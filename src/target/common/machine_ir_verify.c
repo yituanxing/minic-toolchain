@@ -41,7 +41,8 @@ static bool machine_same_register(const MinicMachineRegister *left,
         left->width_bits == right->width_bits;
 }
 
-static bool machine_validate_frames(const MinicMachineFunction *function) {
+static bool machine_validate_frames(const MinicMachineFunction *function,
+    const MinicMachineVerifyPolicy *policy) {
     size_t i;
     if (!machine_power_of_two(function->frame_alignment) ||
         (function->frame_size % function->frame_alignment) != 0U ||
@@ -54,6 +55,10 @@ static bool machine_validate_frames(const MinicMachineFunction *function) {
         if (obj->size_bytes == 0U ||
             !machine_power_of_two(obj->alignment_bytes) ||
             obj->area > MINIC_MACHINE_FRAME_OUTGOING ||
+            obj->base > MINIC_MACHINE_FRAME_BASE_ENTRY_STACK_POINTER ||
+            (function->has_dynamic_stack &&
+             obj->base == MINIC_MACHINE_FRAME_BASE_STACK_POINTER &&
+             obj->area != MINIC_MACHINE_FRAME_OUTGOING) ||
             !obj->has_fixed_offset) return false;
         distance = obj->fixed_offset < 0
             ? (uint64_t)(-(obj->fixed_offset + INT64_C(1))) + 1U
@@ -67,7 +72,11 @@ static bool machine_validate_frames(const MinicMachineFunction *function) {
             if (obj->fixed_offset >= 0 &&
                 obj->size_bytes > function->frame_size - (size_t)distance)
                 return false;
+            if (obj->fixed_offset < 0 &&
+                obj->size_bytes > distance) return false;
         }
+        if (!policy->validate_frame_object(function->target, function,
+                                           obj, policy->context)) return false;
     }
     return true;
 }
@@ -103,6 +112,9 @@ static bool machine_operand_valid(const MinicMachineFunction *function,
                 operand->value.symbol.addend, policy->context);
     case MINIC_MACHINE_OPERAND_BLOCK:
         return operand->value.block_id < function->block_count;
+    case MINIC_MACHINE_OPERAND_BLOCK_ADDRESS:
+        return operand->value.block_id < function->block_count &&
+            function->blocks[operand->value.block_id].indirect_entry;
     case MINIC_MACHINE_OPERAND_ADDRESS:
         address = &operand->value.address;
         return (!address->has_base || machine_validate_register(
@@ -111,6 +123,15 @@ static bool machine_operand_valid(const MinicMachineFunction *function,
                     function, policy, &address->index)) &&
             (!address->has_segment || machine_validate_register(
                     function, policy, &address->segment)) &&
+            (address->has_symbol
+                 ? (minic_core_assembler_symbol_lexically_safe(
+                        address->symbol) &&
+                    policy->validate_relocation != NULL &&
+                    policy->validate_relocation(function->target,
+                        address->symbol, address->relocation,
+                        address->addend, policy->context))
+                 : (address->symbol == NULL && address->relocation == 0U &&
+                    address->addend == 0)) &&
             policy->validate_address != NULL &&
             policy->validate_address(function->target, address,
                                      policy->context);
@@ -122,11 +143,13 @@ static bool machine_operand_valid(const MinicMachineFunction *function,
 static bool machine_validate_instruction(
     const MinicMachineFunction *function, const MinicMachineVerifyPolicy *policy,
     const MinicMachineInstruction *ins, bool *terminates,
-    bool *indirect_successors) {
+    bool *indirect_successors, bool *permits_fallthrough) {
     size_t i;
     MinicMachineOpcodeContract contract = {0};
     if (ins->operand_count > MINIC_MACHINE_MAX_OPERANDS ||
         ins->implicit_count > MINIC_MACHINE_MAX_REGISTER_EFFECTS ||
+        (ins->operand_count == 0U) != (ins->operands == NULL) ||
+        (ins->implicit_count == 0U) != (ins->implicit == NULL) ||
         (ins->effects & ~MACHINE_VALID_EFFECTS) != 0U ||
         ((ins->effects & MINIC_MACHINE_EFFECT_VOLATILE) != 0U &&
          (ins->effects & (MINIC_MACHINE_EFFECT_MEMORY_READ |
@@ -138,9 +161,22 @@ static bool machine_validate_instruction(
     for (i = 0U; i < ins->implicit_count; ++i)
         if (!machine_validate_reg_effect(function, policy,
                                          &ins->implicit[i])) return false;
+    if (!ins->has_core_origin &&
+        (ins->core_block_id != 0U || ins->core_instruction_id != 0U))
+        return false;
     if (ins->kind == MINIC_MACHINE_INSTRUCTION_SOURCE_ASM) {
         if (ins->opcode != 0U || ins->source_asm_template == NULL ||
-            ins->source_asm_template[0] == '\0' ||
+            ins->source_asm_length == 0U ||
+            ins->source_asm_length == SIZE_MAX ||
+            !ins->has_core_origin ||
+            ((ins->effects & MINIC_MACHINE_EFFECT_RETURN) != 0U &&
+             !ins->source_asm_terminates_block) ||
+            (ins->source_asm_terminates_block &&
+             (ins->effects & (MINIC_MACHINE_EFFECT_BRANCH |
+                              MINIC_MACHINE_EFFECT_RETURN)) == 0U) ||
+            (ins->source_asm_permits_fallthrough &&
+             (!ins->source_asm_terminates_block ||
+              (ins->effects & MINIC_MACHINE_EFFECT_BRANCH) == 0U)) ||
             (ins->effects & MINIC_MACHINE_EFFECT_SOURCE_ASM) == 0U ||
             policy->validate_source_asm == NULL ||
             !policy->validate_source_asm(
@@ -152,14 +188,19 @@ static bool machine_validate_instruction(
             } else if (operand->asm_constraint == NULL ||
                        operand->asm_constraint[0] == '\0') return false;
         }
-        *terminates = (ins->effects & MINIC_MACHINE_EFFECT_RETURN) != 0U;
+        *terminates = ins->source_asm_terminates_block;
         *indirect_successors = false;
+        *permits_fallthrough = ins->source_asm_permits_fallthrough;
         return true;
     }
     if (ins->kind != MINIC_MACHINE_INSTRUCTION_SELECTED ||
         ins->opcode == 0U || ins->source_asm_template != NULL ||
+        ins->source_asm_length != 0U ||
+        ins->source_asm_terminates_block ||
+        ins->source_asm_permits_fallthrough ||
         (ins->effects & MINIC_MACHINE_EFFECT_SOURCE_ASM) != 0U ||
         policy->lookup_opcode == NULL ||
+        policy->validate_selected_instruction == NULL ||
         !policy->lookup_opcode(function->target, ins->opcode,
                               &contract, policy->context) ||
         contract.operand_count > MINIC_MACHINE_MAX_OPERANDS ||
@@ -170,11 +211,18 @@ static bool machine_validate_instruction(
              ~function->generated_features) != 0U ||
         (contract.required_effects & ~contract.permitted_effects) != 0U ||
         (contract.permitted_effects & ~MACHINE_VALID_EFFECTS) != 0U ||
+        (contract.permits_fallthrough &&
+         (!contract.terminates_block ||
+          (contract.required_effects & MINIC_MACHINE_EFFECT_BRANCH) == 0U)) ||
         (ins->effects & contract.required_effects) !=
             contract.required_effects ||
         (ins->effects & ~contract.permitted_effects) != 0U ||
         ((ins->effects & MINIC_MACHINE_EFFECT_BRANCH) == 0U &&
          contract.has_indirect_successors) ||
+        ((ins->effects & MINIC_MACHINE_EFFECT_RETURN) != 0U &&
+         !contract.terminates_block) ||
+        ((ins->effects & MINIC_MACHINE_EFFECT_BRANCH) != 0U &&
+         !contract.terminates_block) ||
         (contract.terminates_block &&
          (ins->effects & (MINIC_MACHINE_EFFECT_BRANCH |
                           MINIC_MACHINE_EFFECT_RETURN)) == 0U)) return false;
@@ -192,8 +240,11 @@ static bool machine_validate_instruction(
             !machine_same_register(&ins->implicit[i].reg,
                                    &contract.implicit[i].reg)) return false;
     }
+    if (!policy->validate_selected_instruction(
+            function, ins, policy->context)) return false;
     *terminates = contract.terminates_block;
     *indirect_successors = contract.has_indirect_successors;
+    *permits_fallthrough = contract.permits_fallthrough;
     return true;
 }
 
@@ -210,16 +261,31 @@ bool minic_machine_function_verify(const MinicMachineFunction *function,
     size_t label_count = 0U;
     size_t i;
     if (function == NULL || policy == NULL || function->target == NULL ||
+        function->target->data_layout == NULL ||
+        function->target->data_layout->byte_order == MINIC_BYTE_ORDER_UNKNOWN ||
+        !machine_power_of_two(function->target->data_layout->pointer_size) ||
+        !machine_power_of_two(
+            function->target->data_layout->pointer_alignment) ||
         function->name == NULL ||
         !minic_core_assembler_symbol_lexically_safe(function->name) ||
         function->architecture != function->target->architecture ||
         function->architecture < MINIC_TARGET_ARCH_RISCV64 ||
         function->architecture > MINIC_TARGET_ARCH_RISCV32 ||
+        !minic_function_calling_convention_valid(
+            function->calling_convention) ||
+        policy->validate_function_abi == NULL ||
+        !policy->validate_function_abi(
+            function->target, function->calling_convention, policy->context) ||
+        policy->validate_frame_object == NULL ||
         function->block_count == 0U ||
         function->block_count > function->block_capacity ||
         function->blocks == NULL ||
         function->block_count > SIZE_MAX / sizeof(*labels) ||
-        !machine_validate_frames(function)) return false;
+        policy->validate_generated_features == NULL ||
+        !policy->validate_generated_features(function->target,
+                                              function->generated_features,
+                                              policy->context) ||
+        !machine_validate_frames(function, policy)) return false;
     if ((function->architecture == MINIC_TARGET_ARCH_RISCV32 ||
          function->architecture == MINIC_TARGET_ARCH_RISCV64) &&
         function->target->riscv_isa.strict_isa &&
@@ -237,6 +303,7 @@ bool minic_machine_function_verify(const MinicMachineFunction *function,
         size_t j;
         bool terminated = false;
         bool allow_opaque = false;
+        bool terminal_allows_fallthrough = false;
         if (block->id != i ||
             block->instruction_count > block->instruction_capacity ||
             (block->instruction_count != 0U &&
@@ -248,20 +315,26 @@ bool minic_machine_function_verify(const MinicMachineFunction *function,
              block->fallthrough_target >= function->block_count) ||
             (block->exported_label != NULL &&
              !minic_core_assembler_symbol_lexically_safe(
-                 block->exported_label))) goto cleanup;
+                 block->exported_label)) ||
+            (block->exported_label != NULL &&
+             strcmp(block->exported_label, function->name) == 0))
+            goto cleanup;
         if (block->exported_label != NULL)
             labels[label_count++] = block->exported_label;
         for (j = 0U; j < block->instruction_count; ++j) {
             const MinicMachineInstruction *ins = &block->instructions[j];
             bool is_terminator = false;
             bool indirect = false;
+            bool permits_fallthrough = false;
             size_t operand_id;
             if (terminated || !machine_validate_instruction(
-                    function, policy, ins, &is_terminator, &indirect))
+                    function, policy, ins, &is_terminator, &indirect,
+                    &permits_fallthrough))
                 goto cleanup;
             if (is_terminator) {
                 if (j + 1U != block->instruction_count) goto cleanup;
                 terminated = true;
+                terminal_allows_fallthrough = permits_fallthrough;
             }
             if (indirect) allow_opaque = true;
             for (operand_id = 0U; operand_id < ins->operand_count;
@@ -279,6 +352,7 @@ bool minic_machine_function_verify(const MinicMachineFunction *function,
         }
         if (!terminated && !block->has_fallthrough) goto cleanup;
         if (block->has_fallthrough) {
+            if (terminated && !terminal_allows_fallthrough) goto cleanup;
             if (block->fallthrough_target != i + 1U ||
                 (terminated && block->instruction_count != 0U &&
                  (block->instructions[block->instruction_count - 1U].effects &

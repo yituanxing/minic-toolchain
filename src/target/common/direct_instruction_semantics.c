@@ -61,7 +61,7 @@ static bool direct_core_wide(const MinicCoreFunction *fn, MinicCoreTypeId id) {
            ((type->kind == MINIC_CORE_TYPE_INTEGER &&
              type->value.integer.bit_width == 128U) ||
             (type->kind == MINIC_CORE_TYPE_FLOAT &&
-             type->value.floating.format == MINIC_CORE_FLOAT_EXTENDED));
+             type->value.floating.format == MINIC_CORE_FLOAT_BINARY128));
 }
 
 static bool direct_core_register64(const MinicCoreFunction *fn,
@@ -312,7 +312,7 @@ bool minic_multi_direct_wide_store_shape(
                             MINIC_CORE_TYPE_POINTER) &&
            (direct_core_int128(fn, fn->values[value].core_type_id) ||
             direct_core_float(fn, fn->values[value].core_type_id,
-                              MINIC_CORE_FLOAT_EXTENDED)) &&
+                              MINIC_CORE_FLOAT_BINARY128)) &&
            minic_lp64_frame_plan_wide_slot(frame_plan, value, value_offset);
 }
 
@@ -353,7 +353,7 @@ static bool minic_multi_direct_result_slot_offset(
                  ins->kind == MINIC_CORE_INSTRUCTION_FLOAT_SUBTRACT ||
                  ins->kind == MINIC_CORE_INSTRUCTION_FLOAT_MULTIPLY ||
                  ins->kind == MINIC_CORE_INSTRUCTION_FLOAT_DIVIDE)) &&
-              !(direct_core_float(fn, ins->core_type_id, MINIC_CORE_FLOAT_EXTENDED) &&
+              !(direct_core_float(fn, ins->core_type_id, MINIC_CORE_FLOAT_BINARY128) &&
                 (ins->kind == MINIC_CORE_INSTRUCTION_FLOATING_CONSTANT ||
                  ins->kind == MINIC_CORE_INSTRUCTION_LOAD ||
                  ins->kind == MINIC_CORE_INSTRUCTION_PARAMETER ||

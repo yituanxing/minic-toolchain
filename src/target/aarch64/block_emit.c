@@ -358,7 +358,7 @@ bool minic_aarch64_emit_terminator(FILE *out,
                     return false;
             }
             if (a64_block_fp(fn, minic_core_function_return_type(fn),
-                             MINIC_CORE_FLOAT_EXTENDED, 16U)) {
+                             MINIC_CORE_FLOAT_BINARY128, 16U)) {
                 size_t src;
                 if (!minic_lp64_frame_plan_wide_slot(frame_plan, block->terminator.return_value, &src) ||
                     !minic_a64_emit_owned_slot(out, &view, false,
@@ -370,7 +370,7 @@ bool minic_aarch64_emit_terminator(FILE *out,
                 !a64_block_class(fn, minic_core_function_return_type(fn),
                                  MINIC_CORE_TYPE_RECORD) &&
                 !a64_block_fp(fn, minic_core_function_return_type(fn),
-                              MINIC_CORE_FLOAT_EXTENDED, 16U) &&
+                              MINIC_CORE_FLOAT_BINARY128, 16U) &&
                 !a64_block_i128(fn, minic_core_function_return_type(fn))) {
                 const MinicA64FrameRegisterClass kind =
                     a64_block_fp(fn, minic_core_function_return_type(fn),

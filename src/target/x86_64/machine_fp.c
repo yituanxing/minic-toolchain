@@ -14,7 +14,7 @@ bool minic_x86_64_emit_fp_instruction(
         return false;
     switch (ins->kind) {
     case MINIC_CORE_INSTRUCTION_FLOATING_CONSTANT:
-        if (shape.result_format == MINIC_CORE_FLOAT_EXTENDED) {
+        if (shape.result_format == MINIC_CORE_FLOAT_X87_EXTENDED80) {
             const uint64_t hi = ins->value.floating128_bits.high;
             const uint64_t lo = ins->value.floating128_bits.low;
             const uint64_t fraction_hi = hi & UINT64_C(0x0000ffffffffffff);

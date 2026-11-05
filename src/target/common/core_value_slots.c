@@ -34,7 +34,7 @@ bool minic_core_wide_value_slots_build(
         wide = (type->kind == MINIC_CORE_TYPE_INTEGER &&
                 type->value.integer.bit_width == 128U) ||
                (type->kind == MINIC_CORE_TYPE_FLOAT &&
-                type->value.floating.format == MINIC_CORE_FLOAT_EXTENDED) ||
+                minic_core_float_format_is_wide(type->value.floating.format)) ||
                (type->kind == MINIC_CORE_TYPE_VECTOR &&
                 type->value.vector.representation ==
                     MINIC_CORE_VECTOR_REGISTER_VALUE && type->has_layout &&

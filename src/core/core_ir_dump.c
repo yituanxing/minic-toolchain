@@ -52,10 +52,10 @@ static bool dump_instruction(FILE *output,
             if (type == NULL || type->kind != MINIC_CORE_TYPE_FLOAT ||
                 !type->has_layout || type->size == 0U) return false;
             if (type->size > 8U ||
-                type->value.floating.format == MINIC_CORE_FLOAT_EXTENDED ||
+                type->value.floating.format == MINIC_CORE_FLOAT_X87_EXTENDED80 ||
                 type->value.floating.format == MINIC_CORE_FLOAT_BINARY128)
                 return fprintf(output,
-                    "  %%%" PRIu32 " = const.long_double.bits 0x%016" PRIx64 "%016" PRIx64 "\n",
+                    "  %%%" PRIu32 " = const.wide_float.bits 0x%016" PRIx64 "%016" PRIx64 "\n",
                     instruction->result, instruction->value.floating128_bits.high,
                     instruction->value.floating128_bits.low) >= 0;
             return fprintf(output,

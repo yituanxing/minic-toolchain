@@ -14,6 +14,17 @@ static char *machine_copy_string(const char *text) {
     return copy;
 }
 
+static char *machine_copy_bytes(const char *bytes, size_t length) {
+    char *copy;
+    if (bytes == NULL || length == SIZE_MAX) return NULL;
+    copy = malloc(length + 1U);
+    if (copy != NULL) {
+        memcpy(copy, bytes, length);
+        copy[length] = '\0';
+    }
+    return copy;
+}
+
 static bool machine_reserve(void **data, size_t *capacity,
                             size_t count, size_t element_size) {
     size_t new_capacity;
@@ -39,13 +50,17 @@ static bool machine_reserve(void **data, size_t *capacity,
 static void machine_instruction_destroy(MinicMachineInstruction *ins) {
     size_t i;
     if (ins == NULL) return;
-    for (i = 0U; i < ins->operand_count &&
+    for (i = 0U; ins->operands != NULL && i < ins->operand_count &&
                  i < MINIC_MACHINE_MAX_OPERANDS; ++i) {
         MinicMachineOperand *operand = &ins->operands[i];
         if (operand->kind == MINIC_MACHINE_OPERAND_SYMBOL)
             free(operand->value.symbol.name);
+        if (operand->kind == MINIC_MACHINE_OPERAND_ADDRESS)
+            free(operand->value.address.symbol);
         free(operand->asm_constraint);
     }
+    free(ins->operands);
+    free(ins->implicit);
     free(ins->source_asm_template);
     memset(ins, 0, sizeof(*ins));
 }
@@ -168,15 +183,41 @@ bool minic_machine_block_append_instruction(MinicMachineFunction *function,
     size_t i;
     if (function == NULL || block_id >= function->block_count ||
         input == NULL || input->operand_count > MINIC_MACHINE_MAX_OPERANDS ||
-        input->implicit_count > MINIC_MACHINE_MAX_REGISTER_EFFECTS)
+        input->implicit_count > MINIC_MACHINE_MAX_REGISTER_EFFECTS ||
+        (input->operand_count == 0U) != (input->operands == NULL) ||
+        (input->implicit_count == 0U) != (input->implicit == NULL) ||
+        (input->source_asm_length != 0U &&
+         input->source_asm_template == NULL))
         return false;
+    /* Reject malformed nested relocation metadata before copying. Silently
+     * clearing its unused symbol pointer would launder invalid source input
+     * into a verifier-approved machine address. */
+    for (i = 0U; i < input->operand_count; ++i) {
+        const MinicMachineOperand *operand = &input->operands[i];
+        if (operand->kind == MINIC_MACHINE_OPERAND_ADDRESS) {
+            const MinicMachineAddress *address = &operand->value.address;
+            if ((address->has_symbol && address->symbol == NULL) ||
+                (!address->has_symbol &&
+                 (address->symbol != NULL || address->relocation != 0U ||
+                  address->addend != 0))) return false;
+        }
+    }
     memset(&copy, 0, sizeof(copy));
     copy = *input;
+    copy.operands = NULL;
+    copy.implicit = NULL;
     copy.source_asm_template = NULL;
-    for (i = 0U; i < MINIC_MACHINE_MAX_OPERANDS; ++i) {
-        copy.operands[i].asm_constraint = NULL;
-        if (copy.operands[i].kind == MINIC_MACHINE_OPERAND_SYMBOL)
-            copy.operands[i].value.symbol.name = NULL;
+    if (input->operand_count != 0U) {
+        copy.operands = calloc(input->operand_count, sizeof(*copy.operands));
+        if (copy.operands == NULL) goto fail;
+    }
+    if (input->implicit_count != 0U) {
+        if (input->implicit_count > SIZE_MAX / sizeof(*copy.implicit))
+            goto fail;
+        copy.implicit = malloc(input->implicit_count * sizeof(*copy.implicit));
+        if (copy.implicit == NULL) goto fail;
+        memcpy(copy.implicit, input->implicit,
+               input->implicit_count * sizeof(*copy.implicit));
     }
     for (i = 0U; i < input->operand_count; ++i) {
         const MinicMachineOperand *source = &input->operands[i];
@@ -190,6 +231,14 @@ bool minic_machine_block_append_instruction(MinicMachineFunction *function,
                     machine_copy_string(source->value.symbol.name);
                 if (destination->value.symbol.name == NULL) goto fail;
             }
+        } else if (source->kind == MINIC_MACHINE_OPERAND_ADDRESS) {
+            destination->value.address.symbol = NULL;
+            if (source->value.address.has_symbol &&
+                source->value.address.symbol != NULL) {
+                destination->value.address.symbol =
+                    machine_copy_string(source->value.address.symbol);
+                if (destination->value.address.symbol == NULL) goto fail;
+            }
         }
         if (source->asm_constraint != NULL) {
             destination->asm_constraint =
@@ -199,7 +248,8 @@ bool minic_machine_block_append_instruction(MinicMachineFunction *function,
     }
     if (input->source_asm_template != NULL) {
         copy.source_asm_template =
-            machine_copy_string(input->source_asm_template);
+            machine_copy_bytes(input->source_asm_template,
+                               input->source_asm_length);
         if (copy.source_asm_template == NULL) goto fail;
     }
     block = &function->blocks[block_id];

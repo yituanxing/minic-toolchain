@@ -341,7 +341,7 @@ MinicCoreLowerStatus minic_core_lower_try_arithmetic_binary(
          expression->value.binary.operator_kind == MINIC_BINARY_DIVIDE) &&
         minic_type_is_long_double(expression->type)) {
         *handled = true;
-        const char *helper;
+        MinicCoreExtendedFloatOperation operation;
         MinicCoreValueId left;
         MinicCoreValueId right;
         MinicCoreLowerStatus status;
@@ -350,12 +350,15 @@ MinicCoreLowerStatus minic_core_lower_try_arithmetic_binary(
             context, expression->value.binary.left, expression->value.binary.right,
             minic_type_long_double(), &left, &right);
         if (status != MINIC_CORE_LOWER_OK) return status;
-        helper = expression->value.binary.operator_kind == MINIC_BINARY_ADD ? "__addtf3" :
-                 expression->value.binary.operator_kind == MINIC_BINARY_SUBTRACT ? "__subtf3" :
-                 expression->value.binary.operator_kind == MINIC_BINARY_MULTIPLY ? "__multf3" :
-                 "__divtf3";
+        operation = expression->value.binary.operator_kind == MINIC_BINARY_ADD
+                        ? MINIC_CORE_EXT_FLOAT_ADD
+                    : expression->value.binary.operator_kind == MINIC_BINARY_SUBTRACT
+                        ? MINIC_CORE_EXT_FLOAT_SUBTRACT
+                    : expression->value.binary.operator_kind == MINIC_BINARY_MULTIPLY
+                        ? MINIC_CORE_EXT_FLOAT_MULTIPLY
+                        : MINIC_CORE_EXT_FLOAT_DIVIDE;
         return minic_core_lower_internal_append_long_double_binary_helper(
-            context, expression->span, helper, left, right, minic_type_long_double(), value_id);
+            context, expression->span, operation, left, right, minic_type_long_double(), value_id);
     }
 
     /* RUNTIME_R0_SCALAR_FLOATING: preserve left-to-right evaluation by
@@ -653,13 +656,16 @@ MinicCoreLowerStatus minic_core_lower_try_arithmetic_compound(
                 return status;
             }
             if (minic_type_is_long_double(stored_type)) {
-                const char *helper =
-                    expression->value.binary.operator_kind == MINIC_BINARY_ADD ? "__addtf3" :
-                    expression->value.binary.operator_kind == MINIC_BINARY_SUBTRACT ? "__subtf3" :
-                    expression->value.binary.operator_kind == MINIC_BINARY_MULTIPLY ? "__multf3" :
-                    "__divtf3";
+                MinicCoreExtendedFloatOperation operation =
+                    expression->value.binary.operator_kind == MINIC_BINARY_ADD
+                        ? MINIC_CORE_EXT_FLOAT_ADD
+                    : expression->value.binary.operator_kind == MINIC_BINARY_SUBTRACT
+                        ? MINIC_CORE_EXT_FLOAT_SUBTRACT
+                    : expression->value.binary.operator_kind == MINIC_BINARY_MULTIPLY
+                        ? MINIC_CORE_EXT_FLOAT_MULTIPLY
+                        : MINIC_CORE_EXT_FLOAT_DIVIDE;
                 status = minic_core_lower_internal_append_long_double_binary_helper(
-                    context, expression->span, helper, current, right,
+                    context, expression->span, operation, current, right,
                     minic_type_long_double(), &result);
                 if (status != MINIC_CORE_LOWER_OK) return status;
             } else {

@@ -332,7 +332,7 @@ static bool core_is_scalar(const MinicCoreFunction *function, MinicCoreTypeId id
                             (type->kind == MINIC_CORE_TYPE_FLOAT &&
                              (type->value.floating.format == MINIC_CORE_FLOAT_BINARY32 ||
                               type->value.floating.format == MINIC_CORE_FLOAT_BINARY64 ||
-                              type->value.floating.format == MINIC_CORE_FLOAT_EXTENDED)));
+                              minic_core_float_format_is_wide(type->value.floating.format))));
 }
 
 static bool core_call_type(const MinicCoreFunction *function, MinicCoreTypeId id) {
@@ -446,7 +446,8 @@ static bool core_bitcast_types_valid(const MinicCoreFunction *function,
 #define ct_is_function(id) core_is_function(function, (id))
 #define ct_is_float(id) core_is_float_format(function, (id), MINIC_CORE_FLOAT_BINARY32)
 #define ct_is_double(id) core_is_float_format(function, (id), MINIC_CORE_FLOAT_BINARY64)
-#define ct_is_long_double(id) core_is_float_format(function, (id), MINIC_CORE_FLOAT_EXTENDED)
+#define ct_is_wide_float(id) (core_is_float_format(function, (id), MINIC_CORE_FLOAT_BINARY128) || \
+                                core_is_float_format(function, (id), MINIC_CORE_FLOAT_X87_EXTENDED80))
 #define ct_is_vector_register_value(id) core_is_register_value_vector(function, (id))
 #define ct_is_vector_storage_only(id) core_is_storage_only_vector(function, (id))
 #define ct_equal(a, b) core_equal((a), (b))
@@ -455,6 +456,85 @@ static bool core_bitcast_types_valid(const MinicCoreFunction *function,
 #define ct_call_scalar_type(id) core_is_scalar(function, (id))
 #define ct_call_parameter_type(id) core_call_type(function, (id))
 #define ct_direct_call_return_type(id) core_call_return_type(function, (id))
+
+/* A typed extended numerical call has no source-language identity and no
+ * dependence on the spelling of its possible compiler-runtime fallback.
+ * Validate the complete signature; machine targets later select x87 or TF. */
+static bool core_extended_float_call_contract(
+    const MinicCoreFunction *function, const MinicCoreInstruction *instruction,
+    const MinicCoreType *signature) {
+    MinicCoreExtendedFloatOperation op =
+        instruction->value.call.extended_float_operation;
+    const MinicCoreType *result, *left, *right = NULL;
+    MinicCoreTypeId result_id, left_id;
+    size_t count;
+    bool result_wide, left_wide;
+    if (op == MINIC_CORE_EXT_FLOAT_NONE) return true;
+    if (signature == NULL || signature->kind != MINIC_CORE_TYPE_FUNCTION ||
+        signature->value.function.is_variadic ||
+        signature->value.function.calling_convention != MINIC_CALLING_CONVENTION_DEFAULT ||
+        signature->value.function.parameter_count == 0U ||
+        signature->value.function.parameter_count > 2U ||
+        signature->value.function.parameters == NULL) return false;
+    count = signature->value.function.parameter_count;
+    result_id = signature->value.function.return_type;
+    left_id = signature->value.function.parameters[0];
+    result = core_type(function, result_id);
+    left = core_type(function, left_id);
+    if (result == NULL || left == NULL) return false;
+    if (count == 2U) {
+        right = core_type(function, signature->value.function.parameters[1]);
+        if (right == NULL) return false;
+    }
+    result_wide = result->kind == MINIC_CORE_TYPE_FLOAT &&
+                  minic_core_float_format_is_wide(result->value.floating.format);
+    left_wide = left->kind == MINIC_CORE_TYPE_FLOAT &&
+                minic_core_float_format_is_wide(left->value.floating.format);
+    if (op >= MINIC_CORE_EXT_FLOAT_ADD && op <= MINIC_CORE_EXT_FLOAT_DIVIDE)
+        return count == 2U && result_wide && left_wide &&
+               left_id == result_id &&
+               signature->value.function.parameters[1] == result_id;
+    if (op == MINIC_CORE_EXT_FLOAT_NEGATE)
+        return count == 1U && result_wide && left_id == result_id;
+    if (op >= MINIC_CORE_EXT_FLOAT_EQUAL && op <= MINIC_CORE_EXT_FLOAT_LESS_EQUAL)
+        return count == 2U && left_wide &&
+               left_id == signature->value.function.parameters[1] &&
+               result->kind == MINIC_CORE_TYPE_INTEGER && result->has_layout &&
+               result->size == 4U && result->value.integer.is_signed;
+    if (op == MINIC_CORE_EXT_FLOAT_FROM_BINARY32 ||
+        op == MINIC_CORE_EXT_FLOAT_FROM_BINARY64)
+        return count == 1U && result_wide &&
+               left->kind == MINIC_CORE_TYPE_FLOAT &&
+               left->value.floating.format ==
+                  (op == MINIC_CORE_EXT_FLOAT_FROM_BINARY32
+                       ? MINIC_CORE_FLOAT_BINARY32 : MINIC_CORE_FLOAT_BINARY64);
+    if (op == MINIC_CORE_EXT_FLOAT_TO_BINARY32 ||
+        op == MINIC_CORE_EXT_FLOAT_TO_BINARY64)
+        return count == 1U && left_wide &&
+               result->kind == MINIC_CORE_TYPE_FLOAT &&
+               result->value.floating.format ==
+                  (op == MINIC_CORE_EXT_FLOAT_TO_BINARY32
+                       ? MINIC_CORE_FLOAT_BINARY32 : MINIC_CORE_FLOAT_BINARY64);
+    if (op >= MINIC_CORE_EXT_FLOAT_FROM_SIGNED32 &&
+        op <= MINIC_CORE_EXT_FLOAT_FROM_UNSIGNED64)
+        return count == 1U && result_wide &&
+               left->kind == MINIC_CORE_TYPE_INTEGER && left->has_layout &&
+               left->size == ((op == MINIC_CORE_EXT_FLOAT_FROM_SIGNED32 ||
+                               op == MINIC_CORE_EXT_FLOAT_FROM_UNSIGNED32) ? 4U : 8U) &&
+               left->value.integer.is_signed ==
+                   (op == MINIC_CORE_EXT_FLOAT_FROM_SIGNED32 ||
+                    op == MINIC_CORE_EXT_FLOAT_FROM_SIGNED64);
+    if (op >= MINIC_CORE_EXT_FLOAT_TO_SIGNED32 &&
+        op <= MINIC_CORE_EXT_FLOAT_TO_UNSIGNED64)
+        return count == 1U && left_wide &&
+               result->kind == MINIC_CORE_TYPE_INTEGER && result->has_layout &&
+               result->size == ((op == MINIC_CORE_EXT_FLOAT_TO_SIGNED32 ||
+                                 op == MINIC_CORE_EXT_FLOAT_TO_UNSIGNED32) ? 4U : 8U) &&
+               result->value.integer.is_signed ==
+                   (op == MINIC_CORE_EXT_FLOAT_TO_SIGNED32 ||
+                    op == MINIC_CORE_EXT_FLOAT_TO_SIGNED64);
+    return false;
+}
 
 static bool instruction_is_valid(const MinicCoreFunction *function,
                                  const MinicCoreInstruction *instruction,
@@ -473,7 +553,7 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
         return instruction_result_is_valid(function, instruction) &&
                (ct_is_float(instruction->core_type_id) ||
                 ct_is_double(instruction->core_type_id) ||
-                ct_is_long_double(instruction->core_type_id));
+                ct_is_wide_float(instruction->core_type_id));
     case MINIC_CORE_INSTRUCTION_FLOAT_ADD:
     case MINIC_CORE_INSTRUCTION_FLOAT_SUBTRACT:
     case MINIC_CORE_INSTRUCTION_FLOAT_MULTIPLY:
@@ -1252,7 +1332,9 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
         callee = &function->callees[instruction->value.call.callee_id];
         signature = core_snapshot_signature_type(function,
                                                 callee->core_function_type_id);
-        if (signature == NULL) return false;
+        if (signature == NULL ||
+            !core_extended_float_call_contract(function, instruction, signature))
+            return false;
         return_type = signature->value.function.return_type;
         parameters = signature->value.function.parameters;
         parameter_count = signature->value.function.parameter_count;

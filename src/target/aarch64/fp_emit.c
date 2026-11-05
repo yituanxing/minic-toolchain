@@ -59,7 +59,7 @@ bool minic_aarch64_emit_fp_instruction(
     switch (ins->kind) {
         case MINIC_CORE_INSTRUCTION_FLOATING_CONSTANT: {
             if (a64_fp_matches(fn, ins->core_type_id,
-                               MINIC_CORE_FLOAT_EXTENDED, 16U)) {
+                               MINIC_CORE_FLOAT_BINARY128, 16U)) {
                 size_t dst, half;
                 if (!minic_lp64_frame_plan_wide_slot(frame_plan, ins->result, &dst))
                     return false;

@@ -36,7 +36,7 @@ static bool loongarch64_block_wide(
     return type != NULL &&
            ((type->kind == MINIC_CORE_TYPE_INTEGER && type->size == 16U) ||
             (type->kind == MINIC_CORE_TYPE_FLOAT &&
-             type->value.floating.format == MINIC_CORE_FLOAT_EXTENDED));
+             type->value.floating.format == MINIC_CORE_FLOAT_BINARY128));
 }
 
 static bool loongarch64_block_fp_format(

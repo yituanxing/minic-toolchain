@@ -257,7 +257,7 @@ static bool rv64_core_abi_scalar(const MinicCoreType *type) {
          (type->kind == MINIC_CORE_TYPE_FLOAT &&
           (type->value.floating.format == MINIC_CORE_FLOAT_BINARY32 ||
            type->value.floating.format == MINIC_CORE_FLOAT_BINARY64 ||
-           type->value.floating.format == MINIC_CORE_FLOAT_EXTENDED)));
+           type->value.floating.format == MINIC_CORE_FLOAT_BINARY128)));
 }
 
 static bool rv64_core_abi_wide(const MinicCoreType *type) {
@@ -265,7 +265,7 @@ static bool rv64_core_abi_wide(const MinicCoreType *type) {
         ((type->kind == MINIC_CORE_TYPE_INTEGER &&
           type->value.integer.bit_width == 128U) ||
          (type->kind == MINIC_CORE_TYPE_FLOAT &&
-          type->value.floating.format == MINIC_CORE_FLOAT_EXTENDED));
+          type->value.floating.format == MINIC_CORE_FLOAT_BINARY128));
 }
 
 /* Only resolved type IDs drive production ABI admission. The prepared

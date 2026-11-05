@@ -491,7 +491,8 @@ MinicCoreLowerStatus minic_core_lower_scalar_update(MinicCoreLowerContext *conte
             return MINIC_CORE_LOWER_ERROR;
         }
     } else if (minic_type_is_long_double(stored_type)) {
-        const char *helper = increment ? "__addtf3" : "__subtf3";
+        const MinicCoreExtendedFloatOperation operation = increment
+            ? MINIC_CORE_EXT_FLOAT_ADD : MINIC_CORE_EXT_FLOAT_SUBTRACT;
 
         (void)memset(&instruction, 0, sizeof(instruction));
         instruction.kind = MINIC_CORE_INSTRUCTION_FLOATING_CONSTANT;
@@ -505,7 +506,7 @@ MinicCoreLowerStatus minic_core_lower_scalar_update(MinicCoreLowerContext *conte
             return MINIC_CORE_LOWER_ERROR;
         }
         status = minic_core_lower_internal_append_long_double_binary_helper(
-            context, expression->span, helper, current, one, stored_type, &updated);
+            context, expression->span, operation, current, one, stored_type, &updated);
         if (status != MINIC_CORE_LOWER_OK) {
             return status;
         }

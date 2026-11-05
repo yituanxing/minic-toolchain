@@ -368,7 +368,6 @@ static bool minic_data_layout_type_depth(const MinicTargetInvocation *invocation
         type.base_kind == MINIC_TYPE_BASE_FLOAT64 ||
         type.base_kind == MINIC_TYPE_BASE_FLOAT32X ||
         type.base_kind == MINIC_TYPE_BASE_FLOAT64X) {
-        if (invocation->machine.data_layout->float128_size == 0U) return false;
         switch (type.base_kind) {
         case MINIC_TYPE_BASE_FLOAT32:
             *size = invocation->machine.data_layout->float_size;

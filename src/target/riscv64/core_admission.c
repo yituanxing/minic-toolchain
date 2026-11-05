@@ -29,7 +29,7 @@ static bool rv64_admit_core_scalar(const MinicCoreType *type) {
          (type->kind == MINIC_CORE_TYPE_FLOAT &&
           (type->value.floating.format == MINIC_CORE_FLOAT_BINARY32 ||
            type->value.floating.format == MINIC_CORE_FLOAT_BINARY64 ||
-           type->value.floating.format == MINIC_CORE_FLOAT_EXTENDED)));
+           type->value.floating.format == MINIC_CORE_FLOAT_BINARY128)));
 }
 
 /* Canonical Core verification belongs to Common FunctionPlan. RV64 owns

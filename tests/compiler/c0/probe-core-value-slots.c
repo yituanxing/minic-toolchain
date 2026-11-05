@@ -30,7 +30,7 @@ int main(void) {
     shapes[3].kind = MINIC_CORE_TYPE_FLOAT;
     shapes[3].has_layout = true;
     shapes[3].size = shapes[3].alignment = 16U;
-    shapes[3].value.floating.format = MINIC_CORE_FLOAT_EXTENDED;
+    shapes[3].value.floating.format = MINIC_CORE_FLOAT_BINARY128;
     for (i = 0U; i < 4U; ++i)
         if (!minic_core_type_register(&types, &shapes[i], &values[i].core_type_id))
             return 1;

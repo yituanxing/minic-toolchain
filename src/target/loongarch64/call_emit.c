@@ -7,6 +7,7 @@
 #include "target/common/lp64_aggregate.h"
 #include "target/common/core_abi_value_shape.h"
 #include "target/common/core_call_view.h"
+#include "target/common/core_extended_float_runtime.h"
 #include "target/loongarch64/frame_emit.h"
 #include <stdio.h>
 #include <stdint.h>
@@ -303,6 +304,12 @@ bool minic_loongarch64_emit_abi_instruction(
             } else {
                 const MinicCoreCallee *callee =
                     &fn->callees[ins->value.call.callee_id];
+                const char *call_symbol =
+                    ins->value.call.extended_float_operation == MINIC_CORE_EXT_FLOAT_NONE
+                        ? callee->name
+                        : minic_core_extended_float_runtime_symbol(
+                              ins->value.call.extended_float_operation);
+                if (call_symbol == NULL) return false;
                 /* Revalidate the sealed internal Core callee against the
                  * target's machine-form descriptor, independently of the
                  * original GNU source spelling/C parameter type identities.
@@ -380,8 +387,24 @@ bool minic_loongarch64_emit_abi_instruction(
                     } else {
                         return false;
                     }
-                } else if (fprintf(out, "  bl %s\n", callee->name) < 0) {
+                } else if (fprintf(out, "  bl %s\n", call_symbol) < 0) {
                     return false;
+                }
+                /* Normalize GNU TF's signed comparison status to Core's
+                 * ordered 0/1 predicate before storing the call result. */
+                switch (ins->value.call.extended_float_operation) {
+                case MINIC_CORE_EXT_FLOAT_EQUAL:
+                    if (fputs("  sltu $a0, $zero, $a0\n"
+                              "  xori $a0, $a0, 1\n", out) == EOF) return false;
+                    break;
+                case MINIC_CORE_EXT_FLOAT_LESS:
+                    if (fputs("  slt $a0, $a0, $zero\n", out) == EOF) return false;
+                    break;
+                case MINIC_CORE_EXT_FLOAT_LESS_EQUAL:
+                    if (fputs("  slt $a0, $zero, $a0\n"
+                              "  xori $a0, $a0, 1\n", out) == EOF) return false;
+                    break;
+                default: break;
                 }
             }
             if (stack_bytes != 0U && !minic_loongarch64_emit_sp_adjust(out, stack_bytes, true))

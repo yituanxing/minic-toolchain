@@ -248,6 +248,37 @@ typedef struct MinicCoreCallArgument {
     } value;
 } MinicCoreCallArgument;
 
+/* An extended-precision numerical operation is a typed Core semantic, not
+ * a CALL recognized by the spelling of a GNU compiler-runtime symbol.
+ * Physical x87/binary128 lowering and the fallback runtime ABI are chosen by
+ * the target; ordinary external calls with identical symbol names remain
+ * ordinary calls and never inherit these operation semantics. */
+typedef enum MinicCoreExtendedFloatOperation {
+    MINIC_CORE_EXT_FLOAT_NONE = 0,
+    MINIC_CORE_EXT_FLOAT_ADD,
+    MINIC_CORE_EXT_FLOAT_SUBTRACT,
+    MINIC_CORE_EXT_FLOAT_MULTIPLY,
+    MINIC_CORE_EXT_FLOAT_DIVIDE,
+    MINIC_CORE_EXT_FLOAT_NEGATE,
+    /* Ordered predicates produce canonical i32 0/1, including for NaNs.
+     * They do not expose a target compiler-runtime comparison status. */
+    MINIC_CORE_EXT_FLOAT_EQUAL,
+    MINIC_CORE_EXT_FLOAT_LESS,
+    MINIC_CORE_EXT_FLOAT_LESS_EQUAL,
+    MINIC_CORE_EXT_FLOAT_FROM_BINARY32,
+    MINIC_CORE_EXT_FLOAT_FROM_BINARY64,
+    MINIC_CORE_EXT_FLOAT_TO_BINARY32,
+    MINIC_CORE_EXT_FLOAT_TO_BINARY64,
+    MINIC_CORE_EXT_FLOAT_FROM_SIGNED32,
+    MINIC_CORE_EXT_FLOAT_FROM_UNSIGNED32,
+    MINIC_CORE_EXT_FLOAT_FROM_SIGNED64,
+    MINIC_CORE_EXT_FLOAT_FROM_UNSIGNED64,
+    MINIC_CORE_EXT_FLOAT_TO_SIGNED32,
+    MINIC_CORE_EXT_FLOAT_TO_UNSIGNED32,
+    MINIC_CORE_EXT_FLOAT_TO_SIGNED64,
+    MINIC_CORE_EXT_FLOAT_TO_UNSIGNED64
+} MinicCoreExtendedFloatOperation;
+
 typedef struct MinicCoreInlineAsmRegisterClobber {
     char *name;
     size_t name_length;
@@ -548,6 +579,9 @@ typedef struct MinicCoreInstruction {
             MinicCoreCalleeId callee_id;
             size_t argument_begin;
             size_t argument_count;
+            /* NONE denotes a real external CALL. A nonzero tag owns the
+             * numerical semantics and cannot be inferred from callee.name. */
+            MinicCoreExtendedFloatOperation extended_float_operation;
             /* M86_DIRECT_RECORD_CALL_RESULT: aggregate call results remain
                address-backed Core objects rather than becoming aggregate SSA. */
             MinicCoreObjectId result_object;

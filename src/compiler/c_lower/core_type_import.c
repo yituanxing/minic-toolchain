@@ -413,12 +413,20 @@ static bool import_type(MinicCoreTypeImporter *importer, MinicType source,
         return minic_core_type_register(importer->context, &type, result);
     case MINIC_TYPE_BASE_FLOAT: type.value.floating.format = MINIC_CORE_FLOAT_BINARY32; break;
     case MINIC_TYPE_BASE_DOUBLE: type.value.floating.format = MINIC_CORE_FLOAT_BINARY64; break;
-    case MINIC_TYPE_BASE_LONG_DOUBLE: type.value.floating.format = MINIC_CORE_FLOAT_EXTENDED; break;
+    case MINIC_TYPE_BASE_LONG_DOUBLE:
+    case MINIC_TYPE_BASE_FLOAT64X:
+        if (importer->invocation->machine.data_layout->long_double_representation ==
+            MINIC_LONG_DOUBLE_REPRESENTATION_X87_EXTENDED80)
+            type.value.floating.format = MINIC_CORE_FLOAT_X87_EXTENDED80;
+        else if (importer->invocation->machine.data_layout->long_double_representation ==
+                 MINIC_LONG_DOUBLE_REPRESENTATION_IEEE_BINARY128)
+            type.value.floating.format = MINIC_CORE_FLOAT_BINARY128;
+        else return false;
+        break;
     case MINIC_TYPE_BASE_FLOAT128: type.value.floating.format = MINIC_CORE_FLOAT_BINARY128; break;
-    case MINIC_TYPE_BASE_FLOAT32: type.value.floating.format = MINIC_CORE_FLOAT_EXTENDED32; break;
-    case MINIC_TYPE_BASE_FLOAT64: type.value.floating.format = MINIC_CORE_FLOAT_EXTENDED64; break;
-    case MINIC_TYPE_BASE_FLOAT32X: type.value.floating.format = MINIC_CORE_FLOAT_EXTENDED32X; break;
-    case MINIC_TYPE_BASE_FLOAT64X: type.value.floating.format = MINIC_CORE_FLOAT_EXTENDED64X; break;
+    case MINIC_TYPE_BASE_FLOAT32: type.value.floating.format = MINIC_CORE_FLOAT_BINARY32; break;
+    case MINIC_TYPE_BASE_FLOAT64:
+    case MINIC_TYPE_BASE_FLOAT32X: type.value.floating.format = MINIC_CORE_FLOAT_BINARY64; break;
     case MINIC_TYPE_BASE_ARRAY:
         array = minic_c0_program_array_type(importer->program, source.array_type_id);
         if (array == NULL) return false;

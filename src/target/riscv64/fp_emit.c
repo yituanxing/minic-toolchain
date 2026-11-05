@@ -85,7 +85,7 @@ bool minic_riscv64_emit_fp_instruction(
         return false;
     switch (instruction->kind) {
     case MINIC_CORE_INSTRUCTION_FLOATING_CONSTANT:
-        if (shape.result_format == MINIC_CORE_FLOAT_EXTENDED) {
+        if (shape.result_format == MINIC_CORE_FLOAT_BINARY128) {
             if (fprintf(file,
                         "  li t0, 0x%016" PRIx64 "\n"
                         "  li t1, 0x%016" PRIx64 "\n",

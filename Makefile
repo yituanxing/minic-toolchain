@@ -188,7 +188,9 @@ MINIC_SOURCES := \
 	src/target/common/direct_function_plan.c \
 	src/target/common/core_function_plan.c \
 	src/target/common/machine_ir.c \
+	src/target/common/machine_builder.c \
 	src/target/common/machine_ir_verify.c \
+	src/target/common/machine_gnu_asm.c \
 	src/target/common/core_function_facts.c \
 	src/target/common/core_numeric_shape.c \
 	src/target/common/core_value_slots.c \
@@ -203,6 +205,8 @@ MINIC_SOURCES := \
 	src/target/common/lp64_scalar.c \
 	src/target/common/lp64_frame.c \
 	src/target/riscv/isa_resolve.c \
+	src/target/riscv/machine_opcode.c \
+	src/target/riscv/machine_gnu_asm.c \
 	src/target/riscv64/isa.c \
 	src/target/riscv32/rv32_emit.c \
 	src/target/riscv32/rv32_integer_emit.c \
@@ -241,6 +245,8 @@ MINIC_SOURCES := \
 	src/target/riscv64/codegen_function.c \
 	src/target/riscv64/global_emit.c \
 	src/target/x86_64/codegen.c \
+	src/target/x86_64/machine_opcode.c \
+	src/target/x86_64/machine_gnu_asm.c \
 	src/target/x86_64/machine_emit.c \
 	src/target/x86_64/asm_contract.c \
 	src/target/x86_64/asm_contract_source.c \
@@ -254,6 +260,8 @@ MINIC_SOURCES := \
 	src/target/x86_64/frame.c \
 	src/target/x86_64/global_emit.c \
 	src/target/aarch64/abi.c \
+	src/target/aarch64/machine_opcode.c \
+	src/target/aarch64/machine_gnu_asm.c \
 	src/target/aarch64/codegen.c \
 	src/target/aarch64/frame_emit.c \
 	src/target/aarch64/neon_emit.c \
@@ -267,6 +275,8 @@ MINIC_SOURCES := \
 	src/target/aarch64/integer_emit.c \
 	src/target/aarch64/fp_emit.c \
 	src/target/loongarch64/codegen.c \
+	src/target/loongarch64/machine_opcode.c \
+	src/target/loongarch64/machine_gnu_asm.c \
 	src/target/loongarch64/asm_contract.c \
 	src/target/loongarch64/asm_contract_source.c \
 	src/target/loongarch64/simd_asm.c \
@@ -2297,11 +2307,80 @@ check-machine-ir-contract:
 	$(CC) -std=c11 -Wall -Wextra -Wpedantic -Werror $(MINIC_INCLUDES) \
 	  tests/target/machine_ir_contract_test.c \
 	  src/target/common/machine_ir.c \
+	  src/target/common/machine_builder.c \
 	  src/target/common/machine_ir_verify.c \
 	  -o "$(BUILD_DIR)/tests/machine-ir-contract"
 	"$(BUILD_DIR)/tests/machine-ir-contract"
 
 check-fast: check-machine-ir-contract
+
+.PHONY: check-machine-gnu-asm
+check-machine-gnu-asm:
+	mkdir -p "$(BUILD_DIR)/tests"
+	$(CC) -std=c11 -Wall -Wextra -Wpedantic -Werror $(MINIC_INCLUDES) \
+	  tests/target/machine_gnu_asm_test.c \
+	  src/target/common/machine_ir.c \
+	  src/target/common/machine_builder.c \
+	  src/target/common/machine_ir_verify.c \
+	  src/target/common/machine_gnu_asm.c \
+	  -o "$(BUILD_DIR)/tests/machine-gnu-asm"
+	"$(BUILD_DIR)/tests/machine-gnu-asm"
+
+check-fast: check-machine-gnu-asm
+
+# Real target-owned physical opcode contracts. These exercise the typed
+# builder/verifier/GNU body writer, not the old Core-to-FILE* backends.
+.PHONY: check-riscv-machine-gnu-asm
+check-riscv-machine-gnu-asm:
+	mkdir -p "$(BUILD_DIR)/tests"
+	$(CC) -std=c11 -Wall -Wextra -Wpedantic -Werror $(MINIC_INCLUDES) \
+	  tests/target/riscv_machine_gnu_asm_test.c \
+	  src/target/common/machine_ir.c \
+	  src/target/common/machine_builder.c \
+	  src/target/common/machine_ir_verify.c \
+	  src/target/common/machine_gnu_asm.c \
+	  src/target/riscv/machine_opcode.c \
+	  src/target/riscv/machine_gnu_asm.c \
+	  -o "$(BUILD_DIR)/tests/riscv-machine-gnu-asm"
+	"$(BUILD_DIR)/tests/riscv-machine-gnu-asm"
+
+check-fast: check-riscv-machine-gnu-asm
+
+.PHONY: check-direct-machine-gnu-asm
+check-direct-machine-gnu-asm:
+	mkdir -p "$(BUILD_DIR)/tests"
+	$(CC) -std=c11 -Wall -Wextra -Wpedantic -Werror $(MINIC_INCLUDES) \
+	  tests/target/direct_machine_gnu_asm_test.c \
+	  src/target/data_layout.c \
+	  src/target/common/machine_ir.c \
+	  src/target/common/machine_builder.c \
+	  src/target/common/machine_ir_verify.c \
+	  src/target/common/machine_gnu_asm.c \
+	  src/target/aarch64/machine_opcode.c \
+	  src/target/aarch64/machine_gnu_asm.c \
+	  src/target/loongarch64/machine_opcode.c \
+	  src/target/loongarch64/machine_gnu_asm.c \
+	  -o "$(BUILD_DIR)/tests/direct-machine-gnu-asm"
+	"$(BUILD_DIR)/tests/direct-machine-gnu-asm"
+
+check-fast: check-direct-machine-gnu-asm
+
+.PHONY: check-x86-machine-gnu-asm
+check-x86-machine-gnu-asm:
+	mkdir -p "$(BUILD_DIR)/tests"
+	$(CC) -std=c11 -Wall -Wextra -Wpedantic -Werror $(MINIC_INCLUDES) \
+	  tests/target/x86_machine_gnu_asm_test.c \
+	  src/target/data_layout.c \
+	  src/target/common/machine_ir.c \
+	  src/target/common/machine_builder.c \
+	  src/target/common/machine_ir_verify.c \
+	  src/target/common/machine_gnu_asm.c \
+	  src/target/x86_64/machine_opcode.c \
+	  src/target/x86_64/machine_gnu_asm.c \
+	  -o "$(BUILD_DIR)/tests/x86-machine-gnu-asm"
+	"$(BUILD_DIR)/tests/x86-machine-gnu-asm"
+
+check-fast: check-x86-machine-gnu-asm
 
 # Source ASM and local labels are sealed to canonical owned symbol identities
 # before Core publication. All five machine consumers validate these names

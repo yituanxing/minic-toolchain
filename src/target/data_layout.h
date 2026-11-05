@@ -11,6 +11,14 @@ typedef enum MinicByteOrder {
     MINIC_BYTE_ORDER_BIG
 } MinicByteOrder;
 
+/* Source long double representation; storage shape and calling convention
+ * remain separate facts. _Float64x may select this same representation but
+ * retains an independent C language type identity before Core import. */
+typedef enum MinicLongDoubleRepresentation {
+    MINIC_LONG_DOUBLE_REPRESENTATION_IEEE_BINARY128 = 0,
+    MINIC_LONG_DOUBLE_REPRESENTATION_X87_EXTENDED80
+} MinicLongDoubleRepresentation;
+
 typedef struct MinicDataLayout {
     /* An ABI property, not an architecture test in Frontend or Core.
      * A bytewise bit-field lowering path must reject an unknown order. */
@@ -23,6 +31,7 @@ typedef struct MinicDataLayout {
     size_t double_alignment;
     size_t long_double_size;
     size_t long_double_alignment;
+    MinicLongDoubleRepresentation long_double_representation;
     /* Separate IEEE binary128 identity; 0 means unsupported target. */
     size_t float128_size;
     size_t float128_alignment;

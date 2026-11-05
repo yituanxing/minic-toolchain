@@ -142,7 +142,7 @@ static bool minic_lp64_plan_types(
                 }
                 gp += used;
             }
-        } else if (lp64_call_core_float_format(core, MINIC_CORE_FLOAT_EXTENDED)) {
+        } else if (lp64_call_core_float_format(core, MINIC_CORE_FLOAT_BINARY128)) {
             loc->kind = MINIC_LP64_ARGUMENT_WIDE;
             if (abi->long_double_in_fp_register) {
                 if (fp < abi->fp_argument_registers) {
@@ -423,7 +423,7 @@ static bool minic_lp64_admit_call(
                  * Preserve 32-bit promotions and classify full LP64
                  * integer values in the native general-purpose registers. */
                 if (!is_variadic ||
-                    (!lp64_call_core_float_format(base, MINIC_CORE_FLOAT_EXTENDED) &&
+                    (!lp64_call_core_float_format(base, MINIC_CORE_FLOAT_BINARY128) &&
                      !lp64_call_core_float_format(base, MINIC_CORE_FLOAT_BINARY64) &&
                      base->kind != MINIC_CORE_TYPE_POINTER &&
                      !(abi->variadic_align_wide_gp_pair &&

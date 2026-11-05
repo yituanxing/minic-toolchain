@@ -5,6 +5,7 @@
 #include "target/riscv64/frame_requirements.h"
 #include "target/riscv64/codegen_internal.h"
 #include "target/common/core_abi_value_shape.h"
+#include "target/common/core_extended_float_runtime.h"
 #include "target/riscv64/legalize.h"
 #include <stdint.h>
 #include <stdio.h>
@@ -740,6 +741,7 @@ bool minic_riscv64_emit_direct_call(FILE *file,
                       size_t instruction_id) {
     const MinicCoreCallView *call;
     const MinicCoreCallee *callee;
+    const char *call_symbol;
     MinicRiscv64AbiValue return_value;
     const MinicRiscv64PreparedCall *planned;
     if (file == NULL || function == NULL || frame == NULL ||
@@ -752,6 +754,12 @@ bool minic_riscv64_emit_direct_call(FILE *file,
         planned->argument_count != call->argument_count)
         return false;
     callee = call->callee;
+    call_symbol = instruction->value.call.extended_float_operation ==
+                          MINIC_CORE_EXT_FLOAT_NONE
+        ? callee->name
+        : minic_core_extended_float_runtime_symbol(
+              instruction->value.call.extended_float_operation);
+    if (call_symbol == NULL) return false;
     return_value = planned->return_value;
     if (return_value.kind == MINIC_RISCV64_ABI_VALUE_INDIRECT) {
         if (call->return_form != MINIC_CORE_CALL_RETURN_OBJECT ||
@@ -764,8 +772,23 @@ bool minic_riscv64_emit_direct_call(FILE *file,
             file, function, frame,
             call, planned, true))
         return false;
-    if (fprintf(file, "  call %s\n", callee->name) < 0) {
+    if (fprintf(file, "  call %s\n", call_symbol) < 0) {
         return false;
+    }
+    /* GNU TF comparison helpers return a signed three-way status; Core
+     * exposes an ordered boolean predicate instead. The helpers report
+     * unordered as positive, so < and <= stay false for NaNs. */
+    switch (instruction->value.call.extended_float_operation) {
+    case MINIC_CORE_EXT_FLOAT_EQUAL:
+        if (fputs("  seqz a0, a0\n", file) == EOF) return false;
+        break;
+    case MINIC_CORE_EXT_FLOAT_LESS:
+        if (fputs("  slt a0, a0, zero\n", file) == EOF) return false;
+        break;
+    case MINIC_CORE_EXT_FLOAT_LESS_EQUAL:
+        if (fputs("  slti a0, a0, 1\n", file) == EOF) return false;
+        break;
+    default: break;
     }
     return rv64_emit_call_return_result(file, function, frame,
         instruction, instruction->value.call.result_object, &return_value);

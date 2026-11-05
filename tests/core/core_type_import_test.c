@@ -12,6 +12,66 @@
     } \
 } while (0)
 
+/* C's four TS 18661 spellings are source identities, not Core floating
+ * encodings. Every target must import its physical representation exactly,
+ * while same-layout C aliases can share the execution type safely. */
+static bool check_physical_float_import(void) {
+    static const MinicTargetArchitecture architectures[] = {
+        MINIC_TARGET_ARCH_RISCV32, MINIC_TARGET_ARCH_RISCV64,
+        MINIC_TARGET_ARCH_X86_64, MINIC_TARGET_ARCH_AARCH64,
+        MINIC_TARGET_ARCH_LOONGARCH64,
+    };
+    size_t i;
+    for (i = 0U; i < sizeof(architectures) / sizeof(architectures[0]); ++i) {
+        MinicTargetInvocation target;
+        MinicC0Program program;
+        MinicCoreTypeContext types;
+        MinicCoreTypeImporter importer;
+        MinicCoreTypeId f32, f64, ld = MINIC_CORE_TYPE_INVALID;
+        MinicCoreTypeId f32_alias, f64_alias, f32x, f64x;
+        const MinicCoreType *wide;
+        bool ok;
+        if (!minic_target_invocation_begin(
+                &target, minic_target_info_for_architecture(architectures[i])))
+            return false;
+        minic_c0_program_initialize(&program);
+        minic_core_type_context_initialize(&types);
+        if (!minic_core_type_importer_initialize(&importer, &program, &target, &types)) {
+            minic_core_type_context_destroy(&types);
+            minic_c0_program_destroy(&program);
+            return false;
+        }
+        ok = minic_core_type_import(&importer, minic_type_float(), &f32) &&
+             minic_core_type_import(&importer, minic_type_double(), &f64) &&
+             minic_core_type_import(&importer, minic_type_long_double(), &ld);
+        if (ok && architectures[i] != MINIC_TARGET_ARCH_RISCV32) {
+            ok = minic_core_type_import(&importer, minic_type_float32(), &f32_alias) &&
+                 minic_core_type_import(&importer, minic_type_float64(), &f64_alias) &&
+                 minic_core_type_import(&importer, minic_type_float32x(), &f32x) &&
+                 minic_core_type_import(&importer, minic_type_float64x(), &f64x) &&
+                 f32 == f32_alias && f64 == f64_alias &&
+                 f64 == f32x && ld == f64x;
+        }
+        wide = minic_core_type_get(&types, ld);
+        ok = ok && wide != NULL && wide->size == 16U &&
+             wide->value.floating.format ==
+                (architectures[i] == MINIC_TARGET_ARCH_X86_64
+                     ? MINIC_CORE_FLOAT_X87_EXTENDED80
+                     : MINIC_CORE_FLOAT_BINARY128);
+        if (ok && (architectures[i] == MINIC_TARGET_ARCH_RISCV64 ||
+                   architectures[i] == MINIC_TARGET_ARCH_X86_64)) {
+            MinicCoreTypeId ieee128;
+            ok = minic_core_type_import(&importer, minic_type_float128(), &ieee128) &&
+                 (ieee128 == ld) == (architectures[i] == MINIC_TARGET_ARCH_RISCV64);
+        }
+        minic_core_type_importer_destroy(&importer);
+        minic_core_type_context_destroy(&types);
+        minic_c0_program_destroy(&program);
+        if (!ok) return false;
+    }
+    return true;
+}
+
 int main(void) {
     MinicC0Program program;
     MinicCoreTypeContext context;
@@ -47,6 +107,8 @@ int main(void) {
     const MinicCoreType *node, *pointer, *array, *function, *vector, *int_type;
     size_t node_size, node_alignment, field_offset, bit_offset, storage_alignment;
     size_t previous_count;
+
+    CHECK(check_physical_float_import());
 
     CHECK(minic_target_invocation_begin(
         &invocation, minic_target_info_for_architecture(MINIC_TARGET_ARCH_X86_64)));

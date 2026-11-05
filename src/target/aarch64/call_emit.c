@@ -7,6 +7,7 @@
 #include "target/common/lp64_scalar.h"
 #include "target/common/lp64_aggregate.h"
 #include "target/common/core_abi_value_shape.h"
+#include "target/common/core_extended_float_runtime.h"
 #include "target/aarch64/abi.h"
 #include <stdio.h>
 
@@ -54,7 +55,7 @@ static bool a64_scalar_shape(const MinicCoreFunction *fn,
     case MINIC_CORE_TYPE_FLOAT:
         shape->is_float = value.float_format == MINIC_CORE_FLOAT_BINARY32;
         shape->is_double = value.float_format == MINIC_CORE_FLOAT_BINARY64;
-        shape->is_long_double = value.float_format == MINIC_CORE_FLOAT_EXTENDED;
+        shape->is_long_double = value.float_format == MINIC_CORE_FLOAT_BINARY128;
         return true;
     default:
         return false;
@@ -353,8 +354,14 @@ bool minic_aarch64_emit_abi_instruction(
             } else {
                 const MinicCoreCallee *callee =
                     &fn->callees[ins->value.call.callee_id];
+                const char *call_symbol =
+                    ins->value.call.extended_float_operation == MINIC_CORE_EXT_FLOAT_NONE
+                        ? callee->name
+                        : minic_core_extended_float_runtime_symbol(
+                              ins->value.call.extended_float_operation);
+                if (call_symbol == NULL) return false;
                 if (minic_multi_elf_module_symbol_facts(
-                        module, callee->name,
+                        module, call_symbol,
                         MINIC_ELF_MODULE_SYMBOL_FUNCTION).undefined_weak) {
                     /* An undefined weak symbol may resolve to address zero.
                      * Direct CALL26 can force a PLT entry, forbidden by the
@@ -364,10 +371,25 @@ bool minic_aarch64_emit_abi_instruction(
                     if (fprintf(out, "  adrp x16, :got:%s\n"
                                      "  ldr x16, [x16, :got_lo12:%s]\n"
                                      "  blr x16\n",
-                                callee->name, callee->name) < 0)
+                                call_symbol, call_symbol) < 0)
                         return false;
-                } else if (fprintf(out, "  bl %s\n", callee->name) < 0) {
+                } else if (fprintf(out, "  bl %s\n", call_symbol) < 0) {
                     return false;
+                }
+                /* GNU TF status is a Target ABI detail. Core ordered
+                 * equality/less/less-equal always return canonical 0/1;
+                 * libgcc uses a positive status for unordered NaNs. */
+                switch (ins->value.call.extended_float_operation) {
+                case MINIC_CORE_EXT_FLOAT_EQUAL:
+                    if (fputs("  cmp w0, #0\n  cset w0, eq\n", out) == EOF) return false;
+                    break;
+                case MINIC_CORE_EXT_FLOAT_LESS:
+                    if (fputs("  cmp w0, #0\n  cset w0, lt\n", out) == EOF) return false;
+                    break;
+                case MINIC_CORE_EXT_FLOAT_LESS_EQUAL:
+                    if (fputs("  cmp w0, #0\n  cset w0, le\n", out) == EOF) return false;
+                    break;
+                default: break;
                 }
             }
             if (stack_bytes != 0U &&

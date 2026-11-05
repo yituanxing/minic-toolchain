@@ -626,10 +626,40 @@ static MinicCoreLowerStatus lower_integer_assignment_value(MinicCoreLowerContext
         context, expression->span, result_type, source_value, value_id);
 }
 
-static MinicCoreLowerStatus append_runtime_scalar_call(
+/* Core owns a typed arithmetic operation, not a GNU compiler-rt symbol.  The
+ * spelling below is deliberately outside the C/ELF identifier namespace: a
+ * machine target must select any required external runtime entry itself. */
+static const char *core_extended_float_internal_name(
+    MinicCoreExtendedFloatOperation operation) {
+    switch (operation) {
+    case MINIC_CORE_EXT_FLOAT_ADD: return "@core.float.add";
+    case MINIC_CORE_EXT_FLOAT_SUBTRACT: return "@core.float.subtract";
+    case MINIC_CORE_EXT_FLOAT_MULTIPLY: return "@core.float.multiply";
+    case MINIC_CORE_EXT_FLOAT_DIVIDE: return "@core.float.divide";
+    case MINIC_CORE_EXT_FLOAT_NEGATE: return "@core.float.negate";
+    case MINIC_CORE_EXT_FLOAT_EQUAL: return "@core.float.equal";
+    case MINIC_CORE_EXT_FLOAT_LESS: return "@core.float.less";
+    case MINIC_CORE_EXT_FLOAT_LESS_EQUAL: return "@core.float.less_equal";
+    case MINIC_CORE_EXT_FLOAT_FROM_BINARY32: return "@core.float.from_binary32";
+    case MINIC_CORE_EXT_FLOAT_FROM_BINARY64: return "@core.float.from_binary64";
+    case MINIC_CORE_EXT_FLOAT_TO_BINARY32: return "@core.float.to_binary32";
+    case MINIC_CORE_EXT_FLOAT_TO_BINARY64: return "@core.float.to_binary64";
+    case MINIC_CORE_EXT_FLOAT_FROM_SIGNED32: return "@core.float.from_signed32";
+    case MINIC_CORE_EXT_FLOAT_FROM_UNSIGNED32: return "@core.float.from_unsigned32";
+    case MINIC_CORE_EXT_FLOAT_FROM_SIGNED64: return "@core.float.from_signed64";
+    case MINIC_CORE_EXT_FLOAT_FROM_UNSIGNED64: return "@core.float.from_unsigned64";
+    case MINIC_CORE_EXT_FLOAT_TO_SIGNED32: return "@core.float.to_signed32";
+    case MINIC_CORE_EXT_FLOAT_TO_UNSIGNED32: return "@core.float.to_unsigned32";
+    case MINIC_CORE_EXT_FLOAT_TO_SIGNED64: return "@core.float.to_signed64";
+    case MINIC_CORE_EXT_FLOAT_TO_UNSIGNED64: return "@core.float.to_unsigned64";
+    default: return NULL;
+    }
+}
+
+static MinicCoreLowerStatus append_extended_float_operation(
     MinicCoreLowerContext *context,
     MinicSourceSpan span,
-    const char *name,
+    MinicCoreExtendedFloatOperation operation,
     MinicType return_type,
     const MinicType *parameter_types,
     const MinicCoreValueId *argument_values,
@@ -641,6 +671,7 @@ static MinicCoreLowerStatus append_runtime_scalar_call(
     MinicType instruction_source_type = minic_type_void();
     size_t argument_begin;
     size_t index;
+    const char *name = core_extended_float_internal_name(operation);
 
     if (context == NULL || context->function == NULL || name == NULL ||
         value_id == NULL || argument_count > 2U ||
@@ -679,6 +710,7 @@ static MinicCoreLowerStatus append_runtime_scalar_call(
     instruction.value.call.argument_begin = argument_begin;
     instruction.value.call.argument_count = argument_count;
     instruction.value.call.result_object = MINIC_CORE_OBJECT_INVALID;
+    instruction.value.call.extended_float_operation = operation;
     return minic_core_function_append_source_value_instruction(
                context->source, context->block_id, &instruction, instruction_source_type, value_id)
                ? MINIC_CORE_LOWER_OK
@@ -692,7 +724,7 @@ MinicCoreLowerStatus minic_core_lower_internal_append_long_double_conversion(
     MinicType source_type,
     MinicCoreValueId source_value,
     MinicCoreValueId *value_id) {
-    const char *helper;
+    MinicCoreExtendedFloatOperation operation;
     MinicType parameter_type;
     size_t source_alignment;
     size_t source_size;
@@ -706,12 +738,12 @@ MinicCoreLowerStatus minic_core_lower_internal_append_long_double_conversion(
         *value_id = source_value;
         return MINIC_CORE_LOWER_OK;
     }
-    helper = NULL;
+    operation = MINIC_CORE_EXT_FLOAT_NONE;
     if (minic_type_is_long_double(target_type)) {
         if (minic_type_is_double(source_type)) {
-            helper = "__extenddftf2";
+            operation = MINIC_CORE_EXT_FLOAT_FROM_BINARY64;
         } else if (minic_type_is_float(source_type)) {
-            helper = "__extendsftf2";
+            operation = MINIC_CORE_EXT_FLOAT_FROM_BINARY32;
         } else if (minic_type_is_integer(source_type) &&
                    minic_data_layout_type(context->target,
                                           context->body->program,
@@ -721,20 +753,20 @@ MinicCoreLowerStatus minic_core_lower_internal_append_long_double_conversion(
                    source_size != 0U && source_size <= 8U) {
             (void)source_alignment;
             if (source_size <= 4U) {
-                helper = minic_type_is_unsigned_integer(source_type)
-                             ? "__floatunsitf"
-                             : "__floatsitf";
+                operation = minic_type_is_unsigned_integer(source_type)
+                                ? MINIC_CORE_EXT_FLOAT_FROM_UNSIGNED32
+                                : MINIC_CORE_EXT_FLOAT_FROM_SIGNED32;
             } else {
-                helper = minic_type_is_unsigned_integer(source_type)
-                             ? "__floatunditf"
-                             : "__floatditf";
+                operation = minic_type_is_unsigned_integer(source_type)
+                                ? MINIC_CORE_EXT_FLOAT_FROM_UNSIGNED64
+                                : MINIC_CORE_EXT_FLOAT_FROM_SIGNED64;
             }
         }
     } else if (minic_type_is_long_double(source_type)) {
         if (minic_type_is_double(target_type)) {
-            helper = "__trunctfdf2";
+            operation = MINIC_CORE_EXT_FLOAT_TO_BINARY64;
         } else if (minic_type_is_float(target_type)) {
-            helper = "__trunctfsf2";
+            operation = MINIC_CORE_EXT_FLOAT_TO_BINARY32;
         } else if (minic_type_is_integer(target_type)) {
             MinicCoreLowerStatus status;
             MinicCoreValueId converted_value;
@@ -752,24 +784,24 @@ MinicCoreLowerStatus minic_core_lower_internal_append_long_double_conversion(
             }
             (void)target_alignment;
             if (target_size <= 4U) {
-                helper = minic_type_is_unsigned_integer(target_type)
-                             ? "__fixunstfsi"
-                             : "__fixtfsi";
+                operation = minic_type_is_unsigned_integer(target_type)
+                                ? MINIC_CORE_EXT_FLOAT_TO_UNSIGNED32
+                                : MINIC_CORE_EXT_FLOAT_TO_SIGNED32;
                 helper_return_type = minic_type_is_unsigned_integer(target_type)
                                          ? minic_type_unsigned_int()
                                          : minic_type_int();
             } else {
-                helper = minic_type_is_unsigned_integer(target_type)
-                             ? "__fixunstfdi"
-                             : "__fixtfdi";
+                operation = minic_type_is_unsigned_integer(target_type)
+                                ? MINIC_CORE_EXT_FLOAT_TO_UNSIGNED64
+                                : MINIC_CORE_EXT_FLOAT_TO_SIGNED64;
                 helper_return_type = minic_type_is_unsigned_integer(target_type)
                                          ? minic_type_unsigned_long_long()
                                          : minic_type_long_long();
             }
             parameter_type = source_type;
-            status = append_runtime_scalar_call(context,
+            status = append_extended_float_operation(context,
                                                 span,
-                                                helper,
+                                                operation,
                                                 helper_return_type,
                                                 &parameter_type,
                                                 &source_value,
@@ -786,16 +818,16 @@ MinicCoreLowerStatus minic_core_lower_internal_append_long_double_conversion(
                 context, span, target_type, converted_value, value_id);
         }
     }
-    if (helper == NULL) return MINIC_CORE_LOWER_UNSUPPORTED;
+    if (operation == MINIC_CORE_EXT_FLOAT_NONE) return MINIC_CORE_LOWER_UNSUPPORTED;
     parameter_type = source_type;
-    return append_runtime_scalar_call(
-        context, span, helper, target_type, &parameter_type, &source_value, 1U, value_id);
+    return append_extended_float_operation(
+        context, span, operation, target_type, &parameter_type, &source_value, 1U, value_id);
 }
 
 MinicCoreLowerStatus minic_core_lower_internal_append_long_double_binary_helper(
     MinicCoreLowerContext *context,
     MinicSourceSpan span,
-    const char *helper,
+    MinicCoreExtendedFloatOperation operation,
     MinicCoreValueId left,
     MinicCoreValueId right,
     MinicType return_type,
@@ -807,7 +839,7 @@ MinicCoreLowerStatus minic_core_lower_internal_append_long_double_binary_helper(
     parameter_types[1] = minic_type_long_double();
     argument_values[0] = left;
     argument_values[1] = right;
-    return append_runtime_scalar_call(context, span, helper, return_type,
+    return append_extended_float_operation(context, span, operation, return_type,
                                       parameter_types, argument_values, 2U, value_id);
 }
 
@@ -817,10 +849,9 @@ MinicCoreLowerStatus minic_core_lower_internal_append_long_double_negate(
     MinicCoreValueId operand,
     MinicCoreValueId *value_id) {
     MinicType parameter_type = minic_type_long_double();
-    /* TFmode runtime helper is an exact sign-bit operation. The x86 target
-     * intercepts the same typed call and performs x87 FCHS on its 80-bit
-     * long-double representation. */
-    return append_runtime_scalar_call(context, span, "__negtf2", parameter_type,
+    /* Core sign-bit negation preserves signed zero and NaN payloads;
+     * the target chooses an appropriate native or runtime operation. */
+    return append_extended_float_operation(context, span, MINIC_CORE_EXT_FLOAT_NEGATE, parameter_type,
                                       &parameter_type, &operand, 1U, value_id);
 }
 

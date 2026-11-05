@@ -86,7 +86,7 @@ MinicDirectLP64ProfileResult minic_multi_direct_lp64_profile_function(
                     (loc->kind == MINIC_LP64_ARGUMENT_WIDE &&
                      abi->long_double_in_fp_register &&
                      direct_profile_core_float_format(fn->type_context,
-                         minic_core_function_parameter_types(fn)[i], MINIC_CORE_FLOAT_EXTENDED))) {
+                         minic_core_function_parameter_types(fn)[i], MINIC_CORE_FLOAT_BINARY128))) {
                     profile->fixed_fp_count = abi->fp_argument_registers;
                 } else {
                     profile->fixed_gp_count = abi->gp_argument_registers;

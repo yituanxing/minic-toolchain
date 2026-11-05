@@ -10,6 +10,7 @@ static const MinicDataLayout minic_rv64_data_layout = {
     .double_alignment = 8U,
     .long_double_size = 16U,
     .long_double_alignment = 16U,
+    .long_double_representation = MINIC_LONG_DOUBLE_REPRESENTATION_IEEE_BINARY128,
     /* RV64 Linux lp64d uses IEEE binary128 for long double and _Float128.
      * These storage facts do not imply support for binary128 operations. */
     .float128_size = 16U,
@@ -29,6 +30,7 @@ static const MinicDataLayout minic_rv32_data_layout = {
     .double_alignment = 8U,
     .long_double_size = 16U,
     .long_double_alignment = 16U,
+    .long_double_representation = MINIC_LONG_DOUBLE_REPRESENTATION_IEEE_BINARY128,
     .float128_size = 16U,
     .float128_alignment = 16U,
 };
@@ -49,6 +51,7 @@ static const MinicDataLayout minic_x86_64_linux_data_layout_value = {
     .double_alignment = 8U,
     .long_double_size = 16U,
     .long_double_alignment = 16U,
+    .long_double_representation = MINIC_LONG_DOUBLE_REPRESENTATION_X87_EXTENDED80,
     .float128_size = 16U,
     .float128_alignment = 16U,
 };
@@ -66,6 +69,7 @@ static const MinicDataLayout minic_aarch64_linux_layout = {
     .double_alignment = 8U,
     .long_double_size = 16U,
     .long_double_alignment = 16U,
+    .long_double_representation = MINIC_LONG_DOUBLE_REPRESENTATION_IEEE_BINARY128,
     .fixed_vector128_size = 16U,
     .fixed_vector128_alignment = 16U,
 };
@@ -82,6 +86,7 @@ static const MinicDataLayout minic_loongarch64_linux_layout = {
     .double_alignment = 8U,
     .long_double_size = 16U,
     .long_double_alignment = 16U,
+    .long_double_representation = MINIC_LONG_DOUBLE_REPRESENTATION_IEEE_BINARY128,
 };
 
 const MinicDataLayout *minic_aarch64_linux_data_layout(void) {

@@ -22,7 +22,7 @@ static bool rv64_fn_is_wide_scalar(const MinicCoreFunction *fn,
     const MinicCoreType *type = minic_riscv64_core_base_type(fn, id);
     return type != NULL &&
            ((type->kind == MINIC_CORE_TYPE_FLOAT &&
-             type->value.floating.format == MINIC_CORE_FLOAT_EXTENDED) ||
+             type->value.floating.format == MINIC_CORE_FLOAT_BINARY128) ||
             (type->kind == MINIC_CORE_TYPE_INTEGER &&
              type->value.integer.bit_width == 128U));
 }

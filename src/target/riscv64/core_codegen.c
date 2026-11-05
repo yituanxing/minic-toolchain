@@ -371,7 +371,7 @@ static bool emit_terminator(FILE *file,
         wide_return = (core_return->kind == MINIC_CORE_TYPE_INTEGER &&
                        core_return->value.integer.bit_width == 128U) ||
                       (core_return->kind == MINIC_CORE_TYPE_FLOAT &&
-                       core_return->value.floating.format == MINIC_CORE_FLOAT_EXTENDED);
+                       core_return->value.floating.format == MINIC_CORE_FLOAT_BINARY128);
         fp_return = core_return->kind == MINIC_CORE_TYPE_FLOAT &&
                     (core_return->value.floating.format == MINIC_CORE_FLOAT_BINARY32 ||
                      core_return->value.floating.format == MINIC_CORE_FLOAT_BINARY64);

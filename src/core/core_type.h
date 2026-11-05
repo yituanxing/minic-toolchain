@@ -29,13 +29,17 @@ typedef enum MinicCoreTypeKind {
 typedef enum MinicCoreFloatFormat {
     MINIC_CORE_FLOAT_BINARY32 = 0,
     MINIC_CORE_FLOAT_BINARY64,
-    MINIC_CORE_FLOAT_EXTENDED,
     MINIC_CORE_FLOAT_BINARY128,
-    MINIC_CORE_FLOAT_EXTENDED32,
-    MINIC_CORE_FLOAT_EXTENDED64,
-    MINIC_CORE_FLOAT_EXTENDED32X,
-    MINIC_CORE_FLOAT_EXTENDED64X
+    /* x87's 80-bit encoding with explicit integer significand bit. The
+     * containing Core type separately records the ABI object size (16 B on
+     * x86-64 SysV), which is not the floating payload's encoded bit width. */
+    MINIC_CORE_FLOAT_X87_EXTENDED80
 } MinicCoreFloatFormat;
+
+static inline bool minic_core_float_format_is_wide(MinicCoreFloatFormat format) {
+    return format == MINIC_CORE_FLOAT_BINARY128 ||
+           format == MINIC_CORE_FLOAT_X87_EXTENDED80;
+}
 
 /* Core vectors are classified by the value representation that lowering
  * actually admitted, independently of the source extension naming them.

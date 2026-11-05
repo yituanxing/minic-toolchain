@@ -84,8 +84,15 @@ static bool type_references_valid(const MinicCoreTypeContext *context,
     switch (type->kind) {
     case MINIC_CORE_TYPE_VOID:
     case MINIC_CORE_TYPE_INTEGER:
-    case MINIC_CORE_TYPE_FLOAT:
         return true;
+    case MINIC_CORE_TYPE_FLOAT:
+        return type->value.floating.format == MINIC_CORE_FLOAT_BINARY32
+                   ? (!type->has_layout || type->size == 4U)
+               : type->value.floating.format == MINIC_CORE_FLOAT_BINARY64
+                   ? (!type->has_layout || type->size == 8U)
+               : minic_core_float_format_is_wide(type->value.floating.format)
+                   ? (!type->has_layout || type->size == 16U)
+                   : false;
     case MINIC_CORE_TYPE_POINTER:
         return type->value.pointer.pointee < context->type_count;
     case MINIC_CORE_TYPE_ARRAY: {

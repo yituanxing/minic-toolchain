@@ -41,7 +41,7 @@ bool minic_loongarch64_emit_fp_instruction(
     switch (ins->kind) {
         case MINIC_CORE_INSTRUCTION_FLOATING_CONSTANT:
             if (loong_fp_type(fn, ins->core_type_id,
-                              MINIC_CORE_FLOAT_EXTENDED)) {
+                              MINIC_CORE_FLOAT_BINARY128)) {
                 size_t dst;
                 if (!minic_lp64_frame_plan_wide_slot(frame_plan, ins->result, &dst) ||
                     fprintf(out, "  li.d $t0, 0x%016" PRIx64 "\n",

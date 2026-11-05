@@ -17,6 +17,10 @@ typedef struct MinicMachineOpcodeContract {
     MinicMachineRegisterEffect implicit[MINIC_MACHINE_MAX_REGISTER_EFFECTS];
     size_t implicit_count;
     bool terminates_block;
+    /* A conditional branch may terminate the block while still falling
+     * through to the immediately following block. Plain jumps/returns may
+     * not advertise a second implicit control-flow edge. */
+    bool permits_fallthrough;
     /* Indirect jumps can target a set of indirect-entry blocks without one
      * encoded block operand per possible destination. */
     bool has_indirect_successors;
@@ -25,6 +29,17 @@ typedef struct MinicMachineOpcodeContract {
 typedef bool (*MinicMachineLookupOpcodeContract)(
     const MinicTargetInfo *, uint32_t opcode,
     MinicMachineOpcodeContract *contract, void *context);
+/* Full opcode-specific operand legality: immediate ranges, register
+ * combinations, shifts, alignment, and any target encodability constraints. */
+typedef bool (*MinicMachineValidateSelectedInstruction)(
+    const MinicMachineFunction *, const MinicMachineInstruction *, void *context);
+typedef bool (*MinicMachineValidateGeneratedFeatures)(
+    const MinicTargetInfo *, uint64_t generated_features, void *context);
+typedef bool (*MinicMachineValidateFunctionAbi)(
+    const MinicTargetInfo *, MinicFunctionCallingConvention, void *context);
+typedef bool (*MinicMachineValidateFrameObject)(
+    const MinicTargetInfo *, const MinicMachineFunction *,
+    const MinicMachineFrameObject *, void *context);
 typedef bool (*MinicMachineValidateRegister)(
     const MinicTargetInfo *, const MinicMachineRegister *, void *context);
 typedef bool (*MinicMachineValidateAddress)(
@@ -37,6 +52,15 @@ typedef bool (*MinicMachineValidateSourceAsm)(
 
 typedef struct MinicMachineVerifyPolicy {
     MinicMachineLookupOpcodeContract lookup_opcode;
+    MinicMachineValidateSelectedInstruction validate_selected_instruction;
+    /* Required for ALL targets, including x86/A64/LoongArch: a MachineFunction
+     * cannot claim arbitrary generated ISA bits to qualify forged opcodes. */
+    MinicMachineValidateGeneratedFeatures validate_generated_features;
+    /* Machine ABI legality depends on the selected target, not source C. */
+    MinicMachineValidateFunctionAbi validate_function_abi;
+    /* Required ABI/ISA physical frame addressing gate (e.g. x86 red zone,
+     * FP/SP basis and dynamic stack, RISC-V immediate addressing). */
+    MinicMachineValidateFrameObject validate_frame_object;
     MinicMachineValidateRegister validate_register;
     MinicMachineValidateAddress validate_address;
     MinicMachineValidateRelocation validate_relocation;

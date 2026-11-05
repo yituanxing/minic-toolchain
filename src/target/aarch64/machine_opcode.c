@@ -1,0 +1,633 @@
+#include "target/aarch64/machine_opcode.h"
+
+#include <inttypes.h>
+#include <limits.h>
+#include <stdio.h>
+#include <string.h>
+
+typedef enum A64Form {
+    A64_FORM_RR, A64_FORM_RRR, A64_FORM_RRRR,
+    A64_FORM_RI, A64_FORM_RII, A64_FORM_RRI,
+    A64_FORM_CMP, A64_FORM_CMP_IMM, A64_FORM_CSET,
+    A64_FORM_MEMORY, A64_FORM_FRAME, A64_FORM_PAIR,
+    A64_FORM_ADRP, A64_FORM_ADD_LO12, A64_FORM_GOT_LOAD,
+    A64_FORM_BLOCK, A64_FORM_COND_BLOCK, A64_FORM_REG_BLOCK,
+    A64_FORM_REG, A64_FORM_CALL_SYMBOL, A64_FORM_NONE
+} A64Form;
+
+typedef struct A64Spec {
+    const char *name;
+    A64Form form;
+    unsigned int effects;
+    unsigned int memory_width;
+    bool writes_flags;
+    bool reads_flags;
+    bool writes_link;
+    bool reads_link;
+    bool ends_block;
+    bool permits_fallthrough;
+    bool indirect_successors;
+    bool updates_dest;
+} A64Spec;
+
+#define R MINIC_MACHINE_EFFECT_MEMORY_READ
+#define W MINIC_MACHINE_EFFECT_MEMORY_WRITE
+#define B MINIC_MACHINE_EFFECT_BRANCH
+#define C MINIC_MACHINE_EFFECT_CALL
+#define T MINIC_MACHINE_EFFECT_RETURN
+#define OP(op, mnemonic, shape, fx) [MINIC_A64_MACHINE_##op] = {mnemonic, A64_FORM_##shape, fx}
+
+static const A64Spec a64_specs[MINIC_A64_MACHINE_NOP + 1U] = {
+    OP(MOV, "mov", RR, 0), OP(MVN, "mvn", RR, 0),
+    OP(NEG, "neg", RR, 0), OP(CLZ, "clz", RR, 0),
+    OP(RBIT, "rbit", RR, 0), OP(SXTW, "sxtw", RR, 0),
+    OP(UXTB, "uxtb", RR, 0), OP(UXTH, "uxth", RR, 0),
+    OP(SXTB, "sxtb", RR, 0), OP(SXTH, "sxth", RR, 0),
+    OP(MOVZ, "movz", RII, 0), OP(MOVN, "movn", RII, 0),
+    [MINIC_A64_MACHINE_MOVK] = {"movk", A64_FORM_RII, 0, .updates_dest = true},
+    OP(ADD, "add", RRR, 0), OP(SUB, "sub", RRR, 0),
+    [MINIC_A64_MACHINE_ADDS] = {"adds", A64_FORM_RRR, 0, .writes_flags = true},
+    [MINIC_A64_MACHINE_SUBS] = {"subs", A64_FORM_RRR, 0, .writes_flags = true},
+    [MINIC_A64_MACHINE_ADC] = {"adc", A64_FORM_RRR, 0, .reads_flags = true},
+    [MINIC_A64_MACHINE_SBC] = {"sbc", A64_FORM_RRR, 0, .reads_flags = true},
+    OP(AND, "and", RRR, 0), OP(ORR, "orr", RRR, 0),
+    OP(EOR, "eor", RRR, 0), OP(MUL, "mul", RRR, 0),
+    OP(UDIV, "udiv", RRR, 0), OP(SDIV, "sdiv", RRR, 0),
+    OP(LSL, "lsl", RRR, 0), OP(LSR, "lsr", RRR, 0),
+    OP(ASR, "asr", RRR, 0), OP(MSUB, "msub", RRRR, 0),
+    OP(ADD_IMM, "add", RRI, 0), OP(SUB_IMM, "sub", RRI, 0),
+    OP(LSL_IMM, "lsl", RRI, 0), OP(LSR_IMM, "lsr", RRI, 0),
+    OP(ASR_IMM, "asr", RRI, 0),
+    [MINIC_A64_MACHINE_CMP] = {"cmp", A64_FORM_CMP, 0, .writes_flags = true},
+    [MINIC_A64_MACHINE_CMP_IMM] = {"cmp", A64_FORM_CMP_IMM, 0, .writes_flags = true},
+    [MINIC_A64_MACHINE_CSET] = {"cset", A64_FORM_CSET, 0, .reads_flags = true},
+    [MINIC_A64_MACHINE_LDRB] = {"ldrb", A64_FORM_MEMORY, R, 1},
+    [MINIC_A64_MACHINE_LDRH] = {"ldrh", A64_FORM_MEMORY, R, 2},
+    [MINIC_A64_MACHINE_LDR_W] = {"ldr", A64_FORM_MEMORY, R, 4},
+    [MINIC_A64_MACHINE_LDR_X] = {"ldr", A64_FORM_MEMORY, R, 8},
+    [MINIC_A64_MACHINE_LDRSB] = {"ldrsb", A64_FORM_MEMORY, R, 1},
+    [MINIC_A64_MACHINE_LDRSH] = {"ldrsh", A64_FORM_MEMORY, R, 2},
+    [MINIC_A64_MACHINE_STRB] = {"strb", A64_FORM_MEMORY, W, 1},
+    [MINIC_A64_MACHINE_STRH] = {"strh", A64_FORM_MEMORY, W, 2},
+    [MINIC_A64_MACHINE_STR_W] = {"str", A64_FORM_MEMORY, W, 4},
+    [MINIC_A64_MACHINE_STR_X] = {"str", A64_FORM_MEMORY, W, 8},
+    [MINIC_A64_MACHINE_LDR_FRAME_W] = {"ldr", A64_FORM_FRAME, R, 4},
+    [MINIC_A64_MACHINE_LDR_FRAME_X] = {"ldr", A64_FORM_FRAME, R, 8},
+    [MINIC_A64_MACHINE_STR_FRAME_W] = {"str", A64_FORM_FRAME, W, 4},
+    [MINIC_A64_MACHINE_STR_FRAME_X] = {"str", A64_FORM_FRAME, W, 8},
+    [MINIC_A64_MACHINE_STP_PRE_X] = {"stp", A64_FORM_PAIR, W, 8},
+    [MINIC_A64_MACHINE_LDP_POST_X] = {"ldp", A64_FORM_PAIR, R, 8},
+    OP(ADRP, "adrp", ADRP, 0), OP(ADD_LO12, "add", ADD_LO12, 0),
+    [MINIC_A64_MACHINE_LDR_GOT_LO12] = {"ldr", A64_FORM_GOT_LOAD, R, 8},
+    [MINIC_A64_MACHINE_B] = {"b", A64_FORM_BLOCK, B, .ends_block = true},
+    [MINIC_A64_MACHINE_B_COND] = {"b", A64_FORM_COND_BLOCK, B,
+        .reads_flags = true, .ends_block = true, .permits_fallthrough = true},
+    [MINIC_A64_MACHINE_CBZ] = {"cbz", A64_FORM_REG_BLOCK, B,
+        .ends_block = true, .permits_fallthrough = true},
+    [MINIC_A64_MACHINE_CBNZ] = {"cbnz", A64_FORM_REG_BLOCK, B,
+        .ends_block = true, .permits_fallthrough = true},
+    [MINIC_A64_MACHINE_BR] = {"br", A64_FORM_REG, B,
+        .ends_block = true, .indirect_successors = true},
+    [MINIC_A64_MACHINE_BL] = {"bl", A64_FORM_CALL_SYMBOL, C,
+        .writes_link = true},
+    [MINIC_A64_MACHINE_BLR] = {"blr", A64_FORM_REG, C,
+        .writes_link = true},
+    [MINIC_A64_MACHINE_RET] = {"ret", A64_FORM_NONE, T,
+        .reads_link = true, .ends_block = true},
+    [MINIC_A64_MACHINE_BRK] = {"brk", A64_FORM_NONE, B,
+        .ends_block = true},
+    OP(NOP, "nop", NONE, 0)
+};
+
+#undef OP
+#undef R
+#undef W
+#undef B
+#undef C
+#undef T
+
+static const A64Spec *a64_spec(uint32_t opcode) {
+    if (opcode == 0U || opcode >= sizeof(a64_specs) / sizeof(a64_specs[0]) ||
+        a64_specs[opcode].name == NULL) return NULL;
+    return &a64_specs[opcode];
+}
+
+static MinicMachineRegister a64_implicit(unsigned int number,
+                                        MinicMachineRegisterBank bank,
+                                        unsigned int width) {
+    MinicMachineRegister result = {number, (uint16_t)width, bank};
+    return result;
+}
+
+static void a64_add_implicit(MinicMachineOpcodeContract *contract,
+    MinicMachineRegister reg, unsigned int access) {
+    MinicMachineRegisterEffect *effect =
+        &contract->implicit[contract->implicit_count++];
+    effect->reg = reg;
+    effect->access = access;
+}
+
+static bool a64_register(const MinicTargetInfo *target,
+    const MinicMachineRegister *reg, void *context) {
+    (void)context;
+    if (target == NULL || target->architecture != MINIC_TARGET_ARCH_AARCH64 ||
+        reg == NULL) return false;
+    switch (reg->bank) {
+    case MINIC_MACHINE_REGISTER_GENERAL:
+        return reg->number <= MINIC_A64_MACHINE_SP &&
+            (reg->width_bits == 32U || reg->width_bits == 64U);
+    case MINIC_MACHINE_REGISTER_FLOAT:
+        return reg->number < 32U &&
+            (reg->width_bits == 32U || reg->width_bits == 64U);
+    case MINIC_MACHINE_REGISTER_VECTOR:
+        return reg->number < 32U && reg->width_bits == 128U;
+    case MINIC_MACHINE_REGISTER_FLAGS:
+        return reg->number == 0U && reg->width_bits == 4U;
+    default:
+        return false;
+    }
+}
+
+static bool a64_features(const MinicTargetInfo *target,
+                         uint64_t features, void *context) {
+    (void)context;
+    return target != NULL && target->architecture == MINIC_TARGET_ARCH_AARCH64 &&
+        features == (MINIC_A64_MACHINE_FEATURE_BASE |
+                     MINIC_A64_MACHINE_FEATURE_FP_SIMD);
+}
+
+static bool a64_relocation(const MinicTargetInfo *target,
+    const char *symbol, uint32_t reloc, int64_t addend, void *context) {
+    (void)context;
+    return target != NULL && target->architecture == MINIC_TARGET_ARCH_AARCH64 &&
+        symbol != NULL && symbol[0] != '\0' && addend == 0 &&
+        reloc >= MINIC_A64_RELOC_DIRECT && reloc <= MINIC_A64_RELOC_GOT_LO12;
+}
+
+static bool a64_address(const MinicTargetInfo *target,
+    const MinicMachineAddress *address, void *context) {
+    (void)context;
+    if (target == NULL || target->architecture != MINIC_TARGET_ARCH_AARCH64 ||
+        address == NULL || !address->has_base || address->has_index ||
+        address->has_segment ||
+        (address->scale != 0U && address->scale != 1U) ||
+        address->base.bank != MINIC_MACHINE_REGISTER_GENERAL ||
+        address->base.width_bits != 64U ||
+        address->base.number > MINIC_A64_MACHINE_SP ||
+        address->base.number == MINIC_A64_MACHINE_ZR) return false;
+    switch (address->target_mode) {
+    case MINIC_A64_ADDRESS_UNSIGNED:
+        return !address->has_symbol && address->displacement >= 0 &&
+            address->displacement <= 32760;
+    case MINIC_A64_ADDRESS_PRE_INDEX:
+    case MINIC_A64_ADDRESS_POST_INDEX:
+        return !address->has_symbol && address->displacement >= -512 &&
+            address->displacement <= 504;
+    case MINIC_A64_ADDRESS_GOT_LO12:
+        return address->has_symbol && address->symbol != NULL &&
+            address->relocation == MINIC_A64_RELOC_GOT_LO12 &&
+            address->addend == 0 && address->displacement == 0;
+    default:
+        return false;
+    }
+}
+
+static bool a64_lookup(const MinicTargetInfo *target, uint32_t opcode,
+    MinicMachineOpcodeContract *contract, void *context) {
+    const A64Spec *spec = a64_spec(opcode);
+    size_t n = 0U;
+    (void)context;
+    if (target == NULL || target->architecture != MINIC_TARGET_ARCH_AARCH64 ||
+        contract == NULL || spec == NULL) return false;
+    memset(contract, 0, sizeof(*contract));
+#define REG(access) do { contract->operand_kinds[n] = MINIC_MACHINE_OPERAND_REGISTER; \
+    contract->register_access[n++] = (access); } while (0)
+#define ARG(kind) do { contract->operand_kinds[n++] = (kind); } while (0)
+#define READ MINIC_MACHINE_REGISTER_READ
+#define WRITE MINIC_MACHINE_REGISTER_WRITE
+    switch (spec->form) {
+    case A64_FORM_RR: REG(WRITE); REG(READ); break;
+    case A64_FORM_RRR: REG(WRITE); REG(READ); REG(READ); break;
+    case A64_FORM_RRRR: REG(WRITE); REG(READ); REG(READ); REG(READ); break;
+    case A64_FORM_RI: REG(WRITE); ARG(MINIC_MACHINE_OPERAND_INTEGER); break;
+    case A64_FORM_RII:
+        REG(spec->updates_dest ? READ | WRITE : WRITE);
+        ARG(MINIC_MACHINE_OPERAND_INTEGER);
+        ARG(MINIC_MACHINE_OPERAND_INTEGER);
+        break;
+    case A64_FORM_RRI:
+        REG(WRITE); REG(READ); ARG(MINIC_MACHINE_OPERAND_INTEGER); break;
+    case A64_FORM_CMP: REG(READ); REG(READ); break;
+    case A64_FORM_CMP_IMM: REG(READ); ARG(MINIC_MACHINE_OPERAND_INTEGER); break;
+    case A64_FORM_CSET: REG(WRITE); ARG(MINIC_MACHINE_OPERAND_INTEGER); break;
+    case A64_FORM_MEMORY:
+        REG((spec->effects & MINIC_MACHINE_EFFECT_MEMORY_READ) ? WRITE : READ);
+        ARG(MINIC_MACHINE_OPERAND_ADDRESS); break;
+    case A64_FORM_FRAME:
+        REG((spec->effects & MINIC_MACHINE_EFFECT_MEMORY_READ) ? WRITE : READ);
+        ARG(MINIC_MACHINE_OPERAND_FRAME); break;
+    case A64_FORM_PAIR:
+        REG((spec->effects & MINIC_MACHINE_EFFECT_MEMORY_READ) ? WRITE : READ);
+        REG((spec->effects & MINIC_MACHINE_EFFECT_MEMORY_READ) ? WRITE : READ);
+        ARG(MINIC_MACHINE_OPERAND_ADDRESS); break;
+    case A64_FORM_ADRP: REG(WRITE); ARG(MINIC_MACHINE_OPERAND_SYMBOL); break;
+    case A64_FORM_ADD_LO12:
+        REG(WRITE); REG(READ); ARG(MINIC_MACHINE_OPERAND_SYMBOL); break;
+    case A64_FORM_GOT_LOAD:
+        REG(WRITE); ARG(MINIC_MACHINE_OPERAND_ADDRESS); break;
+    case A64_FORM_BLOCK: ARG(MINIC_MACHINE_OPERAND_BLOCK); break;
+    case A64_FORM_COND_BLOCK:
+        ARG(MINIC_MACHINE_OPERAND_INTEGER);
+        ARG(MINIC_MACHINE_OPERAND_BLOCK); break;
+    case A64_FORM_REG_BLOCK: REG(READ); ARG(MINIC_MACHINE_OPERAND_BLOCK); break;
+    case A64_FORM_REG: REG(READ); break;
+    case A64_FORM_CALL_SYMBOL: ARG(MINIC_MACHINE_OPERAND_SYMBOL); break;
+    case A64_FORM_NONE: break;
+    default: return false;
+    }
+#undef REG
+#undef ARG
+#undef READ
+#undef WRITE
+    contract->operand_count = n;
+    contract->required_generated_features = MINIC_A64_MACHINE_FEATURE_BASE;
+    contract->required_effects = spec->effects;
+    contract->permitted_effects = spec->effects;
+    if ((spec->effects & (MINIC_MACHINE_EFFECT_MEMORY_READ |
+                          MINIC_MACHINE_EFFECT_MEMORY_WRITE)) != 0U)
+        contract->permitted_effects |= MINIC_MACHINE_EFFECT_VOLATILE;
+    if (spec->effects == MINIC_MACHINE_EFFECT_CALL)
+        contract->permitted_effects |= MINIC_MACHINE_EFFECT_MEMORY_READ |
+                                       MINIC_MACHINE_EFFECT_MEMORY_WRITE;
+    contract->terminates_block = spec->ends_block;
+    contract->permits_fallthrough = spec->permits_fallthrough;
+    contract->has_indirect_successors = spec->indirect_successors;
+    if (spec->writes_flags || spec->reads_flags) {
+        MinicMachineRegisterEffect *effect =
+            &contract->implicit[contract->implicit_count++];
+        effect->reg = a64_implicit(0U, MINIC_MACHINE_REGISTER_FLAGS, 4U);
+        effect->access = spec->writes_flags ? MINIC_MACHINE_REGISTER_WRITE :
+            MINIC_MACHINE_REGISTER_READ;
+    }
+    if (spec->writes_link) {
+        unsigned int reg;
+        /* AAPCS64 caller-saved GPRs; x18 is platform-defined and must not
+         * be invented as a scratch register.  Argument banks explicitly
+         * carry use+clobber, not just the call opcode side-effect bit. */
+        for (reg = 0U; reg <= 17U; ++reg)
+            a64_add_implicit(contract,
+                a64_implicit(reg, MINIC_MACHINE_REGISTER_GENERAL, 64U),
+                MINIC_MACHINE_REGISTER_CLOBBER |
+                    (reg <= 8U ? MINIC_MACHINE_REGISTER_READ : 0U));
+        for (reg = 0U; reg < 32U; ++reg)
+            if (reg < 8U || reg >= 16U)
+                a64_add_implicit(contract,
+                    a64_implicit(reg, MINIC_MACHINE_REGISTER_VECTOR, 128U),
+                    MINIC_MACHINE_REGISTER_CLOBBER |
+                        (reg < 8U ? MINIC_MACHINE_REGISTER_READ : 0U));
+        a64_add_implicit(contract,
+            a64_implicit(30U, MINIC_MACHINE_REGISTER_GENERAL, 64U),
+            MINIC_MACHINE_REGISTER_WRITE);
+    } else if (spec->reads_link) {
+        a64_add_implicit(contract,
+            a64_implicit(30U, MINIC_MACHINE_REGISTER_GENERAL, 64U),
+            MINIC_MACHINE_REGISTER_READ);
+    }
+    if (spec->form == A64_FORM_PAIR) {
+        MinicMachineRegisterEffect *effect =
+            &contract->implicit[contract->implicit_count++];
+        effect->reg = a64_implicit(MINIC_A64_MACHINE_SP,
+            MINIC_MACHINE_REGISTER_GENERAL, 64U);
+        effect->access = MINIC_MACHINE_REGISTER_READ | MINIC_MACHINE_REGISTER_WRITE;
+    }
+    return true;
+}
+
+static bool a64_reg_gp(const MinicMachineOperand *operand) {
+    return operand->kind == MINIC_MACHINE_OPERAND_REGISTER &&
+        operand->value.physical.reg.bank == MINIC_MACHINE_REGISTER_GENERAL;
+}
+
+static bool a64_same_width(const MinicMachineOperand *a,
+                           const MinicMachineOperand *b) {
+    return a->value.physical.reg.width_bits == b->value.physical.reg.width_bits;
+}
+
+static bool a64_frame_offset(const MinicMachineFunction *fn,
+    const MinicMachineOperand *operand, unsigned int width,
+    unsigned int *base, int64_t *offset) {
+    const MinicMachineFrameObject *object;
+    int64_t displacement;
+    if (fn == NULL || operand->kind != MINIC_MACHINE_OPERAND_FRAME ||
+        operand->value.frame.index >= fn->frame_object_count ||
+        width == 0U) return false;
+    object = &fn->frame_objects[operand->value.frame.index];
+    displacement = operand->value.frame.displacement;
+    if (!object->has_fixed_offset ||
+        (displacement > 0 && object->fixed_offset > INT64_MAX - displacement) ||
+        (displacement < 0 && object->fixed_offset < INT64_MIN - displacement))
+        return false;
+    *offset = object->fixed_offset + displacement;
+    *base = object->base == MINIC_MACHINE_FRAME_BASE_STACK_POINTER
+        ? MINIC_A64_MACHINE_SP
+        : object->base == MINIC_MACHINE_FRAME_BASE_FRAME_POINTER ? 19U : UINT_MAX;
+    return *base != UINT_MAX && *offset >= 0 && *offset <= 4095 &&
+        (*offset % (int64_t)width) == 0;
+}
+
+static bool a64_legal_selected(const MinicMachineFunction *function,
+    const MinicMachineInstruction *ins, void *context) {
+    const MinicTargetInfo *target = function != NULL ? function->target : NULL;
+    const A64Spec *spec;
+    const MinicMachineOperand *ops;
+    size_t index;
+    unsigned int frame_base;
+    int64_t frame_offset;
+    (void)context;
+    if (target == NULL || target->architecture != MINIC_TARGET_ARCH_AARCH64 ||
+        ins == NULL || (spec = a64_spec(ins->opcode)) == NULL ||
+        ins->operand_count > 16U) return false;
+    ops = ins->operands;
+    for (index = 0U; index < ins->operand_count; ++index)
+        if (ops[index].kind == MINIC_MACHINE_OPERAND_REGISTER &&
+            !a64_reg_gp(&ops[index])) return false;
+    switch (spec->form) {
+    case A64_FORM_RR:
+        return ins->opcode == MINIC_A64_MACHINE_SXTW
+            ? ops[0].value.physical.reg.width_bits == 64U &&
+              ops[1].value.physical.reg.width_bits == 32U
+            : a64_same_width(&ops[0], &ops[1]);
+    case A64_FORM_RRR:
+    case A64_FORM_RRRR:
+    case A64_FORM_RRI:
+        for (index = 1U; index < ins->operand_count; ++index)
+            if (ops[index].kind == MINIC_MACHINE_OPERAND_REGISTER &&
+                !a64_same_width(&ops[0], &ops[index])) return false;
+        for (index = 0U; index < ins->operand_count; ++index)
+            if (ops[index].kind == MINIC_MACHINE_OPERAND_REGISTER &&
+                ops[index].value.physical.reg.number == MINIC_A64_MACHINE_SP)
+                return false;
+        if (ins->opcode == MINIC_A64_MACHINE_MSUB &&
+            ops[0].value.physical.reg.number == MINIC_A64_MACHINE_SP) return false;
+        if (spec->form != A64_FORM_RRI) return true;
+        if (ins->opcode == MINIC_A64_MACHINE_ADD_IMM ||
+            ins->opcode == MINIC_A64_MACHINE_SUB_IMM)
+            return ops[2].value.integer >= 0 && ops[2].value.integer <= 4095;
+        return ops[2].value.integer >= 0 &&
+            ops[2].value.integer < ops[0].value.physical.reg.width_bits;
+    case A64_FORM_RII:
+        return ops[1].value.integer >= 0 && ops[1].value.integer <= 65535 &&
+            ops[2].value.integer >= 0 &&
+            (ops[2].value.integer % 16) == 0 &&
+            ops[2].value.integer < ops[0].value.physical.reg.width_bits &&
+            ops[0].value.physical.reg.number != MINIC_A64_MACHINE_SP;
+    case A64_FORM_CMP:
+        return a64_same_width(&ops[0], &ops[1]);
+    case A64_FORM_CMP_IMM:
+        return ops[1].value.integer >= 0 && ops[1].value.integer <= 4095;
+    case A64_FORM_CSET:
+        return ops[1].value.integer >= 0 && ops[1].value.integer <= 13;
+    case A64_FORM_MEMORY: {
+        const MinicMachineAddress *a = &ops[1].value.address;
+        const bool load_signed = ins->opcode == MINIC_A64_MACHINE_LDRSB ||
+                                 ins->opcode == MINIC_A64_MACHINE_LDRSH;
+        const unsigned int bits = ops[0].value.physical.reg.width_bits;
+        if (a->target_mode != MINIC_A64_ADDRESS_UNSIGNED || a->has_symbol ||
+            a->displacement < 0 || a->displacement > 4095 ||
+            (a->displacement % (int64_t)spec->memory_width) != 0 ||
+            ops[0].value.physical.reg.number == MINIC_A64_MACHINE_SP)
+            return false;
+        return bits == spec->memory_width * 8U ||
+            ((spec->memory_width == 1U || spec->memory_width == 2U) &&
+             bits == 32U) || (load_signed && bits == 64U);
+    }
+    case A64_FORM_FRAME:
+        /* The owner has to resolve an entry-SP-dependent reference into
+         * explicit selected loads/address materializations first. */
+        return ops[0].value.physical.reg.width_bits == spec->memory_width * 8U &&
+            ops[0].value.physical.reg.number != MINIC_A64_MACHINE_SP &&
+            a64_frame_offset(function, &ops[1], spec->memory_width,
+                &frame_base, &frame_offset);
+    case A64_FORM_PAIR: {
+        const MinicMachineAddress *a = &ops[2].value.address;
+        return ops[0].value.physical.reg.width_bits == 64U &&
+            ops[1].value.physical.reg.width_bits == 64U &&
+            a->has_base && a->base.number == MINIC_A64_MACHINE_SP &&
+            a->base.width_bits == 64U && !a->has_symbol &&
+            a->displacement >= -512 && a->displacement <= 504 &&
+            (a->displacement % 8) == 0 &&
+            a->target_mode == (ins->opcode == MINIC_A64_MACHINE_STP_PRE_X
+                ? MINIC_A64_ADDRESS_PRE_INDEX : MINIC_A64_ADDRESS_POST_INDEX);
+    }
+    case A64_FORM_ADRP:
+        return ops[0].value.physical.reg.width_bits == 64U &&
+            (ops[1].value.symbol.relocation == MINIC_A64_RELOC_PAGE ||
+             ops[1].value.symbol.relocation == MINIC_A64_RELOC_GOT_PAGE);
+    case A64_FORM_ADD_LO12:
+        return ops[0].value.physical.reg.width_bits == 64U &&
+            ops[1].value.physical.reg.width_bits == 64U &&
+            ops[2].value.symbol.relocation == MINIC_A64_RELOC_LO12;
+    case A64_FORM_GOT_LOAD:
+        return ops[0].value.physical.reg.width_bits == 64U &&
+            ops[1].value.address.target_mode == MINIC_A64_ADDRESS_GOT_LO12;
+    case A64_FORM_COND_BLOCK:
+        return ops[0].value.integer >= 0 && ops[0].value.integer <= 13;
+    case A64_FORM_CALL_SYMBOL:
+        return ops[0].value.symbol.relocation == MINIC_A64_RELOC_DIRECT;
+    case A64_FORM_REG_BLOCK:
+    case A64_FORM_REG:
+        return ops[0].value.physical.reg.number != MINIC_A64_MACHINE_SP &&
+            (ops[0].value.physical.reg.width_bits == 64U ||
+             spec->form == A64_FORM_REG_BLOCK);
+    case A64_FORM_BLOCK:
+    case A64_FORM_NONE:
+        return true;
+    default:
+        return false;
+    }
+}
+
+static bool a64_gp_text(const MinicMachineRegister *reg,
+                        char *buffer, size_t size) {
+    const char letter = reg->width_bits == 32U ? 'w' : 'x';
+    if (reg->bank != MINIC_MACHINE_REGISTER_GENERAL ||
+        (reg->width_bits != 32U && reg->width_bits != 64U)) return false;
+    if (reg->number == MINIC_A64_MACHINE_SP)
+        return snprintf(buffer, size, "%s", letter == 'x' ? "sp" : "wsp") > 0;
+    if (reg->number == MINIC_A64_MACHINE_ZR)
+        return snprintf(buffer, size, "%s", letter == 'x' ? "xzr" : "wzr") > 0;
+    return reg->number <= 30U &&
+        snprintf(buffer, size, "%c%u", letter, reg->number) > 0;
+}
+
+static const char *a64_condition(int64_t id) {
+    static const char *const names[] = {"eq", "ne", "hs", "lo", "mi", "pl",
+        "vs", "vc", "hi", "ls", "ge", "lt", "gt", "le"};
+    return id >= 0 && (size_t)id < sizeof(names) / sizeof(names[0])
+        ? names[id] : NULL;
+}
+
+static bool a64_block_name(const MinicMachineOperand *op,
+    const MinicMachineGNUAsmLabels *labels, const char **out) {
+    if (op->kind != MINIC_MACHINE_OPERAND_BLOCK || labels == NULL ||
+        op->value.block_id >= labels->count || labels->names == NULL ||
+        labels->names[op->value.block_id] == NULL) return false;
+    *out = labels->names[op->value.block_id];
+    return true;
+}
+
+static bool a64_serialize(FILE *out, const MinicMachineFunction *function,
+    const MinicMachineInstruction *ins,
+    const MinicMachineGNUAsmLabels *labels, void *context) {
+    const A64Spec *spec = a64_spec(ins->opcode);
+    const MinicMachineOperand *o = ins->operands;
+    char a[20], b[20], c[20], d[20], base[20];
+    const char *label;
+    unsigned int frame_base;
+    int64_t frame_offset;
+    (void)context;
+    if (out == NULL || function == NULL || spec == NULL ||
+        !a64_legal_selected(function, ins, NULL)) return false;
+    switch (spec->form) {
+    case A64_FORM_RR:
+        return a64_gp_text(&o[0].value.physical.reg, a, sizeof(a)) &&
+            a64_gp_text(&o[1].value.physical.reg, b, sizeof(b)) &&
+            fprintf(out, "  %s %s, %s\n", spec->name, a, b) >= 0;
+    case A64_FORM_RRR:
+    case A64_FORM_RRRR:
+        if (!a64_gp_text(&o[0].value.physical.reg, a, sizeof(a)) ||
+            !a64_gp_text(&o[1].value.physical.reg, b, sizeof(b)) ||
+            !a64_gp_text(&o[2].value.physical.reg, c, sizeof(c))) return false;
+        if (spec->form == A64_FORM_RRR)
+            return fprintf(out, "  %s %s, %s, %s\n", spec->name, a, b, c) >= 0;
+        return a64_gp_text(&o[3].value.physical.reg, d, sizeof(d)) &&
+            fprintf(out, "  %s %s, %s, %s, %s\n", spec->name, a, b, c, d) >= 0;
+    case A64_FORM_RII:
+        return a64_gp_text(&o[0].value.physical.reg, a, sizeof(a)) &&
+            fprintf(out, "  %s %s, #%" PRId64 ", lsl #%" PRId64 "\n",
+                spec->name, a, o[1].value.integer, o[2].value.integer) >= 0;
+    case A64_FORM_RRI:
+        return a64_gp_text(&o[0].value.physical.reg, a, sizeof(a)) &&
+            a64_gp_text(&o[1].value.physical.reg, b, sizeof(b)) &&
+            fprintf(out, "  %s %s, %s, #%" PRId64 "\n",
+                spec->name, a, b, o[2].value.integer) >= 0;
+    case A64_FORM_CMP:
+        return a64_gp_text(&o[0].value.physical.reg, a, sizeof(a)) &&
+            a64_gp_text(&o[1].value.physical.reg, b, sizeof(b)) &&
+            fprintf(out, "  cmp %s, %s\n", a, b) >= 0;
+    case A64_FORM_CMP_IMM:
+        return a64_gp_text(&o[0].value.physical.reg, a, sizeof(a)) &&
+            fprintf(out, "  cmp %s, #%" PRId64 "\n", a, o[1].value.integer) >= 0;
+    case A64_FORM_CSET:
+        return a64_gp_text(&o[0].value.physical.reg, a, sizeof(a)) &&
+            fprintf(out, "  cset %s, %s\n", a, a64_condition(o[1].value.integer)) >= 0;
+    case A64_FORM_MEMORY:
+    case A64_FORM_GOT_LOAD: {
+        const MinicMachineAddress *addr = &o[1].value.address;
+        if (!a64_gp_text(&o[0].value.physical.reg, a, sizeof(a)) ||
+            !a64_gp_text(&addr->base, base, sizeof(base))) return false;
+        if (addr->has_symbol)
+            return fprintf(out, "  %s %s, [%s, :got_lo12:%s]\n",
+                spec->name, a, base, addr->symbol) >= 0;
+        return fprintf(out, "  %s %s, [%s, #%" PRId64 "]\n",
+            spec->name, a, base, addr->displacement) >= 0;
+    }
+    case A64_FORM_FRAME:
+        if (!a64_gp_text(&o[0].value.physical.reg, a, sizeof(a)) ||
+            !a64_frame_offset(function, &o[1], spec->memory_width,
+                &frame_base, &frame_offset)) return false;
+        return fprintf(out, "  %s %s, [%s, #%" PRId64 "]\n",
+            spec->name, a, frame_base == MINIC_A64_MACHINE_SP ? "sp" : "x19",
+            frame_offset) >= 0;
+    case A64_FORM_PAIR:
+        return a64_gp_text(&o[0].value.physical.reg, a, sizeof(a)) &&
+            a64_gp_text(&o[1].value.physical.reg, b, sizeof(b)) &&
+            fprintf(out, ins->opcode == MINIC_A64_MACHINE_STP_PRE_X
+                ? "  stp %s, %s, [sp, #%" PRId64 "]!\n"
+                : "  ldp %s, %s, [sp], #%" PRId64 "\n",
+                a, b, o[2].value.address.displacement) >= 0;
+    case A64_FORM_ADRP:
+        return a64_gp_text(&o[0].value.physical.reg, a, sizeof(a)) &&
+            fprintf(out, "  adrp %s, %s%s\n", a,
+                o[1].value.symbol.relocation == MINIC_A64_RELOC_GOT_PAGE
+                    ? ":got:" : "", o[1].value.symbol.name) >= 0;
+    case A64_FORM_ADD_LO12:
+        return a64_gp_text(&o[0].value.physical.reg, a, sizeof(a)) &&
+            a64_gp_text(&o[1].value.physical.reg, b, sizeof(b)) &&
+            fprintf(out, "  add %s, %s, :lo12:%s\n", a, b,
+                o[2].value.symbol.name) >= 0;
+    case A64_FORM_BLOCK:
+        return a64_block_name(&o[0], labels, &label) &&
+            fprintf(out, "  b %s\n", label) >= 0;
+    case A64_FORM_COND_BLOCK:
+        return a64_block_name(&o[1], labels, &label) &&
+            fprintf(out, "  b.%s %s\n", a64_condition(o[0].value.integer),
+                label) >= 0;
+    case A64_FORM_REG_BLOCK:
+        return a64_gp_text(&o[0].value.physical.reg, a, sizeof(a)) &&
+            a64_block_name(&o[1], labels, &label) &&
+            fprintf(out, "  %s %s, %s\n", spec->name, a, label) >= 0;
+    case A64_FORM_REG:
+        return a64_gp_text(&o[0].value.physical.reg, a, sizeof(a)) &&
+            fprintf(out, "  %s %s\n", spec->name, a) >= 0;
+    case A64_FORM_CALL_SYMBOL:
+        return fprintf(out, "  bl %s\n", o[0].value.symbol.name) >= 0;
+    case A64_FORM_NONE:
+        return fprintf(out, ins->opcode == MINIC_A64_MACHINE_BRK
+            ? "  brk #0\n" : "  %s\n", spec->name) >= 0;
+    case A64_FORM_RI:
+    default:
+        return false;
+    }
+}
+
+static bool a64_abi(const MinicTargetInfo *target,
+    MinicFunctionCallingConvention calling_convention, void *context) {
+    (void)context;
+    return target != NULL && target->architecture == MINIC_TARGET_ARCH_AARCH64 &&
+        calling_convention == MINIC_CALLING_CONVENTION_DEFAULT;
+}
+
+static bool a64_frame_object(const MinicTargetInfo *target,
+    const MinicMachineFunction *function,
+    const MinicMachineFrameObject *frame, void *context) {
+    (void)context;
+    if (target == NULL || target->architecture != MINIC_TARGET_ARCH_AARCH64 ||
+        function == NULL || frame == NULL || function->frame_alignment < 16U ||
+        frame->base == MINIC_MACHINE_FRAME_BASE_ENTRY_STACK_POINTER) return false;
+    if (frame->area == MINIC_MACHINE_FRAME_OUTGOING)
+        return frame->base == MINIC_MACHINE_FRAME_BASE_STACK_POINTER;
+    if (function->has_dynamic_stack && frame->area == MINIC_MACHINE_FRAME_LOCAL)
+        return frame->base == MINIC_MACHINE_FRAME_BASE_FRAME_POINTER;
+    if (!function->has_dynamic_stack &&
+        frame->base == MINIC_MACHINE_FRAME_BASE_FRAME_POINTER)
+        return false;
+    return frame->base == MINIC_MACHINE_FRAME_BASE_STACK_POINTER ||
+        frame->base == MINIC_MACHINE_FRAME_BASE_FRAME_POINTER;
+}
+
+bool minic_aarch64_machine_opcode_initialize(
+    const MinicTargetInfo *target, MinicMachineGNUAsmPolicy *destination) {
+    static const MinicMachineGNUAsmPolicy policy = {
+        .verify = {
+            .lookup_opcode = a64_lookup,
+            .validate_generated_features = a64_features,
+            .validate_register = a64_register,
+            .validate_address = a64_address,
+            .validate_relocation = a64_relocation,
+            /* No source-ASM bypass until the complete sealed Core ASM
+             * admission/constraint translator is integrated. */
+            .validate_source_asm = NULL,
+            .validate_function_abi = a64_abi,
+            .validate_frame_object = a64_frame_object,
+            .validate_selected_instruction = a64_legal_selected
+        },
+        .emit_selected = a64_serialize,
+        .emit_source_asm = NULL,
+        .context = NULL
+    };
+    if (destination == NULL || target == NULL ||
+        target->architecture != MINIC_TARGET_ARCH_AARCH64) return false;
+    *destination = policy;
+    return true;
+}

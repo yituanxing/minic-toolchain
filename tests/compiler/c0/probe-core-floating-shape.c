@@ -58,12 +58,13 @@ static int run(void) {
     minic_core_type_context_initialize(&ctx);
     REQUIRE(register_float(&ctx, MINIC_CORE_FLOAT_BINARY32, 4U, &f32));
     REQUIRE(register_float(&ctx, MINIC_CORE_FLOAT_BINARY64, 8U, &f64));
-    REQUIRE(register_float(&ctx, MINIC_CORE_FLOAT_EXTENDED, 16U, &ext));
+    REQUIRE(register_float(&ctx, MINIC_CORE_FLOAT_BINARY128, 16U, &ext));
     REQUIRE(register_int(&ctx, 1U, true, &i8));
     REQUIRE(register_int(&ctx, 4U, true, &i32));
     REQUIRE(register_int(&ctx, 8U, false, &u64));
-    REQUIRE(register_float(&ctx, MINIC_CORE_FLOAT_BINARY64, 4U,
-                           &invalid_float));
+    REQUIRE(!register_float(&ctx, MINIC_CORE_FLOAT_BINARY64, 4U,
+                            &invalid_float));
+    invalid_float = MINIC_CORE_TYPE_INVALID;
     malformed.kind = MINIC_CORE_TYPE_INTEGER;
     malformed.has_layout = true;
     malformed.size = 4U;

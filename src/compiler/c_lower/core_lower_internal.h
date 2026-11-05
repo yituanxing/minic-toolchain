@@ -141,7 +141,7 @@ MinicCoreLowerStatus minic_core_lower_internal_lower_floating_binary_operands(Mi
 MinicCoreLowerStatus minic_core_lower_internal_append_long_double_binary_helper(
     MinicCoreLowerContext *context,
     MinicSourceSpan span,
-    const char *helper,
+    MinicCoreExtendedFloatOperation operation,
     MinicCoreValueId left,
     MinicCoreValueId right,
     MinicType return_type,

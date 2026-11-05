@@ -695,7 +695,7 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicCoreModule *module
             return x86_i128_store(out, frame, ins->result, "%r10", "%r11");
         }
         if (x86_emit_core_float(fn, ins->core_type_id,
-                                MINIC_CORE_FLOAT_EXTENDED)) {
+                                MINIC_CORE_FLOAT_X87_EXTENDED80)) {
             if (ms_x64 || location->kind != MINIC_X86_ARG_X87_MEMORY ||
                 fprintf(out, "  fldt %zu(%%rbp)\n",
                         16U + location->stack_index * 8U) < 0)
@@ -1161,7 +1161,7 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicCoreModule *module
     }
     case MINIC_CORE_INSTRUCTION_LOAD:
         if (x86_emit_core_float(fn, ins->core_type_id,
-                                MINIC_CORE_FLOAT_EXTENDED))
+                                MINIC_CORE_FLOAT_X87_EXTENDED80))
             return x86_head_load_memory_address(out, fn, frame, ins->value.load.address) &&
                    fprintf(out, "  fldt (%%r10)\n") >= 0 &&
                    x86_x87_store(out, frame, ins->result);
@@ -1212,7 +1212,7 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicCoreModule *module
         MinicCoreValueId src = ins->value.store.stored_value;
         if (src >= fn->value_count) return false;
         if (x86_emit_core_float(fn, fn->values[src].core_type_id,
-                                MINIC_CORE_FLOAT_EXTENDED))
+                                MINIC_CORE_FLOAT_X87_EXTENDED80))
             return x86_head_load_memory_address(out, fn, frame, ins->value.store.address) &&
                    x86_x87_load(out, frame, src) &&
                    fprintf(out, "  fstpt (%%r10)\n") >= 0;
@@ -1683,7 +1683,7 @@ bool minic_x86_64_emit_core_terminator(FILE *out,
         }
         if (term->return_value != MINIC_CORE_VALUE_INVALID) {
             if (x86_emit_core_float(fn, minic_core_function_return_type(fn),
-                                    MINIC_CORE_FLOAT_EXTENDED))
+                                    MINIC_CORE_FLOAT_X87_EXTENDED80))
                 return x86_x87_load(out, frame, term->return_value) &&
                        fprintf(out, "  jmp .Lmini_x86_f%zu_ret\n", function_id) >= 0;
             if (x86_emit_core_int128(fn, minic_core_function_return_type(fn))) {

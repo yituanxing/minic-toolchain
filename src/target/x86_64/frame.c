@@ -37,7 +37,7 @@ static bool x86_frame_wide_type(const MinicCoreFunction *fn,
         ((type->kind == MINIC_CORE_TYPE_INTEGER &&
           type->value.integer.bit_width == 128U) ||
          (type->kind == MINIC_CORE_TYPE_FLOAT &&
-          type->value.floating.format == MINIC_CORE_FLOAT_EXTENDED));
+          type->value.floating.format == MINIC_CORE_FLOAT_X87_EXTENDED80));
 }
 
 static bool x86_frame_int128_type(const MinicCoreFunction *fn,

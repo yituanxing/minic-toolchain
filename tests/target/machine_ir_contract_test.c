@@ -12,7 +12,10 @@ enum ProbeOpcode {
     PROBE_JUMP,
     PROBE_RETURN,
     PROBE_LOAD_ADDRESS,
-    PROBE_INDIRECT_JUMP
+    PROBE_INDIRECT_JUMP,
+    PROBE_CONDITIONAL,
+    PROBE_BLOCK_ADDRESS,
+    PROBE_MANY
 };
 
 typedef struct ProbePolicyState {
@@ -25,6 +28,63 @@ static MinicMachineRegister gp(unsigned int number, unsigned int width) {
     result.number = number;
     result.width_bits = (uint16_t)width;
     return result;
+}
+
+static void reset_input(MinicMachineInstruction *ins,
+    MinicMachineOperand *operands, MinicMachineRegisterEffect *implicit) {
+    memset(ins, 0, sizeof(*ins));
+    memset(operands, 0, MINIC_MACHINE_MAX_OPERANDS * sizeof(*operands));
+    memset(implicit, 0,
+           MINIC_MACHINE_MAX_REGISTER_EFFECTS * sizeof(*implicit));
+    ins->operands = operands;
+    ins->implicit = implicit;
+}
+
+static bool probe_generated_features(const MinicTargetInfo *target,
+    uint64_t features, void *context) {
+    (void)target;
+    (void)context;
+    return features == UINT64_C(1);
+}
+
+static bool probe_function_abi(const MinicTargetInfo *target,
+    MinicFunctionCallingConvention abi, void *context) {
+    const size_t expected_pointer_bytes =
+        target->architecture == MINIC_TARGET_ARCH_RISCV32 ? 4U : 8U;
+    (void)context;
+    return target->data_layout != NULL &&
+        target->data_layout->pointer_size == expected_pointer_bytes &&
+        (abi == MINIC_CALLING_CONVENTION_DEFAULT ||
+         (target->architecture == MINIC_TARGET_ARCH_X86_64 &&
+          abi == MINIC_CALLING_CONVENTION_MS_X64));
+}
+
+static bool probe_frame_object(const MinicTargetInfo *target,
+    const MinicMachineFunction *fn, const MinicMachineFrameObject *obj,
+    void *context) {
+    (void)target;
+    (void)fn;
+    (void)context;
+    return !(obj->base == MINIC_MACHINE_FRAME_BASE_ENTRY_STACK_POINTER &&
+             obj->area == MINIC_MACHINE_FRAME_OUTGOING);
+}
+
+static bool probe_selected(const MinicMachineFunction *fn,
+    const MinicMachineInstruction *ins, void *context) {
+    (void)context;
+    if (ins->opcode == PROBE_LOAD_FRAME) {
+        const MinicMachineFrameObject *object =
+            &fn->frame_objects[ins->operands[1].value.frame.index];
+        const int64_t base = object->fixed_offset;
+        const int64_t addend = ins->operands[1].value.frame.displacement;
+        if (addend < 0 && base < INT64_MIN - addend) return false;
+        if (addend > 0 && base > INT64_MAX - addend) return false;
+        return (base + addend) >= -16 && (base + addend) <= 16;
+    }
+    if (ins->opcode == PROBE_LOAD_ADDRESS)
+        return ins->operands[1].value.address.displacement >= -2048 &&
+               ins->operands[1].value.address.displacement <= 2048;
+    return true;
 }
 
 static bool probe_lookup(const MinicTargetInfo *target, uint32_t opcode,
@@ -84,6 +144,32 @@ static bool probe_lookup(const MinicTargetInfo *target, uint32_t opcode,
         result->terminates_block = true;
         result->has_indirect_successors = true;
         return true;
+    case PROBE_CONDITIONAL:
+        result->operand_count = 1U;
+        result->operand_kinds[0] = MINIC_MACHINE_OPERAND_BLOCK;
+        result->required_effects = MINIC_MACHINE_EFFECT_BRANCH;
+        result->permitted_effects = MINIC_MACHINE_EFFECT_BRANCH;
+        result->terminates_block = true;
+        result->permits_fallthrough = true;
+        return true;
+    case PROBE_BLOCK_ADDRESS:
+        result->operand_count = 2U;
+        result->operand_kinds[0] = MINIC_MACHINE_OPERAND_REGISTER;
+        result->register_access[0] = MINIC_MACHINE_REGISTER_WRITE;
+        result->operand_kinds[1] = MINIC_MACHINE_OPERAND_BLOCK_ADDRESS;
+        return true;
+    case PROBE_MANY: {
+        size_t i;
+        result->operand_count = MINIC_MACHINE_MAX_OPERANDS;
+        for (i = 0U; i < MINIC_MACHINE_MAX_OPERANDS; ++i)
+            result->operand_kinds[i] = MINIC_MACHINE_OPERAND_INTEGER;
+        result->implicit_count = MINIC_MACHINE_MAX_REGISTER_EFFECTS;
+        for (i = 0U; i < MINIC_MACHINE_MAX_REGISTER_EFFECTS; ++i) {
+            result->implicit[i].reg = gp((unsigned int)(i % 32U), width);
+            result->implicit[i].access = MINIC_MACHINE_REGISTER_CLOBBER;
+        }
+        return true;
+    }
     default:
         return false;
     }
@@ -128,6 +214,8 @@ static bool probe_asm(const MinicTargetInfo *target,
 static bool add_generated(MinicMachineFunction *fn, size_t block,
                           MinicMachineInstruction *ins) {
     ins->kind = MINIC_MACHINE_INSTRUCTION_SELECTED;
+    if (ins->operand_count == 0U) ins->operands = NULL;
+    if (ins->implicit_count == 0U) ins->implicit = NULL;
     return minic_machine_block_append_instruction(fn, block, ins);
 }
 
@@ -141,29 +229,42 @@ static bool add_generated(MinicMachineFunction *fn, size_t block,
 
 static bool exercise_target(MinicTargetArchitecture arch) {
     MinicTargetInfo target = {0};
+    MinicDataLayout layout = {0};
     MinicMachineFunction fn = {0};
     MinicMachineVerifyPolicy policy = {0};
     ProbePolicyState state = {true};
     MinicMachineInstruction ins = {0};
+    MinicMachineOperand input_operands[MINIC_MACHINE_MAX_OPERANDS];
+    MinicMachineRegisterEffect input_implicit[MINIC_MACHINE_MAX_REGISTER_EFFECTS];
     MinicMachineFrameObject frame = {0};
     MinicMachineInstruction *load, *call, *jump;
     MinicMachineRegister saved_reg;
     MinicMachineOperandKind saved_kind;
     char *saved_string;
-    size_t entry, exit_block, frame_id;
+    size_t entry, exit_block, auxiliary_block, frame_id;
     size_t saved_count;
     uint32_t saved_opcode;
     uint64_t saved_features;
     bool result = false;
     const unsigned int width = arch == MINIC_TARGET_ARCH_RISCV32 ? 32U : 64U;
     char symbol[] = "callee";
+    char got_symbol[] = "got_anchor";
+    char source_bytes[] = {'o','p','a','q','u','e','\0','r','v'};
     char label[] = ".Lmachine_exit";
     target.architecture = arch;
+    layout.byte_order = MINIC_BYTE_ORDER_LITTLE;
+    layout.pointer_size = arch == MINIC_TARGET_ARCH_RISCV32 ? 4U : 8U;
+    layout.pointer_alignment = layout.pointer_size;
+    target.data_layout = &layout;
     target.riscv_isa.strict_isa =
         arch == MINIC_TARGET_ARCH_RISCV32 ||
         arch == MINIC_TARGET_ARCH_RISCV64;
     target.riscv_isa.codegen_features = 1U;
     policy.lookup_opcode = probe_lookup;
+    policy.validate_selected_instruction = probe_selected;
+    policy.validate_generated_features = probe_generated_features;
+    policy.validate_function_abi = probe_function_abi;
+    policy.validate_frame_object = probe_frame_object;
     policy.validate_register = probe_register;
     policy.validate_address = probe_address;
     policy.validate_relocation = probe_relocation;
@@ -187,7 +288,10 @@ static bool exercise_target(MinicTargetArchitecture arch) {
                    ".Lmachine_exit") == 0);
     REQUIRE(minic_machine_block_add_successor(&fn, entry, exit_block));
 
-    memset(&ins, 0, sizeof(ins));
+    reset_input(&ins, input_operands, input_implicit);
+    REQUIRE(!minic_machine_block_append_instruction(&fn, entry, &ins));
+
+    reset_input(&ins, input_operands, input_implicit);
     ins.opcode = PROBE_LOAD_FRAME;
     ins.effects = MINIC_MACHINE_EFFECT_MEMORY_READ;
     ins.operand_count = 2U;
@@ -198,7 +302,7 @@ static bool exercise_target(MinicTargetArchitecture arch) {
     ins.operands[1].value.frame.index = frame_id;
     REQUIRE(add_generated(&fn, entry, &ins));
 
-    memset(&ins, 0, sizeof(ins));
+    reset_input(&ins, input_operands, input_implicit);
     ins.opcode = PROBE_CALL;
     ins.effects = MINIC_MACHINE_EFFECT_CALL;
     ins.operand_count = 1U;
@@ -213,22 +317,86 @@ static bool exercise_target(MinicTargetArchitecture arch) {
     REQUIRE(strcmp(fn.blocks[entry].instructions[1].operands[0]
                        .value.symbol.name, "callee") == 0);
 
-    memset(&ins, 0, sizeof(ins));
+    reset_input(&ins, input_operands, input_implicit);
     ins.opcode = PROBE_JUMP;
     ins.effects = MINIC_MACHINE_EFFECT_BRANCH;
     ins.operand_count = 1U;
     ins.operands[0].kind = MINIC_MACHINE_OPERAND_BLOCK;
     ins.operands[0].value.block_id = exit_block;
     REQUIRE(add_generated(&fn, entry, &ins));
-    memset(&ins, 0, sizeof(ins));
+    reset_input(&ins, input_operands, input_implicit);
     ins.opcode = PROBE_RETURN;
     ins.effects = MINIC_MACHINE_EFFECT_RETURN;
     REQUIRE(add_generated(&fn, exit_block, &ins));
     REQUIRE(minic_machine_function_verify(&fn, &policy));
 
+    /* The physical MachineFunction refers to a target-owned DataLayout,
+     * never a freshly guessed 32/64-bit data model in Core. */
+    layout.pointer_size = 0U;
+    REQUIRE(!minic_machine_function_verify(&fn, &policy));
+    layout.pointer_size = width == 32U ? 8U : 4U;
+    REQUIRE(!minic_machine_function_verify(&fn, &policy));
+    layout.pointer_size = width / 8U;
+    REQUIRE(minic_machine_function_verify(&fn, &policy));
+
+    /* Plain jumps cannot invent an additional fallthrough; conditional
+     * branches can, but only with the target's independent contract. */
+    REQUIRE(minic_machine_block_set_fallthrough(&fn, entry, exit_block));
+    REQUIRE(!minic_machine_function_verify(&fn, &policy));
+    fn.blocks[entry].instructions[2].opcode = PROBE_CONDITIONAL;
+    REQUIRE(minic_machine_function_verify(&fn, &policy));
+    fn.blocks[entry].instructions[2].opcode = PROBE_JUMP;
+    fn.blocks[entry].has_fallthrough = false;
+    REQUIRE(minic_machine_function_verify(&fn, &policy));
+
+    /* Generated features must not be self-proclaimed, including on non-RV
+     * backends where the target's codegen feature bits live elsewhere. */
+    fn.generated_features = UINT64_C(2);
+    REQUIRE(!minic_machine_function_verify(&fn, &policy));
+    fn.generated_features = UINT64_C(1);
+    policy.validate_generated_features = NULL;
+    REQUIRE(!minic_machine_function_verify(&fn, &policy));
+    policy.validate_generated_features = probe_generated_features;
+    policy.validate_selected_instruction = NULL;
+    REQUIRE(!minic_machine_function_verify(&fn, &policy));
+    policy.validate_selected_instruction = probe_selected;
+    policy.validate_function_abi = NULL;
+    REQUIRE(!minic_machine_function_verify(&fn, &policy));
+    policy.validate_function_abi = probe_function_abi;
+    policy.validate_frame_object = NULL;
+    REQUIRE(!minic_machine_function_verify(&fn, &policy));
+    policy.validate_frame_object = probe_frame_object;
+    fn.calling_convention = MINIC_CALLING_CONVENTION_MS_X64;
+    if (arch == MINIC_TARGET_ARCH_X86_64)
+        REQUIRE(minic_machine_function_verify(&fn, &policy));
+    else
+        REQUIRE(!minic_machine_function_verify(&fn, &policy));
+    fn.calling_convention = MINIC_CALLING_CONVENTION_DEFAULT;
+
+    /* Local SP offsets are unstable across dynamic allocation, unlike FP
+     * references, which are explicitly distinguished in physical MIR. */
+    fn.has_dynamic_stack = true;
+    REQUIRE(!minic_machine_function_verify(&fn, &policy));
+    fn.frame_objects[0].base = MINIC_MACHINE_FRAME_BASE_FRAME_POINTER;
+    REQUIRE(minic_machine_function_verify(&fn, &policy));
+    fn.frame_objects[0].base = MINIC_MACHINE_FRAME_BASE_STACK_POINTER;
+    fn.has_dynamic_stack = false;
+    REQUIRE(minic_machine_function_verify(&fn, &policy));
+    fn.frame_objects[0].base =
+        MINIC_MACHINE_FRAME_BASE_ENTRY_STACK_POINTER;
+    fn.frame_objects[0].area = MINIC_MACHINE_FRAME_OUTGOING;
+    REQUIRE(!minic_machine_function_verify(&fn, &policy));
+    fn.frame_objects[0].area = MINIC_MACHINE_FRAME_LOCAL;
+    fn.frame_objects[0].base = MINIC_MACHINE_FRAME_BASE_STACK_POINTER;
+
     load = &fn.blocks[entry].instructions[0];
     call = &fn.blocks[entry].instructions[1];
     jump = &fn.blocks[entry].instructions[2];
+    REQUIRE(sizeof(MinicMachineInstruction) < 256U);
+    REQUIRE(fn.blocks[exit_block].instructions[0].operands == NULL);
+    REQUIRE(fn.blocks[exit_block].instructions[0].implicit == NULL);
+    /* Inactive operand and implicit storage no longer exists, so a zero-op
+     * return carries no hidden per-opcode 16/64-element memory cost. */
     saved_opcode = load->opcode;
     load->opcode = UINT32_C(0xdead);
     REQUIRE(!minic_machine_function_verify(&fn, &policy));
@@ -251,6 +419,9 @@ static bool exercise_target(MinicTargetArchitecture arch) {
     call->implicit[0].access = MINIC_MACHINE_REGISTER_READ;
     REQUIRE(!minic_machine_function_verify(&fn, &policy));
     call->implicit[0].access = MINIC_MACHINE_REGISTER_CLOBBER;
+    load->operands[1].value.frame.displacement = 17;
+    REQUIRE(!minic_machine_function_verify(&fn, &policy));
+    load->operands[1].value.frame.displacement = 0;
     saved_features = fn.generated_features;
     fn.generated_features = 0U;
     REQUIRE(!minic_machine_function_verify(&fn, &policy));
@@ -277,10 +448,20 @@ static bool exercise_target(MinicTargetArchitecture arch) {
     fn.frame_objects[0].fixed_offset = 1;
     REQUIRE(!minic_machine_function_verify(&fn, &policy));
     fn.frame_objects[0].fixed_offset = 8;
+    fn.frame_objects[0].fixed_offset = -8;
+    fn.frame_objects[0].size_bytes = 16U;
+    REQUIRE(!minic_machine_function_verify(&fn, &policy));
+    fn.frame_objects[0].size_bytes = 8U;
+    REQUIRE(minic_machine_function_verify(&fn, &policy));
+    fn.frame_objects[0].fixed_offset = 8;
     load->operands[1].value.frame.displacement = INT64_MAX;
     REQUIRE(!minic_machine_function_verify(&fn, &policy));
     load->operands[1].value.frame.displacement = 0;
     fn.frame_objects[0].fixed_offset = 0;
+    saved_string = fn.blocks[exit_block].exported_label;
+    fn.blocks[exit_block].exported_label = fn.name;
+    REQUIRE(!minic_machine_function_verify(&fn, &policy));
+    fn.blocks[exit_block].exported_label = saved_string;
     load->source_asm_template = "fake source escape";
     REQUIRE(!minic_machine_function_verify(&fn, &policy));
     load->source_asm_template = NULL;
@@ -292,7 +473,7 @@ static bool exercise_target(MinicTargetArchitecture arch) {
     REQUIRE(minic_machine_function_initialize(&fn, &target,
                                               "machine_asm_probe", 1U));
     REQUIRE(minic_machine_function_add_block(&fn, NULL, false, &entry));
-    memset(&ins, 0, sizeof(ins));
+    reset_input(&ins, input_operands, input_implicit);
     ins.opcode = PROBE_LOAD_ADDRESS;
     ins.effects = MINIC_MACHINE_EFFECT_MEMORY_READ;
     ins.operand_count = 2U;
@@ -303,23 +484,48 @@ static bool exercise_target(MinicTargetArchitecture arch) {
     ins.operands[1].value.address.target_mode = 1U;
     ins.operands[1].value.address.has_base = true;
     ins.operands[1].value.address.base = gp(4U, width);
+    ins.operands[1].value.address.has_symbol = true;
+    ins.operands[1].value.address.symbol = got_symbol;
+    ins.operands[1].value.address.relocation = 2U;
+    ins.operands[1].value.address.has_symbol = false;
+    REQUIRE(!add_generated(&fn, entry, &ins));
+    ins.operands[1].value.address.has_symbol = true;
     REQUIRE(add_generated(&fn, entry, &ins));
-    memset(&ins, 0, sizeof(ins));
+    got_symbol[0] = 'X';
+    REQUIRE(strcmp(fn.blocks[entry].instructions[0].operands[1]
+                    .value.address.symbol, "got_anchor") == 0);
+    reset_input(&ins, input_operands, input_implicit);
     ins.kind = MINIC_MACHINE_INSTRUCTION_SOURCE_ASM;
     ins.effects = MINIC_MACHINE_EFFECT_SOURCE_ASM |
                   MINIC_MACHINE_EFFECT_COMPILER_BARRIER;
-    ins.source_asm_template = "opaque_source_isa_instruction";
+    ins.source_asm_template = source_bytes;
+    ins.source_asm_length = sizeof(source_bytes);
+    ins.has_core_origin = true;
+    ins.core_instruction_id = 1U;
     ins.operand_count = 1U;
     ins.operands[0].kind = MINIC_MACHINE_OPERAND_REGISTER;
     ins.operands[0].value.physical.reg = gp(1U, width);
     ins.operands[0].value.physical.access = MINIC_MACHINE_REGISTER_READ;
     ins.operands[0].asm_constraint = "r";
+    ins.implicit = NULL;
     REQUIRE(minic_machine_block_append_instruction(&fn, entry, &ins));
-    memset(&ins, 0, sizeof(ins));
+    source_bytes[0] = 'X';
+    REQUIRE(fn.blocks[entry].instructions[1].source_asm_length ==
+            sizeof(source_bytes));
+    REQUIRE(fn.blocks[entry].instructions[1].source_asm_template[0] == 'o');
+    REQUIRE(fn.blocks[entry].instructions[1].source_asm_template[6] == '\0');
+    REQUIRE(fn.blocks[entry].instructions[1].source_asm_template[8] == 'v');
+    reset_input(&ins, input_operands, input_implicit);
     ins.opcode = PROBE_RETURN;
     ins.effects = MINIC_MACHINE_EFFECT_RETURN;
     REQUIRE(add_generated(&fn, entry, &ins));
     REQUIRE(minic_machine_function_verify(&fn, &policy));
+    fn.blocks[entry].instructions[0].operands[1].value.address.relocation = 999U;
+    REQUIRE(!minic_machine_function_verify(&fn, &policy));
+    fn.blocks[entry].instructions[0].operands[1].value.address.relocation = 2U;
+    fn.blocks[entry].instructions[0].operands[1].value.address.has_symbol = false;
+    REQUIRE(!minic_machine_function_verify(&fn, &policy));
+    fn.blocks[entry].instructions[0].operands[1].value.address.has_symbol = true;
     fn.blocks[entry].instructions[0].operands[1].value.address.target_mode = 999U;
     REQUIRE(!minic_machine_function_verify(&fn, &policy));
     fn.blocks[entry].instructions[0].operands[1].value.address.target_mode = 1U;
@@ -337,6 +543,16 @@ static bool exercise_target(MinicTargetArchitecture arch) {
     REQUIRE(!minic_machine_function_verify(&fn, &policy));
     fn.blocks[entry].instructions[1].opcode = 0U;
     REQUIRE(minic_machine_function_verify(&fn, &policy));
+    fn.blocks[entry].instructions[1].has_core_origin = false;
+    REQUIRE(!minic_machine_function_verify(&fn, &policy));
+    fn.blocks[entry].instructions[1].has_core_origin = true;
+    fn.blocks[entry].instructions[1].source_asm_terminates_block = true;
+    REQUIRE(!minic_machine_function_verify(&fn, &policy));
+    fn.blocks[entry].instructions[1].source_asm_terminates_block = false;
+    fn.blocks[entry].instructions[1].source_asm_permits_fallthrough = true;
+    REQUIRE(!minic_machine_function_verify(&fn, &policy));
+    fn.blocks[entry].instructions[1].source_asm_permits_fallthrough = false;
+    REQUIRE(minic_machine_function_verify(&fn, &policy));
     minic_machine_function_destroy(&fn);
 
     /* An indirect machine branch may name a set of indirect-entry blocks
@@ -345,8 +561,20 @@ static bool exercise_target(MinicTargetArchitecture arch) {
                                               "machine_indirect_probe", 1U));
     REQUIRE(minic_machine_function_add_block(&fn, NULL, false, &entry));
     REQUIRE(minic_machine_function_add_block(&fn, NULL, true, &exit_block));
+    REQUIRE(minic_machine_function_add_block(
+        &fn, NULL, true, &auxiliary_block));
+    fn.blocks[auxiliary_block].machine_auxiliary = true;
     REQUIRE(minic_machine_block_add_successor(&fn, entry, exit_block));
-    memset(&ins, 0, sizeof(ins));
+    reset_input(&ins, input_operands, input_implicit);
+    ins.opcode = PROBE_BLOCK_ADDRESS;
+    ins.operand_count = 2U;
+    ins.operands[0].kind = MINIC_MACHINE_OPERAND_REGISTER;
+    ins.operands[0].value.physical.reg = gp(1U, width);
+    ins.operands[0].value.physical.access = MINIC_MACHINE_REGISTER_WRITE;
+    ins.operands[1].kind = MINIC_MACHINE_OPERAND_BLOCK_ADDRESS;
+    ins.operands[1].value.block_id = auxiliary_block;
+    REQUIRE(add_generated(&fn, entry, &ins));
+    reset_input(&ins, input_operands, input_implicit);
     ins.opcode = PROBE_INDIRECT_JUMP;
     ins.effects = MINIC_MACHINE_EFFECT_BRANCH;
     ins.operand_count = 1U;
@@ -354,14 +582,49 @@ static bool exercise_target(MinicTargetArchitecture arch) {
     ins.operands[0].value.physical.reg = gp(2U, width);
     ins.operands[0].value.physical.access = MINIC_MACHINE_REGISTER_READ;
     REQUIRE(add_generated(&fn, entry, &ins));
-    memset(&ins, 0, sizeof(ins));
+    reset_input(&ins, input_operands, input_implicit);
     ins.opcode = PROBE_RETURN;
     ins.effects = MINIC_MACHINE_EFFECT_RETURN;
     REQUIRE(add_generated(&fn, exit_block, &ins));
+    REQUIRE(add_generated(&fn, auxiliary_block, &ins));
+    REQUIRE(minic_machine_function_verify(&fn, &policy));
+    /* BLOCK_ADDRESS names an indirect-entry internal label, but does not
+     * require a fabricated direct-branch CFG edge to that label. */
+    fn.blocks[auxiliary_block].indirect_entry = false;
+    REQUIRE(!minic_machine_function_verify(&fn, &policy));
+    fn.blocks[auxiliary_block].indirect_entry = true;
     REQUIRE(minic_machine_function_verify(&fn, &policy));
     fn.blocks[exit_block].indirect_entry = false;
     REQUIRE(!minic_machine_function_verify(&fn, &policy));
     fn.blocks[exit_block].indirect_entry = true;
+    REQUIRE(minic_machine_function_verify(&fn, &policy));
+    minic_machine_function_destroy(&fn);
+
+    /* The exact-count owner is not merely a small fixed inline array:
+     * stress its entire public operand/register-effect capacity. */
+    REQUIRE(minic_machine_function_initialize(
+        &fn, &target, "machine_capacity_probe", UINT64_C(1)));
+    REQUIRE(minic_machine_function_add_block(&fn, NULL, false, &entry));
+    reset_input(&ins, input_operands, input_implicit);
+    ins.opcode = PROBE_MANY;
+    ins.operand_count = MINIC_MACHINE_MAX_OPERANDS;
+    ins.implicit_count = MINIC_MACHINE_MAX_REGISTER_EFFECTS;
+    {
+        size_t i;
+        for (i = 0U; i < ins.operand_count; ++i) {
+            ins.operands[i].kind = MINIC_MACHINE_OPERAND_INTEGER;
+            ins.operands[i].value.integer = (int64_t)i;
+        }
+        for (i = 0U; i < ins.implicit_count; ++i) {
+            ins.implicit[i].reg = gp((unsigned int)(i % 32U), width);
+            ins.implicit[i].access = MINIC_MACHINE_REGISTER_CLOBBER;
+        }
+    }
+    REQUIRE(add_generated(&fn, entry, &ins));
+    reset_input(&ins, input_operands, input_implicit);
+    ins.opcode = PROBE_RETURN;
+    ins.effects = MINIC_MACHINE_EFFECT_RETURN;
+    REQUIRE(add_generated(&fn, entry, &ins));
     REQUIRE(minic_machine_function_verify(&fn, &policy));
     result = true;
 fail:

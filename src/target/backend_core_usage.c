@@ -121,7 +121,8 @@ static unsigned int minic_backend_usage_bits(const MinicCoreFunction *fn,
     if (type->kind == MINIC_CORE_TYPE_FLOAT) {
         if (type->value.floating.format == MINIC_CORE_FLOAT_BINARY32) return 32U;
         if (type->value.floating.format == MINIC_CORE_FLOAT_BINARY64) return 64U;
-        if (type->value.floating.format == MINIC_CORE_FLOAT_EXTENDED) return 128U;
+        if (type->value.floating.format == MINIC_CORE_FLOAT_BINARY128) return 128U;
+        if (type->value.floating.format == MINIC_CORE_FLOAT_X87_EXTENDED80) return 80U;
     }
     return 0U;
 }

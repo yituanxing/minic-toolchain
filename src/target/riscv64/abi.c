@@ -122,7 +122,7 @@ bool minic_riscv64_abi_classify_core_value_profile(
             value.kind = MINIC_RISCV64_ABI_VALUE_FLOAT;
             value.register_chunks = 1U;
         } else if (((base->kind == MINIC_CORE_TYPE_FLOAT &&
-                     base->value.floating.format == MINIC_CORE_FLOAT_EXTENDED) ||
+                     base->value.floating.format == MINIC_CORE_FLOAT_BINARY128) ||
                     (base->kind == MINIC_CORE_TYPE_INTEGER &&
                      base->value.integer.bit_width == 128U)) && type->size == 16U) {
             value.kind = MINIC_RISCV64_ABI_VALUE_WIDE_SCALAR;

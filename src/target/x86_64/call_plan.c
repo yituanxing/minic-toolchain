@@ -37,7 +37,7 @@ static X86AbiCoreClass x86_plan_class(const MinicCoreFunction *fn,
             return type->size == 4U ? X86_ABI_CLASS_FLOAT : X86_ABI_CLASS_INVALID;
         case MINIC_CORE_FLOAT_BINARY64:
             return type->size == 8U ? X86_ABI_CLASS_DOUBLE : X86_ABI_CLASS_INVALID;
-        case MINIC_CORE_FLOAT_EXTENDED:
+        case MINIC_CORE_FLOAT_X87_EXTENDED80:
             return type->size == 16U ? X86_ABI_CLASS_LONG_DOUBLE
                                      : X86_ABI_CLASS_INVALID;
         default: return X86_ABI_CLASS_INVALID;

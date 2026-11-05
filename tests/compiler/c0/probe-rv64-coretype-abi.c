@@ -67,7 +67,7 @@ int main(void) {
     CHECK(register_integer(&types, 64U, &i64));
     CHECK(register_integer(&types, 128U, &i128));
     CHECK(register_float(&types, MINIC_CORE_FLOAT_BINARY64, 8U, &f64));
-    CHECK(register_float(&types, MINIC_CORE_FLOAT_EXTENDED, 16U, &ext));
+    CHECK(register_float(&types, MINIC_CORE_FLOAT_BINARY128, 16U, &ext));
     CHECK(register_record(&types, f64, 16U, false, &fp_record));
     CHECK(register_record(&types, f64, 16U, true, &fp_union));
     CHECK(register_record(&types, i64, 24U, false, &big_record));

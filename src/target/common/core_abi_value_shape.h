@@ -54,7 +54,7 @@ static inline bool minic_core_abi_value_shape(
                 ? type->size != 4U
                 : type->value.floating.format == MINIC_CORE_FLOAT_BINARY64
                     ? type->size != 8U
-                    : type->value.floating.format == MINIC_CORE_FLOAT_EXTENDED
+                    : minic_core_float_format_is_wide(type->value.floating.format)
                         ? type->size != 16U : true))
             return false;
         shape->float_format = type->value.floating.format;
@@ -85,7 +85,7 @@ static inline bool minic_core_abi_wide_scalar(
     return minic_core_abi_value_shape(fn, id, &shape) &&
            ((shape.kind == MINIC_CORE_TYPE_INTEGER && shape.bytes == 16U) ||
             (shape.kind == MINIC_CORE_TYPE_FLOAT &&
-             shape.float_format == MINIC_CORE_FLOAT_EXTENDED));
+             minic_core_float_format_is_wide(shape.float_format)));
 }
 
 #endif

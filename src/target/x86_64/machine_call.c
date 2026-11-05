@@ -191,7 +191,7 @@ static bool x86_emit_call_arguments_planned(
             size_t offset;
             if (!x86_call_is_float_format(fn,
                     fn->values[arg->value.value_id].core_type_id,
-                    MINIC_CORE_FLOAT_EXTENDED) ||
+                    MINIC_CORE_FLOAT_X87_EXTENDED80) ||
                 frame->value_offsets == NULL)
                 return false;
             offset = frame->value_offsets[arg->value.value_id];
@@ -333,7 +333,7 @@ static bool x86_emit_call_result(FILE *out, const MinicCoreFunction *fn,
                            abi->gp_results[0], abi->gp_results[1]);
     }
     if (x86_call_is_float_format(fn, core_return_type,
-                                 MINIC_CORE_FLOAT_EXTENDED))
+                                 MINIC_CORE_FLOAT_X87_EXTENDED80))
         return x86_x87_store(out, frame, result);
     if (x86_call_is_float_format(fn, core_return_type,
                                  MINIC_CORE_FLOAT_BINARY64)) {
@@ -347,20 +347,21 @@ static bool x86_emit_call_result(FILE *out, const MinicCoreFunction *fn,
     return x86_value_store(out, frame, result);
 }
 
-/* Core represents long-double operations as typed libcalls because RV64
- * uses 128-bit TFmode. Intercept ONLY these exact Core-generated helper
- * signatures for the x86-64 x87/80-bit target. Sending an x87 value to
- * __addtf3/__extenddftf2 would silently use the wrong floating format. */
+/* A typed extended-float Core CALL is target-neutral numerical semantics.
+ * x86 must lower the explicit operation to x87. An ordinary user call whose
+ * callee happens to be named __addtf3 is never reinterpreted as arithmetic. */
 static bool x86_emit_x87_core_helper(FILE *out, const MinicCoreFunction *fn,
                                       const MinicX86Frame *frame,
                                       const MinicCoreCallView *call,
                                       const MinicCoreInstruction *ins) {
-    const char *name = call->callee != NULL ? call->callee->name : NULL;
+    const MinicCoreExtendedFloatOperation operation =
+        ins->value.call.extended_float_operation;
     size_t begin = ins->value.call.argument_begin;
     size_t count = ins->value.call.argument_count;
     MinicCoreValueId a, b = MINIC_CORE_VALUE_INVALID;
     bool result_ld, source_ld;
-    if (name == NULL || begin > fn->call_argument_count ||
+    if (operation == MINIC_CORE_EXT_FLOAT_NONE ||
+        call->callee == NULL || begin > fn->call_argument_count ||
         count > fn->call_argument_count - begin ||
         ins->result >= fn->value_count ||
         (count != 1U && count != 2U)) return false;
@@ -375,41 +376,41 @@ static bool x86_emit_x87_core_helper(FILE *out, const MinicCoreFunction *fn,
         if (b >= fn->value_count) return false;
     }
     result_ld = x86_call_is_float_format(fn, call->core_return_type_id,
-                                         MINIC_CORE_FLOAT_EXTENDED);
+                                         MINIC_CORE_FLOAT_X87_EXTENDED80);
     source_ld = x86_call_is_float_format(fn, fn->values[a].core_type_id,
-                                         MINIC_CORE_FLOAT_EXTENDED);
+                                         MINIC_CORE_FLOAT_X87_EXTENDED80);
     if (fn->values[ins->result].core_type_id != call->core_return_type_id)
         return false;
     if (count == 1U) {
-        if (result_ld && source_ld && strcmp(name, "__negtf2") == 0)
+        if (result_ld && source_ld && operation == MINIC_CORE_EXT_FLOAT_NEGATE)
             return x86_x87_load(out, frame, a) &&
                    fprintf(out, "  fchs\n") >= 0 &&
                    x86_x87_store(out, frame, ins->result);
         if (result_ld && !source_ld && x86_call_is_float_format(
                 fn, fn->values[a].core_type_id,
                 MINIC_CORE_FLOAT_BINARY64) &&
-            strcmp(name, "__extenddftf2") == 0)
+            operation == MINIC_CORE_EXT_FLOAT_FROM_BINARY64)
             return fprintf(out, "  fldl -%zu(%%rbp)\n",
                            frame->value_offsets[a]) >= 0 &&
                    x86_x87_store(out, frame, ins->result);
         if (result_ld && !source_ld && x86_call_is_float_format(
                 fn, fn->values[a].core_type_id,
                 MINIC_CORE_FLOAT_BINARY32) &&
-            strcmp(name, "__extendsftf2") == 0)
+            operation == MINIC_CORE_EXT_FLOAT_FROM_BINARY32)
             return fprintf(out, "  flds -%zu(%%rbp)\n",
                            frame->value_offsets[a]) >= 0 &&
                    x86_x87_store(out, frame, ins->result);
         if (source_ld && x86_call_is_float_format(
                 fn, call->core_return_type_id,
                 MINIC_CORE_FLOAT_BINARY64) &&
-            strcmp(name, "__trunctfdf2") == 0)
+            operation == MINIC_CORE_EXT_FLOAT_TO_BINARY64)
             return x86_x87_load(out, frame, a) &&
                    fprintf(out, "  fstpl -%zu(%%rbp)\n",
                            frame->value_offsets[ins->result]) >= 0;
         if (source_ld && x86_call_is_float_format(
                 fn, call->core_return_type_id,
                 MINIC_CORE_FLOAT_BINARY32) &&
-            strcmp(name, "__trunctfsf2") == 0)
+            operation == MINIC_CORE_EXT_FLOAT_TO_BINARY32)
             return x86_x87_load(out, frame, a) &&
                    fprintf(out, "  fstps -%zu(%%rbp)\n",
                            frame->value_offsets[ins->result]) >= 0;
@@ -419,8 +420,10 @@ static bool x86_emit_x87_core_helper(FILE *out, const MinicCoreFunction *fn,
             bool to_64, to_32;
             if (!x86_call_is_integer(fn, call->core_return_type_id,
                                      &unsigned_value)) return false;
-            to_64 = strcmp(name, unsigned_value ? "__fixunstfdi" : "__fixtfdi") == 0;
-            to_32 = strcmp(name, unsigned_value ? "__fixunstfsi" : "__fixtfsi") == 0;
+            to_64 = operation == (unsigned_value
+                ? MINIC_CORE_EXT_FLOAT_TO_UNSIGNED64 : MINIC_CORE_EXT_FLOAT_TO_SIGNED64);
+            to_32 = operation == (unsigned_value
+                ? MINIC_CORE_EXT_FLOAT_TO_UNSIGNED32 : MINIC_CORE_EXT_FLOAT_TO_SIGNED32);
             if (!to_64 && !to_32) return false;
             if (!x86_x87_load(out, frame, a)) return false;
             if (unsigned_value && to_64) {
@@ -467,8 +470,10 @@ static bool x86_emit_x87_core_helper(FILE *out, const MinicCoreFunction *fn,
             bool from_64, from_32;
             if (!x86_call_is_integer(fn, fn->values[a].core_type_id,
                                      &unsigned_value)) return false;
-            from_64 = strcmp(name, unsigned_value ? "__floatunditf" : "__floatditf") == 0;
-            from_32 = strcmp(name, unsigned_value ? "__floatunsitf" : "__floatsitf") == 0;
+            from_64 = operation == (unsigned_value
+                ? MINIC_CORE_EXT_FLOAT_FROM_UNSIGNED64 : MINIC_CORE_EXT_FLOAT_FROM_SIGNED64);
+            from_32 = operation == (unsigned_value
+                ? MINIC_CORE_EXT_FLOAT_FROM_UNSIGNED32 : MINIC_CORE_EXT_FLOAT_FROM_SIGNED32);
             if (!from_64 && !from_32) return false;
             /* fild accepts signed integers. For unsigned 64-bit values
              * with bit 63 set, add precisely 2^64 as an x87 double-memory
@@ -499,56 +504,44 @@ static bool x86_emit_x87_core_helper(FILE *out, const MinicCoreFunction *fn,
     }
     if (!source_ld || !x86_call_is_float_format(
             fn, fn->values[b].core_type_id,
-            MINIC_CORE_FLOAT_EXTENDED) ||
+            MINIC_CORE_FLOAT_X87_EXTENDED80) ||
         !x86_x87_load(out, frame, a) || !x86_x87_load(out, frame, b))
         return false;
     if (result_ld) {
         const char *instruction =
-            strcmp(name, "__addtf3") == 0 ? "faddp" :
+            operation == MINIC_CORE_EXT_FLOAT_ADD ? "faddp" :
             /* GAS AT&T st(0),st(1) spellings reverse the apparently
              * intuitive subtraction/division order.  After fld(left),
              * fld(right), fsubrp/fdivrp compute LEFT op RIGHT.
              * The former fsubp/fdivp silently computed RIGHT op LEFT. */
-            strcmp(name, "__subtf3") == 0 ? "fsubrp" :
-            strcmp(name, "__multf3") == 0 ? "fmulp" :
-            strcmp(name, "__divtf3") == 0 ? "fdivrp" : NULL;
+            operation == MINIC_CORE_EXT_FLOAT_SUBTRACT ? "fsubrp" :
+            operation == MINIC_CORE_EXT_FLOAT_MULTIPLY ? "fmulp" :
+            operation == MINIC_CORE_EXT_FLOAT_DIVIDE ? "fdivrp" : NULL;
         if (instruction == NULL) return false;
         return fprintf(out, "  %s %%st, %%st(1)\n", instruction) >= 0 &&
                x86_x87_store(out, frame, ins->result);
     }
     if (!x86_call_is_integer(fn, call->core_return_type_id, NULL) ||
-        (strcmp(name, "__eqtf2") != 0 &&
-         strcmp(name, "__lttf2") != 0 &&
-         strcmp(name, "__letf2") != 0)) return false;
-    /* After fldt(left), fldt(right), compare ST(1)=left to ST(0)=right;
-     * fxch ensures fucomip sees left as the first operand. Unordered
-     * comparisons return +1 (libgcc helper contract) except eq != 0. */
+        (operation != MINIC_CORE_EXT_FLOAT_EQUAL &&
+         operation != MINIC_CORE_EXT_FLOAT_LESS &&
+         operation != MINIC_CORE_EXT_FLOAT_LESS_EQUAL)) return false;
+    /* Core's typed ordered predicate returns 0/1. After fldt(left),
+     * fldt(right), fxch makes fucomip compare left against right. Mask
+     * unordered with setnp so every NaN predicate is false. */
     if (fprintf(out,
           "  fxch %%st(1)\n"
           "  fucomip %%st(1), %%st\n"
           "  fstp %%st(0)\n") < 0) return false;
-    if (strcmp(name, "__eqtf2") == 0) {
+    {
+        const char *predicate = operation == MINIC_CORE_EXT_FLOAT_EQUAL
+            ? "sete" : operation == MINIC_CORE_EXT_FLOAT_LESS
+            ? "setb" : "setbe";
         if (fprintf(out,
-              "  setne %%al\n"
-              "  setp %%r10b\n"
-              "  orb %%r10b, %%al\n"
-              "  movzbl %%al, %%eax\n") < 0) return false;
-    } else if (fprintf(out,
-                "  movl $1, %%eax\n"
-                "  jp 1f\n"
-                "  jb 2f\n"
-                "  je 3f\n"
-                "  jmp 1f\n"
-                "2:\n"
-                "  movl $-1, %%eax\n"
-                "  jmp 1f\n"
-                "3:\n"
-                "  xorl %%eax, %%eax\n"
-                "1:\n"
-                /* A 32-bit write zero-extends RAX on x86-64. The -1 helper
-                 * result must be sign-extended before Core's 64-bit SSA slot
-                 * and its signed INTEGER_LESS consume it. */
-                "  movslq %%eax, %%rax\n") < 0) return false;
+                    "  %s %%al\n"
+                    "  setnp %%r10b\n"
+                    "  andb %%r10b, %%al\n"
+                    "  movzbl %%al, %%eax\n", predicate) < 0) return false;
+    }
     return x86_value_store(out, frame, ins->result);
 }
 
@@ -611,34 +604,15 @@ bool minic_x86_64_emit_call_instruction(
                     ins->value.call.result_object, count, call.parameter_count);
             return false;
         }
-        if (x86_call_is_float_format(fn, call.core_return_type_id,
-                                     MINIC_CORE_FLOAT_EXTENDED) ||
-            (call.parameter_count != 0U &&
-             x86_call_is_float_format(fn,
-                 call.core_parameter_type_ids != NULL
-                     ? call.core_parameter_type_ids[0]
-                     : MINIC_CORE_TYPE_INVALID,
-                 MINIC_CORE_FLOAT_EXTENDED))) {
-            if (strncmp(callee->name, "__", 2U) == 0 &&
-                (strstr(callee->name, "tf") != NULL ||
-                 strstr(callee->name, "TF") != NULL)) {
-                bool handled = x86_emit_x87_core_helper(out, fn, frame, &call, ins);
-                if (!handled && getenv("MINIC_X86_CALL_TRACE") != NULL)
-                    (void)fprintf(stderr,
-                        "X86_CALL_GATE function=%s callee=%s stage=x87-helper "
-                        "return_ld=%d argc=%zu first_ld=%d\n",
-                        fn->name, callee->name,
-                        x86_call_is_float_format(fn, call.core_return_type_id,
-                            MINIC_CORE_FLOAT_EXTENDED) ? 1 : 0,
-                        count,
-                        count != 0U &&
-                        fn->call_arguments[begin].kind == MINIC_CORE_CALL_ARGUMENT_VALUE &&
-                        x86_call_is_float_format(fn,
-                            fn->values[fn->call_arguments[begin].value.value_id].core_type_id,
-                            MINIC_CORE_FLOAT_EXTENDED)
-                            ? 1 : 0);
-                return handled;
-            }
+        if (ins->value.call.extended_float_operation != MINIC_CORE_EXT_FLOAT_NONE) {
+            bool handled = x86_emit_x87_core_helper(out, fn, frame, &call, ins);
+            if (!handled && getenv("MINIC_X86_CALL_TRACE") != NULL)
+                (void)fprintf(stderr,
+                    "X86_CALL_GATE function=%s callee=%s stage=typed-x87-op "
+                    "operation=%d argc=%zu\n",
+                    fn->name, callee->name,
+                    (int)ins->value.call.extended_float_operation, count);
+            return handled;
         }
         if (!x86_emit_call_arguments(out, fn, frame,
                                      &call, cached_plan, &outgoing_bytes)) {
@@ -686,7 +660,7 @@ bool minic_x86_64_emit_call_instruction(
                     "long_double=%d double=%d record=%d\n",
                     fn->name, callee->name,
                     x86_call_is_float_format(fn, call.core_return_type_id,
-                        MINIC_CORE_FLOAT_EXTENDED) ? 1 : 0,
+                        MINIC_CORE_FLOAT_X87_EXTENDED80) ? 1 : 0,
                     x86_call_is_float_format(fn, call.core_return_type_id,
                         MINIC_CORE_FLOAT_BINARY64) ? 1 : 0,
                     x86_call_is_record(fn, call.core_return_type_id) ? 1 : 0);

@@ -53,7 +53,7 @@ static bool make_type_context(MinicCoreTypeContext *context, TypeIds *ids) {
     if (!minic_core_type_register(context, &type, &ids->f64)) return false;
     type.size = 16U;
     type.alignment = 16U;
-    type.value.floating.format = MINIC_CORE_FLOAT_EXTENDED;
+    type.value.floating.format = MINIC_CORE_FLOAT_BINARY128;
     if (!minic_core_type_register(context, &type, &ids->long_double)) return false;
 
     /* Fixed object repetition lives in one Core ARRAY type; CoreObject itself
@@ -401,15 +401,15 @@ static bool build_tf_libcall_function(MinicCoreSourceBuilder *builder) {
     minic_core_source_builder_initialize(builder);
     if (!minic_core_function_set_signature(builder, "tf_roundtrip", 12U,
                                            f64, input_types, 2U) ||
-        !minic_core_function_add_callee(builder, "__addtf3", 8U, tf,
+        !minic_core_function_add_callee(builder, "@core.float.add", 15U, tf,
                                        input_types, 2U, false,
                                        MINIC_CALLING_CONVENTION_DEFAULT, &add) ||
-        !minic_core_function_add_callee(builder, "__addtf3", 8U, tf,
+        !minic_core_function_add_callee(builder, "@core.float.add", 15U, tf,
                                        input_types, 2U, false,
                                        MINIC_CALLING_CONVENTION_DEFAULT,
                                        &repeated_add) ||
         add != repeated_add ||
-        !minic_core_function_add_callee(builder, "__trunctfdf2", 12U, f64,
+        !minic_core_function_add_callee(builder, "@core.float.to_binary64", 23U, f64,
                                        &tf, 1U, false,
                                        MINIC_CALLING_CONVENTION_DEFAULT, &trunc) ||
         add == trunc || function->callee_count != 2U ||
@@ -432,6 +432,7 @@ static bool build_tf_libcall_function(MinicCoreSourceBuilder *builder) {
     instruction.value.call.callee_id = add;
     instruction.value.call.argument_begin = begin;
     instruction.value.call.argument_count = 2U;
+    instruction.value.call.extended_float_operation = MINIC_CORE_EXT_FLOAT_ADD;
     instruction.value.call.result_object = MINIC_CORE_OBJECT_INVALID;
     if (!minic_core_function_append_source_value_instruction(builder, block,
             &instruction, tf, &sum)) return false;
@@ -444,6 +445,7 @@ static bool build_tf_libcall_function(MinicCoreSourceBuilder *builder) {
     instruction.value.call.callee_id = trunc;
     instruction.value.call.argument_begin = begin;
     instruction.value.call.argument_count = 1U;
+    instruction.value.call.extended_float_operation = MINIC_CORE_EXT_FLOAT_TO_BINARY64;
     instruction.value.call.result_object = MINIC_CORE_OBJECT_INVALID;
     if (!minic_core_function_append_source_value_instruction(builder, block,
             &instruction, f64, &result)) return false;
@@ -765,9 +767,9 @@ int main(void) {
     CHECK(published.type_context == &context);
     minic_core_function_destroy(&published);
 
-    /* The first synthesized callee may have been registered when a later
-     * libcalls import fails. Retry must clear both direct IDs, without
-     * requiring the synthetic linker names to exist in a C symbol table. */
+    /* The first internal wide-float operation may already have registered a
+     * typed callee when another signature import fails. Retry must clear
+     * both direct IDs; neither internal operation is a linker symbol. */
     CHECK(build_tf_libcall_function(&builder));
     resolver.i32 = ids.i32;
     resolver.f64 = ids.f64;
@@ -784,6 +786,19 @@ int main(void) {
     CHECK(minic_core_function_snapshot_types(&builder, &context,
                                              resolve_source_type, &resolver));
     CHECK(minic_core_function_verify(function));
+    /* The operation, not a linker symbol spelling, owns the physical type
+     * contract. Forging an opcode against a valid callee must be rejected. */
+    function->instructions[2].value.call.extended_float_operation =
+        MINIC_CORE_EXT_FLOAT_TO_BINARY64;
+    CHECK(!minic_core_function_verify(function));
+    function->instructions[2].value.call.extended_float_operation =
+        MINIC_CORE_EXT_FLOAT_ADD;
+    function->instructions[3].value.call.extended_float_operation =
+        MINIC_CORE_EXT_FLOAT_ADD;
+    CHECK(!minic_core_function_verify(function));
+    function->instructions[3].value.call.extended_float_operation =
+        MINIC_CORE_EXT_FLOAT_TO_BINARY64;
+    CHECK(minic_core_function_verify(function));
     {
         const MinicCoreCallee *add = &function->callees[0];
         const MinicCoreCallee *trunc = &function->callees[1];
@@ -791,8 +806,8 @@ int main(void) {
             &context, add->core_function_type_id);
         const MinicCoreType *trunc_type = minic_core_type_get(
             &context, trunc->core_function_type_id);
-        CHECK(strcmp(add->name, "__addtf3") == 0 &&
-              strcmp(trunc->name, "__trunctfdf2") == 0 &&
+        CHECK(strcmp(add->name, "@core.float.add") == 0 &&
+              strcmp(trunc->name, "@core.float.to_binary64") == 0 &&
               add->core_function_type_id != trunc->core_function_type_id &&
               add_type != NULL && add_type->kind == MINIC_CORE_TYPE_FUNCTION &&
               add_type->value.function.return_type == ids.long_double &&

@@ -21,7 +21,10 @@ typedef enum MinicMachineOperandKind {
     MINIC_MACHINE_OPERAND_FRAME,
     MINIC_MACHINE_OPERAND_SYMBOL,
     MINIC_MACHINE_OPERAND_BLOCK,
-    MINIC_MACHINE_OPERAND_ADDRESS
+    MINIC_MACHINE_OPERAND_ADDRESS,
+    /* Machine-local label materialization, e.g. la rd,.Lcomputed_goto.
+     * This is not a taken branch and creates no CFG successor. */
+    MINIC_MACHINE_OPERAND_BLOCK_ADDRESS
 } MinicMachineOperandKind;
 
 typedef enum MinicMachineRegisterBank {
@@ -56,10 +59,19 @@ typedef enum MinicMachineFrameArea {
     MINIC_MACHINE_FRAME_OUTGOING
 } MinicMachineFrameArea;
 
+/* Fixed offsets are interpreted against an explicit machine frame base;
+ * dynamic alloca invalidates stable SP-relative local/incoming references. */
+typedef enum MinicMachineFrameBase {
+    MINIC_MACHINE_FRAME_BASE_STACK_POINTER = 0,
+    MINIC_MACHINE_FRAME_BASE_FRAME_POINTER,
+    MINIC_MACHINE_FRAME_BASE_ENTRY_STACK_POINTER
+} MinicMachineFrameBase;
+
 typedef struct MinicMachineFrameObject {
     size_t size_bytes;
     size_t alignment_bytes;
     MinicMachineFrameArea area;
+    MinicMachineFrameBase base;
     bool has_fixed_offset;
     int64_t fixed_offset;
 } MinicMachineFrameObject;
@@ -77,6 +89,12 @@ typedef struct MinicMachineAddress {
     MinicMachineRegister segment;
     unsigned int scale;
     int64_t displacement;
+    /* A relocation can be one component of a machine addressing mode,
+     * e.g. x86 GOTPCREL(symbol)(%rip). Owned after append. */
+    bool has_symbol;
+    char *symbol;
+    uint32_t relocation;
+    int64_t addend;
 } MinicMachineAddress;
 
 typedef struct MinicMachineOperand {
@@ -125,10 +143,12 @@ typedef struct MinicMachineInstruction {
     MinicMachineInstructionKind kind;
     uint32_t opcode; /* target-scoped; zero reserved for source ASM */
     unsigned int effects;
-    MinicMachineOperand operands[MINIC_MACHINE_MAX_OPERANDS];
+    /* Exact-count owned arrays in appended instructions. Input arrays passed
+     * to append are borrowed and may be stack-allocated. */
+    MinicMachineOperand *operands;
     size_t operand_count;
     /* Implicit physical defs/uses/clobbers; never inferred from a C type. */
-    MinicMachineRegisterEffect implicit[MINIC_MACHINE_MAX_REGISTER_EFFECTS];
+    MinicMachineRegisterEffect *implicit;
     size_t implicit_count;
     /* The original Core position is diagnostic-only; no Core pointers live
      * inside a machine function. */
@@ -138,10 +158,16 @@ typedef struct MinicMachineInstruction {
     /* Only SOURCE_ASM owns an opaque source template. Selected opcodes may
      * never use this field to bypass feature or opcode validation. */
     char *source_asm_template;
+    size_t source_asm_length; /* exact source byte length, excluding final NUL */
+    /* Source ASM goto/branch is an explicit physical control-flow decision;
+     * the target policy must independently authorize its flags and labels. */
+    bool source_asm_terminates_block;
+    bool source_asm_permits_fallthrough;
 } MinicMachineInstruction;
 
 typedef struct MinicMachineBlock {
     size_t id;
+    bool machine_auxiliary; /* target inserted; still obeys physical CFG */
     char *exported_label;
     bool indirect_entry;
     bool has_fallthrough;
@@ -159,6 +185,8 @@ typedef struct MinicMachineFunction {
     MinicTargetArchitecture architecture;
     char *name;
     uint64_t generated_features; /* not the features accepted by source ASM */
+    bool has_dynamic_stack; /* alloca/variable stack pointer movement */
+    MinicFunctionCallingConvention calling_convention;
     size_t frame_size;
     size_t frame_alignment;
     MinicMachineFrameObject *frame_objects;

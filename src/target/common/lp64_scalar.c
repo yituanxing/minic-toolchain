@@ -72,7 +72,7 @@ bool minic_lp64_core_valid_parameter_type(const MinicCoreTypeContext *context,
            (type->kind == MINIC_CORE_TYPE_POINTER ||
             core_scalar_float_format(context, id, MINIC_CORE_FLOAT_BINARY32) ||
             core_scalar_float_format(context, id, MINIC_CORE_FLOAT_BINARY64) ||
-            core_scalar_float_format(context, id, MINIC_CORE_FLOAT_EXTENDED) ||
+            core_scalar_float_format(context, id, MINIC_CORE_FLOAT_BINARY128) ||
             (type->kind == MINIC_CORE_TYPE_INTEGER &&
              type->value.integer.bit_width == 128U && type->has_layout) ||
             minic_lp64_core_integer_width(context, id, &width, &sign));
@@ -83,7 +83,7 @@ bool minic_lp64_core_valid_return_type(const MinicCoreTypeContext *context,
     size_t bytes, slots, fp_elements, fp_width;
     return minic_lp64_core_kind(context, id, MINIC_CORE_TYPE_VOID) ||
            core_scalar_float_format(context, id, MINIC_CORE_FLOAT_BINARY64) ||
-           core_scalar_float_format(context, id, MINIC_CORE_FLOAT_EXTENDED) ||
+           core_scalar_float_format(context, id, MINIC_CORE_FLOAT_BINARY128) ||
            minic_lp64_core_valid_parameter_type(context, id) ||
            (minic_lp64_core_kind(context, id, MINIC_CORE_TYPE_RECORD) &&
             (minic_multi_empty_record_core(context, id) ||

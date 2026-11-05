@@ -66,9 +66,8 @@ static bool probe_abi_value_shapes(void) {
         !minic_core_abi_float_format(&function, id, MINIC_CORE_FLOAT_BINARY64) ||
         minic_core_abi_float_format(&function, id, MINIC_CORE_FLOAT_BINARY32))
         return false;
-    type.value.floating.format = MINIC_CORE_FLOAT_EXTENDED; /* wrong size */
-    if (!register_type(&context, type, &id) ||
-        minic_core_abi_wide_scalar(&function, id)) return false;
+    type.value.floating.format = MINIC_CORE_FLOAT_X87_EXTENDED80; /* wrong size */
+    if (register_type(&context, type, &id)) return false;
     type.size = 16U;
     type.alignment = 16U;
     if (!register_type(&context, type, &id) ||

@@ -26,7 +26,7 @@ static inline bool minic_core_floating_format(
     const MinicCoreType *type, MinicCoreFloatFormat format) {
     const size_t bytes = format == MINIC_CORE_FLOAT_BINARY32 ? 4U
                        : format == MINIC_CORE_FLOAT_BINARY64 ? 8U
-                       : format == MINIC_CORE_FLOAT_EXTENDED ? 16U : 0U;
+                       : minic_core_float_format_is_wide(format) ? 16U : 0U;
     return type != NULL && type->kind == MINIC_CORE_TYPE_FLOAT &&
            type->has_layout && bytes != 0U && type->size == bytes &&
            type->value.floating.format == format;
@@ -106,7 +106,8 @@ static inline bool minic_core_floating_shape(
     if (constant) {
         if (!minic_core_floating_format(result, MINIC_CORE_FLOAT_BINARY32) &&
             !minic_core_floating_format(result, MINIC_CORE_FLOAT_BINARY64) &&
-            !minic_core_floating_format(result, MINIC_CORE_FLOAT_EXTENDED))
+            !minic_core_floating_format(result, MINIC_CORE_FLOAT_BINARY128) &&
+            !minic_core_floating_format(result, MINIC_CORE_FLOAT_X87_EXTENDED80))
             return false;
     } else if (compare) {
         if (result->kind != MINIC_CORE_TYPE_INTEGER || !result->has_layout ||

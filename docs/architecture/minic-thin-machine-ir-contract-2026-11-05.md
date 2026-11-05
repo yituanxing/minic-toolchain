@@ -1,12 +1,14 @@
 # MiniC thin Machine IR contract (2026-11-05)
 
-Status: **model and standalone verifier implemented; production migration
-pending**. `src/target/common/machine_ir.{h,c}` and
-`machine_ir_verify.{h,c}` own typed physical machine objects and validate
-entire synthetic functions on all five target identities. The current target
-emitters still write assembly directly and do not consume this model, so the
-machine pipeline described below is the required migration destination, not
-an accomplished five-target backend handoff.
+Status: **owned model, common builder, independent verifier and five target
+ISA opcode/serializer foundations implemented; production migration pending**.
+`src/target/common/machine_ir.{h,c}`, `machine_builder.{h,c}`,
+`machine_ir_verify.{h,c}` and `machine_gnu_asm.{h,c}` own and independently
+verify typed physical machine objects before any machine-body emission. The
+five target-specific physical opcode contracts have standalone positive and
+forged-negative full-function serializer probes. The current *production*
+target emitters still write assembly directly and do not consume this model,
+so the complete target handoff below remains future migration work.
 This decision supersedes older "defer MIR" notes written while Core was
 shadow-only or before the five production targets consumed sealed Core.
 
@@ -57,6 +59,45 @@ by SourcePolicy/GNU AS. Inline ASM remains an explicit MIR instruction with
 sealed typed operands/constraints and an opaque source template. Do not parse
 source ASM into invented target opcodes, and do not exempt compiler-selected
 opcodes by marking them as inline ASM.
+
+### Foundation closure in the current refactor branch
+
+- Machine operands and implicit register effects are exact-count owned arrays,
+  not per-instruction reservations for 16 operands and 64 clobbers. Temporary
+  selector operands are deep-copied; target symbol/address payloads retain
+  relocation identity through validation and serialization.
+- The whole-function verifier requires selected-target callbacks for the
+  generated ISA feature set, function ABI, physical register legality, frame
+  bases and offsets, symbol/address relocations, opcode operand shape,
+  immediate/encoding limits and exact implicit register effects. A selected
+  instruction cannot self-assert a weaker contract.
+- One Core block may lower to multiple `machine_auxiliary` basic blocks.
+  Address-taken `BLOCK_ADDRESS` operands are distinct from branch `BLOCK`
+  CFG successors. Fallthrough requires the immediately following block and
+  a terminator contract explicitly permitting it.
+- The shared builder exposes typed selected machine instructions, frame
+  indices, machine-only blocks and source-provenance inline ASM. The GNU
+  writer first verifies the *complete* machine function and creates all local
+  labels, then dispatches only selected target opcodes and independently
+  approved source-ASM nodes. Unimplemented source-ASM translation fails closed.
+- ISA-owned tables/printers now exist for RV32I, RV64I, x86-64 GPR/FLAGS,
+  AArch64 GPR and LoongArch64 GPR, including their base calls, branches,
+  memory, frame, ABI and relocation contracts. The RV32/RV64 selected
+  opcode probes exercise 68/85 forms respectively. The x86 GNU assembler
+  probe exercises real PC32, GOTPCREL and PLT32 relocations.
+
+For RV32/RV64 production selection, the existing far-branch policy must
+remain intact: `J_BLOCK`/`JAL_BLOCK` describe actual limited-range PC-relative
+machine jumps, and are **not** equivalent to the existing unbounded
+`lla` plus `jalr` expansion used for large Linux/Lua functions. That
+expansion needs selected address materialization and an explicit indirect
+machine CFG edge before the verifier, not a hidden serializer rewrite.
+
+These are **production prerequisites, not completed target migrations**.
+Prologue/epilogue, all emitted instruction families, runtime helper lowering,
+Linux inline ASM and target-specific outlined machine regions still need to
+be selected into one owned `MachineFunction` per function, with no old direct
+Core-to-text instruction path after conversion.
 
 ## Explicit non-goals
 

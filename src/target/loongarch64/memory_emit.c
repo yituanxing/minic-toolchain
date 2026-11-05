@@ -17,7 +17,7 @@ static bool loong_memory_wide_type(const MinicCoreFunction *fn,
                 ? (type->kind == MINIC_CORE_TYPE_INTEGER &&
                    type->value.integer.bit_width == 128U)
                 : (type->kind == MINIC_CORE_TYPE_FLOAT &&
-                   type->value.floating.format == MINIC_CORE_FLOAT_EXTENDED));
+                   type->value.floating.format == MINIC_CORE_FLOAT_BINARY128));
 }
 
 /* Every ordinary Core access has a byte-exact fallback if its pointer is

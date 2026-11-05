@@ -102,7 +102,9 @@ src/target/common/direct_function_profile.c
 src/target/common/direct_function_plan.c
 src/target/common/core_function_plan.c
 src/target/common/machine_ir.c
+src/target/common/machine_builder.c
 src/target/common/machine_ir_verify.c
+src/target/common/machine_gnu_asm.c
 src/target/common/core_function_facts.c
 src/target/common/core_object_storage.c
 src/target/common/core_call_view.c
@@ -115,6 +117,8 @@ src/target/common/lp64_aggregate.c
 src/target/common/lp64_scalar.c
 src/target/common/lp64_frame.c
 src/target/riscv/isa_resolve.c
+src/target/riscv/machine_opcode.c
+src/target/riscv/machine_gnu_asm.c
 src/target/riscv64/isa.c
 src/target/riscv64/machine_register.c
 src/target/riscv32/rv32_emit.c
@@ -155,6 +159,8 @@ src/target/riscv64/frame_requirements.c
 src/target/riscv64/codegen_function.c
 src/target/riscv64/global_emit.c
 src/target/x86_64/codegen.c
+src/target/x86_64/machine_opcode.c
+src/target/x86_64/machine_gnu_asm.c
 src/target/x86_64/machine_register.c
 src/target/x86_64/machine_emit.c
 src/target/x86_64/asm_contract.c
@@ -168,6 +174,8 @@ src/target/x86_64/call_plan.c
 src/target/x86_64/frame.c
 src/target/x86_64/global_emit.c
 src/target/aarch64/abi.c
+src/target/aarch64/machine_opcode.c
+src/target/aarch64/machine_gnu_asm.c
 src/target/aarch64/machine_register.c
 src/target/aarch64/codegen.c
 src/target/aarch64/frame_emit.c
@@ -181,6 +189,8 @@ src/target/aarch64/call_emit.c
 src/target/aarch64/integer_emit.c
 src/target/aarch64/fp_emit.c
 src/target/loongarch64/codegen.c
+src/target/loongarch64/machine_opcode.c
+src/target/loongarch64/machine_gnu_asm.c
 src/target/loongarch64/machine_register.c
 src/target/loongarch64/asm_contract.c
 src/target/loongarch64/asm_contract_source.c
