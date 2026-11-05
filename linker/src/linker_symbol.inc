@@ -255,6 +255,7 @@ static bool symbol_resolver_assign_absolute(MiniLdSymbolResolver *resolver,
         symbol->other = other;
         symbol->source_symbol = SIZE_MAX;
         symbol->script_placeholder = false;
+        symbol->script_relative_negative = false;
         return true;
     }
     return symbol_resolver_merge_global(resolver, diagnostics, name,

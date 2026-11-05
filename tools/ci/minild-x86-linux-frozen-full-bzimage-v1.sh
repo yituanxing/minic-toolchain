@@ -176,6 +176,8 @@ PY
     >"$MINILD_X86_EV/version-timestamp.sha256"
   sha256sum "$MINILD_X86_OUT/vmlinux" "$MINILD_X86_OUT/arch/x86/boot/bzImage" \
     >"$MINILD_X86_EV/original-GNU-outputs.sha256"
+  sha256sum "$MINILD_X86_OUT/arch/x86/boot/setup.bin" \
+    >"$MINILD_X86_EV/frozen-GNU-setup-bin.sha256"
   cp "$MINILD_X86_OUT/arch/x86/boot/bzImage" "$MINILD_X86_EV/original-GNU-bzImage"
   cp "$MINILD_X86_OUT/arch/x86/boot/voffset.h" "$MINILD_X86_EV/frozen-voffset.h"
   cp "$MINILD_X86_OUT/arch/x86/boot/zoffset.h" "$MINILD_X86_EV/frozen-zoffset.h"
@@ -298,6 +300,20 @@ bzimage() {
     die MiniLD_final_kernel_changed
   verify_immutable
   local bz=arch/x86/boot cmp=arch/x86/boot/compressed
+  local setup_mode=${MINILD_X86_SETUP_MODE:-mini-all-links}
+  local setup_owner output_image
+  case "$setup_mode" in
+    mini-all-links)
+      setup_owner=MiniLD
+      output_image="$bz/bzImage.minild" ;;
+    staged-gnu-setup)
+      setup_owner=GNU_FROZEN
+      output_image="$bz/bzImage.minild-kernel-gnu-setup"
+      must_file "$MINILD_X86_EV/frozen-GNU-setup-bin.sha256"
+      sha256sum --quiet -c "$MINILD_X86_EV/frozen-GNU-setup-bin.sha256" ||
+        die frozen_GNU_setup_bin_changed ;;
+    *) die "unsupported_setup_link_mode=$setup_mode" ;;
+  esac
   # These commands are arch/x86/boot/{compressed/,}Makefile recipes on the
   # pinned source. All 6.6.143 compressed C .o are frozen; only piggy.S is new.
   objcopy -R .comment -S vmlinux "$cmp/vmlinux.bin" || die kernel_to_bin_failed
@@ -312,17 +328,31 @@ bzimage() {
   sha256sum "$cmp/piggy.S" "$cmp/piggy.o" >"$MINILD_X86_EV/generated-piggy.sha256"
   mini_boot_link compressed-vmlinux "$cmp/.vmlinux.cmd" "$cmp/vmlinux"
   verify_generated_header "$MINILD_X86_EV/frozen-zoffset.h" "$cmp/vmlinux" ZO_ ZOFFSET
-  mini_boot_link setup-elf "$bz/.setup.elf.cmd" "$bz/setup.elf"
-  objcopy -O binary "$bz/setup.elf" "$bz/setup.bin" || die MiniLD_setup_to_bin_failed
+  if [[ $setup_mode == mini-all-links ]]; then
+    mini_boot_link setup-elf "$bz/.setup.elf.cmd" "$bz/setup.elf"
+    objcopy -O binary "$bz/setup.elf" "$bz/setup.bin" || die MiniLD_setup_to_bin_failed
+  else
+    # The 16/32-bit setup loader is a *distinct* historical ELF32 GNU-owned
+    # component until MiniLD supports the x86 elf_i386 target. No GNU main
+    # vmlinux, compressed/vmlinux, or generated piggy object is substituted.
+    echo 'MINILD_X86_SETUP=STAGED GNU_frozen_setup_bin=true MiniLD_elf_i386=NOT_RUN'
+  fi
   objcopy -O binary -R .note -R .comment -S "$cmp/vmlinux" "$bz/vmlinux.bin" ||
     die MiniLD_compressed_to_bin_failed
   "$bz/tools/build" "$bz/setup.bin" "$bz/vmlinux.bin" "$bz/zoffset.h" \
-    "$bz/bzImage.minild" || die MiniLD_bzImage_pack_failed
-  must_file "$bz/bzImage.minild"
+    "$output_image" || die MiniLD_bzImage_pack_failed
+  must_file "$output_image"
   verify_immutable
-  sha256sum "$bz/bzImage.minild" "$bz/vmlinux.bin" "$bz/setup.bin" \
+  sha256sum "$output_image" "$bz/vmlinux.bin" "$bz/setup.bin" \
     "$cmp/vmlinux" >"$MINILD_X86_EV/MiniLD-bzImage-and-boot-chain.sha256"
-  echo "MINILD_X86_BZIMAGE=PASS kernel_link=MiniLD compressed_link=MiniLD setup_link=MiniLD Linux_C_rebuilt=0 bytes=$(stat -c%s "$bz/bzImage.minild")"
+  printf 'setup_mode=%s\nsetup_linker=%s\nimage_path=%s\n' \
+    "$setup_mode" "$setup_owner" "$output_image" \
+    >"$MINILD_X86_EV/boot-ownership.txt"
+  if [[ $setup_mode == mini-all-links ]]; then
+    echo "MINILD_X86_BZIMAGE=PASS all_kernel_and_setup_links=MiniLD Linux_C_rebuilt=0 bytes=$(stat -c%s "$output_image")"
+  else
+    echo "MINILD_X86_BZIMAGE=STAGED_PASS kernel_link=MiniLD compressed_link=MiniLD setup_link=GNU_FROZEN Linux_C_rebuilt=0 bytes=$(stat -c%s "$output_image")"
+  fi
 }
 
 case "${1:-}" in

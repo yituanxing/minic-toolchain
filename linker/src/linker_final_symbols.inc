@@ -166,8 +166,14 @@ static bool minild_final_symbols_build_with_version(
                         }
                     } else if ((state->work.sections[section].flags &
                                 SHF_ALLOC) != 0U) {
-                        output->value =
-                            layout->work[section].vaddr + source->value;
+                        if (!minild_layout_section_symbol_value(
+                                source, layout->work[section].vaddr,
+                                &output->value)) {
+                            fprintf(state->diagnostics,
+                                    "minic-ld: invalid-final-section-symbol:%s\n",
+                                    source->name);
+                            return false;
+                        }
                     } else {
                         /* sh_addr is zero for non-ALLOC output sections.
                          * An input symbol must still include the fragment's

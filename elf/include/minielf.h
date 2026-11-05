@@ -63,6 +63,13 @@ typedef struct MiniElfRela {
     int64_t addend;
 } MiniElfRela;
 
+/* SHT_REL has no on-disk addend. The target decodes its implicit operand
+ * from the relocation site, after this neutral wire reader validates REL. */
+typedef struct MiniElfRel {
+    uint64_t offset;
+    uint64_t info;
+} MiniElfRel;
+
 bool minielf_open(MiniElfView *view, const void *data, size_t size);
 bool minielf_section(const MiniElfView *view,
                      size_t index,
@@ -92,10 +99,16 @@ bool minielf_rela(const MiniElfView *view,
                   size_t relocation_section_index,
                   size_t relocation_index,
                   MiniElfRela *rela_out);
+bool minielf_rel(const MiniElfView *view,
+                 size_t relocation_section_index,
+                 size_t relocation_index,
+                 MiniElfRel *rel_out);
 size_t minielf_symbol_count(const MiniElfView *view,
                             const MiniElfSection *symbol_table);
 size_t minielf_rela_count(const MiniElfView *view,
                           const MiniElfSection *relocation_section);
+size_t minielf_rel_count(const MiniElfView *view,
+                         const MiniElfSection *relocation_section);
 size_t minielf_rela_symbol(const MiniElfView *view, uint64_t info);
 uint32_t minielf_rela_type(const MiniElfView *view, uint64_t info);
 unsigned minielf_symbol_bind(unsigned char info);

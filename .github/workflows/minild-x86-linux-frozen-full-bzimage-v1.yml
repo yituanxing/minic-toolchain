@@ -17,6 +17,14 @@ on:
         type: string
         required: true
         default: '3107037abc80b0c0019129364693422aee2818aa'
+      setup_mode:
+        description: 'All MiniLD links; or explicitly staged GNU-frozen ELF32 setup.bin (NOT full linker certification)'
+        type: choice
+        required: true
+        default: mini-all-links
+        options:
+          - mini-all-links
+          - staged-gnu-setup
   push:
     branches:
       - refactor/minias-target-isa-abi-core
@@ -31,12 +39,13 @@ permissions:
 
 jobs:
   x86-minild-real-kbuild-to-p1:
-    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[minild-x86-full-bzimage]')
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[minild-x86-full-bzimage]') || contains(github.event.head_commit.message, '[minild-x86-staged-gnu-setup]')
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     env:
       PRODUCER_RUN_ID: ${{ inputs.producer_run_id || '41856204967' }}
       PRODUCER_SHA: ${{ inputs.producer_sha || '3107037abc80b0c0019129364693422aee2818aa' }}
+      MINILD_X86_SETUP_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.setup_mode || (contains(github.event.head_commit.message, '[minild-x86-staged-gnu-setup]') && 'staged-gnu-setup' || 'mini-all-links') }}
       WORK: ${{ github.workspace }}/build/minild-x86-frozen-full
     steps:
       - uses: actions/checkout@v4
@@ -151,7 +160,7 @@ jobs:
             "$WORK/gnu-out" "$WORK/linux-6.6.143" "$WORK/linux-6.6.143.tar.xz" \
             "$WORK/ld-evidence" "$WORK/minild-build/bin/minic-ld"
 
-      - name: 'Stage B: MiniLD compressed/vmlinux and setup.elf, recompute GNU-AS piggy, build bzImage'
+      - name: 'Stage B: MiniLD compressed/vmlinux, explicit setup owner, GNU-AS piggy, build bzImage'
         shell: bash
         timeout-minutes: 8
         run: |
@@ -176,7 +185,14 @@ jobs:
         run: |
           set -Eeuo pipefail
           cd "$WORK"
-          image="$WORK/gnu-out/arch/x86/boot/bzImage.minild"
+          mode=$(sed -n 's/^setup_mode=//p' "$WORK/ld-evidence/boot-ownership.txt")
+          owned_image=$(sed -n 's/^image_path=//p' "$WORK/ld-evidence/boot-ownership.txt")
+          case "$mode:$owned_image" in
+            'mini-all-links:arch/x86/boot/bzImage.minild'|\
+            'staged-gnu-setup:arch/x86/boot/bzImage.minild-kernel-gnu-setup') ;;
+            *) echo "MINILD_X86_QEMU=FAIL invalid_boot_ownership=$mode:$owned_image" >&2; exit 99 ;;
+          esac
+          image="$WORK/gnu-out/$owned_image"
           original="$WORK/ld-evidence/original-GNU-bzImage"
           initrd="$WORK/runtime-initramfs.cpio.gz"
           test -s "$image"; test -s "$original"; test -s "$initrd"
@@ -227,7 +243,11 @@ jobs:
             "$WORK/ld-evidence/immutable-gnu-inputs.sha256")
           (cd "$WORK/gnu-out" && sha256sum --quiet -c \
             "$WORK/ld-evidence/MiniLD-bzImage-and-boot-chain.sha256")
-          echo 'MINILD_X86_FULL_LINUX=PASS GNU_control=PASS MiniLD_links=kernel+compressed+setup P0=2/2 P1=12/12 Linux_C_compiles=0'
+          if [[ $mode == mini-all-links ]]; then
+            echo 'MINILD_X86_FULL_LINUX=PASS GNU_control=PASS MiniLD_links=kernel+compressed+setup P0=2/2 P1=12/12 Linux_C_compiles=0'
+          else
+            echo 'MINILD_X86_STAGED_LINUX=PASS GNU_control=PASS MiniLD_links=kernel+compressed GNU_setup=FROZEN P0=2/2 P1=12/12 Linux_C_compiles=0 full_MiniLD_setup=NOT_RUN'
+          fi
 
       - name: Preserve provenance, exact linker argv, generated headers and QEMU logs
         if: always()
@@ -248,5 +268,6 @@ jobs:
             echo '### x86-64 Linux 6.6.143 MiniLD full-link opt-in'
             echo 'Producer GNU frozen Kbuild: ${{ env.PRODUCER_RUN_ID }}.'
             echo 'C object rebuilds: forbidden; only fresh generated kallsyms and piggy assembly.'
+            echo 'Setup link owner: ${{ env.MINILD_X86_SETUP_MODE }}. staged-gnu-setup is not all-MiniLD certification.'
             echo 'Full MiniLD vmlinux, postlink relocs, compressed/vmlinux, setup.elf, bzImage and guest PID1/P1: inspect individual steps; no implicit PASS.'
           } >>"$GITHUB_STEP_SUMMARY"

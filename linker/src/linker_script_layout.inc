@@ -439,6 +439,29 @@ static size_t script_layout_expr_reloc_section(
     return SIZE_MAX;
 }
 
+static bool script_layout_bind_symbol_to_anchor(
+    MiniLdScriptLayoutState *script_state, MiniLdResolvedSymbol *symbol,
+    size_t anchor, uint64_t absolute_value) {
+    uint64_t anchor_vaddr;
+
+    if (anchor >= script_state->state->work.count ||
+        anchor > (size_t)INT_MAX) {
+        return false;
+    }
+    anchor_vaddr = script_state->layout->work[anchor].vaddr;
+    if (absolute_value < anchor_vaddr &&
+        anchor_vaddr - absolute_value > INT64_MAX) {
+        fprintf(script_state->state->diagnostics,
+                "minic-ld: linker-script-section-offset-out-of-range:%s\n",
+                symbol->name);
+        return false;
+    }
+    symbol->section = (int)anchor;
+    symbol->value = absolute_value - anchor_vaddr;
+    symbol->script_relative_negative = absolute_value < anchor_vaddr;
+    return true;
+}
+
 static bool script_layout_define_top_symbol(
     MiniLdScriptLayoutState *script_state, size_t command_index,
     const char *name, MiniLdScriptExprId expr_id, uint64_t value) {
@@ -453,7 +476,6 @@ static bool script_layout_define_top_symbol(
             MiniLdResolvedSymbol *symbol;
             unsigned char info = ELF64_ST_INFO(STB_GLOBAL, STT_NOTYPE);
             unsigned char other = STV_DEFAULT;
-            uint64_t offset = value - script_state->layout->work[section].vaddr;
 
             index = symbol_resolver_lookup(resolver, name);
             if (index != SIZE_MAX) {
@@ -471,8 +493,10 @@ static bool script_layout_define_top_symbol(
             if (section > (size_t)INT_MAX) {
                 return false;
             }
-            symbol->section = (int)section;
-            symbol->value = offset;
+            if (!script_layout_bind_symbol_to_anchor(
+                    script_state, symbol, section, value)) {
+                return false;
+            }
             symbol->size = 0U;
             symbol->info = info;
             symbol->other = other;
@@ -485,8 +509,7 @@ static bool script_layout_define_top_symbol(
     if (!script_layout_define_symbol(script_state, name, value)) {
         return false;
     }
-    if (!script_state->have_headers_size ||
-        !script_layout_is_dot_relative_expr(script_state->script, expr_id,
+    if (!script_layout_is_dot_relative_expr(script_state->script, expr_id,
                                             0U)) {
         return true;
     }
@@ -893,14 +916,11 @@ static bool script_layout_bind_output_symbols(
     const MiniLdScriptOutputSection *output,
     size_t command_index) {
     size_t anchor = script_layout_output_anchor(script_state, command_index);
-    uint64_t anchor_vaddr;
     size_t i;
 
     if (anchor == SIZE_MAX) {
         return true;
     }
-    anchor_vaddr = script_state->layout->work[anchor].vaddr;
-
     for (i = 0U; i < output->item_count; ++i) {
         const MiniLdScriptSectionItem *item = &output->items[i];
         MiniLdResolvedSymbol *symbol;
@@ -925,12 +945,13 @@ static bool script_layout_bind_output_symbols(
             return false;
         }
         symbol = &script_state->state->resolver.entries[symbol_index];
-        if (symbol->section != MINILD_SECTION_ABS ||
-            symbol->value < anchor_vaddr) {
+        if (symbol->section != MINILD_SECTION_ABS) {
             continue;
         }
-        symbol->section = (int)anchor;
-        symbol->value -= anchor_vaddr;
+        if (!script_layout_bind_symbol_to_anchor(
+                script_state, symbol, anchor, symbol->value)) {
+            return false;
+        }
     }
     return true;
 }
@@ -1354,9 +1375,11 @@ static bool script_layout_finalize_top_symbol_provenance(
             continue;
         }
         if (owner == SIZE_MAX) {
-            /* Before the first section, or after an explicit dot jump,
-             * GNU associates a matching output-section start with `.`.
-             * A different placement cannot be inferred safely. */
+            /* Top-level forward dot jumps transfer section provenance to
+             * the next materialized output even when ALIGN leaves a hole
+             * before its start.  GNU x86 Linux uses this for __end_rodata
+             * preceding a 2 MiB boundary; its symbol remains section-
+             * relative to the subsequent .data output. */
             for (j = binding->command_index + 1U;
                  j < script_state->script->command_count; ++j) {
                 const MiniLdScriptCommand *cmd =
@@ -1364,11 +1387,32 @@ static bool script_layout_finalize_top_symbol_provenance(
 
                 if (cmd->kind == MINILD_SCRIPT_OUTPUT_SECTION &&
                     script_state->layout->script_outputs[j].defined &&
-                    script_state->layout->script_outputs[j].start ==
+                    script_state->layout->script_outputs[j].start >=
                         binding->value &&
                     script_layout_output_anchor(script_state, j) != SIZE_MAX) {
                     owner = j;
                     break;
+                }
+            }
+            if (owner == SIZE_MAX) {
+                /* A dot anchor after the last materialized output has no
+                 * successor.  GNU retains the preceding section as its
+                 * provenance (e.g. arm64's init_pg_dir and _end after
+                 * a .bss alignment/size extension). */
+                for (j = binding->command_index; j > 0U; --j) {
+                    size_t preceding = j - 1U;
+                    const MiniLdScriptCommand *cmd =
+                        &script_state->script->commands[preceding];
+
+                    if (cmd->kind == MINILD_SCRIPT_OUTPUT_SECTION &&
+                        script_state->layout->script_outputs[preceding].defined &&
+                        script_state->layout->script_outputs[preceding].start <=
+                            binding->value &&
+                        script_layout_output_anchor(script_state, preceding) !=
+                            SIZE_MAX) {
+                        owner = preceding;
+                        break;
+                    }
                 }
             }
         }
@@ -1384,9 +1428,70 @@ static bool script_layout_finalize_top_symbol_provenance(
                     symbol->name);
             return false;
         }
-        symbol->section = (int)anchor;
-        symbol->value = binding->value -
-                        script_state->layout->work[anchor].vaddr;
+        if (!script_layout_bind_symbol_to_anchor(
+                script_state, symbol, anchor, binding->value)) {
+            return false;
+        }
+    }
+
+    /* BFD does not materialize a section that contains only assignments
+     * and no emitted data.  Its dot-relative boundary symbols nevertheless
+     * inherit the next live output at the same address.  Resolve this after
+     * placement: a following owner is not known while visiting an empty
+     * output in source order. */
+    for (i = 0U; i < script_state->script->command_count; ++i) {
+        const MiniLdScriptCommand *command = &script_state->script->commands[i];
+        size_t j;
+
+        if (command->kind != MINILD_SCRIPT_OUTPUT_SECTION ||
+            script_layout_output_anchor(script_state, i) != SIZE_MAX) {
+            continue;
+        }
+        for (j = 0U; j < command->value.section.item_count; ++j) {
+            const MiniLdScriptSectionItem *item =
+                &command->value.section.items[j];
+            MiniLdResolvedSymbol *symbol;
+            size_t symbol_index, next;
+
+            if (item->kind != MINILD_SCRIPT_SECTION_DEFINE_SYMBOL ||
+                item->value.symbol.expression >=
+                    script_state->script->expression_count ||
+                script_state->script->expressions[
+                    item->value.symbol.expression].kind ==
+                    MINILD_SCRIPT_EXPR_ABSOLUTE) {
+                continue;
+            }
+            symbol_index = symbol_resolver_lookup(
+                &script_state->state->resolver, item->value.symbol.name);
+            if (symbol_index == SIZE_MAX) {
+                return false;
+            }
+            symbol = &script_state->state->resolver.entries[symbol_index];
+            if (symbol->section != MINILD_SECTION_ABS) {
+                continue;
+            }
+            for (next = i + 1U;
+                 next < script_state->script->command_count; ++next) {
+                const MiniLdScriptCommand *successor =
+                    &script_state->script->commands[next];
+                size_t anchor;
+
+                if (successor->kind != MINILD_SCRIPT_OUTPUT_SECTION ||
+                    !script_state->layout->script_outputs[next].defined ||
+                    script_state->layout->script_outputs[next].start !=
+                        symbol->value) {
+                    continue;
+                }
+                anchor = script_layout_output_anchor(script_state, next);
+                if (anchor != SIZE_MAX) {
+                    if (!script_layout_bind_symbol_to_anchor(
+                            script_state, symbol, anchor, symbol->value)) {
+                        return false;
+                    }
+                    break;
+                }
+            }
+        }
     }
     return true;
 }
@@ -1872,6 +1977,7 @@ static bool static_build_script_layout(MiniLdState *state,
         size_t owner = layout->work[best].owner_command;
         size_t load = SIZE_MAX;
         size_t desired_load_file = SIZE_MAX;
+        size_t desired_same_page_file = SIZE_MAX;
         size_t aligned;
 
         if (command_load != NULL) {
@@ -1951,6 +2057,7 @@ static bool static_build_script_layout(MiniLdState *state,
                                 section->name);
                         goto done;
                     }
+                    desired_same_page_file = desired;
                     file_cursor = desired;
                 }
             }
@@ -1999,25 +2106,34 @@ static bool static_build_script_layout(MiniLdState *state,
                 uint64_t leading = layout->work[best].vaddr -
                                    layout->script_outputs[owner].start;
 
-                if (desired_load_file != SIZE_MAX) {
+                if (desired_load_file != SIZE_MAX ||
+                    desired_same_page_file != SIZE_MAX) {
                     /* This output is already inside a PT_LOAD whose first
                      * fragment fixed an affine VMA->file mapping. The
                      * target member's desired offset INCLUDES the output
-                     * prefix; adding leading again and rounding by max
-                     * page size inserts a spurious whole page (x86 Linux
-                     * .vvar's first member starts 128B into its output). */
-                    if (leading > desired_load_file ||
-                        desired_load_file %
+                     * prefix. The same is true for a consecutive member
+                     * on the previous section's load page: its already
+                     * computed file offset includes the inter-section gap.
+                     * Adding leading again and rounding by max page size
+                     * would insert a spurious whole page. */
+                    size_t desired = desired_load_file != SIZE_MAX
+                                         ? desired_load_file
+                                         : desired_same_page_file;
+                    if ((desired_load_file != SIZE_MAX &&
+                         desired_same_page_file != SIZE_MAX &&
+                         desired_load_file != desired_same_page_file) ||
+                        leading > desired ||
+                        desired %
                             (section->align == 0U ? 1U :
                              (size_t)section->align) != 0U) {
                         fprintf(state->diagnostics,
-                                "minic-ld: invalid-script-PHDR-output-prefix:%s\n",
+                                "minic-ld: invalid-script-affine-output-prefix:%s\n",
                                 section->name);
                         goto done;
                     }
                     layout->script_outputs[owner].file_base =
-                        desired_load_file - (size_t)leading;
-                    file_cursor = desired_load_file;
+                        desired - (size_t)leading;
+                    file_cursor = desired;
                 } else {
                 /* Later members may be more strictly aligned than the
                  * first. Match the owner's maximum alignment modulo its

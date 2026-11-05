@@ -1,5 +1,29 @@
 /* The final post-layout symbol value view is shared by ET_EXEC and ET_DYN.
  * Neither the static GOT nor dynamic relocation writers should own it. */
+static bool minild_layout_section_symbol_value(
+    const MiniLdResolvedSymbol *symbol, uint64_t section_vaddr,
+    uint64_t *value_out) {
+    if (symbol->script_relative_negative) {
+        uint64_t magnitude = 0U - symbol->value;
+
+        /* Only a linker-script assignment may name a point before its
+         * first input fragment.  Preserve its section provenance while
+         * checking the negative displacement; ordinary input overflows
+         * must still be rejected. */
+        if (magnitude == 0U || magnitude > INT64_MAX ||
+            magnitude > section_vaddr) {
+            return false;
+        }
+        *value_out = section_vaddr - magnitude;
+        return true;
+    }
+    if (symbol->value > UINT64_MAX - section_vaddr) {
+        return false;
+    }
+    *value_out = section_vaddr + symbol->value;
+    return true;
+}
+
 static bool minild_layout_resolve_symbol(MiniLdState *state,
                                          const MiniLdLayout *layout,
                                          size_t symbol_index,
@@ -35,14 +59,13 @@ static bool minild_layout_resolve_symbol(MiniLdState *state,
                 symbol->name);
         return false;
     }
-    if (symbol->value >
-        UINT64_MAX - layout->work[symbol->section].vaddr) {
+    if (!minild_layout_section_symbol_value(
+            symbol, layout->work[symbol->section].vaddr, value_out)) {
         fprintf(state->diagnostics,
                 "minic-ld: relocation-symbol-address-overflow:%s\n",
                 symbol->name);
         return false;
     }
-    *value_out = layout->work[symbol->section].vaddr + symbol->value;
     return true;
 }
 

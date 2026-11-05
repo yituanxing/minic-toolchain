@@ -300,7 +300,8 @@ static bool process_input_data(MiniLdState *state,
         }
         if (i == symtab_index || i == strtab_index ||
             i == elf.section_name_table_index ||
-            input.type == SHT_RELA || input.type == SHT_GROUP) {
+            input.type == SHT_RELA || input.type == SHT_REL ||
+            input.type == SHT_GROUP) {
             continue;
         }
         group_index = group_for_section[i];
@@ -521,7 +522,8 @@ static bool process_input_data(MiniLdState *state,
                     "minic-ld: invalid-section-table:%s\n", path);
             goto done;
         }
-        if (rela_section.type != SHT_RELA) {
+        if (rela_section.type != SHT_RELA &&
+            rela_section.type != SHT_REL) {
             continue;
         }
         if (group_for_section[i] != SIZE_MAX &&
@@ -534,23 +536,46 @@ static bool process_input_data(MiniLdState *state,
                  &state->inputs, file_index, rela_section.info)) ==
                 SIZE_MAX ||
             state->inputs.sections[target_input_id].type == SHT_GROUP ||
-            rela_section.entry_size < (state->target->elf_class == ELFCLASS32
-                                           ? sizeof(Elf32_Rela)
-                                           : sizeof(Elf64_Rela))) {
-            fprintf(state->diagnostics, "minic-ld: invalid-rela:%s\n", path);
+            rela_section.entry_size <
+                (rela_section.type == SHT_REL
+                     ? (state->target->elf_class == ELFCLASS32 ? 8U : 16U)
+                     : (state->target->elf_class == ELFCLASS32 ? 12U : 24U)) ||
+            rela_section.entry_size == 0U ||
+            (rela_section.type == SHT_REL &&
+             rela_section.size % rela_section.entry_size != 0U) ||
+            (rela_section.type == SHT_REL &&
+             state->target->implicit_reloc_addend == NULL)) {
+            fprintf(state->diagnostics,
+                    "minic-ld: invalid-relocation-section:%s\n", path);
             goto done;
         }
-        count = minielf_rela_count(&elf, &rela_section);
+        count = rela_section.type == SHT_REL
+                    ? minielf_rel_count(&elf, &rela_section)
+                    : minielf_rela_count(&elf, &rela_section);
         if (count == 0U && rela_section.size != 0U) {
-            fprintf(state->diagnostics, "minic-ld: invalid-rela:%s\n", path);
+            fprintf(state->diagnostics,
+                    "minic-ld: invalid-relocation-section:%s\n", path);
             goto done;
         }
         for (j = 0U; j < count; ++j) {
-            MiniElfRela rela;
+            MiniElfRela rela = {0};
             size_t input_symbol_index;
             size_t canonical_symbol = SIZE_MAX;
 
-            if (!minielf_rela(&elf, i, j, &rela)) {
+            if (rela_section.type == SHT_REL) {
+                MiniElfRel rel;
+                if (!minielf_rel(&elf, i, j, &rel) ||
+                    !state->target->implicit_reloc_addend(
+                        &elf, (size_t)rela_section.info, rel.offset,
+                        minielf_rela_type(&elf, rel.info), &rela.addend)) {
+                    fprintf(state->diagnostics,
+                            "minic-ld: invalid-rel-implicit-addend:%s\n",
+                            path);
+                    goto done;
+                }
+                rela.offset = rel.offset;
+                rela.info = rel.info;
+            } else if (!minielf_rela(&elf, i, j, &rela)) {
                 fprintf(state->diagnostics,
                         "minic-ld: truncated-rela:%s\n", path);
                 goto done;

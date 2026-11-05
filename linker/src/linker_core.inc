@@ -76,6 +76,10 @@ typedef struct MiniLdResolvedSymbol {
      * is conservative for dot/section-relative script expressions. */
     bool script_planned_absolute;
     bool script_placeholder;
+    /* A linker-script dot assignment may precede the first real fragment
+     * of its output section.  Its section-relative offset is then a small
+     * negative delta, unlike an input ELF symbol's unsigned offset. */
+    bool script_relative_negative;
 } MiniLdResolvedSymbol;
 
 /* An original ET_REL symbol has its own identity even when it loses a

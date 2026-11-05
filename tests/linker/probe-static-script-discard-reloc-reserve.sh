@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# GNU LoongArch static PIE reserves R_LARCH_64 runtime relocation slots
-# before /DISCARD/ removes input sections.  Discarded allocated references
-# consume zero-filled R_NONE slots, not output GOT/IPLT entries.  Non-ALLOC
-# debug references do not reserve runtime relocation capacity.
+# Probe LoongArch static PIE dynamic relocation capacity against GNU BFD.
+# Global /DISCARD/ references may reserve trailing R_NONE; local references
+# use section-scoped dynrel lists.  SHN_ABS and non-ALLOC sites are constants
+# or metadata, not image-base rebasing candidates.
 set -Eeuo pipefail
 
 repo=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
@@ -29,14 +29,19 @@ SECTIONS {
   .got : ALIGN(16) { *(.got) }
   .igot.plt : { *(.igot.plt) }
   .data : { *(.data) }
-  /DISCARD/ : { *(.data.dead) }
   .rela.dyn : ALIGN(8) { *(.rela.dyn) }
+  /DISCARD/ : { *(.data.dead) *(.text.dead) }
 }
 LDS
 cat >"$work/live.s" <<'ASM'
 .text
 .globl _start
 _start:
+    jirl $r0,$r1,0
+.Llocal_alive:
+    jirl $r0,$r1,0
+.section .text.dead,"ax",@progbits
+.Llocal_dead:
     jirl $r0,$r1,0
 .data
 .globl live_pointer
@@ -48,6 +53,8 @@ live_pointer:
 discarded_pointer:
     .quad _start
     .quad _start
+    .quad .Llocal_alive
+    .quad .Llocal_dead
 .section .debug_noise,"",@progbits
     .quad _start
 ASM
@@ -80,7 +87,41 @@ for mode in live dead_only; do
         --script="$work/image.lds" -o "$work/$mode.elf" "${inputs[@]}"
 done
 
-python3 - "$work/live.elf" "$work/dead_only.elf" <<'PY'
+# The exact same MiniAS ELF objects and linker script drive the GNU oracle.
+# Allow local smoke without GNU cross-binutils, but fail closed in CI where
+# MINILD_REQUIRE_GNU=1 is requested.
+gnu_ld=
+if [[ ${MINILD_REQUIRE_GNU:-0} == 1 || ${MINILD_COMPARE_GNU:-0} == 1 ]]; then
+    gnu_ld=${LOONG_GNU_LD:-}
+fi
+if [[ -z $gnu_ld && ( ${MINILD_REQUIRE_GNU:-0} == 1 ||
+                       ${MINILD_COMPARE_GNU:-0} == 1 ) ]]; then
+    for candidate in loongarch64-linux-gnu-ld loongarch64-unknown-linux-gnu-ld; do
+        if command -v "$candidate" >/dev/null 2>&1; then
+            gnu_ld=$(command -v "$candidate")
+            break
+        fi
+    done
+fi
+if [[ -z $gnu_ld && ( ${MINILD_REQUIRE_GNU:-0} == 1 ||
+                       ${MINILD_COMPARE_GNU:-0} == 1 ) ]]; then
+    echo 'MINILD_STATIC_SCRIPT_DISCARD_GNU_ORACLE=FAIL cross linker unavailable' >&2
+    exit 1
+fi
+if [[ -n $gnu_ld ]]; then
+    for mode in live dead_only; do
+        inputs=("$work/$mode.o")
+        [[ $mode == live ]] && inputs+=("$work/absolute.o")
+        "$gnu_ld" -m elf64loongarch -static -pie -n --no-dynamic-linker \
+            --script="$work/image.lds" -o "$work/$mode.gnu.elf" "${inputs[@]}"
+    done
+fi
+
+oracles=("$work/live.elf" "$work/dead_only.elf")
+if [[ -n $gnu_ld ]]; then
+    oracles+=("$work/live.gnu.elf" "$work/dead_only.gnu.elf")
+fi
+python3 - "${oracles[@]}" <<'PY'
 from pathlib import Path
 import struct
 import sys
@@ -107,7 +148,7 @@ assert live['.got'][5] == 8
 relocs = [struct.unpack_from('<QQQ', bytes_of('.rela.dyn'), off)
           for off in range(0, live['.rela.dyn'][5], 24)]
 assert relocs == [(live['.data'][3], 3, live['.text'][3])] + \
-                 [(0, 0, 0)] * 3, relocs
+                 [(0, 0, 0)] * 2, relocs
 assert struct.unpack_from('<2Q', bytes_of('.data')) == (
     live['.text'][3], 0x12345678)
 
@@ -116,8 +157,25 @@ assert '.data.dead' not in dead
 assert '.got' not in dead or dead['.got'][5] == 0
 assert '.rela.dyn' in dead and dead['.rela.dyn'][5] == 24
 assert unused('.rela.dyn') == b'\0' * 24
-print('MINILD_STATIC_SCRIPT_DISCARD_RESERVE=PASS mixed_relative=1 none=3 '
+if len(sys.argv) == 5:
+    for label, mini, gnu in [('live', live, extract(sys.argv[3])[0]),
+                              ('dead_only', dead, extract(sys.argv[4])[0])]:
+        mini_n = mini.get('.rela.dyn', (0, 0, 0, 0, 0, 0))[5] // 24
+        gnu_n = gnu.get('.rela.dyn', (0, 0, 0, 0, 0, 0))[5] // 24
+        assert mini_n == gnu_n, (label, 'rela.dyn slot count', mini_n, gnu_n)
+        mini_bytes = extract(sys.argv[1 if label == 'live' else 2])[1]
+        gnu_bytes = extract(sys.argv[3 if label == 'live' else 4])[1]
+        def types(contents):
+            return [struct.unpack_from('<Q', contents, off + 8)[0] & 0xffffffff
+                    for off in range(0, len(contents), 24)]
+        mtypes = types(mini_bytes('.rela.dyn')) if mini_n else []
+        gtypes = types(gnu_bytes('.rela.dyn')) if gnu_n else []
+        assert mtypes == gtypes, (label, 'rela.dyn relocation types', mtypes, gtypes)
+    print('MINILD_STATIC_SCRIPT_DISCARD_GNU_ORACLE=PASS modes=live,dead_only '
+          'count_and_type_parity=true')
+print('MINILD_STATIC_SCRIPT_DISCARD_RESERVE=PASS mixed_relative=1 none=2 '
       'dead_only_relative=0 dead_only_none=1 '
-      'discarded_runtime_relocs=NONE nonalloc_no_reservation=true '
+      'discarded_runtime_relocs=NONE local_discard_filtered=true '
+      'absolute_and_nonalloc_no_reservation=true '
       'dead_only_synthetic_got=0')
 PY

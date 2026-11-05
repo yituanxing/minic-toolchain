@@ -46,7 +46,9 @@ SECTIONS {
   .text : { *(.text.start) }
   . = ALIGN(0x1000);
   .data.init : { *(.data.init) }
-  .init.text : { *(.init.text) }
+  /* The output owner starts at the end of .data, but its first WORK
+     fragment begins later: its leading hole must be counted once. */
+  .init.text : { . = ALIGN(0x800); *(.init.text) }
   . = ALIGN(0x1000);
   .late.data : { *(.late.data) }
 }
@@ -58,7 +60,7 @@ SECTIONS {
   .text : { *(.text.start) }
   . = ALIGN(0x1000);
   .data.init : { *(.data.init) }
-  .init.text : AT(0x500000) { *(.init.text) }
+  .init.text : AT(0x500000) { . = ALIGN(0x800); *(.init.text) }
   . = ALIGN(0x1000);
   .late.data : { *(.late.data) }
 }
@@ -106,20 +108,36 @@ def examine(path):
     for item in sh:
         end = names.find(b"\0", item[0])
         sections[names[item[0]:end].decode()] = item
-    return ph, sections
+    return raw, ph, sections
 
 def covered(load, sec):
     return (load[0] == 1 and load[3] <= sec[3] and
             sec[3] + sec[5] <= load[3] + load[6])
 
+gnu_loads = None
+gnu_allocated = None
 for label in ("gnu", "mini"):
-    loads, sec = examine(root / (label + ".elf"))
+    raw, loads, sec = examine(root / (label + ".elf"))
     loads = [item for item in loads if item[0] == 1]
     rx = sec[".text"]
     rw = sec[".data.init"]
     init = sec[".init.text"]
     late = sec[".late.data"]
     assert rw[3] // 4096 == init[3] // 4096, (label, "not same page")
+    # This is the exact AArch64 Linux failure class: the output section
+    # starts at the previous section's end, while the first input member
+    # begins after a nonzero internal ALIGN-created leading hole.
+    prefix = (0x800 - init[3] % 0x800) % 0x800
+    assert prefix != 0 and init[5] == prefix + 2048, (
+        label, "nonzero output prefix absent", init)
+    # GNU BFD fills x86 executable gaps with multi-byte NOP sequences,
+    # while MiniLD's current non-PHDR script filler uses zero bytes.
+    # These permissions/layout checks compare ELF geometry, not the
+    # machine-dependent choice of unreachable executable padding bytes.
+    assert len(raw[init[4]:init[4]+prefix]) == prefix, (
+        label, "output-prefix storage", init)
+    assert raw[init[4]+prefix:init[4]+prefix+2048] == bytes([0x90])*2048, (
+        label, "first member relocated after prefix", init)
     page_loads = [p for p in loads if covered(p, rw) and covered(p, init)]
     assert len(page_loads) == 1 and page_loads[0][1] == 7, (
         label, "RW+RX requires RWE LOAD", loads)
@@ -129,6 +147,18 @@ for label in ("gnu", "mini"):
         label, "LOAD page congruence", loads)
     assert any((p[1] & 2) and covered(p, late) for p in loads), (
         label, "late writable data lost W", loads)
+    allocated = {name: (item[1], item[2], item[3], item[4], item[5])
+                 for name, item in sec.items() if item[2] & 2}
+    if label == "gnu":
+        gnu_loads, gnu_allocated = loads, allocated
+    else:
+        assert loads == gnu_loads, (
+            "MiniLD PT_LOAD descriptors differ from GNU BFD",
+            gnu_loads, loads)
+        assert allocated == gnu_allocated, (
+            "MiniLD allocated section geometry differs from GNU BFD",
+            gnu_allocated, allocated)
     print("MINILD_LOAD_PAGE=PASS linker=%s loads=%s "
-          "init_perms=RWE standalone_text=RX" % (label, len(loads)))
+          "init_perms=RWE standalone_text=RX leading=%#x" %
+          (label, len(loads), prefix))
 PY_ELF

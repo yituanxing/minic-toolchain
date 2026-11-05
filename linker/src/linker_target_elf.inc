@@ -11,6 +11,9 @@ static const struct MiniLdSharedTargetAbi *minild_riscv_shared_target_abi(void);
 static bool minild_x86_apply_static_relocations(
     MiniLdState *state, const struct MiniLdLayout *layout,
     const struct MiniLdStaticTargetPlan *plan);
+static bool minild_i386_apply_static_relocations(
+    MiniLdState *state, const struct MiniLdLayout *layout,
+    const struct MiniLdStaticTargetPlan *plan);
 static bool minild_x86_reserve_static_relocations(
     MiniLdState *state, struct MiniLdStaticTargetPlan *plan);
 static bool minild_x86_fill_static_relocations(
@@ -139,6 +142,10 @@ struct MiniLdTargetProfile {
     /* Static CRTs differ in whether ELF headers belong to the first LOAD.
      * Scripted Linux images retain their explicit load-image contract. */
     bool map_static_elf_headers;
+    /* Only REL targets need to extract the input field's implicit addend.
+     * RELA targets leave this NULL and carry A in the relocation record. */
+    bool (*implicit_reloc_addend)(const MiniElfView *, size_t, uint64_t,
+                                  uint32_t, int64_t *);
 };
 
 static bool minild_riscv_merge_flags(MiniLdState *state,
@@ -152,6 +159,8 @@ static bool minild_exact_merge_flags(MiniLdState *state,
 static bool minild_zero_elf_flags(uint32_t flags);
 static bool minild_loongarch_v1_elf_flags(uint32_t flags);
 
+#include "linker_i386_implicit_addend.inc"
+
 static bool minild_riscv_merge_addend_plain(uint32_t type) {
     return type == R_RISCV_32 || type == R_RISCV_64;
 }
@@ -159,6 +168,10 @@ static bool minild_riscv_merge_addend_plain(uint32_t type) {
 static bool minild_x86_merge_addend_plain(uint32_t type) {
     return type == R_X86_64_64 || type == R_X86_64_32 ||
            type == R_X86_64_32S;
+}
+
+static bool minild_i386_merge_addend_plain(uint32_t type) {
+    return type == R_386_32 || type == R_386_16 || type == R_386_8;
 }
 
 static bool minild_aarch64_merge_addend_plain(uint32_t type) {
@@ -185,7 +198,7 @@ static const MiniLdTargetProfile minild_target_profiles[] = {
      minild_riscv_destroy_static_relocations,
      minild_riscv_synthesize_gnu_default_boundaries,
      minild_riscv_shared_target_abi,
-     minild_link_shared_elf64_riscv_inputs_options, NULL, true},
+     minild_link_shared_elf64_riscv_inputs_options, NULL, true, NULL},
     {"elf32lriscv", ELFCLASS32, ELFDATA2LSB, EM_RISCV, "riscv",
      NULL, "elf32-littleriscv", NULL, MINILD_SHT_RISCV_ATTRIBUTES,
      UINT64_C(0x10000), 4096U, 1U, 4U,
@@ -198,7 +211,7 @@ static const MiniLdTargetProfile minild_target_profiles[] = {
      minild_riscv_apply_static_relocations,
      minild_riscv_destroy_static_relocations,
      minild_riscv_synthesize_gnu_default_boundaries,
-     NULL, minild_link_elf32_compat_vdso, NULL, true},
+     NULL, minild_link_elf32_compat_vdso, NULL, true, NULL},
     {"elf_x86_64", ELFCLASS64, ELFDATA2LSB, EM_X86_64, "i386:x86-64",
      NULL, "elf64-x86-64", NULL, 0U, UINT64_C(0x400000), 4096U, 1U, 4U,
      true, true, true, true, false, false, false,
@@ -209,9 +222,19 @@ static const MiniLdTargetProfile minild_target_profiles[] = {
      minild_x86_apply_static_relocations,
      minild_x86_destroy_static_relocations,
      minild_x86_synthesize_default_boundaries,
-     NULL, NULL, minild_zero_elf_flags, true},
+     NULL, NULL, minild_zero_elf_flags, true, NULL},
+    {"elf_i386", ELFCLASS32, ELFDATA2LSB, EM_386, "i386",
+     NULL, "elf32-i386", NULL, 0U, UINT64_C(0x08048000), 4096U, 1U, 4U,
+     false, true, true, true, false, false, false,
+     minild_exact_merge_flags, minild_i386_merge_addend_plain, NULL,
+     NULL,
+     NULL, NULL,
+     minild_i386_apply_static_relocations,
+     NULL, NULL,
+     NULL, NULL, minild_zero_elf_flags, true,
+     minild_i386_implicit_addend},
     {"aarch64linux", ELFCLASS64, ELFDATA2LSB, EM_AARCH64, "aarch64",
-     NULL, "elf64-littleaarch64", NULL, 0U, UINT64_C(0x400000), 4096U, 1U, 4U,
+     NULL, "elf64-littleaarch64", NULL, 0U, UINT64_C(0x400000), 65536U, 1U, 4U,
      true, true, true, true, false, false, true,
      minild_exact_merge_flags, minild_aarch64_merge_addend_plain, NULL,
      minild_aarch64_replan_static_layout,
@@ -220,7 +243,7 @@ static const MiniLdTargetProfile minild_target_profiles[] = {
      minild_aarch64_apply_static_relocations,
      minild_aarch64_destroy_static_relocations,
      minild_aarch64_synthesize_default_boundaries,
-     NULL, NULL, minild_zero_elf_flags, true},
+     NULL, NULL, minild_zero_elf_flags, true, NULL},
     {"elf64loongarch", ELFCLASS64, ELFDATA2LSB, EM_LOONGARCH, "loongarch64",
      "loongarch", "elf64-loongarch", NULL, 0U, UINT64_C(0x120000000), 4096U,
      65536U, 8U,
@@ -233,7 +256,7 @@ static const MiniLdTargetProfile minild_target_profiles[] = {
      minild_loongarch_apply_static_relocations,
      minild_loongarch_destroy_static_relocations,
      minild_loongarch_synthesize_default_boundaries,
-     NULL, NULL, minild_loongarch_v1_elf_flags, true}
+     NULL, NULL, minild_loongarch_v1_elf_flags, true, NULL}
 };
 
 /* Page size is one invocation-level ELF layout contract. Every static

@@ -57,6 +57,8 @@ jobs:
             check-minild-kernel-et-dyn-modes \
             check-minild-script-phdrs \
             check-minild-x86-final-emit-relocs \
+            check-minild-x86-script-symbol-provenance-relocs \
+            check-minild-i386-rel-static \
             check-minild-rv32-static-runtime \
             check-minild-riscv-static-tls \
             check-minild-riscv-uleb-static \

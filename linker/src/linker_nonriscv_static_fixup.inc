@@ -6,11 +6,15 @@
 typedef enum MiniLdNonRiscvFixup {
     MINILD_NONRISCV_INVALID,
     MINILD_NONRISCV_NONE,
+    MINILD_NONRISCV_ABS8,
+    MINILD_NONRISCV_ABS16,
     MINILD_NONRISCV_ABS64,
     MINILD_NONRISCV_ABS32,
     MINILD_NONRISCV_ABS32_SIGNED,
     MINILD_NONRISCV_PCREL64,
     MINILD_NONRISCV_PCREL32,
+    MINILD_NONRISCV_PCREL16,
+    MINILD_NONRISCV_PCREL8,
     MINILD_NONRISCV_TARGET_INSTRUCTION
 } MiniLdNonRiscvFixup;
 
@@ -57,8 +61,13 @@ static bool minild_nonriscv_write_fixup(MiniLdSection *section,
                                         uint64_t place,
                                         bool undefined_weak,
                                         FILE *diagnostics) {
-    size_t width = kind == MINILD_NONRISCV_ABS64 ||
-                   kind == MINILD_NONRISCV_PCREL64 ? 8U : 4U;
+    size_t width =
+        kind == MINILD_NONRISCV_ABS8 ||
+        kind == MINILD_NONRISCV_PCREL8 ? 1U :
+        kind == MINILD_NONRISCV_ABS16 ||
+        kind == MINILD_NONRISCV_PCREL16 ? 2U :
+        kind == MINILD_NONRISCV_ABS64 ||
+        kind == MINILD_NONRISCV_PCREL64 ? 8U : 4U;
     unsigned char *slot;
     uint64_t delta = target - place;
 
@@ -81,6 +90,18 @@ static bool minild_nonriscv_write_fixup(MiniLdSection *section,
     slot = section->data + (size_t)reloc->offset;
 
     switch (kind) {
+    case MINILD_NONRISCV_ABS8:
+        if (target > UINT8_MAX) {
+            break;
+        }
+        store_u8(slot, (uint8_t)target);
+        return true;
+    case MINILD_NONRISCV_ABS16:
+        if (target > UINT16_MAX) {
+            break;
+        }
+        store_u16le(slot, (uint16_t)target);
+        return true;
     case MINILD_NONRISCV_ABS64:
         store_u64le(slot, target);
         return true;
@@ -104,6 +125,18 @@ static bool minild_nonriscv_write_fixup(MiniLdSection *section,
             break;
         }
         store_u32le(slot, (uint32_t)delta);
+        return true;
+    case MINILD_NONRISCV_PCREL16:
+        if (!minild_nonriscv_signed_fits(delta, 16U)) {
+            break;
+        }
+        store_u16le(slot, (uint16_t)delta);
+        return true;
+    case MINILD_NONRISCV_PCREL8:
+        if (!minild_nonriscv_signed_fits(delta, 8U)) {
+            break;
+        }
+        store_u8(slot, (uint8_t)delta);
         return true;
     case MINILD_NONRISCV_TARGET_INSTRUCTION:
         if (ops->write_instruction != NULL &&
