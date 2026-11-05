@@ -20,8 +20,34 @@ for target in riscv32-linux riscv64-linux aarch64-linux; do
         riscv64-linux) set -- -march=rv64i -mabi=lp64 ;;
         *) set -- ;;
     esac
-    "$MINIC_CC" --target="$target" "$@" -S "$work/overflow.i" \
-        -o "$work/$target.s"
+    if ! "$MINIC_CC" --target="$target" "$@" -S "$work/overflow.i" \
+            -o "$work/$target.s" 2>"$work/$target.err"; then
+        echo "RISCV_PACKED_OVERFLOW_STAGE=compile_failed target=$target" >&2
+        tail -n 40 "$work/$target.err" >&2 || true
+        if [ "$target" = riscv32-linux ]; then
+            # Diagnosis only: compile each original checked-overflow function
+            # independently with the same packed type and target options.
+            # This keeps the complete original translation-unit gate intact.
+            for name in packed_overflow_narrow packed_overflow_add \
+                        packed_overflow_sub packed_overflow_mul packed_overflow_wide; do
+                awk -v want="$name" '
+                    index($0, "int packed_overflow_narrow(") == 1 { functions=1 }
+                    !functions { print; next }
+                    index($0, "int " want "(") == 1 { body=1 }
+                    body { print; if (/^}/) exit }
+                ' "$work/overflow.i" > "$work/$name.i"
+                if "$MINIC_CC" --target="$target" "$@" \
+                        -S "$work/$name.i" -o "$work/$name.s" \
+                        2>"$work/$name.err"; then
+                    echo "RISCV_PACKED_OVERFLOW_STAGE=function_pass name=$name" >&2
+                else
+                    echo "RISCV_PACKED_OVERFLOW_STAGE=function_failed name=$name" >&2
+                    tail -n 20 "$work/$name.err" >&2 || true
+                fi
+            done
+        fi
+        exit 1
+    fi
 done
 # LoongArch64 still rejects this checked-overflow Core opcode before
 # target-specific memory transport.  Keep the capability gap observable as

@@ -332,6 +332,148 @@ jobs:
             fi
           done
           echo 'RV32_GPU_TRACE=COMPLETE frozen_1741_objects=true traced_only_virtio_TU=2 GNU_baseline_required=true diagnostic_not_P2=true'
+      - name: Pristine original virtio.c - current MiniC manual versus exact Kbuild-flag route
+        timeout-minutes: 12
+        run: |
+          set -Eeuo pipefail
+          src="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0/linux-6.6.143"
+          out="$GITHUB_WORKSPACE/build/rv32i-linux-entry/out"
+          root="$GITHUB_WORKSPACE/build/rv32-gpu-diff"
+          ev="$root/evidence"
+          test -s "$ev/virtio.uninstrumented.c" || { echo 'RV32_GPU_PRISTINE=BLOCKED source_snapshot_missing'; exit 8; }
+          test -x "$root/minic-trace-build/bin/minic-cc" || { echo 'RV32_GPU_PRISTINE=BLOCKED current_minic_missing'; exit 8; }
+          cp "$ev/virtio.uninstrumented.c" "$src/drivers/virtio/virtio.c"
+          cmp -s "$ev/virtio.uninstrumented.c" "$src/drivers/virtio/virtio.c"
+          test -s "$root/objects/virtio.o"
+          test -s "$out/drivers/virtio/.virtio.o.cmd" || { echo 'RV32_GPU_PRISTINE=BLOCKED Kbuild_cmd_missing'; exit 8; }
+          cp "$out/drivers/virtio/.virtio.o.cmd" "$ev/pristine-original-kbuild-command.before"
+          cp "$root/objects/virtio.o" "$root/frozen-minic-virtio.o"
+          # CONTROL 1: match the 17th trace test's manual GNU-preprocessed .i
+          # and minimal MiniC flags, but remove every printk instrumentation.
+          make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
+            KBUILD_NOCMDDEP=1 -j1 drivers/virtio/virtio.i \
+            >"$ev/pristine-manual-pp.log" 2>&1 || {
+              echo 'RV32_GPU_PRISTINE=BLOCKED current_manual_GNU_PP'
+              tail -n 55 "$ev/pristine-manual-pp.log"
+              exit 8
+            }
+          test -s "$out/drivers/virtio/virtio.i"
+          sed '/^[[:space:]]*#/d' "$out/drivers/virtio/virtio.i" >"$root/pristine-manual.i"
+          "$root/minic-trace-build/bin/minic-cc" --target=riscv32-linux \
+            -march=rv32i -mabi=ilp32 -S "$root/pristine-manual.i" \
+            -o "$root/pristine-manual.s" \
+            >"$ev/pristine-manual-cc.out" 2>"$ev/pristine-manual-cc.err" || {
+              echo 'RV32_GPU_PRISTINE=BLOCKED current_manual_MiniC'
+              tail -n 60 "$ev/pristine-manual-cc.err"
+              exit 8
+            }
+          riscv64-linux-gnu-gcc -march=rv32i -mabi=ilp32 \
+            -c -x assembler "$root/pristine-manual.s" \
+            -o "$root/pristine-manual-virtio.o" \
+            >"$ev/pristine-manual-as.log" 2>&1 || {
+              echo 'RV32_GPU_PRISTINE=BLOCKED current_manual_GNU_AS'
+              tail -n 40 "$ev/pristine-manual-as.log"
+              exit 8
+            }
+          # CONTROL 2: the frozen 7-shard MiniC object originated through
+          # stage2_kbuild_cc.sh, which passes Kbuild -f* flags to MiniC and
+          # preserves Kbuild's GNU AS -march=rv32ima / -mabi=ilp32.
+          # Re-use that EXACT wrapper and Kbuild command for just one C owner.
+          MINIC="$root/minic-trace-build/bin/minic-cc" \
+          REAL_CC=riscv64-linux-gnu-gcc \
+          MINIC_KBUILD_RV32I_ORIGIN_AUDIT=1 \
+          MINIC_KEEP_INTERMEDIATES=1 \
+          MINIC_KBUILD_TRACE="$ev/pristine-kbuild.route" \
+          MINIC_KBUILD_OBJECT_HASH_TRACE="$ev/pristine-kbuild.object-hashes" \
+          MINIC_KBUILD_SUCCESS_TRACE="$ev/pristine-kbuild.success-owners" \
+          make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
+            CC="$GITHUB_WORKSPACE/tests/external/linux/stage2_kbuild_cc.sh" \
+            KBUILD_NOCMDDEP=1 -j1 drivers/virtio/virtio.o \
+            >"$ev/pristine-kbuild-compile.log" 2>&1 || {
+              echo 'RV32_GPU_PRISTINE=BLOCKED current_exact_Kbuild_compile'
+              tail -n 75 "$ev/pristine-kbuild-compile.log"
+              exit 8
+            }
+          test -s "$ev/pristine-kbuild.route"
+          grep -q 'minic rv32i_origin_audit=1' "$ev/pristine-kbuild.route" || {
+            echo 'RV32_GPU_PRISTINE=BLOCKED Kbuild_wrapper_not_original_RV32I_route'
+            exit 8
+          }
+          test "$(wc -l <"$ev/pristine-kbuild.object-hashes")" -eq 1 || {
+            echo 'RV32_GPU_PRISTINE=BLOCKED Kbuild_not_exactly_one_compiled_owner'
+            exit 8
+          }
+          test "$(wc -l <"$ev/pristine-kbuild.success-owners")" -eq 1 || {
+            echo 'RV32_GPU_PRISTINE=BLOCKED Kbuild_success_count_not_one'
+            exit 8
+          }
+          grep -q 'drivers/virtio/virtio.o' "$ev/pristine-kbuild.success-owners" || {
+            echo 'RV32_GPU_PRISTINE=BLOCKED wrong_Kbuild_owner'
+            exit 8
+          }
+          cp "$out/drivers/virtio/virtio.o" "$root/pristine-kbuild-virtio.o"
+          cp "$out/drivers/virtio/.virtio.o.cmd" "$ev/pristine-current-kbuild-command.after"
+          test -s "$out/drivers/virtio/virtio.minic-stage2.i"
+          test -s "$out/drivers/virtio/virtio.minic-stage2.s"
+          cp "$out/drivers/virtio/virtio.minic-stage2.i" "$ev/pristine-kbuild.preprocessed.i"
+          cp "$out/drivers/virtio/virtio.minic-stage2.s" "$ev/pristine-kbuild.minic.s"
+          for owner in frozen-minic pristine-manual pristine-kbuild; do
+            sha256sum "$root/$owner-virtio.o" | tee "$ev/$owner-virtio.sha"
+            riscv64-linux-gnu-readelf -h "$root/$owner-virtio.o" \
+              | grep -Eq 'Class:[[:space:]]+ELF32' || exit 8
+            riscv64-linux-gnu-objdump -dr -M no-aliases \
+              --disassemble=virtio_dev_probe "$root/$owner-virtio.o" \
+              >"$ev/$owner.virtio_dev_probe.disasm"
+          done
+          for owner in pristine-manual pristine-kbuild; do
+            if cmp -s "$root/frozen-minic-virtio.o" "$root/$owner-virtio.o"; then
+              echo "RV32_GPU_PRISTINE_FROZEN_BYTES=$owner IDENTICAL" | tee -a "$ev/pristine-results.txt"
+            else
+              echo "RV32_GPU_PRISTINE_FROZEN_BYTES=$owner DIFFERENT" | tee -a "$ev/pristine-results.txt"
+            fi
+          done
+          oracle() {
+            local mode="$1"
+            mkdir -p "$ev/$mode"
+            RV32I_QEMU_IMAGE="$out/arch/riscv/boot/Image" \
+              RV32I_QEMU_WORK="$ev/$mode" RV32I_QEMU_P1=1 \
+              RV32I_QEMU_GPU_DIAG=1 RV32I_QEMU_GPU_MODULE_DIR="$root/modules" \
+              RV32I_QEMU_TIMEOUT_SECONDS=120 \
+              bash tools/ci/linux-rv32i-qemu-p0-v1.sh >"$ev/$mode.log" 2>&1
+          }
+          for mode in pristine-manual pristine-kbuild; do
+            cp "$root/$mode-virtio.o" "$out/drivers/virtio/virtio.o"
+            cp "$root/gnu-virtio_pci_modern_dev.o" "$out/drivers/virtio/virtio_pci_modern_dev.o"
+            touch "$out/drivers/virtio/virtio.o" "$out/drivers/virtio/virtio_pci_modern_dev.o"
+            sha256sum "$out/drivers/virtio/virtio.o" | cut -d' ' -f1 >"$ev/$mode.expected.sha"
+            make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
+              KBUILD_NOCMDDEP=1 -j4 \
+              --eval="vmlinux: KBUILD_VMLINUX_LIBS += $root/softarith.a" Image \
+              >"$ev/$mode.relink.log" 2>&1 || {
+                echo "RV32_GPU_PRISTINE=BLOCKED link=$mode"
+                tail -n 55 "$ev/$mode.relink.log"
+                exit 8
+              }
+            test "$(sha256sum "$out/drivers/virtio/virtio.o" | cut -d' ' -f1)" = "$(cat "$ev/$mode.expected.sha")" || {
+              echo "RV32_GPU_PRISTINE=BLOCKED Kbuild_overwrote_candidate=$mode"
+              exit 8
+            }
+            rebuilt=$(grep -Ec '^[[:space:]]+CC[[:space:]]+' "$ev/$mode.relink.log" || true)
+            ((rebuilt<=5)) || { echo "RV32_GPU_PRISTINE=BLOCKED relink_rebuilt=$rebuilt"; exit 8; }
+            if oracle "$mode"; then
+              result=PASS
+            else
+              result=FAIL
+              tail -n 80 "$ev/$mode.log" || true
+            fi
+            echo "RV32_GPU_CURRENT_PRISTINE_MODE=$mode GPU=$result" | tee -a "$ev/pristine-results.txt"
+            if [[ -f "$ev/$mode/qemu-serial.log" ]]; then
+              grep -E 'VIRTIO_F_VERSION_1|virtio_gpu|virtio-gpu|GPU_' "$ev/$mode/qemu-serial.log" \
+                | tail -n 45 >"$ev/$mode.gpu-tail" || true
+            fi
+          done
+          echo 'RV32_GPU_PRISTINE=COMPLETE original_source=true current_minic=true manual_and_exact_Kbuild_flags_separate=true frozen_1740_GNU_other_objects=true 2_GPU_oracles=true diagnostic_not_P2=true'
+          cat "$ev/pristine-results.txt"
       - name: Preserve exact swap and guest evidence
         if: always()
         uses: actions/upload-artifact@v4

@@ -45,9 +45,16 @@ SRC
 cc -E -P -x c "$work/sysreg.c" -o "$work/sysreg.i"
 "$cc" --target=aarch64-linux -S "$work/sysreg.i" -o "$work/mini.s"
 for reg in daif sp_el0 tpidr_el1 tpidr_el2 hpfar_el2 cptr_el2 elr_el2 dacr32_el2 dbgvcr32_el2 ifsr32_el2 pmuserenr_el0 spsr_fiq spsr_irq spsr_und; do
-  grep -Fq "  mrs x9, $reg" "$work/mini.s"
+  if ! grep -Eq "^[[:space:]]*mrs x9, $reg[[:space:]]*$" "$work/mini.s"; then
+    echo "AARCH64_LINUX_MRS=FAIL missing-64bit-x9-source-reg=$reg" >&2
+    exit 1
+  fi
 done
-test "$(grep -Fc '  mrs x9, daif' "$work/mini.s")" -eq 2
+daif_count=$(grep -Ec '^[[:space:]]*mrs x9, daif[[:space:]]*$' "$work/mini.s" || true)
+if [[ "$daif_count" -ne 2 ]]; then
+  echo "AARCH64_LINUX_MRS=FAIL daif-instance-count=$daif_count expected=2" >&2
+  exit 1
+fi
 # The selected type must remain a genuine 64-bit register value.
 for bad in extra mnemonic width memory-clobber nonvolatile-daif; do
   case "$bad" in
@@ -73,8 +80,14 @@ if [[ "${MINIC_SYSREG_NATIVE_ONLY:-0}" != 1 ]]; then
   aarch64-linux-gnu-objdump -d "$work/gnu.o" > "$work/gnu.dis"
   aarch64-linux-gnu-objdump -d "$work/mini.o" > "$work/mini.dis"
   for reg in daif sp_el0 tpidr_el1 tpidr_el2 hpfar_el2 cptr_el2 elr_el2 dacr32_el2 dbgvcr32_el2 ifsr32_el2 pmuserenr_el0 spsr_fiq spsr_irq spsr_und; do
-    grep -Eiq "mrs[[:space:]]+[^,]+,[[:space:]]+$reg" "$work/gnu.dis"
-    grep -Eiq "mrs[[:space:]]+[^,]+,[[:space:]]+$reg" "$work/mini.dis"
+    if ! grep -Eiq "mrs[[:space:]]+[^,]+,[[:space:]]+$reg" "$work/gnu.dis"; then
+      echo "AARCH64_LINUX_MRS=FAIL missing-gnu-encoding-reg=$reg" >&2
+      exit 1
+    fi
+    if ! grep -Eiq "mrs[[:space:]]+[^,]+,[[:space:]]+$reg" "$work/mini.dis"; then
+      echo "AARCH64_LINUX_MRS=FAIL missing-minic-encoding-reg=$reg" >&2
+      exit 1
+    fi
   done
 fi
 echo 'AARCH64_LINUX_MRS_U64=PASS original_read_sysreg_u64=1 register_forms=14 including_KVM_EL2 negative=5 EL1_user_exec=not_run'
