@@ -30,7 +30,7 @@ fi
 for fixture in x86_64_linux_pkru x86_64_linux_rng_flag x86_64_linux_fdiv_bug; do
     "${CC:-cc}" -E -P "$root/tests/target/$fixture.c" \
         -o "$temp/$fixture.i"
-    "$minic" --target=x86_64-linux -S "$temp/$fixture.i" \
+    MINIC_X86_TYPED_REJECT_TRACE=1 "$minic" --target=x86_64-linux -S "$temp/$fixture.i" \
         -o "$temp/$fixture.s"
     "${CC:-cc}" -c -x assembler "$temp/$fixture.s" \
         -o "$temp/$fixture.o"

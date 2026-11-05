@@ -1826,6 +1826,14 @@ bool minic_x86_64_linux_percpu_form(const char *text,size_t length,
             *op=f->op;*width=f->width;return true;
         }
     }
+    /* percpu_stable_op() names the address with GNU %P and constrains it
+     * with "p", not "m": it is a pointer-register input, not a memory
+     * lvalue. Its exact text is already validated by the stable catalog. */
+    *width = minic_x86_64_asm_percpu_stable_width(text,length);
+    if (*width != 0U) {
+        *op = 0U;
+        return true;
+    }
     return false;
 }
 

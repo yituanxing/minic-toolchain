@@ -403,10 +403,22 @@ static bool x86_source_percpu_operand(FILE *output,
     unsigned char modifier, void *context) {
     const MinicMachineOperand *binding;
     (void)labels;
-    if (modifier != 0U ||
-        !x86_source_percpu_binding(function,instruction,index,context))
+    if (!x86_source_percpu_binding(function,instruction,index,context))
         return false;
     binding = &instruction->operands[index];
+    /* Linux percpu_stable_op uses GNU %P[var] with a constrained pointer
+     * register, which prints the GS address dereference (%r10). It is
+     * never the ordinary memory-lvalue %[var] mode. */
+    if (modifier == (unsigned char)'P') {
+        if (index != 1U ||
+            minic_x86_64_asm_percpu_stable_width(
+                instruction->source_asm_template,
+                instruction->source_asm_length) == 0U ||
+            binding->kind != MINIC_MACHINE_OPERAND_REGISTER)
+            return false;
+        return output == NULL || fputs("(%r10)",output) != EOF;
+    }
+    if (modifier != 0U) return false;
     if (output == NULL) return binding->kind ==
             MINIC_MACHINE_OPERAND_ADDRESS ||
         binding->kind == MINIC_MACHINE_OPERAND_REGISTER;

@@ -2632,14 +2632,19 @@ static bool loong_select_pointer_offset(LoongSelector *sel,
     if (!minic_multi_direct_pointer_offset_shape(sel->ctx->fn, ins,
             SIZE_MAX, &width, &sign) ||
         !loong_load_value(sel, base, LOONG_T0, true) ||
-        !loong_value_offset(sel, index, &offset)) return false;
+        /* An i128 Core index has a distinct 16-byte wide frame slot. */
+        !(width == 16U ? loong_wide_slot(sel, index, &offset) :
+                          loong_value_offset(sel, index, &offset)))
+        return false;
     index_opcode = width == 1U ? (sign ? MINIC_LOONG_MACHINE_LD_B :
                                          MINIC_LOONG_MACHINE_LD_BU) :
                    width == 2U ? (sign ? MINIC_LOONG_MACHINE_LD_H :
                                          MINIC_LOONG_MACHINE_LD_HU) :
                    width == 4U ? (sign ? MINIC_LOONG_MACHINE_LD_W :
                                          MINIC_LOONG_MACHINE_LD_WU) :
-                   width == 8U ? MINIC_LOONG_MACHINE_LD_D : 0U;
+                   /* Pointer displacement uses the low i128 limb only. */
+                   (width == 8U || width == 16U) ?
+                       MINIC_LOONG_MACHINE_LD_D : 0U;
     if (index_opcode == 0U ||
         !loong_frame_memory(&sel->builder, index_opcode,
             LOONG_T1, offset,

@@ -4,6 +4,8 @@
 #include "target/x86_64/asm_contract.h"
 
 #include <limits.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 enum X86ImplicitKind {
@@ -2089,6 +2091,56 @@ static bool x86_source_fdiv_bug_contract(const MinicTargetInfo *target,
         MINIC_X86_REG_R10, MINIC_X86_REG_R11, MINIC_X86_REG_RAX
     };
     size_t i;
+    if (ins->source_asm_machine_form_id == MINIC_X86_MACHINE_ASM_FDIV_BUG &&
+        getenv("MINIC_X86_TYPED_REJECT_TRACE") != NULL) {
+        fprintf(stderr,
+            "x86 fdiv machine: variant=%u operands=%zu implicit=%zu"
+            " effects=%u expected=%u terminates=%u fallthrough=%u"
+            " template_ok=%u\n",
+            ins->source_asm_machine_form_variant,
+            ins->operand_count,ins->implicit_count,ins->effects,
+            (unsigned int)(MINIC_MACHINE_EFFECT_SOURCE_ASM |
+                MINIC_MACHINE_EFFECT_MEMORY_READ |
+                MINIC_MACHINE_EFFECT_MEMORY_WRITE),
+            (unsigned int)ins->source_asm_terminates_block,
+            (unsigned int)ins->source_asm_permits_fallthrough,
+            (unsigned int)minic_x86_64_typed_machine_form_matches_template(
+                ins->source_asm_machine_form_id,
+                ins->source_asm_machine_form_variant,
+                ins->source_asm_template,ins->source_asm_length));
+        if (ins->operands != NULL) {
+            size_t diag;
+            for (diag = 0U; diag < ins->operand_count && diag < 3U; ++diag) {
+                const MinicMachineOperand *op = &ins->operands[diag];
+                fprintf(stderr,
+                    "x86 fdiv machine operand%zu: kind=%u"
+                    " asm=%s name=%s base=%u width=%u"
+                    " disp=%lld index=%u segment=%u symbol=%u\n",
+                    diag,(unsigned int)op->kind,
+                    op->asm_constraint ? op->asm_constraint : "<null>",
+                    op->asm_name ? op->asm_name : "<null>",
+                    op->kind == MINIC_MACHINE_OPERAND_ADDRESS ?
+                        op->value.address.base.number : 0U,
+                    op->kind == MINIC_MACHINE_OPERAND_ADDRESS ?
+                        op->value.address.base.width_bits : 0U,
+                    op->kind == MINIC_MACHINE_OPERAND_ADDRESS ?
+                        (long long)op->value.address.displacement : 0LL,
+                    op->kind == MINIC_MACHINE_OPERAND_ADDRESS ?
+                        (unsigned int)op->value.address.has_index : 0U,
+                    op->kind == MINIC_MACHINE_OPERAND_ADDRESS ?
+                        (unsigned int)op->value.address.has_segment : 0U,
+                    op->kind == MINIC_MACHINE_OPERAND_ADDRESS ?
+                        (unsigned int)op->value.address.has_symbol : 0U);
+            }
+        }
+        if (ins->implicit != NULL && ins->implicit_count != 0U)
+            fprintf(stderr,
+                "x86 fdiv machine implicit0: bank=%u reg=%u width=%u access=%u\n",
+                (unsigned int)ins->implicit[0].reg.bank,
+                ins->implicit[0].reg.number,
+                ins->implicit[0].reg.width_bits,
+                ins->implicit[0].access);
+    }
     if (ins->source_asm_machine_form_id != MINIC_X86_MACHINE_ASM_FDIV_BUG ||
         ins->source_asm_machine_form_variant != 0U ||
         ins->operand_count != 3U || ins->operands == NULL ||
@@ -2318,6 +2370,8 @@ static bool x86_source_percpu_gs_contract(
     const MinicTargetInfo *target, const MinicMachineInstruction *ins) {
     unsigned int operation;
     size_t width, count, i;
+    const bool stable = minic_x86_64_asm_percpu_stable_width(
+        ins->source_asm_template,ins->source_asm_length) != 0U;
     const MinicMachineOperand *memory;
     const MinicMachineAddress *address;
     if (ins->source_asm_machine_form_id != MINIC_X86_MACHINE_ASM_PERCPU_GS ||
@@ -2327,6 +2381,7 @@ static bool x86_source_percpu_gs_contract(
         (width != 1U && width != 2U && width != 4U && width != 8U) ||
         ins->source_asm_terminates_block ||
         ins->source_asm_permits_fallthrough ||
+        (stable && (ins->effects & MINIC_MACHINE_EFFECT_VOLATILE) != 0U) ||
         ((ins->effects & ~(unsigned int)MINIC_MACHINE_EFFECT_VOLATILE) !=
             (MINIC_MACHINE_EFFECT_SOURCE_ASM |
             (operation == 0U ? MINIC_MACHINE_EFFECT_MEMORY_READ :
@@ -2349,22 +2404,37 @@ static bool x86_source_percpu_gs_contract(
     count = operation == 2U || operation == 3U ? 1U : 2U;
     if (ins->operand_count != count || ins->operands == NULL) return false;
     memory = &ins->operands[operation == 0U ? 1U : 0U];
-    if (memory->kind != MINIC_MACHINE_OPERAND_ADDRESS ||
-        memory->asm_name == NULL ||
-        strcmp(memory->asm_name,"var") != 0 ||
-        memory->asm_constraint == NULL ||
-        strcmp(memory->asm_constraint,
-            operation == 0U ? "m" : "+m") != 0)
-        return false;
-    address = &memory->value.address;
-    if (!minic_x86_64_machine_validate_address(target,address,NULL) ||
-        !address->has_base ||
-        address->base.bank != MINIC_MACHINE_REGISTER_GENERAL ||
-        address->base.number != MINIC_X86_REG_R10 ||
-        address->base.width_bits != 64U ||
-        address->has_index || address->has_segment ||
-        address->has_symbol || address->displacement != 0)
-        return false;
+    if (stable) {
+        if (operation != 0U ||
+            memory->kind != MINIC_MACHINE_OPERAND_REGISTER ||
+            memory->asm_name == NULL ||
+            strcmp(memory->asm_name,"var") != 0 ||
+            memory->asm_constraint == NULL ||
+            strcmp(memory->asm_constraint,"p") != 0 ||
+            memory->value.physical.reg.bank !=
+                MINIC_MACHINE_REGISTER_GENERAL ||
+            memory->value.physical.reg.number != MINIC_X86_REG_R10 ||
+            memory->value.physical.reg.width_bits != 64U ||
+            memory->value.physical.access != MINIC_MACHINE_REGISTER_READ)
+            return false;
+    } else {
+        if (memory->kind != MINIC_MACHINE_OPERAND_ADDRESS ||
+            memory->asm_name == NULL ||
+            strcmp(memory->asm_name,"var") != 0 ||
+            memory->asm_constraint == NULL ||
+            strcmp(memory->asm_constraint,
+                operation == 0U ? "m" : "+m") != 0)
+            return false;
+        address = &memory->value.address;
+        if (!minic_x86_64_machine_validate_address(target,address,NULL) ||
+            !address->has_base ||
+            address->base.bank != MINIC_MACHINE_REGISTER_GENERAL ||
+            address->base.number != MINIC_X86_REG_R10 ||
+            address->base.width_bits != 64U ||
+            address->has_index || address->has_segment ||
+            address->has_symbol || address->displacement != 0)
+            return false;
+    }
     for (i = 0U; i < count; ++i) {
         const MinicMachineOperand *op = &ins->operands[i];
         const unsigned int access = operation == 0U ?

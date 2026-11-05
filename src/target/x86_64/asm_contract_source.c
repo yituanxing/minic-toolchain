@@ -1614,35 +1614,6 @@ static bool x86_linux_ip_here_source(const MinicTargetInvocation *invocation,
     contract->target_machine_form_variant = 1U;
     return true;
 }
-static bool x86_percpu_source(const MinicC0Program *program,
-                              const MinicInlineAsm *src) {
-    const MinicExpression *out, *in;
-    MinicType type;
-    const size_t width = src ? minic_x86_64_asm_percpu_stable_width(
-        src->template_text, src->template_length) : 0U;
-    if (!program || !src || src->is_goto || src->is_volatile ||
-        src->output_count != 1U || src->input_count != 1U ||
-        !src->outputs || !src->inputs ||
-        src->clobber_count != 0U || src->register_clobber_count != 0U ||
-        src->has_memory_clobber || src->label_count != 0U ||
-        width == 0U ||
-        !target_constraint_is(&src->outputs[0], width == 1U ? "=q" : "=r") ||
-        !target_constraint_is(&src->inputs[0], "p"))
-        return false;
-    out = minic_c0_program_expression(program, src->outputs[0].expression);
-    in = minic_c0_program_expression(program, src->inputs[0].expression);
-    return out && in && out->value_category == MINIC_VALUE_LVALUE &&
-           !minic_type_is_const(out->type) &&
-           minic_type_unqualified(out->type, &type) &&
-           (minic_type_is_pointer(type) ? width == 8U :
-            minic_type_is_integer(type) && type.base_kind == MINIC_TYPE_BASE_INT &&
-            (width == 1U ? type.integer_rank == MINIC_INTEGER_RANK_CHAR :
-             width == 2U ? type.integer_rank == MINIC_INTEGER_RANK_SHORT :
-             width == 4U ? type.integer_rank == MINIC_INTEGER_RANK_INT :
-             (type.integer_rank == MINIC_INTEGER_RANK_LONG ||
-              type.integer_rank == MINIC_INTEGER_RANK_LONG_LONG))) &&
-           minic_type_is_pointer(in->type);
-}
 static bool c_is(const MinicInlineAsmOperand *op, const char *s) {
     return target_constraint_is(op, s);
 }
@@ -2127,8 +2098,12 @@ static bool x86_percpu_gs_source(const MinicTargetInvocation *invocation, const 
     const MinicInlineAsm *src,MinicTargetInlineAsmContract *contract){
     (void)invocation;
     unsigned int op;size_t width,i;
+    const size_t stable_width = src ? minic_x86_64_asm_percpu_stable_width(
+        src->template_text,src->template_length) : 0U;
+    const bool stable = stable_width != 0U;
     const MinicExpression *e;
     if(!program||!src||!contract||src->is_goto||src->label_count||
+        (stable && src->is_volatile) ||
        src->clobber_count||src->register_clobber_count||
        src->has_memory_clobber||
        !minic_x86_64_linux_percpu_form(
@@ -2139,7 +2114,7 @@ static bool x86_percpu_gs_source(const MinicTargetInvocation *invocation, const 
         return false;
     if(op==0U){
         if(!c_is(&src->outputs[0],width==1U?"=q":"=r")||
-           !c_is(&src->inputs[0],"m"))return false;
+           !c_is(&src->inputs[0],stable?"p":"m"))return false;
     }else if(!c_is(&src->outputs[0],"+m")||
              (src->input_count&&!c_is(&src->inputs[0],
                 width==1U?"qi":width==8U?"re":"ri")))
@@ -2155,6 +2130,7 @@ static bool x86_percpu_gs_source(const MinicTargetInvocation *invocation, const 
             * and operations retain strict original type qualification. */
            (!(width==1U && minic_type_equal(ty,minic_type_bool())) &&
             !(width==4U && minic_type_is_enum(ty)) &&
+            !(stable && i==1U && minic_type_is_pointer(ty)) &&
             !(width==8U && minic_type_is_pointer(ty) &&
               ((op==0U && i==1U) || (op==1U && i==0U))) &&
             (ty.base_kind!=MINIC_TYPE_BASE_INT||
@@ -2172,7 +2148,7 @@ static bool x86_percpu_gs_source(const MinicTargetInvocation *invocation, const 
         MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT:
         MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE;
     if(src->input_count)
-        contract->kinds[1]=op==0U?
+        contract->kinds[1]=op==0U && !stable?
             MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT:
             MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
     return true;
@@ -5541,12 +5517,6 @@ bool minic_x86_64_qualify_inline_asm(
         contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
         contract->kinds[1] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
         contract->kinds[2] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
-        return true;
-    }
-    if (x86_percpu_source(program, source)) {
-        contract->operand_count = 2U;
-        contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
-        contract->kinds[1] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
         return true;
     }
     if (!qualified(program, source, &is_mulacc, contract)) return false;

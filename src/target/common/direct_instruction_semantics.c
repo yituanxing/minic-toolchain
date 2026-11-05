@@ -625,6 +625,7 @@ bool minic_multi_direct_pointer_offset_shape(
     const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
     size_t maximum_stride, size_t *index_width, bool *index_signed) {
     MinicCoreValueId base, index;
+    const MinicCoreType *wide;
     if (fn == NULL || fn->type_context == NULL || fn->values == NULL ||
         ins == NULL ||
         index_width == NULL || index_signed == NULL ||
@@ -632,12 +633,23 @@ bool minic_multi_direct_pointer_offset_shape(
         return false;
     base = ins->value.pointer_offset.base;
     index = ins->value.pointer_offset.index;
-    return base < fn->value_count && index < fn->value_count &&
-           direct_core_kind(fn, fn->values[base].core_type_id,
-                            MINIC_CORE_TYPE_POINTER) &&
-           direct_core_int_width(fn, fn->values[index].core_type_id,
-                                 index_width, index_signed) &&
-           ins->value.pointer_offset.element_size <= maximum_stride;
+    if (base >= fn->value_count || index >= fn->value_count ||
+        !direct_core_kind(fn, fn->values[base].core_type_id,
+                          MINIC_CORE_TYPE_POINTER) ||
+        ins->value.pointer_offset.element_size > maximum_stride) return false;
+    if (direct_core_int_width(fn, fn->values[index].core_type_id,
+                              index_width, index_signed)) return true;
+    /* The pointer-width low limb alone determines a scaled LP64 address
+     * modulo 2^64, including signed negative 128-bit indices. Do not
+     * relax scalar-width admission for unrelated Core instructions. */
+    wide = direct_core_type(fn, fn->values[index].core_type_id);
+    if (wide == NULL || !wide->has_layout ||
+        wide->kind != MINIC_CORE_TYPE_INTEGER || wide->size != 16U ||
+        wide->value.integer.bit_width != 128U ||
+        wide->value.integer.is_bool) return false;
+    *index_width = 16U;
+    *index_signed = wide->value.integer.is_signed;
+    return true;
 }
 
 /* Arithmetic, bitwise and division/remainder retain distinct result-type

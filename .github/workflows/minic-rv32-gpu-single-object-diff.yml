@@ -74,6 +74,27 @@ jobs:
             riscv64-linux-gnu-readelf -h "${files[0]}" | grep -Eq 'Class:[[:space:]]+ELF32'
             cp "${files[0]}" "$root/objects/$name.o"
           done
+      - name: Compare original GNU vs MiniC RV32 virtio probe machine code
+        run: |
+          set -Eeuo pipefail
+          root=build/rv32-gpu-diff
+          ev="$root/evidence"
+          for owner in gnu minic; do
+            if [[ "$owner" == gnu ]]; then
+              obj=build/rv32i-linux-entry/out/drivers/virtio/virtio.o
+            else
+              obj="$root/objects/virtio.o"
+            fi
+            echo "RV32_GPU_VIRTIO_OBJECT=$owner sha256=$(sha256sum "$obj" | cut -d' ' -f1)"
+            riscv64-linux-gnu-nm -a "$obj" | grep -E '(virtio_dev_probe|virtio_features_ok|features_show)$' | tee "$ev/$owner.virtio.symbols" || true
+            riscv64-linux-gnu-objdump -dr -M no-aliases --disassemble=virtio_dev_probe "$obj" >"$ev/$owner.virtio_dev_probe.disasm"
+            echo "RV32_GPU_VIRTIO_DEV_PROBE_BEGIN=$owner"
+            sed -n '1,240p' "$ev/$owner.virtio_dev_probe.disasm"
+            echo "RV32_GPU_VIRTIO_DEV_PROBE_END=$owner"
+          done
+          diff -u "$ev/gnu.virtio_dev_probe.disasm" "$ev/minic.virtio_dev_probe.disasm" >"$ev/virtio_dev_probe.gnu-vs-minic.diff" || true
+          echo 'RV32_GPU_VIRTIO_DEV_PROBE_DIFF_FIRST_160'
+          sed -n '1,160p' "$ev/virtio_dev_probe.gnu-vs-minic.diff"
       - name: Build 8 exact-config GNU DRM/GPU modules once
         timeout-minutes: 9
         run: |

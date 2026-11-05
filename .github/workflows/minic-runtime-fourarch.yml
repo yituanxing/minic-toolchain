@@ -16,6 +16,8 @@ on:
       - "src/target/riscv64/**"
       - "tests/compiler/c0/probe-riscv-shared-word-operations.sh"
       - "tests/compiler/c0/probe-four-backend-dynamic-stack.sh"
+      - "tests/compiler/c0/probe-wide-pointer-offset-all-targets.sh"
+      - "tests/compiler/c0/wide_pointer_offset_runtime.c"
       - "tests/compiler/c0/probe-gnu-function-aligned-native.sh"
       - "tests/compiler/c0/gnu_function_aligned.c"
       - "tests/compiler/c0/probe-record-rvalue-nested-member-native.sh"
@@ -129,6 +131,8 @@ on:
       - "tests/compiler/c0/probe-x86-compiler-rt-native.sh"
       - "tests/compiler/c0/probe-lp64-compiler-rt-qemu.sh"
       - "tests/compiler/c0/probe-four-backend-dynamic-stack.sh"
+      - "tests/compiler/c0/probe-wide-pointer-offset-all-targets.sh"
+      - "tests/compiler/c0/wide_pointer_offset_runtime.c"
       - "tests/compiler/c0/probe-gnu-function-aligned-native.sh"
       - "tests/compiler/c0/probe-record-rvalue-nested-member-native.sh"
       - "tests/compiler/c0/record_rvalue_nested_member.c"
@@ -233,6 +237,12 @@ jobs:
           python3 -m py_compile tools/runtime/build_runtime.py
           python3 tools/runtime/build_runtime.py --print-sources
           make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/runtime-ci all
+      - name: Core i128 signed/unsigned pointer offsets and GNU zero stride on all LP64 ISAs
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          bash tests/compiler/c0/probe-wide-pointer-offset-all-targets.sh \
+            "${{ matrix.target }}" "$GITHUB_WORKSPACE/build/runtime-ci/bin/minic-cc"
       - name: RISC-V LP64 aligned(64) variadic register-to-stack GNU QEMU differential
         if: matrix.target == 'riscv64'
         shell: bash

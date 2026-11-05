@@ -3605,15 +3605,22 @@ static bool a64_core_instruction(A64CoreSelection *sel,
         const MinicCoreValueId base = ins->value.pointer_offset.base;
         const MinicCoreValueId index = ins->value.pointer_offset.index;
         const size_t stride = ins->value.pointer_offset.element_size;
-        size_t iw;
+        size_t iw, wide_offset;
         bool signed_index;
         if (base >= fn->value_count || index >= fn->value_count ||
             !minic_multi_direct_pointer_offset_shape(fn, ins,
                 SIZE_MAX, &iw, &signed_index) ||
-            (iw != 1U && iw != 2U && iw != 4U && iw != 8U) ||
-            !a64_load_core(sel, base, A64_T0, 64U) ||
-            !a64_load_core(sel, index, A64_T1,
-                iw == 8U ? 64U : 32U)) return false;
+            (iw != 1U && iw != 2U && iw != 4U &&
+             iw != 8U && iw != 16U) ||
+            !a64_load_core(sel, base, A64_T0, 64U)) return false;
+        /* Wide integer SSA values live in the separate 16-byte Core frame
+         * area. Read its LOW 64-bit limb, not its scalar shadow slot. */
+        if (iw == 16U) {
+            if (!a64_wide_core_slot(sel, index, &wide_offset) ||
+                !a64_load_wide_half(sel, wide_offset, A64_T1))
+                return false;
+        } else if (!a64_load_core(sel, index, A64_T1,
+                       iw == 8U ? 64U : 32U)) return false;
         if (iw < 8U && !a64_extend_word(sel,
                 A64_T1, A64_T1, signed_index)) return false;
         if (stride != 0U) {

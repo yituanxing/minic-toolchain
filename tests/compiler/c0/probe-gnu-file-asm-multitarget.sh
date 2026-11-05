@@ -84,7 +84,8 @@ int main(void) {
 SRC
     "$cross_cc" -fno-pie -no-pie -x c "$work/x86-gs-pcpu.i" \
         -o "$work/x86-gs-pcpu.gnu.elf"
-    "$MINIC_CC" --target=x86_64-linux -S "$work/x86-gs-pcpu.i" \
+    MINIC_X86_TYPED_SELECT_TRACE=1 MINIC_X86_TYPED_REJECT_TRACE=1 \
+        "$MINIC_CC" --target=x86_64-linux -S "$work/x86-gs-pcpu.i" \
         -o "$work/x86-gs-pcpu.minic.s"
     grep -Fq 'movq %gs:(%r10), %rax' "$work/x86-gs-pcpu.minic.s"
     "$cross_cc" -fno-pie -no-pie -x assembler "$work/x86-gs-pcpu.minic.s" \
