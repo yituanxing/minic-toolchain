@@ -1924,11 +1924,17 @@ static bool a64_linux_extra_source(A64CoreSelection *sel,
         source->target_machine_form_variant != (cmpwait ? width : 0U) ||
         source->operand_plan_owner != MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED ||
         source->is_volatile != (cmpwait || dep) || source->is_goto ||
-        source->has_memory_clobber != dep ||
-        source->implicit_memory_effect != zeropad ||
+        /* Core's effective memory flag includes typed +Q/Q operand effects.
+         * Only the IO dependency form spells an explicit GNU "memory"
+         * clobber; CMPWAIT and ZEROPAD carry implicit memory effects. */
+        !source->has_memory_clobber ||
+        source->explicit_memory_clobber != dep ||
+        source->implicit_memory_effect != (cmpwait || zeropad) ||
         source->register_clobber_count != 0U ||
         source->resolved_immediate_count != 0U ||
-        source->symbol_reference_count != 0U ||
+        /* Preserve only independently bound C operand liveness roots. An
+         * arbitrary template relocation is still denied by source sealing. */
+        !a64_ordered_core_symbol_roots(fn, source) ||
         source->deferred_immediate_symbol != NULL ||
         ins->result != MINIC_CORE_VALUE_INVALID ||
         !minic_core_function_type_is_kind(fn, ins->core_type_id,
@@ -2078,6 +2084,81 @@ static bool a64_linux_uaccess_source(A64CoreSelection *sel,
     return a64_load_core(sel, ops[0].value, A64_T3, 64U) &&
         a64_memory_register(sel, MINIC_A64_MACHINE_STR_W, false,
             A64_T0, 32U, A64_T3, 0U, true, true);
+}
+
+/* The complete original Linux crash_setup_regs() ASM snapshots x0..x29
+ * before any source output is written. Materialize only its record pointer
+ * into x0 before the first STP; x9/x10 are real early-clobber outputs and
+ * their C lvalues must be stored strictly AFTER the final PC/PSTATE STP.
+ * This is one target-qualified 675-byte hardware form, not generic GNU ASM. */
+static bool a64_linux_kexec_crash_source(A64CoreSelection *sel,
+    const MinicCoreInstruction *ins, const MinicCoreInlineAsm *source) {
+    const MinicCoreFunction *fn = sel->ctx->fn;
+    const MinicCoreStructuredInlineAsmOperand *ops =
+        ins->value.structured_inline_asm.operands;
+    const MinicCoreType *record;
+    MinicMachineOperand machine[3];
+    size_t slot, i;
+    static const unsigned int regs[] = {9U, 10U, 0U};
+    if (source->target_machine_form_id != AARCH64_MACHINE_ASM_KEXEC_CRASH ||
+        source->target_machine_form_variant != 0U ||
+        source->operand_plan_owner != MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED ||
+        !source->is_volatile || source->is_goto ||
+        !source->has_memory_clobber ||
+        source->register_clobber_count != 0U ||
+        source->resolved_immediate_count != 0U ||
+        source->symbol_reference_count != 0U ||
+        source->deferred_immediate_symbol != NULL ||
+        !aarch64_linux_kexec_crash_template(source->template_text,
+            source->template_length) ||
+        ins->result != MINIC_CORE_VALUE_INVALID ||
+        !minic_core_function_type_is_kind(fn, ins->core_type_id,
+            MINIC_CORE_TYPE_VOID) ||
+        ins->value.structured_inline_asm.operand_count != 3U ||
+        ops == NULL || sel->ctx->machine_frame->has_dynamic_stack)
+        return false;
+    record = aarch64_asm_core_type(fn, ops[2].value, true);
+    if (record == NULL || !record->has_layout ||
+        record->kind != MINIC_CORE_TYPE_RECORD ||
+        record->size != 272U || record->alignment != 8U ||
+        !aarch64_asm_core_pointer(fn, ops[2].value, false))
+        return false;
+    for (i = 0U; i < 3U; ++i) {
+        const bool output = i < 2U;
+        if (ops[i].operand_index != i ||
+            ops[i].value >= fn->value_count ||
+            ops[i].kind != (output ?
+                MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT :
+                MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT) ||
+            ops[i].has_fixed_register_binding ||
+            ops[i].early_clobber || ops[i].has_tied_output ||
+            ops[i].physical_read_write ||
+            ops[i].physical_early_clobber != output ||
+            (output && !aarch64_asm_core_integer(fn,
+                ops[i].value, true, 8U, 0)))
+            return false;
+        machine[i] = a64_gp(regs[i], 64U, output ?
+            MINIC_MACHINE_REGISTER_WRITE : MINIC_MACHINE_REGISTER_READ);
+        machine[i].asm_constraint = output ? "=&r" : "r";
+    }
+    if (!minic_lp64_frame_plan_value_slot(sel->ctx->frame_plan,
+            ops[2].value, &slot) ||
+        !minic_a64_machine_emit_frame_address(&sel->builder, &sel->view,
+            minic_a64_owned_slot(slot), 0U,
+            (MinicA64ScratchPolicy){0U, 0U}) ||
+        !a64_memory_register(sel, MINIC_A64_MACHINE_LDR_X, false,
+            0U, 64U, 0U, 0U, false, false) ||
+        !minic_machine_builder_emit_core_source_asm(&sel->builder,
+            source, MINIC_MACHINE_EFFECT_MEMORY_WRITE, machine, 3U,
+            NULL, 0U, false, false) ||
+        !a64_load_core(sel, ops[0].value, A64_T2, 64U) ||
+        !a64_memory_register(sel, MINIC_A64_MACHINE_STR_X, false,
+            A64_T0, 64U, A64_T2, 0U, true, false) ||
+        !a64_load_core(sel, ops[1].value, A64_T2, 64U) ||
+        !a64_memory_register(sel, MINIC_A64_MACHINE_STR_X, false,
+            A64_T1, 64U, A64_T2, 0U, true, false))
+        return false;
+    return true;
 }
 
 /* Original Linux read_sysreg()/write_sysreg() and the encoded MSR_S/MRS_S
@@ -3754,6 +3835,8 @@ static bool a64_core_instruction(A64CoreSelection *sel,
         if (source->target_machine_form_id ==
                 AARCH64_MACHINE_ASM_PSTATE_ALTERNATIVE)
             return a64_linux_pstate_alternative_zero(sel, ins, source);
+        if (source->target_machine_form_id == AARCH64_MACHINE_ASM_KEXEC_CRASH)
+            return a64_linux_kexec_crash_source(sel, ins, source);
         if (source->target_machine_form_id == AARCH64_MACHINE_ASM_LDAR ||
             source->target_machine_form_id == AARCH64_MACHINE_ASM_STLR)
             return a64_linux_acquire_release(sel, ins, source);

@@ -1831,6 +1831,37 @@ const char *aarch64_linux_user_cache_fault_form(
     return NULL;
 }
 
+/* Linux 6.6 arm64 crash_setup_regs() stores all 31 GPRs before
+ * repurposing x9/x10, then SP, PSTATE and the local-label PC. Admit only
+ * that exact 675-byte hardware program (modulo harmless GNU whitespace).
+ * This fingerprint is target/ISA-owned; C types and output bindings are
+ * independently checked by the C qualifier and the Machine verifier. */
+bool aarch64_linux_kexec_crash_template(const char *text, size_t length) {
+    static const char canonical[] =
+        "stpx0,x1,[%2,#16*0]stpx2,x3,[%2,#16*1]stpx4,x5,[%2,#16*2]stpx6,x7,[%2,"
+        "#16*3]stpx8,x9,[%2,#16*4]stpx10,x11,[%2,#16*5]stpx12,x13,[%2,#16*6]stp"
+        "x14,x15,[%2,#16*7]stpx16,x17,[%2,#16*8]stpx18,x19,[%2,#16*9]stpx20,x21"
+        ",[%2,#16*10]stpx22,x23,[%2,#16*11]stpx24,x25,[%2,#16*12]stpx26,x27,[%2"
+        ",#16*13]stpx28,x29,[%2,#16*14]mov%0,spstpx30,%0,[%2,#16*15]/*fakedcurr"
+        "entPSTATE*/mrs%0,CurrentELmrs%1,SPSELorr%0,%0,%1mrs%1,DAIForr%0,%0,%1m"
+        "rs%1,NZCVorr%0,%0,%1adr%1,1f1:stp%1,%0,[%2,#16*16]";
+    char compact[768];
+    size_t i, n = 0U;
+    if (text == NULL || length == 0U || length >= sizeof(compact))
+        return false;
+    for (i = 0U; i < length; ++i) {
+        const char ch = text[i];
+        if (ch == '\0') return false;
+        if (ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r')
+            continue;
+        if (n + 1U >= sizeof(compact)) return false;
+        compact[n++] = ch;
+    }
+    compact[n] = '\0';
+    return n == sizeof(canonical) - 1U &&
+        memcmp(compact, canonical, n) == 0;
+}
+
 /* This inventory is the one machine-owned name for every AArch64 GNU
  * structured form admitted by its source backend. Source checks C types,
  * constraints, and effects; machine checks this ISA identity again against
@@ -1862,6 +1893,8 @@ bool aarch64_machine_asm_identify(const char *text, size_t length,
     /* Preserve the prior machine dispatch priority where pattern families
      * might overlap; do not let a broader opcode family shadow an exact
      * Linux alternative or memory model. */
+    A64_MACHINE_FORM(aarch64_linux_kexec_crash_template(text,length),
+                      KEXEC_CRASH, 0U);
     A64_MACHINE_FORM(aarch64_linux_kvm_va_mask_form(text,length), KVM_VA_MASK, 0U);
     A64_MACHINE_FORM(aarch64_linux_pstate_alternative(text,length).cap,
                      PSTATE_ALTERNATIVE, 0U);

@@ -1154,6 +1154,57 @@ static bool aarch64_linux_lse_source(
     return true;
 }
 
+/* The original arm64 kexec crash register snapshot is an exact privileged
+ * GNU hardware template. Its output temporaries are 64-bit writable lvalues;
+ * the input points to a complete 31-GPR + SP/PC/PSTATE 272-byte AAPCS64
+ * record. In particular the short-record regression must be rejected before
+ * it can reach the physical Machine emitter. */
+static bool aarch64_linux_kexec_crash_source(
+    const MinicTargetInvocation *invocation, const MinicC0Program *program,
+    const MinicInlineAsm *src, MinicTargetInlineAsmContract *contract) {
+    const MinicExpression *output0, *output1, *input;
+    MinicType pointee, plain;
+    size_t size, alignment;
+    if (invocation == NULL || program == NULL || src == NULL ||
+        contract == NULL || !src->is_volatile || src->is_goto ||
+        src->output_count != 2U || src->input_count != 1U ||
+        src->outputs == NULL || src->inputs == NULL ||
+        src->label_count != 0U || src->clobber_count != 1U ||
+        !src->has_memory_clobber || src->register_clobber_count != 0U ||
+        !constraint(&src->outputs[0], "=&r") ||
+        !constraint(&src->outputs[1], "=&r") ||
+        !constraint(&src->inputs[0], "r") ||
+        !aarch64_linux_kexec_crash_template(src->template_text,
+            src->template_length)) return false;
+    output0 = minic_c0_program_expression(
+        program, src->outputs[0].expression);
+    output1 = minic_c0_program_expression(
+        program, src->outputs[1].expression);
+    input = minic_c0_program_expression(
+        program, src->inputs[0].expression);
+    if (output0 == NULL || output1 == NULL || input == NULL ||
+        output0->value_category != MINIC_VALUE_LVALUE ||
+        output1->value_category != MINIC_VALUE_LVALUE ||
+        minic_type_is_const(output0->type) ||
+        minic_type_is_const(output1->type) ||
+        !minic_type_unqualified(output0->type, &plain) ||
+        !minic_type_equal(plain, minic_type_unsigned_long_long()) ||
+        !minic_type_unqualified(output1->type, &plain) ||
+        !minic_type_equal(plain, minic_type_unsigned_long_long()) ||
+        !minic_type_pointee(input->type, &pointee) ||
+        !minic_type_unqualified(pointee, &plain) ||
+        !minic_type_is_record(plain) ||
+        !minic_data_layout_type(invocation, program, plain, &size,
+            &alignment) || size != 272U || alignment != 8U)
+        return false;
+    contract->operand_count = 3U;
+    contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
+    contract->kinds[1] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
+    contract->kinds[2] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+    contract->implicit_memory_effect = true;
+    return true;
+}
+
 bool minic_aarch64_qualify_inline_asm(
     const MinicTargetInvocation *invocation, const MinicC0Program *program, const MinicInlineAsm *src,
     MinicTargetInlineAsmContract *contract) {
@@ -1195,6 +1246,8 @@ bool minic_aarch64_qualify_inline_asm(
             }
         }
     }
+    if(aarch64_linux_kexec_crash_source(invocation,program,src,contract))
+        return true;
     if(aarch64_linux_bitrev_source(program,src,contract))return true;
     if(aarch64_linux_kvm_va_mask_source(program,src,contract))return true;
     if(aarch64_linux_hyp_spin_source(invocation, program,src,contract))return true;

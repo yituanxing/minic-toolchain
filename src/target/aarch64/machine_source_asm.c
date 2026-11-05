@@ -8,6 +8,63 @@
 #include <inttypes.h>
 #include <string.h>
 
+/* Original Linux kexec crash register image: all 31 GPRs, SP, synthetic
+ * PSTATE and local-label PC. Source qualification proves the full record;
+ * MachineIR independently verifies its exact ISA text and physical roles. */
+static bool a64_kexec_crash_form(const MinicMachineFunction *fn,
+    const MinicMachineInstruction *ins, void *context) {
+    const unsigned int effects = MINIC_MACHINE_EFFECT_SOURCE_ASM |
+        MINIC_MACHINE_EFFECT_VOLATILE |
+        MINIC_MACHINE_EFFECT_COMPILER_BARRIER |
+        MINIC_MACHINE_EFFECT_MEMORY_WRITE;
+    (void)context;
+    return fn != NULL && fn->target != NULL &&
+        fn->target->architecture == MINIC_TARGET_ARCH_AARCH64 &&
+        ins != NULL && ins->kind == MINIC_MACHINE_INSTRUCTION_SOURCE_ASM &&
+        ins->source_asm_machine_form_id == AARCH64_MACHINE_ASM_KEXEC_CRASH &&
+        ins->source_asm_machine_form_variant == 0U &&
+        ins->operand_count == 3U && ins->operands != NULL &&
+        ins->implicit_count == 0U && ins->effects == effects &&
+        !ins->source_asm_terminates_block &&
+        !ins->source_asm_permits_fallthrough &&
+        aarch64_linux_kexec_crash_template(ins->source_asm_template,
+            ins->source_asm_length);
+}
+
+static bool a64_kexec_crash_binding(const MinicMachineFunction *fn,
+    const MinicMachineInstruction *ins, size_t index, void *context) {
+    const unsigned int regs[] = {9U, 10U, 0U};
+    const MinicMachineOperand *op;
+    (void)context;
+    if (!a64_kexec_crash_form(fn, ins, NULL) || index >= 3U)
+        return false;
+    op = &ins->operands[index];
+    return op->kind == MINIC_MACHINE_OPERAND_REGISTER &&
+        op->asm_constraint != NULL && op->asm_name == NULL &&
+        strcmp(op->asm_constraint, index < 2U ? "=&r" : "r") == 0 &&
+        op->value.physical.reg.bank == MINIC_MACHINE_REGISTER_GENERAL &&
+        op->value.physical.reg.number == regs[index] &&
+        op->value.physical.reg.width_bits == 64U &&
+        op->value.physical.access == (index < 2U ?
+            MINIC_MACHINE_REGISTER_WRITE : MINIC_MACHINE_REGISTER_READ);
+}
+
+static bool a64_kexec_crash_operand(FILE *output,
+    const MinicMachineFunction *fn, const MinicMachineInstruction *ins,
+    const MinicMachineGNUAsmLabels *labels, size_t index,
+    unsigned char modifier, void *context) {
+    const char *const regs[] = {"x9", "x10", "x0"};
+    (void)labels;
+    return modifier == 0U &&
+        a64_kexec_crash_binding(fn, ins, index, context) &&
+        (output == NULL || fputs(regs[index], output) >= 0);
+}
+
+static const MinicMachineSourceAsmTemplatePolicy a64_kexec_crash_policy = {
+    a64_kexec_crash_form, a64_kexec_crash_binding,
+    a64_kexec_crash_operand, NULL
+};
+
 /* This is a deliberately closed initial MachineIR source-ASM policy.  The
  * direct emitter's Linux descriptor/operand machinery must not be exposed as
  * arbitrary text in MIR: each nontrivial form needs its own physical binding
@@ -789,12 +846,16 @@ static bool a64_machine_extra_source_form(const MinicMachineInstruction *ins) {
     const unsigned int width = cmpwait ? aarch64_linux_cmpwait_form(
         ins->source_asm_template,ins->source_asm_length) : 0U;
     const size_t count = dep ? 2U : 3U;
+    /* Core records both explicit GNU "memory" and typed Q/+Q hardware
+     * memory effects under its effective-memory contract. The common Core
+     * source-ASM builder preserves that conservative compiler barrier for
+     * all three exact target-qualified forms. */
     const unsigned int effects = MINIC_MACHINE_EFFECT_SOURCE_ASM |
+        MINIC_MACHINE_EFFECT_COMPILER_BARRIER |
         (cmpwait ? MINIC_MACHINE_EFFECT_VOLATILE |
                    MINIC_MACHINE_EFFECT_MEMORY_READ |
                    MINIC_MACHINE_EFFECT_MEMORY_WRITE :
-         dep ? MINIC_MACHINE_EFFECT_VOLATILE |
-               MINIC_MACHINE_EFFECT_COMPILER_BARRIER :
+         dep ? MINIC_MACHINE_EFFECT_VOLATILE :
                MINIC_MACHINE_EFFECT_MEMORY_READ);
     size_t i;
     if (!(cmpwait || dep || zeropad) ||
@@ -842,6 +903,8 @@ bool minic_aarch64_machine_source_asm_validate(
         instruction->kind == MINIC_MACHINE_INSTRUCTION_SOURCE_ASM &&
         (instruction->effects & MINIC_MACHINE_EFFECT_SOURCE_ASM) != 0U &&
         (a64_machine_opaque_hint(instruction) ||
+          minic_machine_source_asm_template_preflight(&function,
+              instruction, &a64_kexec_crash_policy) ||
          a64_machine_pstate_alternative(instruction) ||
          a64_machine_extra_source_form(instruction) ||
          minic_machine_source_asm_template_preflight(&function,
@@ -926,6 +989,33 @@ bool minic_aarch64_machine_source_asm_emit(
               instruction->source_asm_template[
                   instruction->source_asm_length - 1U] == '\n') ||
              fputc('\n', output) != EOF);
+    }
+    if (instruction->source_asm_machine_form_id ==
+            AARCH64_MACHINE_ASM_KEXEC_CRASH) {
+        size_t i;
+        /* Canonical GNU spelling of the already-proved 675-byte hardware
+         * template. Resolve #16*N and physical %0/%1/%2 explicitly so a
+         * snapshot verifier can assert zero instructions between STP pairs.
+         * The only removed source bytes are whitespace and a C comment. */
+        if (!minic_machine_source_asm_template_preflight(function,
+                instruction, &a64_kexec_crash_policy))
+            return false;
+        for (i = 0U; i < 15U; ++i)
+            if (fprintf(output, "  stp x%zu, x%zu, [x0, #%zu]\n",
+                    i * 2U, i * 2U + 1U, i * 16U) < 0)
+                return false;
+        return fputs(
+            "  mov x9, sp\n"
+            "  stp x30, x9, [x0, #240]\n"
+            "  mrs x9, CurrentEL\n"
+            "  mrs x10, SPSEL\n"
+            "  orr x9, x9, x10\n"
+            "  mrs x10, DAIF\n"
+            "  orr x9, x9, x10\n"
+            "  mrs x10, NZCV\n"
+            "  orr x9, x9, x10\n"
+            "  adr x10, 1f\n"
+            "1: stp x10, x9, [x0, #256]\n", output) != EOF;
     }
     if (a64_machine_tlbi_form(instruction))
         return minic_machine_source_asm_template_emit(output, function,

@@ -61,7 +61,8 @@ enum Aarch64MachineAsmForm {
     AARCH64_MACHINE_ASM_ATOMIC_RMW,
     AARCH64_MACHINE_ASM_ATOMIC_FETCH,
     AARCH64_MACHINE_ASM_UACCESS_BIC,
-    AARCH64_MACHINE_ASM_MASK
+    AARCH64_MACHINE_ASM_MASK,
+    AARCH64_MACHINE_ASM_KEXEC_CRASH
 };
 
 /* Pure ISA recognition: no C AST, GNU operands, or Core instruction types.
@@ -70,6 +71,11 @@ enum Aarch64MachineAsmForm {
 bool aarch64_machine_asm_identify(const char *text, size_t length,
                                   bool normalized, uint32_t *id,
                                   uint32_t *variant);
+
+/* Exact GNU arm64 Linux crash_setup_regs() 675-byte GPR/SP/PSTATE/PC snapshot.
+ * Whitespace may differ after Core normalization; every opcode, register,
+ * local label and GNU operand placeholder must still match. */
+bool aarch64_linux_kexec_crash_template(const char *text, size_t length);
 
 /* Pure Core execution-type checks shared by the legacy Linux asm emitter and
  * the typed Machine selector. No source-language enum or C AST can enter. */

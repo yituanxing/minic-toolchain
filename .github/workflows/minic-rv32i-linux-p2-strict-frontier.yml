@@ -271,11 +271,12 @@ jobs:
 
       # The Oct31 1741-owner Image passes 11/18, but its historical MiniC
       # drivers/virtio/virtio.c object cannot negotiate GPU modern feature32.
-      # The parallel source-owner differential has proved that *current* MiniC
-      # compiles this pristine original C owner under exact Kbuild flags and
-      # real QEMU GPU succeeds. Preserve all other SHA-attested owners and
-      # relink one owner before requiring all 18 checks in a single real boot.
-      - name: Restore exact GNU Kbuild owner cache for one MiniC virtio.c refresh
+      # The parallel source-owner differential proved that *current* MiniC
+      # can compile the pristine original virtio.c under exact Kbuild flags.
+      # The former paired old virtio_pci_modern_dev.o also failed with that
+      # fresh core, so compile both original C owners once, keep 1739 frozen
+      # owners byte-identical, and require real GPU+full18 QEMU separately.
+      - name: Restore exact GNU Kbuild owner cache for two MiniC virtio source owners
         id: golden
         uses: actions/cache/restore@v4
         with:
@@ -285,7 +286,7 @@ jobs:
           key: linux-gnu-golden-rv32i-v1-6.6.143-4c6c19f79741a8a31ec52ad57b1a6bc56b81dd6996cbf5e1bdc63f587d85244c-0c2a199ea3ae14d3-0703113036a30806-d072447ef15a2074
           fail-on-cache-miss: true
 
-      - name: Restore seven original MiniC owner shards; do not rebuild 1740 C owners
+      - name: Restore seven original MiniC owner shards; preserve 1739 frozen C owners
         uses: actions/download-artifact@v4
         with:
           repository: yituanxing/minic-toolchain
@@ -295,13 +296,37 @@ jobs:
           github-token: ${{ github.token }}
           path: build/rv32-p2-strict/shards
 
-      - name: Compile one current MiniC original virtio.c owner and GNU-relink Image
+      - name: Compile two current MiniC original virtio source owners and GNU-relink Image
         shell: bash
         timeout-minutes: 9
         run: |
           set -Eeuo pipefail
           test '${{ steps.golden.outputs.cache-hit }}' = true
           bash tools/ci/linux-rv32i-p2-refresh-virtio-v1.sh
+
+      - name: Real QEMU GPU feature32 preflight for two exact current MiniC owners
+        shell: bash
+        timeout-minutes: 3
+        run: |
+          set -Eeuo pipefail
+          root="$GITHUB_WORKSPACE/build/rv32-p2-strict"
+          image="$GITHUB_WORKSPACE/build/rv32i-linux-entry/out/arch/riscv/boot/Image"
+          expected=$(sed -n 's/^current_Image_sha256=//p' "$root/refresh-virtio/provenance.txt")
+          test -n "$expected"
+          test "$(sha256sum "$image" | cut -d' ' -f1)" = "$expected"
+          mkdir -p "$root/current-gpu-only"
+          RV32I_QEMU_IMAGE="$image" RV32I_QEMU_WORK="$root/current-gpu-only" \
+            RV32I_QEMU_P1=1 RV32I_QEMU_GPU_DIAG=1 \
+            RV32I_QEMU_GPU_MODULE_DIR="$root/modules" \
+            RV32I_QEMU_TIMEOUT_SECONDS=120 \
+            bash tools/ci/linux-rv32i-qemu-p0-v1.sh \
+            >"$root/current-gpu-only.log" 2>&1 || {
+              echo 'RV32_P2_CURRENT_GPU=FAIL isolated_original_Linux_two_MiniC_owners' >&2
+              tail -n 120 "$root/current-gpu-only.log" >&2
+              exit 1
+            }
+          grep -Fq 'RV32I_GPU_FEATURE_DIAG=PASS' "$root/current-gpu-only/qemu-serial.log"
+          echo "RV32_P2_CURRENT_GPU=PASS current_MiniC_owners=2 all_frozen_MiniC_others=1739 GNU_modules=8 genuine_QEMU=true image_sha256=$expected scope=NOT_FULL_P2"
 
       - name: Prepare a real NVMe PCI namespace backing store
         shell: bash
@@ -366,14 +391,17 @@ jobs:
             build/rv32-p2-strict/canonical11-run/runtime-p2-canonical11-disassembly.txt
             build/rv32-p2-strict/refresh-virtio/provenance.txt
             build/rv32-p2-strict/refresh-virtio/virtio-original-source.sha256
+            build/rv32-p2-strict/refresh-virtio/virtio_pci_modern_dev-original-source.sha256
             build/rv32-p2-strict/refresh-virtio/candidate-hashes.sha256
-            build/rv32-p2-strict/refresh-virtio/kbuild-route
-            build/rv32-p2-strict/refresh-virtio/success-owners
-            build/rv32-p2-strict/refresh-virtio/owner-object-hashes
-            build/rv32-p2-strict/refresh-virtio/one-owner.log
+            build/rv32-p2-strict/refresh-virtio/*-kbuild-route
+            build/rv32-p2-strict/refresh-virtio/*-success-owners
+            build/rv32-p2-strict/refresh-virtio/*-object-hashes
+            build/rv32-p2-strict/refresh-virtio/*-one-owner.log
             build/rv32-p2-strict/refresh-virtio/gnu-relink.log
             build/rv32-p2-strict/refresh-virtio/pre-repair-*.audit
             build/rv32-p2-strict/refresh-virtio/gnu-relink-repair-*.log
+            build/rv32-p2-strict/current-gpu-only.log
+            build/rv32-p2-strict/current-gpu-only/qemu-serial.log
             build/rv32-p2-strict/full18-verdict.txt
             build/rv32-p2-strict/full18-runner.log
             build/rv32-p2-strict/full18-nvme-sha256.txt
