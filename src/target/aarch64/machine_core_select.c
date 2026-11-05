@@ -1438,6 +1438,31 @@ static bool a64_linux_acquire_release(A64CoreSelection *sel,
     const size_t index = width == 1U ? 0U : width == 2U ? 1U :
         width == 4U ? 2U : width == 8U ? 3U : SIZE_MAX;
     const unsigned int bits = width == 8U ? 64U : 32U;
+    if (getenv("MINIC_M1_TRACE") != NULL &&
+        source->target_machine_form_id == AARCH64_MACHINE_ASM_STLR &&
+        ins->value.structured_inline_asm.operand_count == 2U) {
+        size_t slot0 = 0U, slot1 = 0U;
+        const bool has_slot0 = ops[0].value < fn->value_count &&
+            minic_lp64_frame_plan_value_slot(sel->ctx->frame_plan,
+                ops[0].value, &slot0);
+        const bool has_slot1 = ops[1].value < fn->value_count &&
+            minic_lp64_frame_plan_value_slot(sel->ctx->frame_plan,
+                ops[1].value, &slot1);
+        fprintf(stderr,
+            "MINIC_A64_STLR_CORE form=%u width=%zu output_kind=%u"
+            " input_kind=%u output_value=%zu input_value=%zu"
+            " output_integer_carrier=%d input_scalar=%d"
+            " output_slot=%d/%zu input_slot=%d/%zu"
+            " volatile=%d memory=%d register_clobbers=%zu\n",
+            source->target_machine_form_id, width,
+            (unsigned int)ops[0].kind, (unsigned int)ops[1].kind,
+            (size_t)ops[0].value, (size_t)ops[1].value,
+            (int)aarch64_stlr_memory_carrier_core(fn, ops[0].value, width),
+            (int)aarch64_stlr_scalar_core(fn, ops[1].value, false, width),
+            (int)has_slot0, slot0, (int)has_slot1, slot1,
+            (int)source->is_volatile, (int)source->has_memory_clobber,
+            source->register_clobber_count);
+    }
     if (index == SIZE_MAX || source->template_text == NULL ||
         source->operand_plan_owner != MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED ||
         (is_load ? aarch64_load_acquire_width(source->template_text,
@@ -4226,7 +4251,13 @@ bool minic_aarch64_machine_select_core_subset(
         sel.reachable, count)) goto cleanup;
     if (!sel.reachable[fn->entry_block]) goto cleanup;
     machine->frame_size = ctx->machine_frame->frame_size;
-    machine->frame_alignment = ctx->machine_frame->frame_alignment;
+    /* The machine frame records physical SP subtraction alignment, which
+     * stays AAPCS64 16-byte aligned. Over-aligned locals live relative to
+     * the separately aligned x19 anchor; their per-object alignment and
+     * saved-entry-SP contract remain in the target frame plan. In particular,
+     * frame_size includes up to 240 bytes of alignment slack and need not
+     * be a multiple of the over-aligned local's 64..256-byte alignment. */
+    machine->frame_alignment = 16U;
     machine->has_dynamic_stack = ctx->machine_frame->has_dynamic_stack;
     machine->calling_convention = minic_core_function_calling_convention(fn);
     sel.view = (MinicA64FrameView){machine->has_dynamic_stack,

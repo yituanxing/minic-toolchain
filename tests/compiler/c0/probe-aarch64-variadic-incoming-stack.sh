@@ -11,7 +11,7 @@ trap 'rm -rf "$work"' EXIT
 
 "$host" -E -P -std=gnu11 -DMINIC_AARCH64_CURSOR "$src" \
     -o "$work/stack.i"
-MINIC_M1_TRACE=1 MINIC_ASM_OPERAND_PLAN_TRACE=1 "$mini" --target=aarch64-linux -S "$work/stack.i" -o "$work/stack.s"
+MINIC_M1_TRACE=1 MINIC_ASM_OPERAND_PLAN_TRACE=1 MINIC_X86_TYPED_REJECT_TRACE=1 "$mini" --target=aarch64-linux -S "$work/stack.i" -o "$work/stack.s"
 "$host" -std=gnu11 -O0 -Wno-unused-parameter "$src" -o "$work/host-oracle"
 "$work/host-oracle" || {
     echo 'AARCH64_VA_INCOMING=FAIL host-semantics' >&2; exit 1;

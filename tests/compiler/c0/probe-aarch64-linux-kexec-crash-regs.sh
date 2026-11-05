@@ -14,7 +14,7 @@ MINIC_M1_TRACE=1 "$mini" --target=aarch64-linux -S "$work/crash.i" -o "$work/cra
 # PSTATE, and local-label PC. Verify the real target instructions, not a
 # compiler-only placeholder or an abbreviated register dump.
 test "$(grep -c '^  stp x.*\[x0, #' "$work/crash.s")" -eq 16
-grep -Fq '  ldr x0, [x0]' "$work/crash.s"
+grep -Eq '^  ldr x0, \[x0(, #0)?\]$' "$work/crash.s"
 pair=0
 while test "$pair" -lt 15; do
     first=$((pair * 2))
@@ -60,7 +60,7 @@ awk '
     /^  sub sp, sp, x12$/ {if (frame_candidate > 4095) large_frame=frame_candidate}
     /^  stp x0, x1, \[x0, #0\]$/ {
         found++
-        if (before != "  ldr x0, [x0]") bad=1
+        if (before !~ /^  ldr x0, \[x0(, #0)?\]$/) bad=1
         if (before2 ~ /^  add x0, sp, #[0-9]+$/) {
             split(before2, fields, "#")
             if (fields[2]+0 > 4095 || fields[2]+8 > large_frame) bad=1

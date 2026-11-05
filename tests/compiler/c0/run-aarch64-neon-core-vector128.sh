@@ -37,6 +37,32 @@ grep -Eq '^[[:space:]]*str[[:space:]]+q16,[[:space:]]*\[x10(,[[:space:]]*#0)?\][
     -o "$work/const-alu.s"
 grep -F '  eor v16.16b, v16.16b, v17.16b' "$work/const-alu.s" >/dev/null
 
+# The target registry, not generic C Frontend or Core IR, owns the complete
+# GNU/AAPCS64 short-vector spelling inventory. Opaque names are legal in
+# header typedef declarations but not sized as real D-register objects.
+"$host_cc" -E -P -x c \
+    "$root/tests/compiler/c0/aarch64_neon_named_header_types.c" \
+    -o "$work/header-types.i"
+"$minic_cc" --target=aarch64-linux -S "$work/header-types.i" \
+    -o "$work/header-types.a64.s"
+if "$minic_cc" --target=x86_64-linux -S "$work/header-types.i" \
+    -o "$work/header-types.x86.s" >"$work/header-types.x86.stdout" \
+    2>"$work/header-types.x86.stderr"; then
+    printf '%s\n' 'FAIL AArch64 ACLE header typedef leaked to x86' >&2
+    exit 1
+fi
+grep -F 'expected type name' "$work/header-types.x86.stderr" >/dev/null
+printf '%s\n' 'typedef __Int8x8_t a64_opaque_d_vector;' \
+    'int main(void) { a64_opaque_d_vector unsupported_object; return (int)sizeof(unsupported_object); }' \
+    >"$work/header-types-unsupported.i"
+if "$minic_cc" --target=aarch64-linux -S "$work/header-types-unsupported.i" \
+    -o "$work/header-types-unsupported.s" >"$work/header-types-unsupported.stdout" \
+    2>"$work/header-types-unsupported.stderr"; then
+    printf '%s\n' 'FAIL header-only AArch64 D-vector acquired object storage' >&2
+    exit 1
+fi
+test ! -e "$work/header-types-unsupported.s"
+
 # AArch64 builtin source identities are not portable to another backend.
 if "$minic_cc" --target=x86_64-linux -S "$work/vector.i" \
     -o "$work/vector.x86.s" >"$work/vector.x86.stdout" \
