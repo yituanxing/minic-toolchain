@@ -941,6 +941,74 @@ static bool a64_selected_source_asm(const MinicMachineFunction *function,
                     MINIC_A64_MACHINE_LDAR_X : MINIC_A64_MACHINE_STLR_X) : 0U;
         return opcode != 0U && op == opcode && ins->effects == effects;
     }
+    if (id == AARCH64_MACHINE_ASM_MASK) {
+        /* The only admitted Linux NZCV mask is x10/x11 CMP immediately
+         * followed by x9 = SBC xzr,xzr, sealed on its volatile x9 store.
+         * The physical register pair and Core origin must belong to the
+         * very same source instruction; an arbitrary STR may not forge it. */
+        const MinicMachineOperand *store = ins->operands;
+        if (variant != 0U || op != MINIC_A64_MACHINE_STR_X ||
+            ins->effects != (required | MINIC_MACHINE_EFFECT_MEMORY_WRITE) ||
+            !ins->has_core_origin || ins->operand_count != 2U ||
+            store[0].kind != MINIC_MACHINE_OPERAND_REGISTER ||
+            store[0].value.physical.reg.bank !=
+                MINIC_MACHINE_REGISTER_GENERAL ||
+            store[0].value.physical.reg.width_bits != 64U ||
+            store[0].value.physical.reg.number != 9U ||
+            store[1].kind != MINIC_MACHINE_OPERAND_ADDRESS ||
+            !store[1].value.address.has_base ||
+            store[1].value.address.base.bank !=
+                MINIC_MACHINE_REGISTER_GENERAL ||
+            store[1].value.address.base.number != 11U)
+            return false;
+        for (i = 0U; i < function->block_count; ++i) {
+            const MinicMachineBlock *block = &function->blocks[i];
+            for (j = 0U; j < block->instruction_count; ++j) {
+                size_t k;
+                if (&block->instructions[j] != ins) continue;
+                for (k = 1U; k < j; ++k) {
+                    const MinicMachineInstruction *cmp =
+                        &block->instructions[k - 1U];
+                    const MinicMachineInstruction *sbc =
+                        &block->instructions[k];
+                    const MinicMachineOperand *c = cmp->operands;
+                    const MinicMachineOperand *s = sbc->operands;
+                    if (cmp->kind != MINIC_MACHINE_INSTRUCTION_SELECTED ||
+                        sbc->kind != MINIC_MACHINE_INSTRUCTION_SELECTED ||
+                        cmp->opcode != MINIC_A64_MACHINE_CMP ||
+                        sbc->opcode != MINIC_A64_MACHINE_SBC ||
+                        cmp->operand_count != 2U ||
+                        sbc->operand_count != 3U ||
+                        !cmp->has_core_origin || !sbc->has_core_origin ||
+                        cmp->core_instruction_id != ins->core_instruction_id ||
+                        sbc->core_instruction_id != ins->core_instruction_id ||
+                        cmp->core_block_id != ins->core_block_id ||
+                        sbc->core_block_id != ins->core_block_id)
+                        continue;
+                    if (c[0].kind == MINIC_MACHINE_OPERAND_REGISTER &&
+                        c[1].kind == MINIC_MACHINE_OPERAND_REGISTER &&
+                        s[0].kind == MINIC_MACHINE_OPERAND_REGISTER &&
+                        s[1].kind == MINIC_MACHINE_OPERAND_REGISTER &&
+                        s[2].kind == MINIC_MACHINE_OPERAND_REGISTER &&
+                        c[0].value.physical.reg.number == 10U &&
+                        c[1].value.physical.reg.number == 11U &&
+                        s[0].value.physical.reg.number == 9U &&
+                        s[1].value.physical.reg.number ==
+                            MINIC_A64_MACHINE_ZR &&
+                        s[2].value.physical.reg.number ==
+                            MINIC_A64_MACHINE_ZR &&
+                        c[0].value.physical.reg.width_bits == 64U &&
+                        c[1].value.physical.reg.width_bits == 64U &&
+                        s[0].value.physical.reg.width_bits == 64U &&
+                        s[1].value.physical.reg.width_bits == 64U &&
+                        s[2].value.physical.reg.width_bits == 64U)
+                        return true;
+                }
+                return false;
+            }
+        }
+        return false;
+    }
     if (id != AARCH64_MACHINE_ASM_BIT_REVERSE || variant != 0U ||
         op != MINIC_A64_MACHINE_STR_W ||
         ins->effects != (required | MINIC_MACHINE_EFFECT_MEMORY_WRITE))

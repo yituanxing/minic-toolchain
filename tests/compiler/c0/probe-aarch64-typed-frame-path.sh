@@ -102,7 +102,55 @@ cc -E -P -x c \
 "$minic" --target=aarch64-linux -S \
     "$scratch/record.i" -o "$scratch/record.s"
 grep -Eq '^  ldr x30, \[(x19|x17)' "$scratch/record.s"
-grep -Eq '^  (add x11, x19|mov x11, x19)' "$scratch/record.s"
+# x8 is AAPCS64's incoming indirect-result pointer.  The physical
+# selector preserves it in an owned frame slot across the nested indirect
+# call.  The old x11/x19 textual-address spelling was not the ABI contract.
+awk '
+    $0 == "minic_indirect_three:" { inside=1; next }
+    inside && /^\.size minic_indirect_three,/ { complete=1; inside=0; exit }
+    !inside { next }
+    /^  str x8, \[(sp|x19), #[0-9]+\]$/ {
+        slot=$0; sub(/^.*\[/, "", slot); sub(/\]$/, "", slot)
+        saved=1
+        next
+    }
+    saved && /^  blr x16$/ { invoked=1; next }
+    invoked && /^  ldr x10, \[(sp|x19), #[0-9]+\]$/ {
+        reload=$0; sub(/^.*\[/, "", reload); sub(/\]$/, "", reload)
+        if (reload == slot) stage=1
+        next
+    }
+    stage == 1 {
+        stage=($0 ~ /^  ldrb w11, \[x9, #0\]$/) ? 2 : 0
+        next
+    }
+    stage == 2 {
+        if ($0 ~ /^  strb w11, \[x10, #0\]$/) copied=1
+        stage=0
+    }
+    END { exit !(complete && saved && invoked && copied) }
+' "$scratch/record.s"
+# Dynamic alloca moves physical SP.  The same caller-owned x8 must be
+# saved and recovered through the stable x19 frame across gnu_make_three.
+awk '
+    $0 == "minic_dynamic_three:" { inside=1; next }
+    inside && /^\.size minic_dynamic_three,/ { complete=1; inside=0; exit }
+    !inside { next }
+    /^  mov x19, sp$/ { anchored=1; next }
+    anchored && /^  str x8, \[x19, #[0-9]+\]$/ {
+        slot=$0; sub(/^.*\[/, "", slot); sub(/\]$/, "", slot)
+        saved=1
+        next
+    }
+    saved && /^  bl gnu_make_three$/ { invoked=1; next }
+    invoked && /^  ldr x10, \[x19, #[0-9]+\]$/ {
+        reload=$0; sub(/^.*\[/, "", reload); sub(/\]$/, "", reload)
+        if (reload == slot) reloaded=1
+        next
+    }
+    reloaded && /^  strb w11, \[x10, #0\]$/ { copied=1 }
+    END { exit !(complete && anchored && saved && invoked && reloaded && copied) }
+' "$scratch/record.s"
 # A >4 KiB owned frame uses typed scratch materialization, never a silent
 # truncation to an A64 immediate or an x12/x17 string postpass guess.
 grep -Eq '^  movz x17, #[4-9][0-9]{3,}$' "$scratch/record.s"

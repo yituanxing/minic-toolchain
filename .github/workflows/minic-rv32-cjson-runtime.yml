@@ -23,6 +23,7 @@ on:
       - "src/target/riscv64/isa.h"
       - "tests/compiler/c0/probe-riscv-shared-word-operations.sh"
       - "tests/compiler/c0/probe-rv32-pic-gnu-elf-qemu.sh"
+      - "tests/compiler/c0/probe-rv32-checked-overflow-qemu.sh"
       - "tests/compiler/c0/probe-riscv-overaligned-varargs-qemu.sh"
       - "tests/compiler/c0/riscv_overaligned_varargs.c"
       - "tests/compiler/c0/elf_hidden_undefined_pic.c"
@@ -101,6 +102,13 @@ jobs:
         run: |
           set -Eeuo pipefail
           make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/rv32cjson all
+      - name: RV32I checked-overflow typed M1 GNU ELF32 original runtime QEMU differential
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          MINIC_CC="$GITHUB_WORKSPACE/build/rv32cjson/bin/minic-cc" \
+          MINIAS="$GITHUB_WORKSPACE/build/rv32cjson/bin/minic-as" \
+            bash tests/compiler/c0/probe-rv32-checked-overflow-qemu.sh
       - name: RISC-V ILP32 aligned(64) variadic register-to-stack GNU QEMU differential
         shell: bash
         run: |
