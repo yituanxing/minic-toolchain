@@ -66,9 +66,6 @@ typedef struct MinicCoreModuleFragment {
     /* ZERO: nonzero run length; BITS or RELOCATION: scalar byte width. */
     size_t byte_count;
     uint64_t bits;
-    /* ELF scalar decimal spelling may sign-extend an integer literal. The
-     * layout remains bit-exact regardless of the assembler's formatting. */
-    bool bits_signed_integer;
     MinicCoreModuleRelocationKind relocation_kind;
     /* Owned symbolic identity for object/function and local-label targets.
      * Label relocations reference the exact local symbol emitted by the
@@ -98,6 +95,12 @@ typedef struct MinicCoreModuleGlobal {
     char *section_name;
     MinicCoreTypeId core_type_id;
     size_t storage_size;
+    /* Zero requires exact declared CoreType extent. Nonzero is an explicit,
+     * source-independent contract for additional trailing object storage:
+     * its byte extent must be an integral number of these storage units.
+     * Source ingress proves that its source language permits this extension;
+     * Core never infers that permission from a C record's last field. */
+    size_t storage_extension_unit_bytes;
     size_t storage_alignment;
     /* Relocation cardinality and canonical target identities are owned by
      * references[] before reachability and must match materialized fragments

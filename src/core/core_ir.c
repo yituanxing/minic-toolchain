@@ -335,7 +335,7 @@ void minic_core_function_destroy(MinicCoreFunction *function) {
             for (resolved_index = 0U;
                  resolved_index < inline_asm->resolved_immediate_count &&
                      resolved_index < 3U; ++resolved_index)
-                free(inline_asm->resolved_immediates[resolved_index]);
+                free(inline_asm->resolved_immediates[resolved_index].symbol);
         }
         for (clobber_index = 0U; inline_asm->register_clobbers != NULL &&
                                   clobber_index < inline_asm->register_clobber_count;

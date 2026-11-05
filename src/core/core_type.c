@@ -35,9 +35,9 @@ MinicCoreTypeId minic_core_type_unqualified(const MinicCoreTypeContext *context,
     if (context == NULL) return MINIC_CORE_TYPE_INVALID;
     remaining = context->type_count;
     while ((type = minic_core_type_get(context, id)) != NULL &&
-           type->kind == MINIC_CORE_TYPE_QUALIFIED) {
+           type->kind == MINIC_CORE_TYPE_ALIGNED) {
         if (remaining-- == 0U) return MINIC_CORE_TYPE_INVALID;
-        id = type->value.qualified.base;
+        id = type->value.aligned.base;
     }
     return type != NULL ? id : MINIC_CORE_TYPE_INVALID;
 }
@@ -45,8 +45,6 @@ MinicCoreTypeId minic_core_type_unqualified(const MinicCoreTypeContext *context,
 static bool type_equal(const MinicCoreType *left, const MinicCoreType *right) {
     if (left->kind != right->kind || left->has_layout != right->has_layout ||
         left->size != right->size || left->alignment != right->alignment ||
-        left->is_volatile != right->is_volatile ||
-        left->is_read_only != right->is_read_only ||
         left->has_abi_alignment_override != right->has_abi_alignment_override)
         return false;
     switch (left->kind) {
@@ -70,8 +68,8 @@ static bool type_equal(const MinicCoreType *left, const MinicCoreType *right) {
         return left->value.vector.element == right->value.vector.element &&
                left->value.vector.element_count == right->value.vector.element_count &&
                left->value.vector.representation == right->value.vector.representation;
-    case MINIC_CORE_TYPE_QUALIFIED:
-        return left->value.qualified.base == right->value.qualified.base;
+    case MINIC_CORE_TYPE_ALIGNED:
+        return left->value.aligned.base == right->value.aligned.base;
     /* Record and opaque identities are nominal, not shape-interned. */
     case MINIC_CORE_TYPE_RECORD:
     case MINIC_CORE_TYPE_OPAQUE:
@@ -146,10 +144,10 @@ static bool type_references_valid(const MinicCoreTypeContext *context,
                 type->value.vector.representation == MINIC_CORE_VECTOR_REGISTER_VALUE);
     case MINIC_CORE_TYPE_OPAQUE:
         return !type->has_layout;
-    case MINIC_CORE_TYPE_QUALIFIED: {
-        const MinicCoreType *base = minic_core_type_get(context, type->value.qualified.base);
+    case MINIC_CORE_TYPE_ALIGNED: {
+        const MinicCoreType *base = minic_core_type_get(context, type->value.aligned.base);
         return base != NULL &&
-               (type->is_volatile || type->is_read_only || type->has_abi_alignment_override) &&
+               type->has_abi_alignment_override &&
                base->has_layout == type->has_layout &&
                base->size == type->size &&
                (base->alignment == type->alignment ||
@@ -199,7 +197,7 @@ bool minic_core_type_register(MinicCoreTypeContext *context,
     MinicCoreType *resized;
     size_t i;
     if (context == NULL || type == NULL || id == NULL ||
-        type->kind > MINIC_CORE_TYPE_QUALIFIED || !type_references_valid(context, type))
+        type->kind > MINIC_CORE_TYPE_ALIGNED || !type_references_valid(context, type))
         return false;
     if (type->kind != MINIC_CORE_TYPE_RECORD && type->kind != MINIC_CORE_TYPE_OPAQUE &&
         type->kind != MINIC_CORE_TYPE_FUNCTION)

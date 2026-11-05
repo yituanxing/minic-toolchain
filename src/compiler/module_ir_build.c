@@ -114,15 +114,13 @@ static bool module_scalar_width_valid(size_t width) {
 static bool module_sink_bits(void *context, MinicType source_type,
                              size_t width, uint64_t bits) {
     MinicCoreModuleFragment *fragment;
+    /* Core owns physical bytes, never the C signedness used to spell them.
+     * GNU decimal directive formatting is a target-serializer decision. */
+    (void)source_type;
     if (!module_scalar_width_valid(width)) return false;
     fragment = module_push_fragment(context, width, MINIC_CORE_MODULE_FRAGMENT_BITS);
     if (fragment == NULL) return false;
     fragment->bits = bits;
-    fragment->bits_signed_integer = width > 1U &&
-        !minic_type_is_float(source_type) &&
-        !minic_type_is_double(source_type) &&
-        !(minic_type_is_integer(source_type) &&
-          minic_type_is_unsigned_integer(source_type));
     return true;
 }
 
@@ -284,6 +282,23 @@ static bool module_capture_global_payload(MinicCoreModuleGlobal *destination,
     destination->default_section = plan.default_section;
     destination->storage_size = plan.storage_size;
     destination->storage_alignment = plan.storage_alignment;
+    if (source->flexible_array_initializer_count != 0U) {
+        const MinicCoreType *declared = minic_core_type_get(
+            importer->context, destination->core_type_id);
+        size_t extension_bytes;
+        /* Source DataLayout has already checked that this is a legal
+         * initialized flexible tail and computed its exact total extent.
+         * Publish only its physical storage unit, not the C record shape. */
+        if (declared == NULL || !declared->has_layout ||
+            plan.storage_size <= declared->size)
+            return false;
+        extension_bytes = plan.storage_size - declared->size;
+        if (extension_bytes % source->flexible_array_initializer_count != 0U)
+            return false;
+        destination->storage_extension_unit_bytes =
+            extension_bytes / source->flexible_array_initializer_count;
+        if (destination->storage_extension_unit_bytes == 0U) return false;
+    }
     sink.global = destination;
     sink.program = program;
     sink.target = target;

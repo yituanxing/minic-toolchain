@@ -857,41 +857,6 @@ bool core_inline_asm_symbolic_address_fact(
         context, expression_id, symbol, byte_addend, 0U);
 }
 
-static bool core_inline_asm_specialized_symbolic_text(
-    const MinicCoreLowerContext *context,
-    MinicExpressionId expression_id,
-    char *buffer,
-    size_t capacity,
-    const char **text_out,
-    size_t *length_out) {
-    const char *symbol;
-    int64_t addend;
-    int written;
-
-    if (buffer == NULL || capacity == 0U || text_out == NULL || length_out == NULL ||
-        !core_inline_asm_symbolic_address_fact(
-            context, expression_id, &symbol, &addend)) {
-        return false;
-    }
-    if (addend == 0) {
-        *text_out = symbol;
-        *length_out = strlen(symbol);
-        return *length_out != 0U;
-    }
-    written = snprintf(buffer,
-                       capacity,
-                       addend > 0 ? "%s+%" PRId64 : "%s%" PRId64,
-                       symbol,
-                       addend);
-    if (written < 0 || (size_t)written >= capacity) {
-        return false;
-    }
-    *text_out = buffer;
-    *length_out = (size_t)written;
-    return true;
-}
-
-
 static bool core_inline_asm_local_integer_fact_depth(
     const MinicCoreLowerContext *context,
     MinicExpressionId expression_id,
@@ -1026,20 +991,19 @@ static const char *core_inline_asm_specialized_symbolic_name(
     return core_inline_asm_specialized_symbolic_name_depth(context, expression_id, 0U);
 }
 
-bool core_inline_asm_immediate_text(
+bool core_inline_asm_immediate_fact(
     const MinicCoreLowerContext *context,
     const MinicInlineAsmOperand *operand,
-    char *integer_text,
-    size_t integer_capacity,
-    const char **text_out,
-    size_t *length_out) {
+    bool *is_symbol, int64_t *integer,
+    const char **symbol, int64_t *byte_addend) {
     MinicConstValue constant;
     int64_t value;
-    const char *symbol;
+    const char *resolved_symbol = NULL;
+    int64_t resolved_addend = 0;
 
     if (context == NULL || context->body == NULL || context->body->program == NULL ||
-        context->target == NULL || operand == NULL || integer_text == NULL ||
-        integer_capacity == 0U || text_out == NULL || length_out == NULL ||
+        context->target == NULL || operand == NULL || is_symbol == NULL ||
+        integer == NULL || symbol == NULL || byte_addend == NULL ||
         operand->access != MINIC_INLINE_ASM_OPERAND_READ_ONLY ||
         (!core_inline_asm_constraint_is(operand, "i") &&
          !core_inline_asm_constraint_is(operand, "I") &&
@@ -1056,14 +1020,10 @@ bool core_inline_asm_immediate_text(
         (!core_inline_asm_constraint_is(operand, "I") ||
          minic_target_info_inline_asm_immediate_constraint_supported(
              context->target, "I", 1U, value))) {
-        int written;
-
-        written = snprintf(integer_text, integer_capacity, "%" PRId64, value);
-        if (written < 0 || (size_t)written >= integer_capacity) {
-            return false;
-        }
-        *text_out = integer_text;
-        *length_out = (size_t)written;
+        *is_symbol = false;
+        *integer = value;
+        *symbol = NULL;
+        *byte_addend = 0;
         return true;
     }
     /* Compute expressions such as `1 << (feature & 7)` and `feature >> 3`
@@ -1076,10 +1036,10 @@ bool core_inline_asm_immediate_text(
         (!core_inline_asm_constraint_is(operand, "I") ||
          minic_target_info_inline_asm_immediate_constraint_supported(
              context->target, "I", 1U, value))) {
-        int written = snprintf(integer_text, integer_capacity, "%" PRId64, value);
-        if (written < 0 || (size_t)written >= integer_capacity) return false;
-        *text_out = integer_text;
-        *length_out = (size_t)written;
+        *is_symbol = false;
+        *integer = value;
+        *symbol = NULL;
+        *byte_addend = 0;
         return true;
     }
     /* Constraint I cannot accept an address even through transitive
@@ -1088,32 +1048,71 @@ bool core_inline_asm_immediate_text(
     if (core_inline_asm_constraint_is(operand, "I")) {
         return false;
     }
-    if (core_inline_asm_specialized_symbolic_text(
-            context,
-            operand->expression,
-            integer_text,
-            integer_capacity,
-            text_out,
-            length_out)) {
-        return true;
-    }
     if (core_inline_asm_constraint_is(operand, "rK") ||
         core_inline_asm_constraint_is(operand, "I")) {
         /* GNU I is numeric ISA data, never a relocatable address. */
         return false;
     }
-    symbol = core_inline_asm_symbolic_immediate_name(
-        context->body->program, context->target, operand->expression);
-    if (symbol == NULL) {
-        symbol = core_inline_asm_specialized_symbolic_name(
-            context, operand->expression);
+    if (!core_inline_asm_symbolic_address_fact(
+            context, operand->expression, &resolved_symbol,
+            &resolved_addend)) {
+        resolved_symbol = core_inline_asm_symbolic_immediate_name(
+            context->body->program, context->target, operand->expression);
+        if (resolved_symbol == NULL)
+            resolved_symbol = core_inline_asm_specialized_symbolic_name(
+                context, operand->expression);
     }
-    if (symbol == NULL) {
+    if (!minic_core_inline_asm_symbol_valid(resolved_symbol)) return false;
+    *is_symbol = true;
+    *integer = 0;
+    *symbol = resolved_symbol;
+    *byte_addend = resolved_addend;
+    return true;
+}
+
+bool core_inline_asm_immediate_text(
+    const MinicCoreLowerContext *context,
+    const MinicInlineAsmOperand *operand,
+    char *integer_text,
+    size_t integer_capacity,
+    const char **text_out,
+    size_t *length_out) {
+    bool is_symbol;
+    int64_t integer, byte_addend;
+    const char *symbol;
+    int written;
+    if (integer_text == NULL || integer_capacity == 0U ||
+        text_out == NULL || length_out == NULL ||
+        !core_inline_asm_immediate_fact(context, operand, &is_symbol,
+                                        &integer, &symbol, &byte_addend))
         return false;
+    if (is_symbol && byte_addend == 0) {
+        *text_out = symbol;
+        *length_out = strlen(symbol);
+        return true;
     }
-    *text_out = symbol;
-    *length_out = strlen(symbol);
-    return *length_out != 0U;
+    if (is_symbol) {
+        const MinicCoreInlineAsmImmediate witness = {
+            .kind = MINIC_CORE_INLINE_ASM_IMMEDIATE_SYMBOL,
+            .symbol = (char *)symbol,
+            .byte_addend = byte_addend
+        };
+        if (!minic_core_inline_asm_relocation_valid(&witness)) return false;
+        /* The source-only immediate-template specialization finishes as GNU
+         * text, whereas asm-goto publishes the typed witness to Core. */
+        written = snprintf(integer_text, integer_capacity,
+            byte_addend > 0 ? "%s+%" PRId64 : "%s%" PRId64,
+            symbol, byte_addend);
+        if (written < 0 || (size_t)written >= integer_capacity) return false;
+        *text_out = integer_text;
+        *length_out = (size_t)written;
+        return true;
+    }
+    written = snprintf(integer_text, integer_capacity, "%" PRId64, integer);
+    if (written < 0 || (size_t)written >= integer_capacity) return false;
+    *text_out = integer_text;
+    *length_out = (size_t)written;
+    return true;
 }
 
 static bool core_inline_asm_named_input_index(const MinicInlineAsm *source,

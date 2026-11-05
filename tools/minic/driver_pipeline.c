@@ -234,6 +234,11 @@ static int compile_c_to_assembly(const MinicDriverInvocation *invocation,
         arguments[argument_count++] = (char *)output;
         arguments[argument_count++] =
             function_sections ? "-ffunction-sections" : "-fno-function-sections";
+        /* A staged recipe qualifies CPP/AS/LD, but never changes the
+         * compiler's default target. Forward the catalog identity even
+         * while RV64 is the only fully staged registration. */
+        arguments[argument_count++] = "--target";
+        arguments[argument_count++] = (char *)invocation->target_name;
         if (march != NULL) {
             arguments[argument_count++] = "-march";
             arguments[argument_count++] = (char *)march;

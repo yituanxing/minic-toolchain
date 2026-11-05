@@ -5,7 +5,7 @@
 
 /* RV64 machine decisions consume the attached execution type exclusively.
  * Source MinicType descriptors have no authority after Core has been sealed.
- * Peeling qualifiers is shared by the ISA gate, frame and ABI classifiers. */
+ * Peeling physical alignment views is shared by ISA, frame and ABI gates. */
 static inline const MinicCoreType *minic_riscv64_core_base_type(
     const MinicCoreFunction *function, MinicCoreTypeId id) {
     if (function == NULL || function->type_context == NULL) return NULL;

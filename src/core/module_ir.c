@@ -316,41 +316,30 @@ static bool module_live_global_relocations_match(
     return reference_index == global->reference_count;
 }
 
-/* A live object owns precisely its typed extent. The sole extensible shape
- * is a complete, non-union record with a final incomplete array member:
- * those storage-only tail elements are materialized beyond sizeof(record).
- * This predicate consumes sealed Core types, never source initializer slots. */
+/* A live object owns its declared typed extent plus, when explicitly admitted
+ * by the producer, an integral number of trailing storage units. A Core
+ * producer expresses physical backing-storage extent directly; the Module
+ * verifier must not reconstruct source-language record/array rules. */
 static bool module_live_global_layout_valid(
     const MinicCoreTypeContext *types, const MinicCoreType *declared,
     const MinicCoreModuleGlobal *global) {
-    const MinicCoreType *base, *tail, *element;
-    const MinicCoreRecordField *last;
+    const MinicCoreType *base;
     if (types == NULL || declared == NULL || global == NULL ||
         !declared->has_layout || declared->alignment == 0U ||
         global->storage_alignment < declared->alignment)
         return false;
+    /* Qualified CoreType views cannot silently weaken base storage
+     * alignment, even when an explicit extension is present. */
     base = minic_core_type_get(types, minic_core_type_unqualified(
         types, global->core_type_id));
     if (base == NULL || !base->has_layout ||
         global->storage_alignment < base->alignment)
         return false;
-    if (global->storage_size == declared->size) return true;
-    if (global->storage_size < declared->size ||
-        base->kind != MINIC_CORE_TYPE_RECORD ||
-        !base->value.record.is_complete || base->value.record.is_union ||
-        base->value.record.field_count == 0U ||
-        base->value.record.fields == NULL)
-        return false;
-    last = &base->value.record.fields[base->value.record.field_count - 1U];
-    tail = minic_core_type_get(types, minic_core_type_unqualified(
-        types, last->type_id));
-    if (tail == NULL || tail->kind != MINIC_CORE_TYPE_ARRAY ||
-        tail->value.array.is_complete || tail->value.array.count != 0U)
-        return false;
-    element = minic_core_type_get(types, minic_core_type_unqualified(
-        types, tail->value.array.element));
-    return element != NULL && element->has_layout && element->size != 0U &&
-        (global->storage_size - declared->size) % element->size == 0U;
+    if (global->storage_extension_unit_bytes == 0U)
+        return global->storage_size == declared->size;
+    return global->storage_size > declared->size &&
+        (global->storage_size - declared->size) %
+            global->storage_extension_unit_bytes == 0U;
 }
 
 /* Check the one sealed physical data policy. ZERO_NUMERIC may contain
@@ -403,8 +392,11 @@ static bool module_verify_global_one(const MinicCoreModule *module,
         (global->definition_kind == MINIC_CORE_MODULE_DEFINITION_DECLARATION &&
          global->data_policy != MINIC_CORE_MODULE_DATA_MATERIALIZED) ||
         (global->definition_kind == MINIC_CORE_MODULE_DEFINITION_DECLARATION &&
-         (global->storage_size != 0U || global->storage_alignment != 0U ||
+         (global->storage_size != 0U || global->storage_extension_unit_bytes != 0U ||
+          global->storage_alignment != 0U ||
           global->reference_count != 0U || global->fragment_count != 0U)) ||
+        (global->definition_kind == MINIC_CORE_MODULE_DEFINITION_ZERO_FILL &&
+         global->storage_extension_unit_bytes != 0U) ||
         (global->reference_count != 0U && global->references == NULL) ||
         (global->owner_function_index != SIZE_MAX &&
          global->owner_function_index >= module->function_count))

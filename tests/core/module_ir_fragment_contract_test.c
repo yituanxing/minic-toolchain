@@ -536,37 +536,59 @@ static int verify_source_free_global_definition_contract(
 
     object->core_type_id = flexible_id;
     object->storage_alignment = 8U;
+    object->storage_extension_unit_bytes = 4U;
     object->fragments = &zero;
     object->fragment_count = 1U;
     zero.byte_count = object->storage_size = 20U;
     CHECK(minic_core_module_verify(&module), 135); /* 8 + 3 int tail */
-    qualified.kind = MINIC_CORE_TYPE_QUALIFIED;
+    object->storage_extension_unit_bytes = 0U;
+    CHECK(!minic_core_module_verify(&module), 191); /* Core infers no C tail */
+    object->storage_extension_unit_bytes = 4U;
+    qualified.kind = MINIC_CORE_TYPE_ALIGNED;
     qualified.has_layout = true;
     qualified.size = 8U;
-    qualified.alignment = 8U;
-    qualified.is_read_only = true;
-    qualified.value.qualified.base = flexible_id;
+    qualified.alignment = 16U;
+    qualified.has_abi_alignment_override = true;
+    qualified.value.aligned.base = flexible_id;
     CHECK(minic_core_type_register(types, &qualified, &qualified_record_id), 154);
     object->core_type_id = qualified_record_id;
-    CHECK(minic_core_module_verify(&module), 155); /* const qualified record */
+    object->storage_alignment = 16U;
+    CHECK(minic_core_module_verify(&module), 155); /* aligned storage view */
     qualified.has_layout = false;
     qualified.size = 0U;
     qualified.alignment = 0U;
-    qualified.value.qualified.base = incomplete_id;
+    qualified.value.aligned.base = incomplete_id;
     CHECK(minic_core_type_register(types, &qualified, &qualified_tail_id), 156);
     members[1].type_id = qualified_tail_id;
     CHECK(minic_core_type_register(types, &flexible, &qualified_flexible_id), 157);
     object->core_type_id = qualified_flexible_id;
     CHECK(minic_core_module_verify(&module), 158); /* qualified FAM field */
     object->core_type_id = flexible_id;
+    object->storage_alignment = 8U;
     zero.byte_count = object->storage_size = 18U;
     CHECK(!minic_core_module_verify(&module), 136); /* partial tail element */
     zero.byte_count = object->storage_size = 4U;
     CHECK(!minic_core_module_verify(&module), 137); /* less than record */
 
+    /* A source-free Core producer explicitly grants ordinary backing-store
+     * extension. No C record kind or source flexible-member flag is read. */
     object->core_type_id = word_id;
     object->storage_alignment = 4U;
+    zero.byte_count = object->storage_size = 12U;
+    CHECK(minic_core_module_verify(&module), 192); /* 4 + two 4-byte units */
+    object->storage_extension_unit_bytes = 3U;
+    CHECK(!minic_core_module_verify(&module), 193); /* nonintegral unit count */
+    object->storage_extension_unit_bytes = 0U;
+    CHECK(!minic_core_module_verify(&module), 194); /* exact extent required */
+    object->storage_extension_unit_bytes = 4U;
+    object->definition_kind = MINIC_CORE_MODULE_DEFINITION_ZERO_FILL;
+    object->data_policy = MINIC_CORE_MODULE_DATA_ZERO_ONLY;
+    CHECK(!minic_core_module_verify(&module), 195); /* zero-fill must be exact */
+    object->definition_kind = MINIC_CORE_MODULE_DEFINITION_REGULAR;
+    object->data_policy = MINIC_CORE_MODULE_DATA_MATERIALIZED;
     object->storage_size = 4U;
+    object->storage_extension_unit_bytes = 0U;
+    zero.byte_count = 4U;
     CHECK(minic_core_module_verify(&module), 138); /* reset zero scalar */
     object->definition_kind = MINIC_CORE_MODULE_DEFINITION_ZERO_FILL;
     object->data_policy = MINIC_CORE_MODULE_DATA_ZERO_ONLY;
@@ -840,6 +862,6 @@ int main(void) {
     symbols[0].name = NULL;
     CHECK(!minic_core_module_verify(&module), 19);
     minic_core_type_context_destroy(&types);
-    puts("CORE_MODULE_FRAGMENT_CONTRACT=PASS bounds forms names alias-index=14 clone_provenance=8 forged_owner_label=5 label_bindings=8 name_range=9 emitted_elf_namespace=18 canonical_source=valid relocation_edge_identity=9 source_free_zero_facts=3 typed_extent=13 definition_flags=16");
+    puts("CORE_MODULE_FRAGMENT_CONTRACT=PASS bounds forms names alias-index=14 clone_provenance=8 forged_owner_label=5 label_bindings=8 name_range=9 emitted_elf_namespace=18 canonical_source=valid relocation_edge_identity=9 source_free_zero_facts=3 typed_extent=18 definition_flags=16");
     return 0;
 }

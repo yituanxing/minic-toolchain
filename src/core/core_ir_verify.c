@@ -310,16 +310,6 @@ static bool core_is_unsigned_integer(const MinicCoreFunction *function,
            !type->value.integer.is_signed;
 }
 
-static bool core_is_writable(const MinicCoreFunction *function, MinicCoreTypeId id) {
-    const MinicCoreType *type = minic_core_function_type_get(function, id);
-    return type != NULL && !type->is_read_only;
-}
-
-static bool core_is_volatile(const MinicCoreFunction *function, MinicCoreTypeId id) {
-    const MinicCoreType *type = minic_core_function_type_get(function, id);
-    return type != NULL && type->is_volatile;
-}
-
 static bool core_equal(MinicCoreTypeId a, MinicCoreTypeId b) { return a == b; }
 
 static bool core_equal_unqualified(const MinicCoreFunction *function,
@@ -459,8 +449,6 @@ static bool core_bitcast_types_valid(const MinicCoreFunction *function,
 #define ct_is_long_double(id) core_is_float_format(function, (id), MINIC_CORE_FLOAT_EXTENDED)
 #define ct_is_vector_register_value(id) core_is_register_value_vector(function, (id))
 #define ct_is_vector_storage_only(id) core_is_storage_only_vector(function, (id))
-#define ct_is_const(id) (!core_is_writable(function, (id)))
-#define ct_is_volatile(id) core_is_volatile(function, (id))
 #define ct_equal(a, b) core_equal((a), (b))
 #define ct_unqualified(id, out) core_unqualified_out(function, (id), (out))
 #define ct_pointee(id, out) core_pointee(function, (id), (out))
@@ -625,8 +613,7 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
             !ct_pointee(
                 function->values[instruction->value.integer_overflow.result_address].core_type_id,
                 &result_type) ||
-            !ct_is_integer(result_type) || ct_is_bool_integer(result_type) ||
-            ct_is_const(result_type) || ct_is_volatile(result_type)) {
+            !ct_is_integer(result_type) || ct_is_bool_integer(result_type)) {
             return false;
         }
         left = &function->values[instruction->value.integer_overflow.left];
@@ -905,8 +892,7 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
             !ct_unqualified(pointee, &value_type)) {
             return false;
         }
-        return ct_equal(value_type, instruction->core_type_id) &&
-               instruction->value.load.is_volatile == ct_is_volatile(pointee);
+        return ct_equal(value_type, instruction->core_type_id);
     }
     case MINIC_CORE_INSTRUCTION_ATOMIC_LOAD: {
         MinicCoreTypeId pointee, value_type;
@@ -947,11 +933,10 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
             return false;
         }
         return ct_unqualified(function->values[stored_value].core_type_id, &stored_type) &&
-               ct_equal(value_type, stored_type) &&
-               instruction->value.store.is_volatile == ct_is_volatile(pointee);
+               ct_equal(value_type, stored_type);
     }
-    /* BATCH_M_RECORD_LOAD: source qualification is semantic metadata.  The
-       destination is an unqualified private snapshot object. */
+    /* Record load effects are instruction properties. The destination is
+     * a private Core snapshot independent of any source access policy. */
     case MINIC_CORE_INSTRUCTION_RECORD_LOAD: {
         MinicCoreObjectId destination_object;
         MinicCoreTypeId source_pointee;
@@ -968,13 +953,11 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
                                          instruction->value.record_load.source_address,
                                          &source_pointee) &&
                core_record_storage_matches(function, source_pointee,
-                                           instruction->core_type_id) &&
-               instruction->value.record_load.is_volatile ==
-                   ct_is_volatile(source_pointee);
+                                           instruction->core_type_id);
     }
-    /* M80_ADDRESS_BACKED_RECORD_COPY: both SSA operands are addresses to the
-       same unqualified record type; legality of writing a const-qualified
-       destination is already established by the frontend initializer/copy node. */
+    /* Address-backed copies require matching physical record storage;
+     * write eligibility belongs to the source ingress, while both memory
+     * effects travel on the instruction itself. */
     case MINIC_CORE_INSTRUCTION_RECORD_COPY: {
         MinicCoreTypeId destination_pointee;
         MinicCoreTypeId source_pointee;
@@ -1010,9 +993,8 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
                    function, available_values,
                    instruction->value.vector_storage_copy.source_address,
                    &source_pointee) &&
-               !ct_is_const(destination_pointee) &&
-               !ct_is_volatile(destination_pointee) &&
-               !ct_is_volatile(source_pointee) &&
+               !instruction->value.vector_storage_copy.destination_volatile &&
+               !instruction->value.vector_storage_copy.source_volatile &&
                ct_unqualified(destination_pointee, &destination_type) &&
                ct_unqualified(source_pointee, &source_type) &&
                ct_equal(destination_type, instruction->core_type_id) &&
@@ -1026,8 +1008,7 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
                ct_equal(instruction->core_type_id, unqualified) &&
                available_pointer_pointee(function, available_values,
                    instruction->value.load.address, &pointee) &&
-               vector128_memory_pointee(function, instruction->core_type_id, pointee) &&
-               instruction->value.load.is_volatile == ct_is_volatile(pointee);
+               vector128_memory_pointee(function, instruction->core_type_id, pointee);
     }
     case MINIC_CORE_INSTRUCTION_FIXED_VECTOR128_STORE: {
         MinicCoreTypeId pointee;
@@ -1038,10 +1019,8 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
                ct_is_vector_register_value(function->values[value].core_type_id) &&
                available_pointer_pointee(function, available_values,
                    instruction->value.store.address, &pointee) &&
-               !ct_is_const(pointee) &&
                vector128_memory_pointee(function, function->values[value].core_type_id,
-                                        pointee) &&
-               instruction->value.store.is_volatile == ct_is_volatile(pointee);
+                                        pointee);
     }
     case MINIC_CORE_INSTRUCTION_FIXED_VECTOR128_XOR:
         if (!instruction_result_is_valid(function, instruction) ||
@@ -1070,20 +1049,38 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
         if (inline_asm->is_goto &&
             inline_asm->goto_target >= function->block_count)
             return false;
-        /* Link-time symbolic immediates in qualified asm-goto are owned by
-         * Core, regardless of whether the machine template has one or two
-         * C labels. Every recorded slot must be a real, nonempty string;
-         * partial materialization is not a valid target contract. */
+        /* The C admission boundary publishes either a signed integer or an
+         * ELF symbol with a signed byte addend. Never admit source-formatted
+         * numeric/relocation text for the machine to parse again. */
         if (inline_asm->resolved_immediate_count != 0U) {
             size_t i;
             if (!inline_asm->is_goto ||
                 inline_asm->goto_target >= function->block_count ||
                 inline_asm->resolved_immediate_count > 3U)
                 return false;
-            for (i = 0U; i < inline_asm->resolved_immediate_count; ++i)
-                if (!inline_asm->resolved_immediates[i] ||
-                    inline_asm->resolved_immediates[i][0] == '\0')
+            for (i = 0U; i < inline_asm->resolved_immediate_count; ++i) {
+                const MinicCoreInlineAsmImmediate *value =
+                    &inline_asm->resolved_immediates[i];
+                if ((value->kind == MINIC_CORE_INLINE_ASM_IMMEDIATE_INTEGER &&
+                     value->symbol == NULL && value->byte_addend == 0) ||
+                    (value->kind == MINIC_CORE_INLINE_ASM_IMMEDIATE_SYMBOL &&
+                     minic_core_inline_asm_relocation_valid(value))) {
+                    continue;
+                }
+                return false;
+            }
+        }
+        {
+            size_t i;
+            if (inline_asm->resolved_immediate_count > 3U) return false;
+            for (i = inline_asm->resolved_immediate_count; i < 3U; ++i) {
+                const MinicCoreInlineAsmImmediate *value =
+                    &inline_asm->resolved_immediates[i];
+                if (value->kind != MINIC_CORE_INLINE_ASM_IMMEDIATE_INVALID ||
+                    value->symbol != NULL || value->integer != 0 ||
+                    value->byte_addend != 0)
                     return false;
+            }
         }
         if (inline_asm->goto_second_target != MINIC_CORE_BLOCK_INVALID) {
             if (!inline_asm->is_goto ||
@@ -1200,8 +1197,6 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
             case MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE:
                 if (!available_pointer_pointee(
                         function, available_values, binding->value, &pointee) ||
-                    (binding->kind != MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT &&
-                     ct_is_const(pointee)) ||
                     !ct_unqualified(pointee, &value_type) ||
                     /* A GNU memory operand denotes an addressable storage
                      * region, not necessarily a scalar value. Linux's
@@ -1481,11 +1476,8 @@ static bool terminator_is_valid(const MinicCoreFunction *function,
             return terminator->return_value == MINIC_CORE_VALUE_INVALID;
         }
         if (ct_is_record(minic_core_function_return_type(function))) {
-            /* Returning a const-qualified LOCAL record copies its value.
-             * C discards top-level qualifiers on the returned rvalue, not
-             * nested member or pointee qualifiers. The Core return object
-             * can still be the original const local; require exact record
-             * identity after removing only that top-level qualifier. */
+            /* Return the same execution record identity. The private
+             * Core object may have an independent aligned storage view. */
             return terminator->return_value == MINIC_CORE_VALUE_INVALID &&
                    terminator->return_object < function->object_count &&
                    core_record_storage_matches(function,

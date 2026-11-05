@@ -79,11 +79,30 @@ int main(void) {
     fragments[0].byte_offset = 0U;
     fragments[0].byte_count = 4U;
     fragments[0].bits = UINT64_C(0xffffffff);
-    fragments[0].bits_signed_integer = true;
     global.storage_size = 4U;
     global.fragment_count = 1U;
     if (!emitted_matches(&global, 0U, "  .4byte -1\n", true, true)) return 7;
+    /* The same physical payload must serialize under both GNU dialects,
+     * regardless of whether the C producer used signed, unsigned or float.
+     * No source-type hint exists in the immutable Core fragment. */
+    if (!emitted_matches(&global, 0U, "  .4byte 4294967295\n", true, false))
+        return 17;
+    fragments[0].bits = UINT64_C(0x80000000);
+    if (!emitted_matches(&global, 0U, "  .4byte -2147483648\n", true, true) ||
+        !emitted_matches(&global, 0U, "  .4byte 2147483648\n", true, false))
+        return 18;
+    fragments[0].byte_count = global.storage_size = 2U;
+    fragments[0].bits = UINT64_C(0xffff);
+    if (!emitted_matches(&global, 0U, "  .2byte -1\n", true, true) ||
+        !emitted_matches(&global, 0U, "  .2byte 65535\n", true, false))
+        return 19;
+    fragments[0].byte_count = global.storage_size = 8U;
+    fragments[0].bits = UINT64_MAX;
+    if (!emitted_matches(&global, 0U, "  .8byte -1\n", true, true) ||
+        !emitted_matches(&global, 0U, "  .8byte 18446744073709551615\n", true, false))
+        return 20;
     fragments[0].byte_count = 1U;
+    fragments[0].bits = UINT64_C(0x1ff);
     global.storage_size = 1U;
     if (!emitted_matches(&global, 0U, "  .byte 255\n", true, true)) return 8;
     fragments[0].kind = MINIC_CORE_MODULE_FRAGMENT_RELOCATION;
@@ -145,6 +164,6 @@ int main(void) {
         }
         free(text);
     }
-    puts("MODULE_GLOBAL_FRAGMENTS=PASS zero bits signed reloc label strict_layout ELF_section physical_nobits=5");
+    puts("MODULE_GLOBAL_FRAGMENTS=PASS zero bits source_neutral_signed_dialect widths=1,2,4,8 reloc label strict_layout ELF_section physical_nobits=5");
     return 0;
 }

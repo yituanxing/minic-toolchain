@@ -116,10 +116,10 @@ static bool import_record(MinicCoreTypeImporter *importer, MinicType source,
     type.value.record.has_nondefault_layout_policy =
         record->is_packed || record->pack_alignment != 0U ||
         record->explicit_alignment != 0U;
-    /* The C record already has a complete DataLayout even though Core's
-     * recursive member graph must be populated in two phases. Seed that
-     * layout before publishing provisional identity so pointer-to-const
-     * self references receive the final size/alignment in their wrapper. */
+    /* The source record already has a complete DataLayout even though Core's
+     * recursive member graph must be populated in two phases. Seed the layout
+     * before publishing provisional identity so even pointer-to-qualified
+     * self references resolve to the same final Core storage identity. */
     if (record->is_complete && !source_layout(importer, source, &type))
         return false;
     /* The provisional identity is visible before importing any member. This
@@ -356,18 +356,22 @@ static bool import_type(MinicCoreTypeImporter *importer, MinicType source,
          * top-level storage-alignment wrapper here. */
         if (source.pointer_depth == 0U)
             unqualified.explicit_alignment = 0U;
-        if (!import_type(importer, unqualified, &type.value.qualified.base, depth + 1U))
+        if (!import_type(importer, unqualified, &type.value.aligned.base, depth + 1U))
             return false;
-        base = minic_core_type_get(importer->context, type.value.qualified.base);
+        base = minic_core_type_get(importer->context, type.value.aligned.base);
         if (base == NULL) return false;
-        type.kind = MINIC_CORE_TYPE_QUALIFIED;
+        type.has_abi_alignment_override = source.explicit_alignment != 0U &&
+                                          source.pointer_depth == 0U;
+        /* Source cv belongs to the C ingress. Only an ABI-visible alignment
+         * difference survives as a Core physical storage view. */
+        if (!type.has_abi_alignment_override) {
+            *result = type.value.aligned.base;
+            return true;
+        }
+        type.kind = MINIC_CORE_TYPE_ALIGNED;
         type.has_layout = base->has_layout;
         type.size = base->size;
         type.alignment = base->alignment;
-        type.is_volatile = minic_type_is_volatile(source);
-        type.is_read_only = minic_type_is_const(source);
-        type.has_abi_alignment_override = source.explicit_alignment != 0U &&
-                                          source.pointer_depth == 0U;
         if (type.has_abi_alignment_override && type.has_layout) {
             if (!minic_data_layout_type(importer->invocation, importer->program,
                                         source, &size, &alignment) || size != type.size)

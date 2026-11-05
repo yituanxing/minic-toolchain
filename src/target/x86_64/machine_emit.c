@@ -8,6 +8,7 @@
 #include "target/common/direct_residual_plan.h"
 #include "target/common/direct_instruction_semantics.h"
 #include "target/common/lp64_scalar.h"
+#include "target/common/linux_jump_label_asm.h"
 #include "target/x86_64/abi.h"
 #include "target/x86_64/asm_contract.h"
 #include <inttypes.h>
@@ -199,35 +200,6 @@ static bool x86_head_load_memory_address(
         out, fn, frame, address, "%r10", "%r11");
 }
 
-/* Qualified GNU `i` symbolic operands are resolved by Common Core. Every
- * machine consumer shares this fail-closed relocation validator: a symbol
- * with an optional signed decimal addend is representable by ELF, whereas
- * a register, expression, assembler directive or string interpolation is
- * not. This validation runs before anything is written to the output. */
-static bool x86_asm_symbol_relocation_valid(const char *text) {
-    size_t i, length;
-    if (!text) return false;
-    length = strlen(text);
-    if (length == 0U || length > 128U ||
-        !((text[0] >= 'a' && text[0] <= 'z') ||
-          (text[0] >= 'A' && text[0] <= 'Z') ||
-          text[0] == '_' || text[0] == '.')) return false;
-    for (i = 1U; i < length; ++i) {
-        const char ch = text[i];
-        if ((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') ||
-            (ch >= '0' && ch <= '9') || ch == '_' || ch == '.' || ch == '$')
-            continue;
-        if ((ch == '+' || ch == '-') && i + 1U < length) {
-            size_t j;
-            for (j = i + 1U; j < length; ++j)
-                if (text[j] < '0' || text[j] > '9') return false;
-            break;
-        }
-        return false;
-    }
-    return true;
-}
-
 /* Linux's bundled ZSTD decoder places four progressively narrower GNU
  * basic-asm alignments around an explicitly padded hot loop.  A basic asm
  * `nop` is part of that same source sequence.  Match the entire text and
@@ -261,8 +233,8 @@ static unsigned int x86_linux_zstd_loop_padding_form(
 static bool emit_linux_jump_label_asm_goto(
     FILE *out, const MinicCoreFunction *fn, const MinicCoreInlineAsm *a,
     size_t function_id) {
-    unsigned long long flags;
-    char *end;
+    char key_relocation[129];
+    uint64_t flags;
     if (!out || !fn || !a || !a->is_goto || !a->is_volatile ||
         a->has_memory_clobber || a->register_clobber_count != 0U ||
         a->resolved_immediate_count != 2U ||
@@ -270,12 +242,15 @@ static bool emit_linux_jump_label_asm_goto(
         a->goto_second_target != MINIC_CORE_BLOCK_INVALID ||
         !minic_x86_64_linux_jump_label_form(
             a->template_text, a->template_length) ||
-        !a->resolved_immediates[1] ||
-        !x86_asm_symbol_relocation_valid(a->resolved_immediates[0]))
+        !minic_multi_linux_jump_relocation_text(
+            &a->resolved_immediates[0], key_relocation,
+            sizeof(key_relocation)) ||
+        a->resolved_immediates[1].kind !=
+            MINIC_CORE_INLINE_ASM_IMMEDIATE_INTEGER ||
+        a->resolved_immediates[1].integer < 0 ||
+        a->resolved_immediates[1].integer > 3)
         return false;
-    flags = strtoull(a->resolved_immediates[1], &end, 10);
-    if (end == a->resolved_immediates[1] || *end != '\0' || flags > 3ULL)
-        return false;
+    flags = (uint64_t)a->resolved_immediates[1].integer;
     return fprintf(out,
         "1: jmp .Lmini_x86_f%zu_b%u\n"
         "  .pushsection __jump_table,\"aw\"\n"
@@ -286,7 +261,7 @@ static bool emit_linux_jump_label_asm_goto(
         "  .popsection\n",
         function_id, (unsigned)a->goto_target,
         function_id, (unsigned)a->goto_target,
-        a->resolved_immediates[0], flags) >= 0;
+        key_relocation, (unsigned long long)flags) >= 0;
 }
 
 /* Linux _static_cpu_has: the two real C destinations are represented in
@@ -298,8 +273,8 @@ static bool emit_linux_cpu_has_asm_goto(
     FILE *out, const MinicCoreFunction *fn, const MinicCoreInlineAsm *a,
     size_t function_id) {
     const char *text, *end;
-    unsigned long long feature, mask;
-    char *parsed;
+    uint64_t feature, mask;
+    char boot_cpu_relocation[129];
     if (!out || !fn || !a || !a->is_goto || !a->is_volatile ||
         a->has_memory_clobber || a->register_clobber_count != 0U ||
         a->resolved_immediate_count != 3U ||
@@ -308,18 +283,19 @@ static bool emit_linux_cpu_has_asm_goto(
         a->goto_target == a->goto_second_target ||
         !minic_x86_64_linux_cpu_has_goto_form(
             a->template_text, a->template_length) ||
-        !a->resolved_immediates[0] || !a->resolved_immediates[1] ||
-        !a->resolved_immediates[2]) return false;
-    feature = strtoull(a->resolved_immediates[0], &parsed, 10);
-    if (parsed == a->resolved_immediates[0] || *parsed || feature > 65535U)
-        return false;
-    mask = strtoull(a->resolved_immediates[1], &parsed, 10);
-    if (parsed == a->resolved_immediates[1] || *parsed ||
-        mask != (1ULL << (feature & 7ULL))) return false;
-    /* Relocations must identify a *single* compiler-resolved symbol with an
-     * optional decimal addend. No assembler expression, dereference, '@',
-     * semicolon, parentheses or alternate section can enter through %P. */
-    if (!x86_asm_symbol_relocation_valid(a->resolved_immediates[2]))
+        a->resolved_immediates[0].kind !=
+            MINIC_CORE_INLINE_ASM_IMMEDIATE_INTEGER ||
+        a->resolved_immediates[0].integer < 0 ||
+        a->resolved_immediates[0].integer > 65535 ||
+        a->resolved_immediates[1].kind !=
+            MINIC_CORE_INLINE_ASM_IMMEDIATE_INTEGER ||
+        a->resolved_immediates[1].integer < 0 ||
+        !minic_multi_linux_jump_relocation_text(
+            &a->resolved_immediates[2], boot_cpu_relocation,
+            sizeof(boot_cpu_relocation))) return false;
+    feature = (uint64_t)a->resolved_immediates[0].integer;
+    mask = (uint64_t)a->resolved_immediates[1].integer;
+    if (mask != (1ULL << (feature & 7ULL)))
         return false;
     text = strstr(a->template_text, ".skip ");
     end = text ? strchr(text, '\n') : NULL;
@@ -354,8 +330,8 @@ static bool emit_linux_cpu_has_asm_goto(
         "  jnz .Lmini_x86_f%zu_b%u\n"
         "  jmp .Lmini_x86_f%zu_b%u\n"
         "  .popsection\n",
-        feature, function_id, (unsigned)a->goto_second_target,
-        mask, a->resolved_immediates[2],
+        (unsigned long long)feature, function_id, (unsigned)a->goto_second_target,
+        (unsigned long long)mask, boot_cpu_relocation,
         function_id, (unsigned)a->goto_target,
         function_id, (unsigned)a->goto_second_target) >= 0;
 }
@@ -376,7 +352,7 @@ static bool x86_emit_mixed_integer_overflow(
     const MinicCoreValueId rhs = ins->value.integer_overflow.right;
     const MinicCoreValueId address = ins->value.integer_overflow.result_address;
     MinicCoreTypeId result_type;
-    const MinicCoreType *result_qualified, *result;
+    const MinicCoreType *result;
     size_t lhs_width, rhs_width, result_width;
     bool lhs_signed, rhs_signed, result_signed;
     const char *lhs_extension, *rhs_extension, *result_extension, *store;
@@ -384,8 +360,6 @@ static bool x86_emit_mixed_integer_overflow(
         ins->result >= fn->value_count || lhs >= fn->value_count ||
         rhs >= fn->value_count || address >= fn->value_count ||
         !x86_emit_core_pointee(fn, fn->values[address].core_type_id, &result_type) ||
-        (result_qualified = minic_core_type_get(fn->type_context, result_type)) == NULL ||
-        result_qualified->is_read_only || result_qualified->is_volatile ||
         (result = x86_emit_core_type(fn, result_type)) == NULL ||
         result->kind != MINIC_CORE_TYPE_INTEGER ||
         result->value.integer.is_bool ||
@@ -1019,7 +993,7 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicCoreModule *module
          * using exact byte-wise reads, including volatile source bytes.
          * This mirrors the common DirectLP64 record-load contract. */
         MinicCoreTypeId source_pointee;
-        const MinicCoreType *record, *source_type;
+        const MinicCoreType *record;
         size_t extent;
         const MinicCoreObjectId dest =
             ins->value.record_load.destination_object;
@@ -1038,9 +1012,6 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicCoreModule *module
                  fn->objects[dest].core_type_id, ins->core_type_id) ||
             (record = x86_emit_core_type(fn, ins->core_type_id)) == NULL ||
             !record->has_layout || record->alignment == 0U ||
-            (source_type = minic_core_type_get(fn->type_context,
-                                              source_pointee)) == NULL ||
-            ins->value.record_load.is_volatile != source_type->is_volatile ||
             frame->object_storage.objects == NULL ||
             (extent = record->size) > frame->object_storage.objects[dest].extent ||
             !x86_head_load_memory_address_into(
@@ -1091,7 +1062,7 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicCoreModule *module
     }
     case MINIC_CORE_INSTRUCTION_VECTOR_STORAGE_COPY: {
         MinicCoreTypeId dst_pointee, src_pointee;
-        const MinicCoreType *vector, *dst_type, *src_type;
+        const MinicCoreType *vector;
         const MinicCoreValueId dst =
             ins->value.vector_storage_copy.destination_address;
         const MinicCoreValueId src =
@@ -1108,10 +1079,8 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicCoreModule *module
                                    &dst_pointee) ||
             !x86_emit_core_pointee(fn, fn->values[src].core_type_id,
                                    &src_pointee) ||
-            (dst_type = minic_core_type_get(fn->type_context, dst_pointee)) == NULL ||
-            (src_type = minic_core_type_get(fn->type_context, src_pointee)) == NULL ||
-            dst_type->is_read_only || dst_type->is_volatile ||
-            src_type->is_volatile ||
+            ins->value.vector_storage_copy.destination_volatile ||
+            ins->value.vector_storage_copy.source_volatile ||
             !minic_lp64_core_equal_unqualified(fn->type_context,
                 dst_pointee, ins->core_type_id) ||
             !minic_lp64_core_equal_unqualified(fn->type_context,

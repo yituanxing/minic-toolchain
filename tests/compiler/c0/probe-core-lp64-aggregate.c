@@ -158,8 +158,8 @@ int main(void) {
     CHECK(record(&ctx, 2049U, 8U, fields, 1U, false, 0U, 0U, &huge_record));
     CHECK(!minic_multi_indirect_record_core(&ctx, huge_record, &bytes));
     type = (MinicCoreType){0};
-    type.kind = MINIC_CORE_TYPE_QUALIFIED;
-    type.value.qualified.base = big_record;
+    type.kind = MINIC_CORE_TYPE_ALIGNED;
+    type.value.aligned.base = big_record;
     type.has_layout = true;
     type.size = 24U;
     type.alignment = 16U;

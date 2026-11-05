@@ -221,7 +221,7 @@ bool minic_multi_direct_record_load_extent(
     MinicCoreValueId *source, size_t *object_offset, size_t *bytes) {
     MinicCoreObjectId dst;
     MinicCoreTypeId pointee_id;
-    const MinicCoreType *source_type, *record;
+    const MinicCoreType *record;
     if (!fn || fn->type_context == NULL ||
         !ins || !frame_plan ||
         !source || !object_offset || !bytes ||
@@ -237,8 +237,6 @@ bool minic_multi_direct_record_load_extent(
         !direct_core_pointer_pointee(fn, fn->values[*source].core_type_id,
                                      &pointee_id) ||
         !direct_core_equal_unqualified(fn, pointee_id, ins->core_type_id) ||
-        (source_type = minic_core_type_get(fn->type_context, pointee_id)) == NULL ||
-        ins->value.record_load.is_volatile != source_type->is_volatile ||
         !minic_lp64_frame_plan_object(frame_plan, dst, object_offset) ||
         (record = direct_core_type(fn, ins->core_type_id)) == NULL ||
         record->kind != MINIC_CORE_TYPE_RECORD || !record->has_layout ||

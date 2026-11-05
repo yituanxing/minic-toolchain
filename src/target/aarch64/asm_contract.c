@@ -183,11 +183,15 @@ bool minic_aarch64_linux_jump_label_asm_goto_core(
 bool minic_aarch64_emit_linux_jump_label_asm_goto(
     FILE *out, const MinicCoreInlineAsm *source,
     size_t function_id, size_t function_blocks) {
+    char key_relocation[129];
     unsigned int form = source != NULL
         ? aarch64_linux_jump_label_form(source->template_text,
                                         source->template_length) : 0U;
     if (out == NULL || form == 0U ||
         !minic_aarch64_linux_jump_label_asm_goto_core(source) ||
+        !minic_multi_linux_jump_relocation_text(
+            &source->resolved_immediates[0],
+            key_relocation, sizeof(key_relocation)) ||
         source->goto_target >= function_blocks) return false;
     if (form == 1U) {
         if (fputs("1: nop\n", out) == EOF) return false;
@@ -202,7 +206,7 @@ bool minic_aarch64_emit_linux_jump_label_asm_goto(
         "  .quad %s - .\n"
         "  .popsection\n",
         function_id, (unsigned int)source->goto_target,
-        source->resolved_immediates[0]) >= 0;
+        key_relocation) >= 0;
 }
 
 /* Linux 6.6 arch/arm64/include/asm/alternative-macros.h.

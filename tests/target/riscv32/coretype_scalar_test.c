@@ -98,12 +98,12 @@ static int run(void) {
     REQUIRE(register_float(&types, 4U, &f32));
     REQUIRE(register_float(&types, 8U, &f64));
     REQUIRE(register_pointer(&types, s32, &pointer));
-    qualifier.kind = MINIC_CORE_TYPE_QUALIFIED;
+    qualifier.kind = MINIC_CORE_TYPE_ALIGNED;
     qualifier.has_layout = true;
     qualifier.size = 4U;
-    qualifier.alignment = 4U;
-    qualifier.is_volatile = true;
-    qualifier.value.qualified.base = pointer;
+    qualifier.alignment = 8U;
+    qualifier.has_abi_alignment_override = true;
+    qualifier.value.aligned.base = pointer;
     REQUIRE(minic_core_type_register(&types, &qualifier, &qualified_pointer));
     record.kind = MINIC_CORE_TYPE_RECORD;
     record.has_layout = false;

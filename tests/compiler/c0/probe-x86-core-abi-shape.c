@@ -144,19 +144,19 @@ int main(void) {
     REQUIRE(!minic_x86_64_core_record_abi_compatible(&context, one, small));
 
     (void)memset(&type, 0, sizeof(type));
-    type.kind = MINIC_CORE_TYPE_QUALIFIED;
+    type.kind = MINIC_CORE_TYPE_ALIGNED;
     type.has_layout = true;
     type.has_abi_alignment_override = true;
     type.size = 4U;
     type.alignment = 16U;
-    type.value.qualified.base = one;
+    type.value.aligned.base = one;
     REQUIRE(put(&context, type, &aligned_alias));
     REQUIRE(!minic_x86_64_core_one_gp_record(&context, aligned_alias, &bytes));
     REQUIRE(!minic_x86_64_core_record_abi_compatible(
         &context, one, aligned_alias));
     type.size = 24U;
     type.alignment = 32U;
-    type.value.qualified.base = large;
+    type.value.aligned.base = large;
     REQUIRE(put(&context, type, &oversized_alias));
     REQUIRE(!minic_x86_64_core_memory_result_record(
         &context, oversized_alias, &bytes));

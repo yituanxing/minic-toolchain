@@ -575,6 +575,26 @@
         665
       ]
     },
+    "src/target/common/machine_ir.c": {
+      "blob": "24b4ca01ed3016022c5d0219a57c03bbcd30329a",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/common/machine_ir.h": {
+      "blob": "83979f4888e748a043bf8c95163a1dfa1d774a84",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/common/machine_ir_verify.c": {
+      "blob": "378d077a9882a44f6b927db3031b1d7b958cbf60",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/common/machine_ir_verify.h": {
+      "blob": "3110c7ec551f9662574495bdddb2249912f0dae5",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
     "src/target/common/elf_module_symbol_info.c": {
       "blob": "7a4cc03337e14e8ded8dd13d2c77f2d71de94193",
       "review_depth": "targeted",
@@ -638,6 +658,16 @@
     },
     "src/target/data_layout_source.h": {
       "blob": "42d2d6410c9a48b17cb4f30f27515cee1f08ca95",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/driver_stage_recipe.c": {
+      "blob": "8e47c178a3a9f5a8a3cd04045e64d8e1332a50de",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/driver_stage_recipe.h": {
+      "blob": "f162e2fd083d74d2b719f640c27851c1b2e5d1bb",
       "review_depth": "inventory",
       "ci_touched_in": []
     },
@@ -1078,6 +1108,11 @@
       "review_depth": "full",
       "ci_touched_in": [],
       "note": "2026-11-02: 29-line sealed CoreType query header reviewed; production RV64 scalar, overflow, frame and admission uses verified separately."
+    },
+    "src/target/riscv64/driver_stage_recipe.c": {
+      "blob": "c96ee77e895367e0a41677ae2d2cd5e5bcd656c8",
+      "review_depth": "inventory",
+      "ci_touched_in": []
     },
     "src/target/riscv64/fp_emit.c": {
       "blob": "f3ae57fd71db6f202b5381dd96de7c0c42496858",

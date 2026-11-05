@@ -63,7 +63,7 @@ static bool direct_emit_module_global(FILE *out,
     if (out == NULL || obj == NULL || obj->name == NULL ||
         obj->name[0] == '\0' ||
         obj->definition_kind == MINIC_CORE_MODULE_DEFINITION_DECLARATION ||
-        obj->alias_target_index != SIZE_MAX ||
+        obj->alias_target_index != SIZE_MAX || obj->is_thread_local ||
         !minic_multi_module_elf_global_plan_build(
             obj, NULL, true, direct_module_data_directive, false, 8U, &plan))
         return false;

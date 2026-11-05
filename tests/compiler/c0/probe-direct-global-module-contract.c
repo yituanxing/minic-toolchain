@@ -153,7 +153,11 @@ int main(void) {
     object->storage_alignment = 8U;
     object->fragments = &zero;
     object->fragment_count = 1U;
+    CHECK_CASE("flexible_tail_missing_extension", false, false, false, false,
+               NULL, NULL);
+    object->storage_extension_unit_bytes = 4U;
     CHECK_CASE("flexible_tail", true, true, true, true, NULL, NULL);
+    object->storage_extension_unit_bytes = 0U;
     object->core_type_id = byte_id;
     object->storage_size = object->storage_alignment = 1U;
     object->fragments = &bits;

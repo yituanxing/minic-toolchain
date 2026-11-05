@@ -111,3 +111,53 @@ grep -Fq 'incompatible-riscv-isa-abi' "$work/bad-abi.err"
 test ! -e "$work/bad-abi.o"
 
 echo 'STAGED_DRIVER_RECIPE=PASS rv64_default_lp64d rv64i_lp64 predefines=preserved foreign=fail_closed'
+
+# The production catalog correctly has no second staged target yet. Model
+# one with stub CPP/AS/CC tools to prove the staged C->CC dispatch does not
+# inherit minic-cc's historical RV64 default when that gate is opened.
+root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
+"${CC:-cc}" -std=c11 -Wall -Wextra -Werror \
+    -I"$root/src" -I"$root/tools/minic" \
+    "$root/tests/driver/staged-target-forward-test.c" \
+    "$root/tools/minic/driver_pipeline.c" -o "$work/minic"
+cat >"$work/stage-tool" <<'EOF'
+#!/bin/sh
+set -eu
+case "${0##*/}" in
+    minic-cc)
+        printf '%s\n' "$@" >"${STAGED_CC_ARGS:?}"
+        ;;
+esac
+output=
+while [ "$#" -gt 0 ]; do
+    if [ "$1" = -o ]; then
+        shift
+        output=$1
+        break
+    fi
+    shift
+done
+test -n "$output"
+printf 'mock-stage-output\n' >"$output"
+EOF
+for tool in minic-cpp minic-cc minic-as; do
+    cp "$work/stage-tool" "$work/$tool"
+    chmod +x "$work/$tool"
+done
+STAGED_CC_ARGS="$work/cc-argv" "$work/minic" \
+    "$work/basic.i" "$work/nondefault.o" positive
+test -s "$work/nondefault.o"
+awk 'previous == "--target" && $0 == "x86_64-linux" { found = 1 }
+     { previous = $0 }
+     END { exit !found }' "$work/cc-argv"
+for forwarded in -S mock-isa mock-abi -fsigned-char -fshort-wchar; do
+    grep -Fxq -- "$forwarded" "$work/cc-argv"
+done
+if STAGED_CC_ARGS="$work/should-not-exist" "$work/minic" \
+        "$work/basic.i" "$work/mismatch.o" mismatched-recipe; then
+    echo 'FAIL staged recipe architecture mismatch accepted' >&2
+    exit 1
+fi
+test ! -e "$work/mismatch.o"
+test ! -e "$work/should-not-exist"
+echo 'STAGED_NONDEFAULT_TARGET=PASS x86_target_forwarded all_arguments_fit mismatched_recipe_rejected'

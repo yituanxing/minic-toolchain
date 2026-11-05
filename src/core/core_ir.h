@@ -8,6 +8,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <string.h>
 
 typedef uint32_t MinicCoreValueId;
 typedef uint32_t MinicCoreInstructionId;
@@ -276,6 +277,64 @@ typedef struct MinicCoreInlineAsmSymbolReference {
     int64_t byte_addend;
 } MinicCoreInlineAsmSymbolReference;
 
+/* GNU `i` operands cross into Core as a proven constant or one ELF symbol
+ * plus a signed BYTE displacement. Machine stages must not recover types by
+ * reparsing source-formatted decimal or assembler relocation expressions. */
+typedef enum MinicCoreInlineAsmImmediateKind {
+    MINIC_CORE_INLINE_ASM_IMMEDIATE_INVALID = 0,
+    MINIC_CORE_INLINE_ASM_IMMEDIATE_INTEGER,
+    MINIC_CORE_INLINE_ASM_IMMEDIATE_SYMBOL
+} MinicCoreInlineAsmImmediateKind;
+
+typedef struct MinicCoreInlineAsmImmediate {
+    MinicCoreInlineAsmImmediateKind kind;
+    int64_t integer;
+    char *symbol;
+    int64_t byte_addend;
+} MinicCoreInlineAsmImmediate;
+
+/* A precise ELF name or name+byte-addend witness; no assembler syntax. The
+ * formatter is for final target output, never a semantic parsing step. */
+static inline bool minic_core_inline_asm_symbol_valid(const char *symbol) {
+    size_t i, length;
+    if (symbol == NULL) return false;
+    length = strlen(symbol);
+    if (length == 0U || length > 128U ||
+        !((symbol[0] >= 'a' && symbol[0] <= 'z') ||
+          (symbol[0] >= 'A' && symbol[0] <= 'Z') ||
+          symbol[0] == '_' || symbol[0] == '.')) return false;
+    for (i = 1U; i < length; ++i) {
+        const char ch = symbol[i];
+        if ((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') ||
+            (ch >= '0' && ch <= '9') || ch == '_' || ch == '.' ||
+            ch == '$') continue;
+        return false;
+    }
+    return true;
+}
+
+static inline bool minic_core_inline_asm_relocation_valid(
+    const MinicCoreInlineAsmImmediate *immediate) {
+    uint64_t magnitude;
+    size_t length, digits = 1U;
+    if (immediate == NULL ||
+        immediate->kind != MINIC_CORE_INLINE_ASM_IMMEDIATE_SYMBOL ||
+        immediate->integer != 0 ||
+        !minic_core_inline_asm_symbol_valid(immediate->symbol)) return false;
+    length = strlen(immediate->symbol);
+    if (immediate->byte_addend == 0) return true;
+    magnitude = immediate->byte_addend < 0
+        ? (uint64_t)(-(immediate->byte_addend + 1)) + 1U
+        : (uint64_t)immediate->byte_addend;
+    while (magnitude >= 10U) {
+        magnitude /= 10U;
+        ++digits;
+    }
+    /* One signed byte displacement, bounded without rendering any target
+     * expression. The assembler owns its eventual syntax. */
+    return digits < 128U && length <= 128U - 1U - digits;
+}
+
 typedef struct MinicCoreInlineAsm {
     char *template_text;
     size_t template_length;
@@ -310,9 +369,9 @@ typedef struct MinicCoreInlineAsm {
     /* Second CFG destination for a TARGET-qualified multi-label asm-goto.
      * Existing one-label forms leave this as INVALID. */
     MinicCoreBlockId goto_second_target;
-    /* Core-resolved GNU `i` values. These are immutable symbolic/integer
-     * constant texts; no machine syntax or relocation policy is stored. */
-    char *resolved_immediates[3];
+    /* Immutable typed numeric constants or relocation witnesses; target
+     * emission formats machine syntax exactly once at its final boundary. */
+    MinicCoreInlineAsmImmediate resolved_immediates[3];
     size_t resolved_immediate_count;
     /* These references root definitions only when the corresponding Core
      * instruction survives the post-lowering reachable-block closure. */
@@ -463,10 +522,16 @@ typedef struct MinicCoreInstruction {
         struct {
             MinicCoreValueId destination_address;
             MinicCoreValueId source_address;
+            /* Explicit access effects, not inherited from a language type.
+             * Both byte-copy sides may be volatile independently. */
+            bool destination_volatile;
+            bool source_volatile;
         } record_copy;
         struct {
             MinicCoreValueId destination_address;
             MinicCoreValueId source_address;
+            bool destination_volatile;
+            bool source_volatile;
         } vector_storage_copy;
         /* Target ABI state-copy: left=destination cursor pointer, right=source. */
         struct {

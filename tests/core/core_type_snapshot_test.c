@@ -296,6 +296,67 @@ static bool build_core_only_function(MinicCoreFunction *function,
     return minic_core_function_set_terminator(function, block, &terminator);
 }
 
+/* The C ingress stamps volatile onto each COPY access, not onto CoreType.
+ * A single record execution type therefore permits independent source and
+ * destination effects without retaining source cv type identities. */
+static bool test_source_copy_access_effects(void) {
+    MinicCoreSourceBuilder builder;
+    MinicCoreBlockId block;
+    MinicCoreValueId destination, source;
+    MinicCoreInstruction operation = {0};
+    MinicType record = minic_type_record(0U);
+    MinicType volatile_record, pointer, volatile_pointer;
+    MinicType parameters[2];
+    bool ok = false;
+    if (!minic_type_add_volatile(record, &volatile_record) ||
+        !minic_type_pointer_to(record, &pointer) ||
+        !minic_type_pointer_to(volatile_record, &volatile_pointer))
+        return false;
+    parameters[0] = pointer;
+    parameters[1] = volatile_pointer;
+    minic_core_source_builder_initialize(&builder);
+    if (!minic_core_function_set_signature(
+            &builder, "copy_effects", 12U, minic_type_int(), parameters, 2U) ||
+        !minic_core_function_add_block(&builder.core, &block))
+        goto done;
+    operation.kind = MINIC_CORE_INSTRUCTION_PARAMETER;
+    operation.value.parameter_index = 0U;
+    if (!minic_core_function_append_source_value_instruction(
+            &builder, block, &operation, pointer, &destination))
+        goto done;
+    operation.value.parameter_index = 1U;
+    if (!minic_core_function_append_source_value_instruction(
+            &builder, block, &operation, volatile_pointer, &source))
+        goto done;
+    operation = (MinicCoreInstruction){0};
+    operation.kind = MINIC_CORE_INSTRUCTION_RECORD_COPY;
+    operation.value.record_copy.destination_address = destination;
+    operation.value.record_copy.source_address = source;
+    if (!minic_core_function_append_source_effect_instruction(
+            &builder, block, &operation, record) ||
+        builder.core.instruction_count != 3U ||
+        builder.core.instructions[2].value.record_copy.destination_volatile ||
+        !builder.core.instructions[2].value.record_copy.source_volatile)
+        goto done;
+    operation.value.record_copy.destination_address = source;
+    operation.value.record_copy.source_address = destination;
+    if (!minic_core_function_append_source_effect_instruction(
+            &builder, block, &operation, record) ||
+        builder.core.instruction_count != 4U ||
+        !builder.core.instructions[3].value.record_copy.destination_volatile ||
+        builder.core.instructions[3].value.record_copy.source_volatile)
+        goto done;
+    operation.value.record_copy.source_address = MINIC_CORE_VALUE_INVALID;
+    if (minic_core_function_append_source_effect_instruction(
+            &builder, block, &operation, record) ||
+        builder.core.instruction_count != 4U)
+        goto done;
+    ok = true;
+done:
+    minic_core_source_builder_destroy(&builder);
+    return ok;
+}
+
 typedef struct ResolverState {
     MinicCoreTypeId i32;
     MinicCoreTypeId f64, long_double;
@@ -501,6 +562,7 @@ int main(void) {
     ResolverState resolver;
 
     CHECK(make_type_context(&context, &ids));
+    CHECK(test_source_copy_access_effects());
     CHECK(build_core_only_function(&pure, &context, &ids));
     CHECK(minic_core_function_attach_type_context(&pure, &context));
     CHECK(minic_core_function_verify(&pure));

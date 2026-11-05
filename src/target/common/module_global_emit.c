@@ -80,7 +80,10 @@ bool minic_multi_module_emit_global_fragments(
             break;
         case MINIC_CORE_MODULE_FRAGMENT_BITS:
             if (width < 8U) bits &= (UINT64_C(1) << (8U * width)) - UINT64_C(1);
-            if (signed_integer_bits && fragment->bits_signed_integer && width != 1U) {
+            /* The target's GNU dialect may require signed decimal spelling.
+             * Two's-complement sign extension depends only on the emitted
+             * width and raw bits, not on any C initializer/source type. */
+            if (signed_integer_bits && width != 1U) {
                 int64_t signed_bits;
                 if (width < 8U && (bits & (UINT64_C(1) << (8U * width - 1U))) != 0U)
                     bits |= ~((UINT64_C(1) << (8U * width)) - UINT64_C(1));

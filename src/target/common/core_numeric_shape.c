@@ -22,7 +22,7 @@ static bool core_numeric_overflow_result(const MinicCoreFunction *fn,
                                          const MinicCoreInstruction *ins,
                                          MinicCoreTypeId *pointee) {
     MinicCoreValueId address;
-    const MinicCoreType *type, *base;
+    const MinicCoreType *base;
     if (fn == NULL || fn->type_context == NULL || fn->values == NULL ||
         ins == NULL || pointee == NULL ||
         ins->kind != MINIC_CORE_INSTRUCTION_INTEGER_OVERFLOW ||
@@ -37,10 +37,8 @@ static bool core_numeric_overflow_result(const MinicCoreFunction *fn,
     if (!minic_lp64_core_pointer_pointee(fn->type_context,
                                           fn->values[address].core_type_id,
                                           pointee)) return false;
-    type = minic_core_type_get(fn->type_context, *pointee);
     base = core_numeric_base(fn, *pointee);
-    return type != NULL && !type->is_read_only && !type->is_volatile &&
-           base != NULL && base->kind == MINIC_CORE_TYPE_INTEGER &&
+    return base != NULL && base->kind == MINIC_CORE_TYPE_INTEGER &&
            !base->value.integer.is_bool;
 }
 

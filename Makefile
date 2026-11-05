@@ -187,6 +187,8 @@ MINIC_SOURCES := \
 	src/target/common/direct_function_profile.c \
 	src/target/common/direct_function_plan.c \
 	src/target/common/core_function_plan.c \
+	src/target/common/machine_ir.c \
+	src/target/common/machine_ir_verify.c \
 	src/target/common/core_function_facts.c \
 	src/target/common/core_numeric_shape.c \
 	src/target/common/core_value_slots.c \
@@ -2285,6 +2287,21 @@ check-common-linux-jump-label-contract:
 	"$(BUILD_DIR)/tests/common-linux-jump-label-contract"
 
 check-fast: check-common-linux-jump-label-contract
+
+# Thin target-owned MIR data model and whole-function verifier. Production
+# backends will migrate complete function paths after the C/Core boundary is
+# closed; this contract test does not imply that migration has occurred.
+.PHONY: check-machine-ir-contract
+check-machine-ir-contract:
+	mkdir -p "$(BUILD_DIR)/tests"
+	$(CC) -std=c11 -Wall -Wextra -Wpedantic -Werror $(MINIC_INCLUDES) \
+	  tests/target/machine_ir_contract_test.c \
+	  src/target/common/machine_ir.c \
+	  src/target/common/machine_ir_verify.c \
+	  -o "$(BUILD_DIR)/tests/machine-ir-contract"
+	"$(BUILD_DIR)/tests/machine-ir-contract"
+
+check-fast: check-machine-ir-contract
 
 # Source ASM and local labels are sealed to canonical owned symbol identities
 # before Core publication. All five machine consumers validate these names

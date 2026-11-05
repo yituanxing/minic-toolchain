@@ -2,8 +2,10 @@
 #define MINIC_TARGET_COMMON_LINUX_JUMP_LABEL_ASM_H
 
 #include "core/core_ir.h"
+#include <inttypes.h>
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdio.h>
 #include <string.h>
 
 /* The two LP64 targets share the Linux static-key template and Core
@@ -36,30 +38,22 @@ static inline unsigned int minic_multi_linux_jump_label_form(
     return 0U;
 }
 
-/* An ELF symbol plus at most one signed decimal byte addend.  Do not admit
- * arbitrary GAS expressions or percent/label directives from inline ASM. */
-static inline bool minic_multi_linux_jump_key_relocation(const char *key) {
-    size_t i, length;
-    if (key == NULL) return false;
-    length = strlen(key);
-    if (length == 0U || length > 128U ||
-        !((key[0] >= 'a' && key[0] <= 'z') ||
-          (key[0] >= 'A' && key[0] <= 'Z') ||
-          key[0] == '_' || key[0] == '.')) return false;
-    for (i = 1U; i < length; ++i) {
-        const char ch = key[i];
-        if ((ch >= 'a' && ch <= 'z') ||
-            (ch >= 'A' && ch <= 'Z') ||
-            (ch >= '0' && ch <= '9') ||
-            ch == '_' || ch == '.' || ch == '$') continue;
-        if ((ch == '+' || ch == '-') && i + 1U < length) {
-            for (++i; i < length; ++i)
-                if (key[i] < '0' || key[i] > '9') return false;
-            return true;
-        }
-        return false;
-    }
-    return true;
+/* Target-owned GNU/ELF serializer. The Core witness is already a verified
+ * symbol plus byte displacement; no GNU immediate or relocation expression
+ * is parsed after source admission. */
+static inline bool minic_multi_linux_jump_relocation_text(
+    const MinicCoreInlineAsmImmediate *immediate,
+    char *buffer, size_t capacity) {
+    int written;
+    if (buffer == NULL || capacity == 0U ||
+        !minic_core_inline_asm_relocation_valid(immediate)) return false;
+    if (immediate->byte_addend == 0)
+        written = snprintf(buffer, capacity, "%s", immediate->symbol);
+    else
+        written = snprintf(buffer, capacity,
+            immediate->byte_addend > 0 ? "%s+%" PRId64 : "%s%" PRId64,
+            immediate->symbol, immediate->byte_addend);
+    return written > 0 && (size_t)written < capacity && written <= 128;
 }
 
 static inline bool minic_multi_linux_jump_label_asm_goto_core(
@@ -72,8 +66,8 @@ static inline bool minic_multi_linux_jump_label_asm_goto_core(
            source->register_clobber_count == 0U &&
            source->deferred_immediate_symbol == NULL &&
            source->resolved_immediate_count == 1U &&
-           minic_multi_linux_jump_key_relocation(
-               source->resolved_immediates[0]) &&
+           minic_core_inline_asm_relocation_valid(
+               &source->resolved_immediates[0]) &&
            form(source->template_text, source->template_length) != 0U;
 }
 

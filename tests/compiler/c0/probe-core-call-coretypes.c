@@ -151,16 +151,16 @@ int main(void) {
     if (!register_type(&context, type, &other_pointer)) return 5;
 
     (void)memset(&type, 0, sizeof(type));
-    type.kind = MINIC_CORE_TYPE_QUALIFIED;
+    type.kind = MINIC_CORE_TYPE_ALIGNED;
     type.has_layout = true;
     type.size = 4U;
-    type.alignment = 4U;
-    type.is_read_only = true;
-    type.value.qualified.base = record;
+    type.alignment = 8U;
+    type.has_abi_alignment_override = true;
+    type.value.aligned.base = record;
     if (!register_type(&context, type, &qualified_record)) return 15;
     type.size = 8U;
-    type.alignment = 8U;
-    type.value.qualified.base = pointer_type;
+    type.alignment = 16U;
+    type.value.aligned.base = pointer_type;
     if (!register_type(&context, type, &qualified_pointer)) return 16;
 
     if (!register_signature(&context, integer, &integer, 1U, &direct_type) ||

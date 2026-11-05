@@ -153,7 +153,7 @@ int main(void) {
     CHECK(minic_core_type_import(&importer, aligned_node_source, &aligned_node_id));
     CHECK(aligned_node_id != node_id);
     CHECK(minic_core_type_unqualified(&context, aligned_node_id) == node_id);
-    CHECK(minic_core_type_get(&context, aligned_node_id)->kind == MINIC_CORE_TYPE_QUALIFIED);
+    CHECK(minic_core_type_get(&context, aligned_node_id)->kind == MINIC_CORE_TYPE_ALIGNED);
     CHECK(minic_core_type_get(&context, aligned_node_id)->has_abi_alignment_override);
     CHECK(minic_core_type_get(&context, aligned_node_id)->alignment == 32U);
     CHECK(minic_core_type_import(&importer, pointer_source, &pointer_id));
@@ -213,9 +213,7 @@ int main(void) {
         CHECK(recursive_pointer->kind == MINIC_CORE_TYPE_POINTER);
         recursive_pointee = minic_core_type_get(&context,
                                                recursive_pointer->value.pointer.pointee);
-        CHECK(recursive_pointee != NULL &&
-              recursive_pointee->kind == MINIC_CORE_TYPE_QUALIFIED);
-        CHECK(recursive_pointee->is_volatile && recursive_pointee->is_read_only);
+        CHECK(recursive_pointee == qualified_record_type);
         CHECK(recursive_pointee->has_layout &&
               recursive_pointee->size == qualified_record_type->size &&
               recursive_pointee->alignment == qualified_record_type->alignment);
@@ -248,25 +246,18 @@ int main(void) {
           MINIC_CORE_TYPE_INTEGER &&
           minic_core_type_get(&context, complete_enum_id)->has_layout);
     CHECK(minic_core_type_import(&importer, const_integer, &const_int_id));
-    CHECK(int_id != const_int_id); /* CV semantics must survive the C ingress. */
-    CHECK(minic_core_type_get(&context, const_int_id)->kind == MINIC_CORE_TYPE_QUALIFIED);
-    CHECK(minic_core_type_get(&context, const_int_id)->is_read_only);
-    CHECK(!minic_core_type_get(&context, const_int_id)->is_volatile);
+    CHECK(int_id == const_int_id); /* cv affects accesses, never execution type identity. */
     CHECK(minic_core_type_unqualified(&context, const_int_id) == int_id);
     CHECK(minic_core_type_import(&importer, volatile_integer, &volatile_int_id));
-    CHECK(minic_core_type_get(&context, volatile_int_id)->is_volatile);
-    CHECK(!minic_core_type_get(&context, volatile_int_id)->is_read_only);
+    CHECK(volatile_int_id == int_id);
     CHECK(minic_core_type_unqualified(&context, volatile_int_id) == int_id);
     CHECK(minic_core_type_import(&importer, const_volatile_integer, &const_volatile_int_id));
-    CHECK(const_volatile_int_id != const_int_id &&
-          const_volatile_int_id != volatile_int_id);
-    CHECK(minic_core_type_get(&context, const_volatile_int_id)->is_volatile &&
-          minic_core_type_get(&context, const_volatile_int_id)->is_read_only);
+    CHECK(const_volatile_int_id == int_id);
     CHECK(minic_core_type_unqualified(&context, const_volatile_int_id) == int_id);
     CHECK(minic_core_type_import(&importer, integer_pointer_source, &integer_pointer_id));
     CHECK(minic_core_type_import(&importer, pointer_const_source, &pointer_const_id));
-    CHECK(pointer_const_id != integer_pointer_id);
-    CHECK(minic_core_type_get(&context, pointer_const_id)->value.pointer.pointee == const_int_id);
+    CHECK(pointer_const_id == integer_pointer_id);
+    CHECK(minic_core_type_get(&context, pointer_const_id)->value.pointer.pointee == int_id);
 
     CHECK(minic_data_layout_type(source, &program, node_source,
                                   &node_size, &node_alignment));

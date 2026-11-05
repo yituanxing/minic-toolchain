@@ -15,7 +15,7 @@ typedef struct ModuleObjectSymbol {
 
 typedef struct ModuleClosure {
     MinicCoreFunctionSet *set;
-    bool reachable_blocks_only, duplicate_objects;
+    bool reachable_blocks_only;
     bool *functions_live, *functions_seen, *objects_live;
     size_t *function_queue, *object_queue, *owned_heads, *owned_next;
     size_t function_head, function_count, object_head, object_count;
@@ -76,17 +76,24 @@ static bool enqueue_named_function(ModuleClosure *c, const char *name, size_t n)
 }
 
 static bool enqueue_named_object(ModuleClosure *c, const char *name, size_t n) {
-    size_t lo = 0U, hi = c->set->module.global_count;
+    const size_t count = c->set->module.global_count;
+    size_t lo = 0U, hi = count, i;
     if (name == NULL || n == 0U) return false;
-    if (c->duplicate_objects) return true; /* All objects are roots below. */
+    /* Name lookup is a range: multiple C declarations may have one assembler
+     * identity. Keep exactly those owners, not every unrelated static object
+     * in the translation unit whenever any duplicate spelling exists. */
     while (lo < hi) {
         size_t mid = lo + (hi - lo) / 2U;
         const ModuleObjectSymbol *s = &c->symbols[mid];
         int cmp = n < s->length ? -1 : n > s->length ? 1 :
             memcmp(name, s->name, n);
-        if (cmp < 0) hi = mid;
-        else if (cmp > 0) lo = mid + 1U;
-        else return enqueue_object(c, s->id);
+        if (cmp <= 0) hi = mid;
+        else lo = mid + 1U;
+    }
+    for (i = lo; i < count; ++i) {
+        const ModuleObjectSymbol *s = &c->symbols[i];
+        if (s->length != n || memcmp(s->name, name, n) != 0) break;
+        if (!enqueue_object(c, s->id)) return false;
     }
     return true; /* External/target-synthesized object. */
 }
@@ -261,9 +268,6 @@ static bool initialize_closure(ModuleClosure *c) {
         }
     }
     qsort(c->symbols, m->global_count, sizeof(*c->symbols), compare_object_symbol);
-    for (i = 1U; i < m->global_count; ++i)
-        if (compare_object_symbol(&c->symbols[i - 1U], &c->symbols[i]) == 0)
-            c->duplicate_objects = true;
     return true;
 }
 
@@ -302,8 +306,7 @@ bool minic_core_function_set_close_reachability(
         const MinicCoreModuleGlobal *g = &m->globals[i];
         if ((g->is_file_asm_root ||
              (g->owner_function_index == SIZE_MAX &&
-              (g->is_file_scope_reachability_root ||
-               c.duplicate_objects))) &&
+              g->is_file_scope_reachability_root)) &&
             !enqueue_object(&c, i)) goto done;
     }
 

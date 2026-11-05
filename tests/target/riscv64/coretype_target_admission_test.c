@@ -87,12 +87,12 @@ static int run(void) {
     REQUIRE(register_pointer(&types, record_id, &record_pointer_id));
     REQUIRE(register_overflow_scalar(&types, 1U, false, true, &bool_id));
     REQUIRE(register_overflow_scalar(&types, 4U, false, false, &unsigned_id));
-    qualifier.kind = MINIC_CORE_TYPE_QUALIFIED;
+    qualifier.kind = MINIC_CORE_TYPE_ALIGNED;
     qualifier.has_layout = true;
     qualifier.size = 4U;
-    qualifier.alignment = 4U;
-    qualifier.is_volatile = true;
-    qualifier.value.qualified.base = record_id;
+    qualifier.alignment = 8U;
+    qualifier.has_abi_alignment_override = true;
+    qualifier.value.aligned.base = record_id;
     REQUIRE(minic_core_type_register(&types, &qualifier, &volatile_record_id));
     REQUIRE(register_pointer(&types, volatile_record_id, &volatile_record_pointer_id));
     {
@@ -168,7 +168,7 @@ static int run(void) {
     REQUIRE(minic_riscv64_core_record_load_supported(&function, &ins, &record_size));
     REQUIRE(record_size == 4U);
     ins.value.record_load.source_address = 1U;
-    REQUIRE(!minic_riscv64_core_record_load_supported(&function, &ins, NULL));
+    REQUIRE(minic_riscv64_core_record_load_supported(&function, &ins, NULL));
     ins.value.record_load.is_volatile = true;
     REQUIRE(minic_riscv64_core_record_load_supported(&function, &ins, NULL));
     ins.value.record_load.destination_object = 1U;

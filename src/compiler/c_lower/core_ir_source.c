@@ -602,6 +602,41 @@ static MinicCoreInstruction minic_source_placeholder(
     return result;
 }
 
+/* Source qualifiers end at C ingress. Preserve each memory side as a
+ * concrete Core instruction effect; independent Core producers may provide
+ * these effects directly without C types. */
+static bool minic_source_seal_copy_effects(
+    const MinicCoreSourceBuilder *builder, MinicCoreInstruction *instruction) {
+    MinicCoreValueId dst, src;
+    MinicType destination, source;
+    if (builder == NULL || instruction == NULL) return false;
+    if (instruction->kind == MINIC_CORE_INSTRUCTION_RECORD_COPY) {
+        dst = instruction->value.record_copy.destination_address;
+        src = instruction->value.record_copy.source_address;
+    } else if (instruction->kind == MINIC_CORE_INSTRUCTION_VECTOR_STORAGE_COPY) {
+        dst = instruction->value.vector_storage_copy.destination_address;
+        src = instruction->value.vector_storage_copy.source_address;
+    } else return true;
+    if (dst >= builder->core.value_count || src >= builder->core.value_count ||
+        !minic_type_pointee(minic_core_function_source_value_type(builder, dst),
+                            &destination) ||
+        !minic_type_pointee(minic_core_function_source_value_type(builder, src),
+                            &source))
+        return false;
+    if (instruction->kind == MINIC_CORE_INSTRUCTION_RECORD_COPY) {
+        instruction->value.record_copy.destination_volatile =
+            minic_type_is_volatile(destination);
+        instruction->value.record_copy.source_volatile =
+            minic_type_is_volatile(source);
+    } else {
+        instruction->value.vector_storage_copy.destination_volatile =
+            minic_type_is_volatile(destination);
+        instruction->value.vector_storage_copy.source_volatile =
+            minic_type_is_volatile(source);
+    }
+    return true;
+}
+
 bool minic_core_function_append_source_value_instruction(
     MinicCoreSourceBuilder *builder, MinicCoreBlockId block_id,
     const MinicCoreInstruction *instruction, MinicType source_type,
@@ -636,6 +671,7 @@ bool minic_core_function_append_source_effect_instruction(
 
     if (instruction == NULL) return false;
     placeholder = minic_source_placeholder(instruction);
+    if (!minic_source_seal_copy_effects(builder, &placeholder)) return false;
     if (function == NULL || function->type_context != NULL ||
         (draft = builder->source_draft) == NULL ||
         draft->instruction_type_count != function->instruction_count ||

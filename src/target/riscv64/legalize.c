@@ -33,7 +33,7 @@ bool minic_riscv64_core_record_load_supported(const MinicCoreFunction *function,
                                        const MinicCoreInstruction *instruction,
                                        size_t *record_size) {
     const MinicCoreTypeContext *types;
-    const MinicCoreType *record, *pointee;
+    const MinicCoreType *record;
     MinicCoreTypeId source_pointee_id;
     if (function == NULL || function->type_context == NULL || instruction == NULL ||
         instruction->kind != MINIC_CORE_INSTRUCTION_RECORD_LOAD ||
@@ -55,10 +55,8 @@ bool minic_riscv64_core_record_load_supported(const MinicCoreFunction *function,
         !minic_lp64_core_equal_unqualified(
             types, source_pointee_id, instruction->core_type_id)) return false;
     record = minic_riscv64_core_base_type(function, instruction->core_type_id);
-    pointee = minic_core_type_get(types, source_pointee_id);
-    if (record == NULL || pointee == NULL || !record->has_layout ||
-        record->size == 0U || record->alignment == 0U ||
-        instruction->value.record_load.is_volatile != pointee->is_volatile)
+    if (record == NULL || !record->has_layout ||
+        record->size == 0U || record->alignment == 0U)
         return false;
     if (record_size != NULL) *record_size = record->size;
     return true;
@@ -164,7 +162,7 @@ bool minic_riscv64_core_integer_overflow_xlen_scratch_exact(
 bool minic_riscv64_core_integer_overflow_supported(
     const MinicCoreFunction *function, const MinicCoreInstruction *instruction,
     MinicCoreTypeId *result_type, size_t *result_size, bool *is_unsigned) {
-    const MinicCoreType *result, *pointee, *left, *right, *flag;
+    const MinicCoreType *result, *left, *right, *flag;
     MinicCoreTypeId pointee_id, left_id, right_id;
     size_t left_size, right_size;
     bool result_is_unsigned;
@@ -187,7 +185,6 @@ bool minic_riscv64_core_integer_overflow_supported(
         return false;
     }
     flag = minic_riscv64_core_base_type(function, instruction->core_type_id);
-    pointee = minic_core_type_get(function->type_context, pointee_id);
     result = minic_riscv64_core_base_type(function, pointee_id);
     left_id = function->values[instruction->value.integer_overflow.left].core_type_id;
     right_id = function->values[instruction->value.integer_overflow.right].core_type_id;
@@ -195,7 +192,6 @@ bool minic_riscv64_core_integer_overflow_supported(
     right = minic_riscv64_core_base_type(function, right_id);
     if (flag == NULL || flag->kind != MINIC_CORE_TYPE_INTEGER ||
         !flag->value.integer.is_bool ||
-        pointee == NULL || pointee->is_read_only || pointee->is_volatile ||
         result == NULL || result->kind != MINIC_CORE_TYPE_INTEGER ||
         result->value.integer.is_bool || !result->has_layout ||
         result->size == 0U || result->size > 8U ||

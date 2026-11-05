@@ -7,7 +7,9 @@ mkdir -p "$build_dir"
 
 "$minic" -S "$root/tests/programs/c0/static_record_compound_literal.c" \
     -o "$build_dir/static_record_compound_literal.s"
-grep -F '.word 3735899821' "$build_dir/static_record_compound_literal.s" >/dev/null
+# 0xdead4ead remains bit-exact; RV64's GNU assembler dialect prints the
+# signed 32-bit interpretation regardless of the C member's signedness.
+grep -F '.word -559067475' "$build_dir/static_record_compound_literal.s" >/dev/null
 grep -F '.dword -1' "$build_dir/static_record_compound_literal.s" >/dev/null
 test "$(grep -c '  .dword value+' "$build_dir/static_record_compound_literal.s")" -eq 2
 

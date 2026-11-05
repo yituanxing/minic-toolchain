@@ -95,11 +95,14 @@ src/target/backend_core_usage.c
 src/target/common/global_emit.c
 src/target/common/program_visit.c
 src/target/common/program_emit.c
+src/target/common/elf_module_symbol_info.c
 src/target/common/direct_program_emit.c
 src/target/common/direct_preflight.c
 src/target/common/direct_function_profile.c
 src/target/common/direct_function_plan.c
 src/target/common/core_function_plan.c
+src/target/common/machine_ir.c
+src/target/common/machine_ir_verify.c
 src/target/common/core_function_facts.c
 src/target/common/core_object_storage.c
 src/target/common/core_call_view.c

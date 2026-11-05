@@ -73,12 +73,12 @@ static int run(void) {
     pointer_type.size = 8U;
     pointer_type.alignment = 8U;
     pointer_type.value.pointer.pointee = words;
-    qualifier.kind = MINIC_CORE_TYPE_QUALIFIED;
+    qualifier.kind = MINIC_CORE_TYPE_ALIGNED;
     qualifier.has_layout = true;
     qualifier.size = 16U;
-    qualifier.alignment = 16U;
-    qualifier.is_read_only = true;
-    qualifier.value.qualified.base = words;
+    qualifier.alignment = 32U;
+    qualifier.has_abi_alignment_override = true;
+    qualifier.value.aligned.base = words;
     if (!minic_core_type_register(&types, &pointer_type, &pointer) ||
         !minic_core_type_register(&types, &qualifier, &qualified)) return 2;
     if (!minic_aarch64_neon_vector128_core_type(&types, words) ||

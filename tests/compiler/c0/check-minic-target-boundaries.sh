@@ -81,7 +81,11 @@ has src/compiler/global_payload.c 'MINIC_SOURCE_GLOBAL_PAYLOAD_ZERO'
 has src/core/module_ir.c 'module_live_global_layout_valid('
 has src/core/module_ir.c 'module_live_global_definition_valid('
 has src/core/module_ir.c 'global->storage_size == declared->size'
-has src/core/module_ir.c 'tail->value.array.is_complete'
+# The Core Module contracts extended storage without recovering the source
+# language's flexible-array declaration from the tail member of a record.
+has src/core/module_ir.c 'global->storage_extension_unit_bytes'
+has src/compiler/module_ir_build.c 'destination->storage_extension_unit_bytes'
+lacks src/core/module_ir.c 'tail->value.array.is_complete'
 has src/core/module_ir.c 'global->data_policy != MINIC_CORE_MODULE_DATA_MATERIALIZED || bss'
 has src/core/module_ir.c '!module_live_global_layout_valid(module->type_context, type, global)'
 has tests/core/module_ir_fragment_contract_test.c 'verify_source_free_global_definition_contract('
@@ -1725,10 +1729,15 @@ cc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror \
   src/target/common/core_function_plan.c \
   src/target/common/program_visit.c \
   src/target/common/program_emit.c \
+  src/target/common/elf_module_symbol_info.c \
   src/compiler/global_payload.c \
   src/target/common/global_emit.c \
   -o "$work/program-emit-probe"
 "$work/program-emit-probe" "$work/test-output.s"
+
+# A sealed Core-only Module proves real strong-vs-undefined-weak ELF
+# ownership through GNU AS/readelf, plus AArch64/LoongArch64 TLS fail-closed.
+sh tests/compiler/c0/probe-program-emit-elf-owner-tls.sh
 
 # Check the real shared CFG cursor on an all-block and RV32/RV64-style
 # reachable subset before any ISA-dependent assembly emission.

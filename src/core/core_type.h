@@ -21,9 +21,9 @@ typedef enum MinicCoreTypeKind {
     MINIC_CORE_TYPE_FUNCTION,
     MINIC_CORE_TYPE_VECTOR,
     MINIC_CORE_TYPE_OPAQUE,
-    /* Source-independent memory-access qualifiers wrap a base execution
-     * shape without corrupting nominal record identity or ABI layout. */
-    MINIC_CORE_TYPE_QUALIFIED
+    /* A physical storage-alignment view of a base execution shape.
+     * Language const/volatile access policy is never a Core type. */
+    MINIC_CORE_TYPE_ALIGNED
 } MinicCoreTypeKind;
 
 typedef enum MinicCoreFloatFormat {
@@ -65,8 +65,6 @@ typedef struct MinicCoreType {
     bool has_layout;
     size_t size;
     size_t alignment;
-    bool is_volatile;
-    bool is_read_only;
     /* ABI-effective alignment was explicitly overridden on this view. */
     bool has_abi_alignment_override;
     union {
@@ -111,7 +109,7 @@ typedef struct MinicCoreType {
         } vector;
         struct {
             MinicCoreTypeId base;
-        } qualified;
+        } aligned;
     } value;
 } MinicCoreType;
 
@@ -125,7 +123,7 @@ void minic_core_type_context_initialize(MinicCoreTypeContext *context);
 void minic_core_type_context_destroy(MinicCoreTypeContext *context);
 const MinicCoreType *minic_core_type_get(const MinicCoreTypeContext *context,
                                         MinicCoreTypeId id);
-/* Peel zero or more memory-effect qualifiers. INVALID signals a bad ID. */
+/* Peel zero or more physical alignment views. INVALID signals a bad ID. */
 MinicCoreTypeId minic_core_type_unqualified(const MinicCoreTypeContext *context,
                                             MinicCoreTypeId id);
 /* Copies owned parameter/member arrays; never retains caller memory. Records

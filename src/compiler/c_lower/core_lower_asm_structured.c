@@ -461,16 +461,14 @@ MinicCoreLowerStatus core_asm_try_structured_roles_and_asm_goto(
     /* Target-qualified asm-goto is a genuine CFG effect. The same path owns
      * the one-label Linux static-key table and the two-label CPU-feature
      * alternative. Preserve the complete source template, resolve all `i`
-     * operands into *link-time* text before committing, and transport C
+     * operands into typed link-time facts before committing, and transport C
      * label destinations as Core blocks. Neither form may silently lower
      * a GNU immediate into a runtime SSA register. */
     if (minic_source_backend_qualify_inline_asm_goto(
             minic_source_backend_for_target(&context->target->machine),
             context->target,
             context->body->program, source)) {
-        char immediate_buffers[3][MINIC_CORE_IMMEDIATE_TEXT_LIMIT];
-        const char *resolved[3] = {NULL, NULL, NULL};
-        size_t lengths[3] = {0U, 0U, 0U};
+        MinicCoreInlineAsmImmediate resolved[3] = {{0}};
         MinicCoreBlockId targets[2] = {
             MINIC_CORE_BLOCK_INVALID, MINIC_CORE_BLOCK_INVALID
         };
@@ -485,10 +483,23 @@ MinicCoreLowerStatus core_asm_try_structured_roles_and_asm_goto(
             source->inputs == NULL || source->labels == NULL)
             return MINIC_CORE_LOWER_UNSUPPORTED;
         for (i = 0U; i < source->input_count; ++i) {
-            if (!core_inline_asm_immediate_text(
-                    context, &source->inputs[i], immediate_buffers[i],
-                    sizeof(immediate_buffers[i]), &resolved[i], &lengths[i]) ||
-                !resolved[i] || lengths[i] == 0U || lengths[i] > 128U) {
+            bool is_symbol;
+            int64_t integer, addend;
+            const char *symbol;
+            bool valid = core_inline_asm_immediate_fact(
+                context, &source->inputs[i], &is_symbol, &integer,
+                &symbol, &addend);
+            if (valid) {
+                resolved[i].kind = is_symbol
+                    ? MINIC_CORE_INLINE_ASM_IMMEDIATE_SYMBOL
+                    : MINIC_CORE_INLINE_ASM_IMMEDIATE_INTEGER;
+                resolved[i].integer = integer;
+                resolved[i].symbol = (char *)symbol;
+                resolved[i].byte_addend = addend;
+                valid = !is_symbol ||
+                    minic_core_inline_asm_relocation_valid(&resolved[i]);
+            }
+            if (!valid) {
                 if (getenv("MINIC_ASM_FRONTIER_TRACE") != NULL)
                     (void)fprintf(stderr,
                         "CORE_ASM_GOTO_IMMEDIATE_FAILURE function=%s "
@@ -527,11 +538,15 @@ MinicCoreLowerStatus core_asm_try_structured_roles_and_asm_goto(
         stored->goto_target = targets[0];
         stored->goto_second_target = targets[1];
         for (i = 0U; i < source->input_count; ++i) {
-            char *owned = (char *)malloc(lengths[i] + 1U);
-            if (!owned) return MINIC_CORE_LOWER_ERROR;
-            (void)memcpy(owned, resolved[i], lengths[i]);
-            owned[lengths[i]] = '\0';
-            stored->resolved_immediates[i] = owned;
+            MinicCoreInlineAsmImmediate *dest = &stored->resolved_immediates[i];
+            *dest = resolved[i];
+            dest->symbol = NULL;
+            if (resolved[i].kind == MINIC_CORE_INLINE_ASM_IMMEDIATE_SYMBOL) {
+                const size_t length = strlen(resolved[i].symbol);
+                dest->symbol = (char *)malloc(length + 1U);
+                if (dest->symbol == NULL) return MINIC_CORE_LOWER_ERROR;
+                (void)memcpy(dest->symbol, resolved[i].symbol, length + 1U);
+            }
             stored->resolved_immediate_count = i + 1U;
         }
         (void)memset(&effect, 0, sizeof(effect));

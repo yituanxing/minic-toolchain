@@ -1,5 +1,6 @@
 #include "target/common/program_emit.h"
 #include "target/common/elf_alias_emit.h"
+#include "target/common/elf_module_symbol_info.h"
 #include "core/symbol_identity.h"
 #include <stdint.h>
 #include <stdbool.h>
@@ -306,8 +307,12 @@ static bool minic_program_emit_undefined_symbol_visibility_module(
                     object->is_file_asm_root ||
                     minic_program_symbol_used_in_live_raw_core_asm(
                         &uses, object->name);
+                const bool undefined_weak = object->is_weak &&
+                    minic_multi_elf_module_symbol_facts(
+                        module, object->name,
+                        MINIC_ELF_MODULE_SYMBOL_OBJECT).undefined_weak;
                 if (used && (object->name == NULL ||
-                    (object->is_weak &&
+                    (undefined_weak &&
                      fprintf(out, ".weak %s\n", object->name) < 0) ||
                     (object->visibility != MINIC_CORE_MODULE_VISIBILITY_DEFAULT &&
                      (directive == NULL ||
@@ -329,8 +334,12 @@ static bool minic_program_emit_undefined_symbol_visibility_module(
                     function->is_file_asm_root ||
                     minic_program_symbol_used_in_live_raw_core_asm(
                         &uses, function->name);
+                const bool undefined_weak = function->is_weak &&
+                    minic_multi_elf_module_symbol_facts(
+                        module, function->name,
+                        MINIC_ELF_MODULE_SYMBOL_FUNCTION).undefined_weak;
                 if (used && (function->name == NULL ||
-                    (function->is_weak &&
+                    (undefined_weak &&
                      fprintf(out, ".weak %s\n", function->name) < 0) ||
                     (function->visibility != MINIC_CORE_MODULE_VISIBILITY_DEFAULT &&
                      (directive == NULL ||

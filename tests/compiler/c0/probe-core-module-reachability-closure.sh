@@ -98,6 +98,18 @@ done
 "$work/duplicate-name.minic"
 echo 'CORE_MODULE_DUPLICATE_FUNCTION_SYMBOL=PASS call_initializer_five_ISA=5 live_source_asm_RV=2 dead_source_asm_pruned=5 GNU_native=0 MiniC_native=0'
 
+# Distinct C object declarators with one GNU assembler spelling are not yet
+# a frontend feature. Forge the valid source-independent Module/Core producer
+# directly so this reachability contract cannot silently degrade into a C
+# parser special-case or a whole-module static-root fallback.
+"$host_cc" -std=c11 -Wall -Wextra -Werror -ffunction-sections -fdata-sections \
+    -Wl,--gc-sections -I"$root/src" \
+    "$root/tests/compiler/c0/probe-core-duplicate-object-closure.c" \
+    "$root/src/compiler/core_reachability.c" \
+    "$root/src/core/core_ir.c" "$root/src/core/module_ir.c" \
+    "$root/src/core/core_type.c" -o "$work/core-duplicate-object"
+"$work/core-duplicate-object"
+
 # MC-064: x86-specific %c0 would require a different backend ASM grammar;
 # use the original RV64 GNU-valid %0 symbolic immediate in all variants.
 # With only -S available, insist the referenced local definition is present;

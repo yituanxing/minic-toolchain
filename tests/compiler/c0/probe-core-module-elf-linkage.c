@@ -63,6 +63,12 @@ int main(void) {
         {.name = "local_alias", .is_internal = true,
          .definition_kind = MINIC_CORE_MODULE_DEFINITION_DECLARATION,
          .emittable = true, .alias_target_index = 1U},
+        /* ELF names are untyped: opposite-kind strong owners take precedence. */
+        {.name = "function_owned_object",
+         .definition_kind = MINIC_CORE_MODULE_DEFINITION_DECLARATION,
+         .is_weak = true, .alias_target_index = SIZE_MAX},
+        {.name = "object_owned_function", .emittable = true,
+         .alias_target_index = SIZE_MAX},
     };
     MinicCoreModuleFunctionSymbol mixed_functions[] = {
         {.name = "weak_first", .is_weak = true,
@@ -83,6 +89,10 @@ int main(void) {
          .alias_target_index = SIZE_MAX, .specialization_source_index = SIZE_MAX},
         {.name = "local_alias", .is_internal = true,
          .alias_target_index = 1U, .specialization_source_index = SIZE_MAX},
+        {.name = "function_owned_object", .is_defined = true,
+         .alias_target_index = SIZE_MAX, .specialization_source_index = SIZE_MAX},
+        {.name = "object_owned_function", .is_weak = true,
+         .alias_target_index = SIZE_MAX, .specialization_source_index = SIZE_MAX},
     };
     MinicCoreModule module = {
         .globals = globals,
@@ -110,6 +120,8 @@ int main(void) {
     CHECK(!OBJ("tentative_object").undefined_weak, 14);
     CHECK(FN("weak_function").undefined_weak, 15);
     CHECK(!FN("internal_function").undefined_weak, 16);
+    CHECK(OBJ("weak_function").undefined_weak &&
+          FN("weak_object").undefined_weak, 35);
     CHECK(!OBJ("source_only_name").tu_local &&
           !OBJ("source_only_name").nonpreemptible &&
           !OBJ("source_only_name").undefined_weak &&
@@ -149,6 +161,12 @@ int main(void) {
           OBJ("local_alias").nonpreemptible, 30);
     CHECK(FN("local_alias").tu_local &&
           FN("local_alias").nonpreemptible, 31);
-    puts("MINIC_CORE_MODULE_ELF_LINKAGE=PASS facts=3 kinds=2 cases=31");
+    CHECK(!OBJ("function_owned_object").undefined_weak &&
+          !FN("function_owned_object").undefined_weak, 32);
+    CHECK(!OBJ("object_owned_function").undefined_weak &&
+          !FN("object_owned_function").undefined_weak, 33);
+    CHECK(!OBJ("function_owned_object").tu_local &&
+          !FN("object_owned_function").tu_local, 34);
+    puts("MINIC_CORE_MODULE_ELF_LINKAGE=PASS facts=3 kinds=2 cases=35 cross_kind=4");
     return 0;
 }

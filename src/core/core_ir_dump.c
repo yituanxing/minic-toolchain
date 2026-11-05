@@ -18,12 +18,6 @@ static bool dump_type_is_record(const MinicCoreFunction *function,
     return type != NULL && type->kind == MINIC_CORE_TYPE_RECORD;
 }
 
-static bool dump_type_is_volatile(const MinicCoreFunction *function,
-                                  MinicCoreTypeId core_id) {
-    const MinicCoreType *type = minic_core_function_type_get(function, core_id);
-    return type != NULL && type->is_volatile;
-}
-
 static bool dump_call_arguments(FILE *output, const MinicCoreFunction *function,
                                 size_t argument_begin, size_t argument_count) {
     size_t index;
@@ -407,12 +401,20 @@ static bool dump_instruction(FILE *output,
                        instruction->value.record_load.destination_object) >= 0;
     case MINIC_CORE_INSTRUCTION_RECORD_COPY:
         return fprintf(output,
-                       "  record.copy %%%" PRIu32 ", %%%" PRIu32 "\n",
+                       "  record.copy%s%s %%%" PRIu32 ", %%%" PRIu32 "\n",
+                       instruction->value.record_copy.source_volatile
+                           ? ".source_volatile" : "",
+                       instruction->value.record_copy.destination_volatile
+                           ? ".destination_volatile" : "",
                        instruction->value.record_copy.source_address,
                        instruction->value.record_copy.destination_address) >= 0;
     case MINIC_CORE_INSTRUCTION_VECTOR_STORAGE_COPY:
         return fprintf(output,
-                       "  vector.storage.copy %%%" PRIu32 ", %%%" PRIu32 "\n",
+                       "  vector.storage.copy%s%s %%%" PRIu32 ", %%%" PRIu32 "\n",
+                       instruction->value.vector_storage_copy.source_volatile
+                           ? ".source_volatile" : "",
+                       instruction->value.vector_storage_copy.destination_volatile
+                           ? ".destination_volatile" : "",
                        instruction->value.vector_storage_copy.source_address,
                        instruction->value.vector_storage_copy.destination_address) >= 0;
     case MINIC_CORE_INSTRUCTION_FIXED_VECTOR128_LOAD:
@@ -573,10 +575,8 @@ bool minic_core_function_dump(FILE *output, const MinicCoreFunction *function) {
     }
     for (index = 0U; index < function->object_count; ++index) {
         if (fprintf(output,
-                    "object %%o%" PRIu32 "%s\n",
-                    (MinicCoreObjectId)index,
-                    dump_type_is_volatile(function,
-                        function->objects[index].core_type_id) ? " volatile" : "") < 0) {
+                    "object %%o%" PRIu32 "\n",
+                    (MinicCoreObjectId)index) < 0) {
             return false;
         }
     }

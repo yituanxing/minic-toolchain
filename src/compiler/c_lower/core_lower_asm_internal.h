@@ -68,6 +68,15 @@ bool core_inline_asm_immediate_text(
     const char **text_out,
     size_t *length_out);
 
+/* Source-owned semantic constant resolution shared by text specialization
+ * and the typed Core asm-goto boundary. Symbol points into the C program and
+ * must be copied before publishing the Core witness. */
+bool core_inline_asm_immediate_fact(
+    const MinicCoreLowerContext *context,
+    const MinicInlineAsmOperand *operand,
+    bool *is_symbol, int64_t *integer,
+    const char **symbol, int64_t *byte_addend);
+
 /* Canonical GNU symbolic immediate, independent of how many AST wrappers or
  * pointer-arithmetic steps produced it. The displacement is in bytes, not C
  * pointer elements; callers compare assembler symbol + displacement together. */

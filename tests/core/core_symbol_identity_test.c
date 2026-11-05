@@ -25,6 +25,9 @@ int main(void) {
     MinicCoreBlockId blocks[2];
     MinicCoreTerminator terminator = {0};
     MinicCoreInlineAsmId assembly;
+    MinicCoreInlineAsmId typed_assembly;
+    MinicCoreBlockId immediate_block;
+    MinicCoreInstruction immediate_effect = {0};
     char *symbol = NULL;
 
     REQUIRE(minic_core_format_label_symbol(0U, &symbol));
@@ -98,8 +101,61 @@ int main(void) {
     REQUIRE(function.inline_asms[assembly].deferred_immediate_symbol != NULL);
     REQUIRE(!minic_core_function_verify(&function));
 
+    /* A Source-free producer cannot bypass typed Core immediate admission.
+     * The instruction must be present: merely storing orphaned metadata does
+     * not exercise the instruction verifier's execution contract. */
+    free(function.inline_asms[assembly].deferred_immediate_symbol);
+    function.inline_asms[assembly].deferred_immediate_symbol = NULL;
+    REQUIRE(minic_core_function_add_block(&function, &immediate_block));
+    REQUIRE(minic_core_function_add_opaque_inline_asm(
+        &function, "nop", 3U, true, false, &typed_assembly));
+    function.inline_asms[typed_assembly].is_goto = true;
+    function.inline_asms[typed_assembly].goto_target = blocks[1];
+    function.inline_asms[typed_assembly].resolved_immediate_count = 2U;
+    function.inline_asms[typed_assembly].resolved_immediates[0].kind =
+        MINIC_CORE_INLINE_ASM_IMMEDIATE_SYMBOL;
+    function.inline_asms[typed_assembly].resolved_immediates[0].symbol = owned("key");
+    function.inline_asms[typed_assembly].resolved_immediates[0].byte_addend = 4;
+    function.inline_asms[typed_assembly].resolved_immediates[1].kind =
+        MINIC_CORE_INLINE_ASM_IMMEDIATE_INTEGER;
+    function.inline_asms[typed_assembly].resolved_immediates[1].integer = 3;
+    REQUIRE(function.inline_asms[typed_assembly].resolved_immediates[0].symbol != NULL);
+    immediate_effect.kind = MINIC_CORE_INSTRUCTION_OPAQUE_INLINE_ASM;
+    immediate_effect.core_type_id = void_type;
+    immediate_effect.value.inline_asm_id = typed_assembly;
+    REQUIRE(minic_core_function_append_effect_instruction(
+        &function, immediate_block, &immediate_effect));
+    REQUIRE(minic_core_function_set_terminator(
+        &function, immediate_block, &terminator));
+    REQUIRE(minic_core_function_verify(&function));
+    {
+        MinicCoreInlineAsmImmediate *key =
+            &function.inline_asms[typed_assembly].resolved_immediates[0];
+        MinicCoreInlineAsmImmediate *flags =
+            &function.inline_asms[typed_assembly].resolved_immediates[1];
+        char *saved_key = key->symbol;
+        key->symbol = (char *)"key+1";
+        REQUIRE(!minic_core_function_verify(&function)); /* no assembler expression */
+        key->symbol = saved_key;
+        key->kind = MINIC_CORE_INLINE_ASM_IMMEDIATE_INTEGER;
+        REQUIRE(!minic_core_function_verify(&function)); /* stale symbolic payload */
+        key->kind = MINIC_CORE_INLINE_ASM_IMMEDIATE_SYMBOL;
+        flags->byte_addend = 1;
+        REQUIRE(!minic_core_function_verify(&function)); /* integer cannot relocate */
+        flags->byte_addend = 0;
+        flags->kind = MINIC_CORE_INLINE_ASM_IMMEDIATE_INVALID;
+        REQUIRE(!minic_core_function_verify(&function)); /* missing typed slot */
+        flags->kind = MINIC_CORE_INLINE_ASM_IMMEDIATE_INTEGER;
+        function.inline_asms[typed_assembly].resolved_immediates[2].kind =
+            MINIC_CORE_INLINE_ASM_IMMEDIATE_INTEGER;
+        REQUIRE(!minic_core_function_verify(&function)); /* hidden trailing slot */
+        function.inline_asms[typed_assembly].resolved_immediates[2].kind =
+            MINIC_CORE_INLINE_ASM_IMMEDIATE_INVALID;
+        REQUIRE(minic_core_function_verify(&function));
+    }
+
     minic_core_function_destroy(&function);
     minic_core_type_context_destroy(&types);
-    puts("CORE_SYMBOL_IDENTITY=PASS owned_local_symbols unique canonical deferred_goto injection_rejected");
+    puts("CORE_SYMBOL_IDENTITY=PASS local_symbols deferred_goto typed_asm_integer_symbol forged_payload_rejected");
     return 0;
 }
