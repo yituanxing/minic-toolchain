@@ -31,7 +31,17 @@ SECTIONS {
   .igot.plt : { *(.igot.plt) }
   .data : { *(.data) }
   .rela.dyn : ALIGN(8) { *(.rela.dyn) }
-  /DISCARD/ : { *(.data.dead) *(.text.dead) }
+  /* Linux 6.6.143 arch/loongarch/kernel/vmlinux.lds discards dynamic
+   * symbol tables and loader sections from its static-PIE image. GNU BFD
+   * otherwise preserves them as orphans, shifting .data and .rela.dyn and
+   * invalidating an exact-R_RELATIVE-offset comparison for this fixture. */
+  /DISCARD/ : {
+    *(.data.dead) *(.text.dead)
+    *(.dynamic .dynsym .dynstr .hash .gnu.hash)
+    *(.gnu.attributes)
+    *(.options)
+    *(.eh_frame)
+  }
 }
 LDS
 cat >"$work/live.s" <<'ASM'
