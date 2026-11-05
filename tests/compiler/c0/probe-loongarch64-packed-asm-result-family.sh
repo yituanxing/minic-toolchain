@@ -16,26 +16,29 @@ for name in packed_clock packed_cpucfg packed_nospec \
             packed_percpu_amo packed_frametrace_csr; do
   sed -n "/^${name}:/,/^\.size ${name},/p" "$d/source.s" > "$d/$name.s"
   test -s "$d/$name.s"
-  grep -Fq '.Lloong_store_native_' "$d/$name.s"
+  # The old emitter used private .Lloong_store_native_ labels. M1 must
+  # instead form real slow/native/done blocks with a conditional edge, and
+  # retain the byte-scatter writeback path for unknown packed alignment.
+  grep -Eq '^  beqz \$t3, \.Lminic_mir_' "$d/$name.s"
   grep -Fq 'st.b $t3,' "$d/$name.s"
 done
 grep -Fq 'rdtime.d $t0, $t1' "$d/packed_clock.s"
-grep -Fq 'andi $t3, $t2, 7' "$d/packed_clock.s"
-grep -Fq 'andi $t3, $t2, 3' "$d/packed_clock.s"
+grep -Fq 'andi $t3, $t7, 7' "$d/packed_clock.s"
+grep -Fq 'andi $t3, $t7, 3' "$d/packed_clock.s"
 grep -Fq 'cpucfg $t0, $t1' "$d/packed_cpucfg.s"
-grep -Fq 'andi $t3, $t2, 3' "$d/packed_cpucfg.s"
-grep -Fq 'sltu $t2, $t0, $t1' "$d/packed_nospec.s"
+grep -Fq 'andi $t3, $t7, 3' "$d/packed_cpucfg.s"
+grep -Eq '^  sltu[[:space:]]+\$t2,[[:space:]]*\$t0,[[:space:]]*\$t1$' "$d/packed_nospec.s"
 grep -Fq 'andi $t3, $t1, 7' "$d/packed_nospec.s"
 grep -Fq 'amadd.d $t2, $t0, $t1' "$d/packed_percpu_amo.s"
 grep -Fq 'andi $t3, $t1, 7' "$d/packed_percpu_amo.s"
-grep -Fq 'csrrd $t0, 7' "$d/packed_frametrace_csr.s"
-grep -Fq 'andi $t3, $t1, 7' "$d/packed_frametrace_csr.s"
+grep -Eq '^  csrrd \$t0, (0x7|7)$' "$d/packed_frametrace_csr.s"
+grep -Fq 'andi $t3, $t7, 7' "$d/packed_frametrace_csr.s"
 
 sed -n '/^aligned_global_frametrace_csr:/,/^\.size aligned_global_frametrace_csr,/p' \
   "$d/source.s" > "$d/aligned.s"
-grep -Fq 'csrrd $t0, 7' "$d/aligned.s"
-grep -Fq 'st.d $t0, $t1, 0' "$d/aligned.s"
-if grep -Fq '.Lloong_store_native_' "$d/aligned.s"; then
+grep -Eq '^  csrrd \$t0, (0x7|7)$' "$d/aligned.s"
+grep -Fq 'st.d $t0, $t7, 0' "$d/aligned.s"
+if grep -Fq 'andi $t3, $t7, 7' "$d/aligned.s"; then
   echo 'LOONG_PACKED_RESULT=FAIL static aligned global gained guard' >&2
   exit 1
 fi
@@ -55,4 +58,4 @@ for bad in clock cpucfg nospec percpu_amo frametrace; do
   fi
   test ! -e "$d/bad.s"
 done
-echo 'LOONG_PACKED_ASM_RESULT_FAMILY=PASS GNU_C=PASS positive=5 native_global_fastpath=1 negatives=5 QEMU=NOT_RUN'
+echo 'LOONG_PACKED_ASM_RESULT_FAMILY=PASS GNU_C=PASS positive=5 typed_cfg_guarded_writeback=5 native_global_fastpath=1 negatives=5 QEMU=NOT_RUN'

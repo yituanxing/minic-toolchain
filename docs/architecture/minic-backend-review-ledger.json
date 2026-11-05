@@ -10,7 +10,7 @@
     672,
     673
   ],
-  "audit_in_progress": "Core-to-physical-MachineIR migration: LoongArch64 whole-function production selection has a live typed-output inode witness for eighteen supported fixtures, with one historical unsupported case still rejected; GNU AS/LD/QEMU/Linux runtime acceptance is pending. RV32/RV64, x86-64 and AArch64 have additional typed selector families but retain legacy production entrypoints until whole-function coverage and ABI parity are proven. New source owners are inventory-only; stale fingerprints reopen review and do not imply full-source certification.",
+  "audit_in_progress": "Core-to-physical-MachineIR migration: LoongArch64 whole-function production selection has a live typed-output inode witness for twenty supported fixtures, with one historical unsupported case still rejected; full GNU AS/LD/QEMU/Linux runtime acceptance is pending. Loong scalar sealed-source families 1/4/5/6/15/17 and immediate DBAR 22 now bind directly to physical MachineIR, with strict negative admission and source-only probes. RV32/RV64, x86-64 and AArch64 have additional typed selector families but retain legacy production entrypoints until whole-function coverage and ABI parity are proven. New source owners are inventory-only; stale fingerprints reopen review and do not imply full-source certification.",
   "next_deep_review": [
     "src/target/aarch64/frame_emit.c",
     "src/target/loongarch64/frame_emit.c",
@@ -126,6 +126,16 @@
     },
     "src/target/loongarch64/machine_pte_select.h": {
       "blob": "6597dd1e0fed0db790dde60543d12af21dd58590",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/loongarch64/machine_scalar_source_select.c": {
+      "blob": "5734785d89d40efde0333aff842a8ccf496441ef",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/loongarch64/machine_scalar_source_select.h": {
+      "blob": "4c5eec710713f6d5e162676656b81f336ec21af2",
       "review_depth": "inventory",
       "ci_touched_in": []
     },

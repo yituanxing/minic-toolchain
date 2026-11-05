@@ -37,6 +37,8 @@ LOONG_PRODUCTION_EXTRAS = {
     "named_store_mb_structured": ROOT / "tests/compiler/c0/loong-linux-named-store-mb.c",
     "packed_hardware_results": ROOT / "tests/compiler/c0/loongarch64_packed_hardware_asm_results.c",
     "percpu_structured_source": ROOT / "tests/target/loongarch64/percpu_structured_source.c",
+    "dbar_machine_immediate": ROOT / "tests/target/loongarch64/dbar_machine_immediate.c",
+    "loong_scalar_source_forms": ROOT / "tests/compiler/mir-migration/loong_scalar_source_forms.c",
 }
 LOONG_LEGACY_NEGATIVE = ROOT / "tests/target/loongarch64/int128_pair_legacy_unsupported.c"
 LOONG_SOURCE_NEGATIVES = (
@@ -44,6 +46,10 @@ LOONG_SOURCE_NEGATIVES = (
     ("bug_bad_path", ROOT / "tests/target/loongarch64/opaque_bugtable_negative.c", "MINIC_BAD_BUG_PATH"),
     ("bug_bad_label", ROOT / "tests/target/loongarch64/opaque_bugtable_negative.c", "MINIC_BAD_BUG_LABEL"),
     ("bug_bad_opcode", ROOT / "tests/target/loongarch64/opaque_bugtable_negative.c", "MINIC_BAD_BUG_NATIVE"),
+    ("dbar_suffix", ROOT / "tests/target/loongarch64/dbar_machine_immediate.c", "MINIC_BAD_DBAR_SUFFIX"),
+    ("dbar_constraint", ROOT / "tests/target/loongarch64/dbar_machine_immediate.c", "MINIC_BAD_DBAR_CONSTRAINT"),
+    ("dbar_dynamic", ROOT / "tests/target/loongarch64/dbar_machine_immediate.c", "MINIC_BAD_DBAR_DYNAMIC"),
+    ("clock_cpu_id_historical", ROOT / "tests/compiler/mir-migration/loong_scalar_source_forms.c", "MINIC_LOONG_CLOCK_CPU_ID_HISTORICAL_NEGATIVE"),
 )
 TARGETS = ("aarch64", "loongarch64")
 FIVE = ("riscv32", "riscv64", "x86_64", "aarch64", "loongarch64")
@@ -214,6 +220,27 @@ def check_functional_shapes(asm, arch, case):
             demand(opcode in asm, f"{key}: sealed perCPU ISA missing {opcode}")
         demand(len(re.findall(r"\bandi\s+\$t3,\s+\$t1,\s+7", asm)) >= 2,
                f"{key}: packed perCPU native/byte stores missing alignment guards")
+    elif case == "dbar_machine_immediate":
+        for marker in ("minic_loong_dbar_18:", "minic_loong_dbar_1792:",
+                       "dbar 18", "dbar 1792"):
+            demand(marker in asm, f"{key}: sealed DBAR hardware form missing {marker}")
+        demand(asm.count("# MINIC_SOURCE_INLINE_ASM_BEGIN") == 2,
+               f"{key}: physical SOURCE_ASM occurrence count changed")
+    elif case == "loong_scalar_source_forms":
+        for marker in ("loong_scalar_cacop:", "loong_scalar_cpucfg:",
+                       "loong_scalar_fpr_read:", "loong_scalar_fpr_write:",
+                       "loong_scalar_clock:",
+                       "loong_scalar_clock_named:",
+                       "loong_scalar_clock_vdso_base:",
+                       "loong_scalar_clock_counter_only:",
+                       "loong_scalar_invtlb:",
+                       "loong_scalar_frametrace_csr:",
+                       "cacop 8", "cpucfg ", "movfr2gr.d", "movgr2fr.d",
+                       "rdtime.d", "la.pcrel", "invtlb 0", "csrrd "):
+            demand(marker in asm,
+                   f"{key}: sealed scalar hardware form missing {marker}")
+        demand(asm.count("# MINIC_SOURCE_INLINE_ASM_BEGIN") == 13,
+               f"{key}: physical SOURCE_ASM occurrence count changed")
     else:
         raise Failure(f"unknown MIR test fixture {case}")
     check_label_integrity(asm, key)

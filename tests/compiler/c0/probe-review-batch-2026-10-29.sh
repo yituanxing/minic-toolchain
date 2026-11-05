@@ -33,6 +33,7 @@ sh tests/compiler/c0/probe-minic-target-machine-options.sh
 sh tests/compiler/c0/probe-rv64-hardfloat-fp-record-reject.sh
 sh tests/compiler/c0/probe-rv64-lp64-softfloat-record-call.sh
 sh tests/compiler/c0/probe-loongarch64-packed-scalar-alignment.sh
+bash tests/compiler/mir-migration/probe_loong_scalar_source_forms.sh "$mini"
 sh tests/compiler/c0/probe-loongarch64-syscall-alias-policy.sh
 sh tests/compiler/c0/probe-loongarch64-vararg-int128-pair.sh
 bash tests/compiler/c0/probe-loongarch64-packed-asm-output.sh "$mini"

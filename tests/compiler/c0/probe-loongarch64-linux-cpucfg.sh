@@ -21,7 +21,9 @@ SRC
 "$MINIC_CC" --target=loongarch64-linux -fPIE -S \
   "$work/cpucfg.i" -o "$work/cpucfg.s"
 test "$(grep -Fc '  cpucfg $t0, $t1' "$work/cpucfg.s")" -eq 2
-grep -Fq '  st.w $t0, $t2, 0' "$work/cpucfg.s"
+# The typed selector uses t7 to materialize the output lvalue, leaving the
+# early-clobber cpucfg result in t0 intact until its explicit MachineIR store.
+grep -Fq '  st.w $t0, $t7, 0' "$work/cpucfg.s"
 echo 'MINIC_LOONGARCH64_CPUCFG_SHAPE=PASS constant_index=1 runtime_index=1'
 
 cross=${LOONGARCH64_CC:-loongarch64-linux-gnu-gcc-13}

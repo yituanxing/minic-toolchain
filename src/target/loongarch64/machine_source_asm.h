@@ -19,4 +19,10 @@ bool minic_loongarch64_select_core_source_asm(
     MinicMachineBuilder *, const MinicDirectLP64BlockContext *,
     const MinicCoreInstruction *);
 
+/* Sealed GNU I-constraint `dbar %0`: lower the Core constant to a physical
+ * MachineIR immediate, without carrying a C expression into the backend. */
+bool minic_loongarch64_select_core_dbar_hint(
+    MinicMachineBuilder *, const MinicDirectLP64BlockContext *,
+    const MinicCoreInstruction *);
+
 #endif

@@ -16,16 +16,20 @@ cc -E -P -x c "$src" -o "$dir/source.i"
 for fn in loong_fpr_packed loong_percpu_packed; do
   sed -n "/^${fn}:/,/^\.size ${fn},/p" "$dir/mini.s" > "$dir/$fn.s"
   test -s "$dir/$fn.s"
-  grep -Fq 'andi $t3, $t1, 7' "$dir/$fn.s"
-  grep -Fq 'st.b $t3, $t1, 7' "$dir/$fn.s"
-  grep -Fq 'st.d $t0, $t1, 0' "$dir/$fn.s"
+  # Physical M1 uses a different scratch address register for a scalar FPR
+  # output than for an indexed perCPU output. Both still require a native
+  # alignment gate and byte-exact fallback for an unknown packed lvalue.
+  if [[ "$fn" == loong_fpr_packed ]]; then addr=t7; else addr=t1; fi
+  grep -Fq "andi \$t3, \$$addr, 7" "$dir/$fn.s"
+  grep -Fq "st.b \$t3, \$$addr, 7" "$dir/$fn.s"
+  grep -Fq "st.d \$t0, \$$addr, 0" "$dir/$fn.s"
 done
 grep -Fq 'movfr2gr.d $t0, $f0' "$dir/loong_fpr_packed.s"
 grep -Fq 'ldx.d $t0, $r21, $t1' "$dir/loong_percpu_packed.s"
 
-# The native-width fast path remains in the machine code; source provenance
-# may let future Core metadata eliminate the branch for known-aligned roots.
-grep -Fq '.Lloong_store_native_' "$dir/loong_fpr_packed.s"
+# The native-width path and byte fallback must both be reached through
+# physical MachineIR CFG, not source-local labels or an old private helper.
+grep -Eq '^  beqz \$t3, \.Lminic_mir_' "$dir/loong_fpr_packed.s"
 for bad in bad-fpr-register bad-percpu-base; do
   case "$bad" in
     bad-fpr-register)

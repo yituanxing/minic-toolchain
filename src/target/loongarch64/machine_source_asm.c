@@ -2,6 +2,7 @@
 #include "target/loongarch64/machine_opcode.h"
 #include "target/loongarch64/machine_target_state.h"
 #include "target/loongarch64/machine_asm_form.h"
+#include "target/loongarch64/asm_contract_internal.h"
 #include "target/common/core_machine_asm.h"
 #include "target/common/direct_linux_bug_asm.h"
 #include "target/common/machine_source_asm_template.h"
@@ -62,6 +63,30 @@ static bool loong_source_form(const MinicMachineInstruction *ins) {
     /* ID 20 is LSX/LASX and requires its own typed SIMD register grammar;
      * do not misinterpret vector operands as general-purpose registers. */
     if (id == 20U) return false;
+    /* C ingress seals the GNU named rdtime form as variant 2, but the
+     * source-to-Core normalizer rewrites %[val]/%[tid] into %0/%1. That is
+     * exactly the numeric template shape: retain the sealed named identity
+     * while requiring its two early-clobber physical outputs. Arbitrary
+     * numeric ASM may not borrow variant 2 to bypass this check. */
+    if (id == MINIC_LOONG_MACHINE_ASM_CLOCK &&
+        ins->source_asm_machine_form_variant == LOONG_CLOCK_RDTIME_NAMED &&
+        loong_linux_clock_form(ins->source_asm_template,
+            ins->source_asm_length) == LOONG_CLOCK_RDTIME_NUMERIC) {
+        size_t i;
+        if (ins->operand_count != 2U || ins->operands == NULL ||
+            ins->implicit_count != 0U ||
+            (ins->effects & MINIC_MACHINE_EFFECT_VOLATILE) == 0U ||
+            (ins->effects & MINIC_MACHINE_EFFECT_COMPILER_BARRIER) != 0U)
+            return false;
+        for (i = 0U; i < 2U; ++i)
+            if (ins->operands[i].kind != MINIC_MACHINE_OPERAND_REGISTER ||
+                ins->operands[i].asm_constraint == NULL ||
+                strcmp(ins->operands[i].asm_constraint, "=&r") != 0 ||
+                ins->operands[i].value.physical.access !=
+                    MINIC_MACHINE_REGISTER_WRITE)
+                return false;
+        return true;
+    }
     if (id <= 28U)
         return minic_loongarch64_typed_scalar_form_matches_template(id,
                 ins->source_asm_machine_form_variant,
@@ -331,4 +356,60 @@ bool minic_loongarch64_select_core_source_asm(
         source->template_text == NULL) return false;
     return minic_machine_builder_emit_core_source_asm(builder, source,
         0U, NULL, 0U, NULL, 0U, false, false);
+}
+
+bool minic_loongarch64_select_core_dbar_hint(
+    MinicMachineBuilder *builder, const MinicDirectLP64BlockContext *ctx,
+    const MinicCoreInstruction *instruction) {
+    const MinicCoreFunction *fn;
+    const MinicCoreInlineAsm *source;
+    const MinicCoreStructuredInlineAsmOperand *role;
+    const MinicCoreInstruction *definition;
+    MinicCoreInstructionId definition_id;
+    MinicMachineOperand binding = {0};
+    int64_t hint;
+    if (builder == NULL || builder->function == NULL || ctx == NULL ||
+        (fn = ctx->fn) == NULL || ctx->target == NULL ||
+        builder->function->target != ctx->target ||
+        ctx->target->architecture != MINIC_TARGET_ARCH_LOONGARCH64 ||
+        instruction == NULL ||
+        instruction->kind != MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM ||
+        instruction->result != MINIC_CORE_VALUE_INVALID ||
+        !minic_core_function_type_is_kind(fn, instruction->core_type_id,
+            MINIC_CORE_TYPE_VOID) ||
+        instruction->value.structured_inline_asm.operand_count != 1U ||
+        instruction->value.structured_inline_asm.inline_asm_id >=
+            fn->inline_asm_count || fn->inline_asms == NULL)
+        return false;
+    source = &fn->inline_asms[
+        instruction->value.structured_inline_asm.inline_asm_id];
+    role = &instruction->value.structured_inline_asm.operands[0];
+    if (source->target_machine_form_id !=
+            MINIC_LOONG_MACHINE_ASM_HINT_DBAR ||
+        source->target_machine_form_variant != 1U ||
+        source->operand_plan_owner !=
+            MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED ||
+        !source->is_volatile || source->is_goto ||
+        !source->has_memory_clobber ||
+        source->register_clobber_count != 0U ||
+        !loongarch64_dbar_template(source->template_text,
+            source->template_length) ||
+        role->operand_index != 0U ||
+        role->kind != MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT ||
+        role->has_fixed_register_binding || role->early_clobber ||
+        role->value >= fn->value_count)
+        return false;
+    definition_id = fn->values[role->value].definition;
+    if (definition_id >= fn->instruction_count) return false;
+    definition = &fn->instructions[definition_id];
+    if (definition->kind != MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT ||
+        definition->result != role->value ||
+        !loongarch64_dbar_hint(
+            (hint = definition->value.integer_value)))
+        return false;
+    binding.kind = MINIC_MACHINE_OPERAND_INTEGER;
+    binding.value.integer = hint;
+    binding.asm_constraint = "I";
+    return minic_machine_builder_emit_core_source_asm(builder, source,
+        0U, &binding, 1U, NULL, 0U, false, false);
 }

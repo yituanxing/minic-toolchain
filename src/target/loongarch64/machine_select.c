@@ -7,6 +7,7 @@
 #include "target/loongarch64/machine_llsc_select.h"
 #include "target/loongarch64/machine_pte_select.h"
 #include "target/loongarch64/machine_csr_source_select.h"
+#include "target/loongarch64/machine_scalar_source_select.h"
 #include "target/loongarch64/machine_target_state.h"
 #include "target/loongarch64/frame_emit.h"
 #include "target/common/core_block_walk.h"
@@ -3058,6 +3059,20 @@ static bool loong_select_structured_asm(LoongSelector *sel,
     if (ins->value.structured_inline_asm.operand_count == 0U)
         return minic_loongarch64_select_core_source_asm(
             &sel->builder, sel->ctx, ins);
+    if (source->target_machine_form_id ==
+        MINIC_LOONG_MACHINE_ASM_HINT_DBAR)
+        return minic_loongarch64_select_core_dbar_hint(
+            &sel->builder, sel->ctx, ins);
+    if (source->target_machine_form_id == LOONG_DESC_CACOP ||
+        source->target_machine_form_id == LOONG_DESC_FRAMETRACE_CSR ||
+        source->target_machine_form_id == LOONG_DESC_CPUCFG ||
+        source->target_machine_form_id == LOONG_DESC_FPR_TRANSFER ||
+        source->target_machine_form_id == MINIC_LOONG_MACHINE_ASM_CLOCK ||
+        source->target_machine_form_id == MINIC_LOONG_MACHINE_ASM_INVTLB)
+        return minic_loongarch64_machine_select_scalar_source(
+            &sel->builder, sel->ctx, ins,
+            loong_structured_load_callback,
+            loong_structured_store_callback, sel);
     if (source->target_machine_form_id == LOONG_DESC_FCSR0_WRITE) {
         const MinicCoreType *value_type;
         MinicCoreTypeId value_type_id;
@@ -3544,6 +3559,23 @@ static size_t loong_source_asm_writeback_count(
     source = &fn->inline_asms[
         ins->value.structured_inline_asm.inline_asm_id];
     switch (source->target_machine_form_id) {
+    case LOONG_DESC_FRAMETRACE_CSR:
+    case LOONG_DESC_CPUCFG:
+        return 1U;
+    case LOONG_DESC_FPR_TRANSFER: {
+        const unsigned int form = loong_linux_fpr_transfer_form(
+            source->template_text, source->template_length);
+        return form >= 1U && form <= 32U ? 1U : 0U;
+    }
+    case MINIC_LOONG_MACHINE_ASM_CLOCK: {
+        const LoongLinuxClockAsm form = loong_linux_clock_form(
+            source->template_text, source->template_length);
+        return form == LOONG_CLOCK_RDTIME_NUMERIC ||
+            form == LOONG_CLOCK_RDTIME_NAMED ? 2U :
+            form == LOONG_CLOCK_VDSO_BASE ||
+            form == LOONG_CLOCK_CPU_ID ||
+            form == LOONG_CLOCK_COUNTER_ONLY ? 1U : 0U;
+    }
     case LOONG_DESC_PERCPU_INDEXED: {
         MinicLoongPerCpuIndexedForm form = loong_percpu_indexed_form(
             source->template_text, source->template_length);
