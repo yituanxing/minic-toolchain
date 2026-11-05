@@ -1088,7 +1088,9 @@ static bool script_layout_place_patterns(
                     &items[item_index].value.pattern,
                     script_section_source_name(
                         &script_state->state->work.sections[i]),
-                    script_state->state->work.sections[i].input_path)) {
+                    script_state->state->work.sections[i].input_path,
+                    script_state->state->work.sections[i].input_archive_path,
+                    script_state->state->work.sections[i].input_archive_member_name)) {
                 selected = true;
                 break;
             }
@@ -1446,7 +1448,9 @@ static bool script_layout_process_output(MiniLdScriptLayoutState *script_state,
                     !minild_script_pattern_matches_input(
                         &item->value.pattern,
                         script_section_source_name(section),
-                        section->input_path)) {
+                        section->input_path,
+                        section->input_archive_path,
+                        section->input_archive_member_name)) {
                     continue;
                 }
                 if (align > input_alignment) {
@@ -1882,6 +1886,7 @@ static bool static_build_script_layout(MiniLdState *state,
     size_t *command_deferred_owner = NULL;
     size_t i;
     size_t alloc_count = 0U;
+    size_t alloc_note_count = 0U;
     bool have_alloc_tls = false;
     size_t last_file_backed = SIZE_MAX;
     /* The implicit no-separate-code writable PT_LOAD may contain later
@@ -2337,6 +2342,9 @@ static bool static_build_script_layout(MiniLdState *state,
             }
         }
         ++alloc_count;
+        if (section->type == SHT_NOTE) {
+            ++alloc_note_count;
+        }
         if ((section->flags & SHF_TLS) != 0U) {
             have_alloc_tls = true;
         }
@@ -2351,23 +2359,50 @@ static bool static_build_script_layout(MiniLdState *state,
         MiniLdElfAbiSizes abi =
             minild_elf_abi_sizes(state->target->elf_class);
 
-        size_t header_phdr_count = script->phdr_count != 0U
-                                       ? script->phdr_count +
-                                             (have_alloc_tls ? 1U : 0U)
-                                       : alloc_count;
+        size_t header_phdr_count;
+        size_t extra_phdr_count = have_alloc_tls ? 1U : 0U;
 
         /* Script layout precedes ProgramPlan materialization.  Account for
          * its GNU_STACK decision now: -z noexecstack or admitted input notes
          * synthesize one header when the script has no explicit PHDRS. */
         uint32_t stack_flags = 0U;
-        if (script->phdr_count == 0U &&
-            minild_program_plan_stack_flags(state, &stack_flags)) {
-            if (header_phdr_count == SIZE_MAX) {
+        if (script->phdr_count == 0U) {
+            /* The eventual static ProgramPlan publishes at most one LOAD
+             * per nonempty allocated work fragment, but additionally one
+             * PT_NOTE per surviving allocated NOTE output and one PT_TLS
+             * for the whole TLS image.  A script may combine fragments,
+             * so reserve this strict upper bound before file placement.
+             * Missing those extra records corrupts -n images: the final
+             * ELF PHDR table would overlap the first section's bytes. */
+            if (alloc_note_count > SIZE_MAX - extra_phdr_count) {
                 fprintf(state->diagnostics,
                         "minic-ld: linker-script-header-overflow\n");
                 goto done;
             }
-            ++header_phdr_count;
+            extra_phdr_count += alloc_note_count;
+            if (minild_program_plan_stack_flags(state, &stack_flags)) {
+                if (extra_phdr_count == SIZE_MAX) {
+                    fprintf(state->diagnostics,
+                            "minic-ld: linker-script-header-overflow\n");
+                    goto done;
+                }
+                ++extra_phdr_count;
+            }
+            if (alloc_count > SIZE_MAX - extra_phdr_count) {
+                fprintf(state->diagnostics,
+                        "minic-ld: linker-script-header-overflow\n");
+                goto done;
+            }
+            header_phdr_count = alloc_count + extra_phdr_count;
+        } else {
+            /* Explicit PHDRS own their table.  The only implicit record
+             * the supported static-script policy adds is PT_TLS. */
+            if (script->phdr_count > SIZE_MAX - extra_phdr_count) {
+                fprintf(state->diagnostics,
+                        "minic-ld: linker-script-header-overflow\n");
+                goto done;
+            }
+            header_phdr_count = script->phdr_count + extra_phdr_count;
         }
 
         if (abi.phdr == 0U ||

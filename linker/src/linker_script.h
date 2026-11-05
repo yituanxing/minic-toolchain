@@ -191,6 +191,8 @@ bool minild_script_pattern_matches(const MiniLdScriptPattern *pattern,
                                    const char *section_name);
 bool minild_script_pattern_matches_input(const MiniLdScriptPattern *pattern,
                                          const char *section_name,
-                                         const char *input_file);
+                                         const char *input_file,
+                                         const char *archive_path,
+                                         const char *archive_member_name);
 
 #endif

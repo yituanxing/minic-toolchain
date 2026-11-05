@@ -22,6 +22,35 @@ are independent recertification gates.
    projection.  Unadmitted --emit-relocs transformations fail closed; only
    the target that supplies a post-fixup classifier can enable that mode.
 
+### Correctness closeout: archive origins, COMMON and PHDR footprint
+
+- Each admitted archive member retains **two original identifiers** in the
+  immutable InputGraph: its parent archive path and its member name.  Linker
+  scripts match archive-qualified source selectors against those originals;
+  the work projection only borrows them.  Thin-archive physical paths and
+  coalesced work-section names cannot stand in for the parent/member pair.
+- The one canonical symbol resolver implements tentative `SHN_COMMON`
+  selection across `-r` and final links.  Multiple COMMON candidates merge
+  their greatest size and alignment; an ordinary strong definition wins over
+  COMMON and COMMON wins over an ordinary weak definition.  Archive selection
+  consults the candidate's actual binding and section index: a preexisting
+  COMMON extracts a genuinely strong member, not a weak or another COMMON.
+  Final `.bss` also inherits the maximum symbol alignment.
+- Linker-script header reservation includes potential `PT_LOAD`, `PT_NOTE`,
+  `PT_TLS` and `PT_GNU_STACK` entries before assigning file offsets.  The
+  final ProgramPlan validates that the synthesized header range cannot
+  overlap any emitted file-backed section.  This is essential for `-n`,
+  whose target alignment may be one byte.  Explicit script `PHDRS` remains
+  the segment-owner boundary.
+
+These are shared ELF data-flow repairs, not new ISA-dependent CLI switches.
+GNU BFD differential probes cover multi-COMMON and archive extraction,
+archive/member script selectors, and ELF32/ELF64 normal versus `-n`
+TLS/NOTE/stack header layouts.  The canonical five-target Make boundary is
+also the first check in the GitHub ELF boundary workflow, with its additional
+CI-only checks retained.  New-head full Linux/QEMU P1 remains a separate
+required recertification gate.
+
 There are six explicit ELF descriptors (RV32, RV64, x86-64, i386 setup,
 AArch64 and LoongArch64).  They use named initializers so extending a target
 contract cannot silently shift positional ABI callbacks.  The public

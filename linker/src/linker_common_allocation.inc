@@ -25,6 +25,13 @@ static bool minild_allocate_common(MiniLdState *state) {
          * of any original input fragments, and it must survive GC. */
         state->work.sections[bss_index].gc_discarded = false;
         alignment = symbol->value == 0U ? 1U : symbol->value;
+        /* COMMON st_value is an alignment requirement, not an address.
+         * The output section itself must be aligned as well as this
+         * symbol's offset; otherwise a non-page-aligned .bss VMA can break
+         * even though the offset within .bss is correctly rounded up. */
+        if (alignment > state->work.sections[bss_index].align) {
+            state->work.sections[bss_index].align = alignment;
+        }
         if (!align_up_size(state->work.sections[bss_index].size,
                            alignment,
                            &aligned) ||

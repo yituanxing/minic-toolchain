@@ -129,7 +129,9 @@ static bool select_input_groups(MiniLdState *state,
 static bool process_input_data(MiniLdState *state,
                                const unsigned char *data,
                                size_t size,
-                               const char *path) {
+                               const char *path,
+                               const char *archive_path,
+                               const char *archive_member_name) {
     MiniElfView elf;
     MiniElfSection shstrtab;
     MiniElfSection symtab;
@@ -253,7 +255,8 @@ static bool process_input_data(MiniLdState *state,
             link_order_targets[header.link] = true;
         }
     }
-    if (!input_graph_record_file(&state->inputs, path, elf.flags,
+    if (!input_graph_record_file(&state->inputs, path, archive_path,
+                                 archive_member_name, elf.flags,
                                  elf.section_count, &file_index)) {
         fprintf(state->diagnostics,
                 "minic-ld: out-of-memory:input-file\n");
@@ -789,7 +792,7 @@ static bool process_input(MiniLdState *state, const char *path) {
             ok = process_dso_input_data(state, data, size, path);
         }
     } else {
-        ok = process_input_data(state, data, size, path);
+        ok = process_input_data(state, data, size, path, NULL, NULL);
     }
     free(data);
     return ok;

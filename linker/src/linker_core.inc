@@ -34,6 +34,9 @@ typedef struct MiniLdSection {
     /* Non-owning path of the exact input fragment, NULL for synthesized or
      * legacy merged sections.  InputFile owns this string until teardown. */
     const char *input_path;
+    /* Borrowed from InputFile and preserved through source section sorting. */
+    const char *input_archive_path;
+    const char *input_archive_member_name;
     uint32_t type;
     uint64_t flags;
     uint64_t align;
@@ -135,6 +138,10 @@ typedef struct MiniLdRelocationWorkspace {
  * STT_SECTION symbols or padding in the merged buffer. */
 typedef struct MiniLdInputFile {
     char *path;
+    /* Exact source identity: the archive and member are independent facts,
+     * not an encoded synthetic filename. NULL for standalone ET_REL. */
+    char *archive_path;
+    char *archive_member_name;
     size_t first_section;
     size_t section_count;
     /* ET_REL symbols are appended contiguously for each input object,

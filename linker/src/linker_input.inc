@@ -12,6 +12,8 @@ static void input_graph_destroy(MiniLdInputGraph *graph) {
 
     for (i = 0U; i < graph->file_count; ++i) {
         free(graph->files[i].path);
+        free(graph->files[i].archive_path);
+        free(graph->files[i].archive_member_name);
         free(graph->files[i].section_ids);
     }
     for (i = 0U; i < graph->section_count; ++i) {
@@ -101,6 +103,8 @@ static bool input_graph_select_comdat(MiniLdInputGraph *graph,
 
 static bool input_graph_record_file(MiniLdInputGraph *graph,
                                     const char *path,
+                                    const char *archive_path,
+                                    const char *archive_member_name,
                                     uint32_t elf_flags,
                                     size_t elf_section_count,
                                     size_t *file_out) {
@@ -128,15 +132,36 @@ static bool input_graph_record_file(MiniLdInputGraph *graph,
     if (entry->path == NULL) {
         return false;
     }
-    if (elf_section_count > SIZE_MAX / sizeof(*entry->section_ids)) {
+    if ((archive_path == NULL) != (archive_member_name == NULL)) {
         free(entry->path);
         entry->path = NULL;
         return false;
     }
+    if (archive_path != NULL) {
+        entry->archive_path = minild_strdup(archive_path);
+        entry->archive_member_name = minild_strdup(archive_member_name);
+        if (entry->archive_path == NULL ||
+            entry->archive_member_name == NULL) {
+            free(entry->archive_path);
+            free(entry->archive_member_name);
+            free(entry->path);
+            memset(entry, 0, sizeof(*entry));
+            return false;
+        }
+    }
+    if (elf_section_count > SIZE_MAX / sizeof(*entry->section_ids)) {
+        free(entry->archive_path);
+        free(entry->archive_member_name);
+        free(entry->path);
+        memset(entry, 0, sizeof(*entry));
+        return false;
+    }
     entry->section_ids = malloc(elf_section_count * sizeof(*entry->section_ids));
     if (entry->section_ids == NULL) {
+        free(entry->archive_path);
+        free(entry->archive_member_name);
         free(entry->path);
-        entry->path = NULL;
+        memset(entry, 0, sizeof(*entry));
         return false;
     }
     for (size_t i = 0U; i < elf_section_count; ++i) {

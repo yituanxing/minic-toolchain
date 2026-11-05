@@ -51,8 +51,37 @@ static void minild_program_plan_set_stack(MiniElfProgramHeader *ph,
 
 static bool minild_program_plan_validate(const MiniLdState *state,
                                          const MiniLdProgramPlan *plan,
+                                         const MiniLdOutputPlan *output_plan,
                                          size_t image_size) {
+    MiniLdElfAbiSizes abi = minild_elf_abi_sizes(state->target->elf_class);
+    size_t header_end;
     size_t i;
+
+    /* The ELF and PHDR records must own their complete file range.
+     * Layout precedes final PHDR synthesis, so a low-alignment scripted
+     * image (notably GNU -n) can otherwise place section bytes inside a
+     * later-added PT_TLS/PT_NOTE header.  Fail before any output is written
+     * even if a future script planner misses a header-count case. */
+    if (abi.phdr == 0U || plan->count > (SIZE_MAX - abi.ehdr) / abi.phdr) {
+        fprintf(state->diagnostics,
+                "minic-ld: final-program-header-overflow\n");
+        return false;
+    }
+    header_end = abi.ehdr + plan->count * abi.phdr;
+    for (i = 0U; i < output_plan->count; ++i) {
+        const MiniLdOutputSection *section = &output_plan->sections[i];
+
+        if (section->type == SHT_NOBITS || section->size == 0U) {
+            continue;
+        }
+        if (section->file_offset == SIZE_MAX ||
+            section->file_offset < header_end) {
+            fprintf(state->diagnostics,
+                    "minic-ld: final-section-overlaps-elf-headers:%s\n",
+                    section->name);
+            return false;
+        }
+    }
     for (i = 0U; i < plan->count; ++i) {
         const MiniElfProgramHeader *ph = &plan->entries[i];
         uint64_t align = ph->alignment;

@@ -35,7 +35,9 @@ static bool minild_select_script_inputs(MiniLdState *state,
                     source->file >= state->inputs.file_count ||
                     !minild_script_pattern_matches_input(
                         &item->value.pattern, source->name,
-                        state->inputs.files[source->file].path)) {
+                        state->inputs.files[source->file].path,
+                        state->inputs.files[source->file].archive_path,
+                        state->inputs.files[source->file].archive_member_name)) {
                     continue;
                 }
                 if (source_section >= state->work.count) {
@@ -69,7 +71,9 @@ static bool minild_select_script_inputs(MiniLdState *state,
                     section->input_name != NULL ||
                     !minild_script_pattern_matches_input(
                         &item->value.pattern, section->name,
-                        section->input_path)) {
+                        section->input_path,
+                        section->input_archive_path,
+                        section->input_archive_member_name)) {
                     continue;
                 }
                 section->script_selected = true;

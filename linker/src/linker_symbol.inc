@@ -184,8 +184,42 @@ static bool symbol_resolver_merge_global(MiniLdSymbolResolver *resolver,
         unsigned old_bind = ELF64_ST_BIND(existing->info);
         bool old_defined = symbol_resolver_is_defined(existing);
         bool new_defined = section != MINILD_SECTION_UNDEF;
+        bool old_common = existing->section == MINILD_SECTION_COMMON;
+        bool new_common = section == MINILD_SECTION_COMMON;
 
-        if (!old_defined && new_defined) {
+        /* ELF tentative definitions are neither ordinary strong definitions
+         * nor undefined references.  GNU BFD merges COMMON candidates using
+         * their maximum requested size and alignment; a regular strong
+         * definition supersedes COMMON, while COMMON supersedes a regular
+         * weak definition.  Apply this once in the canonical resolver so -r,
+         * ET_EXEC, ET_DYN and archive inputs observe the same winner. */
+        if (old_common && new_common) {
+            if (size > existing->size) {
+                existing->size = size;
+                existing->source_symbol = source_symbol;
+            }
+            if (value > existing->value) {
+                existing->value = value;
+            }
+        } else if (old_common && new_defined) {
+            if (new_bind != STB_WEAK) {
+                existing->section = section;
+                existing->value = value;
+                existing->size = size;
+                existing->info = info;
+                existing->other = other;
+                existing->source_symbol = source_symbol;
+            }
+        } else if (new_common) {
+            if (!old_defined || old_bind == STB_WEAK) {
+                existing->section = section;
+                existing->value = value;
+                existing->size = size;
+                existing->info = info;
+                existing->other = other;
+                existing->source_symbol = source_symbol;
+            }
+        } else if (!old_defined && new_defined) {
             existing->section = section;
             existing->value = value;
             existing->size = size;
@@ -215,14 +249,24 @@ static bool symbol_resolver_merge_global(MiniLdSymbolResolver *resolver,
     return true;
 }
 
-/* Lazy archive extraction asks about unmet nonweak references only.  It does
- * not own or modify the global hash or the selected canonical definition. */
+/* A strong archive definition may override a tentative COMMON from an
+ * already admitted object, but another archive COMMON (or weak definition)
+ * must not be extracted merely to merge it.  Truly undefined strong inputs
+ * accept any archive definition, including COMMON or weak. */
 static bool symbol_resolver_needs_archive(const MiniLdSymbolResolver *resolver,
-                                          const char *name) {
+                                          const char *name,
+                                          unsigned candidate_bind,
+                                          uint16_t candidate_shndx) {
     size_t index = symbol_resolver_lookup(resolver, name);
 
-    return index != SIZE_MAX &&
-           !symbol_resolver_is_defined(&resolver->entries[index]) &&
+    if (index == SIZE_MAX) {
+        return false;
+    }
+    if (resolver->entries[index].section == MINILD_SECTION_COMMON) {
+        return candidate_shndx != SHN_COMMON &&
+               candidate_bind != STB_WEAK;
+    }
+    return !symbol_resolver_is_defined(&resolver->entries[index]) &&
            ELF64_ST_BIND(resolver->entries[index].info) != STB_WEAK;
 }
 

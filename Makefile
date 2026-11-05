@@ -976,11 +976,22 @@ check-minild-static-script-pure-nobits-phdr: $(MINILD_BINARY)
 	MINILD="$(abspath $(MINILD_BINARY))" \
 	bash tests/linker/probe-static-script-pure-nobits-phdr.sh
 
+.PHONY: check-minild-script-header-footprint
+check-minild-script-header-footprint: $(MINILD_BINARY)
+	MINILD="$(abspath $(MINILD_BINARY))" \
+	bash tests/linker/probe-script-header-footprint.sh
+
 .PHONY: check-minild-five-arch-linux-linker-boundary
 check-minild-five-arch-linux-linker-boundary: \
 	check-minild-cli-archive-group-parity \
 	check-minild-cli-option-mode-contract \
 	check-minild-gnu-stack-parity \
+	check-minild-symbol-ownership \
+	check-minild-common-resolution-gnu \
+	check-minild-archive-resolution-boundary \
+	check-minild-archive-input-provenance \
+	check-minild-input-section-gc \
+	check-minild-script-gc-input \
 	check-minild-static-merge-five-target \
 	check-minild-static-merge-strings \
 	check-minild-static-merge-input-pool-identity \
@@ -1021,6 +1032,7 @@ check-minild-five-arch-linux-linker-boundary: \
 	check-minild-x86-script-info \
 	check-minild-x86-script-synthetic-nobits \
 	check-minild-static-script-pure-nobits-phdr \
+	check-minild-script-header-footprint \
 	check-minild-segment-plan
 
 .PHONY: check-minild-rv32-static-runtime
@@ -1301,11 +1313,21 @@ check-minild-symbol-ownership: $(MINIAS_BINARY) $(MINILD_BINARY)
 	MINILD="$(abspath $(MINILD_BINARY))" \
 	bash tests/linker/probe-symbol-ownership.sh
 
+.PHONY: check-minild-common-resolution-gnu
+check-minild-common-resolution-gnu: $(MINILD_BINARY)
+	MINILD="$(abspath $(MINILD_BINARY))" \
+	bash tests/linker/probe-common-resolution-gnu.sh
+
 .PHONY: check-minild-archive-resolution-boundary
 check-minild-archive-resolution-boundary: $(MINIAS_BINARY) $(MINILD_BINARY)
 	MINIAS="$(abspath $(MINIAS_BINARY))" \
 	MINILD="$(abspath $(MINILD_BINARY))" \
 	bash tests/linker/probe-archive-resolution-boundary.sh
+
+.PHONY: check-minild-archive-input-provenance
+check-minild-archive-input-provenance: $(MINILD_BINARY)
+	MINILD="$(abspath $(MINILD_BINARY))" \
+	bash tests/linker/probe-archive-input-provenance.sh
 
 .PHONY: check-minild-cli-archive-group-parity
 check-minild-cli-archive-group-parity: $(MINILD_BINARY)

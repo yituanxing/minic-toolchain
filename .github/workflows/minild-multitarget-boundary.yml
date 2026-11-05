@@ -45,12 +45,13 @@ jobs:
         run: |
           make -j4 MODE=release CFLAGS=-Werror \
             build/release/bin/minic-as build/release/bin/minic-ld
-      - name: Exercise ELF32/64 relocatable targets and three static targets
+      - name: Exercise canonical five-target boundary and additional CI runtime gates
         env:
           MINILD_REQUIRE_QEMU: '1'
           MINILD_REQUIRE_GNU: '1'
         run: |
           make MODE=release CFLAGS=-Werror \
+            check-minild-five-arch-linux-linker-boundary \
             check-minild-multitarget-relocatable \
             check-minild-multitarget-static \
             check-minild-multitarget-script-gc-boundary \

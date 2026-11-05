@@ -545,7 +545,9 @@ static size_t minild_merge_output_owner(const MiniLdState *state,
                 minild_script_pattern_matches_input(
                     &item->value.pattern,
                     work->input_name != NULL ? work->input_name : work->name,
-                    work->input_path)) {
+                    work->input_path,
+                    work->input_archive_path,
+                    work->input_archive_member_name)) {
                 return cmd->value.section.discard ? SIZE_MAX : i;
             }
         }

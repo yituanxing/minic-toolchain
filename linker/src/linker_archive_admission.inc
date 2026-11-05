@@ -14,6 +14,7 @@ typedef struct MiniLdArchiveMember {
 
 typedef struct MiniLdArchive {
     MiniLdArchiveKind kind;
+    char *original_path;
     unsigned char *data;
     size_t size;
     MiniLdArchiveMember *members;
@@ -78,6 +79,7 @@ static void archive_destroy(MiniLdArchive *archive) {
     }
     free(archive->members);
     free(archive->data);
+    free(archive->original_path);
     memset(archive, 0, sizeof(*archive));
 }
 
@@ -333,8 +335,11 @@ done:
 }
 
 static bool state_has_unresolved_nonweak(const MiniLdState *state,
-                                         const char *name) {
-    return symbol_resolver_needs_archive(&state->resolver, name);
+                                         const char *name,
+                                         unsigned candidate_bind,
+                                         uint16_t candidate_shndx) {
+    return symbol_resolver_needs_archive(&state->resolver, name,
+                                         candidate_bind, candidate_shndx);
 }
 
 static bool object_data_defines_needed_symbol(MiniLdState *state,
@@ -424,7 +429,8 @@ static bool object_data_defines_needed_symbol(MiniLdState *state,
                         path);
                 goto done;
             }
-            if (state_has_unresolved_nonweak(state, name)) {
+            if (state_has_unresolved_nonweak(state, name, bind,
+                                             symbol.section_index)) {
                 *needed_out = true;
                 break;
             }
@@ -583,6 +589,11 @@ static bool archive_open_kind(MiniLdArchive *archive,
         return false;
     }
     archive->kind = (MiniLdArchiveKind)kind;
+    archive->original_path = minild_strdup(path);
+    if (archive->original_path == NULL) {
+        fprintf(diagnostics, "minic-ld: out-of-memory:archive-origin\n");
+        return false;
+    }
     if (archive->kind == MINILD_ARCHIVE_THIN) {
         ok = read_thin_archive_members(path, archive, diagnostics);
     } else {
@@ -643,7 +654,8 @@ static bool archive_member_process(MiniLdState *state,
         }
         return process_dso_input_data(state, view->bytes, view->size, path);
     }
-    return process_input_data(state, view->bytes, view->size, path);
+    return process_input_data(state, view->bytes, view->size, path,
+                              archive->original_path, member->name);
 }
 
 /* One fixed-point member selector for both archive encodings.  An extracted

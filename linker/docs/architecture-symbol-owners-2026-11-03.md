@@ -47,8 +47,9 @@ definitions and linker-synthesized symbols have no input source.
    Never recover input identity by reverse-engineering section names.
 4. Script assignments may override a canonical definition, clearing its
    `source_symbol` because the current value no longer belongs to an input
-   object. COMMON allocation, relaxation and final VMA assignment likewise
-   mutate canonical state only.
+   object. COMMON selection merges tentative candidate sizes and alignments
+   in that same canonical owner; COMMON allocation, relaxation and final VMA
+   assignment likewise mutate canonical state only.
 5. Output plan and final-symbol projection translate canonical IDs into
    final ELF section indexes and values. ET_EXEC/ET_DYN `.symtab` share this
    producer; the shared writer's `.dynsym` follows the same resolution.
@@ -84,8 +85,9 @@ the GNU RISC-V toolchain and cached Linux objects not present here.
 
 ## Intentionally deferred
 
-- Resolving every GNU edge case (for example, multiple COMMON definitions),
-  new language-level symbol semantics, or broader archive/LTO support.
+- Resolving every GNU edge case beyond the admitted COMMON precedence and
+  archive-selection rules, new language-level symbol semantics, or broader
+  archive/LTO support.
 - Changing stable canonical indices into pointers or reordering them for
   output. Only the temporary final-symbol view controls ELF table order.
 - Rewriting the ET_REL writer or the global index during this owner split.

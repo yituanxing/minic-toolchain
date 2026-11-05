@@ -118,6 +118,10 @@ static bool minild_project_admitted_inputs(MiniLdState *state,
              * selection. The generated work name is never a source fact. */
             output->input_name = input->name;
             output->input_path = state->inputs.files[input->file].path;
+            output->input_archive_path =
+                state->inputs.files[input->file].archive_path;
+            output->input_archive_member_name =
+                state->inputs.files[input->file].archive_member_name;
             ++fragments;
         }
         if (projection == MINILD_PROJECTION_RELOCATABLE &&

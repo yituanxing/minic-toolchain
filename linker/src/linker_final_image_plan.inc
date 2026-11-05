@@ -80,5 +80,5 @@ static bool minild_final_image_prepare(
         return false;
     }
     return minild_program_plan_validate(state, &final->program,
-                                        final->tables.total_size);
+                                        output_plan, final->tables.total_size);
 }
