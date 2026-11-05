@@ -108,12 +108,42 @@ done
 rv64_blocks=$(grep -Ec '^\.Lminic_mir_[^:]+_[0-9]+:' "$work/riscv64-linux.s" || :)
 aarch64_blocks=$(grep -Ec '^\.Lminic_mir_[^:]+_[0-9]+:' "$work/aarch64-linux.s" || :)
 loongarch64_blocks=$(grep -Ec '^\.Lminic_mir_[^:]+_[0-9]+:' "$work/loongarch64-linux.s" || :)
-if [ "$rv64_blocks" -eq 0 ] || [ "$aarch64_blocks" -ne "$rv64_blocks" ] ||
-   [ "$loongarch64_blocks" -ne "$rv64_blocks" ]; then
-    printf 'FAIL direct LP64 unreachable Core block emission rv64=%s aarch64=%s loongarch64=%s\n' \
+# A MachineIR block is not a Core block. RV64 creates a far-entry
+# island for every reachable Core block and two branch auxiliaries; AArch64
+# and LoongArch64 use different auxiliaries. Check presence individually,
+# never require their emitted Machine CFG block counts to be identical.
+if [ "$rv64_blocks" -eq 0 ] || [ "$aarch64_blocks" -eq 0 ] ||
+   [ "$loongarch64_blocks" -eq 0 ]; then
+    printf 'FAIL missing MachineIR LP64 blocks rv64=%s aarch64=%s loongarch64=%s\n' \
       "$rv64_blocks" "$aarch64_blocks" "$loongarch64_blocks" >&2
     exit 1
 fi
+# Source LABEL statements lower to canonical sealed .Luser_<statement-id>
+# Core block identities, carried unchanged through all five MachineIR
+# targets (src/core/symbol_identity.h and compiler/c_lower/core_lower.c).
+# EARLY, PREFIX and AFTER must each remain reachable despite the constant
+# switch's otherwise-dead cases. Three distinct aliases on each target,
+# with exact shared identities, prove that the Core label/reentry roots
+# survived target lowering without conflating ISA-specific Machine aux.
+reference_core_labels=''
+for target in riscv32-linux riscv64-linux x86_64-linux aarch64-linux loongarch64-linux; do
+    labels=$(grep -E '^\.Luser_[0-9]+:$' "$work/$target.s" || :)
+    label_count=$(printf '%s\n' "$labels" | grep -Ec '^\.Luser_[0-9]+:$' || :)
+    distinct_labels=$(printf '%s\n' "$labels" | LC_ALL=C sort -u)
+    distinct_count=$(printf '%s\n' "$distinct_labels" |
+        grep -Ec '^\.Luser_[0-9]+:$' || :)
+    if [ "$label_count" -ne 3 ] || [ "$distinct_count" -ne 3 ]; then
+        printf 'FAIL %s lost/duplicated Core source reentry labels count=%s unique=%s\n' \
+          "$target" "$label_count" "$distinct_count" >&2
+        exit 1
+    fi
+    if [ -z "$reference_core_labels" ]; then
+        reference_core_labels=$distinct_labels
+    elif [ "$distinct_labels" != "$reference_core_labels" ]; then
+        printf 'FAIL %s changed cross-target Core source reentry identities\n' "$target" >&2
+        exit 1
+    fi
+done
 cc -O0 -no-pie -fno-pie -x c "$work/constant-switch.i" -o "$work/gnu"
 cc -O0 -no-pie -fno-pie -x assembler "$work/x86_64-linux.s" -o "$work/minic"
 "$work/gnu"
@@ -135,4 +165,4 @@ if "$MINIC_CC" --target=x86_64-linux -S "$work/dynamic-switch.i" \
     echo 'FAIL dynamic switch pruned executable unknown GNU asm' >&2
     exit 1
 fi
-echo "MINIC_CORE_CONSTANT_SWITCH_DEAD_SOURCE=PASS five_targets=5 rv64_aarch64_loongarch64_reachable_blocks=$rv64_blocks external_goto=6 suffix_break=1 suffix_return=1 conditional_fallthrough=1 dynamic_negative=1"
+echo "MINIC_CORE_CONSTANT_SWITCH_DEAD_SOURCE=PASS five_targets=5 rv64_machine_blocks=$rv64_blocks aarch64_machine_blocks=$aarch64_blocks loongarch64_machine_blocks=$loongarch64_blocks sealed_core_reentry_labels=3 external_goto=6 suffix_break=1 suffix_return=1 conditional_fallthrough=1 dynamic_negative=1"

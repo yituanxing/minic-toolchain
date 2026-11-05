@@ -135,7 +135,10 @@ require_unrolled_return_copy minic_sixty_four 64
 require_contains '^  movz x12, #2048(, lsl #0)?$' "$work/aarch64.s"
 # Alloca moves the stack pointer; the return-object and saved x8 slot must
 # still be addressed relative to the stable AAPCS64 callee-saved x19.
-require_contains '^  add x11, x19, #[0-9]+$' "$work/minic_dynamic_three.body"
+# Machine-owned x9 is the result-object source pointer. Dynamic frames
+# resolve owned slots against callee-saved x19; offset zero is a MOV,
+# otherwise ADD x9,x19,#slot (the old text emitter used x11).
+require_contains '^  (add x9, x19, #[0-9]+|mov x9, x19)$' "$work/minic_dynamic_three.body"
 
 # LoongArch now has its OWN independently qualified LP64D return policy.
 # The same source is legal there, but its hidden result MUST use $a0, never
