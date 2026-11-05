@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # In AArch64 PIC images GNU BFD allocates global GOT slots in ELF link-hash
 # bucket traversal order, not first-encounter relocation order.  Strong and
-# undefined weak symbols must participate in the same ordering.
+# undefined weak symbols must participate in the same ordering. GNU BFD's
+# ordinary DSO uses GOT[0] for &_DYNAMIC; MiniLD's kernel ET_DYN reserves it
+# as zero, so compare only real GOT symbol slots and their instruction uses.
 set -Eeuo pipefail
 
 : "${MINIAS:?set MINIAS to minic-as}"
@@ -86,13 +88,26 @@ def sections(path):
         result[name]=(s[3],data[s[4]:s[4]+s[5]])
     return result
 
-def decode(path):
+def decode(path, gnu_dynamic=False):
     secs=sections(path)
     assert '.text' in secs and '.got' in secs, secs.keys()
     text_addr,code=secs['.text']
     got_addr,got_data=secs['.got']
     assert len(got_data)==56,(path,len(got_data))
-    assert got_data[:8]==b'\0'*8,(path,got_data[:8])
+    got0=struct.unpack_from('<Q',got_data)[0]
+    if gnu_dynamic:
+        # BFD's AArch64 ELF DSO policy places &_DYNAMIC at GOT[0].
+        # MiniLD's kernel ET_DYN profile reserves that word as zero; the
+        # Linux kernel does not use it as the loader's dynamic anchor.
+        # Compare the six actual relocation slots and instruction fixups,
+        # while checking BFD's own reserved-word ABI independently.
+        assert '.dynamic' in secs,(path,'GNU .dynamic missing')
+        assert got0==secs['.dynamic'][0],(
+            path,'GNU GOT[0] must reference .dynamic',hex(got0),
+            hex(secs['.dynamic'][0]))
+    else:
+        assert '.dynamic' not in secs,(path,'kernel GOT policy must not fabricate .dynamic')
+        assert got0==0,(path,'kernel GOT[0] must be reserved zero',hex(got0))
     pairs={}
     for i,name in enumerate(names):
         adrp,ldr=struct.unpack_from('<II',code,i*8)
@@ -115,10 +130,14 @@ baseline=decode(sys.argv[1])
 print('MINILD_AARCH64_KERNEL_GOT_ORDER=PASS '
       'symbols=6 global_hash_buckets=4051 includes_undefweak=true')
 if len(sys.argv)>2:
-    gnu=decode(sys.argv[2])
-    assert baseline==gnu,('GNU GOT/code parity',baseline[:2],gnu[:2])
+    gnu=decode(sys.argv[2],gnu_dynamic=True)
+    assert baseline[0]==gnu[0],('GNU GOT slot-address parity',baseline[0],gnu[0])
+    assert baseline[1][8:]==gnu[1][8:],(
+        'GNU GOT symbol payload parity',baseline[1][8:],gnu[1][8:])
+    assert baseline[2]==gnu[2],('GNU instruction fixup parity')
     print('MINILD_AARCH64_KERNEL_GOT_ORDER_GNU=PASS '
-          'exact_got_bytes_and_instruction_slots')
+          'exact_symbol_got_bytes_and_instruction_slots '
+          'gnu_got0_dynamic_anchor=verified kernel_got0_reserved=verified')
 PY
 }
 
