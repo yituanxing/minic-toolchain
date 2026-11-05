@@ -297,6 +297,12 @@ if len(sys.argv) == 9:
                                f':size={sections[name][5]:#x}'
                                for name in ('.text','.data','.rela.dyn')
                                if name in sections),flush=True)
+                for name, sh in sections.items():
+                    if sh[2] & 0x2:
+                        print(f'MINILD_LOONG_GNU_ALLOC_SECTION={label}:{producer} '
+                              f'name={name} type={sh[1]} flags={sh[2]:#x} '
+                              f'vaddr={sh[3]:#x} off={sh[4]:#x} '
+                              f'size={sh[5]:#x} align={sh[8]}',flush=True)
             for producer, contents in (('mini',mini_bytes('.rela.dyn')),
                                        ('gnu',gnu_bytes('.rela.dyn'))):
                 for index in range(0,len(contents),24):
