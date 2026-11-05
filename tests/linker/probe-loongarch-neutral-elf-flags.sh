@@ -79,6 +79,7 @@ if ! command -v "$GNU_LD" >/dev/null 2>&1; then
     echo 'MINILD_LOONG_NEUTRAL_FLAGS=SKIP GNU_oracle_missing'
     exit 0
 fi
+gnu_version=$("$GNU_LD" --version | head -n 1)
 for order in early late; do
     if [[ $order == early ]]; then
         inputs=("$work/blob-neutral.o" "$work/code.o")
@@ -91,13 +92,16 @@ for order in early late; do
     mini_flag=$(readelf -Wh "$work/$order.mini.elf" | sed -n 's/.*Flags:[[:space:]]*\(0x[0-9a-f]*\).*/\1/p')
     if [[ $gnu_flag == 0x43 && $mini_flag == "$gnu_flag" ]]; then
         echo "MINILD_LOONG_NEUTRAL_FLAGS=PASS GNU_BFD_order=$order e_flags=$gnu_flag byte_exact=true"
-    elif [[ $order == early && $gnu_flag == 0x0 && $mini_flag == 0x43 ]]; then
-        # Old BFD may inherit unknown ABI flags from a data-only first
-        # object.  That is not the ABI of the actual LP64D code, whose
-        # e_flags must remain 0x43 regardless of input ordering.
-        echo 'MINILD_LOONG_NEUTRAL_FLAGS=PASS GNU_BFD_legacy_neutral_first_e_flags=0x0 MiniLD_effective_code_ABI=0x43'
+    elif [[ $order == early && $gnu_flag == 0x40 && $mini_flag == 0x43 &&
+            $gnu_version == *2.42* ]]; then
+        # Ubuntu's older GNU BFD 2.42 can retain the object ABI-v1 marker
+        # from the later code input while leaving its float-ABI modifier
+        # at zero when a neutral data-only input appeared first.  An
+        # executable containing LP64D code must instead keep the actual
+        # code ABI (0x43), regardless of input order.
+        echo 'MINILD_LOONG_NEUTRAL_FLAGS=PASS GNU_BFD_2_42_neutral_first_e_flags=0x40 MiniLD_effective_code_ABI=0x43'
     else
-        echo "MINILD_LOONG_NEUTRAL_FLAGS=FAIL GNU_BFD_order=$order gnu_flags=${gnu_flag:-missing} mini_flags=${mini_flag:-missing}" >&2
+        echo "MINILD_LOONG_NEUTRAL_FLAGS=FAIL GNU_BFD_order=$order gnu_flags=${gnu_flag:-missing} mini_flags=${mini_flag:-missing} linker=$gnu_version" >&2
         exit 1
     fi
 done

@@ -70,6 +70,13 @@ match, and requires exact output with corrected BFD.  Do not regress to a
 known historical linking error solely to get byte-for-byte equality with an
 older test toolchain.
 
+Ubuntu's GNU BFD 2.42 also reports `e_flags=0x40` when a neutral LoongArch
+data-only input (`e_flags=0`) precedes real LP64D code (`e_flags=0x43`).
+That drops the actual code's double-float ABI modifier; MiniLD retains
+`0x43` in either input order.  The GNU check records only this precisely
+versioned, blob-first legacy outcome, while requiring a full match in
+normal code-first and newer-toolchain cases.
+
 The CI boundary Make invocation uses `--keep-going`: one failing GNU oracle
 must not prevent the remaining independent target checks from reporting
 their results.  The overall step still fails if any prerequisite fails.
