@@ -228,8 +228,8 @@ jobs:
               s=s.replace(needle, needle+"\n"+addition, 1)
           insert_after('virtio_add_status(dev, VIRTIO_CONFIG_S_DRIVER);\n\n\t/* Figure out what features the device supports. */', r'''
               pr_err("MINIC_GPU_TRACE_INPUT embedded=%px dev=%px offset=%ld config=%px\n",
-                     (void *)_d, (void *)dev, (long)((char *)_d - (char *)dev),
-                     (void *)dev->config);''')
+                     _d, dev, (long)((char *)_d - (char *)dev),
+                     dev->config);''')
           insert_after('device_features = dev->config->get_features(dev);', r'''
               pr_err("MINIC_GPU_TRACE_RAW low=%08x high=%08x\n",
                      (u32)device_features, (u32)(device_features >> 32));''')

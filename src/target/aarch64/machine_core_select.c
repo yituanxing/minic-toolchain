@@ -2377,8 +2377,7 @@ bool minic_aarch64_machine_prove_selected_source_asm(
             source->register_clobber_count != 0U ||
             source->resolved_immediate_count != 0U ||
             source->symbol_reference_count != 0U ||
-            ins->value.structured_inline_asm.operand_count != 5U ||
-            ins->value.structured_inline_asm.operands == NULL)
+            ins->value.structured_inline_asm.operand_count != 5U)
             return false;
         ops = ins->value.structured_inline_asm.operands;
         for (i = 0U; i < 5U; ++i)
