@@ -24,11 +24,13 @@ bool minic_multi_direct_lp64_function_plan_prepare(
     MinicDirectLP64FunctionPlan *plan) {
     MinicDirectLP64FunctionProfile profile;
     MinicDirectLP64ProfileResult profile_result;
+    MinicMachineLP64FrameContract *machine_frame;
     const char *name;
     size_t object_end, ld_base;
     if (plan == NULL)
         return false;
     (void)memset(plan, 0, sizeof(*plan));
+    machine_frame = &plan->machine_frame;
     plan->failed_stage = "function_preflight";
     plan->failed_block = SIZE_MAX;
     plan->failed_instruction = SIZE_MAX;
@@ -51,10 +53,10 @@ bool minic_multi_direct_lp64_function_plan_prepare(
                 ? "variadic_preflight" : "function_preflight";
         return false;
     }
-    plan->variadic_count = profile.variadic_address_count;
-    plan->variadic_gp_count = profile.fixed_gp_count;
-    plan->variadic_fp_count = profile.fixed_fp_count;
-    plan->has_dynamic_stack = profile.has_dynamic_stack;
+    machine_frame->variadic_count = profile.variadic_address_count;
+    machine_frame->variadic_gp_count = profile.fixed_gp_count;
+    machine_frame->variadic_fp_count = profile.fixed_fp_count;
+    machine_frame->has_dynamic_stack = profile.has_dynamic_stack;
 
     plan->failed_stage = "cfg_preflight";
     if (!minic_multi_direct_lp64_cfg_preflight(
@@ -71,14 +73,14 @@ bool minic_multi_direct_lp64_function_plan_prepare(
                 architecture_name, name, fn->value_count, fn->object_count);
         return false;
     }
-    plan->frame_alignment =
+    machine_frame->frame_alignment =
         plan->frame_plan.max_object_alignment > abi->stack_alignment
             ? plan->frame_plan.max_object_alignment : abi->stack_alignment;
     /* LoongArch's current linear va_list walks directly from the saved GARs
      * into the caller's overflow area. An aligned local-frame gap breaks
      * that contiguity; do not silently give such a function a wrong cursor. */
-    if (plan->frame_alignment > abi->stack_alignment &&
-        plan->variadic_count != 0U &&
+    if (machine_frame->frame_alignment > abi->stack_alignment &&
+        machine_frame->variadic_count != 0U &&
         abi->variadic_requires_public_stack_alignment) {
         plan->failed_stage = "variadic_frame_realign";
         return false;
@@ -86,8 +88,8 @@ bool minic_multi_direct_lp64_function_plan_prepare(
     /* A local aligned above the public 16B stack guarantee requires a
      * callee-saved fixed base and a saved unmodified entry SP. This also
      * covers genuinely dynamic stack allocations in the same function. */
-    if (plan->frame_alignment > abi->stack_alignment)
-        plan->has_dynamic_stack = true;
+    if (machine_frame->frame_alignment > abi->stack_alignment)
+        machine_frame->has_dynamic_stack = true;
     object_end = plan->frame_plan.object_end;
     plan->failed_stage = "binary128_layout";
     if (!minic_core_frame_align_up(object_end, 16U, &ld_base))
@@ -106,9 +108,9 @@ bool minic_multi_direct_lp64_function_plan_prepare(
                 minic_core_function_return_type(fn), &result_bytes) && result_bytes > 16U) {
             if (!minic_core_frame_reserve(&object_end, 8U, 8U,
                                           MINIC_LARGE_FRAME_MAX,
-                                          &plan->indirect_return_offset))
+                                          &machine_frame->indirect_return_offset))
                 return false;
-            plan->has_indirect_return = true;
+            machine_frame->has_indirect_return = true;
         }
     }
 
@@ -120,7 +122,7 @@ bool minic_multi_direct_lp64_function_plan_prepare(
         if (!minic_lp64_plan_function_calls(
                 fn, facts->call_index, abi, architecture_name, name,
                 &plan->failed_instruction, &failed_preflight,
-                &plan->has_calls, &plan->outgoing_calls)) {
+                &machine_frame->has_calls, &plan->outgoing_calls)) {
             plan->failed_stage =
                 failed_preflight ? "call_preflight" : "call_planning";
             return false;
@@ -130,19 +132,19 @@ bool minic_multi_direct_lp64_function_plan_prepare(
     plan->failed_stage = "frame_finalization";
     plan->failed_instruction = SIZE_MAX;
     if (!minic_lp64_finalize_direct_frame(
-            object_end, plan->has_calls, plan->has_dynamic_stack,
-            plan->variadic_count != 0U, plan->frame_alignment, abi,
-            &plan->save_offset, &plan->variadic_save_base,
-            &plan->frame_size)) {
+            object_end, machine_frame->has_calls, machine_frame->has_dynamic_stack,
+            machine_frame->variadic_count != 0U, machine_frame->frame_alignment, abi,
+            &machine_frame->save_offset, &machine_frame->variadic_save_base,
+            &machine_frame->frame_size)) {
         if (getenv("MINIC_M1_TRACE") != NULL &&
-            plan->frame_size > MINIC_LARGE_FRAME_MAX)
+            machine_frame->frame_size > MINIC_LARGE_FRAME_MAX)
             (void)fprintf(stderr,
                 "MINIC_M8_FRAME_CAP arch=%s function=%s frame=%zu end=%zu\n",
-                architecture_name, name, plan->frame_size, object_end);
+                architecture_name, name, machine_frame->frame_size, object_end);
         return false;
     }
-    plan->saved_entry_sp_offset = plan->frame_alignment > abi->stack_alignment
-        ? plan->save_offset + (plan->has_calls ? 8U : 0U) + 8U
+    machine_frame->saved_entry_sp_offset = machine_frame->frame_alignment > abi->stack_alignment
+        ? machine_frame->save_offset + (machine_frame->has_calls ? 8U : 0U) + 8U
         : SIZE_MAX;
     /* AAPCS64 cursor0 keeps the established 32B tag + 64B GP + 128B FP
      * region. Each further va_copy/va_start cursor owns another 32B tag,
@@ -150,14 +152,14 @@ bool minic_multi_direct_lp64_function_plan_prepare(
      * the final frame (not the incoming save/return offsets), so the extra
      * tags remain below entry SP and above all existing frame slots. */
     if (abi->extra_variadic_cursor_bytes != 0U &&
-        plan->variadic_count > 1U) {
-        const size_t extra_cursors = plan->variadic_count - 1U;
+        machine_frame->variadic_count > 1U) {
+        const size_t extra_cursors = machine_frame->variadic_count - 1U;
         if (extra_cursors > MINIC_LARGE_FRAME_MAX /
                 abi->extra_variadic_cursor_bytes ||
-            plan->frame_size > MINIC_LARGE_FRAME_MAX -
+            machine_frame->frame_size > MINIC_LARGE_FRAME_MAX -
                 extra_cursors * abi->extra_variadic_cursor_bytes)
             return false;
-        plan->frame_size +=
+        machine_frame->frame_size +=
             extra_cursors * abi->extra_variadic_cursor_bytes;
     }
     plan->failed_stage = NULL;

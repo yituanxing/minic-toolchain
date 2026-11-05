@@ -179,7 +179,7 @@ bool minic_machine_builder_emit_source_asm_typed(MinicMachineBuilder *builder,
     const MinicMachineSourceAsmInput *input) {
     MinicMachineInstruction instruction = {0};
     if (builder == NULL || !builder->has_core_origin || input == NULL ||
-        input->source_bytes == NULL || input->source_byte_length == 0U ||
+        input->source_bytes == NULL ||
         (input->binding_count != 0U && input->bindings == NULL) ||
         (input->implicit_count != 0U && input->implicit == NULL) ||
         input->binding_count > MINIC_MACHINE_MAX_OPERANDS ||

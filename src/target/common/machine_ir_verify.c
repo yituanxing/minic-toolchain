@@ -269,7 +269,6 @@ static bool machine_validate_instruction(
     if (ins->kind == MINIC_MACHINE_INSTRUCTION_SOURCE_ASM) {
         if (ins->opcode != 0U || ins->source_asm_template == NULL ||
             ins->local_label_name != NULL || ins->directive != NULL ||
-            ins->source_asm_length == 0U ||
             ins->source_asm_length == SIZE_MAX ||
             !ins->has_core_origin ||
             ((ins->effects & MINIC_MACHINE_EFFECT_RETURN) != 0U &&
@@ -280,8 +279,31 @@ static bool machine_validate_instruction(
             (ins->source_asm_permits_fallthrough &&
              (!ins->source_asm_terminates_block ||
               (ins->effects & MINIC_MACHINE_EFFECT_BRANCH) == 0U)) ||
-            (ins->effects & MINIC_MACHINE_EFFECT_SOURCE_ASM) == 0U ||
-            policy->validate_source_asm == NULL ||
+            (ins->effects & MINIC_MACHINE_EFFECT_SOURCE_ASM) == 0U)
+            return false;
+        /* GNU asm("") with volatile/memory effects is a physical no-op,
+         * not an ISA instruction or arbitrary assembler escape. Core must
+         * preserve the compiler-side ordering even when no bytes print.
+         * No target source-ASM translator is necessary for empty input. */
+        if (ins->source_asm_length == 0U) {
+            const unsigned int permitted = MINIC_MACHINE_EFFECT_SOURCE_ASM |
+                MINIC_MACHINE_EFFECT_VOLATILE |
+                MINIC_MACHINE_EFFECT_COMPILER_BARRIER;
+            if (ins->operand_count != 0U || ins->implicit_count != 0U ||
+                ins->source_asm_machine_form_id != 0U ||
+                ins->source_asm_machine_form_variant != 0U ||
+                ins->source_asm_terminates_block ||
+                ins->source_asm_permits_fallthrough ||
+                (ins->effects & ~permitted) != 0U ||
+                (ins->effects & (MINIC_MACHINE_EFFECT_VOLATILE |
+                                 MINIC_MACHINE_EFFECT_COMPILER_BARRIER)) == 0U)
+                return false;
+            *terminates = false;
+            *indirect_successors = false;
+            *permits_fallthrough = false;
+            return true;
+        }
+        if (policy->validate_source_asm == NULL ||
             !policy->validate_source_asm(
                 function->target, ins, policy->context)) return false;
         for (i = 0U; i < ins->operand_count; ++i) {

@@ -159,9 +159,9 @@ static bool minic_loongarch64_emit_record_load(FILE *out,
             ctx->fn, ins, ctx->frame_plan,
             &source, &dest, &bytes) ||
         !minic_loongarch64_emit_frame_mem(out, "ld.d", "$t2",
-            minic_lp64_frame_value_offset(frame_plan, source), ctx->dynamic_frame) ||
+            minic_lp64_frame_value_offset(frame_plan, source), ctx->machine_frame->has_dynamic_stack) ||
         !minic_loongarch64_emit_frame_address(
-            out, "$t1", dest, ctx->dynamic_frame))
+            out, "$t1", dest, ctx->machine_frame->has_dynamic_stack))
         return false;
     return loongarch64_emit_record_bytes(
         out, "$t2", "$t1", "$t0", "$t3", bytes);
@@ -447,25 +447,25 @@ static bool loongarch64_machine_emit_family(
     case MINIC_DIRECT_MACHINE_RECORD_COPY:
         return minic_loongarch64_emit_record_copy(
             out, fn, ins, ctx->frame_plan,
-            ctx->dynamic_frame);
+            ctx->machine_frame->has_dynamic_stack);
     case MINIC_DIRECT_MACHINE_PARAMETER_OBJECT:
         return minic_loongarch64_emit_parameter_object(
             out, fn, ins, ctx->incoming_plan, ctx->frame_plan,
-            ctx->frame, ctx->dynamic_frame,
-            ctx->saved_entry_sp_offset);
+            ctx->machine_frame->frame_size, ctx->machine_frame->has_dynamic_stack,
+            ctx->machine_frame->saved_entry_sp_offset);
     case MINIC_DIRECT_MACHINE_MEMORY:
         return minic_loongarch64_emit_memory_instruction(
             out, module, target, fn, ins, ctx->frame_plan,
-            ctx->id, ctx->dynamic_frame, shape->lhs_in_previous_gp,
+            ctx->id, ctx->machine_frame->has_dynamic_stack, shape->lhs_in_previous_gp,
             needs_gp_store);
     case MINIC_DIRECT_MACHINE_FP:
         return minic_loongarch64_emit_fp_instruction(
             out, module, target, fn, ins, shape->result_offset,
-            ctx->id, ctx->dynamic_frame, ctx->frame_plan, needs_gp_store);
+            ctx->id, ctx->machine_frame->has_dynamic_stack, ctx->frame_plan, needs_gp_store);
     case MINIC_DIRECT_MACHINE_INTEGER:
         return minic_loongarch64_emit_integer_instruction(
             out, module, target, fn, ins, ctx->frame_plan,
-            ctx->dynamic_frame, shape->lhs_in_previous_gp,
+            ctx->machine_frame->has_dynamic_stack, shape->lhs_in_previous_gp,
             needs_gp_store);
     case MINIC_DIRECT_MACHINE_ABI:
         return minic_loongarch64_emit_abi_instruction(
@@ -487,7 +487,7 @@ static bool loongarch64_machine_store_gp(
     const MinicCoreInstruction *ins, size_t offset, bool include_double) {
     return loongarch64_emit_gp_result(
         out, ctx->fn, ins, offset, include_double,
-        ctx->dynamic_frame);
+        ctx->machine_frame->has_dynamic_stack);
 }
 
 static bool loongarch64_machine_emit_terminator(
@@ -495,10 +495,10 @@ static bool loongarch64_machine_emit_terminator(
     const MinicCoreBlock *block, size_t block_id) {
     return minic_loongarch64_emit_terminator(
         out, ctx->fn,
-        block, ctx->id, block_id, ctx->frame_plan, ctx->frame,
-        ctx->save_offset, ctx->has_direct_calls, ctx->dynamic_frame,
-        ctx->has_indirect_return, ctx->indirect_return_offset,
-        ctx->frame_alignment, ctx->saved_entry_sp_offset);
+        block, ctx->id, block_id, ctx->frame_plan, ctx->machine_frame->frame_size,
+        ctx->machine_frame->save_offset, ctx->machine_frame->has_calls, ctx->machine_frame->has_dynamic_stack,
+        ctx->machine_frame->has_indirect_return, ctx->machine_frame->indirect_return_offset,
+        ctx->machine_frame->frame_alignment, ctx->machine_frame->saved_entry_sp_offset);
 }
 
 static bool loongarch64_machine_no_native_opcode(

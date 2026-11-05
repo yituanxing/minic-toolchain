@@ -8,6 +8,61 @@
 
 #define CHECK(test, code) do { if (!(test)) return (code); } while (0)
 
+static int verify_source_asm_tu_identity(const MinicCoreModule *baseline) {
+    MinicCoreModuleFunctionSymbol symbols[3] = {
+        {.name = "original", .is_defined = true,
+         .alias_target_index = SIZE_MAX, .specialization_source_index = SIZE_MAX},
+        {.name = "clone", .is_defined = true, .is_internal = true,
+         .alias_target_index = SIZE_MAX, .specialization_source_index = 0U},
+        {.name = "other", .is_defined = true,
+         .alias_target_index = SIZE_MAX, .specialization_source_index = SIZE_MAX}
+    };
+    MinicCoreInlineAsm original[2] = {{0}, {0}};
+    MinicCoreInlineAsm cloned[2] = {{0}, {0}};
+    MinicCoreInlineAsm other[1] = {{0}};
+    MinicCoreFunction functions[3] = {
+        {.inline_asms = original, .inline_asm_count = 2U},
+        {.inline_asms = cloned, .inline_asm_count = 2U},
+        {.inline_asms = other, .inline_asm_count = 1U}
+    };
+    MinicCoreModule module = *baseline;
+    module.function_symbols = symbols;
+    module.function_count = 3U;
+    CHECK(minic_core_module_seal_source_asm_occurrences(
+        &module, functions, 3U), 200);
+    CHECK(original[0].source_asm_unique_id == 1U &&
+          original[1].source_asm_unique_id == 2U &&
+          cloned[0].source_asm_unique_id == 3U &&
+          cloned[1].source_asm_unique_id == 4U &&
+          other[0].source_asm_unique_id == 5U, 201);
+    /* Re-sealing is never allowed to silently reuse an already published
+     * source occurrence, even when the original and the clone share ASM. */
+    CHECK(!minic_core_module_seal_source_asm_occurrences(
+        &module, functions, 3U), 202);
+    CHECK(other[0].source_asm_unique_id == 5U, 203);
+
+    original[0].source_asm_unique_id = 0U;
+    original[1].source_asm_unique_id = 0U;
+    cloned[0].source_asm_unique_id = 0U;
+    cloned[1].source_asm_unique_id = 0U;
+    other[0].source_asm_unique_id = 0U;
+    functions[2].inline_asms = NULL;
+    CHECK(!minic_core_module_seal_source_asm_occurrences(
+        &module, functions, 3U), 204);
+    CHECK(original[0].source_asm_unique_id == 0U &&
+          cloned[0].source_asm_unique_id == 0U, 205);
+    functions[2].inline_asms = other;
+    symbols[2].is_defined = false;
+    CHECK(!minic_core_module_seal_source_asm_occurrences(
+        &module, functions, 3U), 206);
+    symbols[2].is_defined = true;
+    CHECK(!minic_core_module_seal_source_asm_occurrences(
+        &module, functions, 2U), 207);
+    CHECK(minic_core_module_seal_source_asm_occurrences(
+        &module, functions, 3U), 208);
+    return 0;
+}
+
 static int verify_module_provenance_edges(const MinicCoreModule *baseline) {
     MinicCoreModuleFunctionSymbol functions[3] = {
         {.name = "source", .is_defined = true, .alias_target_index = SIZE_MAX,
@@ -859,9 +914,10 @@ int main(void) {
         CHECK(definition_result == 0, 153);
     }
     CHECK(verify_module_label_emission_ownership(&module, &types) == 0, 187);
+    CHECK(verify_source_asm_tu_identity(&module) == 0, 209);
     symbols[0].name = NULL;
     CHECK(!minic_core_module_verify(&module), 19);
     minic_core_type_context_destroy(&types);
-    puts("CORE_MODULE_FRAGMENT_CONTRACT=PASS bounds forms names alias-index=14 clone_provenance=8 forged_owner_label=5 label_bindings=8 name_range=9 emitted_elf_namespace=18 canonical_source=valid relocation_edge_identity=9 source_free_zero_facts=3 typed_extent=18 definition_flags=16");
+    puts("CORE_MODULE_FRAGMENT_CONTRACT=PASS bounds forms names alias-index=14 clone_provenance=8 forged_owner_label=5 label_bindings=8 name_range=9 emitted_elf_namespace=18 canonical_source=valid relocation_edge_identity=9 source_free_zero_facts=3 typed_extent=18 definition_flags=16 source_asm_tu_identity=9");
     return 0;
 }

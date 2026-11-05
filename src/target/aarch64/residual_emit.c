@@ -112,18 +112,18 @@ bool minic_aarch64_emit_residual_instruction(
     ins = &fn->instructions[ins_id];
     name = ctx->name;
     id = ctx->id;
-    frame = ctx->frame;
-    va_base = ctx->va_base;
+    frame = ctx->machine_frame->frame_size;
+    va_base = ctx->machine_frame->variadic_save_base;
     /* Named stack arguments can exhaust either register bank. AAPCS64
      * encodes exhausted banks as offset zero, never a positive offset. */
-    va_fp = ctx->va_fp < 8U ? ctx->va_fp : 8U;
-    va_gp = ctx->va_gp < 8U ? ctx->va_gp : 8U;
-    va_count = ctx->va_count;
+    va_fp = ctx->machine_frame->variadic_fp_count < 8U ? ctx->machine_frame->variadic_fp_count : 8U;
+    va_gp = ctx->machine_frame->variadic_gp_count < 8U ? ctx->machine_frame->variadic_gp_count : 8U;
+    va_count = ctx->machine_frame->variadic_count;
     reject_block = block_id;
     reject_ins = (size_t)ins_id;
-    dynamic_frame = ctx->dynamic_frame;
+    dynamic_frame = ctx->machine_frame->has_dynamic_stack;
     frame_view = (MinicA64FrameView){
-        dynamic_frame, frame, 0U, ctx->saved_entry_sp_offset
+        dynamic_frame, frame, 0U, ctx->machine_frame->saved_entry_sp_offset
     };
     *needs_writeback = true;
         switch (ins->kind) {
@@ -235,7 +235,7 @@ bool minic_aarch64_emit_residual_instruction(
                     "MINIC_AARCH64_STRUCTURED_REJECT function=%s dynamic_frame=%d "
                     "template_length=%zu operand_count=%zu volatile=%d "
                     "memory=%d goto=%d preview=%s\n",
-                    name, ctx->dynamic_frame ? 1 : 0, info->template_length,
+                    name, ctx->machine_frame->has_dynamic_stack ? 1 : 0, info->template_length,
                     ins->value.structured_inline_asm.operand_count,
                     info->is_volatile ? 1 : 0, info->has_memory_clobber ? 1 : 0,
                     info->is_goto ? 1 : 0, preview);
@@ -267,15 +267,15 @@ bool minic_aarch64_emit_residual_instruction(
             }
             if (
                 !minic_multi_direct_call_frame_return_level0_shape(fn, ins) ||
-                (ctx->has_direct_calls &&
-                 (ctx->save_offset > 32760U ||
-                  (ctx->save_offset & 7U) != 0U)))
+                (ctx->machine_frame->has_calls &&
+                 (ctx->machine_frame->save_offset > 32760U ||
+                  (ctx->machine_frame->save_offset & 7U) != 0U)))
                 return minic_multi_direct_machine_reject(
                     fn, "aarch64", name, "call_frame_return_address",
                     reject_block, reject_ins, __LINE__);
-            if (ctx->has_direct_calls) {
+            if (ctx->machine_frame->has_calls) {
                 if (!minic_a64_emit_owned_slot(out, &frame_view, false,
-                        MINIC_A64_REG_X, 9U, ctx->save_offset))
+                        MINIC_A64_REG_X, 9U, ctx->machine_frame->save_offset))
                     return false;
             } else if (fputs("  mov x9, x30\n", out) == EOF) {
                 return false;

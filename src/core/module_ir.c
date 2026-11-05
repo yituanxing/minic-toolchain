@@ -604,3 +604,36 @@ done:
     free(labels);
     return valid;
 }
+
+bool minic_core_module_seal_source_asm_occurrences(
+    const MinicCoreModule *module, MinicCoreFunction *functions,
+    size_t function_count) {
+    uint64_t next_id = 1U;
+    size_t function_index, asm_index;
+    if (!minic_core_module_verify(module) ||
+        module->function_count != function_count ||
+        (function_count != 0U && functions == NULL)) return false;
+
+    /* A clone is independently emitted and must never inherit its source
+     * body's GNU %= identity. Preflight every Core body before publishing
+     * any ID, including late-lowered internal and specialized functions. */
+    for (function_index = 0U; function_index < function_count; ++function_index) {
+        const MinicCoreFunction *fn = &functions[function_index];
+        if ((fn->inline_asm_count != 0U && fn->inline_asms == NULL) ||
+            (!module->function_symbols[function_index].is_defined &&
+             fn->inline_asm_count != 0U)) return false;
+        for (asm_index = 0U; asm_index < fn->inline_asm_count; ++asm_index) {
+            if (fn->inline_asms[asm_index].source_asm_unique_id != 0U ||
+                next_id == 0U) return false;
+            ++next_id;
+        }
+    }
+
+    next_id = 1U;
+    for (function_index = 0U; function_index < function_count; ++function_index) {
+        MinicCoreFunction *fn = &functions[function_index];
+        for (asm_index = 0U; asm_index < fn->inline_asm_count; ++asm_index)
+            fn->inline_asms[asm_index].source_asm_unique_id = next_id++;
+    }
+    return true;
+}

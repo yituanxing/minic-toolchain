@@ -12,6 +12,25 @@ so the complete target handoff below remains future migration work.
 This decision supersedes older "defer MIR" notes written while Core was
 shadow-only or before the five production targets consumed sealed Core.
 
+### Latest ownership closure (same refactor branch)
+
+- `CoreFunctionSet` finalization now assigns a nonzero, TU-unique source-ASM
+  occurrence ID from sealed Module function order, including independently
+  emitted specialization clones. The `core_machine_asm.h` ingress copies this
+  ID and target machine-form proof into an owned `MachineInstruction`; it
+  cannot invent identity from a template hash or a C statement index.
+- Empty volatile or memory-clobber GNU ASM is represented as an effect-only
+  `SOURCE_ASM` node. It is validated without a target opcode or assembler
+  printer and emits no bytes, preserving the Core barrier without a text
+  escape or changing existing production output.
+- AArch64 and LoongArch64 now calculate their physical LP64 frame facts once
+  in `MinicMachineLP64FrameContract`. Both existing target emitters borrow the
+  same immutable contract through `DirectLP64BlockContext`, with no shadow
+  copies of frame size, alignment, varargs, save slots or dynamic-stack state.
+  ABI planning and ISA register decisions are unchanged. The complete
+  instruction selectors still need conversion to MachineBuilder; these
+  ownership changes are not a claim of production MIR migration.
+
 ## Placement and owners
 
 The current production handoff is

@@ -298,6 +298,9 @@ bool minic_finalize_core_function_set_module(const MinicC0Program *program,
     if (ok)
         ok = minic_core_module_verify_label_bindings(
             &set->module, set->functions, set->function_count);
+    if (ok)
+        ok = minic_core_module_seal_source_asm_occurrences(
+            &set->module, set->functions, set->function_count);
     /* The Core module is immutable after construction. Release the last
      * compiler-only AST importer before entering target emission. */
     minic_core_type_importer_destroy(set->type_importer);

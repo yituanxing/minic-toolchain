@@ -82,7 +82,7 @@ static bool aarch64_owned_reg_policy(FILE *out,
         !minic_lp64_frame_plan_value_slot(ctx->frame_plan, id, &offset))
         return false;
     view = (MinicA64FrameView){
-        ctx->dynamic_frame, ctx->frame, 0U, ctx->saved_entry_sp_offset
+        ctx->machine_frame->has_dynamic_stack, ctx->machine_frame->frame_size, 0U, ctx->machine_frame->saved_entry_sp_offset
     };
     return minic_a64_emit_frame_load(out, &view,
         minic_a64_owned_slot(offset),
@@ -1254,7 +1254,7 @@ static bool aarch64_linux_kvm_va_mask_emit(
     const MinicCoreFunction *fn = ctx->fn;
     const MinicCoreStructuredInlineAsmOperand *op =
         ins->value.structured_inline_asm.operands;
-    if (!out || !ctx || !fn || !info || !op || ctx->dynamic_frame ||
+    if (!out || !ctx || !fn || !info || !op || ctx->machine_frame->has_dynamic_stack ||
         !aarch64_linux_kvm_va_mask_form(
             info->template_text, info->template_length) ||
         !info->is_volatile || info->is_goto || info->has_memory_clobber ||
@@ -1824,7 +1824,7 @@ static bool aarch64_linux_kvm_at_fixup_emit(
     const MinicCoreStructuredInlineAsmOperand *ops =
         ins->value.structured_inline_asm.operands;
     size_t i;
-    if (!out || !fn || !ops || !info || ctx->dynamic_frame ||
+    if (!out || !fn || !ops || !info || ctx->machine_frame->has_dynamic_stack ||
         !info->is_volatile || info->is_goto ||
         !info->has_memory_clobber || info->register_clobber_count ||
         !aarch64_linux_kvm_at_fixup_template(
@@ -1899,7 +1899,7 @@ static bool aarch64_linux_at_s1e1r_emit(
     fn = ctx->fn;
     op = ins->value.structured_inline_asm.operands;
     if (!info->is_volatile || info->is_goto || info->has_memory_clobber ||
-        info->register_clobber_count || ctx->dynamic_frame ||
+        info->register_clobber_count || ctx->machine_frame->has_dynamic_stack ||
         !aarch64_linux_at_s1e1r_template(
             info->template_text, info->template_length) ||
         ins->value.structured_inline_asm.operand_count != 1U || !op ||
@@ -2044,7 +2044,7 @@ static bool aarch64_linux_io_dependency_emit(
     const MinicCoreStructuredInlineAsmOperand *b=
         ins->value.structured_inline_asm.operands;
     size_t i;
-    if(!out||!ctx||!fn||!b||!info||ctx->dynamic_frame||
+    if(!out||!ctx||!fn||!b||!info||ctx->machine_frame->has_dynamic_stack||
        !info->is_volatile||info->is_goto||
        !info->has_memory_clobber||info->register_clobber_count!=0U||
        !aarch64_linux_io_dependency_form(
@@ -2140,7 +2140,7 @@ static bool aarch64_linux_encoded_sysreg_emit(
     const MinicCoreFunction *fn=ctx->fn;
     const MinicCoreStructuredInlineAsmOperand *op=
         ins->value.structured_inline_asm.operands;
-    if(!out||!ctx||!fn||!info||!op||!opcode||ctx->dynamic_frame||
+    if(!out||!ctx||!fn||!info||!op||!opcode||ctx->machine_frame->has_dynamic_stack||
        !info->is_volatile||info->is_goto||info->has_memory_clobber||
        info->register_clobber_count||
        ins->value.structured_inline_asm.operand_count!=1U||
@@ -2403,7 +2403,7 @@ static bool aarch64_linux_encoded_sysreg_write_emit(
                           sizeof(aarch64_linux_write_sysregs[0]) ||
         !info->is_volatile || info->is_goto ||
         info->has_memory_clobber || info->register_clobber_count ||
-        ctx->dynamic_frame ||
+        ctx->machine_frame->has_dynamic_stack ||
         ins->value.structured_inline_asm.operand_count != 1U || !op ||
         op->operand_index != 0U ||
         op->kind != MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT ||
@@ -2519,7 +2519,7 @@ static bool aarch64_linux_vhe_sysreg_alternative_emit(
     const MinicCoreFunction *fn = ctx->fn;
     const MinicCoreStructuredInlineAsmOperand *op =
         ins->value.structured_inline_asm.operands;
-    if (!out || !fn || !op || !info || !form || ctx->dynamic_frame ||
+    if (!out || !fn || !op || !info || !form || ctx->machine_frame->has_dynamic_stack ||
         !info->is_volatile || info->is_goto || !info->has_memory_clobber ||
         info->register_clobber_count ||
         ins->value.structured_inline_asm.operand_count != 1U ||
@@ -2592,7 +2592,7 @@ static bool aarch64_linux_tlbi_emit(
     const MinicCoreStructuredInlineAsmOperand *b=
         ins->value.structured_inline_asm.operands;
     const char *mnemonic=aarch64_linux_tlbi_mnemonic(form);
-    if(!out||!ctx||!fn||!info||!mnemonic||ctx->dynamic_frame||
+    if(!out||!ctx||!fn||!info||!mnemonic||ctx->machine_frame->has_dynamic_stack||
        info->is_goto||!info->is_volatile||
        !info->has_memory_clobber||info->register_clobber_count||
        ins->value.structured_inline_asm.operand_count!=
@@ -2675,7 +2675,7 @@ static bool aarch64_linux_hyp_spin_emit(
     const bool lock = form == AARCH64_LINUX_HYP_SPIN_LOCK;
     size_t i, count;
     if (!out || !fn || !info || !ops ||
-        form == AARCH64_LINUX_HYP_SPIN_NONE || ctx->dynamic_frame ||
+        form == AARCH64_LINUX_HYP_SPIN_NONE || ctx->machine_frame->has_dynamic_stack ||
         !info->is_volatile || info->is_goto ||
         !info->has_memory_clobber || info->register_clobber_count ||
         ins->value.structured_inline_asm.operand_count != (lock ? 5U : 2U))
@@ -2821,7 +2821,7 @@ static bool aarch64_linux_zeropad_emit(
     const MinicCoreStructuredInlineAsmOperand *ops =
         ins->value.structured_inline_asm.operands;
     size_t i;
-    if (!info || !ops || ctx->dynamic_frame || !info->is_volatile ||
+    if (!info || !ops || ctx->machine_frame->has_dynamic_stack || !info->is_volatile ||
         info->is_goto || info->register_clobber_count != 0U ||
         !aarch64_linux_zeropad_form(
             info->template_text, info->template_length) ||
@@ -2968,7 +2968,7 @@ static bool aarch64_linux_uaccess_emit(
     const char *writeback = NULL;
 
     if (!out || !fn || !form || !info || !info->is_volatile || info->is_goto ||
-        ctx->dynamic_frame || info->register_clobber_count != 0U ||
+        ctx->machine_frame->has_dynamic_stack || info->register_clobber_count != 0U ||
         ins->value.structured_inline_asm.operand_count != 3U ||
         !aarch64_linux_uaccess_form(info->template_text,
                                    info->template_length, &(Aarch64UaccessForm){0}))
@@ -3114,7 +3114,7 @@ static bool aarch64_linux_xpaclri_emit(
     const MinicCoreStructuredInlineAsmOperand *op =
         ins->value.structured_inline_asm.operands;
     const MinicCoreFixedRegisterBinding *fixed;
-    if (!out || !fn || !op || !info || ctx->dynamic_frame || info->is_goto ||
+    if (!out || !fn || !op || !info || ctx->machine_frame->has_dynamic_stack || info->is_goto ||
         !aarch64_linux_xpaclri_form(info->template_text, info->template_length) ||
         ins->value.structured_inline_asm.operand_count != 1U ||
         info->register_clobber_count != 0U || info->has_memory_clobber ||
@@ -3151,7 +3151,7 @@ static bool aarch64_linux_smccc_emit(
         ins->value.structured_inline_asm.operands;
     const size_t count = ins->value.structured_inline_asm.operand_count;
     size_t i;
-    if (!out || !fn || !op || ctx->dynamic_frame || !info ||
+    if (!out || !fn || !op || ctx->machine_frame->has_dynamic_stack || !info ||
         !info->is_volatile || info->is_goto ||
         info->register_clobber_count != 0U ||
         (form != 1U && form != 2U) || count < 5U || count > 12U)
@@ -3228,7 +3228,7 @@ static bool aarch64_linux_svc_emit(
     const MinicCoreStructuredInlineAsmOperand *ops =
         ins->value.structured_inline_asm.operands;
     size_t i;
-    if (!out || !fn || !ops || !info || ctx->dynamic_frame ||
+    if (!out || !fn || !ops || !info || ctx->machine_frame->has_dynamic_stack ||
         !aarch64_linux_svc_form(info->template_text, info->template_length) ||
         !info->is_volatile || info->is_goto || !info->has_memory_clobber ||
         info->register_clobber_count != 0U ||
@@ -3297,7 +3297,7 @@ static bool aarch64_linux_wfxt_emit(
     const MinicCoreFunction *fn=ctx->fn;
     const MinicCoreStructuredInlineAsmOperand *op=
         ins->value.structured_inline_asm.operands;
-    if(!out||!fn||!info||!op||ctx->dynamic_frame||
+    if(!out||!fn||!info||!op||ctx->machine_frame->has_dynamic_stack||
        (form!=1U&&form!=2U)||!info->is_volatile||info->is_goto||
        !info->has_memory_clobber||info->register_clobber_count||
        ins->value.structured_inline_asm.operand_count!=1U||
@@ -3539,7 +3539,7 @@ static bool aarch64_linux_lse_casp128_emit(
     const MinicCoreStructuredInlineAsmOperand *op =
         ins->value.structured_inline_asm.operands;
     size_t i;
-    if (!out || !fn || !op || !info || ctx->dynamic_frame ||
+    if (!out || !fn || !op || !info || ctx->machine_frame->has_dynamic_stack ||
         mode < 1U || mode > 2U || !info->is_volatile || info->is_goto ||
         ins->value.structured_inline_asm.operand_count != 8U ||
         aarch64_linux_lse_casp128_form(
@@ -3635,7 +3635,7 @@ static bool aarch64_linux_lse_dec_positive_emit(
     const MinicCoreStructuredInlineAsmOperand *op =
         ins->value.structured_inline_asm.operands;
     size_t i;
-    if (!out || !fn || !op || !info || ctx->dynamic_frame ||
+    if (!out || !fn || !op || !info || ctx->machine_frame->has_dynamic_stack ||
         !info->is_volatile || info->is_goto || !info->has_memory_clobber ||
         info->register_clobber_count != 1U || !info->register_clobbers ||
         info->register_clobbers[0].name_length != 2U ||
@@ -3964,7 +3964,7 @@ static bool aarch64_linux_timer_alternative_emit(
     const MinicCoreFunction *fn = ctx->fn;
     const MinicCoreStructuredInlineAsmOperand *op =
         ins->value.structured_inline_asm.operands;
-    if (!out || !fn || !info || !op || ctx->dynamic_frame ||
+    if (!out || !fn || !info || !op || ctx->machine_frame->has_dynamic_stack ||
         !info->is_volatile || info->is_goto ||
         info->register_clobber_count != 0U ||
         (form != 1U && form != 2U) ||
@@ -4026,7 +4026,7 @@ static bool aarch64_linux_counter_ordering_emit(
     const MinicCoreFunction *fn = ctx->fn;
     const MinicCoreStructuredInlineAsmOperand *op =
         ins->value.structured_inline_asm.operands;
-    if (!out || !fn || !info || !op || ctx->dynamic_frame ||
+    if (!out || !fn || !info || !op || ctx->machine_frame->has_dynamic_stack ||
         !aarch64_linux_counter_ordering_form(
             info->template_text, info->template_length) ||
         !info->is_volatile || info->is_goto ||
@@ -4099,7 +4099,7 @@ static bool aarch64_linux_rng_sysreg_emit(
     const MinicCoreStructuredInlineAsmOperand *op =
         ins->value.structured_inline_asm.operands;
     size_t i;
-    if (!out || !fn || !info || !op || ctx->dynamic_frame ||
+    if (!out || !fn || !info || !op || ctx->machine_frame->has_dynamic_stack ||
         !info->is_volatile || info->is_goto || info->has_memory_clobber ||
         info->register_clobber_count != 1U ||
         !info->register_clobbers ||
@@ -4155,7 +4155,7 @@ static bool aarch64_linux_qcom_return_stack_emit(
     const MinicCoreFunction *fn = ctx->fn;
     const MinicCoreStructuredInlineAsmOperand *op =
         ins->value.structured_inline_asm.operands;
-    if (!out || !fn || !op || !info || ctx->dynamic_frame ||
+    if (!out || !fn || !op || !info || ctx->machine_frame->has_dynamic_stack ||
         !info->is_volatile || info->is_goto || info->has_memory_clobber ||
         info->register_clobber_count != 0U ||
         !aarch64_linux_qcom_return_stack_form(
@@ -4235,7 +4235,7 @@ static bool aarch64_linux_cache_op_emit(
           (!info->has_memory_clobber &&
            aarch64_linux_efi_unclobbered_cache_form(mnemonic))) ||
         info->register_clobber_count ||
-        ctx->dynamic_frame ||
+        ctx->machine_frame->has_dynamic_stack ||
         ins->value.structured_inline_asm.operand_count != 1U || !op ||
         op->operand_index != 0U ||
         op->kind != MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT ||
@@ -4309,7 +4309,7 @@ static bool aarch64_linux_user_cache_fault_emit(
         info->template_text, info->template_length);
     if (!instruction || !info->is_volatile || info->is_goto ||
         !info->has_memory_clobber || info->register_clobber_count ||
-        ctx->dynamic_frame ||
+        ctx->machine_frame->has_dynamic_stack ||
         ins->value.structured_inline_asm.operand_count != 2U || !op ||
         op[0].operand_index != 0U || op[1].operand_index != 1U ||
         op[0].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT ||
@@ -4361,7 +4361,7 @@ static bool aarch64_linux_percpu_write_alternative_emit(
             info->template_text, info->template_length) ||
         !info->is_volatile || info->is_goto ||
         !info->has_memory_clobber || info->register_clobber_count ||
-        ctx->dynamic_frame ||
+        ctx->machine_frame->has_dynamic_stack ||
         ins->value.structured_inline_asm.operand_count != 1U ||
         operand[0].operand_index != 0U ||
         operand[0].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT ||
@@ -4417,7 +4417,7 @@ static bool aarch64_linux_lse_emit(
     size_t i;
     if (!out || !fn || !info || !form || !ops || !info->is_volatile ||
         info->is_goto || !info->has_memory_clobber ||
-        info->register_clobber_count || ctx->dynamic_frame ||
+        info->register_clobber_count || ctx->machine_frame->has_dynamic_stack ||
         ins->value.structured_inline_asm.operand_count != count ||
         form->mode >= sizeof(order) / sizeof(order[0]))
         return false;
@@ -4507,7 +4507,7 @@ static bool aarch64_linux_crash_regs_emit(
     const MinicCoreType *record;
     size_t record_size, record_alignment;
     size_t i;
-    if (ctx->dynamic_frame || !op || !info->is_volatile || info->is_goto ||
+    if (ctx->machine_frame->has_dynamic_stack || !op || !info->is_volatile || info->is_goto ||
         !info->has_memory_clobber || info->register_clobber_count ||
         ins->value.structured_inline_asm.operand_count != 3U ||
         !aarch64_linux_crash_regs_template(
@@ -4538,8 +4538,8 @@ static bool aarch64_linux_crash_regs_emit(
      * far [sp,#offset] load, corrupting the x17 image BEFORE the snapshot.
      * Build the owned-slot address directly in x0 and dereference it: this
      * needs no separate physical scratch, regardless of frame size. */
-    frame = (MinicA64FrameView){false, ctx->frame, 0U,
-                                ctx->saved_entry_sp_offset};
+    frame = (MinicA64FrameView){false, ctx->machine_frame->frame_size, 0U,
+                                ctx->machine_frame->saved_entry_sp_offset};
     if (!minic_a64_emit_owned_address(out, &frame,
             minic_lp64_frame_value_offset(ctx->frame_plan, op[2].value), 0U) ||
         fputs("  ldr x0, [x0]\n", out) == EOF) return false;
@@ -4766,7 +4766,7 @@ bool minic_aarch64_emit_qualified_structured_asm(
         info->register_clobber_count == 0U &&
         ins->value.structured_inline_asm.operand_count == 0U)
         return fputs("  dmb oshst\n", out) != EOF;
-    if (ctx->dynamic_frame) return false;
+    if (ctx->machine_frame->has_dynamic_stack) return false;
     if (aarch64_linux_crash_regs_template(
             info->template_text, info->template_length))
         return aarch64_linux_crash_regs_emit(out, ctx, ins, info);
@@ -4940,7 +4940,7 @@ bool minic_aarch64_emit_qualified_structured_asm(
         size_t k;
         /* The Core effect conservatively includes +Q RMW memory ordering. */
         if (!ops || !info->is_volatile || info->is_goto ||
-            ctx->dynamic_frame || info->register_clobber_count ||
+            ctx->machine_frame->has_dynamic_stack || info->register_clobber_count ||
             ins->result != MINIC_CORE_VALUE_INVALID)
             return false;
         for (k=0U;k<3U;++k)

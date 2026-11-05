@@ -213,4 +213,13 @@ bool minic_core_module_verify_label_bindings(
     const MinicCoreModule *module, const struct MinicCoreFunction *functions,
     size_t function_count);
 
+/* Seal unique physical source-ASM occurrences after all ordinary and clone
+ * Core functions have been lowered. The function-set ordinal is the Module
+ * ordinal; the assigned nonzero IDs are TU-unique, independent of C statement
+ * identities and stable through backend lowering. Preflight is transactional:
+ * invalid inputs leave every CoreInlineAsm unchanged. */
+bool minic_core_module_seal_source_asm_occurrences(
+    const MinicCoreModule *module, struct MinicCoreFunction *functions,
+    size_t function_count);
+
 #endif

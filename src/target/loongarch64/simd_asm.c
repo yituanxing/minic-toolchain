@@ -369,7 +369,7 @@ bool minic_loongarch64_simd_emit_structured(
             const char *reg = step->lasx ? "$xr" : "$vr";
             if (!minic_loongarch64_emit_frame_mem(
                     out, "ld.d", "$t0", minic_lp64_frame_value_offset(ctx->frame_plan, value),
-                    ctx->dynamic_frame) ||
+                    ctx->machine_frame->has_dynamic_stack) ||
                 fprintf(out, "  %s %s%u, $t0, %d\n", op, reg,
                         step->registers[0], step->memory_offset) < 0)
                 return false;

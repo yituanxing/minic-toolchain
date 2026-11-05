@@ -232,7 +232,7 @@ static bool loong_linux_clock_emit(
     for (i = 0U; i < count; ++i)
         if (!minic_loongarch64_emit_frame_mem(
                 out, "ld.d", "$t2", minic_lp64_frame_value_offset(ctx->frame_plan, b[i].value),
-                ctx->dynamic_frame) ||
+                ctx->machine_frame->has_dynamic_stack) ||
             !minic_loongarch64_emit_asm_output_store(
                 out, fn, b[i].value,
                 (form == LOONG_CLOCK_RDTIME_NUMERIC && i == 1U) ||
@@ -313,16 +313,16 @@ static bool loong_linux_vdso_emit(
     /* Materialize the syscall-number and both argument registers from
      * Core SSA, independently of the compiler's scratch register choices. */
     if (!minic_loongarch64_emit_frame_mem(out, "ld.d", "$a7",
-            minic_lp64_frame_value_offset(ctx->frame_plan, b[1].value), ctx->dynamic_frame) ||
+            minic_lp64_frame_value_offset(ctx->frame_plan, b[1].value), ctx->machine_frame->has_dynamic_stack) ||
         !minic_loongarch64_emit_frame_mem(out,
             minic_core_function_value_is_kind(fn, b[2].value, MINIC_CORE_TYPE_POINTER)
                 ? "ld.d" : "ld.w", "$a0",
-            minic_lp64_frame_value_offset(ctx->frame_plan, b[2].value), ctx->dynamic_frame) ||
+            minic_lp64_frame_value_offset(ctx->frame_plan, b[2].value), ctx->machine_frame->has_dynamic_stack) ||
         !minic_loongarch64_emit_frame_mem(out, "ld.d", "$a1",
-            minic_lp64_frame_value_offset(ctx->frame_plan, b[3].value), ctx->dynamic_frame) ||
+            minic_lp64_frame_value_offset(ctx->frame_plan, b[3].value), ctx->machine_frame->has_dynamic_stack) ||
         fputs("  syscall 0\n", out) == EOF ||
         !minic_loongarch64_emit_frame_mem(out, "ld.d", "$t2",
-            minic_lp64_frame_value_offset(ctx->frame_plan, b[0].value), ctx->dynamic_frame) ||
+            minic_lp64_frame_value_offset(ctx->frame_plan, b[0].value), ctx->machine_frame->has_dynamic_stack) ||
         fputs("  st.d $a0, $t2, 0\n", out) == EOF) return false;
     return true;
 }
@@ -521,11 +521,11 @@ static bool loong_linux_cpucfg_emit(
         return false;
     return minic_loongarch64_emit_frame_mem(
                out, "ld.d", "$t1", minic_lp64_frame_value_offset(ctx->frame_plan, operands[1].value),
-               ctx->dynamic_frame) &&
+               ctx->machine_frame->has_dynamic_stack) &&
            fprintf(out, "  cpucfg $t0, $t1\n") >= 0 &&
            minic_loongarch64_emit_frame_mem(
                out, "ld.d", "$t2", minic_lp64_frame_value_offset(ctx->frame_plan, operands[0].value),
-               ctx->dynamic_frame) &&
+               ctx->machine_frame->has_dynamic_stack) &&
            minic_loongarch64_emit_asm_output_store(
                out, fn, operands[0].value,
                4U, "$t0", "$t2", "$t3");
@@ -704,15 +704,15 @@ static bool loong_mask_nospec_emit(
      * address materialization. No temporary overlap with $t0/$t1/$t2. */
     return minic_loongarch64_emit_frame_mem(
                out, "ld.d", "$t0", minic_lp64_frame_value_offset(ctx->frame_plan, b[1].value),
-               ctx->dynamic_frame) &&
+               ctx->machine_frame->has_dynamic_stack) &&
            minic_loongarch64_emit_frame_mem(
                out, "ld.d", "$t1", minic_lp64_frame_value_offset(ctx->frame_plan, b[2].value),
-               ctx->dynamic_frame) &&
+               ctx->machine_frame->has_dynamic_stack) &&
            fputs("  sltu $t2, $t0, $t1\n"
                  "  sub.d $t2, $zero, $t2\n", out) != EOF &&
            minic_loongarch64_emit_frame_mem(
                out, "ld.d", "$t1", minic_lp64_frame_value_offset(ctx->frame_plan, b[0].value),
-               ctx->dynamic_frame) &&
+               ctx->machine_frame->has_dynamic_stack) &&
            minic_loongarch64_emit_asm_output_store(
                out, fn, b[0].value,
                8U, "$t2", "$t1", "$t3");
@@ -791,19 +791,19 @@ static bool loong_percpu_indexed_emit(
     if (!minic_core_function_value_is_kind(fn, b[1].value, MINIC_CORE_TYPE_POINTER))
         return false;
     if (!minic_loongarch64_emit_frame_mem(
-            out, "ld.d", "$t1", minic_lp64_frame_value_offset(ctx->frame_plan, b[1].value), ctx->dynamic_frame))
+            out, "ld.d", "$t1", minic_lp64_frame_value_offset(ctx->frame_plan, b[1].value), ctx->machine_frame->has_dynamic_stack))
         return false;
     if (read)
         return fprintf(out, "  %s $t0, $r21, $t1\n",
                        mnemonics[(size_t)form-1U]) >= 0 &&
                minic_loongarch64_emit_frame_mem(
                    out, "ld.d", "$t1", minic_lp64_frame_value_offset(ctx->frame_plan, b[0].value),
-                   ctx->dynamic_frame) &&
+                   ctx->machine_frame->has_dynamic_stack) &&
                minic_loongarch64_emit_asm_output_store(
                    out, fn, b[0].value,
                    8U, "$t0", "$t1", "$t3");
     return minic_loongarch64_emit_frame_mem(
-               out, "ld.d", "$t0", minic_lp64_frame_value_offset(ctx->frame_plan, b[0].value),ctx->dynamic_frame) &&
+               out, "ld.d", "$t0", minic_lp64_frame_value_offset(ctx->frame_plan, b[0].value),ctx->machine_frame->has_dynamic_stack) &&
            fprintf(out, "  %s $t0, $r21, $t1\n",
                    mnemonics[(size_t)form-1U]) >= 0;
 }
@@ -883,13 +883,13 @@ static bool loong_percpu_amo_emit(
        !loong_asm_integer(fn,b[2].value,false,8U,-1))
         return false;
     return minic_loongarch64_emit_frame_mem(
-             out,"ld.d","$t1",minic_lp64_frame_value_offset(ctx->frame_plan, b[1].value),ctx->dynamic_frame)&&
+             out,"ld.d","$t1",minic_lp64_frame_value_offset(ctx->frame_plan, b[1].value),ctx->machine_frame->has_dynamic_stack)&&
            minic_loongarch64_emit_frame_mem(
-             out,"ld.d","$t0",minic_lp64_frame_value_offset(ctx->frame_plan, b[2].value),ctx->dynamic_frame)&&
+             out,"ld.d","$t0",minic_lp64_frame_value_offset(ctx->frame_plan, b[2].value),ctx->machine_frame->has_dynamic_stack)&&
            fprintf(out,"  %s $t2, $t0, $t1\n",
                    loong_percpu_amo[form].mnemonic)>=0&&
            minic_loongarch64_emit_frame_mem(
-             out,"ld.d","$t1",minic_lp64_frame_value_offset(ctx->frame_plan, b[0].value),ctx->dynamic_frame)&&
+             out,"ld.d","$t1",minic_lp64_frame_value_offset(ctx->frame_plan, b[0].value),ctx->machine_frame->has_dynamic_stack)&&
            minic_loongarch64_emit_asm_output_store(
              out,fn,b[0].value,
              8U,"$t2","$t1","$t3");
@@ -930,7 +930,7 @@ static bool loong_fcsr0_write_emit(
     return minic_loongarch64_emit_frame_mem(
              out,plain->size==8U?"ld.d":"ld.w","$t0",
              minic_lp64_frame_value_offset(ctx->frame_plan, b[0].value),
-             ctx->dynamic_frame)&&
+             ctx->machine_frame->has_dynamic_stack)&&
            fputs("  movgr2fcsr $fcsr0, $t0\n",out)!=EOF;
 }
 
@@ -994,14 +994,14 @@ static bool loong_linux_fpr_transfer_emit(
             return false;
         return fprintf(out, "  movfr2gr.d $t0, $f%u\n", reg) >= 0 &&
             minic_loongarch64_emit_frame_mem(out, "ld.d", "$t1",
-                minic_lp64_frame_value_offset(ctx->frame_plan, b[0].value), ctx->dynamic_frame) &&
+                minic_lp64_frame_value_offset(ctx->frame_plan, b[0].value), ctx->machine_frame->has_dynamic_stack) &&
             minic_loongarch64_emit_asm_output_store(
                 out, fn, b[0].value,
                 8U, "$t0", "$t1", "$t3");
     }
     return loong_asm_integer(fn, b[0].value, false, 8U, 0) &&
         minic_loongarch64_emit_frame_mem(out, "ld.d", "$t0",
-            minic_lp64_frame_value_offset(ctx->frame_plan, b[0].value), ctx->dynamic_frame) &&
+            minic_lp64_frame_value_offset(ctx->frame_plan, b[0].value), ctx->machine_frame->has_dynamic_stack) &&
         fprintf(out, "  movgr2fr.d $f%u, $t0\n", reg) >= 0;
 }
 
@@ -1073,13 +1073,13 @@ static bool loong_linux_invtlb_emit(
     if (form == 1U || form == 3U) {
         if (!minic_loongarch64_emit_frame_mem(
                 out, "ld.d", "$t0", minic_lp64_frame_value_offset(ctx->frame_plan, b[1].value),
-                ctx->dynamic_frame)) return false;
+                ctx->machine_frame->has_dynamic_stack)) return false;
     } else if (fputs("  or $t0, $zero, $zero\n", out) == EOF) return false;
     if (form == 1U || form == 2U) {
         if (!minic_loongarch64_emit_frame_mem(
                 out, "ld.d", "$t1",
                 minic_lp64_frame_value_offset(ctx->frame_plan, b[form == 1U ? 2U : 1U].value),
-                ctx->dynamic_frame)) return false;
+                ctx->machine_frame->has_dynamic_stack)) return false;
     } else if (fputs("  or $t1, $zero, $zero\n", out) == EOF) return false;
     return fprintf(out, "  invtlb %lld, $t0, $t1\n",
                    (long long)def->value.integer_value) >= 0;
@@ -1141,13 +1141,13 @@ static bool loong_linux_add_unless_emit(
     }
     if (!minic_loongarch64_emit_frame_mem(
             out, "ld.d", "$t2", minic_lp64_frame_value_offset(ctx->frame_plan, b[2].value),
-            ctx->dynamic_frame) ||
+            ctx->machine_frame->has_dynamic_stack) ||
         !minic_loongarch64_emit_frame_mem(
             out, "ld.d", "$t4", minic_lp64_frame_value_offset(ctx->frame_plan, b[3].value),
-            ctx->dynamic_frame) ||
+            ctx->machine_frame->has_dynamic_stack) ||
         !minic_loongarch64_emit_frame_mem(
             out, "ld.d", "$t5", minic_lp64_frame_value_offset(ctx->frame_plan, b[4].value),
-            ctx->dynamic_frame) ||
+            ctx->machine_frame->has_dynamic_stack) ||
         fprintf(out,
             "  or $t1, $zero, $zero\n"
             "0: ll.%s $t0, $t2, 0\n"
@@ -1160,11 +1160,11 @@ static bool loong_linux_add_unless_emit(
             "2:\n", suffix, suffix, suffix) < 0 ||
         !minic_loongarch64_emit_frame_mem(
             out, "ld.d", "$t7", minic_lp64_frame_value_offset(ctx->frame_plan, b[0].value),
-            ctx->dynamic_frame) ||
+            ctx->machine_frame->has_dynamic_stack) ||
         fprintf(out, "  st.%s $t0, $t7, 0\n", suffix) < 0 ||
         !minic_loongarch64_emit_frame_mem(
             out, "ld.d", "$t7", minic_lp64_frame_value_offset(ctx->frame_plan, b[1].value),
-            ctx->dynamic_frame) ||
+            ctx->machine_frame->has_dynamic_stack) ||
         fprintf(out, "  st.%s $t1, $t7, 0\n", suffix) < 0) return false;
     return true;
 }
@@ -1234,10 +1234,10 @@ static bool loong_linux_sub_positive_emit(
     }
     if (!minic_loongarch64_emit_frame_mem(
             out, "ld.d", "$t4", minic_lp64_frame_value_offset(ctx->frame_plan, b[2].value),
-            ctx->dynamic_frame) ||
+            ctx->machine_frame->has_dynamic_stack) ||
         !minic_loongarch64_emit_frame_mem(
             out, "ld.d", "$t5", minic_lp64_frame_value_offset(ctx->frame_plan, b[3].value),
-            ctx->dynamic_frame) ||
+            ctx->machine_frame->has_dynamic_stack) ||
         fprintf(out,
             "1: ll.%s $t0, $t4, 0\n"
             "  %s.%s $t1, $t0, $t5\n"
@@ -1249,11 +1249,11 @@ static bool loong_linux_sub_positive_emit(
             form->add_negated ? "add" : "sub", suffix, suffix) < 0 ||
         !minic_loongarch64_emit_frame_mem(
             out, "ld.d", "$t7", minic_lp64_frame_value_offset(ctx->frame_plan, b[0].value),
-            ctx->dynamic_frame) ||
+            ctx->machine_frame->has_dynamic_stack) ||
         fprintf(out, "  st.%s $t1, $t7, 0\n", suffix) < 0 ||
         !minic_loongarch64_emit_frame_mem(
             out, "ld.d", "$t7", minic_lp64_frame_value_offset(ctx->frame_plan, b[1].value),
-            ctx->dynamic_frame) ||
+            ctx->machine_frame->has_dynamic_stack) ||
         fprintf(out, "  st.%s $t2, $t7, 0\n", suffix) < 0) return false;
     return true;
 }
@@ -1568,16 +1568,16 @@ static bool loong_linux_uaccess_emit(
      * address. The shared frame helper handles large and dynamic frames. */
     if (!minic_loongarch64_emit_frame_mem(
             out, "ld.d", "$t1", minic_lp64_frame_value_offset(ctx->frame_plan, b[0].value),
-            ctx->dynamic_frame) ||
+            ctx->machine_frame->has_dynamic_stack) ||
         !minic_loongarch64_emit_asm_input_scalar(
             out, fn, b[0].value, 4U) ||
         !minic_loongarch64_emit_frame_mem(
             out, "ld.d", "$t4", minic_lp64_frame_value_offset(ctx->frame_plan, b[form->load ? 2U : 1U].value),
-            ctx->dynamic_frame)) return false;
+            ctx->machine_frame->has_dynamic_stack)) return false;
     if (!form->load &&
         !minic_loongarch64_emit_frame_mem(
             out, "ld.d", "$t2", minic_lp64_frame_value_offset(ctx->frame_plan, b[2].value),
-            ctx->dynamic_frame)) return false;
+            ctx->machine_frame->has_dynamic_stack)) return false;
     if (fprintf(out,
             "1: %s %s, $t4, 0\n"
             "2:\n"
@@ -1592,14 +1592,14 @@ static bool loong_linux_uaccess_emit(
             form->load ? 13U : 0U) < 0 ||
         !minic_loongarch64_emit_frame_mem(
             out, "ld.d", "$t7", minic_lp64_frame_value_offset(ctx->frame_plan, b[0].value),
-            ctx->dynamic_frame) ||
+            ctx->machine_frame->has_dynamic_stack) ||
         !minic_loongarch64_emit_asm_output_store(
             out, fn, b[0].value,
             4U, "$t0", "$t7", "$t3")) return false;
     if (form->load &&
         (!minic_loongarch64_emit_frame_mem(
              out, "ld.d", "$t7", minic_lp64_frame_value_offset(ctx->frame_plan, b[1].value),
-             ctx->dynamic_frame) ||
+             ctx->machine_frame->has_dynamic_stack) ||
          !minic_loongarch64_emit_asm_output_store(
              out, fn, b[1].value,
              data_width, "$t1", "$t7", "$t3"))) return false;
@@ -1654,13 +1654,13 @@ static bool loong_linux_futex_rmw_emit(
         initial->value.integer_value != 0) return false;
     if (!minic_loongarch64_emit_frame_mem(
             out, "ld.d", "$t4", minic_lp64_frame_value_offset(ctx->frame_plan, b[4].value),
-            ctx->dynamic_frame) ||
+            ctx->machine_frame->has_dynamic_stack) ||
         !minic_loongarch64_emit_frame_mem(
             out, "ld.d", "$t5", minic_lp64_frame_value_offset(ctx->frame_plan, b[2].value),
-            ctx->dynamic_frame) ||
+            ctx->machine_frame->has_dynamic_stack) ||
         !minic_loongarch64_emit_frame_mem(
             out, "ld.d", "$t2", minic_lp64_frame_value_offset(ctx->frame_plan, b[5].value),
-            ctx->dynamic_frame) ||
+            ctx->machine_frame->has_dynamic_stack) ||
         /* Frame offset legalization may consume $t3 as a scratch. The
          * fault-status register must survive that helper after the loop. */
         fputs("  addi.w $t6, $zero, 0\n", out) == EOF ||
@@ -1691,11 +1691,11 @@ static bool loong_linux_futex_rmw_emit(
             "  .popsection\n", out) == EOF ||
         !minic_loongarch64_emit_frame_mem(
             out, "ld.d", "$t7", minic_lp64_frame_value_offset(ctx->frame_plan, b[0].value),
-            ctx->dynamic_frame) ||
+            ctx->machine_frame->has_dynamic_stack) ||
         fputs("  st.w $t6, $t7, 0\n", out) == EOF ||
         !minic_loongarch64_emit_frame_mem(
             out, "ld.d", "$t7", minic_lp64_frame_value_offset(ctx->frame_plan, b[1].value),
-            ctx->dynamic_frame) ||
+            ctx->machine_frame->has_dynamic_stack) ||
         fputs("  st.w $t1, $t7, 0\n", out) == EOF) return false;
     return true;
 }
@@ -1730,13 +1730,13 @@ static bool loong_linux_futex_cmpxchg_emit(
                                i == 0U ? 1 : 0)) return false;
     }
     if (!minic_loongarch64_emit_frame_mem(out, "ld.d", "$t4",
-            minic_lp64_frame_value_offset(ctx->frame_plan, b[3].value), ctx->dynamic_frame) ||
+            minic_lp64_frame_value_offset(ctx->frame_plan, b[3].value), ctx->machine_frame->has_dynamic_stack) ||
         !minic_loongarch64_emit_frame_mem(out, "ld.d", "$t5",
-            minic_lp64_frame_value_offset(ctx->frame_plan, b[2].value), ctx->dynamic_frame) ||
+            minic_lp64_frame_value_offset(ctx->frame_plan, b[2].value), ctx->machine_frame->has_dynamic_stack) ||
         !minic_loongarch64_emit_frame_mem(out, "ld.wu", "$t2",
-            minic_lp64_frame_value_offset(ctx->frame_plan, b[4].value), ctx->dynamic_frame) ||
+            minic_lp64_frame_value_offset(ctx->frame_plan, b[4].value), ctx->machine_frame->has_dynamic_stack) ||
         !minic_loongarch64_emit_frame_mem(out, "ld.wu", "$t8",
-            minic_lp64_frame_value_offset(ctx->frame_plan, b[5].value), ctx->dynamic_frame) ||
+            minic_lp64_frame_value_offset(ctx->frame_plan, b[5].value), ctx->machine_frame->has_dynamic_stack) ||
         /* FIXME(MC-045): operand 0 is GNU +r and may enter nonzero; source
          * qualification does not prove an initial zero. Its old value is
          * currently dropped on the no-fault/no-store path. */
@@ -1759,10 +1759,10 @@ static bool loong_linux_futex_cmpxchg_emit(
               "  .short ((18 << 0) | (0 << 5))\n"
               "  .popsection\n", out) == EOF ||
         !minic_loongarch64_emit_frame_mem(out, "ld.d", "$t7",
-            minic_lp64_frame_value_offset(ctx->frame_plan, b[0].value), ctx->dynamic_frame) ||
+            minic_lp64_frame_value_offset(ctx->frame_plan, b[0].value), ctx->machine_frame->has_dynamic_stack) ||
         fputs("  st.w $t6, $t7, 0\n", out) == EOF ||
         !minic_loongarch64_emit_frame_mem(out, "ld.d", "$t7",
-            minic_lp64_frame_value_offset(ctx->frame_plan, b[1].value), ctx->dynamic_frame) ||
+            minic_lp64_frame_value_offset(ctx->frame_plan, b[1].value), ctx->machine_frame->has_dynamic_stack) ||
         fputs("  st.w $t1, $t7, 0\n", out) == EOF) return false;
     return true;
 }
@@ -1834,7 +1834,7 @@ static bool loong_linux_irq_switch_emit(
     fn = ctx->fn;
     operands = ins->value.structured_inline_asm.operands;
     if (!info->is_volatile || info->is_goto || !info->has_memory_clobber ||
-        ctx->dynamic_frame || !loong_linux_irq_switch_template(
+        ctx->machine_frame->has_dynamic_stack || !loong_linux_irq_switch_template(
             info->template_text, info->template_length, true) ||
         info->register_clobber_count != 18U || !info->register_clobbers ||
         ins->value.structured_inline_asm.operand_count != 2U || !operands)
@@ -1942,10 +1942,10 @@ static bool loong_linux_frametrace_emit(
         !minic_core_function_value_is_kind(fn, b[1].value, MINIC_CORE_TYPE_POINTER) ||
         !minic_loongarch64_emit_frame_mem(
             out, "ld.d", "$t0", minic_lp64_frame_value_offset(ctx->frame_plan, b[1].value),
-            ctx->dynamic_frame) ||
+            ctx->machine_frame->has_dynamic_stack) ||
         !minic_loongarch64_emit_frame_mem(
             out, "ld.d", "$t1", minic_lp64_frame_value_offset(ctx->frame_plan, b[0].value),
-            ctx->dynamic_frame) ||
+            ctx->machine_frame->has_dynamic_stack) ||
         fputs("  st.d $r1, $t0, 8\n"
               "  pcaddi $ra, 0\n"
               "  st.d $ra, $t1, 0\n"
@@ -2016,7 +2016,7 @@ static bool loong_linux_frametrace_csr_emit(
     return fprintf(out, "  csrrd $t0, %u\n", csr) >= 0 &&
         minic_loongarch64_emit_frame_mem(
             out, "ld.d", "$t1", minic_lp64_frame_value_offset(ctx->frame_plan, b[0].value),
-            ctx->dynamic_frame) &&
+            ctx->machine_frame->has_dynamic_stack) &&
         minic_loongarch64_emit_asm_output_store(
             out, fn, b[0].value,
             pointee->size,
@@ -2062,10 +2062,10 @@ static bool minic_loongarch64_emit_amo(
      * LoongArch atomic *DB instruction performs both the RMW and hardware
      * memory ordering. Never lower +ZB to C load/compute/store. */
     return minic_loongarch64_emit_frame_mem(
-               out, "ld.d", "$t1", minic_lp64_frame_value_offset(ctx->frame_plan, b[0].value), ctx->dynamic_frame) &&
+               out, "ld.d", "$t1", minic_lp64_frame_value_offset(ctx->frame_plan, b[0].value), ctx->machine_frame->has_dynamic_stack) &&
            minic_loongarch64_emit_frame_mem(
                out, atom->width == 8U ? "ld.d" : "ld.w",
-               "$t0", minic_lp64_frame_value_offset(ctx->frame_plan, b[1].value), ctx->dynamic_frame) &&
+               "$t0", minic_lp64_frame_value_offset(ctx->frame_plan, b[1].value), ctx->machine_frame->has_dynamic_stack) &&
            fprintf(out, "  %s $zero, $t0, $t1\n",
                    atom->instruction) >= 0;
 }
@@ -2138,20 +2138,20 @@ static bool minic_loongarch64_emit_csr(
     if (form == 2U &&
         (!minic_loongarch64_emit_frame_mem(
              out, "ld.d", "$t1", minic_lp64_frame_value_offset(ctx->frame_plan, b[0].value),
-             ctx->dynamic_frame) ||
+             ctx->machine_frame->has_dynamic_stack) ||
          !minic_loongarch64_emit_asm_input_scalar(
              out, fn, b[0].value, width) ||
          fputs("  move $t1, $t0\n", out) == EOF ||
          !minic_loongarch64_emit_frame_mem(
              out, "ld.w", "$t0", minic_lp64_frame_value_offset(ctx->frame_plan, b[1].value),
-             ctx->dynamic_frame) ||
+             ctx->machine_frame->has_dynamic_stack) ||
          fputs("  csrxchg $t1, $t0, 0\n", out) == EOF))
         return false;
     if (form == 1U && fputs("  csrrd $t1, 0\n", out) == EOF)
         return false;
     return minic_loongarch64_emit_frame_mem(
                out, "ld.d", "$t2", minic_lp64_frame_value_offset(ctx->frame_plan, b[0].value),
-               ctx->dynamic_frame) &&
+               ctx->machine_frame->has_dynamic_stack) &&
            minic_loongarch64_emit_asm_output_store(
                out, fn, b[0].value,
                width, "$t1", "$t2", "$t3");
@@ -2188,14 +2188,14 @@ static bool minic_loongarch64_emit_amo_fetch(
      * stable across later frame accesses and holds hardware AMO old-value. */
     return minic_loongarch64_emit_frame_mem(
                out, "ld.d", "$t1", minic_lp64_frame_value_offset(ctx->frame_plan, b[0].value),
-               ctx->dynamic_frame) &&
+               ctx->machine_frame->has_dynamic_stack) &&
            minic_loongarch64_emit_frame_mem(
                out, atom->width == 8U ? "ld.d" : "ld.w", "$t0",
-               minic_lp64_frame_value_offset(ctx->frame_plan, b[2].value), ctx->dynamic_frame) &&
+               minic_lp64_frame_value_offset(ctx->frame_plan, b[2].value), ctx->machine_frame->has_dynamic_stack) &&
            fprintf(out, "  %s $t2, $t0, $t1\n", atom->instruction) >= 0 &&
            minic_loongarch64_emit_frame_mem(
                out, "ld.d", "$t1", minic_lp64_frame_value_offset(ctx->frame_plan, b[1].value),
-               ctx->dynamic_frame) &&
+               ctx->machine_frame->has_dynamic_stack) &&
            minic_loongarch64_emit_asm_output_store(
                out, fn, b[1].value,
                atom->width, "$t2", "$t1", "$t3");
@@ -2228,11 +2228,11 @@ static bool loong_pte_emit(
         if(!loong_asm_integer(fn,b[i].value,i<2U,8U,0))return false;
     }
     return minic_loongarch64_emit_frame_mem(
-             out,"ld.d","$t2",minic_lp64_frame_value_offset(ctx->frame_plan, b[1].value),ctx->dynamic_frame)&&
+             out,"ld.d","$t2",minic_lp64_frame_value_offset(ctx->frame_plan, b[1].value),ctx->machine_frame->has_dynamic_stack)&&
            minic_loongarch64_emit_frame_mem(
-             out,"ld.d","$t0",minic_lp64_frame_value_offset(ctx->frame_plan, b[2].value),ctx->dynamic_frame)&&
+             out,"ld.d","$t0",minic_lp64_frame_value_offset(ctx->frame_plan, b[2].value),ctx->machine_frame->has_dynamic_stack)&&
            minic_loongarch64_emit_frame_mem(
-             out,"ld.d","$t1",minic_lp64_frame_value_offset(ctx->frame_plan, b[0].value),ctx->dynamic_frame)&&
+             out,"ld.d","$t1",minic_lp64_frame_value_offset(ctx->frame_plan, b[0].value),ctx->machine_frame->has_dynamic_stack)&&
            fputs("1:\n"
                  "  ll.d $t4, $t1, 0\n"
                  "  bnez $t4, 2f\n"
@@ -2286,15 +2286,15 @@ static bool loong_linux_cmpxchg_emit(FILE *out,
         /* out0 old32, out1 temp, out2 destination; input3 source,
          * input4 mask, input5 expected and input6 replacement. */
         if(!minic_loongarch64_emit_frame_mem(out,"ld.d","$t4",
-              minic_lp64_frame_value_offset(ctx->frame_plan, b[3].value),ctx->dynamic_frame)||
+              minic_lp64_frame_value_offset(ctx->frame_plan, b[3].value),ctx->machine_frame->has_dynamic_stack)||
            !minic_loongarch64_emit_frame_mem(out,"ld.d","$t7",
-              minic_lp64_frame_value_offset(ctx->frame_plan, b[2].value),ctx->dynamic_frame)||
+              minic_lp64_frame_value_offset(ctx->frame_plan, b[2].value),ctx->machine_frame->has_dynamic_stack)||
            !minic_loongarch64_emit_frame_mem(out,load,"$t0",
-              minic_lp64_frame_value_offset(ctx->frame_plan, b[4].value),ctx->dynamic_frame)||
+              minic_lp64_frame_value_offset(ctx->frame_plan, b[4].value),ctx->machine_frame->has_dynamic_stack)||
            !minic_loongarch64_emit_frame_mem(out,load,"$t1",
-              minic_lp64_frame_value_offset(ctx->frame_plan, b[5].value),ctx->dynamic_frame)||
+              minic_lp64_frame_value_offset(ctx->frame_plan, b[5].value),ctx->machine_frame->has_dynamic_stack)||
            !minic_loongarch64_emit_frame_mem(out,load,"$t2",
-              minic_lp64_frame_value_offset(ctx->frame_plan, b[6].value),ctx->dynamic_frame)||
+              minic_lp64_frame_value_offset(ctx->frame_plan, b[6].value),ctx->machine_frame->has_dynamic_stack)||
            fputs("1:\n  ll.w $t5, $t4, 0\n"
                  "  and $t6, $t5, $t0\n"
                  "  bne $t6, $t1, 2f\n"
@@ -2306,19 +2306,19 @@ static bool loong_linux_cmpxchg_emit(FILE *out,
                  "2:\n  dbar 0x700\n3:\n",out)==EOF)return false;
         for(k=0U;k<2U;++k)
             if(!minic_loongarch64_emit_frame_mem(out,"ld.d","$t7",
-                  minic_lp64_frame_value_offset(ctx->frame_plan, b[k].value),ctx->dynamic_frame)||
+                  minic_lp64_frame_value_offset(ctx->frame_plan, b[k].value),ctx->machine_frame->has_dynamic_stack)||
                fprintf(out,"  st.w %s, $t7, 0\n",
                        k==0U?"$t5":"$t6")<0)return false;
         return true;
     }
     if(!minic_loongarch64_emit_frame_mem(out,"ld.d","$t4",
-          minic_lp64_frame_value_offset(ctx->frame_plan, b[2].value),ctx->dynamic_frame)||
+          minic_lp64_frame_value_offset(ctx->frame_plan, b[2].value),ctx->machine_frame->has_dynamic_stack)||
        !minic_loongarch64_emit_frame_mem(out,"ld.d","$t7",
-          minic_lp64_frame_value_offset(ctx->frame_plan, b[1].value),ctx->dynamic_frame)||
+          minic_lp64_frame_value_offset(ctx->frame_plan, b[1].value),ctx->machine_frame->has_dynamic_stack)||
        !minic_loongarch64_emit_frame_mem(out,load,"$t1",
-          minic_lp64_frame_value_offset(ctx->frame_plan, b[3].value),ctx->dynamic_frame)||
+          minic_lp64_frame_value_offset(ctx->frame_plan, b[3].value),ctx->machine_frame->has_dynamic_stack)||
        !minic_loongarch64_emit_frame_mem(out,load,"$t2",
-          minic_lp64_frame_value_offset(ctx->frame_plan, b[4].value),ctx->dynamic_frame)||
+          minic_lp64_frame_value_offset(ctx->frame_plan, b[4].value),ctx->machine_frame->has_dynamic_stack)||
        fprintf(out,"1:\n  ll.%c $t5, $t4, 0\n"
                    "  bne $t5, $t1, 2f\n"
                    "  or $t0, $t2, $zero\n"
@@ -2327,7 +2327,7 @@ static bool loong_linux_cmpxchg_emit(FILE *out,
                    "2:\n  dbar 0x700\n",
                    width==8U?'d':'w',width==8U?'d':'w')<0||
        !minic_loongarch64_emit_frame_mem(out,"ld.d","$t7",
-          minic_lp64_frame_value_offset(ctx->frame_plan, b[0].value),ctx->dynamic_frame)||
+          minic_lp64_frame_value_offset(ctx->frame_plan, b[0].value),ctx->machine_frame->has_dynamic_stack)||
        fprintf(out,"  %s $t5, $t7, 0\n",store)<0)return false;
     return true;
 }
@@ -2362,17 +2362,17 @@ static bool loong_linux_xchg_emit(FILE *out,
                               i==1U&&named?8U:width,-1))return false;
     }
     return minic_loongarch64_emit_frame_mem(
-             out,"ld.d","$t1",minic_lp64_frame_value_offset(ctx->frame_plan, b[0].value),ctx->dynamic_frame)&&
+             out,"ld.d","$t1",minic_lp64_frame_value_offset(ctx->frame_plan, b[0].value),ctx->machine_frame->has_dynamic_stack)&&
            minic_loongarch64_emit_frame_mem(
              out,width==8U?"ld.d":"ld.w","$t0",
-             minic_lp64_frame_value_offset(ctx->frame_plan, b[2].value),ctx->dynamic_frame)&&
+             minic_lp64_frame_value_offset(ctx->frame_plan, b[2].value),ctx->machine_frame->has_dynamic_stack)&&
            fprintf(out,"  %s.%c $t2, $t0, $t1\n",
                    form>=15U?"amxor":form>=13U?"amor":
                    form>=11U?"amand":form>=9U?"amadd":
                    form>=7U?"amswap":"amswap_db",
                    width==8U?'d':'w')>=0&&
            minic_loongarch64_emit_frame_mem(
-             out,"ld.d","$t1",minic_lp64_frame_value_offset(ctx->frame_plan, b[1].value),ctx->dynamic_frame)&&
+             out,"ld.d","$t1",minic_lp64_frame_value_offset(ctx->frame_plan, b[1].value),ctx->machine_frame->has_dynamic_stack)&&
            minic_loongarch64_emit_asm_output_store(
              out,fn,b[1].value,
              width==8U||named?8U:4U,"$t2","$t1","$t3");
@@ -2408,13 +2408,13 @@ static bool loong_linux_xchg_small_emit(FILE *out,
             return false;
     }
     if(!minic_loongarch64_emit_frame_mem(out,"ld.d","$t4",
-          minic_lp64_frame_value_offset(ctx->frame_plan, b[3].value),ctx->dynamic_frame)||
+          minic_lp64_frame_value_offset(ctx->frame_plan, b[3].value),ctx->machine_frame->has_dynamic_stack)||
        !minic_loongarch64_emit_frame_mem(out,"ld.d","$t7",
-          minic_lp64_frame_value_offset(ctx->frame_plan, b[2].value),ctx->dynamic_frame)||
+          minic_lp64_frame_value_offset(ctx->frame_plan, b[2].value),ctx->machine_frame->has_dynamic_stack)||
        !minic_loongarch64_emit_frame_mem(out,"ld.w","$t0",
-          minic_lp64_frame_value_offset(ctx->frame_plan, b[4].value),ctx->dynamic_frame)||
+          minic_lp64_frame_value_offset(ctx->frame_plan, b[4].value),ctx->machine_frame->has_dynamic_stack)||
        !minic_loongarch64_emit_frame_mem(out,"ld.w","$t1",
-          minic_lp64_frame_value_offset(ctx->frame_plan, b[5].value),ctx->dynamic_frame)||
+          minic_lp64_frame_value_offset(ctx->frame_plan, b[5].value),ctx->machine_frame->has_dynamic_stack)||
        fputs("1:\n"
              "  ll.w $t5, $t4, 0\n"
              "  andn $t6, $t5, $t0\n"
@@ -2423,7 +2423,7 @@ static bool loong_linux_xchg_small_emit(FILE *out,
              "  beqz $t6, 1b\n",out)==EOF)return false;
     for(i=0U;i<2U;++i){
         if(!minic_loongarch64_emit_frame_mem(out,"ld.d","$t7",
-              minic_lp64_frame_value_offset(ctx->frame_plan, b[i].value),ctx->dynamic_frame)||
+              minic_lp64_frame_value_offset(ctx->frame_plan, b[i].value),ctx->machine_frame->has_dynamic_stack)||
            fprintf(out,"  st.w %s, $t7, 0\n",
                    i==0U?"$t5":"$t6")<0)return false;
     }
@@ -2464,7 +2464,7 @@ static bool loong_linux_cacop_emit(
     if (code < 8 || code > 13) return false;
     return minic_loongarch64_emit_frame_mem(
                out, "ld.d", "$t0", minic_lp64_frame_value_offset(ctx->frame_plan, b[1].value),
-               ctx->dynamic_frame) &&
+               ctx->machine_frame->has_dynamic_stack) &&
            fprintf(out, "  cacop %lld, $t0, 0\n", (long long)code) >= 0;
 }
 

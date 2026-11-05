@@ -191,11 +191,11 @@ bool minic_loongarch64_emit_residual_instruction(
     ins = &fn->instructions[ins_id];
     name = ctx->name;
     id = ctx->id;
-    va_gp = ctx->va_gp;
-    va_count = ctx->va_count;
+    va_gp = ctx->machine_frame->variadic_gp_count;
+    va_count = ctx->machine_frame->variadic_count;
     reject_block = block_id;
     reject_ins = (size_t)ins_id;
-    dynamic_frame = ctx->dynamic_frame;
+    dynamic_frame = ctx->machine_frame->has_dynamic_stack;
     *needs_writeback = true;
         switch (ins->kind) {
         case MINIC_CORE_INSTRUCTION_OPAQUE_INLINE_ASM: {
@@ -256,8 +256,8 @@ bool minic_loongarch64_emit_residual_instruction(
                 return minic_multi_direct_machine_reject(
                     fn, "loongarch64", name, "call_frame_return_address",
                     reject_block, reject_ins, __LINE__);
-            if (ctx->has_direct_calls) {
-                if (!emit_sp_mem(out, "ld.d", "$t0", ctx->save_offset))
+            if (ctx->machine_frame->has_calls) {
+                if (!emit_sp_mem(out, "ld.d", "$t0", ctx->machine_frame->save_offset))
                     return false;
             } else if (fputs("  move $t0, $ra\n", out) == EOF) {
                 return false;
@@ -554,7 +554,7 @@ bool minic_loongarch64_emit_residual_instruction(
                                      MINIC_CORE_TYPE_POINTER) ||
                 ins->result >= fn->value_count ||
                 fprintf(out, "  li.d $t0, %zu\n",
-                        ctx->va_base + va_gp * 8U) < 0 ||
+                        ctx->machine_frame->variadic_save_base + va_gp * 8U) < 0 ||
                 fprintf(out, "  add.d $t0, %s, $t0\n",
                         dynamic_frame ? "$s0" : "$sp") < 0)
                 return minic_multi_direct_machine_reject(fn, "loongarch64", name,

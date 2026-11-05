@@ -45,6 +45,7 @@ static bool emit_one(PoisonMachine machine, const MinicCoreFunction *function,
                      char *output, size_t capacity) {
     MinicDirectLP64BlockContext a64 = {0};
     MinicLP64FramePlan a64_frame = {0};
+    MinicMachineLP64FrameContract a64_machine_frame = {0};
     MinicX86Frame x86_frame = {0};
     MinicCoreModule module = { .finalized = true };
     MinicTargetInfo target = {0};
@@ -60,7 +61,8 @@ static bool emit_one(PoisonMachine machine, const MinicCoreFunction *function,
     a64_frame.value_offsets = offsets;
     a64.fn = function;
     a64.frame_plan = &a64_frame;
-    a64.frame = 64U;
+    a64_machine_frame.frame_size = 64U;
+    a64.machine_frame = &a64_machine_frame;
     x86_frame.value_count = 1U;
     x86_frame.value_offsets = offsets;
     result = machine == POISON_AARCH64

@@ -123,27 +123,27 @@ static bool loongarch64_emit_prologue(
     };
     const MinicCoreFunction *fn = ctx->fn;
     const char *name = ctx->name;
-    const size_t frame = ctx->frame;
-    const size_t save_offset = ctx->save_offset;
-    const bool has_calls = ctx->has_direct_calls;
-    const bool dynamic_frame = ctx->dynamic_frame;
+    const size_t frame = ctx->machine_frame->frame_size;
+    const size_t save_offset = ctx->machine_frame->save_offset;
+    const bool has_calls = ctx->machine_frame->has_calls;
+    const bool dynamic_frame = ctx->machine_frame->has_dynamic_stack;
     size_t i;
-    if (ctx->frame_alignment > 16U) {
+    if (ctx->machine_frame->frame_alignment > 16U) {
         /* Entry $sp is only 16-aligned. Reserve worst-case alignment slack,
          * preserve the exact entry $sp, and round a stable callee-saved $s0
          * frame base UP. All object slots are aligned relative to $s0;
          * outgoing call stack space continues to use the 16-aligned $sp. */
-        if (!dynamic_frame || ctx->saved_entry_sp_offset == SIZE_MAX ||
+        if (!dynamic_frame || ctx->machine_frame->saved_entry_sp_offset == SIZE_MAX ||
             fputs("  move $t0, $sp\n", out) == EOF ||
             !minic_loongarch64_emit_sp_adjust(out, frame, false) ||
             fprintf(out, "  move $t1, $s0\n"
                          "  addi.d $s0, $sp, %zu\n"
                          "  li.d $t3, -%zu\n"
                          "  and $s0, $s0, $t3\n",
-                    ctx->frame_alignment - 1U,
-                    ctx->frame_alignment) < 0 ||
+                    ctx->machine_frame->frame_alignment - 1U,
+                    ctx->machine_frame->frame_alignment) < 0 ||
             !minic_loongarch64_emit_frame_mem(
-                out, "st.d", "$t0", ctx->saved_entry_sp_offset, true) ||
+                out, "st.d", "$t0", ctx->machine_frame->saved_entry_sp_offset, true) ||
             !minic_loongarch64_emit_frame_mem(
                 out, "st.d", "$t1",
                 save_offset + (has_calls ? 8U : 0U), true))
@@ -159,20 +159,20 @@ static bool loongarch64_emit_prologue(
         !minic_loongarch64_emit_frame_mem(
             out, "st.d", "$ra", save_offset, dynamic_frame))
         goto fail;
-    if (ctx->has_indirect_return) {
+    if (ctx->machine_frame->has_indirect_return) {
         /* LP64D uses $a0 as a hidden first GAR, unlike AAPCS64 x8.
          * A nested BL may destroy $a0, so pin the caller-owned buffer
          * address in our stable local frame before any normal instruction. */
         if (!minic_loongarch64_emit_frame_mem(
-                out, "st.d", "$a0", ctx->indirect_return_offset,
+                out, "st.d", "$a0", ctx->machine_frame->indirect_return_offset,
                 dynamic_frame))
             goto fail;
     }
-    if (ctx->va_count != 0U) {
+    if (ctx->machine_frame->variadic_count != 0U) {
         for (i = 0U; i < 8U; ++i)
             if (!minic_loongarch64_emit_frame_mem(
                     out, "st.d", registers[i],
-                    ctx->va_base + i * 8U, dynamic_frame))
+                    ctx->machine_frame->variadic_save_base + i * 8U, dynamic_frame))
                 return minic_multi_direct_machine_reject(
                     fn, "loongarch64", name, "variadic_save",
                     SIZE_MAX, SIZE_MAX, __LINE__);

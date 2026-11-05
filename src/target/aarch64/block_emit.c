@@ -107,8 +107,8 @@ bool minic_aarch64_emit_record_copy(FILE *out,
             const MinicCoreValueId dst = ins->value.record_copy.destination_address;
             const MinicCoreValueId src = ins->value.record_copy.source_address;
             const MinicA64FrameView view = {
-                ctx->dynamic_frame, ctx->frame, 0U,
-                ctx->saved_entry_sp_offset
+                ctx->machine_frame->has_dynamic_stack, ctx->machine_frame->frame_size, 0U,
+                ctx->machine_frame->saved_entry_sp_offset
             };
             size_t bytes;
             if (!minic_multi_direct_record_copy_extent(
@@ -151,7 +151,7 @@ static bool minic_aarch64_emit_record_load(FILE *out,
     MinicCoreValueId source;
     size_t dest, bytes, byte;
     const MinicA64FrameView view = {
-        ctx->dynamic_frame, ctx->frame, 0U, ctx->saved_entry_sp_offset
+        ctx->machine_frame->has_dynamic_stack, ctx->machine_frame->frame_size, 0U, ctx->machine_frame->saved_entry_sp_offset
     };
     if (!minic_multi_direct_record_load_extent(
             ctx->fn, ins, ctx->frame_plan,
@@ -185,8 +185,8 @@ bool minic_aarch64_emit_parameter_object(FILE *out,
     const MinicCoreInstruction *ins) {
             const MinicCoreFunction *fn = ctx->fn;
             const MinicA64FrameView view = {
-                ctx->dynamic_frame, ctx->frame, 0U,
-                ctx->saved_entry_sp_offset
+                ctx->machine_frame->has_dynamic_stack, ctx->machine_frame->frame_size, 0U,
+                ctx->machine_frame->saved_entry_sp_offset
             };
             const MinicLP64ArgumentLocation *location;
             size_t size, slots, object_offset, k, chunk;
@@ -300,12 +300,12 @@ bool minic_aarch64_emit_terminator(FILE *out,
     const MinicCoreBlock *block, size_t block_id) {
         const MinicCoreFunction *fn = ctx->fn;
         const MinicLP64FramePlan *frame_plan = ctx->frame_plan;
-        const size_t id = ctx->id, frame = ctx->frame;
-        const size_t save_offset = ctx->save_offset;
-        const size_t saved_entry_sp_offset = ctx->saved_entry_sp_offset;
-        const bool has_direct_calls = ctx->has_direct_calls;
-        const bool dynamic_frame = ctx->dynamic_frame;
-        const bool has_indirect_return = ctx->has_indirect_return;
+        const size_t id = ctx->id, frame = ctx->machine_frame->frame_size;
+        const size_t save_offset = ctx->machine_frame->save_offset;
+        const size_t saved_entry_sp_offset = ctx->machine_frame->saved_entry_sp_offset;
+        const bool has_direct_calls = ctx->machine_frame->has_calls;
+        const bool dynamic_frame = ctx->machine_frame->has_dynamic_stack;
+        const bool has_indirect_return = ctx->machine_frame->has_indirect_return;
         const MinicA64FrameView view = {
             dynamic_frame, frame, 0U, saved_entry_sp_offset
         };
@@ -339,7 +339,7 @@ bool minic_aarch64_emit_terminator(FILE *out,
                 } else if (has_indirect_return) {
                     if (!aarch64_emit_indirect_record_return(
                             out, fn, frame_plan,
-                            object_id, ctx->indirect_return_offset, &view))
+                            object_id, ctx->machine_frame->indirect_return_offset, &view))
                         return false;
                 } else if (!a64_block_gp_record(
                                fn, minic_core_function_return_type(fn), &bytes, &slots) ||
@@ -497,7 +497,7 @@ static bool aarch64_machine_emit_family(
     const MinicTargetInfo *target = ctx->target;
     const MinicCoreFunction *fn = ctx->fn;
     const MinicA64FrameView frame_view = {
-        ctx->dynamic_frame, ctx->frame, 0U, ctx->saved_entry_sp_offset
+        ctx->machine_frame->has_dynamic_stack, ctx->machine_frame->frame_size, 0U, ctx->machine_frame->saved_entry_sp_offset
     };
     if (shape == NULL || needs_gp_store == NULL) return false;
     *needs_gp_store = false;
@@ -536,7 +536,7 @@ static bool aarch64_machine_store_gp(
     FILE *out, const MinicDirectLP64BlockContext *ctx,
     const MinicCoreInstruction *ins, size_t offset, bool include_double) {
     const MinicA64FrameView view = {
-        ctx->dynamic_frame, ctx->frame, 0U, ctx->saved_entry_sp_offset
+        ctx->machine_frame->has_dynamic_stack, ctx->machine_frame->frame_size, 0U, ctx->machine_frame->saved_entry_sp_offset
     };
     return aarch64_emit_gp_result(
         out, ctx->fn,

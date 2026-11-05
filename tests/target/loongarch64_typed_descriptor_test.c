@@ -118,6 +118,7 @@ static void descriptor_core_type_machine_positive(void) {
     MinicCoreStructuredInlineAsmOperand operands[2] = {{0}};
     MinicCoreInstruction ins = {0};
     MinicLP64FramePlan plan = {0};
+    MinicMachineLP64FrameContract machine_frame = {0};
     MinicDirectLP64BlockContext ctx = {0};
     size_t offsets[2] = {16U, 24U};
     minic_core_type_context_initialize(&types);
@@ -174,6 +175,7 @@ static void descriptor_core_type_machine_positive(void) {
     plan.value_offsets = offsets;
     ctx.fn = &fn;
     ctx.frame_plan = &plan;
+    ctx.machine_frame = &machine_frame;
     assert(cpucfg_emit_matches(&ctx, &ins, true));
     values[0].core_type_id = u32_id;
     assert(cpucfg_emit_matches(&ctx, &ins, false));

@@ -93,20 +93,10 @@ static inline bool minic_multi_direct_lp64_emit_function(
     ctx = (MinicDirectLP64BlockContext){
         .module = module, .target = target, .fn = fn, .core_facts = facts,
         .frame_plan = &plan.frame_plan,
+        .machine_frame = &plan.machine_frame,
         .incoming_plan = &plan.incoming_plan,
         .outgoing_calls = &plan.outgoing_calls,
-        .name = name, .id = id, .frame = plan.frame_size,
-        .frame_alignment = plan.frame_alignment,
-        .saved_entry_sp_offset = plan.saved_entry_sp_offset,
-        .save_offset = plan.save_offset,
-        .indirect_return_offset = plan.indirect_return_offset,
-        .va_base = plan.variadic_save_base,
-        .va_gp = plan.variadic_gp_count,
-        .va_fp = plan.variadic_fp_count,
-        .va_count = plan.variadic_count,
-        .has_direct_calls = plan.has_calls,
-        .has_indirect_return = plan.has_indirect_return,
-        .dynamic_frame = plan.has_dynamic_stack
+        .name = name, .id = id
     };
     if (!config->emit_prologue(out, &ctx)) goto cleanup;
     if (!config->emit_core_blocks(out, &ctx)) goto cleanup;

@@ -379,6 +379,11 @@ typedef struct MinicCoreInlineAsm {
      * provenance; it must never be interpreted as this machine form ID. */
     uint32_t target_machine_form_id;
     uint32_t target_machine_form_variant;
+    /* Module-sealed translation-unit occurrence identity. Zero is permitted
+     * only during C->Core construction; MachineIR source ASM carries the
+     * nonzero value verbatim for GNU %= expansion. This is not a C AST ID,
+     * a target opcode, or a hash of the source template. */
+    uint64_t source_asm_unique_id;
     bool explicit_memory_clobber;
     bool implicit_memory_effect;
     /* BATCH_L_STRUCTURED_REGISTER_READWRITE: keep register-clobber spelling

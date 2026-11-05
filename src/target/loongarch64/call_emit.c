@@ -138,8 +138,8 @@ bool minic_loongarch64_emit_abi_instruction(
     fn = ctx->fn;
     frame_plan = ctx->frame_plan;
     incoming_plan = ctx->incoming_plan;
-    frame = ctx->frame;
-    dynamic_frame = ctx->dynamic_frame;
+    frame = ctx->machine_frame->frame_size;
+    dynamic_frame = ctx->machine_frame->has_dynamic_stack;
     *needs_gp_store = false;
     switch (ins->kind) {
         case MINIC_CORE_INSTRUCTION_CALL:
@@ -496,11 +496,11 @@ bool minic_loongarch64_emit_abi_instruction(
                         if (!emit_sp_mem(out, "st.d", gp_regs[location->gp_first + chunk],
                                          dst + chunk * 8U))
                             return false;
-                    } else if ((ctx->saved_entry_sp_offset != SIZE_MAX
+                    } else if ((ctx->machine_frame->saved_entry_sp_offset != SIZE_MAX
                                    ? !minic_loongarch64_emit_incoming_stack_mem(
                                          out, "ld.d", "$t0",
                                          (location->stack_first + chunk - used) * 8U,
-                                         ctx->saved_entry_sp_offset)
+                                         ctx->machine_frame->saved_entry_sp_offset)
                                    : !emit_sp_mem(out, "ld.d", "$t0",
                                          frame + (location->stack_first + chunk - used) * 8U)) ||
                                !emit_sp_mem(out, "st.d", "$t0",
@@ -540,11 +540,11 @@ bool minic_loongarch64_emit_abi_instruction(
                     loongarch64_call_float_format(fn,
                         ins->core_type_id, MINIC_CORE_FLOAT_BINARY64)
                         ? "st.d" : "st.w";
-                if (!(ctx->saved_entry_sp_offset != SIZE_MAX
+                if (!(ctx->machine_frame->saved_entry_sp_offset != SIZE_MAX
                           ? minic_loongarch64_emit_incoming_stack_mem(
                                 out, load, "$t0",
                                 location->stack_first * 8U,
-                                ctx->saved_entry_sp_offset)
+                                ctx->machine_frame->saved_entry_sp_offset)
                           : emit_sp_mem(out, load, "$t0",
                                 frame + location->stack_first * 8U)) ||
                     !emit_sp_mem(out, store, "$t0", offset))

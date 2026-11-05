@@ -120,7 +120,7 @@ static bool aarch64_emit_incoming_stack_read(FILE *out,
     MinicA64FrameRegisterClass kind, unsigned int reg,
     size_t stack_slot) {
     const MinicA64FrameView view = {
-        ctx->dynamic_frame, ctx->frame, 0U, ctx->saved_entry_sp_offset
+        ctx->machine_frame->has_dynamic_stack, ctx->machine_frame->frame_size, 0U, ctx->machine_frame->saved_entry_sp_offset
     };
     if (!out || !ctx || stack_slot > SIZE_MAX / 8U) return false;
     return minic_a64_emit_frame_load(out, &view,
@@ -141,8 +141,8 @@ bool minic_aarch64_emit_abi_instruction(
     const MinicLP64FramePlan *frame_plan;
     const MinicLP64ArgumentPlan *incoming_plan;
     const MinicA64FrameView frame_view = {
-        ctx ? ctx->dynamic_frame : false, ctx ? ctx->frame : 0U,
-        0U, ctx ? ctx->saved_entry_sp_offset : SIZE_MAX
+        ctx ? ctx->machine_frame->has_dynamic_stack : false, ctx ? ctx->machine_frame->frame_size : 0U,
+        0U, ctx ? ctx->machine_frame->saved_entry_sp_offset : SIZE_MAX
     };
     if (out == NULL || ctx == NULL || ctx->module == NULL ||
         ctx->target == NULL || ctx->fn == NULL || ctx->frame_plan == NULL ||
@@ -430,8 +430,8 @@ bool minic_aarch64_emit_abi_instruction(
                     return false;
                 for (chunk = 0U; chunk < slots; ++chunk) {
                     const MinicA64FrameView view = {
-                        ctx->dynamic_frame, ctx->frame, 0U,
-                        ctx->saved_entry_sp_offset
+                        ctx->machine_frame->has_dynamic_stack, ctx->machine_frame->frame_size, 0U,
+                        ctx->machine_frame->saved_entry_sp_offset
                     };
                     const size_t payload = bytes - chunk * 8U >= 8U
                         ? 8U : bytes - chunk * 8U;

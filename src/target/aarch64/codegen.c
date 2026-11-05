@@ -38,20 +38,20 @@ static bool aarch64_emit_prologue(
     FILE *out, const MinicDirectLP64BlockContext *ctx) {
     const MinicCoreFunction *fn = ctx->fn;
     const char *name = ctx->name;
-    const size_t frame = ctx->frame;
-    const size_t save_offset = ctx->save_offset;
-    const bool has_calls = ctx->has_direct_calls;
-    const bool dynamic_frame = ctx->dynamic_frame;
-    const bool realigned = ctx->frame_alignment > 16U;
+    const size_t frame = ctx->machine_frame->frame_size;
+    const size_t save_offset = ctx->machine_frame->save_offset;
+    const bool has_calls = ctx->machine_frame->has_calls;
+    const bool dynamic_frame = ctx->machine_frame->has_dynamic_stack;
+    const bool realigned = ctx->machine_frame->frame_alignment > 16U;
     const MinicA64FrameView view = {
-        dynamic_frame, frame, 0U, ctx->saved_entry_sp_offset
+        dynamic_frame, frame, 0U, ctx->machine_frame->saved_entry_sp_offset
     };
     const MinicA64ScratchPolicy scratch = {0U, 0U};
     size_t i;
     if (realigned && (!dynamic_frame ||
-        ctx->frame_alignment > 256U ||
-        (ctx->frame_alignment & (ctx->frame_alignment - 1U)) != 0U ||
-        ctx->saved_entry_sp_offset == SIZE_MAX))
+        ctx->machine_frame->frame_alignment > 256U ||
+        (ctx->machine_frame->frame_alignment & (ctx->machine_frame->frame_alignment - 1U)) != 0U ||
+        ctx->machine_frame->saved_entry_sp_offset == SIZE_MAX))
         goto fail;
     /* Linux arm64 stack unwinding requires an AAPCS64 frame record even
      * for leaf functions. The 16B record lives ABOVE all Core-local frame
@@ -76,13 +76,13 @@ static bool aarch64_emit_prologue(
         if (fprintf(out, "  add x9, sp, #%zu\n"
                          "  and x9, x9, #-%zu\n"
                          "  mov x19, x9\n",
-                    ctx->frame_alignment - 1U,
-                    ctx->frame_alignment) < 0 ||
+                    ctx->machine_frame->frame_alignment - 1U,
+                    ctx->machine_frame->frame_alignment) < 0 ||
             !minic_a64_emit_frame_store(out, &view,
                 minic_a64_owned_slot(save_offset + (has_calls ? 8U : 0U)),
                 (MinicA64FrameRegister){MINIC_A64_REG_X, 14U}, scratch) ||
             !minic_a64_emit_frame_store(out, &view,
-                minic_a64_owned_slot(ctx->saved_entry_sp_offset),
+                minic_a64_owned_slot(ctx->machine_frame->saved_entry_sp_offset),
                 (MinicA64FrameRegister){MINIC_A64_REG_X, 15U}, scratch) ||
             (has_calls && !minic_a64_emit_frame_store(out, &view,
                 minic_a64_owned_slot(save_offset),
@@ -101,14 +101,14 @@ static bool aarch64_emit_prologue(
             (MinicA64FrameRegister){MINIC_A64_REG_X, 19U}, scratch) ||
          fputs("  mov x19, sp\n", out) == EOF))
         goto fail;
-    if (ctx->va_count != 0U) {
+    if (ctx->machine_frame->variadic_count != 0U) {
         for (i = 0U; i < 8U; ++i) {
             if (!minic_a64_emit_frame_store(out, &view,
-                    minic_a64_owned_slot(ctx->va_base + 32U + i * 8U),
+                    minic_a64_owned_slot(ctx->machine_frame->variadic_save_base + 32U + i * 8U),
                     (MinicA64FrameRegister){MINIC_A64_REG_X,
                                             (unsigned int)i}, scratch) ||
                 !minic_a64_emit_frame_store(out, &view,
-                    minic_a64_owned_slot(ctx->va_base + 96U + i * 16U),
+                    minic_a64_owned_slot(ctx->machine_frame->variadic_save_base + 96U + i * 16U),
                     (MinicA64FrameRegister){MINIC_A64_REG_Q,
                                             (unsigned int)i}, scratch))
                 return minic_multi_direct_machine_reject(
@@ -116,8 +116,8 @@ static bool aarch64_emit_prologue(
                     SIZE_MAX, __LINE__);
         }
     }
-    if (ctx->has_indirect_return) {
-        const size_t slot = ctx->indirect_return_offset;
+    if (ctx->machine_frame->has_indirect_return) {
+        const size_t slot = ctx->machine_frame->indirect_return_offset;
         /* AAPCS64 x8 carries the caller-owned result buffer. It is not
          * call-preserved: save it in our own frame before any nested BL. */
         if (!minic_a64_emit_frame_store(out, &view,

@@ -178,8 +178,8 @@ bool minic_machine_gnu_asm_emit_unbound_source_asm(FILE *output,
     if (output == NULL || instruction == NULL ||
         instruction->kind != MINIC_MACHINE_INSTRUCTION_SOURCE_ASM ||
         instruction->operand_count != 0U ||
-        instruction->source_asm_template == NULL ||
-        instruction->source_asm_length == 0U) return false;
+        instruction->source_asm_template == NULL) return false;
+    if (instruction->source_asm_length == 0U) return true;
     bytes = instruction->source_asm_template;
     for (i = 0U; i < instruction->source_asm_length; ++i)
         if (bytes[i] == '\0' || bytes[i] == '%') return false;
@@ -201,7 +201,9 @@ static bool machine_gnu_asm_prepare(const MinicMachineFunction *function,
             size_t j;
             for (j = 0U; j < block->instruction_count; ++j)
                 if (block->instructions[j].kind ==
-                    MINIC_MACHINE_INSTRUCTION_SOURCE_ASM) return false;
+                    MINIC_MACHINE_INSTRUCTION_SOURCE_ASM &&
+                    block->instructions[j].source_asm_length != 0U)
+                    return false;
         }
     }
     return true;
@@ -238,6 +240,10 @@ bool minic_machine_gnu_asm_emit_body(FILE *output,
         for (j = 0U; j < block->instruction_count; ++j) {
             const MinicMachineInstruction *instruction =
                 &block->instructions[j];
+            /* Effect-only source ASM remains in MIR for scheduling/barrier
+             * correctness but produces no target instruction text. */
+            if (instruction->kind == MINIC_MACHINE_INSTRUCTION_SOURCE_ASM &&
+                instruction->source_asm_length == 0U) continue;
             if (instruction->kind == MINIC_MACHINE_INSTRUCTION_LOCAL_LABEL) {
                 if (fprintf(output, "%s:\n",
                             instruction->local_label_name) < 0) goto done;

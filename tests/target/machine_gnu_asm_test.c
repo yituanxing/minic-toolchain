@@ -1,6 +1,7 @@
 /* Real verified GNU body emission; selected opcodes use target callbacks and
  * source ASM cannot bypass the verifier or the source emitter gate. */
 #include "target/common/machine_gnu_asm.h"
+#include "target/common/core_machine_asm.h"
 #include "target/common/machine_builder.h"
 
 #include <stdio.h>
@@ -151,12 +152,16 @@ int main(void) {
     MinicMachineGNUAsmPolicy policy = {0};
     MinicMachineFunction function = {0};
     MinicMachineFunction source_function = {0};
+    MinicMachineFunction empty_function = {0};
     MinicMachineBuilder source_builder = {0};
+    MinicMachineBuilder empty_builder = {0};
     MinicMachineSourceAsmInput typed_asm = {0};
+    MinicCoreInlineAsm sealed_empty_asm = {0};
     FILE *output = NULL;
     FILE *rejected = NULL;
     FILE *accepted = NULL;
     FILE *accepted_typed = NULL;
+    FILE *accepted_empty = NULL;
     size_t only_block;
     bool success = false;
     unsigned int stage = 0U;
@@ -293,12 +298,53 @@ int main(void) {
     source_function.blocks[0].instructions[2].source_asm_machine_form_id = 0U;
     stage = 7U;
 
+    /* An effect-only GNU asm("") is an ordering barrier, not machine text.
+     * It must survive owned MIR verification even if the target has no
+     * inline-ASM printer, while malformed empty machine forms fail closed. */
+    policy.emit_source_asm = NULL;
+    policy.verify.validate_source_asm = NULL;
+    if (!minic_machine_function_initialize(&empty_function, &target,
+                                           "mir_empty_asm", 0U) ||
+        !minic_machine_builder_initialize(&empty_builder, &empty_function) ||
+        !minic_machine_builder_create_block(&empty_builder, NULL, false,
+                                            false, &only_block)) goto done;
+    minic_machine_builder_set_origin(&empty_builder, 0U, 0U);
+    sealed_empty_asm.template_text = "";
+    sealed_empty_asm.is_volatile = true;
+    sealed_empty_asm.has_memory_clobber = true;
+    if (minic_machine_builder_emit_core_source_asm(
+            &empty_builder, &sealed_empty_asm, 0U,
+            NULL, 0U, NULL, 0U, false, false)) goto done;
+    sealed_empty_asm.source_asm_unique_id = 77U;
+    if (!minic_machine_builder_emit_core_source_asm(
+            &empty_builder, &sealed_empty_asm, 0U,
+            NULL, 0U, NULL, 0U, false, false)) goto done;
+    minic_machine_builder_clear_origin(&empty_builder);
+    if (!minic_machine_builder_emit_selected(&empty_builder, PROBE_RET,
+            MINIC_MACHINE_EFFECT_RETURN, NULL, 0U, NULL, 0U)) goto done;
+    accepted_empty = tmpfile();
+    if (accepted_empty == NULL ||
+        !minic_machine_gnu_asm_preflight(&empty_function, &policy) ||
+        !minic_machine_gnu_asm_emit_body(
+            accepted_empty, &empty_function, &policy) ||
+        !verify_output(accepted_empty, "\tret\n")) goto done;
+    empty_function.blocks[0].instructions[0].effects =
+        MINIC_MACHINE_EFFECT_SOURCE_ASM;
+    if (minic_machine_gnu_asm_preflight(&empty_function, &policy)) goto done;
+    empty_function.blocks[0].instructions[0].effects |=
+        MINIC_MACHINE_EFFECT_COMPILER_BARRIER;
+    empty_function.blocks[0].instructions[0].source_asm_machine_form_id = 9U;
+    if (minic_machine_gnu_asm_preflight(&empty_function, &policy)) goto done;
+    stage = 8U;
+
     success = true;
 done:
     if (output != NULL) fclose(output);
     if (rejected != NULL) fclose(rejected);
     if (accepted != NULL) fclose(accepted);
     if (accepted_typed != NULL) fclose(accepted_typed);
+    if (accepted_empty != NULL) fclose(accepted_empty);
+    minic_machine_function_destroy(&empty_function);
     minic_machine_function_destroy(&source_function);
     minic_machine_function_destroy(&function);
     if (!success) {
