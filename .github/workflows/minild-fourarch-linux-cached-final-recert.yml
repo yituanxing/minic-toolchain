@@ -25,6 +25,7 @@ on:
       - .github/workflows/minild-fourarch-linux-cached-final-recert.yml
       - linker/**
       - tools/ci/minild-linux-real-final-replay.sh
+      - tools/ci/minild-aarch64-shadow-dynsym-oracle.py
 
 permissions:
   contents: read
@@ -239,6 +240,20 @@ jobs:
             "$work/ld-capture" \
             "$GITHUB_WORKSPACE/build/release/bin/minic-ld" \
             "$work/ld-evidence"
+
+      # Diagnostic only: a second GNU link with an isolated copy of the
+      # AArch64 kernel script retains discarded dynamic symbol metadata.
+      # It reuses the same SHA-verified GNU objects and never gates MiniLD.
+      - name: Diagnose GNU AArch64 discarded dynsym ordinals (non-gating)
+        if: always() && matrix.arch == 'aarch64'
+        continue-on-error: true
+        shell: bash
+        timeout-minutes: 6
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/minild-linux-fourarch/aarch64"
+          python3 tools/ci/minild-aarch64-shadow-dynsym-oracle.py \
+            "$work/ld-capture" "$work/ld-evidence"
 
       - name: Preserve logs, true GNU source identity and exact linker argv
         if: always()

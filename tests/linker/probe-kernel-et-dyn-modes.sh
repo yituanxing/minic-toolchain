@@ -87,8 +87,14 @@ for spec in \
         '  .text : { *(.text.entry) }' \
         '  . = ALIGN(0x1000);' \
         '  .rela.dyn : { __rela_start = .; *(.rela .rela*); __rela_end = .; }' \
-        '  .data : { *(.data.ptr) }' \
-        '}' >"$work/$arch/vmlinux.lds"
+        '  .data : { *(.data.ptr) }' >"$work/$arch/vmlinux.lds"
+    if [[ $arch == aarch64 ]]; then
+        # GNU's shared-image AArch64 backend creates these headers even when
+        # the kernel input does not directly reference a GOT entry.
+        printf '%s\n' '  .got : { *(.got) }' \
+            '  .got.plt : { *(.got.plt) }' >>"$work/$arch/vmlinux.lds"
+    fi
+    printf '%s\n' '}' >>"$work/$arch/vmlinux.lds"
 
     "$MINIAS" "--target=$target" "-march=$march" "-mabi=$mabi" \
         -o "$work/$arch/entry.o" "$work/$arch/entry.s" || die assemble_entry
