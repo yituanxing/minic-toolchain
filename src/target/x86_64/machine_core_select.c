@@ -18,6 +18,7 @@
 #include "target/common/elf_module_symbol_info.h"
 #include "target/common/lp64_scalar.h"
 #include "core/symbol_identity.h"
+#include "core/value_uses.h"
 
 #include <limits.h>
 #include <stdint.h>
@@ -44,6 +45,8 @@ typedef struct X86CoreSelector {
     size_t *blocks;
     size_t *false_blocks;
     bool *reachable;
+    /* Common Core semantic use census; never inferred from Machine registers. */
+    size_t *value_uses;
     X86AuxBlocks *instruction_aux;
 } X86CoreSelector;
 
@@ -183,6 +186,12 @@ static bool x86_core_load(X86CoreSelector *sel, MinicCoreValueId value,
 static bool x86_core_store(X86CoreSelector *sel, MinicCoreValueId value,
     unsigned int reg) {
     MinicMachineOperand slot;
+    if (sel == NULL || sel->value_uses == NULL ||
+        value >= sel->core->value_count) return false;
+    /* The producing instruction still executes; only its unused SSA frame
+     * writeback can disappear. In particular, do not discard volatile loads,
+     * atomics, function calls, or any other observable Core instruction. */
+    if (sel->value_uses[value] == 0U) return true;
     return x86_slot(sel, value, &slot) &&
         x86_2(sel, MINIC_X86_MI_MOV64_R_FRBP,
             x86_reg(reg, 64U), slot);
@@ -238,11 +247,13 @@ static bool x86_i128_boolean_result(X86CoreSelector *sel,
 static bool x86_i128_store(X86CoreSelector *sel, MinicCoreValueId id,
     unsigned int low, unsigned int high) {
     size_t distance;
-    if (id >= sel->frame->value_count ||
+    if (sel->value_uses == NULL || id >= sel->core->value_count ||
+        id >= sel->frame->value_count ||
         sel->frame->value_offsets == NULL ||
         (distance = sel->frame->value_offsets[id]) < 16U ||
         distance > sel->frame->frame_size || distance > INT32_MAX)
         return false;
+    if (sel->value_uses[id] == 0U) return true;
     return x86_2(sel, MINIC_X86_MI_MOV64_RA,
             x86_reg(low, 64U),
             x86_addr(MINIC_X86_REG_RBP, -(int64_t)distance)) &&
@@ -6782,12 +6793,19 @@ bool minic_x86_64_machine_select_core_subset(
     sel.blocks = malloc(count * sizeof(*sel.blocks));
     sel.false_blocks = malloc(count * sizeof(*sel.false_blocks));
     sel.reachable = calloc(count, sizeof(*sel.reachable));
+    if (core->value_count > SIZE_MAX / sizeof(*sel.value_uses))
+        goto cleanup;
+    sel.value_uses = calloc(core->value_count != 0U ?
+        core->value_count : 1U, sizeof(*sel.value_uses));
     if (core->instruction_count > SIZE_MAX /
             sizeof(*sel.instruction_aux)) goto cleanup;
     sel.instruction_aux = calloc(core->instruction_count != 0U ?
         core->instruction_count : 1U, sizeof(*sel.instruction_aux));
     if (sel.blocks == NULL || sel.false_blocks == NULL ||
-        sel.reachable == NULL || sel.instruction_aux == NULL ||
+        sel.reachable == NULL || sel.value_uses == NULL ||
+        sel.instruction_aux == NULL ||
+        !minic_core_function_value_use_counts(core, sel.value_uses,
+            core->value_count) ||
         !minic_core_function_mark_reachable_blocks(core,
             sel.reachable, count) ||
         !sel.reachable[core->entry_block] ||
@@ -6971,6 +6989,7 @@ cleanup:
     free(sel.blocks);
     free(sel.false_blocks);
     free(sel.reachable);
+    free(sel.value_uses);
     free(sel.instruction_aux);
     if (!ok) minic_machine_function_destroy(machine);
     return ok;

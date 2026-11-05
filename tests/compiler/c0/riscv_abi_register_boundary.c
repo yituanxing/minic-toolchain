@@ -38,13 +38,16 @@ int minic_asm_signed_short(void) {
 }
 int minic_asm_unsigned_char(void) {
     unsigned char value = 0xfeU;
-    __asm__ volatile ("srli %0,%0,1" : "+r"(value));
-    return value == 0x7fU;
+    /* QImode "+r" leaves upper GPR bits unspecified in GNU; test
+     * only the defined low 8 bits of the inout value. */
+    __asm__ volatile ("addi %0,%0,1" : "+r"(value));
+    return value == 0xffU;
 }
 int minic_asm_unsigned_short(void) {
     unsigned short value = 0xfffeU;
-    __asm__ volatile ("srli %0,%0,1" : "+r"(value));
-    return value == 0x7fffU;
+    /* HImode "+r" likewise makes no promise about upper GPR bits. */
+    __asm__ volatile ("addi %0,%0,1" : "+r"(value));
+    return value == 0xffffU;
 }
 #if ABI_RV64
 int minic_asm_unsigned32_readwrite(void) {
