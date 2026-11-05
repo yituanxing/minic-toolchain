@@ -1,0 +1,227 @@
+name: MiniLD LoongArch64 Frozen GNU Linux Full Image and QEMU
+
+# Only restore the GNU Linux 6.6.143 object cache produced by the existing
+# four-arch Kbuild lane. MiniLD links final vmlinux and the EFI zboot image;
+# original GNU objcopy/gzip packages that image. No Linux kernel C compile,
+# no Kbuild rebuild, and no regenerated original GNU objects.
+on:
+  workflow_dispatch:
+    inputs:
+      producer_run_id:
+        description: Original four-arch GNU Kbuild run with cached objects
+        type: string
+        required: true
+        default: '41856204967'
+      producer_sha:
+        description: Original GNU pool producer commit SHA
+        type: string
+        required: true
+        default: '3107037abc80b0c0019129364693422aee2818aa'
+  push:
+    branches:
+      - refactor/minias-target-isa-abi-core
+    paths:
+      - .github/workflows/minild-loongarch64-linux-cached-full-image.yml
+      - tools/ci/minild-loongarch64-linux-cached-full-image-v1.sh
+      - linker/**
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  loong-full-linux:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[minild-loong-full-image]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      PRODUCER_RUN_ID: ${{ inputs.producer_run_id || '41856204967' }}
+      PRODUCER_SHA: ${{ inputs.producer_sha || '3107037abc80b0c0019129364693422aee2818aa' }}
+      GNU_POOL: ${{ github.workspace }}/build/minild-linux-fourarch/loongarch64/out
+      EVIDENCE: ${{ github.workspace }}/build/minild-loong-cached-full-evidence
+      TOOLS_DIR: ${{ github.workspace }}/build/minild-loong-cached-tools
+      LINUX_ARCHIVE: ${{ github.workspace }}/build/minild-loong-cached-linux/linux-6.6.143.tar.xz
+      LINUX_SOURCE: ${{ github.workspace }}/build/minild-loong-cached-linux/linux-6.6.143
+      RUNTIME: ${{ github.workspace }}/build/minild-loong-cached-runtime
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install link, packaging and real LoongArch64 QEMU tools
+        shell: bash
+        timeout-minutes: 10
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get -o Acquire::Retries=3 update -qq
+          sudo apt-get -o Acquire::Retries=3 install -y -qq --no-install-recommends \
+            gcc make binutils binutils-loongarch64-linux-gnu \
+            gcc-13-loongarch64-linux-gnu libc6-dev-loong64-cross \
+            qemu-system-misc gzip cpio curl xz-utils zstd git python3
+          test -x "$(command -v qemu-system-loongarch64)"
+          test -x "$(command -v loongarch64-linux-gnu-objcopy)"
+
+      - name: Restore immutable GNU Linux Kbuild pool from producer cache
+        id: cache
+        uses: actions/cache/restore@v4
+        with:
+          path: build/minild-linux-fourarch/loongarch64/out
+          key: minild-gnu-linux-first-kallsyms1-6.6.143-loongarch64-${{ env.PRODUCER_SHA }}
+          fail-on-cache-miss: false
+
+      - name: Download immutable producer artifact only on cache miss
+        if: steps.cache.outputs.cache-hit != 'true'
+        uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ env.PRODUCER_RUN_ID }}
+          name: minild-gnu-kbuild-tree-loongarch64-${{ env.PRODUCER_SHA }}
+          path: build/minild-linux-fourarch/loongarch64
+
+      - name: Authenticate producer archive and safely restore original pool
+        if: steps.cache.outputs.cache-hit != 'true'
+        shell: bash
+        timeout-minutes: 8
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/minild-linux-fourarch/loongarch64"
+          test -s "$work/gnu-kbuild-frozen-tree.sha256"
+          shopt -s nullglob
+          parts=("$work"/gnu-kbuild-frozen-tree.tar.zst.part*)
+          (( ${#parts[@]} > 0 )) || exit 81
+          (cd "$work" && sha256sum --quiet --check gnu-kbuild-frozen-tree.sha256)
+          cat "${parts[@]}" | tar --zstd -tf - | python3 -c '
+          from pathlib import PurePosixPath
+          import sys
+          paths = list(sys.stdin)
+          if len(paths) < 500: raise SystemExit("truncated GNU source archive")
+          for raw in paths:
+              path = PurePosixPath(raw.strip())
+              if path.is_absolute() or ".." in path.parts or path.parts[0] != "out":
+                  raise SystemExit("unsafe GNU archive member")
+          print(f"MINILD_LOONG_POOL=ARCHIVE_VERIFIED members={len(paths)}")'
+          cat "${parts[@]}" | tar -C "$work" --zstd -xf -
+          test -s "$GNU_POOL/vmlinux"
+
+      - name: Download original GNU object SHA manifest from producer
+        uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ env.PRODUCER_RUN_ID }}
+          name: minild-real-kallsyms1-loongarch64-${{ env.PRODUCER_SHA }}
+          path: build/minild-linux-fourarch/loongarch64
+
+      - name: Verify every GNU object SHA and GNU vmlinux baseline
+        shell: bash
+        timeout-minutes: 5
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/minild-linux-fourarch/loongarch64"
+          test -s "$work/ld-evidence/gnu-kbuild-objects.sha256"
+          test -s "$work/ld-evidence/gnu-kbuild-identity.sha256"
+          (cd "$GNU_POOL" && \
+            sha256sum --quiet --check "$work/ld-evidence/gnu-kbuild-objects.sha256")
+          sha256sum --quiet --check "$work/ld-evidence/gnu-kbuild-identity.sha256"
+          mkdir -p "$EVIDENCE"
+          cp "$work/ld-evidence/gnu-kbuild-objects.sha256" "$EVIDENCE/"
+          cp "$work/ld-evidence/gnu-kbuild-identity.sha256" "$EVIDENCE/"
+          printf 'producer_run=%s\nproducer_sha=%s\nreplay_sha=%s\nLinux_kernel_C_compiles=0\n' \
+            "$PRODUCER_RUN_ID" "$PRODUCER_SHA" "$GITHUB_SHA" \
+            >"$EVIDENCE/pinned-provenance.txt"
+          echo 'MINILD_LOONG_POOL=PASS immutable_GNU_objects_verified=true'
+
+      - name: Build current MiniLD only
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$TOOLS_DIR" \
+            "$TOOLS_DIR/bin/minic-ld"
+
+      - name: Stage A - frozen GNU final kallsyms2 to real MiniLD vmlinux
+        shell: bash
+        timeout-minutes: 6
+        run: |
+          set -Eeuo pipefail
+          bash tools/ci/minild-loongarch64-linux-cached-full-image-v1.sh link \
+            "$GNU_POOL" "$TOOLS_DIR/bin/minic-ld" "$EVIDENCE"
+
+      - name: Fetch pinned Linux source for EFI linker script only
+        shell: bash
+        timeout-minutes: 6
+        run: |
+          set -Eeuo pipefail
+          mkdir -p "$(dirname "$LINUX_ARCHIVE")"
+          curl -fL --retry 3 --retry-delay 3 \
+            https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.6.143.tar.xz \
+            -o "$LINUX_ARCHIVE"
+          printf '%s  %s\n' \
+            dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932 \
+            "$LINUX_ARCHIVE" | sha256sum -c -
+          tar -xJf "$LINUX_ARCHIVE" -C "$(dirname "$LINUX_ARCHIVE")"
+          test -s "$LINUX_SOURCE/drivers/firmware/efi/libstub/zboot.lds"
+          echo 'MINILD_LOONG_SOURCE=PASS SHA_pinned_kernel_6.6.143 no_C_recompiled=true'
+
+      - name: Stage B - GNU objcopy/gzip and MiniLD EFI zboot, no GNU kernel relink
+        shell: bash
+        timeout-minutes: 6
+        run: |
+          set -Eeuo pipefail
+          bash tools/ci/minild-loongarch64-linux-cached-full-image-v1.sh image \
+            "$GNU_POOL" "$LINUX_SOURCE" "$TOOLS_DIR/bin/minic-ld" "$EVIDENCE"
+
+      - name: Prepare identical independent GNU userspace initramfs for both QEMU boots
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          BUILD_DIR="$RUNTIME/userland-build" \
+            OUTPUT_INITRAMFS="$RUNTIME/runtime-initramfs.cpio.gz" \
+            RISCV_CC=loongarch64-linux-gnu-gcc-13 \
+            LINUX_RUNTIME_REPRODUCIBLE=1 \
+            bash tests/external/linux/build_runtime_initramfs.sh
+          sha256sum "$RUNTIME/runtime-initramfs.cpio.gz" \
+            >"$EVIDENCE/identical-userland.sha256"
+          echo 'MINILD_LOONG_USERSpace=PASS only_three_userspace_C_compiles=true kernel_C_compiles=0'
+
+      - name: Stage C control - original frozen GNU EFI QEMU P0 2/2 and P1 12/12
+        shell: bash
+        timeout-minutes: 13
+        run: |
+          set -Eeuo pipefail
+          work="$RUNTIME/gnu"
+          mkdir -p "$work"
+          ln -s "$GNU_POOL" "$work/out"
+          ln -s "$RUNTIME/runtime-initramfs.cpio.gz" "$work/runtime-initramfs.cpio.gz"
+          WORK_DIR="$work" LOONG_QEMU_REPLAY_ONLY=1 \
+            LOONG_QEMU_REPLAY_ORIGIN=gnu \
+            bash tests/external/linux/minias_loongarch64_linux.sh
+          echo 'MINILD_LOONG_GNU_QEMU=PASS P0=2/2 P1=12/12'
+
+      - name: Stage C candidate - actual MiniLD EFI QEMU P0 2/2 and P1 12/12
+        shell: bash
+        timeout-minutes: 13
+        run: |
+          set -Eeuo pipefail
+          work="$RUNTIME/mini"
+          mkdir -p "$work"
+          ln -s "$EVIDENCE/minild-image-stage" "$work/out"
+          ln -s "$RUNTIME/runtime-initramfs.cpio.gz" "$work/runtime-initramfs.cpio.gz"
+          cp "$RUNTIME/gnu/QEMU_EFI.fd" "$work/QEMU_EFI.fd"
+          WORK_DIR="$work" LOONG_QEMU_REPLAY_ONLY=1 \
+            LOONG_QEMU_REPLAY_ORIGIN=minild \
+            bash tests/external/linux/minias_loongarch64_linux.sh
+          sha256sum "$EVIDENCE/minild-image-stage/arch/loongarch/boot/vmlinuz.efi" \
+            >"$EVIDENCE/booted-minild-EFI.sha256"
+          echo 'MINILD_LOONG_QEMU=PASS full_MiniLD_EFI=true P0=2/2 P1=12/12'
+
+      - name: Preserve complete frozen-link, image and QEMU evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: minild-loong-full-image-${{ github.sha }}
+          path: |
+            build/minild-loong-cached-full-evidence/
+            build/minild-loong-cached-runtime/gnu/evidence/
+            build/minild-loong-cached-runtime/mini/evidence/
+          if-no-files-found: warn
+          include-hidden-files: true
+          retention-days: 14

@@ -62,8 +62,6 @@ typedef struct MiniLdMergeSortedAtom {
 typedef struct MiniLdMergeGroup {
     size_t leader;
     size_t owner;
-    size_t input_count;
-    size_t input_bytes;
     uint64_t flags;
     uint64_t align;
     uint64_t entsize;
@@ -675,13 +673,9 @@ static bool minild_merge_live_sections(MiniLdState *state,
         group = &groups[j];
         /* By construction this pool has one input sh_addralign.  Individual
          * atoms still inherit gcd(sh_addralign, source_offset). */
-        ++group->input_count;
         if (source->align == 0U ||
             source->size % (size_t)source->align != 0U) {
             group->pad_trailing = false;
-        }
-        if (group->input_bytes <= SIZE_MAX - source->size) {
-            group->input_bytes += source->size;
         }
         map->leader = group->leader;
         for (pos = 0U; pos < source->size;) {
@@ -872,19 +866,6 @@ static bool minild_merge_live_sections(MiniLdState *state,
         fprintf(state->diagnostics,
                 "minic-ld: merge-live-entries:groups=%zu:deduplicated-bytes=%zu\n",
                 group_count, total_saved);
-        if (getenv("MINILD_MERGE_PROFILE") != NULL) {
-            for (i = 0U; i < group_count; ++i) {
-                const MiniLdMergeGroup *group = &groups[i];
-                fprintf(state->diagnostics,
-                        "MINILD_MERGE_GROUP=%zu owner=%zu leader=%zu name=%s entsize=%llu align=%llu inputs=%zu raw=%zu merged=%zu\n",
-                        i, group->owner, group->leader,
-                        state->work.sections[group->leader].input_name,
-                        (unsigned long long)group->entsize,
-                        (unsigned long long)group->align,
-                        group->input_count, group->input_bytes,
-                        group->size);
-            }
-        }
     }
     ok = true;
     goto done;

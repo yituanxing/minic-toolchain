@@ -532,24 +532,6 @@ static bool minild_aarch64_fill_static_relocations(
             MiniLdSection *source;
             bool live;
 
-            if (state->kernel_shared_image &&
-                getenv("MINILD_PROFILE_AARCH64_RELOC") != NULL &&
-                reloc->type == R_AARCH64_ABS64 &&
-                !minild_aarch64_kernel_relative_target(state, reloc) &&
-                reloc->section < state->work.count &&
-                (state->work.sections[reloc->section].flags & SHF_ALLOC) != 0U &&
-                !state->work.sections[reloc->section].script_discard &&
-                !state->work.sections[reloc->section].gc_discarded &&
-                reloc->symbol < state->resolver.count) {
-                const MiniLdResolvedSymbol *s =
-                    &state->resolver.entries[reloc->symbol];
-                fprintf(state->diagnostics,
-                        "minic-ld: aarch64-live-abs64-nonrebase:symbol=%s:shndx=%d:bind=%u:src=%s:offset=%llu\n",
-                        s->name, s->section,
-                        (unsigned)ELF64_ST_BIND(s->info),
-                        state->work.sections[reloc->section].name,
-                        (unsigned long long)reloc->offset);
-            }
             if (!minild_aarch64_kernel_relative_target(state, reloc)) {
                 continue;
             }

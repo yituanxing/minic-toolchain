@@ -560,25 +560,6 @@ static bool minild_aarch64_replan_static_layout(
             return false;
         }
     }
-    if (getenv("MINILD_PROFILE_AARCH64_ERRATUM") != NULL) {
-        size_t p;
-
-        fprintf(state->diagnostics,
-                "minic-ld: aarch64-843419-analysis:patches=%zu:mappings=%zu:changed=%u\n",
-                errata->count, errata->code_map_count,
-                *changed ? 1U : 0U);
-        for (p = 0U; p < errata->count; ++p) {
-            const MiniLdAarch64ErratumPatch *patch = &errata->patches[p];
-            fprintf(state->diagnostics,
-                    "minic-ld: aarch64-843419-patch:source=%zu:%s:insn=%zu:stub=%zu:base=0x%llx\n",
-                    patch->section,
-                    state->work.sections[patch->section].input_name != NULL
-                        ? state->work.sections[patch->section].input_name
-                        : state->work.sections[patch->section].name,
-                    patch->instruction_offset, patch->stub_offset,
-                    (unsigned long long)layout->work[patch->section].vaddr);
-        }
-    }
     return true;
 }
 
