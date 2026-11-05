@@ -2101,7 +2101,8 @@ static bool x86_source_fdiv_bug_contract(const MinicTargetInfo *target,
             ins->operand_count,ins->implicit_count,ins->effects,
             (unsigned int)(MINIC_MACHINE_EFFECT_SOURCE_ASM |
                 MINIC_MACHINE_EFFECT_MEMORY_READ |
-                MINIC_MACHINE_EFFECT_MEMORY_WRITE),
+                MINIC_MACHINE_EFFECT_MEMORY_WRITE |
+                MINIC_MACHINE_EFFECT_COMPILER_BARRIER),
             (unsigned int)ins->source_asm_terminates_block,
             (unsigned int)ins->source_asm_permits_fallthrough,
             (unsigned int)minic_x86_64_typed_machine_form_matches_template(
@@ -2147,9 +2148,11 @@ static bool x86_source_fdiv_bug_contract(const MinicTargetInfo *target,
         ins->implicit_count != 8U || ins->implicit == NULL ||
         ins->source_asm_terminates_block ||
         ins->source_asm_permits_fallthrough ||
-        ins->effects != (MINIC_MACHINE_EFFECT_SOURCE_ASM |
-            MINIC_MACHINE_EFFECT_MEMORY_READ |
-            MINIC_MACHINE_EFFECT_MEMORY_WRITE) ||
+        (ins->effects & ~(unsigned int)MINIC_MACHINE_EFFECT_VOLATILE) !=
+            (MINIC_MACHINE_EFFECT_SOURCE_ASM |
+             MINIC_MACHINE_EFFECT_MEMORY_READ |
+             MINIC_MACHINE_EFFECT_MEMORY_WRITE |
+             MINIC_MACHINE_EFFECT_COMPILER_BARRIER) ||
         !minic_x86_64_typed_machine_form_matches_template(
             ins->source_asm_machine_form_id,
             ins->source_asm_machine_form_variant,
@@ -2381,7 +2384,6 @@ static bool x86_source_percpu_gs_contract(
         (width != 1U && width != 2U && width != 4U && width != 8U) ||
         ins->source_asm_terminates_block ||
         ins->source_asm_permits_fallthrough ||
-        (stable && (ins->effects & MINIC_MACHINE_EFFECT_VOLATILE) != 0U) ||
         ((ins->effects & ~(unsigned int)MINIC_MACHINE_EFFECT_VOLATILE) !=
             (MINIC_MACHINE_EFFECT_SOURCE_ASM |
             (operation == 0U ? MINIC_MACHINE_EFFECT_MEMORY_READ :

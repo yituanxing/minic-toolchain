@@ -526,10 +526,14 @@ static bool a64_source_goto_policy_form(const MinicMachineFunction *fn,
             strncmp(symbol, prefix, sizeof(prefix) - 1U) != 0)
             return false;
         digits = (const unsigned char *)(symbol + sizeof(prefix) - 1U);
-        if (*digits == '\0') return false;
-        for (; *digits; ++digits)
-            if (*digits < '0' || *digits > '9') return false;
-        return true;
+        /* Core emits the exact typed deferred witness as
+         * __minic_deferred_asm_immediate_<ordinal>_0. Reject other suffixes
+         * instead of admitting an arbitrary assembly-time symbol. */
+        if (*digits < '0' || *digits > '9' ||
+            (*digits == '0' && digits[1] != '_')) return false;
+        do { ++digits; } while (*digits >= '0' && *digits <= '9');
+        return digits[0] == '_' && digits[1] == '0' &&
+            digits[2] == '\0';
     }
     if (kind == 1U)
         return value->kind == MINIC_MACHINE_OPERAND_SYMBOL &&

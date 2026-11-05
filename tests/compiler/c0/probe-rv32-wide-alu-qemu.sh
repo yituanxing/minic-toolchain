@@ -29,6 +29,21 @@ int w_eq(U a,U b) { return a == b; }
 int w_lt_u(U a,U b) { return a < b; }
 int w_lt_s(I a,I b) { return a < b; }
 int w_zero(U a) { return !a; }
+/* Exact Linux virtio_dev_probe data path: nested config callback returns
+ * unsigned u64 through RV32 ILP32 a0:a1, then feature bit32 is checked. */
+struct VirtioConfig { U (*get_features)(void *); };
+struct VirtioDev { const struct VirtioConfig *config; };
+U virtio_features(const struct VirtioDev *dev, void *context) {
+  return dev->config->get_features(context);
+}
+U virtio_feature32_mask(const struct VirtioDev *dev, void *context) {
+  U features = dev->config->get_features(context);
+  return features & (1ULL << 32);
+}
+int virtio_feature32_test(const struct VirtioDev *dev, void *context) {
+  U features = dev->config->get_features(context);
+  return (features & (1ULL << 32)) != 0ULL;
+}
 SRC
 "$MINIC_CC" --target=riscv32-linux -march=rv32i -mabi=ilp32 \
   -S "$work/wide.i" -o "$work/wide.s"
@@ -47,6 +62,21 @@ extern U w_udiv(U,U), w_umod(U,U);
 extern I w_sdiv(I,I), w_smod(I,I);
 extern I w_neg(I), w_sar(I,unsigned);
 extern int w_eq(U,U), w_lt_u(U,U), w_lt_s(I,I), w_zero(U);
+struct VirtioConfig { U (*get_features)(void *); };
+struct VirtioDev { const struct VirtioConfig *config; };
+extern U virtio_features(const struct VirtioDev *, void *);
+extern U virtio_feature32_mask(const struct VirtioDev *, void *);
+extern int virtio_feature32_test(const struct VirtioDev *, void *);
+static U virtio_get_features(void *context) {
+  return *(volatile U *)context;
+}
+static const struct VirtioConfig virtio_config = { virtio_get_features };
+static const struct VirtioDev virtio_device = { &virtio_config };
+static volatile U virtio_feature_value;
+static const U virtio_cases[7] = {
+  0ULL, 1ULL, 0x100000000ULL, 0x100000005ULL,
+  0x200000000ULL, 0xffffffffffffffffULL, 0x123456789abcdef0ULL
+};
 static volatile U values[10] = {
   0ULL, 1ULL, 0xffffffffULL, 0x100000000ULL,
   0x123456789abcdef0ULL, 0xaaaaaaaa55555555ULL,
@@ -87,7 +117,24 @@ static int test(void) {
   }
   return 0;
 }
-int main(void) { return test(); }
+static int test_virtio(void) {
+  unsigned i;
+  for (i=0;i<7U;++i) {
+    U bits=virtio_cases[i], masked=bits&(1ULL<<32);
+    virtio_feature_value=bits;
+    if (virtio_features(&virtio_device,(void *)&virtio_feature_value)!=bits)
+      return 14;
+    if (virtio_feature32_mask(&virtio_device,(void *)&virtio_feature_value)
+        !=masked) return 15;
+    if (virtio_feature32_test(&virtio_device,(void *)&virtio_feature_value)
+        !=(masked!=0ULL)) return 16;
+  }
+  return 0;
+}
+int main(void) {
+  int result=test();
+  return result !=0 ? result : test_virtio();
+}
 SRC
 cat >"$work/start.s" <<'SRC'
 .text
@@ -121,4 +168,5 @@ for mode in gnu minic-gas minic-as; do
     exit 1
   fi
 done
-echo "RV32_I64_ALU=PASS checks=1500 functions=19 ISA=rv32i ABI=ilp32 GNU_C=1 GNU_AS=1 MiniAS=1 QEMU=1 upstream_llvm_DI_arithmetic=1"
+echo "RV32_I64_ALU=PASS checks=1500 functions=22 ISA=rv32i ABI=ilp32 GNU_C=1 GNU_AS=1 MiniAS=1 QEMU=1 upstream_llvm_DI_arithmetic=1"
+echo "RV32_VIRTIO_FEATURE32=PASS cases=7 indirect_u64_callback_a0_a1=1 shift32=1 wide_bitwise_and=1 GNU_C=1 GNU_AS=1 MiniAS=1 QEMU=1"

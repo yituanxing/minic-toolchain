@@ -2103,7 +2103,6 @@ static bool x86_percpu_gs_source(const MinicTargetInvocation *invocation, const 
     const bool stable = stable_width != 0U;
     const MinicExpression *e;
     if(!program||!src||!contract||src->is_goto||src->label_count||
-        (stable && src->is_volatile) ||
        src->clobber_count||src->register_clobber_count||
        src->has_memory_clobber||
        !minic_x86_64_linux_percpu_form(

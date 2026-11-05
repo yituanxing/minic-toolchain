@@ -4181,8 +4181,8 @@ static bool x86_source_fdiv_bug(X86CoreSelector *sel,
         source->target_machine_form_variant != 0U ||
         source->operand_plan_owner != MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED ||
         source->source_asm_unique_id == 0U ||
-        source->is_volatile || source->is_goto ||
-        source->has_memory_clobber || source->explicit_memory_clobber ||
+        source->is_goto || !source->has_memory_clobber ||
+        source->explicit_memory_clobber ||
         source->resolved_immediate_count != 0U ||
         source->goto_second_target != MINIC_CORE_BLOCK_INVALID ||
         source->register_clobber_count != 0U ||
@@ -4557,7 +4557,7 @@ static bool x86_source_percpu_gs(X86CoreSelector *sel,
     MinicMachineOperand bindings[2];
     MinicMachineRegisterEffect flags = {0};
     unsigned int operation;
-    size_t width, count;
+    size_t width, count, stable_width;
     bool stable;
     const bool is_source = ins->kind ==
         MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM;
@@ -4568,13 +4568,41 @@ static bool x86_source_percpu_gs(X86CoreSelector *sel,
     source = &sel->core->inline_asms[
         ins->value.structured_inline_asm.inline_asm_id];
     roles = ins->value.structured_inline_asm.operands;
-    stable = minic_x86_64_asm_percpu_stable_width(
-        source->template_text,source->template_length) != 0U;
+    stable_width = minic_x86_64_asm_percpu_stable_width(
+        source->template_text,source->template_length);
+    stable = stable_width != 0U;
+    if (stable && getenv("MINIC_X86_TYPED_REJECT_TRACE") != NULL) {
+        fprintf(stderr,
+            "x86 gs stable source: form=%u owner=%u variant=%u unique=%u volatile=%u mem=%u explicit=%u clobbers=%zu operands=%zu template=%u\n",
+            (unsigned int)source->target_machine_form_id,
+            (unsigned int)source->operand_plan_owner,
+            (unsigned int)source->target_machine_form_variant,
+            (unsigned int)(source->source_asm_unique_id != 0U),
+            (unsigned int)source->is_volatile,
+            (unsigned int)source->has_memory_clobber,
+            (unsigned int)source->explicit_memory_clobber,
+            source->register_clobber_count,
+            ins->value.structured_inline_asm.operand_count,
+            (unsigned int)minic_x86_64_typed_machine_form_matches_template(
+                source->target_machine_form_id,
+                source->target_machine_form_variant,
+                source->template_text,source->template_length));
+        if (roles != NULL &&
+            ins->value.structured_inline_asm.operand_count >= 2U)
+            fprintf(stderr,
+                "x86 gs stable roles: output_kind=%u output_shape=%u input_kind=%u input_shape=%u input_value=%u\n",
+                (unsigned int)roles[0].kind,
+                (unsigned int)x86_percpu_scalar_shape(
+                    sel,roles[0].value,stable_width,true),
+                (unsigned int)roles[1].kind,
+                (unsigned int)x86_asm_gp_input_width(
+                    sel,roles[1].value,8U),
+                (unsigned int)roles[1].value);
+    }
     if (source->target_machine_form_id != MINIC_X86_MACHINE_ASM_PERCPU_GS ||
         source->operand_plan_owner != MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED ||
         source->target_machine_form_variant != 0U ||
         source->source_asm_unique_id == 0U || source->is_goto ||
-        (stable && source->is_volatile) ||
         source->explicit_memory_clobber ||
         source->register_clobber_count != 0U ||
         source->resolved_immediate_count != 0U ||

@@ -74,7 +74,7 @@ jobs:
             riscv64-linux-gnu-readelf -h "${files[0]}" | grep -Eq 'Class:[[:space:]]+ELF32'
             cp "${files[0]}" "$root/objects/$name.o"
           done
-      - name: Compare original GNU vs MiniC RV32 virtio probe machine code
+      - name: Compare narrow GNU and MiniC RV32 indirect u64 callback ABI contexts
         run: |
           set -Eeuo pipefail
           root=build/rv32-gpu-diff
@@ -82,19 +82,36 @@ jobs:
           for owner in gnu minic; do
             if [[ "$owner" == gnu ]]; then
               obj=build/rv32i-linux-entry/out/drivers/virtio/virtio.o
+              call_index=3
+              before=18
+              after=130
             else
               obj="$root/objects/virtio.o"
+              call_index=1
+              before=40
+              after=190
             fi
             echo "RV32_GPU_VIRTIO_OBJECT=$owner sha256=$(sha256sum "$obj" | cut -d' ' -f1)"
             riscv64-linux-gnu-nm -a "$obj" | grep -E '(virtio_dev_probe|virtio_features_ok|features_show)$' | tee "$ev/$owner.virtio.symbols" || true
             riscv64-linux-gnu-objdump -dr -M no-aliases --disassemble=virtio_dev_probe "$obj" >"$ev/$owner.virtio_dev_probe.disasm"
-            echo "RV32_GPU_VIRTIO_DEV_PROBE_BEGIN=$owner"
-            sed -n '1,240p' "$ev/$owner.virtio_dev_probe.disasm"
-            echo "RV32_GPU_VIRTIO_DEV_PROBE_END=$owner"
+            echo "RV32_GPU_VIRTIO_INDIRECT_U64_CONTEXT_BEGIN=$owner"
+            awk -v want="$call_index" -v before="$before" -v after="$after" '
+              { line[NR]=$0 }
+              /jalr[[:space:]]+ra,0\((t[0-6]|a[0-9]|s[0-9])\)/ {
+                seen++
+                if (seen==want) anchor=NR
+              }
+              END {
+                if (!anchor) { print "RV32_GPU_VIRTIO_INDIRECT_CALL=NOT_FOUND"; exit 0 }
+                lo=anchor-before
+                if(lo<1) lo=1
+                hi=anchor+after
+                if(hi>NR) hi=NR
+                for(i=lo;i<=hi;i++) print line[i]
+              }
+            ' "$ev/$owner.virtio_dev_probe.disasm" | tee "$ev/$owner.virtio_indirect_context.txt"
+            echo "RV32_GPU_VIRTIO_INDIRECT_U64_CONTEXT_END=$owner"
           done
-          diff -u "$ev/gnu.virtio_dev_probe.disasm" "$ev/minic.virtio_dev_probe.disasm" >"$ev/virtio_dev_probe.gnu-vs-minic.diff" || true
-          echo 'RV32_GPU_VIRTIO_DEV_PROBE_DIFF_FIRST_160'
-          sed -n '1,160p' "$ev/virtio_dev_probe.gnu-vs-minic.diff"
       - name: Build 8 exact-config GNU DRM/GPU modules once
         timeout-minutes: 9
         run: |
