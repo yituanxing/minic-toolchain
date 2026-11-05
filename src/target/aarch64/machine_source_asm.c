@@ -100,6 +100,87 @@ static const MinicMachineSourceAsmTemplatePolicy a64_tlbi_template_policy = {
     NULL
 };
 
+/* Keep the original GNU source text for the three source-qualified one-GPR
+ * families.  Their ISA fingerprints are the SAME pure Target predicates
+ * used by C admission and the former direct emitter.  The physical x9
+ * binding and %a0 address modifier are checked independently at MachineIR. */
+static bool a64_one_gp_form(const MinicMachineInstruction *ins) {
+    const unsigned int source = MINIC_MACHINE_EFFECT_SOURCE_ASM;
+    const unsigned int vol = MINIC_MACHINE_EFFECT_VOLATILE;
+    const unsigned int barrier = MINIC_MACHINE_EFFECT_COMPILER_BARRIER;
+    const unsigned int memory = MINIC_MACHINE_EFFECT_MEMORY_READ |
+        MINIC_MACHINE_EFFECT_MEMORY_WRITE;
+    const char *cache;
+    if (ins == NULL || ins->operand_count != 1U ||
+        ins->implicit_count != 0U || ins->source_asm_terminates_block ||
+        ins->source_asm_permits_fallthrough ||
+        ins->source_asm_machine_form_variant != 0U) return false;
+    switch (ins->source_asm_machine_form_id) {
+    case AARCH64_MACHINE_ASM_AT_S1E1R:
+        return ins->effects == (source | vol) &&
+            aarch64_linux_at_s1e1r_template(ins->source_asm_template,
+                ins->source_asm_length);
+    case AARCH64_MACHINE_ASM_PREFETCH:
+        return ins->effects == (source | vol) &&
+            aarch64_linux_prefetch_template(ins->source_asm_template,
+                ins->source_asm_length) != NULL;
+    case AARCH64_MACHINE_ASM_CACHE_OP:
+        cache = aarch64_linux_cache_op_form(ins->source_asm_template,
+            ins->source_asm_length);
+        return cache != NULL &&
+            (ins->effects == (source | vol | barrier | memory) ||
+             (aarch64_linux_efi_unclobbered_cache_form(cache) &&
+              (ins->effects == (source | memory) ||
+               ins->effects == (source | vol | memory))));
+    default: return false;
+    }
+}
+
+static bool a64_gp_source_form(const MinicMachineFunction *fn,
+    const MinicMachineInstruction *ins, void *context) {
+    (void)context;
+    return fn != NULL && fn->target != NULL &&
+        fn->target->architecture == MINIC_TARGET_ARCH_AARCH64 &&
+        a64_one_gp_form(ins);
+}
+
+static bool a64_gp_source_binding(const MinicMachineFunction *fn,
+    const MinicMachineInstruction *ins, size_t index, void *context) {
+    const MinicMachineOperand *op;
+    const bool pref = ins != NULL &&
+        ins->source_asm_machine_form_id == AARCH64_MACHINE_ASM_PREFETCH;
+    (void)context;
+    if (!a64_gp_source_form(fn, ins, NULL) || index != 0U ||
+        ins->operands == NULL) return false;
+    op = &ins->operands[0];
+    return op->kind == MINIC_MACHINE_OPERAND_REGISTER &&
+        op->asm_constraint != NULL &&
+        strcmp(op->asm_constraint, pref ? "p" : "r") == 0 &&
+        op->value.physical.reg.bank == MINIC_MACHINE_REGISTER_GENERAL &&
+        op->value.physical.reg.number == 9U &&
+        op->value.physical.reg.width_bits == 64U &&
+        op->value.physical.access == MINIC_MACHINE_REGISTER_READ;
+}
+
+static bool a64_gp_source_operand(FILE *output,
+    const MinicMachineFunction *fn, const MinicMachineInstruction *ins,
+    const MinicMachineGNUAsmLabels *labels, size_t index,
+    unsigned char modifier, void *context) {
+    const bool pref = ins != NULL &&
+        ins->source_asm_machine_form_id == AARCH64_MACHINE_ASM_PREFETCH;
+    (void)labels;
+    return modifier == (pref ? 'a' : 0U) &&
+        a64_gp_source_binding(fn, ins, index, context) &&
+        (output == NULL || fputs(pref ? "[x9]" : "x9", output) >= 0);
+}
+
+static const MinicMachineSourceAsmTemplatePolicy a64_one_gp_policy = {
+    a64_gp_source_form,
+    a64_gp_source_binding,
+    a64_gp_source_operand,
+    NULL
+};
+
 bool minic_aarch64_machine_source_asm_validate(
     const MinicTargetInfo *target, const MinicMachineInstruction *instruction,
     void *context) {
@@ -114,7 +195,9 @@ bool minic_aarch64_machine_source_asm_validate(
         (instruction->effects & MINIC_MACHINE_EFFECT_SOURCE_ASM) != 0U &&
         (a64_machine_opaque_hint(instruction) ||
          minic_machine_source_asm_template_preflight(&function,
-             instruction, &a64_tlbi_template_policy));
+             instruction, &a64_tlbi_template_policy) ||
+         minic_machine_source_asm_template_preflight(&function,
+             instruction, &a64_one_gp_policy));
 }
 
 bool minic_aarch64_machine_source_asm_emit(
@@ -129,6 +212,13 @@ bool minic_aarch64_machine_source_asm_emit(
     if (a64_machine_tlbi_form(instruction))
         return minic_machine_source_asm_template_emit(output, function,
             instruction, labels, &a64_tlbi_template_policy) &&
+            ((instruction->source_asm_length != 0U &&
+              instruction->source_asm_template[
+                  instruction->source_asm_length - 1U] == '\n') ||
+             fputc('\n', output) != EOF);
+    if (a64_one_gp_form(instruction))
+        return minic_machine_source_asm_template_emit(output, function,
+            instruction, labels, &a64_one_gp_policy) &&
             ((instruction->source_asm_length != 0U &&
               instruction->source_asm_template[
                   instruction->source_asm_length - 1U] == '\n') ||

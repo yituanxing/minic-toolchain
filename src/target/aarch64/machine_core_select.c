@@ -1427,6 +1427,71 @@ static bool a64_linux_tlbi(A64CoreSelection *sel,
         NULL, 0U, false, false);
 }
 
+/* The source-qualified AT, cache-maintenance and PRFM family has exactly
+ * one consumed 64-bit value. Keep genuine GNU source text; the target seals
+ * its original grammar and effects and assigns only the physical x9 input.
+ * The `%a0` PRFM modifier belongs to GNU AArch64 address syntax, not Core. */
+static bool a64_linux_one_gp_source(A64CoreSelection *sel,
+    const MinicCoreInstruction *ins, const MinicCoreInlineAsm *source) {
+    const MinicCoreFunction *fn = sel->ctx->fn;
+    const MinicCoreStructuredInlineAsmOperand *operand =
+        ins->value.structured_inline_asm.operands;
+    const uint32_t form = source->target_machine_form_id;
+    const bool cache = form == AARCH64_MACHINE_ASM_CACHE_OP;
+    const bool prefetch = form == AARCH64_MACHINE_ASM_PREFETCH;
+    const char *cache_op = cache ? aarch64_linux_cache_op_form(
+        source->template_text, source->template_length) : NULL;
+    const bool efi = cache &&
+        aarch64_linux_efi_unclobbered_cache_form(cache_op);
+    MinicMachineOperand binding = a64_gp(A64_T0, 64U,
+        MINIC_MACHINE_REGISTER_READ);
+    if (source->target_machine_form_variant != 0U ||
+        source->operand_plan_owner != MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED ||
+        ins->result != MINIC_CORE_VALUE_INVALID ||
+        !minic_core_function_type_is_kind(fn, ins->core_type_id,
+            MINIC_CORE_TYPE_VOID) ||
+        source->is_goto || source->register_clobber_count != 0U ||
+        source->symbol_reference_count != 0U ||
+        source->resolved_immediate_count != 0U ||
+        source->deferred_immediate_symbol != NULL ||
+        ins->value.structured_inline_asm.operand_count != 1U ||
+        sel->ctx->machine_frame->has_dynamic_stack || operand == NULL ||
+        operand->operand_index != 0U ||
+        operand->kind != MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT ||
+        operand->early_clobber || operand->physical_early_clobber ||
+        operand->physical_read_write || operand->has_fixed_register_binding ||
+        operand->has_tied_output || operand->value >= fn->value_count)
+        return false;
+    if (form == AARCH64_MACHINE_ASM_AT_S1E1R) {
+        if (!source->is_volatile || source->has_memory_clobber ||
+            source->implicit_memory_effect ||
+            !aarch64_linux_at_s1e1r_template(source->template_text,
+                source->template_length) ||
+            !aarch64_asm_core_integer(fn, operand->value, false, 8U, 0))
+            return false;
+    } else if (prefetch) {
+        if (!source->is_volatile || source->has_memory_clobber ||
+            source->implicit_memory_effect ||
+            aarch64_linux_prefetch_template(source->template_text,
+                source->template_length) == NULL ||
+            !minic_core_function_value_is_kind(fn, operand->value,
+                MINIC_CORE_TYPE_POINTER)) return false;
+    } else if (cache) {
+        if (cache_op == NULL || !source->implicit_memory_effect ||
+            !((source->is_volatile && source->has_memory_clobber) ||
+              (!source->has_memory_clobber && efi)) ||
+            !(aarch64_asm_core_pointer(fn, operand->value, false) ||
+              aarch64_asm_core_integer(fn, operand->value, false, 8U, 0)))
+            return false;
+    } else return false;
+    if (!a64_load_core(sel, operand->value, A64_T0, 64U)) return false;
+    binding.asm_constraint = prefetch ? "p" : "r";
+    return minic_machine_builder_emit_core_source_asm(&sel->builder,
+        source, cache ? MINIC_MACHINE_EFFECT_MEMORY_READ |
+                        MINIC_MACHINE_EFFECT_MEMORY_WRITE : 0U,
+        &binding, 1U, NULL, 0U, false, false);
+}
+
 /* Physical source-ASM seals require two independent proofs. machine_opcode.c
  * checks the exact hardware opcode, size and effects; this target callback
  * checks the corresponding sealed Core address/scalar roles and native type
@@ -2496,6 +2561,10 @@ static bool a64_core_instruction(A64CoreSelection *sel,
             return a64_linux_bit_reverse(sel, ins, source);
         if (source->target_machine_form_id == AARCH64_MACHINE_ASM_TLBI)
             return a64_linux_tlbi(sel, ins, source);
+        if (source->target_machine_form_id == AARCH64_MACHINE_ASM_AT_S1E1R ||
+            source->target_machine_form_id == AARCH64_MACHINE_ASM_CACHE_OP ||
+            source->target_machine_form_id == AARCH64_MACHINE_ASM_PREFETCH)
+            return a64_linux_one_gp_source(sel, ins, source);
         if (ins->result != MINIC_CORE_VALUE_INVALID ||
             ins->value.structured_inline_asm.operand_count != 0U ||
             !minic_core_function_type_is_kind(fn, ins->core_type_id,

@@ -425,6 +425,69 @@ static bool x86_float_shape(const X86CoreSelector *sel,
     return false;
 }
 
+/* SysV AMD64 transports long double as an 80-bit x87 payload in a 16-byte
+ * Core slot.  The slot's upper six bytes are ABI padding, not a binary128
+ * value; all x87 operations below use selected physical MachineIR opcodes. */
+static bool x86_x87_shape(const X86CoreSelector *sel, MinicCoreTypeId id) {
+    const MinicCoreType *type = x86_type(sel, id);
+    return type != NULL && type->kind == MINIC_CORE_TYPE_FLOAT &&
+        type->has_layout && type->size == 16U &&
+        type->value.floating.format == MINIC_CORE_FLOAT_X87_EXTENDED80;
+}
+
+static bool x86_x87_slot(X86CoreSelector *sel, MinicCoreValueId value,
+    size_t width, size_t byte_offset, MinicMachineOperand *operand) {
+    size_t distance;
+    if (sel == NULL || operand == NULL ||
+        value >= sel->core->value_count ||
+        !x86_x87_shape(sel, sel->core->values[value].core_type_id) ||
+        sel->frame->value_offsets == NULL ||
+        (distance = sel->frame->value_offsets[value]) < 16U ||
+        distance > sel->frame->frame_size || distance > INT32_MAX ||
+        width == 0U || byte_offset > 16U || width > 16U - byte_offset)
+        return false;
+    return minic_x86_64_machine_frame_slot(&sel->builder,
+        MINIC_MACHINE_FRAME_BASE_FRAME_POINTER,
+        MINIC_MACHINE_FRAME_LOCAL, width, 1U,
+        -(int64_t)(distance - byte_offset), operand);
+}
+
+static bool x86_x87_load(X86CoreSelector *sel, MinicCoreValueId value) {
+    MinicMachineOperand slot;
+    return x86_x87_slot(sel, value, 10U, 0U, &slot) &&
+        x86_1(sel, MINIC_X86_MI_FLDT_FRAME_RBP, slot);
+}
+
+static bool x86_x87_store(X86CoreSelector *sel, MinicCoreValueId value) {
+    MinicMachineOperand slot;
+    return x86_x87_slot(sel, value, 10U, 0U, &slot) &&
+        x86_1(sel, MINIC_X86_MI_FSTPT_FRAME_RBP, slot);
+}
+
+static bool x86_x87_constant(X86CoreSelector *sel,
+    const MinicCoreInstruction *ins) {
+    const uint64_t hi = ins->value.floating128_bits.high;
+    const uint64_t lo = ins->value.floating128_bits.low;
+    const uint64_t fraction_hi = hi & UINT64_C(0x0000ffffffffffff);
+    const unsigned int exponent = (unsigned int)((hi >> 48U) & 0x7fffU);
+    const uint64_t significand =
+        (exponent == 0U ? 0U : UINT64_C(1) << 63U) |
+        (fraction_hi << 15U) | (lo >> 49U);
+    MinicMachineOperand low, high;
+    if (ins->result >= sel->core->value_count ||
+        (lo & UINT64_C(0x0001ffffffffffff)) != 0U ||
+        !x86_x87_slot(sel, ins->result, 8U, 0U, &low) ||
+        !x86_x87_slot(sel, ins->result, 8U, 8U, &high)) return false;
+    return x86_ir(sel, MINIC_X86_MI_MOVABS64_IR,
+            (int64_t)significand, 64U, MINIC_X86_REG_RAX) &&
+        x86_2(sel, MINIC_X86_MI_MOV64_R_FRBP,
+            x86_reg(MINIC_X86_REG_RAX, 64U), low) &&
+        x86_ir(sel, MINIC_X86_MI_MOV64_IR,
+            (int64_t)(hi >> 48U), 64U, MINIC_X86_REG_RAX) &&
+        x86_2(sel, MINIC_X86_MI_MOV64_R_FRBP,
+            x86_reg(MINIC_X86_REG_RAX, 64U), high);
+}
+
 /* Physical register names remain owned by the established x86 ABI bank.
  * The selector only resolves those names to MachineIR register numbers. */
 static bool x86_abi_gp_register(MinicFunctionCallingConvention convention,
@@ -942,6 +1005,20 @@ static bool x86_scalar_memory(X86CoreSelector *sel,
     vol = load ? ins->value.load.is_volatile : ins->value.store.is_volatile;
     if (address >= sel->core->value_count ||
         payload >= sel->core->value_count) return false;
+    if (x86_x87_shape(sel, load ? ins->core_type_id :
+            sel->core->values[payload].core_type_id)) {
+        if (!x86_record_pointer(sel, address, MINIC_X86_REG_R11))
+            return false;
+        if (load)
+            return x86_emit(sel, MINIC_X86_MI_FLDT_ADDRESS,
+                    (MinicMachineOperand[]){x86_addr(MINIC_X86_REG_R11, 0)},
+                    1U, vol ? MINIC_MACHINE_EFFECT_VOLATILE : 0U) &&
+                x86_x87_store(sel, payload);
+        return x86_x87_load(sel, payload) &&
+            x86_emit(sel, MINIC_X86_MI_FSTPT_ADDRESS,
+                (MinicMachineOperand[]){x86_addr(MINIC_X86_REG_R11, 0)},
+                1U, vol ? MINIC_MACHINE_EFFECT_VOLATILE : 0U);
+    }
     if (x86_i128_type(sel, load ? ins->core_type_id :
             sel->core->values[payload].core_type_id, NULL)) {
         if (!x86_record_pointer(sel, address, MINIC_X86_REG_R10))
@@ -1019,13 +1096,24 @@ static bool x86_parameter(X86CoreSelector *sel,
     wide = x86_i128_type(sel, ins->core_type_id, NULL);
     if (position >= plan->argument_count ||
         plan->locations == NULL ||
-        (!floating && !wide && !x86_scalar_shape(sel, ins->core_type_id,
+        (!floating && !wide && !x86_x87_shape(sel, ins->core_type_id) &&
+         !x86_scalar_shape(sel, ins->core_type_id,
             &bytes, &sign, &is_bool)) ||
         (plan->calling_convention != MINIC_CALLING_CONVENTION_DEFAULT &&
          plan->calling_convention != MINIC_CALLING_CONVENTION_MS_X64) ||
         plan->calling_convention !=
             minic_core_function_calling_convention(sel->core)) return false;
     where = &plan->locations[position];
+    if (x86_x87_shape(sel, ins->core_type_id)) {
+        if (plan->calling_convention != MINIC_CALLING_CONVENTION_DEFAULT ||
+            where->kind != MINIC_X86_ARG_X87_MEMORY || !where->on_stack ||
+            where->stack_index > (INT32_MAX - 16U) / 8U)
+            return false;
+        return x86_1(sel, MINIC_X86_MI_FLDT_ADDRESS,
+                x86_addr(MINIC_X86_REG_RBP,
+                    (int64_t)(16U + where->stack_index * 8U))) &&
+            x86_x87_store(sel, ins->result);
+    }
     if (wide) {
         unsigned int first, second;
         if (plan->calling_convention !=
@@ -1218,6 +1306,30 @@ static bool x86_call_argument(X86CoreSelector *sel,
     }
     if (arg->kind != MINIC_CORE_CALL_ARGUMENT_VALUE ||
         arg->value.value_id >= sel->core->value_count) return false;
+    if (x86_x87_shape(sel, declared_type)) {
+        MinicMachineOperand low, high;
+        if (convention != MINIC_CALLING_CONVENTION_DEFAULT ||
+            where->kind != MINIC_X86_ARG_X87_MEMORY || !where->on_stack ||
+            !x86_x87_shape(sel,
+                sel->core->values[arg->value.value_id].core_type_id) ||
+            where->stack_index > INT32_MAX / 8U ||
+            (stack_offset = where->stack_index * 8U) > stack_bytes ||
+            stack_bytes - stack_offset < 16U ||
+            stack_offset > INT32_MAX - 16U ||
+            !x86_x87_slot(sel, arg->value.value_id, 8U, 0U, &low) ||
+            !x86_x87_slot(sel, arg->value.value_id, 8U, 8U, &high))
+            return false;
+        return x86_2(sel, MINIC_X86_MI_MOV64_FRBP_R, low,
+                x86_reg(MINIC_X86_REG_RAX, 64U)) &&
+            x86_2(sel, MINIC_X86_MI_MOV64_RA,
+                x86_reg(MINIC_X86_REG_RAX, 64U),
+                x86_addr(MINIC_X86_REG_RSP, (int64_t)stack_offset)) &&
+            x86_2(sel, MINIC_X86_MI_MOV64_FRBP_R, high,
+                x86_reg(MINIC_X86_REG_RAX, 64U)) &&
+            x86_2(sel, MINIC_X86_MI_MOV64_RA,
+                x86_reg(MINIC_X86_REG_RAX, 64U),
+                x86_addr(MINIC_X86_REG_RSP, (int64_t)(stack_offset + 8U)));
+    }
     if (x86_i128_type(sel, declared_type, NULL)) {
         unsigned int first, second;
         if (convention != MINIC_CALLING_CONVENTION_DEFAULT ||
@@ -1285,6 +1397,255 @@ static bool x86_call_argument(X86CoreSelector *sel,
         return false;
     return x86_rr(sel, MINIC_X86_MI_MOV64_RR, 64U,
         MINIC_X86_REG_RAX, physical_gp);
+}
+
+/* Extended80 Core calls have explicit numeric operation IDs.  They never
+ * perform a symbol call, even when the Core callee uses a libgcc-style name;
+ * conversely, an ordinary call to that name remains an ordinary ABI call.
+ * All intermediate x87 stack traffic is represented by real x87 opcodes. */
+static bool x86_x87_extended_call(X86CoreSelector *sel,
+    const MinicCoreInstruction *ins, size_t instruction_id) {
+    const MinicCoreExtendedFloatOperation op =
+        ins->value.call.extended_float_operation;
+    const MinicCoreCallArgument *arguments;
+    const MinicCoreType *left_type, *right_type = NULL;
+    const MinicCoreType *result_type = x86_type(sel, ins->core_type_id);
+    const MinicCoreValueId result = ins->result;
+    MinicCoreValueId left, right = MINIC_CORE_VALUE_INVALID;
+    MinicCoreTypeId left_id;
+    bool source_ld, result_ld;
+    size_t begin = ins->value.call.argument_begin;
+    size_t count = ins->value.call.argument_count;
+    const X86AuxBlocks *aux;
+    MinicMachineOperand slot;
+    if (op == MINIC_CORE_EXT_FLOAT_NONE ||
+        ins->kind != MINIC_CORE_INSTRUCTION_CALL ||
+        instruction_id >= sel->core->instruction_count ||
+        sel->instruction_aux == NULL ||
+        ins->value.call.callee_id >= sel->core->callee_count ||
+        sel->core->callees == NULL ||
+        result >= sel->core->value_count ||
+        sel->core->values[result].core_type_id != ins->core_type_id ||
+        begin > sel->core->call_argument_count ||
+        count > sel->core->call_argument_count - begin ||
+        (count != 1U && count != 2U) ||
+        sel->core->call_arguments == NULL ||
+        result_type == NULL) return false;
+    arguments = sel->core->call_arguments + begin;
+    if (arguments[0].kind != MINIC_CORE_CALL_ARGUMENT_VALUE ||
+        (left = arguments[0].value.value_id) >= sel->core->value_count)
+        return false;
+    left_id = sel->core->values[left].core_type_id;
+    left_type = x86_type(sel, left_id);
+    if (left_type == NULL) return false;
+    if (count == 2U) {
+        if (arguments[1].kind != MINIC_CORE_CALL_ARGUMENT_VALUE ||
+            (right = arguments[1].value.value_id) >= sel->core->value_count)
+            return false;
+        right_type = x86_type(sel,
+            sel->core->values[right].core_type_id);
+        if (right_type == NULL) return false;
+    }
+    aux = &sel->instruction_aux[instruction_id];
+    source_ld = x86_x87_shape(sel, left_id);
+    result_ld = x86_x87_shape(sel, ins->core_type_id);
+    if (count == 2U) {
+        MinicX86MachineOpcode opcode = MINIC_X86_MI_INVALID;
+        if (!source_ld || !x86_x87_shape(sel,
+                sel->core->values[right].core_type_id) ||
+            !x86_x87_load(sel, left) || !x86_x87_load(sel, right))
+            return false;
+        if (result_ld) {
+            switch (op) {
+            case MINIC_CORE_EXT_FLOAT_ADD: opcode = MINIC_X86_MI_FADDP_ST1; break;
+            case MINIC_CORE_EXT_FLOAT_SUBTRACT: opcode = MINIC_X86_MI_FSUBRP_ST1; break;
+            case MINIC_CORE_EXT_FLOAT_MULTIPLY: opcode = MINIC_X86_MI_FMULP_ST1; break;
+            case MINIC_CORE_EXT_FLOAT_DIVIDE: opcode = MINIC_X86_MI_FDIVRP_ST1; break;
+            default: return false;
+            }
+            return x86_0(sel, opcode) && x86_x87_store(sel, result);
+        }
+        if (result_type->kind != MINIC_CORE_TYPE_INTEGER ||
+            !result_type->has_layout || result_type->size != 4U ||
+            !result_type->value.integer.is_signed ||
+            (op != MINIC_CORE_EXT_FLOAT_EQUAL &&
+             op != MINIC_CORE_EXT_FLOAT_LESS &&
+             op != MINIC_CORE_EXT_FLOAT_LESS_EQUAL)) return false;
+        opcode = op == MINIC_CORE_EXT_FLOAT_EQUAL ? MINIC_X86_MI_SETZ8_R :
+            op == MINIC_CORE_EXT_FLOAT_LESS ? MINIC_X86_MI_SETB8_R :
+            MINIC_X86_MI_SETBE8_R;
+        return x86_0(sel, MINIC_X86_MI_FXCH_ST1) &&
+            x86_0(sel, MINIC_X86_MI_FUCOMIP_ST1) &&
+            x86_0(sel, MINIC_X86_MI_FSTP_ST0) &&
+            x86_1(sel, opcode, x86_reg(MINIC_X86_REG_RAX, 8U)) &&
+            x86_1(sel, MINIC_X86_MI_SETNP8_R,
+                x86_reg(MINIC_X86_REG_R10, 8U)) &&
+            x86_rr(sel, MINIC_X86_MI_AND8_RR, 8U,
+                MINIC_X86_REG_R10, MINIC_X86_REG_RAX) &&
+            x86_2(sel, MINIC_X86_MI_MOVZBQ_RR,
+                x86_reg(MINIC_X86_REG_RAX, 8U),
+                x86_reg(MINIC_X86_REG_RAX, 64U)) &&
+            x86_result(sel, ins);
+    }
+    if (source_ld && result_ld) {
+        return op == MINIC_CORE_EXT_FLOAT_NEGATE &&
+            x86_x87_load(sel, left) &&
+            x86_0(sel, MINIC_X86_MI_FCHS) &&
+            x86_x87_store(sel, result);
+    }
+    if (result_ld && left_type->kind == MINIC_CORE_TYPE_FLOAT) {
+        const bool float32 = left_type->has_layout &&
+            left_type->size == 4U &&
+            left_type->value.floating.format == MINIC_CORE_FLOAT_BINARY32;
+        const bool float64 = left_type->has_layout &&
+            left_type->size == 8U &&
+            left_type->value.floating.format == MINIC_CORE_FLOAT_BINARY64;
+        if ((!float32 || op != MINIC_CORE_EXT_FLOAT_FROM_BINARY32) &&
+            (!float64 || op != MINIC_CORE_EXT_FLOAT_FROM_BINARY64))
+            return false;
+        return x86_slot(sel, left, &slot) &&
+            x86_1(sel, float64 ? MINIC_X86_MI_FLDL_FRAME_RBP :
+                MINIC_X86_MI_FLDS_FRAME_RBP, slot) &&
+            x86_x87_store(sel, result);
+    }
+    if (source_ld && result_type->kind == MINIC_CORE_TYPE_FLOAT) {
+        const bool float32 = result_type->has_layout &&
+            result_type->size == 4U &&
+            result_type->value.floating.format == MINIC_CORE_FLOAT_BINARY32;
+        const bool float64 = result_type->has_layout &&
+            result_type->size == 8U &&
+            result_type->value.floating.format == MINIC_CORE_FLOAT_BINARY64;
+        if ((!float32 || op != MINIC_CORE_EXT_FLOAT_TO_BINARY32) &&
+            (!float64 || op != MINIC_CORE_EXT_FLOAT_TO_BINARY64))
+            return false;
+        return x86_x87_load(sel, left) && x86_slot(sel, result, &slot) &&
+            x86_1(sel, float64 ? MINIC_X86_MI_FSTPL_FRAME_RBP :
+                MINIC_X86_MI_FSTPS_FRAME_RBP, slot);
+    }
+    if (result_ld && left_type->kind == MINIC_CORE_TYPE_INTEGER &&
+        left_type->has_layout &&
+        (left_type->size == 4U || left_type->size == 8U)) {
+        const bool unsigned_integer = !left_type->value.integer.is_signed;
+        const bool from32 = left_type->size == 4U;
+        if ((from32 && op != (unsigned_integer ?
+                MINIC_CORE_EXT_FLOAT_FROM_UNSIGNED32 :
+                MINIC_CORE_EXT_FLOAT_FROM_SIGNED32)) ||
+            (!from32 && op != (unsigned_integer ?
+                MINIC_CORE_EXT_FLOAT_FROM_UNSIGNED64 :
+                MINIC_CORE_EXT_FLOAT_FROM_SIGNED64))) return false;
+        if (unsigned_integer && !from32) {
+            if (aux->first == SIZE_MAX || aux->second == SIZE_MAX ||
+                !x86_core_load(sel, left, MINIC_X86_REG_R10) ||
+                !x86_ir(sel, MINIC_X86_MI_SUB64_IR, 16, 64U,
+                    MINIC_X86_REG_RSP) ||
+                !x86_2(sel, MINIC_X86_MI_MOV64_RA,
+                    x86_reg(MINIC_X86_REG_R10, 64U),
+                    x86_addr(MINIC_X86_REG_RSP, 0)) ||
+                !x86_1(sel, MINIC_X86_MI_FILDQ_ADDRESS,
+                    x86_addr(MINIC_X86_REG_RSP, 0)) ||
+                !x86_rr(sel, MINIC_X86_MI_TEST64_RR, 64U,
+                    MINIC_X86_REG_R10, MINIC_X86_REG_R10) ||
+                !x86_1(sel, MINIC_X86_MI_JNS_B, x86_block(aux->second)) ||
+                !minic_machine_builder_add_successor(&sel->builder,
+                    aux->first) ||
+                !minic_machine_builder_add_successor(&sel->builder,
+                    aux->second) ||
+                !minic_machine_builder_set_fallthrough(&sel->builder,
+                    aux->first) ||
+                !minic_machine_builder_position_at(&sel->builder,
+                    aux->first) ||
+                !x86_ir(sel, MINIC_X86_MI_MOVABS64_IR,
+                    (int64_t)UINT64_C(0x43f0000000000000), 64U,
+                    MINIC_X86_REG_R10) ||
+                !x86_2(sel, MINIC_X86_MI_MOV64_RA,
+                    x86_reg(MINIC_X86_REG_R10, 64U),
+                    x86_addr(MINIC_X86_REG_RSP, 0)) ||
+                !x86_1(sel, MINIC_X86_MI_FADDL_ADDRESS,
+                    x86_addr(MINIC_X86_REG_RSP, 0)) ||
+                !x86_1(sel, MINIC_X86_MI_JMP_B, x86_block(aux->second)) ||
+                !minic_machine_builder_add_successor(&sel->builder,
+                    aux->second) ||
+                !minic_machine_builder_position_at(&sel->builder,
+                    aux->second) ||
+                !x86_ir(sel, MINIC_X86_MI_ADD64_IR, 16, 64U,
+                    MINIC_X86_REG_RSP)) return false;
+            return x86_x87_store(sel, result);
+        }
+        return x86_slot(sel, left, &slot) &&
+            x86_1(sel, from32 && !unsigned_integer ?
+                MINIC_X86_MI_FILDL_FRAME_RBP :
+                MINIC_X86_MI_FILDQ_FRAME_RBP, slot) &&
+            x86_x87_store(sel, result);
+    }
+    if (source_ld && result_type->kind == MINIC_CORE_TYPE_INTEGER &&
+        result_type->has_layout &&
+        (result_type->size == 4U || result_type->size == 8U)) {
+        const bool unsigned_integer = !result_type->value.integer.is_signed;
+        const bool to32 = result_type->size == 4U;
+        if ((to32 && op != (unsigned_integer ?
+                MINIC_CORE_EXT_FLOAT_TO_UNSIGNED32 :
+                MINIC_CORE_EXT_FLOAT_TO_SIGNED32)) ||
+            (!to32 && op != (unsigned_integer ?
+                MINIC_CORE_EXT_FLOAT_TO_UNSIGNED64 :
+                MINIC_CORE_EXT_FLOAT_TO_SIGNED64)) ||
+            !x86_x87_load(sel, left) ||
+            !x86_ir(sel, MINIC_X86_MI_SUB64_IR, 16, 64U,
+                MINIC_X86_REG_RSP)) return false;
+        if (!to32 && unsigned_integer) {
+            if (aux->first == SIZE_MAX || aux->second == SIZE_MAX ||
+                aux->third == SIZE_MAX ||
+                !x86_ir(sel, MINIC_X86_MI_MOVABS64_IR,
+                    (int64_t)UINT64_C(0x43e0000000000000), 64U,
+                    MINIC_X86_REG_R10) ||
+                !x86_2(sel, MINIC_X86_MI_MOV64_RA,
+                    x86_reg(MINIC_X86_REG_R10, 64U),
+                    x86_addr(MINIC_X86_REG_RSP, 0)) ||
+                !x86_1(sel, MINIC_X86_MI_FLDL_ADDRESS,
+                    x86_addr(MINIC_X86_REG_RSP, 0)) ||
+                !x86_0(sel, MINIC_X86_MI_FUCOMIP_ST1) ||
+                !x86_1(sel, MINIC_X86_MI_JBE_B, x86_block(aux->second)) ||
+                !minic_machine_builder_add_successor(&sel->builder,
+                    aux->first) ||
+                !minic_machine_builder_add_successor(&sel->builder,
+                    aux->second) ||
+                !minic_machine_builder_set_fallthrough(&sel->builder,
+                    aux->first) ||
+                !minic_machine_builder_position_at(&sel->builder,
+                    aux->first) ||
+                !x86_1(sel, MINIC_X86_MI_FISTTPQ_ADDRESS,
+                    x86_addr(MINIC_X86_REG_RSP, 8)) ||
+                !x86_2(sel, MINIC_X86_MI_MOV64_AR,
+                    x86_addr(MINIC_X86_REG_RSP, 8),
+                    x86_reg(MINIC_X86_REG_RAX, 64U)) ||
+                !x86_1(sel, MINIC_X86_MI_JMP_B, x86_block(aux->third)) ||
+                !minic_machine_builder_add_successor(&sel->builder,
+                    aux->third) ||
+                !minic_machine_builder_position_at(&sel->builder,
+                    aux->second) ||
+                !x86_1(sel, MINIC_X86_MI_FLDL_ADDRESS,
+                    x86_addr(MINIC_X86_REG_RSP, 0)) ||
+                !x86_0(sel, MINIC_X86_MI_FSUBRP_ST1) ||
+                !x86_1(sel, MINIC_X86_MI_FISTTPQ_ADDRESS,
+                    x86_addr(MINIC_X86_REG_RSP, 8)) ||
+                !x86_2(sel, MINIC_X86_MI_MOV64_AR,
+                    x86_addr(MINIC_X86_REG_RSP, 8),
+                    x86_reg(MINIC_X86_REG_RAX, 64U)) ||
+                !x86_2(sel, MINIC_X86_MI_BTS64_IR, x86_imm(63),
+                    x86_reg(MINIC_X86_REG_RAX, 64U)) ||
+                !x86_1(sel, MINIC_X86_MI_JMP_B, x86_block(aux->third)) ||
+                !minic_machine_builder_add_successor(&sel->builder,
+                    aux->third) ||
+                !minic_machine_builder_position_at(&sel->builder,
+                    aux->third)) return false;
+        } else if (!x86_1(sel, MINIC_X86_MI_FISTTPQ_ADDRESS,
+                x86_addr(MINIC_X86_REG_RSP, 8)) ||
+            !x86_2(sel, MINIC_X86_MI_MOV64_AR,
+                x86_addr(MINIC_X86_REG_RSP, 8),
+                x86_reg(MINIC_X86_REG_RAX, 64U))) return false;
+        return x86_ir(sel, MINIC_X86_MI_ADD64_IR, 16, 64U,
+                MINIC_X86_REG_RSP) && x86_result(sel, ins);
+    }
+    return false;
 }
 
 static bool x86_scalar_call(X86CoreSelector *sel,
@@ -1369,6 +1730,7 @@ static bool x86_scalar_call(X86CoreSelector *sel,
          (plan->stack_bytes < 32U || plan->is_variadic))) return false;
     if (result_type->kind != MINIC_CORE_TYPE_VOID && !record_result &&
         !x86_i128_type(sel, ins->core_type_id, NULL) &&
+        !x86_x87_shape(sel, ins->core_type_id) &&
         !x86_float_shape(sel, ins->core_type_id, &fp_double)) {
         size_t bytes;
         bool sign, is_bool;
@@ -1435,6 +1797,9 @@ static bool x86_scalar_call(X86CoreSelector *sel,
     if (x86_i128_type(sel, ins->core_type_id, NULL))
         return x86_i128_store(sel, ins->result,
             MINIC_X86_REG_RAX, MINIC_X86_REG_RDX);
+    if (x86_x87_shape(sel, ins->core_type_id))
+        return plan->calling_convention == MINIC_CALLING_CONVENTION_DEFAULT &&
+            x86_x87_store(sel, ins->result);
     if (x86_float_shape(sel, ins->core_type_id, &fp_double))
         return x86_float_store_xmm(sel, ins->result, 0U, fp_double);
     return x86_result(sel, ins);
@@ -2622,6 +2987,10 @@ static bool x86_core_instruction(X86CoreSelector *sel,
         return x86_dynamic_stack_alloc(sel, ins, instruction_id);
     case MINIC_CORE_INSTRUCTION_CALL:
     case MINIC_CORE_INSTRUCTION_INDIRECT_CALL:
+        if (ins->kind == MINIC_CORE_INSTRUCTION_CALL &&
+            ins->value.call.extended_float_operation !=
+                MINIC_CORE_EXT_FLOAT_NONE)
+            return x86_x87_extended_call(sel, ins, instruction_id);
         return x86_scalar_call(sel, ins, instruction_id);
     case MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT:
         if (x86_i128_type(sel, ins->core_type_id, &sign))
@@ -2643,6 +3012,8 @@ static bool x86_core_instruction(X86CoreSelector *sel,
                 ins->value.integer_value, 64U, MINIC_X86_REG_RAX) &&
             x86_result(sel, ins);
     case MINIC_CORE_INSTRUCTION_FLOATING_CONSTANT:
+        if (x86_x87_shape(sel, ins->core_type_id))
+            return x86_x87_constant(sel, ins);
         return x86_float_shape(sel, ins->core_type_id, &is_bool) &&
             x86_ir(sel, MINIC_X86_MI_MOVABS64_IR,
                 (int64_t)ins->value.floating_bits,
@@ -2884,8 +3255,12 @@ static bool x86_core_terminator(X86CoreSelector *sel, size_t core_id) {
             } else return false;
         } else if (type->kind == MINIC_CORE_TYPE_FLOAT) {
             bool fp_double;
-            if (term->return_value >= sel->core->value_count ||
-                !x86_float_shape(sel, id, &fp_double) ||
+            if (term->return_value >= sel->core->value_count) return false;
+            if (x86_x87_shape(sel, id)) {
+                if (minic_core_function_calling_convention(sel->core) !=
+                        MINIC_CALLING_CONVENTION_DEFAULT ||
+                    !x86_x87_load(sel, term->return_value)) return false;
+            } else if (!x86_float_shape(sel, id, &fp_double) ||
                 !x86_float_load_xmm(sel, term->return_value,
                     0U, MINIC_X86_REG_RAX, fp_double)) return false;
         } else if (x86_i128_type(sel, id, NULL)) {
@@ -2998,6 +3373,22 @@ bool minic_x86_64_machine_select_core_subset(
                         NULL, false, true, &aux->first) ||
                     !minic_machine_builder_create_block(&sel.builder,
                         NULL, false, true, &aux->second)) goto cleanup;
+            } else if (ins->kind == MINIC_CORE_INSTRUCTION_CALL &&
+                ins->value.call.extended_float_operation ==
+                    MINIC_CORE_EXT_FLOAT_FROM_UNSIGNED64) {
+                if (!minic_machine_builder_create_block(&sel.builder,
+                        NULL, false, true, &aux->first) ||
+                    !minic_machine_builder_create_block(&sel.builder,
+                        NULL, false, true, &aux->second)) goto cleanup;
+            } else if (ins->kind == MINIC_CORE_INSTRUCTION_CALL &&
+                ins->value.call.extended_float_operation ==
+                    MINIC_CORE_EXT_FLOAT_TO_UNSIGNED64) {
+                if (!minic_machine_builder_create_block(&sel.builder,
+                        NULL, false, true, &aux->first) ||
+                    !minic_machine_builder_create_block(&sel.builder,
+                        NULL, false, true, &aux->second) ||
+                    !minic_machine_builder_create_block(&sel.builder,
+                        NULL, false, true, &aux->third)) goto cleanup;
             } else if ((ins->kind ==
                     MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_LEFT ||
                     ins->kind ==

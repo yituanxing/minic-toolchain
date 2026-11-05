@@ -2716,6 +2716,10 @@ bool minic_riscv_machine_select_core_subset(MinicMachineFunction *machine,
     const MinicCoreFunction *core;
     const MinicTargetInfo *target;
     const MinicRiscvPhysicalFrame *frame;
+    const char *reject_phase = "input_contract";
+    const MinicCoreFunction *trace_core = plan != NULL ? plan->core : NULL;
+    size_t reject_block = SIZE_MAX;
+    unsigned reject_terminator_kind = UINT_MAX;
     size_t i, id;
     bool success = false;
     if (machine == NULL || plan == NULL || plan->core == NULL ||
@@ -2755,8 +2759,16 @@ bool minic_riscv_machine_select_core_subset(MinicMachineFunction *machine,
         (core->value_count != 0U && plan->value_offsets == NULL) ||
         (core->object_count != 0U && plan->object_offsets == NULL) ||
         !minic_machine_function_initialize(machine, target, core->name,
-            isa.codegen_features))
+            isa.codegen_features)) {
+        if (getenv("MINIC_RV_MACHINE_TRACE") != NULL)
+            (void)fprintf(stderr,
+                "RV_TYPED_REJECT_PHASE function=%s stage=input_contract "
+                "block=%zu terminator_kind=%u\n",
+                trace_core != NULL && trace_core->name != NULL
+                    ? trace_core->name : "<unknown>",
+                SIZE_MAX, UINT_MAX);
         return false;
+    }
     machine->calling_convention =
         minic_core_function_calling_convention(core);
     machine->frame_size = frame->frame_size;
@@ -2764,6 +2776,7 @@ bool minic_riscv_machine_select_core_subset(MinicMachineFunction *machine,
     machine->has_dynamic_stack = frame->has_dynamic_stack;
     sel.plan = plan;
     sel.xlen = isa.xlen;
+    reject_phase = "builder_alloc";
     if (!minic_machine_builder_initialize(&sel.builder, machine)) goto done;
     if (core->block_count > SIZE_MAX / sizeof(*sel.core_blocks)) goto done;
     sel.core_blocks = calloc(core->block_count, sizeof(*sel.core_blocks));
@@ -2797,6 +2810,7 @@ bool minic_riscv_machine_select_core_subset(MinicMachineFunction *machine,
     }
     if (!minic_core_function_mark_reachable_blocks(
             core, sel.reachable, core->block_count)) goto done;
+    reject_phase = "block_map";
     if (!minic_machine_builder_create_block(&sel.builder,
         NULL, false, true, &id) || id != 0U) goto done;
     /* Core entry first (the physical ABI prologue falls through to block1),
@@ -2806,6 +2820,7 @@ bool minic_riscv_machine_select_core_subset(MinicMachineFunction *machine,
             (i <= core->entry_block ? i - 1U : i);
         const MinicCoreBlock *block = &core->blocks[core_id];
         if (!sel.reachable[core_id]) continue;
+        reject_block = core_id;
         if (!minic_machine_builder_create_block(&sel.builder,
             NULL, true, true, &sel.far_entries[core_id])) goto done;
         if (!minic_machine_builder_create_block(&sel.builder,
@@ -2842,6 +2857,8 @@ bool minic_riscv_machine_select_core_subset(MinicMachineFunction *machine,
                 goto done;
         }
     }
+    reject_phase = "prologue";
+    reject_block = core->entry_block;
     if (sel.far_entries[core->entry_block] != 1U ||
         !minic_machine_builder_create_block(&sel.builder,
             NULL, true, true, &sel.epilogue_block) ||
@@ -2851,6 +2868,9 @@ bool minic_riscv_machine_select_core_subset(MinicMachineFunction *machine,
         const MinicCoreBlock *block = &core->blocks[i];
         size_t j;
         if (!sel.reachable[i]) continue;
+        reject_phase = "block_entry";
+        reject_block = i;
+        reject_terminator_kind = UINT_MAX;
         if (!minic_machine_builder_position_at(&sel.builder,
                 sel.far_entries[i]) ||
             !rv_j(&sel, sel.core_blocks[i])) goto done;
@@ -2872,7 +2892,11 @@ bool minic_riscv_machine_select_core_subset(MinicMachineFunction *machine,
             }
             minic_machine_builder_clear_origin(&sel.builder);
         }
+        reject_phase = "terminator";
+        reject_terminator_kind = (unsigned)block->terminator.kind;
         if (!rv_core_terminator(&sel, i)) goto done;
+        reject_phase = "overflow_island";
+        reject_terminator_kind = UINT_MAX;
         for (j = 0U; j < block->instruction_count; ++j) {
             const MinicCoreInstructionId instruction_id =
                 block->instructions[j];
@@ -2883,16 +2907,28 @@ bool minic_riscv_machine_select_core_subset(MinicMachineFunction *machine,
                 goto done;
         }
     }
+    reject_phase = "epilogue";
+    reject_block = SIZE_MAX;
     if (!minic_riscv_machine_select_epilogue(&sel.builder, frame,
             sel.epilogue_block)) goto done;
     /* External/local-label and asm-goto entry roots belong to Core's common
      * closure. A not-yet-migrated multi-entry MachineCFG must be rejected as
      * a whole, never silently drop or falsely accept its reachable blocks. */
-    if (!minic_machine_core_coverage_verify(core, sel.reachable, machine) ||
-        !minic_riscv_machine_gnu_asm_policy(target, &policy) ||
-        !minic_machine_gnu_asm_preflight(machine, &policy)) goto done;
+    reject_phase = "coverage";
+    if (!minic_machine_core_coverage_verify(core, sel.reachable, machine))
+        goto done;
+    reject_phase = "gnu_policy";
+    if (!minic_riscv_machine_gnu_asm_policy(target, &policy)) goto done;
+    reject_phase = "gnu_preflight";
+    if (!minic_machine_gnu_asm_preflight(machine, &policy)) goto done;
     success = true;
 done:
+    if (!success && getenv("MINIC_RV_MACHINE_TRACE") != NULL)
+        (void)fprintf(stderr,
+            "RV%u_TYPED_REJECT_PHASE function=%s stage=%s "
+            "block=%zu terminator_kind=%u\n",
+            sel.xlen, core->name, reject_phase, reject_block,
+            reject_terminator_kind);
     free(sel.core_blocks);
     free(sel.far_entries);
     free(sel.reachable);
