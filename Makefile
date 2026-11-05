@@ -774,6 +774,10 @@ check-minild-x86-kernel-pie-image: $(MINILD_BINARY)
 	MINILD="$(abspath $(MINILD_BINARY))" \
 	bash tests/linker/probe-minild-x86-kernel-pie-image.sh
 
+.PHONY: check-minild-x86-zoffset-dependency
+check-minild-x86-zoffset-dependency:
+	bash tests/linker/probe-minild-x86-zoffset-dependency.sh
+
 .PHONY: check-minild-force-undefined-archive
 check-minild-force-undefined-archive: $(MINILD_BINARY)
 	MINILD="$(abspath $(MINILD_BINARY))" \

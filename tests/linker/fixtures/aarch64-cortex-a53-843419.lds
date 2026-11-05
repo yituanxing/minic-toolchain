@@ -14,4 +14,6 @@ SECTIONS {
   . = ALIGN(0x1000);
   .rela.dyn : { *(.rela .rela*) }
   .data : { *(.data*) }
+  .got : { *(.got) }
+  .got.plt : { *(.got.plt) }
 }

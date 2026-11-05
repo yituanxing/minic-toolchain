@@ -3,6 +3,8 @@ ENTRY(_start)
 SECTIONS {
   . = 0x400000;
   .text : { *(.text) }
+  .got : { *(.got) }
+  .got.plt : { *(.got.plt) }
   .rela.dyn : { *(.rela.dyn) }
   /* Isolate the dynamic-relocation contract from unrelated orphan-section
    * placement in ordinary GNU shared-library emulations. */

@@ -40,9 +40,9 @@ typedef struct MiniLdLoongarchStaticGot {
     size_t ifunc_rela_section;
     size_t ifunc_count;
     /* -static -pie may use ET_EXEC with -n, yet LoongArch still needs its
-     * image-base fixups at boot.  GNU BFD reserves an R_LARCH_64 slot before
-     * the script discards sections, then leaves unused slots as R_LARCH_NONE.
-     * Preserve this distinction rather than treating -n as a PIC request. */
+     * image-base fixups at boot.  GNU BFD pre-reserves R_LARCH_32/R_LARCH_64
+     * dynrel slots before final symbol/section pruning, leaving unused slots
+     * as R_NONE.  Preserve allocation lifetime separately from emission. */
     size_t relative_reserved_count;
     MiniLdLoongRelaxPlan *relax;
     bool present;
@@ -279,28 +279,36 @@ static bool minild_loongarch_reserve_static_relocations(
                 return false;
             }
             source = &state->work.sections[reloc->section];
-            /* GNU BFD sizes global symbol dynrel capacity from its input
-             * R_LARCH_64 references, even when the winning definition is
-             * later found to be SHN_ABS.  The absolute value is emitted
-             * directly and that reserved slot remains R_NONE.  In contrast,
-             * local ABS symbols are constants which never need a slot.
-             * Global dynrel lists also survive source /DISCARD/ pruning;
-             * local lists follow the source section's lifetime. */
-            const bool global =
-                reloc->symbol < state->resolver.count &&
-                ELF64_ST_BIND(state->resolver.entries[reloc->symbol].info) !=
-                    STB_LOCAL;
-            if (type == R_LARCH_64 && (source->flags & SHF_ALLOC) != 0U &&
-                reloc->symbol < state->resolver.count &&
-                (state->resolver.entries[reloc->symbol].section !=
-                     MINILD_SECTION_ABS || global) &&
-                (!(source->gc_discarded || source->script_discard) || global)) {
-                if (got->relative_reserved_count == SIZE_MAX) {
-                    fprintf(state->diagnostics,
-                            "minic-ld: loongarch-static-relative-reserve-overflow\n");
-                    return false;
+            /* GNU BFD records both R_LARCH_32 and R_LARCH_64 in its
+             * dynamic-relocation candidate lists.  A global SHN_ABS
+             * definition still consumes its early reservation, later left
+             * as R_NONE.  A local ABS constant never consumes a slot.
+             * Global source /DISCARD/ does not reclaim candidate slots,
+             * unlike section-local lists.  Undefined weak symbols resolve
+             * to zero in static PIE, so BFD drops their dynrel list before
+             * allocating .rela.dyn. */
+            if ((type == R_LARCH_32 || type == R_LARCH_64) &&
+                (source->flags & SHF_ALLOC) != 0U &&
+                reloc->symbol < state->resolver.count) {
+                const MiniLdResolvedSymbol *symbol =
+                    &state->resolver.entries[reloc->symbol];
+                const unsigned bind = ELF64_ST_BIND(symbol->info);
+                const bool global = bind != STB_LOCAL;
+                const bool unresolved_weak =
+                    bind == STB_WEAK &&
+                    symbol->section == MINILD_SECTION_UNDEF;
+
+                if (!unresolved_weak &&
+                    (symbol->section != MINILD_SECTION_ABS || global) &&
+                    (!(source->gc_discarded || source->script_discard) ||
+                     global)) {
+                    if (got->relative_reserved_count == SIZE_MAX) {
+                        fprintf(state->diagnostics,
+                                "minic-ld: loongarch-static-relative-reserve-overflow\n");
+                        return false;
+                    }
+                    ++got->relative_reserved_count;
                 }
-                ++got->relative_reserved_count;
             }
             if (!minild_loongarch_static_reloc_source_live(state, reloc,
                                                           &live)) {
@@ -310,7 +318,7 @@ static bool minild_loongarch_reserve_static_relocations(
                 continue;
             }
 
-            if (type == R_LARCH_64 ||
+            if (type == R_LARCH_64 || type == R_LARCH_32 ||
                 minild_loongarch_static_uses_got(type) ||
                 minild_loongarch_static_uses_tls_ie(type)) {
                 needs_got = true;
@@ -546,7 +554,8 @@ static bool minild_loongarch_fill_static_relocations(
             const MiniLdResolvedSymbol *symbol;
             bool live;
 
-            if (reloc->type != R_LARCH_64) {
+            if (reloc->type != R_LARCH_64 &&
+                reloc->type != R_LARCH_32) {
                 continue;
             }
             if (!minild_static_reloc_source(

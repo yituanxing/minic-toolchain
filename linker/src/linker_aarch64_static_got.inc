@@ -373,6 +373,19 @@ static bool minild_aarch64_reserve_static_relocations(
         }
         offsets[reloc->symbol] = aligned;
     }
+    if (state->kernel_shared_image && !got->present) {
+        /* GNU BFD creates the shared-image GOT header even when there are
+         * no GOT-using instructions. Direct ABS64 sites still need its
+         * presence to reproduce the kernel's output-section layout. */
+        if (!find_or_add_section(state, ".got", SHT_PROGBITS,
+                                 SHF_ALLOC | SHF_WRITE, 8U, 8U,
+                                 &got->section) ||
+            !section_append_zero(&state->work.sections[got->section], 8U)) {
+            return false;
+        }
+        state->work.sections[got->section].gc_discarded = false;
+        got->present = true;
+    }
     /* AArch64 shared images reserve the first GOT word and the three-word
      * GOTPLT header even when no PLT entries are emitted. */
     if (state->kernel_shared_image && got->present) {

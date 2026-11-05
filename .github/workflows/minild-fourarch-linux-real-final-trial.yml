@@ -8,11 +8,10 @@ name: MiniLD Four-Arch Real Linux Final Link Trial
 # certification by MiniLD. RV64 has its own frozen GNU Kbuild replay lane.
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - refactor/minias-target-isa-abi-core
-    paths:
-      - .github/workflows/minild-fourarch-linux-real-final-trial.yml
+
+# Rebuilding four GNU Linux trees is a provenance-refresh operation, not a
+# normal MiniLD iteration gate. Use the SHA-verified frozen Kbuild replay
+# workflow for branch pushes; run this producer explicitly when inputs change.
 
 permissions:
   contents: read

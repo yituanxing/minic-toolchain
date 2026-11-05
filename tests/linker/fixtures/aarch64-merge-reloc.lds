@@ -7,4 +7,6 @@ SECTIONS {
   .rodata : { *(.rodata.str1.8) }
   . = ALIGN(0x1000);
   .data : { *(.data) }
+  .got : { *(.got) }
+  .got.plt : { *(.got.plt) }
 }
