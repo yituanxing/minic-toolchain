@@ -190,6 +190,8 @@ preflight() {
       arch/x86/boot/compressed/mkpiggy arch/x86/boot/tools/build \
       arch/x86/tools/relocs arch/x86/boot/voffset.h arch/x86/boot/zoffset.h \
       arch/x86/boot/setup.bin arch/x86/boot/bzImage \
+      arch/x86/boot/compressed/vmlinux.bin \
+      arch/x86/boot/compressed/vmlinux.relocs \
       arch/x86/boot/compressed/.vmlinux.cmd arch/x86/boot/.setup.elf.cmd; do
     must_file "$MINILD_X86_OUT/$name"
   done
@@ -225,6 +227,15 @@ PY
     >"$MINILD_X86_EV/frozen-GNU-setup-bin.sha256"
   cp "$MINILD_X86_OUT/arch/x86/boot/bzImage" "$MINILD_X86_EV/original-GNU-bzImage"
   cp "$MINILD_X86_OUT/arch/x86/boot/setup.elf" "$MINILD_X86_EV/original-GNU-setup.elf"
+  # Must snapshot these *before* the original Kbuild postlink is replayed:
+  # neither GNU input can be recovered after vmlinux and .relocs are replaced.
+  cp "$MINILD_X86_OUT/arch/x86/boot/compressed/vmlinux.bin" \
+    "$MINILD_X86_EV/frozen-GNU-vmlinux.bin"
+  cp "$MINILD_X86_OUT/arch/x86/boot/compressed/vmlinux.relocs" \
+    "$MINILD_X86_EV/frozen-GNU-vmlinux.relocs"
+  sha256sum "$MINILD_X86_EV/frozen-GNU-vmlinux.bin" \
+    "$MINILD_X86_EV/frozen-GNU-vmlinux.relocs" \
+    >"$MINILD_X86_EV/frozen-GNU-compressed-payload.sha256"
   sha256sum "$MINILD_X86_EV/original-GNU-setup.elf" \
     >"$MINILD_X86_EV/original-GNU-setup-elf.sha256"
   cp "$MINILD_X86_OUT/arch/x86/boot/voffset.h" "$MINILD_X86_EV/frozen-voffset.h"
@@ -287,6 +298,23 @@ full_link() {
   objcopy --remove-section='.rel.*' --remove-section='.rel__*' \
     --remove-section='.rela.*' --remove-section='.rela__*' vmlinux ||
     die x86_postlink_objcopy_failed
+  # Same actual Kbuild objcopy input bytes as the compression stage; inspect
+  # ELF metadata, allocated section bytes and three x86 relocation classes
+  # independently. Changes are evidence, not a reason to counterfeit GNU
+  # bytes or weaken subsequent ZOFFSET/QEMU gates.
+  objcopy -R .comment -S vmlinux arch/x86/boot/compressed/vmlinux.bin ||
+    die x86_payload_diagnostic_objcopy_failed
+  cp arch/x86/boot/compressed/vmlinux.relocs \
+    "$MINILD_X86_EV/MiniLD-vmlinux.relocs"
+  python3 "$repo/tools/ci/minild-x86-frozen-payload-diff.py" \
+    "$MINILD_X86_EV/frozen-GNU-vmlinux.bin" \
+    arch/x86/boot/compressed/vmlinux.bin \
+    "$MINILD_X86_EV/frozen-GNU-vmlinux.relocs" \
+    arch/x86/boot/compressed/vmlinux.relocs \
+    >"$MINILD_X86_EV/GNU-vs-MiniLD-compressed-payload-diff.txt" ||
+    die x86_payload_diagnostic_failed
+  grep -E '^(ELF (GNU|MINI)|RELOCS (GNU|MINI)|RELOCS_CLASS)' \
+    "$MINILD_X86_EV/GNU-vs-MiniLD-compressed-payload-diff.txt"
   verify_immutable
   sha256sum vmlinux System.map arch/x86/boot/compressed/vmlinux.relocs \
     >"$MINILD_X86_EV/MiniLD-final-vmlinux-and-relocs.sha256"
@@ -322,8 +350,6 @@ PY
 
 mini_boot_link() {
   local name=$1 cmd=$2 output=$3
-  # Under `set -u`, bash expands all assignments in one `local` command
-  # before assigning `name`; the argv path must be bound afterwards.
   local argv_file="$MINILD_X86_EV/$name.minild.argv0"
   local -a args=()
   captured_link_args "$cmd" "$output" "$argv_file"

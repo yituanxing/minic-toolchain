@@ -828,6 +828,12 @@ check-minild-aarch64-merge-insn-relocs: $(MINIAS_BINARY) $(MINILD_BINARY)
 	MINILD="$(abspath $(MINILD_BINARY))" \
 	bash tests/linker/probe-aarch64-merge-insn-relocs.sh
 
+.PHONY: check-minild-aarch64-discarded-dynrel
+check-minild-aarch64-discarded-dynrel: $(MINIAS_BINARY) $(MINILD_BINARY)
+	MINIAS="$(abspath $(MINIAS_BINARY))" \
+	MINILD="$(abspath $(MINILD_BINARY))" \
+	bash tests/linker/probe-aarch64-discarded-dynrel.sh
+
 .PHONY: check-minild-loongarch-static-pie
 check-minild-loongarch-static-pie: $(MINIAS_BINARY) $(MINILD_BINARY)
 	MINIAS="$(abspath $(MINIAS_BINARY))" \
@@ -937,6 +943,7 @@ check-minild-five-arch-linux-linker-boundary: \
 	check-minild-aarch64-cortex-a53-843419 \
 	check-minild-aarch64-static-instruction-relocs \
 	check-minild-aarch64-merge-insn-relocs \
+	check-minild-aarch64-discarded-dynrel \
 	check-minild-loongarch-static-pie \
 	check-minild-loongarch-pcala-relax-fixedpoint \
 	check-minild-static-script-discard-reloc-reserve \

@@ -71,6 +71,7 @@ jobs:
             check-minild-aarch64-static-instruction-relocs \
             check-minild-aarch64-merge-insn-relocs \
             check-minild-aarch64-merge-reloc-target \
+            check-minild-aarch64-discarded-dynrel \
             check-minild-loongarch-static-relocs \
             check-minild-loongarch-pcala-relax-fixedpoint \
             check-minild-static-script-discard-reloc-reserve \

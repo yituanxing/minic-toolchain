@@ -37,6 +37,7 @@ typedef struct MiniLdAarch64ErratumPlan {
 
 typedef struct MiniLdAarch64StaticGot {
     size_t section;
+    size_t kernel_gotplt_section;
     size_t symbol_count;
     size_t *slot_offsets;
     /* TLS IE entries hold TP-relative offsets, never absolute symbol VMAs.
@@ -237,6 +238,7 @@ static bool minild_aarch64_reserve_static_relocations(
     }
     plan->target_data = got;
     got->section = SIZE_MAX;
+    got->kernel_gotplt_section = SIZE_MAX;
     got->ifunc_stub_section = SIZE_MAX;
     got->ifunc_got_section = SIZE_MAX;
     got->ifunc_rela_section = SIZE_MAX;
@@ -346,11 +348,19 @@ static bool minild_aarch64_reserve_static_relocations(
         }
         if (!got->present) {
             if (!find_or_add_section(state, ".got", SHT_PROGBITS,
-                                     SHF_ALLOC | SHF_WRITE, 8U, 0U,
+                                     SHF_ALLOC | SHF_WRITE, 8U, 8U,
                                      &got->section)) {
                 return false;
             }
             state->work.sections[got->section].gc_discarded = false;
+            /* AArch64's shared-image GOT starts with the ABI-reserved
+             * _GLOBAL_OFFSET_TABLE_ entry.  Ordinary non-PIE static links
+             * do not need this initial header slot. */
+            if (state->kernel_shared_image &&
+                !section_append_zero(&state->work.sections[got->section],
+                                     8U)) {
+                return false;
+            }
             got->present = true;
         }
         section = &state->work.sections[got->section];
@@ -362,6 +372,21 @@ static bool minild_aarch64_reserve_static_relocations(
             return false;
         }
         offsets[reloc->symbol] = aligned;
+    }
+    /* AArch64 shared images reserve the first GOT word and the three-word
+     * GOTPLT header even when no PLT entries are emitted. */
+    if (state->kernel_shared_image && got->present) {
+        MiniLdSection *gotplt;
+        if (!find_or_add_section(state, ".got.plt", SHT_PROGBITS,
+                                 SHF_ALLOC | SHF_WRITE, 8U, 8U,
+                                 &got->kernel_gotplt_section)) {
+            return false;
+        }
+        gotplt = &state->work.sections[got->kernel_gotplt_section];
+        gotplt->gc_discarded = false;
+        if (!section_append_zero(gotplt, 24U)) {
+            return false;
+        }
     }
     if (state->kernel_shared_image) {
         MiniLdSection *rela;
@@ -382,7 +407,21 @@ static bool minild_aarch64_reserve_static_relocations(
             }
             source = &state->work.sections[reloc->section];
             if ((source->flags & SHF_ALLOC) != 0U &&
-                !source->gc_discarded && !source->script_discard) {
+                (source->gc_discarded || source->script_discard)) {
+                /* GNU BFD charges ordinary global/weak-symbol ABS64
+                 * references in allocated inputs to dynamic relocation
+                 * capacity before linker-script /DISCARD/ removes those
+                 * inputs.  The removed references leave R_NONE records in
+                 * the reserved RELA region. Local-symbol relocations have
+                 * no such global dynrel reservation.  These inert records
+                 * must remain zero and follow the live RELATIVE records. */
+                if (reloc->symbol < state->resolver.count &&
+                    ELF64_ST_BIND(
+                        state->resolver.entries[reloc->symbol].info) !=
+                        STB_LOCAL) {
+                    ++got->kernel_relative_reserved_count;
+                }
+            } else if ((source->flags & SHF_ALLOC) != 0U) {
                 ++got->kernel_relative_reserved_count;
             }
         }
@@ -480,6 +519,24 @@ static bool minild_aarch64_fill_static_relocations(
             MiniLdSection *source;
             bool live;
 
+            if (state->kernel_shared_image &&
+                getenv("MINILD_PROFILE_AARCH64_RELOC") != NULL &&
+                reloc->type == R_AARCH64_ABS64 &&
+                !minild_aarch64_kernel_relative_target(state, reloc) &&
+                reloc->section < state->work.count &&
+                (state->work.sections[reloc->section].flags & SHF_ALLOC) != 0U &&
+                !state->work.sections[reloc->section].script_discard &&
+                !state->work.sections[reloc->section].gc_discarded &&
+                reloc->symbol < state->resolver.count) {
+                const MiniLdResolvedSymbol *s =
+                    &state->resolver.entries[reloc->symbol];
+                fprintf(state->diagnostics,
+                        "minic-ld: aarch64-live-abs64-nonrebase:symbol=%s:shndx=%d:bind=%u:src=%s:offset=%llu\n",
+                        s->name, s->section,
+                        (unsigned)ELF64_ST_BIND(s->info),
+                        state->work.sections[reloc->section].name,
+                        (unsigned long long)reloc->offset);
+            }
             if (!minild_aarch64_kernel_relative_target(state, reloc)) {
                 continue;
             }
@@ -575,12 +632,10 @@ static bool minild_aarch64_fill_static_relocations(
                                                           i, &value)) {
                     return false;
                 }
-                if (!tls_ie && state->kernel_shared_image &&
-                    minild_aarch64_kernel_symbol_rebases(state, i)) {
-                    /* --no-apply-dynamic-relocs: RELATIVE record owns this
-                     * pointer; leave the input zero in the GOT slot. */
-                    continue;
-                }
+                /* GNU keeps the fully linked initial contents of local GOT
+                 * entries even when --no-apply-dynamic-relocs is active.
+                 * The paired RELATIVE record carries the same addend so the
+                 * runtime loader can rebase this preinitialised pointer. */
                 if (!range_ok(offset, 8U, section->size)) {
                     fprintf(state->diagnostics,
                             "minic-ld: invalid-aarch64-static-got-slot\n");

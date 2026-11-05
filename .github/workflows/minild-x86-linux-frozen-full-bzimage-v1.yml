@@ -31,6 +31,7 @@ on:
     paths:
       - .github/workflows/minild-x86-linux-frozen-full-bzimage-v1.yml
       - tools/ci/minild-x86-linux-frozen-full-bzimage-v1.sh
+      - tools/ci/minild-x86-frozen-payload-diff.py
       - tests/linker/probe-minild-x86-frozen-manifest-v1.sh
       - tests/linker/probe-minild-x86-boot-dispatch-v1.sh
       - tests/linker/probe-x86-no-linker-generated-unwind.sh
