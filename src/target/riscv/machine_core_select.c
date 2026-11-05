@@ -2332,9 +2332,130 @@ static bool rv_core_scalar_input_source_asm(RvCoreSelection *sel,
         source, 0U, bindings, count, NULL, 0U, false, false);
 }
 
-/* Preserve exactly the source-owned, sealed target asm event. Structured
- * register inputs have one narrow, fully physically bound owner above;
- * output, memory, asm-goto, and larger forms still fail closed. */
+/* Source-owned GNU =r / +r effects carry a Core pointer to the actual
+ * lvalue. The physical output register must be written back AFTER the ASM,
+ * including unaligned and narrow objects; it is never a fake C SSA result.
+ * Transport every byte explicitly, so a packed Linux field cannot turn an
+ * otherwise valid output into an unaligned LW/SW/LD/SD. */
+static bool rv_core_asm_lvalue(RvCoreSelection *sel,
+    MinicCoreValueId address, unsigned *bytes, bool *sign) {
+    const MinicCoreFunction *fn = sel->plan->core;
+    const MinicCoreTypeContext *types = fn->type_context;
+    const MinicCoreType *pointer;
+    bool ptr;
+    unsigned ptr_bytes;
+    bool ptr_signed;
+    if (types == NULL || address >= fn->value_count ||
+        !rv_type(sel, fn->values[address].core_type_id,
+            &ptr_bytes, &ptr_signed, &ptr) || !ptr)
+        return false;
+    pointer = minic_core_type_get(types, minic_core_type_unqualified(types,
+        fn->values[address].core_type_id));
+    return pointer != NULL && pointer->kind == MINIC_CORE_TYPE_POINTER &&
+        rv_type(sel, pointer->value.pointer.pointee, bytes, sign, &ptr);
+}
+static bool rv_core_asm_lvalue_transfer(RvCoreSelection *sel,
+    MinicCoreValueId address, unsigned bytes, bool load) {
+    unsigned i;
+    if (bytes == 0U || bytes > sel->xlen / 8U ||
+        !rv_load(sel, address, RV_T2) ||
+        (load && !rv_li(sel, RV_T0, 0))) return false;
+    for (i = 0U; i < bytes; ++i) {
+        if (load) {
+            if (!rv_byte_transfer(sel, true, RV_T1, RV_T2, i, false) ||
+                (i != 0U && !rv_rri(sel, MINIC_RISCV_MACHINE_SLLI,
+                    RV_T1, RV_T1, (int64_t)(i * 8U))) ||
+                !rv_rrr(sel, MINIC_RISCV_MACHINE_OR,
+                    RV_T0, RV_T0, RV_T1)) return false;
+        } else if ((i == 0U
+                ? !rv_rr(sel, MINIC_RISCV_MACHINE_MV, RV_T1, RV_T0)
+                : !rv_rri(sel, MINIC_RISCV_MACHINE_SRLI,
+                    RV_T1, RV_T0, (int64_t)(i * 8U))) ||
+            !rv_byte_transfer(sel, false, RV_T1, RV_T2, i, false))
+            return false;
+    }
+    return true;
+}
+
+/* This common RV32/RV64 physical binding owns the canonical GNU scalar
+ * register output family. There is no temporary alias between output x5
+ * and input x6, and the remaining t-registers are reserved for Core frame
+ * transfers. Source text stays SOURCE_ASM, never a selected CSR opcode or
+ * a manually reproduced assembly string. Complex roles remain fail-closed. */
+static bool rv_core_scalar_output_source_asm(RvCoreSelection *sel,
+    const MinicCoreInstruction *ins, const MinicCoreInlineAsm *source) {
+    const MinicCoreFunction *fn = sel->plan->core;
+    const MinicCoreStructuredInlineAsmOperand *roles =
+        ins->value.structured_inline_asm.operands;
+    const size_t count = ins->value.structured_inline_asm.operand_count;
+    const bool ssa = count != 0U &&
+        roles[0].kind == MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_RESULT;
+    const bool readwrite = count != 0U &&
+        roles[0].kind == MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE;
+    MinicMachineOperand bindings[2];
+    unsigned bytes, input_bytes;
+    bool sign, pointer, input_sign, input_pointer;
+    if (source->operand_plan_owner != MINIC_ASM_OPERAND_PLAN_GENERIC_STRUCTURED ||
+        source->target_machine_form_id != 0U ||
+        source->target_machine_form_variant != 0U ||
+        source->register_clobber_count != 0U ||
+        source->resolved_immediate_count != 0U ||
+        source->deferred_immediate_symbol != NULL ||
+        source->is_goto || !source->is_volatile ||
+        source->template_length == 0U ||
+        count == 0U || count > 2U ||
+        roles[0].operand_index != 0U ||
+        (roles[0].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT &&
+         !ssa && !readwrite) ||
+        roles[0].has_fixed_register_binding ||
+        roles[0].early_clobber != roles[0].physical_early_clobber ||
+        (readwrite && roles[0].early_clobber) ||
+        roles[0].has_tied_output ||
+        roles[0].physical_read_write != readwrite ||
+        (ssa ? (ins->result >= fn->value_count ||
+                roles[0].value != MINIC_CORE_VALUE_INVALID ||
+                !rv_type(sel, ins->core_type_id, &bytes, &sign, &pointer)) :
+               (ins->result != MINIC_CORE_VALUE_INVALID ||
+                !rv_core_asm_lvalue(sel, roles[0].value, &bytes, &sign))))
+        return false;
+    if (count == 2U &&
+        (roles[1].operand_index != 1U ||
+         roles[1].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT ||
+         roles[1].has_fixed_register_binding || roles[1].early_clobber ||
+         roles[1].physical_early_clobber ||
+         roles[1].physical_read_write || roles[1].has_tied_output ||
+         roles[1].value >= fn->value_count ||
+         !rv_type(sel, fn->values[roles[1].value].core_type_id,
+             &input_bytes, &input_sign, &input_pointer))) return false;
+    (void)pointer;
+    (void)input_bytes;
+    (void)input_sign;
+    (void)input_pointer;
+    /* The output destination is materialized only after SOURCE_ASM. A
+     * read/write output carries its pre-ASM value in the SAME register. */
+    if ((readwrite && !rv_core_asm_lvalue_transfer(sel,
+            roles[0].value, bytes, true)) ||
+        (count == 2U && !rv_load(sel, roles[1].value, RV_T1))) return false;
+    bindings[0] = rv_reg(sel->xlen, RV_T0,
+        MINIC_MACHINE_REGISTER_WRITE |
+            (readwrite ? MINIC_MACHINE_REGISTER_READ : 0U));
+    bindings[0].asm_constraint = readwrite ? "+r" :
+        (roles[0].physical_early_clobber ? "=&r" : "=r");
+    if (count == 2U) {
+        bindings[1] = rv_reg(sel->xlen, RV_T1,
+            MINIC_MACHINE_REGISTER_READ);
+        bindings[1].asm_constraint = "r";
+    }
+    if (!minic_machine_builder_emit_core_source_asm(&sel->builder,
+            source, 0U, bindings, count, NULL, 0U, false, false) ||
+        !rv_normalize(sel, RV_T0, bytes, sign)) return false;
+    return ssa ? rv_store(sel, ins->result, RV_T0) :
+        rv_core_asm_lvalue_transfer(sel, roles[0].value, bytes, false);
+}
+
+/* Preserve exactly the source-owned, sealed target asm event. All accepted
+ * scalar register roles have explicit pre/post-ASM machine transfers.
+ * Memory, asm-goto, and larger forms still fail closed. */
 static bool rv_core_unbound_source_asm(RvCoreSelection *sel,
     const MinicCoreInstruction *ins) {
     const MinicCoreFunction *fn = sel->plan->core;
@@ -2353,8 +2474,12 @@ static bool rv_core_unbound_source_asm(RvCoreSelection *sel,
         source->goto_second_target != MINIC_CORE_BLOCK_INVALID)
         return false;
     if (ins->kind == MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM &&
-        ins->value.structured_inline_asm.operand_count != 0U)
-        return rv_core_scalar_input_source_asm(sel, ins, source);
+        ins->value.structured_inline_asm.operand_count != 0U) {
+        if (ins->value.structured_inline_asm.operands[0].kind ==
+            MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT)
+            return rv_core_scalar_input_source_asm(sel, ins, source);
+        return rv_core_scalar_output_source_asm(sel, ins, source);
+    }
     return minic_machine_builder_emit_core_source_asm(&sel->builder,
         source, 0U, NULL, 0U, NULL, 0U, false, false);
 }

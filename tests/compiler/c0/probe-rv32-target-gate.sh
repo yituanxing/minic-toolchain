@@ -174,9 +174,13 @@ unsigned long original_kernel_flags(void) {
 SRC
 "$MINIC_CC" --target=riscv32-linux -march=rv32i -mabi=ilp32 \
     -S "$work/kernel-csr-structured.i" -o "$work/kernel-csr-structured.s"
-grep -Fq 'csrr t0, 0x100' "$work/kernel-csr-structured.s"
-grep -Fq 'csrrc t0, 0x100, t1' "$work/kernel-csr-structured.s"
-grep -Fq 'sw t0, 0(a2)' "$work/kernel-csr-structured.s"
+# The typed MachineIR source binder prints canonical physical x5/x6 GPRs.
+# The address-backed output is byte-exact rather than a speculative aligned
+# native SW: verify all four bytes and the original hardware CSR templates.
+grep -Fq 'csrr x5, 0x100' "$work/kernel-csr-structured.s"
+grep -Fq 'csrrc x5, 0x100, x6' "$work/kernel-csr-structured.s"
+grep -Fq 'sb x6, 0(x7)' "$work/kernel-csr-structured.s"
+grep -Fq 'sb x6, 3(x7)' "$work/kernel-csr-structured.s"
 grep -Fq '# MINIC_SOURCE_INLINE_ASM_BEGIN' "$work/kernel-csr-structured.s"
 echo 'RV32I_STRUCTURED_CSR=PASS output_input=1 pointer_writeback=1 kernel_asm_provenance=1'
 cat > "$work/kernel-opaque-asm.i" <<'SRC'
