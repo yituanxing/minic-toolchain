@@ -299,7 +299,11 @@ static const MiniLdTargetProfile minild_target_profiles[] = {
      minild_aarch64_synthesize_default_boundaries,
      NULL, NULL, minild_zero_elf_flags, false, true, NULL},
     {"elf64loongarch", ELFCLASS64, ELFDATA2LSB, EM_LOONGARCH, "loongarch64",
-     "loongarch", "elf64-loongarch", NULL, 0U, UINT64_C(0x120000000), 4096U,
+     /* GNU elf64loongarch default PT_LOAD p_align is 16 KiB, even though
+      * -n uses its independent 64 KiB nmagic alignment below.  This is
+      * ABI page granularity, not a permission-merge special case: adjacent
+      * R, RX, and RW output sections may share one 16 KiB mapped page. */
+     "loongarch", "elf64-loongarch", NULL, 0U, UINT64_C(0x120000000), 16384U,
      65536U, 8U,
      true, true, true, true, false, false, false, false,
      minild_loongarch_merge_flags, minild_loongarch_merge_addend_plain,

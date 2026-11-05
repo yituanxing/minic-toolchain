@@ -1,0 +1,237 @@
+name: MiniLD AArch64 LoongArch64 Frozen Linux Full Image and P1
+
+# Expensive, deliberate final acceptance only. The complete GNU-produced
+# Linux 6.6.143 source/object pool is SHA authenticated; no kernel C rebuild.
+# Pushes on the integration branch are inert unless the final commit message
+# explicitly contains [minild-aarch-loong-full-image]. Keep both arches on
+# the same immutable commit and never rerun QEMU for unrelated linker edits.
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - refactor/minias-target-isa-abi-core
+    paths:
+      - .github/workflows/minild-aarch-loong-cached-full-image-v1.yml
+      - tools/ci/minild-aarch-loong-cached-full-image-v1.sh
+      - linker/**
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  mini-ld-frozen-full-image:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[minild-aarch-loong-full-image]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [aarch64, loongarch64]
+    env:
+      PRODUCER_RUN: '41856204967'
+      PRODUCER_SHA: '3107037abc80b0c0019129364693422aee2818aa'
+      EXP_DIR: ${{ github.workspace }}/build/minild-linux-fourarch/${{ matrix.arch }}
+      EVIDENCE_DIR: ${{ github.workspace }}/build/minild-aarch-loong-full-image-evidence/${{ matrix.arch }}
+      MINILD_BINARY: ${{ github.workspace }}/build/minild-aarch-loong-full-image-tools/bin/minic-ld
+      DRIVER: tools/ci/minild-aarch-loong-cached-full-image-v1.sh
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Install GNU assembler/linker, QEMU and archive tools (no kernel rebuild)
+        shell: bash
+        timeout-minutes: 9
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get -o Acquire::Retries=3 update -qq
+          sudo apt-get -o Acquire::Retries=3 install -y -qq --no-install-recommends \
+            gcc make binutils curl xz-utils zstd cpio gzip file \
+            python3 git
+          case '${{ matrix.arch }}' in
+            aarch64)
+              sudo apt-get -o Acquire::Retries=3 install -y -qq --no-install-recommends \
+                gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu \
+                qemu-system-arm ;;
+            loongarch64)
+              sudo apt-get -o Acquire::Retries=3 install -y -qq --no-install-recommends \
+                gcc-13-loongarch64-linux-gnu binutils-loongarch64-linux-gnu \
+                qemu-system-misc ;;
+          esac
+          echo 'MINILD_TWOARCH_TOOLS=PASS kernels_C_compiled=0'
+
+      - name: Restore immutable original GNU Kbuild object tree if cached
+        id: golden_cache
+        uses: actions/cache/restore@v4
+        with:
+          path: build/minild-linux-fourarch/${{ matrix.arch }}/out
+          key: minild-gnu-linux-first-kallsyms1-6.6.143-${{ matrix.arch }}-${{ env.PRODUCER_SHA }}
+          fail-on-cache-miss: false
+
+      - name: Download exact GNU producer archive when cache was evicted
+        if: steps.golden_cache.outputs.cache-hit != 'true'
+        uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: '41856204967'
+          name: minild-gnu-kbuild-tree-${{ matrix.arch }}-3107037abc80b0c0019129364693422aee2818aa
+          path: build/minild-linux-fourarch/${{ matrix.arch }}
+
+      - name: Authenticate archive SHA and extract only the original output tree
+        if: steps.golden_cache.outputs.cache-hit != 'true'
+        shell: bash
+        timeout-minutes: 12
+        run: |
+          set -Eeuo pipefail
+          test -s "$EXP_DIR/gnu-kbuild-frozen-tree.sha256"
+          python3 - "$EXP_DIR" <<'PY'
+          from pathlib import Path
+          import re, sys
+          work = Path(sys.argv[1])
+          actual = sorted(p.name for p in work.glob('gnu-kbuild-frozen-tree.tar.zst.part*'))
+          lines = (work / 'gnu-kbuild-frozen-tree.sha256').read_text().splitlines()
+          listed = []
+          for line in lines:
+              match = re.fullmatch(r'[0-9a-f]{64}  (gnu-kbuild-frozen-tree\.tar\.zst\.part\d{3})', line)
+              if not match:
+                  raise SystemExit('MINILD_TWOARCH_FROZEN=FAIL invalid_archive_sha_manifest')
+              listed.append(match[1])
+          if not listed or len(set(listed)) != len(listed) or sorted(listed) != actual:
+              raise SystemExit('MINILD_TWOARCH_FROZEN=FAIL chunk_list_mismatch')
+          print(f'MINILD_TWOARCH_FROZEN=PASS parts={len(actual)}')
+          PY
+          (cd "$EXP_DIR" && sha256sum --quiet -c gnu-kbuild-frozen-tree.sha256)
+          shopt -s nullglob
+          parts=("$EXP_DIR"/gnu-kbuild-frozen-tree.tar.zst.part*)
+          (( ${#parts[@]} > 0 ))
+          cat "${parts[@]}" | tar --zstd -tf - |
+            python3 -c '
+          from pathlib import PurePosixPath
+          import sys
+          count = 0
+          for line in sys.stdin:
+              path = PurePosixPath(line.strip().rstrip("/"))
+              if path.is_absolute() or ".." in path.parts or not path.parts or path.parts[0] != "out":
+                  raise SystemExit("MINILD_TWOARCH_FROZEN=FAIL unsafe_tar_path")
+              count += 1
+          if count < 500:
+              raise SystemExit("MINILD_TWOARCH_FROZEN=FAIL incomplete_GNU_Kbuild_archive")
+          print(f"MINILD_TWOARCH_FROZEN=PASS archived_paths={count}")
+          '
+          cat "${parts[@]}" | tar -C "$EXP_DIR" --zstd -xf -
+          test -s "$EXP_DIR/out/vmlinux"
+
+      - name: Download exact original GNU first-kallsyms1 capture and object manifest
+        uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: '41856204967'
+          name: minild-real-kallsyms1-${{ matrix.arch }}-3107037abc80b0c0019129364693422aee2818aa
+          path: build/minild-linux-fourarch/${{ matrix.arch }}
+
+      - name: Verify GNU producer manifest, BFD identity and Kbuild command
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mkdir -p "$EVIDENCE_DIR"
+          bash "$DRIVER" verify-golden '${{ matrix.arch }}' \
+            "$EXP_DIR/out" "$EXP_DIR" "$EVIDENCE_DIR"
+          bash "$DRIVER" preflight-capture '${{ matrix.arch }}' "$EXP_DIR/ld-capture"
+
+      - name: Fetch matching Linux 6.6.143 tarball with exact original SHA
+        shell: bash
+        timeout-minutes: 7
+        run: |
+          set -Eeuo pipefail
+          archive="$EXP_DIR/linux-6.6.143.tar.xz"
+          curl -fL --retry 3 --retry-delay 2 \
+            https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.6.143.tar.xz \
+            -o "$archive"
+          printf '%s  %s\n' \
+            dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932 \
+            "$archive" | sha256sum -c -
+          tar -xJf "$archive" -C "$EXP_DIR"
+          test -s "$EXP_DIR/linux-6.6.143/scripts/link-vmlinux.sh"
+          echo 'MINILD_TWOARCH_LINUX_SOURCE=PASS Linux=6.6.143 C_compiles=0'
+
+      - name: Build only current MiniLD, reject warnings
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release CFLAGS=-Werror \
+            BUILD_DIR="$GITHUB_WORKSPACE/build/minild-aarch-loong-full-image-tools" \
+            "$MINILD_BINARY"
+          test -x "$MINILD_BINARY"
+          sha256sum "$MINILD_BINARY"
+
+      - name: Build identical GNU-only deterministic userspace initramfs
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          case '${{ matrix.arch }}' in
+            aarch64) cc=aarch64-linux-gnu-gcc ;;
+            loongarch64) cc=loongarch64-linux-gnu-gcc-13 ;;
+          esac
+          RISCV_CC="$cc" LINUX_RUNTIME_REPRODUCIBLE=1 \
+          BUILD_DIR="$EXP_DIR/runtime-initramfs-build" \
+          OUTPUT_INITRAMFS="$EXP_DIR/runtime-initramfs.cpio.gz" \
+            bash tests/external/linux/build_runtime_initramfs.sh
+          test -s "$EXP_DIR/runtime-initramfs.cpio.gz"
+          sha256sum "$EXP_DIR/runtime-initramfs.cpio.gz" \
+            >"$EVIDENCE_DIR/runtime-initramfs.sha256"
+          echo 'MINILD_TWOARCH_USERSPACE=PASS GNU_GCC_only=true kernel_C_compiles=0'
+
+      - name: Genuine original GNU Image/EFI QEMU control, P1 12/12
+        shell: bash
+        timeout-minutes: 5
+        run: |
+          set -Eeuo pipefail
+          bash "$DRIVER" qemu-p1 '${{ matrix.arch }}' GNU \
+            "$EXP_DIR/out" "$EXP_DIR" "$EVIDENCE_DIR"
+
+      - name: Original Kbuild kallsyms 1/2/optional3, all kernel links via MiniLD
+        shell: bash
+        timeout-minutes: 20
+        run: |
+          set -Eeuo pipefail
+          bash "$DRIVER" full-link '${{ matrix.arch }}' \
+            "$EXP_DIR/out" "$EXP_DIR/linux-6.6.143" \
+            "$EXP_DIR/linux-6.6.143.tar.xz" "$EXP_DIR" "$EVIDENCE_DIR" \
+            "$MINILD_BINARY"
+
+      - name: Original GNU objcopy Image or genuine LoongArch MiniLD EFI zboot
+        shell: bash
+        timeout-minutes: 8
+        run: |
+          set -Eeuo pipefail
+          bash "$DRIVER" image '${{ matrix.arch }}' \
+            "$EXP_DIR/out" "$EXP_DIR/linux-6.6.143" \
+            "$EVIDENCE_DIR" "$MINILD_BINARY"
+
+      - name: QEMU boots the new MiniLD image, canonical P1 syscalls 12/12
+        shell: bash
+        timeout-minutes: 5
+        run: |
+          set -Eeuo pipefail
+          bash "$DRIVER" qemu-p1 '${{ matrix.arch }}' MINILD \
+            "$EXP_DIR/out" "$EXP_DIR" "$EVIDENCE_DIR"
+
+      - name: Final GNU/MiniLD Linux image and guest SHA audit
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          bash "$DRIVER" audit-final '${{ matrix.arch }}' \
+            "$EXP_DIR/out" "$EVIDENCE_DIR" "$MINILD_BINARY"
+          echo 'MINILD_TWOARCH_LINUX_P1=PASS arch=${{ matrix.arch }} original_GNU_control=true MiniLD_complete_Image=true QEMU_P1=12/12 kernel_C_compiles=0'
+
+      - name: Preserve exact frozen QEMU/link evidence on pass or failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: minild-twoarch-full-image-${{ matrix.arch }}-${{ github.sha }}
+          path: build/minild-aarch-loong-full-image-evidence/${{ matrix.arch }}/
+          if-no-files-found: warn
+          retention-days: 14

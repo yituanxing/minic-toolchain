@@ -100,9 +100,9 @@ static bool parse_assert_command(ScriptParser *parser) {
            minild_script_parser_error(parser, "out-of-memory:ASSERT");
 }
 
-static bool parse_provide_command(ScriptParser *parser) {
-    MiniLdScriptCommand command;
-    MiniLdScriptExprId expression;
+static bool parse_symbol_function(ScriptParser *parser,
+                                  char **name_out,
+                                  MiniLdScriptExprId *expression_out) {
     char *name;
     if (!minild_script_parser_next(parser) ||
         !minild_script_expect(parser, TOKEN_LPAREN,
@@ -116,22 +116,77 @@ static bool parse_provide_command(ScriptParser *parser) {
         !minild_script_parser_next(parser) ||
         !minild_script_expect(parser, TOKEN_EQUAL,
                               "expected-'='-in-PROVIDE") ||
-        !minild_script_parse_expression(parser, &expression) ||
+        !minild_script_parse_expression(parser, expression_out) ||
         !minild_script_expect(parser, TOKEN_RPAREN,
                               "expected-')'-after-PROVIDE")) {
         free(name);
         return false;
     }
     (void)minild_script_consume(parser, TOKEN_SEMICOLON);
+    *name_out = name;
+    return true;
+}
+
+static bool parse_provide_command(ScriptParser *parser, bool hidden,
+                                  bool provide) {
+    MiniLdScriptCommand command;
+    MiniLdScriptExprId expression;
+    char *name;
+
+    if (!parse_symbol_function(parser, &name, &expression)) {
+        return false;
+    }
     memset(&command, 0, sizeof(command));
     command.kind = MINILD_SCRIPT_DEFINE_SYMBOL;
     command.value.symbol.name = name;
     command.value.symbol.expression = expression;
-    command.value.symbol.provide = true;
+    command.value.symbol.provide = provide;
+    command.value.symbol.hidden = hidden;
     if (!append_command(parser->script, command)) {
         free(name);
         return minild_script_parser_error(parser, "out-of-memory:PROVIDE");
     }
+    return true;
+}
+
+static bool parse_extern_command(ScriptParser *parser) {
+    MiniLdScript *script = parser->script;
+
+    if (!minild_script_parser_next(parser) ||
+        !minild_script_expect(parser, TOKEN_LPAREN,
+                              "expected-'('-after-EXTERN")) {
+        return false;
+    }
+    while (parser->token.kind != TOKEN_RPAREN) {
+        char **names;
+        char *name;
+
+        if (parser->token.kind == TOKEN_COMMA) {
+            if (!minild_script_parser_next(parser)) return false;
+            continue;
+        }
+        if (parser->token.kind != TOKEN_IDENTIFIER ||
+            script->extern_symbol_count == SIZE_MAX / sizeof(*names)) {
+            return minild_script_parser_error(parser,
+                                              "expected-EXTERN-symbol");
+        }
+        name = minild_script_strdup_range(parser->token.begin,
+                                          parser->token.length);
+        if (name == NULL) {
+            return minild_script_parser_error(parser, "out-of-memory:EXTERN");
+        }
+        names = realloc(script->extern_symbols,
+                        (script->extern_symbol_count + 1U) * sizeof(*names));
+        if (names == NULL) {
+            free(name);
+            return minild_script_parser_error(parser, "out-of-memory:EXTERN");
+        }
+        script->extern_symbols = names;
+        script->extern_symbols[script->extern_symbol_count++] = name;
+        if (!minild_script_parser_next(parser)) return false;
+    }
+    if (!minild_script_parser_next(parser)) return false;
+    (void)minild_script_consume(parser, TOKEN_SEMICOLON);
     return true;
 }
 
@@ -384,6 +439,28 @@ static bool parse_section_body(ScriptParser *parser,
             }
             continue;
         }
+        if (minild_script_token_is(parser, "PROVIDE") ||
+            minild_script_token_is(parser, "PROVIDE_HIDDEN") ||
+            minild_script_token_is(parser, "HIDDEN")) {
+            MiniLdScriptSectionItem item;
+            bool provide = !minild_script_token_is(parser, "HIDDEN");
+            bool hidden = !minild_script_token_is(parser, "PROVIDE");
+
+            memset(&item, 0, sizeof(item));
+            item.kind = MINILD_SCRIPT_SECTION_DEFINE_SYMBOL;
+            item.value.symbol.provide = provide;
+            item.value.symbol.hidden = hidden;
+            if (!parse_symbol_function(parser, &item.value.symbol.name,
+                                       &item.value.symbol.expression)) {
+                return false;
+            }
+            if (!append_section_item(section, item)) {
+                free(item.value.symbol.name);
+                return minild_script_parser_error(parser,
+                                                  "out-of-memory:section-PROVIDE");
+            }
+            continue;
+        }
         if (parser->token.kind == TOKEN_STAR ||
             parser->token.kind == TOKEN_SLASH ||
             parser->token.kind == TOKEN_NUMBER ||
@@ -619,10 +696,18 @@ static bool parse_sections(ScriptParser *parser) {
         /* GNU PROVIDE is conditional: referenced undefined symbols are
          * defined, but ordinary existing definitions are never replaced,
          * and unreferenced declarations do not become ELF exports. */
-        if (minild_script_token_is(parser, "PROVIDE")) {
-            if (!parse_provide_command(parser)) {
+        if (minild_script_token_is(parser, "PROVIDE") ||
+            minild_script_token_is(parser, "PROVIDE_HIDDEN") ||
+            minild_script_token_is(parser, "HIDDEN")) {
+            bool provide = !minild_script_token_is(parser, "HIDDEN");
+            bool hidden = !minild_script_token_is(parser, "PROVIDE");
+            if (!parse_provide_command(parser, hidden, provide)) {
                 return false;
             }
+            continue;
+        }
+        if (minild_script_token_is(parser, "EXTERN")) {
+            if (!parse_extern_command(parser)) return false;
             continue;
         }
 
@@ -1037,6 +1122,10 @@ void minild_script_destroy(MiniLdScript *script) {
     free(script->entry_symbol);
     free(script->output_arch);
     free(script->output_format);
+    for (i = 0U; i < script->extern_symbol_count; ++i) {
+        free(script->extern_symbols[i]);
+    }
+    free(script->extern_symbols);
 
     for (i = 0U; i < script->expression_count; ++i) {
         free(script->expressions[i].name);
@@ -1144,10 +1233,16 @@ bool minild_script_parse_file(const char *path,
             if (!parse_phdrs(&parser)) {
                 goto done;
             }
-        } else if (minild_script_token_is(&parser, "PROVIDE")) {
-            if (!parse_provide_command(&parser)) {
+        } else if (minild_script_token_is(&parser, "PROVIDE") ||
+                   minild_script_token_is(&parser, "PROVIDE_HIDDEN") ||
+                   minild_script_token_is(&parser, "HIDDEN")) {
+            bool provide = !minild_script_token_is(&parser, "HIDDEN");
+            bool hidden = !minild_script_token_is(&parser, "PROVIDE");
+            if (!parse_provide_command(&parser, hidden, provide)) {
                 goto done;
             }
+        } else if (minild_script_token_is(&parser, "EXTERN")) {
+            if (!parse_extern_command(&parser)) goto done;
         } else if (minild_script_token_is(&parser, "ASSERT")) {
             if (!parse_assert_command(&parser)) {
                 goto done;

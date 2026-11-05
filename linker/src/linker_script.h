@@ -81,6 +81,8 @@ typedef struct MiniLdScriptSectionItem {
         struct {
             char *name;
             MiniLdScriptExprId expression;
+            bool provide;
+            bool hidden;
         } symbol;
         MiniLdScriptExprId expression;
     } value;
@@ -117,6 +119,7 @@ typedef struct MiniLdScriptCommand {
             char *name;
             MiniLdScriptExprId expression;
             bool provide; /* GNU PROVIDE: define only if unresolved */
+            bool hidden; /* GNU PROVIDE_HIDDEN/HIDDEN: STV_HIDDEN */
         } symbol;
         MiniLdScriptExprId expression;
         MiniLdScriptOutputSection section;
@@ -136,6 +139,9 @@ typedef struct MiniLdScript {
     char *entry_symbol;
     char *output_arch;
     char *output_format;
+    /* GNU EXTERN names are archive-admission roots, not assignments. */
+    char **extern_symbols;
+    size_t extern_symbol_count;
     MiniLdScriptExpr *expressions;
     size_t expression_count;
     size_t expression_capacity;

@@ -158,6 +158,27 @@ static int minild_link_static_pipeline(
             }
         }
     }
+    if (have_script) {
+        size_t extern_index;
+
+        for (extern_index = 0U;
+             extern_index < script.extern_symbol_count; ++extern_index) {
+            size_t resolved_index;
+            const char *name = script.extern_symbols[extern_index];
+
+            /* GNU EXTERN has -u semantics.  It must enter the canonical
+             * resolver before archive extraction, not in layout. */
+            if (!symbol_resolver_merge_global(
+                    &state.resolver, diagnostics, name,
+                    MINILD_SECTION_UNDEF, 0U, 0U,
+                    ELF64_ST_INFO(STB_GLOBAL, STT_NOTYPE), STV_DEFAULT,
+                    SIZE_MAX, &resolved_index)) {
+                fprintf(diagnostics,
+                        "minic-ld: invalid-script-EXTERN-symbol:%s\n", name);
+                goto done;
+            }
+        }
+    }
     if (!process_input_sequence(&state, inputs, input_count)) {
         goto done;
     }

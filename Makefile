@@ -862,6 +862,12 @@ check-minild-loongarch-neutral-elf-flags: $(MINIAS_BINARY) $(MINILD_BINARY)
 	MINILD="$(abspath $(MINILD_BINARY))" \
 	bash tests/linker/probe-loongarch-neutral-elf-flags.sh
 
+.PHONY: check-minild-loongarch-default-maxpage
+check-minild-loongarch-default-maxpage: $(MINIAS_BINARY) $(MINILD_BINARY)
+	MINIAS="$(abspath $(MINIAS_BINARY))" \
+	MINILD="$(abspath $(MINILD_BINARY))" \
+	bash tests/linker/probe-loongarch-default-maxpage.sh
+
 .PHONY: check-minild-static-script-discard-reloc-reserve
 check-minild-static-script-discard-reloc-reserve: $(MINIAS_BINARY) $(MINILD_BINARY)
 	MINIAS="$(abspath $(MINIAS_BINARY))" \
@@ -882,6 +888,11 @@ check-minild-script-data-width-flags: $(MINILD_BINARY)
 check-minild-script-top-level-empty-statements: $(MINILD_BINARY)
 	MINILD="$(abspath $(MINILD_BINARY))" \
 	bash tests/linker/probe-script-top-level-empty-statements.sh
+
+.PHONY: check-minild-script-provide-gnu
+check-minild-script-provide-gnu: $(MINILD_BINARY)
+	MINILD="$(abspath $(MINILD_BINARY))" \
+	bash tests/linker/probe-script-provide-gnu.sh
 
 .PHONY: check-minild-synthetic-byte-phdr-flags
 check-minild-synthetic-byte-phdr-flags: $(MINILD_BINARY)
@@ -964,10 +975,12 @@ check-minild-five-arch-linux-linker-boundary: \
 	check-minild-loongarch-pcala-relax-fixedpoint \
 	check-minild-loongarch-pcala-undefweak-modes \
 	check-minild-loongarch-neutral-elf-flags \
+	check-minild-loongarch-default-maxpage \
 	check-minild-static-script-discard-reloc-reserve \
 	check-minild-script-output-entsize-coalescing \
 	check-minild-script-data-width-flags \
 	check-minild-script-top-level-empty-statements \
+	check-minild-script-provide-gnu \
 	check-minild-script-forward-placement-fixedpoint \
 	check-minild-synthetic-byte-phdr-flags \
 	check-minild-static-script-load-page-coalesce \

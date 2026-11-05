@@ -45,6 +45,14 @@ static bool minild_final_symbol_local(const MiniLdResolvedSymbol *source,
     if (ELF64_ST_BIND(source->info) == STB_LOCAL) {
         return true;
     }
+    /* GNU BFD finalizes script HIDDEN()/PROVIDE_HIDDEN() definitions as
+     * local DEFAULT symbols in .symtab, while canonical resolution retains
+     * their global identity and HIDDEN visibility until the final view. */
+    if (source->source_symbol == SIZE_MAX &&
+        source->section != MINILD_SECTION_UNDEF &&
+        ELF64_ST_VISIBILITY(source->other) == STV_HIDDEN) {
+        return true;
+    }
     if (version == NULL || !version->version_local_all ||
         source->section == MINILD_SECTION_UNDEF ||
         source->name[0] == '\0') {
