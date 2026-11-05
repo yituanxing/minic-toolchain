@@ -24,8 +24,13 @@ long long mini_xadd64_ll_long(long long delta, long *p) {
 }
 SRC
 "$cc" --target=x86_64-linux -S "$d/xadd.i" -o "$d/xadd.s"
-grep -Fq '  xaddq %r10, (%r11)' "$d/xadd.s"
-grep -Fq '  xaddl %r10d, (%r11)' "$d/xadd.s"
+for form in '  xaddq %rax, (%r10)' '  xaddl %eax, (%r10)'; do
+  if ! grep -Fq "$form" "$d/xadd.s"; then
+    echo "FAIL: original Linux local XADD MachineIR physical form missing: $form" >&2
+    sed -n '1,160p' "$d/xadd.s" >&2
+    exit 1
+  fi
+done
 sed 's/mini_/gnu_/g' "$d/xadd.i" > "$d/gnu.c"
 gcc -c -O0 "$d/gnu.c" -o "$d/gnu.o"
 gcc -c -x assembler "$d/xadd.s" -o "$d/mini.o"

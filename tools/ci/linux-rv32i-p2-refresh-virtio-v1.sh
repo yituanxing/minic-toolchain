@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# RV32 P2: retain 1739 SHA-attested frozen MiniC Linux C owners; replace only
-# drivers/virtio/{virtio.c,virtio_pci_modern_dev.c} using current MiniC + original Kbuild wrapper.
+# RV32 P2: retain 1738 SHA-attested frozen MiniC Linux C owners; replace
+# the three exact virtio core/PCI-transport source owners with current MiniC
+# under the original Kbuild wrapper, then require genuine QEMU feature32.
 # The full 18/18 genuine QEMU test remains mandatory and fail-closed.
 set -Eeuo pipefail
 : "$GITHUB_WORKSPACE"
@@ -34,10 +35,11 @@ test "$(sha256sum "$out/.config" | cut -d' ' -f1)" = 4c6c19f79741a8a31ec52ad57b1
 make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$ev/minic-build" all \
   >"$ev/minic-build.log" 2>&1 || { tail -n 70 "$ev/minic-build.log" >&2; exit 4; }
 test -x "$ev/minic-build/bin/minic-cc"
-# Two strictly scoped C owners, each recompiled through the actual Linux
+# Three strictly scoped C owners, each recompiled through the actual Linux
 # stage2 Kbuild wrapper (not a handwritten GNU command). The historical
-# MiniC virtio.c + virtio_pci_modern_dev.c pairing failed GPU feature32.
-for owner in virtio virtio_pci_modern_dev; do
+# MiniC vp_finalize_features() in virtio_pci_modern.c falsely rejected
+# VIRTIO_F_VERSION_1 while the live device sysfs bit32 was already set.
+for owner in virtio virtio_pci_modern_dev virtio_pci_modern; do
   sha256sum "$src/drivers/virtio/$owner.c" >"$ev/$owner-original-source.sha256"
   touch "$src/drivers/virtio/$owner.c"
   MINIC="$ev/minic-build/bin/minic-cc" REAL_CC=riscv64-linux-gnu-gcc \
@@ -61,12 +63,12 @@ for owner in virtio virtio_pci_modern_dev; do
   riscv64-linux-gnu-readelf -h "$ev/current-$owner.o" | grep -Eq 'Class:[[:space:]]+ELF32'
   echo "RV32I_P2_REFRESH_OWNER=PASS owner=$owner single_MiniC_C=true GNU_AS=true"
 done
-# Audit frozen shard inventory 1741/1741, retain 1739 byte-identical,
-# replace both October 31 virtio owners with current exact-Kbuild MiniC.
-python3 - "$prov/full-c-objects.txt" "$shards" "$out" "$ev/current-virtio.o" "$ev/current-virtio_pci_modern_dev.o" "$ev/candidate-hashes.sha256" <<'PY_AUDIT'
+# Audit frozen shard inventory 1741/1741, retain 1738 byte-identical,
+# replace exactly three proven virtio feature/finalizer owners.
+python3 - "$prov/full-c-objects.txt" "$shards" "$out" "$ev/current-virtio.o" "$ev/current-virtio_pci_modern_dev.o" "$ev/current-virtio_pci_modern.o" "$ev/candidate-hashes.sha256" <<'PY_AUDIT'
 from pathlib import Path
 import hashlib, re, shutil, sys
-listing, shards, out, current_core, current_pci, hashes = map(Path, sys.argv[1:])
+listing, shards, out, current_core, current_pci_dev, current_pci_finalizer, hashes = map(Path, sys.argv[1:])
 owners = [s for s in listing.read_text().splitlines() if s and not s.startswith('#')]
 assert len(owners) == 1741 and len(set(owners)) == 1741
 observed = {}
@@ -88,7 +90,8 @@ for i in range(7):
         observed[name] = (p, manifest[name])
 changed = {
     'drivers/virtio/virtio.o': current_core,
-    'drivers/virtio/virtio_pci_modern_dev.o': current_pci,
+    'drivers/virtio/virtio_pci_modern_dev.o': current_pci_dev,
+    'drivers/virtio/virtio_pci_modern.o': current_pci_finalizer,
 }
 new_digests = {name: hashlib.sha256(p.read_bytes()).hexdigest()
                for name, p in changed.items()}
@@ -102,8 +105,40 @@ with hashes.open('w') as f:
     for name in owners:
         h = new_digests[name] if name in new_digests else observed[name][1]
         f.write('%s  %s\n' % (h, name))
-print('RV32I_P2_REFRESH_OWNERS=PASS C_owners=1741/1741 frozen=1739 current_virtio=2 all_SHA=true')
+print('RV32I_P2_REFRESH_OWNERS=PASS C_owners=1741/1741 frozen=1738 current_virtio=3 all_SHA=true')
 PY_AUDIT
+# Read-only machine-code proof for the exact old/current finalizer that
+# tests __virtio_test_bit(vdev, VIRTIO_F_VERSION_1) == BIT_ULL(32).
+# Symbol may be folded/renamed; record absence honestly, never substitute
+# disassembly inspection for the real GPU QEMU oracle.
+slot=$(python3 - "$prov/full-c-objects.txt" <<'PY_SLOT'
+from pathlib import Path
+import sys
+owners = [s for s in Path(sys.argv[1]).read_text().splitlines()
+          if s and not s.startswith('#')]
+assert len(owners) == 1741
+print(owners.index('drivers/virtio/virtio_pci_modern.o') % 7)
+PY_SLOT
+)
+frozen_finalizer="$shards/shard-$slot/minic/drivers/virtio/virtio_pci_modern.o"
+current_finalizer="$ev/current-virtio_pci_modern.o"
+for variant in frozen current; do
+  if [[ "$variant" == frozen ]]; then candidate="$frozen_finalizer";
+  else candidate="$current_finalizer"; fi
+  test -s "$candidate"
+  if riscv64-linux-gnu-readelf -Ws "$candidate" |
+      grep -Eq '[[:space:]]vp_finalize_features([[:space:]]|$)'; then
+    echo "RV32I_P2_FINALIZER_DISASM=AVAILABLE variant=$variant" |
+      tee "$ev/$variant-finalizer-symbol.txt"
+    riscv64-linux-gnu-objdump -dr --disassemble=vp_finalize_features \
+      "$candidate" >"$ev/$variant-finalizer.dis" || true
+  else
+    echo "RV32I_P2_FINALIZER_DISASM=UNAVAILABLE variant=$variant symbol=absent" |
+      tee "$ev/$variant-finalizer-symbol.txt"
+    riscv64-linux-gnu-objdump -dr "$candidate" \
+      >"$ev/$variant-finalizer-full.dis" || true
+  fi
+done
 bash tests/compiler/c0/build-rv32-gcc-runtime.sh "$ev/runtime" \
   >"$ev/runtime-build.log" 2>&1 || { tail -n 70 "$ev/runtime-build.log" >&2; exit 4; }
 test "$(wc -l <"$ev/runtime/rv32-runtime-objects.rsp")" -ge 17
@@ -180,6 +215,6 @@ test "$rebuilt" -le 5 || { echo "RV32I_P2_REFRESH=FAIL unexpected_rebuild=$rebui
 new_sha=$(sha256sum "$out/arch/riscv/boot/Image" | cut -d' ' -f1)
 test -n "$new_sha"
 test "$new_sha" != "$old_sha"
-printf 'original_Image_sha256=%s\ncurrent_Image_sha256=%s\nMiniC_C_owners=1739_frozen_plus_2_current\nGNU_link_rebuilt_C=%s\n' \
+printf 'original_Image_sha256=%s\ncurrent_Image_sha256=%s\nMiniC_C_owners=1738_frozen_plus_3_current\nGNU_link_rebuilt_C=%s\n' \
   "$old_sha" "$new_sha" "$rebuilt" >"$ev/provenance.txt"
 echo "RV32I_P2_REFRESH=PASS new_Image_sha256=$new_sha old_Image_sha256=$old_sha MiniC_C=1741/1741 GNU_link=true"

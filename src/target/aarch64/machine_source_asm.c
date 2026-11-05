@@ -856,6 +856,7 @@ static bool a64_machine_extra_source_form(const MinicMachineInstruction *ins) {
                    MINIC_MACHINE_EFFECT_MEMORY_READ |
                    MINIC_MACHINE_EFFECT_MEMORY_WRITE :
          dep ? MINIC_MACHINE_EFFECT_VOLATILE :
+               MINIC_MACHINE_EFFECT_VOLATILE |
                MINIC_MACHINE_EFFECT_MEMORY_READ);
     size_t i;
     if (!(cmpwait || dep || zeropad) ||

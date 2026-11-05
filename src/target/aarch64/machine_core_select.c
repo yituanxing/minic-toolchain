@@ -1923,7 +1923,7 @@ static bool a64_linux_extra_source(A64CoreSelection *sel,
             source->template_text, source->template_length)) ||
         source->target_machine_form_variant != (cmpwait ? width : 0U) ||
         source->operand_plan_owner != MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED ||
-        source->is_volatile != (cmpwait || dep) || source->is_goto ||
+        !source->is_volatile || source->is_goto ||
         /* Core's effective memory flag includes typed +Q/Q operand effects.
          * Only the IO dependency form spells an explicit GNU "memory"
          * clobber; CMPWAIT and ZEROPAD carry implicit memory effects. */
