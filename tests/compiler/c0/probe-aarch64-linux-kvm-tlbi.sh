@@ -11,7 +11,12 @@ test -s "$work/tlbi.s"
 for op in vale1is vale2is aside1is rvale1is vae1is rvae1is \
     vaale1is vaae1is ipas2e1is ipas2e1 vae2is vmalle1 \
     vmalle1is alle1is vmalls12e1is; do
-    grep -Fq "  tlbi $op" "$work/tlbi.s"
+    case "$op" in
+        vmalle1|vmalle1is|alle1is|vmalls12e1is)
+            grep -Eq "^[[:space:]]*tlbi $op[[:space:]]*$" "$work/tlbi.s" ;;
+        *)
+            grep -Eq "^[[:space:]]*tlbi $op, x9[[:space:]]*$" "$work/tlbi.s" ;;
+    esac
 done
 for target in x86_64 riscv32 riscv64 loongarch64; do
     if "$minic" --target="$target-linux" -S "$work/input.i" \

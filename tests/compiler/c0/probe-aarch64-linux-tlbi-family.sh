@@ -26,9 +26,15 @@ void mini_tlbi_barrier(void) {
 }
 SRC
 "$mini" --target=aarch64-linux -S "$d/tlb.i" -o "$d/mini.s"
-test "$(grep -Ec '^  tlbi ' "$d/mini.s")" -eq 10
-grep -Fq '  dsb nshst' "$d/mini.s"
-grep -Fq '  dsb nsh' "$d/mini.s"
+test "$(grep -Ec '^[[:space:]]*tlbi [[:alnum:]_]+(, x9)?[[:space:]]*$' "$d/mini.s" || true)" -eq 10
+grep -Eq '^[[:space:]]*dsb nshst[[:space:]]*$' "$d/mini.s"
+grep -Eq '^[[:space:]]*dsb nsh[[:space:]]*$' "$d/mini.s"
+for opcode in vale1is vale2is aside1is rvale1is vae1is rvae1is vaale1is vaae1is; do
+    grep -Eq "^[[:space:]]*tlbi $opcode, x9[[:space:]]*$" "$d/mini.s"
+done
+for opcode in vmalle1 vmalle1is; do
+    grep -Eq "^[[:space:]]*tlbi $opcode[[:space:]]*$" "$d/mini.s"
+done
 if [[ "$MINIC_TLBI_SOURCE_ONLY" != 1 ]];then
  aarch64-linux-gnu-gcc -c -x assembler "$d/mini.s" -o "$d/mini.o"
  sed 's/mini_/gnu_/g' "$d/tlb.i" >"$d/gnu.c"

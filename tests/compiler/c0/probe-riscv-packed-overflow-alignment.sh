@@ -63,40 +63,34 @@ if ! grep -q 'LoongArch64: Core instruction/ABI not yet supported by M1 emitter'
     exit 1
 fi
 
-# The overflow emitter has its own memory effects: every packed result
-# requires byte-scatter, even if arithmetic uses a native or runtime libcall.
+# The RV32/RV64 MachineIR selector emits typed SB for every individual
+# byte of the checked-overflow result, including a packed field at odd
+# offset.  The removed pre-MachineIR direct emitter used textual
+# .Lminic_typed_*_native labels; they are NOT a MachineIR correctness
+# obligation. Check the actual byte-count contract instead (2/4/8 bytes)
+# and keep the GNU native + MiniC x86 differential above unchanged.
 for target in riscv32-linux riscv64-linux; do
-    for name in packed_overflow_narrow packed_overflow_add \
-                packed_overflow_sub packed_overflow_mul packed_overflow_wide; do
-        awk -v name="$name" '
+    for spec in packed_overflow_narrow:2 packed_overflow_add:4 \
+                packed_overflow_sub:4 packed_overflow_mul:4 \
+                packed_overflow_wide:8; do
+        name=${spec%:*}
+        required=${spec#*:}
+        awk -v name="$name" -v required="$required" '
             $0 == name ":" { inside=1; found=1; next }
-            inside && index($0, ".size " name ",") == 1 { done=1; inside=0 }
+            inside && index($0, ".size " name ",") == 1 {
+                done=1
+                inside=0
+            }
             inside && $0 ~ /^  sb / { bytewise++ }
-            inside && /\.Lminic_typed_.*_native/ { guard++ }
-            END { if (!found || !done || bytewise == 0 || guard == 0) {
-                printf "RISCV_PACKED_OVERFLOW=FAIL %s bytes=%d guards=%d\n", name, bytewise, guard > "/dev/stderr"
-                exit 1
-            }}
+            END {
+                if (!found || !done || bytewise < required) {
+                    printf "RISCV_PACKED_OVERFLOW=FAIL %s bytes=%d required=%d\\n",
+                           name, bytewise, required > "/dev/stderr"
+                    exit 1
+                }
+            }
         ' "$work/$target.s"
     done
-    # GNU local labels are emitted by different per-function helpers. Their
-    # numeric suffix must be unique; otherwise the checked-overflow 1f/2f
-    # branches may silently select a byte-transport helper's label.
-    awk '
-        /^\.Lminic_typed_.*_(native|done):$/ {
-            name=$0
-            sub(/:$/, "", name)
-            if (seen[name]++) {
-                print "RISCV_PACKED_OVERFLOW=FAIL duplicate assembly label " name > "/dev/stderr"
-                exit 1
-            }
-            labels++
-        }
-        END { if (!labels) {
-            print "RISCV_PACKED_OVERFLOW=FAIL missing typed transfer labels" > "/dev/stderr"
-            exit 1
-        }}
-    ' "$work/$target.s"
 done
 
 echo 'RISCV_PACKED_OVERFLOW_ALIGNMENT=PASS GNU-native MiniC-x86 RV32/RV64/AArch -S guarded-bytewise Loong-expected-reject'

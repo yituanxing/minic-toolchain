@@ -1797,6 +1797,401 @@ static bool rv_checked_call(RvCoreSelection *sel, const char *helper) {
  * Input/pointee types must be identical for the 18 canonical GNU builtins.
  * Mixed-width/signed arithmetic is a separate admission case and remains
  * fail-closed rather than silently changing the old overflow contract. */
+
+/* ILP32 checked-overflow is the RV32I twin of the RV64 MachineIR family.
+ * Its C type conversions have already been lowered to Core integer widths.
+ * Keep the full LL/SC-independent mathematical result in two base-I words
+ * and scatter each result byte: even packed member addresses may be odd. */
+static bool rv_core_checked32_store(RvCoreSelection *sel,
+    MinicCoreValueId address, unsigned size, unsigned low, unsigned high) {
+    unsigned int i;
+    if (sel->xlen != 32U || size == 0U || size > 8U ||
+        low == RV_T0 || low == RV_T1 ||
+        (size > 4U && (high == RV_T0 || high == RV_T1)) ||
+        !rv_load(sel, address, RV_T0)) return false;
+    for (i = 0U; i < size; ++i) {
+        const unsigned int word = i < 4U ? low : high;
+        const int64_t shift = (int64_t)((i % 4U) * 8U);
+        if ((shift == 0
+                ? !rv_rr(sel, MINIC_RISCV_MACHINE_MV, RV_T1, word)
+                : !rv_rri(sel, MINIC_RISCV_MACHINE_SRLI,
+                    RV_T1, word, shift)) ||
+            !rv_byte_transfer(sel, false, RV_T1, RV_T0, i, false))
+            return false;
+    }
+    return true;
+}
+
+static bool rv_core_checked32_extend(RvCoreSelection *sel,
+    MinicCoreValueId id, const MinicCoreType *type,
+    unsigned low, unsigned high) {
+    if (type == NULL || type->kind != MINIC_CORE_TYPE_INTEGER ||
+        type->value.integer.is_bool || !type->has_layout ||
+        type->value.integer.bit_width != type->size * 8U)
+        return false;
+    if (type->size == 8U)
+        return rv_value_chunk(sel, id, 0U, low, true) &&
+            rv_value_chunk(sel, id, 1U, high, true);
+    if ((type->size != 1U && type->size != 2U &&
+         type->size != 4U) ||
+        !rv_load(sel, id, low) ||
+        !rv_normalize(sel, low, (unsigned int)type->size,
+            type->value.integer.is_signed)) return false;
+    return type->value.integer.is_signed
+        ? rv_rri(sel, MINIC_RISCV_MACHINE_SRAI, high, low, 31)
+        : rv_li(sel, high, 0);
+}
+
+/* Both inputs of a narrow result fit one XLEN word.  Signed/unsigned mixing
+ * still has an exact two-word mathematical result for add/sub/multiply; the
+ * destination's sign extension is the sole overflow predicate. */
+static bool rv_core_checked32_narrow(RvCoreSelection *sel,
+    const MinicCoreInstruction *ins, const MinicCoreType *left_type,
+    const MinicCoreType *right_type,
+    unsigned int size, bool sign) {
+    const MinicCoreIntegerOverflowOperator op =
+        ins->value.integer_overflow.operator_kind;
+    const MinicCoreValueId left = ins->value.integer_overflow.left;
+    const MinicCoreValueId right = ins->value.integer_overflow.right;
+    const MinicCoreValueId address =
+        ins->value.integer_overflow.result_address;
+    if (size == 0U || size > 4U || left_type->size > 4U ||
+        right_type->size > 4U) return false;
+    if (op == MINIC_CORE_INTEGER_OVERFLOW_MULTIPLY) {
+        if (!sel->plan->frame->saves_return_address ||
+            !rv_core_checked32_extend(sel, left, left_type, RV_A0, RV_A1) ||
+            !rv_core_checked32_extend(sel, right, right_type, RV_A2, RV_A3) ||
+            !rv_checked_call(sel, "__muldi3") ||
+            !rv_rr(sel, MINIC_RISCV_MACHINE_MV, RV_T4, RV_A0) ||
+            !rv_rr(sel, MINIC_RISCV_MACHINE_MV, RV_T5, RV_A1) ||
+            !rv_normalize(sel, RV_T4, size, sign) ||
+            (sign ? !rv_rri(sel, MINIC_RISCV_MACHINE_SRAI,
+                        RV_T6, RV_T4, 31)
+                  : !rv_li(sel, RV_T6, 0)) ||
+            !rv_rrr(sel, MINIC_RISCV_MACHINE_XOR,
+                RV_T5, RV_T5, RV_T6) ||
+            !rv_rrr(sel, MINIC_RISCV_MACHINE_XOR,
+                RV_T6, RV_A0, RV_T4) ||
+            !rv_rrr(sel, MINIC_RISCV_MACHINE_OR,
+                RV_T5, RV_T5, RV_T6) ||
+            !rv_rr(sel, MINIC_RISCV_MACHINE_SNEZ, RV_T5, RV_T5) ||
+            !rv_core_checked32_store(sel, address, size, RV_T4, RV_T2))
+            return false;
+        return rv_store(sel, ins->result, RV_T5);
+    }
+    if (op != MINIC_CORE_INTEGER_OVERFLOW_ADD &&
+        op != MINIC_CORE_INTEGER_OVERFLOW_SUBTRACT) return false;
+    if (!rv_core_checked32_extend(sel, left, left_type, RV_T0, RV_T1) ||
+        !rv_core_checked32_extend(sel, right, right_type, RV_T2, RV_T3))
+        return false;
+    if (op == MINIC_CORE_INTEGER_OVERFLOW_ADD) {
+        if (!rv_rrr(sel, MINIC_RISCV_MACHINE_ADD,
+                RV_T4, RV_T0, RV_T2) ||
+            !rv_rrr(sel, MINIC_RISCV_MACHINE_SLTU,
+                RV_T6, RV_T4, RV_T0) ||
+            !rv_rrr(sel, MINIC_RISCV_MACHINE_ADD,
+                RV_T5, RV_T1, RV_T3) ||
+            !rv_rrr(sel, MINIC_RISCV_MACHINE_ADD,
+                RV_T5, RV_T5, RV_T6)) return false;
+    } else {
+        if (!rv_rrr(sel, MINIC_RISCV_MACHINE_SUB,
+                RV_T4, RV_T0, RV_T2) ||
+            !rv_rrr(sel, MINIC_RISCV_MACHINE_SLTU,
+                RV_T6, RV_T0, RV_T2) ||
+            !rv_rrr(sel, MINIC_RISCV_MACHINE_SUB,
+                RV_T5, RV_T1, RV_T3) ||
+            !rv_rrr(sel, MINIC_RISCV_MACHINE_SUB,
+                RV_T5, RV_T5, RV_T6)) return false;
+    }
+    if (!rv_rr(sel, MINIC_RISCV_MACHINE_MV, RV_T6, RV_T4) ||
+        !rv_normalize(sel, RV_T4, size, sign) ||
+        !rv_rrr(sel, MINIC_RISCV_MACHINE_XOR,
+            RV_T6, RV_T6, RV_T4) ||
+        (sign ? !rv_rri(sel, MINIC_RISCV_MACHINE_SRAI,
+                    RV_A0, RV_T4, 31)
+              : !rv_li(sel, RV_A0, 0)) ||
+        !rv_rrr(sel, MINIC_RISCV_MACHINE_XOR,
+            RV_A0, RV_A0, RV_T5) ||
+        !rv_rrr(sel, MINIC_RISCV_MACHINE_OR,
+            RV_A0, RV_A0, RV_T6) ||
+        !rv_rr(sel, MINIC_RISCV_MACHINE_SNEZ, RV_A0, RV_A0) ||
+        !rv_core_checked32_store(sel, address, size, RV_T4, RV_T2))
+        return false;
+    return rv_store(sel, ins->result, RV_A0);
+}
+
+/* Linux mixes unsigned long long with unsigned int for a u32 result.
+ * Preserve the high original word plus low carry: no 64-bit truncation may
+ * turn a mathematically overflowing addition into "no overflow". */
+static bool rv_core_checked32_mixed_wide_add(RvCoreSelection *sel,
+    const MinicCoreInstruction *ins,
+    const MinicCoreType *left_type, const MinicCoreType *right_type,
+    const MinicCoreType *result_type) {
+    const bool wide_left = left_type->size == 8U;
+    const MinicCoreType *wide_type = wide_left ? left_type : right_type;
+    const MinicCoreType *narrow_type = wide_left ? right_type : left_type;
+    const MinicCoreValueId wide = wide_left ?
+        ins->value.integer_overflow.left : ins->value.integer_overflow.right;
+    const MinicCoreValueId narrow = wide_left ?
+        ins->value.integer_overflow.right : ins->value.integer_overflow.left;
+    if (ins->value.integer_overflow.operator_kind !=
+            MINIC_CORE_INTEGER_OVERFLOW_ADD ||
+        result_type->size != 4U || result_type->value.integer.is_signed ||
+        wide_type->size != 8U || wide_type->value.integer.is_signed ||
+        narrow_type->size != 4U ||
+        narrow_type->value.integer.is_signed ||
+        !rv_value_chunk(sel, wide, 0U, RV_T0, true) ||
+        !rv_value_chunk(sel, wide, 1U, RV_T1, true) ||
+        !rv_load(sel, narrow, RV_T2) ||
+        !rv_rrr(sel, MINIC_RISCV_MACHINE_ADD,
+            RV_T4, RV_T0, RV_T2) ||
+        !rv_rrr(sel, MINIC_RISCV_MACHINE_SLTU,
+            RV_A0, RV_T4, RV_T0) ||
+        !rv_rrr(sel, MINIC_RISCV_MACHINE_OR,
+            RV_A0, RV_A0, RV_T1) ||
+        !rv_rr(sel, MINIC_RISCV_MACHINE_SNEZ, RV_A0, RV_A0) ||
+        !rv_core_checked32_store(sel,
+            ins->value.integer_overflow.result_address, 4U, RV_T4, RV_T2))
+        return false;
+    return rv_store(sel, ins->result, RV_A0);
+}
+
+/* A 64-bit RV32I result is two frame words; ADD/SUB carry and signed
+ * overflow stay in ordinary base-I GPRs.  MUL uses the original GNU
+ * __muldi3 quotient witness and __{u,}divdi3 to detect discarded high
+ * product bits.  Protect both zero-divisor and MIN/-1 cases. */
+static bool rv_core_checked32_wide(RvCoreSelection *sel,
+    const MinicCoreInstruction *ins, bool sign) {
+    const MinicCoreIntegerOverflowOperator op =
+        ins->value.integer_overflow.operator_kind;
+    const MinicCoreValueId left = ins->value.integer_overflow.left;
+    const MinicCoreValueId right = ins->value.integer_overflow.right;
+    const MinicCoreValueId address =
+        ins->value.integer_overflow.result_address;
+    if (op == MINIC_CORE_INTEGER_OVERFLOW_MULTIPLY) {
+        if (!sel->plan->frame->saves_return_address ||
+            !rv_value_chunk(sel, left, 0U, RV_A0, true) ||
+            !rv_value_chunk(sel, left, 1U, RV_A1, true) ||
+            !rv_value_chunk(sel, right, 0U, RV_A2, true) ||
+            !rv_value_chunk(sel, right, 1U, RV_A3, true) ||
+            !rv_checked_call(sel, "__muldi3") ||
+            !rv_rr(sel, MINIC_RISCV_MACHINE_MV, RV_T4, RV_A0) ||
+            !rv_rr(sel, MINIC_RISCV_MACHINE_MV, RV_T5, RV_A1) ||
+            !rv_core_checked32_store(sel, address, 8U, RV_T4, RV_T5) ||
+            !rv_value_chunk(sel, right, 0U, RV_A2, true) ||
+            !rv_value_chunk(sel, right, 1U, RV_A3, true))
+            return false;
+        if (sign) {
+            /* Original MIN64/-1 would fault in signed division. Rewrite
+             * only the verification denominator to +1; re-evaluate the
+             * original pair after the call and force overflow=true. */
+            if (!rv_value_chunk(sel, left, 0U, RV_T0, true) ||
+                !rv_value_chunk(sel, left, 1U, RV_T1, true) ||
+                !rv_rr(sel, MINIC_RISCV_MACHINE_SEQZ, RV_T6, RV_T0) ||
+                !rv_li(sel, RV_T0, INT32_MIN) ||
+                !rv_rrr(sel, MINIC_RISCV_MACHINE_XOR,
+                    RV_T0, RV_T1, RV_T0) ||
+                !rv_rr(sel, MINIC_RISCV_MACHINE_SEQZ, RV_T0, RV_T0) ||
+                !rv_rrr(sel, MINIC_RISCV_MACHINE_AND,
+                    RV_T6, RV_T6, RV_T0) ||
+                !rv_li(sel, RV_T0, -1) ||
+                !rv_rrr(sel, MINIC_RISCV_MACHINE_XOR,
+                    RV_T2, RV_A2, RV_T0) ||
+                !rv_rr(sel, MINIC_RISCV_MACHINE_SEQZ, RV_T2, RV_T2) ||
+                !rv_rrr(sel, MINIC_RISCV_MACHINE_AND,
+                    RV_T6, RV_T6, RV_T2) ||
+                !rv_rrr(sel, MINIC_RISCV_MACHINE_XOR,
+                    RV_T2, RV_A3, RV_T0) ||
+                !rv_rr(sel, MINIC_RISCV_MACHINE_SEQZ, RV_T2, RV_T2) ||
+                !rv_rrr(sel, MINIC_RISCV_MACHINE_AND,
+                    RV_T6, RV_T6, RV_T2) ||
+                !rv_rri(sel, MINIC_RISCV_MACHINE_SLLI,
+                    RV_T0, RV_T6, 1) ||
+                !rv_rrr(sel, MINIC_RISCV_MACHINE_ADD,
+                    RV_A2, RV_A2, RV_T0) ||
+                !rv_rrr(sel, MINIC_RISCV_MACHINE_ADD,
+                    RV_A3, RV_A3, RV_T6)) return false;
+        }
+        if (!rv_rrr(sel, MINIC_RISCV_MACHINE_OR,
+                RV_T0, RV_A2, RV_A3) ||
+            !rv_rr(sel, MINIC_RISCV_MACHINE_SEQZ, RV_T0, RV_T0) ||
+            !rv_rrr(sel, MINIC_RISCV_MACHINE_OR,
+                RV_A2, RV_A2, RV_T0) ||
+            !rv_rr(sel, MINIC_RISCV_MACHINE_MV, RV_A0, RV_T4) ||
+            !rv_rr(sel, MINIC_RISCV_MACHINE_MV, RV_A1, RV_T5) ||
+            !rv_checked_call(sel, sign ? "__divdi3" : "__udivdi3") ||
+            !rv_value_chunk(sel, left, 0U, RV_T0, true) ||
+            !rv_value_chunk(sel, left, 1U, RV_T1, true) ||
+            !rv_rrr(sel, MINIC_RISCV_MACHINE_XOR,
+                RV_T0, RV_A0, RV_T0) ||
+            !rv_rrr(sel, MINIC_RISCV_MACHINE_XOR,
+                RV_T1, RV_A1, RV_T1) ||
+            !rv_rrr(sel, MINIC_RISCV_MACHINE_OR,
+                RV_T0, RV_T0, RV_T1) ||
+            !rv_rr(sel, MINIC_RISCV_MACHINE_SNEZ, RV_A0, RV_T0) ||
+            !rv_value_chunk(sel, right, 0U, RV_T2, true) ||
+            !rv_value_chunk(sel, right, 1U, RV_T3, true) ||
+            !rv_rrr(sel, MINIC_RISCV_MACHINE_OR,
+                RV_T2, RV_T2, RV_T3) ||
+            !rv_rr(sel, MINIC_RISCV_MACHINE_SNEZ, RV_T2, RV_T2) ||
+            !rv_rrr(sel, MINIC_RISCV_MACHINE_AND,
+                RV_A0, RV_A0, RV_T2)) return false;
+        if (sign) {
+            if (!rv_value_chunk(sel, left, 0U, RV_T0, true) ||
+                !rv_value_chunk(sel, left, 1U, RV_T1, true) ||
+                !rv_value_chunk(sel, right, 0U, RV_T2, true) ||
+                !rv_value_chunk(sel, right, 1U, RV_T3, true) ||
+                !rv_rr(sel, MINIC_RISCV_MACHINE_SEQZ, RV_T0, RV_T0) ||
+                !rv_li(sel, RV_T6, INT32_MIN) ||
+                !rv_rrr(sel, MINIC_RISCV_MACHINE_XOR,
+                    RV_T1, RV_T1, RV_T6) ||
+                !rv_rr(sel, MINIC_RISCV_MACHINE_SEQZ, RV_T1, RV_T1) ||
+                !rv_rrr(sel, MINIC_RISCV_MACHINE_AND,
+                    RV_T0, RV_T0, RV_T1) ||
+                !rv_li(sel, RV_T6, -1) ||
+                !rv_rrr(sel, MINIC_RISCV_MACHINE_XOR,
+                    RV_T2, RV_T2, RV_T6) ||
+                !rv_rr(sel, MINIC_RISCV_MACHINE_SEQZ, RV_T2, RV_T2) ||
+                !rv_rrr(sel, MINIC_RISCV_MACHINE_AND,
+                    RV_T0, RV_T0, RV_T2) ||
+                !rv_rrr(sel, MINIC_RISCV_MACHINE_XOR,
+                    RV_T3, RV_T3, RV_T6) ||
+                !rv_rr(sel, MINIC_RISCV_MACHINE_SEQZ, RV_T3, RV_T3) ||
+                !rv_rrr(sel, MINIC_RISCV_MACHINE_AND,
+                    RV_T0, RV_T0, RV_T3) ||
+                !rv_rrr(sel, MINIC_RISCV_MACHINE_OR,
+                    RV_A0, RV_A0, RV_T0)) return false;
+        }
+        return rv_store(sel, ins->result, RV_A0);
+    }
+    if (op != MINIC_CORE_INTEGER_OVERFLOW_ADD &&
+        op != MINIC_CORE_INTEGER_OVERFLOW_SUBTRACT) return false;
+    if (!rv_value_chunk(sel, left, 0U, RV_T0, true) ||
+        !rv_value_chunk(sel, left, 1U, RV_T1, true) ||
+        !rv_value_chunk(sel, right, 0U, RV_T2, true) ||
+        !rv_value_chunk(sel, right, 1U, RV_T3, true))
+        return false;
+    if (op == MINIC_CORE_INTEGER_OVERFLOW_ADD) {
+        if (!rv_rrr(sel, MINIC_RISCV_MACHINE_ADD,
+                RV_T4, RV_T0, RV_T2) ||
+            !rv_rrr(sel, MINIC_RISCV_MACHINE_SLTU,
+                RV_T6, RV_T4, RV_T0) ||
+            !rv_rrr(sel, MINIC_RISCV_MACHINE_ADD,
+                RV_T5, RV_T1, RV_T3) ||
+            !rv_rrr(sel, MINIC_RISCV_MACHINE_SLTU,
+                RV_A0, RV_T5, RV_T1) ||
+            !rv_rrr(sel, MINIC_RISCV_MACHINE_ADD,
+                RV_T5, RV_T5, RV_T6) ||
+            !rv_rrr(sel, MINIC_RISCV_MACHINE_SLTU,
+                RV_A1, RV_T5, RV_T6) ||
+            !rv_rrr(sel, MINIC_RISCV_MACHINE_OR,
+                RV_A0, RV_A0, RV_A1)) return false;
+    } else {
+        if (!rv_rrr(sel, MINIC_RISCV_MACHINE_SUB,
+                RV_T4, RV_T0, RV_T2) ||
+            !rv_rrr(sel, MINIC_RISCV_MACHINE_SLTU,
+                RV_T6, RV_T0, RV_T2) ||
+            !rv_rrr(sel, MINIC_RISCV_MACHINE_SUB,
+                RV_T5, RV_T1, RV_T3) ||
+            !rv_rrr(sel, MINIC_RISCV_MACHINE_SLTU,
+                RV_A0, RV_T1, RV_T3) ||
+            !rv_rrr(sel, MINIC_RISCV_MACHINE_SLTU,
+                RV_A1, RV_T5, RV_T6) ||
+            !rv_rrr(sel, MINIC_RISCV_MACHINE_SUB,
+                RV_T5, RV_T5, RV_T6) ||
+            !rv_rrr(sel, MINIC_RISCV_MACHINE_OR,
+                RV_A0, RV_A0, RV_A1)) return false;
+    }
+    if (sign) {
+        if (!rv_rrr(sel, MINIC_RISCV_MACHINE_XOR,
+                RV_A0, RV_T1, RV_T3) ||
+            (op == MINIC_CORE_INTEGER_OVERFLOW_ADD &&
+             !rv_rr(sel, MINIC_RISCV_MACHINE_NOT, RV_A0, RV_A0)) ||
+            !rv_rrr(sel, MINIC_RISCV_MACHINE_XOR,
+                RV_A1, RV_T1, RV_T5) ||
+            !rv_rrr(sel, MINIC_RISCV_MACHINE_AND,
+                RV_A0, RV_A0, RV_A1) ||
+            !rv_rri(sel, MINIC_RISCV_MACHINE_SRLI,
+                RV_A0, RV_A0, 31)) return false;
+    }
+    return rv_core_checked32_store(sel, address, 8U, RV_T4, RV_T5) &&
+        rv_store(sel, ins->result, RV_A0);
+}
+
+static bool rv_core_checked32(RvCoreSelection *sel,
+    const MinicCoreInstruction *ins) {
+    const MinicCoreFunction *fn = sel->plan->core;
+    const MinicCoreTypeContext *types = fn->type_context;
+    const MinicCoreValueId left = ins->value.integer_overflow.left;
+    const MinicCoreValueId right = ins->value.integer_overflow.right;
+    const MinicCoreValueId address =
+        ins->value.integer_overflow.result_address;
+    const MinicCoreIntegerOverflowOperator op =
+        ins->value.integer_overflow.operator_kind;
+    const MinicCoreType *pointer, *result, *flag, *lt, *rt;
+    MinicCoreTypeId pointee;
+    if (sel->xlen != 32U || types == NULL || !sel->plan->frame ||
+        left >= fn->value_count || right >= fn->value_count ||
+        address >= fn->value_count || ins->result >= fn->value_count ||
+        (op != MINIC_CORE_INTEGER_OVERFLOW_ADD &&
+         op != MINIC_CORE_INTEGER_OVERFLOW_SUBTRACT &&
+         op != MINIC_CORE_INTEGER_OVERFLOW_MULTIPLY))
+        return false;
+    pointer = minic_core_type_get(types, minic_core_type_unqualified(types,
+        fn->values[address].core_type_id));
+    flag = minic_core_type_get(types, minic_core_type_unqualified(types,
+        ins->core_type_id));
+    if (pointer == NULL || pointer->kind != MINIC_CORE_TYPE_POINTER ||
+        !pointer->has_layout || pointer->size != 4U ||
+        flag == NULL || flag->kind != MINIC_CORE_TYPE_INTEGER ||
+        !flag->value.integer.is_bool ||
+        minic_core_type_unqualified(types,
+            fn->values[ins->result].core_type_id) !=
+            minic_core_type_unqualified(types, ins->core_type_id))
+        return false;
+    pointee = minic_core_type_unqualified(types,
+        pointer->value.pointer.pointee);
+    result = minic_core_type_get(types, pointee);
+    lt = minic_core_type_get(types, minic_core_type_unqualified(types,
+        fn->values[left].core_type_id));
+    rt = minic_core_type_get(types, minic_core_type_unqualified(types,
+        fn->values[right].core_type_id));
+    if (result == NULL || lt == NULL || rt == NULL ||
+        result->kind != MINIC_CORE_TYPE_INTEGER ||
+        result->value.integer.is_bool || !result->has_layout ||
+        (result->size != 1U && result->size != 2U &&
+         result->size != 4U && result->size != 8U) ||
+        result->value.integer.bit_width != result->size * 8U ||
+        lt->kind != MINIC_CORE_TYPE_INTEGER ||
+        rt->kind != MINIC_CORE_TYPE_INTEGER ||
+        lt->value.integer.is_bool || rt->value.integer.is_bool ||
+        !lt->has_layout || !rt->has_layout ||
+        (lt->size != 1U && lt->size != 2U &&
+         lt->size != 4U && lt->size != 8U) ||
+        (rt->size != 1U && rt->size != 2U &&
+         rt->size != 4U && rt->size != 8U) ||
+        lt->value.integer.bit_width != lt->size * 8U ||
+        rt->value.integer.bit_width != rt->size * 8U)
+        return false;
+    if (result->size <= 4U) {
+        if (lt->size <= 4U && rt->size <= 4U)
+            return rv_core_checked32_narrow(sel, ins, lt, rt,
+                (unsigned int)result->size,
+                result->value.integer.is_signed);
+        if (lt->size == 8U || rt->size == 8U)
+            return rv_core_checked32_mixed_wide_add(sel, ins,
+                lt, rt, result);
+        return false;
+    }
+    if (minic_core_type_unqualified(types,
+            fn->values[left].core_type_id) != pointee ||
+        minic_core_type_unqualified(types,
+            fn->values[right].core_type_id) != pointee)
+        return false;
+    return rv_core_checked32_wide(sel, ins,
+        result->value.integer.is_signed);
+}
+
 static bool rv_core_checked_overflow(RvCoreSelection *sel,
     const MinicCoreInstruction *ins) {
     const MinicCoreFunction *fn = sel->plan->core;
@@ -1811,6 +2206,7 @@ static bool rv_core_checked_overflow(RvCoreSelection *sel,
     MinicCoreTypeId pointee;
     unsigned size;
     bool sign;
+    if (sel->xlen == 32U) return rv_core_checked32(sel, ins);
     if (sel->xlen != 64U || types == NULL ||
         left >= fn->value_count || right >= fn->value_count ||
         address >= fn->value_count || ins->result >= fn->value_count ||

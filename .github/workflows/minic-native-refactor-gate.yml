@@ -16,6 +16,10 @@ on:
       - 'src/compiler/**'
       - 'src/frontend/**'
       - 'tests/target/riscv64/layout_test.c'
+      - 'tests/target/machine_gnu_asm_test.c'
+      - 'tests/target/riscv_machine_gnu_asm_test.c'
+      - 'tests/target/direct_machine_gnu_asm_test.c'
+      - 'tests/target/x86_machine_gnu_asm_test.c'
       - 'Makefile'
       - 'tests/compiler/c0/check-four-target-model-m0.c'
       - 'tests/compiler/c0/check-minic-target-boundaries.sh'
@@ -64,6 +68,10 @@ on:
       - 'src/compiler/**'
       - 'src/frontend/**'
       - 'tests/target/riscv64/layout_test.c'
+      - 'tests/target/machine_gnu_asm_test.c'
+      - 'tests/target/riscv_machine_gnu_asm_test.c'
+      - 'tests/target/direct_machine_gnu_asm_test.c'
+      - 'tests/target/x86_machine_gnu_asm_test.c'
       - 'Makefile'
       - '.github/workflows/minic-native-refactor-gate.yml'
       - 'tests/compiler/c0/check-minic-target-boundaries.sh'
@@ -184,6 +192,13 @@ jobs:
           make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/minic-native-backend all
           test -x build/minic-native-backend/bin/minic
           test -x build/minic-native-backend/bin/minic-cc
+      - name: Four Target-owned GNU section marker and MachineIR printer contracts
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/minic-native-backend \
+            check-machine-gnu-asm check-riscv-machine-gnu-asm \
+            check-direct-machine-gnu-asm check-x86-machine-gnu-asm
       - name: P47 five-ISA global output smoke with focused x86 GNU ABI oracles
         shell: bash
         run: |

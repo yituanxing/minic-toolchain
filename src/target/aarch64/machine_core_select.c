@@ -1492,6 +1492,72 @@ static bool a64_linux_acquire_release(A64CoreSelection *sel,
     return true;
 }
 
+/* One Core proof is shared by the native selector and the selected-source
+ * seal: exactly the original Linux cc-clobber unsigned-LP64 form, never an
+ * arbitrary register ASM with a matching mnemonic. */
+static bool a64_mask_core_contract(const MinicCoreFunction *fn,
+    const MinicCoreInstruction *ins, const MinicCoreInlineAsm *source) {
+    const MinicCoreStructuredInlineAsmOperand *ops;
+    size_t i;
+    if (fn == NULL || ins == NULL || source == NULL ||
+        ins->kind != MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM ||
+        source->target_machine_form_id != AARCH64_MACHINE_ASM_MASK ||
+        source->target_machine_form_variant != 0U ||
+        source->operand_plan_owner != MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED ||
+        !mask_template(source->template_text, source->template_length) ||
+        !source->is_volatile || source->is_goto ||
+        source->has_memory_clobber || source->explicit_memory_clobber ||
+        source->implicit_memory_effect ||
+        source->register_clobber_count != 1U ||
+        source->register_clobbers == NULL ||
+        source->register_clobbers[0].name == NULL ||
+        source->register_clobbers[0].name_length != 2U ||
+        memcmp(source->register_clobbers[0].name, "cc", 2U) != 0 ||
+        source->resolved_immediate_count != 0U ||
+        source->symbol_reference_count != 0U ||
+        source->deferred_immediate_symbol != NULL ||
+        ins->result != MINIC_CORE_VALUE_INVALID ||
+        !minic_core_function_type_is_kind(fn, ins->core_type_id,
+            MINIC_CORE_TYPE_VOID) ||
+        ins->value.structured_inline_asm.operand_count != 3U)
+        return false;
+    ops = ins->value.structured_inline_asm.operands;
+    for (i = 0U; i < 3U; ++i)
+        if (ops[i].operand_index != i || ops[i].value >= fn->value_count ||
+            ops[i].kind != (i == 0U ?
+                MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT :
+                MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT) ||
+            ops[i].has_fixed_register_binding || ops[i].early_clobber ||
+            ops[i].physical_early_clobber || ops[i].physical_read_write ||
+            ops[i].has_tied_output ||
+            !aarch64_asm_core_integer(fn, ops[i].value,
+                i == 0U, 8U, 0))
+            return false;
+    return true;
+}
+
+/* Linux array_index_mask_nospec is a sealed three-operand unsigned-LP64
+ * compare/SBC chain. Emit native typed opcodes back-to-back so the SBC reads
+ * precisely the NZCV produced by its CMP, then write the =r lvalue back. */
+static bool a64_linux_mask_source(A64CoreSelection *sel,
+    const MinicCoreInstruction *ins, const MinicCoreInlineAsm *source) {
+    const MinicCoreStructuredInlineAsmOperand *ops =
+        ins->value.structured_inline_asm.operands;
+    if (!a64_mask_core_contract(sel->ctx->fn, ins, source) ||
+        !a64_load_core(sel, ops[1].value, A64_T1, 64U) ||
+        !a64_load_core(sel, ops[2].value, A64_T2, 64U) ||
+        !a64_compare(sel, 64U, A64_T1, A64_T2) ||
+        !a64_rrr(sel, MINIC_A64_MACHINE_SBC, 64U, A64_T0,
+            MINIC_A64_MACHINE_ZR, MINIC_A64_MACHINE_ZR) ||
+        !a64_load_core(sel, ops[0].value, A64_T2, 64U) ||
+        !a64_memory_register(sel, MINIC_A64_MACHINE_STR_X, false,
+            A64_T0, 64U, A64_T2, 0U, true, true))
+        return false;
+    return minic_machine_builder_seal_selected_source_asm(&sel->builder,
+        source->target_machine_form_id, source->target_machine_form_variant,
+        source->source_asm_unique_id);
+}
+
 /* Linux's sealed 32-bit rbit macro is a normal physical register transform;
  * the output itself is an address-backed Core object, not a SSA result. */
 static bool a64_linux_bit_reverse(A64CoreSelection *sel,
@@ -2491,6 +2557,12 @@ bool minic_aarch64_machine_prove_selected_source_asm(
             aarch64_asm_core_integer(fn, ops[4].value,
                 false, cmp_width, -1);
     }
+    if (source->target_machine_form_id == AARCH64_MACHINE_ASM_MASK)
+        return selected->kind == MINIC_MACHINE_INSTRUCTION_SELECTED &&
+            selected->opcode == MINIC_A64_MACHINE_STR_X &&
+            selected->source_asm_machine_form_id == AARCH64_MACHINE_ASM_MASK &&
+            selected->source_asm_machine_form_variant == 0U &&
+            a64_mask_core_contract(fn, ins, source);
     if (ins->value.structured_inline_asm.operand_count != 2U ||
         (!acquire && !release && !bit_reverse)) return false;
     ops = ins->value.structured_inline_asm.operands;
@@ -3576,6 +3648,8 @@ static bool a64_core_instruction(A64CoreSelection *sel,
         if (source->target_machine_form_id == AARCH64_MACHINE_ASM_LDAR ||
             source->target_machine_form_id == AARCH64_MACHINE_ASM_STLR)
             return a64_linux_acquire_release(sel, ins, source);
+        if (source->target_machine_form_id == AARCH64_MACHINE_ASM_MASK)
+            return a64_linux_mask_source(sel, ins, source);
         if (source->target_machine_form_id == AARCH64_MACHINE_ASM_BIT_REVERSE)
             return a64_linux_bit_reverse(sel, ins, source);
         if (source->target_machine_form_id == AARCH64_MACHINE_ASM_TLBI)

@@ -8,7 +8,7 @@ trap 'rm -rf "$work"' EXIT HUP INT TERM
 "${HOST_CC:-cc}" -E -P -std=gnu11 "$src" -o "$work/positive.i"
 "$mini" --target=aarch64-linux -fshort-wchar -funsigned-char -fno-PIE \
     -S "$work/positive.i" -o "$work/positive.s"
-test "$(grep -Fc '  mrs x9, pmccfiltr_el0' "$work/positive.s")" -eq 1
+test "$(grep -Ec '^[[:space:]]*mrs x9, pmccfiltr_el0[[:space:]]*$' "$work/positive.s" || true)" -eq 1
 for target in x86_64 loongarch64; do
     if "$mini" --target="$target-linux" -S "$work/positive.i" \
         -o "$work/foreign.s" >/dev/null 2>&1; then

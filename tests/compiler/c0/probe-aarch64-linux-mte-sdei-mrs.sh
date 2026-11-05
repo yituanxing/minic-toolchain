@@ -7,9 +7,9 @@ work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT HUP INT TERM
 "${HOST_CC:-cc}" -E -P -std=gnu11 "$src" -o "$work/positive.i"
 "$mini" --target=aarch64-linux -S "$work/positive.i" -o "$work/positive.s"
-test "$(grep -Ec '^  mrs x9, ' "$work/positive.s")" -eq 2
-grep -Fq '  mrs x9, CNTVCT_EL0' "$work/positive.s"
-grep -Fq '  mrs x9, vbar_el1' "$work/positive.s"
+test "$(grep -Ec '^[[:space:]]*mrs x9, [[:alnum:]_]+[[:space:]]*$' "$work/positive.s" || true)" -eq 2
+grep -Eq '^[[:space:]]*mrs x9, CNTVCT_EL0[[:space:]]*$' "$work/positive.s"
+grep -Eq '^[[:space:]]*mrs x9, vbar_el1[[:space:]]*$' "$work/positive.s"
 for target in x86_64 loongarch64; do
     if "$mini" --target="$target-linux" -S "$work/positive.i" \
         -o "$work/foreign.s" >/dev/null 2>&1; then

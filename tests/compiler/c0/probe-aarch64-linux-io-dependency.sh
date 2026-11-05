@@ -19,8 +19,8 @@ unsigned long mini_readl_dependency(unsigned int val) {
 }
 SRC
 "$mini" --target=aarch64-linux -S "$d/io.i" -o "$d/mini.s"
-test "$(grep -Fc '  eor x9, x10, x10' "$d/mini.s")" -eq 2
-test "$(grep -Fc '  cbnz x9, .' "$d/mini.s")" -eq 2
+test "$(grep -Ec '^[[:space:]]*eor[[:space:]]+x9,[[:space:]]*x10,[[:space:]]*x10[[:space:]]*$' "$d/mini.s" || true)" -eq 2
+test "$(grep -Ec '^[[:space:]]*cbnz[[:space:]]+x9,[[:space:]]*\.[[:space:]]*$' "$d/mini.s" || true)" -eq 2
 for bad in second-instruction extra-instruction wrong-constraint missing-clobber; do
  case "$bad" in
   second-instruction) sed 's/cbnz/cbz/g' "$d/io.i" > "$d/bad.i" ;;

@@ -8,11 +8,11 @@ trap 'rm -rf "$work"' EXIT HUP INT TERM
 src="$root/tests/compiler/c0/aarch64_linux_mrs_read_family.c"
 "${HOST_CC:-cc}" -E -P -std=gnu11 "$src" -o "$work/read.i"
 "$mini" --target=aarch64-linux -S "$work/read.i" -o "$work/read.s"
-test "$(grep -Ec '^  mrs x9, ' "$work/read.s")" -eq 31
+test "$(grep -Ec '^[[:space:]]*mrs x9, [[:alnum:]_]+[[:space:]]*$' "$work/read.s" || true)" -eq 31
 for reg in pmcr_el0 pmceid0_el0 pmceid1_el0 cntpct_el0 \
     cnthctl_el2 SCTLR_EL1 dbgbcr15_el1 dbgbvr0_el1 \
     pmevcntr30_el0 pmevtyper30_el0 s3_0_c15_c0_5; do
-    grep -Fq "  mrs x9, $reg" "$work/read.s"
+    grep -Eq "^[[:space:]]*mrs x9, $reg[[:space:]]*$" "$work/read.s"
 done
 for target in x86_64 loongarch64; do
     if "$mini" --target="$target-linux" -S "$work/read.i" \

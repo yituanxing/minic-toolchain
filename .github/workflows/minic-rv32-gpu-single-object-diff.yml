@@ -29,6 +29,13 @@ jobs:
         timeout-minutes: 5
         run: |
           set -Eeuo pipefail
+          # Mirror routing only: preserve Ubuntu suites, signed package metadata,
+          # the original GNU/QEMU package list, and downstream binary SHA guards.
+          for sources in /etc/apt/apt-mirrors.txt /etc/apt/sources.list.d/ubuntu.sources; do
+            if [[ -f "$sources" ]] && grep -q 'azure.archive.ubuntu.com' "$sources"; then
+              sudo sed -i 's#azure.archive.ubuntu.com#archive.ubuntu.com#g' "$sources"
+            fi
+          done
           sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=15 -o Acquire::https::Timeout=15 update -qq
           sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=15 -o Acquire::https::Timeout=15 install -y --no-install-recommends \
             gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu qemu-system-misc opensbi \

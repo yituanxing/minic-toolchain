@@ -7,8 +7,8 @@ trap 'rm -rf "$work"' EXIT HUP INT TERM
 src="$root/tests/compiler/c0/aarch64_linux_tegra_ndiv_sysreg.c"
 "${HOST_CC:-cc}" -E -P -std=gnu11 "$src" -o "$work/real.i"
 "$mini" --target=aarch64-linux -S "$work/real.i" -o "$work/real.s"
-grep -q '  mrs x9, s3_0_c15_c0_4' "$work/real.s"
-grep -q '  msr s3_0_c15_c0_4, x9' "$work/real.s"
+grep -Eq '^[[:space:]]*mrs x9, s3_0_c15_c0_4[[:space:]]*$' "$work/real.s"
+grep -Eq '^[[:space:]]*msr s3_0_c15_c0_4, x9[[:space:]]*$' "$work/real.s"
 for target in x86_64 loongarch64; do
     if "$mini" --target="$target-linux" -S "$work/real.i" \
         -o "$work/foreign.s" >/dev/null 2>&1; then
