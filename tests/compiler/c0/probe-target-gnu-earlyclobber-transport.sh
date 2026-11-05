@@ -21,9 +21,15 @@ for entry in "${cases[@]}"; do
     IFS='|' read -r target source minimum <<< "$entry"
     cc -E -P -std=gnu11 -x c "$root/tests/compiler/c0/$source" \
         -o "$tmp/$target.i"
-    MINIC_GNU_ASM_CONSTRAINT_TRACE=1 MINIC_ASM_OPERAND_PLAN_TRACE=1 \
-        "$minic" --target="$target-linux" \
-        -S "$tmp/$target.i" -o "$tmp/$target.s" 2>"$tmp/$target.log"
+    echo "TARGET_GNU_EARLY_STAGE=compile_begin target=$target"
+    if ! MINIC_GNU_ASM_CONSTRAINT_TRACE=1 MINIC_ASM_OPERAND_PLAN_TRACE=1 \
+            "$minic" --target="$target-linux" \
+            -S "$tmp/$target.i" -o "$tmp/$target.s" 2>"$tmp/$target.log"; then
+        echo "TARGET_GNU_EARLY_STAGE=compile_failed target=$target" >&2
+        tail -n 55 "$tmp/$target.log" >&2 || true
+        exit 1
+    fi
+    echo "TARGET_GNU_EARLY_STAGE=compile_success target=$target"
     test -s "$tmp/$target.s"
     actual="$(grep -c 'CORE_GNU_ASM_CONSTRAINT .* gnu_early=1 core_early=0' \
               "$tmp/$target.log" || true)"

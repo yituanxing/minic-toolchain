@@ -14,6 +14,8 @@ work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT HUP INT TERM
 fixtures='dynamic_stack_alloca dynamic_local_vla'
 expected=2
+# Trace only the failing AArch64 Core/Machine boundary; stderr remains per-fixture.
+if [ "$target" = aarch64 ]; then export MINIC_M1_TRACE=1; fi
 # The 64-wide-argument AAPCS64 path spills 960 bytes across live alloca.
 if [ "$target" = aarch64 ]; then
   fixtures="$fixtures dynamic_stack_wide_spill"
@@ -39,6 +41,8 @@ for fixture in $fixtures; do
         -o "$mini_asm" >"$work/$fixture.mini.out" 2>"$work/$fixture.mini.err" ||
      ! test -s "$mini_asm"; then
     echo "FOUR_BACKEND_DYNAMIC_STACK=FAIL target=$target fixture=$fixture stage=MiniC" >&2
+    grep -E "MINIC_BACKEND_REJECT|MINIC_M1_FRONTIER|MINIC_A64_|MINIC_M1_FRAME|MINIC_LP64_" \
+      "$work/$fixture.mini.err" | tail -n 65 >&2 || true
     tail -n 18 "$work/$fixture.mini.err" >&2 || true
     exit 1
   fi

@@ -206,6 +206,131 @@ jobs:
           test "$(wc -l <"$ev/results.txt")" -eq 4
           cat "$ev/results.txt"
           echo 'RV32_GPU_DIFF=COMPLETE no_1741_rebuild=true QEMU_GPU_only=4 not_full_P2=true'
+      - name: Source-identical GNU and MiniC virtio_dev_probe phase trace (one TU, frozen objects)
+        timeout-minutes: 10
+        run: |
+          set -Eeuo pipefail
+          src="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0/linux-6.6.143"
+          out="$GITHUB_WORKSPACE/build/rv32i-linux-entry/out"
+          root="$GITHUB_WORKSPACE/build/rv32-gpu-diff"
+          ev="$root/evidence"
+          cp "$src/drivers/virtio/virtio.c" "$ev/virtio.uninstrumented.c"
+          python3 - "$src/drivers/virtio/virtio.c" <<'PY'
+          from pathlib import Path
+          import sys
+          p=Path(sys.argv[1])
+          s=p.read_text()
+          def insert_after(needle, addition):
+              global s
+              count=s.count(needle)
+              if count!=1:
+                  raise SystemExit(f"RV32_GPU_TRACE=BLOCKED anchor={needle!r} count={count}")
+              s=s.replace(needle, needle+"\n"+addition, 1)
+          insert_after('virtio_add_status(dev, VIRTIO_CONFIG_S_DRIVER);\n\n\t/* Figure out what features the device supports. */', r'''
+              pr_err("MINIC_GPU_TRACE_INPUT embedded=%px dev=%px offset=%ld config=%px\n",
+                     (void *)_d, (void *)dev, (long)((char *)_d - (char *)dev),
+                     (void *)dev->config);''')
+          insert_after('device_features = dev->config->get_features(dev);', r'''
+              pr_err("MINIC_GPU_TRACE_RAW low=%08x high=%08x\n",
+                     (u32)device_features, (u32)(device_features >> 32));''')
+          insert_after('dev->features = driver_features_legacy & device_features;', r'''
+              pr_err("MINIC_GPU_TRACE_SELECT low=%08x high=%08x rawhigh=%08x driverhigh=%08x legacyhigh=%08x\n",
+                     (u32)dev->features, (u32)(dev->features >> 32),
+                     (u32)(device_features >> 32), (u32)(driver_features >> 32),
+                     (u32)(driver_features_legacy >> 32));''')
+          insert_after('__virtio_set_bit(dev, i);', r'''
+              pr_err("MINIC_GPU_TRACE_TRANSPORT low=%08x high=%08x\n",
+                     (u32)dev->features, (u32)(dev->features >> 32));''')
+          marker='err = dev->config->finalize_features(dev);'
+          if s.count(marker)<2:
+              raise SystemExit('RV32_GPU_TRACE=BLOCKED finalize anchor missing')
+          s=s.replace(marker, marker+r'''
+              pr_err("MINIC_GPU_TRACE_FINALIZE low=%08x high=%08x err=%d\n",
+                     (u32)dev->features, (u32)(dev->features >> 32), err);''',1)
+          p.write_text(s)
+          PY
+          cp "$src/drivers/virtio/virtio.c" "$ev/virtio.instrumented.c"
+          make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
+            KBUILD_NOCMDDEP=1 -j1 drivers/virtio/virtio.i drivers/virtio/virtio.o \
+            >"$ev/trace-gnu-compile.log" 2>&1 || {
+              echo 'RV32_GPU_TRACE=BLOCKED original_GNU_one_TU_compile'
+              tail -n 55 "$ev/trace-gnu-compile.log"
+              exit 7
+            }
+          rebuilt=$(grep -Ec '^[[:space:]]+CC[[:space:]]+' "$ev/trace-gnu-compile.log" || true)
+          ((rebuilt<=1)) || {
+            echo "RV32_GPU_TRACE=BLOCKED unexpected_GNU_C_recompile=$rebuilt"
+            exit 7
+          }
+          echo "RV32_GPU_TRACE_GNU_RECOMPILED_TU=$rebuilt"
+          test -s "$out/drivers/virtio/virtio.i"
+          test -s "$out/drivers/virtio/virtio.o"
+          cp "$out/drivers/virtio/virtio.o" "$root/instrumented-gnu-virtio.o"
+          sed '/^[[:space:]]*#/d' "$out/drivers/virtio/virtio.i" >"$root/instrumented.i"
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$root/minic-trace-build" all \
+            >"$ev/trace-minic-build.log" 2>&1 || {
+              echo 'RV32_GPU_TRACE=BLOCKED minic_host_build'
+              tail -n 45 "$ev/trace-minic-build.log"
+              exit 7
+            }
+          "$root/minic-trace-build/bin/minic-cc" --target=riscv32-linux \
+            -march=rv32i -mabi=ilp32 -S "$root/instrumented.i" \
+            -o "$root/instrumented-minic.s" >"$ev/trace-minic-compile.out" \
+            2>"$ev/trace-minic-compile.err" || {
+              echo 'RV32_GPU_TRACE=BLOCKED instrumented_MiniC_compile'
+              tail -n 55 "$ev/trace-minic-compile.err"
+              exit 7
+            }
+          riscv64-linux-gnu-gcc -march=rv32i -mabi=ilp32 -c -x assembler \
+            "$root/instrumented-minic.s" -o "$root/instrumented-minic-virtio.o" \
+            >"$ev/trace-minic-as.log" 2>&1 || {
+              echo 'RV32_GPU_TRACE=BLOCKED instrumented_MiniC_GNU_AS'
+              tail -n 45 "$ev/trace-minic-as.log"
+              exit 7
+            }
+          oracle() {
+            local mode="$1"
+            mkdir -p "$ev/trace-$mode"
+            RV32I_QEMU_IMAGE="$out/arch/riscv/boot/Image" \
+              RV32I_QEMU_WORK="$ev/trace-$mode" RV32I_QEMU_P1=1 \
+              RV32I_QEMU_GPU_DIAG=1 RV32I_QEMU_GPU_MODULE_DIR="$root/modules" \
+              RV32I_QEMU_TIMEOUT_SECONDS=120 \
+              bash tools/ci/linux-rv32i-qemu-p0-v1.sh >"$ev/trace-$mode.log" 2>&1
+          }
+          for mode in gnu minic; do
+            if [[ "$mode" == gnu ]]; then
+              cp "$root/instrumented-gnu-virtio.o" "$out/drivers/virtio/virtio.o"
+            else
+              cp "$root/instrumented-minic-virtio.o" "$out/drivers/virtio/virtio.o"
+            fi
+            cp "$root/gnu-virtio_pci_modern_dev.o" "$out/drivers/virtio/virtio_pci_modern_dev.o"
+            touch "$out/drivers/virtio/virtio.o" "$out/drivers/virtio/virtio_pci_modern_dev.o"
+            make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
+              KBUILD_NOCMDDEP=1 -j4 \
+              --eval="vmlinux: KBUILD_VMLINUX_LIBS += $root/softarith.a" Image \
+              >"$ev/trace-$mode.relink.log" 2>&1 || {
+                echo "RV32_GPU_TRACE=BLOCKED mode=$mode link"
+                tail -n 45 "$ev/trace-$mode.relink.log"
+                exit 7
+              }
+            if oracle "$mode"; then
+              result=PASS
+            else
+              result=FAIL
+            fi
+            echo "RV32_GPU_TRACE_MODE=$mode GPU=$result"
+            grep -ha 'MINIC_GPU_TRACE_' "$ev/trace-$mode/qemu-serial.log" \
+              | tee "$ev/trace-$mode.phases" || true
+            test -s "$ev/trace-$mode.phases" || {
+              echo "RV32_GPU_TRACE=BLOCKED mode=$mode missing_kernel_phase_logs"
+              exit 7
+            }
+            if [[ "$mode" == gnu && "$result" != PASS ]]; then
+              echo 'RV32_GPU_TRACE=BLOCKED instrumented_GNU_GPU_baseline_failed'
+              exit 7
+            fi
+          done
+          echo 'RV32_GPU_TRACE=COMPLETE frozen_1741_objects=true traced_only_virtio_TU=2 GNU_baseline_required=true diagnostic_not_P2=true'
       - name: Preserve exact swap and guest evidence
         if: always()
         uses: actions/upload-artifact@v4

@@ -12,7 +12,7 @@ source="$root/tests/compiler/c0/aarch64-linux-narrow-cmpxchg.c"
 # Source-only native CI executes all safety and codegen contracts without
 # requiring the foreign assembler/QEMU.  The runtime matrix executes both.
 cc -E -P -x c "$source" -o "$work/narrow.i"
-"$minic" --target=aarch64-linux -S "$work/narrow.i" -o "$work/narrow.minic.s"
+MINIC_M1_TRACE=1 MINIC_ASM_OPERAND_PLAN_TRACE=1 "$minic" --target=aarch64-linux -S "$work/narrow.i" -o "$work/narrow.minic.s"
 for opcode in \
     'ldxrb w9' 'ldaxrb w9' 'stxrb w13' 'stlxrb w13' \
     'ldxrh w9' 'ldaxrh w9' 'stxrh w13' 'stlxrh w13' \

@@ -2345,8 +2345,59 @@ bool minic_aarch64_machine_prove_selected_source_asm(
         !minic_core_function_type_is_kind(fn, ins->core_type_id,
             MINIC_CORE_TYPE_VOID) ||
         !source->is_volatile || source->is_goto ||
-        source->operand_plan_owner != MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED ||
-        ins->value.structured_inline_asm.operand_count != 2U ||
+        source->operand_plan_owner != MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED)
+        return false;
+    /*
+     * The five-operand Linux CMPXCHG family has already been selected by the
+     * target, but must also prove its Core roles before the selected-source
+     * seal is accepted.  Two-operand acquire/release rules below are separate.
+     */
+    if (source->target_machine_form_id == AARCH64_MACHINE_ASM_CMPXCHG) {
+        const unsigned int named = aarch64_linux_cmpxchg_form(
+            source->template_text, source->template_length, false);
+        const unsigned int numeric = aarch64_linux_cmpxchg_form(
+            source->template_text, source->template_length, true);
+        const unsigned int form = numeric ? numeric : named;
+        const size_t cmp_width = aarch64_linux_cmpxchg_width(form);
+        const unsigned int mode = form ?
+            (form - 1U) % 4U : 0U;
+        static const MinicCoreStructuredInlineAsmOperandKind kinds[5] = {
+            MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT,
+            MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT,
+            MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE,
+            MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT,
+            MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT
+        };
+        if (form == 0U ||
+            selected->source_asm_machine_form_id !=
+                AARCH64_MACHINE_ASM_CMPXCHG ||
+            selected->source_asm_machine_form_variant != form ||
+            source->target_machine_form_variant != form ||
+            source->has_memory_clobber != (mode != 0U) ||
+            source->register_clobber_count != 0U ||
+            source->resolved_immediate_count != 0U ||
+            source->symbol_reference_count != 0U ||
+            ins->value.structured_inline_asm.operand_count != 5U ||
+            ins->value.structured_inline_asm.operands == NULL)
+            return false;
+        ops = ins->value.structured_inline_asm.operands;
+        for (i = 0U; i < 5U; ++i)
+            if (ops[i].operand_index != i ||
+                ops[i].value >= fn->value_count ||
+                ops[i].kind != kinds[i] ||
+                ops[i].has_fixed_register_binding ||
+                ops[i].has_tied_output || ops[i].physical_read_write)
+                return false;
+        return aarch64_asm_core_integer(fn, ops[0].value, true, 8U, -1) &&
+            aarch64_asm_core_integer(fn, ops[1].value,
+                true, cmp_width, -1) &&
+            aarch64_asm_core_integer(fn, ops[2].value,
+                true, cmp_width, -1) &&
+            aarch64_asm_core_integer(fn, ops[3].value, false, 8U, -1) &&
+            aarch64_asm_core_integer(fn, ops[4].value,
+                false, cmp_width, -1);
+    }
+    if (ins->value.structured_inline_asm.operand_count != 2U ||
         (!acquire && !release && !bit_reverse)) return false;
     ops = ins->value.structured_inline_asm.operands;
     for (i = 0U; i < 2U; ++i)
@@ -4107,8 +4158,18 @@ bool minic_aarch64_machine_select_core_subset(
             goto cleanup;
         }
     }
-    ok = a64_derive_generated_features(&sel) &&
-         minic_machine_gnu_asm_preflight(machine, &sel.policy);
+    ok = a64_derive_generated_features(&sel);
+    if (!ok && getenv("MINIC_M1_TRACE") != NULL)
+        (void)fprintf(stderr,
+            "MINIC_A64_MIR_REJECT function=%s phase=generated_features blocks=%zu\n",
+            ctx->name, machine->block_count);
+    if (ok) {
+        ok = minic_machine_gnu_asm_preflight(machine, &sel.policy);
+        if (!ok && getenv("MINIC_M1_TRACE") != NULL)
+            (void)fprintf(stderr,
+                "MINIC_A64_MIR_REJECT function=%s phase=machine_preflight blocks=%zu\n",
+                ctx->name, machine->block_count);
+    }
 cleanup:
     free(sel.blocks);
     free(sel.false_blocks);
