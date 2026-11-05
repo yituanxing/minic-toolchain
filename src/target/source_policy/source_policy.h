@@ -66,6 +66,12 @@ typedef struct MinicTargetSourceLanguagePolicy {
         const MinicTargetInvocation *, const char *, size_t,
         const MinicTargetGnuPragmaOptionState *,
         MinicTargetGnuPragmaOptionState *);
+    /* GCC system headers may contain target-private header markers. The
+     * source policy admits only exact named markers under the active source
+     * option snapshot; no marker enables machine emission on its own. */
+    bool (*gnu_pragma_internal_header)(
+        const MinicTargetInvocation *, const char *, size_t,
+        const char *, size_t, const MinicTargetGnuPragmaOptionState *);
 } MinicTargetSourceLanguagePolicy;
 
 /* The frontend builds one canonical genuine C source type per Program from

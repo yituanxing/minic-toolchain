@@ -152,6 +152,10 @@ bool minic_target_info_gnu_pragma_target_options(
     const MinicTargetInvocation *target, const char *value, size_t value_length,
     const MinicTargetGnuPragmaOptionState *current,
     MinicTargetGnuPragmaOptionState *next);
+bool minic_target_info_gnu_pragma_internal_header(
+    const MinicTargetInvocation *target, const char *directive, size_t directive_length,
+    const char *header, size_t header_length,
+    const MinicTargetGnuPragmaOptionState *current);
 bool minic_target_info_function_pointer_calling_convention_declaration_supported(
     const MinicTargetInvocation *target, MinicFunctionCallingConvention convention);
 bool minic_target_info_va_cursor_source_shape(

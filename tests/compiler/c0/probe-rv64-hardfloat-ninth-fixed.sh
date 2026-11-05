@@ -75,4 +75,35 @@ if grep -Eq '^  (fadd\.|fdiv\.|fmv\.|fsub\.|fmul\.)' "$work/soft.s"; then
     echo 'RV64_HARDFLOAT_NINTH=FAIL F/D in strict soft-float LP64' >&2
     exit 1
 fi
-echo 'RV64_HARDFLOAT_NINTH=PASS -S LP64D=9th/10th/mixed/stack/float/indirect LP64=softfloat no-D=reject'
+
+# Both strict LP64 and LP64D require the identical integer-only typed path.
+# A previous shared switch sent the integer family into native-FPR selection
+# whenever the ABI was LP64D, even though the Core operands were integers.
+for flavor in hard soft; do
+    for name in int32_arithmetic int64_arithmetic; do
+        if test "$name" = int32_arithmetic; then
+            div_symbol=__udivdi3
+            rem_symbol=__umoddi3
+        else
+            div_symbol=__divdi3
+            rem_symbol=__moddi3
+        fi
+        awk -v name="$name" -v div_symbol="$div_symbol" \
+            -v rem_symbol="$rem_symbol" '
+            $0 == name ":" { inside = 1; found = 1; next }
+            inside && index($0, ".size " name ",") == 1 { inside = 0; done = 1 }
+            inside && /__muldi3/ { mul++ }
+            inside && index($0, div_symbol) { div++ }
+            inside && index($0, rem_symbol) { rem++ }
+            inside && /^  (fadd\.|fdiv\.|fmv\.|fsub\.|fmul\.)/ { invalid_fp++ }
+            END {
+                if (!found || !done || mul == 0 || div == 0 ||
+                    rem == 0 || invalid_fp != 0) exit 1
+            }
+        ' "$work/$flavor.s" || {
+            echo "RV64_HARDFLOAT_NINTH=FAIL typed integer call $flavor $name" >&2
+            exit 1
+        }
+    done
+done
+echo 'RV64_HARDFLOAT_NINTH=PASS -S LP64D=9th/10th/mixed/stack/float/indirect LP64=softfloat integer_MUL_DIV_REM=LP64+LP64D no-D=reject'

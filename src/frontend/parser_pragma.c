@@ -234,6 +234,48 @@ bool minic_parser_parse_preprocessor_directive(MinicParser *parser) {
             }
         }
         if (!pragma_consume_word(text, length, &cursor, "diagnostic")) {
+            size_t directive_begin = cursor;
+            size_t directive_end;
+            size_t header_begin;
+
+            /* Target-private GCC system-header markers use the form
+             * `#pragma GCC <target-word> "<header>"`. Preserve their lexical
+             * identity and let the selected target policy approve the exact
+             * marker under the current source feature snapshot. This is not
+             * a generic GCC pragma passthrough or an ISA grant. */
+            while (cursor < length &&
+                   ((text[cursor] >= 'a' && text[cursor] <= 'z') ||
+                    (text[cursor] >= 'A' && text[cursor] <= 'Z') ||
+                    (text[cursor] >= '0' && text[cursor] <= '9') ||
+                    text[cursor] == '_')) {
+                cursor += 1U;
+            }
+            directive_end = cursor;
+            if (directive_end != directive_begin) {
+                size_t before_space = cursor;
+
+                pragma_skip_horizontal_space(text, length, &cursor);
+                if (cursor > before_space && cursor < length && text[cursor] == '"') {
+                    cursor += 1U;
+                    header_begin = cursor;
+                    while (cursor < length && text[cursor] != '"' &&
+                           text[cursor] != '\\') {
+                        cursor += 1U;
+                    }
+                    if (cursor < length && text[cursor] == '"' &&
+                        cursor > header_begin &&
+                        minic_target_info_gnu_pragma_internal_header(
+                            parser->invocation, text + directive_begin,
+                            directive_end - directive_begin,
+                            text + header_begin, cursor - header_begin,
+                            &parser->gnu_target_options)) {
+                        cursor += 1U;
+                        if (pragma_only_trailing_space(text, length, cursor)) {
+                            return minic_parser_advance(parser);
+                        }
+                    }
+                }
+            }
             minic_parser_error(parser, "unsupported GCC pragma directive");
             return false;
         }

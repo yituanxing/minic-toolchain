@@ -3035,6 +3035,10 @@ static bool rv_core_instruction(RvCoreSelection *sel,
     case MINIC_CORE_INSTRUCTION_INTEGER_MULTIPLY:
     case MINIC_CORE_INSTRUCTION_INTEGER_DIVIDE:
     case MINIC_CORE_INSTRUCTION_INTEGER_REMAINDER:
+        /* Hard-float ABI is orthogonal to integer arithmetic. LP64D still
+         * emits only base-I opcodes; all three integer operations use the
+         * same typed compiler-rt CALL transport as LP64/ILP32. */
+        return rv_core_runtime_binary(sel, ins);
     case MINIC_CORE_INSTRUCTION_FLOAT_ADD:
     case MINIC_CORE_INSTRUCTION_FLOAT_SUBTRACT:
     case MINIC_CORE_INSTRUCTION_FLOAT_MULTIPLY:

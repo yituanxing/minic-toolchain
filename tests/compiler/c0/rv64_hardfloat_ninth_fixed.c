@@ -47,3 +47,14 @@ float call_ninth_float(double x, float y) {
 double call_indirect_ninth(double x) {
     return indirect_ninth(x,x,x,x,x,x,x,x,x);
 }
+
+/* F/D availability must not reclassify integer ALU operations. The selected
+ * RV64I machine backend always lowers MUL/DIV/REM through typed GNU runtime
+ * calls, independent of the psABI used for floating arguments. */
+unsigned int int32_arithmetic(unsigned int left, unsigned int right) {
+    return left * right + left / right + left % right;
+}
+
+long int64_arithmetic(long left, long right) {
+    return left * right + left / right + left % right;
+}

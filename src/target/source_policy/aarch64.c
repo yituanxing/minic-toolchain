@@ -111,12 +111,30 @@ static bool aarch_pragma_target_options(
     return true;
 }
 
+static bool aarch_pragma_internal_header(
+    const MinicTargetInvocation *target, const char *directive, size_t directive_length,
+    const char *header, size_t header_length,
+    const MinicTargetGnuPragmaOptionState *current) {
+    /* GCC's real AArch64 arm_neon.h emits this marker after its
+     * push_options/target("+nothing+simd") prefix. It marks GCC's own
+     * system-header intrinsic declarations; in MiniC the target source
+     * registry remains the only authority for supported vector vocabulary.
+     * No arbitrary GCC extension pragma or unselected ISA is accepted. */
+    return target != NULL && current != NULL &&
+           current->selected_source_features == 1U &&
+           (target->source_info.language_type_capabilities &
+            MINIC_TARGET_LANG_FIXED_VECTOR128_STORAGE_DECLARATIONS) != 0U &&
+           aarch_register_is(directive, directive_length, "aarch64") &&
+           aarch_register_is(header, header_length, "arm_neon.h");
+}
+
 const MinicTargetSourceLanguagePolicy minic_aarch64_source_language_policy = {
     .builtin_types = aarch_builtin_types,
     .builtin_type_count = sizeof(aarch_builtin_types) / sizeof(aarch_builtin_types[0]),
     .header_opaque_return = aarch_header_opaque_return,
     .header_attribute = aarch_header_attribute,
     .gnu_pragma_target_options = aarch_pragma_target_options,
+    .gnu_pragma_internal_header = aarch_pragma_internal_header,
 };
 
 const MinicTargetVaCursorSourceAbiPolicy minic_aarch64_va_cursor_source_abi_policy = {

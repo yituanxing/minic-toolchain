@@ -232,6 +232,8 @@ static bool a64_address(const MinicTargetInfo *target,
         address->base.number > MINIC_A64_MACHINE_SP ||
         address->base.number == MINIC_A64_MACHINE_ZR) return false;
     switch (address->target_mode) {
+    case MINIC_A64_ADDRESS_BASE_ONLY:
+        return !address->has_symbol && address->displacement == 0;
     case MINIC_A64_ADDRESS_UNSIGNED:
         return !address->has_symbol && address->displacement >= 0 &&
             /* The independent selected opcode constrains the access size.
@@ -526,7 +528,9 @@ static bool a64_legal_selected(const MinicMachineFunction *function,
                                  ins->opcode == MINIC_A64_MACHINE_LDRSH ||
                                  ins->opcode == MINIC_A64_MACHINE_LDRSW;
         const unsigned int bits = ops[0].value.physical.reg.width_bits;
-        if (a->target_mode != MINIC_A64_ADDRESS_UNSIGNED || a->has_symbol ||
+        if ((a->target_mode != MINIC_A64_ADDRESS_UNSIGNED &&
+             a->target_mode != MINIC_A64_ADDRESS_BASE_ONLY) ||
+            a->has_symbol ||
             a->displacement < 0 ||
             a->displacement > (int64_t)(4095U * spec->memory_width) ||
             (a->displacement % (int64_t)spec->memory_width) != 0 ||
@@ -756,6 +760,12 @@ static bool a64_serialize(FILE *out, const MinicMachineFunction *function,
         if (addr->has_symbol)
             return fprintf(out, "  %s %s, [%s, :got_lo12:%s]\n",
                 spec->name, a, base, addr->symbol) >= 0;
+        /* Keep the no-offset spelling a target-verified physical address
+         * mode. Other zero-displacement accesses retain their established
+         * base+zero golden output. */
+        if (addr->target_mode == MINIC_A64_ADDRESS_BASE_ONLY)
+            return fprintf(out, "  %s %s, [%s]\n",
+                spec->name, a, base) >= 0;
         return fprintf(out, "  %s %s, [%s, #%" PRId64 "]\n",
             spec->name, a, base, addr->displacement) >= 0;
     }

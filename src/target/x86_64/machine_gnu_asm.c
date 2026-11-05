@@ -341,6 +341,87 @@ static const MinicMachineSourceAsmTemplatePolicy x86_bug_c_policy = {
     NULL
 };
 
+/* GNU's original safe-MSR exception-register macro expands the selected
+ * physical `err` register inside GAS. Source qualification is exact and the
+ * MachineIR verifier independently fixes ECX/EAX/EDX/R11 before interpolation.
+ * We preserve the real `.irp` and PC-relative __ex_table relocations. */
+static bool x86_source_msr_form(const MinicMachineFunction *function,
+    const MinicMachineInstruction *instruction, void *context) {
+    (void)context;
+    return function != NULL && function->target != NULL &&
+        instruction->source_asm_machine_form_id == MINIC_X86_MACHINE_ASM_MSR &&
+        minic_x86_64_machine_validate_source_asm(function->target,
+            instruction,NULL);
+}
+
+static bool x86_source_msr_binding(const MinicMachineFunction *function,
+    const MinicMachineInstruction *instruction, size_t index, void *context) {
+    return index < instruction->operand_count &&
+        x86_source_msr_form(function,instruction,context);
+}
+
+static bool x86_source_msr_operand(FILE *output,
+    const MinicMachineFunction *function,
+    const MinicMachineInstruction *instruction,
+    const MinicMachineGNUAsmLabels *labels, size_t index,
+    unsigned char modifier, void *context) {
+    (void)labels;
+    if (modifier != 0U ||
+        !x86_source_msr_binding(function,instruction,index,context))
+        return false;
+    return output == NULL ||
+        x86_emit_register(output,&instruction->operands[index]);
+}
+
+static const MinicMachineSourceAsmTemplatePolicy x86_msr_policy = {
+    x86_source_msr_form,
+    x86_source_msr_binding,
+    x86_source_msr_operand,
+    NULL
+};
+
+static bool x86_source_percpu_form(const MinicMachineFunction *function,
+    const MinicMachineInstruction *instruction, void *context) {
+    (void)context;
+    return function != NULL && function->target != NULL &&
+        instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_PERCPU_GS &&
+        minic_x86_64_machine_validate_source_asm(function->target,
+            instruction,NULL);
+}
+
+static bool x86_source_percpu_binding(const MinicMachineFunction *function,
+    const MinicMachineInstruction *instruction, size_t index, void *context) {
+    return index < instruction->operand_count &&
+        x86_source_percpu_form(function,instruction,context);
+}
+
+static bool x86_source_percpu_operand(FILE *output,
+    const MinicMachineFunction *function,
+    const MinicMachineInstruction *instruction,
+    const MinicMachineGNUAsmLabels *labels, size_t index,
+    unsigned char modifier, void *context) {
+    const MinicMachineOperand *binding;
+    (void)labels;
+    if (modifier != 0U ||
+        !x86_source_percpu_binding(function,instruction,index,context))
+        return false;
+    binding = &instruction->operands[index];
+    if (output == NULL) return binding->kind ==
+            MINIC_MACHINE_OPERAND_ADDRESS ||
+        binding->kind == MINIC_MACHINE_OPERAND_REGISTER;
+    return binding->kind == MINIC_MACHINE_OPERAND_ADDRESS ?
+        x86_emit_address(output,&binding->value.address) :
+        x86_emit_register(output,binding);
+}
+
+static const MinicMachineSourceAsmTemplatePolicy x86_percpu_policy = {
+    x86_source_percpu_form,
+    x86_source_percpu_binding,
+    x86_source_percpu_operand,
+    NULL
+};
+
 /* The fully qualified futex family owns 9 fault-site records across six
  * original GNU forms. Emit real section relocations with the ABI-mandated
  * R8D recovery register (architectural register number 8) rather than
@@ -517,6 +598,18 @@ static bool x86_emit_source_asm(FILE *out,
         return fputs("  ",out) != EOF &&
             minic_machine_source_asm_template_emit(out,function,
                 instruction,labels,&x86_bug_c_policy) &&
+            fputc('\n',out) != EOF;
+    if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_MSR)
+        return fputs("  ",out) != EOF &&
+            minic_machine_source_asm_template_emit(out,function,
+                instruction,labels,&x86_msr_policy) &&
+            fputc('\n',out) != EOF;
+    if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_PERCPU_GS)
+        return fputs("  ",out) != EOF &&
+            minic_machine_source_asm_template_emit(out,function,
+                instruction,labels,&x86_percpu_policy) &&
             fputc('\n',out) != EOF;
     variant = instruction->source_asm_machine_form_variant;
     return variant >= 1U && variant <=

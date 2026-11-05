@@ -16,7 +16,9 @@ typedef enum MinicA64MachineAddressMode {
     MINIC_A64_ADDRESS_PRE_INDEX = 2,
     MINIC_A64_ADDRESS_POST_INDEX = 3,
     MINIC_A64_ADDRESS_GOT_LO12 = 4,
-    MINIC_A64_ADDRESS_PAIR_OFFSET = 5
+    MINIC_A64_ADDRESS_PAIR_OFFSET = 5,
+    /* No-offset base form, preserving the native GNU base-only spelling. */
+    MINIC_A64_ADDRESS_BASE_ONLY = 6
 } MinicA64MachineAddressMode;
 
 typedef enum MinicA64MachineRelocation {

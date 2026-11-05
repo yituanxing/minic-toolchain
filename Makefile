@@ -2394,14 +2394,19 @@ check-direct-machine-gnu-asm:
 	  src/target/common/machine_ir_verify.c \
 	  src/target/common/machine_gnu_asm.c \
 	  src/target/common/machine_source_asm_template.c \
+	  src/core/core_ir.c \
+	  src/core/core_type.c \
+	  src/core/core_ir_verify.c \
 	  src/target/aarch64/machine_opcode.c \
 	  src/target/aarch64/machine_gnu_asm.c \
 	  src/target/aarch64/machine_source_asm.c \
+	  src/target/aarch64/asm_contract.c \
 	  src/target/aarch64/machine_sysreg_contract.c \
 	  src/target/aarch64/machine_lse_source_select.c \
 	  src/target/loongarch64/machine_opcode.c \
 	  src/target/loongarch64/machine_gnu_asm.c \
 	  src/target/loongarch64/machine_asm_form.c \
+	  src/target/loongarch64/simd_asm.c \
 	  src/target/loongarch64/machine_source_asm.c \
 	  -o "$(BUILD_DIR)/tests/direct-machine-gnu-asm"
 	"$(BUILD_DIR)/tests/direct-machine-gnu-asm"
@@ -2485,6 +2490,7 @@ check-a64-machine-mir-frame-select:
 	  src/target/aarch64/machine_opcode.c \
 	  src/target/aarch64/machine_gnu_asm.c \
 	  src/target/aarch64/machine_source_asm.c \
+	  src/target/aarch64/asm_contract.c \
 	  src/target/aarch64/machine_sysreg_contract.c \
 	  src/target/aarch64/machine_lse_source_select.c \
 	  src/target/common/machine_source_asm_template.c \
@@ -2570,6 +2576,7 @@ check-a64-machine-core-select:
 	  src/target/aarch64/machine_opcode.c \
 	  src/target/aarch64/machine_gnu_asm.c \
 	  src/target/aarch64/machine_source_asm.c \
+	  src/target/aarch64/asm_contract.c \
 	  src/target/aarch64/machine_sysreg_contract.c \
 	  src/target/aarch64/machine_lse_source_select.c \
 	  src/target/aarch64/machine_frame_select.c \
@@ -2640,6 +2647,7 @@ check-a64-machine-source-asm:
 	$(CC) -std=c11 -Wall -Wextra -Wpedantic -Werror $(MINIC_INCLUDES) \
 	  tests/target/aarch64/machine_source_asm_test.c \
 	  src/target/aarch64/machine_source_asm.c \
+	  src/target/aarch64/asm_contract.c \
 	  src/target/aarch64/machine_sysreg_contract.c \
 	  src/target/aarch64/machine_lse_source_select.c \
 	  src/target/common/machine_source_asm_template.c \

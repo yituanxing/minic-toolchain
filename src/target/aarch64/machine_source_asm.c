@@ -288,6 +288,89 @@ static const MinicMachineSourceAsmTemplatePolicy a64_sysreg_policy = {
     NULL
 };
 
+/* The full original Linux user-access template is one faulting machine
+ * effect plus its associated GNU __ex_table fixup.  x9 carries the errno
+ * read/write operand, x10 the user scalar, and x11 the user pointer.  The
+ * C lvalue writeback is a separate typed STRB/STRH/STR instruction selected
+ * by MachineCore; it must never inherit x10's 64-bit register width. */
+static bool a64_uaccess_form(const MinicMachineInstruction *ins) {
+    Aarch64UaccessForm form;
+    const unsigned int effects = MINIC_MACHINE_EFFECT_SOURCE_ASM |
+        MINIC_MACHINE_EFFECT_VOLATILE |
+        MINIC_MACHINE_EFFECT_COMPILER_BARRIER;
+    return ins != NULL && ins->source_asm_template != NULL &&
+        aarch64_linux_uaccess_form(ins->source_asm_template,
+            ins->source_asm_length, &form) &&
+        ins->source_asm_machine_form_id == AARCH64_MACHINE_ASM_UACCESS &&
+        ins->source_asm_machine_form_variant ==
+            (((unsigned int)form.is_load << 16) |
+             ((unsigned int)form.width << 8) | form.exception_type) &&
+        ins->operand_count == 3U && ins->implicit_count == 0U &&
+        ins->effects == (effects |
+            (form.is_load ? MINIC_MACHINE_EFFECT_MEMORY_READ :
+                            MINIC_MACHINE_EFFECT_MEMORY_WRITE)) &&
+        !ins->source_asm_terminates_block &&
+        !ins->source_asm_permits_fallthrough;
+}
+
+static bool a64_uaccess_policy_form(const MinicMachineFunction *fn,
+    const MinicMachineInstruction *ins, void *context) {
+    (void)context;
+    return fn != NULL && fn->target != NULL &&
+        fn->target->architecture == MINIC_TARGET_ARCH_AARCH64 &&
+        a64_uaccess_form(ins);
+}
+
+static bool a64_uaccess_policy_binding(const MinicMachineFunction *fn,
+    const MinicMachineInstruction *ins, size_t index, void *context) {
+    Aarch64UaccessForm form;
+    const MinicMachineOperand *op;
+    const unsigned int access = index == 0U ?
+        MINIC_MACHINE_REGISTER_READ | MINIC_MACHINE_REGISTER_WRITE :
+        index == 1U ? MINIC_MACHINE_REGISTER_WRITE :
+                      MINIC_MACHINE_REGISTER_READ;
+    (void)context;
+    if (!a64_uaccess_policy_form(fn, ins, NULL) || index >= 3U ||
+        ins->operands == NULL ||
+        !aarch64_linux_uaccess_form(ins->source_asm_template,
+            ins->source_asm_length, &form)) return false;
+    op = &ins->operands[index];
+    return op->kind == MINIC_MACHINE_OPERAND_REGISTER &&
+        op->asm_name == NULL && op->asm_constraint != NULL &&
+        strcmp(op->asm_constraint, index == 0U ? "+r" :
+            index == 1U ? (form.is_load ? "=r" : "rZ") : "r") == 0 &&
+        op->value.physical.reg.bank == MINIC_MACHINE_REGISTER_GENERAL &&
+        op->value.physical.reg.number == 9U + index &&
+        op->value.physical.reg.width_bits ==
+            (index == 0U || (index == 1U && form.width < 8U) ? 32U : 64U) &&
+        op->value.physical.access ==
+            (index == 1U && !form.is_load ?
+                MINIC_MACHINE_REGISTER_READ : access);
+}
+
+static bool a64_uaccess_policy_operand(FILE *output,
+    const MinicMachineFunction *fn, const MinicMachineInstruction *ins,
+    const MinicMachineGNUAsmLabels *labels, size_t index,
+    unsigned char modifier, void *context) {
+    const char *word = index == 0U ? "w9" :
+        index == 1U ? "w10" : "w11";
+    const char *wide = index == 0U ? "x9" :
+        index == 1U ? "x10" : "x11";
+    (void)labels;
+    return a64_uaccess_policy_binding(fn, ins, index, context) &&
+        ((index == 0U && modifier == 'w') ||
+         (index == 1U && (modifier == 'w' || modifier == 'x')) ||
+         (index == 2U && modifier == 0U)) &&
+        (output == NULL || fputs(modifier == 'w' ? word : wide, output) >= 0);
+}
+
+static const MinicMachineSourceAsmTemplatePolicy a64_uaccess_policy = {
+    a64_uaccess_policy_form,
+    a64_uaccess_policy_binding,
+    a64_uaccess_policy_operand,
+    NULL
+};
+
 bool minic_aarch64_machine_source_asm_validate(
     const MinicTargetInfo *target, const MinicMachineInstruction *instruction,
     void *context) {
@@ -307,6 +390,8 @@ bool minic_aarch64_machine_source_asm_validate(
              instruction, &a64_one_gp_policy) ||
          minic_machine_source_asm_template_preflight(&function,
              instruction, &a64_sysreg_policy) ||
+         minic_machine_source_asm_template_preflight(&function,
+             instruction, &a64_uaccess_policy) ||
          minic_aarch64_machine_lse_casp128_validate(&function, instruction) ||
          minic_aarch64_machine_lse_scalar_validate(&function, instruction) ||
          minic_aarch64_machine_lse_dec_positive_validate(&function, instruction));
@@ -342,6 +427,32 @@ bool minic_aarch64_machine_source_asm_emit(
               instruction->source_asm_template[
                   instruction->source_asm_length - 1U] == '\n') ||
              fputc('\n', output) != EOF);
+    if (a64_uaccess_form(instruction)) {
+        Aarch64UaccessForm form;
+        /* The exact original GNU .irp register table was admitted and
+         * preflighted above.  Its only observable expansion in the sealed
+         * form is one type-2/type-3 exception fixup that mentions physical
+         * x9 and x10 (or xzr for a store). Emit its canonical, already
+         * resolved GNU directives; this retains relocation identity while
+         * making the width-specific native writeback auditable. */
+        return aarch64_linux_uaccess_form(
+                instruction->source_asm_template,
+                instruction->source_asm_length, &form) &&
+            minic_machine_source_asm_template_preflight(function,
+                instruction, &a64_uaccess_policy) &&
+            fprintf(output,
+                "1: %s, [x11]\n"
+                "2:\n"
+                "  .pushsection __ex_table,\"a\"\n"
+                "  .align 2\n"
+                "  .long (1b - .)\n"
+                "  .long (2b - .)\n"
+                "  .short %u\n"
+                "  .short ((9 << 0) | (%u << 5))\n"
+                "  .popsection\n",
+                form.mnemonic, form.exception_type,
+                form.is_load ? 10U : 31U) >= 0;
+    }
     if (instruction->source_asm_machine_form_id ==
             AARCH64_MACHINE_ASM_LSE_CASP128)
         return minic_aarch64_machine_lse_casp128_emit(output,

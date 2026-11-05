@@ -1622,6 +1622,173 @@ static bool x86_source_ip_here_contract(const MinicMachineInstruction *ins) {
         output->value.physical.access == MINIC_MACHINE_REGISTER_WRITE;
 }
 
+/* Privileged Linux MSR instructions have exact source-qualified templates,
+ * but the machine verifier still independently proves the physical ECX,
+ * EAX, EDX and safe-error bindings before GNU is allowed to emit bytes. */
+static bool x86_source_msr_contract(const MinicMachineInstruction *ins) {
+    unsigned int registers[4] = {0};
+    const char *constraints[4] = {NULL};
+    const unsigned int form = minic_x86_64_linux_msr_form(
+        ins->source_asm_template,ins->source_asm_length);
+    const bool read = form == 1U || form == 3U || form == 5U;
+    const bool safe = form == 3U || form == 4U;
+    const size_t outputs = safe ? (read ? 3U : 1U) : (read ? 2U : 0U);
+    const size_t count = safe ? 4U : 3U;
+    unsigned int width = 32U;
+    size_t i;
+    if (ins->source_asm_machine_form_id != MINIC_X86_MACHINE_ASM_MSR ||
+        ins->source_asm_machine_form_variant != 0U ||
+        form == 0U || form > 6U ||
+        ins->operand_count != count || ins->operands == NULL ||
+        ins->source_asm_terminates_block ||
+        ins->source_asm_permits_fallthrough ||
+        ins->effects != (MINIC_MACHINE_EFFECT_SOURCE_ASM |
+            MINIC_MACHINE_EFFECT_VOLATILE |
+            (read ? MINIC_MACHINE_EFFECT_MEMORY_READ :
+                MINIC_MACHINE_EFFECT_MEMORY_WRITE) |
+            (read ? 0U : MINIC_MACHINE_EFFECT_COMPILER_BARRIER)) ||
+        ins->implicit_count != (safe ? 1U : 0U) ||
+        (safe && (ins->implicit == NULL ||
+            ins->implicit[0].reg.bank != MINIC_MACHINE_REGISTER_FLAGS ||
+            ins->implicit[0].reg.number != 0U ||
+            ins->implicit[0].reg.width_bits != 64U ||
+            ins->implicit[0].access != MINIC_MACHINE_REGISTER_CLOBBER)) ||
+        (!safe && ins->implicit != NULL) ||
+        !minic_x86_64_typed_machine_form_matches_template(
+            ins->source_asm_machine_form_id,
+            ins->source_asm_machine_form_variant,
+            ins->source_asm_template,ins->source_asm_length))
+        return false;
+    if (safe && read) {
+        registers[0] = MINIC_X86_REG_R11;
+        registers[1] = MINIC_X86_REG_RAX;
+        registers[2] = MINIC_X86_REG_RDX;
+        registers[3] = MINIC_X86_REG_RCX;
+        constraints[0] = "=r";
+        constraints[1] = "=a";
+        constraints[2] = "=d";
+        constraints[3] = "c";
+    } else if (safe) {
+        registers[0] = registers[2] = MINIC_X86_REG_RAX;
+        registers[1] = MINIC_X86_REG_RCX;
+        registers[3] = MINIC_X86_REG_RDX;
+        constraints[0] = "=a";
+        constraints[1] = "c";
+        constraints[2] = "0";
+        constraints[3] = "d";
+    } else if (read) {
+        registers[0] = MINIC_X86_REG_RAX;
+        registers[1] = MINIC_X86_REG_RDX;
+        registers[2] = MINIC_X86_REG_RCX;
+        constraints[0] = "=a";
+        constraints[1] = "=d";
+        constraints[2] = "c";
+        width = ins->operands[0].value.physical.reg.width_bits;
+        if ((width != 32U && width != 64U) ||
+            ins->operands[1].value.physical.reg.width_bits != width)
+            return false;
+    } else {
+        registers[0] = MINIC_X86_REG_RCX;
+        registers[1] = MINIC_X86_REG_RAX;
+        registers[2] = MINIC_X86_REG_RDX;
+        constraints[0] = "c";
+        constraints[1] = "a";
+        constraints[2] = "d";
+    }
+    for (i = 0U; i < count; ++i) {
+        const MinicMachineOperand *operand = &ins->operands[i];
+        const unsigned int bits = read && !safe && i < 2U ? width :
+            safe && read && (i == 1U || i == 2U) ? 64U : 32U;
+        const unsigned int access = i < outputs ?
+            MINIC_MACHINE_REGISTER_WRITE : MINIC_MACHINE_REGISTER_READ;
+        if (operand->kind != MINIC_MACHINE_OPERAND_REGISTER ||
+            operand->asm_constraint == NULL ||
+            strcmp(operand->asm_constraint,constraints[i]) != 0 ||
+            (operand->asm_name != NULL &&
+                (!safe || i != 0U || strcmp(operand->asm_name,"err") != 0)) ||
+            (safe && i == 0U && (operand->asm_name == NULL ||
+                strcmp(operand->asm_name,"err") != 0)) ||
+            operand->value.physical.reg.bank != MINIC_MACHINE_REGISTER_GENERAL ||
+            operand->value.physical.reg.number != registers[i] ||
+            operand->value.physical.reg.width_bits != bits ||
+            operand->value.physical.access != access)
+            return false;
+    }
+    return true;
+}
+
+static bool x86_source_percpu_gs_contract(
+    const MinicTargetInfo *target, const MinicMachineInstruction *ins) {
+    unsigned int operation;
+    size_t width, count, i;
+    const MinicMachineOperand *memory;
+    const MinicMachineAddress *address;
+    if (ins->source_asm_machine_form_id != MINIC_X86_MACHINE_ASM_PERCPU_GS ||
+        ins->source_asm_machine_form_variant != 0U ||
+        !minic_x86_64_linux_percpu_form(ins->source_asm_template,
+            ins->source_asm_length,&operation,&width) ||
+        (width != 1U && width != 2U && width != 4U && width != 8U) ||
+        ins->source_asm_terminates_block ||
+        ins->source_asm_permits_fallthrough ||
+        ((ins->effects & ~(unsigned int)MINIC_MACHINE_EFFECT_VOLATILE) !=
+            (MINIC_MACHINE_EFFECT_SOURCE_ASM |
+            (operation == 0U ? MINIC_MACHINE_EFFECT_MEMORY_READ :
+                operation == 1U ? MINIC_MACHINE_EFFECT_MEMORY_WRITE :
+                    MINIC_MACHINE_EFFECT_MEMORY_READ |
+                    MINIC_MACHINE_EFFECT_MEMORY_WRITE) |
+            (operation == 0U ? 0U :
+                MINIC_MACHINE_EFFECT_COMPILER_BARRIER))) ||
+        !minic_x86_64_typed_machine_form_matches_template(
+            ins->source_asm_machine_form_id,
+            ins->source_asm_machine_form_variant,
+            ins->source_asm_template,ins->source_asm_length) ||
+        ins->implicit_count != (operation >= 2U ? 1U : 0U) ||
+        (operation >= 2U && (ins->implicit == NULL ||
+            ins->implicit[0].reg.bank != MINIC_MACHINE_REGISTER_FLAGS ||
+            ins->implicit[0].reg.number != 0U ||
+            ins->implicit[0].reg.width_bits != 64U ||
+            ins->implicit[0].access != MINIC_MACHINE_REGISTER_CLOBBER)) ||
+        (operation < 2U && ins->implicit != NULL)) return false;
+    count = operation == 2U || operation == 3U ? 1U : 2U;
+    if (ins->operand_count != count || ins->operands == NULL) return false;
+    memory = &ins->operands[operation == 0U ? 1U : 0U];
+    if (memory->kind != MINIC_MACHINE_OPERAND_ADDRESS ||
+        memory->asm_name == NULL ||
+        strcmp(memory->asm_name,"var") != 0 ||
+        memory->asm_constraint == NULL ||
+        strcmp(memory->asm_constraint,
+            operation == 0U ? "m" : "+m") != 0)
+        return false;
+    address = &memory->value.address;
+    if (!minic_x86_64_machine_validate_address(target,address,NULL) ||
+        !address->has_base ||
+        address->base.bank != MINIC_MACHINE_REGISTER_GENERAL ||
+        address->base.number != MINIC_X86_REG_R10 ||
+        address->base.width_bits != 64U ||
+        address->has_index || address->has_segment ||
+        address->has_symbol || address->displacement != 0)
+        return false;
+    for (i = 0U; i < count; ++i) {
+        const MinicMachineOperand *op = &ins->operands[i];
+        const unsigned int access = operation == 0U ?
+            MINIC_MACHINE_REGISTER_WRITE : MINIC_MACHINE_REGISTER_READ;
+        const char *constraint = operation == 0U ?
+            (width == 1U ? "=q" : "=r") :
+            (width == 1U ? "qi" : width == 8U ? "re" : "ri");
+        if (op == memory) continue;
+        if (op->kind != MINIC_MACHINE_OPERAND_REGISTER ||
+            op->asm_name == NULL || strcmp(op->asm_name,"val") != 0 ||
+            op->asm_constraint == NULL ||
+            strcmp(op->asm_constraint,constraint) != 0 ||
+            op->value.physical.reg.bank != MINIC_MACHINE_REGISTER_GENERAL ||
+            op->value.physical.reg.number != MINIC_X86_REG_RAX ||
+            op->value.physical.reg.width_bits != width*8U ||
+            op->value.physical.access != access)
+            return false;
+    }
+    return true;
+}
+
 /* The two GNU Linux BUG_TABLE source spellings have identical ELF semantics
  * but different operand-reference names. `%c` prints the relocation *symbol*
  * and three source-proven integer constants without a `$` prefix. The ELF
@@ -1723,6 +1890,12 @@ bool minic_x86_64_machine_validate_source_asm(const MinicTargetInfo *target,
     if (instruction->source_asm_machine_form_id ==
             MINIC_X86_MACHINE_ASM_IP_HERE)
         return x86_source_ip_here_contract(instruction);
+    if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_MSR)
+        return x86_source_msr_contract(instruction);
+    if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_PERCPU_GS)
+        return x86_source_percpu_gs_contract(target,instruction);
     if (instruction->source_asm_machine_form_id ==
             MINIC_X86_MACHINE_ASM_BUG_TABLE_C_IMMEDIATE)
         return x86_source_bug_c_immediate_contract(instruction);

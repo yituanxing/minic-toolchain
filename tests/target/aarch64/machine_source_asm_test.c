@@ -1,7 +1,26 @@
+#define _POSIX_C_SOURCE 200809L
 #include "target/aarch64/machine_source_asm.h"
 #include "target/aarch64/asm_contract_internal.h"
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
+
+static FILE *open_test_output(void) {
+    const char *directory = getenv("TMPDIR");
+    char path[512];
+    int fd;
+    FILE *file;
+    if (directory == NULL || *directory == '\0') directory = "/tmp";
+    if (snprintf(path, sizeof(path), "%s/minic-a64-source-XXXXXX",
+            directory) >= (int)sizeof(path)) return NULL;
+    fd = mkstemp(path);
+    if (fd < 0) return NULL;
+    unlink(path);
+    file = fdopen(fd, "w+b");
+    if (file == NULL) close(fd);
+    return file;
+}
 
 int main(void) {
     MinicTargetInfo target = {0};
@@ -19,7 +38,7 @@ int main(void) {
     ins.source_asm_length = 3U;
     if (!minic_aarch64_machine_source_asm_validate(&target, &ins, NULL))
         return 1;
-    out = tmpfile();
+    out = open_test_output();
     if (out == NULL) return 1;
     if (!minic_aarch64_machine_source_asm_emit(out, &fn, &ins, NULL, NULL) ||
         fflush(out) != 0 || fseek(out, 0L, SEEK_SET) != 0) {
@@ -82,7 +101,7 @@ int main(void) {
                 fprintf(stderr, "A64 source TLBI rejected form=%zu\n", i);
                 return 1;
             }
-            asm_out = tmpfile();
+            asm_out = open_test_output();
             if (asm_out == NULL ||
                 !minic_aarch64_machine_source_asm_emit(asm_out, &fn,
                     &ins, NULL, NULL) || fflush(asm_out) != 0 ||
@@ -175,7 +194,7 @@ int main(void) {
                 fprintf(stderr, "A64 one-GP source rejected index=%zu\n", i);
                 return 1;
             }
-            selected = tmpfile();
+            selected = open_test_output();
             if (selected == NULL ||
                 !minic_aarch64_machine_source_asm_emit(selected, &fn,
                     &ins, NULL, NULL) || fflush(selected) != 0 ||

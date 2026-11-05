@@ -1,3 +1,4 @@
+#define _POSIX_C_SOURCE 200809L
 /* Two LP64 target-owned native opcode/ABI contracts, with actual owned
  * MachineFunction -> independent verifier -> GNU machine body serialization.
  * No machine assembly string or FILE* trampoline is stored in MIR. */
@@ -12,6 +13,23 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
+
+static FILE *open_test_output(void) {
+    const char *directory = getenv("TMPDIR");
+    char path[512];
+    int fd;
+    FILE *file;
+    if (directory == NULL || *directory == '\0') directory = "/tmp";
+    if (snprintf(path, sizeof(path), "%s/minic-native-asm-XXXXXX",
+            directory) >= (int)sizeof(path)) return NULL;
+    fd = mkstemp(path);
+    if (fd < 0) return NULL;
+    unlink(path);
+    file = fdopen(fd, "w+b");
+    if (file == NULL) close(fd);
+    return file;
+}
 
 #define CHECK(expr) do { if (!(expr)) { \
     fprintf(stderr, "machine native contract:%d: %s\n", __LINE__, #expr); \
@@ -100,7 +118,7 @@ static bool append(MinicMachineFunction *function,
 static bool emitted_contains(const MinicMachineFunction *function,
     const MinicMachineGNUAsmPolicy *policy, const char *first,
     const char *second, const char *third) {
-    FILE *output = tmpfile();
+    FILE *output = open_test_output();
     char buffer[8192];
     size_t count;
     CHECK(output != NULL);

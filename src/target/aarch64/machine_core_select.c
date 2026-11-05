@@ -1493,6 +1493,105 @@ static bool a64_linux_one_gp_source(A64CoreSelection *sel,
         &binding, 1U, NULL, 0U, false, false);
 }
 
+/* The original Linux __get_user/__put_user contract has three independent
+ * GNU roles, with an exception-table fixup that names the errno/data GPRs.
+ * Resolve those roles to x9/x10/x11 in typed MachineIR; only the C lvalue
+ * width determines the later writeback. In particular byte and halfword
+ * outputs must never be widened to the full scratch-register width. */
+static bool a64_linux_uaccess_source(A64CoreSelection *sel,
+    const MinicCoreInstruction *ins, const MinicCoreInlineAsm *source) {
+    static const uint32_t stores[4] = {
+        MINIC_A64_MACHINE_STRB, MINIC_A64_MACHINE_STRH,
+        MINIC_A64_MACHINE_STR_W, MINIC_A64_MACHINE_STR_X
+    };
+    Aarch64UaccessForm form;
+    const MinicCoreFunction *fn = sel->ctx->fn;
+    const MinicCoreStructuredInlineAsmOperand *ops =
+        ins->value.structured_inline_asm.operands;
+    MinicMachineOperand bindings[3];
+    MinicMachineOperand writeback[2];
+    unsigned int bits;
+    size_t index;
+    if (source->target_machine_form_id != AARCH64_MACHINE_ASM_UACCESS ||
+        source->operand_plan_owner != MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED ||
+        source->template_text == NULL ||
+        !aarch64_linux_uaccess_form(source->template_text,
+            source->template_length, &form) ||
+        source->target_machine_form_variant !=
+            (((unsigned int)form.is_load << 16) |
+             ((unsigned int)form.width << 8) | form.exception_type) ||
+        ins->result != MINIC_CORE_VALUE_INVALID ||
+        !minic_core_function_type_is_kind(fn, ins->core_type_id,
+            MINIC_CORE_TYPE_VOID) ||
+        ins->value.structured_inline_asm.operand_count != 3U ||
+        !source->is_volatile || source->is_goto ||
+        !source->has_memory_clobber || !source->implicit_memory_effect ||
+        source->register_clobber_count != 0U ||
+        source->resolved_immediate_count != 0U ||
+        source->symbol_reference_count != 0U ||
+        source->deferred_immediate_symbol != NULL ||
+        ops == NULL || sel->ctx->machine_frame->has_dynamic_stack ||
+        (form.width != 1U && form.width != 2U &&
+         form.width != 4U && form.width != 8U) ||
+        !aarch64_asm_core_integer(fn, ops[0].value, true, 4U, 1) ||
+        !(aarch64_asm_core_integer(fn, ops[1].value, form.is_load,
+                form.width, -1) ||
+          (form.width == 8U && aarch64_asm_core_pointer(
+                fn, ops[1].value, form.is_load))) ||
+        !aarch64_asm_core_pointer(fn, ops[2].value, false)) return false;
+    bits = form.width == 8U ? 64U : 32U;
+    for (index = 0U; index < 3U; ++index) {
+        const MinicCoreStructuredInlineAsmOperand *op = &ops[index];
+        if (op->operand_index != index || op->value >= fn->value_count ||
+            op->has_fixed_register_binding || op->early_clobber ||
+            op->physical_early_clobber ||
+            op->physical_read_write != (index == 0U) ||
+            op->has_tied_output ||
+            op->kind != (index == 0U ?
+                MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE :
+                index == 1U && form.is_load ?
+                MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT :
+                MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT)) return false;
+        bindings[index] = a64_gp(A64_T0 + (unsigned int)index,
+            index == 0U || (index == 1U && form.width != 8U) ? 32U : 64U,
+            index == 0U ? MINIC_MACHINE_REGISTER_READ |
+                MINIC_MACHINE_REGISTER_WRITE :
+                index == 1U && form.is_load ? MINIC_MACHINE_REGISTER_WRITE :
+                MINIC_MACHINE_REGISTER_READ);
+        bindings[index].asm_constraint = index == 0U ? "+r" :
+            index == 1U ? (form.is_load ? "=r" : "rZ") : "r";
+    }
+    if (!a64_load_core(sel, ops[0].value, A64_T3, 64U) ||
+        !a64_memory_register(sel, MINIC_A64_MACHINE_LDR_W, false,
+            A64_T0, 32U, A64_T3, 0U, false, false) ||
+        !a64_load_core(sel, ops[2].value, A64_T2, 64U) ||
+        (!form.is_load &&
+         !a64_load_core(sel, ops[1].value, A64_T1, bits)) ||
+        !minic_machine_builder_emit_core_source_asm(&sel->builder,
+            source, form.is_load ? MINIC_MACHINE_EFFECT_MEMORY_READ :
+                                   MINIC_MACHINE_EFFECT_MEMORY_WRITE,
+            bindings, 3U, NULL, 0U, false, false)) return false;
+    index = form.width == 1U ? 0U : form.width == 2U ? 1U :
+        form.width == 4U ? 2U : 3U;
+    if (form.is_load) {
+        if (!a64_load_core(sel, ops[1].value, A64_T3, 64U))
+            return false;
+        writeback[0] = a64_gp(A64_T1, bits, MINIC_MACHINE_REGISTER_READ);
+        writeback[1] = a64_address(A64_T3);
+        writeback[1].value.address.target_mode =
+            MINIC_A64_ADDRESS_BASE_ONLY;
+        if (!a64_emit(sel, stores[index], writeback, 2U))
+            return false;
+        sel->builder.function->blocks[sel->builder.current_block]
+            .instructions[sel->builder.function->blocks[
+                sel->builder.current_block].instruction_count - 1U]
+            .effects |= MINIC_MACHINE_EFFECT_VOLATILE;
+    }
+    return a64_load_core(sel, ops[0].value, A64_T3, 64U) &&
+        a64_memory_register(sel, MINIC_A64_MACHINE_STR_W, false,
+            A64_T0, 32U, A64_T3, 0U, true, true);
+}
+
 /* Original Linux read_sysreg()/write_sysreg() and the encoded MSR_S/MRS_S
  * macro wrappers are one audited family: a sealed finite ISA system-register
  * grammar, one physical x9 operand, and a typed Core lvalue store for reads.
@@ -2437,7 +2536,18 @@ static bool a64_binary(A64CoreSelection *sel,
         if (!minic_multi_direct_pointer_less_shape(fn, ins)) return false;
     } else if (compare) {
         if (!minic_multi_direct_integer_compare_shape(fn, ins,
-            &lhs_width, &rhs_width, &lhs_signed, &rhs_signed)) return false;
+            &lhs_width, &rhs_width, &lhs_signed, &rhs_signed)) {
+            /* Core scalar equality also admits two pointer values. It is
+             * not an integer comparison, but AAPCS64 still compares their
+             * full 64-bit addresses with one native CMP. */
+            if (ins->kind != MINIC_CORE_INSTRUCTION_SCALAR_EQUAL ||
+                !aarch64_asm_core_pointer(fn, left, false) ||
+                !aarch64_asm_core_pointer(fn, right, false) ||
+                !aarch64_asm_core_integer(fn, ins->result, false, 4U, 1))
+                return false;
+            lhs_width = rhs_width = 8U;
+            lhs_signed = rhs_signed = false;
+        }
     } else if (shift) {
         if (!minic_multi_direct_integer_shift_shape(fn, ins,
             &lhs_width, &rhs_width, &lhs_signed, &rhs_signed)) return false;
@@ -2927,6 +3037,8 @@ static bool a64_core_instruction(A64CoreSelection *sel,
             source->target_machine_form_id == AARCH64_MACHINE_ASM_ENCODED_SYSREG_READ ||
             source->target_machine_form_id == AARCH64_MACHINE_ASM_ENCODED_SYSREG_WRITE)
             return a64_linux_sysreg_source(sel, ins, source);
+        if (source->target_machine_form_id == AARCH64_MACHINE_ASM_UACCESS)
+            return a64_linux_uaccess_source(sel, ins, source);
         if (source->target_machine_form_id == AARCH64_MACHINE_ASM_LSE_CASP128)
             return a64_linux_casp128_source(sel, ins, source);
         if (source->target_machine_form_id == AARCH64_MACHINE_ASM_LSE)

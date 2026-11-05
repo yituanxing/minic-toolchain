@@ -353,6 +353,19 @@ bool minic_target_info_gnu_pragma_target_options(
     *next = candidate;
     return true;
 }
+
+bool minic_target_info_gnu_pragma_internal_header(
+    const MinicTargetInvocation *target, const char *directive, size_t directive_length,
+    const char *header, size_t header_length,
+    const MinicTargetGnuPragmaOptionState *current) {
+    const MinicTargetSourceLanguagePolicy *policy =
+        (target == NULL || target->source_info.integer_model == NULL) ? NULL :
+        target->source_info.source_language_policy;
+    return policy != NULL && directive != NULL && header != NULL && current != NULL &&
+           policy->gnu_pragma_internal_header != NULL &&
+           policy->gnu_pragma_internal_header(
+               target, directive, directive_length, header, header_length, current);
+}
 /* ABI type spelling is a language capability; the target backend still
  * decides separately which calling conventions it can actually emit. */
 bool minic_target_info_function_pointer_calling_convention_declaration_supported(
