@@ -54,28 +54,66 @@ done
 # RISC-V has no target-specific qualifier: RV64's existing generic `+&r`
 # allocator remains a distinct path. RV32 must still successfully compile
 # generic C and reject unsupported specialized early-clobber allocations.
+echo "TARGET_GNU_EARLY_STAGE=rv64_generic_preprocess_begin"
 cc -E -P -std=gnu11 -x c \
     "$root/tests/compiler/c0/gnu_inline_asm_readwrite_earlyclobber.c" \
     -o "$tmp/riscv.i"
-MINIC_ASM_OPERAND_PLAN_TRACE=1 "$minic" --target=riscv64-linux \
-    -S "$tmp/riscv.i" -o "$tmp/riscv64.s" 2>"$tmp/riscv64.log"
-grep -Eq 'add a0, a0,' "$tmp/riscv64.s"
-grep -E 'CORE_ASM_OPERAND_PLAN owner=2 source_form=[0-9a-f]{16} .* gnu_early=3 ' \
-    "$tmp/riscv64.log" >/dev/null
+echo "TARGET_GNU_EARLY_STAGE=rv64_generic_compile_begin"
+if ! MINIC_ASM_OPERAND_PLAN_TRACE=1 "$minic" --target=riscv64-linux \
+        -S "$tmp/riscv.i" -o "$tmp/riscv64.s" 2>"$tmp/riscv64.log"; then
+    echo "TARGET_GNU_EARLY_STAGE=rv64_generic_compile_failed" >&2
+    tail -n 65 "$tmp/riscv64.log" >&2 || true
+    exit 1
+fi
+echo "TARGET_GNU_EARLY_STAGE=rv64_generic_compile_success"
+if ! grep -Eq 'add a0, a0,' "$tmp/riscv64.s"; then
+    echo "TARGET_GNU_EARLY_STAGE=rv64_generic_assembly_mismatch" >&2
+    sed -n '1,100p' "$tmp/riscv64.s" >&2
+    exit 1
+fi
+if ! grep -E 'CORE_ASM_OPERAND_PLAN owner=2 source_form=[0-9a-f]{16} .* gnu_early=3 ' \
+        "$tmp/riscv64.log" >/dev/null; then
+    echo "TARGET_GNU_EARLY_STAGE=rv64_generic_owner_mismatch" >&2
+    tail -n 65 "$tmp/riscv64.log" >&2
+    exit 1
+fi
+echo "TARGET_GNU_EARLY_STAGE=rv64_generic_source_pass"
 rv32_early='fail_closed'
+echo "TARGET_GNU_EARLY_STAGE=rv32_generic_probe_begin"
 if "$minic" --target=riscv32-linux -S "$tmp/riscv.i" \
-        -o "$tmp/rv32-early.s" >/dev/null 2>&1; then
+        -o "$tmp/rv32-early.s" >"$tmp/rv32-early.stdout" 2>"$tmp/rv32-early.log"; then
     # A future RV32 backend may legitimately implement this form; in that
     # case it must produce an actual target assembly artifact.
-    test -s "$tmp/rv32-early.s"
-    grep -Eq 'add a0, a0,' "$tmp/rv32-early.s"
+    if ! test -s "$tmp/rv32-early.s"; then
+        echo "TARGET_GNU_EARLY_STAGE=rv32_generic_accepted_empty_assembly" >&2
+        exit 1
+    fi
+    if ! grep -Eq 'add a0, a0,' "$tmp/rv32-early.s"; then
+        echo "TARGET_GNU_EARLY_STAGE=rv32_generic_accepted_wrong_assembly" >&2
+        sed -n '1,100p' "$tmp/rv32-early.s" >&2
+        exit 1
+    fi
     rv32_early='accepted'
 else
-    test ! -e "$tmp/rv32-early.s"
+    if test -e "$tmp/rv32-early.s"; then
+        echo "TARGET_GNU_EARLY_STAGE=rv32_generic_rejected_but_emitted" >&2
+        tail -n 45 "$tmp/rv32-early.log" >&2
+        exit 1
+    fi
 fi
+echo "TARGET_GNU_EARLY_STAGE=rv32_generic_probe_success mode=$rv32_early"
 printf 'int main(void) { return 42; }\n' > "$tmp/riscv32.c"
-"$minic" --target=riscv32-linux -S "$tmp/riscv32.c" -o "$tmp/riscv32.s"
-test -s "$tmp/riscv32.s"
+if ! "$minic" --target=riscv32-linux -S "$tmp/riscv32.c" \
+        -o "$tmp/riscv32.s" 2>"$tmp/riscv32.log"; then
+    echo "TARGET_GNU_EARLY_STAGE=rv32_plain_compile_failed" >&2
+    tail -n 45 "$tmp/riscv32.log" >&2
+    exit 1
+fi
+if ! test -s "$tmp/riscv32.s"; then
+    echo "TARGET_GNU_EARLY_STAGE=rv32_plain_empty_assembly" >&2
+    exit 1
+fi
+echo "TARGET_GNU_EARLY_STAGE=rv32_generic_pass"
 
 # Native GNU/MiniC differential and the exception-table/atomic correctness
 # gate use the real x86 Linux futex fixture (not only a synthetic asm).

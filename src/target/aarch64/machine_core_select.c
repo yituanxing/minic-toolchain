@@ -2295,7 +2295,7 @@ static bool a64_linux_cmpxchg_source(A64CoreSelection *sel,
         ops == NULL || sel->ctx->machine_frame->has_dynamic_stack ||
         !aarch64_asm_core_integer(fn, ops[0].value, true, 8U, -1) ||
         !aarch64_asm_core_integer(fn, ops[1].value, true, width, -1) ||
-        !aarch64_asm_core_integer(fn, ops[2].value, true, width, -1) ||
+        !aarch64_stlr_memory_carrier_core(fn, ops[2].value, width) ||
         !aarch64_asm_core_integer(fn, ops[3].value, false, 8U, -1) ||
         !aarch64_asm_core_integer(fn, ops[4].value, false, width, -1))
         return false;
@@ -2483,8 +2483,8 @@ bool minic_aarch64_machine_prove_selected_source_asm(
         return aarch64_asm_core_integer(fn, ops[0].value, true, 8U, -1) &&
             aarch64_asm_core_integer(fn, ops[1].value,
                 true, cmp_width, -1) &&
-            aarch64_asm_core_integer(fn, ops[2].value,
-                true, cmp_width, -1) &&
+            aarch64_stlr_memory_carrier_core(fn, ops[2].value,
+                cmp_width) &&
             aarch64_asm_core_integer(fn, ops[3].value, false, 8U, -1) &&
             aarch64_asm_core_integer(fn, ops[4].value,
                 false, cmp_width, -1);
