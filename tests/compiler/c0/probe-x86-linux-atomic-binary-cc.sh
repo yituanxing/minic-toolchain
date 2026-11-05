@@ -64,8 +64,11 @@ int main(void) {
 }
 EOF
 "$minic" --target=x86_64-linux -S "$dir/atomic.i" -o "$dir/atomic.s"
-for instr in 'lock; subl' 'lock; addl' 'lock; subq' 'lock; addq' 'sete %al' 'sets %al'; do
-  grep -Fq "$instr" "$dir/atomic.s"
+for instr in 'lock; subl' 'lock; addl' 'lock; subq' 'lock; addq' 'sete %r9b' 'sets %r9b'; do
+  if ! grep -Fq "$instr" "$dir/atomic.s"; then
+    echo "FAIL x86 binary RMWcc missing exact physical opcode: $instr" >&2
+    exit 1
+  fi
 done
 cc -O0 -no-pie "$dir/main.c" "$dir/oracle.c" -x assembler "$dir/atomic.s" -o "$dir/diff"
 set +e

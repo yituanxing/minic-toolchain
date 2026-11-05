@@ -123,8 +123,11 @@ int main(void) {
 }
 EOF
 "$minic" --target=x86_64-linux -S "$w/try.i" -o "$w/try.s"
-for op in cmpxchgb cmpxchgw cmpxchgl cmpxchgq 'sete %r8b';do
- grep -Fq "$op" "$w/try.s"
+for op in cmpxchgb cmpxchgw cmpxchgl cmpxchgq 'sete %r9b';do
+ if ! grep -Fq "$op" "$w/try.s"; then
+  echo "FAIL x86 trycas missing exact physical opcode: $op" >&2
+  exit 1
+ fi
 done
 cc -O0 -no-pie "$w/main.c" "$w/gcc.c" -x assembler "$w/try.s" -o "$w/diff"
 set +e
