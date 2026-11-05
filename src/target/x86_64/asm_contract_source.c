@@ -2414,10 +2414,11 @@ static bool x86_add32_carry_source(const MinicTargetInvocation *invocation, cons
 }
 
 static bool x86_nospec_source(const MinicC0Program *program,
-                              const MinicInlineAsm *src) {
+    const MinicInlineAsm *src, uint32_t *width_out) {
     const MinicExpression *out, *size, *index;
     MinicType out_type, size_type, index_type;
-    if (!program || !src || !src->outputs || !src->inputs ||
+    if (!program || !src || width_out == NULL ||
+        !src->outputs || !src->inputs ||
         !src->is_volatile || src->is_goto || src->label_count ||
         src->output_count != 1U || src->input_count != 2U ||
         src->clobber_count != 1U || src->register_clobber_count != 1U ||
@@ -2432,18 +2433,22 @@ static bool x86_nospec_source(const MinicC0Program *program,
     out = minic_c0_program_expression(program, src->outputs[0].expression);
     size = minic_c0_program_expression(program, src->inputs[0].expression);
     index = minic_c0_program_expression(program, src->inputs[1].expression);
-    return out && size && index &&
-        out->value_category == MINIC_VALUE_LVALUE &&
-        !minic_type_is_const(out->type) &&
-        minic_type_unqualified(out->type, &out_type) &&
-        minic_type_equal(out_type, minic_type_unsigned_long()) &&
-        minic_type_unqualified(size->type, &size_type) &&
-        minic_type_unqualified(index->type, &index_type) &&
-        minic_type_equal(size_type, index_type) &&
-        size_type.base_kind == MINIC_TYPE_BASE_INT &&
-        (size_type.integer_rank == MINIC_INTEGER_RANK_INT ||
-         size_type.integer_rank == MINIC_INTEGER_RANK_LONG ||
-         size_type.integer_rank == MINIC_INTEGER_RANK_LONG_LONG);
+    if (!out || !size || !index ||
+        out->value_category != MINIC_VALUE_LVALUE ||
+        minic_type_is_const(out->type) ||
+        !minic_type_unqualified(out->type, &out_type) ||
+        !minic_type_equal(out_type, minic_type_unsigned_long()) ||
+        !minic_type_unqualified(size->type, &size_type) ||
+        !minic_type_unqualified(index->type, &index_type) ||
+        !minic_type_equal(size_type, index_type) ||
+        size_type.base_kind != MINIC_TYPE_BASE_INT ||
+        (size_type.integer_rank != MINIC_INTEGER_RANK_INT &&
+         size_type.integer_rank != MINIC_INTEGER_RANK_LONG &&
+         size_type.integer_rank != MINIC_INTEGER_RANK_LONG_LONG))
+        return false;
+    /* Source owns C integer ranks; Machine receives only the byte width. */
+    *width_out = size_type.integer_rank == MINIC_INTEGER_RANK_INT ? 4U : 8U;
+    return true;
 }
 static bool x86_linux_raw_cmpxchg_source(const MinicTargetInvocation *invocation,
     const MinicC0Program *program, const MinicInlineAsm *src,
@@ -5546,6 +5551,7 @@ bool minic_x86_64_qualify_inline_asm(
     const MinicTargetInvocation *invocation, const MinicC0Program *program, const MinicInlineAsm *source,
     MinicTargetInlineAsmContract *contract) {
     bool is_mulacc = false;
+    uint32_t nospec_width = 0U;
     size_t i, count;
     if (!invocation || !contract) return false;
     for (i = 0U;
@@ -5558,7 +5564,9 @@ bool minic_x86_64_qualify_inline_asm(
             return true;
         }
     }
-    if (x86_nospec_source(program, source)) {
+    if (x86_nospec_source(program, source, &nospec_width)) {
+        contract->target_machine_form_id = MINIC_X86_MACHINE_ASM_NOSPEC;
+        contract->target_machine_form_variant = nospec_width;
         contract->operand_count = 3U;
         contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
         contract->kinds[1] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;

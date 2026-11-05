@@ -15,6 +15,9 @@ bool minic_x86_64_typed_machine_form_matches_template(
     size_t percpu_width = 0U;
     if (!text) return false;
     switch ((MinicX86MachineAsmForm)form_id) {
+    case MINIC_X86_MACHINE_ASM_NOSPEC:
+        return (variant == 4U || variant == 8U) &&
+            minic_x86_64_asm_nospec_template(text, length);
     case MINIC_X86_MACHINE_ASM_CPUID_MATCHED:
         return (variant == 6U || variant == 8U) && length == 5U &&
             memcmp(text, "cpuid", 5U) == 0;

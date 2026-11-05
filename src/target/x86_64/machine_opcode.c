@@ -2345,6 +2345,32 @@ static bool x86_scalar_machine_mem(const MinicTargetInfo *target,
         !addr->has_symbol && addr->displacement == 0;
 }
 
+/* The original Linux nospec source occurrence has been lowered to one
+ * selected CMP32/64 and one selected SBB64. Revalidate the immutable source
+ * form and cc clobber, but permit no hidden assembler bytes or operands. */
+static bool x86_source_nospec_contract(
+    const MinicMachineInstruction *ins) {
+    const MinicMachineRegisterEffect *flags;
+    const uint32_t width = ins->source_asm_machine_form_variant;
+    if (ins->source_asm_machine_form_id != MINIC_X86_MACHINE_ASM_NOSPEC ||
+        (width != 4U && width != 8U) ||
+        !minic_x86_64_typed_machine_form_matches_template(
+            ins->source_asm_machine_form_id, width,
+            ins->source_asm_template, ins->source_asm_length) ||
+        ins->source_asm_terminates_block ||
+        ins->source_asm_permits_fallthrough ||
+        ins->effects != (MINIC_MACHINE_EFFECT_SOURCE_ASM |
+            MINIC_MACHINE_EFFECT_VOLATILE) ||
+        ins->operand_count != 0U || ins->operands != NULL ||
+        ins->implicit_count != 1U ||
+        (flags = ins->implicit) == NULL)
+        return false;
+    return flags->reg.bank == MINIC_MACHINE_REGISTER_FLAGS &&
+        flags->reg.number == 0U &&
+        flags->reg.width_bits == 64U &&
+        flags->access == MINIC_MACHINE_REGISTER_CLOBBER;
+}
+
 static bool x86_source_scalar_port_io_contract(
     const MinicMachineInstruction *ins) {
     const MinicX86PortIo form = minic_x86_64_port_io_form(
@@ -2967,6 +2993,9 @@ bool minic_x86_64_machine_validate_source_asm(const MinicTargetInfo *target,
     if (instruction->source_asm_machine_form_id ==
             MINIC_X86_MACHINE_ASM_MXCSR)
         return x86_source_mxcsr_contract(target,instruction);
+    if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_NOSPEC)
+        return x86_source_nospec_contract(instruction);
     if (instruction->source_asm_machine_form_id ==
             MINIC_X86_MACHINE_ASM_PORT_IO)
         return x86_source_scalar_port_io_contract(instruction);

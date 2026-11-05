@@ -183,7 +183,9 @@ typedef enum MinicX86MachineAsmForm {
     MINIC_X86_MACHINE_ASM_BUG_TABLE_C_IMMEDIATE,
     /* A GCC lowercase-i immediate is a source-qualified compile-time value,
      * even when the opcode itself (`nop`) does not reference the input. */
-    MINIC_X86_MACHINE_ASM_NOP_CONST_I
+    MINIC_X86_MACHINE_ASM_NOP_CONST_I,
+    /* Linux array_index_mask_nospec, typed 32/64-bit CMP then 64-bit SBB. */
+    MINIC_X86_MACHINE_ASM_NOSPEC
 } MinicX86MachineAsmForm;
 
 /* RAID6's fixed XMM/YMM/ZMM and opmask-register GNU templates. Every

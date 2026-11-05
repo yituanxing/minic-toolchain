@@ -514,6 +514,9 @@ static bool x86_emit_source_asm(FILE *out,
     if (instruction->source_asm_machine_form_id == 0U)
         return true; /* Empty volatile asm has an effect but zero bytes. */
     if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_NOSPEC)
+        return true; /* CMP/SBB are already selected physical Machine opcodes. */
+    if (instruction->source_asm_machine_form_id ==
             MINIC_X86_MACHINE_ASM_PUT_USER_CALL ||
         instruction->source_asm_machine_form_id ==
             MINIC_X86_MACHINE_ASM_GET_USER_CALL)

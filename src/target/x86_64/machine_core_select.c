@@ -4413,6 +4413,75 @@ static MinicMachineRegisterEffect x86_scalar_flags_clobber(void) {
     return effect;
 }
 
+/* Linux array_index_mask_nospec: size and index compare in their exact
+ * Core byte width, while the subtraction-borrow materializes a full 64-bit
+ * mask. Two selected physical opcodes own the hardware flags; the single
+ * source-owned marker contributes provenance/cc clobber but prints no bytes. */
+static bool x86_source_nospec(X86CoreSelector *sel,
+    const MinicCoreInstruction *ins) {
+    const MinicCoreInlineAsm *source;
+    const MinicCoreStructuredInlineAsmOperand *roles;
+    const MinicCoreInlineAsmRegisterClobber *clobber;
+    MinicMachineRegisterEffect flags = x86_scalar_flags_clobber();
+    size_t width;
+    if (ins->kind != MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM ||
+        ins->result != MINIC_CORE_VALUE_INVALID ||
+        sel->core->inline_asms == NULL ||
+        ins->value.structured_inline_asm.inline_asm_id >=
+            sel->core->inline_asm_count)
+        return false;
+    source = &sel->core->inline_asms[
+        ins->value.structured_inline_asm.inline_asm_id];
+    roles = ins->value.structured_inline_asm.operands;
+    width = source->target_machine_form_variant;
+    if (source->target_machine_form_id != MINIC_X86_MACHINE_ASM_NOSPEC ||
+        (width != 4U && width != 8U) ||
+        source->operand_plan_owner != MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED ||
+        source->source_asm_unique_id == 0U ||
+        !source->is_volatile || source->is_goto ||
+        source->has_memory_clobber || source->explicit_memory_clobber ||
+        source->register_clobber_count != 1U ||
+        source->register_clobbers == NULL ||
+        source->resolved_immediate_count != 0U ||
+        source->goto_second_target != MINIC_CORE_BLOCK_INVALID ||
+        ins->value.structured_inline_asm.operand_count != 3U ||
+        roles == NULL ||
+        !minic_x86_64_typed_machine_form_matches_template(
+            source->target_machine_form_id,
+            source->target_machine_form_variant,
+            source->template_text, source->template_length))
+        return false;
+    clobber = &source->register_clobbers[0];
+    if (clobber->name == NULL || clobber->name_length != 2U ||
+        memcmp(clobber->name, "cc", 2U) != 0 ||
+        !x86_scalar_role(&roles[0], 0U,
+            MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT) ||
+        !x86_scalar_role(&roles[1], 1U,
+            MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT) ||
+        !x86_scalar_role(&roles[2], 2U,
+            MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT) ||
+        roles[0].physical_read_write || roles[1].physical_read_write ||
+        roles[2].physical_read_write ||
+        roles[0].has_tied_output || roles[1].has_tied_output ||
+        roles[2].has_tied_output ||
+        !x86_asm_u64_lvalue(sel, roles[0].value) ||
+        !x86_asm_gp_input_width(sel, roles[1].value, width) ||
+        !x86_asm_gp_input_width(sel, roles[2].value, width))
+        return false;
+    /* GNU %1=size, %2=index, %0=mask. No flag-affecting instruction
+     * between CMP and SBB: CF alone determines zero versus all-ones. */
+    return x86_core_load(sel, roles[1].value, MINIC_X86_REG_R10) &&
+        x86_core_load(sel, roles[2].value, MINIC_X86_REG_R11) &&
+        x86_rr(sel, width == 4U ? MINIC_X86_MI_CMP32_RR :
+            MINIC_X86_MI_CMP64_RR, (unsigned int)(width * 8U),
+            MINIC_X86_REG_R10, MINIC_X86_REG_R11) &&
+        x86_rr(sel, MINIC_X86_MI_SBB64_RR, 64U,
+            MINIC_X86_REG_R8, MINIC_X86_REG_R8) &&
+        minic_machine_builder_emit_core_source_asm(&sel->builder,
+            source, 0U, NULL, 0U, &flags, 1U, false, false) &&
+        x86_scalar_output_store(sel, roles[0].value, MINIC_X86_REG_R8, 8U);
+}
+
 static bool x86_source_scalar_port_io(X86CoreSelector *sel,
     const MinicCoreInstruction *ins) {
     const MinicCoreInlineAsm *source;
@@ -6399,6 +6468,7 @@ static bool x86_core_instruction(X86CoreSelector *sel,
             x86_source_scalar_cmpxchg(sel, ins, true) ||
             x86_source_scalar_bitops(sel, ins) ||
             x86_source_scalar_atomic_cc(sel, ins) ||
+            x86_source_nospec(sel, ins) ||
             x86_source_unwind_context(sel, ins) ||
             x86_source_msr(sel, ins) ||
             x86_source_hweight(sel, ins) ||
