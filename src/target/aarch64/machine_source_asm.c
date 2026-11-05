@@ -600,6 +600,84 @@ static const MinicMachineSourceAsmTemplatePolicy a64_source_goto_policy = {
 };
 
 
+/* KVM nVHE ticket lock/unlock: exact original Linux ALTERNATIVE source
+ * remains intact (feature33 PREL32 entries, numbered labels and LSE
+ * directives). Only two source-sealed physical forms are legal; every
+ * early-clobber result has its own register distinct from the live memory
+ * address carriers. */
+static bool a64_hyp_spin_form(const MinicMachineFunction *fn,
+    const MinicMachineInstruction *ins, void *context) {
+    const Aarch64LinuxHypSpinForm form = ins != NULL ?
+        aarch64_linux_hyp_spin_form(ins->source_asm_template,
+            ins->source_asm_length) : AARCH64_LINUX_HYP_SPIN_NONE;
+    const size_t count = form == AARCH64_LINUX_HYP_SPIN_LOCK ? 5U : 2U;
+    const unsigned int effects = MINIC_MACHINE_EFFECT_SOURCE_ASM |
+        MINIC_MACHINE_EFFECT_VOLATILE |
+        MINIC_MACHINE_EFFECT_COMPILER_BARRIER |
+        MINIC_MACHINE_EFFECT_MEMORY_READ |
+        MINIC_MACHINE_EFFECT_MEMORY_WRITE;
+    (void)context;
+    return fn != NULL && fn->target != NULL &&
+        fn->target->architecture == MINIC_TARGET_ARCH_AARCH64 &&
+        ins != NULL && ins->kind == MINIC_MACHINE_INSTRUCTION_SOURCE_ASM &&
+        ins->source_asm_machine_form_id == AARCH64_MACHINE_ASM_HYP_SPIN &&
+        form != AARCH64_LINUX_HYP_SPIN_NONE &&
+        ins->source_asm_machine_form_variant == (unsigned int)form &&
+        ins->operand_count == count && ins->operands != NULL &&
+        ins->implicit_count == 0U && ins->effects == effects &&
+        !ins->source_asm_terminates_block &&
+        !ins->source_asm_permits_fallthrough;
+}
+
+static bool a64_hyp_spin_binding(const MinicMachineFunction *fn,
+    const MinicMachineInstruction *ins, size_t index, void *context) {
+    const bool lock = ins != NULL &&
+        ins->source_asm_machine_form_variant ==
+            AARCH64_LINUX_HYP_SPIN_LOCK;
+    const size_t count = lock ? 5U : 2U;
+    const unsigned int number = lock ? 9U + (unsigned int)index :
+        (index == 0U ? 12U : 9U);
+    const bool output = lock ? index < 3U : index == 1U;
+    const char *constraint = lock ?
+        (index < 3U ? "=&r" : index == 3U ? "+Q" : "Q") :
+        (index == 0U ? "=Q" : "=&r");
+    const MinicMachineOperand *op;
+    (void)context;
+    if (!a64_hyp_spin_form(fn, ins, NULL) || index >= count ||
+        ins->operands == NULL) return false;
+    op = &ins->operands[index];
+    return op->kind == MINIC_MACHINE_OPERAND_REGISTER &&
+        op->asm_name == NULL && op->asm_constraint != NULL &&
+        strcmp(op->asm_constraint, constraint) == 0 &&
+        op->value.physical.reg.bank == MINIC_MACHINE_REGISTER_GENERAL &&
+        op->value.physical.reg.number == number &&
+        op->value.physical.reg.width_bits == 64U &&
+        op->value.physical.access == (output ?
+            MINIC_MACHINE_REGISTER_WRITE : MINIC_MACHINE_REGISTER_READ);
+}
+
+static bool a64_hyp_spin_operand(FILE *output,
+    const MinicMachineFunction *fn, const MinicMachineInstruction *ins,
+    const MinicMachineGNUAsmLabels *labels, size_t index,
+    unsigned char modifier, void *context) {
+    const bool lock = ins != NULL &&
+        ins->source_asm_machine_form_variant ==
+            AARCH64_LINUX_HYP_SPIN_LOCK;
+    const bool memory = lock ? index >= 3U : index == 0U;
+    const unsigned int number = lock ? 9U + (unsigned int)index :
+        (index == 0U ? 12U : 9U);
+    (void)labels;
+    if (!a64_hyp_spin_binding(fn, ins, index, context)) return false;
+    if (memory) return modifier == 0U &&
+        (output == NULL || fprintf(output, "[x%u]", number) >= 0);
+    return modifier == 'w' &&
+        (output == NULL || fprintf(output, "w%u", number) >= 0);
+}
+
+static const MinicMachineSourceAsmTemplatePolicy a64_hyp_spin_policy = {
+    a64_hyp_spin_form, a64_hyp_spin_binding, a64_hyp_spin_operand, NULL
+};
+
 /* Linux arm64's exact 16-form CMPXCHG retry loop: five typed operands,
  * source-owned memory ordering, exclusive status and GNU local labels. */
 static bool a64_cmpxchg_form(const MinicMachineFunction *fn,
@@ -622,8 +700,7 @@ static bool a64_cmpxchg_form(const MinicMachineFunction *fn,
         MINIC_MACHINE_EFFECT_VOLATILE |
         MINIC_MACHINE_EFFECT_MEMORY_READ |
         MINIC_MACHINE_EFFECT_MEMORY_WRITE |
-        (form && (form - 1U) % 4U != 0U ?
-            MINIC_MACHINE_EFFECT_COMPILER_BARRIER : 0U);
+        MINIC_MACHINE_EFFECT_COMPILER_BARRIER;
     return form != 0U && ins->source_asm_machine_form_variant == form &&
         ins->effects == effects;
 }
@@ -768,6 +845,8 @@ bool minic_aarch64_machine_source_asm_validate(
          a64_machine_pstate_alternative(instruction) ||
          a64_machine_extra_source_form(instruction) ||
          minic_machine_source_asm_template_preflight(&function,
+             instruction, &a64_hyp_spin_policy) ||
+         minic_machine_source_asm_template_preflight(&function,
              instruction, &a64_cmpxchg_policy) ||
          minic_machine_source_asm_template_preflight(&function,
              instruction, &a64_source_goto_policy) ||
@@ -902,6 +981,13 @@ bool minic_aarch64_machine_source_asm_emit(
                 form.mnemonic, form.exception_type,
                 form.is_load ? 10U : 31U) >= 0;
     }
+    if (instruction->source_asm_machine_form_id == AARCH64_MACHINE_ASM_HYP_SPIN)
+        return minic_machine_source_asm_template_emit(output, function,
+            instruction, labels, &a64_hyp_spin_policy) &&
+            ((instruction->source_asm_length != 0U &&
+              instruction->source_asm_template[
+                  instruction->source_asm_length - 1U] == '\n') ||
+             fputc('\n', output) != EOF);
     if (instruction->source_asm_machine_form_id == AARCH64_MACHINE_ASM_CMPXCHG)
         return minic_machine_source_asm_template_emit(output, function,
             instruction, labels, &a64_cmpxchg_policy) &&

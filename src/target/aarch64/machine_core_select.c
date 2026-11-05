@@ -44,6 +44,8 @@ typedef struct A64CoreSelection {
     bool *reachable;
     size_t *goto_emit;
     size_t *goto_continue;
+    size_t *dynamic_continuation;
+    size_t *dynamic_overflow;
     A64VariadicBlocks *variadic_blocks;
     MinicA64FrameView view;
 } A64CoreSelection;
@@ -1117,22 +1119,22 @@ static bool a64_fixed_sp_read(A64CoreSelection *sel,
  * MachineCFG blocks.  Frame accesses remain anchored to x19, the immutable
  * base established by the AAPCS64 machine prologue. */
 static bool a64_dynamic_stack_alloc(A64CoreSelection *sel,
-    const MinicCoreInstruction *ins) {
-    size_t overflow, continuation;
+    const MinicCoreInstruction *ins, MinicCoreInstructionId ins_id) {
+    size_t continuation, overflow;
     const size_t source_block = sel->builder.current_block;
     const MinicMachineOperand high[] = {
         a64_immediate(2), a64_block(0U)
     };
     MinicMachineOperand branch[2] = {high[0], high[1]};
-    if (!minic_multi_direct_dynamic_stack_alloc_shape(sel->ctx->fn, ins,
+    if (ins_id >= sel->ctx->fn->instruction_count) return false;
+    continuation = sel->dynamic_continuation[ins_id];
+    overflow = sel->dynamic_overflow[ins_id];
+    if (continuation == SIZE_MAX || overflow == SIZE_MAX ||
+        !minic_multi_direct_dynamic_stack_alloc_shape(sel->ctx->fn, ins,
             sel->ctx->machine_frame->has_dynamic_stack) ||
         !a64_load_core(sel, ins->value.operand, A64_T0, 64U) ||
         !a64_rri(sel, MINIC_A64_MACHINE_ADDS_IMM, 64U,
             A64_T1, A64_T0, 15) ||
-        !minic_machine_builder_create_block(&sel->builder, NULL,
-            false, true, &continuation) ||
-        !minic_machine_builder_create_block(&sel->builder, NULL,
-            false, true, &overflow) ||
         !minic_machine_builder_position_at(&sel->builder, source_block))
         return false;
     branch[1] = a64_block(overflow);
@@ -2158,6 +2160,95 @@ static bool a64_linux_scalar_lse_source(A64CoreSelection *sel,
             9U, bits, 12U, 0U, true, false);
 }
 
+/* Original Linux KVM nVHE hyp ticket spinlock: preserve the complete
+ * LL/SC-versus-LSE alternative as one sealed, physically assigned
+ * MachineIR source instruction. Source already proved the record and GNU
+ * constraints; this target rechecks Core storage shape and all five/two
+ * physical operands before emitting the original ELF altinstructions. */
+static bool a64_linux_hyp_spin_source(A64CoreSelection *sel,
+    const MinicCoreInstruction *ins, const MinicCoreInlineAsm *source) {
+    const MinicCoreFunction *fn = sel->ctx->fn;
+    const MinicCoreStructuredInlineAsmOperand *ops =
+        ins->value.structured_inline_asm.operands;
+    const Aarch64LinuxHypSpinForm form = aarch64_linux_hyp_spin_form(
+        source->template_text, source->template_length);
+    const bool lock = form == AARCH64_LINUX_HYP_SPIN_LOCK;
+    const size_t count = lock ? 5U : 2U;
+    MinicMachineOperand machine[5];
+    size_t i;
+    if (form == AARCH64_LINUX_HYP_SPIN_NONE ||
+        source->target_machine_form_id != AARCH64_MACHINE_ASM_HYP_SPIN ||
+        source->target_machine_form_variant != (unsigned int)form ||
+        source->operand_plan_owner != MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED ||
+        !source->is_volatile || source->is_goto ||
+        !source->has_memory_clobber || source->register_clobber_count != 0U ||
+        source->resolved_immediate_count != 0U ||
+        source->symbol_reference_count != 0U ||
+        source->deferred_immediate_symbol != NULL ||
+        ins->result != MINIC_CORE_VALUE_INVALID ||
+        !minic_core_function_type_is_kind(fn, ins->core_type_id,
+            MINIC_CORE_TYPE_VOID) ||
+        ins->value.structured_inline_asm.operand_count != count ||
+        ops == NULL || sel->ctx->machine_frame->has_dynamic_stack)
+        return false;
+    for (i = 0U; i < count; ++i) {
+        const MinicCoreStructuredInlineAsmOperandKind kind = lock ?
+            (i < 2U ? MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_OUTPUT :
+             i == 2U ? MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT :
+             i == 3U ? MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE :
+                       MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT) :
+            (i == 0U ? MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_OUTPUT :
+                       MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT);
+        const unsigned int number = lock ? 9U + (unsigned int)i :
+            (i == 0U ? 12U : 9U);
+        const bool early = lock ? i < 3U : i == 1U;
+        const MinicCoreType *const object = aarch64_asm_core_type(
+            fn, ops[i].value, true);
+        if (ops[i].operand_index != i || ops[i].value >= fn->value_count ||
+            ops[i].kind != kind || ops[i].has_fixed_register_binding ||
+            ops[i].has_tied_output || ops[i].early_clobber ||
+            ops[i].physical_early_clobber != early ||
+            object == NULL || !object->has_layout ||
+            (lock && (i == 0U || i == 1U || i == 3U) ?
+                (object->kind != MINIC_CORE_TYPE_RECORD ||
+                 object->size != 4U) :
+             !aarch64_asm_core_integer(fn, ops[i].value, true,
+                lock ? (i == 4U ? 2U : 4U) :
+                       (i == 0U ? 2U : 8U), 0)))
+            return false;
+        machine[i] = a64_gp(number, 64U, early ?
+            MINIC_MACHINE_REGISTER_WRITE : MINIC_MACHINE_REGISTER_READ);
+        machine[i].asm_constraint = lock ?
+            (i < 3U ? "=&r" : i == 3U ? "+Q" : "Q") :
+            (i == 0U ? "=Q" : "=&r");
+    }
+    /* Load every memory carrier before setting x9..x11 outputs; no generic
+     * allocator may alias the early-clobber registers with live x12/x13. */
+    if (lock) {
+        if (!a64_load_core(sel, ops[3].value, 12U, 64U) ||
+            !a64_load_core(sel, ops[4].value, 13U, 64U)) return false;
+    } else if (!a64_load_core(sel, ops[0].value, 12U, 64U)) {
+        return false;
+    }
+    if (!minic_machine_builder_emit_core_source_asm(&sel->builder, source,
+            MINIC_MACHINE_EFFECT_MEMORY_READ |
+            MINIC_MACHINE_EFFECT_MEMORY_WRITE,
+            machine, count, NULL, 0U, false, false))
+        return false;
+    if (lock) {
+        for (i = 0U; i < 3U; ++i) {
+            if (!a64_load_core(sel, ops[i].value, 14U, 64U) ||
+                !a64_memory_register(sel, MINIC_A64_MACHINE_STR_W,
+                    false, 9U + (unsigned int)i, 32U,
+                    14U, 0U, true, false)) return false;
+        }
+        return true;
+    }
+    return a64_load_core(sel, ops[1].value, 14U, 64U) &&
+        a64_memory_register(sel, MINIC_A64_MACHINE_STR_X, false,
+            9U, 64U, 14U, 0U, true, false);
+}
+
 /* Linux __ll_sc__cmpxchg_case_* is one sixteen-member LL/SC family.
  * Each source-qualified form retains its original retry loop, ordering,
  * physical status register and GNU 8/16/32/64-bit register spellings.
@@ -2191,7 +2282,8 @@ static bool a64_linux_cmpxchg_source(A64CoreSelection *sel,
         form == 0U || source->target_machine_form_variant != form ||
         source->operand_plan_owner != MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED ||
         !source->is_volatile || source->is_goto ||
-        source->has_memory_clobber != (mode != 0U) ||
+        !source->has_memory_clobber ||
+        source->explicit_memory_clobber != (mode != 0U) ||
         source->register_clobber_count != 0U ||
         source->resolved_immediate_count != 0U ||
         source->symbol_reference_count != 0U ||
@@ -2373,7 +2465,8 @@ bool minic_aarch64_machine_prove_selected_source_asm(
                 AARCH64_MACHINE_ASM_CMPXCHG ||
             selected->source_asm_machine_form_variant != form ||
             source->target_machine_form_variant != form ||
-            source->has_memory_clobber != (mode != 0U) ||
+            !source->has_memory_clobber ||
+        source->explicit_memory_clobber != (mode != 0U) ||
             source->register_clobber_count != 0U ||
             source->resolved_immediate_count != 0U ||
             source->symbol_reference_count != 0U ||
@@ -3457,7 +3550,7 @@ static bool a64_core_instruction(A64CoreSelection *sel,
     case MINIC_CORE_INSTRUCTION_FIXED_REGISTER_READ:
         return a64_fixed_sp_read(sel, ins);
     case MINIC_CORE_INSTRUCTION_DYNAMIC_STACK_ALLOC:
-        return a64_dynamic_stack_alloc(sel, ins);
+        return a64_dynamic_stack_alloc(sel, ins, ins_id);
     case MINIC_CORE_INSTRUCTION_OPAQUE_INLINE_ASM: {
         const MinicCoreInlineAsmId id = ins->value.inline_asm_id;
         if (id >= fn->inline_asm_count || fn->inline_asms == NULL)
@@ -3503,6 +3596,8 @@ static bool a64_core_instruction(A64CoreSelection *sel,
         if (source->target_machine_form_id == AARCH64_MACHINE_ASM_RAW_IO_READ ||
             source->target_machine_form_id == AARCH64_MACHINE_ASM_RAW_IO_STORE)
             return a64_linux_raw_io_source(sel, ins, source);
+        if (source->target_machine_form_id == AARCH64_MACHINE_ASM_HYP_SPIN)
+            return a64_linux_hyp_spin_source(sel, ins, source);
         if (source->target_machine_form_id == AARCH64_MACHINE_ASM_CMPXCHG)
             return a64_linux_cmpxchg_source(sel, ins, source);
         if (source->target_machine_form_id == AARCH64_MACHINE_ASM_LSE_CASP128)
@@ -4016,6 +4111,10 @@ bool minic_aarch64_machine_select_core_subset(
         fn->instruction_count : 1U) * sizeof(*sel.goto_emit));
     sel.goto_continue = malloc((fn->instruction_count != 0U ?
         fn->instruction_count : 1U) * sizeof(*sel.goto_continue));
+    sel.dynamic_continuation = malloc((fn->instruction_count != 0U ?
+        fn->instruction_count : 1U) * sizeof(*sel.dynamic_continuation));
+    sel.dynamic_overflow = malloc((fn->instruction_count != 0U ?
+        fn->instruction_count : 1U) * sizeof(*sel.dynamic_overflow));
     if (fn->instruction_count > SIZE_MAX / sizeof(*sel.variadic_blocks))
         goto cleanup;
     if (fn->instruction_count != 0U)
@@ -4024,6 +4123,7 @@ bool minic_aarch64_machine_select_core_subset(
     if (sel.blocks == NULL || sel.false_blocks == NULL ||
         sel.true_blocks == NULL || sel.reachable == NULL ||
         sel.goto_emit == NULL || sel.goto_continue == NULL ||
+        sel.dynamic_continuation == NULL || sel.dynamic_overflow == NULL ||
         (fn->instruction_count != 0U && sel.variadic_blocks == NULL) ||
         !minic_aarch64_machine_gnu_asm_policy_initialize(
             ctx->target, &sel.policy) ||
@@ -4035,8 +4135,10 @@ bool minic_aarch64_machine_select_core_subset(
         sel.false_blocks[i] = SIZE_MAX;
         sel.true_blocks[i] = SIZE_MAX;
     }
-    for (i = 0U; i < fn->instruction_count; ++i)
+    for (i = 0U; i < fn->instruction_count; ++i) {
         sel.goto_emit[i] = sel.goto_continue[i] = SIZE_MAX;
+        sel.dynamic_continuation[i] = sel.dynamic_overflow[i] = SIZE_MAX;
+    }
     for (i = 0U; i < fn->instruction_count; ++i)
         sel.variadic_blocks[i] = (A64VariadicBlocks){SIZE_MAX,
             SIZE_MAX, SIZE_MAX, SIZE_MAX};
@@ -4087,6 +4189,16 @@ bool minic_aarch64_machine_select_core_subset(
                            NULL, false, true,
                            &sel.goto_continue[ins_id]))) goto cleanup;
               }
+              /* Reserve each dynamic continuation in instruction order so
+               * the MachineCFG fallthrough stays physically adjacent.
+               * Overflow traps live out-of-line after all Core blocks. */
+              if (ins->kind == MINIC_CORE_INSTRUCTION_DYNAMIC_STACK_ALLOC) {
+                  if (!minic_machine_builder_create_block(&sel.builder,
+                          NULL, false, true,
+                          &sel.dynamic_continuation[ins_id]))
+                      goto cleanup;
+                  continue;
+              }
               if (ins->kind !=
                       MINIC_CORE_INSTRUCTION_VARIADIC_NEXT_SCALAR &&
                   !((ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_LEFT ||
@@ -4121,6 +4233,12 @@ bool minic_aarch64_machine_select_core_subset(
             }
         }
     }
+    /* Trap blocks are out-of-line, never between two dynamic alloca
+     * continuations. A Machine fallthrough target must be source+1. */
+    for (i = 0U; i < fn->instruction_count; ++i)
+        if (sel.dynamic_continuation[i] != SIZE_MAX &&
+            !minic_machine_builder_create_block(&sel.builder, NULL,
+                false, true, &sel.dynamic_overflow[i])) goto cleanup;
     if (!minic_machine_builder_position_at(&sel.builder, prologue) ||
         !minic_a64_machine_emit_prologue(&sel.builder, ctx->machine_frame))
         goto cleanup;
@@ -4176,6 +4294,8 @@ cleanup:
     free(sel.reachable);
     free(sel.goto_emit);
     free(sel.goto_continue);
+    free(sel.dynamic_continuation);
+    free(sel.dynamic_overflow);
     free(sel.variadic_blocks);
     if (!ok) minic_machine_function_destroy(machine);
     return ok;
