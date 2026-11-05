@@ -9,6 +9,7 @@ cross_cc=$2
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
+trap 'status=$?; printf "FAIL GNU source ASM probe target=%s line=%s exit=%s command=%s\n" "$target" "$LINENO" "$status" "$BASH_COMMAND" >&2' ERR
 cat > "$work/original.i" <<'SRC'
 __asm__(".pushsection .rodata\n"
         ".globl minic_original_source_asm_marker\n"
@@ -332,9 +333,23 @@ SRC
     "$cross_cc" -x c "$work/aarch64-llsc.i" -o "$work/aarch64-llsc.gnu.elf"
     "$MINIC_CC" --target=aarch64-linux -S "$work/aarch64-llsc.i" \
         -o "$work/aarch64-llsc.minic.s"
+    # The frozen Linux GNU asm spells ALU lines with ONE initial space.
+    # MachineIR preserves that source whitespace; verify full hardware
+    # mnemonic and all physical operands, independent of indentation.
+    if grep -Eq '^[[:space:]]*\.error[[:space:]]' "$work/aarch64-llsc.minic.s"; then
+        grep -E '^[[:space:]]*\.error[[:space:]]' "$work/aarch64-llsc.minic.s" >&2
+        echo 'FAIL authentic arm64 LL/SC MachineIR rejected original Core' >&2
+        exit 1
+    fi
     for op in and orr eor bic add sub; do
-        grep -Fq "  $op w9, w9, w11" "$work/aarch64-llsc.minic.s"
-        grep -Fq "  $op x9, x9, x11" "$work/aarch64-llsc.minic.s"
+        for word in w x; do
+            expected="^[[:space:]]+$op[[:space:]]+${word}9,[[:space:]]*${word}9,[[:space:]]*${word}11[[:space:]]*$"
+            if ! grep -Eq "$expected" "$work/aarch64-llsc.minic.s"; then
+                printf 'FAIL original arm64 LL/SC emitted unexpected %s-bit %s operands\n' "$word" "$op" >&2
+                grep -En "^[[:space:]]*($op|\.error)" "$work/aarch64-llsc.minic.s" >&2 || true
+                exit 1
+            fi
+        done
     done
     "$cross_cc" -x assembler "$work/aarch64-llsc.minic.s" \
         -o "$work/aarch64-llsc.minic.elf"

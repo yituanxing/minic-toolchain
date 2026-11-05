@@ -969,7 +969,8 @@ static bool a64_atomic_physical_form(
             for(i=0U;i<4U;++i)p->regs[i]=regs[i];
             if(id==AARCH64_MACHINE_ASM_PERCPU_RMW) {
                 p->regs[0]=12U;p->regs[1]=9U;
-                if(strstr(ins->source_asm_template,"%[loop]")!=NULL) {
+                if(strstr(ins->source_asm_template,"%w[loop]")!=NULL ||
+                   strstr(ins->source_asm_template,"%[loop]")!=NULL) {
                     p->names[0]="loop";
                     p->names[1]=cpu.returns_new?"ret":"tmp";
                     p->names[2]="ptr";p->names[3]="val";
@@ -1043,6 +1044,119 @@ static const MinicMachineSourceAsmTemplatePolicy a64_atomic_source_policy={
     a64_atomic_policy_operand,
     NULL
 };
+
+
+/* Original Linux 6.6 arm64 per-CPU TPIDR_EL1/EL2 alternatives. The
+ * target seals the complete two-PREL32 feature-47 patch record. */
+static bool a64_percpu_alt_form(
+    const MinicMachineFunction *fn, const MinicMachineInstruction *ins,
+    void *context) {
+    const bool read = ins != NULL &&
+        ins->source_asm_machine_form_id ==
+            AARCH64_MACHINE_ASM_PERCPU_ALTERNATIVE;
+    const bool write = ins != NULL &&
+        ins->source_asm_machine_form_id ==
+            AARCH64_MACHINE_ASM_PERCPU_WRITE_ALTERNATIVE;
+    const unsigned int read_effects = MINIC_MACHINE_EFFECT_SOURCE_ASM |
+        MINIC_MACHINE_EFFECT_VOLATILE |
+        MINIC_MACHINE_EFFECT_MEMORY_READ;
+    const unsigned int write_effects = MINIC_MACHINE_EFFECT_SOURCE_ASM |
+        MINIC_MACHINE_EFFECT_VOLATILE |
+        MINIC_MACHINE_EFFECT_COMPILER_BARRIER |
+        MINIC_MACHINE_EFFECT_MEMORY_WRITE;
+    (void)context;
+    return fn != NULL && fn->target != NULL &&
+        fn->target->architecture == MINIC_TARGET_ARCH_AARCH64 &&
+        (read || write) &&
+        ins->kind == MINIC_MACHINE_INSTRUCTION_SOURCE_ASM &&
+        ins->source_asm_machine_form_variant == 0U &&
+        ins->implicit_count == 0U &&
+        !ins->source_asm_terminates_block &&
+        !ins->source_asm_permits_fallthrough &&
+        ins->operand_count == (read ? 2U : 1U) &&
+        ins->operands != NULL &&
+        ins->effects == (read ? read_effects : write_effects) &&
+        (read ? aarch64_linux_percpu_alternative_template(
+                    ins->source_asm_template, ins->source_asm_length) :
+                aarch64_linux_percpu_write_alternative_template(
+                    ins->source_asm_template, ins->source_asm_length));
+}
+static bool a64_percpu_alt_binding(
+    const MinicMachineFunction *fn, const MinicMachineInstruction *ins,
+    size_t index, void *context) {
+    const bool read = ins != NULL &&
+        ins->source_asm_machine_form_id ==
+            AARCH64_MACHINE_ASM_PERCPU_ALTERNATIVE;
+    const MinicMachineOperand *op;
+    const char *constraint;
+    if (!a64_percpu_alt_form(fn, ins, context) ||
+        index >= ins->operand_count) return false;
+    constraint = read ? (index == 0U ? "=r" : "Q") : "r";
+    op = &ins->operands[index];
+    return op->kind == MINIC_MACHINE_OPERAND_REGISTER &&
+        op->asm_name == NULL && op->asm_constraint != NULL &&
+        strcmp(op->asm_constraint, constraint) == 0 &&
+        op->value.physical.reg.bank == MINIC_MACHINE_REGISTER_GENERAL &&
+        op->value.physical.reg.number == (read && index == 1U ? 10U : 9U) &&
+        op->value.physical.reg.width_bits == 64U &&
+        op->value.physical.access ==
+            (read && index == 0U ?
+                MINIC_MACHINE_REGISTER_WRITE :
+                MINIC_MACHINE_REGISTER_READ);
+}
+static bool a64_percpu_alt_operand(
+    FILE *output, const MinicMachineFunction *fn,
+    const MinicMachineInstruction *ins,
+    const MinicMachineGNUAsmLabels *labels, size_t index,
+    unsigned char modifier, void *context) {
+    const bool read = ins->source_asm_machine_form_id ==
+        AARCH64_MACHINE_ASM_PERCPU_ALTERNATIVE;
+    (void)labels;
+    if (!a64_percpu_alt_binding(fn, ins, index, context) ||
+        modifier != 0U) return false;
+    if (output == NULL) return true;
+    if (read && index == 1U) return fputs("[x10]", output) >= 0;
+    return fputs("x9", output) >= 0;
+}
+static const MinicMachineSourceAsmTemplatePolicy a64_percpu_alt_policy = {
+    a64_percpu_alt_form, a64_percpu_alt_binding,
+    a64_percpu_alt_operand, NULL
+};
+static bool a64_percpu_alt_emit(FILE *output,
+    const MinicMachineFunction *fn, const MinicMachineInstruction *ins) {
+    const bool read = ins->source_asm_machine_form_id ==
+        AARCH64_MACHINE_ASM_PERCPU_ALTERNATIVE;
+    if (!minic_machine_source_asm_template_preflight(
+            fn, ins, &a64_percpu_alt_policy))
+        return false;
+    /* Source recognizers prove each original token, including both .org
+     * equal-length assertions. Resolve the sole %0 to physical x9. */
+    if (fputs(
+            "  .if 1 == 1\n"
+            "661:\n", output) == EOF ||
+        fputs(read ? "  mrs x9, tpidr_el1\n" :
+                     "  msr tpidr_el1, x9\n", output) == EOF ||
+        fputs(
+            "662:\n"
+            "  .pushsection .altinstructions,\"a\"\n"
+            "  .word 661b - .\n"
+            "  .word 663f - .\n"
+            "  .hword 47\n"
+            "  .byte 662b-661b\n"
+            "  .byte 664f-663f\n"
+            "  .popsection\n"
+            "  .subsection 1\n"
+            "663:\n", output) == EOF ||
+        fputs(read ? "  mrs x9, tpidr_el2\n" :
+                     "  msr tpidr_el2, x9\n", output) == EOF)
+        return false;
+    return fputs(
+        "664:\n"
+        "  .org . - (664b-663b) + (662b-661b)\n"
+        "  .org . - (662b-661b) + (664b-663b)\n"
+        "  .previous\n"
+        "  .endif\n", output) != EOF;
+}
 
 static bool a64_machine_pstate_alternative(
     const MinicMachineInstruction *ins) {
@@ -1146,6 +1260,8 @@ bool minic_aarch64_machine_source_asm_validate(
              instruction, &a64_cmpxchg_policy) ||
           minic_machine_source_asm_template_preflight(&function,
               instruction, &a64_atomic_source_policy) ||
+         minic_machine_source_asm_template_preflight(&function,
+             instruction, &a64_percpu_alt_policy) ||
          minic_machine_source_asm_template_preflight(&function,
              instruction, &a64_source_goto_policy) ||
          minic_machine_source_asm_template_preflight(&function,
@@ -1317,6 +1433,8 @@ bool minic_aarch64_machine_source_asm_emit(
               instruction->source_asm_template[
                   instruction->source_asm_length - 1U] == '\n') ||
              fputc('\n', output) != EOF);
+    if (a64_percpu_alt_form(function, instruction, NULL))
+        return a64_percpu_alt_emit(output, function, instruction);
     if(a64_atomic_policy_form(function,instruction,NULL))
         return minic_machine_source_asm_template_emit(output,function,
             instruction,labels,&a64_atomic_source_policy) &&

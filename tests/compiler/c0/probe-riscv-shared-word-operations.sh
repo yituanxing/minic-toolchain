@@ -34,10 +34,11 @@ require_form() {
   target=$1
   fn=$2
   form=$3
-  awk -v function="$fn" '
-    $0 == function ":" { found = 1 }
+  # POSIX awk reserves `function`; choose an ordinary selector name.
+  awk -v selected_fn="$fn" '
+    $0 == selected_fn ":" { found = 1 }
     found { print }
-    found && $1 == ".size" && $2 == function "," { exit }
+    found && $1 == ".size" && $2 == selected_fn "," { exit }
   ' "$work/$target.s" | grep -Eq "$form" || {
     printf 'RISCV_SHARED_WORD_OPS=FAIL %s function=%s missing_MachineIR_form=%s\n' \
       "$target" "$fn" "$form" >&2
