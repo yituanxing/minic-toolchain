@@ -43,10 +43,16 @@ test -s "$work/gnu_fixed_register_bindings.s"
 grep -F 'read_current_like:' "$work/gnu_fixed_register_bindings.s" >/dev/null
 grep -F 'read_stack_pointer_like:' "$work/gnu_fixed_register_bindings.s" >/dev/null
 grep -F 'read_stack_pointer_plain_asm:' "$work/gnu_fixed_register_bindings.s" >/dev/null
-# Core serializes the architectural register read through a temporary
-# (mv t0,tp/sp ; sd t0 ; ld a0). The old 'mv a0' oracle was stale.
-grep -Eq '^  mv [a-z][a-z0-9]*, tp$' "$work/gnu_fixed_register_bindings.s"
-test "$(grep -Ec '^  mv [a-z][a-z0-9]*, sp$' "$work/gnu_fixed_register_bindings.s")" -ge 2
+# The Core FIXED_REGISTER_READ lowers to physical t0 <- tp/sp, followed
+# by one 64-bit SSA spill and one ABI a0 reload per reader. GNU RISC-V xN
+# spellings are numerically identical to the ABI names (x5=t0, x4=tp,
+# x2=sp, x10=a0); do not treat a pure printer spelling change as an ISA bug.
+# Keep exact source-register and destination-register identities, all three
+# reads, and the SSA transfer. A loose 'mv any, any' would miss wrong binding.
+grep -Eq '^  mv (x5|t0), (x4|tp)$' "$work/gnu_fixed_register_bindings.s"
+test "$(grep -Ec '^  mv (x5|t0), (x2|sp)$' "$work/gnu_fixed_register_bindings.s")" -eq 2
+test "$(grep -Ec '^  sd (x5|t0), [0-9]+\((x2|sp)\)$' "$work/gnu_fixed_register_bindings.s")" -eq 3
+test "$(grep -Ec '^  ld (x10|a0), [0-9]+\((x2|sp)\)$' "$work/gnu_fixed_register_bindings.s")" -eq 3
 ! grep -F 'riscv_current_is_tp' "$work/gnu_fixed_register_bindings.s" >/dev/null
 ! grep -F 'current_stack_pointer' "$work/gnu_fixed_register_bindings.s" >/dev/null
 

@@ -41,11 +41,17 @@ require_saved_x8_copy_slot() {
         if ! grep -Eq "^  add x10, ${base}, #${saved_slot}$" "$body" ||
            ! grep -Eq '^  ldr x10, \[x10(, #0)?\]$' "$body"; then
             echo "AAPCS64_SRET=DIAG saved x8 slot mismatch base=$base offset=$saved_slot function=$name" >&2
-            grep -En '^  (str x8,|ldr x10,|add x10,|strb w9,)' "$body" >&2 || true
+            grep -En '^  (str x8,|ldr x10,|add x10,|ldrb w11,|strb w11,|add x9,)' "$body" >&2 || true
             fail "$name did not reload the exact saved x8 slot"
         fi
     fi
-    require_contains '^  strb w9, \[x10\], #1$' "$body"
+    # The typed Core byte-copy is a precise four-op ISA chain. It uses
+    # w11 as the byte value, x9 as source, and x10 as destination; both
+    # pointers advance explicitly instead of old GNU post-index addressing.
+    require_contains '^  ldrb w11, \[x9(, #0)?\]$' "$body"
+    require_contains '^  strb w11, \[x10(, #0)?\]$' "$body"
+    require_contains '^  add x9, x9, #1$' "$body"
+    require_contains '^  add x10, x10, #1$' "$body"
 }
 require_rejected() {
     local target=$1 source=$2 name=$3
@@ -97,9 +103,15 @@ require_contains '^  add x8, sp, #[0-9]+$' "$work/aarch64.s"
 require_contains '^  bl gnu_make_three$' "$work/aarch64.s"
 require_contains '^  bl gnu_make_eighteen$' "$work/aarch64.s"
 require_contains '^  bl gnu_tap$' "$work/aarch64.s"
-require_contains '^  ldrb w9, \[x11\], #1$' "$work/aarch64.s"
-require_contains '^  strb w9, \[x10\], #1$' "$work/aarch64.s"
-require_contains '^  b.ne 1b$' "$work/aarch64.s"
+# Exact native copy-step hardware; A64_T0=x9, A64_T1=x10, byte=w11.
+# Above-64-byte copies use x12 countdown + CBNZ MachineIR CFG, not
+# source-language NZCV/B.NE numeric-label control flow.
+require_contains '^  ldrb w11, \[x9(, #0)?\]$' "$work/aarch64.s"
+require_contains '^  strb w11, \[x10(, #0)?\]$' "$work/aarch64.s"
+require_contains '^  add x9, x9, #1$' "$work/aarch64.s"
+require_contains '^  add x10, x10, #1$' "$work/aarch64.s"
+require_contains '^  sub x12, x12, #1$' "$work/aarch64.s"
+require_contains '^  cbnz x12, [^[:space:]]+$' "$work/aarch64.s"
 require_contains '^  movz x12, #144(, lsl #0)?$' "$work/aarch64.s"
 require_contains '^  movz x12, #40(, lsl #0)?$' "$work/aarch64.s"
 require_contains '^  movz x12, #24(, lsl #0)?$' "$work/aarch64.s"
