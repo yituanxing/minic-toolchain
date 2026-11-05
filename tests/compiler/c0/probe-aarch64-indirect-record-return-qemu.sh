@@ -34,8 +34,17 @@ require_saved_x8_copy_slot() {
     saved_slot=$(sed -nE "s/^  str x8, \\[${base}, #([0-9]+)\\]$/\\1/p" \
         "$body" | head -n 1)
     [[ -n "$saved_slot" ]] || fail "$name lacks typed $base frame save of x8"
-    require_contains "^  add x10, ${base}, #${saved_slot}$" "$body"
-    require_contains '^  ldr x10, \[x10\]$' "$body"
+    # Typed MachineIR can reload the *same saved x8 slot* in one LDR
+    # unsigned-offset instruction; the earlier ADD+LDR pair is also valid.
+    # Neither form may alter the base register or slot displacement.
+    if ! grep -Eq "^  ldr x10, \\[${base}, #${saved_slot}\\]$" "$body"; then
+        if ! grep -Eq "^  add x10, ${base}, #${saved_slot}$" "$body" ||
+           ! grep -Eq '^  ldr x10, \[x10(, #0)?\]$' "$body"; then
+            echo "AAPCS64_SRET=DIAG saved x8 slot mismatch base=$base offset=$saved_slot function=$name" >&2
+            grep -En '^  (str x8,|ldr x10,|add x10,|strb w9,)' "$body" >&2 || true
+            fail "$name did not reload the exact saved x8 slot"
+        fi
+    fi
     require_contains '^  strb w9, \[x10\], #1$' "$body"
 }
 require_rejected() {
@@ -91,13 +100,13 @@ require_contains '^  bl gnu_tap$' "$work/aarch64.s"
 require_contains '^  ldrb w9, \[x11\], #1$' "$work/aarch64.s"
 require_contains '^  strb w9, \[x10\], #1$' "$work/aarch64.s"
 require_contains '^  b.ne 1b$' "$work/aarch64.s"
-require_contains '^  movz x12, #144$' "$work/aarch64.s"
-require_contains '^  movz x12, #40$' "$work/aarch64.s"
-require_contains '^  movz x12, #24$' "$work/aarch64.s"
-require_contains '^  movz x12, #32$' "$work/aarch64.s"
-require_contains '^  movz x12, #17$' "$work/aarch64.s"
-require_contains '^  movz x12, #64$' "$work/aarch64.s"
-require_contains '^  movz x12, #2048$' "$work/aarch64.s"
+require_contains '^  movz x12, #144(, lsl #0)?$' "$work/aarch64.s"
+require_contains '^  movz x12, #40(, lsl #0)?$' "$work/aarch64.s"
+require_contains '^  movz x12, #24(, lsl #0)?$' "$work/aarch64.s"
+require_contains '^  movz x12, #32(, lsl #0)?$' "$work/aarch64.s"
+require_contains '^  movz x12, #17(, lsl #0)?$' "$work/aarch64.s"
+require_contains '^  movz x12, #64(, lsl #0)?$' "$work/aarch64.s"
+require_contains '^  movz x12, #2048(, lsl #0)?$' "$work/aarch64.s"
 # Alloca moves the stack pointer; the return-object and saved x8 slot must
 # still be addressed relative to the stable AAPCS64 callee-saved x19.
 require_contains '^  add x11, x19, #[0-9]+$' "$work/minic_dynamic_three.body"
