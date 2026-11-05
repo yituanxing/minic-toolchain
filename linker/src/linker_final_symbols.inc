@@ -306,7 +306,7 @@ static bool minild_final_relocations_build(
     if (!emit_relocs) {
         return true;
     }
-    if (state->target == NULL || state->target->machine != EM_X86_64 ||
+    if (state->target == NULL || state->target->final_reloc_kind == NULL ||
         state->target->elf_class != ELFCLASS64 ||
         plan->count > SIZE_MAX / sizeof(*final->sections)) {
         fprintf(state->diagnostics,
@@ -341,6 +341,7 @@ static bool minild_final_relocations_build(
             MiniLdFinalRelocSection *out;
             size_t shndx, symbol_index;
             uint64_t place;
+            MiniLdFinalRelocKind kind;
 
             if (source->section >= plan->work_count) {
                 fprintf(state->diagnostics,
@@ -356,7 +357,8 @@ static bool minild_final_relocations_build(
                 layout->work[source->section].discarded) {
                 continue;
             }
-            if (source->type == R_X86_64_NONE) {
+            kind = state->target->final_reloc_kind(source->type);
+            if (kind == MINILD_FINAL_RELOC_SKIP) {
                 continue;
             }
             /* A scripted non-ALLOC section can carry a nonzero VMA (GNU
@@ -370,12 +372,7 @@ static bool minild_final_relocations_build(
                         "minic-ld: unsupported-emit-relocs-nonalloc-vma\n");
                 return false;
             }
-            if (source->type != R_X86_64_64 &&
-                source->type != R_X86_64_32 &&
-                source->type != R_X86_64_32S &&
-                source->type != R_X86_64_PC64 &&
-                source->type != R_X86_64_PC32 &&
-                source->type != R_X86_64_PLT32) {
+            if (kind != MINILD_FINAL_RELOC_EMIT) {
                 fprintf(state->diagnostics,
                         "minic-ld: unsupported-emit-relocs-transform:%u\n",
                         (unsigned)source->type);

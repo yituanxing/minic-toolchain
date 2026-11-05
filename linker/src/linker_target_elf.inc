@@ -74,6 +74,17 @@ static bool minild_loongarch_replan_static_layout(
     struct MiniLdStaticTargetPlan *plan, bool *changed);
 static bool minild_riscv_synthesize_gnu_default_boundaries(
     MiniLdState *state, const struct MiniLdLayout *layout);
+static bool minild_aarch64_kernel_rebase_invariant(uint32_t type);
+
+/* Final --emit-relocs preserves only the target's admitted relocation
+ * wire forms. Common owns ELF output membership and symbol indices; it
+ * must never classify target-specific R_* numbers. */
+typedef enum MiniLdFinalRelocKind {
+    MINILD_FINAL_RELOC_UNSUPPORTED,
+    MINILD_FINAL_RELOC_SKIP,
+    MINILD_FINAL_RELOC_EMIT
+} MiniLdFinalRelocKind;
+static MiniLdFinalRelocKind minild_x86_final_reloc_kind(uint32_t type);
 
 typedef bool (*MiniLdTargetFlagsMerge)(MiniLdState *, uint32_t, bool,
                                        const char *);
@@ -157,6 +168,11 @@ struct MiniLdTargetProfile {
      * RELA targets leave this NULL and carry A in the relocation record. */
     bool (*implicit_reloc_addend)(const MiniElfView *, size_t, uint64_t,
                                   uint32_t, int64_t *);
+    /* The AArch64 kernel's fixed-address ET_DYN relocation filter is a
+     * Target capability; no future Target may silently reuse its ISA list. */
+    bool (*kernel_shared_rebase_invariant)(uint32_t type);
+    /* NULL means --emit-relocs is unsupported for this Target. */
+    MiniLdFinalRelocKind (*final_reloc_kind)(uint32_t type);
 };
 
 static bool minild_riscv_merge_flags(MiniLdState *state,
@@ -252,7 +268,8 @@ static const MiniLdTargetProfile minild_target_profiles[] = {
      minild_riscv_destroy_static_relocations,
      minild_riscv_synthesize_gnu_default_boundaries,
      minild_riscv_shared_target_abi,
-     minild_link_shared_elf64_riscv_inputs_options, NULL, true, true, NULL},
+     minild_link_shared_elf64_riscv_inputs_options, NULL, true, true, NULL,
+     NULL, NULL},
     {"elf32lriscv", ELFCLASS32, ELFDATA2LSB, EM_RISCV, "riscv",
      NULL, "elf32-littleriscv", NULL, MINILD_SHT_RISCV_ATTRIBUTES,
      UINT64_C(0x10000), 4096U, 1U, 4U,
@@ -265,7 +282,8 @@ static const MiniLdTargetProfile minild_target_profiles[] = {
      minild_riscv_apply_static_relocations,
      minild_riscv_destroy_static_relocations,
      minild_riscv_synthesize_gnu_default_boundaries,
-     NULL, minild_link_elf32_compat_vdso, NULL, true, true, NULL},
+     NULL, minild_link_elf32_compat_vdso, NULL, true, true, NULL,
+     NULL, NULL},
     {"elf_x86_64", ELFCLASS64, ELFDATA2LSB, EM_X86_64, "i386:x86-64",
      NULL, "elf64-x86-64", NULL, 0U, UINT64_C(0x400000), 4096U, 1U, 4U,
      true, true, true, true, false, false, false, true,
@@ -276,7 +294,8 @@ static const MiniLdTargetProfile minild_target_profiles[] = {
      minild_x86_apply_static_relocations,
      minild_x86_destroy_static_relocations,
      minild_x86_synthesize_default_boundaries,
-     NULL, NULL, minild_zero_elf_flags, true, true, NULL},
+     NULL, NULL, minild_zero_elf_flags, true, true, NULL,
+     NULL, minild_x86_final_reloc_kind},
     {"elf_i386", ELFCLASS32, ELFDATA2LSB, EM_386, "i386",
      NULL, "elf32-i386", NULL, 0U, UINT64_C(0x08048000), 4096U, 1U, 4U,
      false, true, true, true, false, false, false, false,
@@ -286,7 +305,7 @@ static const MiniLdTargetProfile minild_target_profiles[] = {
      minild_i386_apply_static_relocations,
      NULL, NULL,
      NULL, NULL, minild_zero_elf_flags, true, true,
-     minild_i386_implicit_addend},
+     minild_i386_implicit_addend, NULL, NULL},
     {"aarch64linux", ELFCLASS64, ELFDATA2LSB, EM_AARCH64, "aarch64",
      NULL, "elf64-littleaarch64", NULL, 0U, UINT64_C(0x400000), 65536U, 1U, 4U,
      true, true, true, true, false, false, true, false,
@@ -297,7 +316,8 @@ static const MiniLdTargetProfile minild_target_profiles[] = {
      minild_aarch64_apply_static_relocations,
      minild_aarch64_destroy_static_relocations,
      minild_aarch64_synthesize_default_boundaries,
-     NULL, NULL, minild_zero_elf_flags, false, true, NULL},
+     NULL, NULL, minild_zero_elf_flags, false, true, NULL,
+     minild_aarch64_kernel_rebase_invariant, NULL},
     {"elf64loongarch", ELFCLASS64, ELFDATA2LSB, EM_LOONGARCH, "loongarch64",
      /* GNU elf64loongarch default PT_LOAD p_align is 16 KiB, even though
       * -n uses its independent 64 KiB nmagic alignment below.  This is
@@ -314,7 +334,8 @@ static const MiniLdTargetProfile minild_target_profiles[] = {
      minild_loongarch_apply_static_relocations,
      minild_loongarch_destroy_static_relocations,
      minild_loongarch_synthesize_default_boundaries,
-     NULL, NULL, minild_loongarch_v1_elf_flags, true, true, NULL}
+     NULL, NULL, minild_loongarch_v1_elf_flags, true, true, NULL,
+     NULL, NULL}
 };
 
 /* Page size is one invocation-level ELF layout contract. Every static
@@ -375,71 +396,13 @@ bool minild_emulation_supports_kernel_pie_image(const char *emulation) {
     return target != NULL && target->supports_kernel_pie_image;
 }
 
-/* AArch64's Linux kernel -shared -Bsymbolic -T link is not a user-space
- * DSO.  Target-owned R_AARCH64_RELATIVE records in .rela.dyn preserve
- * allocated absolute pointers without pre-applying their image-base values.
- * Other relocations admitted here can be materialized statically because
- * they are unchanged by a common 4KiB-aligned rebase of S and P.
- *
- *   PC-relative: (S + delta) - (P + delta) = S - P, including ADR/LD/branch
- *                immediates and full-width PREL data fields.
- *   Page-relative: PAGE(S + delta) - PAGE(P + delta) = PAGE(S) - PAGE(P).
- *   Low 12:      (S + delta) & 0xfff = S & 0xfff.
- *
- * MOVW, GOT/TLS and static resolver relocations require their own runtime
- * handling and must not silently be accepted as ordinary static fixups.
- * This policy applies only to the specifically admitted kernel ET_DYN mode. */
-#ifndef R_AARCH64_GOTPCREL32
-#define R_AARCH64_GOTPCREL32 315
-#endif
-static bool minild_aarch64_kernel_rebase_invariant(uint32_t type) {
-    switch (type) {
-    /* No value, or a full-width PC-relative scalar. */
-    case R_AARCH64_NONE:
-    /* Converted to R_AARCH64_RELATIVE where the target is image-relative. */
-    case R_AARCH64_ABS64:
-    /* Post-layout checked: only image-invariant absolute values are legal. */
-    case R_AARCH64_ABS32:
-    case R_AARCH64_PREL32:
-    case R_AARCH64_PREL64:
-    /* PC-relative and page-relative A64 instruction fields. */
-    case R_AARCH64_ADR_PREL_LO21:
-    case R_AARCH64_ADR_PREL_PG_HI21:
-    case R_AARCH64_ADR_PREL_PG_HI21_NC:
-    case R_AARCH64_LD_PREL_LO19:
-    case R_AARCH64_TSTBR14:
-    case R_AARCH64_CONDBR19:
-    case R_AARCH64_CALL26:
-    case R_AARCH64_JUMP26:
-    /* Only the low 12 bits of page-aligned rebasing participate. */
-    case R_AARCH64_ADD_ABS_LO12_NC:
-    case R_AARCH64_LDST8_ABS_LO12_NC:
-    case R_AARCH64_LDST16_ABS_LO12_NC:
-    case R_AARCH64_LDST32_ABS_LO12_NC:
-    case R_AARCH64_LDST64_ABS_LO12_NC:
-    case R_AARCH64_LDST128_ABS_LO12_NC:
-    /* GOT address calculations are invariant under common rebasing; the
-     * actual GOT pointer is separately emitted as R_AARCH64_RELATIVE. */
-    case R_AARCH64_GOTREL64:
-    case R_AARCH64_GOTREL32:
-    case R_AARCH64_GOT_LD_PREL19:
-    case R_AARCH64_LD64_GOTOFF_LO15:
-    case R_AARCH64_ADR_GOT_PAGE:
-    case R_AARCH64_LD64_GOT_LO12_NC:
-    case R_AARCH64_LD64_GOTPAGE_LO15:
-    case R_AARCH64_GOTPCREL32:
-        return true;
-    default:
-        return false;
-    }
-}
-
 static bool minild_target_validate_kernel_shared_relocations(
     const MiniLdState *state) {
     size_t i;
 
     if (state->target == NULL ||
-        !state->target->supports_kernel_shared_image) {
+        !state->target->supports_kernel_shared_image ||
+        state->target->kernel_shared_rebase_invariant == NULL) {
         return false;
     }
     for (i = 0U; i < state->relocations.count; ++i) {
@@ -456,7 +419,7 @@ static bool minild_target_validate_kernel_shared_relocations(
             state->work.sections[reloc->section].script_discard) {
             continue;
         }
-        if (!minild_aarch64_kernel_rebase_invariant(type)) {
+        if (!state->target->kernel_shared_rebase_invariant(type)) {
             fprintf(state->diagnostics,
                     "minic-ld: unsupported-kernel-shared-runtime-relocation:%u"
                     ":source=%s:target=%s:offset=0x%llx\n",

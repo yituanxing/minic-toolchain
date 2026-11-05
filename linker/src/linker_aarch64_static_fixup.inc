@@ -3,6 +3,57 @@
 
 #include "linker_aarch64_erratum843419.inc"
 
+/* The Linux kernel's -shared -Bsymbolic -T image is not a user-space DSO.
+ * Target-owned R_AARCH64_RELATIVE records in .rela.dyn preserve allocated
+ * absolute pointers without applying their image-base values. All other
+ * admitted relocations are invariant under a common 4KiB-aligned rebase:
+ * PC-relative S-P, page-relative PAGE(S)-PAGE(P), or the low 12 bits.
+ * MOVW, TLS and other runtime-dependent relocations stay fail-closed. */
+#ifndef R_AARCH64_GOTPCREL32
+#define R_AARCH64_GOTPCREL32 315
+#endif
+static bool minild_aarch64_kernel_rebase_invariant(uint32_t type) {
+    switch (type) {
+    /* No value, or a full-width PC-relative scalar. */
+    case R_AARCH64_NONE:
+    /* Converted to R_AARCH64_RELATIVE where the target is image-relative. */
+    case R_AARCH64_ABS64:
+    /* Post-layout checked: only image-invariant absolute values are legal. */
+    case R_AARCH64_ABS32:
+    case R_AARCH64_PREL32:
+    case R_AARCH64_PREL64:
+    /* PC-relative and page-relative A64 instruction fields. */
+    case R_AARCH64_ADR_PREL_LO21:
+    case R_AARCH64_ADR_PREL_PG_HI21:
+    case R_AARCH64_ADR_PREL_PG_HI21_NC:
+    case R_AARCH64_LD_PREL_LO19:
+    case R_AARCH64_TSTBR14:
+    case R_AARCH64_CONDBR19:
+    case R_AARCH64_CALL26:
+    case R_AARCH64_JUMP26:
+    /* Only the low 12 bits of page-aligned rebasing participate. */
+    case R_AARCH64_ADD_ABS_LO12_NC:
+    case R_AARCH64_LDST8_ABS_LO12_NC:
+    case R_AARCH64_LDST16_ABS_LO12_NC:
+    case R_AARCH64_LDST32_ABS_LO12_NC:
+    case R_AARCH64_LDST64_ABS_LO12_NC:
+    case R_AARCH64_LDST128_ABS_LO12_NC:
+    /* GOT address calculations are invariant under common rebasing; the
+     * actual GOT pointer is separately emitted as R_AARCH64_RELATIVE. */
+    case R_AARCH64_GOTREL64:
+    case R_AARCH64_GOTREL32:
+    case R_AARCH64_GOT_LD_PREL19:
+    case R_AARCH64_LD64_GOTOFF_LO15:
+    case R_AARCH64_ADR_GOT_PAGE:
+    case R_AARCH64_LD64_GOT_LO12_NC:
+    case R_AARCH64_LD64_GOTPAGE_LO15:
+    case R_AARCH64_GOTPCREL32:
+        return true;
+    default:
+        return false;
+    }
+}
+
 static MiniLdNonRiscvFixup minild_aarch64_static_fixup_class(uint32_t type) {
     switch (type) {
     case R_AARCH64_NONE: return MINILD_NONRISCV_NONE;

@@ -2,6 +2,25 @@
  * always a four-byte G+A-P displacement. Relaxation to S+A-P is an optional
  * target-owned opcode rewrite, never a prerequisite for a valid relocation. */
 
+/* --emit-relocs retains the original relocation type for the final ELF,
+ * but only the six GNU x86-64 forms whose section/symbol projection is
+ * implemented. This list is target policy, not a FinalSymbols decision. */
+static MiniLdFinalRelocKind minild_x86_final_reloc_kind(uint32_t type) {
+    switch (type) {
+    case R_X86_64_NONE:
+        return MINILD_FINAL_RELOC_SKIP;
+    case R_X86_64_64:
+    case R_X86_64_32:
+    case R_X86_64_32S:
+    case R_X86_64_PC64:
+    case R_X86_64_PC32:
+    case R_X86_64_PLT32:
+        return MINILD_FINAL_RELOC_EMIT;
+    default:
+        return MINILD_FINAL_RELOC_UNSUPPORTED;
+    }
+}
+
 static MiniLdNonRiscvFixup minild_x86_static_fixup_class(uint32_t type) {
     switch (type) {
     case R_X86_64_NONE: return MINILD_NONRISCV_NONE;
