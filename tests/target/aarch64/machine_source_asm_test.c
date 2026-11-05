@@ -88,7 +88,7 @@ int main(void) {
         ins.source_asm_length = sizeof(bug_table) - 1U;
         if (!minic_aarch64_machine_source_asm_validate(&target, &ins, NULL))
             return 1;
-        selected = tmpfile();
+        selected = open_test_output();
         if (selected == NULL ||
             !minic_aarch64_machine_source_asm_emit(selected, &fn,
                 &ins, NULL, NULL) || fflush(selected) != 0 ||

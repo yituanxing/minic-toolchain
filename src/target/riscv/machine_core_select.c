@@ -4,6 +4,7 @@
 #include "target/riscv/machine_target_state.h"
 #include "target/riscv/instruction_select.h"
 #include "target/riscv/register_identity.h"
+#include "target/riscv/typed_memory.h"
 #include "target/common/core_machine_asm.h"
 #include "target/common/core_scalar_conversion.h"
 #include "target/common/core_floating_shape.h"
@@ -1656,10 +1657,12 @@ static bool rv_core_payload_memory(RvCoreSelection *sel,
     if (type == NULL || !type->has_layout ||
         !((type->kind == MINIC_CORE_TYPE_FLOAT &&
             (type->size == 4U || type->size == 8U ||
-             type->size == 2U * word)) ||
+             (sel->xlen == 64U && type->size == 16U &&
+              type->value.floating.format == MINIC_CORE_FLOAT_BINARY128))) ||
           (type->kind == MINIC_CORE_TYPE_INTEGER &&
-            type->size == 2U * word &&
-            type->value.integer.bit_width == 2U * sel->xlen)) ||
+            type->size >= 2U &&
+            type->value.integer.bit_width == type->size * 8U) ||
+          (type->kind == MINIC_CORE_TYPE_POINTER && type->size == word)) ||
         type->size > 2U * word ||
         !rv_load(sel, address, RV_T0)) return false;
     chunks = (type->size + word - 1U) / word;
@@ -1690,8 +1693,11 @@ static bool rv_core_payload_memory(RvCoreSelection *sel,
                         i * word + j, is_volatile)) return false;
             }
         }
-        if (load && !rv_value_chunk(sel, ins->result, i,
-                RV_T1, false)) return false;
+        if (load &&
+            ((type->kind == MINIC_CORE_TYPE_INTEGER &&
+              type->size < word && type->value.integer.is_signed &&
+              !rv_normalize(sel, RV_T1, (unsigned)type->size, true)) ||
+             !rv_value_chunk(sel, ins->result, i, RV_T1, false))) return false;
     }
     return true;
 }
@@ -1724,7 +1730,11 @@ static bool rv_core_memory(RvCoreSelection *sel,
     if (!atomic && memory_type != NULL &&
         (memory_type->kind == MINIC_CORE_TYPE_FLOAT ||
          (memory_type->kind == MINIC_CORE_TYPE_INTEGER &&
-          memory_type->size == 2U * (sel->xlen / 8U))))
+          memory_type->size == 2U * (sel->xlen / 8U)) ||
+         (memory_type->size > 1U &&
+          (memory_type->kind == MINIC_CORE_TYPE_INTEGER ||
+           memory_type->kind == MINIC_CORE_TYPE_POINTER) &&
+          minic_riscv_address_alignment(fn, address) < memory_type->size)))
         return rv_core_payload_memory(sel, ins, load, address,
             source, is_volatile, memory_type);
     /* Core admits memory_order=0 (relaxed) only. Naturally aligned RV32I /
@@ -2390,17 +2400,20 @@ static bool rv_core_call_result(RvCoreSelection *sel,
                 sel->plan->abi64->outgoing_calls->sites == NULL ||
                 (prepared = sel->plan->abi64->outgoing_calls->sites[ordinal]) ==
                     NULL) return false;
-            if (size == 4U || size == 8U) {
-                if (prepared->return_value.kind !=
-                        MINIC_RISCV64_ABI_VALUE_FLOAT ||
-                    !rv_fp_to_bits(sel, RV_A0, 10U, size == 8U))
-                    return false;
-            } else if (size == 16U) {
-                /* Binary128 is a two-GPR psABI value, never a FPR scalar. */
+            /* LP64D puts binary32/64 results in fa0, but binary128
+             * remains a two-XLEN GPR pair in a0/a1. Never try to move the
+             * wide scalar through a single FPR or reject it as untyped. */
+            if (size == 16U) {
                 if (prepared->return_value.kind !=
                         MINIC_RISCV64_ABI_VALUE_WIDE_SCALAR ||
-                    prepared->return_value.slot_count != 2U) return false;
-            } else return false;
+                    prepared->return_value.slot_count != 2U ||
+                    prepared->return_value.storage_size != size)
+                    return false;
+            } else if ((size != 4U && size != 8U) ||
+                       prepared->return_value.kind !=
+                           MINIC_RISCV64_ABI_VALUE_FLOAT ||
+                       !rv_fp_to_bits(sel, RV_A0, 10U, size == 8U))
+                return false;
         }
     }
     chunks = (size + word - 1U) / word;

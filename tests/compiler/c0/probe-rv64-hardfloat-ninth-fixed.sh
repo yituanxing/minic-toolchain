@@ -106,4 +106,23 @@ for flavor in hard soft; do
         }
     done
 done
-echo 'RV64_HARDFLOAT_NINTH=PASS -S LP64D=9th/10th/mixed/stack/float/indirect LP64=softfloat integer_MUL_DIV_REM=LP64+LP64D no-D=reject'
+
+for flavor in hard soft; do
+    for spec in 'call_binary128_direct:  call gnu_binary128' \
+                'call_binary128_indirect:  jalr ra, 0(x5)' \
+                'passthrough_binary128:  ld x11, '; do
+        name=${spec%%:*}
+        expected=${spec#*:}
+        awk -v name="$name" -v expected="$expected" '
+            $0 == name ":" { inside = 1; found = 1; next }
+            inside && index($0, ".size " name ",") == 1 { inside = 0; done = 1 }
+            inside && index($0, expected) == 1 { proof++ }
+            inside && /^  (fadd\.|fdiv\.|fmv\.|fsub\.|fmul\.)/ { invalid_fp++ }
+            END { if (!found || !done || proof == 0 || invalid_fp != 0) exit 1 }
+        ' "$work/$flavor.s" || {
+            echo "RV64_HARDFLOAT_NINTH=FAIL binary128-GPR $flavor $name" >&2
+            exit 1
+        }
+    done
+done
+echo 'RV64_HARDFLOAT_NINTH=PASS -S LP64D=9th/10th/mixed/stack/float/indirect LP64=softfloat integer_MUL_DIV_REM=LP64+LP64D binary128_GPR=direct+indirect+incoming no-D=reject'

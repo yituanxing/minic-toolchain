@@ -4090,6 +4090,170 @@ static bool x86_source_gs_tied_alu(X86CoreSelector *sel,
         x86_addr(MINIC_X86_REG_R11,0));
 }
 
+/* Original Linux ip_fast_csum has three GNU outputs, two tied inputs and a
+ * hardware carry chain. Its output 1 is a pointer, outputs 0/2 are 32-bit
+ * integers. Materialize the two initial values before emitting the single
+ * sealed MachineIR source instruction, and store all three physical outputs
+ * back through their Core-owned lvalue pointers afterwards. */
+static bool x86_source_ip_fast_csum(X86CoreSelector *sel,
+    const MinicCoreInstruction *ins) {
+    const MinicCoreInlineAsm *source;
+    const MinicCoreStructuredInlineAsmOperand *roles;
+    MinicMachineOperand bindings[5];
+    MinicMachineRegisterEffect flags = {0};
+    static const unsigned int regs[5] = {
+        MINIC_X86_REG_RAX, MINIC_X86_REG_R9, MINIC_X86_REG_R11,
+        MINIC_X86_REG_R9, MINIC_X86_REG_R11
+    };
+    static const unsigned int bits[5] = {32U,64U,32U,64U,32U};
+    static const char *const constraints[5] = {"=r","=r","=r","1","2"};
+    size_t i;
+    if (ins->kind != MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM ||
+        ins->result != MINIC_CORE_VALUE_INVALID ||
+        sel->core->inline_asms == NULL ||
+        ins->value.structured_inline_asm.inline_asm_id >=
+            sel->core->inline_asm_count ||
+        ins->value.structured_inline_asm.operand_count != 5U) return false;
+    source = &sel->core->inline_asms[
+        ins->value.structured_inline_asm.inline_asm_id];
+    roles = ins->value.structured_inline_asm.operands;
+    if (roles == NULL ||
+        source->target_machine_form_id != MINIC_X86_MACHINE_ASM_IP_FAST_CSUM ||
+        source->target_machine_form_variant != 0U ||
+        source->operand_plan_owner != MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED ||
+        source->source_asm_unique_id == 0U ||
+        source->is_goto || !source->has_memory_clobber ||
+        !source->explicit_memory_clobber ||
+        source->register_clobber_count != 0U ||
+        source->resolved_immediate_count != 0U ||
+        source->goto_second_target != MINIC_CORE_BLOCK_INVALID ||
+        !minic_x86_64_typed_machine_form_matches_template(
+            source->target_machine_form_id,
+            source->target_machine_form_variant,
+            source->template_text,source->template_length)) return false;
+    for (i = 0U; i < 5U; ++i) {
+        const bool output = i < 3U;
+        const bool tied = i >= 3U;
+        if (roles[i].operand_index != i ||
+            roles[i].kind != (output ?
+                MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT :
+                MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT) ||
+            roles[i].has_fixed_register_binding || roles[i].early_clobber ||
+            roles[i].physical_early_clobber || roles[i].physical_read_write ||
+            roles[i].has_tied_output != tied ||
+            (tied && roles[i].tied_output_index != i-2U) ||
+            !(output ? (i == 1U ?
+                x86_percpu_scalar_shape(sel,roles[i].value,8U,true) :
+                x86_asm_gp_lvalue_width(sel,roles[i].value,4U)) :
+                x86_asm_gp_input_width(sel,roles[i].value,bits[i]/8U)))
+            return false;
+    }
+    if (!x86_core_load(sel,roles[3].value,MINIC_X86_REG_R9) ||
+        !x86_core_load(sel,roles[4].value,MINIC_X86_REG_R11))
+        return false;
+    for (i = 0U; i < 5U; ++i) {
+        bindings[i] = x86_reg(regs[i],bits[i]);
+        bindings[i].asm_constraint = (char *)constraints[i];
+        bindings[i].value.physical.access = i < 3U ?
+            MINIC_MACHINE_REGISTER_WRITE : MINIC_MACHINE_REGISTER_READ;
+    }
+    flags.reg = (MinicMachineRegister){0U,64U,MINIC_MACHINE_REGISTER_FLAGS};
+    flags.access = MINIC_MACHINE_REGISTER_CLOBBER;
+    if (!minic_machine_builder_emit_core_source_asm(&sel->builder,source,
+            MINIC_MACHINE_EFFECT_MEMORY_READ |
+                MINIC_MACHINE_EFFECT_MEMORY_WRITE,
+            bindings,5U,&flags,1U,false,false)) return false;
+    for (i = 0U; i < 3U; ++i) {
+        if (!x86_core_load(sel,roles[i].value,MINIC_X86_REG_R10) ||
+            !x86_2(sel,i == 1U ? MINIC_X86_MI_MOV64_RA :
+                MINIC_X86_MI_MOV32_RA,
+                x86_reg(regs[i],bits[i]),
+                x86_addr(MINIC_X86_REG_R10,0))) return false;
+    }
+    return true;
+}
+
+/* SMP lock-bearing XADD is an indivisible hardware RMW and a .smp_locks
+ * relocation record. Preserve the original pointer-indirected +r and +m
+ * semantics with actual AL/AX/EAX/RAX and R10-relative memory operands. */
+static bool x86_source_smp_xadd(X86CoreSelector *sel,
+    const MinicCoreInstruction *ins) {
+    const MinicCoreInlineAsm *source;
+    const MinicCoreStructuredInlineAsmOperand *roles;
+    MinicX86GsAtomicPlan plan;
+    MinicMachineOperand bindings[2];
+    MinicMachineRegisterEffect flags = {0};
+    MinicX86MachineOpcode load,store;
+    const char *reg_constraint;
+    unsigned int bits;
+    size_t width;
+    size_t i;
+    if (ins->kind != MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM ||
+        ins->result != MINIC_CORE_VALUE_INVALID ||
+        sel->core->inline_asms == NULL ||
+        ins->value.structured_inline_asm.inline_asm_id >=
+            sel->core->inline_asm_count ||
+        ins->value.structured_inline_asm.operand_count != 2U) return false;
+    source = &sel->core->inline_asms[
+        ins->value.structured_inline_asm.inline_asm_id];
+    roles = ins->value.structured_inline_asm.operands;
+    plan = minic_x86_64_gs_atomic_plan(source->template_text,
+        source->template_length);
+    width = plan.width;
+    if (roles == NULL ||
+        source->target_machine_form_id != MINIC_X86_MACHINE_ASM_GS_ATOMIC ||
+        source->target_machine_form_variant != 0U ||
+        source->operand_plan_owner != MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED ||
+        source->source_asm_unique_id == 0U ||
+        plan.kind != MINIC_X86_GS_ATOMIC_XADD_SMP ||
+        (width != 1U && width != 2U && width != 4U && width != 8U) ||
+        !source->is_volatile || source->is_goto ||
+        !source->has_memory_clobber || !source->explicit_memory_clobber ||
+        source->register_clobber_count != 1U ||
+        source->resolved_immediate_count != 0U ||
+        source->goto_second_target != MINIC_CORE_BLOCK_INVALID ||
+        !minic_x86_64_typed_machine_form_matches_template(
+            source->target_machine_form_id,
+            source->target_machine_form_variant,
+            source->template_text,source->template_length)) return false;
+    for (i = 0U; i < 2U; ++i) {
+        if (roles[i].operand_index != i ||
+            roles[i].kind != (i == 0U ?
+                MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE :
+                MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE) ||
+            roles[i].has_fixed_register_binding || roles[i].early_clobber ||
+            roles[i].physical_early_clobber || roles[i].has_tied_output ||
+            !x86_asm_gp_lvalue_width(sel,roles[i].value,width)) return false;
+    }
+    bits = (unsigned int)(width*8U);
+    reg_constraint = width == 1U ? "+q" : "+r";
+    load = width == 1U ? MINIC_X86_MI_MOV8_AR :
+        width == 2U ? MINIC_X86_MI_MOV16_AR :
+        width == 4U ? MINIC_X86_MI_MOV32_AR : MINIC_X86_MI_MOV64_AR;
+    store = width == 1U ? MINIC_X86_MI_MOV8_RA :
+        width == 2U ? MINIC_X86_MI_MOV16_RA :
+        width == 4U ? MINIC_X86_MI_MOV32_RA : MINIC_X86_MI_MOV64_RA;
+    if (!x86_core_load(sel,roles[0].value,MINIC_X86_REG_R11) ||
+        !x86_2(sel,load,x86_addr(MINIC_X86_REG_R11,0),
+            x86_reg(MINIC_X86_REG_RAX,bits)) ||
+        !x86_core_load(sel,roles[1].value,MINIC_X86_REG_R10)) return false;
+    bindings[0] = x86_reg(MINIC_X86_REG_RAX,bits);
+    bindings[0].asm_constraint = (char *)reg_constraint;
+    bindings[0].value.physical.access = MINIC_MACHINE_REGISTER_READ |
+        MINIC_MACHINE_REGISTER_WRITE;
+    bindings[1] = x86_addr(MINIC_X86_REG_R10,0);
+    bindings[1].asm_constraint = "+m";
+    flags.reg = (MinicMachineRegister){0U,64U,MINIC_MACHINE_REGISTER_FLAGS};
+    flags.access = MINIC_MACHINE_REGISTER_CLOBBER;
+    return minic_machine_builder_emit_core_source_asm(&sel->builder,source,
+            MINIC_MACHINE_EFFECT_MEMORY_READ |
+                MINIC_MACHINE_EFFECT_MEMORY_WRITE,
+            bindings,2U,&flags,1U,false,false) &&
+        x86_core_load(sel,roles[0].value,MINIC_X86_REG_R11) &&
+        x86_2(sel,store,x86_reg(MINIC_X86_REG_RAX,bits),
+            x86_addr(MINIC_X86_REG_R11,0));
+}
+
 /* Linux _THIS_IP_ returns the instruction's current RIP, not an address
  * computed from a source-C constant or guessed symbol expression. */
 static bool x86_source_ip_here(X86CoreSelector *sel,
@@ -4204,6 +4368,51 @@ static bool x86_source_bug_table_c(X86CoreSelector *sel,
     }
     return minic_machine_builder_emit_core_source_asm(&sel->builder,
         source,0U,bindings,4U,NULL,0U,false,false);
+}
+
+/* Scalar GNU lowercase-i qualifier: capture its immutable numeric witness
+ * in a real MachineIR immediate, even though the native NOP consumes no
+ * physical register. The separate verifier proves the complete instruction. */
+static bool x86_source_nop_const_i(X86CoreSelector *sel,
+    const MinicCoreInstruction *ins) {
+    const MinicCoreInlineAsm *source;
+    const MinicCoreStructuredInlineAsmOperand *role;
+    const MinicCoreInlineAsmImmediate *immediate;
+    MinicMachineOperand binding;
+    if (ins->kind != MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM ||
+        ins->result != MINIC_CORE_VALUE_INVALID ||
+        ins->value.structured_inline_asm.operand_count != 1U ||
+        sel->core->inline_asms == NULL ||
+        ins->value.structured_inline_asm.inline_asm_id >=
+            sel->core->inline_asm_count) return false;
+    source = &sel->core->inline_asms[
+        ins->value.structured_inline_asm.inline_asm_id];
+    role = ins->value.structured_inline_asm.operands;
+    if (role == NULL ||
+        source->target_machine_form_id != MINIC_X86_MACHINE_ASM_NOP_CONST_I ||
+        source->target_machine_form_variant != 1U ||
+        source->operand_plan_owner != MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED ||
+        source->source_asm_unique_id == 0U || !source->is_volatile ||
+        source->is_goto || source->has_memory_clobber ||
+        source->explicit_memory_clobber ||
+        source->register_clobber_count != 0U ||
+        source->resolved_immediate_count != 1U ||
+        source->goto_second_target != MINIC_CORE_BLOCK_INVALID ||
+        role[0].operand_index != 0U ||
+        role[0].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT ||
+        role[0].has_fixed_register_binding || role[0].early_clobber ||
+        role[0].physical_early_clobber || role[0].physical_read_write ||
+        role[0].has_tied_output ||
+        !minic_x86_64_typed_machine_form_matches_template(
+            source->target_machine_form_id,source->target_machine_form_variant,
+            source->template_text,source->template_length)) return false;
+    immediate = &source->resolved_immediates[0];
+    if (immediate->kind != MINIC_CORE_INLINE_ASM_IMMEDIATE_INTEGER ||
+        immediate->symbol != NULL || immediate->asm_name != NULL) return false;
+    binding = x86_imm(immediate->integer);
+    binding.asm_constraint = "i";
+    return minic_machine_builder_emit_core_source_asm(&sel->builder,
+        source,0U,&binding,1U,NULL,0U,false,false);
 }
 
 static bool x86_source_accumulator_math(X86CoreSelector *sel,
@@ -4564,9 +4773,12 @@ static bool x86_core_instruction(X86CoreSelector *sel,
             x86_source_futex_extable(sel, ins) ||
             x86_source_msr(sel, ins) ||
             x86_source_percpu_gs(sel, ins) ||
+            x86_source_ip_fast_csum(sel, ins) ||
+            x86_source_smp_xadd(sel, ins) ||
             x86_source_gs_tied_alu(sel, ins) ||
             x86_source_ip_here(sel, ins) ||
-            x86_source_bug_table_c(sel, ins);
+            x86_source_bug_table_c(sel, ins) ||
+            x86_source_nop_const_i(sel, ins);
     case MINIC_CORE_INSTRUCTION_FIXED_REGISTER_READ:
         return x86_fixed_register_read(sel, ins);
     case MINIC_CORE_INSTRUCTION_BLOCK_ADDRESS:

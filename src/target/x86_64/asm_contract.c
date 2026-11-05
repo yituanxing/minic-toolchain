@@ -109,6 +109,9 @@ bool minic_x86_64_typed_machine_form_matches_template(
     case MINIC_X86_MACHINE_ASM_BUG_TABLE_C_IMMEDIATE:
         return variant != 0U && variant ==
             minic_x86_64_linux_bug_table_c_form(text, length);
+    case MINIC_X86_MACHINE_ASM_NOP_CONST_I:
+        return variant == 1U && length == 3U &&
+            memcmp(text,"nop",3U) == 0;
     case MINIC_X86_MACHINE_ASM_ZERO_BARRIER:
         form = minic_x86_64_linux_zero_barrier_form(text, length);
         break;

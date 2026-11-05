@@ -28,10 +28,11 @@ for target in riscv32-linux riscv64-linux aarch64-linux loongarch64-linux; do
         -o "$work/$target.s"
 done
 
-# Every unproven typed pointer must have a bytewise fallback, including
-# the high/low halves of long long and double, and both signed and unsigned
-# narrow scalar accesses.  A direct native load is only reachable after its
-# exact runtime alignment guard.  Record copies are a separate Core opcode.
+# Every unproven typed pointer must have byte-exact transport, including the
+# high/low halves of long long and double, and signed/unsigned narrow values.
+# The MachineIR selector now proves Core address alignment before native
+# accesses and emits direct LBU/SB on unknown packed addresses; the retired
+# FILE* runtime native-guard label is not a required instruction sequence.
 for item in 'packed_read_short:lbu:2' 'packed_read_word:lbu:4' \
             'packed_read_wide:lbu:8' 'packed_read_double:lbu:8' \
             'packed_write_short:sb:2' 'packed_write_word:sb:4' \
@@ -44,9 +45,8 @@ for item in 'packed_read_short:lbu:2' 'packed_read_word:lbu:4' \
         $0 == name ":" { inside=1; found=1; next }
         inside && index($0, ".size " name ",") == 1 { done=1; inside=0 }
         inside && $0 ~ ("^  " op " ") { bytewise++ }
-        inside && $0 ~ /^  andi t3, t0, [13]$/ { guard++ }
-        END { if (!found || !done || bytewise < expected || !guard) {
-            printf "RV32_PACKED_SCALAR=FAIL %s bytewise=%d guard=%d\n", name, bytewise, guard > "/dev/stderr"
+        END { if (!found || !done || bytewise < expected) {
+            printf "RV32_PACKED_SCALAR=FAIL %s bytewise=%d required=%d\n", name, bytewise, expected > "/dev/stderr"
             exit 1
         }}
     ' "$work/riscv32-linux.s"
@@ -57,12 +57,11 @@ done
 awk '
     $0 == "natural_local_fast_path:" { inside=1; found=1; next }
     inside && index($0, ".size natural_local_fast_path,") == 1 { done=1; inside=0 }
-    inside && $0 ~ /^  andi t3, t0, [13]$/ { guard++ }
     inside && $0 ~ /^  (lw|sw) / { native++ }
-    END { if (!found || !done || guard || !native) {
-        printf "RV32_NATURAL_ALIGN_FAST=FAIL native=%d guard=%d\n", native, guard > "/dev/stderr"
+    END { if (!found || !done || !native) {
+        printf "RV32_NATURAL_ALIGN_FAST=FAIL native=%d\n", native > "/dev/stderr"
         exit 1
     }}
 ' "$work/riscv32-linux.s"
 
-echo 'RV32_PACKED_SCALAR_ALIGNMENT=PASS gcc-native minic-x86 five-ISA RV32I-guarded-bytewise'
+echo 'RV32_PACKED_SCALAR_ALIGNMENT=PASS gcc-native minic-x86 five-ISA RV32I-proven-native-unknown-bytewise'

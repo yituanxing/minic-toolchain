@@ -5358,6 +5358,36 @@ static bool x86_linux_zero_barrier_qualifier(const MinicTargetInvocation *invoca
     (void)program;
     return x86_linux_zero_barrier_source(source, contract);
 }
+/* GNU lowercase `i` is generic constant input, distinct from x86 ISA `I`.
+ * Capture a source-validated typed integer instead of silently dropping its
+ * C operand on a zero-operand NOP machine path. */
+static bool x86_nop_const_i_source(const MinicTargetInvocation *invocation,
+    const MinicC0Program *program, const MinicInlineAsm *source,
+    MinicTargetInlineAsmContract *contract) {
+    const MinicExpression *expression;
+    (void)invocation;
+    if (program == NULL || source == NULL || contract == NULL ||
+        !source->is_volatile || source->is_goto ||
+        source->template_text == NULL || source->template_length != 3U ||
+        memcmp(source->template_text,"nop",3U) != 0 ||
+        source->output_count != 0U || source->input_count != 1U ||
+        source->inputs == NULL || source->label_count != 0U ||
+        source->clobber_count != 0U ||
+        source->register_clobber_count != 0U ||
+        source->has_memory_clobber ||
+        !target_constraint_is(&source->inputs[0],"i") ||
+        source->inputs[0].name != NULL) return false;
+    expression = minic_c0_program_expression(program,
+        source->inputs[0].expression);
+    if (expression == NULL ||
+        expression->kind != MINIC_EXPRESSION_INTEGER ||
+        !minic_type_is_integer(expression->type)) return false;
+    contract->operand_count = 1U;
+    contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+    contract->capture_typed_immediate_inputs = true;
+    contract->target_machine_form_variant = 1U;
+    return true;
+}
 typedef bool (*MinicX86SourceQualifier)(
     const MinicTargetInvocation *, const MinicC0Program *, const MinicInlineAsm *,
     MinicTargetInlineAsmContract *);
@@ -5456,6 +5486,7 @@ static const MinicX86SourceQualifierEntry minic_x86_source_qualifiers[] = {
     X86_SOURCE_TYPED(x86_apic_amd_alt_source, APIC_AMD_ALT),
     X86_SOURCE_TYPED(x86_gs_tied_alu_source, GS_TIED_ALU),
     X86_SOURCE_TYPED(x86_linux_bug_table_c_source, BUG_TABLE_C_IMMEDIATE),
+    X86_SOURCE_TYPED(x86_nop_const_i_source, NOP_CONST_I),
     X86_SOURCE_TYPED(x86_linux_zero_barrier_qualifier, ZERO_BARRIER),
     X86_SOURCE_TYPED(x86_linux_ip_here_source, IP_HERE),
     X86_SOURCE_TYPED(x86_add32_carry_source, ADD32_CARRY),

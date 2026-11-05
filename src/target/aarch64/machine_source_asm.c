@@ -189,6 +189,93 @@ static const MinicMachineSourceAsmTemplatePolicy a64_one_gp_policy = {
     NULL
 };
 
+/* The physical source-ASM representation of Linux arm64 io.h's raw writes
+ * and feature-91 acquire-read alternatives. Both source templates are
+ * reclassified by the immutable ISA catalog before any GNU substitution.
+ * Physical x9 carries the scalar and x10 the pointer: no Q-memory role or
+ * legacy direct FILE* emitter is consulted. */
+static bool a64_raw_io_form(const MinicMachineInstruction *ins) {
+    const Aarch64RawIoRead *read;
+    const Aarch64RawIoStore *store;
+    const bool is_read = ins != NULL &&
+        ins->source_asm_machine_form_id == AARCH64_MACHINE_ASM_RAW_IO_READ;
+    const unsigned int effects = MINIC_MACHINE_EFFECT_SOURCE_ASM |
+        MINIC_MACHINE_EFFECT_VOLATILE |
+        (!is_read ? MINIC_MACHINE_EFFECT_COMPILER_BARRIER : 0U) |
+        (is_read ? MINIC_MACHINE_EFFECT_MEMORY_READ :
+                   MINIC_MACHINE_EFFECT_MEMORY_WRITE);
+    if (ins == NULL || ins->source_asm_template == NULL ||
+        ins->operand_count != 2U || ins->implicit_count != 0U ||
+        ins->source_asm_terminates_block ||
+        ins->source_asm_permits_fallthrough ||
+        ins->effects != effects) return false;
+    read = aarch64_raw_io_read(ins->source_asm_template,
+        ins->source_asm_length);
+    store = aarch64_raw_io_store(ins->source_asm_template,
+        ins->source_asm_length);
+    if (is_read)
+        return read != NULL && store == NULL &&
+            ins->source_asm_machine_form_variant == read->width;
+    return ins->source_asm_machine_form_id ==
+            AARCH64_MACHINE_ASM_RAW_IO_STORE &&
+        store != NULL && read == NULL &&
+        ins->source_asm_machine_form_variant == store->width;
+}
+
+static bool a64_raw_io_policy_form(const MinicMachineFunction *fn,
+    const MinicMachineInstruction *ins, void *context) {
+    (void)context;
+    return fn != NULL && fn->target != NULL &&
+        fn->target->architecture == MINIC_TARGET_ARCH_AARCH64 &&
+        a64_raw_io_form(ins);
+}
+
+static bool a64_raw_io_policy_binding(const MinicMachineFunction *fn,
+    const MinicMachineInstruction *ins, size_t index, void *context) {
+    const MinicMachineOperand *op;
+    const bool read = ins != NULL &&
+        ins->source_asm_machine_form_id == AARCH64_MACHINE_ASM_RAW_IO_READ;
+    (void)context;
+    if (!a64_raw_io_policy_form(fn, ins, NULL) || index >= 2U ||
+        ins->operands == NULL) return false;
+    op = &ins->operands[index];
+    return op->kind == MINIC_MACHINE_OPERAND_REGISTER &&
+        op->asm_constraint != NULL && op->asm_name == NULL &&
+        strcmp(op->asm_constraint, index == 0U ?
+            (read ? "=r" : "rZ") : "r") == 0 &&
+        op->value.physical.reg.bank == MINIC_MACHINE_REGISTER_GENERAL &&
+        op->value.physical.reg.number == 9U + index &&
+        op->value.physical.reg.width_bits ==
+            (index == 1U || ins->source_asm_machine_form_variant == 8U ?
+                64U : 32U) &&
+        op->value.physical.access == (read && index == 0U ?
+            MINIC_MACHINE_REGISTER_WRITE : MINIC_MACHINE_REGISTER_READ);
+}
+
+static bool a64_raw_io_policy_operand(FILE *output,
+    const MinicMachineFunction *fn, const MinicMachineInstruction *ins,
+    const MinicMachineGNUAsmLabels *labels, size_t index,
+    unsigned char modifier, void *context) {
+    const unsigned char expected = index == 0U ?
+        (ins->source_asm_machine_form_variant == 8U ?
+            /* GNU raw64 uses %x0; the feature-91 read64 uses %0. */
+            ins->source_asm_machine_form_id == AARCH64_MACHINE_ASM_RAW_IO_READ ?
+                0U : 'x' : 'w') : 0U;
+    (void)labels;
+    return a64_raw_io_policy_binding(fn, ins, index, context) &&
+        modifier == expected &&
+        (output == NULL || fputs(index == 1U ? "x10" :
+            ins->source_asm_machine_form_variant == 8U ? "x9" : "w9",
+            output) >= 0);
+}
+
+static const MinicMachineSourceAsmTemplatePolicy a64_raw_io_policy = {
+    a64_raw_io_policy_form,
+    a64_raw_io_policy_binding,
+    a64_raw_io_policy_operand,
+    NULL
+};
+
 /* All named and encoded Linux system-register accessors are single physical
  * x9 input/output effects. C admission has already sealed a finite tuple or
  * named-register grammar; MachineIR independently replays that exact target
@@ -389,6 +476,8 @@ bool minic_aarch64_machine_source_asm_validate(
          minic_machine_source_asm_template_preflight(&function,
              instruction, &a64_one_gp_policy) ||
          minic_machine_source_asm_template_preflight(&function,
+             instruction, &a64_raw_io_policy) ||
+         minic_machine_source_asm_template_preflight(&function,
              instruction, &a64_sysreg_policy) ||
          minic_machine_source_asm_template_preflight(&function,
              instruction, &a64_uaccess_policy) ||
@@ -416,6 +505,13 @@ bool minic_aarch64_machine_source_asm_emit(
     if (a64_one_gp_form(instruction))
         return minic_machine_source_asm_template_emit(output, function,
             instruction, labels, &a64_one_gp_policy) &&
+            ((instruction->source_asm_length != 0U &&
+              instruction->source_asm_template[
+                  instruction->source_asm_length - 1U] == '\n') ||
+             fputc('\n', output) != EOF);
+    if (a64_raw_io_form(instruction))
+        return minic_machine_source_asm_template_emit(output, function,
+            instruction, labels, &a64_raw_io_policy) &&
             ((instruction->source_asm_length != 0U &&
               instruction->source_asm_template[
                   instruction->source_asm_length - 1U] == '\n') ||

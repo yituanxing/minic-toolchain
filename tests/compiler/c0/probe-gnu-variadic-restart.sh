@@ -23,22 +23,67 @@ done
 # bank itself is immutable and shared. The second restart is not an alias of
 # the first cursor's mutable GP/FP offsets.
 awk '
-    # Typed frame addressing now uses a native ADD immediate for small
-    # cursor slots. Large frames may still materialize the offset into x9
-    # first; both forms must resolve relative to the owned frame anchor.
-    /^  movz x9, #[0-9]+$/ { wide_offset = $3 }
-    /^  movk x9, #[0-9]+, lsl #[0-9]+$/ {
-        wide_offset = wide_offset ":" $3 ":" $5
+    function begin_cursor(reg, offset) {
+        cursor[reg] = offset
+        next_field[reg] = 0
+        first_line[reg] = NR
     }
-    /^  add x9, (sp|x19), #[0-9]+$/ {
-        cursor = $3 ":" $4
+    $0 == "mini_va_restart:" { within = 1; found = 1; next }
+    within && /^\.size mini_va_restart,/ { within = 0; done = 1 }
+    !within { next }
+    # The AAPCS64 tag consists of three full-width pointers at byte offsets
+    # 0/8/16 and two signed word offsets at 24/28. Establish two separately
+    # allocated, fully initialized 32-byte tags, not a fixed x9/x10 pattern.
+    /^  movz x[0-9]+, #[0-9]+(, lsl #[0-9]+)?$/ {
+        line = $0; sub(/^ +/, "", line)
+        split(line, fields, /[ ,#]+/)
+        wide[fields[2]] = fields[3] ":" fields[5]
+        next
     }
-    /^  add x9, (sp|x19), x9$/ {
-        cursor = $3 ":" wide_offset
+    /^  movk x[0-9]+, #[0-9]+, lsl #[0-9]+$/ {
+        line = $0; sub(/^ +/, "", line)
+        split(line, fields, /[ ,#]+/)
+        wide[fields[2]] = wide[fields[2]] ":" fields[3] ":" fields[5]
+        next
     }
-    /^  str x10, \[x9\]$/ { slots[++count] = cursor }
-    END { if (count != 2 || slots[1] == slots[2] ||
-              slots[1] == "" || slots[2] == "") exit 1 }
+    /^  add x[0-9]+, (sp|x[0-9]+), #[0-9]+$/ {
+        line = $0; sub(/^ +/, "", line)
+        split(line, fields, /[ ,#]+/)
+        begin_cursor(fields[2], fields[3] ":" fields[4])
+        next
+    }
+    /^  add x[0-9]+, (sp|x[0-9]+), x[0-9]+$/ {
+        line = $0; sub(/^ +/, "", line)
+        split(line, fields, /[ ,#]+/)
+        if (fields[2] == fields[4] && wide[fields[4]] != "")
+            begin_cursor(fields[2], fields[3] ":" wide[fields[4]])
+        next
+    }
+    /^  str [xw][0-9]+, \[x[0-9]+(, #[0-9]+)?\]$/ {
+        line = $0; sub(/^ +/, "", line)
+        split(line, fields, /[ ,\[\]#]+/)
+        base = fields[3]; offset = fields[4] + 0
+        stage = next_field[base]
+        if (cursor[base] == "" || stage < 0 || stage > 4 ||
+            NR - first_line[base] > 18) next
+        expected = stage < 3 ? stage * 8 : 24 + (stage - 3) * 4
+        width = substr(fields[2], 1, 1)
+        if (offset != expected ||
+            (stage < 3 && width != "x") ||
+            (stage >= 3 && width != "w")) next
+        next_field[base]++
+        if (next_field[base] == 5) {
+            completed[cursor[base]] = 1
+            next_field[base] = -1
+        }
+    }
+    END {
+        for (slot in completed) unique++
+        if (!found || !done || unique != 2) {
+            print "AAPCS64_VA_RESTART=FAIL initialized_distinct_tags=" unique > "/dev/stderr"
+            exit 1
+        }
+    }
 ' "$work/aarch64-linux.s"
 
 cc -O0 -no-pie "$source" "$driver" -o "$work/gnu-native"

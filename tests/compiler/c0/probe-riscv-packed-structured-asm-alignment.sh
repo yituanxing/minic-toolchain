@@ -27,13 +27,12 @@ for target in riscv32-linux riscv64-linux; do
             inside && index($0, ".size " name ",") == 1 { done=1; inside=0 }
             inside && /^  lbu / { loads++ }
             inside && /^  sb / { stores++ }
-            inside && /\.Lminic_typed_.*_native/ { guards++ }
             END {
                 required_loads = name == "packed_asm_output" ? 0 : 4
                 required_stores = 4
                 if (!found || !done || loads < required_loads ||
-                    stores < required_stores || guards < 1) {
-                    printf "PACKED_ASM_TRANSFER=FAIL %s loads=%d stores=%d guards=%d\n", name, loads, stores, guards > "/dev/stderr"
+                    stores < required_stores) {
+                    printf "PACKED_ASM_TRANSFER=FAIL %s loads=%d stores=%d\n", name, loads, stores > "/dev/stderr"
                     exit 1
                 }
             }
@@ -42,14 +41,10 @@ for target in riscv32-linux riscv64-linux; do
     awk -v target="$target" '
         $0 == "packed_asm_large_frame:" { inside=1; next }
         inside && index($0, ".size packed_asm_large_frame,") == 1 { inside=0 }
-        inside && /^  li t2, / { large_offset=1 }
+        inside && $1 == "li" && $2 ~ /^x[0-9]+,$/ && $3 + 0 >= 8192 { large_offset=1 }
         inside && /MINIC_PACKED_ASM_INPUTS/ {
             marker++
-            if (target == "riscv64-linux" &&
-                $0 ~ /(^|[[:space:]])t[256]([[:space:]]|$)/)
-                bad=1
-            if (target == "riscv32-linux" &&
-                $0 ~ /(^|[[:space:]])t6([[:space:]]|$)/)
+            if ($0 ~ /(^|[[:space:]])x(7|30|31)([[:space:]]|$)/)
                 bad=1
         }
         END {
@@ -61,7 +56,7 @@ for target in riscv32-linux riscv64-linux; do
         }
     ' "$work/$target.s"
     awk '
-        /^\.Lminic_typed_.*_(native|done):$/ {
+        /^\.Lminic_mir_.*_[0-9]+:$/ {
             label=$0
             sub(/:$/, "", label)
             if (seen[label]++) {
@@ -71,9 +66,9 @@ for target in riscv32-linux riscv64-linux; do
             count++
         }
         END { if (!count) {
-            print "PACKED_ASM_LABEL=FAIL no labels" > "/dev/stderr"
+            print "PACKED_ASM_LABEL=FAIL no MachineIR block labels" > "/dev/stderr"
             exit 1
         }}
     ' "$work/$target.s"
 done
-echo 'RISCV_PACKED_STRUCTURED_ASM_ALIGNMENT=PASS GNU-native RV32I/RV64I -S guarded-ingress-egress large-frame-live-regs'
+echo 'RISCV_PACKED_STRUCTURED_ASM_ALIGNMENT=PASS GNU-native RV32I/RV64I -S bytewise-ingress-egress large-frame-live-regs'

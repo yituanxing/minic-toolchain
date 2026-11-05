@@ -17,11 +17,10 @@ for item in packed_wide_read:lbu packed_wide_write:sb \
         $0 == name ":" { inside=1; found=1; next }
         inside && index($0, ".size " name ",") == 1 { done=1; inside=0 }
         inside && $0 ~ ("^  " op " ") { bytes++ }
-        inside && /\.Lminic_typed_rv64_memory_.*_native/ { guards++ }
-        END { if (!found || !done || bytes < 16 || guards < 2) {
-            printf "RV64_PACKED_WIDE=FAIL %s bytes=%d guards=%d\n", name, bytes, guards > "/dev/stderr"
+        END { if (!found || !done || bytes < 16) {
+            printf "RV64_PACKED_WIDE=FAIL %s bytes=%d\n", name, bytes > "/dev/stderr"
             exit 1
         }}
     ' "$work/wide.s"
 done
-echo 'RV64_PACKED_WIDE_ALIGNMENT=PASS int128 long-double 2x8byte guarded-bytewise'
+echo 'RV64_PACKED_WIDE_ALIGNMENT=PASS int128 long-double two-word bytewise MachineIR'

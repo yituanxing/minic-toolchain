@@ -58,3 +58,20 @@ unsigned int int32_arithmetic(unsigned int left, unsigned int right) {
 long int64_arithmetic(long left, long right) {
     return left * right + left / right + left % right;
 }
+
+/* psABI binary128 is a pair of GPR words even with LP64D enabled. Both
+ * direct and indirect calls must preserve the complete 16-byte payload. */
+extern long double gnu_binary128(void);
+extern long double (*binary128_pointer)(void);
+
+long double call_binary128_direct(void) {
+    return gnu_binary128();
+}
+
+long double call_binary128_indirect(void) {
+    return binary128_pointer();
+}
+
+long double passthrough_binary128(long double value) {
+    return value;
+}

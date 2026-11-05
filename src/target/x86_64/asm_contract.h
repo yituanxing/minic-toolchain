@@ -180,7 +180,10 @@ typedef enum MinicX86MachineAsmForm {
     MINIC_X86_MACHINE_ASM_BITSCAN_MATCHED,
     MINIC_X86_MACHINE_ASM_MATCHED_MEMORY,
     /* Original Linux BUG table GNU %c scalar immediate/symbol transport. */
-    MINIC_X86_MACHINE_ASM_BUG_TABLE_C_IMMEDIATE
+    MINIC_X86_MACHINE_ASM_BUG_TABLE_C_IMMEDIATE,
+    /* A GCC lowercase-i immediate is a source-qualified compile-time value,
+     * even when the opcode itself (`nop`) does not reference the input. */
+    MINIC_X86_MACHINE_ASM_NOP_CONST_I
 } MinicX86MachineAsmForm;
 
 /* RAID6's fixed XMM/YMM/ZMM and opmask-register GNU templates. Every

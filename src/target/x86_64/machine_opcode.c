@@ -1625,6 +1625,86 @@ static bool x86_source_ip_here_contract(const MinicMachineInstruction *ins) {
 /* Privileged Linux MSR instructions have exact source-qualified templates,
  * but the machine verifier still independently proves the physical ECX,
  * EAX, EDX and safe-error bindings before GNU is allowed to emit bytes. */
+/* Physical proof for the original Linux checksum CF loop and SMP XADD.
+ * Both have exact Source-owned grammar, but independent machine proofs here
+ * rule out forged register widths, ties, lock metadata and memory effects. */
+static bool x86_source_carry_xadd_contract(const MinicTargetInfo *target,
+    const MinicMachineInstruction *ins) {
+    const bool csum = ins->source_asm_machine_form_id ==
+        MINIC_X86_MACHINE_ASM_IP_FAST_CSUM;
+    const MinicX86GsAtomicPlan plan = csum ?
+        (MinicX86GsAtomicPlan){0} : minic_x86_64_gs_atomic_plan(
+            ins->source_asm_template,ins->source_asm_length);
+    static const unsigned int csum_regs[5] = {
+        MINIC_X86_REG_RAX, MINIC_X86_REG_R9, MINIC_X86_REG_R11,
+        MINIC_X86_REG_R9, MINIC_X86_REG_R11
+    };
+    static const unsigned int csum_bits[5] = {32U,64U,32U,64U,32U};
+    static const char *const csum_constraints[5] = {"=r","=r","=r","1","2"};
+    const unsigned int bits = (unsigned int)(plan.width*8U);
+    const size_t count = csum ? 5U : 2U;
+    size_t i;
+    if ((csum ? !minic_x86_64_ip_fast_csum_template(
+            ins->source_asm_template,ins->source_asm_length) :
+            plan.kind != MINIC_X86_GS_ATOMIC_XADD_SMP) ||
+        (!csum && bits != 8U && bits != 16U &&
+            bits != 32U && bits != 64U) ||
+        ins->source_asm_machine_form_variant != 0U ||
+        ins->source_asm_terminates_block ||
+        ins->source_asm_permits_fallthrough ||
+        ins->effects != (MINIC_MACHINE_EFFECT_SOURCE_ASM |
+            MINIC_MACHINE_EFFECT_MEMORY_READ |
+            MINIC_MACHINE_EFFECT_MEMORY_WRITE |
+            MINIC_MACHINE_EFFECT_COMPILER_BARRIER |
+            MINIC_MACHINE_EFFECT_VOLATILE) ||
+        ins->operand_count != count || ins->operands == NULL ||
+        ins->implicit_count != 1U || ins->implicit == NULL ||
+        ins->implicit[0].reg.bank != MINIC_MACHINE_REGISTER_FLAGS ||
+        ins->implicit[0].reg.number != 0U ||
+        ins->implicit[0].reg.width_bits != 64U ||
+        ins->implicit[0].access != MINIC_MACHINE_REGISTER_CLOBBER ||
+        !minic_x86_64_typed_machine_form_matches_template(
+            ins->source_asm_machine_form_id,
+            ins->source_asm_machine_form_variant,
+            ins->source_asm_template,ins->source_asm_length)) return false;
+    for (i = 0U; i < count; ++i) {
+        const MinicMachineOperand *op = &ins->operands[i];
+        if (op->asm_name != NULL || op->asm_constraint == NULL) return false;
+        if (csum) {
+            if (op->kind != MINIC_MACHINE_OPERAND_REGISTER ||
+                strcmp(op->asm_constraint,csum_constraints[i]) != 0 ||
+                op->value.physical.reg.bank != MINIC_MACHINE_REGISTER_GENERAL ||
+                op->value.physical.reg.number != csum_regs[i] ||
+                op->value.physical.reg.width_bits != csum_bits[i] ||
+                op->value.physical.access != (i < 3U ?
+                    MINIC_MACHINE_REGISTER_WRITE : MINIC_MACHINE_REGISTER_READ))
+                return false;
+        } else if (i == 0U) {
+            if (op->kind != MINIC_MACHINE_OPERAND_REGISTER ||
+                strcmp(op->asm_constraint,bits == 8U ? "+q" : "+r") != 0 ||
+                op->value.physical.reg.bank != MINIC_MACHINE_REGISTER_GENERAL ||
+                op->value.physical.reg.number != MINIC_X86_REG_RAX ||
+                op->value.physical.reg.width_bits != bits ||
+                op->value.physical.access !=
+                    (MINIC_MACHINE_REGISTER_READ | MINIC_MACHINE_REGISTER_WRITE))
+                return false;
+        } else {
+            const MinicMachineAddress *address = &op->value.address;
+            if (op->kind != MINIC_MACHINE_OPERAND_ADDRESS ||
+                strcmp(op->asm_constraint,"+m") != 0 ||
+                !minic_x86_64_machine_validate_address(target,address,NULL) ||
+                !address->has_base ||
+                address->base.bank != MINIC_MACHINE_REGISTER_GENERAL ||
+                address->base.number != MINIC_X86_REG_R10 ||
+                address->base.width_bits != 64U ||
+                address->has_index || address->has_segment ||
+                address->has_symbol || address->displacement != 0)
+                return false;
+        }
+    }
+    return true;
+}
+
 static bool x86_source_msr_contract(const MinicMachineInstruction *ins) {
     unsigned int registers[4] = {0};
     const char *constraints[4] = {NULL};
@@ -1838,6 +1918,29 @@ static bool x86_source_bug_c_immediate_contract(
         ins->operands[3].value.integer == 12;
 }
 
+static bool x86_source_nop_const_i_contract(
+    const MinicMachineInstruction *ins) {
+    const MinicMachineOperand *input;
+    if (ins->source_asm_machine_form_id !=
+            MINIC_X86_MACHINE_ASM_NOP_CONST_I ||
+        ins->source_asm_machine_form_variant != 1U ||
+        ins->operand_count != 1U || ins->operands == NULL ||
+        ins->implicit_count != 0U || ins->implicit != NULL ||
+        ins->source_asm_terminates_block ||
+        ins->source_asm_permits_fallthrough ||
+        ins->effects != (MINIC_MACHINE_EFFECT_SOURCE_ASM |
+                        MINIC_MACHINE_EFFECT_VOLATILE) ||
+        !minic_x86_64_typed_machine_form_matches_template(
+            ins->source_asm_machine_form_id,
+            ins->source_asm_machine_form_variant,
+            ins->source_asm_template,ins->source_asm_length)) return false;
+    input = &ins->operands[0];
+    return input->kind == MINIC_MACHINE_OPERAND_INTEGER &&
+        input->asm_constraint != NULL &&
+        strcmp(input->asm_constraint,"i") == 0 &&
+        input->asm_name == NULL;
+}
+
 /* Machine ownership of the complete zero-operand Linux ordering family.
  * Every form has an exact Source-validated variant. No other source syntax
  * can pass this physical proof, even if its textual mnemonic looks similar. */
@@ -1894,11 +1997,19 @@ bool minic_x86_64_machine_validate_source_asm(const MinicTargetInfo *target,
             MINIC_X86_MACHINE_ASM_MSR)
         return x86_source_msr_contract(instruction);
     if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_IP_FAST_CSUM ||
+        instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_GS_ATOMIC)
+        return x86_source_carry_xadd_contract(target,instruction);
+    if (instruction->source_asm_machine_form_id ==
             MINIC_X86_MACHINE_ASM_PERCPU_GS)
         return x86_source_percpu_gs_contract(target,instruction);
     if (instruction->source_asm_machine_form_id ==
             MINIC_X86_MACHINE_ASM_BUG_TABLE_C_IMMEDIATE)
         return x86_source_bug_c_immediate_contract(instruction);
+    if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_NOP_CONST_I)
+        return x86_source_nop_const_i_contract(instruction);
     if (instruction->source_asm_machine_form_id == 0U &&
         instruction->source_asm_machine_form_variant == 0U &&
         instruction->source_asm_length == 0U)

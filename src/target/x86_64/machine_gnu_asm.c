@@ -600,6 +600,9 @@ static bool x86_emit_source_asm(FILE *out,
                 instruction,labels,&x86_bug_c_policy) &&
             fputc('\n',out) != EOF;
     if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_NOP_CONST_I)
+        return fputs("  nop\n",out) != EOF;
+    if (instruction->source_asm_machine_form_id ==
             MINIC_X86_MACHINE_ASM_MSR)
         return fputs("  ",out) != EOF &&
             minic_machine_source_asm_template_emit(out,function,
@@ -611,6 +614,50 @@ static bool x86_emit_source_asm(FILE *out,
             minic_machine_source_asm_template_emit(out,function,
                 instruction,labels,&x86_percpu_policy) &&
             fputc('\n',out) != EOF;
+    if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_IP_FAST_CSUM)
+        /* The exact source checksum template and the physical RAX/R9/R11
+         * bindings have already passed independent MachineIR validation. */
+        return fputs("  movl (%r9), %eax\n"
+                     "  subl $4, %r11d\n"
+                     "  jbe 2f\n"
+                     "  addl 4(%r9), %eax\n"
+                     "  adcl 8(%r9), %eax\n"
+                     "  adcl 12(%r9), %eax\n"
+                     "1: adcl 16(%r9), %eax\n"
+                     "  leaq 4(%r9), %r9\n"
+                     "  decl %r11d\n"
+                     "  jne 1b\n"
+                     "  adcl $0, %eax\n"
+                     "  movl %eax, %r11d\n"
+                     "  shrl $16, %eax\n"
+                     "  addw %r11w, %ax\n"
+                     "  adcl $0, %eax\n"
+                     "  notl %eax\n"
+                     "2:\n",out) != EOF;
+    if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_GS_ATOMIC) {
+        const MinicX86GsAtomicPlan plan = minic_x86_64_gs_atomic_plan(
+            instruction->source_asm_template,
+            instruction->source_asm_length);
+        const char *suffix;
+        const char *reg;
+        if (plan.kind != MINIC_X86_GS_ATOMIC_XADD_SMP) return false;
+        switch (plan.width) {
+        case 1U: suffix = "b"; reg = "%al"; break;
+        case 2U: suffix = "w"; reg = "%ax"; break;
+        case 4U: suffix = "l"; reg = "%eax"; break;
+        case 8U: suffix = "q"; reg = "%rax"; break;
+        default: return false;
+        }
+        return fputs("  .pushsection .smp_locks,\"a\"\n"
+                     "  .balign 4\n"
+                     "  .long 671f - .\n"
+                     "  .popsection\n"
+                     "671:\n"
+                     "  lock; xadd",out) != EOF &&
+            fprintf(out,"%s %s, (%%r10)\n",suffix,reg) >= 0;
+    }
     variant = instruction->source_asm_machine_form_variant;
     return variant >= 1U && variant <=
             sizeof(hardware) / sizeof(hardware[0]) &&

@@ -1506,6 +1506,82 @@ static bool a64_linux_one_gp_source(A64CoreSelection *sel,
         &binding, 1U, NULL, 0U, false, false);
 }
 
+/* Original Linux arm64 io.h raw MMIO is two typed scalar operands, even
+ * when the GNU form is a write through an r pointer rather than a Q lvalue.
+ * The read alternative must retain both 661/663 instruction bodies and its
+ * .altinstructions fixups. The source qualifier and the MachineIR verifier
+ * independently match the exact same target-owned width catalog. */
+static bool a64_linux_raw_io_source(A64CoreSelection *sel,
+    const MinicCoreInstruction *ins, const MinicCoreInlineAsm *source) {
+    static const uint32_t stores[4] = {
+        MINIC_A64_MACHINE_STRB, MINIC_A64_MACHINE_STRH,
+        MINIC_A64_MACHINE_STR_W, MINIC_A64_MACHINE_STR_X
+    };
+    const MinicCoreFunction *fn = sel->ctx->fn;
+    const MinicCoreStructuredInlineAsmOperand *ops =
+        ins->value.structured_inline_asm.operands;
+    const Aarch64RawIoRead *read = aarch64_raw_io_read(
+        source->template_text, source->template_length);
+    const Aarch64RawIoStore *store = aarch64_raw_io_store(
+        source->template_text, source->template_length);
+    const bool is_read = source->target_machine_form_id ==
+        AARCH64_MACHINE_ASM_RAW_IO_READ;
+    const size_t width = is_read ? (read ? read->width : 0U) :
+        (store ? store->width : 0U);
+    const unsigned int bits = width == 8U ? 64U : 32U;
+    const size_t index = width == 1U ? 0U : width == 2U ? 1U :
+        width == 4U ? 2U : 3U;
+    MinicMachineOperand bindings[2];
+    size_t i;
+    if (width == 0U ||
+        (is_read ? store != NULL : read != NULL) ||
+        source->target_machine_form_id != (is_read ?
+            AARCH64_MACHINE_ASM_RAW_IO_READ :
+            AARCH64_MACHINE_ASM_RAW_IO_STORE) ||
+        source->target_machine_form_variant != width ||
+        source->operand_plan_owner != MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED ||
+        ins->result != MINIC_CORE_VALUE_INVALID ||
+        !minic_core_function_type_is_kind(fn, ins->core_type_id,
+            MINIC_CORE_TYPE_VOID) ||
+        ins->value.structured_inline_asm.operand_count != 2U ||
+        !source->is_volatile || source->is_goto ||
+        source->explicit_memory_clobber ||
+        source->has_memory_clobber != !is_read ||
+        source->implicit_memory_effect == is_read ||
+        source->register_clobber_count != 0U ||
+        source->resolved_immediate_count != 0U ||
+        source->symbol_reference_count != 0U ||
+        source->deferred_immediate_symbol != NULL ||
+        ops == NULL || sel->ctx->machine_frame->has_dynamic_stack ||
+        !aarch64_asm_core_integer(fn, ops[0].value, is_read,
+            width, -1) ||
+        !aarch64_asm_core_pointer(fn, ops[1].value, false)) return false;
+    for (i = 0U; i < 2U; ++i) {
+        const MinicCoreStructuredInlineAsmOperand *op = &ops[i];
+        if (op->operand_index != i || op->value >= fn->value_count ||
+            op->has_fixed_register_binding || op->early_clobber ||
+            op->physical_early_clobber || op->physical_read_write ||
+            op->has_tied_output || op->kind != (is_read && i == 0U ?
+                MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT :
+                MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT)) return false;
+        bindings[i] = a64_gp(A64_T0 + (unsigned int)i,
+            i == 0U ? bits : 64U, is_read && i == 0U ?
+                MINIC_MACHINE_REGISTER_WRITE : MINIC_MACHINE_REGISTER_READ);
+        bindings[i].asm_constraint = i == 0U ?
+            (is_read ? "=r" : "rZ") : "r";
+    }
+    if ((!is_read && !a64_load_core(sel, ops[0].value, A64_T0, bits)) ||
+        !a64_load_core(sel, ops[1].value, A64_T1, 64U) ||
+        !minic_machine_builder_emit_core_source_asm(&sel->builder,
+            source, is_read ? MINIC_MACHINE_EFFECT_MEMORY_READ :
+                MINIC_MACHINE_EFFECT_MEMORY_WRITE,
+            bindings, 2U, NULL, 0U, false, false)) return false;
+    if (!is_read) return true;
+    return a64_load_core(sel, ops[0].value, A64_T2, 64U) &&
+        a64_memory_register(sel, stores[index], false,
+            A64_T0, bits, A64_T2, 0U, true, true);
+}
+
 /* The original Linux __get_user/__put_user contract has three independent
  * GNU roles, with an exception-table fixup that names the errno/data GPRs.
  * Resolve those roles to x9/x10/x11 in typed MachineIR; only the C lvalue
@@ -3052,6 +3128,9 @@ static bool a64_core_instruction(A64CoreSelection *sel,
             return a64_linux_sysreg_source(sel, ins, source);
         if (source->target_machine_form_id == AARCH64_MACHINE_ASM_UACCESS)
             return a64_linux_uaccess_source(sel, ins, source);
+        if (source->target_machine_form_id == AARCH64_MACHINE_ASM_RAW_IO_READ ||
+            source->target_machine_form_id == AARCH64_MACHINE_ASM_RAW_IO_STORE)
+            return a64_linux_raw_io_source(sel, ins, source);
         if (source->target_machine_form_id == AARCH64_MACHINE_ASM_LSE_CASP128)
             return a64_linux_casp128_source(sel, ins, source);
         if (source->target_machine_form_id == AARCH64_MACHINE_ASM_LSE)

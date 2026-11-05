@@ -31,10 +31,54 @@ cc -E -P -x c "$aarch_source" -o "$work/aarch64-source.i"
 "$minic" --target=aarch64-linux -S "$work/aarch64-source.i" \
   -o "$work/aarch64-source.s"
 grep -F 'sum_after_copy:' "$work/aarch64-source.s" >/dev/null
-grep -F 'ldp x11, x12, [x10]' "$work/aarch64-source.s" >/dev/null
-grep -F 'ldp x13, x14, [x10, #16]' "$work/aarch64-source.s" >/dev/null
-grep -F 'stp x11, x12, [x9]' "$work/aarch64-source.s" >/dev/null
-grep -F 'stp x13, x14, [x9, #16]' "$work/aarch64-source.s" >/dev/null
+# The typed AArch64 MachineIR path lowers this 32-byte source va_list copy
+# into four 64-bit loads followed by four matching stores. Verify two full
+# copies, offsets 0/8/16/24 and shared source/destination bases, without
+# depending on the historical fixed x9/x10/x11..x14 register assignment.
+awk '
+  $0 == "sum_after_copy:" { within = 1; found = 1; next }
+  within && /^\.size sum_after_copy,/ { within = 0; done = 1 }
+  within { instructions[++count] = $0 }
+  END {
+    for (i = 1; i + 7 <= count; i++) {
+      valid = 1
+      src = ""; dst = ""
+      for (j = 0; j < 4; j++) {
+        line = instructions[i + j]
+        if (line !~ /^  ldr x[0-9]+, \[x[0-9]+, #[0-9]+\]$/) {
+          valid = 0; break
+        }
+        sub(/^ +/, "", line)
+        split(line, fields, /[ ,\[\]#]+/)
+        if (fields[4] + 0 != j * 8 ||
+            (j > 0 && fields[3] != src)) {
+          valid = 0; break
+        }
+        src = fields[3]
+        regs[j] = fields[2]
+      }
+      if (!valid) continue
+      for (j = 0; j < 4; j++) {
+        line = instructions[i + 4 + j]
+        if (line !~ /^  str x[0-9]+, \[x[0-9]+, #[0-9]+\]$/) {
+          valid = 0; break
+        }
+        sub(/^ +/, "", line)
+        split(line, fields, /[ ,\[\]#]+/)
+        if (fields[2] != regs[j] || fields[4] + 0 != j * 8 ||
+            (j > 0 && fields[3] != dst)) {
+          valid = 0; break
+        }
+        dst = fields[3]
+      }
+      if (valid && src != dst) copies++
+    }
+    if (!found || !done || copies < 2) {
+      print "AARCH64_VA_SOURCE_COPY=FAIL full_32B_copies=" copies > "/dev/stderr"
+      exit 1
+    }
+  }
+' "$work/aarch64-source.s"
 
 # The structured source ABI cannot accept the historic char* proxy. Keep
 # an explicit negative on both targets; the linear RV/Loong ABIs still use
