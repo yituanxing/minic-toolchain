@@ -89,7 +89,8 @@ MinicCoreLowerStatus core_asm_try_target_register_contract(
          * legacy fixed-register special case on all three Linux targets. */
         if ((bind->kind == MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT ||
              bind->kind == MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT ||
-             bind->kind == MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE) &&
+             bind->kind == MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE ||
+             bind->kind == MINIC_CORE_STRUCTURED_INLINE_ASM_FIXED_REGISTER_READWRITE) &&
             core_inline_asm_fixed_binding_id(
                 ctx->body->program, source_expression,
                 &source_fixed_binding_id)) {
@@ -101,7 +102,18 @@ MinicCoreLowerStatus core_asm_try_target_register_contract(
             }
             bind->has_fixed_register_binding = true;
         }
-        if (bind->kind == MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT) {
+        if (bind->kind == MINIC_CORE_STRUCTURED_INLINE_ASM_FIXED_REGISTER_READWRITE) {
+            /* A fixed machine register is a scalar location, not a C
+             * addressable object. Keep the source read and physical +r
+             * output role separate; the target later proves exact placement. */
+            if (source_expression == NULL ||
+                source_expression->kind != MINIC_EXPRESSION_FIXED_REGISTER ||
+                !bind->has_fixed_register_binding) {
+                free(normalized);
+                return MINIC_CORE_LOWER_UNSUPPORTED;
+            }
+            status = lower_expression(ctx, op->expression, &bind->value);
+        } else if (bind->kind == MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT) {
             const MinicExpression *expr = source_expression;
             MinicConstValue folded;
             /* Target GNU immediate operands can be full integer constant

@@ -5,16 +5,19 @@
 #include "target/riscv/instruction_select.h"
 #include "target/riscv/register_identity.h"
 #include "target/common/core_machine_asm.h"
+#include "target/common/core_scalar_conversion.h"
+#include "target/common/core_floating_shape.h"
 #include "target/common/machine_core_coverage.h"
 #include "target/common/elf_module_symbol_info.h"
 #include <limits.h>
+#include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
 enum { RV_ZERO = 0U, RV_SP = 2U, RV_T0 = 5U, RV_T1 = 6U,
        RV_T2 = 7U, RV_S0 = 8U, RV_A0 = 10U, RV_A7 = 17U,
-       RV_T3 = 28U, RV_T6 = 31U };
+       RV_T3 = 28U, RV_T4 = 29U, RV_T5 = 30U, RV_T6 = 31U };
 typedef struct RvCoreSelection {
     MinicMachineBuilder builder;
     const MinicRiscvCoreMachinePlan *plan;
@@ -24,6 +27,10 @@ typedef struct RvCoreSelection {
     size_t *far_entries;
     size_t *conditional_fallthroughs;
     size_t *conditional_others;
+    size_t *dynamic_check2;
+    size_t *dynamic_commit;
+    size_t *dynamic_continue;
+    size_t *dynamic_overflow;
     size_t epilogue_block;
 } RvCoreSelection;
 
@@ -416,6 +423,335 @@ static bool rv_core_constant(RvCoreSelection *sel,
         rv_normalize(sel, RV_T0, bytes, sign) &&
         rv_store(sel, ins->result, RV_T0);
 }
+
+/* Preserve exact IEEE-754 storage bits, including negative zero and NaN
+ * payloads.  Binary128 needs a separately-qualified wide representation. */
+static bool rv_core_float_constant(RvCoreSelection *sel,
+    const MinicCoreInstruction *ins) {
+    const MinicCoreTypeContext *types = sel->plan->core->type_context;
+    const MinicCoreType *type = types == NULL ? NULL :
+        minic_core_type_get(types,
+            minic_core_type_unqualified(types, ins->core_type_id));
+    const size_t word = sel->xlen / 8U;
+    const uint64_t bits = ins->value.floating_bits;
+    size_t chunks, i;
+    if (type == NULL || type->kind != MINIC_CORE_TYPE_FLOAT ||
+        !type->has_layout || (type->size != 4U && type->size != 8U) ||
+        (type->size == 4U && bits >> 32U != 0U)) return false;
+    chunks = (type->size + word - 1U) / word;
+    for (i = 0U; i < chunks; ++i) {
+        const int64_t immediate = sel->xlen == 32U ?
+            (int64_t)(int32_t)(uint32_t)(bits >> (32U * i)) :
+            (int64_t)bits;
+        if (!rv_li(sel, RV_T0, immediate) ||
+            !rv_value_chunk(sel, ins->result, i, RV_T0, false))
+            return false;
+    }
+    return true;
+}
+
+/* Strict base-I compiler-runtime lowering with fully typed psABI register
+ * operands.  Frame finalization, not this selector, owns return-address
+ * preservation and all ABI storage offsets.  No M/F/D is emitted. */
+static bool rv_core_runtime_binary(RvCoreSelection *sel,
+    const MinicCoreInstruction *ins) {
+    const MinicCoreFunction *fn = sel->plan->core;
+    const MinicCoreTypeContext *types = fn->type_context;
+    const MinicCoreValueId lhs = ins->value.binary.left;
+    const MinicCoreValueId rhs = ins->value.binary.right;
+    const MinicCoreType *result, *left, *right;
+    const size_t word = sel->xlen / 8U;
+    const char *helper = NULL;
+    MinicMachineOperand symbol = {0};
+    MinicRiscvIsa isa = {0};
+    size_t chunks, i, operand_index, size;
+    bool integer, sign;
+    if (types == NULL || lhs >= fn->value_count ||
+        rhs >= fn->value_count || !sel->plan->frame->saves_return_address ||
+        !minic_riscv_target_isa_load(sel->plan->target, &isa)) return false;
+    result = minic_core_type_get(types,
+        minic_core_type_unqualified(types, ins->core_type_id));
+    left = minic_core_type_get(types,
+        minic_core_type_unqualified(types, fn->values[lhs].core_type_id));
+    right = minic_core_type_get(types,
+        minic_core_type_unqualified(types, fn->values[rhs].core_type_id));
+    if (result == NULL || left == NULL || right == NULL ||
+        !result->has_layout || !left->has_layout || !right->has_layout ||
+        result->size != left->size || result->size != right->size ||
+        !rv_transport_type(sel, ins->core_type_id,
+            &size, &integer, &sign)) return false;
+    if (ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_MULTIPLY ||
+        ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_DIVIDE ||
+        ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_REMAINDER) {
+        const bool unsigned_integer = !sign;
+        if (!integer || result->kind != MINIC_CORE_TYPE_INTEGER ||
+            left->kind != MINIC_CORE_TYPE_INTEGER ||
+            right->kind != MINIC_CORE_TYPE_INTEGER) return false;
+        if (size > word) {
+            if (sel->xlen == 32U)
+                helper = minic_riscv_integer_arithmetic_symbol(
+                    ins->kind, unsigned_integer, 64U);
+            else if (ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_MULTIPLY)
+                helper = "__multi3";
+            else if (ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_DIVIDE)
+                helper = unsigned_integer ? "__udivti3" : "__divti3";
+            else
+                helper = unsigned_integer ? "__umodti3" : "__modti3";
+        } else {
+            helper = minic_riscv_integer_arithmetic_symbol(
+                ins->kind, unsigned_integer, sel->xlen);
+        }
+    } else {
+        if (integer || result->kind != MINIC_CORE_TYPE_FLOAT ||
+            left->kind != MINIC_CORE_TYPE_FLOAT ||
+            right->kind != MINIC_CORE_TYPE_FLOAT ||
+            (size != 4U && size != 8U) ||
+            (sel->xlen == 64U && isa.abi != MINIC_RISCV_ABI_LP64) ||
+            (sel->xlen == 32U && isa.abi != MINIC_RISCV_ABI_ILP32))
+            return false;
+        helper = minic_riscv_softfloat_arithmetic_symbol(ins->kind);
+    }
+    chunks = (size + word - 1U) / word;
+    if (helper == NULL || chunks == 0U || chunks > 2U ||
+        2U * chunks > 8U) return false;
+    for (operand_index = 0U; operand_index < 2U; ++operand_index) {
+        const MinicCoreValueId operand = operand_index ? rhs : lhs;
+        for (i = 0U; i < chunks; ++i)
+            if (!rv_value_chunk(sel, operand, i,
+                    RV_A0 + (unsigned)(operand_index * chunks + i), true))
+                return false;
+    }
+    symbol.kind = MINIC_MACHINE_OPERAND_SYMBOL;
+    /* Machine builder duplicates symbol operands; the static helper spelling
+     * is only borrowed for the duration of this emission. */
+    symbol.value.symbol.name = (char *)helper;
+    symbol.value.symbol.relocation = MINIC_RISCV_MACHINE_RELOC_CALL;
+    if (!rv_emit(sel, MINIC_RISCV_MACHINE_CALL_DIRECT, &symbol, 1U))
+        return false;
+    if (integer && size <= word &&
+        !rv_normalize(sel, RV_A0, (unsigned)size, sign)) return false;
+    for (i = 0U; i < chunks; ++i)
+        if (!rv_value_chunk(sel, ins->result, i,
+                RV_A0 + (unsigned)i, false)) return false;
+    return true;
+}
+
+/* Soft-float RV32 ILP32 and RV64 LP64 use integer argument registers for
+ * transported IEEE payloads. Keep conversions and ordered comparisons in
+ * compiler-rt, preserving strict base-I selected code and NaN predicates. */
+static bool rv_core_runtime_unary_float(RvCoreSelection *sel,
+    const MinicCoreInstruction *ins) {
+    const MinicCoreFunction *fn = sel->plan->core;
+    const size_t word = sel->xlen / 8U;
+    MinicCoreFloatingShape shape = {0};
+    MinicRiscvIsa isa = {0};
+    const char *helper = NULL;
+    size_t source_size = 0U, result_size = 0U, chunks, i;
+    bool integer, sign;
+    MinicMachineOperand symbol = {0};
+    if (!minic_core_floating_shape(fn, ins, &shape) ||
+        !minic_riscv_target_isa_load(sel->plan->target, &isa) ||
+        (sel->xlen == 32U && isa.abi != MINIC_RISCV_ABI_ILP32) ||
+        (sel->xlen == 64U && isa.abi != MINIC_RISCV_ABI_LP64) ||
+        ins->value.operand >= fn->value_count) return false;
+    if (ins->kind == MINIC_CORE_INSTRUCTION_DOUBLE_NEGATE) {
+        if (!rv_value_chunk(sel, ins->value.operand, 0U, RV_T0, true))
+            return false;
+        if (sel->xlen == 32U) {
+            if (!rv_value_chunk(sel, ins->value.operand, 1U,
+                    RV_T1, true) || !rv_li(sel, RV_T2, INT32_MIN) ||
+                !rv_rrr(sel, MINIC_RISCV_MACHINE_XOR,
+                    RV_T1, RV_T1, RV_T2)) return false;
+        } else if (!rv_li(sel, RV_T2, INT64_MIN) ||
+                   !rv_rrr(sel, MINIC_RISCV_MACHINE_XOR,
+                       RV_T0, RV_T0, RV_T2)) return false;
+        return rv_value_chunk(sel, ins->result, 0U, RV_T0, false) &&
+            (sel->xlen == 64U || rv_value_chunk(sel, ins->result, 1U,
+                RV_T1, false));
+    }
+    if (!sel->plan->frame->saves_return_address ||
+        !rv_transport_type(sel, shape.source_id, &source_size,
+            &integer, &sign) ||
+        !rv_transport_type(sel, shape.result_id, &result_size,
+            &integer, &sign)) return false;
+    switch (ins->kind) {
+    case MINIC_CORE_INSTRUCTION_FLOAT_TO_DOUBLE:
+        helper = "__extendsfdf2"; break;
+    case MINIC_CORE_INSTRUCTION_DOUBLE_TO_FLOAT:
+        helper = "__truncdfsf2"; break;
+    case MINIC_CORE_INSTRUCTION_INTEGER_TO_DOUBLE:
+        if (shape.integer_bytes <= 4U)
+            helper = shape.integer_signed ? "__floatsidf" : "__floatunsidf";
+        else if (shape.integer_bytes == 8U)
+            helper = shape.integer_signed ? "__floatdidf" : "__floatundidf";
+        else if (shape.integer_bytes == 16U && sel->xlen == 64U)
+            helper = shape.integer_signed ? "__floattidf" : "__floatuntidf";
+        break;
+    case MINIC_CORE_INSTRUCTION_DOUBLE_TO_INTEGER:
+        if (shape.integer_bytes <= 4U)
+            helper = shape.integer_signed ? "__fixdfsi" : "__fixunsdfsi";
+        else if (shape.integer_bytes == 8U)
+            helper = shape.integer_signed ? "__fixdfdi" : "__fixunsdfdi";
+        else if (shape.integer_bytes == 16U && sel->xlen == 64U)
+            helper = shape.integer_signed ? "__fixdfti" : "__fixunsdfti";
+        break;
+    default: return false;
+    }
+    chunks = (source_size + word - 1U) / word;
+    if (helper == NULL || chunks == 0U || chunks > 2U ||
+        (result_size + word - 1U) / word > 2U) return false;
+    for (i = 0U; i < chunks; ++i)
+        if (!rv_value_chunk(sel, ins->value.operand, i,
+                RV_A0 + (unsigned)i, true)) return false;
+    if (ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_TO_DOUBLE &&
+        shape.integer_bytes <= 4U &&
+        !rv_normalize(sel, RV_A0, (unsigned)shape.integer_bytes,
+            shape.integer_signed)) return false;
+    symbol.kind = MINIC_MACHINE_OPERAND_SYMBOL;
+    symbol.value.symbol.name = (char *)helper;
+    symbol.value.symbol.relocation = MINIC_RISCV_MACHINE_RELOC_CALL;
+    if (!rv_emit(sel, MINIC_RISCV_MACHINE_CALL_DIRECT, &symbol, 1U))
+        return false;
+    if (ins->kind == MINIC_CORE_INSTRUCTION_DOUBLE_TO_INTEGER &&
+        shape.integer_bytes <= word &&
+        !rv_normalize(sel, RV_A0, (unsigned)shape.integer_bytes,
+            shape.integer_signed)) return false;
+    chunks = (result_size + word - 1U) / word;
+    for (i = 0U; i < chunks; ++i)
+        if (!rv_value_chunk(sel, ins->result, i,
+                RV_A0 + (unsigned)i, false)) return false;
+    return true;
+}
+
+static bool rv_core_runtime_double_compare(RvCoreSelection *sel,
+    const MinicCoreInstruction *ins) {
+    const MinicCoreFunction *fn = sel->plan->core;
+    MinicCoreFloatingShape shape = {0};
+    MinicRiscvIsa isa = {0};
+    MinicMachineOperand symbol = {0};
+    const size_t chunks = 8U / (sel->xlen / 8U);
+    const char *helper;
+    size_t i, index;
+    if (!minic_core_floating_shape(fn, ins, &shape) ||
+        !minic_riscv_target_isa_load(sel->plan->target, &isa) ||
+        (sel->xlen == 32U && isa.abi != MINIC_RISCV_ABI_ILP32) ||
+        (sel->xlen == 64U && isa.abi != MINIC_RISCV_ABI_LP64) ||
+        !sel->plan->frame->saves_return_address || chunks > 2U)
+        return false;
+    switch (ins->kind) {
+    case MINIC_CORE_INSTRUCTION_DOUBLE_EQUAL: helper = "__eqdf2"; break;
+    case MINIC_CORE_INSTRUCTION_DOUBLE_LESS:
+    case MINIC_CORE_INSTRUCTION_DOUBLE_LESS_EQUAL:
+        helper = "__ledf2"; break;
+    default: return false;
+    }
+    for (index = 0U; index < 2U; ++index) {
+        const MinicCoreValueId value = index ?
+            ins->value.binary.right : ins->value.binary.left;
+        for (i = 0U; i < chunks; ++i)
+            if (!rv_value_chunk(sel, value, i,
+                    RV_A0 + (unsigned)(index * chunks + i), true))
+                return false;
+    }
+    symbol.kind = MINIC_MACHINE_OPERAND_SYMBOL;
+    symbol.value.symbol.name = (char *)helper;
+    symbol.value.symbol.relocation = MINIC_RISCV_MACHINE_RELOC_CALL;
+    if (!rv_emit(sel, MINIC_RISCV_MACHINE_CALL_DIRECT, &symbol, 1U))
+        return false;
+    if (ins->kind == MINIC_CORE_INSTRUCTION_DOUBLE_EQUAL) {
+        if (!rv_rr(sel, MINIC_RISCV_MACHINE_SEQZ,
+                RV_A0, RV_A0)) return false;
+    } else if (ins->kind == MINIC_CORE_INSTRUCTION_DOUBLE_LESS) {
+        if (!rv_rrr(sel, MINIC_RISCV_MACHINE_SLT,
+                RV_A0, RV_A0, RV_ZERO)) return false;
+    } else if (!rv_rri(sel, MINIC_RISCV_MACHINE_SLTI,
+            RV_A0, RV_A0, 1)) return false;
+    return rv_store(sel, ins->result, RV_A0);
+}
+
+/* Dynamic allocation is selected as five adjacent physical CFG stages:
+ * check1, check2, overflow, commit and continuation. BLTU from check1
+ * targets next-next overflow; BGEU from check2 targets next-next commit.
+ * Both branches are provably in range under RISC-V's typed 4KiB contract.
+ * The old finalized ABI frame exclusively determines outgoing call storage. */
+static bool rv_core_dynamic_stack(RvCoreSelection *sel,
+    MinicCoreInstructionId id, const MinicCoreInstruction *ins) {
+    const MinicCoreFunction *fn = sel->plan->core;
+    const MinicRiscvPhysicalFrame *frame = sel->plan->frame;
+    const size_t outgoing = sel->xlen == 32U ?
+        frame->outgoing_size : frame->dynamic_call_area_size;
+    const MinicCoreValueId count = ins->value.operand;
+    const MinicCoreTypeContext *types = fn->type_context;
+    const MinicCoreType *count_type;
+    unsigned result_bytes;
+    bool sign, pointer;
+    MinicMachineOperand branch[3];
+    if (id >= fn->instruction_count || count >= fn->value_count ||
+        types == NULL || !frame->has_dynamic_stack ||
+        outgoing > (size_t)INT32_MAX ||
+        sel->dynamic_check2[id] == SIZE_MAX ||
+        sel->dynamic_commit[id] == SIZE_MAX ||
+        sel->dynamic_continue[id] == SIZE_MAX ||
+        sel->dynamic_overflow[id] == SIZE_MAX ||
+        !rv_type(sel, ins->core_type_id,
+            &result_bytes, &sign, &pointer) || !pointer ||
+        ins->result >= fn->value_count ||
+        fn->values[ins->result].core_type_id != ins->core_type_id)
+        return false;
+    count_type = minic_core_type_get(types,
+        minic_core_type_unqualified(types,
+            fn->values[count].core_type_id));
+    if (count_type == NULL || count_type->kind != MINIC_CORE_TYPE_INTEGER ||
+        !count_type->has_layout ||
+        count_type->size != sel->xlen / 8U ||
+        count_type->value.integer.bit_width != sel->xlen ||
+        count_type->value.integer.is_signed ||
+        count_type->value.integer.is_bool ||
+        !rv_load(sel, count, RV_T0) ||
+        !rv_rr(sel, MINIC_RISCV_MACHINE_MV, RV_T1, RV_T0) ||
+        !rv_rri(sel, MINIC_RISCV_MACHINE_ADDI, RV_T0, RV_T0, 15))
+        return false;
+    branch[0] = rv_reg(sel->xlen, RV_T0, MINIC_MACHINE_REGISTER_READ);
+    branch[1] = rv_reg(sel->xlen, RV_T1, MINIC_MACHINE_REGISTER_READ);
+    branch[2] = rv_target(sel->dynamic_overflow[id], false);
+    if (!rv_emit(sel, MINIC_RISCV_MACHINE_BLTU, branch, 3U) ||
+        !minic_machine_builder_add_successor(&sel->builder,
+            sel->dynamic_overflow[id]) ||
+        !minic_machine_builder_add_successor(&sel->builder,
+            sel->dynamic_check2[id]) ||
+        !minic_machine_builder_set_fallthrough(&sel->builder,
+            sel->dynamic_check2[id]) ||
+        !minic_machine_builder_position_at(&sel->builder,
+            sel->dynamic_check2[id]) ||
+        !rv_li(sel, RV_T1, -16) ||
+        !rv_rrr(sel, MINIC_RISCV_MACHINE_AND,
+            RV_T0, RV_T0, RV_T1) ||
+        !rv_li(sel, RV_T1, (int64_t)outgoing) ||
+        !rv_rrr(sel, MINIC_RISCV_MACHINE_ADD,
+            RV_T2, RV_T0, RV_T1)) return false;
+    branch[0] = rv_reg(sel->xlen, RV_T2, MINIC_MACHINE_REGISTER_READ);
+    branch[1] = rv_reg(sel->xlen, RV_T0, MINIC_MACHINE_REGISTER_READ);
+    branch[2] = rv_target(sel->dynamic_commit[id], false);
+    if (!rv_emit(sel, MINIC_RISCV_MACHINE_BGEU, branch, 3U) ||
+        !minic_machine_builder_add_successor(&sel->builder,
+            sel->dynamic_commit[id]) ||
+        !minic_machine_builder_add_successor(&sel->builder,
+            sel->dynamic_overflow[id]) ||
+        !minic_machine_builder_set_fallthrough(&sel->builder,
+            sel->dynamic_overflow[id]) ||
+        !minic_machine_builder_position_at(&sel->builder,
+            sel->dynamic_commit[id]) ||
+        !rv_rrr(sel, MINIC_RISCV_MACHINE_SUB,
+            RV_SP, RV_SP, RV_T2) ||
+        !rv_li(sel, RV_T0, (int64_t)outgoing) ||
+        !rv_rrr(sel, MINIC_RISCV_MACHINE_ADD,
+            RV_T0, RV_SP, RV_T0) ||
+        !rv_store(sel, ins->result, RV_T0) ||
+        !rv_j(sel, sel->dynamic_continue[id]) ||
+        !minic_machine_builder_position_at(&sel->builder,
+            sel->dynamic_continue[id])) return false;
+    return true;
+}
 static bool rv_core_unary(RvCoreSelection *sel,
     const MinicCoreInstruction *ins) {
     unsigned bytes;
@@ -435,6 +771,279 @@ static bool rv_core_unary(RvCoreSelection *sel,
     return rv_rr(sel, opcode, RV_T0, RV_T0) &&
         rv_normalize(sel, RV_T0, bytes, sign) &&
         rv_store(sel, ins->result, RV_T0);
+}
+
+/* Base-I bit scans need no Zbb instruction.  Each iteration selects a
+ * power-of-two half with a register-controlled shift, so neither a
+ * control-flow island nor a helper call is required.  An all-zero operand
+ * returns the source width, including RV32's two-word uint64_t case. */
+static bool rv_core_bitscan(RvCoreSelection *sel,
+    const MinicCoreInstruction *ins) {
+    unsigned width, scan_width, half, log_half;
+    bool wide32, clz;
+    const MinicCoreFunction *fn = sel->plan->core;
+    const MinicCoreTypeContext *types = fn->type_context;
+    const MinicCoreType *input, *result;
+    if (types == NULL || ins->value.operand >= fn->value_count ||
+        ins->result >= fn->value_count) return false;
+    input = minic_core_type_get(types, minic_core_type_unqualified(types,
+        fn->values[ins->value.operand].core_type_id));
+    result = minic_core_type_get(types, minic_core_type_unqualified(types,
+        ins->core_type_id));
+    if (input == NULL || result == NULL ||
+        input->kind != MINIC_CORE_TYPE_INTEGER ||
+        input->value.integer.is_signed ||
+        result->kind != MINIC_CORE_TYPE_INTEGER ||
+        result->value.integer.bit_width != 32U ||
+        (width = input->value.integer.bit_width) == 0U ||
+        (width != 8U && width != 16U && width != 32U && width != 64U) ||
+        width > 2U * sel->xlen) return false;
+    wide32 = sel->xlen == 32U && width == 64U;
+    clz = ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_CLZ;
+    scan_width = wide32 ? 32U : width;
+    if (wide32) {
+        /* Select high on CLZ, low on CTZ when nonzero.  The other half is
+         * only scanned if the preferred half is all zero.  T4 retains the
+         * optional extra 32 counted bits throughout the inner algorithm. */
+        if (!rv_value_chunk(sel, ins->value.operand, 0U, RV_T0, true) ||
+            !rv_value_chunk(sel, ins->value.operand, 1U, RV_T1, true) ||
+            !rv_rr(sel, MINIC_RISCV_MACHINE_SNEZ, RV_T4,
+                clz ? RV_T1 : RV_T0) ||
+            !rv_rri(sel, MINIC_RISCV_MACHINE_XORI, RV_T4, RV_T4, 1) ||
+            !rv_rri(sel, MINIC_RISCV_MACHINE_SLLI, RV_T4, RV_T4, 5) ||
+            !rv_rr(sel, MINIC_RISCV_MACHINE_SNEZ, RV_T5,
+                clz ? RV_T1 : RV_T0) ||
+            !rv_rrr(sel, MINIC_RISCV_MACHINE_SUB, RV_T5, RV_ZERO, RV_T5) ||
+            !rv_rrr(sel, MINIC_RISCV_MACHINE_AND, RV_T2,
+                clz ? RV_T1 : RV_T0, RV_T5) ||
+            !rv_rr(sel, MINIC_RISCV_MACHINE_NOT, RV_T5, RV_T5) ||
+            !rv_rrr(sel, MINIC_RISCV_MACHINE_AND, RV_T0,
+                clz ? RV_T0 : RV_T1, RV_T5) ||
+            !rv_rrr(sel, MINIC_RISCV_MACHINE_OR, RV_T0, RV_T0, RV_T2))
+            return false;
+    } else {
+        if (!rv_load(sel, ins->value.operand, RV_T0) ||
+            (width < sel->xlen &&
+             !rv_normalize(sel, RV_T0, width / 8U, false))) return false;
+    }
+    if (!rv_li(sel, RV_T1, 0)) return false;
+    half = scan_width / 2U;
+    log_half = 0U;
+    for (unsigned value = half; value > 1U; value >>= 1U)
+        ++log_half;
+    for (; half != 0U; half >>= 1U) {
+        if (clz) {
+            if (!rv_rri(sel, MINIC_RISCV_MACHINE_SRLI,
+                    RV_T2, RV_T0, (int64_t)half) ||
+                !rv_rr(sel, MINIC_RISCV_MACHINE_SNEZ, RV_T3, RV_T2))
+                return false;
+            if ((log_half != 0U &&
+                 !rv_rri(sel, MINIC_RISCV_MACHINE_SLLI,
+                     RV_T3, RV_T3, log_half)) ||
+                !rv_li(sel, RV_T5, half) ||
+                !rv_rrr(sel, MINIC_RISCV_MACHINE_SUB,
+                    RV_T5, RV_T5, RV_T3) ||
+                !rv_rrr(sel, MINIC_RISCV_MACHINE_ADD,
+                    RV_T1, RV_T1, RV_T5)) return false;
+        } else {
+            const uint64_t mask = (UINT64_C(1) << half) - 1U;
+            if (!rv_li(sel, RV_T5, (int64_t)mask) ||
+                !rv_rrr(sel, MINIC_RISCV_MACHINE_AND,
+                    RV_T2, RV_T0, RV_T5) ||
+                !rv_rr(sel, MINIC_RISCV_MACHINE_SEQZ, RV_T3, RV_T2) ||
+                (log_half != 0U &&
+                 !rv_rri(sel, MINIC_RISCV_MACHINE_SLLI,
+                     RV_T3, RV_T3, log_half)) ||
+                !rv_rrr(sel, MINIC_RISCV_MACHINE_ADD,
+                    RV_T1, RV_T1, RV_T3)) return false;
+        }
+        if (!rv_rrr(sel, MINIC_RISCV_MACHINE_SRL, RV_T0, RV_T0, RV_T3))
+            return false;
+        if (log_half != 0U) --log_half;
+    }
+    return rv_rr(sel, MINIC_RISCV_MACHINE_SEQZ, RV_T2, RV_T0) &&
+        rv_rrr(sel, MINIC_RISCV_MACHINE_ADD, RV_T1, RV_T1, RV_T2) &&
+        (!wide32 || rv_rrr(sel, MINIC_RISCV_MACHINE_ADD,
+            RV_T1, RV_T1, RV_T4)) &&
+        rv_store(sel, ins->result, RV_T1);
+}
+
+static bool rv_wide_integer(RvCoreSelection *sel, MinicCoreTypeId id,
+    bool *sign) {
+    const MinicCoreTypeContext *types = sel->plan->core->type_context;
+    const MinicCoreType *type = types == NULL ? NULL :
+        minic_core_type_get(types, minic_core_type_unqualified(types, id));
+    if (sign == NULL || type == NULL || !type->has_layout ||
+        type->kind != MINIC_CORE_TYPE_INTEGER ||
+        type->size != 2U * (sel->xlen / 8U) ||
+        type->value.integer.bit_width != 2U * sel->xlen)
+        return false;
+    *sign = type->value.integer.is_signed;
+    return true;
+}
+
+/* Compiler-rt owns the two-word shift's cross-XLEN carry and arithmetic
+ * sign fill. Valid C shifts have a count below the promoted left width;
+ * all operands use the psABI's ordinary a0/a1,a2 register placement. */
+static bool rv_core_wide_shift(RvCoreSelection *sel,
+    const MinicCoreInstruction *ins) {
+    const MinicCoreFunction *fn = sel->plan->core;
+    const MinicCoreTypeContext *types = fn->type_context;
+    const MinicCoreValueId left = ins->value.binary.left;
+    const MinicCoreValueId right = ins->value.binary.right;
+    const MinicCoreType *count;
+    bool sign, result_sign, count_sign;
+    unsigned count_bytes;
+    bool pointer;
+    const char *helper;
+    MinicMachineOperand symbol = {0};
+    if (types == NULL || left >= fn->value_count ||
+        right >= fn->value_count ||
+        !sel->plan->frame->saves_return_address ||
+        !rv_wide_integer(sel, fn->values[left].core_type_id, &sign) ||
+        !rv_wide_integer(sel, ins->core_type_id, &result_sign) ||
+        sign != result_sign ||
+        !rv_type(sel, fn->values[right].core_type_id,
+            &count_bytes, &count_sign, &pointer) || pointer) return false;
+    count = minic_core_type_get(types, minic_core_type_unqualified(types,
+        fn->values[right].core_type_id));
+    if (count == NULL || count->kind != MINIC_CORE_TYPE_INTEGER ||
+        !rv_value_chunk(sel, left, 0U, RV_A0, true) ||
+        !rv_value_chunk(sel, left, 1U, RV_A0 + 1U, true) ||
+        !rv_load(sel, right, RV_A0 + 2U) ||
+        !rv_normalize(sel, RV_A0 + 2U,
+            count_bytes, count_sign)) return false;
+    if (ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_LEFT)
+        helper = sel->xlen == 32U ? "__ashldi3" : "__ashlti3";
+    else if (ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_RIGHT)
+        helper = sel->xlen == 32U ?
+            (sign ? "__ashrdi3" : "__lshrdi3") :
+            (sign ? "__ashrti3" : "__lshrti3");
+    else return false;
+    symbol.kind = MINIC_MACHINE_OPERAND_SYMBOL;
+    symbol.value.symbol.name = (char *)helper;
+    symbol.value.symbol.relocation = MINIC_RISCV_MACHINE_RELOC_CALL;
+    return rv_emit(sel, MINIC_RISCV_MACHINE_CALL_DIRECT, &symbol, 1U) &&
+        rv_value_chunk(sel, ins->result, 0U, RV_A0, false) &&
+        rv_value_chunk(sel, ins->result, 1U, RV_A0 + 1U, false);
+}
+
+/* Two-GPR values keep an ordinary Core SSA identity; low/high words are
+ * transported with the existing final frame offsets.  Carry/borrow and the
+ * signed high-word comparison need only RVI, never a M/Zbb instruction. */
+static bool rv_core_wide_binary(RvCoreSelection *sel,
+    const MinicCoreInstruction *ins) {
+    const MinicCoreFunction *fn = sel->plan->core;
+    bool left_sign, right_sign, result_sign;
+    uint32_t opcode;
+    if (ins->value.binary.left >= fn->value_count ||
+        ins->value.binary.right >= fn->value_count ||
+        !rv_wide_integer(sel,
+            fn->values[ins->value.binary.left].core_type_id, &left_sign) ||
+        !rv_wide_integer(sel,
+            fn->values[ins->value.binary.right].core_type_id, &right_sign) ||
+        left_sign != right_sign ||
+        !rv_value_chunk(sel, ins->value.binary.left, 0U, RV_T0, true) ||
+        !rv_value_chunk(sel, ins->value.binary.left, 1U, RV_T1, true) ||
+        !rv_value_chunk(sel, ins->value.binary.right, 0U, RV_T2, true) ||
+        !rv_value_chunk(sel, ins->value.binary.right, 1U, RV_T3, true))
+        return false;
+    switch (ins->kind) {
+    case MINIC_CORE_INSTRUCTION_INTEGER_ADD:
+        if (!rv_wide_integer(sel, ins->core_type_id, &result_sign) ||
+            !rv_rrr(sel, MINIC_RISCV_MACHINE_ADD,
+                RV_T4, RV_T0, RV_T2) ||
+            !rv_rrr(sel, MINIC_RISCV_MACHINE_SLTU,
+                RV_T5, RV_T4, RV_T0) ||
+            !rv_rrr(sel, MINIC_RISCV_MACHINE_ADD,
+                RV_T1, RV_T1, RV_T3) ||
+            !rv_rrr(sel, MINIC_RISCV_MACHINE_ADD,
+                RV_T1, RV_T1, RV_T5) ||
+            !rv_rr(sel, MINIC_RISCV_MACHINE_MV,
+                RV_T0, RV_T4)) return false;
+        break;
+    case MINIC_CORE_INSTRUCTION_INTEGER_SUBTRACT:
+        if (!rv_wide_integer(sel, ins->core_type_id, &result_sign) ||
+            !rv_rrr(sel, MINIC_RISCV_MACHINE_SLTU,
+                RV_T5, RV_T0, RV_T2) ||
+            !rv_rrr(sel, MINIC_RISCV_MACHINE_SUB,
+                RV_T0, RV_T0, RV_T2) ||
+            !rv_rrr(sel, MINIC_RISCV_MACHINE_SUB,
+                RV_T1, RV_T1, RV_T3) ||
+            !rv_rrr(sel, MINIC_RISCV_MACHINE_SUB,
+                RV_T1, RV_T1, RV_T5)) return false;
+        break;
+    case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_AND:
+    case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_OR:
+    case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_XOR:
+        if (!rv_wide_integer(sel, ins->core_type_id, &result_sign))
+            return false;
+        opcode = ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_AND ?
+            MINIC_RISCV_MACHINE_AND :
+            ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_OR ?
+            MINIC_RISCV_MACHINE_OR : MINIC_RISCV_MACHINE_XOR;
+        if (!rv_rrr(sel, opcode, RV_T0, RV_T0, RV_T2) ||
+            !rv_rrr(sel, opcode, RV_T1, RV_T1, RV_T3)) return false;
+        break;
+    case MINIC_CORE_INSTRUCTION_SCALAR_EQUAL:
+        if (!rv_rrr(sel, MINIC_RISCV_MACHINE_XOR,
+                RV_T0, RV_T0, RV_T2) ||
+            !rv_rrr(sel, MINIC_RISCV_MACHINE_XOR,
+                RV_T1, RV_T1, RV_T3) ||
+            !rv_rrr(sel, MINIC_RISCV_MACHINE_OR,
+                RV_T0, RV_T0, RV_T1) ||
+            !rv_rr(sel, MINIC_RISCV_MACHINE_SEQZ,
+                RV_T0, RV_T0)) return false;
+        return rv_store(sel, ins->result, RV_T0);
+    case MINIC_CORE_INSTRUCTION_INTEGER_LESS:
+        if (!rv_rrr(sel, left_sign ? MINIC_RISCV_MACHINE_SLT :
+                MINIC_RISCV_MACHINE_SLTU, RV_T4, RV_T1, RV_T3) ||
+            !rv_rrr(sel, MINIC_RISCV_MACHINE_XOR,
+                RV_T5, RV_T1, RV_T3) ||
+            !rv_rr(sel, MINIC_RISCV_MACHINE_SEQZ,
+                RV_T5, RV_T5) ||
+            !rv_rrr(sel, MINIC_RISCV_MACHINE_SLTU,
+                RV_T0, RV_T0, RV_T2) ||
+            !rv_rrr(sel, MINIC_RISCV_MACHINE_AND,
+                RV_T0, RV_T0, RV_T5) ||
+            !rv_rrr(sel, MINIC_RISCV_MACHINE_OR,
+                RV_T0, RV_T0, RV_T4)) return false;
+        return rv_store(sel, ins->result, RV_T0);
+    default:
+        return false;
+    }
+    return rv_value_chunk(sel, ins->result, 0U, RV_T0, false) &&
+        rv_value_chunk(sel, ins->result, 1U, RV_T1, false);
+}
+
+static bool rv_core_wide_unary(RvCoreSelection *sel,
+    const MinicCoreInstruction *ins) {
+    const MinicCoreFunction *fn = sel->plan->core;
+    bool source_sign, result_sign;
+    if (ins->value.operand >= fn->value_count ||
+        !rv_wide_integer(sel,
+            fn->values[ins->value.operand].core_type_id, &source_sign) ||
+        !rv_wide_integer(sel, ins->core_type_id, &result_sign) ||
+        !rv_value_chunk(sel, ins->value.operand, 0U, RV_T0, true) ||
+        !rv_value_chunk(sel, ins->value.operand, 1U, RV_T1, true))
+        return false;
+    switch (ins->kind) {
+    case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_NOT:
+        if (!rv_rr(sel, MINIC_RISCV_MACHINE_NOT, RV_T0, RV_T0) ||
+            !rv_rr(sel, MINIC_RISCV_MACHINE_NOT, RV_T1, RV_T1)) return false;
+        break;
+    case MINIC_CORE_INSTRUCTION_INTEGER_NEGATE:
+        if (!rv_rr(sel, MINIC_RISCV_MACHINE_NEG, RV_T0, RV_T0) ||
+            !rv_rr(sel, MINIC_RISCV_MACHINE_SNEZ, RV_T2, RV_T0) ||
+            !rv_rr(sel, MINIC_RISCV_MACHINE_NEG, RV_T1, RV_T1) ||
+            !rv_rrr(sel, MINIC_RISCV_MACHINE_SUB,
+                RV_T1, RV_T1, RV_T2)) return false;
+        break;
+    default:
+        return false;
+    }
+    return rv_value_chunk(sel, ins->result, 0U, RV_T0, false) &&
+        rv_value_chunk(sel, ins->result, 1U, RV_T1, false);
 }
 static bool rv_core_binary(RvCoreSelection *sel,
     const MinicCoreInstruction *ins) {
@@ -728,6 +1337,56 @@ static uint32_t rv_memory_opcode(const RvCoreSelection *sel,
     }
     return MINIC_RISCV_MACHINE_INVALID;
 }
+/* Raw IEEE payloads and two-word integers can share one byte-exact store
+ * transport. This remains valid for dynamically unaligned/packed pointers;
+ * neither an F/D instruction nor an unaligned RV integer load is needed. */
+static bool rv_core_payload_memory(RvCoreSelection *sel,
+    const MinicCoreInstruction *ins, bool load,
+    MinicCoreValueId address, MinicCoreValueId source, bool is_volatile,
+    const MinicCoreType *type) {
+    const size_t word = sel->xlen / 8U;
+    size_t i, j, chunks;
+    if (type == NULL || !type->has_layout ||
+        !((type->kind == MINIC_CORE_TYPE_FLOAT &&
+            (type->size == 4U || type->size == 8U)) ||
+          (type->kind == MINIC_CORE_TYPE_INTEGER &&
+            type->size == 2U * word &&
+            type->value.integer.bit_width == 2U * sel->xlen)) ||
+        type->size > 2U * word ||
+        !rv_load(sel, address, RV_T0)) return false;
+    chunks = (type->size + word - 1U) / word;
+    for (i = 0U; i < chunks; ++i) {
+        const size_t count = type->size - i * word < word ?
+            type->size - i * word : word;
+        if (load) {
+            if (!rv_li(sel, RV_T1, 0)) return false;
+        } else if (!rv_value_chunk(sel, source, i, RV_T1, true)) {
+            return false;
+        }
+        for (j = 0U; j < count; ++j) {
+            if (load) {
+                if (!rv_byte_transfer(sel, true, RV_T2, RV_T0,
+                        i * word + j, is_volatile) ||
+                    (j != 0U &&
+                     !rv_rri(sel, MINIC_RISCV_MACHINE_SLLI,
+                         RV_T2, RV_T2, (int64_t)(j * 8U))) ||
+                    !rv_rrr(sel, MINIC_RISCV_MACHINE_OR,
+                        RV_T1, RV_T1, RV_T2)) return false;
+            } else {
+                if ((j == 0U
+                        ? !rv_rr(sel, MINIC_RISCV_MACHINE_MV,
+                            RV_T2, RV_T1)
+                        : !rv_rri(sel, MINIC_RISCV_MACHINE_SRLI,
+                            RV_T2, RV_T1, (int64_t)(j * 8U))) ||
+                    !rv_byte_transfer(sel, false, RV_T2, RV_T0,
+                        i * word + j, is_volatile)) return false;
+            }
+        }
+        if (load && !rv_value_chunk(sel, ins->result, i,
+                RV_T1, false)) return false;
+    }
+    return true;
+}
 static bool rv_core_memory(RvCoreSelection *sel,
     const MinicCoreInstruction *ins) {
     const MinicCoreFunction *fn = sel->plan->core;
@@ -751,6 +1410,15 @@ static bool rv_core_memory(RvCoreSelection *sel,
     uint32_t opcode;
     MinicMachineOperand ops[2];
     const MinicCoreType *memory_type;
+    memory_type = fn->type_context == NULL ? NULL :
+        minic_core_type_get(fn->type_context,
+            minic_core_type_unqualified(fn->type_context, type_id));
+    if (!atomic && memory_type != NULL &&
+        (memory_type->kind == MINIC_CORE_TYPE_FLOAT ||
+         (memory_type->kind == MINIC_CORE_TYPE_INTEGER &&
+          memory_type->size == 2U * (sel->xlen / 8U))))
+        return rv_core_payload_memory(sel, ins, load, address,
+            source, is_volatile, memory_type);
     /* Core admits memory_order=0 (relaxed) only. Naturally aligned RV32I /
      * RV64I scalar load/store are atomic at those widths; stronger orders
      * would require a separate typed FENCE policy, never silent downgrading. */
@@ -836,11 +1504,68 @@ static bool rv_core_pointer_offset(RvCoreSelection *sel,
 }
 static bool rv_core_conversion(RvCoreSelection *sel,
     const MinicCoreInstruction *ins) {
-    unsigned bytes;
-    bool sign, pointer;
-    return rv_type(sel, ins->core_type_id, &bytes, &sign, &pointer) &&
-        rv_load(sel, ins->value.operand, RV_T0) &&
-        rv_normalize(sel, RV_T0, bytes, sign) &&
+    const MinicCoreFunction *fn = sel->plan->core;
+    const size_t word = sel->xlen / 8U;
+    const bool conversion = ins->kind ==
+        MINIC_CORE_INSTRUCTION_INTEGER_CONVERSION;
+    MinicCoreIntegerConversionShape cast = {0};
+    MinicCoreScalarBitcastShape bitcast = {0};
+    size_t source_bytes, target_bytes;
+    bool source_signed, target_signed, target_bool, source_pointer;
+    if (conversion) {
+        if (!minic_core_integer_conversion_shape(fn, ins, &cast))
+            return false;
+        source_bytes = cast.source_bytes;
+        target_bytes = cast.target_bytes;
+        source_signed = cast.source_signed;
+        target_signed = cast.target_signed;
+        target_bool = cast.target_bool;
+        source_pointer = false;
+    } else {
+        if (!minic_core_scalar_bitcast_shape(fn, ins, &bitcast))
+            return false;
+        source_bytes = bitcast.source_bytes;
+        target_bytes = bitcast.target_bytes;
+        source_signed = bitcast.source_signed;
+        target_signed = bitcast.target_signed;
+        target_bool = bitcast.target_bool;
+        source_pointer = bitcast.source_pointer;
+    }
+    /* RV32's historical pointer->long long bitcast sign-extends its pointer;
+     * RV64 has no qualified pointer<->__int128 bitcast. */
+    if (source_bytes == 0U || target_bytes == 0U ||
+        source_bytes > 2U * word || target_bytes > 2U * word ||
+        (!conversion && sel->xlen == 64U &&
+         (source_bytes > word || target_bytes > word)) ||
+        !rv_value_chunk(sel, ins->value.operand, 0U, RV_T0, true))
+        return false;
+    if (source_bytes > word) {
+        if (!rv_value_chunk(sel, ins->value.operand, 1U, RV_T1, true))
+            return false;
+    } else if (!source_pointer &&
+               !rv_normalize(sel, RV_T0, (unsigned)source_bytes,
+                   source_signed)) return false;
+    if (target_bool) {
+        if (source_bytes > word &&
+            !rv_rrr(sel, MINIC_RISCV_MACHINE_OR,
+                RV_T0, RV_T0, RV_T1)) return false;
+        if (!rv_rr(sel, MINIC_RISCV_MACHINE_SNEZ,
+            RV_T0, RV_T0)) return false;
+    }
+    if (target_bytes > word) {
+        if (source_bytes <= word &&
+            (conversion ? source_signed : source_pointer) &&
+            !rv_rri(sel, MINIC_RISCV_MACHINE_SRAI,
+                RV_T1, RV_T0, (int64_t)(sel->xlen - 1U)))
+            return false;
+        if (source_bytes <= word &&
+            !(conversion ? source_signed : source_pointer) &&
+            !rv_li(sel, RV_T1, 0)) return false;
+        return rv_value_chunk(sel, ins->result, 0U, RV_T0, false) &&
+            rv_value_chunk(sel, ins->result, 1U, RV_T1, false);
+    }
+    return rv_normalize(sel, RV_T0, (unsigned)target_bytes,
+               target_signed) &&
         rv_store(sel, ins->result, RV_T0);
 }
 static bool rv_core_object_address(RvCoreSelection *sel,
@@ -1202,6 +1927,34 @@ static bool rv_core_fixed_register_read(RvCoreSelection *sel,
     return rv_store(sel, ins->result, RV_T0);
 }
 
+static bool rv_core_fixed_register_write(RvCoreSelection *sel,
+    const MinicCoreInstruction *ins) {
+    const MinicCoreFunction *fn = sel->plan->core;
+    const MinicCoreFixedRegisterBinding *binding;
+    const size_t id = ins->value.fixed_register_write.binding_id;
+    const MinicCoreValueId source = ins->value.fixed_register_write.source;
+    unsigned reg, bytes;
+    bool sign, pointer;
+    if (id >= fn->fixed_register_binding_count ||
+        fn->fixed_register_bindings == NULL || source >= fn->value_count ||
+        ins->result != MINIC_CORE_VALUE_INVALID) return false;
+    binding = &fn->fixed_register_bindings[id];
+    if (binding->is_local || binding->register_name == NULL ||
+        binding->core_type_id != fn->values[source].core_type_id ||
+        sel->plan->target->fixed_register_write == NULL ||
+        !sel->plan->target->fixed_register_write(
+            binding->register_name, binding->register_name_length) ||
+        !minic_riscv_gpr_id(binding->register_name,
+            binding->register_name_length, &reg) ||
+        reg == RV_ZERO || reg == RV_SP || reg == RV_T0 ||
+        !rv_type(sel, binding->core_type_id, &bytes, &sign, &pointer) ||
+        bytes != sel->xlen / 8U ||
+        !rv_load(sel, source, RV_T0)) return false;
+    (void)sign;
+    (void)pointer;
+    return rv_rr(sel, MINIC_RISCV_MACHINE_MV, reg, RV_T0);
+}
+
 /* Preserve exactly the source-owned, sealed target asm event.  The full
  * structured register allocator and asm-goto CFG binding have not yet been
  * migrated: admitting them here without real bindings would miscompile
@@ -1231,15 +1984,23 @@ static bool rv_core_unbound_source_asm(RvCoreSelection *sel,
 static bool rv_core_instruction(RvCoreSelection *sel,
     MinicCoreInstructionId instruction_id,
     const MinicCoreInstruction *ins) {
+    bool wide_signed;
     switch (ins->kind) {
     case MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT:
         return rv_core_constant(sel, ins);
+    case MINIC_CORE_INSTRUCTION_FLOATING_CONSTANT:
+        return rv_core_float_constant(sel, ins);
     case MINIC_CORE_INSTRUCTION_PARAMETER:
         return rv_core_parameter(sel, ins);
     case MINIC_CORE_INSTRUCTION_PARAMETER_OBJECT:
         return rv_core_parameter_object(sel, ins);
     case MINIC_CORE_INSTRUCTION_FIXED_REGISTER_READ:
         return rv_core_fixed_register_read(sel, ins);
+    case MINIC_CORE_INSTRUCTION_FIXED_REGISTER_WRITE:
+        return rv_core_fixed_register_write(sel, ins);
+    case MINIC_CORE_INSTRUCTION_INTEGER_CLZ:
+    case MINIC_CORE_INSTRUCTION_INTEGER_CTZ:
+        return rv_core_bitscan(sel, ins);
     case MINIC_CORE_INSTRUCTION_INTEGER_ADD:
     case MINIC_CORE_INSTRUCTION_INTEGER_SUBTRACT:
     case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_AND:
@@ -1250,10 +2011,42 @@ static bool rv_core_instruction(RvCoreSelection *sel,
     case MINIC_CORE_INSTRUCTION_INTEGER_LESS:
     case MINIC_CORE_INSTRUCTION_POINTER_LESS:
     case MINIC_CORE_INSTRUCTION_SCALAR_EQUAL:
+        if (ins->value.binary.left < sel->plan->core->value_count &&
+            rv_wide_integer(sel, sel->plan->core->values[
+                ins->value.binary.left].core_type_id, &wide_signed))
+            return (ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_LEFT ||
+                    ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_RIGHT)
+                ? rv_core_wide_shift(sel, ins) : rv_core_wide_binary(sel, ins);
         return rv_core_binary(sel, ins);
+    case MINIC_CORE_INSTRUCTION_INTEGER_MULTIPLY:
+    case MINIC_CORE_INSTRUCTION_INTEGER_DIVIDE:
+    case MINIC_CORE_INSTRUCTION_INTEGER_REMAINDER:
+    case MINIC_CORE_INSTRUCTION_FLOAT_ADD:
+    case MINIC_CORE_INSTRUCTION_FLOAT_SUBTRACT:
+    case MINIC_CORE_INSTRUCTION_FLOAT_MULTIPLY:
+    case MINIC_CORE_INSTRUCTION_FLOAT_DIVIDE:
+    case MINIC_CORE_INSTRUCTION_DOUBLE_ADD:
+    case MINIC_CORE_INSTRUCTION_DOUBLE_SUBTRACT:
+    case MINIC_CORE_INSTRUCTION_DOUBLE_MULTIPLY:
+    case MINIC_CORE_INSTRUCTION_DOUBLE_DIVIDE:
+        return rv_core_runtime_binary(sel, ins);
+    case MINIC_CORE_INSTRUCTION_DOUBLE_EQUAL:
+    case MINIC_CORE_INSTRUCTION_DOUBLE_LESS:
+    case MINIC_CORE_INSTRUCTION_DOUBLE_LESS_EQUAL:
+        return rv_core_runtime_double_compare(sel, ins);
+    case MINIC_CORE_INSTRUCTION_DOUBLE_NEGATE:
+    case MINIC_CORE_INSTRUCTION_FLOAT_TO_DOUBLE:
+    case MINIC_CORE_INSTRUCTION_DOUBLE_TO_FLOAT:
+    case MINIC_CORE_INSTRUCTION_INTEGER_TO_DOUBLE:
+    case MINIC_CORE_INSTRUCTION_DOUBLE_TO_INTEGER:
+        return rv_core_runtime_unary_float(sel, ins);
     case MINIC_CORE_INSTRUCTION_INTEGER_NEGATE:
     case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_NOT:
     case MINIC_CORE_INSTRUCTION_SCALAR_IS_ZERO:
+        if (ins->value.operand < sel->plan->core->value_count &&
+            rv_wide_integer(sel, sel->plan->core->values[
+                ins->value.operand].core_type_id, &wide_signed))
+            return rv_core_wide_unary(sel, ins);
         return rv_core_unary(sel, ins);
     case MINIC_CORE_INSTRUCTION_INTEGER_CONVERSION:
     case MINIC_CORE_INSTRUCTION_SCALAR_BITCAST:
@@ -1279,6 +2072,8 @@ static bool rv_core_instruction(RvCoreSelection *sel,
         return rv_core_record(sel, ins);
     case MINIC_CORE_INSTRUCTION_CALL_FRAME_ADDRESS:
         return rv_core_call_frame_address(sel, ins);
+    case MINIC_CORE_INSTRUCTION_DYNAMIC_STACK_ALLOC:
+        return rv_core_dynamic_stack(sel, instruction_id, ins);
     case MINIC_CORE_INSTRUCTION_VARIADIC_ARGUMENT_ADDRESS:
         return rv_core_variadic_address(sel, ins);
     case MINIC_CORE_INSTRUCTION_CALL:
@@ -1456,8 +2251,10 @@ bool minic_riscv_machine_select_core_subset(MinicMachineFunction *machine,
         (core->value_count != 0U && plan->value_offsets == NULL) ||
         (core->object_count != 0U && plan->object_offsets == NULL) ||
         !minic_machine_function_initialize(machine, target, core->name,
-            minic_core_function_calling_convention(core)))
+            isa.codegen_features))
         return false;
+    machine->calling_convention =
+        minic_core_function_calling_convention(core);
     machine->frame_size = frame->frame_size;
     machine->frame_alignment = 16U;
     machine->has_dynamic_stack = frame->has_dynamic_stack;
@@ -1472,11 +2269,28 @@ bool minic_riscv_machine_select_core_subset(MinicMachineFunction *machine,
         core->block_count * sizeof(*sel.conditional_fallthroughs));
     sel.conditional_others = malloc(
         core->block_count * sizeof(*sel.conditional_others));
+    sel.dynamic_check2 = malloc(core->instruction_count *
+        sizeof(*sel.dynamic_check2));
+    sel.dynamic_commit = malloc(core->instruction_count *
+        sizeof(*sel.dynamic_commit));
+    sel.dynamic_continue = malloc(core->instruction_count *
+        sizeof(*sel.dynamic_continue));
+    sel.dynamic_overflow = malloc(core->instruction_count *
+        sizeof(*sel.dynamic_overflow));
     if (sel.core_blocks == NULL || sel.far_entries == NULL ||
         sel.reachable == NULL ||
         sel.conditional_fallthroughs == NULL ||
-        sel.conditional_others == NULL)
+        sel.conditional_others == NULL ||
+        (core->instruction_count != 0U &&
+         (sel.dynamic_check2 == NULL || sel.dynamic_commit == NULL ||
+          sel.dynamic_continue == NULL || sel.dynamic_overflow == NULL)))
         goto done;
+    for (i = 0U; i < core->instruction_count; ++i) {
+        sel.dynamic_check2[i] = SIZE_MAX;
+        sel.dynamic_commit[i] = SIZE_MAX;
+        sel.dynamic_continue[i] = SIZE_MAX;
+        sel.dynamic_overflow[i] = SIZE_MAX;
+    }
     if (!minic_core_function_mark_reachable_blocks(
             core, sel.reachable, core->block_count)) goto done;
     if (!minic_machine_builder_create_block(&sel.builder,
@@ -1494,6 +2308,27 @@ bool minic_riscv_machine_select_core_subset(MinicMachineFunction *machine,
             block->local_label_symbol, block->indirect_entry, false,
             &sel.core_blocks[core_id]) ||
             !minic_machine_builder_mark_core_block(&sel.builder, core_id)) goto done;
+        /* Each checked branch reaches only its next-next physical block.
+         * The failure island splits check2 and commit but cannot be entered
+         * by the successful path; consecutive allocations stay contiguous. */
+        {
+            size_t j;
+            for (j = 0U; j < block->instruction_count; ++j) {
+                const MinicCoreInstructionId ins_id = block->instructions[j];
+                if (ins_id >= core->instruction_count) goto done;
+                if (core->instructions[ins_id].kind !=
+                    MINIC_CORE_INSTRUCTION_DYNAMIC_STACK_ALLOC) continue;
+                if (!minic_machine_builder_create_block(&sel.builder,
+                        NULL, false, true, &sel.dynamic_check2[ins_id]) ||
+                    !minic_machine_builder_create_block(&sel.builder,
+                        NULL, false, true, &sel.dynamic_overflow[ins_id]) ||
+                    !minic_machine_builder_create_block(&sel.builder,
+                        NULL, false, true, &sel.dynamic_commit[ins_id]) ||
+                    !minic_machine_builder_create_block(&sel.builder,
+                        NULL, false, true, &sel.dynamic_continue[ins_id]))
+                    goto done;
+            }
+        }
         if (block->terminator.kind ==
             MINIC_CORE_TERMINATOR_CONDITIONAL_BRANCH) {
             if (!minic_machine_builder_create_block(&sel.builder,
@@ -1523,10 +2358,26 @@ bool minic_riscv_machine_select_core_subset(MinicMachineFunction *machine,
             if (instruction_id >= core->instruction_count) goto done;
             minic_machine_builder_set_origin(&sel.builder, i, instruction_id);
             if (!rv_core_instruction(&sel, instruction_id,
-                    &core->instructions[instruction_id])) goto done;
+                    &core->instructions[instruction_id])) {
+                if (getenv("MINIC_RV_MACHINE_TRACE") != NULL)
+                    (void)fprintf(stderr,
+                        "RV%u_TYPED_REJECT function=%s block=%zu instruction=%u kind=%u\n",
+                        sel.xlen, core->name, i, (unsigned)instruction_id,
+                        (unsigned)core->instructions[instruction_id].kind);
+                goto done;
+            }
             minic_machine_builder_clear_origin(&sel.builder);
         }
         if (!rv_core_terminator(&sel, i)) goto done;
+        for (j = 0U; j < block->instruction_count; ++j) {
+            const MinicCoreInstructionId instruction_id =
+                block->instructions[j];
+            if (sel.dynamic_overflow[instruction_id] == SIZE_MAX) continue;
+            if (!minic_machine_builder_position_at(&sel.builder,
+                    sel.dynamic_overflow[instruction_id]) ||
+                !rv_emit(&sel, MINIC_RISCV_MACHINE_EBREAK, NULL, 0U))
+                goto done;
+        }
     }
     if (!minic_riscv_machine_select_epilogue(&sel.builder, frame,
             sel.epilogue_block)) goto done;
@@ -1543,6 +2394,10 @@ done:
     free(sel.reachable);
     free(sel.conditional_fallthroughs);
     free(sel.conditional_others);
+    free(sel.dynamic_check2);
+    free(sel.dynamic_commit);
+    free(sel.dynamic_continue);
+    free(sel.dynamic_overflow);
     if (!success) minic_machine_function_destroy(machine);
     return success;
 }

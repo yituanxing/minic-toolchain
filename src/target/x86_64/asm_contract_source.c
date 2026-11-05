@@ -4105,13 +4105,11 @@ static bool x86_linux_rep_stosb_alternative_source(const MinicTargetInvocation *
                        !minic_type_equal(expr->type, minic_type_unsigned_long())))
             return false;
     }
-    if (expr->kind == MINIC_EXPRESSION_FIXED_REGISTER)
-        stack = minic_c0_program_fixed_register_binding(
-            program, expr->value.fixed_register_binding_id);
-    else if (expr->kind == MINIC_EXPRESSION_LOCAL)
-        stack = minic_c0_program_local_fixed_register_binding(
-            program, expr->value.local_id);
-    else return false;
+    /* Physical +r RSP is a global fixed-register dependency, not an
+     * addressable local or a scalar input masquerading as an output. */
+    if (expr->kind != MINIC_EXPRESSION_FIXED_REGISTER) return false;
+    stack = minic_c0_program_fixed_register_binding(
+        program, expr->value.fixed_register_binding_id);
     if (!stack || !stack->register_name ||
         strcmp(stack->register_name, "rsp") != 0)
         return false;
@@ -4121,7 +4119,7 @@ static bool x86_linux_rep_stosb_alternative_source(const MinicTargetInvocation *
     contract->operand_count = 4U;
     contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE;
     contract->kinds[1] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE;
-    contract->kinds[2] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+    contract->kinds[2] = MINIC_CORE_STRUCTURED_INLINE_ASM_FIXED_REGISTER_READWRITE;
     contract->kinds[3] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
     contract->implicit_memory_effect = true;
     return true;
@@ -4815,20 +4813,16 @@ static bool x86_linux_rep_movsb_alternative_source(const MinicTargetInvocation *
                 !minic_type_is_pointer(expression->type)))
             return false;
     }
-    if (expression->kind == MINIC_EXPRESSION_FIXED_REGISTER)
-        stack_binding = minic_c0_program_fixed_register_binding(
-            program, expression->value.fixed_register_binding_id);
-    else if (expression->kind == MINIC_EXPRESSION_LOCAL)
-        stack_binding = minic_c0_program_local_fixed_register_binding(
-            program, expression->value.local_id);
-    else return false;
+    if (expression->kind != MINIC_EXPRESSION_FIXED_REGISTER) return false;
+    stack_binding = minic_c0_program_fixed_register_binding(
+        program, expression->value.fixed_register_binding_id);
     if (!stack_binding || !stack_binding->register_name ||
         strcmp(stack_binding->register_name, "rsp") != 0)
         return false;
     contract->operand_count = 4U;
     for (i = 0U; i < 4U; ++i)
         contract->kinds[i] =
-            i == 3U ? MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT :
+            i == 3U ? MINIC_CORE_STRUCTURED_INLINE_ASM_FIXED_REGISTER_READWRITE :
                       MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE;
     contract->implicit_memory_effect = true;
     return true;
@@ -4998,11 +4992,15 @@ static bool x86_linux_put_user_call_source(const MinicTargetInvocation *invocati
         return false;
     contract->operand_count = 5U;
     contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
-    contract->kinds[1] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+    contract->kinds[1] = MINIC_CORE_STRUCTURED_INLINE_ASM_FIXED_REGISTER_READWRITE;
     contract->kinds[2] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
     contract->kinds[3] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
     contract->kinds[4] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
     contract->implicit_memory_effect = true;
+    /* Numeric-template normalization rewrites %[size] to Core operand 4.
+     * The production selector independently proves that exact normalized
+     * spelling before selecting a private helper CALL. */
+    contract->target_machine_form_variant = form == 0x100U ? 0x200U : 0x800U;
     return true;
 }
 
@@ -5070,10 +5068,11 @@ static bool x86_linux_get_user_call_source(const MinicTargetInvocation *invocati
     contract->operand_count = 5U;
     contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
     contract->kinds[1] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
-    contract->kinds[2] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+    contract->kinds[2] = MINIC_CORE_STRUCTURED_INLINE_ASM_FIXED_REGISTER_READWRITE;
     contract->kinds[3] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
     contract->kinds[4] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
     contract->implicit_memory_effect = true;
+    contract->target_machine_form_variant = form == 1U ? 3U : 4U;
     return true;
 }
 

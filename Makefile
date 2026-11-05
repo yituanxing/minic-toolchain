@@ -302,13 +302,7 @@ MINIC_SOURCES := \
 	src/target/loongarch64/asm_contract_source.c \
 	src/target/loongarch64/simd_asm.c \
 	src/target/loongarch64/simd_source_policy.c \
-	src/target/loongarch64/block_emit.c \
-	src/target/loongarch64/residual_emit.c \
-	src/target/loongarch64/scalar_normalize.c \
 	src/target/loongarch64/memory_emit.c \
-	src/target/loongarch64/call_emit.c \
-	src/target/loongarch64/integer_emit.c \
-	src/target/loongarch64/fp_emit.c \
 	src/target/loongarch64/frame_emit.c \
 	tools/minic-cc/main.c
 MINIC_OBJECTS := $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(MINIC_SOURCES))
@@ -2357,6 +2351,22 @@ check-machine-core-coverage:
 
 check-fast: check-machine-core-coverage
 
+.PHONY: check-machine-production-preflight
+check-machine-production-preflight:
+	mkdir -p "$(BUILD_DIR)/tests"
+	$(CC) -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror $(MINIC_INCLUDES) \
+	  tests/target/machine_production_preflight_test.c \
+	  src/core/core_type.c \
+	  src/target/common/machine_ir.c \
+	  src/target/common/machine_builder.c \
+	  src/target/common/machine_ir_verify.c \
+	  src/target/common/machine_core_coverage.c \
+	  src/target/common/machine_gnu_asm.c \
+	  -o "$(BUILD_DIR)/tests/machine-production-preflight"
+	"$(BUILD_DIR)/tests/machine-production-preflight"
+
+check-fast: check-machine-production-preflight
+
 .PHONY: check-machine-source-asm-template
 check-machine-source-asm-template:
 	mkdir -p "$(BUILD_DIR)/tests"
@@ -2458,11 +2468,15 @@ check-loong-machine-mir-production: $(MINIC_CC_BINARY)
 	  --minic-cc "$(abspath $(MINIC_CC_BINARY))" \
 	  --build-dir "$(abspath $(BUILD_DIR))" --host-cc "$(CC)"
 
-# Run each still-legacy target against its frozen bytes; LoongArch64 must
-# instead execute the live typed writer. The all-five production gate above
-# remains the final no-legacy milestone after the other four switch.
+# RV32 production is now one live typed writer with no old golden fallback.
+# The remaining legacy targets still require their frozen-byte contracts;
+# the all-five production gate is the final no-legacy milestone.
 check-mir-migration-current: $(MINIC_CC_BINARY)
-	@for arch in riscv32 riscv64 x86_64 aarch64; do \
+	python3 tests/compiler/mir-migration/probe_machine_ir.py \
+	  --mode production --targets riscv32 \
+	  --minic-cc "$(abspath $(MINIC_CC_BINARY))" \
+	  --build-dir "$(abspath $(BUILD_DIR))" --host-cc "$(CC)"
+	@for arch in riscv64 x86_64 aarch64; do \
 	  python3 tests/compiler/mir-migration/probe_machine_ir.py \
 	    --mode golden --targets "$$arch" \
 	    --minic-cc "$(abspath $(MINIC_CC_BINARY))" \
@@ -2494,6 +2508,7 @@ check-a64-machine-mir-frame-select:
 	  src/target/aarch64/machine_opcode.c \
 	  src/target/aarch64/machine_gnu_asm.c \
 	  src/target/aarch64/machine_source_asm.c \
+	  src/target/common/machine_source_asm_template.c \
 	  -o "$(BUILD_DIR)/tests/a64-machine-mir-frame-select"
 	"$(BUILD_DIR)/tests/a64-machine-mir-frame-select"
 
@@ -2558,6 +2573,7 @@ check-a64-machine-core-select:
 	  src/target/common/machine_ir_verify.c \
 	  src/target/common/machine_gnu_asm.c \
 	  src/target/common/machine_core_coverage.c \
+	  src/target/common/machine_source_asm_template.c \
 	  src/target/common/lp64_scalar.c \
 	  src/target/common/lp64_frame.c \
 	  src/target/common/lp64_aggregate.c \
@@ -2639,6 +2655,7 @@ check-a64-machine-source-asm:
 	$(CC) -std=c11 -Wall -Wextra -Wpedantic -Werror $(MINIC_INCLUDES) \
 	  tests/target/aarch64/machine_source_asm_test.c \
 	  src/target/aarch64/machine_source_asm.c \
+	  src/target/common/machine_source_asm_template.c \
 	  -o "$(BUILD_DIR)/tests/a64-machine-source-asm"
 	"$(BUILD_DIR)/tests/a64-machine-source-asm"
 
@@ -2991,6 +3008,7 @@ check-loong-scalar-normalized-seal: $(MINIC_CC_BINARY)
 	$(CC) $(CPPFLAGS) $(MINIC_INCLUDES) $(MINIC_CFLAGS) \
 	  -ffunction-sections -fdata-sections -Wl,--gc-sections \
 	  tests/compiler/c0/probe-loong-scalar-normalized-seal.c \
+	  src/target/loongarch64/machine_asm_form.c \
 	  src/target/loongarch64/asm_contract.c \
 	  src/target/loongarch64/asm_contract_source.c $(MINIC_LDFLAGS) \
 	  -o "$(BUILD_DIR)/tests/compiler/c0/loong-scalar-normalized-seal"

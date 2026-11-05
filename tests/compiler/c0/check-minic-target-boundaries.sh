@@ -277,7 +277,7 @@ for header in \
   src/target/aarch64/codegen.h \
   src/target/aarch64/block_emit.h \
   src/target/loongarch64/codegen.h \
-  src/target/loongarch64/block_emit.h; do
+  src/target/loongarch64/machine_select.h; do
   lacks "$header" 'frontend/ast.h'
 done
 has src/target/common/linux_jump_label_source.h 'minic_multi_qualify_linux_jump_label_asm_goto('

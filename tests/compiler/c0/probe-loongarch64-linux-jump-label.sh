@@ -63,12 +63,12 @@ if test -n "${MINIC_JUMP_BASELINE_CC:-}"; then
     fi
     echo 'MINIC_LOONGARCH64_JUMP_LABEL_DIFF=PASS asm_byte_identical=1'
 fi
-grep -Fq '1: nop' "$work/jump.s"
-grep -Fq '1: b .Lmini_loong_' "$work/jump.s"
-test "$(grep -Fc '.pushsection __jump_table,"aw"' "$work/jump.s")" -eq 3
-test "$(grep -Fc '.balign 8' "$work/jump.s")" -eq 3
-grep -Fq '.quad local_key - .' "$work/jump.s"
-grep -Fq '.quad external_key - .' "$work/jump.s"
+grep -Eq '1:[[:space:]]+nop' "$work/jump.s"
+grep -Eq '1:[[:space:]]+b[[:space:]]+\.Luser_' "$work/jump.s"
+test "$(grep -Ec '\.pushsection[[:space:]]+__jump_table,[[:space:]]*"aw"' "$work/jump.s")" -eq 3
+test "$(grep -Ec '\.align[[:space:]]+3' "$work/jump.s")" -eq 3
+grep -Eq '\.quad[[:space:]]+local_key[[:space:]]*-[[:space:]]*\.' "$work/jump.s"
+grep -Eq '\.quad[[:space:]]+external_key[[:space:]]*-[[:space:]]*\.' "$work/jump.s"
 echo 'MINIC_LOONGARCH64_JUMP_LABEL_SHAPE=PASS nop=2 branch=1 PREL32=3 PREL64=3 symbolic_inline_clone=1'
 
 cross=${LOONGARCH64_CC:-loongarch64-linux-gnu-gcc-13}

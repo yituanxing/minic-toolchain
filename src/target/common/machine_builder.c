@@ -172,6 +172,32 @@ bool minic_machine_builder_emit_selected(MinicMachineBuilder *builder,
     return machine_builder_append(builder, &instruction);
 }
 
+bool minic_machine_builder_seal_selected_source_asm(
+    MinicMachineBuilder *builder, uint32_t target_machine_form_id,
+    uint32_t target_machine_form_variant, uint64_t source_asm_unique_id) {
+    MinicMachineBlock *block;
+    MinicMachineInstruction *selected;
+    if (builder == NULL || builder->function == NULL ||
+        !builder->has_position || !builder->has_core_origin ||
+        target_machine_form_id == 0U ||
+        builder->current_block >= builder->function->block_count)
+        return false;
+    block = &builder->function->blocks[builder->current_block];
+    if (block->instruction_count == 0U) return false;
+    selected = &block->instructions[block->instruction_count - 1U];
+    if (selected->kind != MINIC_MACHINE_INSTRUCTION_SELECTED ||
+        !selected->has_core_origin ||
+        selected->core_block_id != builder->origin_block ||
+        selected->core_instruction_id != builder->origin_instruction ||
+        selected->has_selected_source_asm_seal) return false;
+    selected->has_selected_source_asm_seal = true;
+    selected->source_asm_machine_form_id = target_machine_form_id;
+    selected->source_asm_machine_form_variant = target_machine_form_variant;
+    selected->has_source_asm_unique_id = source_asm_unique_id != 0U;
+    selected->source_asm_unique_id = source_asm_unique_id;
+    return true;
+}
+
 bool minic_machine_builder_emit_compiler_barrier(
     MinicMachineBuilder *builder) {
     MinicMachineInstruction instruction = {0};

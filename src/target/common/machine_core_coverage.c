@@ -139,6 +139,62 @@ static bool machine_source_asm_matches_core(
             machine_instruction->source_asm_unique_id;
 }
 
+/* A target-qualified source ASM may be fully selected into real physical
+ * opcodes. Exactly one effect-bearing SELECTED instruction seals the Core
+ * occurrence; the remaining 1:N transport instructions retain ordinary
+ * Core origin. Source text is never copied into an opcode. Target-specific
+ * MachineVerifier independently proves opcode/form/operands/effects, while
+ * this gate proves the identity and source-mandated observable effects. */
+static bool machine_selected_asm_matches_core(
+    const MinicCoreFunction *core, const MinicCoreInstruction *instruction,
+    const MinicMachineFunction *machine,
+    const MinicMachineInstruction *selected,
+    const MinicMachineCoreCoveragePolicy *policy) {
+    const MinicCoreInlineAsm *source;
+    MinicCoreInlineAsmId id;
+    if (instruction->kind != MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM ||
+        !selected->has_selected_source_asm_seal ||
+        selected->kind != MINIC_MACHINE_INSTRUCTION_SELECTED ||
+        selected->source_asm_template != NULL ||
+        selected->source_asm_length != 0U)
+        return false;
+    id = instruction->value.structured_inline_asm.inline_asm_id;
+    if (id >= core->inline_asm_count || core->inline_asms == NULL)
+        return false;
+    source = &core->inline_asms[id];
+    return policy != NULL && policy->prove_selected_source_asm != NULL &&
+        source->template_text != NULL &&
+        source->operand_plan_owner == MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED &&
+        source->target_machine_form_id != 0U &&
+        !source->is_goto &&
+        /* Clobber and immediate role mappings are target-dependent. The
+         * mandatory independent proof callback receives the full Core
+         * descriptor and must verify them against physical registers and
+         * relocations instead of Common guessing an ISA contract. */
+        source->deferred_immediate_symbol == NULL &&
+        instruction->value.structured_inline_asm.operand_count <=
+            MINIC_CORE_STRUCTURED_INLINE_ASM_OPERAND_LIMIT &&
+        source->target_machine_form_id ==
+            selected->source_asm_machine_form_id &&
+        source->target_machine_form_variant ==
+            selected->source_asm_machine_form_variant &&
+        selected->has_source_asm_unique_id ==
+            (source->source_asm_unique_id != 0U) &&
+        source->source_asm_unique_id == selected->source_asm_unique_id &&
+        /* Register-only compiler-selected ASM (e.g. A64 rbit) cannot carry
+         * the memory-only VOLATILE flag in physical opcode contracts. Its
+         * mandatory source seal itself is an observable scheduling effect.
+         * Actual memory operations must retain hardware volatility. */
+        (!source->is_volatile ||
+         (selected->effects & (MINIC_MACHINE_EFFECT_MEMORY_READ |
+                               MINIC_MACHINE_EFFECT_MEMORY_WRITE)) == 0U ||
+         (selected->effects & MINIC_MACHINE_EFFECT_VOLATILE) != 0U) &&
+        (!source->has_memory_clobber ||
+         (selected->effects & MINIC_MACHINE_EFFECT_COMPILER_BARRIER) != 0U) &&
+        policy->prove_selected_source_asm(core, instruction, source, machine,
+            selected, policy->context);
+}
+
 /* A source asm-goto is a Core instruction, not the block terminator. Its
  * explicit label edges must survive independently of the ordinary Core
  * terminator. An opaque indirect branch targets all sealed indirect entries.
@@ -246,9 +302,10 @@ static bool machine_core_edges_match(const MinicCoreFunction *core,
     return true;
 }
 
-bool minic_machine_core_coverage_verify(const MinicCoreFunction *core,
-                                         const bool *reachable_blocks,
-                                         const MinicMachineFunction *machine) {
+bool minic_machine_core_coverage_verify_with_policy(
+    const MinicCoreFunction *core, const bool *reachable_blocks,
+    const MinicMachineFunction *machine,
+    const MinicMachineCoreCoveragePolicy *policy) {
     size_t *owner = NULL;
     unsigned int *effects = NULL;
     unsigned char *seen = NULL;
@@ -341,15 +398,24 @@ bool minic_machine_core_coverage_verify(const MinicCoreFunction *core,
                 goto cleanup;
             if (ins->kind == MINIC_MACHINE_INSTRUCTION_SOURCE_ASM) {
                 if (!machine_source_asm_matches_core(
-                        core, &core->instructions[id], ins)) goto cleanup;
+                        core, &core->instructions[id], ins) ||
+                    seen_source_asm[id]) goto cleanup;
+                seen_source_asm[id] = 1U;
+            }
+            if (ins->has_selected_source_asm_seal) {
+                if (seen_source_asm[id] ||
+                    !machine_selected_asm_matches_core(
+                        core, &core->instructions[id], machine, ins,
+                        policy)) goto cleanup;
                 seen_source_asm[id] = 1U;
             }
             if (ins->kind == MINIC_MACHINE_INSTRUCTION_COMPILER_BARRIER &&
                 core->instructions[id].kind !=
-                    MINIC_CORE_INSTRUCTION_COMPILER_BARRIER)
-                goto cleanup;
+                    MINIC_CORE_INSTRUCTION_COMPILER_BARRIER) goto cleanup;
             seen[id] = 1U;
             effects[id] |= ins->effects;
+            if (ins->has_selected_source_asm_seal)
+                effects[id] |= MINIC_MACHINE_EFFECT_SOURCE_ASM;
         }
     }
     /* The native function entry is ABI code, never a Core entry alias.  In
@@ -476,4 +542,10 @@ cleanup:
     free(expected);
     free(actual);
     return valid;
+}
+
+bool minic_machine_core_coverage_verify(const MinicCoreFunction *core,
+    const bool *reachable_blocks, const MinicMachineFunction *machine) {
+    return minic_machine_core_coverage_verify_with_policy(
+        core, reachable_blocks, machine, NULL);
 }

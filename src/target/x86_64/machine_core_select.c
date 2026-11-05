@@ -12,6 +12,7 @@
 #include "target/common/core_machine_asm.h"
 #include "target/common/direct_instruction_semantics.h"
 #include "target/common/core_numeric_shape.h"
+#include "target/common/core_scalar_conversion.h"
 #include "target/common/core_floating_shape.h"
 #include "target/common/direct_residual_plan.h"
 #include "target/common/elf_module_symbol_info.h"
@@ -186,6 +187,51 @@ static bool x86_core_store(X86CoreSelector *sel, MinicCoreValueId value,
             x86_reg(reg, 64U), slot);
 }
 
+static bool x86_i128_type(const X86CoreSelector *sel, MinicCoreTypeId id,
+    bool *signed_integer) {
+    const MinicCoreType *type = minic_core_type_get(sel->core->type_context,
+        minic_core_type_unqualified(sel->core->type_context, id));
+    if (type == NULL || type->kind != MINIC_CORE_TYPE_INTEGER ||
+        !type->has_layout || type->size != 16U ||
+        type->value.integer.bit_width != 128U ||
+        type->value.integer.is_bool) return false;
+    if (signed_integer != NULL)
+        *signed_integer = type->value.integer.is_signed;
+    return true;
+}
+
+static bool x86_i128_load(X86CoreSelector *sel, MinicCoreValueId id,
+    unsigned int low, unsigned int high) {
+    size_t distance;
+    if (id >= sel->frame->value_count ||
+        sel->frame->value_offsets == NULL ||
+        (distance = sel->frame->value_offsets[id]) < 16U ||
+        distance > sel->frame->frame_size || distance > INT32_MAX)
+        return false;
+    return x86_2(sel, MINIC_X86_MI_MOV64_AR,
+            x86_addr(MINIC_X86_REG_RBP, -(int64_t)distance),
+            x86_reg(low, 64U)) &&
+        x86_2(sel, MINIC_X86_MI_MOV64_AR,
+            x86_addr(MINIC_X86_REG_RBP, -(int64_t)(distance - 8U)),
+            x86_reg(high, 64U));
+}
+
+static bool x86_i128_store(X86CoreSelector *sel, MinicCoreValueId id,
+    unsigned int low, unsigned int high) {
+    size_t distance;
+    if (id >= sel->frame->value_count ||
+        sel->frame->value_offsets == NULL ||
+        (distance = sel->frame->value_offsets[id]) < 16U ||
+        distance > sel->frame->frame_size || distance > INT32_MAX)
+        return false;
+    return x86_2(sel, MINIC_X86_MI_MOV64_RA,
+            x86_reg(low, 64U),
+            x86_addr(MINIC_X86_REG_RBP, -(int64_t)distance)) &&
+        x86_2(sel, MINIC_X86_MI_MOV64_RA,
+            x86_reg(high, 64U),
+            x86_addr(MINIC_X86_REG_RBP, -(int64_t)(distance - 8U)));
+}
+
 /* Reuse the sealed x86 frame's object geometry. These are physical addresses
  * consumed by existing Core record transfers, never a new object layout. */
 static bool x86_object_address(X86CoreSelector *sel,
@@ -258,6 +304,16 @@ static bool x86_record_move_bytes(X86CoreSelector *sel,
                     x86_addr(dst_base, (int64_t)(dst_offset + i)),
                     volatile_destination)) return false;
         return true;
+    }
+    /* REP MOVSB preserves the argument bank with three pushes. Account for
+     * their live stack displacement when the caller owns an RSP operand. */
+    if (src_base == MINIC_X86_REG_RSP) {
+        if (src_offset > INT32_MAX - 24U) return false;
+        src_offset += 24U;
+    }
+    if (dst_base == MINIC_X86_REG_RSP) {
+        if (dst_offset > INT32_MAX - 24U) return false;
+        dst_offset += 24U;
     }
     if (src_offset > INT32_MAX - bytes ||
         dst_offset > INT32_MAX - bytes) return false;
@@ -657,8 +713,195 @@ static bool x86_integer_binary(X86CoreSelector *sel,
     return x86_result(sel, ins);
 }
 
+/* Pair-register SysV i128 arithmetic. Every operation is a physical x86
+ * instruction; no opaque C runtime helper or pre-rendered assembler opcode.
+ * The sealed Core signedness determines only the high-word comparison and
+ * arithmetic right shift. */
+static bool x86_jump(X86CoreSelector *, size_t);
+
+static bool x86_i128_binary(X86CoreSelector *sel,
+    const MinicCoreInstruction *ins, size_t instruction_id) {
+    const MinicCoreValueId left = ins->value.binary.left;
+    const MinicCoreValueId right = ins->value.binary.right;
+    const bool shift = ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_LEFT ||
+        ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_RIGHT;
+    bool signed_integer;
+    size_t small, large, done;
+    MinicX86MachineOpcode lo, hi;
+    if (left >= sel->core->value_count ||
+        right >= sel->core->value_count ||
+        !x86_i128_type(sel, sel->core->values[left].core_type_id,
+            &signed_integer) ||
+        (!shift && !x86_i128_type(sel,
+            sel->core->values[right].core_type_id, NULL)) ||
+        !x86_i128_load(sel, left, MINIC_X86_REG_RAX, MINIC_X86_REG_RDX))
+        return false;
+    if (shift) {
+        size_t width;
+        bool sign, is_bool;
+        if (instruction_id >= sel->core->instruction_count ||
+            !x86_scalar_shape(sel,
+                sel->core->values[right].core_type_id,
+                &width, &sign, &is_bool)) return false;
+        small = sel->instruction_aux[instruction_id].first;
+        large = sel->instruction_aux[instruction_id].second;
+        done = sel->instruction_aux[instruction_id].third;
+        if (small == SIZE_MAX || large == SIZE_MAX || done == SIZE_MAX ||
+            !x86_core_load(sel, right, MINIC_X86_REG_RCX) ||
+            !x86_ir(sel, MINIC_X86_MI_CMP64_IR, 64,
+                64U, MINIC_X86_REG_RCX) ||
+            !x86_1(sel, MINIC_X86_MI_JAE_B, x86_block(large)) ||
+            !minic_machine_builder_add_successor(&sel->builder, large) ||
+            !minic_machine_builder_add_successor(&sel->builder, small) ||
+            !minic_machine_builder_set_fallthrough(&sel->builder, small) ||
+            !minic_machine_builder_position_at(&sel->builder, small))
+            return false;
+        if (ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_RIGHT) {
+            if (!x86_rr(sel, MINIC_X86_MI_SHRD64_CL_RR, 64U,
+                    MINIC_X86_REG_RDX, MINIC_X86_REG_RAX) ||
+                !x86_1(sel, signed_integer ? MINIC_X86_MI_SAR64_CL_R :
+                    MINIC_X86_MI_SHR64_CL_R,
+                    x86_reg(MINIC_X86_REG_RDX, 64U))) return false;
+        } else if (!x86_rr(sel, MINIC_X86_MI_SHLD64_CL_RR, 64U,
+                MINIC_X86_REG_RAX, MINIC_X86_REG_RDX) ||
+            !x86_1(sel, MINIC_X86_MI_SHL64_CL_R,
+                x86_reg(MINIC_X86_REG_RAX, 64U))) return false;
+        if (!x86_jump(sel, done) ||
+            !minic_machine_builder_position_at(&sel->builder, large) ||
+            !x86_ir(sel, MINIC_X86_MI_SUB64_IR, 64,
+                64U, MINIC_X86_REG_RCX)) return false;
+        if (ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_RIGHT) {
+            if (!x86_rr(sel, MINIC_X86_MI_MOV64_RR, 64U,
+                    MINIC_X86_REG_RDX, MINIC_X86_REG_RAX) ||
+                !x86_1(sel, signed_integer ? MINIC_X86_MI_SAR64_CL_R :
+                    MINIC_X86_MI_SHR64_CL_R,
+                    x86_reg(MINIC_X86_REG_RAX, 64U)) ||
+                !(signed_integer ?
+                    x86_ir(sel, MINIC_X86_MI_SAR64_IR, 63,
+                        64U, MINIC_X86_REG_RDX) :
+                    x86_rr(sel, MINIC_X86_MI_XOR64_RR, 64U,
+                        MINIC_X86_REG_RDX, MINIC_X86_REG_RDX))) return false;
+        } else if (!x86_rr(sel, MINIC_X86_MI_MOV64_RR, 64U,
+                MINIC_X86_REG_RAX, MINIC_X86_REG_RDX) ||
+            !x86_1(sel, MINIC_X86_MI_SHL64_CL_R,
+                x86_reg(MINIC_X86_REG_RDX, 64U)) ||
+            !x86_rr(sel, MINIC_X86_MI_XOR64_RR, 64U,
+                MINIC_X86_REG_RAX, MINIC_X86_REG_RAX)) return false;
+        return x86_jump(sel, done) &&
+            minic_machine_builder_position_at(&sel->builder, done) &&
+            x86_i128_store(sel, ins->result,
+                MINIC_X86_REG_RAX, MINIC_X86_REG_RDX);
+    }
+    if (!x86_i128_load(sel, right,
+            MINIC_X86_REG_R10, MINIC_X86_REG_R11)) return false;
+    switch (ins->kind) {
+    case MINIC_CORE_INSTRUCTION_INTEGER_ADD:
+    case MINIC_CORE_INSTRUCTION_INTEGER_SUBTRACT:
+    case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_AND:
+    case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_OR:
+    case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_XOR:
+        switch (ins->kind) {
+        case MINIC_CORE_INSTRUCTION_INTEGER_ADD:
+            lo = MINIC_X86_MI_ADD64_RR;
+            hi = MINIC_X86_MI_ADC64_RR;
+            break;
+        case MINIC_CORE_INSTRUCTION_INTEGER_SUBTRACT:
+            lo = MINIC_X86_MI_SUB64_RR;
+            hi = MINIC_X86_MI_SBB64_RR;
+            break;
+        case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_AND:
+            lo = hi = MINIC_X86_MI_AND64_RR; break;
+        case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_OR:
+            lo = hi = MINIC_X86_MI_OR64_RR; break;
+        default: lo = hi = MINIC_X86_MI_XOR64_RR; break;
+        }
+        if (!x86_rr(sel, lo, 64U, MINIC_X86_REG_R10,
+                MINIC_X86_REG_RAX) ||
+            !x86_rr(sel, hi, 64U, MINIC_X86_REG_R11,
+                MINIC_X86_REG_RDX)) return false;
+        break;
+    case MINIC_CORE_INSTRUCTION_INTEGER_MULTIPLY:
+        if (!x86_rr(sel, MINIC_X86_MI_MOV64_RR, 64U,
+                MINIC_X86_REG_RDX, MINIC_X86_REG_R8) ||
+            !x86_rr(sel, MINIC_X86_MI_IMUL64_RR, 64U,
+                MINIC_X86_REG_R10, MINIC_X86_REG_R8) ||
+            !x86_rr(sel, MINIC_X86_MI_MOV64_RR, 64U,
+                MINIC_X86_REG_R11, MINIC_X86_REG_R9) ||
+            !x86_rr(sel, MINIC_X86_MI_IMUL64_RR, 64U,
+                MINIC_X86_REG_RAX, MINIC_X86_REG_R9) ||
+            !x86_1(sel, MINIC_X86_MI_MUL64_R,
+                x86_reg(MINIC_X86_REG_R10, 64U)) ||
+            !x86_rr(sel, MINIC_X86_MI_ADD64_RR, 64U,
+                MINIC_X86_REG_R8, MINIC_X86_REG_RDX) ||
+            !x86_rr(sel, MINIC_X86_MI_ADD64_RR, 64U,
+                MINIC_X86_REG_R9, MINIC_X86_REG_RDX)) return false;
+        break;
+    case MINIC_CORE_INSTRUCTION_INTEGER_LESS:
+        if (!x86_rr(sel, MINIC_X86_MI_CMP64_RR, 64U,
+                MINIC_X86_REG_R10, MINIC_X86_REG_RAX) ||
+            !x86_1(sel, MINIC_X86_MI_SETB8_R,
+                x86_reg(MINIC_X86_REG_RCX, 8U)) ||
+            !x86_rr(sel, MINIC_X86_MI_CMP64_RR, 64U,
+                MINIC_X86_REG_R11, MINIC_X86_REG_RDX) ||
+            !x86_1(sel, signed_integer ? MINIC_X86_MI_SETL8_R :
+                MINIC_X86_MI_SETB8_R,
+                x86_reg(MINIC_X86_REG_RAX, 8U)) ||
+            !x86_1(sel, MINIC_X86_MI_SETZ8_R,
+                x86_reg(MINIC_X86_REG_RDX, 8U)) ||
+            !x86_rr(sel, MINIC_X86_MI_AND8_RR, 8U,
+                MINIC_X86_REG_RCX, MINIC_X86_REG_RDX) ||
+            !x86_rr(sel, MINIC_X86_MI_OR8_RR, 8U,
+                MINIC_X86_REG_RDX, MINIC_X86_REG_RAX) ||
+            !x86_2(sel, MINIC_X86_MI_MOVZBQ_RR,
+                x86_reg(MINIC_X86_REG_RAX, 8U),
+                x86_reg(MINIC_X86_REG_RAX, 64U))) return false;
+        return x86_core_store(sel, ins->result, MINIC_X86_REG_RAX);
+    case MINIC_CORE_INSTRUCTION_SCALAR_EQUAL:
+        if (!x86_rr(sel, MINIC_X86_MI_CMP64_RR, 64U,
+                MINIC_X86_REG_R10, MINIC_X86_REG_RAX) ||
+            !x86_1(sel, MINIC_X86_MI_SETZ8_R,
+                x86_reg(MINIC_X86_REG_RCX, 8U)) ||
+            !x86_rr(sel, MINIC_X86_MI_CMP64_RR, 64U,
+                MINIC_X86_REG_R11, MINIC_X86_REG_RDX) ||
+            !x86_1(sel, MINIC_X86_MI_SETZ8_R,
+                x86_reg(MINIC_X86_REG_RAX, 8U)) ||
+            !x86_rr(sel, MINIC_X86_MI_AND8_RR, 8U,
+                MINIC_X86_REG_RCX, MINIC_X86_REG_RAX) ||
+            !x86_2(sel, MINIC_X86_MI_MOVZBQ_RR,
+                x86_reg(MINIC_X86_REG_RAX, 8U),
+                x86_reg(MINIC_X86_REG_RAX, 64U))) return false;
+        return x86_core_store(sel, ins->result, MINIC_X86_REG_RAX);
+    default: return false;
+    }
+    return x86_i128_store(sel, ins->result,
+        MINIC_X86_REG_RAX, MINIC_X86_REG_RDX);
+}
+
 static bool x86_unary(X86CoreSelector *sel,
     const MinicCoreInstruction *ins) {
+    if (ins->value.operand < sel->core->value_count &&
+        x86_i128_type(sel,
+            sel->core->values[ins->value.operand].core_type_id, NULL)) {
+        if (ins->kind == MINIC_CORE_INSTRUCTION_SCALAR_IS_ZERO ||
+            !x86_i128_type(sel, ins->core_type_id, NULL) ||
+            !x86_i128_load(sel, ins->value.operand,
+                MINIC_X86_REG_RAX, MINIC_X86_REG_RDX)) return false;
+        if (ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_NEGATE) {
+            if (!x86_1(sel, MINIC_X86_MI_NEG64_R,
+                    x86_reg(MINIC_X86_REG_RAX, 64U)) ||
+                !x86_ir(sel, MINIC_X86_MI_ADC64_IR, 0,
+                    64U, MINIC_X86_REG_RDX) ||
+                !x86_1(sel, MINIC_X86_MI_NEG64_R,
+                    x86_reg(MINIC_X86_REG_RDX, 64U))) return false;
+        } else if (ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_NOT) {
+            if (!x86_1(sel, MINIC_X86_MI_NOT64_R,
+                    x86_reg(MINIC_X86_REG_RAX, 64U)) ||
+                !x86_1(sel, MINIC_X86_MI_NOT64_R,
+                    x86_reg(MINIC_X86_REG_RDX, 64U))) return false;
+        } else return false;
+        return x86_i128_store(sel, ins->result,
+            MINIC_X86_REG_RAX, MINIC_X86_REG_RDX);
+    }
     if (ins->value.operand >= sel->core->value_count ||
         !x86_core_load(sel, ins->value.operand, MINIC_X86_REG_RAX))
         return false;
@@ -699,6 +942,28 @@ static bool x86_scalar_memory(X86CoreSelector *sel,
     vol = load ? ins->value.load.is_volatile : ins->value.store.is_volatile;
     if (address >= sel->core->value_count ||
         payload >= sel->core->value_count) return false;
+    if (x86_i128_type(sel, load ? ins->core_type_id :
+            sel->core->values[payload].core_type_id, NULL)) {
+        if (!x86_record_pointer(sel, address, MINIC_X86_REG_R10))
+            return false;
+        if (load)
+            return x86_2_volatile(sel, MINIC_X86_MI_MOV64_AR,
+                    x86_addr(MINIC_X86_REG_R10, 0),
+                    x86_reg(MINIC_X86_REG_RAX, 64U), vol) &&
+                x86_2_volatile(sel, MINIC_X86_MI_MOV64_AR,
+                    x86_addr(MINIC_X86_REG_R10, 8),
+                    x86_reg(MINIC_X86_REG_RDX, 64U), vol) &&
+                x86_i128_store(sel, ins->result,
+                    MINIC_X86_REG_RAX, MINIC_X86_REG_RDX);
+        return x86_i128_load(sel, payload,
+                MINIC_X86_REG_RAX, MINIC_X86_REG_RDX) &&
+            x86_2_volatile(sel, MINIC_X86_MI_MOV64_RA,
+                x86_reg(MINIC_X86_REG_RAX, 64U),
+                x86_addr(MINIC_X86_REG_R10, 0), vol) &&
+            x86_2_volatile(sel, MINIC_X86_MI_MOV64_RA,
+                x86_reg(MINIC_X86_REG_RDX, 64U),
+                x86_addr(MINIC_X86_REG_R10, 8), vol);
+    }
     floating = x86_float_shape(sel, load ? ins->core_type_id :
         sel->core->values[payload].core_type_id, &fp_double);
     if (
@@ -747,18 +1012,63 @@ static bool x86_parameter(X86CoreSelector *sel,
     const MinicX86ArgLocation *where;
     unsigned int physical_gp;
     size_t bytes, offset;
-    bool sign = false, is_bool = false, ms, float_double = false, floating;
+    bool sign = false, is_bool = false, ms, float_double = false, floating,
+        wide;
     const size_t position = ins->value.parameter_index;
     floating = x86_float_shape(sel, ins->core_type_id, &float_double);
+    wide = x86_i128_type(sel, ins->core_type_id, NULL);
     if (position >= plan->argument_count ||
         plan->locations == NULL ||
-        (!floating && !x86_scalar_shape(sel, ins->core_type_id,
+        (!floating && !wide && !x86_scalar_shape(sel, ins->core_type_id,
             &bytes, &sign, &is_bool)) ||
         (plan->calling_convention != MINIC_CALLING_CONVENTION_DEFAULT &&
          plan->calling_convention != MINIC_CALLING_CONVENTION_MS_X64) ||
         plan->calling_convention !=
             minic_core_function_calling_convention(sel->core)) return false;
     where = &plan->locations[position];
+    if (wide) {
+        unsigned int first, second;
+        if (plan->calling_convention !=
+                MINIC_CALLING_CONVENTION_DEFAULT ||
+            where->kind != MINIC_X86_ARG_I128_TWO_GP)
+            return false;
+        if (where->on_stack) {
+            if (where->stack_index > (INT32_MAX - 24U) / 8U ||
+                !x86_2(sel, MINIC_X86_MI_MOV64_AR,
+                    x86_addr(MINIC_X86_REG_RBP,
+                        (int64_t)(16U + where->stack_index * 8U)),
+                    x86_reg(MINIC_X86_REG_R10, 64U)) ||
+                !x86_2(sel, MINIC_X86_MI_MOV64_AR,
+                    x86_addr(MINIC_X86_REG_RBP,
+                        (int64_t)(24U + where->stack_index * 8U)),
+                    x86_reg(MINIC_X86_REG_R11, 64U))) return false;
+        } else {
+            if (!x86_abi_gp_register(plan->calling_convention,
+                    where->gp_index, &first) ||
+                !x86_abi_gp_register(plan->calling_convention,
+                    where->gp_index + 1U, &second)) return false;
+            if (sel->frame->saves_incoming_gp) {
+                const size_t distance =
+                    sel->frame->incoming_gp_save_offset;
+                if (distance > INT32_MAX -
+                        (where->gp_index + 1U) * 8U ||
+                    !x86_2(sel, MINIC_X86_MI_MOV64_AR,
+                        x86_addr(MINIC_X86_REG_RBP,
+                            -(int64_t)(distance + where->gp_index * 8U)),
+                        x86_reg(MINIC_X86_REG_R10, 64U)) ||
+                    !x86_2(sel, MINIC_X86_MI_MOV64_AR,
+                        x86_addr(MINIC_X86_REG_RBP,
+                            -(int64_t)(distance +
+                                (where->gp_index + 1U) * 8U)),
+                        x86_reg(MINIC_X86_REG_R11, 64U))) return false;
+            } else if (!x86_rr(sel, MINIC_X86_MI_MOV64_RR, 64U,
+                    first, MINIC_X86_REG_R10) ||
+                !x86_rr(sel, MINIC_X86_MI_MOV64_RR, 64U,
+                    second, MINIC_X86_REG_R11)) return false;
+        }
+        return x86_i128_store(sel, ins->result,
+            MINIC_X86_REG_R10, MINIC_X86_REG_R11);
+    }
     if (where->kind != (floating ? MINIC_X86_ARG_SSE :
             MINIC_X86_ARG_INTEGER)) return false;
     ms = plan->calling_convention == MINIC_CALLING_CONVENTION_MS_X64;
@@ -820,6 +1130,12 @@ static const MinicX86ArgumentPlan *x86_call_plan(
     return NULL;
 }
 
+static bool x86_load_record_gp(X86CoreSelector *, size_t, size_t);
+static bool x86_call_object_address(X86CoreSelector *, MinicCoreObjectId,
+    size_t, unsigned int);
+static bool x86_call_record_result(X86CoreSelector *, MinicCoreTypeId,
+    MinicCoreObjectId);
+
 static bool x86_call_argument(X86CoreSelector *sel,
     const MinicCoreCallArgument *arg, MinicCoreTypeId declared_type,
     const MinicX86ArgLocation *where, size_t stack_bytes,
@@ -830,11 +1146,107 @@ static bool x86_call_argument(X86CoreSelector *sel,
     size_t bytes, stack_offset;
     bool sign, is_bool, fp_double, floating;
     if (arg == NULL || where == NULL ||
-        arg->kind != MINIC_CORE_CALL_ARGUMENT_VALUE ||
-        arg->value.value_id >= sel->core->value_count ||
-        (where->kind != MINIC_X86_ARG_INTEGER &&
-         where->kind != MINIC_X86_ARG_SSE) ||
         declared_type == MINIC_CORE_TYPE_INVALID) return false;
+    if (arg->kind == MINIC_CORE_CALL_ARGUMENT_OBJECT) {
+        const MinicCoreObjectId object = arg->value.object_id;
+        const MinicCoreType *record = object < sel->core->object_count &&
+            sel->core->objects != NULL ? x86_type(sel,
+            sel->core->objects[object].core_type_id) : NULL;
+        unsigned int first, second;
+        if (convention != MINIC_CALLING_CONVENTION_DEFAULT ||
+            record == NULL || record->kind != MINIC_CORE_TYPE_RECORD ||
+            !record->has_layout ||
+            !minic_x86_64_core_record_abi_compatible(
+                sel->core->type_context,
+                sel->core->objects[object].core_type_id, declared_type))
+            return false;
+        if (where->kind == MINIC_X86_ARG_RECORD_EMPTY)
+            return record->size == 0U && where->record_bytes == 0U;
+        if (where->record_bytes == 0U ||
+            where->record_bytes != record->size ||
+            (where->kind != MINIC_X86_ARG_RECORD_ONE_GP &&
+             where->kind != MINIC_X86_ARG_RECORD_TWO_GP &&
+             where->kind != MINIC_X86_ARG_RECORD_MEMORY) ||
+            !x86_call_object_address(sel, object, stack_bytes,
+                MINIC_X86_REG_R11)) return false;
+        if (where->on_stack) {
+            if (where->stack_index > INT32_MAX / 8U ||
+                (stack_offset = where->stack_index * 8U) > stack_bytes ||
+                where->record_bytes > stack_bytes - stack_offset)
+                return false;
+        } else stack_offset = 0U;
+        if (where->kind == MINIC_X86_ARG_RECORD_MEMORY)
+            return where->on_stack &&
+                x86_record_move_bytes(sel, MINIC_X86_REG_R11, 0U,
+                    MINIC_X86_REG_RSP, stack_offset,
+                    where->record_bytes, false, false, false);
+        if (where->kind == MINIC_X86_ARG_RECORD_ONE_GP) {
+            if (where->record_bytes > 8U ||
+                !x86_load_record_gp(sel, where->record_bytes, 0U))
+                return false;
+            if (!where->on_stack) {
+                return x86_abi_gp_register(convention, where->gp_index,
+                        &first) && x86_rr(sel, MINIC_X86_MI_MOV64_RR,
+                        64U, MINIC_X86_REG_RAX, first);
+            }
+            return x86_2(sel, MINIC_X86_MI_MOV64_RA,
+                x86_reg(MINIC_X86_REG_RAX, 64U),
+                x86_addr(MINIC_X86_REG_RSP, (int64_t)stack_offset));
+        }
+        if (where->record_bytes <= 8U || where->record_bytes > 16U ||
+            !x86_load_record_gp(sel, 8U, 0U)) return false;
+        if (where->on_stack) {
+            if (stack_offset > INT32_MAX - 8U ||
+                !x86_2(sel, MINIC_X86_MI_MOV64_RA,
+                    x86_reg(MINIC_X86_REG_RAX, 64U),
+                    x86_addr(MINIC_X86_REG_RSP, (int64_t)stack_offset)))
+                return false;
+        } else if (!x86_abi_gp_register(convention, where->gp_index,
+                &first) || !x86_abi_gp_register(convention,
+                where->gp_index + 1U, &second) ||
+            !x86_rr(sel, MINIC_X86_MI_MOV64_RR, 64U,
+                MINIC_X86_REG_RAX, first)) return false;
+        if (!x86_load_record_gp(sel, where->record_bytes - 8U, 8U))
+            return false;
+        if (where->on_stack)
+            return x86_2(sel, MINIC_X86_MI_MOV64_RA,
+                x86_reg(MINIC_X86_REG_RAX, 64U),
+                x86_addr(MINIC_X86_REG_RSP,
+                    (int64_t)(stack_offset + 8U)));
+        return x86_rr(sel, MINIC_X86_MI_MOV64_RR, 64U,
+            MINIC_X86_REG_RAX, second);
+    }
+    if (arg->kind != MINIC_CORE_CALL_ARGUMENT_VALUE ||
+        arg->value.value_id >= sel->core->value_count) return false;
+    if (x86_i128_type(sel, declared_type, NULL)) {
+        unsigned int first, second;
+        if (convention != MINIC_CALLING_CONVENTION_DEFAULT ||
+            where->kind != MINIC_X86_ARG_I128_TWO_GP ||
+            !x86_i128_type(sel,
+                sel->core->values[arg->value.value_id].core_type_id, NULL) ||
+            !x86_i128_load(sel, arg->value.value_id,
+                MINIC_X86_REG_R10, MINIC_X86_REG_R11)) return false;
+        if (!where->on_stack)
+            return x86_abi_gp_register(convention, where->gp_index,
+                    &first) &&
+                x86_abi_gp_register(convention, where->gp_index + 1U,
+                    &second) &&
+                x86_rr(sel, MINIC_X86_MI_MOV64_RR, 64U,
+                    MINIC_X86_REG_R10, first) &&
+                x86_rr(sel, MINIC_X86_MI_MOV64_RR, 64U,
+                    MINIC_X86_REG_R11, second);
+        if (where->stack_index > (INT32_MAX - 16U) / 8U ||
+            (stack_offset = where->stack_index * 8U) > stack_bytes ||
+            stack_bytes - stack_offset < 16U) return false;
+        return x86_2(sel, MINIC_X86_MI_MOV64_RA,
+                x86_reg(MINIC_X86_REG_R10, 64U),
+                x86_addr(MINIC_X86_REG_RSP, (int64_t)stack_offset)) &&
+            x86_2(sel, MINIC_X86_MI_MOV64_RA,
+                x86_reg(MINIC_X86_REG_R11, 64U),
+                x86_addr(MINIC_X86_REG_RSP, (int64_t)(stack_offset + 8U)));
+    }
+    if (where->kind != MINIC_X86_ARG_INTEGER &&
+        where->kind != MINIC_X86_ARG_SSE) return false;
     actual = x86_type(sel,
         sel->core->values[arg->value.value_id].core_type_id);
     floating = x86_float_shape(sel, declared_type, &fp_double);
@@ -890,9 +1302,8 @@ static bool x86_scalar_call(X86CoreSelector *sel,
     MinicCoreTypeId function_type;
     const char *symbol = NULL;
     size_t i;
-    bool fp_double;
-    if (result_object != MINIC_CORE_OBJECT_INVALID ||
-        begin > sel->core->call_argument_count ||
+    bool fp_double, record_result;
+    if (begin > sel->core->call_argument_count ||
         count > sel->core->call_argument_count - begin ||
         (count != 0U && sel->core->call_arguments == NULL) ||
         (sel->frame->frame_size & 15U) != 0U ||
@@ -916,6 +1327,8 @@ static bool x86_scalar_call(X86CoreSelector *sel,
     }
     signature = x86_type(sel, function_type);
     result_type = x86_type(sel, ins->core_type_id);
+    record_result = result_type != NULL &&
+        result_type->kind == MINIC_CORE_TYPE_RECORD;
     if (signature == NULL || signature->kind != MINIC_CORE_TYPE_FUNCTION ||
         signature->value.function.return_type != ins->core_type_id ||
         signature->value.function.parameter_count > count ||
@@ -924,7 +1337,16 @@ static bool x86_scalar_call(X86CoreSelector *sel,
         (!signature->value.function.is_variadic &&
          signature->value.function.parameter_count != count) ||
         result_type == NULL ||
-        (result_type->kind != MINIC_CORE_TYPE_VOID &&
+        (record_result ?
+            (ins->result != MINIC_CORE_VALUE_INVALID ||
+             result_object >= sel->core->object_count ||
+             sel->core->objects == NULL ||
+             !minic_x86_64_core_record_abi_compatible(
+                sel->core->type_context,
+                sel->core->objects[result_object].core_type_id,
+                ins->core_type_id)) :
+            result_object != MINIC_CORE_OBJECT_INVALID) ||
+        (!record_result && result_type->kind != MINIC_CORE_TYPE_VOID &&
          ins->result >= sel->core->value_count) ||
         (result_type->kind == MINIC_CORE_TYPE_VOID &&
          ins->result != MINIC_CORE_VALUE_INVALID)) return false;
@@ -945,7 +1367,8 @@ static bool x86_scalar_call(X86CoreSelector *sel,
         (plan->stack_bytes & 15U) != 0U ||
         (plan->calling_convention == MINIC_CALLING_CONVENTION_MS_X64 &&
          (plan->stack_bytes < 32U || plan->is_variadic))) return false;
-    if (result_type->kind != MINIC_CORE_TYPE_VOID &&
+    if (result_type->kind != MINIC_CORE_TYPE_VOID && !record_result &&
+        !x86_i128_type(sel, ins->core_type_id, NULL) &&
         !x86_float_shape(sel, ins->core_type_id, &fp_double)) {
         size_t bytes;
         bool sign, is_bool;
@@ -963,9 +1386,12 @@ static bool x86_scalar_call(X86CoreSelector *sel,
             signature->value.function.parameter_count ?
             signature->value.function.parameters[i] :
             arg->kind == MINIC_CORE_CALL_ARGUMENT_VALUE &&
-            arg->value.value_id < sel->core->value_count ?
-            sel->core->values[arg->value.value_id].core_type_id :
-            MINIC_CORE_TYPE_INVALID;
+                arg->value.value_id < sel->core->value_count ?
+                sel->core->values[arg->value.value_id].core_type_id :
+            arg->kind == MINIC_CORE_CALL_ARGUMENT_OBJECT &&
+                arg->value.object_id < sel->core->object_count ?
+                sel->core->objects[arg->value.object_id].core_type_id :
+                MINIC_CORE_TYPE_INVALID;
         if (!x86_call_argument(sel,
                 arg, declared,
                 &plan->locations[i], plan->stack_bytes,
@@ -976,6 +1402,15 @@ static bool x86_scalar_call(X86CoreSelector *sel,
          !x86_ir(sel, MINIC_X86_MI_MOV8_IR,
              (int64_t)plan->end.fp_used, 8U, MINIC_X86_REG_RAX)))
         return false;
+    if (record_result) {
+        size_t bytes;
+        if (plan->calling_convention != MINIC_CALLING_CONVENTION_DEFAULT)
+            return false;
+        if (minic_x86_64_core_memory_result_record(sel->core->type_context,
+                ins->core_type_id, &bytes) &&
+            !x86_call_object_address(sel, result_object, plan->stack_bytes,
+                MINIC_X86_REG_RDI)) return false;
+    }
     if (indirect) {
         if ((minic_x86_64_target_codegen_options(sel->target) &
              (MINIC_X86_CODEGEN_INDIRECT_EXTERNAL_THUNK |
@@ -994,7 +1429,12 @@ static bool x86_scalar_call(X86CoreSelector *sel,
         !x86_ir(sel, MINIC_X86_MI_ADD64_IR,
             (int64_t)plan->stack_bytes, 64U, MINIC_X86_REG_RSP))
         return false;
+    if (record_result)
+        return x86_call_record_result(sel, ins->core_type_id, result_object);
     if (result_type->kind == MINIC_CORE_TYPE_VOID) return true;
+    if (x86_i128_type(sel, ins->core_type_id, NULL))
+        return x86_i128_store(sel, ins->result,
+            MINIC_X86_REG_RAX, MINIC_X86_REG_RDX);
     if (x86_float_shape(sel, ins->core_type_id, &fp_double))
         return x86_float_store_xmm(sel, ins->result, 0U, fp_double);
     return x86_result(sel, ins);
@@ -1032,6 +1472,88 @@ static bool x86_store_record_gp(X86CoreSelector *sel,
     }
     return x86_1(sel, MINIC_X86_MI_POP64_R,
         x86_reg(MINIC_X86_REG_RCX, 64U));
+}
+
+/* Transfer exactly one SysV INTEGER eightbyte from R11+offset to RAX.
+ * Partial odd tails are assembled bytewise so a packed neighbor is never
+ * read. The only scratch is R10; RCX is restored when CL is needed. */
+static bool x86_load_record_gp(X86CoreSelector *sel,
+    size_t bytes, size_t offset) {
+    MinicX86MachineOpcode opcode;
+    size_t i;
+    if (bytes == 0U || bytes > 8U || offset > INT32_MAX - bytes)
+        return false;
+    switch (bytes) {
+    case 1U: opcode = MINIC_X86_MI_MOVZBQ_AR; break;
+    case 2U: opcode = MINIC_X86_MI_MOVZWQ_AR; break;
+    case 4U: opcode = MINIC_X86_MI_MOV32_AR; break;
+    case 8U: opcode = MINIC_X86_MI_MOV64_AR; break;
+    default: opcode = MINIC_X86_MI_INVALID; break;
+    }
+    if (opcode != MINIC_X86_MI_INVALID)
+        return x86_2(sel, opcode, x86_addr(MINIC_X86_REG_R11,
+                (int64_t)offset), x86_reg(MINIC_X86_REG_RAX,
+                bytes == 4U ? 32U : 64U));
+    if (!x86_1(sel, MINIC_X86_MI_PUSH64_R,
+            x86_reg(MINIC_X86_REG_RCX, 64U)) ||
+        !x86_ir(sel, MINIC_X86_MI_MOV8_IR, 8, 8U,
+            MINIC_X86_REG_RCX) ||
+        !x86_rr(sel, MINIC_X86_MI_XOR64_RR, 64U,
+            MINIC_X86_REG_RAX, MINIC_X86_REG_RAX)) return false;
+    for (i = bytes; i != 0U; --i)
+        if (!x86_1(sel, MINIC_X86_MI_SHL64_CL_R,
+                x86_reg(MINIC_X86_REG_RAX, 64U)) ||
+            !x86_2(sel, MINIC_X86_MI_MOVZBQ_AR,
+                x86_addr(MINIC_X86_REG_R11, (int64_t)(offset + i - 1U)),
+                x86_reg(MINIC_X86_REG_R10, 64U)) ||
+            !x86_rr(sel, MINIC_X86_MI_OR64_RR, 64U,
+                MINIC_X86_REG_R10, MINIC_X86_REG_RAX)) return false;
+    return x86_1(sel, MINIC_X86_MI_POP64_R,
+        x86_reg(MINIC_X86_REG_RCX, 64U));
+}
+
+/* The finalized frame may place over-aligned Core objects relative to RSP.
+ * A call's outgoing reservation moves that anchor by exactly stack_bytes. */
+static bool x86_call_object_address(X86CoreSelector *sel,
+    MinicCoreObjectId object, size_t stack_bytes, unsigned int reg) {
+    if (sel->frame->objects_from_aligned_rsp) {
+        size_t offset;
+        if (object >= sel->frame->object_count ||
+            sel->frame->object_offsets == NULL ||
+            sel->frame->object_offsets[object] > INT32_MAX - stack_bytes)
+            return false;
+        offset = sel->frame->object_offsets[object] + stack_bytes;
+        return x86_2(sel, MINIC_X86_MI_LEA64_AR,
+            x86_addr(MINIC_X86_REG_RSP, (int64_t)offset),
+            x86_reg(reg, 64U));
+    }
+    return x86_object_address(sel, object, reg);
+}
+
+static bool x86_call_record_result(X86CoreSelector *sel,
+    MinicCoreTypeId return_type, MinicCoreObjectId object) {
+    const MinicCoreType *type = x86_type(sel, return_type);
+    size_t bytes;
+    if (type == NULL || type->kind != MINIC_CORE_TYPE_RECORD ||
+        !type->has_layout || object >= sel->core->object_count ||
+        !minic_x86_64_core_record_abi_compatible(
+            sel->core->type_context, return_type,
+            sel->core->objects[object].core_type_id)) return false;
+    if (minic_x86_64_core_memory_result_record(sel->core->type_context,
+            return_type, &bytes)) return bytes == type->size;
+    if (!x86_object_address(sel, object, MINIC_X86_REG_R10))
+        return false;
+    if (minic_x86_64_core_one_gp_record(sel->core->type_context,
+            return_type, &bytes))
+        return x86_store_record_gp(sel, bytes, 0U);
+    if (!minic_x86_64_core_two_gp_record(sel->core->type_context,
+            return_type) || type->size <= 8U || type->size > 16U ||
+        !x86_2(sel, MINIC_X86_MI_MOV64_RA,
+            x86_reg(MINIC_X86_REG_RAX, 64U),
+            x86_addr(MINIC_X86_REG_R10, 0)) ||
+        !x86_rr(sel, MINIC_X86_MI_MOV64_RR, 64U,
+            MINIC_X86_REG_RDX, MINIC_X86_REG_RAX)) return false;
+    return x86_store_record_gp(sel, type->size - 8U, 8U);
 }
 
 /* A real SysV aggregate parameter is transported using the exact incoming
@@ -1844,6 +2366,220 @@ static bool x86_source_zero_barrier(X86CoreSelector *sel,
         source, effects, NULL, 0U, implicit, implicit_count, false, false);
 }
 
+/* The kernel's uaccess exception helpers have an ABI of their own.  The
+ * original C ingress has already qualified the GNU constraints, but Core
+ * still carries their exact physical roles.  Materialize a sequence of
+ * actual selected x86 instructions, including its direct CALL relocation;
+ * never feed the textual template to the assembler as a machine opcode. */
+static bool x86_uaccess_lvalue(X86CoreSelector *sel,
+    MinicCoreValueId value, size_t expected_width, bool signed_int) {
+    const MinicCoreType *pointer;
+    const MinicCoreType *pointee;
+    MinicCoreTypeId pointee_id;
+    if (value >= sel->core->value_count ||
+        (pointer = x86_type(sel,
+            sel->core->values[value].core_type_id)) == NULL ||
+        pointer->kind != MINIC_CORE_TYPE_POINTER ||
+        !minic_lp64_core_pointer_pointee(sel->core->type_context,
+            sel->core->values[value].core_type_id, &pointee_id) ||
+        (pointee = x86_type(sel, pointee_id)) == NULL ||
+        !pointee->has_layout || pointee->size != expected_width ||
+        pointee->kind != MINIC_CORE_TYPE_INTEGER ||
+        pointee->value.integer.is_bool ||
+        (signed_int && !pointee->value.integer.is_signed)) return false;
+    return true;
+}
+
+static bool x86_uaccess_call(X86CoreSelector *sel,
+    const MinicCoreInstruction *ins) {
+    static const char *const put_symbols[2][4] = {
+        {"__put_user_1", "__put_user_2", "__put_user_4", "__put_user_8"},
+        {"__put_user_nocheck_1", "__put_user_nocheck_2",
+         "__put_user_nocheck_4", "__put_user_nocheck_8"}
+    };
+    static const char *const get_symbols[2][4] = {
+        {"__get_user_1", "__get_user_2", "__get_user_4", "__get_user_8"},
+        {"__get_user_nocheck_1", "__get_user_nocheck_2",
+         "__get_user_nocheck_4", "__get_user_nocheck_8"}
+    };
+    static const MinicX86MachineOpcode stores[4] = {
+        MINIC_X86_MI_MOV8_RA, MINIC_X86_MI_MOV16_RA,
+        MINIC_X86_MI_MOV32_RA, MINIC_X86_MI_MOV64_RA
+    };
+    const MinicCoreInlineAsm *source;
+    const MinicCoreStructuredInlineAsmOperand *bindings;
+    const MinicCoreFixedRegisterBinding *fixed;
+    const MinicCoreInstruction *constant;
+    MinicCoreInlineAsmId id;
+    unsigned int form;
+    size_t i, bytes, width_index;
+    bool put, nocheck, sign, is_bool;
+    const char *symbol;
+    if (sel == NULL || ins == NULL ||
+        ins->kind != MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM ||
+        ins->value.structured_inline_asm.operand_count != 5U ||
+        (id = ins->value.structured_inline_asm.inline_asm_id) >=
+            sel->core->inline_asm_count || !sel->core->inline_asms)
+        return false;
+    source = &sel->core->inline_asms[id];
+    bindings = ins->value.structured_inline_asm.operands;
+    put = source->target_machine_form_id ==
+        MINIC_X86_MACHINE_ASM_PUT_USER_CALL;
+    if (!put && source->target_machine_form_id !=
+            MINIC_X86_MACHINE_ASM_GET_USER_CALL) return false;
+    form = minic_x86_64_linux_uaccess_core_form_exact(
+        source->template_text, source->template_length, put);
+    if (!source->is_volatile || source->is_goto ||
+        !source->has_memory_clobber ||
+        source->target_machine_form_variant != form ||
+        (put ? (form != 0x200U && form != 0x800U) :
+               (form != 3U && form != 4U)) ||
+        source->source_asm_unique_id == 0U ||
+        source->register_clobber_count != (put ? 1U : 0U) ||
+        (put && (!source->register_clobbers ||
+            source->register_clobbers[0].name_length != 3U ||
+            memcmp(source->register_clobbers[0].name, "ebx", 3U) != 0)) ||
+        source->resolved_immediate_count != 0U ||
+        source->goto_second_target != MINIC_CORE_BLOCK_INVALID)
+        return false;
+    for (i = 0U; i < 5U; ++i) {
+        const bool output = i == 0U || (!put && i == 1U);
+        const bool stack_binding = i == (put ? 1U : 2U);
+        const bool bound = put ? (i == 1U || i == 3U) :
+            (i == 1U || i == 2U);
+        if (bindings[i].operand_index != i ||
+            bindings[i].value >= sel->core->value_count ||
+            bindings[i].early_clobber ||
+            bindings[i].kind != (stack_binding ?
+                MINIC_CORE_STRUCTURED_INLINE_ASM_FIXED_REGISTER_READWRITE :
+                output ?
+                MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT :
+                MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT) ||
+            bindings[i].has_fixed_register_binding != bound ||
+            (bound && bindings[i].fixed_register_binding_id >=
+                sel->core->fixed_register_binding_count)) return false;
+    }
+    if (!x86_uaccess_lvalue(sel, bindings[0].value, 4U, true) ||
+        !minic_core_function_value_is_kind(sel->core,
+            bindings[put ? 2U : 3U].value, MINIC_CORE_TYPE_POINTER) ||
+        !minic_core_function_value_is_kind(sel->core,
+            bindings[4].value, MINIC_CORE_TYPE_INTEGER) ||
+        sel->core->values[bindings[4].value].definition >=
+            sel->core->instruction_count) return false;
+    constant = &sel->core->instructions[
+        sel->core->values[bindings[4].value].definition];
+    if (constant->kind != MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT ||
+        constant->result != bindings[4].value) return false;
+    bytes = (size_t)constant->value.integer_value;
+    switch (bytes) {
+    case 1U: width_index = 0U; break;
+    case 2U: width_index = 1U; break;
+    case 4U: width_index = 2U; break;
+    case 8U: width_index = 3U; break;
+    default: return false;
+    }
+    if (put) {
+        if (bindings[1].fixed_register_binding_id >=
+                sel->core->fixed_register_binding_count ||
+            bindings[3].fixed_register_binding_id >=
+                sel->core->fixed_register_binding_count) return false;
+        fixed = &sel->core->fixed_register_bindings[
+            bindings[3].fixed_register_binding_id];
+        if (!fixed->register_name ||
+            (strcmp(fixed->register_name, "rax") != 0 &&
+             strcmp(fixed->register_name, "%rax") != 0) ||
+            !x86_scalar_shape(sel,
+                sel->core->values[bindings[3].value].core_type_id,
+                &i, &sign, &is_bool) || i != bytes || is_bool)
+            return false;
+        fixed = &sel->core->fixed_register_bindings[
+            bindings[1].fixed_register_binding_id];
+        if (!fixed->register_name ||
+            strcmp(fixed->register_name, "rsp") != 0) return false;
+    } else {
+        fixed = &sel->core->fixed_register_bindings[
+            bindings[1].fixed_register_binding_id];
+        if (!fixed->register_name ||
+            (strcmp(fixed->register_name, "rdx") != 0 &&
+             strcmp(fixed->register_name, "%rdx") != 0) ||
+            !x86_uaccess_lvalue(sel, bindings[1].value, bytes, false))
+            return false;
+        fixed = &sel->core->fixed_register_bindings[
+            bindings[2].fixed_register_binding_id];
+        if (!fixed->register_name ||
+            strcmp(fixed->register_name, "rsp") != 0) return false;
+    }
+    nocheck = put ? form == 0x800U : form == 4U;
+    symbol = put ? put_symbols[nocheck][width_index] :
+        get_symbols[nocheck][width_index];
+    /* Preserve RBX across even a nonstandard helper that declares its
+     * clobber. The 16-byte spill preserves call-site stack alignment. */
+    if (!x86_ir(sel, MINIC_X86_MI_SUB64_IR, 16, 64U,
+            MINIC_X86_REG_RSP) ||
+        !x86_2(sel, MINIC_X86_MI_MOV64_RA,
+            x86_reg(MINIC_X86_REG_RBX, 64U),
+            x86_addr(MINIC_X86_REG_RSP, 0)) ||
+        !x86_core_load(sel, bindings[put ? 2U : 3U].value,
+            put ? MINIC_X86_REG_RCX : MINIC_X86_REG_RAX) ||
+        (put && !x86_core_load(sel, bindings[3].value,
+            MINIC_X86_REG_RAX)) ||
+        !x86_1(sel, MINIC_X86_MI_CALL_UACCESS_LOCAL_SYMBOL,
+            x86_symbol(symbol, MINIC_X86_MACHINE_RELOC_PC32)) ||
+        !x86_2(sel, MINIC_X86_MI_MOV64_AR,
+            x86_addr(MINIC_X86_REG_RSP, 0),
+            x86_reg(MINIC_X86_REG_RBX, 64U)) ||
+        !x86_ir(sel, MINIC_X86_MI_ADD64_IR, 16, 64U,
+            MINIC_X86_REG_RSP)) return false;
+    if (!put) {
+        if (!x86_core_load(sel, bindings[1].value, MINIC_X86_REG_R11) ||
+            !x86_2(sel, stores[width_index],
+                x86_reg(MINIC_X86_REG_RDX, (unsigned int)(8U*bytes)),
+                x86_addr(MINIC_X86_REG_R11, 0))) return false;
+    }
+    return x86_core_load(sel, bindings[0].value, MINIC_X86_REG_R11) &&
+        x86_2(sel, MINIC_X86_MI_MOV32_RA,
+            x86_reg(put ? MINIC_X86_REG_RCX : MINIC_X86_REG_RAX, 32U),
+            x86_addr(MINIC_X86_REG_R11, 0)) &&
+        /* Core coverage also requires one unique source-owned occurrence.
+         * This semantic marker prints zero bytes; the actual helper call
+         * was selected as physical opcodes immediately above. */
+        minic_machine_builder_emit_core_source_asm(&sel->builder,
+            source, MINIC_MACHINE_EFFECT_MEMORY_READ |
+                MINIC_MACHINE_EFFECT_MEMORY_WRITE,
+            NULL, 0U, NULL, 0U, false, false);
+}
+
+static bool x86_integer_conversion(X86CoreSelector *sel,
+    const MinicCoreInstruction *ins) {
+    MinicCoreIntegerConversionShape shape = {0};
+    if (!minic_core_integer_conversion_shape(sel->core, ins, &shape))
+        return false;
+    if (shape.source_bytes != 16U && shape.target_bytes != 16U)
+        return x86_core_load(sel, ins->value.operand,
+                MINIC_X86_REG_RAX) &&
+            x86_result(sel, ins);
+    if (shape.target_bytes == 16U) {
+        if (shape.source_bytes == 16U) {
+            if (!x86_i128_load(sel, ins->value.operand,
+                MINIC_X86_REG_RAX, MINIC_X86_REG_RDX)) return false;
+        } else if (!x86_core_load(sel, ins->value.operand,
+                MINIC_X86_REG_RAX) ||
+            !(shape.source_signed ?
+                x86_rr(sel, MINIC_X86_MI_MOV64_RR, 64U,
+                    MINIC_X86_REG_RAX, MINIC_X86_REG_RDX) &&
+                x86_ir(sel, MINIC_X86_MI_SAR64_IR, 63,
+                    64U, MINIC_X86_REG_RDX) :
+                x86_rr(sel, MINIC_X86_MI_XOR64_RR, 64U,
+                    MINIC_X86_REG_RDX, MINIC_X86_REG_RDX)))
+            return false;
+        return x86_i128_store(sel, ins->result,
+            MINIC_X86_REG_RAX, MINIC_X86_REG_RDX);
+    }
+    return x86_i128_load(sel, ins->value.operand,
+            MINIC_X86_REG_RAX, MINIC_X86_REG_RDX) &&
+        x86_result(sel, ins);
+}
+
 static bool x86_core_instruction(X86CoreSelector *sel,
     const MinicCoreInstruction *ins, size_t instruction_id) {
     size_t bytes;
@@ -1870,7 +2606,8 @@ static bool x86_core_instruction(X86CoreSelector *sel,
         return x86_compiler_barrier(sel, ins);
     case MINIC_CORE_INSTRUCTION_OPAQUE_INLINE_ASM:
     case MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM:
-        return x86_source_zero_barrier(sel, ins);
+        return x86_source_zero_barrier(sel, ins) ||
+            x86_uaccess_call(sel, ins);
     case MINIC_CORE_INSTRUCTION_FIXED_REGISTER_READ:
         return x86_fixed_register_read(sel, ins);
     case MINIC_CORE_INSTRUCTION_BLOCK_ADDRESS:
@@ -1887,6 +2624,19 @@ static bool x86_core_instruction(X86CoreSelector *sel,
     case MINIC_CORE_INSTRUCTION_INDIRECT_CALL:
         return x86_scalar_call(sel, ins, instruction_id);
     case MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT:
+        if (x86_i128_type(sel, ins->core_type_id, &sign))
+            return x86_ir(sel, MINIC_X86_MI_MOVABS64_IR,
+                    ins->value.integer_value, 64U,
+                    MINIC_X86_REG_RAX) &&
+                (sign ?
+                    x86_rr(sel, MINIC_X86_MI_MOV64_RR, 64U,
+                        MINIC_X86_REG_RAX, MINIC_X86_REG_RDX) &&
+                    x86_ir(sel, MINIC_X86_MI_SAR64_IR, 63,
+                        64U, MINIC_X86_REG_RDX) :
+                    x86_rr(sel, MINIC_X86_MI_XOR64_RR, 64U,
+                        MINIC_X86_REG_RDX, MINIC_X86_REG_RDX)) &&
+                x86_i128_store(sel, ins->result,
+                    MINIC_X86_REG_RAX, MINIC_X86_REG_RDX);
         return x86_scalar_shape(sel, ins->core_type_id, &bytes,
                 &sign, &is_bool) &&
             x86_ir(sel, MINIC_X86_MI_MOVABS64_IR,
@@ -1930,6 +2680,11 @@ static bool x86_core_instruction(X86CoreSelector *sel,
     case MINIC_CORE_INSTRUCTION_INTEGER_LESS:
     case MINIC_CORE_INSTRUCTION_POINTER_LESS:
     case MINIC_CORE_INSTRUCTION_SCALAR_EQUAL:
+        if (ins->value.binary.left < sel->core->value_count &&
+            x86_i128_type(sel,
+                sel->core->values[ins->value.binary.left].core_type_id,
+                NULL))
+            return x86_i128_binary(sel, ins, instruction_id);
         return x86_integer_binary(sel, ins);
     case MINIC_CORE_INSTRUCTION_INTEGER_NEGATE:
     case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_NOT:
@@ -1942,6 +2697,8 @@ static bool x86_core_instruction(X86CoreSelector *sel,
         return x86_integer_overflow(sel, ins);
     case MINIC_CORE_INSTRUCTION_INTEGER_CONVERSION:
     case MINIC_CORE_INSTRUCTION_SCALAR_BITCAST:
+        if (ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_CONVERSION)
+            return x86_integer_conversion(sel, ins);
         return (ins->kind != MINIC_CORE_INSTRUCTION_SCALAR_BITCAST ||
             !sel->frame->kernel_head_link_addresses ||
             sel->frame->kernel_head_vma_cast_globals == NULL ||
@@ -2084,12 +2841,55 @@ static bool x86_core_terminator(X86CoreSelector *sel, size_t core_id) {
         size_t bytes;
         bool sign, is_bool;
         if (type == NULL) return false;
-        if (type->kind == MINIC_CORE_TYPE_FLOAT) {
+        if (type->kind == MINIC_CORE_TYPE_RECORD) {
+            const MinicCoreObjectId object = term->return_object;
+            if (minic_core_function_calling_convention(sel->core) !=
+                    MINIC_CALLING_CONVENTION_DEFAULT ||
+                term->return_value != MINIC_CORE_VALUE_INVALID ||
+                object >= sel->core->object_count ||
+                sel->core->objects == NULL ||
+                !minic_x86_64_core_record_abi_compatible(
+                    sel->core->type_context, id,
+                    sel->core->objects[object].core_type_id) ||
+                !x86_object_address(sel, object, MINIC_X86_REG_R11))
+                return false;
+            if (minic_x86_64_core_one_gp_record(sel->core->type_context,
+                    id, &bytes)) {
+                if (!x86_load_record_gp(sel, bytes, 0U)) return false;
+            } else if (minic_x86_64_core_two_gp_record(
+                    sel->core->type_context, id)) {
+                if (!type->has_layout || type->size < 9U ||
+                    type->size > 16U ||
+                    !x86_load_record_gp(sel, type->size - 8U, 8U) ||
+                    !x86_rr(sel, MINIC_X86_MI_MOV64_RR, 64U,
+                        MINIC_X86_REG_RAX, MINIC_X86_REG_RDX) ||
+                    !x86_load_record_gp(sel, 8U, 0U)) return false;
+            } else if (sel->frame->has_sret &&
+                sel->frame->sret_save_offset != 0U &&
+                minic_x86_64_core_memory_result_record(
+                    sel->core->type_context, id, &bytes)) {
+                if (sel->frame->sret_save_offset > INT32_MAX ||
+                    !x86_2(sel, MINIC_X86_MI_MOV64_AR,
+                        x86_addr(MINIC_X86_REG_RBP,
+                            -(int64_t)sel->frame->sret_save_offset),
+                        x86_reg(MINIC_X86_REG_RDI, 64U)) ||
+                    !x86_record_move_bytes(sel, MINIC_X86_REG_R11, 0U,
+                        MINIC_X86_REG_RDI, 0U, bytes, true, false, false) ||
+                    !x86_2(sel, MINIC_X86_MI_MOV64_AR,
+                        x86_addr(MINIC_X86_REG_RBP,
+                            -(int64_t)sel->frame->sret_save_offset),
+                        x86_reg(MINIC_X86_REG_RAX, 64U))) return false;
+            } else return false;
+        } else if (type->kind == MINIC_CORE_TYPE_FLOAT) {
             bool fp_double;
             if (term->return_value >= sel->core->value_count ||
                 !x86_float_shape(sel, id, &fp_double) ||
                 !x86_float_load_xmm(sel, term->return_value,
                     0U, MINIC_X86_REG_RAX, fp_double)) return false;
+        } else if (x86_i128_type(sel, id, NULL)) {
+            if (term->return_value >= sel->core->value_count ||
+                !x86_i128_load(sel, term->return_value,
+                    MINIC_X86_REG_RAX, MINIC_X86_REG_RDX)) return false;
         } else if (type->kind != MINIC_CORE_TYPE_VOID &&
             (term->return_value >= sel->core->value_count ||
              !x86_scalar_shape(sel, id, &bytes, &sign, &is_bool) ||
@@ -2196,6 +2996,20 @@ bool minic_x86_64_machine_select_core_subset(
                         NULL, false, true, &aux->first) ||
                     !minic_machine_builder_create_block(&sel.builder,
                         NULL, false, true, &aux->second)) goto cleanup;
+            } else if ((ins->kind ==
+                    MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_LEFT ||
+                    ins->kind ==
+                    MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_RIGHT) &&
+                ins->value.binary.left < core->value_count &&
+                x86_i128_type(&sel,
+                    core->values[ins->value.binary.left].core_type_id,
+                    NULL)) {
+                if (!minic_machine_builder_create_block(&sel.builder,
+                        NULL, false, true, &aux->first) ||
+                    !minic_machine_builder_create_block(&sel.builder,
+                        NULL, false, true, &aux->second) ||
+                    !minic_machine_builder_create_block(&sel.builder,
+                        NULL, false, true, &aux->third)) goto cleanup;
             } else if (ins->kind ==
                     MINIC_CORE_INSTRUCTION_INTEGER_TO_DOUBLE ||
                     ins->kind ==

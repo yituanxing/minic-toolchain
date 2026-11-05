@@ -16,11 +16,29 @@ for name in packed_clock packed_cpucfg packed_nospec \
             packed_percpu_amo packed_frametrace_csr; do
   sed -n "/^${name}:/,/^\.size ${name},/p" "$d/source.s" > "$d/$name.s"
   test -s "$d/$name.s"
-  # The old emitter used private .Lloong_store_native_ labels. M1 must
-  # instead form real slow/native/done blocks with a conditional edge, and
-  # retain the byte-scatter writeback path for unknown packed alignment.
-  grep -Eq '^  beqz \$t3, \.Lminic_mir_' "$d/$name.s"
-  grep -Fq 'st.b $t3,' "$d/$name.s"
+  # Unknown-alignment writes need a real MIR guard, byte scatter and
+  # physical CFG continuation, never a private source-label helper.
+  grep -Fq '.Lminic_mir_' "$d/$name.s"
+  case "$name" in
+    packed_clock|packed_cpucfg|packed_frametrace_csr)
+      addr=t7
+      # These target families select an inline eight/four-byte scatter.
+      # The zero-misalignment branch bypasses every single-byte store.
+      grep -Eq '^  beqz \$t3, \.Lminic_mir_' "$d/$name.s"
+      if [[ "$name" == packed_cpucfg ]]; then last=3; else last=7; fi
+      grep -Fq "st.b \$t3, \$$addr, $last" "$d/$name.s"
+      ;;
+    packed_nospec|packed_percpu_amo)
+      addr=t1
+      # A nonzero alignment value enters the outlined eight-trip helper.
+      grep -Eq '^  bnez \$t3, \.Lminic_mir_' "$d/$name.s"
+      grep -Fq '  pcaddi $t6, 2' "$d/$name.s"
+      grep -Fq '  li.d $t3, 8' "$d/$name.s"
+      grep -Fq '  jirl $zero, $t6, 0' "$d/$name.s"
+      ;;
+  esac
+  grep -Eq "^  andi \\\$t3, \\\$$addr, (3|7)$" "$d/$name.s"
+  grep -Eq "^  st\\.b \\\$(t0|t2|t3), \\\$$addr, [0-9]+$" "$d/$name.s"
 done
 grep -Fq 'rdtime.d $t0, $t1' "$d/packed_clock.s"
 grep -Fq 'andi $t3, $t7, 7' "$d/packed_clock.s"
@@ -37,11 +55,38 @@ grep -Fq 'andi $t3, $t7, 7' "$d/packed_frametrace_csr.s"
 sed -n '/^aligned_global_frametrace_csr:/,/^\.size aligned_global_frametrace_csr,/p' \
   "$d/source.s" > "$d/aligned.s"
 grep -Eq '^  csrrd \$t0, (0x7|7)$' "$d/aligned.s"
-grep -Fq 'st.d $t0, $t7, 0' "$d/aligned.s"
-if grep -Fq 'andi $t3, $t7, 7' "$d/aligned.s"; then
+grep -Eq '^  st\.d \$t0, \$(t7|t1), 0$' "$d/aligned.s"
+if grep -Eq '^  andi \$t3, \$(t7|t1), 7$' "$d/aligned.s" ||
+   grep -Fq '  pcaddi $t6, 2' "$d/aligned.s"; then
   echo 'LOONG_PACKED_RESULT=FAIL static aligned global gained guard' >&2
   exit 1
 fi
+
+# For source forms that emit an outlined helper, a selected CFG branch must
+# follow pcaddi immediately and its return land at the zero-width MIR label.
+# Clock/CPUCFG/CSR deliberately use inlined byte stores and need no pcaddi.
+awk '
+  /^packed_(clock|nospec|percpu_amo|frametrace_csr):$/ {
+    name=$0; sub(/:$/, "", name)
+  }
+  /^  pcaddi \$t6, 2$/ {
+    if (name !~ /^packed_(nospec|percpu_amo)$/) bad++
+    seen[name]++
+    if (getline branch != 1 ||
+        branch !~ /^  b \.Lminic_mir_[a-z_0-9]+_[0-9]+$/ ||
+        getline continuation != 1 ||
+        continuation !~ /^\.Lminic_mir_[a-z_0-9]+_[0-9]+:$/) bad++
+  }
+  END {
+    if (bad || seen["packed_clock"] != 0 ||
+        seen["packed_nospec"] != 1 ||
+        seen["packed_percpu_amo"] != 1 ||
+        seen["packed_frametrace_csr"] != 0) exit 1
+  }
+' "$d/source.s" || {
+  echo 'LOONG_PACKED_RESULT=FAIL pcaddi/branch/continuation layout' >&2
+  exit 1
+}
 
 for bad in clock cpucfg nospec percpu_amo frametrace; do
   case "$bad" in

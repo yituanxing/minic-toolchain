@@ -1,9 +1,27 @@
 #include "target/loongarch64/machine_asm_form.h"
 #include "target/loongarch64/asm_contract_internal.h"
+#include "target/common/linux_jump_label_asm.h"
 
 #include <limits.h>
 #include <string.h>
 #include <stdio.h>
+
+/* Source admission, MIR emission and linker-relocation recording must share
+ * the same exact Linux static-key grammar, independent of legacy FILE* code. */
+unsigned int loong_linux_jump_label_form(
+    const char *text, size_t length) {
+    return minic_multi_linux_jump_label_form(
+        text, length,
+        ".pushsection__jump_table,\"aw\".align3"
+        ".long1b-.,%l[l_yes]-..quad%0-..popsection");
+}
+
+bool minic_loongarch64_linux_jump_label_asm_goto_core(
+    const MinicCoreInlineAsm *source) {
+    return minic_multi_linux_jump_label_asm_goto_core(
+        source, loong_linux_jump_label_form);
+}
+
 LoongLinuxClockAsm loong_linux_clock_form(
     const char *text, size_t length) {
     static const char *const forms[] = {

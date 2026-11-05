@@ -352,10 +352,14 @@ bool minic_x86_64_typed_machine_form_matches_template(
     default:
         return false;
     }
-    /* All 69 newly tagged source families historically publish variant zero.
-     * Their native machine parser independently selects the exact opcode,
-     * width and relocation shape. Reject forged nonzero variants instead of
-     * treating a synthetic Core form as a source-qualified instruction. */
+    /* The uaccess forms preserve their original source vs normalized Core
+     * distinctions: GNU's named %[size] becomes typed %c4 at Core ingress.
+     * Both sides must prove the exact normalized private helper form. */
+    if (form_id == MINIC_X86_MACHINE_ASM_PUT_USER_CALL ||
+        form_id == MINIC_X86_MACHINE_ASM_GET_USER_CALL)
+        return form != 0U && variant == form;
+    /* All other newly tagged source families publish variant zero; their
+     * machine parser independently owns the exact opcode and width. */
     if (form_id >= MINIC_X86_MACHINE_ASM_CRASH_REGISTER &&
         form_id <= MINIC_X86_MACHINE_ASM_CSUM_PARTIAL)
         return form != 0U && variant == 0U;

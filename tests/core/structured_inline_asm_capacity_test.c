@@ -234,6 +234,151 @@ static bool verify_core_scalar_result(bool bad_value, bool duplicate_output,
     return ready && verified == expected;
 }
 
+/* A GNU +r output on a global hardware-register binding is not an
+ * address-backed C lvalue. Its Core input must be the very same fixed
+ * register's read, while the structured ASM owns its physical output. */
+static bool verify_fixed_register_readwrite_role(void) {
+    MinicCoreSourceBuilder builder;
+    MinicCoreFunction *function = &builder.core;
+    MinicCoreTypeContext context;
+    MinicCoreType type = {0};
+    MinicCoreTypeId integer_type, void_type;
+    MinicCoreInstruction read = {0}, asm_effect = {0};
+    MinicCoreTerminator terminator = {0};
+    MinicCoreStructuredInlineAsmOperand *operand;
+    MinicCoreValueId input, unrelated;
+    MinicCoreBlockId block;
+    MinicCoreInlineAsmId asm_id;
+    size_t fixed_id, other_id, output_count;
+    bool ok, verified;
+
+    minic_core_source_builder_initialize(&builder);
+    minic_core_type_context_initialize(&context);
+    type.kind = MINIC_CORE_TYPE_INTEGER;
+    type.has_layout = true;
+    type.size = 8U;
+    type.alignment = 8U;
+    type.value.integer.bit_width = 64U;
+    type.value.integer.is_signed = false;
+    ok = minic_core_type_register(&context, &type, &integer_type);
+    memset(&type, 0, sizeof(type));
+    type.kind = MINIC_CORE_TYPE_VOID;
+    ok = ok && minic_core_type_register(&context, &type, &void_type) &&
+         minic_core_function_set_signature(&builder, "fixed_rw", 8U,
+                                            minic_type_void(), NULL, 0U) &&
+         minic_core_function_add_fixed_register_binding(&builder, "rsp", 3U,
+             minic_type_unsigned_long(), false, &fixed_id) &&
+         minic_core_function_add_fixed_register_binding(&builder, "r12", 3U,
+             minic_type_unsigned_long(), false, &other_id) &&
+         minic_core_function_add_block(function, &block) &&
+         minic_core_function_add_opaque_inline_asm(
+             function, "mov %0,%0", 9U, true, false, &asm_id);
+    if (ok) {
+        read.kind = MINIC_CORE_INSTRUCTION_FIXED_REGISTER_READ;
+        read.value.fixed_register_binding_id = fixed_id;
+        ok = minic_core_function_append_value_instruction(
+            function, block, &read, &input);
+    }
+    if (ok) {
+        read.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
+        read.value.integer_value = 1;
+        ok = minic_core_function_append_value_instruction(
+            function, block, &read, &unrelated);
+    }
+    if (ok) {
+        asm_effect.kind = MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM;
+        asm_effect.value.structured_inline_asm.inline_asm_id = asm_id;
+        asm_effect.value.structured_inline_asm.operand_count = 1U;
+        operand = &asm_effect.value.structured_inline_asm.operands[0];
+        operand->kind = MINIC_CORE_STRUCTURED_INLINE_ASM_FIXED_REGISTER_READWRITE;
+        operand->operand_index = 0U;
+        operand->value = input;
+        operand->has_fixed_register_binding = true;
+        operand->fixed_register_binding_id = fixed_id;
+        operand->physical_read_write = true;
+        function->inline_asms[asm_id].operand_plan_owner =
+            MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED;
+        function->inline_asms[asm_id].target_machine_form_id = 1U;
+        terminator.kind = MINIC_CORE_TERMINATOR_RETURN;
+        terminator.return_value = MINIC_CORE_VALUE_INVALID;
+        terminator.return_object = MINIC_CORE_OBJECT_INVALID;
+        ok = minic_core_function_append_effect_instruction(
+                function, block, &asm_effect) &&
+             minic_core_function_set_terminator(function, block, &terminator) &&
+             minic_core_function_define_signature(function, &context, void_type,
+                NULL, 0U, MINIC_CALLING_CONVENTION_DEFAULT, false);
+    }
+    if (ok) {
+        function->values[input].core_type_id = integer_type;
+        function->values[unrelated].core_type_id = integer_type;
+        function->instructions[0].core_type_id = integer_type;
+        function->instructions[1].core_type_id = integer_type;
+        function->instructions[2].core_type_id = void_type;
+        function->fixed_register_bindings[fixed_id].core_type_id = integer_type;
+        function->fixed_register_bindings[other_id].core_type_id = integer_type;
+        ok = minic_core_function_attach_type_context(function, &context);
+    }
+    if (ok) {
+        operand = &function->instructions[2].value.structured_inline_asm.operands[0];
+        verified = minic_core_function_verify(function);
+        ok = verified &&
+             minic_core_asm_output_operand_count(&function->instructions[2],
+                                                 &output_count) &&
+             output_count == 1U;
+    }
+    if (ok) {
+        operand->physical_read_write = false;
+        ok = !minic_core_function_verify(function);
+        operand->physical_read_write = true;
+    }
+    if (ok) {
+        operand->kind = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE;
+        ok = !minic_core_function_verify(function);
+        operand->kind = MINIC_CORE_STRUCTURED_INLINE_ASM_FIXED_REGISTER_READWRITE;
+    }
+    if (ok) {
+        operand->kind = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+        ok = !minic_core_function_verify(function);
+        operand->kind = MINIC_CORE_STRUCTURED_INLINE_ASM_FIXED_REGISTER_READWRITE;
+    }
+    if (ok) {
+        operand->has_fixed_register_binding = false;
+        ok = !minic_core_function_verify(function);
+        operand->has_fixed_register_binding = true;
+    }
+    if (ok) {
+        operand->fixed_register_binding_id = other_id;
+        ok = !minic_core_function_verify(function);
+        operand->fixed_register_binding_id = fixed_id;
+    }
+    if (ok) {
+        operand->value = unrelated;
+        ok = !minic_core_function_verify(function);
+        operand->value = input;
+    }
+    if (ok) {
+        function->fixed_register_bindings[fixed_id].is_local = true;
+        ok = !minic_core_function_verify(function);
+        function->fixed_register_bindings[fixed_id].is_local = false;
+    }
+    if (ok) {
+        operand->physical_early_clobber = true;
+        ok = !minic_core_function_verify(function);
+        operand->physical_early_clobber = false;
+    }
+    if (ok) {
+        function->inline_asms[asm_id].operand_plan_owner =
+            MINIC_ASM_OPERAND_PLAN_GENERIC_STRUCTURED;
+        ok = !minic_core_function_verify(function);
+        function->inline_asms[asm_id].operand_plan_owner =
+            MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED;
+    }
+    if (ok) ok = minic_core_function_verify(function);
+    minic_core_source_builder_destroy(&builder);
+    minic_core_type_context_destroy(&context);
+    return ok;
+}
+
 int main(void) {
     MinicInlineAsm source;
     MinicInlineAsmOperand outputs[4];
@@ -281,6 +426,11 @@ int main(void) {
         !verify_core_scalar_result(false, false, true, false)) {
         (void)fprintf(stderr, "FAIL SSA register-result Core verifier boundary\n");
         return 6;
+    }
+    if (!verify_fixed_register_readwrite_role()) {
+        (void)fprintf(stderr,
+            "FAIL fixed hardware-register GNU +r input/output Core contract\n");
+        return 7;
     }
 
     /* A GNU goto label uses the operand slot immediately after all data

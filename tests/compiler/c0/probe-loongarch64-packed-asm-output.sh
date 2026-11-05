@@ -21,8 +21,36 @@ for fn in loong_fpr_packed loong_percpu_packed; do
   # alignment gate and byte-exact fallback for an unknown packed lvalue.
   if [[ "$fn" == loong_fpr_packed ]]; then addr=t7; else addr=t1; fi
   grep -Fq "andi \$t3, \$$addr, 7" "$dir/$fn.s"
-  grep -Fq "st.b \$t3, \$$addr, 7" "$dir/$fn.s"
   grep -Fq "st.d \$t0, \$$addr, 0" "$dir/$fn.s"
+  # In addition to its late byte scatter, the fallback writes the first
+  # byte from the live scalar value; this guards against shifted value/ptr.
+  grep -Fq "st.b \$t0, \$$addr, 0" "$dir/$fn.s"
+  if [[ "$fn" == loong_fpr_packed ]]; then
+    # Scalar FPR output is eight selected byte stores, with a real CFG
+    # branch around them when the address is naturally aligned.
+    grep -Eq '^  beqz \$t3, \.Lminic_mir_' "$dir/$fn.s"
+    test "$(grep -Ec '^  st\.b \$t[0-9]+, \$t7, [0-7]$' "$dir/$fn.s")" -eq 8
+    grep -Fq 'st.b $t3, $t7, 7' "$dir/$fn.s"
+  else
+    # Indexed perCPU has the same safety property via an eight-trip
+    # outlined loop. PC+8 must land after exactly one branch instruction.
+    grep -Eq '^  bnez \$t3, \.Lminic_mir_' "$dir/$fn.s"
+    grep -Fq '  li.d $t3, 8' "$dir/$fn.s"
+    grep -Fq '  srli.d $t0, $t0, 8' "$dir/$fn.s"
+    grep -Fq '  addi.d $t3, $t3, -1' "$dir/$fn.s"
+    grep -Eq '^  bnez \$t3, \.Lminic_mir_' "$dir/$fn.s"
+    grep -Fq 'jirl $zero, $t6, 0' "$dir/$fn.s"
+    awk '
+      /^  pcaddi \$t6, 2$/ {
+        seen++
+        if (getline branch != 1 ||
+            branch !~ /^  b \.Lminic_mir_[a-z_0-9]+_[0-9]+$/ ||
+            getline continuation != 1 ||
+            continuation !~ /^\.Lminic_mir_[a-z_0-9]+_[0-9]+:$/) bad++
+      }
+      END { if (seen != 1 || bad) exit 1 }
+    ' "$dir/$fn.s"
+  fi
 done
 grep -Fq 'movfr2gr.d $t0, $f0' "$dir/loong_fpr_packed.s"
 grep -Fq 'ldx.d $t0, $r21, $t1' "$dir/loong_percpu_packed.s"
@@ -30,6 +58,7 @@ grep -Fq 'ldx.d $t0, $r21, $t1' "$dir/loong_percpu_packed.s"
 # The native-width path and byte fallback must both be reached through
 # physical MachineIR CFG, not source-local labels or an old private helper.
 grep -Eq '^  beqz \$t3, \.Lminic_mir_' "$dir/loong_fpr_packed.s"
+grep -Fq '.Lminic_mir_loong_fpr_packed_' "$dir/loong_fpr_packed.s"
 for bad in bad-fpr-register bad-percpu-base; do
   case "$bad" in
     bad-fpr-register)

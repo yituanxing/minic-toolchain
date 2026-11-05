@@ -24,6 +24,32 @@ static bool loong_source_opaque(const MinicMachineInstruction *ins) {
     };
     MinicCoreInlineAsm linux_bug = {0};
     size_t i;
+    /* Static-key asm-goto is a single, exactly sealed GNU record with a
+     * source-owned C branch target and one typed symbolic relocation. Core
+     * CFG provenance and Machine successor equality are checked separately. */
+    if (ins->source_asm_machine_form_id == 0U &&
+        ins->source_asm_machine_form_variant == 0U &&
+        loong_linux_jump_label_form(ins->source_asm_template,
+            ins->source_asm_length) != 0U)
+        return ins->operand_count == 2U && ins->operands != NULL &&
+            ins->implicit_count == 0U && ins->source_asm_terminates_block &&
+            ins->source_asm_permits_fallthrough &&
+            (ins->effects & (MINIC_MACHINE_EFFECT_SOURCE_ASM |
+                             MINIC_MACHINE_EFFECT_VOLATILE |
+                             MINIC_MACHINE_EFFECT_BRANCH)) ==
+                            (MINIC_MACHINE_EFFECT_SOURCE_ASM |
+                             MINIC_MACHINE_EFFECT_VOLATILE |
+                             MINIC_MACHINE_EFFECT_BRANCH) &&
+            (ins->effects & (MINIC_MACHINE_EFFECT_MEMORY_READ |
+                             MINIC_MACHINE_EFFECT_MEMORY_WRITE |
+                             MINIC_MACHINE_EFFECT_RETURN)) == 0U &&
+            ins->operands[0].kind == MINIC_MACHINE_OPERAND_SYMBOL &&
+            ins->operands[0].asm_constraint != NULL &&
+            strcmp(ins->operands[0].asm_constraint, "i") == 0 &&
+            ins->operands[1].kind == MINIC_MACHINE_OPERAND_BLOCK &&
+            ins->operands[1].asm_constraint == NULL &&
+            ins->operands[1].asm_name != NULL &&
+            strcmp(ins->operands[1].asm_name, "l_yes") == 0;
     if (ins->operand_count != 0U || ins->implicit_count != 0U ||
         ins->source_asm_machine_form_variant != 0U ||
         ins->source_asm_terminates_block ||
@@ -241,15 +267,19 @@ static bool loong_source_operand(FILE *out,
          * form). LL/SC `m`/`ZC` operands instead need rj,imm12. The Core
          * source ID is sealed against the exact instruction grammar, so
          * this distinction remains target-owned and non-heuristic. */
-        if (ins->source_asm_machine_form_id == 11U ||
-            ins->source_asm_machine_form_id == 25U ||
-            ins->source_asm_machine_form_id == 27U ||
-            ins->source_asm_machine_form_id == 28U)
-            return operand->value.address.displacement == 0 &&
-                loong_source_print_gp(out,
-                    operand->value.address.base.number);
-        return loong_source_print_gp(out,
-                   operand->value.address.base.number) &&
+        if ((ins->source_asm_machine_form_id == LOONG_DESC_XCHG ||
+             ins->source_asm_machine_form_id ==
+                 MINIC_LOONG_MACHINE_ASM_PERCPU_AMO ||
+             ins->source_asm_machine_form_id ==
+                 MINIC_LOONG_MACHINE_ASM_AMO_STORE ||
+             ins->source_asm_machine_form_id ==
+                 MINIC_LOONG_MACHINE_ASM_AMO_FETCH) &&
+            operand->asm_constraint != NULL &&
+            strcmp(operand->asm_constraint, "+ZB") == 0 &&
+            operand->value.address.displacement == 0)
+            return loong_source_print_gp(out,
+                operand->value.address.base.number);
+        return loong_source_print_gp(out, operand->value.address.base.number) &&
             fprintf(out, ", %" PRId64,
                     operand->value.address.displacement) >= 0;
     case MINIC_MACHINE_OPERAND_INTEGER:
@@ -265,10 +295,35 @@ static bool loong_source_operand(FILE *out,
 
 static bool loong_source_validate_form(const MinicMachineFunction *fn,
     const MinicMachineInstruction *ins, void *context) {
+    unsigned int form, reg, access;
     (void)context;
-    return fn != NULL && fn->target != NULL && ins != NULL &&
-        fn->target->architecture == MINIC_TARGET_ARCH_LOONGARCH64 &&
-        loong_source_form(ins);
+    if (fn == NULL || fn->target == NULL || ins == NULL ||
+        fn->target->architecture != MINIC_TARGET_ARCH_LOONGARCH64 ||
+        !loong_source_form(ins)) return false;
+    if (ins->source_asm_machine_form_id == LOONG_DESC_FPR_TRANSFER) {
+        const MinicMachineRegisterEffect *effect = ins->implicit;
+        form = loong_linux_fpr_transfer_form(ins->source_asm_template,
+            ins->source_asm_length);
+        if (!form || ins->operand_count != 1U ||
+            ins->implicit_count != 1U || effect == NULL) return false;
+        access = form <= 32U ? MINIC_MACHINE_REGISTER_READ :
+                               MINIC_MACHINE_REGISTER_WRITE;
+        reg = (form - 1U) % 32U;
+        return effect[0].reg.bank == MINIC_MACHINE_REGISTER_FLOAT &&
+            effect[0].reg.number == reg &&
+            effect[0].reg.width_bits == 64U &&
+            effect[0].access == access;
+    }
+    if (ins->source_asm_machine_form_id == LOONG_DESC_PERCPU_INDEXED) {
+        const MinicMachineRegisterEffect *effect = ins->implicit;
+        if (ins->operand_count != 2U || ins->implicit_count != 1U ||
+            effect == NULL) return false;
+        return effect[0].reg.bank == MINIC_MACHINE_REGISTER_GENERAL &&
+            effect[0].reg.number == 21U &&
+            effect[0].reg.width_bits == 64U &&
+            effect[0].access == MINIC_MACHINE_REGISTER_READ;
+    }
+    return true;
 }
 
 static bool loong_source_validate_binding(const MinicMachineFunction *fn,
@@ -278,6 +333,26 @@ static bool loong_source_validate_binding(const MinicMachineFunction *fn,
     if (fn == NULL || fn->target == NULL || id >= ins->operand_count ||
         ins->operands == NULL) return false;
     op = &ins->operands[id];
+    if (ins->source_asm_machine_form_id ==
+            MINIC_LOONG_MACHINE_ASM_PERCPU_AMO &&
+        (ins->operand_count != 3U ||
+         (ins->effects & (MINIC_MACHINE_EFFECT_MEMORY_READ |
+                          MINIC_MACHINE_EFFECT_MEMORY_WRITE |
+                          MINIC_MACHINE_EFFECT_VOLATILE)) !=
+                          (MINIC_MACHINE_EFFECT_MEMORY_READ |
+                           MINIC_MACHINE_EFFECT_MEMORY_WRITE |
+                           MINIC_MACHINE_EFFECT_VOLATILE) ||
+         (id == 0U && (op->kind != MINIC_MACHINE_OPERAND_REGISTER ||
+                        op->asm_constraint == NULL ||
+                        strcmp(op->asm_constraint, "=&r") != 0)) ||
+         (id == 1U && (op->kind != MINIC_MACHINE_OPERAND_ADDRESS ||
+                        op->asm_constraint == NULL ||
+                        strcmp(op->asm_constraint, "+ZB") != 0 ||
+                        op->value.address.displacement != 0)) ||
+         (id == 2U && (op->kind != MINIC_MACHINE_OPERAND_REGISTER ||
+                        op->asm_constraint == NULL ||
+                        strcmp(op->asm_constraint, "r") != 0))))
+        return false;
     if (op->kind == MINIC_MACHINE_OPERAND_BLOCK)
         return op->asm_constraint == NULL &&
             ins->source_asm_terminates_block &&

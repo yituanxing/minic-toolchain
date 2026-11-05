@@ -4230,7 +4230,7 @@ static bool emit_linux_rep_movsb_alternative(
     for (i = 0U; i < 4U; ++i) {
         if (b[i].operand_index != i ||
             b[i].kind != (i == 3U ?
-                MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT :
+                MINIC_CORE_STRUCTURED_INLINE_ASM_FIXED_REGISTER_READWRITE :
                 MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE) ||
             b[i].early_clobber || b[i].value >= fn->value_count ||
             (i == 0U && !x86_asm_operand_integer(fn, b[i].value,
@@ -4414,6 +4414,8 @@ static bool emit_linux_rep_stosb_alternative(
             b[i].early_clobber ||
             b[i].kind != (i < 2U ?
                 MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE :
+                i == 2U ?
+                MINIC_CORE_STRUCTURED_INLINE_ASM_FIXED_REGISTER_READWRITE :
                 MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT) ||
             b[i].has_fixed_register_binding != (i == 2U))
             return false;
@@ -5031,7 +5033,9 @@ static bool emit_linux_put_user_call(
     for (i = 0U; i < 5U; ++i)
         if (b[i].operand_index != i || b[i].value >= fn->value_count ||
             b[i].early_clobber ||
-            b[i].kind != (i == 0U ?
+            b[i].kind != (i == 1U ?
+                MINIC_CORE_STRUCTURED_INLINE_ASM_FIXED_REGISTER_READWRITE :
+                i == 0U ?
                 MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT :
                 MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT) ||
             b[i].has_fixed_register_binding != (i == 1U || i == 3U))
@@ -5108,7 +5112,9 @@ static bool emit_linux_get_user_call(
     for (i = 0U; i < 5U; ++i)
         if (b[i].operand_index != i || b[i].value >= fn->value_count ||
             b[i].early_clobber ||
-            b[i].kind != (i < 2U ?
+            b[i].kind != (i == 2U ?
+                MINIC_CORE_STRUCTURED_INLINE_ASM_FIXED_REGISTER_READWRITE :
+                i < 2U ?
                 MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT :
                 MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT) ||
             b[i].has_fixed_register_binding != (i == 1U || i == 2U))

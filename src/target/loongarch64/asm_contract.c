@@ -45,28 +45,6 @@ static bool loong_asm_pointer(const MinicCoreFunction *fn,
         type->has_layout && type->size == 8U;
 }
 
-/* Linux 6.6.143 arch/loongarch/include/asm/jump_label.h:
- * 1:nop (or b %l[l_yes]), then a 16-byte, eight-aligned __jump_table
- * [site PREL32, target PREL32, key PREL64]. No generic ASM passthrough is
- * safe: the C label must become a real Core block, and the key operand
- * must remain an ELF symbolic relocation, never a runtime GPR value. */
-unsigned int loong_linux_jump_label_form(
-    const char *text, size_t length) {
-    return minic_multi_linux_jump_label_form(
-        text, length,
-        ".pushsection__jump_table,\"aw\".align3"
-        ".long1b-.,%l[l_yes]-..quad%0-..popsection");
-}
-
-
-
-
-bool minic_loongarch64_linux_jump_label_asm_goto_core(
-    const MinicCoreInlineAsm *source) {
-    return minic_multi_linux_jump_label_asm_goto_core(
-        source, loong_linux_jump_label_form);
-}
-
 bool minic_loongarch64_emit_linux_jump_label_asm_goto(
     FILE *out, const MinicCoreInlineAsm *source,
     size_t function_id, size_t function_blocks) {

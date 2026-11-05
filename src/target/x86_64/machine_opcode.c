@@ -24,6 +24,7 @@ enum X86ImplicitKind {
     X86_IMPLICIT_REP_MOVSB,
     X86_IMPLICIT_CALL_SYSV,
     X86_IMPLICIT_CALL_MS,
+    X86_IMPLICIT_CALL_UACCESS,
     X86_IMPLICIT_CALL_SYSV_THUNK_R11,
     X86_IMPLICIT_JMP_THUNK_RAX,
     X86_IMPLICIT_X87_STACK_PUSH,
@@ -379,6 +380,8 @@ static const MinicX86MachineOpcodeInfo x86_opcodes[MINIC_X86_MI_LAST] = {
         CA|MR|MW,X86_IMPLICIT_CALL_SYSV),
     SYM(CALL_MS_LOCAL_SYMBOL,"call",MINIC_X86_MACHINE_RELOC_PC32,
         CA|MR|MW,X86_IMPLICIT_CALL_MS),
+    SYM(CALL_UACCESS_LOCAL_SYMBOL,"call",MINIC_X86_MACHINE_RELOC_PC32,
+        CA|MR|MW,X86_IMPLICIT_CALL_UACCESS),
     SYM(CALL_INDIRECT_THUNK_R11,"call",MINIC_X86_MACHINE_RELOC_PC32,
         CA|MR|MW,X86_IMPLICIT_CALL_SYSV_THUNK_R11),
     [MINIC_X86_MI_CALL_SYSV_R] = { .mnemonic="call",
@@ -644,6 +647,16 @@ static bool x86_append_implicit(MinicMachineOpcodeContract *out,
                x86_gp(out,MINIC_X86_REG_RCX,64,R|W) && x86_flags(out,R);
     case X86_IMPLICIT_JMP_THUNK_RAX:
         return x86_gp(out,MINIC_X86_REG_RAX,64,R);
+    case X86_IMPLICIT_CALL_UACCESS:
+        /* Kernel uaccess helper ABI: one register carries the address,
+         * another the payload, while RSP is live and RBX is clobbered by
+         * put_user (conservatively model it for get_user too). */
+        return x86_gp(out,MINIC_X86_REG_RSP,64,R|W) &&
+            x86_gp(out,MINIC_X86_REG_RAX,64,R|W) &&
+            x86_gp(out,MINIC_X86_REG_RCX,64,R|W) &&
+            x86_gp(out,MINIC_X86_REG_RDX,64,C) &&
+            x86_gp(out,MINIC_X86_REG_RBX,64,C) &&
+            x86_flags(out,C);
     case X86_IMPLICIT_CALL_SYSV:
     case X86_IMPLICIT_CALL_MS:
     case X86_IMPLICIT_CALL_SYSV_THUNK_R11: {
@@ -970,6 +983,27 @@ bool minic_x86_64_machine_validate_source_asm(const MinicTargetInfo *target,
                  MINIC_MACHINE_EFFECT_VOLATILE) &&
             instruction->implicit_count == 0U &&
             instruction->implicit == NULL;
+    if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_PUT_USER_CALL ||
+        instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_GET_USER_CALL) {
+        const bool put = instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_PUT_USER_CALL;
+        form = minic_x86_64_linux_uaccess_core_form_exact(
+            instruction->source_asm_template,
+            instruction->source_asm_length, put);
+        return instruction->source_asm_machine_form_variant == form &&
+            (put ? form == 0x200U || form == 0x800U :
+                   form == 3U || form == 4U) &&
+            instruction->implicit_count == 0U &&
+            instruction->implicit == NULL &&
+            instruction->effects ==
+                (MINIC_MACHINE_EFFECT_SOURCE_ASM |
+                 MINIC_MACHINE_EFFECT_VOLATILE |
+                 MINIC_MACHINE_EFFECT_COMPILER_BARRIER |
+                 MINIC_MACHINE_EFFECT_MEMORY_READ |
+                 MINIC_MACHINE_EFFECT_MEMORY_WRITE);
+    }
     if (instruction->source_asm_machine_form_id !=
             MINIC_X86_MACHINE_ASM_ZERO_BARRIER ||
         (form = minic_x86_64_zero_barrier_form_exact(

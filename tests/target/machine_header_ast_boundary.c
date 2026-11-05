@@ -17,7 +17,7 @@
 #include "target/aarch64/block_emit.h"
 #include "target/loongarch64/codegen.h"
 #include "target/loongarch64/asm_contract.h"
-#include "target/loongarch64/block_emit.h"
+#include "target/loongarch64/machine_select.h"
 
 #ifdef MINIC_FRONTEND_AST_H
 #error "machine/Core target headers leaked the full C AST"

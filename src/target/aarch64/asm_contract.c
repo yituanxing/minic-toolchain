@@ -8,48 +8,9 @@
 #include "core/symbol_identity.h"
 #include <string.h>
 
-/* The separate asm_contract_source.c owns GNU operand and C type admission.
- * This unit owns shared ISA form recognition and machine emission only.
- * Physical ISA emitters inspect sealed Core execution types; a poisoned
- * source-language type must not affect an otherwise valid machine operand. */
-static const MinicCoreType *aarch64_asm_core_type(
-    const MinicCoreFunction *fn, MinicCoreValueId value, bool pointee) {
-    MinicCoreTypeId id;
-    if (!fn || !fn->type_context || !fn->values || value >= fn->value_count)
-        return NULL;
-    id = fn->values[value].core_type_id;
-    if (pointee && !minic_lp64_core_pointer_pointee(
-            fn->type_context, id, &id)) return NULL;
-    id = minic_core_type_unqualified(fn->type_context, id);
-    return minic_core_type_get(fn->type_context, id);
-}
-
-/* sign: -1 either, 0 unsigned, 1 signed. _Bool has a different semantic
- * representation and must be explicitly admitted by its real Core flag. */
-static bool aarch64_asm_core_integer(
-    const MinicCoreFunction *fn, MinicCoreValueId value, bool pointee,
-    size_t width, int sign) {
-    const MinicCoreType *type = aarch64_asm_core_type(fn, value, pointee);
-    return type && type->has_layout && type->kind == MINIC_CORE_TYPE_INTEGER &&
-        !type->value.integer.is_bool && type->size == width &&
-        type->value.integer.bit_width == width * 8U &&
-        (sign < 0 || type->value.integer.is_signed == (sign != 0));
-}
-
-static bool aarch64_asm_core_bool(
-    const MinicCoreFunction *fn, MinicCoreValueId value, bool pointee) {
-    const MinicCoreType *type = aarch64_asm_core_type(fn, value, pointee);
-    return type && type->has_layout && type->kind == MINIC_CORE_TYPE_INTEGER &&
-        type->size == 1U && type->value.integer.is_bool &&
-        type->value.integer.bit_width == 1U;
-}
-
-static bool aarch64_asm_core_pointer(
-    const MinicCoreFunction *fn, MinicCoreValueId value, bool pointee) {
-    const MinicCoreType *type = aarch64_asm_core_type(fn, value, pointee);
-    return type && type->has_layout && type->kind == MINIC_CORE_TYPE_POINTER &&
-        type->size == 8U;
-}
+/* Source-language admission remains in asm_contract_source.c; the machine
+ * execution-type predicates now reside in asm_contract_internal.h so both
+ * emitters apply precisely the same sealed Core checks. */
 
 static bool aarch64_asm_core_gpr_scalar(
     const MinicCoreFunction *fn, MinicCoreValueId value, bool allow_pointer) {
@@ -791,29 +752,6 @@ const Aarch64RawIoRead *aarch64_raw_io_read(
     return NULL;
 }
 
-/* Both real 6.6.143 arm64 prefetch() and prefetchw() in
- * processor.h use GNU p and %a0. A trailing newline is source whitespace;
- * the only safe hardware opcodes are exact PRFM PLDL1KEEP/PSTL1KEEP. */
-const char *aarch64_linux_prefetch_template(const char *text, size_t length) {
-    char compact[64];
-    size_t i, n = 0U;
-    if (!text || length == 0U || length >= sizeof(compact)) return NULL;
-    for (i = 0U; i < length; ++i) {
-        const char c = text[i];
-        if (c == ' ' || c == '\t' || c == '\n' || c == '\r')
-            continue;
-        if (c == ';' || n + 1U >= sizeof(compact))
-            return NULL;
-        compact[n++] = c;
-    }
-    compact[n] = '\0';
-    if (strcmp(compact, "prfmpldl1keep,%a0") == 0)
-        return "pldl1keep";
-    if (strcmp(compact, "prfmpstl1keep,%a0") == 0)
-        return "pstl1keep";
-    return NULL;
-}
-
 /* ORIGINAL Linux 6.6.143 arch/arm64/include/asm/io.h, all four
  * __raw_write{b,w,l,q} operations:
  * asm volatile("str{b,h} %w0, [%1]" : : "rZ"(val), "r"(addr));
@@ -849,60 +787,12 @@ const Aarch64RawIoStore *aarch64_raw_io_store(
 }
 
 
-/* Original arm64 barrier.h four-width hardware acquire load. */
-size_t aarch64_load_acquire_width(const char *s,size_t len) {
-    static const char *const kinds[]={
-        "ldarb%w0,%1","ldarh%w0,%1","ldar%w0,%1","ldar%0,%1"
-    };
-    char norm[64];size_t i,n=0U;
-    if(!s||!len||len>=sizeof(norm))return 0U;
-    for(i=0U;i<len;++i) {
-        const char c=s[i];
-        if(c==' '||c==9)continue;
-        if(c==10||c==13||c==';'||n+1U>=sizeof(norm))return 0U;
-        norm[n++]=c;
-    }
-    norm[n]=0;
-    for(i=0U;i<4U;++i)
-        if(strcmp(norm,kinds[i])==0)return (size_t)1U<<i;
-    return 0U;
-}
-
-/* Real Linux arm64 store-release GNU ASM: release ordering is hardware. */
-size_t aarch64_stlr_width(const char *s, size_t len) {
-    static const char *const form[] = {
-        NULL, "stlrb%w1,%0", "stlrh%w1,%0", NULL,
-        "stlr%w1,%0", NULL, NULL, NULL, "stlr%x1,%0"
-    };
-    char norm[64]; size_t i, n = 0U;
-    if (!s || !len || len >= sizeof(norm)) return 0U;
-    for (i = 0U; i < len; ++i) {
-        if (s[i] == '\n' || s[i] == '\r' || s[i] == ';') return 0U;
-        if (s[i] == ' ' || s[i] == '\t') continue;
-        if (n + 1U >= sizeof(norm)) return 0U;
-        norm[n++] = s[i];
-    }
-    norm[n] = '\0';
-    for (i = 1U; i <= 8U; ++i)
-        if (form[i] && strcmp(norm, form[i]) == 0) return i;
-    return 0U;
-}
-
 
 /* smp_load_acquire/smp_store_release on Linux BPF struct-ops state use a
  * *C enum*, not an int typedef. Resolve its actual underlying integer type
  * through the corresponding source/Core enum catalogs: accepting every
  * enum as 32-bit would silently truncate a valid 64-bit C enum. */
 
-
-static bool aarch64_stlr_scalar_core(
-    const MinicCoreFunction *fn, MinicCoreValueId value,
-    bool pointee, size_t width) {
-    /* C enum's effective integer representation is already a Core integer;
-     * there is no reason for a machine emitter to revisit nominal C enum
-     * catalogs or the source type rank. */
-    return aarch64_asm_core_integer(fn, value, pointee, width, -1);
-}
 
 /* AAPCS64 C pointer occupies one 64-bit GPR, including typed volatile
  * pointer lvalues in original Linux RCU publish/read primitives.
@@ -922,20 +812,6 @@ static bool aarch64_stlr_scalar_core(
  * qualification has already proven the C layout. Revalidate its native
  * access size from the independently imported Core type snapshot so the
  * machine emission can never consult the C Program again. */
-static bool aarch64_stlr_memory_carrier_core(
-    const MinicCoreFunction *fn, MinicCoreValueId address,
-    size_t width) {
-    const MinicCoreType *object = aarch64_asm_core_type(fn, address, true);
-    if (!object || !object->has_layout) return false;
-    if (aarch64_stlr_scalar_core(fn, address, true, width) ||
-        (width == 1U && aarch64_asm_core_bool(fn, address, true)) ||
-        (width == 8U && aarch64_asm_core_pointer(fn, address, true)))
-        return true;
-    return object->kind == MINIC_CORE_TYPE_RECORD &&
-           object->has_layout && object->size == width &&
-           object->alignment <= width;
-}
-
 static bool aarch64_core_pointee_layout(
     const MinicCoreFunction *fn, MinicCoreValueId address,
     size_t *size, size_t *alignment) {
@@ -1871,23 +1747,6 @@ static bool aarch64_linux_kvm_at_fixup_emit(
 /* AT S1E1R explicitly requests a stage-1 EL1 address translation and
  * updates PAR_EL1. The operand is a virtual address, not an ordinary load;
  * keep the privileged side effect and reject arbitrary AT operations. */
-bool aarch64_linux_at_s1e1r_template(
-    const char *text, size_t length) {
-    static const char exact[] = "ats1e1r,%0";
-    char normalized[64];
-    size_t i, n = 0U;
-    if (!text || !length || length >= sizeof(normalized)) return false;
-    for (i = 0U; i < length; ++i) {
-        const char ch = text[i];
-        if (ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n')
-            continue;
-        if (ch == '\0' || n + 1U >= sizeof(normalized)) return false;
-        normalized[n++] = ch;
-    }
-    normalized[n] = '\0';
-    return strcmp(normalized, exact) == 0;
-}
-
 
 
 static bool aarch64_linux_at_s1e1r_emit(
@@ -2546,37 +2405,6 @@ static bool aarch64_linux_vhe_sysreg_alternative_emit(
  * GNU register-or-zero operand. This is a KERNEL HARDWARE invalidation,
  * not a C function call or an ordinary compiler memory fence. Keep all
  * original TLBI opcodes in this ISA target, never generic Core. */
-static const char *const aarch64_linux_tlbi_names[] = {
-    /* All forms before ADDR_FORM_COUNT have one rZ input. */
-    "vale1is", "vale2is", "aside1is", "rvale1is",
-    "vae1is", "rvae1is", "vaale1is", "vaae1is",
-    /* KVM stage-2 and EL2 address translations. */
-    "ipas2e1is", "ipas2e1", "vae2is", "ripas2e1is", "ripas2e1",
-    /* Whole-context invalidations have no explicit operand. */
-    "vmalle1", "vmalle1is", "alle1is", "vmalls12e1is",
-    "vmalls12e1"
-};
-unsigned int aarch64_linux_tlbi_form(const char *text,size_t length) {
-    char normalized[128],expected[128];
-    size_t i,n=0U;
-    if(!text||!length||length>=sizeof(normalized))return 0U;
-    for(i=0U;i<length;++i){
-        const char ch=text[i];
-        if(ch==' '||ch=='\t'||ch=='\r'||ch=='\n')continue;
-        if(ch=='\0'||n+1U>=sizeof(normalized))return 0U;
-        normalized[n++]=ch;
-    }
-    normalized[n]='\0';
-    for(i=0U;i<sizeof(aarch64_linux_tlbi_names)/
-                  sizeof(aarch64_linux_tlbi_names[0]);++i){
-        const int written=snprintf(expected,sizeof(expected),
-            ".archarmv8.5-atlbi%s%s",aarch64_linux_tlbi_names[i],
-            i<AARCH64_LINUX_TLBI_ADDR_FORM_COUNT?",%x0":"");
-        if(written>0&&(size_t)written<sizeof(expected)&&
-           strcmp(normalized,expected)==0)return (unsigned int)i+1U;
-    }
-    return 0U;
-}
 static const char *aarch64_linux_tlbi_mnemonic(unsigned int form) {
     return !form || (size_t)form > sizeof(aarch64_linux_tlbi_names) /
             sizeof(aarch64_linux_tlbi_names[0])
@@ -4183,43 +4011,11 @@ static bool aarch64_linux_qcom_return_stack_emit(
  * only this exact one-register GNU spelling and a typed 64-bit address; in
  * particular, a semicolon, register suffix or second instruction cannot
  * sneak through an open-ended GNU ASM passthrough. */
-const char *aarch64_linux_cache_op_form(
-    const char *text, size_t length) {
-    static const struct { const char *compact; const char *asm_text; } forms[] = {
-        {"dcivac,%0", "dc ivac"},
-        {"dccvac,%0", "dc cvac"},
-        {"dccvau,%0", "dc cvau"},
-        {"dccivac,%0", "dc civac"},
-        {"icivau,%0", "ic ivau"}
-    };
-    char normalized[80];
-    size_t i, n = 0U;
-    if (!text || length == 0U || length >= sizeof(normalized)) return NULL;
-    for (i = 0U; i < length; ++i) {
-        const char ch = text[i];
-        if (ch == ' ' || ch == '\t') continue;
-        if (ch == '\0' || ch == '\n' || ch == '\r' || ch == ';' ||
-            n + 1U >= sizeof(normalized)) return NULL;
-        normalized[n++] = ch;
-    }
-    normalized[n] = '\0';
-    for (i = 0U; i < sizeof(forms)/sizeof(forms[0]); ++i)
-        if (strcmp(normalized, forms[i].compact) == 0)
-            return forms[i].asm_text;
-    return NULL;
-}
-
 /* Linux 6.6 drivers/firmware/efi/libstub/arm64.c writes
  * asm("dc " DCTYPE ", %0" :: "r"(base)) with no GNU outputs or clobbers.
  * GNU extended asm without outputs is implicitly volatile; the hardware
  * cache maintenance still occurs. The two DCTYPE alternatives, civac/cvau,
  * are the only un-clobbered forms admitted by this target contract. */
-bool aarch64_linux_efi_unclobbered_cache_form(const char *mnemonic) {
-    return mnemonic &&
-        (strcmp(mnemonic, "dc civac") == 0 ||
-         strcmp(mnemonic, "dc cvau") == 0);
-}
-
 
 
 static bool aarch64_linux_cache_op_emit(

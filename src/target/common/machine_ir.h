@@ -210,6 +210,11 @@ typedef struct MinicMachineInstruction {
      * CoreInlineAsm. Zero ID means no special machine-form claim. */
     uint32_t source_asm_machine_form_id;
     uint32_t source_asm_machine_form_variant;
+    /* A target-qualified source-ASM occurrence may instead lower into 1:N
+     * genuine SELECTED opcodes. Exactly one semantic opcode carries this
+     * seal; it owns no source template and needs independent target opcode
+     * validation before Core coverage can credit the original ASM effect. */
+    bool has_selected_source_asm_seal;
     /* GNU `%=` requires an explicit translation-unit unique occurrence ID.
      * It must come from source/Module lowering, never a serializer hash. */
     bool has_source_asm_unique_id;

@@ -178,10 +178,21 @@ static bool machine_validate_instruction(
         (ins->core_block_id != 0U || ins->core_instruction_id != 0U))
         return false;
     if ((ins->kind != MINIC_MACHINE_INSTRUCTION_SOURCE_ASM &&
+         !ins->has_selected_source_asm_seal &&
          (ins->source_asm_machine_form_id != 0U ||
           ins->source_asm_machine_form_variant != 0U ||
           ins->has_source_asm_unique_id ||
           ins->source_asm_unique_id != 0U)) ||
+        (ins->has_selected_source_asm_seal &&
+         (ins->kind != MINIC_MACHINE_INSTRUCTION_SELECTED ||
+          !ins->has_core_origin ||
+          ins->source_asm_machine_form_id == 0U ||
+          ins->source_asm_template != NULL ||
+          ins->source_asm_length != 0U ||
+          ins->source_asm_terminates_block ||
+          ins->source_asm_permits_fallthrough ||
+          (!ins->has_source_asm_unique_id &&
+           ins->source_asm_unique_id != 0U))) ||
         (ins->kind == MINIC_MACHINE_INSTRUCTION_SOURCE_ASM &&
          ((ins->source_asm_machine_form_id == 0U &&
            ins->source_asm_machine_form_variant != 0U) ||
@@ -396,6 +407,12 @@ static bool machine_validate_instruction(
     }
     if (!policy->validate_selected_instruction(
             function, ins, policy->context)) return false;
+    /* Independent physical authorization: an opcode cannot self-declare its
+     * source provenance or use a synthetic source template as a trampoline. */
+    if (ins->has_selected_source_asm_seal &&
+        (policy->validate_selected_source_asm == NULL ||
+         !policy->validate_selected_source_asm(
+             function, ins, policy->context))) return false;
     *terminates = contract.terminates_block;
     *indirect_successors = contract.has_indirect_successors;
     *permits_fallthrough = contract.permits_fallthrough;
@@ -455,8 +472,9 @@ bool minic_machine_function_verify(const MinicMachineFunction *function,
         label_capacity += block->alias_count + 1U;
         for (j = 0U; j < block->instruction_count; ++j) {
             if (block->instructions == NULL) return false;
-            if (block->instructions[j].kind ==
-                MINIC_MACHINE_INSTRUCTION_SOURCE_ASM &&
+            if ((block->instructions[j].kind ==
+                    MINIC_MACHINE_INSTRUCTION_SOURCE_ASM ||
+                 block->instructions[j].has_selected_source_asm_seal) &&
                 block->instructions[j].has_source_asm_unique_id) {
                 if (source_unique_capacity == SIZE_MAX) return false;
                 ++source_unique_capacity;
@@ -536,7 +554,8 @@ bool minic_machine_function_verify(const MinicMachineFunction *function,
             }
             if (ins->kind == MINIC_MACHINE_INSTRUCTION_LOCAL_LABEL)
                 labels[label_count++] = ins->local_label_name;
-            if (ins->kind == MINIC_MACHINE_INSTRUCTION_SOURCE_ASM &&
+            if ((ins->kind == MINIC_MACHINE_INSTRUCTION_SOURCE_ASM ||
+                 ins->has_selected_source_asm_seal) &&
                 ins->has_source_asm_unique_id) {
                 size_t earlier;
                 for (earlier = 0U; earlier < source_unique_count; ++earlier)

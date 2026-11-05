@@ -24,6 +24,11 @@ static bool x86_emit_source_asm(FILE *out,
             instruction, context)) return false;
     if (instruction->source_asm_machine_form_id == 0U)
         return true; /* Empty volatile asm has an effect but zero bytes. */
+    if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_PUT_USER_CALL ||
+        instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_GET_USER_CALL)
+        return true; /* Physical opcodes already emitted this private CALL. */
     variant = instruction->source_asm_machine_form_variant;
     return variant >= 1U && variant <=
             sizeof(hardware) / sizeof(hardware[0]) &&

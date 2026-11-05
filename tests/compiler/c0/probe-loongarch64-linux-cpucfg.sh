@@ -21,9 +21,16 @@ SRC
 "$MINIC_CC" --target=loongarch64-linux -fPIE -S \
   "$work/cpucfg.i" -o "$work/cpucfg.s"
 test "$(grep -Fc '  cpucfg $t0, $t1' "$work/cpucfg.s")" -eq 2
-# The typed selector uses t7 to materialize the output lvalue, leaving the
-# early-clobber cpucfg result in t0 intact until its explicit MachineIR store.
-grep -Fq '  st.w $t0, $t7, 0' "$work/cpucfg.s"
+# A physical lvalue pointer may be retained in t7 or rematerialized in t1.
+# Either way the early-clobber cpucfg result must be stored as the exact
+# 32-bit t0 value, after both scalar input variants have executed.
+# Other C stack/local stores may also happen to use t0. Verify each GNU
+# source occurrence and its output writeback within its own function.
+for fn in loongson_cpu_get_prid loongson_cpu_get_cfg; do
+    sed -n "/^${fn}:/,/^\\.size ${fn},/p" "$work/cpucfg.s" >"$work/$fn.s"
+    test "$(grep -Fc '  cpucfg $t0, $t1' "$work/$fn.s")" -eq 1
+    grep -Eq '^  st\.w \$t0, \$(t7|t1), 0$' "$work/$fn.s"
+done
 echo 'MINIC_LOONGARCH64_CPUCFG_SHAPE=PASS constant_index=1 runtime_index=1'
 
 cross=${LOONGARCH64_CC:-loongarch64-linux-gnu-gcc-13}

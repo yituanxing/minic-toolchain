@@ -132,9 +132,51 @@ static void check_source_plan(MinicAsmOperandPlanOwner owner) {
     assert(!minic_source_backend_capture_asm_operand_source(&source, owner, &plan));
 }
 
+static void check_fixed_register_scalar_readwrite(void) {
+    MinicInlineAsmOperand output = make_operand("stack", "+r",
+        MINIC_INLINE_ASM_OPERAND_READ_WRITE);
+    MinicInlineAsmOperand input = make_operand(NULL, "r",
+        MINIC_INLINE_ASM_OPERAND_READ_ONLY);
+    MinicInlineAsm source = {0};
+    MinicAsmOperandPlan plan = {0};
+    MinicCoreInstruction ins = {0};
+    MinicCoreInlineAsm effect = {0};
+    size_t outputs = 0U;
+    source.template_text = "call %1";
+    source.template_length = strlen(source.template_text);
+    source.outputs = &output;
+    source.output_count = 1U;
+    source.inputs = &input;
+    source.input_count = 1U;
+    plan.operand_count = 2U;
+    plan.kinds[0] =
+        MINIC_CORE_STRUCTURED_INLINE_ASM_FIXED_REGISTER_READWRITE;
+    plan.kinds[1] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+    assert(minic_source_backend_capture_asm_operand_source(
+        &source, MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED, &plan));
+    assert(plan.gnu_readwrite[0] && !plan.gnu_readwrite[1]);
+    ins.kind = MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM;
+    ins.value.structured_inline_asm.operand_count = 2U;
+    ins.value.structured_inline_asm.operands[0].kind = plan.kinds[0];
+    ins.value.structured_inline_asm.operands[1].kind = plan.kinds[1];
+    ins.value.structured_inline_asm.operands[0].operand_index = 0U;
+    ins.value.structured_inline_asm.operands[1].operand_index = 1U;
+    assert(minic_core_asm_output_operand_count(&ins, &outputs));
+    assert(outputs == 1U);
+    assert(core_asm_publish_operand_plan(&ins, &effect, &plan));
+    assert(ins.value.structured_inline_asm.operands[0].physical_read_write);
+    /* The scalar input role cannot impersonate GNU's +r output prefix. */
+    ins.value.structured_inline_asm.operands[0].kind =
+        MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+    assert(minic_core_asm_output_operand_count(&ins, &outputs));
+    assert(outputs == 0U);
+    assert(!core_asm_publish_operand_plan(&ins, &effect, &plan));
+}
+
 int main(void) {
     check_source_plan(MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED);
     check_source_plan(MINIC_ASM_OPERAND_PLAN_GENERIC_STRUCTURED);
+    check_fixed_register_scalar_readwrite();
     puts("PASS core/asm_operand_plan source-ties=2 early=1 effects=explicit+implicit forms=2");
     return 0;
 }

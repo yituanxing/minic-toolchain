@@ -25,44 +25,113 @@ for name in read_packed_high write_packed_high read_packed_tail \
     }
 done
 
+# MachineIR may select either an unrolled byte-only transport or a fast
+# native-width load/store with a physical address-alignment branch and a
+# bounded byte-loop fallback. Count loop trips, not textual byte opcodes.
+# Frame spill/reload accesses are unrelated to the packed C lvalue.
 awk '
-    function expect(minread, minwrite, signed32) {
-        if (reads < minread || writes < minwrite ||
-            (signed32 && sign32 == 0) || unsafe_native) {
-            printf "LOONGARCH_PACKED_ALIGNMENT=FAIL function=%s byte_reads=%d byte_writes=%d sign32=%d unsafe_native=%d expected_read=%d expected_write=%d\n", name, reads, writes, sign32, unsafe_native, minread, minwrite > "/dev/stderr"
-            bad++
-        }
-        checked++
+  /^[a-z_][a-z_0-9]*:$/ {
+    name=substr($0,1,length($0)-1)
+  }
+  /^  andi \$t3, \$(t1|t7), (3|7)$/ {
+    mask=($0 ~ /, 3$/ ? 3 : 7)
+    if (getline branch != 1 ||
+        branch !~ /^  bnez \$t3, \.Lminic_mir_/ ||
+        getline fast_label != 1 ||
+        fast_label !~ /^\.Lminic_mir_[a-z_0-9]+_[0-9]+:$/ ||
+        getline native != 1 ||
+        native !~ /^  (ld\.(w|wu|d)|st\.(w|d)) \$t[0-9]+, \$(t1|t7), 0$/ ||
+        (mask == 3 && native !~ /^  (ld\.(w|wu)|st\.w) /) ||
+        (mask == 7 && native !~ /^  (ld\.d|st\.d) /)) {
+      printf "LOONGARCH_PACKED_ALIGNMENT=FAIL unguarded native function=%s line=%d\n", name, NR > "/dev/stderr"
+      bad++
     }
-    function finish() {
-        if (name == "read_packed_high") expect(4, 0, 0)
-        else if (name == "write_packed_high") expect(4, 4, 0)
-        else if (name == "read_packed_tail") expect(4, 0, 0)
-        else if (name == "read_packed_scalar") expect(4, 0, 1)
-        else if (name == "write_packed_scalar") expect(4, 4, 0)
-        else if (name == "read_packed_pointer") expect(8, 0, 0)
-        else if (name == "read_packed_wide") expect(16, 0, 0)
-        else if (name == "write_packed_wide") expect(16, 16, 0)
+    gate[name]++
+    if (mask==3) gate4[name]++
+    else gate8[name]++
+  }
+  /^  ld\.bu \$t[0-9]+, \$(t1|t7), [0-9]+$/ { byte_read[name]++ }
+  /^  st\.b \$t[0-9]+, \$(t1|t7), [0-9]+$/ { byte_write[name]++ }
+  /^  li\.d \$t[34], (4|8)$/ {
+    if ($0 ~ /, 4$/) trip4[name]++
+    else trip8[name]++
+  }
+  /^  addi\.d \$t[34], \$t[34], -1$/ { loop_count[name]++ }
+  /^  bnez \$t[34], \.Lminic_mir_/ { loop_branch[name]++ }
+  /^  jirl \$zero, \$t6, 0$/ { helper_return[name]++ }
+  /^  pcaddi \$t6, 2$/ {
+    pc[name]++
+    if (getline branch != 1 ||
+        branch !~ /^  b \.Lminic_mir_[a-z_0-9]+_[0-9]+$/ ||
+        getline continuation != 1 ||
+        continuation !~ /^\.Lminic_mir_[a-z_0-9]+_[0-9]+:$/) {
+      printf "LOONGARCH_PACKED_ALIGNMENT=FAIL pcaddi PC+8 function=%s line=%d\n", name, NR > "/dev/stderr"
+      bad++
     }
-    /^[a-z_][a-z_0-9]*:$/ {
-        finish()
-        name = substr($0, 1, length($0) - 1)
-        reads = writes = sign32 = unsafe_native = 0
-        next
+  }
+  END {
+    if (ENVIRON["MINIC_PACKED_ALIGNMENT_TRACE"] != "") {
+      for (n in gate)
+        printf "PACKED_TRACE %s gate=%d gate4=%d gate8=%d byte_r=%d byte_w=%d trip4=%d trip8=%d pc=%d loop=%d loopbranch=%d return=%d\n", n, gate[n], gate4[n], gate8[n], byte_read[n], byte_write[n], trip4[n], trip8[n], pc[n], loop_count[n], loop_branch[n], helper_return[n] > "/dev/stderr"
     }
-    /^  ld\.bu \$t[0-9]+, \$t1, [0-9]+$/ { reads++ }
-    /^  st\.b \$t[0-9]+, \$t1, [0-9]+$/ { writes++ }
-    /^  add\.w \$t[0-9]+, \$t[0-9]+, \$zero$/ { sign32++ }
-    /^  (ld\.(h|hu|w|wu|d)|st\.(h|w|d)) \$[a-z0-9]+, \$t1, [-0-9]+$/ {
-        unsafe_native++
-    }
-    END {
-        finish()
-        if (checked != 8 || bad) exit 1
-    }
-' "$work/source.s"
-
-# Aligned native fast paths and the shared helper remain a separate
-# optimization migration. This structural observation alone does not prove
-# execution semantics or generic address provenance.
-echo 'LOONGARCH_PACKED_ALIGNMENT=PASS -S byte_transport_smoke=8 sign32_observed=1 native_t1_unguarded=NOT_OBSERVED aligned_fastpath=NOT_MIGRATED GNU_QEMU=NOT_RUN'
+    # Packed bitfields operate on 3/2 source bytes; they may not replace
+    # an unaligned field by an unchecked native word/dword load/store.
+    if (byte_read["read_packed_high"] < 3 ||
+        byte_read["write_packed_high"] < 3 ||
+        byte_write["write_packed_high"] < 3 ||
+        byte_read["read_packed_tail"] < 2 ||
+        gate["read_packed_high"] || gate["write_packed_high"] ||
+        gate["read_packed_tail"] ||
+        pc["read_packed_high"] || pc["write_packed_high"] ||
+        pc["read_packed_tail"]) bad++
+    # A 4/8-byte packed scalar uses either all-byte lowering or exactly
+    # one guarded native instruction with a width-matched byte-loop escape.
+    if (!((gate4["read_packed_scalar"]==1 &&
+           byte_read["read_packed_scalar"]>=1 &&
+           trip4["read_packed_scalar"]>=1 && pc["read_packed_scalar"]==1 &&
+           helper_return["read_packed_scalar"]>=1) ||
+          (gate["read_packed_scalar"]==0 &&
+           byte_read["read_packed_scalar"]>=4))) bad++
+    if (!((gate4["write_packed_scalar"]==1 &&
+           ((byte_write["write_packed_scalar"]>=4 &&
+             pc["write_packed_scalar"]==0) ||
+            (byte_write["write_packed_scalar"]>=1 &&
+             trip4["write_packed_scalar"]>=1 &&
+             pc["write_packed_scalar"]==1 &&
+             helper_return["write_packed_scalar"]>=1))) ||
+          (gate["write_packed_scalar"]==0 &&
+           byte_write["write_packed_scalar"]>=4))) bad++
+    if (!((gate8["read_packed_pointer"]==1 &&
+           byte_read["read_packed_pointer"]>=1 &&
+           trip8["read_packed_pointer"]>=1 && pc["read_packed_pointer"]==1 &&
+           helper_return["read_packed_pointer"]>=1) ||
+          (gate["read_packed_pointer"]==0 &&
+           byte_read["read_packed_pointer"]>=8))) bad++
+    # Both halves of a packed 128-bit value must pass independent aligned
+    # native gates, but may share one eight-trip byte fallback helper.
+    if (!((gate8["read_packed_wide"]==2 &&
+           byte_read["read_packed_wide"]>=1 &&
+           trip8["read_packed_wide"]>=1 && pc["read_packed_wide"]==2 &&
+           helper_return["read_packed_wide"]>=1) ||
+          (gate["read_packed_wide"]==0 &&
+           byte_read["read_packed_wide"]>=16))) bad++
+    if (!((gate8["write_packed_wide"]==2 &&
+           byte_write["write_packed_wide"]>=1 &&
+           trip8["write_packed_wide"]>=1 && pc["write_packed_wide"]==2 &&
+           helper_return["write_packed_wide"]>=1) ||
+          (gate["write_packed_wide"]==0 &&
+           byte_write["write_packed_wide"]>=16))) bad++
+    for (n in gate)
+      if (n ~ /^(read|write)_packed_(scalar|pointer|wide)$/ &&
+          gate[n] != 0 && pc[n] != 0 &&
+          (loop_count[n]<1 || loop_branch[n]<1)) bad++
+    # A statically aligned 128-bit global requires no slow path.
+    if (gate["read_static_wide"] || pc["read_static_wide"] ||
+        byte_read["read_static_wide"] || byte_write["read_static_wide"]) bad++
+    if (bad) exit 1
+  }
+' "$work/source.s" || {
+    echo 'LOONGARCH_PACKED_ALIGNMENT=FAIL packed byte transport or native alignment proof' >&2
+    exit 1
+}
+echo 'LOONGARCH_PACKED_ALIGNMENT=PASS -S bitfield_byte_transport=3x3+2 scalar_pointer_guarded_or_bytes=3 wide_two_halves=2 fallback_bounded=1 pcaddi_when_emitted=verified static_global_fastpath=1 GNU_QEMU=NOT_RUN'

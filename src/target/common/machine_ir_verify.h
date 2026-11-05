@@ -49,6 +49,11 @@ typedef bool (*MinicMachineValidateRelocation)(
     int64_t addend, void *context);
 typedef bool (*MinicMachineValidateSourceAsm)(
     const MinicTargetInfo *, const MinicMachineInstruction *, void *context);
+/* A selected source-ASM expansion is NOT raw source text. Independently
+ * recognize the opcode, physical operands, effects and sealed source form;
+ * no callback means target-qualified selected expansions are unsupported. */
+typedef bool (*MinicMachineValidateSelectedSourceAsm)(
+    const MinicMachineFunction *, const MinicMachineInstruction *, void *context);
 
 typedef struct MinicMachineVerifyPolicy {
     MinicMachineLookupOpcodeContract lookup_opcode;
@@ -65,6 +70,7 @@ typedef struct MinicMachineVerifyPolicy {
     MinicMachineValidateAddress validate_address;
     MinicMachineValidateRelocation validate_relocation;
     MinicMachineValidateSourceAsm validate_source_asm;
+    MinicMachineValidateSelectedSourceAsm validate_selected_source_asm;
     void *context;
 } MinicMachineVerifyPolicy;
 

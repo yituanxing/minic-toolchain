@@ -441,7 +441,14 @@ typedef enum MinicCoreStructuredInlineAsmOperandKind {
      * The sole result lives in instruction->result; operand.value is INVALID.
      * This allows a mixed +A memory output and =r result to retain the
      * original GNU operand positions without adding a synthetic Core store. */
-    MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_RESULT
+    MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_RESULT,
+    /* Target-qualified GNU +r on an explicit fixed hardware register.
+     * Unlike REGISTER_READWRITE, this is a scalar SSA read paired with a
+     * physical register binding, NOT the address of a C lvalue. This is still
+     * a tied physical input/output: native lowering must preserve the
+     * before-value and the after-ASM register state without a fabricated
+     * memory writeback. Only target-proven forms may select this role. */
+    MINIC_CORE_STRUCTURED_INLINE_ASM_FIXED_REGISTER_READWRITE
 } MinicCoreStructuredInlineAsmOperandKind;
 
 typedef struct MinicCoreStructuredInlineAsmOperand {
@@ -623,6 +630,7 @@ static inline bool minic_core_asm_output_operand_count(
         case MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT:
         case MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_RESULT:
         case MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE:
+        case MINIC_CORE_STRUCTURED_INLINE_ASM_FIXED_REGISTER_READWRITE:
         case MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_OUTPUT:
         case MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE:
             output = true;

@@ -3,6 +3,7 @@
 #include "target/riscv/machine_core_select.h"
 #include "target/riscv/machine_gnu_asm.h"
 #include "target/riscv/machine_target_state.h"
+#include "target/riscv/instruction_select.h"
 #include "target/common/machine_core_coverage.h"
 #include "target/data_layout.h"
 #include <stdio.h>
@@ -113,6 +114,13 @@ static bool core_cycle(MinicCoreFunction *fn, MinicCoreTypeContext *types,
         ins.value.fixed_register_binding_id = 0U;
         CHECK(minic_core_function_append_value_instruction(
             fn, entry, &ins, &result));
+        ins = (MinicCoreInstruction){0};
+        ins.kind = MINIC_CORE_INSTRUCTION_FIXED_REGISTER_WRITE;
+        ins.core_type_id = void_type;
+        ins.result = MINIC_CORE_VALUE_INVALID;
+        ins.value.fixed_register_write.binding_id = 0U;
+        ins.value.fixed_register_write.source = result;
+        CHECK(minic_core_function_append_effect_instruction(fn, entry, &ins));
     }
     term.kind = MINIC_CORE_TERMINATOR_BRANCH;
     term.branch_target = backedge;
@@ -172,6 +180,7 @@ static bool run(unsigned xlen, bool compiler_barrier,
         MINIC_TARGET_ARCH_RISCV32 : MINIC_TARGET_ARCH_RISCV64;
     target.data_layout = &layout;
     target.fixed_register_read = test_fixed_tp_register;
+    target.fixed_register_write = test_fixed_tp_register;
     isa.xlen = xlen;
     isa.abi = xlen == 32U ? MINIC_RISCV_ABI_ILP32 : MINIC_RISCV_ABI_LP64;
     isa.strict_isa = true;
@@ -237,6 +246,7 @@ static bool run(unsigned xlen, bool compiler_barrier,
             strstr(text, "# MINIC_SOURCE_INLINE_ASM_END");
     if (fixed_register)
         okay = okay && strstr(text, "  mv x5, x4") &&
+            strstr(text, "  mv x4, x5") &&
             strstr(text, xlen == 32U ? "  sw x5, 32(x2)" :
                                            "  sd x5, 32(x2)");
     if (!okay) fprintf(stderr, "RV%u asm:\n%s\n", xlen, text);
@@ -285,6 +295,9 @@ static bool run(unsigned xlen, bool compiler_barrier,
         minic_machine_function_destroy(&machine);
         target.fixed_register_read = NULL;
         okay = !minic_riscv_machine_select_core_subset(&machine, &plan);
+        target.fixed_register_read = test_fixed_tp_register;
+        target.fixed_register_write = NULL;
+        okay = okay && !minic_riscv_machine_select_core_subset(&machine, &plan);
     }
 done:
     if (!okay) fprintf(stderr, "RV%u core-CFG exported=%d at %s\n",
@@ -298,11 +311,12 @@ done:
     minic_core_type_context_destroy(&types);
     return okay;
 }
-static bool run_scalar(unsigned xlen, bool unsupported_multiply) {
+static bool run_scalar(unsigned xlen, MinicCoreInstructionKind binary,
+                       bool saved_return_address) {
     MinicCoreFunction fn = {0};
     MinicCoreTypeContext types;
     MinicCoreType type = {0};
-    MinicCoreTypeId integer_type;
+    MinicCoreTypeId integer_type, unsigned_type;
     MinicCoreBlockId entry;
     MinicCoreValueId values[4];
     MinicCoreInstruction ins = {0};
@@ -323,6 +337,8 @@ static bool run_scalar(unsigned xlen, bool unsupported_multiply) {
     char assembly[4096];
     size_t i, n;
     bool ok = false;
+    const bool bitscan = binary == MINIC_CORE_INSTRUCTION_INTEGER_CLZ ||
+        binary == MINIC_CORE_INSTRUCTION_INTEGER_CTZ;
     const char *stage = "initialize";
     minic_core_type_context_initialize(&types);
     minic_core_function_initialize(&fn);
@@ -335,24 +351,30 @@ static bool run_scalar(unsigned xlen, bool unsupported_multiply) {
     type.size = type.alignment = 4U;
     type.value.integer.bit_width = 32U;
     type.value.integer.is_signed = true;
-    if (!minic_core_type_register(&types, &type, &integer_type) ||
+    if (!minic_core_type_register(&types, &type, &integer_type)) goto done;
+    type.value.integer.is_signed = false;
+    if (!minic_core_type_register(&types, &type, &unsigned_type) ||
         !minic_core_function_define_signature(&fn, &types, integer_type,
             NULL, 0U, MINIC_CALLING_CONVENTION_DEFAULT, false) ||
         !minic_core_function_add_block(&fn, &entry)) goto done;
     stage = "build instructions";
     ins.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
-    ins.core_type_id = integer_type;
+    ins.core_type_id = bitscan ? unsigned_type : integer_type;
     ins.value.integer_value = 71;
     if (!minic_core_function_append_value_instruction(&fn, entry, &ins,
             &values[0])) goto done;
-    ins.value.integer_value = -27;
+    ins.value.integer_value = bitscan ? 27 : -27;
     if (!minic_core_function_append_value_instruction(&fn, entry, &ins,
             &values[1])) goto done;
-    ins.kind = unsupported_multiply ?
-        MINIC_CORE_INSTRUCTION_INTEGER_MULTIPLY :
-        MINIC_CORE_INSTRUCTION_INTEGER_ADD;
-    ins.value.binary.left = values[0];
-    ins.value.binary.right = values[1];
+    ins.kind = binary;
+    if (bitscan) {
+        ins.value.operand = values[0];
+        ins.core_type_id = integer_type;
+    }
+    else {
+        ins.value.binary.left = values[0];
+        ins.value.binary.right = values[1];
+    }
     if (!minic_core_function_append_value_instruction(&fn, entry, &ins,
             &values[2])) goto done;
     ins.kind = MINIC_CORE_INSTRUCTION_INTEGER_NEGATE;
@@ -377,6 +399,8 @@ static bool run_scalar(unsigned xlen, bool unsupported_multiply) {
     if (!minic_riscv_target_isa_store(&target, &isa)) goto done;
     frame.frame_size = 128U;
     frame.stack_alignment = 16U;
+    frame.saves_return_address = saved_return_address;
+    frame.return_address_offset = 96U;
     for (i = 0U; i < 4U; ++i) offsets[i] = i * (xlen / 8U);
     plan.target = &target;
     plan.core = &fn;
@@ -386,7 +410,8 @@ static bool run_scalar(unsigned xlen, bool unsupported_multiply) {
     if (!prepare_old_rv_abi(&fn, xlen, 0U, &abi32, &abi64,
             &calls64, &plan)) goto done;
     stage = "select";
-    if (unsupported_multiply) {
+    if (binary != MINIC_CORE_INSTRUCTION_INTEGER_ADD &&
+        !saved_return_address) {
         ok = !minic_riscv_machine_select_core_subset(&machine, &plan);
         goto done;
     }
@@ -407,14 +432,448 @@ static bool run_scalar(unsigned xlen, bool unsupported_multiply) {
         fseek(out, 0L, SEEK_SET) != 0) goto done;
     n = fread(assembly, 1U, sizeof(assembly) - 1U, out);
     assembly[n] = '\0';
+    const char *helper = binary == MINIC_CORE_INSTRUCTION_INTEGER_MULTIPLY ?
+        (xlen == 32U ? "__mulsi3" : "__muldi3") :
+        binary == MINIC_CORE_INSTRUCTION_INTEGER_DIVIDE ?
+        (xlen == 32U ? "__divsi3" : "__divdi3") :
+        binary == MINIC_CORE_INSTRUCTION_INTEGER_REMAINDER ?
+        (xlen == 32U ? "__modsi3" : "__moddi3") : NULL;
     ok = strstr(assembly, "  li x5, 71") != NULL &&
-        strstr(assembly, "  li x5, -27") != NULL &&
-        strstr(assembly, "  add x5, x5, x6") != NULL &&
+        strstr(assembly, bitscan ? "  li x5, 27" : "  li x5, -27") != NULL &&
+        (bitscan ? strstr(assembly, "  srl x5, x5, x28") != NULL &&
+                   strstr(assembly, "  add x6, x6, x7") != NULL :
+         helper != NULL ? strstr(assembly, helper) != NULL :
+                          strstr(assembly, "  add x5, x5, x6") != NULL) &&
         strstr(assembly, "  neg x5, x5") != NULL &&
         strstr(assembly, "  ret") != NULL;
     if (!ok) fprintf(stderr, "RV%u scalar asm:\n%s\n", xlen, assembly);
 done:
     if (!ok) fprintf(stderr, "RV%u scalar Core selection failed at %s\n", xlen, stage);
+    if (out != NULL) fclose(out);
+    minic_machine_function_destroy(&machine);
+    rv32_function_abi_plan_destroy(&abi32);
+    minic_riscv64_function_abi_plan_destroy(&abi64);
+    minic_core_call_index_destroy(&calls64);
+    minic_core_function_destroy(&fn);
+    minic_core_type_context_destroy(&types);
+    return ok;
+}
+
+
+/* The same Core FP value must travel through typed MachineIR as raw
+ * IEEE-754 bits on both ILP32 and LP64.  No F/D mnemonic may leak into the
+ * generated stream even when the source target admits F/D assembly. */
+static bool run_softfloat(unsigned xlen, unsigned bytes,
+                          MinicCoreInstructionKind binary) {
+    MinicCoreFunction fn = {0};
+    MinicCoreTypeContext types;
+    MinicCoreType type = {0};
+    MinicCoreTypeId fp_type;
+    MinicCoreBlockId entry;
+    MinicCoreValueId values[3];
+    MinicCoreInstruction ins = {0};
+    MinicCoreTerminator term = {0};
+    MinicMachineFunction machine = {0};
+    MinicRiscvCoreMachinePlan plan = {0};
+    Rv32FunctionAbiPlan abi32 = {0};
+    MinicRiscv64FunctionAbiPlan abi64 = {0};
+    MinicCoreCallIndex calls64 = {0};
+    MinicRiscvPhysicalFrame frame = {0};
+    MinicTargetInfo target = {0};
+    MinicRiscvIsa isa = {0};
+    MinicDataLayout layout = {0};
+    MinicMachineGNUAsmPolicy policy = {0};
+    const bool reachable[] = {true};
+    size_t offsets[3], i, n;
+    FILE *out = NULL;
+    char assembly[8192];
+    const char *helper = minic_riscv_softfloat_arithmetic_symbol(binary);
+    bool ok = false;
+    const char *stage = "initialize";
+    minic_core_type_context_initialize(&types);
+    minic_core_function_initialize(&fn);
+    fn.name = malloc(sizeof("rv_softfloat_core"));
+    if (fn.name == NULL || helper == NULL) goto done;
+    memcpy(fn.name, "rv_softfloat_core", sizeof("rv_softfloat_core"));
+    fn.name_length = sizeof("rv_softfloat_core") - 1U;
+    type.kind = MINIC_CORE_TYPE_FLOAT;
+    type.has_layout = true;
+    type.size = type.alignment = bytes;
+    type.value.floating.format = bytes == 4U ?
+        MINIC_CORE_FLOAT_BINARY32 : MINIC_CORE_FLOAT_BINARY64;
+    if (!minic_core_type_register(&types, &type, &fp_type) ||
+        !minic_core_function_define_signature(&fn, &types, fp_type,
+            NULL, 0U, MINIC_CALLING_CONVENTION_DEFAULT, false) ||
+        !minic_core_function_add_block(&fn, &entry)) goto done;
+    stage = "build Core";
+    ins.kind = MINIC_CORE_INSTRUCTION_FLOATING_CONSTANT;
+    ins.core_type_id = fp_type;
+    ins.value.floating_bits = bytes == 4U ?
+        UINT64_C(0x80000000) : UINT64_C(0x8000000000000000);
+    if (!minic_core_function_append_value_instruction(&fn, entry, &ins,
+            &values[0])) goto done;
+    ins.value.floating_bits = bytes == 4U ?
+        UINT64_C(0x3f800000) : UINT64_C(0x3ff0000000000000);
+    if (!minic_core_function_append_value_instruction(&fn, entry, &ins,
+            &values[1])) goto done;
+    ins.kind = binary;
+    ins.value.binary.left = values[0];
+    ins.value.binary.right = values[1];
+    if (!minic_core_function_append_value_instruction(&fn, entry, &ins,
+            &values[2])) goto done;
+    term.kind = MINIC_CORE_TERMINATOR_RETURN;
+    term.return_value = values[2];
+    term.return_object = MINIC_CORE_OBJECT_INVALID;
+    if (!minic_core_function_set_terminator(&fn, entry, &term) ||
+        !minic_core_function_attach_type_context(&fn, &types) ||
+        !minic_core_function_verify(&fn)) goto done;
+    stage = "target ABI";
+    layout.byte_order = MINIC_BYTE_ORDER_LITTLE;
+    layout.pointer_size = layout.pointer_alignment = xlen / 8U;
+    target.architecture = xlen == 32U ?
+        MINIC_TARGET_ARCH_RISCV32 : MINIC_TARGET_ARCH_RISCV64;
+    target.data_layout = &layout;
+    isa.xlen = xlen;
+    isa.abi = xlen == 32U ? MINIC_RISCV_ABI_ILP32 : MINIC_RISCV_ABI_LP64;
+    isa.strict_isa = true;
+    if (!minic_riscv_target_isa_store(&target, &isa)) goto done;
+    frame.frame_size = 128U;
+    frame.stack_alignment = 16U;
+    frame.saves_return_address = true;
+    frame.return_address_offset = 96U;
+    for (i = 0U; i < 3U; ++i) offsets[i] = 16U + i * 16U;
+    plan.target = &target;
+    plan.core = &fn;
+    plan.frame = &frame;
+    plan.value_offsets = offsets;
+    plan.value_offset_count = 3U;
+    if (!prepare_old_rv_abi(&fn, xlen, 0U, &abi32, &abi64,
+            &calls64, &plan)) goto done;
+    stage = "MachineIR";
+    if (!minic_riscv_machine_select_core_subset(&machine, &plan) ||
+        !minic_machine_core_coverage_verify(&fn, reachable, &machine) ||
+        !minic_riscv_machine_gnu_asm_policy(&target, &policy) ||
+        !minic_machine_gnu_asm_preflight(&machine, &policy)) goto done;
+    stage = "GNU asm";
+    out = tmpfile();
+    if (out == NULL || !minic_machine_gnu_asm_emit_body(out,
+            &machine, &policy) || fflush(out) != 0 ||
+        fseek(out, 0L, SEEK_SET) != 0) goto done;
+    n = fread(assembly, 1U, sizeof(assembly) - 1U, out);
+    assembly[n] = '\0';
+    ok = strstr(assembly, helper) != NULL &&
+        strstr(assembly, "  call ") != NULL &&
+        strstr(assembly, "  ret") != NULL &&
+        strstr(assembly, "fadd.") == NULL &&
+        strstr(assembly, "fsub.") == NULL &&
+        strstr(assembly, "fmul.") == NULL &&
+        strstr(assembly, "fdiv.") == NULL;
+    if (!ok) fprintf(stderr,"RV%u softfloat %u asm:\n%s\n",
+        xlen, bytes, assembly);
+done:
+    if (!ok) fprintf(stderr, "RV%u softfloat %u failed at %s\n",
+        xlen, bytes, stage);
+    if (out != NULL) fclose(out);
+    minic_machine_function_destroy(&machine);
+    rv32_function_abi_plan_destroy(&abi32);
+    minic_riscv64_function_abi_plan_destroy(&abi64);
+    minic_core_call_index_destroy(&calls64);
+    minic_core_function_destroy(&fn);
+    minic_core_type_context_destroy(&types);
+    return ok;
+}
+
+/* Compare NaN-sensitive softfloat relations and the complete scalar
+ * conversion/negation family through typed selected instructions on both
+ * RV32I and RV64I. No direct FILE* emitter participates in this test. */
+static bool run_float_runtime_family(unsigned xlen) {
+    MinicCoreFunction fn = {0};
+    MinicCoreTypeContext types;
+    MinicCoreType type = {0};
+    MinicCoreTypeId void_t, int_t, float_t, double_t;
+    MinicCoreBlockId entry;
+    MinicCoreValueId values[12];
+    MinicCoreInstruction ins = {0};
+    MinicCoreTerminator term = {0};
+    MinicMachineFunction machine = {0};
+    MinicRiscvCoreMachinePlan plan = {0};
+    Rv32FunctionAbiPlan abi32 = {0};
+    MinicRiscv64FunctionAbiPlan abi64 = {0};
+    MinicCoreCallIndex calls64 = {0};
+    MinicRiscvPhysicalFrame frame = {0};
+    MinicTargetInfo target = {0};
+    MinicRiscvIsa isa = {0};
+    MinicDataLayout layout = {0};
+    MinicMachineGNUAsmPolicy policy = {0};
+    size_t offsets[12], i, n;
+    FILE *out = NULL;
+    char assembly[16384];
+    const char *required[] = {"__eqdf2", "__ledf2", "__extendsfdf2",
+        "__truncdfsf2", "__floatsidf", "__fixdfsi"};
+    bool ok = false;
+    const char *stage = "initialize";
+    minic_core_type_context_initialize(&types);
+    minic_core_function_initialize(&fn);
+    fn.name = malloc(sizeof("rv_float_runtime"));
+    if (fn.name == NULL) goto done;
+    memcpy(fn.name, "rv_float_runtime", sizeof("rv_float_runtime"));
+    fn.name_length = sizeof("rv_float_runtime") - 1U;
+    type.kind = MINIC_CORE_TYPE_VOID;
+    if (!minic_core_type_register(&types, &type, &void_t)) goto done;
+    type = (MinicCoreType){0};
+    type.kind = MINIC_CORE_TYPE_INTEGER;
+    type.has_layout = true;
+    type.size = type.alignment = 4U;
+    type.value.integer.bit_width = 32U;
+    type.value.integer.is_signed = true;
+    if (!minic_core_type_register(&types, &type, &int_t)) goto done;
+    type = (MinicCoreType){0};
+    type.kind = MINIC_CORE_TYPE_FLOAT;
+    type.has_layout = true;
+    type.size = type.alignment = 4U;
+    type.value.floating.format = MINIC_CORE_FLOAT_BINARY32;
+    if (!minic_core_type_register(&types, &type, &float_t)) goto done;
+    type.size = type.alignment = 8U;
+    type.value.floating.format = MINIC_CORE_FLOAT_BINARY64;
+    if (!minic_core_type_register(&types, &type, &double_t) ||
+        !minic_core_function_define_signature(&fn, &types, void_t,
+            NULL, 0U, MINIC_CALLING_CONVENTION_DEFAULT, false) ||
+        !minic_core_function_add_block(&fn, &entry)) goto done;
+    stage = "build core";
+    ins.kind = MINIC_CORE_INSTRUCTION_FLOATING_CONSTANT;
+    ins.core_type_id = float_t;
+    ins.value.floating_bits = UINT64_C(0x80000000);
+    if (!minic_core_function_append_value_instruction(&fn, entry, &ins,
+            &values[0])) goto done;
+    ins.core_type_id = double_t;
+    ins.value.floating_bits = UINT64_C(0x3ff0000000000000);
+    if (!minic_core_function_append_value_instruction(&fn, entry, &ins,
+            &values[1])) goto done;
+    ins.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
+    ins.core_type_id = int_t;
+    ins.value.integer_value = -123;
+    if (!minic_core_function_append_value_instruction(&fn, entry, &ins,
+            &values[2])) goto done;
+    for (i = 0U; i < 3U; ++i) {
+        ins.kind = i == 0U ? MINIC_CORE_INSTRUCTION_DOUBLE_EQUAL :
+            i == 1U ? MINIC_CORE_INSTRUCTION_DOUBLE_LESS :
+                MINIC_CORE_INSTRUCTION_DOUBLE_LESS_EQUAL;
+        ins.core_type_id = int_t;
+        ins.value.binary.left = values[1];
+        ins.value.binary.right = values[1];
+        if (!minic_core_function_append_value_instruction(&fn, entry, &ins,
+                &values[3U + i])) goto done;
+    }
+    ins.kind = MINIC_CORE_INSTRUCTION_DOUBLE_NEGATE;
+    ins.core_type_id = double_t;
+    ins.value.operand = values[1];
+    if (!minic_core_function_append_value_instruction(&fn, entry, &ins,
+            &values[6])) goto done;
+    ins.kind = MINIC_CORE_INSTRUCTION_FLOAT_TO_DOUBLE;
+    ins.value.operand = values[0];
+    if (!minic_core_function_append_value_instruction(&fn, entry, &ins,
+            &values[7])) goto done;
+    ins.kind = MINIC_CORE_INSTRUCTION_DOUBLE_TO_FLOAT;
+    ins.core_type_id = float_t;
+    ins.value.operand = values[1];
+    if (!minic_core_function_append_value_instruction(&fn, entry, &ins,
+            &values[8])) goto done;
+    ins.kind = MINIC_CORE_INSTRUCTION_INTEGER_TO_DOUBLE;
+    ins.core_type_id = double_t;
+    ins.value.operand = values[2];
+    if (!minic_core_function_append_value_instruction(&fn, entry, &ins,
+            &values[9])) goto done;
+    ins.kind = MINIC_CORE_INSTRUCTION_DOUBLE_TO_INTEGER;
+    ins.core_type_id = int_t;
+    ins.value.operand = values[1];
+    if (!minic_core_function_append_value_instruction(&fn, entry, &ins,
+            &values[10])) goto done;
+    term.kind = MINIC_CORE_TERMINATOR_RETURN;
+    term.return_value = MINIC_CORE_VALUE_INVALID;
+    term.return_object = MINIC_CORE_OBJECT_INVALID;
+    if (!minic_core_function_set_terminator(&fn, entry, &term) ||
+        !minic_core_function_attach_type_context(&fn, &types) ||
+        !minic_core_function_verify(&fn)) goto done;
+    stage = "target";
+    layout.byte_order = MINIC_BYTE_ORDER_LITTLE;
+    layout.pointer_size = layout.pointer_alignment = xlen / 8U;
+    target.architecture = xlen == 32U ?
+        MINIC_TARGET_ARCH_RISCV32 : MINIC_TARGET_ARCH_RISCV64;
+    target.data_layout = &layout;
+    isa.xlen = xlen;
+    isa.abi = xlen == 32U ? MINIC_RISCV_ABI_ILP32 : MINIC_RISCV_ABI_LP64;
+    isa.strict_isa = true;
+    if (!minic_riscv_target_isa_store(&target, &isa)) goto done;
+    frame.frame_size = 512U;
+    frame.stack_alignment = 16U;
+    frame.saves_return_address = true;
+    frame.return_address_offset = 448U;
+    for (i = 0U; i < fn.value_count; ++i)
+        offsets[i] = 16U + i * 16U;
+    plan.target = &target;
+    plan.core = &fn;
+    plan.frame = &frame;
+    plan.value_offsets = offsets;
+    plan.value_offset_count = fn.value_count;
+    if (!prepare_old_rv_abi(&fn, xlen, 0U, &abi32, &abi64,
+            &calls64, &plan)) goto done;
+    stage = "select and preflight";
+    if (!minic_riscv_machine_select_core_subset(&machine, &plan) ||
+        !minic_riscv_machine_gnu_asm_policy(&target, &policy) ||
+        !minic_machine_gnu_asm_preflight(&machine, &policy)) goto done;
+    stage = "serialize";
+    out = tmpfile();
+    if (out == NULL || !minic_machine_gnu_asm_emit_body(out,
+            &machine, &policy) || fflush(out) != 0 ||
+        fseek(out, 0L, SEEK_SET) != 0) goto done;
+    n = fread(assembly, 1U, sizeof(assembly) - 1U, out);
+    assembly[n] = '\0';
+    for (i = 0U; i < sizeof(required) / sizeof(required[0]); ++i)
+        if (strstr(assembly, required[i]) == NULL) goto done;
+    ok = strstr(assembly, "fadd.") == NULL &&
+        strstr(assembly, "fmv.") == NULL &&
+        strstr(assembly, "fcvt.") == NULL &&
+        strstr(assembly, "  ret") != NULL;
+done:
+    if (!ok) fprintf(stderr, "RV%u FP runtime family failed at %s\n",
+        xlen, stage);
+    if (out != NULL) fclose(out);
+    minic_machine_function_destroy(&machine);
+    rv32_function_abi_plan_destroy(&abi32);
+    minic_riscv64_function_abi_plan_destroy(&abi64);
+    minic_core_call_index_destroy(&calls64);
+    minic_core_function_destroy(&fn);
+    minic_core_type_context_destroy(&types);
+    return ok;
+}
+
+/* Two allocations in one Core block verify the preplanned physical CFG
+ * ordering: both unsigned-overflow branches trap and the successful moving
+ * stack remains independent of the fixed s0-relative SSA frame. */
+static bool run_dynamic_stack(unsigned xlen) {
+    MinicCoreFunction fn = {0};
+    MinicCoreTypeContext types;
+    MinicCoreType type = {0};
+    MinicCoreTypeId count_t, ptr_t;
+    MinicCoreBlockId entry;
+    MinicCoreValueId value[3];
+    MinicCoreInstruction ins = {0};
+    MinicCoreTerminator term = {0};
+    MinicMachineFunction machine = {0};
+    MinicRiscvCoreMachinePlan plan = {0};
+    Rv32FunctionAbiPlan abi32 = {0};
+    MinicRiscv64FunctionAbiPlan abi64 = {0};
+    MinicCoreCallIndex calls64 = {0};
+    MinicRiscvPhysicalFrame frame = {0};
+    MinicTargetInfo target = {0};
+    MinicRiscvIsa isa = {0};
+    MinicDataLayout layout = {0};
+    MinicMachineGNUAsmPolicy policy = {0};
+    const size_t offsets[3] = {16U, 32U, 48U};
+    FILE *out = NULL;
+    char assembly[8192];
+    size_t i, n, traps = 0U;
+    bool ok = false;
+    const char *stage = "init";
+    minic_core_type_context_initialize(&types);
+    minic_core_function_initialize(&fn);
+    fn.name = malloc(sizeof("rv_dynamic_stack"));
+    if (fn.name == NULL) goto done;
+    memcpy(fn.name, "rv_dynamic_stack", sizeof("rv_dynamic_stack"));
+    fn.name_length = sizeof("rv_dynamic_stack") - 1U;
+    type.kind = MINIC_CORE_TYPE_INTEGER;
+    type.has_layout = true;
+    type.size = type.alignment = xlen / 8U;
+    type.value.integer.bit_width = xlen;
+    if (!minic_core_type_register(&types, &type, &count_t)) goto done;
+    type = (MinicCoreType){0};
+    type.kind = MINIC_CORE_TYPE_POINTER;
+    type.has_layout = true;
+    type.size = type.alignment = xlen / 8U;
+    type.value.pointer.pointee = count_t;
+    if (!minic_core_type_register(&types, &type, &ptr_t) ||
+        !minic_core_function_define_signature(&fn, &types, ptr_t,
+            NULL, 0U, MINIC_CALLING_CONVENTION_DEFAULT, false) ||
+        !minic_core_function_add_block(&fn, &entry)) goto done;
+    stage = "Core dynamic";
+    ins.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
+    ins.core_type_id = count_t;
+    ins.value.integer_value = 41;
+    if (!minic_core_function_append_value_instruction(&fn, entry, &ins,
+            &value[0])) goto done;
+    ins.kind = MINIC_CORE_INSTRUCTION_DYNAMIC_STACK_ALLOC;
+    ins.core_type_id = ptr_t;
+    ins.value.operand = value[0];
+    if (!minic_core_function_append_value_instruction(&fn, entry, &ins,
+            &value[1]) ||
+        !minic_core_function_append_value_instruction(&fn, entry, &ins,
+            &value[2])) goto done;
+    term.kind = MINIC_CORE_TERMINATOR_RETURN;
+    term.return_value = value[2];
+    term.return_object = MINIC_CORE_OBJECT_INVALID;
+    if (!minic_core_function_set_terminator(&fn, entry, &term) ||
+        !minic_core_function_attach_type_context(&fn, &types) ||
+        !minic_core_function_verify(&fn)) goto done;
+    stage = "frame";
+    layout.byte_order = MINIC_BYTE_ORDER_LITTLE;
+    layout.pointer_size = layout.pointer_alignment = xlen / 8U;
+    target.architecture = xlen == 32U ?
+        MINIC_TARGET_ARCH_RISCV32 : MINIC_TARGET_ARCH_RISCV64;
+    target.data_layout = &layout;
+    isa.xlen = xlen;
+    isa.abi = xlen == 32U ? MINIC_RISCV_ABI_ILP32 : MINIC_RISCV_ABI_LP64;
+    isa.strict_isa = true;
+    if (!minic_riscv_target_isa_store(&target, &isa)) goto done;
+    frame.frame_size = 256U;
+    frame.stack_alignment = 16U;
+    frame.saves_return_address = true;
+    frame.return_address_offset = 224U;
+    frame.has_dynamic_stack = true;
+    frame.saved_frame_base_offset = 216U;
+    if (xlen == 32U) frame.outgoing_size = 32U;
+    else frame.dynamic_call_area_size = 32U;
+    plan.target = &target;
+    plan.core = &fn;
+    plan.frame = &frame;
+    plan.value_offsets = offsets;
+    plan.value_offset_count = 3U;
+    if (!prepare_old_rv_abi(&fn, xlen, 0U, &abi32, &abi64,
+            &calls64, &plan)) goto done;
+    stage = "select";
+    if (!minic_riscv_machine_select_core_subset(&machine, &plan) ||
+        !minic_riscv_machine_gnu_asm_policy(&target, &policy) ||
+        !minic_machine_gnu_asm_preflight(&machine, &policy)) goto done;
+    for (i = 0U; i < machine.block_count; ++i) {
+        size_t j;
+        for (j = 0U; j < machine.blocks[i].instruction_count; ++j) {
+            const MinicMachineInstruction *m =
+                &machine.blocks[i].instructions[j];
+            if (m->opcode == MINIC_RISCV_MACHINE_EBREAK) ++traps;
+        }
+    }
+    if (traps != 2U) goto done;
+    stage = "serialize";
+    out = tmpfile();
+    if (out == NULL || !minic_machine_gnu_asm_emit_body(out,
+            &machine, &policy) || fflush(out) != 0 ||
+        fseek(out, 0L, SEEK_SET) != 0) goto done;
+    n = fread(assembly, 1U, sizeof(assembly) - 1U, out);
+    assembly[n] = '\0';
+    if (strstr(assembly, "  bltu x5, x6") == NULL ||
+        strstr(assembly, "  bgeu x7, x5") == NULL ||
+        strstr(assembly, "  sub x2, x2, x7") == NULL ||
+        strstr(assembly, "  ebreak") == NULL) {
+        fprintf(stderr, "RV%u dynamic asm:\n%s\n", xlen, assembly);
+        goto done;
+    }
+    stage = "reject inconsistent frame";
+    minic_machine_function_destroy(&machine);
+    frame.has_dynamic_stack = false;
+    if (minic_riscv_machine_select_core_subset(&machine, &plan)) goto done;
+    ok = true;
+done:
+    if (!ok) fprintf(stderr, "RV%u dynamic stack failed at %s\n",
+        xlen, stage);
     if (out != NULL) fclose(out);
     minic_machine_function_destroy(&machine);
     rv32_function_abi_plan_destroy(&abi32);
@@ -1506,8 +1965,28 @@ int main(void) {
         !run(64U, false, false, true, false) ||
         !run(32U, false, false, false, true) ||
         !run(64U, false, false, false, true) ||
-        !run_scalar(32U, false) || !run_scalar(64U, false) ||
-        !run_scalar(32U, true) || !run_scalar(64U, true) ||
+        !run_scalar(32U, MINIC_CORE_INSTRUCTION_INTEGER_ADD, false) ||
+        !run_scalar(64U, MINIC_CORE_INSTRUCTION_INTEGER_ADD, false) ||
+        !run_scalar(32U, MINIC_CORE_INSTRUCTION_INTEGER_MULTIPLY, false) ||
+        !run_scalar(64U, MINIC_CORE_INSTRUCTION_INTEGER_MULTIPLY, false) ||
+        !run_scalar(32U, MINIC_CORE_INSTRUCTION_INTEGER_MULTIPLY, true) ||
+        !run_scalar(64U, MINIC_CORE_INSTRUCTION_INTEGER_MULTIPLY, true) ||
+        !run_scalar(32U, MINIC_CORE_INSTRUCTION_INTEGER_DIVIDE, true) ||
+        !run_scalar(64U, MINIC_CORE_INSTRUCTION_INTEGER_DIVIDE, true) ||
+        !run_scalar(32U, MINIC_CORE_INSTRUCTION_INTEGER_REMAINDER, true) ||
+        !run_scalar(64U, MINIC_CORE_INSTRUCTION_INTEGER_REMAINDER, true) ||
+        !run_scalar(32U, MINIC_CORE_INSTRUCTION_INTEGER_CLZ, true) ||
+        !run_scalar(64U, MINIC_CORE_INSTRUCTION_INTEGER_CLZ, true) ||
+        !run_scalar(32U, MINIC_CORE_INSTRUCTION_INTEGER_CTZ, true) ||
+        !run_scalar(64U, MINIC_CORE_INSTRUCTION_INTEGER_CTZ, true) ||
+        !run_softfloat(32U, 4U, MINIC_CORE_INSTRUCTION_FLOAT_MULTIPLY) ||
+        !run_softfloat(64U, 4U, MINIC_CORE_INSTRUCTION_FLOAT_MULTIPLY) ||
+        !run_softfloat(32U, 8U, MINIC_CORE_INSTRUCTION_DOUBLE_DIVIDE) ||
+        !run_softfloat(64U, 8U, MINIC_CORE_INSTRUCTION_DOUBLE_DIVIDE) ||
+        !run_float_runtime_family(32U) ||
+        !run_float_runtime_family(64U) ||
+        !run_dynamic_stack(32U) ||
+        !run_dynamic_stack(64U) ||
         !run_memory_family(32U) || !run_memory_family(64U) ||
         !run_indirect_call(32U, false) || !run_indirect_call(64U, false) ||
         !run_indirect_call(32U, true) || !run_indirect_call(64U, true) ||

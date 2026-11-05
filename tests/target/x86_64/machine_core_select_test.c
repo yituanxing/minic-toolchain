@@ -5,6 +5,7 @@
 #include "target/x86_64/machine_target_state.h"
 #include "target/x86_64/machine_opcode.h"
 #include "target/x86_64/asm_contract.h"
+#include "target/common/machine_builder.h"
 #include "target/common/machine_core_coverage.h"
 #include "target/common/machine_gnu_asm.h"
 #include "target/data_layout.h"
@@ -1944,6 +1945,130 @@ done:
     return okay;
 }
 
+/* Linux uaccess helpers are a private CALL ABI, not SysV. Check that their
+ * selected opcode remains a physical relocation with exact implicit register
+ * effects, and can reach the GNU serializer without source-ASM text escape. */
+static bool scenario_uaccess_call_opcode(void) {
+    static const char *const symbols[4] = {
+        "__put_user_4", "__put_user_nocheck_8",
+        "__get_user_2", "__get_user_nocheck_1"
+    };
+    static const char *const templates[4] = {
+        "call __put_user_%c4", "call __put_user_nocheck_%c4",
+        "call __get_user_%c4", "call __get_user_nocheck_%c4"
+    };
+    static const unsigned int forms[4] = {0x200U, 0x800U, 3U, 4U};
+    MinicTargetInfo target = {0};
+    MinicMachineGNUAsmPolicy policy = {0};
+    MinicMachineOpcodeContract contract = {0}, ret = {0};
+    unsigned int seen = 0U;
+    size_t kind;
+    bool okay = false;
+    const char *stage = "opcode-contract";
+    target.architecture = MINIC_TARGET_ARCH_X86_64;
+    target.data_layout = minic_x86_64_linux_data_layout();
+    if (!minic_x86_64_machine_opcode_lookup(&target,
+            MINIC_X86_MI_CALL_UACCESS_LOCAL_SYMBOL, &contract, NULL) ||
+        !minic_x86_64_machine_opcode_lookup(&target,
+            MINIC_X86_MI_RET, &ret, NULL) ||
+        !minic_x86_64_machine_gnu_asm_policy(&target, &policy) ||
+        contract.operand_count != 1U ||
+        contract.operand_kinds[0] != MINIC_MACHINE_OPERAND_SYMBOL ||
+        contract.required_effects !=
+            (MINIC_MACHINE_EFFECT_CALL | MINIC_MACHINE_EFFECT_MEMORY_READ |
+             MINIC_MACHINE_EFFECT_MEMORY_WRITE) ||
+        contract.implicit_count < 6U) goto done;
+    for (kind = 0U; kind < contract.implicit_count; ++kind) {
+        const MinicMachineRegisterEffect *effect = &contract.implicit[kind];
+        if (effect->reg.bank == MINIC_MACHINE_REGISTER_GENERAL &&
+            effect->reg.number == MINIC_X86_REG_RBX &&
+            (effect->access & MINIC_MACHINE_REGISTER_CLOBBER) != 0U)
+            seen |= 1U;
+        if (effect->reg.bank == MINIC_MACHINE_REGISTER_GENERAL &&
+            effect->reg.number == MINIC_X86_REG_RSP &&
+            (effect->access & (MINIC_MACHINE_REGISTER_READ |
+                               MINIC_MACHINE_REGISTER_WRITE)) ==
+                (MINIC_MACHINE_REGISTER_READ | MINIC_MACHINE_REGISTER_WRITE))
+            seen |= 2U;
+        if (effect->reg.bank == MINIC_MACHINE_REGISTER_GENERAL &&
+            effect->reg.number == MINIC_X86_REG_RAX)
+            seen |= 4U;
+        if (effect->reg.bank == MINIC_MACHINE_REGISTER_GENERAL &&
+            effect->reg.number == MINIC_X86_REG_RCX)
+            seen |= 8U;
+        if (effect->reg.bank == MINIC_MACHINE_REGISTER_GENERAL &&
+            effect->reg.number == MINIC_X86_REG_RDX)
+            seen |= 16U;
+        if (effect->reg.bank == MINIC_MACHINE_REGISTER_FLAGS)
+            seen |= 32U;
+    }
+    if (seen != 63U) goto done;
+    stage = "positive-machine";
+    for (kind = 0U; kind < 4U; ++kind) {
+        MinicMachineFunction machine = {0};
+        MinicMachineBuilder builder = {0};
+        MinicMachineOperand operand = {0};
+        FILE *output = NULL;
+        char expected[96], text[2048] = {0};
+        size_t id, n;
+        bool valid = false;
+        if (minic_x86_64_linux_uaccess_core_form_exact(
+                templates[kind], strlen(templates[kind]), kind < 2U) !=
+                forms[kind]) goto loop_done;
+        if (!minic_machine_function_initialize(&machine, &target,
+                "uaccess_machine_contract",
+                minic_x86_64_machine_generated_features(&target)) ||
+            !minic_machine_builder_initialize(&builder, &machine) ||
+            !minic_machine_builder_create_block(&builder, NULL, false,
+                true, &id)) goto loop_done;
+        operand.kind = MINIC_MACHINE_OPERAND_SYMBOL;
+        operand.value.symbol.name = (char *)symbols[kind];
+        operand.value.symbol.relocation = MINIC_X86_MACHINE_RELOC_PC32;
+        stage = "emit-physical-call";
+        if (!minic_machine_builder_emit_selected(&builder,
+                MINIC_X86_MI_CALL_UACCESS_LOCAL_SYMBOL,
+                contract.required_effects, &operand, 1U,
+                contract.implicit, contract.implicit_count)) goto loop_done;
+        stage = "emit-return";
+        if (!minic_machine_builder_emit_selected(&builder,
+                MINIC_X86_MI_RET, ret.required_effects, NULL, 0U,
+                ret.implicit, ret.implicit_count)) goto loop_done;
+        stage = "preflight";
+        if (!minic_machine_gnu_asm_preflight(&machine, &policy)) goto loop_done;
+        stage = "serialize";
+        if ((output = tmpfile()) == NULL ||
+            !minic_machine_gnu_asm_emit_body(output, &machine, &policy) ||
+            fflush(output) != 0 || fseek(output, 0L, SEEK_SET) != 0)
+            goto loop_done;
+        n = fread(text, 1U, sizeof(text) - 1U, output);
+        text[n] = '\0';
+        if (snprintf(expected, sizeof(expected), "call %s", symbols[kind]) < 0 ||
+            strstr(text, expected) == NULL || strstr(text, "%c4") != NULL)
+            goto loop_done;
+        /* Wrong relocation cannot pass target preflight. */
+        stage = "negative-relocation";
+        machine.blocks[0].instructions[0].operands[0].value.symbol.relocation =
+            MINIC_X86_MACHINE_RELOC_ABSOLUTE;
+        valid = !minic_machine_gnu_asm_preflight(&machine, &policy);
+loop_done:
+        if (output != NULL) fclose(output);
+        minic_machine_function_destroy(&machine);
+        if (!valid) goto done;
+        stage = "positive-machine";
+    }
+    stage = "negative-template";
+    if (minic_x86_64_linux_uaccess_core_form_exact(
+            "call __put_user_%c5", strlen("call __put_user_%c5"), true) ||
+        minic_x86_64_linux_uaccess_core_form_exact(
+            "call __get_user_%c4; nop",
+            strlen("call __get_user_%c4; nop"), false)) goto done;
+    okay = true;
+done:
+    if (!okay) fprintf(stderr, "X86_UACCESS_MIR=FAIL stage=%s case=%zu\n",
+        stage, kind);
+    return okay;
+}
+
 int main(int argc, char **argv) {
     unsigned int fp_mode, source_form;
     if (argc == 2 && strcmp(argv[1], "--emit-fp") == 0) {
@@ -1996,6 +2121,7 @@ int main(int argc, char **argv) {
         if (!scenario_fp_boundary(fp_mode, NULL)) return 1;
     for (source_form = 0U; source_form <= 7U; ++source_form)
         if (!scenario_source_zero_barrier(source_form)) return 1;
-    puts("X86_CORE_MIR=PASS cycle=1 physical_alu=1 parameter=1 sse2=1 direct_call=1 mixed_vararg_stack=1 indirect_call=1 ms_shadow_stack=1 record_copy=1 record_load=1 vector_storage=1 record_abi=1 volatile=1 empty_record_reject=1 rep_movsb=1 pic_symbol=1 got_weak=1 head_32s_reject=1 relaxed_atomic=1 compiler_barrier=1 origin=1 fail_closed=1 bitscan_zero_nonzero=1 overflow_32_64=1 va_arg=1 alloca=1 block_address=1 fp_boundary=1 zero_asm=8/8");
+    if (!scenario_uaccess_call_opcode()) return 1;
+    puts("X86_CORE_MIR=PASS cycle=1 physical_alu=1 parameter=1 sse2=1 direct_call=1 mixed_vararg_stack=1 indirect_call=1 ms_shadow_stack=1 record_copy=1 record_load=1 vector_storage=1 record_abi=1 volatile=1 empty_record_reject=1 rep_movsb=1 pic_symbol=1 got_weak=1 head_32s_reject=1 relaxed_atomic=1 compiler_barrier=1 origin=1 fail_closed=1 bitscan_zero_nonzero=1 overflow_32_64=1 va_arg=1 alloca=1 block_address=1 fp_boundary=1 zero_asm=8/8 uaccess_physical=4/4");
     return 0;
 }

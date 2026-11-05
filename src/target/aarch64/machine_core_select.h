@@ -10,4 +10,11 @@
 bool minic_aarch64_machine_select_core_subset(MinicMachineFunction *,
     const MinicDirectLP64BlockContext *);
 
+/* Independent target Core-operand/ISA proof for a selected Linux GNU ASM
+ * occurrence. The common coverage verifier requires it for every seal. */
+bool minic_aarch64_machine_prove_selected_source_asm(
+    const MinicCoreFunction *, const MinicCoreInstruction *,
+    const MinicCoreInlineAsm *, const MinicMachineFunction *,
+    const MinicMachineInstruction *, void *);
+
 #endif

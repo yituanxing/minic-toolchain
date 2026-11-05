@@ -42,6 +42,15 @@ bool minic_machine_builder_emit_selected(MinicMachineBuilder *,
     const MinicMachineOperand *operands, size_t operand_count,
     const MinicMachineRegisterEffect *implicit, size_t implicit_count);
 
+/* Attach one sealed, target-qualified source-ASM origin to the MOST RECENT
+ * physical SELECTED instruction. For a 1:N expansion, only the opcode that
+ * implements the source's actual hardware effect gets this seal. Other
+ * ABI/operand transport operations keep normal Core origin. The target must
+ * independently validate the selected opcode/form correspondence. */
+bool minic_machine_builder_seal_selected_source_asm(MinicMachineBuilder *,
+    uint32_t target_machine_form_id, uint32_t target_machine_form_variant,
+    uint64_t source_asm_unique_id);
+
 /* A Core-origin compiler barrier has no physical bytes. It is deliberately
  * distinct from both ISA fences and user-authored empty source ASM. */
 bool minic_machine_builder_emit_compiler_barrier(MinicMachineBuilder *);

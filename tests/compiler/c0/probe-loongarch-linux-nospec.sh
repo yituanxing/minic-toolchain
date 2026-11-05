@@ -15,6 +15,17 @@ unsigned long mini_nospec(unsigned long index, unsigned long size) {
         : "=r"(mask) : "r"(index), "r"(size) :);
     return mask;
 }
+struct __attribute__((packed)) MiniMaskResult {
+    unsigned char pad;
+    unsigned long mask;
+};
+void mini_nospec_packed(struct MiniMaskResult *p,
+                        unsigned long index, unsigned long size) {
+    __asm__ __volatile__(
+        "sltu\t%0, %1, %2\n\t"
+        "sub.d\t%0, $zero, %0\n\t"
+        : "=r"(p->mask) : "r"(index), "r"(size) :);
+}
 SRC
 "$mini" --target=loongarch64-linux -S "$d/nospec.i" -o "$d/mini.s"
 # Source-authored GNU inline ASM preserves tabs from the original template;
@@ -22,6 +33,14 @@ SRC
 # register roles and operations without depending on that whitespace choice.
 grep -Eq '^[[:space:]]*sltu[[:space:]]+\$t2,[[:space:]]*\$t0,[[:space:]]*\$t1[[:space:]]*$' "$d/mini.s"
 grep -Eq '^[[:space:]]*sub\.d[[:space:]]+\$t2,[[:space:]]*\$zero,[[:space:]]*\$t2[[:space:]]*$' "$d/mini.s"
+# Source-form MachineIR preserves the exact GNU template, including tabs.
+# Its three register operands must nevertheless be physically fixed to the
+# original contract, not passed through as unbound text placeholders.
+grep -Eq '^[[:blank:]]+sltu[[:blank:]]+\$t2, \$t0, \$t1$' "$d/mini.s"
+grep -Eq '^[[:blank:]]+sub\.d[[:blank:]]+\$t2, \$zero, \$t2$' "$d/mini.s"
+grep -Fq 'mini_nospec_packed:' "$d/mini.s"
+grep -Fq '  andi $t3, $t1, 7' "$d/mini.s"
+grep -Fq '  st.b $t0, $t1, 0' "$d/mini.s"
 for bad in extra mnemonic constraint volatile clobber width; do
     case "$bad" in
         extra) sed 's/sub.d\\t%0, \$zero, %0/sub.d\\t%0, $zero, %0; nop/' "$d/nospec.i" > "$d/bad.i" ;;
@@ -47,12 +66,24 @@ if [[ "${MINIC_LOONG_NOSPEC_NATIVE_ONLY:-0}" != 1 ]]; then
     cat > "$d/main.c" <<'SRC'
 extern unsigned long mini_nospec(unsigned long, unsigned long);
 extern unsigned long gnu_nospec(unsigned long, unsigned long);
+struct __attribute__((packed)) MiniMaskResult {
+    unsigned char pad;
+    unsigned long mask;
+};
+extern void mini_nospec_packed(struct MiniMaskResult *, unsigned long,
+                              unsigned long);
+extern void gnu_nospec_packed(struct MiniMaskResult *, unsigned long,
+                             unsigned long);
 int main(void) {
     unsigned long i, j;
     for (i=0; i<128; ++i) for (j=0; j<128; ++j) {
         unsigned long actual=mini_nospec(i,j);
         unsigned long expected=gnu_nospec(i,j);
+        struct MiniMaskResult mini={0,0}, gnu={0,0};
+        mini_nospec_packed(&mini,i,j);
+        gnu_nospec_packed(&gnu,i,j);
         if (actual!=expected || actual!=(i<j?~0UL:0UL)) return 1;
+        if (mini.mask!=gnu.mask || mini.mask!=expected) return 2;
     }
     return 42;
 }

@@ -1,4 +1,5 @@
 #include "target/aarch64/machine_opcode.h"
+#include "target/aarch64/asm_contract_internal.h"
 
 #include <inttypes.h>
 #include <limits.h>
@@ -9,7 +10,8 @@ typedef enum A64Form {
     A64_FORM_RR, A64_FORM_RRR, A64_FORM_RRRR, A64_FORM_RRRI,
     A64_FORM_RI, A64_FORM_RII, A64_FORM_RRI,
     A64_FORM_CMP, A64_FORM_CMP_IMM, A64_FORM_CSET,
-    A64_FORM_MEMORY, A64_FORM_MEMORY_POST_BYTE, A64_FORM_FRAME, A64_FORM_PAIR,
+    A64_FORM_MEMORY, A64_FORM_ORDERED_MEMORY, A64_FORM_MEMORY_POST_BYTE,
+    A64_FORM_FRAME, A64_FORM_PAIR,
     A64_FORM_ADRP, A64_FORM_ADD_LO12, A64_FORM_ADRP_BLOCK,
     A64_FORM_ADD_LO12_BLOCK, A64_FORM_GOT_LOAD,
     A64_FORM_BLOCK, A64_FORM_COND_BLOCK, A64_FORM_REG_BLOCK,
@@ -90,6 +92,14 @@ static const A64Spec a64_specs[MINIC_A64_MACHINE_NOP + 1U] = {
     [MINIC_A64_MACHINE_STR_X] = {"str", A64_FORM_MEMORY, W, 8},
     [MINIC_A64_MACHINE_LDRB_POST] = {"ldrb", A64_FORM_MEMORY_POST_BYTE, R, 1},
     [MINIC_A64_MACHINE_STRB_POST] = {"strb", A64_FORM_MEMORY_POST_BYTE, W, 1},
+    [MINIC_A64_MACHINE_LDARB] = {"ldarb", A64_FORM_ORDERED_MEMORY, R, 1},
+    [MINIC_A64_MACHINE_LDARH] = {"ldarh", A64_FORM_ORDERED_MEMORY, R, 2},
+    [MINIC_A64_MACHINE_LDAR_W] = {"ldar", A64_FORM_ORDERED_MEMORY, R, 4},
+    [MINIC_A64_MACHINE_LDAR_X] = {"ldar", A64_FORM_ORDERED_MEMORY, R, 8},
+    [MINIC_A64_MACHINE_STLRB] = {"stlrb", A64_FORM_ORDERED_MEMORY, W, 1},
+    [MINIC_A64_MACHINE_STLRH] = {"stlrh", A64_FORM_ORDERED_MEMORY, W, 2},
+    [MINIC_A64_MACHINE_STLR_W] = {"stlr", A64_FORM_ORDERED_MEMORY, W, 4},
+    [MINIC_A64_MACHINE_STLR_X] = {"stlr", A64_FORM_ORDERED_MEMORY, W, 8},
     [MINIC_A64_MACHINE_LDR_FRAME_W] = {"ldr", A64_FORM_FRAME, R, 4},
     [MINIC_A64_MACHINE_LDR_FRAME_X] = {"ldr", A64_FORM_FRAME, R, 8},
     [MINIC_A64_MACHINE_STR_FRAME_W] = {"str", A64_FORM_FRAME, W, 4},
@@ -276,6 +286,7 @@ static bool a64_lookup(const MinicTargetInfo *target, uint32_t opcode,
     case A64_FORM_CMP_IMM: REG(READ); ARG(MINIC_MACHINE_OPERAND_INTEGER); break;
     case A64_FORM_CSET: REG(WRITE); ARG(MINIC_MACHINE_OPERAND_INTEGER); break;
     case A64_FORM_MEMORY:
+    case A64_FORM_ORDERED_MEMORY:
         REG((spec->effects & MINIC_MACHINE_EFFECT_MEMORY_READ) ? WRITE : READ);
         ARG(MINIC_MACHINE_OPERAND_ADDRESS); break;
     case A64_FORM_MEMORY_POST_BYTE:
@@ -336,6 +347,10 @@ static bool a64_lookup(const MinicTargetInfo *target, uint32_t opcode,
     if ((spec->effects & (MINIC_MACHINE_EFFECT_MEMORY_READ |
                           MINIC_MACHINE_EFFECT_MEMORY_WRITE)) != 0U)
         contract->permitted_effects |= MINIC_MACHINE_EFFECT_VOLATILE;
+    /* Compiler GNU `memory` clobber on a sealed acquire/release instruction
+     * is a semantic ordering property of that SAME selected hardware op. */
+    if (spec->form == A64_FORM_ORDERED_MEMORY)
+        contract->permitted_effects |= MINIC_MACHINE_EFFECT_COMPILER_BARRIER;
     if (spec->effects == MINIC_MACHINE_EFFECT_CALL)
         contract->permitted_effects |= MINIC_MACHINE_EFFECT_MEMORY_READ |
                                        MINIC_MACHINE_EFFECT_MEMORY_WRITE;
@@ -521,6 +536,13 @@ static bool a64_legal_selected(const MinicMachineFunction *function,
             ((spec->memory_width == 1U || spec->memory_width == 2U) &&
              bits == 32U) || (load_signed && bits == 64U);
     }
+    case A64_FORM_ORDERED_MEMORY:
+        return ops[1].value.address.target_mode == MINIC_A64_ADDRESS_UNSIGNED &&
+            !ops[1].value.address.has_symbol &&
+            ops[1].value.address.displacement == 0 &&
+            ops[0].value.physical.reg.number != MINIC_A64_MACHINE_SP &&
+            ops[0].value.physical.reg.width_bits ==
+                (spec->memory_width == 8U ? 64U : 32U);
     case A64_FORM_MEMORY_POST_BYTE:
         return ops[0].value.physical.reg.width_bits == 32U &&
             ops[0].value.physical.reg.number < 31U &&
@@ -737,6 +759,12 @@ static bool a64_serialize(FILE *out, const MinicMachineFunction *function,
         return fprintf(out, "  %s %s, [%s, #%" PRId64 "]\n",
             spec->name, a, base, addr->displacement) >= 0;
     }
+    case A64_FORM_ORDERED_MEMORY: {
+        const MinicMachineAddress *addr = &o[1].value.address;
+        return a64_gp_text(&o[0].value.physical.reg, a, sizeof(a)) &&
+            a64_gp_text(&addr->base, base, sizeof(base)) &&
+            fprintf(out, "  %s %s, [%s]\n", spec->name, a, base) >= 0;
+    }
     case A64_FORM_MEMORY_POST_BYTE:
         return a64_gp_text(&o[0].value.physical.reg, a, sizeof(a)) &&
             a64_gp_text(&o[1].value.physical.reg, base, sizeof(base)) &&
@@ -862,6 +890,71 @@ static bool a64_frame_object(const MinicTargetInfo *target,
         frame->base == MINIC_MACHINE_FRAME_BASE_FRAME_POINTER;
 }
 
+/* A selected opcode cannot declare arbitrary Linux ASM provenance. The
+ * target-owned proof binds the sealed source form to the exact physical
+ * opcode, width and compulsory memory/volatility effects. The selected
+ * output store for RBIT also requires an actual predecessor RBIT with the
+ * identical Core origin: a fabricated STR alone cannot claim that form. */
+static bool a64_selected_source_asm(const MinicMachineFunction *function,
+    const MinicMachineInstruction *ins, void *context) {
+    const uint32_t id = ins->source_asm_machine_form_id;
+    const uint32_t variant = ins->source_asm_machine_form_variant;
+    const uint32_t op = ins->opcode;
+    const unsigned int required = MINIC_MACHINE_EFFECT_VOLATILE;
+    size_t i, j;
+    (void)context;
+    if (function == NULL || function->target == NULL ||
+        function->target->architecture != MINIC_TARGET_ARCH_AARCH64 ||
+        !ins->has_selected_source_asm_seal ||
+        ins->kind != MINIC_MACHINE_INSTRUCTION_SELECTED ||
+        (ins->effects & required) != required) return false;
+    if (id == AARCH64_MACHINE_ASM_LDAR || id == AARCH64_MACHINE_ASM_STLR) {
+        const unsigned int effects = required |
+            MINIC_MACHINE_EFFECT_COMPILER_BARRIER |
+            (id == AARCH64_MACHINE_ASM_LDAR ?
+                MINIC_MACHINE_EFFECT_MEMORY_READ :
+                MINIC_MACHINE_EFFECT_MEMORY_WRITE);
+        const uint32_t opcode = variant == 1U ?
+                (id == AARCH64_MACHINE_ASM_LDAR ?
+                    MINIC_A64_MACHINE_LDARB : MINIC_A64_MACHINE_STLRB) :
+            variant == 2U ?
+                (id == AARCH64_MACHINE_ASM_LDAR ?
+                    MINIC_A64_MACHINE_LDARH : MINIC_A64_MACHINE_STLRH) :
+            variant == 4U ?
+                (id == AARCH64_MACHINE_ASM_LDAR ?
+                    MINIC_A64_MACHINE_LDAR_W : MINIC_A64_MACHINE_STLR_W) :
+            variant == 8U ?
+                (id == AARCH64_MACHINE_ASM_LDAR ?
+                    MINIC_A64_MACHINE_LDAR_X : MINIC_A64_MACHINE_STLR_X) : 0U;
+        return opcode != 0U && op == opcode && ins->effects == effects;
+    }
+    if (id != AARCH64_MACHINE_ASM_BIT_REVERSE || variant != 0U ||
+        op != MINIC_A64_MACHINE_STR_W ||
+        ins->effects != (required | MINIC_MACHINE_EFFECT_MEMORY_WRITE))
+        return false;
+    for (i = 0U; i < function->block_count; ++i) {
+        const MinicMachineBlock *block = &function->blocks[i];
+        for (j = 0U; j < block->instruction_count; ++j) {
+            const MinicMachineInstruction *candidate =
+                &block->instructions[j];
+            size_t k;
+            if (candidate != ins) continue;
+            for (k = 0U; k < j; ++k) {
+                const MinicMachineInstruction *before =
+                    &block->instructions[k];
+                if (before->kind == MINIC_MACHINE_INSTRUCTION_SELECTED &&
+                    before->opcode == MINIC_A64_MACHINE_RBIT &&
+                    before->has_core_origin && ins->has_core_origin &&
+                    before->core_instruction_id == ins->core_instruction_id &&
+                    before->core_block_id == ins->core_block_id)
+                    return true;
+            }
+            return false;
+        }
+    }
+    return false;
+}
+
 bool minic_aarch64_machine_opcode_initialize(
     const MinicTargetInfo *target, MinicMachineGNUAsmPolicy *destination) {
     static const MinicMachineGNUAsmPolicy policy = {
@@ -876,7 +969,8 @@ bool minic_aarch64_machine_opcode_initialize(
             .validate_source_asm = NULL,
             .validate_function_abi = a64_abi,
             .validate_frame_object = a64_frame_object,
-            .validate_selected_instruction = a64_legal_selected
+            .validate_selected_instruction = a64_legal_selected,
+            .validate_selected_source_asm = a64_selected_source_asm
         },
         .emit_selected = a64_serialize,
         .emit_source_asm = NULL,

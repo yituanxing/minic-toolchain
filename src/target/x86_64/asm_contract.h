@@ -27,6 +27,33 @@ static inline unsigned int minic_x86_64_zero_barrier_form_exact(
             return (unsigned int)(i + 1U);
     return 0U;
 }
+/* Core has already resolved the named size placeholder to operand #4.
+ * Keep physical MIR verification independent of the C-ingress matcher and
+ * of the old FILE* backend's asm_contract.c object. */
+static inline unsigned int minic_x86_64_linux_uaccess_core_form_exact(
+    const char *text, size_t length, bool put) {
+    char compact[96];
+    size_t i, n = 0U;
+    if (text == NULL || length == 0U || length >= sizeof(compact))
+        return 0U;
+    for (i = 0U; i < length; ++i) {
+        const char c = text[i];
+        if (c == ' ' || c == '\t' || c == '\r' || c == '\n') continue;
+        if (c == '\0' || c == ';' || n + 1U >= sizeof(compact)) return 0U;
+        compact[n++] = c;
+    }
+    compact[n] = '\0';
+    if (put) {
+        if (strcmp(compact, "call__put_user_%c4") == 0) return 0x200U;
+        if (strcmp(compact, "call__put_user_nocheck_%c4") == 0)
+            return 0x800U;
+    } else {
+        if (strcmp(compact, "call__get_user_%c4") == 0) return 3U;
+        if (strcmp(compact, "call__get_user_nocheck_%c4") == 0)
+            return 4U;
+    }
+    return 0U;
+}
 /* The source qualifier chooses a semantic family once. Core transports this
  * number opaquely; the machine emitter still validates native operand
  * registers/widths and hardware side effects before emitting any bytes.

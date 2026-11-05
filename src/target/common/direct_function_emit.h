@@ -5,11 +5,9 @@
 #include "target/common/direct_block_context.h"
 #include "target/common/direct_program_emit.h"
 #include "target/common/module_global_emit.h"
-#include "target/common/machine_core_coverage.h"
-#include "target/common/machine_gnu_asm.h"
+#include "target/common/machine_production_preflight.h"
 #include <stdint.h>
 #include <stdio.h>
-#include <string.h>
 
 /* The direct LP64 frontend-to-native orchestration is shared once:
  * ELF metadata, verified Common-to-ABI planning, complete BlockContext,
@@ -34,6 +32,9 @@ typedef struct MinicDirectLP64FunctionEmitter {
                            const MinicDirectLP64BlockContext *);
     bool (*initialize_machine_asm_policy)(const MinicTargetInfo *,
                                           MinicMachineGNUAsmPolicy *);
+    /* Optional target-owned Core operand-role proof for compiler-selected
+     * source-ASM hardware forms. NULL fails closed if a selector claims one. */
+    MinicMachineCoreSelectedAsmProof prove_selected_source_asm;
 } MinicDirectLP64FunctionEmitter;
 
 static inline bool minic_multi_direct_lp64_emit_function(
@@ -49,6 +50,7 @@ static inline bool minic_multi_direct_lp64_emit_function(
     MinicDirectLP64BlockContext ctx = {0};
     MinicMachineFunction machine = {0};
     MinicMachineGNUAsmPolicy machine_policy = {0};
+    MinicMachineCoreCoveragePolicy core_asm_policy = {0};
     const char *name;
     const char *section;
     size_t alignment;
@@ -102,20 +104,23 @@ static inline bool minic_multi_direct_lp64_emit_function(
         .name = name, .id = id
     };
     if (use_machine) {
+        core_asm_policy.prove_selected_source_asm =
+            config->prove_selected_source_asm;
+        const MinicMachineProductionSource source = {
+            .core = fn,
+            .reachable_blocks = facts->reachable_blocks,
+            .target = target,
+            .symbol = name,
+            .core_asm_policy = &core_asm_policy
+        };
         if (!config->select_machine(&machine, &ctx) ||
-            machine.target != target ||
-            machine.architecture != target->architecture ||
-            machine.name == NULL || strcmp(machine.name, name) != 0 ||
-            machine.calling_convention !=
-                minic_core_function_calling_convention(fn) ||
             machine.frame_size != plan.machine_frame.frame_size ||
             machine.frame_alignment != plan.machine_frame.frame_alignment ||
             machine.has_dynamic_stack !=
                 plan.machine_frame.has_dynamic_stack ||
-            !minic_machine_core_coverage_verify(
-                fn, facts->reachable_blocks, &machine) ||
             !config->initialize_machine_asm_policy(target, &machine_policy) ||
-            !minic_machine_gnu_asm_preflight(&machine, &machine_policy)) {
+            !minic_machine_production_preflight(
+                &source, &machine, &machine_policy)) {
             (void)minic_multi_direct_machine_reject(fn,
                 config->architecture, name, "machine_function_preflight",
                 SIZE_MAX, SIZE_MAX, __LINE__);

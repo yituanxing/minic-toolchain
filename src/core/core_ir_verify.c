@@ -1270,6 +1270,40 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
                     binding->physical_read_write)
                     return false;
                 break;
+            case MINIC_CORE_STRUCTURED_INLINE_ASM_FIXED_REGISTER_READWRITE: {
+                const MinicCoreFixedRegisterBinding *fixed;
+                const MinicCoreValue *input_value;
+                const MinicCoreInstruction *source_read;
+                if (inline_asm->operand_plan_owner !=
+                        MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED ||
+                    !binding->has_fixed_register_binding ||
+                    !binding->physical_read_write || binding->early_clobber ||
+                    binding->physical_early_clobber ||
+                    binding->has_tied_output ||
+                    binding->fixed_register_binding_id >=
+                        function->fixed_register_binding_count ||
+                    !ct_unqualified(function->values[
+                        binding->value].core_type_id, &value_type) ||
+                    (!ct_is_integer(value_type) &&
+                     !ct_is_pointer(value_type))) return false;
+                fixed = &function->fixed_register_bindings[
+                    binding->fixed_register_binding_id];
+                input_value = &function->values[binding->value];
+                if (fixed->is_local ||
+                    fixed->core_type_id != input_value->core_type_id ||
+                    input_value->definition >= function->instruction_count)
+                    return false;
+                /* An arbitrary scalar input plus forged fixed-binding ID
+                 * cannot constitute a physical GNU +r tied operand. Only
+                 * this exact hardware-register read is its before-value;
+                 * the ASM effect owns the physical register's after-state. */
+                source_read = &function->instructions[input_value->definition];
+                if (source_read->kind != MINIC_CORE_INSTRUCTION_FIXED_REGISTER_READ ||
+                    source_read->value.fixed_register_binding_id !=
+                        binding->fixed_register_binding_id)
+                    return false;
+                break;
+            }
             case MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT:
             case MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE:
             case MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_OUTPUT:
