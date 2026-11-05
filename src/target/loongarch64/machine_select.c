@@ -4480,7 +4480,10 @@ bool minic_loongarch64_select_machine(MinicMachineFunction *machine,
                     MINIC_LOONG_MACHINE_FEATURE_FP))
         return false;
     machine->frame_size = frame->frame_size;
-    machine->frame_alignment = frame->frame_alignment;
+    /* Machine frame size tracks the physical 16-byte-aligned SP decrement.
+     * Local over-alignment lives in the separate target frame contract and
+     * the aligned frame base established by the prologue. */
+    machine->frame_alignment = 16U;
     machine->has_dynamic_stack = frame->has_dynamic_stack;
     machine->calling_convention = MINIC_CALLING_CONVENTION_DEFAULT;
     sel.ctx = ctx;

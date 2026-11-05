@@ -1411,6 +1411,12 @@ static bool a64_ordered_source_memory(A64CoreSelection *sel, uint32_t opcode,
         source->target_machine_form_variant, source->source_asm_unique_id);
 }
 
+static bool a64_ordered_trace_stage(bool success, const char *stage) {
+    if (!success && getenv("MINIC_M1_TRACE") != NULL)
+        fprintf(stderr, "MINIC_A64_STLR_STAGE_FAIL %s\n", stage);
+    return success;
+}
+
 /* Original Linux smp_load_acquire/smp_store_release are sealed two-role GNU
  * forms. Keep C operand admission upstream; recheck the native Core pointee
  * width and emit actual acquire/release opcodes with typed address operands.
@@ -1462,6 +1468,28 @@ static bool a64_linux_acquire_release(A64CoreSelection *sel,
             (int)has_slot0, slot0, (int)has_slot1, slot1,
             (int)source->is_volatile, (int)source->has_memory_clobber,
             source->register_clobber_count);
+        fprintf(stderr,
+            "MINIC_A64_STLR_GUARDS core_void=%d result_invalid=%d"
+            " is_goto=%d immediate=%zu symbols=%zu deferred=%d"
+            " op0_index=%zu op1_index=%zu"
+            " op0_fixed=%d op1_fixed=%d op0_early=%d op1_early=%d"
+            " op0_phys_early=%d op1_phys_early=%d"
+            " op0_rw=%d op1_rw=%d op0_tied=%d op1_tied=%d\n",
+            (int)minic_core_function_type_is_kind(fn, ins->core_type_id,
+                MINIC_CORE_TYPE_VOID),
+            (int)(ins->result == MINIC_CORE_VALUE_INVALID),
+            (int)source->is_goto, source->resolved_immediate_count,
+            source->symbol_reference_count,
+            (int)(source->deferred_immediate_symbol != NULL),
+            (size_t)ops[0].operand_index, (size_t)ops[1].operand_index,
+            (int)ops[0].has_fixed_register_binding,
+            (int)ops[1].has_fixed_register_binding,
+            (int)ops[0].early_clobber, (int)ops[1].early_clobber,
+            (int)ops[0].physical_early_clobber,
+            (int)ops[1].physical_early_clobber,
+            (int)ops[0].physical_read_write,
+            (int)ops[1].physical_read_write,
+            (int)ops[0].has_tied_output, (int)ops[1].has_tied_output);
     }
     if (index == SIZE_MAX || source->template_text == NULL ||
         source->operand_plan_owner != MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED ||
@@ -1510,10 +1538,16 @@ static bool a64_linux_acquire_release(A64CoreSelection *sel,
         ops[1].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT ||
         !aarch64_stlr_memory_carrier_core(fn, ops[0].value, width) ||
         !aarch64_stlr_scalar_core(fn, ops[1].value, false, width) ||
-        !a64_load_core(sel, ops[0].value, A64_T1, 64U) ||
-        !a64_load_core(sel, ops[1].value, A64_T0, 64U) ||
-        !a64_ordered_source_memory(sel, release[index],
-            A64_T0, bits, A64_T1, true, source)) return false;
+        !a64_ordered_trace_stage(
+            a64_load_core(sel, ops[0].value, A64_T1, 64U),
+            "load_output_address") ||
+        !a64_ordered_trace_stage(
+            a64_load_core(sel, ops[1].value, A64_T0, 64U),
+            "load_input_scalar") ||
+        !a64_ordered_trace_stage(
+            a64_ordered_source_memory(sel, release[index],
+                A64_T0, bits, A64_T1, true, source),
+            "emit_sealed_release")) return false;
     return true;
 }
 

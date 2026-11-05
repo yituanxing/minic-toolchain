@@ -17,9 +17,20 @@ for case_name in load_xor_store sha3_eor3; do
     "$gnu_cc" -static -O2 "$source_file" -o "$work/$case_name.gnu.elf"
     "$qemu" -cpu max "$work/$case_name.gnu.elf"
     if ! "$minic_cc" --target=aarch64-linux -S "$work/$case_name.i" \
-            -o "$work/$case_name.minic.s"; then
+            -o "$work/$case_name.minic.s" \
+            2>"$work/$case_name.minic.stderr"; then
         printf '%s\n' "AARCH64_NEON_STAGE3=FAIL stage=minic_compile case=$case_name" >&2
-        sed -n '80,110{=;p;}' "$work/$case_name.i" >&2
+        cat "$work/$case_name.minic.stderr" >&2
+        # Show the first actual failing GNU-preprocessed source location,
+        # not a fixed 80-110 window that hid every later ACLE gap.
+        failing_line=$(sed -n 's/.*\.i:\([0-9][0-9]*\):[0-9][0-9]*: error:.*/\1/p' \
+            "$work/$case_name.minic.stderr" | head -n 1)
+        if [ -n "$failing_line" ]; then
+            first_line=$((failing_line > 8 ? failing_line - 8 : 1))
+            last_line=$((failing_line + 8))
+            sed -n "${first_line},${last_line}{=;p;}" \
+                "$work/$case_name.i" >&2
+        fi
         exit 1
     fi
     "$gnu_cc" -static "$work/$case_name.minic.s" -o "$work/$case_name.minic.elf"

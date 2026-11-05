@@ -101,7 +101,10 @@ static inline bool minic_multi_direct_lp64_emit_function(
     };
     if (!config->select_machine(&machine, &ctx) ||
         machine.frame_size != plan.machine_frame.frame_size ||
-        machine.frame_alignment != plan.machine_frame.frame_alignment ||
+        /* Machine records the ABI's physical SP alignment; the target frame
+         * separately retains any stricter local-object alignment (x19/fp
+         * realignment plus slack). Never conflate those two contracts. */
+        machine.frame_alignment != config->abi->stack_alignment ||
         machine.has_dynamic_stack != plan.machine_frame.has_dynamic_stack ||
         !config->initialize_machine_asm_policy(target, &machine_policy) ||
         !minic_machine_production_preflight(

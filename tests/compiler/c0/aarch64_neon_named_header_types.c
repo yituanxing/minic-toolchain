@@ -31,4 +31,11 @@ typedef __Uint16x8_t a64_named_header_type_26;
 typedef __Uint32x4_t a64_named_header_type_27;
 typedef __Bfloat16x4_t a64_named_header_type_28;
 typedef __Bfloat16x8_t a64_named_header_type_29;
+typedef __Poly8_t a64_named_header_scalar_0;
+typedef __Poly16_t a64_named_header_scalar_1;
+typedef __Poly64_t a64_named_header_scalar_2;
+typedef __Poly128_t a64_named_header_scalar_3;
+typedef __Mfloat8x8_t a64_named_header_scalar_4;
+typedef __Mfloat8x16_t a64_named_header_scalar_5;
+typedef __fp16 a64_named_header_scalar_6;
 int main(void) { return 0; }
