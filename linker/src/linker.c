@@ -192,7 +192,8 @@ static int minild_link_static_pipeline(
         (garbage_collect &&
          !minild_gc_prune_static(&state, entry_symbol, options)) ||
         (garbage_collect && !have_script &&
-         (!minild_gc_group_default_output_classes(&state) ||
+         (!minild_gc_coalesce_nonalloc(&state) ||
+          !minild_gc_group_default_output_classes(&state) ||
           !minild_gc_sort_default_output_alignment(&state))) ||
         !minild_merge_live_sections(&state, have_script ? &script : NULL) ||
         !minild_static_reserve_build_id(&state) ||

@@ -78,11 +78,12 @@ static bool minild_final_symbol_local(const MiniLdResolvedSymbol *source,
  * All source relocations have already been applied when --emit-relocs is
  * absent. Keep resolver identities untouched and project only this view.
  *
- * Likewise, local definitions from /DISCARD/ or --gc-sections cannot name
- * addresses in the final image. Preserving them as SHN_UNDEF creates tens of
- * thousands of fictitious local undefined symbols in real Linux Kbuild.
- * The existing --emit-relocs mode retains its source symbol projection until
- * final relocation addends can be rewritten to canonical section symbols. */
+ * Likewise, definitions from /DISCARD/ or --gc-sections cannot name
+ * addresses in the final image. Their original resolver section remains
+ * available to non-ALLOC relocation fixups, but none of these discarded
+ * definitions (local *or global*) may become fictitious SHN_UNDEF symbols.
+ * In --emit-relocs, discarded-target non-ALLOC records become R_NONE rather
+ * than referring to synthetic undefined stand-ins for deleted definitions. */
 static bool minild_final_symbol_kept(const MiniLdState *state,
                                      const MiniLdOutputPlan *plan,
                                      const MiniLdResolvedSymbol *source,
@@ -93,16 +94,23 @@ static bool minild_final_symbol_kept(const MiniLdState *state,
         source->name[0] == '.' && source->name[1] == 'L') {
         return false;
     }
-    if (emit_relocs || !local) {
+    if (source->section >= 0 &&
+        ((size_t)source->section >= plan->work_count ||
+         plan->work_shndx[source->section] == 0U)) {
+        return false;
+    }
+    if (emit_relocs) {
+        return true;
+    }
+    if (!local) {
+        /* Genuine undefined imports must remain in .symtab. */
         return true;
     }
     if (ELF64_ST_TYPE(source->info) == STT_SECTION ||
         source->section == MINILD_SECTION_UNDEF) {
         return false;
     }
-    return source->section < 0 ||
-           ((size_t)source->section < plan->work_count &&
-            plan->work_shndx[source->section] != 0U);
+    return true;
 }
 
 static bool minild_final_symbols_build_with_version(
@@ -334,6 +342,7 @@ static bool minild_final_relocations_build(
             size_t shndx, symbol_index;
             uint64_t place;
             MiniLdFinalRelocKind kind;
+            bool discarded_target = false;
 
             if (source->section >= plan->work_count) {
                 fprintf(state->diagnostics,
@@ -349,7 +358,22 @@ static bool minild_final_relocations_build(
                 layout->work[source->section].discarded) {
                 continue;
             }
-            kind = state->target->final_reloc_kind(source->type);
+            /* A surviving debug relocation whose original definition was
+             * discarded retains an output RELA slot under GNU BFD's
+             * --emit-relocs, but is rewritten to R_NONE/sym0/addend0.
+             * The static fixup already zeroed its entire source field. */
+            if ((section->flags & SHF_ALLOC) == 0U &&
+                source->symbol < state->resolver.count) {
+                const MiniLdResolvedSymbol *target =
+                    &state->resolver.entries[source->symbol];
+
+                discarded_target = target->section >= 0 &&
+                    ((size_t)target->section >= plan->work_count ||
+                     minild_output_shndx(
+                         plan, (size_t)target->section) == 0U);
+            }
+            kind = discarded_target ? MINILD_FINAL_RELOC_EMIT :
+                   state->target->final_reloc_kind(source->type);
             if (kind == MINILD_FINAL_RELOC_SKIP) {
                 continue;
             }
@@ -370,15 +394,21 @@ static bool minild_final_relocations_build(
                         (unsigned)source->type);
                 return false;
             }
-            if (source->symbol >= symbols->resolver_count ||
-                (symbol_index = symbols->resolver_to_final[source->symbol]) ==
-                    SIZE_MAX ||
-                symbol_index > UINT32_MAX ||
-                ELF64_ST_TYPE(state->resolver.entries[source->symbol].info) ==
-                    STT_GNU_IFUNC) {
-                fprintf(state->diagnostics,
-                        "minic-ld: unsupported-emit-relocs-symbol\n");
-                return false;
+            if (discarded_target) {
+                symbol_index = 0U;
+            } else {
+                if (source->symbol >= symbols->resolver_count ||
+                    (symbol_index =
+                         symbols->resolver_to_final[source->symbol]) ==
+                        SIZE_MAX ||
+                    symbol_index > UINT32_MAX ||
+                    ELF64_ST_TYPE(
+                        state->resolver.entries[source->symbol].info) ==
+                        STT_GNU_IFUNC) {
+                    fprintf(state->diagnostics,
+                            "minic-ld: unsupported-emit-relocs-symbol\n");
+                    return false;
+                }
             }
             owner = &plan->sections[shndx - 1U];
             if ((section->flags & SHF_ALLOC) != 0U) {
@@ -419,8 +449,9 @@ static bool minild_final_relocations_build(
                 }
                 out->entries[out->count++] = (MiniElfRela){
                     .offset = place,
-                    .info = ELF64_R_INFO(symbol_index, source->type),
-                    .addend = source->addend
+                    .info = ELF64_R_INFO(symbol_index,
+                                        discarded_target ? 0U : source->type),
+                    .addend = discarded_target ? 0 : source->addend
                 };
             }
         }

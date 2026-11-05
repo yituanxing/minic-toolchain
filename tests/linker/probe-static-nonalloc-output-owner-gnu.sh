@@ -118,6 +118,36 @@ PY
     fi
 done
 
+# A relocation type unsupported by MiniLD must not be examined when -S has
+# removed its non-ALLOC source from the final output. GNU BFD implements
+# R_X86_64_SIZE64, but adding that opcode is not required for correct -S.
+printf '.text\n.globl _start\n_start: ret\n.section .debug_info,"",@progbits\n.quad 0\n.reloc 0, R_X86_64_SIZE64, _start+7\n' |
+    as -o "$work/unsupported-debug.o" -
+for mode in plain gc; do
+    flags=(-S)
+    if [[ $mode == gc ]]; then flags+=(--gc-sections); fi
+    "$gnu_ld" -m elf_x86_64 -static -e _start "${flags[@]}" \
+        -o "$work/unsupported.$mode.gnu.elf" "$work/unsupported-debug.o"
+    "$MINILD" -m elf_x86_64 -static -e _start "${flags[@]}" \
+        -o "$work/unsupported.$mode.mini.elf" "$work/unsupported-debug.o"
+    for flavor in gnu mini; do
+        if readelf -SW "$work/unsupported.$mode.$flavor.elf" |
+                grep -q '\.debug_info'; then
+            echo "MINILD_STATIC_NONALLOC_OUTPUT_GNU=FAIL stripped_unsupported_debug:$mode:$flavor" >&2
+            exit 1
+        fi
+    done
+done
+if "$MINILD" -m elf_x86_64 -static -e _start \
+        -o "$work/unsupported.live.elf" "$work/unsupported-debug.o" \
+        >"$work/unsupported.live.log" 2>&1; then
+    echo 'MINILD_STATIC_NONALLOC_OUTPUT_GNU=FAIL unsupported_live_reloc_accepted' >&2
+    exit 1
+fi
+grep -Fq 'unsupported-static-relocation:62:33' \
+    "$work/unsupported.live.log"
+test ! -e "$work/unsupported.live.elf"
+
 # The source is ALLOC here; treating a non-ALLOC target as an absolute VMA
 # would leak an unmapped address into runtime data.  Preserve fail-closed.
 printf '.text\n.globl _start\n_start: ret\n.data\n.quad debug_global\n.section .debug_owned,"",@progbits\n.globl debug_global\ndebug_global: .quad 4\n' |
@@ -130,4 +160,4 @@ fi
 grep -Fq 'unsupported-static-symbol:debug_global' "$work/invalid.log"
 test ! -e "$work/invalid.elf"
 
-echo 'MINILD_STATIC_NONALLOC_OUTPUT_GNU=PASS GNU_BFD=4 modes=default_scripted_discarded_keep_discarded_strip global_symbols=2 cross_fragment=8 pcrel=0 discarded_ABS_PCREL=zero allocated_to_nonalloc=rejected'
+echo 'MINILD_STATIC_NONALLOC_OUTPUT_GNU=PASS GNU_BFD=6 modes=default_scripted_discarded_keep_discarded_strip_unknown_plain_strip_unknown_gc global_symbols=2 cross_fragment=8 pcrel=0 discarded_ABS_PCREL=zero stripped_unknown=skip allocated_to_nonalloc=rejected'

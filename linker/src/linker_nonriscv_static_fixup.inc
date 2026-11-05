@@ -191,12 +191,26 @@ static bool minild_nonriscv_apply_with_ops(
     machine = state->target->machine;
     for (i = 0U; i < state->relocations.count; ++i) {
         const MiniLdReloc *reloc = &state->relocations.entries[i];
-        MiniLdNonRiscvFixup kind = ops->classify(reloc->type);
+        MiniLdNonRiscvFixup kind;
         MiniLdSection *section;
         MiniLdStaticRelocOperands operands;
         bool undefined_weak = false;
         bool live;
 
+        /* Final OutputPlan liveness owns the source.  -S and /DISCARD/
+         * remove non-ALLOC metadata before any target ISA policy applies;
+         * an unknown relocation in discarded debug bytes cannot make an
+         * otherwise valid executable fail. Surviving sources remain fully
+         * checked against their target's exact supported relocation set. */
+        if (!minild_static_reloc_source(
+                state, layout, output_plan, reloc,
+                "nonriscv-invalid-relocation-section", &section, &live)) {
+            return false;
+        }
+        if (!live) {
+            continue;
+        }
+        kind = ops->classify(reloc->type);
         if (kind == MINILD_NONRISCV_INVALID) {
             fprintf(state->diagnostics,
                     "minic-ld: unsupported-static-relocation:%u:%u\n",
@@ -204,14 +218,6 @@ static bool minild_nonriscv_apply_with_ops(
             return false;
         }
         if (kind == MINILD_NONRISCV_NONE) {
-            continue;
-        }
-        if (!minild_static_reloc_source(
-                state, layout, output_plan, reloc,
-                "nonriscv-invalid-relocation-section", &section, &live)) {
-            return false;
-        }
-        if (!live) {
             continue;
         }
         if (!minild_static_reloc_operands(

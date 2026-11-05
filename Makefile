@@ -1028,6 +1028,7 @@ check-minild-five-arch-linux-linker-boundary: \
 	check-minild-x86-script-symbol-provenance-relocs \
 	check-minild-final-symtab-section-owner-gnu \
 	check-minild-static-nonalloc-output-owner-gnu \
+	check-minild-gc-nonalloc-gnu \
 	check-minild-i386-rel-static \
 	check-minild-x86-frozen-manifest \
 	check-minild-x86-boot-dispatch \
@@ -1083,6 +1084,11 @@ check-minild-aarch64-static-ifunc: $(MINIAS_BINARY) $(MINILD_BINARY)
 check-minild-static-nonalloc-output-owner-gnu: $(MINILD_BINARY)
 	MINILD="$(abspath $(MINILD_BINARY))" \
 	bash tests/linker/probe-static-nonalloc-output-owner-gnu.sh
+
+.PHONY: check-minild-gc-nonalloc-gnu
+check-minild-gc-nonalloc-gnu: $(MINILD_BINARY)
+	MINILD="$(abspath $(MINILD_BINARY))" \
+	bash tests/linker/probe-gc-nonalloc-gnu.sh
 
 .PHONY: check-minild-static-nonalloc-relocations
 check-minild-static-nonalloc-relocations: $(MINIAS_BINARY) $(MINILD_BINARY) \

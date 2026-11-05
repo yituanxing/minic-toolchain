@@ -17,8 +17,12 @@ static bool minild_projection_fragment(const MiniLdState *state,
            (projection != MINILD_PROJECTION_RELOCATABLE &&
             (input->flags & (SHF_ALLOC | SHF_MERGE)) ==
                 (SHF_ALLOC | SHF_MERGE)) ||
-           (projection == MINILD_PROJECTION_GC &&
-            (input->flags & (SHF_ALLOC | SHF_LINK_ORDER)) != 0U);
+           /* GC must retain each non-ALLOC section's *input-file* owner.
+            * GNU retains debug/metadata from an object with live allocated
+            * code or data, but discards metadata from a dead-only object.
+            * Coalescing same-named inputs before GC loses that distinction
+            * and prevents surviving debug relocations from being applied. */
+           projection == MINILD_PROJECTION_GC;
 }
 
 static bool minild_project_admitted_inputs(MiniLdState *state,
