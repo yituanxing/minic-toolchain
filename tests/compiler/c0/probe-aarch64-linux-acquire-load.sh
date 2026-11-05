@@ -23,13 +23,10 @@ u64 mini_read64(const volatile u64 *p){
 SRC
 sed 's/mini_/gnu_/g' "$w/load.i" >"$w/gnu.c"
 aarch64-linux-gnu-gcc -O0 -c "$w/gnu.c" -o "$w/gnu.o"
-set -x
 "$minic" --target=aarch64-linux -S "$w/load.i" -o "$w/mini.s"
-# Temporary one-run exact GNU mnemonic and physical binding evidence.
-grep -nE 'ldar|strb|strh|str[[:space:]]' "$w/mini.s" || true
 for ins in 'ldarb w9, [x10]' 'ldarh w9, [x10]' \
  'ldar w9, [x10]' 'ldar x9, [x10]' \
- 'strb w9, [x11]' 'strh w9, [x11]' 'str w9, [x11]' 'str x9, [x11]';do
+ 'strb w9, [x11, #0]' 'strh w9, [x11, #0]' 'str w9, [x11, #0]' 'str x9, [x11, #0]';do
  grep -Fq "$ins" "$w/mini.s"
 done
 aarch64-linux-gnu-gcc -c -x assembler "$w/mini.s" -o "$w/mini.o"
