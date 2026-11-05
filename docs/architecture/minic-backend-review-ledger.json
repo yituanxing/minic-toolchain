@@ -10,7 +10,7 @@
     672,
     673
   ],
-  "audit_in_progress": "Core-to-physical-MachineIR migration: LoongArch64 whole-function production selection has a live typed-output inode witness for twenty supported fixtures, with one historical unsupported case still rejected; full GNU AS/LD/QEMU/Linux runtime acceptance is pending. Loong scalar sealed-source families 1/4/5/6/15/17 and immediate DBAR 22 now bind directly to physical MachineIR, with strict negative admission and source-only probes. RV32/RV64, x86-64 and AArch64 have additional typed selector families but retain legacy production entrypoints until whole-function coverage and ABI parity are proven. New source owners are inventory-only; stale fingerprints reopen review and do not imply full-source certification.",
+  "audit_in_progress": "Core-to-physical-MachineIR migration: five targets now have production typed selection entrypoints, but complete function admission, ABI parity and full GNU AS/LD/QEMU/Linux runtime acceptance remain separate, unproven gates. LoongArch64 production has 22 typed-output fixtures and one intentionally unsupported legacy case; additional source-ASM UACCESS and LL/SC families have focused proofs. RV32 wide-integer virtio compilation and RV64 GNU source-ASM provenance have focused passing probes; upstream zlib full-TU admission and RV64 checked-overflow selector coverage remain open. Retired Loong emit modules are removed from the active inventory. New source owners are inventory-only; stale fingerprints reopen review and do not imply full-source certification.",
   "next_deep_review": [
     "src/target/aarch64/frame_emit.c",
     "src/target/loongarch64/frame_emit.c",
@@ -69,6 +69,11 @@
       "review_depth": "inventory",
       "ci_touched_in": []
     },
+    "src/target/common/machine_production_preflight.h": {
+      "blob": "3ae44d1936e68015c2f550837a61e8d3252fa9b2",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
     "src/target/common/machine_source_asm_template.c": {
       "blob": "4ea2cefa8b6c4eb86a634625eedf3dd990634f41",
       "review_depth": "inventory",
@@ -119,6 +124,16 @@
       "review_depth": "inventory",
       "ci_touched_in": []
     },
+    "src/target/loongarch64/machine_llsc_extended_select.c": {
+      "blob": "5afa249785b7c511e132b259e202e4ee9db0c371",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/loongarch64/machine_llsc_extended_select.h": {
+      "blob": "8fb1070ebcf9a1df39ef8a09d6eab3a0bf30aa23",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
     "src/target/loongarch64/machine_pte_select.c": {
       "blob": "69b3012f6e1ff2e00fdc67a11842be3ff7d7f9c8",
       "review_depth": "inventory",
@@ -156,6 +171,16 @@
     },
     "src/target/loongarch64/machine_source_asm.h": {
       "blob": "240c2a30c17a7f0084a401b037571b489425cede",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/loongarch64/machine_uaccess_select.c": {
+      "blob": "f52091e19f059b35287a90bef969b80c27b7f465",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/loongarch64/machine_uaccess_select.h": {
+      "blob": "71294e40810695565c89982070b41d05e4db347a",
       "review_depth": "inventory",
       "ci_touched_in": []
     },

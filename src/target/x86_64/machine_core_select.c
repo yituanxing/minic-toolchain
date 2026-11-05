@@ -2855,10 +2855,12 @@ static bool x86_core_terminator(X86CoreSelector *sel, size_t core_id) {
                 return false;
             if (minic_x86_64_core_one_gp_record(sel->core->type_context,
                     id, &bytes)) {
-                if (!x86_load_record_gp(sel, bytes, 0U)) return false;
+                if (sel->frame->has_sret ||
+                    !x86_load_record_gp(sel, bytes, 0U)) return false;
             } else if (minic_x86_64_core_two_gp_record(
                     sel->core->type_context, id)) {
-                if (!type->has_layout || type->size < 9U ||
+                if (sel->frame->has_sret ||
+                    !type->has_layout || type->size < 9U ||
                     type->size > 16U ||
                     !x86_load_record_gp(sel, type->size - 8U, 8U) ||
                     !x86_rr(sel, MINIC_X86_MI_MOV64_RR, 64U,

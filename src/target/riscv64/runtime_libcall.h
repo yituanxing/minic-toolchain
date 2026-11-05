@@ -23,6 +23,11 @@ const char *minic_riscv64_softfloat_binary_symbol(
     const MinicRiscvIsa *isa, MinicCoreInstructionKind kind);
 bool minic_riscv64_needs_arithmetic_libcall(const MinicRiscvIsa *isa,
                                              const MinicCoreFunction *function);
+/* Typed MachineIR's full implicit compiler-runtime CALL inventory. Unlike
+ * the legacy native-M/F/D planner, this must reserve RA for base-I helpers
+ * in non-strict/default and extension-enabled profiles as well. */
+bool minic_riscv64_needs_machine_runtime_call(
+    const MinicRiscvIsa *, const MinicCoreFunction *);
 bool minic_riscv64_uses_arithmetic_libcall(const MinicRiscvIsa *isa);
 bool minic_riscv64_emit_arithmetic_libcall(
     FILE *file, const MinicRiscvIsa *isa, MinicRiscv64ArithmeticLibcall operation,

@@ -416,26 +416,29 @@ static bool rv_transport_type(const RvCoreSelection *sel,
     *size = type->size;
     return true;
 }
-static bool rv_wide_integer(RvCoreSelection *sel, MinicCoreTypeId id,
-    bool *sign);
 static bool rv_core_constant(RvCoreSelection *sel,
     const MinicCoreInstruction *ins) {
     unsigned bytes;
     bool sign, pointer;
-    /* An ILP32 integer constant may occupy the finalized two-register
-     * scalar slot. Keep both words from the signed Core payload, including
-     * bit 63, rather than rejecting every uint64_t/long long constant. */
-    if (sel->xlen == 32U) {
-        bool wide_sign;
-        if (rv_wide_integer(sel, ins->core_type_id, &wide_sign)) {
-            const uint64_t bits = (uint64_t)ins->value.integer_value;
-            (void)wide_sign;
-            return rv_li(sel, RV_T0, (int64_t)(int32_t)(uint32_t)bits) &&
-                rv_value_chunk(sel, ins->result, 0U, RV_T0, false) &&
-                rv_li(sel, RV_T0,
-                    (int64_t)(int32_t)(uint32_t)(bits >> 32U)) &&
-                rv_value_chunk(sel, ins->result, 1U, RV_T0, false);
-        }
+    const MinicCoreTypeContext *types = sel->plan->core->type_context;
+    const MinicCoreType *type = types == NULL ? NULL :
+        minic_core_type_get(types,
+            minic_core_type_unqualified(types, ins->core_type_id));
+    const unsigned word = sel->xlen / 8U;
+    if (type != NULL && type->kind == MINIC_CORE_TYPE_INTEGER &&
+        type->has_layout && type->size == 2U * word &&
+        type->value.integer.bit_width != 0U &&
+        type->value.integer.bit_width <= type->size * 8U) {
+        const uint64_t raw = (uint64_t)ins->value.integer_value;
+        const int64_t low = sel->xlen == 32U ?
+            (int64_t)(int32_t)(uint32_t)raw : ins->value.integer_value;
+        const int64_t high = sel->xlen == 32U ?
+            (int64_t)(int32_t)(uint32_t)(raw >> 32U) :
+            (ins->value.integer_value < 0 ? -1 : 0);
+        return rv_li(sel, RV_T0, low) &&
+            rv_value_chunk(sel, ins->result, 0U, RV_T0, false) &&
+            rv_li(sel, RV_T0, high) &&
+            rv_value_chunk(sel, ins->result, 1U, RV_T0, false);
     }
     return rv_type(sel, ins->core_type_id, &bytes, &sign, &pointer) &&
         rv_li(sel, RV_T0, ins->value.integer_value) &&
@@ -485,7 +488,8 @@ static bool rv_core_runtime_binary(RvCoreSelection *sel,
     MinicRiscvIsa isa = {0};
     size_t chunks, i, operand_index, size;
     bool integer, sign;
-    if (types == NULL || lhs >= fn->value_count ||
+    if (!minic_riscv_machine_implicit_runtime_call(fn, ins, sel->xlen) ||
+        types == NULL || lhs >= fn->value_count ||
         rhs >= fn->value_count || !sel->plan->frame->saves_return_address ||
         !minic_riscv_target_isa_load(sel->plan->target, &isa)) return false;
     result = minic_core_type_get(types,
@@ -588,7 +592,8 @@ static bool rv_core_runtime_unary_float(RvCoreSelection *sel,
             (sel->xlen == 64U || rv_value_chunk(sel, ins->result, 1U,
                 RV_T1, false));
     }
-    if (!sel->plan->frame->saves_return_address ||
+    if (!minic_riscv_machine_implicit_runtime_call(fn, ins, sel->xlen) ||
+        !sel->plan->frame->saves_return_address ||
         !rv_transport_type(sel, shape.source_id, &source_size,
             &integer, &sign) ||
         !rv_transport_type(sel, shape.result_id, &result_size,
@@ -651,7 +656,8 @@ static bool rv_core_runtime_double_compare(RvCoreSelection *sel,
     const size_t chunks = 8U / (sel->xlen / 8U);
     const char *helper;
     size_t i, index;
-    if (!minic_core_floating_shape(fn, ins, &shape) ||
+    if (!minic_riscv_machine_implicit_runtime_call(fn, ins, sel->xlen) ||
+        !minic_core_floating_shape(fn, ins, &shape) ||
         !minic_riscv_target_isa_load(sel->plan->target, &isa) ||
         (sel->xlen == 32U && isa.abi != MINIC_RISCV_ABI_ILP32) ||
         (sel->xlen == 64U && isa.abi != MINIC_RISCV_ABI_LP64) ||
@@ -1126,20 +1132,29 @@ static bool rv_core_wide_unary(RvCoreSelection *sel,
     const MinicCoreInstruction *ins) {
     const MinicCoreFunction *fn = sel->plan->core;
     bool source_sign, result_sign;
+    unsigned result_bytes;
+    bool result_pointer;
     if (ins->value.operand >= fn->value_count ||
         !rv_wide_integer(sel,
             fn->values[ins->value.operand].core_type_id, &source_sign) ||
-        (ins->kind != MINIC_CORE_INSTRUCTION_SCALAR_IS_ZERO &&
-         !rv_wide_integer(sel, ins->core_type_id, &result_sign)) ||
         !rv_value_chunk(sel, ins->value.operand, 0U, RV_T0, true) ||
         !rv_value_chunk(sel, ins->value.operand, 1U, RV_T1, true))
         return false;
-    switch (ins->kind) {
-    case MINIC_CORE_INSTRUCTION_SCALAR_IS_ZERO:
+    /* A 2*XLEN input has two truth limbs, but the Core `!x` RESULT is
+     * ordinary 32-bit int on BOTH ILP32 and LP64. Never demand a wide
+     * result slot for SCALAR_IS_ZERO, and never inspect only its low limb. */
+    if (ins->kind == MINIC_CORE_INSTRUCTION_SCALAR_IS_ZERO) {
+        if (!rv_type(sel, ins->core_type_id, &result_bytes,
+                &result_sign, &result_pointer) || result_pointer ||
+            result_bytes != 4U) return false;
         return rv_rrr(sel, MINIC_RISCV_MACHINE_OR,
                 RV_T0, RV_T0, RV_T1) &&
             rv_rr(sel, MINIC_RISCV_MACHINE_SEQZ, RV_T0, RV_T0) &&
             rv_store(sel, ins->result, RV_T0);
+    }
+    if (!rv_wide_integer(sel, ins->core_type_id, &result_sign) ||
+        source_sign != result_sign) return false;
+    switch (ins->kind) {
     case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_NOT:
         if (!rv_rr(sel, MINIC_RISCV_MACHINE_NOT, RV_T0, RV_T0) ||
             !rv_rr(sel, MINIC_RISCV_MACHINE_NOT, RV_T1, RV_T1)) return false;

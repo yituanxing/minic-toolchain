@@ -1,3 +1,4 @@
+#define _POSIX_C_SOURCE 200809L
 /* Genuine Core CFG→typed RV32I/RV64I selection: a backedge to the Core
  * entry must never reexecute the ABI prologue or address the function symbol. */
 #include "target/riscv/machine_core_select.h"
@@ -6,13 +7,33 @@
 #include "target/riscv/instruction_select.h"
 #include "target/common/machine_core_coverage.h"
 #include "target/data_layout.h"
+#include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #define CHECK(x) do { if (!(x)) { \
     fprintf(stderr, "RV_CORE_MIR:%d: %s\n", __LINE__, #x); \
     return false; } } while (0)
+
+/* Keep each test's temporary assembly stream inside the task workspace
+ * when glibc's fixed /tmp mount is full; no unrelated /tmp entries touched. */
+static FILE *rv_test_tmpfile(void) {
+    const char *dir = getenv("TMPDIR");
+    char path[1024];
+    int n, fd;
+    FILE *out;
+    if (dir == NULL || dir[0] == '\0') return tmpfile();
+    n = snprintf(path, sizeof(path), "%s/minic-rv-test-XXXXXX", dir);
+    if (n < 0 || (size_t)n >= sizeof(path)) return NULL;
+    fd = mkstemp(path);
+    if (fd < 0) return NULL;
+    (void)unlink(path);
+    out = fdopen(fd, "w+");
+    if (out == NULL) (void)close(fd);
+    return out;
+}
 
 static bool test_fixed_tp_register(const char *name, size_t length) {
     return name != NULL && length == 2U && memcmp(name, "tp", 2U) == 0;
@@ -227,7 +248,7 @@ static bool run(unsigned xlen, bool compiler_barrier,
         fprintf(stderr, "RV%u: machine CFG contract mismatch\n", xlen);
         goto done;
     }
-    out = tmpfile();
+    out = rv_test_tmpfile();
     stage = "assembly";
     if (out == NULL || !minic_machine_gnu_asm_emit_body(out,
         &machine, &policy) || fflush(out) != 0 ||
@@ -317,12 +338,14 @@ done:
     minic_core_type_context_destroy(&types);
     return okay;
 }
-static bool run_scalar(unsigned xlen, MinicCoreInstructionKind binary,
-                       bool saved_return_address) {
+static bool run_scalar_extended(unsigned xlen, MinicCoreInstructionKind binary,
+    bool saved_return_address, unsigned bytes, bool is_signed,
+    bool strict, bool native_m_available) {
     MinicCoreFunction fn = {0};
     MinicCoreTypeContext types;
     MinicCoreType type = {0};
     MinicCoreTypeId integer_type, unsigned_type;
+    MinicCoreTypeId scalar_type;
     MinicCoreBlockId entry;
     MinicCoreValueId values[4];
     MinicCoreInstruction ins = {0};
@@ -345,6 +368,8 @@ static bool run_scalar(unsigned xlen, MinicCoreInstructionKind binary,
     bool ok = false;
     const bool bitscan = binary == MINIC_CORE_INSTRUCTION_INTEGER_CLZ ||
         binary == MINIC_CORE_INSTRUCTION_INTEGER_CTZ;
+    const char *helper = minic_riscv_integer_arithmetic_symbol(
+        binary, !is_signed, xlen);
     const char *stage = "initialize";
     minic_core_type_context_initialize(&types);
     minic_core_function_initialize(&fn);
@@ -354,18 +379,20 @@ static bool run_scalar(unsigned xlen, MinicCoreInstructionKind binary,
     fn.name_length = sizeof("rv_scalar_core") - 1U;
     type.kind = MINIC_CORE_TYPE_INTEGER;
     type.has_layout = true;
-    type.size = type.alignment = 4U;
-    type.value.integer.bit_width = 32U;
+    type.size = type.alignment = bytes;
+    type.value.integer.bit_width = bytes * 8U;
     type.value.integer.is_signed = true;
     if (!minic_core_type_register(&types, &type, &integer_type)) goto done;
     type.value.integer.is_signed = false;
-    if (!minic_core_type_register(&types, &type, &unsigned_type) ||
-        !minic_core_function_define_signature(&fn, &types, integer_type,
+    if (!minic_core_type_register(&types, &type, &unsigned_type)) goto done;
+    scalar_type = is_signed ? integer_type : unsigned_type;
+    if (!minic_core_function_define_signature(&fn, &types,
+            bitscan ? integer_type : scalar_type,
             NULL, 0U, MINIC_CALLING_CONVENTION_DEFAULT, false) ||
         !minic_core_function_add_block(&fn, &entry)) goto done;
     stage = "build instructions";
     ins.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
-    ins.core_type_id = bitscan ? unsigned_type : integer_type;
+    ins.core_type_id = bitscan ? unsigned_type : scalar_type;
     ins.value.integer_value = 71;
     if (!minic_core_function_append_value_instruction(&fn, entry, &ins,
             &values[0])) goto done;
@@ -401,7 +428,8 @@ static bool run_scalar(unsigned xlen, MinicCoreInstructionKind binary,
     target.data_layout = &layout;
     isa.xlen = xlen;
     isa.abi = xlen == 32U ? MINIC_RISCV_ABI_ILP32 : MINIC_RISCV_ABI_LP64;
-    isa.strict_isa = true;
+    isa.strict_isa = strict;
+    isa.codegen_features = native_m_available ? MINIC_RISCV_FEATURE_M : 0U;
     if (!minic_riscv_target_isa_store(&target, &isa)) goto done;
     frame.frame_size = 128U;
     frame.stack_alignment = 16U;
@@ -416,8 +444,7 @@ static bool run_scalar(unsigned xlen, MinicCoreInstructionKind binary,
     if (!prepare_old_rv_abi(&fn, xlen, 0U, &abi32, &abi64,
             &calls64, &plan)) goto done;
     stage = "select";
-    if (binary != MINIC_CORE_INSTRUCTION_INTEGER_ADD &&
-        !saved_return_address) {
+    if (helper != NULL && !saved_return_address) {
         ok = !minic_riscv_machine_select_core_subset(&machine, &plan);
         goto done;
     }
@@ -432,29 +459,30 @@ static bool run_scalar(unsigned xlen, MinicCoreInstructionKind binary,
     if (!minic_riscv_machine_gnu_asm_policy(&target, &policy) ||
         !minic_machine_gnu_asm_preflight(&machine, &policy)) goto done;
     stage = "serialize";
-    out = tmpfile();
+    out = rv_test_tmpfile();
     if (out == NULL || !minic_machine_gnu_asm_emit_body(out,
             &machine, &policy) || fflush(out) != 0 ||
         fseek(out, 0L, SEEK_SET) != 0) goto done;
     n = fread(assembly, 1U, sizeof(assembly) - 1U, out);
     assembly[n] = '\0';
-    const char *helper = binary == MINIC_CORE_INSTRUCTION_INTEGER_MULTIPLY ?
-        (xlen == 32U ? "__mulsi3" : "__muldi3") :
-        binary == MINIC_CORE_INSTRUCTION_INTEGER_DIVIDE ?
-        (xlen == 32U ? "__divsi3" : "__divdi3") :
-        binary == MINIC_CORE_INSTRUCTION_INTEGER_REMAINDER ?
-        (xlen == 32U ? "__modsi3" : "__moddi3") : NULL;
     ok = strstr(assembly, "  li x5, 71") != NULL &&
         strstr(assembly, bitscan ? "  li x5, 27" : "  li x5, -27") != NULL &&
         (bitscan ? strstr(assembly, "  srl x5, x5, x28") != NULL &&
                    strstr(assembly, "  add x6, x6, x7") != NULL :
-         helper != NULL ? strstr(assembly, helper) != NULL :
+         helper != NULL ? strstr(assembly, helper) != NULL &&
+                          strstr(assembly, "  call __") != NULL &&
+                          strstr(assembly, "  mul x") == NULL &&
+                          strstr(assembly, "  div x") == NULL &&
+                          strstr(assembly, "  rem x") == NULL :
                           strstr(assembly, "  add x5, x5, x6") != NULL) &&
         strstr(assembly, "  neg x5, x5") != NULL &&
         strstr(assembly, "  ret") != NULL;
     if (!ok) fprintf(stderr, "RV%u scalar asm:\n%s\n", xlen, assembly);
 done:
-    if (!ok) fprintf(stderr, "RV%u scalar Core selection failed at %s\n", xlen, stage);
+    if (!ok) fprintf(stderr,
+        "RV%u scalar failed at %s op=%d width=%u signed=%d ra=%d strict=%d M=%d\n",
+        xlen, stage, (int)binary, bytes, (int)is_signed,
+        (int)saved_return_address, (int)strict, (int)native_m_available);
     if (out != NULL) fclose(out);
     minic_machine_function_destroy(&machine);
     rv32_function_abi_plan_destroy(&abi32);
@@ -463,6 +491,42 @@ done:
     minic_core_function_destroy(&fn);
     minic_core_type_context_destroy(&types);
     return ok;
+}
+
+static bool run_scalar(unsigned xlen, MinicCoreInstructionKind binary,
+                       bool saved_return_address) {
+    return run_scalar_extended(xlen, binary, saved_return_address,
+        4U, true, true, false);
+}
+
+/* The bcdd selector always chooses I-only libcalls, even with M available.
+ * Exercise the ENTIRE narrow/full-XLEN integer family in both signednesses.
+ * Unlike the earlier staged I-only subset, M is a positive base-I fallback. */
+static bool run_integer_runtime_matrix(void) {
+    const MinicCoreInstructionKind operations[] = {
+        MINIC_CORE_INSTRUCTION_INTEGER_MULTIPLY,
+        MINIC_CORE_INSTRUCTION_INTEGER_DIVIDE,
+        MINIC_CORE_INSTRUCTION_INTEGER_REMAINDER
+    };
+    const unsigned xlens[] = {32U, 64U};
+    size_t architecture, op;
+    for (architecture = 0U; architecture < 2U; ++architecture)
+        for (op = 0U; op < sizeof(operations) / sizeof(operations[0]); ++op)
+            for (unsigned bytes = 1U; bytes <= xlens[architecture] / 8U;
+                 bytes *= 2U)
+                for (unsigned sign = 0U; sign < 2U; ++sign)
+                    if (!run_scalar_extended(xlens[architecture], operations[op],
+                            true, bytes, sign != 0U, true, false)) return false;
+    return run_scalar_extended(32U, operations[0],
+               false, 4U, true, true, false) &&
+           run_scalar_extended(64U, operations[1],
+               false, 8U, false, true, false) &&
+           run_scalar_extended(32U, operations[2],
+               true, 4U, false, true, true) &&
+           run_scalar_extended(64U, operations[0],
+               true, 8U, true, true, true) &&
+           run_scalar_extended(64U, operations[1],
+               true, 4U, true, false, false);
 }
 
 
@@ -561,7 +625,7 @@ static bool run_softfloat(unsigned xlen, unsigned bytes,
         !minic_riscv_machine_gnu_asm_policy(&target, &policy) ||
         !minic_machine_gnu_asm_preflight(&machine, &policy)) goto done;
     stage = "GNU asm";
-    out = tmpfile();
+    out = rv_test_tmpfile();
     if (out == NULL || !minic_machine_gnu_asm_emit_body(out,
             &machine, &policy) || fflush(out) != 0 ||
         fseek(out, 0L, SEEK_SET) != 0) goto done;
@@ -728,7 +792,7 @@ static bool run_float_runtime_family(unsigned xlen) {
         !minic_riscv_machine_gnu_asm_policy(&target, &policy) ||
         !minic_machine_gnu_asm_preflight(&machine, &policy)) goto done;
     stage = "serialize";
-    out = tmpfile();
+    out = rv_test_tmpfile();
     if (out == NULL || !minic_machine_gnu_asm_emit_body(out,
             &machine, &policy) || fflush(out) != 0 ||
         fseek(out, 0L, SEEK_SET) != 0) goto done;
@@ -859,7 +923,7 @@ static bool run_dynamic_stack(unsigned xlen) {
     }
     if (traps != 2U) goto done;
     stage = "serialize";
-    out = tmpfile();
+    out = rv_test_tmpfile();
     if (out == NULL || !minic_machine_gnu_asm_emit_body(out,
             &machine, &policy) || fflush(out) != 0 ||
         fseek(out, 0L, SEEK_SET) != 0) goto done;
@@ -1060,7 +1124,7 @@ static bool run_memory_family(unsigned xlen) {
     if (!saw_volatile_read || !saw_volatile_write || !saw_atomic_read ||
         !saw_atomic_write || !saw_barrier) goto done;
     stage = "assembly";
-    out = tmpfile();
+    out = rv_test_tmpfile();
     if (out == NULL || !minic_machine_gnu_asm_emit_body(out,
         &machine, &policy) || fflush(out) != 0 ||
         fseek(out, 0L, SEEK_SET) != 0) goto done;
@@ -1220,7 +1284,7 @@ static bool run_indirect_call(unsigned xlen, bool stack_case) {
         !minic_machine_core_coverage_verify(&fn, reachable, &machine) ||
         !minic_riscv_machine_gnu_asm_policy(&target, &policy) ||
         !minic_machine_gnu_asm_preflight(&machine, &policy)) goto done;
-    out = tmpfile();
+    out = rv_test_tmpfile();
     if (out == NULL || !minic_machine_gnu_asm_emit_body(out,
         &machine, &policy) || fflush(out) != 0 ||
         fseek(out, 0L, SEEK_SET) != 0) goto done;
@@ -1529,7 +1593,7 @@ static bool run_wide_parameter(unsigned xlen, bool split_register_stack) {
         !minic_riscv_machine_gnu_asm_policy(&target, &policy) ||
         !minic_machine_gnu_asm_preflight(&machine, &policy)) goto done;
     stage = "assembly";
-    out = tmpfile();
+    out = rv_test_tmpfile();
     if (out == NULL || !minic_machine_gnu_asm_emit_body(out,
         &machine, &policy) || fflush(out) != 0 ||
         fseek(out, 0L, SEEK_SET) != 0) goto done;
@@ -1560,11 +1624,12 @@ done:
 /* A 64-bit ILP32 Core condition is true when EITHER little-endian word is
  * nonzero. The low limb may be zero and the upper limb nonzero. LP64 has a
  * single 64-bit limb and must not materialize a phantom second chunk. */
-static bool run_wide_condition(unsigned xlen) {
+static bool run_wide_condition(unsigned xlen, bool explicit_zero,
+    bool constant, int64_t immediate) {
     MinicCoreTypeContext types;
     MinicCoreFunction fn = {0};
     MinicCoreType type = {0};
-    MinicCoreTypeId void_t, wide_t;
+    MinicCoreTypeId void_t, wide_t, int_t;
     MinicCoreBlockId entry, yes, no;
     MinicCoreValueId condition;
     MinicCoreInstruction ins = {0};
@@ -1580,7 +1645,7 @@ static bool run_wide_condition(unsigned xlen) {
     MinicRiscvIsa isa = {0};
     MinicMachineGNUAsmPolicy policy = {0};
     const bool reachable[] = {true, true, true};
-    const size_t offsets[] = {32U};
+    const size_t offsets[] = {32U, 64U};
     FILE *out = NULL;
     char assembly[8192];
     size_t n;
@@ -1597,19 +1662,36 @@ static bool run_wide_condition(unsigned xlen) {
     type = (MinicCoreType){0};
     type.kind = MINIC_CORE_TYPE_INTEGER;
     type.has_layout = true;
-    type.size = type.alignment = 8U;
-    type.value.integer.bit_width = 64U;
+    type.size = type.alignment = 4U;
+    type.value.integer.bit_width = 32U;
+    type.value.integer.is_signed = true;
+    if (!minic_core_type_register(&types, &type, &int_t)) goto done;
+    type.value.integer.is_signed = false;
+    type.size = type.alignment = (explicit_zero || constant) ?
+        2U * (xlen / 8U) : 8U;
+    type.value.integer.bit_width = (unsigned)(type.size * 8U);
     if (!minic_core_type_register(&types, &type, &wide_t) ||
         !minic_core_function_define_signature(&fn, &types,
-            void_t, &wide_t, 1U, MINIC_CALLING_CONVENTION_DEFAULT, false) ||
+            void_t, constant ? NULL : &wide_t, constant ? 0U : 1U,
+            MINIC_CALLING_CONVENTION_DEFAULT, false) ||
         !minic_core_function_add_block(&fn, &entry) ||
         !minic_core_function_add_block(&fn, &yes) ||
         !minic_core_function_add_block(&fn, &no)) goto done;
-    ins.kind = MINIC_CORE_INSTRUCTION_PARAMETER;
+    ins.kind = constant ? MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT :
+        MINIC_CORE_INSTRUCTION_PARAMETER;
     ins.core_type_id = wide_t;
-    ins.value.parameter_index = 0U;
+    if (constant) ins.value.integer_value = immediate;
+    else ins.value.parameter_index = 0U;
     if (!minic_core_function_append_value_instruction(&fn,
         entry, &ins, &condition)) goto done;
+    if (explicit_zero) {
+        ins = (MinicCoreInstruction){0};
+        ins.kind = MINIC_CORE_INSTRUCTION_SCALAR_IS_ZERO;
+        ins.core_type_id = int_t;
+        ins.value.operand = condition;
+        if (!minic_core_function_append_value_instruction(&fn,
+            entry, &ins, &condition)) goto done;
+    }
     term.kind = MINIC_CORE_TERMINATOR_CONDITIONAL_BRANCH;
     term.conditional.condition = condition;
     term.conditional.when_true = yes;
@@ -1639,7 +1721,7 @@ static bool run_wide_condition(unsigned xlen) {
     bridge.core = &fn;
     bridge.frame = &frame;
     bridge.value_offsets = offsets;
-    bridge.value_offset_count = 1U;
+    bridge.value_offset_count = explicit_zero ? 2U : 1U;
     if (!prepare_old_rv_abi(&fn, xlen, 0U, &abi32, &abi64,
             &calls64, &bridge) ||
         !minic_riscv_machine_select_core_subset(&machine, &bridge) ||
@@ -1647,22 +1729,35 @@ static bool run_wide_condition(unsigned xlen) {
         !minic_riscv_machine_gnu_asm_policy(&target, &policy) ||
         !minic_machine_gnu_asm_preflight(&machine, &policy)) goto done;
     stage = "assembly";
-    out = tmpfile();
+    out = rv_test_tmpfile();
     if (out == NULL || !minic_machine_gnu_asm_emit_body(out,
         &machine, &policy) || fflush(out) != 0 ||
         fseek(out, 0L, SEEK_SET) != 0) goto done;
     n = fread(assembly, 1U, sizeof(assembly) - 1U, out);
     assembly[n] = '\0';
     okay = strstr(assembly, "  beqz x5, ") != NULL &&
-        (xlen == 32U
-            ? strstr(assembly, "  lw x5, 32(x2)") != NULL &&
-              strstr(assembly, "  lw x6, 36(x2)") != NULL &&
+        (!constant ||
+            (strstr(assembly, immediate < 0 ? "  li x5, -1" :
+                 xlen == 32U ? "  li x5, 1" : "  li x5, 0") != NULL &&
+             strstr(assembly, xlen == 32U ? "  sw x5, 36(x2)" :
+                 "  sd x5, 40(x2)") != NULL)) &&
+        (explicit_zero
+            ? strstr(assembly, "  or x5, x5, x6") != NULL &&
+              strstr(assembly, "  seqz x5, x5") != NULL &&
+              strstr(assembly, xlen == 32U ? "  lw x6, 36(x2)" :
+                  "  ld x6, 40(x2)") != NULL
+            : xlen == 32U || constant
+            ? strstr(assembly, xlen == 32U ? "  lw x5, 32(x2)" :
+                  "  ld x5, 32(x2)") != NULL &&
+              strstr(assembly, xlen == 32U ? "  lw x6, 36(x2)" :
+                  "  ld x6, 40(x2)") != NULL &&
               strstr(assembly, "  or x5, x5, x6") != NULL
             : strstr(assembly, "  ld x5, 32(x2)") != NULL &&
               strstr(assembly, "  or x5, x5, x6") == NULL);
 done:
     if (!okay) fprintf(stderr,
-        "RV%u 64-bit condition failed at %s\n", xlen, stage);
+        "RV%u wide condition zero=%d constant=%d immediate=%" PRId64
+        " failed at %s\n", xlen, explicit_zero, constant, immediate, stage);
     if (out != NULL) fclose(out);
     minic_machine_function_destroy(&machine);
     rv32_function_abi_plan_destroy(&abi32);
@@ -1981,6 +2076,7 @@ int main(void) {
         !run_scalar(64U, MINIC_CORE_INSTRUCTION_INTEGER_DIVIDE, true) ||
         !run_scalar(32U, MINIC_CORE_INSTRUCTION_INTEGER_REMAINDER, true) ||
         !run_scalar(64U, MINIC_CORE_INSTRUCTION_INTEGER_REMAINDER, true) ||
+        !run_integer_runtime_matrix() ||
         !run_scalar(32U, MINIC_CORE_INSTRUCTION_INTEGER_CLZ, true) ||
         !run_scalar(64U, MINIC_CORE_INSTRUCTION_INTEGER_CLZ, true) ||
         !run_scalar(32U, MINIC_CORE_INSTRUCTION_INTEGER_CTZ, true) ||
@@ -2006,7 +2102,14 @@ int main(void) {
         !run_wide_parameter(64U, false) ||
         !run_wide_parameter(32U, true) ||
         !run_wide_parameter(64U, true) ||
-        !run_wide_condition(32U) || !run_wide_condition(64U) ||
+        !run_wide_condition(32U, false, false, 0) ||
+        !run_wide_condition(64U, false, false, 0) ||
+        !run_wide_condition(32U, true, false, 0) ||
+        !run_wide_condition(64U, true, false, 0) ||
+        !run_wide_condition(32U, false, true, INT64_C(4294967296)) ||
+        !run_wide_condition(32U, true, true, -1) ||
+        !run_wide_condition(64U, false, true, INT64_C(4294967296)) ||
+        !run_wide_condition(64U, true, true, -1) ||
         !run_record_memory(32U) || !run_record_memory(64U) ||
         !run_frame_varargs(32U, false) ||
         !run_frame_varargs(64U, false) ||
@@ -2015,6 +2118,6 @@ int main(void) {
         fprintf(stderr, "RV_CORE_MIR_CFG=FAIL\n");
         return 1;
     }
-    puts("RV_CORE_MIR_CFG=PASS architectures=2 prologue_isolated=1 exported_reachability=1 core_scalar=1 memory_effects=1 record_memory=1 frame_varargs=1 indirect_call=1 stack_marshalling=1 wide_split=1 aggregate_parameter=1 aggregate_call=1 source_asm=1 fixed_register=1 abi_plan_reject=1 fail_closed=1");
+    puts("RV_CORE_MIR_CFG=PASS architectures=2 prologue_isolated=1 exported_reachability=1 core_scalar=1 integer_libcall_matrix=42 policy_cases=5 memory_effects=1 record_memory=1 frame_varargs=1 indirect_call=1 stack_marshalling=1 wide_split=1 aggregate_parameter=1 aggregate_call=1 source_asm=1 fixed_register=1 abi_plan_reject=1 fail_closed=1");
     return 0;
 }

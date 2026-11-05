@@ -73,7 +73,7 @@ static bool rv64_emit_typed_function(
             function, &old_frame.asm_plan) ||
         !minic_riscv64_core_frame_initialize_with_storage(
             function, &old_frame, &abi, true,
-            minic_riscv64_needs_arithmetic_libcall(isa, function),
+            minic_riscv64_needs_machine_runtime_call(isa, function),
             facts, storage)) goto done;
     frame_ready = true;
     if (!minic_riscv64_core_frame_mark_reachable_blocks(

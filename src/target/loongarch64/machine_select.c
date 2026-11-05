@@ -5,9 +5,11 @@
 #include "target/loongarch64/asm_contract_internal.h"
 #include "target/loongarch64/machine_builtin_select.h"
 #include "target/loongarch64/machine_llsc_select.h"
+#include "target/loongarch64/machine_llsc_extended_select.h"
 #include "target/loongarch64/machine_pte_select.h"
 #include "target/loongarch64/machine_csr_source_select.h"
 #include "target/loongarch64/machine_scalar_source_select.h"
+#include "target/loongarch64/machine_uaccess_select.h"
 #include "target/loongarch64/machine_target_state.h"
 #include "target/loongarch64/frame_emit.h"
 #include "target/common/core_block_walk.h"
@@ -35,7 +37,7 @@ enum {
     LOONG_A0 = 4U, LOONG_T0 = 12U, LOONG_T1 = 13U,
     LOONG_T2 = 14U, LOONG_T3 = 15U, LOONG_T4 = 16U,
     LOONG_T5 = 17U, LOONG_T6 = 18U, LOONG_T7 = 19U,
-    LOONG_S0 = 23U
+    LOONG_S0 = 23U, LOONG_ASM_TRANSFER_SLOTS = 3U
 };
 
 typedef struct LoongMemoryRoute {
@@ -77,10 +79,9 @@ typedef struct LoongSelector {
      * appending of these blocks would break physical fallthrough adjacency. */
     size_t *copy_loop;
     size_t *copy_done;
-    /* Each structured ASM result lvalue may need a native-width aligned
-     * store or the exact-byte unaligned path. At most two outputs occur in
-     * the current qualified forms (masked cmpxchg / small xchg). Their
-     * adjacent slow/native/done blocks are planned in Core order. */
+    /* Source ASM ingress/egress may require guarded native-width or exact
+     * byte transfers. Linux __get_user uses three physical C-lvalue
+     * transfers: error ingress, error egress and result egress. */
     size_t *asm_write_slow;
     size_t *asm_write_native;
     size_t *asm_write_done;
@@ -2893,8 +2894,9 @@ static bool loong_structured_store_at(LoongSelector *sel,
         return loong_memory_volatile(builder, MINIC_LOONG_MACHINE_ST_B,
             source_reg, address_reg, 0, false, false);
     if (sel->asm_active_id >= sel->ctx->fn->instruction_count ||
-        sel->asm_write_ordinal >= 2U) return false;
-    slot = 2U * sel->asm_active_id + sel->asm_write_ordinal++;
+        sel->asm_write_ordinal >= LOONG_ASM_TRANSFER_SLOTS) return false;
+    slot = LOONG_ASM_TRANSFER_SLOTS * sel->asm_active_id +
+        sel->asm_write_ordinal++;
     if (loong_structured_address_aligned(sel->ctx->fn,
             destination_address, width))
         return loong_memory_volatile(builder,
@@ -2997,8 +2999,9 @@ static bool loong_structured_read_lvalue_callback(void *opaque,
     if (reg == LOONG_T0 || reg == LOONG_T2 || reg == LOONG_T3 ||
         !loong_load_value(sel, address, LOONG_T2, true) ||
         sel->asm_active_id >= sel->ctx->fn->instruction_count ||
-        sel->asm_write_ordinal >= 2U) return false;
-    slot = 2U * sel->asm_active_id + sel->asm_write_ordinal++;
+        sel->asm_write_ordinal >= LOONG_ASM_TRANSFER_SLOTS) return false;
+    slot = LOONG_ASM_TRANSFER_SLOTS * sel->asm_active_id +
+        sel->asm_write_ordinal++;
     if (loong_structured_address_aligned(sel->ctx->fn, address, width))
         return loong_memory_volatile(builder,
             width == 8U ? MINIC_LOONG_MACHINE_LD_D :
@@ -3037,6 +3040,19 @@ static bool loong_structured_read_lvalue_callback(void *opaque,
         !loong_branch(sel, MINIC_LOONG_MACHINE_B, done, false, false) ||
         !minic_machine_builder_position_at(builder, done)) return false;
     return true;
+}
+
+/* GNU's fault-table error output occupies t0, which the guarded 32-bit
+ * packed ingress itself uses as byte-assembly scratch. Read into t1 and
+ * then move the intact C +r input into its selected physical t0 register. */
+static bool loong_structured_read_error_callback(void *opaque,
+    MinicCoreValueId address, unsigned int reg, size_t width) {
+    LoongSelector *sel = (LoongSelector *)opaque;
+    return reg == LOONG_T0 && width == 4U &&
+        loong_structured_read_lvalue_callback(opaque,
+            address, LOONG_T1, width) &&
+        loong_rr(&sel->builder, MINIC_LOONG_MACHINE_MOVE,
+            LOONG_T0, LOONG_T1);
 }
 
 /* Linux per-CPU indexed, AMO and atomic RMW source forms share the same
@@ -3294,6 +3310,24 @@ static bool loong_select_structured_asm(LoongSelector *sel,
         return minic_loongarch64_machine_select_pte(&sel->builder,
             sel->ctx, ins, loong_structured_load_callback,
             loong_structured_store_pte_callback, sel);
+    if (source->target_machine_form_id ==
+        MINIC_LOONG_MACHINE_ASM_UACCESS)
+        return minic_loongarch64_machine_select_uaccess(&sel->builder,
+            sel->ctx, ins, loong_structured_load_callback,
+            loong_structured_read_error_callback,
+            loong_structured_store_callback, sel);
+    if (source->target_machine_form_id == LOONG_DESC_FUTEX_CMPXCHG ||
+        source->target_machine_form_id ==
+            MINIC_LOONG_MACHINE_ASM_ADD_UNLESS ||
+        source->target_machine_form_id ==
+            MINIC_LOONG_MACHINE_ASM_FUTEX_RMW ||
+        source->target_machine_form_id ==
+            MINIC_LOONG_MACHINE_ASM_SUB_POSITIVE)
+        return minic_loongarch64_machine_select_llsc_extended(
+            &sel->builder, sel->ctx, ins,
+            loong_structured_load_callback,
+            loong_structured_store_callback,
+            loong_structured_read_lvalue_callback, sel);
     if (source->target_machine_form_id == MINIC_LOONG_MACHINE_ASM_CSR)
         return minic_loongarch64_machine_select_csr_source(&sel->builder,
             sel->ctx, ins, loong_structured_load_callback,
@@ -4145,6 +4179,18 @@ static size_t loong_source_asm_writeback_count(
             source->template_length) == 2U ? 2U : 1U;
     case LOONG_DESC_XCHG_SMALL:
         return 2U;
+    case LOONG_DESC_FUTEX_CMPXCHG:
+        return 3U;
+    case MINIC_LOONG_MACHINE_ASM_ADD_UNLESS:
+    case MINIC_LOONG_MACHINE_ASM_FUTEX_RMW:
+    case MINIC_LOONG_MACHINE_ASM_SUB_POSITIVE:
+        return 2U;
+    case MINIC_LOONG_MACHINE_ASM_UACCESS: {
+        LoongLinuxUaccess form;
+        return loong_linux_uaccess_form(source->template_text,
+            source->template_length, &form) ?
+            (form.load ? 3U : 2U) : 0U;
+    }
     default:
         return 0U;
     }
@@ -4169,6 +4215,23 @@ static bool loong_source_asm_transfer_shape(
         ins->value.structured_inline_asm.inline_asm_id];
     role_index = 0U;
     switch (source->target_machine_form_id) {
+    case LOONG_DESC_FUTEX_CMPXCHG:
+        role_index = ordinal == 2U ? 1U : 0U;
+        break;
+    case MINIC_LOONG_MACHINE_ASM_ADD_UNLESS:
+    case MINIC_LOONG_MACHINE_ASM_FUTEX_RMW:
+    case MINIC_LOONG_MACHINE_ASM_SUB_POSITIVE:
+        role_index = ordinal;
+        break;
+    case MINIC_LOONG_MACHINE_ASM_UACCESS: {
+        LoongLinuxUaccess form;
+        if (!loong_linux_uaccess_form(source->template_text,
+                source->template_length, &form)) return false;
+        /* +r error input/output and the __get_user data carrier share
+         * this preplanned memory-transfer slot ordering. */
+        role_index = ordinal == 2U && form.load ? 1U : 0U;
+        break;
+    }
     case LOONG_DESC_XCHG:
     case LOONG_DESC_PTE:
     case MINIC_LOONG_MACHINE_ASM_AMO_FETCH:
@@ -4192,7 +4255,10 @@ static bool loong_source_asm_transfer_shape(
     pointee = minic_core_type_get(fn->type_context, type_id);
     if (!pointee || !pointee->has_layout ||
         pointee->kind != MINIC_CORE_TYPE_INTEGER ||
-        (pointee->size != 4U && pointee->size != 8U))
+        (pointee->size != 4U && pointee->size != 8U &&
+         (source->target_machine_form_id !=
+              MINIC_LOONG_MACHINE_ASM_UACCESS ||
+          (pointee->size != 1U && pointee->size != 2U))))
         return false;
     *out_address = roles[role_index].value;
     *out_width = pointee->size;
@@ -4385,7 +4451,7 @@ bool minic_loongarch64_select_machine(MinicMachineFunction *machine,
             SIZE_MAX / sizeof(*sel.memory_helpers) ||
         fn->instruction_count > SIZE_MAX / sizeof(*sel.alloc_trap) ||
         fn->instruction_count > SIZE_MAX /
-            (2U * sizeof(*sel.asm_write_slow)) ||
+            (LOONG_ASM_TRANSFER_SLOTS * sizeof(*sel.asm_write_slow)) ||
         !minic_machine_function_initialize(machine, ctx->target, ctx->name,
             minic_loongarch64_target_soft_float_abi(ctx->target)
                 ? MINIC_LOONG_MACHINE_FEATURE_BASE
@@ -4398,7 +4464,7 @@ bool minic_loongarch64_select_machine(MinicMachineFunction *machine,
     machine->calling_convention = MINIC_CALLING_CONVENTION_DEFAULT;
     sel.ctx = ctx;
     asm_slots = (fn->instruction_count != 0U
-        ? fn->instruction_count : 1U) * 2U;
+        ? fn->instruction_count : 1U) * LOONG_ASM_TRANSFER_SLOTS;
     sel.block_ids = malloc(count * sizeof(*sel.block_ids));
     sel.aux_true = malloc(count * sizeof(*sel.aux_true));
     sel.aux_false = malloc(count * sizeof(*sel.aux_false));
@@ -4521,9 +4587,10 @@ bool minic_loongarch64_select_machine(MinicMachineFunction *machine,
                 const size_t outputs =
                     loong_source_asm_writeback_count(fn, ins);
                 size_t output;
-                if (outputs > 2U) goto cleanup;
+                if (outputs > LOONG_ASM_TRANSFER_SLOTS) goto cleanup;
                 for (output = 0U; output < outputs; ++output) {
-                    const size_t slot = id * 2U + output;
+                    const size_t slot = id * LOONG_ASM_TRANSFER_SLOTS +
+                        output;
                     MinicCoreValueId out_address;
                     size_t out_width;
                     if (!loong_source_asm_transfer_shape(fn, ins, output,

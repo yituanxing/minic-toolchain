@@ -1,3 +1,4 @@
+#define _POSIX_C_SOURCE 200809L
 /* LoongArch LP64S/LP64D typed physical frame selection smoke/negative probes.
  * The production selector is deliberately not registered while remaining
  * Core/ABI/unaligned-memory families are still being migrated. */
@@ -5,6 +6,7 @@
 #include "target/loongarch64/machine_opcode.h"
 #include "target/common/machine_gnu_asm.h"
 #include "target/data_layout.h"
+#include "test_tempfile.h"
 
 #include <assert.h>
 #include <stdio.h>
@@ -53,7 +55,7 @@ static bool selected_case(const char *name,
     stage = "preflight";
     if (!minic_machine_gnu_asm_preflight(&machine, &policy)) goto done;
     stage = "serializer";
-    stream = tmpfile();
+    stream = loong_test_tempfile();
     if (stream == NULL ||
         !minic_machine_gnu_asm_emit_body(stream, &machine, &policy) ||
         fflush(stream) != 0 || fseek(stream, 0L, SEEK_SET) != 0)
@@ -141,7 +143,7 @@ static bool label_address_case(bool forged) {
     stage = "preflight";
     if (!minic_machine_gnu_asm_preflight(&machine, &policy)) goto done;
     stage = "serialize";
-    stream = tmpfile();
+    stream = loong_test_tempfile();
     if (stream == NULL ||
         !minic_machine_gnu_asm_emit_body(stream, &machine, &policy) ||
         fflush(stream) != 0 || fseek(stream, 0L, SEEK_SET) != 0) goto done;

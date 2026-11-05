@@ -329,6 +329,24 @@ static bool riscv_source_asm_expand(FILE *output,
         ins->source_asm_template == NULL || ins->source_asm_length == 0U ||
         ins->source_asm_length > 1048576U ||
         (ins->operand_count != 0U && ins->operands == NULL)) return false;
+    if (function->target != NULL &&
+        function->target->architecture == MINIC_TARGET_ARCH_RISCV64) {
+        static const char *const reserved[] = {
+            "# MINIC_RV64I_ASM_BEGIN", "# MINIC_RV64I_ASM_END"
+        };
+        size_t marker;
+        /* The ISA auditor treats these comments as source-origin trust
+         * delimiters. Neither literal GNU source asm nor a placeholder may
+         * forge them; enforce the same sealed constraint as the old emitter. */
+        for (marker = 0U; marker < sizeof(reserved) / sizeof(reserved[0]);
+             ++marker) {
+            const size_t len = strlen(reserved[marker]);
+            if (len > ins->source_asm_length) continue;
+            for (i = 0U; i <= ins->source_asm_length - len; ++i)
+                if (memcmp(ins->source_asm_template + i,
+                        reserved[marker], len) == 0) return false;
+        }
+    }
     for (i = 0U; i < ins->operand_count; ++i) {
         const MinicMachineOperand *op = &ins->operands[i];
         size_t previous;
@@ -435,7 +453,7 @@ static bool riscv_machine_emit_source_asm(FILE *output,
     const MinicMachineFunction *function, const MinicMachineInstruction *ins,
     const MinicMachineGNUAsmLabels *labels, void *context) {
     const bool rv64 = function != NULL && function->target != NULL &&
-        minic_riscv_target_isa(function->target).xlen == 64U;
+        function->target->architecture == MINIC_TARGET_ARCH_RISCV64;
     (void)context;
     if (output == NULL || function == NULL || labels == NULL ||
         !riscv_source_asm_expand(NULL, function, ins, labels) ||

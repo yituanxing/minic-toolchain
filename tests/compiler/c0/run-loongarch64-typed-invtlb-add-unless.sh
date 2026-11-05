@@ -14,8 +14,11 @@ if test -n "$baseline"; then test -x "$baseline"; fi
     -o "$work/source.i"
 "$minic" --target=loongarch64-linux -S "$work/source.i" -o "$work/r6.s"
 test "$(grep -Fc '  invtlb 0,' "$work/r6.s")" -eq 4
-grep -Fq '  sc.w $t1, $t2, 0' "$work/r6.s"
-grep -Fq '  sc.d $t1, $t2, 0' "$work/r6.s"
+# Preserve the exact selected ISA/physical operands while allowing GNU's
+# original source-authored whitespace, rather than assuming the old direct
+# emitter's two-space prefix before each LL/SC source-template line.
+grep -Eq '^[[:space:]]*sc[.]w[[:space:]]+\$t1,[[:space:]]*\$t2,[[:space:]]*0$' "$work/r6.s"
+grep -Eq '^[[:space:]]*sc[.]d[[:space:]]+\$t1,[[:space:]]*\$t2,[[:space:]]*0$' "$work/r6.s"
 if test -n "$baseline"; then
     "$baseline" --target=loongarch64-linux -S "$work/source.i" -o "$work/r5.s"
     cmp "$work/r5.s" "$work/r6.s"

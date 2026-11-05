@@ -128,6 +128,23 @@ bool minic_riscv64_needs_arithmetic_libcall(const MinicRiscvIsa *isa,
     }
     return false;
 }
+
+/* The native/legacy emitter still consumes its original M/F/D-sensitive
+ * frame inventory above. Typed production emits base-I helpers regardless
+ * of extension availability; drive that independent frame lifetime from
+ * the EXACT same shape vocabulary used by the shared RV32/RV64 selector. */
+bool minic_riscv64_needs_machine_runtime_call(
+    const MinicRiscvIsa *isa, const MinicCoreFunction *function) {
+    size_t i;
+    if (isa == NULL || isa->xlen != 64U || function == NULL ||
+        (function->instruction_count != 0U && function->instructions == NULL))
+        return false;
+    for (i = 0U; i < function->instruction_count; ++i)
+        if (minic_riscv_machine_implicit_runtime_call(
+                function, &function->instructions[i], isa->xlen))
+            return true;
+    return false;
+}
 bool minic_riscv64_emit_arithmetic_libcall(
     FILE *file, const MinicRiscvIsa *isa, MinicRiscv64ArithmeticLibcall operation,
     const char *destination, const char *left, const char *right) {

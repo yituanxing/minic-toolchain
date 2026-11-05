@@ -1,3 +1,4 @@
+#define _POSIX_C_SOURCE 200809L
 /* Physical x86-64 Core selection: actual Core CFG and physical opcode
  * contracts, no printer-only machine strings or legacy FILE* instruction
  * fallback.  Unsupported instructions must fail the whole function. */
@@ -2069,6 +2070,134 @@ done:
     return okay;
 }
 
+/* The native SysV record result contract has three mutually exclusive
+ * transports: RAX, RAX+RDX and hidden RDI (sret). This fixture exercises
+ * the real whole-function selector, origin/effect verification and GNU
+ * formatter, including odd-width last eightbytes without overreads. */
+static bool scenario_record_return(size_t bytes, bool bad_sret,
+    bool bad_object, bool bad_layout) {
+    MinicCoreTypeContext types;
+    MinicCoreFunction core = {0};
+    MinicCoreType type = {0};
+    MinicCoreTypeId record_id, other_id;
+    MinicCoreBlockId block;
+    MinicCoreTerminator term = {0};
+    MinicCoreObjectStorage storage = {0};
+    MinicX86Frame frame = {0};
+    MinicTargetInfo target = {0};
+    MinicMachineFunction machine = {0};
+    MinicMachineGNUAsmPolicy policy = {0};
+    size_t value_offset = 8U, object_offset = 320U;
+    size_t i, j, gp_high = 0U, shl = 0U, rep = 0U, reads = 0U;
+    size_t writes = 0U;
+    bool reachable[1] = {false};
+    bool okay = false, reject = bad_sret || bad_object || bad_layout;
+    const char *stage = "setup";
+    FILE *out = NULL;
+    char *assembly = NULL;
+    size_t length = 0U;
+    minic_core_type_context_initialize(&types);
+    minic_core_function_initialize(&core);
+    core.name = malloc(sizeof("x86_record_return"));
+    if (core.name == NULL) goto done;
+    memcpy(core.name, "x86_record_return", sizeof("x86_record_return"));
+    core.name_length = sizeof("x86_record_return") - 1U;
+    type.kind = MINIC_CORE_TYPE_RECORD;
+    type.has_layout = true;
+    type.size = bytes;
+    type.alignment = bad_layout ? 32U : 1U;
+    type.value.record.is_complete = true;
+    if (!minic_core_type_register(&types, &type, &record_id)) goto done;
+    /* Distinct record identity with identical storage: a forged object
+     * type must never acquire the return ABI of the declared record. */
+    type.size = bytes + 1U;
+    if (!minic_core_type_register(&types, &type, &other_id) ||
+        !minic_core_function_define_signature(&core, &types,
+            record_id, NULL, 0U, MINIC_CALLING_CONVENTION_DEFAULT,
+            false) || !minic_core_function_add_block(&core, &block))
+        goto done;
+    core.objects = calloc(1U, sizeof(*core.objects));
+    if (core.objects == NULL) goto done;
+    core.objects[0].core_type_id = record_id;
+    core.object_count = core.object_capacity = 1U;
+    term.kind = MINIC_CORE_TERMINATOR_RETURN;
+    term.return_value = MINIC_CORE_VALUE_INVALID;
+    term.return_object = 0U;
+    if (!minic_core_function_set_terminator(&core, block, &term) ||
+        !minic_core_function_attach_type_context(&core, &types)) goto done;
+    if (bad_object) core.objects[0].core_type_id = other_id;
+    target.architecture = MINIC_TARGET_ARCH_X86_64;
+    target.data_layout = minic_x86_64_linux_data_layout();
+    frame.value_offsets = &value_offset;
+    frame.value_count = core.value_count;
+    frame.object_count = core.object_count;
+    frame.object_offsets = &object_offset;
+    frame.frame_size = 512U;
+    frame.has_sret = (bytes > 16U) != bad_sret;
+    frame.sret_save_offset = frame.has_sret ? 8U : 0U;
+    storage.extent = bytes;
+    storage.alignment = type.alignment;
+    frame.object_storage.objects = &storage;
+    frame.object_storage.count = 1U;
+    stage = "select";
+    if (reject) {
+        okay = !minic_x86_64_machine_select_core_subset(
+            &machine, &target, &core, &frame);
+        goto done;
+    }
+    if (!minic_x86_64_machine_select_core_subset(
+            &machine, &target, &core, &frame) ||
+        !minic_core_function_mark_reachable_blocks(&core,
+            reachable, 1U) ||
+        !minic_machine_core_coverage_verify(&core,
+            reachable, &machine) ||
+        !minic_x86_64_machine_gnu_asm_policy(&target, &policy) ||
+        !minic_machine_gnu_asm_preflight(&machine, &policy)) goto done;
+    stage = "native-opcodes";
+    for (i = 0U; i < machine.block_count; ++i)
+        for (j = 0U; j < machine.blocks[i].instruction_count; ++j) {
+            const MinicMachineInstruction *op =
+                &machine.blocks[i].instructions[j];
+            if (op->opcode == MINIC_X86_MI_REP_MOVSB) ++rep;
+            if (op->opcode == MINIC_X86_MI_SHL64_CL_R) ++shl;
+            if (op->effects & MINIC_MACHINE_EFFECT_MEMORY_READ) ++reads;
+            if (op->effects & MINIC_MACHINE_EFFECT_MEMORY_WRITE) ++writes;
+            if (op->opcode == MINIC_X86_MI_MOV64_RR &&
+                op->operand_count == 2U &&
+                op->operands[0].kind == MINIC_MACHINE_OPERAND_REGISTER &&
+                op->operands[1].kind == MINIC_MACHINE_OPERAND_REGISTER &&
+                op->operands[0].value.physical.reg.number ==
+                    MINIC_X86_REG_RAX &&
+                op->operands[1].value.physical.reg.number ==
+                    MINIC_X86_REG_RDX) ++gp_high;
+        }
+    if (reads == 0U || (bytes > 16U ?
+            (rep != (bytes > 128U ? 1U : 0U) || writes == 0U || gp_high != 0U) :
+            (rep != 0U || gp_high != (bytes > 8U ? 1U : 0U))) ||
+        (bytes == 3U || bytes == 7U || bytes == 15U ?
+            shl == 0U : shl != 0U)) goto done;
+    stage = "gnu-asm";
+    out = open_memstream(&assembly, &length);
+    if (out == NULL ||
+        !minic_machine_gnu_asm_emit_body(out, &machine, &policy) ||
+        fflush(out) != 0 || assembly == NULL || length == 0U)
+        goto done;
+    okay = strstr(assembly, "rep movsb") != NULL ? bytes > 128U :
+        bytes <= 128U;
+done:
+    if (!okay) fprintf(stderr,
+        "X86_CORE_MIR=FAIL record-return bytes=%zu bad_sret=%d "
+        "bad_object=%d bad_layout=%d stage=%s\n",
+        bytes, bad_sret ? 1 : 0, bad_object ? 1 : 0,
+        bad_layout ? 1 : 0, stage);
+    if (out != NULL) fclose(out);
+    free(assembly);
+    minic_machine_function_destroy(&machine);
+    minic_core_function_destroy(&core);
+    minic_core_type_context_destroy(&types);
+    return okay;
+}
+
 int main(int argc, char **argv) {
     unsigned int fp_mode, source_form;
     if (argc == 2 && strcmp(argv[1], "--emit-fp") == 0) {
@@ -2076,6 +2205,21 @@ int main(int argc, char **argv) {
             if (!scenario_fp_boundary(fp_mode, stdout)) return 1;
         return fputs(".section .note.GNU-stack,\"\",@progbits\n",
             stdout) == EOF ? 1 : 0;
+    }
+    if (argc == 2 && strcmp(argv[1], "--record-return-only") == 0) {
+        return scenario_record_return(1U, false, false, false) &&
+            scenario_record_return(3U, false, false, false) &&
+            scenario_record_return(7U, false, false, false) &&
+            scenario_record_return(8U, false, false, false) &&
+            scenario_record_return(9U, false, false, false) &&
+            scenario_record_return(15U, false, false, false) &&
+            scenario_record_return(16U, false, false, false) &&
+            scenario_record_return(17U, false, false, false) &&
+            scenario_record_return(256U, false, false, false) &&
+            scenario_record_return(7U, true, false, false) &&
+            scenario_record_return(256U, true, false, false) &&
+            scenario_record_return(7U, false, true, false) &&
+            scenario_record_return(9U, false, false, true) ? 0 : 1;
     }
     if (argc != 1) return 2;
     if (!scenario(false, false) || !scenario(false, true) ||
@@ -2089,6 +2233,19 @@ int main(int argc, char **argv) {
         !scenario_record_transfer(129U, 0U, false, false) ||
         !scenario_record_transfer(32U, 1U, true, false) ||
         !scenario_record_transfer(16U, 2U, false, false) ||
+        !scenario_record_return(1U, false, false, false) ||
+        !scenario_record_return(3U, false, false, false) ||
+        !scenario_record_return(7U, false, false, false) ||
+        !scenario_record_return(8U, false, false, false) ||
+        !scenario_record_return(9U, false, false, false) ||
+        !scenario_record_return(15U, false, false, false) ||
+        !scenario_record_return(16U, false, false, false) ||
+        !scenario_record_return(17U, false, false, false) ||
+        !scenario_record_return(256U, false, false, false) ||
+        !scenario_record_return(7U, true, false, false) ||
+        !scenario_record_return(256U, true, false, false) ||
+        !scenario_record_return(7U, false, true, false) ||
+        !scenario_record_return(9U, false, false, true) ||
         !scenario_parameter_object(7U,
             MINIC_X86_ARG_RECORD_ONE_GP, false, false) ||
         !scenario_parameter_object(15U,
@@ -2122,6 +2279,6 @@ int main(int argc, char **argv) {
     for (source_form = 0U; source_form <= 7U; ++source_form)
         if (!scenario_source_zero_barrier(source_form)) return 1;
     if (!scenario_uaccess_call_opcode()) return 1;
-    puts("X86_CORE_MIR=PASS cycle=1 physical_alu=1 parameter=1 sse2=1 direct_call=1 mixed_vararg_stack=1 indirect_call=1 ms_shadow_stack=1 record_copy=1 record_load=1 vector_storage=1 record_abi=1 volatile=1 empty_record_reject=1 rep_movsb=1 pic_symbol=1 got_weak=1 head_32s_reject=1 relaxed_atomic=1 compiler_barrier=1 origin=1 fail_closed=1 bitscan_zero_nonzero=1 overflow_32_64=1 va_arg=1 alloca=1 block_address=1 fp_boundary=1 zero_asm=8/8 uaccess_physical=4/4");
+    puts("X86_CORE_MIR=PASS cycle=1 physical_alu=1 parameter=1 sse2=1 direct_call=1 mixed_vararg_stack=1 indirect_call=1 ms_shadow_stack=1 record_copy=1 record_load=1 vector_storage=1 record_abi=1 record_return=13/13 volatile=1 empty_record_reject=1 rep_movsb=1 pic_symbol=1 got_weak=1 head_32s_reject=1 relaxed_atomic=1 compiler_barrier=1 origin=1 fail_closed=1 bitscan_zero_nonzero=1 overflow_32_64=1 va_arg=1 alloca=1 block_address=1 fp_boundary=1 zero_asm=8/8 uaccess_physical=4/4");
     return 0;
 }

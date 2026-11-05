@@ -39,6 +39,7 @@ sh tests/compiler/c0/probe-loongarch64-vararg-int128-pair.sh
 bash tests/compiler/c0/probe-loongarch64-packed-asm-output.sh "$mini"
 bash tests/compiler/c0/probe-loongarch64-packed-asm-result-family.sh "$mini"
 bash tests/compiler/c0/probe-loongarch64-packed-uaccess-output.sh "$mini"
+bash tests/compiler/mir-migration/probe_loong_llsc_extended_forms.sh "$mini"
 bash tests/compiler/c0/probe-loongarch64-packed-hardware-asm-results.sh "$mini"
 bash tests/compiler/c0/probe-data-layout-zero-size-reloc.sh
 sh tests/compiler/c0/run-alignof-expression.sh

@@ -39,6 +39,8 @@ LOONG_PRODUCTION_EXTRAS = {
     "percpu_structured_source": ROOT / "tests/target/loongarch64/percpu_structured_source.c",
     "dbar_machine_immediate": ROOT / "tests/target/loongarch64/dbar_machine_immediate.c",
     "loong_scalar_source_forms": ROOT / "tests/compiler/mir-migration/loong_scalar_source_forms.c",
+    "packed_uaccess_output": ROOT / "tests/compiler/c0/loongarch64_packed_uaccess_output.c",
+    "loong_llsc_extended_forms": ROOT / "tests/compiler/mir-migration/loong_llsc_extended_forms.c",
 }
 LOONG_LEGACY_NEGATIVE = ROOT / "tests/target/loongarch64/int128_pair_legacy_unsupported.c"
 LOONG_SOURCE_NEGATIVES = (
@@ -241,6 +243,80 @@ def check_functional_shapes(asm, arch, case):
                    f"{key}: sealed scalar hardware form missing {marker}")
         demand(asm.count("# MINIC_SOURCE_INLINE_ASM_BEGIN") == 13,
                f"{key}: physical SOURCE_ASM occurrence count changed")
+    elif case == "packed_uaccess_output":
+        # Twelve original GNU Linux user-access source instructions (four
+        # packed reads and all eight large-sentinel get/put variants) must
+        # reach the actual MachineIR serializer. Their exception-table
+        # relocation grammar and physical GPR aliases are ABI data, not
+        # ignorable assembler comments or a generic source-asm fallback.
+        for name in ("packed_uaccess_byte", "packed_uaccess_half",
+                     "packed_uaccess_word", "packed_uaccess_wide_carrier"):
+            demand(f"{name}:" in asm, f"{key}: missing packed {name}")
+        for action in ("get", "put"):
+            for width in ("byte", "half", "word", "double"):
+                demand(f"linux_large_{action}_{width}:" in asm,
+                       f"{key}: lost Linux user-{action} {width}")
+        demand(asm.count("# MINIC_SOURCE_INLINE_ASM_BEGIN") == 12 and
+               asm.count('.pushsection __ex_table, "a"') == 12 and
+               asm.count(".long ((1b) - .)") == 12 and
+               asm.count(".long ((2b) - .)") == 12 and
+               asm.count(".short (2)") == 12,
+               f"{key}: source-owned faulting ASM/exception table lost")
+        for opcode in (r"1:\s*ld\.b\s+\$t1,\s*\$t4,\s*0",
+                       r"1:\s*ld\.h\s+\$t1,\s*\$t4,\s*0",
+                       r"1:\s*ld\.w\s+\$t1,\s*\$t4,\s*0",
+                       r"1:\s*ld\.d\s+\$t1,\s*\$t4,\s*0",
+                       r"1:\s*st\.b\s+\$t2,\s*\$t4,\s*0",
+                       r"1:\s*st\.h\s+\$t2,\s*\$t4,\s*0",
+                       r"1:\s*st\.w\s+\$t2,\s*\$t4,\s*0",
+                       r"1:\s*st\.d\s+\$t2,\s*\$t4,\s*0"):
+            demand(bool(re.search(opcode, asm)),
+                   f"{key}: sealed faulting user instruction missing: {opcode}")
+        demand(asm.count('.equ .L__gpr_num_$t\\num, 12+\\num') == 12 and
+               asm.count('.short ((((.L__gpr_num_$t0) << 0) | '
+                         '((.L__gpr_num_$t1) << 5)))') == 8 and
+               asm.count('.short ((((.L__gpr_num_$t0) << 0) | '
+                         '((.L__gpr_num_zero) << 5)))') == 4,
+               f"{key}: typed error/result GPR exception fixup changed")
+        demand(len(re.findall(r"\bandi\s+\$t3,\s*\$t2,\s*3", asm)) >= 4 and
+               len(re.findall(r"\bandi\s+\$t3,\s*\$t7,\s*3", asm)) >= 4,
+               f"{key}: packed error ingress/egress alignment guards absent")
+    elif case == "loong_llsc_extended_forms":
+        # All four original Linux LL/SC families remain original SOURCE_ASM,
+        # with MachineIR carrying the physical faulting load/store operands,
+        # output lvalue ingress/egress and source-owned exception metadata.
+        for marker in ("loong_futex_cmpxchg:", "loong_add_unless_w:",
+                       "loong_add_unless_d:", "loong_futex_set:",
+                       "loong_futex_add:", "loong_futex_or:",
+                       "loong_futex_and:", "loong_futex_xor:",
+                       "loong_sub_positive_addi_w:",
+                       "loong_sub_positive_addi_d:",
+                       "loong_sub_positive_sub_w:",
+                       "loong_sub_positive_sub_d:"):
+            demand(marker in asm, f"{key}: missing sealed LL/SC {marker}")
+        demand(asm.count("# MINIC_SOURCE_INLINE_ASM_BEGIN") == 12 and
+               asm.count('.pushsection __ex_table, "a"') == 12,
+               f"{key}: source-owned LL/SC/exception-table count changed")
+        for operation in (r"1:\s*ll\.w\s+\$t1,\s*\$t4,\s*0",
+                          r"sc\.w\s+\$t0,\s*\$t5,\s*0",
+                          r"0:\s*ll\.w\s+\$t0,\s*\$t2,\s*0",
+                          r"0:\s*ll\.d\s+\$t0,\s*\$t2,\s*0",
+                          r"addi\.w\s+\$t1,\s*\$t2,\s*-1",
+                          r"addi\.d\s+\$t1,\s*\$t2,\s*-1",
+                          r"sub\.w\s+\$t1,\s*\$t2,\s*\$t5",
+                          r"sub\.d\s+\$t1,\s*\$t2,\s*\$t5"):
+            demand(bool(re.search(operation, asm)),
+                   f"{key}: sealed LL/SC machine binding absent: {operation}")
+        for operation in (r"move\s+\$t0,\s+\$t2",
+                          r"add\.w\s+\$t0,\s*\$t1,\s*\$t2",
+                          r"or\s+\$t0,\s*\$t1,\s*\$t2",
+                          r"and\s+\$t0,\s*\$t1,\s*\$t2",
+                          r"xor\s+\$t0,\s*\$t1,\s*\$t2"):
+            demand(bool(re.search(operation, asm)),
+                   f"{key}: futex RMW ISA family missing: {operation}")
+        demand(asm.count('.short ((((.L__gpr_num_$t6) << 0) | '
+                         '((.L__gpr_num_zero) << 5)))') >= 2,
+               f"{key}: futex error fixup lost selected physical register")
     else:
         raise Failure(f"unknown MIR test fixture {case}")
     check_label_integrity(asm, key)

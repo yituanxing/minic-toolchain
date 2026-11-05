@@ -1,3 +1,4 @@
+#define _POSIX_C_SOURCE 200809L
 /* A Core entry need not be block zero. The prologue may only reach the
  * declared entry, and a Core CFG backedge must never re-enter the prologue. */
 #include "target/loongarch64/machine_select.h"
@@ -7,6 +8,7 @@
 #include "target/common/direct_call_plan.h"
 #include "target/common/lp64_aggregate.h"
 #include "target/data_layout.h"
+#include "test_tempfile.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -80,7 +82,7 @@ static bool test_nonzero_core_entry(void) {
             &target, &policy) ||
         !minic_machine_gnu_asm_preflight(&machine, &policy)) goto done;
     stage = "serialize";
-    output = tmpfile();
+    output = loong_test_tempfile();
     if (output == NULL ||
         !minic_machine_gnu_asm_emit_body(output, &machine, &policy) ||
         fflush(output) != 0 || fseek(output, 0L, SEEK_SET) != 0) goto done;
@@ -245,7 +247,7 @@ static bool test_record_transfer(size_t bytes, unsigned int mode) {
     stage = "preflight";
     if (!minic_machine_gnu_asm_preflight(&machine, &policy)) goto done;
     stage = "gnu-emission";
-    assembly = tmpfile();
+    assembly = loong_test_tempfile();
     if (assembly == NULL ||
         !minic_machine_gnu_asm_emit_body(assembly, &machine, &policy) ||
         fflush(assembly) != 0 || fseek(assembly, 0L, SEEK_SET) != 0)
@@ -601,7 +603,7 @@ static bool test_record_call(unsigned int mode) {
             &target, &policy) ||
         !minic_machine_gnu_asm_preflight(&machine, &policy)) goto done;
     stage = "GNU";
-    assembly = tmpfile();
+    assembly = loong_test_tempfile();
     if (assembly == NULL ||
         !minic_machine_gnu_asm_emit_body(assembly, &machine, &policy) ||
         fflush(assembly) != 0 || fseek(assembly, 0L, SEEK_SET) != 0)
@@ -862,7 +864,7 @@ static bool test_integer_overflow(unsigned int mode) {
                     MINIC_MACHINE_EFFECT_MEMORY_WRITE) != 0U) ++writes;
     }
     stage = "GNU-emission";
-    assembly = tmpfile();
+    assembly = loong_test_tempfile();
     if (assembly == NULL ||
         !minic_machine_gnu_asm_emit_body(assembly, &machine, &policy) ||
         fflush(assembly) != 0 || fseek(assembly, 0L, SEEK_SET) != 0)
@@ -967,7 +969,7 @@ static bool test_compiler_barrier(void) {
         }
     }
     stage = "gnu-no-bytes";
-    assembly = tmpfile();
+    assembly = loong_test_tempfile();
     if (assembly == NULL ||
         !minic_machine_gnu_asm_emit_body(assembly, &machine, &policy) ||
         fflush(assembly) != 0 || fseek(assembly, 0L, SEEK_SET) != 0)

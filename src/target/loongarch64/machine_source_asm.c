@@ -185,8 +185,15 @@ static bool loong_source_constraint(const MinicTargetInfo *target,
     if (output || readwrite) return false;
     if (operand->kind == MINIC_MACHINE_OPERAND_INTEGER) {
         if (strcmp(c + i, "Jr") == 0) return operand->value.integer == 0;
-        if (strcmp(c + i, "I") == 0) return
-            operand->value.integer >= 0 && operand->value.integer <= 2047;
+        if (strcmp(c + i, "I") == 0) {
+            /* GNU's sub-positive arithmetic uses signed s12, unlike
+             * DBAR's unsigned hint. Never widen unrelated source forms. */
+            const int64_t minimum =
+                ins->source_asm_machine_form_id ==
+                    MINIC_LOONG_MACHINE_ASM_SUB_POSITIVE ? -2048 : 0;
+            return operand->value.integer >= minimum &&
+                operand->value.integer <= 2047;
+        }
         return strcmp(c + i, "i") == 0 ||
                strcmp(c + i, "n") == 0;
     }

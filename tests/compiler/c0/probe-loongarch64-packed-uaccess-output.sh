@@ -17,9 +17,15 @@ for entry in byte:1:b half:2:h word:4:w wide_carrier:8:d; do
   sed -n "/^${name}:/,/^\.size ${name},/p" "$d/source.s" > "$d/$name.s"
   test -s "$d/$name.s"
   grep -Fq '.pushsection __ex_table, "a"' "$d/$name.s"
-  grep -Fq '.short ((12 << 0) | (13 << 5))' "$d/$name.s"
-  grep -Fq 'andi $t3, $t1, 3' "$d/$name.s"  # packed +r ingress
-  grep -Fq 'ld.bu $t2, $t1, 0' "$d/$name.s"
+  grep -Fq '.long ((1b) - .)' "$d/$name.s"
+  grep -Fq '.long ((2b) - .)' "$d/$name.s"
+  grep -Fq '.short (2)' "$d/$name.s"
+  # MachineIR preserves GNU's original symbolic GPR numbering and
+  # fault-table expression. They resolve to t0=12, t1=13 via .irp.
+  grep -Fq '.equ .L__gpr_num_$t\num, 12+\num' "$d/$name.s"
+  grep -Fq '.short ((((.L__gpr_num_$t0) << 0) | ((.L__gpr_num_$t1) << 5)))' "$d/$name.s"
+  grep -Fq 'andi $t3, $t2, 3' "$d/$name.s"  # packed +r ingress
+  grep -Fq 'ld.bu $t0, $t2, 0' "$d/$name.s"
   grep -Fq 'andi $t3, $t7, 3' "$d/$name.s"  # packed +r egress
   grep -Fq 'st.w $t0, $t7, 0' "$d/$name.s"
   grep -Fq "  st.$suffix \$t1, \$t7, 0" "$d/$name.s"
@@ -48,10 +54,13 @@ for entry in get:byte:ld.b get:half:ld.h get:word:ld.w get:double:ld.d \
   test -s "$d/$name.s"
   grep -Fq "1: $opcode " "$d/$name.s"
   grep -Fq '.pushsection __ex_table, "a"' "$d/$name.s"
+  grep -Fq '.equ .L__gpr_num_$t\num, 12+\num' "$d/$name.s"
+  grep -Fq '.short (2)' "$d/$name.s"
   if [[ "$action" == get ]]; then
-    grep -Fq '.short ((12 << 0) | (13 << 5))' "$d/$name.s"
+    grep -Fq '.short ((((.L__gpr_num_$t0) << 0) | ((.L__gpr_num_$t1) << 5)))' "$d/$name.s"
   else
-    grep -Fq '.short ((12 << 0) | (0 << 5))' "$d/$name.s"
+    grep -Fq '.equ .L__gpr_num_zero, 0' "$d/$name.s"
+    grep -Fq '.short ((((.L__gpr_num_$t0) << 0) | ((.L__gpr_num_zero) << 5)))' "$d/$name.s"
   fi
 done
 

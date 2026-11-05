@@ -6,6 +6,41 @@
 #include <stdbool.h>
 #include <stddef.h>
 
+/* The single Core→RISC-V typed Machine implicit-CALL inventory. The
+ * physical selector and the pre-frame RA planner MUST consume the same
+ * classification: MachineIR intentionally emits only base-I and therefore
+ * uses compiler-runtime helpers even when -march exposes M/F/D. Explicit
+ * Core CALLs are already accounted for by Common FunctionFacts. */
+static inline bool minic_riscv_machine_implicit_runtime_call(
+    const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
+    unsigned xlen) {
+    if (fn == NULL || ins == NULL || (xlen != 32U && xlen != 64U))
+        return false;
+    switch (ins->kind) {
+    case MINIC_CORE_INSTRUCTION_INTEGER_MULTIPLY:
+    case MINIC_CORE_INSTRUCTION_INTEGER_DIVIDE:
+    case MINIC_CORE_INSTRUCTION_INTEGER_REMAINDER:
+    case MINIC_CORE_INSTRUCTION_FLOAT_ADD:
+    case MINIC_CORE_INSTRUCTION_FLOAT_SUBTRACT:
+    case MINIC_CORE_INSTRUCTION_FLOAT_MULTIPLY:
+    case MINIC_CORE_INSTRUCTION_FLOAT_DIVIDE:
+    case MINIC_CORE_INSTRUCTION_DOUBLE_ADD:
+    case MINIC_CORE_INSTRUCTION_DOUBLE_SUBTRACT:
+    case MINIC_CORE_INSTRUCTION_DOUBLE_MULTIPLY:
+    case MINIC_CORE_INSTRUCTION_DOUBLE_DIVIDE:
+    case MINIC_CORE_INSTRUCTION_DOUBLE_EQUAL:
+    case MINIC_CORE_INSTRUCTION_DOUBLE_LESS:
+    case MINIC_CORE_INSTRUCTION_DOUBLE_LESS_EQUAL:
+    case MINIC_CORE_INSTRUCTION_FLOAT_TO_DOUBLE:
+    case MINIC_CORE_INSTRUCTION_DOUBLE_TO_FLOAT:
+    case MINIC_CORE_INSTRUCTION_INTEGER_TO_DOUBLE:
+    case MINIC_CORE_INSTRUCTION_DOUBLE_TO_INTEGER:
+        return true;
+    default:
+        return false;
+    }
+}
+
 /* Machine operation selection shared by RV32I and RV64.
  * Core/type legalization and XLEN-specific canonicalization belong to the
  * consumer. This layer selects only base-I register opcode identities;

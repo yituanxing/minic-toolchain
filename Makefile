@@ -294,9 +294,11 @@ MINIC_SOURCES := \
 	src/target/loongarch64/machine_select.c \
 	src/target/loongarch64/machine_builtin_select.c \
 	src/target/loongarch64/machine_llsc_select.c \
+	src/target/loongarch64/machine_llsc_extended_select.c \
 	src/target/loongarch64/machine_pte_select.c \
 	src/target/loongarch64/machine_csr_source_select.c \
 	src/target/loongarch64/machine_scalar_source_select.c \
+	src/target/loongarch64/machine_uaccess_select.c \
 	src/target/loongarch64/machine_source_asm.c \
 	src/target/loongarch64/asm_contract.c \
 	src/target/loongarch64/asm_contract_source.c \
@@ -2467,6 +2469,8 @@ check-loong-machine-mir-production: $(MINIC_CC_BINARY)
 	  --mode production --targets loongarch64 \
 	  --minic-cc "$(abspath $(MINIC_CC_BINARY))" \
 	  --build-dir "$(abspath $(BUILD_DIR))" --host-cc "$(CC)"
+	bash tests/compiler/mir-migration/probe_loong_llsc_extended_forms.sh \
+	  "$(abspath $(MINIC_CC_BINARY))"
 
 # RV32 production is now one live typed writer with no old golden fallback.
 # The remaining legacy targets still require their frozen-byte contracts;
@@ -2531,9 +2535,11 @@ check-loong-machine-mir-select:
 	  src/target/loongarch64/machine_select.c \
 	  src/target/loongarch64/machine_builtin_select.c \
 	  src/target/loongarch64/machine_llsc_select.c \
+	  src/target/loongarch64/machine_llsc_extended_select.c \
 	  src/target/loongarch64/machine_pte_select.c \
 	  src/target/loongarch64/machine_csr_source_select.c \
 	  src/target/loongarch64/machine_scalar_source_select.c \
+	  src/target/loongarch64/machine_uaccess_select.c \
 	  -o "$(BUILD_DIR)/tests/loong-machine-mir-select"
 	"$(BUILD_DIR)/tests/loong-machine-mir-select"
 
@@ -2643,9 +2649,11 @@ check-loong-machine-core-select:
 	  src/target/loongarch64/machine_select.c \
 	  src/target/loongarch64/machine_builtin_select.c \
 	  src/target/loongarch64/machine_llsc_select.c \
+	  src/target/loongarch64/machine_llsc_extended_select.c \
 	  src/target/loongarch64/machine_pte_select.c \
 	  src/target/loongarch64/machine_csr_source_select.c \
 	  src/target/loongarch64/machine_scalar_source_select.c \
+	  src/target/loongarch64/machine_uaccess_select.c \
 	  -o "$(BUILD_DIR)/tests/loong-machine-core-select"
 	"$(BUILD_DIR)/tests/loong-machine-core-select"
 
