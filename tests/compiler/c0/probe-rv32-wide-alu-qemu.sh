@@ -29,8 +29,6 @@ int w_eq(U a,U b) { return a == b; }
 int w_lt_u(U a,U b) { return a < b; }
 int w_lt_s(I a,I b) { return a < b; }
 int w_zero(U a) { return !a; }
-/* Exact Linux virtio_dev_probe data path: nested config callback returns
- * unsigned u64 through RV32 ILP32 a0:a1, then feature bit32 is checked. */
 struct VirtioConfig { U (*get_features)(void *); };
 struct VirtioDev { const struct VirtioConfig *config; };
 U virtio_features(const struct VirtioDev *dev, void *context) {

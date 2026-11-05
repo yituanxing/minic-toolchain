@@ -35,7 +35,17 @@ for cap in 0 1 31 127 255 1023 4095 16383 32767; do
     test "$(grep -Fc '.subsection 1' "$asm")" -eq 1
     # Both asm-goto branches must name real emitted Core block labels;
     # neither may be erased or redirected to an invented local label.
-    test "$(grep -Ec $'^\tb\t\\.Lmini_arm_f[0-9]+_b[0-9]+' "$asm")" -eq 2
+    # Inline-GNU %l[l_yes]/%l[l_no] binds to Core's exported C label,
+    # while MachineIR-internal CFG jumps deliberately use .Lminic_mir_*.
+    # Check exactly two real asm-goto branches, one inside each helper, and
+    # verify every branch target is an emitted local label in the same helper.
+    test "$(grep -Ec $'^\tb\t\\.Luser_[0-9]+$' "$asm")" -eq 2
+    for helper in linux_has_cap_unlikely linux_has_cap_likely; do
+        target="$(sed -n -E "/^${helper}:/,/^\.size ${helper},/s/^[[:space:]]*b[[:space:]]+(\.Luser_[0-9]+)$/\1/p" "$asm")"
+        test -n "$target"
+        test "$(printf '%s\n' "$target" | wc -l)" -eq 1
+        grep -Fxq "${target}:" "$asm"
+    done
 done
 
 # 32768 already overlaps the callback marker. 65535/65536 test hword
