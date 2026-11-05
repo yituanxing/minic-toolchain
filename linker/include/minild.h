@@ -31,6 +31,8 @@ typedef struct MiniLdStaticOptions {
     /* AArch64 -shared -Bsymbolic --no-apply-dynamic-relocs cannot silently
      * consume fixups which instead require emitted runtime .rela.dyn. */
     bool kernel_shared_no_dynamic_relocations;
+    /* GNU -q: retain final static relocation records. */
+    bool emit_relocs;
 } MiniLdStaticOptions;
 
 typedef struct MiniLdSharedOptions {

@@ -58,10 +58,16 @@ if "$MINILD" -melf_x86_64 -pie --no-dynamic-linker -o "$work/bad.elf" \
 fi
 grep -Fq -- '--no-dynamic-linker-requires-static-link' "$work/bad.err"
 test ! -e "$work/bad.elf"
-if "$MINILD" -melf_x86_64 --emit-relocs -o "$work/bad-reloc.elf" \
-    "$work/fixture.o" >"$work/bad-reloc.out" 2>"$work/bad-reloc.err"; then
-    echo 'MINILD_LINUX_STATIC_FLAGS=FAIL accepted_unimplemented_emit_relocs' >&2
-    exit 1
-fi
-grep -Fq 'unsupported-option:--emit-relocs' "$work/bad-reloc.err"
-echo 'MINILD_LINUX_STATIC_FLAGS=PASS GNU_BFD_X_symtab=parity static_no_interp=true runtime=42 emit_relocs=fail_closed'
+ld -melf_x86_64 --emit-relocs -e _start -o "$work/gnu-relocs.elf" \
+    "$work/fixture.o"
+"$MINILD" -melf_x86_64 --emit-relocs -e _start \
+    -o "$work/mini-relocs.elf" "$work/fixture.o"
+for owner in gnu mini; do
+    readelf -W -r "$work/$owner-relocs.elf" >"$work/$owner-relocs.txt"
+    grep -Fq '.rela.text' "$work/$owner-relocs.txt"
+    grep -Fq R_X86_64_32S "$work/$owner-relocs.txt"
+    status=0
+    "$work/$owner-relocs.elf" || status=$?
+    [[ $status == 42 ]]
+done
+echo 'MINILD_LINUX_STATIC_FLAGS=PASS GNU_BFD_X_symtab=parity static_no_interp=true runtime=42 emit_relocs=positive'

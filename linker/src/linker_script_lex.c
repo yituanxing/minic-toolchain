@@ -174,11 +174,25 @@ bool minild_script_parser_next(ScriptParser *parser) {
     case '+': parser->token.kind = TOKEN_PLUS; return true;
     case '-': parser->token.kind = TOKEN_MINUS; return true;
     case '/': parser->token.kind = TOKEN_SLASH; return true;
+    case '%': parser->token.kind = TOKEN_PERCENT; return true;
+    case '&': parser->token.kind = TOKEN_AMP; return true;
+    case '^': parser->token.kind = TOKEN_CARET; return true;
+    case '|': parser->token.kind = TOKEN_PIPE; return true;
+    case '~': parser->token.kind = TOKEN_TILDE; return true;
     case '<':
         if (parser->offset < parser->source_size &&
             parser->source[parser->offset] == '<') {
             parser_advance_char(parser);
             parser->token.kind = TOKEN_SHIFT_LEFT;
+            parser->token.length = 2U;
+            return true;
+        }
+        break;
+    case '>':
+        if (parser->offset < parser->source_size &&
+            parser->source[parser->offset] == '>') {
+            parser_advance_char(parser);
+            parser->token.kind = TOKEN_SHIFT_RIGHT;
             parser->token.length = 2U;
             return true;
         }

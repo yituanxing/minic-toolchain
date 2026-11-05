@@ -55,6 +55,8 @@ jobs:
             check-minild-multitarget-static \
             check-minild-multitarget-script-gc-boundary \
             check-minild-kernel-et-dyn-modes \
+            check-minild-script-phdrs \
+            check-minild-x86-final-emit-relocs \
             check-minild-rv32-static-runtime \
             check-minild-riscv-static-tls \
             check-minild-riscv-uleb-static \

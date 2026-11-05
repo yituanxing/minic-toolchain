@@ -740,6 +740,16 @@ check-minild-kernel-et-dyn-modes: $(MINIAS_BINARY) $(MINILD_BINARY)
 	MINILD="$(abspath $(MINILD_BINARY))" \
 	bash tests/linker/probe-kernel-et-dyn-modes.sh
 
+.PHONY: check-minild-x86-final-emit-relocs
+check-minild-x86-final-emit-relocs: $(MINILD_BINARY)
+	MINILD="$(abspath $(MINILD_BINARY))" \
+	bash tests/linker/probe-x86-final-emit-relocs.sh
+
+.PHONY: check-minild-script-phdrs
+check-minild-script-phdrs: $(MINILD_BINARY)
+	MINILD="$(abspath $(MINILD_BINARY))" \
+	bash tests/linker/probe-static-script-phdrs.sh
+
 .PHONY: check-minild-rv32-static-runtime
 check-minild-rv32-static-runtime: $(MINIAS_BINARY) $(MINILD_BINARY)
 	MINIAS="$(abspath $(MINIAS_BINARY))" \

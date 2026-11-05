@@ -6,6 +6,7 @@
 typedef struct MiniLdFinalImage {
     MiniLdProgramPlan program;
     MiniLdFinalSymbols symbols;
+    MiniLdFinalRelocations relocations;
     MiniLdFinalSectionTables tables;
 } MiniLdFinalImage;
 
@@ -13,6 +14,7 @@ static void minild_final_image_destroy(MiniLdFinalImage *final) {
     minild_final_section_tables_destroy(&final->tables);
     minild_program_plan_destroy(&final->program);
     minild_final_symbols_destroy(&final->symbols);
+    minild_final_relocations_destroy(&final->relocations);
     memset(final, 0, sizeof(*final));
 }
 
@@ -28,7 +30,8 @@ static bool minild_final_image_prepare(
     size_t load_image_end,
     const MiniLdScript *version_script,
     MiniLdFinalSymbolTableOrder table_order,
-    uint16_t elf_type) {
+    uint16_t elf_type,
+    bool emit_relocs) {
     size_t end_nonalloc;
 
     if (elf_type != ET_EXEC && elf_type != ET_DYN) {
@@ -55,7 +58,15 @@ static bool minild_final_image_prepare(
                 elf_type == ET_DYN ? "shared-writer" : "static-output");
         return false;
     }
+    if (!minild_final_relocations_build(state, layout, output_plan,
+                                        &final->symbols, emit_relocs,
+                                        &final->relocations)) {
+        fprintf(state->diagnostics,
+                "minic-ld: invalid-final-relocation-projection\n");
+        return false;
+    }
     if (!minild_final_section_tables_build(state, output_plan, &final->symbols,
+                                           &final->relocations,
                                            end_nonalloc, table_order,
                                            &final->tables)) {
         fprintf(state->diagnostics,

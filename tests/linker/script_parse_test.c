@@ -11,6 +11,10 @@ static bool resolve_symbol(void *context,
         *value_out = UINT64_C(0x1000);
         return true;
     }
+    if (strcmp(name, "kernel_entry") == 0) {
+        *value_out = UINT64_C(0xffffffff80001234);
+        return true;
+    }
     return false;
 }
 
@@ -166,6 +170,68 @@ int main(int argc, char **argv) {
         }
         minild_script_destroy(&vdso);
         puts("MINILD_SCRIPT_VDSO_HEADERS=PASS PHDR_count=4 sizeof_headers=288 mapping=text flags=5 filehdr=true VERSION=LINUX_4.15 exports=7 local_all=true no_guess=true");
+    }
+    {
+        static const struct {
+            const char *name;
+            uint64_t expected;
+            bool valid;
+        } bitwise_cases[] = {
+            {"_kernel_entry", UINT64_C(0xffff80001234), true},
+            {"_precedence", UINT64_C(1), true},
+            {"_xor", UINT64_C(3), true},
+            {"_shift", UINT64_C(2), true},
+            {"_modulo", UINT64_C(2), true},
+            {"_complement", UINT64_C(0), true},
+            {"_invalid_shift", UINT64_C(0), false},
+            {"_invalid_modulo", UINT64_C(0), false}
+        };
+        MiniLdScript bitwise;
+        size_t c;
+
+        minild_script_initialize(&bitwise);
+        if (!minild_script_parse_file(
+                "tests/linker/script-gnu-bitwise-expressions.lds",
+                &bitwise, stderr) ||
+            bitwise.output_arch == NULL ||
+            strcmp(bitwise.output_arch, "loongarch") != 0) {
+            minild_script_destroy(&bitwise);
+            minild_script_destroy(&script);
+            return 1;
+        }
+        for (c = 0U; c < sizeof(bitwise_cases) / sizeof(bitwise_cases[0]); ++c) {
+            bool found = false;
+            size_t i;
+
+            for (i = 0U; i < bitwise.command_count; ++i) {
+                const MiniLdScriptCommand *command = &bitwise.commands[i];
+                bool evaluated;
+
+                if (command->kind != MINILD_SCRIPT_DEFINE_SYMBOL ||
+                    strcmp(command->value.symbol.name,
+                           bitwise_cases[c].name) != 0) {
+                    continue;
+                }
+                found = true;
+                evaluated = minild_script_evaluate(
+                    &bitwise, command->value.symbol.expression,
+                    &context, &value, stderr);
+                if (evaluated != bitwise_cases[c].valid ||
+                    (evaluated && value != bitwise_cases[c].expected)) {
+                    minild_script_destroy(&bitwise);
+                    minild_script_destroy(&script);
+                    return 1;
+                }
+                break;
+            }
+            if (!found) {
+                minild_script_destroy(&bitwise);
+                minild_script_destroy(&script);
+                return 1;
+            }
+        }
+        minild_script_destroy(&bitwise);
+        puts("MINILD_SCRIPT_GNU_BITWISE=PASS loongarch_kernel_mask=exact precedence=AND_XOR_OR_shift modulo=PASS invalid_shift_divisor=reject");
     }
     puts("MINILD_SCRIPT_A0=PASS linux-subset=PASS commands=12 expressions=37 wildcard=PASS");
     minild_script_destroy(&script);

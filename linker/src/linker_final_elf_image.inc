@@ -205,6 +205,7 @@ static bool minild_final_write_image(
     const MiniLdProgramPlan *program_plan,
     const MiniLdFinalSectionTables *tables,
     const MiniLdFinalSymbols *symbols,
+    const MiniLdFinalRelocations *relocations,
     uint16_t elf_type,
     uint64_t entry,
     const char *path) {
@@ -257,6 +258,30 @@ static bool minild_final_write_image(
         goto done;
     }
     minild_final_section_tables_emit(tables, symbols, image);
+    for (i = 0U; i < relocations->section_count; ++i) {
+        const MiniLdFinalRelocSection *reloc = &relocations->sections[i];
+        size_t j;
+
+        if (reloc->capacity == 0U) {
+            continue;
+        }
+        if (reloc->count > SIZE_MAX / sizeof(Elf64_Rela) ||
+            !range_ok(reloc->offset, reloc->count * sizeof(Elf64_Rela),
+                      total_size)) {
+            fprintf(state->diagnostics,
+                    "minic-ld: invalid-final-relocation-range\n");
+            goto done;
+        }
+        for (j = 0U; j < reloc->count; ++j) {
+            if (!minild_final_pack_rela(image + reloc->offset +
+                                           j * sizeof(Elf64_Rela),
+                                        elf_class, &reloc->entries[j])) {
+                fprintf(state->diagnostics,
+                        "minic-ld: invalid-final-relocation-record\n");
+                goto done;
+            }
+        }
+    }
     for (i = 0U; i < symbols->entry_count; ++i) {
         if (!minild_final_pack_symbol(
                 image + tables->symtab_offset + i * abi.sym, elf_class,

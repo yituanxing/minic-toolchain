@@ -82,14 +82,15 @@ static bool minild_static_tls_file_location(
         if (section->type == SHT_NOBITS || section->size == 0U) {
             continue;
         }
-        if (place->file_offset == SIZE_MAX ||
-            delta > place->file_offset) {
+        if (output_plan->work_file_offsets[i] == SIZE_MAX ||
+            delta > output_plan->work_file_offsets[i]) {
             return false;
         }
         if (!found_file) {
-            file_offset = place->file_offset - (size_t)delta;
+            file_offset = output_plan->work_file_offsets[i] - (size_t)delta;
             found_file = true;
-        } else if (file_offset != place->file_offset - (size_t)delta) {
+        } else if (file_offset !=
+                   output_plan->work_file_offsets[i] - (size_t)delta) {
             return false;
         }
     }
@@ -345,7 +346,8 @@ static bool minild_static_program_plan_build(
             ph->physical_address = load->laddr;
             ph->file_size = load->file_size;
             ph->memory_size = load->mem_size;
-            ph->alignment = state->nmagic ? 1U :
+            ph->alignment = state->nmagic
+                                ? state->target->nmagic_load_alignment :
                             state->target->page_size;
         }
     } else {
@@ -412,12 +414,289 @@ failed:
     return false;
 }
 
+/* A PHDRS directive owns the executable program headers.  In particular,
+ * the script's explicit FLAGS and :phdr inheritance must survive the final
+ * image projection; synthesizing coalesced PT_LOADs here would silently
+ * discard the ABI contract of an architecture's vmlinux.lds. */
+typedef struct MiniLdScriptSegmentExtent {
+    uint64_t file_base, vaddr_base, laddr_base;
+    uint64_t file_end, memory_end;
+    uint64_t last_memory_end;
+    uint32_t derived_flags;
+    bool occupied, file_backed;
+} MiniLdScriptSegmentExtent;
+
+static bool minild_static_script_phdr_program_plan_build(
+    const MiniLdState *state,
+    const MiniLdLayout *layout,
+    MiniLdOutputPlan *output_plan,
+    const MiniLdScript *script,
+    MiniLdProgramPlan *plan) {
+    const MiniLdTlsProjection *tls = &output_plan->tls;
+    MiniLdElfAbiSizes abi = minild_elf_abi_sizes(state->target->elf_class);
+    MiniLdScriptSegmentExtent *extents = NULL;
+    bool *inherited = NULL;
+    size_t i, j, tls_file_offset = 0U;
+    size_t load_count = script->phdr_count;
+    uint64_t tls_paddr = 0U;
+    bool ok = false;
+
+    memset(plan, 0, sizeof(*plan));
+    if (script->phdr_count == 0U || abi.phdr == 0U ||
+        script->phdr_count > UINT16_MAX - (tls->has_nonempty_section ? 1U : 0U) ||
+        script->phdr_count >
+            (SIZE_MAX - abi.ehdr) / abi.phdr -
+                (tls->has_nonempty_section ? 1U : 0U)) {
+        fprintf(state->diagnostics, "minic-ld: invalid-static-script-PHDR-count\n");
+        return false;
+    }
+    extents = calloc(load_count, sizeof(*extents));
+    inherited = calloc(load_count, sizeof(*inherited));
+    plan->count = load_count + (tls->has_nonempty_section ? 1U : 0U);
+    plan->entries = calloc(plan->count, sizeof(*plan->entries));
+    if (extents == NULL || inherited == NULL || plan->entries == NULL) {
+        fprintf(state->diagnostics, "minic-ld: out-of-memory:script-PHDRS\n");
+        goto done;
+    }
+    /* The parser accepts these for shared/vDSO scripts. A static image
+     * cannot truthfully publish their semantics until the corresponding
+     * dynamic and header-in-LOAD projections have been constructed. */
+    for (j = 0U; j < load_count; ++j) {
+        const MiniLdScriptPhdr *decl = &script->phdrs[j];
+        MiniElfProgramHeader *ph = &plan->entries[j];
+        if (decl->filehdr || decl->phdrs ||
+            (strcmp(decl->type_name, "PT_LOAD") != 0 &&
+             strcmp(decl->type_name, "PT_NOTE") != 0)) {
+            fprintf(state->diagnostics,
+                    "minic-ld: unsupported-static-script-PHDR-type-or-header:%s\n",
+                    decl->name);
+            goto done;
+        }
+        ph->type = strcmp(decl->type_name, "PT_LOAD") == 0
+                       ? PT_LOAD : PT_NOTE;
+        ph->flags = decl->have_flags ? decl->flags : PF_R;
+        ph->alignment = ph->type == PT_LOAD
+                            ? (state->nmagic
+                                   ? state->target->nmagic_load_alignment
+                                   : state->target->page_size)
+                            : state->target->static_note_alignment;
+    }
+    /* GNU's initial default is the first PT_LOAD; each explicit :phdr
+     * replaces the inherited association for subsequent alloc sections.
+     * A section may explicitly belong to both LOAD and NOTE. */
+    for (j = 0U; j < load_count; ++j) {
+        if (plan->entries[j].type == PT_LOAD) {
+            inherited[j] = true;
+            break;
+        }
+    }
+    if (j == load_count) {
+        fprintf(state->diagnostics,
+                "minic-ld: unsupported-static-script-PHDR-no-LOAD\n");
+        goto done;
+    }
+    for (i = 0U; i < output_plan->count; ++i) {
+        MiniLdOutputSection *section = &output_plan->sections[i];
+        const MiniLdScriptOutputSection *script_section = NULL;
+        uint32_t section_flags = PF_R;
+
+        if (section->command != SIZE_MAX) {
+            const MiniLdScriptCommand *command;
+            if (section->command >= script->command_count) {
+                fprintf(state->diagnostics,
+                        "minic-ld: invalid-static-script-section-command:%s\n",
+                        section->name);
+                goto done;
+            }
+            command = &script->commands[section->command];
+            if (command->kind == MINILD_SCRIPT_OUTPUT_SECTION) {
+                script_section = &command->value.section;
+            }
+        }
+        if (script_section != NULL && script_section->phdr_name_count != 0U) {
+            memset(inherited, 0, load_count * sizeof(*inherited));
+            for (j = 0U; j < script_section->phdr_name_count; ++j) {
+                const char *name = script_section->phdr_names[j];
+                size_t k;
+                for (k = 0U; k < load_count; ++k) {
+                    if (strcmp(script->phdrs[k].name, name) == 0) {
+                        inherited[k] = true;
+                        break;
+                    }
+                }
+                if (k == load_count) {
+                    fprintf(state->diagnostics,
+                            "minic-ld: unknown-static-script-PHDR:%s\n", name);
+                    goto done;
+                }
+            }
+        }
+        if ((section->flags & SHF_ALLOC) == 0U || section->size == 0U) {
+            continue;
+        }
+        if (section->size > UINT64_MAX - section->vaddr ||
+            section->size > UINT64_MAX - section->laddr ||
+            (section->type != SHT_NOBITS &&
+             (section->file_offset == SIZE_MAX ||
+              section->size > UINT64_MAX - section->file_offset))) {
+            fprintf(state->diagnostics,
+                    "minic-ld: invalid-static-script-PHDR-section:%s\n",
+                    section->name);
+            goto done;
+        }
+        if ((section->flags & SHF_WRITE) != 0U) {
+            section_flags |= PF_W;
+        }
+        if ((section->flags & SHF_EXECINSTR) != 0U) {
+            section_flags |= PF_X;
+        }
+        for (j = 0U; j < load_count; ++j) {
+            MiniLdScriptSegmentExtent *ext = &extents[j];
+            const MiniElfProgramHeader *ph = &plan->entries[j];
+            uint64_t delta, section_end = section->vaddr + section->size;
+
+            if (!inherited[j]) {
+                continue;
+            }
+            if (ph->type == PT_NOTE && section->type != SHT_NOTE) {
+                fprintf(state->diagnostics,
+                        "minic-ld: invalid-static-script-PT_NOTE-section:%s\n",
+                        section->name);
+                goto done;
+            }
+            if (!ext->occupied) {
+                ext->occupied = true;
+                ext->vaddr_base = section->vaddr;
+                ext->laddr_base = section->laddr;
+                ext->memory_end = section_end;
+                ext->last_memory_end = section_end;
+            } else {
+                if (section->vaddr < ext->last_memory_end ||
+                    section->laddr < ext->laddr_base ||
+                    section->vaddr - ext->vaddr_base !=
+                        section->laddr - ext->laddr_base) {
+                    fprintf(state->diagnostics,
+                            "minic-ld: nonaffine-static-script-PHDR-LMA:%s\n",
+                            section->name);
+                    goto done;
+                }
+                ext->memory_end = section_end;
+                ext->last_memory_end = section_end;
+            }
+            ext->derived_flags |= section_flags;
+            if (section->type == SHT_NOBITS) {
+                continue;
+            }
+            delta = section->vaddr - ext->vaddr_base;
+            if (!ext->file_backed) {
+                /* NOBITS at the front still occupies virtual space. */
+                if (section->file_offset < delta) {
+                    fprintf(state->diagnostics,
+                            "minic-ld: nonaffine-static-script-PHDR-file:%s\n",
+                            section->name);
+                    goto done;
+                }
+                ext->file_base = section->file_offset - delta;
+                ext->file_backed = true;
+            } else if (section->file_offset < ext->file_base ||
+                       section->file_offset - ext->file_base != delta) {
+                fprintf(state->diagnostics,
+                        "minic-ld: nonaffine-static-script-PHDR-file:%s:"
+                        "offset=0x%llx:base=0x%llx:"
+                        "vaddr=0x%llx:vbase=0x%llx\n",
+                        section->name,
+                        (unsigned long long)section->file_offset,
+                        (unsigned long long)ext->file_base,
+                        (unsigned long long)section->vaddr,
+                        (unsigned long long)ext->vaddr_base);
+                goto done;
+            }
+            ext->file_end = section->file_offset + section->size;
+        }
+    }
+    for (j = 0U; j < load_count; ++j) {
+        const MiniLdScriptSegmentExtent *ext = &extents[j];
+        const MiniLdScriptPhdr *decl = &script->phdrs[j];
+        MiniElfProgramHeader *ph = &plan->entries[j];
+        if (!ext->occupied) {
+            /* Keep script declaration order, including empty PT_NOTE. */
+            continue;
+        }
+        ph->virtual_address = ext->vaddr_base;
+        ph->physical_address = ext->laddr_base;
+        ph->offset = ext->file_backed ? ext->file_base : 0U;
+        ph->file_size = ext->file_backed ? ext->file_end - ext->file_base : 0U;
+        ph->memory_size = ext->memory_end - ext->vaddr_base;
+        if (!decl->have_flags) {
+            ph->flags = ext->derived_flags;
+        }
+        if (ph->type == PT_LOAD && ph->alignment > 1U &&
+            ph->offset % ph->alignment !=
+                ph->virtual_address % ph->alignment) {
+            fprintf(state->diagnostics,
+                    "minic-ld: invalid-static-script-PHDR-congruence:%s\n",
+                    decl->name);
+            goto done;
+        }
+    }
+    /* No two output sections may claim the same file bytes after PHDR
+     * normalization. Holes inside LOAD are zero bytes, not hidden aliases
+     * of another section. */
+    for (i = 0U; i < output_plan->count; ++i) {
+        const MiniLdOutputSection *a = &output_plan->sections[i];
+        if ((a->flags & SHF_ALLOC) == 0U || a->type == SHT_NOBITS ||
+            a->size == 0U) {
+            continue;
+        }
+        for (j = i + 1U; j < output_plan->count; ++j) {
+            const MiniLdOutputSection *b = &output_plan->sections[j];
+            if ((b->flags & SHF_ALLOC) != 0U &&
+                b->type != SHT_NOBITS && b->size != 0U &&
+                a->file_offset < b->file_offset + b->size &&
+                b->file_offset < a->file_offset + a->size) {
+                fprintf(state->diagnostics,
+                        "minic-ld: overlapping-static-script-PHDR-files:%s:%s\n",
+                        a->name, b->name);
+                goto done;
+            }
+        }
+    }
+    if (tls->has_nonempty_section) {
+        MiniElfProgramHeader *ph = &plan->entries[load_count];
+        if (!minild_static_tls_file_location(state, layout, output_plan,
+                                             &tls_file_offset, &tls_paddr)) {
+            fprintf(state->diagnostics,
+                    "minic-ld: invalid-static-tls-segment-layout\n");
+            goto done;
+        }
+        ph->type = PT_TLS;
+        ph->flags = PF_R;
+        ph->offset = tls_file_offset;
+        ph->virtual_address = tls->block_base;
+        ph->physical_address = tls_paddr;
+        ph->file_size = tls->has_file_contents
+                            ? tls->file_end - tls->block_base : 0U;
+        ph->memory_size = tls->memory_end - tls->block_base;
+        ph->alignment = tls->alignment;
+    }
+    ok = true;
+done:
+    free(extents);
+    free(inherited);
+    if (!ok) {
+        minild_program_plan_destroy(plan);
+    }
+    return ok;
+}
+
 static bool static_write_executable(MiniLdState *state,
                                     const MiniLdLayout *layout,
                                     MiniLdOutputPlan *output_plan,
                                     const char *path,
                                     uint64_t entry,
-                                    bool output_et_dyn) {
+                                    bool output_et_dyn,
+                                    bool emit_relocs,
+                                    const MiniLdScript *script) {
     MiniLdFinalImage final = {0};
     MiniLdElfAbiSizes abi = minild_elf_abi_sizes(state->target->elf_class);
     size_t load_image_size;
@@ -425,8 +704,11 @@ static bool static_write_executable(MiniLdState *state,
     bool ok = false;
     const uint16_t elf_type = output_et_dyn ? ET_DYN : ET_EXEC;
 
-    if (!minild_static_program_plan_build(state, layout, output_plan,
-                                          &final.program)) {
+    if (!(script != NULL && script->phdr_count != 0U
+              ? minild_static_script_phdr_program_plan_build(
+                    state, layout, output_plan, script, &final.program)
+              : minild_static_program_plan_build(
+                    state, layout, output_plan, &final.program))) {
         goto done;
     }
     load_image_size = abi.ehdr + final.program.count * abi.phdr;
@@ -486,12 +768,13 @@ static bool static_write_executable(MiniLdState *state,
     if (!minild_final_image_prepare(state, layout, output_plan,
                                           &final, load_image_size, NULL,
                                           MINILD_FINAL_SYMTAB_FIRST,
-                                          elf_type)) {
+                                          elf_type, emit_relocs)) {
         goto done;
     }
     ok = minild_final_write_image(state, layout, output_plan,
                                   &final.program, &final.tables,
-                                  &final.symbols, elf_type, entry, path);
+                                  &final.symbols, &final.relocations,
+                                  elf_type, entry, path);
 
 done:
     /* Retain the prior fail-closed contract even if preparation failed

@@ -124,6 +124,7 @@ int main(int argc, char **argv) {
     bool nmagic = false;
     bool discard_locals = false;
     bool no_dynamic_linker = false;
+    bool emit_relocs = false;
     bool z_notext = false;
     bool symbolic = false;
     bool no_apply_dynamic_relocs = false;
@@ -331,6 +332,9 @@ int main(int argc, char **argv) {
             no_undefined = true;
         } else if (strcmp(argv[i], "--no-dynamic-linker") == 0) {
             no_dynamic_linker = true;
+        } else if (strcmp(argv[i], "--emit-relocs") == 0 ||
+                   strcmp(argv[i], "-q") == 0) {
+            emit_relocs = true;
         } else if (strcmp(argv[i], "-Bsymbolic") == 0) {
             symbolic = true;
         } else if (strcmp(argv[i], "--no-apply-dynamic-relocs") == 0) {
@@ -445,8 +449,9 @@ int main(int argc, char **argv) {
     }
 
     /* GNU Kbuild uses -static -pie -n -T for a fixed-address Linux kernel.
-     * It is a statically resolved ET_DYN, with no PT_INTERP or dynamic
-     * relocation consumer. Do not send it through the RV64 DSO/PIE engine. */
+     * GNU's -n suppresses the PIE ELF type (ET_EXEC), even if -pie is also
+     * present. Preserve the kernel-mode permission checks separately from
+     * the actual ELF output type; this is not a user-space PIE/DSO link. */
     kernel_static_pie = static_link && pie_link && !shared_link &&
                         !relocatable && script_path != NULL &&
                         no_dynamic_linker && interpreter_path == NULL;
@@ -459,7 +464,12 @@ int main(int argc, char **argv) {
                           interpreter_path == NULL &&
                           version_script_path == NULL && soname == NULL &&
                           needed_name == NULL && dynamic_list_path == NULL;
-    kernel_et_dyn = kernel_static_pie || kernel_shared_image;
+    kernel_et_dyn = kernel_shared_image || (kernel_static_pie && !nmagic);
+    if (emit_relocs && (relocatable || shared_link || pie_link ||
+                        strcmp(emulation, "elf_x86_64") != 0)) {
+        fprintf(stderr, "minic-ld: --emit-relocs-requires-x86-static-link\n");
+        return 2;
+    }
     if ((symbolic || no_apply_dynamic_relocs || pic_veneer) &&
         !kernel_shared_image) {
         fprintf(stderr, "minic-ld: kernel-shared-options-require-static-ET_DYN-script\n");
@@ -541,8 +551,8 @@ int main(int argc, char **argv) {
                 script_path);
         return 2;
     }
-    if (z_notext && !kernel_et_dyn) {
-        fprintf(stderr, "minic-ld: -z notext-requires-kernel-ET_DYN\n");
+    if (z_notext && !kernel_static_pie && !kernel_shared_image) {
+        fprintf(stderr, "minic-ld: -z notext-requires-kernel-link-mode\n");
         return 2;
     }
     if (shared_link && !kernel_shared_image && script_path != NULL &&
@@ -605,6 +615,7 @@ int main(int argc, char **argv) {
         options.discard_locals = discard_locals;
         options.output_et_dyn = kernel_et_dyn;
         options.kernel_shared_no_dynamic_relocations = kernel_shared_image;
+        options.emit_relocs = emit_relocs;
         return minild_link_static_elf64_inputs_target(
             output, inputs, input_count, &options, emulation, stderr);
     }

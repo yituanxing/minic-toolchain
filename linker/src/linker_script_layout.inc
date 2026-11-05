@@ -148,12 +148,18 @@ static bool script_layout_is_literal_expr(const MiniLdScript *script,
     case MINILD_SCRIPT_EXPR_INTEGER:
         return true;
     case MINILD_SCRIPT_EXPR_NEGATE:
+    case MINILD_SCRIPT_EXPR_BITWISE_NOT:
         return script_layout_is_literal_expr(script, expr->left, depth + 1U);
     case MINILD_SCRIPT_EXPR_ADD:
     case MINILD_SCRIPT_EXPR_SUBTRACT:
     case MINILD_SCRIPT_EXPR_MULTIPLY:
     case MINILD_SCRIPT_EXPR_DIVIDE:
+    case MINILD_SCRIPT_EXPR_MODULO:
     case MINILD_SCRIPT_EXPR_SHIFT_LEFT:
+    case MINILD_SCRIPT_EXPR_SHIFT_RIGHT:
+    case MINILD_SCRIPT_EXPR_BITWISE_AND:
+    case MINILD_SCRIPT_EXPR_BITWISE_XOR:
+    case MINILD_SCRIPT_EXPR_BITWISE_OR:
         return script_layout_is_literal_expr(script, expr->left, depth + 1U) &&
                script_layout_is_literal_expr(script, expr->right, depth + 1U);
     default:
@@ -1042,10 +1048,14 @@ static bool static_build_script_layout(MiniLdState *state,
     bool *command_deferred = NULL;
     size_t i;
     size_t alloc_count = 0U;
+    bool have_alloc_tls = false;
     size_t last_file_backed = SIZE_MAX;
     uint64_t *owner_max_align = NULL;
     size_t *owner_remaining = NULL;
     bool *owner_file_backed = NULL;
+    size_t *command_load = NULL;
+    uint64_t *load_first_vaddr = NULL;
+    size_t *load_first_file = NULL;
     size_t storage_count;
     size_t file_cursor;
     size_t header_size;
@@ -1081,6 +1091,58 @@ static bool static_build_script_layout(MiniLdState *state,
     owner_file_backed = calloc(script->command_count == 0U ? 1U :
                                script->command_count,
                                sizeof(*owner_file_backed));
+    if (script->phdr_count != 0U && state->nmagic) {
+        size_t active_load = SIZE_MAX;
+        size_t command;
+        size_t j;
+
+        command_load = malloc((script->command_count == 0U ? 1U :
+                               script->command_count) * sizeof(*command_load));
+        load_first_vaddr = calloc(script->phdr_count,
+                                  sizeof(*load_first_vaddr));
+        load_first_file = malloc(script->phdr_count * sizeof(*load_first_file));
+        if (command_load == NULL || load_first_vaddr == NULL ||
+            load_first_file == NULL) {
+            fprintf(state->diagnostics,
+                    "minic-ld: out-of-memory:script-PHDR-file-layout\n");
+            goto done;
+        }
+        for (j = 0U; j < script->phdr_count; ++j) {
+            load_first_file[j] = SIZE_MAX;
+            if (active_load == SIZE_MAX &&
+                strcmp(script->phdrs[j].type_name, "PT_LOAD") == 0) {
+                active_load = j;
+            }
+        }
+        for (command = 0U; command < script->command_count; ++command) {
+            const MiniLdScriptCommand *cmd = &script->commands[command];
+            command_load[command] = active_load;
+            if (cmd->kind != MINILD_SCRIPT_OUTPUT_SECTION) {
+                continue;
+            }
+            if (cmd->value.section.phdr_name_count != 0U) {
+                active_load = SIZE_MAX;
+                for (j = 0U; j < cmd->value.section.phdr_name_count; ++j) {
+                    const char *name = cmd->value.section.phdr_names[j];
+                    size_t k;
+
+                    for (k = 0U; k < script->phdr_count; ++k) {
+                        if (strcmp(name, script->phdrs[k].name) == 0 &&
+                            strcmp(script->phdrs[k].type_name,
+                                   "PT_LOAD") == 0) {
+                            if (active_load != SIZE_MAX && active_load != k) {
+                                fprintf(state->diagnostics,
+                                        "minic-ld: unsupported-script-multiple-PHDR-LOADs\n");
+                                goto done;
+                            }
+                            active_load = k;
+                        }
+                    }
+                }
+            }
+            command_load[command] = active_load;
+        }
+    }
 
     if (layout->work == NULL || layout->script_outputs == NULL ||
         script_state.section_placed == NULL ||
@@ -1235,6 +1297,9 @@ static bool static_build_script_layout(MiniLdState *state,
             }
         }
         ++alloc_count;
+        if ((section->flags & SHF_TLS) != 0U) {
+            have_alloc_tls = true;
+        }
         if ((section->flags & SHF_WRITE) != 0U) {
             layout->have_rw = true;
         } else {
@@ -1246,11 +1311,18 @@ static bool static_build_script_layout(MiniLdState *state,
         MiniLdElfAbiSizes abi =
             minild_elf_abi_sizes(state->target->elf_class);
 
+        size_t header_phdr_count = script->phdr_count != 0U
+                                       ? script->phdr_count +
+                                             (have_alloc_tls ? 1U : 0U)
+                                       : alloc_count;
+
         if (abi.phdr == 0U ||
-            alloc_count > (SIZE_MAX - abi.ehdr) / abi.phdr ||
-            !align_up_size(abi.ehdr + alloc_count * abi.phdr,
-                           state->nmagic ? 1U :
-                           state->target->page_size, &header_size)) {
+            header_phdr_count < script->phdr_count ||
+            header_phdr_count > (SIZE_MAX - abi.ehdr) / abi.phdr ||
+            !align_up_size(abi.ehdr + header_phdr_count * abi.phdr,
+                           state->nmagic
+                               ? state->target->nmagic_load_alignment
+                               : state->target->page_size, &header_size)) {
             fprintf(state->diagnostics,
                     "minic-ld: linker-script-header-overflow\n");
             goto done;
@@ -1294,7 +1366,37 @@ static bool static_build_script_layout(MiniLdState *state,
         size_t best = file_order[i].index;
         const MiniLdSection *section = &state->work.sections[best];
         size_t owner = layout->work[best].owner_command;
+        size_t load = SIZE_MAX;
+        size_t desired_load_file = SIZE_MAX;
         size_t aligned;
+
+        if (command_load != NULL) {
+            if (owner < script->command_count) {
+                load = command_load[owner];
+            }
+            if (load < script->phdr_count &&
+                load_first_file[load] != SIZE_MAX) {
+                uint64_t delta;
+
+                if (layout->work[best].vaddr < load_first_vaddr[load] ||
+                    (delta = layout->work[best].vaddr -
+                             load_first_vaddr[load]) >
+                        SIZE_MAX - load_first_file[load]) {
+                    fprintf(state->diagnostics,
+                            "minic-ld: unsupported-script-PHDR-address-order:%s\n",
+                            section->name);
+                    goto done;
+                }
+                desired_load_file = load_first_file[load] + (size_t)delta;
+                if (file_cursor > desired_load_file) {
+                    fprintf(state->diagnostics,
+                            "minic-ld: unsupported-script-PHDR-file-order:%s\n",
+                            section->name);
+                    goto done;
+                }
+                file_cursor = desired_load_file;
+            }
+        }
 
         /* A pair of output sections may occupy the same ELF load page even
          * though their names/flags differ.  Preserve the VMA/LMA distance in
@@ -1434,6 +1536,17 @@ static bool static_build_script_layout(MiniLdState *state,
             }
         }
         layout->work[best].file_offset = file_cursor;
+        if (load < script->phdr_count) {
+            if (load_first_file[load] == SIZE_MAX) {
+                load_first_file[load] = file_cursor;
+                load_first_vaddr[load] = layout->work[best].vaddr;
+            } else if (file_cursor != desired_load_file) {
+                fprintf(state->diagnostics,
+                        "minic-ld: unsupported-script-PHDR-file-alignment:%s\n",
+                        section->name);
+                goto done;
+            }
+        }
         if (section->type != SHT_NOBITS &&
             !add_size(file_cursor, section->size, &file_cursor)) {
             fprintf(state->diagnostics,
@@ -1475,6 +1588,9 @@ done:
     free(owner_max_align);
     free(owner_remaining);
     free(owner_file_backed);
+    free(command_load);
+    free(load_first_vaddr);
+    free(load_first_file);
     free(command_deferred);
     free(script_state.symbol_provenance);
     free(script_state.section_placed);

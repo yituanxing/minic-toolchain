@@ -106,7 +106,28 @@ for spec in \
                 --no-dynamic-linker -z notext -T "$work/$arch/vmlinux.lds" \
                 -o "$work/$arch/kernel.elf" "$work/$arch/entry.o" \
                 >"$work/$arch/kernel.log" 2>&1 || die kernel_static_pie
-            check_elf "$work/$arch/kernel.elf" "$machine" dyn
+            # GNU ld -n overrides the PIE ELF identity to ET_EXEC while
+            # retaining the admitted static-kernel linker mode.
+            check_elf "$work/$arch/kernel.elf" "$machine" exec
+            "$MINILD" -m "$emulation" -static -pie -X \
+                --no-dynamic-linker -z notext -T "$work/$arch/vmlinux.lds" \
+                -o "$work/$arch/kernel-pie.elf" "$work/$arch/entry.o" \
+                >"$work/$arch/kernel-pie.log" 2>&1 || die kernel_without_nmagic
+            check_elf "$work/$arch/kernel-pie.elf" "$machine" dyn
+            if [[ $arch == loongarch64 ]]; then
+                # The actual Linux 6.6.143 script spells the GNU output
+                # architecture "loongarch", not our ABI-width alias.
+                sed 's/OUTPUT_ARCH(loongarch64)/OUTPUT_ARCH(loongarch)/' \
+                    "$work/$arch/vmlinux.lds" >"$work/$arch/kernel-gnu-arch.lds"
+                "$MINILD" -m "$emulation" -static -pie -n -X \
+                    --no-dynamic-linker -z notext \
+                    -T "$work/$arch/kernel-gnu-arch.lds" \
+                    -o "$work/$arch/kernel-gnu-arch.elf" \
+                    "$work/$arch/entry.o" \
+                    >"$work/$arch/kernel-gnu-arch.log" 2>&1 ||
+                    die kernel_gnu_output_arch
+                check_elf "$work/$arch/kernel-gnu-arch.elf" "$machine" exec
+            fi
             ;;
         aarch64)
             "$MINILD" -m "$emulation" -shared -Bsymbolic \
@@ -127,7 +148,17 @@ for spec in \
             [[ ! -e "$work/$arch/must-reject.elf" ]] || die rejected_elf_written
             ;;
     esac
-    echo "MINILD_KERNEL_ET_DYN=PASS arch=$arch script_ET_EXEC=PASS kernel_ET_DYN=$( [[ -e $work/$arch/kernel.elf ]] && echo PASS || echo NOT_APPLICABLE )"
+    case "$arch" in
+        rv64|loongarch64)
+            echo "MINILD_KERNEL_ET_DYN=PASS arch=$arch script_ET_EXEC=PASS nmagic_ET_EXEC=PASS static_PIE_ET_DYN=PASS"
+            ;;
+        aarch64)
+            echo "MINILD_KERNEL_ET_DYN=PASS arch=$arch script_ET_EXEC=PASS shared_kernel_ET_DYN=PASS"
+            ;;
+        *)
+            echo "MINILD_KERNEL_ET_DYN=PASS arch=$arch script_ET_EXEC=PASS kernel_mode=NOT_APPLICABLE"
+            ;;
+    esac
 done
 
 # A Linux-kernel profile cannot silently become a general-purpose PIE/DSO.

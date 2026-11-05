@@ -18,7 +18,13 @@ typedef enum ScriptTokenKind {
     TOKEN_PLUS,
     TOKEN_MINUS,
     TOKEN_SLASH,
-    TOKEN_SHIFT_LEFT
+    TOKEN_PERCENT,
+    TOKEN_AMP,
+    TOKEN_CARET,
+    TOKEN_PIPE,
+    TOKEN_TILDE,
+    TOKEN_SHIFT_LEFT,
+    TOKEN_SHIFT_RIGHT
 } ScriptTokenKind;
 
 typedef struct ScriptToken {

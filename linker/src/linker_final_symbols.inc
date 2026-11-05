@@ -5,6 +5,8 @@
 typedef struct MiniLdFinalSymbols {
     MiniLdBuffer names;
     MiniElfSymbol *entries;
+    size_t *resolver_to_final;
+    size_t resolver_count;
     size_t entry_count;
     size_t local_count;
 } MiniLdFinalSymbols;
@@ -12,6 +14,7 @@ typedef struct MiniLdFinalSymbols {
 static void minild_final_symbols_destroy(MiniLdFinalSymbols *final) {
     free(final->names.data);
     free(final->entries);
+    free(final->resolver_to_final);
     memset(final, 0, sizeof(*final));
 }
 
@@ -82,14 +85,23 @@ static bool minild_final_symbols_build_with_version(
         ++kept;
     }
 
-    if (kept >= SIZE_MAX / sizeof(MiniElfSymbol) - 1U) {
+    if (kept >= SIZE_MAX / sizeof(MiniElfSymbol) - 1U ||
+        state->resolver.count > SIZE_MAX / sizeof(size_t)) {
         return false;
     }
     final->entry_count = kept + 1U;
+    final->resolver_count = state->resolver.count;
     final->entries = calloc(final->entry_count,
                             sizeof(*final->entries));
-    if (final->entries == NULL || !buffer_append_zero(&final->names, 1U)) {
+    final->resolver_to_final = malloc((final->resolver_count == 0U ? 1U :
+                                      final->resolver_count) *
+                                     sizeof(*final->resolver_to_final));
+    if (final->entries == NULL || final->resolver_to_final == NULL ||
+        !buffer_append_zero(&final->names, 1U)) {
         return false;
+    }
+    for (i = 0U; i < final->resolver_count; ++i) {
+        final->resolver_to_final[i] = SIZE_MAX;
     }
     for (pass = 0U; pass < 2U; ++pass) {
         for (i = 0U; i < state->resolver.count; ++i) {
@@ -109,6 +121,7 @@ static bool minild_final_symbols_build_with_version(
                 continue;
             }
             output = &final->entries[next++];
+            final->resolver_to_final[i] = next - 1U;
             if (source->name[0] != '\0' &&
                 !buffer_append_string(&final->names, source->name,
                                       &output->name)) {
@@ -197,6 +210,176 @@ static bool minild_final_symbols_build(const MiniLdState *state,
                                                    NULL, final);
 }
 
+/* Final-link SHT_RELA data is indexed by final OutputSection, never by the
+ * input section or an as-time work-fragment identity.  Restrict the first
+ * x86 admission to untransformed relocations; GOT/IFUNC/TLS and relaxation
+ * require a target-provided post-fixup relocation projection. */
+typedef struct MiniLdFinalRelocSection {
+    MiniElfRela *entries;
+    size_t count;
+    size_t capacity;
+    size_t offset;
+    uint32_t name_offset;
+} MiniLdFinalRelocSection;
+
+typedef struct MiniLdFinalRelocations {
+    MiniLdFinalRelocSection *sections;
+    size_t section_count;
+    size_t active_count;
+} MiniLdFinalRelocations;
+
+static void minild_final_relocations_destroy(MiniLdFinalRelocations *final) {
+    size_t i;
+
+    for (i = 0U; i < final->section_count; ++i) {
+        free(final->sections[i].entries);
+    }
+    free(final->sections);
+    memset(final, 0, sizeof(*final));
+}
+
+static bool minild_final_relocations_build(
+    MiniLdState *state, const MiniLdLayout *layout,
+    const MiniLdOutputPlan *plan, const MiniLdFinalSymbols *symbols,
+    bool emit_relocs, MiniLdFinalRelocations *final) {
+    size_t pass, i;
+
+    memset(final, 0, sizeof(*final));
+    if (!emit_relocs) {
+        return true;
+    }
+    if (state->target == NULL || state->target->machine != EM_X86_64 ||
+        state->target->elf_class != ELFCLASS64 ||
+        plan->count > SIZE_MAX / sizeof(*final->sections)) {
+        fprintf(state->diagnostics,
+                "minic-ld: unsupported-target-final-relocations\n");
+        return false;
+    }
+    final->section_count = plan->count;
+    final->sections = calloc(plan->count == 0U ? 1U : plan->count,
+                             sizeof(*final->sections));
+    if (final->sections == NULL) {
+        return false;
+    }
+    for (pass = 0U; pass < 2U; ++pass) {
+        if (pass == 1U) {
+            for (i = 0U; i < final->section_count; ++i) {
+                MiniLdFinalRelocSection *out = &final->sections[i];
+
+                if (out->capacity == 0U) {
+                    continue;
+                }
+                out->entries = calloc(out->capacity, sizeof(*out->entries));
+                if (out->entries == NULL) {
+                    return false;
+                }
+                ++final->active_count;
+            }
+        }
+        for (i = 0U; i < state->relocations.count; ++i) {
+            const MiniLdReloc *source = &state->relocations.entries[i];
+            const MiniLdSection *section;
+            const MiniLdOutputSection *owner;
+            MiniLdFinalRelocSection *out;
+            size_t shndx, symbol_index;
+            uint64_t place;
+
+            if (source->section >= plan->work_count) {
+                fprintf(state->diagnostics,
+                        "minic-ld: invalid-final-relocation-source\n");
+                return false;
+            }
+            shndx = minild_output_shndx(plan, source->section);
+            if (shndx == 0U) {
+                continue;
+            }
+            section = &state->work.sections[source->section];
+            if (layout->scripted &&
+                layout->work[source->section].discarded) {
+                continue;
+            }
+            if (source->type == R_X86_64_NONE) {
+                continue;
+            }
+            /* A scripted non-ALLOC section can carry a nonzero VMA (GNU
+             * ld then emits absolute r_offset).  Our final non-ALLOC
+             * sections deliberately have sh_addr=0 and section-relative
+             * symbol values, so do not serialize a contradictory r_offset
+             * until the final section-VMA policy can represent that case. */
+            if ((section->flags & SHF_ALLOC) == 0U &&
+                layout->work[source->section].vaddr != 0U) {
+                fprintf(state->diagnostics,
+                        "minic-ld: unsupported-emit-relocs-nonalloc-vma\n");
+                return false;
+            }
+            if (source->type != R_X86_64_64 &&
+                source->type != R_X86_64_32 &&
+                source->type != R_X86_64_32S &&
+                source->type != R_X86_64_PC32 &&
+                source->type != R_X86_64_PLT32) {
+                fprintf(state->diagnostics,
+                        "minic-ld: unsupported-emit-relocs-transform:%u\n",
+                        (unsigned)source->type);
+                return false;
+            }
+            if (source->symbol >= symbols->resolver_count ||
+                (symbol_index = symbols->resolver_to_final[source->symbol]) ==
+                    SIZE_MAX ||
+                symbol_index > UINT32_MAX ||
+                ELF64_ST_TYPE(state->resolver.entries[source->symbol].info) ==
+                    STT_GNU_IFUNC) {
+                fprintf(state->diagnostics,
+                        "minic-ld: unsupported-emit-relocs-symbol\n");
+                return false;
+            }
+            owner = &plan->sections[shndx - 1U];
+            if ((section->flags & SHF_ALLOC) != 0U) {
+                if (layout->work[source->section].vaddr >
+                    UINT64_MAX - source->offset ||
+                    layout->work[source->section].vaddr < owner->vaddr) {
+                    return false;
+                }
+                place = layout->work[source->section].vaddr +
+                        source->offset;
+                if (place < owner->vaddr ||
+                    place - owner->vaddr >= owner->size) {
+                    return false;
+                }
+            } else {
+                size_t fragment_offset =
+                    plan->work_file_offsets[source->section];
+                if (fragment_offset < owner->file_offset ||
+                    source->offset > UINT64_MAX -
+                        (uint64_t)(fragment_offset - owner->file_offset)) {
+                    return false;
+                }
+                place = (uint64_t)(fragment_offset - owner->file_offset) +
+                        source->offset;
+                if (place >= owner->size) {
+                    return false;
+                }
+            }
+            out = &final->sections[shndx - 1U];
+            if (pass == 0U) {
+                if (out->capacity == SIZE_MAX / sizeof(*out->entries)) {
+                    return false;
+                }
+                ++out->capacity;
+            } else {
+                if (out->count >= out->capacity) {
+                    return false;
+                }
+                out->entries[out->count++] = (MiniElfRela){
+                    .offset = place,
+                    .info = ELF64_R_INFO(symbol_index, source->type),
+                    .addend = source->addend
+                };
+            }
+        }
+    }
+    return true;
+}
+
 /* The final ELF section table and its synthetic symbol/name trailer have
  * one owner for ET_EXEC and ET_DYN.  Their LOAD segments and ELF headers
  * remain writer-specific; only physical ordering of the two symbol buffers
@@ -234,6 +417,7 @@ static bool minild_final_section_tables_build(
     const MiniLdState *state,
     const MiniLdOutputPlan *plan,
     const MiniLdFinalSymbols *symbols,
+    MiniLdFinalRelocations *relocations,
     size_t end_nonalloc,
     MiniLdFinalSymbolTableOrder order,
     MiniLdFinalSectionTables *tables) {
@@ -247,7 +431,8 @@ static bool minild_final_section_tables_build(
     if (state->target == NULL ||
         (state->target->elf_class != ELFCLASS32 &&
          state->target->elf_class != ELFCLASS64) ||
-        plan->count > UINT16_MAX - 4U) {
+        plan->count > UINT16_MAX - 4U ||
+        relocations->active_count > UINT16_MAX - 4U - plan->count) {
         return false;
     }
     abi = minild_elf_abi_sizes(state->target->elf_class);
@@ -255,10 +440,10 @@ static bool minild_final_section_tables_build(
         symbols->local_count > UINT32_MAX) {
         return false;
     }
-    tables->count = plan->count + 4U;
-    tables->symtab_index = plan->count + 1U;
-    tables->strtab_index = plan->count + 2U;
-    tables->shstrtab_index = plan->count + 3U;
+    tables->count = plan->count + relocations->active_count + 4U;
+    tables->symtab_index = plan->count + relocations->active_count + 1U;
+    tables->strtab_index = tables->symtab_index + 1U;
+    tables->shstrtab_index = tables->symtab_index + 2U;
     symbol_bytes = symbols->entry_count * abi.sym;
     tables->headers = calloc(tables->count, sizeof(*tables->headers));
     tables->output_name_offsets = calloc(plan->count == 0U ? 1U : plan->count,
@@ -274,6 +459,32 @@ static bool minild_final_section_tables_build(
             return false;
         }
     }
+    for (i = 0U; i < relocations->section_count; ++i) {
+        MiniLdFinalRelocSection *reloc = &relocations->sections[i];
+        size_t length;
+        char *name;
+        bool appended;
+
+        if (reloc->capacity == 0U) {
+            continue;
+        }
+        length = strlen(plan->sections[i].name);
+        if (length > SIZE_MAX - 6U) {
+            return false;
+        }
+        name = malloc(length + 6U);
+        if (name == NULL) {
+            return false;
+        }
+        memcpy(name, ".rela", 5U);
+        memcpy(name + 5U, plan->sections[i].name, length + 1U);
+        appended = buffer_append_string(&tables->section_names, name,
+                                        &reloc->name_offset);
+        free(name);
+        if (!appended) {
+            return false;
+        }
+    }
     if (!buffer_append_string(&tables->section_names, ".symtab",
                               &symtab_name) ||
         !buffer_append_string(&tables->section_names, ".strtab",
@@ -284,6 +495,19 @@ static bool minild_final_section_tables_build(
     }
 
     cursor = end_nonalloc;
+    for (i = 0U; i < relocations->section_count; ++i) {
+        MiniLdFinalRelocSection *reloc = &relocations->sections[i];
+
+        if (reloc->capacity == 0U) {
+            continue;
+        }
+        if (!align_up_size(cursor, abi.word_alignment, &reloc->offset) ||
+            reloc->count > SIZE_MAX / sizeof(Elf64_Rela) ||
+            !add_size(reloc->offset,
+                      reloc->count * sizeof(Elf64_Rela), &cursor)) {
+            return false;
+        }
+    }
     if (order == MINILD_FINAL_SYMTAB_FIRST) {
         if (!align_up_size(cursor, abi.word_alignment, &tables->symtab_offset) ||
             !add_size(tables->symtab_offset, symbol_bytes,
@@ -310,6 +534,28 @@ static bool minild_final_section_tables_build(
     }
     tables->total_size = tables->header_offset +
                          tables->count * abi.shdr;
+
+    {
+        size_t rel_shndx = plan->count + 1U;
+        for (i = 0U; i < relocations->section_count; ++i) {
+            const MiniLdFinalRelocSection *reloc = &relocations->sections[i];
+
+            if (reloc->capacity == 0U) {
+                continue;
+            }
+            tables->headers[rel_shndx++] = (MiniElfSection){
+                .name = reloc->name_offset,
+                .type = SHT_RELA,
+                .flags = SHF_INFO_LINK,
+                .offset = reloc->offset,
+                .size = reloc->count * sizeof(Elf64_Rela),
+                .link = (uint32_t)tables->symtab_index,
+                .info = (uint32_t)(i + 1U),
+                .alignment = abi.word_alignment,
+                .entry_size = sizeof(Elf64_Rela)
+            };
+        }
+    }
 
     tables->headers[tables->symtab_index] = (MiniElfSection){
         .name = symtab_name,

@@ -75,10 +75,16 @@ struct MiniLdTargetProfile {
     unsigned char data_encoding;
     uint16_t machine;
     const char *script_arch;
+    /* GNU linker scripts may use either the ISA or ABI-width arch spelling. */
+    const char *script_arch_alternate;
     const char *pie_interpreter;
     uint32_t attributes_type;
     uint64_t static_image_base;
     size_t page_size;
+    /* Segment ABI alignment is not always the section-layout page size.
+     * GNU LoongArch -n still publishes a 64KB PT_LOAD alignment. */
+    size_t nmagic_load_alignment;
+    size_t static_note_alignment;
     bool supports_relocatable;
     bool supports_static;
     bool supports_static_script;
@@ -132,8 +138,8 @@ static bool minild_loongarch_v1_elf_flags(uint32_t flags);
  * RV32's shared mode is its separate, narrow compat-vDSO implementation. */
 static const MiniLdTargetProfile minild_target_profiles[] = {
     {"elf64lriscv", ELFCLASS64, ELFDATA2LSB, EM_RISCV, "riscv",
-     "/lib/ld-musl-riscv64.so.1", MINILD_SHT_RISCV_ATTRIBUTES,
-     UINT64_C(0x10000), 4096U,
+     NULL, "/lib/ld-musl-riscv64.so.1", MINILD_SHT_RISCV_ATTRIBUTES,
+     UINT64_C(0x10000), 4096U, 1U, 4U,
      true, true, true, true, true, true, false, minild_riscv_merge_flags,
      minild_riscv_relax_section,
      minild_riscv_reserve_static_relocations,
@@ -144,8 +150,8 @@ static const MiniLdTargetProfile minild_target_profiles[] = {
      minild_riscv_shared_target_abi,
      minild_link_shared_elf64_riscv_inputs_options, NULL, true},
     {"elf32lriscv", ELFCLASS32, ELFDATA2LSB, EM_RISCV, "riscv",
-     NULL, MINILD_SHT_RISCV_ATTRIBUTES,
-     UINT64_C(0x10000), 4096U,
+     NULL, NULL, MINILD_SHT_RISCV_ATTRIBUTES,
+     UINT64_C(0x10000), 4096U, 1U, 4U,
      true, true, true, true, true, false, false, minild_riscv_merge_flags,
      minild_riscv_relax_section,
      minild_riscv_reserve_static_relocations,
@@ -155,7 +161,7 @@ static const MiniLdTargetProfile minild_target_profiles[] = {
      minild_riscv_synthesize_gnu_default_boundaries,
      NULL, minild_link_elf32_compat_vdso, NULL, true},
     {"elf_x86_64", ELFCLASS64, ELFDATA2LSB, EM_X86_64, "i386:x86-64",
-     NULL, 0U, UINT64_C(0x400000), 4096U,
+     NULL, NULL, 0U, UINT64_C(0x400000), 4096U, 1U, 4U,
      true, true, true, true, false, false, false,
      minild_exact_merge_flags, NULL,
      minild_x86_reserve_static_relocations,
@@ -165,7 +171,7 @@ static const MiniLdTargetProfile minild_target_profiles[] = {
      minild_x86_synthesize_default_boundaries,
      NULL, NULL, minild_zero_elf_flags, true},
     {"aarch64linux", ELFCLASS64, ELFDATA2LSB, EM_AARCH64, "aarch64",
-     NULL, 0U, UINT64_C(0x400000), 4096U,
+     NULL, NULL, 0U, UINT64_C(0x400000), 4096U, 1U, 4U,
      true, true, true, true, false, false, true,
      minild_exact_merge_flags, NULL,
      minild_aarch64_reserve_static_relocations,
@@ -175,7 +181,8 @@ static const MiniLdTargetProfile minild_target_profiles[] = {
      minild_aarch64_synthesize_default_boundaries,
      NULL, NULL, minild_zero_elf_flags, true},
     {"elf64loongarch", ELFCLASS64, ELFDATA2LSB, EM_LOONGARCH, "loongarch64",
-     NULL, 0U, UINT64_C(0x120000000), 4096U,
+     "loongarch", NULL, 0U, UINT64_C(0x120000000), 4096U,
+     65536U, 8U,
      true, true, true, true, false, false, false,
      minild_exact_merge_flags, minild_loongarch_relax_section,
      minild_loongarch_reserve_static_relocations,
@@ -296,7 +303,9 @@ static void minild_target_set_relocatable_identity(
 static bool minild_target_accept_script_arch(
     const MiniLdTargetProfile *target, const char *arch) {
     return target != NULL && arch != NULL &&
-           strcmp(arch, target->script_arch) == 0;
+           (strcmp(arch, target->script_arch) == 0 ||
+            (target->script_arch_alternate != NULL &&
+             strcmp(arch, target->script_arch_alternate) == 0));
 }
 
 static const char *minild_target_default_pie_interpreter(

@@ -56,13 +56,14 @@ static bool shared_write_object(MiniLdState *state,
                                           &final, image_size,
                                           shared->version_script,
                                           MINILD_FINAL_STRTAB_FIRST,
-                                          ET_DYN)) {
+                                          ET_DYN, false)) {
         goto done;
     }
     minild_shared_output_section_links(output_plan, shared,
                                         final.tables.headers);
     ok = minild_final_write_image(state, layout, output_plan, &final.program,
                                   &final.tables, &final.symbols,
+                                  &final.relocations,
                                   ET_DYN, entry, path);
 
 done:

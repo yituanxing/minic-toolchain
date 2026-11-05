@@ -80,9 +80,9 @@ static int minild_link_static_pipeline(
                     script.output_arch);
             goto done;
         }
-        if (script.phdr_count != 0U || script.version_name != NULL) {
+        if (script.version_name != NULL) {
             fprintf(diagnostics,
-                    "minic-ld: unsupported-static-script-PHDRS-or-VERSION\n");
+                    "minic-ld: unsupported-static-script-VERSION\n");
             goto done;
         }
         have_script = true;
@@ -134,7 +134,9 @@ static int minild_link_static_pipeline(
         !minild_output_plan_build(&state, &layout, &output_plan) ||
         !static_write_executable(&state, &layout, &output_plan,
                                  output_path, entry,
-                                 options != NULL && options->output_et_dyn)) {
+                                 options != NULL && options->output_et_dyn,
+                                 options != NULL && options->emit_relocs,
+                                 have_script ? &script : NULL)) {
         goto done;
     }
     minild_perf_phase("output", &phase_start, &state, diagnostics);
@@ -222,6 +224,7 @@ int minild_link_static_elf64_riscv_inputs(const char *output_path,
     options.discard_locals = false;
     options.output_et_dyn = false;
     options.kernel_shared_no_dynamic_relocations = false;
+    options.emit_relocs = false;
     return minild_link_static_elf64_riscv_inputs_options(output_path,
                                                           inputs,
                                                           input_count,

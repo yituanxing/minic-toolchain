@@ -140,6 +140,19 @@ static bool parse_unary(ScriptParser *parser, MiniLdScriptExprId *expression_out
         return append_expression(parser->script, expression, expression_out) ||
                minild_script_parser_error(parser, "out-of-memory:expression");
     }
+    if (parser->token.kind == TOKEN_TILDE) {
+        MiniLdScriptExpr expression;
+        MiniLdScriptExprId operand;
+        if (!minild_script_parser_next(parser) || !parse_unary(parser, &operand)) {
+            return false;
+        }
+        memset(&expression, 0, sizeof(expression));
+        expression.kind = MINILD_SCRIPT_EXPR_BITWISE_NOT;
+        expression.left = operand;
+        expression.right = MINILD_SCRIPT_EXPR_NONE;
+        return append_expression(parser->script, expression, expression_out) ||
+               minild_script_parser_error(parser, "out-of-memory:expression");
+    }
     return parse_primary(parser, expression_out);
 }
 
@@ -154,11 +167,13 @@ static bool parse_multiplicative(ScriptParser *parser,
         MiniLdScriptExprKind kind;
         MiniLdScriptExpr expression;
         MiniLdScriptExprId right;
-        if (token != TOKEN_STAR && token != TOKEN_SLASH) {
+        if (token != TOKEN_STAR && token != TOKEN_SLASH &&
+            token != TOKEN_PERCENT) {
             break;
         }
-        kind = token == TOKEN_STAR ? MINILD_SCRIPT_EXPR_MULTIPLY
-                                   : MINILD_SCRIPT_EXPR_DIVIDE;
+        kind = token == TOKEN_STAR ? MINILD_SCRIPT_EXPR_MULTIPLY :
+               token == TOKEN_SLASH ? MINILD_SCRIPT_EXPR_DIVIDE :
+                                       MINILD_SCRIPT_EXPR_MODULO;
         if (!minild_script_parser_next(parser) || !parse_unary(parser, &right)) {
             return false;
         }
@@ -200,21 +215,25 @@ static bool parse_additive(ScriptParser *parser, MiniLdScriptExprId *expression_
     return true;
 }
 
-bool minild_script_parse_expression(ScriptParser *parser,
-                                    MiniLdScriptExprId *expression_out) {
+static bool parse_shift(ScriptParser *parser,
+                        MiniLdScriptExprId *expression_out) {
     MiniLdScriptExprId left;
     if (!parse_additive(parser, &left)) {
         return false;
     }
-    while (parser->token.kind == TOKEN_SHIFT_LEFT) {
+    while (parser->token.kind == TOKEN_SHIFT_LEFT ||
+           parser->token.kind == TOKEN_SHIFT_RIGHT) {
         MiniLdScriptExpr expression;
         MiniLdScriptExprId right;
+        ScriptTokenKind token = parser->token.kind;
         if (!minild_script_parser_next(parser) ||
             !parse_additive(parser, &right)) {
             return false;
         }
         memset(&expression, 0, sizeof(expression));
-        expression.kind = MINILD_SCRIPT_EXPR_SHIFT_LEFT;
+        expression.kind = token == TOKEN_SHIFT_LEFT
+                              ? MINILD_SCRIPT_EXPR_SHIFT_LEFT
+                              : MINILD_SCRIPT_EXPR_SHIFT_RIGHT;
         expression.left = left;
         expression.right = right;
         if (!append_expression(parser->script, expression, &left)) {
@@ -223,6 +242,56 @@ bool minild_script_parse_expression(ScriptParser *parser,
     }
     *expression_out = left;
     return true;
+}
+
+/* GNU ld expression precedence: additive > shift > bitwise AND > XOR > OR.
+ * Keep the bitwise levels a single recursive grammar shared by all targets,
+ * including LoongArch's kernel_entry & PHYSADDR_MASK Kbuild expression. */
+typedef bool (*MiniLdParseExprLevel)(ScriptParser *, MiniLdScriptExprId *);
+
+static bool parse_bitwise_level(ScriptParser *parser,
+                                MiniLdParseExprLevel tighter,
+                                ScriptTokenKind token,
+                                MiniLdScriptExprKind kind,
+                                MiniLdScriptExprId *expression_out) {
+    MiniLdScriptExprId left;
+    if (!tighter(parser, &left)) {
+        return false;
+    }
+    while (parser->token.kind == token) {
+        MiniLdScriptExpr expression;
+        MiniLdScriptExprId right;
+        if (!minild_script_parser_next(parser) || !tighter(parser, &right)) {
+            return false;
+        }
+        memset(&expression, 0, sizeof(expression));
+        expression.kind = kind;
+        expression.left = left;
+        expression.right = right;
+        if (!append_expression(parser->script, expression, &left)) {
+            return minild_script_parser_error(parser, "out-of-memory:expression");
+        }
+    }
+    *expression_out = left;
+    return true;
+}
+
+static bool parse_bitwise_and(ScriptParser *parser,
+                              MiniLdScriptExprId *expression_out) {
+    return parse_bitwise_level(parser, parse_shift, TOKEN_AMP,
+                               MINILD_SCRIPT_EXPR_BITWISE_AND, expression_out);
+}
+
+static bool parse_bitwise_xor(ScriptParser *parser,
+                              MiniLdScriptExprId *expression_out) {
+    return parse_bitwise_level(parser, parse_bitwise_and, TOKEN_CARET,
+                               MINILD_SCRIPT_EXPR_BITWISE_XOR, expression_out);
+}
+
+bool minild_script_parse_expression(ScriptParser *parser,
+                                    MiniLdScriptExprId *expression_out) {
+    return parse_bitwise_level(parser, parse_bitwise_xor, TOKEN_PIPE,
+                               MINILD_SCRIPT_EXPR_BITWISE_OR, expression_out);
 }
 
 static bool evaluate_expression(const MiniLdScript *script,
@@ -274,6 +343,7 @@ static bool evaluate_expression(const MiniLdScript *script,
                 expression->name);
         return false;
     case MINILD_SCRIPT_EXPR_NEGATE:
+    case MINILD_SCRIPT_EXPR_BITWISE_NOT:
         if (!evaluate_expression(script,
                                  expression->left,
                                  context,
@@ -282,7 +352,8 @@ static bool evaluate_expression(const MiniLdScript *script,
                                  depth + 1U)) {
             return false;
         }
-        *value_out = UINT64_C(0) - left;
+        *value_out = expression->kind == MINILD_SCRIPT_EXPR_NEGATE
+                         ? UINT64_C(0) - left : ~left;
         return true;
     case MINILD_SCRIPT_EXPR_ALIGN:
         if (!evaluate_expression(script,
@@ -314,7 +385,12 @@ static bool evaluate_expression(const MiniLdScript *script,
     case MINILD_SCRIPT_EXPR_SUBTRACT:
     case MINILD_SCRIPT_EXPR_MULTIPLY:
     case MINILD_SCRIPT_EXPR_DIVIDE:
+    case MINILD_SCRIPT_EXPR_MODULO:
     case MINILD_SCRIPT_EXPR_SHIFT_LEFT:
+    case MINILD_SCRIPT_EXPR_SHIFT_RIGHT:
+    case MINILD_SCRIPT_EXPR_BITWISE_AND:
+    case MINILD_SCRIPT_EXPR_BITWISE_XOR:
+    case MINILD_SCRIPT_EXPR_BITWISE_OR:
         if (!evaluate_expression(script,
                                  expression->left,
                                  context,
@@ -335,18 +411,28 @@ static bool evaluate_expression(const MiniLdScript *script,
             *value_out = left - right;
         } else if (expression->kind == MINILD_SCRIPT_EXPR_MULTIPLY) {
             *value_out = left * right;
-        } else if (expression->kind == MINILD_SCRIPT_EXPR_DIVIDE) {
+        } else if (expression->kind == MINILD_SCRIPT_EXPR_DIVIDE ||
+                   expression->kind == MINILD_SCRIPT_EXPR_MODULO) {
             if (right == 0U) {
                 fprintf(diagnostics, "minic-ld: linker-script-division-by-zero\n");
                 return false;
             }
-            *value_out = left / right;
-        } else {
+            *value_out = expression->kind == MINILD_SCRIPT_EXPR_DIVIDE
+                             ? left / right : left % right;
+        } else if (expression->kind == MINILD_SCRIPT_EXPR_SHIFT_LEFT ||
+                   expression->kind == MINILD_SCRIPT_EXPR_SHIFT_RIGHT) {
             if (right >= 64U) {
                 fprintf(diagnostics, "minic-ld: linker-script-invalid-shift\n");
                 return false;
             }
-            *value_out = left << right;
+            *value_out = expression->kind == MINILD_SCRIPT_EXPR_SHIFT_LEFT
+                             ? left << right : left >> right;
+        } else if (expression->kind == MINILD_SCRIPT_EXPR_BITWISE_AND) {
+            *value_out = left & right;
+        } else if (expression->kind == MINILD_SCRIPT_EXPR_BITWISE_XOR) {
+            *value_out = left ^ right;
+        } else {
+            *value_out = left | right;
         }
         return true;
     }
