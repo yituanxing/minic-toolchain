@@ -1,0 +1,203 @@
+name: MiniAS Linux Three ISA Original Kbuild S Corpus
+
+# One exact source/config compiler-owned Linux build per architecture.
+# Preserve the real producer-created .incbin binaries along with saved GNU
+# .s and .cmd: the old S-only archive could never qualify 11 genuine
+# Linux owners that require Kbuild-generated payloads.
+# Only after the Kbuild producer do seven independent MiniAS shards run.
+# This is discovery; first-target-unsupported is not a semantic PASS.
+on:
+  workflow_dispatch:
+  push:
+    branches: [refactor/minias-target-isa-abi-core]
+    paths:
+      - '.github/workflows/minias-linux-three-isa-kbuild-corpus.yml'
+
+permissions:
+  contents: read
+  actions: read  # immutable same-repository original producer archives
+
+jobs:
+  producer:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 100
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [x86_64, aarch64, loongarch64]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install original GNU Kbuild toolchains (no MiniC fallback)
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get update
+          common=(bc bison flex libssl-dev libelf-dev make curl xz-utils python3)
+          case '${{ matrix.target }}' in
+            x86_64) extra=() ;;
+            aarch64) extra=(gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu) ;;
+            loongarch64) extra=(gcc-13-loongarch64-linux-gnu binutils-loongarch64-linux-gnu) ;;
+            *) exit 2 ;;
+          esac
+          sudo apt-get install -y --no-install-recommends "${common[@]}" "${extra[@]}"
+      - name: Build real Linux 6.6.143 under one immutable per-target config
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/minias-linux-kbuild/${{ matrix.target }}"
+          mkdir -p "$work"
+          archive="$work/linux-6.6.143.tar.xz"
+          curl --retry 3 -fsSL https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.6.143.tar.xz -o "$archive"
+          printf '%s  %s\n' 'dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932' "$archive" | sha256sum -c -
+          tar -xJf "$archive" -C "$work"
+          src="$work/linux-6.6.143"
+          output="$work/out"
+          case '${{ matrix.target }}' in
+            x86_64) target_arch=x86_64; cross=''; compiler=gcc ;;
+            aarch64) target_arch=arm64; cross=aarch64-linux-gnu-; compiler=aarch64-linux-gnu-gcc ;;
+            loongarch64) target_arch=loongarch; cross=loongarch64-linux-gnu-; compiler=loongarch64-linux-gnu-gcc-13 ;;
+            *) exit 2 ;;
+          esac
+          export ARCH="$target_arch" CROSS_COMPILE="$cross"
+          make -C "$src" O="$output" CC="$compiler" defconfig
+          test -s "$output/.config"
+          before=$(sha256sum "$output/.config" | cut -d' ' -f1)
+          # -save-temps=obj does not ask the compiler for new extensions,
+          # and captures .s from the EXACT C and native .S Kbuild commands.
+          # This is ORIGINAL-config generation, not the restricted-ISA lane.
+          set +e
+          # Linux 6.6.143's CONFIG_WERROR on GCC13 produces non-semantic
+          # -Werror=address (~2,000 diagnostics) and a second independent
+          # -Werror=tautological-compare. Do NOT fix warnings one-at-a-time
+          # via source patches. -Wno-error changes only diagnostic fatality,
+          # never target ISA or ABI. The exact override and .cmd are frozen
+          # and GNU and MiniAS consume the SAME generated .s.
+          extra_cflags='-Wno-error'
+          make -k -C "$src" O="$output" CC="$compiler" -j4 \
+            KCFLAGS="-save-temps=obj $extra_cflags" KAFLAGS='-save-temps=obj' vmlinux \
+            >"$work/kbuild.log" 2>&1
+          rc=$?
+          set -e
+          after=$(sha256sum "$output/.config" | cut -d' ' -f1)
+          test "$before" = "$after" || { echo 'MINIAS_KBUILD_CONFIG_CHANGED' >&2; exit 2; }
+          printf '%s\n' "$rc" >"$work/build-exit.txt"
+          echo "MINIAS_REAL_KBUILD target=${{ matrix.target }} exit=$rc config=$after"
+          # Preserve artifacts even if the original Kbuild failed, and
+          # distinguish a partial usable error census from full Linux input.
+          python3 tools/ci/minias-linux-kbuild-seven-v1.py export \
+            --target '${{ matrix.target }}' --out "$output" \
+            --compiler "$compiler" --compiler-path "$(command -v "$compiler")" \
+            --build-exit "$rc" --dest "$work/frozen" --include-incbin
+
+      # The original S-only cache deliberately did not contain generated
+      # binaries. Rebuild EACH GNU target from the pinned 6.6.143 tarball
+      # here; no mixing cached source manifests with newer generated blobs.
+      # This new corpus is separately SHA-identified and never retroactively
+      # changes historical 3x7 coverage results.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: minias-linux-kbuild-${{ matrix.target }}-shard0
+          path: build/minias-linux-kbuild/${{ matrix.target }}/frozen/shard-0.tar.gz
+          retention-days: 30
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: minias-linux-kbuild-${{ matrix.target }}-shard1
+          path: build/minias-linux-kbuild/${{ matrix.target }}/frozen/shard-1.tar.gz
+          retention-days: 30
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: minias-linux-kbuild-${{ matrix.target }}-shard2
+          path: build/minias-linux-kbuild/${{ matrix.target }}/frozen/shard-2.tar.gz
+          retention-days: 30
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: minias-linux-kbuild-${{ matrix.target }}-shard3
+          path: build/minias-linux-kbuild/${{ matrix.target }}/frozen/shard-3.tar.gz
+          retention-days: 30
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: minias-linux-kbuild-${{ matrix.target }}-shard4
+          path: build/minias-linux-kbuild/${{ matrix.target }}/frozen/shard-4.tar.gz
+          retention-days: 30
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: minias-linux-kbuild-${{ matrix.target }}-shard5
+          path: build/minias-linux-kbuild/${{ matrix.target }}/frozen/shard-5.tar.gz
+          retention-days: 30
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: minias-linux-kbuild-${{ matrix.target }}-shard6
+          path: build/minias-linux-kbuild/${{ matrix.target }}/frozen/shard-6.tar.gz
+          retention-days: 30
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: minias-linux-kbuild-${{ matrix.target }}-producer-evidence
+          path: |
+            build/minias-linux-kbuild/${{ matrix.target }}/frozen/manifest.json
+            build/minias-linux-kbuild/${{ matrix.target }}/frozen/config.sha256
+            build/minias-linux-kbuild/${{ matrix.target }}/kbuild.log
+            build/minias-linux-kbuild/${{ matrix.target }}/build-exit.txt
+          retention-days: 30
+          if-no-files-found: warn
+
+  scan:
+    needs: producer
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [x86_64, aarch64, loongarch64]
+        shard: [0, 1, 2, 3, 4, 5, 6]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: minias-linux-kbuild-${{ matrix.target }}-shard${{ matrix.shard }}
+          path: build/minias-linux-kbuild-input
+      - name: Compile current MiniAS once per isolated runner
+        run: make -j2 MODE=release CFLAGS=-Werror build/release/bin/minic-as
+      - name: Enumerate all current assembly blockers for one ISA only
+        run: |
+          python3 tools/ci/minias-linux-kbuild-seven-v1.py scan \
+            --target '${{ matrix.target }}' \
+            --shard '${{ matrix.shard }}' \
+            --archive 'build/minias-linux-kbuild-input/shard-${{ matrix.shard }}.tar.gz' \
+            --minias "$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            --dest 'build/minias-linux-s-scan/${{ matrix.target }}-${{ matrix.shard }}'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: minias-linux-s-result-${{ matrix.target }}-${{ matrix.shard }}
+          path: build/minias-linux-s-scan/${{ matrix.target }}-${{ matrix.shard }}/results.json
+          retention-days: 30
+          if-no-files-found: error
+
+  aggregate:
+    needs: scan
+    if: always() && needs.scan.result == 'success'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: minias-linux-s-result-*
+          path: build/minias-linux-s-collection
+      - name: Require complete 3 x 7 original-Kbuild result union
+        run: |
+          python3 tools/ci/minias-linux-kbuild-seven-v1.py aggregate \
+            --results build/minias-linux-s-collection \
+            --dest build/minias-linux-s-aggregate/summary.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: minias-linux-s-three-target-aggregate
+          path: build/minias-linux-s-aggregate/summary.json
+          if-no-files-found: error
+          retention-days: 30

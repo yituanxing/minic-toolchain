@@ -1,0 +1,680 @@
+name: MiniAS Target ISA ABI Contract
+
+on:
+  pull_request:
+    paths:
+      - 'assembler/**'
+      - 'elf/**'
+      - 'tools/minic-as/**'
+      - 'tests/assembler/**'
+      - 'Makefile'
+      - '.github/workflows/minias-target-contract.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: minias-contract-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  native-a0-rv32i:
+    name: Native A0, strict RV32I, GNU parity, ELF32 real link
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          repository: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name || github.repository }}
+      - name: Assert evaluated source is exact PR head
+        run: |
+          actual="$(git rev-parse HEAD)"
+          expected="${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}"
+          test "$actual" = "$expected"
+          echo "MINIAS_EXACT_HEAD=PASS sha=$actual"
+      - name: Install RISC-V GNU assembler/linker and QEMU user runner
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            binutils-riscv64-linux-gnu gcc-riscv64-linux-gnu \
+            binutils-aarch64-linux-gnu \
+            binutils-loongarch64-linux-gnu qemu-user python3-pyelftools
+      - name: Build MiniAS from this exact PR head
+        run: |
+          make -j2 MODE=release CFLAGS=-Werror build/release/bin/minic-as
+          test -x build/release/bin/minic-as
+      - name: Reject malformed four-target operands with clean failure unwind
+        run: bash tests/assembler/probe-mc-operand-failure-unwind.sh
+      - name: Enforce ISA-private fixup and MC emission ownership
+        run: bash tests/assembler/probe-mc-target-boundary.sh
+      - name: Four Target EncodeResult and Common-owned Fixup/Symbol transactions
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-mc-encode-result.sh
+      - name: Four Target bound SymbolRefs retain GNU object and fixup identity
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-mc-symbol-ref-transaction.sh
+      - name: Four Target instruction lowering ownership and x86 GNU modes
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-mc-target-lowering-ownership.sh
+      - name: Validate Common MCOperand nested ownership and error-path lifecycle
+        run: bash tests/assembler/probe-mc-operand-lifetime.sh
+      - name: RV32E validates parsed GPRs without treating symbols as registers
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-rv32e-typed-registers.sh
+      - name: Reject false-green immutable Linux seven-shard manifests
+        run: bash tests/assembler/probe-minias-acceptance-gates.sh
+      - name: Verify MCLayout validates source-ordered fragments and stable anchors
+        run: grep -q "minias_validate_fragment_layout" assembler/src/mc_layout.c
+      - name: Stress persistent MCLayout with 160 x86 long-branch expansions
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-relax-plan-stress.sh
+      - name: GNU x86 and RV64 2048-edge alias DAG retains SymbolID order
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=x86_64 \
+            bash tests/assembler/probe-mc-alias-dag.sh
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=riscv \
+            bash tests/assembler/probe-mc-alias-dag.sh
+      - name: GNU four-target synthetic dot-anchor ELF visibility
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-common-dot-anchor-visibility-gnu.sh
+      - name: GNU local COMMON allocation after BSS subsection zero, before higher subsections
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-common-local-comm-order-gnu.sh
+      - name: GNU Section-relative alignment across out-of-order subsections and DWARF PCs
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-mc-cross-subsection-alignment-gnu.sh
+      - name: GNU x86 and RV64 SourceFrame replay after forced long branch
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=x86_64 \
+            bash tests/assembler/probe-mc-source-replay-branch.sh
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=riscv \
+            bash tests/assembler/probe-mc-source-replay-branch.sh
+      - name: Stable SourceSite rebinds branch growth across conditional topology changes
+        run: |
+          command -v as
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-mc-source-stable-rebind.sh
+      - name: Common lowering independent translation-unit ownership
+        run: bash tests/assembler/probe-common-lowering-boundary.sh
+      - name: P06 Common Context and Emission single-owner boundary
+        run: bash tests/assembler/probe-common-context-emission-boundary.sh
+      - name: Context owns Section metadata and one post-layout size commit
+        run: bash tests/assembler/probe-common-context-section-metadata-owner.sh
+      - name: Section metadata and emitted bytes have compile-time distinct owners
+        run: bash tests/assembler/probe-common-section-owners-const.sh
+      - name: ELF serializer consumes only terminal ObjectModel borrows
+        run: bash tests/assembler/probe-elf-object-view-boundary.sh
+      - name: ObjectModel owns terminal references and generic atomic publication
+        run: bash tests/assembler/probe-object-model-transaction.sh
+      - name: Section and Symbol semantics project to checked ELF values
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-object-section-format-projection.sh
+      - name: Immutable TargetSpec and output ABI retain independent owners
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-target-spec-const-abi.sh
+      - name: Public C ABI compatibility and ELF attribute policy do not alter ISA
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-minias-public-api-compat.sh
+      - name: Target-private ISA and ABI stay independent of poisoned ELF flags
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-target-profile-elf-isolation.sh
+      - name: Six-profile data layout and object format boundary against GNU
+        run: |
+          MINIAS_REQUIRE_SIX_GNU=1 MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-target-datalayout-format-boundary.sh
+      - name: ELF32 i386 REL implicit addends are strict and fail-closed
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            python3 tests/assembler/probe-elf-semantic-i386-rel-addends.py
+      - name: Common symbol differences and PC-relative widths across all six GNU ELF profiles
+        run: |
+          REQUIRE_ALL_GNU=1 MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-common-relocation-widths-gnu.sh
+      - name: Per-target narrow relocation psABI contracts with GNU positive and negative cases
+        run: |
+          command -v riscv64-linux-gnu-as
+          command -v aarch64-linux-gnu-as
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-x86-narrow-symbol-relocs-gnu.sh
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-rv-add8-sub8-gnu.sh
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-aarch64-narrow-data-relocations.sh
+      - name: GNU x86 ELF32 i386 ISA and object ABI must agree in both directions
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-x86-i386-object-rel-gnu.sh
+      - name: Context owns all source, layout and synthetic Symbol state
+        run: bash tests/assembler/probe-common-context-symbol-owner.sh
+      - name: Context Symbol table is compiler-enforced const outside its owner
+        run: bash tests/assembler/probe-common-context-symbol-const-capability.sh
+      - name: CFI DWARF and Emission use checked Context SymbolID snapshots
+        run: bash tests/assembler/probe-common-symbol-id-views.sh
+      - name: Synthetic CFI, DWARF, MCExpr and Emit symbols use Context capabilities
+        run: bash tests/assembler/probe-common-context-synthetic-symbol-owner.sh
+      - name: SourceGraph opaque-session semantic service isolation
+        run: bash tests/assembler/probe-source-session-isolation.sh
+      - name: Source statement events enforce Source/Common parser ownership
+        run: bash tests/assembler/probe-source-statement-event-boundary.sh
+      - name: Source conditional MCExpr and defined-symbol semantics against GNU
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-source-if-common-gnu.sh
+      - name: GNU Source-owned statement dispatch and leading-label semantics
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-source-statement-dispatch-gnu.sh
+      - name: GNU SourceContext replay, macro lifetime and source-site identity
+        run: |
+          command -v as
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-source-context-composite-gnu.sh
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-source-macro-lifetime-gnu.sh
+      - name: GNU RV64I 160-typed-fragment relaxation stress
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=riscv \
+            bash tests/assembler/probe-typed-relax-four-target-stress.sh
+      - name: GNU RV64 branch bindings, long branches and linked override parity
+        run: |
+          command -v riscv64-linux-gnu-as
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-rv-branch-binding-gnu.sh
+      - name: GNU RV32/RV64 typed LI materialization semantics and measurement
+        run: |
+          # This CI acceptance gate may never silently skip its GNU oracle.
+          command -v riscv64-linux-gnu-as
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-rv-typed-li-materialization.sh
+      - name: GNU RISC-V option and ELF architecture attribute semantic state
+        run: |
+          command -v riscv64-linux-gnu-as
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-rv-attribute-semantic-state.sh
+      - name: GNU RV32 target width invariants across data and instruction operands
+        run: |
+          command -v riscv64-linux-gnu-as
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-rv32-target-width-invariants.sh
+      - name: GNU RV32/RV64 canonical target profile is a single source of truth
+        run: |
+          command -v riscv64-linux-gnu-as
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-rv-target-profile-single-source.sh
+      - name: Target-owned RISC-V ISA versions and lexical aliases match GNU
+        run: |
+          command -v riscv64-linux-gnu-as
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-rv-versioned-target-profile.sh
+      - name: GNU RV32/RV64 .option RVC push pop and ISA feature-state boundaries
+        run: |
+          command -v riscv64-linux-gnu-as
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-rv-option-rvc-state.sh
+      - name: GNU RV32I/RV64I lexical RVC over file Base-I and sticky ELF flags
+        run: |
+          command -v riscv64-linux-gnu-as
+          command -v riscv64-linux-gnu-objcopy
+          REQUIRE_ALL_GNU=1 MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-rv-rvc-site-gnu.sh
+      - name: GNU RV32/RV64 lexical ISA and exact mapping-symbol order
+        run: |
+          command -v riscv64-linux-gnu-as
+          command -v riscv64-linux-gnu-objcopy
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-rv-site-mapping-gnu.sh
+      - name: GNU RV32/RV64 explicit Link Relaxation and final ld alignment
+        run: |
+          command -v riscv64-linux-gnu-as
+          command -v riscv64-linux-gnu-ld
+          REQUIRE_ALL_GNU=1 MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-rv-link-relax-gnu.sh
+      - name: GNU RISC-V final DWARF line addresses after real CALL shortening
+        run: |
+          REQUIRE_ALL_GNU=1 MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-rv-dwarf-final-link-relax-gnu.sh
+      - name: GNU RV32/RV64 cross-site LLA and ULEB final-link semantics
+        run: |
+          REQUIRE_ALL_GNU=1 MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-rv-cross-site-relax-semantics-gnu.sh
+      - name: GNU RV32/RV64 PC-relative DATA differences after CALL relaxation
+        run: |
+          REQUIRE_ALL_GNU=1 MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-rv-data-difference-final-link-gnu.sh
+      - name: GNU RV32/RV64 both CFI frames follow final linked CALL PCs
+        run: |
+          REQUIRE_ALL_GNU=1 MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-cfi-both-frames-final-link-relax-gnu.sh
+      - name: RV32 RV64 and LoongArch deferred LEB link-motion expression correctness
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-link-motion-deferred-leb-expression.sh
+      - name: TargetSpec to lexical relaxation mode across all four backends
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-link-relax-targetspec-cli.sh
+      - name: GNU LoongArch link-relaxable ALIGN and lexical option-site ownership
+        run: |
+          command -v loongarch64-linux-gnu-as
+          command -v loongarch64-linux-gnu-ld
+          REQUIRE_ALL_GNU=1 MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-loong-align-relax-gnu.sh
+      - name: LoongArch branch and DWARF correctness across lexical relaxation scopes
+        run: |
+          REQUIRE_ALL_GNU=1 MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-loong-scoped-relax-correctness.sh
+      - name: GNU LoongArch final link semantic motion of PCALA data ULEB and both CFI frames
+        run: |
+          REQUIRE_ALL_GNU=1 MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-loong-link-motion-semantics-gnu.sh
+      - name: GNU RISC-V and LoongArch DWARF line programs survive linker relaxation
+        run: |
+          REQUIRE_ALL_GNU=1 MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-dwarf-line-linker-relax-gnu.sh
+      - name: GNU RVC compressed nop and ret are frozen at each lexical option site
+        run: |
+          command -v riscv64-linux-gnu-as
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-rv-compressed-pseudo-site-gnu.sh
+      - name: RV strict executable instructions reject all Common raw data escapes
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-rv-exec-directive-completeness.sh
+      - name: Assert one Common DWARF object model, CFI writer and owned bytecode
+        run: bash tests/assembler/probe-cfi-model-ownership.sh
+      - name: GNU CFI return-column CIE/FDE parity including LoongArch Linux directive
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-cfi-return-column-gnu.sh
+          for arch in x86_64 i386 riscv32 riscv64 loongarch64; do
+            MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            MINIAS_CFI_ARCH_ONLY="$arch" \
+              bash tests/assembler/probe-cfi-source-section-collision-gnu.sh
+          done
+      - name: GNU DWARF line view reset and alternate ELF symbol size anchors
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-common-dwarf-view-size-gnu.sh
+      - name: GNU ELF32 i386 CIE frame ABI, bytes and relocation parity
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-cfi-i386-gnu.sh
+      - name: Six-profile GNU ld -r cross-object CFI CIE and FDE relocation semantics
+        run: |
+          REQUIRE_ALL_GNU=1 MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-cfi-debug-frame-link-gnu.sh
+      - name: GNU Common CFI absolute expressions and invalid operands across targets
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-cfi-expression-gnu.sh
+      - name: GNU i386 and AMD64 CFI DWARF named-register callback semantics
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-cfi-x86-register-names-gnu.sh
+      - name: GNU Linux real-mode i386 code16/code16gcc and ELF32 REL link oracle
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-x86-linux-code16-gnu.sh
+      - name: GNU Linux VDSO handwritten ELF32 EH PC32 relocation and shared link
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-x86-vdso-eh-gnu.sh
+      - name: GNU Linux setup header unresolved ELF32 byte relocation and link
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-x86-boot-header-elf32-gnu.sh
+      - name: GNU Linux x86 five-level kernel page-table relocation addends
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-x86-kernel-pgt-gnu.sh
+      - name: GNU x86 absolute local symbol folding and typed PUSH widths
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-common-abs-symbol-fixup-gnu.sh
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-x86-abs-push-gnu.sh
+      - name: GNU ELF32 REL and ELF64 RELA local PC32 section-symbol canonicalization
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-common-local-pc32-section-gnu.sh
+      - name: GNU Linux standalone LOCK prefix as a persistent x86 MC operand
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-x86-linux-lock-prefix-gnu.sh
+      - name: GNU GCC i386 PIC GOTPC/GOT32X/GOTOFF/PLT32 and ELF32 shared link oracle
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-x86-i386-pic-gnu.sh
+      - name: GNU i386 GOTPC immediate and displacement lowering across five opcodes
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-x86-i386-gotpc-gnu.sh
+      - name: Enforce one Common MCFragment layout engine and shared variable DATA
+        run: bash tests/assembler/probe-mc-layout-ownership.sh
+      - name: Enforce discriminated Fragment payload and safe Target pre-layout reads
+        run: bash tests/assembler/probe-mc-fragment-payload-union.sh
+      - name: Target Parse, site capture and ALIGN cannot borrow Common Fragments
+        run: bash tests/assembler/probe-mc-target-fragment-private.sh
+      - name: Reject mutable Common records and raw arrays from phase-limited Targets
+        run: bash tests/assembler/probe-mc-target-readonly-projections.sh
+      - name: Reject mutable MCInst and nested operand payloads in all four Target read phases
+        run: bash tests/assembler/probe-mc-instruction-readonly-view.sh
+      - name: Verify live AArch64 finalization after readonly Section projection
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-mc-target-readonly-finalization.sh
+      - name: Enforce unique Common MCExpr grammar and emission ownership
+        run: bash tests/assembler/probe-mc-expression-ownership.sh
+      - name: GNU expression precedence oracle across four Target data sections
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-mc-shared-expression-grammar.sh
+      - name: GNU source frame macro, repeat and end ownership
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-common-skipped-macro-repeat-gnu.sh
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-common-source-end-gnu.sh
+      - name: Run complete A0 including ISA/ABI and macro relaxation regressions
+        run: make MODE=release check-minias-a0
+      - name: GNU RISC-V target-shared MC operand lexer and rejected mismatched groups
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=riscv \
+            bash tests/assembler/probe-mc-operand-lexer.sh
+      - name: Run strict RV32I GNU byte oracle and real ELF32/QEMU smoke
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-rv32i-elf32.sh
+      - name: Assert fragment-owned, directive and synthesized relocation offsets
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-fragment-fixup-ownership.sh
+      - name: Validate ELF SHT_GROUP and GNU COMDAT real linker semantics
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-comdat-groups.sh
+      - name: Same-pass branch relaxation and forward-data fragment fixed point
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-deferred-fragment-relax.sh
+      - name: Fixed GNU .org and lexical directives stay in persistent MCLayout
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=riscv \
+            bash tests/assembler/probe-mc-org-lexical-layout.sh
+      - name: GNU RISC-V fixed .org and forward DATA share one layout fixed point
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=riscv \
+            bash tests/assembler/probe-mc-org-data-fixedpoint.sh
+      - name: GNU RISC-V retained variable MCExpr and explicit legacy fallback
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=riscv \
+            bash tests/assembler/probe-mcexpr-variable-fixedpoint.sh
+      - name: GNU RISC-V deferred symbolic LEB layout and byte oracle
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=riscv \
+            bash tests/assembler/probe-mc-deferred-leb-gnu.sh
+      - name: GNU RISC-V linker ULEB relocation follows final option relax state
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-rv-uleb-final-relax-state-gnu.sh
+      - name: GNU RISC-V function .size signed end anchor after branch relaxation
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=riscv \
+            bash tests/assembler/probe-mcexpr-size-end-anchor.sh
+      - name: MCExpr data oracle retained privately in Common, not Target ABI
+        run: |
+          grep -q "MINIAS_MC_EXPR_DIFFERENCE" assembler/src/minias_fragment_internal.h
+          ! grep -q "MINIAS_MC_EXPR_DIFFERENCE" assembler/src/minias_target_api.h
+      - name: Verify atomic MCFragment transactions across four CodeEmitters
+        run: bash tests/assembler/probe-mc-fragment-transaction.sh
+      - name: Validate MCExpr stable interned Symbol IDs and 1024-relocation GNU oracle
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-mcexpr-symbol-ids.sh
+      - name: GNU RV64 raw CFI bytecode retained as a single fragment event
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=riscv \
+            bash tests/assembler/probe-cfi-escape-blob.sh
+      - name: GNU RV32 and RV64 extended CFI nested state
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=riscv \
+            bash tests/assembler/probe-cfi-extended-gnu.sh
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=riscv32 \
+            bash tests/assembler/probe-cfi-extended-gnu.sh
+      - name: Real RV64/RV32 implicit EH GNU oracle
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=riscv \
+            bash tests/assembler/probe-cfi-eh-frame.sh
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=riscv32 \
+            bash tests/assembler/probe-cfi-eh-frame.sh
+      - name: GNU RV32/RV64 dual CFI frame section contract
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=riscv \
+            bash tests/assembler/probe-cfi-dual-frame.sh
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=riscv32 \
+            bash tests/assembler/probe-cfi-dual-frame.sh
+      - name: Check real RV64 .debug_frame CIE/FDE against GNU GAS
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=riscv \
+            bash tests/assembler/probe-cfi-debug-frame.sh
+      - name: Check real RV32 ELF32 DWARF CIE/FDE ABI against GNU GAS
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=riscv32 \
+            bash tests/assembler/probe-cfi-debug-frame.sh
+      - name: GNU RV64I MCExpr data-byte and relocation oracle
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=riscv \
+            bash tests/assembler/probe-common-mcexpr-four-arch.sh
+      - name: GNU RV64I one-pass immutable INCBIN binary DATA
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=riscv \
+            bash tests/assembler/probe-mc-immutable-incbin.sh
+      - name: GNU RV64I immutable signed LEB, unsigned LEB and string DATA
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=riscv \
+            bash tests/assembler/probe-mc-immutable-literal-data.sh
+      - name: GNU RV64I lexical .set expressions retain immutable MC fields
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=riscv \
+            bash tests/assembler/probe-mcexpr-lexical-sets.sh
+      - name: GNU RV64 typed variable DATA and long-branch relayout
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=riscv \
+            bash tests/assembler/probe-typed-variable-data-relax.sh
+      - name: GCC C-to-S RV64I base ISA versus inline-asm extension gate
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-rv64i-gcc-compiler-source.sh
+      # Do not let one newly exposed ISA discrepancy hide the other Target
+      # probes.  Preserve a failing job conclusion after collecting every
+      # individual exit status; never use continue-on-error here.
+      - name: Batch E GNU Target and SourceGraph probes, aggregate all blockers
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: |
+          set +e
+          failures=0
+          run_probe() {
+            local name="$1"
+            shift
+            echo "::group::$name"
+            "$@"
+            local code=$?
+            echo '::endgroup::'
+            if (( code != 0 )); then
+              echo "::error::MINIAS_BATCH_E_PROBE_FAIL name=$name exit=$code"
+              failures=$((failures + 1))
+            else
+              echo "MINIAS_BATCH_E_PROBE_PASS name=$name"
+            fi
+          }
+          minias="$GITHUB_WORKSPACE/build/release/bin/minic-as"
+          run_probe x86-register-plan \
+            env MINIAS="$minias" bash tests/assembler/probe-x86-register-encoding-plan-gnu.sh
+          run_probe loong-dynamic-token \
+            env MINIAS="$minias" bash tests/assembler/probe-loong-dynamic-token-descriptor.sh
+          run_probe sourcegraph-x86 \
+            env MINIAS="$minias" ARCH=x86_64 bash tests/assembler/probe-mc-source-graph-cache.sh
+          run_probe sourcegraph-rv64 \
+            env MINIAS="$minias" ARCH=riscv bash tests/assembler/probe-mc-source-graph-cache.sh
+          run_probe rv-typed-fp \
+            env MINIAS="$minias" bash tests/assembler/probe-rv-typed-fp-operands.sh
+          if (( failures != 0 )); then
+            echo "::error::MINIAS_BATCH_E_PROBES_FAILED total=$failures"
+            exit 1
+          fi
+          echo 'MINIAS_BATCH_E_PROBES=PASS all=5'
+
+
+  aarch64-vertical:
+    name: AArch64 native instruction, relocation, real LD and QEMU
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          repository: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name || github.repository }}
+      - name: Assert evaluated source is exact PR head
+        run: |
+          actual="$(git rev-parse HEAD)"
+          expected="${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}"
+          test "$actual" = "$expected"
+          echo "MINIAS_EXACT_HEAD=PASS sha=$actual"
+      - name: Install GNU AArch64 assembler, linker and QEMU
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            binutils-aarch64-linux-gnu qemu-user python3-pyelftools
+      - name: Build MiniAS on exact head
+        run: make -j2 MODE=release CFLAGS=-Werror build/release/bin/minic-as
+      - name: GNU AArch64 fill and space mapping transitions retain section semantics
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-aarch64-inst-mapping-gnu.sh
+      - name: GNU AArch64 grouped MC operand tokenizer and invalid nesting
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=aarch64 \
+            bash tests/assembler/probe-mc-operand-lexer.sh
+      - name: GNU AArch64 scalar load/store encoding table and illegal forms
+        run: |
+          command -v aarch64-linux-gnu-as
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-aarch64-scalar-memory-table.sh
+      - name: GNU AArch64 deferred scalar memory operands retain target descriptors
+        run: |
+          command -v aarch64-linux-gnu-as
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-aarch64-deferred-memory-descriptor.sh
+      - name: AArch64 scalar lo12 relocations share the typed memory descriptor
+        run: |
+          command -v aarch64-linux-gnu-as
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-aarch64-relocated-scalar-memory-table.sh
+      - name: GNU explicit ELF symbol-zero relocation and source-dot fixups
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-explicit-reloc-abs0-gnu.sh
+      - name: GNU AArch64 MCExpr data-byte and relocation oracle
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=aarch64 \
+            bash tests/assembler/probe-common-mcexpr-four-arch.sh
+      - name: GNU AArch64 160-typed-fragment relaxation stress
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=aarch64 \
+            bash tests/assembler/probe-typed-relax-four-target-stress.sh
+      - name: GNU AArch64 one-pass immutable binary DATA
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=aarch64 \
+            bash tests/assembler/probe-mc-immutable-incbin.sh
+      - name: GNU AArch64 immutable LEB and string DATA
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=aarch64 \
+            bash tests/assembler/probe-mc-immutable-literal-data.sh
+      - name: GNU AArch64 immutable parse-site MCExpr
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=aarch64 \
+            bash tests/assembler/probe-mcexpr-lexical-sets.sh
+      - name: GNU Linux AArch64 MOVQ logical-shift and checked signed lanes
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-aarch64-linux-movq-gnu.sh
+      - name: GNU AArch64 raw CFI bytecode retained as a single fragment event
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=aarch64 \
+            bash tests/assembler/probe-cfi-escape-blob.sh
+      - name: GNU AArch64 extended CFI nested state
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=aarch64 \
+            bash tests/assembler/probe-cfi-extended-gnu.sh
+      - name: Real AArch64 implicit EH GNU oracle
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=aarch64 \
+            bash tests/assembler/probe-cfi-eh-frame.sh
+      - name: GNU AArch64 dual CFI frame section contract
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=aarch64 \
+            bash tests/assembler/probe-cfi-dual-frame.sh
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+          MINIAS_CFI_ARCH_ONLY=aarch64 \
+            bash tests/assembler/probe-cfi-source-section-collision-gnu.sh
+      - name: GNU AArch64 late fragment symbol differences in machine operands
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-aarch64-retained-delta.sh
+      - name: GNU AArch64 typed literal pool mixed-width identity and relocation
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-aarch64-literal-pool-order.sh
+      - name: GNU AArch64 fixed .org and forward DATA layout
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=aarch64 \
+            bash tests/assembler/probe-mc-org-data-fixedpoint.sh
+      - name: GNU AArch64 retained variable MCExpr fixed point
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=aarch64 \
+            bash tests/assembler/probe-mcexpr-variable-fixedpoint.sh
+      - name: GNU AArch64 deferred symbolic LEB layout and byte oracle
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=aarch64 \
+            bash tests/assembler/probe-mc-deferred-leb-gnu.sh
+      - name: GNU AArch64 .size signed end-anchor and forward DATA
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=aarch64 \
+            bash tests/assembler/probe-mcexpr-size-end-anchor.sh
+      - name: Check AArch64 real .debug_frame CIE/FDE against GNU GAS
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=aarch64 \
+            bash tests/assembler/probe-cfi-debug-frame.sh
+      - name: AArch64 .req aliases only resolve in typed register positions
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-aarch64-typed-register-alias.sh
+      - name: AArch64 Linux PC dot branches use immediate displacement not undefined ELF symbols
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-aarch64-dot-branch-real-link.sh
+      - name: Test independent AArch64 backend through shared ELF engine
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-aarch64-elf64.sh
+      - name: GNU AArch64 typed Memory and ALU branch composite deferred operands
+        if: ${{ !cancelled() }}
+        run: |
+          command -v aarch64-linux-gnu-as
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-aarch64-typed-composite-memory-gnu.sh

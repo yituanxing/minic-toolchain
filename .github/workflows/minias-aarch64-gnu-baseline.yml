@@ -1,0 +1,66 @@
+name: MiniAS AArch64 Linux GNU-AS Independent Oracle
+
+# This oracle deliberately uses GNU AS for every production assembly object.
+# Its job is to distinguish QEMU/guest-configuration failures from MiniAS
+# correctness failures; it MUST NEVER be counted as a MiniAS runtime PASS.
+on:
+  workflow_dispatch:
+  push:
+    branches: [refactor/minias-target-isa-abi-core]
+    paths:
+      - '.github/workflows/minias-aarch64-gnu-baseline.yml'
+      - 'tests/external/linux/minias_aarch64_gnu_baseline.sh'
+
+permissions:
+  contents: read
+
+jobs:
+  gnu-as-aarch64-oracle:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[minias-gnu-arm-baseline]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 70
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Install exact GNU AArch64 Kbuild + QEMU dependencies
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu libc6-dev-arm64-cross \
+            qemu-system-arm make bc bison flex libssl-dev libelf-dev \
+            curl xz-utils cpio gzip file python3-pyelftools
+
+      - name: GNU AS reference Linux 6.6.143 Image and identical QEMU P0-init
+        id: oracle
+        shell: bash
+        timeout-minutes: 60
+        env:
+          WORK_DIR: ${{ github.workspace }}/build/minias-aarch64-gnu-oracle
+          LINUX_VERSION: 6.6.143
+        run: bash tests/external/linux/minias_aarch64_gnu_baseline.sh
+
+      - name: Preserve independent GNU oracle build and guest evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: minias-aarch64-gnu-oracle
+          path: |
+            build/minias-aarch64-gnu-oracle/*.log
+            build/minias-aarch64-gnu-oracle/*.sha256
+            build/minias-aarch64-gnu-oracle/out/arch/arm64/boot/Image
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Summarize GNU independent oracle (not MiniAS acceptance)
+        if: always()
+        run: |
+          {
+            echo '### GNU AS AArch64 kernel oracle'
+            echo 'All production assembly and GNU link use GNU tools; the exact same upstream source, Kconfig, initramfs and QEMU args as the MiniAS lane.'
+            echo 'This is **NOT** a MiniAS runtime PASS; it isolates baseline QEMU or kernel behavior.'
+            echo 'Result: `${{ steps.oracle.outcome }}`'
+          } >> "$GITHUB_STEP_SUMMARY"

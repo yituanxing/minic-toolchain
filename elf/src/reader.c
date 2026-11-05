@@ -1,6 +1,6 @@
 #include "minielf.h"
+#include "minielf_elf_abi.h"
 
-#include <elf.h>
 #include <limits.h>
 #include <string.h>
 
@@ -433,6 +433,66 @@ size_t minielf_rela_count(const MiniElfView *view,
     }
     return (size_t)(relocation_section->size /
                     relocation_section->entry_size);
+}
+
+size_t minielf_rel_count(const MiniElfView *view,
+                         const MiniElfSection *relocation_section) {
+    uint64_t minimum;
+
+    if (view == NULL || relocation_section == NULL ||
+        relocation_section->type != SHT_REL) {
+        return 0U;
+    }
+    minimum = view->elf_class == ELFCLASS64 ? 16U : 8U;
+    if (relocation_section->entry_size < minimum ||
+        relocation_section->entry_size == 0U ||
+        relocation_section->size % relocation_section->entry_size != 0U ||
+        relocation_section->size / relocation_section->entry_size > SIZE_MAX) {
+        return 0U;
+    }
+    return (size_t)(relocation_section->size /
+                    relocation_section->entry_size);
+}
+
+bool minielf_rel(const MiniElfView *view,
+                 size_t relocation_section_index,
+                 size_t relocation_index,
+                 MiniElfRel *rel_out) {
+    MiniElfSection table;
+    uint64_t minimum;
+    uint64_t relative;
+    uint64_t absolute;
+    const unsigned char *data;
+
+    if (rel_out == NULL ||
+        !minielf_section(view, relocation_section_index, &table) ||
+        table.type != SHT_REL) {
+        return false;
+    }
+    minimum = view->elf_class == ELFCLASS64 ? 16U : 8U;
+    if (table.entry_size < minimum ||
+        relocation_index >= minielf_rel_count(view, &table) ||
+        relocation_index > UINT64_MAX / table.entry_size) {
+        return false;
+    }
+    relative = (uint64_t)relocation_index * table.entry_size;
+    if (table.offset > UINT64_MAX - relative) {
+        return false;
+    }
+    absolute = table.offset + relative;
+    if (absolute > SIZE_MAX ||
+        !range_ok((size_t)absolute, (size_t)minimum, view->size)) {
+        return false;
+    }
+    data = view->data + (size_t)absolute;
+    if (view->elf_class == ELFCLASS64) {
+        rel_out->offset = load_u64(view, data);
+        rel_out->info = load_u64(view, data + 8U);
+    } else {
+        rel_out->offset = load_u32(view, data);
+        rel_out->info = load_u32(view, data + 4U);
+    }
+    return true;
 }
 
 bool minielf_rela(const MiniElfView *view,

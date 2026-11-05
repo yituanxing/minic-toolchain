@@ -1,0 +1,279 @@
+name: MiniLD Four-Arch Frozen Linux First Link Recertification
+
+# Reuse the SHA-verified GNU Kbuild pool and recorded true kallsyms1 LD argv
+# from the prior four-architecture source run. Restore a durable producer
+# artifact when the Actions cache has been evicted; never rebuild GNU C in
+# this recertification. One independent GNU/MiniLD link replay only.
+# A first-kallsyms1 PASS is not a vmlinux/Image/guest P1 certification.
+on:
+  workflow_dispatch:
+    inputs:
+      producer_run_id:
+        description: 'Run that produced both the GNU object caches and link artifacts'
+        required: true
+        type: string
+        default: '41856204967'
+      producer_sha:
+        description: 'Full original GNU corpus producer SHA'
+        required: true
+        type: string
+        default: '3107037abc80b0c0019129364693422aee2818aa'
+  push:
+    branches:
+      - refactor/minias-target-isa-abi-core
+    paths:
+      - .github/workflows/minild-fourarch-linux-cached-final-recert.yml
+      - linker/**
+      - tools/ci/minild-linux-real-final-replay.sh
+      - tools/ci/minild-aarch64-shadow-dynsym-oracle.py
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  four-frozen-linux-first-link:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[minild-cached-fourarch]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [rv32, x86_64, aarch64, loongarch64]
+    env:
+      PRODUCER_RUN_ID: ${{ inputs.producer_run_id || '41856204967' }}
+      PRODUCER_SHA: ${{ inputs.producer_sha || '3107037abc80b0c0019129364693422aee2818aa' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Install link-only GNU ELF oracles without Linux C compilers
+        shell: bash
+        timeout-minutes: 8
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get -o Acquire::Retries=3 update -qq
+          sudo apt-get -o Acquire::Retries=3 install -y -qq --no-install-recommends \
+            gcc make binutils python3 zstd
+          case '${{ matrix.arch }}' in
+            rv32)
+              sudo apt-get -o Acquire::Retries=3 install -y -qq --no-install-recommends \
+                binutils-riscv64-linux-gnu ;;
+            x86_64) ;;
+            aarch64)
+              sudo apt-get -o Acquire::Retries=3 install -y -qq --no-install-recommends \
+                binutils-aarch64-linux-gnu ;;
+            loongarch64)
+              sudo apt-get -o Acquire::Retries=3 install -y -qq --no-install-recommends \
+                binutils-loongarch64-linux-gnu ;;
+          esac
+
+      - name: Restore exact GNU Kbuild frozen object tree when cached
+        id: cache
+        uses: actions/cache/restore@v4
+        with:
+          path: build/minild-linux-fourarch/${{ matrix.arch }}/${{ (matrix.arch == 'rv32' || matrix.arch == 'x86_64') && 'gnu-out' || 'out' }}
+          key: minild-gnu-linux-first-kallsyms1-6.6.143-${{ matrix.arch }}-${{ env.PRODUCER_SHA }}
+          fail-on-cache-miss: false
+
+      - name: Download immutable GNU Kbuild archive when cache was evicted
+        if: steps.cache.outputs.cache-hit != 'true'
+        uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ env.PRODUCER_RUN_ID }}
+          name: minild-gnu-kbuild-tree-${{ matrix.arch }}-${{ env.PRODUCER_SHA }}
+          path: build/minild-linux-fourarch/${{ matrix.arch }}
+
+      - name: Verify and unpack immutable GNU Kbuild archive
+        if: steps.cache.outputs.cache-hit != 'true'
+        shell: bash
+        timeout-minutes: 8
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/minild-linux-fourarch/${{ matrix.arch }}"
+          case '${{ matrix.arch }}' in
+            rv32|x86_64) tree=gnu-out ;;
+            aarch64|loongarch64) tree=out ;;
+          esac
+          test -s "$work/gnu-kbuild-frozen-tree.sha256"
+          shopt -s nullglob
+          parts=("$work"/gnu-kbuild-frozen-tree.tar.zst.part*)
+          if (( ${#parts[@]} == 0 )); then
+            echo 'MINILD_FROZEN=FAIL producer_archive_parts_absent' >&2
+            exit 81
+          fi
+          python3 -c '
+          from pathlib import Path
+          import re
+          import sys
+
+          work = Path(sys.argv[1])
+          actual = sorted(p.name for p in work.glob(
+              "gnu-kbuild-frozen-tree.tar.zst.part*"))
+          listed = []
+          for line in (work / "gnu-kbuild-frozen-tree.sha256").read_text().splitlines():
+              match = re.fullmatch(
+                  r"[0-9a-f]{64}  (gnu-kbuild-frozen-tree\.tar\.zst\.part\d{3})",
+                  line)
+              if match is None:
+                  raise SystemExit("MINILD_FROZEN=FAIL invalid_archive_manifest")
+              listed.append(match.group(1))
+          if not listed or sorted(set(listed)) != actual or len(listed) != len(actual):
+              raise SystemExit("MINILD_FROZEN=FAIL archive_chunk_set_mismatch")
+          print(f"MINILD_FROZEN=ARCHIVE_SHA_MANIFEST_PASS parts={len(actual)}")
+          ' "$work"
+          (cd "$work" && \
+            sha256sum --quiet --check gnu-kbuild-frozen-tree.sha256)
+          # Check every tar entry before extraction: only the expected Kbuild
+          # subtree is admissible, never absolute paths or parent traversal.
+          cat "${parts[@]}" | tar --zstd -tf - |
+            python3 -c '
+          from pathlib import PurePosixPath
+          import sys
+
+          root = sys.argv[1]
+          entries = 0
+          for line in sys.stdin:
+              name = line.strip().rstrip("/")
+              path = PurePosixPath(name)
+              if (not name or path.is_absolute() or
+                      ".." in path.parts or path.parts[0] != root):
+                  raise SystemExit("MINILD_FROZEN=FAIL unsafe_archive_path")
+              entries += 1
+          if entries < 500:
+              raise SystemExit("MINILD_FROZEN=FAIL incomplete_archive_tree")
+          print(f"MINILD_FROZEN=ARCHIVE_MANIFEST_PASS entries={entries}")
+          ' "$tree"
+          cat "${parts[@]}" | tar -C "$work" --zstd -xf -
+          test -s "$work/$tree/vmlinux"
+          echo "MINILD_FROZEN=ARTIFACT_RESTORED arch=${{ matrix.arch }} cache_miss=true"
+
+      - name: Download first-kallsyms1 captured argv and GNU object hash manifest
+        uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ env.PRODUCER_RUN_ID }}
+          name: minild-real-kallsyms1-${{ matrix.arch }}-${{ env.PRODUCER_SHA }}
+          path: build/minild-linux-fourarch/${{ matrix.arch }}
+
+      - name: Authenticate producer inputs, machine and current replay cwd
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          arch='${{ matrix.arch }}'
+          work="$GITHUB_WORKSPACE/build/minild-linux-fourarch/$arch"
+          case "$arch" in
+            rv32|x86_64) out="$work/gnu-out" ;;
+            aarch64|loongarch64) out="$work/out" ;;
+          esac
+          ev="$work/ld-evidence"
+          capture="$work/ld-capture"
+          mkdir -p "$ev"
+          test -s "$out/vmlinux"
+          test -s "$out/.config"
+          test -s "$capture/first-kallsyms1.argv0"
+          test -s "$capture/first-kallsyms1.gnu-ld.sha256"
+          test -s "$ev/gnu-kbuild-objects.sha256"
+          test -s "$ev/gnu-kbuild-identity.sha256"
+          recorded_cwd=$(<"$capture/first-kallsyms1.cwd")
+          test "$recorded_cwd" = "$(realpath "$out")" || {
+            echo "MINILD_FROZEN=FAIL original_linker_cwd_mismatch=$recorded_cwd" >&2
+            exit 81
+          }
+          sha256sum --quiet --check "$capture/first-kallsyms1.gnu-ld.sha256"
+          sha256sum --quiet --check "$ev/gnu-kbuild-identity.sha256"
+          python3 - "$out" "$ev/gnu-kbuild-objects.sha256" <<'PY_MANIFEST'
+          from pathlib import Path
+          import re
+          import sys
+
+          out, manifest = map(Path, sys.argv[1:])
+          lines = manifest.read_text().splitlines()
+          if len(lines) < 500:
+              raise SystemExit('MINILD_FROZEN=FAIL implausibly_small_GNU_object_pool')
+          seen = set()
+          for line in lines:
+              match = re.fullmatch(r'([0-9a-f]{64})  (.+\.(?:o|a))', line)
+              if match is None:
+                  raise SystemExit('MINILD_FROZEN=FAIL malformed_GNU_manifest')
+              path = Path(match.group(2))
+              if path.is_absolute() or '..' in path.parts or path in seen:
+                  raise SystemExit('MINILD_FROZEN=FAIL unsafe_or_duplicate_object_path')
+              seen.add(path)
+          print(f'MINILD_FROZEN=MANIFEST_PASS objects={len(lines)}')
+          PY_MANIFEST
+          (cd "$out" && sha256sum --quiet --check "$ev/gnu-kbuild-objects.sha256")
+          {
+            printf 'producer_run_id=%s\n' "$PRODUCER_RUN_ID"
+            printf 'producer_sha=%s\n' "$PRODUCER_SHA"
+            printf 'replay_head=%s\n' "$GITHUB_SHA"
+            printf 'arch=%s\n' "$arch"
+            printf 'GNU_C_sources_recompiled=false\nGNU_AS_objects_rebuilt=false\n'
+            printf 'MiniLD_final_vmlinux_Image_QEMU=NOT_RUN\n'
+          } >"$ev/frozen-replay-identity.txt"
+          echo "MINILD_FROZEN=PASS arch=$arch GNU_object_sha_verified=true cwd_exact=true"
+
+      - name: Verify four script and GC target policies before frozen replay
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 tools/ci/minild-check-target-policies.py \
+            linker/src/linker_target_elf.inc MINILD_FROZEN
+          make -j4 MODE=release CFLAGS=-Werror build/release/bin/minic-ld
+
+      - name: Replay real GNU Kbuild first link on original frozen objects
+        shell: bash
+        timeout-minutes: 8
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/minild-linux-fourarch/${{ matrix.arch }}"
+          # LoongArch only: capture BFD's real /DISCARD/ section decisions
+          # during the already-required GNU first-kallsyms1 control link.
+          if [[ '${{ matrix.arch }}' == loongarch64 ]]; then
+            export MINILD_LINUX_GNU_MAP=1
+          fi
+          bash tools/ci/minild-linux-real-final-replay.sh \
+            "$work/ld-capture" \
+            "$GITHUB_WORKSPACE/build/release/bin/minic-ld" \
+            "$work/ld-evidence"
+
+      # Diagnostic only: a second GNU link with an isolated copy of the
+      # AArch64 kernel script retains discarded dynamic symbol metadata.
+      # It reuses the same SHA-verified GNU objects and never gates MiniLD.
+      - name: Diagnose GNU AArch64 discarded dynsym ordinals (non-gating)
+        if: always() && matrix.arch == 'aarch64'
+        continue-on-error: true
+        shell: bash
+        timeout-minutes: 6
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/minild-linux-fourarch/aarch64"
+          python3 tools/ci/minild-aarch64-shadow-dynsym-oracle.py \
+            "$work/ld-capture" "$work/ld-evidence"
+
+      - name: Preserve logs, true GNU source identity and exact linker argv
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: minild-cached-kallsyms1-${{ matrix.arch }}-${{ github.sha }}
+          path: |
+            build/minild-linux-fourarch/${{ matrix.arch }}/ld-capture/
+            build/minild-linux-fourarch/${{ matrix.arch }}/ld-evidence/
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: State the bounded Linux acceptance honestly
+        if: always()
+        run: |
+          {
+            echo '### Frozen GNU Linux first-link recert: ${{ matrix.arch }}'
+            echo 'Source Linux 6.6.143 Kbuild producer: ${{ env.PRODUCER_RUN_ID }}.'
+            echo 'No Linux C rebuild or new GNU Kbuild.'
+            echo 'Actual first kallsyms1 GNU/MiniLD result: inspect the replay job.'
+            echo 'Full MiniLD vmlinux/Image/guest P0/P1: **NOT RUN**.'
+          } >>"$GITHUB_STEP_SUMMARY"

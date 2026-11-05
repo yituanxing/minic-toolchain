@@ -1,0 +1,105 @@
+name: MiniAS Affected Target Seven-Way Linux ISA Frontier
+
+# Targeted LoongArch-only replay after grouped BYTEPICK/IOCSR/FCSR/LI.W
+# ISA support, using the identical SHA-pinned original GNU .s shard input.
+# Not an ELF semantic parity or Linux P1 acceptance.
+# Exact GNU original Kbuild shard corpus replay after grouped support for GCC's
+# location-assignment '.L2 = .' through the Common fragment-anchor path.
+# After a batch of target-local encoding changes, rerun only affected
+# x86-64 and LoongArch64 on the SAME frozen original Linux GNU Kbuild inputs.
+on:
+  workflow_dispatch:
+  push:
+    branches: [refactor/minias-target-isa-abi-core]
+    paths:
+      - '.github/workflows/minias-linux-two-target-seven-replay.yml'
+      - 'assembler/src/x86_64_target.c'
+      - 'assembler/src/loongarch64_target.c'
+      - 'tests/assembler/probe-x86-loong-base.sh'
+      - 'tools/ci/minias-linux-kbuild-seven-v1.py'
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  shard:
+    # Explicit grouped-campaign request; don't run 14 shards on every
+    # one-line target fix. Workflow dispatch is the manual alternative.
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[minias-replay-2x7]') || contains(github.event.head_commit.message, '[minias-replay-loong-7]') || contains(github.event.head_commit.message, '[minias-replay-x86-7]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        target: ${{ fromJSON(contains(github.event.head_commit.message, '[minias-replay-loong-7]') && '["loongarch64"]' || contains(github.event.head_commit.message, '[minias-replay-x86-7]') && '["x86_64"]' || '["x86_64","loongarch64"]') }}
+        shard: [0, 1, 2, 3, 4, 5, 6]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          repository: ${{ github.repository }}
+          run-id: '40461070882'
+          github-token: ${{ github.token }}
+          name: minias-linux-kbuild-${{ matrix.target }}-shard${{ matrix.shard }}
+          path: build/minias-frozen
+      - name: Verify full GNU Linux source and original C/S/CMD hashes
+        shell: bash
+        run: |
+          python3 - '${{ matrix.target }}' '${{ matrix.shard }}' <<'PY_CHECK'
+          import importlib.util, pathlib, sys
+          target, shard = sys.argv[1], int(sys.argv[2])
+          golden = {
+            "x86_64": "9065a6925d9e5081336894e42f7544f9d671efcb5d70eb499a24884988d00ac1",
+            "loongarch64": "203ed9df2cb4408cd8d0ee48b5de9f2a6444d115e8cdca649cf70995d6fc7017",
+          }
+          spec = importlib.util.spec_from_file_location(
+            "minias_kbuild", "tools/ci/minias-linux-kbuild-seven-v1.py")
+          tool = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(tool)
+          m, digest, owners = tool.checked_shard(
+            pathlib.Path(f"build/minias-frozen/shard-{shard}.tar.gz"),target,shard)
+          assert digest == golden[target], (target, shard, digest)
+          assert m["build_exit"] == 0 and m["full_kbuild"] and owners
+          print(f"MINIAS_KBUILD_PIN=PASS target={target} shard={shard} "
+                f"inputs={len(owners)} exact_manifest={digest} GCC_rebuilt=NO")
+          PY_CHECK
+      - name: Build only MiniAS from current source SHA
+        run: make -j2 MODE=release CFLAGS=-Werror build/release/bin/minic-as
+      - name: Scan complete affected architecture shard (2GiB per-file guard)
+        run: |
+          python3 tools/ci/minias-linux-kbuild-seven-v1.py scan \
+            --target '${{ matrix.target }}' --shard '${{ matrix.shard }}' \
+            --archive 'build/minias-frozen/shard-${{ matrix.shard }}.tar.gz' \
+            --minias "$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            --dest 'build/minias-pareto/${{ matrix.target }}-${{ matrix.shard }}'
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: minias-pareto-${{ matrix.target }}-${{ matrix.shard }}
+          path: build/minias-pareto/${{ matrix.target }}-${{ matrix.shard }}/results.json
+          if-no-files-found: warn
+          retention-days: 14
+
+  aggregate:
+    needs: shard
+    if: always() && needs.shard.result == 'success'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: minias-pareto-*
+          path: build/minias-pareto-collected
+      - name: Validate all 14 distinct owners and target-only Pareto
+        run: |
+          python3 tools/ci/minias-linux-kbuild-seven-v1.py aggregate \
+            --targets "${{ contains(github.event.head_commit.message, '[minias-replay-loong-7]') && 'loongarch64' || contains(github.event.head_commit.message, '[minias-replay-x86-7]') && 'x86_64' || 'x86_64,loongarch64' }}" \
+            --results build/minias-pareto-collected \
+            --dest build/minias-pareto-summary.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: minias-two-ISA-full-source-frontier
+          path: build/minias-pareto-summary.json
+          if-no-files-found: error
+          retention-days: 14

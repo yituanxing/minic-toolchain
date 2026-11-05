@@ -1,0 +1,232 @@
+name: MiniLD Four-Arch Real Linux Final Link Trial
+
+# Four independent GNU-produced Linux 6.6.143 Kbuild controls, followed by
+# GNU/MiniLD replay of their exact first Kbuild kallsyms1 linker argv. The
+# existing x86/RV32 scripts also run MiniAS preflight on separate outputs.
+# Their GNU control pool is the only source of MiniLD final-link inputs.
+# This is an experimental first-link frontier, not a vmlinux/Image/QEMU
+# certification by MiniLD. RV64 has its own frozen GNU Kbuild replay lane.
+on:
+  workflow_dispatch:
+
+# Rebuilding four GNU Linux trees is a provenance-refresh operation, not a
+# normal MiniLD iteration gate. Use the SHA-verified frozen Kbuild replay
+# workflow for branch pushes; run this producer explicitly when inputs change.
+
+permissions:
+  contents: read
+
+jobs:
+  four-real-kallsyms1:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [rv32, x86_64, aarch64, loongarch64]
+    env:
+      LINUX_VERSION: 6.6.143
+      MINIAS: ${{ github.workspace }}/build/release/bin/minic-as
+      WORK_DIR: ${{ github.workspace }}/build/minild-linux-fourarch/${{ matrix.arch }}
+      MINILD_GNU_LD_WRAPPER: ${{ github.workspace }}/tools/ci/minild-linux-real-final-capture-ld.sh
+      MINILD_LINUX_FINAL_CAPTURE_DIR: ${{ github.workspace }}/build/minild-linux-fourarch/${{ matrix.arch }}/ld-capture
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Install exact GNU Kbuild and target QEMU dependencies
+        shell: bash
+        timeout-minutes: 15
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get -o Acquire::Retries=3 update -qq
+          sudo apt-get -o Acquire::Retries=3 install -y -qq --no-install-recommends \
+            gcc binutils make bc bison flex libssl-dev libelf-dev \
+            curl xz-utils cpio gzip zstd file python3-pyelftools
+          case '${{ matrix.arch }}' in
+            rv32)
+              sudo apt-get -o Acquire::Retries=3 install -y -qq --no-install-recommends \
+                gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
+                qemu-system-misc opensbi device-tree-compiler
+              echo "MINILD_LINUX_GNU_LD=$(command -v riscv64-linux-gnu-ld)" >>"$GITHUB_ENV"
+              ;;
+            x86_64)
+              sudo apt-get -o Acquire::Retries=3 install -y -qq --no-install-recommends \
+                qemu-system-x86 gcc-multilib libc6-dev-i386
+              echo "MINILD_LINUX_GNU_LD=$(command -v ld)" >>"$GITHUB_ENV"
+              ;;
+            aarch64)
+              sudo apt-get -o Acquire::Retries=3 install -y -qq --no-install-recommends \
+                gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu \
+                libc6-dev-arm64-cross qemu-system-arm
+              echo "MINILD_LINUX_GNU_LD=$(command -v aarch64-linux-gnu-ld)" >>"$GITHUB_ENV"
+              ;;
+            loongarch64)
+              sudo apt-get -o Acquire::Retries=3 install -y -qq --no-install-recommends \
+                gcc-13-loongarch64-linux-gnu binutils-loongarch64-linux-gnu \
+                libc6-dev-loong64-cross qemu-system-misc
+              echo "MINILD_LINUX_GNU_LD=$(command -v loongarch64-linux-gnu-ld)" >>"$GITHUB_ENV"
+              ;;
+          esac
+
+      - name: Verify checked-in five-target script and GC policies
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 tools/ci/minild-check-target-policies.py \
+            linker/src/linker_target_elf.inc MINILD_LINUX_TRIAL
+          test "$(git rev-parse HEAD)" = '${{ github.sha }}'
+          test -x "$MINILD_GNU_LD_WRAPPER"
+          make -j4 MODE=release CFLAGS=-Werror \
+            build/release/bin/minic-as build/release/bin/minic-ld
+          echo 'MINILD_LINUX_TRIAL=TOOLS_PASS GNU_compiler_and_assembler_unchanged=true'
+
+      - name: Existing GNU Kbuild control, capture first real link and guest checks
+        id: gnu_kernel
+        shell: bash
+        timeout-minutes: 105
+        continue-on-error: true
+        run: |
+          set -Eeuo pipefail
+          mkdir -p "$WORK_DIR"
+          printf 'MINILD_LINUX_TRIAL=GNU_BUILD_START arch=%s release=%s\n' \
+            '${{ matrix.arch }}' "$LINUX_VERSION"
+          case '${{ matrix.arch }}' in
+            rv32)
+              unset RV32_GNU_GOLDEN_CACHE_HIT
+              MINIAS_RV32_P1=1 bash tests/external/linux/minias_rv32_linux.sh
+              ;;
+            x86_64)
+              bash tests/external/linux/minias_x86_64_linux.sh
+              ;;
+            aarch64)
+              AARCH64_AS_BACKEND=gnu bash tests/external/linux/minias_aarch64_linux.sh
+              ;;
+            loongarch64)
+              LOONG_AS_BACKEND=gnu bash tests/external/linux/minias_loongarch64_linux.sh
+              ;;
+          esac
+
+      # The GNU object pool is preserved before any MiniLD experiment. A
+      # late QEMU failure does not retroactively invalidate captured GNU
+      # kallsyms1 linkage; both outcomes are reported separately.
+      - name: Verify exact GNU Kbuild capture and hash its object pool
+        if: always()
+        id: corpus
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          case '${{ matrix.arch }}' in
+            rv32|x86_64) out="$WORK_DIR/gnu-out" ;;
+            aarch64|loongarch64) out="$WORK_DIR/out" ;;
+          esac
+          capture="$MINILD_LINUX_FINAL_CAPTURE_DIR"
+          if [[ ! -s "$capture/first-kallsyms1.argv0" ||
+                ! -s "$capture/first-kallsyms1.gnu-ld.sha256" ||
+                ! -s "$out/.config" || ! -s "$out/vmlinux" ]]; then
+            echo 'MINILD_LINUX_TRIAL=FAIL no_complete_GNU_link_input_universe' >&2
+            exit 81
+          fi
+          mkdir -p "$WORK_DIR/ld-evidence"
+          (cd "$out" && find . -type f \( -name '*.o' -o -name '*.a' \) -print0 |
+            sort -z | xargs -0 sha256sum) >"$WORK_DIR/ld-evidence/gnu-kbuild-objects.sha256"
+          test "$(wc -l <"$WORK_DIR/ld-evidence/gnu-kbuild-objects.sha256")" -ge 500
+          cp "$out/.config" "$WORK_DIR/ld-evidence/gnu-kbuild.config"
+          sha256sum "$out/.config" "$out/vmlinux" \
+            >"$WORK_DIR/ld-evidence/gnu-kbuild-identity.sha256"
+          printf 'GNU_KBUILD_OBJECT_POOL=PASS arch=%s objects=%s QEMU_lane=%s\n' \
+            '${{ matrix.arch }}' \
+            "$(wc -l <"$WORK_DIR/ld-evidence/gnu-kbuild-objects.sha256")" \
+            '${{ steps.gnu_kernel.outcome }}'
+          echo "out_dir=$out" >>"$GITHUB_OUTPUT"
+          echo "cache_ready=true" >>"$GITHUB_OUTPUT"
+
+      - name: Save frozen GNU Kbuild inputs before testing MiniLD
+        if: always() && steps.corpus.outputs.cache_ready == 'true'
+        uses: actions/cache/save@v4
+        continue-on-error: true
+        with:
+          path: ${{ steps.corpus.outputs.out_dir }}
+          key: minild-gnu-linux-first-kallsyms1-6.6.143-${{ matrix.arch }}-${{ github.sha }}
+
+      # GitHub may evict a successfully written Actions cache during bursts
+      # of unrelated CI.  Publish an independently downloadable, SHA-checked
+      # complete GNU Kbuild tree as immutable artifact chunks.  Split AFTER
+      # zstd compression so no uploaded file approaches the 2 GiB limit.
+      - name: Seal complete GNU Kbuild tree independently of cache eviction
+        if: always() && steps.corpus.outputs.cache_ready == 'true'
+        shell: bash
+        timeout-minutes: 12
+        run: |
+          set -Eeuo pipefail
+          case '${{ matrix.arch }}' in
+            rv32|x86_64) tree=gnu-out ;;
+            aarch64|loongarch64) tree=out ;;
+          esac
+          test -s "$WORK_DIR/$tree/vmlinux"
+          test -s "$WORK_DIR/ld-evidence/gnu-kbuild-objects.sha256"
+          tar -C "$WORK_DIR" --zstd -cf - "$tree" |
+            split -b 1700m -d -a 3 - \
+              "$WORK_DIR/gnu-kbuild-frozen-tree.tar.zst.part"
+          (cd "$WORK_DIR" && \
+            sha256sum gnu-kbuild-frozen-tree.tar.zst.part* \
+              >gnu-kbuild-frozen-tree.sha256)
+          test -s "$WORK_DIR/gnu-kbuild-frozen-tree.sha256"
+          echo "MINILD_GNU_TREE_ARTIFACT=SEALED arch=${{ matrix.arch }} "
+          wc -c "$WORK_DIR"/gnu-kbuild-frozen-tree.tar.zst.part*
+
+      - name: Keep durable GNU Kbuild inputs independently of Actions cache
+        if: always() && steps.corpus.outputs.cache_ready == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: minild-gnu-kbuild-tree-${{ matrix.arch }}-${{ github.sha }}
+          path: |
+            build/minild-linux-fourarch/${{ matrix.arch }}/gnu-kbuild-frozen-tree.tar.zst.part*
+            build/minild-linux-fourarch/${{ matrix.arch }}/gnu-kbuild-frozen-tree.sha256
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Differential replay of actual Linux kallsyms1 via GNU and MiniLD
+        id: replay
+        if: always() && steps.corpus.outputs.cache_ready == 'true'
+        shell: bash
+        timeout-minutes: 10
+        run: |
+          set -Eeuo pipefail
+          bash tools/ci/minild-linux-real-final-replay.sh \
+            "$MINILD_LINUX_FINAL_CAPTURE_DIR" \
+            "$GITHUB_WORKSPACE/build/release/bin/minic-ld" \
+            "$WORK_DIR/ld-evidence"
+
+      - name: Preserve exact link commands, input hashes and failures
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: minild-real-kallsyms1-${{ matrix.arch }}-${{ github.sha }}
+          path: |
+            build/minild-linux-fourarch/${{ matrix.arch }}/ld-capture/
+            build/minild-linux-fourarch/${{ matrix.arch }}/ld-evidence/
+            build/minild-linux-fourarch/${{ matrix.arch }}/kbuild.log
+            build/minild-linux-fourarch/${{ matrix.arch }}/**/qemu*.log
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: State exact acceptance boundaries
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo '### MiniLD real Linux first-link trial: ${{ matrix.arch }}'
+            echo 'GNU Linux Kbuild and runtime control: `${{ steps.gnu_kernel.outcome }}`.'
+            echo 'SHA-verified frozen GNU object pool: `${{ steps.corpus.outcome }}`.'
+            echo 'GNU versus MiniLD real kallsyms1 link: `${{ steps.replay.outcome }}`.'
+            echo 'MiniLD full vmlinux, Image and QEMU: **NOT RUN**.'
+            echo 'Four production script/GC policies: **UNCHANGED** (trial override only).'
+          } >>"$GITHUB_STEP_SUMMARY"
+          if [[ '${{ steps.gnu_kernel.outcome }}' != success ]]; then
+            echo 'MINILD_LINUX_TRIAL=INCOMPLETE GNU_Kbuild_or_QEMU_failed=true' >&2
+            exit 82
+          fi

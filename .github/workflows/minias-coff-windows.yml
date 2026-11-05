@@ -1,0 +1,88 @@
+name: MiniAS x86-64 COFF Real Windows Link and Run
+
+# The candidate must be compiled on a Windows runner as a native MinGW PE
+# program, emit a real COFF .obj, link with MSVC link.exe and execute the PE
+# on Windows. Linux Wine/QEMU or a successful object dump alone is not PASS.
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - '.github/workflows/minias-coff-windows.yml'
+      - 'assembler/**'
+      - 'elf/**'
+      - 'tools/minic-as/**'
+      - 'Makefile'
+      - 'tests/assembler/probe-coff-windows-link-run.ps1'
+      - 'tests/assembler/probe-minias-windows-atomic-output.ps1'
+
+permissions:
+  contents: read
+
+jobs:
+  windows-pe-execution:
+    if: github.event_name != 'pull_request' || github.head_ref == 'refactor/minias-target-isa-abi-core'
+    runs-on: windows-latest
+    timeout-minutes: 30
+    env:
+      SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Set up native MinGW-w64 GCC and Make
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            mingw-w64-x86_64-gcc
+            git
+            make
+            python
+
+      - name: Build exactly tested MiniAS as a Windows-native executable
+        id: native_build
+        shell: msys2 {0}
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          command -v gcc
+          gcc -dumpmachine | grep -qi 'mingw'
+          make -j4 MODE=release CC=gcc CFLAGS=-Werror build/release/bin/minic-as
+          test -x build/release/bin/minic-as.exe
+          echo "MINGW_BIN=$(cygpath -w /mingw64/bin)" >> "$GITHUB_ENV"
+
+      - name: Configure native Microsoft linker and COFF inspectors
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: amd64
+
+      - name: Verify COFF records then link and execute real Windows PE
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $false
+          $env:PATH = "$env:MINGW_BIN;$env:PATH"
+          Get-Command link.exe, cl.exe, dumpbin.exe | Out-Host
+          ./tests/assembler/probe-coff-windows-link-run.ps1 `
+            -MiniAsPath 'build/release/bin/minic-as.exe'
+
+      - name: Verify native Win32 atomic object publication and ACL preservation
+        if: ${{ !cancelled() && steps.native_build.outcome == 'success' }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $false
+          $env:PATH = "$env:MINGW_BIN;$env:PATH"
+          ./tests/assembler/probe-minias-windows-atomic-output.ps1 `
+            -MiniAsPath 'build/release/bin/minic-as.exe'
+
+      - name: Preserve candidate COFF Microsoft-link evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: minias-coff-windows-native
+          path: build/coff-windows-native/
+          if-no-files-found: ignore
+          retention-days: 14

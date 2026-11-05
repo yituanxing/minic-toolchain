@@ -87,6 +87,85 @@ static uint64_t load_u64(const MiniElfView *view,
     return value;
 }
 
+/* SHT_GROUP is an array of 32-bit words even in ELF64. Its first word is
+ * GRP_* flags, subsequent words are original section-header indices. The
+ * rewrite deliberately preserves those original indices (removed headers
+ * become SHT_NULL), so a surviving group must discard deleted members.
+ * This is shared ELF semantics, not a MiniAS or target-specific workaround.
+ */
+static void store_u32(unsigned char *data, unsigned char encoding,
+                      uint32_t value);
+
+static bool rewrite_group_members(const MiniElfView *view,
+                                  MiniElfRewriteSectionState *states) {
+    size_t i;
+    for (i = 1U; i < view->section_count; ++i) {
+        MiniElfSection *group = &states[i].section;
+        const unsigned char *data;
+        unsigned char *retained = NULL;
+        size_t bytes, words, j, kept = 0U;
+        bool changed = false;
+
+        if (group->type != SHT_GROUP) {
+            continue;
+        }
+        if (group->size < sizeof(uint32_t) ||
+            group->size > SIZE_MAX ||
+            group->size % sizeof(uint32_t) != 0U ||
+            !minielf_section_data(view, i, &data, &bytes) ||
+            bytes != (size_t)group->size) {
+            return false;
+        }
+        words = bytes / sizeof(uint32_t);
+        retained = malloc(bytes);
+        if (retained == NULL) {
+            return false;
+        }
+        memcpy(retained, data, sizeof(uint32_t));
+        for (j = 1U; j < words; ++j) {
+            uint32_t member = load_u32(view, data + j * sizeof(uint32_t));
+            if (member == 0U || member >= view->section_count ||
+                member == i || states[member].section.type == SHT_GROUP) {
+                free(retained);
+                return false;
+            }
+            if (states[i].remove) {
+                /* Removing a whole group leaves its data sections usable
+                 * as ordinary, ungrouped sections. Never leave SHF_GROUP
+                 * without an SHT_GROUP owner. */
+                states[member].section.flags &= ~((uint64_t)SHF_GROUP);
+                continue;
+            }
+            if (states[member].remove) {
+                changed = true;
+                continue;
+            }
+            store_u32(retained + (kept + 1U) * sizeof(uint32_t),
+                      view->data_encoding, member);
+            ++kept;
+        }
+        if (states[i].remove) {
+            free(retained);
+            continue;
+        }
+        if (kept == 0U) {
+            /* A group containing only the GRP_COMDAT flag is not a group.
+             * GNU objcopy drops it after the final member is removed. */
+            states[i].remove = true;
+            free(retained);
+            continue;
+        }
+        if (changed) {
+            group->size = (kept + 1U) * sizeof(uint32_t);
+            states[i].modified_data = retained;
+            states[i].modified_size = (size_t)group->size;
+        } else {
+            free(retained);
+        }
+    }
+    return true;
+}
+
 static void store_u32(unsigned char *data,
                       unsigned char encoding,
                       uint32_t value) {
@@ -799,6 +878,10 @@ bool minielf_rewrite(const MiniElfView *view,
             section->link == symtab_index) {
             states[i].remove = true;
         }
+    }
+    if (!rewrite_group_members(view, states)) {
+        set_error(error_out, MINIELF_REWRITE_INVALID_SECTION);
+        goto done;
     }
 
     if (options->keep_global_count != 0U &&

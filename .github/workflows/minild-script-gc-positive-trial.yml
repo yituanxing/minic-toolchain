@@ -1,0 +1,79 @@
+name: MiniLD Script GC Five-Target Positive Trial
+
+# Five-target positive GNU BFD/QEMU contract for the now checked-in script/GC
+# capability. The real Linux Kbuild check remains a separate workflow.
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - refactor/minias-target-isa-abi-core
+    paths:
+      - .github/workflows/minild-script-gc-positive-trial.yml
+
+permissions:
+  contents: read
+
+jobs:
+  five-target-positive-script-gc:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install GNU BFD target oracles and Linux user-mode QEMU
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get -o Acquire::Retries=3 update -qq
+          sudo apt-get -o Acquire::Retries=3 install -y -qq --no-install-recommends \
+            qemu-user binutils-riscv64-linux-gnu binutils-aarch64-linux-gnu \
+            binutils-loongarch64-linux-gnu
+          for tool in qemu-riscv32 qemu-riscv64 qemu-aarch64 \
+                      qemu-loongarch64 riscv64-linux-gnu-ld \
+                      aarch64-linux-gnu-ld loongarch64-linux-gnu-ld; do
+            command -v "$tool"
+          done
+
+      - name: Verify checked-in five-target script and GC policies
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ev="$GITHUB_WORKSPACE/build/minild-script-gc-positive-trial"
+          mkdir -p "$ev/tmp"
+          source=linker/src/linker_target_elf.inc
+          sha256sum "$source" >"$ev/checked-in-target-profile.sha256"
+          python3 tools/ci/minild-check-target-policies.py \
+            "$source" MINILD_SCRIPT_GC_TRIAL
+
+      - name: Build trial MiniAS and MiniLD with Werror
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release CFLAGS=-Werror \
+            build/release/bin/minic-as build/release/bin/minic-ld
+          echo 'MINILD_SCRIPT_GC_TRIAL=BUILD_PASS checked_in_target_policy=true'
+
+      - name: Run three independent GNU versus MiniLD script GC modes on five targets
+        shell: bash
+        env:
+          MINILD_REQUIRE_GNU: '1'
+          MINILD_REQUIRE_QEMU: '1'
+          MINILD_SCRIPT_GC_5ARCH_KEEP: '1'
+        run: |
+          set -Eeuo pipefail
+          ev="$GITHUB_WORKSPACE/build/minild-script-gc-positive-trial"
+          mkdir -p "$ev/tmp"
+          export TMPDIR="$ev/tmp"
+          echo 'MINILD_SCRIPT_GC_TRIAL=RUN checked_in_target_policy=true mode=-T-only,GC-only,combined'
+          make MODE=release CFLAGS=-Werror \
+            check-minild-multitarget-script-gc-boundary \
+            2>&1 | tee "$ev/trial.log"
+          echo 'MINILD_SCRIPT_GC_TRIAL=PASS five_targets=5 modes_per_target=3 GNU_BFD_QEMU=true'
+
+      - name: Preserve exact trial inputs and failing ELF or runtime logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: minild-script-gc-positive-trial
+          path: build/minild-script-gc-positive-trial/
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 14

@@ -49,9 +49,152 @@ static bool append_section_item(MiniLdScriptOutputSection *section,
     return true;
 }
 
+/* `x += expr` is syntax sugar for `x = x + expr`. Preserve the same
+ * expression graph used by ordinary assignments; no second layout path. */
+static bool make_additive_assignment(ScriptParser *parser,
+                                     const ScriptToken *name,
+                                     MiniLdScriptExprId rhs,
+                                     MiniLdScriptExprId *result) {
+    MiniLdScriptExpr left;
+    MiniLdScriptExpr add;
+    MiniLdScriptExprId lhs;
+    memset(&left, 0, sizeof(left));
+    left.left = MINILD_SCRIPT_EXPR_NONE;
+    left.right = MINILD_SCRIPT_EXPR_NONE;
+    if (name->length == 1U && name->begin[0] == '.') {
+        left.kind = MINILD_SCRIPT_EXPR_DOT;
+    } else {
+        left.kind = MINILD_SCRIPT_EXPR_SYMBOL;
+        left.name = minild_script_strdup_range(name->begin, name->length);
+        if (left.name == NULL) {
+            return minild_script_parser_error(parser,
+                                              "out-of-memory:plus-equals");
+        }
+    }
+    if (!minild_script_append_expression(parser->script, left, &lhs)) {
+        free(left.name);
+        return minild_script_parser_error(parser,
+                                          "out-of-memory:plus-equals");
+    }
+    memset(&add, 0, sizeof(add));
+    add.kind = MINILD_SCRIPT_EXPR_ADD;
+    add.left = lhs;
+    add.right = rhs;
+    return minild_script_append_expression(parser->script, add, result) ||
+           minild_script_parser_error(parser, "out-of-memory:plus-equals");
+}
+
+static bool parse_assert_command(ScriptParser *parser) {
+    MiniLdScriptCommand command;
+    MiniLdScriptExprId expression;
+    if (!minild_script_parse_expression(parser, &expression) ||
+        parser->script->expressions[expression].kind !=
+            MINILD_SCRIPT_EXPR_ASSERT) {
+        return minild_script_parser_error(parser, "invalid-ASSERT-command");
+    }
+    (void)minild_script_consume(parser, TOKEN_SEMICOLON);
+    memset(&command, 0, sizeof(command));
+    command.kind = MINILD_SCRIPT_ASSERT;
+    command.value.expression = expression;
+    return append_command(parser->script, command) ||
+           minild_script_parser_error(parser, "out-of-memory:ASSERT");
+}
+
+static bool parse_symbol_function(ScriptParser *parser,
+                                  char **name_out,
+                                  MiniLdScriptExprId *expression_out) {
+    char *name;
+    if (!minild_script_parser_next(parser) ||
+        !minild_script_expect(parser, TOKEN_LPAREN,
+                              "expected-'('-after-PROVIDE") ||
+        parser->token.kind != TOKEN_IDENTIFIER) {
+        return minild_script_parser_error(parser, "expected-PROVIDE-symbol");
+    }
+    name = minild_script_strdup_range(parser->token.begin,
+                                      parser->token.length);
+    if (name == NULL ||
+        !minild_script_parser_next(parser) ||
+        !minild_script_expect(parser, TOKEN_EQUAL,
+                              "expected-'='-in-PROVIDE") ||
+        !minild_script_parse_expression(parser, expression_out) ||
+        !minild_script_expect(parser, TOKEN_RPAREN,
+                              "expected-')'-after-PROVIDE")) {
+        free(name);
+        return false;
+    }
+    (void)minild_script_consume(parser, TOKEN_SEMICOLON);
+    *name_out = name;
+    return true;
+}
+
+static bool parse_provide_command(ScriptParser *parser, bool hidden,
+                                  bool provide) {
+    MiniLdScriptCommand command;
+    MiniLdScriptExprId expression;
+    char *name;
+
+    if (!parse_symbol_function(parser, &name, &expression)) {
+        return false;
+    }
+    memset(&command, 0, sizeof(command));
+    command.kind = MINILD_SCRIPT_DEFINE_SYMBOL;
+    command.value.symbol.name = name;
+    command.value.symbol.expression = expression;
+    command.value.symbol.provide = provide;
+    command.value.symbol.hidden = hidden;
+    if (!append_command(parser->script, command)) {
+        free(name);
+        return minild_script_parser_error(parser, "out-of-memory:PROVIDE");
+    }
+    return true;
+}
+
+static bool parse_extern_command(ScriptParser *parser) {
+    MiniLdScript *script = parser->script;
+
+    if (!minild_script_parser_next(parser) ||
+        !minild_script_expect(parser, TOKEN_LPAREN,
+                              "expected-'('-after-EXTERN")) {
+        return false;
+    }
+    while (parser->token.kind != TOKEN_RPAREN) {
+        char **names;
+        char *name;
+
+        if (parser->token.kind == TOKEN_COMMA) {
+            if (!minild_script_parser_next(parser)) return false;
+            continue;
+        }
+        if (parser->token.kind != TOKEN_IDENTIFIER ||
+            script->extern_symbol_count == SIZE_MAX / sizeof(*names)) {
+            return minild_script_parser_error(parser,
+                                              "expected-EXTERN-symbol");
+        }
+        name = minild_script_strdup_range(parser->token.begin,
+                                          parser->token.length);
+        if (name == NULL) {
+            return minild_script_parser_error(parser, "out-of-memory:EXTERN");
+        }
+        names = realloc(script->extern_symbols,
+                        (script->extern_symbol_count + 1U) * sizeof(*names));
+        if (names == NULL) {
+            free(name);
+            return minild_script_parser_error(parser, "out-of-memory:EXTERN");
+        }
+        script->extern_symbols = names;
+        script->extern_symbols[script->extern_symbol_count++] = name;
+        if (!minild_script_parser_next(parser)) return false;
+    }
+    if (!minild_script_parser_next(parser)) return false;
+    (void)minild_script_consume(parser, TOKEN_SEMICOLON);
+    return true;
+}
+
 static bool append_pattern_text(ScriptParser *parser,
                                 bool keep,
                                 bool sort,
+                                size_t selector_id,
+                                const char *file_pattern,
                                 MiniLdScriptOutputSection *section) {
     char buffer[512];
     size_t size = 0U;
@@ -113,49 +256,116 @@ static bool append_pattern_text(ScriptParser *parser,
     memset(&item, 0, sizeof(item));
     item.kind = MINILD_SCRIPT_SECTION_PATTERN;
     item.value.pattern.text = minild_script_strdup_range(buffer, size);
+    if (file_pattern != NULL) {
+        item.value.pattern.file_pattern = minild_script_strdup_range(
+            file_pattern, strlen(file_pattern));
+    }
     item.value.pattern.keep = keep;
     item.value.pattern.sort = sort;
+    item.value.pattern.selector_id = selector_id;
     item.value.pattern.common = strcmp(buffer, "COMMON") == 0;
     if (item.value.pattern.text == NULL ||
+        (file_pattern != NULL && item.value.pattern.file_pattern == NULL) ||
         !append_section_item(section, item)) {
         free(item.value.pattern.text);
+        free(item.value.pattern.file_pattern);
         return minild_script_parser_error(parser,
                                           "out-of-memory:pattern");
     }
     return true;
 }
 
+/* A GNU input description starts with a file selector, not necessarily '*'.
+ * Tokens are rejoined because the lexer separates '*', '/', '-' and ':' from
+ * identifiers (e.g. '*crtbegin.o', 'build/foo.o' or 'lib.a:member.o'). */
+static bool parse_input_file_selector(ScriptParser *parser,
+                                      char **file_pattern_out) {
+    char buffer[512];
+    size_t size = 0U;
+    *file_pattern_out = NULL;
+    while (parser->token.kind != TOKEN_LPAREN) {
+        switch (parser->token.kind) {
+        case TOKEN_IDENTIFIER:
+        case TOKEN_NUMBER:
+        case TOKEN_STAR:
+        case TOKEN_MINUS:
+        case TOKEN_PLUS:
+        case TOKEN_SLASH:
+        case TOKEN_COLON:
+            break;
+        default:
+            return minild_script_parser_error(parser,
+                                              "expected-input-file-selector");
+        }
+        if (parser->token.length == 0U ||
+            parser->token.length >= sizeof(buffer) - size) {
+            return minild_script_parser_error(parser,
+                                              "input-file-pattern-too-long");
+        }
+        memcpy(buffer + size, parser->token.begin, parser->token.length);
+        size += parser->token.length;
+        if (!minild_script_parser_next(parser)) {
+            return false;
+        }
+    }
+    if (size == 0U) {
+        return minild_script_parser_error(parser,
+                                          "expected-input-file-selector");
+    }
+    buffer[size] = '\0';
+    if (!(size == 1U && buffer[0] == '*')) {
+        *file_pattern_out = minild_script_strdup_range(buffer, size);
+        if (*file_pattern_out == NULL) {
+            return minild_script_parser_error(parser,
+                                              "out-of-memory:file-pattern");
+        }
+    }
+    return minild_script_parser_next(parser);
+}
+
 static bool parse_pattern_list(ScriptParser *parser,
                                bool keep,
                                MiniLdScriptOutputSection *section) {
-    if (!minild_script_expect(parser,
-                              TOKEN_STAR,
-                              "expected-'*'-before-section-patterns") ||
-        !minild_script_expect(parser,
-                              TOKEN_LPAREN,
-                              "expected-'('-before-section-patterns")) {
+    char *file_pattern = NULL;
+    size_t selector_id;
+    bool ok = false;
+
+    if (section->item_count == SIZE_MAX) {
+        return minild_script_parser_error(parser,
+                                          "input-selector-id-overflow");
+    }
+    selector_id = section->item_count + 1U;
+
+    if (!parse_input_file_selector(parser, &file_pattern)) {
+        free(file_pattern);
         return false;
     }
-
     while (parser->token.kind != TOKEN_RPAREN) {
-        bool sort = false;
-        if (minild_script_token_is(parser, "SORT")) {
-            sort = true;
+        bool sort = minild_script_token_is(parser, "SORT") ||
+                    minild_script_token_is(parser, "SORT_BY_NAME");
+        if (sort) {
             if (!minild_script_parser_next(parser) ||
                 !minild_script_expect(parser,
                                       TOKEN_LPAREN,
                                       "expected-'('-after-SORT") ||
-                !append_pattern_text(parser, keep, true, section) ||
+                !append_pattern_text(parser, keep, true, selector_id,
+                                     file_pattern,
+                                     section) ||
                 !minild_script_expect(parser,
                                       TOKEN_RPAREN,
                                       "expected-')'-after-SORT")) {
-                return false;
+                goto done;
             }
-        } else if (!append_pattern_text(parser, keep, sort, section)) {
-            return false;
+        } else if (!append_pattern_text(parser, keep, false, selector_id,
+                                        file_pattern,
+                                        section)) {
+            goto done;
         }
     }
-    return minild_script_parser_next(parser);
+    ok = minild_script_parser_next(parser);
+done:
+    free(file_pattern);
+    return ok;
 }
 
 static bool parse_section_body(ScriptParser *parser,
@@ -171,6 +381,10 @@ static bool parse_section_body(ScriptParser *parser,
             return minild_script_parser_error(parser,
                                               "unexpected-eof-in-output-section");
         }
+        /* GNU accepts optional semicolons after input descriptions. */
+        if (minild_script_consume(parser, TOKEN_SEMICOLON)) {
+            continue;
+        }
         if (minild_script_token_is(parser, "KEEP")) {
             if (!minild_script_parser_next(parser) ||
                 !minild_script_expect(parser,
@@ -184,26 +398,33 @@ static bool parse_section_body(ScriptParser *parser,
             }
             continue;
         }
-        if (minild_script_token_is(parser, "BYTE")) {
+        if (minild_script_token_is(parser, "BYTE") ||
+            minild_script_token_is(parser, "SHORT") ||
+            minild_script_token_is(parser, "LONG") ||
+            minild_script_token_is(parser, "QUAD")) {
             MiniLdScriptSectionItem item;
             MiniLdScriptExprId expression;
+            unsigned data_width = minild_script_token_is(parser, "BYTE") ? 1U :
+                                  minild_script_token_is(parser, "SHORT") ? 2U :
+                                  minild_script_token_is(parser, "LONG") ? 4U : 8U;
             memset(&item, 0, sizeof(item));
             if (!minild_script_parser_next(parser) ||
                 !minild_script_expect(parser,
                                       TOKEN_LPAREN,
-                                      "expected-'('-after-BYTE") ||
+                                      "expected-'('-after-data-directive") ||
                 !minild_script_parse_expression(parser, &expression) ||
                 !minild_script_expect(parser,
                                       TOKEN_RPAREN,
-                                      "expected-')'-after-BYTE")) {
+                                      "expected-')'-after-data-directive")) {
                 return false;
             }
             (void)minild_script_consume(parser, TOKEN_SEMICOLON);
             item.kind = MINILD_SCRIPT_SECTION_BYTE;
+            item.data_width = data_width;
             item.value.expression = expression;
             if (!append_section_item(section, item)) {
                 return minild_script_parser_error(parser,
-                                                  "out-of-memory:BYTE");
+                                                  "out-of-memory:data-directive");
             }
             continue;
         }
@@ -218,38 +439,84 @@ static bool parse_section_body(ScriptParser *parser,
             }
             continue;
         }
-        if (parser->token.kind == TOKEN_STAR) {
+        if (minild_script_token_is(parser, "PROVIDE") ||
+            minild_script_token_is(parser, "PROVIDE_HIDDEN") ||
+            minild_script_token_is(parser, "HIDDEN")) {
+            MiniLdScriptSectionItem item;
+            bool provide = !minild_script_token_is(parser, "HIDDEN");
+            bool hidden = !minild_script_token_is(parser, "PROVIDE");
+
+            memset(&item, 0, sizeof(item));
+            item.kind = MINILD_SCRIPT_SECTION_DEFINE_SYMBOL;
+            item.value.symbol.provide = provide;
+            item.value.symbol.hidden = hidden;
+            if (!parse_symbol_function(parser, &item.value.symbol.name,
+                                       &item.value.symbol.expression)) {
+                return false;
+            }
+            if (!append_section_item(section, item)) {
+                free(item.value.symbol.name);
+                return minild_script_parser_error(parser,
+                                                  "out-of-memory:section-PROVIDE");
+            }
+            continue;
+        }
+        if (parser->token.kind == TOKEN_STAR ||
+            parser->token.kind == TOKEN_SLASH ||
+            parser->token.kind == TOKEN_NUMBER ||
+            parser->token.kind == TOKEN_COLON) {
             if (!parse_pattern_list(parser, false, section)) {
                 return false;
             }
             continue;
         }
         if (parser->token.kind == TOKEN_IDENTIFIER) {
+            ScriptParser lookahead = *parser;
             ScriptToken name = parser->token;
             char *symbol_name;
             MiniLdScriptExprId expression;
             MiniLdScriptSectionItem item;
             bool is_dot;
 
+            if (!minild_script_parser_next(&lookahead)) {
+                return false;
+            }
+            if (lookahead.token.kind != TOKEN_EQUAL &&
+                lookahead.token.kind != TOKEN_PLUS_EQUAL) {
+                if (!parse_pattern_list(parser, false, section)) {
+                    return false;
+                }
+                continue;
+            }
             if (!minild_script_parser_next(parser)) {
                 return false;
             }
-            if (parser->token.kind != TOKEN_EQUAL) {
+            if (parser->token.kind != TOKEN_EQUAL &&
+                parser->token.kind != TOKEN_PLUS_EQUAL) {
                 parser->token = name;
                 return minild_script_parser_error(parser,
                                                   "unsupported-output-section-item");
             }
 
-            symbol_name = minild_script_strdup_range(name.begin, name.length);
-            is_dot = name.length == 1U && name.begin[0] == '.';
-            if (symbol_name == NULL ||
-                !minild_script_parser_next(parser) ||
-                !minild_script_parse_expression(parser, &expression) ||
-                !minild_script_expect(parser,
-                                      TOKEN_SEMICOLON,
-                                      "expected-';'-after-assignment")) {
-                free(symbol_name);
-                return false;
+            {
+                bool plus_equal = parser->token.kind == TOKEN_PLUS_EQUAL;
+                MiniLdScriptExprId rhs;
+                symbol_name = minild_script_strdup_range(name.begin,
+                                                          name.length);
+                is_dot = name.length == 1U && name.begin[0] == '.';
+                if (symbol_name == NULL ||
+                    !minild_script_parser_next(parser) ||
+                    !minild_script_parse_expression(parser, &rhs) ||
+                    (plus_equal &&
+                     !make_additive_assignment(parser, &name, rhs, &expression)) ||
+                    !minild_script_expect(parser, TOKEN_SEMICOLON,
+                                          "expected-';'-after-assignment")) {
+                    free(symbol_name);
+                    return false;
+                }
+                if (!plus_equal) {
+                    expression = rhs;
+                }
             }
 
             memset(&item, 0, sizeof(item));
@@ -280,16 +547,19 @@ static bool parse_section_body(ScriptParser *parser,
 static bool parse_output_section(ScriptParser *parser,
                                  char *name,
                                  bool discard,
-                                 MiniLdScriptExprId address) {
+                                 MiniLdScriptExprId address,
+                                 bool info) {
     MiniLdScriptOutputSection section;
     MiniLdScriptCommand command;
 
     memset(&section, 0, sizeof(section));
     section.name = name;
     section.discard = discard;
+    section.info = info;
     section.address = address;
     section.at = MINILD_SCRIPT_EXPR_NONE;
     section.align = MINILD_SCRIPT_EXPR_NONE;
+    section.fill = MINILD_SCRIPT_EXPR_NONE;
 
     if (!minild_script_expect(parser,
                               TOKEN_COLON,
@@ -357,6 +627,11 @@ static bool parse_output_section(ScriptParser *parser,
             return false;
         }
     }
+    if (parser->token.kind == TOKEN_EQUAL &&
+        (!minild_script_parser_next(parser) ||
+         !minild_script_parse_expression(parser, &section.fill))) {
+        return false;
+    }
     memset(&command, 0, sizeof(command));
     command.kind = MINILD_SCRIPT_OUTPUT_SECTION;
     command.value.section = section;
@@ -382,6 +657,12 @@ static bool parse_sections(ScriptParser *parser) {
             return minild_script_parser_error(parser,
                                               "unexpected-eof-in-SECTIONS");
         }
+        if (minild_script_token_is(parser, "ASSERT")) {
+            if (!parse_assert_command(parser)) {
+                return false;
+            }
+            continue;
+        }
         if (parser->token.kind == TOKEN_SLASH) {
             if (!minild_script_parser_next(parser) ||
                 !minild_script_token_is(parser, "DISCARD") ||
@@ -400,7 +681,8 @@ static bool parse_sections(ScriptParser *parser) {
             if (!parse_output_section(parser,
                                       name,
                                       true,
-                                      MINILD_SCRIPT_EXPR_NONE)) {
+                                      MINILD_SCRIPT_EXPR_NONE,
+                                      false)) {
                 free(name);
                 return false;
             }
@@ -414,40 +696,18 @@ static bool parse_sections(ScriptParser *parser) {
         /* GNU PROVIDE is conditional: referenced undefined symbols are
          * defined, but ordinary existing definitions are never replaced,
          * and unreferenced declarations do not become ELF exports. */
-        if (minild_script_token_is(parser, "PROVIDE")) {
-            MiniLdScriptCommand command;
-            MiniLdScriptExprId expression;
-            char *symbol_name;
-            if (!minild_script_parser_next(parser) ||
-                !minild_script_expect(parser, TOKEN_LPAREN,
-                                      "expected-'('-after-PROVIDE") ||
-                parser->token.kind != TOKEN_IDENTIFIER) {
-                return minild_script_parser_error(parser,
-                                                  "expected-PROVIDE-symbol");
-            }
-            symbol_name = minild_script_strdup_range(parser->token.begin,
-                                                      parser->token.length);
-            if (symbol_name == NULL ||
-                !minild_script_parser_next(parser) ||
-                !minild_script_expect(parser, TOKEN_EQUAL,
-                                      "expected-'='-in-PROVIDE") ||
-                !minild_script_parse_expression(parser, &expression) ||
-                !minild_script_expect(parser, TOKEN_RPAREN,
-                                      "expected-')'-after-PROVIDE")) {
-                free(symbol_name);
+        if (minild_script_token_is(parser, "PROVIDE") ||
+            minild_script_token_is(parser, "PROVIDE_HIDDEN") ||
+            minild_script_token_is(parser, "HIDDEN")) {
+            bool provide = !minild_script_token_is(parser, "HIDDEN");
+            bool hidden = !minild_script_token_is(parser, "PROVIDE");
+            if (!parse_provide_command(parser, hidden, provide)) {
                 return false;
             }
-            (void)minild_script_consume(parser, TOKEN_SEMICOLON);
-            memset(&command, 0, sizeof(command));
-            command.kind = MINILD_SCRIPT_DEFINE_SYMBOL;
-            command.value.symbol.name = symbol_name;
-            command.value.symbol.expression = expression;
-            command.value.symbol.provide = true;
-            if (!append_command(parser->script, command)) {
-                free(symbol_name);
-                return minild_script_parser_error(parser,
-                                                  "out-of-memory:PROVIDE");
-            }
+            continue;
+        }
+        if (minild_script_token_is(parser, "EXTERN")) {
+            if (!parse_extern_command(parser)) return false;
             continue;
         }
 
@@ -457,18 +717,26 @@ static bool parse_sections(ScriptParser *parser) {
             free(name);
             return false;
         }
-        if (parser->token.kind == TOKEN_EQUAL) {
+        if (parser->token.kind == TOKEN_EQUAL ||
+            parser->token.kind == TOKEN_PLUS_EQUAL) {
             MiniLdScriptExprId expression;
+            MiniLdScriptExprId rhs;
             MiniLdScriptCommand command;
             bool is_dot = first.length == 1U && first.begin[0] == '.';
+            bool plus_equal = parser->token.kind == TOKEN_PLUS_EQUAL;
 
             if (!minild_script_parser_next(parser) ||
-                !minild_script_parse_expression(parser, &expression) ||
+                !minild_script_parse_expression(parser, &rhs) ||
+                (plus_equal &&
+                 !make_additive_assignment(parser, &first, rhs, &expression)) ||
                 !minild_script_expect(parser,
                                       TOKEN_SEMICOLON,
                                       "expected-';'-after-assignment")) {
                 free(name);
                 return false;
+            }
+            if (!plus_equal) {
+                expression = rhs;
             }
             memset(&command, 0, sizeof(command));
             if (is_dot) {
@@ -487,15 +755,30 @@ static bool parse_sections(ScriptParser *parser) {
             continue;
         }
 
-        if (parser->token.kind != TOKEN_COLON) {
+        {
+            bool info = false;
+            if (parser->token.kind == TOKEN_LPAREN) {
+                if (!minild_script_parser_next(parser) ||
+                    !minild_script_token_is(parser, "INFO") ||
+                    !minild_script_parser_next(parser) ||
+                    !minild_script_expect(parser, TOKEN_RPAREN,
+                                          "expected-')'-after-INFO")) {
+                    free(name);
+                    return minild_script_parser_error(parser,
+                                                      "unsupported-output-section-type");
+                }
+                info = true;
+            }
+            if (parser->token.kind != TOKEN_COLON) {
             if (!minild_script_parse_expression(parser, &address)) {
                 free(name);
                 return false;
             }
-        }
-        if (!parse_output_section(parser, name, false, address)) {
-            free(name);
-            return false;
+            }
+            if (!parse_output_section(parser, name, false, address, info)) {
+                free(name);
+                return false;
+            }
         }
     }
     return minild_script_parser_next(parser);
@@ -757,6 +1040,75 @@ static bool parse_directive_with_identifier(ScriptParser *parser,
     return true;
 }
 
+static bool parse_output_format(ScriptParser *parser, char **format_out) {
+    char *format;
+    if (!minild_script_parser_next(parser) ||
+        !minild_script_expect(parser, TOKEN_LPAREN,
+                              "expected-'('-after-OUTPUT_FORMAT") ||
+        parser->token.kind != TOKEN_STRING) {
+        return minild_script_parser_error(parser,
+                                          "expected-OUTPUT_FORMAT-string");
+    }
+    format = minild_script_strdup_range(parser->token.begin,
+                                        parser->token.length);
+    if (format == NULL || !minild_script_parser_next(parser) ||
+        !minild_script_expect(parser, TOKEN_RPAREN,
+                              "expected-')'-after-OUTPUT_FORMAT")) {
+        free(format);
+        return false;
+    }
+    free(*format_out);
+    *format_out = format;
+    return true;
+}
+
+/* GNU BFD target names such as i386:x86-64 contain characters that the
+ * section/expression lexer deliberately keeps as separate tokens.  Join
+ * those tokens only for OUTPUT_ARCH; ENTRY remains a plain identifier and
+ * section punctuation retains its existing meaning. */
+static bool parse_output_arch_name(ScriptParser *parser, char **value_out) {
+    const char *begin;
+    const char *end;
+    char *value;
+
+    if (!minild_script_parser_next(parser) ||
+        !minild_script_expect(parser, TOKEN_LPAREN,
+                              "expected-'('-after-directive") ||
+        parser->token.kind != TOKEN_IDENTIFIER) {
+        return minild_script_parser_error(parser,
+                                          "expected-identifier-in-directive");
+    }
+    begin = parser->token.begin;
+    end = begin;
+    do {
+        if (parser->token.begin != end ||
+            (parser->token.kind != TOKEN_IDENTIFIER &&
+             parser->token.kind != TOKEN_NUMBER &&
+             parser->token.kind != TOKEN_COLON &&
+             parser->token.kind != TOKEN_MINUS)) {
+            return minild_script_parser_error(parser,
+                                              "invalid-output-arch-spelling");
+        }
+        end += parser->token.length;
+        if (!minild_script_parser_next(parser)) {
+            return false;
+        }
+    } while (parser->token.kind != TOKEN_RPAREN &&
+             parser->token.kind != TOKEN_EOF);
+    if (parser->token.kind != TOKEN_RPAREN) {
+        return minild_script_parser_error(parser,
+                                          "expected-')'-after-directive");
+    }
+    value = minild_script_strdup_range(begin, (size_t)(end - begin));
+    if (value == NULL || !minild_script_parser_next(parser)) {
+        free(value);
+        return false;
+    }
+    free(*value_out);
+    *value_out = value;
+    return true;
+}
+
 void minild_script_initialize(MiniLdScript *script) {
     memset(script, 0, sizeof(*script));
 }
@@ -769,6 +1121,11 @@ void minild_script_destroy(MiniLdScript *script) {
     }
     free(script->entry_symbol);
     free(script->output_arch);
+    free(script->output_format);
+    for (i = 0U; i < script->extern_symbol_count; ++i) {
+        free(script->extern_symbols[i]);
+    }
+    free(script->extern_symbols);
 
     for (i = 0U; i < script->expression_count; ++i) {
         free(script->expressions[i].name);
@@ -786,6 +1143,7 @@ void minild_script_destroy(MiniLdScript *script) {
                 MiniLdScriptSectionItem *item = &section->items[j];
                 if (item->kind == MINILD_SCRIPT_SECTION_PATTERN) {
                     free(item->value.pattern.text);
+                    free(item->value.pattern.file_pattern);
                 } else if (item->kind ==
                            MINILD_SCRIPT_SECTION_DEFINE_SYMBOL) {
                     free(item->value.symbol.name);
@@ -847,9 +1205,19 @@ bool minild_script_parse_file(const char *path,
     }
 
     while (parser.token.kind != TOKEN_EOF) {
-        if (minild_script_token_is(&parser, "OUTPUT_ARCH")) {
-            if (!parse_directive_with_identifier(&parser,
-                                                 &script->output_arch)) {
+        /* GNU linker scripts accept empty top-level statements. Linux's
+         * macro-expanded image-vars.h legitimately emits `name = value;;`
+         * for many aliases, so consuming only the first semicolon after an
+         * assignment must not turn the second into an unknown directive. */
+        if (minild_script_consume(&parser, TOKEN_SEMICOLON)) {
+            continue;
+        }
+        if (minild_script_token_is(&parser, "OUTPUT_FORMAT")) {
+            if (!parse_output_format(&parser, &script->output_format)) {
+                goto done;
+            }
+        } else if (minild_script_token_is(&parser, "OUTPUT_ARCH")) {
+            if (!parse_output_arch_name(&parser, &script->output_arch)) {
                 goto done;
             }
         } else if (minild_script_token_is(&parser, "ENTRY")) {
@@ -863,6 +1231,20 @@ bool minild_script_parse_file(const char *path,
             }
         } else if (minild_script_token_is(&parser, "PHDRS")) {
             if (!parse_phdrs(&parser)) {
+                goto done;
+            }
+        } else if (minild_script_token_is(&parser, "PROVIDE") ||
+                   minild_script_token_is(&parser, "PROVIDE_HIDDEN") ||
+                   minild_script_token_is(&parser, "HIDDEN")) {
+            bool provide = !minild_script_token_is(&parser, "HIDDEN");
+            bool hidden = !minild_script_token_is(&parser, "PROVIDE");
+            if (!parse_provide_command(&parser, hidden, provide)) {
+                goto done;
+            }
+        } else if (minild_script_token_is(&parser, "EXTERN")) {
+            if (!parse_extern_command(&parser)) goto done;
+        } else if (minild_script_token_is(&parser, "ASSERT")) {
+            if (!parse_assert_command(&parser)) {
                 goto done;
             }
         } else if (minild_script_token_is(&parser, "VERSION")) {
@@ -885,27 +1267,43 @@ bool minild_script_parse_file(const char *path,
                 }
                 continue;
             }
-            if (parser.token.kind != TOKEN_EQUAL) {
+            if (parser.token.kind != TOKEN_EQUAL &&
+                parser.token.kind != TOKEN_PLUS_EQUAL) {
                 minild_script_parser_error(
                     &parser,
                     "unsupported-top-level-linker-script-command");
                 goto done;
             }
-            symbol_name = minild_script_strdup_range(name.begin,
-                                                     name.length);
+            {
+                bool plus_equal = parser.token.kind == TOKEN_PLUS_EQUAL;
+                MiniLdScriptExprId rhs;
+                symbol_name = minild_script_strdup_range(name.begin,
+                                                         name.length);
             if (symbol_name == NULL ||
                 !minild_script_parser_next(&parser) ||
-                !minild_script_parse_expression(&parser, &expression) ||
+                !minild_script_parse_expression(&parser, &rhs) ||
+                (plus_equal &&
+                 !make_additive_assignment(&parser, &name, rhs, &expression)) ||
                 !minild_script_expect(&parser,
                                       TOKEN_SEMICOLON,
                                       "expected-';'-after-assignment")) {
                 free(symbol_name);
                 goto done;
             }
+                if (!plus_equal) {
+                    expression = rhs;
+                }
+            }
             memset(&command, 0, sizeof(command));
-            command.kind = MINILD_SCRIPT_DEFINE_SYMBOL;
-            command.value.symbol.name = symbol_name;
-            command.value.symbol.expression = expression;
+            if (name.length == 1U && name.begin[0] == '.') {
+                command.kind = MINILD_SCRIPT_SET_DOT;
+                command.value.expression = expression;
+                free(symbol_name);
+            } else {
+                command.kind = MINILD_SCRIPT_DEFINE_SYMBOL;
+                command.value.symbol.name = symbol_name;
+                command.value.symbol.expression = expression;
+            }
             if (!append_command(script, command)) {
                 free(symbol_name);
                 minild_script_parser_error(&parser,

@@ -1,78 +1,214 @@
-#include "minias_internal.h"
+#include "minias_elf_object_view.h"
 #include "minielf.h"
+#include "minielf_elf_abi.h"
 
-#include <elf.h>
+#include <stdarg.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-static bool symbol_referenced_by_relocation(const MiniAs *as,
-                                             size_t symbol_index) {
-    size_t i;
-
-    for (i = 0U; i < as->reloc_count; ++i) {
-        if (as->relocs[i].symbol_index == symbol_index) {
-            return true;
-        }
-    }
-    return false;
+static void elf_object_error(MiniAsElfObjectView *object,const char *format,...) {
+    va_list ap;
+    if(object->error[0]!='\0')return;
+    va_start(ap,format);
+    (void)vsnprintf(object->error,sizeof(object->error),format,ap);
+    va_end(ap);
 }
 
-static bool should_emit_symbol(const MiniAs *as, size_t symbol_index) {
-    const MiniAsSymbol *symbol = &as->symbols[symbol_index];
+static bool elf_has_symbol(const MiniAsElfObjectView *object,
+                           const char *name) {
+    size_t id;
+    return object->model.find_symbol_id(object->model.reader,name,&id);
+}
 
-    /*
-     * GNU as treats .L-prefixed names as temporary local labels: once their
-     * assembly-time role is finished, they are omitted unless a relocation
-     * still needs them. Keep undefined locals visible so invalid input is not
-     * silently accepted.
-     */
-    if (symbol->bind == MINIAS_STB_LOCAL &&
-        symbol->defined &&
-        strncmp(symbol->name, ".L", 2U) == 0 &&
-        !symbol_referenced_by_relocation(as, symbol_index)) {
+/* Section semantics are retained in Common independently of the ELF wire
+ * numbers. This is the only SectionKind/SectionFlags -> SHT/SHF conversion;
+ * a future format writer must implement its own explicit projection. */
+static bool project_elf_section(MiniAsElfObjectView *object,
+                                const MiniAsSection *input,
+                                MiniElfWriteSection *output) {
+    const MiniAsSectionFlags supported=
+        MINIAS_SECTION_FLAG_ALLOC|MINIAS_SECTION_FLAG_WRITE|
+        MINIAS_SECTION_FLAG_EXECINSTR|MINIAS_SECTION_FLAG_MERGE|
+        MINIAS_SECTION_FLAG_STRINGS|MINIAS_SECTION_FLAG_TLS|
+        MINIAS_SECTION_FLAG_GROUP|MINIAS_SECTION_FLAG_LINK_ORDER|
+        MINIAS_SECTION_FLAG_GNU_RETAIN;
+    const MiniAsSectionFlags flags=input->flags;
+    uint64_t elf_flags=0U;
+    switch(input->type) {
+        case MINIAS_SECTION_KIND_PROGBITS:output->type=SHT_PROGBITS;break;
+        case MINIAS_SECTION_KIND_NOBITS:output->type=SHT_NOBITS;break;
+        case MINIAS_SECTION_KIND_NOTE:output->type=SHT_NOTE;break;
+        case MINIAS_SECTION_KIND_INIT_ARRAY:output->type=SHT_INIT_ARRAY;break;
+        case MINIAS_SECTION_KIND_FINI_ARRAY:output->type=SHT_FINI_ARRAY;break;
+        case MINIAS_SECTION_KIND_PREINIT_ARRAY:output->type=SHT_PREINIT_ARRAY;break;
+        default:
+            elf_object_error(object,"unsupported-elf-section-kind:%s",input->name);
+            return false;
+    }
+    if((flags & ~supported)!=0U ||
+       ((flags & MINIAS_SECTION_FLAG_GROUP)!=0U)!=
+           (input->group_signature!=NULL) ||
+       (input->group_comdat && input->group_signature==NULL)) {
+        elf_object_error(object,"invalid-elf-section-flags:%s",input->name);
         return false;
     }
+    if((flags & MINIAS_SECTION_FLAG_ALLOC)!=0U)elf_flags|=SHF_ALLOC;
+    if((flags & MINIAS_SECTION_FLAG_WRITE)!=0U)elf_flags|=SHF_WRITE;
+    if((flags & MINIAS_SECTION_FLAG_EXECINSTR)!=0U)elf_flags|=SHF_EXECINSTR;
+    if((flags & MINIAS_SECTION_FLAG_MERGE)!=0U)elf_flags|=SHF_MERGE;
+    if((flags & MINIAS_SECTION_FLAG_STRINGS)!=0U)elf_flags|=SHF_STRINGS;
+    if((flags & MINIAS_SECTION_FLAG_TLS)!=0U)elf_flags|=SHF_TLS;
+    if((flags & MINIAS_SECTION_FLAG_GROUP)!=0U)elf_flags|=SHF_GROUP;
+    if((flags & MINIAS_SECTION_FLAG_LINK_ORDER)!=0U)elf_flags|=SHF_LINK_ORDER;
+    if((flags & MINIAS_SECTION_FLAG_GNU_RETAIN)!=0U)elf_flags|=SHF_GNU_RETAIN;
+    output->flags=elf_flags;
+    output->has_group=input->group_signature!=NULL;
+    output->group_flags=input->group_comdat?GRP_COMDAT:0U;
     return true;
 }
 
-static size_t emitted_symbol_count(const MiniAs *as) {
-    size_t i;
-    size_t count = 0U;
+/* Core retains symbolic binding/kind/visibility semantics. Mapping to ELF
+ * STB/STT/STV codes is an explicit operation, including GNU extensions. */
+static bool project_elf_symbol(MiniAsElfObjectView *object,
+                               const MiniAsSymbol *input,
+                               MiniElfWriteSymbol *output) {
+    unsigned char bind,type,visibility;
+    switch(input->bind) {
+        case MINIAS_SYMBOL_BINDING_LOCAL:bind=STB_LOCAL;break;
+        case MINIAS_SYMBOL_BINDING_GLOBAL:bind=STB_GLOBAL;break;
+        case MINIAS_SYMBOL_BINDING_WEAK:bind=STB_WEAK;break;
+        case MINIAS_SYMBOL_BINDING_GNU_UNIQUE:bind=STB_GNU_UNIQUE;break;
+        default:goto invalid;
+    }
+    switch(input->type) {
+        case MINIAS_SYMBOL_KIND_NOTYPE:type=STT_NOTYPE;break;
+        case MINIAS_SYMBOL_KIND_OBJECT:type=STT_OBJECT;break;
+        case MINIAS_SYMBOL_KIND_FUNC:type=STT_FUNC;break;
+        case MINIAS_SYMBOL_KIND_TLS:type=STT_TLS;break;
+        case MINIAS_SYMBOL_KIND_GNU_IFUNC:type=STT_GNU_IFUNC;break;
+        default:goto invalid;
+    }
+    switch(input->visibility) {
+        case MINIAS_SYMBOL_VISIBILITY_DEFAULT:visibility=STV_DEFAULT;break;
+        case MINIAS_SYMBOL_VISIBILITY_INTERNAL:visibility=STV_INTERNAL;break;
+        case MINIAS_SYMBOL_VISIBILITY_HIDDEN:visibility=STV_HIDDEN;break;
+        case MINIAS_SYMBOL_VISIBILITY_PROTECTED:visibility=STV_PROTECTED;break;
+        default:goto invalid;
+    }
+    output->info=(unsigned char)((bind<<4U)|type);
+    output->other=visibility;
+    return true;
+invalid:
+    elf_object_error(object,"unsupported-elf-symbol-semantics:%s",input->name);
+    return false;
+}
 
-    for (i = 0U; i < as->symbol_count; ++i) {
-        if (should_emit_symbol(as, i)) {
+/* Generic ELF STT_SECTION relocation for a target-selected, defined local
+ * reference. GNU uses section+addend for eligible absolute relocations even
+ * when source and destination are in the same section. No machine-specific
+ * ELF logic lives here. */
+static bool section_symbol_fixup(const MiniAsElfObjectView *as,const MiniAsFixup *fixup) {
+    const MiniAsSymbol *sym;
+    MiniAsSymbolView target_symbol;
+    bool requested=fixup->prefer_section_symbol ||
+        as->policy->fold_defined_local_relocation_to_section ||
+        (as->policy->fold_local_pcrel_relocation_to_section &&
+         fixup->origin==MINIAS_FIXUP_ORIGIN_FRAGMENT &&
+         (fixup->kind==MINIAS_FIXUP_PREL32 ||
+          fixup->kind==MINIAS_FIXUP_PREL64)) ||
+        (as->policy->fold_synthetic_local_relocation_to_section &&
+         fixup->origin==MINIAS_FIXUP_ORIGIN_SYNTHETIC_SECTION) ||
+        (as->policy->fold_local_abs_relocation_to_section &&
+         fixup->kind==MINIAS_FIXUP_ABS);
+    if(!requested || fixup->symbol_index>=as->model.symbol_count)
+        return false;
+    sym=&as->model.symbols[fixup->symbol_index];
+    return sym->defined && sym->bind==MINIAS_SYMBOL_BINDING_LOCAL &&
+           sym->section>=0 && (size_t)sym->section<as->model.section_count &&
+           (as->policy->allow_local_section_symbol_fixup==NULL ||
+            (minias_project_symbol(sym,&target_symbol) &&
+             as->policy->allow_local_section_symbol_fixup(fixup,&target_symbol)));
+}
+
+/* Symbol-table membership is an ELF ObjectModel decision, not a Target
+ * encoding decision. Derive it once from the finalized fixup and COMDAT
+ * graph: repeated scans for every local label were quadratic on genuine
+ * compiler-generated Kbuild input with many temporary symbols. A relocation
+ * whose symbol is folded to STT_SECTION does not keep its original .L label
+ * alive, but a SHT_GROUP signature always does. */
+typedef struct MiniAsELFSymbolState {
+    bool referenced_by_relocation;
+    bool group_signature;
+    bool emit;
+} MiniAsELFSymbolState;
+
+/* Resolve the two kinds of references once before assigning ELF symbol
+ * ordinals. A Target's STT_SECTION folding decision controls both whether
+ * the original local SymbolID survives in .symtab and how the relocation is
+ * serialized; recomputing it in those two passes risks divergent results.
+ * Likewise, the group signature selected for symbol liveness is the exact
+ * SymbolID later written into the SHT_GROUP reference. */
+typedef struct MiniAsELFFixupPlan {
+    bool use_section_symbol;
+} MiniAsELFFixupPlan;
+
+static bool plan_elf_symbols(MiniAsElfObjectView *as,MiniAsELFSymbolState *states,
+                             MiniAsELFFixupPlan *relocation_plan,
+                             const MiniAsObjectPlan *model_plan,
+                             size_t *emitted_count) {
+    size_t i;
+    size_t count=0U;
+    const size_t fixup_count=as->model.fixup_count;
+    for(i=0U;i<as->model.section_count;++i) {
+        const size_t id=model_plan->sections[i].signature_symbol;
+        if(id==SIZE_MAX)continue;
+        if(id>=as->model.symbol_count) {
+            elf_object_error(as,"invalid-group-signature:%s",
+                             as->model.sections[i].name);
+            return false;
+        }
+        states[id].group_signature=true;
+    }
+    for(i=0U;i<fixup_count;++i) {
+        const MiniAsFixup *fixup=&as->model.fixups[i];
+        relocation_plan[i].use_section_symbol=section_symbol_fixup(as,fixup);
+        if(fixup->symbol_index<as->model.symbol_count &&
+           !relocation_plan[i].use_section_symbol)
+            states[fixup->symbol_index].referenced_by_relocation=true;
+    }
+    for(i=0U;i<as->model.symbol_count;++i) {
+        const MiniAsSymbol *symbol=&as->model.symbols[i];
+        const bool temporary=symbol->bind==MINIAS_SYMBOL_BINDING_LOCAL &&
+            symbol->defined &&
+            (strncmp(symbol->name,".L",2U)==0 ||
+             minias_is_private_symbol_name(symbol->name));
+        states[i].emit=!temporary || states[i].group_signature ||
+            states[i].referenced_by_relocation;
+        if(states[i].emit) {
+            if(count==SIZE_MAX) {
+                elf_object_error(as,"too-many-elf-symbols");
+                return false;
+            }
             ++count;
         }
     }
-    return count;
+    *emitted_count=count;
+    return true;
 }
 
-/* Standard SHT_RISCV_ATTRIBUTES / Tag_RISCV_arch encoding for
- * explicitly qualified RV64I/LP64. A + vendor-length + "riscv" + Tag_File
- * + file-length + ULEB(Tag_arch=5) + NUL-terminated ISA string.
- * The profile is exact rv64i2p1, and thus never advertises extensions the
- * strict-I encoder refuses. Emit nothing for the historical default. */
-static const unsigned char rv32i_ilp32_attributes[] = {
-    0x41, 0x19, 0x00, 0x00, 0x00,
-    'r', 'i', 's', 'c', 'v', 0x00,
-    0x01, 0x0f, 0x00, 0x00, 0x00,
-    0x05, 'r', 'v', '3', '2', 'i', '2', 'p', '1', 0x00
-};
-static const unsigned char rv64i_lp64_attributes[] = {
-    0x41, 0x19, 0x00, 0x00, 0x00,
-    'r', 'i', 's', 'c', 'v', 0x00,
-    0x01, 0x0f, 0x00, 0x00, 0x00,
-    0x05, 'r', 'v', '6', '4', 'i', '2', 'p', '1', 0x00
-};
-#define MINIAS_SHT_RISCV_ATTRIBUTES UINT32_C(0x70000003)
-
-static bool minias_write_elf(MiniAs *as,
+static bool minias_write_elf(MiniAsElfObjectView *as,
                              const char *path,
                              unsigned char elf_class) {
+    const size_t fixup_count=as->model.fixup_count;
     MiniElfWriteSection *sections = NULL;
     MiniElfWriteSymbol *symbols = NULL;
     MiniElfWriteRela *relocations = NULL;
     size_t *symbol_map = NULL;
+    MiniAsObjectPlan object_plan={0};
+    MiniAsELFSymbolState *symbol_states = NULL;
+    MiniAsELFFixupPlan *relocation_plan = NULL;
+    char **private_names = NULL;
     unsigned char *image = NULL;
     size_t image_size = 0U;
     MiniElfWriteError write_error = MINIELF_WRITE_OK;
@@ -80,98 +216,191 @@ static bool minias_write_elf(MiniAs *as,
     size_t output_symbol_count = 0U;
     size_t expected_symbol_count;
     size_t section_count;
-    bool strict_arch_attribute;
+    MiniAsObjectAttribute attribute;
+    bool emit_attribute;
     size_t i;
-    FILE *file = NULL;
+    size_t private_suffix=0U;
     bool ok = false;
 
-    expected_symbol_count = emitted_symbol_count(as);
-    strict_arch_attribute = (as->strict_i_xlen == 32U && elf_class == ELFCLASS32) ||
-                            (as->strict_i_xlen == 64U && elf_class == ELFCLASS64);
-    if (strict_arch_attribute &&
-        minias_find_section(as, ".riscv.attributes") >= 0) {
-        minias_set_error(as, "rv64i-duplicate-arch-attribute-section");
+    if(as==NULL)return false;
+    if(as->policy==NULL || as->policy->supports_fixup==NULL ||
+       as->policy->fixup_relocation_type==NULL) {
+        elf_object_error(as,"missing-elf-target-policy");
         return false;
     }
-    if (as->section_count == SIZE_MAX) {
-        minias_set_error(as, "too-many-elf-sections");
-        return false;
+    if(!minias_object_plan(&as->model,&object_plan,
+                           as->error,sizeof(as->error)))return false;
+    if(as->model.symbol_count>SIZE_MAX/sizeof(*symbol_states)) {
+        elf_object_error(as,"too-many-elf-symbols");
+        goto done;
     }
-    section_count = as->section_count + (strict_arch_attribute ? 1U : 0U);
+    symbol_states=calloc(as->model.symbol_count==0U ? 1U : as->model.symbol_count,
+                         sizeof(*symbol_states));
+    if(symbol_states==NULL) {
+        elf_object_error(as,"out-of-memory:elf-symbol-plan");
+        goto done;
+    }
+    if(fixup_count>SIZE_MAX/sizeof(*relocation_plan)) {
+        elf_object_error(as,"elf-object-capacity-overflow");
+        goto done;
+    }
+    relocation_plan=calloc(fixup_count==0U?1U:fixup_count,
+                           sizeof(*relocation_plan));
+    if(relocation_plan==NULL) {
+        elf_object_error(as,"out-of-memory:elf-reference-plan");
+        goto done;
+    }
+    if(!plan_elf_symbols(as,symbol_states,relocation_plan,&object_plan,
+                         &expected_symbol_count))goto done;
+    if(as->model.cu_file_count>SIZE_MAX-expected_symbol_count) {
+        elf_object_error(as,"too-many-cu-file-symbols");
+        goto done;
+    }
+    expected_symbol_count+=as->model.cu_file_count;
+    memset(&attribute, 0, sizeof(attribute));
+    if (as->policy->object_attributes != NULL) {
+        as->policy->object_attributes(as->target_abi, elf_class,
+                                      &attribute);
+    }
+    emit_attribute = attribute.name != NULL &&
+                     (!as->suppress_target_attributes ||
+                      attribute.source_explicit);
+    if (emit_attribute && as->model.find_section(as->model.reader,attribute.name)>=0) {
+        elf_object_error(as,"duplicate-target-attribute-section:%s",attribute.name);
+        goto done;
+    }
+    if (as->model.section_count == SIZE_MAX) {
+        elf_object_error(as, "too-many-elf-sections");
+        goto done;
+    }
+    section_count = as->model.section_count + (emit_attribute ? 1U : 0U);
+    /* The ObjectModel contains independently sized vectors. Guard every
+     * multiplication before allocating: an overflowing plain malloc for
+     * symbol_map would otherwise create an undersized ordinal map even
+     * though the surrounding calloc arrays reject their own overflow. */
+    if(section_count>SIZE_MAX/sizeof(*sections) ||
+       expected_symbol_count>SIZE_MAX/sizeof(*symbols) ||
+       fixup_count>SIZE_MAX/sizeof(*relocations) ||
+       as->model.symbol_count>SIZE_MAX/sizeof(*symbol_map) ||
+       as->model.symbol_count>SIZE_MAX/sizeof(*private_names)) {
+        elf_object_error(as,"elf-object-capacity-overflow");
+        goto done;
+    }
     sections = calloc(section_count == 0U ? 1U : section_count,
                       sizeof(*sections));
     symbols = calloc(expected_symbol_count == 0U ? 1U : expected_symbol_count,
                      sizeof(*symbols));
-    relocations = calloc(as->reloc_count == 0U ? 1U : as->reloc_count,
+    relocations = calloc(fixup_count == 0U ? 1U : fixup_count,
                          sizeof(*relocations));
-    symbol_map = malloc((as->symbol_count == 0U ? 1U : as->symbol_count) *
+    symbol_map = malloc((as->model.symbol_count == 0U ? 1U : as->model.symbol_count) *
                         sizeof(*symbol_map));
+    private_names = calloc(as->model.symbol_count == 0U ? 1U : as->model.symbol_count,
+                           sizeof(*private_names));
     if (sections == NULL || symbols == NULL || relocations == NULL ||
-        symbol_map == NULL) {
-        minias_set_error(as, "out-of-memory:elf");
+        symbol_map == NULL || private_names == NULL) {
+        elf_object_error(as, "out-of-memory:elf");
         goto done;
     }
-    for (i = 0U; i < as->symbol_count; ++i) {
+    for (i = 0U; i < as->model.symbol_count; ++i) {
         symbol_map[i] = SIZE_MAX;
     }
+    /* STT_FILE is a real ELF local symbol with absolute section identity.
+     * Keep it outside the user-label hash and the relocation SymbolID map;
+     * duplicate source filenames must never alias a program label. */
+    for(i=0U;i<as->model.cu_file_count;++i) {
+        MiniElfWriteSymbol *output=&symbols[output_symbol_count++];
+        output->name=as->model.cu_file(as->model.reader,i);
+        output->info=(unsigned char)((STB_LOCAL<<4U)|STT_FILE);
+        output->section_index=SHN_ABS;
+    }
 
-    for (i = 0U; i < as->section_count; ++i) {
-        MiniAsSection *input = &as->sections[i];
+    for (i = 0U; i < as->model.section_count; ++i) {
+        const MiniAsSection *input=&as->model.sections[i];
+        const MiniAsObjectSectionPlan *planned=&object_plan.sections[i];
         MiniElfWriteSection *output = &sections[i];
 
         output->name = input->name;
-        output->type = input->type;
-        output->flags = input->flags;
+        if(!project_elf_section(as,input,output))goto done;
+        if(planned->linked_section!=SIZE_MAX) {
+            output->has_link_order_target=true;
+            output->linked_target_section=planned->linked_section;
+        }
         output->alignment = input->align == 0U ? 1U : input->align;
-        output->entry_size = 0U;
-        output->data = input->data;
-        output->size = input->size;
+        output->entry_size = input->entry_size;
+        output->data=planned->bytes;
+        output->size=planned->size;
     }
 
-    if (strict_arch_attribute) {
-        MiniElfWriteSection *attr = &sections[as->section_count];
-        attr->name = ".riscv.attributes";
-        attr->type = MINIAS_SHT_RISCV_ATTRIBUTES;
+    if (emit_attribute) {
+        MiniElfWriteSection *attr = &sections[as->model.section_count];
+        attr->name = attribute.name;
+        attr->type = attribute.type;
         attr->flags = 0U;
         attr->alignment = 1U;
         attr->entry_size = 0U;
-        attr->data = as->strict_i_xlen == 32U ?
-            rv32i_ilp32_attributes : rv64i_lp64_attributes;
-        attr->size = as->strict_i_xlen == 32U ?
-            sizeof(rv32i_ilp32_attributes) : sizeof(rv64i_lp64_attributes);
+        attr->data = attribute.data;
+        attr->size = attribute.size;
     }
 
-    for (i = 0U; i < as->symbol_count; ++i) {
-        MiniAsSymbol *input = &as->symbols[i];
+    for (i = 0U; i < as->model.symbol_count; ++i) {
+        const MiniAsSymbol *input = &as->model.symbols[i];
         MiniElfWriteSymbol *output;
+        bool local_group_signature=false;
 
-        if (!should_emit_symbol(as, i)) {
+        if (!symbol_states[i].emit) {
             continue;
         }
-        if (input->bind == MINIAS_STB_LOCAL && !input->defined) {
-            minias_set_error(as,
+        local_group_signature=input->bind==MINIAS_SYMBOL_BINDING_LOCAL &&
+            !input->defined && symbol_states[i].group_signature;
+        if (input->bind == MINIAS_SYMBOL_BINDING_LOCAL && !input->defined &&
+            !local_group_signature) {
+            elf_object_error(as,
                              "undefined-local-symbol:%s",
                              input->name);
             goto done;
         }
         if (output_symbol_count >= expected_symbol_count) {
-            minias_set_error(as, "internal:symbol-count");
+            elf_object_error(as, "internal:symbol-count");
             goto done;
         }
         symbol_map[i] = output_symbol_count;
         output = &symbols[output_symbol_count++];
-        output->name = input->name;
-        output->info =
-            (unsigned char)((input->bind << 4U) | (input->type & 0x0fU));
-        output->other = input->visibility;
+        if(minias_is_private_symbol_name(input->name)) {
+            char visible[96];
+            int n;
+            /* Source labels cannot address the private SymbolID; pick an
+             * ELF spelling absent from the full user symbol table. */
+            do {
+                if(private_suffix==SIZE_MAX) {
+                    elf_object_error(as,"private-symbol-name-overflow");
+                    goto done;
+                }
+                n=snprintf(visible,sizeof(visible),
+                           ".Lminias_private_%zu",private_suffix++);
+                if(n<0 || (size_t)n>=sizeof(visible)) {
+                    elf_object_error(as,"private-symbol-name-capacity");
+                    goto done;
+                }
+            }while(elf_has_symbol(as,visible));
+            private_names[i]=minias_strdup(visible);
+            if(private_names[i]==NULL) {
+                elf_object_error(as,"out-of-memory:elf-private-symbol");
+                goto done;
+            }
+            output->name=private_names[i];
+        }else output->name=input->name;
+        if(!project_elf_symbol(as,input,output))goto done;
         if (!input->defined) {
             output->section_index = SHN_UNDEF;
+            output->group_signature_section=local_group_signature;
         } else if (input->section == MINIAS_SECTION_ABS) {
             output->section_index = SHN_ABS;
+        } else if (input->section == MINIAS_SECTION_COMMON) {
+            output->section_index = SHN_COMMON;
         } else if (input->section < 0 ||
-                   (size_t)input->section >= as->section_count ||
+                   (size_t)input->section >= as->model.section_count ||
                    (size_t)input->section + 1U > UINT16_MAX) {
-            minias_set_error(as,
+            elf_object_error(as,
                              "internal:bad-symbol-section:%s",
                              input->name);
             goto done;
@@ -183,81 +412,132 @@ static bool minias_write_elf(MiniAs *as,
         output->size = input->size;
     }
     if (output_symbol_count != expected_symbol_count) {
-        minias_set_error(as, "internal:symbol-count");
+        elf_object_error(as, "internal:symbol-count");
         goto done;
     }
+    for(i=0U;i<as->model.section_count;++i) {
+        const MiniAsSection *sec=&as->model.sections[i];
+        const size_t idx=object_plan.sections[i].signature_symbol;
+        if(idx!=SIZE_MAX) {
+            if(idx>=as->model.symbol_count || symbol_map[idx]==SIZE_MAX) {
+                elf_object_error(as,"invalid-group-signature:%s",sec->name);
+                goto done;
+            }
+            sections[i].group_signature_symbol=symbol_map[idx];
+        }
+    }
 
-    for (i = 0U; i < as->reloc_count; ++i) {
-        MiniAsReloc *input = &as->relocs[i];
+    for (i = 0U; i < fixup_count; ++i) {
+        const MiniAsFixup *input = &as->model.fixups[i];
         MiniElfWriteRela *output = &relocations[i];
-
-        if (input->section < 0 ||
-            (size_t)input->section >= as->section_count ||
-            input->symbol_index >= as->symbol_count ||
+        const uint64_t final_offset=object_plan.fixups[i].final_offset;
+        const bool section_reloc=relocation_plan[i].use_section_symbol;
+        if (input->symbol_index != SIZE_MAX && !section_reloc &&
             symbol_map[input->symbol_index] == SIZE_MAX) {
-            minias_set_error(as, "internal:bad-relocation-symbol");
+            elf_object_error(as, "internal:bad-relocation-symbol");
+            goto done;
+        }
+        /* The encoded ELF relocation number is an opaque Target value,
+         * not a predicate. R_*_NONE may legitimately be zero; only the
+         * semantic capability contract can reject an unsupported fixup.
+         * A raw NONE request is never allowed to masquerade as an actual
+         * relocation, regardless of a future target's numeric mapping. */
+        if (input->kind == MINIAS_FIXUP_NONE ||
+            as->policy->supports_fixup==NULL ||
+            !as->policy->supports_fixup(as->target_abi,input->kind,input->width)) {
+            elf_object_error(as, "unsupported-elf-fixup:kind=%u",
+                             (unsigned)input->kind);
             goto done;
         }
         output->target_section = (size_t)input->section;
-        output->offset = input->offset;
-        output->symbol_index = symbol_map[input->symbol_index];
-        output->type = input->type;
+        output->offset = final_offset;
+        output->symbol_index = input->symbol_index == SIZE_MAX ? SIZE_MAX :
+                               symbol_map[input->symbol_index];
+        output->type = as->policy->fixup_relocation_type(
+            as->target_abi,input->kind,input->width);
+        output->field_width = input->width;
         output->addend = input->addend;
+        if(section_reloc) {
+            const MiniAsSymbol *local=&as->model.symbols[input->symbol_index];
+            if(local->value>(uint64_t)INT64_MAX ||
+               (input->addend>0 &&
+                (uint64_t)input->addend>(uint64_t)INT64_MAX-local->value)) {
+                elf_object_error(as,"section-fixup-addend-overflow:%s",
+                                 local->name);
+                goto done;
+            }
+            output->use_section_symbol=true;
+            output->section_symbol_index=(size_t)local->section;
+            output->addend=(int64_t)local->value+input->addend;
+        }
     }
 
     memset(&spec, 0, sizeof(spec));
     spec.elf_class = elf_class;
     spec.data_encoding = ELFDATA2LSB;
-    spec.machine = EM_RISCV;
+    /* GNU symbol-type and binding extensions require EI_OSABI=GNU so
+     * external readelf/ld classify type 10 as IFUNC and bind 10 UNIQUE,
+     * rather than unknown OS-specific symbol types. Derive from emitted
+     * symbols; ordinary RV/other ELF objects retain System V. */
+    spec.osabi = ELFOSABI_NONE;
+    for (i = 0U; i < output_symbol_count; ++i) {
+        if ((symbols[i].info & 0x0fU) == STT_GNU_IFUNC ||
+            (symbols[i].info >> 4U) == STB_GNU_UNIQUE) {
+            spec.osabi = ELFOSABI_GNU;
+            break;
+        }
+    }
+    spec.machine = as->object_machine != 0U ?
+                   as->object_machine : as->policy->elf_machine;
+    spec.relocation_format = as->output_rel_relocations ?
+                             MINIELF_RELOC_FORMAT_REL :
+                             MINIELF_RELOC_FORMAT_RELA;
     spec.flags = as->elf_flags;
     spec.sections = sections;
     spec.section_count = section_count;
     spec.symbols = symbols;
     spec.symbol_count = output_symbol_count;
     spec.relocations = relocations;
-    spec.relocation_count = as->reloc_count;
+    spec.relocation_count = fixup_count;
     spec.emit_section_symbols = true;
+    spec.emit_all_section_symbols = as->policy->emit_all_section_symbols;
 
     if (!minielf_build_relocatable(&spec,
                                    &image,
                                    &image_size,
                                    &write_error)) {
-        minias_set_error(as,
+        elf_object_error(as,
                          "elf-write:%s",
                          minielf_write_error_string(write_error));
         goto done;
     }
 
-    file = fopen(path, "wb");
-    if (file == NULL) {
-        minias_set_error(as, "output-open:%s", path);
-        goto done;
-    }
-    if (fwrite(image, 1U, image_size, file) != image_size ||
-        fclose(file) != 0) {
-        file = NULL;
-        minias_set_error(as, "output-write:%s", path);
-        goto done;
-    }
-    file = NULL;
-    ok = true;
+    ok=minias_object_publish_image(path,image,image_size,
+                                   as->error,sizeof(as->error));
 
 done:
-    if (file != NULL) {
-        (void)fclose(file);
+    if(private_names!=NULL) {
+        for(i=0U;i<as->model.symbol_count;++i)free(private_names[i]);
     }
+    free(private_names);
     free(image);
     free(symbol_map);
+    minias_object_dispose_plan(&object_plan);
+    free(symbol_states);
+    free(relocation_plan);
     free(relocations);
     free(symbols);
     free(sections);
     return ok;
 }
 
-bool minias_write_elf64(MiniAs *as, const char *path) {
-    return minias_write_elf(as, path, ELFCLASS64);
-}
-
-bool minias_write_elf32(MiniAs *as, const char *path) {
-    return minias_write_elf(as, path, ELFCLASS32);
+bool minias_write_elf_object(MiniAsElfObjectView *as, const char *path) {
+    if(as==NULL || path==NULL)return false;
+    if(as->target_abi.address_size==4U)
+        return minias_write_elf(as,path,ELFCLASS32);
+    if(as->target_abi.address_size==8U)
+        return minias_write_elf(as,path,ELFCLASS64);
+    elf_object_error(as,"invalid-elf-address-size:%u",
+                     (unsigned)as->target_abi.address_size);
+    return false;
 }

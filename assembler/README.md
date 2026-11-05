@@ -1,33 +1,89 @@
 # MiniAS assembler component
 
-Ownership: RISC-V assembly source (`.s`) to ELF relocatable object (`.o`).
+Ownership: target assembly source (`.s`) to ELF relocatable object (`.o`),
+currently covering RISC-V (RV32/RV64), AArch64, x86-64 and LoongArch64.
 
 Public tool identity: `minic-as`.
 
 ## Architecture
 
-MiniAS deliberately does not build a compiler-style AST or IR. Assembly already
-contains target instructions and explicit assembler directives, so the production
-path is a compact two-pass assembler:
+MiniAS deliberately does not build a compiler-style AST for an entire `.s`.
+It does retain typed instruction/operand objects, expression trees and MC
+fragments for layout, fixups and output:
 
 ```text
 assembly text
-  -> statement/directive parser
-  -> section + symbol ownership
-  -> pass-1 offsets and sizes
-  -> RV64 instruction encoding + fixups/relocations
-  -> ELF64 ET_REL writer
+  -> SourceGraph / macro and conditional expansion
+  -> common statement/directive parser + target instruction parser
+  -> typed MCInst / MCExpr / sections / symbols / fragments
+  -> MCLayout / target relaxation / encoding / fixups
+  -> ELF32 or ELF64 ET_REL writer
 ```
+
+See [the target boundary migration contract](docs/target-boundary.md) for
+implemented ISA/ABI behavior and remaining architecture work.
+See also [the 2026-10-31 architecture discussion decisions](docs/architecture-discussion-decisions-2026-10-31.md)
+for the agreed ISA/ABI/configuration and Parser-to-MC design boundaries,
+verified source gaps, and proposed follow-up order (not implementation status).
+The [full-source review ledger](docs/full-source-review-ledger-2026-10-29.md)
+starts with the current file-count/refactor-progress dashboard and separates
+source coverage, touched files, closed ownership boundaries and deferred work.
 
 The C implementation is split by ownership:
 
-- `assembler.c`: statement parsing, sections, symbols and the two-pass driver.
-- `riscv_encode.c`: RISC-V register and instruction encoding.
-- `elf_writer.c`: relocatable ELF object construction.
+- `source_graph.c`, `source_expansion.c`: source-site identity and GNU source expansion.
+- `assembler.c`: assembly-session lifecycle, Target finalization and output driver.
+- `common_lowering.c`: the sole Common statement/directive lowerer and
+  creation of typed source Fragments; its private pass state owns GNU numeric
+  labels, literal pools, section stacks and deferred layout-control flags.
+- `common_context.c`: stable SectionID/SymbolID identities, aliases, names
+  and their indexes; hash tables and vector capacities are opaque Context
+  state, while semantic Section/Symbol records retain stable shared IDs.
+- `common_emission.c`: fragment-owned Fixup/EncodeResult transaction,
+  typed DATA materialization, Section byte commits and final emission;
+  `minias_common_emission.h` exposes read-only Fixup/cursor queries and
+  `minias_common_emission_private.h` confines mutable transaction state to
+  Emission plus the shared request encoder.
+- `mc_leb.c`: one reusable signed/unsigned LEB byte serializer for source,
+  layout and DWARF consumers, independent of Section storage.
+- `mc_layout.c`: owns canonical Subsections, their parser hash index and
+  persistent Fragment anchor graph; exposes only a const subsection lookup
+  for CFI, and consumes Lowering's parse-complete layout plan snapshot.
+- `mc_expr.c`: retained symbolic expression semantics.
+- `riscv_encode.c`, `aarch64_target.c`, `x86_64_target.c`, `loongarch64_target.c`:
+  target-specific instruction parsing, measuring and encoding.
+- `elf_writer.c`: relocatable ELF object construction through `minielf`.
 - `tools/minic-as/main.c`: standalone command-line driver.
 
 The older Python MiniAS is used as a semantic and bug-history reference, not as a
 physical code template.
+
+The Common domain split changes function ownership and destructor delegation,
+not the SourceGraph replay/Target encode protocol. Emission's Fixup vector,
+fragment transaction, EncodeResult and anchor ordinal now live behind an
+opaque state. Context indexes, Lowering worklists and MCLayout subsection
+storage likewise have their own private lifetime; the shared `MiniAs` carries
+only their opaque handles and the semantically shared Section/Symbol/Fragment
+records. `MiniAsStmt` now holds one `FragmentKind`-discriminated payload
+union rather than 22 mutually exclusive flat fields; Target pre-layout,
+SourceGraph, Lowering, MCExpr, MCLayout and Emission all consume the same
+variant, and Common destroys only its active arm. Section/Symbol and Fragment
+phase-aware access still need further tightening before a format-neutral
+ObjectModel. See [the P06 owner-split record](docs/common-owner-split-2026-11-02.md)
+and [the Fragment payload migration](docs/fragment-payload-2026-11-02.md).
+
+The subsequent [Target read-projection boundary](docs/target-readonly-views-2026-11-02.md)
+removes raw Common Section/Symbol definitions from the Target header and
+replaces the PreLayout/PostEmit array borrows and Relax/Encode Symbol pointers
+with live phase-scoped scalar/const views; no alternate persistent object
+graph is constructed.
+
+The [MCInst phase read-only migration](docs/instruction-readonly-phases-2026-11-02.md)
+now also makes Parse the sole builder of the retained instruction. All four
+Targets measure, relax and encode from a stack-scoped, recursively const-
+borrowed operand projection; lifetime/destructor fields never cross those
+three stage interfaces. Generic ALIGN and site-capture callback narrowing
+is still separate work.
 
 ## Explicit strict RV64I profile
 

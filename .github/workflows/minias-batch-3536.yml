@@ -1,0 +1,26 @@
+name: MiniAS Opt-in Full 3536 Acceptance
+
+# Deliberately expensive and intentionally opt-in: ordinary targeted fixes
+# only run focused A0/ISA gates. One consolidated architecture milestone can
+# request the 3352+149+35 corpus via the commit trailer below.
+on:
+  push:
+    branches:
+      - refactor/minias-target-isa-abi-core
+    paths:
+      - 'assembler/**'
+      - 'elf/**'
+      - 'tools/minic-as/**'
+      - 'tests/assembler/**'
+      - '.github/workflows/minias-batch-3536.yml'
+      - '.github/workflows/minias-a0-gate-v1.yml'
+      - 'tests/external/linux/corpus_replay.py'
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  exact-head-3536:
+    if: contains(github.event.head_commit.message, '[minias-gate-v1]')
+    uses: ./.github/workflows/minias-a0-gate-v1.yml

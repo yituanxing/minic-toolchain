@@ -1,0 +1,13 @@
+Archive member included to satisfy reference by file (symbol)
+
+Discarded input sections
+
+ .note.GNU-stack
+                0x0000000000000000        0x0 vmlinux.a(foo.o)
+ .exitcall.exit
+                0x0000000000000000        0x8 vmlinux.a(foo.o)
+ .exitcall.exit 0x0000000000000000        0x8 vmlinux.a(bar.o)
+
+Memory Configuration
+
+Name             Origin             Length             Attributes

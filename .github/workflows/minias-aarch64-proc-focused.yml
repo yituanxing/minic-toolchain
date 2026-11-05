@@ -1,0 +1,60 @@
+name: MiniAS AArch64 Linux proc.o Focused GNU Oracle
+
+# One exact Kbuild .config and one GCC .s. GNU AS is an independent reference;
+# MiniAS alone builds the candidate object. No mixed kernel gets accepted.
+on:
+  workflow_dispatch:
+  push:
+    branches: [refactor/minias-target-isa-abi-core]
+    paths:
+      - '.github/workflows/minias-aarch64-proc-focused.yml'
+      - 'tests/external/linux/minias_aarch64_proc_focused.sh'
+      - 'assembler/**'
+      - 'elf/**'
+
+permissions:
+  contents: read
+
+jobs:
+  proc-gnu-single-as:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[minias-aarch-proc]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Install AArch64 GNU Kbuild dependencies
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu \
+            gcc make bc bison flex libssl-dev libelf-dev \
+            curl xz-utils python3-pyelftools
+
+      - name: Build exact-head MiniAS assembler
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse HEAD)" = '${{ github.sha }}'
+          make -j4 MODE=release CFLAGS=-Werror build/release/bin/minic-as
+
+      - name: Focused real proc.S GCC S to MiniAS/GNU sidecars
+        id: proc
+        timeout-minutes: 22
+        env:
+          MINIAS: ${{ github.workspace }}/build/release/bin/minic-as
+          WORK_DIR: ${{ github.workspace }}/build/minias-aarch64-proc-focused
+          LINUX_VERSION: 6.6.143
+        run: bash tests/external/linux/minias_aarch64_proc_focused.sh
+
+      - name: Preserve exact GCC source, object binaries and ELF diff
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: minias-aarch64-proc-focused
+          path: build/minias-aarch64-proc-focused/evidence/**
+          if-no-files-found: warn
+          retention-days: 14

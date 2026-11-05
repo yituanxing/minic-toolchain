@@ -1,0 +1,202 @@
+name: MiniLD RV64 Linux Cached Full Image Experiment
+
+# Explicitly opt in: manual dispatch or a clearly tagged branch commit only;
+# all other pushes skip this expensive experiment and do not touch green CI.
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - refactor/minias-target-isa-abi-core
+    paths:
+      - .github/workflows/minild-rv64-linux-cached-full-image-experiment.yml
+      - tools/ci/minild-rv64-linux-cached-full-image-experiment-v1.sh
+      - linker/**
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  rv64-mini-ld-full-image:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[minild-rv64-full-image]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pinned-baseline GNU tools and QEMU prerequisites
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get -o Acquire::Retries=3 update -qq
+          sudo apt-get -o Acquire::Retries=3 install -y -qq --no-install-recommends \
+            gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu libc6-dev-riscv64-cross \
+            qemu-system-misc opensbi make curl xz-utils cpio gzip file
+
+      - name: Resolve exact historical GNU Kbuild cache identity
+        id: golden
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          config=eeb04f304ebfb97a1079c187dc0c2ea3cc61fc50a55aa3cc776237c16ab19bbe
+          gcc_sig=$(sha256sum "$(command -v riscv64-linux-gnu-gcc)" | cut -c1-16)
+          ld_sig=$(sha256sum "$(command -v riscv64-linux-gnu-ld)" | cut -c1-16)
+          key="linux-gnu-golden-v1-6.6.143-$config-$gcc_sig-$ld_sig"
+          printf 'key=%s\n' "$key" >>"$GITHUB_OUTPUT"
+          echo "MINILD_RV64_REQUESTED_CACHE=$key"
+
+      - name: Restore only the QEMU-certified GNU object cache
+        id: golden_cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            build/linux-runtime-gcc/out
+            build/linux-runtime-gcc/provenance
+          key: ${{ steps.golden.outputs.key }}
+          restore-keys: |
+            linux-gnu-golden-v1-6.6.143-
+          fail-on-cache-miss: true
+
+      - name: Verify provenance, exact .config and every original GNU object SHA
+        shell: bash
+        env:
+          MATCHED_CACHE_KEY: ${{ steps.golden_cache.outputs['cache-matched-key'] }}
+        run: |
+          set -Eeuo pipefail
+          case "$MATCHED_CACHE_KEY" in
+            linux-gnu-golden-v1-6.6.143-eeb04f304ebfb97a1079c187dc0c2ea3cc61fc50a55aa3cc776237c16ab19bbe-*) ;;
+            *) echo "MINILD_RV64_GOLDEN=FAIL wrong_matched_cache_key=$MATCHED_CACHE_KEY" >&2; exit 10 ;;
+          esac
+          work="$GITHUB_WORKSPACE/build/linux-runtime-gcc"
+          ev="$GITHUB_WORKSPACE/build/minild-rv64-full-image-evidence"
+          mkdir -p "$ev"
+          printf 'matched_cache_key=%s\nrequested_key=%s\n' \
+            "$MATCHED_CACHE_KEY" '${{ steps.golden.outputs.key }}' >"$ev/cache-identity.txt"
+          bash tools/ci/minild-rv64-linux-cached-full-image-experiment-v1.sh verify-golden \
+            "$work/out" "$work/provenance" "$ev"
+
+      - name: Fetch identical Linux 6.6.143 source with exact archived SHA
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-runtime-gcc"
+          archive="$work/linux-6.6.143.tar.xz"
+          mkdir -p "$work"
+          curl -fL --retry 3 --retry-delay 3 \
+            https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.6.143.tar.xz \
+            -o "$archive"
+          printf '%s  %s\n' \
+            dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932 \
+            "$archive" | sha256sum -c -
+          tar -xJf "$archive" -C "$work"
+          test -s "$work/linux-6.6.143/scripts/link-vmlinux.sh"
+          echo 'MINILD_RV64_LINUX_SOURCE=PASS release=6.6.143 source_compile=NOT_RUN'
+
+      - name: Build current MiniLD only with warnings as errors
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          tools="$GITHUB_WORKSPACE/build/minild-rv64-full-image-tools"
+          make -C "$GITHUB_WORKSPACE" -j4 MODE=release CFLAGS=-Werror \
+            BUILD_DIR="$tools" "$tools/bin/minic-ld"
+          test -x "$tools/bin/minic-ld"
+          sha256sum "$tools/bin/minic-ld"
+
+      # Stage A: the *original* stable Linux scripts/link-vmlinux.sh generates
+      # fresh kallsyms1/2/optional3 and final vmlinux+System.map from MiniLD.
+      # Strict MAKE/CC/LD command guards prevent any Linux .c compilation.
+      - name: 'Stage A: original Kbuild kallsyms and MiniLD final vmlinux'
+        shell: bash
+        timeout-minutes: 18
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-runtime-gcc"
+          ev="$GITHUB_WORKSPACE/build/minild-rv64-full-image-evidence"
+          mini="$GITHUB_WORKSPACE/build/minild-rv64-full-image-tools/bin/minic-ld"
+          bash tools/ci/minild-rv64-linux-cached-full-image-experiment-v1.sh full-link \
+            "$work/out" "$work/linux-6.6.143" "$work/linux-6.6.143.tar.xz" \
+            "$ev" "$mini"
+
+      # Stage B only runs if Stage A has produced an authenticated MiniLD
+      # final vmlinux; use Linux's RV64 GNU objcopy flags and the unchanged
+      # QEMU full/P1 runtime contract, never a borrowed golden GNU Image.
+      - name: 'Stage B: GNU objcopy Image from actual MiniLD vmlinux'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-runtime-gcc"
+          mini="$GITHUB_WORKSPACE/build/minild-rv64-full-image-tools/bin/minic-ld"
+          ev="$GITHUB_WORKSPACE/build/minild-rv64-full-image-evidence"
+          bash tools/ci/minild-rv64-linux-cached-full-image-experiment-v1.sh image \
+            "$work/out" "$ev" "$mini"
+
+      - name: Prepare separate userspace-only deterministic initramfs
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-runtime-gcc"
+          BUILD_DIR="$work/mini-runtime-initramfs" \
+          OUTPUT_INITRAMFS="$work/mini-runtime-initramfs.cpio.gz" \
+          RISCV_CC=riscv64-linux-gnu-gcc \
+          LINUX_RUNTIME_REPRODUCIBLE=1 \
+            bash tests/external/linux/build_runtime_initramfs.sh
+          # Above GCC compiles precisely three userspace-only runtime programs;
+          # Linux kernel C sources and frozen GNU object pool are untouched.
+          echo 'MINILD_RV64_USERSpace=PASS Linux_kernel_C_compiles=0'
+
+      - name: 'Stage B: QEMU full Linux PID1 and shell 2/2'
+        shell: bash
+        timeout-minutes: 7
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-runtime-gcc"
+          LINUX_IMAGE="$work/out/arch/riscv/boot/Image.minild" \
+          INITRAMFS="$work/mini-runtime-initramfs.cpio.gz" \
+          BUILD_DIR="$work/mini-runtime-qemu-full" \
+          LINUX_RELEASE=6.6.143 \
+          QEMU_SYSTEM_RISCV64=qemu-system-riscv64 \
+          QEMU_TIMEOUT_SECONDS=90 \
+          QEMU_SHELL_INPUT_DELAY_SECONDS=8 \
+            bash tests/external/linux/runtime_boot.sh
+          echo 'MINILD_RV64_QEMU_FULL=PASS lanes=2/2 MiniLD_vmlinux=true'
+
+      - name: 'Stage B: QEMU P1 syscalls 12/12'
+        shell: bash
+        timeout-minutes: 4
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-runtime-gcc"
+          LINUX_IMAGE="$work/out/arch/riscv/boot/Image.minild" \
+          INITRAMFS="$work/mini-runtime-initramfs.cpio.gz" \
+          BUILD_DIR="$work/mini-runtime-qemu-p1" \
+          LINUX_RELEASE=6.6.143 \
+          LINUX_RUNTIME_PROFILE=p1 \
+          QEMU_SYSTEM_RISCV64=qemu-system-riscv64 \
+          QEMU_TIMEOUT_SECONDS=90 \
+            bash tests/external/linux/runtime_boot.sh
+          echo 'MINILD_RV64_QEMU_P1=PASS syscalls=12/12 MiniLD_vmlinux=true'
+
+      - name: Final authentic all-stage verdict
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-runtime-gcc"
+          mini="$GITHUB_WORKSPACE/build/minild-rv64-full-image-tools/bin/minic-ld"
+          ev="$GITHUB_WORKSPACE/build/minild-rv64-full-image-evidence"
+          test -s "$ev/stage-a.ok"
+          test -s "$ev/minild-Image.sha256"
+          bash tools/ci/minild-rv64-linux-cached-full-image-experiment-v1.sh audit-final \
+            "$work/out" "$ev" "$mini"
+          echo 'MINILD_RV64_CACHED_FULL_IMAGE=PASS kallsyms1_2_optional3=true final_vmlinux=true Image=true QEMU_full=2/2 QEMU_P1=12/12 kernel_C_recompiled=0'
+
+      - name: Preserve independent link and QEMU evidence even on failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: minild-rv64-cached-full-image-experiment-${{ github.sha }}
+          path: |
+            build/minild-rv64-full-image-evidence/
+            build/linux-runtime-gcc/mini-runtime-qemu-full/*.log
+            build/linux-runtime-gcc/mini-runtime-qemu-p1/*.log
+          if-no-files-found: warn
+          retention-days: 14

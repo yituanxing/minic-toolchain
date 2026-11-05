@@ -17,12 +17,29 @@ typedef enum MiniLdScriptExprKind {
     MINILD_SCRIPT_EXPR_SUBTRACT,
     MINILD_SCRIPT_EXPR_MULTIPLY,
     MINILD_SCRIPT_EXPR_DIVIDE,
+    MINILD_SCRIPT_EXPR_MODULO,
     MINILD_SCRIPT_EXPR_SHIFT_LEFT,
+    MINILD_SCRIPT_EXPR_SHIFT_RIGHT,
+    MINILD_SCRIPT_EXPR_BITWISE_AND,
+    MINILD_SCRIPT_EXPR_BITWISE_XOR,
+    MINILD_SCRIPT_EXPR_BITWISE_OR,
+    MINILD_SCRIPT_EXPR_BITWISE_NOT,
     MINILD_SCRIPT_EXPR_NEGATE,
     MINILD_SCRIPT_EXPR_ALIGN,
     MINILD_SCRIPT_EXPR_ADDR,
+    MINILD_SCRIPT_EXPR_SIZEOF,
     MINILD_SCRIPT_EXPR_ABSOLUTE,
-    MINILD_SCRIPT_EXPR_SIZEOF_HEADERS
+    MINILD_SCRIPT_EXPR_SIZEOF_HEADERS,
+    MINILD_SCRIPT_EXPR_LESS,
+    MINILD_SCRIPT_EXPR_LESS_EQUAL,
+    MINILD_SCRIPT_EXPR_GREATER,
+    MINILD_SCRIPT_EXPR_GREATER_EQUAL,
+    MINILD_SCRIPT_EXPR_EQUAL,
+    MINILD_SCRIPT_EXPR_NOT_EQUAL,
+    MINILD_SCRIPT_EXPR_LOGICAL_NOT,
+    MINILD_SCRIPT_EXPR_LOGICAL_AND,
+    MINILD_SCRIPT_EXPR_LOGICAL_OR,
+    MINILD_SCRIPT_EXPR_ASSERT
 } MiniLdScriptExprKind;
 
 typedef struct MiniLdScriptExpr {
@@ -35,6 +52,12 @@ typedef struct MiniLdScriptExpr {
 
 typedef struct MiniLdScriptPattern {
     char *text;
+    /* NULL matches any input file, otherwise a GNU file-name wildcard. */
+    char *file_pattern;
+    /* One GNU parenthesized file selector may contain multiple unsorted
+     * patterns. They match in input-object order as a union, unlike separate
+     * selectors, which are consumed one after another. Zero is ungrouped. */
+    size_t selector_id;
     bool keep;
     bool sort;
     bool common;
@@ -50,11 +73,16 @@ typedef enum MiniLdScriptSectionItemKind {
 
 typedef struct MiniLdScriptSectionItem {
     MiniLdScriptSectionItemKind kind;
+    /* GNU output-section data commands share the same expression grammar;
+     * encoding width belongs to the script command, not the target ISA. */
+    unsigned data_width;
     union {
         MiniLdScriptPattern pattern;
         struct {
             char *name;
             MiniLdScriptExprId expression;
+            bool provide;
+            bool hidden;
         } symbol;
         MiniLdScriptExprId expression;
     } value;
@@ -65,6 +93,8 @@ typedef struct MiniLdScriptOutputSection {
     MiniLdScriptExprId address;
     MiniLdScriptExprId at;
     MiniLdScriptExprId align;
+    MiniLdScriptExprId fill;
+    bool info; /* GNU (INFO): keep section outside the PT_LOAD image. */
     MiniLdScriptSectionItem *items;
     size_t item_count;
     size_t item_capacity;
@@ -78,7 +108,8 @@ typedef struct MiniLdScriptOutputSection {
 typedef enum MiniLdScriptCommandKind {
     MINILD_SCRIPT_DEFINE_SYMBOL = 0,
     MINILD_SCRIPT_SET_DOT,
-    MINILD_SCRIPT_OUTPUT_SECTION
+    MINILD_SCRIPT_OUTPUT_SECTION,
+    MINILD_SCRIPT_ASSERT
 } MiniLdScriptCommandKind;
 
 typedef struct MiniLdScriptCommand {
@@ -88,6 +119,7 @@ typedef struct MiniLdScriptCommand {
             char *name;
             MiniLdScriptExprId expression;
             bool provide; /* GNU PROVIDE: define only if unresolved */
+            bool hidden; /* GNU PROVIDE_HIDDEN/HIDDEN: STV_HIDDEN */
         } symbol;
         MiniLdScriptExprId expression;
         MiniLdScriptOutputSection section;
@@ -106,6 +138,10 @@ typedef struct MiniLdScriptPhdr {
 typedef struct MiniLdScript {
     char *entry_symbol;
     char *output_arch;
+    char *output_format;
+    /* GNU EXTERN names are archive-admission roots, not assignments. */
+    char **extern_symbols;
+    size_t extern_symbol_count;
     MiniLdScriptExpr *expressions;
     size_t expression_count;
     size_t expression_capacity;
@@ -137,6 +173,7 @@ typedef struct MiniLdScriptEvalContext {
     bool have_headers_size;
     MiniLdScriptResolveSymbol resolve_symbol;
     MiniLdScriptResolveSection resolve_section;
+    MiniLdScriptResolveSection resolve_section_size;
     void *user;
 } MiniLdScriptEvalContext;
 
@@ -152,5 +189,10 @@ bool minild_script_evaluate(const MiniLdScript *script,
                             FILE *diagnostics);
 bool minild_script_pattern_matches(const MiniLdScriptPattern *pattern,
                                    const char *section_name);
+bool minild_script_pattern_matches_input(const MiniLdScriptPattern *pattern,
+                                         const char *section_name,
+                                         const char *input_file,
+                                         const char *archive_path,
+                                         const char *archive_member_name);
 
 #endif

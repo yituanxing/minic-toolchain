@@ -2,23 +2,15 @@
 
 #include <ctype.h>
 #include <stdlib.h>
+#include <stdint.h>
 
 static bool append_byte(unsigned char **data,
                         size_t *size,
                         size_t *capacity,
                         unsigned int value) {
-    unsigned char *next;
-    size_t next_capacity;
-
-    if (*size == *capacity) {
-        next_capacity = *capacity == 0U ? 32U : *capacity * 2U;
-        next = realloc(*data, next_capacity);
-        if (next == NULL) {
-            return false;
-        }
-        *data = next;
-        *capacity = next_capacity;
-    }
+    if (*size == SIZE_MAX ||
+        !minias_grow_array((void **)data,capacity,sizeof(**data),*size+1U))
+        return false;
     (*data)[(*size)++] = (unsigned char)(value & 0xffU);
     return true;
 }
@@ -54,10 +46,7 @@ bool minias_decode_string_literals(const char *text,
             ++p;
         }
         if (*p != '"') {
-            free(*data);
-            *data = NULL;
-            *size = 0U;
-            return false;
+            goto invalid;
         }
         ++p;
         while (*p != '\0' && *p != '"') {
@@ -68,10 +57,7 @@ bool minias_decode_string_literals(const char *text,
             } else {
                 ++p;
                 if (*p == '\0') {
-                    free(*data);
-                    *data = NULL;
-                    *size = 0U;
-                    return false;
+                    goto invalid;
                 }
                 switch (*p) {
                 case 'a': value = 7U; ++p; break;
@@ -96,10 +82,7 @@ bool minias_decode_string_literals(const char *text,
                         ++p;
                     }
                     if (!any) {
-                        free(*data);
-                        *data = NULL;
-                        *size = 0U;
-                        return false;
+                        goto invalid;
                     }
                     value = accum;
                     break;
@@ -115,28 +98,25 @@ bool minias_decode_string_literals(const char *text,
                         }
                         value = accum;
                     } else {
-                        free(*data);
-                        *data = NULL;
-                        *size = 0U;
-                        return false;
+                        goto invalid;
                     }
                     break;
                 }
             }
             if (!append_byte(data, size, &capacity, value)) {
-                free(*data);
-                *data = NULL;
-                *size = 0U;
-                return false;
+                goto invalid;
             }
         }
         if (*p != '"') {
-            free(*data);
-            *data = NULL;
-            *size = 0U;
-            return false;
+            goto invalid;
         }
         ++p;
+        /* GAS .asciz/.string terminate EACH quoted argument, not just
+         * the final token. For example, "a","b" emits 61 00 62 00.
+         * .ascii and .incbin path parsing pass nul_terminate=false. */
+        if(nul_terminate && !append_byte(data,size,&capacity,0U)) {
+            goto invalid;
+        }
         while (*p == ' ' || *p == '\t') {
             ++p;
         }
@@ -147,18 +127,13 @@ bool minias_decode_string_literals(const char *text,
         if (*p == '"') {
             continue;
         }
-        if (*p == '\0') {
-            if (nul_terminate && !append_byte(data, size, &capacity, 0U)) {
-                free(*data);
-                *data = NULL;
-                *size = 0U;
-                return false;
-            }
-            return true;
-        }
-        free(*data);
-        *data = NULL;
-        *size = 0U;
-        return false;
+        if (*p == '\0') return true;
+        goto invalid;
     }
+invalid:
+    /* One owner releases partially decoded bytes on every failure. */
+    free(*data);
+    *data = NULL;
+    *size = 0U;
+    return false;
 }

@@ -1,0 +1,113 @@
+#include "minias.h"
+#include "minias_internal.h"
+
+#include <string.h>
+
+/* The public API is intentionally independent of MiniAsTargetOps. All
+ * ISA/ABI parsing, bitness and target-specific ELF policy is resolved at
+ * the one registry/TargetSpec boundary before the MC engine is created. */
+int minias_assemble_invocation(const char *input_path,
+                               const char *output_path,
+                               const MiniAsInvocation *invocation,
+                               FILE *diagnostic) {
+    return minias_assemble_invocation_with_policy(
+        input_path, output_path, invocation, false, diagnostic);
+}
+
+int minias_assemble_invocation_with_policy(const char *input_path,
+                                          const char *output_path,
+                                          const MiniAsInvocation *invocation,
+                                          bool suppress_target_attributes,
+                                          FILE *diagnostic) {
+    return minias_assemble_invocation_with_options(input_path,output_path,
+        invocation,MINIAS_LINK_RELAX_TARGET_DEFAULT,
+        suppress_target_attributes,diagnostic);
+}
+
+int minias_assemble_invocation_with_options(const char *input_path,
+                                          const char *output_path,
+                                          const MiniAsInvocation *invocation,
+                                          MiniAsLinkRelaxMode link_relax,
+                                          bool suppress_target_attributes,
+                                          FILE *diagnostic) {
+    return minias_assemble_invocation_with_object_format(
+        input_path,output_path,invocation,link_relax,
+        suppress_target_attributes,"elf",diagnostic);
+}
+
+int minias_assemble_invocation_with_object_format(const char *input_path,
+                                                  const char *output_path,
+                                                  const MiniAsInvocation *invocation,
+                                                  MiniAsLinkRelaxMode link_relax,
+                                                  bool suppress_target_attributes,
+                                                  const char *format,
+                                                  FILE *diagnostic) {
+    const char *target_name = "riscv";
+    const char *march = NULL;
+    const char *mabi = NULL;
+    const MiniAsTargetOps *target;
+    MiniAsTargetSpec config;
+    char error[256] = {0};
+
+    if (invocation != NULL) {
+        if (invocation->target != NULL) target_name = invocation->target;
+        march = invocation->march;
+        mabi = invocation->mabi;
+    }
+    if (input_path == NULL || output_path == NULL) {
+        if (diagnostic != NULL)
+            fprintf(diagnostic, "minic-as: missing-input-or-output\n");
+        return 2;
+    }
+    target = minias_find_target(target_name);
+    if (target == NULL) {
+        if (diagnostic != NULL)
+            fprintf(diagnostic, "minic-as: unsupported-target:%s\n", target_name);
+        return 2;
+    }
+    if(link_relax>MINIAS_LINK_RELAX_DISABLE ||
+       (link_relax!=MINIAS_LINK_RELAX_TARGET_DEFAULT &&
+        !target->supports_link_relax_cli)) {
+        if(diagnostic!=NULL)
+            fprintf(diagnostic,"minic-as: unsupported-target-link-relax-option:%s\n",
+                    target->name);
+        return 2;
+    }
+    memset(&config, 0, sizeof(config));
+    if (target->resolve_profile == NULL ||
+        !target->resolve_profile(march, mabi, &config,
+                                 error, sizeof(error))) {
+        if (diagnostic != NULL)
+            fprintf(diagnostic, "minic-as: %s\n",
+                    error[0] != '\0' ? error : "missing-target-profile");
+        return 2;
+    }
+    if (config.target != target) {
+        if (diagnostic != NULL)
+            fprintf(diagnostic, "minic-as: internal:profile-target-mismatch\n");
+        return 2;
+    }
+    if(format==NULL || strcmp(format,"elf")==0)
+        config.object.format=MINIAS_OBJECT_FORMAT_ELF;
+    else if(strcmp(format,"coff")==0)
+        config.object.format=MINIAS_OBJECT_FORMAT_COFF;
+    else {
+        if(diagnostic!=NULL)
+            fprintf(diagnostic,"minic-as: unsupported-object-format:%s\n",format);
+        return 2;
+    }
+    if(config.object.format==MINIAS_OBJECT_FORMAT_COFF &&
+       (target->coff_policy==NULL || config.layout.address_size!=8U ||
+        suppress_target_attributes)) {
+        if(diagnostic!=NULL)
+            fprintf(diagnostic,"minic-as: unsupported-target-coff-profile:%s\n",
+                    target->name);
+        return 2;
+    }
+    config.link_relax_mode=(uint8_t)link_relax;
+    /* Output-attribute suppression is an ELF format policy; Common does not
+     * decide which ISA's attributes exist or own their serialization. */
+    if(config.object.format==MINIAS_OBJECT_FORMAT_ELF)
+        config.object.elf.suppress_target_attributes = suppress_target_attributes;
+    return minias_assemble_config(input_path, output_path, &config, diagnostic);
+}

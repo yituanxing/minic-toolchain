@@ -1,0 +1,327 @@
+name: MiniLD x86-64 Frozen Linux Full bzImage and P1 Experiment
+
+# Deliberately opt-in. The entire x86 kernel C and boot/compressed C pool is
+# restored from the exact GNU Kbuild producer, not compiled in this workflow.
+# Real kallsyms and *every* Linux kernel/boot linker invocation use MiniLD;
+# none of the GNU-produced vmlinux, setup.bin or bzImage can be substituted.
+on:
+  workflow_dispatch:
+    inputs:
+      producer_run_id:
+        description: Exact source GNU Linux Kbuild run (frozen 6.6.143 inputs)
+        type: string
+        required: true
+        default: '41856204967'
+      producer_sha:
+        description: Exact producer revision (no C rebuild)
+        type: string
+        required: true
+        default: '3107037abc80b0c0019129364693422aee2818aa'
+      setup_mode:
+        description: 'All MiniLD links; or explicitly staged GNU-frozen ELF32 setup.bin (NOT full linker certification)'
+        type: choice
+        required: true
+        default: mini-all-links
+        options:
+          - mini-all-links
+          - staged-gnu-setup
+  push:
+    branches:
+      - refactor/minias-target-isa-abi-core
+    paths:
+      - .github/workflows/minild-x86-linux-frozen-full-bzimage-v1.yml
+      - tools/ci/minild-x86-linux-frozen-full-bzimage-v1.sh
+      - tools/ci/minild-x86-frozen-payload-diff.py
+      - tools/ci/minild-x86-zoffset-header-audit.py
+      - tests/linker/probe-minild-x86-frozen-manifest-v1.sh
+      - tests/linker/probe-minild-x86-zoffset-dependency.sh
+      - tests/linker/probe-minild-x86-boot-dispatch-v1.sh
+      - tests/linker/probe-x86-no-linker-generated-unwind.sh
+      - tests/linker/probe-forced-undefined-archive.sh
+      - tests/linker/probe-scripted-array-boundaries-gnu.sh
+      - tests/linker/probe-force-undefined-archive.sh
+      - linker/**
+      - tools/minic-ld/**
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  x86-minild-real-kbuild-to-p1:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[minild-x86-full-bzimage]') || contains(github.event.head_commit.message, '[minild-x86-staged-gnu-setup]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    env:
+      PRODUCER_RUN_ID: ${{ inputs.producer_run_id || '41856204967' }}
+      PRODUCER_SHA: ${{ inputs.producer_sha || '3107037abc80b0c0019129364693422aee2818aa' }}
+      MINILD_X86_SETUP_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.setup_mode || (contains(github.event.head_commit.message, '[minild-x86-staged-gnu-setup]') && 'staged-gnu-setup' || 'mini-all-links') }}
+      WORK: ${{ github.workspace }}/build/minild-x86-frozen-full
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install host-only GNU binutils, x86 QEMU and initramfs userspace compiler
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get -o Acquire::Retries=3 update -qq
+          sudo apt-get -o Acquire::Retries=3 install -y -qq --no-install-recommends \
+            gcc make binutils python3 zstd curl xz-utils cpio gzip file qemu-system-x86
+
+      - name: Restore exactly the GNU Kbuild x86-64 frozen objects
+        uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ env.PRODUCER_RUN_ID }}
+          name: minild-gnu-kbuild-tree-x86_64-${{ env.PRODUCER_SHA }}
+          path: ${{ env.WORK }}
+
+      - name: Restore the original GNU linker invocation and immutable input manifest
+        uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ env.PRODUCER_RUN_ID }}
+          name: minild-real-kallsyms1-x86_64-${{ env.PRODUCER_SHA }}
+          path: ${{ env.WORK }}
+
+      - name: Verify segmented Kbuild archive SHA and extract original objects
+        shell: bash
+        timeout-minutes: 9
+        run: |
+          set -Eeuo pipefail
+          cd "$WORK"
+          shopt -s nullglob
+          pieces=(gnu-kbuild-frozen-tree.tar.zst.part*)
+          test "${#pieces[@]}" -gt 0
+          test -s gnu-kbuild-frozen-tree.sha256
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          actual = sorted(p.name for p in Path('.').glob('gnu-kbuild-frozen-tree.tar.zst.part*'))
+          expected = []
+          for line in Path('gnu-kbuild-frozen-tree.sha256').read_text().splitlines():
+              matched = re.fullmatch(r'[0-9a-f]{64}  (gnu-kbuild-frozen-tree\.tar\.zst\.part\d{3})', line)
+              if not matched:
+                  raise SystemExit('MINILD_X86_FROZEN=FAIL bad_archive_manifest')
+              expected.append(matched.group(1))
+          if sorted(expected) != actual or len(set(expected)) != len(expected):
+              raise SystemExit('MINILD_X86_FROZEN=FAIL wrong_chunk_identity')
+          PY
+          sha256sum --quiet -c gnu-kbuild-frozen-tree.sha256
+          cat "${pieces[@]}" | tar --zstd -tf - | python3 -c '
+          from pathlib import PurePosixPath
+          import sys
+          count = 0
+          for entry in sys.stdin:
+              p = PurePosixPath(entry.strip())
+              if p.is_absolute() or ".." in p.parts or not p.parts or p.parts[0] != "gnu-out":
+                  raise SystemExit("MINILD_X86_FROZEN=FAIL unsafe_archive_path")
+              count += 1
+          if count < 500: raise SystemExit("MINILD_X86_FROZEN=FAIL too_few_archive_entries")
+          print(f"MINILD_X86_FROZEN=PASS archive_entries={count}")'
+          cat "${pieces[@]}" | tar --zstd -xf -
+          test -s gnu-out/vmlinux.o
+          test -s ld-evidence/gnu-kbuild-objects.sha256
+          printf 'producer_run_id=%s\nproducer_sha=%s\nreplay_sha=%s\n' \
+            "$PRODUCER_RUN_ID" "$PRODUCER_SHA" "$GITHUB_SHA" \
+            >"ld-evidence/mini-full-producer-identity.txt"
+
+      - name: Fetch verified identical Linux 6.6.143 source (source is never compiled)
+        shell: bash
+        timeout-minutes: 8
+        run: |
+          set -Eeuo pipefail
+          cd "$WORK"
+          curl -fL --retry 3 --retry-delay 3 \
+            https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.6.143.tar.xz \
+            -o linux-6.6.143.tar.xz
+          printf '%s  linux-6.6.143.tar.xz\n' \
+            dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932 | \
+            sha256sum -c -
+          tar -xJf linux-6.6.143.tar.xz
+          test -s linux-6.6.143/scripts/link-vmlinux.sh
+          echo 'MINILD_X86_SOURCE=PASS version=6.6.143 kernel_C_compiles=0'
+
+      - name: Build only the current MiniLD tool
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release CFLAGS=-Werror \
+            BUILD_DIR="$WORK/minild-build" "$WORK/minild-build/bin/minic-ld"
+          test -x "$WORK/minild-build/bin/minic-ld"
+
+      - name: Prove forced archive symbols, kernel PIE and x86 zoffset dependencies
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          make MODE=release CFLAGS=-Werror BUILD_DIR="$WORK/minild-build" \
+            check-minild-force-undefined-archive \
+            check-minild-x86-zoffset-dependency \
+            check-minild-x86-kernel-pie-image
+
+      - name: Prove only kallsyms, piggy and zoffset-dependent header.S escape frozen SHA checks
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          bash tests/linker/probe-minild-x86-frozen-manifest-v1.sh
+
+      - name: Prove genuine x86 compressed boot link command dispatch under nounset
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          bash tests/linker/probe-minild-x86-boot-dispatch-v1.sh
+
+      - name: Verify GNU x86 compressed kernel static PIE and no-generated-unwind CLI
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          MINILD="$WORK/minild-build/bin/minic-ld" \
+            bash tests/linker/probe-x86-no-linker-generated-unwind.sh
+
+      - name: Verify GNU -u archive extraction, --gc-sections roots, and unsupported-mode guard
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          MINILD="$WORK/minild-build/bin/minic-ld" \
+            bash tests/linker/probe-forced-undefined-archive.sh
+          MINILD="$WORK/minild-build/bin/minic-ld" \
+            bash tests/linker/probe-force-undefined-archive.sh
+
+      - name: Verify no fabricated init-array markers under an explicit Linux linker script
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          MINILD="$WORK/minild-build/bin/minic-ld" \
+            bash tests/linker/probe-scripted-array-boundaries-gnu.sh
+
+      - name: Authenticate all GNU C-owned inputs and record GNU control bzImage
+        shell: bash
+        timeout-minutes: 8
+        run: |
+          set -Eeuo pipefail
+          bash tools/ci/minild-x86-linux-frozen-full-bzimage-v1.sh preflight \
+            "$WORK/gnu-out" "$WORK/ld-evidence" \
+            "$WORK/ld-evidence/gnu-kbuild-objects.sha256"
+
+      - name: 'Stage A: original Kbuild kallsyms 1/2[/3], MiniLD final vmlinux, x86 postlink'
+        shell: bash
+        timeout-minutes: 15
+        run: |
+          set -Eeuo pipefail
+          bash tools/ci/minild-x86-linux-frozen-full-bzimage-v1.sh full-link \
+            "$WORK/gnu-out" "$WORK/linux-6.6.143" "$WORK/linux-6.6.143.tar.xz" \
+            "$WORK/ld-evidence" "$WORK/minild-build/bin/minic-ld"
+
+      - name: 'Stage B: MiniLD compressed/vmlinux, explicit setup owner, GNU-AS piggy, build bzImage'
+        shell: bash
+        timeout-minutes: 8
+        run: |
+          set -Eeuo pipefail
+          bash tools/ci/minild-x86-linux-frozen-full-bzimage-v1.sh bzimage \
+            "$WORK/gnu-out" "$WORK/linux-6.6.143" \
+            "$WORK/ld-evidence" "$WORK/minild-build/bin/minic-ld"
+
+      - name: Build GNU userspace-only deterministic initramfs
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          RISCV_CC=gcc BUILD_DIR="$WORK/userspace" \
+          OUTPUT_INITRAMFS="$WORK/runtime-initramfs.cpio.gz" \
+          LINUX_RUNTIME_REPRODUCIBLE=1 \
+            bash tests/external/linux/build_runtime_initramfs.sh
+          echo 'MINILD_X86_USERSPACE=PASS kernel_C_compiles=0'
+
+      - name: 'Stage C: boot MiniLD bzImage in QEMU PID1 and shell P0 2/2 plus P1 12/12'
+        shell: bash
+        timeout-minutes: 8
+        run: |
+          set -Eeuo pipefail
+          cd "$WORK"
+          mode=$(sed -n 's/^setup_mode=//p' "$WORK/ld-evidence/boot-ownership.txt")
+          owned_image=$(sed -n 's/^image_path=//p' "$WORK/ld-evidence/boot-ownership.txt")
+          case "$mode:$owned_image" in
+            'mini-all-links:arch/x86/boot/bzImage.minild'|\
+            'staged-gnu-setup:arch/x86/boot/bzImage.minild-kernel-gnu-setup') ;;
+            *) echo "MINILD_X86_QEMU=FAIL invalid_boot_ownership=$mode:$owned_image" >&2; exit 99 ;;
+          esac
+          image="$WORK/gnu-out/$owned_image"
+          original="$WORK/ld-evidence/original-GNU-bzImage"
+          initrd="$WORK/runtime-initramfs.cpio.gz"
+          test -s "$image"; test -s "$original"; test -s "$initrd"
+          run_qemu() {
+            local flavor=$1 name=$2 executable=$3 extra=$4 interactive=$5
+            local rc=0 log="$WORK/ld-evidence/qemu-${flavor}-${name}.log"
+            if [[ $interactive == yes ]]; then
+              (sleep 10; printf '%s\n' 'mount -t proc proc /proc' \
+                'echo PROC_CMDLINE_BEGIN' 'cat /proc/cmdline' \
+                'echo PROC_CMDLINE_END' 'echo RDINIT_SH_OK' 'echo DONE_RDINIT' 'poweroff -f'; sleep 2) | \
+                timeout --signal=TERM 140 qemu-system-x86_64 -M q35 -cpu max -m 1G -smp 1 \
+                  -nographic -no-reboot -kernel "$executable" -initrd "$initrd" \
+                  -append "console=ttyS0,115200 earlyprintk=serial,ttyS0 loglevel=8 panic=-1 $extra" \
+                  >"$log" 2>&1 || rc=$?
+            else
+              timeout --signal=TERM 140 qemu-system-x86_64 -M q35 -cpu max -m 1G -smp 1 \
+                -nographic -no-reboot -kernel "$executable" -initrd "$initrd" \
+                -append "console=ttyS0,115200 earlyprintk=serial,ttyS0 loglevel=8 panic=-1 $extra" \
+                </dev/null >"$log" 2>&1 || rc=$?
+            fi
+            case "$rc" in 0|124|143) ;; *) tail -n 65 "$log" >&2; exit 91 ;; esac
+            grep -Fq 'Linux version 6.6.143' "$log" || { tail -n 65 "$log" >&2; exit 92; }
+            if [[ $name == p1 ]]; then
+              python3 "$GITHUB_WORKSPACE/tests/external/linux/runtime_v2_log_check.py" \
+                --profile p1 --log "$log"
+            elif [[ $name == init ]]; then
+              for token in 'INIT_PROC_MOUNT=PASS' 'INIT_SYSFS_MOUNT=PASS' \
+                'INIT_DEVTMPFS_MOUNT=PASS' 'USER_SHELL_OK' 'DONE_COMMANDS' \
+                'MINIC_LINUX_RUNTIME_INIT_END fail=0'; do
+                grep -Fq "$token" "$log" || { tail -n 65 "$log" >&2; exit 93; }
+              done
+            else
+              for token in 'MINIC_LINUX_RUNTIME_SH_READY' 'RDINIT_SH_OK' 'DONE_RDINIT'; do
+                grep -Fq "$token" "$log" || { tail -n 65 "$log" >&2; exit 94; }
+              done
+            fi
+            echo "MINILD_X86_QEMU_LANE=PASS flavor=$flavor name=$name kernel=$executable"
+          }
+          # Independent GNU control proves guest/userspace contract on this
+          # runner; its kernel is never used for the MiniLD lane.
+          for flavor in gnu mini; do
+            if [[ $flavor == gnu ]]; then executable="$original"; else executable="$image"; fi
+            run_qemu "$flavor" init "$executable" rdinit=/init no
+            run_qemu "$flavor" sh "$executable" rdinit=/bin/sh yes
+            run_qemu "$flavor" p1 "$executable" 'rdinit=/init minic_runtime=p1' no
+          done
+          (cd "$WORK/gnu-out" && sha256sum --quiet -c \
+            "$WORK/ld-evidence/immutable-gnu-inputs.sha256")
+          (cd "$WORK/gnu-out" && sha256sum --quiet -c \
+            "$WORK/ld-evidence/MiniLD-bzImage-and-boot-chain.sha256")
+          if [[ $mode == mini-all-links ]]; then
+            echo 'MINILD_X86_FULL_LINUX=PASS GNU_control=PASS MiniLD_links=kernel+compressed+setup P0=2/2 P1=12/12 Linux_C_compiles=0'
+          else
+            echo 'MINILD_X86_STAGED_LINUX=PASS GNU_control=PASS MiniLD_links=kernel+compressed GNU_setup=FROZEN P0=2/2 P1=12/12 Linux_C_compiles=0 full_MiniLD_setup=NOT_RUN'
+          fi
+
+      - name: Preserve provenance, exact linker argv, generated headers and QEMU logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: minild-x86-full-bzimage-${{ github.sha }}
+          path: |
+            build/minild-x86-frozen-full/ld-evidence/**
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: State the proved boundary without retroactively marking unrun passes
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo '### x86-64 Linux 6.6.143 MiniLD full-link opt-in'
+            echo 'Producer GNU frozen Kbuild: ${{ env.PRODUCER_RUN_ID }}.'
+            echo 'C object rebuilds: forbidden; only fresh generated kallsyms and piggy assembly.'
+            echo 'Setup link owner: ${{ env.MINILD_X86_SETUP_MODE }}. staged-gnu-setup is not all-MiniLD certification.'
+            echo 'Full MiniLD vmlinux, postlink relocs, compressed/vmlinux, setup.elf, bzImage and guest PID1/P1: inspect individual steps; no implicit PASS.'
+          } >>"$GITHUB_STEP_SUMMARY"

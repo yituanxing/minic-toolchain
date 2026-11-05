@@ -1,0 +1,95 @@
+name: MiniLD GCC Runtime Ladder (Exploratory)
+
+# This is deliberately separate from the green ELF boundary workflow.
+# A red job is evidence of a missing MiniLD capability, not a regression
+# of the already accepted MiniAS -> GNU LD path.  A normal linker edit does
+# not rerun this expensive cohort unless its commit opts in explicitly.
+# This cohort also verifies the target's TLS/GOT/branch relocation family
+# before attempting the full GCC+libc five-stage GNU BFD differential.
+# Follow-up cohort: AArch64 checked-in IFUNC oracle and LoongArch B26
+# undefined-weak branch handling after the first real-glibc differential.
+# Next five-architecture real-glibc differential: shared ordered CRT array
+# placement and LoongArch static IRELATIVE/IPLT/IGOT initialization, after
+# fault tracing confirmed both independent startup correctness gaps.
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - refactor/minias-target-isa-abi-core
+    paths:
+      - .github/workflows/minild-gcc-runtime-ladder.yml
+      - linker/**
+      - tools/minic-ld/**
+      - tests/linker/**
+
+permissions:
+  contents: read
+
+jobs:
+  gcc-minild-execution:
+    if: ${{ github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[minild-gcc-runtime-ladder]') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: x86_64, cc: gcc }
+          - { arch: riscv32, cc: riscv64-unknown-elf-gcc }
+          - { arch: riscv64, cc: riscv64-linux-gnu-gcc }
+          - { arch: aarch64, cc: aarch64-linux-gnu-gcc }
+          - { arch: loongarch64, cc: loongarch64-linux-gnu-gcc-13 }
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install GNU compiler, libc, binutils and real user emulators
+        run: |
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            gcc binutils libc6-dev qemu-user
+          case '${{ matrix.arch }}' in
+            riscv32)
+              sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+                gcc-riscv64-unknown-elf picolibc-riscv64-unknown-elf \
+                binutils-riscv64-linux-gnu linux-libc-dev-riscv64-cross ;;
+            riscv64)
+              sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+                gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu libc6-dev-riscv64-cross ;;
+            aarch64)
+              sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+                gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu libc6-dev-arm64-cross ;;
+            loongarch64)
+              sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+                gcc-13-loongarch64-linux-gnu binutils-loongarch64-linux-gnu libc6-dev-loong64-cross ;;
+          esac
+      - name: Build the exact revision of MiniAS and MiniLD
+        run: |
+          make -j4 MODE=release CFLAGS=-Werror \
+            build/release/bin/minic-as build/release/bin/minic-ld
+      - name: Verify ISA-specific static relocation family
+        env:
+          MINILD_REQUIRE_GNU: '1'
+          MINILD_REQUIRE_QEMU: '1'
+        run: |
+          case '${{ matrix.arch }}' in
+            x86_64) make MODE=release CFLAGS=-Werror check-minild-x86-crt-got-relax ;;
+            riscv32) make MODE=release CFLAGS=-Werror check-minild-riscv-static-tls check-minild-riscv-uleb-static check-minild-static-nonalloc-relocations ;;
+            riscv64) make MODE=release CFLAGS=-Werror check-minild-riscv-static-tls check-minild-riscv-uleb-static ;;
+            aarch64) make MODE=release CFLAGS=-Werror check-minild-aarch64-static-got check-minild-aarch64-static-tls check-minild-aarch64-static-ifunc ;;
+            loongarch64) make MODE=release CFLAGS=-Werror check-minild-loongarch-static-relocs ;;
+          esac
+      - name: Run independent five-stage real-C link/runtime probes
+        env:
+          CC: ${{ matrix.cc }}
+          BARE_CC: ${{ matrix.cc }}
+          MINIAS: ${{ github.workspace }}/build/release/bin/minic-as
+          MINILD: ${{ github.workspace }}/build/release/bin/minic-ld
+          WORK_DIR: ${{ github.workspace }}/build/minild-gcc-runtime-ladder/${{ matrix.arch }}
+        run: bash tests/linker/probe-minild-gcc-runtime-ladder.sh '${{ matrix.arch }}'
+      - name: Keep linker commands, assembly, objects, ELF and runtime evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: minild-gcc-runtime-ladder-${{ matrix.arch }}
+          path: build/minild-gcc-runtime-ladder/${{ matrix.arch }}/
+          if-no-files-found: warn
+          retention-days: 14

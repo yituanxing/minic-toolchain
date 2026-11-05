@@ -1,0 +1,167 @@
+name: MiniLD RV64 Linux Cached Final Link Recertification
+
+on:
+  workflow_dispatch:
+  # Opt-in source pushes replay only the single real kallsyms1 link using
+  # the QEMU-certified GNU pool cached by the feature branch itself.
+  # No Linux C source is recompiled in this workflow.
+  push:
+    branches:
+      - refactor/minias-target-isa-abi-core
+    paths:
+      - .github/workflows/minild-rv64-linux-cached-final-recert.yml
+      - linker/**
+      - tools/ci/minild-linux-cache-final-replay-v1.sh
+
+jobs:
+  rv64-cached-final-link:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[minild-cached-replay]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install original GNU cross-toolchain without rebuilding Linux
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get -o Acquire::Retries=3 update -qq
+          sudo apt-get -o Acquire::Retries=3 install -y -qq --no-install-recommends \
+            gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu
+
+      - name: Identify historical exact key and record current GNU tool identity
+        id: golden
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ev="$GITHUB_WORKSPACE/build/minild-rv64-recert-evidence"
+          mkdir -p "$ev"
+          config=eeb04f304ebfb97a1079c187dc0c2ea3cc61fc50a55aa3cc776237c16ab19bbe
+          gcc_sig=$(sha256sum "$(command -v riscv64-linux-gnu-gcc)" | cut -c1-16)
+          ld_sig=$(sha256sum "$(command -v riscv64-linux-gnu-ld)" | cut -c1-16)
+          key="linux-gnu-golden-v1-6.6.143-$config-$gcc_sig-$ld_sig"
+          printf 'GNU_GOLDEN_KEY=%s\n' "$key"
+          printf 'key=%s\n' "$key" >> "$GITHUB_OUTPUT"
+          {
+            printf 'refactor_head=%s\n' "$GITHUB_SHA"
+            printf 'requested_exact_key=%s\n' "$key"
+            printf 'cache_fallback_prefix=linux-gnu-golden-v1-6.6.143-\n'
+            sha256sum "$(command -v riscv64-linux-gnu-gcc)" \
+              "$(command -v riscv64-linux-gnu-ld)" \
+              "$(command -v riscv64-linux-gnu-ar)"
+          } >"$ev/cache-request-and-gnu-tools.txt"
+
+      - name: Restore the frozen Linux 6.6.143 GNU Kbuild objects
+        id: golden_cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            build/linux-runtime-gcc/out
+            build/linux-runtime-gcc/provenance
+          key: ${{ steps.golden.outputs.key }}
+          # Historical cache may have a different pinned .config SHA or
+          # distro tool fingerprint. A prefix hit is only an untrusted
+          # candidate until the full below provenance contract is checked.
+          restore-keys: |
+            linux-gnu-golden-v1-6.6.143-
+          fail-on-cache-miss: true
+
+      - name: Authenticate recovered exact GNU Kbuild pool and full manifest
+        shell: bash
+        env:
+          MATCHED_CACHE_KEY: ${{ steps.golden_cache.outputs['cache-matched-key'] }}
+          REQUESTED_CACHE_KEY: ${{ steps.golden.outputs.key }}
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-runtime-gcc"
+          out="$work/out"
+          meta="$work/provenance/gcc-baseline.txt"
+          manifest="$work/provenance/gcc-objects.sha256"
+          ev="$GITHUB_WORKSPACE/build/minild-rv64-recert-evidence"
+          case "$MATCHED_CACHE_KEY" in
+            linux-gnu-golden-v1-6.6.143-*) ;;
+            *) echo 'MINILD_RV64_GOLDEN=FAIL invalid_or_missing_cache_matched_key' >&2; exit 8 ;;
+          esac
+          printf 'requested_key=%s\nmatched_key=%s\nexact_match=%s\n' \
+            "$REQUESTED_CACHE_KEY" "$MATCHED_CACHE_KEY" \
+            "${{ steps.golden_cache.outputs['cache-hit'] }}" \
+            >"$ev/cache-restore.txt"
+          for input in "$meta" "$manifest" "$out/.config" "$out/vmlinux" \
+                       "$out/arch/riscv/boot/Image"; do
+            test -s "$input" || { echo "MINILD_RV64_GOLDEN=FAIL missing_input=$input" >&2; exit 9; }
+          done
+          require_property() {
+            local key=$1 expected=$2 observed
+            observed=$(sed -n "s/^${key}=//p" "$meta")
+            if [[ "$observed" != "$expected" ]]; then
+              echo "MINILD_RV64_GOLDEN=FAIL provenance_mismatch=$key" >&2
+              exit 10
+            fi
+          }
+          require_property schema linux-gnu-exact-config-v1
+          require_property linux_release 6.6.143
+          require_property linux_archive_sha256 dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932
+          require_property qemu_contract full_and_p1_passed
+          require_property gcc_target "$(riscv64-linux-gnu-gcc -dumpmachine)"
+          require_property gcc_version "$(riscv64-linux-gnu-gcc -dumpfullversion)"
+          require_property gcc_binary_sha256 "$(sha256sum "$(command -v riscv64-linux-gnu-gcc)" | cut -d' ' -f1)"
+          require_property gnu_ld_binary_sha256 "$(sha256sum "$(command -v riscv64-linux-gnu-ld)" | cut -d' ' -f1)"
+          require_property gnu_ar_binary_sha256 "$(sha256sum "$(command -v riscv64-linux-gnu-ar)" | cut -d' ' -f1)"
+          require_property config_sha256 "$(sha256sum "$out/.config" | cut -d' ' -f1)"
+          require_property vmlinux_sha256 "$(sha256sum "$out/vmlinux" | cut -d' ' -f1)"
+          require_property image_sha256 "$(sha256sum "$out/arch/riscv/boot/Image" | cut -d' ' -f1)"
+          python3 - "$out" "$manifest" "$meta" <<'PY_MANIFEST'
+          from pathlib import Path
+          import re
+          import sys
+
+          out, manifest, meta = map(Path, sys.argv[1:])
+          objects = manifest.read_text().splitlines()
+          if len(objects) < 1500:
+              raise SystemExit('MINILD_RV64_GOLDEN=FAIL too_few_GNU_objects')
+          declared = re.search(r'^gcc_object_count=(\d+)$', meta.read_text(), re.M)
+          if declared is None or int(declared.group(1)) != len(objects):
+              raise SystemExit('MINILD_RV64_GOLDEN=FAIL object_count_mismatch')
+          seen = set()
+          for line in objects:
+              match = re.fullmatch(r'([0-9a-f]{64})  (.+\.o)', line)
+              if match is None:
+                  raise SystemExit('MINILD_RV64_GOLDEN=FAIL malformed_object_manifest')
+              candidate = Path(match.group(2))
+              if candidate.is_absolute() or '..' in candidate.parts or candidate in seen:
+                  raise SystemExit('MINILD_RV64_GOLDEN=FAIL unsafe_or_duplicate_object_path')
+              seen.add(candidate)
+          print(f'MINILD_RV64_GOLDEN_OBJECTS={len(objects)} valid_manifest=true')
+          PY_MANIFEST
+          (cd "$out" && sha256sum --quiet -c "$manifest")
+          cp "$meta" "$ev/verified-gcc-baseline.txt"
+          sha256sum "$out/.config" "$out/vmlinux" \
+            "$out/arch/riscv/boot/Image" "$manifest" "$meta" \
+            >"$ev/verified-golden-inputs.sha256"
+          printf 'MINILD_RV64_GOLDEN=PASS matched_cache_key=%s all_frozen_GCC_objects_sha_verified=true qemu_certified=true no_C_recompile=true\n' \
+            "$MATCHED_CACHE_KEY"
+
+      - name: Replay actual vmlinux kallsyms1 final link with current MiniLD
+        shell: bash
+        timeout-minutes: 5
+        run: |
+          set -Eeuo pipefail
+          bash tools/ci/minild-linux-cache-final-replay-v1.sh \
+            "$GITHUB_WORKSPACE/build/linux-runtime-gcc/out" \
+            "$GITHUB_WORKSPACE/build/minild-rv64-recert-tools" \
+            "$GITHUB_WORKSPACE/build/minild-rv64-recert-evidence"
+
+      - name: State exact current-head link boundary without exaggerating Linux runtime
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          echo 'MINILD_RV64_FINAL=PASS real_kallsyms1=true input=sha_verified_GNU_Kbuild_cache miniC_2064_recompiled=0 full_vmlinux_Image_QEMU=NOT_RUN'
+
+      - name: Keep ELF and linkage evidence, even if replay fails
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: minild-rv64-cached-final-recert-${{ github.sha }}
+          path: build/minild-rv64-recert-evidence/
+          if-no-files-found: warn
+          retention-days: 14

@@ -1,0 +1,115 @@
+name: MiniLD Five-Target ELF Boundary
+
+on:
+  push:
+    branches:
+      - refactor/minias-target-isa-abi-core
+    paths:
+      - linker/**
+      - elf/**
+      - assembler/**
+      - tools/minic-ld/**
+      - tests/linker/**
+      - Makefile
+      - .github/workflows/minild-multitarget-boundary.yml
+  pull_request:
+    paths:
+      - linker/**
+      - elf/**
+      - assembler/**
+      - tools/minic-ld/**
+      - tests/linker/**
+      - Makefile
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  five-target-contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Linux user emulators and GNU BFD cross-target oracles
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq qemu-user \
+            binutils-riscv64-linux-gnu binutils-aarch64-linux-gnu \
+            binutils-loongarch64-linux-gnu
+          command -v qemu-aarch64
+          command -v qemu-loongarch64
+          command -v qemu-riscv32
+          command -v riscv64-linux-gnu-ld
+      - name: Build exact-head MiniAS and MiniLD
+        run: |
+          make -j4 MODE=release CFLAGS=-Werror \
+            build/release/bin/minic-as build/release/bin/minic-ld
+      - name: Exercise canonical five-target boundary and additional CI runtime gates
+        env:
+          MINILD_REQUIRE_QEMU: '1'
+          MINILD_REQUIRE_GNU: '1'
+        run: |
+          # Complete independent GNU-oracle probes even if an earlier one
+          # fails, so a single CI run reports the whole correctness class.
+          # -k still exits nonzero when any prerequisite failed.
+          make --keep-going MODE=release CFLAGS=-Werror \
+            check-minild-five-arch-linux-linker-boundary \
+            check-minild-multitarget-relocatable \
+            check-minild-multitarget-static \
+            check-minild-multitarget-script-gc-boundary \
+            check-minild-kernel-et-dyn-modes \
+            check-minild-script-phdrs \
+            check-minild-x86-final-emit-relocs \
+            check-minild-x86-script-symbol-provenance-relocs \
+            check-minild-i386-rel-static \
+            check-minild-x86-frozen-manifest \
+            check-minild-x86-boot-dispatch \
+            check-minild-force-undefined-archive \
+            check-minild-rv32-static-runtime \
+            check-minild-riscv-static-tls \
+            check-minild-riscv-uleb-static \
+            check-minild-aarch64-kernel-provide-dynordinals \
+            check-minild-aarch64-static-got \
+            check-minild-aarch64-static-tls \
+            check-minild-aarch64-static-ifunc \
+            check-minild-aarch64-static-instruction-relocs \
+            check-minild-aarch64-merge-insn-relocs \
+            check-minild-aarch64-merge-reloc-target \
+            check-minild-aarch64-discarded-dynrel \
+            check-minild-gnu-bfd-duplicate-hidden-dyn-index \
+            check-minild-loongarch-static-relocs \
+            check-minild-loongarch-pcala-relax-fixedpoint \
+            check-minild-static-script-discard-reloc-reserve \
+            check-minild-script-output-entsize-coalescing \
+            check-minild-script-data-width-flags \
+            check-minild-script-top-level-empty-statements \
+            check-minild-script-forward-placement-fixedpoint \
+            check-minild-static-merge-input-pool-identity \
+            check-minild-static-merge-bfd-order \
+            check-minild-synthetic-byte-phdr-flags \
+            check-minild-static-script-load-page-coalesce \
+            check-minild-static-nonalloc-relocations \
+            check-minild-x86-crt-got-relax \
+            check-minild-target-default-symbols \
+            check-minild-target-shared-abi-boundary \
+            check-minild-riscv-abi-integration \
+            check-minild-riscv-final-fixup-parity \
+            check-minild-riscv-u-type-boundary \
+            check-minild-riscv-gp-align-relax \
+            check-minild-rv32-addsub64 \
+            check-minild-segment-plan \
+            check-minild-final-elf-audit \
+            check-minild-final-elf-kernel-entry \
+            check-minild-script-merge-section-flags \
+            check-minild-script-ro-after-init \
+            check-minild-script-mixed-bss \
+            check-minild-script-nmagic \
+            check-minild-linux-cli-gnu-parity \
+            check-minild-linux-static-cli-target-options \
+            check-minild-linux-final-replay-vmlinux-o \
+            check-minild-explicit-endianness \
+            check-minild-layout-phase-boundary \
+            check-minild-shared-phase-owners \
+            check-minild-input-phase-owners \
+            check-minild-final-elf64-owner-lifecycle

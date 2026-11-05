@@ -1,0 +1,197 @@
+#ifndef MINIAS_RISCV_TARGET_H
+#define MINIAS_RISCV_TARGET_H
+
+#include "riscv_fixup_kinds.h"
+#include "riscv_profile.h"
+
+#include <stdbool.h>
+#include <stdint.h>
+#include <stddef.h>
+
+#define MINIAS_RISCV_OPTION_PIC 1U
+#define MINIAS_RISCV_OPTION_NO_RVC 2U
+#define MINIAS_RISCV_OPTION_NO_RELAX 4U
+/* .option arch,+zbb is lexical instruction permission, never Tag_RISCV_arch. */
+#define MINIAS_RISCV_OPTION_SITE_ZBB 8U
+/* .option arch,+v likewise grants V at instruction sites only. */
+#define MINIAS_RISCV_OPTION_SITE_V 16U
+/* GNU .option rvc can enable C lexically even when the immutable file ISA
+ * omits C; push/pop restores this site permission, not ELF e_flags. */
+#define MINIAS_RISCV_OPTION_FORCE_RVC 32U
+/* This is a captured provenance bit, not an option-stack entry: GNU's
+ * permanently advertised C capability can also license later C.NOP fill. */
+#define MINIAS_RISCV_SITE_EVER_RVC 64U
+/* Linker relaxability is a *source-site* permission. Keep an explicit
+ * positive marker apart from NO_RELAX: existing MiniAS invocations retain
+ * their nonrelaxable instruction/layout contract unless source opts in,
+ * while the historical final-option ULEB relocation policy remains intact. */
+#define MINIAS_RISCV_OPTION_MARK_RELAX 128U
+/* GAS treats .insn as code for $x/$d mapping regardless of which retained
+ * Fragment representation supplies its machine bytes. No alternate graph. */
+#define MINIAS_RISCV_SITE_INSN_DATA 1U
+/* Immutable source-site decision, including the file ISA's C capability.
+ * The alignment planner sees only MiniAsCodeAlignmentView, not TargetState. */
+#define MINIAS_RISCV_SITE_EFFECTIVE_RVC 2U
+
+/* LI is a parsed, immutable target instruction plan. The MCInst pointer is
+ * stable across stmt-vector relocation and layout retries. MCInst owns the
+ * plan through its normal Target payload destructor, with no extra hash. */
+typedef struct MiniAsRiscvLiPlan {
+    unsigned count;
+    uint32_t words[16];
+} MiniAsRiscvLiPlan;
+
+/* TargetContext: RISC-V ISA/ABI/attribute data never belongs to Common.
+ * RV32 and RV64 are profiles of this single Target, not separate assemblers. */
+typedef struct MiniAsRiscvState {
+    /* Only the explicit audit API rejects raw executable fragments; an
+     * ordinary -march=rv32i/rv64i remains GNU-compatible assembly. */
+    bool reject_raw_exec_fragments;
+    unsigned strict_i_xlen;
+    bool isa_explicit;
+    bool source_attribute_seen;
+    unsigned target_xlen;
+    MiniAsRiscvISA file_isa;
+    /* The E calling convention may be selected by -mabi=ilp32e even when
+     * -march is omitted. Keep this legality policy in the Target state,
+     * not in Core's mutable ELF output flags. */
+    bool rv32e_abi;
+    /* Mutable .option mode belongs to this TargetContext, not MiniAs.
+     * The matching immutable parse-site view lives in stmt->site. */
+    uint32_t options;
+    /* GNU immediately sets EF_RISCV_RVC for a positive .option rvc, even
+     * if no compressed machine word follows or a later pop disables C. */
+    bool rvc_option_seen;
+    /* Semantic source of ELF Tag_File attributes. Serialization is a single
+     * target-owned step, independent of source .attribute directive order. */
+    char arch_attribute_isa[512];
+    bool stack_align_present;
+    unsigned stack_align;
+    bool unaligned_access_present;
+    unsigned unaligned_access;
+    /* GNU GAS infers Privileged ISA 1.11 from source CSR/privileged forms,
+     * while an explicit .attribute 8/10/12 tuple can select another known
+     * version. Both policies remain private to this TargetContext. */
+    bool priv_spec_present;
+    unsigned priv_spec;
+    bool priv_spec_minor_present;
+    unsigned priv_spec_minor;
+    bool priv_spec_revision_present;
+    unsigned priv_spec_revision;
+    unsigned char target_attributes[512];
+    size_t target_attributes_size;
+    /* GNU RISC-V .option push/pop is target-local, never shared state. */
+    uint32_t option_stack[64];
+    size_t option_depth;
+} MiniAsRiscvState;
+
+/* A single instruction-site C decision for parser and encoder.  The
+ * implicit/legacy profile keeps its historical uncompressed default. */
+static inline bool minias_riscv_site_compression_enabled(
+    const MiniAsRiscvState *state, uint32_t site_options) {
+    return state != NULL &&
+           (site_options & MINIAS_RISCV_OPTION_NO_RVC) == 0U &&
+           (((state->file_isa.features & RISCV_ISA_C) != 0U &&
+             state->isa_explicit) ||
+            (site_options & MINIAS_RISCV_OPTION_FORCE_RVC) != 0U);
+}
+
+/* Shared target-owned MC opcode families: used by parser, encoder and
+ * relaxation without any mnemonic parsing in the common assembler. */
+enum MiniAsRiscvMCFamily {
+    RV_MC_R = 1, RV_MC_I, RV_MC_LOAD, RV_MC_STORE, RV_MC_U,
+    RV_MC_BRANCH, RV_MC_JAL, RV_MC_WORD, RV_MC_C16,
+    RV_MC_SYMBOL_LOAD, RV_MC_SYMBOL_STORE,
+    RV_MC_LI, RV_MC_CALL, RV_MC_TAIL, RV_MC_LA, RV_MC_RAW
+};
+
+/* An ELF relocation has two identities: a stable Common symbol reference,
+ * and a Target-specific expression modifier. @plt belongs only to RISC-V's
+ * CALL/TAIL syntax; it must not be erased when binding the symbol NameId. */
+typedef enum MiniAsRiscvSymbolModifier {
+    MINIAS_RV_SYM_NONE = 0,
+    MINIAS_RV_SYM_PLT = 1
+} MiniAsRiscvSymbolModifier;
+
+struct MiniAs;
+struct MiniAsParseInstruction;
+struct MiniAsInstructionView;
+struct MiniAsSymbolRef;
+struct MiniAsMeasureView;
+struct MiniAsMeasureErrorSink;
+struct MiniAsParseContext;
+
+/* RISC-V-private typed instruction API: Common sees only TargetOps.
+ * No other ISA or the assembler driver needs these concrete symbols. */
+bool minias_riscv_measure_mcinst(const struct MiniAsMeasureView *,
+                                struct MiniAsMeasureErrorSink *,
+                                const struct MiniAsInstructionView *, uint32_t *);
+bool minias_riscv_parse_mcinst(struct MiniAsParseContext *, struct MiniAsParseInstruction *);
+bool minias_riscv_encode(struct MiniAsEncodeContext *, const struct MiniAsInstructionView *);
+bool minias_riscv_instruction_may_link_relax(const struct MiniAsInstructionView *);
+
+/* Parser already chose a fixed descriptor or dynamic Target form; validate
+ * its typed feature/XLEN policy once, after MCInst construction. An explicitly
+ * requested Base-I output-word audit remains an independent check. */
+bool minias_riscv_validate_parsed_isa(struct MiniAsParseContext *ctx,
+                                     const struct MiniAsParseInstruction *stmt,
+                                     uint64_t required_features,
+                                     bool rv64_only);
+
+/* One ephemeral, layout-generation-specific branch resolution.  The result
+ * must be recomputed after each Common MCLayout pass: retained MCInst owns
+ * the expression, but Symbol offsets can move while fragments relax.  Both
+ * Target relaxation and final encoding consume these exact range decisions. */
+typedef struct MiniAsRiscvBranchPlan {
+    bool local;
+    int64_t displacement;
+    uint32_t required_size;
+    bool short_legal;
+    bool long_legal;
+    bool jal_legal;
+} MiniAsRiscvBranchPlan;
+/* Pure range/relocation policy. Caller supplies a current-layout symbol
+ * snapshot and owns diagnostics; no Common state is read or modified. */
+bool minias_riscv_compute_branch_plan(const struct MiniAsInstructionView *stmt,
+                                      const struct MiniAsSymbolView *symbol,
+                                      MiniAsRiscvBranchPlan *result,
+                                      const char **diagnostic);
+/* Retained branch/JAL operand binding is immutable across relaxation and
+ * final encoding. Each phase still looks up its own current symbol view. */
+const struct MiniAsSymbolRef *minias_riscv_branch_bound_symbol(
+    const struct MiniAsInstructionView *stmt);
+
+/* RISC-V-only psABI relocation constants. */
+#define MINIAS_R_RISCV_32 1U
+#define MINIAS_R_RISCV_64 2U
+#define MINIAS_R_RISCV_JAL 17U
+#define MINIAS_R_RISCV_BRANCH 16U
+#define MINIAS_R_RISCV_RVC_BRANCH 44U
+#define MINIAS_R_RISCV_RVC_JUMP 45U
+#define MINIAS_R_RISCV_CALL_PLT 19U
+#define MINIAS_R_RISCV_GOT_HI20 20U
+#define MINIAS_R_RISCV_PCREL_HI20 23U
+#define MINIAS_R_RISCV_PCREL_LO12_I 24U
+#define MINIAS_R_RISCV_PCREL_LO12_S 25U
+#define MINIAS_R_RISCV_HI20 26U
+#define MINIAS_R_RISCV_LO12_I 27U
+#define MINIAS_R_RISCV_LO12_S 28U
+#define MINIAS_R_RISCV_ADD8 33U
+#define MINIAS_R_RISCV_ADD16 34U
+#define MINIAS_R_RISCV_ADD32 35U
+#define MINIAS_R_RISCV_ADD64 36U
+#define MINIAS_R_RISCV_SUB8 37U
+#define MINIAS_R_RISCV_SUB16 38U
+#define MINIAS_R_RISCV_SUB32 39U
+#define MINIAS_R_RISCV_SUB64 40U
+#define MINIAS_R_RISCV_ALIGN 43U
+#define MINIAS_R_RISCV_RELAX 51U
+#define MINIAS_R_RISCV_SET8 54U
+#define MINIAS_R_RISCV_SET16 55U
+#define MINIAS_R_RISCV_SET32 56U
+/* psABI variable-width DWARF/data relocation pair. SET must precede SUB
+ * at the same section offset; its width is the retained ULEB fragment. */
+#define MINIAS_R_RISCV_SET_ULEB128 60U
+#define MINIAS_R_RISCV_SUB_ULEB128 61U
+
+#endif

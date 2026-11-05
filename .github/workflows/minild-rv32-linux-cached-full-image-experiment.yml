@@ -1,0 +1,199 @@
+name: MiniLD RV32 Linux Cached Full Image Experiment
+
+# Explicitly opt in: manual dispatch or a clearly tagged branch commit only;
+# all other pushes skip this expensive experiment and do not touch green CI.
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - refactor/minias-target-isa-abi-core
+    paths:
+      - .github/workflows/minild-rv32-linux-cached-full-image-experiment.yml
+      - tools/ci/minild-rv32-linux-cached-full-image-experiment-v1.sh
+      - linker/**
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  rv32-mini-ld-full-image:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[minild-rv32-full-image]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install RV32 GNU assembly/link oracles, QEMU and OpenSBI
+        shell: bash
+        timeout-minutes: 8
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get -o Acquire::Retries=3 update -qq
+          sudo apt-get -o Acquire::Retries=3 install -y -qq --no-install-recommends \
+            gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
+            qemu-system-misc opensbi device-tree-compiler \
+            make curl xz-utils cpio gzip file zstd python3
+
+      - name: Download exact frozen producer 41856204967 GNU object tree
+        uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: '41856204967'
+          name: minild-gnu-kbuild-tree-rv32-3107037abc80b0c0019129364693422aee2818aa
+          path: build/minild-linux-fourarch/rv32
+
+      - name: Download same producer GNU first-link argv and object SHA manifest
+        uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: '41856204967'
+          name: minild-real-kallsyms1-rv32-3107037abc80b0c0019129364693422aee2818aa
+          path: build/minild-linux-fourarch/rv32
+
+      - name: Authenticate exact archive and extract only RV32 gnu-out
+        shell: bash
+        timeout-minutes: 8
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/minild-linux-fourarch/rv32"
+          test -s "$work/gnu-kbuild-frozen-tree.tar.zst.part000"
+          test -s "$work/gnu-kbuild-frozen-tree.sha256"
+          printf '%s  %s\n' \
+            ec214b3cce2509a3d8153a974c060fd3d788d1ec00960f23305c8d0bd3cc3b90 \
+            gnu-kbuild-frozen-tree.tar.zst.part000 |
+            (cd "$work" && sha256sum -c -)
+          (cd "$work" && sha256sum --quiet -c gnu-kbuild-frozen-tree.sha256)
+          test "$(find "$work" -maxdepth 1 -name 'gnu-kbuild-frozen-tree.tar.zst.part*' | wc -l)" -eq 1
+          tar --zstd -tf "$work/gnu-kbuild-frozen-tree.tar.zst.part000" |
+            python3 -c '
+          from pathlib import PurePosixPath
+          import sys
+          total = 0
+          for raw in sys.stdin:
+              path = PurePosixPath(raw.strip().rstrip("/"))
+              if path.is_absolute() or ".." in path.parts or not path.parts or path.parts[0] != "gnu-out":
+                  raise SystemExit("MINILD_RV32_FROZEN=FAIL unsafe_archive_entry")
+              total += 1
+          if total < 500:
+              raise SystemExit("MINILD_RV32_FROZEN=FAIL incomplete_archive")
+          print(f"MINILD_RV32_FROZEN=PASS exact_producer=41856204967 entries={total}")
+          '
+          tar --zstd -xf "$work/gnu-kbuild-frozen-tree.tar.zst.part000" -C "$work"
+          test -s "$work/gnu-out/vmlinux"
+
+      - name: Verify original GNU config, LD binary, and frozen object pool
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/minild-linux-fourarch/rv32"
+          ev="$GITHUB_WORKSPACE/build/minild-rv32-full-image-evidence"
+          mkdir -p "$ev"
+          bash tools/ci/minild-rv32-linux-cached-full-image-experiment-v1.sh verify-golden \
+            "$work/gnu-out" "$work" "$ev"
+
+      - name: Fetch identical Linux 6.6.143 source with exact archived SHA
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/minild-linux-fourarch/rv32"
+          archive="$work/linux-6.6.143.tar.xz"
+          mkdir -p "$work"
+          curl -fL --retry 3 --retry-delay 3 \
+            https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.6.143.tar.xz \
+            -o "$archive"
+          printf '%s  %s\n' \
+            dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932 \
+            "$archive" | sha256sum -c -
+          tar -xJf "$archive" -C "$work"
+          test -s "$work/linux-6.6.143/scripts/link-vmlinux.sh"
+          echo 'MINILD_RV32_LINUX_SOURCE=PASS release=6.6.143 source_compile=NOT_RUN'
+
+      - name: Build current MiniLD only with warnings as errors
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          tools="$GITHUB_WORKSPACE/build/minild-rv32-full-image-tools"
+          make -C "$GITHUB_WORKSPACE" -j4 MODE=release CFLAGS=-Werror \
+            BUILD_DIR="$tools" "$tools/bin/minic-ld"
+          test -x "$tools/bin/minic-ld"
+          sha256sum "$tools/bin/minic-ld"
+
+      # Stage A: the *original* stable Linux scripts/link-vmlinux.sh generates
+      # fresh kallsyms1/2/optional3 and final vmlinux+System.map from MiniLD.
+      # Strict MAKE/CC/LD command guards prevent any Linux .c compilation.
+      - name: 'Stage A: original Kbuild kallsyms and MiniLD final vmlinux'
+        shell: bash
+        timeout-minutes: 18
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/minild-linux-fourarch/rv32"
+          ev="$GITHUB_WORKSPACE/build/minild-rv32-full-image-evidence"
+          mini="$GITHUB_WORKSPACE/build/minild-rv32-full-image-tools/bin/minic-ld"
+          bash tools/ci/minild-rv32-linux-cached-full-image-experiment-v1.sh full-link \
+            "$work/gnu-out" "$work/linux-6.6.143" "$work/linux-6.6.143.tar.xz" \
+            "$ev" "$mini"
+
+      # Stage B only runs after the complete native Kbuild/ MiniLD final
+      # vmlinux; use Linux's RV32 GNU objcopy flags, never the GNU Image.
+      - name: 'Stage B: GNU objcopy Image from actual MiniLD vmlinux'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/minild-linux-fourarch/rv32"
+          mini="$GITHUB_WORKSPACE/build/minild-rv32-full-image-tools/bin/minic-ld"
+          ev="$GITHUB_WORKSPACE/build/minild-rv32-full-image-evidence"
+          bash tools/ci/minild-rv32-linux-cached-full-image-experiment-v1.sh image \
+            "$work/gnu-out" "$ev" "$mini"
+
+      # Reuse the RV32-specific OpenSBI + ELF32/ILP32 + P1 guest oracle.
+      # RV64 runtime_boot.sh is architecturally incompatible.
+      - name: 'Stage C: RV32 OpenSBI QEMU PID1 and canonical P1 12/12'
+        shell: bash
+        timeout-minutes: 7
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/minild-linux-fourarch/rv32"
+          image="$work/gnu-out/arch/riscv/boot/Image.minild"
+          ev="$GITHUB_WORKSPACE/build/minild-rv32-full-image-evidence"
+          test -s "$image"
+          RV32I_QEMU_IMAGE="$image" \
+          RV32I_QEMU_WORK="$GITHUB_WORKSPACE/build/minild-rv32-qemu-p1" \
+          RV32I_QEMU_KERNEL_PROVENANCE=gnu-gcc-gnu-as \
+          RV32I_QEMU_P1=1 \
+          RV32I_QEMU_TIMEOUT_SECONDS=90 \
+            bash tools/ci/linux-rv32i-qemu-p0-v1.sh | tee "$ev/qemu-rv32-p1.stdout"
+          grep -Eq 'RV32I_QEMU_P1=PASS.*syscalls=12/12' "$ev/qemu-rv32-p1.stdout"
+          echo 'MINILD_RV32_QEMU_P1=PASS MiniLD_final_Image=true RV32_guest=ELF32 syscalls=12/12'
+
+      - name: Final authentic all-stage verdict
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/minild-linux-fourarch/rv32"
+          mini="$GITHUB_WORKSPACE/build/minild-rv32-full-image-tools/bin/minic-ld"
+          ev="$GITHUB_WORKSPACE/build/minild-rv32-full-image-evidence"
+          test -s "$ev/stage-a.ok"
+          test -s "$ev/minild-Image.sha256"
+          test -s "$ev/qemu-rv32-p1.stdout"
+          grep -Eq 'RV32I_QEMU_P1=PASS.*syscalls=12/12' "$ev/qemu-rv32-p1.stdout"
+          test -s "$GITHUB_WORKSPACE/build/minild-rv32-qemu-p1/provenance.txt"
+          image_sha=$(sha256sum "$work/gnu-out/arch/riscv/boot/Image.minild" | cut -d' ' -f1)
+          grep -Fxq "image_sha256=$image_sha" \
+            "$GITHUB_WORKSPACE/build/minild-rv32-qemu-p1/provenance.txt"
+          bash tools/ci/minild-rv32-linux-cached-full-image-experiment-v1.sh audit-final \
+            "$work/gnu-out" "$ev" "$mini"
+          echo 'MINILD_RV32_CACHED_FULL_IMAGE=PASS kallsyms1_2_optional3=true final_vmlinux=true Image=true QEMU_RV32_P1=12/12 kernel_C_recompiled=0'
+
+      - name: Preserve independent link and QEMU evidence even on failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: minild-rv32-cached-full-image-experiment-${{ github.sha }}
+          path: |
+            build/minild-rv32-full-image-evidence/
+            build/minild-rv32-qemu-p1/*.log
+          if-no-files-found: warn
+          retention-days: 14

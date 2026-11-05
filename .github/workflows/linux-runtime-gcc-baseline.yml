@@ -14,6 +14,11 @@ on:
   push:
     branches:
       - "main"
+      # A single opt-in GNU golden refresh for MiniLD final-link replay.
+      # Push path filtering requires this workflow change, and the job-level
+      # marker below opts in exactly one GNU golden refresh.  Avoid relying
+      # on head_commit.modified, which is absent in some GitHub ref updates.
+      - "refactor/minias-target-isa-abi-core"
     paths:
       - '.github/workflows/linux-runtime-gcc-baseline.yml'
       # One explicitly audited four-ISA + seven-shard current-source recertification.
@@ -65,7 +70,12 @@ env:
 
 jobs:
   gcc-runtime:
-    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[linux-runtime-gcc]')
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.ref == 'refs/heads/main' && contains(github.event.head_commit.message, '[linux-runtime-gcc]')) ||
+      (github.event_name == 'push' &&
+       github.ref == 'refs/heads/refactor/minias-target-isa-abi-core' &&
+       contains(github.event.head_commit.message, '[minild-golden-refresh]'))
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
@@ -227,6 +237,54 @@ jobs:
             build/linux-runtime-gcc/out
             build/linux-runtime-gcc/provenance
           key: ${{ steps.exact_gnu.outputs.key }}
+
+      # One current-head MiniLD Linux final-link replay on the *same* new
+      # QEMU-certified GNU Kbuild pool, after the golden was saved.  A MiniLD
+      # failure must not discard the completed GNU cache, and this path never
+      # recompiles the 2064-MiniC-object candidate corpus.  This is only one
+      # real kallsyms1 link, NOT a full MiniLD Image or guest P1 acceptance.
+      - name: Replay one actual RV64 Linux final link with current MiniLD
+        if: >-
+          github.event_name == 'push' &&
+          github.ref == 'refs/heads/refactor/minias-target-isa-abi-core' &&
+          contains(github.event.head_commit.message, '[minild-golden-refresh]')
+        timeout-minutes: 5
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-runtime-gcc"
+          ev="$GITHUB_WORKSPACE/build/minild-rv64-fresh-golden-final"
+          mkdir -p "$ev"
+          test -s "$work/provenance/gcc-objects.sha256"
+          test -s "$work/provenance/gcc-baseline.txt"
+          (cd "$work/out" && sha256sum --quiet -c "$work/provenance/gcc-objects.sha256")
+          cp "$work/provenance/gcc-baseline.txt" "$ev/verified-gcc-baseline.txt"
+          {
+            printf 'refactor_sha=%s\n' "$GITHUB_SHA"
+            printf 'new_gnu_golden_cache_key=%s\n' '${{ steps.exact_gnu.outputs.key }}'
+            printf 'input_universe=sha_verified_pure_GNU_Kbuild\n'
+            printf 'scope=single_real_kallsyms1_link_only\n'
+            printf 'minic_2064_recompiled=false\n'
+            printf 'minild_final_Image_QEMU_p1=NOT_RUN\n'
+          } >"$ev/replay-identity.txt"
+          bash tools/ci/minild-linux-cache-final-replay-v1.sh \
+            "$work/out" \
+            "$GITHUB_WORKSPACE/build/minild-rv64-fresh-golden-tools" \
+            "$ev"
+          echo 'MINILD_RV64_FRESH_GOLDEN_FINAL=PASS kallsyms1=true sha_verified_GNU_objects=true Linux_Image_QEMU=NOT_RUN'
+
+      - name: Preserve one-shot real MiniLD Linux final link or exact blocker
+        if: >-
+          always() && github.event_name == 'push' &&
+          github.ref == 'refs/heads/refactor/minias-target-isa-abi-core' &&
+          contains(github.event.head_commit.message, '[minild-golden-refresh]')
+        uses: actions/upload-artifact@v4
+        with:
+          name: minild-rv64-fresh-golden-final-${{ github.sha }}
+          path: build/minild-rv64-fresh-golden-final/
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 14
 
       # GitHub Actions caches are branch-scoped: the old agent-branch GCC
       # golden/source caches cannot be restored after consolidating to main.
