@@ -217,32 +217,16 @@ MINIC_SOURCES := \
 	src/target/riscv/machine_core_select.c \
 	src/target/riscv64/isa.c \
 	src/target/riscv32/rv32_emit.c \
-	src/target/riscv32/rv32_integer_emit.c \
-	src/target/riscv32/rv32_wide_emit.c \
-	src/target/riscv32/rv32_fp_emit.c \
-	src/target/riscv32/rv32_memory_emit.c \
 	src/target/riscv32/rv32_frame.c \
 	src/target/riscv32/rv32_scalar.c \
-	src/target/riscv32/rv32_call.c \
 	src/target/riscv32/rv32_abi_plan.c \
 	src/target/riscv32/rv32_abi_cursor.c \
 	src/target/riscv32/rv32_global_emit.c \
 	src/target/riscv64/abi.c \
-	src/target/riscv64/codegen_support.c \
-	src/target/riscv64/core_codegen.c \
 	src/target/riscv64/core_admission.c \
 	src/target/riscv64/function_abi_plan.c \
-	src/target/riscv64/memory_emit.c \
-	src/target/riscv/record_copy_bytes.c \
-	src/target/riscv/word_operations.c \
-	src/target/riscv64/inline_asm_emit.c \
-	src/target/riscv64/call_emit.c \
-	src/target/riscv64/scalar_emit.c \
 	src/target/riscv64/runtime_libcall.c \
-	src/target/riscv64/fp_emit.c \
-	src/target/riscv64/overflow_emit.c \
 	src/target/riscv64/frame_layout.c \
-	src/target/riscv64/frame_access.c \
 	src/target/riscv64/asm_plan.c \
 	src/target/common/core_spill_layout.c \
 	src/target/common/core_object_intervals.c \
@@ -2736,6 +2720,7 @@ check-x86-machine-core-select:
 	  src/target/common/machine_builder.c \
 	  src/target/common/machine_ir_verify.c \
 	  src/target/common/machine_gnu_asm.c \
+	  src/target/common/machine_source_asm_template.c \
 	  src/target/common/machine_core_coverage.c \
 	  src/target/common/lp64_scalar.c \
 	  src/target/common/lp64_frame.c \
@@ -2745,6 +2730,8 @@ check-x86-machine-core-select:
 	  src/target/common/direct_residual_plan.c \
 	  src/target/common/elf_module_symbol_info.c \
 	  src/target/x86_64/abi.c \
+	  src/target/x86_64/asm_contract.c \
+	  src/target/x86_64/machine_raid6_source_policy.c \
 	  src/target/x86_64/machine_opcode.c \
 	  src/target/x86_64/machine_gnu_asm.c \
 	  src/target/x86_64/machine_frame_select.c \
@@ -2776,6 +2763,9 @@ check-x86-machine-gnu-asm:
 	  src/target/common/machine_builder.c \
 	  src/target/common/machine_ir_verify.c \
 	  src/target/common/machine_gnu_asm.c \
+	  src/target/common/machine_source_asm_template.c \
+	  src/target/x86_64/asm_contract.c \
+	  src/target/x86_64/machine_raid6_source_policy.c \
 	  src/target/x86_64/machine_opcode.c \
 	  src/target/x86_64/machine_gnu_asm.c \
 	  -o "$(BUILD_DIR)/tests/x86-machine-gnu-asm"

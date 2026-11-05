@@ -1,3 +1,4 @@
+#define _POSIX_C_SOURCE 200809L
 #include "target/common/machine_gnu_asm.h"
 #include "target/x86_64/machine_opcode.h"
 #include "target/x86_64/codegen_options.h"
@@ -8,6 +9,29 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
+
+/* Keep seekable GNU output probes independent of a full system /tmp. */
+static FILE *probe_stream(void) {
+    const char *directory = getenv("TMPDIR");
+    char path[4096];
+    int length;
+    int fd;
+    FILE *stream;
+    if (directory == NULL || directory[0] == '\0') directory = ".";
+    length = snprintf(path, sizeof(path), "%s/minic-x86-gnu-XXXXXX",
+                      directory);
+    if (length <= 0 || (size_t)length >= sizeof(path)) return NULL;
+    fd = mkstemp(path);
+    if (fd < 0) return NULL;
+    if (unlink(path) != 0) {
+        close(fd);
+        return NULL;
+    }
+    stream = fdopen(fd, "w+");
+    if (stream == NULL) close(fd);
+    return stream;
+}
 
 /* This test is deliberately independent of the legacy Core-to-FILE* x86
  * emitter. It constructs selected physical operations, verifies their full
@@ -140,7 +164,7 @@ static void append2(MinicMachineFunction *function,size_t id,unsigned int opcode
 
 static bool rejected_without_output(MinicMachineFunction *function,
     const MinicMachineGNUAsmPolicy *policy) {
-    FILE *stream=tmpfile();
+    FILE *stream=probe_stream();
     bool rejected;
     assert(stream != NULL);
     rejected=!minic_machine_gnu_asm_emit_body(stream,function,policy);
@@ -315,7 +339,7 @@ static void test_x86_fp_machine_contract(const MinicTargetInfo *target,
     append0(&fn,block_id,MINIC_X86_MI_RET);
     assert(minic_machine_function_verify(&fn,&policy->verify));
 
-    stream=tmpfile();
+    stream=probe_stream();
     assert(stream != NULL);
     assert(minic_machine_gnu_asm_emit_body(stream,&fn,policy));
     assert(fflush(stream)==0);
@@ -383,7 +407,7 @@ int main(void) {
     build_function(&function,target);
     assert(minic_machine_function_verify(&function,&policy.verify));
 
-    stream=tmpfile();
+    stream=probe_stream();
     assert(stream != NULL);
     assert(minic_machine_gnu_asm_emit_body(stream,&function,&policy));
     assert(fflush(stream)==0);

@@ -14,6 +14,15 @@ ${CC:-cc} -E -P -x c "$root/tests/compiler/c0/rv64_hardfloat_ninth_fixed.c" \
     "$work/ninth.i" -o "$work/hard.s"
 "$MINIC_CC" --target=riscv64-linux -march=rv64i -mabi=lp64 -S \
     "$work/ninth.i" -o "$work/soft.s"
+if "$MINIC_CC" --target=riscv64-linux -march=rv64i -mabi=lp64d -S \
+    "$work/ninth.i" -o "$work/invalid-hard.s" 2>"$work/invalid-hard.err"; then
+    echo 'RV64_HARDFLOAT_NINTH=FAIL LP64D accepted ISA without F/D' >&2
+    exit 1
+fi
+if ! grep -Fq 'lp64d requires F/D' "$work/invalid-hard.err"; then
+    echo 'RV64_HARDFLOAT_NINTH=FAIL wrong LP64D ISA rejection' >&2
+    exit 1
+fi
 
 # Extract function-level properties without conflating the caller's eight
 # outgoing fa moves with the callee's eight incoming fmv.x.d transfers.
@@ -24,11 +33,17 @@ for spec in ninth:a0:8 tenth_mixed:a2:8 spill_mixed:STACK:8 \
     last_gp=${rest%%:*}
     expected_fp=${rest#*:}
     awk -v name="$name" -v gp="$last_gp" -v expected="$expected_fp" '
+        BEGIN {
+            # Typed integer-machine serialization uses architectural xN;
+            # native FP instructions retain GNU faN/ftN ABI aliases.
+            if (gp == "a0") gp = "x10"
+            else if (gp == "a2") gp = "x12"
+        }
         $0 == name ":" { inside = 1; found = 1; next }
         inside && index($0, ".size " name ",") == 1 { inside = 0; done = 1 }
         inside && $0 ~ /^  fmv\.x\.d t0, fa[0-7]$/ { fprs++ }
-        inside && $0 == "  mv t0, " gp { gp_found++ }
-        inside && $0 ~ /^  ld t0, [0-9]+\(sp\)$/ { stack_load++ }
+        inside && $0 == "  mv x5, " gp { gp_found++ }
+        inside && $0 ~ /^  ld x5, [0-9]+\(x2\)$/ { stack_load++ }
         END {
             if (!found || !done || fprs != expected ||
                 (gp != "STACK" && gp_found == 0) ||
@@ -41,11 +56,11 @@ for spec in ninth:a0:8 tenth_mixed:a2:8 spill_mixed:STACK:8 \
     ' "$work/hard.s"
 done
 
-for spec in 'call_ninth:  ld a0, ' \
-            'call_tenth_mixed:  ld a2, ' \
-            'call_spill_mixed:  sd t0, 0(sp)' \
-            'call_ninth_float:  ld a0, ' \
-            'call_indirect_ninth:  jalr ra, t0, 0'; do
+for spec in 'call_ninth:  ld x10, ' \
+            'call_tenth_mixed:  mv x12, x5' \
+            'call_spill_mixed:  sd x5, 0(x2)' \
+            'call_ninth_float:  ld x10, ' \
+            'call_indirect_ninth:  jalr ra, 0(x5)'; do
     name=${spec%%:*}
     expected=${spec#*:}
     awk -v name="$name" -v expected="$expected" '
@@ -60,4 +75,4 @@ if grep -Eq '^  (fadd\.|fdiv\.|fmv\.|fsub\.|fmul\.)' "$work/soft.s"; then
     echo 'RV64_HARDFLOAT_NINTH=FAIL F/D in strict soft-float LP64' >&2
     exit 1
 fi
-echo 'RV64_HARDFLOAT_NINTH=PASS -S LP64D=9th/10th/mixed/stack/float/indirect LP64=softfloat'
+echo 'RV64_HARDFLOAT_NINTH=PASS -S LP64D=9th/10th/mixed/stack/float/indirect LP64=softfloat no-D=reject'

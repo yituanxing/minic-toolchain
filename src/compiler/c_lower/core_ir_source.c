@@ -597,8 +597,6 @@ static MinicCoreInstruction minic_source_placeholder(
     const MinicCoreInstruction *input) {
     MinicCoreInstruction result = *input;
     result.core_type_id = MINIC_CORE_TYPE_INVALID;
-    if (result.kind == MINIC_CORE_INSTRUCTION_FIELD_ADDRESS)
-        result.value.field_address.core_record_type_id = MINIC_CORE_TYPE_INVALID;
     return result;
 }
 
@@ -713,8 +711,6 @@ static void clear_core_type_snapshots(MinicCoreFunction *function) {
     for (index = 0U; index < function->instruction_count; ++index) {
         MinicCoreInstruction *instruction = &function->instructions[index];
         instruction->core_type_id = MINIC_CORE_TYPE_INVALID;
-        if (instruction->kind == MINIC_CORE_INSTRUCTION_FIELD_ADDRESS)
-            instruction->value.field_address.core_record_type_id = MINIC_CORE_TYPE_INVALID;
     }
 }
 
@@ -1081,25 +1077,6 @@ bool minic_core_function_snapshot_types(MinicCoreSourceBuilder *builder,
         MinicCoreInstruction *instruction = &function->instructions[index];
         if (!snapshot_one_type(context, resolver, user_data, draft->instruction_types[index],
                                &instruction->core_type_id)) goto failed;
-        if (instruction->kind == MINIC_CORE_INSTRUCTION_FIELD_ADDRESS) {
-            const MinicCoreType *pointer, *record;
-            const MinicCoreValueId base = instruction->value.field_address.base;
-            MinicCoreTypeId pointer_id, record_id;
-            if (base >= function->value_count) goto failed;
-            pointer_id = minic_core_type_unqualified(
-                context, function->values[base].core_type_id);
-            pointer = minic_core_type_get(context, pointer_id);
-            if (pointer == NULL || pointer->kind != MINIC_CORE_TYPE_POINTER)
-                goto failed;
-            record_id = minic_core_type_unqualified(context, pointer->value.pointer.pointee);
-            record = minic_core_type_get(context, record_id);
-            if (record == NULL || record->kind != MINIC_CORE_TYPE_RECORD)
-                goto failed;
-            /* The lowerer already checked the source nominal record ID.
-             * After import the base pointer owns that identity; no C
-             * RecordId needs to cross the Core boundary. */
-            instruction->value.field_address.core_record_type_id = record_id;
-        }
     }
     if (minic_core_function_attach_type_context(function, context)) {
         minic_core_source_draft_release(builder->source_draft);

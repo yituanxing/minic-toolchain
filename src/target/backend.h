@@ -15,12 +15,13 @@ typedef struct MinicCoreModule MinicCoreModule;
  * Core/Target seam: compiler.c owns C semantics and Core IR; the selected
  * backend owns ABI lowering, frame planning, instruction selection and
  * machine emission. Neither physical registers nor frame offsets cross
- * back into Core. A future Machine IR belongs inside this boundary:
+ * back into Core. Production machine functions follow the sealed path:
  *
- *   Core -> backend lower -> [optional Machine IR + passes] -> emitter
+ *   Core -> target-owned typed Machine IR -> whole-function verification
+ *        -> GNU assembly serializer
  *
- * Backend callbacks currently emit directly to GNU assembly. Introducing
- * Machine IR must not require a new frontend target dispatch.
+ * Optimization passes are deliberately absent at this stage. The frontend
+ * must not know or enumerate the backends' physical machine choices.
  */
 /* A fully sealed translation-unit module is the only machine-side
  * data/symbol boundary. Source-C admission precedes this callback. */
@@ -31,8 +32,10 @@ typedef bool (*MinicBackendEmitModule)(
     const MinicCoreModule *module, MinicDiagnostic *diagnostic);
 
 typedef struct MinicBackend {
-    /* This is the only Core-to-machine handoff in the compile driver.
-     * Today: direct GNU text. Future: lower, optimize and emit Machine IR. */
+    /* Sole Core-to-machine handoff. The five selected production target
+     * profiles emit typed Machine IR before GNU serialization. A failed
+     * typed admission never falls back to direct emission. The separate
+     * RV64 LP64D legacy ABI branch remains explicitly outside that seal. */
     MinicBackendEmitModule emit_module;
     /* True only when the machine emitter omits unreachable Core blocks.
      * Core call-graph pruning must use exactly the same emitted CFG roots. */

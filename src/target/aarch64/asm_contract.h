@@ -4,22 +4,12 @@
 /* Machine-only Core/GNU native contracts. C source admission and clone
  * policy are declared separately by asm_contract_source.h. */
 bool minic_aarch64_linux_cap_asm_goto_core(const MinicCoreInlineAsm *);
-bool minic_aarch64_emit_linux_cap_asm_goto(
-    FILE *, const MinicCoreInlineAsm *, size_t, size_t);
 /* Original Linux static-branch __jump_table PREL32/PREL64 relocation. */
 bool minic_aarch64_linux_jump_label_asm_goto_core(const MinicCoreInlineAsm *);
-bool minic_aarch64_emit_linux_jump_label_asm_goto(
-    FILE *, const MinicCoreInlineAsm *, size_t, size_t);
-#include "target/common/direct_block_context.h"
-/* Core operand roles are sealed; machine emitters recheck ISA effects. */
-bool minic_aarch64_emit_qualified_structured_asm(
-    FILE *, const MinicDirectLP64BlockContext *, const MinicCoreInstruction *);
 bool minic_aarch64_qualified_opaque_asm(const MinicCoreInlineAsm *);
 /* Exact zero-operand Linux KVM basic-asm alternative with feature metadata. */
 bool minic_aarch64_linux_barrier_alternative_opaque(
     const MinicCoreInlineAsm *);
-bool minic_aarch64_emit_linux_barrier_alternative_opaque(
-    FILE *, const MinicCoreInlineAsm *);
 /* Bounded GNU .rept N/NOP/.endr from original GICv3 read-ordering erratum. */
 unsigned int minic_aarch64_linux_rept_nop_count(const char *, size_t);
 /* EL1 DAIF mask update with Linux's exact local_daif_mask annotation. */

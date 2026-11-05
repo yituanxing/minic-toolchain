@@ -153,9 +153,78 @@ int main(void) {
             MINIC_CORE_INLINE_ASM_IMMEDIATE_INVALID;
         REQUIRE(minic_core_function_verify(&function));
     }
+    {
+        MinicCoreInlineAsm *named = &function.inline_asms[typed_assembly];
+        char *saved;
+        /* The C-source GNU names must survive as owned Core facts. Neither
+         * labels nor relocation symbols may masquerade as operand names. */
+        free(named->template_text);
+        named->template_text = owned(".word %[key]\n.word %[flags]\n.long %l[enabled]");
+        REQUIRE(named->template_text != NULL);
+        named->template_length = strlen(named->template_text);
+        named->resolved_immediates[0].asm_name = owned("key");
+        named->resolved_immediates[1].asm_name = owned("flags");
+        named->goto_label_names[0] = owned("enabled");
+        REQUIRE(named->resolved_immediates[0].asm_name != NULL &&
+                named->resolved_immediates[1].asm_name != NULL &&
+                named->goto_label_names[0] != NULL);
+        REQUIRE(minic_core_function_verify(&function));
+
+        saved = named->resolved_immediates[1].asm_name;
+        named->resolved_immediates[1].asm_name = (char *)"key";
+        REQUIRE(!minic_core_function_verify(&function)); /* duplicate binding */
+        named->resolved_immediates[1].asm_name = saved;
+        saved = named->resolved_immediates[0].asm_name;
+        named->resolved_immediates[0].asm_name = (char *)"key+1";
+        REQUIRE(!minic_core_function_verify(&function)); /* source injection */
+        named->resolved_immediates[0].asm_name = saved;
+        saved = named->goto_label_names[0];
+        named->goto_label_names[0] = (char *)"key";
+        REQUIRE(!minic_core_function_verify(&function)); /* label/input collision */
+        named->goto_label_names[0] = (char *)"enabled; .globl forged";
+        REQUIRE(!minic_core_function_verify(&function)); /* forged label syntax */
+        named->goto_label_names[0] = saved;
+        saved = named->template_text;
+        named->template_text = (char *)".word %[missing]";
+        named->template_length = strlen(named->template_text);
+        REQUIRE(!minic_core_function_verify(&function)); /* unresolved name */
+        named->template_text = (char *)".long %l[key]";
+        named->template_length = strlen(named->template_text);
+        REQUIRE(!minic_core_function_verify(&function)); /* wrong operand kind */
+        named->template_text = (char *)".long %l[missing]";
+        named->template_length = strlen(named->template_text);
+        REQUIRE(!minic_core_function_verify(&function)); /* nonexistent C label */
+        named->template_text = (char *)".word %%[not_an_operand]";
+        named->template_length = strlen(named->template_text);
+        REQUIRE(minic_core_function_verify(&function)); /* escaped GNU percent */
+        named->template_text = saved;
+        named->template_length = strlen(saved);
+        named->goto_label_names[1] = (char *)"hidden";
+        REQUIRE(!minic_core_function_verify(&function)); /* unused second label */
+        named->goto_label_names[1] = NULL;
+        named->resolved_immediates[2].asm_name = (char *)"hidden";
+        REQUIRE(!minic_core_function_verify(&function)); /* hidden immediate slot */
+        named->resolved_immediates[2].asm_name = NULL;
+        named->resolved_immediates[3].kind =
+            MINIC_CORE_INLINE_ASM_IMMEDIATE_INTEGER;
+        REQUIRE(!minic_core_function_verify(&function)); /* fourth unused slot */
+        named->resolved_immediates[3].kind =
+            MINIC_CORE_INLINE_ASM_IMMEDIATE_INVALID;
+        /* Typed immediate facts belong either to real asm-goto CFG or a
+         * target-qualified STRUCTURED effect. An opaque textual ASM cannot
+         * forge machine-source admission by setting metadata alone. */
+        named->is_goto = false;
+        named->operand_plan_owner = MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED;
+        named->target_machine_form_id = 173U;
+        REQUIRE(!minic_core_function_verify(&function));
+        named->target_machine_form_id = 0U;
+        named->operand_plan_owner = MINIC_ASM_OPERAND_PLAN_NONE;
+        named->is_goto = true;
+        REQUIRE(minic_core_function_verify(&function));
+    }
 
     minic_core_function_destroy(&function);
     minic_core_type_context_destroy(&types);
-    puts("CORE_SYMBOL_IDENTITY=PASS local_symbols deferred_goto typed_asm_integer_symbol forged_payload_rejected");
+    puts("CORE_SYMBOL_IDENTITY=PASS local_symbols deferred_goto typed_asm_integer_symbol named_operand_label_bindings forged_payload_rejected");
     return 0;
 }

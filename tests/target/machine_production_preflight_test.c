@@ -374,16 +374,26 @@ int main(void) {
     CHECK(minic_machine_gnu_asm_preflight(&machine, &policy));
     CHECK(minic_machine_production_preflight(&source, &machine, &policy));
     source.symbol = "another_symbol";
+    /* The sealed Core identity and exported ELF symbol are independent:
+     * a legitimate Module alias must not make physical admission fail. */
+    CHECK(minic_machine_production_preflight(&source, &machine, &policy));
+    source.symbol = "";
     CHECK(!minic_machine_production_preflight(&source, &machine, &policy));
     source.symbol = function_name;
-    /* Core's source identity is counted and may differ from the emitted
-     * symbol (e.g. GNU aliases). It must not be read with strcmp(). */
+    /* Conversely, a selector bound to another Core function is invalid.
+     * The Core identity is counted and cannot be read via strcmp(). */
     core.name = "other_core_function";
-    CHECK(minic_machine_production_preflight(&source, &machine, &policy));
+    CHECK(!minic_machine_production_preflight(&source, &machine, &policy));
     core.name = function_name;
     ++core.name_length;
-    CHECK(minic_machine_production_preflight(&source, &machine, &policy));
+    CHECK(!minic_machine_production_preflight(&source, &machine, &policy));
     --core.name_length;
+    {
+        char *const selected_name = machine.name;
+        machine.name = "other_selected_function";
+        CHECK(!minic_machine_production_preflight(&source, &machine, &policy));
+        machine.name = selected_name;
+    }
     source.target = &foreign_target;
     CHECK(!minic_machine_production_preflight(&source, &machine, &policy));
     source.target = &target;

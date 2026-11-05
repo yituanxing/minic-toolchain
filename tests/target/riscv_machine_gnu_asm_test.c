@@ -1,6 +1,7 @@
 /* Whole-function, owned-RISC-V-MIR smoke: every RV32I/RV64I selected opcode
  * family, synthetic physical CFG, GNU serializer, illegal machine negatives.
  * No production Core-to-FILE* emitter is involved. */
+#define _GNU_SOURCE
 #include "target/riscv/machine_gnu_asm.h"
 #include "target/riscv/machine_target_state.h"
 
@@ -22,6 +23,14 @@ static MinicMachineRegister gpr(unsigned xlen, unsigned id) {
     reg.number = id;
     reg.width_bits = (uint16_t)xlen;
     reg.bank = MINIC_MACHINE_REGISTER_GENERAL;
+    return reg;
+}
+
+static MinicMachineRegister fpr(unsigned id) {
+    MinicMachineRegister reg = {0};
+    reg.number = id;
+    reg.width_bits = 64U;
+    reg.bank = MINIC_MACHINE_REGISTER_FLOAT;
     return reg;
 }
 
@@ -70,6 +79,36 @@ static bool append_selected(MinicMachineFunction *function, size_t block,
         case MINIC_MACHINE_OPERAND_REGISTER:
             op->value.physical.reg = gpr(xlen,
                 index == 0U ? 5U : index == 1U ? 6U : 7U);
+            if (opcode >= MINIC_RISCV_MACHINE_FMV_X_W &&
+                opcode < MINIC_RISCV_MACHINE_LAST) {
+                bool is_gpr = false;
+                switch (opcode) {
+                case MINIC_RISCV_MACHINE_FMV_X_W:
+                case MINIC_RISCV_MACHINE_FMV_X_D:
+                case MINIC_RISCV_MACHINE_FEQ_D:
+                case MINIC_RISCV_MACHINE_FLT_D:
+                case MINIC_RISCV_MACHINE_FLE_D:
+                case MINIC_RISCV_MACHINE_FCVT_W_D_RTZ:
+                case MINIC_RISCV_MACHINE_FCVT_WU_D_RTZ:
+                case MINIC_RISCV_MACHINE_FCVT_L_D_RTZ:
+                case MINIC_RISCV_MACHINE_FCVT_LU_D_RTZ:
+                    is_gpr = index == 0U;
+                    break;
+                case MINIC_RISCV_MACHINE_FMV_W_X:
+                case MINIC_RISCV_MACHINE_FMV_D_X:
+                case MINIC_RISCV_MACHINE_FCVT_D_W:
+                case MINIC_RISCV_MACHINE_FCVT_D_WU:
+                case MINIC_RISCV_MACHINE_FCVT_D_L:
+                case MINIC_RISCV_MACHINE_FCVT_D_LU:
+                    is_gpr = index == 1U;
+                    break;
+                default:
+                    break;
+                }
+                if (!is_gpr)
+                    op->value.physical.reg = fpr(
+                        index == 0U ? 0U : index == 1U ? 1U : 2U);
+            }
             op->value.physical.access = contract.register_access[index];
             break;
         case MINIC_MACHINE_OPERAND_INTEGER:
@@ -174,24 +213,23 @@ static bool verify_and_serialize(const MinicMachineFunction *fn,
                                   const MinicMachineGNUAsmPolicy *policy,
                                   char *text, size_t text_capacity) {
     FILE *output;
-    long size;
-    size_t read_size;
+    char *buffer = NULL;
+    size_t size = 0U;
+    bool okay;
     if (!minic_machine_function_verify(fn, &policy->verify)) return false;
-    output = tmpfile();
+    /* Build farms need not have writable /tmp. The stream is an in-memory
+     * GNU assembly buffer, so this test never depends on a temp filesystem. */
+    output = open_memstream(&buffer, &size);
     if (output == NULL) return false;
-    if (!minic_machine_gnu_asm_emit_body(output, fn, policy) ||
-        fflush(output) != 0 || fseek(output, 0, SEEK_END) != 0 ||
-        (size = ftell(output)) < 0 ||
-        (size_t)size >= text_capacity ||
-        fseek(output, 0, SEEK_SET) != 0) {
-        fclose(output);
-        return false;
-    }
-    read_size = fread(text, 1U, (size_t)size, output);
-    fclose(output);
-    if (read_size != (size_t)size) return false;
-    text[read_size] = '\0';
-    return true;
+    okay = minic_machine_gnu_asm_emit_body(output, fn, policy) &&
+        fflush(output) == 0;
+    if (fclose(output) != 0) okay = false;
+    if (okay && buffer != NULL && size < text_capacity) {
+        memcpy(text, buffer, size);
+        text[size] = '\0';
+    } else okay = false;
+    free(buffer);
+    return okay;
 }
 
 static bool run_all_selected_opcodes(const MinicTargetInfo *target,
@@ -353,6 +391,51 @@ static bool run_negative_cases(const MinicTargetInfo *target,
     return true;
 }
 
+static bool run_lp64d_fp_cases(const MinicTargetInfo *target,
+                             const MinicMachineGNUAsmPolicy *policy) {
+    MinicMachineFunction fn = {0};
+    MinicMachineInstruction *selected;
+    MinicMachineRegister saved;
+    MinicRiscvIsa saved_isa = minic_riscv_target_isa(target);
+    MinicTargetInfo insufficient_target = *target;
+    MinicRiscvIsa insufficient_isa = saved_isa;
+    char serialized[8192];
+    size_t tested;
+    CHECK(saved_isa.abi == MINIC_RISCV_ABI_LP64D);
+    CHECK(run_all_selected_opcodes(target, policy, &tested));
+    CHECK(tested >= 26U);
+    CHECK(make_function(&fn, target, MINIC_RISCV_MACHINE_FMV_X_D));
+    CHECK(verify_and_serialize(&fn, policy, serialized, sizeof(serialized)));
+    CHECK(strstr(serialized, "fmv.x.d t0, ft1") != NULL);
+    selected = &fn.blocks[0].instructions[0];
+    saved = selected->operands[1].value.physical.reg;
+    selected->operands[1].value.physical.reg.bank =
+        MINIC_MACHINE_REGISTER_GENERAL;
+    CHECK(!minic_machine_function_verify(&fn, &policy->verify));
+    selected->operands[1].value.physical.reg = saved;
+    CHECK(minic_machine_function_verify(&fn, &policy->verify));
+    selected->operands[1].value.physical.reg.number = 32U;
+    CHECK(!minic_machine_function_verify(&fn, &policy->verify));
+    selected->operands[1].value.physical.reg = saved;
+    minic_machine_function_destroy(&fn);
+    CHECK(make_function(&fn, target, MINIC_RISCV_MACHINE_FCVT_W_D_RTZ));
+    CHECK(verify_and_serialize(&fn, policy, serialized, sizeof(serialized)));
+    CHECK(strstr(serialized, "fcvt.w.d t0, ft1, rtz") != NULL);
+    minic_machine_function_destroy(&fn);
+    insufficient_isa.codegen_features = MINIC_RISCV_FEATURE_F;
+    insufficient_isa.features = MINIC_RISCV_FEATURE_F;
+    CHECK(minic_riscv_target_isa_store(&insufficient_target,
+        &insufficient_isa));
+    CHECK(!minic_riscv_machine_opcode_info(&insufficient_target,
+        MINIC_RISCV_MACHINE_FADD_D,
+        &(MinicRiscvMachineOpcodeInfo){0}));
+    CHECK(minic_riscv_machine_opcode_info(&insufficient_target,
+        MINIC_RISCV_MACHINE_FADD_S,
+        &(MinicRiscvMachineOpcodeInfo){0}));
+    puts("RV64 LP64D typed F/D: 26 opcodes, bank/feature/rtz checks PASS");
+    return true;
+}
+
 /* Source-origin GNU asm is the only opaque machine operation allowed; its
  * template is emitted by explicit, checked physical bindings. Compiler-
  * selected instructions must use target-owned opcode identities instead. */
@@ -471,6 +554,20 @@ int main(void) {
                "typed CFG, memory, PCREL/GOT, ABI, source-asm bindings "
                "and forged negatives PASS\n",
                widths[i], tested);
+    }
+    {
+        MinicTargetInfo target;
+        MinicDataLayout layout;
+        MinicMachineGNUAsmPolicy policy;
+        MinicRiscvIsa isa;
+        if (!setup_target(&target, &layout, 64U)) return 1;
+        isa = minic_riscv_target_isa(&target);
+        isa.abi = MINIC_RISCV_ABI_LP64D;
+        isa.features = MINIC_RISCV_FEATURE_F | MINIC_RISCV_FEATURE_D;
+        isa.codegen_features = isa.features;
+        if (!minic_riscv_target_isa_store(&target, &isa) ||
+            !minic_riscv_machine_gnu_asm_policy(&target, &policy) ||
+            !run_lp64d_fp_cases(&target, &policy)) return 1;
     }
     return 0;
 }

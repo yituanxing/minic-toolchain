@@ -11,11 +11,11 @@
 static int verify_source_asm_tu_identity(const MinicCoreModule *baseline) {
     MinicCoreModuleFunctionSymbol symbols[3] = {
         {.name = "original", .is_defined = true,
-         .alias_target_index = SIZE_MAX, .specialization_source_index = SIZE_MAX},
+         .alias_target_index = SIZE_MAX, .storage_owner_function_index = SIZE_MAX},
         {.name = "clone", .is_defined = true, .is_internal = true,
-         .alias_target_index = SIZE_MAX, .specialization_source_index = 0U},
+         .alias_target_index = SIZE_MAX, .storage_owner_function_index = 0U},
         {.name = "other", .is_defined = true,
-         .alias_target_index = SIZE_MAX, .specialization_source_index = SIZE_MAX}
+         .alias_target_index = SIZE_MAX, .storage_owner_function_index = SIZE_MAX}
     };
     MinicCoreInlineAsm original[2] = {{0}, {0}};
     MinicCoreInlineAsm cloned[2] = {{0}, {0}};
@@ -63,16 +63,16 @@ static int verify_source_asm_tu_identity(const MinicCoreModule *baseline) {
     return 0;
 }
 
-static int verify_module_provenance_edges(const MinicCoreModule *baseline) {
+static int verify_module_storage_owner_edges(const MinicCoreModule *baseline) {
     MinicCoreModuleFunctionSymbol functions[3] = {
         {.name = "source", .is_defined = true, .alias_target_index = SIZE_MAX,
-         .specialization_source_index = SIZE_MAX},
+         .storage_owner_function_index = SIZE_MAX},
         {.name = "clone", .is_defined = true, .is_internal = true,
          .alias_target_index = SIZE_MAX,
-         .specialization_source_index = 0U},
+         .storage_owner_function_index = 0U},
         {.name = "other_clone", .is_defined = true, .is_internal = true,
          .alias_target_index = SIZE_MAX,
-         .specialization_source_index = 0U}
+         .storage_owner_function_index = 0U}
     };
     MinicCoreModuleReference label = {
         .kind = MINIC_CORE_MODULE_REFERENCE_OWNER_LABEL, .target_index = 0U
@@ -84,44 +84,44 @@ static int verify_module_provenance_edges(const MinicCoreModule *baseline) {
     };
     MinicCoreModule module = *baseline;
 
-    /* A canonical defined source may own multiple specialization clones,
-     * and a static label reference may name its matching canonical owner. */
+    /* A canonical definition may own storage shared by several functions;
+     * a local label relocation must name that canonical storage owner. */
     module.function_symbols = functions;
     module.function_count = 3U;
     module.globals = &local;
     module.global_count = 1U;
     CHECK(minic_core_module_verify(&module), 20);
 
-    functions[1].specialization_source_index = 1U;
-    CHECK(!minic_core_module_verify(&module), 21); /* clone is its own source */
-    functions[1].specialization_source_index = 3U;
+    functions[1].storage_owner_function_index = 1U;
+    CHECK(!minic_core_module_verify(&module), 21); /* self-owned cycle */
+    functions[1].storage_owner_function_index = 3U;
     CHECK(!minic_core_module_verify(&module), 22); /* out of range */
-    functions[1].specialization_source_index = 0U;
+    functions[1].storage_owner_function_index = 0U;
     functions[0].is_defined = false;
-    CHECK(!minic_core_module_verify(&module), 23); /* undefined source */
+    CHECK(!minic_core_module_verify(&module), 23); /* undefined owner */
     functions[0].is_defined = true;
-    functions[2].specialization_source_index = 1U;
-    CHECK(!minic_core_module_verify(&module), 24); /* nested clone source */
-    functions[2].specialization_source_index = 0U;
+    functions[2].storage_owner_function_index = 1U;
+    CHECK(!minic_core_module_verify(&module), 24); /* chained owner */
+    functions[2].storage_owner_function_index = 0U;
     CHECK(minic_core_module_verify(&module), 25);
     functions[1].is_defined = false;
-    CHECK(!minic_core_module_verify(&module), 172); /* clone must define a body */
+    CHECK(!minic_core_module_verify(&module), 172); /* borrower must define a body */
     functions[1].is_defined = true;
     functions[1].is_internal = false;
-    CHECK(!minic_core_module_verify(&module), 173); /* clone has TU-local linkage */
+    CHECK(!minic_core_module_verify(&module), 173); /* borrower has TU-local linkage */
     functions[1].is_internal = true;
     functions[1].alias_target_index = 0U;
-    CHECK(!minic_core_module_verify(&module), 174); /* clone cannot be alias */
+    CHECK(!minic_core_module_verify(&module), 174); /* borrower cannot be alias */
     functions[1].alias_target_index = SIZE_MAX;
 
     label.target_index = 1U;
     CHECK(!minic_core_module_verify(&module), 26); /* wrong owner index */
     local.owner_function_index = 1U;
-    CHECK(!minic_core_module_verify(&module), 27); /* clone cannot own label */
+    CHECK(!minic_core_module_verify(&module), 27); /* borrower cannot own label */
     local.owner_function_index = 0U;
     label.target_index = 0U;
-    functions[1].specialization_source_index = SIZE_MAX;
-    functions[2].specialization_source_index = SIZE_MAX;
+    functions[1].storage_owner_function_index = SIZE_MAX;
+    functions[2].storage_owner_function_index = SIZE_MAX;
     functions[0].is_defined = false;
     CHECK(!minic_core_module_verify(&module), 28); /* undefined label owner */
     functions[0].is_defined = true;
@@ -143,9 +143,9 @@ static int verify_module_alias_index_ownership(const MinicCoreModule *baseline) 
     };
     MinicCoreModuleFunctionSymbol functions[2] = {
         {.name = "real_function", .is_defined = true,
-         .alias_target_index = SIZE_MAX, .specialization_source_index = SIZE_MAX},
+         .alias_target_index = SIZE_MAX, .storage_owner_function_index = SIZE_MAX},
         {.name = "function_alias", .alias_target_index = 0U,
-         .specialization_source_index = SIZE_MAX}
+         .storage_owner_function_index = SIZE_MAX}
     };
     MinicCoreModule module = *baseline;
     module.globals = objects;
@@ -197,12 +197,12 @@ static int verify_module_alias_index_ownership(const MinicCoreModule *baseline) 
 static int verify_module_function_symbol_range(const MinicCoreModule *baseline) {
     MinicCoreModuleFunctionSymbol functions[3] = {
         {.name = "shared",
-         .specialization_source_index = SIZE_MAX, .alias_target_index = SIZE_MAX},
+         .storage_owner_function_index = SIZE_MAX, .alias_target_index = SIZE_MAX},
         {.name = "shared", .is_defined = true,
          .is_internal = true, .is_referenced = true,
-         .specialization_source_index = SIZE_MAX, .alias_target_index = SIZE_MAX},
+         .storage_owner_function_index = SIZE_MAX, .alias_target_index = SIZE_MAX},
         {.name = "elsewhere", .is_defined = true,
-         .specialization_source_index = SIZE_MAX, .alias_target_index = SIZE_MAX}
+         .storage_owner_function_index = SIZE_MAX, .alias_target_index = SIZE_MAX}
     };
     MinicCoreModule module = *baseline;
     MinicCoreModuleFunctionNameIndex names = {0};
@@ -241,15 +241,15 @@ static int verify_module_emitted_symbol_namespace(
     };
     MinicCoreModuleFunctionSymbol functions[5] = {
         {.name = "real_function", .is_defined = true,
-         .alias_target_index = SIZE_MAX, .specialization_source_index = SIZE_MAX},
+         .alias_target_index = SIZE_MAX, .storage_owner_function_index = SIZE_MAX},
         {.name = "function_alias", .alias_target_index = 0U,
-         .specialization_source_index = SIZE_MAX},
+         .storage_owner_function_index = SIZE_MAX},
         {.name = "function_alias", /* declaration, not another emitted symbol */
-         .alias_target_index = SIZE_MAX, .specialization_source_index = SIZE_MAX},
+         .alias_target_index = SIZE_MAX, .storage_owner_function_index = SIZE_MAX},
         {.name = "another_function", .is_defined = true,
-         .alias_target_index = SIZE_MAX, .specialization_source_index = SIZE_MAX},
+         .alias_target_index = SIZE_MAX, .storage_owner_function_index = SIZE_MAX},
         {.name = "another_alias", .alias_target_index = 0U,
-         .specialization_source_index = SIZE_MAX}
+         .storage_owner_function_index = SIZE_MAX}
     };
     MinicCoreModuleGlobal objects[3] = {
         {.name = "real_object", .emittable = true,
@@ -358,7 +358,7 @@ static int verify_materialized_relocation_edges(
     MinicCoreModuleFunctionSymbol functions[1] = {
         {.name = "callee", .is_defined = true,
          .alias_target_index = SIZE_MAX,
-         .specialization_source_index = SIZE_MAX}
+         .storage_owner_function_index = SIZE_MAX}
     };
     MinicCoreModule module = *baseline;
 
@@ -769,12 +769,12 @@ static int verify_module_label_emission_ownership(
     MinicCoreModuleFunctionSymbol symbols[3] = {
         {.name = "owner", .is_defined = true, .is_internal = true,
          .is_referenced = true, .alias_target_index = SIZE_MAX,
-         .specialization_source_index = SIZE_MAX},
+         .storage_owner_function_index = SIZE_MAX},
         {.name = "other", .is_defined = true, .alias_target_index = SIZE_MAX,
-         .specialization_source_index = SIZE_MAX},
+         .storage_owner_function_index = SIZE_MAX},
         {.name = "clone", .is_defined = true, .is_internal = true,
          .is_referenced = true, .alias_target_index = SIZE_MAX,
-         .specialization_source_index = 0U}
+         .storage_owner_function_index = 0U}
     };
     MinicCoreBlock owner_blocks[1] = {{.local_label_symbol = ".Luser_23"}};
     MinicCoreBlock other_blocks[1] = {{.local_label_symbol = ".Luser_24"}};
@@ -838,9 +838,9 @@ int main(void) {
     MinicCoreTypeContext types;
     MinicCoreModuleFunctionSymbol symbols[2] = {
         {.name = "callee", .is_defined = true, .alias_target_index = SIZE_MAX,
-         .specialization_source_index = SIZE_MAX},
+         .storage_owner_function_index = SIZE_MAX},
         {.name = "alias", .alias_target_index = 0U,
-         .specialization_source_index = SIZE_MAX}
+         .storage_owner_function_index = SIZE_MAX}
     };
     MinicCoreModule module = {
         .type_context = &types,
@@ -899,7 +899,7 @@ int main(void) {
     CHECK(minic_core_module_global_fragments_valid(&object), 17);
 
     CHECK(minic_core_module_verify(&module), 18);
-    CHECK(verify_module_provenance_edges(&module) == 0, 32);
+    CHECK(verify_module_storage_owner_edges(&module) == 0, 32);
     CHECK(verify_module_alias_index_ownership(&module) == 0, 54);
     CHECK(verify_module_function_symbol_range(&module) == 0, 69);
     CHECK(verify_module_emitted_symbol_namespace(&module, &types) == 0, 89);
@@ -918,6 +918,6 @@ int main(void) {
     symbols[0].name = NULL;
     CHECK(!minic_core_module_verify(&module), 19);
     minic_core_type_context_destroy(&types);
-    puts("CORE_MODULE_FRAGMENT_CONTRACT=PASS bounds forms names alias-index=14 clone_provenance=8 forged_owner_label=5 label_bindings=8 name_range=9 emitted_elf_namespace=18 canonical_source=valid relocation_edge_identity=9 source_free_zero_facts=3 typed_extent=18 definition_flags=16 source_asm_tu_identity=9");
+    puts("CORE_MODULE_FRAGMENT_CONTRACT=PASS bounds forms names alias-index=14 storage_ownership=8 forged_owner_label=5 label_bindings=8 name_range=9 emitted_elf_namespace=18 canonical_source=valid relocation_edge_identity=9 source_free_zero_facts=3 typed_extent=18 definition_flags=16 source_asm_tu_identity=9");
     return 0;
 }

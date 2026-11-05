@@ -141,7 +141,10 @@ typedef struct MinicCoreModuleFunctionSymbol {
     bool is_reachability_root;
     bool is_file_asm_root;
     bool is_owner_label_relocation_target;
-    size_t specialization_source_index; /* SIZE_MAX unless a source clone. */
+    /* Optional canonical function that owns this definition's shared local
+     * storage and exported local labels. SIZE_MAX means self-owned storage.
+     * This is a physical Module ownership edge, not a source clone identity. */
+    size_t storage_owner_function_index;
 } MinicCoreModuleFunctionSymbol;
 
 typedef struct MinicCoreModuleFileAsm {

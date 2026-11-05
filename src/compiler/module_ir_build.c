@@ -326,10 +326,12 @@ static bool module_capture_function(MinicCoreModuleFunctionSymbol *destination,
     destination->is_referenced = source->is_referenced;
     destination->is_weak = source->is_weak;
     destination->is_constructor = source->is_constructor;
-    destination->specialization_source_index = source->is_integer_specialization
+    /* Resolve source specialization into a language-independent Module
+     * storage owner. No source FunctionId meaning survives publication. */
+    destination->storage_owner_function_index = source->is_integer_specialization
         ? (size_t)source->specialization_source : SIZE_MAX;
-    if (destination->specialization_source_index != SIZE_MAX &&
-        destination->specialization_source_index >= program->function_count)
+    if (destination->storage_owner_function_index != SIZE_MAX &&
+        destination->storage_owner_function_index >= program->function_count)
         return false;
     destination->is_reachability_root =
         !source->is_integer_specialization && source->is_defined &&

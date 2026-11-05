@@ -4,8 +4,6 @@
 #include "target/common/program_visit.h"
 #include "target/common/program_emit.h"
 #include "target/riscv64/abi.h"
-#include "target/riscv64/codegen_internal.h"
-#include "target/riscv64/core_codegen.h"
 #include "target/riscv/function_symbol.h"
 #include "target/riscv64/isa.h"
 #include "target/riscv/machine_target_state.h"
@@ -32,11 +30,18 @@ typedef struct Rv64ProgramContext {
     const MinicCoreModule *module;
 } Rv64ProgramContext;
 
-/* Production always consumes its one finalized LP64 ABI/frame layout.
- * Selection happens before writing a function symbol, and a rejected MIR
- * never falls through to an old FILE* instruction emitter.  LP64D register
- * banks must be qualified separately; borrowing LP64 GPR placements for
- * that ABI would break public C calls despite syntactically valid asm. */
+static void rv64_set_diagnostic(MinicDiagnostic *diagnostic,
+                                const char *path, const char *message) {
+    if (diagnostic == NULL || message == NULL) return;
+    diagnostic->path = path;
+    diagnostic->line = 1U;
+    diagnostic->column = 1U;
+    (void)snprintf(diagnostic->message, sizeof(diagnostic->message), "%s", message);
+}
+
+/* Production consumes one immutable psABI and frame plan, either LP64 GPR
+ * transport or LP64D native FPR transport. Both profiles select and verify
+ * the complete physical MachineIR before writing any function body. */
 static bool rv64_emit_typed_function(
     FILE *out, const MinicCoreModule *module,
     const MinicTargetInfo *target, const MinicCoreFunction *function,
@@ -54,10 +59,13 @@ static bool rv64_emit_typed_function(
     size_t source_asm_id;
     bool okay = false;
     bool frame_ready = false;
+    bool lp64_soft_float;
     if (out == NULL || module == NULL || target == NULL ||
         function == NULL || symbol == NULL || symbol->symbol_name == NULL ||
         facts == NULL || isa == NULL ||
-        isa->abi != MINIC_RISCV_ABI_LP64) goto done;
+        (isa->abi != MINIC_RISCV_ABI_LP64 &&
+         isa->abi != MINIC_RISCV_ABI_LP64D)) goto done;
+    lp64_soft_float = isa->abi == MINIC_RISCV_ABI_LP64;
     /* The historical RV64I origin audit trusts these delimiters as source
      * provenance. Validate every source template before the typed writer
      * can emit the exact same trusted marker pair. */
@@ -68,11 +76,11 @@ static bool rv64_emit_typed_function(
                 source->template_text, source->template_length)) goto done;
     }
     if (!minic_riscv64_core_function_admit_profile(
-            true, function, &abi, true, facts, storage) ||
+            true, function, &abi, lp64_soft_float, facts, storage) ||
         !minic_riscv64_asm_function_plan_build(
             function, &old_frame.asm_plan) ||
         !minic_riscv64_core_frame_initialize_with_storage(
-            function, &old_frame, &abi, true,
+            function, &old_frame, &abi, lp64_soft_float,
             minic_riscv64_needs_machine_runtime_call(isa, function),
             facts, storage)) goto done;
     frame_ready = true;
@@ -135,7 +143,7 @@ static bool rv64_visit_module_global(
             "cannot emit RISC-V Core module global '%s' (index=%zu fragments=%zu)",
             global->name != NULL ? global->name : "<unnamed>",
             index, global->fragment_count);
-        minic_riscv64_set_diagnostic(ctx->diagnostic, ctx->path, message);
+        rv64_set_diagnostic(ctx->diagnostic, ctx->path, message);
     }
     return false;
 }
@@ -172,20 +180,12 @@ static bool rv64_visit_function(
         success = minic_riscv_function_symbol_from_module(module_decl, &symbol);
         symbol.function_sections = function_sections;
         success = success && minic_riscv_target_isa_load(target, &isa);
-        if (success && isa.abi == MINIC_RISCV_ABI_LP64) {
-            /* LP64 is fully GPR/soft-float. The complete selected function
-             * owns production emission without a failed-selection fallback. */
+        if (success && (isa.abi == MINIC_RISCV_ABI_LP64 ||
+                        isa.abi == MINIC_RISCV_ABI_LP64D)) {
+            /* LP64 and LP64D are independently qualified by the same
+             * ABI-driven MachineIR pipeline. Never fall back to FILE*. */
             success = rv64_emit_typed_function(file, module, target,
                 core_function, &symbol, facts, storage, &isa);
-        } else if (success && isa.abi == MINIC_RISCV_ABI_LP64D) {
-            /* Default LP64D has a physically different FP argument bank.
-             * Keep that existing ABI owner until a typed FPR contract is
-             * built; treating it as LP64 here would silently break Linux. */
-            success =
-                minic_riscv64_emit_core_function_with_symbol_with_storage_module_trusted(
-                    file, module, core_function, &symbol, facts, storage,
-                    target != NULL && target->position_independent,
-                    &isa, ctx->diagnostic);
         }
         if (success && is_constructor) {
             success = name != NULL && name[0] != '\0' &&
@@ -207,7 +207,7 @@ static bool rv64_visit_function(
         (void)snprintf(message, sizeof(message),
                        "cannot emit RISC-V function '%s' (index=%zu)",
                        name != NULL ? name : "<unnamed>", index);
-        minic_riscv64_set_diagnostic(ctx->diagnostic, ctx->path, message);
+        rv64_set_diagnostic(ctx->diagnostic, ctx->path, message);
     }
     return success;
 }
@@ -253,7 +253,7 @@ static bool rv64_finalize(const char *path, const MinicTargetInfo *target,
     if (minic_riscv64_check_isa_assembly(
             path, &isa, isa_error, sizeof(isa_error)))
         return true;
-    minic_riscv64_set_diagnostic(ctx->diagnostic, path, isa_error);
+    rv64_set_diagnostic(ctx->diagnostic, path, isa_error);
     return false;
 }
 
@@ -271,12 +271,12 @@ static bool rv64_write_core_program_impl(const char *path,
     Rv64ProgramContext context = { path, diagnostic, module };
     bool success;
     if (module == NULL || target == NULL || path == NULL) {
-        minic_riscv64_set_diagnostic(diagnostic, path, "module/target/path is required");
+        rv64_set_diagnostic(diagnostic, path, "module/target/path is required");
         return false;
     }
     if (module->function_count != core_function_count ||
         (core_function_count != 0U && core_functions == NULL)) {
-        minic_riscv64_set_diagnostic(diagnostic, path,
+        rv64_set_diagnostic(diagnostic, path,
             "Core function map does not match program functions");
         return false;
     }
@@ -286,7 +286,7 @@ static bool rv64_write_core_program_impl(const char *path,
         path, module, target, core_functions, core_function_count,
         function_sections, &config, &context, rv64_visit_module_global);
     if (!success && diagnostic != NULL && diagnostic->message[0] == '\0')
-        minic_riscv64_set_diagnostic(diagnostic, path, "cannot write RISC-V assembly");
+        rv64_set_diagnostic(diagnostic, path, "cannot write RISC-V assembly");
     return success;
 }
 

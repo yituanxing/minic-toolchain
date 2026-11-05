@@ -2753,10 +2753,38 @@ static bool a64_unary(A64CoreSelection *sel,
     const MinicCoreInstruction *ins) {
     const MinicCoreFunction *fn = sel->ctx->fn;
     size_t width;
+    size_t from, to;
     bool sign, is_pointer;
     uint32_t opcode;
     unsigned int bits;
     unsigned int scan_bits;
+    /* AAPCS64 transports a single i128 Core operand as two 64-bit halves.
+     * The common scalar unary decoder correctly admits only <=64 bits, so
+     * select the full physical carry chain before scalar legalization. */
+    if ((ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_NEGATE ||
+         ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_NOT) &&
+        ins->value.operand < fn->value_count &&
+        a64_wide_integer(fn,
+            fn->values[ins->value.operand].core_type_id)) {
+        if (ins->core_type_id !=
+                fn->values[ins->value.operand].core_type_id ||
+            !a64_wide_core_slot(sel, ins->value.operand, &from) ||
+            !a64_wide_core_slot(sel, ins->result, &to) ||
+            !a64_load_wide_half(sel, from, A64_T0) ||
+            !a64_load_wide_half(sel, from + 8U, A64_T1)) return false;
+        if (ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_NEGATE) {
+            /* 0 - (hi:lo): low NEGS writes NZCV, high NGC consumes carry. */
+            if (!a64_rr(sel, MINIC_A64_MACHINE_NEGS, 64U,
+                    A64_T0, A64_T0) ||
+                !a64_rr(sel, MINIC_A64_MACHINE_NGC, 64U,
+                    A64_T1, A64_T1)) return false;
+        } else if (!a64_rr(sel, MINIC_A64_MACHINE_MVN, 64U,
+                A64_T0, A64_T0) ||
+            !a64_rr(sel, MINIC_A64_MACHINE_MVN, 64U,
+                A64_T1, A64_T1)) return false;
+        return a64_store_wide_half(sel, to, A64_T0) &&
+            a64_store_wide_half(sel, to + 8U, A64_T1);
+    }
     if (ins->value.operand >= fn->value_count ||
         !a64_value_width(fn, fn->values[ins->value.operand].core_type_id,
             &width, &sign, &is_pointer)) return false;
@@ -2909,6 +2937,20 @@ static bool a64_core_instruction(A64CoreSelection *sel,
             ins->value.structured_inline_asm.operand_count != 0U ||
             !minic_core_function_type_is_kind(fn, ins->core_type_id,
                 MINIC_CORE_TYPE_VOID)) return false;
+        /* A valid GNU spelling is not a machine-admission capability.
+         * ID0 belongs only to proved generic structured ASM; target-owned
+         * physical forms must carry their exact nonzero Machine form ID.
+         * In particular, NONE cannot forge a zero-role `dmb oshst`. */
+        if ((source->operand_plan_owner !=
+                 MINIC_ASM_OPERAND_PLAN_GENERIC_STRUCTURED &&
+             source->operand_plan_owner !=
+                 MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED) ||
+            (source->operand_plan_owner ==
+                 MINIC_ASM_OPERAND_PLAN_GENERIC_STRUCTURED &&
+             source->target_machine_form_id != 0U) ||
+            (source->operand_plan_owner ==
+                 MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED &&
+             source->target_machine_form_id == 0U)) return false;
         if (!source->is_volatile || source->is_goto ||
             source->register_clobber_count != 0U ||
             source->resolved_immediate_count != 0U ||

@@ -1,5 +1,4 @@
 #include "target/riscv32/rv32_internal.h"
-#include "target/riscv/register_identity.h"
 #include "target/riscv/machine_target_state.h"
 #include "target/data_layout.h"
 #include "target/common/core_function_facts.h"
@@ -9,10 +8,10 @@
 #include "target/common/core_frame_layout.h"
 #include <limits.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
 
-/* ILP32 frame planner and stack word transport. RV64's LP64-specific
+/* ILP32 finalized frame planner. RV64's LP64-specific
  * dynamic-frame and 8-byte SSA slot assumptions are not imported. */
 /* A failed real-world frame should identify the ownership boundary
  * in the same grouped acceptance run, rather than spend a CI cycle per
@@ -254,110 +253,4 @@ bool rv32_machine_physical_frame(const Rv32Frame *frame,
         .variadic = frame->is_variadic
     };
     return true;
-}
-/* Outgoing call words use moving sp. All fixed Core SSA/objects use s0
- * when dynamic alloca changes sp. t6 owns large-displacement addressing. */
-static bool rv32_stack_at(FILE *out, const char *base, const char *op,
-                          const char *reg, size_t off) {
-    if (out == NULL || base == NULL || op == NULL || reg == NULL ||
-        off > (size_t)INT32_MAX)
-        return false;
-    /* t6 is the large-displacement address scratch. Storing t6 through
-     * t6 would overwrite the original payload before sw; refuse rather
-     * than silently generate corrupt machine code. Loads into t6 remain
-     * valid, since its old value is not an input. */
-    if (off > 2047U && minic_riscv_gpr_name_equal(reg, "t6") &&
-        (strcmp(op, "sw") == 0 || strcmp(op, "sb") == 0 ||
-         strcmp(op, "sh") == 0))
-        return false;
-    if (off <= 2047U)
-        return fprintf(out, "  %s %s, %zu(%s)\n", op, reg, off, base) >= 0;
-    return fprintf(out, "  li t6, %zu\n  add t6, %s, t6\n"
-                        "  %s %s, 0(t6)\n", off, base, op, reg) >= 0;
-}
-bool rv32_stack(FILE *out, const char *op, const char *reg, size_t off) {
-    return rv32_stack_at(out, "sp", op, reg, off);
-}
-bool rv32_fixed_stack(FILE *out, const Rv32Frame *fr,
-                      const char *op, const char *reg, size_t off) {
-    return fr != NULL && rv32_stack_at(
-        out, fr->has_dynamic_stack ? "s0" : "sp", op, reg, off);
-}
-/* A valid Core ID is not itself proof of an allocated machine slot.
- * Uninitialized entries use SIZE_MAX, and must never be printed as an
- * immediate or wrapped by the two-word access below. */
-bool rv32_slot(FILE *out, const Rv32Frame *f,
-                       MinicCoreValueId id, const char *reg, bool load) {
-    size_t off;
-    if (out == NULL || f == NULL || reg == NULL ||
-        f->value_offsets == NULL || id == MINIC_CORE_VALUE_INVALID ||
-        (size_t)id >= f->value_count)
-        return false;
-    off = f->value_offsets[id];
-    return off != SIZE_MAX && off <= (size_t)INT32_MAX &&
-           off <= f->frame_size && f->frame_size - off >= 4U &&
-           rv32_fixed_stack(out, f, load ? "lw" : "sw", reg, off);
-}
-/* Low-word first: RISC-V ELF32 and the little-endian ILP32 psABI. */
-bool rv32_pair_slot(FILE *out, const Rv32Frame *f,
-                           MinicCoreValueId id,
-                           const char *low, const char *high, bool load) {
-    size_t off;
-    if (out == NULL || f == NULL || low == NULL || high == NULL ||
-        f->value_offsets == NULL || id == MINIC_CORE_VALUE_INVALID ||
-        (size_t)id >= f->value_count)
-        return false;
-    off = f->value_offsets[id];
-    if (off == SIZE_MAX || off > (size_t)INT32_MAX - 4U ||
-        off > f->frame_size || f->frame_size - off < 8U)
-        return false;
-    return rv32_fixed_stack(out, f, load ? "lw" : "sw", low, off) &&
-           rv32_fixed_stack(out, f, load ? "lw" : "sw", high, off + 4U);
-}
-bool rv32_address(FILE *out, const Rv32Frame *fr,
-                  const char *reg, size_t off) {
-    const char *base;
-    if (fr == NULL || reg == NULL) return false;
-    base = fr->has_dynamic_stack ? "s0" : "sp";
-    /* Materializing a large displacement destroys the destination first;
-     * spelling the live base as x2/x8 does not make it a fresh register. */
-    if (minic_riscv_gpr_name_equal(reg, base)) return false;
-    return off <= 2047U ?
-        fprintf(out, "  addi %s, %s, %zu\n", reg, base, off) >= 0 :
-        fprintf(out, "  li %s, %zu\n  add %s, %s, %s\n",
-                reg, off, reg, base, reg) >= 0;
-}
-bool rv32_incoming_word(FILE *out, const Rv32Frame *fr,
-                               size_t word, const char *reg) {
-    if (out == NULL || fr == NULL || reg == NULL) return false;
-    if (word < 8U)
-        return fprintf(out, "  mv %s, a%zu\n", reg, word) >= 0;
-    /* Dynamic frame realignment means caller arguments are relative to
-     * the saved ENTRY sp, not the frame_size offset from aligned sp.
-     * Mirror RV64's entry_sp_offset transport for this ABI boundary. */
-    if (fr->has_dynamic_stack_alignment) {
-        size_t off;
-        if (word - 8U > SIZE_MAX / 4U ||
-            minic_riscv_gpr_name_equal(reg, "t5") ||
-            minic_riscv_gpr_name_equal(reg, "t6") ||
-            !rv32_fixed_stack(out, fr, "lw", "t6", fr->entry_sp_offset))
-            return false;
-        off = (word - 8U) * 4U;
-        if (off <= 2047U)
-            return fprintf(out, "  lw %s, %zu(t6)\n", reg, off) >= 0;
-        return fprintf(out,
-                       "  li t5, %zu\n  add t5, t6, t5\n  lw %s, 0(t5)\n",
-                       off, reg) >= 0;
-    }
-    return word - 8U <= (SIZE_MAX - fr->frame_size) / 4U &&
-           rv32_fixed_stack(out, fr, "lw", reg,
-                             fr->frame_size + (word - 8U) * 4U);
-}
-bool rv32_outgoing_word(FILE *out, const Rv32Frame *fr,
-                               size_t word, const char *reg) {
-    if (out == NULL || fr == NULL || reg == NULL) return false;
-    if (word < 8U)
-        return fprintf(out, "  mv a%zu, %s\n", word, reg) >= 0;
-    return word - 8U < fr->outgoing_size / 4U &&
-           rv32_stack(out, "sw", reg, (word - 8U) * 4U);
 }

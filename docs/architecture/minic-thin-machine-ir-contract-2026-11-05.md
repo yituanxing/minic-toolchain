@@ -1,15 +1,21 @@
 # MiniC thin Machine IR contract (2026-11-05)
 
-Status: **five production entrypoints cut over to owned MachineIR;
-whole-function preflight and GNU serialization structurally sealed;
-remaining ISA/source-ASM families and Linux runtime parity not yet certified**.
+Status: **five target entrypoints have typed MachineIR production paths;
+whole-function preflight and GNU serialization are sealed for their admitted
+ABI profiles, including RV64 LP64D F/D; broader ISA/source-ASM/Linux runtime
+parity remains separately unqualified**.
 `src/target/common/machine_ir.{h,c}`, `machine_builder.{h,c}`,
 `machine_ir_verify.{h,c}` and `machine_gnu_asm.{h,c}` own and independently
 verify typed physical machine objects before any machine-body emission. The
 five target-specific physical opcode contracts have standalone positive and
 forged-negative full-function serializer probes. The current production
 writers select complete functions into typed MachineIR and reject unsupported
-forms before emitting any machine-body bytes. The structural
+forms before emitting any machine-body bytes within their admitted profiles.
+RV64 `lp64d` uses target-owned typed floating-register operands, the admitted
+F/D arithmetic and conversions, and explicit FPR ABI formal/CALL/return
+effects. Its legacy Core-to-`FILE*` emission family has been physically
+retired. This proves structural ownership and local ABI probes, not a fresh
+RV64 LP64D Linux Image or QEMU boot. The structural
 `tests/compiler/mir-migration/check-production-seal.sh --final` gate confirms
 that legacy direct Core-to-`FILE*` instruction callbacks and the retired
 x86/AArch/Loong direct emit families are absent. It does **not** certify that
@@ -107,7 +113,7 @@ opcodes by marking them as inline ASM.
 - ISA-owned tables/printers now exist for RV32I, RV64I, x86-64 GPR/FLAGS,
   AArch64 GPR and LoongArch64 GPR, including their base calls, branches,
   memory, frame, ABI and relocation contracts. The RV32/RV64 selected
-  opcode probes exercise 68/85 forms respectively. The x86 GNU assembler
+  opcode probes exercise 69/86 forms respectively. The x86 GNU assembler
   probe exercises real PC32, GOTPCREL and PLT32 relocations.
 
 For RV32/RV64 production selection, the existing far-branch policy must
@@ -117,8 +123,9 @@ machine jumps, and are **not** equivalent to the existing unbounded
 expansion needs selected address materialization and an explicit indirect
 machine CFG edge before the verifier, not a hidden serializer rewrite.
 
-The **structural production migration is complete**, with one owned
-`MachineFunction` per accepted function and no old direct Core-to-text
+The **structural production migration is complete for the admitted five-target
+profiles**, including RV64 LP64D's typed floating-point ABI, with one owned
+`MachineFunction` per accepted function and no retired Core-to-`FILE*`
 instruction fallback. Behavioral acceptance is deliberately separate: genuine
 Linux source-ASM families, ABI corner cases, generated-ISA constraints, GNU
 AS/LD relocations and per-target QEMU P0/P1 must all pass against the frozen

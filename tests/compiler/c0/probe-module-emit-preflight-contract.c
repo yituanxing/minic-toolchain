@@ -10,10 +10,10 @@ int main(void) {
     MinicCoreModuleFunctionSymbol symbols[2] = {
         {.name = "live", .is_defined = true,
          .alias_target_index = SIZE_MAX,
-         .specialization_source_index = SIZE_MAX},
+         .storage_owner_function_index = SIZE_MAX},
         {.name = "discarded", .is_defined = false,
          .alias_target_index = SIZE_MAX,
-         .specialization_source_index = SIZE_MAX}
+         .storage_owner_function_index = SIZE_MAX}
     };
     MinicCoreFunction functions[2] = {{0}, {0}};
     MinicCoreModuleFragment numeric = {

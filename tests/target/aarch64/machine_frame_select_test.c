@@ -1,3 +1,4 @@
+#define _POSIX_C_SOURCE 200809L
 /* AAPCS64 typed frame-selection compatibility probes. These are real owned
  * MachineFunctions, independently verified and GNU-serialized. They do not
  * claim that the Core whole-function production selector is switched. */
@@ -10,6 +11,35 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
+
+/* tmpfile() ignores TMPDIR under glibc and can fail when /tmp is full.
+ * Keep a real seekable stream for the physical GNU serializer. */
+static FILE *a64_frame_workspace_stream(void) {
+    static const char suffix[] = "/a64-machine-frame-XXXXXX";
+    const char *directory = getenv("TMPDIR");
+    FILE *stream;
+    char *name;
+    size_t len;
+    int fd;
+    if (directory == NULL || *directory == '\0') directory = ".";
+    len = strlen(directory) + sizeof(suffix);
+    name = malloc(len);
+    if (name == NULL) return NULL;
+    (void)snprintf(name, len, "%s%s", directory, suffix);
+    fd = mkstemp(name);
+    if (fd < 0) { free(name); return NULL; }
+    if (unlink(name) != 0) {
+        (void)close(fd);
+        (void)remove(name);
+        free(name);
+        return NULL;
+    }
+    free(name);
+    stream = fdopen(fd, "w+b");
+    if (stream == NULL) (void)close(fd);
+    return stream;
+}
 
 static bool frame_case(const char *name,
     const MinicMachineLP64FrameContract *frame, const char *must_have,
@@ -47,7 +77,7 @@ static bool frame_case(const char *name,
     STEP(minic_a64_machine_emit_epilogue(&builder, frame));
     STEP(minic_machine_gnu_asm_preflight(&machine, &policy));
 #undef STEP
-    stream = tmpfile();
+    stream = a64_frame_workspace_stream();
     if (stream == NULL) goto done;
     if (!minic_machine_gnu_asm_emit_body(stream, &machine, &policy) ||
         fflush(stream) != 0 || fseek(stream, 0L, SEEK_SET) != 0) {
@@ -115,6 +145,147 @@ done:
     if (!ok) fprintf(stderr, "A64 MIR large incoming frame failed\n");
     minic_machine_function_destroy(&machine);
     return ok;
+}
+
+/* The deleted Core-to-FILE* frame path used to have a separate host test.
+ * Exercise all of its live-scratch and stable-frame invariants against the
+ * *real* selected MachineIR instructions and fail-closed GNU serializer. */
+static bool physical_frame_access_case(const char *name,
+    unsigned int action, MinicA64FrameView view, MinicA64FrameRef frame,
+    MinicA64FrameRegister reg, MinicA64ScratchPolicy scratch,
+    bool should_select, const char *must_have, const char *must_not_have) {
+    MinicTargetInfo target = {0};
+    MinicMachineGNUAsmPolicy policy = {0};
+    MinicMachineFunction machine = {0};
+    MinicMachineBuilder builder = {0};
+    MinicMachineLP64FrameContract empty_frame = {0};
+    FILE *stream = NULL;
+    char buffer[8192];
+    size_t block, size;
+    bool selected, ok = false;
+    target.architecture = MINIC_TARGET_ARCH_AARCH64;
+    target.data_layout = minic_aarch64_linux_data_layout();
+    empty_frame.frame_alignment = 16U;
+    empty_frame.saved_entry_sp_offset = SIZE_MAX;
+    if (!minic_aarch64_machine_gnu_asm_policy_initialize(&target, &policy) ||
+        !minic_machine_function_initialize(&machine, &target, name,
+            MINIC_A64_MACHINE_FEATURE_BASE | MINIC_A64_MACHINE_FEATURE_FP_SIMD) ||
+        !minic_machine_builder_initialize(&builder, &machine) ||
+        !minic_machine_builder_create_block(&builder, NULL, false,
+            false, &block) ||
+        !minic_machine_builder_position_at(&builder, block)) goto done;
+    switch (action) {
+    case 0U:
+        selected = minic_a64_machine_emit_frame_load(
+            &builder, &view, frame, reg, scratch);
+        break;
+    case 1U:
+        selected = minic_a64_machine_emit_frame_store(
+            &builder, &view, frame, reg, scratch);
+        break;
+    case 2U:
+        selected = minic_a64_machine_emit_frame_address(
+            &builder, &view, frame, reg.number, scratch);
+        break;
+    default: goto done;
+    }
+    if (!should_select) { ok = !selected; goto done; }
+    if (!selected || !minic_a64_machine_emit_epilogue(&builder, &empty_frame) ||
+        !minic_machine_gnu_asm_preflight(&machine, &policy)) goto done;
+    stream = a64_frame_workspace_stream();
+    if (stream == NULL ||
+        !minic_machine_gnu_asm_emit_body(stream, &machine, &policy) ||
+        fflush(stream) != 0 || fseek(stream, 0L, SEEK_SET) != 0) goto done;
+    size = fread(buffer, 1U, sizeof(buffer) - 1U, stream);
+    buffer[size] = '\0';
+    ok = (must_have == NULL || strstr(buffer, must_have) != NULL) &&
+         (must_not_have == NULL || strstr(buffer, must_not_have) == NULL);
+    if (!ok) fprintf(stderr, "A64 typed frame %s unexpectedly:\n%s\n",
+                     name, buffer);
+done:
+    if (!ok) fprintf(stderr, "A64 typed frame access failed: %s\n", name);
+    if (stream != NULL) fclose(stream);
+    minic_machine_function_destroy(&machine);
+    return ok;
+}
+
+static bool live_frame_access_cases(void) {
+    MinicA64FrameView stable = {false, 256U, 0U, SIZE_MAX};
+    const MinicA64FrameView dynamic = {true, 256U, 96U, SIZE_MAX};
+    const MinicA64FrameView aligned = {true, 256U, 0U, 80U};
+    const MinicA64ScratchPolicy free_scratch = {0U, 0U};
+    const MinicA64FrameRef slot = {MINIC_A64_FRAME_OWNED, 40U};
+#define CASE(name, act, view, ref, kind, reg, scratch, want, yes, no) \
+    if (!physical_frame_access_case((name), (act), (view), (ref), \
+        (MinicA64FrameRegister){(kind), (reg)}, (scratch), (want), \
+        (yes), (no))) return false
+    CASE("stable_fp64", 0U, stable, slot, MINIC_A64_REG_D, 9U,
+        free_scratch, true, "ldr d9, [sp, #40]", NULL);
+    CASE("dynamic_fp32", 1U, dynamic, slot, MINIC_A64_REG_S, 9U,
+        free_scratch, true, "str s9, [x19, #40]", NULL);
+    stable.outgoing_sp_bytes = 96U;
+    CASE("stable_outgoing_shift", 0U, stable, slot, MINIC_A64_REG_X, 9U,
+        free_scratch, true, "ldr x9, [sp, #136]", NULL);
+    CASE("dynamic_outgoing_sp", 0U, dynamic,
+        ((MinicA64FrameRef){MINIC_A64_FRAME_OUTGOING, 40U}),
+        MINIC_A64_REG_X, 9U, free_scratch, true,
+        "ldr x9, [sp, #40]", NULL);
+    CASE("large_owned_load", 0U, dynamic,
+        ((MinicA64FrameRef){MINIC_A64_FRAME_OWNED, 4096U}),
+        MINIC_A64_REG_X, 9U, free_scratch, true,
+        "ldr x9, [x17, #0]", "[sp, #4096]");
+    CASE("large_owned_store", 1U, dynamic,
+        ((MinicA64FrameRef){MINIC_A64_FRAME_OWNED, 32760U}),
+        MINIC_A64_REG_W, 9U, free_scratch, true,
+        "str w9, [x17, #0]", "[sp, #32760]");
+    CASE("large_owned_address", 2U, dynamic,
+        ((MinicA64FrameRef){MINIC_A64_FRAME_OWNED, 5000U}),
+        MINIC_A64_REG_X, 11U, free_scratch, true,
+        "add x11, x19, x11", NULL);
+    CASE("aligned_incoming", 0U, aligned,
+        ((MinicA64FrameRef){MINIC_A64_FRAME_INCOMING, 64U}),
+        MINIC_A64_REG_X, 9U, free_scratch, true,
+        "ldr x9, [x17, #80]", NULL);
+    CASE("stable_incoming", 0U, stable,
+        ((MinicA64FrameRef){MINIC_A64_FRAME_INCOMING, 64U}),
+        MINIC_A64_REG_X, 9U, free_scratch, true,
+        "ldr x9, [sp, #432]", NULL);
+    stable.outgoing_sp_bytes = 0U;
+    CASE("live_x17", 1U, stable,
+        ((MinicA64FrameRef){MINIC_A64_FRAME_OWNED, 32760U}),
+        MINIC_A64_REG_X, 17U, free_scratch, true,
+        "str x17, [x16, #0]", "movz x17");
+    CASE("masked_x17_vector", 0U, dynamic,
+        ((MinicA64FrameRef){MINIC_A64_FRAME_OWNED, 4096U}),
+        MINIC_A64_REG_Q, 9U,
+        ((MinicA64ScratchPolicy){UINT32_C(1) << 17U, 0U}), true,
+        "ldr q9, [x16, #0]", NULL);
+    CASE("explicit_x12", 0U, dynamic,
+        ((MinicA64FrameRef){MINIC_A64_FRAME_OWNED, 32760U}),
+        MINIC_A64_REG_X, 17U,
+        ((MinicA64ScratchPolicy){UINT32_C(0x3ee00), 12U}), true,
+        "ldr x17, [x12, #0]", NULL);
+    CASE("explicit_x12_blocked", 0U, dynamic,
+        ((MinicA64FrameRef){MINIC_A64_FRAME_OWNED, 32760U}),
+        MINIC_A64_REG_X, 17U,
+        ((MinicA64ScratchPolicy){UINT32_C(0x3fe00), 12U}), false,
+        NULL, NULL);
+    CASE("all_scratch_blocked", 0U, dynamic,
+        ((MinicA64FrameRef){MINIC_A64_FRAME_OWNED, 65520U}),
+        MINIC_A64_REG_W, 9U,
+        ((MinicA64ScratchPolicy){(UINT32_C(1) << 16U) |
+            (UINT32_C(1) << 17U), 0U}), false, NULL, NULL);
+    stable.frame_size = SIZE_MAX;
+    CASE("incoming_overflow", 0U, stable,
+        ((MinicA64FrameRef){MINIC_A64_FRAME_INCOMING, 64U}),
+        MINIC_A64_REG_X, 9U, free_scratch, false, NULL, NULL);
+    CASE("invalid_w31", 0U, stable, slot,
+        MINIC_A64_REG_W, 31U, free_scratch, false, NULL, NULL);
+    CASE("anchored_x19", 2U, dynamic,
+        ((MinicA64FrameRef){MINIC_A64_FRAME_OWNED, 32760U}),
+        MINIC_A64_REG_X, 19U, free_scratch, false, NULL, NULL);
+#undef CASE
+    return true;
 }
 
 static MinicMachineOperand gp(unsigned int reg, unsigned int width) {
@@ -211,7 +382,7 @@ static bool opcode_forms_case(void) {
 #undef EMIT3
     if (!minic_a64_machine_emit_epilogue(&builder, &frame) ||
         !minic_machine_gnu_asm_preflight(&machine, &policy)) goto done;
-    stream = tmpfile();
+    stream = a64_frame_workspace_stream();
     if (stream == NULL) goto done;
     if (!minic_machine_gnu_asm_emit_body(stream, &machine, &policy) ||
         fflush(stream) != 0 || fseek(stream, 0L, SEEK_SET) != 0) {
@@ -264,6 +435,7 @@ int main(void) {
         "and x9, x9, #-64", "str q0, [x19, #352]",
         "mov sp, x9"));
     assert(incoming_case());
+    assert(live_frame_access_cases());
     assert(opcode_forms_case());
     puts("A64 physical MachineFrame synthetic contracts PASS");
     return 0;

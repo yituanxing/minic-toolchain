@@ -5,6 +5,8 @@
 #include "core/core_ir.h"
 #include "target/aarch64/asm_contract.h"
 #include "target/aarch64/asm_contract_internal.h"
+#include "target/x86_64/asm_contract.h"
+#include "aarch64/typed_source_asm_probe.h"
 #include "x86_64/typed_source_asm_probe.h"
 
 #ifdef NDEBUG
@@ -45,10 +47,6 @@ static bool register_pointer(MinicCoreTypeContext *types,
 static bool emit_one(PoisonMachine machine, const MinicCoreFunction *function,
                      const MinicCoreInstruction *instruction,
                      char *output, size_t capacity) {
-    MinicDirectLP64BlockContext a64 = {0};
-    MinicLP64FramePlan a64_frame = {0};
-    MinicMachineLP64FrameContract a64_machine_frame = {0};
-    size_t offsets[1] = {16U};
     FILE *stream;
     char *buffer = NULL;
     size_t length = 0U;
@@ -57,14 +55,9 @@ static bool emit_one(PoisonMachine machine, const MinicCoreFunction *function,
     output[0] = '\0';
     stream = open_memstream(&buffer, &length);
     assert(stream != NULL);
-    a64_frame.value_count = 1U;
-    a64_frame.value_offsets = offsets;
-    a64.fn = function;
-    a64.frame_plan = &a64_frame;
-    a64_machine_frame.frame_size = 64U;
-    a64.machine_frame = &a64_machine_frame;
     result = machine == POISON_AARCH64
-        ? minic_aarch64_emit_qualified_structured_asm(stream, &a64, instruction)
+        ? minic_test_aarch64_typed_source_asm_emit(stream, function,
+              instruction)
         : minic_test_x86_typed_source_asm_emit(stream, function,
               instruction);
     assert(fflush(stream) == 0);
@@ -96,6 +89,10 @@ static void machine_core_poison(PoisonMachine machine) {
     assert(register_pointer(&types, u32, &pointer_u32));
     assert(register_pointer(&types, u64, &pointer_u64));
 
+    function.core_function_type_id = MINIC_CORE_TYPE_INVALID;
+    assert(minic_core_function_define_signature(&function, &types,
+        void_id, NULL, 0U, MINIC_CALLING_CONVENTION_DEFAULT, false));
+
     function.type_context = &types;
     function.values = value;
     function.value_count = 1U;
@@ -109,16 +106,14 @@ static void machine_core_poison(PoisonMachine machine) {
     inline_asm.source_asm_unique_id = 46U;
     inline_asm.goto_target = MINIC_CORE_BLOCK_INVALID;
     inline_asm.goto_second_target = MINIC_CORE_BLOCK_INVALID;
-    /* P45 closes the source-qualified-machine handshake. The AArch64 MRS
-     * hardware instruction must carry its exact target-owned machine ID,
-     * while x86's longstanding MOV memory-output probe exercises the
-     * deliberately independent, legal generic-structured ID0 path. */
-    inline_asm.operand_plan_owner = machine == POISON_AARCH64
-        ? MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED
-        : MINIC_ASM_OPERAND_PLAN_GENERIC_STRUCTURED;
+    /* Both hardware instructions require exact source-owned machine IDs.
+     * The x86 Linux crash-register family captures RBX through a qualified
+     * =m output, not a generic ID0 raw-text emission exception. */
+    inline_asm.operand_plan_owner = MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED;
     inline_asm.target_machine_form_id = machine == POISON_AARCH64
-        ? AARCH64_MACHINE_ASM_MRS : 0U;
-    inline_asm.target_machine_form_variant = 0U;
+        ? AARCH64_MACHINE_ASM_MRS : MINIC_X86_MACHINE_ASM_CRASH_REGISTER;
+    inline_asm.target_machine_form_variant = machine == POISON_AARCH64
+        ? 0U : 1U;
     instruction.kind = MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM;
     instruction.core_type_id = void_id;
     instruction.result = MINIC_CORE_VALUE_INVALID;
@@ -131,26 +126,12 @@ static void machine_core_poison(PoisonMachine machine) {
             ? MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT
             : MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_OUTPUT;
 
-    if (machine == POISON_X86_64) {
-        /* Known migration gap: the legacy generic ID0 MOVQ memory-output
-         * positive remains a legal source form, but production x86 typed
-         * selection cannot lower it yet.  Explicitly preserve the original
-         * template, operand and pointer identity as a fail-closed witness;
-         * restore the positive and pointee negatives once the ISA form is
-         * implemented in MachineIR. */
-        assert(!emit_one(machine, &function, &instruction,
-                         rejected, sizeof(rejected)));
-        assert(rejected[0] == '\0');
-        fputs("TYPED_ASM_CORE_POISON=FAIL unsupported-positive="
-              "x86_generic_movq_memory_output\n", stderr);
-        assert(0 && "restore x86 generic MOVQ positive in typed MachineIR");
-        minic_core_type_context_destroy(&types);
-        return;
-    }
-
     assert(emit_one(machine, &function, &instruction, normal, sizeof(normal)));
+    if (getenv("MINIC_TYPED_SOURCE_PROBE_DEBUG") != NULL)
+        fprintf(stderr, "CORE_POISON_POSITIVE machine=%d asm=%s\n",
+                (int)machine, normal);
     assert(strstr(normal, machine == POISON_AARCH64
-        ? "  mrs x9, cntpct_el0\n" : "  movq %rbx, (%r11)\n") != NULL);
+        ? "mrs x9, cntpct_el0\n" : "movq %rbx, (%r11)\n") != NULL);
 
     /* The public instruction/function schemas contain no C descriptor at all;
      * repeat with unchanged sealed Core identities and compare the output. */
@@ -168,9 +149,20 @@ static void machine_core_poison(PoisonMachine machine) {
     assert(!emit_one(machine, &function, &instruction, rejected,
                      sizeof(rejected)));
     assert(rejected[0] == '\0');
-    inline_asm.operand_plan_owner = machine == POISON_AARCH64
-        ? MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED
-        : MINIC_ASM_OPERAND_PLAN_GENERIC_STRUCTURED;
+    inline_asm.operand_plan_owner = MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED;
+    if (machine == POISON_X86_64) {
+        /* Identical source text must fail when stripped of its proven x86
+         * physical-register source form: no generic ID0 fallback. */
+        inline_asm.operand_plan_owner = MINIC_ASM_OPERAND_PLAN_GENERIC_STRUCTURED;
+        inline_asm.target_machine_form_id = 0U;
+        inline_asm.target_machine_form_variant = 0U;
+        assert(!emit_one(machine, &function, &instruction,
+                         rejected, sizeof(rejected)));
+        assert(rejected[0] == '\0');
+        inline_asm.operand_plan_owner = MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED;
+        inline_asm.target_machine_form_id = MINIC_X86_MACHINE_ASM_CRASH_REGISTER;
+        inline_asm.target_machine_form_variant = 1U;
+    }
 
     /* A wrong Core pointee or a nonpointer carrier may not emit even one
      * instruction; an absent type arena is never a C fallback invitation. */

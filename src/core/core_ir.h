@@ -44,16 +44,6 @@ typedef enum MinicCoreCallFrameAddressKind {
     MINIC_CORE_CALL_FRAME_ADDRESS_FRAME
 } MinicCoreCallFrameAddressKind;
 
-/* A FIELD_ADDRESS names one nominal Core record field. The resulting address
- * denotes the complete field type, except for a packed bit-field's scalar
- * storage carrier. Array elements require explicit typed address lowering. */
-typedef enum MinicCoreFieldAccessForm {
-    MINIC_CORE_FIELD_ACCESS_EXACT = 0,
-    /* Numeric form 1 belonged to the retired legacy array-element shortcut.
-     * Keep the remaining encoding stable and reject form 1 at verification. */
-    MINIC_CORE_FIELD_ACCESS_BITFIELD_STORAGE = 2
-} MinicCoreFieldAccessForm;
-
 /* M158_FINAL_STRICT_TAIL */
 typedef enum MinicCoreInstructionKind {
     MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT = 0,
@@ -317,11 +307,19 @@ typedef enum MinicCoreInlineAsmImmediateKind {
     MINIC_CORE_INLINE_ASM_IMMEDIATE_SYMBOL
 } MinicCoreInlineAsmImmediateKind;
 
+/* Four typed GNU `i` inputs cover Linux BUG/WARN symbol, line, flags and
+ * entry size; target-specific source qualifiers may admit a smaller set.
+ * The RISC-V asm-goto CFG contract remains independently capped at three. */
+#define MINIC_CORE_INLINE_ASM_IMMEDIATE_LIMIT 4U
+
 typedef struct MinicCoreInlineAsmImmediate {
     MinicCoreInlineAsmImmediateKind kind;
     int64_t integer;
     char *symbol;
     int64_t byte_addend;
+    /* Owned GNU symbolic input name, if the source operand was named.
+     * This is distinct from the target-neutral relocation symbol above. */
+    char *asm_name;
 } MinicCoreInlineAsmImmediate;
 
 /* A precise ELF name or name+byte-addend witness; no assembler syntax. The
@@ -405,9 +403,12 @@ typedef struct MinicCoreInlineAsm {
     /* Second CFG destination for a TARGET-qualified multi-label asm-goto.
      * Existing one-label forms leave this as INVALID. */
     MinicCoreBlockId goto_second_target;
+    /* Owned source GNU label names in the same order as the Core BlockIds.
+     * NULL denotes an unnamed/positional label; no source AST is retained. */
+    char *goto_label_names[2];
     /* Immutable typed numeric constants or relocation witnesses; target
      * emission formats machine syntax exactly once at its final boundary. */
-    MinicCoreInlineAsmImmediate resolved_immediates[3];
+    MinicCoreInlineAsmImmediate resolved_immediates[MINIC_CORE_INLINE_ASM_IMMEDIATE_LIMIT];
     size_t resolved_immediate_count;
     /* These references root definitions only when the corresponding Core
      * instruction survives the post-lowering reachable-block closure. */
@@ -524,11 +525,9 @@ typedef struct MinicCoreInstruction {
         MinicCoreBlockId block_id;
         struct {
             MinicCoreValueId base;
-            MinicCoreTypeId core_record_type_id;
-            size_t field_index;
-            MinicCoreFieldAccessForm access_form;
-            /* Target-neutral DataLayout result captured at AST -> Core lowering.
-               Backends consume the byte displacement without reopening record AST. */
+            /* A source-independent displacement inside one complete Core
+             * record. The C ingress resolves member identity and bit-field
+             * carrier legality before publishing this physical address. */
             size_t byte_offset;
         } field_address;
         struct {

@@ -219,7 +219,6 @@ static bool build_field_fixture(MinicCoreSourceBuilder *builder,
     (void)memset(&instruction, 0, sizeof(instruction));
     instruction.kind = MINIC_CORE_INSTRUCTION_FIELD_ADDRESS;
     instruction.value.field_address.base = base;
-    instruction.value.field_address.field_index = 0U;
     instruction.value.field_address.byte_offset = 8U;
     if (!minic_core_function_append_source_value_instruction(
             builder, block, &instruction, source_pointer_int, &result)) return false;
@@ -231,7 +230,6 @@ static bool build_field_fixture(MinicCoreSourceBuilder *builder,
     function->values[result].core_type_id = ids->ptr_i32;
     function->instructions[0].core_type_id = ids->ptr_record_a;
     function->instructions[1].core_type_id = ids->ptr_i32;
-    function->instructions[1].value.field_address.core_record_type_id = ids->record_a;
     return true;
 }
 
@@ -611,34 +609,22 @@ int main(void) {
     CHECK(minic_core_function_attach_type_context(function, &context));
     CHECK(minic_core_function_verify_core_type_snapshot(function));
     CHECK(minic_core_function_verify(function));
-    /* A record member's pointer type is a sealed Core constraint. The
-     * retired array-element shortcut (numeric form 1) cannot be re-admitted;
-     * a bit-field storage carrier also requires an actual bit-field. */
-    function->instructions[1].value.field_address.access_form =
-        (MinicCoreFieldAccessForm)1;
-    CHECK(!minic_core_function_verify(function));
-    function->instructions[1].value.field_address.access_form =
-        MINIC_CORE_FIELD_ACCESS_BITFIELD_STORAGE;
-    CHECK(!minic_core_function_verify(function));
-    function->instructions[1].value.field_address.access_form =
-        (MinicCoreFieldAccessForm)99;
-    CHECK(!minic_core_function_verify(function));
-    function->instructions[1].value.field_address.access_form =
-        MINIC_CORE_FIELD_ACCESS_EXACT;
+    /* Core no longer interprets C member identities or bit-field carriers.
+     * It accepts a typed physical address within the declared record extent;
+     * independent producers can address the same bytes with an i8 pointer. */
     function->values[1].core_type_id = ids.ptr_i8;
     function->instructions[1].core_type_id = ids.ptr_i8;
+    CHECK(minic_core_function_verify_core_type_snapshot(function));
+    /* The function signature still returns i32*, so changing its result to
+     * i8* must fail the independent return-contract verification. */
     CHECK(!minic_core_function_verify(function));
     function->values[1].core_type_id = ids.ptr_i32;
     function->instructions[1].core_type_id = ids.ptr_i32;
     CHECK(minic_core_function_verify(function));
-    saved = function->instructions[1].value.field_address.core_record_type_id;
-    function->instructions[1].value.field_address.core_record_type_id = ids.record_b;
+    function->instructions[1].value.field_address.byte_offset = 17U;
     CHECK(!minic_core_function_verify_core_type_snapshot(function));
-    function->instructions[1].value.field_address.core_record_type_id = ids.incomplete_record;
-    CHECK(!minic_core_function_verify_core_type_snapshot(function));
-    function->instructions[1].value.field_address.core_record_type_id = saved;
-    function->instructions[1].value.field_address.byte_offset = 12U;
-    CHECK(!minic_core_function_verify_core_type_snapshot(function));
+    function->instructions[1].value.field_address.byte_offset = 16U;
+    CHECK(minic_core_function_verify_core_type_snapshot(function));
     function->instructions[1].value.field_address.byte_offset = 8U;
     function->values[0].core_type_id = ids.ptr_record_b;
     CHECK(!minic_core_function_verify_core_type_snapshot(function));
@@ -866,6 +852,6 @@ int main(void) {
           function->block_count == 0U);
     minic_core_source_builder_destroy(&builder);
     minic_core_type_context_destroy(&context);
-    (void)puts("CORE_TYPE_SNAPSHOT=PASS valid malformed direct_core_producer indirect_nominal field_nominal overflow enum_source_admission rollback partial_oom");
+    (void)puts("CORE_TYPE_SNAPSHOT=PASS valid malformed direct_core_producer indirect_nominal field_physical overflow enum_source_admission rollback partial_oom");
     return 0;
 }

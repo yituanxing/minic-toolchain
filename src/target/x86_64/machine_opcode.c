@@ -349,7 +349,8 @@ static const MinicX86MachineOpcodeInfo x86_opcodes[MINIC_X86_MI_LAST] = {
     RR(OR8_RR,"orb",8,8,R|W,X86_IMPLICIT_FLAGS_DEF),
     RR(TEST8_RR,"testb",8,8,R,X86_IMPLICIT_FLAGS_DEF),
 
-    SET(SETZ8_R,"setz"), SET(SETNZ8_R,"setnz"),
+    /* GNU Linux emits the equal/ZF alias `sete` for hardware SETZ. */
+    SET(SETZ8_R,"sete"), SET(SETNZ8_R,"setnz"),
     SET(SETB8_R,"setb"), SET(SETBE8_R,"setbe"),
     SET(SETL8_R,"setl"), SET(SETLE8_R,"setle"),
     SET(SETO8_R,"seto"), SET(SETC8_R,"setc"),
@@ -1124,6 +1125,552 @@ static bool x86_source_matched_contract(const MinicTargetInfo *target,
     return true;
 }
 
+/* The GNU matched-memory family is register transport around actual memory
+ * traffic, not a Core instruction copied as assembler syntax. For 7/5/2
+ * shapes it uses caller-scratch R8/R9/R10/RCX, reserving R11 for address
+ * materialization after the source's entire carry chain. */
+static bool x86_source_matched_memory_contract(
+    const MinicMachineInstruction *ins) {
+    static const unsigned int regs[4] = {
+        MINIC_X86_REG_R8, MINIC_X86_REG_R9,
+        MINIC_X86_REG_R10, MINIC_X86_REG_RCX
+    };
+    static const char *const ties[] = {"0","1","2"};
+    const size_t count = ins->source_asm_machine_form_variant;
+    const size_t noutputs = count == 7U ? 4U :
+        count == 5U ? 3U : count == 2U ? 1U : 0U;
+    size_t i;
+    if (ins->source_asm_machine_form_id !=
+            MINIC_X86_MACHINE_ASM_MATCHED_MEMORY || noutputs == 0U ||
+        ins->operand_count != count || ins->operands == NULL ||
+        ins->source_asm_terminates_block ||
+        ins->source_asm_permits_fallthrough ||
+        ins->effects !=
+            (MINIC_MACHINE_EFFECT_SOURCE_ASM |
+             MINIC_MACHINE_EFFECT_VOLATILE |
+             MINIC_MACHINE_EFFECT_COMPILER_BARRIER |
+             MINIC_MACHINE_EFFECT_MEMORY_READ |
+             MINIC_MACHINE_EFFECT_MEMORY_WRITE) ||
+        !minic_x86_64_typed_machine_form_matches_template(
+            ins->source_asm_machine_form_id,
+            ins->source_asm_machine_form_variant,
+            ins->source_asm_template, ins->source_asm_length) ||
+        ins->implicit_count != 1U || ins->implicit == NULL ||
+        ins->implicit[0].reg.bank != MINIC_MACHINE_REGISTER_FLAGS ||
+        ins->implicit[0].reg.number != 0U ||
+        ins->implicit[0].reg.width_bits != 64U ||
+        ins->implicit[0].access != MINIC_MACHINE_REGISTER_CLOBBER)
+        return false;
+    for (i = 0U; i < count; ++i) {
+        const bool output = i < noutputs;
+        const size_t reg_index = output ? i : i - noutputs;
+        const MinicMachineOperand *operand = &ins->operands[i];
+        const char *expected = output ? "=r" : ties[reg_index];
+        if (reg_index >= 4U || operand->asm_name != NULL ||
+            operand->kind != MINIC_MACHINE_OPERAND_REGISTER ||
+            operand->asm_constraint == NULL ||
+            strcmp(operand->asm_constraint, expected) != 0 ||
+            operand->value.physical.reg.bank !=
+                MINIC_MACHINE_REGISTER_GENERAL ||
+            operand->value.physical.reg.number != regs[reg_index] ||
+            operand->value.physical.reg.width_bits != 64U ||
+            operand->value.physical.access != (output ?
+                MINIC_MACHINE_REGISTER_WRITE : MINIC_MACHINE_REGISTER_READ))
+            return false;
+    }
+    return true;
+}
+
+/* GNU bit scans use the implicit FLAGS producer and a fixed pair of physical
+ * registers.  Source's five width/tied/read-write shapes remain distinct;
+ * the verifier rejects a forged variant or a binding alias mismatch. */
+static bool x86_source_bit_scan_contract(
+    const MinicMachineInstruction *ins) {
+    const unsigned int variant = ins->source_asm_machine_form_variant;
+    const bool tied = variant == MINIC_X86_BIT_SCAN_BSF32_TIED ||
+        variant == MINIC_X86_BIT_SCAN_BSR32_TIED;
+    const bool readwrite = variant == MINIC_X86_BIT_SCAN_BSR64_READWRITE;
+    const unsigned int width = tied ? 32U : 64U;
+    const size_t count = tied ? 3U : 2U;
+    const MinicMachineOperand *op;
+    if (ins->source_asm_machine_form_id !=
+            MINIC_X86_MACHINE_ASM_BITSCAN_MATCHED ||
+        variant < MINIC_X86_BIT_SCAN_BSF64 ||
+        variant > MINIC_X86_BIT_SCAN_BSR64_READWRITE ||
+        ins->operand_count != count || ins->operands == NULL ||
+        ins->source_asm_terminates_block ||
+        ins->source_asm_permits_fallthrough ||
+        ins->effects != (MINIC_MACHINE_EFFECT_SOURCE_ASM |
+                         MINIC_MACHINE_EFFECT_VOLATILE) ||
+        !minic_x86_64_typed_machine_form_matches_template(
+            ins->source_asm_machine_form_id, variant,
+            ins->source_asm_template, ins->source_asm_length) ||
+        ins->implicit_count != 1U || ins->implicit == NULL ||
+        ins->implicit[0].reg.bank != MINIC_MACHINE_REGISTER_FLAGS ||
+        ins->implicit[0].reg.number != 0U ||
+        ins->implicit[0].reg.width_bits != 64U ||
+        ins->implicit[0].access != MINIC_MACHINE_REGISTER_CLOBBER)
+        return false;
+    op = &ins->operands[0];
+    if (op->kind != MINIC_MACHINE_OPERAND_REGISTER ||
+        op->asm_name != NULL || op->asm_constraint == NULL ||
+        strcmp(op->asm_constraint, readwrite ? "+r" : "=r") != 0 ||
+        op->value.physical.reg.bank != MINIC_MACHINE_REGISTER_GENERAL ||
+        op->value.physical.reg.number != MINIC_X86_REG_RAX ||
+        op->value.physical.reg.width_bits != width ||
+        op->value.physical.access != (readwrite ?
+            MINIC_MACHINE_REGISTER_READ | MINIC_MACHINE_REGISTER_WRITE :
+            MINIC_MACHINE_REGISTER_WRITE)) return false;
+    op = &ins->operands[1];
+    if (op->kind != MINIC_MACHINE_OPERAND_REGISTER ||
+        op->asm_name != NULL || op->asm_constraint == NULL ||
+        (strcmp(op->asm_constraint, "rm") != 0 &&
+         strcmp(op->asm_constraint, "r") != 0) ||
+        op->value.physical.reg.bank != MINIC_MACHINE_REGISTER_GENERAL ||
+        op->value.physical.reg.number != MINIC_X86_REG_R10 ||
+        op->value.physical.reg.width_bits != width ||
+        op->value.physical.access != MINIC_MACHINE_REGISTER_READ)
+        return false;
+    if (tied) {
+        op = &ins->operands[2];
+        if (op->kind != MINIC_MACHINE_OPERAND_REGISTER ||
+            op->asm_name != NULL || op->asm_constraint == NULL ||
+            strcmp(op->asm_constraint, "0") != 0 ||
+            op->value.physical.reg.bank != MINIC_MACHINE_REGISTER_GENERAL ||
+            op->value.physical.reg.number != MINIC_X86_REG_RAX ||
+            op->value.physical.reg.width_bits != 32U ||
+            op->value.physical.access != MINIC_MACHINE_REGISTER_READ)
+            return false;
+    }
+    return true;
+}
+
+/* Linux's source-qualified prefetch alternative is an ELF patching protocol,
+ * not unconditional PREFETCHW. Keep its exact two physical operands and
+ * source-vetted template before allowing section/label serialization. */
+static bool x86_source_prefetchw_alt_contract(
+    const MinicTargetInfo *target,
+    const MinicMachineInstruction *ins) {
+    const MinicMachineOperand *imm,*mem;
+    const MinicMachineAddress *address;
+    if (ins->source_asm_machine_form_id !=
+            MINIC_X86_MACHINE_ASM_PREFETCHW_ALT ||
+        ins->source_asm_machine_form_variant != 1U ||
+        ins->operand_count != 2U || ins->operands == NULL ||
+        ins->source_asm_terminates_block ||
+        ins->source_asm_permits_fallthrough ||
+        ins->effects != (MINIC_MACHINE_EFFECT_SOURCE_ASM |
+                         MINIC_MACHINE_EFFECT_VOLATILE |
+                         MINIC_MACHINE_EFFECT_MEMORY_READ) ||
+        !minic_x86_64_typed_machine_form_matches_template(
+            ins->source_asm_machine_form_id,
+            ins->source_asm_machine_form_variant,
+            ins->source_asm_template, ins->source_asm_length) ||
+        ins->implicit_count != 0U || ins->implicit != NULL)
+        return false;
+    imm = &ins->operands[0];
+    mem = &ins->operands[1];
+    if (imm->kind != MINIC_MACHINE_OPERAND_INTEGER ||
+        imm->value.integer != 0 || imm->asm_name != NULL ||
+        imm->asm_constraint == NULL ||
+        strcmp(imm->asm_constraint,"i") != 0 ||
+        mem->kind != MINIC_MACHINE_OPERAND_ADDRESS ||
+        mem->asm_name != NULL || mem->asm_constraint == NULL ||
+        strcmp(mem->asm_constraint,"m") != 0)
+        return false;
+    address = &mem->value.address;
+    return minic_x86_64_machine_validate_address(target,address,NULL) &&
+        address->base.bank == MINIC_MACHINE_REGISTER_GENERAL &&
+        address->base.number == MINIC_X86_REG_R10 &&
+        address->base.width_bits == 64U &&
+        !address->has_index && !address->has_segment &&
+        !address->has_symbol && address->displacement == 0;
+}
+
+/* CMPXCHG16B is one indivisible 128-bit hardware read/conditional write.
+ * Its condition-code output, implicit flags, fixed four-register ABI and
+ * patchable SMP/GS alternate section must all be proven together. No
+ * source FormId alone authorizes section directives or a private CALL. */
+static bool x86_source_cmpxchg128_contract(
+    const MinicTargetInfo *target,
+    const MinicMachineInstruction *ins) {
+    static const unsigned int registers[4] = {
+        MINIC_X86_REG_RAX, MINIC_X86_REG_RDX,
+        MINIC_X86_REG_RBX, MINIC_X86_REG_RCX
+    };
+    static const char *const constraints[4] = {"+a","+d","b","c"};
+    const unsigned int variant = ins->source_asm_machine_form_variant;
+    const bool alt = variant == 2U;
+    const size_t at = alt ? 0U : 1U;
+    const size_t count = alt ? 5U : 6U;
+    const MinicMachineOperand *mem;
+    const MinicMachineAddress *address;
+    size_t i;
+    if (ins->source_asm_machine_form_id !=
+            MINIC_X86_MACHINE_ASM_CMPXCHG128 ||
+        (variant != 1U && variant != 2U) ||
+        ins->operand_count != count || ins->operands == NULL ||
+        ins->source_asm_terminates_block ||
+        ins->source_asm_permits_fallthrough ||
+        ins->effects != (MINIC_MACHINE_EFFECT_SOURCE_ASM |
+            MINIC_MACHINE_EFFECT_VOLATILE |
+            MINIC_MACHINE_EFFECT_COMPILER_BARRIER |
+            MINIC_MACHINE_EFFECT_MEMORY_READ |
+            MINIC_MACHINE_EFFECT_MEMORY_WRITE |
+            (alt ? MINIC_MACHINE_EFFECT_CALL : 0U)) ||
+        !minic_x86_64_typed_machine_form_matches_template(
+            ins->source_asm_machine_form_id, variant,
+            ins->source_asm_template, ins->source_asm_length) ||
+        ins->implicit_count != (alt ? 2U : 1U) ||
+        ins->implicit == NULL ||
+        ins->implicit[0].reg.bank != MINIC_MACHINE_REGISTER_FLAGS ||
+        ins->implicit[0].reg.number != 0U ||
+        ins->implicit[0].reg.width_bits != 64U ||
+        ins->implicit[0].access != MINIC_MACHINE_REGISTER_CLOBBER ||
+        (alt && (ins->implicit[1].reg.bank !=
+                MINIC_MACHINE_REGISTER_GENERAL ||
+            ins->implicit[1].reg.number != MINIC_X86_REG_RSI ||
+            ins->implicit[1].reg.width_bits != 64U ||
+            ins->implicit[1].access != MINIC_MACHINE_REGISTER_CLOBBER)))
+        return false;
+    if (!alt) {
+        const MinicMachineOperand *flags = &ins->operands[0];
+        if (flags->kind != MINIC_MACHINE_OPERAND_REGISTER ||
+            flags->asm_name != NULL ||
+            flags->asm_constraint == NULL ||
+            strcmp(flags->asm_constraint,"=@cce") != 0 ||
+            flags->value.physical.reg.bank != MINIC_MACHINE_REGISTER_FLAGS ||
+            flags->value.physical.reg.number != 0U ||
+            flags->value.physical.reg.width_bits != 64U ||
+            flags->value.physical.access != MINIC_MACHINE_REGISTER_WRITE)
+            return false;
+    }
+    mem = &ins->operands[at];
+    if (mem->kind != MINIC_MACHINE_OPERAND_ADDRESS ||
+        mem->asm_constraint == NULL ||
+        strcmp(mem->asm_constraint,"+m") != 0 ||
+        mem->asm_name == NULL ||
+        strcmp(mem->asm_name,alt ? "var" : "ptr") != 0)
+        return false;
+    address = &mem->value.address;
+    if (!minic_x86_64_machine_validate_address(target,address,NULL) ||
+        address->base.bank != MINIC_MACHINE_REGISTER_GENERAL ||
+        address->base.number != MINIC_X86_REG_R11 ||
+        address->base.width_bits != 64U ||
+        address->has_index || address->has_segment ||
+        address->has_symbol || address->displacement != 0)
+        return false;
+    for (i = 0U; i < 4U; ++i) {
+        const MinicMachineOperand *op = &ins->operands[at+i+1U];
+        const unsigned int access = i < 2U ?
+            MINIC_MACHINE_REGISTER_READ | MINIC_MACHINE_REGISTER_WRITE :
+            MINIC_MACHINE_REGISTER_READ;
+        if (op->kind != MINIC_MACHINE_OPERAND_REGISTER ||
+            op->asm_name != NULL || op->asm_constraint == NULL ||
+            strcmp(op->asm_constraint,constraints[i]) != 0 ||
+            op->value.physical.reg.bank != MINIC_MACHINE_REGISTER_GENERAL ||
+            op->value.physical.reg.number != registers[i] ||
+            op->value.physical.reg.width_bits != 64U ||
+            op->value.physical.access != access) return false;
+    }
+    return true;
+}
+
+/* Linux crash_setup_regs snapshots all sixteen architectural GPRs, flags
+ * and RIP. The Source qualifier seals the precise GNU instruction and typed
+ * variant, while this machine contract seals the captured register and the
+ * distinct R10 scratch required when the source itself reads R11. */
+static bool x86_source_crash_register_contract(
+    const MinicTargetInfo *target,
+    const MinicMachineInstruction *ins) {
+    static const unsigned int gpr[16] = {
+        MINIC_X86_REG_RBX, MINIC_X86_REG_RCX,
+        MINIC_X86_REG_RDX, MINIC_X86_REG_RSI,
+        MINIC_X86_REG_RDI, MINIC_X86_REG_RBP,
+        MINIC_X86_REG_RAX, MINIC_X86_REG_RSP,
+        MINIC_X86_REG_R8, MINIC_X86_REG_R9,
+        MINIC_X86_REG_R10, MINIC_X86_REG_R11,
+        MINIC_X86_REG_R12, MINIC_X86_REG_R13,
+        MINIC_X86_REG_R14, MINIC_X86_REG_R15
+    };
+    const unsigned int variant = ins->source_asm_machine_form_variant;
+    const bool memory_output = variant <= 17U;
+    const MinicMachineOperand *operand;
+    if (ins->source_asm_machine_form_id !=
+            MINIC_X86_MACHINE_ASM_CRASH_REGISTER ||
+        variant == 0U || variant > 18U ||
+        ins->operand_count != 1U || ins->operands == NULL ||
+        ins->source_asm_terminates_block ||
+        ins->source_asm_permits_fallthrough ||
+        (memory_output ?
+            ins->effects != (MINIC_MACHINE_EFFECT_SOURCE_ASM |
+                MINIC_MACHINE_EFFECT_VOLATILE |
+                MINIC_MACHINE_EFFECT_MEMORY_WRITE) :
+            (ins->effects != MINIC_MACHINE_EFFECT_SOURCE_ASM &&
+             ins->effects != (MINIC_MACHINE_EFFECT_SOURCE_ASM |
+                 MINIC_MACHINE_EFFECT_VOLATILE))) ||
+        !minic_x86_64_typed_machine_form_matches_template(
+            ins->source_asm_machine_form_id, variant,
+            ins->source_asm_template, ins->source_asm_length) ||
+        ins->implicit_count != (memory_output ? 1U : 0U) ||
+        (memory_output && ins->implicit == NULL) ||
+        (!memory_output && ins->implicit != NULL)) return false;
+    operand = &ins->operands[0];
+    if (operand->asm_name != NULL || operand->asm_constraint == NULL ||
+        strcmp(operand->asm_constraint,memory_output ? "=m" : "=r") != 0)
+        return false;
+    if (!memory_output) return
+        operand->kind == MINIC_MACHINE_OPERAND_REGISTER &&
+        operand->value.physical.reg.bank == MINIC_MACHINE_REGISTER_GENERAL &&
+        operand->value.physical.reg.number == MINIC_X86_REG_RAX &&
+        operand->value.physical.reg.width_bits == 64U &&
+        operand->value.physical.access == MINIC_MACHINE_REGISTER_WRITE;
+    {
+        const MinicMachineAddress *address;
+        const MinicMachineRegisterEffect *effect = &ins->implicit[0];
+        if (operand->kind != MINIC_MACHINE_OPERAND_ADDRESS ||
+            effect->reg.bank != (variant == 17U ?
+                MINIC_MACHINE_REGISTER_FLAGS : MINIC_MACHINE_REGISTER_GENERAL) ||
+            effect->reg.number != (variant == 17U ? 0U : gpr[variant-1U]) ||
+            effect->reg.width_bits != 64U ||
+            effect->access != MINIC_MACHINE_REGISTER_READ) return false;
+        address = &operand->value.address;
+        return minic_x86_64_machine_validate_address(target,address,NULL) &&
+            address->base.bank == MINIC_MACHINE_REGISTER_GENERAL &&
+            address->base.number == (variant == 12U ?
+                MINIC_X86_REG_R10 : MINIC_X86_REG_R11) &&
+            address->base.width_bits == 64U &&
+            !address->has_index && !address->has_segment &&
+            !address->has_symbol && address->displacement == 0;
+    }
+}
+
+/* GNU Linux futex type-17 fault recovery is an atomic ISA operation plus
+ * PREL32 exception metadata. Variant 1 is cmpxchg, 2 xchg, 3 xadd, 4-6 the
+ * OR/AND/XOR cmpxchg retry loops. Every variant traps into R8D (-EFAULT);
+ * none may escape merely because its Source text mentions an extable macro. */
+static bool x86_source_futex_extable_contract(
+    const MinicTargetInfo *target,
+    const MinicMachineInstruction *ins) {
+    const unsigned int variant = ins->source_asm_machine_form_variant;
+    const bool loop = variant >= 4U && variant <= 6U;
+    const size_t count = loop ? 6U : 5U;
+    const size_t output_count = loop ? 4U : 3U;
+    const MinicMachineOperand *mem;
+    const MinicMachineAddress *address;
+    const unsigned int registers[6] = {
+        variant == 1U ? MINIC_X86_REG_R8 : MINIC_X86_REG_RAX,
+        variant == 1U ? MINIC_X86_REG_RAX : MINIC_X86_REG_R8,
+        MINIC_X86_REG_R10,
+        loop ? MINIC_X86_REG_R9 : variant == 1U ?
+            MINIC_X86_REG_R9 : MINIC_X86_REG_RAX,
+        loop ? MINIC_X86_REG_R11 : variant == 1U ?
+            MINIC_X86_REG_RAX : MINIC_X86_REG_R8,
+        MINIC_X86_REG_R8
+    };
+    const char *const constraints[6] = {
+        variant == 1U ? "+r" : loop ? "=&a" : "=r",
+        variant == 1U ? "=a" : loop ? "=&r" : "=r",
+        "+m",
+        loop ? "=&r" : variant == 1U ? "r" : "0",
+        loop ? "r" : "1",
+        "1"
+    };
+    size_t i;
+    if (ins->source_asm_machine_form_id !=
+            MINIC_X86_MACHINE_ASM_FUTEX_EXTABLE ||
+        variant == 0U || variant > 6U ||
+        ins->operand_count != count || ins->operands == NULL ||
+        ins->source_asm_terminates_block ||
+        ins->source_asm_permits_fallthrough ||
+        ins->effects != (MINIC_MACHINE_EFFECT_SOURCE_ASM |
+            MINIC_MACHINE_EFFECT_VOLATILE |
+            MINIC_MACHINE_EFFECT_MEMORY_READ |
+            MINIC_MACHINE_EFFECT_MEMORY_WRITE |
+            MINIC_MACHINE_EFFECT_COMPILER_BARRIER) ||
+        !minic_x86_64_typed_machine_form_matches_template(
+            ins->source_asm_machine_form_id,variant,
+            ins->source_asm_template,ins->source_asm_length) ||
+        ins->implicit_count != (variant == 2U ? 0U : 1U) ||
+        (variant == 2U && ins->implicit != NULL) ||
+        (variant != 2U && (ins->implicit == NULL ||
+            ins->implicit[0].reg.bank != MINIC_MACHINE_REGISTER_FLAGS ||
+            ins->implicit[0].reg.number != 0U ||
+            ins->implicit[0].reg.width_bits != 64U ||
+            ins->implicit[0].access != MINIC_MACHINE_REGISTER_CLOBBER)))
+        return false;
+    mem = &ins->operands[2];
+    if (mem->kind != MINIC_MACHINE_OPERAND_ADDRESS ||
+        mem->asm_name != NULL || mem->asm_constraint == NULL ||
+        strcmp(mem->asm_constraint,"+m") != 0) return false;
+    address = &mem->value.address;
+    if (!minic_x86_64_machine_validate_address(target,address,NULL) ||
+        address->base.bank != MINIC_MACHINE_REGISTER_GENERAL ||
+        address->base.number != MINIC_X86_REG_R10 ||
+        address->base.width_bits != 64U ||
+        address->has_index || address->has_segment ||
+        address->has_symbol || address->displacement != 0) return false;
+    for (i = 0U; i < count; ++i) {
+        const MinicMachineOperand *operand = &ins->operands[i];
+        const unsigned int access = i >= output_count ?
+            MINIC_MACHINE_REGISTER_READ :
+            i == 0U && variant == 1U ?
+                MINIC_MACHINE_REGISTER_READ | MINIC_MACHINE_REGISTER_WRITE :
+                MINIC_MACHINE_REGISTER_WRITE;
+        if (i == 2U) continue;
+        if (operand->kind != MINIC_MACHINE_OPERAND_REGISTER ||
+            operand->asm_name != NULL || operand->asm_constraint == NULL ||
+            strcmp(operand->asm_constraint,constraints[i]) != 0 ||
+            operand->value.physical.reg.bank != MINIC_MACHINE_REGISTER_GENERAL ||
+            operand->value.physical.reg.number != registers[i] ||
+            operand->value.physical.reg.width_bits != 32U ||
+            operand->value.physical.access != access)
+            return false;
+    }
+    return true;
+}
+
+/* The five original Linux GS per-CPU tied-ALU operations each admit a
+ * 32-bit and a 64-bit physical width. The source's `0` tied seed lives in
+ * EAX/RAX; the GS segment address is not an ordinary process pointer. */
+static bool x86_source_gs_tied_alu_contract(
+    const MinicTargetInfo *target,
+    const MinicMachineInstruction *ins) {
+    const unsigned int form = ins->source_asm_machine_form_variant;
+    const MinicMachineOperand *out,*mem,*tied;
+    const MinicMachineAddress *address;
+    unsigned int width;
+    if (ins->source_asm_machine_form_id !=
+            MINIC_X86_MACHINE_ASM_GS_TIED_ALU ||
+        form < 1U || form > 5U ||
+        ins->operand_count != 3U || ins->operands == NULL ||
+        ins->source_asm_terminates_block ||
+        ins->source_asm_permits_fallthrough ||
+        (ins->effects != (MINIC_MACHINE_EFFECT_SOURCE_ASM |
+                             MINIC_MACHINE_EFFECT_MEMORY_READ) &&
+         ins->effects != (MINIC_MACHINE_EFFECT_SOURCE_ASM |
+                             MINIC_MACHINE_EFFECT_VOLATILE |
+                             MINIC_MACHINE_EFFECT_MEMORY_READ)) ||
+        !minic_x86_64_typed_machine_form_matches_template(
+            ins->source_asm_machine_form_id,form,
+            ins->source_asm_template,ins->source_asm_length) ||
+        ins->implicit_count != 1U || ins->implicit == NULL ||
+        ins->implicit[0].reg.bank != MINIC_MACHINE_REGISTER_FLAGS ||
+        ins->implicit[0].reg.number != 0U ||
+        ins->implicit[0].reg.width_bits != 64U ||
+        ins->implicit[0].access != MINIC_MACHINE_REGISTER_CLOBBER)
+        return false;
+    out = &ins->operands[0];
+    mem = &ins->operands[1];
+    tied = &ins->operands[2];
+    if (out->kind != MINIC_MACHINE_OPERAND_REGISTER) return false;
+    width = out->value.physical.reg.width_bits;
+    if ((width != 32U && width != 64U) ||
+        out->asm_name != NULL || out->asm_constraint == NULL ||
+        strcmp(out->asm_constraint,"=r") != 0 ||
+        out->value.physical.reg.bank != MINIC_MACHINE_REGISTER_GENERAL ||
+        out->value.physical.reg.number != MINIC_X86_REG_RAX ||
+        out->value.physical.access != MINIC_MACHINE_REGISTER_WRITE ||
+        mem->kind != MINIC_MACHINE_OPERAND_ADDRESS ||
+        mem->asm_name != NULL || mem->asm_constraint == NULL ||
+        strcmp(mem->asm_constraint,"m") != 0 ||
+        tied->kind != MINIC_MACHINE_OPERAND_REGISTER ||
+        tied->asm_name != NULL || tied->asm_constraint == NULL ||
+        strcmp(tied->asm_constraint,"0") != 0 ||
+        tied->value.physical.reg.bank != MINIC_MACHINE_REGISTER_GENERAL ||
+        tied->value.physical.reg.number != MINIC_X86_REG_RAX ||
+        tied->value.physical.reg.width_bits != width ||
+        tied->value.physical.access != MINIC_MACHINE_REGISTER_READ)
+        return false;
+    address = &mem->value.address;
+    return minic_x86_64_machine_validate_address(target,address,NULL) &&
+        address->base.bank == MINIC_MACHINE_REGISTER_GENERAL &&
+        address->base.number == MINIC_X86_REG_R10 &&
+        address->base.width_bits == 64U &&
+        address->has_segment &&
+        address->segment.number == MINIC_X86_SEG_GS &&
+        !address->has_index && !address->has_symbol &&
+        address->displacement == 0;
+}
+
+/* Linux _THIS_IP_ is not an absolute symbol constant: the architectural
+ * instruction computes RIP at the source CALLSITE. Its single GNU =r output
+ * is selected into RAX before the ordinary typed store into the C lvalue. */
+static bool x86_source_ip_here_contract(const MinicMachineInstruction *ins) {
+    const MinicMachineOperand *output;
+    if (ins->source_asm_machine_form_id != MINIC_X86_MACHINE_ASM_IP_HERE ||
+        ins->source_asm_machine_form_variant != 1U ||
+        ins->operand_count != 1U || ins->operands == NULL ||
+        ins->source_asm_terminates_block ||
+        ins->source_asm_permits_fallthrough ||
+        (ins->effects != MINIC_MACHINE_EFFECT_SOURCE_ASM &&
+         ins->effects != (MINIC_MACHINE_EFFECT_SOURCE_ASM |
+             MINIC_MACHINE_EFFECT_VOLATILE)) ||
+        !minic_x86_64_typed_machine_form_matches_template(
+            ins->source_asm_machine_form_id,
+            ins->source_asm_machine_form_variant,
+            ins->source_asm_template,ins->source_asm_length) ||
+        ins->implicit_count != 0U || ins->implicit != NULL)
+        return false;
+    output = &ins->operands[0];
+    return output->kind == MINIC_MACHINE_OPERAND_REGISTER &&
+        output->asm_name == NULL && output->asm_constraint != NULL &&
+        strcmp(output->asm_constraint,"=r") == 0 &&
+        output->value.physical.reg.bank == MINIC_MACHINE_REGISTER_GENERAL &&
+        output->value.physical.reg.number == MINIC_X86_REG_RAX &&
+        output->value.physical.reg.width_bits == 64U &&
+        output->value.physical.access == MINIC_MACHINE_REGISTER_WRITE;
+}
+
+/* The two GNU Linux BUG_TABLE source spellings have identical ELF semantics
+ * but different operand-reference names. `%c` prints the relocation *symbol*
+ * and three source-proven integer constants without a `$` prefix. The ELF
+ * reference is PC-relative from `.long symbol - .`, never ABS64. */
+static bool x86_source_bug_c_immediate_contract(
+    const MinicMachineInstruction *ins) {
+    static const char *const names[4] = {"path","ln","fl","sz"};
+    const unsigned int variant = ins->source_asm_machine_form_variant;
+    size_t index;
+    if (ins->source_asm_machine_form_id !=
+            MINIC_X86_MACHINE_ASM_BUG_TABLE_C_IMMEDIATE ||
+        (variant != 1U && variant != 2U) ||
+        ins->operand_count != 4U || ins->operands == NULL ||
+        ins->source_asm_terminates_block ||
+        ins->source_asm_permits_fallthrough ||
+        ins->effects != (MINIC_MACHINE_EFFECT_SOURCE_ASM |
+                         MINIC_MACHINE_EFFECT_VOLATILE) ||
+        ins->implicit_count != 0U || ins->implicit != NULL ||
+        !minic_x86_64_typed_machine_form_matches_template(
+            ins->source_asm_machine_form_id,variant,
+            ins->source_asm_template,ins->source_asm_length))
+        return false;
+    for (index = 0U; index < 4U; ++index) {
+        const MinicMachineOperand *op = &ins->operands[index];
+        if (op->asm_constraint == NULL ||
+            strcmp(op->asm_constraint,"i") != 0 ||
+            (variant == 1U ? op->asm_name != NULL :
+                (op->asm_name == NULL ||
+                 strcmp(op->asm_name,names[index]) != 0)))
+            return false;
+        if (index == 0U) {
+            if (op->kind != MINIC_MACHINE_OPERAND_SYMBOL ||
+                op->value.symbol.name == NULL ||
+                op->value.symbol.relocation !=
+                    MINIC_X86_MACHINE_RELOC_PC32)
+                return false;
+        } else if (op->kind != MINIC_MACHINE_OPERAND_INTEGER)
+            return false;
+    }
+    /* GNU __bug_table uses a 16-bit line and flags field, plus 12-byte
+     * record layout. These checked physical values are not emitted as
+     * arbitrary assembler source or taken from runtime SSA registers. */
+    return ins->operands[1].value.integer >= 0 &&
+        ins->operands[1].value.integer <= UINT16_MAX &&
+        ins->operands[2].value.integer >= 0 &&
+        ins->operands[2].value.integer <= UINT16_MAX &&
+        ins->operands[3].value.integer == 12;
+}
+
 /* Machine ownership of the complete zero-operand Linux ordering family.
  * Every form has an exact Source-validated variant. No other source syntax
  * can pass this physical proof, even if its textual mnemonic looks similar. */
@@ -1140,8 +1687,7 @@ bool minic_x86_64_machine_validate_source_asm(const MinicTargetInfo *target,
         instruction->source_asm_unique_id == 0U ||
         instruction->source_asm_template == NULL ||
         instruction->source_asm_terminates_block ||
-        instruction->source_asm_permits_fallthrough ||
-        (instruction->effects & MINIC_MACHINE_EFFECT_VOLATILE) == 0U)
+        instruction->source_asm_permits_fallthrough)
         return false;
     if (instruction->source_asm_machine_form_id ==
             MINIC_X86_MACHINE_ASM_MULDIV_U64 ||
@@ -1153,6 +1699,33 @@ bool minic_x86_64_machine_validate_source_asm(const MinicTargetInfo *target,
         instruction->source_asm_machine_form_id ==
             MINIC_X86_MACHINE_ASM_MULACC_MATCHED)
         return x86_source_matched_contract(target, instruction);
+    if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_MATCHED_MEMORY)
+        return x86_source_matched_memory_contract(instruction);
+    if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_BITSCAN_MATCHED)
+        return x86_source_bit_scan_contract(instruction);
+    if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_PREFETCHW_ALT)
+        return x86_source_prefetchw_alt_contract(target,instruction);
+    if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_CMPXCHG128)
+        return x86_source_cmpxchg128_contract(target,instruction);
+    if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_CRASH_REGISTER)
+        return x86_source_crash_register_contract(target,instruction);
+    if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_FUTEX_EXTABLE)
+        return x86_source_futex_extable_contract(target,instruction);
+    if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_GS_TIED_ALU)
+        return x86_source_gs_tied_alu_contract(target,instruction);
+    if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_IP_HERE)
+        return x86_source_ip_here_contract(instruction);
+    if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_BUG_TABLE_C_IMMEDIATE)
+        return x86_source_bug_c_immediate_contract(instruction);
     if (instruction->source_asm_machine_form_id == 0U &&
         instruction->source_asm_machine_form_variant == 0U &&
         instruction->source_asm_length == 0U)

@@ -14,6 +14,7 @@
 #include "target/backend_source.h"
 #include "target/aarch64/asm_contract.h"
 #include "target/aarch64/asm_contract_internal.h"
+#include "aarch64/typed_source_asm_probe.h"
 #include "target/x86_64/asm_contract.h"
 #include "x86_64/typed_source_asm_probe.h"
 
@@ -118,10 +119,6 @@ static MinicTargetInlineAsmContract source_qualify(ProbeArch arch) {
 static bool emit_one(ProbeArch arch, const MinicCoreFunction *function,
                      const MinicCoreInstruction *instruction,
                      char *output, size_t capacity) {
-    MinicDirectLP64BlockContext a64 = {0};
-    MinicLP64FramePlan a64_frame = {0};
-    MinicMachineLP64FrameContract a64_machine_frame = {0};
-    size_t offsets[2] = {16U, 24U};
     FILE *stream;
     char *buffer = NULL;
     size_t length = 0U;
@@ -130,14 +127,9 @@ static bool emit_one(ProbeArch arch, const MinicCoreFunction *function,
     stream = open_memstream(&buffer, &length);
     assert(stream != NULL);
     output[0] = '\0';
-    a64_frame.value_count = 2U;
-    a64_frame.value_offsets = offsets;
-    a64.fn = function;
-    a64.frame_plan = &a64_frame;
-    a64_machine_frame.frame_size = 64U;
-    a64.machine_frame = &a64_machine_frame;
     result = arch == PROBE_A64
-        ? minic_aarch64_emit_qualified_structured_asm(stream, &a64, instruction)
+        ? minic_test_aarch64_typed_source_asm_emit(stream, function,
+            instruction)
         : minic_test_x86_typed_source_asm_emit(stream, function,
             instruction);
     assert(fflush(stream) == 0 && length < capacity);
@@ -180,6 +172,9 @@ static void check_machine_boundary(ProbeArch arch) {
     assert(register_integer(&types, 8U, &u64));
     assert(register_pointer(&types, u32, &ptr_u32));
     assert(register_pointer(&types, u64, &ptr_u64));
+    function.core_function_type_id = MINIC_CORE_TYPE_INVALID;
+    assert(minic_core_function_define_signature(&function, &types,
+        void_id, NULL, 0U, MINIC_CALLING_CONVENTION_DEFAULT, false));
     function.type_context = &types;
     function.values = values;
     function.value_count = 2U;
@@ -285,9 +280,9 @@ static void check_machine_boundary(ProbeArch arch) {
         values[1].core_type_id = ptr_u32;
     }
 
-    /* Generic structured ASM owns NO machine ID and remains supported.
-     * Its legal forms are independently checked by the original ISA backend.
-     */
+    /* AArch's generic zero-effect barrier remains an ID0 positive.  x86's
+     * original real Linux `movq %%rbx, %0` memory-output positive belongs to
+     * the proven CRASH_REGISTER source family, not arbitrary generic ID0. */
     form.operand_plan_owner = MINIC_ASM_OPERAND_PLAN_GENERIC_STRUCTURED;
     form.target_machine_form_id = 0U;
     form.target_machine_form_variant = 0U;
@@ -295,6 +290,9 @@ static void check_machine_boundary(ProbeArch arch) {
         form.template_text = "movq %%rbx, %0";
         form.template_length = strlen(form.template_text);
         form.has_memory_clobber = false;
+        form.operand_plan_owner = MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED;
+        form.target_machine_form_id = MINIC_X86_MACHINE_ASM_CRASH_REGISTER;
+        form.target_machine_form_variant = 1U;
         values[0].core_type_id = ptr_u64;
         ins.value.structured_inline_asm.operand_count = 1U;
         ins.value.structured_inline_asm.operands[0].operand_index = 0U;
@@ -307,34 +305,38 @@ static void check_machine_boundary(ProbeArch arch) {
         ins.value.structured_inline_asm.operand_count = 0U;
     }
     if (arch == PROBE_X86) {
-        /* Known production feature gap after the FILE* cutover: the old
-         * generic ID0 register-to-memory MOVQ was a positive.  MachineIR
-         * currently fails it closed.  Keep the original spell and role
-         * here so this explicit unresolved migration gap cannot be erased
-         * by replacing the test with an unrelated accepted opcode. */
-        must_reject(arch, "TYPED_GAP_GENERIC_MOVQ_MEM_OUTPUT",
-                    &function, &ins);
-        fputs("P45_TYPED_REGRESSION=FAIL unsupported-positive="
-              "generic_movq_memory_output\n", stderr);
-        assert(0 && "restore x86 generic MOVQ positive in typed MachineIR");
+        assert(emit_one(arch, &function, &ins, positive, sizeof(positive)));
+        assert(strstr(positive, "movq %rbx, (%r11)\n") != NULL);
+        /* Same legal source text with a forged generic ID0 is NEVER a
+         * physical register permission or a replacement for qualification. */
+        form.operand_plan_owner = MINIC_ASM_OPERAND_PLAN_GENERIC_STRUCTURED;
+        form.target_machine_form_id = 0U;
+        form.target_machine_form_variant = 0U;
+        must_reject(arch, "generic_movq_unqualified", &function, &ins);
+        form.operand_plan_owner = MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED;
+        form.target_machine_form_id = MINIC_X86_MACHINE_ASM_CRASH_REGISTER;
+        form.target_machine_form_variant = 1U;
     } else {
         if (!emit_one(arch, &function, &ins, positive, sizeof(positive))) {
             fprintf(stderr, "P45 GENERIC STRUCTURED REJECTED aarch64 asm=%s\n",
                     positive);
             assert(0 && "pre-existing generic structured ISA form must survive");
         }
-        assert(strstr(positive, "  dmb oshst\n") != NULL);
+        /* SOURCE_ASM is serialized as exact source bytes; unlike selected
+         * target opcodes, its GNU text has no synthetic indentation. */
+        assert(strstr(positive, "dmb oshst\n") != NULL);
     }
 
-    /* Missing ownership is not a supported third machine-ASM dialect;
-     * Core's ID0 invariant also forbids an orphan nonzero variant. Even
-     * these legitimate generic spellings must fail when metadata is forged.
-     */
+    /* Missing ownership cannot authorize either qualified x86 hardware
+     * access or AArch's generic barrier; every noncanonical form variant
+     * also fails before output regardless of source spelling. */
     form.operand_plan_owner = MINIC_ASM_OPERAND_PLAN_NONE;
-    must_reject(arch, "unowned_id0", &function, &ins);
-    form.operand_plan_owner = MINIC_ASM_OPERAND_PLAN_GENERIC_STRUCTURED;
+    must_reject(arch, "unowned_form", &function, &ins);
+    form.operand_plan_owner = arch == PROBE_X86
+        ? MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED
+        : MINIC_ASM_OPERAND_PLAN_GENERIC_STRUCTURED;
     form.target_machine_form_variant = 99U;
-    must_reject(arch, "id0_nonzero_variant", &function, &ins);
+    must_reject(arch, "invalid_variant", &function, &ins);
     minic_core_type_context_destroy(&types);
 }
 
@@ -345,7 +347,8 @@ int main(void) {
          "machine_positive=2 deterministic=2 poisoned_id=2 poisoned_variant=2 "
          "poisoned_owner=2 poisoned_template=2 poisoned_core=2 "
          "target_only_id0_reject=4 a64_rbit_typed=1 "
-         "generic_structured_id0=2 orphan_owner_reject=2 "
-         "id0_variant_reject=2 partial_output=0");
+         "aarch_generic_id0=1 x86_crash_register=1 "
+         "generic_movq_forged_id0_reject=1 orphan_owner_reject=2 "
+         "invalid_variant_reject=2 partial_output=0");
     return 0;
 }

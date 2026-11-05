@@ -1,6 +1,7 @@
 /* Native LoongArch target builtin ISA forms: selected opcode contracts,
  * physical ABI binding, immediate legalizer, and GNU printer.  No source ASM
  * or legacy direct-text emitter participates in this witness. */
+#define _POSIX_C_SOURCE 200809L
 #include "target/loongarch64/machine_opcode.h"
 #include "target/common/machine_builder.h"
 #include "target/data_layout.h"
@@ -8,7 +9,30 @@
 #include <assert.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
+
+static FILE *probe_stream(void) {
+    const char *directory = getenv("TMPDIR");
+    char path[4096];
+    int length;
+    int fd;
+    FILE *stream;
+    if (directory == NULL || directory[0] == '\0') directory = ".";
+    length = snprintf(path, sizeof(path), "%s/minic-loong-builtin-XXXXXX",
+                      directory);
+    if (length <= 0 || (size_t)length >= sizeof(path)) return NULL;
+    fd = mkstemp(path);
+    if (fd < 0) return NULL;
+    if (unlink(path) != 0) {
+        close(fd);
+        return NULL;
+    }
+    stream = fdopen(fd, "w+");
+    if (stream == NULL) close(fd);
+    return stream;
+}
 
 typedef enum BuiltinForm {
     BUILTIN_RR_WR,
@@ -173,7 +197,7 @@ static bool test_case(const BuiltinCase *test, ForgeKind forged) {
     }
     if (!minic_machine_gnu_asm_preflight(&machine, &policy)) goto done;
     stage = "serializer";
-    out = tmpfile();
+    out = probe_stream();
     if (out == NULL || !minic_machine_gnu_asm_emit_body(out, &machine, &policy) ||
         fflush(out) != 0 || fseek(out, 0L, SEEK_SET) != 0) goto done;
     length = fread(actual, 1U, sizeof(actual) - 1U, out);

@@ -2,6 +2,7 @@
 #include "target/riscv/machine_target_state.h"
 
 #include "core/symbol_identity.h"
+#include "core/core_ir.h"
 
 #include <limits.h>
 #include <string.h>
@@ -107,11 +108,91 @@ static const RiscvMachineDescription riscv_machine_descriptions[
     RV_OP(TAIL_DIRECT, "tail", SYMBOL),
     RV_OP(CALL_INDIRECT, "jalr", REGISTER),
     RV_OP(BARRIER, NULL, NONE),
-    RV_OP(UNREACHABLE, NULL, NONE)
+    RV_OP(UNREACHABLE, NULL, NONE),
+    RV64_OP(FMV_X_W, "fmv.x.w", REGISTER_REGISTER),
+    RV64_OP(FMV_W_X, "fmv.w.x", REGISTER_REGISTER),
+    RV64_OP(FMV_X_D, "fmv.x.d", REGISTER_REGISTER),
+    RV64_OP(FMV_D_X, "fmv.d.x", REGISTER_REGISTER),
+    RV64_OP(FADD_S, "fadd.s", REGISTER_REGISTER_REGISTER),
+    RV64_OP(FSUB_S, "fsub.s", REGISTER_REGISTER_REGISTER),
+    RV64_OP(FMUL_S, "fmul.s", REGISTER_REGISTER_REGISTER),
+    RV64_OP(FDIV_S, "fdiv.s", REGISTER_REGISTER_REGISTER),
+    RV64_OP(FADD_D, "fadd.d", REGISTER_REGISTER_REGISTER),
+    RV64_OP(FSUB_D, "fsub.d", REGISTER_REGISTER_REGISTER),
+    RV64_OP(FMUL_D, "fmul.d", REGISTER_REGISTER_REGISTER),
+    RV64_OP(FDIV_D, "fdiv.d", REGISTER_REGISTER_REGISTER),
+    RV64_OP(FEQ_D, "feq.d", REGISTER_REGISTER_REGISTER),
+    RV64_OP(FLT_D, "flt.d", REGISTER_REGISTER_REGISTER),
+    RV64_OP(FLE_D, "fle.d", REGISTER_REGISTER_REGISTER),
+    RV64_OP(FCVT_D_W, "fcvt.d.w", REGISTER_REGISTER),
+    RV64_OP(FCVT_D_WU, "fcvt.d.wu", REGISTER_REGISTER),
+    RV64_OP(FCVT_D_L, "fcvt.d.l", REGISTER_REGISTER),
+    RV64_OP(FCVT_D_LU, "fcvt.d.lu", REGISTER_REGISTER),
+    RV64_OP(FCVT_W_D_RTZ, "fcvt.w.d", REGISTER_REGISTER),
+    RV64_OP(FCVT_WU_D_RTZ, "fcvt.wu.d", REGISTER_REGISTER),
+    RV64_OP(FCVT_L_D_RTZ, "fcvt.l.d", REGISTER_REGISTER),
+    RV64_OP(FCVT_LU_D_RTZ, "fcvt.lu.d", REGISTER_REGISTER),
+    RV64_OP(FCVT_D_S, "fcvt.d.s", REGISTER_REGISTER),
+    RV64_OP(FCVT_S_D, "fcvt.s.d", REGISTER_REGISTER),
+    RV64_OP(FSGNJN_D, "fsgnjn.d", REGISTER_REGISTER_REGISTER)
 };
 
 #undef RV_OP
 #undef RV64_OP
+
+static uint32_t riscv_machine_fp_features(uint32_t opcode) {
+    if (opcode < MINIC_RISCV_MACHINE_FMV_X_W ||
+        opcode >= MINIC_RISCV_MACHINE_LAST) return 0U;
+    if (opcode == MINIC_RISCV_MACHINE_FMV_X_W ||
+        opcode == MINIC_RISCV_MACHINE_FMV_W_X ||
+        (opcode >= MINIC_RISCV_MACHINE_FADD_S &&
+         opcode <= MINIC_RISCV_MACHINE_FDIV_S))
+        return MINIC_RISCV_FEATURE_F;
+    return MINIC_RISCV_FEATURE_F | MINIC_RISCV_FEATURE_D;
+}
+
+/* Never infer a mixed-bank operand from its assembly spelling. The physical
+ * opcode, not Core type or GNU serializer, owns all FPR/GPR bank choices. */
+static bool riscv_machine_fp_operand_bank(uint32_t opcode, size_t index,
+                                         MinicMachineRegisterBank *bank) {
+    bool destination_is_gpr = false;
+    bool source_is_gpr = false;
+    bool three_registers;
+    if (bank == NULL || riscv_machine_fp_features(opcode) == 0U ||
+        index >= 3U) return false;
+    switch (opcode) {
+    case MINIC_RISCV_MACHINE_FMV_X_W:
+    case MINIC_RISCV_MACHINE_FMV_X_D:
+    case MINIC_RISCV_MACHINE_FCVT_W_D_RTZ:
+    case MINIC_RISCV_MACHINE_FCVT_WU_D_RTZ:
+    case MINIC_RISCV_MACHINE_FCVT_L_D_RTZ:
+    case MINIC_RISCV_MACHINE_FCVT_LU_D_RTZ:
+    case MINIC_RISCV_MACHINE_FEQ_D:
+    case MINIC_RISCV_MACHINE_FLT_D:
+    case MINIC_RISCV_MACHINE_FLE_D:
+        destination_is_gpr = true;
+        break;
+    case MINIC_RISCV_MACHINE_FMV_W_X:
+    case MINIC_RISCV_MACHINE_FMV_D_X:
+    case MINIC_RISCV_MACHINE_FCVT_D_W:
+    case MINIC_RISCV_MACHINE_FCVT_D_WU:
+    case MINIC_RISCV_MACHINE_FCVT_D_L:
+    case MINIC_RISCV_MACHINE_FCVT_D_LU:
+        source_is_gpr = true;
+        break;
+    default:
+        break;
+    }
+    three_registers =
+        (opcode >= MINIC_RISCV_MACHINE_FADD_S &&
+         opcode <= MINIC_RISCV_MACHINE_FLE_D) ||
+        opcode == MINIC_RISCV_MACHINE_FSGNJN_D;
+    if (index >= (three_registers ? 3U : 2U)) return false;
+    *bank = (index == 0U && destination_is_gpr) ||
+            (index == 1U && source_is_gpr)
+        ? MINIC_MACHINE_REGISTER_GENERAL : MINIC_MACHINE_REGISTER_FLOAT;
+    return true;
+}
 
 static bool riscv_machine_target(const MinicTargetInfo *target, unsigned *xlen) {
     MinicRiscvIsa isa;
@@ -137,6 +218,7 @@ bool minic_riscv_machine_opcode_info(const MinicTargetInfo *target,
                                       uint32_t opcode,
                                       MinicRiscvMachineOpcodeInfo *info) {
     const RiscvMachineDescription *desc;
+    MinicRiscvIsa isa;
     unsigned xlen;
     if (info == NULL || !riscv_machine_target(target, &xlen) ||
         opcode == MINIC_RISCV_MACHINE_INVALID ||
@@ -144,6 +226,12 @@ bool minic_riscv_machine_opcode_info(const MinicTargetInfo *target,
     desc = &riscv_machine_descriptions[opcode];
     if (desc->form == MINIC_RISCV_MACHINE_FORM_INVALID ||
         (desc->rv64_only && xlen != 64U)) return false;
+    if (riscv_machine_fp_features(opcode) != 0U) {
+        const uint32_t required = riscv_machine_fp_features(opcode);
+        if (!minic_riscv_target_isa_load(target, &isa) ||
+            isa.abi != MINIC_RISCV_ABI_LP64D ||
+            !minic_riscv_codegen_has(&isa, required)) return false;
+    }
     info->mnemonic = desc->mnemonic;
     info->form = desc->form;
     info->rv64_only = desc->rv64_only;
@@ -208,11 +296,17 @@ bool minic_riscv_machine_validate_frame_object(
 bool minic_riscv_machine_validate_register(
     const MinicTargetInfo *target, const MinicMachineRegister *reg,
     void *context) {
+    MinicRiscvIsa isa;
     unsigned xlen;
     (void)context;
-    return reg != NULL && riscv_machine_target(target, &xlen) &&
-           reg->bank == MINIC_MACHINE_REGISTER_GENERAL &&
-           reg->number < 32U && reg->width_bits == xlen;
+    if (reg == NULL || !riscv_machine_target(target, &xlen) ||
+        reg->number >= 32U || reg->width_bits != xlen) return false;
+    if (reg->bank == MINIC_MACHINE_REGISTER_GENERAL) return true;
+    return reg->bank == MINIC_MACHINE_REGISTER_FLOAT && xlen == 64U &&
+        minic_riscv_target_isa_load(target, &isa) &&
+        isa.abi == MINIC_RISCV_ABI_LP64D &&
+        minic_riscv_codegen_has(&isa, MINIC_RISCV_FEATURE_F |
+                                   MINIC_RISCV_FEATURE_D);
 }
 
 bool minic_riscv_machine_validate_address(
@@ -225,6 +319,7 @@ bool minic_riscv_machine_validate_address(
            address->scale == 1U &&
            address->displacement >= -2048 &&
            address->displacement <= 2047 &&
+           address->base.bank == MINIC_MACHINE_REGISTER_GENERAL &&
            minic_riscv_machine_validate_register(target, &address->base, context);
 }
 
@@ -232,10 +327,17 @@ bool minic_riscv_machine_validate_relocation(
     const MinicTargetInfo *target, const char *symbol,
     uint32_t relocation, int64_t addend, void *context) {
     unsigned xlen;
+    MinicCoreInlineAsmImmediate immediate = {0};
     (void)context;
-    return riscv_machine_target(target, &xlen) &&
-           minic_core_assembler_symbol_lexically_safe(symbol) &&
-           addend == 0 &&
+    if (!riscv_machine_target(target, &xlen) ||
+        !minic_core_assembler_symbol_lexically_safe(symbol)) return false;
+    if (relocation == MINIC_RISCV_MACHINE_RELOC_SOURCE_IMMEDIATE) {
+        immediate.kind = MINIC_CORE_INLINE_ASM_IMMEDIATE_SYMBOL;
+        immediate.symbol = (char *)symbol;
+        immediate.byte_addend = addend;
+        return minic_core_inline_asm_relocation_valid(&immediate);
+    }
+    return addend == 0 &&
            (relocation == MINIC_RISCV_MACHINE_RELOC_PCREL_LOCAL ||
             relocation == MINIC_RISCV_MACHINE_RELOC_GOT ||
             relocation == MINIC_RISCV_MACHINE_RELOC_CALL);
@@ -248,15 +350,28 @@ static void register_effect(MinicMachineRegisterEffect *effect, unsigned id,
     effect->reg.bank = MINIC_MACHINE_REGISTER_GENERAL;
     effect->access = access;
 }
+static void float_register_effect(MinicMachineRegisterEffect *effect,
+                                  unsigned id, unsigned access) {
+    effect->reg.number = id;
+    effect->reg.width_bits = 64U;
+    effect->reg.bank = MINIC_MACHINE_REGISTER_FLOAT;
+    effect->access = access;
+}
 
 /* Physical effects are specified by the target, never self-attested by an
  * incoming MachineInstruction. A standard call clobbers every psABI
  * caller-saved integer register; it reads all potential argument registers
  * conservatively without changing existing argument assignment. */
-static void call_effects(MinicMachineOpcodeContract *contract, unsigned xlen,
+static void call_effects(MinicMachineOpcodeContract *contract,
+                         const MinicTargetInfo *target, unsigned xlen,
                          bool tail) {
     static const unsigned volatile_ids[] = {
         5U, 6U, 7U, 10U, 11U, 12U, 13U, 14U, 15U, 16U, 17U,
+        28U, 29U, 30U, 31U
+    };
+    static const unsigned fp_volatile_ids[] = {
+        0U, 1U, 2U, 3U, 4U, 5U, 6U, 7U,
+        10U, 11U, 12U, 13U, 14U, 15U, 16U, 17U,
         28U, 29U, 30U, 31U
     };
     size_t i;
@@ -271,6 +386,19 @@ static void call_effects(MinicMachineOpcodeContract *contract, unsigned xlen,
                                  MINIC_MACHINE_REGISTER_READ : 0U);
         register_effect(&contract->implicit[contract->implicit_count++],
                         id, xlen, access);
+    }
+    if (xlen == 64U && minic_riscv_target_isa(target).abi ==
+        MINIC_RISCV_ABI_LP64D) {
+        for (i = 0U; i < sizeof(fp_volatile_ids) /
+                         sizeof(fp_volatile_ids[0]); ++i) {
+            const unsigned id = fp_volatile_ids[i];
+            const unsigned access = MINIC_MACHINE_REGISTER_WRITE |
+                MINIC_MACHINE_REGISTER_CLOBBER |
+                (id >= 10U && id <= 17U ?
+                    MINIC_MACHINE_REGISTER_READ : 0U);
+            float_register_effect(
+                &contract->implicit[contract->implicit_count++], id, access);
+        }
     }
 }
 
@@ -296,6 +424,10 @@ bool minic_riscv_machine_lookup_opcode_contract(
     if (contract == NULL || !riscv_machine_target(target, &xlen) ||
         !minic_riscv_machine_opcode_info(target, opcode, &info)) return false;
     memset(contract, 0, sizeof(*contract));
+    if (riscv_machine_fp_features(opcode) != 0U &&
+        minic_riscv_target_isa(target).strict_isa)
+        contract->required_generated_features =
+            riscv_machine_fp_features(opcode);
     switch (info.form) {
     case MINIC_RISCV_MACHINE_FORM_NONE:
         break;
@@ -437,13 +569,13 @@ bool minic_riscv_machine_lookup_opcode_contract(
     case MINIC_RISCV_MACHINE_JALR_CALL:
         contract->required_effects = call | memread | memwrite;
         contract->permitted_effects = call | memread | memwrite | barrier;
-        call_effects(contract, xlen, false);
+        call_effects(contract, target, xlen, false);
         break;
     case MINIC_RISCV_MACHINE_TAIL_DIRECT:
         contract->required_effects = call | branch | memread | memwrite;
         contract->permitted_effects = call | branch | memread | memwrite | barrier;
         contract->terminates_block = true;
-        call_effects(contract, xlen, true);
+        call_effects(contract, target, xlen, true);
         break;
     case MINIC_RISCV_MACHINE_RET:
         contract->required_effects = MINIC_MACHINE_EFFECT_RETURN;
@@ -629,6 +761,16 @@ bool minic_riscv_machine_validate_selected_instruction(
         ins->operand_count != contract.operand_count ||
         (ins->operand_count != 0U && ins->operands == NULL))
         return false;
+    if (riscv_machine_fp_features(ins->opcode) != 0U) {
+        for (index = 0U; index < ins->operand_count; ++index) {
+            MinicMachineRegisterBank required_bank;
+            if (!riscv_machine_fp_operand_bank(ins->opcode, index,
+                    &required_bank) ||
+                ins->operands[index].kind != MINIC_MACHINE_OPERAND_REGISTER ||
+                ins->operands[index].value.physical.reg.bank != required_bank)
+                return false;
+        }
+    }
     for (index = 0U; index < ins->operand_count; ++index)
         if (ins->operands[index].kind == MINIC_MACHINE_OPERAND_ADDRESS &&
             !minic_riscv_machine_validate_address(

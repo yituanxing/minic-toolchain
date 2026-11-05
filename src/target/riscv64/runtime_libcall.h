@@ -4,32 +4,11 @@
 #include "target/riscv64/isa.h"
 #include "core/core_ir.h"
 #include <stdbool.h>
-#include <stdio.h>
 
-/* Standard GCC libgcc / LLVM compiler-rt integer builtins.
- * The compiler owns ABI-aware CALL emission; the runtime provider owns
- * arithmetic algorithms. The provider is supplied by the final linker. */
-typedef enum MinicRiscv64ArithmeticLibcall {
-    MINIC_RISCV64_LIBCALL_MUL,
-    MINIC_RISCV64_LIBCALL_SDIV,
-    MINIC_RISCV64_LIBCALL_UDIV,
-    MINIC_RISCV64_LIBCALL_SMOD,
-    MINIC_RISCV64_LIBCALL_UMOD
-} MinicRiscv64ArithmeticLibcall;
-
-/* NULL selects existing native F/D or an unsupported non-arithmetic op.
- * A non-NULL name selects an external standard libgcc soft-float helper. */
-const char *minic_riscv64_softfloat_binary_symbol(
-    const MinicRiscvIsa *isa, MinicCoreInstructionKind kind);
-bool minic_riscv64_needs_arithmetic_libcall(const MinicRiscvIsa *isa,
-                                             const MinicCoreFunction *function);
-/* Typed MachineIR's full implicit compiler-runtime CALL inventory. Unlike
- * the legacy native-M/F/D planner, this must reserve RA for base-I helpers
- * in non-strict/default and extension-enabled profiles as well. */
+/* Typed MachineIR's compiler-runtime CALL inventory, used to reserve the
+ * saved return-address frame slot before physical instruction selection.
+ * Runtime instructions themselves are emitted only by MachineIR. */
 bool minic_riscv64_needs_machine_runtime_call(
     const MinicRiscvIsa *, const MinicCoreFunction *);
-bool minic_riscv64_uses_arithmetic_libcall(const MinicRiscvIsa *isa);
-bool minic_riscv64_emit_arithmetic_libcall(
-    FILE *file, const MinicRiscvIsa *isa, MinicRiscv64ArithmeticLibcall operation,
-    const char *destination, const char *left, const char *right);
+
 #endif

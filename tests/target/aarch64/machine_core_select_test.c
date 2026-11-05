@@ -1,3 +1,4 @@
+#define _POSIX_C_SOURCE 200809L
 /* A real Core CFG, with a backedge to Core block zero, must never branch to
  * the external function symbol (which would execute the prologue twice).
  * This is distinct from synthetic frame-only MachineIR instruction tests. */
@@ -12,6 +13,38 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
+
+/* glibc tmpfile() ignores TMPDIR, which made these physical MachineIR
+ * read/seek/fflush checks report a false serializer failure when the host
+ * /tmp filesystem was full. Use the configured workspace temp directory and
+ * unlink the file immediately; this remains a genuine bidirectional FILE*
+ * with unchanged output and failure assertions. */
+static FILE *a64_core_cfg_workspace_stream(void) {
+    static const char suffix[] = "/a64-core-mir-XXXXXX";
+    const char *directory = getenv("TMPDIR");
+    char *name;
+    FILE *stream;
+    size_t size;
+    int fd;
+    if (directory == NULL || *directory == '\0') directory = ".";
+    size = strlen(directory) + sizeof(suffix);
+    name = malloc(size);
+    if (name == NULL) return NULL;
+    (void)snprintf(name, size, "%s%s", directory, suffix);
+    fd = mkstemp(name);
+    if (fd < 0) { free(name); return NULL; }
+    if (unlink(name) != 0) {
+        (void)close(fd);
+        (void)remove(name);
+        free(name);
+        return NULL;
+    }
+    free(name);
+    stream = fdopen(fd, "w+b");
+    if (stream == NULL) (void)close(fd);
+    return stream;
+}
 
 static bool build_cycle(MinicCoreFunction *core,
     MinicCoreTypeContext *types, bool unsupported) {
@@ -114,7 +147,7 @@ static bool run_case(bool unsupported) {
         !minic_aarch64_machine_gnu_asm_policy_initialize(&target, &policy) ||
         !minic_machine_gnu_asm_preflight(&machine, &policy)) goto done;
     failure_stage = "serialize";
-    output = tmpfile();
+    output = a64_core_cfg_workspace_stream();
     if (output == NULL ||
         !minic_machine_gnu_asm_emit_body(output, &machine, &policy) ||
         fflush(output) != 0 || fseek(output, 0L, SEEK_SET) != 0) goto done;
@@ -220,7 +253,7 @@ static bool run_fp_case(void) {
         !minic_aarch64_machine_gnu_asm_policy_initialize(&target, &policy) ||
         !minic_machine_gnu_asm_preflight(&machine, &policy)) goto cleanup;
     stage = "serialization";
-    output = tmpfile();
+    output = a64_core_cfg_workspace_stream();
     if (output == NULL ||
         !minic_machine_gnu_asm_emit_body(output, &machine, &policy) ||
         fflush(output) != 0 || fseek(output, 0L, SEEK_SET) != 0)
@@ -348,7 +381,7 @@ static bool run_wide_case(void) {
         !minic_machine_core_coverage_verify(&core, reachable, &machine) ||
         !minic_aarch64_machine_gnu_asm_policy_initialize(&target, &policy) ||
         !minic_machine_gnu_asm_preflight(&machine, &policy)) goto cleanup;
-    output = tmpfile();
+    output = a64_core_cfg_workspace_stream();
     stage = "serialization";
     if (output == NULL ||
         !minic_machine_gnu_asm_emit_body(output, &machine, &policy) ||
@@ -489,7 +522,7 @@ static bool run_wide_arithmetic_case(void) {
     if (!minic_aarch64_machine_gnu_asm_policy_initialize(&target, &policy) ||
         !minic_machine_gnu_asm_preflight(&machine, &policy)) goto done;
     stage = "serialize";
-    out = tmpfile();
+    out = a64_core_cfg_workspace_stream();
     if (out == NULL ||
         !minic_machine_gnu_asm_emit_body(out, &machine, &policy) ||
         fflush(out) != 0 || fseek(out, 0L, SEEK_SET) != 0) goto done;
@@ -611,7 +644,7 @@ static bool run_variadic_cursor_case(void) {
     if (!minic_aarch64_machine_gnu_asm_policy_initialize(&target, &policy) ||
         !minic_machine_gnu_asm_preflight(&machine, &policy)) goto done;
     stage = "serialize";
-    out = tmpfile();
+    out = a64_core_cfg_workspace_stream();
     if (out == NULL ||
         !minic_machine_gnu_asm_emit_body(out, &machine, &policy) ||
         fflush(out) != 0 || fseek(out, 0L, SEEK_SET) != 0) goto done;
@@ -795,7 +828,7 @@ static bool run_acquire_release_case(bool acquire, size_t width,
     if (!minic_aarch64_machine_gnu_asm_policy_initialize(&target, &policy) ||
         !minic_machine_gnu_asm_preflight(&machine, &policy)) goto done;
     stage = "serialize";
-    out = tmpfile();
+    out = a64_core_cfg_workspace_stream();
     if (out == NULL ||
         !minic_machine_gnu_asm_emit_body(out, &machine, &policy) ||
         fflush(out) != 0 || fseek(out, 0L, SEEK_SET) != 0) goto done;
@@ -941,7 +974,7 @@ static bool run_tlbi_source_case(size_t form) {
     if (!minic_aarch64_machine_gnu_asm_policy_initialize(&target, &policy) ||
         !minic_machine_gnu_asm_preflight(&machine, &policy)) goto done;
     stage = "serialize";
-    out = tmpfile();
+    out = a64_core_cfg_workspace_stream();
     if (out == NULL ||
         !minic_machine_gnu_asm_emit_body(out, &machine, &policy) ||
         fflush(out) != 0 || fseek(out, 0L, SEEK_SET) != 0) goto done;
@@ -1090,7 +1123,7 @@ static bool run_one_gp_source_case(unsigned int mode) {
         !minic_aarch64_machine_gnu_asm_policy_initialize(&target, &policy) ||
         !minic_machine_gnu_asm_preflight(&machine, &policy)) goto done;
     stage = "serialize";
-    out = tmpfile();
+    out = a64_core_cfg_workspace_stream();
     if (out == NULL ||
         !minic_machine_gnu_asm_emit_body(out, &machine, &policy) ||
         fflush(out) != 0 || fseek(out, 0L, SEEK_SET) != 0) goto done;
@@ -1237,7 +1270,7 @@ static bool run_residual_case(void) {
         !minic_aarch64_machine_gnu_asm_policy_initialize(&target, &policy) ||
         !minic_machine_gnu_asm_preflight(&machine, &policy)) goto cleanup;
     stage = "serialize";
-    out = tmpfile();
+    out = a64_core_cfg_workspace_stream();
     if (out == NULL ||
         !minic_machine_gnu_asm_emit_body(out, &machine, &policy) ||
         fflush(out) != 0 || fseek(out, 0L, SEEK_SET) != 0) goto cleanup;
@@ -1373,7 +1406,7 @@ static bool run_record_loop_case(void) {
         !minic_aarch64_machine_gnu_asm_policy_initialize(&target, &policy) ||
         !minic_machine_gnu_asm_preflight(&machine, &policy)) goto cleanup;
     stage = "serialize";
-    out = tmpfile();
+    out = a64_core_cfg_workspace_stream();
     if (out == NULL ||
         !minic_machine_gnu_asm_emit_body(out, &machine, &policy) ||
         fflush(out) != 0 || fseek(out, 0L, SEEK_SET) != 0) goto cleanup;
@@ -1505,7 +1538,7 @@ static bool run_record_parameter_case(size_t bytes, bool indirect,
         }
     }
     stage = "physical-serialization";
-    out = tmpfile();
+    out = a64_core_cfg_workspace_stream();
     if (out == NULL ||
         !minic_machine_gnu_asm_emit_body(out, &machine, &policy) ||
         fflush(out) != 0 || fseek(out, 0L, SEEK_SET) != 0) goto done;
@@ -1629,7 +1662,7 @@ static bool run_wide_abi_parameter_case(bool floating, bool stack) {
         !minic_aarch64_machine_gnu_asm_policy_initialize(&target, &policy) ||
         !minic_machine_gnu_asm_preflight(&machine, &policy)) goto done;
     stage = "serialize";
-    out = tmpfile();
+    out = a64_core_cfg_workspace_stream();
     if (out == NULL ||
         !minic_machine_gnu_asm_emit_body(out, &machine, &policy) ||
         fflush(out) != 0 || fseek(out, 0L, SEEK_SET) != 0) goto done;
@@ -1880,7 +1913,7 @@ static bool run_record_call_case(unsigned int mode) {
         !minic_aarch64_machine_gnu_asm_policy_initialize(&target, &policy) ||
         !minic_machine_gnu_asm_preflight(&machine, &policy)) goto done;
     stage = "gnu-serialize";
-    out = tmpfile();
+    out = a64_core_cfg_workspace_stream();
     if (out == NULL ||
         !minic_machine_gnu_asm_emit_body(out, &machine, &policy) ||
         fflush(out) != 0 || fseek(out, 0L, SEEK_SET) != 0) goto done;
@@ -2076,7 +2109,7 @@ static bool run_wide_call_case(bool floating, bool stack) {
         !minic_aarch64_machine_gnu_asm_policy_initialize(&target, &policy) ||
         !minic_machine_gnu_asm_preflight(&machine, &policy)) goto done;
     stage = "gnu-serialize";
-    out = tmpfile();
+    out = a64_core_cfg_workspace_stream();
     if (out == NULL ||
         !minic_machine_gnu_asm_emit_body(out, &machine, &policy) ||
         fflush(out) != 0 || fseek(out, 0L, SEEK_SET) != 0) goto done;
@@ -2239,7 +2272,7 @@ static bool run_indirect_record_call_case(void) {
         !minic_aarch64_machine_gnu_asm_policy_initialize(&target, &policy) ||
         !minic_machine_gnu_asm_preflight(&machine, &policy)) goto done;
     stage = "gnu-serialize";
-    out = tmpfile();
+    out = a64_core_cfg_workspace_stream();
     if (out == NULL ||
         !minic_machine_gnu_asm_emit_body(out, &machine, &policy) ||
         fflush(out) != 0 || fseek(out, 0L, SEEK_SET) != 0) goto done;
@@ -2381,7 +2414,7 @@ static bool run_hfa_record_call_case(void) {
         !minic_aarch64_machine_gnu_asm_policy_initialize(&target, &policy) ||
         !minic_machine_gnu_asm_preflight(&machine, &policy)) goto done;
     stage = "gnu-serialize";
-    out = tmpfile();
+    out = a64_core_cfg_workspace_stream();
     if (out == NULL ||
         !minic_machine_gnu_asm_emit_body(out, &machine, &policy) ||
         fflush(out) != 0 || fseek(out, 0L, SEEK_SET) != 0) goto done;
@@ -2514,7 +2547,7 @@ static bool run_symbol_policy_case(unsigned int mode) {
         !minic_aarch64_machine_gnu_asm_policy_initialize(&target, &policy) ||
         !minic_machine_gnu_asm_preflight(&machine, &policy)) goto done;
     stage = "gnu-serialize";
-    out = tmpfile();
+    out = a64_core_cfg_workspace_stream();
     if (out == NULL ||
         !minic_machine_gnu_asm_emit_body(out, &machine, &policy) ||
         fflush(out) != 0 || fseek(out, 0L, SEEK_SET) != 0) goto done;
@@ -2622,7 +2655,7 @@ static bool run_block_address_case(void) {
         !minic_aarch64_machine_gnu_asm_policy_initialize(&target, &policy) ||
         !minic_machine_gnu_asm_preflight(&machine, &policy)) goto done;
     stage = "serialize";
-    out = tmpfile();
+    out = a64_core_cfg_workspace_stream();
     if (out == NULL || !minic_machine_gnu_asm_emit_body(out, &machine,
             &policy) || fflush(out) != 0 || fseek(out, 0L, SEEK_SET) != 0)
         goto done;
@@ -2791,7 +2824,7 @@ static bool run_overflow_case(unsigned int mode) {
                 ++writes;
         }
     stage = "serialize";
-    out = tmpfile();
+    out = a64_core_cfg_workspace_stream();
     if (out == NULL || !minic_machine_gnu_asm_emit_body(out, &machine,
             &policy) || fflush(out) != 0 || fseek(out, 0L, SEEK_SET) != 0)
         goto done;
@@ -2947,7 +2980,7 @@ static bool run_pointer_mixed_shift_case(void) {
         !minic_aarch64_machine_gnu_asm_policy_initialize(&target, &policy) ||
         !minic_machine_gnu_asm_preflight(&machine, &policy)) goto done;
     stage = "serialize";
-    out = tmpfile();
+    out = a64_core_cfg_workspace_stream();
     if (out == NULL ||
         !minic_machine_gnu_asm_emit_body(out, &machine, &policy) ||
         fflush(out) != 0 || fseek(out, 0L, SEEK_SET) != 0) goto done;
@@ -3043,7 +3076,7 @@ static bool run_record_return_case(size_t bytes) {
         !minic_aarch64_machine_gnu_asm_policy_initialize(&target, &policy) ||
         !minic_machine_gnu_asm_preflight(&machine, &policy)) goto done;
     stage = "serialize";
-    out = tmpfile();
+    out = a64_core_cfg_workspace_stream();
     if (out == NULL ||
         !minic_machine_gnu_asm_emit_body(out, &machine, &policy) ||
         fflush(out) != 0 || fseek(out, 0L, SEEK_SET) != 0) goto done;

@@ -266,6 +266,82 @@ static int check_cfg_edges(void) {
     return 0;
 }
 
+/* C local labels, computed-goto entries and escaped block addresses are
+ * independently reachable from outside the ABI entry path.  They are real
+ * Machine roots, never invented CFG branches from the function prologue.
+ * Their ordinary outgoing Core edges must nevertheless survive exactly. */
+static int check_independent_core_roots(void) {
+    MinicCoreInstruction address = {0};
+    MinicCoreInstructionId address_id = 0U;
+    MinicCoreBlock core_blocks[3] = {0};
+    MinicCoreFunction core = {0};
+    MinicMachineBlock machine_blocks[4] = {0};
+    MinicMachineFunction machine = {0};
+    size_t prologue_target = 1U;
+    size_t secondary_target = 3U;
+    bool reachable[3] = {true, true, true};
+
+    core_blocks[0].has_terminator = true;
+    core_blocks[0].terminator.kind = MINIC_CORE_TERMINATOR_RETURN;
+    core_blocks[1].has_terminator = true;
+    core_blocks[1].terminator.kind = MINIC_CORE_TERMINATOR_BRANCH;
+    core_blocks[1].terminator.branch_target = 2U;
+    core_blocks[1].indirect_entry = true;
+    core_blocks[2].has_terminator = true;
+    core_blocks[2].terminator.kind = MINIC_CORE_TERMINATOR_RETURN;
+    core.blocks = core_blocks;
+    core.block_count = 3U;
+    core.name = "independent_core_roots";
+
+    machine_blocks[0].machine_auxiliary = true;
+    machine_blocks[0].successors = &prologue_target;
+    machine_blocks[0].successor_count = 1U;
+    machine_blocks[1].has_core_block_origin = true;
+    machine_blocks[1].core_block_id = 0U;
+    machine_blocks[2].has_core_block_origin = true;
+    machine_blocks[2].core_block_id = 1U;
+    machine_blocks[2].indirect_entry = true;
+    machine_blocks[2].successors = &secondary_target;
+    machine_blocks[2].successor_count = 1U;
+    machine_blocks[3].has_core_block_origin = true;
+    machine_blocks[3].core_block_id = 2U;
+    machine.blocks = machine_blocks;
+    machine.block_count = 4U;
+
+    /* A reachable cloned-label root has no fabricated prologue edge. */
+    if (!minic_machine_core_coverage_verify(&core, reachable, &machine))
+        return 1;
+    /* Starting at that root still requires the exact outgoing branch. */
+    machine_blocks[2].successor_count = 0U;
+    if (minic_machine_core_coverage_verify(&core, reachable, &machine))
+        return 2;
+    machine_blocks[2].successor_count = 1U;
+    /* External assembler-local symbols are independent roots too, even
+     * when the Core block is not itself an indirect-branch target. */
+    core_blocks[1].indirect_entry = false;
+    core_blocks[1].local_label_symbol = ".Lexternal_entry";
+    machine_blocks[2].indirect_entry = false;
+    if (!minic_machine_core_coverage_verify(&core, reachable, &machine))
+        return 3;
+    core_blocks[1].local_label_symbol = NULL;
+    /* An address-taken block can escape independently of explicit branches
+     * and of whether target code folds the address value into a constant. */
+    address.kind = MINIC_CORE_INSTRUCTION_BLOCK_ADDRESS;
+    address.value.block_id = 1U;
+    core_blocks[0].instructions = &address_id;
+    core_blocks[0].instruction_count = 1U;
+    core.instructions = &address;
+    core.instruction_count = 1U;
+    if (!minic_machine_core_coverage_verify(&core, reachable, &machine))
+        return 4;
+    /* Ordinary disconnected blocks without source-reachable roots are
+     * forbidden to claim either live effects or a missing edge. */
+    core_blocks[0].instruction_count = 0U;
+    if (minic_machine_core_coverage_verify(&core, reachable, &machine))
+        return 5;
+    return 0;
+}
+
 static int check_compiler_barrier_origin(void) {
     MinicCoreInstruction core_instruction = {0};
     MinicCoreInstructionId instruction_id = 0U;
@@ -401,6 +477,11 @@ int main(void) {
     error = check_cfg_edges();
     if (error != 0) {
         fprintf(stderr, "MACHINE_CORE_COVERAGE=FAIL cfg_case=%d\n", error);
+        return 1;
+    }
+    error = check_independent_core_roots();
+    if (error != 0) {
+        fprintf(stderr, "MACHINE_CORE_COVERAGE=FAIL root_case=%d\n", error);
         return 1;
     }
     error = check_compiler_barrier_origin();

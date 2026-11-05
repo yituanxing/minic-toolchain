@@ -7,13 +7,18 @@ repo="$(cd "$(dirname "$0")/../../.." && pwd)"
 scratch="$(mktemp -d)"
 trap 'rm -rf "$scratch"' EXIT
 
-# Native API tests verify width encoding, live scratch masking, stable x19
-# versus outgoing SP, incoming aligned frame SP and overflow rejection.
-cc -std=c11 -Wall -Wextra -Werror -I"$repo/src" \
-    "$repo/src/target/aarch64/frame_emit.c" \
-    "$repo/tests/target/aarch64/frame_emit_test.c" \
-    -o "$scratch/frame-test"
-"$scratch/frame-test"
+# Native typed MachineIR tests verify width encoding, live scratch masking,
+# stable x19 versus outgoing SP, incoming aligned frame SP, overflow rejection
+# and verified GNU serialization. There is no second FILE* frame emitter.
+frame_build=${BUILD_DIR:-"$repo/build/debug"}
+case "$frame_build" in
+    /*) ;;
+    *) frame_build="$repo/$frame_build" ;;
+esac
+mkdir -p "$frame_build/tests/aarch64-frame-temporary"
+TMPDIR="$frame_build/tests/aarch64-frame-temporary" \
+    make -s --no-print-directory -C "$repo" BUILD_DIR="$frame_build" \
+    check-a64-machine-mir-frame-select
 
 # There must be one frame-address authority: the typed emitter. Reintroducing
 # either late textual rewrite silently loses scratch-register liveness and
@@ -26,13 +31,12 @@ if test -e "$repo/src/target/aarch64/asm_legalize.c" ||
     exit 1
 fi
 
-# The integer and residual machine families have no remaining implicit
-# Core-owned `sp` slot users. A source-side guard catches regressions even
-# when the old text legalizer accidentally masks the emitted mistake.
+# The entire direct Core-to-text integer/residual families were physically
+# deleted. A reintroduced FILE* implementation is a regression, even if its
+# eventual assembly happened to have valid frame offsets.
 for source in integer_emit.c residual_emit.c; do
-    if grep -Eq '\[sp,|add x[0-9]+, sp, x[0-9]+' \
-        "$repo/src/target/aarch64/$source"; then
-        echo "AARCH64_TYPED_FRAME_SOURCE=FAIL legacy SP reference: $source" >&2
+    if test -e "$repo/src/target/aarch64/$source"; then
+        echo "AARCH64_TYPED_FRAME_SOURCE=FAIL legacy direct emitter restored: $source" >&2
         exit 1
     fi
 done
@@ -45,7 +49,7 @@ grep -Fq 'fadd d9, d9, d10' "$scratch/real.s"
 grep -Fq 'fmul d9, d9, d10' "$scratch/real.s"
 grep -Fq 'fdiv d9, d9, d10' "$scratch/real.s"
 grep -Eq 'ldr x10, \[(sp|x19)' "$scratch/real.s"
-grep -Fq 'str x9, [x10]' "$scratch/real.s"
+grep -Eq '^  str x10, \[x9(, #0)?\]$' "$scratch/real.s"
 
 # Pointer arithmetic loads integer indices through a stable owned frame
 # address. Narrow reads (ldrsb/ldrsh/ldrsw) can use the same region without
@@ -55,8 +59,8 @@ cc -E -P -nostdinc -x c \
     -o "$scratch/pointer.i"
 "$minic" --target=aarch64-linux -S \
     "$scratch/pointer.i" -o "$scratch/pointer.s"
-grep -Eq '^  add x16, (sp|x19), #[0-9]+$' "$scratch/pointer.s"
-grep -Fq '  ldr x10, [x16]' "$scratch/pointer.s"
+grep -Eq '^  add x9, (sp|x19), #[0-9]+$' "$scratch/pointer.s"
+grep -Eq '^  ldr x10, \[x9(, #0)?\]$' "$scratch/pointer.s"
 
 # Real Core block/return/parameter paths, including a moving live SP and
 # record-copy returns. These now share the same typed owned-slot/frame APIs

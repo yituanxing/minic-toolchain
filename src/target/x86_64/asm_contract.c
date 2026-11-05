@@ -28,6 +28,23 @@ bool minic_x86_64_typed_machine_form_matches_template(
         return (variant == 2U || variant == 5U || variant == 7U) &&
             minic_x86_64_asm_matched_template(text, length,
                 variant == 7U ? 4U : variant == 5U ? 3U : 1U);
+    case MINIC_X86_MACHINE_ASM_PREFETCHW_ALT:
+        return variant == 1U &&
+            minic_x86_64_linux_prefetchw_alt_form(text, length);
+    case MINIC_X86_MACHINE_ASM_CMPXCHG128:
+        return (variant == 1U || variant == 2U) &&
+            variant == minic_x86_64_linux_cmpxchg128_form(text, length);
+    case MINIC_X86_MACHINE_ASM_CRASH_REGISTER: {
+        const unsigned int gpr =
+            minic_x86_64_linux_crash_gpr_snapshot_form(text, length);
+        const unsigned int misc =
+            minic_x86_64_linux_crash_misc_snapshot_form(text, length);
+        return (gpr != 0U || misc != 0U) &&
+            variant == (gpr != 0U ? gpr : 16U + misc);
+    }
+    case MINIC_X86_MACHINE_ASM_FUTEX_EXTABLE:
+        return variant >= 1U && variant <= 6U &&
+            variant == minic_x86_64_linux_futex_extable_form(text, length);
     case MINIC_X86_MACHINE_ASM_ZSTD_CPUID:
         return variant == 0U && length == 5U &&
             memcmp(text, "cpuid", 5U) == 0;
@@ -89,6 +106,9 @@ bool minic_x86_64_typed_machine_form_matches_template(
     case MINIC_X86_MACHINE_ASM_IP_HERE:
         return variant == 1U &&
             minic_x86_64_linux_ip_here_template(text, length);
+    case MINIC_X86_MACHINE_ASM_BUG_TABLE_C_IMMEDIATE:
+        return variant != 0U && variant ==
+            minic_x86_64_linux_bug_table_c_form(text, length);
     case MINIC_X86_MACHINE_ASM_ZERO_BARRIER:
         form = minic_x86_64_linux_zero_barrier_form(text, length);
         break;
@@ -155,9 +175,6 @@ bool minic_x86_64_typed_machine_form_matches_template(
     case MINIC_X86_MACHINE_ASM_X87_PROBE:
         return variant == 0U &&
             minic_x86_64_linux_x87_probe_form(text, length);
-    case MINIC_X86_MACHINE_ASM_CRASH_REGISTER:
-        form = (unsigned int)((minic_x86_64_linux_crash_gpr_snapshot_form(text, length) || minic_x86_64_linux_crash_misc_snapshot_form(text, length)) ? 1U : 0U);
-        break;
     case MINIC_X86_MACHINE_ASM_VMWARE_HYPERCALL:
         form = (unsigned int)minic_x86_64_linux_vmware_hypercall_form(text, length);
         break;
@@ -181,9 +198,6 @@ bool minic_x86_64_typed_machine_form_matches_template(
         break;
     case MINIC_X86_MACHINE_ASM_PCI_MMCONFIG:
         form = (unsigned int)(minic_x86_64_linux_pci_mmconfig_form(text, length, false) ? minic_x86_64_linux_pci_mmconfig_form(text, length, false) : minic_x86_64_linux_pci_mmconfig_form(text, length, true));
-        break;
-    case MINIC_X86_MACHINE_ASM_CMPXCHG128:
-        form = (unsigned int)minic_x86_64_linux_cmpxchg128_form(text, length);
         break;
     case MINIC_X86_MACHINE_ASM_TASK_SIZE_ALT:
         form = (unsigned int)minic_x86_64_linux_task_size_alt_form(text, length);
@@ -290,9 +304,6 @@ bool minic_x86_64_typed_machine_form_matches_template(
     case MINIC_X86_MACHINE_ASM_PAT_CLFLUSHOPT:
         form = (unsigned int)minic_x86_64_linux_pat_clflushopt_form(text, length);
         break;
-    case MINIC_X86_MACHINE_ASM_FUTEX_EXTABLE:
-        form = (unsigned int)minic_x86_64_linux_futex_extable_form(text, length);
-        break;
     case MINIC_X86_MACHINE_ASM_DEBUG_REGISTER:
         form = (unsigned int)minic_x86_64_linux_debug_register_form(text, length);
         break;
@@ -316,9 +327,6 @@ bool minic_x86_64_typed_machine_form_matches_template(
         break;
     case MINIC_X86_MACHINE_ASM_TESTCC:
         form = (unsigned int)minic_x86_64_linux_testcc_form(text, length);
-        break;
-    case MINIC_X86_MACHINE_ASM_PREFETCHW_ALT:
-        form = (unsigned int)minic_x86_64_linux_prefetchw_alt_form(text, length);
         break;
     case MINIC_X86_MACHINE_ASM_APIC_AMD_ALT:
         form = (unsigned int)minic_x86_64_linux_apic_amd_alt_form(text, length);
@@ -371,12 +379,63 @@ bool minic_x86_64_typed_machine_form_matches_template(
     if (form_id == MINIC_X86_MACHINE_ASM_PUT_USER_CALL ||
         form_id == MINIC_X86_MACHINE_ASM_GET_USER_CALL)
         return form != 0U && variant == form;
+    if (form_id == MINIC_X86_MACHINE_ASM_GS_TIED_ALU)
+        return form != 0U && variant == form;
     /* All other newly tagged source families publish variant zero; their
      * machine parser independently owns the exact opcode and width. */
     if (form_id >= MINIC_X86_MACHINE_ASM_CRASH_REGISTER &&
         form_id <= MINIC_X86_MACHINE_ASM_CSUM_PARTIAL)
         return form != 0U && variant == 0U;
     return form != 0U && variant == form;
+}
+
+/* Linux BUG metadata has two finite original GNU grammars.  The %c forms
+ * are *typed* source operands, not arbitrary assembler substitution.  All
+ * labels, section order, and optional unreachable metadata are part of the
+ * matched identity; a machine operand can never authorize extra source ASM. */
+unsigned int minic_x86_64_linux_bug_table_c_form(
+    const char *text, size_t length) {
+    static const char numeric[] =
+        "1:\t.byte 0x0f, 0x0b\n"
+        ".pushsection __bug_table,\"aw\"\n"
+        "2:\t.long 1b - .\n"
+        ".long %c0 - .\n"
+        ".word %c1\n"
+        ".word %c2\n"
+        ".org 2b+%c3\n"
+        ".popsection\n"
+        "998:\n"
+        ".pushsection .discard.reachable\n"
+        ".long 998b\n"
+        ".popsection\n";
+    static const char named[] =
+        "1:\t.byte 0x0f, 0x0b\n"
+        ".pushsection __bug_table,\"aw\"\n"
+        "2:\t.long 1b - .\n"
+        ".long %c[path] - .\n"
+        ".word %c[ln]\n"
+        ".word %c[fl]\n"
+        ".org 2b+%c[sz]\n"
+        ".popsection\n";
+    /* Core normalizes validated %[name] references to numeric operand
+     * indices; the qualifier already sealed the original named grammar. */
+    static const char named_core[] =
+        "1:\t.byte 0x0f, 0x0b\n"
+        ".pushsection __bug_table,\"aw\"\n"
+        "2:\t.long 1b - .\n"
+        ".long %c0 - .\n"
+        ".word %c1\n"
+        ".word %c2\n"
+        ".org 2b+%c3\n"
+        ".popsection\n";
+    if (text == NULL || strlen(text) != length) return 0U;
+    if (length == sizeof(numeric)-1U &&
+        memcmp(text,numeric,sizeof(numeric)-1U) == 0) return 1U;
+    if (length == sizeof(named)-1U &&
+        memcmp(text,named,sizeof(named)-1U) == 0) return 2U;
+    if (length == sizeof(named_core)-1U &&
+        memcmp(text,named_core,sizeof(named_core)-1U) == 0) return 2U;
+    return 0U;
 }
 
 /* All GNU %c inputs have already been resolved into owned symbols/numbers

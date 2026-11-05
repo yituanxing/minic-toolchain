@@ -374,7 +374,7 @@ MinicCoreLowerStatus minic_core_lower_internal_append_field_address(MinicCoreLow
     MinicType actual_field_type, declared_field_type;
     const MinicRecord *record;
     const MinicRecordField *field;
-    size_t byte_offset;
+    size_t byte_offset, bit_offset;
 
     if (context == NULL || context->body == NULL || context->body->program == NULL ||
         context->function == NULL || address_id == NULL ||
@@ -392,22 +392,37 @@ MinicCoreLowerStatus minic_core_lower_internal_append_field_address(MinicCoreLow
         (field->is_bit_field
             ? !minic_type_is_integer(actual_field_type)
             : !minic_type_equal(actual_field_type, declared_field_type)) ||
-        !minic_data_layout_record_field_offset(context->target,
+        !minic_data_layout_record_field_layout(context->target,
                                                context->body->program,
-                                               record,
-                                               field_index,
-                                               &byte_offset)) {
+                                               record, field_index,
+                                               &byte_offset, &bit_offset)) {
         return MINIC_CORE_LOWER_UNSUPPORTED;
+    }
+    /* C-only admission: Machine/Core FIELD_ADDRESS records only the proven
+     * byte displacement. In particular, the bit-field lvalue's temporary
+     * unsigned storage carrier must satisfy the old Core-verifier contract
+     * before the source member identity and access form are discarded. */
+    if (field->is_bit_field) {
+        size_t carrier_size, carrier_alignment, record_size, record_alignment;
+        MinicType record_type = minic_type_record(record_id);
+        if (field->bit_width == 0U || field->bit_width > 64U ||
+            bit_offset >= 8U || !minic_type_is_unsigned_integer(actual_field_type) ||
+            minic_type_is_bool_integer(actual_field_type) ||
+            !minic_data_layout_type(context->target, context->body->program,
+                                    actual_field_type, &carrier_size, &carrier_alignment) ||
+            !minic_data_layout_type(context->target, context->body->program,
+                                    record_type, &record_size, &record_alignment) ||
+            (carrier_size != 1U && carrier_size != 2U &&
+             carrier_size != 4U && carrier_size != 8U) ||
+            byte_offset >= record_size) return MINIC_CORE_LOWER_UNSUPPORTED;
+        (void)carrier_alignment;
+        (void)record_alignment;
     }
     (void)memset(&instruction, 0, sizeof(instruction));
     instruction.kind = MINIC_CORE_INSTRUCTION_FIELD_ADDRESS;
     instruction.span = span;
     instruction.result = MINIC_CORE_VALUE_INVALID;
     instruction.value.field_address.base = base_id;
-    instruction.value.field_address.field_index = field_index;
-    instruction.value.field_address.access_form = field->is_bit_field
-        ? MINIC_CORE_FIELD_ACCESS_BITFIELD_STORAGE
-        : MINIC_CORE_FIELD_ACCESS_EXACT;
     instruction.value.field_address.byte_offset = byte_offset;
     if (!minic_type_pointer_to(field_type, &instruction_source_type)) {
         return MINIC_CORE_LOWER_ERROR;

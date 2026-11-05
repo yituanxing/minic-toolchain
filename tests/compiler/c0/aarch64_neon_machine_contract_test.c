@@ -1,10 +1,9 @@
-/* Native host proof of sealed CoreType-based AArch64 Q-register emission.
- * The separate ACLE/QEMU gate owns actual machine runtime qualification. */
+/* Native proof of Core's qualified 128-bit vector admission shape.
+ * Typed MachineIR physical emission and GNU serialization are exercised by
+ * run-aarch64-neon-core-vector128.sh; there is no parallel FILE* emitter. */
 #include "target/aarch64/neon_emit.h"
 
 #include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
 
 static bool add_integer(MinicCoreTypeContext *types, unsigned int bits,
                         bool sign, MinicCoreTypeId *result) {
@@ -34,29 +33,11 @@ static bool add_vector(MinicCoreTypeContext *types, MinicCoreTypeId element,
     return minic_core_type_register(types, &type, result);
 }
 
-static bool has_text(FILE *out, const char *needle) {
-    char text[4096];
-    size_t count;
-    if (fflush(out) != 0 || fseek(out, 0L, SEEK_SET) != 0)
-        return false;
-    count = fread(text, 1U, sizeof(text) - 1U, out);
-    text[count] = '\0';
-    return strstr(text, needle) != NULL;
-}
-
-static bool empty_file(FILE *out) {
-    return fflush(out) == 0 && fseek(out, 0L, SEEK_END) == 0 &&
-           ftell(out) == 0L;
-}
-
 static int run(void) {
-    const MinicA64FrameView frame = {false, 1024U, 0U, SIZE_MAX};
-    const MinicA64FrameView dynamic = {true, 12288U, 0U, SIZE_MAX};
     MinicCoreTypeContext types;
     MinicCoreTypeId u64, u8, s8, words, bytes, signed_bytes;
     MinicCoreTypeId nonbuiltin, misaligned, wrong_count, pointer, qualified;
     MinicCoreType qualifier = {0}, pointer_type = {0};
-    FILE *out;
     minic_core_type_context_initialize(&types);
     if (!add_integer(&types, 64U, false, &u64) ||
         !add_integer(&types, 8U, false, &u8) ||
@@ -92,55 +73,6 @@ static int run(void) {
         minic_aarch64_neon_vector128_core_type(NULL, words) ||
         minic_aarch64_neon_vector128_core_type(&types, MINIC_CORE_TYPE_INVALID))
         return 2;
-
-    out = tmpfile();
-    if (out == NULL) return 3;
-    if (!minic_aarch64_neon_emit_load_core(out, &frame, &types, words, 0U, 16U) ||
-        !has_text(out, "  ldr q16, [x10]\n") ||
-        !has_text(out, "  str q16, [sp, #16]\n")) return 4;
-    fclose(out);
-
-    out = tmpfile();
-    if (out == NULL) return 5;
-    if (!minic_aarch64_neon_emit_store_core(out, &frame, &types, bytes, 0U, 16U) ||
-        !has_text(out, "  ldr q16, [sp, #16]\n") ||
-        !has_text(out, "  str q16, [x10]\n")) return 6;
-    fclose(out);
-
-    out = tmpfile();
-    if (out == NULL) return 7;
-    if (!minic_aarch64_neon_emit_xor_core(out, &frame, &types, words,
-                                         16U, 32U, 48U) ||
-        !has_text(out, "  ldr q16, [sp, #16]\n") ||
-        !has_text(out, "  ldr q17, [sp, #32]\n") ||
-        !has_text(out, "  eor v16.16b, v16.16b, v17.16b\n") ||
-        !has_text(out, "  str q16, [sp, #48]\n")) return 8;
-    fclose(out);
-
-    out = tmpfile();
-    if (out == NULL) return 9;
-    if (!minic_aarch64_neon_emit_xor_core(out, &dynamic, &types, signed_bytes,
-                                         8192U, 8208U, 8224U) ||
-        !has_text(out, "  add x17, x19, x17\n") ||
-        !has_text(out, "  ldr q16, [x17]\n") ||
-        !has_text(out, "  ldr q17, [x17]\n") ||
-        !has_text(out, "  str q16, [x17]\n")) return 10;
-    fclose(out);
-
-    /* Machine admission checks Core shape, not the source's C qualifiers.
-     * Rejected shapes must not write even the first machine instruction. */
-    out = tmpfile();
-    if (out == NULL) return 11;
-    if (minic_aarch64_neon_emit_xor_core(out, &frame, &types, pointer,
-                                        0U, 16U, 32U) || !empty_file(out) ||
-        minic_aarch64_neon_emit_load_core(out, &frame, &types, nonbuiltin,
-                                         0U, 16U) || !empty_file(out) ||
-        minic_aarch64_neon_emit_store_core(out, &frame, &types, misaligned,
-                                          0U, 16U) || !empty_file(out) ||
-        minic_aarch64_neon_emit_xor_core(out, &frame, &types, wrong_count,
-                                        0U, 16U, 32U) || !empty_file(out))
-        return 12;
-    fclose(out);
 
     minic_core_type_context_destroy(&types);
     return 0;

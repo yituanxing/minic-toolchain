@@ -361,11 +361,10 @@ static bool dump_instruction(FILE *output,
                        function->function_symbols[instruction->value.function_symbol_id].name) >= 0;
     case MINIC_CORE_INSTRUCTION_FIELD_ADDRESS:
         return fprintf(output,
-                       "  %%%" PRIu32 " = field.addr %%%" PRIu32 ", core_record=%zu, field=%zu\n",
+                       "  %%%" PRIu32 " = field.addr %%%" PRIu32 ", byte_offset=%zu\n",
                        instruction->result,
                        instruction->value.field_address.base,
-                       instruction->value.field_address.core_record_type_id,
-                       instruction->value.field_address.field_index) >= 0;
+                       instruction->value.field_address.byte_offset) >= 0;
     case MINIC_CORE_INSTRUCTION_POINTER_OFFSET:
         return fprintf(output,
                        "  %%%" PRIu32 " = pointer.offset %%%" PRIu32 ", %%%" PRIu32

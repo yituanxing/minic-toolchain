@@ -2,23 +2,11 @@
 #define MINIC_TARGET_AARCH64_NEON_EMIT_H
 
 #include "core/core_type.h"
-#include "target/aarch64/frame_emit.h"
 
-/* Target-owned AdvSIMD machine primitives. These routines neither create
- * vector Core SSA values nor admit an unimplemented source-level ACLE ABI.
- * Their callers must present qualified typed Core operations and offsets
- * allocated by the normal LP64 spill planner. */
+/* AArch64 AdvSIMD's ABI-neutral Core shape classifier. Native Q-register
+ * emission is owned by the typed MachineIR selector and GNU serializer;
+ * no parallel Core-to-FILE* vector instruction writer exists here. */
 bool minic_aarch64_neon_vector128_core_type(const MinicCoreTypeContext *,
                                             MinicCoreTypeId);
-
-/* A pointer resides in a normal x-register SSA slot; each vector result or
- * operand resides in a separate 16-byte Core value slot. Unaligned user
- * pointers are valid for ordinary NEON LD1/ST1 semantics. */
-bool minic_aarch64_neon_emit_load_core(FILE *, const MinicA64FrameView *,
-    const MinicCoreTypeContext *, MinicCoreTypeId, size_t, size_t);
-bool minic_aarch64_neon_emit_store_core(FILE *, const MinicA64FrameView *,
-    const MinicCoreTypeContext *, MinicCoreTypeId, size_t, size_t);
-bool minic_aarch64_neon_emit_xor_core(FILE *, const MinicA64FrameView *,
-    const MinicCoreTypeContext *, MinicCoreTypeId, size_t, size_t, size_t);
 
 #endif

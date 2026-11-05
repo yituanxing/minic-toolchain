@@ -15,6 +15,30 @@ static bool riscv_machine_register_printable(const MinicMachineFunction *fn,
                &operand->value.physical.reg, NULL);
 }
 
+/* The spelling is an output-only presentation of a verified physical bank:
+ * GNU aliases preserve the established RV64D ABI and arithmetic probes. */
+static const char *riscv_machine_abi_register_name(
+    const MinicMachineRegister *reg) {
+    static const char *const gpr_names[32] = {
+        "zero", "ra", "sp", "gp", "tp", "t0", "t1", "t2",
+        "s0", "s1", "a0", "a1", "a2", "a3", "a4", "a5",
+        "a6", "a7", "s2", "s3", "s4", "s5", "s6", "s7",
+        "s8", "s9", "s10", "s11", "t3", "t4", "t5", "t6"
+    };
+    static const char *const fpr_names[32] = {
+        "ft0", "ft1", "ft2", "ft3", "ft4", "ft5", "ft6", "ft7",
+        "fs0", "fs1", "fa0", "fa1", "fa2", "fa3", "fa4", "fa5",
+        "fa6", "fa7", "fs2", "fs3", "fs4", "fs5", "fs6", "fs7",
+        "fs8", "fs9", "fs10", "fs11", "ft8", "ft9", "ft10", "ft11"
+    };
+    if (reg == NULL || reg->number >= 32U) return NULL;
+    if (reg->bank == MINIC_MACHINE_REGISTER_GENERAL)
+        return gpr_names[reg->number];
+    if (reg->bank == MINIC_MACHINE_REGISTER_FLOAT)
+        return fpr_names[reg->number];
+    return NULL;
+}
+
 static bool riscv_machine_block_label(const MinicMachineFunction *fn,
                                       const MinicMachineGNUAsmLabels *labels,
                                       const MinicMachineOperand *operand,
@@ -75,6 +99,28 @@ static bool riscv_machine_emit_selected(FILE *output,
         operand[2].kind == MINIC_MACHINE_OPERAND_REGISTER) {
         if (!riscv_machine_register_printable(fn, &operand[2])) return false;
         r2 = operand[2].value.physical.reg.number;
+    }
+    if (ins->opcode >= MINIC_RISCV_MACHINE_FMV_X_W &&
+        ins->opcode < MINIC_RISCV_MACHINE_LAST) {
+        const char *rnames[3] = {NULL, NULL, NULL};
+        size_t i;
+        if (desc.mnemonic == NULL ||
+            (ins->operand_count != 2U && ins->operand_count != 3U))
+            return false;
+        for (i = 0U; i < ins->operand_count; ++i) {
+            rnames[i] = riscv_machine_abi_register_name(
+                &operand[i].value.physical.reg);
+            if (rnames[i] == NULL) return false;
+        }
+        if (ins->operand_count == 3U)
+            return fprintf(output, "  %s %s, %s, %s\n",
+                desc.mnemonic, rnames[0], rnames[1], rnames[2]) >= 0;
+        if (ins->opcode >= MINIC_RISCV_MACHINE_FCVT_W_D_RTZ &&
+            ins->opcode <= MINIC_RISCV_MACHINE_FCVT_LU_D_RTZ)
+            return fprintf(output, "  %s %s, %s, rtz\n",
+                desc.mnemonic, rnames[0], rnames[1]) >= 0;
+        return fprintf(output, "  %s %s, %s\n",
+            desc.mnemonic, rnames[0], rnames[1]) >= 0;
     }
     switch (desc.form) {
     case MINIC_RISCV_MACHINE_FORM_NONE:
@@ -231,7 +277,9 @@ static bool riscv_asm_constraint(const MinicTargetInfo *target,
     case MINIC_MACHINE_OPERAND_REGISTER: {
         const unsigned access = operand->value.physical.access;
         if (role != 'r' && role != 'g') return false;
-        if (!minic_riscv_machine_validate_register(
+        if (operand->value.physical.reg.bank !=
+                MINIC_MACHINE_REGISTER_GENERAL ||
+            !minic_riscv_machine_validate_register(
                 target, &operand->value.physical.reg, NULL) ||
             (output || inout ?
              (access & MINIC_MACHINE_REGISTER_WRITE) == 0U :
@@ -320,7 +368,14 @@ static bool riscv_source_asm_operand(FILE *output,
         return fprintf(output, "%" PRId64,
                        operand->value.integer) >= 0;
     case MINIC_MACHINE_OPERAND_SYMBOL:
-        return fputs(operand->value.symbol.name, output) >= 0;
+        if (operand->value.symbol.relocation !=
+            MINIC_RISCV_MACHINE_RELOC_SOURCE_IMMEDIATE) return false;
+        if (operand->value.symbol.addend == 0)
+            return fputs(operand->value.symbol.name, output) >= 0;
+        return fprintf(output,
+            operand->value.symbol.addend > 0 ? "%s+%" PRId64 : "%s%" PRId64,
+            operand->value.symbol.name,
+            operand->value.symbol.addend) >= 0;
     default:
         return false;
     }

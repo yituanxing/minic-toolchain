@@ -1,9 +1,37 @@
+#define _POSIX_C_SOURCE 200809L
 #include "target/common/program_emit.h"
 #include "target/common/elf_alias_emit.h"
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
+
+/* tmpfile() unconditionally allocates under the host's /tmp on some libc
+ * implementations, ignoring TMPDIR. Keep the transactional read/write
+ * fixture next to the caller-provided output path instead, and unlink it
+ * immediately so every failure/close remains self-cleaning. */
+static FILE *test_buffered_rw_stream(const char *path) {
+    static const char suffix[] = ".stream-XXXXXX";
+    const size_t size = strlen(path) + sizeof(suffix);
+    char *name = malloc(size);
+    FILE *stream;
+    int fd;
+    if (name == NULL) return NULL;
+    (void)snprintf(name, size, "%s%s", path, suffix);
+    fd = mkstemp(name);
+    if (fd < 0) { free(name); return NULL; }
+    if (unlink(name) != 0) {
+        (void)close(fd);
+        (void)remove(name);
+        free(name);
+        return NULL;
+    }
+    free(name);
+    stream = fdopen(fd, "w+b");
+    if (stream == NULL) (void)close(fd);
+    return stream;
+}
 
 /* Standalone host-level probe of the real five-target output transaction. */
 typedef struct TestContext {
@@ -211,15 +239,15 @@ static int check_module_snapshot_output(const char *path) {
     {
         MinicCoreModuleFunctionSymbol symbols[2] = {
             { .name = "real_fn", .is_defined = true, .alias_target_index = SIZE_MAX,
-              .specialization_source_index = SIZE_MAX },
+              .storage_owner_function_index = SIZE_MAX },
             { .name = "alias_fn", .alias_target_index = 0U,
-              .specialization_source_index = SIZE_MAX }
+              .storage_owner_function_index = SIZE_MAX }
         };
         MinicCoreModuleGlobal alias = {
             .name = "alias_obj", .definition_kind = MINIC_CORE_MODULE_DEFINITION_DECLARATION,
             .alias_target_index = 0U
         };
-        FILE *tmp = tmpfile();
+        FILE *tmp = test_buffered_rw_stream(path);
         if (tmp == NULL) return 5;
         module.function_symbols = symbols;
         module.function_count = 2U;
@@ -273,7 +301,7 @@ int main(int argc, char **argv) {
     MinicCoreModuleFunctionSymbol declaration = {
         .name = "fixture_function", .is_defined = true,
         .is_referenced = true, .alias_target_index = SIZE_MAX,
-        .specialization_source_index = SIZE_MAX
+        .storage_owner_function_index = SIZE_MAX
     };
     MinicCoreFunction ir = {0};
     MinicCoreTypeContext synthetic_types = {0};
@@ -364,13 +392,13 @@ int main(int argc, char **argv) {
     {
         MinicCoreModuleFunctionSymbol module_decl = {
             .name = "sealed_function", .is_defined = true, .is_referenced = true,
-            .alias_target_index = SIZE_MAX, .specialization_source_index = SIZE_MAX
+            .alias_target_index = SIZE_MAX, .storage_owner_function_index = SIZE_MAX
         };
         MinicCoreModule owned_module = {
             .function_symbols = &module_decl, .function_count = 1U,
             .finalized = true
         };
-        FILE *probe = tmpfile();
+        FILE *probe = test_buffered_rw_stream(path);
         if (probe == NULL) return 41;
         (void)memset(&ctx, 0, sizeof(ctx));
         if (!minic_program_visit_prepared_functions_module(
@@ -382,7 +410,7 @@ int main(int argc, char **argv) {
         }
         if (fclose(probe) != 0) return 43;
         /* A missing sealed Module cannot sneak through the machine visitor. */
-        probe = tmpfile();
+        probe = test_buffered_rw_stream(path);
         if (probe == NULL) return 44;
         (void)memset(&ctx, 0, sizeof(ctx));
         if (minic_program_visit_prepared_functions_module(

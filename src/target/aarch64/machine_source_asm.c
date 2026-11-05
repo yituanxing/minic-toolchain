@@ -1,6 +1,7 @@
 #include "target/aarch64/machine_source_asm.h"
 #include "target/aarch64/asm_contract_internal.h"
 #include "target/aarch64/machine_lse_source_select.h"
+#include "target/common/direct_linux_bug_asm.h"
 #include "target/common/machine_source_asm_template.h"
 
 #include <string.h>
@@ -11,6 +12,7 @@
  * and exact template verifier before being admitted here.  A zero-operand
  * barrier/hint has no GNU substitution and can be represented immediately. */
 static bool a64_machine_opaque_hint(const MinicMachineInstruction *instruction) {
+    MinicCoreInlineAsm linux_bug = {0};
     if (instruction == NULL || instruction->source_asm_template == NULL ||
         instruction->source_asm_length == 0U ||
         (instruction->source_asm_machine_form_id != 0U &&
@@ -28,8 +30,22 @@ static bool a64_machine_opaque_hint(const MinicMachineInstruction *instruction) 
     /* Share the source qualifier's exact ISA recognizer. In particular,
      * original cache.h uses a literal TAB in `ic\tialluis`; preserving
      * this accepted GNU spelling must not trigger the old FILE* path. */
-    return aarch64_barrier_template(instruction->source_asm_template,
-        instruction->source_asm_length) != NULL;
+    if (aarch64_barrier_template(instruction->source_asm_template,
+            instruction->source_asm_length) != NULL)
+        return true;
+    /* A Linux BUG_ON() is a *single*, self-contained zero-operand source
+     * effect. Its paired numeric labels and ELF __bug_table relocations are
+     * part of the same typed MachineIR instruction. Reuse the admission
+     * recognizer; no arbitrary `.pushsection`/BRK string escapes here. */
+    if (instruction->effects != (MINIC_MACHINE_EFFECT_SOURCE_ASM |
+                                 MINIC_MACHINE_EFFECT_VOLATILE) ||
+        instruction->source_asm_machine_form_id != 0U)
+        return false;
+    linux_bug.is_volatile = true;
+    linux_bug.template_text = instruction->source_asm_template;
+    linux_bug.template_length = instruction->source_asm_length;
+    return minic_multi_direct_linux_bug_asm(&linux_bug,
+        "14470", "14471", "14472", "brk0x800", true);
 }
 
 /* Original Linux TLBI 6.6.143 is a sealed GNU source-ASM instruction. The

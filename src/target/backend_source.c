@@ -4,14 +4,19 @@
 #include "target/x86_64/asm_contract_source.h"
 #include "target/aarch64/asm_contract_source.h"
 #include "target/loongarch64/asm_contract_source.h"
+#include "target/riscv/asm_goto_source.h"
 
 #include <string.h>
 
 /* Source policy and machine emission intentionally register independently.
  * Both indexes come from the same canonical target inventory; there is no
  * frontend or Core architecture switch and no host-ISA fallback. */
-static const MinicSourceBackend riscv64_source_backend = {0};
-static const MinicSourceBackend riscv32_source_backend = {0};
+static const MinicSourceBackend riscv64_source_backend = {
+    .qualify_inline_asm_goto = minic_riscv_qualify_inline_asm_goto,
+};
+static const MinicSourceBackend riscv32_source_backend = {
+    .qualify_inline_asm_goto = minic_riscv_qualify_inline_asm_goto,
+};
 static const MinicSourceBackend x86_64_source_backend = {
     .qualify_inline_asm = minic_x86_64_qualify_inline_asm,
     .requires_qualified_input_asm = minic_x86_64_requires_qualified_input_asm,

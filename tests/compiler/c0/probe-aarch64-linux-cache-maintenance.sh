@@ -21,14 +21,17 @@ test -s "$work/cache.s" || fail 'MiniC emitted no target assembly'
 # Count original hardware instructions, not mere Core admissions. AArch64
 # DC/IC cache instructions are not user-mode QEMU smoke-test candidates.
 for family in 'dc ivac' 'dc cvac' 'dc cvau' 'dc civac' 'ic ivau'; do
-    count=$(grep -cF "  $family, x9" "$work/cache.s" || true)
+    # MachineIR emits the original GNU template without the old FILE* path's
+    # two-space prefix; keep opcode/register/line exact across either layout.
+    count=$(grep -Ec "^[[:space:]]*${family// /[[:space:]]+},[[:space:]]*x9[[:space:]]*$" \
+        "$work/cache.s" || true)
     case "$family" in
         'dc civac') (( count >= 2 )) ||
             fail "required repeated target hardware instruction $family" ;;
         *) (( count >= 1 )) || fail "missing hardware instruction $family" ;;
     esac
 done
-grep -Fxq '  ic ialluis' "$work/cache.s" ||
+grep -Eq '^[[:space:]]*ic[[:space:]]+ialluis[[:space:]]*$' "$work/cache.s" ||
     fail 'implicit-volatile I-cache-wide invalidation missing'
 
 # The exact template and constraints are the hardware security boundary.

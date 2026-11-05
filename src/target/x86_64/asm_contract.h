@@ -178,7 +178,9 @@ typedef enum MinicX86MachineAsmForm {
     MINIC_X86_MACHINE_ASM_CPUID_MATCHED,
     MINIC_X86_MACHINE_ASM_MULACC_MATCHED,
     MINIC_X86_MACHINE_ASM_BITSCAN_MATCHED,
-    MINIC_X86_MACHINE_ASM_MATCHED_MEMORY
+    MINIC_X86_MACHINE_ASM_MATCHED_MEMORY,
+    /* Original Linux BUG table GNU %c scalar immediate/symbol transport. */
+    MINIC_X86_MACHINE_ASM_BUG_TABLE_C_IMMEDIATE
 } MinicX86MachineAsmForm;
 
 /* RAID6's fixed XMM/YMM/ZMM and opmask-register GNU templates. Every
@@ -364,6 +366,7 @@ bool minic_x86_64_linux_prefetchw_alt_form(const char *,size_t);
 /* Post-Core immediate-specialized GNU Linux BUG/WARN metadata format.
  * Accept directive-only side-table source, never arbitrary opaque machine ASM. */
 bool minic_x86_64_linux_bug_table_opaque(const char *, size_t);
+unsigned int minic_x86_64_linux_bug_table_c_form(const char *, size_t);
 /* Register allocation and native instruction templates are x86 machine
  * contracts. C operand admission is declared in asm_contract_source.h. */
 bool minic_x86_64_linux_cpu_has_goto_form(const char *, size_t);

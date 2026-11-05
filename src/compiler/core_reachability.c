@@ -59,9 +59,10 @@ static bool enqueue_function(ModuleClosure *c, size_t id) {
     c->functions_live[id] = true;
     c->function_queue[c->function_count++] = id;
     if (!enqueue_owned(c, id)) return false;
-    /* A clone executes the source FunctionBody and borrows its local statics. */
-    return f->specialization_source_index == SIZE_MAX ||
-        enqueue_owned(c, f->specialization_source_index);
+    /* Borrowers retain local statics owned by the canonical Module function.
+     * The source implementation may use this generic edge for cloned bodies. */
+    return f->storage_owner_function_index == SIZE_MAX ||
+        enqueue_owned(c, f->storage_owner_function_index);
 }
 
 static bool enqueue_named_function(ModuleClosure *c, const char *name, size_t n) {
@@ -352,14 +353,14 @@ bool minic_core_function_set_close_reachability(
         const MinicCoreModuleFunctionSymbol *f = &m->function_symbols[i];
         if (!c.functions_live[i]) continue;
         canonical_owner_live[i] = true;
-        if (f->specialization_source_index != SIZE_MAX)
-            canonical_owner_live[f->specialization_source_index] = true;
+        if (f->storage_owner_function_index != SIZE_MAX)
+            canonical_owner_live[f->storage_owner_function_index] = true;
     }
     /* Transactional publication: no C program writes, no partial pruning. */
     for (i = 0U; i < m->function_count; ++i) {
         MinicCoreModuleFunctionSymbol *f = &m->function_symbols[i];
         if (f->is_defined && f->is_internal) f->is_referenced = c.functions_live[i];
-        if (f->specialization_source_index != SIZE_MAX) {
+        if (f->storage_owner_function_index != SIZE_MAX) {
             if (f->is_referenced) ++kept;
             else ++pruned;
         }

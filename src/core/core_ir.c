@@ -330,12 +330,16 @@ void minic_core_function_destroy(MinicCoreFunction *function) {
 
         free(inline_asm->template_text);
         free(inline_asm->deferred_immediate_symbol);
+        free(inline_asm->goto_label_names[0]);
+        free(inline_asm->goto_label_names[1]);
         {
             size_t resolved_index;
             for (resolved_index = 0U;
                  resolved_index < inline_asm->resolved_immediate_count &&
-                     resolved_index < 3U; ++resolved_index)
+                     resolved_index < 3U; ++resolved_index) {
                 free(inline_asm->resolved_immediates[resolved_index].symbol);
+                free(inline_asm->resolved_immediates[resolved_index].asm_name);
+            }
         }
         for (clobber_index = 0U; inline_asm->register_clobbers != NULL &&
                                   clobber_index < inline_asm->register_clobber_count;

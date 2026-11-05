@@ -175,6 +175,7 @@ static bool x86_linux_crash_register_source(const MinicTargetInvocation *invocat
     contract->kinds[0] = memory_output ?
         MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_OUTPUT :
         MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
+    contract->target_machine_form_variant = gpr != 0U ? gpr : 16U + misc;
     return true;
 }
 
@@ -2234,6 +2235,7 @@ static bool x86_gs_tied_alu_source(const MinicTargetInvocation *invocation,
     contract->kinds[0]=MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
     contract->kinds[1]=MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT;
     contract->kinds[2]=MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+    contract->target_machine_form_variant=op;
     return true;
 }
 
@@ -2319,6 +2321,7 @@ static bool x86_prefetchw_alt_source(const MinicTargetInvocation *invocation,
     contract->operand_count=2U;
     contract->kinds[0]=MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
     contract->kinds[1]=MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT;
+    contract->target_machine_form_variant=1U;
     return true;
 }
 
@@ -4945,6 +4948,7 @@ static bool x86_linux_cmpxchg128_source(const MinicTargetInvocation *invocation,
     contract->kinds[at+3U] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
     contract->kinds[at+4U] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
     contract->implicit_memory_effect = true;
+    contract->target_machine_form_variant = form;
     return true;
 }
 
@@ -5134,6 +5138,57 @@ static bool x86_linux_pat_clflushopt_source(const MinicTargetInvocation *invocat
     return true;
 }
 
+/* Two original Linux BUG/WARN GNU %c shapes.  The C ingress captures each
+ * source `i` as a typed immediate/symbol; no immediate is ever inferred from
+ * raw asm text by machine selection. */
+static bool x86_linux_bug_table_c_source(
+    const MinicTargetInvocation *invocation,
+    const MinicC0Program *program, const MinicInlineAsm *source,
+    MinicTargetInlineAsmContract *contract) {
+    static const char *const names[4] = {"path","ln","fl","sz"};
+    const MinicExpression *expression;
+    unsigned int variant;
+    size_t i;
+    (void)invocation;
+    if (program == NULL || source == NULL || contract == NULL ||
+        (variant = minic_x86_64_linux_bug_table_c_form(
+            source->template_text,source->template_length)) == 0U ||
+        !source->is_volatile || source->is_goto ||
+        source->output_count != 0U || source->input_count != 4U ||
+        source->inputs == NULL || source->clobber_count != 0U ||
+        source->register_clobber_count != 0U ||
+        source->has_memory_clobber || source->label_count != 0U)
+        return false;
+    for (i = 0U; i < 4U; ++i) {
+        const MinicInlineAsmOperand *input = &source->inputs[i];
+        if (!target_constraint_is(input,"i") ||
+            (variant == 1U ? input->name != NULL :
+                (input->name == NULL ||
+                 input->name_length != strlen(names[i]) ||
+                 memcmp(input->name,names[i],input->name_length) != 0)))
+            return false;
+        expression = minic_c0_program_expression(program,input->expression);
+        if (expression == NULL || (i == 0U ?
+                (!minic_type_is_pointer(expression->type) ||
+                 (expression->kind != MINIC_EXPRESSION_GLOBAL_OBJECT &&
+                  expression->kind != MINIC_EXPRESSION_ADDRESS_OF &&
+                  expression->kind != MINIC_EXPRESSION_FUNCTION &&
+                  expression->kind != MINIC_EXPRESSION_CAST &&
+                  expression->kind != MINIC_EXPRESSION_BITCAST &&
+                  expression->kind != MINIC_EXPRESSION_CONVERSION)) :
+                (expression->kind != MINIC_EXPRESSION_INTEGER ||
+                 (i == 3U ? expression->value.integer_value != 12 :
+                    expression->value.integer_value < 0 ||
+                    expression->value.integer_value > 65535))))
+            return false;
+        contract->kinds[i] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+    }
+    contract->operand_count = 4U;
+    contract->target_machine_form_variant = variant;
+    contract->capture_typed_immediate_inputs = true;
+    return true;
+}
+
 static bool x86_linux_futex_extable_source(const MinicTargetInvocation *invocation,
     const MinicC0Program *program, const MinicInlineAsm *source,
     MinicTargetInlineAsmContract *contract) {
@@ -5184,6 +5239,7 @@ static bool x86_linux_futex_extable_source(const MinicTargetInvocation *invocati
     }
     contract->operand_count = output_count + 2U;
     contract->implicit_memory_effect = true;
+    contract->target_machine_form_variant = form;
     return true;
 }
 
@@ -5399,6 +5455,7 @@ static const MinicX86SourceQualifierEntry minic_x86_source_qualifiers[] = {
     X86_SOURCE_TYPED(x86_prefetchw_alt_source, PREFETCHW_ALT),
     X86_SOURCE_TYPED(x86_apic_amd_alt_source, APIC_AMD_ALT),
     X86_SOURCE_TYPED(x86_gs_tied_alu_source, GS_TIED_ALU),
+    X86_SOURCE_TYPED(x86_linux_bug_table_c_source, BUG_TABLE_C_IMMEDIATE),
     X86_SOURCE_TYPED(x86_linux_zero_barrier_qualifier, ZERO_BARRIER),
     X86_SOURCE_TYPED(x86_linux_ip_here_source, IP_HERE),
     X86_SOURCE_TYPED(x86_add32_carry_source, ADD32_CARRY),

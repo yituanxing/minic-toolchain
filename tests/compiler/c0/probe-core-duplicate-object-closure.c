@@ -38,7 +38,7 @@ int main(void) {
     function_symbol.is_defined = true;
     function_symbol.is_reachability_root = true;
     function_symbol.alias_target_index = SIZE_MAX;
-    function_symbol.specialization_source_index = SIZE_MAX;
+    function_symbol.storage_owner_function_index = SIZE_MAX;
     referenced_global.name = "same_asm_symbol";
     referenced_global.name_length = strlen(referenced_global.name);
     instruction.kind = MINIC_CORE_INSTRUCTION_GLOBAL_ADDRESS;

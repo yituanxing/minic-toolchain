@@ -101,6 +101,35 @@ typedef enum MinicRiscvMachineOpcode {
     MINIC_RISCV_MACHINE_CALL_INDIRECT,
     MINIC_RISCV_MACHINE_BARRIER,
     MINIC_RISCV_MACHINE_UNREACHABLE,
+    /* RV64 LP64D-only F/D operations. All register operands retain their
+     * physical register bank; the opcode contract checks each bank. Only
+     * explicit Core FP operations may select these instructions. */
+    MINIC_RISCV_MACHINE_FMV_X_W,
+    MINIC_RISCV_MACHINE_FMV_W_X,
+    MINIC_RISCV_MACHINE_FMV_X_D,
+    MINIC_RISCV_MACHINE_FMV_D_X,
+    MINIC_RISCV_MACHINE_FADD_S,
+    MINIC_RISCV_MACHINE_FSUB_S,
+    MINIC_RISCV_MACHINE_FMUL_S,
+    MINIC_RISCV_MACHINE_FDIV_S,
+    MINIC_RISCV_MACHINE_FADD_D,
+    MINIC_RISCV_MACHINE_FSUB_D,
+    MINIC_RISCV_MACHINE_FMUL_D,
+    MINIC_RISCV_MACHINE_FDIV_D,
+    MINIC_RISCV_MACHINE_FEQ_D,
+    MINIC_RISCV_MACHINE_FLT_D,
+    MINIC_RISCV_MACHINE_FLE_D,
+    MINIC_RISCV_MACHINE_FCVT_D_W,
+    MINIC_RISCV_MACHINE_FCVT_D_WU,
+    MINIC_RISCV_MACHINE_FCVT_D_L,
+    MINIC_RISCV_MACHINE_FCVT_D_LU,
+    MINIC_RISCV_MACHINE_FCVT_W_D_RTZ,
+    MINIC_RISCV_MACHINE_FCVT_WU_D_RTZ,
+    MINIC_RISCV_MACHINE_FCVT_L_D_RTZ,
+    MINIC_RISCV_MACHINE_FCVT_LU_D_RTZ,
+    MINIC_RISCV_MACHINE_FCVT_D_S,
+    MINIC_RISCV_MACHINE_FCVT_S_D,
+    MINIC_RISCV_MACHINE_FSGNJN_D,
     MINIC_RISCV_MACHINE_LAST
 } MinicRiscvMachineOpcode;
 
@@ -110,7 +139,11 @@ typedef enum MinicRiscvMachineRelocation {
     MINIC_RISCV_MACHINE_RELOC_INVALID = 0,
     MINIC_RISCV_MACHINE_RELOC_PCREL_LOCAL,
     MINIC_RISCV_MACHINE_RELOC_GOT,
-    MINIC_RISCV_MACHINE_RELOC_CALL
+    MINIC_RISCV_MACHINE_RELOC_CALL,
+    /* Typed `i` input of genuine source GNU asm, not a generated opcode.
+     * The target assembler chooses the ELF fixup from the original source
+     * directive; the Core fact owns the symbol and signed byte addend. */
+    MINIC_RISCV_MACHINE_RELOC_SOURCE_IMMEDIATE
 } MinicRiscvMachineRelocation;
 
 typedef enum MinicRiscvMachineAddressMode {

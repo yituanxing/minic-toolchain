@@ -220,12 +220,26 @@ static bool run(unsigned xlen, bool compiler_barrier,
     stage = "select";
     if (exported_island) {
         bool live[3] = {false, false, false};
-        /* The shared Core closure recognizes this externally reachable
-         * entry. Until MachineIR multi-entry coverage can prove it, the
-         * selector must reject the WHOLE function, never discard it. */
+        bool found_symbol = false;
+        size_t block_index;
+        /* The independent assembler-local symbol is a legitimate Core and
+         * Machine root, with no fabricated edge from the ABI prologue.
+         * Its absence would silently drop a linker-reachable label. */
         okay = minic_core_function_mark_reachable_blocks(
             &fn, live, 3U) && live[0] && live[1] && live[2] &&
-            !minic_riscv_machine_select_core_subset(&machine, &plan);
+            minic_riscv_machine_select_core_subset(&machine, &plan) &&
+            machine.block_count == 8U &&
+            minic_machine_core_coverage_verify(&fn, live, &machine);
+        if (!okay) goto done;
+        for (block_index = 0U; block_index < machine.block_count;
+             ++block_index) {
+            const MinicMachineBlock *block = &machine.blocks[block_index];
+            if (block->has_core_block_origin && block->core_block_id == 2U)
+                found_symbol = block_index != 0U &&
+                    block->exported_label != NULL &&
+                    strcmp(block->exported_label, ".Luser_123") == 0;
+        }
+        okay = found_symbol;
         goto done;
     }
     if (!minic_riscv_machine_select_core_subset(&machine, &plan)) {

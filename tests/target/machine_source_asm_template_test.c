@@ -1,7 +1,31 @@
+#define _POSIX_C_SOURCE 200809L
 #include "target/common/machine_source_asm_template.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
+
+static FILE *probe_stream(void) {
+    const char *directory = getenv("TMPDIR");
+    char path[4096];
+    int length;
+    int fd;
+    FILE *stream;
+    if (directory == NULL || directory[0] == '\0') directory = ".";
+    length = snprintf(path, sizeof(path), "%s/minic-source-template-XXXXXX",
+                      directory);
+    if (length <= 0 || (size_t)length >= sizeof(path)) return NULL;
+    fd = mkstemp(path);
+    if (fd < 0) return NULL;
+    if (unlink(path) != 0) {
+        close(fd);
+        return NULL;
+    }
+    stream = fdopen(fd, "w+");
+    if (stream == NULL) close(fd);
+    return stream;
+}
 
 static bool form(const MinicMachineFunction *fn,
                  const MinicMachineInstruction *ins, void *ctx) {
@@ -109,7 +133,7 @@ int main(void) {
     ins.operand_count = 3U;
     if (!minic_machine_source_asm_template_preflight(&function, &ins,
                                                      &policy)) return 1;
-    out = tmpfile();
+    out = probe_stream();
     if (out == NULL) return 1;
     if (!minic_machine_source_asm_template_emit(out, &function, &ins,
                                                 &labels, &policy) ||
@@ -126,7 +150,7 @@ int main(void) {
      * bytes reach the output stream. */
     {
         MinicMachineGNUAsmLabels missing = {names, 1U};
-        out = tmpfile();
+        out = probe_stream();
         if (out == NULL) return 1;
         if (minic_machine_source_asm_template_emit(out, &function, &ins,
                                                    &missing, &policy) ||
@@ -149,7 +173,7 @@ int main(void) {
         empty.source_asm_terminates_block = false;
         if (!minic_machine_source_asm_template_preflight(&function, &empty,
                                                          &policy)) return 1;
-        out = tmpfile();
+        out = probe_stream();
         if (out == NULL) return 1;
         if (!minic_machine_source_asm_template_emit(out, &function, &empty,
                                                     &labels, &policy) ||

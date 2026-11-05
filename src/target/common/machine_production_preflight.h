@@ -36,8 +36,11 @@ static inline bool minic_machine_production_preflight(
         selected == NULL || policy == NULL ||
         selected->target != source->target ||
         selected->architecture != source->target->architecture ||
-        selected->name == NULL ||
-        strcmp(selected->name, source->symbol) != 0 ||
+        selected->name == NULL || source->core->name == NULL ||
+        source->core->name_length == 0U ||
+        strlen(selected->name) != source->core->name_length ||
+        memcmp(selected->name, source->core->name,
+               source->core->name_length) != 0 ||
         selected->calling_convention !=
             minic_core_function_calling_convention(source->core))
         return false;

@@ -17,6 +17,9 @@ MinicCoreLowerStatus core_asm_try_target_register_contract(
     size_t length, i;
     const MinicSourceBackend *backend;
     MinicTargetInlineAsmContract contract;
+    MinicCoreInlineAsmImmediate typed_immediates[
+        MINIC_CORE_INLINE_ASM_IMMEDIATE_LIMIT] = {{0}};
+    size_t typed_immediate_count = 0U;
     if (!handled) return MINIC_CORE_LOWER_ERROR;
     *handled = false;
     if (!ctx || !ctx->target || !ctx->body || !ctx->body->program ||
@@ -53,6 +56,48 @@ MinicCoreLowerStatus core_asm_try_target_register_contract(
             &contract)) {
         free(normalized);
         return MINIC_CORE_LOWER_ERROR;
+    }
+    /* Source-qualified GNU immediate-only instructions (e.g. Linux's
+     * four-operand BUG table) must cross the language/Core boundary as
+     * immutable integer or ELF symbol+byte-addend witnesses. Only the
+     * exact source qualifier may opt in: existing scalar register-operand
+     * machine forms are intentionally unaffected. GNU operand names remain
+     * owned identities, not ad-hoc strings in a machine opcode. */
+    if (contract.capture_typed_immediate_inputs) {
+        if (contract.owner != MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED ||
+            contract.target_machine_form_id == 0U ||
+            source->output_count != 0U || source->input_count == 0U ||
+            source->input_count > MINIC_CORE_INLINE_ASM_IMMEDIATE_LIMIT ||
+            source->input_count != contract.operand_count ||
+            source->inputs == NULL) {
+            free(normalized);
+            return MINIC_CORE_LOWER_UNSUPPORTED;
+        }
+        for (i = 0U; i < source->input_count; ++i) {
+            const MinicInlineAsmOperand *input = &source->inputs[i];
+            bool is_symbol = false;
+            int64_t integer = 0, byte_addend = 0;
+            const char *symbol = NULL;
+            MinicCoreInlineAsmImmediate *typed = &typed_immediates[i];
+            if (contract.kinds[i] != MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT ||
+                !core_inline_asm_constraint_is(input, "i") ||
+                !core_inline_asm_immediate_fact(ctx, input, &is_symbol,
+                    &integer, &symbol, &byte_addend)) {
+                free(normalized);
+                return MINIC_CORE_LOWER_UNSUPPORTED;
+            }
+            typed->kind = is_symbol
+                ? MINIC_CORE_INLINE_ASM_IMMEDIATE_SYMBOL
+                : MINIC_CORE_INLINE_ASM_IMMEDIATE_INTEGER;
+            typed->integer = integer;
+            typed->symbol = (char *)symbol;
+            typed->byte_addend = byte_addend;
+            if (is_symbol && !minic_core_inline_asm_relocation_valid(typed)) {
+                free(normalized);
+                return MINIC_CORE_LOWER_UNSUPPORTED;
+            }
+        }
+        typed_immediate_count = source->input_count;
     }
     memset(&ins, 0, sizeof(ins));
     ins.kind = MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM;
@@ -247,6 +292,34 @@ MinicCoreLowerStatus core_asm_try_target_register_contract(
     if (!core_asm_publish_operand_plan(
             &ins, &ctx->function->inline_asms[id], &contract))
         return MINIC_CORE_LOWER_ERROR;
+    if (typed_immediate_count != 0U) {
+        MinicCoreInlineAsm *stored = &ctx->function->inline_asms[id];
+        for (i = 0U; i < typed_immediate_count; ++i) {
+            MinicCoreInlineAsmImmediate *dest = &stored->resolved_immediates[i];
+            const MinicCoreInlineAsmImmediate *typed = &typed_immediates[i];
+            const MinicInlineAsmOperand *source_input = &source->inputs[i];
+            *dest = *typed;
+            dest->symbol = NULL;
+            dest->asm_name = NULL;
+            stored->resolved_immediate_count = i + 1U;
+            if (typed->kind == MINIC_CORE_INLINE_ASM_IMMEDIATE_SYMBOL) {
+                const size_t symbol_length = strlen(typed->symbol);
+                dest->symbol = (char *)malloc(symbol_length + 1U);
+                if (dest->symbol == NULL) return MINIC_CORE_LOWER_ERROR;
+                memcpy(dest->symbol, typed->symbol, symbol_length + 1U);
+            }
+            if (source_input->name != NULL) {
+                if (source_input->name_length == 0U ||
+                    source_input->name_length > 128U)
+                    return MINIC_CORE_LOWER_UNSUPPORTED;
+                dest->asm_name = (char *)malloc(source_input->name_length + 1U);
+                if (dest->asm_name == NULL) return MINIC_CORE_LOWER_ERROR;
+                memcpy(dest->asm_name, source_input->name,
+                       source_input->name_length);
+                dest->asm_name[source_input->name_length] = '\0';
+            }
+        }
+    }
     return minic_core_function_append_source_effect_instruction(
         ctx->source, ctx->block_id, &ins, ins_source_type)
         ? MINIC_CORE_LOWER_OK : MINIC_CORE_LOWER_ERROR;

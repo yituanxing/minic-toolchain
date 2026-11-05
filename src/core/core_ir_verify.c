@@ -12,6 +12,117 @@ static bool storage_shape_is_valid(const void *data, size_t count, size_t capaci
     return count <= capacity && (count == 0U || data != NULL);
 }
 
+/* GNU operand names are an immutable binding table after C ingress, not
+ * untrusted machine syntax. Verify exact identifier grammar independent of
+ * any target ISA and reject cross-namespace ambiguity. */
+static bool core_asm_goto_name_valid(const char *name) {
+    size_t i;
+    if (name == NULL || name[0] == '\0') return false;
+    for (i = 0U; name[i] != '\0'; ++i) {
+        const unsigned char ch = (unsigned char)name[i];
+        if (ch == '_' || (ch >= 'A' && ch <= 'Z') ||
+            (ch >= 'a' && ch <= 'z') ||
+            (i != 0U && ch >= '0' && ch <= '9')) continue;
+        return false;
+    }
+    return true;
+}
+
+static bool core_asm_goto_name_matches(
+    const MinicCoreInlineAsm *assembly, bool label_operand,
+    const char *name, size_t name_length) {
+    size_t i;
+    if (label_operand) {
+        const size_t labels = assembly->goto_second_target !=
+            MINIC_CORE_BLOCK_INVALID ? 2U : 1U;
+        for (i = 0U; i < labels; ++i) {
+            const char *candidate = assembly->goto_label_names[i];
+            if (candidate != NULL && strlen(candidate) == name_length &&
+                memcmp(candidate, name, name_length) == 0) return true;
+        }
+    } else {
+        for (i = 0U; i < assembly->resolved_immediate_count; ++i) {
+            const char *candidate = assembly->resolved_immediates[i].asm_name;
+            if (candidate != NULL && strlen(candidate) == name_length &&
+                memcmp(candidate, name, name_length) == 0) return true;
+        }
+    }
+    return false;
+}
+
+static bool core_asm_named_bindings_valid(
+    const MinicCoreInlineAsm *assembly) {
+    const char *names[MINIC_CORE_INLINE_ASM_IMMEDIATE_LIMIT + 2U] = {NULL};
+    size_t name_count = 0U, i, j;
+    bool has_named_binding = false;
+    if (assembly->resolved_immediate_count > MINIC_CORE_INLINE_ASM_IMMEDIATE_LIMIT ||
+        (assembly->is_goto && assembly->resolved_immediate_count > 3U) ||
+        (!assembly->is_goto &&
+         (assembly->goto_label_names[0] != NULL ||
+          assembly->goto_label_names[1] != NULL)) ||
+        (assembly->goto_second_target == MINIC_CORE_BLOCK_INVALID &&
+         assembly->goto_label_names[1] != NULL)) return false;
+    for (i = 0U; i < assembly->resolved_immediate_count; ++i)
+        names[name_count++] = assembly->resolved_immediates[i].asm_name;
+    names[name_count++] = assembly->goto_label_names[0];
+    if (assembly->goto_second_target != MINIC_CORE_BLOCK_INVALID)
+        names[name_count++] = assembly->goto_label_names[1];
+    for (i = 0U; i < name_count; ++i) {
+        if (names[i] == NULL) continue;
+        has_named_binding = true;
+        if (!core_asm_goto_name_valid(names[i])) return false;
+        for (j = 0U; j < i; ++j)
+            if (names[j] != NULL && strcmp(names[i], names[j]) == 0)
+                return false;
+    }
+    /* Legacy single-label deferred ASM-goto has a separate existing
+     * qualification contract and no Core named-operand binding table. */
+    if (!has_named_binding && assembly->resolved_immediate_count == 0U)
+        return true;
+    if (assembly->template_text == NULL) return false;
+    /* The target-owned source-form proof sealed the numeric GNU template
+     * BEFORE non-goto machine selection. Its names are metadata for Core's
+     * immutable immediate slots, not characters to reinterpret as operands.
+     * ASM-goto retains the independent raw-template placeholder proof below. */
+    if (!assembly->is_goto)
+        return assembly->operand_plan_owner ==
+                   MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED &&
+               assembly->target_machine_form_id != 0U;
+    /* A target may print `%l[enabled]` and `%[key]` differently, but the
+     * binding identities and operand/label kinds are target-neutral. */
+    for (i = 0U; i < assembly->template_length; ++i) {
+        bool label_operand = false;
+        size_t name_start, name_end;
+        if (assembly->template_text[i] != '%') continue;
+        if (i + 1U == assembly->template_length) continue;
+        ++i;
+        if (assembly->template_text[i] == '%') continue;
+        if (assembly->template_text[i] == 'l') {
+            label_operand = true;
+            ++i;
+        } else if (assembly->template_text[i] == 'c' ||
+                   assembly->template_text[i] == 'n' ||
+                   assembly->template_text[i] == 'z') {
+            ++i;
+        }
+        if (i >= assembly->template_length ||
+            assembly->template_text[i] != '[') {
+            if (i < assembly->template_length) --i;
+            continue;
+        }
+        name_start = i + 1U;
+        for (name_end = name_start;
+             name_end < assembly->template_length &&
+             assembly->template_text[name_end] != ']'; ++name_end) {}
+        if (name_start == name_end || name_end >= assembly->template_length ||
+            !core_asm_goto_name_matches(assembly, label_operand,
+                assembly->template_text + name_start,
+                name_end - name_start)) return false;
+        i = name_end;
+    }
+    return true;
+}
+
 /* Only sealed CoreType snapshots reach this verifier; any mutable C source
  * descriptor is confined to compiler-owned ingress and has been released.
  * Invalid, foreign-arena and incomplete Core TypeIds fail closed. */
@@ -185,24 +296,18 @@ bool minic_core_function_verify_core_type_snapshot(const MinicCoreFunction *func
                     function->values[instruction->result].core_type_id) return false;
         }
         if (instruction->kind == MINIC_CORE_INSTRUCTION_FIELD_ADDRESS) {
-            const MinicCoreType *record = core_snapshot_base_type(
-                function, instruction->value.field_address.core_record_type_id);
-            const MinicCoreType *pointer;
+            const MinicCoreType *pointer, *record;
             size_t base_id = instruction->value.field_address.base;
-            if (record == NULL || record->kind != MINIC_CORE_TYPE_RECORD ||
-                !record->value.record.is_complete ||
-                instruction->value.field_address.field_index >= record->value.record.field_count ||
-                record->value.record.fields == NULL ||
-                record->value.record.fields[instruction->value.field_address.field_index]
-                    .byte_offset != instruction->value.field_address.byte_offset ||
-                base_id >= function->value_count) return false;
+            if (base_id >= function->value_count) return false;
             pointer = core_snapshot_base_type(function,
                                               function->values[base_id].core_type_id);
-            if (pointer == NULL || pointer->kind != MINIC_CORE_TYPE_POINTER ||
-                minic_core_type_unqualified(function->type_context,
-                                            pointer->value.pointer.pointee) !=
-                    minic_core_type_unqualified(function->type_context,
-                        instruction->value.field_address.core_record_type_id)) return false;
+            if (pointer == NULL || pointer->kind != MINIC_CORE_TYPE_POINTER)
+                return false;
+            record = core_snapshot_base_type(function, pointer->value.pointer.pointee);
+            if (record == NULL || record->kind != MINIC_CORE_TYPE_RECORD ||
+                !record->value.record.is_complete || !record->has_layout ||
+                instruction->value.field_address.byte_offset > record->size)
+                return false;
         } else if (instruction->kind == MINIC_CORE_INSTRUCTION_CALL) {
             const MinicCoreCallee *callee;
             const MinicCoreType *signature;
@@ -905,46 +1010,25 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
         MinicCoreTypeId base_pointee;
         MinicCoreTypeId field_type;
         const MinicCoreType *record;
-        const MinicCoreRecordField *field;
-        const MinicCoreType *storage_type;
 
         base = instruction->value.field_address.base;
         if (!instruction_result_is_valid(function, instruction) || base >= function->value_count ||
             !available_values[base] ||
             !ct_pointee(function->values[base].core_type_id, &base_pointee) ||
             !ct_is_record(base_pointee) ||
-            !core_equal_unqualified(function, base_pointee,
-                                    instruction->value.field_address.core_record_type_id) ||
             !ct_pointee(instruction->core_type_id, &field_type) ||
             ct_is_void(field_type) || ct_is_function(field_type)) {
             return false;
         }
         record = core_type(function, base_pointee);
-        if (record == NULL || !record->value.record.is_complete ||
-            instruction->value.field_address.field_index >= record->value.record.field_count ||
-            record->value.record.fields == NULL) return false;
-        field = &record->value.record.fields[instruction->value.field_address.field_index];
-        if (field->byte_offset != instruction->value.field_address.byte_offset) return false;
-        switch (instruction->value.field_address.access_form) {
-        case MINIC_CORE_FIELD_ACCESS_EXACT:
-            return !field->is_bit_field &&
-                   core_equal_unqualified(function, field_type, field->type_id);
-        case MINIC_CORE_FIELD_ACCESS_BITFIELD_STORAGE:
-            storage_type = core_type(function, field_type);
-            return field->is_bit_field && field->bit_width > 0U &&
-                   field->bit_width <= 64U && field->bit_offset < 8U &&
-                   field->byte_offset < record->size && storage_type != NULL &&
-                   storage_type->kind == MINIC_CORE_TYPE_INTEGER &&
-                   !storage_type->value.integer.is_signed &&
-                   !storage_type->value.integer.is_bool &&
-                   (storage_type->value.integer.bit_width == 8U ||
-                    storage_type->value.integer.bit_width == 16U ||
-                    storage_type->value.integer.bit_width == 32U ||
-                    storage_type->value.integer.bit_width == 64U) &&
-                   storage_type->has_layout &&
-                   storage_type->size == storage_type->value.integer.bit_width / 8U;
-        }
-        return false;
+        /* FIELD_ADDRESS is a physical byte displacement, not an AST member
+         * selector. Source ingress already established member and bit-field
+         * legality; independent Core producers may address any in-bounds
+         * storage within this complete record. A flexible tail may start at
+         * the record's exact byte extent. */
+        return record != NULL && record->has_layout &&
+               record->value.record.is_complete &&
+               instruction->value.field_address.byte_offset <= record->size;
     }
     case MINIC_CORE_INSTRUCTION_POINTER_OFFSET: {
         MinicCoreValueId base;
@@ -1153,11 +1237,13 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
         {
             size_t i;
             if (inline_asm->resolved_immediate_count > 3U) return false;
-            for (i = inline_asm->resolved_immediate_count; i < 3U; ++i) {
+            for (i = inline_asm->resolved_immediate_count;
+                 i < MINIC_CORE_INLINE_ASM_IMMEDIATE_LIMIT; ++i) {
                 const MinicCoreInlineAsmImmediate *value =
                     &inline_asm->resolved_immediates[i];
                 if (value->kind != MINIC_CORE_INLINE_ASM_IMMEDIATE_INVALID ||
-                    value->symbol != NULL || value->integer != 0 ||
+                    value->symbol != NULL || value->asm_name != NULL ||
+                    value->integer != 0 ||
                     value->byte_addend != 0)
                     return false;
             }
@@ -1211,6 +1297,18 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
             ((inline_asm->explicit_memory_clobber ||
                inline_asm->implicit_memory_effect) &&
               !inline_asm->has_memory_clobber)) return false;
+        /* An immediate-only, target-qualified non-goto form carries one
+         * verified GNU `i` fact for each original source operand, never a
+         * guessed textual relocation or a runtime SSA substitute. Other
+         * qualified ASM forms retain their preexisting zero-fact contract. */
+        if (inline_asm->resolved_immediate_count != 0U &&
+            (inline_asm->is_goto ||
+             inline_asm->operand_plan_owner !=
+                 MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED ||
+             inline_asm->target_machine_form_id == 0U ||
+             inline_asm->resolved_immediate_count !=
+                 instruction->value.structured_inline_asm.operand_count ||
+             output_operand_count != 0U)) return false;
         /* Machine-neutral non-terminator ASM-goto successors are explicit
          * Core BlockIds, independent of exported assembler-local symbols. */
         if (inline_asm->is_goto &&
@@ -1233,6 +1331,10 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
             MinicCoreTypeId value_type;
 
             binding = &instruction->value.structured_inline_asm.operands[operand_index];
+            if (inline_asm->resolved_immediate_count != 0U &&
+                (binding->operand_index != operand_index ||
+                 binding->kind !=
+                     MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT)) return false;
             if (binding->operand_index >= MINIC_CORE_STRUCTURED_INLINE_ASM_OPERAND_LIMIT ||
                 used_indices[binding->operand_index] ||
                 (binding->kind != MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_RESULT &&
@@ -1846,6 +1948,33 @@ bool minic_core_function_verify(const MinicCoreFunction *function) {
               (assembly->goto_second_target >= function->block_count ||
                assembly->goto_second_target == assembly->goto_target))))
             return false;
+        if (!core_asm_named_bindings_valid(assembly)) return false;
+        if (assembly->resolved_immediate_count >
+            MINIC_CORE_INLINE_ASM_IMMEDIATE_LIMIT) return false;
+        if (!assembly->is_goto && assembly->resolved_immediate_count != 0U &&
+            (assembly->operand_plan_owner !=
+                 MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED ||
+             assembly->target_machine_form_id == 0U)) return false;
+        {
+            size_t immediate_index;
+            for (immediate_index = 0U;
+                 immediate_index < MINIC_CORE_INLINE_ASM_IMMEDIATE_LIMIT;
+                 ++immediate_index) {
+                const MinicCoreInlineAsmImmediate *value =
+                    &assembly->resolved_immediates[immediate_index];
+                if (immediate_index >= assembly->resolved_immediate_count) {
+                    if (value->kind != MINIC_CORE_INLINE_ASM_IMMEDIATE_INVALID ||
+                        value->symbol != NULL || value->asm_name != NULL ||
+                        value->integer != 0 || value->byte_addend != 0)
+                        return false;
+                } else if (!((value->kind == MINIC_CORE_INLINE_ASM_IMMEDIATE_INTEGER &&
+                              value->symbol == NULL && value->byte_addend == 0) ||
+                             (value->kind == MINIC_CORE_INLINE_ASM_IMMEDIATE_SYMBOL &&
+                              minic_core_inline_asm_relocation_valid(value)))) {
+                    return false;
+                }
+            }
+        }
         if (!storage_shape_is_valid(assembly->symbol_references,
                 assembly->symbol_reference_count,
                 assembly->symbol_reference_capacity)) return false;

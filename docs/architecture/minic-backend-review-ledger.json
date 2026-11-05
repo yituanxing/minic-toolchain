@@ -38,6 +38,21 @@
       "review_depth": "inventory",
       "ci_touched_in": []
     },
+    "src/target/aarch64/machine_lse_source_select.c": {
+      "blob": "684150b1e2e92102c9f38b58e3d979cffd729f3f",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/aarch64/machine_lse_source_select.h": {
+      "blob": "9363b85317f383725d3883d85dbad41ce3a84c1d",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/aarch64/machine_sysreg_contract.c": {
+      "blob": "6b45f5b15671cd8c1cea556c676bd9ee5810d87e",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
     "src/target/aarch64/machine_source_asm.c": {
       "blob": "9602dbcb0332916ecbf3fe6e24d84ff95091a952",
       "review_depth": "inventory",
@@ -353,6 +368,11 @@
       "review_depth": "inventory",
       "ci_touched_in": []
     },
+    "src/target/x86_64/machine_raid6_source_policy.c": {
+      "blob": "ef1088015bdd1eb1ed848d80283528499c2349a8",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
     "src/target/x86_64/machine_target_state.h": {
       "blob": "18be0a74397172a519911385a91388ce9d04416e",
       "review_depth": "inventory",
@@ -650,11 +670,6 @@
       "review_depth": "inventory",
       "ci_touched_in": []
     },
-    "src/target/common/direct_block_register.h": {
-      "blob": "81b44e51df84784b2acd6d6a2b1115e827d838b5",
-      "review_depth": "inventory",
-      "ci_touched_in": []
-    },
     "src/target/common/direct_call_plan.c": {
       "blob": "2f6ebdc06a08fb4750619bc0d1d5f20980627068",
       "review_depth": "inventory",
@@ -722,13 +737,6 @@
       "blob": "a70a1cac9232de92ea5b413bb7e8b07e500af7fd",
       "review_depth": "inventory",
       "ci_touched_in": []
-    },
-    "src/target/common/direct_machine_dispatch.h": {
-      "blob": "42a73aaa0049cef46980901a2e88e27ae9d3388b",
-      "review_depth": "inventory",
-      "ci_touched_in": [
-        668
-      ]
     },
     "src/target/common/direct_preflight.c": {
       "blob": "1fb0174dedcb754795b29f248fb47a88e7c2d20c",
@@ -1002,12 +1010,6 @@
       "review_depth": "inventory",
       "ci_touched_in": []
     },
-    "src/target/riscv/frame_address_policy.h": {
-      "blob": "6ac7a82b17ebb5f50be1468de2c46d1948129788",
-      "review_depth": "inventory",
-      "ci_touched_in": [],
-      "note": "2026-10-29: RV64 frame address, large-displacement scratch selection and live 128-bit half preservation reviewed with a production frame-access regression; no RV32 runtime or cross-ISA assembly certification implied."
-    },
     "src/target/riscv/function_symbol.h": {
       "blob": "bb1d25b83d0df98d50fc1386ba17527de9daa175",
       "review_depth": "inventory",
@@ -1052,31 +1054,11 @@
         665
       ]
     },
-    "src/target/riscv/record_copy_bytes.c": {
-      "blob": "44ad658b174417e8851775b18839fd3ef5968acc",
-      "review_depth": "inventory",
-      "ci_touched_in": []
-    },
-    "src/target/riscv/record_copy_bytes.h": {
-      "blob": "da5d0745a180b485e153d3811a71f7f8973028cf",
-      "review_depth": "inventory",
-      "ci_touched_in": []
-    },
     "src/target/riscv/typed_memory.h": {
       "blob": "2aa9e068956542415a23146873abfde908221991",
       "review_depth": "inventory",
       "ci_touched_in": [],
       "note": "2026-10-29: shared RV32/RV64 Base-I typed scalar transport reviewed for unknown address alignment and split wide words; GNU-native and five-ISA compile probes included in batch21."
-    },
-    "src/target/riscv/word_operations.c": {
-      "blob": "6c42bc35d609fd8d0f1297bf1fd1a1d02ca9d6ba",
-      "review_depth": "inventory",
-      "ci_touched_in": []
-    },
-    "src/target/riscv/word_operations.h": {
-      "blob": "02422f12d108bf524be22c0fbb25a0b0388793ab",
-      "review_depth": "inventory",
-      "ci_touched_in": []
     },
     "src/target/riscv32/machine_register.c": {
       "blob": "2c28b312a3fb9f8d268db29409d367df31d782c5",
@@ -1109,12 +1091,6 @@
         665
       ]
     },
-    "src/target/riscv32/rv32_call.c": {
-      "blob": "95c9a5d84824751e8f6bfe6c8bfaa983cc2ea1b0",
-      "review_depth": "inventory",
-      "ci_touched_in": [],
-      "note": "2026-10-27: read complete CALL emitter with CoreCallView and target psABI planning context. Production QEMU differential remains separate acceptance evidence."
-    },
     "src/target/riscv32/rv32_emit.c": {
       "blob": "7762ad9f2918bd66469a812fe70f9997cdd082f2",
       "review_depth": "inventory",
@@ -1125,11 +1101,6 @@
     },
     "src/target/riscv32/rv32_emit.h": {
       "blob": "f0220d9377fdebd8129038000ef4fe00ca0726fd",
-      "review_depth": "inventory",
-      "ci_touched_in": []
-    },
-    "src/target/riscv32/rv32_fp_emit.c": {
-      "blob": "e28dd5ca08ed88c7f20ff4a71768594d5ccbdcda",
       "review_depth": "inventory",
       "ci_touched_in": []
     },
@@ -1151,11 +1122,6 @@
       "review_depth": "inventory",
       "ci_touched_in": []
     },
-    "src/target/riscv32/rv32_integer_emit.c": {
-      "blob": "0dcc83aa786f078002e6b54fd34ebd381760b9b9",
-      "review_depth": "inventory",
-      "ci_touched_in": []
-    },
     "src/target/riscv32/rv32_internal.h": {
       "blob": "9ed5fbb8442841b071a6e8e1f35ab9e37c4c5a68",
       "review_depth": "inventory",
@@ -1163,18 +1129,8 @@
         665
       ]
     },
-    "src/target/riscv32/rv32_memory_emit.c": {
-      "blob": "6eea9649655bd885fa04c4b885d07a3ab07b053f",
-      "review_depth": "inventory",
-      "ci_touched_in": []
-    },
     "src/target/riscv32/rv32_scalar.c": {
       "blob": "6ef59b7aed7848994b273eb7dead10824bd425e3",
-      "review_depth": "inventory",
-      "ci_touched_in": []
-    },
-    "src/target/riscv32/rv32_wide_emit.c": {
-      "blob": "c4e6a55c2962a3d20b2d190f3f205684a64f2894",
       "review_depth": "inventory",
       "ci_touched_in": []
     },
@@ -1205,40 +1161,12 @@
       "review_depth": "inventory",
       "ci_touched_in": []
     },
-    "src/target/riscv64/call_emit.c": {
-      "blob": "3094d12496c09b3b27751779eb408bc561f92038",
-      "review_depth": "inventory",
-      "ci_touched_in": [
-        665
-      ],
-      "audit_note": "Verified direct/indirect control paths and return ABI. New wide return helper shared for both; full CALL marshalling review remains pending.",
-      "note": "2026-10-27: read complete CALL emitter with CoreCallView and target psABI planning context. Production QEMU differential remains separate acceptance evidence."
-    },
-    "src/target/riscv64/call_emit.h": {
-      "blob": "e9c2611932ac89325b386cd35aad89077e49d5d1",
-      "review_depth": "inventory",
-      "ci_touched_in": [
-        665
-      ]
-    },
     "src/target/riscv64/codegen_function.c": {
       "blob": "e5ce889b93c7a5566db338931657025a905add58",
       "review_depth": "inventory",
       "ci_touched_in": [
         666
       ]
-    },
-    "src/target/riscv64/codegen_internal.h": {
-      "blob": "cda509ce0757ae015f289f5d1ce310cf0ffaed6f",
-      "review_depth": "inventory",
-      "ci_touched_in": [
-        665
-      ]
-    },
-    "src/target/riscv64/codegen_support.c": {
-      "blob": "e18094ca04be3195a4304ac6824242e2f198bc73",
-      "review_depth": "inventory",
-      "ci_touched_in": []
     },
     "src/target/riscv64/codegen.h": {
       "blob": "3be68026cae374f9aa92bfff685c5701be2a6449",
@@ -1259,22 +1187,6 @@
         665
       ]
     },
-    "src/target/riscv64/core_codegen.c": {
-      "blob": "38dac31f5bfa456a3fb9ddc4a25024a028778c39",
-      "review_depth": "inventory",
-      "ci_touched_in": [
-        665,
-        666
-      ]
-    },
-    "src/target/riscv64/core_codegen.h": {
-      "blob": "ebb73ca87480e198a64015deac738b7e86914445",
-      "review_depth": "inventory",
-      "ci_touched_in": [
-        665,
-        666
-      ]
-    },
     "src/target/riscv64/core_type_query.h": {
       "blob": "acacbc94bd2e154f8a65f2af935beff8a0b756f4",
       "review_depth": "inventory",
@@ -1283,28 +1195,6 @@
     },
     "src/target/riscv64/driver_stage_recipe.c": {
       "blob": "c96ee77e895367e0a41677ae2d2cd5e5bcd656c8",
-      "review_depth": "inventory",
-      "ci_touched_in": []
-    },
-    "src/target/riscv64/fp_emit.c": {
-      "blob": "a5c3cfdd6145edb031943894eef73375a0318484",
-      "review_depth": "inventory",
-      "ci_touched_in": [
-        665
-      ]
-    },
-    "src/target/riscv64/fp_emit.h": {
-      "blob": "7573f249dbcd8a3686993e2d50fc53485234eb82",
-      "review_depth": "inventory",
-      "ci_touched_in": []
-    },
-    "src/target/riscv64/frame_access.c": {
-      "blob": "98c178ccf623a0df8d384e29649161435952903a",
-      "review_depth": "inventory",
-      "ci_touched_in": []
-    },
-    "src/target/riscv64/frame_access.h": {
-      "blob": "a52d55214938a41a4e58446a3bcf4eaaa8177c59",
       "review_depth": "inventory",
       "ci_touched_in": []
     },
@@ -1361,16 +1251,6 @@
       "review_depth": "inventory",
       "ci_touched_in": []
     },
-    "src/target/riscv64/inline_asm_emit.c": {
-      "blob": "9cfdeb0d13c9d8ab4749f8bd02526f5397518479",
-      "review_depth": "inventory",
-      "ci_touched_in": []
-    },
-    "src/target/riscv64/inline_asm_emit.h": {
-      "blob": "5b93f4b33d46eeb823b63840633aca5587832a13",
-      "review_depth": "inventory",
-      "ci_touched_in": []
-    },
     "src/target/riscv64/isa.c": {
       "blob": "0ab10c4a30179eb8e67e192db94d52d790cc04d6",
       "review_depth": "inventory",
@@ -1400,26 +1280,6 @@
         665
       ]
     },
-    "src/target/riscv64/memory_emit.c": {
-      "blob": "c8ad464517474f8e8a61996010ed6ede03d6da7d",
-      "review_depth": "inventory",
-      "ci_touched_in": []
-    },
-    "src/target/riscv64/memory_emit.h": {
-      "blob": "7d3a7d7ca70b794b7847bc7b98f2bfba783da8b9",
-      "review_depth": "inventory",
-      "ci_touched_in": []
-    },
-    "src/target/riscv64/overflow_emit.c": {
-      "blob": "670af8ad1a6b8b86209976736e09ea01edb22248",
-      "review_depth": "inventory",
-      "ci_touched_in": []
-    },
-    "src/target/riscv64/overflow_emit.h": {
-      "blob": "5d126e3ef39897957deaeb4365e3fd21064714c3",
-      "review_depth": "inventory",
-      "ci_touched_in": []
-    },
     "src/target/riscv64/record_snapshot.c": {
       "blob": "8cfd8241be01c65f8e749c443e7fe2bb56481cba",
       "review_depth": "inventory",
@@ -1441,18 +1301,6 @@
     },
     "src/target/riscv64/runtime_libcall.h": {
       "blob": "f2f6c99f9258ff7d485a360682c6f0a163d5b819",
-      "review_depth": "inventory",
-      "ci_touched_in": []
-    },
-    "src/target/riscv64/scalar_emit.c": {
-      "blob": "c83754eaa2af0cae8f64aaa7edc19f712c753b90",
-      "review_depth": "inventory",
-      "ci_touched_in": [
-        665
-      ]
-    },
-    "src/target/riscv64/scalar_emit.h": {
-      "blob": "e20cb91542a4e91f7c08aa24d26da155eb7a73c3",
       "review_depth": "inventory",
       "ci_touched_in": []
     },

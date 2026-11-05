@@ -1,11 +1,37 @@
 /* Real verified GNU body emission; selected opcodes use target callbacks and
  * source ASM cannot bypass the verifier or the source emitter gate. */
+#define _POSIX_C_SOURCE 200809L
 #include "target/common/machine_gnu_asm.h"
 #include "target/common/core_machine_asm.h"
 #include "target/common/machine_builder.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
+
+/* The executor's /tmp can be full; the test must honor the workspace TMPDIR.
+ * Keep genuine seekable FILE streams so every serializer assertion remains. */
+static FILE *probe_stream(void) {
+    const char *directory = getenv("TMPDIR");
+    char path[4096];
+    int fd;
+    int length;
+    FILE *stream;
+    if (directory == NULL || directory[0] == '\0') directory = ".";
+    length = snprintf(path, sizeof(path), "%s/minic-machine-gnu-XXXXXX",
+                      directory);
+    if (length <= 0 || (size_t)length >= sizeof(path)) return NULL;
+    fd = mkstemp(path);
+    if (fd < 0) return NULL;
+    if (unlink(path) != 0) {
+        close(fd);
+        return NULL;
+    }
+    stream = fdopen(fd, "w+");
+    if (stream == NULL) close(fd);
+    return stream;
+}
 
 enum ProbeOpcode { PROBE_JUMP = 1, PROBE_RET };
 
@@ -185,7 +211,7 @@ int main(void) {
     if (!build_two_block_function(&function, &target)) goto done;
     stage = 1U;
 
-    output = tmpfile();
+    output = probe_stream();
     if (output == NULL ||
         !minic_machine_gnu_asm_preflight(&function, &policy) ||
         !minic_machine_gnu_asm_emit_body(output, &function, &policy) ||
@@ -201,7 +227,7 @@ int main(void) {
             "\t.popsection\n")) goto done;
     stage = 2U;
 
-    rejected = tmpfile();
+    rejected = probe_stream();
     if (rejected == NULL) goto done;
     function.blocks[0].instructions[1].opcode = UINT32_MAX;
     if (minic_machine_gnu_asm_emit_body(rejected, &function, &policy) ||
@@ -250,7 +276,7 @@ int main(void) {
     stage = 5U;
 
     policy.emit_source_asm = minic_machine_gnu_asm_emit_unbound_source_asm;
-    accepted = tmpfile();
+    accepted = probe_stream();
     if (accepted == NULL ||
         !minic_machine_gnu_asm_preflight(&source_function, &policy) ||
         !minic_machine_gnu_asm_emit_body(accepted, &source_function, &policy) ||
@@ -282,7 +308,7 @@ int main(void) {
     }
     if (minic_machine_gnu_asm_preflight(&source_function, &policy)) goto done;
     source_function.blocks[0].instructions[1].source_asm_unique_id = 42U;
-    accepted_typed = tmpfile();
+    accepted_typed = probe_stream();
     if (accepted_typed == NULL ||
         !minic_machine_gnu_asm_preflight(&source_function, &policy) ||
         !minic_machine_gnu_asm_emit_body(
@@ -322,7 +348,7 @@ int main(void) {
     minic_machine_builder_clear_origin(&empty_builder);
     if (!minic_machine_builder_emit_selected(&empty_builder, PROBE_RET,
             MINIC_MACHINE_EFFECT_RETURN, NULL, 0U, NULL, 0U)) goto done;
-    accepted_empty = tmpfile();
+    accepted_empty = probe_stream();
     if (accepted_empty == NULL ||
         !minic_machine_gnu_asm_preflight(&empty_function, &policy) ||
         !minic_machine_gnu_asm_emit_body(

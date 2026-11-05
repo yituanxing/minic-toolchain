@@ -558,29 +558,64 @@ bool minic_machine_core_coverage_verify_with_policy(
         }
         if (!reached_entry) goto cleanup;
     }
-    /* Every reachable Core block must also be physically reachable through
-     * the selected Machine CFG, including the opaque indirect entries. */
+    /* The Core reachability contract has more than one control-flow root:
+     * entry_block, assembler-visible local labels, indirect entries, and
+     * address-taken blocks.  An indirect/local entry is a genuine physical
+     * entry point, not a fabricated edge from the ABI prologue.  Walk the
+     * native entry first, then seed only independently reachable Core roots.
+     * Ordinary Core successors must still have real Machine CFG edges. */
     failure_stage = "physical_machine_reachability";
     memset(visited, 0, machine->block_count * sizeof(*visited));
+    /* Reuse the destination bitmap before exact-edge comparison, where it
+     * is cleared for every Core block.  Scan reachable Core instructions,
+     * including address values the target legitimately folds away. */
+    for (i = 0U; i < core->instruction_count; ++i)
+        if (owner[i] != SIZE_MAX && reachable_blocks[owner[i]] &&
+            core->instructions[i].kind ==
+                MINIC_CORE_INSTRUCTION_BLOCK_ADDRESS &&
+            core->instructions[i].value.block_id < core->block_count)
+            expected[core->instructions[i].value.block_id] = 1U;
     {
         size_t head = 0U, tail = 1U;
         queue[0] = 0U;
         visited[0] = 1U;
-        while (head < tail) {
-            const MinicMachineBlock *block = &machine->blocks[queue[head++]];
-            const size_t edge_count = block->successor_count +
-                (block->has_fallthrough ? 1U : 0U);
-            size_t edge;
-            if (edge_count < block->successor_count) goto cleanup;
-            for (edge = 0U; edge < edge_count; ++edge) {
-                const size_t to = edge < block->successor_count
-                    ? block->successors[edge] : block->fallthrough_target;
-                if (to >= machine->block_count) goto cleanup;
-                if (!visited[to]) {
-                    visited[to] = 1U;
-                    queue[tail++] = to;
+        for (i = 0U; ; ++i) {
+            while (head < tail) {
+                const MinicMachineBlock *block =
+                    &machine->blocks[queue[head++]];
+                const size_t edge_count = block->successor_count +
+                    (block->has_fallthrough ? 1U : 0U);
+                size_t edge;
+                if (edge_count < block->successor_count) goto cleanup;
+                for (edge = 0U; edge < edge_count; ++edge) {
+                    const size_t to = edge < block->successor_count
+                        ? block->successors[edge] : block->fallthrough_target;
+                    if (to >= machine->block_count) goto cleanup;
+                    if (!visited[to]) {
+                        visited[to] = 1U;
+                        queue[tail++] = to;
+                    }
                 }
             }
+            if (i == core->block_count) break;
+            if (!reachable_blocks[i] || visited[primary[i]]) continue;
+            /* BLOCK_ADDRESS is itself a Core escape root.  Merely
+             * visiting an arbitrary unreachable Machine block cannot
+             * establish a new root. */
+            if (!core->blocks[i].indirect_entry &&
+                core->blocks[i].local_label_symbol == NULL &&
+                !expected[i]) continue;
+            if (getenv("MINIC_RV_MACHINE_TRACE") != NULL)
+                (void)fprintf(stderr,
+                    "MACHINE_CORE_COVERAGE_EXTERNAL_ROOT function=%s "
+                    "core_block=%zu machine_block=%zu indirect=%u "
+                    "local_label=%u address_taken=%u\n",
+                    core->name != NULL ? core->name : "<unknown>",
+                    i, primary[i], (unsigned)core->blocks[i].indirect_entry,
+                    (unsigned)(core->blocks[i].local_label_symbol != NULL),
+                    (unsigned)(expected[i] != 0U));
+            visited[primary[i]] = 1U;
+            queue[tail++] = primary[i];
         }
     }
     for (i = 0U; i < core->block_count; ++i)

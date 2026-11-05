@@ -305,13 +305,17 @@ unsigned int linux_register_rmw(unsigned int value) {
 SRC
 "$MINIC_CC" --target=riscv32-linux -march=rv32i -mabi=ilp32 \
   -S "$work/kernel-structured-atomic.i" -o "$work/kernel-structured-atomic.s"
-grep -Fq 'amoadd.w t1, t2, (t0)' "$work/kernel-structured-atomic.s"
-grep -Fq 'amoadd.w zero, t1, (t0)' "$work/kernel-structured-atomic.s"
-grep -Fq 'lr.w t0, (t2)' "$work/kernel-structured-atomic.s"
-grep -Fq 'bne t0, t3, 1f' "$work/kernel-structured-atomic.s"
-grep -Fq 'sc.w t1, t4, (t2)' "$work/kernel-structured-atomic.s"
-grep -Fq 'addi t0, t0, 1' "$work/kernel-structured-atomic.s"
-grep -Fq 'sw t1, 0(a2)' "$work/kernel-structured-atomic.s"
+# Typed GNU SOURCE_ASM binds x10/x11/x12/x14 physically.  The source
+# immediate constraint rJ with %z3 must stay architectural zero; never
+# conflate it with an allocated scratch register or a compiler A opcode.
+grep -Fq 'amoadd.w x11, x12, (x10)' "$work/kernel-structured-atomic.s"
+grep -Fq 'amoadd.w zero, x11, (x10)' "$work/kernel-structured-atomic.s"
+grep -Fq 'lr.w x10, (x12)' "$work/kernel-structured-atomic.s"
+grep -Fq 'bne x10, zero, 1f' "$work/kernel-structured-atomic.s"
+grep -Fq 'sc.w x11, x14, (x12)' "$work/kernel-structured-atomic.s"
+grep -Fq 'addi x5, x5, 1' "$work/kernel-structured-atomic.s"
+grep -Fq 'sb x6, 0(x7)' "$work/kernel-structured-atomic.s"
+grep -Fq 'sb x6, 3(x7)' "$work/kernel-structured-atomic.s"
 grep -Fq '# MINIC_SOURCE_INLINE_ASM_BEGIN' "$work/kernel-structured-atomic.s"
 echo 'RV32I_STRUCTURED_ATOMIC=PASS memory_RW=1 early_clobber=1 operand_z=1 register_RMW=1'
 cat > "$work/kernel-structured-ssa-result.i" <<'SRC'
@@ -335,10 +339,10 @@ unsigned char rv32_narrow_unsigned_output(void) {
 SRC
 "$MINIC_CC" --target=riscv32-linux -march=rv32i -mabi=ilp32 \
     -S "$work/kernel-structured-ssa-result.i" -o "$work/kernel-structured-ssa-result.s"
-grep -Fq 'amoadd.w t0, t2, (t1)' "$work/kernel-structured-ssa-result.s"
-grep -Fq 'sb t0, 0(a2)' "$work/kernel-structured-ssa-result.s"
-grep -Fq 'lb t1, 0(t0)' "$work/kernel-structured-ssa-result.s"
-grep -Fq 'lbu t1, 0(t0)' "$work/kernel-structured-ssa-result.s"
+grep -Fq 'amoadd.w x10, x12, (x11)' "$work/kernel-structured-ssa-result.s"
+grep -Fq 'sb x6, 0(x7)' "$work/kernel-structured-ssa-result.s"
+grep -Eq '^[[:space:]]+lb x[0-9]+, 0\(x[0-9]+\)' "$work/kernel-structured-ssa-result.s"
+grep -Eq '^[[:space:]]+lbu x[0-9]+, 0\(x[0-9]+\)' "$work/kernel-structured-ssa-result.s"
 echo 'RV32I_STRUCTURED_SSA_OUTPUT=PASS swapped_output_order=1 signed_byte=1 unsigned_byte=1'
 cat > "$work/kernel-legacy-and-wide-asm.i" <<'SRC'
 static inline unsigned long rv32_irq_save_legacy(void) {
@@ -358,10 +362,11 @@ int rv32_put_user_pair(unsigned int *ptr, unsigned long long value) {
 SRC
 "$MINIC_CC" --target=riscv32-linux -march=rv32i -mabi=ilp32 \
   -S "$work/kernel-legacy-and-wide-asm.i" -o "$work/kernel-legacy-and-wide-asm.s"
-grep -Fq 'csrrc t0, 0x100,' "$work/kernel-legacy-and-wide-asm.s"
-grep -Fq 'sw t3, (t1)' "$work/kernel-legacy-and-wide-asm.s"
-grep -Fq 'sw t4, (t2)' "$work/kernel-legacy-and-wide-asm.s"
-grep -Fq 'sw t0, 0(a2)' "$work/kernel-legacy-and-wide-asm.s"
+grep -Fq 'csrrc x5, 0x100, 2' "$work/kernel-legacy-and-wide-asm.s"
+grep -Fq 'sw x13, 0(x11)' "$work/kernel-legacy-and-wide-asm.s"
+grep -Fq 'sw x14, 0(x12)' "$work/kernel-legacy-and-wide-asm.s"
+grep -Fq 'sb x6, 0(x7)' "$work/kernel-legacy-and-wide-asm.s"
+grep -Fq 'sb x6, 3(x7)' "$work/kernel-legacy-and-wide-asm.s"
 grep -Fq '# MINIC_SOURCE_INLINE_ASM_BEGIN' "$work/kernel-legacy-and-wide-asm.s"
 echo 'RV32I_LEGACY_WIDE_ASM=PASS CSR=1 two_u64_low_words=1 memory_outputs=2 register_RMW=1'
 cat > "$work/kernel-section-zero-aggregate.i" <<'SRC'
@@ -400,7 +405,10 @@ SRC
 "$MINIC_CC" --target=riscv32-linux -march=rv32i -mabi=ilp32 \
   -S "$work/kernel-asm-goto.i" -o "$work/kernel-asm-goto.s"
 grep -Fq '.pushsection __jump_table' "$work/kernel-asm-goto.s"
-grep -Eq '\.long 1b - \., \.Lrv32_jump_owner_rv32_bb[0-9]+ - \.' "$work/kernel-asm-goto.s"
+asm_goto_label=$(sed -n 's/.*\.long 1b - \., \(\.Luser_[0-9][0-9]*\) - \..*/\1/p' "$work/kernel-asm-goto.s")
+test -n "$asm_goto_label"
+grep -Fxq "$asm_goto_label:" "$work/kernel-asm-goto.s"
+grep -Fq '.word 11' "$work/kernel-asm-goto.s"
 grep -Fq '# MINIC_SOURCE_INLINE_ASM_BEGIN' "$work/kernel-asm-goto.s"
 echo 'RV32I_ASM_GOTO=PASS Core_target_block=1 source_jump_table=1 original_template=1'
 cat > "$work/kernel-sizeof-switch.i" <<'SRC'
@@ -485,7 +493,11 @@ awk 'BEGIN {
 for entry in rv32_spill_chain rv32_spill_wide; do
   bytes=$(awk -v name="$entry:" '
     $0==name {in_function=1;next}
-    in_function && $1=="li" && $2=="t0," {print $3;exit}
+    in_function && $1=="addi" && $2=="x2," && $3=="x2," &&
+      $4 ~ /^-[0-9]+$/ {print -$4;exit}
+    in_function && $1=="li" && $2=="x5," && $3 ~ /^[0-9]+$/ {
+      print $3;exit
+    }
   ' "$work/rv32-shared-spill.s")
   case "$bytes" in ''|*[!0-9]*) echo "RV32I_CORE_SPILL=FAIL missing_frame entry=$entry bytes=$bytes" >&2; exit 1;; esac
   # Wide 64-bit lowering also reserves CoreObjects for arithmetic staging.
@@ -513,9 +525,9 @@ SRC
 "$MINIC_CC" --target=riscv32-linux -march=rv32i -mabi=ilp32 \
     -S "$work/rv32-overaligned-frame.i" -o "$work/rv32-overaligned-frame.s"
 grep -q '^rv32_overaligned_frame:' "$work/rv32-overaligned-frame.s"
-grep -Fq 'li t1, -64' "$work/rv32-overaligned-frame.s"
-grep -Fq 'and sp, sp, t1' "$work/rv32-overaligned-frame.s"
-grep -Fq 'mv sp, t0' "$work/rv32-overaligned-frame.s"
-grep -Fq 'lw t6,' "$work/rv32-overaligned-frame.s"
+grep -Fq 'li x6, -64' "$work/rv32-overaligned-frame.s"
+grep -Fq 'and x2, x2, x6' "$work/rv32-overaligned-frame.s"
+grep -Fq 'mv x2, x5' "$work/rv32-overaligned-frame.s"
+grep -Fq 'lw x5, 4(x7)' "$work/rv32-overaligned-frame.s"
 echo 'RV32I_OVERALIGNED_FRAME=PASS alignment=64 entry_sp_saved=true incoming_stack_args=true'
 echo 'RV32I_TARGET_GATE=PASS ILP32_registered=true incompatible_ISA_rejected=true basic_C_core_emitted=true'

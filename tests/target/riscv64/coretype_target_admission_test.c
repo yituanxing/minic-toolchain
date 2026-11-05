@@ -1,8 +1,7 @@
 #include "core/core_ir.h"
 #include "target/riscv64/legalize.h"
-#include "target/riscv64/inline_asm_emit.h"
+#include "target/riscv64/core_admission.h"
 #include "target/riscv64/record_snapshot.h"
-#include "target/riscv64/codegen_internal.h"
 #include "target/riscv64/core_type_query.h"
 #include "target/riscv64/isa.h"
 
@@ -57,14 +56,12 @@ static int run(void) {
     MinicCoreTypeId void_id, int_id, wide_id, record_id, pointer_id, record_pointer_id;
     MinicCoreTypeId volatile_record_id, volatile_record_pointer_id;
     MinicCoreTypeId bool_id, unsigned_id;
-    MinicCoreTypeId malformed_pointer_id, other_record_id, direct_signature_id;
+    MinicCoreTypeId other_record_id, direct_signature_id;
     MinicCoreType qualifier = {0};
     MinicCoreValue values[4];
     MinicCoreObject objects[1];
     MinicCoreFunction function = {0};
     MinicCoreInstruction ins = {0};
-    MinicCoreInlineAsm asm_binding = {0};
-    MinicCoreFixedRegisterBinding fixed_binding = {0};
     MinicCoreCallee callee = {0};
     MinicCoreCallArgument call_argument = {0};
     MinicCoreCallSite call_site = {0};
@@ -73,10 +70,7 @@ static int run(void) {
     MinicRiscvIsa strict_isa = {64U, MINIC_RISCV_ABI_LP64, 0U, 0U, true};
     MinicCoreInstruction isa_ins = {0};
     char reason[256];
-    char output[2048];
     size_t record_size;
-    FILE *stream;
-    size_t written;
 
     minic_core_type_context_initialize(&types);
     REQUIRE(register_type(&types, MINIC_CORE_TYPE_VOID, 0U, 0U, &void_id));
@@ -95,15 +89,6 @@ static int run(void) {
     qualifier.value.aligned.base = record_id;
     REQUIRE(minic_core_type_register(&types, &qualifier, &volatile_record_id));
     REQUIRE(register_pointer(&types, volatile_record_id, &volatile_record_pointer_id));
-    {
-        MinicCoreType malformed = {0};
-        malformed.kind = MINIC_CORE_TYPE_POINTER;
-        malformed.has_layout = true;
-        malformed.size = 4U; /* valid Core entry but not an RV64 pointer */
-        malformed.alignment = 4U;
-        malformed.value.pointer.pointee = int_id;
-        REQUIRE(minic_core_type_register(&types, &malformed, &malformed_pointer_id));
-    }
 
     memset(values, 0, sizeof(values));
     memset(objects, 0, sizeof(objects));
@@ -205,63 +190,8 @@ static int run(void) {
     ins.value.call_frame_address.level = 1U;
     REQUIRE(!minic_riscv64_core_call_frame_address_supported(&function, &ins));
 
-    asm_binding.template_text = "add %0, %0, zero";
-    asm_binding.template_length = strlen(asm_binding.template_text);
-    asm_binding.is_volatile = true;
-    function.inline_asms = &asm_binding;
-    function.inline_asm_count = 1U;
-    ins = (MinicCoreInstruction){0};
-    ins.kind = MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM;
-    ins.core_type_id = int_id;
-    ins.result = 3U;
-    ins.value.structured_inline_asm.inline_asm_id = 0U;
-    ins.value.structured_inline_asm.operand_count = 1U;
-    ins.value.structured_inline_asm.operands[0].kind =
-        MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_RESULT;
-    ins.value.structured_inline_asm.operands[0].operand_index = 0U;
-    ins.value.structured_inline_asm.operands[0].value = MINIC_CORE_VALUE_INVALID;
-    REQUIRE(minic_riscv64_inline_asm_instruction_supported(&function, &ins));
-    ins.value.structured_inline_asm.operands[0].value = 3U;
-    REQUIRE(!minic_riscv64_inline_asm_instruction_supported(&function, &ins));
-    ins.value.structured_inline_asm.operands[0].value = MINIC_CORE_VALUE_INVALID;
-    ins.core_type_id = record_id;
-    REQUIRE(!minic_riscv64_inline_asm_instruction_supported(&function, &ins));
-
-    /* Fixed-register register-output asm must follow the Core pointee and
-     * Core binding identity even when both source descriptors are void.
-     * A malformed pointer layout must fail closed before address transport. */
-    fixed_binding.register_name = "a2";
-    fixed_binding.register_name_length = 2U;
-    fixed_binding.core_type_id = int_id;
-    fixed_binding.is_local = true;
-    function.fixed_register_bindings = &fixed_binding;
-    function.fixed_register_binding_count = 1U;
-    ins = (MinicCoreInstruction){0};
-    ins.kind = MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM;
-    ins.core_type_id = void_id;
-    ins.result = MINIC_CORE_VALUE_INVALID;
-    ins.value.structured_inline_asm.inline_asm_id = 0U;
-    ins.value.structured_inline_asm.operand_count = 1U;
-    ins.value.structured_inline_asm.operands[0].kind =
-        MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
-    ins.value.structured_inline_asm.operands[0].operand_index = 0U;
-    ins.value.structured_inline_asm.operands[0].value = 2U;
-    ins.value.structured_inline_asm.operands[0].has_fixed_register_binding = true;
-    values[2].core_type_id = malformed_pointer_id;
-    REQUIRE(!minic_riscv64_inline_asm_instruction_supported(&function, &ins));
-    REQUIRE(register_pointer(&types, wide_id, &values[2].core_type_id));
-    REQUIRE(!minic_riscv64_inline_asm_instruction_supported(&function, &ins));
-    values[2].core_type_id = pointer_id;
-    /* pointer_id now points to void after the CALL_FRAME_ADDRESS test;
-     * restore the original int-pointer identity for structured asm. */
-    REQUIRE(register_pointer(&types, int_id, &values[2].core_type_id));
-    REQUIRE(minic_riscv64_inline_asm_instruction_supported(&function, &ins));
-    fixed_binding.core_type_id = record_id;
-    REQUIRE(!minic_riscv64_inline_asm_instruction_supported(&function, &ins));
-    fixed_binding.core_type_id = int_id;
-    function.type_context = NULL;
-    REQUIRE(!minic_riscv64_inline_asm_instruction_supported(&function, &ins));
-    function.type_context = &types;
+    /* Source asm and fixed-register validation now run in typed RISC-V
+     * MachineIR; keep this test focused on pure CoreType / ABI admission. */
 
     /* A source-C descriptor cannot license snapshot stack reuse. Different
      * Core Record IDs (even with identical layouts) must remain distinct. */
@@ -364,24 +294,8 @@ static int run(void) {
         true, &function, &ins, &call_site.view, call_cache.sites[0]));
     minic_riscv64_call_plan_cache_destroy(&call_cache);
 
-    /* Native instruction and bytewise fallback both derive from Core layout.
-     * We check the exact machine transport without relying on GNU cross-as. */
-    stream = tmpfile();
-    REQUIRE(stream != NULL);
-    REQUIRE(minic_riscv64_emit_safe_core_scalar_load(
-        stream, &types, int_id, "t0", "t1", "t2", 1U));
-    REQUIRE(minic_riscv64_emit_safe_core_scalar_store(
-        stream, &types, int_id, "t0", "t1", "t2", 1U));
-    REQUIRE(!minic_riscv64_emit_safe_core_scalar_load(
-        stream, &types, record_id, "t0", "t1", "t2", 1U));
-    rewind(stream);
-    written = fread(output, 1U, sizeof(output) - 1U, stream);
-    output[written] = '\0';
-    REQUIRE(strstr(output, "lbu t2") != NULL);
-    REQUIRE(strstr(output, "sb t2") != NULL);
-    REQUIRE(strstr(output, "lw t0, 0(t1)") != NULL);
-    REQUIRE(strstr(output, "sw t0, 0(t1)") != NULL);
-    REQUIRE(fclose(stream) == 0);
+    /* Bytewise scalar memory lowering is now covered by typed selector
+     * memory tests rather than the retired FILE* scalar transport. */
 
     /* Strict ISA admission and frame predicates depend exclusively on sealed
      * CoreType identities. No source-language type field exists on Core IR. */
@@ -422,6 +336,6 @@ int main(void) {
         fprintf(stderr, "RV64_CORETYPE_TARGET_ADMISSION=FAIL line=%d\n", line);
         return 1;
     }
-    puts("RV64_CORETYPE_TARGET_ADMISSION=PASS record_load_copy volatile bitcast asm fixed_register_pointer_layout snapshot_nominal call_abi core_only_scalar_transport overflow_poison_C strict_isa_frame_type");
+    puts("RV64_CORETYPE_TARGET_ADMISSION=PASS record_load_copy volatile bitcast snapshot_nominal call_abi overflow_poison_C strict_isa_frame_type");
     return 0;
 }

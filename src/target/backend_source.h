@@ -32,6 +32,11 @@ typedef struct MinicAsmOperandPlan {
     bool explicit_memory_clobber;
     bool implicit_memory_effect;
     bool effective_memory_effect;
+    /* Target-qualified GNU `i` source operands can request immutable,
+     * target-neutral integer/ELF-symbol witnesses in Core. Only an exact
+     * source-form qualifier may opt in; legacy qualified register forms
+     * retain their existing SSA-only contract by default. */
+    bool capture_typed_immediate_inputs;
 } MinicAsmOperandPlan;
 
 typedef MinicAsmOperandPlan MinicTargetInlineAsmContract;

@@ -42,8 +42,18 @@ typedef enum CoreAsmPoison {
     CORE_ASM_MIXED_OUTPUT_AFTER_INPUT,
     CORE_ASM_EARLY_CLOBBER_INPUT,
     CORE_ASM_READWRITE_INPUT,
-    CORE_ASM_UNCLAIMED_INPUT_TIE
+    CORE_ASM_UNCLAIMED_INPUT_TIE,
+    CORE_ASM_TYPED_FOUR,
+    CORE_ASM_TYPED_MISSING_SLOT,
+    CORE_ASM_TYPED_UNQUALIFIED_OWNER
 } CoreAsmPoison;
+
+static char *core_asm_test_owned(const char *source) {
+    const size_t length = strlen(source);
+    char *copy = (char *)malloc(length + 1U);
+    if (copy != NULL) memcpy(copy, source, length + 1U);
+    return copy;
+}
 
 static bool verify_core_roles(size_t count, CoreAsmPoison poison, bool expected) {
     MinicCoreSourceBuilder builder;
@@ -92,6 +102,29 @@ static bool verify_core_roles(size_t count, CoreAsmPoison poison, bool expected)
         integer.value.integer_value = 1;
         initialized = minic_core_function_append_value_instruction(
             function, block, &integer, &scalar);
+    }
+    if (initialized && poison >= CORE_ASM_TYPED_FOUR) {
+        MinicCoreInlineAsm *source = &function->inline_asms[asm_id];
+        static const int64_t numeric[3] = {519, 0, 12};
+        source->operand_plan_owner = MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED;
+        source->target_machine_form_id = 173U;
+        source->resolved_immediate_count = 4U;
+        source->resolved_immediates[0].kind =
+            MINIC_CORE_INLINE_ASM_IMMEDIATE_SYMBOL;
+        source->resolved_immediates[0].symbol = core_asm_test_owned(".L.str_0");
+        source->resolved_immediates[0].asm_name = core_asm_test_owned("path");
+        initialized = source->resolved_immediates[0].symbol != NULL &&
+                      source->resolved_immediates[0].asm_name != NULL;
+        for (index = 1U; index < 4U; ++index) {
+            source->resolved_immediates[index].kind =
+                MINIC_CORE_INLINE_ASM_IMMEDIATE_INTEGER;
+            source->resolved_immediates[index].integer = numeric[index - 1U];
+        }
+        if (poison == CORE_ASM_TYPED_MISSING_SLOT)
+            source->resolved_immediates[2].kind =
+                MINIC_CORE_INLINE_ASM_IMMEDIATE_INVALID;
+        if (poison == CORE_ASM_TYPED_UNQUALIFIED_OWNER)
+            source->operand_plan_owner = MINIC_ASM_OPERAND_PLAN_GENERIC_STRUCTURED;
     }
     if (initialized) {
         asm_effect.kind = MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM;
@@ -420,6 +453,13 @@ int main(void) {
         (void)fprintf(stderr, "FAIL 13-16 operand Core verifier boundary\n");
         return 5;
     }
+    if (!verify_core_roles(4U, CORE_ASM_TYPED_FOUR, true) ||
+        !verify_core_roles(4U, CORE_ASM_TYPED_MISSING_SLOT, false) ||
+        !verify_core_roles(4U, CORE_ASM_TYPED_UNQUALIFIED_OWNER, false)) {
+        (void)fprintf(stderr,
+            "FAIL four GNU typed source-immediate witnesses / forged Core contract\n");
+        return 8;
+    }
     if (!verify_core_scalar_result(false, false, false, true) ||
         !verify_core_scalar_result(true, false, false, false) ||
         !verify_core_scalar_result(false, true, false, false) ||
@@ -462,6 +502,6 @@ int main(void) {
         return 4;
     }
 
-    (void)puts("PASS Core GNU structured asm 16 operands + %10-%15 + named + modifier + goto + over-cap fail-closed");
+    (void)puts("PASS Core GNU structured asm 16 operands + %10-%15 + named + modifier + goto + 4 typed immediates + over-cap fail-closed");
     return 0;
 }

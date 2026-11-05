@@ -17,7 +17,6 @@ for mode in native sanitize; do
         -I"$root/src" -I"$root/include" "${flags[@]}" \
         "$root/src/core/core_type.c" \
         "$root/src/target/riscv32/rv32_scalar.c" \
-        "$root/src/target/riscv32/rv32_wide_emit.c" \
         "$root/tests/target/riscv32/coretype_scalar_test.c" \
         -o "$work/rv32-coretype-$mode"
     ASAN_OPTIONS=detect_leaks=0 "$work/rv32-coretype-$mode"

@@ -1,7 +1,6 @@
 #include "target/riscv32/rv32_internal.h"
 
 #include <stdio.h>
-#include <string.h>
 
 #define REQUIRE(condition) do { if (!(condition)) return __LINE__; } while (0)
 
@@ -41,36 +40,6 @@ static bool register_pointer(MinicCoreTypeContext *ctx,
     return minic_core_type_register(ctx, &type, id);
 }
 
-static bool check_load_opcode(const MinicCoreFunction *function,
-                              MinicCoreTypeId id, const char *expected) {
-    FILE *stream = tmpfile();
-    char buffer[512];
-    size_t count;
-    bool ok;
-    if (stream == NULL) return false;
-    ok = rv32_core_load_mem(stream, function, id, "t1", 1U) &&
-         fflush(stream) == 0 && fseek(stream, 0L, SEEK_SET) == 0;
-    count = ok ? fread(buffer, 1U, sizeof(buffer) - 1U, stream) : 0U;
-    buffer[count] = '\0';
-    ok = ok && strstr(buffer, expected) != NULL;
-    return fclose(stream) == 0 && ok;
-}
-
-static bool check_canon_opcode(const MinicCoreFunction *function,
-                               MinicCoreTypeId id, const char *expected) {
-    FILE *stream = tmpfile();
-    char buffer[256];
-    size_t count;
-    bool ok;
-    if (stream == NULL) return false;
-    ok = rv32_core_canon(stream, function, id, "t0") &&
-         fflush(stream) == 0 && fseek(stream, 0L, SEEK_SET) == 0;
-    count = ok ? fread(buffer, 1U, sizeof(buffer) - 1U, stream) : 0U;
-    buffer[count] = '\0';
-    ok = ok && strstr(buffer, expected) != NULL;
-    return fclose(stream) == 0 && ok;
-}
-
 static int run(void) {
     MinicCoreTypeContext types;
     MinicCoreTypeId boolean, s8, u8, s16, u16, s32, u32, s64, u64;
@@ -83,7 +52,6 @@ static int run(void) {
     MinicCoreFunction function = {0};
     unsigned bits, words;
     bool sign;
-    FILE *stream;
 
     minic_core_type_context_initialize(&types);
     REQUIRE(register_integer(&types, 1U, false, true, &boolean));
@@ -155,10 +123,9 @@ static int run(void) {
     REQUIRE(rv32_core_pointee_type(&function, invalid_pointer) ==
             MINIC_CORE_TYPE_INVALID);
     REQUIRE(rv32_core_pointee_type(&function, s32) == MINIC_CORE_TYPE_INVALID);
-    REQUIRE(check_load_opcode(&function, s8, "  lb t1"));
-    REQUIRE(check_load_opcode(&function, u8, "  lbu t1"));
-    REQUIRE(check_canon_opcode(&function, boolean, "snez"));
-    REQUIRE(check_canon_opcode(&function, s16, "srai"));
+    /* Typed RISC-V opcode selection and serialization have separate
+     * real .i -> MachineIR -> GNU ASM tests; this sealed-Core type probe
+     * must never import the retired FILE* scalar emitter. */
 
     /* Detached Core is rejected even with a plausible Core integer ID. */
     function.type_context = NULL;
@@ -169,13 +136,6 @@ static int run(void) {
     REQUIRE(!rv32_core_integer_type(&function, u64));
     REQUIRE(!rv32_core_pointer_type(&function, pointer));
     REQUIRE(rv32_core_pointee_type(&function, pointer) == MINIC_CORE_TYPE_INVALID);
-    stream = tmpfile();
-    REQUIRE(stream != NULL);
-    REQUIRE(!rv32_core_canon(stream, &function, s8, "t0"));
-    REQUIRE(!rv32_core_load_mem(stream, &function, s8, "t1", 1U));
-    REQUIRE(!rv32_core_store_mem(stream, &function, s8, 1U));
-    REQUIRE(ftell(stream) == 0L);
-    REQUIRE(fclose(stream) == 0);
 
     minic_core_type_context_destroy(&types);
     return 0;

@@ -11,6 +11,7 @@
 #include "target/data_layout.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 
 static bool minic_test_x86_typed_source_asm_emit(
     FILE *out, const MinicCoreFunction *original,
@@ -26,6 +27,7 @@ static bool minic_test_x86_typed_source_asm_emit(
     bool reachable[1] = {false};
     size_t value_offsets[16] = {16U, 24U, 32U, 40U};
     bool admitted = false;
+    const char *failed_step = "select";
     if (out == NULL || original == NULL || original_instruction == NULL ||
         original->value_count > 16U || original->type_context == NULL ||
         original->inline_asms == NULL || original->inline_asm_count != 1U)
@@ -49,13 +51,25 @@ static bool minic_test_x86_typed_source_asm_emit(
     frame.frame_size = 64U;
     target.architecture = MINIC_TARGET_ARCH_X86_64;
     target.data_layout = minic_x86_64_linux_data_layout();
-    admitted = minic_x86_64_machine_select_core_subset(
-            &machine, &target, &core, &frame) &&
-        minic_core_function_mark_reachable_blocks(&core, reachable, 1U) &&
-        minic_machine_core_coverage_verify(&core, reachable, &machine) &&
-        minic_x86_64_machine_gnu_asm_policy(&target, &policy) &&
-        minic_machine_gnu_asm_preflight(&machine, &policy) &&
-        minic_machine_gnu_asm_emit_body(out, &machine, &policy);
+    if (!minic_x86_64_machine_select_core_subset(
+            &machine, &target, &core, &frame)) goto done;
+    failed_step = "reachable";
+    if (!minic_core_function_mark_reachable_blocks(&core, reachable, 1U))
+        goto done;
+    failed_step = "coverage";
+    if (!minic_machine_core_coverage_verify(&core, reachable, &machine))
+        goto done;
+    failed_step = "policy";
+    if (!minic_x86_64_machine_gnu_asm_policy(&target, &policy)) goto done;
+    failed_step = "preflight";
+    if (!minic_machine_gnu_asm_preflight(&machine, &policy)) goto done;
+    failed_step = "emit";
+    if (!minic_machine_gnu_asm_emit_body(out, &machine, &policy)) goto done;
+    admitted = true;
+done:
+    if (!admitted && getenv("MINIC_TYPED_SOURCE_PROBE_DEBUG") != NULL)
+        fprintf(stderr, "X86_TYPED_SOURCE_PROBE=REJECT step=%s template=%s\n",
+                failed_step, original->inline_asms[0].template_text);
     minic_machine_function_destroy(&machine);
     return admitted;
 }

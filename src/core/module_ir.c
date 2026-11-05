@@ -420,7 +420,7 @@ static bool module_verify_global_one(const MinicCoreModule *module,
                 const MinicCoreModuleFunctionSymbol *owner =
                     &module->function_symbols[reference->target_index];
                 if (global->owner_function_index != reference->target_index ||
-                    !owner->is_defined || owner->specialization_source_index != SIZE_MAX)
+                    !owner->is_defined || owner->storage_owner_function_index != SIZE_MAX)
                     return false;
             }
         }
@@ -473,16 +473,16 @@ bool minic_core_module_verify(const MinicCoreModule *module) {
         const MinicCoreModuleFunctionSymbol *symbol = &module->function_symbols[index];
         if (symbol->name == NULL || symbol->name[0] == '\0' ||
             !valid_visibility(symbol->visibility) ||
-            (symbol->specialization_source_index != SIZE_MAX &&
-             (symbol->specialization_source_index >= module->function_count ||
-              symbol->specialization_source_index == index))) return false;
-        if (symbol->specialization_source_index != SIZE_MAX) {
-            const MinicCoreModuleFunctionSymbol *source =
-                &module->function_symbols[symbol->specialization_source_index];
+            (symbol->storage_owner_function_index != SIZE_MAX &&
+             (symbol->storage_owner_function_index >= module->function_count ||
+              symbol->storage_owner_function_index == index))) return false;
+        if (symbol->storage_owner_function_index != SIZE_MAX) {
+            const MinicCoreModuleFunctionSymbol *owner =
+                &module->function_symbols[symbol->storage_owner_function_index];
             if (!symbol->is_defined || !symbol->is_internal ||
                 symbol->alias_target_index != SIZE_MAX ||
-                !source->is_defined ||
-                source->specialization_source_index != SIZE_MAX) return false;
+                !owner->is_defined ||
+                owner->storage_owner_function_index != SIZE_MAX) return false;
         }
         if (symbol->alias_target_index != SIZE_MAX) {
             const MinicCoreModuleFunctionSymbol *target;
@@ -541,8 +541,7 @@ bool minic_core_module_verify_label_bindings(
         (function_count != 0U && functions == NULL))
         return false;
     /* Only Core definitions selected for machine emission export aliases.
-     * Function clones execute the original body but must not export its
-     * canonical local labels a second time. */
+     * A storage borrower never republishes the canonical owner's labels. */
     for (function_index = 0U; function_index < function_count; ++function_index) {
         const MinicCoreModuleFunctionSymbol *symbol =
             &module->function_symbols[function_index];
@@ -555,7 +554,7 @@ bool minic_core_module_verify_label_bindings(
         for (block_index = 0U; block_index < function->block_count; ++block_index) {
             const char *name = function->blocks[block_index].local_label_symbol;
             if (name == NULL) continue;
-            if (symbol->specialization_source_index != SIZE_MAX ||
+            if (symbol->storage_owner_function_index != SIZE_MAX ||
                 !minic_core_label_symbol_valid(name) ||
                 capacity == SIZE_MAX / sizeof(*labels)) goto done;
             if (label_count == capacity) {

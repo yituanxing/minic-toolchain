@@ -76,7 +76,7 @@ int main(void) {
         return 5;
     }
     module.function_symbols[0].name = owned("main");
-    module.function_symbols[0].specialization_source_index = SIZE_MAX;
+    module.function_symbols[0].storage_owner_function_index = SIZE_MAX;
     module.function_symbols[0].section_name = owned(".text.main");
     module.file_asms[0].text = owned(".globl marker");
     module.file_asms[0].length = strlen(".globl marker");

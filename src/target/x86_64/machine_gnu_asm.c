@@ -9,6 +9,7 @@
 
 static bool x86_emit_register(FILE *, const MinicMachineOperand *);
 static bool x86_emit_address(FILE *, const MinicMachineAddress *);
+static const char *x86_gp_name(const MinicMachineRegister *);
 
 static bool x86_source_accumulator_form(
     const MinicMachineFunction *function,
@@ -52,8 +53,10 @@ static const MinicMachineSourceAsmTemplatePolicy x86_accumulator_policy = {
 };
 
 /* Matched x86 source forms are distinct from the accumulator family: CPUID
- * uses four tied 32-bit named hardware registers, while MULACC reads a true
- * explicit memory operand in R11 and writes three tied 64-bit registers.
+ * uses four tied 32-bit named hardware registers; MULACC reads a true
+ * explicit memory operand in R11 and writes three tied 64-bit registers;
+ * matched-memory writes pointer-indirected arithmetic using caller-scratch
+ * registers with no additional register allocator or textual bypass.
  * The target verifier independently proves every binding before this generic
  * GNU placeholder substitution may print a source spelling. */
 static bool x86_source_matched_form(
@@ -64,7 +67,9 @@ static bool x86_source_matched_form(
         (instruction->source_asm_machine_form_id ==
              MINIC_X86_MACHINE_ASM_CPUID_MATCHED ||
          instruction->source_asm_machine_form_id ==
-             MINIC_X86_MACHINE_ASM_MULACC_MATCHED) &&
+             MINIC_X86_MACHINE_ASM_MULACC_MATCHED ||
+         instruction->source_asm_machine_form_id ==
+             MINIC_X86_MACHINE_ASM_MATCHED_MEMORY) &&
         minic_x86_64_machine_validate_source_asm(function->target,
             instruction, NULL);
 }
@@ -102,6 +107,289 @@ static const MinicMachineSourceAsmTemplatePolicy x86_matched_policy = {
     x86_source_matched_operand,
     NULL
 };
+
+/* The GNU bit-scan family has five Source-qualified width/tie forms. The
+ * source `rep; bsf`, `bsr`, `bsfl`, `bsrl`, `bsrq` remains the exact GNU
+ * template; every placeholder binds to the preverified physical RAX/R10. */
+static bool x86_source_bit_scan_form(
+    const MinicMachineFunction *function,
+    const MinicMachineInstruction *instruction, void *context) {
+    (void)context;
+    return function != NULL && function->target != NULL &&
+        instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_BITSCAN_MATCHED &&
+        minic_x86_64_machine_validate_source_asm(function->target,
+            instruction,NULL);
+}
+
+static bool x86_source_bit_scan_binding(
+    const MinicMachineFunction *function,
+    const MinicMachineInstruction *instruction, size_t index,
+    void *context) {
+    return index < instruction->operand_count &&
+        x86_source_bit_scan_form(function,instruction,context);
+}
+
+static bool x86_source_bit_scan_operand(
+    FILE *output, const MinicMachineFunction *function,
+    const MinicMachineInstruction *instruction,
+    const MinicMachineGNUAsmLabels *labels, size_t index,
+    unsigned char modifier, void *context) {
+    (void)labels;
+    if (!x86_source_bit_scan_binding(function,instruction,index,context) ||
+        (modifier != 0U && !(modifier == 'q' && index == 0U &&
+            instruction->source_asm_machine_form_variant ==
+                MINIC_X86_BIT_SCAN_BSR64_READWRITE)))
+        return false;
+    return output == NULL ||
+        x86_emit_register(output,&instruction->operands[index]);
+}
+
+static const MinicMachineSourceAsmTemplatePolicy x86_bit_scan_policy = {
+    x86_source_bit_scan_form,
+    x86_source_bit_scan_binding,
+    x86_source_bit_scan_operand,
+    NULL
+};
+
+/* `%P1` is GNU's memory operand sans size suffix. The Source qualifier has
+ * already checked the exact ELF alternative syntax; the x86 physical
+ * verifier seals an R10-relative address and an integer zero operand. */
+static bool x86_source_prefetchw_alt_form(
+    const MinicMachineFunction *function,
+    const MinicMachineInstruction *instruction, void *context) {
+    (void)context;
+    return function != NULL && function->target != NULL &&
+        instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_PREFETCHW_ALT &&
+        minic_x86_64_machine_validate_source_asm(function->target,
+            instruction,NULL);
+}
+
+static bool x86_source_prefetchw_alt_binding(
+    const MinicMachineFunction *function,
+    const MinicMachineInstruction *instruction, size_t index,
+    void *context) {
+    return index < instruction->operand_count &&
+        x86_source_prefetchw_alt_form(function,instruction,context);
+}
+
+static bool x86_source_prefetchw_alt_operand(
+    FILE *output, const MinicMachineFunction *function,
+    const MinicMachineInstruction *instruction,
+    const MinicMachineGNUAsmLabels *labels, size_t index,
+    unsigned char modifier, void *context) {
+    (void)labels;
+    if (!x86_source_prefetchw_alt_binding(function,instruction,index,context))
+        return false;
+    if (index == 0U && modifier == 0U)
+        return output == NULL || fputs("$0",output) != EOF;
+    if (index != 1U || modifier != 'P') return false;
+    return output == NULL ||
+        x86_emit_address(output,&instruction->operands[1].value.address);
+}
+
+static const MinicMachineSourceAsmTemplatePolicy x86_prefetchw_alt_policy = {
+    x86_source_prefetchw_alt_form,
+    x86_source_prefetchw_alt_binding,
+    x86_source_prefetchw_alt_operand,
+    NULL
+};
+
+/* Both CMPXCHG16B forms use actual R11-relative 16-byte memory, fixed
+ * RAX:RDX and RBX:RCX pairs, and the complete source-matched Linux patch
+ * metadata. Only `%[ptr]`, `%P[var]` and `%[var]` can interpolate their
+ * preverified memory operand; other bytes are immutable exact GNU source. */
+static bool x86_source_cmpxchg128_form(
+    const MinicMachineFunction *function,
+    const MinicMachineInstruction *instruction, void *context) {
+    (void)context;
+    return function != NULL && function->target != NULL &&
+        instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_CMPXCHG128 &&
+        minic_x86_64_machine_validate_source_asm(function->target,
+            instruction,NULL);
+}
+
+static bool x86_source_cmpxchg128_binding(
+    const MinicMachineFunction *function,
+    const MinicMachineInstruction *instruction, size_t index,
+    void *context) {
+    return index < instruction->operand_count &&
+        x86_source_cmpxchg128_form(function,instruction,context);
+}
+
+static bool x86_source_cmpxchg128_operand(
+    FILE *output, const MinicMachineFunction *function,
+    const MinicMachineInstruction *instruction,
+    const MinicMachineGNUAsmLabels *labels, size_t index,
+    unsigned char modifier, void *context) {
+    const size_t at =
+        instruction->source_asm_machine_form_variant == 2U ? 0U : 1U;
+    (void)labels;
+    if (!x86_source_cmpxchg128_binding(function,instruction,index,context) ||
+        index != at || (modifier != 0U && modifier != 'P'))
+        return false;
+    return output == NULL ||
+        x86_emit_address(output,&instruction->operands[at].value.address);
+}
+
+static const MinicMachineSourceAsmTemplatePolicy x86_cmpxchg128_policy = {
+    x86_source_cmpxchg128_form,
+    x86_source_cmpxchg128_binding,
+    x86_source_cmpxchg128_operand,
+    NULL
+};
+
+/* Crash-snapshot source forms are a finite hardware family, not arbitrary
+ * GNU passthrough. The 18 exact source variants independently seal captured
+ * GPR, FLAGS or RIP; only the verified output ADDRESS/register is printed. */
+static bool x86_source_crash_register_form(
+    const MinicMachineFunction *function,
+    const MinicMachineInstruction *instruction, void *context) {
+    (void)context;
+    return function != NULL && function->target != NULL &&
+        instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_CRASH_REGISTER &&
+        minic_x86_64_machine_validate_source_asm(function->target,
+            instruction,NULL);
+}
+
+static bool x86_source_crash_register_binding(
+    const MinicMachineFunction *function,
+    const MinicMachineInstruction *instruction, size_t index,
+    void *context) {
+    return index < instruction->operand_count &&
+        x86_source_crash_register_form(function,instruction,context);
+}
+
+static bool x86_source_crash_register_operand(
+    FILE *output, const MinicMachineFunction *function,
+    const MinicMachineInstruction *instruction,
+    const MinicMachineGNUAsmLabels *labels, size_t index,
+    unsigned char modifier, void *context) {
+    const MinicMachineOperand *operand;
+    (void)labels;
+    if (index != 0U || modifier != 0U ||
+        !x86_source_crash_register_binding(function,instruction,index,context))
+        return false;
+    operand = &instruction->operands[0];
+    if (output == NULL) return operand->kind == MINIC_MACHINE_OPERAND_ADDRESS ||
+        operand->kind == MINIC_MACHINE_OPERAND_REGISTER;
+    if (operand->kind == MINIC_MACHINE_OPERAND_ADDRESS)
+        return x86_emit_address(output,&operand->value.address);
+    return x86_emit_register(output,operand);
+}
+
+static const MinicMachineSourceAsmTemplatePolicy x86_crash_register_policy = {
+    x86_source_crash_register_form,
+    x86_source_crash_register_binding,
+    x86_source_crash_register_operand,
+    NULL
+};
+
+/* GNU `%c` immediate interpolation for two exact Linux BUG/WARN templates.
+ * This Source ASM form carries four typed, independently checked operands;
+ * no x86 emitted instruction is inferred from an unconstrained C string.
+ * The `.long %c0 - .` directive asks GAS for its genuine PC32 relocation. */
+static bool x86_source_bug_c_form(
+    const MinicMachineFunction *function,
+    const MinicMachineInstruction *instruction, void *context) {
+    (void)context;
+    return function != NULL && function->target != NULL &&
+        instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_BUG_TABLE_C_IMMEDIATE &&
+        minic_x86_64_machine_validate_source_asm(function->target,
+            instruction,NULL);
+}
+
+static bool x86_source_bug_c_binding(
+    const MinicMachineFunction *function,
+    const MinicMachineInstruction *instruction, size_t index,
+    void *context) {
+    return index < 4U &&
+        x86_source_bug_c_form(function,instruction,context);
+}
+
+static bool x86_source_bug_c_operand(
+    FILE *output, const MinicMachineFunction *function,
+    const MinicMachineInstruction *instruction,
+    const MinicMachineGNUAsmLabels *labels, size_t index,
+    unsigned char modifier, void *context) {
+    const MinicMachineOperand *op;
+    (void)labels;
+    if (modifier != 'c' ||
+        !x86_source_bug_c_binding(function,instruction,index,context))
+        return false;
+    op = &instruction->operands[index];
+    if (output == NULL) return index == 0U ?
+        op->kind == MINIC_MACHINE_OPERAND_SYMBOL :
+        op->kind == MINIC_MACHINE_OPERAND_INTEGER;
+    if (index != 0U) return
+        fprintf(output,"%" PRId64,op->value.integer) >= 0;
+    if (fputs(op->value.symbol.name,output) == EOF) return false;
+    if (op->value.symbol.addend != 0)
+        return fprintf(output,"%+" PRId64,
+            op->value.symbol.addend) >= 0;
+    return true;
+}
+
+static const MinicMachineSourceAsmTemplatePolicy x86_bug_c_policy = {
+    x86_source_bug_c_form,
+    x86_source_bug_c_binding,
+    x86_source_bug_c_operand,
+    NULL
+};
+
+/* The fully qualified futex family owns 9 fault-site records across six
+ * original GNU forms. Emit real section relocations with the ABI-mandated
+ * R8D recovery register (architectural register number 8) rather than
+ * copying an unchecked `.macro` containing operand or register text. */
+static bool x86_emit_futex_extable_record(FILE *out,
+    unsigned int fault, unsigned int recovery) {
+    return fprintf(out,
+        "  .pushsection \"__ex_table\",\"a\"\n"
+        "  .balign 4\n"
+        "  .long (%ub) - .\n"
+        "  .long (%ub) - .\n"
+        "  .long (17 | ((-14) << 16)) + (8 << 8)\n"
+        "  .popsection\n", fault, recovery) >= 0;
+}
+
+static bool x86_emit_futex_extable(FILE *out,
+    const MinicMachineFunction *function,
+    const MinicMachineInstruction *instruction) {
+    const unsigned int variant = instruction->source_asm_machine_form_variant;
+    const bool loop = variant >= 4U;
+    const char *operation = variant == 4U ? "orl" :
+        variant == 5U ? "andl" : "xorl";
+    if (out == NULL || function == NULL ||
+        !minic_x86_64_machine_validate_source_asm(function->target,
+            instruction,NULL)) return false;
+    if (variant == 1U || variant == 3U || loop) {
+        if (fputs("1:\n",out) == EOF) return false;
+        if (loop &&
+            (fputs("  movl (%r10), %eax\n"
+                   "2:\n"
+                   "  movl %eax, %r9d\n",out) == EOF ||
+             fprintf(out,"  %s %%r11d, %%r9d\n",operation) < 0 ||
+             fputs("3:\n",out) == EOF)) return false;
+        if (fputs("  .pushsection .smp_locks,\"a\"\n"
+                  "  .balign 4\n"
+                  "  .long 671f - .\n"
+                  "  .popsection\n"
+                  "671:\n"
+                  "  lock; ",out) == EOF) return false;
+        if (variant == 1U || loop) {
+            if (fputs("cmpxchgl %r9d, (%r10)\n",out) == EOF) return false;
+            if (loop && fputs("  jnz 2b\n4:\n",out) == EOF) return false;
+        } else if (fputs("xaddl %eax, (%r10)\n",out) == EOF) return false;
+    } else if (fputs("1:\n  xchgl %eax, (%r10)\n",out) == EOF)
+        return false;
+    if (!loop && fputs("2:\n",out) == EOF) return false;
+    return x86_emit_futex_extable_record(out,1U,loop ? 4U : 2U) &&
+        (!loop || x86_emit_futex_extable_record(out,3U,4U));
+}
 
 /* Only the seven Source-qualified, operand-free Linux barrier forms are
  * serialized here. Variant and source text are checked independently by the
@@ -141,11 +429,95 @@ static bool x86_emit_source_asm(FILE *out,
     if (instruction->source_asm_machine_form_id ==
             MINIC_X86_MACHINE_ASM_CPUID_MATCHED ||
         instruction->source_asm_machine_form_id ==
-            MINIC_X86_MACHINE_ASM_MULACC_MATCHED)
+            MINIC_X86_MACHINE_ASM_MULACC_MATCHED ||
+        instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_MATCHED_MEMORY)
         return fputs("  ", out) != EOF &&
             minic_machine_source_asm_template_emit(out, function,
                 instruction, labels, &x86_matched_policy) &&
             fputc('\n', out) != EOF;
+    if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_BITSCAN_MATCHED) {
+        static const char *const bit_scan_hardware[] = {
+            "  rep; bsfq %r10, %rax\n",
+            "  bsrq %r10, %rax\n",
+            "  bsfl %r10d, %eax\n",
+            "  bsrl %r10d, %eax\n",
+            "  bsrq %r10, %rax\n"
+        };
+        /* Exact source template, width, operands, ties and FLAGS effect
+         * were sealed by MachineIR; produce deterministic ISA syntax. */
+        variant = instruction->source_asm_machine_form_variant;
+        if (variant < MINIC_X86_BIT_SCAN_BSF64 ||
+            variant > MINIC_X86_BIT_SCAN_BSR64_READWRITE)
+            return false;
+        return minic_machine_source_asm_template_preflight(function,
+            instruction,&x86_bit_scan_policy) &&
+            fputs(bit_scan_hardware[variant - 1U],out) != EOF;
+    }
+    if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_PREFETCHW_ALT)
+        return fputs("  ",out) != EOF &&
+            minic_machine_source_asm_template_emit(out,function,
+                instruction,labels,&x86_prefetchw_alt_policy) &&
+            fputc('\n',out) != EOF;
+    if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_CMPXCHG128)
+        return fputs("  ",out) != EOF &&
+            minic_machine_source_asm_template_emit(out,function,
+                instruction,labels,&x86_cmpxchg128_policy) &&
+            fputc('\n',out) != EOF;
+    if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_CRASH_REGISTER) {
+        const unsigned int form = instruction->source_asm_machine_form_variant;
+        /* Canonical GNU physical ISA spellings preserve the historical
+         * observed instruction boundaries and R10/R11 independent scratch.
+         * The complete original Source spelling and matching constraints
+         * are still preflighted before printing any hardware instruction. */
+        if (!minic_machine_source_asm_template_preflight(function,
+                instruction,&x86_crash_register_policy)) return false;
+        if (form <= 16U) {
+            const char *reg = x86_gp_name(&instruction->implicit[0].reg);
+            return reg != NULL && fprintf(out,"  movq %s, ",reg) >= 0 &&
+                x86_emit_address(out,
+                    &instruction->operands[0].value.address) &&
+                fputc('\n',out) != EOF;
+        }
+        if (form == 17U)
+            return fputs("  pushfq\n  popq (%r11)\n",out) != EOF;
+        return form == 18U && fputs("  leaq 0(%rip), %rax\n",out) != EOF;
+    }
+    if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_FUTEX_EXTABLE)
+        return x86_emit_futex_extable(out,function,instruction);
+    if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_GS_TIED_ALU) {
+        static const char *const ops[5] = {
+            "add", "sub", "and", "or", "xor"
+        };
+        const unsigned int form = instruction->source_asm_machine_form_variant;
+        unsigned int width;
+        if (form < 1U || form > 5U ||
+            !minic_x86_64_machine_validate_source_asm(function->target,
+                instruction,NULL)) return false;
+        width = instruction->operands[0].value.physical.reg.width_bits;
+        if (fprintf(out,"  %s%c ",ops[form-1U],
+                width == 32U ? 'l' : 'q') < 0 ||
+            !x86_emit_address(out,
+                &instruction->operands[1].value.address)) return false;
+        return fprintf(out,", %s\n",width == 32U ? "%eax" : "%rax") >= 0;
+    }
+    if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_IP_HERE)
+        /* Keep GNU's actual instruction-relative counter, not the address
+         * of the containing function or a fabricated linker symbol. */
+        return fputs("  leaq 0(%rip), %rax\n",out) != EOF;
+    if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_BUG_TABLE_C_IMMEDIATE)
+        return fputs("  ",out) != EOF &&
+            minic_machine_source_asm_template_emit(out,function,
+                instruction,labels,&x86_bug_c_policy) &&
+            fputc('\n',out) != EOF;
     variant = instruction->source_asm_machine_form_variant;
     return variant >= 1U && variant <=
             sizeof(hardware) / sizeof(hardware[0]) &&

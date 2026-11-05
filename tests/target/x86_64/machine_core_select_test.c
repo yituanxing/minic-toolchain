@@ -14,6 +14,29 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
+
+/* Use a seekable workspace stream; glibc tmpfile() hardcodes /tmp. */
+static FILE *probe_stream(void) {
+    const char *directory = getenv("TMPDIR");
+    char path[4096];
+    int length;
+    int fd;
+    FILE *stream;
+    if (directory == NULL || directory[0] == '\0') directory = ".";
+    length = snprintf(path, sizeof(path), "%s/minic-x86-core-XXXXXX",
+                      directory);
+    if (length <= 0 || (size_t)length >= sizeof(path)) return NULL;
+    fd = mkstemp(path);
+    if (fd < 0) return NULL;
+    if (unlink(path) != 0) {
+        close(fd);
+        return NULL;
+    }
+    stream = fdopen(fd, "w+");
+    if (stream == NULL) close(fd);
+    return stream;
+}
 
 static bool make_core(MinicCoreFunction *core,
     MinicCoreTypeContext *types, bool unsupported, bool scalar) {
@@ -152,7 +175,7 @@ static bool scenario(bool unsupported, bool scalar) {
         if (!found_barrier) goto done;
     }
     stage = "gnu-asm";
-    out = tmpfile();
+    out = probe_stream();
     if (out == NULL || !minic_machine_gnu_asm_emit_body(
             out, &machine, &policy) || fflush(out) != 0 ||
         fseek(out, 0L, SEEK_SET) != 0) goto done;
@@ -310,7 +333,7 @@ static bool scenario_float(void) {
         !minic_machine_core_coverage_verify(&core,
             reachable, &machine)) goto done;
     stage = "machine-serialization";
-    output = tmpfile();
+    output = probe_stream();
     if (output == NULL ||
         !minic_machine_gnu_asm_emit_body(output, &machine, &policy) ||
         fflush(output) != 0 || fseek(output, 0L, SEEK_SET) != 0)
@@ -649,7 +672,7 @@ static bool scenario_planned_scalar_call(bool indirect, bool ms) {
             (stack_writes == 3U && sse_moves >= 8U && variadic_al == 1U));
     if (!okay) goto done;
     stage = "gnu-assembly";
-    output = tmpfile();
+    output = probe_stream();
     if (output == NULL ||
         !minic_x86_64_machine_gnu_asm_policy(&target, &policy) ||
         !minic_machine_gnu_asm_emit_body(output, &machine, &policy) ||
@@ -874,7 +897,7 @@ static bool scenario_record_transfer(size_t bytes, unsigned int mode,
          (volatile_source && volatile_reads == 0U) ||
          (volatile_destination && volatile_writes == 0U))) goto done;
     stage = "gnu-assembly";
-    output = tmpfile();
+    output = probe_stream();
     if (output == NULL ||
         !minic_machine_gnu_asm_emit_body(output, &machine, &policy) ||
         fflush(output) != 0 || fseek(output, 0L, SEEK_SET) != 0)
@@ -1005,7 +1028,7 @@ static bool scenario_parameter_object(size_t bytes,
         ((bytes == 7U || bytes == 15U) && rcx_preserved == 0U))
         goto done;
     stage = "gnu-asm";
-    output = tmpfile();
+    output = probe_stream();
     if (output == NULL ||
         !minic_machine_gnu_asm_emit_body(output, &machine, &policy) ||
         fflush(output) != 0 || fseek(output, 0L, SEEK_SET) != 0)
@@ -1158,11 +1181,6 @@ static bool scenario_symbol_address(bool function_symbol, bool pic,
     target.data_layout = minic_x86_64_linux_data_layout();
     target.position_independent = pic;
     stage = "select";
-    if (head_rejected) {
-        okay = !minic_x86_64_machine_select_core_subset(
-            &machine, &target, &core, &frame);
-        goto done;
-    }
     if (!minic_x86_64_machine_select_core_subset(
             &machine, &target, &core, &frame) ||
         !minic_core_function_mark_reachable_blocks(&core,
@@ -1174,6 +1192,17 @@ static bool scenario_symbol_address(bool function_symbol, bool pic,
     for (i = 0U; i < machine.blocks[1].instruction_count; ++i) {
         const MinicMachineInstruction *op =
             &machine.blocks[1].instructions[i];
+        if (head_rejected) {
+            if (op->opcode != MINIC_X86_MI_MOV64_IMM32S_SYMBOL_R)
+                continue;
+            if (!op->has_core_origin || op->operand_count != 2U ||
+                op->operands[0].kind != MINIC_MACHINE_OPERAND_SYMBOL ||
+                op->operands[0].value.symbol.relocation !=
+                    MINIC_X86_MACHINE_RELOC_ABS32S)
+                goto done;
+            ++selected;
+            continue;
+        }
         if (op->opcode != MINIC_X86_MI_LEA64_RIP_SYMBOL_R &&
             op->opcode != MINIC_X86_MI_MOV64_GOTPCREL_R) continue;
         if ((op->opcode == MINIC_X86_MI_MOV64_GOTPCREL_R) !=
@@ -1188,17 +1217,20 @@ static bool scenario_symbol_address(bool function_symbol, bool pic,
     }
     if (selected != 1U) goto done;
     stage = "gnu-asm";
-    output = tmpfile();
+    output = probe_stream();
     if (output == NULL ||
         !minic_machine_gnu_asm_emit_body(output, &machine, &policy) ||
         fflush(output) != 0 || fseek(output, 0L, SEEK_SET) != 0)
         goto done;
     length = fread(assembly, 1U, sizeof(assembly) - 1U, output);
     assembly[length] = '\0';
-    okay = pic && (!hidden || weak) ?
-        strstr(assembly, "@GOTPCREL(%rip)") != NULL :
-        strstr(assembly, "(%rip)") != NULL &&
-            strstr(assembly, "@GOTPCREL") == NULL;
+    okay = head_rejected ?
+        strstr(assembly, "movq $module_data_symbol") != NULL &&
+            strstr(assembly, "@GOTPCREL") == NULL :
+        pic && (!hidden || weak) ?
+            strstr(assembly, "@GOTPCREL(%rip)") != NULL :
+            strstr(assembly, "(%rip)") != NULL &&
+                strstr(assembly, "@GOTPCREL") == NULL;
 done:
     if (!okay) fprintf(stderr,
         "X86_CORE_MIR=FAIL symbol func=%d pic=%d hidden=%d weak=%d "
@@ -1334,7 +1366,7 @@ static bool scenario_relaxed_atomic(void) {
     }
     if (read_count != 1U || write_count != 1U) goto done;
     stage = "gnu-asm";
-    output = tmpfile();
+    output = probe_stream();
     if (output == NULL ||
         !minic_machine_gnu_asm_emit_body(output, &machine, &policy) ||
         fflush(output) != 0 || fseek(output, 0L, SEEK_SET) != 0)
@@ -1609,7 +1641,7 @@ static bool scenario_new_core_case(X86NewCoreCase mode) {
         ((variadic || alloc) && machine.block_count < 4U) ||
         (alloc && !machine.has_dynamic_stack)) goto done;
     stage = "gnu-assembly";
-    output = tmpfile();
+    output = probe_stream();
     if (output == NULL || !minic_machine_gnu_asm_emit_body(
             output, &machine, &policy) || fflush(output) != 0 ||
         fseek(output, 0L, SEEK_SET) != 0) goto done;
@@ -1882,6 +1914,9 @@ static bool scenario_source_zero_barrier(unsigned int form) {
     core.inline_asms[source_id].target_machine_form_id = form == 0U
         ? 0U : MINIC_X86_MACHINE_ASM_ZERO_BARRIER;
     core.inline_asms[source_id].target_machine_form_variant = form;
+    if (form != 0U)
+        core.inline_asms[source_id].operand_plan_owner =
+            MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED;
     if (form == 1U &&
         !minic_core_function_add_inline_asm_register_clobber(
             &core, source_id, "cc", 2U)) goto done;
@@ -1923,7 +1958,7 @@ static bool scenario_source_zero_barrier(unsigned int form) {
                 selected->source_asm_unique_id == 700U + form)
                 ++source_events;
         }
-    if (source_events != 1U || (out = tmpfile()) == NULL ||
+    if (source_events != 1U || (out = probe_stream()) == NULL ||
         !minic_machine_gnu_asm_emit_body(out, &machine, &policy) ||
         fflush(out) != 0 || fseek(out, 0L, SEEK_SET) != 0) goto done;
     n = fread(text, 1U, sizeof(text) - 1U, out);
@@ -2037,7 +2072,7 @@ static bool scenario_uaccess_call_opcode(void) {
         stage = "preflight";
         if (!minic_machine_gnu_asm_preflight(&machine, &policy)) goto loop_done;
         stage = "serialize";
-        if ((output = tmpfile()) == NULL ||
+        if ((output = probe_stream()) == NULL ||
             !minic_machine_gnu_asm_emit_body(output, &machine, &policy) ||
             fflush(output) != 0 || fseek(output, 0L, SEEK_SET) != 0)
             goto loop_done;
@@ -2741,6 +2776,6 @@ int main(int argc, char **argv) {
     for (source_form = 0U; source_form <= 7U; ++source_form)
         if (!scenario_source_zero_barrier(source_form)) return 1;
     if (!scenario_uaccess_call_opcode()) return 1;
-    puts("X86_CORE_MIR=PASS cycle=1 physical_alu=1 parameter=1 sse2=1 direct_call=1 mixed_vararg_stack=1 indirect_call=1 ms_shadow_stack=1 record_copy=1 record_load=1 vector_storage=1 record_abi=1 record_return=13/13 volatile=1 empty_record_reject=1 rep_movsb=1 pic_symbol=1 got_weak=1 head_32s_reject=1 relaxed_atomic=1 compiler_barrier=1 origin=1 fail_closed=1 bitscan_zero_nonzero=1 overflow_32_64=1 va_arg=1 alloca=1 block_address=1 fp_boundary=1 zero_asm=8/8 uaccess_physical=4/4");
+    puts("X86_CORE_MIR=PASS cycle=1 physical_alu=1 parameter=1 sse2=1 direct_call=1 mixed_vararg_stack=1 indirect_call=1 ms_shadow_stack=1 record_copy=1 record_load=1 vector_storage=1 record_abi=1 record_return=13/13 volatile=1 empty_record_reject=1 rep_movsb=1 pic_symbol=1 got_weak=1 head_32s_typed=1 relaxed_atomic=1 compiler_barrier=1 origin=1 fail_closed=1 bitscan_zero_nonzero=1 overflow_32_64=1 va_arg=1 alloca=1 block_address=1 fp_boundary=1 zero_asm=8/8 uaccess_physical=4/4");
     return 0;
 }

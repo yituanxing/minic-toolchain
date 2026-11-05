@@ -208,6 +208,32 @@ static bool core_inline_asm_rewind_dead_local_assignment(
     return false;
 }
 
+/* Names in extended GNU ASM are source identifiers, not assembler operands.
+ * Bind their exact spelling at C ingress, then let Core own copies forever;
+ * the machine selector must not rediscover names from the frontend Program. */
+static bool core_asm_goto_source_name_valid(const char *name, size_t length) {
+    size_t i;
+    if (name == NULL) return length == 0U;
+    if (length == 0U || length == SIZE_MAX || name[length] != '\0')
+        return false;
+    for (i = 0U; i < length; ++i) {
+        const unsigned char ch = (unsigned char)name[i];
+        if (ch == '_' || (ch >= 'A' && ch <= 'Z') ||
+            (ch >= 'a' && ch <= 'z') ||
+            (i != 0U && ch >= '0' && ch <= '9')) continue;
+        return false;
+    }
+    return true;
+}
+
+static char *core_asm_goto_copy_source_name(const char *name, size_t length) {
+    char *copy;
+    if (name == NULL || length == SIZE_MAX) return NULL;
+    copy = (char *)malloc(length + 1U);
+    if (copy != NULL) (void)memcpy(copy, name, length + 1U);
+    return copy;
+}
+
 /* Ordered GNU-asm shape admission: the first committed case wins.
  * Unsupported shapes fall through without claiming ownership. */
 MinicCoreLowerStatus core_asm_try_immediate_output_csr(
@@ -482,6 +508,33 @@ MinicCoreLowerStatus core_asm_try_structured_roles_and_asm_goto(
             source->label_count == 0U || source->label_count > 2U ||
             source->inputs == NULL || source->labels == NULL)
             return MINIC_CORE_LOWER_UNSUPPORTED;
+        /* Source-label names and input symbolic names share one GNU operand
+         * namespace, even though their typed Core values differ. Resolve
+         * collisions and invalid spellings before creating any Core object. */
+        for (i = 0U; i < source->input_count + source->label_count; ++i) {
+            const bool is_input = i < source->input_count;
+            const size_t slot = is_input ? i : i - source->input_count;
+            const char *name = is_input ? source->inputs[slot].name :
+                source->labels[slot].name;
+            const size_t length = is_input ? source->inputs[slot].name_length :
+                source->labels[slot].name_length;
+            size_t j;
+            if (!core_asm_goto_source_name_valid(name, length))
+                return MINIC_CORE_LOWER_UNSUPPORTED;
+            if (name == NULL) continue;
+            for (j = 0U; j < i; ++j) {
+                const bool earlier_input = j < source->input_count;
+                const size_t earlier_slot = earlier_input ? j : j - source->input_count;
+                const char *earlier_name = earlier_input ?
+                    source->inputs[earlier_slot].name : source->labels[earlier_slot].name;
+                const size_t earlier_length = earlier_input ?
+                    source->inputs[earlier_slot].name_length :
+                    source->labels[earlier_slot].name_length;
+                if (earlier_name != NULL && earlier_length == length &&
+                    memcmp(name, earlier_name, length) == 0)
+                    return MINIC_CORE_LOWER_UNSUPPORTED;
+            }
+        }
         for (i = 0U; i < source->input_count; ++i) {
             bool is_symbol;
             int64_t integer, addend;
@@ -537,17 +590,29 @@ MinicCoreLowerStatus core_asm_try_structured_roles_and_asm_goto(
         stored->is_goto = true;
         stored->goto_target = targets[0];
         stored->goto_second_target = targets[1];
+        for (i = 0U; i < source->label_count; ++i) {
+            const MinicInlineAsmLabel *label = &source->labels[i];
+            stored->goto_label_names[i] = core_asm_goto_copy_source_name(
+                label->name, label->name_length);
+            if (label->name != NULL && stored->goto_label_names[i] == NULL)
+                return MINIC_CORE_LOWER_ERROR;
+        }
         for (i = 0U; i < source->input_count; ++i) {
             MinicCoreInlineAsmImmediate *dest = &stored->resolved_immediates[i];
             *dest = resolved[i];
             dest->symbol = NULL;
+            dest->asm_name = NULL;
+            stored->resolved_immediate_count = i + 1U;
             if (resolved[i].kind == MINIC_CORE_INLINE_ASM_IMMEDIATE_SYMBOL) {
                 const size_t length = strlen(resolved[i].symbol);
                 dest->symbol = (char *)malloc(length + 1U);
                 if (dest->symbol == NULL) return MINIC_CORE_LOWER_ERROR;
                 (void)memcpy(dest->symbol, resolved[i].symbol, length + 1U);
             }
-            stored->resolved_immediate_count = i + 1U;
+            dest->asm_name = core_asm_goto_copy_source_name(
+                source->inputs[i].name, source->inputs[i].name_length);
+            if (source->inputs[i].name != NULL && dest->asm_name == NULL)
+                return MINIC_CORE_LOWER_ERROR;
         }
         (void)memset(&effect, 0, sizeof(effect));
         effect.kind = MINIC_CORE_INSTRUCTION_OPAQUE_INLINE_ASM;

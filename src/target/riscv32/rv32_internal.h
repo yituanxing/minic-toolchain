@@ -11,7 +11,6 @@
 #include "target/riscv/machine_frame_select.h"
 #include <stdbool.h>
 #include <stddef.h>
-#include <stdio.h>
 
 /* RV32I/ILP32 physical-machine contract: Core IR never owns frame slots,
  * integer-register placement, scratch-register choices or ABI stack. */
@@ -46,7 +45,8 @@ typedef struct Rv32Frame {
     Rv32FunctionAbiPlan abi;
 } Rv32Frame;
 
-/* Frame ownership: rv32_frame.c */
+/* Finalized ILP32 ABI frame ownership: rv32_frame.c. Physical transfers
+ * are emitted only through the shared typed RISC-V MachineIR selector. */
 bool rv32_frame_init_with_storage(Rv32Frame *,
     const MinicCoreFunction *, const MinicTargetInfo *, bool,
     const MinicCoreFunctionFacts *, const MinicCoreObjectStoragePlan *);
@@ -55,60 +55,16 @@ void rv32_frame_destroy(Rv32Frame *);
  * Never run a second frame allocation or argument-register cursor here. */
 bool rv32_machine_physical_frame(const Rv32Frame *,
                                  MinicRiscvPhysicalFrame *);
-bool rv32_stack(FILE *, const char *, const char *, size_t);
-bool rv32_fixed_stack(FILE *, const Rv32Frame *, const char *, const char *, size_t);
-bool rv32_slot(FILE *, const Rv32Frame *, MinicCoreValueId, const char *, bool);
-bool rv32_pair_slot(FILE *, const Rv32Frame *, MinicCoreValueId,
-                    const char *, const char *, bool);
-bool rv32_address(FILE *, const Rv32Frame *, const char *, size_t);
-bool rv32_incoming_word(FILE *, const Rv32Frame *, size_t, const char *);
-bool rv32_outgoing_word(FILE *, const Rv32Frame *, size_t, const char *);
-
-/* Type widths and scalar transport: rv32_scalar.c */
+/* Sealed Core scalar/type widths, used by the live ABI planner. */
 /* Every machine scalar is classified from its sealed Core type ID. */
 bool rv32_core_scalar_storage_words(const MinicCoreFunction *, MinicCoreTypeId,
                                     unsigned *);
 bool rv32_core_scalar(const MinicCoreFunction *, MinicCoreTypeId,
                       unsigned *, bool *);
-bool rv32_core_canon(FILE *, const MinicCoreFunction *, MinicCoreTypeId,
-                     const char *);
-bool rv32_core_load_mem(FILE *, const MinicCoreFunction *, MinicCoreTypeId,
-                        const char *, size_t);
-bool rv32_core_store_mem(FILE *, const MinicCoreFunction *, MinicCoreTypeId,
-                         size_t);
-bool rv32_load2(FILE *, const Rv32Frame *, const MinicCoreInstruction *);
-
-/* Typed machine family lowering; all transport stays behind Target. */
-bool rv32_emit_integer_instruction(FILE *, const MinicCoreFunction *,
-                                   const Rv32Frame *, const MinicCoreInstruction *,
-                                   const char *);
 bool rv32_core_is_wide_integer(const MinicCoreFunction *, MinicCoreTypeId);
 bool rv32_core_unsigned_integer(const MinicCoreFunction *, MinicCoreTypeId);
 bool rv32_core_integer_type(const MinicCoreFunction *, MinicCoreTypeId);
 bool rv32_core_pointer_type(const MinicCoreFunction *, MinicCoreTypeId);
 MinicCoreTypeId rv32_core_pointee_type(const MinicCoreFunction *,
                                       MinicCoreTypeId);
-bool rv32_emit_wide_integer(FILE *, const MinicCoreFunction *,
-                            const Rv32Frame *, const MinicCoreInstruction *,
-                            const char *);
-bool rv32_emit_fp_instruction(FILE *, const MinicCoreFunction *,
-                              const Rv32Frame *, const MinicCoreInstruction *);
-bool rv32_emit_memory_instruction(FILE *, const MinicCoreModule *,
-                                  const MinicTargetInfo *,
-                                  const MinicCoreFunction *,
-                                  const Rv32Frame *, const MinicCoreInstruction *);
-
-/* Parameters/direct/indirect ABI lowering: rv32_call.c */
-bool rv32_emit_parameter(FILE *, const MinicCoreFunction *,
-                         const Rv32Frame *, const MinicCoreInstruction *);
-bool rv32_emit_parameter_object(FILE *, const MinicCoreFunction *,
-                                const Rv32Frame *, const MinicCoreInstruction *);
-bool rv32_emit_record_return(FILE *, const Rv32Frame *,
-                             const MinicCoreTerminator *, const char *);
-/* Shared tail-safe word packing for Core record OBJECT arguments/returns. */
-bool rv32_emit_object_word(FILE *, const Rv32Frame *, MinicCoreObjectId,
-                           size_t, unsigned, const char *);
-bool rv32_emit_call(FILE *, const MinicCoreFunction *,
-                    const Rv32Frame *, const MinicCoreInstruction *,
-                    MinicCoreInstructionId);
 #endif

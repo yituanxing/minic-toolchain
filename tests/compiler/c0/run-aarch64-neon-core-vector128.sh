@@ -20,8 +20,13 @@ if [ "$count" -ne 2 ]; then
     printf '%s\n' "FAIL expected 2 native AArch64 Q-vector eor instructions, got $count" >&2
     exit 1
 fi
-grep -F '  ldr q16, [x10]' "$work/vector.s" >/dev/null
-grep -F '  str q16, [x10]' "$work/vector.s" >/dev/null
+# The typed AArch64 addressing serializer canonicalizes register-indirect
+# `[x10]` as `[x10, #0]`; both are the identical zero-offset Q memory
+# access. Keep the exact vector register, base, and zero displacement sealed.
+grep -Eq '^[[:space:]]*ldr[[:space:]]+q16,[[:space:]]*\[x10(,[[:space:]]*#0)?\][[:space:]]*$' \
+    "$work/vector.s"
+grep -Eq '^[[:space:]]*str[[:space:]]+q16,[[:space:]]*\[x10(,[[:space:]]*#0)?\][[:space:]]*$' \
+    "$work/vector.s"
 
 # The original Stage2 const vector-pointer ALU probe is now a positive
 # AArch64 Core/V-register case; it never passes a vector across the C ABI.

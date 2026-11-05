@@ -184,23 +184,23 @@ int main(int argc, char **argv) {
     };
     MinicCoreModuleFunctionSymbol symbols[8] = {
         { .name = "weak_fn", .is_weak = true, .is_file_asm_root = true,
-          .alias_target_index = SIZE_MAX, .specialization_source_index = SIZE_MAX },
+          .alias_target_index = SIZE_MAX, .storage_owner_function_index = SIZE_MAX },
         { .name = "weak_fn", .is_defined = true, .is_referenced = true,
-          .alias_target_index = SIZE_MAX, .specialization_source_index = SIZE_MAX },
+          .alias_target_index = SIZE_MAX, .storage_owner_function_index = SIZE_MAX },
         { .name = "weak_after_fn", .is_defined = true, .is_referenced = true,
-          .alias_target_index = SIZE_MAX, .specialization_source_index = SIZE_MAX },
+          .alias_target_index = SIZE_MAX, .storage_owner_function_index = SIZE_MAX },
         { .name = "weak_after_fn", .is_weak = true, .is_file_asm_root = true,
-          .alias_target_index = SIZE_MAX, .specialization_source_index = SIZE_MAX },
+          .alias_target_index = SIZE_MAX, .storage_owner_function_index = SIZE_MAX },
         { .name = "missing_fn", .is_weak = true, .is_file_asm_root = true,
-          .alias_target_index = SIZE_MAX, .specialization_source_index = SIZE_MAX },
+          .alias_target_index = SIZE_MAX, .storage_owner_function_index = SIZE_MAX },
         { .name = "unused_fn", .is_weak = true,
-          .alias_target_index = SIZE_MAX, .specialization_source_index = SIZE_MAX },
+          .alias_target_index = SIZE_MAX, .storage_owner_function_index = SIZE_MAX },
         { .name = "cross_function_owner", .is_defined = true,
           .is_referenced = true,
-          .alias_target_index = SIZE_MAX, .specialization_source_index = SIZE_MAX },
+          .alias_target_index = SIZE_MAX, .storage_owner_function_index = SIZE_MAX },
         { .name = "cross_object_owner", .is_weak = true,
           .is_file_asm_root = true,
-          .alias_target_index = SIZE_MAX, .specialization_source_index = SIZE_MAX }
+          .alias_target_index = SIZE_MAX, .storage_owner_function_index = SIZE_MAX }
     };
     MinicCoreBlock entry = {
         .has_terminator = true,

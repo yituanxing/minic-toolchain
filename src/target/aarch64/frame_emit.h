@@ -4,7 +4,6 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
-#include <stdio.h>
 
 /* A frame reference carries meaning, not a post-emit assembly spelling.
  * OUTGOING/PHYSICAL_SP always use the live SP, whereas owned Core/ASM
@@ -29,9 +28,9 @@ typedef struct {
     size_t saved_entry_sp_offset;
 } MinicA64FrameView;
 
-/* Shared physical AArch64 frame resolution used by both the legacy GNU
- * emitter and Machine IR selector.  A saved-entry-SP path needs an explicit
- * load of the stored stack pointer before addressing incoming arguments. */
+/* Shared physical frame resolution consumed by the typed Machine IR
+ * selector. A saved-entry-SP path needs an explicit load of the stored stack
+ * pointer before addressing incoming arguments. */
 typedef struct {
     unsigned int base_register; /* x19 or SP(32) */
     size_t displacement;
@@ -63,25 +62,6 @@ typedef struct {
      * value, including the result/source register protected automatically. */
     unsigned int preferred_scratch;
 } MinicA64ScratchPolicy;
-
-bool minic_a64_emit_frame_load(FILE *out, const MinicA64FrameView *view,
-    MinicA64FrameRef frame, MinicA64FrameRegister target,
-    MinicA64ScratchPolicy scratch);
-bool minic_a64_emit_frame_store(FILE *out, const MinicA64FrameView *view,
-    MinicA64FrameRef frame, MinicA64FrameRegister source,
-    MinicA64ScratchPolicy scratch);
-bool minic_a64_emit_frame_address(FILE *out, const MinicA64FrameView *view,
-    MinicA64FrameRef frame, unsigned int gp_target,
-    MinicA64ScratchPolicy scratch);
-
-/* Core SSA and record slots are always owned by the stable function frame.
- * Keep that ownership and default IP0/IP1 scratch selection in one place
- * instead of re-creating a stack-text transport in each opcode family. */
-bool minic_a64_emit_owned_slot(FILE *out, const MinicA64FrameView *view,
-    bool store, MinicA64FrameRegisterClass kind,
-    unsigned int reg, size_t offset);
-bool minic_a64_emit_owned_address(FILE *out, const MinicA64FrameView *view,
-    size_t offset, unsigned int gp_target);
 
 static inline MinicA64FrameRef minic_a64_owned_slot(size_t offset) {
     MinicA64FrameRef ref = {MINIC_A64_FRAME_OWNED, offset};

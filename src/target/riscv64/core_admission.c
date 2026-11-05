@@ -1,12 +1,9 @@
 #include "target/riscv64/core_admission.h"
 #include "target/common/core_instruction_family.h"
-#include "target/riscv64/core_codegen.h"
 #include "target/riscv64/legalize.h"
 #include "target/riscv64/abi.h"
-#include "target/riscv64/inline_asm_emit.h"
 #include "target/riscv64/frame_requirements.h"
 #include "target/riscv64/function_abi_plan.h"
-#include "target/riscv64/codegen_internal.h"
 #include "target/riscv64/core_type_query.h"
 #include <inttypes.h>
 #include <stddef.h>
@@ -97,8 +94,11 @@ static bool core_instruction_supported(bool require_prepared_abi,
     case MINIC_CORE_INSTRUCTION_FIXED_REGISTER_READ: {
         const MinicCoreFixedRegisterBinding *binding;
 
-        binding = minic_riscv64_inline_asm_fixed_register_binding(
-            function, instruction->value.fixed_register_binding_id);
+        binding = instruction->value.fixed_register_binding_id <
+                      function->fixed_register_binding_count &&
+                  function->fixed_register_bindings != NULL ?
+            &function->fixed_register_bindings[
+                instruction->value.fixed_register_binding_id] : NULL;
         if (binding == NULL || binding->register_name == NULL ||
             binding->register_name_length == 0U) return false;
         return rv64_admit_core_scalar(rv64_admit_core_base(
@@ -121,7 +121,11 @@ static bool core_instruction_supported(bool require_prepared_abi,
     }
     case MINIC_CORE_INSTRUCTION_OPAQUE_INLINE_ASM:
     case MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM:
-        return minic_riscv64_inline_asm_instruction_supported(function, instruction);
+        /* Core verifier owns source template/CFG shape, and MachineIR owns
+         * target operands, named goto targets and physical CFG continuation.
+         * Standalone unprepared admission cannot validate the machine
+         * contract, so it fails closed instead of consulting a FILE* emitter. */
+        return require_prepared_abi;
     case MINIC_CORE_INSTRUCTION_COMPILER_BARRIER:
         return true;
     case MINIC_CORE_INSTRUCTION_CALL:
@@ -320,14 +324,5 @@ bool minic_riscv64_core_function_admit_profile(
         require_prepared_abi, function, abi_plan, core_verified,
         minic_core_function_facts_verified(facts, function) ? facts->call_index : NULL,
         storage);
-}
-bool minic_riscv64_core_function_admit(
-    bool require_prepared_abi, const MinicCoreFunction *function,
-    MinicRiscv64FunctionAbiPlan *abi_plan) {
-    return minic_riscv64_core_function_admit_profile(
-        require_prepared_abi, function, abi_plan, false, NULL, NULL);
-}
-bool minic_riscv64_core_function_can_emit(const MinicCoreFunction *function) {
-    return core_function_can_emit(false, function, NULL, false, NULL, NULL);
 }
 
