@@ -488,12 +488,15 @@ elif [[ "$status" != 124 ]]; then
   exit 1
 fi
 if [[ "$gpu_diag" == 1 ]]; then
-  grep -Fq 'RV32I_GPU_FEATURE_DIAG_BEGIN original_kernel_config=true' "$work/qemu-serial.log" || {
+  # UART serial lines may end in CRLF: normalize only line endings while
+  # retaining strict whole-line guest evidence, as in the established P2 gate.
+  tr -d '\r' <"$work/qemu-serial.log" >"$work/qemu-gpu-normalized.log"
+  grep -Fxq 'RV32I_GPU_FEATURE_DIAG_BEGIN original_kernel_config=true' "$work/qemu-gpu-normalized.log" || {
     echo 'RV32I_GPU_FEATURE_DIAG=FAIL missing_real_guest_start' >&2
     tail -n 80 "$work/qemu-serial.log" >&2
     exit 1
   }
-  grep -Fxq 'RV32I_GPU_FEATURE_DIAG=PASS' "$work/qemu-serial.log" || {
+  grep -Fxq 'RV32I_GPU_FEATURE_DIAG=PASS' "$work/qemu-gpu-normalized.log" || {
     echo 'RV32I_GPU_FEATURE_DIAG=FAIL kernel_negotiation_or_real_module_binding' >&2
     tail -n 80 "$work/qemu-serial.log" >&2
     exit 1

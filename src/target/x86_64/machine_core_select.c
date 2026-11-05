@@ -4122,7 +4122,7 @@ static bool x86_source_fdiv_bug(X86CoreSelector *sel,
     const MinicCoreInlineAsm *source;
     const MinicCoreStructuredInlineAsmOperand *roles;
     MinicMachineOperand bindings[3];
-    MinicMachineRegisterEffect fpu[8] = {{0}};
+    MinicMachineRegisterEffect fpu[8];
     size_t i;
     if (sel == NULL || ins == NULL ||
         ins->kind != MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM ||
