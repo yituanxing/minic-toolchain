@@ -439,91 +439,6 @@ static bool dump_instruction(FILE *output,
                        inline_asm->is_volatile ? " volatile" : "",
                        inline_asm->has_memory_clobber ? " memory" : "") >= 0;
     }
-    case MINIC_CORE_INSTRUCTION_REGISTER_OUTPUT_INLINE_ASM: {
-        const MinicCoreInlineAsm *inline_asm;
-
-        if (function == NULL || instruction->value.inline_asm_id >= function->inline_asm_count) {
-            return false;
-        }
-        inline_asm = &function->inline_asms[instruction->value.inline_asm_id];
-        return fprintf(output,
-                       "  %%%" PRIu32 " = asm.register_output id=%" PRIu32 "%s%s\n",
-                       instruction->result,
-                       instruction->value.inline_asm_id,
-                       inline_asm->is_volatile ? " volatile" : "",
-                       inline_asm->has_memory_clobber ? " memory" : "") >= 0;
-    }
-    case MINIC_CORE_INSTRUCTION_REGISTER_OUTPUT_INPUT_INLINE_ASM: {
-        const MinicCoreInlineAsm *inline_asm;
-        MinicCoreInlineAsmId inline_asm_id;
-
-        inline_asm_id = instruction->value.register_output_input_inline_asm.inline_asm_id;
-        if (function == NULL || inline_asm_id >= function->inline_asm_count) {
-            return false;
-        }
-        inline_asm = &function->inline_asms[inline_asm_id];
-        return fprintf(output,
-                       "  %%%" PRIu32 " = asm.register_output_input id=%" PRIu32
-                       " %%%" PRIu32 "%s%s\n",
-                       instruction->result,
-                       inline_asm_id,
-                       instruction->value.register_output_input_inline_asm.operand,
-                       inline_asm->is_volatile ? " volatile" : "",
-                       inline_asm->has_memory_clobber ? " memory" : "") >= 0;
-    }
-    case MINIC_CORE_INSTRUCTION_MEMORY_READWRITE_SCALAR_INPUT_INLINE_ASM: {
-        const MinicCoreInlineAsm *inline_asm;
-        MinicCoreInlineAsmId inline_asm_id;
-        size_t register_index;
-
-        inline_asm_id = instruction->value.memory_readwrite_scalar_input_inline_asm.inline_asm_id;
-        register_index =
-            instruction->value.memory_readwrite_scalar_input_inline_asm.register_output_operand_index;
-        if (function == NULL || inline_asm_id >= function->inline_asm_count) {
-            return false;
-        }
-        inline_asm = &function->inline_asms[inline_asm_id];
-        if (register_index == SIZE_MAX) {
-            return fprintf(output,
-                           "  asm.memory_rw_input id=%" PRIu32 " mem=%%%" PRIu32
-                           " input=%%%" PRIu32 " operands=%zu,-,%zu%s%s\n",
-                           inline_asm_id,
-                           instruction->value.memory_readwrite_scalar_input_inline_asm.memory_address,
-                           instruction->value.memory_readwrite_scalar_input_inline_asm.operand,
-                           instruction->value.memory_readwrite_scalar_input_inline_asm.memory_operand_index,
-                           instruction->value.memory_readwrite_scalar_input_inline_asm.scalar_input_operand_index,
-                           inline_asm->is_volatile ? " volatile" : "",
-                           inline_asm->has_memory_clobber ? " memory" : "") >= 0;
-        }
-        return fprintf(output,
-                       "  %%%" PRIu32 " = asm.memory_rw_input id=%" PRIu32
-                       " mem=%%%" PRIu32 " input=%%%" PRIu32 " operands=%zu,%zu,%zu%s%s\n",
-                       instruction->result,
-                       inline_asm_id,
-                       instruction->value.memory_readwrite_scalar_input_inline_asm.memory_address,
-                       instruction->value.memory_readwrite_scalar_input_inline_asm.operand,
-                       instruction->value.memory_readwrite_scalar_input_inline_asm.memory_operand_index,
-                       register_index,
-                       instruction->value.memory_readwrite_scalar_input_inline_asm.scalar_input_operand_index,
-                       inline_asm->is_volatile ? " volatile" : "",
-                       inline_asm->has_memory_clobber ? " memory" : "") >= 0;
-    }
-    case MINIC_CORE_INSTRUCTION_SCALAR_INPUT_INLINE_ASM: {
-        const MinicCoreInlineAsm *inline_asm;
-        MinicCoreInlineAsmId inline_asm_id;
-
-        inline_asm_id = instruction->value.scalar_input_inline_asm.inline_asm_id;
-        if (function == NULL || inline_asm_id >= function->inline_asm_count) {
-            return false;
-        }
-        inline_asm = &function->inline_asms[inline_asm_id];
-        return fprintf(output,
-                       "  asm.scalar_input id=%" PRIu32 " %%%" PRIu32 "%s%s\n",
-                       inline_asm_id,
-                       instruction->value.scalar_input_inline_asm.operand,
-                       inline_asm->is_volatile ? " volatile" : "",
-                       inline_asm->has_memory_clobber ? " memory" : "") >= 0;
-    }
     case MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM: {
         MinicCoreInlineAsmId inline_asm_id;
         const MinicCoreInlineAsm *inline_asm;
@@ -533,8 +448,13 @@ static bool dump_instruction(FILE *output,
             return false;
         }
         inline_asm = &function->inline_asms[inline_asm_id];
+        if (instruction->result != MINIC_CORE_VALUE_INVALID &&
+            fprintf(output, "  %%%" PRIu32 " =", instruction->result) < 0)
+            return false;
         if (fprintf(output,
-                    "  asm.structured id=%" PRIu32 " operands=%zu%s%s",
+                    instruction->result == MINIC_CORE_VALUE_INVALID
+                        ? "  asm.structured id=%" PRIu32 " operands=%zu%s%s"
+                        : " asm.structured id=%" PRIu32 " operands=%zu%s%s",
                     inline_asm_id,
                     instruction->value.structured_inline_asm.operand_count,
                     inline_asm->is_volatile ? " volatile" : "",

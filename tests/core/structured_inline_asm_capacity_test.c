@@ -145,6 +145,95 @@ static bool verify_core_roles(size_t count, CoreAsmPoison poison, bool expected)
     return initialized && verified == expected;
 }
 
+/* A register output with an SSA definition is not a pointer-backed output.
+ * Core must preserve one result, regard its output binding as a definition
+ * rather than a use, and reject duplicate/malformed register results. */
+static bool verify_core_scalar_result(bool bad_value, bool duplicate_output,
+                                      bool missing_result, bool expected) {
+    MinicCoreSourceBuilder builder;
+    MinicCoreFunction *function = &builder.core;
+    MinicCoreTypeContext context;
+    MinicCoreType type = {0};
+    MinicCoreTypeId integer_type, void_type;
+    MinicCoreInstruction integer = {0}, result = {0};
+    MinicCoreTerminator terminator = {0};
+    MinicCoreValueId input, output;
+    MinicCoreBlockId block;
+    MinicCoreInlineAsmId asm_id;
+    bool ready;
+    bool verified = false;
+
+    minic_core_type_context_initialize(&context);
+    type.kind = MINIC_CORE_TYPE_INTEGER;
+    type.has_layout = true;
+    type.size = 4U;
+    type.alignment = 4U;
+    type.value.integer.bit_width = 32U;
+    type.value.integer.is_signed = true;
+    if (!minic_core_type_register(&context, &type, &integer_type)) {
+        minic_core_type_context_destroy(&context);
+        return false;
+    }
+    memset(&type, 0, sizeof(type));
+    type.kind = MINIC_CORE_TYPE_VOID;
+    if (!minic_core_type_register(&context, &type, &void_type)) {
+        minic_core_type_context_destroy(&context);
+        return false;
+    }
+    minic_core_source_builder_initialize(&builder);
+    ready = minic_core_function_set_signature(
+                &builder, "ssa_asm", 7U, minic_type_void(), NULL, 0U) &&
+            minic_core_function_add_block(function, &block) &&
+            minic_core_function_add_opaque_inline_asm(
+                function, "addi %0,%1,0", 12U, true, false, &asm_id);
+    if (ready) {
+        integer.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
+        integer.value.integer_value = 41;
+        ready = minic_core_function_append_value_instruction(
+            function, block, &integer, &input);
+    }
+    if (ready) {
+        result.kind = MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM;
+        result.value.structured_inline_asm.inline_asm_id = asm_id;
+        result.value.structured_inline_asm.operand_count = 2U;
+        result.value.structured_inline_asm.operands[0].kind =
+            MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_RESULT;
+        result.value.structured_inline_asm.operands[0].operand_index = 0U;
+        result.value.structured_inline_asm.operands[0].value =
+            bad_value ? input : MINIC_CORE_VALUE_INVALID;
+        result.value.structured_inline_asm.operands[1].kind =
+            duplicate_output ? MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_RESULT
+                             : MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+        result.value.structured_inline_asm.operands[1].operand_index = 1U;
+        result.value.structured_inline_asm.operands[1].value =
+            duplicate_output ? MINIC_CORE_VALUE_INVALID : input;
+        ready = minic_core_function_append_value_instruction(
+            function, block, &result, &output);
+    }
+    if (ready) {
+        terminator.kind = MINIC_CORE_TERMINATOR_RETURN;
+        terminator.return_value = MINIC_CORE_VALUE_INVALID;
+        terminator.return_object = MINIC_CORE_OBJECT_INVALID;
+        ready = minic_core_function_set_terminator(function, block, &terminator) &&
+                minic_core_function_define_signature(
+                    function, &context, void_type, NULL, 0U,
+                    MINIC_CALLING_CONVENTION_DEFAULT, false);
+    }
+    if (ready) {
+        function->values[input].core_type_id = integer_type;
+        function->values[output].core_type_id = integer_type;
+        function->instructions[0].core_type_id = integer_type;
+        function->instructions[1].core_type_id = integer_type;
+        if (missing_result)
+            function->instructions[1].result = MINIC_CORE_VALUE_INVALID;
+        verified = minic_core_function_attach_type_context(function, &context) &&
+                   minic_core_function_verify(function);
+    }
+    minic_core_source_builder_destroy(&builder);
+    minic_core_type_context_destroy(&context);
+    return ready && verified == expected;
+}
+
 int main(void) {
     MinicInlineAsm source;
     MinicInlineAsmOperand outputs[4];
@@ -185,6 +274,13 @@ int main(void) {
         !verify_core_roles(13U, CORE_ASM_UNCLAIMED_INPUT_TIE, false)) {
         (void)fprintf(stderr, "FAIL 13-16 operand Core verifier boundary\n");
         return 5;
+    }
+    if (!verify_core_scalar_result(false, false, false, true) ||
+        !verify_core_scalar_result(true, false, false, false) ||
+        !verify_core_scalar_result(false, true, false, false) ||
+        !verify_core_scalar_result(false, false, true, false)) {
+        (void)fprintf(stderr, "FAIL SSA register-result Core verifier boundary\n");
+        return 6;
     }
 
     /* A GNU goto label uses the operand slot immediately after all data

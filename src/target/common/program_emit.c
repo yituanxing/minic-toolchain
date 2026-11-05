@@ -18,7 +18,7 @@ bool minic_program_emit_module_preflight(
     const MinicCoreModule *module, const MinicCoreFunction *functions,
     size_t function_count) {
     size_t index;
-    if (!minic_core_module_verify(module) ||
+    if (!minic_core_module_verify_label_bindings(module, functions, function_count) ||
         module->function_count != function_count ||
         (function_count != 0U && functions == NULL))
         return false;
@@ -233,20 +233,11 @@ static bool minic_program_emit_collect_symbol_uses_module(
                     name = function->callees[ins->value.call.callee_id].name;
                 }
                 if (ins->kind == MINIC_CORE_INSTRUCTION_OPAQUE_INLINE_ASM ||
-                    ins->kind == MINIC_CORE_INSTRUCTION_REGISTER_OUTPUT_INLINE_ASM ||
-                    ins->kind == MINIC_CORE_INSTRUCTION_REGISTER_OUTPUT_INPUT_INLINE_ASM ||
-                    ins->kind == MINIC_CORE_INSTRUCTION_MEMORY_READWRITE_SCALAR_INPUT_INLINE_ASM ||
-                    ins->kind == MINIC_CORE_INSTRUCTION_SCALAR_INPUT_INLINE_ASM ||
                     ins->kind == MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM) {
-                    MinicCoreInlineAsmId asm_id = ins->value.inline_asm_id;
-                    if (ins->kind == MINIC_CORE_INSTRUCTION_REGISTER_OUTPUT_INPUT_INLINE_ASM)
-                        asm_id = ins->value.register_output_input_inline_asm.inline_asm_id;
-                    if (ins->kind == MINIC_CORE_INSTRUCTION_MEMORY_READWRITE_SCALAR_INPUT_INLINE_ASM)
-                        asm_id = ins->value.memory_readwrite_scalar_input_inline_asm.inline_asm_id;
-                    if (ins->kind == MINIC_CORE_INSTRUCTION_SCALAR_INPUT_INLINE_ASM)
-                        asm_id = ins->value.scalar_input_inline_asm.inline_asm_id;
-                    if (ins->kind == MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM)
-                        asm_id = ins->value.structured_inline_asm.inline_asm_id;
+                    MinicCoreInlineAsmId asm_id = ins->kind ==
+                        MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM
+                        ? ins->value.structured_inline_asm.inline_asm_id
+                        : ins->value.inline_asm_id;
                     if (asm_id >= function->inline_asm_count ||
                         !minic_program_symbol_use_add_asm(
                             uses, &function->inline_asms[asm_id])) {
@@ -371,7 +362,8 @@ bool minic_program_emit_write_module(
         module == NULL || !module->finalized || visit_module_global == NULL ||
         module->function_count != function_count ||
         config->emit_function == NULL ||
-        (function_count != 0U && functions == NULL))
+        (function_count != 0U && functions == NULL) ||
+        !minic_program_emit_module_preflight(module, functions, function_count))
         return false;
     /* Stage next to the destination, without touching the last good .s.
      * Both output and ISA finalizers operate on this private file. Only a

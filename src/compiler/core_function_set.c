@@ -202,7 +202,7 @@ bool minic_prepare_core_function_set(const MinicC0Program *program,
         if (function->is_internal && !function->is_referenced &&
             !set.module.function_symbols[function_index].is_reachability_root &&
             !set.module.function_symbols[function_index].is_file_asm_root &&
-            !set.module.function_symbols[function_index].is_source_label_relocation_owner) {
+            !set.module.function_symbols[function_index].is_owner_label_relocation_target) {
             const char *name = set.module.function_symbols[function_index].name;
             size_t first, last;
             /* An external declaration and a local definition may share an
@@ -295,6 +295,9 @@ bool minic_finalize_core_function_set_module(const MinicC0Program *program,
         return false;
     ok = minic_core_module_materialize_live_payloads(
         &set->module, program, target, set->type_importer);
+    if (ok)
+        ok = minic_core_module_verify_label_bindings(
+            &set->module, set->functions, set->function_count);
     /* The Core module is immutable after construction. Release the last
      * compiler-only AST importer before entering target emission. */
     minic_core_type_importer_destroy(set->type_importer);

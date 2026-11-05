@@ -95,14 +95,7 @@ static bool core_asm_id_for_instruction(const MinicCoreInstruction *ins,
                                         MinicCoreInlineAsmId *id) {
     switch (ins->kind) {
     case MINIC_CORE_INSTRUCTION_OPAQUE_INLINE_ASM:
-    case MINIC_CORE_INSTRUCTION_REGISTER_OUTPUT_INLINE_ASM:
         *id = ins->value.inline_asm_id; return true;
-    case MINIC_CORE_INSTRUCTION_REGISTER_OUTPUT_INPUT_INLINE_ASM:
-        *id = ins->value.register_output_input_inline_asm.inline_asm_id; return true;
-    case MINIC_CORE_INSTRUCTION_MEMORY_READWRITE_SCALAR_INPUT_INLINE_ASM:
-        *id = ins->value.memory_readwrite_scalar_input_inline_asm.inline_asm_id; return true;
-    case MINIC_CORE_INSTRUCTION_SCALAR_INPUT_INLINE_ASM:
-        *id = ins->value.scalar_input_inline_asm.inline_asm_id; return true;
     case MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM:
         *id = ins->value.structured_inline_asm.inline_asm_id; return true;
     default: return false;

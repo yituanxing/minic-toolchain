@@ -31,12 +31,28 @@ static bool direct_lp64_only_structured_asm(
         const MinicCoreInstruction *ins = &fn->instructions[i];
         if (ins->kind == MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM) {
             const size_t id = ins->value.structured_inline_asm.inline_asm_id;
+            const size_t operand_count = ins->value.structured_inline_asm.operand_count;
             if (id >= fn->inline_asm_count || used[id] ||
                 fn->inline_asms[id].is_goto ||
                 fn->inline_asms[id].template_text == NULL ||
                 ins->result != MINIC_CORE_VALUE_INVALID ||
                 !minic_lp64_core_kind(fn->type_context, ins->core_type_id,
                                       MINIC_CORE_TYPE_VOID))
+                goto done;
+            /* The generic GNU fallback previously published these as two
+             * RISC-V-only scalar instruction kinds. Unifying Core's operand
+             * representation must not silently grant x86/A64/Loong a new
+             * hardware ASM capability. Already-qualified target contracts
+             * and the existing two-input / +r structured forms are intact. */
+            if (fn->inline_asms[id].operand_plan_owner == MINIC_ASM_OPERAND_PLAN_NONE &&
+                ((operand_count == 1U &&
+                  ins->value.structured_inline_asm.operands[0].kind ==
+                      MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT) ||
+                 (operand_count == 2U &&
+                  ins->value.structured_inline_asm.operands[0].kind ==
+                      MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE &&
+                  ins->value.structured_inline_asm.operands[1].kind ==
+                      MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT)))
                 goto done;
             used[id] = true;
             ++count;
@@ -51,11 +67,6 @@ static bool direct_lp64_only_structured_asm(
                 goto done;
             used[id] = true;
             ++count;
-        } else if (ins->kind == MINIC_CORE_INSTRUCTION_REGISTER_OUTPUT_INLINE_ASM ||
-                   ins->kind == MINIC_CORE_INSTRUCTION_REGISTER_OUTPUT_INPUT_INLINE_ASM ||
-                   ins->kind == MINIC_CORE_INSTRUCTION_MEMORY_READWRITE_SCALAR_INPUT_INLINE_ASM ||
-                   ins->kind == MINIC_CORE_INSTRUCTION_SCALAR_INPUT_INLINE_ASM) {
-            goto done;
         }
     }
     accepted = count == fn->inline_asm_count;

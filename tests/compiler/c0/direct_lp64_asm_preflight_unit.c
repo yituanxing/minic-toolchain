@@ -35,6 +35,31 @@ static int check_asm_ids(size_t count) {
     function.instructions = instructions;
     if (!direct_lp64_only_structured_asm(&function, NULL)) goto done;
 
+    /* Source-generic scalar fallbacks were previously RISC-V-only opcodes.
+     * Their new typed STRUCTURED spelling must not silently widen x86/A64/
+     * Loong hardware capabilities, while target-qualified exact forms and
+     * pre-existing generic +r/two-input effects remain admissible here. */
+    instructions[0].value.structured_inline_asm.operand_count = 1U;
+    instructions[0].value.structured_inline_asm.operands[0].kind =
+        MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+    if (direct_lp64_only_structured_asm(&function, NULL)) goto done;
+    asms[0].operand_plan_owner = MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED;
+    if (!direct_lp64_only_structured_asm(&function, NULL)) goto done;
+    asms[0].operand_plan_owner = MINIC_ASM_OPERAND_PLAN_NONE;
+    instructions[0].value.structured_inline_asm.operands[0].kind =
+        MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE;
+    if (!direct_lp64_only_structured_asm(&function, NULL)) goto done;
+    instructions[0].value.structured_inline_asm.operand_count = 2U;
+    instructions[0].value.structured_inline_asm.operands[0].kind =
+        MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE;
+    instructions[0].value.structured_inline_asm.operands[1].kind =
+        MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+    if (direct_lp64_only_structured_asm(&function, NULL)) goto done;
+    instructions[0].value.structured_inline_asm.operands[0].kind =
+        MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+    if (!direct_lp64_only_structured_asm(&function, NULL)) goto done;
+    instructions[0].value.structured_inline_asm.operand_count = 0U;
+
     /* One repeated ID leaves another entry orphaned. */
     if (count > 1U) {
         instructions[count - 1U].value.structured_inline_asm.inline_asm_id = 0U;

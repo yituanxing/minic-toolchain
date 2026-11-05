@@ -110,11 +110,10 @@ size_t minic_core_function_fold_literal_branches(MinicCoreFunction *function) {
     return count;
 }
 
-/* One target-independent conservative CFG filter for every Core backend.
- * Keep source labels as additional roots: they may be reached through a
- * computed goto, asm-goto or forward function-level goto even when their
- * lexical switch/loop arm has no ordinary CFG predecessor. All targets must
- * agree on this reachability set for instructions and ELF symbol uses. */
+/* One target-independent CFG filter for every Core backend. An exported
+ * local symbol is a linker-visible entry; an indirect-entry block is a
+ * control-flow entry. Neither role implies the other, and live ASM-goto
+ * effects contribute explicit non-terminator successors. */
 bool minic_core_function_mark_reachable_blocks(const MinicCoreFunction *function,
                                                bool *reachable, size_t capacity) {
     MinicCoreBlockId *queue;
@@ -137,17 +136,16 @@ bool minic_core_function_mark_reachable_blocks(const MinicCoreFunction *function
 
     MINIC_CORE_REACH_ENQUEUE(function->entry_block);
     for (index = 0U; index < function->block_count; ++index)
-        if (function->blocks[index].local_label_symbol != NULL)
+        if (function->blocks[index].indirect_entry ||
+            function->blocks[index].local_label_symbol != NULL)
             MINIC_CORE_REACH_ENQUEUE((MinicCoreBlockId)index);
     while (begin < end) {
         const MinicCoreBlock *block = &function->blocks[queue[begin++]];
         size_t instruction_index;
-        /* A BLOCK_ADDRESS produced in an executable block is a first-class
-         * escape edge to its target block, even if that target has no source
-         * local_label_symbol. This is Core CFG ownership, not C label syntax;
-         * the same canonical marking is used by the backend emitter and the
-         * whole-module symbol closure. Unreachable address producers do not
-         * introduce spurious roots. */
+        /* A live BLOCK_ADDRESS produces a first-class escape edge to a Core
+         * block even if it has no exported assembler symbol. An ASM-goto
+         * also transfers control directly from its containing instruction;
+         * these edges must survive independent Core producers. */
         if ((block->instruction_count != 0U && block->instructions == NULL) ||
             (function->instruction_count != 0U && function->instructions == NULL)) {
             free(queue);
@@ -164,6 +162,25 @@ bool minic_core_function_mark_reachable_blocks(const MinicCoreFunction *function
             instruction = &function->instructions[id];
             if (instruction->kind == MINIC_CORE_INSTRUCTION_BLOCK_ADDRESS)
                 MINIC_CORE_REACH_ENQUEUE(instruction->value.block_id);
+            if (instruction->kind == MINIC_CORE_INSTRUCTION_OPAQUE_INLINE_ASM ||
+                instruction->kind == MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM) {
+                const MinicCoreInlineAsmId asm_id =
+                    instruction->kind == MINIC_CORE_INSTRUCTION_OPAQUE_INLINE_ASM
+                    ? instruction->value.inline_asm_id
+                    : instruction->value.structured_inline_asm.inline_asm_id;
+                const MinicCoreInlineAsm *assembly;
+                if (asm_id >= function->inline_asm_count ||
+                    function->inline_asms == NULL) {
+                    free(queue);
+                    return false;
+                }
+                assembly = &function->inline_asms[asm_id];
+                if (assembly->is_goto) {
+                    MINIC_CORE_REACH_ENQUEUE(assembly->goto_target);
+                    if (assembly->goto_second_target != MINIC_CORE_BLOCK_INVALID)
+                        MINIC_CORE_REACH_ENQUEUE(assembly->goto_second_target);
+                }
+            }
         }
         if (!block->has_terminator) { free(queue); return false; }
         switch (block->terminator.kind) {
@@ -185,6 +202,37 @@ bool minic_core_function_mark_reachable_blocks(const MinicCoreFunction *function
     }
 #undef MINIC_CORE_REACH_ENQUEUE
     free(queue);
+    return true;
+}
+
+bool minic_core_function_mark_indirect_entries(const MinicCoreFunction *function,
+                                               const bool *reachable,
+                                               bool *indirect_entries, size_t capacity) {
+    size_t block_id;
+    if (function == NULL || reachable == NULL || indirect_entries == NULL ||
+        function->block_count == 0U || capacity < function->block_count ||
+        function->blocks == NULL) return false;
+    memset(indirect_entries, 0, function->block_count * sizeof(*indirect_entries));
+    for (block_id = 0U; block_id < function->block_count; ++block_id) {
+        const MinicCoreBlock *block = &function->blocks[block_id];
+        size_t index;
+        if (!reachable[block_id]) continue;
+        if (block->indirect_entry) indirect_entries[block_id] = true;
+        if ((block->instruction_count != 0U && block->instructions == NULL) ||
+            (function->instruction_count != 0U && function->instructions == NULL))
+            return false;
+        for (index = 0U; index < block->instruction_count; ++index) {
+            const MinicCoreInstructionId instruction_id = block->instructions[index];
+            const MinicCoreInstruction *instruction;
+            if (instruction_id >= function->instruction_count) return false;
+            instruction = &function->instructions[instruction_id];
+            if (instruction->kind == MINIC_CORE_INSTRUCTION_BLOCK_ADDRESS) {
+                if (instruction->value.block_id >= function->block_count ||
+                    !reachable[instruction->value.block_id]) return false;
+                indirect_entries[instruction->value.block_id] = true;
+            }
+        }
+    }
     return true;
 }
 

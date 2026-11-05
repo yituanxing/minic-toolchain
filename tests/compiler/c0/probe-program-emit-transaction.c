@@ -110,6 +110,15 @@ static bool module_between(FILE *out, const MinicCoreModule *module,
 
 /* Module-only output owns immutable global/ASM and symbol-use evidence. */
 static int check_module_snapshot_output(const char *path) {
+    MinicCoreTypeContext types = {0};
+    MinicCoreType word = {
+        .kind = MINIC_CORE_TYPE_INTEGER, .has_layout = true,
+        .size = 8U, .alignment = 8U
+    };
+    MinicCoreTypeId word_id;
+    MinicCoreModuleReference reference = {
+        .kind = MINIC_CORE_MODULE_REFERENCE_OBJECT, .target_index = 1U
+    };
     MinicCoreModuleFragment fragment = {
         .kind = MINIC_CORE_MODULE_FRAGMENT_RELOCATION,
         .byte_count = 8U,
@@ -118,14 +127,17 @@ static int check_module_snapshot_output(const char *path) {
     };
     MinicCoreModuleGlobal globals[4] = {
         { .name = "owned", .emittable = true, .fragments = &fragment,
-          .fragment_count = 1U, .alias_target_index = SIZE_MAX },
+          .fragment_count = 1U, .references = &reference,
+          .reference_count = 1U, .storage_size = 8U,
+          .storage_alignment = 8U, .default_section = MINIC_CORE_MODULE_SECTION_DATA,
+          .alias_target_index = SIZE_MAX, .owner_function_index = SIZE_MAX },
         { .name = "weak_ext", .definition_kind = MINIC_CORE_MODULE_DEFINITION_DECLARATION,
           .is_weak = true,
           .visibility = MINIC_CORE_MODULE_VISIBILITY_HIDDEN,
-          .alias_target_index = SIZE_MAX },
+          .alias_target_index = SIZE_MAX, .owner_function_index = SIZE_MAX },
         { .name = "unused_hidden", .definition_kind = MINIC_CORE_MODULE_DEFINITION_DECLARATION,
           .visibility = MINIC_CORE_MODULE_VISIBILITY_HIDDEN,
-          .alias_target_index = SIZE_MAX },
+          .alias_target_index = SIZE_MAX, .owner_function_index = SIZE_MAX },
         /* Real ModuleIR ingress seals lexical raw file-ASM references into
          * this ownership bit. A hand-built module must carry that fact too;
          * the output writer must not parse source ASM a second time. */
@@ -133,10 +145,11 @@ static int check_module_snapshot_output(const char *path) {
           .is_weak = true,
           .is_file_asm_root = true,
           .visibility = MINIC_CORE_MODULE_VISIBILITY_HIDDEN,
-          .alias_target_index = SIZE_MAX }
+          .alias_target_index = SIZE_MAX, .owner_function_index = SIZE_MAX }
     };
     MinicCoreModuleFileAsm file_asm = { " .quad asm_weak", 15U };
     MinicCoreModule module = {
+        .type_context = &types,
         .globals = globals, .global_count = 4U,
         .file_asms = &file_asm, .file_asm_count = 1U,
         .finalized = true
@@ -152,6 +165,9 @@ static int check_module_snapshot_output(const char *path) {
     FILE *in;
     char data[4096] = {0};
     size_t count;
+    minic_core_type_context_initialize(&types);
+    if (!minic_core_type_register(&types, &word, &word_id)) return 19;
+    globals[0].core_type_id = word_id;
     if (!minic_program_emit_write_module(
             path, &module, &target, NULL, 0U, false,
             &config, &context, module_global)) return 1;
@@ -233,14 +249,26 @@ static int check_module_snapshot_output(const char *path) {
             strstr(data, ".set alias_obj, owned\n") == NULL ||
             strstr(data, ".set alias_fn, real_fn\n") == NULL) return 7;
     }
+    minic_core_type_context_destroy(&types);
     (void)remove(path);
     return 0;
 }
 
 int main(int argc, char **argv) {
+    MinicCoreType scalar = {
+        .kind = MINIC_CORE_TYPE_INTEGER, .has_layout = true,
+        .size = 8U, .alignment = 8U
+    };
+    MinicCoreTypeId scalar_id;
+    MinicCoreModuleFragment zero = {
+        .kind = MINIC_CORE_MODULE_FRAGMENT_ZERO, .byte_count = 8U
+    };
     MinicCoreModuleGlobal object = {
         .name = "fixture_global", .emittable = true,
-        .alias_target_index = SIZE_MAX
+        .storage_size = 8U, .storage_alignment = 8U,
+        .default_section = MINIC_CORE_MODULE_SECTION_BSS,
+        .fragments = &zero, .fragment_count = 1U,
+        .alias_target_index = SIZE_MAX, .owner_function_index = SIZE_MAX
     };
     MinicCoreModuleFunctionSymbol declaration = {
         .name = "fixture_function", .is_defined = true,
@@ -265,6 +293,7 @@ int main(int argc, char **argv) {
         { .kind = MINIC_CORE_INSTRUCTION_CALL_FRAME_ADDRESS }
     };
     MinicCoreModule module = {
+        .type_context = &synthetic_types,
         .globals = &object, .global_count = 1U,
         .function_symbols = &declaration, .function_count = 1U,
         .finalized = true
@@ -284,6 +313,9 @@ int main(int argc, char **argv) {
     const char *path;
     if (argc != 2) return 2;
     path = argv[1];
+    minic_core_type_context_initialize(&synthetic_types);
+    if (!minic_core_type_register(&synthetic_types, &scalar, &scalar_id)) return 3;
+    object.core_type_id = scalar_id;
     instructions[5].value.call_frame_address.kind = MINIC_CORE_CALL_FRAME_ADDRESS_RETURN;
     ir.instructions = instructions;
     ir.type_context = &synthetic_types;
@@ -362,7 +394,14 @@ int main(int argc, char **argv) {
         }
         if (fclose(probe) != 0) return 46;
     }
-    if (check_module_snapshot_output(path) != 0) return 50;
+    {
+        const int snapshot_result = check_module_snapshot_output(path);
+        if (snapshot_result != 0) {
+            (void)fprintf(stderr, "MODULE_SNAPSHOT_TRANSACTION_FAILED=%d\n",
+                          snapshot_result);
+            return 50;
+        }
+    }
     puts("MINIC_CORE_MODULE_SYMBOL_TRANSACTION=PASS no_C_program_global=file_asm=1 weak_hidden=2 alias=2 invalid_reject=2");
     (void)remove(path);
     /* Errors at every stage must leave the previous successful output
@@ -399,6 +438,7 @@ int main(int argc, char **argv) {
     }
     (void)remove(path);
     puts("MINIC_FIVE_TARGET_OUTPUT_TRANSACTION=PASS failures=5 rollback=5 census=1 atomic_preserve=5");
+    minic_core_type_context_destroy(&synthetic_types);
     return 0;
 }
 

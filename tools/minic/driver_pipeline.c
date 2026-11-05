@@ -18,62 +18,6 @@ static bool minic_driver_plain_char_unsigned(const MinicDriverLanguageOptions *o
 }
 
 
-static void append_rv64_linux_musl_predefines(char **arguments,
-                                               size_t *count,
-                                               bool hosted,
-                                               const char *march,
-                                               const char *mabi,
-                                 const MinicDriverLanguageOptions *language) {
-    arguments[(*count)++] = "-D__STDC__=1";
-    arguments[(*count)++] = "-D__STDC_VERSION__=201112L";
-    /*
-     * Product-driver GNU surface level.  Keep this deliberately conservative:
-     * real-world headers use __GNUC_PREREQ(2,7) to decide whether GNU
-     * __attribute__ syntax is available.  MiniC supports that syntax, but does
-     * not claim the later GCC builtin/optimization surface.  Advertising 2.7
-     * preserves attributes such as packed without opening newer feature paths.
-     */
-    arguments[(*count)++] = "-D__GNUC__=2";
-    arguments[(*count)++] = "-D__GNUC_MINOR__=7";
-    arguments[(*count)++] = "-D__GNUC_PATCHLEVEL__=0";
-    arguments[(*count)++] =
-        hosted ? "-D__STDC_HOSTED__=1" : "-D__STDC_HOSTED__=0";
-    arguments[(*count)++] = "-D__linux__=1";
-    arguments[(*count)++] = "-D__linux=1";
-    arguments[(*count)++] = "-Dlinux=1";
-    arguments[(*count)++] = "-D__unix__=1";
-    arguments[(*count)++] = "-D__unix=1";
-    arguments[(*count)++] = "-D__riscv=1";
-    arguments[(*count)++] = "-D__riscv_xlen=64";
-    if (minic_driver_plain_char_unsigned(language))
-        arguments[(*count)++] = "-D__CHAR_UNSIGNED__=1";
-    arguments[(*count)++] = "-D__LP64__=1";
-    arguments[(*count)++] = "-D_LP64=1";
-    if (mabi != NULL && strcmp(mabi, "lp64") == 0) {
-        arguments[(*count)++] = "-D__riscv_float_abi_soft=1";
-    } else {
-        arguments[(*count)++] = "-D__riscv_float_abi_double=1";
-    }
-    /* CPP macros describe available hardware, not compiler codegen choices. */
-    if (march == NULL ||
-        (minic_riscv_profile_find(march) != NULL &&
-         (minic_riscv_profile_find(march)->features & MINIC_RISCV_FEATURE_M))) {
-        arguments[(*count)++] = "-D__riscv_mul=1";
-        arguments[(*count)++] = "-D__riscv_div=1";
-    }
-    arguments[(*count)++] = "-D__ORDER_LITTLE_ENDIAN__=1234";
-    arguments[(*count)++] = "-D__ORDER_BIG_ENDIAN__=4321";
-    arguments[(*count)++] =
-        "-D__BYTE_ORDER__=__ORDER_LITTLE_ENDIAN__";
-    arguments[(*count)++] = "-D__CHAR_BIT__=8";
-    arguments[(*count)++] = "-D__SIZEOF_SHORT__=2";
-    arguments[(*count)++] = "-D__SIZEOF_INT__=4";
-    arguments[(*count)++] = "-D__SIZEOF_LONG__=8";
-    arguments[(*count)++] = "-D__SIZEOF_LONG_LONG__=8";
-    arguments[(*count)++] = "-D__SIZEOF_POINTER__=8";
-    arguments[(*count)++] = "-D__SIZEOF_SIZE_T__=8";
-}
-
 static char *duplicate_text(const char *text) {
     size_t size = strlen(text) + 1U;
     char *copy = malloc(size);
@@ -218,6 +162,7 @@ static int preprocess_c_to_file(const MinicDriverInvocation *invocation,
     const char *march = invocation->march;
     const char *mabi = invocation->mabi;
     const MinicDriverLanguageOptions *language = &invocation->language;
+    const MinicTargetDriverStageRecipe *recipe = invocation->stage_recipe;
     char *include_dir = NULL;
     char *arguments[256];
     size_t count = 0U;
@@ -229,8 +174,12 @@ static int preprocess_c_to_file(const MinicDriverInvocation *invocation,
     arguments[count++] = "-P";
     arguments[count++] = "-undef";
     arguments[count++] = "-nostdinc";
-    append_rv64_linux_musl_predefines(
-        arguments, &count, hosted, march, mabi, language);
+    if (recipe == NULL || !recipe->append_cpp_predefines(
+            arguments, &count, sizeof(arguments) / sizeof(arguments[0]),
+            hosted, minic_driver_plain_char_unsigned(language), march, mabi)) {
+        fprintf(stderr, "minic: invalid-staged-CPP-recipe\n");
+        return 1;
+    }
     /*
      * User include directories must shadow the driver's default sysroot
      * headers, matching GCC's -I-before-system search semantics.  MiniPP
@@ -321,6 +270,7 @@ static int compile_c_to_object(const MinicDriverInvocation *invocation,
                                char *as) {
     const char *march = invocation->march;
     const char *mabi = invocation->mabi;
+    const MinicTargetDriverStageRecipe *recipe = invocation->stage_recipe;
     char *temp_s = make_temp_path("/tmp/minic-driver-s-XXXXXX");
     int status = 1;
 
@@ -331,13 +281,13 @@ static int compile_c_to_object(const MinicDriverInvocation *invocation,
     if (status == 0) {
         char *arguments[8];
         size_t argument_count = 0U;
-        /* User-facing driver uses the same ISA and ABI as minic-cc.
-         * The default existing rv64gc/lp64d pipeline is untouched. */
+        /* The assembler sees the same ISA/ABI as minic-cc. Legacy defaults
+         * belong to this qualified target recipe, not the generic driver. */
         char isa_option[64], abi_option[32];
         int isa_size = snprintf(isa_option, sizeof(isa_option), "-march=%s",
-                                march != NULL ? march : "rv64gc");
+                                march != NULL ? march : recipe->assembler_default_march);
         int abi_size = snprintf(abi_option, sizeof(abi_option), "-mabi=%s",
-                                mabi != NULL ? mabi : "lp64d");
+                                mabi != NULL ? mabi : recipe->assembler_default_mabi);
         /* The profile was already validated by the shared catalog in main.
          * The assembler receives exactly that pair, without an independent
          * ternary map silently rewriting a future accepted ISA. */
@@ -382,6 +332,7 @@ int minic_driver_execute(const char *argv0,
     const char *march = invocation->march;
     const char *mabi = invocation->mabi;
     const char *runtime_archive = invocation->runtime_archive;
+    const MinicTargetDriverStageRecipe *recipe = invocation->stage_recipe;
     MinicDriverLanguageOptions language = invocation->language;
     const char *const *ld_forward = invocation->ld_forward;
     size_t ld_forward_count = invocation->ld_forward_count;
@@ -403,6 +354,18 @@ int minic_driver_execute(const char *argv0,
     int status = 1;
 
     (void)memset(temporary_objects, 0, sizeof(temporary_objects));
+
+    if (mode != MINIC_DRIVER_ASSEMBLY) {
+        const MinicTargetCatalogEntry *entry =
+            minic_target_catalog_find(target_name);
+        if (entry == NULL || recipe == NULL ||
+            recipe->architecture != entry->architecture ||
+            (entry->product_driver_stages &
+             MINIC_TARGET_STAGE_STAGED_ASSEMBLER_AND_LINKER) == 0U) {
+            fprintf(stderr, "minic: invalid-staged-target-recipe\n");
+            return 2;
+        }
+    }
 
     cpp = sibling_tool(argv0, "minic-cpp");
     cc = sibling_tool(argv0, "minic-cc");
@@ -518,7 +481,7 @@ int minic_driver_execute(const char *argv0,
         }
 
         arguments[count++] = ld;
-        arguments[count++] = "-melf64lriscv";
+        arguments[count++] = (char *)recipe->ld_emulation_option;
         if (static_link) {
             arguments[count++] = "-static";
         } else {
@@ -527,8 +490,7 @@ int minic_driver_execute(const char *argv0,
         arguments[count++] = "-e";
         arguments[count++] = "_start";
         if (!static_link) {
-            arguments[count++] =
-                "--dynamic-linker=/lib/ld-musl-riscv64.so.1";
+            arguments[count++] = (char *)recipe->dynamic_linker_option;
         }
         arguments[count++] = "-o";
         arguments[count++] = (char *)output;
@@ -553,9 +515,10 @@ int minic_driver_execute(const char *argv0,
             if (static_link) {
                 arguments[count++] = "--start-group";
                 arguments[count++] = "-lc";
-                /* Never silently link a default LP64D multilib runtime
-                 * into an explicitly requested RV64I/LP64 binary. */
-                if (march == NULL || strcmp(march, "rv64i") != 0)
+                /* Target-owned opt-out keeps a default multilib runtime
+                 * from crossing into an explicitly strict ISA profile. */
+                if (march == NULL || recipe->omit_default_lgcc_march == NULL ||
+                    strcmp(march, recipe->omit_default_lgcc_march) != 0)
                     arguments[count++] = "-lgcc";
                 arguments[count++] = "--end-group";
             } else {

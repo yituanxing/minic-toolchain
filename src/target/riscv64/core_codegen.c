@@ -304,10 +304,6 @@ static bool emit_instruction(FILE *file,
     case MINIC_CORE_INSTRUCTION_RECORD_COPY:
         return minic_riscv64_emit_memory_instruction(file, function, frame, instruction);
     case MINIC_CORE_INSTRUCTION_OPAQUE_INLINE_ASM:
-    case MINIC_CORE_INSTRUCTION_REGISTER_OUTPUT_INLINE_ASM:
-    case MINIC_CORE_INSTRUCTION_REGISTER_OUTPUT_INPUT_INLINE_ASM:
-    case MINIC_CORE_INSTRUCTION_MEMORY_READWRITE_SCALAR_INPUT_INLINE_ASM:
-    case MINIC_CORE_INSTRUCTION_SCALAR_INPUT_INLINE_ASM:
     case MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM:
         return minic_riscv64_emit_inline_asm_instruction(
             file, function, frame, symbol_name, instruction, instruction_id);
@@ -729,8 +725,7 @@ static bool emit_core_function_with_symbol(FILE *file,
         if (!emit_block_label(file, symbol_name, (MinicCoreBlockId)block_index)) {
             return core_frame_fail(&frame);
         }
-        if (!function->suppress_local_label_aliases &&
-            block->local_label_symbol != NULL &&
+        if (block->local_label_symbol != NULL &&
             (!minic_core_label_symbol_valid(block->local_label_symbol) ||
              fprintf(file, "%s:\n", block->local_label_symbol) < 0)) {
             return core_frame_fail(&frame);

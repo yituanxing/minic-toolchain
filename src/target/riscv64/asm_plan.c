@@ -229,7 +229,7 @@ static bool core_structured_inline_asm_allocate(
     operand_count = instruction->value.structured_inline_asm.operand_count;
     /* Core admits up to sixteen source operands. This machine plan has only
      * ten physical bindings: reject before indexing either ten-slot array. */
-    if (operand_count == 0U || operand_count > MINIC_RISCV64_ASM_MAX_OPERANDS) {
+    if (operand_count > MINIC_RISCV64_ASM_MAX_OPERANDS) {
         return false;
     }
     inline_asm = &function->inline_asms[instruction->value.structured_inline_asm.inline_asm_id];
@@ -298,6 +298,7 @@ static bool core_structured_inline_asm_allocate(
             continue;
         }
         switch (binding->kind) {
+        case MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_RESULT:
         case MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT:
         case MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE:
             preferences = output_preferences;

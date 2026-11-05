@@ -70,16 +70,26 @@ static int clobber_reservation(int left, int right) {
     return result;
 }
 
+static int memory_input_linux_shape(const int *value);
+
 int main(void) {
     int previous;
     int swap_target = 21;
     int swapped;
+    int memory_probe = 0;
+    RegisterOutputs register_probe = {0};
 
     atomic_add_like(5, &global_counter);
     previous = atomic_fetch_add_like(3, &global_counter);
     swapped = futex_constraint_shape(9, &swap_target);
+    memory_output_store_like(8, &memory_probe);
+    register_member_outputs_like(&register_probe);
     return previous == 12 && global_counter.counter == 15 && swapped == 21 && swap_target == 9 &&
-                   linux_target_constraint_shape(5) == 12 && clobber_reservation(4, 6) == 10
+                   linux_target_constraint_shape(5) == 12 && clobber_reservation(4, 6) == 10 &&
+                   memory_probe == 8 && memory_input_linux_shape(&memory_probe) == 8 &&
+                   register_probe.first == 1UL && register_probe.second == 2UL &&
+                   register_probe.third == 3UL && register_probe.fourth == 4UL &&
+                   register_probe.fifth == 5UL
                ? 0
                : 1;
 }

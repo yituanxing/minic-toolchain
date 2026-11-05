@@ -211,10 +211,19 @@ static int run(void) {
     function.inline_asms = &asm_binding;
     function.inline_asm_count = 1U;
     ins = (MinicCoreInstruction){0};
-    ins.kind = MINIC_CORE_INSTRUCTION_REGISTER_OUTPUT_INLINE_ASM;
+    ins.kind = MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM;
     ins.core_type_id = int_id;
-    ins.value.inline_asm_id = 0U;
+    ins.result = 3U;
+    ins.value.structured_inline_asm.inline_asm_id = 0U;
+    ins.value.structured_inline_asm.operand_count = 1U;
+    ins.value.structured_inline_asm.operands[0].kind =
+        MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_RESULT;
+    ins.value.structured_inline_asm.operands[0].operand_index = 0U;
+    ins.value.structured_inline_asm.operands[0].value = MINIC_CORE_VALUE_INVALID;
     REQUIRE(minic_riscv64_inline_asm_instruction_supported(&function, &ins));
+    ins.value.structured_inline_asm.operands[0].value = 3U;
+    REQUIRE(!minic_riscv64_inline_asm_instruction_supported(&function, &ins));
+    ins.value.structured_inline_asm.operands[0].value = MINIC_CORE_VALUE_INVALID;
     ins.core_type_id = record_id;
     REQUIRE(!minic_riscv64_inline_asm_instruction_supported(&function, &ins));
 

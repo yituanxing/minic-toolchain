@@ -110,214 +110,77 @@ const MinicCoreFixedRegisterBinding *minic_riscv64_inline_asm_fixed_register_bin
                : NULL;
 }
 
+/* Opaque ASM is a distinct, operand-free Core effect. GNU immediate lowering
+ * has already substituted its symbolic operands into the template; unlike
+ * the retired scalar ASM opcodes, no target register binding remains. */
 static bool core_opaque_inline_asm_supported(const MinicCoreFunction *function,
                                              const MinicCoreInstruction *instruction) {
     const MinicCoreInlineAsm *inline_asm;
-
     if (function == NULL || instruction == NULL ||
         instruction->kind != MINIC_CORE_INSTRUCTION_OPAQUE_INLINE_ASM ||
-        instruction->value.inline_asm_id >= function->inline_asm_count) {
-        return false;
-    }
-    inline_asm = &function->inline_asms[instruction->value.inline_asm_id];
-    /* M89_EMPTY_VOLATILE_OPAQUE_ASM: opaque volatile asm may carry zero
-       target bytes; emit_opaque_inline_asm naturally loops zero times. */
-    if (inline_asm->template_text == NULL || !inline_asm->is_volatile) {
-        return false;
-    }
-    /* M76_SINGLE_LABEL_ASM_GOTO: the target is explicit Core metadata even
-       though the target-specific template remains opaque. */
-    return !inline_asm->is_goto || inline_asm->goto_target < function->block_count;
-}
-
-static bool core_register_output_inline_asm_supported(
-    const MinicCoreFunction *function, const MinicCoreInstruction *instruction) {
-    const MinicCoreInlineAsm *inline_asm;
-    size_t index;
-
-    if (function == NULL || instruction == NULL ||
-        instruction->kind != MINIC_CORE_INSTRUCTION_REGISTER_OUTPUT_INLINE_ASM ||
-        !rv64_asm_integer_or_pointer(function, instruction->core_type_id) ||
-        instruction->value.inline_asm_id >= function->inline_asm_count) {
-        return false;
-    }
-    inline_asm = &function->inline_asms[instruction->value.inline_asm_id];
-    if (inline_asm->template_text == NULL || inline_asm->template_length == 0U ||
-        !inline_asm->is_volatile) {
-        return false;
-    }
-    for (index = 0U; index < inline_asm->template_length; ++index) {
-        if (inline_asm->template_text[index] != '%') {
-            continue;
-        }
-        if (index + 1U >= inline_asm->template_length ||
-            (inline_asm->template_text[index + 1U] != '%' &&
-             inline_asm->template_text[index + 1U] != '0')) {
-            return false;
-        }
-        index += 1U;
-    }
-    return true;
-}
-
-static bool core_register_output_input_inline_asm_supported(
-    const MinicCoreFunction *function, const MinicCoreInstruction *instruction) {
-    const MinicCoreInlineAsm *inline_asm;
-    MinicCoreValueId operand;
-    size_t index;
-
-    if (function == NULL || instruction == NULL ||
-        instruction->kind != MINIC_CORE_INSTRUCTION_REGISTER_OUTPUT_INPUT_INLINE_ASM ||
-        !rv64_asm_integer_or_pointer(function, instruction->core_type_id) ||
-        instruction->value.register_output_input_inline_asm.inline_asm_id >=
-            function->inline_asm_count) {
-        return false;
-    }
-    operand = instruction->value.register_output_input_inline_asm.operand;
-    if (operand >= function->value_count ||
-        !rv64_asm_integer_or_pointer(function,
-            function->values[operand].core_type_id)) {
-        return false;
-    }
-    inline_asm = &function->inline_asms[
-        instruction->value.register_output_input_inline_asm.inline_asm_id];
-    if (inline_asm->template_text == NULL || inline_asm->template_length == 0U ||
-        !inline_asm->is_volatile) {
-        return false;
-    }
-    for (index = 0U; index < inline_asm->template_length; ++index) {
-        if (inline_asm->template_text[index] != '%') {
-            continue;
-        }
-        if (index + 1U >= inline_asm->template_length ||
-            (inline_asm->template_text[index + 1U] != '%' &&
-             inline_asm->template_text[index + 1U] != '0' &&
-             inline_asm->template_text[index + 1U] != '1')) {
-            return false;
-        }
-        index += 1U;
-    }
-    return true;
-}
-
-static bool core_memory_readwrite_scalar_input_inline_asm_supported(
-    const MinicCoreFunction *function, const MinicCoreInstruction *instruction) {
-    const MinicCoreInlineAsm *inline_asm;
-    MinicCoreValueId memory_address;
-    MinicCoreValueId operand;
-    size_t memory_index;
-    size_t register_index;
-    size_t scalar_index;
-    size_t index;
-    bool has_register_output;
-
-    if (function == NULL || instruction == NULL ||
-        instruction->kind != MINIC_CORE_INSTRUCTION_MEMORY_READWRITE_SCALAR_INPUT_INLINE_ASM ||
-        instruction->value.memory_readwrite_scalar_input_inline_asm.inline_asm_id >=
-            function->inline_asm_count) {
-        return false;
-    }
-    memory_address = instruction->value.memory_readwrite_scalar_input_inline_asm.memory_address;
-    operand = instruction->value.memory_readwrite_scalar_input_inline_asm.operand;
-    memory_index = instruction->value.memory_readwrite_scalar_input_inline_asm.memory_operand_index;
-    register_index =
-        instruction->value.memory_readwrite_scalar_input_inline_asm.register_output_operand_index;
-    scalar_index =
-        instruction->value.memory_readwrite_scalar_input_inline_asm.scalar_input_operand_index;
-    has_register_output = register_index != SIZE_MAX;
-    if (memory_address >= function->value_count || operand >= function->value_count ||
-        !rv64_asm_core_pointer(function,
-            function->values[memory_address].core_type_id) ||
-        !rv64_asm_integer_or_pointer(function,
-            function->values[operand].core_type_id) ||
-        memory_index >= MINIC_RISCV64_ASM_MAX_OPERANDS ||
-        scalar_index >= MINIC_RISCV64_ASM_MAX_OPERANDS ||
-        memory_index == scalar_index ||
-        (has_register_output &&
-         (register_index >= MINIC_RISCV64_ASM_MAX_OPERANDS ||
-          register_index == memory_index || register_index == scalar_index))) {
-        return false;
-    }
-    if (has_register_output) {
-        if (!rv64_asm_integer_or_pointer(function, instruction->core_type_id) ||
-            instruction->result == MINIC_CORE_VALUE_INVALID) {
-            return false;
-        }
-    } else if (!rv64_asm_void(function, instruction->core_type_id) ||
-               instruction->result != MINIC_CORE_VALUE_INVALID) {
-        return false;
-    }
-    inline_asm = &function->inline_asms[
-        instruction->value.memory_readwrite_scalar_input_inline_asm.inline_asm_id];
-    if (inline_asm->template_text == NULL || inline_asm->template_length == 0U ||
-        !inline_asm->is_volatile || !inline_asm->has_memory_clobber) {
-        return false;
-    }
-    for (index = 0U; index < inline_asm->template_length; ++index) {
-        size_t operand_index;
-        unsigned char ch;
-
-        if (inline_asm->template_text[index] != '%') {
-            continue;
-        }
-        if (index + 1U >= inline_asm->template_length) {
-            return false;
-        }
-        ch = (unsigned char)inline_asm->template_text[index + 1U];
-        if (ch == '%') {
-            index += 1U;
-            continue;
-        }
-        if (ch < '0' || ch > '9') {
-            return false;
-        }
-        operand_index = (size_t)(ch - '0');
-        if (operand_index != memory_index && operand_index != scalar_index &&
-            (!has_register_output || operand_index != register_index)) {
-            return false;
-        }
-        index += 1U;
-    }
-    return true;
-}
-
-static bool core_scalar_input_inline_asm_supported(
-    const MinicCoreFunction *function, const MinicCoreInstruction *instruction) {
-    const MinicCoreInlineAsm *inline_asm;
-    MinicCoreValueId operand;
-    size_t index;
-
-    if (function == NULL || instruction == NULL ||
-        instruction->kind != MINIC_CORE_INSTRUCTION_SCALAR_INPUT_INLINE_ASM ||
         instruction->result != MINIC_CORE_VALUE_INVALID ||
         !rv64_asm_void(function, instruction->core_type_id) ||
-        instruction->value.scalar_input_inline_asm.inline_asm_id >= function->inline_asm_count) {
+        instruction->value.inline_asm_id >= function->inline_asm_count) return false;
+    inline_asm = &function->inline_asms[instruction->value.inline_asm_id];
+    return inline_asm->template_text != NULL && inline_asm->is_volatile &&
+        (!inline_asm->is_goto ||
+         (inline_asm->goto_target < function->block_count &&
+          inline_asm->goto_second_target == MINIC_CORE_BLOCK_INVALID));
+}
+
+static bool emit_opaque_inline_asm(FILE *file,
+                                   const MinicCoreFunction *function,
+                                   const char *symbol_name,
+                                   const MinicCoreInstruction *instruction) {
+    const MinicCoreInlineAsm *inline_asm;
+    size_t index;
+    if (file == NULL || !core_opaque_inline_asm_supported(function, instruction))
         return false;
-    }
-    operand = instruction->value.scalar_input_inline_asm.operand;
-    if (operand >= function->value_count ||
-        !rv64_asm_integer_or_pointer(function,
-            function->values[operand].core_type_id)) {
+    inline_asm = &function->inline_asms[instruction->value.inline_asm_id];
+    if (inline_asm->is_goto &&
+        (symbol_name == NULL || symbol_name[0] == '\0')) return false;
+    if (inline_asm->is_goto && inline_asm->deferred_immediate_symbol != NULL &&
+        (!minic_core_deferred_asm_symbol_valid(inline_asm->deferred_immediate_symbol) ||
+         fprintf(file, "  # MINIC_DEFERRED_ASM_IMMEDIATE requires inline specialization\n"
+                       "  .extern %s\n",
+                 inline_asm->deferred_immediate_symbol) < 0)) return false;
+    if (fprintf(file, "  ") < 0 || !minic_riscv64_asm_audit_marker(file, true))
         return false;
-    }
-    inline_asm =
-        &function->inline_asms[instruction->value.scalar_input_inline_asm.inline_asm_id];
-    if (inline_asm->template_text == NULL || inline_asm->template_length == 0U ||
-        !inline_asm->is_volatile) {
-        return false;
-    }
     for (index = 0U; index < inline_asm->template_length; ++index) {
+        unsigned char ch;
         if (inline_asm->template_text[index] != '%') {
+            if (fputc((unsigned char)inline_asm->template_text[index], file) == EOF)
+                return false;
             continue;
         }
-        if (index + 1U >= inline_asm->template_length ||
-            (inline_asm->template_text[index + 1U] != '%' &&
-             inline_asm->template_text[index + 1U] != '0')) {
-            return false;
+        if (++index >= inline_asm->template_length) return false;
+        ch = (unsigned char)inline_asm->template_text[index];
+        if (ch == '%') {
+            if (fputc('%', file) == EOF) return false;
+            continue;
         }
-        index += 1U;
+        if (inline_asm->is_goto && ch == '0' &&
+            inline_asm->deferred_immediate_symbol != NULL) {
+            if (fputs(inline_asm->deferred_immediate_symbol, file) == EOF) return false;
+            continue;
+        }
+        if (inline_asm->is_goto && ch == 'l' &&
+            index + 1U < inline_asm->template_length &&
+            inline_asm->template_text[index + 1U] == '[') {
+            index += 2U;
+            if (index >= inline_asm->template_length ||
+                inline_asm->template_text[index] == ']') return false;
+            while (index < inline_asm->template_length &&
+                   inline_asm->template_text[index] != ']') ++index;
+            if (index >= inline_asm->template_length ||
+                fprintf(file, ".L%s_core_bb%" PRIu32,
+                        symbol_name, inline_asm->goto_target) < 0) return false;
+            continue;
+        }
+        return false;
     }
-    return true;
+    return fputc('\n', file) != EOF &&
+        minic_riscv64_asm_audit_marker(file, false);
 }
 
 /* M126A_GENERIC_STRUCTURED_ASM: capability is now role/resource based. */
@@ -328,19 +191,25 @@ static bool core_structured_inline_asm_supported(const MinicCoreFunction *functi
     bool bound[MINIC_RISCV64_ASM_MAX_OPERANDS] = {false};
     size_t binding_index;
     size_t template_index;
+    size_t scalar_results = 0U;
 
     if (function == NULL || instruction == NULL ||
         instruction->kind != MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM ||
-        instruction->result != MINIC_CORE_VALUE_INVALID ||
-        !rv64_asm_void(function, instruction->core_type_id) ||
+        (instruction->result == MINIC_CORE_VALUE_INVALID
+             ? !rv64_asm_void(function, instruction->core_type_id)
+             : (instruction->result >= function->value_count ||
+                !rv64_asm_integer_or_pointer(function, instruction->core_type_id))) ||
         instruction->value.structured_inline_asm.inline_asm_id >= function->inline_asm_count ||
-        instruction->value.structured_inline_asm.operand_count == 0U ||
         instruction->value.structured_inline_asm.operand_count >
             MINIC_CORE_STRUCTURED_INLINE_ASM_OPERAND_LIMIT) {
         return false;
     }
     inline_asm = &function->inline_asms[instruction->value.structured_inline_asm.inline_asm_id];
-    if (inline_asm->template_text == NULL || !inline_asm->is_volatile || inline_asm->is_goto) {
+    if (inline_asm->template_text == NULL || !inline_asm->is_volatile ||
+        (inline_asm->is_goto &&
+         (instruction->value.structured_inline_asm.operand_count != 0U ||
+          inline_asm->goto_target >= function->block_count ||
+          inline_asm->goto_second_target != MINIC_CORE_BLOCK_INVALID))) {
         return false;
     }
     for (binding_index = 0U;
@@ -353,10 +222,12 @@ static bool core_structured_inline_asm_supported(const MinicCoreFunction *functi
 
         if (binding->operand_index >= MINIC_RISCV64_ASM_MAX_OPERANDS ||
             bound[binding->operand_index] ||
-            binding->value >= function->value_count ||
+            (binding->kind != MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_RESULT &&
+             binding->value >= function->value_count) ||
             (binding->early_clobber &&
              binding->kind != MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT &&
-             binding->kind != MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE)) {
+             binding->kind != MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE &&
+             binding->kind != MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_RESULT)) {
             return false;
         }
         bound[binding->operand_index] = true;
@@ -368,6 +239,13 @@ static bool core_structured_inline_asm_supported(const MinicCoreFunction *functi
             }
         }
         switch (binding->kind) {
+        case MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_RESULT:
+            if (++scalar_results != 1U ||
+                instruction->result == MINIC_CORE_VALUE_INVALID ||
+                binding->value != MINIC_CORE_VALUE_INVALID ||
+                fixed_binding != NULL || binding->has_fixed_register_binding)
+                return false;
+            break;
         case MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT:
         case MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE:
             if (!rv64_asm_core_pointer_scalar(function,
@@ -397,6 +275,8 @@ static bool core_structured_inline_asm_supported(const MinicCoreFunction *functi
             return false;
         }
     }
+    if ((instruction->result == MINIC_CORE_VALUE_INVALID) !=
+        (scalar_results == 0U)) return false;
     for (template_index = 0U; template_index < inline_asm->template_length; ++template_index) {
         unsigned char ch;
         if (inline_asm->template_text[template_index] != '%') {
@@ -408,6 +288,22 @@ static bool core_structured_inline_asm_supported(const MinicCoreFunction *functi
         ch = (unsigned char)inline_asm->template_text[template_index];
         if (ch == '%') {
             continue;
+        }
+        if (inline_asm->is_goto) {
+            if (ch == '0' && inline_asm->deferred_immediate_symbol != NULL)
+                continue;
+            if (ch == 'l' && template_index + 1U < inline_asm->template_length &&
+                inline_asm->template_text[template_index + 1U] == '[') {
+                template_index += 2U;
+                if (template_index >= inline_asm->template_length ||
+                    inline_asm->template_text[template_index] == ']') return false;
+                while (template_index < inline_asm->template_length &&
+                       inline_asm->template_text[template_index] != ']')
+                    ++template_index;
+                if (template_index >= inline_asm->template_length) return false;
+                continue;
+            }
+            return false;
         }
         if (ch == 'z') {
             if (++template_index >= inline_asm->template_length) {
@@ -422,348 +318,12 @@ static bool core_structured_inline_asm_supported(const MinicCoreFunction *functi
     return minic_riscv64_asm_instruction_plan_build(function, instruction, &probe);
 }
 
-/* M85_RECORD_CALL_ARGUMENT: validate direct-call arguments against the
-   shared RV64 ABI classifier. Core stores VALUE/OBJECT form only; register
-   placement remains entirely target-owned. The first caller tier intentionally
-   stays register-only, matching the pre-M85 Core call backend's no-stack scope. */
-static bool emit_opaque_inline_asm(FILE *file,
-                                   const MinicCoreFunction *function,
-                                   const char *symbol_name,
-                                   const MinicCoreInstruction *instruction) {
-    const MinicCoreInlineAsm *inline_asm;
-    size_t index;
-
-    if (file == NULL || !core_opaque_inline_asm_supported(function, instruction)) {
-        return false;
-    }
-    inline_asm = &function->inline_asms[instruction->value.inline_asm_id];
-    if (inline_asm->is_goto) {
-        bool deferred_immediate =
-            inline_asm->deferred_immediate_symbol != NULL;
-
-        if (symbol_name == NULL || symbol_name[0] == '\0' ||
-            inline_asm->goto_target >= function->block_count) {
-            return false;
-        }
-        if (deferred_immediate) {
-            if (!minic_core_deferred_asm_symbol_valid(
-                    inline_asm->deferred_immediate_symbol))
-                return false;
-            if (fprintf(file,
-                        "  # MINIC_DEFERRED_ASM_IMMEDIATE requires inline specialization\n"
-                        "  .extern %s\n"
-                        "  ",
-                        inline_asm->deferred_immediate_symbol) < 0) {
-                return false;
-            }
-        } else if (fprintf(file, "  ") < 0) {
-            return false;
-        }
-        if (!minic_riscv64_asm_audit_marker(file, true)) return false;
-    for (index = 0U; index < inline_asm->template_length; ++index) {
-            if (inline_asm->template_text[index] != '%') {
-                if (fputc((unsigned char)inline_asm->template_text[index], file) == EOF) {
-                    return false;
-                }
-                continue;
-            }
-            if (index + 1U >= inline_asm->template_length) {
-                return false;
-            }
-            if (inline_asm->template_text[index + 1U] == '%') {
-                if (fputc('%', file) == EOF) {
-                    return false;
-                }
-                index += 1U;
-                continue;
-            }
-            if (inline_asm->template_text[index + 1U] == '0') {
-                if (!deferred_immediate ||
-                    fputs(inline_asm->deferred_immediate_symbol, file) == EOF) {
-                    return false;
-                }
-                index += 1U;
-                continue;
-            }
-            if (index + 2U < inline_asm->template_length &&
-                inline_asm->template_text[index + 1U] == 'l' &&
-                inline_asm->template_text[index + 2U] == '[') {
-                size_t name_end = index + 3U;
-                while (name_end < inline_asm->template_length &&
-                       inline_asm->template_text[name_end] != ']') {
-                    name_end += 1U;
-                }
-                if (name_end >= inline_asm->template_length || name_end == index + 3U ||
-                    fprintf(file,
-                            ".L%s_core_bb%" PRIu32,
-                            symbol_name,
-                            inline_asm->goto_target) < 0) {
-                    return false;
-                }
-                index = name_end;
-                continue;
-            }
-            return false;
-        }
-        return fputc('\n', file) != EOF &&
-           minic_riscv64_asm_audit_marker(file, false);
-    }
-    if (fprintf(file, "  ") < 0) {
-        return false;
-    }
-    if (!minic_riscv64_asm_audit_marker(file, true)) return false;
-    for (index = 0U; index < inline_asm->template_length; ++index) {
-        if (inline_asm->template_text[index] != '%') {
-            if (fputc((unsigned char)inline_asm->template_text[index], file) == EOF) {
-                return false;
-            }
-            continue;
-        }
-        if (index + 1U >= inline_asm->template_length ||
-            inline_asm->template_text[index + 1U] != '%') {
-            return false;
-        }
-        if (fputc('%', file) == EOF) {
-            return false;
-        }
-        index += 1U;
-    }
-    return fputc('\n', file) != EOF &&
-           minic_riscv64_asm_audit_marker(file, false);
-}
-
-static bool emit_register_output_inline_asm(
-    FILE *file,
-    const MinicCoreFunction *function,
-    const MinicRiscv64CoreFrame *frame,
-    const MinicCoreInstruction *instruction) {
-    const MinicCoreInlineAsm *inline_asm;
-    size_t index;
-
-    if (file == NULL || frame == NULL ||
-        !core_register_output_inline_asm_supported(function, instruction)) {
-        return false;
-    }
-    inline_asm = &function->inline_asms[instruction->value.inline_asm_id];
-    if (fprintf(file, "  ") < 0) {
-        return false;
-    }
-    if (!minic_riscv64_asm_audit_marker(file, true)) return false;
-    for (index = 0U; index < inline_asm->template_length; ++index) {
-        if (inline_asm->template_text[index] != '%') {
-            if (fputc((unsigned char)inline_asm->template_text[index], file) == EOF) {
-                return false;
-            }
-            continue;
-        }
-        index += 1U;
-        if (inline_asm->template_text[index] == '%') {
-            if (fputc('%', file) == EOF) {
-                return false;
-            }
-        } else if (inline_asm->template_text[index] == '0') {
-            if (fprintf(file, "t0") < 0) {
-                return false;
-            }
-        } else {
-            return false;
-        }
-    }
-    if (fputc('\n', file) == EOF ||
-        !minic_riscv64_asm_audit_marker(file, false) ||
-        !rv64_asm_normalize_integer(file, function,
-                                    instruction->core_type_id, "t0")) {
-        return false;
-    }
-    return minic_riscv64_frame_store_value(file, frame, instruction->result, "t0");
-}
-
-static bool emit_register_output_input_inline_asm(
-    FILE *file,
-    const MinicCoreFunction *function,
-    const MinicRiscv64CoreFrame *frame,
-    const MinicCoreInstruction *instruction) {
-    const MinicCoreInlineAsm *inline_asm;
-    size_t index;
-
-    if (file == NULL || frame == NULL ||
-        !core_register_output_input_inline_asm_supported(function, instruction) ||
-        !minic_riscv64_frame_load_value(
-            file, frame, instruction->value.register_output_input_inline_asm.operand, "t1")) {
-        return false;
-    }
-    inline_asm = &function->inline_asms[
-        instruction->value.register_output_input_inline_asm.inline_asm_id];
-    if (fprintf(file, "  ") < 0) {
-        return false;
-    }
-    if (!minic_riscv64_asm_audit_marker(file, true)) return false;
-    for (index = 0U; index < inline_asm->template_length; ++index) {
-        if (inline_asm->template_text[index] != '%') {
-            if (fputc((unsigned char)inline_asm->template_text[index], file) == EOF) {
-                return false;
-            }
-            continue;
-        }
-        index += 1U;
-        if (inline_asm->template_text[index] == '%') {
-            if (fputc('%', file) == EOF) {
-                return false;
-            }
-        } else if (inline_asm->template_text[index] == '0') {
-            if (fprintf(file, "t0") < 0) {
-                return false;
-            }
-        } else if (inline_asm->template_text[index] == '1') {
-            if (fprintf(file, "t1") < 0) {
-                return false;
-            }
-        } else {
-            return false;
-        }
-    }
-    if (fputc('\n', file) == EOF ||
-        !minic_riscv64_asm_audit_marker(file, false) ||
-        !rv64_asm_normalize_integer(file, function,
-                                    instruction->core_type_id, "t0")) {
-        return false;
-    }
-    return minic_riscv64_frame_store_value(file, frame, instruction->result, "t0");
-}
-
-static bool emit_memory_readwrite_scalar_input_inline_asm(
-    FILE *file,
-    const MinicCoreFunction *function,
-    const MinicRiscv64CoreFrame *frame,
-    const MinicCoreInstruction *instruction) {
-    const MinicCoreInlineAsm *inline_asm;
-    size_t memory_index;
-    size_t register_index;
-    size_t scalar_index;
-    size_t index;
-    bool has_register_output;
-
-    if (file == NULL || function == NULL || function->type_context == NULL || frame == NULL ||
-        !core_memory_readwrite_scalar_input_inline_asm_supported(function, instruction) ||
-        !minic_riscv64_frame_load_value(
-            file,
-            frame,
-            instruction->value.memory_readwrite_scalar_input_inline_asm.memory_address,
-            "t0") ||
-        !minic_riscv64_frame_load_value(
-            file, frame, instruction->value.memory_readwrite_scalar_input_inline_asm.operand, "t2")) {
-        return false;
-    }
-    memory_index = instruction->value.memory_readwrite_scalar_input_inline_asm.memory_operand_index;
-    register_index =
-        instruction->value.memory_readwrite_scalar_input_inline_asm.register_output_operand_index;
-    scalar_index =
-        instruction->value.memory_readwrite_scalar_input_inline_asm.scalar_input_operand_index;
-    has_register_output = register_index != SIZE_MAX;
-    inline_asm = &function->inline_asms[
-        instruction->value.memory_readwrite_scalar_input_inline_asm.inline_asm_id];
-    if (fprintf(file, "  ") < 0) {
-        return false;
-    }
-    if (!minic_riscv64_asm_audit_marker(file, true)) return false;
-    for (index = 0U; index < inline_asm->template_length; ++index) {
-        size_t operand_index;
-        unsigned char ch;
-
-        if (inline_asm->template_text[index] != '%') {
-            if (fputc((unsigned char)inline_asm->template_text[index], file) == EOF) {
-                return false;
-            }
-            continue;
-        }
-        index += 1U;
-        ch = (unsigned char)inline_asm->template_text[index];
-        if (ch == '%') {
-            if (fputc('%', file) == EOF) {
-                return false;
-            }
-            continue;
-        }
-        if (ch < '0' || ch > '9') {
-            return false;
-        }
-        operand_index = (size_t)(ch - '0');
-        if (operand_index == memory_index) {
-            if (fprintf(file, "(t0)") < 0) {
-                return false;
-            }
-        } else if (has_register_output && operand_index == register_index) {
-            if (fprintf(file, "t1") < 0) {
-                return false;
-            }
-        } else if (operand_index == scalar_index) {
-            if (fprintf(file, "t2") < 0) {
-                return false;
-            }
-        } else {
-            return false;
-        }
-    }
-    if (fputc('\n', file) == EOF ||
-        !minic_riscv64_asm_audit_marker(file, false)) {
-        return false;
-    }
-    if (!has_register_output) {
-        return true;
-    }
-    if (!rv64_asm_normalize_integer(file, function,
-                                    instruction->core_type_id, "t1")) {
-        return false;
-    }
-    return minic_riscv64_frame_store_value(file, frame, instruction->result, "t1");
-}
-
-static bool emit_scalar_input_inline_asm(
-    FILE *file,
-    const MinicCoreFunction *function,
-    const MinicRiscv64CoreFrame *frame,
-    const MinicCoreInstruction *instruction) {
-    const MinicCoreInlineAsm *inline_asm;
-    size_t index;
-
-    if (file == NULL || frame == NULL ||
-        !core_scalar_input_inline_asm_supported(function, instruction) ||
-        !minic_riscv64_frame_load_value(file, frame, instruction->value.scalar_input_inline_asm.operand, "t0")) {
-        return false;
-    }
-    inline_asm =
-        &function->inline_asms[instruction->value.scalar_input_inline_asm.inline_asm_id];
-    if (fprintf(file, "  ") < 0) {
-        return false;
-    }
-    if (!minic_riscv64_asm_audit_marker(file, true)) return false;
-    for (index = 0U; index < inline_asm->template_length; ++index) {
-        if (inline_asm->template_text[index] != '%') {
-            if (fputc((unsigned char)inline_asm->template_text[index], file) == EOF) {
-                return false;
-            }
-            continue;
-        }
-        index += 1U;
-        if (inline_asm->template_text[index] == '%') {
-            if (fputc('%', file) == EOF) {
-                return false;
-            }
-        } else if (inline_asm->template_text[index] == '0') {
-            if (fprintf(file, "t0") < 0) {
-                return false;
-            }
-        } else {
-            return false;
-        }
-    }
-    return fputc('\n', file) != EOF &&
-           minic_riscv64_asm_audit_marker(file, false);
-}
-
+/* One machine emission owner for all canonical structured ASM roles, including
+ * unbound raw ASM/asm-goto effects and typed register-result SSA. */
 static bool emit_structured_inline_asm(FILE *file,
                                        const MinicCoreFunction *function,
                                        const MinicRiscv64CoreFrame *frame,
+                                       const char *symbol_name,
                                        const MinicCoreInstruction *instruction,
                                        size_t instruction_id) {
     const MinicCoreInlineAsm *inline_asm;
@@ -798,6 +358,7 @@ static bool emit_structured_inline_asm(FILE *file,
             return false;
         }
         switch (binding->kind) {
+        case MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_RESULT:
         case MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT:
             break;
         case MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE:
@@ -827,6 +388,12 @@ static bool emit_structured_inline_asm(FILE *file,
         }
     }
 
+    if (inline_asm->is_goto && inline_asm->deferred_immediate_symbol != NULL &&
+        (!minic_core_deferred_asm_symbol_valid(inline_asm->deferred_immediate_symbol) ||
+         fprintf(file,
+                 "  # MINIC_DEFERRED_ASM_IMMEDIATE requires inline specialization\n"
+                 "  .extern %s\n",
+                 inline_asm->deferred_immediate_symbol) < 0)) return false;
     if (fprintf(file, "  ") < 0) {
         return false;
     }
@@ -849,6 +416,28 @@ static bool emit_structured_inline_asm(FILE *file,
                 return false;
             }
             continue;
+        }
+        if (inline_asm->is_goto) {
+            if (ch == '0') {
+                if (inline_asm->deferred_immediate_symbol == NULL ||
+                    fputs(inline_asm->deferred_immediate_symbol, file) == EOF)
+                    return false;
+                continue;
+            }
+            if (ch == 'l' && index + 1U < inline_asm->template_length &&
+                inline_asm->template_text[index + 1U] == '[') {
+                index += 2U;
+                if (index >= inline_asm->template_length ||
+                    inline_asm->template_text[index] == ']') return false;
+                while (index < inline_asm->template_length &&
+                       inline_asm->template_text[index] != ']') ++index;
+                if (index >= inline_asm->template_length || symbol_name == NULL ||
+                    fprintf(file, ".L%s_core_bb%" PRIu32,
+                            symbol_name, inline_asm->goto_target) < 0)
+                    return false;
+                continue;
+            }
+            return false;
         }
         if (ch == 'z') {
             if (++index >= inline_asm->template_length) {
@@ -884,6 +473,15 @@ static bool emit_structured_inline_asm(FILE *file,
         const char *register_name;
         MinicCoreTypeId core_value_type = MINIC_CORE_TYPE_INVALID;
 
+        if (binding->kind == MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_RESULT) {
+            register_name = operand_registers[binding->operand_index];
+            if (instruction->result == MINIC_CORE_VALUE_INVALID ||
+                !rv64_asm_normalize_integer(file, function,
+                                            instruction->core_type_id, register_name) ||
+                !minic_riscv64_frame_store_value(
+                    file, frame, instruction->result, register_name)) return false;
+            continue;
+        }
         if (binding->kind != MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT &&
             binding->kind != MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE) {
             continue;
@@ -910,28 +508,18 @@ static bool emit_structured_inline_asm(FILE *file,
 
 bool minic_riscv64_inline_asm_instruction_supported(
     const MinicCoreFunction *function, const MinicCoreInstruction *instruction) {
-    if (function == NULL || instruction == NULL ||
-        function->inline_asms == NULL ||
-        instruction->value.inline_asm_id >= function->inline_asm_count ||
-        !minic_riscv64_source_asm_marker_safe(
-            function->inline_asms[instruction->value.inline_asm_id].template_text,
-            function->inline_asms[instruction->value.inline_asm_id].template_length))
+    const MinicCoreInlineAsm *inline_asm;
+    if (function == NULL || instruction == NULL || function->inline_asms == NULL)
         return false;
-    switch (instruction->kind) {
-    case MINIC_CORE_INSTRUCTION_OPAQUE_INLINE_ASM:
-        return core_opaque_inline_asm_supported(function, instruction);
-    case MINIC_CORE_INSTRUCTION_REGISTER_OUTPUT_INLINE_ASM:
-        return core_register_output_inline_asm_supported(function, instruction);
-    case MINIC_CORE_INSTRUCTION_REGISTER_OUTPUT_INPUT_INLINE_ASM:
-        return core_register_output_input_inline_asm_supported(function, instruction);
-    case MINIC_CORE_INSTRUCTION_MEMORY_READWRITE_SCALAR_INPUT_INLINE_ASM:
-        return core_memory_readwrite_scalar_input_inline_asm_supported(function, instruction);
-    case MINIC_CORE_INSTRUCTION_SCALAR_INPUT_INLINE_ASM:
-        return core_scalar_input_inline_asm_supported(function, instruction);
-    case MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM:
-        return core_structured_inline_asm_supported(function, instruction);
-    default: return false;
-    }
+    if (instruction->kind == MINIC_CORE_INSTRUCTION_OPAQUE_INLINE_ASM) {
+        if (!core_opaque_inline_asm_supported(function, instruction)) return false;
+        inline_asm = &function->inline_asms[instruction->value.inline_asm_id];
+    } else if (instruction->kind == MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM) {
+        if (!core_structured_inline_asm_supported(function, instruction)) return false;
+        inline_asm = &function->inline_asms[instruction->value.structured_inline_asm.inline_asm_id];
+    } else return false;
+    return minic_riscv64_source_asm_marker_safe(inline_asm->template_text,
+                                                inline_asm->template_length);
 }
 bool minic_riscv64_emit_inline_asm_instruction(
     FILE *file, const MinicCoreFunction *function, const MinicRiscv64CoreFrame *frame,
@@ -940,20 +528,8 @@ bool minic_riscv64_emit_inline_asm_instruction(
     if (file == NULL || function == NULL || frame == NULL || instruction == NULL ||
         !minic_riscv64_inline_asm_instruction_supported(function, instruction))
         return false;
-    switch (instruction->kind) {
-    case MINIC_CORE_INSTRUCTION_OPAQUE_INLINE_ASM:
+    if (instruction->kind == MINIC_CORE_INSTRUCTION_OPAQUE_INLINE_ASM)
         return emit_opaque_inline_asm(file, function, symbol_name, instruction);
-    case MINIC_CORE_INSTRUCTION_REGISTER_OUTPUT_INLINE_ASM:
-        return emit_register_output_inline_asm(file, function, frame, instruction);
-    case MINIC_CORE_INSTRUCTION_REGISTER_OUTPUT_INPUT_INLINE_ASM:
-        return emit_register_output_input_inline_asm(file, function, frame, instruction);
-    case MINIC_CORE_INSTRUCTION_MEMORY_READWRITE_SCALAR_INPUT_INLINE_ASM:
-        return emit_memory_readwrite_scalar_input_inline_asm(
-            file, function, frame, instruction);
-    case MINIC_CORE_INSTRUCTION_SCALAR_INPUT_INLINE_ASM:
-        return emit_scalar_input_inline_asm(file, function, frame, instruction);
-    case MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM:
-        return emit_structured_inline_asm(file, function, frame, instruction, instruction_id);
-    default: return false;
-    }
+    return emit_structured_inline_asm(file, function, frame, symbol_name,
+                                      instruction, instruction_id);
 }

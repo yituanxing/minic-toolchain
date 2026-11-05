@@ -85,18 +85,23 @@ MinicCoreLowerStatus ensure_statement_block(MinicCoreLowerContext *context, Mini
     }
     if (source_statement->kind == MINIC_STATEMENT_LABEL) {
         MinicCoreBlock *block = &context->function->blocks[mapped];
-
-        char *name;
-        if (!minic_core_format_label_symbol((size_t)statement_id, &name))
-            return MINIC_CORE_LOWER_ERROR;
-        if (block->local_label_symbol != NULL &&
-            strcmp(block->local_label_symbol, name) != 0) {
-            free(name);
-            return MINIC_CORE_LOWER_ERROR;
+        /* Even a clone's unexported target can be reached by computed goto
+         * or an opaque branch. Only the original function exports the
+         * assembler-local identity used by its static label relocations. */
+        block->indirect_entry = true;
+        if (!context->source_function->is_integer_specialization) {
+            char *name;
+            if (!minic_core_format_label_symbol((size_t)statement_id, &name))
+                return MINIC_CORE_LOWER_ERROR;
+            if (block->local_label_symbol != NULL &&
+                strcmp(block->local_label_symbol, name) != 0) {
+                free(name);
+                return MINIC_CORE_LOWER_ERROR;
+            }
+            if (block->local_label_symbol == NULL)
+                block->local_label_symbol = name;
+            else free(name);
         }
-        if (block->local_label_symbol == NULL)
-            block->local_label_symbol = name;
-        else free(name);
     }
     *block_id = mapped;
     return MINIC_CORE_LOWER_OK;
@@ -1589,7 +1594,6 @@ MinicCoreLowerStatus minic_core_lower_function_with_index(const MinicFunctionBod
     context.reentry_index = reentry_index;
     context.source = &lowered;
     context.function = &lowered.core;
-    lowered.core.suppress_local_label_aliases = source_function->is_integer_specialization;
     context.block_id = block_id;
     context.break_target = MINIC_CORE_BLOCK_INVALID;
     context.local_objects = local_objects;

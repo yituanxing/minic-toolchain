@@ -253,6 +253,32 @@ grep -Fq 'addi t0, t0, 1' "$work/kernel-structured-atomic.s"
 grep -Fq 'sw t1, 0(a2)' "$work/kernel-structured-atomic.s"
 grep -Fq '# MINIC_SOURCE_INLINE_ASM_BEGIN' "$work/kernel-structured-atomic.s"
 echo 'RV32I_STRUCTURED_ATOMIC=PASS memory_RW=1 early_clobber=1 operand_z=1 register_RMW=1'
+cat > "$work/kernel-structured-ssa-result.i" <<'SRC'
+unsigned int rv32_atomic_output_first(volatile unsigned int *ptr,
+                                       unsigned int delta) {
+    unsigned int old;
+    __asm__ __volatile__("amoadd.w %0, %2, %1"
+                         : "=r"(old), "+A"(*ptr) : "r"(delta) : "memory");
+    return old;
+}
+signed char rv32_narrow_signed_output(void) {
+    signed char result;
+    __asm__ __volatile__("li %0, -1" : "=r"(result));
+    return result;
+}
+unsigned char rv32_narrow_unsigned_output(void) {
+    unsigned char result;
+    __asm__ __volatile__("li %0, -1" : "=r"(result));
+    return result;
+}
+SRC
+"$MINIC_CC" --target=riscv32-linux -march=rv32i -mabi=ilp32 \
+    -S "$work/kernel-structured-ssa-result.i" -o "$work/kernel-structured-ssa-result.s"
+grep -Fq 'amoadd.w t0, t2, (t1)' "$work/kernel-structured-ssa-result.s"
+grep -Fq 'sb t0, 0(a2)' "$work/kernel-structured-ssa-result.s"
+grep -Fq 'lb t1, 0(t0)' "$work/kernel-structured-ssa-result.s"
+grep -Fq 'lbu t1, 0(t0)' "$work/kernel-structured-ssa-result.s"
+echo 'RV32I_STRUCTURED_SSA_OUTPUT=PASS swapped_output_order=1 signed_byte=1 unsigned_byte=1'
 cat > "$work/kernel-legacy-and-wide-asm.i" <<'SRC'
 static inline unsigned long rv32_irq_save_legacy(void) {
     unsigned long flags = 2;

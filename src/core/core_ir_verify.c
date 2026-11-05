@@ -1067,6 +1067,9 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
         inline_asm = &function->inline_asms[instruction->value.inline_asm_id];
         if (!inline_asm->template_text || !inline_asm->is_volatile)
             return false;
+        if (inline_asm->is_goto &&
+            inline_asm->goto_target >= function->block_count)
+            return false;
         /* Link-time symbolic immediates in qualified asm-goto are owned by
          * Core, regardless of whether the machine template has one or two
          * C labels. Every recorded slot must be a real, nonempty string;
@@ -1092,114 +1095,19 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
         }
         return true;
     }
-    case MINIC_CORE_INSTRUCTION_REGISTER_OUTPUT_INLINE_ASM: {
-        const MinicCoreInlineAsm *inline_asm;
-
-        if (!instruction_result_is_valid(function, instruction) ||
-            (!ct_is_integer(instruction->core_type_id) &&
-             !ct_is_pointer(instruction->core_type_id)) ||
-            instruction->value.inline_asm_id >= function->inline_asm_count) {
-            return false;
-        }
-        inline_asm = &function->inline_asms[instruction->value.inline_asm_id];
-        return inline_asm->template_text != NULL && inline_asm->template_length != 0U &&
-               inline_asm->is_volatile;
-    }
-    case MINIC_CORE_INSTRUCTION_REGISTER_OUTPUT_INPUT_INLINE_ASM: {
-        const MinicCoreInlineAsm *inline_asm;
-        MinicCoreValueId operand;
-
-        operand = instruction->value.register_output_input_inline_asm.operand;
-        if (!instruction_result_is_valid(function, instruction) ||
-            (!ct_is_integer(instruction->core_type_id) &&
-             !ct_is_pointer(instruction->core_type_id)) ||
-            operand >= function->value_count || !available_values[operand] ||
-            (!ct_is_integer(function->values[operand].core_type_id) &&
-             !ct_is_pointer(function->values[operand].core_type_id)) ||
-            instruction->value.register_output_input_inline_asm.inline_asm_id >=
-                function->inline_asm_count) {
-            return false;
-        }
-        inline_asm = &function->inline_asms[
-            instruction->value.register_output_input_inline_asm.inline_asm_id];
-        return inline_asm->template_text != NULL && inline_asm->template_length != 0U &&
-               inline_asm->is_volatile;
-    }
-    case MINIC_CORE_INSTRUCTION_MEMORY_READWRITE_SCALAR_INPUT_INLINE_ASM: {
-        const MinicCoreInlineAsm *inline_asm;
-        MinicCoreValueId memory_address;
-        MinicCoreValueId operand;
-        MinicCoreTypeId pointee;
-        size_t memory_index;
-        size_t register_index;
-        size_t scalar_index;
-        bool has_register_output;
-
-        memory_address = instruction->value.memory_readwrite_scalar_input_inline_asm.memory_address;
-        operand = instruction->value.memory_readwrite_scalar_input_inline_asm.operand;
-        memory_index = instruction->value.memory_readwrite_scalar_input_inline_asm.memory_operand_index;
-        register_index =
-            instruction->value.memory_readwrite_scalar_input_inline_asm.register_output_operand_index;
-        scalar_index =
-            instruction->value.memory_readwrite_scalar_input_inline_asm.scalar_input_operand_index;
-        has_register_output = register_index != SIZE_MAX;
-        if (memory_address >= function->value_count || operand >= function->value_count ||
-            !available_values[memory_address] || !available_values[operand] ||
-            !ct_pointee(function->values[memory_address].core_type_id, &pointee) ||
-            (!ct_is_integer(pointee) && !ct_is_pointer(pointee)) ||
-            (!ct_is_integer(function->values[operand].core_type_id) &&
-             !ct_is_pointer(function->values[operand].core_type_id)) ||
-            memory_index > 9U || scalar_index > 9U || memory_index == scalar_index ||
-            (has_register_output &&
-             (register_index > 9U || register_index == memory_index || register_index == scalar_index)) ||
-            instruction->value.memory_readwrite_scalar_input_inline_asm.inline_asm_id >=
-                function->inline_asm_count) {
-            return false;
-        }
-        if (has_register_output) {
-            if (!instruction_result_is_valid(function, instruction) ||
-                (!ct_is_integer(instruction->core_type_id) &&
-                 !ct_is_pointer(instruction->core_type_id))) {
-                return false;
-            }
-        } else if (instruction->result != MINIC_CORE_VALUE_INVALID ||
-                   !ct_is_void(instruction->core_type_id)) {
-            return false;
-        }
-        inline_asm = &function->inline_asms[
-            instruction->value.memory_readwrite_scalar_input_inline_asm.inline_asm_id];
-        return inline_asm->template_text != NULL && inline_asm->template_length != 0U &&
-               inline_asm->is_volatile && inline_asm->has_memory_clobber;
-    }
-    case MINIC_CORE_INSTRUCTION_SCALAR_INPUT_INLINE_ASM: {
-        const MinicCoreInlineAsm *inline_asm;
-        MinicCoreValueId operand;
-
-        operand = instruction->value.scalar_input_inline_asm.operand;
-        if (instruction->result != MINIC_CORE_VALUE_INVALID ||
-            !ct_is_void(instruction->core_type_id) || operand >= function->value_count ||
-            !available_values[operand] ||
-            (!ct_is_integer(function->values[operand].core_type_id) &&
-             !ct_is_pointer(function->values[operand].core_type_id)) ||
-            instruction->value.scalar_input_inline_asm.inline_asm_id >=
-                function->inline_asm_count) {
-            return false;
-        }
-        inline_asm = &function->inline_asms[
-            instruction->value.scalar_input_inline_asm.inline_asm_id];
-        return inline_asm->template_text != NULL && inline_asm->template_length != 0U &&
-               inline_asm->is_volatile;
-    }
     /* M67_STRUCTURED_MULTI_OPERAND_INLINE_ASM: Core records operand roles and
        semantic values/addresses; target register assignment stays in the backend. */
     case MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM: {
         const MinicCoreInlineAsm *inline_asm;
         bool used_indices[MINIC_CORE_STRUCTURED_INLINE_ASM_OPERAND_LIMIT] = {false};
         bool has_memory_readwrite = false;
-        size_t operand_index, output_operand_count;
+        size_t operand_index, output_operand_count, scalar_result_count = 0U;
 
-        if (instruction->result != MINIC_CORE_VALUE_INVALID ||
-            !ct_is_void(instruction->core_type_id) ||
+        if ((instruction->result == MINIC_CORE_VALUE_INVALID
+                 ? !ct_is_void(instruction->core_type_id)
+                 : (!instruction_result_is_valid(function, instruction) ||
+                    (!ct_is_integer(instruction->core_type_id) &&
+                     !ct_is_pointer(instruction->core_type_id)))) ||
             instruction->value.structured_inline_asm.inline_asm_id >= function->inline_asm_count ||
             instruction->value.structured_inline_asm.operand_count >
                 MINIC_CORE_STRUCTURED_INLINE_ASM_OPERAND_LIMIT) {
@@ -1226,9 +1134,8 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
             ((inline_asm->explicit_memory_clobber ||
                inline_asm->implicit_memory_effect) &&
               !inline_asm->has_memory_clobber)) return false;
-        /* The C label is a real CFG destination even when the asm also
-         * produces typed GNU register outputs. The same Core block IDs
-         * are used by opaque and structured goto machine emitters. */
+        /* Machine-neutral non-terminator ASM-goto successors are explicit
+         * Core BlockIds, independent of exported assembler-local symbols. */
         if (inline_asm->is_goto &&
             (inline_asm->goto_target >= function->block_count ||
              inline_asm->goto_second_target != MINIC_CORE_BLOCK_INVALID))
@@ -1239,7 +1146,8 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
          * revalidates that clobber and literal instruction. Other targets
          * retain their stricter target-only contracts. */
         if (instruction->value.structured_inline_asm.operand_count == 0U)
-            return inline_asm->register_clobber_count <= 1U;
+            return instruction->result == MINIC_CORE_VALUE_INVALID &&
+                   inline_asm->register_clobber_count <= 1U;
         for (operand_index = 0U;
              operand_index < instruction->value.structured_inline_asm.operand_count;
              ++operand_index) {
@@ -1250,16 +1158,20 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
             binding = &instruction->value.structured_inline_asm.operands[operand_index];
             if (binding->operand_index >= MINIC_CORE_STRUCTURED_INLINE_ASM_OPERAND_LIMIT ||
                 used_indices[binding->operand_index] ||
-                binding->value >= function->value_count || !available_values[binding->value] ||
+                (binding->kind != MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_RESULT &&
+                 (binding->value >= function->value_count ||
+                  !available_values[binding->value])) ||
                 (binding->has_fixed_register_binding &&
                  binding->fixed_register_binding_id >=
                      function->fixed_register_binding_count) ||
                 (binding->early_clobber &&
                  binding->kind != MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT &&
-                 binding->kind != MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE) ||
+                 binding->kind != MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE &&
+                 binding->kind != MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_RESULT) ||
                 (binding->physical_early_clobber &&
                  binding->kind != MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT &&
                  binding->kind != MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE &&
+                 binding->kind != MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_RESULT &&
                  binding->kind != MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_OUTPUT &&
                  binding->kind != MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE) ||
                 (inline_asm->operand_plan_owner != MINIC_ASM_OPERAND_PLAN_NONE &&
@@ -1273,6 +1185,14 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
             }
             used_indices[binding->operand_index] = true;
             switch (binding->kind) {
+            case MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_RESULT:
+                if (++scalar_result_count != 1U ||
+                    instruction->result == MINIC_CORE_VALUE_INVALID ||
+                    binding->value != MINIC_CORE_VALUE_INVALID ||
+                    binding->has_fixed_register_binding ||
+                    binding->physical_read_write)
+                    return false;
+                break;
             case MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT:
             case MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE:
             case MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_OUTPUT:
@@ -1310,7 +1230,9 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
                 return false;
             }
         }
-        return !has_memory_readwrite || inline_asm->has_memory_clobber;
+        return (instruction->result == MINIC_CORE_VALUE_INVALID
+                    ? scalar_result_count == 0U : scalar_result_count == 1U) &&
+               (!has_memory_readwrite || inline_asm->has_memory_clobber);
     }
     case MINIC_CORE_INSTRUCTION_COMPILER_BARRIER:
         return instruction->result == MINIC_CORE_VALUE_INVALID &&
@@ -1810,6 +1732,12 @@ bool minic_core_function_verify(const MinicCoreFunction *function) {
     for (index = 0U; index < function->inline_asm_count; ++index) {
         const MinicCoreInlineAsm *assembly = &function->inline_asms[index];
         size_t ref_index;
+        if (assembly->is_goto &&
+            (assembly->goto_target >= function->block_count ||
+             (assembly->goto_second_target != MINIC_CORE_BLOCK_INVALID &&
+              (assembly->goto_second_target >= function->block_count ||
+               assembly->goto_second_target == assembly->goto_target))))
+            return false;
         if (!storage_shape_is_valid(assembly->symbol_references,
                 assembly->symbol_reference_count,
                 assembly->symbol_reference_capacity)) return false;

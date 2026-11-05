@@ -9,6 +9,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+struct MinicCoreFunction;
+
 typedef enum MinicCoreModuleVisibility {
     MINIC_CORE_MODULE_VISIBILITY_DEFAULT = 0,
     MINIC_CORE_MODULE_VISIBILITY_HIDDEN,
@@ -135,7 +137,7 @@ typedef struct MinicCoreModuleFunctionSymbol {
     bool is_constructor;
     bool is_reachability_root;
     bool is_file_asm_root;
-    bool is_source_label_relocation_owner;
+    bool is_owner_label_relocation_target;
     size_t specialization_source_index; /* SIZE_MAX unless a source clone. */
 } MinicCoreModuleFunctionSymbol;
 
@@ -200,5 +202,12 @@ bool minic_core_module_global_fragments_valid(const MinicCoreModuleGlobal *globa
  * minic_core_module_verify to establish the symbol namespace and functions. */
 bool minic_core_module_verify_global(const MinicCoreModule *module, size_t ordinal);
 bool minic_core_module_verify(const MinicCoreModule *module);
+/* Bind the sealed Module's owner-label relocation edges to the actual Core
+ * function bodies selected for emission. No C statement IDs or clone aliases
+ * are consulted. An exported local alias belongs to exactly one canonical
+ * emitted Core function and one of its Core blocks. */
+bool minic_core_module_verify_label_bindings(
+    const MinicCoreModule *module, const struct MinicCoreFunction *functions,
+    size_t function_count);
 
 #endif

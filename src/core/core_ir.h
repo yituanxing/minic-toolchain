@@ -101,12 +101,10 @@ typedef enum MinicCoreInstructionKind {
     /* M80_ADDRESS_BACKED_RECORD_COPY: byte-preserving aggregate memory copy. */
     MINIC_CORE_INSTRUCTION_RECORD_COPY,
     MINIC_CORE_INSTRUCTION_OPAQUE_INLINE_ASM,
-    MINIC_CORE_INSTRUCTION_REGISTER_OUTPUT_INLINE_ASM,
-    MINIC_CORE_INSTRUCTION_REGISTER_OUTPUT_INPUT_INLINE_ASM,
-    MINIC_CORE_INSTRUCTION_MEMORY_READWRITE_SCALAR_INPUT_INLINE_ASM,
-    MINIC_CORE_INSTRUCTION_SCALAR_INPUT_INLINE_ASM,
-    /* M67_STRUCTURED_MULTI_OPERAND_INLINE_ASM: target-neutral operand bindings. */
-    MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM,
+    /* Four retired scalar-ASM opcode numbers remain unassigned. Preserve the
+     * numeric identity of all subsequent Core instructions without retaining
+     * a parallel instruction representation or accepting their old encodings. */
+    MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM = MINIC_CORE_INSTRUCTION_OPAQUE_INLINE_ASM + 5,
     MINIC_CORE_INSTRUCTION_COMPILER_BARRIER,
     MINIC_CORE_INSTRUCTION_CALL_FRAME_ADDRESS,
     /* M123_VARIADIC_ARGUMENT_ADDRESS: semantic origin of a va_list cursor.
@@ -247,13 +245,6 @@ typedef struct MinicCoreCallArgument {
         MinicCoreValueId value_id;
         MinicCoreObjectId object_id;
     } value;
-    /* Source-proven C integer constant AFTER parameter conversion.
-     * Scalar argument snapshots may be spilled/reloaded for call ordering,
-     * so recovering this fact from a final LOAD SSA is not reliable.
-     * This fact is ABI/ISA-neutral: each target owns immediate constraints
-     * and whether a call consumes hardware immediates. */
-    bool has_constant_integer;
-    uint64_t constant_integer_bits;
 } MinicCoreCallArgument;
 
 typedef struct MinicCoreInlineAsmRegisterClobber {
@@ -350,7 +341,12 @@ typedef enum MinicCoreStructuredInlineAsmOperandKind {
        pointees and never require post-asm writeback. */
     MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT,
     MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE,
-    MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT
+    MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT,
+    /* An SSA register output, unlike REGISTER_OUTPUT's address-backed lvalue.
+     * The sole result lives in instruction->result; operand.value is INVALID.
+     * This allows a mixed +A memory output and =r result to retain the
+     * original GNU operand positions without adding a synthetic Core store. */
+    MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_RESULT
 } MinicCoreStructuredInlineAsmOperandKind;
 
 typedef struct MinicCoreStructuredInlineAsmOperand {
@@ -480,22 +476,6 @@ typedef struct MinicCoreInstruction {
         MinicCoreInlineAsmId inline_asm_id;
         struct {
             MinicCoreInlineAsmId inline_asm_id;
-            MinicCoreValueId operand;
-        } register_output_input_inline_asm;
-        struct {
-            MinicCoreInlineAsmId inline_asm_id;
-            MinicCoreValueId memory_address;
-            MinicCoreValueId operand;
-            size_t memory_operand_index;
-            size_t register_output_operand_index;
-            size_t scalar_input_operand_index;
-        } memory_readwrite_scalar_input_inline_asm;
-        struct {
-            MinicCoreInlineAsmId inline_asm_id;
-            MinicCoreValueId operand;
-        } scalar_input_inline_asm;
-        struct {
-            MinicCoreInlineAsmId inline_asm_id;
             size_t operand_count;
             MinicCoreStructuredInlineAsmOperand operands[MINIC_CORE_STRUCTURED_INLINE_ASM_OPERAND_LIMIT];
         } structured_inline_asm;
@@ -537,6 +517,7 @@ static inline bool minic_core_asm_output_operand_count(
         bool output;
         switch (instruction->value.structured_inline_asm.operands[i].kind) {
         case MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT:
+        case MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_RESULT:
         case MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE:
         case MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_OUTPUT:
         case MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE:
@@ -577,8 +558,13 @@ typedef struct MinicCoreBlock {
     size_t instruction_capacity;
     MinicCoreTerminator terminator;
     bool has_terminator;
-    /* Local symbol identity resolved once on source ingress; Module data
-     * relocations refer to this very same name. NULL means no local label. */
+    /* A block may be reached through an opaque/indirect transfer even if it
+     * has no assembler-visible alias (for example a specialized function).
+     * This is control flow, not a source-language clone or label flag. */
+    bool indirect_entry;
+    /* Optional exported assembler-local alias. Module data relocations use
+     * this exact symbol, and only the canonical owner publishes it. A block
+     * may be an indirect entry without exporting any symbol. */
     char *local_label_symbol;
 } MinicCoreBlock;
 
@@ -591,10 +577,6 @@ typedef struct MinicCoreFunction {
     /* The sole sealed definition signature: return, formals, ABI convention
        and variadic policy all live in one nominal Core FUNCTION type. */
     MinicCoreTypeId core_function_type_id;
-    /* Integer-specialization clones share Semantic statement ids with their
-       source. Their executable Core block labels are already function-scoped,
-       so do not also export the source-id .Luser_* compatibility aliases. */
-    bool suppress_local_label_aliases;
     MinicCoreFixedRegisterBinding *fixed_register_bindings;
     size_t fixed_register_binding_count;
     size_t fixed_register_binding_capacity;
@@ -732,11 +714,17 @@ bool minic_core_function_set_terminator(MinicCoreFunction *function,
  * arm would create executable references to impossible GNU compile-time
  * assertions. This changes only CFG edges, never instruction side effects. */
 size_t minic_core_function_fold_literal_branches(MinicCoreFunction *function);
-/* Conservative CFG reachability shared by every target. Ordinary source
- * labels are roots because indirect branches / function-level gotos may
- * reenter them even when lexical control flow cannot. */
+/* Conservative CFG reachability shared by every target. Explicit local
+ * exports and indirect entries are distinct roots; live ASM-goto and block
+ * address producers contribute their own CFG successors. */
 bool minic_core_function_mark_reachable_blocks(const MinicCoreFunction *function,
                                                bool *reachable, size_t capacity);
+/* Machine-independent indirect landing-pad census. A reachable BLOCK_ADDRESS
+ * makes its destination an indirect entry even for an independent Core
+ * producer that did not pre-mark the target block. */
+bool minic_core_function_mark_indirect_entries(const MinicCoreFunction *function,
+                                               const bool *reachable,
+                                               bool *indirect_entries, size_t capacity);
 bool minic_core_function_verify(const MinicCoreFunction *function);
 bool minic_core_function_dump(FILE *output, const MinicCoreFunction *function);
 

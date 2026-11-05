@@ -287,6 +287,8 @@ BACKEND_MODULE_ARENA_TEST_BINARY := $(BUILD_DIR)/tests/target/backend-module-are
 DIRECT_LP64_ASM_UNIT_BINARY := $(BUILD_DIR)/tests/compiler/c0/direct-lp64-asm-preflight-unit
 MINIC_DRIVER_SOURCES := \
 	src/target/target_catalog.c \
+	src/target/driver_stage_recipe.c \
+	src/target/riscv64/driver_stage_recipe.c \
 	tools/minic/driver_cli.c \
 	tools/minic/driver_pipeline.c \
 	tools/minic/main.c

@@ -92,32 +92,26 @@ static bool emit_lp64_record_chunk_argument(FILE *out, size_t offset,
     return minic_loongarch64_emit_sp_mem(out, "st.d", "$t0", stack_slot * 8U);
 }
 
-/* Resolve only immutable integer-constant SSA operands. CSR numbers must
- * be known at compilation time; never treat a dynamic GPR as CSR index. */
+/* Resolve only an actual integer-constant SSA definition. A conversion chain
+ * is not proof of an identical literal: its signedness/width could change the
+ * value. The source ingress emits a typed final constant for qualified machine
+ * builtin immediates after ordinary argument evaluation/snapshotting. */
 static bool loongarch_builtin_immediate_value(
     const MinicCoreFunction *fn, MinicCoreValueId value, uint64_t *out) {
-    unsigned depth;
+    MinicCoreInstructionId definition;
+    const MinicCoreInstruction *ins;
     if (fn == NULL || out == NULL || fn->values == NULL ||
         fn->instructions == NULL || value >= fn->value_count)
         return false;
-    for (depth = 0U; depth < 5U; ++depth) {
-        const MinicCoreInstructionId definition = fn->values[value].definition;
-        const MinicCoreInstruction *ins;
-        if (definition >= fn->instruction_count)
-            return false;
-        ins = &fn->instructions[definition];
-        if (ins->result != value)
-            return false;
-        if (ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT) {
-            *out = (uint64_t)ins->value.integer_value;
-            return true;
-        }
-        if (ins->kind != MINIC_CORE_INSTRUCTION_INTEGER_CONVERSION ||
-            ins->value.operand >= fn->value_count)
-            return false;
-        value = ins->value.operand;
-    }
-    return false;
+    definition = fn->values[value].definition;
+    if (definition >= fn->instruction_count)
+        return false;
+    ins = &fn->instructions[definition];
+    if (ins->result != value ||
+        ins->kind != MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT)
+        return false;
+    *out = (uint64_t)ins->value.integer_value;
+    return true;
 }
 
 /* Outgoing calls and incoming named parameters share the same ABI plan
@@ -352,17 +346,14 @@ bool minic_loongarch64_emit_abi_instruction(
                         const MinicCoreCallArgument *immediate_arg =
                             immediate_index < count ?
                                 &fn->call_arguments[begin + immediate_index] : NULL;
-                        /* The C argument was evaluated and scalar-snapshotted
-                         * correctly. Consume the Core source-constant fact
-                         * rather than treating the post-snapshot LOAD as
-                         * an arbitrary GPR CSR index. Exact CSR range remains
-                         * a LoongArch target policy, not a Core restriction. */
+                        /* Only a real, verified Core integer-constant SSA
+                         * operand can select a privileged CSR index. Source
+                         * constant evaluation and argument snapshotting were
+                         * completed before this sealed machine instruction. */
                         if (immediate_arg == NULL ||
                             immediate_arg->kind != MINIC_CORE_CALL_ARGUMENT_VALUE ||
-                            !(immediate_arg->has_constant_integer
-                              ? (imm = immediate_arg->constant_integer_bits, true)
-                              : loongarch_builtin_immediate_value(
-                                    fn, immediate_arg->value.value_id, &imm)) ||
+                            !loongarch_builtin_immediate_value(
+                                fn, immediate_arg->value.value_id, &imm) ||
                             imm > 16383U)
                             return false;
                     }

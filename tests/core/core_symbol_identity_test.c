@@ -84,6 +84,11 @@ int main(void) {
         "__minic_deferred_asm_immediate_17_0");
     REQUIRE(function.inline_asms[assembly].deferred_immediate_symbol != NULL);
     REQUIRE(minic_core_function_verify(&function));
+    /* A source-free producer cannot fabricate a dangling control-flow edge
+     * merely by claiming an otherwise well-formed opaque ASM effect. */
+    function.inline_asms[assembly].goto_target = MINIC_CORE_BLOCK_INVALID;
+    REQUIRE(!minic_core_function_verify(&function));
+    function.inline_asms[assembly].goto_target = blocks[1];
     function.inline_asms[assembly].is_goto = false;
     REQUIRE(!minic_core_function_verify(&function)); /* no non-goto borrowed label */
     function.inline_asms[assembly].is_goto = true;

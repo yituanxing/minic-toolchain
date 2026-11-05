@@ -1,6 +1,7 @@
 /* One target-neutral fragment contract for ModuleIR verification and every
  * architecture's emitter; neither may accept malformed ranges or symbols. */
 #include "core/module_ir.h"
+#include "core/core_ir.h"
 
 #include <stdio.h>
 #include <stdint.h>
@@ -11,9 +12,11 @@ static int verify_module_provenance_edges(const MinicCoreModule *baseline) {
     MinicCoreModuleFunctionSymbol functions[3] = {
         {.name = "source", .is_defined = true, .alias_target_index = SIZE_MAX,
          .specialization_source_index = SIZE_MAX},
-        {.name = "clone", .is_defined = true, .alias_target_index = SIZE_MAX,
+        {.name = "clone", .is_defined = true, .is_internal = true,
+         .alias_target_index = SIZE_MAX,
          .specialization_source_index = 0U},
-        {.name = "other_clone", .is_defined = true, .alias_target_index = SIZE_MAX,
+        {.name = "other_clone", .is_defined = true, .is_internal = true,
+         .alias_target_index = SIZE_MAX,
          .specialization_source_index = 0U}
     };
     MinicCoreModuleReference label = {
@@ -46,6 +49,15 @@ static int verify_module_provenance_edges(const MinicCoreModule *baseline) {
     CHECK(!minic_core_module_verify(&module), 24); /* nested clone source */
     functions[2].specialization_source_index = 0U;
     CHECK(minic_core_module_verify(&module), 25);
+    functions[1].is_defined = false;
+    CHECK(!minic_core_module_verify(&module), 172); /* clone must define a body */
+    functions[1].is_defined = true;
+    functions[1].is_internal = false;
+    CHECK(!minic_core_module_verify(&module), 173); /* clone has TU-local linkage */
+    functions[1].is_internal = true;
+    functions[1].alias_target_index = 0U;
+    CHECK(!minic_core_module_verify(&module), 174); /* clone cannot be alias */
+    functions[1].alias_target_index = SIZE_MAX;
 
     label.target_index = 1U;
     CHECK(!minic_core_module_verify(&module), 26); /* wrong owner index */
@@ -315,6 +327,9 @@ static int verify_materialized_relocation_edges(
     module.function_symbols = functions;
     module.function_count = 1U;
     CHECK(minic_core_module_verify(&module), 92); /* correct ordered edges */
+    references[0].kind = (MinicCoreModuleReferenceKind)-1;
+    CHECK(!minic_core_module_verify(&module), 175); /* invalid enum below zero */
+    references[0].kind = MINIC_CORE_MODULE_REFERENCE_OBJECT;
 
     globals[0].reference_count = 1U;
     CHECK(!minic_core_module_verify(&module), 93); /* extra ELF relocation */
@@ -646,6 +661,85 @@ static int verify_source_free_global_definition_contract(
     object->reference_count = 0U;
     object->definition_kind = MINIC_CORE_MODULE_DEFINITION_REGULAR;
     object->data_policy = MINIC_CORE_MODULE_DATA_MATERIALIZED;
+    object->default_section = (MinicCoreModuleDefaultSection)-1;
+    CHECK(!minic_core_module_verify(&module), 176); /* invalid dead section */
+    object->default_section = (MinicCoreModuleDefaultSection)4;
+    CHECK(!minic_core_module_verify(&module), 177);
+    object->default_section = MINIC_CORE_MODULE_SECTION_BSS;
+    return 0;
+}
+
+static int verify_module_label_emission_ownership(
+    const MinicCoreModule *baseline, MinicCoreTypeContext *types) {
+    MinicCoreType word = {0};
+    MinicCoreTypeId word_id;
+    MinicCoreModuleReference reference = {
+        .kind = MINIC_CORE_MODULE_REFERENCE_OWNER_LABEL, .target_index = 0U
+    };
+    MinicCoreModuleFragment relocation = {
+        .kind = MINIC_CORE_MODULE_FRAGMENT_RELOCATION, .byte_count = 4U,
+        .relocation_kind = MINIC_CORE_MODULE_RELOCATION_LABEL,
+        .relocation_symbol = ".Luser_23"
+    };
+    MinicCoreModuleGlobal object = {
+        .name = "local_address_table", .is_internal = true, .emittable = true,
+        .storage_size = 4U, .storage_alignment = 4U,
+        .default_section = MINIC_CORE_MODULE_SECTION_DATA,
+        .alias_target_index = SIZE_MAX, .owner_function_index = 0U,
+        .references = &reference, .reference_count = 1U,
+        .fragments = &relocation, .fragment_count = 1U
+    };
+    MinicCoreModuleFunctionSymbol symbols[3] = {
+        {.name = "owner", .is_defined = true, .is_internal = true,
+         .is_referenced = true, .alias_target_index = SIZE_MAX,
+         .specialization_source_index = SIZE_MAX},
+        {.name = "other", .is_defined = true, .alias_target_index = SIZE_MAX,
+         .specialization_source_index = SIZE_MAX},
+        {.name = "clone", .is_defined = true, .is_internal = true,
+         .is_referenced = true, .alias_target_index = SIZE_MAX,
+         .specialization_source_index = 0U}
+    };
+    MinicCoreBlock owner_blocks[1] = {{.local_label_symbol = ".Luser_23"}};
+    MinicCoreBlock other_blocks[1] = {{.local_label_symbol = ".Luser_24"}};
+    MinicCoreBlock clone_blocks[1] = {{0}};
+    MinicCoreFunction functions[3] = {
+        {.blocks = owner_blocks, .block_count = 1U},
+        {.blocks = other_blocks, .block_count = 1U},
+        {.blocks = clone_blocks, .block_count = 1U}
+    };
+    MinicCoreModule module = *baseline;
+    word.kind = MINIC_CORE_TYPE_INTEGER;
+    word.has_layout = true;
+    word.size = word.alignment = 4U;
+    CHECK(minic_core_type_register(types, &word, &word_id), 178);
+    object.core_type_id = word_id;
+    module.globals = &object;
+    module.global_count = 1U;
+    module.function_symbols = symbols;
+    module.function_count = 3U;
+    CHECK(minic_core_module_verify_label_bindings(&module, functions, 3U), 179);
+
+    relocation.relocation_symbol = ".Luser_99";
+    CHECK(minic_core_module_verify(&module) &&
+          !minic_core_module_verify_label_bindings(&module, functions, 3U), 180);
+    relocation.relocation_symbol = ".Luser_24";
+    CHECK(!minic_core_module_verify_label_bindings(&module, functions, 3U), 181);
+    relocation.relocation_symbol = ".Luser_23";
+    other_blocks[0].local_label_symbol = ".Luser_23";
+    CHECK(!minic_core_module_verify_label_bindings(&module, functions, 3U), 182);
+    other_blocks[0].local_label_symbol = ".Luser_24";
+    clone_blocks[0].local_label_symbol = ".Luser_70";
+    CHECK(!minic_core_module_verify_label_bindings(&module, functions, 3U), 183);
+    clone_blocks[0].local_label_symbol = NULL;
+    symbols[0].is_referenced = false;
+    CHECK(!minic_core_module_verify_label_bindings(&module, functions, 3U), 184);
+    symbols[0].is_referenced = true;
+    reference.target_index = 1U;
+    object.owner_function_index = 1U;
+    CHECK(minic_core_module_verify(&module) &&
+          !minic_core_module_verify_label_bindings(&module, functions, 3U), 185);
+    reference.target_index = object.owner_function_index = 0U;
+    CHECK(minic_core_module_verify_label_bindings(&module, functions, 3U), 186);
     return 0;
 }
 
@@ -742,9 +836,10 @@ int main(void) {
                           definition_result);
         CHECK(definition_result == 0, 153);
     }
+    CHECK(verify_module_label_emission_ownership(&module, &types) == 0, 187);
     symbols[0].name = NULL;
     CHECK(!minic_core_module_verify(&module), 19);
     minic_core_type_context_destroy(&types);
-    puts("CORE_MODULE_FRAGMENT_CONTRACT=PASS bounds forms names alias-index=14 clone_provenance=5 forged_owner_label=5 name_range=9 emitted_elf_namespace=18 canonical_source=valid relocation_edge_identity=8 source_free_zero_facts=3 typed_extent=13 definition_flags=14");
+    puts("CORE_MODULE_FRAGMENT_CONTRACT=PASS bounds forms names alias-index=14 clone_provenance=8 forged_owner_label=5 label_bindings=8 name_range=9 emitted_elf_namespace=18 canonical_source=valid relocation_edge_identity=9 source_free_zero_facts=3 typed_extent=13 definition_flags=16");
     return 0;
 }

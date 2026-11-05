@@ -364,11 +364,17 @@ MinicCoreLowerStatus core_asm_try_immediate_output_csr(
                         context, output_expression->value.local_id);
                 }
                 (void)memset(&instruction, 0, sizeof(instruction));
-                instruction.kind = MINIC_CORE_INSTRUCTION_REGISTER_OUTPUT_INLINE_ASM;
+                instruction.kind = MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM;
                 instruction.span = statement->span;
                 instruction_source_type = output_type;
                 instruction.result = MINIC_CORE_VALUE_INVALID;
-                instruction.value.inline_asm_id = inline_asm_id;
+                instruction.value.structured_inline_asm.inline_asm_id = inline_asm_id;
+                instruction.value.structured_inline_asm.operand_count = 1U;
+                instruction.value.structured_inline_asm.operands[0].kind =
+                    MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_RESULT;
+                instruction.value.structured_inline_asm.operands[0].operand_index = 0U;
+                instruction.value.structured_inline_asm.operands[0].value =
+                    MINIC_CORE_VALUE_INVALID;
                 if (!minic_core_function_append_source_value_instruction(
                         context->source, context->block_id, &instruction, instruction_source_type, &output_value)) {
                     if (getenv("MINIC_ASM_BATCH_TRACE") != NULL) {

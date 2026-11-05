@@ -120,10 +120,6 @@ static bool core_instruction_supported(bool require_prepared_abi,
             function, instruction, &result_type, &result_size, &is_unsigned);
     }
     case MINIC_CORE_INSTRUCTION_OPAQUE_INLINE_ASM:
-    case MINIC_CORE_INSTRUCTION_REGISTER_OUTPUT_INLINE_ASM:
-    case MINIC_CORE_INSTRUCTION_REGISTER_OUTPUT_INPUT_INLINE_ASM:
-    case MINIC_CORE_INSTRUCTION_MEMORY_READWRITE_SCALAR_INPUT_INLINE_ASM:
-    case MINIC_CORE_INSTRUCTION_SCALAR_INPUT_INLINE_ASM:
     case MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM:
         return minic_riscv64_inline_asm_instruction_supported(function, instruction);
     case MINIC_CORE_INSTRUCTION_COMPILER_BARRIER:

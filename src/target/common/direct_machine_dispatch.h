@@ -196,7 +196,6 @@ static inline bool minic_multi_direct_machine_dispatch(
         if (fprintf(out, ".L%s_f%zu_b%zu:\n", dispatch->label_prefix,
                     ctx->id, block_id) < 0 ||
             (block->local_label_symbol != NULL &&
-             !fn->suppress_local_label_aliases &&
              (!minic_core_label_symbol_valid(block->local_label_symbol) ||
               fprintf(out, "%s:\n", block->local_label_symbol) < 0))) {
             success = minic_multi_direct_machine_reject(

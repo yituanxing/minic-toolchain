@@ -386,7 +386,7 @@ bool minic_core_module_prepare_from_program(MinicCoreModule *output,
                 &global->references[reference_index];
             if (reference->kind == MINIC_CORE_MODULE_REFERENCE_OWNER_LABEL)
                 staged.function_symbols[reference->target_index].
-                    is_source_label_relocation_owner = true;
+                    is_owner_label_relocation_target = true;
         }
     }
     for (index = 0U; index < staged.file_asm_count; ++index) {

@@ -45,6 +45,21 @@ has src/compiler/c_lower/core_ir_source.c 'minic_core_source_builder_destroy('
 has src/core/core_ir.h 'char *local_label_symbol;'
 has src/core/core_ir.h 'char *deferred_immediate_symbol;'
 has src/core/module_ir.h 'char *relocation_symbol;'
+# GNU ASM publishes one typed Core instruction with a bounded operand
+# contract. A machine register result is the instruction's SSA definition,
+# never a fake address-backed lvalue or a fifth instruction kind.
+has src/core/core_ir.h 'MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_RESULT'
+has src/core/core_ir_verify.c 'scalar_result_count'
+has src/core/value_uses.c 'MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_RESULT'
+for owner in src/core/core_ir.h src/core/core_ir_verify.c \
+             src/compiler/c_lower/core_lower_asm_scalar_forms.c \
+             src/compiler/c_lower/core_lower_asm_structured.c \
+             src/target/common/direct_preflight.c; do
+  lacks "$owner" 'MINIC_CORE_INSTRUCTION_REGISTER_OUTPUT_INLINE_ASM'
+  lacks "$owner" 'MINIC_CORE_INSTRUCTION_REGISTER_OUTPUT_INPUT_INLINE_ASM'
+  lacks "$owner" 'MINIC_CORE_INSTRUCTION_MEMORY_READWRITE_SCALAR_INPUT_INLINE_ASM'
+  lacks "$owner" 'MINIC_CORE_INSTRUCTION_SCALAR_INPUT_INLINE_ASM'
+done
 # C initializer syntax is consumed before publishing Core Module globals.
 # The generic ELF definition facts, typed fragments and reference edges are
 # sufficient to drive the five machine owners without shadow initializer
@@ -131,8 +146,8 @@ has src/target/common/elf_alias_emit.h 'alias->alias_target_index'
 has src/target/common/program_emit.c 'alias_target_index'
 # Do not prune a canonical function before lowering if an initializer
 # contains a source-local label relocation; function ABI alignment is live.
-has src/core/module_ir.h 'is_source_label_relocation_owner;'
-has src/compiler/core_function_set.c 'is_source_label_relocation_owner'
+has src/core/module_ir.h 'is_owner_label_relocation_target;'
+has src/compiler/core_function_set.c 'is_owner_label_relocation_target'
 has src/core/module_ir.h 'size_t explicit_alignment;'
 exists src/core/symbol_identity.h
 has src/core/symbol_identity.h 'minic_core_label_symbol_valid('
@@ -417,11 +432,17 @@ has src/target/x86_64/asm_contract_source.c 'x86_linux_raw_cmpxchg_source('
 has src/target/x86_64/machine_asm.c 'emit_linux_raw_cmpxchg('
 lacks src/compiler/c_lower/core_lower_asm_target.c 'cmpxchgb'
 
-# The immutable C integer argument fact survives universal Core call
-# argument snapshot. Only LoongArch machine code interprets it as CSR index.
-has src/core/core_ir.h 'has_constant_integer;'
+# Target-qualified builtin immediate operands become real typed Core SSA
+# integer constants after ordinary C argument evaluation and snapshotting.
+# Neither generic Core CALL arguments nor the LoongArch machine emitter may
+# accept a forged, unverified parallel source-constant hint.
+lacks src/core/core_ir.h 'has_constant_integer;'
+lacks src/core/core_ir.h 'constant_integer_bits;'
 has src/compiler/c_lower/core_lower_calls.c 'minic_const_eval_arithmetic_to_integer('
-has src/target/loongarch64/call_emit.c 'immediate_arg->has_constant_integer'
+has src/compiler/c_lower/core_lower_calls.c 'minic_target_info_machine_builtin_form('
+has src/compiler/c_lower/core_lower_calls.c 'MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT'
+has src/target/loongarch64/call_emit.c 'loongarch_builtin_immediate_value('
+lacks src/target/loongarch64/call_emit.c 'immediate_arg->has_constant_integer'
 lacks src/compiler/c_lower/core_lower_calls.c '__builtin_loongarch_csrrd_w'
 
 # Genuine LoongArch C original __percpu_{read,write,add,and,or} and
@@ -773,7 +794,7 @@ has src/target/riscv64/global_emit.c 'target/common/module_global_emit.h'
 # ISA/ABI profile names must be shared between native compiler and staged
 # product driver. Only machine legalization owns the actual feature bits.
 has src/target/riscv/isa_resolve.c 'minic_riscv_profile_find(march)'
-has tools/minic/driver_cli.c 'minic_riscv_profile_find(march)'
+has src/target/riscv64/driver_stage_recipe.c 'minic_riscv_profile_find(march)'
 has src/target/target_catalog.c 'minic_riscv_profile_all('
 lacks tools/minic/driver_cli.c 'strcmp(march, "rv64im")'
 
@@ -1698,7 +1719,7 @@ fi
 cc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror \
   -ffunction-sections -fdata-sections -Wl,--gc-sections \
   -Iinclude -Isrc tests/compiler/c0/probe-program-emit-transaction.c \
-  src/core/core_ir.c src/core/module_ir.c src/core/value_uses.c \
+  src/core/core_ir.c src/core/core_type.c src/core/module_ir.c src/core/value_uses.c \
   src/frontend/ast_global.c \
   src/target/common/core_function_facts.c \
   src/target/common/core_function_plan.c \

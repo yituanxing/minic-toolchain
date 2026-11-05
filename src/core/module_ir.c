@@ -1,4 +1,5 @@
 #include "core/module_ir.h"
+#include "core/core_ir.h"
 #include "core/symbol_identity.h"
 
 #include <stdlib.h>
@@ -389,6 +390,8 @@ static bool module_verify_global_one(const MinicCoreModule *module,
         module->type_context, global->core_type_id);
     if (global->name == NULL || global->name[0] == '\0' ||
         !valid_visibility(global->visibility) ||
+        (global->default_section < MINIC_CORE_MODULE_SECTION_BSS ||
+         global->default_section > MINIC_CORE_MODULE_SECTION_RELRO) ||
         (global->definition_kind != MINIC_CORE_MODULE_DEFINITION_REGULAR &&
          global->definition_kind != MINIC_CORE_MODULE_DEFINITION_ZERO_FILL &&
          global->definition_kind != MINIC_CORE_MODULE_DEFINITION_DECLARATION) ||
@@ -418,6 +421,7 @@ static bool module_verify_global_one(const MinicCoreModule *module,
                  reference->target_index >= module->function_count) ||
                 (reference->kind == MINIC_CORE_MODULE_REFERENCE_OWNER_LABEL &&
                  reference->target_index >= module->function_count) ||
+                reference->kind < MINIC_CORE_MODULE_REFERENCE_OBJECT ||
                 reference->kind > MINIC_CORE_MODULE_REFERENCE_OWNER_LABEL)
                 return false;
             if (reference->kind == MINIC_CORE_MODULE_REFERENCE_OWNER_LABEL) {
@@ -447,8 +451,6 @@ static bool module_verify_global_one(const MinicCoreModule *module,
     if (type == NULL) return false;
     if (global->definition_kind == MINIC_CORE_MODULE_DEFINITION_DECLARATION)
         return global->fragment_count == 0U;
-    if (global->default_section > MINIC_CORE_MODULE_SECTION_RELRO)
-        return false;
     if (!type->has_layout || !valid_power_two(global->storage_alignment) ||
         !minic_core_module_global_fragments_valid(global) ||
         !module_live_global_relocations_match(module, global) ||
@@ -485,7 +487,9 @@ bool minic_core_module_verify(const MinicCoreModule *module) {
         if (symbol->specialization_source_index != SIZE_MAX) {
             const MinicCoreModuleFunctionSymbol *source =
                 &module->function_symbols[symbol->specialization_source_index];
-            if (!source->is_defined ||
+            if (!symbol->is_defined || !symbol->is_internal ||
+                symbol->alias_target_index != SIZE_MAX ||
+                !source->is_defined ||
                 source->specialization_source_index != SIZE_MAX) return false;
         }
         if (symbol->alias_target_index != SIZE_MAX) {
@@ -508,4 +512,103 @@ bool minic_core_module_verify(const MinicCoreModule *module) {
                     module->file_asms[index].length) != NULL))
             return false;
     return true;
+}
+
+typedef struct ModuleExportedLocalLabel {
+    const char *name;
+    size_t owner_function_index;
+} ModuleExportedLocalLabel;
+
+static int module_exported_label_compare(const void *left, const void *right) {
+    const ModuleExportedLocalLabel *a = left, *b = right;
+    return strcmp(a->name, b->name);
+}
+
+static bool module_label_has_canonical_owner(
+    const ModuleExportedLocalLabel *labels, size_t label_count,
+    const char *name, size_t owner) {
+    size_t begin = 0U, end = label_count;
+    while (begin < end) {
+        const size_t middle = begin + (end - begin) / 2U;
+        const int comparison = strcmp(name, labels[middle].name);
+        if (comparison < 0) end = middle;
+        else if (comparison > 0) begin = middle + 1U;
+        else return labels[middle].owner_function_index == owner;
+    }
+    return false;
+}
+
+bool minic_core_module_verify_label_bindings(
+    const MinicCoreModule *module, const MinicCoreFunction *functions,
+    size_t function_count) {
+    ModuleExportedLocalLabel *labels = NULL;
+    size_t label_count = 0U, capacity = 0U, function_index;
+    bool valid = false;
+    if (!minic_core_module_verify(module) ||
+        module->function_count != function_count ||
+        (function_count != 0U && functions == NULL))
+        return false;
+    /* Only Core definitions selected for machine emission export aliases.
+     * Function clones execute the original body but must not export its
+     * canonical local labels a second time. */
+    for (function_index = 0U; function_index < function_count; ++function_index) {
+        const MinicCoreModuleFunctionSymbol *symbol =
+            &module->function_symbols[function_index];
+        const MinicCoreFunction *function = &functions[function_index];
+        size_t block_index;
+        if (!symbol->is_defined || (symbol->is_internal && !symbol->is_referenced))
+            continue;
+        if (function->block_count != 0U && function->blocks == NULL)
+            goto done;
+        for (block_index = 0U; block_index < function->block_count; ++block_index) {
+            const char *name = function->blocks[block_index].local_label_symbol;
+            if (name == NULL) continue;
+            if (symbol->specialization_source_index != SIZE_MAX ||
+                !minic_core_label_symbol_valid(name) ||
+                capacity == SIZE_MAX / sizeof(*labels)) goto done;
+            if (label_count == capacity) {
+                const size_t next_capacity = capacity == 0U ? 16U :
+                    capacity > SIZE_MAX / (2U * sizeof(*labels))
+                        ? SIZE_MAX / sizeof(*labels) : capacity * 2U;
+                ModuleExportedLocalLabel *grown;
+                if (next_capacity <= capacity) goto done;
+                grown = realloc(labels, next_capacity * sizeof(*labels));
+                if (grown == NULL) goto done;
+                labels = grown;
+                capacity = next_capacity;
+            }
+            labels[label_count].name = name;
+            labels[label_count++].owner_function_index = function_index;
+        }
+    }
+    if (label_count > 1U)
+        qsort(labels, label_count, sizeof(*labels), module_exported_label_compare);
+    for (function_index = 1U; function_index < label_count; ++function_index)
+        if (strcmp(labels[function_index - 1U].name, labels[function_index].name) == 0)
+            goto done; /* Duplicate assembler symbols across function bodies. */
+    for (function_index = 0U; function_index < module->global_count; ++function_index) {
+        const MinicCoreModuleGlobal *global = &module->globals[function_index];
+        size_t fragment_index, reference_index = 0U;
+        if (!global->emittable ||
+            global->definition_kind == MINIC_CORE_MODULE_DEFINITION_DECLARATION)
+            continue;
+        for (fragment_index = 0U; fragment_index < global->fragment_count;
+             ++fragment_index) {
+            const MinicCoreModuleFragment *fragment = &global->fragments[fragment_index];
+            const MinicCoreModuleReference *reference;
+            if (fragment->kind != MINIC_CORE_MODULE_FRAGMENT_RELOCATION) continue;
+            if (reference_index >= global->reference_count) goto done;
+            reference = &global->references[reference_index++];
+            if (reference->kind != MINIC_CORE_MODULE_REFERENCE_OWNER_LABEL)
+                continue;
+            if (fragment->relocation_symbol == NULL ||
+                !module_label_has_canonical_owner(
+                    labels, label_count, fragment->relocation_symbol,
+                    reference->target_index)) goto done;
+        }
+    }
+    valid = true;
+done:
+    free(labels);
+    return valid;
 }

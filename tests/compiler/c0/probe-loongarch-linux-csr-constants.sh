@@ -18,17 +18,36 @@ unsigned long linux_exchange_csr(unsigned long value, unsigned long mask) {
 unsigned int linux_csr_compound(void) {
     return __builtin_loongarch_csrrd_w((unsigned int)(0x10 + 0x10));
 }
+unsigned int linux_csr_narrowed(void) {
+    return __builtin_loongarch_csrrd_w((unsigned short)0x10020);
+}
+static volatile unsigned long linux_csr_volatile_value;
+unsigned long linux_csr_volatile_write(void) {
+    return __builtin_loongarch_csrwr_d(linux_csr_volatile_value,
+                                      (unsigned short)0x10020);
+}
 SRC
 "$mini" --target=loongarch64-linux -S "$d/csr.i" -o "$d/csr.s"
 grep -Fq 'csrrd $a0, 32' "$d/csr.s"
 grep -Fq 'csrrd $a0, 16' "$d/csr.s"
 grep -Fq 'csrwr $a0, 16' "$d/csr.s"
 grep -Fq 'csrxchg $a0, $a1, 16' "$d/csr.s"
-test "$(grep -Fc 'csrrd $a0, 32' "$d/csr.s")" -eq 2
-for bad in dynamic overrange unknown;do
+test "$(grep -Fc 'csrrd $a0, 32' "$d/csr.s")" -eq 3
+sed -n '/^linux_csr_volatile_write:/,/^\.size linux_csr_volatile_write/p' \
+    "$d/csr.s" > "$d/volatile_write.s"
+grep -Fq 'ld.d ' "$d/volatile_write.s"
+grep -Fq 'csrwr $a0, 32' "$d/volatile_write.s"
+for bad in dynamic forged_shadow overrange unknown;do
   case "$bad" in
     dynamic) cat > "$d/bad.i" <<'SRC'
 unsigned int f(unsigned int csr){return __builtin_loongarch_csrrd_w(csr);}
+SRC
+      ;;
+    forged_shadow) cat > "$d/bad.i" <<'SRC'
+unsigned int f(unsigned int csr) {
+    unsigned int unrelated_literal = 32U;
+    return __builtin_loongarch_csrrd_w(csr + (unrelated_literal - 32U));
+}
 SRC
       ;;
     overrange) cat > "$d/bad.i" <<'SRC'
@@ -50,4 +69,4 @@ if [[ "${MINIC_LOONG_CSR_SOURCE_ONLY:-0}" != 1 ]]; then
   loongarch64-linux-gnu-gcc-13 -c -x assembler "$d/csr.s" -o "$d/csr.o"
   loongarch64-linux-gnu-readelf -h "$d/csr.o" | grep -Fq 'LoongArch'
 fi
-echo "MINIC_LOONGARCH_CSR_CONST=PASS genuine_linux=1 forms=4 source_snapshot=1 negatives=3 GAS_mode=${MINIC_LOONG_CSR_SOURCE_ONLY:-0}"
+echo "MINIC_LOONGARCH_CSR_CONST=PASS genuine_linux=1 forms=4 typed_constant_narrowing=1 volatile_preserved=1 negatives=4 GAS_mode=${MINIC_LOONG_CSR_SOURCE_ONLY:-0}"

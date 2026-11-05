@@ -23,13 +23,13 @@ static void usage(FILE *out, const char *argv0) {
     for (i = 0U; i < count; ++i)
         (void)fprintf(out, "%s%s", i == 0U ? "" : "|", targets[i].name);
     (void)fprintf(out,
-            "] [-march=rv32i|rv64i|rv64im|rv64imafd|rv64ima_zicsr_zifencei|rv64imac_zicsr_zifencei] [-mabi=ilp32|lp64|lp64d] [-fsigned-char|-funsigned-char] [-fshort-wchar|-fno-short-wchar] [-fPIC|-fPIE (only -S)] [-fcf-protection=branch] [-mindirect-branch=thunk-extern|thunk-inline|keep] [-mindirect-branch-register] [-mfunction-return=thunk-extern] [-fpatchable-function-entry=16,16] [--rtlib=PATH (link only)] [-ffreestanding|-fhosted] [-ffunction-sections|-fno-function-sections] [-static] "
+            "] [-march=TARGET-ISA] [-mabi=TARGET-ABI] [-fsigned-char|-funsigned-char] [-fshort-wchar|-fno-short-wchar] [-fPIC|-fPIE (only -S)] [-fcf-protection=branch] [-mindirect-branch=thunk-extern|thunk-inline|keep] [-mindirect-branch-register] [-mfunction-return=thunk-extern] [-fpatchable-function-entry=16,16] [--rtlib=PATH (link only)] [-ffreestanding|-fhosted (staged only)] [-ffunction-sections|-fno-function-sections] [-static (link only)] "
             "[-nostdlib] [-nostartfiles] [-nodefaultlibs] [-nostdinc] "
             "[--sysroot DIR] [-DNAME[=VALUE]] [-UNAME] [-IDIR] "
             "[-isystem DIR] [-include FILE] [-LDIR] [-lNAME] "
             "-o OUTPUT INPUT...\n"
-            "  -S: all registered MiniC backends (preprocessed C input)\n"
-            "  -c/link: RV64 staged CPP/AS/LD pipeline only\n");
+            "  -S: all registered backends, preprocessed .i input; CPP/link options rejected\n"
+            "  -c/link: qualified RV64 staged CPP/AS/LD pipeline only\n");
 }
 
 static bool append_forward_option(const char **options,
@@ -60,10 +60,13 @@ int minic_driver_cli_parse(int argc, char **argv,
     bool no_startfiles = false;
     bool no_defaultlibs = false;
     bool no_stdinc = false;
+    bool sysroot_given = false;
+    bool hosted_option_given = false;
     bool function_sections = false;
     const MinicTargetCatalogEntry *default_target = minic_target_catalog_default();
     const char *target_name = default_target != NULL ? default_target->name : "";
     const MinicTargetCatalogEntry *target_entry;
+    const MinicTargetDriverStageRecipe *stage_recipe = NULL;
     bool target_given = false;
     const char *march = NULL;
     const char *mabi = NULL;
@@ -105,8 +108,10 @@ int minic_driver_cli_parse(int argc, char **argv,
             runtime_archive = argument + 8U;
         } else if (strcmp(argument, "-ffreestanding") == 0) {
             hosted = false;
+            hosted_option_given = true;
         } else if (strcmp(argument, "-fhosted") == 0) {
             hosted = true;
+            hosted_option_given = true;
         } else if (strcmp(argument, "-fno-builtin") == 0) {
             /* MiniC has no implicit builtin substitution yet. */
         } else if (strcmp(argument, "-fsigned-char") == 0 ||
@@ -159,12 +164,14 @@ int minic_driver_cli_parse(int argc, char **argv,
                 return 2;
             }
             sysroot = argv[index];
+            sysroot_given = true;
         } else if (strncmp(argument, "--sysroot=", 10U) == 0) {
             if (sysroot != NULL || argument[10] == '\0') {
                 usage(stderr, argv[0]);
                 return 2;
             }
             sysroot = argument + 10U;
+            sysroot_given = true;
         } else if (strncmp(argument, "-D", 2U) == 0 ||
                    strncmp(argument, "-U", 2U) == 0 ||
                    strncmp(argument, "-I", 2U) == 0) {
@@ -240,50 +247,50 @@ int minic_driver_cli_parse(int argc, char **argv,
         fprintf(stderr, "minic: unsupported-target:%s\n", target_name);
         return 2;
     }
-    /* C -> GNU assembly may use all registered backends. The staged PP,
-     * assembler and linker remain exclusively RV64; reject unqualified
-     * -c/link *before* invoking any RV64 tool for a foreign target. */
-    if (mode != MINIC_DRIVER_ASSEMBLY &&
-        (target_entry->product_driver_stages &
-         MINIC_TARGET_STAGE_STAGED_ASSEMBLER_AND_LINKER) == 0U) {
-        fprintf(stderr, "minic: target-requires-minic-cc-or-external-assembler:%s\n",
-                target_name);
+    /* -S consumes an already preprocessed .i. CPP and linker arguments are
+     * not meaningful at this boundary, and must never be accepted then
+     * silently discarded (especially for a foreign target). */
+    if (mode == MINIC_DRIVER_ASSEMBLY &&
+        (cpp_forward_count != 0U || no_stdinc || sysroot_given ||
+         hosted_option_given || static_link || no_stdlib || no_startfiles ||
+         no_defaultlibs)) {
+        fprintf(stderr,
+                "minic: -S-preprocessed-input-rejects-CPP-and-link-options\n");
         return 2;
     }
-    if (target_entry->isa_family == MINIC_TARGET_ISA_FAMILY_RISCV &&
-        (target_entry->product_driver_stages &
-         MINIC_TARGET_STAGE_STAGED_ASSEMBLER_AND_LINKER) != 0U) {
-    /* Be strict about the whole pipeline: a compiler accepting RV64I but
-     * the assembler silently using RV64GC would violate the target contract. */
-    if (march != NULL) {
-        const MinicRiscvProfile *profile = minic_riscv_profile_find(march);
-        if (profile == NULL || profile->xlen != 64U) {
-            fprintf(stderr, "minic: unsupported-riscv-isa:%s\n", march);
+    if (mode != MINIC_DRIVER_ASSEMBLY) {
+        char reason[240];
+        /* A backend's -S capability is not evidence of a staged toolchain.
+         * Both the catalog and an actual target-owned recipe must qualify. */
+        if ((target_entry->product_driver_stages &
+             MINIC_TARGET_STAGE_STAGED_ASSEMBLER_AND_LINKER) == 0U) {
+            fprintf(stderr, "minic: target-requires-minic-cc-or-external-assembler:%s\n",
+                    target_name);
             return 2;
         }
-        if (mabi == NULL) mabi = profile->mabi;
-        if (strcmp(mabi, "lp64") != 0 &&
-            !(strcmp(mabi, "lp64d") == 0 &&
-              (profile->features & (MINIC_RISCV_FEATURE_F | MINIC_RISCV_FEATURE_D)) ==
-                  (MINIC_RISCV_FEATURE_F | MINIC_RISCV_FEATURE_D))) {
-            fprintf(stderr, "minic: incompatible-riscv-isa-abi:%s/%s\n", march, mabi);
+        stage_recipe = minic_target_driver_stage_recipe_for_architecture(
+            target_entry->architecture);
+        if (stage_recipe == NULL) {
+            fprintf(stderr, "minic: target-staged-recipe-unavailable:%s\n",
+                    target_name);
             return 2;
         }
-        /* Unqualified built-in MiniAS ISA combinations are -S only. */
-        if (mode != MINIC_DRIVER_ASSEMBLY &&
-            !profile->staged_assembler_qualified) {
-            fprintf(stderr, "minic: extended-riscv-isa-requires--S-external-assembler:%s\n", march);
+        if (!stage_recipe->validate_isa_abi(
+                march, &mabi, reason, sizeof(reason))) {
+            fprintf(stderr, "minic: %s\n", reason[0] ? reason : "invalid-staged-isa-abi");
             return 2;
         }
-    } else if (mabi != NULL && strcmp(mabi, "lp64d") != 0) {
-        fprintf(stderr, "minic: explicit-nondefault-abi-requires--march\n");
-        return 2;
-    }
     }
     if (runtime_archive != NULL) {
-        if (mode != MINIC_DRIVER_LINK || march == NULL ||
-            strcmp(march, "rv64i") != 0) {
-            fprintf(stderr, "minic: --rtlib-requires-rv64i-link-mode\n");
+        if (mode != MINIC_DRIVER_LINK || stage_recipe == NULL ||
+            stage_recipe->explicit_runtime_archive_march == NULL ||
+            march == NULL ||
+            strcmp(march, stage_recipe->explicit_runtime_archive_march) != 0) {
+            fprintf(stderr, "minic: --rtlib-requires-link-and-target-march:%s\n",
+                    stage_recipe != NULL &&
+                    stage_recipe->explicit_runtime_archive_march != NULL
+                        ? stage_recipe->explicit_runtime_archive_march
+                        : "unavailable");
             return 2;
         }
         if (access(runtime_archive, R_OK) != 0) {
@@ -324,7 +331,7 @@ int minic_driver_cli_parse(int argc, char **argv,
 
     *invocation = (MinicDriverInvocation){
         .mode = mode,
-        .target_entry = target_entry,
+        .stage_recipe = stage_recipe,
         .target_name = target_name,
         .input_count = input_count,
         .output = output,

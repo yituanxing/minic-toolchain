@@ -14,19 +14,24 @@ mkdir -p "$work"
 "$minic" -S "$work/gnu_inline_asm_operands.i" -o "$assembly"
 
 test -s "$assembly"
-grep -F 'amoadd.w zero, t1, (t0)' "$assembly" >/dev/null
-grep -F 'amoadd.w t1, t3, (t0)' "$assembly" >/dev/null
+# The unified typed ASM assigns registers through the target planner, whose
+# legal allocation may change without changing the GNU output/input roles.
+# Both the memory-only and the SSA-result forms must keep the exact AMO opcode
+# and a register-held scalar/address operand; the runtime probe below also
+# verifies the emitted register result is stored into its source destination.
+grep -Eq '^amoadd[.]w zero, [a-z][0-9]+, \([a-z][0-9]+\)$' "$assembly"
+grep -Eq '^amoadd[.]w [a-z][0-9]+, [a-z][0-9]+, \([a-z][0-9]+\)$' "$assembly"
 grep -F '.type memory_output_store_like, @function' "$assembly" >/dev/null
 grep -F 'sw t1, 0(t0)' "$assembly" >/dev/null
 grep -F '.type register_member_outputs_like, @function' "$assembly" >/dev/null
-grep -F 'li t0, 1' "$assembly" >/dev/null
-grep -F 'li t1, 2' "$assembly" >/dev/null
-grep -F 'li t3, 3' "$assembly" >/dev/null
-grep -F 'li t4, 4' "$assembly" >/dev/null
-grep -F 'li t5, 5' "$assembly" >/dev/null
-grep -F 'sd t5, 0(a0)' "$assembly" >/dev/null
+for value in 1 2 3 4 5; do
+    grep -Eq "^[[:space:]]*li [a-z][0-9]+, $value\$" "$assembly"
+done
+# The fixture's main now actually reads all five output members; an output
+# register that was never written back is a runtime failure, independently of
+# the allocator's chosen machine register names.
 grep -F '.type memory_input_linux_shape, @function' "$assembly" >/dev/null
-grep -F 'lw t1, 0(t3)' "$assembly" >/dev/null
+grep -Eq '^lw [a-z][0-9]+, \([a-z][0-9]+\)$' "$assembly"
 
 cat >"$work/core-memory-input.c" <<'EOF'
 static int core_memory_input_linux_shape(const int *value) {
@@ -36,13 +41,17 @@ static int core_memory_input_linux_shape(const int *value) {
     __asm__ __volatile__("lw %1, %2" : "+r"(error), "=&r"(loaded) : "m"(*value));
     return loaded + (int)error;
 }
+int main(void) {
+    int memory = 12;
+    return core_memory_input_linux_shape(&memory) == 12 ? 0 : 1;
+}
 EOF
 "$host_cc" -E -P -std=gnu11 -x c "$work/core-memory-input.c" \
     -o "$work/core-memory-input.i"
 MINIC_CORE_IR=strict "$minic" -S "$work/core-memory-input.i" \
     -o "$work/core-memory-input.s"
 grep -F '.type core_memory_input_linux_shape, @function' "$work/core-memory-input.s" >/dev/null
-grep -F 'lw t1, (t2)' "$work/core-memory-input.s" >/dev/null
+grep -Eq '^lw [a-z][0-9]+, \([a-z][0-9]+\)$' "$work/core-memory-input.s"
 
 cat >"$work/core-generic-structured.c" <<'EOF'
 static long output_three_inputs(long a, long b, long c) {
@@ -70,19 +79,31 @@ static long mixed_atomic(long *p, long a, long b, long c, long d) {
                          : "+A"(*p), "+r"(a), "+r"(b) : "r"(c), "r"(d) : "memory");
     return a + b;
 }
+
+int main(void) {
+    long memory = 7;
+    long arithmetic = output_three_inputs(3, 4, 5);
+    long accumulator = five_early_outputs(2);
+    long atomic_result = mixed_atomic(&memory, 1, 2, 3, 4);
+    three_inputs_a0_clobber(1, 2, 3);
+    return arithmetic == 2 && accumulator == 12 &&
+           atomic_result == 13 && memory == 10 ? 0 : 1;
+}
 EOF
 "$host_cc" -E -P -std=gnu11 -x c "$work/core-generic-structured.c" \
     -o "$work/core-generic-structured.i"
 MINIC_CORE_IR=strict "$minic" -S "$work/core-generic-structured.i" \
     -o "$work/core-generic-structured.s"
-grep -F 'add t0, t3, t4' "$work/core-generic-structured.s" >/dev/null
-grep -F 'xor t0, t0, t5' "$work/core-generic-structured.s" >/dev/null
-grep -F 'add t0, t3, t4' "$work/core-generic-structured.s" >/dev/null
-grep -F 'amoadd.d t0, t3, (t2)' "$work/core-generic-structured.s" >/dev/null
+grep -Eq '^[[:space:]]*add [a-z][0-9]+, [a-z][0-9]+, [a-z][0-9]+$' \
+    "$work/core-generic-structured.s"
+grep -Eq '^[[:space:]]*xor [a-z][0-9]+, [a-z][0-9]+, [a-z][0-9]+$' \
+    "$work/core-generic-structured.s"
+grep -Eq '^amoadd[.]d [a-z][0-9]+, [a-z][0-9]+, \([a-z][0-9]+\)$' \
+    "$work/core-generic-structured.s"
 
 grep -F 'addi t3, zero, 7' "$assembly" >/dev/null
-grep -F 'add t0, t0, t3' "$assembly" >/dev/null
-grep -F 'add t0, t1, t4' "$assembly" >/dev/null
+grep -Eq '^[[:space:]]*add [a-z][0-9]+, [a-z][0-9]+, t3$' "$assembly"
+grep -Eq '^add [a-z][0-9]+, [a-z][0-9]+, [a-z][0-9]+$' "$assembly"
 if grep -E '\+A|"r"|=r' "$assembly" >/dev/null; then
     printf '%s\n' 'unexpected raw GNU asm constraints in emitted assembly' >&2
     exit 1
@@ -113,13 +134,13 @@ EOF
 "$host_cc" -E -P -std=gnu11 -x c "$work/callee-saved-fallback.c" \
     -o "$work/callee-saved-fallback.i"
 "$minic" -S "$work/callee-saved-fallback.i" -o "$work/callee-saved-fallback.s"
-grep -F '  sd s1, 24(sp)' "$work/callee-saved-fallback.s" >/dev/null
-grep -F '  sd s2, 32(sp)' "$work/callee-saved-fallback.s" >/dev/null
-grep -F '  sd s3, 40(sp)' "$work/callee-saved-fallback.s" >/dev/null
+for reg in s1 s2 s3; do
+    saved_slot=$(sed -n "s/^  sd $reg, \([0-9][0-9]*\)(sp)\$/\1/p" \
+        "$work/callee-saved-fallback.s" | head -n 1)
+    test -n "$saved_slot"
+    grep -F "  ld $reg, $saved_slot(sp)" "$work/callee-saved-fallback.s" >/dev/null
+done
 grep -F 'add s1, s2, s3' "$work/callee-saved-fallback.s" >/dev/null
-grep -F '  ld s1, 24(sp)' "$work/callee-saved-fallback.s" >/dev/null
-grep -F '  ld s2, 32(sp)' "$work/callee-saved-fallback.s" >/dev/null
-grep -F '  ld s3, 40(sp)' "$work/callee-saved-fallback.s" >/dev/null
 
 cat >"$work/unsupported-clobber.c" <<'EOF'
 int f(int value) {

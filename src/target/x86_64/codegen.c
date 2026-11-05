@@ -616,6 +616,7 @@ static bool x86_head_plan_address_roles(
                             scratch[k] = x86_head_unknown_origin();
                 }
                 if (i == fn->entry_block ||
+                    block->indirect_entry ||
                     block->local_label_symbol != NULL) {
                     /* Backedges cannot bootstrap an uninitialized slot, and
                      * a source-visible label can also have an opaque asm or
@@ -884,6 +885,7 @@ static bool x86_emit_function(FILE *out,
     MinicCoreBlockWalk walk = {0};
     const bool *reachable = NULL;
     bool *owned_reachable = NULL;
+    bool *indirect_entries = NULL;
     bool *head_direct_data_globals = NULL;
     MinicCoreGlobalId *head_vma_cast_globals = NULL;
     MinicCoreGlobalId *head_memory_rebase_globals = NULL;
@@ -923,9 +925,8 @@ static bool x86_emit_function(FILE *out,
         }
     }
     frame.module = module;
-    /* Match the shared Core CFG visibility contract: source labels remain
-     * roots for computed goto and asm-goto, while dead lexical arms must not
-     * contribute machine instructions or unresolved linker references. */
+    /* The Core CFG owns indirect-entry and exported-label facts separately;
+     * a cloned function can have a valid indirect landing without an alias. */
     if (minic_core_function_facts_verified(facts, fn)) {
         reachable = facts->reachable_blocks;
         function_value_use_counts = facts->value_use_counts;
@@ -940,6 +941,16 @@ static bool x86_emit_function(FILE *out,
     if (reachable == NULL) {
         x86_error(diag, path, "x86-64 cannot discover reachable Core blocks");
         goto done;
+    }
+    if ((target->x86_codegen_options & MINIC_X86_CODEGEN_IBT_ENDBR) != 0U) {
+        indirect_entries = calloc(fn->block_count == 0U ? 1U : fn->block_count,
+                                  sizeof(*indirect_entries));
+        if (indirect_entries == NULL ||
+            !minic_core_function_mark_indirect_entries(
+                fn, reachable, indirect_entries, fn->block_count)) {
+            x86_error(diag, path, "x86-64 cannot seal indirect Core landing pads");
+            goto done;
+        }
     }
     if ((target->x86_codegen_options & MINIC_X86_CODEGEN_NO_SSE) != 0U &&
         !x86_no_sse_function_safe(fn, reachable)) {
@@ -1125,16 +1136,17 @@ static bool x86_emit_function(FILE *out,
         MinicCoreValueId previous_direct_value = MINIC_CORE_VALUE_INVALID;
         MinicCoreObjectId previous_direct_object = MINIC_CORE_OBJECT_INVALID;
         if (fprintf(out, ".Lmini_x86_f%zu_b%zu:\n", function_id, block_index) < 0) goto done;
-        if (block->local_label_symbol != NULL && !fn->suppress_local_label_aliases) {
+        if (block->local_label_symbol != NULL) {
             if (!minic_core_label_symbol_valid(block->local_label_symbol) ||
                 fprintf(out, "%s:\n", block->local_label_symbol) < 0)
                 goto done;
-            /* GNU computed-goto entries are indirect branch destinations.
-             * They need ENDBR independently of the function's own entry. */
-            if ((target->x86_codegen_options & MINIC_X86_CODEGEN_IBT_ENDBR) != 0U &&
-                fputs("  endbr64\n", out) == EOF)
-                goto done;
         }
+        /* IBT depends on executable entry semantics, not whether a canonical
+         * owner exports an assembler alias. In particular, specialized
+         * clones and anonymous BLOCK_ADDRESS targets need ENDBR too. */
+        if (indirect_entries != NULL && indirect_entries[block_index] &&
+            fputs("  endbr64\n", out) == EOF)
+            goto done;
         for (k = 0U; k < block->instruction_count; ++k) {
             MinicCoreInstructionId id = 0U;
             const MinicCoreInstruction *ins = NULL;
@@ -1262,6 +1274,7 @@ static bool x86_emit_function(FILE *out,
                      ".p2align 3\n  .quad %s\n", name) < 0) goto done;
     success = true;
 done:
+    free(indirect_entries);
     free(head_direct_data_globals);
     free(head_vma_cast_globals);
     free(head_memory_rebase_globals);

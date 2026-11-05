@@ -200,21 +200,27 @@ MinicCoreLowerStatus core_asm_try_mixed_memory_forms(
                     { *handled = true; return MINIC_CORE_LOWER_ERROR; }
                 }
                 (void)memset(&instruction, 0, sizeof(instruction));
-                instruction.kind = MINIC_CORE_INSTRUCTION_MEMORY_READWRITE_SCALAR_INPUT_INLINE_ASM;
+                instruction.kind = MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM;
                 instruction.span = statement->span;
                 instruction_source_type = output_type;
                 instruction.result = MINIC_CORE_VALUE_INVALID;
-                instruction.value.memory_readwrite_scalar_input_inline_asm.inline_asm_id =
-                    inline_asm_id;
-                instruction.value.memory_readwrite_scalar_input_inline_asm.memory_address =
-                    memory_address;
-                instruction.value.memory_readwrite_scalar_input_inline_asm.operand = input_value;
-                instruction.value.memory_readwrite_scalar_input_inline_asm.memory_operand_index =
+                instruction.value.structured_inline_asm.inline_asm_id = inline_asm_id;
+                instruction.value.structured_inline_asm.operand_count = 3U;
+                instruction.value.structured_inline_asm.operands[memory_index].kind =
+                    MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE;
+                instruction.value.structured_inline_asm.operands[memory_index].operand_index =
                     memory_index;
-                instruction.value.memory_readwrite_scalar_input_inline_asm.register_output_operand_index =
+                instruction.value.structured_inline_asm.operands[memory_index].value = memory_address;
+                instruction.value.structured_inline_asm.operands[register_index].kind =
+                    MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_RESULT;
+                instruction.value.structured_inline_asm.operands[register_index].operand_index =
                     register_index;
-                instruction.value.memory_readwrite_scalar_input_inline_asm.scalar_input_operand_index =
-                    2U;
+                instruction.value.structured_inline_asm.operands[register_index].value =
+                    MINIC_CORE_VALUE_INVALID;
+                instruction.value.structured_inline_asm.operands[2].kind =
+                    MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+                instruction.value.structured_inline_asm.operands[2].operand_index = 2U;
+                instruction.value.structured_inline_asm.operands[2].value = input_value;
                 if (!minic_core_function_append_source_value_instruction(
                         context->source, context->block_id, &instruction, instruction_source_type, &output_value)) {
                     { *handled = true; return MINIC_CORE_LOWER_ERROR; }
@@ -306,20 +312,20 @@ MinicCoreLowerStatus core_asm_try_mixed_memory_forms(
                 { *handled = true; return MINIC_CORE_LOWER_ERROR; }
             }
             (void)memset(&instruction, 0, sizeof(instruction));
-            instruction.kind = MINIC_CORE_INSTRUCTION_MEMORY_READWRITE_SCALAR_INPUT_INLINE_ASM;
+            instruction.kind = MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM;
             instruction.span = statement->span;
             instruction_source_type = minic_type_void();
             instruction.result = MINIC_CORE_VALUE_INVALID;
-            instruction.value.memory_readwrite_scalar_input_inline_asm.inline_asm_id =
-                inline_asm_id;
-            instruction.value.memory_readwrite_scalar_input_inline_asm.memory_address =
-                memory_address;
-            instruction.value.memory_readwrite_scalar_input_inline_asm.operand = input_value;
-            instruction.value.memory_readwrite_scalar_input_inline_asm.memory_operand_index = 0U;
-            instruction.value.memory_readwrite_scalar_input_inline_asm.register_output_operand_index =
-                SIZE_MAX;
-            instruction.value.memory_readwrite_scalar_input_inline_asm.scalar_input_operand_index =
-                1U;
+            instruction.value.structured_inline_asm.inline_asm_id = inline_asm_id;
+            instruction.value.structured_inline_asm.operand_count = 2U;
+            instruction.value.structured_inline_asm.operands[0].kind =
+                MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE;
+            instruction.value.structured_inline_asm.operands[0].operand_index = 0U;
+            instruction.value.structured_inline_asm.operands[0].value = memory_address;
+            instruction.value.structured_inline_asm.operands[1].kind =
+                MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+            instruction.value.structured_inline_asm.operands[1].operand_index = 1U;
+            instruction.value.structured_inline_asm.operands[1].value = input_value;
             { *handled = true; return minic_core_function_append_source_effect_instruction(
                        context->source, context->block_id, &instruction, instruction_source_type)
                        ? MINIC_CORE_LOWER_OK
@@ -390,11 +396,17 @@ MinicCoreLowerStatus core_asm_try_mixed_memory_forms(
                             { *handled = true; return MINIC_CORE_LOWER_ERROR; }
                         }
                         (void)memset(&instruction, 0, sizeof(instruction));
-                        instruction.kind = MINIC_CORE_INSTRUCTION_REGISTER_OUTPUT_INLINE_ASM;
+                        instruction.kind = MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM;
                         instruction.span = statement->span;
                         instruction_source_type = output_type;
                         instruction.result = MINIC_CORE_VALUE_INVALID;
-                        instruction.value.inline_asm_id = inline_asm_id;
+                        instruction.value.structured_inline_asm.inline_asm_id = inline_asm_id;
+                        instruction.value.structured_inline_asm.operand_count = 1U;
+                        instruction.value.structured_inline_asm.operands[0].kind =
+                            MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_RESULT;
+                        instruction.value.structured_inline_asm.operands[0].operand_index = 0U;
+                        instruction.value.structured_inline_asm.operands[0].value =
+                            MINIC_CORE_VALUE_INVALID;
                         if (!minic_core_function_append_source_value_instruction(
                                 context->source,
                                 context->block_id,
@@ -438,12 +450,21 @@ MinicCoreLowerStatus core_asm_try_mixed_memory_forms(
                     { *handled = true; return MINIC_CORE_LOWER_ERROR; }
                 }
                 (void)memset(&instruction, 0, sizeof(instruction));
-                instruction.kind = MINIC_CORE_INSTRUCTION_REGISTER_OUTPUT_INPUT_INLINE_ASM;
+                instruction.kind = MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM;
                 instruction.span = statement->span;
                 instruction_source_type = output_type;
                 instruction.result = MINIC_CORE_VALUE_INVALID;
-                instruction.value.register_output_input_inline_asm.inline_asm_id = inline_asm_id;
-                instruction.value.register_output_input_inline_asm.operand = input_value;
+                instruction.value.structured_inline_asm.inline_asm_id = inline_asm_id;
+                instruction.value.structured_inline_asm.operand_count = 2U;
+                instruction.value.structured_inline_asm.operands[0].kind =
+                    MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_RESULT;
+                instruction.value.structured_inline_asm.operands[0].operand_index = 0U;
+                instruction.value.structured_inline_asm.operands[0].value =
+                    MINIC_CORE_VALUE_INVALID;
+                instruction.value.structured_inline_asm.operands[1].kind =
+                    MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+                instruction.value.structured_inline_asm.operands[1].operand_index = 1U;
+                instruction.value.structured_inline_asm.operands[1].value = input_value;
                 if (!minic_core_function_append_source_value_instruction(
                         context->source, context->block_id, &instruction, instruction_source_type, &output_value)) {
                     { *handled = true; return MINIC_CORE_LOWER_ERROR; }
@@ -633,11 +654,16 @@ MinicCoreLowerStatus core_asm_try_readwrite_and_output_specialization(
                 }
                 free(specialized_template);
                 (void)memset(&instruction, 0, sizeof(instruction));
-                instruction.kind = MINIC_CORE_INSTRUCTION_REGISTER_OUTPUT_INLINE_ASM;
+                instruction.kind = MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM;
                 instruction.span = statement->span;
                 instruction_source_type = output_type;
                 instruction.result = MINIC_CORE_VALUE_INVALID;
-                instruction.value.inline_asm_id = inline_asm_id;
+                instruction.value.structured_inline_asm.inline_asm_id = inline_asm_id;
+                instruction.value.structured_inline_asm.operand_count = 1U;
+                instruction.value.structured_inline_asm.operands[0].kind =
+                    MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_RESULT;
+                instruction.value.structured_inline_asm.operands[0].operand_index = 0U;
+                instruction.value.structured_inline_asm.operands[0].value = MINIC_CORE_VALUE_INVALID;
                 if (!minic_core_function_append_source_value_instruction(
                         context->source, context->block_id, &instruction, instruction_source_type, &output_value)) {
                     { *handled = true; return MINIC_CORE_LOWER_ERROR; }
@@ -719,11 +745,16 @@ MinicCoreLowerStatus core_asm_try_readwrite_and_output_specialization(
                     { *handled = true; return MINIC_CORE_LOWER_ERROR; }
                 }
                 (void)memset(&instruction, 0, sizeof(instruction));
-                instruction.kind = MINIC_CORE_INSTRUCTION_REGISTER_OUTPUT_INLINE_ASM;
+                instruction.kind = MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM;
                 instruction.span = statement->span;
                 instruction_source_type = output_type;
                 instruction.result = MINIC_CORE_VALUE_INVALID;
-                instruction.value.inline_asm_id = inline_asm_id;
+                instruction.value.structured_inline_asm.inline_asm_id = inline_asm_id;
+                instruction.value.structured_inline_asm.operand_count = 1U;
+                instruction.value.structured_inline_asm.operands[0].kind =
+                    MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_RESULT;
+                instruction.value.structured_inline_asm.operands[0].operand_index = 0U;
+                instruction.value.structured_inline_asm.operands[0].value = MINIC_CORE_VALUE_INVALID;
                 if (!minic_core_function_append_source_value_instruction(
                         context->source, context->block_id, &instruction, instruction_source_type, &output_value)) {
                     { *handled = true; return MINIC_CORE_LOWER_ERROR; }
@@ -1170,12 +1201,16 @@ MinicCoreLowerStatus core_asm_try_empty_barrier_scalar_forms(
                 { *handled = true; return MINIC_CORE_LOWER_ERROR; }
             }
             (void)memset(&instruction, 0, sizeof(instruction));
-            instruction.kind = MINIC_CORE_INSTRUCTION_SCALAR_INPUT_INLINE_ASM;
+            instruction.kind = MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM;
             instruction.span = statement->span;
             instruction_source_type = minic_type_void();
             instruction.result = MINIC_CORE_VALUE_INVALID;
-            instruction.value.scalar_input_inline_asm.inline_asm_id = inline_asm_id;
-            instruction.value.scalar_input_inline_asm.operand = input_value;
+            instruction.value.structured_inline_asm.inline_asm_id = inline_asm_id;
+            instruction.value.structured_inline_asm.operand_count = 1U;
+            instruction.value.structured_inline_asm.operands[0].kind =
+                MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+            instruction.value.structured_inline_asm.operands[0].operand_index = 0U;
+            instruction.value.structured_inline_asm.operands[0].value = input_value;
             { *handled = true; return minic_core_function_append_source_effect_instruction(
                        context->source, context->block_id, &instruction, instruction_source_type)
                        ? MINIC_CORE_LOWER_OK

@@ -391,10 +391,16 @@ static const MinicFunction *core_select_direct_call_specialization(
  * Direct, indirect and aggregate-returning calls must share this ordering.
  * The optional direct name preserves existing diagnostics for failed scalar
  * expression lowering; no ABI register assignment happens at this stage. */
+typedef struct MinicCompilerCallImmediateFact {
+    bool proven_constant;
+    uint64_t bits;
+} MinicCompilerCallImmediateFact;
+
 static MinicCoreLowerStatus core_prepare_call_argument(
     MinicCoreLowerContext *context, const MinicExpression *call,
     size_t index, MinicType type, bool fixed, const char *direct_name,
-    MinicCoreCallArgument *argument, MinicCoreObjectId *snapshot_object) {
+    MinicCoreCallArgument *argument, MinicCoreObjectId *snapshot_object,
+    MinicCompilerCallImmediateFact *immediate_fact) {
     MinicCoreLowerStatus status;
     MinicExpressionId source;
     if (context == NULL || call == NULL || argument == NULL ||
@@ -425,20 +431,19 @@ static MinicCoreLowerStatus core_prepare_call_argument(
         !minic_type_equal(
             minic_core_function_source_value_type(context->source, argument->value.value_id), type))
         return MINIC_CORE_LOWER_ERROR;
-    /* Preserve one immutable language fact before the ordinary Core
-     * evaluation-order snapshot. Do not let backends infer immediates from
-     * arbitrary LOAD/STORE aliases or skip call side-effect ordering.
-     * No target ISA or CSR identity belongs in this generic call path. */
-    argument->has_constant_integer = false;
-    argument->constant_integer_bits = 0U;
-    if (context->target != NULL && minic_type_is_integer(type)) {
+    /* A target-qualified machine builtin may demand a literal operand. Its
+     * source proof lives only in this Compiler-local call-lowering draft;
+     * after source-order evaluation and snapshotting, reload emits a real
+     * typed Core INTEGER_CONSTANT instead of exporting a second shadow fact. */
+    if (immediate_fact != NULL && context->target != NULL &&
+        minic_type_is_integer(type)) {
         MinicConstValue integer;
         if (minic_const_eval_arithmetic_to_integer(
                 context->body->program, context->target, source,
                 type, &integer) &&
             minic_type_equal(integer.type, type)) {
-            argument->has_constant_integer = true;
-            argument->constant_integer_bits = integer.bits;
+            immediate_fact->proven_constant = true;
+            immediate_fact->bits = integer.bits;
         }
     }
     return minic_core_lower_internal_spill_scalar_value(
@@ -452,12 +457,27 @@ static MinicCoreLowerStatus core_prepare_call_argument(
 static MinicCoreLowerStatus core_reload_call_arguments(
     MinicCoreLowerContext *context, const MinicExpression *call,
     const MinicType *types, const MinicCoreObjectId *snapshots,
-    MinicCoreCallArgument *arguments, size_t count) {
+    MinicCoreCallArgument *arguments, size_t count,
+    size_t immediate_index, const MinicCompilerCallImmediateFact *immediate_fact) {
     size_t i;
     for (i = 0U; i < count; ++i) {
         MinicCoreLowerStatus status;
         MinicCoreValueId reloaded;
         if (arguments[i].kind == MINIC_CORE_CALL_ARGUMENT_OBJECT) continue;
+        if (i == immediate_index && immediate_fact != NULL &&
+            immediate_fact->proven_constant) {
+            MinicCoreInstruction literal;
+            (void)memset(&literal, 0, sizeof(literal));
+            literal.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
+            literal.span = call->span;
+            literal.result = MINIC_CORE_VALUE_INVALID;
+            literal.value.integer_value = (int64_t)immediate_fact->bits;
+            if (!minic_core_function_append_source_value_instruction(
+                    context->source, context->block_id, &literal, types[i],
+                    &arguments[i].value.value_id))
+                return MINIC_CORE_LOWER_ERROR;
+            continue;
+        }
         status = minic_core_lower_internal_reload_scalar_value(
             context, call->span, types[i], snapshots[i], &reloaded);
         if (status != MINIC_CORE_LOWER_OK) return status;
@@ -491,11 +511,13 @@ static MinicCoreLowerStatus core_lower_direct_call_impl(
     MinicType instruction_source_type = minic_type_void();
     MinicCoreCallArgument *arguments;
     MinicCoreObjectId argument_objects[MINIC_MAX_FUNCTION_PARAMETERS];
+    MinicCompilerCallImmediateFact immediate_fact = {0};
     MinicType argument_types[MINIC_MAX_FUNCTION_PARAMETERS];
     MinicCoreLowerStatus status;
     size_t argument_begin;
     size_t argument_count;
     size_t argument_index;
+    size_t immediate_index = SIZE_MAX;
     bool returns_void;
     bool returns_record;
 
@@ -589,6 +611,22 @@ static MinicCoreLowerStatus core_lower_direct_call_impl(
         }
     }
 
+    /* Only a sealed machine-builtin descriptor may request an immediate.
+     * The compiler does not recognize an ISA, opcode or source builtin name;
+     * the target descriptor supplies the one Core CALL operand position. */
+    if (context->target != NULL) {
+        size_t descriptor_argument_count = 0U;
+        const char *descriptor_mnemonic = NULL;
+        size_t descriptor_immediate_index = SIZE_MAX;
+        if (minic_target_info_machine_builtin_form(
+                &context->target->machine, callee_name, callee_name_length,
+                &descriptor_argument_count, &descriptor_mnemonic,
+                &descriptor_immediate_index) &&
+            descriptor_argument_count == argument_count &&
+            descriptor_immediate_index < argument_count)
+            immediate_index = descriptor_immediate_index;
+    }
+
     arguments = argument_count == 0U
                     ? NULL
                     : (MinicCoreCallArgument *)calloc(argument_count, sizeof(*arguments));
@@ -599,7 +637,8 @@ static MinicCoreLowerStatus core_lower_direct_call_impl(
             context, expression, argument_index, argument_types[argument_index],
             argument_index < callee->parameter_count,
             result_object != NULL ? NULL : callee_name,
-            &arguments[argument_index], &argument_objects[argument_index]);
+            &arguments[argument_index], &argument_objects[argument_index],
+            argument_index == immediate_index ? &immediate_fact : NULL);
         if (status != MINIC_CORE_LOWER_OK) {
             free(arguments);
             return status;
@@ -607,7 +646,7 @@ static MinicCoreLowerStatus core_lower_direct_call_impl(
     }
     status = core_reload_call_arguments(
         context, expression, argument_types, argument_objects,
-        arguments, argument_count);
+        arguments, argument_count, immediate_index, &immediate_fact);
     if (status != MINIC_CORE_LOWER_OK) {
         free(arguments);
         return status;
@@ -782,7 +821,7 @@ static MinicCoreLowerStatus core_lower_indirect_call_impl(MinicCoreLowerContext 
         status = core_prepare_call_argument(
             context, expression, argument_index,
             argument_types[argument_index], fixed, NULL,
-            &arguments[argument_index], &argument_objects[argument_index]);
+            &arguments[argument_index], &argument_objects[argument_index], NULL);
         if (status != MINIC_CORE_LOWER_OK) {
             free(arguments);
             return status;
@@ -796,7 +835,7 @@ static MinicCoreLowerStatus core_lower_indirect_call_impl(MinicCoreLowerContext 
     }
     status = core_reload_call_arguments(
         context, expression, argument_types, argument_objects,
-        arguments, argument_count);
+        arguments, argument_count, SIZE_MAX, NULL);
     if (status != MINIC_CORE_LOWER_OK) {
         free(arguments);
         return status;

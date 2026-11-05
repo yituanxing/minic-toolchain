@@ -134,27 +134,16 @@ bool minic_core_visit_instruction_value_uses(const MinicCoreFunction *function,
                core_visit_value_use(
                    instruction->value.vector_storage_copy.source_address,
                    visitor, context);
-    case MINIC_CORE_INSTRUCTION_REGISTER_OUTPUT_INPUT_INLINE_ASM:
-        return core_visit_value_use(
-            instruction->value.register_output_input_inline_asm.operand, visitor, context);
-    case MINIC_CORE_INSTRUCTION_MEMORY_READWRITE_SCALAR_INPUT_INLINE_ASM:
-        return core_visit_value_use(
-                   instruction->value.memory_readwrite_scalar_input_inline_asm.memory_address,
-                   visitor,
-                   context) &&
-               core_visit_value_use(
-                   instruction->value.memory_readwrite_scalar_input_inline_asm.operand,
-                   visitor,
-                   context);
-    case MINIC_CORE_INSTRUCTION_SCALAR_INPUT_INLINE_ASM:
-        return core_visit_value_use(
-            instruction->value.scalar_input_inline_asm.operand, visitor, context);
     case MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM:
         if (instruction->value.structured_inline_asm.operand_count >
             MINIC_CORE_STRUCTURED_INLINE_ASM_OPERAND_LIMIT) {
             return false;
         }
         for (i = 0U; i < instruction->value.structured_inline_asm.operand_count; ++i) {
+            /* REGISTER_RESULT defines instruction->result; it is not a use. */
+            if (instruction->value.structured_inline_asm.operands[i].kind ==
+                MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_RESULT)
+                continue;
             if (!core_visit_value_use(
                     instruction->value.structured_inline_asm.operands[i].value,
                     visitor,
@@ -187,7 +176,6 @@ bool minic_core_visit_instruction_value_uses(const MinicCoreFunction *function,
     case MINIC_CORE_INSTRUCTION_FUNCTION_ADDRESS:
     case MINIC_CORE_INSTRUCTION_BLOCK_ADDRESS:
     case MINIC_CORE_INSTRUCTION_OPAQUE_INLINE_ASM:
-    case MINIC_CORE_INSTRUCTION_REGISTER_OUTPUT_INLINE_ASM:
     case MINIC_CORE_INSTRUCTION_COMPILER_BARRIER:
     case MINIC_CORE_INSTRUCTION_CALL_FRAME_ADDRESS:
     case MINIC_CORE_INSTRUCTION_VARIADIC_ARGUMENT_ADDRESS:

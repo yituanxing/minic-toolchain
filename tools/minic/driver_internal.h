@@ -1,7 +1,7 @@
 #ifndef MINIC_TOOLS_MINIC_DRIVER_INTERNAL_H
 #define MINIC_TOOLS_MINIC_DRIVER_INTERNAL_H
 
-#include "target/target_catalog.h"
+#include "target/driver_stage_recipe.h"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -29,7 +29,9 @@ typedef struct MinicDriverLanguageOptions {
  * pipeline merely because its backend can produce -S output. */
 typedef struct MinicDriverInvocation {
     MinicDriverMode mode;
-    const MinicTargetCatalogEntry *target_entry;
+    /* NULL for every -S invocation; only an explicitly registered product
+     * stage provides CPP/AS/LD details to the executor. */
+    const MinicTargetDriverStageRecipe *stage_recipe;
     const char *target_name;
     const char *inputs[MINIC_DRIVER_MAX_INPUTS];
     size_t input_count;
