@@ -230,6 +230,11 @@ jobs:
         run: |
           set -Eeuo pipefail
           work="$GITHUB_WORKSPACE/build/minild-linux-fourarch/${{ matrix.arch }}"
+          # LoongArch only: capture BFD's real /DISCARD/ section decisions
+          # during the already-required GNU first-kallsyms1 control link.
+          if [[ '${{ matrix.arch }}' == loongarch64 ]]; then
+            export MINILD_LINUX_GNU_MAP=1
+          fi
           bash tools/ci/minild-linux-real-final-replay.sh \
             "$work/ld-capture" \
             "$GITHUB_WORKSPACE/build/release/bin/minic-ld" \

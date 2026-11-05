@@ -88,6 +88,9 @@ static int minild_link_static_pipeline(
         options != NULL && options->fix_cortex_a53_843419;
     state.max_page_size =
         options != NULL ? options->max_page_size : 0U;
+    state.separate_code =
+        options != NULL && options->separate_code_explicit
+            ? options->separate_code : target->separate_code_default;
     state.orphan_handling_error =
         options != NULL && options->orphan_handling_error;
     state.build_id_sha1 =

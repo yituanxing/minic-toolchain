@@ -73,7 +73,17 @@ def relocs(path):
             return [(struct.unpack_from('<QQq',b,s[4]+i*24))
                     for i in range(s[5]//24)]
     return []
-assert relocs(sys.argv[1])==relocs(sys.argv[2]),'GNU dynrel parity'
+gnu=relocs(sys.argv[1])
+mini=relocs(sys.argv[2])
+if gnu != mini:
+    def pretty(records):
+        return [(hex(place), hex(info >> 32), info & 0xffffffff, addend)
+                for place, info, addend in records]
+    print('MINILD_AARCH64_DISCARDED_DYNREL_GNU=DIFF '
+          f'gnu_count={len(gnu)} mini_count={len(mini)}', flush=True)
+    print(f'GNU_Rela={pretty(gnu)}', flush=True)
+    print(f'Mini_Rela={pretty(mini)}', flush=True)
+assert gnu == mini, 'GNU dynrel parity'
 print('MINILD_AARCH64_DISCARDED_DYNREL_GNU=PASS exact_relro_records')
 PY_GNU
 else

@@ -148,6 +148,8 @@ int main(int argc, char **argv) {
     bool emit_relocs = false;
     bool build_id_sha1 = false;
     bool z_notext = false;
+    bool separate_code_explicit = false;
+    bool separate_code = false;
     bool symbolic = false;
     bool no_apply_dynamic_relocs = false;
     bool pic_veneer = false;
@@ -457,6 +459,12 @@ int main(int argc, char **argv) {
                             argv[i]);
                     return 2;
                 }
+            } else if (strcmp(argv[i], "separate-code") == 0) {
+                separate_code_explicit = true;
+                separate_code = true;
+            } else if (strcmp(argv[i], "noseparate-code") == 0) {
+                separate_code_explicit = true;
+                separate_code = false;
             } else if (strcmp(argv[i], "noexecstack") != 0 &&
                 strcmp(argv[i], "nodefaultlib") != 0 &&
                 strcmp(argv[i], "norelro") != 0 &&
@@ -623,6 +631,13 @@ int main(int argc, char **argv) {
         fprintf(stderr, "minic-ld: -z max-page-size-requires-final-kernel-or-static-link\n");
         return 2;
     }
+    if (separate_code_explicit && (relocatable ||
+        (shared_link && !kernel_shared_image) ||
+        (pie_link && !kernel_resolved_pie))) {
+        fprintf(stderr,
+                "minic-ld: -z separate-code-requires-final-kernel-or-static-link\n");
+        return 2;
+    }
     if (discard_locals && (relocatable ||
                            (shared_link && !kernel_shared_image) ||
                            (pie_link && !kernel_resolved_pie))) {
@@ -737,6 +752,8 @@ int main(int argc, char **argv) {
         options.static_pie_requested = kernel_resolved_pie;
         options.fix_cortex_a53_843419 = fix_cortex_a53_843419;
         options.max_page_size = max_page_size;
+        options.separate_code_explicit = separate_code_explicit;
+        options.separate_code = separate_code;
         options.orphan_handling_error = orphan_handling_error;
         options.kernel_shared_no_dynamic_relocations = kernel_shared_image;
         options.emit_relocs = emit_relocs;

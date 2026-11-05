@@ -36,6 +36,7 @@ on:
       - tests/linker/probe-minild-x86-boot-dispatch-v1.sh
       - tests/linker/probe-x86-no-linker-generated-unwind.sh
       - tests/linker/probe-forced-undefined-archive.sh
+      - tests/linker/probe-scripted-array-boundaries-gnu.sh
       - tests/linker/probe-force-undefined-archive.sh
       - linker/**
       - tools/minic-ld/**
@@ -183,6 +184,13 @@ jobs:
             bash tests/linker/probe-forced-undefined-archive.sh
           MINILD="$WORK/minild-build/bin/minic-ld" \
             bash tests/linker/probe-force-undefined-archive.sh
+
+      - name: Verify no fabricated init-array markers under an explicit Linux linker script
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          MINILD="$WORK/minild-build/bin/minic-ld" \
+            bash tests/linker/probe-scripted-array-boundaries-gnu.sh
 
       - name: Authenticate all GNU C-owned inputs and record GNU control bzImage
         shell: bash

@@ -149,6 +149,12 @@ if [[ $replaced != 1 ]]; then
   echo "MINILD_LINUX_FINAL_REPLAY=INCONCLUSIVE output_option_count=$replaced" >&2
   exit 73
 fi
+# Optional evidence from the *same* GNU replay.  -Map/--cref print the
+# linker's decisions without changing the frozen Kbuild input objects or
+# running an expensive second GNU link.  MiniLD's argv remains unmodified.
+if [[ ${MINILD_LINUX_GNU_MAP:-0} == 1 ]]; then
+  gnu_args+=("-Map=$evidence/gnu-link.map" --cref)
+fi
 printf '%s\0' "${gnu_args[@]}" >"$evidence/gnu-replay.argv0"
 printf '%s\0' "${mini_args[@]}" >"$evidence/minild-replay.argv0"
 printf 'capture=%s\nKbuild_cwd=%s\noriginal_GNU_ld=%s\nMiniLD=%s\n' \
@@ -165,6 +171,16 @@ printf '%s\n' "$gnu_status" >"$evidence/gnu.status"
 if [[ $gnu_status != 0 || ! -s $gnu_out ]]; then
   echo "MINILD_LINUX_FINAL_REPLAY=FAIL GNU_replay_status=$gnu_status" >&2
   exit 74
+fi
+if [[ ${MINILD_LINUX_GNU_MAP:-0} == 1 ]]; then
+  [[ -s $evidence/gnu-link.map ]] || {
+    echo 'MINILD_LINUX_FINAL_REPLAY=FAIL missing_GNU_linker_map' >&2
+    exit 74
+  }
+  python3 tools/ci/minild-gnu-link-map-discard-report.py \
+    "$evidence/gnu-link.map" \
+    >"$evidence/gnu-discarded-exitcall.txt"
+  tail -n 1 "$evidence/gnu-discarded-exitcall.txt"
 fi
 sha256sum --quiet -c "$evidence/input-objects-and-scripts.sha256" || {
   echo 'MINILD_LINUX_FINAL_REPLAY=FAIL GNU_replay_mutated_inputs' >&2

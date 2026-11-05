@@ -268,6 +268,7 @@ typedef struct MiniLdState {
     size_t script_forward_guess_capacity;
     bool fix_cortex_a53_843419;
     uint64_t max_page_size;
+    bool separate_code;
     bool orphan_handling_error;
     bool build_id_sha1;
     bool discard_locals;

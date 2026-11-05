@@ -42,6 +42,11 @@ typedef struct MiniLdStaticOptions {
     bool fix_cortex_a53_843419;
     /* GNU -z max-page-size, zero requests the Target ABI default. */
     uint64_t max_page_size;
+    /* GNU -z separate-code/noseparate-code: the target emulation supplies
+     * the default and the command line may override it for final images.
+     * Keep the presence bit: false by itself is not an explicit override. */
+    bool separate_code_explicit;
+    bool separate_code;
     /* GNU --orphan-handling=error rejects unmatched alloc input sections. */
     bool orphan_handling_error;
     /* GNU --build-id=sha1: materialize an ELF note and hash the image. */

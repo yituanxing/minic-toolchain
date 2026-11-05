@@ -87,9 +87,14 @@ static bool static_need_array_bound_pair(
     const char *end_name) {
     size_t i;
 
-    /* Preserve the already certified scripted Linux path exactly. */
-    if (layout->scripted ||
-        symbol_resolver_lookup(&state->resolver, start_name) != SIZE_MAX ||
+    /* GNU's default script PROVIDEs these boundaries. A user-supplied
+     * linker script does not: any boundary must come from its own explicit
+     * assignment. Inventing absent symbols changes Linux kallsyms input and
+     * can shift the final kernel image despite matching section layouts. */
+    if (layout->scripted) {
+        return false;
+    }
+    if (symbol_resolver_lookup(&state->resolver, start_name) != SIZE_MAX ||
         symbol_resolver_lookup(&state->resolver, end_name) != SIZE_MAX) {
         return true;
     }

@@ -184,6 +184,7 @@ static bool minild_static_program_plan_build(
                 uint32_t combined_flags = prev->flags | next->flags;
                 uint64_t page_size = minild_static_page_size(state);
                 bool ordered, same_page, linear_gap, plain_contiguous;
+                bool nearby_writable_page = false;
 
                 if (prev->vaddr > UINT64_MAX - prev->mem_size ||
                     prev->laddr > UINT64_MAX - prev->mem_size ||
@@ -229,6 +230,20 @@ static bool minild_static_program_plan_build(
                       prev->mem_size <= UINT64_MAX - vgap - next->file_size));
                 plain_contiguous = linear_gap && vgap == 0U &&
                     prev->file_size == prev->mem_size;
+                if (ordered && page_size > 0U &&
+                    (prev->flags & PF_W) != 0U) {
+                    /* BFD -z noseparate-code still starts a fresh LOAD
+                     * when an unassigned full page separates successive
+                     * sections.  Aligning to the *next* page boundary is
+                     * part of the preceding load's padding; an additional
+                     * sub-page scripted hole may remain in that load.
+                     * This distinction matters for kernel scripts that
+                     * reserve small page-table slots between regions. */
+                    uint64_t padding =
+                        (page_size - previous_vend % page_size) % page_size;
+                    nearby_writable_page =
+                        vgap >= padding && vgap - padding < page_size;
+                }
                 /* A loader maps PT_LOAD at page granularity.  Separate RX
                  * text and R rodata mappings inside one page would let the
                  * later mapping remove execute permission from _start.
@@ -240,6 +255,14 @@ static bool minild_static_program_plan_build(
                  * the union would instead emit overlapping LOAD mappings
                  * with incompatible permissions.  The page affinity and
                  * file/VMA/LMA relation are mandatory, not permission flags.
+                 * GNU emulations with -z noseparate-code retain a writable
+                 * LOAD across subsequent affine page boundaries, even if
+                 * those later sections are RX or R-only.  BFD starts a new
+                 * LOAD at the first read-only-to-writable transition, then
+                 * its writable data load owns all later compatible sections.
+                 * The separate-code policy instead allows distinct paging
+                 * permissions at the following boundaries.  Explicit
+                 * PHDRS never enter this automatic segment planner.
                  * A BSS tail is padded with real zero file bytes only if a
                  * later file-backed section re-enters the same load page.
                  * Non-linear AT() mapping cannot share that load.
@@ -248,7 +271,9 @@ static bool minild_static_program_plan_build(
                 if ((state->nmagic && plain_contiguous) ||
                     (!state->nmagic &&
                      ((plain_contiguous && prev->flags == next->flags) ||
-                      (same_page && linear_gap)))) {
+                      (same_page && linear_gap) ||
+                      (!state->separate_code && linear_gap &&
+                       nearby_writable_page)))) {
                     if (next->file_size != 0U) {
                         prev->file_size = prev->mem_size + vgap +
                                           next->file_size;

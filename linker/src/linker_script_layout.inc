@@ -1572,6 +1572,10 @@ static bool static_build_script_layout(MiniLdState *state,
     size_t alloc_count = 0U;
     bool have_alloc_tls = false;
     size_t last_file_backed = SIZE_MAX;
+    /* The implicit no-separate-code writable PT_LOAD may contain later
+     * read-only or executable sections.  Remember the whole load's
+     * permissions, not merely the immediately preceding work member. */
+    bool implicit_load_writable = false;
     uint64_t *owner_max_align = NULL;
     size_t *owner_remaining = NULL;
     bool *owner_file_backed = NULL;
@@ -2014,6 +2018,7 @@ static bool static_build_script_layout(MiniLdState *state,
         size_t load = SIZE_MAX;
         size_t desired_load_file = SIZE_MAX;
         size_t desired_same_page_file = SIZE_MAX;
+        bool continues_implicit_load = false;
         size_t aligned;
 
         if (command_load != NULL) {
@@ -2064,10 +2069,32 @@ static bool static_build_script_layout(MiniLdState *state,
             if (prior->size <= UINT64_MAX - prior_place->vaddr &&
                 prior->size <= UINT64_MAX - prior_place->laddr) {
                 previous_end = prior_place->vaddr + (uint64_t)prior->size;
+                uint64_t page_size = minild_static_page_size(state);
+                uint64_t page_padding =
+                    (page_size - previous_end % page_size) % page_size;
+                uint64_t address_gap = this_place->vaddr >= previous_end
+                                   ? this_place->vaddr - previous_end
+                                   : UINT64_MAX;
+                bool same_page = previous_end != 0U &&
+                    (previous_end - 1U) / page_size ==
+                        this_place->vaddr / page_size;
+                /* GNU BFD -z noseparate-code carries a writable LOAD
+                 * through an ALIGN(page) and a subsequent sub-page dot
+                 * reservation.  Although the total VMA hole may exceed
+                 * a page, the missing bytes must remain in the ELF file
+                 * to keep the segment's file/VMA mapping affine.  A
+                 * reservation of a whole additional page starts another
+                 * LOAD instead.  Explicit PHDRS retain their own affine
+                 * mapping and never take this implicit grouping policy. */
+                bool nearby_writable_page =
+                    script->phdr_count == 0U &&
+                    !state->separate_code &&
+                    implicit_load_writable &&
+                    address_gap >= page_padding &&
+                    address_gap - page_padding < page_size;
                 if (previous_end != 0U &&
                     previous_end <= this_place->vaddr &&
-                    (previous_end - 1U) / minild_static_page_size(state) ==
-                        this_place->vaddr / minild_static_page_size(state) &&
+                    (same_page || nearby_writable_page) &&
                     this_place->laddr >=
                         prior_place->laddr + (uint64_t)prior->size &&
                     this_place->laddr -
@@ -2095,6 +2122,7 @@ static bool static_build_script_layout(MiniLdState *state,
                     }
                     desired_same_page_file = desired;
                     file_cursor = desired;
+                    continues_implicit_load = true;
                 }
             }
         }
@@ -2258,6 +2286,12 @@ static bool static_build_script_layout(MiniLdState *state,
             }
         }
         if (section->type != SHT_NOBITS) {
+            if (!continues_implicit_load) {
+                implicit_load_writable =
+                    (section->flags & SHF_WRITE) != 0U;
+            } else if ((section->flags & SHF_WRITE) != 0U) {
+                implicit_load_writable = true;
+            }
             last_file_backed = best;
         }
     }
