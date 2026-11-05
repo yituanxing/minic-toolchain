@@ -15,6 +15,21 @@ static bool has_archive_suffix(const char *path) {
            path[length - 1U] == 'a';
 }
 
+/* GNU's group rescan and whole-archive extraction are orthogonal flags.
+ * Resolve them once for both explicit paths and -l search results. */
+static MiniLdInputKind classify_input(const char *path, bool in_group,
+                                     bool whole_archive) {
+    if (in_group) {
+        return whole_archive ? MINILD_INPUT_GROUP_WHOLE_ARCHIVE
+                             : MINILD_INPUT_GROUP_ARCHIVE;
+    }
+    if (has_archive_suffix(path)) {
+        return whole_archive ? MINILD_INPUT_WHOLE_ARCHIVE
+                             : MINILD_INPUT_ARCHIVE;
+    }
+    return MINILD_INPUT_OBJECT;
+}
+
 
 static bool file_exists(const char *path) {
     FILE *file = fopen(path, "rb");
@@ -130,6 +145,7 @@ int main(int argc, char **argv) {
     const char *library_dirs[256];
     const char *forced_undefined_symbols[256];
     size_t input_count = 0U;
+    size_t input_path_count = 0U;
     size_t library_dir_count = 0U;
     size_t forced_undefined_count = 0U;
     bool relocatable = false;
@@ -148,6 +164,8 @@ int main(int argc, char **argv) {
     bool emit_relocs = false;
     bool build_id_sha1 = false;
     bool z_notext = false;
+    bool z_nodefaultlib = false;
+    bool z_noexecstack = false;
     bool separate_code_explicit = false;
     bool separate_code = false;
     bool symbolic = false;
@@ -287,12 +305,10 @@ int main(int argc, char **argv) {
                 return 2;
             }
             inputs[input_count].path = path;
-            inputs[input_count].kind =
-                has_archive_suffix(path)
-                    ? (whole_archive ? MINILD_INPUT_WHOLE_ARCHIVE
-                                     : MINILD_INPUT_ARCHIVE)
-                    : MINILD_INPUT_OBJECT;
+            inputs[input_count].kind = classify_input(
+                path, group_mode, whole_archive);
             ++input_count;
+            ++input_path_count;
         } else if (strcmp(argv[i], "--dynamic-linker") == 0 ||
                    strcmp(argv[i], "-dynamic-linker") == 0) {
             if (++i >= argc) {
@@ -326,12 +342,20 @@ int main(int argc, char **argv) {
                 usage(stderr, argv[0]);
                 return 2;
             }
+            if (needed_name != NULL) {
+                fprintf(stderr, "minic-ld: multiple-needed-not-supported\n");
+                return 2;
+            }
             needed_name = argv[i];
             if (*needed_name == '\0') {
                 fprintf(stderr, "minic-ld: empty-needed\n");
                 return 2;
             }
         } else if (strncmp(argv[i], "--needed=", 9U) == 0) {
+            if (needed_name != NULL) {
+                fprintf(stderr, "minic-ld: multiple-needed-not-supported\n");
+                return 2;
+            }
             needed_name = argv[i] + 9U;
             if (*needed_name == '\0') {
                 fprintf(stderr, "minic-ld: empty-needed\n");
@@ -430,10 +454,25 @@ int main(int argc, char **argv) {
             whole_archive = false;
         } else if (strcmp(argv[i], "--start-group") == 0 ||
                    strcmp(argv[i], "-(") == 0) {
+            if (group_mode) {
+                fprintf(stderr, "minic-ld: nested-archive-group\n");
+                return 2;
+            }
             group_mode = true;
         } else if (strcmp(argv[i], "--end-group") == 0 ||
                    strcmp(argv[i], "-)") == 0) {
+            if (!group_mode) {
+                fprintf(stderr, "minic-ld: unmatched-end-group\n");
+                return 2;
+            }
             group_mode = false;
+            if (input_count == sizeof(inputs) / sizeof(inputs[0])) {
+                fprintf(stderr, "minic-ld: too-many-inputs\n");
+                return 2;
+            }
+            inputs[input_count].path = NULL;
+            inputs[input_count].kind = MINILD_INPUT_GROUP_BREAK;
+            ++input_count;
         } else if (strncmp(argv[i], "-m", 2U) == 0) {
             const char *requested_emulation = argv[i] + 2;
             if (*requested_emulation == '\0') {
@@ -471,6 +510,12 @@ int main(int argc, char **argv) {
                 strcmp(argv[i], "notext") != 0) {
                 fprintf(stderr, "minic-ld: unsupported-z:%s\n", argv[i]);
                 return 2;
+            }
+            if (strcmp(argv[i], "nodefaultlib") == 0) {
+                z_nodefaultlib = true;
+            }
+            if (strcmp(argv[i], "noexecstack") == 0) {
+                z_noexecstack = true;
             }
             if (strcmp(argv[i], "notext") == 0) {
                 z_notext = true;
@@ -511,28 +556,15 @@ int main(int argc, char **argv) {
                 return 2;
             }
             inputs[input_count].path = argv[i];
-            if (group_mode) {
-                /*
-                 * GNU --start-group applies to the complete input sequence,
-                 * including ordinary .o files. Objects appearing after an
-                 * archive may introduce new unresolved symbols that require
-                 * an earlier archive to be rescanned.
-                 */
-                inputs[input_count].kind = MINILD_INPUT_GROUP_ARCHIVE;
-            } else if (has_archive_suffix(argv[i])) {
-                if (whole_archive) {
-                    inputs[input_count].kind = MINILD_INPUT_WHOLE_ARCHIVE;
-                } else {
-                    inputs[input_count].kind = MINILD_INPUT_ARCHIVE;
-                }
-            } else {
-                inputs[input_count].kind = MINILD_INPUT_OBJECT;
-            }
+            inputs[input_count].kind = classify_input(
+                argv[i], group_mode, whole_archive);
             ++input_count;
+            ++input_path_count;
         }
     }
 
-    if (output == NULL || input_count == 0U || whole_archive || group_mode) {
+    if (output == NULL || input_path_count == 0U ||
+        whole_archive || group_mode) {
         usage(stderr, argv[0]);
         return 2;
     }
@@ -565,6 +597,41 @@ int main(int argc, char **argv) {
                           needed_name == NULL && dynamic_list_path == NULL;
     kernel_et_dyn = kernel_shared_image ||
                     (kernel_static_pie && !nmagic) || kernel_pie_image;
+    /* Do not parse GNU options and then silently drop them at a mode
+     * dispatcher which has no matching Options contract.  These modes may
+     * gain support later, but must never emit a misleading successful ELF. */
+    if (relocatable &&
+        (entry_symbol != NULL || script_path != NULL || strip_debug ||
+         build_id_sha1 || orphan_handling_error)) {
+        fprintf(stderr, "minic-ld: unsupported-relocatable-link-options\n");
+        return 2;
+    }
+    if ((soname != NULL || needed_name != NULL ||
+         dynamic_list_path != NULL) &&
+        (relocatable || (!shared_link && !pie_link))) {
+        fprintf(stderr, "minic-ld: shared-options-require-shared-or-pie\n");
+        return 2;
+    }
+    if (build_id_sha1 &&
+        (relocatable || (shared_link && !kernel_shared_image) ||
+         (pie_link && !kernel_resolved_pie))) {
+        fprintf(stderr, "minic-ld: build-id-requires-final-static-link\n");
+        return 2;
+    }
+    if (z_nodefaultlib &&
+        ((shared_link && !kernel_shared_image) ||
+         (pie_link && !kernel_resolved_pie))) {
+        fprintf(stderr, "minic-ld: unsupported-dynamic-nodefaultlib\n");
+        return 2;
+    }
+    if (z_noexecstack &&
+        ((shared_link && !kernel_shared_image) ||
+         (pie_link && !kernel_resolved_pie))) {
+        /* PT_GNU_STACK is currently owned by neither dynamic program plan.
+         * Do not pretend to honor an explicit non-executable-stack request. */
+        fprintf(stderr, "minic-ld: unsupported-dynamic-noexecstack\n");
+        return 2;
+    }
     if (emit_relocs && (relocatable || shared_link || pie_link ||
                         strcmp(emulation, "elf_x86_64") != 0)) {
         fprintf(stderr, "minic-ld: --emit-relocs-requires-x86-static-link\n");
@@ -748,6 +815,7 @@ int main(int argc, char **argv) {
         options.gc_sections = gc_sections;
         options.nmagic = nmagic;
         options.discard_locals = discard_locals;
+        options.strip_debug = strip_debug;
         options.output_et_dyn = kernel_et_dyn;
         options.static_pie_requested = kernel_resolved_pie;
         options.fix_cortex_a53_843419 = fix_cortex_a53_843419;

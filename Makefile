@@ -978,6 +978,8 @@ check-minild-static-script-pure-nobits-phdr: $(MINILD_BINARY)
 
 .PHONY: check-minild-five-arch-linux-linker-boundary
 check-minild-five-arch-linux-linker-boundary: \
+	check-minild-cli-archive-group-parity \
+	check-minild-cli-option-mode-contract \
 	check-minild-static-merge-five-target \
 	check-minild-static-merge-strings \
 	check-minild-static-merge-input-pool-identity \
@@ -1303,6 +1305,16 @@ check-minild-archive-resolution-boundary: $(MINIAS_BINARY) $(MINILD_BINARY)
 	MINIAS="$(abspath $(MINIAS_BINARY))" \
 	MINILD="$(abspath $(MINILD_BINARY))" \
 	bash tests/linker/probe-archive-resolution-boundary.sh
+
+.PHONY: check-minild-cli-archive-group-parity
+check-minild-cli-archive-group-parity: $(MINILD_BINARY)
+	MINILD="$(abspath $(MINILD_BINARY))" \
+	bash tests/linker/probe-cli-archive-group-parity.sh
+
+.PHONY: check-minild-cli-option-mode-contract
+check-minild-cli-option-mode-contract: $(MINILD_BINARY)
+	MINILD="$(abspath $(MINILD_BINARY))" \
+	bash tests/linker/probe-cli-option-mode-contract.sh
 
 .PHONY: check-minild-input-work-section-boundary
 check-minild-input-work-section-boundary: $(MINIAS_BINARY) $(MINILD_BINARY)

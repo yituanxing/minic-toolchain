@@ -277,6 +277,7 @@ typedef struct MiniLdState {
     bool orphan_handling_error;
     bool build_id_sha1;
     bool discard_locals;
+    bool strip_debug;
     FILE *diagnostics;
 } MiniLdState;
 
@@ -308,6 +309,17 @@ static char *minild_strdup(const char *text) {
 
 static bool range_ok(size_t offset, size_t amount, size_t total) {
     return offset <= total && amount <= total - offset;
+}
+
+/* Shared and static output must agree on GNU's -S debug-section families.
+ * .eh_frame is runtime unwind data, not a removable debug section. */
+static bool minild_is_debug_section_name(const char *name) {
+    return strncmp(name, ".debug", 6U) == 0 ||
+           strncmp(name, ".zdebug", 7U) == 0 ||
+           strncmp(name, ".stab", 5U) == 0 ||
+           strcmp(name, ".gdb_index") == 0 ||
+           strcmp(name, ".gnu_debuglink") == 0 ||
+           strcmp(name, ".gnu_debugaltlink") == 0;
 }
 
 static bool add_size(size_t a, size_t b, size_t *out) {

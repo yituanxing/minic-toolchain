@@ -65,3 +65,47 @@ The single translation unit plus ordered `.inc` modules is intentional: it
 preserves phase order without duplicating persistent owners.  Complete
 user-space PIE/DSO coverage and unrelated debug formats are feature work,
 not reasons to reopen this architecture migration.
+
+## Correctness-first command-line policy
+
+MiniLD deliberately does not accept the full GNU ld option set. Every
+accepted option must have a checked owner for the selected mode, or be an
+explicitly verified no-op. This follows MiniAS/MiniC's target-ABI-first
+approach: `-m`, object ELF class and byte order determine the output target;
+the linker validates object ABI and relocations rather than interpreting
+compiler `-march` / `-mabi` switches itself. Optimization-only flags and
+unrelated debug format expansion are outside this phase.
+
+Correctness-critical groups are:
+
+1. Target/object identity: `-m`, `-EL` / `-EB`, `-r` / `-static` / `-shared`
+   / `-pie`, ELF32/ELF64, target relocation and ABI contracts.
+2. Link graph: ordered objects, `-L` / `-l`, `--start-group` /
+   `--end-group`, `--whole-archive`, `-u`, weak/strong/COMMON/COMDAT rules.
+3. Final image: `-T`, `-e`, `-n`, `-z max-page-size`, section GC,
+   build-id, interpreter and static/dynamic program-header placement.
+4. Observable output: static `-S` removes non-allocated debug sections;
+   shared `-S` fails closed if a debug section remains. `-X` and
+   `--emit-relocs` have separate admitted owner contracts.
+
+Archive group membership and whole-archive extraction are separate axes:
+one group is rescanned to a fixed point, each `--end-group` terminates that
+domain, and `-l` archives obey the same group/whole classification as
+explicit `.a` arguments. The native GNU BFD differential checks cyclic
+archives, mixed ordinary objects, independent groups and unreferenced
+whole-archive members.
+
+Options parsed by the CLI but without a selected output owner must not
+silently disappear: `-r -T/-S/--build-id/-e`, static-only
+`--soname/--needed/--dynamic-list`, dynamic `--build-id`, duplicate
+`--needed`, dynamic `-z nodefaultlib` and dynamic `-z noexecstack` are
+rejected until implemented. In particular, `-z noexecstack` still needs a
+separate final-static `PT_GNU_STACK` audit; preserving a historical kernel
+linker's accepted flag does *not* certify this program header for ordinary
+user-space executables. The ELF relocation/group engine remains shared;
+this is command-line admission, not a second linker pipeline.
+
+The two targeted CLI probes run on a single assembly input and compare
+GNU/MiniLD effects without recompiling Linux. After any output-changing
+linker patch, recertify the exact frozen Linux link and QEMU P1 for each of
+the five targets. Historic P1 success alone is not a new-head PASS.

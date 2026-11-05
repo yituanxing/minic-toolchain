@@ -10,7 +10,11 @@ typedef enum MiniLdInputKind {
     MINILD_INPUT_OBJECT = 0,
     MINILD_INPUT_WHOLE_ARCHIVE = 1,
     MINILD_INPUT_GROUP_ARCHIVE = 2,
-    MINILD_INPUT_ARCHIVE = 3
+    MINILD_INPUT_ARCHIVE = 3,
+    /* Group membership and whole-archive are independent GNU options.
+     * A boundary prevents two adjacent groups from merging accidentally. */
+    MINILD_INPUT_GROUP_WHOLE_ARCHIVE = 4,
+    MINILD_INPUT_GROUP_BREAK = 5
 } MiniLdInputKind;
 
 typedef struct MiniLdInput {
@@ -31,6 +35,8 @@ typedef struct MiniLdStaticOptions {
     bool nmagic;
     /* GNU -X: omit temporary .L* locals from the final ET_EXEC symtab only. */
     bool discard_locals;
+    /* GNU -S: omit non-allocated debugging sections from final ELF output. */
+    bool strip_debug;
     /* Kernel ET_DYN is a statically resolved image, not an ELF DSO. */
     bool output_et_dyn;
     /* Preserve the original static -pie request even when GNU -n forces

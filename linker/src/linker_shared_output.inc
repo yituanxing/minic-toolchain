@@ -117,12 +117,7 @@ static bool shared_strip_debug_preflight(const MiniLdState *state) {
         if (section->size == 0U) {
             continue;
         }
-        if (strncmp(name, ".debug", 6U) == 0 ||
-            strncmp(name, ".zdebug", 7U) == 0 ||
-            strncmp(name, ".stab", 5U) == 0 ||
-            strcmp(name, ".gdb_index") == 0 ||
-            strcmp(name, ".gnu_debuglink") == 0 ||
-            strcmp(name, ".gnu_debugaltlink") == 0) {
+        if (minild_is_debug_section_name(name)) {
             fprintf(state->diagnostics,
                     "minic-ld: unsupported-shared-strip-debug-section:%s\n",
                     name);

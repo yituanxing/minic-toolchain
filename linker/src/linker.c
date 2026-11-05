@@ -84,6 +84,7 @@ static int minild_link_static_pipeline(
     state.build_id_sha1 =
         options != NULL && options->build_id_sha1;
     state.discard_locals = options != NULL && options->discard_locals;
+    state.strip_debug = options != NULL && options->strip_debug;
     memset(&layout, 0, sizeof(layout));
     minild_script_initialize(&script);
     state.diagnostics = diagnostics;

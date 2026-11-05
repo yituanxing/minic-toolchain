@@ -211,6 +211,19 @@ static bool minild_output_plan_build(const MiniLdState *state,
             (layout->scripted && layout->work[i].discarded)) {
             continue;
         }
+        if (state->strip_debug &&
+            minild_is_debug_section_name(part->input_name != NULL
+                                             ? part->input_name : part->name)) {
+            if ((part->flags & SHF_ALLOC) != 0U) {
+                fprintf(state->diagnostics,
+                        "minic-ld: unsupported-strip-allocated-debug:%s\n",
+                        part->name);
+                goto done;
+            }
+            /* Keep the source/work identities for relocation validation,
+             * but omit debug-only bytes from the final section projection. */
+            continue;
+        }
         if (command != SIZE_MAX && command < layout->script_command_count &&
             owner_to_output[command] != SIZE_MAX) {
             output = &plan->sections[owner_to_output[command]];

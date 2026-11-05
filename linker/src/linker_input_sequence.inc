@@ -73,7 +73,9 @@ static bool process_group_sequence(MiniLdState *state,
                 size_t extracted = 0U;
 
                 if (!archive_extract(state, &entries[i].archive,
-                                     false, &extracted)) {
+                                     inputs[i].kind ==
+                                         MINILD_INPUT_GROUP_WHOLE_ARCHIVE,
+                                     &extracted)) {
                     goto done;
                 }
                 changed = changed || extracted != 0U;
@@ -107,11 +109,17 @@ static bool process_input_sequence(MiniLdState *state,
     while (i < input_count) {
         bool input_ok;
 
-        if (inputs[i].kind == MINILD_INPUT_GROUP_ARCHIVE) {
+        if (inputs[i].kind == MINILD_INPUT_GROUP_BREAK) {
+            ++i;
+            continue;
+        }
+        if (inputs[i].kind == MINILD_INPUT_GROUP_ARCHIVE ||
+            inputs[i].kind == MINILD_INPUT_GROUP_WHOLE_ARCHIVE) {
             size_t end = i + 1U;
 
             while (end < input_count &&
-                   inputs[end].kind == MINILD_INPUT_GROUP_ARCHIVE) {
+                   (inputs[end].kind == MINILD_INPUT_GROUP_ARCHIVE ||
+                    inputs[end].kind == MINILD_INPUT_GROUP_WHOLE_ARCHIVE)) {
                 ++end;
             }
             if (!process_group_sequence(state, inputs + i, end - i)) {
