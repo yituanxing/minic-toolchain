@@ -29,8 +29,11 @@ awk '
 # Do not force an implementation-specific stack roundtrip for a live value.
 grep -Fq '  addq %r10, %rax' "$work/live.s" ||
     fail 'live arithmetic computation disappeared'
-grep -Fq 'movq %rax, (%r10)' "$work/live.s" ||
-    fail 'observable global store disappeared'
+# Generic scalar STORE uses R11 as the physical address register; R10
+# belongs to the separate i128 memory path. Require the actual x86 MachineIR
+# address/value register pair as well as the independently linked GNU runtime.
+grep -Fq '  movq %rax, (%r11)' "$work/live.s" ||
+    fail 'observable global store disappeared (expected RAX -> [R11])'
 
 cat > "$work/driver.c" <<'EOF'
 extern long dead_add(long, long);
