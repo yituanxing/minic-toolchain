@@ -868,6 +868,182 @@ static const MinicMachineSourceAsmTemplatePolicy a64_cmpxchg_policy = {
     a64_cmpxchg_form, a64_cmpxchg_binding, a64_cmpxchg_operand, NULL
 };
 
+/* The six frozen Linux arm64 LL/SC or UACCESS families are ISA-owned
+ * source templates. Core only carries scalar/memory roles; Machine seals
+ * exact physical GPRs, GNU constraints, true memory effects and imm bits. */
+typedef struct {
+    unsigned int regs[5];
+    const char *constraints[5], *names[5];
+    bool outputs[5], immediate;
+    size_t count, memory;
+} A64AtomicPhysicalForm;
+
+static bool a64_atomic_physical_form(
+    const MinicMachineInstruction *ins, A64AtomicPhysicalForm *p) {
+    Aarch64AtomicForm a = {0};
+    Aarch64PerCpuForm cpu = {0};
+    Aarch64XchgForm x = {0};
+    const char *in = NULL;
+    size_t width = 0U, i;
+    unsigned int mode = 0U, variant, id;
+    const unsigned int mem_effects = MINIC_MACHINE_EFFECT_SOURCE_ASM |
+        MINIC_MACHINE_EFFECT_VOLATILE |
+        MINIC_MACHINE_EFFECT_COMPILER_BARRIER |
+        MINIC_MACHINE_EFFECT_MEMORY_READ |
+        MINIC_MACHINE_EFFECT_MEMORY_WRITE;
+    if (ins == NULL || p == NULL ||
+        ins->kind != MINIC_MACHINE_INSTRUCTION_SOURCE_ASM ||
+        ins->source_asm_template == NULL ||
+        ins->source_asm_terminates_block ||
+        ins->source_asm_permits_fallthrough ||
+        ins->implicit_count != 0U) return false;
+    memset(p, 0, sizeof(*p));
+    id = ins->source_asm_machine_form_id;
+    if (id == AARCH64_MACHINE_ASM_UACCESS_BIC) {
+        if (!aarch64_linux_uaccess_bic_template(ins->source_asm_template,
+                ins->source_asm_length) ||
+            ins->source_asm_machine_form_variant != 0U ||
+            ins->effects != (MINIC_MACHINE_EFFECT_SOURCE_ASM |
+                             MINIC_MACHINE_EFFECT_VOLATILE))
+            return false;
+        p->count = 3U;
+        p->regs[0] = 9U; p->regs[1] = 10U;
+        p->constraints[0] = "=r";
+        p->constraints[1] = "r";
+        p->constraints[2] = "i";
+        p->outputs[0] = true; p->immediate = true;
+    } else {
+        switch (id) {
+        case AARCH64_MACHINE_ASM_ATOMIC_RMW:
+            if (!aarch64_atomic_form(ins->source_asm_template,
+                    ins->source_asm_length, false, &a)) return false;
+            width = a.width; mode = a.mode;
+            in = width == 8U ? a.op->rmw_constraint : a.op->fetch32_constraint;
+            break;
+        case AARCH64_MACHINE_ASM_ATOMIC_FETCH:
+            if (!aarch64_atomic_form(ins->source_asm_template,
+                    ins->source_asm_length, true, &a)) return false;
+            width = a.width; mode = a.mode;
+            in = width == 8U ? a.op->fetch64_constraint : a.op->fetch32_constraint;
+            break;
+        case AARCH64_MACHINE_ASM_ATOMIC_RETURN:
+            if (!aarch64_atomic_return_form(ins->source_asm_template,
+                    ins->source_asm_length, &a)) return false;
+            width = a.width; mode = a.mode; in = a.op->rmw_constraint;
+            break;
+        case AARCH64_MACHINE_ASM_XCHG:
+            if (!aarch64_linux_xchg_form(ins->source_asm_template,
+                    ins->source_asm_length, &x)) return false;
+            width = x.width; mode = x.mode; in = "r";
+            break;
+        case AARCH64_MACHINE_ASM_PERCPU_RMW:
+            if (!aarch64_linux_percpu_rmw_form(ins->source_asm_template,
+                    ins->source_asm_length, &cpu) || cpu.op == NULL)
+                return false;
+            for (i = 0U; i < 6U; ++i)
+                if (cpu.op == &aarch64_atomic_operations[i]) break;
+            if (i == 6U) return false;
+            width = cpu.width; mode = (unsigned int)i; in = "r";
+            break;
+        default: return false;
+        }
+        variant = ((unsigned int)width << 8) | mode;
+        if ((width != 1U && width != 2U && width != 4U && width != 8U) ||
+            (id != AARCH64_MACHINE_ASM_XCHG &&
+             id != AARCH64_MACHINE_ASM_PERCPU_RMW &&
+             width != 4U && width != 8U) ||
+            ins->source_asm_machine_form_variant != variant ||
+            ins->effects != mem_effects || in == NULL)
+            return false;
+        if (id == AARCH64_MACHINE_ASM_ATOMIC_FETCH) {
+            static const unsigned int regs[] = {9U,13U,12U,10U,11U};
+            p->count = 5U; p->memory = 3U;
+            for (i=0U;i<5U;++i)p->regs[i]=regs[i];
+            for (i=0U;i<3U;++i) {
+                p->constraints[i]="=&r";p->outputs[i]=true;
+            }
+            p->constraints[3]="+Q";p->constraints[4]=in;
+        } else {
+            static const unsigned int regs[] = {9U,12U,10U,11U};
+            p->count=4U;p->memory=2U;
+            for(i=0U;i<4U;++i)p->regs[i]=regs[i];
+            if(id==AARCH64_MACHINE_ASM_PERCPU_RMW) {
+                p->regs[0]=12U;p->regs[1]=9U;
+                if(strstr(ins->source_asm_template,"%[loop]")!=NULL) {
+                    p->names[0]="loop";
+                    p->names[1]=cpu.returns_new?"ret":"tmp";
+                    p->names[2]="ptr";p->names[3]="val";
+                }
+            }
+            p->outputs[0]=true;p->outputs[1]=true;
+            p->constraints[0]="=&r";p->constraints[1]="=&r";
+            p->constraints[2]="+Q";p->constraints[3]=in;
+        }
+    }
+    return ins->operand_count==p->count && ins->operands!=NULL;
+}
+
+static bool a64_atomic_policy_form(
+    const MinicMachineFunction *fn, const MinicMachineInstruction *ins,
+    void *context) {
+    A64AtomicPhysicalForm p;
+    (void)context;
+    return fn!=NULL && fn->target!=NULL &&
+        fn->target->architecture==MINIC_TARGET_ARCH_AARCH64 &&
+        a64_atomic_physical_form(ins,&p);
+}
+
+static bool a64_atomic_policy_binding(
+    const MinicMachineFunction *fn, const MinicMachineInstruction *ins,
+    size_t index, void *context) {
+    A64AtomicPhysicalForm p;
+    const MinicMachineOperand *op;
+    if (!a64_atomic_policy_form(fn,ins,context) ||
+        !a64_atomic_physical_form(ins,&p) || index>=p.count) return false;
+    op=&ins->operands[index];
+    if(op->asm_constraint==NULL ||
+       strcmp(op->asm_constraint,p.constraints[index])!=0 ||
+       (op->asm_name==NULL)!=(p.names[index]==NULL) ||
+       (op->asm_name!=NULL &&
+        strcmp(op->asm_name,p.names[index])!=0)) return false;
+    if(p.immediate && index==2U)
+        return op->kind==MINIC_MACHINE_OPERAND_INTEGER &&
+            op->value.integer==(INT64_C(1)<<55);
+    return op->kind==MINIC_MACHINE_OPERAND_REGISTER &&
+        op->value.physical.reg.bank==MINIC_MACHINE_REGISTER_GENERAL &&
+        op->value.physical.reg.number==p.regs[index] &&
+        op->value.physical.reg.width_bits==64U &&
+        op->value.physical.access==(p.outputs[index]?
+            MINIC_MACHINE_REGISTER_WRITE:MINIC_MACHINE_REGISTER_READ);
+}
+
+static bool a64_atomic_policy_operand(FILE *out,
+    const MinicMachineFunction *fn, const MinicMachineInstruction *ins,
+    const MinicMachineGNUAsmLabels *labels, size_t index,
+    unsigned char modifier, void *context) {
+    A64AtomicPhysicalForm p;
+    (void)labels;
+    if (!a64_atomic_policy_binding(fn,ins,index,context) ||
+        !a64_atomic_physical_form(ins,&p)) return false;
+    if(p.immediate && index==2U)
+        return modifier==0U && (out==NULL ||
+            fprintf(out,"#0x%" PRIx64,
+                (uint64_t)ins->operands[index].value.integer)>=0);
+    if(!p.immediate && index==p.memory)
+        return modifier==0U &&
+            (out==NULL || fputs("[x10]",out)>=0);
+    return (modifier==0U || modifier=='w') &&
+        (out==NULL || fprintf(out,"%c%u",
+            modifier=='w'?'w':'x',p.regs[index])>=0);
+}
+
+static const MinicMachineSourceAsmTemplatePolicy a64_atomic_source_policy={
+    a64_atomic_policy_form,
+    a64_atomic_policy_binding,
+    a64_atomic_policy_operand,
+    NULL
+};
+
 static bool a64_machine_pstate_alternative(
     const MinicMachineInstruction *ins) {
     const Aarch64LinuxPstateAlternative form = ins != NULL &&
@@ -968,6 +1144,8 @@ bool minic_aarch64_machine_source_asm_validate(
              instruction, &a64_hyp_spin_policy) ||
          minic_machine_source_asm_template_preflight(&function,
              instruction, &a64_cmpxchg_policy) ||
+          minic_machine_source_asm_template_preflight(&function,
+              instruction, &a64_atomic_source_policy) ||
          minic_machine_source_asm_template_preflight(&function,
              instruction, &a64_source_goto_policy) ||
          minic_machine_source_asm_template_preflight(&function,
@@ -1139,6 +1317,13 @@ bool minic_aarch64_machine_source_asm_emit(
               instruction->source_asm_template[
                   instruction->source_asm_length - 1U] == '\n') ||
              fputc('\n', output) != EOF);
+    if(a64_atomic_policy_form(function,instruction,NULL))
+        return minic_machine_source_asm_template_emit(output,function,
+            instruction,labels,&a64_atomic_source_policy) &&
+            ((instruction->source_asm_length!=0U &&
+              instruction->source_asm_template[
+                  instruction->source_asm_length-1U]=='\n') ||
+             fputc('\n',output)!=EOF);
     if (instruction->source_asm_machine_form_id == AARCH64_MACHINE_ASM_CMPXCHG)
         return minic_machine_source_asm_template_emit(output, function,
             instruction, labels, &a64_cmpxchg_policy) &&

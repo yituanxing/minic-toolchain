@@ -1868,6 +1868,268 @@ static bool a64_linux_brk_source(A64CoreSelection *sel,
         source, 0U, &binding, 1U, NULL, 0U, false, false);
 }
 
+
+/* Six original Linux LL/SC/uaccess source families share one M1 transport:
+ * immutable target ISA fingerprint, Core-address operands, distinct
+ * physical early-clobber registers and a bounded GNU source-ASM template.
+ * No output instruction is formatted from C AST or replayed by a direct
+ * assembler. The matching Machine verifier independently seals every
+ * physical operand and the exact original machine instruction sequence. */
+static bool a64_atomic_load_core_preserving(A64CoreSelection *sel,
+    MinicCoreValueId value, unsigned int reg, unsigned int bits,
+    uint32_t preserve_gp) {
+    size_t offset;
+    if (reg > 30U || (bits != 32U && bits != 64U) ||
+        !minic_lp64_frame_plan_value_slot(sel->ctx->frame_plan,
+            value, &offset)) return false;
+    return minic_a64_machine_emit_frame_load(&sel->builder, &sel->view,
+        minic_a64_owned_slot(offset),
+        (MinicA64FrameRegister){bits == 64U ?
+            MINIC_A64_REG_X : MINIC_A64_REG_W, reg},
+        (MinicA64ScratchPolicy){
+            .forbidden_gp_mask = preserve_gp, .preferred_scratch = 15U});
+}
+
+static uint32_t a64_atomic_store_opcode(size_t bytes) {
+    switch (bytes) {
+    case 1U: return MINIC_A64_MACHINE_STRB;
+    case 2U: return MINIC_A64_MACHINE_STRH;
+    case 4U: return MINIC_A64_MACHINE_STR_W;
+    case 8U: return MINIC_A64_MACHINE_STR_X;
+    default: return 0U;
+    }
+}
+
+static bool a64_linux_old_atomic_source(A64CoreSelection *sel,
+    const MinicCoreInstruction *ins, const MinicCoreInlineAsm *source) {
+    const MinicCoreFunction *fn = sel->ctx->fn;
+    const MinicCoreStructuredInlineAsmOperand *ops =
+        ins->value.structured_inline_asm.operands;
+    const uint32_t form = source->target_machine_form_id;
+    const bool fetch = form == AARCH64_MACHINE_ASM_ATOMIC_FETCH;
+    const bool percpu = form == AARCH64_MACHINE_ASM_PERCPU_RMW;
+    const bool old_rmw = form == AARCH64_MACHINE_ASM_ATOMIC_RMW;
+    const bool ret = form == AARCH64_MACHINE_ASM_ATOMIC_RETURN;
+    const bool xchg = form == AARCH64_MACHINE_ASM_XCHG;
+    Aarch64AtomicForm atomic = {0};
+    Aarch64PerCpuForm percpu_form = {0};
+    Aarch64XchgForm xchg_form = {0};
+    const Aarch64AtomicOperation *operation = NULL;
+    unsigned int regs[5] = {9U, 12U, 10U, 11U, 0U};
+    const char *constraints[5] = {0};
+    const char *names[5] = {0};
+    MinicMachineOperand bindings[5] = {{0}};
+    size_t output_count, count, mem, value, status, width, i;
+    unsigned int mode, declared_variant;
+    bool explicit_memory;
+    if (!(fetch || percpu || old_rmw || ret || xchg) ||
+        source->operand_plan_owner != MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED ||
+        !source->is_volatile || source->is_goto ||
+        !source->has_memory_clobber || !source->implicit_memory_effect ||
+        source->register_clobber_count != 0U ||
+        source->resolved_immediate_count != 0U ||
+        source->symbol_reference_count != 0U ||
+        source->deferred_immediate_symbol != NULL ||
+        ins->result != MINIC_CORE_VALUE_INVALID ||
+        !minic_core_function_type_is_kind(fn, ins->core_type_id,
+            MINIC_CORE_TYPE_VOID) ||
+        ops == NULL || sel->ctx->machine_frame->has_dynamic_stack)
+        return false;
+    if (fetch || old_rmw || ret) {
+        const bool valid = ret ?
+            aarch64_atomic_return_form(source->template_text,
+                source->template_length, &atomic) :
+            aarch64_atomic_form(source->template_text,
+                source->template_length, fetch, &atomic);
+        if (!valid || atomic.op == NULL) return false;
+        width = atomic.width;
+        mode = atomic.mode;
+        operation = atomic.op;
+    } else if (xchg) {
+        if (!aarch64_linux_xchg_form(source->template_text,
+                source->template_length, &xchg_form)) return false;
+        width = xchg_form.width;
+        mode = xchg_form.mode;
+    } else {
+        if (!aarch64_linux_percpu_rmw_form(source->template_text,
+                source->template_length, &percpu_form) ||
+            percpu_form.op == NULL ||
+            percpu_form.op < aarch64_atomic_operations ||
+            percpu_form.op >= aarch64_atomic_operations + 6)
+            return false;
+        width = percpu_form.width;
+        mode = (unsigned int)(percpu_form.op -
+            aarch64_atomic_operations);
+        operation = percpu_form.op;
+    }
+    if (width != 1U && width != 2U &&
+        width != 4U && width != 8U) return false;
+    if ((old_rmw || fetch || ret) && width < 4U) return false;
+    if ((fetch || ret || xchg) && mode > 3U) return false;
+    if (old_rmw && mode != 0U) return false;
+    declared_variant = ((unsigned int)width << 8) | mode;
+    explicit_memory = (fetch || ret) ? mode != 1U :
+        xchg ? mode != 0U : false;
+    if (source->target_machine_form_variant != declared_variant ||
+        source->explicit_memory_clobber != explicit_memory ||
+        ins->value.structured_inline_asm.operand_count !=
+            (fetch ? 5U : 4U)) return false;
+    count = fetch ? 5U : 4U;
+    output_count = fetch ? 3U : 2U;
+    mem = fetch ? 3U : 2U;
+    value = fetch ? 4U : 3U;
+    status = fetch ? 2U : percpu ? 0U : 1U;
+    constraints[0] = "=&r"; constraints[1] = "=&r";
+    if (fetch) {
+        constraints[2] = "=&r"; constraints[3] = "+Q";
+        constraints[4] = width == 8U ?
+            operation->fetch64_constraint :
+            operation->fetch32_constraint;
+        regs[0] = 9U; regs[1] = 13U; regs[2] = 12U;
+        regs[3] = 10U; regs[4] = 11U;
+    } else {
+        constraints[2] = "+Q";
+        constraints[3] = percpu || xchg ? "r" :
+            ret ? operation->rmw_constraint :
+            width == 8U ? operation->rmw_constraint :
+                          operation->fetch32_constraint;
+        regs[0] = percpu ? 12U : 9U;
+        regs[1] = percpu ? 9U : 12U;
+        regs[2] = 10U; regs[3] = 11U;
+        if (percpu &&
+            strstr(source->template_text, "%[loop]") != NULL) {
+            names[0] = "loop";
+            names[1] = percpu_form.returns_new ? "ret" : "tmp";
+            names[2] = "ptr"; names[3] = "val";
+        }
+    }
+    for (i = 0U; i < count; ++i) {
+        size_t output_width = i == status ? (percpu ? 4U : 8U) : width;
+        const MinicCoreStructuredInlineAsmOperandKind expected_kind =
+            i < output_count ?
+                MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT :
+            i == mem ?
+                MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE :
+                MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+        const unsigned int access = i < output_count ?
+            MINIC_MACHINE_REGISTER_WRITE : MINIC_MACHINE_REGISTER_READ;
+        if (ops[i].operand_index != i ||
+            ops[i].kind != expected_kind ||
+            ops[i].value >= fn->value_count ||
+            ops[i].has_fixed_register_binding || ops[i].has_tied_output ||
+            ops[i].early_clobber ||
+            ops[i].physical_early_clobber != (i < output_count) ||
+            ops[i].physical_read_write != (i == mem) ||
+            (i < output_count ?
+                !aarch64_asm_core_integer(fn, ops[i].value,
+                    true, output_width, -1) :
+             i == mem ?
+                !aarch64_stlr_memory_carrier_core(fn, ops[i].value, width) :
+                !aarch64_asm_core_integer(fn, ops[i].value,
+                    false, width, -1)))
+            return false;
+        bindings[i] = a64_gp(regs[i], 64U, access);
+        bindings[i].asm_constraint = constraints[i];
+        bindings[i].asm_name = (char *)names[i];
+    }
+    /* Both inputs are loaded before the LL/SC retry loop; physical x10
+     * (memory carrier) and x11 (new scalar) survive all early outputs.
+     * No input is reconstructed from an arbitrary GNU register spelling. */
+    if (!a64_atomic_load_core_preserving(sel,
+            ops[mem].value, 10U, 64U, 0U) ||
+        !a64_atomic_load_core_preserving(sel,
+            ops[value].value, 11U, width == 8U ? 64U : 32U,
+            UINT32_C(1) << 10) ||
+        !minic_machine_builder_emit_core_source_asm(&sel->builder,
+            source, MINIC_MACHINE_EFFECT_MEMORY_READ |
+                    MINIC_MACHINE_EFFECT_MEMORY_WRITE,
+            bindings, count, NULL, 0U, false, false))
+        return false;
+    /* Store every real output into its Core lvalue, including the retry
+     * status and temporary ALU result, while reserving x9/x12/x13 as live
+     * physical outputs until their stores complete. */
+    for (i = 0U; i < output_count; ++i) {
+        const size_t output_width =
+            i == status ? (percpu ? 4U : 8U) : width;
+        const uint32_t store = a64_atomic_store_opcode(output_width);
+        const uint32_t live = (UINT32_C(1) << 9) |
+            (UINT32_C(1) << 12) | (UINT32_C(1) << 13);
+        if (store == 0U ||
+            !a64_atomic_load_core_preserving(sel,
+                ops[i].value, 14U, 64U, live) ||
+            !a64_memory_register(sel, store, false,
+                regs[i], output_width == 8U ? 64U : 32U,
+                14U, 0U, true, false))
+            return false;
+    }
+    return true;
+}
+
+/* Original Linux uaccess __uaccess_mask_ptr: one canonical BIC xN,xM,#bit55.
+ * The Core immediate is proven from the *actual* SSA constant definition;
+ * a matching source string cannot reclassify a runtime-valued mask. */
+static bool a64_linux_uaccess_bic_source(A64CoreSelection *sel,
+    const MinicCoreInstruction *ins, const MinicCoreInlineAsm *source) {
+    const MinicCoreFunction *fn = sel->ctx->fn;
+    const MinicCoreStructuredInlineAsmOperand *ops =
+        ins->value.structured_inline_asm.operands;
+    const MinicCoreInstruction *literal;
+    MinicCoreInstructionId definition;
+    MinicMachineOperand bindings[3];
+    if (source->target_machine_form_id != AARCH64_MACHINE_ASM_UACCESS_BIC ||
+        source->target_machine_form_variant != 0U ||
+        source->operand_plan_owner != MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED ||
+        !aarch64_linux_uaccess_bic_template(
+            source->template_text, source->template_length) ||
+        !source->is_volatile || source->is_goto ||
+        source->has_memory_clobber || source->explicit_memory_clobber ||
+        source->implicit_memory_effect ||
+        source->register_clobber_count != 0U ||
+        source->resolved_immediate_count != 0U ||
+        source->symbol_reference_count != 0U ||
+        source->deferred_immediate_symbol != NULL ||
+        ins->result != MINIC_CORE_VALUE_INVALID ||
+        !minic_core_function_type_is_kind(fn, ins->core_type_id,
+            MINIC_CORE_TYPE_VOID) ||
+        ins->value.structured_inline_asm.operand_count != 3U ||
+        ops == NULL || sel->ctx->machine_frame->has_dynamic_stack ||
+        !aarch64_asm_core_pointer(fn, ops[0].value, true) ||
+        !aarch64_asm_core_pointer(fn, ops[1].value, false) ||
+        !aarch64_asm_core_integer(fn, ops[2].value, false, 8U, -1))
+        return false;
+    if (ops[0].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT ||
+        ops[1].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT ||
+        ops[2].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT)
+        return false;
+    for (size_t i = 0U; i < 3U; ++i)
+        if (ops[i].operand_index != i || ops[i].value >= fn->value_count ||
+            ops[i].has_fixed_register_binding || ops[i].has_tied_output ||
+            ops[i].physical_read_write || ops[i].physical_early_clobber)
+            return false;
+    definition = fn->values[ops[2].value].definition;
+    if (definition >= fn->instruction_count) return false;
+    literal = &fn->instructions[definition];
+    if (literal->kind != MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT ||
+        literal->result != ops[2].value ||
+        (uint64_t)literal->value.integer_value != (UINT64_C(1) << 55))
+        return false;
+    bindings[0] = a64_gp(9U, 64U, MINIC_MACHINE_REGISTER_WRITE);
+    bindings[1] = a64_gp(10U, 64U, MINIC_MACHINE_REGISTER_READ);
+    bindings[2] = a64_immediate(literal->value.integer_value);
+    bindings[0].asm_constraint = "=r";
+    bindings[1].asm_constraint = "r";
+    bindings[2].asm_constraint = "i";
+    if (!a64_load_core(sel, ops[1].value, 10U, 64U) ||
+        !minic_machine_builder_emit_core_source_asm(&sel->builder,
+            source, 0U, bindings, 3U, NULL, 0U, false, false) ||
+        !a64_atomic_load_core_preserving(sel,
+            ops[0].value, 11U, 64U, UINT32_C(1) << 9) ||
+        !a64_memory_register(sel, MINIC_A64_MACHINE_STR_X, false,
+            9U, 64U, 11U, 0U, true, false))
+        return false;
+    return true;
+}
+
 /* Original Linux arm64 io.h raw MMIO is two typed scalar operands, even
  * when the GNU form is a write through an r pointer rather than a Q lvalue.
  * The read alternative must retain both 661/663 instruction bodies and its
@@ -3912,6 +4174,14 @@ static bool a64_core_instruction(A64CoreSelection *sel,
         if (source->target_machine_form_id == AARCH64_MACHINE_ASM_RAW_IO_READ ||
             source->target_machine_form_id == AARCH64_MACHINE_ASM_RAW_IO_STORE)
             return a64_linux_raw_io_source(sel, ins, source);
+        if (source->target_machine_form_id == AARCH64_MACHINE_ASM_ATOMIC_RMW ||
+            source->target_machine_form_id == AARCH64_MACHINE_ASM_ATOMIC_FETCH ||
+            source->target_machine_form_id == AARCH64_MACHINE_ASM_PERCPU_RMW ||
+            source->target_machine_form_id == AARCH64_MACHINE_ASM_ATOMIC_RETURN ||
+            source->target_machine_form_id == AARCH64_MACHINE_ASM_XCHG)
+            return a64_linux_old_atomic_source(sel, ins, source);
+        if (source->target_machine_form_id == AARCH64_MACHINE_ASM_UACCESS_BIC)
+            return a64_linux_uaccess_bic_source(sel, ins, source);
         if (source->target_machine_form_id == AARCH64_MACHINE_ASM_HYP_SPIN)
             return a64_linux_hyp_spin_source(sel, ins, source);
         if (source->target_machine_form_id == AARCH64_MACHINE_ASM_CMPXCHG)

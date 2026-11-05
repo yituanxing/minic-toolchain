@@ -284,13 +284,27 @@ for pic_flag in -fPIC -fPIE; do
   "$MINIC" --target=riscv32-linux "$pic_flag" -S "$work/rv32-pic.i" \
     -o "$work/rv32-pic-driver.s"
   cmp "$work/rv32-pic-cc.s" "$work/rv32-pic-driver.s"
-  grep -Fxq '  la t0, pic_external' "$work/rv32-pic-cc.s"
-  grep -Fxq '  la t0, pic_external_fn' "$work/rv32-pic-cc.s"
-  grep -Fxq '  lla t0, pic_hidden' "$work/rv32-pic-cc.s"
-  grep -Fxq '  lla t0, pic_local' "$work/rv32-pic-cc.s"
-  grep -Fxq '  .option push' "$work/rv32-pic-cc.s"
-  grep -Fxq '  .option pic' "$work/rv32-pic-cc.s"
-  grep -Fxq '  .option pop' "$work/rv32-pic-cc.s"
+  # Common MachineIR prints canonical physical x5 (psABI t0). Exact
+  # GOT/preemptibility and .option pic scope are unchanged.
+  for form in \
+    '^  la (x5|t0), pic_external$' \
+    '^  la (x5|t0), pic_external_fn$' \
+    '^  lla (x5|t0), pic_hidden$' \
+    '^  lla (x5|t0), pic_local$'; do
+    if ! grep -Eq "$form" "$work/rv32-pic-cc.s"; then
+      printf 'MINIC_TARGET_ABI_FLAGS=FAIL RV32 %s missing PIC MachineIR form %s\n' \
+        "$pic_flag" "$form" >&2
+      grep -E '^  (la|lla|\.option)' "$work/rv32-pic-cc.s" >&2 || :
+      exit 1
+    fi
+  done
+  for literal in '  .option push' '  .option pic' '  .option pop'; do
+    if ! grep -Fxq "$literal" "$work/rv32-pic-cc.s"; then
+      printf 'MINIC_TARGET_ABI_FLAGS=FAIL RV32 %s missing %s\n' \
+        "$pic_flag" "$literal" >&2
+      exit 1
+    fi
+  done
 done
 for option in -mcmodel=large -fshort-enums -fwrapv -mtune=generic; do
   if "$MINIC_CC" --target=riscv64-linux "$option" -S "$work/unsigned.i" \
@@ -312,7 +326,30 @@ int minic_aarch64_va_copy_accept(__builtin_va_list source) {
 EOF
 "$MINIC_CC" --target=aarch64-linux -S "$work/aarch64-va-copy.i" \
     -o "$work/aarch64-va-copy.s"
-grep -Fq 'ldp x11, x12, [x10]' "$work/aarch64-va-copy.s"
-grep -Fq 'stp x13, x14, [x9, #16]' "$work/aarch64-va-copy.s"
-echo 'MINIC_AARCH64_VA_COPY=PASS independent_32byte_ABI_cursor_copy'
+# The new A64 Machine selector owns four exact 64-bit LDR and four STR
+# operations, all source loads before any destination store. The removed
+# direct emitter paired LDP/STP oracle did not describe this MachineIR.
+for index in 0 1 2 3; do
+  reg=$((11 + index))
+  displacement=$((index * 8))
+  for form in \
+    "  ldr x$reg, [x10, #$displacement]" \
+    "  str x$reg, [x9, #$displacement]"; do
+    if ! grep -Fxq "$form" "$work/aarch64-va-copy.s"; then
+      printf 'MINIC_TARGET_ABI_FLAGS=FAIL AArch64 missing AAPCS64 copy: %s\n' \
+        "$form" >&2
+      grep -E '^  (ldr|str)' "$work/aarch64-va-copy.s" >&2 || :
+      exit 1
+    fi
+  done
+done
+last_load=$(grep -nFx '  ldr x14, [x10, #24]' \
+  "$work/aarch64-va-copy.s" | cut -d: -f1)
+first_store=$(grep -nFx '  str x11, [x9, #0]' \
+  "$work/aarch64-va-copy.s" | cut -d: -f1)
+if [ "$last_load" -ge "$first_store" ]; then
+  echo 'MINIC_TARGET_ABI_FLAGS=FAIL AArch64 va_copy stores before final load' >&2
+  exit 1
+fi
+echo 'MINIC_AARCH64_VA_COPY=PASS independent_32byte_ABI_cursor_copy four_loads_before_four_stores=1'
 echo 'MINIC_TARGET_ABI_FLAGS=PASS five_targets char_signedness wchar_override target_isolation rv32_scoped_GOT_PIC'

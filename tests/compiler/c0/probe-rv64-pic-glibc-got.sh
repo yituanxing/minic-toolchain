@@ -63,18 +63,18 @@ for pic_flag in -fPIE -fPIC; do
     }
   done
   for symbol in local_data local_function hidden_data hidden_function; do
-    grep -Eq "^[[:space:]]+lla t0, $symbol$" "$work/nonpreemptible-$pic_flag.s" || {
+    grep -Eq "^[[:space:]]+lla (x5|t0), $symbol$" "$work/nonpreemptible-$pic_flag.s" || {
       echo "RV64_PIC_GLIBC_GOT=FAIL $pic_flag should use PCREL for $symbol" >&2
       exit 1
     }
   done
-  grep -Eq '^[[:space:]]+lla t0, \.Lminic_string_[0-9]+' \
+  grep -Eq '^[[:space:]]+lla (x5|t0), \.Lminic_string_[0-9]+' \
     "$work/nonpreemptible-$pic_flag.s" || {
     echo "RV64_PIC_GLIBC_GOT=FAIL $pic_flag private_string_got_regression=1" >&2
     exit 1
   }
   for symbol in ordinary_extern ordinary_function; do
-    grep -Eq "^[[:space:]]+la t0, $symbol$" "$work/nonpreemptible-$pic_flag.s" || {
+    grep -Eq "^[[:space:]]+la (x5|t0), $symbol$" "$work/nonpreemptible-$pic_flag.s" || {
       echo "RV64_PIC_GLIBC_GOT=FAIL $pic_flag should use GOT for $symbol" >&2
       exit 1
     }
@@ -86,11 +86,26 @@ if grep -q '  .option pic' "$work/nonpreemptible-static.s"; then
   echo 'RV64_PIC_GLIBC_GOT=FAIL kernel_pic_got_regression=1' >&2
   exit 1
 fi
-grep -q '  .option pic' "$work/pic.s"
-grep -q '  la t0, optind' "$work/pic.s"
-grep -q '  la t0, puts' "$work/pic.s"
-grep -q '  lla t0, optind' "$work/kernel.s"
-grep -q '  lla t0, puts' "$work/kernel.s"
+grep -Fq '  .option pic' "$work/pic.s" || {
+  echo 'RV64_PIC_GLIBC_GOT=FAIL missing PIC directive' >&2
+  exit 1
+}
+grep -Eq '^  la (x5|t0), optind$' "$work/pic.s" || {
+  echo 'RV64_PIC_GLIBC_GOT=FAIL missing external optind GOT addressing' >&2
+  exit 1
+}
+grep -Eq '^  la (x5|t0), puts$' "$work/pic.s" || {
+  echo 'RV64_PIC_GLIBC_GOT=FAIL missing external puts GOT addressing' >&2
+  exit 1
+}
+grep -Eq '^  lla (x5|t0), optind$' "$work/kernel.s" || {
+  echo 'RV64_PIC_GLIBC_GOT=FAIL missing static optind PCREL addressing' >&2
+  exit 1
+}
+grep -Eq '^  lla (x5|t0), puts$' "$work/kernel.s" || {
+  echo 'RV64_PIC_GLIBC_GOT=FAIL missing static puts PCREL addressing' >&2
+  exit 1
+}
 if grep -q '  .option pic' "$work/kernel.s"; then
   echo 'RV64_PIC_GLIBC_GOT=FAIL static_kernel_got_regression=1' >&2
   exit 1

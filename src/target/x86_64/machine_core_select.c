@@ -217,6 +217,24 @@ static bool x86_i128_load(X86CoreSelector *sel, MinicCoreValueId id,
             x86_reg(high, 64U));
 }
 
+/* An i128 truth value observes BOTH physical limbs. A nonzero high word
+ * must not vanish when the low word happens to be zero (including bit127).
+ * The normalized 0/1 is a regular Core scalar result in RAX. */
+static bool x86_i128_boolean_result(X86CoreSelector *sel,
+    MinicCoreValueId result, bool invert) {
+    return x86_rr(sel, MINIC_X86_MI_OR64_RR, 64U,
+            MINIC_X86_REG_RDX, MINIC_X86_REG_RAX) &&
+        x86_rr(sel, MINIC_X86_MI_TEST64_RR, 64U,
+            MINIC_X86_REG_RAX, MINIC_X86_REG_RAX) &&
+        x86_1(sel, invert ? MINIC_X86_MI_SETZ8_R :
+                MINIC_X86_MI_SETNZ8_R,
+            x86_reg(MINIC_X86_REG_RAX, 8U)) &&
+        x86_2(sel, MINIC_X86_MI_MOVZBQ_RR,
+            x86_reg(MINIC_X86_REG_RAX, 8U),
+            x86_reg(MINIC_X86_REG_RAX, 64U)) &&
+        x86_core_store(sel, result, MINIC_X86_REG_RAX);
+}
+
 static bool x86_i128_store(X86CoreSelector *sel, MinicCoreValueId id,
     unsigned int low, unsigned int high) {
     size_t distance;
@@ -964,8 +982,11 @@ static bool x86_unary(X86CoreSelector *sel,
     if (ins->value.operand < sel->core->value_count &&
         x86_i128_type(sel,
             sel->core->values[ins->value.operand].core_type_id, NULL)) {
-        if (ins->kind == MINIC_CORE_INSTRUCTION_SCALAR_IS_ZERO ||
-            !x86_i128_type(sel, ins->core_type_id, NULL) ||
+        if (ins->kind == MINIC_CORE_INSTRUCTION_SCALAR_IS_ZERO)
+            return x86_i128_load(sel, ins->value.operand,
+                    MINIC_X86_REG_RAX, MINIC_X86_REG_RDX) &&
+                x86_i128_boolean_result(sel, ins->result, true);
+        if (!x86_i128_type(sel, ins->core_type_id, NULL) ||
             !x86_i128_load(sel, ins->value.operand,
                 MINIC_X86_REG_RAX, MINIC_X86_REG_RDX)) return false;
         if (ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_NEGATE) {
@@ -6307,6 +6328,10 @@ static bool x86_integer_conversion(X86CoreSelector *sel,
         return x86_i128_store(sel, ins->result,
             MINIC_X86_REG_RAX, MINIC_X86_REG_RDX);
     }
+    if (shape.target_bool)
+        return x86_i128_load(sel, ins->value.operand,
+                MINIC_X86_REG_RAX, MINIC_X86_REG_RDX) &&
+            x86_i128_boolean_result(sel, ins->result, false);
     return x86_i128_load(sel, ins->value.operand,
             MINIC_X86_REG_RAX, MINIC_X86_REG_RDX) &&
         x86_result(sel, ins);
