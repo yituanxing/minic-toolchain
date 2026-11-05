@@ -343,26 +343,33 @@ static bool parse_section_body(ScriptParser *parser,
             }
             continue;
         }
-        if (minild_script_token_is(parser, "BYTE")) {
+        if (minild_script_token_is(parser, "BYTE") ||
+            minild_script_token_is(parser, "SHORT") ||
+            minild_script_token_is(parser, "LONG") ||
+            minild_script_token_is(parser, "QUAD")) {
             MiniLdScriptSectionItem item;
             MiniLdScriptExprId expression;
+            unsigned data_width = minild_script_token_is(parser, "BYTE") ? 1U :
+                                  minild_script_token_is(parser, "SHORT") ? 2U :
+                                  minild_script_token_is(parser, "LONG") ? 4U : 8U;
             memset(&item, 0, sizeof(item));
             if (!minild_script_parser_next(parser) ||
                 !minild_script_expect(parser,
                                       TOKEN_LPAREN,
-                                      "expected-'('-after-BYTE") ||
+                                      "expected-'('-after-data-directive") ||
                 !minild_script_parse_expression(parser, &expression) ||
                 !minild_script_expect(parser,
                                       TOKEN_RPAREN,
-                                      "expected-')'-after-BYTE")) {
+                                      "expected-')'-after-data-directive")) {
                 return false;
             }
             (void)minild_script_consume(parser, TOKEN_SEMICOLON);
             item.kind = MINILD_SCRIPT_SECTION_BYTE;
+            item.data_width = data_width;
             item.value.expression = expression;
             if (!append_section_item(section, item)) {
                 return minild_script_parser_error(parser,
-                                                  "out-of-memory:BYTE");
+                                                  "out-of-memory:data-directive");
             }
             continue;
         }

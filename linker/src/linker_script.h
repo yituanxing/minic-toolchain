@@ -73,6 +73,9 @@ typedef enum MiniLdScriptSectionItemKind {
 
 typedef struct MiniLdScriptSectionItem {
     MiniLdScriptSectionItemKind kind;
+    /* GNU output-section data commands share the same expression grammar;
+     * encoding width belongs to the script command, not the target ISA. */
+    unsigned data_width;
     union {
         MiniLdScriptPattern pattern;
         struct {

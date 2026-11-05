@@ -961,10 +961,13 @@ static bool script_layout_bind_output_symbols(
  * section. Its load/write attributes derive from the inherited PHDRS
  * assignment (e.g. x86 Linux .orc_lookup inherits :data).
  *
- * Conversely, an output containing BYTE but no input fragment is real
- * SHT_PROGBITS and defaults to SHF_ALLOC, independent of the PT_LOAD's
- * p_flags.  A PT_LOAD declared FLAGS(7) does not imply every constituent
- * section is writable; Linux LoongArch .edata_padding is such a section. */
+ * Conversely, an output containing a script data directive but no input
+ * fragment is real SHT_PROGBITS and normally defaults to SHF_ALLOC,
+ * independent of PT_LOAD p_flags. GNU BFD uses SHF_WRITE if the first
+ * content-producing operation follows a symbol assignment: the synthetic
+ * section has already been opened as writable by that assignment (e.g.
+ * x86 boot's setup_sig = .; LONG(...)). Assignments following data do not
+ * retroactively change the section's flags. */
 static uint64_t script_layout_synthetic_flags(
     const MiniLdScript *script, size_t command_index, bool has_bytes) {
     size_t selected_load = SIZE_MAX;
@@ -1000,6 +1003,18 @@ static uint64_t script_layout_synthetic_flags(
         return 0U;
     }
     if (has_bytes) {
+        const MiniLdScriptOutputSection *output =
+            &script->commands[command_index].value.section;
+        for (i = 0U; i < output->item_count; ++i) {
+            MiniLdScriptSectionItemKind kind = output->items[i].kind;
+            if (kind == MINILD_SCRIPT_SECTION_DEFINE_SYMBOL) {
+                return SHF_ALLOC | SHF_WRITE;
+            }
+            if (kind == MINILD_SCRIPT_SECTION_BYTE ||
+                kind == MINILD_SCRIPT_SECTION_SET_DOT) {
+                break;
+            }
+        }
         return SHF_ALLOC;
     }
     if (selected_load != SIZE_MAX &&
@@ -1201,43 +1216,64 @@ static bool script_layout_process_output(MiniLdScriptLayoutState *script_state,
                                         &value)) {
                 return false;
             }
-            if (script_state->dot == UINT64_MAX) {
+            if ((item->data_width != 1U && item->data_width != 2U &&
+                 item->data_width != 4U && item->data_width != 8U) ||
+                script_state->dot > UINT64_MAX -
+                                         (uint64_t)item->data_width) {
                 fprintf(script_state->state->diagnostics,
-                        "minic-ld: linker-script-BYTE-overflow:%s\n",
+                        "minic-ld: linker-script-data-overflow:%s\n",
                         output->name);
                 return false;
             }
             {
                 MiniLdLayout *layout = script_state->layout;
-                if (layout->script_byte_count == layout->script_byte_capacity) {
+                size_t count = (size_t)item->data_width;
+                size_t n;
+                if (layout->script_byte_count > SIZE_MAX - count) {
+                    fprintf(script_state->state->diagnostics,
+                            "minic-ld: script-data-count-overflow\n");
+                    return false;
+                }
+                if (layout->script_byte_capacity -
+                        layout->script_byte_count < count) {
+                    size_t needed = layout->script_byte_count + count;
                     size_t capacity = layout->script_byte_capacity == 0U
-                                          ? 16U : layout->script_byte_capacity * 2U;
+                                          ? 16U : layout->script_byte_capacity;
                     MiniLdScriptBytePatch *patches;
-                    if (capacity < layout->script_byte_capacity ||
+                    while (capacity < needed &&
+                           capacity <= SIZE_MAX / 2U) {
+                        capacity *= 2U;
+                    }
+                    if (capacity < needed ||
                         capacity > SIZE_MAX / sizeof(*patches)) {
                         fprintf(script_state->state->diagnostics,
-                                "minic-ld: script-BYTE-count-overflow\n");
+                                "minic-ld: script-data-count-overflow\n");
                         return false;
                     }
                     patches = realloc(layout->script_bytes,
                                       capacity * sizeof(*patches));
                     if (patches == NULL) {
                         fprintf(script_state->state->diagnostics,
-                                "minic-ld: out-of-memory:script-BYTE\n");
+                                "minic-ld: out-of-memory:script-data\n");
                         return false;
                     }
                     layout->script_bytes = patches;
                     layout->script_byte_capacity = capacity;
                 }
-                layout->script_bytes[layout->script_byte_count].command =
-                    command_index;
-                layout->script_bytes[layout->script_byte_count].address =
-                    script_state->dot;
-                layout->script_bytes[layout->script_byte_count].value =
-                    (unsigned char)value;
-                ++layout->script_byte_count;
+                for (n = 0U; n < count; ++n) {
+                    unsigned byte_index =
+                        script_state->state->target->data_encoding ==
+                                ELFDATA2MSB
+                            ? (unsigned)(count - 1U - n) : (unsigned)n;
+                    MiniLdScriptBytePatch *patch =
+                        &layout->script_bytes[layout->script_byte_count++];
+                    patch->command = command_index;
+                    patch->address = script_state->dot + (uint64_t)n;
+                    patch->value =
+                        (unsigned char)(value >> (8U * byte_index));
+                }
             }
-            ++script_state->dot;
+            script_state->dot += (uint64_t)item->data_width;
             break;
         case MINILD_SCRIPT_SECTION_CONSTRUCTORS:
             break;

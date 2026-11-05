@@ -193,6 +193,7 @@ preflight() {
       arch/x86/boot/compressed/.vmlinux.cmd arch/x86/boot/.setup.elf.cmd; do
     must_file "$MINILD_X86_OUT/$name"
   done
+  must_file "$MINILD_X86_OUT/arch/x86/boot/setup.elf"
   grep -Fxq CONFIG_X86_KERNEL_IBT=y "$MINILD_X86_OUT/include/config/auto.conf" ||
     die wrong_pinned_x86_IBT_config
   grep -Fxq CONFIG_X86_NEED_RELOCS=y "$MINILD_X86_OUT/include/config/auto.conf" ||
@@ -223,6 +224,9 @@ PY
   sha256sum "$MINILD_X86_OUT/arch/x86/boot/setup.bin" \
     >"$MINILD_X86_EV/frozen-GNU-setup-bin.sha256"
   cp "$MINILD_X86_OUT/arch/x86/boot/bzImage" "$MINILD_X86_EV/original-GNU-bzImage"
+  cp "$MINILD_X86_OUT/arch/x86/boot/setup.elf" "$MINILD_X86_EV/original-GNU-setup.elf"
+  sha256sum "$MINILD_X86_EV/original-GNU-setup.elf" \
+    >"$MINILD_X86_EV/original-GNU-setup-elf.sha256"
   cp "$MINILD_X86_OUT/arch/x86/boot/voffset.h" "$MINILD_X86_EV/frozen-voffset.h"
   cp "$MINILD_X86_OUT/arch/x86/boot/zoffset.h" "$MINILD_X86_EV/frozen-zoffset.h"
   verify_immutable
@@ -317,7 +321,8 @@ PY
 }
 
 mini_boot_link() {
-  local name=$1 cmd=$2 output=$3 argv_file="$MINILD_X86_EV/$name.minild.argv0"
+  local name=$1 cmd=$2 output=$3
+  local argv_file="$MINILD_X86_EV/$name.minild.argv0"
   local -a args=()
   captured_link_args "$cmd" "$output" "$argv_file"
   mapfile -d '' -t args <"$argv_file"
@@ -374,6 +379,18 @@ bzimage() {
   verify_generated_header "$MINILD_X86_EV/frozen-zoffset.h" "$cmp/vmlinux" ZO_ ZOFFSET
   if [[ $setup_mode == mini-all-links ]]; then
     mini_boot_link setup-elf "$bz/.setup.elf.cmd" "$bz/setup.elf"
+    sha256sum --quiet -c "$MINILD_X86_EV/original-GNU-setup-elf.sha256" ||
+      die frozen_GNU_setup_elf_control_changed
+    python3 "$repo/tools/ci/minild-final-elf-audit.py" \
+      "$MINILD_X86_EV/original-GNU-setup.elf" "$bz/setup.elf" \
+      >"$MINILD_X86_EV/setup-elf-strict-audit.stdout" \
+      2>"$MINILD_X86_EV/setup-elf-strict-audit.stderr" || {
+      tail -n 50 "$MINILD_X86_EV/setup-elf-strict-audit.stderr" >&2 || true
+      die MiniLD_setup_elf_strict_GNU_audit_failed
+    }
+    sha256sum "$MINILD_X86_EV/original-GNU-setup.elf" "$bz/setup.elf" \
+      >"$MINILD_X86_EV/setup-elf-audit-pair.sha256"
+    echo 'MINILD_X86_SETUP=PASS linker=MiniLD GNU_ELF32_strict_audit=true'
     objcopy -O binary "$bz/setup.elf" "$bz/setup.bin" || die MiniLD_setup_to_bin_failed
   else
     # The 16/32-bit setup loader is a *distinct* historical ELF32 GNU-owned
@@ -421,5 +438,18 @@ case "${1:-}" in
     captured_link_args "$1" "$2" "$4" ;;
   project-immutable-manifest)
     shift; project_immutable_manifest "$@" ;;
+  probe-boot-link)
+    # Synthetic fixture only: unit-test the *actual* boot-link dispatch code
+    # with a test-owned stub linker, not a Linux acceptance or fallback path.
+    shift
+    [[ $# == 7 ]] || die 'usage=probe-boot-link MINI EVIDENCE SRC OUT NAME CMD OUTPUT'
+    export MINILD_X86_MINI MINILD_X86_EV MINILD_X86_SRC
+    MINILD_X86_MINI=$(realpath "$1")
+    MINILD_X86_EV=$(realpath -m "$2")
+    MINILD_X86_SRC=$(realpath "$3")
+    local_out=$(realpath "$4")
+    mkdir -p "$MINILD_X86_EV"
+    cd "$local_out"
+    mini_boot_link "$5" "$6" "$7" ;;
   *) die 'usage={preflight|full-link|bzimage|guard-make|guard-cc|guard-ld}' ;;
 esac

@@ -155,7 +155,6 @@ int main(int argc, char **argv) {
     uint64_t max_page_size = 0U;
     /* 0 = default target byte order; 1 = -EL, 2 = -EB. */
     unsigned int requested_endianness = 0U;
-    bool emulation_explicit = false;
     bool kernel_static_pie;
     bool kernel_shared_image;
     bool kernel_et_dyn;
@@ -400,12 +399,10 @@ int main(int argc, char **argv) {
                 }
                 requested_emulation = argv[i];
             }
-            if (emulation_explicit &&
-                strcmp(emulation, requested_emulation) != 0) {
-                fprintf(stderr, "minic-ld: conflicting-emulations\n");
-                return 2;
-            }
-            emulation_explicit = true;
+            /* GNU ld's -m is a stateful option: the last emulation wins.
+             * Kbuild can pass its outer architecture -m followed by the
+             * boot sublink's -m elf_i386; admitting both still requires
+             * each input to match the final target ELF class/machine. */
             emulation = requested_emulation;
         } else if (strcmp(argv[i], "-z") == 0) {
             if (++i >= argc) {
