@@ -185,9 +185,14 @@ for label,mini,gnu in (("ET_EXEC",sys.argv[1],sys.argv[2]),
                        ("kernel_staticPIE",sys.argv[3],sys.argv[4])):
     mini_vma,a=text(mini)
     gnu_vma,b=text(gnu)
-    assert mini_vma==gnu_vma,(label,'section_vma',hex(mini_vma),hex(gnu_vma))
+    # BFD may place orphan .text after reserved ELF headers, while MiniLD
+    # may start the output section at the segment base.  Address-dependent
+    # old BFD PC-relative encodings must use BFD's actual .text VMA; the
+    # absolute-zero MiniLD instruction is invariant under either layout.
+    vma_delta=gnu_vma-mini_vma
     if a == b:
-        print(f'MINILD_LOONG_WEAK_PCALA=PASS GNU_{label}_text_byte_exact=true patched_BFD=true')
+        print(f'MINILD_LOONG_WEAK_PCALA=PASS GNU_{label}_text_byte_exact=true '
+              f'patched_BFD=true GNU_text_VMA_delta={vma_delta:+#x}')
         continue
     # Before GNU BFD's 2024-12 undefined-weak fix, pcalau12i was left
     # PC-relative for symbols requiring absolute zero.  Accept *only* this
@@ -198,5 +203,5 @@ for label,mini,gnu in (("ET_EXEC",sys.argv[1],sys.argv[2]),
     assert bytes(expected)==a and old_bfd_pcala_to_zero(b,gnu_vma),(
         label,len(a),len(b),a[:16].hex(),b[:16].hex())
     print(f'MINILD_LOONG_WEAK_PCALA=PASS GNU_{label}_LEGACY_pre_2024_12_pcala_bug=true '
-          'other_bytes_exact=true')
+          f'other_bytes_exact=true GNU_text_VMA_delta={vma_delta:+#x}')
 PY

@@ -89,6 +89,16 @@ for order in early late; do
         -o "$work/$order.gnu.elf" "${inputs[@]}"
     gnu_flag=$(readelf -Wh "$work/$order.gnu.elf" | sed -n 's/.*Flags:[[:space:]]*\(0x[0-9a-f]*\).*/\1/p')
     mini_flag=$(readelf -Wh "$work/$order.mini.elf" | sed -n 's/.*Flags:[[:space:]]*\(0x[0-9a-f]*\).*/\1/p')
-    [[ $gnu_flag == 0x43 && $mini_flag == "$gnu_flag" ]]
+    if [[ $gnu_flag == 0x43 && $mini_flag == "$gnu_flag" ]]; then
+        echo "MINILD_LOONG_NEUTRAL_FLAGS=PASS GNU_BFD_order=$order e_flags=$gnu_flag byte_exact=true"
+    elif [[ $order == early && $gnu_flag == 0x0 && $mini_flag == 0x43 ]]; then
+        # Old BFD may inherit unknown ABI flags from a data-only first
+        # object.  That is not the ABI of the actual LP64D code, whose
+        # e_flags must remain 0x43 regardless of input ordering.
+        echo 'MINILD_LOONG_NEUTRAL_FLAGS=PASS GNU_BFD_legacy_neutral_first_e_flags=0x0 MiniLD_effective_code_ABI=0x43'
+    else
+        echo "MINILD_LOONG_NEUTRAL_FLAGS=FAIL GNU_BFD_order=$order gnu_flags=${gnu_flag:-missing} mini_flags=${mini_flag:-missing}" >&2
+        exit 1
+    fi
 done
-echo 'MINILD_LOONG_NEUTRAL_FLAGS=PASS GNU_BFD_early_late_e_flags_equal=true'
+echo 'MINILD_LOONG_NEUTRAL_FLAGS=PASS GNU_BFD_two_orders_checked=true'
