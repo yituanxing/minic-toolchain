@@ -64,4 +64,25 @@ bool minic_machine_builder_emit_source_asm(MinicMachineBuilder *,
     const MinicMachineRegisterEffect *implicit, size_t implicit_count,
     bool terminates_block, bool permits_fallthrough);
 
+typedef struct MinicMachineSourceAsmInput {
+    const char *source_bytes;
+    size_t source_byte_length;
+    unsigned int effects;
+    const MinicMachineOperand *bindings;
+    size_t binding_count;
+    const MinicMachineRegisterEffect *implicit;
+    size_t implicit_count;
+    bool terminates_block;
+    bool permits_fallthrough;
+    uint32_t target_machine_form_id;
+    uint32_t target_machine_form_variant;
+    bool has_unique_id;
+    uint64_t unique_id;
+} MinicMachineSourceAsmInput;
+
+/* The extended physical source-ASM ingress preserves target Linux machine
+ * form proof and GNU `%=` instance identity without interpreting C syntax. */
+bool minic_machine_builder_emit_source_asm_typed(MinicMachineBuilder *,
+    const MinicMachineSourceAsmInput *);
+
 #endif

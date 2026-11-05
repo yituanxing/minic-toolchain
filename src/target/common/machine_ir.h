@@ -203,6 +203,14 @@ typedef struct MinicMachineInstruction {
      * never use this field to bypass feature or opcode validation. */
     char *source_asm_template;
     size_t source_asm_length; /* exact source byte length, excluding final NUL */
+    /* Immutable target-recognized Linux/source ASM descriptor imported from
+     * CoreInlineAsm. Zero ID means no special machine-form claim. */
+    uint32_t source_asm_machine_form_id;
+    uint32_t source_asm_machine_form_variant;
+    /* GNU `%=` requires an explicit translation-unit unique occurrence ID.
+     * It must come from source/Module lowering, never a serializer hash. */
+    bool has_source_asm_unique_id;
+    uint64_t source_asm_unique_id;
     /* Present only for LOCAL_LABEL. Allows labels inside the same physical
      * block (GNU exception/fixup pairs, local FP conversion branches). */
     char *local_label_name;

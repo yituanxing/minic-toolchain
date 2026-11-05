@@ -177,6 +177,16 @@ static bool machine_validate_instruction(
     if (!ins->has_core_origin &&
         (ins->core_block_id != 0U || ins->core_instruction_id != 0U))
         return false;
+    if ((ins->kind != MINIC_MACHINE_INSTRUCTION_SOURCE_ASM &&
+         (ins->source_asm_machine_form_id != 0U ||
+          ins->source_asm_machine_form_variant != 0U ||
+          ins->has_source_asm_unique_id ||
+          ins->source_asm_unique_id != 0U)) ||
+        (ins->kind == MINIC_MACHINE_INSTRUCTION_SOURCE_ASM &&
+         ((ins->source_asm_machine_form_id == 0U &&
+           ins->source_asm_machine_form_variant != 0U) ||
+          (!ins->has_source_asm_unique_id &&
+           ins->source_asm_unique_id != 0U)))) return false;
     if (ins->kind == MINIC_MACHINE_INSTRUCTION_LOCAL_LABEL) {
         if (ins->opcode != 0U || ins->effects != 0U ||
             ins->operand_count != 0U || ins->implicit_count != 0U ||
@@ -365,6 +375,9 @@ bool minic_machine_function_verify(const MinicMachineFunction *function,
     const char **labels = NULL;
     size_t *referenced = NULL;
     size_t *visited = NULL;
+    uint64_t *source_unique_ids = NULL;
+    size_t source_unique_count = 0U;
+    size_t source_unique_capacity = 0U;
     size_t label_count = 0U;
     size_t label_capacity = 1U; /* the module-defined function symbol */
     size_t section_nesting = 0U;
@@ -406,6 +419,12 @@ bool minic_machine_function_verify(const MinicMachineFunction *function,
         for (j = 0U; j < block->instruction_count; ++j) {
             if (block->instructions == NULL) return false;
             if (block->instructions[j].kind ==
+                MINIC_MACHINE_INSTRUCTION_SOURCE_ASM &&
+                block->instructions[j].has_source_asm_unique_id) {
+                if (source_unique_capacity == SIZE_MAX) return false;
+                ++source_unique_capacity;
+            }
+            if (block->instructions[j].kind ==
                 MINIC_MACHINE_INSTRUCTION_LOCAL_LABEL) {
                 if (label_capacity == SIZE_MAX) return false;
                 ++label_capacity;
@@ -416,7 +435,12 @@ bool minic_machine_function_verify(const MinicMachineFunction *function,
     labels = calloc(label_capacity, sizeof(*labels));
     referenced = calloc(function->block_count, sizeof(*referenced));
     visited = calloc(function->block_count, sizeof(*visited));
-    if (labels == NULL || referenced == NULL || visited == NULL) goto cleanup;
+    if (source_unique_capacity >
+        SIZE_MAX / sizeof(*source_unique_ids)) goto cleanup;
+    source_unique_ids = calloc(source_unique_capacity == 0U
+        ? 1U : source_unique_capacity, sizeof(*source_unique_ids));
+    if (labels == NULL || referenced == NULL || visited == NULL ||
+        source_unique_ids == NULL) goto cleanup;
     labels[label_count++] = function->name;
     for (i = 0U; i < function->block_count; ++i) {
         const MinicMachineBlock *block = &function->blocks[i];
@@ -475,6 +499,15 @@ bool minic_machine_function_verify(const MinicMachineFunction *function,
             }
             if (ins->kind == MINIC_MACHINE_INSTRUCTION_LOCAL_LABEL)
                 labels[label_count++] = ins->local_label_name;
+            if (ins->kind == MINIC_MACHINE_INSTRUCTION_SOURCE_ASM &&
+                ins->has_source_asm_unique_id) {
+                size_t earlier;
+                for (earlier = 0U; earlier < source_unique_count; ++earlier)
+                    if (source_unique_ids[earlier] ==
+                        ins->source_asm_unique_id) goto cleanup;
+                source_unique_ids[source_unique_count++] =
+                    ins->source_asm_unique_id;
+            }
             if (is_terminator) {
                 terminated = true;
                 terminal_allows_fallthrough = permits_fallthrough;
@@ -527,5 +560,6 @@ cleanup:
     free(labels);
     free(referenced);
     free(visited);
+    free(source_unique_ids);
     return valid;
 }

@@ -152,9 +152,11 @@ int main(void) {
     MinicMachineFunction function = {0};
     MinicMachineFunction source_function = {0};
     MinicMachineBuilder source_builder = {0};
+    MinicMachineSourceAsmInput typed_asm = {0};
     FILE *output = NULL;
     FILE *rejected = NULL;
     FILE *accepted = NULL;
+    FILE *accepted_typed = NULL;
     size_t only_block;
     bool success = false;
     unsigned int stage = 0U;
@@ -250,11 +252,53 @@ int main(void) {
         !verify_output(accepted, "nop\n\tret\n")) goto done;
     stage = 6U;
 
+    /* The target's Linux/source machine-form proof is immutable MIR data.
+     * GNU %= identity is explicit; duplicated occurrence IDs fail closed. */
+    source_function.blocks[0].instructions[0].source_asm_machine_form_id = 9U;
+    source_function.blocks[0].instructions[0].source_asm_machine_form_variant = 2U;
+    source_function.blocks[0].instructions[0].has_source_asm_unique_id = true;
+    source_function.blocks[0].instructions[0].source_asm_unique_id = 41U;
+    typed_asm.source_bytes = "nop";
+    typed_asm.source_byte_length = 3U;
+    typed_asm.effects = MINIC_MACHINE_EFFECT_VOLATILE;
+    typed_asm.target_machine_form_id = 9U;
+    typed_asm.target_machine_form_variant = 2U;
+    typed_asm.has_unique_id = true;
+    typed_asm.unique_id = 41U;
+    minic_machine_builder_set_origin(&source_builder, 0U, 1U);
+    if (!minic_machine_builder_emit_source_asm_typed(
+            &source_builder, &typed_asm)) goto done;
+    {
+        MinicMachineInstruction saved =
+            source_function.blocks[0].instructions[1];
+        source_function.blocks[0].instructions[1] =
+            source_function.blocks[0].instructions[2];
+        source_function.blocks[0].instructions[2] = saved;
+    }
+    if (minic_machine_gnu_asm_preflight(&source_function, &policy)) goto done;
+    source_function.blocks[0].instructions[1].source_asm_unique_id = 42U;
+    accepted_typed = tmpfile();
+    if (accepted_typed == NULL ||
+        !minic_machine_gnu_asm_preflight(&source_function, &policy) ||
+        !minic_machine_gnu_asm_emit_body(
+            accepted_typed, &source_function, &policy) ||
+        !verify_output(accepted_typed, "nop\nnop\n\tret\n")) goto done;
+    source_function.blocks[0].instructions[1].has_source_asm_unique_id =
+        false;
+    if (minic_machine_gnu_asm_preflight(&source_function, &policy)) goto done;
+    source_function.blocks[0].instructions[1].has_source_asm_unique_id =
+        true;
+    source_function.blocks[0].instructions[2].source_asm_machine_form_id = 1U;
+    if (minic_machine_gnu_asm_preflight(&source_function, &policy)) goto done;
+    source_function.blocks[0].instructions[2].source_asm_machine_form_id = 0U;
+    stage = 7U;
+
     success = true;
 done:
     if (output != NULL) fclose(output);
     if (rejected != NULL) fclose(rejected);
     if (accepted != NULL) fclose(accepted);
+    if (accepted_typed != NULL) fclose(accepted_typed);
     minic_machine_function_destroy(&source_function);
     minic_machine_function_destroy(&function);
     if (!success) {

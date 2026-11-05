@@ -162,26 +162,49 @@ bool minic_machine_builder_emit_source_asm(MinicMachineBuilder *builder,
     const MinicMachineOperand *bindings, size_t binding_count,
     const MinicMachineRegisterEffect *implicit, size_t implicit_count,
     bool terminates_block, bool permits_fallthrough) {
+    MinicMachineSourceAsmInput input = {0};
+    input.source_bytes = source_bytes;
+    input.source_byte_length = byte_length;
+    input.effects = effects;
+    input.bindings = bindings;
+    input.binding_count = binding_count;
+    input.implicit = implicit;
+    input.implicit_count = implicit_count;
+    input.terminates_block = terminates_block;
+    input.permits_fallthrough = permits_fallthrough;
+    return minic_machine_builder_emit_source_asm_typed(builder, &input);
+}
+
+bool minic_machine_builder_emit_source_asm_typed(MinicMachineBuilder *builder,
+    const MinicMachineSourceAsmInput *input) {
     MinicMachineInstruction instruction = {0};
-    if (builder == NULL || !builder->has_core_origin ||
-        source_bytes == NULL || byte_length == 0U ||
-        (binding_count != 0U && bindings == NULL) ||
-        (implicit_count != 0U && implicit == NULL) ||
-        binding_count > MINIC_MACHINE_MAX_OPERANDS ||
-        implicit_count > MINIC_MACHINE_MAX_REGISTER_EFFECTS)
+    if (builder == NULL || !builder->has_core_origin || input == NULL ||
+        input->source_bytes == NULL || input->source_byte_length == 0U ||
+        (input->binding_count != 0U && input->bindings == NULL) ||
+        (input->implicit_count != 0U && input->implicit == NULL) ||
+        input->binding_count > MINIC_MACHINE_MAX_OPERANDS ||
+        input->implicit_count > MINIC_MACHINE_MAX_REGISTER_EFFECTS ||
+        (input->target_machine_form_id == 0U &&
+         input->target_machine_form_variant != 0U) ||
+        (!input->has_unique_id && input->unique_id != 0U))
         return false;
     instruction.kind = MINIC_MACHINE_INSTRUCTION_SOURCE_ASM;
-    instruction.effects = effects | MINIC_MACHINE_EFFECT_SOURCE_ASM;
-    instruction.operands = (MinicMachineOperand *)bindings;
-    instruction.operand_count = binding_count;
-    instruction.implicit = (MinicMachineRegisterEffect *)implicit;
-    instruction.implicit_count = implicit_count;
+    instruction.effects = input->effects | MINIC_MACHINE_EFFECT_SOURCE_ASM;
+    instruction.operands = (MinicMachineOperand *)input->bindings;
+    instruction.operand_count = input->binding_count;
+    instruction.implicit = (MinicMachineRegisterEffect *)input->implicit;
+    instruction.implicit_count = input->implicit_count;
     instruction.has_core_origin = true;
     instruction.core_block_id = builder->origin_block;
     instruction.core_instruction_id = builder->origin_instruction;
-    instruction.source_asm_template = (char *)source_bytes;
-    instruction.source_asm_length = byte_length;
-    instruction.source_asm_terminates_block = terminates_block;
-    instruction.source_asm_permits_fallthrough = permits_fallthrough;
+    instruction.source_asm_template = (char *)input->source_bytes;
+    instruction.source_asm_length = input->source_byte_length;
+    instruction.source_asm_terminates_block = input->terminates_block;
+    instruction.source_asm_permits_fallthrough = input->permits_fallthrough;
+    instruction.source_asm_machine_form_id = input->target_machine_form_id;
+    instruction.source_asm_machine_form_variant =
+        input->target_machine_form_variant;
+    instruction.has_source_asm_unique_id = input->has_unique_id;
+    instruction.source_asm_unique_id = input->unique_id;
     return machine_builder_append(builder, &instruction);
 }
