@@ -986,6 +986,17 @@ check-binary128-literal-oracle:
 		$(MINIC_LDFLAGS) -o "$(BUILD_DIR)/tests/frontend/binary128_literal_oracle_test"
 	"$(abspath $(BUILD_DIR))/tests/frontend/binary128_literal_oracle_test"
 
+.PHONY: check-core-language-boundary
+check-core-language-boundary:
+	bash tests/core/check-core-language-boundary.sh "$(CC)"
+
+.PHONY: check-target-abstraction-boundary
+check-target-abstraction-boundary:
+	bash tests/core/check-target-abstraction-boundary.sh "$(CC)"
+
+# check-core-types already executes the Core language boundary script.
+check-fast: check-target-abstraction-boundary
+
 .PHONY: check-core-types
 check-core-types:
 	bash tests/core/run-core-types.sh "$(CC)"
@@ -2638,6 +2649,16 @@ check-x86-machine-core-select:
 	  src/target/x86_64/machine_core_select.c \
 	  -o "$(BUILD_DIR)/tests/x86-machine-core-select"
 	"$(BUILD_DIR)/tests/x86-machine-core-select"
+
+# Structural parity is a focused, native-host gate: all five target selectors
+# must accept their proven Core subsets, reject unsupported whole functions,
+# and satisfy Core-origin/effect coverage before the production path is switched.
+# Keep Linux and expensive full-compiler suites separate from this gate.
+.PHONY: check-five-machine-core-select
+check-five-machine-core-select: check-machine-ir-contract \
+	check-machine-core-coverage check-machine-source-asm-template \
+	check-riscv-machine-core-select check-x86-machine-core-select \
+	check-a64-machine-core-select check-loong-machine-core-select
 
 .PHONY: check-x86-machine-gnu-asm
 check-x86-machine-gnu-asm:

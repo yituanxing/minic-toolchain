@@ -6,6 +6,8 @@ root=$(cd "$(dirname "$0")/../.." && pwd)
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 
+"$root/tests/core/check-core-language-boundary.sh" "$host_cc"
+
 type_sources=(
     "$root/src/core/core_type.c"
     "$root/tests/core/core_type_context_test.c"

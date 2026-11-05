@@ -2,6 +2,7 @@
 #include "target/riscv/machine_gnu_asm.h"
 #include "target/riscv/machine_opcode.h"
 #include "target/riscv/machine_target_state.h"
+#include "target/riscv/instruction_select.h"
 #include <limits.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -59,6 +60,11 @@ static bool rv_emit(RvCoreSelection *sel, uint32_t opcode,
                     const MinicMachineOperand *ops, size_t count) {
     return minic_riscv_machine_emit_selected(&sel->builder, opcode,
                                               ops, count);
+}
+static bool rv_emit_volatile(RvCoreSelection *sel, uint32_t opcode,
+    bool is_volatile, const MinicMachineOperand *ops, size_t count) {
+    return minic_riscv_machine_emit_selected_effects(&sel->builder, opcode,
+        is_volatile ? MINIC_MACHINE_EFFECT_VOLATILE : 0U, ops, count);
 }
 static bool rv_li(RvCoreSelection *sel, unsigned dst, int64_t value) {
     const MinicMachineOperand ops[] = {
@@ -309,11 +315,18 @@ static uint32_t rv_memory_opcode(const RvCoreSelection *sel,
 static bool rv_core_memory(RvCoreSelection *sel,
     const MinicCoreInstruction *ins) {
     const MinicCoreFunction *fn = sel->plan->core;
-    const bool load = ins->kind == MINIC_CORE_INSTRUCTION_LOAD;
-    const MinicCoreValueId address = load ? ins->value.load.address :
-        ins->value.store.address;
+    const bool load = ins->kind == MINIC_CORE_INSTRUCTION_LOAD ||
+        ins->kind == MINIC_CORE_INSTRUCTION_ATOMIC_LOAD;
+    const bool atomic = ins->kind == MINIC_CORE_INSTRUCTION_ATOMIC_LOAD ||
+        ins->kind == MINIC_CORE_INSTRUCTION_ATOMIC_STORE;
+    const MinicCoreValueId address = atomic ?
+        (load ? ins->value.atomic_load.address : ins->value.atomic_store.address) :
+        (load ? ins->value.load.address : ins->value.store.address);
     const MinicCoreValueId source = load ? MINIC_CORE_VALUE_INVALID :
-        ins->value.store.stored_value;
+        (atomic ? ins->value.atomic_store.stored_value :
+            ins->value.store.stored_value);
+    const bool is_volatile = !atomic && (load ?
+        ins->value.load.is_volatile : ins->value.store.is_volatile);
     const MinicCoreTypeId type_id = load ? ins->core_type_id :
         (source < fn->value_count ? fn->values[source].core_type_id :
          MINIC_CORE_TYPE_INVALID);
@@ -321,15 +334,89 @@ static bool rv_core_memory(RvCoreSelection *sel,
     bool sign, pointer;
     uint32_t opcode;
     MinicMachineOperand ops[2];
-    if (!rv_type(sel, type_id, &bytes, &sign, &pointer) ||
+    const MinicCoreType *memory_type;
+    /* Core admits memory_order=0 (relaxed) only. Naturally aligned RV32I /
+     * RV64I scalar load/store are atomic at those widths; stronger orders
+     * would require a separate typed FENCE policy, never silent downgrading. */
+    if ((atomic && (load ? ins->value.atomic_load.memory_order :
+            ins->value.atomic_store.memory_order) != 0U) ||
+        !rv_type(sel, type_id, &bytes, &sign, &pointer) ||
+        (atomic && (fn->type_context == NULL ||
+            (memory_type = minic_core_type_get(fn->type_context,
+                minic_core_type_unqualified(fn->type_context, type_id))) == NULL ||
+            !memory_type->has_layout || memory_type->alignment < bytes)) ||
         (opcode = rv_memory_opcode(sel, load, bytes, sign)) == 0U ||
         !rv_load(sel, address, RV_T0) ||
         (!load && !rv_load(sel, source, RV_T1))) return false;
     ops[0] = rv_reg(sel->xlen, RV_T1, load ?
         MINIC_MACHINE_REGISTER_WRITE : MINIC_MACHINE_REGISTER_READ);
     ops[1] = rv_addr(sel->xlen, RV_T0);
-    if (!rv_emit(sel, opcode, ops, 2U)) return false;
+    if (!rv_emit_volatile(sel, opcode, is_volatile, ops, 2U)) return false;
     return !load || rv_store(sel, ins->result, RV_T1);
+}
+static bool rv_core_field_address(RvCoreSelection *sel,
+    const MinicCoreInstruction *ins) {
+    const size_t offset = ins->value.field_address.byte_offset;
+    if (offset > (size_t)INT64_MAX ||
+        (sel->xlen == 32U && offset > (size_t)UINT32_MAX) ||
+        !rv_load(sel, ins->value.field_address.base, RV_T0)) return false;
+    if (offset <= 2047U) {
+        if (!rv_rri(sel, MINIC_RISCV_MACHINE_ADDI,
+            RV_T0, RV_T0, (int64_t)offset)) return false;
+    } else if (!rv_li(sel, RV_T1, (int64_t)offset) ||
+        !rv_rrr(sel, MINIC_RISCV_MACHINE_ADD,
+            RV_T0, RV_T0, RV_T1)) return false;
+    return rv_store(sel, ins->result, RV_T0);
+}
+static bool rv_core_pointer_offset(RvCoreSelection *sel,
+    const MinicCoreInstruction *ins) {
+    MinicRiscvPointerScalePlan scale;
+    const MinicCoreFunction *fn = sel->plan->core;
+    const size_t stride = ins->value.pointer_offset.element_size;
+    size_t bits;
+    unsigned bit = 0U;
+    unsigned index_bytes;
+    bool index_signed, index_pointer;
+    if (!minic_riscv_plan_pointer_scale(stride, &scale) ||
+        (sel->xlen == 32U && stride > (size_t)UINT32_MAX) ||
+        ins->value.pointer_offset.index >= fn->value_count ||
+        !rv_type(sel,
+            fn->values[ins->value.pointer_offset.index].core_type_id,
+            &index_bytes, &index_signed, &index_pointer) || index_pointer ||
+        !rv_load(sel, ins->value.pointer_offset.base, RV_T0)) return false;
+    if (scale.kind == MINIC_RISCV_POINTER_SCALE_ZERO)
+        return rv_store(sel, ins->result, RV_T0);
+    if (!rv_load(sel, ins->value.pointer_offset.index, RV_T1)) return false;
+    switch (scale.kind) {
+    case MINIC_RISCV_POINTER_SCALE_UNIT:
+        break;
+    case MINIC_RISCV_POINTER_SCALE_SHIFT:
+        if (scale.shift >= sel->xlen ||
+            !rv_rri(sel, MINIC_RISCV_MACHINE_SLLI,
+                RV_T1, RV_T1, (int64_t)scale.shift)) return false;
+        break;
+    case MINIC_RISCV_POINTER_SCALE_MULTIPLY:
+        /* Literal stride is legalized to I-only shifts and adds. This is a
+         * target-owned machine expansion; no runtime __muldi3/M extension. */
+        if (!rv_li(sel, RV_T2, 0)) return false;
+        for (bits = stride; bits != 0U; bits >>= 1U, ++bit) {
+            if ((bits & 1U) == 0U) continue;
+            if (bit == 0U) {
+                if (!rv_rr(sel, MINIC_RISCV_MACHINE_MV,
+                    RV_T3, RV_T1)) return false;
+            } else if (!rv_rri(sel, MINIC_RISCV_MACHINE_SLLI,
+                           RV_T3, RV_T1, (int64_t)bit)) return false;
+            if (!rv_rrr(sel, MINIC_RISCV_MACHINE_ADD,
+                RV_T2, RV_T2, RV_T3)) return false;
+        }
+        if (!rv_rr(sel, MINIC_RISCV_MACHINE_MV, RV_T1, RV_T2)) return false;
+        break;
+    default:
+        return false;
+    }
+    return rv_rrr(sel, ins->value.pointer_offset.subtract ?
+        MINIC_RISCV_MACHINE_SUB : MINIC_RISCV_MACHINE_ADD,
+        RV_T0, RV_T0, RV_T1) && rv_store(sel, ins->result, RV_T0);
 }
 static bool rv_core_conversion(RvCoreSelection *sel,
     const MinicCoreInstruction *ins) {
@@ -401,6 +488,9 @@ static bool rv_core_call(RvCoreSelection *sel,
     MinicMachineOperand op;
     size_t i;
     const MinicCoreCallee *callee;
+    const MinicCoreType *signature;
+    unsigned result_bytes;
+    bool result_sign, result_pointer;
     if (!sel->plan->frame->saves_return_address ||
         ins->value.call.extended_float_operation !=
             MINIC_CORE_EXT_FLOAT_NONE ||
@@ -409,7 +499,17 @@ static bool rv_core_call(RvCoreSelection *sel,
         count > 8U || start > fn->call_argument_count ||
         count > fn->call_argument_count - start) return false;
     callee = &fn->callees[ins->value.call.callee_id];
-    if (callee->name == NULL) return false;
+    if (callee->name == NULL || fn->type_context == NULL) return false;
+    signature = minic_core_type_get(fn->type_context,
+        minic_core_type_unqualified(fn->type_context,
+            callee->core_function_type_id));
+    if (signature == NULL || signature->kind != MINIC_CORE_TYPE_FUNCTION ||
+        signature->value.function.is_variadic ||
+        signature->value.function.calling_convention !=
+            MINIC_CALLING_CONVENTION_DEFAULT ||
+        (ins->result != MINIC_CORE_VALUE_INVALID &&
+         !rv_type(sel, ins->core_type_id, &result_bytes,
+             &result_sign, &result_pointer))) return false;
     for (i = 0U; i < count; ++i) {
         const MinicCoreCallArgument *arg = &fn->call_arguments[start + i];
         unsigned bytes;
@@ -427,7 +527,53 @@ static bool rv_core_call(RvCoreSelection *sel,
     op.value.symbol.addend = 0;
     if (!rv_emit(sel, MINIC_RISCV_MACHINE_CALL_DIRECT, &op, 1U)) return false;
     return ins->result == MINIC_CORE_VALUE_INVALID ||
-        rv_store(sel, ins->result, RV_A0);
+        (rv_normalize(sel, RV_A0, result_bytes, result_sign) &&
+         rv_store(sel, ins->result, RV_A0));
+}
+static bool rv_core_indirect_call(RvCoreSelection *sel,
+    const MinicCoreInstruction *ins) {
+    const MinicCoreFunction *fn = sel->plan->core;
+    const size_t start = ins->value.indirect_call.argument_begin;
+    const size_t count = ins->value.indirect_call.argument_count;
+    MinicMachineOperand callee;
+    const MinicCoreType *signature;
+    unsigned result_bytes;
+    bool result_sign, result_pointer;
+    size_t i;
+    if (!sel->plan->frame->saves_return_address ||
+        ins->value.indirect_call.result_object != MINIC_CORE_OBJECT_INVALID ||
+        count > 8U || start > fn->call_argument_count ||
+        count > fn->call_argument_count - start ||
+        ins->value.indirect_call.signature_id >= fn->call_signature_count ||
+        !rv_load(sel, ins->value.indirect_call.callee, RV_T0)) return false;
+    signature = minic_core_type_get(fn->type_context,
+        minic_core_type_unqualified(fn->type_context,
+            fn->call_signatures[ins->value.indirect_call.signature_id]
+                .core_function_type_id));
+    if (signature == NULL || signature->kind != MINIC_CORE_TYPE_FUNCTION ||
+        signature->value.function.is_variadic ||
+        signature->value.function.calling_convention !=
+            MINIC_CALLING_CONVENTION_DEFAULT ||
+        (ins->result != MINIC_CORE_VALUE_INVALID &&
+         !rv_type(sel, ins->core_type_id, &result_bytes,
+             &result_sign, &result_pointer))) return false;
+    for (i = 0U; i < count; ++i) {
+        const MinicCoreCallArgument *arg = &fn->call_arguments[start + i];
+        unsigned bytes;
+        bool sign, pointer;
+        if (arg->kind != MINIC_CORE_CALL_ARGUMENT_VALUE ||
+            arg->value.value_id >= fn->value_count ||
+            !rv_type(sel, fn->values[arg->value.value_id].core_type_id,
+                &bytes, &sign, &pointer) ||
+            !rv_load(sel, arg->value.value_id, RV_A0 + (unsigned)i))
+            return false;
+    }
+    callee = rv_reg(sel->xlen, RV_T0, MINIC_MACHINE_REGISTER_READ);
+    if (!rv_emit(sel, MINIC_RISCV_MACHINE_CALL_INDIRECT, &callee, 1U))
+        return false;
+    return ins->result == MINIC_CORE_VALUE_INVALID ||
+        (rv_normalize(sel, RV_A0, result_bytes, result_sign) &&
+         rv_store(sel, ins->result, RV_A0));
 }
 static bool rv_core_instruction(RvCoreSelection *sel,
     const MinicCoreInstruction *ins) {
@@ -456,6 +602,10 @@ static bool rv_core_instruction(RvCoreSelection *sel,
         return rv_core_conversion(sel, ins);
     case MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS:
         return rv_core_object_address(sel, ins);
+    case MINIC_CORE_INSTRUCTION_FIELD_ADDRESS:
+        return rv_core_field_address(sel, ins);
+    case MINIC_CORE_INSTRUCTION_POINTER_OFFSET:
+        return rv_core_pointer_offset(sel, ins);
     case MINIC_CORE_INSTRUCTION_GLOBAL_ADDRESS:
     case MINIC_CORE_INSTRUCTION_FUNCTION_ADDRESS:
         return rv_core_symbol(sel, ins);
@@ -463,9 +613,15 @@ static bool rv_core_instruction(RvCoreSelection *sel,
         return rv_core_block_address(sel, ins);
     case MINIC_CORE_INSTRUCTION_LOAD:
     case MINIC_CORE_INSTRUCTION_STORE:
+    case MINIC_CORE_INSTRUCTION_ATOMIC_LOAD:
+    case MINIC_CORE_INSTRUCTION_ATOMIC_STORE:
         return rv_core_memory(sel, ins);
     case MINIC_CORE_INSTRUCTION_CALL:
         return rv_core_call(sel, ins);
+    case MINIC_CORE_INSTRUCTION_INDIRECT_CALL:
+        return rv_core_indirect_call(sel, ins);
+    case MINIC_CORE_INSTRUCTION_COMPILER_BARRIER:
+        return rv_emit(sel, MINIC_RISCV_MACHINE_BARRIER, NULL, 0U);
     default:
         return false;
     }

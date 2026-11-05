@@ -350,12 +350,296 @@ cleanup:
     return ok;
 }
 
+/* Signed i64 -> i128 -> _Bool/i64 and a dynamic alloca in one Core function.
+ * Exercises both i128 limbs, signed extension, actual overflow CFG, 16-byte
+ * stack rounding and x19-anchored local value slots after SP moves. */
+static bool run_residual_case(void) {
+    MinicCoreTypeContext types;
+    MinicCoreFunction core = {0};
+    MinicCoreModule module = {0};
+    MinicTargetInfo target = {0};
+    MinicMachineLP64FrameContract abi = {0};
+    MinicLP64FramePlan plan = {0};
+    MinicDirectLP64BlockContext context = {0};
+    MinicMachineGNUAsmPolicy policy = {0};
+    MinicMachineFunction machine = {0};
+    MinicCoreType type = {0};
+    MinicCoreTypeId void_type, s64_type, s128_type, bool_type,
+        u64_type, pointer_type;
+    MinicCoreBlockId entry;
+    MinicCoreValueId values[6];
+    MinicCoreInstruction ins = {0};
+    MinicCoreTerminator term = {0};
+    const bool reachable[1] = {true};
+    size_t offsets[6] = {0U, SIZE_MAX, 8U, 16U, 24U, 32U};
+    size_t wide_offsets[6] = {SIZE_MAX, 48U, SIZE_MAX, SIZE_MAX,
+        SIZE_MAX, SIZE_MAX};
+    char assembly[16384] = {0};
+    FILE *out = NULL;
+    size_t n;
+    bool ok = false;
+    const char *stage = "construct";
+    minic_core_type_context_initialize(&types);
+    minic_core_function_initialize(&core);
+    type.kind = MINIC_CORE_TYPE_VOID;
+    if (!minic_core_type_register(&types, &type, &void_type)) goto cleanup;
+    type = (MinicCoreType){0};
+    type.kind = MINIC_CORE_TYPE_INTEGER;
+    type.has_layout = true;
+    type.size = type.alignment = 8U;
+    type.value.integer.bit_width = 64U;
+    type.value.integer.is_signed = true;
+    if (!minic_core_type_register(&types, &type, &s64_type)) goto cleanup;
+    type.size = type.alignment = 16U;
+    type.value.integer.bit_width = 128U;
+    if (!minic_core_type_register(&types, &type, &s128_type)) goto cleanup;
+    type.size = type.alignment = 1U;
+    type.value.integer.bit_width = 8U;
+    type.value.integer.is_signed = false;
+    type.value.integer.is_bool = true;
+    if (!minic_core_type_register(&types, &type, &bool_type)) goto cleanup;
+    type.size = type.alignment = 8U;
+    type.value.integer.bit_width = 64U;
+    type.value.integer.is_bool = false;
+    if (!minic_core_type_register(&types, &type, &u64_type)) goto cleanup;
+    type = (MinicCoreType){0};
+    type.kind = MINIC_CORE_TYPE_POINTER;
+    type.has_layout = true;
+    type.size = type.alignment = 8U;
+    type.value.pointer.pointee = void_type;
+    if (!minic_core_type_register(&types, &type, &pointer_type)) goto cleanup;
+    core.name = malloc(sizeof("a64_residual"));
+    if (core.name == NULL) goto cleanup;
+    memcpy(core.name, "a64_residual", sizeof("a64_residual"));
+    core.name_length = sizeof("a64_residual") - 1U;
+    if (!minic_core_function_define_signature(&core, &types, void_type,
+            NULL, 0U, MINIC_CALLING_CONVENTION_DEFAULT, false) ||
+        !minic_core_function_add_block(&core, &entry)) goto cleanup;
+    ins.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
+    ins.core_type_id = s64_type;
+    ins.value.integer_value = -1;
+    if (!minic_core_function_append_value_instruction(&core, entry, &ins,
+            &values[0])) goto cleanup;
+    ins.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONVERSION;
+    ins.core_type_id = s128_type;
+    ins.value.operand = values[0];
+    if (!minic_core_function_append_value_instruction(&core, entry, &ins,
+            &values[1])) goto cleanup;
+    ins.core_type_id = bool_type;
+    ins.value.operand = values[1];
+    if (!minic_core_function_append_value_instruction(&core, entry, &ins,
+            &values[2])) goto cleanup;
+    ins.core_type_id = s64_type;
+    if (!minic_core_function_append_value_instruction(&core, entry, &ins,
+            &values[3])) goto cleanup;
+    ins.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
+    ins.core_type_id = u64_type;
+    ins.value.integer_value = 31;
+    if (!minic_core_function_append_value_instruction(&core, entry, &ins,
+            &values[4])) goto cleanup;
+    ins.kind = MINIC_CORE_INSTRUCTION_DYNAMIC_STACK_ALLOC;
+    ins.core_type_id = pointer_type;
+    ins.value.operand = values[4];
+    if (!minic_core_function_append_value_instruction(&core, entry, &ins,
+            &values[5])) goto cleanup;
+    term.kind = MINIC_CORE_TERMINATOR_RETURN;
+    term.return_value = MINIC_CORE_VALUE_INVALID;
+    if (!minic_core_function_set_terminator(&core, entry, &term) ||
+        !minic_core_function_attach_type_context(&core, &types) ||
+        !minic_core_function_verify(&core)) goto cleanup;
+    target.architecture = MINIC_TARGET_ARCH_AARCH64;
+    target.data_layout = minic_aarch64_linux_data_layout();
+    module.type_context = &types;
+    abi.frame_alignment = 16U;
+    abi.frame_size = 96U;
+    abi.save_offset = 80U;
+    abi.has_dynamic_stack = true;
+    abi.saved_entry_sp_offset = SIZE_MAX;
+    plan.value_count = 6U;
+    plan.value_offsets = offsets;
+    plan.wide_offsets = wide_offsets;
+    context = (MinicDirectLP64BlockContext){
+        .fn = &core, .module = &module, .target = &target,
+        .machine_frame = &abi, .frame_plan = &plan,
+        .name = core.name
+    };
+    stage = "selection";
+    if (!minic_aarch64_machine_select_core_subset(&machine, &context))
+        goto cleanup;
+    stage = "coverage-and-preflight";
+    if (!machine.has_dynamic_stack || machine.block_count != 4U ||
+        !minic_machine_core_coverage_verify(&core, reachable, &machine) ||
+        !minic_aarch64_machine_gnu_asm_policy_initialize(&target, &policy) ||
+        !minic_machine_gnu_asm_preflight(&machine, &policy)) goto cleanup;
+    stage = "serialize";
+    out = tmpfile();
+    if (out == NULL ||
+        !minic_machine_gnu_asm_emit_body(out, &machine, &policy) ||
+        fflush(out) != 0 || fseek(out, 0L, SEEK_SET) != 0) goto cleanup;
+    n = fread(assembly, 1U, sizeof(assembly) - 1U, out);
+    assembly[n] = '\0';
+    stage = "physical-invariants";
+    ok = strstr(assembly, "  asr x10, x9, #63\n") != NULL &&
+        strstr(assembly, "  orr x9, x9, x10\n") != NULL &&
+        strstr(assembly, "  adds x10, x9, #15\n") != NULL &&
+        strstr(assembly, "  b.hs .Lminic_mir_a64_residual_3\n") != NULL &&
+        strstr(assembly, "  and x10, x10, #-16\n") != NULL &&
+        strstr(assembly, "  sub sp, sp, x10\n") != NULL &&
+        strstr(assembly, "  brk #0\n") != NULL;
+    if (ok) {
+        /* Reject the ENTIRE Core function when the Common frame planner
+         * hasn't reserved a dynamic-frame base. No legacy alloca fallback. */
+        stage = "fail-closed-without-dynamic-frame";
+        minic_machine_function_destroy(&machine);
+        abi.has_dynamic_stack = false;
+        ok = !minic_aarch64_machine_select_core_subset(&machine, &context);
+    }
+cleanup:
+    if (!ok) {
+        fprintf(stderr, "A64 residual case failed at %s\n", stage);
+        if (strcmp(stage, "physical-invariants") == 0)
+            fprintf(stderr, "%s\n", assembly);
+    }
+    if (out != NULL) fclose(out);
+    minic_machine_function_destroy(&machine);
+    minic_core_function_destroy(&core);
+    minic_core_type_context_destroy(&types);
+    return ok;
+}
+
+/* Large record copies must own a physical CFG loop. MachineBuilder block
+ * creation changes the insertion point; the original Core block has to
+ * branch into that loop, not accidentally make the done block its source. */
+static bool run_record_loop_case(void) {
+    MinicCoreTypeContext types;
+    MinicCoreFunction core = {0};
+    MinicCoreModule module = {0};
+    MinicTargetInfo target = {0};
+    MinicMachineLP64FrameContract abi = {0};
+    MinicLP64FramePlan plan = {0};
+    MinicLP64ArgumentPlan incoming = {0};
+    MinicDirectLP64BlockContext context = {0};
+    MinicMachineGNUAsmPolicy policy = {0};
+    MinicMachineFunction machine = {0};
+    MinicCoreType type = {0};
+    MinicCoreTypeId void_type, record_type, ptr_type;
+    MinicCoreTypeId parameters[2];
+    MinicCoreBlockId entry;
+    MinicCoreValueId pointer[2];
+    MinicCoreInstruction ins = {0};
+    MinicCoreTerminator term = {0};
+    const bool reachable[1] = {true};
+    size_t offsets[2] = {0U, 8U};
+    char assembly[8192] = {0};
+    FILE *out = NULL;
+    size_t n;
+    bool ok = false;
+    const char *stage = "construct";
+    minic_core_type_context_initialize(&types);
+    minic_core_function_initialize(&core);
+    type.kind = MINIC_CORE_TYPE_VOID;
+    if (!minic_core_type_register(&types, &type, &void_type)) goto cleanup;
+    type = (MinicCoreType){0};
+    type.kind = MINIC_CORE_TYPE_RECORD;
+    type.has_layout = true;
+    type.size = 128U;
+    type.alignment = 8U;
+    if (!minic_core_type_register(&types, &type, &record_type)) goto cleanup;
+    type = (MinicCoreType){0};
+    type.kind = MINIC_CORE_TYPE_POINTER;
+    type.has_layout = true;
+    type.size = type.alignment = 8U;
+    type.value.pointer.pointee = record_type;
+    if (!minic_core_type_register(&types, &type, &ptr_type)) goto cleanup;
+    core.name = malloc(sizeof("a64_record_loop"));
+    if (core.name == NULL) goto cleanup;
+    memcpy(core.name, "a64_record_loop", sizeof("a64_record_loop"));
+    core.name_length = sizeof("a64_record_loop") - 1U;
+    parameters[0] = parameters[1] = ptr_type;
+    if (!minic_core_function_define_signature(&core, &types, void_type,
+            parameters, 2U, MINIC_CALLING_CONVENTION_DEFAULT, false) ||
+        !minic_core_function_add_block(&core, &entry)) goto cleanup;
+    ins.kind = MINIC_CORE_INSTRUCTION_PARAMETER;
+    ins.core_type_id = ptr_type;
+    ins.value.parameter_index = 0U;
+    if (!minic_core_function_append_value_instruction(&core, entry, &ins,
+            &pointer[0])) goto cleanup;
+    ins.value.parameter_index = 1U;
+    if (!minic_core_function_append_value_instruction(&core, entry, &ins,
+            &pointer[1])) goto cleanup;
+    ins.kind = MINIC_CORE_INSTRUCTION_RECORD_COPY;
+    ins.core_type_id = record_type;
+    ins.result = MINIC_CORE_VALUE_INVALID;
+    ins.value.record_copy.source_address = pointer[0];
+    ins.value.record_copy.destination_address = pointer[1];
+    ins.value.record_copy.source_volatile = true;
+    ins.value.record_copy.destination_volatile = true;
+    if (!minic_core_function_append_effect_instruction(&core, entry, &ins))
+        goto cleanup;
+    term.kind = MINIC_CORE_TERMINATOR_RETURN;
+    term.return_value = MINIC_CORE_VALUE_INVALID;
+    if (!minic_core_function_set_terminator(&core, entry, &term) ||
+        !minic_core_function_attach_type_context(&core, &types) ||
+        !minic_core_function_verify(&core)) goto cleanup;
+    target.architecture = MINIC_TARGET_ARCH_AARCH64;
+    target.data_layout = minic_aarch64_linux_data_layout();
+    module.type_context = &types;
+    abi.frame_size = 32U;
+    abi.frame_alignment = 16U;
+    abi.saved_entry_sp_offset = SIZE_MAX;
+    plan.value_count = 2U;
+    plan.value_offsets = offsets;
+    incoming.argument_count = 2U;
+    incoming.arguments[0].gp_first = 0U;
+    incoming.arguments[0].gp_registers = 1U;
+    incoming.arguments[1].gp_first = 1U;
+    incoming.arguments[1].gp_registers = 1U;
+    context = (MinicDirectLP64BlockContext){
+        .fn = &core, .module = &module, .target = &target,
+        .machine_frame = &abi, .frame_plan = &plan,
+        .incoming_plan = &incoming, .name = core.name
+    };
+    stage = "selection";
+    if (!minic_aarch64_machine_select_core_subset(&machine, &context))
+        goto cleanup;
+    stage = "coverage-and-preflight";
+    if (machine.block_count != 4U ||
+        !minic_machine_core_coverage_verify(&core, reachable, &machine) ||
+        !minic_aarch64_machine_gnu_asm_policy_initialize(&target, &policy) ||
+        !minic_machine_gnu_asm_preflight(&machine, &policy)) goto cleanup;
+    stage = "serialize";
+    out = tmpfile();
+    if (out == NULL ||
+        !minic_machine_gnu_asm_emit_body(out, &machine, &policy) ||
+        fflush(out) != 0 || fseek(out, 0L, SEEK_SET) != 0) goto cleanup;
+    n = fread(assembly, 1U, sizeof(assembly) - 1U, out);
+    assembly[n] = '\0';
+    stage = "loop-invariants";
+    ok = strstr(assembly, "  b .Lminic_mir_a64_record_loop_2\n") != NULL &&
+        strstr(assembly, "  ldrb w11, [x9, #0]\n") != NULL &&
+        strstr(assembly, "  strb w11, [x10, #0]\n") != NULL &&
+        strstr(assembly, "  cbnz x12, .Lminic_mir_a64_record_loop_2\n") != NULL &&
+        strstr(assembly, "  ret\n") != NULL;
+cleanup:
+    if (!ok) {
+        fprintf(stderr, "A64 record-copy case failed at %s\n", stage);
+        if (strcmp(stage, "loop-invariants") == 0)
+            fprintf(stderr, "%s\n", assembly);
+    }
+    if (out != NULL) fclose(out);
+    minic_machine_function_destroy(&machine);
+    minic_core_function_destroy(&core);
+    minic_core_type_context_destroy(&types);
+    return ok;
+}
+
 int main(void) {
     if (!run_case(false) || !run_case(true) ||
-        !run_fp_case() || !run_wide_case()) {
+        !run_fp_case() || !run_wide_case() || !run_residual_case() ||
+        !run_record_loop_case()) {
         fprintf(stderr, "A64_CORE_MIR_CFG=FAIL\n");
         return 1;
     }
-    puts("A64_CORE_MIR_CFG=PASS prologue_isolated=1 backedge_to_core0=1 fail_closed=1 fp64=1 i128=1");
+    puts("A64_CORE_MIR_CFG=PASS prologue_isolated=1 backedge_to_core0=1 fail_closed=1 fp64=1 i128=1 i128_cast=1 dynamic_alloca=1 record_loop=1");
     return 0;
 }

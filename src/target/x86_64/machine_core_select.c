@@ -528,44 +528,210 @@ static bool x86_parameter(X86CoreSelector *sel,
  * Core functions (and simple Linux helpers). Any argument plan, hidden sret,
  * non-default calling convention or extended-float helper is rejected until
  * target-owned call lowering can model it without a legacy instruction. */
-static bool x86_zero_arg_sysv_call(X86CoreSelector *sel,
-    const MinicCoreInstruction *ins) {
-    const MinicCoreCallee *callee;
+/* Call plans are the target ABI's single classification authority. A Core
+ * call with one or more arguments must have a sealed site-specific plan:
+ * MachineIR cannot quietly re-classify a record or reinterpret a parameter
+ * after the original call planning pass. The only standalone exception is
+ * the trivial zero-argument SysV call, which has no argument locations. */
+static const MinicX86ArgumentPlan *x86_call_plan(
+    const X86CoreSelector *sel, size_t instruction_id) {
+    const MinicX86OutgoingCallPlans *plans =
+        &sel->frame->outgoing_call_plans;
+    size_t i;
+    if (plans->count != 0U && plans->sites == NULL) return NULL;
+    for (i = 0U; i < plans->count; ++i)
+        if (plans->sites[i].instruction_id == instruction_id)
+            return &plans->sites[i].plan;
+    return NULL;
+}
+
+static bool x86_call_argument(X86CoreSelector *sel,
+    const MinicCoreCallArgument *arg, MinicCoreTypeId declared_type,
+    const MinicX86ArgLocation *where, size_t stack_bytes,
+    MinicFunctionCallingConvention convention) {
+    static const unsigned int sysv_gp[6] = {
+        MINIC_X86_REG_RDI, MINIC_X86_REG_RSI, MINIC_X86_REG_RDX,
+        MINIC_X86_REG_RCX, MINIC_X86_REG_R8, MINIC_X86_REG_R9};
+    static const unsigned int ms_gp[4] = {
+        MINIC_X86_REG_RCX, MINIC_X86_REG_RDX,
+        MINIC_X86_REG_R8, MINIC_X86_REG_R9};
+    const bool ms = convention == MINIC_CALLING_CONVENTION_MS_X64;
+    const MinicCoreType *actual;
+    size_t bytes, stack_offset;
+    bool sign, is_bool, fp_double, floating;
+    if (arg == NULL || where == NULL ||
+        arg->kind != MINIC_CORE_CALL_ARGUMENT_VALUE ||
+        arg->value.value_id >= sel->core->value_count ||
+        (where->kind != MINIC_X86_ARG_INTEGER &&
+         where->kind != MINIC_X86_ARG_SSE) ||
+        declared_type == MINIC_CORE_TYPE_INVALID) return false;
+    actual = x86_type(sel,
+        sel->core->values[arg->value.value_id].core_type_id);
+    floating = x86_float_shape(sel, declared_type, &fp_double);
+    if (actual == NULL ||
+        (floating ?
+            !x86_float_shape(sel,
+                sel->core->values[arg->value.value_id].core_type_id,
+                &is_bool) || is_bool != fp_double ||
+                where->kind != MINIC_X86_ARG_SSE :
+            !x86_scalar_shape(sel, declared_type, &bytes,
+                &sign, &is_bool) ||
+                !x86_scalar_shape(sel,
+                    sel->core->values[arg->value.value_id].core_type_id,
+                    &stack_offset, &sign, &is_bool) ||
+                bytes != stack_offset ||
+                where->kind != MINIC_X86_ARG_INTEGER)) return false;
+    if (where->on_stack) {
+        if (where->stack_index > SIZE_MAX / 8U ||
+            (stack_offset = where->stack_index * 8U) > INT32_MAX ||
+            stack_offset > stack_bytes ||
+            stack_bytes - stack_offset < 8U ||
+            !x86_core_load(sel, arg->value.value_id, MINIC_X86_REG_RAX))
+            return false;
+        return x86_2(sel, MINIC_X86_MI_MOV64_RA,
+            x86_reg(MINIC_X86_REG_RAX, 64U),
+            x86_addr(MINIC_X86_REG_RSP, (int64_t)stack_offset));
+    }
+    if (floating) {
+        if (where->fp_index >= (ms ? 4U : 8U)) return false;
+        return x86_float_load_xmm(sel, arg->value.value_id,
+            (unsigned int)where->fp_index, MINIC_X86_REG_RAX, fp_double);
+    }
+    if (where->gp_index >= (ms ? 4U : 6U) ||
+        !x86_core_load(sel, arg->value.value_id, MINIC_X86_REG_RAX))
+        return false;
+    return x86_rr(sel, MINIC_X86_MI_MOV64_RR, 64U,
+        MINIC_X86_REG_RAX,
+        (ms ? ms_gp : sysv_gp)[where->gp_index]);
+}
+
+static bool x86_scalar_call(X86CoreSelector *sel,
+    const MinicCoreInstruction *ins, size_t instruction_id) {
+    const bool indirect = ins->kind == MINIC_CORE_INSTRUCTION_INDIRECT_CALL;
+    const size_t begin = indirect ? ins->value.indirect_call.argument_begin :
+        ins->value.call.argument_begin;
+    const size_t count = indirect ? ins->value.indirect_call.argument_count :
+        ins->value.call.argument_count;
+    const MinicCoreObjectId result_object = indirect ?
+        ins->value.indirect_call.result_object : ins->value.call.result_object;
     const MinicCoreType *signature, *result_type;
+    const MinicX86ArgumentPlan *plan = x86_call_plan(sel, instruction_id);
+    MinicX86ArgumentPlan empty = {0};
+    MinicCoreTypeId function_type;
+    const char *symbol = NULL;
+    size_t i;
     bool fp_double;
-    if (ins->value.call.callee_id >= sel->core->callee_count ||
-        sel->core->callees == NULL ||
-        ins->value.call.argument_count != 0U ||
-        ins->value.call.extended_float_operation !=
-            MINIC_CORE_EXT_FLOAT_NONE ||
-        ins->value.call.result_object != MINIC_CORE_OBJECT_INVALID ||
-        sel->frame->has_sret ||
-        (sel->frame->frame_size & 15U) != 0U) return false;
-    callee = &sel->core->callees[ins->value.call.callee_id];
-    if (!minic_core_inline_asm_symbol_valid(callee->name)) return false;
-    signature = x86_type(sel, callee->core_function_type_id);
-    if (signature == NULL || signature->kind != MINIC_CORE_TYPE_FUNCTION ||
-        signature->value.function.calling_convention !=
-            MINIC_CALLING_CONVENTION_DEFAULT ||
-        signature->value.function.parameter_count != 0U ||
-        signature->value.function.is_variadic ||
-        signature->value.function.return_type != ins->core_type_id)
-        return false;
+    if (result_object != MINIC_CORE_OBJECT_INVALID ||
+        begin > sel->core->call_argument_count ||
+        count > sel->core->call_argument_count - begin ||
+        (count != 0U && sel->core->call_arguments == NULL) ||
+        (sel->frame->frame_size & 15U) != 0U ||
+        (!indirect && ins->value.call.extended_float_operation !=
+            MINIC_CORE_EXT_FLOAT_NONE)) return false;
+    if (indirect) {
+        const MinicCoreCallSignatureId id =
+            ins->value.indirect_call.signature_id;
+        if (id >= sel->core->call_signature_count ||
+            sel->core->call_signatures == NULL ||
+            ins->value.indirect_call.callee >= sel->core->value_count)
+            return false;
+        function_type = sel->core->call_signatures[id].core_function_type_id;
+    } else {
+        const MinicCoreCalleeId id = ins->value.call.callee_id;
+        if (id >= sel->core->callee_count || sel->core->callees == NULL)
+            return false;
+        symbol = sel->core->callees[id].name;
+        if (!minic_core_inline_asm_symbol_valid(symbol)) return false;
+        function_type = sel->core->callees[id].core_function_type_id;
+    }
+    signature = x86_type(sel, function_type);
     result_type = x86_type(sel, ins->core_type_id);
-    if (result_type == NULL ||
-        !x86_1(sel, MINIC_X86_MI_CALL_SYSV_SYMBOL,
-            x86_symbol(callee->name, MINIC_X86_MACHINE_RELOC_PLT32)))
+    if (signature == NULL || signature->kind != MINIC_CORE_TYPE_FUNCTION ||
+        signature->value.function.return_type != ins->core_type_id ||
+        signature->value.function.parameter_count > count ||
+        (signature->value.function.parameter_count != 0U &&
+         signature->value.function.parameters == NULL) ||
+        (!signature->value.function.is_variadic &&
+         signature->value.function.parameter_count != count) ||
+        result_type == NULL ||
+        (result_type->kind != MINIC_CORE_TYPE_VOID &&
+         ins->result >= sel->core->value_count) ||
+        (result_type->kind == MINIC_CORE_TYPE_VOID &&
+         ins->result != MINIC_CORE_VALUE_INVALID)) return false;
+    if (plan == NULL) {
+        if (count != 0U || indirect ||
+            signature->value.function.calling_convention !=
+                MINIC_CALLING_CONVENTION_DEFAULT ||
+            signature->value.function.is_variadic) return false;
+        empty.calling_convention = MINIC_CALLING_CONVENTION_DEFAULT;
+        plan = &empty;
+    }
+    if (plan->calling_convention !=
+            signature->value.function.calling_convention ||
+        plan->argument_count != count ||
+        plan->is_variadic != signature->value.function.is_variadic ||
+        (count != 0U && plan->locations == NULL) ||
+        plan->stack_bytes > INT32_MAX ||
+        (plan->stack_bytes & 15U) != 0U ||
+        (plan->calling_convention == MINIC_CALLING_CONVENTION_MS_X64 &&
+         (plan->stack_bytes < 32U || plan->is_variadic))) return false;
+    if (result_type->kind != MINIC_CORE_TYPE_VOID &&
+        !x86_float_shape(sel, ins->core_type_id, &fp_double)) {
+        size_t bytes;
+        bool sign, is_bool;
+        if (!x86_scalar_shape(sel, ins->core_type_id,
+                &bytes, &sign, &is_bool)) return false;
+    }
+    if (plan->stack_bytes != 0U &&
+        !x86_ir(sel, MINIC_X86_MI_SUB64_IR,
+            (int64_t)plan->stack_bytes, 64U, MINIC_X86_REG_RSP))
         return false;
-    if (result_type->kind == MINIC_CORE_TYPE_VOID)
-        return ins->result == MINIC_CORE_VALUE_INVALID;
-    if (ins->result >= sel->core->value_count) return false;
+    for (i = 0U; i < count; ++i) {
+        const MinicCoreCallArgument *arg =
+            &sel->core->call_arguments[begin + i];
+        const MinicCoreTypeId declared = i <
+            signature->value.function.parameter_count ?
+            signature->value.function.parameters[i] :
+            arg->kind == MINIC_CORE_CALL_ARGUMENT_VALUE &&
+            arg->value.value_id < sel->core->value_count ?
+            sel->core->values[arg->value.value_id].core_type_id :
+            MINIC_CORE_TYPE_INVALID;
+        if (!x86_call_argument(sel,
+                arg, declared,
+                &plan->locations[i], plan->stack_bytes,
+                plan->calling_convention)) return false;
+    }
+    if (plan->is_variadic &&
+        (plan->end.fp_used > 8U ||
+         !x86_ir(sel, MINIC_X86_MI_MOV8_IR,
+             (int64_t)plan->end.fp_used, 8U, MINIC_X86_REG_RAX)))
+        return false;
+    if (indirect) {
+        if ((minic_x86_64_target_codegen_options(sel->target) &
+             (MINIC_X86_CODEGEN_INDIRECT_EXTERNAL_THUNK |
+              MINIC_X86_CODEGEN_INDIRECT_INLINE_THUNK)) != 0U ||
+            !x86_core_load(sel, ins->value.indirect_call.callee,
+                MINIC_X86_REG_R11) ||
+            !x86_1(sel, plan->calling_convention ==
+                MINIC_CALLING_CONVENTION_MS_X64 ?
+                    MINIC_X86_MI_CALL_MS_R : MINIC_X86_MI_CALL_SYSV_R,
+                x86_reg(MINIC_X86_REG_R11, 64U))) return false;
+    } else if (!x86_1(sel,
+            plan->calling_convention == MINIC_CALLING_CONVENTION_MS_X64 ?
+                MINIC_X86_MI_CALL_MS_SYMBOL : MINIC_X86_MI_CALL_SYSV_SYMBOL,
+            x86_symbol(symbol, MINIC_X86_MACHINE_RELOC_PLT32))) return false;
+    if (plan->stack_bytes != 0U &&
+        !x86_ir(sel, MINIC_X86_MI_ADD64_IR,
+            (int64_t)plan->stack_bytes, 64U, MINIC_X86_REG_RSP))
+        return false;
+    if (result_type->kind == MINIC_CORE_TYPE_VOID) return true;
     if (x86_float_shape(sel, ins->core_type_id, &fp_double))
         return x86_float_store_xmm(sel, ins->result, 0U, fp_double);
     return x86_result(sel, ins);
 }
 
 static bool x86_core_instruction(X86CoreSelector *sel,
-    const MinicCoreInstruction *ins) {
+    const MinicCoreInstruction *ins, size_t instruction_id) {
     size_t bytes;
     bool sign, is_bool;
     if (sel == NULL || ins == NULL) return false;
@@ -573,7 +739,8 @@ static bool x86_core_instruction(X86CoreSelector *sel,
     case MINIC_CORE_INSTRUCTION_PARAMETER:
         return x86_parameter(sel, ins);
     case MINIC_CORE_INSTRUCTION_CALL:
-        return x86_zero_arg_sysv_call(sel, ins);
+    case MINIC_CORE_INSTRUCTION_INDIRECT_CALL:
+        return x86_scalar_call(sel, ins, instruction_id);
     case MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT:
         return x86_scalar_shape(sel, ins->core_type_id, &bytes,
                 &sign, &is_bool) &&
@@ -853,7 +1020,7 @@ bool minic_x86_64_machine_select_core_subset(
             if (!minic_core_block_instruction_at(core, block, j,
                     &id, &ins)) goto cleanup;
             minic_machine_builder_set_origin(&sel.builder, i, id);
-            if (!x86_core_instruction(&sel, ins)) goto cleanup;
+            if (!x86_core_instruction(&sel, ins, id)) goto cleanup;
         }
         minic_machine_builder_clear_origin(&sel.builder);
         if (!x86_core_terminator(&sel, i)) goto cleanup;

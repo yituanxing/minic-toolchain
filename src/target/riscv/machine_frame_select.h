@@ -8,6 +8,12 @@
  * neither selector may invent an instruction effect or bypass legalization. */
 bool minic_riscv_machine_emit_selected(MinicMachineBuilder *,
     uint32_t opcode, const MinicMachineOperand *, size_t operand_count);
+/* Core volatile memory operations retain the target's ordinary physical
+ * load/store opcode, but the effect bit is validated by that opcode's
+ * contract and must not be silently dropped by a selector. */
+bool minic_riscv_machine_emit_selected_effects(MinicMachineBuilder *,
+    uint32_t opcode, unsigned int extra_effects,
+    const MinicMachineOperand *, size_t operand_count);
 
 /* Already-finalized physical psABI frame, independent of the source language.
  * RV32 ILP32 and RV64 LP64 use the SAME native selection algorithm, while

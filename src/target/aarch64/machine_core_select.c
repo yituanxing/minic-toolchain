@@ -711,6 +711,95 @@ static bool a64_fixed_sp_read(A64CoreSelection *sel,
         a64_store_core(sel, ins->result, A64_T0, 64U);
 }
 
+/* Dynamic alloca is a Core memory-lifetime effect, never a source-ASM
+ * instruction.  The overflow trap and normal continuation are real auxiliary
+ * MachineCFG blocks.  Frame accesses remain anchored to x19, the immutable
+ * base established by the AAPCS64 machine prologue. */
+static bool a64_dynamic_stack_alloc(A64CoreSelection *sel,
+    const MinicCoreInstruction *ins) {
+    size_t overflow, continuation;
+    const size_t source_block = sel->builder.current_block;
+    const MinicMachineOperand high[] = {
+        a64_immediate(2), a64_block(0U)
+    };
+    MinicMachineOperand branch[2] = {high[0], high[1]};
+    if (!minic_multi_direct_dynamic_stack_alloc_shape(sel->ctx->fn, ins,
+            sel->ctx->machine_frame->has_dynamic_stack) ||
+        !a64_load_core(sel, ins->value.operand, A64_T0, 64U) ||
+        !a64_rri(sel, MINIC_A64_MACHINE_ADDS_IMM, 64U,
+            A64_T1, A64_T0, 15) ||
+        !minic_machine_builder_create_block(&sel->builder, NULL,
+            false, true, &continuation) ||
+        !minic_machine_builder_create_block(&sel->builder, NULL,
+            false, true, &overflow) ||
+        !minic_machine_builder_position_at(&sel->builder, source_block))
+        return false;
+    branch[1] = a64_block(overflow);
+    if (!a64_emit(sel, MINIC_A64_MACHINE_B_COND, branch, 2U) ||
+        !minic_machine_builder_add_successor(&sel->builder, overflow) ||
+        !minic_machine_builder_add_successor(&sel->builder, continuation) ||
+        !minic_machine_builder_set_fallthrough(&sel->builder, continuation) ||
+        !minic_machine_builder_position_at(&sel->builder, overflow) ||
+        !a64_emit(sel, MINIC_A64_MACHINE_BRK, NULL, 0U) ||
+        !minic_machine_builder_position_at(&sel->builder, continuation) ||
+        !a64_rri(sel, MINIC_A64_MACHINE_AND_ALIGN_IMM, 64U,
+            A64_T1, A64_T1, -16) ||
+        !a64_rrr(sel, MINIC_A64_MACHINE_SUB, 64U,
+            MINIC_A64_MACHINE_SP, MINIC_A64_MACHINE_SP, A64_T1) ||
+        !a64_rri(sel, MINIC_A64_MACHINE_ADD_IMM, 64U,
+            A64_T0, MINIC_A64_MACHINE_SP, 0)) return false;
+    return a64_store_core(sel, ins->result, A64_T0, 64U);
+}
+
+/* One whole-family integer cast, including i128 and C _Bool, delegates
+ * source semantic classification to the shared Core conversion plan.  Its
+ * only target decisions are register width, exact sign-extension and which
+ * 64-bit halves are moved between already-allocated frame slots. */
+static bool a64_integer_conversion(A64CoreSelection *sel,
+    const MinicCoreInstruction *ins) {
+    MinicDirectIntegerCastPlan cast;
+    if (!minic_multi_direct_integer_cast_plan(sel->ctx->module,
+            sel->ctx->target, sel->ctx->fn, ins,
+            sel->ctx->frame_plan, &cast)) return false;
+    if (cast.source_wide) {
+        if (!a64_load_wide_half(sel, cast.source_wide_offset, A64_T0) ||
+            !a64_load_wide_half(sel,
+                cast.source_wide_offset + 8U, A64_T1)) return false;
+    } else {
+        const unsigned int bits = cast.source_width == 8U ? 64U : 32U;
+        if (!a64_load_core(sel, cast.operand, A64_T0, bits) ||
+            (cast.source_width < 4U &&
+             !a64_normalize(sel, cast.source_width,
+                 cast.source_signed, A64_T0))) return false;
+        if (cast.target_wide) {
+            if (cast.source_width != 8U && cast.source_signed &&
+                !a64_extend_word(sel, A64_T0, A64_T0, true)) return false;
+            if (cast.source_signed) {
+                if (!a64_rri(sel, MINIC_A64_MACHINE_ASR_IMM, 64U,
+                        A64_T1, A64_T0, 63)) return false;
+            } else if (!a64_load_constant(sel, A64_T1, 0U)) return false;
+        }
+    }
+    if (cast.target_wide)
+        return a64_store_wide_half(sel, cast.target_wide_offset, A64_T0) &&
+            a64_store_wide_half(sel, cast.target_wide_offset + 8U, A64_T1);
+    if (cast.target_boolean) {
+        if (cast.source_wide &&
+            !a64_rrr(sel, MINIC_A64_MACHINE_ORR, 64U,
+                A64_T0, A64_T0, A64_T1)) return false;
+        if (!a64_cmp_zero(sel,
+                cast.source_wide || cast.source_width == 8U ? 64U : 32U,
+                A64_T0) || !a64_cset(sel, A64_T0, 1)) return false;
+    } else if (cast.target_width == 8U && !cast.source_wide &&
+        cast.source_width < 8U && cast.source_signed) {
+        if (!a64_extend_word(sel, A64_T0, A64_T0, true)) return false;
+    } else if (cast.target_width < 8U &&
+        !a64_normalize(sel, cast.target_width,
+            cast.target_signed, A64_T0)) return false;
+    return a64_store_core(sel, ins->result, A64_T0,
+        cast.target_width == 8U ? 64U : 32U);
+}
+
 /* Source-owned zero-operand hardware hints are carried through their exact
  * proven Core source bytes. They are NOT arbitrary selected instruction text:
  * the independent target source-ASM grammar validates a fixed hint subset. */
@@ -893,12 +982,14 @@ static bool a64_copy_bytes(A64CoreSelection *sel,
     }
     {
         size_t loop, done;
+        const size_t source_block = sel->builder.current_block;
         MinicMachineOperand branch[2];
         if (!a64_load_constant(sel, A64_T3, (uint64_t)bytes) ||
             !minic_machine_builder_create_block(&sel->builder, NULL,
                 false, true, &loop) ||
             !minic_machine_builder_create_block(&sel->builder, NULL,
                 false, true, &done) ||
+            !minic_machine_builder_position_at(&sel->builder, source_block) ||
             !a64_branch(sel, loop) ||
             !minic_machine_builder_position_at(&sel->builder, loop) ||
             !a64_copy_one_byte(sel, source_volatile,
@@ -1161,6 +1252,8 @@ static bool a64_core_instruction(A64CoreSelection *sel,
         return a64_call_frame_address(sel, ins);
     case MINIC_CORE_INSTRUCTION_FIXED_REGISTER_READ:
         return a64_fixed_sp_read(sel, ins);
+    case MINIC_CORE_INSTRUCTION_DYNAMIC_STACK_ALLOC:
+        return a64_dynamic_stack_alloc(sel, ins);
     case MINIC_CORE_INSTRUCTION_OPAQUE_INLINE_ASM:
         return a64_opaque_hint(sel, ins);
     case MINIC_CORE_INSTRUCTION_FIXED_VECTOR128_LOAD:
@@ -1200,22 +1293,7 @@ static bool a64_core_instruction(A64CoreSelection *sel,
             a64_store_core(sel, ins->result, A64_T0,
                 width == 8U ? 64U : 32U);
     case MINIC_CORE_INSTRUCTION_INTEGER_CONVERSION: {
-        const MinicCoreValueId from = ins->value.operand;
-        size_t from_width, to_width;
-        bool from_signed, to_signed, from_pointer, to_pointer;
-        if (from >= fn->value_count ||
-            !a64_value_width(fn, fn->values[from].core_type_id,
-                &from_width, &from_signed, &from_pointer) ||
-            !a64_value_width(fn, ins->core_type_id,
-                &to_width, &to_signed, &to_pointer) ||
-            from_pointer || to_pointer ||
-            !a64_load_core(sel, from, A64_T0,
-                from_width == 8U ? 64U : 32U)) return false;
-        if (to_width == 8U && from_width < 8U &&
-            !a64_extend_word(sel, A64_T0, A64_T0, from_signed)) return false;
-        return a64_normalize(sel, to_width, to_signed, A64_T0) &&
-            a64_store_core(sel, ins->result, A64_T0,
-                to_width == 8U ? 64U : 32U);
+        return a64_integer_conversion(sel, ins);
     }
     case MINIC_CORE_INSTRUCTION_INTEGER_ADD:
     case MINIC_CORE_INSTRUCTION_INTEGER_SUBTRACT:

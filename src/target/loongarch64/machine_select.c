@@ -402,6 +402,59 @@ static bool loong_load_value(LoongSelector *sel, MinicCoreValueId value,
         sel->ctx->machine_frame->has_dynamic_stack, true);
 }
 
+/* Byte-exact record transport. The source and destination pointer registers
+ * remain distinct, so both independently qualified volatile access sides
+ * receive their own effect flags. Large objects use real auxiliary Machine
+ * blocks and a counted loop; no source-assembly private labels are emitted. */
+static bool loong_copy_record_bytes(LoongSelector *sel, size_t bytes,
+    bool source_volatile, bool destination_volatile) {
+    MinicMachineBuilder *b = &sel->builder;
+    size_t byte;
+    size_t loop, done, before;
+    if (bytes == 0U || bytes > 16U * 1024U * 1024U) return false;
+    if (bytes < 8U) {
+        for (byte = 0U; byte < bytes; ++byte) {
+            if (!loong_memory_volatile(b, MINIC_LOONG_MACHINE_LD_BU,
+                    LOONG_T0, LOONG_T2, 0, true, source_volatile) ||
+                !loong_memory_volatile(b, MINIC_LOONG_MACHINE_ST_B,
+                    LOONG_T0, LOONG_T1, 0, false,
+                    destination_volatile) ||
+                !loong_rri(b, MINIC_LOONG_MACHINE_ADDI_D,
+                    LOONG_T2, LOONG_T2, 1) ||
+                !loong_rri(b, MINIC_LOONG_MACHINE_ADDI_D,
+                    LOONG_T1, LOONG_T1, 1)) return false;
+        }
+        return true;
+    }
+    if (!b->has_position) return false;
+    before = b->current_block;
+    if (!minic_machine_builder_create_block(b, NULL, false, true, &loop) ||
+        !minic_machine_builder_create_block(b, NULL, false, true, &done) ||
+        !minic_machine_builder_position_at(b, before)) return false;
+    if (!loong_ri(b, MINIC_LOONG_MACHINE_LI_D, LOONG_T3,
+            (int64_t)bytes) ||
+        !loong_branch(sel, MINIC_LOONG_MACHINE_B, loop, false, false))
+        return false;
+    if (!minic_machine_builder_position_at(b, loop) ||
+        !loong_memory_volatile(b, MINIC_LOONG_MACHINE_LD_BU,
+            LOONG_T0, LOONG_T2, 0, true, source_volatile) ||
+        !loong_memory_volatile(b, MINIC_LOONG_MACHINE_ST_B,
+            LOONG_T0, LOONG_T1, 0, false, destination_volatile) ||
+        !loong_rri(b, MINIC_LOONG_MACHINE_ADDI_D,
+            LOONG_T2, LOONG_T2, 1) ||
+        !loong_rri(b, MINIC_LOONG_MACHINE_ADDI_D,
+            LOONG_T1, LOONG_T1, 1) ||
+        !loong_rri(b, MINIC_LOONG_MACHINE_ADDI_D,
+            LOONG_T3, LOONG_T3, -1) ||
+        !loong_rr(b, MINIC_LOONG_MACHINE_MOVE, LOONG_T0, LOONG_T3))
+        return false;
+    if (!minic_machine_builder_add_successor(b, done) ||
+        !loong_branch(sel, MINIC_LOONG_MACHINE_BNEZ, loop, true, false) ||
+        !minic_machine_builder_set_fallthrough(b, done) ||
+        !minic_machine_builder_position_at(b, done)) return false;
+    return true;
+}
+
 static bool loong_store_value(LoongSelector *sel,
     const MinicCoreInstruction *ins, unsigned int reg, bool force_64) {
     const MinicCoreFunction *fn = sel->ctx->fn;
@@ -1004,6 +1057,59 @@ static bool loong_select_memory(LoongSelector *sel,
     return !is_load || loong_store_value(sel, ins, LOONG_T0, pointer);
 }
 
+/* Aggregate and fixed-vector storage is address-backed Core state. Unlike
+ * scalar integer LOAD, alignment is not presumed, and a source-volatile read
+ * must not be collapsed with an independently volatile destination write. */
+static bool loong_select_record_transfer(LoongSelector *sel,
+    const MinicCoreInstruction *ins) {
+    const MinicCoreFunction *fn = sel->ctx->fn;
+    MinicCoreValueId source, destination;
+    size_t bytes, destination_offset;
+    bool source_volatile, destination_volatile;
+    if (ins->kind == MINIC_CORE_INSTRUCTION_RECORD_LOAD) {
+        if (!minic_multi_direct_record_load_extent(fn, ins,
+                sel->ctx->frame_plan, &source,
+                &destination_offset, &bytes) ||
+            !loong_load_value(sel, source, LOONG_T2, true) ||
+            !loong_local_frame_address(sel, LOONG_T1,
+                destination_offset)) return false;
+        source_volatile = ins->value.record_load.is_volatile;
+        destination_volatile = false;
+    } else {
+        if (ins->kind == MINIC_CORE_INSTRUCTION_RECORD_COPY) {
+            if (!minic_multi_direct_record_copy_extent(fn, ins, &bytes))
+                return false;
+            source = ins->value.record_copy.source_address;
+            destination = ins->value.record_copy.destination_address;
+            source_volatile = ins->value.record_copy.source_volatile;
+            destination_volatile =
+                ins->value.record_copy.destination_volatile;
+        } else if (ins->kind ==
+                       MINIC_CORE_INSTRUCTION_VECTOR_STORAGE_COPY) {
+            const MinicCoreType *type = minic_core_type_get(
+                fn->type_context, minic_core_type_unqualified(
+                    fn->type_context, ins->core_type_id));
+            if (type == NULL || type->kind != MINIC_CORE_TYPE_VECTOR ||
+                !type->has_layout || type->size != 16U ||
+                type->alignment == 0U) return false;
+            bytes = 16U;
+            source = ins->value.vector_storage_copy.source_address;
+            destination =
+                ins->value.vector_storage_copy.destination_address;
+            source_volatile =
+                ins->value.vector_storage_copy.source_volatile;
+            destination_volatile =
+                ins->value.vector_storage_copy.destination_volatile;
+        } else return false;
+        if (source >= fn->value_count || destination >= fn->value_count ||
+            !loong_load_value(sel, source, LOONG_T2, true) ||
+            !loong_load_value(sel, destination, LOONG_T1, true))
+            return false;
+    }
+    return loong_copy_record_bytes(sel, bytes, source_volatile,
+        destination_volatile);
+}
+
 static bool loong_incoming_load(LoongSelector *sel,
     size_t incoming_offset, unsigned int reg, bool wide) {
     const MinicMachineLP64FrameContract *frame = sel->ctx->machine_frame;
@@ -1027,6 +1133,80 @@ static bool loong_incoming_load(LoongSelector *sel,
     }
     return loong_memory(b, opcode, reg, LOONG_T3,
         (int64_t)incoming_offset, MINIC_LOONG_ADDRESS_IMM12, true);
+}
+
+/* The Common incoming-ABI plan determines record classification; the target
+ * owns all physical GAR/stack ingress. A by-value indirect record is copied
+ * byte-for-byte into private local storage, while register-class records
+ * unpack each eightbyte without touching tail padding. */
+static bool loong_select_parameter_object(LoongSelector *sel,
+    const MinicCoreInstruction *ins) {
+    const MinicLP64ArgumentLocation *location = NULL;
+    const bool dynamic = sel->ctx->machine_frame->has_dynamic_stack;
+    size_t object_offset, chunk;
+    if (!minic_multi_direct_parameter_object_location(sel->ctx->fn, ins,
+            sel->ctx->incoming_plan, sel->ctx->frame_plan,
+            &location, &object_offset) || location == NULL) return false;
+    /* Empty records have no physical write. The Core effect-coverage gate
+     * must first model them as explicitly effect-free before admission. */
+    if (location->kind == MINIC_LP64_ARGUMENT_EMPTY_RECORD)
+        return false;
+    if (location->kind == MINIC_LP64_ARGUMENT_INDIRECT_RECORD) {
+        if (location->gp_registers != 0U) {
+            if (location->gp_first >= 8U ||
+                !loong_rr(&sel->builder, MINIC_LOONG_MACHINE_MOVE,
+                    LOONG_T2, LOONG_A0 + (unsigned int)location->gp_first))
+                return false;
+        } else {
+            if (location->stack_first > SIZE_MAX / 8U ||
+                !loong_incoming_load(sel, location->stack_first * 8U,
+                    LOONG_T2, true)) return false;
+        }
+        return loong_local_frame_address(sel, LOONG_T1, object_offset) &&
+            loong_copy_record_bytes(sel, location->size_bytes, false, false);
+    }
+    if (location->kind != MINIC_LP64_ARGUMENT_RECORD ||
+        location->chunks > location->size_bytes / 8U +
+            (location->size_bytes % 8U != 0U ? 1U : 0U))
+        return false;
+    for (chunk = 0U; chunk < location->chunks; ++chunk) {
+        const bool in_register = chunk < location->gp_registers;
+        if ((!in_register && location->stack_first >
+                SIZE_MAX - (chunk - location->gp_registers)) ||
+            chunk > SIZE_MAX / 8U) return false;
+        const size_t slot = in_register ? 0U :
+            location->stack_first + chunk - location->gp_registers;
+        const size_t remaining = location->size_bytes - chunk * 8U;
+        const size_t payload = remaining >= 8U ? 8U : remaining;
+        size_t byte;
+        if (payload == 0U || slot > SIZE_MAX / 8U ||
+            object_offset > SIZE_MAX - chunk * 8U) return false;
+        if (in_register) {
+            if (location->gp_first + chunk >= 8U ||
+                !loong_rr(&sel->builder, MINIC_LOONG_MACHINE_MOVE,
+                    LOONG_T0, LOONG_A0 +
+                        (unsigned int)(location->gp_first + chunk)))
+                return false;
+        } else if (!loong_incoming_load(sel, slot * 8U,
+                       LOONG_T0, true)) return false;
+        if (payload == 8U && ((object_offset + chunk * 8U) & 7U) == 0U) {
+            if (!loong_frame_memory(&sel->builder,
+                    MINIC_LOONG_MACHINE_ST_D, LOONG_T0,
+                    object_offset + chunk * 8U, dynamic, false))
+                return false;
+            continue;
+        }
+        for (byte = 0U; byte < payload; ++byte) {
+            if (object_offset + chunk * 8U > SIZE_MAX - byte ||
+                !loong_frame_memory(&sel->builder,
+                    MINIC_LOONG_MACHINE_ST_B, LOONG_T0,
+                    object_offset + chunk * 8U + byte, dynamic, false) ||
+                (byte + 1U < payload &&
+                 !loong_rri(&sel->builder, MINIC_LOONG_MACHINE_SRLI_D,
+                     LOONG_T0, LOONG_T0, 8))) return false;
+        }
+    }
+    return true;
 }
 
 static bool loong_select_parameter(LoongSelector *sel,
@@ -1565,6 +1745,12 @@ static bool loong_select_core(LoongSelector *sel,
     case MINIC_CORE_INSTRUCTION_ATOMIC_LOAD:
     case MINIC_CORE_INSTRUCTION_ATOMIC_STORE:
         return loong_select_memory(sel, ins);
+    case MINIC_CORE_INSTRUCTION_RECORD_LOAD:
+    case MINIC_CORE_INSTRUCTION_RECORD_COPY:
+    case MINIC_CORE_INSTRUCTION_VECTOR_STORAGE_COPY:
+        return loong_select_record_transfer(sel, ins);
+    case MINIC_CORE_INSTRUCTION_PARAMETER_OBJECT:
+        return loong_select_parameter_object(sel, ins);
     case MINIC_CORE_INSTRUCTION_PARAMETER:
         return loong_select_parameter(sel, ins);
     case MINIC_CORE_INSTRUCTION_CALL:

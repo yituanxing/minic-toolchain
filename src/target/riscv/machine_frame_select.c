@@ -57,8 +57,9 @@ static MinicMachineOperand rv_address(unsigned xlen, unsigned base,
     return result;
 }
 
-bool minic_riscv_machine_emit_selected(MinicMachineBuilder *builder,
-    uint32_t opcode, const MinicMachineOperand *operands, size_t count) {
+bool minic_riscv_machine_emit_selected_effects(MinicMachineBuilder *builder,
+    uint32_t opcode, unsigned int extra_effects,
+    const MinicMachineOperand *operands, size_t count) {
     MinicMachineOpcodeContract contract = {0};
     const MinicTargetInfo *target;
     size_t i;
@@ -66,6 +67,7 @@ bool minic_riscv_machine_emit_selected(MinicMachineBuilder *builder,
         (target = builder->function->target) == NULL ||
         !minic_riscv_machine_lookup_opcode_contract(
             target, opcode, &contract, NULL) ||
+        (extra_effects & ~contract.permitted_effects) != 0U ||
         contract.operand_count != count ||
         (count != 0U && operands == NULL)) return false;
     for (i = 0U; i < count; ++i)
@@ -74,9 +76,15 @@ bool minic_riscv_machine_emit_selected(MinicMachineBuilder *builder,
              operands[i].value.physical.access != contract.register_access[i]))
             return false;
     return minic_machine_builder_emit_selected(builder, opcode,
-        contract.required_effects, operands, count,
+        contract.required_effects | extra_effects, operands, count,
         contract.implicit_count != 0U ? contract.implicit : NULL,
         contract.implicit_count);
+}
+
+bool minic_riscv_machine_emit_selected(MinicMachineBuilder *builder,
+    uint32_t opcode, const MinicMachineOperand *operands, size_t count) {
+    return minic_riscv_machine_emit_selected_effects(
+        builder, opcode, 0U, operands, count);
 }
 
 #define rv_emit minic_riscv_machine_emit_selected

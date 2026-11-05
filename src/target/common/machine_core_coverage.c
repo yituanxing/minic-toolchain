@@ -120,6 +120,11 @@ static bool machine_source_asm_matches_core(
         machine_instruction->source_asm_template == NULL) return false;
     source = &core->inline_asms[source_id];
     return source->template_text != NULL &&
+        (!source->is_volatile ||
+         (machine_instruction->effects & MINIC_MACHINE_EFFECT_VOLATILE) != 0U) &&
+        (!source->has_memory_clobber ||
+         (machine_instruction->effects &
+             MINIC_MACHINE_EFFECT_COMPILER_BARRIER) != 0U) &&
         source->template_length == machine_instruction->source_asm_length &&
         memcmp(source->template_text,
                machine_instruction->source_asm_template,
@@ -134,6 +139,113 @@ static bool machine_source_asm_matches_core(
             machine_instruction->source_asm_unique_id;
 }
 
+/* A source asm-goto is a Core instruction, not the block terminator. Its
+ * explicit label edges must survive independently of the ordinary Core
+ * terminator. An opaque indirect branch targets all sealed indirect entries.
+ * The comparison never reparses source or assembler syntax. */
+static bool core_expected_successors(const MinicCoreFunction *core,
+    const bool *reachable, size_t block_id, unsigned char *expected) {
+    const MinicCoreBlock *block = &core->blocks[block_id];
+    const MinicCoreTerminator *term = &block->terminator;
+    size_t i;
+    if (!block->has_terminator) return false;
+    for (i = 0U; i < block->instruction_count; ++i) {
+        const MinicCoreInstruction *ins;
+        const MinicCoreInlineAsm *source;
+        MinicCoreInlineAsmId source_id;
+        if (block->instructions[i] >= core->instruction_count) return false;
+        ins = &core->instructions[block->instructions[i]];
+        if (ins->kind == MINIC_CORE_INSTRUCTION_OPAQUE_INLINE_ASM)
+            source_id = ins->value.inline_asm_id;
+        else if (ins->kind == MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM)
+            source_id = ins->value.structured_inline_asm.inline_asm_id;
+        else continue;
+        if (source_id >= core->inline_asm_count || core->inline_asms == NULL)
+            return false;
+        source = &core->inline_asms[source_id];
+        if (!source->is_goto) continue;
+        if (source->goto_target >= core->block_count ||
+            !reachable[source->goto_target]) return false;
+        expected[source->goto_target] = 1U;
+        if (source->goto_second_target != MINIC_CORE_BLOCK_INVALID) {
+            if (source->goto_second_target >= core->block_count ||
+                !reachable[source->goto_second_target]) return false;
+            expected[source->goto_second_target] = 1U;
+        }
+    }
+    switch (term->kind) {
+    case MINIC_CORE_TERMINATOR_RETURN:
+    case MINIC_CORE_TERMINATOR_UNREACHABLE:
+        return true;
+    case MINIC_CORE_TERMINATOR_BRANCH:
+        if (term->branch_target >= core->block_count ||
+            !reachable[term->branch_target]) return false;
+        expected[term->branch_target] = 1U;
+        return true;
+    case MINIC_CORE_TERMINATOR_CONDITIONAL_BRANCH:
+        if (term->conditional.when_true >= core->block_count ||
+            term->conditional.when_false >= core->block_count ||
+            !reachable[term->conditional.when_true] ||
+            !reachable[term->conditional.when_false]) return false;
+        expected[term->conditional.when_true] = 1U;
+        expected[term->conditional.when_false] = 1U;
+        return true;
+    case MINIC_CORE_TERMINATOR_INDIRECT_BRANCH:
+        for (i = 0U; i < core->block_count; ++i)
+            if (reachable[i] && core->blocks[i].indirect_entry)
+                expected[i] = 1U;
+        return true;
+    default:
+        return false;
+    }
+}
+
+/* Follow only target-created auxiliary blocks between primary Core blocks.
+ * This admits branch islands, spill/record-copy loops and conditional false
+ * islands, but rejects a wrong destination even if both Core blocks are
+ * globally reachable from the function entry. */
+static bool machine_core_edges_match(const MinicCoreFunction *core,
+    const bool *reachable, const MinicMachineFunction *machine,
+    const size_t *primary, size_t *queue, size_t *visit_stamps,
+    unsigned char *expected, unsigned char *actual) {
+    size_t core_id;
+    for (core_id = 0U; core_id < core->block_count; ++core_id) {
+        size_t head = 0U, tail = 1U;
+        if (!reachable[core_id]) continue;
+        memset(expected, 0, core->block_count * sizeof(*expected));
+        memset(actual, 0, core->block_count * sizeof(*actual));
+        if (!core_expected_successors(core, reachable, core_id, expected))
+            return false;
+        queue[0] = primary[core_id];
+        visit_stamps[primary[core_id]] = core_id + 1U;
+        while (head < tail) {
+            const MinicMachineBlock *block = &machine->blocks[queue[head++]];
+            const size_t edge_count = block->successor_count +
+                (block->has_fallthrough ? 1U : 0U);
+            size_t edge;
+            if (edge_count < block->successor_count) return false;
+            for (edge = 0U; edge < edge_count; ++edge) {
+                const size_t to = edge < block->successor_count
+                    ? block->successors[edge] : block->fallthrough_target;
+                const MinicMachineBlock *next;
+                if (to >= machine->block_count || to == 0U) return false;
+                next = &machine->blocks[to];
+                if (next->has_core_block_origin) {
+                    if (next->core_block_id >= core->block_count) return false;
+                    actual[next->core_block_id] = 1U;
+                } else if (visit_stamps[to] != core_id + 1U) {
+                    visit_stamps[to] = core_id + 1U;
+                    queue[tail++] = to;
+                }
+            }
+        }
+        if (memcmp(expected, actual,
+                   core->block_count * sizeof(*expected)) != 0)
+            return false;
+    }
+    return true;
+}
+
 bool minic_machine_core_coverage_verify(const MinicCoreFunction *core,
                                          const bool *reachable_blocks,
                                          const MinicMachineFunction *machine) {
@@ -144,6 +256,9 @@ bool minic_machine_core_coverage_verify(const MinicCoreFunction *core,
     size_t *primary = NULL;
     size_t *queue = NULL;
     unsigned char *visited = NULL;
+    size_t *visit_stamps = NULL;
+    unsigned char *expected = NULL;
+    unsigned char *actual = NULL;
     size_t i;
     bool valid = false;
     if (core == NULL || reachable_blocks == NULL || machine == NULL ||
@@ -156,7 +271,8 @@ bool minic_machine_core_coverage_verify(const MinicCoreFunction *core,
         core->instruction_count > SIZE_MAX / sizeof(*owner) ||
         core->instruction_count > SIZE_MAX / sizeof(*effects) ||
         core->block_count > SIZE_MAX / sizeof(*primary) ||
-        machine->block_count > SIZE_MAX / sizeof(*queue))
+        machine->block_count > SIZE_MAX / sizeof(*queue) ||
+        machine->block_count > SIZE_MAX / sizeof(*visit_stamps))
         return false;
     owner = malloc((core->instruction_count == 0U ? 1U :
                     core->instruction_count) * sizeof(*owner));
@@ -169,9 +285,13 @@ bool minic_machine_core_coverage_verify(const MinicCoreFunction *core,
     primary = malloc(core->block_count * sizeof(*primary));
     queue = malloc(machine->block_count * sizeof(*queue));
     visited = calloc(machine->block_count, sizeof(*visited));
+    visit_stamps = calloc(machine->block_count, sizeof(*visit_stamps));
+    expected = calloc(core->block_count, sizeof(*expected));
+    actual = calloc(core->block_count, sizeof(*actual));
     if (owner == NULL || effects == NULL || seen == NULL ||
         seen_source_asm == NULL || primary == NULL || queue == NULL ||
-        visited == NULL) goto cleanup;
+        visited == NULL || visit_stamps == NULL || expected == NULL ||
+        actual == NULL) goto cleanup;
     for (i = 0U; i < core->instruction_count; ++i) owner[i] = SIZE_MAX;
     for (i = 0U; i < core->block_count; ++i) primary[i] = SIZE_MAX;
     for (i = 0U; i < core->block_count; ++i) {
@@ -212,6 +332,8 @@ bool minic_machine_core_coverage_verify(const MinicCoreFunction *core,
             id = ins->core_instruction_id;
             if (ins->core_block_id >= core->block_count ||
                 !reachable_blocks[ins->core_block_id] ||
+                (block->has_core_block_origin &&
+                 ins->core_block_id != block->core_block_id) ||
                 id >= core->instruction_count ||
                 owner[id] != ins->core_block_id ||
                 ins->kind == MINIC_MACHINE_INSTRUCTION_DIRECTIVE ||
@@ -288,6 +410,17 @@ bool minic_machine_core_coverage_verify(const MinicCoreFunction *core,
     }
     for (i = 0U; i < core->block_count; ++i)
         if (reachable_blocks[i] && !visited[primary[i]]) goto cleanup;
+    for (i = 0U; i < machine->block_count; ++i) {
+        const MinicMachineBlock *block = &machine->blocks[i];
+        size_t j;
+        if (visited[i]) continue;
+        /* An unreachable physical island cannot prove a live Core effect. */
+        for (j = 0U; j < block->instruction_count; ++j)
+            if (block->instructions[j].has_core_origin) goto cleanup;
+    }
+    if (!machine_core_edges_match(core, reachable_blocks, machine, primary,
+                                  queue, visit_stamps, expected, actual))
+        goto cleanup;
     for (i = 0U; i < core->instruction_count; ++i) {
         CoreMachineDemand demand;
         if (owner[i] == SIZE_MAX || !reachable_blocks[owner[i]]) continue;
@@ -335,5 +468,8 @@ cleanup:
     free(primary);
     free(queue);
     free(visited);
+    free(visit_stamps);
+    free(expected);
+    free(actual);
     return valid;
 }

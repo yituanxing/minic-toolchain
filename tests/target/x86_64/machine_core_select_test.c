@@ -393,10 +393,306 @@ done:
     return okay;
 }
 
+/* Exercise the real call planner's sealed layout rather than admitting a
+ * second hand-rolled ABI classifier in the selector: 8 INTEGER + 9 SSE
+ * values exhaust both register banks and overflow onto three stack slots.
+ * A variadic signature additionally requires the final %al SSE count. */
+static bool scenario_planned_scalar_call(bool indirect, bool ms) {
+    MinicCoreTypeContext types;
+    MinicCoreFunction core = {0};
+    MinicTargetInfo target = {0};
+    MinicX86Frame frame = {0};
+    MinicMachineFunction machine = {0};
+    MinicMachineGNUAsmPolicy policy = {0};
+    MinicCoreType type = {0};
+    MinicCoreTypeId integer_id, float_id, signature_id, pointer_id;
+    MinicCoreTypeId parameter_types[17] = {0};
+    MinicCoreTypeId incoming_id;
+    MinicCoreBlockId block;
+    MinicCoreInstruction ins = {0};
+    MinicCoreTerminator term = {0};
+    MinicCoreValueId values[20] = {0};
+    MinicX86ArgLocation outgoing_locations[17] = {{0}};
+    MinicX86OutgoingCallSite outgoing = {0};
+    MinicX86ArgLocation incoming = {0};
+    size_t offsets[20] = {0};
+    size_t i, argc = indirect ? 2U : ms ? 5U : 17U;
+    size_t ins_id = SIZE_MAX;
+    size_t call_count = 0U, stack_writes = 0U;
+    size_t sse_moves = 0U, variadic_al = 0U, target_r11 = 0U;
+    FILE *output = NULL;
+    char assembly[18000];
+    size_t assembly_length;
+    bool reachable[1] = {false};
+    bool okay = false;
+    const char *stage = "initialize";
+    minic_core_type_context_initialize(&types);
+    minic_core_function_initialize(&core);
+    core.name = malloc(sizeof("x86_planned_call"));
+    if (core.name == NULL) goto done;
+    memcpy(core.name, "x86_planned_call", sizeof("x86_planned_call"));
+    core.name_length = sizeof("x86_planned_call") - 1U;
+    type.kind = MINIC_CORE_TYPE_INTEGER;
+    type.has_layout = true;
+    type.size = 8U;
+    type.alignment = 8U;
+    type.value.integer.is_signed = true;
+    type.value.integer.bit_width = 64U;
+    if (!minic_core_type_register(&types, &type, &integer_id)) goto done;
+    type = (MinicCoreType){0};
+    type.kind = MINIC_CORE_TYPE_FLOAT;
+    type.has_layout = true;
+    type.size = 8U;
+    type.alignment = 8U;
+    type.value.floating.format = MINIC_CORE_FLOAT_BINARY64;
+    if (!minic_core_type_register(&types, &type, &float_id)) goto done;
+    for (i = 0U; i < 17U; ++i)
+        parameter_types[i] = i < 8U ? integer_id : float_id;
+    if (indirect) parameter_types[1] = float_id;
+    if (ms) {
+        parameter_types[1] = float_id;
+        parameter_types[3] = float_id;
+    }
+    type = (MinicCoreType){0};
+    type.kind = MINIC_CORE_TYPE_FUNCTION;
+    type.value.function.return_type = integer_id;
+    type.value.function.parameters = parameter_types;
+    type.value.function.parameter_count = ms ? 5U : 2U;
+    type.value.function.is_variadic = !indirect && !ms;
+    type.value.function.calling_convention =
+        ms ? MINIC_CALLING_CONVENTION_MS_X64 :
+            MINIC_CALLING_CONVENTION_DEFAULT;
+    if (!minic_core_type_register(&types, &type, &signature_id)) goto done;
+    type = (MinicCoreType){0};
+    type.kind = MINIC_CORE_TYPE_POINTER;
+    type.has_layout = true;
+    type.size = 8U;
+    type.alignment = 8U;
+    type.value.pointer.pointee = signature_id;
+    if (!minic_core_type_register(&types, &type, &pointer_id)) goto done;
+    incoming_id = pointer_id;
+    if (!minic_core_function_define_signature(&core, &types,
+            integer_id, indirect ? &incoming_id : NULL,
+            indirect ? 1U : 0U, MINIC_CALLING_CONVENTION_DEFAULT,
+            false) || !minic_core_function_add_block(&core, &block))
+        goto done;
+    core.call_arguments = calloc(argc, sizeof(*core.call_arguments));
+    if (core.call_arguments == NULL) goto done;
+    core.call_argument_count = argc;
+    core.call_argument_capacity = argc;
+    if (indirect) {
+        core.call_signatures = calloc(1U, sizeof(*core.call_signatures));
+        if (core.call_signatures == NULL) goto done;
+        core.call_signature_count = 1U;
+        core.call_signature_capacity = 1U;
+        core.call_signatures[0].core_function_type_id = signature_id;
+        ins.kind = MINIC_CORE_INSTRUCTION_PARAMETER;
+        ins.core_type_id = pointer_id;
+        ins.value.parameter_index = 0U;
+        if (!minic_core_function_append_value_instruction(&core,
+                block, &ins, &values[0])) goto done;
+    } else {
+        core.callees = calloc(1U, sizeof(*core.callees));
+        if (core.callees == NULL) goto done;
+        core.callee_count = 1U;
+        core.callee_capacity = 1U;
+        core.callees[0].name = malloc(sizeof("planned_callee"));
+        if (core.callees[0].name == NULL) goto done;
+        memcpy(core.callees[0].name, "planned_callee",
+            sizeof("planned_callee"));
+        core.callees[0].name_length = sizeof("planned_callee") - 1U;
+        core.callees[0].core_function_type_id = signature_id;
+    }
+    for (i = 0U; i < argc; ++i) {
+        const size_t index = i + (indirect ? 1U : 0U);
+        ins = (MinicCoreInstruction){0};
+        ins.core_type_id = ms ?
+            (i == 1U || i == 3U ? float_id : integer_id) :
+            i < 8U ? integer_id : float_id;
+        if (indirect && i == 1U) ins.core_type_id = float_id;
+        ins.kind = ins.core_type_id == integer_id ?
+            MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT :
+            MINIC_CORE_INSTRUCTION_FLOATING_CONSTANT;
+        if (ins.kind == MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT)
+            ins.value.integer_value = (int64_t)(i + 10U);
+        else ins.value.floating_bits = UINT64_C(0x3ff0000000000000);
+        if (!minic_core_function_append_value_instruction(&core,
+                block, &ins, &values[index])) goto done;
+        core.call_arguments[i].kind = MINIC_CORE_CALL_ARGUMENT_VALUE;
+        core.call_arguments[i].value.value_id = values[index];
+    }
+    ins = (MinicCoreInstruction){0};
+    ins.core_type_id = integer_id;
+    if (indirect) {
+        ins.kind = MINIC_CORE_INSTRUCTION_INDIRECT_CALL;
+        ins.value.indirect_call.callee = values[0];
+        ins.value.indirect_call.signature_id = 0U;
+        ins.value.indirect_call.argument_begin = 0U;
+        ins.value.indirect_call.argument_count = argc;
+        ins.value.indirect_call.result_object = MINIC_CORE_OBJECT_INVALID;
+    } else {
+        ins.kind = MINIC_CORE_INSTRUCTION_CALL;
+        ins.value.call.callee_id = 0U;
+        ins.value.call.argument_begin = 0U;
+        ins.value.call.argument_count = argc;
+        ins.value.call.result_object = MINIC_CORE_OBJECT_INVALID;
+    }
+    ins_id = core.instruction_count;
+    if (!minic_core_function_append_value_instruction(&core,
+            block, &ins, &values[argc + (indirect ? 1U : 0U)])) goto done;
+    term.kind = MINIC_CORE_TERMINATOR_RETURN;
+    term.return_value = values[argc + (indirect ? 1U : 0U)];
+    if (!minic_core_function_set_terminator(&core, block, &term) ||
+        !minic_core_function_attach_type_context(&core, &types) ||
+        !minic_core_function_verify(&core)) goto done;
+    stage = "frame";
+    for (i = 0U; i < 20U; ++i) offsets[i] = (i + 1U) * 8U;
+    frame.value_offsets = offsets;
+    frame.value_count = core.value_count;
+    frame.frame_size = 256U;
+    if (indirect) {
+        incoming.kind = MINIC_X86_ARG_INTEGER;
+        incoming.gp_index = 0U;
+        frame.incoming_arguments.locations = &incoming;
+        frame.incoming_arguments.argument_count = 1U;
+        frame.incoming_arguments.calling_convention =
+            MINIC_CALLING_CONVENTION_DEFAULT;
+    }
+    for (i = 0U; i < argc; ++i) {
+        MinicX86ArgLocation *loc = &outgoing_locations[i];
+        if (indirect) {
+            loc->kind = i == 0U ? MINIC_X86_ARG_INTEGER : MINIC_X86_ARG_SSE;
+            loc->gp_index = 0U;
+            loc->fp_index = 0U;
+        } else if (ms) {
+            loc->kind = i == 1U || i == 3U ?
+                MINIC_X86_ARG_SSE : MINIC_X86_ARG_INTEGER;
+            loc->gp_index = i;
+            loc->fp_index = i;
+            if (i >= 4U) {
+                loc->on_stack = true;
+                loc->stack_index = i;
+            }
+        } else if (i < 8U) {
+            loc->kind = MINIC_X86_ARG_INTEGER;
+            loc->gp_index = i;
+            if (i >= 6U) {
+                loc->on_stack = true;
+                loc->stack_index = i - 6U;
+            }
+        } else {
+            loc->kind = MINIC_X86_ARG_SSE;
+            loc->fp_index = i - 8U;
+            if (i == 16U) {
+                loc->on_stack = true;
+                loc->stack_index = 2U;
+            }
+        }
+    }
+    outgoing.instruction_id = ins_id;
+    outgoing.plan.locations = outgoing_locations;
+    outgoing.plan.argument_count = argc;
+    outgoing.plan.stack_bytes = indirect ? 0U : ms ? 48U : 32U;
+    outgoing.plan.end.fp_used = indirect ? 1U : ms ? 2U : 8U;
+    outgoing.plan.calling_convention = ms ?
+        MINIC_CALLING_CONVENTION_MS_X64 :
+        MINIC_CALLING_CONVENTION_DEFAULT;
+    outgoing.plan.is_variadic = !indirect && !ms;
+    frame.outgoing_call_plans.sites = &outgoing;
+    frame.outgoing_call_plans.count = 1U;
+    target.architecture = MINIC_TARGET_ARCH_X86_64;
+    target.data_layout = minic_x86_64_linux_data_layout();
+    if (ms) target.call_lowering_capabilities =
+        MINIC_TARGET_CALL_MS_X64_FIXED_SCALAR;
+    stage = "select";
+    if (!minic_x86_64_machine_select_core_subset(&machine,
+            &target, &core, &frame) ||
+        !minic_core_function_mark_reachable_blocks(&core,
+            reachable, 1U) ||
+        !minic_machine_core_coverage_verify(&core,
+            reachable, &machine)) goto done;
+    for (i = 0U; i < machine.blocks[1].instruction_count; ++i) {
+        const MinicMachineInstruction *op =
+            &machine.blocks[1].instructions[i];
+        if (op->opcode == (indirect ? MINIC_X86_MI_CALL_SYSV_R :
+                ms ? MINIC_X86_MI_CALL_MS_SYMBOL :
+                    MINIC_X86_MI_CALL_SYSV_SYMBOL)) ++call_count;
+        if (op->opcode == MINIC_X86_MI_MOV64_RA) ++stack_writes;
+        if (op->opcode == MINIC_X86_MI_MOVQ_GPR_XMM) ++sse_moves;
+        if (op->opcode == MINIC_X86_MI_MOV8_IR) ++variadic_al;
+        if (indirect && op->opcode == MINIC_X86_MI_MOV64_FRBP_R &&
+            op->operand_count == 2U &&
+            op->operands[1].kind == MINIC_MACHINE_OPERAND_REGISTER &&
+            op->operands[1].value.physical.reg.number == MINIC_X86_REG_R11)
+            ++target_r11;
+    }
+    stage = "machine-ops";
+    okay = call_count == 1U &&
+        (indirect ? (stack_writes == 0U && sse_moves >= 1U &&
+            target_r11 == 1U && variadic_al == 0U) :
+        ms ? (stack_writes == 1U && sse_moves >= 2U &&
+            variadic_al == 0U) :
+            (stack_writes == 3U && sse_moves >= 8U && variadic_al == 1U));
+    if (!okay) goto done;
+    stage = "gnu-assembly";
+    output = tmpfile();
+    if (output == NULL ||
+        !minic_x86_64_machine_gnu_asm_policy(&target, &policy) ||
+        !minic_machine_gnu_asm_emit_body(output, &machine, &policy) ||
+        fflush(output) != 0 || fseek(output, 0L, SEEK_SET) != 0) {
+        okay = false;
+        goto done;
+    }
+    assembly_length = fread(assembly, 1U, sizeof(assembly) - 1U, output);
+    assembly[assembly_length] = '\0';
+    okay = indirect ? strstr(assembly, "call *%r11") != NULL :
+        strstr(assembly, "call planned_callee@PLT") != NULL;
+    if (okay && ms)
+        okay = strstr(assembly, "subq $48, %rsp") != NULL &&
+            strstr(assembly, "32(%rsp)") != NULL &&
+            strstr(assembly, "addq $48, %rsp") != NULL;
+    if (okay && !indirect && !ms)
+        okay = strstr(assembly, "subq $32, %rsp") != NULL &&
+            strstr(assembly, "movb $8, %al") != NULL &&
+            strstr(assembly, "16(%rsp)") != NULL &&
+            strstr(assembly, "addq $32, %rsp") != NULL;
+    if (okay) {
+        MinicMachineFunction rejected = {0};
+        const size_t saved_bytes = outgoing.plan.stack_bytes;
+        const size_t saved_count = frame.outgoing_call_plans.count;
+        stage = "reject-forged-abi-plan";
+        outgoing.plan.stack_bytes = 24U;
+        okay = !minic_x86_64_machine_select_core_subset(&rejected,
+            &target, &core, &frame);
+        minic_machine_function_destroy(&rejected);
+        outgoing.plan.stack_bytes = saved_bytes;
+        frame.outgoing_call_plans.count = 0U;
+        if (okay) {
+            rejected = (MinicMachineFunction){0};
+            okay = !minic_x86_64_machine_select_core_subset(&rejected,
+                &target, &core, &frame);
+            minic_machine_function_destroy(&rejected);
+        }
+        frame.outgoing_call_plans.count = saved_count;
+    }
+done:
+    if (!okay) fprintf(stderr,
+        "X86_CORE_MIR=FAIL planned-call indirect=%d ms=%d stage=%s\n",
+        indirect ? 1 : 0, ms ? 1 : 0, stage);
+    if (output != NULL) fclose(output);
+    minic_machine_function_destroy(&machine);
+    minic_core_function_destroy(&core);
+    minic_core_type_context_destroy(&types);
+    return okay;
+}
+
 int main(void) {
     if (!scenario(false, false) || !scenario(false, true) ||
         !scenario(true, false) || !scenario_parameter() ||
-        !scenario_float() || !scenario_direct_call()) return 1;
-    puts("X86_CORE_MIR=PASS cycle=1 physical_alu=1 parameter=1 sse2=1 direct_call=1 origin=1 fail_closed=1");
+        !scenario_float() || !scenario_direct_call() ||
+        !scenario_planned_scalar_call(false, false) ||
+        !scenario_planned_scalar_call(true, false) ||
+        !scenario_planned_scalar_call(false, true)) return 1;
+    puts("X86_CORE_MIR=PASS cycle=1 physical_alu=1 parameter=1 sse2=1 direct_call=1 mixed_vararg_stack=1 indirect_call=1 ms_shadow_stack=1 origin=1 fail_closed=1");
     return 0;
 }
