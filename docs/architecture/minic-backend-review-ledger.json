@@ -1010,6 +1010,11 @@
       "review_depth": "inventory",
       "ci_touched_in": []
     },
+    "src/target/riscv/asm_goto_source.h": {
+      "blob": "ebeafb28b90d564a07eabe99af4f0572650c679b",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
     "src/target/riscv/function_symbol.h": {
       "blob": "bb1d25b83d0df98d50fc1386ba17527de9daa175",
       "review_depth": "inventory",
