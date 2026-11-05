@@ -192,10 +192,15 @@ static bool loongarch64_emit_function(
     bool function_sections) {
     MinicDirectLP64AbiPolicy abi = loongarch64_abi_policy;
     const MinicDirectLP64FunctionEmitter emitter = {
-        "loongarch64", &abi,
-        "@progbits", "@function", "@init_array", "quad",
-        loongarch64_emit_prologue, minic_loongarch64_emit_core_blocks,
-        minic_loongarch64_qualified_opaque_asm
+        .architecture = "loongarch64",
+        .abi = &abi,
+        .text_section_type = "@progbits",
+        .elf_function_type = "@function",
+        .init_array_type = "@init_array",
+        .init_word_directive = "quad",
+        .emit_prologue = loongarch64_emit_prologue,
+        .emit_core_blocks = minic_loongarch64_emit_core_blocks,
+        .qualify_opaque_asm = minic_loongarch64_qualified_opaque_asm
     };
     bool success;
     if (target == NULL || fn == NULL) return false;

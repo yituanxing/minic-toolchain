@@ -29,6 +29,18 @@ typedef struct {
     size_t saved_entry_sp_offset;
 } MinicA64FrameView;
 
+/* Shared physical AArch64 frame resolution used by both the legacy GNU
+ * emitter and Machine IR selector.  A saved-entry-SP path needs an explicit
+ * load of the stored stack pointer before addressing incoming arguments. */
+typedef struct {
+    unsigned int base_register; /* x19 or SP(32) */
+    size_t displacement;
+    bool saved_entry_frame_sp;
+} MinicA64ResolvedFrame;
+
+bool minic_a64_resolve_frame(const MinicA64FrameView *,
+    MinicA64FrameRef, MinicA64ResolvedFrame *);
+
 typedef enum {
     MINIC_A64_REG_W,
     MINIC_A64_REG_X,

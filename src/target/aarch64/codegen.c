@@ -139,10 +139,20 @@ static bool aarch64_emit_function(
     const MinicCoreObjectStoragePlan *storage, size_t id,
     bool function_sections) {
     static const MinicDirectLP64FunctionEmitter emitter = {
-        "aarch64", &aarch64_abi_policy,
-        "%progbits", "%function", "%init_array", "xword",
-        aarch64_emit_prologue, minic_aarch64_emit_core_blocks,
-        minic_aarch64_qualified_opaque_asm
+        .architecture = "aarch64",
+        .abi = &aarch64_abi_policy,
+        .text_section_type = "%progbits",
+        .elf_function_type = "%function",
+        .init_array_type = "%init_array",
+        .init_word_directive = "xword",
+        .emit_prologue = aarch64_emit_prologue,
+        .emit_core_blocks = minic_aarch64_emit_core_blocks,
+        .qualify_opaque_asm = minic_aarch64_qualified_opaque_asm,
+        /* Full-Core instruction selection and sealed Linux source-ASM
+         * admission are not migrated yet; keep this function on its proven
+         * legacy path instead of mixing partial Machine IR with FILE*. */
+        .select_machine = NULL,
+        .initialize_machine_asm_policy = NULL
     };
     return minic_multi_direct_lp64_emit_function(
         out, target, module, module_decl, fn, facts, storage,

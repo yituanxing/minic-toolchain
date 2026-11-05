@@ -211,6 +211,7 @@ MINIC_SOURCES := \
 	src/target/riscv/isa_resolve.c \
 	src/target/riscv/machine_opcode.c \
 	src/target/riscv/machine_gnu_asm.c \
+	src/target/riscv/machine_frame_select.c \
 	src/target/riscv64/isa.c \
 	src/target/riscv32/rv32_emit.c \
 	src/target/riscv32/rv32_integer_emit.c \
@@ -251,6 +252,7 @@ MINIC_SOURCES := \
 	src/target/x86_64/codegen.c \
 	src/target/x86_64/machine_opcode.c \
 	src/target/x86_64/machine_gnu_asm.c \
+	src/target/x86_64/machine_frame_select.c \
 	src/target/x86_64/machine_emit.c \
 	src/target/x86_64/asm_contract.c \
 	src/target/x86_64/asm_contract_source.c \
@@ -266,6 +268,9 @@ MINIC_SOURCES := \
 	src/target/aarch64/abi.c \
 	src/target/aarch64/machine_opcode.c \
 	src/target/aarch64/machine_gnu_asm.c \
+	src/target/aarch64/machine_frame_select.c \
+	src/target/aarch64/machine_core_select.c \
+	src/target/aarch64/machine_source_asm.c \
 	src/target/aarch64/codegen.c \
 	src/target/aarch64/frame_emit.c \
 	src/target/aarch64/neon_emit.c \
@@ -281,6 +286,8 @@ MINIC_SOURCES := \
 	src/target/loongarch64/codegen.c \
 	src/target/loongarch64/machine_opcode.c \
 	src/target/loongarch64/machine_gnu_asm.c \
+	src/target/loongarch64/machine_select.c \
+	src/target/loongarch64/machine_source_asm.c \
 	src/target/loongarch64/asm_contract.c \
 	src/target/loongarch64/asm_contract_source.c \
 	src/target/loongarch64/simd_asm.c \
@@ -2362,12 +2369,151 @@ check-direct-machine-gnu-asm:
 	  src/target/common/machine_gnu_asm.c \
 	  src/target/aarch64/machine_opcode.c \
 	  src/target/aarch64/machine_gnu_asm.c \
+	  src/target/aarch64/machine_source_asm.c \
 	  src/target/loongarch64/machine_opcode.c \
 	  src/target/loongarch64/machine_gnu_asm.c \
+	  src/target/loongarch64/machine_source_asm.c \
 	  -o "$(BUILD_DIR)/tests/direct-machine-gnu-asm"
 	"$(BUILD_DIR)/tests/direct-machine-gnu-asm"
 
 check-fast: check-direct-machine-gnu-asm
+
+# A64/Loong Core->GNU migration: strict pre-MIR golden A/B is safe on current
+# HEAD. The separate opt-in production gate also traps the actual invocation
+# of the typed MachineIR serializer in the running minic-cc process; do NOT
+# attach it to check-fast until both full selectors are switched over.
+.PHONY: check-a64-loong-mir-golden check-a64-loong-mir-production check-five-machine-mir-golden
+check-a64-loong-mir-golden: $(MINIC_CC_BINARY)
+	python3 tests/compiler/mir-migration/probe_machine_ir.py \
+	  --mode golden --minic-cc "$(abspath $(MINIC_CC_BINARY))" \
+	  --build-dir "$(abspath $(BUILD_DIR))" --host-cc "$(CC)"
+
+check-five-machine-mir-golden: $(MINIC_CC_BINARY)
+	python3 tests/compiler/mir-migration/probe_machine_ir.py \
+	  --mode golden --targets five --minic-cc "$(abspath $(MINIC_CC_BINARY))" \
+	  --build-dir "$(abspath $(BUILD_DIR))" --host-cc "$(CC)"
+
+check-a64-loong-mir-production: $(MINIC_CC_BINARY)
+	python3 tests/compiler/mir-migration/probe_machine_ir.py \
+	  --mode production --minic-cc "$(abspath $(MINIC_CC_BINARY))" \
+	  --build-dir "$(abspath $(BUILD_DIR))" --host-cc "$(CC)"
+
+.PHONY: check-a64-machine-mir-frame-select
+check-a64-machine-mir-frame-select:
+	mkdir -p "$(BUILD_DIR)/tests"
+	$(CC) -std=c11 -Wall -Wextra -Wpedantic -Werror $(MINIC_INCLUDES) \
+	  -ffunction-sections -fdata-sections -Wl,--gc-sections \
+	  tests/target/aarch64/machine_frame_select_test.c \
+	  src/target/common/machine_ir.c \
+	  src/target/common/machine_builder.c \
+	  src/target/common/machine_ir_verify.c \
+	  src/target/common/machine_gnu_asm.c \
+	  src/target/data_layout.c \
+	  src/target/aarch64/machine_frame_select.c \
+	  src/target/aarch64/frame_emit.c \
+	  src/target/aarch64/machine_opcode.c \
+	  src/target/aarch64/machine_gnu_asm.c \
+	  src/target/aarch64/machine_source_asm.c \
+	  -o "$(BUILD_DIR)/tests/a64-machine-mir-frame-select"
+	"$(BUILD_DIR)/tests/a64-machine-mir-frame-select"
+
+.PHONY: check-loong-machine-mir-select
+check-loong-machine-mir-select:
+	mkdir -p "$(BUILD_DIR)/tests"
+	$(CC) -std=c11 -Wall -Wextra -Wpedantic -Werror $(MINIC_INCLUDES) \
+	  -ffunction-sections -fdata-sections -Wl,--gc-sections \
+	  tests/target/loongarch64/machine_select_test.c \
+	  src/target/data_layout.c \
+	  src/target/common/machine_ir.c \
+	  src/target/common/machine_builder.c \
+	  src/target/common/machine_ir_verify.c \
+	  src/target/common/machine_gnu_asm.c \
+	  src/target/loongarch64/machine_opcode.c \
+	  src/target/loongarch64/machine_gnu_asm.c \
+	  src/target/loongarch64/machine_source_asm.c \
+	  src/target/loongarch64/machine_select.c \
+	  -o "$(BUILD_DIR)/tests/loong-machine-mir-select"
+	"$(BUILD_DIR)/tests/loong-machine-mir-select"
+
+.PHONY: check-a64-machine-core-select
+check-a64-machine-core-select:
+	mkdir -p "$(BUILD_DIR)/tests"
+	$(CC) -std=c11 -Wall -Wextra -Wpedantic -Werror $(MINIC_INCLUDES) \
+	  -ffunction-sections -fdata-sections -Wl,--gc-sections \
+	  tests/target/aarch64/machine_core_select_test.c \
+	  src/core/core_ir.c src/core/core_type.c \
+	  src/core/core_ir_verify.c src/core/module_ir.c \
+	  src/target/data_layout.c \
+	  src/target/common/machine_ir.c \
+	  src/target/common/machine_builder.c \
+	  src/target/common/machine_ir_verify.c \
+	  src/target/common/machine_gnu_asm.c \
+	  src/target/common/lp64_scalar.c \
+	  src/target/common/lp64_frame.c \
+	  src/target/common/core_numeric_shape.c \
+	  src/target/common/direct_instruction_semantics.c \
+	  src/target/common/direct_residual_plan.c \
+	  src/target/common/elf_module_symbol_info.c \
+	  src/target/aarch64/machine_opcode.c \
+	  src/target/aarch64/machine_gnu_asm.c \
+	  src/target/aarch64/machine_source_asm.c \
+	  src/target/aarch64/machine_frame_select.c \
+	  src/target/aarch64/machine_core_select.c \
+	  src/target/aarch64/frame_emit.c \
+	  -o "$(BUILD_DIR)/tests/a64-machine-core-select"
+	"$(BUILD_DIR)/tests/a64-machine-core-select"
+
+.PHONY: check-loong-machine-source-asm
+check-loong-machine-source-asm:
+	mkdir -p "$(BUILD_DIR)/tests"
+	$(CC) -std=c11 -Wall -Wextra -Wpedantic -Werror $(MINIC_INCLUDES) \
+	  tests/target/loong_machine_source_asm_test.c \
+	  src/target/loongarch64/machine_source_asm.c \
+	  src/target/common/machine_ir.c \
+	  src/target/common/machine_builder.c \
+	  -o "$(BUILD_DIR)/tests/loong-machine-source-asm"
+	"$(BUILD_DIR)/tests/loong-machine-source-asm"
+
+.PHONY: check-a64-machine-source-asm
+check-a64-machine-source-asm:
+	mkdir -p "$(BUILD_DIR)/tests"
+	$(CC) -std=c11 -Wall -Wextra -Wpedantic -Werror $(MINIC_INCLUDES) \
+	  tests/target/aarch64/machine_source_asm_test.c \
+	  src/target/aarch64/machine_source_asm.c \
+	  -o "$(BUILD_DIR)/tests/a64-machine-source-asm"
+	"$(BUILD_DIR)/tests/a64-machine-source-asm"
+
+.PHONY: check-x86-machine-frame-select
+check-x86-machine-frame-select:
+	mkdir -p "$(BUILD_DIR)/tests"
+	$(CC) -std=c11 -Wall -Wextra -Wpedantic -Werror $(MINIC_INCLUDES) \
+	  -ffunction-sections -fdata-sections -Wl,--gc-sections \
+	  tests/target/x86_64/machine_frame_select_test.c \
+	  src/target/data_layout.c \
+	  src/target/common/machine_ir.c \
+	  src/target/common/machine_builder.c \
+	  src/target/common/machine_ir_verify.c \
+	  src/target/common/machine_gnu_asm.c \
+	  src/target/x86_64/machine_opcode.c \
+	  src/target/x86_64/machine_gnu_asm.c \
+	  src/target/x86_64/machine_frame_select.c \
+	  -o "$(BUILD_DIR)/tests/x86-machine-frame-select"
+	"$(BUILD_DIR)/tests/x86-machine-frame-select"
+
+.PHONY: check-riscv-machine-frame-select
+check-riscv-machine-frame-select:
+	mkdir -p "$(BUILD_DIR)/tests"
+	$(CC) -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror $(MINIC_INCLUDES) \
+	  tests/target/riscv_machine_frame_select_test.c \
+	  src/target/riscv/machine_frame_select.c \
+	  src/target/riscv/machine_opcode.c \
+	  src/target/riscv/machine_gnu_asm.c \
+	  src/target/common/machine_ir.c \
+	  src/target/common/machine_builder.c \
+	  src/target/common/machine_ir_verify.c \
+	  src/target/common/machine_gnu_asm.c \
+	  -o "$(BUILD_DIR)/tests/riscv-machine-frame-select"
+	"$(BUILD_DIR)/tests/riscv-machine-frame-select"
 
 .PHONY: check-x86-machine-gnu-asm
 check-x86-machine-gnu-asm:

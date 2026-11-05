@@ -6,10 +6,10 @@
 #include <string.h>
 
 typedef enum A64Form {
-    A64_FORM_RR, A64_FORM_RRR, A64_FORM_RRRR,
+    A64_FORM_RR, A64_FORM_RRR, A64_FORM_RRRR, A64_FORM_RRRI,
     A64_FORM_RI, A64_FORM_RII, A64_FORM_RRI,
     A64_FORM_CMP, A64_FORM_CMP_IMM, A64_FORM_CSET,
-    A64_FORM_MEMORY, A64_FORM_FRAME, A64_FORM_PAIR,
+    A64_FORM_MEMORY, A64_FORM_MEMORY_POST_BYTE, A64_FORM_FRAME, A64_FORM_PAIR,
     A64_FORM_ADRP, A64_FORM_ADD_LO12, A64_FORM_GOT_LOAD,
     A64_FORM_BLOCK, A64_FORM_COND_BLOCK, A64_FORM_REG_BLOCK,
     A64_FORM_REG, A64_FORM_CALL_SYMBOL, A64_FORM_NONE,
@@ -67,6 +67,10 @@ static const A64Spec a64_specs[MINIC_A64_MACHINE_NOP + 1U] = {
     [MINIC_A64_MACHINE_NGC] = {"ngc", A64_FORM_RR, 0,
         .reads_flags = true},
     OP(ADD_IMM, "add", RRI, 0), OP(SUB_IMM, "sub", RRI, 0),
+    [MINIC_A64_MACHINE_ADDS_IMM] = {"adds", A64_FORM_RRI, 0, .writes_flags = true},
+    [MINIC_A64_MACHINE_SUBS_IMM] = {"subs", A64_FORM_RRI, 0, .writes_flags = true},
+    OP(AND_ALIGN_IMM, "and", RRI, 0),
+    OP(ORR_LSL, "orr", RRRI, 0),
     OP(LSL_IMM, "lsl", RRI, 0), OP(LSR_IMM, "lsr", RRI, 0),
     OP(ASR_IMM, "asr", RRI, 0),
     [MINIC_A64_MACHINE_CMP] = {"cmp", A64_FORM_CMP, 0, .writes_flags = true},
@@ -83,12 +87,16 @@ static const A64Spec a64_specs[MINIC_A64_MACHINE_NOP + 1U] = {
     [MINIC_A64_MACHINE_STRH] = {"strh", A64_FORM_MEMORY, W, 2},
     [MINIC_A64_MACHINE_STR_W] = {"str", A64_FORM_MEMORY, W, 4},
     [MINIC_A64_MACHINE_STR_X] = {"str", A64_FORM_MEMORY, W, 8},
+    [MINIC_A64_MACHINE_LDRB_POST] = {"ldrb", A64_FORM_MEMORY_POST_BYTE, R, 1},
+    [MINIC_A64_MACHINE_STRB_POST] = {"strb", A64_FORM_MEMORY_POST_BYTE, W, 1},
     [MINIC_A64_MACHINE_LDR_FRAME_W] = {"ldr", A64_FORM_FRAME, R, 4},
     [MINIC_A64_MACHINE_LDR_FRAME_X] = {"ldr", A64_FORM_FRAME, R, 8},
     [MINIC_A64_MACHINE_STR_FRAME_W] = {"str", A64_FORM_FRAME, W, 4},
     [MINIC_A64_MACHINE_STR_FRAME_X] = {"str", A64_FORM_FRAME, W, 8},
     [MINIC_A64_MACHINE_STP_PRE_X] = {"stp", A64_FORM_PAIR, W, 8},
     [MINIC_A64_MACHINE_LDP_POST_X] = {"ldp", A64_FORM_PAIR, R, 8},
+    [MINIC_A64_MACHINE_STP_OFFSET_X] = {"stp", A64_FORM_PAIR, W, 8},
+    [MINIC_A64_MACHINE_LDP_OFFSET_X] = {"ldp", A64_FORM_PAIR, R, 8},
     OP(ADRP, "adrp", ADRP, 0), OP(ADD_LO12, "add", ADD_LO12, 0),
     [MINIC_A64_MACHINE_LDR_GOT_LO12] = {"ldr", A64_FORM_GOT_LOAD, R, 8},
     [MINIC_A64_MACHINE_B] = {"b", A64_FORM_BLOCK, B, .ends_block = true},
@@ -220,6 +228,9 @@ static bool a64_address(const MinicTargetInfo *target,
     case MINIC_A64_ADDRESS_POST_INDEX:
         return !address->has_symbol && address->displacement >= -512 &&
             address->displacement <= 504;
+    case MINIC_A64_ADDRESS_PAIR_OFFSET:
+        return !address->has_symbol && address->displacement >= -512 &&
+            address->displacement <= 504;
     case MINIC_A64_ADDRESS_GOT_LO12:
         return address->has_symbol && address->symbol != NULL &&
             address->relocation == MINIC_A64_RELOC_GOT_LO12 &&
@@ -246,6 +257,9 @@ static bool a64_lookup(const MinicTargetInfo *target, uint32_t opcode,
     case A64_FORM_RR: REG(WRITE); REG(READ); break;
     case A64_FORM_RRR: REG(WRITE); REG(READ); REG(READ); break;
     case A64_FORM_RRRR: REG(WRITE); REG(READ); REG(READ); REG(READ); break;
+    case A64_FORM_RRRI:
+        REG(WRITE); REG(READ); REG(READ);
+        ARG(MINIC_MACHINE_OPERAND_INTEGER); break;
     case A64_FORM_RI: REG(WRITE); ARG(MINIC_MACHINE_OPERAND_INTEGER); break;
     case A64_FORM_RII:
         REG(spec->updates_dest ? READ | WRITE : WRITE);
@@ -260,6 +274,9 @@ static bool a64_lookup(const MinicTargetInfo *target, uint32_t opcode,
     case A64_FORM_MEMORY:
         REG((spec->effects & MINIC_MACHINE_EFFECT_MEMORY_READ) ? WRITE : READ);
         ARG(MINIC_MACHINE_OPERAND_ADDRESS); break;
+    case A64_FORM_MEMORY_POST_BYTE:
+        REG((spec->effects & MINIC_MACHINE_EFFECT_MEMORY_READ) ? WRITE : READ);
+        REG(READ | WRITE); ARG(MINIC_MACHINE_OPERAND_INTEGER); break;
     case A64_FORM_FRAME:
         REG((spec->effects & MINIC_MACHINE_EFFECT_MEMORY_READ) ? WRITE : READ);
         ARG(MINIC_MACHINE_OPERAND_FRAME); break;
@@ -347,7 +364,9 @@ static bool a64_lookup(const MinicTargetInfo *target, uint32_t opcode,
             a64_implicit(30U, MINIC_MACHINE_REGISTER_GENERAL, 64U),
             MINIC_MACHINE_REGISTER_READ);
     }
-    if (spec->form == A64_FORM_PAIR) {
+    if (spec->form == A64_FORM_PAIR &&
+        (opcode == MINIC_A64_MACHINE_STP_PRE_X ||
+         opcode == MINIC_A64_MACHINE_LDP_POST_X)) {
         MinicMachineRegisterEffect *effect =
             &contract->implicit[contract->implicit_count++];
         effect->reg = a64_implicit(MINIC_A64_MACHINE_SP,
@@ -428,6 +447,7 @@ static bool a64_legal_selected(const MinicMachineFunction *function,
             : a64_same_width(&ops[0], &ops[1]);
     case A64_FORM_RRR:
     case A64_FORM_RRRR:
+    case A64_FORM_RRRI:
     case A64_FORM_RRI:
         for (index = 1U; index < ins->operand_count; ++index)
             if (ops[index].kind == MINIC_MACHINE_OPERAND_REGISTER &&
@@ -438,14 +458,30 @@ static bool a64_legal_selected(const MinicMachineFunction *function,
                   ops[index].value.physical.reg.width_bits == 32U)) return false;
         for (index = 0U; index < ins->operand_count; ++index)
             if (ops[index].kind == MINIC_MACHINE_OPERAND_REGISTER &&
-                ops[index].value.physical.reg.number == MINIC_A64_MACHINE_SP)
-                return false;
+                ops[index].value.physical.reg.number == MINIC_A64_MACHINE_SP &&
+                !((ins->opcode == MINIC_A64_MACHINE_ADD ||
+                   ins->opcode == MINIC_A64_MACHINE_SUB ||
+                   ins->opcode == MINIC_A64_MACHINE_ADD_IMM ||
+                   ins->opcode == MINIC_A64_MACHINE_SUB_IMM) &&
+                  index <= 1U)) return false;
         if (ins->opcode == MINIC_A64_MACHINE_MSUB &&
             ops[0].value.physical.reg.number == MINIC_A64_MACHINE_SP) return false;
+        if (spec->form == A64_FORM_RRRI)
+            return ops[3].value.integer >= 0 &&
+                ops[3].value.integer <
+                    ops[0].value.physical.reg.width_bits;
         if (spec->form != A64_FORM_RRI) return true;
         if (ins->opcode == MINIC_A64_MACHINE_ADD_IMM ||
-            ins->opcode == MINIC_A64_MACHINE_SUB_IMM)
+            ins->opcode == MINIC_A64_MACHINE_SUB_IMM ||
+            ins->opcode == MINIC_A64_MACHINE_ADDS_IMM ||
+            ins->opcode == MINIC_A64_MACHINE_SUBS_IMM)
             return ops[2].value.integer >= 0 && ops[2].value.integer <= 4095;
+        if (ins->opcode == MINIC_A64_MACHINE_AND_ALIGN_IMM) {
+            const int64_t imm = ops[2].value.integer;
+            if (imm > -16 || imm < -256) return false;
+            const uint64_t alignment = (uint64_t)(-imm);
+            return (alignment & (alignment - 1U)) == 0U;
+        }
         return ops[2].value.integer >= 0 &&
             ops[2].value.integer < ops[0].value.physical.reg.width_bits;
     case A64_FORM_RII:
@@ -476,6 +512,15 @@ static bool a64_legal_selected(const MinicMachineFunction *function,
             ((spec->memory_width == 1U || spec->memory_width == 2U) &&
              bits == 32U) || (load_signed && bits == 64U);
     }
+    case A64_FORM_MEMORY_POST_BYTE:
+        return ops[0].value.physical.reg.width_bits == 32U &&
+            ops[0].value.physical.reg.number < 31U &&
+            ops[1].value.physical.reg.width_bits == 64U &&
+            ops[1].value.physical.reg.number <= MINIC_A64_MACHINE_SP &&
+            ops[1].value.physical.reg.number != MINIC_A64_MACHINE_ZR &&
+            ops[0].value.physical.reg.number !=
+                ops[1].value.physical.reg.number &&
+            ops[2].value.integer >= -256 && ops[2].value.integer <= 255;
     case A64_FORM_FRAME:
         /* The owner has to resolve an entry-SP-dependent reference into
          * explicit selected loads/address materializations first. */
@@ -485,14 +530,20 @@ static bool a64_legal_selected(const MinicMachineFunction *function,
                 &frame_base, &frame_offset);
     case A64_FORM_PAIR: {
         const MinicMachineAddress *a = &ops[2].value.address;
+        const bool offset_pair =
+            ins->opcode == MINIC_A64_MACHINE_STP_OFFSET_X ||
+            ins->opcode == MINIC_A64_MACHINE_LDP_OFFSET_X;
         return ops[0].value.physical.reg.width_bits == 64U &&
             ops[1].value.physical.reg.width_bits == 64U &&
-            a->has_base && a->base.number == MINIC_A64_MACHINE_SP &&
+            a->has_base && a->base.number <= MINIC_A64_MACHINE_SP &&
+            a->base.number != MINIC_A64_MACHINE_ZR &&
+            (offset_pair || a->base.number == MINIC_A64_MACHINE_SP) &&
             a->base.width_bits == 64U && !a->has_symbol &&
             a->displacement >= -512 && a->displacement <= 504 &&
             (a->displacement % 8) == 0 &&
-            a->target_mode == (ins->opcode == MINIC_A64_MACHINE_STP_PRE_X
-                ? MINIC_A64_ADDRESS_PRE_INDEX : MINIC_A64_ADDRESS_POST_INDEX);
+            a->target_mode == (offset_pair ? MINIC_A64_ADDRESS_PAIR_OFFSET :
+                ins->opcode == MINIC_A64_MACHINE_STP_PRE_X
+                    ? MINIC_A64_ADDRESS_PRE_INDEX : MINIC_A64_ADDRESS_POST_INDEX);
     }
     case A64_FORM_ADRP:
         return ops[0].value.physical.reg.width_bits == 64U &&
@@ -630,11 +681,15 @@ static bool a64_serialize(FILE *out, const MinicMachineFunction *function,
             fprintf(out, "  %s %s, %s\n", spec->name, a, b) >= 0;
     case A64_FORM_RRR:
     case A64_FORM_RRRR:
+    case A64_FORM_RRRI:
         if (!a64_gp_text(&o[0].value.physical.reg, a, sizeof(a)) ||
             !a64_gp_text(&o[1].value.physical.reg, b, sizeof(b)) ||
             !a64_gp_text(&o[2].value.physical.reg, c, sizeof(c))) return false;
         if (spec->form == A64_FORM_RRR)
             return fprintf(out, "  %s %s, %s, %s\n", spec->name, a, b, c) >= 0;
+        if (spec->form == A64_FORM_RRRI)
+            return fprintf(out, "  %s %s, %s, %s, lsl #%" PRId64 "\n",
+                spec->name, a, b, c, o[3].value.integer) >= 0;
         return a64_gp_text(&o[3].value.physical.reg, d, sizeof(d)) &&
             fprintf(out, "  %s %s, %s, %s, %s\n", spec->name, a, b, c, d) >= 0;
     case A64_FORM_RII:
@@ -667,6 +722,11 @@ static bool a64_serialize(FILE *out, const MinicMachineFunction *function,
         return fprintf(out, "  %s %s, [%s, #%" PRId64 "]\n",
             spec->name, a, base, addr->displacement) >= 0;
     }
+    case A64_FORM_MEMORY_POST_BYTE:
+        return a64_gp_text(&o[0].value.physical.reg, a, sizeof(a)) &&
+            a64_gp_text(&o[1].value.physical.reg, base, sizeof(base)) &&
+            fprintf(out, "  %s %s, [%s], #%" PRId64 "\n",
+                spec->name, a, base, o[2].value.integer) >= 0;
     case A64_FORM_FP_RR:
     case A64_FORM_FP_CONVERT:
     case A64_FORM_FP_CMP:
@@ -706,12 +766,18 @@ static bool a64_serialize(FILE *out, const MinicMachineFunction *function,
             spec->name, a, frame_base == MINIC_A64_MACHINE_SP ? "sp" : "x19",
             frame_offset) >= 0;
     case A64_FORM_PAIR:
-        return a64_gp_text(&o[0].value.physical.reg, a, sizeof(a)) &&
-            a64_gp_text(&o[1].value.physical.reg, b, sizeof(b)) &&
-            fprintf(out, ins->opcode == MINIC_A64_MACHINE_STP_PRE_X
-                ? "  stp %s, %s, [sp, #%" PRId64 "]!\n"
-                : "  ldp %s, %s, [sp], #%" PRId64 "\n",
-                a, b, o[2].value.address.displacement) >= 0;
+        if (!a64_gp_text(&o[0].value.physical.reg, a, sizeof(a)) ||
+            !a64_gp_text(&o[1].value.physical.reg, b, sizeof(b)) ||
+            !a64_gp_text(&o[2].value.address.base, base, sizeof(base)))
+            return false;
+        if (ins->opcode == MINIC_A64_MACHINE_STP_PRE_X)
+            return fprintf(out, "  stp %s, %s, [%s, #%" PRId64 "]!\n",
+                a, b, base, o[2].value.address.displacement) >= 0;
+        if (ins->opcode == MINIC_A64_MACHINE_LDP_POST_X)
+            return fprintf(out, "  ldp %s, %s, [%s], #%" PRId64 "\n",
+                a, b, base, o[2].value.address.displacement) >= 0;
+        return fprintf(out, "  %s %s, %s, [%s, #%" PRId64 "]\n",
+            spec->name, a, b, base, o[2].value.address.displacement) >= 0;
     case A64_FORM_ADRP:
         return a64_gp_text(&o[0].value.physical.reg, a, sizeof(a)) &&
             fprintf(out, "  adrp %s, %s%s\n", a,

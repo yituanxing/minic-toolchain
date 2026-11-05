@@ -90,6 +90,10 @@ typedef enum MinicLoongMachineOpcode {
     MINIC_LOONG_MACHINE_ST_FRAME_D,
     MINIC_LOONG_MACHINE_PCADDI,
     MINIC_LOONG_MACHINE_LA_GLOBAL,
+    /* TU-private symbols and computed-goto addresses are distinct fixups.
+     * A BLOCK_ADDRESS is a data use, not a CFG successor. */
+    MINIC_LOONG_MACHINE_LA_LOCAL,
+    MINIC_LOONG_MACHINE_LA_BLOCK_ADDRESS,
     MINIC_LOONG_MACHINE_B,
     MINIC_LOONG_MACHINE_BEQZ,
     MINIC_LOONG_MACHINE_BNEZ,

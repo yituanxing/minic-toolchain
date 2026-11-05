@@ -3,20 +3,14 @@
 #include <inttypes.h>
 #include <string.h>
 
-typedef struct {
-    const char *base;
-    size_t displacement;
-    bool saved_entry_frame_sp;
-} MinicA64ResolvedFrame;
-
 static bool a64_add(size_t lhs, size_t rhs, size_t *result) {
     if (result == NULL || lhs > SIZE_MAX - rhs) return false;
     *result = lhs + rhs;
     return true;
 }
 
-static bool a64_resolve(const MinicA64FrameView *view,
-                        MinicA64FrameRef ref, MinicA64ResolvedFrame *out) {
+bool minic_a64_resolve_frame(const MinicA64FrameView *view,
+                            MinicA64FrameRef ref, MinicA64ResolvedFrame *out) {
     if (view == NULL || out == NULL) return false;
     out->saved_entry_frame_sp = false;
     switch (ref.region) {
@@ -24,7 +18,7 @@ static bool a64_resolve(const MinicA64FrameView *view,
         /* Reject an unmapped Core SSA sentinel before any address
          * materialization. Owned offsets must fit the shared LP64 plan. */
         if (ref.byte_offset > MINIC_LARGE_FRAME_MAX) return false;
-        out->base = view->dynamic_frame ? "x19" : "sp";
+        out->base_register = view->dynamic_frame ? 19U : 32U;
         if (!view->dynamic_frame &&
             !a64_add(ref.byte_offset, view->outgoing_sp_bytes,
                      &ref.byte_offset)) return false;
@@ -32,7 +26,7 @@ static bool a64_resolve(const MinicA64FrameView *view,
         return true;
     case MINIC_A64_FRAME_OUTGOING:
     case MINIC_A64_FRAME_PHYSICAL_SP:
-        out->base = "sp";
+        out->base_register = 32U;
         out->displacement = ref.byte_offset;
         return true;
     case MINIC_A64_FRAME_INCOMING:
@@ -41,7 +35,7 @@ static bool a64_resolve(const MinicA64FrameView *view,
         if (view->saved_entry_sp_offset != SIZE_MAX) {
             if (!view->dynamic_frame) return false;
             out->saved_entry_frame_sp = true;
-            out->base = "x19";
+            out->base_register = 19U;
             out->displacement = ref.byte_offset;
             return true;
         }
@@ -49,11 +43,15 @@ static bool a64_resolve(const MinicA64FrameView *view,
             (!view->dynamic_frame &&
              !a64_add(ref.byte_offset, view->outgoing_sp_bytes,
                       &ref.byte_offset))) return false;
-        out->base = view->dynamic_frame ? "x19" : "sp";
+        out->base_register = view->dynamic_frame ? 19U : 32U;
         out->displacement = ref.byte_offset;
         return true;
     }
     return false;
+}
+
+static const char *a64_frame_base(const MinicA64ResolvedFrame *resolved) {
+    return resolved->base_register == 19U ? "x19" : "sp";
 }
 
 static unsigned int a64_scratch(MinicA64ScratchPolicy policy,
@@ -138,7 +136,7 @@ static bool a64_transfer(FILE *out, const MinicA64FrameView *view,
     uint32_t excluded = 0U;
     unsigned int scratch, secondary;
     if (out == NULL || !a64_reg_shape(reg, &prefix, &width) ||
-        !a64_resolve(view, ref, &resolved)) return false;
+        !minic_a64_resolve_frame(view, ref, &resolved)) return false;
     if (reg.kind == MINIC_A64_REG_W || reg.kind == MINIC_A64_REG_X)
         excluded = UINT32_C(1) << reg.number;
     /* Keep one conservative immediate boundary for all frame transfer
@@ -151,7 +149,7 @@ static bool a64_transfer(FILE *out, const MinicA64FrameView *view,
         resolved.displacement <= 4095U)
         return fprintf(out, "  %s %s%u, [%s, #%zu]\n",
                        operation, prefix, reg.number,
-                       resolved.base, resolved.displacement) >= 0;
+                       a64_frame_base(&resolved), resolved.displacement) >= 0;
     scratch = a64_scratch(policy, excluded);
     if (scratch == 0U) return false;
     if (resolved.saved_entry_frame_sp) {
@@ -175,7 +173,7 @@ static bool a64_transfer(FILE *out, const MinicA64FrameView *view,
         return fprintf(out, "  %s %s%u, [x%u]\n",
                        operation, prefix, reg.number, secondary) >= 0;
     }
-    return a64_address_from_base(out, scratch, resolved.base,
+    return a64_address_from_base(out, scratch, a64_frame_base(&resolved),
                                  resolved.displacement) &&
         fprintf(out, "  %s %s%u, [x%u]\n",
                 operation, prefix, reg.number, scratch) >= 0;
@@ -200,9 +198,9 @@ bool minic_a64_emit_frame_address(FILE *out, const MinicA64FrameView *view,
     unsigned int scratch;
     if (out == NULL || gp_target > 30U ||
         (view != NULL && view->dynamic_frame && gp_target == 19U) ||
-        !a64_resolve(view, frame, &resolved)) return false;
+        !minic_a64_resolve_frame(view, frame, &resolved)) return false;
     if (!resolved.saved_entry_frame_sp)
-        return a64_address_from_base(out, gp_target, resolved.base,
+        return a64_address_from_base(out, gp_target, a64_frame_base(&resolved),
                                      resolved.displacement);
     scratch = a64_scratch(policy, UINT32_C(1) << gp_target);
     if (scratch == 0U ||

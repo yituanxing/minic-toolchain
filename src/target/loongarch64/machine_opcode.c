@@ -10,6 +10,7 @@ typedef enum LoongForm {
     L_FORM_RR, L_FORM_RI, L_FORM_RRR, L_FORM_RRI,
     L_FORM_MEMORY, L_FORM_FRAME, L_FORM_BLOCK, L_FORM_RBLOCK,
     L_FORM_RRBLOCK, L_FORM_SYMBOL, L_FORM_RSYMBOL,
+    L_FORM_RSYMBOL_LOCAL, L_FORM_RBLOCK_ADDRESS,
     L_FORM_JIRL, L_FORM_NONE,
     L_FORM_RRII,
     L_FORM_FP_RR, L_FORM_FP_RRR, L_FORM_FP_CMP,
@@ -81,6 +82,9 @@ static const LoongSpec loong_specs[MINIC_LOONG_MACHINE_NOP + 1U] = {
     FRAME_STORE(ST_FRAME_D, "st.d", 8),
     RI(PCADDI, "pcaddi"),
     [MINIC_LOONG_MACHINE_LA_GLOBAL] = {"la.global", L_FORM_RSYMBOL, 0},
+    [MINIC_LOONG_MACHINE_LA_LOCAL] = {"la.local", L_FORM_RSYMBOL_LOCAL, 0},
+    [MINIC_LOONG_MACHINE_LA_BLOCK_ADDRESS] = {
+        "la.local", L_FORM_RBLOCK_ADDRESS, 0},
     [MINIC_LOONG_MACHINE_B] = {"b", L_FORM_BLOCK,
         MINIC_MACHINE_EFFECT_BRANCH, .ends_block = true},
     RBLOCK(BEQZ, "beqz"), RBLOCK(BNEZ, "bnez"),
@@ -265,7 +269,11 @@ static bool loong_lookup(const MinicTargetInfo *target, uint32_t opcode,
     case L_FORM_RRBLOCK:
         REG(RD); REG(RD); ARG(MINIC_MACHINE_OPERAND_BLOCK); break;
     case L_FORM_SYMBOL: ARG(MINIC_MACHINE_OPERAND_SYMBOL); break;
-    case L_FORM_RSYMBOL: REG(WR); ARG(MINIC_MACHINE_OPERAND_SYMBOL); break;
+    case L_FORM_RSYMBOL:
+    case L_FORM_RSYMBOL_LOCAL:
+        REG(WR); ARG(MINIC_MACHINE_OPERAND_SYMBOL); break;
+    case L_FORM_RBLOCK_ADDRESS:
+        REG(WR); ARG(MINIC_MACHINE_OPERAND_BLOCK_ADDRESS); break;
     case L_FORM_JIRL:
         REG(RD); ARG(MINIC_MACHINE_OPERAND_INTEGER); break;
     case L_FORM_FP_RR:
@@ -423,6 +431,10 @@ static bool loong_legal_selected(const MinicMachineFunction *function,
         return ops[0].value.symbol.relocation == MINIC_LOONG_RELOC_DIRECT;
     case L_FORM_RSYMBOL:
         return ops[1].value.symbol.relocation == MINIC_LOONG_RELOC_GLOBAL;
+    case L_FORM_RSYMBOL_LOCAL:
+        return ops[1].value.symbol.relocation == MINIC_LOONG_RELOC_DIRECT;
+    case L_FORM_RBLOCK_ADDRESS:
+        return true;
     case L_FORM_JIRL:
         return ops[1].value.integer >= -32768 &&
             ops[1].value.integer <= 32764 &&
@@ -529,7 +541,8 @@ static bool loong_fcc_text(const MinicMachineRegister *reg,
 
 static bool loong_block_name(const MinicMachineOperand *operand,
     const MinicMachineGNUAsmLabels *labels, const char **name) {
-    if (operand->kind != MINIC_MACHINE_OPERAND_BLOCK || labels == NULL ||
+    if ((operand->kind != MINIC_MACHINE_OPERAND_BLOCK &&
+         operand->kind != MINIC_MACHINE_OPERAND_BLOCK_ADDRESS) || labels == NULL ||
         operand->value.block_id >= labels->count || labels->names == NULL ||
         labels->names[operand->value.block_id] == NULL) return false;
     *name = labels->names[operand->value.block_id];
@@ -631,6 +644,14 @@ static bool loong_serialize(FILE *out, const MinicMachineFunction *function,
         return loong_gp_text(&o[0].value.physical.reg, a, sizeof(a)) &&
             fprintf(out, "  la.global %s, %s\n", a,
                 o[1].value.symbol.name) >= 0;
+    case L_FORM_RSYMBOL_LOCAL:
+        return loong_gp_text(&o[0].value.physical.reg, a, sizeof(a)) &&
+            fprintf(out, "  la.local %s, %s\n", a,
+                o[1].value.symbol.name) >= 0;
+    case L_FORM_RBLOCK_ADDRESS:
+        return loong_gp_text(&o[0].value.physical.reg, a, sizeof(a)) &&
+            loong_block_name(&o[1], labels, &label) &&
+            fprintf(out, "  la.local %s, %s\n", a, label) >= 0;
     case L_FORM_JIRL:
         return loong_gp_text(&o[0].value.physical.reg, a, sizeof(a)) &&
             fprintf(out, "  jirl %s, %s, %" PRId64 "\n",
