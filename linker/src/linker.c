@@ -146,8 +146,10 @@ static int minild_link_static_pipeline(
         ((garbage_collect || have_script) &&
          !minild_restore_input_order(&state)) ||
         !minild_allocate_common(&state) ||
-        (garbage_collect && have_script &&
-         !minild_select_script_inputs(&state, &script)) ||
+        /* Source ownership (in particular /DISCARD/) must be known before
+         * targets reserve synthetic relocation storage, even without GC.
+         * Layout still owns the final output placement decision. */
+        (have_script && !minild_select_script_inputs(&state, &script)) ||
         (garbage_collect && !minild_gc_prune_static(&state, entry_symbol)) ||
         (garbage_collect && !have_script &&
          (!minild_gc_group_default_output_classes(&state) ||

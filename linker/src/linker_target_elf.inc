@@ -288,12 +288,47 @@ bool minild_emulation_supports_kernel_shared_image(const char *emulation) {
     return target != NULL && target->supports_kernel_shared_image;
 }
 
-/* Only relocations whose instruction bits are invariant under a 4KiB-aligned
- * whole-image rebase may bypass .rela.dyn.  An ADRP page delta is invariant,
- * as are ADD/LDST low12 immediate fragments: (S + delta) & 0xfff == S & 0xfff
- * when delta is page-aligned.  Full ABS values, data pointers, GOT/TLS and
- * other runtime-dependent operands remain forbidden.  AArch64 kernel images
- * use 4KiB page-aligned rebasing; never generalize this allowlist to DSO. */
+/* AArch64's Linux kernel -shared -Bsymbolic -T link is not a user-space
+ * DSO.  It has no dynamic relocation writer, so only expressions unchanged
+ * by a common 4KiB-aligned rebase of S and P can be materialized statically.
+ *
+ *   PC-relative: (S + delta) - (P + delta) = S - P, including ADR/LD/branch
+ *                immediates and full-width PREL data fields.
+ *   Page-relative: PAGE(S + delta) - PAGE(P + delta) = PAGE(S) - PAGE(P).
+ *   Low 12:      (S + delta) & 0xfff = S & 0xfff.
+ *
+ * Absolute pointer/data MOVW, GOT/TLS and static resolver relocations need
+ * preserved runtime .rela.dyn (or an equivalent target-owned relocation
+ * engine), which this mode cannot silently synthesize. Keep those rejected.
+ * This policy applies only to the specifically admitted kernel ET_DYN mode. */
+static bool minild_aarch64_kernel_rebase_invariant(uint32_t type) {
+    switch (type) {
+    /* No value, or a full-width PC-relative scalar. */
+    case R_AARCH64_NONE:
+    case R_AARCH64_PREL32:
+    case R_AARCH64_PREL64:
+    /* PC-relative and page-relative A64 instruction fields. */
+    case R_AARCH64_ADR_PREL_LO21:
+    case R_AARCH64_ADR_PREL_PG_HI21:
+    case R_AARCH64_ADR_PREL_PG_HI21_NC:
+    case R_AARCH64_LD_PREL_LO19:
+    case R_AARCH64_TSTBR14:
+    case R_AARCH64_CONDBR19:
+    case R_AARCH64_CALL26:
+    case R_AARCH64_JUMP26:
+    /* Only the low 12 bits of page-aligned rebasing participate. */
+    case R_AARCH64_ADD_ABS_LO12_NC:
+    case R_AARCH64_LDST8_ABS_LO12_NC:
+    case R_AARCH64_LDST16_ABS_LO12_NC:
+    case R_AARCH64_LDST32_ABS_LO12_NC:
+    case R_AARCH64_LDST64_ABS_LO12_NC:
+    case R_AARCH64_LDST128_ABS_LO12_NC:
+        return true;
+    default:
+        return false;
+    }
+}
+
 static bool minild_target_validate_kernel_shared_relocations(
     const MiniLdState *state) {
     size_t i;
@@ -312,16 +347,7 @@ static bool minild_target_validate_kernel_shared_relocations(
         if ((state->work.sections[reloc->section].flags & SHF_ALLOC) == 0U) {
             continue;
         }
-        if (type != R_AARCH64_NONE && type != R_AARCH64_PREL32 &&
-            type != R_AARCH64_PREL64 && type != R_AARCH64_CALL26 &&
-            type != R_AARCH64_JUMP26 &&
-            type != R_AARCH64_ADR_PREL_PG_HI21 &&
-            type != R_AARCH64_ADD_ABS_LO12_NC &&
-            type != R_AARCH64_LDST8_ABS_LO12_NC &&
-            type != R_AARCH64_LDST16_ABS_LO12_NC &&
-            type != R_AARCH64_LDST32_ABS_LO12_NC &&
-            type != R_AARCH64_LDST64_ABS_LO12_NC &&
-            type != R_AARCH64_LDST128_ABS_LO12_NC) {
+        if (!minild_aarch64_kernel_rebase_invariant(type)) {
             fprintf(state->diagnostics,
                     "minic-ld: unsupported-kernel-shared-runtime-relocation:%u\n",
                     (unsigned)type);

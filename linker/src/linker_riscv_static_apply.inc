@@ -167,7 +167,8 @@ static bool minild_riscv_apply_static_relocations(
                 0);
             if (!minild_target_apply_final_instruction(
                     &pairs, section, reloc, target, operands.place,
-                    false, operands.symbol_name, state->diagnostics)) {
+                    state->target->elf_class == ELFCLASS32, false,
+                    operands.symbol_name, state->diagnostics)) {
                 goto fail;
             }
             break;
@@ -175,7 +176,8 @@ static bool minild_riscv_apply_static_relocations(
         default:
             if (!minild_target_apply_final_instruction(
                     &pairs, section, reloc, target, operands.place,
-                    false, operands.symbol_name, state->diagnostics)) {
+                    state->target->elf_class == ELFCLASS32, false,
+                    operands.symbol_name, state->diagnostics)) {
                 goto fail;
             }
             break;

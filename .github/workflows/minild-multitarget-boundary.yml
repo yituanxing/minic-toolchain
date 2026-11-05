@@ -63,13 +63,16 @@ jobs:
             check-minild-aarch64-static-got \
             check-minild-aarch64-static-tls \
             check-minild-aarch64-static-ifunc \
+            check-minild-aarch64-static-instruction-relocs \
             check-minild-loongarch-static-relocs \
+            check-minild-static-script-discard-reloc-reserve \
             check-minild-static-nonalloc-relocations \
             check-minild-x86-crt-got-relax \
             check-minild-target-default-symbols \
             check-minild-target-shared-abi-boundary \
             check-minild-riscv-abi-integration \
             check-minild-riscv-final-fixup-parity \
+            check-minild-riscv-u-type-boundary \
             check-minild-rv32-addsub64 \
             check-minild-segment-plan \
             check-minild-final-elf-audit \

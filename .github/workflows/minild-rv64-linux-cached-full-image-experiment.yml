@@ -10,6 +10,7 @@ on:
     paths:
       - .github/workflows/minild-rv64-linux-cached-full-image-experiment.yml
       - tools/ci/minild-rv64-linux-cached-full-image-experiment-v1.sh
+      - linker/**
 
 permissions:
   contents: read

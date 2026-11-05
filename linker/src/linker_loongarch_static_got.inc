@@ -130,6 +130,23 @@ static bool minild_loongarch_static_uses_tls_le(uint32_t type) {
     }
 }
 
+/* Script matching and GC select source sections before static target
+ * reservation.  Synthetic GOT/IPLT/.rela.dyn capacity belongs to surviving
+ * relocation consumers, not to sections the script will later discard. */
+static bool minild_loongarch_static_reloc_source_live(
+    const MiniLdState *state, const MiniLdReloc *reloc, bool *live) {
+    const MiniLdSection *source;
+
+    if (reloc->section >= state->work.count) {
+        fprintf(state->diagnostics,
+                "minic-ld: loongarch-static-reserve-invalid-source\n");
+        return false;
+    }
+    source = &state->work.sections[reloc->section];
+    *live = !source->gc_discarded && !source->script_discard;
+    return true;
+}
+
 static bool minild_loongarch_static_tls_offset(
     MiniLdState *state, const MiniLdLayout *layout,
     size_t symbol_index, uint64_t *offset) {
@@ -244,7 +261,17 @@ static bool minild_loongarch_reserve_static_relocations(
          * images, not a reason to inject an unplaceable section into every
          * static-PIE linker script. */
         for (i = 0U; i < state->relocations.count; ++i) {
-            uint32_t type = state->relocations.entries[i].type;
+            const MiniLdReloc *reloc = &state->relocations.entries[i];
+            uint32_t type = reloc->type;
+            bool live;
+
+            if (!minild_loongarch_static_reloc_source_live(state, reloc,
+                                                          &live)) {
+                return false;
+            }
+            if (!live) {
+                continue;
+            }
 
             if (type == R_LARCH_64) {
                 ++got->relative_reserved_count;
@@ -293,9 +320,17 @@ static bool minild_loongarch_reserve_static_relocations(
     for (i = 0U; i < state->relocations.count; ++i) {
         const MiniLdReloc *reloc = &state->relocations.entries[i];
         bool tls_ie = minild_loongarch_static_uses_tls_ie(reloc->type);
+        bool live;
         size_t *slots;
         MiniLdSection *section;
         size_t aligned;
+
+        if (!minild_loongarch_static_reloc_source_live(state, reloc, &live)) {
+            return false;
+        }
+        if (!live) {
+            continue;
+        }
 
         if (reloc->symbol != SIZE_MAX &&
             reloc->symbol < got->symbol_count &&

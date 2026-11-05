@@ -173,7 +173,7 @@ static bool riscv_shared_patch_final_layout_relocations(
                 shared->symbols[reloc->symbol].tls_gd_offset, reloc->addend);
         }
         if (!minild_target_apply_final_instruction(
-                &pairs, source, reloc, target, place, true,
+                &pairs, source, reloc, target, place, false, true,
                 reloc->symbol < state->resolver.count
                     ? state->resolver.entries[reloc->symbol].name : "<none>",
                 state->diagnostics)) {
@@ -334,8 +334,17 @@ static bool riscv_shared_finalize_plt_and_calls(MiniLdState *state,
         }
         entry_address = plt_address + plt_offset;
         slot_address = gotplt_address + got_offset;
-        minild_target_emit_plt_entry(plt->data, plt_offset,
-                                     entry_address, slot_address);
+        if (!range_ok(plt_offset, shared->abi->plt_entry_bytes,
+                      plt->size) ||
+            !range_ok(got_offset, shared->abi->gotplt_slot_bytes,
+                      gotplt->size) ||
+            !minild_target_emit_plt_entry(plt->data, plt_offset,
+                                          entry_address, slot_address,
+                                          state->diagnostics)) {
+            fprintf(state->diagnostics,
+                    "minic-ld: invalid-shared-plt-encoding\n");
+            return false;
+        }
 
         memset(&relocation, 0, sizeof(relocation));
         relocation.offset = slot_address;
@@ -412,7 +421,7 @@ static bool riscv_shared_finalize_plt_and_calls(MiniLdState *state,
         if (!minild_target_apply_final_instruction(
                 NULL, source, reloc, signed_destination,
                 layout->work[reloc->section].vaddr + reloc->offset,
-                true, target->name, state->diagnostics)) {
+                false, true, target->name, state->diagnostics)) {
             return false;
         }
     }

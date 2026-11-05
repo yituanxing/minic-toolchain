@@ -35,6 +35,46 @@ static int64_t riscv_lo12(int64_t value) {
     return low;
 }
 
+/* AUIPC/LUI sign-extend their 20-bit immediate before adding the 12-bit
+ * low part.  On RV64 the rounded high part must therefore fit a signed
+ * 20-bit number; silently masking it would branch to the wrong 2 GiB region.
+ * RV32 is different: the operation is modulo 2^32, so the low 20 bits of
+ * the rounded high word correctly address the entire 32-bit address space.
+ * In particular, 0x80000000..0xffffffff are valid RV32 kernel addresses. */
+static bool riscv_hi20_encodable(int64_t value, bool rv32) {
+    int64_t high = riscv_hi20(value);
+
+    return rv32 ||
+           (high >= -INT64_C(524288) && high <= INT64_C(524287));
+}
+
+/* The CALL relocation represents an AUIPC followed by JALR.  A non-RELAX
+ * producer still has to supply the real pair: otherwise writing its two
+ * immediate fields can silently turn unrelated instructions into a jump. */
+static bool riscv_decode_call_pair(const MiniLdSection *section,
+                                   uint64_t offset, unsigned *jalr_rd) {
+    uint32_t auipc;
+    uint32_t jalr;
+    unsigned base;
+
+    if (section->type == SHT_NOBITS || offset > SIZE_MAX ||
+        !range_ok((size_t)offset, 8U, section->size)) {
+        return false;
+    }
+    auipc = load_u32le(section->data + (size_t)offset);
+    jalr = load_u32le(section->data + (size_t)offset + 4U);
+    base = (auipc >> 7U) & 31U;
+    if ((auipc & UINT32_C(0x7f)) != UINT32_C(0x17) ||
+        (jalr & UINT32_C(0x707f)) != UINT32_C(0x67) ||
+        ((jalr >> 15U) & 31U) != base) {
+        return false;
+    }
+    if (jalr_rd != NULL) {
+        *jalr_rd = (jalr >> 7U) & 31U;
+    }
+    return true;
+}
+
 static bool static_patch_utype(MiniLdSection *section,
                                uint64_t offset,
                                int64_t imm20,
@@ -516,6 +556,7 @@ static bool minild_target_apply_final_instruction(
     const MiniLdReloc *reloc,
     int64_t target,
     uint64_t place,
+    bool rv32,
     bool shared_output,
     const char *symbol_name,
     FILE *diagnostics) {
@@ -541,9 +582,57 @@ static bool minild_target_apply_final_instruction(
         break;
     }
 
+    /* Final-image U-type overflow is a fatal linker error, regardless of
+     * whether a RELAX marker was present.  Check after the full-layout
+     * displacement is known and before patching even the first instruction.
+     * The same psABI invariant covers static kernel links, ELF32/ILP32 and
+     * RV64 ET_DYN, including shared GOT/TLS and local/PLT calls. */
     switch (reloc->type) {
     case R_RISCV_CALL:
     case R_RISCV_CALL_PLT:
+    case R_RISCV_GOT_HI20:
+    case R_RISCV_TLS_GOT_HI20:
+    case R_RISCV_TLS_GD_HI20:
+    case R_RISCV_PCREL_HI20:
+        if (!riscv_hi20_encodable(delta, rv32)) {
+            fprintf(diagnostics,
+                    "minic-ld: R_RISCV_U-type-overflow:type=%u:section=%s:"
+                    "offset=%llu:symbol=%s:place=0x%llx:target=0x%llx:delta=%lld\n",
+                    reloc->type, source->name,
+                    (unsigned long long)reloc->offset,
+                    symbol_name == NULL ? "<none>" : symbol_name,
+                    (unsigned long long)place,
+                    (unsigned long long)(uint64_t)target,
+                    (long long)delta);
+            return false;
+        }
+        break;
+    case R_RISCV_HI20:
+    case R_RISCV_TPREL_HI20:
+        if (!riscv_hi20_encodable(target, rv32)) {
+            fprintf(diagnostics,
+                    "minic-ld: R_RISCV_U-type-overflow:type=%u:section=%s:"
+                    "offset=%llu:symbol=%s:target=0x%llx\n",
+                    reloc->type, source->name,
+                    (unsigned long long)reloc->offset,
+                    symbol_name == NULL ? "<none>" : symbol_name,
+                    (unsigned long long)(uint64_t)target);
+            return false;
+        }
+        break;
+    default:
+        break;
+    }
+
+    switch (reloc->type) {
+    case R_RISCV_CALL:
+    case R_RISCV_CALL_PLT:
+        if (!riscv_decode_call_pair(source, reloc->offset, NULL)) {
+            fprintf(diagnostics,
+                    "minic-ld: R_RISCV_CALL-invalid-pair:section=%s:offset=%llu\n",
+                    source->name, (unsigned long long)reloc->offset);
+            return false;
+        }
         return static_patch_utype(source, reloc->offset,
                                   riscv_hi20(delta), diagnostics) &&
                static_patch_itype(source, reloc->offset + 4U,
@@ -896,14 +985,23 @@ static uint32_t minild_riscv_encode_itype(unsigned opcode,
            (uint32_t)opcode;
 }
 
-static void minild_target_emit_plt_entry(unsigned char *data,
-                                        size_t offset,
-                                        uint64_t entry_address,
-                                        uint64_t slot_address) {
+static bool minild_target_emit_plt_entry(unsigned char *data,
+                                         size_t offset,
+                                         uint64_t entry_address,
+                                         uint64_t slot_address,
+                                         FILE *diagnostics) {
     int64_t delta = minild_riscv_pc_delta_bits(
         minild_target_signed_bits(slot_address), entry_address);
     int64_t hi = riscv_hi20(delta);
     int64_t lo = riscv_lo12(delta);
+
+    if (!riscv_hi20_encodable(delta, false)) {
+        fprintf(diagnostics,
+                "minic-ld: R_RISCV_PLT-GOT-overflow:entry=0x%llx:slot=0x%llx:delta=%lld\n",
+                (unsigned long long)entry_address,
+                (unsigned long long)slot_address, (long long)delta);
+        return false;
+    }
 
     store_u32le(data + offset + 0U,
                 minild_riscv_encode_utype(0x17U, 28U, hi));
@@ -912,4 +1010,5 @@ static void minild_target_emit_plt_entry(unsigned char *data,
     store_u32le(data + offset + 8U,
                 minild_riscv_encode_itype(0x67U, 0U, 0U, 28U, 0));
     store_u32le(data + offset + 12U, UINT32_C(0x00000013));
+    return true;
 }

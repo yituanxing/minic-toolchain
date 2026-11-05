@@ -758,17 +758,35 @@ check-minild-riscv-static-relax-fixedpoint: $(MINIAS_BINARY) $(MINILD_BINARY)
 	MINILD="$(abspath $(MINILD_BINARY))" \
 	bash tests/linker/probe-riscv-static-relax-fixedpoint.sh
 
+.PHONY: check-minild-riscv-u-type-boundary
+check-minild-riscv-u-type-boundary: $(MINIAS_BINARY) $(MINILD_BINARY)
+	MINIAS="$(abspath $(MINIAS_BINARY))" \
+	MINILD="$(abspath $(MINILD_BINARY))" \
+	bash tests/linker/probe-riscv-u-type-boundary.sh
+
 .PHONY: check-minild-aarch64-cortex-a53-843419
 check-minild-aarch64-cortex-a53-843419: $(MINIAS_BINARY) $(MINILD_BINARY)
 	MINIAS="$(abspath $(MINIAS_BINARY))" \
 	MINILD="$(abspath $(MINILD_BINARY))" \
 	bash tests/linker/probe-aarch64-cortex-a53-843419.sh
 
+.PHONY: check-minild-aarch64-static-instruction-relocs
+check-minild-aarch64-static-instruction-relocs: $(MINIAS_BINARY) $(MINILD_BINARY)
+	MINIAS="$(abspath $(MINIAS_BINARY))" \
+	MINILD="$(abspath $(MINILD_BINARY))" \
+	bash tests/linker/probe-aarch64-static-instruction-relocs.sh
+
 .PHONY: check-minild-loongarch-static-pie
 check-minild-loongarch-static-pie: $(MINIAS_BINARY) $(MINILD_BINARY)
 	MINIAS="$(abspath $(MINIAS_BINARY))" \
 	MINILD="$(abspath $(MINILD_BINARY))" \
 	bash tests/linker/probe-loongarch-static-pie.sh
+
+.PHONY: check-minild-static-script-discard-reloc-reserve
+check-minild-static-script-discard-reloc-reserve: $(MINIAS_BINARY) $(MINILD_BINARY)
+	MINIAS="$(abspath $(MINIAS_BINARY))" \
+	MINILD="$(abspath $(MINILD_BINARY))" \
+	bash tests/linker/probe-static-script-discard-reloc-reserve.sh
 
 # Linux-facing linker invariants are exercised across all five ELF targets
 # before any expensive vmlinux re-link or QEMU boot attempt.
@@ -818,9 +836,12 @@ check-minild-five-arch-linux-linker-boundary: \
 	check-minild-static-merge-strings \
 	check-minild-static-build-id-sha1 \
 	check-minild-riscv-static-relax-fixedpoint \
+	check-minild-riscv-u-type-boundary \
 	check-minild-riscv-pie-relax-fixedpoint \
 	check-minild-aarch64-cortex-a53-843419 \
+	check-minild-aarch64-static-instruction-relocs \
 	check-minild-loongarch-static-pie \
+	check-minild-static-script-discard-reloc-reserve \
 	check-minild-x86-linux-kbuild-options \
 	check-minild-x86-linux-pc64 \
 	check-minild-x86-script-info \

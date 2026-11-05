@@ -142,24 +142,8 @@ static bool minild_rv_relax_has_marker(
 static bool minild_rv_relax_call_encoding(const MiniLdSection *section,
                                            uint64_t offset,
                                            unsigned *rd_out) {
-    uint32_t auipc;
-    uint32_t jalr;
-    unsigned auipc_rd;
-
-    if (offset > SIZE_MAX ||
-        !range_ok((size_t)offset, 8U, section->size)) {
-        return false;
-    }
-    auipc = load_u32le(section->data + (size_t)offset);
-    jalr = load_u32le(section->data + (size_t)offset + 4U);
-    auipc_rd = (auipc >> 7U) & 31U;
-    if ((auipc & 0x7fU) != 0x17U ||
-        (jalr & 0x707fU) != 0x67U ||
-        ((jalr >> 15U) & 31U) != auipc_rd) {
-        return false;
-    }
-    *rd_out = (jalr >> 7U) & 31U;
-    return true;
+    /* The very same pair predicate protects unrelaxed final fixups. */
+    return riscv_decode_call_pair(section, offset, rd_out);
 }
 
 static MiniLdRiscvRelaxPlan *minild_rv_relax_capture(MiniLdState *state) {

@@ -13,6 +13,21 @@ static MiniLdNonRiscvFixup minild_aarch64_static_fixup_class(uint32_t type) {
     case R_AARCH64_GOTPCREL32: return MINILD_NONRISCV_PCREL32;
     case R_AARCH64_PREL64: return MINILD_NONRISCV_PCREL64;
     case R_AARCH64_PREL32: return MINILD_NONRISCV_PCREL32;
+    case R_AARCH64_MOVW_UABS_G0:
+    case R_AARCH64_MOVW_UABS_G0_NC:
+    case R_AARCH64_MOVW_UABS_G1:
+    case R_AARCH64_MOVW_UABS_G1_NC:
+    case R_AARCH64_MOVW_UABS_G2:
+    case R_AARCH64_MOVW_UABS_G2_NC:
+    case R_AARCH64_MOVW_UABS_G3:
+    case R_AARCH64_MOVW_SABS_G0:
+    case R_AARCH64_MOVW_SABS_G1:
+    case R_AARCH64_MOVW_SABS_G2:
+    case R_AARCH64_LD_PREL_LO19:
+    case R_AARCH64_ADR_PREL_LO21:
+    case R_AARCH64_ADR_PREL_PG_HI21_NC:
+    case R_AARCH64_TSTBR14:
+    case R_AARCH64_CONDBR19:
     case R_AARCH64_CALL26:
     case R_AARCH64_JUMP26:
     case R_AARCH64_ADR_PREL_PG_HI21:
@@ -88,6 +103,60 @@ static bool minild_aarch64_static_write_tls_movw(
     return true;
 }
 
+/* AAELF64 MOVW absolute relocations are a family, not the TLS-specialized
+ * MOVW subset.  _NC means MOVK with truncated bits, whereas checked unsigned
+ * members require all higher chunks to be zero.  Signed members select MOVN
+ * for negative absolute values and validate the full magnitude. */
+static bool minild_aarch64_static_write_absolute_movw(
+    unsigned char *slot, uint64_t value, unsigned group, bool nonchecking,
+    bool signed_value) {
+    uint32_t word = load_u32le(slot);
+    uint32_t opcode = word & UINT32_C(0x7f800000);
+    uint64_t magnitude = value;
+    uint64_t limit;
+
+    if (group > 3U || ((word >> 21U) & 3U) != group ||
+        (group > 1U && (word & UINT32_C(0x80000000)) == 0U)) {
+        return false;
+    }
+    if (opcode != UINT32_C(0x12800000) &&
+        opcode != UINT32_C(0x52800000) &&
+        opcode != UINT32_C(0x72800000)) {
+        return false;
+    }
+    if (nonchecking) {
+        /* GNU accepts both MOVZ and MOVK spelling with an _NC modifier;
+         * unlike a checked relocation, the source opcode remains intact. */
+        if (opcode == UINT32_C(0x12800000)) magnitude = ~value;
+    } else {
+        if (signed_value && opcode == UINT32_C(0x72800000)) {
+            return false;
+        }
+        if (group < 3U) {
+            limit = UINT64_C(1) << ((group + 1U) * 16U);
+            if (signed_value) {
+                /* Complement is the A64 MOVN immediate, including -1. */
+                if (value >= limit && (~value) >= limit) {
+                    return false;
+                }
+            } else if (value >= limit) {
+                return false;
+            }
+        }
+        if (signed_value && (value >> 63U) != 0U) {
+            magnitude = ~value;
+            word &= ~UINT32_C(0x60000000);
+        } else if (opcode != UINT32_C(0x72800000)) {
+            word &= ~UINT32_C(0x60000000);
+            word |= UINT32_C(0x40000000);
+        }
+    }
+    word &= ~UINT32_C(0x001fffe0);
+    word |= ((uint32_t)(magnitude >> (group * 16U)) & UINT32_C(0xffff)) << 5U;
+    store_u32le(slot, word);
+    return true;
+}
+
 static bool minild_aarch64_static_write_instruction(
     unsigned char *slot, const MiniLdReloc *reloc,
     uint64_t target, uint64_t place, bool undefined_weak) {
@@ -98,6 +167,74 @@ static bool minild_aarch64_static_write_instruction(
     (void)undefined_weak;
 
     switch (reloc->type) {
+    case R_AARCH64_MOVW_UABS_G0:
+    case R_AARCH64_MOVW_UABS_G0_NC:
+    case R_AARCH64_MOVW_UABS_G1:
+    case R_AARCH64_MOVW_UABS_G1_NC:
+    case R_AARCH64_MOVW_UABS_G2:
+    case R_AARCH64_MOVW_UABS_G2_NC:
+    case R_AARCH64_MOVW_UABS_G3:
+    case R_AARCH64_MOVW_SABS_G0:
+    case R_AARCH64_MOVW_SABS_G1:
+    case R_AARCH64_MOVW_SABS_G2: {
+        bool signed_value = reloc->type >= R_AARCH64_MOVW_SABS_G0;
+        bool nonchecking = !signed_value &&
+                           ((reloc->type - R_AARCH64_MOVW_UABS_G0) & 1U) != 0U;
+        unsigned group = signed_value
+                             ? reloc->type - R_AARCH64_MOVW_SABS_G0
+                             : (reloc->type - R_AARCH64_MOVW_UABS_G0) / 2U;
+
+        return minild_aarch64_static_write_absolute_movw(
+            slot, target, group, nonchecking, signed_value);
+    }
+    case R_AARCH64_ADR_PREL_LO21: {
+        if (!minild_nonriscv_signed_fits(delta, 21U)) {
+            return false;
+        }
+        instruction = load_u32le(slot);
+        if ((instruction & UINT32_C(0x9f000000)) != UINT32_C(0x10000000)) {
+            return false;
+        }
+        imm = (uint32_t)delta & UINT32_C(0x1fffff);
+        instruction &= ~UINT32_C(0x60ffffe0);
+        instruction |= (imm & 3U) << 29U;
+        instruction |= ((imm >> 2U) & UINT32_C(0x7ffff)) << 5U;
+        store_u32le(slot, instruction);
+        return true;
+    }
+    case R_AARCH64_LD_PREL_LO19:
+    case R_AARCH64_CONDBR19:
+    case R_AARCH64_TSTBR14: {
+        unsigned shift = reloc->type == R_AARCH64_TSTBR14 ? 14U : 19U;
+
+        if ((delta & 3U) != 0U ||
+            !minild_nonriscv_signed_fits(delta, shift + 2U)) {
+            return false;
+        }
+        instruction = load_u32le(slot);
+        if (reloc->type == R_AARCH64_LD_PREL_LO19) {
+            if ((instruction & UINT32_C(0x3b000000)) !=
+                UINT32_C(0x18000000)) {
+                return false;
+            }
+        } else if (reloc->type == R_AARCH64_CONDBR19) {
+            if ((instruction & UINT32_C(0xff000010)) !=
+                    UINT32_C(0x54000000) &&
+                (instruction & UINT32_C(0x7e000000)) !=
+                    UINT32_C(0x34000000)) {
+                return false;
+            }
+        } else if ((instruction & UINT32_C(0x7e000000)) !=
+                   UINT32_C(0x36000000)) {
+            return false;
+        }
+        instruction &= ~(shift == 14U ? UINT32_C(0x0007ffe0) :
+                        UINT32_C(0x00ffffe0));
+        instruction |= (((uint32_t)delta >> 2U) &
+                        ((UINT32_C(1) << shift) - 1U)) << 5U;
+        store_u32le(slot, instruction);
+        return true;
+    }
     case R_AARCH64_CALL26:
     case R_AARCH64_JUMP26:
         if ((delta & UINT64_C(3)) != 0U ||
@@ -115,11 +252,13 @@ static bool minild_aarch64_static_write_instruction(
                            (((uint32_t)delta >> 2U) & UINT32_C(0x03ffffff)));
         return true;
     case R_AARCH64_ADR_PREL_PG_HI21:
+    case R_AARCH64_ADR_PREL_PG_HI21_NC:
     case R_AARCH64_ADR_GOT_PAGE:
     case R_AARCH64_TLSIE_ADR_GOTTPREL_PAGE21: {
         uint64_t page_delta = (target >> 12U) - (place >> 12U);
 
-        if (!minild_nonriscv_signed_fits(page_delta, 21U)) {
+        if (reloc->type != R_AARCH64_ADR_PREL_PG_HI21_NC &&
+            !minild_nonriscv_signed_fits(page_delta, 21U)) {
             return false;
         }
         instruction = load_u32le(slot);
