@@ -8,8 +8,12 @@
  * with an 8-byte island: the original unsigned-immediate load/store followed
  * by an unconditional branch back.  GNU BFD reserves each nonempty A53 ADRP
  * veneer section in full 4 KiB units to keep the instruction page phase
- * unchanged when the layout is replayed.  We retain the source fragment's
- * work-owner identity and give its veneer tail the same page-stable capacity.
+ * unchanged when the layout is replayed.  A BFD veneer section has its own
+ * 8-byte alignment, then an 8-byte branch-around guard (B + NOP), followed
+ * by one 8-byte load/return stub per patched instruction.  We model that
+ * adjacent synthetic section inside the source's work-owner allocation;
+ * its prefix and whole-page reservation must have exactly the same visible
+ * size/alignment effects as BFD, including when the input ends at 4 mod 8.
  * The original instruction is replaced by
  * a branch to the island only after the ordinary relocation pass has written
  * the relocated instruction into its new home.  Layout must be recomputed
@@ -256,10 +260,11 @@ static bool minild_aarch64_843419_relocation_movable(uint32_t type) {
 
 static bool minild_aarch64_843419_add_patch(
     MiniLdState *state, MiniLdAarch64ErratumPlan *errata,
-    size_t section_index, size_t instruction_offset) {
+    const MiniLdLayout *layout, size_t section_index,
+    size_t instruction_offset) {
     MiniLdSection *section = &state->work.sections[section_index];
     MiniLdAarch64ErratumPatch *next;
-    size_t reloc_index = SIZE_MAX, stub_offset, i;
+    size_t reloc_index = SIZE_MAX, stub_offset, guard_offset, i;
     uint32_t instruction;
 
     if (minild_aarch64_843419_patch_known(errata, section_index,
@@ -304,8 +309,28 @@ static bool minild_aarch64_843419_add_patch(
         errata->patches = next;
         errata->capacity = capacity;
     }
-    if (!align_up_size(errata->original_sizes[section_index], 4U,
-                       &stub_offset)) {
+    {
+        uint64_t source_end;
+        size_t prefix;
+
+        if (layout->work[section_index].vaddr >
+            UINT64_MAX - errata->original_sizes[section_index]) {
+            fprintf(state->diagnostics,
+                    "minic-ld: aarch64-843419-stub-address-overflow\n");
+            return false;
+        }
+        source_end = layout->work[section_index].vaddr +
+                     (uint64_t)errata->original_sizes[section_index];
+        prefix = (size_t)((8U - (source_end & UINT64_C(7))) & 7U);
+        if (errata->original_sizes[section_index] >
+            SIZE_MAX - prefix - 8U) {
+            return false;
+        }
+        guard_offset = errata->original_sizes[section_index] + prefix;
+        stub_offset = guard_offset + 8U;
+    }
+    if ((layout->work[section_index].vaddr + guard_offset) % 8U != 0U ||
+        guard_offset > SIZE_MAX - 4096U) {
         fprintf(state->diagnostics,
                 "minic-ld: aarch64-843419-stub-alignment-overflow\n");
         return false;
@@ -320,26 +345,32 @@ static bool minild_aarch64_843419_add_patch(
         }
     }
     instruction = load_u32le(section->data + instruction_offset);
-    if (stub_offset > SIZE_MAX - 8U) {
+    if (stub_offset > guard_offset + 4096U - 8U) {
+        fprintf(state->diagnostics,
+                "minic-ld: aarch64-843419-stub-page-overflow\n");
         return false;
     }
-    if (section->size <= stub_offset) {
-        /* Allocate a separate page-sized tail logically even if this
-         * section's original payload was not page aligned.  A newly
-         * encountered erratum may not shift later instructions by 8B and
-         * create spurious new page-boundary errata on the next round. */
-        size_t to_fill;
+    if (section->size == errata->original_sizes[section_index]) {
+        /* GNU allocates the *stub section*, not a 4K blob beginning at the
+         * final source instruction.  Account for its absolute 8B-alignment
+         * prefix, reserve the complete 4K synthetic section, and put the
+         * unconditional skip branch before the executable veneers. */
+        size_t prefix = guard_offset -
+                        errata->original_sizes[section_index];
 
-        if (stub_offset > SIZE_MAX - 4096U) {
-            return false;
-        }
-        to_fill = stub_offset - section->size;
-        if (!section_append_zero(section, to_fill) ||
+        if (!section_append_zero(section, prefix) ||
             !section_append_zero(section, 4096U)) {
             fprintf(state->diagnostics,
                     "minic-ld: out-of-memory:aarch64-843419-stub-page\n");
             return false;
         }
+        store_u32le(section->data + guard_offset, UINT32_C(0x14000400));
+        store_u32le(section->data + guard_offset + 4U,
+                    UINT32_C(0xd503201f));
+    } else if (section->size != guard_offset + 4096U) {
+        fprintf(state->diagnostics,
+                "minic-ld: aarch64-843419-stub-prefix-changed\n");
+        return false;
     }
     if (!range_ok(stub_offset, 8U, section->size)) {
         fprintf(state->diagnostics,
@@ -401,6 +432,7 @@ static bool minild_aarch64_843419_scan_code_range(
             !minild_aarch64_843419_patch_known(
                 errata, section_index, (size_t)patch_at)) {
             if (!minild_aarch64_843419_add_patch(state, errata,
+                                                 layout,
                                                  section_index,
                                                  (size_t)patch_at)) {
                 return false;

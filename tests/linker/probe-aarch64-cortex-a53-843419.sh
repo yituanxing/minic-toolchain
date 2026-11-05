@@ -117,7 +117,10 @@ data = patched.symbols['embedded_data_sequence']
 value = patched.symbols['fixture_value']
 assert site & 0xfff == 0xff8 and optional & 0xfff == 0xff8
 assert original.symbols['cascade_sequence'] & 0xfff == 0xff0
-assert cascade & 0xfff == 0xff0
+# BFD aligns the synthetic stub section to 8B. The first input .text ends
+# at +0x100c, so its 4B alignment prefix moves the following would-be
+# cascade to +0xff4. The test must retain the non-cascade assertion below.
+assert cascade & 0xfff == 0xff4
 assert page_last & 0xfff == 0xffc and write_destination & 0xfff == 0xff8
 assert negative & 0xfff == 0xff4 and data & 0xfff == 0xff8
 assert value & 0xfff == 24
@@ -132,6 +135,9 @@ assert stub != site + 8 and stub != site + 12
 assert patched.insn(stub) == original_load
 assert branch_target(patched, stub + 4) == site + 12
 assert stub in patched.synthetic_x, 'missing island $x mapping after $d'
+assert stub % 8 == 0
+assert patched.insn(stub - 4) == 0xd503201f
+assert branch_target(patched, stub - 8) == stub - 8 + 4096
 
 # GNU reserves a full 4 KiB erratum tail, so the next source section's
 # ADRP stays at safe +0xff0; an 8B-only tail would spuriously patch it.

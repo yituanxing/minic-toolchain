@@ -28,7 +28,8 @@ typedef struct MiniLdNonRiscvStaticOps {
                            const MiniLdReloc *, uint64_t *);
     /* Only instruction encodings reach this hook; scalar writes are Common. */
     size_t (*instruction_width)(uint32_t type);
-    bool (*write_instruction)(unsigned char *slot,
+    bool (*write_instruction)(const MiniLdState *state,
+                              unsigned char *slot,
                               const MiniLdReloc *reloc,
                               uint64_t target, uint64_t place,
                               bool undefined_weak);
@@ -52,7 +53,8 @@ static bool minild_nonriscv_signed_fits(uint64_t bits, unsigned width) {
     return bits < sign_bit || bits >= UINT64_MAX - (sign_bit - 1U);
 }
 
-static bool minild_nonriscv_write_fixup(MiniLdSection *section,
+static bool minild_nonriscv_write_fixup(const MiniLdState *state,
+                                        MiniLdSection *section,
                                         const MiniLdReloc *reloc,
                                         uint16_t machine,
                                         MiniLdNonRiscvFixup kind,
@@ -140,7 +142,7 @@ static bool minild_nonriscv_write_fixup(MiniLdSection *section,
         return true;
     case MINILD_NONRISCV_TARGET_INSTRUCTION:
         if (ops->write_instruction != NULL &&
-            ops->write_instruction(slot, reloc, target, place,
+            ops->write_instruction(state, slot, reloc, target, place,
                                    undefined_weak)) {
             return true;
         }
@@ -212,7 +214,7 @@ static bool minild_nonriscv_apply_with_ops(
             ops->defer_fixup(state, reloc)) {
             continue;
         }
-        if (!minild_nonriscv_write_fixup(section, reloc, machine, kind, ops,
+        if (!minild_nonriscv_write_fixup(state, section, reloc, machine, kind, ops,
                                          operands.target_bits, operands.place,
                                          undefined_weak,
                                          state->diagnostics)) {

@@ -45,10 +45,10 @@ static bool minild_final_image_prepare(
     }
     if (!(version_script == NULL
               ? minild_final_symbols_build(state, layout, output_plan,
-                                           &final->symbols)
+                                           emit_relocs, &final->symbols)
               : minild_final_symbols_build_with_version(
                     state, layout, output_plan, version_script,
-                    &final->symbols))) {
+                    emit_relocs, &final->symbols))) {
         if (elf_type == ET_DYN) {
             fprintf(state->diagnostics,
                     "minic-ld: cannot-build-shared-static-symbols\n");

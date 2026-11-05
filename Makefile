@@ -850,6 +850,18 @@ check-minild-loongarch-pcala-relax-fixedpoint: $(MINIAS_BINARY) $(MINILD_BINARY)
 	MINILD="$(abspath $(MINILD_BINARY))" \
 	bash tests/linker/probe-loongarch-pcala-relax-fixedpoint.sh
 
+.PHONY: check-minild-loongarch-pcala-undefweak-modes
+check-minild-loongarch-pcala-undefweak-modes: $(MINIAS_BINARY) $(MINILD_BINARY)
+	MINIAS="$(abspath $(MINIAS_BINARY))" \
+	MINILD="$(abspath $(MINILD_BINARY))" \
+	bash tests/linker/probe-loongarch-pcala-undefweak-modes.sh
+
+.PHONY: check-minild-loongarch-neutral-elf-flags
+check-minild-loongarch-neutral-elf-flags: $(MINIAS_BINARY) $(MINILD_BINARY)
+	MINIAS="$(abspath $(MINIAS_BINARY))" \
+	MINILD="$(abspath $(MINILD_BINARY))" \
+	bash tests/linker/probe-loongarch-neutral-elf-flags.sh
+
 .PHONY: check-minild-static-script-discard-reloc-reserve
 check-minild-static-script-discard-reloc-reserve: $(MINIAS_BINARY) $(MINILD_BINARY)
 	MINIAS="$(abspath $(MINIAS_BINARY))" \
@@ -950,6 +962,8 @@ check-minild-five-arch-linux-linker-boundary: \
 	check-minild-aarch64-discarded-dynrel \
 	check-minild-loongarch-static-pie \
 	check-minild-loongarch-pcala-relax-fixedpoint \
+	check-minild-loongarch-pcala-undefweak-modes \
+	check-minild-loongarch-neutral-elf-flags \
 	check-minild-static-script-discard-reloc-reserve \
 	check-minild-script-output-entsize-coalescing \
 	check-minild-script-data-width-flags \
@@ -960,6 +974,7 @@ check-minild-five-arch-linux-linker-boundary: \
 	check-minild-x86-linux-kbuild-options \
 	check-minild-x86-linux-pc64 \
 	check-minild-x86-script-symbol-provenance-relocs \
+	check-minild-final-symtab-section-owner-gnu \
 	check-minild-i386-rel-static \
 	check-minild-x86-frozen-manifest \
 	check-minild-x86-boot-dispatch \
@@ -1234,6 +1249,11 @@ check-minild-final-symbol-view: $(MINIAS_BINARY) $(MINILD_BINARY)
 	MINIAS="$(abspath $(MINIAS_BINARY))" \
 	MINILD="$(abspath $(MINILD_BINARY))" \
 	bash tests/linker/probe-final-symbol-view.sh
+
+.PHONY: check-minild-final-symtab-section-owner-gnu
+check-minild-final-symtab-section-owner-gnu: $(MINILD_BINARY)
+	MINILD="$(abspath $(MINILD_BINARY))" \
+	bash tests/linker/probe-final-symtab-section-owner-gnu.sh
 
 .PHONY: check-minild-symbol-ownership
 check-minild-symbol-ownership: $(MINIAS_BINARY) $(MINILD_BINARY)

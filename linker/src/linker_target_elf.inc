@@ -169,6 +169,10 @@ static bool minild_exact_merge_flags(MiniLdState *state,
                                      const char *path);
 static bool minild_zero_elf_flags(uint32_t flags);
 static bool minild_loongarch_v1_elf_flags(uint32_t flags);
+static bool minild_loongarch_merge_flags(MiniLdState *state,
+                                         uint32_t incoming_flags,
+                                         bool incoming_has_code,
+                                         const char *path);
 
 #include "linker_i386_implicit_addend.inc"
 
@@ -298,7 +302,7 @@ static const MiniLdTargetProfile minild_target_profiles[] = {
      "loongarch", "elf64-loongarch", NULL, 0U, UINT64_C(0x120000000), 4096U,
      65536U, 8U,
      true, true, true, true, false, false, false, false,
-     minild_exact_merge_flags, minild_loongarch_merge_addend_plain,
+     minild_loongarch_merge_flags, minild_loongarch_merge_addend_plain,
      NULL,
      minild_loongarch_replan_static_layout,
      minild_loongarch_reserve_static_relocations,
@@ -605,6 +609,36 @@ static bool minild_zero_elf_flags(uint32_t flags) {
 static bool minild_loongarch_v1_elf_flags(uint32_t flags) {
     return flags == UINT32_C(0x41) || flags == UINT32_C(0x42) ||
            flags == UINT32_C(0x43);
+}
+
+/* GNU objcopy -I binary -O elf64-loongarch emits SHF_ALLOC byte payloads
+ * with e_flags=0.  Those objects have no executable LoongArch instructions
+ * or psABI to reconcile; the next real ELF input determines the ABI.  This
+ * is not permission for code-bearing or unknown-ABI objects to enter the
+ * same link, and an already selected LP64S/F/D ABI remains strict. */
+static bool minild_loongarch_merge_flags(MiniLdState *state,
+                                         uint32_t incoming_flags,
+                                         bool incoming_has_code,
+                                         const char *path) {
+    if (incoming_flags == 0U && !incoming_has_code) {
+        return true;
+    }
+    if (!minild_loongarch_v1_elf_flags(incoming_flags)) {
+        fprintf(state->diagnostics,
+                "minic-ld: unsupported-target-elf-flags:%s:0x%08x\n",
+                path, (unsigned)incoming_flags);
+        return false;
+    }
+    if (state->elf_flags != 0U && state->elf_flags != incoming_flags) {
+        fprintf(state->diagnostics,
+                "minic-ld: incompatible-target-elf-flags:%s:"
+                "current=0x%08x:incoming=0x%08x\n",
+                path, (unsigned)state->elf_flags,
+                (unsigned)incoming_flags);
+        return false;
+    }
+    state->elf_flags = incoming_flags;
+    return true;
 }
 
 static bool minild_exact_merge_flags(MiniLdState *state,

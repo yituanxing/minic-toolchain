@@ -189,7 +189,7 @@ static bool minild_loongarch_branch_opcode(uint32_t type, uint32_t word) {
 }
 
 static bool minild_loongarch_static_write_instruction(
-    unsigned char *slot, const MiniLdReloc *reloc,
+    const MiniLdState *state, unsigned char *slot, const MiniLdReloc *reloc,
     uint64_t target, uint64_t place, bool undefined_weak) {
     uint64_t delta = target - place;
     uint64_t value = target;
@@ -289,11 +289,13 @@ static bool minild_loongarch_static_write_instruction(
                      ? UINT32_C(0x1a000000) : UINT32_C(0x14000000))) {
             return false;
         }
-        if (reloc->type == R_LARCH_PCALA_HI20 && undefined_weak) {
-            /* GNU BFD's static undefined-weak PCALA resolution uses
-             * absolute S+A (normally zero) and changes pcalau12i into
-             * lu12i.w.  A PC-relative 32-bit page check would reject
-             * zero from a regular ET_EXEC image above 2 GiB. */
+        if (reloc->type == R_LARCH_PCALA_HI20 && undefined_weak &&
+            !state->static_pie_requested) {
+            /* Ordinary GNU static ET_EXEC links materialize undefined
+             * weak PCALA references as absolute S+A (usually zero),
+             * rewriting pcalau12i to lu12i.w.  Kernel static PIE under a
+             * script instead retains PCALA's PC-relative 20-bit field;
+             * see the frozen Linux weak __start/__stop references. */
             if (!minild_nonriscv_signed_fits(target, 32U)) {
                 return false;
             }
@@ -304,7 +306,9 @@ static bool minild_loongarch_static_write_instruction(
             reloc->type == R_LARCH_GOT_PC_HI20 ||
             reloc->type == R_LARCH_TLS_IE_PC_HI20) {
             value = minild_loongarch_pc32_page_delta(target, place);
-            if (!minild_nonriscv_signed_fits(value, 32U)) {
+            if (!minild_nonriscv_signed_fits(value, 32U) &&
+                !(reloc->type == R_LARCH_PCALA_HI20 && undefined_weak &&
+                  state->static_pie_requested)) {
                 return false;
             }
         } else if (reloc->type == R_LARCH_TLS_LE_HI20_R) {

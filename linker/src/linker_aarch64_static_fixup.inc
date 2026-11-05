@@ -158,12 +158,13 @@ static bool minild_aarch64_static_write_absolute_movw(
 }
 
 static bool minild_aarch64_static_write_instruction(
-    unsigned char *slot, const MiniLdReloc *reloc,
+    const MiniLdState *state, unsigned char *slot, const MiniLdReloc *reloc,
     uint64_t target, uint64_t place, bool undefined_weak) {
     uint64_t delta = target - place;
     uint32_t instruction;
     uint32_t imm;
 
+    (void)state;
     (void)undefined_weak;
 
     switch (reloc->type) {

@@ -63,33 +63,71 @@ static bool minild_final_symbol_local(const MiniLdResolvedSymbol *source,
            !minild_final_version_exports(version, source->name);
 }
 
+/* A source ET_REL STT_SECTION is a relocation operand, not an independent
+ * symbol in the linked image. Ordinary GNU final images omit it entirely;
+ * Linux's AArch64 kernel-shared image instead emits one canonical symbol
+ * per surviving output section for its section-relative dynamic records.
+ * All source relocations have already been applied when --emit-relocs is
+ * absent. Keep resolver identities untouched and project only this view.
+ *
+ * Likewise, local definitions from /DISCARD/ or --gc-sections cannot name
+ * addresses in the final image. Preserving them as SHN_UNDEF creates tens of
+ * thousands of fictitious local undefined symbols in real Linux Kbuild.
+ * The existing --emit-relocs mode retains its source symbol projection until
+ * final relocation addends can be rewritten to canonical section symbols. */
+static bool minild_final_symbol_kept(const MiniLdState *state,
+                                     const MiniLdOutputPlan *plan,
+                                     const MiniLdResolvedSymbol *source,
+                                     bool emit_relocs) {
+    bool local = ELF64_ST_BIND(source->info) == STB_LOCAL;
+
+    if (state->discard_locals && local &&
+        source->name[0] == '.' && source->name[1] == 'L') {
+        return false;
+    }
+    if (emit_relocs || !local) {
+        return true;
+    }
+    if (ELF64_ST_TYPE(source->info) == STT_SECTION ||
+        source->section == MINILD_SECTION_UNDEF) {
+        return false;
+    }
+    return source->section < 0 ||
+           ((size_t)source->section < plan->work_count &&
+            plan->work_shndx[source->section] != 0U);
+}
+
 static bool minild_final_symbols_build_with_version(
     const MiniLdState *state,
     const MiniLdLayout *layout,
     const MiniLdOutputPlan *plan,
     const MiniLdScript *version_script,
+    bool emit_relocs,
     MiniLdFinalSymbols *final) {
     size_t next = 1U;
     size_t pass, i, kept = 0U;
+    /* Ordinary GNU ET_EXEC/ET_DYN without --emit-relocs does not require
+     * STT_SECTION at all. The AArch64 Linux shared image is different:
+     * its retained .rela.dyn section-symbol references use precisely one
+     * canonical section symbol per output section. */
+    size_t canonical_sections = !emit_relocs && state->kernel_shared_image
+                                    ? plan->count : 0U;
 
-    /* -X applies only to the output table. Input/resolver symbol indices
-     * remain stable for relocation and script evaluation. ELF mapping
-     * symbols ($x/$d) and named local symbols are not .L* temporaries. */
+    /* The final projection does not mutate source symbol identities used
+     * by relocation and script evaluation. */
     for (i = 0U; i < state->resolver.count; ++i) {
         const MiniLdResolvedSymbol *source = &state->resolver.entries[i];
-        if (state->discard_locals &&
-            ELF64_ST_BIND(source->info) == STB_LOCAL &&
-            source->name[0] == '.' && source->name[1] == 'L') {
+        if (!minild_final_symbol_kept(state, plan, source, emit_relocs))
             continue;
-        }
         ++kept;
     }
 
-    if (kept >= SIZE_MAX / sizeof(MiniElfSymbol) - 1U ||
+    if (canonical_sections > UINT16_MAX ||
+        kept > SIZE_MAX / sizeof(MiniElfSymbol) - 1U - canonical_sections ||
         state->resolver.count > SIZE_MAX / sizeof(size_t)) {
         return false;
     }
-    final->entry_count = kept + 1U;
+    final->entry_count = kept + 1U + canonical_sections;
     final->resolver_count = state->resolver.count;
     final->entries = calloc(final->entry_count,
                             sizeof(*final->entries));
@@ -103,14 +141,19 @@ static bool minild_final_symbols_build_with_version(
     for (i = 0U; i < final->resolver_count; ++i) {
         final->resolver_to_final[i] = SIZE_MAX;
     }
+    for (i = 0U; i < canonical_sections; ++i) {
+        MiniElfSymbol *output = &final->entries[next++];
+
+        output->info = ELF64_ST_INFO(STB_LOCAL, STT_SECTION);
+        output->other = STV_DEFAULT;
+        output->section_index = (uint16_t)(i + 1U);
+        output->value = plan->sections[i].vaddr;
+    }
     for (pass = 0U; pass < 2U; ++pass) {
         for (i = 0U; i < state->resolver.count; ++i) {
             const MiniLdResolvedSymbol *source = &state->resolver.entries[i];
-            if (state->discard_locals &&
-                ELF64_ST_BIND(source->info) == STB_LOCAL &&
-                source->name[0] == '.' && source->name[1] == 'L') {
+            if (!minild_final_symbol_kept(state, plan, source, emit_relocs))
                 continue;
-            }
             bool local = minild_final_symbol_local(source, state, plan,
                                                    version_script);
             bool localized = local &&
@@ -211,9 +254,10 @@ static bool minild_final_symbols_build_with_version(
 static bool minild_final_symbols_build(const MiniLdState *state,
                                        const MiniLdLayout *layout,
                                        const MiniLdOutputPlan *plan,
+                                       bool emit_relocs,
                                        MiniLdFinalSymbols *final) {
     return minild_final_symbols_build_with_version(state, layout, plan,
-                                                   NULL, final);
+                                                   NULL, emit_relocs, final);
 }
 
 /* Final-link SHT_RELA data is indexed by final OutputSection, never by the
