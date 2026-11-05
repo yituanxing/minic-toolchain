@@ -64,6 +64,133 @@ typedef struct MiniLdAarch64KernelRelativeRecord {
     uint64_t addend;
 } MiniLdAarch64KernelRelativeRecord;
 
+typedef struct MiniLdAarch64GotOrder {
+    size_t symbol;
+    size_t original_offset;
+    size_t hash_bucket;
+    bool local;
+} MiniLdAarch64GotOrder;
+
+/* BFD allocates AArch64 global GOT slots through elf_link_hash_traverse,
+ * rather than from the order in which input relocations were encountered.
+ * The hash table grows at 75% occupancy using libiberty's prime sequence;
+ * its bucket traversal controls every global GOT word and consequently the
+ * immediates of all ADR_GOT_PAGE/LD64_GOT_LO12 pairs. */
+static size_t minild_aarch64_bfd_hash_capacity(const MiniLdState *state) {
+    static const size_t capacities[] = {
+        4051U, 4093U, 8191U, 16381U, 32749U, 65521U,
+        131071U, 262139U, 524287U, 1048573U, 2097143U,
+        4194301U, 8388593U, 16777213U, 33554393U,
+        67108859U, 134217689U, 268435399U, 536870909U
+    };
+    size_t nonlocal = 0U;
+    size_t capacity_index = 0U;
+    size_t i;
+
+    for (i = 0U; i < state->resolver.count; ++i) {
+        const MiniLdResolvedSymbol *symbol = &state->resolver.entries[i];
+        if (ELF64_ST_BIND(symbol->info) != STB_LOCAL &&
+            symbol->name != NULL && symbol->name[0] != '\0') {
+            ++nonlocal;
+        }
+    }
+    while (capacity_index + 1U <
+               sizeof(capacities) / sizeof(capacities[0]) &&
+           nonlocal > (capacities[capacity_index] * 3U) / 4U) {
+        ++capacity_index;
+    }
+    return capacities[capacity_index];
+}
+
+/* Same unsigned-long (LP64 BFD) string hash used by bfd/hash.c. */
+static size_t minild_aarch64_bfd_hash_bucket(const char *name,
+                                             size_t bucket_count) {
+    const unsigned char *cursor = (const unsigned char *)name;
+    unsigned long hash = 0UL;
+    unsigned int length = 0U;
+
+    while (*cursor != 0U) {
+        unsigned long c = (unsigned long)*cursor++;
+        hash += c + (c << 17U);
+        hash ^= hash >> 2U;
+        ++length;
+    }
+    hash += (unsigned long)length + ((unsigned long)length << 17U);
+    hash ^= hash >> 2U;
+    return (size_t)(hash % (unsigned long)bucket_count);
+}
+
+static int minild_aarch64_got_order_compare(const void *left,
+                                             const void *right) {
+    const MiniLdAarch64GotOrder *a = left;
+    const MiniLdAarch64GotOrder *b = right;
+
+    if (a->local != b->local) return a->local ? -1 : 1;
+    if (a->local) {
+        if (a->original_offset < b->original_offset) return -1;
+        if (a->original_offset > b->original_offset) return 1;
+    } else {
+        if (a->hash_bucket < b->hash_bucket) return -1;
+        if (a->hash_bucket > b->hash_bucket) return 1;
+        /* BFD chains symbols in reverse discovery order within a bucket. */
+        if (a->symbol > b->symbol) return -1;
+        if (a->symbol < b->symbol) return 1;
+    }
+    return 0;
+}
+
+static int minild_aarch64_got_slot_compare(const void *left,
+                                            const void *right) {
+    size_t a = *(const size_t *)left;
+    size_t b = *(const size_t *)right;
+    return a < b ? -1 : (a > b ? 1 : 0);
+}
+
+static bool minild_aarch64_kernel_order_got(MiniLdState *state,
+                                             MiniLdAarch64StaticGot *got) {
+    MiniLdAarch64GotOrder *order;
+    size_t *slots;
+    size_t buckets = minild_aarch64_bfd_hash_capacity(state);
+    size_t used = 0U;
+    size_t i;
+
+    for (i = 0U; i < got->symbol_count; ++i) {
+        if (got->slot_offsets[i] != SIZE_MAX) ++used;
+    }
+    if (used < 2U) return true;
+    if (used > SIZE_MAX / sizeof(*order) ||
+        used > SIZE_MAX / sizeof(*slots)) return false;
+    order = malloc(used * sizeof(*order));
+    slots = malloc(used * sizeof(*slots));
+    if (order == NULL || slots == NULL) {
+        free(order);
+        free(slots);
+        return false;
+    }
+    used = 0U;
+    for (i = 0U; i < got->symbol_count; ++i) {
+        const MiniLdResolvedSymbol *symbol;
+        if (got->slot_offsets[i] == SIZE_MAX) continue;
+        symbol = &state->resolver.entries[i];
+        order[used].symbol = i;
+        order[used].original_offset = got->slot_offsets[i];
+        order[used].local = ELF64_ST_BIND(symbol->info) == STB_LOCAL;
+        order[used].hash_bucket = minild_aarch64_bfd_hash_bucket(
+            symbol->name, buckets);
+        slots[used] = got->slot_offsets[i];
+        ++used;
+    }
+    qsort(order, used, sizeof(*order), minild_aarch64_got_order_compare);
+    /* The set of reserved offsets is unchanged; only their ownership moves. */
+    qsort(slots, used, sizeof(*slots), minild_aarch64_got_slot_compare);
+    for (i = 0U; i < used; ++i) {
+        got->slot_offsets[order[i].symbol] = slots[i];
+    }
+    free(order);
+    free(slots);
+    return true;
+}
+
 static int minild_aarch64_kernel_relative_compare(const void *a,
                                                    const void *b) {
     const MiniLdAarch64KernelRelativeRecord *left = a;
@@ -385,6 +512,12 @@ static bool minild_aarch64_reserve_static_relocations(
         }
         state->work.sections[got->section].gc_discarded = false;
         got->present = true;
+    }
+    if (state->kernel_shared_image && got->present &&
+        !minild_aarch64_kernel_order_got(state, got)) {
+        fprintf(state->diagnostics,
+                "minic-ld: aarch64-kernel-got-order-failed\n");
+        return false;
     }
     /* AArch64 shared images reserve the first GOT word and the three-word
      * GOTPLT header even when no PLT entries are emitted. */

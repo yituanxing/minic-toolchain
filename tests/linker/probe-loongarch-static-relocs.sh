@@ -510,35 +510,59 @@ echo 'MINILD_LOONGARCH_STATIC=PASS symbol_in_deleted_ALIGN_NOP=rejected'
 test "$(readelf -Wr "$work/pcala-rounding.o" | grep -c R_LARCH_PCALA_HI20)" -eq 2
 "$MINILD" -m elf64loongarch -static -e _start \
     -o "$work/pcala-rounding-mini.elf" "$work/pcala-rounding.o"
-python3 - "$work/pcala-rounding-mini.elf" <<'PY'
+"$MINILD" -m elf64loongarch -static -e _start \
+    -z max-page-size=16384 -o "$work/pcala-rounding-explicit-16k.elf" \
+    "$work/pcala-rounding.o"
+cmp "$work/pcala-rounding-mini.elf" \
+    "$work/pcala-rounding-explicit-16k.elf"
+"$MINILD" -m elf64loongarch -static -e _start \
+    -z max-page-size=65536 -o "$work/pcala-rounding-explicit-64k.elf" \
+    "$work/pcala-rounding.o"
+python3 - "$work/pcala-rounding-mini.elf" \
+    "$work/pcala-rounding-explicit-64k.elf" <<'PY'
 from pathlib import Path
 import struct,sys
-b=Path(sys.argv[1]).read_bytes()
-off=struct.unpack_from('<Q',b,40)[0]
-n=struct.unpack_from('<H',b,60)[0]
-si=struct.unpack_from('<H',b,62)[0]
-secs=[struct.unpack_from('<IIQQQQIIQQ',b,off+i*64) for i in range(n)]
-st=secs[si]; names=b[st[4]:st[4]+st[5]]
-def name(s):
-    i=s[0]; return names[i:names.index(0,i)].decode()
-sections={name(s):s for s in secs}
-sym=sections['.symtab']; stab=secs[sym[6]]
-strings=b[stab[4]:stab[4]+stab[5]]
-symbols={}
-for pos in range(sym[4],sym[4]+sym[5],24):
-    idx,_,_,_,value,_=struct.unpack_from('<IBBHQQ',b,pos)
-    if idx: symbols[strings[idx:strings.index(0,idx)].decode()]=value
-text=sections['.text']
-assert symbols['pcala_low_7ff']&0xfff==0x7ff
-assert symbols['pcala_low_800']&0xfff==0x800
-words=[struct.unpack_from('<I',b,text[4]+p)[0] for p in (0,4,8,12)]
-assert words[0]&0xfe000000==0x1a000000
-assert words[2]&0xfe000000==0x1a000000
-assert (words[0]>>5)&0xfffff==1, ('low12=0x7ff no carry',hex(words[0]))
-assert (words[2]>>5)&0xfffff==2, ('low12=0x800 carries +0x1000',hex(words[2]))
-assert (words[1]>>10)&0xfff==0x7ff
-assert (words[3]>>10)&0xfff==0x800
-print('MINILD_LOONGARCH_STATIC=PASS PCALA_HI20_page_rounding low12=7ff/800 hi20=1/2')
+for path, page, expected_hi20 in (
+        (sys.argv[1], 0x4000, (4, 5)),
+        (sys.argv[2], 0x10000, (16, 17))):
+    b=Path(path).read_bytes()
+    off=struct.unpack_from('<Q',b,40)[0]
+    n=struct.unpack_from('<H',b,60)[0]
+    si=struct.unpack_from('<H',b,62)[0]
+    secs=[struct.unpack_from('<IIQQQQIIQQ',b,off+i*64) for i in range(n)]
+    st=secs[si]; names=b[st[4]:st[4]+st[5]]
+    def name(s):
+        i=s[0]; return names[i:names.index(0,i)].decode()
+    sections={name(s):s for s in secs}
+    sym=sections['.symtab']; stab=secs[sym[6]]
+    strings=b[stab[4]:stab[4]+stab[5]]
+    symbols={}
+    for pos in range(sym[4],sym[4]+sym[5],24):
+        idx,_,_,_,value,_=struct.unpack_from('<IBBHQQ',b,pos)
+        if idx: symbols[strings[idx:strings.index(0,idx)].decode()]=value
+    text=sections['.text']
+    assert sections['.data'][3]-text[3]==page, (path,sections['.data'])
+    assert symbols['pcala_low_7ff']&0xfff==0x7ff
+    assert symbols['pcala_low_800']&0xfff==0x800
+    words=[struct.unpack_from('<I',b,text[4]+p)[0] for p in (0,4,8,12)]
+    assert words[0]&0xfe000000==0x1a000000
+    assert words[2]&0xfe000000==0x1a000000
+    for word, site, label, expected in (
+            (words[0],0,'pcala_low_7ff',expected_hi20[0]),
+            (words[2],8,'pcala_low_800',expected_hi20[1])):
+        target=symbols[label]
+        place=text[3]+site
+        # BFD RELOCATE_CALC_PC32_HI20 subtracts the 4K-rounded PC and
+        # rounds up exactly when the target's low12 has its sign bit set.
+        delta=((target&~0xfff)-(place&~0xfff) +
+               (0x1000 if target&0x800 else 0))
+        assert ((word>>5)&0xfffff)==((delta>>12)&0xfffff)==expected, (
+            label,hex(word),hex(target),hex(place),hex(delta))
+    assert (words[1]>>10)&0xfff==0x7ff
+    assert (words[3]>>10)&0xfff==0x800
+print('MINILD_LOONGARCH_STATIC=PASS PCALA_HI20_page_rounding '
+      'low12=7ff/800 GNU_default_16KiB_hi20=4/5 '
+      'explicit_16KiB=byte_exact explicit_64KiB_hi20=16/17')
 PY
 
 # The new width-specific calculation must not weaken opcode validation.
