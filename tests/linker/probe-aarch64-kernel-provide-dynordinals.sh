@@ -105,14 +105,14 @@ def extract(path, expected_index):
     assert (glob[0][1]>>32)==expected_index,(path,glob,expected_index)
     return records
 
-single=extract(sys.argv[1],5)
-repeated=extract(sys.argv[2],4)
+single=extract(sys.argv[1],4)
+repeated=extract(sys.argv[2],3)
 print('MINILD_AARCH64_PROVIDE_DYNORDINAL=PASS '
       'script_hidden_single=1 duplicate=excluded '
-      'weak_global_dynindex=single:5 repeated:4')
+      'weak_global_dynindex=single:4 repeated:3')
 if len(sys.argv)>3:
-    gnu_single=extract(sys.argv[3],5)
-    gnu_repeated=extract(sys.argv[4],4)
+    gnu_single=extract(sys.argv[3],4)
+    gnu_repeated=extract(sys.argv[4],3)
     assert single==gnu_single,('GNU single',gnu_single,single)
     assert repeated==gnu_repeated,('GNU repeated',gnu_repeated,repeated)
     print('MINILD_AARCH64_PROVIDE_DYNORDINAL_GNU=PASS '

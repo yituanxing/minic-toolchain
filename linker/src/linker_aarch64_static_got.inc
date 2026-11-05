@@ -272,12 +272,23 @@ static bool minild_aarch64_kernel_dyn_local_count(
             address_referenced[reloc->symbol] = 1U;
         }
     }
-    for (i = 0U; i < state->work.count; ++i) {
-        const MiniLdSection *section = &state->work.sections[i];
-        if ((section->flags & SHF_ALLOC) == 0U || section->gc_discarded ||
-            section->script_discard || section->size == 0U) continue;
-        if ((section->flags & SHF_WRITE) != 0U) seen_data = true;
-        else seen_code = true;
+    /* BFD's section-local dynsym records originate in admitted ET_REL
+     * sections, not linker-created .got/.rela.dyn output buffers.  In
+     * particular a GOT-only tiny fixture has a live code input but no
+     * original data input; allocating a synthetic writable GOT must not
+     * invent a second section-local dynindex. */
+    for (i = 0U; i < state->inputs.section_count; ++i) {
+        const MiniLdInputSection *input = &state->inputs.sections[i];
+        const MiniLdSection *section;
+        size_t owner;
+        if ((input->flags & SHF_ALLOC) == 0U || input->size == 0U) continue;
+        if (state->work.placements == NULL) continue;
+        owner = state->work.placements[i].work_section;
+        if (owner >= state->work.count) continue;
+        section = &state->work.sections[owner];
+        if (section->gc_discarded || section->script_discard) continue;
+        if ((input->flags & SHF_EXECINSTR) != 0U) seen_code = true;
+        else seen_data = true;
     }
     count = (seen_code ? 1U : 0U) + (seen_data ? 1U : 0U);
     for (i = 0U; i < symbols; ++i) {
