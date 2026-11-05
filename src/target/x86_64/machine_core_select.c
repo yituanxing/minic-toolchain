@@ -4744,7 +4744,11 @@ static bool x86_source_scalar_bitops(X86CoreSelector *sel,
     flag_index = desc->has_flag ?
         (desc->memory_output ? 1U : 0U) : SIZE_MAX;
     bit_index = count-1U;
-    if (source->has_memory_clobber != required_barrier ||
+    /* Core records the effective memory effect: a GNU +m output is an
+     * implicit memory write even without a separate memory clobber.
+     * Only the explicit clobber controls the source grammar policy. */
+    if (source->has_memory_clobber !=
+            (required_barrier || desc->memory_output) ||
         source->explicit_memory_clobber != required_barrier ||
         (desc->is_locked && !source->is_volatile) ||
         ins->value.structured_inline_asm.operand_count != count)

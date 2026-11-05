@@ -2484,8 +2484,12 @@ static bool x86_source_scalar_bitops_contract(
     const bool byte_rmw = form == MINIC_X86_BITOPS_LOCK_OR_BYTE ||
         form == MINIC_X86_BITOPS_LOCK_AND_BYTE ||
         form == MINIC_X86_BITOPS_LOCK_XOR_BYTE;
+    /* Core's effective memory bit includes +m read/write roles. The typed
+     * source-ASM handoff currently represents that bit as a conservative
+     * Machine compiler barrier even when GNU omitted "memory". */
     const bool barrier = !byte_rmw ||
-        form == MINIC_X86_BITOPS_LOCK_OR_BYTE;
+        form == MINIC_X86_BITOPS_LOCK_OR_BYTE ||
+        (desc != NULL && desc->memory_output);
     const bool named = memchr(ins->source_asm_template,'[',
         ins->source_asm_length) != NULL;
     const size_t count = desc != NULL && desc->has_flag ? 3U : 2U;
