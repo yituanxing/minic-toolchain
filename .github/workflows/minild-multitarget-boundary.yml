@@ -65,6 +65,7 @@ jobs:
             check-minild-rv32-static-runtime \
             check-minild-riscv-static-tls \
             check-minild-riscv-uleb-static \
+            check-minild-aarch64-kernel-provide-dynordinals \
             check-minild-aarch64-static-got \
             check-minild-aarch64-static-tls \
             check-minild-aarch64-static-ifunc \
@@ -72,6 +73,7 @@ jobs:
             check-minild-aarch64-merge-insn-relocs \
             check-minild-aarch64-merge-reloc-target \
             check-minild-aarch64-discarded-dynrel \
+            check-minild-gnu-bfd-duplicate-hidden-dyn-index \
             check-minild-loongarch-static-relocs \
             check-minild-loongarch-pcala-relax-fixedpoint \
             check-minild-static-script-discard-reloc-reserve \

@@ -910,6 +910,10 @@ check-minild-script-provide-gnu: $(MINILD_BINARY)
 check-minild-gnu-bfd-local-dyn-index:
 	bash tests/linker/probe-gnu-bfd-local-dyn-index.sh
 
+.PHONY: check-minild-gnu-bfd-duplicate-hidden-dyn-index
+check-minild-gnu-bfd-duplicate-hidden-dyn-index:
+	bash tests/linker/probe-gnu-bfd-duplicate-hidden-dyn-index.sh
+
 .PHONY: check-minild-synthetic-byte-phdr-flags
 check-minild-synthetic-byte-phdr-flags: $(MINILD_BINARY)
 	MINILD="$(abspath $(MINILD_BINARY))" \
@@ -1000,6 +1004,7 @@ check-minild-five-arch-linux-linker-boundary: \
 	check-minild-script-top-level-empty-statements \
 	check-minild-script-provide-gnu \
 	check-minild-gnu-bfd-local-dyn-index \
+	check-minild-gnu-bfd-duplicate-hidden-dyn-index \
 	check-minild-script-forward-placement-fixedpoint \
 	check-minild-synthetic-byte-phdr-flags \
 	check-minild-static-script-load-page-coalesce \

@@ -209,30 +209,43 @@ static bool minild_aarch64_kernel_undefined_weak(
            ELF64_ST_VISIBILITY(symbol->other) == STV_DEFAULT;
 }
 
-/* GNU records a hidden undefined input symbol as a dynamic candidate while
- * reading a PIC object.  A later linker-script PROVIDE may define it and
- * force local binding; BFD's dynsym renumbering retains it in the local
- * prefix *before* unresolved weak global symbols.  InputGraph preserves the
- * original UND/visibility after the canonical resolver is rewritten.  The
- * kernel's script discards ordinary dynamic metadata, so no output-section
- * dynsym records precede this local prefix (unlike a normal shared DSO). */
-static bool minild_aarch64_kernel_forced_local_dyn_count(
+/* BFD assigns dynamic indices before a kernel script discards .dynsym:
+ * section-local entries precede forced-local script PROVIDEs, followed by
+ * global hash traversal. A hidden UND may be eligible for that local prefix
+ * only while it belongs to one input object and its value is address-taken.
+ * Repeated hidden UND declarations from different ET_REL objects become
+ * forced-local during early BFD hash merging and do not consume a dynindex;
+ * CALL26/JUMP26-only aliases likewise do not need one. Keep the provenance
+ * from original InputGraph symbols, and require an actually applied PROVIDE. */
+static bool minild_aarch64_kernel_dyn_local_count(
     const MiniLdState *state, size_t *count_out) {
-    unsigned char *seen;
-    size_t i, count = 0U;
+    unsigned char *seen = NULL, *address_referenced = NULL;
+    size_t *first_file = NULL;
+    size_t i, count = 0U, symbols = state->resolver.count;
+    bool seen_code = false, seen_data = false;
 
-    seen = calloc(state->resolver.count == 0U ? 1U :
-                  state->resolver.count, sizeof(*seen));
-    if (seen == NULL) return false;
+    if (symbols > SIZE_MAX / sizeof(*first_file)) return false;
+    seen = calloc(symbols == 0U ? 1U : symbols, sizeof(*seen));
+    address_referenced = calloc(symbols == 0U ? 1U : symbols,
+                                sizeof(*address_referenced));
+    first_file = malloc((symbols == 0U ? 1U : symbols) *
+                        sizeof(*first_file));
+    if (seen == NULL || address_referenced == NULL || first_file == NULL) {
+        free(seen);
+        free(address_referenced);
+        free(first_file);
+        return false;
+    }
     for (i = 0U; i < state->inputs.symbol_count; ++i) {
         const MiniLdInputSymbol *source = &state->inputs.symbols[i];
         const MiniLdResolvedSymbol *resolved;
         size_t canonical = source->canonical_symbol;
 
-        if (canonical >= state->resolver.count || seen[canonical] != 0U ||
+        if (canonical >= symbols || seen[canonical] == 2U ||
             source->elf_section != SHN_UNDEF ||
             ELF64_ST_BIND(source->info) == STB_LOCAL ||
-            ELF64_ST_VISIBILITY(source->other) != STV_HIDDEN) {
+            (ELF64_ST_VISIBILITY(source->other) != STV_HIDDEN &&
+             ELF64_ST_VISIBILITY(source->other) != STV_INTERNAL)) {
             continue;
         }
         resolved = &state->resolver.entries[canonical];
@@ -240,10 +253,39 @@ static bool minild_aarch64_kernel_forced_local_dyn_count(
             resolved->section == MINILD_SECTION_UNDEF) {
             continue;
         }
-        seen[canonical] = 1U;
-        ++count;
+        if (seen[canonical] == 0U) {
+            first_file[canonical] = source->file;
+            seen[canonical] = 1U;
+        } else if (first_file[canonical] != source->file) {
+            seen[canonical] = 2U;
+        }
+    }
+    for (i = 0U; i < state->relocations.count; ++i) {
+        const MiniLdReloc *reloc = &state->relocations.entries[i];
+        const MiniLdSection *source;
+        if (reloc->symbol >= symbols || reloc->section >= state->work.count ||
+            reloc->type == R_AARCH64_CALL26 ||
+            reloc->type == R_AARCH64_JUMP26) continue;
+        source = &state->work.sections[reloc->section];
+        if ((source->flags & SHF_ALLOC) != 0U && !source->gc_discarded &&
+            !source->script_discard) {
+            address_referenced[reloc->symbol] = 1U;
+        }
+    }
+    for (i = 0U; i < state->work.count; ++i) {
+        const MiniLdSection *section = &state->work.sections[i];
+        if ((section->flags & SHF_ALLOC) == 0U || section->gc_discarded ||
+            section->script_discard || section->size == 0U) continue;
+        if ((section->flags & SHF_WRITE) != 0U) seen_data = true;
+        else seen_code = true;
+    }
+    count = (seen_code ? 1U : 0U) + (seen_data ? 1U : 0U);
+    for (i = 0U; i < symbols; ++i) {
+        if (seen[i] == 1U && address_referenced[i]) ++count;
     }
     free(seen);
+    free(address_referenced);
+    free(first_file);
     *count_out = count;
     return true;
 }
@@ -276,7 +318,7 @@ static bool minild_aarch64_kernel_emit_weak_dynrels(
     bool ok = false;
 
     if (got->kernel_rela_section == SIZE_MAX) return true;
-    if (!minild_aarch64_kernel_forced_local_dyn_count(state, &local_count) ||
+    if (!minild_aarch64_kernel_dyn_local_count(state, &local_count) ||
         got->symbol_count > SIZE_MAX / sizeof(*dynamic_index)) return false;
     needed = calloc(got->symbol_count == 0U ? 1U :
                     got->symbol_count, sizeof(*needed));
