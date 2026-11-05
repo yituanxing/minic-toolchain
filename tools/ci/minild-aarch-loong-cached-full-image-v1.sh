@@ -342,9 +342,8 @@ full_link() {
   # exact final SHF_ALLOC byte geometry is not a meaningful QEMU gate.
   # Preserve independent strict ELF validation: entrypoint, PT_LOAD backing,
   # VMA/file congruence, section-to-LOAD coverage, ABI flags and code owners.
-  python3 - "$repo/tools/ci/minild-final-elf-audit.py" \
-    "$out/vmlinux" "$arch" >"$ev/final-ELF-safety-audit.txt" <<'PY' ||
-    die final_MiniLD_ELF_mapping_or_ABI_invalid
+  if ! python3 - "$repo/tools/ci/minild-final-elf-audit.py" \
+       "$out/vmlinux" "$arch" >"$ev/final-ELF-safety-audit.txt" <<'PY'
 import runpy
 import sys
 
@@ -370,6 +369,9 @@ print('MINILD_TWOARCH_ELF_SAFETY=PASS '
       'ABI_and_entry=exact independently_mapped_alloc_sections=true '
       'GNU_final_byte_identity=NOT_REQUIRED QEMU=NOT_RUN')
 PY
+  then
+    die final_MiniLD_ELF_mapping_or_ABI_invalid
+  fi
   cat "$ev/final-ELF-safety-audit.txt"
   sha256sum "$out/vmlinux" "$out/System.map" >"$ev/minild-final-vmlinux.sha256"
   printf 'mini_sha=%s\nlinux_sha=%s\n' "$(digest "$mini")" "$kernel_sha" \
@@ -493,7 +495,7 @@ PY_ZBOOT
 from pathlib import Path
 import struct, sys
 b = Path(sys.argv[1]).read_bytes()
-if len(b) < 0x100 or b[:2] != b'MZ' or b[2:6] != b'zimg':
+if len(b) < 0x100 or b[:8] != b'MZ\0\0zimg':
     raise SystemExit('MINILD_TWOARCH_FULL=FAIL invalid_Loong_EFI_Zboot_header')
 pe = struct.unpack_from('<I', b, 0x3c)[0]
 if pe + 6 > len(b) or b[pe:pe+4] != b'PE\0\0':
