@@ -237,6 +237,12 @@ jobs:
           python3 -m py_compile tools/runtime/build_runtime.py
           python3 tools/runtime/build_runtime.py --print-sources
           make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/runtime-ci all
+      - name: Original GNU Linux AArch64 narrow CMPXCHG exclusive 8/16 GNU QEMU differential
+        if: matrix.target == 'aarch64'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          bash tests/compiler/c0/probe-aarch64-linux-narrow-cmpxchg-qemu.sh "$GITHUB_WORKSPACE/build/runtime-ci/bin/minic-cc"
       - name: Core i128 signed/unsigned pointer offsets and GNU zero stride on all LP64 ISAs
         shell: bash
         run: |
@@ -779,12 +785,6 @@ jobs:
         run: |
           set -Eeuo pipefail
           MINIC_TLBI_SOURCE_ONLY=0 bash tests/compiler/c0/probe-aarch64-linux-tlbi-family.sh "$GITHUB_WORKSPACE/build/runtime-ci/bin/minic-cc"
-      - name: Original GNU Linux AArch64 narrow CMPXCHG exclusive 8/16 GNU QEMU differential
-        if: matrix.target == 'aarch64'
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          bash tests/compiler/c0/probe-aarch64-linux-narrow-cmpxchg-qemu.sh "$GITHUB_WORKSPACE/build/runtime-ci/bin/minic-cc"
       - name: Original Linux LoongArch no-operand DBAR real GNU QEMU
         if: matrix.target == 'loongarch64'
         shell: bash

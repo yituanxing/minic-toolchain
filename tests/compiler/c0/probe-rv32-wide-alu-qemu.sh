@@ -48,6 +48,7 @@ struct VirtioModelConfig {
   U (*get_features)(void *);
 };
 struct VirtioModelDriver {
+  unsigned char prefix[80];
   const unsigned *feature_table;
   unsigned feature_table_size;
   const unsigned *feature_table_legacy;
@@ -150,6 +151,7 @@ struct VirtioModelConfig {
   U (*get_features)(void *);
 };
 struct VirtioModelDriver {
+  unsigned char prefix[80];
   const unsigned *feature_table;
   unsigned feature_table_size;
   const unsigned *feature_table_legacy;
@@ -240,7 +242,11 @@ static int test_virtio_model(void) {
   if ((unsigned)((char *)&minic_dev.config - (char *)&minic_dev) != 592U ||
       (unsigned)((char *)&minic_dev.features - (char *)&minic_dev) != 608U ||
       (unsigned)((char *)&virtio_model_config.get_features -
-                 (char *)&virtio_model_config) != 36U)
+                 (char *)&virtio_model_config) != 36U ||
+      (unsigned)((char *)&drv.feature_table - (char *)&drv) != 80U ||
+      (unsigned)((char *)&drv.feature_table_size - (char *)&drv) != 84U ||
+      (unsigned)((char *)&drv.feature_table_legacy - (char *)&drv) != 88U ||
+      (unsigned)((char *)&drv.feature_table_size_legacy - (char *)&drv) != 92U)
     return 17;
   for (variant = 0U; variant < 2U; variant++) {
     drv.feature_table_legacy = variant ? model_legacy_table : (const unsigned *)0;
@@ -354,4 +360,4 @@ for mode in gnu minic-gas minic-as; do
 done
 echo "RV32_I64_ALU=PASS checks=1500 functions=22 ISA=rv32i ABI=ilp32 GNU_C=1 GNU_AS=1 MiniAS=1 QEMU=1 upstream_llvm_DI_arithmetic=1"
 echo "RV32_VIRTIO_FEATURE32=PASS cases=7 indirect_u64_callback_a0_a1=1 shift32=1 wide_bitwise_and=1 GNU_C=1 GNU_AS=1 MiniAS=1 QEMU=1"
-echo "RV32_VIRTIO_MODEL=PASS cases=9 variants=2 feature_table=1ull_dynamic_shift transport_28_41=1 config_at_592_of_dev_552_of_embedded=1 feature_at_608_of_dev_568_of_embedded=1 config_callback_at_36=1 GNU_C=1 GNU_AS=1 MiniAS=1 QEMU=1"
+echo "RV32_VIRTIO_MODEL=PASS cases=9 variants=2 feature_table=1ull_dynamic_shift transport_28_41=1 config_at_592_of_dev_552_of_embedded=1 feature_at_608_of_dev_568_of_embedded=1 config_callback_at_36=1 driver_table_at_80_legacy_88=1 GNU_C=1 GNU_AS=1 MiniAS=1 QEMU=1"

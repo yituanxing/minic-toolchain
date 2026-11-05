@@ -487,6 +487,17 @@ static bool x86_emit_futex_extable(FILE *out,
 /* Only the seven Source-qualified, operand-free Linux barrier forms are
  * serialized here. Variant and source text are checked independently by the
  * target verifier before any function output is written. */
+/* Linux LOCK_PREFIX emits a real .smp_locks relocation identifying the
+ * exact following instruction; no preformatted source template is copied. */
+static bool x86_emit_scalar_smp_lock(FILE *out) {
+    return fputs("  .pushsection .smp_locks,\"a\"\n"
+        "  .balign 4\n"
+        "  .long 671f - .\n"
+        "  .popsection\n"
+        "671:\n"
+        "  lock; ",out) != EOF;
+}
+
 static bool x86_emit_source_asm(FILE *out,
     const MinicMachineFunction *function,
     const MinicMachineInstruction *instruction,
@@ -661,6 +672,94 @@ static bool x86_emit_source_asm(FILE *out,
         if (form != 1U && form != 2U) return false;
         return fputs(form == 1U ? "  rdrand %rax\n" :
             "  rdseed %rax\n",out) != EOF;
+    }
+    if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_PORT_IO) {
+        const MinicX86PortIo form = minic_x86_64_port_io_form(
+            instruction->source_asm_template,
+            instruction->source_asm_length);
+        const MinicX86PortIoDesc *desc =
+            minic_x86_64_port_io_description(form);
+        const char *data;
+        if (desc == NULL) return false;
+        data = desc->width == 1U ? "%al" :
+            desc->width == 2U ? "%ax" : "%eax";
+        return desc->is_input ?
+            fprintf(out,"  %s %%dx, %s\n",desc->opcode,data) >= 0 :
+            fprintf(out,"  %s %s, %%dx\n",desc->opcode,data) >= 0;
+    }
+    if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_ATOMIC_RMW) {
+        const MinicX86AtomicRmw form = minic_x86_64_atomic_rmw_form(
+            instruction->source_asm_template,
+            instruction->source_asm_length);
+        const MinicX86AtomicRmwDesc *desc =
+            minic_x86_64_atomic_rmw_description(form);
+        const char *value;
+        if (desc == NULL || (desc->locked &&
+            !x86_emit_scalar_smp_lock(out))) return false;
+        value = desc->width == 4U ? "%r11d" : "%r11";
+        return desc->unary ?
+            fprintf(out,"%s%s (%%r10)\n",
+                desc->locked ? "" : "  ",desc->opcode) >= 0 :
+            fprintf(out,"%s%s %s, (%%r10)\n",
+                desc->locked ? "" : "  ",desc->opcode,value) >= 0;
+    }
+    if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_RAW_CMPXCHG ||
+        instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_TRYCAS) {
+        const bool trycas = instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_TRYCAS;
+        const MinicX86TryCas form = trycas ?
+            minic_x86_64_trycas_form(
+                instruction->source_asm_template,
+                instruction->source_asm_length) :
+            minic_x86_64_raw_cmpxchg_form(
+                instruction->source_asm_template,
+                instruction->source_asm_length);
+        const MinicX86TryCasDesc *desc =
+            minic_x86_64_trycas_desc(form);
+        if (desc == NULL || (desc->locked &&
+            !x86_emit_scalar_smp_lock(out))) return false;
+        return fprintf(out,"%s%s %s, (%%r11)\n",
+            desc->locked ? "" : "  ",desc->op,desc->new_reg) >= 0;
+    }
+    if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_BITOPS) {
+        const MinicX86BitopsForm form = minic_x86_64_linux_bitops_form(
+            instruction->source_asm_template,
+            instruction->source_asm_length);
+        const MinicX86BitopsDesc *desc =
+            minic_x86_64_bitops_description(form);
+        const bool byte_rmw = form == MINIC_X86_BITOPS_LOCK_OR_BYTE ||
+            form == MINIC_X86_BITOPS_LOCK_AND_BYTE ||
+            form == MINIC_X86_BITOPS_LOCK_XOR_BYTE;
+        if (desc == NULL || (desc->is_locked &&
+            !x86_emit_scalar_smp_lock(out))) return false;
+        return fprintf(out,"%s%s %s, (%%r10)\n",
+            desc->is_locked ? "" : "  ",desc->opcode,
+            byte_rmw ? "%r11b" : "%r11") >= 0;
+    }
+    if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_ATOMIC_CC) {
+        const MinicX86AtomicCC form = minic_x86_64_atomic_cc_form(
+            instruction->source_asm_template,
+            instruction->source_asm_length);
+        const MinicX86AtomicCCDesc *desc =
+            minic_x86_64_atomic_cc_description(form);
+        const bool locked = minic_x86_64_atomic_cc_locked_form(
+            instruction->source_asm_template,
+            instruction->source_asm_length);
+        const char *value;
+        if (desc == NULL || (locked &&
+            !x86_emit_scalar_smp_lock(out))) return false;
+        value = desc->width == 4U ? "%r11d" : "%r11";
+        return desc->has_value ?
+            fprintf(out,"%s%s %s, (%%r10)\n",
+                locked ? "" : "  ",desc->opcode,value) >= 0 :
+            fprintf(out,"%s%s (%%r10)\n",
+                locked ? "" : "  ",desc->opcode) >= 0;
     }
     if (instruction->source_asm_machine_form_id ==
             MINIC_X86_MACHINE_ASM_MXCSR) {
