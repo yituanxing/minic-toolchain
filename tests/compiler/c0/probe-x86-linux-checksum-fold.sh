@@ -18,7 +18,10 @@ unsigned int mini_add32(unsigned int a,unsigned int b) {
 }
 SRC
 sed 's/mini_/gnu_/g' "$d/fold.i" >"$d/gnu.c"
-"$cc" --target=x86_64-linux -S "$d/fold.i" -o "$d/mini.s"
+if ! MINIC_X86_TYPED_REJECT_TRACE=1 "$cc" --target=x86_64-linux -S "$d/fold.i" -o "$d/mini.s"; then
+  echo "FAIL x86 checksum fold/add32 typed MachineIR; see exact function and selector stage above" >&2
+  exit 1
+fi
 gcc -c -x assembler "$d/mini.s" -o "$d/mini.o"
 gcc -O0 -c "$d/gnu.c" -o "$d/gnu.o"
 grep -Fq 'addl %r10d, %eax' "$d/mini.s"

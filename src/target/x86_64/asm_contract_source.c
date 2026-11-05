@@ -3017,7 +3017,10 @@ static bool x86_linux_lowlevel_scalar_source(const MinicTargetInvocation *invoca
             program, source->inputs[1].expression);
         if (!operand || !minic_type_is_integer(operand->type)) return false;
         contract->operand_count = 2U;
-        contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE;
+        /* GNU input-only "m" is an input location, even though the
+         * selected BTC hardware operation mutates memory. Keep the GNU
+         * binding role separate from the target Machine write effect. */
+        contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT;
         contract->kinds[1] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
         contract->implicit_memory_effect = true;
         contract->target_machine_form_variant = form;
