@@ -3819,7 +3819,9 @@ static bool x86_source_hweight(X86CoreSelector *sel,
         source->target_machine_form_variant != 0U ||
         source->operand_plan_owner != MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED ||
         source->source_asm_unique_id == 0U ||
-        source->is_volatile || source->is_goto ||
+        /* The Source HWEIGHT qualifier requires original GNU nonvolatile
+         * syntax; Core deliberately marks its produced output effectful. */
+        !source->is_volatile || source->is_goto ||
         source->has_memory_clobber || source->explicit_memory_clobber ||
         source->implicit_memory_effect ||
         source->register_clobber_count != 0U ||
@@ -5527,7 +5529,10 @@ static bool x86_source_checksum_carry(X86CoreSelector *sel,
         ins->value.structured_inline_asm.operand_count != count ||
         source->target_machine_form_variant != 0U ||
         source->operand_plan_owner != MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED ||
-        source->source_asm_unique_id == 0U || source->is_volatile ||
+        /* Core marks every target-qualified ASM effect volatile to retain
+         * observable results; original GNU nonvolatile syntax was checked
+         * exclusively by the C Source contract before Core import. */
+        source->source_asm_unique_id == 0U || !source->is_volatile ||
         source->is_goto || source->explicit_memory_clobber ||
         (source->has_memory_clobber &&
             !(is_partial && partial >= 2U && partial <= 5U)) ||

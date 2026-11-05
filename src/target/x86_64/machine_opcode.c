@@ -1705,6 +1705,9 @@ static bool x86_source_checksum_carry_contract(
         (ins->effects &
             ~(unsigned int)MINIC_MACHINE_EFFECT_COMPILER_BARRIER) !=
             (MINIC_MACHINE_EFFECT_SOURCE_ASM |
+             /* GNU source may be nonvolatile, but Core retains its
+              * observable output as an effective volatile effect. */
+             MINIC_MACHINE_EFFECT_VOLATILE |
              (partial && form >= 2U && form <= 5U ?
                  MINIC_MACHINE_EFFECT_MEMORY_READ : 0U)) ||
         ((ins->effects & MINIC_MACHINE_EFFECT_COMPILER_BARRIER) != 0U &&
@@ -1958,7 +1961,8 @@ static bool x86_source_hweight_contract(const MinicMachineInstruction *ins) {
         ins->source_asm_machine_form_variant != 0U ||
         ins->source_asm_terminates_block ||
         ins->source_asm_permits_fallthrough ||
-        ins->effects != MINIC_MACHINE_EFFECT_SOURCE_ASM ||
+        ins->effects != (MINIC_MACHINE_EFFECT_SOURCE_ASM |
+            MINIC_MACHINE_EFFECT_VOLATILE) ||
         ins->operand_count != 2U || ins->operands == NULL ||
         ins->implicit_count != 0U || ins->implicit != NULL ||
         !minic_x86_64_typed_machine_form_matches_template(
