@@ -1,5 +1,6 @@
 #include "minild.h"
 
+#include <errno.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -22,6 +23,24 @@ static bool file_exists(const char *path) {
         return false;
     }
     (void)fclose(file);
+    return true;
+}
+
+static bool parse_page_size(const char *option, uint64_t *value_out) {
+    const char prefix[] = "max-page-size=";
+    char *end;
+    unsigned long long value;
+    if (strncmp(option, prefix, sizeof(prefix) - 1U) != 0) {
+        return false;
+    }
+    errno = 0;
+    value = strtoull(option + sizeof(prefix) - 1U, &end, 0);
+    if (errno != 0 || end == option + sizeof(prefix) - 1U ||
+        *end != '\0' || value < 4096ULL ||
+        (value & (value - 1ULL)) != 0ULL || value > (1ULL << 30)) {
+        return false;
+    }
+    *value_out = (uint64_t)value;
     return true;
 }
 
@@ -125,11 +144,15 @@ int main(int argc, char **argv) {
     bool discard_locals = false;
     bool no_dynamic_linker = false;
     bool emit_relocs = false;
+    bool build_id_sha1 = false;
     bool z_notext = false;
     bool symbolic = false;
     bool no_apply_dynamic_relocs = false;
     bool pic_veneer = false;
+    bool fix_cortex_a53_843419 = false;
     bool no_undefined = false;
+    bool orphan_handling_error = false;
+    uint64_t max_page_size = 0U;
     /* 0 = default target byte order; 1 = -EL, 2 = -EB. */
     unsigned int requested_endianness = 0U;
     bool emulation_explicit = false;
@@ -335,6 +358,9 @@ int main(int argc, char **argv) {
         } else if (strcmp(argv[i], "--emit-relocs") == 0 ||
                    strcmp(argv[i], "-q") == 0) {
             emit_relocs = true;
+        } else if (strcmp(argv[i], "--build-id=sha1") == 0 ||
+                   strcmp(argv[i], "--build-id") == 0) {
+            build_id_sha1 = true;
         } else if (strcmp(argv[i], "-Bsymbolic") == 0) {
             symbolic = true;
         } else if (strcmp(argv[i], "--no-apply-dynamic-relocs") == 0) {
@@ -344,6 +370,11 @@ int main(int argc, char **argv) {
         } else if (strcmp(argv[i], "-X") == 0 ||
                    strcmp(argv[i], "--discard-locals") == 0) {
             discard_locals = true;
+        } else if (strcmp(argv[i], "--discard-none") == 0) {
+            /* GNU --discard-none overrides an earlier -X/-x selection. */
+            discard_locals = false;
+        } else if (strcmp(argv[i], "--fix-cortex-a53-843419") == 0) {
+            fix_cortex_a53_843419 = true;
         } else if (strcmp(argv[i], "-EL") == 0 ||
                    strcmp(argv[i], "-EB") == 0) {
             unsigned int next = strcmp(argv[i], "-EL") == 0 ? 1U : 2U;
@@ -381,7 +412,13 @@ int main(int argc, char **argv) {
                 usage(stderr, argv[0]);
                 return 2;
             }
-            if (strcmp(argv[i], "noexecstack") != 0 &&
+            if (strncmp(argv[i], "max-page-size=", 14U) == 0) {
+                if (!parse_page_size(argv[i], &max_page_size)) {
+                    fprintf(stderr, "minic-ld: invalid-max-page-size:%s\n",
+                            argv[i]);
+                    return 2;
+                }
+            } else if (strcmp(argv[i], "noexecstack") != 0 &&
                 strcmp(argv[i], "nodefaultlib") != 0 &&
                 strcmp(argv[i], "norelro") != 0 &&
                 strcmp(argv[i], "notext") != 0) {
@@ -391,6 +428,10 @@ int main(int argc, char **argv) {
             if (strcmp(argv[i], "notext") == 0) {
                 z_notext = true;
             }
+        } else if (strcmp(argv[i], "--orphan-handling=error") == 0) {
+            orphan_handling_error = true;
+        } else if (strcmp(argv[i], "--orphan-handling=warn") == 0) {
+            orphan_handling_error = false;
         } else if (strcmp(argv[i], "--hash-style=both") == 0) {
             hash_style_both = true;
         } else if (strcmp(argv[i], "--eh-frame-hdr") == 0) {
@@ -398,9 +439,7 @@ int main(int argc, char **argv) {
         } else if (strcmp(argv[i], "-S") == 0 ||
                    strcmp(argv[i], "--strip-debug") == 0) {
             strip_debug = true;
-        } else if (strcmp(argv[i], "--no-warn-rwx-segments") == 0 ||
-                   strcmp(argv[i], "--build-id=sha1") == 0 ||
-                   strcmp(argv[i], "--orphan-handling=warn") == 0) {
+        } else if (strcmp(argv[i], "--no-warn-rwx-segments") == 0) {
             /*
              * These options affect ELF metadata/debug retention or diagnostics,
              * not the A2/A3 static load image. Accept the Linux final-link
@@ -475,6 +514,14 @@ int main(int argc, char **argv) {
         fprintf(stderr, "minic-ld: kernel-shared-options-require-static-ET_DYN-script\n");
         return 2;
     }
+    if (fix_cortex_a53_843419 &&
+        ((strcmp(emulation, "aarch64linux") != 0 &&
+          strcmp(emulation, "aarch64elf") != 0) ||
+         relocatable || pie_link ||
+         (shared_link && !kernel_shared_image))) {
+        fprintf(stderr, "minic-ld: --fix-cortex-a53-843419-requires-aarch64-static-or-kernel-image\n");
+        return 2;
+    }
 
     if ((relocatable ? 1 : 0) + (shared_link ? 1 : 0) +
             (pie_link ? 1 : 0) >
@@ -503,6 +550,16 @@ int main(int argc, char **argv) {
         (relocatable || shared_link ||
          (pie_link && !kernel_static_pie) || interpreter_path != NULL)) {
         fprintf(stderr, "minic-ld: --no-dynamic-linker-requires-static-link\n");
+        return 2;
+    }
+    if (orphan_handling_error && script_path == NULL) {
+        fprintf(stderr, "minic-ld: --orphan-handling=error-requires-script\n");
+        return 2;
+    }
+    if (max_page_size != 0U && (relocatable ||
+        (shared_link && !kernel_shared_image) ||
+        (pie_link && !kernel_static_pie))) {
+        fprintf(stderr, "minic-ld: -z max-page-size-requires-final-kernel-or-static-link\n");
         return 2;
     }
     if (discard_locals && (relocatable ||
@@ -614,8 +671,13 @@ int main(int argc, char **argv) {
         options.nmagic = nmagic;
         options.discard_locals = discard_locals;
         options.output_et_dyn = kernel_et_dyn;
+        options.static_pie_requested = kernel_static_pie;
+        options.fix_cortex_a53_843419 = fix_cortex_a53_843419;
+        options.max_page_size = max_page_size;
+        options.orphan_handling_error = orphan_handling_error;
         options.kernel_shared_no_dynamic_relocations = kernel_shared_image;
         options.emit_relocs = emit_relocs;
+        options.build_id_sha1 = build_id_sha1;
         return minild_link_static_elf64_inputs_target(
             output, inputs, input_count, &options, emulation, stderr);
     }

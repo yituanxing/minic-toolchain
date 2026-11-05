@@ -3,9 +3,9 @@
 #include <stdlib.h>
 #include <string.h>
 
-static bool append_expression(MiniLdScript *script,
-                              MiniLdScriptExpr expression,
-                              MiniLdScriptExprId *id_out) {
+bool minild_script_append_expression(MiniLdScript *script,
+                                     MiniLdScriptExpr expression,
+                                     MiniLdScriptExprId *id_out) {
     MiniLdScriptExpr *next;
     if (script->expression_count == script->expression_capacity) {
         size_t capacity = script->expression_capacity == 0U ? 64U : script->expression_capacity * 2U;
@@ -23,6 +23,12 @@ static bool append_expression(MiniLdScript *script,
     *id_out = script->expression_count;
     script->expressions[script->expression_count++] = expression;
     return true;
+}
+
+static bool append_expression(MiniLdScript *script,
+                              MiniLdScriptExpr expression,
+                              MiniLdScriptExprId *id_out) {
+    return minild_script_append_expression(script, expression, id_out);
 }
 
 static bool parse_primary(ScriptParser *parser, MiniLdScriptExprId *expression_out) {
@@ -70,41 +76,73 @@ static bool parse_primary(ScriptParser *parser, MiniLdScriptExprId *expression_o
         }
         if (parser->token.kind == TOKEN_LPAREN &&
             (strcmp(name, "ALIGN") == 0 || strcmp(name, "ADDR") == 0 ||
+             strcmp(name, "SIZEOF") == 0 || strcmp(name, "ASSERT") == 0 ||
              strcmp(name, "ABSOLUTE") == 0)) {
             MiniLdScriptExprId operand;
             MiniLdScriptExprKind kind = strcmp(name, "ALIGN") == 0
                                             ? MINILD_SCRIPT_EXPR_ALIGN
                                         : strcmp(name, "ADDR") == 0
                                             ? MINILD_SCRIPT_EXPR_ADDR
+                                        : strcmp(name, "SIZEOF") == 0
+                                            ? MINILD_SCRIPT_EXPR_SIZEOF
+                                        : strcmp(name, "ASSERT") == 0
+                                            ? MINILD_SCRIPT_EXPR_ASSERT
                                             : MINILD_SCRIPT_EXPR_ABSOLUTE;
             free(name);
             if (!minild_script_parser_next(parser)) {
                 return false;
             }
-            if (kind == MINILD_SCRIPT_EXPR_ADDR) {
+            if (kind == MINILD_SCRIPT_EXPR_ADDR ||
+                kind == MINILD_SCRIPT_EXPR_SIZEOF) {
                 if (parser->token.kind != TOKEN_IDENTIFIER) {
-                    return minild_script_parser_error(parser, "ADDR-requires-section-name");
+                    return minild_script_parser_error(parser, "section-expression-requires-section-name");
                 }
                 expression.kind = kind;
                 expression.name = minild_script_strdup_range(parser->token.begin,
                                                              parser->token.length);
                 if (expression.name == NULL) {
-                    return minild_script_parser_error(parser, "out-of-memory:ADDR");
+                    return minild_script_parser_error(parser, "out-of-memory:section-expression");
                 }
                 if (!minild_script_parser_next(parser) ||
-                    !minild_script_expect(parser, TOKEN_RPAREN, "expected-')'-after-ADDR")) {
+                    !minild_script_expect(parser, TOKEN_RPAREN, "expected-')'-after-section-expression")) {
                     free(expression.name);
                     return false;
                 }
                 return append_expression(parser->script, expression, expression_out) ||
                        minild_script_parser_error(parser, "out-of-memory:expression");
             }
-            if (!minild_script_parse_expression(parser, &operand) ||
-                !minild_script_expect(parser, TOKEN_RPAREN, "expected-')'-after-function")) {
+            if (!minild_script_parse_expression(parser, &operand)) {
                 return false;
             }
             expression.kind = kind;
             expression.left = operand;
+            if (kind == MINILD_SCRIPT_EXPR_ALIGN &&
+                parser->token.kind == TOKEN_COMMA) {
+                if (!minild_script_parser_next(parser) ||
+                    !minild_script_parse_expression(parser, &expression.right)) {
+                    return false;
+                }
+            }
+            if (kind == MINILD_SCRIPT_EXPR_ASSERT) {
+                if (!minild_script_expect(parser, TOKEN_COMMA,
+                                          "expected-','-after-ASSERT-expression") ||
+                    parser->token.kind != TOKEN_STRING) {
+                    return minild_script_parser_error(parser,
+                                                      "expected-ASSERT-message");
+                }
+                expression.name = minild_script_strdup_range(
+                    parser->token.begin, parser->token.length);
+                if (expression.name == NULL ||
+                    !minild_script_parser_next(parser)) {
+                    free(expression.name);
+                    return false;
+                }
+            }
+            if (!minild_script_expect(parser, TOKEN_RPAREN,
+                                      "expected-')'-after-function")) {
+                free(expression.name);
+                return false;
+            }
             return append_expression(parser->script, expression, expression_out) ||
                    minild_script_parser_error(parser, "out-of-memory:expression");
         }
@@ -288,10 +326,50 @@ static bool parse_bitwise_xor(ScriptParser *parser,
                                MINILD_SCRIPT_EXPR_BITWISE_XOR, expression_out);
 }
 
-bool minild_script_parse_expression(ScriptParser *parser,
-                                    MiniLdScriptExprId *expression_out) {
+static bool parse_bitwise_or(ScriptParser *parser,
+                             MiniLdScriptExprId *expression_out) {
     return parse_bitwise_level(parser, parse_bitwise_xor, TOKEN_PIPE,
                                MINILD_SCRIPT_EXPR_BITWISE_OR, expression_out);
+}
+
+static bool parse_comparison(ScriptParser *parser,
+                             MiniLdScriptExprId *expression_out) {
+    MiniLdScriptExprId left;
+    if (!parse_bitwise_or(parser, &left)) {
+        return false;
+    }
+    while (parser->token.kind == TOKEN_LESS ||
+           parser->token.kind == TOKEN_LESS_EQUAL) {
+        ScriptTokenKind token = parser->token.kind;
+        MiniLdScriptExpr expression;
+        MiniLdScriptExprId right;
+        if (!minild_script_parser_next(parser) ||
+            !parse_bitwise_or(parser, &right)) {
+            return false;
+        }
+        memset(&expression, 0, sizeof(expression));
+        expression.kind = token == TOKEN_LESS ? MINILD_SCRIPT_EXPR_LESS :
+                          MINILD_SCRIPT_EXPR_LESS_EQUAL;
+        expression.left = left;
+        expression.right = right;
+        if (!append_expression(parser->script, expression, &left)) {
+            return minild_script_parser_error(parser, "out-of-memory:expression");
+        }
+    }
+    *expression_out = left;
+    return true;
+}
+
+static bool parse_equality(ScriptParser *parser,
+                           MiniLdScriptExprId *expression_out) {
+    return parse_bitwise_level(parser, parse_comparison, TOKEN_EQUAL_EQUAL,
+                               MINILD_SCRIPT_EXPR_EQUAL, expression_out);
+}
+
+bool minild_script_parse_expression(ScriptParser *parser,
+                                    MiniLdScriptExprId *expression_out) {
+    return parse_bitwise_level(parser, parse_equality, TOKEN_LOGICAL_OR,
+                               MINILD_SCRIPT_EXPR_LOGICAL_OR, expression_out);
 }
 
 static bool evaluate_expression(const MiniLdScript *script,
@@ -334,6 +412,18 @@ static bool evaluate_expression(const MiniLdScript *script,
                 expression->name);
         return false;
     case MINILD_SCRIPT_EXPR_ADDR:
+    case MINILD_SCRIPT_EXPR_SIZEOF:
+        if (expression->kind == MINILD_SCRIPT_EXPR_SIZEOF) {
+            if (context->resolve_section_size != NULL &&
+                context->resolve_section_size(context->user, expression->name,
+                                              value_out)) {
+                return true;
+            }
+            fprintf(diagnostics,
+                    "minic-ld: linker-script-unknown-section-size:%s\n",
+                    expression->name);
+            return false;
+        }
         if (context->resolve_section != NULL &&
             context->resolve_section(context->user, expression->name, value_out)) {
             return true;
@@ -364,15 +454,36 @@ static bool evaluate_expression(const MiniLdScript *script,
                                  depth + 1U)) {
             return false;
         }
+        if (expression->right != MINILD_SCRIPT_EXPR_NONE) {
+            left = right;
+            if (!evaluate_expression(script, expression->right, context,
+                                     &right, diagnostics, depth + 1U)) {
+                return false;
+            }
+        } else {
+            left = context->dot;
+        }
         if (right == 0U) {
-            *value_out = context->dot;
+            *value_out = left;
             return true;
         }
         if ((right & (right - 1U)) != 0U) {
             fprintf(diagnostics, "minic-ld: linker-script-invalid-alignment\n");
             return false;
         }
-        *value_out = (context->dot + right - 1U) & ~(right - 1U);
+        *value_out = (left + right - 1U) & ~(right - 1U);
+        return true;
+    case MINILD_SCRIPT_EXPR_ASSERT:
+        if (!evaluate_expression(script, expression->left, context, &left,
+                                 diagnostics, depth + 1U)) {
+            return false;
+        }
+        if (left == 0U) {
+            fprintf(diagnostics, "minic-ld: linker-script-assertion-failed:%s\n",
+                    expression->name != NULL ? expression->name : "");
+            return false;
+        }
+        *value_out = 1U;
         return true;
     case MINILD_SCRIPT_EXPR_ABSOLUTE:
         return evaluate_expression(script,
@@ -391,6 +502,10 @@ static bool evaluate_expression(const MiniLdScript *script,
     case MINILD_SCRIPT_EXPR_BITWISE_AND:
     case MINILD_SCRIPT_EXPR_BITWISE_XOR:
     case MINILD_SCRIPT_EXPR_BITWISE_OR:
+    case MINILD_SCRIPT_EXPR_LESS:
+    case MINILD_SCRIPT_EXPR_LESS_EQUAL:
+    case MINILD_SCRIPT_EXPR_EQUAL:
+    case MINILD_SCRIPT_EXPR_LOGICAL_OR:
         if (!evaluate_expression(script,
                                  expression->left,
                                  context,
@@ -431,6 +546,14 @@ static bool evaluate_expression(const MiniLdScript *script,
             *value_out = left & right;
         } else if (expression->kind == MINILD_SCRIPT_EXPR_BITWISE_XOR) {
             *value_out = left ^ right;
+        } else if (expression->kind == MINILD_SCRIPT_EXPR_LESS) {
+            *value_out = left < right ? 1U : 0U;
+        } else if (expression->kind == MINILD_SCRIPT_EXPR_LESS_EQUAL) {
+            *value_out = left <= right ? 1U : 0U;
+        } else if (expression->kind == MINILD_SCRIPT_EXPR_EQUAL) {
+            *value_out = left == right ? 1U : 0U;
+        } else if (expression->kind == MINILD_SCRIPT_EXPR_LOGICAL_OR) {
+            *value_out = left != 0U || right != 0U ? 1U : 0U;
         } else {
             *value_out = left | right;
         }

@@ -57,6 +57,12 @@ static void minild_riscv_destroy_static_relocations(
 static bool minild_riscv_relax_section(MiniLdState *state,
                                       size_t section_index,
                                       uint64_t address);
+static bool minild_riscv_replan_static_layout(
+    MiniLdState *state, const struct MiniLdLayout *layout,
+    struct MiniLdStaticTargetPlan *plan, bool *changed);
+static bool minild_aarch64_replan_static_layout(
+    MiniLdState *state, const struct MiniLdLayout *layout,
+    struct MiniLdStaticTargetPlan *plan, bool *changed);
 static bool minild_loongarch_relax_section(MiniLdState *state,
                                           size_t section_index,
                                           uint64_t address);
@@ -77,6 +83,9 @@ struct MiniLdTargetProfile {
     const char *script_arch;
     /* GNU linker scripts may use either the ISA or ABI-width arch spelling. */
     const char *script_arch_alternate;
+    /* GNU OUTPUT_FORMAT belongs to the target ABI, never to generic
+     * linker-script parsing or a host-dependent default. */
+    const char *script_output_format;
     const char *pie_interpreter;
     uint32_t attributes_type;
     uint64_t static_image_base;
@@ -95,7 +104,16 @@ struct MiniLdTargetProfile {
      * not interchangeable with a user-space DSO on other targets. */
     bool supports_kernel_shared_image;
     MiniLdTargetFlagsMerge merge_flags;
+    /* SHF_MERGE may rewrite STT_SECTION+addend only when this relocation's
+     * addend is a plain source byte offset (no PC bias/ISA split encoding).
+     * Unknown relocations make their referenced source atom ineligible. */
+    bool (*merge_section_addend_is_plain)(uint32_t type);
     bool (*relax_section)(MiniLdState *, size_t, uint64_t);
+    /* Target recomputes size-changing machine-level decisions using the
+     * complete placement, never a partially laid-out input fragment. */
+    bool (*replan_static_layout)(MiniLdState *,
+                                 const struct MiniLdLayout *,
+                                 struct MiniLdStaticTargetPlan *, bool *);
     /* The target reserves size-changing synthetic relocation sections before
      * placement, then fills and patches them only after final addresses.
      * The plan is opaque to Core; NULL hooks are valid for no-op stages. */
@@ -134,14 +152,33 @@ static bool minild_exact_merge_flags(MiniLdState *state,
 static bool minild_zero_elf_flags(uint32_t flags);
 static bool minild_loongarch_v1_elf_flags(uint32_t flags);
 
+static bool minild_riscv_merge_addend_plain(uint32_t type) {
+    return type == R_RISCV_32 || type == R_RISCV_64;
+}
+
+static bool minild_x86_merge_addend_plain(uint32_t type) {
+    return type == R_X86_64_64 || type == R_X86_64_32 ||
+           type == R_X86_64_32S;
+}
+
+static bool minild_aarch64_merge_addend_plain(uint32_t type) {
+    return type == R_AARCH64_ABS64 || type == R_AARCH64_ABS32;
+}
+
+static bool minild_loongarch_merge_addend_plain(uint32_t type) {
+    return type == R_LARCH_64 || type == R_LARCH_32;
+}
+
 /* GNU ld emulation spellings are the public target selection contract.
  * RV32's shared mode is its separate, narrow compat-vDSO implementation. */
 static const MiniLdTargetProfile minild_target_profiles[] = {
     {"elf64lriscv", ELFCLASS64, ELFDATA2LSB, EM_RISCV, "riscv",
-     NULL, "/lib/ld-musl-riscv64.so.1", MINILD_SHT_RISCV_ATTRIBUTES,
+     NULL, "elf64-littleriscv", "/lib/ld-musl-riscv64.so.1", MINILD_SHT_RISCV_ATTRIBUTES,
      UINT64_C(0x10000), 4096U, 1U, 4U,
      true, true, true, true, true, true, false, minild_riscv_merge_flags,
+     minild_riscv_merge_addend_plain,
      minild_riscv_relax_section,
+     minild_riscv_replan_static_layout,
      minild_riscv_reserve_static_relocations,
      minild_riscv_fill_static_relocations,
      minild_riscv_apply_static_relocations,
@@ -150,10 +187,12 @@ static const MiniLdTargetProfile minild_target_profiles[] = {
      minild_riscv_shared_target_abi,
      minild_link_shared_elf64_riscv_inputs_options, NULL, true},
     {"elf32lriscv", ELFCLASS32, ELFDATA2LSB, EM_RISCV, "riscv",
-     NULL, NULL, MINILD_SHT_RISCV_ATTRIBUTES,
+     NULL, "elf32-littleriscv", NULL, MINILD_SHT_RISCV_ATTRIBUTES,
      UINT64_C(0x10000), 4096U, 1U, 4U,
      true, true, true, true, true, false, false, minild_riscv_merge_flags,
+     minild_riscv_merge_addend_plain,
      minild_riscv_relax_section,
+     minild_riscv_replan_static_layout,
      minild_riscv_reserve_static_relocations,
      minild_riscv_fill_static_relocations,
      minild_riscv_apply_static_relocations,
@@ -161,9 +200,10 @@ static const MiniLdTargetProfile minild_target_profiles[] = {
      minild_riscv_synthesize_gnu_default_boundaries,
      NULL, minild_link_elf32_compat_vdso, NULL, true},
     {"elf_x86_64", ELFCLASS64, ELFDATA2LSB, EM_X86_64, "i386:x86-64",
-     NULL, NULL, 0U, UINT64_C(0x400000), 4096U, 1U, 4U,
+     NULL, "elf64-x86-64", NULL, 0U, UINT64_C(0x400000), 4096U, 1U, 4U,
      true, true, true, true, false, false, false,
-     minild_exact_merge_flags, NULL,
+     minild_exact_merge_flags, minild_x86_merge_addend_plain, NULL,
+     NULL,
      minild_x86_reserve_static_relocations,
      minild_x86_fill_static_relocations,
      minild_x86_apply_static_relocations,
@@ -171,9 +211,10 @@ static const MiniLdTargetProfile minild_target_profiles[] = {
      minild_x86_synthesize_default_boundaries,
      NULL, NULL, minild_zero_elf_flags, true},
     {"aarch64linux", ELFCLASS64, ELFDATA2LSB, EM_AARCH64, "aarch64",
-     NULL, NULL, 0U, UINT64_C(0x400000), 4096U, 1U, 4U,
+     NULL, "elf64-littleaarch64", NULL, 0U, UINT64_C(0x400000), 4096U, 1U, 4U,
      true, true, true, true, false, false, true,
-     minild_exact_merge_flags, NULL,
+     minild_exact_merge_flags, minild_aarch64_merge_addend_plain, NULL,
+     minild_aarch64_replan_static_layout,
      minild_aarch64_reserve_static_relocations,
      minild_aarch64_fill_static_relocations,
      minild_aarch64_apply_static_relocations,
@@ -181,10 +222,12 @@ static const MiniLdTargetProfile minild_target_profiles[] = {
      minild_aarch64_synthesize_default_boundaries,
      NULL, NULL, minild_zero_elf_flags, true},
     {"elf64loongarch", ELFCLASS64, ELFDATA2LSB, EM_LOONGARCH, "loongarch64",
-     "loongarch", NULL, 0U, UINT64_C(0x120000000), 4096U,
+     "loongarch", "elf64-loongarch", NULL, 0U, UINT64_C(0x120000000), 4096U,
      65536U, 8U,
      true, true, true, true, false, false, false,
-     minild_exact_merge_flags, minild_loongarch_relax_section,
+     minild_exact_merge_flags, minild_loongarch_merge_addend_plain,
+     minild_loongarch_relax_section,
+     NULL,
      minild_loongarch_reserve_static_relocations,
      minild_loongarch_fill_static_relocations,
      minild_loongarch_apply_static_relocations,
@@ -192,6 +235,15 @@ static const MiniLdTargetProfile minild_target_profiles[] = {
      minild_loongarch_synthesize_default_boundaries,
      NULL, NULL, minild_loongarch_v1_elf_flags, true}
 };
+
+/* Page size is one invocation-level ELF layout contract. Every static
+ * placement and PHDR computation must use the same value when GNU
+ * -z max-page-size overrides the Target's default. */
+static size_t minild_static_page_size(const MiniLdState *state) {
+    return state->max_page_size != 0U
+               ? (size_t)state->max_page_size
+               : state->target->page_size;
+}
 
 static const MiniLdTargetProfile *minild_target_find(const char *emulation) {
     size_t i;
@@ -236,11 +288,12 @@ bool minild_emulation_supports_kernel_shared_image(const char *emulation) {
     return target != NULL && target->supports_kernel_shared_image;
 }
 
-/* Only PC-relative relocations whose encoded values remain unchanged when
- * the entire ET_DYN is rebased may bypass .rela.dyn. The AArch64 Linux
- * kernel's dynamic relocation retention needs its own output phase; until
- * then reject the data/GOT/TLS/absolute classes rather than emitting a
- * plausible but non-relocatable kernel image. */
+/* Only relocations whose instruction bits are invariant under a 4KiB-aligned
+ * whole-image rebase may bypass .rela.dyn.  An ADRP page delta is invariant,
+ * as are ADD/LDST low12 immediate fragments: (S + delta) & 0xfff == S & 0xfff
+ * when delta is page-aligned.  Full ABS values, data pointers, GOT/TLS and
+ * other runtime-dependent operands remain forbidden.  AArch64 kernel images
+ * use 4KiB page-aligned rebasing; never generalize this allowlist to DSO. */
 static bool minild_target_validate_kernel_shared_relocations(
     const MiniLdState *state) {
     size_t i;
@@ -262,7 +315,13 @@ static bool minild_target_validate_kernel_shared_relocations(
         if (type != R_AARCH64_NONE && type != R_AARCH64_PREL32 &&
             type != R_AARCH64_PREL64 && type != R_AARCH64_CALL26 &&
             type != R_AARCH64_JUMP26 &&
-            type != R_AARCH64_ADR_PREL_PG_HI21) {
+            type != R_AARCH64_ADR_PREL_PG_HI21 &&
+            type != R_AARCH64_ADD_ABS_LO12_NC &&
+            type != R_AARCH64_LDST8_ABS_LO12_NC &&
+            type != R_AARCH64_LDST16_ABS_LO12_NC &&
+            type != R_AARCH64_LDST32_ABS_LO12_NC &&
+            type != R_AARCH64_LDST64_ABS_LO12_NC &&
+            type != R_AARCH64_LDST128_ABS_LO12_NC) {
             fprintf(state->diagnostics,
                     "minic-ld: unsupported-kernel-shared-runtime-relocation:%u\n",
                     (unsigned)type);

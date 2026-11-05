@@ -130,6 +130,7 @@ static bool minild_static_program_plan_build(
     MiniLdElfAbiSizes abi = minild_elf_abi_sizes(state->target->elf_class);
     size_t count = 0U;
     size_t load_count;
+    size_t note_count = 0U;
     size_t tls_file_offset = 0U;
     uint64_t tls_paddr = 0U;
     size_t i;
@@ -181,7 +182,7 @@ static bool minild_static_program_plan_build(
                 uint64_t previous_vend, previous_lend, previous_fend;
                 uint64_t vgap = 0U, lgap = 0U, fgap = 0U;
                 uint32_t combined_flags = prev->flags | next->flags;
-                uint64_t page_size = state->target->page_size;
+                uint64_t page_size = minild_static_page_size(state);
                 bool ordered, same_page, linear_gap, plain_contiguous;
                 bool safe_permissions;
 
@@ -289,6 +290,27 @@ static bool minild_static_program_plan_build(
                 (layout->have_rw ? 1U : 0U);
     }
     load_count = count;
+    /* Notes are meaningful runtime records even without a generated build
+     * ID. Publish a PT_NOTE for each standalone SHT_NOTE output section;
+     * explicit linker-script PHDRS instead own their chosen note grouping. */
+    for (i = 0U; i < output_plan->count; ++i) {
+        const MiniLdOutputSection *section = &output_plan->sections[i];
+        if ((section->flags & SHF_ALLOC) != 0U &&
+            section->type == SHT_NOTE && section->size != 0U) {
+            if (section->file_offset == SIZE_MAX) {
+                fprintf(state->diagnostics,
+                        "minic-ld: invalid-static-note-placement:%s\n",
+                        section->name);
+                goto failed;
+            }
+            ++note_count;
+        }
+    }
+    if (count > SIZE_MAX - note_count) {
+        fprintf(state->diagnostics, "minic-ld: too-many-static-segments\n");
+        goto failed;
+    }
+    count += note_count;
     if (tls->has_nonempty_section) {
         uint64_t tls_base = tls->block_base;
         uint64_t tls_memsz;
@@ -311,6 +333,11 @@ static bool minild_static_program_plan_build(
                     "minic-ld: invalid-static-tls-segment-size\n");
             goto failed;
         }
+        if (count == SIZE_MAX) {
+            fprintf(state->diagnostics,
+                    "minic-ld: too-many-static-segments\n");
+            goto failed;
+        }
         ++count;
     }
     if (abi.phdr == 0U || count > UINT16_MAX ||
@@ -329,9 +356,9 @@ static bool minild_static_program_plan_build(
             const MiniLdStaticLoadSegment *load = &loads[i];
             MiniElfProgramHeader *ph = &plan->entries[i];
             if (!state->nmagic &&
-                (state->target->page_size == 0U ||
-                 load->file_offset % state->target->page_size !=
-                     load->vaddr % state->target->page_size)) {
+                (minild_static_page_size(state) == 0U ||
+                 load->file_offset % minild_static_page_size(state) !=
+                     load->vaddr % minild_static_page_size(state))) {
                 fprintf(state->diagnostics,
                         "minic-ld: invalid-script-load-page-congruence:"
                         "vaddr=0x%llx offset=0x%llx\n",
@@ -348,7 +375,7 @@ static bool minild_static_program_plan_build(
             ph->memory_size = load->mem_size;
             ph->alignment = state->nmagic
                                 ? state->target->nmagic_load_alignment :
-                            state->target->page_size;
+                            minild_static_page_size(state);
         }
     } else {
         size_t index = 0U;
@@ -377,7 +404,7 @@ static bool minild_static_program_plan_build(
                 ph->virtual_address = ph->physical_address = layout->rx_vaddr;
                 ph->file_size = ph->memory_size = layout->rx_file_size;
             }
-            ph->alignment = state->target->page_size;
+            ph->alignment = minild_static_page_size(state);
         }
         if (layout->have_rw) {
             MiniElfProgramHeader *ph = &plan->entries[index++];
@@ -387,11 +414,33 @@ static bool minild_static_program_plan_build(
             ph->virtual_address = ph->physical_address = layout->rw_vaddr;
             ph->file_size = layout->rw_file_size;
             ph->memory_size = layout->rw_mem_size;
-            ph->alignment = state->target->page_size;
+            ph->alignment = minild_static_page_size(state);
+        }
+    }
+    {
+        size_t note_index = load_count;
+        for (i = 0U; i < output_plan->count; ++i) {
+            const MiniLdOutputSection *section = &output_plan->sections[i];
+            MiniElfProgramHeader *ph;
+
+            if ((section->flags & SHF_ALLOC) == 0U ||
+                section->type != SHT_NOTE || section->size == 0U) {
+                continue;
+            }
+            ph = &plan->entries[note_index++];
+            ph->type = PT_NOTE;
+            ph->flags = PF_R;
+            ph->offset = section->file_offset;
+            ph->virtual_address = section->vaddr;
+            ph->physical_address = section->laddr;
+            ph->file_size = section->size;
+            ph->memory_size = section->size;
+            ph->alignment = section->align;
         }
     }
     if (tls->has_nonempty_section) {
-        MiniElfProgramHeader *ph = &plan->entries[load_count];
+        MiniElfProgramHeader *ph =
+            &plan->entries[load_count + note_count];
 
         ph->type = PT_TLS;
         ph->flags = PF_R;
@@ -423,7 +472,7 @@ typedef struct MiniLdScriptSegmentExtent {
     uint64_t file_end, memory_end;
     uint64_t last_memory_end;
     uint32_t derived_flags;
-    bool occupied, file_backed;
+    bool occupied, file_backed, projected_nobits_file_base;
 } MiniLdScriptSegmentExtent;
 
 static bool minild_static_script_phdr_program_plan_build(
@@ -478,7 +527,7 @@ static bool minild_static_script_phdr_program_plan_build(
         ph->alignment = ph->type == PT_LOAD
                             ? (state->nmagic
                                    ? state->target->nmagic_load_alignment
-                                   : state->target->page_size)
+                                   : minild_static_page_size(state))
                             : state->target->static_note_alignment;
     }
     /* GNU's initial default is the first PT_LOAD; each explicit :phdr
@@ -585,6 +634,24 @@ static bool minild_static_script_phdr_program_plan_build(
             }
             ext->derived_flags |= section_flags;
             if (section->type == SHT_NOBITS) {
+                /* A pure BSS PT_LOAD has p_filesz=0 but still needs a
+                 * page-congruent p_offset.  The script file planner already
+                 * projected an offset for its first NOBITS member; retain
+                 * that affine origin instead of synthesizing offset zero.
+                 * A subsequent PROGBITS member takes precedence below. */
+                if (ph->type == PT_LOAD && !ext->file_backed &&
+                    !ext->projected_nobits_file_base &&
+                    section->file_offset != SIZE_MAX) {
+                    delta = section->vaddr - ext->vaddr_base;
+                    if (section->file_offset < delta) {
+                        fprintf(state->diagnostics,
+                                "minic-ld: nonaffine-static-script-PHDR-BSS:%s\n",
+                                section->name);
+                        goto done;
+                    }
+                    ext->file_base = section->file_offset - delta;
+                    ext->projected_nobits_file_base = true;
+                }
                 continue;
             }
             delta = section->vaddr - ext->vaddr_base;
@@ -624,7 +691,8 @@ static bool minild_static_script_phdr_program_plan_build(
         }
         ph->virtual_address = ext->vaddr_base;
         ph->physical_address = ext->laddr_base;
-        ph->offset = ext->file_backed ? ext->file_base : 0U;
+        ph->offset = ext->file_backed || ext->projected_nobits_file_base
+                         ? ext->file_base : 0U;
         ph->file_size = ext->file_backed ? ext->file_end - ext->file_base : 0U;
         ph->memory_size = ext->memory_end - ext->vaddr_base;
         if (!decl->have_flags) {

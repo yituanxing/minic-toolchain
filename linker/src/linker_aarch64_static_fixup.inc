@@ -1,6 +1,8 @@
 /* AArch64 ELF64 ET_EXEC relocation policy and machine instruction fields.
  * Class-neutral S+A/P and scalar writing remain in the shared static pass. */
 
+#include "linker_aarch64_erratum843419.inc"
+
 static MiniLdNonRiscvFixup minild_aarch64_static_fixup_class(uint32_t type) {
     switch (type) {
     case R_AARCH64_NONE: return MINILD_NONRISCV_NONE;
@@ -277,5 +279,6 @@ static bool minild_aarch64_apply_static_relocations(
         minild_aarch64_static_write_instruction
     };
 
-    return minild_nonriscv_apply_with_ops(state, layout, plan, &ops);
+    return minild_nonriscv_apply_with_ops(state, layout, plan, &ops) &&
+           minild_aarch64_843419_emit_branches(state, layout, plan);
 }

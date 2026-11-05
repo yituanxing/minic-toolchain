@@ -17,9 +17,11 @@ typedef struct MiniLdOutputSection {
     size_t *members;
     size_t member_count;
     size_t member_capacity;
-    unsigned char fill;
+    uint64_t fill;
+    unsigned fill_width;
     bool have_fill;
     bool have_content;
+    bool preserve_script_vaddr;
 } MiniLdOutputSection;
 
 typedef struct MiniLdOutputPlan {
@@ -228,6 +230,12 @@ static bool minild_output_plan_build(const MiniLdState *state,
                 layout->script_outputs[command].have_fill) {
                 output->have_fill = true;
                 output->fill = layout->script_outputs[command].fill;
+                output->fill_width =
+                    layout->script_outputs[command].fill_width;
+            }
+            if (command != SIZE_MAX && layout->script_outputs != NULL) {
+                output->preserve_script_vaddr =
+                    layout->script_outputs[command].informational;
             }
         }
         if (output->member_count == output->member_capacity) {
@@ -519,10 +527,15 @@ static bool minild_output_plan_section_headers(
         header->name = name_offsets[i];
         header->type = section->type;
         header->flags = section->flags;
-        header->address = (section->flags & SHF_ALLOC) != 0U
+        header->address = ((section->flags & SHF_ALLOC) != 0U ||
+                           section->preserve_script_vaddr)
                               ? section->vaddr : 0U;
-        header->offset = section->type == SHT_NOBITS ||
-                                  section->size == 0U
+        /* SHT_NOBITS occupies no file bytes, but its sh_offset still
+         * describes the file position projected from its PT_LOAD VMA.
+         * Script-generated BSS and Linux .orc_lookup need this metadata;
+         * writing zero lost GNU's file-affine mapping. */
+        header->offset = section->size == 0U ||
+                                 section->file_offset == SIZE_MAX
                              ? 0U : section->file_offset;
         header->size = section->size;
         header->alignment = section->align == 0U ? 1U : section->align;
@@ -577,6 +590,24 @@ static bool minild_output_write_script_bytes(const MiniLdState *state,
     return true;
 }
 
+typedef struct MiniLdOutputFillMember {
+    size_t begin;
+    size_t end;
+} MiniLdOutputFillMember;
+
+static int minild_output_fill_member_compare(const void *lhs,
+                                              const void *rhs) {
+    const MiniLdOutputFillMember *a = lhs;
+    const MiniLdOutputFillMember *b = rhs;
+    if (a->begin != b->begin) {
+        return a->begin < b->begin ? -1 : 1;
+    }
+    if (a->end != b->end) {
+        return a->end < b->end ? -1 : 1;
+    }
+    return 0;
+}
+
 /* Final emission follows the OutputPlan's single surviving-section map.
  * Writers do not independently decide which work fragments survive, which
  * script gaps receive fill, or where final bytes belong. */
@@ -590,8 +621,13 @@ static bool minild_output_plan_emit_sections(
 
     for (i = 0U; i < plan->count; ++i) {
         const MiniLdOutputSection *output = &plan->sections[i];
-        if (output->have_fill && output->fill != 0U &&
+        if (output->have_fill &&
             output->type != SHT_NOBITS && output->size != 0U) {
+            MiniLdOutputFillMember *members;
+            size_t member_count = 0U;
+            size_t cursor = 0U;
+            size_t j;
+
             if (output->file_offset == SIZE_MAX ||
                 output->size > SIZE_MAX ||
                 !range_ok(output->file_offset, (size_t)output->size,
@@ -601,33 +637,62 @@ static bool minild_output_plan_emit_sections(
                         output->name);
                 return false;
             }
-            memset(image + output->file_offset, output->fill,
-                   (size_t)output->size);
-            /* A script's FILL pattern applies to alignment holes, not to
-             * SHT_NOBITS members that were promoted into PROGBITS. GNU
-             * materializes those BSS bytes as zeros in the output file. */
-            for (size_t j = 0U; j < output->member_count; ++j) {
+            members = calloc(output->member_count == 0U
+                                 ? 1U : output->member_count,
+                             sizeof(*members));
+            if (members == NULL) {
+                fprintf(state->diagnostics,
+                        "minic-ld: out-of-memory:output-fill-members:%s\n",
+                        output->name);
+                return false;
+            }
+            /* GNU restarts the pattern at the beginning of EACH hole. The
+             * phase is not the hole's absolute address % pattern width.
+             * Treat NOBITS work members as covered ranges so their promoted
+             * bytes remain zero instead of receiving code-fill patterns. */
+            for (j = 0U; j < output->member_count; ++j) {
                 size_t work = output->members[j];
                 const MiniLdSection *part = &state->work.sections[work];
                 uint64_t delta;
-                size_t offset;
 
-                if (part->type != SHT_NOBITS || part->size == 0U) {
+                if (part->size == 0U) {
                     continue;
                 }
                 if (layout->work[work].vaddr < output->vaddr ||
                     (delta = layout->work[work].vaddr - output->vaddr) >
-                        SIZE_MAX - output->file_offset ||
-                    !range_ok(output->file_offset + (size_t)delta,
-                              part->size, image_size)) {
+                        SIZE_MAX ||
+                    delta > output->size ||
+                    part->size > output->size - delta) {
+                    free(members);
                     fprintf(state->diagnostics,
-                            "minic-ld: invalid-mixed-NOBITS-fill:%s\n",
+                            "minic-ld: invalid-output-fill-member:%s\n",
                             output->name);
                     return false;
                 }
-                offset = output->file_offset + (size_t)delta;
-                memset(image + offset, 0, part->size);
+                members[member_count].begin = (size_t)delta;
+                members[member_count].end = (size_t)delta + part->size;
+                ++member_count;
             }
+            qsort(members, member_count, sizeof(*members),
+                  minild_output_fill_member_compare);
+            for (j = 0U; j < member_count; ++j) {
+                if (members[j].begin > cursor) {
+                    minild_script_fill_bytes(
+                        image + output->file_offset + cursor,
+                        members[j].begin - cursor, output->fill,
+                        output->fill_width, 0U);
+                }
+                if (members[j].end > cursor) {
+                    cursor = members[j].end;
+                }
+            }
+            if (cursor < (size_t)output->size) {
+                minild_script_fill_bytes(image + output->file_offset + cursor,
+                                         (size_t)output->size - cursor,
+                                         output->fill,
+                                         output->fill_width, 0U);
+            }
+            free(members);
         }
     }
     for (i = 0U; i < state->work.count; ++i) {

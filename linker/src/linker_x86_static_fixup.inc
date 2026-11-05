@@ -8,6 +8,8 @@ static MiniLdNonRiscvFixup minild_x86_static_fixup_class(uint32_t type) {
     case R_X86_64_64: return MINILD_NONRISCV_ABS64;
     case R_X86_64_32: return MINILD_NONRISCV_ABS32;
     case R_X86_64_32S: return MINILD_NONRISCV_ABS32_SIGNED;
+    /* Linux tracepoints emit signed 64-bit S+A-P pointers in __tracepoints. */
+    case R_X86_64_PC64: return MINILD_NONRISCV_PCREL64;
     case R_X86_64_PC32:
     case R_X86_64_PLT32: return MINILD_NONRISCV_PCREL32;
     case R_X86_64_GOTPCREL: return MINILD_NONRISCV_PCREL32;
@@ -97,6 +99,7 @@ static bool minild_x86_resolve_static_got_target(
             STT_GNU_IFUNC &&
         (reloc->type == R_X86_64_PC32 ||
          reloc->type == R_X86_64_PLT32 ||
+         reloc->type == R_X86_64_PC64 ||
          reloc->type == R_X86_64_64 ||
          reloc->type == R_X86_64_32 ||
          reloc->type == R_X86_64_32S)) {

@@ -9,7 +9,14 @@ static bool minild_projection_fragment(const MiniLdState *state,
     if (minild_target_is_attributes_section(state, input->type)) {
         return false;
     }
+    /* Static SHF_MERGE needs source-fragment ownership even without -T/-gc.
+     * A name-coalesced output has already lost each input entry's offsets
+     * and cannot correctly remap STT_SECTION + addend references. -r must
+     * retain the original mergeable bytes/flags unchanged. */
     return projection == MINILD_PROJECTION_SCRIPT ||
+           (projection != MINILD_PROJECTION_RELOCATABLE &&
+            (input->flags & (SHF_ALLOC | SHF_MERGE)) ==
+                (SHF_ALLOC | SHF_MERGE)) ||
            (projection == MINILD_PROJECTION_GC &&
             (input->flags & (SHF_ALLOC | SHF_LINK_ORDER)) != 0U);
 }

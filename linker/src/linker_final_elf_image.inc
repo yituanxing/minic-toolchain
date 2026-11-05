@@ -198,6 +198,8 @@ static bool minild_final_pack_elf_header(unsigned char *out,
     return true;
 }
 
+#include "linker_build_id_checksum.inc"
+
 static bool minild_final_write_image(
     const MiniLdState *state,
     const MiniLdLayout *layout,
@@ -299,6 +301,10 @@ static bool minild_final_write_image(
                     "minic-ld: final-elf-section-header-overflow:%zu\n", i);
             goto done;
         }
+    }
+    if (!minild_final_fill_gnu_build_id(
+            state, output_plan, program_plan, tables, image, total_size)) {
+        goto done;
     }
 
     file = fopen(path, "wb");

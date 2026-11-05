@@ -490,7 +490,9 @@ print('MINILD_SEGMENT_CHECK=PASS mode=script-existing-RWX '
 raw, ph, names = inspect('static-default.elf', 2)
 loads = [p for p in ph if p[0] == 1]
 tls = [p for p in ph if p[0] == 7]
-assert len(loads) == 2 and len(tls) == 1 and len(ph) == 3, ('ET_EXEC default PHDRs', ph)
+notes = [p for p in ph if p[0] == 4]
+assert len(loads) == 2 and len(tls) == 1 and len(notes) == 1 and len(ph) == 4, ('ET_EXEC default PHDRs', ph)
+assert notes[0][2] == one(names, '.note.minild')[4] and notes[0][5] == one(names, '.note.minild')[5], ('ET_EXEC PT_NOTE payload', notes)
 assert loads[0][1] == 5 and loads[1][1] == 6 and all(p[7] == 4096 for p in loads)
 # A plain ET_EXEC with a static CRT maps the ELF and PHDR bytes in its
 # initial LOAD.  The linker-synthesized __ehdr_start must identify that
@@ -530,10 +532,12 @@ print('MINILD_SEGMENT_CHECK=PASS mode=static-default loads=2 '
 raw, ph, names = inspect('static-script.elf', 2)
 loads = [p for p in ph if p[0] == 1]
 tls = [p for p in ph if p[0] == 7]
+notes = [p for p in ph if p[0] == 4]
 assert len(loads) == 2 and all(
     p[7] == 4096 and p[2] % 4096 == p[3] % 4096 for p in loads
 ), ('script LOAD page congruence', ph)
-assert len(tls) == 1 and len(ph) == 3, ('scripted PT_TLS', ph)
+assert len(tls) == 1 and len(notes) == 1 and len(ph) == 4, ('scripted PT_TLS+PT_NOTE', ph)
+assert notes[0][2] == one(names, '.note')[4] and notes[0][5] == one(names, '.note')[5], ('scripted PT_NOTE payload', notes)
 data = one(names, '.data')
 assert any(covers(p, data) and p[4] != p[3] for p in loads), ('AT() LMA lost', ph)
 assert any(covers(p, one(names, '.text')) for p in loads)

@@ -36,10 +36,34 @@ typedef struct MiniLdLoongarchStaticGot {
     size_t ifunc_got_section;
     size_t ifunc_rela_section;
     size_t ifunc_count;
+    /* -static -pie may use ET_EXEC with -n, yet LoongArch still needs its
+     * image-base fixups at boot.  GNU BFD reserves an R_LARCH_64 slot before
+     * the script discards sections, then leaves unused slots as R_LARCH_NONE.
+     * Preserve this distinction rather than treating -n as a PIC request. */
+    size_t relative_reserved_count;
     bool present;
 } MiniLdLoongarchStaticGot;
 
+typedef struct MiniLdLoongarchRelativeRecord {
+    uint64_t place;
+    uint64_t addend;
+} MiniLdLoongarchRelativeRecord;
+
+static int minild_loongarch_relative_record_compare(const void *left,
+                                                    const void *right) {
+    const MiniLdLoongarchRelativeRecord *a = left;
+    const MiniLdLoongarchRelativeRecord *b = right;
+
+    if (a->place < b->place) return -1;
+    if (a->place > b->place) return 1;
+    return 0;
+}
+
 static bool minild_loongarch_static_uses_got(uint32_t type);
+static bool minild_loongarch_static_resolve_target(
+    MiniLdState *state, const MiniLdLayout *layout,
+    const MiniLdStaticTargetPlan *plan, const MiniLdReloc *reloc,
+    uint64_t *target);
 
 static bool minild_loongarch_static_ifunc_reference(uint32_t type) {
     switch (type) {
@@ -209,6 +233,47 @@ static bool minild_loongarch_reserve_static_relocations(
         got->ifunc_stub_offsets[i] = SIZE_MAX;
         got->ifunc_slot_offsets[i] = SIZE_MAX;
     }
+    if (state->static_pie_requested) {
+        MiniLdSection *section;
+
+        /* GNU creates the initial reserved GOT word even when all ordinary
+         * references are PC-relative.  Actual GOT symbols follow this word. */
+        if (!find_or_add_section(state, ".got", SHT_PROGBITS,
+                                 SHF_ALLOC | SHF_WRITE, 16U, 0U,
+                                 &got->section)) {
+            return false;
+        }
+        section = &state->work.sections[got->section];
+        section->gc_discarded = false;
+        got->present = true;
+        if (!section_append_zero(section, 8U)) {
+            return false;
+        }
+        for (i = 0U; i < state->relocations.count; ++i) {
+            if (state->relocations.entries[i].type == R_LARCH_64) {
+                ++got->relative_reserved_count;
+            }
+        }
+        if (got->relative_reserved_count != 0U) {
+            MiniLdSection *rela;
+
+            if (got->relative_reserved_count >
+                    SIZE_MAX / sizeof(Elf64_Rela) ||
+                !find_or_add_section(state, ".rela.dyn", SHT_RELA,
+                                     SHF_ALLOC, 8U, sizeof(Elf64_Rela),
+                                     &got->ifunc_rela_section)) {
+                fprintf(state->diagnostics,
+                        "minic-ld: loongarch-static-relative-reserve-overflow\n");
+                return false;
+            }
+            rela = &state->work.sections[got->ifunc_rela_section];
+            rela->gc_discarded = false;
+            if (!section_append_zero(rela, got->relative_reserved_count *
+                                            sizeof(Elf64_Rela))) {
+                return false;
+            }
+        }
+    }
     for (i = 0U; i < state->relocations.count; ++i) {
         const MiniLdReloc *reloc = &state->relocations.entries[i];
         bool tls_ie = minild_loongarch_static_uses_tls_ie(reloc->type);
@@ -373,13 +438,98 @@ static bool minild_loongarch_fill_static_relocations(
             }
         }
     }
+    if (got->relative_reserved_count != 0U) {
+        MiniLdLoongarchRelativeRecord *records;
+        MiniLdSection *rela;
+        size_t count = 0U;
+
+        if (got->ifunc_rela_section >= state->work.count) {
+            return false;
+        }
+        rela = &state->work.sections[got->ifunc_rela_section];
+        records = malloc(got->relative_reserved_count * sizeof(*records));
+        if (records == NULL) {
+            fprintf(state->diagnostics,
+                    "minic-ld: out-of-memory:loongarch-static-relatives\n");
+            return false;
+        }
+        for (i = 0U; i < state->relocations.count; ++i) {
+            const MiniLdReloc *reloc = &state->relocations.entries[i];
+            MiniLdStaticRelocOperands operands;
+            MiniLdSection *source;
+            const MiniLdResolvedSymbol *symbol;
+            bool live;
+
+            if (reloc->type != R_LARCH_64) {
+                continue;
+            }
+            if (!minild_static_reloc_source(
+                    state, layout, reloc,
+                    "loongarch-static-relative-source-invalid",
+                    &source, &live)) {
+                free(records);
+                return false;
+            }
+            if (!live || (source->flags & SHF_ALLOC) == 0U ||
+                reloc->symbol == SIZE_MAX ||
+                reloc->symbol >= state->resolver.count) {
+                continue;
+            }
+            symbol = &state->resolver.entries[reloc->symbol];
+            /* Absolute linker-script symbols and undefined weak zero are
+             * already final values; rebasing them would corrupt the image. */
+            if (symbol->section < 0 ||
+                (size_t)symbol->section >= state->work.count ||
+                (state->work.sections[symbol->section].flags & SHF_ALLOC) == 0U) {
+                continue;
+            }
+            if (!minild_static_reloc_operands(
+                    state, layout, reloc,
+                    "loongarch-static-relative-place-overflow", &operands) ||
+                !minild_loongarch_static_resolve_target(
+                    state, layout, plan, reloc, &operands.target_bits)) {
+                free(records);
+                return false;
+            }
+            if (count >= got->relative_reserved_count) {
+                free(records);
+                fprintf(state->diagnostics,
+                        "minic-ld: loongarch-static-relative-capacity-overrun\n");
+                return false;
+            }
+            records[count].place = operands.place;
+            records[count].addend = operands.target_bits;
+            ++count;
+        }
+        /* BFD emits active R_RELATIVE records in ascending image-address
+         * order, with any unused pre-reserved entries left as R_NONE. */
+        qsort(records, count, sizeof(*records),
+              minild_loongarch_relative_record_compare);
+        for (i = 0U; i < count; ++i) {
+            size_t offset = i * sizeof(Elf64_Rela);
+
+            if (!range_ok(offset, sizeof(Elf64_Rela), rela->size)) {
+                free(records);
+                return false;
+            }
+            store_u64le(rela->data + offset, records[i].place);
+            store_u64le(rela->data + offset + 8U,
+                        ELF64_R_INFO(0U, R_LARCH_RELATIVE));
+            store_u64le(rela->data + offset + 16U, records[i].addend);
+        }
+        free(records);
+    }
     if (got->ifunc_count != 0U) {
         MiniLdSection *stub = &state->work.sections[got->ifunc_stub_section];
         MiniLdSection *slot = &state->work.sections[got->ifunc_got_section];
         MiniLdSection *rela = &state->work.sections[got->ifunc_rela_section];
         uint64_t stub_base = layout->work[got->ifunc_stub_section].vaddr;
         uint64_t slot_base = layout->work[got->ifunc_got_section].vaddr;
-        size_t rela_offset = 0U;
+        /* The IPLT range is a distinct contiguous table at the end, even
+         * when the ordinary relative reservation contains R_NONE holes.
+         * __rela_iplt_start/end must never cover R_LARCH_RELATIVE slots. */
+        size_t rela_offset = got->relative_reserved_count *
+                             sizeof(Elf64_Rela);
 
         for (i = 0U; i < got->symbol_count; ++i) {
             size_t stub_offset = got->ifunc_stub_offsets[i];
@@ -453,8 +603,30 @@ static bool minild_loongarch_fill_static_relocations(
 
 static bool minild_loongarch_synthesize_default_boundaries(
     MiniLdState *state, const MiniLdLayout *layout) {
+    size_t iplt_count = 0U;
     size_t i;
 
+    /* These symbols are used by static IFUNC resolvers, NOT by the kernel's
+     * KASLR __rela_dyn_begin/end table.  Avoid defining them for an image
+     * which contains only R_LARCH_RELATIVE entries. */
+    for (i = 0U; i < state->work.count; ++i) {
+        const MiniLdSection *section = &state->work.sections[i];
+
+        if (strcmp(section->name, ".igot.plt") == 0 &&
+            section->type == SHT_PROGBITS &&
+            (section->flags & SHF_ALLOC) != 0U &&
+            !layout->work[i].discarded && section->size != 0U) {
+            if (section->size % sizeof(uint64_t) != 0U) {
+                fprintf(state->diagnostics,
+                        "minic-ld: loongarch-static-iplt-slot-size-invalid\n");
+                return false;
+            }
+            iplt_count += section->size / sizeof(uint64_t);
+        }
+    }
+    if (iplt_count == 0U) {
+        return true;
+    }
     for (i = 0U; i < state->work.count; ++i) {
         const MiniLdSection *section = &state->work.sections[i];
         uint64_t base;
@@ -471,8 +643,15 @@ static bool minild_loongarch_synthesize_default_boundaries(
                     "minic-ld: loongarch-static-ifunc-rela-span-overflow\n");
             return false;
         }
+        if (iplt_count > section->size / sizeof(Elf64_Rela)) {
+            fprintf(state->diagnostics,
+                    "minic-ld: loongarch-static-iplt-rela-size-invalid\n");
+            return false;
+        }
         return static_define_absolute_if_undefined(
-                   state, "__rela_iplt_start", base) &&
+                   state, "__rela_iplt_start",
+                   base + (uint64_t)(section->size -
+                                      iplt_count * sizeof(Elf64_Rela))) &&
                static_define_absolute_if_undefined(
                    state, "__rela_iplt_end",
                    base + (uint64_t)section->size);

@@ -21,6 +21,8 @@ int minild_link_static_elf64_riscv_inputs(const char *output_path,
 #include "linker_input_projection.inc"
 #include "linker_script_input_selection.inc"
 #include "linker_input_gc.inc"
+#include "linker_merge_sections.inc"
+#include "linker_static_build_id.inc"
 
 static int minild_link_static_pipeline(
     const char *output_path,
@@ -60,9 +62,34 @@ static int minild_link_static_pipeline(
                 "minic-ld: --nmagic-requires-static-script\n");
         return 2;
     }
+    if (options != NULL && options->fix_cortex_a53_843419 &&
+        target->machine != EM_AARCH64) {
+        fprintf(diagnostics,
+                "minic-ld: --fix-cortex-a53-843419-requires-aarch64\n");
+        return 2;
+    }
+    if (options != NULL && options->max_page_size != 0U &&
+        (options->max_page_size > SIZE_MAX ||
+         options->max_page_size < target->page_size ||
+         (options->max_page_size & (options->max_page_size - 1U)) != 0U)) {
+        fprintf(diagnostics,
+                "minic-ld: invalid-max-page-size:%llu\n",
+                (unsigned long long)options->max_page_size);
+        return 2;
+    }
     memset(&state, 0, sizeof(state));
     state.target = target;
     state.nmagic = options != NULL && options->nmagic;
+    state.static_pie_requested =
+        options != NULL && options->static_pie_requested;
+    state.fix_cortex_a53_843419 =
+        options != NULL && options->fix_cortex_a53_843419;
+    state.max_page_size =
+        options != NULL ? options->max_page_size : 0U;
+    state.orphan_handling_error =
+        options != NULL && options->orphan_handling_error;
+    state.build_id_sha1 =
+        options != NULL && options->build_id_sha1;
     state.discard_locals = options != NULL && options->discard_locals;
     memset(&layout, 0, sizeof(layout));
     minild_script_initialize(&script);
@@ -78,6 +105,16 @@ static int minild_link_static_pipeline(
             fprintf(diagnostics,
                     "minic-ld: unsupported-linker-script-arch:%s\n",
                     script.output_arch);
+            goto done;
+        }
+        if (script.output_format != NULL &&
+            strcmp(script.output_format,
+                   state.target->script_output_format) != 0) {
+            fprintf(diagnostics,
+                    "minic-ld: unsupported-linker-script-format:%s"
+                    ":target=%s\n",
+                    script.output_format,
+                    state.target->script_output_format);
             goto done;
         }
         if (script.version_name != NULL) {
@@ -115,10 +152,12 @@ static int minild_link_static_pipeline(
         (garbage_collect && !have_script &&
          (!minild_gc_group_default_output_classes(&state) ||
           !minild_gc_sort_default_output_alignment(&state))) ||
+        !minild_merge_live_sections(&state, have_script ? &script : NULL) ||
+        !minild_static_reserve_build_id(&state) ||
         !static_reserve_target_relocations(&state, &static_reloc_plan) ||
-        !(have_script
-              ? static_build_script_layout(&state, &script, &layout, 0U)
-              : static_build_layout(&state, &layout))) {
+        !static_run_layout_to_fixed_point(&state,
+                                          have_script ? &script : NULL,
+                                          &layout, &static_reloc_plan)) {
         goto done;
     }
     minild_perf_phase("layout", &phase_start, &state, diagnostics);
@@ -223,6 +262,11 @@ int minild_link_static_elf64_riscv_inputs(const char *output_path,
     options.nmagic = false;
     options.discard_locals = false;
     options.output_et_dyn = false;
+    options.static_pie_requested = false;
+    options.fix_cortex_a53_843419 = false;
+    options.max_page_size = 0U;
+    options.orphan_handling_error = false;
+    options.build_id_sha1 = false;
     options.kernel_shared_no_dynamic_relocations = false;
     options.emit_relocs = false;
     return minild_link_static_elf64_riscv_inputs_options(output_path,

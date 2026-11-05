@@ -87,6 +87,29 @@ static bool script_layout_section_value(void *context,
     return false;
 }
 
+static bool script_layout_section_size(void *context,
+                                       const char *name,
+                                       uint64_t *value_out) {
+    MiniLdScriptLayoutState *script_state = context;
+    size_t i;
+
+    for (i = 0U; i < script_state->script->command_count; ++i) {
+        const MiniLdScriptCommand *command = &script_state->script->commands[i];
+        const MiniLdLayoutScriptOutput *output =
+            &script_state->layout->script_outputs[i];
+
+        if (command->kind == MINILD_SCRIPT_OUTPUT_SECTION && output->defined &&
+            strcmp(command->value.section.name, name) == 0) {
+            if (output->end < output->start) {
+                return false;
+            }
+            *value_out = output->end - output->start;
+            return true;
+        }
+    }
+    return false;
+}
+
 static bool script_layout_evaluate(MiniLdScriptLayoutState *script_state,
                                    MiniLdScriptExprId expression,
                                    uint64_t *value_out) {
@@ -98,12 +121,43 @@ static bool script_layout_evaluate(MiniLdScriptLayoutState *script_state,
     context.have_headers_size = script_state->have_headers_size;
     context.resolve_symbol = script_layout_symbol_value;
     context.resolve_section = script_layout_section_value;
+    context.resolve_section_size = script_layout_section_size;
     context.user = script_state;
     return minild_script_evaluate(script_state->script,
                                   expression,
                                   &context,
                                   value_out,
                                   script_state->state->diagnostics);
+}
+
+/* GNU permits top-level script symbol assignments to refer to input
+ * sections placed later in SECTIONS.  Whether that reference is direct or
+ * buried inside ABSOLUTE/arithmetic/ALIGN is immaterial.  Delay only the
+ * assignment, never the address-dependent placement commands themselves. */
+static bool script_layout_expr_unplaced(
+    MiniLdScriptLayoutState *script_state, MiniLdScriptExprId id,
+    unsigned depth) {
+    const MiniLdScriptExpr *expr;
+    uint64_t dummy;
+
+    if (id == MINILD_SCRIPT_EXPR_NONE) {
+        return false;
+    }
+    if (id >= script_state->script->expression_count || depth > 128U) {
+        return false; /* The actual evaluator diagnoses malformed ASTs. */
+    }
+    expr = &script_state->script->expressions[id];
+    if (expr->kind == MINILD_SCRIPT_EXPR_SYMBOL) {
+        return !script_layout_symbol_value(script_state, expr->name, &dummy);
+    }
+    if (expr->kind == MINILD_SCRIPT_EXPR_ADDR) {
+        return !script_layout_section_value(script_state, expr->name, &dummy);
+    }
+    if (expr->kind == MINILD_SCRIPT_EXPR_SIZEOF) {
+        return !script_layout_section_size(script_state, expr->name, &dummy);
+    }
+    return script_layout_expr_unplaced(script_state, expr->left, depth + 1U) ||
+           script_layout_expr_unplaced(script_state, expr->right, depth + 1U);
 }
 
 static bool script_layout_define_symbol(MiniLdScriptLayoutState *script_state,
@@ -200,11 +254,98 @@ static bool script_layout_is_dot_relative_expr(const MiniLdScript *script,
            script_layout_is_literal_expr(script, expr->right, depth + 1U);
 }
 
+/* A top-level GNU assignment can be an alias of a relocatable input symbol:
+ * `jiffies = jiffies_64` must keep the section binding, not become SHN_ABS.
+ * Arithmetic with one relocatable operand and a fixed scalar preserves the
+ * base; ABSOLUTE(), differences of relocatables and bitwise transforms do
+ * not. The numeric value is still evaluated by the common expression engine. */
+static size_t script_layout_expr_reloc_section(
+    MiniLdScriptLayoutState *script_state, MiniLdScriptExprId id,
+    unsigned depth) {
+    const MiniLdScriptExpr *expr;
+    size_t left;
+    size_t right;
+
+    if (id == MINILD_SCRIPT_EXPR_NONE ||
+        id >= script_state->script->expression_count || depth > 128U) {
+        return SIZE_MAX;
+    }
+    expr = &script_state->script->expressions[id];
+    if (expr->kind == MINILD_SCRIPT_EXPR_SYMBOL) {
+        size_t index = symbol_resolver_lookup(&script_state->state->resolver,
+                                               expr->name);
+        if (index != SIZE_MAX &&
+            script_state->state->resolver.entries[index].section >= 0) {
+            size_t section = (size_t)script_state->state->resolver.entries[
+                index].section;
+            if (section < script_state->state->work.count &&
+                script_state->section_placed[section] &&
+                !script_state->layout->work[section].discarded) {
+                return section;
+            }
+        }
+        return SIZE_MAX;
+    }
+    if (expr->kind != MINILD_SCRIPT_EXPR_ADD &&
+        expr->kind != MINILD_SCRIPT_EXPR_SUBTRACT) {
+        return SIZE_MAX;
+    }
+    left = script_layout_expr_reloc_section(
+        script_state, expr->left, depth + 1U);
+    right = script_layout_expr_reloc_section(
+        script_state, expr->right, depth + 1U);
+    if (left != SIZE_MAX && right == SIZE_MAX) {
+        return left;
+    }
+    if (expr->kind == MINILD_SCRIPT_EXPR_ADD &&
+        right != SIZE_MAX && left == SIZE_MAX) {
+        return right;
+    }
+    return SIZE_MAX;
+}
+
 static bool script_layout_define_top_symbol(
     MiniLdScriptLayoutState *script_state, size_t command_index,
     const char *name, MiniLdScriptExprId expr_id, uint64_t value) {
     MiniLdScriptSymbolProvenance *entry;
     size_t index;
+
+    if (!script_state->have_headers_size) {
+        size_t section = script_layout_expr_reloc_section(
+            script_state, expr_id, 0U);
+        if (section != SIZE_MAX) {
+            MiniLdSymbolResolver *resolver = &script_state->state->resolver;
+            MiniLdResolvedSymbol *symbol;
+            unsigned char info = ELF64_ST_INFO(STB_GLOBAL, STT_NOTYPE);
+            unsigned char other = STV_DEFAULT;
+            uint64_t offset = value - script_state->layout->work[section].vaddr;
+
+            index = symbol_resolver_lookup(resolver, name);
+            if (index != SIZE_MAX) {
+                /* Keep an original undefined object's type/visibility. */
+                info = resolver->entries[index].info;
+                other = resolver->entries[index].other;
+            }
+            if (!symbol_resolver_merge_global(
+                    resolver, script_state->state->diagnostics,
+                    name, MINILD_SECTION_UNDEF, 0U, 0U,
+                    info, other, SIZE_MAX, &index)) {
+                return false;
+            }
+            symbol = &resolver->entries[index];
+            if (section > (size_t)INT_MAX) {
+                return false;
+            }
+            symbol->section = (int)section;
+            symbol->value = offset;
+            symbol->size = 0U;
+            symbol->info = info;
+            symbol->other = other;
+            symbol->source_symbol = SIZE_MAX;
+            symbol->script_placeholder = false;
+            return true;
+        }
+    }
 
     if (!script_layout_define_symbol(script_state, name, value)) {
         return false;
@@ -394,7 +535,25 @@ static bool script_layout_place_section(MiniLdScriptLayoutState *script_state,
                                         size_t section_index,
                                         size_t command_index) {
     MiniLdSection *section = &script_state->state->work.sections[section_index];
+    const MiniLdScriptOutputSection *output =
+        &script_state->script->commands[command_index].value.section;
     uint64_t aligned;
+
+    /* GNU (INFO) is a non-allocating output section even when an input
+     * fragment originally carried SHF_ALLOC. Keep its VMA/dot assignment
+     * and bytes in the ELF file, but never map it through PT_LOAD. */
+    if (output->info) {
+        section->flags &= ~(uint64_t)SHF_ALLOC;
+    }
+    /* Linker-created GOT output sections obey pointer alignment; scripts
+     * may omit an explicit ALIGN even when a synthetic GOT member exists. */
+    if ((strcmp(output->name, ".got.plt") == 0 ||
+         strcmp(output->name, ".got") == 0) &&
+        section->align <
+            (script_state->state->target->elf_class == ELFCLASS64 ? 8U : 4U)) {
+        section->align =
+            script_state->state->target->elf_class == ELFCLASS64 ? 8U : 4U;
+    }
 
     if (!static_align_up_u64(script_state->dot,
                              section->align == 0U ? 1U : section->align,
@@ -641,6 +800,52 @@ static bool script_layout_bind_output_symbols(
     return true;
 }
 
+/* A linker-script output consisting solely of an advancing dot expression
+ * has no input fragments, but GNU still materializes a real SHT_NOBITS
+ * section. Its load/write attributes derive from the inherited PHDRS
+ * assignment (e.g. x86 Linux .orc_lookup inherits :data). */
+static uint64_t script_layout_synthetic_flags(
+    const MiniLdScript *script, size_t command_index) {
+    size_t selected_load = SIZE_MAX;
+    size_t i;
+
+    for (i = 0U; i <= command_index; ++i) {
+        const MiniLdScriptCommand *command = &script->commands[i];
+        const MiniLdScriptOutputSection *output;
+        size_t j;
+
+        if (command->kind != MINILD_SCRIPT_OUTPUT_SECTION) {
+            continue;
+        }
+        output = &command->value.section;
+        if (output->phdr_name_count == 0U) {
+            continue;
+        }
+        selected_load = SIZE_MAX;
+        for (j = 0U; j < output->phdr_name_count; ++j) {
+            size_t p;
+            for (p = 0U; p < script->phdr_count; ++p) {
+                if (strcmp(output->phdr_names[j],
+                           script->phdrs[p].name) == 0 &&
+                    strcmp(script->phdrs[p].type_name,
+                           "PT_LOAD") == 0) {
+                    selected_load = p;
+                    break;
+                }
+            }
+        }
+    }
+    if (script->commands[command_index].value.section.info) {
+        return 0U;
+    }
+    if (selected_load != SIZE_MAX &&
+        script->phdrs[selected_load].have_flags &&
+        (script->phdrs[selected_load].flags & PF_W) != 0U) {
+        return SHF_ALLOC | SHF_WRITE;
+    }
+    return SHF_ALLOC;
+}
+
 static bool script_layout_process_output(MiniLdScriptLayoutState *script_state,
                                          const MiniLdScriptOutputSection *output,
                                          size_t command_index) {
@@ -650,6 +855,8 @@ static bool script_layout_process_output(MiniLdScriptLayoutState *script_state,
     size_t i;
 
     script_state->layout->script_outputs[command_index].name = output->name;
+    script_state->layout->script_outputs[command_index].informational =
+        output->info;
 
     if (output->fill != MINILD_SCRIPT_EXPR_NONE) {
         uint64_t fill;
@@ -657,14 +864,10 @@ static bool script_layout_process_output(MiniLdScriptLayoutState *script_state,
         if (!script_layout_evaluate(script_state, output->fill, &fill)) {
             return false;
         }
-        if (fill > UINT8_MAX) {
-            fprintf(script_state->state->diagnostics,
-                    "minic-ld: unsupported-script-fill-pattern:%s\n",
-                    output->name);
-            return false;
-        }
         script_state->layout->script_outputs[command_index].fill =
-            (unsigned char)fill;
+            fill;
+        script_state->layout->script_outputs[command_index].fill_width =
+            minild_script_fill_width(fill);
         script_state->layout->script_outputs[command_index].have_fill = true;
     }
 
@@ -795,6 +998,15 @@ static bool script_layout_process_output(MiniLdScriptLayoutState *script_state,
                                         &value)) {
                 return false;
             }
+            /* GNU's `. = ASSERT(condition, "message");` is a validation
+             * idiom, not a request to move the location counter to 1. */
+            if (script_state->script->expressions[
+                    item->value.expression].kind == MINILD_SCRIPT_EXPR_ASSERT) {
+                if (value == 0U) {
+                    return false;
+                }
+                break;
+            }
             if (value < script_state->dot) {
                 fprintf(script_state->state->diagnostics,
                         "minic-ld: linker-script-dot-moved-backward:%s\n",
@@ -855,11 +1067,13 @@ static bool script_layout_process_output(MiniLdScriptLayoutState *script_state,
     script_state->layout->script_outputs[command_index].end =
         script_state->dot;
 
-    /* A pure BYTE output needs a working section to anchor its layout.
-     * Mixed input/BYTE outputs instead keep their real work fragments and
-     * materialize byte members at their output-relative file addresses. */
-    if (script_state->layout->script_byte_count != byte_start) {
+    /* A script output with no input fragments still needs a real WorkSection
+     * when its dot grows: pure BYTE becomes PROGBITS; pure dot growth is
+     * GNU SHT_NOBITS (Linux's .orc_lookup), not a vanished output. */
+    if (script_state->dot > output_start) {
         bool has_input = false;
+        bool has_bytes =
+            script_state->layout->script_byte_count != byte_start;
 
         for (i = 0U; i < script_state->state->work.count; ++i) {
             if (script_state->layout->work[i].owner_command == command_index &&
@@ -885,7 +1099,10 @@ static bool script_layout_process_output(MiniLdScriptLayoutState *script_state,
             }
             length = (size_t)(script_state->dot - output_start);
             if (!find_or_add_section(state, output->name,
-                                     SHT_PROGBITS, SHF_ALLOC, 1U, 0U,
+                                     has_bytes ? SHT_PROGBITS : SHT_NOBITS,
+                                     script_layout_synthetic_flags(
+                                         script_state->script, command_index),
+                                     1U, 0U,
                                      &synthetic_index)) {
                 return false;
             }
@@ -900,11 +1117,13 @@ static bool script_layout_process_output(MiniLdScriptLayoutState *script_state,
              * OutputSection after its fill pattern is applied.  Its holes
              * must carry that same pattern or the copy would overwrite
              * the script's requested fill with zero bytes. */
-            if (length != 0U &&
+            if (has_bytes && length != 0U &&
                 script_state->layout->script_outputs[command_index].have_fill) {
-                memset(section->data,
-                       script_state->layout->script_outputs[command_index].fill,
-                       length);
+                const MiniLdLayoutScriptOutput *script_output =
+                    &script_state->layout->script_outputs[command_index];
+                minild_script_fill_bytes(section->data, length,
+                                         script_output->fill,
+                                         script_output->fill_width, 0U);
             }
             for (i = byte_start;
                  i < script_state->layout->script_byte_count; ++i) {
@@ -1091,7 +1310,10 @@ static bool static_build_script_layout(MiniLdState *state,
     owner_file_backed = calloc(script->command_count == 0U ? 1U :
                                script->command_count,
                                sizeof(*owner_file_backed));
-    if (script->phdr_count != 0U && state->nmagic) {
+    /* Explicit PHDR ownership constrains each load's byte/VMA distance
+     * whether GNU -n was requested or not.  x86 Linux's 2MiB-aligned
+     * PT_LOADs are not a special case of nmagic's dense physical layout. */
+    if (script->phdr_count != 0U) {
         size_t active_load = SIZE_MAX;
         size_t command;
         size_t j;
@@ -1172,11 +1394,27 @@ static bool static_build_script_layout(MiniLdState *state,
         uint64_t value;
 
         switch (command->kind) {
+        case MINILD_SCRIPT_ASSERT:
+            if (!script_layout_evaluate(&script_state,
+                                        command->value.expression,
+                                        &value) || value == 0U) {
+                fprintf(state->diagnostics,
+                        "minic-ld: linker-script-assertion-failed\n");
+                goto done;
+            }
+            break;
         case MINILD_SCRIPT_SET_DOT:
             if (!script_layout_evaluate(&script_state,
                                         command->value.expression,
                                         &value)) {
                 goto done;
+            }
+            if (script->expressions[command->value.expression].kind ==
+                MINILD_SCRIPT_EXPR_ASSERT) {
+                if (value == 0U) {
+                    goto done;
+                }
+                break;
             }
             if (value < script_state.dot) {
                 fprintf(state->diagnostics,
@@ -1200,12 +1438,8 @@ static bool static_build_script_layout(MiniLdState *state,
                     break;
                 }
             }
-            if (script->expressions[command->value.symbol.expression].kind ==
-                    MINILD_SCRIPT_EXPR_SYMBOL &&
-                !script_layout_symbol_value(
-                    &script_state,
-                    script->expressions[command->value.symbol.expression].name,
-                    &value)) {
+            if (script_layout_expr_unplaced(
+                    &script_state, command->value.symbol.expression, 0U)) {
                 command_deferred[i] = true;
                 break;
             }
@@ -1322,7 +1556,7 @@ static bool static_build_script_layout(MiniLdState *state,
             !align_up_size(abi.ehdr + header_phdr_count * abi.phdr,
                            state->nmagic
                                ? state->target->nmagic_load_alignment
-                               : state->target->page_size, &header_size)) {
+                               : minild_static_page_size(state), &header_size)) {
             fprintf(state->diagnostics,
                     "minic-ld: linker-script-header-overflow\n");
             goto done;
@@ -1404,7 +1638,7 @@ static bool static_build_script_layout(MiniLdState *state,
          * both without mapping unrelated file bytes over the first section.
          * Do this before choosing a new output-section file base.  Members
          * of an existing output already get exact dot-hole offsets below. */
-        if (!state->nmagic && state->target->page_size != 0U &&
+        if (!state->nmagic && minild_static_page_size(state) != 0U &&
             last_file_backed != SIZE_MAX &&
             section->type != SHT_NOBITS) {
             size_t previous = last_file_backed;
@@ -1420,8 +1654,8 @@ static bool static_build_script_layout(MiniLdState *state,
                 previous_end = prior_place->vaddr + (uint64_t)prior->size;
                 if (previous_end != 0U &&
                     previous_end <= this_place->vaddr &&
-                    (previous_end - 1U) / state->target->page_size ==
-                        this_place->vaddr / state->target->page_size &&
+                    (previous_end - 1U) / minild_static_page_size(state) ==
+                        this_place->vaddr / minild_static_page_size(state) &&
                     this_place->laddr >=
                         prior_place->laddr + (uint64_t)prior->size &&
                     this_place->laddr -
@@ -1492,6 +1726,29 @@ static bool static_build_script_layout(MiniLdState *state,
         } else {
             file_cursor = aligned;
             if (owner != SIZE_MAX && owner < script->command_count) {
+                uint64_t leading = layout->work[best].vaddr -
+                                   layout->script_outputs[owner].start;
+
+                if (desired_load_file != SIZE_MAX) {
+                    /* This output is already inside a PT_LOAD whose first
+                     * fragment fixed an affine VMA->file mapping. The
+                     * target member's desired offset INCLUDES the output
+                     * prefix; adding leading again and rounding by max
+                     * page size inserts a spurious whole page (x86 Linux
+                     * .vvar's first member starts 128B into its output). */
+                    if (leading > desired_load_file ||
+                        desired_load_file %
+                            (section->align == 0U ? 1U :
+                             (size_t)section->align) != 0U) {
+                        fprintf(state->diagnostics,
+                                "minic-ld: invalid-script-PHDR-output-prefix:%s\n",
+                                section->name);
+                        goto done;
+                    }
+                    layout->script_outputs[owner].file_base =
+                        desired_load_file - (size_t)leading;
+                    file_cursor = desired_load_file;
+                } else {
                 /* Later members may be more strictly aligned than the
                  * first. Match the owner's maximum alignment modulo its
                  * VMA now, so later VMA gaps also have correct file gaps.
@@ -1503,11 +1760,9 @@ static bool static_build_script_layout(MiniLdState *state,
                 size_t alignment = (size_t)(owner_max_align[owner] == 0U
                                                ? 1U : owner_max_align[owner]);
                 if (!state->nmagic &&
-                    alignment < state->target->page_size) {
-                    alignment = state->target->page_size;
+                    alignment < minild_static_page_size(state)) {
+                    alignment = minild_static_page_size(state);
                 }
-                uint64_t leading = layout->work[best].vaddr -
-                                   layout->script_outputs[owner].start;
                 size_t wanted = (size_t)(layout->work[best].vaddr % alignment);
                 size_t have;
                 size_t minimum;
@@ -1533,6 +1788,7 @@ static bool static_build_script_layout(MiniLdState *state,
                 }
                 layout->script_outputs[owner].file_base =
                     file_cursor - (size_t)leading;
+                }
             }
         }
         layout->work[best].file_offset = file_cursor;
@@ -1542,8 +1798,13 @@ static bool static_build_script_layout(MiniLdState *state,
                 load_first_vaddr[load] = layout->work[best].vaddr;
             } else if (file_cursor != desired_load_file) {
                 fprintf(state->diagnostics,
-                        "minic-ld: unsupported-script-PHDR-file-alignment:%s\n",
-                        section->name);
+                        "minic-ld: unsupported-script-PHDR-file-alignment:%s"
+                        ":phdr=%zu:actual=0x%zx:expected=0x%zx"
+                        ":vaddr=0x%llx:owner=%zu\n",
+                        section->name, load, file_cursor,
+                        desired_load_file,
+                        (unsigned long long)layout->work[best].vaddr,
+                        owner);
                 goto done;
             }
         }

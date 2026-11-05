@@ -750,6 +750,84 @@ check-minild-script-phdrs: $(MINILD_BINARY)
 	MINILD="$(abspath $(MINILD_BINARY))" \
 	bash tests/linker/probe-static-script-phdrs.sh
 
+# Full-placement Target decisions are shared by RV32/RV64 static Linux,
+# AArch64 kernel ET_DYN errata and LoongArch static PIE relocation output.
+.PHONY: check-minild-riscv-static-relax-fixedpoint
+check-minild-riscv-static-relax-fixedpoint: $(MINIAS_BINARY) $(MINILD_BINARY)
+	MINIAS="$(abspath $(MINIAS_BINARY))" \
+	MINILD="$(abspath $(MINILD_BINARY))" \
+	bash tests/linker/probe-riscv-static-relax-fixedpoint.sh
+
+.PHONY: check-minild-aarch64-cortex-a53-843419
+check-minild-aarch64-cortex-a53-843419: $(MINIAS_BINARY) $(MINILD_BINARY)
+	MINIAS="$(abspath $(MINIAS_BINARY))" \
+	MINILD="$(abspath $(MINILD_BINARY))" \
+	bash tests/linker/probe-aarch64-cortex-a53-843419.sh
+
+.PHONY: check-minild-loongarch-static-pie
+check-minild-loongarch-static-pie: $(MINIAS_BINARY) $(MINILD_BINARY)
+	MINIAS="$(abspath $(MINIAS_BINARY))" \
+	MINILD="$(abspath $(MINILD_BINARY))" \
+	bash tests/linker/probe-loongarch-static-pie.sh
+
+# Linux-facing linker invariants are exercised across all five ELF targets
+# before any expensive vmlinux re-link or QEMU boot attempt.
+.PHONY: check-minild-static-build-id-sha1 check-minild-static-merge-five-target check-minild-static-merge-strings
+check-minild-static-build-id-sha1: $(MINILD_BINARY)
+	MINILD="$(abspath $(MINILD_BINARY))" \
+	bash tests/linker/probe-static-build-id-sha1.sh
+
+check-minild-static-merge-five-target: $(MINIAS_BINARY) $(MINILD_BINARY)
+	MINIAS="$(abspath $(MINIAS_BINARY))" \
+	MINILD="$(abspath $(MINILD_BINARY))" \
+	bash tests/linker/probe-static-merge-five-target.sh
+
+check-minild-static-merge-strings: $(MINILD_BINARY)
+	MINILD="$(abspath $(MINILD_BINARY))" \
+	bash tests/linker/probe-static-merge-strings.sh
+
+.PHONY: check-minild-riscv-pie-relax-fixedpoint check-minild-x86-linux-kbuild-options check-minild-x86-linux-pc64 check-minild-x86-script-info check-minild-x86-script-synthetic-nobits check-minild-static-script-pure-nobits-phdr
+check-minild-riscv-pie-relax-fixedpoint: $(MINIAS_BINARY) $(MINILD_BINARY)
+	MINIAS="$(abspath $(MINIAS_BINARY))" \
+	MINILD="$(abspath $(MINILD_BINARY))" \
+	bash tests/linker/probe-riscv-pie-relax-fixedpoint.sh
+
+check-minild-x86-linux-kbuild-options: $(MINILD_BINARY)
+	MINILD="$(abspath $(MINILD_BINARY))" \
+	bash tests/linker/probe-x86-linux-kbuild-options.sh
+
+check-minild-x86-linux-pc64: $(MINILD_BINARY)
+	MINILD="$(abspath $(MINILD_BINARY))" \
+	bash tests/linker/probe-x86-linux-pc64.sh
+
+check-minild-x86-script-info: $(MINILD_BINARY)
+	MINILD="$(abspath $(MINILD_BINARY))" \
+	bash tests/linker/probe-x86-script-info.sh
+
+check-minild-x86-script-synthetic-nobits: $(MINILD_BINARY)
+	MINILD="$(abspath $(MINILD_BINARY))" \
+	bash tests/linker/probe-x86-script-synthetic-nobits.sh
+
+check-minild-static-script-pure-nobits-phdr: $(MINILD_BINARY)
+	MINILD="$(abspath $(MINILD_BINARY))" \
+	bash tests/linker/probe-static-script-pure-nobits-phdr.sh
+
+.PHONY: check-minild-five-arch-linux-linker-boundary
+check-minild-five-arch-linux-linker-boundary: \
+	check-minild-static-merge-five-target \
+	check-minild-static-merge-strings \
+	check-minild-static-build-id-sha1 \
+	check-minild-riscv-static-relax-fixedpoint \
+	check-minild-riscv-pie-relax-fixedpoint \
+	check-minild-aarch64-cortex-a53-843419 \
+	check-minild-loongarch-static-pie \
+	check-minild-x86-linux-kbuild-options \
+	check-minild-x86-linux-pc64 \
+	check-minild-x86-script-info \
+	check-minild-x86-script-synthetic-nobits \
+	check-minild-static-script-pure-nobits-phdr \
+	check-minild-segment-plan
+
 .PHONY: check-minild-rv32-static-runtime
 check-minild-rv32-static-runtime: $(MINIAS_BINARY) $(MINILD_BINARY)
 	MINIAS="$(abspath $(MINIAS_BINARY))" \

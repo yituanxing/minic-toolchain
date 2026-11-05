@@ -156,6 +156,76 @@ static bool shared_script_validate_discarded_alloc(
     return true;
 }
 
+typedef struct MiniLdSharedRiscvRelaxPolicy {
+    const MiniLdState *state;
+    const MiniLdSharedImage *shared;
+} MiniLdSharedRiscvRelaxPolicy;
+
+/* Preemptible references must still branch through their reserved PLT
+ * entry.  The shared finalizer owns CALL/PLT patching and currently admits
+ * full AUIPC/JALR pairs only; a short JAL in this class would otherwise be
+ * incorrectly patched against S instead of PLT(S).  Locally bound calls are
+ * safe to shorten and are patched by the existing final JAL/RVC writer. */
+static bool shared_riscv_relax_local_call(const MiniLdReloc *reloc,
+                                          void *opaque) {
+    const MiniLdSharedRiscvRelaxPolicy *policy = opaque;
+    if (reloc->symbol == SIZE_MAX ||
+        reloc->symbol >= policy->shared->prepared_symbol_count) {
+        return false;
+    }
+    return !shared_symbol_needs_plt(policy->state, policy->shared,
+                                     reloc->symbol);
+}
+
+/* Both default ET_DYN placement and the constrained vDSO -T script now use
+ * the same RISC-V materializer as ET_EXEC.  Metadata sizes and symbol/PLT
+ * identities were reserved before entering this loop; only machine bytes,
+ * section lengths and source-coordinate offsets may change. */
+static bool shared_riscv_layout_to_fixed_point(
+    MiniLdState *state, const MiniLdScript *script, MiniLdLayout *layout,
+    const MiniLdSharedImage *shared, MiniLdRiscvRelaxPlan **relax) {
+    MiniLdScriptLayoutCheckpoint checkpoint;
+    MiniLdSharedRiscvRelaxPolicy policy = {state, shared};
+    const unsigned max_rounds = 32U;
+    unsigned round;
+    bool ok = false;
+
+    if (!static_script_checkpoint_begin(state, script, &checkpoint)) {
+        fprintf(state->diagnostics,
+                "minic-ld: out-of-memory:shared-layout-checkpoint\n");
+        free(checkpoint.script_symbols);
+        return false;
+    }
+    for (round = 0U; round < max_rounds; ++round) {
+        bool changed = false;
+        if (!(script != NULL
+                  ? shared_build_vdso_script_layout(
+                        state, script, layout)
+                  : shared_build_layout(state, layout))) {
+            goto done;
+        }
+        if (!minild_riscv_replan_image_layout(
+                state, layout, relax, &changed,
+                shared_riscv_relax_local_call, &policy)) {
+            goto done;
+        }
+        if (!changed) {
+            ok = true;
+            goto done;
+        }
+        minild_layout_destroy(layout);
+        if (!static_script_checkpoint_rollback(state, &checkpoint)) {
+            goto done;
+        }
+    }
+    fprintf(state->diagnostics,
+            "minic-ld: riscv-shared-layout-did-not-converge:rounds=%u\n",
+            max_rounds);
+done:
+    free(checkpoint.script_symbols);
+    return ok;
+}
+
 int minild_link_shared_elf64_riscv_inputs_options(
     const char *output_path,
     const MiniLdInput *inputs,
@@ -185,6 +255,7 @@ int minild_link_shared_elf64_riscv_inputs_options(
     MiniLdState state;
     MiniLdLayout layout;
     MiniLdSharedImage shared;
+    MiniLdRiscvRelaxPlan *relax = NULL;
     MiniLdOutputPlan output_plan = {0};
     MiniLdScript version_script;
     MiniLdScript layout_script;
@@ -261,10 +332,9 @@ int minild_link_shared_elf64_riscv_inputs_options(
                                  version,
                                  &shared) ||
         (pie && !shared_validate_pie_dso_symbols(&state)) ||
-        !(script_path != NULL
-              ? shared_build_vdso_script_layout(&state, &layout_script,
-                                                &layout)
-              : shared_build_layout(&state, &layout))) {
+        !shared_riscv_layout_to_fixed_point(
+            &state, script_path != NULL ? &layout_script : NULL,
+            &layout, &shared, &relax)) {
         goto done;
     }
     if (script_path != NULL &&
@@ -307,6 +377,7 @@ int minild_link_shared_elf64_riscv_inputs_options(
 done:
     minild_output_plan_destroy(&output_plan);
     minild_layout_destroy(&layout);
+    minild_riscv_relax_plan_destroy(relax);
     shared_image_destroy(&shared);
     state_destroy(&state);
     minild_script_destroy(&version_script);

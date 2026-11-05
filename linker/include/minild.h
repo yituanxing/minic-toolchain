@@ -3,6 +3,7 @@
 
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
 #include <stdio.h>
 
 typedef enum MiniLdInputKind {
@@ -28,6 +29,19 @@ typedef struct MiniLdStaticOptions {
     bool discard_locals;
     /* Kernel ET_DYN is a statically resolved image, not an ELF DSO. */
     bool output_et_dyn;
+    /* Preserve the original static -pie request even when GNU -n forces
+     * the emitted ELF type to ET_EXEC.  Target synthetic relocations (for
+     * example LoongArch KASLR R_LARCH_RELATIVE) depend on this semantic,
+     * not the ELF header's e_type. */
+    bool static_pie_requested;
+    /* Architecture erratum repair must be applied after final placement. */
+    bool fix_cortex_a53_843419;
+    /* GNU -z max-page-size, zero requests the Target ABI default. */
+    uint64_t max_page_size;
+    /* GNU --orphan-handling=error rejects unmatched alloc input sections. */
+    bool orphan_handling_error;
+    /* GNU --build-id=sha1: materialize an ELF note and hash the image. */
+    bool build_id_sha1;
     /* AArch64 -shared -Bsymbolic --no-apply-dynamic-relocs cannot silently
      * consume fixups which instead require emitted runtime .rela.dyn. */
     bool kernel_shared_no_dynamic_relocations;

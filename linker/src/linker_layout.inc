@@ -24,9 +24,12 @@ typedef struct MiniLdLayoutScriptOutput {
     uint64_t start;
     uint64_t end;
     size_t file_base;
-    unsigned char fill;
+    uint64_t fill;
+    unsigned fill_width;
     bool have_fill;
     bool defined;
+    /* GNU (INFO): non-alloc section with a meaningful script VMA. */
+    bool informational;
 } MiniLdLayoutScriptOutput;
 
 typedef struct MiniLdLayout {
@@ -47,6 +50,27 @@ typedef struct MiniLdLayout {
     bool have_rw;
     bool scripted;
 } MiniLdLayout;
+
+/* Linker-script holes use a repeating big-endian literal byte sequence,
+ * regardless of the selected ELF target's data encoding. */
+static unsigned minild_script_fill_width(uint64_t value) {
+    unsigned width = 1U;
+    while (width < 8U && (value >> (width * 8U)) != 0U) {
+        ++width;
+    }
+    return width;
+}
+
+static void minild_script_fill_bytes(unsigned char *bytes, size_t count,
+                                     uint64_t value, unsigned width,
+                                     size_t offset) {
+    size_t i;
+    for (i = 0U; i < count; ++i) {
+        unsigned index = (unsigned)((offset + i) % width);
+        bytes[i] = (unsigned char)(
+            (value >> ((width - 1U - index) * 8U)) & UINT64_C(0xff));
+    }
+}
 
 /* The surviving TLS block has one layout identity for ET_EXEC fixups,
  * .symtab values and PT_TLS.  Do not let targets independently infer where
@@ -273,7 +297,7 @@ static bool static_place_rw_sections(MiniLdState *state,
         MiniLdStaticRwOrder *entry;
 
         if ((section->flags & (SHF_ALLOC | SHF_WRITE)) !=
-            (SHF_ALLOC | SHF_WRITE)) {
+            (SHF_ALLOC | SHF_WRITE) || section->gc_discarded) {
             continue;
         }
         entry = &order[count++];
@@ -339,8 +363,8 @@ done:
 static bool static_build_layout_at(MiniLdState *state,
                                    MiniLdLayout *layout,
                                    uint64_t base_vaddr) {
-    const size_t page = state->target->page_size;
-    const size_t header_page = state->target->page_size;
+    const size_t page = minild_static_page_size(state);
+    const size_t header_page = minild_static_page_size(state);
     size_t rx_cursor = 0U;
     size_t i;
 
@@ -365,7 +389,8 @@ static bool static_build_layout_at(MiniLdState *state,
         size_t aligned;
 
         if ((section->flags & SHF_ALLOC) == 0U ||
-            (section->flags & SHF_WRITE) != 0U) {
+            (section->flags & SHF_WRITE) != 0U ||
+            section->gc_discarded) {
             continue;
         }
         if (section->type == SHT_NOBITS) {

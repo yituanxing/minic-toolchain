@@ -27,8 +27,14 @@ typedef enum MiniLdScriptExprKind {
     MINILD_SCRIPT_EXPR_NEGATE,
     MINILD_SCRIPT_EXPR_ALIGN,
     MINILD_SCRIPT_EXPR_ADDR,
+    MINILD_SCRIPT_EXPR_SIZEOF,
     MINILD_SCRIPT_EXPR_ABSOLUTE,
-    MINILD_SCRIPT_EXPR_SIZEOF_HEADERS
+    MINILD_SCRIPT_EXPR_SIZEOF_HEADERS,
+    MINILD_SCRIPT_EXPR_LESS,
+    MINILD_SCRIPT_EXPR_LESS_EQUAL,
+    MINILD_SCRIPT_EXPR_EQUAL,
+    MINILD_SCRIPT_EXPR_LOGICAL_OR,
+    MINILD_SCRIPT_EXPR_ASSERT
 } MiniLdScriptExprKind;
 
 typedef struct MiniLdScriptExpr {
@@ -78,6 +84,7 @@ typedef struct MiniLdScriptOutputSection {
     MiniLdScriptExprId at;
     MiniLdScriptExprId align;
     MiniLdScriptExprId fill;
+    bool info; /* GNU (INFO): keep section outside the PT_LOAD image. */
     MiniLdScriptSectionItem *items;
     size_t item_count;
     size_t item_capacity;
@@ -91,7 +98,8 @@ typedef struct MiniLdScriptOutputSection {
 typedef enum MiniLdScriptCommandKind {
     MINILD_SCRIPT_DEFINE_SYMBOL = 0,
     MINILD_SCRIPT_SET_DOT,
-    MINILD_SCRIPT_OUTPUT_SECTION
+    MINILD_SCRIPT_OUTPUT_SECTION,
+    MINILD_SCRIPT_ASSERT
 } MiniLdScriptCommandKind;
 
 typedef struct MiniLdScriptCommand {
@@ -119,6 +127,7 @@ typedef struct MiniLdScriptPhdr {
 typedef struct MiniLdScript {
     char *entry_symbol;
     char *output_arch;
+    char *output_format;
     MiniLdScriptExpr *expressions;
     size_t expression_count;
     size_t expression_capacity;
@@ -150,6 +159,7 @@ typedef struct MiniLdScriptEvalContext {
     bool have_headers_size;
     MiniLdScriptResolveSymbol resolve_symbol;
     MiniLdScriptResolveSection resolve_section;
+    MiniLdScriptResolveSection resolve_section_size;
     void *user;
 } MiniLdScriptEvalContext;
 

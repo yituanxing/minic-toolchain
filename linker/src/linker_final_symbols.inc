@@ -315,6 +315,7 @@ static bool minild_final_relocations_build(
             if (source->type != R_X86_64_64 &&
                 source->type != R_X86_64_32 &&
                 source->type != R_X86_64_32S &&
+                source->type != R_X86_64_PC64 &&
                 source->type != R_X86_64_PC32 &&
                 source->type != R_X86_64_PLT32) {
                 fprintf(state->diagnostics,

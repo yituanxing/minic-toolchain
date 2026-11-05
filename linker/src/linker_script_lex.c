@@ -160,6 +160,30 @@ bool minild_script_parser_next(ScriptParser *parser) {
         return true;
     }
 
+    if (c == '"') {
+        parser_advance_char(parser);
+        parser->token.begin = parser->source + parser->offset;
+        while (parser->offset < parser->source_size &&
+               parser->source[parser->offset] != '"') {
+            if (parser->source[parser->offset] == '\\') {
+                parser_advance_char(parser);
+                if (parser->offset >= parser->source_size) {
+                    return minild_script_parser_error(parser,
+                                                      "unterminated-string");
+                }
+            }
+            parser_advance_char(parser);
+        }
+        if (parser->offset >= parser->source_size) {
+            return minild_script_parser_error(parser, "unterminated-string");
+        }
+        parser->token.kind = TOKEN_STRING;
+        parser->token.length = (size_t)(parser->source + parser->offset -
+                                        parser->token.begin);
+        parser_advance_char(parser);
+        return true;
+    }
+
     parser_advance_char(parser);
     parser->token.length = 1U;
     switch (c) {
@@ -169,16 +193,44 @@ bool minild_script_parser_next(ScriptParser *parser) {
     case ')': parser->token.kind = TOKEN_RPAREN; return true;
     case ':': parser->token.kind = TOKEN_COLON; return true;
     case ';': parser->token.kind = TOKEN_SEMICOLON; return true;
-    case '=': parser->token.kind = TOKEN_EQUAL; return true;
+    case '=':
+        if (parser->offset < parser->source_size &&
+            parser->source[parser->offset] == '=') {
+            parser_advance_char(parser);
+            parser->token.kind = TOKEN_EQUAL_EQUAL;
+            parser->token.length = 2U;
+            return true;
+        }
+        parser->token.kind = TOKEN_EQUAL;
+        return true;
     case '*': parser->token.kind = TOKEN_STAR; return true;
-    case '+': parser->token.kind = TOKEN_PLUS; return true;
+    case '+':
+        if (parser->offset < parser->source_size &&
+            parser->source[parser->offset] == '=') {
+            parser_advance_char(parser);
+            parser->token.kind = TOKEN_PLUS_EQUAL;
+            parser->token.length = 2U;
+            return true;
+        }
+        parser->token.kind = TOKEN_PLUS;
+        return true;
     case '-': parser->token.kind = TOKEN_MINUS; return true;
     case '/': parser->token.kind = TOKEN_SLASH; return true;
     case '%': parser->token.kind = TOKEN_PERCENT; return true;
     case '&': parser->token.kind = TOKEN_AMP; return true;
     case '^': parser->token.kind = TOKEN_CARET; return true;
-    case '|': parser->token.kind = TOKEN_PIPE; return true;
+    case '|':
+        if (parser->offset < parser->source_size &&
+            parser->source[parser->offset] == '|') {
+            parser_advance_char(parser);
+            parser->token.kind = TOKEN_LOGICAL_OR;
+            parser->token.length = 2U;
+            return true;
+        }
+        parser->token.kind = TOKEN_PIPE;
+        return true;
     case '~': parser->token.kind = TOKEN_TILDE; return true;
+    case ',': parser->token.kind = TOKEN_COMMA; return true;
     case '<':
         if (parser->offset < parser->source_size &&
             parser->source[parser->offset] == '<') {
@@ -187,7 +239,15 @@ bool minild_script_parser_next(ScriptParser *parser) {
             parser->token.length = 2U;
             return true;
         }
-        break;
+        if (parser->offset < parser->source_size &&
+            parser->source[parser->offset] == '=') {
+            parser_advance_char(parser);
+            parser->token.kind = TOKEN_LESS_EQUAL;
+            parser->token.length = 2U;
+            return true;
+        }
+        parser->token.kind = TOKEN_LESS;
+        return true;
     case '>':
         if (parser->offset < parser->source_size &&
             parser->source[parser->offset] == '>') {

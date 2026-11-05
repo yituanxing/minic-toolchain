@@ -1,6 +1,9 @@
 /* RISC-V ET_EXEC relocation reservation and GOT materialization.
  * Only this target leaf knows the GOT_HI20 policy, slot width, or the
  * machine's generated .got bytes. Layout treats it as an ordinary section. */
+typedef struct MiniLdRiscvRelaxPlan MiniLdRiscvRelaxPlan;
+static void minild_riscv_relax_plan_destroy(MiniLdRiscvRelaxPlan *plan);
+
 typedef struct MiniLdRiscvStaticGot {
     size_t section;
     size_t *slot_offsets;
@@ -9,6 +12,8 @@ typedef struct MiniLdRiscvStaticGot {
     size_t *tls_slot_offsets;
     size_t symbol_count;
     bool present;
+    /* Same target-owned session survives generic fixed-point re-layout. */
+    MiniLdRiscvRelaxPlan *relax;
 } MiniLdRiscvStaticGot;
 
 /* RISC-V TLS variant I initializes tp to the beginning of the PT_TLS
@@ -63,6 +68,7 @@ static void minild_riscv_destroy_static_relocations(
     }
     free(got->slot_offsets);
     free(got->tls_slot_offsets);
+    minild_riscv_relax_plan_destroy(got->relax);
     free(got);
     plan->target_data = NULL;
 }
@@ -158,6 +164,10 @@ static bool minild_riscv_reserve_static_relocations(
     }
     return true;
 }
+
+/* RISC-V whole-image CALL/ALIGN replan uses this static target's GOT plan
+ * for lifetime ownership; it never changes GOT slot policies. */
+#include "linker_riscv_relax_plan.inc"
 
 static bool minild_riscv_fill_static_relocations(
     MiniLdState *state, const MiniLdLayout *layout,

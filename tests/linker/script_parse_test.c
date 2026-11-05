@@ -15,6 +15,10 @@ static bool resolve_symbol(void *context,
         *value_out = UINT64_C(0xffffffff80001234);
         return true;
     }
+    if (strcmp(name, "_start") == 0) {
+        *value_out = UINT64_C(0x200000);
+        return true;
+    }
     return false;
 }
 
@@ -24,6 +28,16 @@ static bool resolve_section(void *context,
     (void)context;
     if (strcmp(name, ".text") == 0) {
         *value_out = UINT64_C(0x2000);
+        return true;
+    }
+    return false;
+}
+
+static bool resolve_section_size(void *context,
+                                 const char *name,
+                                 uint64_t *value_out) {
+    if (strcmp(name, ".got.plt") == 0) {
+        *value_out = *(const uint64_t *)context;
         return true;
     }
     return false;
@@ -232,6 +246,59 @@ int main(int argc, char **argv) {
         }
         minild_script_destroy(&bitwise);
         puts("MINILD_SCRIPT_GNU_BITWISE=PASS loongarch_kernel_mask=exact precedence=AND_XOR_OR_shift modulo=PASS invalid_shift_divisor=reject");
+    }
+    {
+        MiniLdScript kbuild;
+        MiniLdScriptEvalContext check;
+        uint64_t got_size = 0U;
+        minild_script_initialize(&kbuild);
+        if (!minild_script_parse_file(
+                "tests/linker/script-x86-kbuild-language.lds", &kbuild,
+                stderr) ||
+            kbuild.command_count != 8U ||
+            kbuild.output_format == NULL ||
+            strcmp(kbuild.output_format, "elf64-x86-64") != 0 ||
+            kbuild.phdr_count != 2U ||
+            kbuild.commands[4].kind != MINILD_SCRIPT_OUTPUT_SECTION ||
+            !kbuild.commands[4].value.section.info ||
+            kbuild.commands[5].kind != MINILD_SCRIPT_ASSERT ||
+            kbuild.commands[6].kind != MINILD_SCRIPT_DEFINE_SYMBOL ||
+            !kbuild.commands[6].value.symbol.provide ||
+            kbuild.commands[7].kind != MINILD_SCRIPT_SET_DOT) {
+            minild_script_destroy(&kbuild);
+            minild_script_destroy(&script);
+            return 1;
+        }
+        memset(&check, 0, sizeof(check));
+        check.user = &got_size;
+        check.resolve_symbol = resolve_symbol;
+        check.resolve_section_size = resolve_section_size;
+        if (!minild_script_evaluate(&kbuild,
+                                    kbuild.commands[0].value.expression,
+                                    &check, &value, stderr) ||
+            value != UINT64_C(0x200000) ||
+            !minild_script_evaluate(&kbuild,
+                                    kbuild.commands[5].value.expression,
+                                    &check, &value, stderr) ||
+            value != 1U ||
+            !minild_script_evaluate(&kbuild,
+                                    kbuild.commands[7].value.expression,
+                                    &check, &value, stderr) ||
+            value != 1U) {
+            minild_script_destroy(&kbuild);
+            minild_script_destroy(&script);
+            return 1;
+        }
+        got_size = 7U;
+        if (minild_script_evaluate(&kbuild,
+                                   kbuild.commands[5].value.expression,
+                                   &check, &value, stderr)) {
+            minild_script_destroy(&kbuild);
+            minild_script_destroy(&script);
+            return 1;
+        }
+        minild_script_destroy(&kbuild);
+        puts("MINILD_SCRIPT_X86_KBUILD=PASS output_format phdrs INFO at ALIGN2 SIZEOF ASSERT provide plus_equals checks");
     }
     puts("MINILD_SCRIPT_A0=PASS linux-subset=PASS commands=12 expressions=37 wildcard=PASS");
     minild_script_destroy(&script);

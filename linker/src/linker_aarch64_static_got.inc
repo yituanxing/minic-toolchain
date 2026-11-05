@@ -6,6 +6,35 @@
 #ifndef R_AARCH64_GOTPCREL32
 #define R_AARCH64_GOTPCREL32 315
 #endif
+/* A53-843419 is an address-dependent *post-layout* target transform.  The
+ * work section owns relocated code and its appended 8-byte branch islands;
+ * immutable InputGraph sections never change.  Keep the patch plan alongside
+ * GOT/IFUNC state so that repeated layout passes remain idempotent. */
+typedef struct MiniLdAarch64ErratumPatch {
+    size_t section;
+    size_t instruction_offset;
+    size_t stub_offset;
+    uint32_t instruction;
+} MiniLdAarch64ErratumPatch;
+
+typedef struct MiniLdAarch64CodeMap {
+    size_t section;
+    uint64_t offset;
+    bool code;
+} MiniLdAarch64CodeMap;
+
+typedef struct MiniLdAarch64ErratumPlan {
+    MiniLdAarch64ErratumPatch *patches;
+    size_t count;
+    size_t capacity;
+    size_t *original_sizes;
+    unsigned char *input_owned;
+    size_t original_section_count;
+    MiniLdAarch64CodeMap *code_map;
+    size_t code_map_count;
+    bool initialized;
+} MiniLdAarch64ErratumPlan;
+
 typedef struct MiniLdAarch64StaticGot {
     size_t section;
     size_t symbol_count;
@@ -23,6 +52,7 @@ typedef struct MiniLdAarch64StaticGot {
     size_t ifunc_rela_section;
     size_t ifunc_count;
     bool present;
+    MiniLdAarch64ErratumPlan erratum843419;
 } MiniLdAarch64StaticGot;
 
 static bool minild_aarch64_static_uses_got(uint32_t type);
@@ -141,6 +171,10 @@ static void minild_aarch64_destroy_static_relocations(
         free(got->tls_slot_offsets);
         free(got->ifunc_stub_offsets);
         free(got->ifunc_slot_offsets);
+        free(got->erratum843419.patches);
+        free(got->erratum843419.original_sizes);
+        free(got->erratum843419.input_owned);
+        free(got->erratum843419.code_map);
         free(got);
         plan->target_data = NULL;
     }
