@@ -1642,7 +1642,201 @@ done:
     return okay;
 }
 
-int main(void) {
+/* Signed/unsigned integer <-> binary64, binary32 transport, sign-bit negate
+ * and ordered comparisons form one physical SSE2 selection family. The
+ * optional assembler stream is linked against a host-GCC reference by the
+ * separate differential test, so these are runtime witnesses as well as
+ * preflight/coverage/fail-closed tests. */
+static bool scenario_fp_boundary(unsigned int mode, FILE *assembly_out) {
+    MinicCoreTypeContext types;
+    MinicCoreFunction core = {0};
+    MinicCoreType t = {0};
+    MinicCoreTypeId unsigned8, signed32, signed64, unsigned64, float32, float64;
+    MinicCoreTypeId formals[2], result_type;
+    MinicCoreBlockId block;
+    MinicCoreValueId first, second = MINIC_CORE_VALUE_INVALID, result;
+    MinicCoreInstruction ins = {0};
+    MinicCoreTerminator term = {0};
+    MinicCoreInstructionId origin;
+    MinicX86Frame frame = {0};
+    MinicX86ArgLocation locations[2] = {{0}};
+    MinicTargetInfo target = {0};
+    MinicMachineFunction machine = {0};
+    MinicMachineGNUAsmPolicy policy = {0};
+    size_t offsets[3] = {8U, 16U, 24U};
+    bool reachable[1] = {false};
+    bool origin_seen = false, opcode_seen = false, okay = false;
+    MinicX86MachineOpcode expected;
+    size_t i, j;
+    char name[32];
+    const char *stage = "types";
+    if (mode >= 12U) return false;
+    minic_core_type_context_initialize(&types);
+    minic_core_function_initialize(&core);
+    if (snprintf(name, sizeof(name), "mir_fp_%u", mode) < 0) goto done;
+    core.name = malloc(strlen(name) + 1U);
+    if (core.name == NULL) goto done;
+    memcpy(core.name, name, strlen(name) + 1U);
+    core.name_length = strlen(name);
+    t.kind = MINIC_CORE_TYPE_INTEGER;
+    t.has_layout = true;
+    t.size = t.alignment = 1U;
+    t.value.integer.bit_width = 8U;
+    t.value.integer.is_signed = false;
+    if (!minic_core_type_register(&types, &t, &unsigned8)) goto done;
+    t.size = t.alignment = 4U;
+    t.value.integer.bit_width = 32U;
+    t.value.integer.is_signed = true;
+    if (!minic_core_type_register(&types, &t, &signed32)) goto done;
+    t.size = t.alignment = 8U;
+    t.value.integer.bit_width = 64U;
+    if (!minic_core_type_register(&types, &t, &signed64)) goto done;
+    t.value.integer.is_signed = false;
+    if (!minic_core_type_register(&types, &t, &unsigned64)) goto done;
+    t = (MinicCoreType){0};
+    t.kind = MINIC_CORE_TYPE_FLOAT;
+    t.has_layout = true;
+    t.size = t.alignment = 4U;
+    t.value.floating.format = MINIC_CORE_FLOAT_BINARY32;
+    if (!minic_core_type_register(&types, &t, &float32)) goto done;
+    t.size = t.alignment = 8U;
+    t.value.floating.format = MINIC_CORE_FLOAT_BINARY64;
+    if (!minic_core_type_register(&types, &t, &float64)) goto done;
+    formals[0] = mode == 0U ? signed64 : mode == 1U ? unsigned64 :
+        mode == 4U ? float32 : mode == 10U ? unsigned8 : float64;
+    formals[1] = float64;
+    result_type = mode == 2U ? signed64 : mode == 3U ? unsigned64 :
+        mode == 11U ? unsigned8 :
+        mode == 5U ? float32 :
+        (mode >= 7U && mode <= 9U) ? signed32 : float64;
+    stage = "core-build";
+    if (!minic_core_function_define_signature(&core, &types,
+            result_type, formals, (mode >= 7U && mode <= 9U) ? 2U : 1U,
+            MINIC_CALLING_CONVENTION_DEFAULT, false) ||
+        !minic_core_function_add_block(&core, &block)) goto done;
+    ins.kind = MINIC_CORE_INSTRUCTION_PARAMETER;
+    ins.core_type_id = formals[0];
+    ins.value.parameter_index = 0U;
+    if (!minic_core_function_append_value_instruction(&core,
+            block, &ins, &first)) goto done;
+    if (mode >= 7U && mode <= 9U) {
+        ins.core_type_id = formals[1];
+        ins.value.parameter_index = 1U;
+        if (!minic_core_function_append_value_instruction(&core,
+                block, &ins, &second)) goto done;
+    }
+    ins = (MinicCoreInstruction){0};
+    ins.core_type_id = result_type;
+    ins.value.operand = first;
+    switch (mode) {
+    case 0U: case 1U: case 10U:
+        ins.kind = MINIC_CORE_INSTRUCTION_INTEGER_TO_DOUBLE;
+        expected = MINIC_X86_MI_CVTSI2SDQ_GPR_XMM; break;
+    case 2U: case 3U: case 11U:
+        ins.kind = MINIC_CORE_INSTRUCTION_DOUBLE_TO_INTEGER;
+        expected = MINIC_X86_MI_CVTTSD2SIQ_XMM_GPR; break;
+    case 4U:
+        ins.kind = MINIC_CORE_INSTRUCTION_FLOAT_TO_DOUBLE;
+        expected = MINIC_X86_MI_CVTSS2SD_XMM; break;
+    case 5U:
+        ins.kind = MINIC_CORE_INSTRUCTION_DOUBLE_TO_FLOAT;
+        expected = MINIC_X86_MI_CVTSD2SS_XMM; break;
+    case 6U:
+        ins.kind = MINIC_CORE_INSTRUCTION_DOUBLE_NEGATE;
+        expected = MINIC_X86_MI_XOR64_RR; break;
+    case 7U: case 8U: case 9U:
+        ins.kind = mode == 7U ? MINIC_CORE_INSTRUCTION_DOUBLE_EQUAL :
+            mode == 8U ? MINIC_CORE_INSTRUCTION_DOUBLE_LESS :
+            MINIC_CORE_INSTRUCTION_DOUBLE_LESS_EQUAL;
+        ins.value.binary.left = first;
+        ins.value.binary.right = second;
+        expected = MINIC_X86_MI_SETNP8_R; break;
+    default: goto done;
+    }
+    origin = (MinicCoreInstructionId)core.instruction_count;
+    if (!minic_core_function_append_value_instruction(&core,
+            block, &ins, &result)) goto done;
+    term.kind = MINIC_CORE_TERMINATOR_RETURN;
+    term.return_value = result;
+    if (!minic_core_function_set_terminator(&core, block, &term) ||
+        !minic_core_function_attach_type_context(&core, &types) ||
+        !minic_core_function_verify(&core)) goto done;
+    target.architecture = MINIC_TARGET_ARCH_X86_64;
+    target.data_layout = minic_x86_64_linux_data_layout();
+    frame.frame_size = 64U;
+    frame.value_count = core.value_count;
+    frame.value_offsets = offsets;
+    frame.incoming_arguments.calling_convention =
+        MINIC_CALLING_CONVENTION_DEFAULT;
+    frame.incoming_arguments.locations = locations;
+    frame.incoming_arguments.argument_count =
+        (mode >= 7U && mode <= 9U) ? 2U : 1U;
+    for (i = 0U; i < frame.incoming_arguments.argument_count; ++i) {
+        const bool floating = formals[i] == float32 || formals[i] == float64;
+        locations[i].kind = floating ? MINIC_X86_ARG_SSE : MINIC_X86_ARG_INTEGER;
+        if (floating) locations[i].fp_index = i;
+        else locations[i].gp_index = i;
+    }
+    stage = "select-coverage-preflight";
+    if (!minic_x86_64_machine_select_core_subset(&machine, &target,
+            &core, &frame)) goto done;
+    stage = "coverage";
+    if (!minic_core_function_mark_reachable_blocks(&core, reachable, 1U) ||
+        !minic_machine_core_coverage_verify(&core, reachable, &machine))
+        goto done;
+    stage = "gnu-preflight";
+    if (!minic_x86_64_machine_gnu_asm_policy(&target, &policy) ||
+        !minic_machine_gnu_asm_preflight(&machine, &policy)) goto done;
+    for (i = 0U; i < machine.block_count; ++i)
+        for (j = 0U; j < machine.blocks[i].instruction_count; ++j) {
+            const MinicMachineInstruction *mi =
+                &machine.blocks[i].instructions[j];
+            if (mi->opcode == expected) opcode_seen = true;
+            if (mi->has_core_origin && mi->core_instruction_id == origin)
+                origin_seen = true;
+        }
+    if (!opcode_seen || !origin_seen ||
+        ((mode == 1U || mode == 3U) && machine.block_count < 4U)) goto done;
+    if (assembly_out != NULL) {
+        stage = "emit-assembly";
+        if (fprintf(assembly_out,
+                ".text\n.globl %s\n.type %s,@function\n%s:\n",
+                name, name, name) < 0 ||
+            !minic_machine_gnu_asm_emit_body(
+                assembly_out, &machine, &policy) ||
+            fprintf(assembly_out, ".size %s,.-%s\n", name, name) < 0)
+            goto done;
+    }
+    stage = "strict-reject";
+    if (mode >= 7U && mode <= 9U)
+        core.instructions[origin].value.binary.right =
+            MINIC_CORE_VALUE_INVALID;
+    else core.instructions[origin].value.operand =
+        MINIC_CORE_VALUE_INVALID;
+    {
+        MinicMachineFunction rejected = {0};
+        okay = !minic_x86_64_machine_select_core_subset(&rejected,
+            &target, &core, &frame);
+        minic_machine_function_destroy(&rejected);
+    }
+done:
+    if (!okay) fprintf(stderr,
+        "X86_FP_MIR=FAIL mode=%u stage=%s\n", mode, stage);
+    minic_machine_function_destroy(&machine);
+    minic_core_function_destroy(&core);
+    minic_core_type_context_destroy(&types);
+    return okay;
+}
+
+int main(int argc, char **argv) {
+    unsigned int fp_mode;
+    if (argc == 2 && strcmp(argv[1], "--emit-fp") == 0) {
+        for (fp_mode = 0U; fp_mode < 12U; ++fp_mode)
+            if (!scenario_fp_boundary(fp_mode, stdout)) return 1;
+        return fputs(".section .note.GNU-stack,\"\",@progbits\n",
+            stdout) == EOF ? 1 : 0;
+    }
+    if (argc != 1) return 2;
     if (!scenario(false, false) || !scenario(false, true) ||
         !scenario(true, false) || !scenario_parameter() ||
         !scenario_float() || !scenario_direct_call() ||
@@ -1682,6 +1876,8 @@ int main(void) {
         !scenario_new_core_case(X86_NEW_VARIADIC) ||
         !scenario_new_core_case(X86_NEW_ALLOCA) ||
         !scenario_new_core_case(X86_NEW_BLOCK_ADDRESS)) return 1;
-    puts("X86_CORE_MIR=PASS cycle=1 physical_alu=1 parameter=1 sse2=1 direct_call=1 mixed_vararg_stack=1 indirect_call=1 ms_shadow_stack=1 record_copy=1 record_load=1 vector_storage=1 record_abi=1 volatile=1 empty_record_reject=1 rep_movsb=1 pic_symbol=1 got_weak=1 head_32s_reject=1 relaxed_atomic=1 compiler_barrier=1 origin=1 fail_closed=1 bitscan_zero_nonzero=1 overflow_32_64=1 va_arg=1 alloca=1 block_address=1");
+    for (fp_mode = 0U; fp_mode < 12U; ++fp_mode)
+        if (!scenario_fp_boundary(fp_mode, NULL)) return 1;
+    puts("X86_CORE_MIR=PASS cycle=1 physical_alu=1 parameter=1 sse2=1 direct_call=1 mixed_vararg_stack=1 indirect_call=1 ms_shadow_stack=1 record_copy=1 record_load=1 vector_storage=1 record_abi=1 volatile=1 empty_record_reject=1 rep_movsb=1 pic_symbol=1 got_weak=1 head_32s_reject=1 relaxed_atomic=1 compiler_barrier=1 origin=1 fail_closed=1 bitscan_zero_nonzero=1 overflow_32_64=1 va_arg=1 alloca=1 block_address=1 fp_boundary=1");
     return 0;
 }

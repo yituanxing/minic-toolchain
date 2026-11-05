@@ -2695,6 +2695,9 @@ check-x86-machine-core-select:
 	  src/target/x86_64/machine_core_select.c \
 	  -o "$(BUILD_DIR)/tests/x86-machine-core-select"
 	"$(BUILD_DIR)/tests/x86-machine-core-select"
+	TMPDIR="$(abspath $(BUILD_DIR))/tests" \
+	  bash tests/target/x86_64/check_machine_fp_differential.sh \
+	  "$(abspath $(BUILD_DIR))/tests/x86-machine-core-select"
 
 # Structural parity is a focused, native-host gate: all five target selectors
 # must accept their proven Core subsets, reject unsupported whole functions,

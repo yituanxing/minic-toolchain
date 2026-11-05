@@ -10,6 +10,7 @@
 #include "target/common/machine_gnu_asm.h"
 #include "target/common/direct_instruction_semantics.h"
 #include "target/common/core_numeric_shape.h"
+#include "target/common/core_floating_shape.h"
 #include "target/common/direct_residual_plan.h"
 #include "target/common/elf_module_symbol_info.h"
 #include "target/common/lp64_scalar.h"
@@ -441,6 +442,146 @@ static bool x86_float_binary(X86CoreSelector *sel,
     }
     return x86_2(sel, opcode, x86_xmm(1U), x86_xmm(0U)) &&
         x86_float_store_xmm(sel, ins->result, 0U, is_double);
+}
+
+/* The native binary32/binary64 conversion and comparison family uses only
+ * typed physical GP/XMM instructions. Preserve the unsigned-64 boundaries
+ * and the unordered NaN mask; neither can be replaced by the signed fast
+ * path. Split control flow into genuine adjacent MachineIR basic blocks. */
+static bool x86_fp_conversion(X86CoreSelector *sel,
+    const MinicCoreInstruction *ins, size_t instruction_id) {
+    MinicCoreFloatingShape shape = {0};
+    const MinicCoreValueId operand = ins->value.operand;
+    const bool to_double = ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_TO_DOUBLE;
+    const bool to_integer = ins->kind == MINIC_CORE_INSTRUCTION_DOUBLE_TO_INTEGER;
+    size_t first, second, third;
+    if (instruction_id >= sel->core->instruction_count ||
+        sel->instruction_aux == NULL ||
+        !minic_core_floating_shape(sel->core, ins, &shape) ||
+        operand >= sel->core->value_count) return false;
+    first = sel->instruction_aux[instruction_id].first;
+    second = sel->instruction_aux[instruction_id].second;
+    third = sel->instruction_aux[instruction_id].third;
+    if (to_double) {
+        if (shape.integer_bytes > 8U ||
+            !x86_core_load(sel, operand, MINIC_X86_REG_RAX) ||
+            !x86_2(sel, MINIC_X86_MI_CVTSI2SDQ_GPR_XMM,
+                x86_reg(MINIC_X86_REG_RAX, 64U), x86_xmm(0U))) return false;
+        if (shape.integer_bytes == 8U && !shape.integer_signed) {
+            if (first == SIZE_MAX || second == SIZE_MAX ||
+                !x86_rr(sel, MINIC_X86_MI_TEST64_RR, 64U,
+                    MINIC_X86_REG_RAX, MINIC_X86_REG_RAX) ||
+                !x86_1(sel, MINIC_X86_MI_JNS_B, x86_block(second)) ||
+                !minic_machine_builder_add_successor(&sel->builder, second) ||
+                !minic_machine_builder_add_successor(&sel->builder, first) ||
+                !minic_machine_builder_set_fallthrough(&sel->builder, first) ||
+                !minic_machine_builder_position_at(&sel->builder, first) ||
+                !x86_ir(sel, MINIC_X86_MI_MOVABS64_IR,
+                    (int64_t)UINT64_C(0x43f0000000000000),
+                    64U, MINIC_X86_REG_R10) ||
+                !x86_2(sel, MINIC_X86_MI_MOVQ_GPR_XMM,
+                    x86_reg(MINIC_X86_REG_R10, 64U), x86_xmm(1U)) ||
+                !x86_2(sel, MINIC_X86_MI_ADDSD_XMM,
+                    x86_xmm(1U), x86_xmm(0U)) ||
+                !x86_1(sel, MINIC_X86_MI_JMP_B, x86_block(second)) ||
+                !minic_machine_builder_add_successor(&sel->builder, second) ||
+                !minic_machine_builder_position_at(&sel->builder, second))
+                return false;
+        }
+        return x86_float_store_xmm(sel, ins->result, 0U, true);
+    }
+    if (to_integer) {
+        if (shape.integer_bytes > 8U ||
+            !x86_float_load_xmm(sel, operand, 0U,
+                MINIC_X86_REG_RAX, true)) return false;
+        if (shape.integer_bytes == 8U && !shape.integer_signed) {
+            if (first == SIZE_MAX || second == SIZE_MAX ||
+                third == SIZE_MAX ||
+                !x86_ir(sel, MINIC_X86_MI_MOVABS64_IR,
+                    (int64_t)UINT64_C(0x43e0000000000000),
+                    64U, MINIC_X86_REG_R10) ||
+                !x86_2(sel, MINIC_X86_MI_MOVQ_GPR_XMM,
+                    x86_reg(MINIC_X86_REG_R10, 64U), x86_xmm(1U)) ||
+                !x86_2(sel, MINIC_X86_MI_UCOMISD_XMM,
+                    x86_xmm(1U), x86_xmm(0U)) ||
+                !x86_1(sel, MINIC_X86_MI_JB_B, x86_block(second)) ||
+                !minic_machine_builder_add_successor(&sel->builder, second) ||
+                !minic_machine_builder_add_successor(&sel->builder, first) ||
+                !minic_machine_builder_set_fallthrough(&sel->builder, first) ||
+                !minic_machine_builder_position_at(&sel->builder, first) ||
+                !x86_2(sel, MINIC_X86_MI_SUBSD_XMM,
+                    x86_xmm(1U), x86_xmm(0U)) ||
+                !x86_2(sel, MINIC_X86_MI_CVTTSD2SIQ_XMM_GPR,
+                    x86_xmm(0U), x86_reg(MINIC_X86_REG_RAX, 64U)) ||
+                !x86_ir(sel, MINIC_X86_MI_BTS64_IR,
+                    63, 64U, MINIC_X86_REG_RAX) ||
+                !x86_1(sel, MINIC_X86_MI_JMP_B, x86_block(third)) ||
+                !minic_machine_builder_add_successor(&sel->builder, third) ||
+                !minic_machine_builder_position_at(&sel->builder, second) ||
+                !x86_2(sel, MINIC_X86_MI_CVTTSD2SIQ_XMM_GPR,
+                    x86_xmm(0U), x86_reg(MINIC_X86_REG_RAX, 64U)) ||
+                !x86_1(sel, MINIC_X86_MI_JMP_B, x86_block(third)) ||
+                !minic_machine_builder_add_successor(&sel->builder, third) ||
+                !minic_machine_builder_position_at(&sel->builder, third))
+                return false;
+        } else if (!x86_2(sel, MINIC_X86_MI_CVTTSD2SIQ_XMM_GPR,
+                x86_xmm(0U), x86_reg(MINIC_X86_REG_RAX, 64U))) return false;
+        return x86_result(sel, ins);
+    }
+    if (ins->kind == MINIC_CORE_INSTRUCTION_FLOAT_TO_DOUBLE) {
+        return x86_float_load_xmm(sel, operand, 0U,
+                MINIC_X86_REG_RAX, false) &&
+            x86_2(sel, MINIC_X86_MI_CVTSS2SD_XMM,
+                x86_xmm(0U), x86_xmm(0U)) &&
+            x86_float_store_xmm(sel, ins->result, 0U, true);
+    }
+    if (ins->kind == MINIC_CORE_INSTRUCTION_DOUBLE_TO_FLOAT) {
+        return x86_float_load_xmm(sel, operand, 0U,
+                MINIC_X86_REG_RAX, true) &&
+            x86_2(sel, MINIC_X86_MI_CVTSD2SS_XMM,
+                x86_xmm(0U), x86_xmm(0U)) &&
+            x86_float_store_xmm(sel, ins->result, 0U, false);
+    }
+    return false;
+}
+
+static bool x86_fp_compare_or_negate(X86CoreSelector *sel,
+    const MinicCoreInstruction *ins) {
+    MinicCoreFloatingShape shape = {0};
+    MinicX86MachineOpcode predicate;
+    if (!minic_core_floating_shape(sel->core, ins, &shape)) return false;
+    if (ins->kind == MINIC_CORE_INSTRUCTION_DOUBLE_NEGATE)
+        return x86_core_load(sel, ins->value.operand,
+                MINIC_X86_REG_RAX) &&
+            x86_ir(sel, MINIC_X86_MI_MOVABS64_IR,
+                INT64_MIN, 64U, MINIC_X86_REG_R10) &&
+            x86_rr(sel, MINIC_X86_MI_XOR64_RR, 64U,
+                MINIC_X86_REG_R10, MINIC_X86_REG_RAX) &&
+            x86_core_store(sel, ins->result, MINIC_X86_REG_RAX);
+    switch (ins->kind) {
+    case MINIC_CORE_INSTRUCTION_DOUBLE_EQUAL:
+        predicate = MINIC_X86_MI_SETZ8_R; break;
+    case MINIC_CORE_INSTRUCTION_DOUBLE_LESS:
+        predicate = MINIC_X86_MI_SETB8_R; break;
+    case MINIC_CORE_INSTRUCTION_DOUBLE_LESS_EQUAL:
+        predicate = MINIC_X86_MI_SETBE8_R; break;
+    default: return false;
+    }
+    return x86_float_load_xmm(sel, ins->value.binary.left,
+            0U, MINIC_X86_REG_RAX, true) &&
+        x86_float_load_xmm(sel, ins->value.binary.right,
+            1U, MINIC_X86_REG_R10, true) &&
+        x86_2(sel, MINIC_X86_MI_UCOMISD_XMM,
+            x86_xmm(1U), x86_xmm(0U)) &&
+        x86_1(sel, predicate, x86_reg(MINIC_X86_REG_RAX, 8U)) &&
+        x86_1(sel, MINIC_X86_MI_SETNP8_R,
+            x86_reg(MINIC_X86_REG_R10, 8U)) &&
+        x86_rr(sel, MINIC_X86_MI_AND8_RR, 8U,
+            MINIC_X86_REG_R10, MINIC_X86_REG_RAX) &&
+        x86_2(sel, MINIC_X86_MI_MOVZBQ_RR,
+            x86_reg(MINIC_X86_REG_RAX, 8U),
+            x86_reg(MINIC_X86_REG_RAX, 64U)) &&
+        x86_result(sel, ins);
 }
 
 static bool x86_integer_binary(X86CoreSelector *sel,
@@ -1701,6 +1842,16 @@ static bool x86_core_instruction(X86CoreSelector *sel,
     case MINIC_CORE_INSTRUCTION_DOUBLE_MULTIPLY:
     case MINIC_CORE_INSTRUCTION_DOUBLE_DIVIDE:
         return x86_float_binary(sel, ins);
+    case MINIC_CORE_INSTRUCTION_INTEGER_TO_DOUBLE:
+    case MINIC_CORE_INSTRUCTION_DOUBLE_TO_INTEGER:
+    case MINIC_CORE_INSTRUCTION_FLOAT_TO_DOUBLE:
+    case MINIC_CORE_INSTRUCTION_DOUBLE_TO_FLOAT:
+        return x86_fp_conversion(sel, ins, instruction_id);
+    case MINIC_CORE_INSTRUCTION_DOUBLE_NEGATE:
+    case MINIC_CORE_INSTRUCTION_DOUBLE_EQUAL:
+    case MINIC_CORE_INSTRUCTION_DOUBLE_LESS:
+    case MINIC_CORE_INSTRUCTION_DOUBLE_LESS_EQUAL:
+        return x86_fp_compare_or_negate(sel, ins);
     case MINIC_CORE_INSTRUCTION_INTEGER_ADD:
     case MINIC_CORE_INSTRUCTION_INTEGER_SUBTRACT:
     case MINIC_CORE_INSTRUCTION_INTEGER_MULTIPLY:
@@ -1980,6 +2131,24 @@ bool minic_x86_64_machine_select_core_subset(
                         NULL, false, true, &aux->first) ||
                     !minic_machine_builder_create_block(&sel.builder,
                         NULL, false, true, &aux->second)) goto cleanup;
+            } else if (ins->kind ==
+                    MINIC_CORE_INSTRUCTION_INTEGER_TO_DOUBLE ||
+                    ins->kind ==
+                    MINIC_CORE_INSTRUCTION_DOUBLE_TO_INTEGER) {
+                MinicCoreFloatingShape shape = {0};
+                if (!minic_core_floating_shape(core, ins, &shape))
+                    goto cleanup;
+                if (shape.integer_bytes == 8U &&
+                    !shape.integer_signed) {
+                    if (!minic_machine_builder_create_block(&sel.builder,
+                            NULL, false, true, &aux->first) ||
+                        !minic_machine_builder_create_block(&sel.builder,
+                            NULL, false, true, &aux->second)) goto cleanup;
+                    if (ins->kind ==
+                            MINIC_CORE_INSTRUCTION_DOUBLE_TO_INTEGER &&
+                        !minic_machine_builder_create_block(&sel.builder,
+                            NULL, false, true, &aux->third)) goto cleanup;
+                }
             }
         }
         if (block->has_terminator &&

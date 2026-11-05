@@ -27,6 +27,11 @@ CASES = (
     "aggregate_abi", "fp_scalar_abi", "packed_memory", "indirect_control",
     "variadic_calls", "wide_integer", "inline_positive",
 )
+LOONG_PRODUCTION_EXTRAS = {
+    "record_copy_aux_layout": ROOT / "tests/target/loongarch64/record_copy_aux_layout.c",
+    "int128_pair_semantics": ROOT / "tests/target/loongarch64/int128_pair_semantics.c",
+}
+LOONG_LEGACY_NEGATIVE = ROOT / "tests/target/loongarch64/int128_pair_legacy_unsupported.c"
 TARGETS = ("aarch64", "loongarch64")
 FIVE = ("riscv32", "riscv64", "x86_64", "aarch64", "loongarch64")
 TRACED_FUNCTION = "minic_machine_gnu_asm_emit_body"
@@ -124,6 +129,15 @@ def check_functional_shapes(asm, arch, case):
         demand("mir_inline:" in asm, f"{key}: missing mir_inline")
         demand(len(re.findall(r"(?m)^\s*nop\s*$", asm)) == 1,
                f"{key}: source-owned inline ASM must appear exactly once")
+    elif case == "record_copy_aux_layout":
+        for marker in ("loong_record_copy_before_alloc:",
+                       "loong_record_copy_before_float_conversion:"):
+            demand(marker in asm, f"{key}: missing {marker}")
+        demand("$sp" in asm, f"{key}: dynamic LP64D frame absent")
+    elif case == "int128_pair_semantics":
+        for marker in ("loong_u128_pair_arithmetic:", "loong_u128_pair_compare:",
+                       "loong_i128_arithmetic_shift:", "loong_i128_signed_less:"):
+            demand(marker in asm, f"{key}: missing {marker}")
     else:
         raise Failure(f"unknown MIR test fixture {case}")
     check_label_integrity(asm, key)
@@ -165,7 +179,8 @@ def main():
     parser.add_argument("--host-cc", default="cc")
     parser.add_argument("--baseline-cc", type=Path,
                         help="optional old compiler: generate and show unified diff on mismatch")
-    parser.add_argument("--case", action="append", choices=CASES,
+    parser.add_argument("--case", action="append",
+                        choices=CASES + tuple(LOONG_PRODUCTION_EXTRAS),
                         help="run only these named fixture(s) for an incremental regression")
     args = parser.parse_args()
     binary = args.minic_cc.resolve(strict=True)
@@ -175,7 +190,9 @@ def main():
     golden = read_goldens()
     archs = (FIVE if args.targets == "five" else
              TARGETS if args.targets == "a64-loong" else (args.targets,))
-    cases = tuple(args.case) if args.case else CASES
+    loong_only_production = args.mode == "production" and archs == ("loongarch64",)
+    cases = tuple(args.case) if args.case else (
+        CASES + tuple(LOONG_PRODUCTION_EXTRAS) if loong_only_production else CASES)
     witness = None
     function_start = None
     function_size = None
@@ -187,7 +204,11 @@ def main():
     unsupported = 0
     changed_assembly = 0
     for case in cases:
-        source = Path(__file__).with_name(case + ".c")
+        if case in LOONG_PRODUCTION_EXTRAS:
+            demand(loong_only_production,
+                   f"{case}: only the LoongArch64 production gate may run this case")
+        source = LOONG_PRODUCTION_EXTRAS.get(
+            case, Path(__file__).with_name(case + ".c"))
         preprocessed = work / (case + ".i")
         proc = run([args.host_cc, "-E", "-P", "-std=gnu11", "-x", "c",
                     str(source), "-o", str(preprocessed)])
@@ -236,6 +257,11 @@ def main():
             asm = payload.decode("utf-8")
             check_functional_shapes(asm, arch, case)
             digest = hashlib.sha256(payload).hexdigest()
+            if case in LOONG_PRODUCTION_EXTRAS:
+                print(f"MIR_LOONG_TYPED_COMPOSITION=PASS case={case} "
+                      f"target={arch} bytes={len(payload)} typed_emitter=verified")
+                positives += 1
+                continue
             # The historical direct output must stay byte-identical in golden
             # mode. A typed selector is free to choose a different *correct*
             # machine encoding; production mode instead requires a real
@@ -265,6 +291,20 @@ def main():
                 print(f"MIR_AB_GOLDEN=PASS target={arch} case={case} bytes={len(payload)} sha256={digest}")
             positives += 1
 
+    if loong_only_production:
+        unsupported_i = work / "loong_int128_unsupported.i"
+        unsupported_s = work / "loong_int128_unsupported.s"
+        unsupported_s.unlink(missing_ok=True)
+        proc = run([args.host_cc, "-E", "-P", "-std=gnu11", "-x", "c",
+                    str(LOONG_LEGACY_NEGATIVE), "-o", str(unsupported_i)])
+        demand(proc.returncode == 0,
+               f"GNU preprocess old unsupported Loong i128 multiply: {proc.stderr}")
+        proc = run([str(binary), "--target=loongarch64-linux", "-S",
+                    str(unsupported_i), "-o", str(unsupported_s)])
+        demand(proc.returncode != 0 and not unsupported_s.exists() and
+               "error:" in proc.stderr,
+               "Loong i128 multiply lost old fail-closed contract")
+        print("MIR_LOONG_LEGACY_NEGATIVE=PASS operation=i128_multiply")
     negative = Path(__file__).with_name("inline_negative.c")
     neg_i = work / "inline_negative.i"
     proc = run([args.host_cc, "-E", "-P", "-std=gnu11", "-x", "c",
@@ -281,7 +321,7 @@ def main():
                f"{arch}: bad negative diagnostic: {proc.stderr}")
         print(f"MIR_ASM_NEGATIVE=PASS target={arch} rejected=unbound_operand")
     print(f"MIR_MIGRATION={args.mode.upper()}_PASS targets={len(archs)} positive={positives} "
-          f"legacy_unsupported={unsupported} negative={len(archs)} "
+          f"legacy_unsupported={unsupported} negative={len(archs) + int(loong_only_production)} "
           f"typed_emitter_calls={calls} changed_assembly={changed_assembly}")
 
 

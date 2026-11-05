@@ -109,7 +109,19 @@ require_contains '^  add x11, x19, #[0-9]+$' "$work/minic_dynamic_three.body"
 "$minic_cc" --target=loongarch64-linux -S "$work/mini.i" \
     -o "$work/loong.s" || fail 'LoongArch independent LP64D result ABI'
 require_contains '^  st\.d \$a0, ' "$work/loong.s"
-require_contains '^  move \$t2, \$a0$' "$work/loong.s"
+# Both physical assignments implement the same LP64D sret contract: reload
+# the saved hidden $a0 pointer, copy the local source bytes into that exact
+# destination, and leave $a0 intact for return. The old direct emitter chose
+# t1=source/t2=destination; typed MachineIR chooses the inverse. Do not make
+# an ABI assertion depend on either temporary register allocation.
+if grep -Eq '^  move \$t2, \$a0$' "$work/loong.s"; then
+    require_contains '^  ld\.bu \$t4, \$t1, 0$' "$work/loong.s"
+    require_contains '^  st\.b \$t4, \$t2, 0$' "$work/loong.s"
+else
+    require_contains '^  move \$t1, \$a0$' "$work/loong.s"
+    require_contains '^  ld\.bu \$t0, \$t2, 0$' "$work/loong.s"
+    require_contains '^  st\.b \$t0, \$t1, 0$' "$work/loong.s"
+fi
 
 # A 24-byte homogeneous floating-point aggregate is AAPCS64 HFA, not the
 # x8 memory-result class. This feature must never turn an unimplemented

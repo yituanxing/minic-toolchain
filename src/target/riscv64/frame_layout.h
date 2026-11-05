@@ -32,6 +32,10 @@ typedef struct MinicRiscv64CoreFrame {
     size_t *value_offsets;
     MinicRiscv64AbiArgumentLocation *parameter_locations;
     size_t parameter_location_count;
+    /* The same prepared return classification transfers with the locations.
+     * MIR must never ask a caller to reconstruct an already-consumed plan. */
+    MinicRiscv64AbiValue return_abi_value;
+    bool has_return_abi_value;
     MinicRiscv64AbiCursor named_parameter_cursor;
     bool has_named_parameter_cursor;
     /* M177_CONSTANT_SWITCH_CFG_OWNER: suppress target emission of Core blocks
@@ -74,6 +78,10 @@ void minic_riscv64_core_frame_destroy(MinicRiscv64CoreFrame *);
 bool minic_riscv64_machine_physical_frame(
     const MinicRiscv64CoreFrame *, MinicRiscvPhysicalFrame *,
     MinicRiscvPhysicalCalleeSave *, size_t);
+/* Borrow the one already-consumed, fully finalized frame ABI, including its
+ * retained return classification. No second ABI classification is legal. */
+bool minic_riscv64_core_frame_abi_view(
+    const MinicRiscv64CoreFrame *, MinicRiscv64FunctionAbiView *);
 bool minic_riscv64_core_frame_parameter_location(
     const MinicRiscv64CoreFrame *, size_t, MinicRiscv64AbiArgumentLocation *);
 bool minic_riscv64_core_frame_object_offset(

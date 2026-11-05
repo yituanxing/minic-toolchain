@@ -30,7 +30,9 @@ static bool prepare_old_rv_abi(const MinicCoreFunction *fn, unsigned xlen,
         !minic_core_call_index_build(fn, expected_calls, calls64) ||
         !minic_riscv64_call_plan_cache_build(fn, true, calls64,
             &abi64->outgoing_calls)) return false;
-    bridge->abi64 = abi64;
+    if (!minic_riscv64_function_abi_view_from_prepared(
+            abi64, &bridge->abi64_view)) return false;
+    bridge->abi64 = &bridge->abi64_view;
     bridge->semantic_calls64 = calls64;
     return true;
 }
@@ -663,7 +665,7 @@ static bool run_indirect_call(unsigned xlen, bool stack_case) {
         else plan.abi64 = NULL;
         ok = !minic_riscv_machine_select_core_subset(&machine, &plan);
         plan.abi32 = xlen == 32U ? &abi32 : NULL;
-        plan.abi64 = xlen == 64U ? &abi64 : NULL;
+        plan.abi64 = xlen == 64U ? &plan.abi64_view : NULL;
     }
     if (ok) {
         /* Neither incoming nor outgoing placements may be reconstructed
@@ -977,6 +979,122 @@ done:
     return ok;
 }
 
+/* A 64-bit ILP32 Core condition is true when EITHER little-endian word is
+ * nonzero. The low limb may be zero and the upper limb nonzero. LP64 has a
+ * single 64-bit limb and must not materialize a phantom second chunk. */
+static bool run_wide_condition(unsigned xlen) {
+    MinicCoreTypeContext types;
+    MinicCoreFunction fn = {0};
+    MinicCoreType type = {0};
+    MinicCoreTypeId void_t, wide_t;
+    MinicCoreBlockId entry, yes, no;
+    MinicCoreValueId condition;
+    MinicCoreInstruction ins = {0};
+    MinicCoreTerminator term = {0};
+    MinicRiscvCoreMachinePlan bridge = {0};
+    Rv32FunctionAbiPlan abi32 = {0};
+    MinicRiscv64FunctionAbiPlan abi64 = {0};
+    MinicCoreCallIndex calls64 = {0};
+    MinicRiscvPhysicalFrame frame = {0};
+    MinicMachineFunction machine = {0};
+    MinicTargetInfo target = {0};
+    MinicDataLayout layout = {0};
+    MinicRiscvIsa isa = {0};
+    MinicMachineGNUAsmPolicy policy = {0};
+    const bool reachable[] = {true, true, true};
+    const size_t offsets[] = {32U};
+    FILE *out = NULL;
+    char assembly[8192];
+    size_t n;
+    bool okay = false;
+    const char *stage = "Core";
+    minic_core_type_context_initialize(&types);
+    minic_core_function_initialize(&fn);
+    fn.name = malloc(sizeof("rv_wide_condition"));
+    if (fn.name == NULL) goto done;
+    memcpy(fn.name, "rv_wide_condition", sizeof("rv_wide_condition"));
+    fn.name_length = sizeof("rv_wide_condition") - 1U;
+    type.kind = MINIC_CORE_TYPE_VOID;
+    if (!minic_core_type_register(&types, &type, &void_t)) goto done;
+    type = (MinicCoreType){0};
+    type.kind = MINIC_CORE_TYPE_INTEGER;
+    type.has_layout = true;
+    type.size = type.alignment = 8U;
+    type.value.integer.bit_width = 64U;
+    if (!minic_core_type_register(&types, &type, &wide_t) ||
+        !minic_core_function_define_signature(&fn, &types,
+            void_t, &wide_t, 1U, MINIC_CALLING_CONVENTION_DEFAULT, false) ||
+        !minic_core_function_add_block(&fn, &entry) ||
+        !minic_core_function_add_block(&fn, &yes) ||
+        !minic_core_function_add_block(&fn, &no)) goto done;
+    ins.kind = MINIC_CORE_INSTRUCTION_PARAMETER;
+    ins.core_type_id = wide_t;
+    ins.value.parameter_index = 0U;
+    if (!minic_core_function_append_value_instruction(&fn,
+        entry, &ins, &condition)) goto done;
+    term.kind = MINIC_CORE_TERMINATOR_CONDITIONAL_BRANCH;
+    term.conditional.condition = condition;
+    term.conditional.when_true = yes;
+    term.conditional.when_false = no;
+    if (!minic_core_function_set_terminator(&fn, entry, &term)) goto done;
+    term = (MinicCoreTerminator){0};
+    term.kind = MINIC_CORE_TERMINATOR_RETURN;
+    term.return_value = MINIC_CORE_VALUE_INVALID;
+    term.return_object = MINIC_CORE_OBJECT_INVALID;
+    if (!minic_core_function_set_terminator(&fn, yes, &term) ||
+        !minic_core_function_set_terminator(&fn, no, &term) ||
+        !minic_core_function_attach_type_context(&fn, &types) ||
+        !minic_core_function_verify(&fn)) goto done;
+    stage = "Machine";
+    layout.byte_order = MINIC_BYTE_ORDER_LITTLE;
+    layout.pointer_size = layout.pointer_alignment = xlen / 8U;
+    target.architecture = xlen == 32U ?
+        MINIC_TARGET_ARCH_RISCV32 : MINIC_TARGET_ARCH_RISCV64;
+    target.data_layout = &layout;
+    isa.xlen = xlen;
+    isa.abi = xlen == 32U ? MINIC_RISCV_ABI_ILP32 : MINIC_RISCV_ABI_LP64;
+    isa.strict_isa = true;
+    if (!minic_riscv_target_isa_store(&target, &isa)) goto done;
+    frame.frame_size = 128U;
+    frame.stack_alignment = 16U;
+    bridge.target = &target;
+    bridge.core = &fn;
+    bridge.frame = &frame;
+    bridge.value_offsets = offsets;
+    bridge.value_offset_count = 1U;
+    if (!prepare_old_rv_abi(&fn, xlen, 0U, &abi32, &abi64,
+            &calls64, &bridge) ||
+        !minic_riscv_machine_select_core_subset(&machine, &bridge) ||
+        !minic_machine_core_coverage_verify(&fn, reachable, &machine) ||
+        !minic_riscv_machine_gnu_asm_policy(&target, &policy) ||
+        !minic_machine_gnu_asm_preflight(&machine, &policy)) goto done;
+    stage = "assembly";
+    out = tmpfile();
+    if (out == NULL || !minic_machine_gnu_asm_emit_body(out,
+        &machine, &policy) || fflush(out) != 0 ||
+        fseek(out, 0L, SEEK_SET) != 0) goto done;
+    n = fread(assembly, 1U, sizeof(assembly) - 1U, out);
+    assembly[n] = '\0';
+    okay = strstr(assembly, "  beqz x5, ") != NULL &&
+        (xlen == 32U
+            ? strstr(assembly, "  lw x5, 32(x2)") != NULL &&
+              strstr(assembly, "  lw x6, 36(x2)") != NULL &&
+              strstr(assembly, "  or x5, x5, x6") != NULL
+            : strstr(assembly, "  ld x5, 32(x2)") != NULL &&
+              strstr(assembly, "  or x5, x5, x6") == NULL);
+done:
+    if (!okay) fprintf(stderr,
+        "RV%u 64-bit condition failed at %s\n", xlen, stage);
+    if (out != NULL) fclose(out);
+    minic_machine_function_destroy(&machine);
+    rv32_function_abi_plan_destroy(&abi32);
+    minic_riscv64_function_abi_plan_destroy(&abi64);
+    minic_core_call_index_destroy(&calls64);
+    minic_core_function_destroy(&fn);
+    minic_core_type_context_destroy(&types);
+    return okay;
+}
+
 /* Packed records must remain byte-exact on both ISA widths, and each
  * independently volatile source/destination side survives Core→MIR. */
 static bool run_record_memory(unsigned xlen) {
@@ -1283,6 +1401,7 @@ int main(void) {
         !run_wide_parameter(64U, false) ||
         !run_wide_parameter(32U, true) ||
         !run_wide_parameter(64U, true) ||
+        !run_wide_condition(32U) || !run_wide_condition(64U) ||
         !run_record_memory(32U) || !run_record_memory(64U) ||
         !run_frame_varargs(32U, false) ||
         !run_frame_varargs(64U, false) ||

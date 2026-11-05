@@ -4,6 +4,25 @@
 #include <stdlib.h>
 #include <string.h>
 
+bool minic_riscv64_function_abi_view_from_prepared(
+    const MinicRiscv64FunctionAbiPlan *plan,
+    MinicRiscv64FunctionAbiView *view) {
+    if (plan == NULL || view == NULL || !plan->prepared ||
+        (plan->parameter_location_count != 0U &&
+         plan->parameter_locations == NULL) ||
+        (plan->outgoing_calls.count != 0U &&
+         plan->outgoing_calls.sites == NULL)) return false;
+    *view = (MinicRiscv64FunctionAbiView){
+        .return_value = plan->return_value,
+        .named_parameter_cursor = plan->named_parameter_cursor,
+        .parameter_locations = plan->parameter_locations,
+        .parameter_location_count = plan->parameter_location_count,
+        .outgoing_calls = &plan->outgoing_calls,
+        .validated = true
+    };
+    return true;
+}
+
 static bool rv64_fn_is_record(const MinicCoreFunction *fn,
                              MinicCoreTypeId id) {
     return minic_riscv64_core_is_record(fn, id);

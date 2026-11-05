@@ -12,6 +12,30 @@
 #include <stdlib.h>
 #include <string.h>
 
+bool minic_riscv64_core_frame_abi_view(
+    const MinicRiscv64CoreFrame *frame,
+    MinicRiscv64FunctionAbiView *view) {
+    if (frame == NULL || view == NULL ||
+        !frame->has_named_parameter_cursor ||
+        !frame->has_return_abi_value ||
+        (frame->parameter_location_count != 0U &&
+         frame->parameter_locations == NULL) ||
+        (frame->outgoing_calls.count != 0U &&
+         frame->outgoing_calls.sites == NULL) ||
+        (frame->semantic_calls == NULL ? frame->outgoing_calls.count != 0U :
+         frame->semantic_calls->count != frame->outgoing_calls.count))
+        return false;
+    *view = (MinicRiscv64FunctionAbiView){
+        .return_value = frame->return_abi_value,
+        .named_parameter_cursor = frame->named_parameter_cursor,
+        .parameter_locations = frame->parameter_locations,
+        .parameter_location_count = frame->parameter_location_count,
+        .outgoing_calls = &frame->outgoing_calls,
+        .validated = true
+    };
+    return true;
+}
+
 bool minic_riscv64_machine_physical_frame(
     const MinicRiscv64CoreFrame *frame,
     MinicRiscvPhysicalFrame *physical,
@@ -87,6 +111,7 @@ bool minic_riscv64_core_frame_initialize_with_storage(
     frame->owned_reachable_blocks = NULL;
     frame->parameter_locations = NULL;
     frame->parameter_location_count = 0U;
+    frame->has_return_abi_value = false;
     frame->has_named_parameter_cursor = false;
     frame->value_slot_count = 0U;
     frame->object_storage = (MinicCoreObjectStoragePlan){0};
@@ -249,6 +274,8 @@ bool minic_riscv64_core_frame_initialize_with_storage(
             return false;
         }
         return_value = abi_plan->return_value;
+        frame->return_abi_value = return_value;
+        frame->has_return_abi_value = true;
         frame->parameter_locations = abi_plan->parameter_locations;
         frame->parameter_location_count = abi_plan->parameter_location_count;
         frame->named_parameter_cursor = abi_plan->named_parameter_cursor;
@@ -454,6 +481,7 @@ void minic_riscv64_core_frame_destroy(MinicRiscv64CoreFrame *frame) {
     free(frame->parameter_locations);
     frame->parameter_locations = NULL;
     frame->parameter_location_count = 0U;
+    frame->has_return_abi_value = false;
     frame->has_named_parameter_cursor = false;
     free(frame->object_offsets);
     frame->object_offsets = NULL;

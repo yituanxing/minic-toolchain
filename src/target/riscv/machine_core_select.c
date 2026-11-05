@@ -352,7 +352,7 @@ static bool rv_formal_placement(const RvCoreSelection *sel, size_t index,
         out->indirect = loc->indirect_record;
         out->ignored = loc->words == 0U && loc->record_size == 0U;
     } else {
-        const MinicRiscv64FunctionAbiPlan *abi = sel->plan->abi64;
+        const MinicRiscv64FunctionAbiView *abi = sel->plan->abi64;
         const MinicRiscv64AbiArgumentLocation *loc;
         if (abi == NULL || abi->parameter_locations == NULL ||
             index >= abi->parameter_location_count) return false;
@@ -985,9 +985,9 @@ static bool rv_core_call_arguments(RvCoreSelection *sel,
                 has_record_result) ||
             (has_scalar_result &&
              view->return_form != MINIC_CORE_CALL_RETURN_VALUE) ||
-            ordinal >= sel->plan->abi64->outgoing_calls.count ||
-            sel->plan->abi64->outgoing_calls.sites == NULL ||
-            (call64 = sel->plan->abi64->outgoing_calls.sites[ordinal]) == NULL ||
+            ordinal >= sel->plan->abi64->outgoing_calls->count ||
+            sel->plan->abi64->outgoing_calls->sites == NULL ||
+            (call64 = sel->plan->abi64->outgoing_calls->sites[ordinal]) == NULL ||
             call64->instruction_id != instruction_id ||
             call64->argument_count != count ||
             (!has_record_result &&
@@ -1096,9 +1096,9 @@ static bool rv_core_call_result(RvCoreSelection *sel,
             if (sel->plan->semantic_calls64 == NULL ||
                 minic_core_call_index_find(sel->plan->semantic_calls64,
                     instruction_id, &ordinal) == NULL ||
-                ordinal >= sel->plan->abi64->outgoing_calls.count ||
-                sel->plan->abi64->outgoing_calls.sites == NULL ||
-                (call = sel->plan->abi64->outgoing_calls.sites[ordinal]) == NULL)
+                ordinal >= sel->plan->abi64->outgoing_calls->count ||
+                sel->plan->abi64->outgoing_calls->sites == NULL ||
+                (call = sel->plan->abi64->outgoing_calls->sites[ordinal]) == NULL)
                 return false;
             size = call->return_value.storage_size;
             indirect = call->return_value.kind ==
@@ -1295,10 +1295,22 @@ static bool rv_core_terminator(RvCoreSelection *sel, size_t core_id) {
     case MINIC_CORE_TERMINATOR_CONDITIONAL_BRANCH: {
         const size_t yes = term->conditional.when_true;
         const size_t no = term->conditional.when_false;
+        const MinicCoreValueId cond = term->conditional.condition;
+        size_t bytes, chunks;
+        bool integer, sign;
         if (aux == SIZE_MAX || other == SIZE_MAX ||
             yes >= fn->block_count ||
             no >= fn->block_count ||
-            !rv_load(sel, term->conditional.condition, RV_T0) ||
+            cond >= fn->value_count ||
+            !rv_transport_type(sel, fn->values[cond].core_type_id,
+                &bytes, &integer, &sign) ||
+            (chunks = (bytes + sel->xlen / 8U - 1U) /
+                (sel->xlen / 8U)) == 0U || chunks > 2U ||
+            !rv_value_chunk(sel, cond, 0U, RV_T0, true) ||
+            (chunks == 2U &&
+             (!integer || !rv_value_chunk(sel, cond, 1U, RV_T1, true) ||
+              !rv_rrr(sel, MINIC_RISCV_MACHINE_OR,
+                  RV_T0, RV_T0, RV_T1))) ||
             !rv_branch_zero(sel, false, RV_T0, other) ||
             !minic_machine_builder_add_successor(&sel->builder, aux) ||
             !minic_machine_builder_set_fallthrough(&sel->builder, aux) ||
@@ -1356,7 +1368,8 @@ bool minic_riscv_machine_select_core_subset(MinicMachineFunction *machine,
                plan->frame->has_hidden_result_pointer !=
                    plan->abi32->indirect_return)
             : (plan->abi64 == NULL || plan->abi32 != NULL ||
-               !plan->abi64->prepared ||
+               !plan->abi64->validated ||
+               plan->abi64->outgoing_calls == NULL ||
                !plan->abi64->named_parameter_cursor.lp64_soft_float ||
                plan->abi64->parameter_location_count !=
                    minic_core_function_parameter_count(core) ||
@@ -1364,9 +1377,9 @@ bool minic_riscv_machine_select_core_subset(MinicMachineFunction *machine,
                    (plan->abi64->return_value.kind ==
                     MINIC_RISCV64_ABI_VALUE_INDIRECT) ||
                (plan->semantic_calls64 == NULL
-                   ? plan->abi64->outgoing_calls.count != 0U
+                   ? plan->abi64->outgoing_calls->count != 0U
                    : plan->semantic_calls64->count !=
-                     plan->abi64->outgoing_calls.count))) ||
+                     plan->abi64->outgoing_calls->count))) ||
         target->data_layout->pointer_size != isa.xlen / 8U ||
         (frame = plan->frame)->frame_size > (size_t)INT32_MAX ||
         frame->frame_size % 16U != 0U ||

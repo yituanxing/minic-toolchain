@@ -3,9 +3,17 @@
 /* Semantic classification is NOT an ISA/ABI permission bitset. */
 int main(void) {
     unsigned int i;
-    for (i = 0U; i < (unsigned int)MINIC_CORE_INSTRUCTION_KIND_COUNT; ++i)
-        if (minic_core_instruction_semantic_family((MinicCoreInstructionKind)i) ==
-            MINIC_CORE_FAMILY_INVALID) return 1;
+    for (i = 0U; i < (unsigned int)MINIC_CORE_INSTRUCTION_KIND_COUNT; ++i) {
+        const MinicCoreSemanticFamily family =
+            minic_core_instruction_semantic_family((MinicCoreInstructionKind)i);
+        /* Four numeric IDs between opaque and structured ASM were retired.
+         * Preserving their holes is intentional ABI stability, not a new
+         * live Core opcode that the target vocabulary failed to classify. */
+        if (i > (unsigned int)MINIC_CORE_INSTRUCTION_OPAQUE_INLINE_ASM &&
+            i < (unsigned int)MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM) {
+            if (family != MINIC_CORE_FAMILY_INVALID) return 1;
+        } else if (family == MINIC_CORE_FAMILY_INVALID) return 1;
+    }
     if (minic_core_instruction_semantic_family((MinicCoreInstructionKind)-1) !=
             MINIC_CORE_FAMILY_INVALID ||
         minic_core_instruction_semantic_family(

@@ -22,7 +22,8 @@ typedef struct MinicRiscvCoreMachinePlan {
      * selector only consumes locations; it never computes register cursors.
      * RV64's outgoing cache shares the Common sparse CALL index ordinal. */
     const Rv32FunctionAbiPlan *abi32;
-    const MinicRiscv64FunctionAbiPlan *abi64;
+    MinicRiscv64FunctionAbiView abi64_view;
+    const MinicRiscv64FunctionAbiView *abi64;
     const MinicCoreCallIndex *semantic_calls64;
     const size_t *value_offsets;
     size_t value_offset_count;
