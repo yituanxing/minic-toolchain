@@ -18,13 +18,20 @@ gcc -E -P -std=gnu11 -x c "$fixture" -o "$work/gnu.i"
     || fail 'exact original MRS/MSR GNU macro not admitted'
 test -s "$work/mini.s" || fail 'no generated assembly'
 
-# The source .macro was specialized to a real physical register x9 by the
-# AArch64 target. Do not accept an invented C call or compiler-only barrier.
-# The two distinct opcode bases separate read and write completely.
-grep -Eq '^  \.inst 0xd53[0-9a-f]{5}$' "$work/mini.s" ||
-    fail 'MRS encoded hardware instruction missing'
-grep -Eq '^  \.inst 0xd51[0-9a-f]{5}$' "$work/mini.s" ||
-    fail 'MSR encoded hardware instruction missing'
+# Keep the original GNU .macro/.inst expression intact in source ASM.
+# GNU GAS, not MiniC, resolves the .L__gpr_num_x* macros into encoded bits.
+# Check both fixed opcode bases, exact register binding x9 and macro roles.
+# Independent GNU disassembly below proves actual MRS/MSR machine opcodes.
+if ! grep -Fq '.inst (0xd5200000|(\sreg)|(.L__gpr_num_\rt))' "$work/mini.s" ||
+   ! grep -Fq '.inst (0xd5000000|(\sreg)|(.L__gpr_num_\rt))' "$work/mini.s" ||
+   ! grep -Eq '^[[:space:]]*\.macro[[:space:]]+mrs_s,[[:space:]]*rt,[[:space:]]*sreg$' "$work/mini.s" ||
+   ! grep -Eq '^[[:space:]]*\.macro[[:space:]]+msr_s,[[:space:]]*sreg,[[:space:]]*rt$' "$work/mini.s" ||
+   ! grep -Eq '^[[:space:]]*mrs_s[[:space:]]+x9,[[:space:]]*' "$work/mini.s" ||
+   ! grep -Eq '^[[:space:]]*msr_s[[:space:]]+.*,[[:space:]]*x9[[:space:]]*$' "$work/mini.s"; then
+    echo 'AARCH64_GIC_SRE=DIAG sealed GNU macro/physical operand candidates:' >&2
+    grep -En '\.inst|\.macro|mrs_s|msr_s' "$work/mini.s" >&2 || true
+    fail 'GNU encoded MRS/MSR source macro/physical binding missing'
+fi
 grep -Eq '^  ldr x9, \[sp, #[0-9]+\]$' "$work/mini.s" ||
     fail 'MSR incoming typed value not loaded into x9'
 

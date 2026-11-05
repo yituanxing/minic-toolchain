@@ -31,15 +31,19 @@ with open(sys.argv[1],"w") as f:
   f.write(" return ret;\n}\n")
 PY
 "$cc" --target=aarch64-linux -S "$d/orig.i" -o "$d/mini.s"
-test "$(grep -Fc '  .inst 0xd5' "$d/mini.s")" -eq 11
+# MachineIR emits all eleven exact Linux .irp/.macro definitions as GNU
+# source; only GNU GAS resolves the .inst(sreg|physical-register) expression.
+# The actual encoded ISA is asserted below with independent GNU objdump.
+test "$(grep -Fxc '.inst (0xd5200000|(\sreg)|(.L__gpr_num_\rt))' "$d/mini.s")" -eq 11
+test "$(grep -Ec '^[[:space:]]*mrs_s[[:space:]]+x9,' "$d/mini.s")" -eq 11
 gnu_cross=0
 if [[ "${MINIC_SYSREG_SOURCE_ONLY:-0}" != 1 ]];then
  aarch64-linux-gnu-gcc -c -x assembler "$d/mini.s" -o "$d/mini.o"
  aarch64-linux-gnu-gcc -c -O0 -x c "$d/orig.i" -o "$d/gnu.o"
  aarch64-linux-gnu-objdump -d "$d/mini.o" > "$d/mini.dis"
  aarch64-linux-gnu-objdump -d "$d/gnu.o" > "$d/gnu.dis"
- grep -Fq 'mrs' "$d/mini.dis"
- grep -Fq 'mrs' "$d/gnu.dis"
+ test "$(grep -Ec '[[:space:]]mrs[[:space:]]+' "$d/mini.dis")" -eq 11
+ test "$(grep -Ec '[[:space:]]mrs[[:space:]]+' "$d/gnu.dis")" -eq 11
  gnu_cross=1
 fi
 for bad in invalid-register invalid-dbgvcr injected wrong-output no-volatile;do

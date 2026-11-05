@@ -3732,8 +3732,10 @@ static bool x86_asm_gp_lvalue_width(const X86CoreSelector *sel,
         minic_lp64_core_pointer_pointee(sel->core->type_context,
             sel->core->values[value].core_type_id, &pointee_id) &&
         (type = x86_type(sel,pointee_id)) != NULL &&
-        type->kind == MINIC_CORE_TYPE_INTEGER && type->has_layout &&
-        type->size == width && !type->value.integer.is_bool;
+        type->has_layout && type->size == width &&
+        ((type->kind == MINIC_CORE_TYPE_INTEGER &&
+          !type->value.integer.is_bool) ||
+         (width == 8U && type->kind == MINIC_CORE_TYPE_POINTER));
 }
 
 static bool x86_asm_gp_input_width(const X86CoreSelector *sel,
