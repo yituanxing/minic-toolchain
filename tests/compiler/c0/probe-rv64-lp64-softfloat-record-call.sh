@@ -23,9 +23,25 @@ if grep -Eq '^  (fadd\.|fsub\.|fmul\.|fdiv\.|flw |fld |fsw |fsd |fmv\.)' \
     echo 'RV64_LP64_RECORD_CALL=FAIL forbidden F/D instructions' >&2
     exit 1
 fi
-grep -Fq '  jalr ra, t0, 0' "$work/soft.s" || {
-    echo 'RV64_LP64_RECORD_CALL=FAIL no indirect call' >&2; exit 1;
-}
+# The typed RV64 MachineIR GNU emitter prints `jalr ra, 0(xN)`, not the
+# legacy fixed-register three-operand spelling `jalr ra, t0, 0`. Both record
+# callees must be called through a register, not silently rewritten as a
+# direct call or dropped during whole-function selection.
+for suffix in float double; do
+    awk -v name="indirect_$suffix" '
+        $0 == name ":" { within = 1; found = 1; next }
+        within && index($0, ".size " name ",") == 1 { within = 0; done = 1 }
+        within && $0 ~ /^  jalr (ra|x1), 0\(x[0-9]+\)$/ { indirect++ }
+        within && $0 ~ /^  call / { direct++ }
+        END {
+            if (!found || !done || indirect != 1 || direct != 0) {
+                printf "RV64_LP64_RECORD_CALL=FAIL %s indirect=%d direct=%d\n", \
+                    name, indirect, direct > "/dev/stderr"
+                exit 1
+            }
+        }
+    ' "$work/soft.s"
+done
 
 if "$MINIC_CC" --target=riscv64-linux -march=rv64imafd -mabi=lp64d \
     -S "$work/record.i" -o "$work/hard.s" >"$work/hard.out" 2>"$work/hard.err"; then

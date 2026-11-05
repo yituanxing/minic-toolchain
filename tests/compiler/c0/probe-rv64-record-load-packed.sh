@@ -18,37 +18,53 @@ for item in packed_two:2 packed_four:4 packed_eight:8 packed_four_with_local:4 n
     awk -v name="load_$suffix" -v expected="$bytes" '
         $0 == name ":" { within = 1; found = 1; next }
         within && index($0, ".size " name ",") == 1 { within = 0; done = 1 }
-        within && $0 ~ /^  lbu t2, [0-9]+\(t0\)$/ { loads++ }
-        within && $0 ~ /^  sb t2, [0-9]+\(t1\)$/ { stores++ }
-        within && $0 == "  addi t0, t0, 1" { member_offset++ }
+        # Physical MachineIR assigns x-registers, not the old fixed t0/t1/t2.
+        # Every byte offset in the record must have a byte-read and byte-write
+        # witness. Other byte accesses (e.g. return ABI gather) may coexist.
+        within && $0 ~ /^  lbu x[0-9]+, [0-9]+\(x[0-9]+\)$/ {
+            offset = $3; sub(/\(.*/, "", offset); reads[offset]++
+        }
+        within && $0 ~ /^  sb x[0-9]+, [0-9]+\(x[0-9]+\)$/ {
+            offset = $3; sub(/\(.*/, "", offset); writes[offset]++
+        }
+        within && $0 ~ /^  addi x[0-9]+, x[0-9]+, 1$/ { member_offset++ }
         END {
-            if (!found || !done || loads != expected || stores != expected ||
-                (name == "load_natural_field_packed" && member_offset == 0)) {
-                printf "RV64_ALIGN_SAFE_RECORD_LOAD=FAIL %s bytes=%d loads=%d stores=%d member_offset=%d\n", \
-                    name, expected, loads, stores, member_offset > "/dev/stderr"
+            for (i = 0; i < expected; ++i) {
+                if (!reads[i] || !writes[i]) missing++
+            }
+            if (!found || !done || missing ||
+                (name == "load_natural_field_packed" && !member_offset)) {
+                printf "RV64_ALIGN_SAFE_RECORD_LOAD=FAIL %s bytes=%d missing_offsets=%d member_offset=%d\n", \
+                    name, expected, missing, member_offset > "/dev/stderr"
                 exit 1
             }
         }
     ' "$work/packed.s"
 done
 
-# The first packed by-value parameter occupies frame byte zero. The second
-# record begins at byte one; incoming scalar words and return aggregates must
-# therefore use the existing byte-scatter/gather paths, not unaligned sh/sw/sd
-# or lhu/lwu/ld. The pre-fix emitted `sw a1,0(t3)` with t3=sp+1 and
-# `lwu a0,0(t0)` with t0=sp+1 for the four-byte variant.
+# The first packed by-value parameter occupies frame byte zero; the second
+# starts at byte one. Verify a stack+1 address and a byte-scatter/gather
+# witness for every byte of the second record; a wide access through that
+# unaligned address is not a permitted replacement.
 for item in two:2 four:4 eight:8; do
     suffix=${item%%:*}
     bytes=${item#*:}
     awk -v name="mix_after_one_$suffix" -v expected="$bytes" '
         $0 == name ":" { within = 1; found = 1; next }
         within && index($0, ".size " name ",") == 1 { within = 0; done = 1 }
-        within && $0 ~ /^  sb t1, 0\(t3\)$/ { incoming_bytes++ }
-        within && $0 ~ /^  lbu t6, [0-9]+\(t0\)$/ { return_bytes++ }
+        within && $0 ~ /^  addi x[0-9]+, x2, 1$/ { odd_frame++ }
+        within && $0 ~ /^  sb x[0-9]+, [0-9]+\(x[0-9]+\)$/ {
+            offset = $3; sub(/\(.*/, "", offset); scatters[offset]++
+        }
+        within && $0 ~ /^  lbu x[0-9]+, [0-9]+\(x[0-9]+\)$/ {
+            offset = $3; sub(/\(.*/, "", offset); gathers[offset]++
+        }
         END {
-            if (!found || !done || incoming_bytes != expected || return_bytes != expected) {
-                printf "RV64_ODD_FRAME_AGGREGATE=FAIL %s size=%d incoming=%d return=%d\n", \
-                    name, expected, incoming_bytes, return_bytes > "/dev/stderr"
+            for (i = 0; i < expected; ++i)
+                if (!scatters[i] || !gathers[i]) missing++
+            if (!found || !done || !odd_frame || missing) {
+                printf "RV64_ODD_FRAME_AGGREGATE=FAIL %s size=%d odd_frame=%d missing_offsets=%d\n", \
+                    name, expected, odd_frame, missing > "/dev/stderr"
                 exit 1
             }
         }
@@ -58,13 +74,22 @@ done
 awk '
     $0 == "call_after_one_four:" { within = 1; found = 1; next }
     within && index($0, ".size call_after_one_four,") == 1 { within = 0; done = 1 }
-    within && $0 ~ /^  sb t1, 0\(t3\)$/ { scatter++ }
-    within && $0 ~ /^  lbu t1, 0\(t3\)$/ { argument_gather++ }
-    within && $0 ~ /^  lbu t6, [0-9]+\(t0\)$/ { result_gather++ }
+    within && $0 ~ /^  addi x[0-9]+, x2, 5$/ { first_odd_address++ }
+    within && $0 ~ /^  addi x[0-9]+, x2, 6$/ { second_odd_address++ }
+    within && $0 == "  call mix_after_one_four" { called++ }
+    within && $0 ~ /^  sb x[0-9]+, [0-9]+\(x[0-9]+\)$/ {
+        offset = $3; sub(/\(.*/, "", offset); scatter[offset]++
+    }
+    within && $0 ~ /^  lbu x[0-9]+, [0-9]+\(x[0-9]+\)$/ {
+        offset = $3; sub(/\(.*/, "", offset); gather[offset]++
+    }
     END {
-        if (!found || !done || scatter != 8 || argument_gather != 4 || result_gather != 4) {
-            printf "RV64_ODD_FRAME_CALL=FAIL scatter=%d argument_gather=%d result_gather=%d\n", \
-                scatter, argument_gather, result_gather > "/dev/stderr"
+        for (i = 0; i < 4; ++i)
+            if (!scatter[i] || !gather[i]) missing++
+        if (!found || !done || !first_odd_address || !second_odd_address ||
+            !called || missing) {
+            printf "RV64_ODD_FRAME_CALL=FAIL odd_addresses=%d,%d call=%d missing_offsets=%d\n", \
+                first_odd_address, second_odd_address, called, missing > "/dev/stderr"
             exit 1
         }
     }

@@ -18,13 +18,15 @@ for item in natural:1 packed:1 aligned:2 wide_scalar:2; do
     awk -v name="call_$suffix" -v begin="$begin" '
         $0 == name ":" { within = 1; found = 1; next }
         within && index($0, ".size " name ",") == 1 { within = 0; done = 1 }
-        within && $0 ~ /^  mv a[0-7], t[0-6]$/ {
+        # Physical MachineIR prints architectural x-register numbers, while
+        # the psABI still assigns a1..a4 to x11..x14.
+        within && $0 ~ /^  mv x(11|12|13|14), x[0-9]+$/ {
             split($2, parts, ",")
             reg = parts[1]
-            if (reg == "a1") a1++
-            if (reg == "a2") a2++
-            if (reg == "a3") a3++
-            if (reg == "a4") a4++
+            if (reg == "x11") a1++
+            if (reg == "x12") a2++
+            if (reg == "x13") a3++
+            if (reg == "x14") a4++
         }
         within && $0 == "  call accept_pair" { call++ }
         END {
@@ -47,19 +49,19 @@ done
 awk '
     $0 == "take_variadic:" { variadic = 1; saw_variadic = 1; next }
     $0 == "take_fixed:" { fixed = 1; saw_fixed = 1; next }
-    variadic && /^\.Ltake_variadic_rv32_bb0:$/ {
+    variadic && /^\.Lminic_mir_take_variadic_[0-9]+:$/ {
         variadic = 0; ended_variadic = 1; next
     }
-    fixed && /^\.Ltake_fixed_rv32_bb0:$/ {
+    fixed && /^\.Lminic_mir_take_fixed_[0-9]+:$/ {
         fixed = 0; ended_fixed = 1; next
     }
-    variadic && /^  sw a[1-7], [0-9]+\(sp\)$/ {
-        reg = substr($2, 1, 2)
+    variadic && /^  sw x(11|12|13|14|15|16|17), [0-9]+\(x2\)$/ {
+        reg = $2; sub(/,$/, "", reg)
         split($3, parts, "(")
         saved[reg]++
         offsets[reg] = parts[1] + 0
     }
-    fixed && /^  sw a[1-7],/ { fixed_saves++ }
+    fixed && /^  sw x(11|12|13|14|15|16|17),/ { fixed_saves++ }
     END {
         if (!saw_variadic || !ended_variadic || !saw_fixed || !ended_fixed ||
             fixed_saves != 0) {
@@ -67,8 +69,8 @@ awk '
             exit 1
         }
         for (i = 1; i <= 7; ++i) {
-            reg = "a" i
-            if (saved[reg] != 1 || (i > 1 && offsets[reg] != offsets["a" (i - 1)] + 4)) {
+            reg = "x" (i + 10)
+            if (saved[reg] != 1 || (i > 1 && offsets[reg] != offsets["x" (i + 9)] + 4)) {
                 printf "RV32_VARIADIC_DEFINITION=FAIL %s saves=%d offset=%d\n", \
                     reg, saved[reg], offsets[reg] > "/dev/stderr"
                 exit 1

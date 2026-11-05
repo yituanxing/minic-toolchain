@@ -160,7 +160,7 @@
       "ci_touched_in": []
     },
     "src/target/riscv/machine_core_select.c": {
-      "blob": "319f2a790e0a91288333ec8e84aa6fc5b9ec2f76",
+      "blob": "31fc3c30f56467387bda46f53bfe681503dbe458",
       "review_depth": "inventory",
       "ci_touched_in": []
     },

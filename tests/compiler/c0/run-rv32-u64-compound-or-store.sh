@@ -28,6 +28,14 @@ riscv64-linux-gnu-gcc -march=rv32i -mabi=ilp32 -E -P -std=gnu11 \
   -o "$work/virtio.i"
 "$MINIC_CC" --target=riscv32-linux -march=rv32i -mabi=ilp32 \
   -S "$work/virtio.i" -o "$work/virtio.minic.s"
+# The GNU freestanding ELF32 fixture has no compiler-rt/libgcc closure.
+# Base-I two-word shifts must be real typed instruction sequences here,
+# otherwise the GNU LD/QEMU differential fails before examining behavior.
+if grep -Eq '^[[:space:]]+call[[:space:]]+__(ashldi3|ashrdi3|lshrdi3)' \
+    "$work/virtio.minic.s"; then
+  echo 'RV32_VIRTIO_FEATURE=FAIL cause=wide_shift_libcall_without_runtime' >&2
+  exit 1
+fi
 riscv64-linux-gnu-gcc -march=rv32i -mabi=ilp32 \
   -c "$work/virtio.minic.s" -o "$work/virtio.minic.o"
 riscv64-linux-gnu-gcc -march=rv32i -mabi=ilp32 -O1 -std=gnu11 \

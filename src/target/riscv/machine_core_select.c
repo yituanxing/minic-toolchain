@@ -16,7 +16,9 @@
 #include <string.h>
 
 enum { RV_ZERO = 0U, RV_SP = 2U, RV_T0 = 5U, RV_T1 = 6U,
-       RV_T2 = 7U, RV_S0 = 8U, RV_A0 = 10U, RV_A7 = 17U,
+       RV_T2 = 7U, RV_S0 = 8U, RV_A0 = 10U, RV_A1 = 11U,
+       RV_A2 = 12U, RV_A3 = 13U, RV_A4 = 14U, RV_A5 = 15U,
+       RV_A6 = 16U, RV_A7 = 17U,
        RV_T3 = 28U, RV_T4 = 29U, RV_T5 = 30U, RV_T6 = 31U };
 typedef struct RvCoreSelection {
     MinicMachineBuilder builder;
@@ -899,9 +901,15 @@ static bool rv_wide_integer(RvCoreSelection *sel, MinicCoreTypeId id,
     return true;
 }
 
-/* Compiler-rt owns the two-word shift's cross-XLEN carry and arithmetic
- * sign fill. Valid C shifts have a count below the promoted left width;
- * all operands use the psABI's ordinary a0/a1,a2 register placement. */
+/* Base-I pair shift, shared by RV32 i64 and RV64 i128. The two halves are
+ * transported from the finalized Core frame, never relowered as C types.
+ *
+ * RISC-V masks register shift counts to log2(XLEN), so we explicitly build
+ * three all-bits masks for [0,XLEN), [XLEN,2*XLEN), and >=2*XLEN. A high
+ * count word forces the last case. The inverse count is also masked; its
+ * spurious carry at count%XLEN == 0 is removed by a nonzero-low mask.
+ * This branch-free lowering needs neither a call frame nor compiler-rt
+ * __ashldi3/__ashlti3, which real Linux freestanding linkers may omit. */
 static bool rv_core_wide_shift(RvCoreSelection *sel,
     const MinicCoreInstruction *ins) {
     const MinicCoreFunction *fn = sel->plan->core;
@@ -909,40 +917,121 @@ static bool rv_core_wide_shift(RvCoreSelection *sel,
     const MinicCoreValueId left = ins->value.binary.left;
     const MinicCoreValueId right = ins->value.binary.right;
     const MinicCoreType *count;
-    bool sign, result_sign, count_sign;
-    unsigned count_bytes;
-    bool pointer;
-    const char *helper;
-    MinicMachineOperand symbol = {0};
+    const unsigned width = sel->xlen;
+    const bool shift_right =
+        ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_RIGHT;
+    bool sign, result_sign, integer, count_sign;
+    size_t count_bytes;
     if (types == NULL || left >= fn->value_count ||
         right >= fn->value_count ||
-        !sel->plan->frame->saves_return_address ||
         !rv_wide_integer(sel, fn->values[left].core_type_id, &sign) ||
         !rv_wide_integer(sel, ins->core_type_id, &result_sign) ||
         sign != result_sign ||
-        !rv_type(sel, fn->values[right].core_type_id,
-            &count_bytes, &count_sign, &pointer) || pointer) return false;
+        !rv_transport_type(sel, fn->values[right].core_type_id,
+            &count_bytes, &integer, &count_sign) || !integer ||
+        count_bytes == 0U || count_bytes > 2U * (width / 8U)) return false;
     count = minic_core_type_get(types, minic_core_type_unqualified(types,
         fn->values[right].core_type_id));
     if (count == NULL || count->kind != MINIC_CORE_TYPE_INTEGER ||
-        !rv_value_chunk(sel, left, 0U, RV_A0, true) ||
-        !rv_value_chunk(sel, left, 1U, RV_A0 + 1U, true) ||
-        !rv_load(sel, right, RV_A0 + 2U) ||
-        !rv_normalize(sel, RV_A0 + 2U,
-            count_bytes, count_sign)) return false;
-    if (ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_LEFT)
-        helper = sel->xlen == 32U ? "__ashldi3" : "__ashlti3";
-    else if (ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_RIGHT)
-        helper = sel->xlen == 32U ?
-            (sign ? "__ashrdi3" : "__lshrdi3") :
-            (sign ? "__ashrti3" : "__lshrti3");
-    else return false;
-    symbol.kind = MINIC_MACHINE_OPERAND_SYMBOL;
-    symbol.value.symbol.name = (char *)helper;
-    symbol.value.symbol.relocation = MINIC_RISCV_MACHINE_RELOC_CALL;
-    return rv_emit(sel, MINIC_RISCV_MACHINE_CALL_DIRECT, &symbol, 1U) &&
-        rv_value_chunk(sel, ins->result, 0U, RV_A0, false) &&
-        rv_value_chunk(sel, ins->result, 1U, RV_A0 + 1U, false);
+        (ins->kind != MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_LEFT &&
+         !shift_right) ||
+        !rv_value_chunk(sel, left, 0U, RV_T0, true) ||
+        !rv_value_chunk(sel, left, 1U, RV_T1, true) ||
+        !rv_value_chunk(sel, right, 0U, RV_T2, true)) return false;
+    if (count_bytes > width / 8U &&
+        !rv_value_chunk(sel, right, 1U, RV_T5, true)) return false;
+    /* a0=s, a1=XLEN-s, a2=smallMask, a3=middleMask,
+     * a4=nonzeroMask, a5..a7=scratch/result; t0,t1=original pair. */
+    if (!rv_rri(sel, MINIC_RISCV_MACHINE_ANDI,
+            RV_A0, RV_T2, (int64_t)(width - 1U)) ||
+        !rv_li(sel, RV_A1, (int64_t)width) ||
+        !rv_rrr(sel, MINIC_RISCV_MACHINE_SUB,
+            RV_A1, RV_A1, RV_A0) ||
+        !rv_rri(sel, MINIC_RISCV_MACHINE_ANDI,
+            RV_A1, RV_A1, (int64_t)(width - 1U)) ||
+        !rv_li(sel, RV_A4, (int64_t)width) ||
+        !rv_rrr(sel, MINIC_RISCV_MACHINE_SLTU,
+            RV_A2, RV_T2, RV_A4) ||
+        !rv_li(sel, RV_A4, (int64_t)(2U * width)) ||
+        !rv_rrr(sel, MINIC_RISCV_MACHINE_SLTU,
+            RV_A3, RV_T2, RV_A4)) return false;
+    if (count_bytes > width / 8U &&
+        (!rv_rr(sel, MINIC_RISCV_MACHINE_SEQZ, RV_A4, RV_T5) ||
+         !rv_rrr(sel, MINIC_RISCV_MACHINE_AND,
+             RV_A2, RV_A2, RV_A4) ||
+         !rv_rrr(sel, MINIC_RISCV_MACHINE_AND,
+             RV_A3, RV_A3, RV_A4))) return false;
+    if (!rv_rr(sel, MINIC_RISCV_MACHINE_NOT, RV_A4, RV_A2) ||
+        !rv_rrr(sel, MINIC_RISCV_MACHINE_AND,
+            RV_A3, RV_A3, RV_A4) ||
+        !rv_rr(sel, MINIC_RISCV_MACHINE_NEG, RV_A2, RV_A2) ||
+        !rv_rr(sel, MINIC_RISCV_MACHINE_NEG, RV_A3, RV_A3) ||
+        !rv_rr(sel, MINIC_RISCV_MACHINE_SNEZ, RV_A4, RV_A0) ||
+        !rv_rr(sel, MINIC_RISCV_MACHINE_NEG, RV_A4, RV_A4))
+        return false;
+    if (!shift_right) {
+        /* [lo,hi]<<s; the old lo contributes to the new hi. */
+        if (!rv_rrr(sel, MINIC_RISCV_MACHINE_SLL,
+                RV_A5, RV_T0, RV_A0) ||
+            !rv_rrr(sel, MINIC_RISCV_MACHINE_SLL,
+                RV_A6, RV_T1, RV_A0) ||
+            !rv_rrr(sel, MINIC_RISCV_MACHINE_SRL,
+                RV_A7, RV_T0, RV_A1) ||
+            !rv_rrr(sel, MINIC_RISCV_MACHINE_AND,
+                RV_A7, RV_A7, RV_A4) ||
+            !rv_rrr(sel, MINIC_RISCV_MACHINE_OR,
+                RV_A6, RV_A6, RV_A7) ||
+            !rv_rrr(sel, MINIC_RISCV_MACHINE_AND,
+                RV_A6, RV_A6, RV_A2) ||
+            !rv_rrr(sel, MINIC_RISCV_MACHINE_AND,
+                RV_A7, RV_A5, RV_A3) ||
+            !rv_rrr(sel, MINIC_RISCV_MACHINE_OR,
+                RV_A6, RV_A6, RV_A7) ||
+            !rv_rrr(sel, MINIC_RISCV_MACHINE_AND,
+                RV_A5, RV_A5, RV_A2)) return false;
+    } else {
+        const uint32_t hi_shift = sign ? MINIC_RISCV_MACHINE_SRA :
+            MINIC_RISCV_MACHINE_SRL;
+        /* For an arithmetic right shift, the old high sign bit fills
+         * the high word at >=XLEN and both words at >=2*XLEN. */
+        if (!rv_rrr(sel, MINIC_RISCV_MACHINE_SRL,
+                RV_A5, RV_T0, RV_A0) ||
+            !rv_rrr(sel, MINIC_RISCV_MACHINE_SLL,
+                RV_A6, RV_T1, RV_A1) ||
+            !rv_rrr(sel, MINIC_RISCV_MACHINE_AND,
+                RV_A6, RV_A6, RV_A4) ||
+            !rv_rrr(sel, MINIC_RISCV_MACHINE_OR,
+                RV_A5, RV_A5, RV_A6) ||
+            !rv_rrr(sel, hi_shift, RV_A6, RV_T1, RV_A0) ||
+            !rv_rrr(sel, MINIC_RISCV_MACHINE_AND,
+                RV_A7, RV_A6, RV_A3) ||
+            !rv_rrr(sel, MINIC_RISCV_MACHINE_AND,
+                RV_A5, RV_A5, RV_A2) ||
+            !rv_rrr(sel, MINIC_RISCV_MACHINE_OR,
+                RV_A5, RV_A5, RV_A7) ||
+            !rv_rrr(sel, MINIC_RISCV_MACHINE_AND,
+                RV_A6, RV_A6, RV_A2)) return false;
+        if (sign) {
+            if (!rv_rri(sel, MINIC_RISCV_MACHINE_SRAI,
+                    RV_A7, RV_T1, (int64_t)(width - 1U)) ||
+                !rv_rr(sel, MINIC_RISCV_MACHINE_NOT, RV_A1, RV_A2) ||
+                !rv_rrr(sel, MINIC_RISCV_MACHINE_AND,
+                    RV_A1, RV_A1, RV_A7) ||
+                !rv_rrr(sel, MINIC_RISCV_MACHINE_OR,
+                    RV_A6, RV_A6, RV_A1) ||
+                !rv_rrr(sel, MINIC_RISCV_MACHINE_OR,
+                    RV_A1, RV_A2, RV_A3) ||
+                !rv_rr(sel, MINIC_RISCV_MACHINE_NOT, RV_A1, RV_A1) ||
+                !rv_rrr(sel, MINIC_RISCV_MACHINE_AND,
+                    RV_A1, RV_A1, RV_A7) ||
+                !rv_rrr(sel, MINIC_RISCV_MACHINE_OR,
+                    RV_A5, RV_A5, RV_A1)) return false;
+        }
+    }
+    return rv_rr(sel, MINIC_RISCV_MACHINE_MV, RV_T0, RV_A5) &&
+        rv_rr(sel, MINIC_RISCV_MACHINE_MV, RV_T1, RV_A6) &&
+        rv_value_chunk(sel, ins->result, 0U, RV_T0, false) &&
+        rv_value_chunk(sel, ins->result, 1U, RV_T1, false);
 }
 
 /* Two-GPR values keep an ordinary Core SSA identity; low/high words are

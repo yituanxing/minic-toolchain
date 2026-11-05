@@ -15,13 +15,31 @@ int ti_eq(U128 a, U128 b) { return a == b; }
 EOF
 "$minic_cc" --target=riscv64-linux -march=rv64i -mabi=lp64 \
   -S "$work/ti.i" -o "$work/ti.s"
-for symbol in __multi3 __cmpti2 __ucmpti2; do
-    grep -F "call $symbol" "$work/ti.s" >/dev/null
-done
-# There are two uses of the unsigned comparator, < and ==.
-test "$(grep -c 'call __ucmpti2' "$work/ti.s")" -ge 2
-grep -Eq '^[[:space:]]+sd ra,' "$work/ti.s"
-grep -Eq '^[[:space:]]+ld ra,' "$work/ti.s"
+# The LP64 pair ABI requires a compiler-rt multiply, but comparisons are now
+# selected directly as verified base-I two-word operations. A golden check
+# for __cmpti2/__ucmpti2 would reject the typed implementation despite its
+# stronger no-call guarantee. Check the signed-high/unsigned-low comparator
+# and both-word equality in each sealed function body instead.
+grep -F 'call __multi3' "$work/ti.s" >/dev/null
+python3 - "$work/ti.s" <<'PY'
+from pathlib import Path
+import re
+import sys
+asm = Path(sys.argv[1]).read_text()
+for name, expected in {
+    'ti_sless': (r'\bslt\s+x\d+,', r'\bsltu\s+x\d+,'),
+    'ti_uless': (r'\bsltu\s+x\d+,',),
+    'ti_eq': (r'\bxor\s+x\d+,', r'\bseqz\s+x\d+,'),
+}.items():
+    match = re.search(rf'(?m)^{name}:\s*\n(.*?)(?=^\s*\.size\s+{name}\b)',
+                      asm, re.S | re.M)
+    assert match, f'{name}: missing complete GNU function region'
+    for opcode in expected:
+        assert re.search(opcode, match.group(1)), (name, opcode)
+print('RV64I_I128_COMPARE=PASS signed_high=1 unsigned_low=1 both_words=1')
+PY
+grep -Eq '^[[:space:]]+sd (ra|x1),' "$work/ti.s"
+grep -Eq '^[[:space:]]+ld (ra|x1),' "$work/ti.s"
 if grep -Eq '^[[:space:]]*(mul|mulh|mulhu|mulhsu|div|divu|rem|remu)(w)?[[:space:]]' "$work/ti.s"; then
     echo "RV64I_I128=FAIL compiler introduced M" >&2
     exit 1
@@ -40,9 +58,9 @@ report=json.loads(Path(sys.argv[1]).read_text())
 s=report['summary']
 assert s['compiler_non_i'] == 0, s
 ops=s['opcode_counts']['compiler']
-assert ops.get('call', 0) >= 4, ops
+assert ops.get('call', 0) >= 1, ops
 tsv=Path(sys.argv[2]).read_text()
 assert 'compiler\tcall\tI\t' in tsv, tsv[:100]
 assert len(tsv.splitlines()) > 2
-print('RV64I_I128=PASS libcall=multi3,cmpti2,ucmpti2 compiler_non_I=0 opcode_tsv=1')
+print('RV64I_I128=PASS libcall=multi3 checked_pair_comparisons=3 compiler_non_I=0 opcode_tsv=1')
 PY
