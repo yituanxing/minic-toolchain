@@ -15,8 +15,18 @@ RV64 `lp64d` uses target-owned typed floating-register operands, the admitted
 F/D arithmetic and conversions, and explicit FPR ABI formal/CALL/return
 effects. Its legacy Core-to-`FILE*` emission family has been physically
 retired. This proves structural ownership and local ABI probes, not a fresh
-RV64 LP64D Linux Image or QEMU boot. The structural
-`tests/compiler/mir-migration/check-production-seal.sh --final` gate confirms
+RV64 LP64D Linux Image or QEMU boot.
+
+RISC-V generated-instruction policy is ABI-scoped: RV32 ILP32 and RV64 LP64
+generate base-I integer instructions and compiler-runtime integer/soft-float
+calls, even when `-march` permits M/F/D for source-owned GNU assembly.
+Explicit RV64 LP64D is different: its real hard-float psABI requires typed
+FPR transfers, F/D scalar operations, and floating-register calls/returns,
+but it still does not proactively select integer M instructions. A source
+ASM permission never enlarges the compiler's selected integer opcode set.
+The strict-I and LP64D positive/negative probes test this distinction.
+
+The structural `tests/compiler/mir-migration/check-production-seal.sh --final` gate confirms
 that legacy direct Core-to-`FILE*` instruction callbacks and the retired
 x86/AArch/Loong direct emit families are absent. It does **not** certify that
 every original Linux GNU inline-ASM form is accepted or that a current Image

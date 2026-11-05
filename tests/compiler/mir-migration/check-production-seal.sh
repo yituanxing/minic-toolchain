@@ -75,6 +75,10 @@ need src/target/common/machine_core_coverage.c 'machine_core_edges_match('
 need src/target/common/machine_core_coverage.c 'seen_source_asm'
 
 if [[ "$mode" == '--final' ]]; then
+    # Seal all RV64 ABI modes. The default LP64D dispatch must not re-enter
+    # the historical direct Core->FILE* emitter after the typed MIR cutover.
+    forbid src/target/riscv64/codegen_function.c \
+        'minic_riscv64_emit_core_function_with_symbol_with_storage_module_trusted('
     # Direct LP64 cannot keep a selectable FILE* instruction path even if the
     # two production target registrations happen to choose the typed branch.
     forbid src/target/common/direct_function_emit.h 'emit_core_blocks'

@@ -7,6 +7,7 @@
 #include "target/common/core_machine_asm.h"
 #include "target/common/core_scalar_conversion.h"
 #include "target/common/core_floating_shape.h"
+#include "target/common/core_extended_float_runtime.h"
 #include "target/common/machine_core_coverage.h"
 #include "target/common/elf_module_symbol_info.h"
 #include <limits.h>
@@ -510,11 +511,18 @@ static bool rv_core_float_constant(RvCoreSelection *sel,
     const uint64_t bits = ins->value.floating_bits;
     size_t chunks, i;
     if (type == NULL || type->kind != MINIC_CORE_TYPE_FLOAT ||
-        !type->has_layout || (type->size != 4U && type->size != 8U) ||
+        !type->has_layout ||
+        (type->size != 4U && type->size != 8U &&
+         !(type->size == 16U && sel->xlen == 64U &&
+           minic_core_float_format_is_wide(
+               type->value.floating.format))) ||
         (type->size == 4U && bits >> 32U != 0U)) return false;
     chunks = (type->size + word - 1U) / word;
     for (i = 0U; i < chunks; ++i) {
-        const int64_t immediate = sel->xlen == 32U ?
+        const int64_t immediate = type->size == 16U ?
+            (int64_t)(i == 0U ? ins->value.floating128_bits.low :
+                                     ins->value.floating128_bits.high) :
+            sel->xlen == 32U ?
             (int64_t)(int32_t)(uint32_t)(bits >> (32U * i)) :
             (int64_t)bits;
         if (!rv_li(sel, RV_T0, immediate) ||
@@ -1647,7 +1655,8 @@ static bool rv_core_payload_memory(RvCoreSelection *sel,
     size_t i, j, chunks;
     if (type == NULL || !type->has_layout ||
         !((type->kind == MINIC_CORE_TYPE_FLOAT &&
-            (type->size == 4U || type->size == 8U)) ||
+            (type->size == 4U || type->size == 8U ||
+             type->size == 2U * word)) ||
           (type->kind == MINIC_CORE_TYPE_INTEGER &&
             type->size == 2U * word &&
             type->value.integer.bit_width == 2U * sel->xlen)) ||
@@ -2374,16 +2383,24 @@ static bool rv_core_call_result(RvCoreSelection *sel,
         if (fp_type != NULL && fp_type->kind == MINIC_CORE_TYPE_FLOAT) {
             const MinicRiscv64PreparedCall *prepared;
             size_t ordinal;
-            if ((size != 4U && size != 8U) ||
-                sel->plan->semantic_calls64 == NULL ||
+            if (sel->plan->semantic_calls64 == NULL ||
                 minic_core_call_index_find(sel->plan->semantic_calls64,
                     instruction_id, &ordinal) == NULL ||
                 ordinal >= sel->plan->abi64->outgoing_calls->count ||
                 sel->plan->abi64->outgoing_calls->sites == NULL ||
                 (prepared = sel->plan->abi64->outgoing_calls->sites[ordinal]) ==
-                    NULL ||
-                prepared->return_value.kind != MINIC_RISCV64_ABI_VALUE_FLOAT ||
-                !rv_fp_to_bits(sel, RV_A0, 10U, size == 8U)) return false;
+                    NULL) return false;
+            if (size == 4U || size == 8U) {
+                if (prepared->return_value.kind !=
+                        MINIC_RISCV64_ABI_VALUE_FLOAT ||
+                    !rv_fp_to_bits(sel, RV_A0, 10U, size == 8U))
+                    return false;
+            } else if (size == 16U) {
+                /* Binary128 is a two-GPR psABI value, never a FPR scalar. */
+                if (prepared->return_value.kind !=
+                        MINIC_RISCV64_ABI_VALUE_WIDE_SCALAR ||
+                    prepared->return_value.slot_count != 2U) return false;
+            } else return false;
         }
     }
     chunks = (size + word - 1U) / word;
@@ -2402,20 +2419,41 @@ static bool rv_core_call(RvCoreSelection *sel,
     const MinicCoreInstruction *ins) {
     const MinicCoreFunction *fn = sel->plan->core;
     const MinicCoreCallee *callee;
+    const char *symbol;
     MinicMachineOperand op = {0};
-    if (ins->value.call.extended_float_operation !=
-            MINIC_CORE_EXT_FLOAT_NONE ||
-        ins->value.call.callee_id >= fn->callee_count) return false;
+    if (ins->value.call.callee_id >= fn->callee_count) return false;
     callee = &fn->callees[ins->value.call.callee_id];
-    if (callee->name == NULL ||
+    symbol = ins->value.call.extended_float_operation ==
+        MINIC_CORE_EXT_FLOAT_NONE ? callee->name :
+        minic_core_extended_float_runtime_symbol(
+            ins->value.call.extended_float_operation);
+    if (symbol == NULL ||
         !rv_core_call_arguments(sel, instruction_id,
             ins->value.call.argument_begin, ins->value.call.argument_count,
             ins->result, ins->value.call.result_object)) return false;
     op.kind = MINIC_MACHINE_OPERAND_SYMBOL;
-    op.value.symbol.name = callee->name;
+    /* Builder copies the runtime helper's static name into owned MIR. */
+    op.value.symbol.name = (char *)symbol;
     op.value.symbol.relocation = MINIC_RISCV_MACHINE_RELOC_CALL;
     op.value.symbol.addend = 0;
     if (!rv_emit(sel, MINIC_RISCV_MACHINE_CALL_DIRECT, &op, 1U)) return false;
+    /* TF comparison runtime helpers return an ordered three-way integer.
+     * Preserve Core's boolean predicate through selected GPR opcodes. */
+    switch (ins->value.call.extended_float_operation) {
+    case MINIC_CORE_EXT_FLOAT_EQUAL:
+        if (!rv_rr(sel, MINIC_RISCV_MACHINE_SEQZ, RV_A0, RV_A0))
+            return false;
+        break;
+    case MINIC_CORE_EXT_FLOAT_LESS:
+        if (!rv_rrr(sel, MINIC_RISCV_MACHINE_SLT, RV_A0, RV_A0, RV_ZERO))
+            return false;
+        break;
+    case MINIC_CORE_EXT_FLOAT_LESS_EQUAL:
+        if (!rv_rri(sel, MINIC_RISCV_MACHINE_SLTI, RV_A0, RV_A0, 1))
+            return false;
+        break;
+    default: break;
+    }
     return rv_core_call_result(sel, instruction_id, ins,
         ins->value.call.result_object);
 }
@@ -2704,41 +2742,99 @@ static bool rv_core_scalar_output_source_asm(RvCoreSelection *sel,
         rv_core_asm_lvalue_transfer(sel, roles[0].value, bytes, false);
 }
 
-/* GNU Linux atomics carry a physical memory address as a first-class ASM
- * operand, not a scalar register with a textual `(...)` suffix.  Keep every
- * output, early-clobber, read/write and input in a distinct a-register while
- * the source effect executes.  Frame materialization uses only t-registers,
- * so loading later inputs cannot clobber already bound operands.  This is
- * one shared RV32 ILP32 / RV64 LP64 lowering of the complete mixed +A,
- * register-output and scalar-input family, not an alternate text emitter. */
-static bool rv_core_atomic_source_asm(RvCoreSelection *sel,
+/* One physical GNU source-ASM binder for mixed memory/register forms and
+ * multiple register outputs. Every operand owns a distinct caller-saved a
+ * register; Core frame transfers use t-register scratch. Fixed a-register
+ * identities are honored, and explicit clobbers are separate typed effects.
+ * The source template never becomes compiler-selected ISA instructions. */
+static bool rv_core_mixed_source_asm(RvCoreSelection *sel,
     const MinicCoreInstruction *ins, const MinicCoreInlineAsm *source) {
     const MinicCoreFunction *fn = sel->plan->core;
     const MinicCoreStructuredInlineAsmOperand *roles =
         ins->value.structured_inline_asm.operands;
     const size_t count = ins->value.structured_inline_asm.operand_count;
     MinicMachineOperand bindings[8];
+    MinicMachineRegisterEffect clobbers[MINIC_MACHINE_MAX_REGISTER_EFFECTS];
+    unsigned physicals[8] = {0};
+    bool reserved[32] = {false};
     unsigned widths[8] = {0};
     bool signs[8] = {0};
-    size_t i, outputs = 0U, results = 0U;
-    bool has_memory = false;
+    size_t i, j, outputs = 0U, results = 0U;
     unsigned int effects = 0U;
-    if (source->operand_plan_owner != MINIC_ASM_OPERAND_PLAN_GENERIC_STRUCTURED ||
+    if ((source->operand_plan_owner != MINIC_ASM_OPERAND_PLAN_GENERIC_STRUCTURED &&
+         !(source->operand_plan_owner == MINIC_ASM_OPERAND_PLAN_NONE &&
+           count == 1U &&
+           roles[0].kind == MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE &&
+           source->register_clobber_count != 0U)) ||
         source->target_machine_form_id != 0U ||
         source->target_machine_form_variant != 0U ||
-        source->is_goto || source->template_length == 0U ||
-        source->register_clobber_count != 0U ||
+        source->is_goto || !source->is_volatile ||
+        source->template_length == 0U ||
+        source->register_clobber_count > MINIC_MACHINE_MAX_REGISTER_EFFECTS ||
+        (source->register_clobber_count != 0U &&
+         source->register_clobbers == NULL) ||
         source->resolved_immediate_count != 0U ||
         source->deferred_immediate_symbol != NULL ||
-        count < 2U || count > 8U ||
+        count == 0U || count > 8U ||
         !minic_core_asm_output_operand_count(ins, &outputs)) return false;
+    /* All source clobbers must be recognized caller-saved physical GPRs.
+     * Callee-saved registers require an explicit MachineIR save/restore
+     * contract and are intentionally not admitted by this family. */
+    for (i = 0U; i < source->register_clobber_count; ++i) {
+        const MinicCoreInlineAsmRegisterClobber *clobber =
+            &source->register_clobbers[i];
+        unsigned id;
+        if (!minic_riscv_gpr_id(clobber->name, clobber->name_length, &id) ||
+            !minic_riscv_gpr_caller_saved(id) || reserved[id]) return false;
+        reserved[id] = true;
+        clobbers[i].reg = (MinicMachineRegister){id,
+            (uint16_t)sel->xlen, MINIC_MACHINE_REGISTER_GENERAL};
+        clobbers[i].access = MINIC_MACHINE_REGISTER_WRITE;
+    }
+    /* Reserve exact local `register ... asm("aN")` assignments before
+     * allocating generic operands; a generic role may never steal one. */
+    for (i = 0U; i < count; ++i) {
+        const MinicCoreStructuredInlineAsmOperand *role = &roles[i];
+        const MinicCoreFixedRegisterBinding *fixed;
+        unsigned id, fixed_bytes, role_bytes;
+        bool fixed_sign, fixed_ptr, role_sign, role_ptr;
+        if (!role->has_fixed_register_binding) continue;
+        if (role->fixed_register_binding_id >= fn->fixed_register_binding_count ||
+            (fixed = &fn->fixed_register_bindings[
+                role->fixed_register_binding_id])->register_name == NULL ||
+            !fixed->is_local ||
+            !minic_riscv_gpr_id(fixed->register_name,
+                fixed->register_name_length, &id) ||
+            id < RV_A0 || id > RV_A7 || reserved[id] ||
+            (role->kind != MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT &&
+             role->kind != MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE &&
+             role->kind != MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT) ||
+            !rv_type(sel, fixed->core_type_id,
+                &fixed_bytes, &fixed_sign, &fixed_ptr)) return false;
+        if (role->kind == MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT) {
+            if (role->value >= fn->value_count ||
+                !rv_type(sel, fn->values[role->value].core_type_id,
+                    &role_bytes, &role_sign, &role_ptr)) return false;
+        } else if (!rv_core_asm_lvalue(sel, role->value,
+                       &role_bytes, &role_sign)) return false;
+        if (fixed_bytes != role_bytes || fixed_sign != role_sign)
+            return false;
+        reserved[id] = true;
+        physicals[i] = id;
+    }
+    for (i = 0U; i < count; ++i) {
+        if (physicals[i] != 0U) continue;
+        for (j = RV_A0; j <= RV_A7 && reserved[j]; ++j) {}
+        if (j > RV_A7) return false;
+        physicals[i] = (unsigned)j;
+        reserved[j] = true;
+    }
     for (i = 0U; i < count; ++i) {
         const MinicCoreStructuredInlineAsmOperand *role = &roles[i];
         bool pointer;
         unsigned ptr_bytes;
         bool ptr_signed;
-        if (role->operand_index != i || role->has_fixed_register_binding ||
-            role->has_tied_output ||
+        if (role->operand_index != i || role->has_tied_output ||
             role->early_clobber != role->physical_early_clobber)
             return false;
         switch (role->kind) {
@@ -2754,7 +2850,6 @@ static bool rv_core_atomic_source_asm(RvCoreSelection *sel,
                 role->physical_read_write != (role->kind ==
                     MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE))
                 return false;
-            has_memory = true;
             effects |= (role->kind ==
                 MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT) ?
                     MINIC_MACHINE_EFFECT_MEMORY_READ :
@@ -2777,11 +2872,15 @@ static bool rv_core_atomic_source_asm(RvCoreSelection *sel,
             if (i >= outputs || role->value >= fn->value_count ||
                 !rv_core_asm_lvalue(sel, role->value,
                     &widths[i], &signs[i]) ||
-                role->physical_read_write != (role->kind ==
-                    MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE) ||
+                (role->physical_read_write != (role->kind ==
+                    MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE) &&
+                 !(source->operand_plan_owner == MINIC_ASM_OPERAND_PLAN_NONE &&
+                   role->kind ==
+                       MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE)) ||
                 (role->kind ==
                     MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE &&
-                    role->early_clobber)) return false;
+                    role->early_clobber &&
+                    !role->physical_early_clobber)) return false;
             break;
         case MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT:
             if (i < outputs || role->value >= fn->value_count ||
@@ -2803,15 +2902,13 @@ static bool rv_core_atomic_source_asm(RvCoreSelection *sel,
             return false;
         }
     }
-    /* This path admits mixed memory/register atomics only.  Existing simple
-     * scalar roles retain their independently tested exact contract. */
-    if (!has_memory || (results == 0U &&
+    if ((results == 0U &&
          ins->result != MINIC_CORE_VALUE_INVALID) ||
         (results != 0U && ins->result == MINIC_CORE_VALUE_INVALID))
         return false;
     for (i = 0U; i < count; ++i) {
         const MinicCoreStructuredInlineAsmOperand *role = &roles[i];
-        const unsigned physical = RV_A0 + (unsigned)i;
+        const unsigned physical = physicals[i];
         switch (role->kind) {
         case MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE:
         case MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_OUTPUT:
@@ -2837,7 +2934,8 @@ static bool rv_core_atomic_source_asm(RvCoreSelection *sel,
                 return false;
             bindings[i] = rv_reg(sel->xlen, physical,
                 MINIC_MACHINE_REGISTER_READ | MINIC_MACHINE_REGISTER_WRITE);
-            bindings[i].asm_constraint = "+r";
+            bindings[i].asm_constraint = role->physical_early_clobber ?
+                "+&r" : "+r";
             break;
         case MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT:
             if (rv_core_asm_zero_rj(fn, source, role->value, i)) {
@@ -2858,10 +2956,12 @@ static bool rv_core_atomic_source_asm(RvCoreSelection *sel,
         }
     }
     if (!minic_machine_builder_emit_core_source_asm(&sel->builder, source,
-            effects, bindings, count, NULL, 0U, false, false)) return false;
+            effects, bindings, count,
+            source->register_clobber_count != 0U ? clobbers : NULL,
+            source->register_clobber_count, false, false)) return false;
     for (i = 0U; i < outputs; ++i) {
         const MinicCoreStructuredInlineAsmOperand *role = &roles[i];
-        const unsigned physical = RV_A0 + (unsigned)i;
+        const unsigned physical = physicals[i];
         if (role->kind == MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_RESULT ||
             role->kind == MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT ||
             role->kind == MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE) {
@@ -2971,27 +3071,36 @@ static bool rv_core_unbound_source_asm(RvCoreSelection *sel,
     if (source->template_text == NULL) return false;
     if (source->is_goto)
         return rv_core_source_asm_goto(sel, instruction_id, ins, source);
-    if (
-        source->register_clobber_count != 0U ||
-        source->resolved_immediate_count != 0U ||
+    if (source->resolved_immediate_count != 0U ||
         source->goto_second_target != MINIC_CORE_BLOCK_INVALID)
         return false;
     if (ins->kind == MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM &&
         ins->value.structured_inline_asm.operand_count != 0U) {
         size_t i;
+        bool mixed = source->register_clobber_count != 0U ||
+            ins->value.structured_inline_asm.operand_count > 2U;
+        size_t output_count = 0U;
+        if (!minic_core_asm_output_operand_count(ins, &output_count))
+            return false;
+        mixed = mixed || output_count > 1U;
         for (i = 0U; i < ins->value.structured_inline_asm.operand_count; ++i) {
-            const MinicCoreStructuredInlineAsmOperandKind kind =
-                ins->value.structured_inline_asm.operands[i].kind;
+            const MinicCoreStructuredInlineAsmOperand *role =
+                &ins->value.structured_inline_asm.operands[i];
+            const MinicCoreStructuredInlineAsmOperandKind kind = role->kind;
             if (kind == MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE ||
                 kind == MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_OUTPUT ||
                 kind == MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT)
-                return rv_core_atomic_source_asm(sel, ins, source);
+                mixed = true;
+            mixed = mixed || role->has_fixed_register_binding ||
+                role->physical_early_clobber;
         }
+        if (mixed) return rv_core_mixed_source_asm(sel, ins, source);
         if (ins->value.structured_inline_asm.operands[0].kind ==
             MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT)
             return rv_core_scalar_input_source_asm(sel, ins, source);
         return rv_core_scalar_output_source_asm(sel, ins, source);
     }
+    if (source->register_clobber_count != 0U) return false;
     return minic_machine_builder_emit_core_source_asm(&sel->builder,
         source, 0U, NULL, 0U, NULL, 0U, false, false);
 }

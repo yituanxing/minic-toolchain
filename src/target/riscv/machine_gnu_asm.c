@@ -253,7 +253,9 @@ static bool riscv_asm_constraint(const MinicTargetInfo *target,
         ++i;
     }
     if (constraint[i] == '&') {
-        if (!output) return false;
+        /* GNU +&r is an early-clobber tied output: it must retain the
+         * initial register value as well as forbid overlap with inputs. */
+        if (!output && !inout) return false;
         ++i;
     }
     role = constraint[i];

@@ -43,7 +43,6 @@ bool minic_riscv64_machine_physical_frame(
     const uint16_t mask = frame != NULL ? frame->asm_plan.callee_saved_mask : 0U;
     size_t i, saved = 0U;
     if (frame == NULL || physical == NULL ||
-        frame->frame_size == 0U ||
         frame->has_dynamic_stack_alignment !=
             (frame->stack_alignment > 16U) ||
         frame->integer_parameter_count > 8U ||

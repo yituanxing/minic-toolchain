@@ -27,8 +27,9 @@ for selection in "rv64i lp64 add" "rv64im lp64 mul" "rv64imafd lp64d float"; do
   test -s "$tmp/$march.s"
 done
 
-# RV64I emits standard integer compiler-runtime libcalls, with NO arithmetic
-# algorithms maintained inside MiniC. RV64IM still selects native M.
+# Machine codegen deliberately selects Base-I integer instructions even if
+# -march grants M to source-owned GNU inline assembly. Both LP64 profiles
+# must use the existing upstream compiler-runtime arithmetic entry points.
 "$MINIC_CC" --target=riscv64-linux -march=rv64i -mabi=lp64 \
   -S "$tmp/mul.i" -o "$tmp/rv64i-fullarith.s"
 test -s "$tmp/rv64i-fullarith.s"
@@ -38,8 +39,32 @@ done
 if grep -Eq '^[[:space:]]*(mul|mulh|div|divu|rem|remu)[[:space:]]' "$tmp/rv64i-fullarith.s"; then
   echo "RV64_ISA=FAIL rv64i arithmetic leaked M" >&2; exit 1
 fi
-grep -Eq '^[[:space:]]*div[[:space:]]' "$tmp/rv64im.s"
-grep -Eq '^[[:space:]]*rem[[:space:]]' "$tmp/rv64im.s"
+for symbol in __muldi3 __divdi3 __moddi3; do
+  grep -q "call $symbol" "$tmp/rv64im.s"
+done
+if grep -Eq '^[[:space:]]*(mul|mulh|mulw|div|divu|rem|remu)[[:space:]]' \
+   "$tmp/rv64im.s"; then
+  echo 'RV64_ISA=FAIL rv64im source extension leaked M into codegen' >&2
+  exit 1
+fi
+echo 'RV64_INTEGER_CODEGEN=PASS rv64i=I_only rv64im=I_only libgcc_mul_div_rem=3'
+
+# LP64D is a separate hard-float calling convention, not a license to use
+# M. Its F/D instructions are needed for the real fa0..fa7 ABI, whereas
+# integer multiplication remains a Base-I compiler-runtime CALL.
+"$MINIC_CC" --target=riscv64-linux -march=rv64imafd -mabi=lp64d \
+  -S "$tmp/mul.i" -o "$tmp/rv64imafd-integer.s"
+for symbol in __muldi3 __divdi3 __moddi3; do
+  grep -q "call $symbol" "$tmp/rv64imafd-integer.s"
+done
+if grep -Eq '^[[:space:]]*(mul|mulh|mulw|div|divu|rem|remu)[[:space:]]' \
+   "$tmp/rv64imafd-integer.s"; then
+  echo 'RV64_ISA=FAIL lp64d source extension leaked M into codegen' >&2
+  exit 1
+fi
+grep -Eq '^[[:space:]]*fadd\.d[[:space:]]+(f[0-9]+|ft[0-9]+|fa[0-9]+)' "$tmp/rv64imafd.s"
+grep -Eq '^[[:space:]]*fmv\.d\.x[[:space:]]+(f[0-9]+|ft[0-9]+|fa[0-9]+)' "$tmp/rv64imafd.s"
+echo 'RV64_LP64D_CODEGEN=PASS F_D_required=1 hard_float_ABI=1 M_not_selected=1'
 "$MINIC_CC" --target=riscv64-linux -march=rv64i -mabi=lp64 \
     -S "$tmp/mulonly.i" -o "$tmp/rv64i-mul.s"
 test -s "$tmp/rv64i-mul.s"
@@ -47,9 +72,10 @@ grep -q 'call __muldi3' "$tmp/rv64i-mul.s"
 if grep -Eq '^[[:space:]]*(mul|mulh|div|rem)[[:space:]]' "$tmp/rv64i-mul.s"; then
   echo 'RV64_ISA=FAIL RV64I software multiply leaked M' >&2; exit 1
 fi
-# Optional M cannot regress correctness of two-word C comparisons.
-# There is no native two-word M compare; the same Base-I runtime path works
-# for rv64i and rv64im. Only the compiler-owned output is audited here.
+# Optional M cannot change two-word C comparison selection. The typed RV64
+# machine selector emits explicit high-limb signed/unsigned comparisons and
+# low-limb unsigned tie-breakers using Base-I SLT/SLTU/XOR/SEQZ. No library
+# CALL or M instruction is required for comparisons alone.
 cat >"$tmp/int128-cmp.i" <<'SRC'
 typedef __int128 s128;
 typedef unsigned __int128 u128;
@@ -60,12 +86,15 @@ SRC
 for march in rv64i rv64im; do
   "$MINIC_CC" --target=riscv64-linux "-march=$march" -mabi=lp64 \
     -S "$tmp/int128-cmp.i" -o "$tmp/int128-cmp-$march.s"
-  grep -q 'call __cmpti2' "$tmp/int128-cmp-$march.s"
-  grep -q 'call __ucmpti2' "$tmp/int128-cmp-$march.s"
-  grep -Eq '[[:space:]]+sd ra,' "$tmp/int128-cmp-$march.s"
-  grep -Eq '[[:space:]]+ld ra,' "$tmp/int128-cmp-$march.s"
+  for opcode in slt sltu xor seqz; do
+    grep -Eq "^[[:space:]]*$opcode[[:space:]]" "$tmp/int128-cmp-$march.s"
+  done
+  if grep -Eq '^[[:space:]]*(mul|mulh|div|divu|rem|remu)[[:space:]]' \
+    "$tmp/int128-cmp-$march.s"; then
+    echo "RV64_I128_COMPARISON_FALLBACK=FAIL $march leaked M" >&2; exit 1
+  fi
 done
-echo 'RV64_I128_COMPARISON_FALLBACK=PASS base_i=1 optional_m=1'
+echo 'RV64_I128_COMPARISON_FALLBACK=PASS base_i_limb_compare=1 optional_m=1'
 
 # LP64 always permits floating-point C signatures. The ABI maps raw
 # float/double payload bits through a0-a7 and a0 return, never fa0/fa7.
@@ -132,7 +161,7 @@ long *advance(long *p, long offset) { return p + offset; }
 SRC
 "$MINIC_CC" --target=riscv64-linux -march=rv64i -mabi=lp64 \
   -S "$tmp/longptr.i" -o "$tmp/longptr-i.s"
-grep -q 'slli t1, t1, 3' "$tmp/longptr-i.s"
+grep -Eq 'slli[[:space:]]+(t1|x6),[[:space:]]*(t1|x6),[[:space:]]*3' "$tmp/longptr-i.s"
 if grep -Eq '^[[:space:]]*mul[[:space:]]' "$tmp/longptr-i.s"; then
   echo 'RV64_ISA=FAIL pointer scale emitted hardware M' >&2; exit 1
 fi
@@ -142,11 +171,13 @@ struct Packed3 *evaluate(struct Packed3 *p, long n) { return p + n; }
 SRC
 "$MINIC_CC" --target=riscv64-linux -march=rv64i -mabi=lp64 \
   -S "$tmp/oddptr.i" -o "$tmp/oddptr-i.s"
-grep -q 'call __muldi3' "$tmp/oddptr-i.s"
-# The pointer base must be RELOADED after the call, because t0 is
-# caller-clobbered, and the compiler must preserve the function entry ra.
-grep -Eq '[[:space:]]+sd ra,' "$tmp/oddptr-i.s"
-grep -Eq '[[:space:]]+ld ra,' "$tmp/oddptr-i.s"
+# The selected I-only pointer scale for a three-byte record is
+# n*2+n, without a compiler-runtime call or native M multiplication.
+grep -Eq '^[[:space:]]*slli[[:space:]].*,[[:space:]]*1$' "$tmp/oddptr-i.s"
+grep -Eq '^[[:space:]]*add[[:space:]]' "$tmp/oddptr-i.s"
+if grep -q 'call __muldi3' "$tmp/oddptr-i.s"; then
+  echo 'RV64_ISA=FAIL odd-size pointer scale needlessly called libgcc' >&2; exit 1
+fi
 if grep -Eq '^[[:space:]]*mul[[:space:]]' "$tmp/oddptr-i.s"; then
   echo 'RV64_ISA=FAIL odd-size pointer scale emitted hardware M' >&2; exit 1
 fi
@@ -179,7 +210,7 @@ test -s "$tmp/record-fpabi.s"
 # already verified two-register integer-conversion path. Pair arithmetic,
 # divrem libcalls and strict ISA machine opcodes are tested independently by
 # probe-rv64i-int128-pairs.sh.
-# __cmpti2/__ucmpti2; only the still-unimplemented TI operators above reject.
+# Core selects typed base-I limb comparisons without M/libgcc helpers.
 cat >"$tmp/qualified-i128-comparisons.i" <<'SRC'
 typedef unsigned __int128 U128;
 typedef __int128 I128;
@@ -189,15 +220,16 @@ int ult(U128 a, U128 b) { return a < b; }
 SRC
 "$MINIC_CC" --target=riscv64-linux -march=rv64i -mabi=lp64 \
   -S "$tmp/qualified-i128-comparisons.i" -o "$tmp/qualified-i128-comparisons.s"
-grep -q 'call __cmpti2' "$tmp/qualified-i128-comparisons.s"
-grep -q 'call __ucmpti2' "$tmp/qualified-i128-comparisons.s"
+for opcode in slt sltu xor seqz; do
+  grep -Eq "^[[:space:]]*$opcode[[:space:]]" "$tmp/qualified-i128-comparisons.s"
+done
 cat >"$tmp/qualified-i128-abi.i" <<'SRC'
 unsigned __int128 passthrough(unsigned __int128 a) { return a; }
 SRC
 "$MINIC_CC" --target=riscv64-linux -march=rv64i -mabi=lp64 \
   -S "$tmp/qualified-i128-abi.i" -o "$tmp/qualified-i128-abi.s"
 test -s "$tmp/qualified-i128-abi.s"
-grep -Eq '[[:space:]]+mv t[01], a[01]' "$tmp/qualified-i128-abi.s" || {
+grep -Eq '[[:space:]]+mv[[:space:]]+(t[01]|x[56]),[[:space:]]*(a[01]|x1[01])' "$tmp/qualified-i128-abi.s" || {
   echo 'RV64I_INT128=FAIL two-register incoming ABI missing' >&2; exit 1
 }
 
@@ -270,8 +302,8 @@ for march in rv64i rv64im; do
       echo "RV64_SOFTFP=FAIL missing $sym in $march" >&2; exit 1;
     }
   done
-  grep -Eq '[[:space:]]+sd ra,' "$tmp/softfp-$march.s"
-  grep -Eq '[[:space:]]+ld ra,' "$tmp/softfp-$march.s"
+  grep -Eq '[[:space:]]+sd[[:space:]]+(ra|x1),' "$tmp/softfp-$march.s"
+  grep -Eq '[[:space:]]+ld[[:space:]]+(ra|x1),' "$tmp/softfp-$march.s"
   if grep -Eq '^[[:space:]]*(fadd|fsub|fmul|fdiv|fcvt|fmv)\.' "$tmp/softfp-$march.s"; then
     echo "RV64_SOFTFP=FAIL leaked F/D opcode in $march" >&2; exit 1
   fi
@@ -520,8 +552,8 @@ SRC
     grep -q 'call __muldi3' "$tmp/checkedmul.s"
     grep -q 'call __divdi3' "$tmp/checkedmul.s"
     grep -q 'call __udivdi3' "$tmp/checkedmul.s"
-    grep -Eq '[[:space:]]+sd ra,' "$tmp/checkedmul.s"
-    grep -Eq '[[:space:]]+ld ra,' "$tmp/checkedmul.s"
+    grep -Eq '[[:space:]]+sd[[:space:]]+(ra|x1),' "$tmp/checkedmul.s"
+    grep -Eq '[[:space:]]+ld[[:space:]]+(ra|x1),' "$tmp/checkedmul.s"
     cat >"$tmp/checkedmul-start.s" <<'SRC'
 .section .text
 .globl _start

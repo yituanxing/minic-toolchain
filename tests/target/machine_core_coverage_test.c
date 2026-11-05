@@ -321,8 +321,16 @@ static int check_independent_core_roots(void) {
     core_blocks[1].indirect_entry = false;
     core_blocks[1].local_label_symbol = ".Lexternal_entry";
     machine_blocks[2].indirect_entry = false;
+    machine_blocks[2].exported_label = ".Lexternal_entry";
     if (!minic_machine_core_coverage_verify(&core, reachable, &machine))
         return 3;
+    machine_blocks[2].exported_label = ".Lwrong_external_entry";
+    if (minic_machine_core_coverage_verify(&core, reachable, &machine))
+        return 9;
+    machine_blocks[2].exported_label = NULL;
+    if (minic_machine_core_coverage_verify(&core, reachable, &machine))
+        return 10;
+    machine_blocks[2].exported_label = ".Lexternal_entry";
     core_blocks[1].local_label_symbol = NULL;
     /* An address-taken block can escape independently of explicit branches
      * and of whether target code folds the address value into a constant. */

@@ -469,7 +469,11 @@ bool minic_machine_core_coverage_verify_with_policy(
             failure_core_block = id;
             if (block->machine_auxiliary || id >= core->block_count ||
                 !reachable_blocks[id] || primary[id] != SIZE_MAX ||
-                block->indirect_entry != core->blocks[id].indirect_entry)
+                block->indirect_entry != core->blocks[id].indirect_entry ||
+                (core->blocks[id].local_label_symbol != NULL &&
+                 (block->exported_label == NULL ||
+                  strcmp(block->exported_label,
+                         core->blocks[id].local_label_symbol) != 0)))
                 goto cleanup;
             primary[id] = i;
         } else if (block->core_block_id != 0U) {

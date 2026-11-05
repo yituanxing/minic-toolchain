@@ -9,6 +9,7 @@
 #include "target/common/core_block_walk.h"
 #include "target/common/core_machine_asm.h"
 #include "target/common/core_numeric_shape.h"
+#include "target/common/core_extended_float_runtime.h"
 #include "target/common/core_abi_value_shape.h"
 #include "target/common/direct_instruction_semantics.h"
 #include "target/common/direct_residual_plan.h"
@@ -861,6 +862,8 @@ static bool a64_call(A64CoreSelection *sel,
     const MinicCoreInstruction *ins) {
     const MinicCoreFunction *fn = sel->ctx->fn;
     const bool indirect = ins->kind == MINIC_CORE_INSTRUCTION_INDIRECT_CALL;
+    const MinicCoreExtendedFloatOperation extended = indirect ?
+        MINIC_CORE_EXT_FLOAT_NONE : ins->value.call.extended_float_operation;
     const size_t begin = indirect ? ins->value.indirect_call.argument_begin :
         ins->value.call.argument_begin;
     const size_t count = indirect ? ins->value.indirect_call.argument_count :
@@ -880,9 +883,7 @@ static bool a64_call(A64CoreSelection *sel,
          !a64_wide_float(fn, ins->core_type_id) &&
          !a64_scalar_abi(fn, ins->core_type_id, &result)) ||
         begin > fn->call_argument_count ||
-        count > fn->call_argument_count - begin ||
-        (!indirect && ins->value.call.extended_float_operation !=
-            MINIC_CORE_EXT_FLOAT_NONE)) return false;
+        count > fn->call_argument_count - begin) return false;
     call_id = (size_t)(ins - fn->instructions);
     planned = minic_lp64_function_call_plan(sel->ctx->outgoing_calls, call_id);
     if (planned == NULL || planned->argument_count != count ||
@@ -971,7 +972,9 @@ static bool a64_call(A64CoreSelection *sel,
                     MINIC_ELF_MODULE_SYMBOL_FUNCTION) :
                 (MinicElfModuleSymbolFacts){0};
         if (ins->value.call.callee_id >= fn->callee_count ||
-            (name = fn->callees[ins->value.call.callee_id].name) == NULL)
+            (name = extended == MINIC_CORE_EXT_FLOAT_NONE ?
+                fn->callees[ins->value.call.callee_id].name :
+                minic_core_extended_float_runtime_symbol(extended)) == NULL)
             return false;
         if (facts.undefined_weak) {
             const MinicMachineOperand op[] = {
@@ -992,6 +995,16 @@ static bool a64_call(A64CoreSelection *sel,
         !a64_rri(sel, MINIC_A64_MACHINE_ADD_IMM, 64U,
             MINIC_A64_MACHINE_SP, MINIC_A64_MACHINE_SP,
             (int64_t)planned->stack_bytes)) return false;
+    /* GNU TFmode helpers return ordered integer comparison statuses, not
+     * the Core 0/1 predicate. Keep the typed Core operation separate from
+     * an ordinary user-defined symbol named __eqtf2/__lttf2/__letf2. */
+    if (extended >= MINIC_CORE_EXT_FLOAT_EQUAL &&
+        extended <= MINIC_CORE_EXT_FLOAT_LESS_EQUAL &&
+        (!a64_cmp_zero(sel, 32U, 0U) ||
+         !a64_cset(sel, 0U,
+             extended == MINIC_CORE_EXT_FLOAT_EQUAL ? 0 :
+             extended == MINIC_CORE_EXT_FLOAT_LESS ? 11 : 13)))
+        return false;
     if (result.kind == MINIC_CORE_TYPE_VOID) return true;
     if (result.kind == MINIC_CORE_TYPE_RECORD)
         return a64_call_record_result(sel, ins, result_object);

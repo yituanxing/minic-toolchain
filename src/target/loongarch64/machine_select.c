@@ -1398,9 +1398,26 @@ static bool loong_select_float(LoongSelector *sel,
             minic_core_type_unqualified(fn->type_context, ins->core_type_id));
         size_t offset;
         if (type == NULL || type->kind != MINIC_CORE_TYPE_FLOAT ||
-            (type->value.floating.format != MINIC_CORE_FLOAT_BINARY64 &&
+            !loong_value_offset(sel, ins->result, &offset)) return false;
+        if (type->value.floating.format == MINIC_CORE_FLOAT_BINARY128) {
+            /* A binary128 constant is two payload carriers, not an FPR
+             * operand.  LP64D passes it through the wide GPR/stack ABI;
+             * preserve both halves of its exact Core bit pattern. */
+            return type->has_layout && type->size == 16U &&
+                offset <= SIZE_MAX - 8U &&
+                loong_ri(b, MINIC_LOONG_MACHINE_LI_D, LOONG_T0,
+                    (int64_t)ins->value.floating128_bits.low) &&
+                loong_frame_memory(b, MINIC_LOONG_MACHINE_ST_D, LOONG_T0,
+                    offset, sel->ctx->machine_frame->has_dynamic_stack,
+                    false) &&
+                loong_ri(b, MINIC_LOONG_MACHINE_LI_D, LOONG_T0,
+                    (int64_t)ins->value.floating128_bits.high) &&
+                loong_frame_memory(b, MINIC_LOONG_MACHINE_ST_D, LOONG_T0,
+                    offset + 8U,
+                    sel->ctx->machine_frame->has_dynamic_stack, false);
+        }
+        if ((type->value.floating.format != MINIC_CORE_FLOAT_BINARY64 &&
              type->value.floating.format != MINIC_CORE_FLOAT_BINARY32) ||
-            !loong_value_offset(sel, ins->result, &offset) ||
             !loong_ri(b, MINIC_LOONG_MACHINE_LI_D,
                 LOONG_T0, (int64_t)ins->value.floating_bits)) return false;
         return loong_frame_memory(b,

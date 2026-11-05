@@ -62,6 +62,91 @@ int main(void) {
     if (minic_aarch64_machine_source_asm_validate(&target, &ins, NULL))
         return 1;
     {
+        static char bug_table[] =
+            ".pushsection __bug_table,\"aw\";\n"
+            ".align 2;\n"
+            "14470: .long 14471f - .;\n"
+            ".pushsection .rodata.str,\"aMS\",@progbits,1;\n"
+            "14472: .string \"aarch64-fixture.c\";\n"
+            ".popsection;\n"
+            ".long 14472b - .;\n"
+            ".short 41;\n"
+            ".short 0;\n"
+            ".align 2;\n"
+            ".popsection;\n"
+            "14471: brk 0x800\n";
+        char edited[sizeof(bug_table) + 8U];
+        char *at;
+        char rendered[sizeof(bug_table) + 8U];
+        size_t count;
+        FILE *selected;
+        memset(&ins, 0, sizeof(ins));
+        ins.kind = MINIC_MACHINE_INSTRUCTION_SOURCE_ASM;
+        ins.effects = MINIC_MACHINE_EFFECT_SOURCE_ASM |
+            MINIC_MACHINE_EFFECT_VOLATILE;
+        ins.source_asm_template = bug_table;
+        ins.source_asm_length = sizeof(bug_table) - 1U;
+        if (!minic_aarch64_machine_source_asm_validate(&target, &ins, NULL))
+            return 1;
+        selected = tmpfile();
+        if (selected == NULL ||
+            !minic_aarch64_machine_source_asm_emit(selected, &fn,
+                &ins, NULL, NULL) || fflush(selected) != 0 ||
+            fseek(selected, 0L, SEEK_SET) != 0) {
+            if (selected != NULL) fclose(selected);
+            return 1;
+        }
+        count = fread(rendered, 1U, sizeof(rendered), selected);
+        fclose(selected);
+        if (count != sizeof(bug_table) ||
+            memcmp(rendered, bug_table, sizeof(bug_table) - 1U) != 0 ||
+            rendered[count - 1U] != '\n') return 1;
+        /* Do not permit modified sections, numeric labels or injected ASM. */
+        memcpy(edited, bug_table, sizeof(bug_table));
+        ins.source_asm_template = edited;
+        at = strstr(edited, "__bug_table");
+        if (at == NULL) return 1;
+        at[2] = 'x';
+        if (minic_aarch64_machine_source_asm_validate(&target, &ins, NULL))
+            return 1;
+        memcpy(edited, bug_table, sizeof(bug_table));
+        edited[1] = 'x';
+        if (minic_aarch64_machine_source_asm_validate(&target, &ins, NULL))
+            return 1;
+        memcpy(edited, bug_table, sizeof(bug_table));
+        at = strstr(edited, "aarch64-fixture.c");
+        if (at == NULL) return 1;
+        at[7] = '?';
+        if (minic_aarch64_machine_source_asm_validate(&target, &ins, NULL))
+            return 1;
+        memcpy(edited, bug_table, sizeof(bug_table));
+        at = strstr(edited, "14471f");
+        if (at == NULL) return 1;
+        at[4] = '3';
+        if (minic_aarch64_machine_source_asm_validate(&target, &ins, NULL))
+            return 1;
+        memcpy(edited, bug_table, sizeof(bug_table));
+        at = strstr(edited, ".popsection;");
+        if (at == NULL) return 1;
+        at[1] = 'x';
+        if (minic_aarch64_machine_source_asm_validate(&target, &ins, NULL))
+            return 1;
+        memcpy(edited, bug_table, sizeof(bug_table));
+        memcpy(edited + sizeof(bug_table) - 1U, "nop", 4U);
+        ins.source_asm_length += 3U;
+        if (minic_aarch64_machine_source_asm_validate(&target, &ins, NULL))
+            return 1;
+        ins.source_asm_template = bug_table;
+        ins.source_asm_length = sizeof(bug_table) - 1U;
+        ins.effects |= MINIC_MACHINE_EFFECT_COMPILER_BARRIER;
+        if (minic_aarch64_machine_source_asm_validate(&target, &ins, NULL))
+            return 1;
+        ins.effects &= ~MINIC_MACHINE_EFFECT_COMPILER_BARRIER;
+        ins.source_asm_terminates_block = true;
+        if (minic_aarch64_machine_source_asm_validate(&target, &ins, NULL))
+            return 1;
+    }
+    {
         MinicMachineOperand binding = {0};
         char source[128], assembled[256];
         static const size_t count = sizeof(aarch64_linux_tlbi_names) /
@@ -233,6 +318,6 @@ int main(void) {
         if (minic_aarch64_machine_source_asm_validate(&target,
                 &ins, NULL)) return 1;
     }
-    puts("A64_MACHINE_SOURCE_ASM=PASS exact_opaque=1 arbitrary_rejected=1 tlbi=18 source_seal_rejected=18 binding_rejected=13 injection_rejected=18 one_gp=8 physical_negative=32 injected_rejected=1");
+    puts("A64_MACHINE_SOURCE_ASM=PASS exact_opaque=1 bug_table=1 bug_table_negative=8 arbitrary_rejected=1 tlbi=18 source_seal_rejected=18 binding_rejected=13 injection_rejected=18 one_gp=8 physical_negative=32 injected_rejected=1");
     return 0;
 }

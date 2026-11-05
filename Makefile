@@ -2111,6 +2111,32 @@ check-aarch64-fixmap-opaque-asm-clone: $(MINIC_CC_BINARY)
 	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
 	sh tests/compiler/c0/probe-aarch64-fixmap-opaque-asm-clone.sh
 
+.PHONY: check-aarch64-fixmap-cross-static-const-bug-asm
+check-aarch64-fixmap-cross-static-const-bug-asm: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	sh tests/compiler/c0/probe-aarch64-fixmap-cross-static-const-bug-asm.sh
+
+# Keep source-owned BUG table sections and clone behavior in the fast gate.
+check-fast: check-aarch64-fixmap-cross-static-const-bug-asm
+
+.PHONY: check-aarch64-typed-extended-float-abi
+check-aarch64-typed-extended-float-abi: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	sh tests/compiler/c0/probe-aarch64-typed-extended-float-abi.sh
+
+check-fast: check-aarch64-typed-extended-float-abi
+
+.PHONY: check-typed-extended-float-runtime
+check-typed-extended-float-runtime: $(MINIC_CC_BINARY)
+	mkdir -p "$(BUILD_DIR)/tests"
+	TMPDIR="$(abspath $(BUILD_DIR)/tests)" \
+	  bash tests/compiler/c0/probe-typed-extended-float-runtime.sh \
+	  "$(abspath $(MINIC_CC_BINARY))"
+
+# The same typed binary128 Core value and runtime ABI must reach every
+# production backend; this short probe also runs the x86 native differential.
+check-fast: check-typed-extended-float-runtime
+
 .PHONY: check-loongarch64-immediate-core-fold
 check-loongarch64-immediate-core-fold: $(MINIC_CC_BINARY)
 	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" BUILD_DIR="$(abspath $(BUILD_DIR))" \
