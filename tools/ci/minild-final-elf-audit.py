@@ -38,7 +38,10 @@ def read_elf(path):
      phentsize, phnum, shentsize, shnum, shstrndx) = struct.unpack_from(
          header_fmt, data, 16)
     check(version == 1 and ehsize == header_size, "invalid ELF header size/version")
-    check(etype == 2, "kernel first-link output must be ET_EXEC")
+    # AArch64's real GNU Linux kernel first link uses -shared -Bsymbolic and
+    # is ET_DYN.  Other kernel targets produce ET_EXEC.  Reject ET_REL/CORE,
+    # then require exact GNU/MiniLD type identity in the differential gate.
+    check(etype in (2, 3), "kernel first-link output must be ET_EXEC or ET_DYN")
     check(0 < phnum < 65535 and 0 < shnum < 65535,
           "missing or extended ELF tables are not admitted")
     check(phentsize == (56 if is64 else 32) and
@@ -69,10 +72,28 @@ def read_elf(path):
               "PT_LOAD virtual address wraps")
         loads.append((perms, fileoff, vaddr, paddr, filesz, memsz, align))
     check(loads, "no PT_LOAD mappings")
+    entry_mapping = ("zero", 0)
     if entry:
-        check(any((perms & 1) and vaddr <= entry < vaddr + memsz
-                  for perms, _, vaddr, _, _, memsz, _ in loads),
-              "entry point is outside executable PT_LOAD")
+        if any((perms & 1) and vaddr <= entry < vaddr + memsz
+               for perms, _, vaddr, _, _, memsz, _ in loads):
+            entry_mapping = ("virtual", entry)
+        else:
+            # Linux x86's kernel image has high-half executable VMAs but a
+            # low physical boot entry: GNU e_entry equals the text PT_LOAD's
+            # p_paddr, not its p_vaddr.  Admit this only when the entry is
+            # within file-backed *executable* physical bytes of a high-half
+            # load, and map it back to the canonical virtual instruction
+            # address for comparison against MiniLD.  Ordinary user-space
+            # ET_EXEC/ET_DYN still requires a virtual executable entry.
+            mapped = [(vaddr + entry - paddr)
+                      for perms, _, vaddr, paddr, filesz, _, _ in loads
+                      if (perms & 1) and vaddr != paddr and
+                         vaddr >= (1 << ((64 if is64 else 32) - 1)) and
+                         paddr < vaddr and paddr <= entry and
+                         entry - paddr < filesz]
+            check(len(mapped) == 1,
+                  "entry point is outside executable PT_LOAD VMA/LMA")
+            entry_mapping = ("kernel-physical", mapped[0])
 
     shfmt = endian + ("IIQQQQIIQQ" if is64 else "IIIIIIIIII")
     sections = []
@@ -114,18 +135,21 @@ def read_elf(path):
                   name)
             alloc.append((name, kind, flags_sh, address, size))
     return ((elf_class, encoding, etype, machine, flags, entry),
-            Counter(alloc), len(loads))
+            Counter(alloc), len(loads), entry_mapping)
 
 
 def main():
     if len(sys.argv) != 3:
         raise SystemExit("usage: minild-final-elf-audit.py GNU.elf MiniLD.elf")
     try:
-        gnu_id, gnu_sections, gnu_loads = read_elf(sys.argv[1])
-        mini_id, mini_sections, mini_loads = read_elf(sys.argv[2])
+        gnu_id, gnu_sections, gnu_loads, gnu_entry = read_elf(sys.argv[1])
+        mini_id, mini_sections, mini_loads, mini_entry = read_elf(sys.argv[2])
         check(gnu_id == mini_id,
               "GNU/MiniLD ELF identity, ABI flags or entrypoint differs: " +
               repr((gnu_id, mini_id)))
+        check(gnu_entry == mini_entry,
+              "GNU/MiniLD executable entry interpretation differs: " +
+              repr((gnu_entry, mini_entry)))
         missing = gnu_sections - mini_sections
         extra = mini_sections - gnu_sections
         check(not missing and not extra,
@@ -133,10 +157,11 @@ def main():
               repr(list(missing.elements())[:8]) + " extra=" +
               repr(list(extra.elements())[:8]))
         print("MINILD_FINAL_ELF_AUDIT=PASS identity=exact "
-              "entrypoint=exact allocated_sections={} "
+              "entrypoint=exact entry_mapping={} allocated_sections={} "
               "gnu_loads={} mini_loads={} "
               "load_mapping=validated".format(
-                  sum(gnu_sections.values()), gnu_loads, mini_loads))
+                  gnu_entry[0], sum(gnu_sections.values()),
+                  gnu_loads, mini_loads))
     except (InvalidELF, OSError, struct.error) as exc:
         print("MINILD_FINAL_ELF_AUDIT=FAIL " + str(exc), file=sys.stderr)
         return 1

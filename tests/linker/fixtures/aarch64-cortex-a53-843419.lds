@@ -12,5 +12,6 @@ SECTIONS {
     *(.text.embedded_data)
   }
   . = ALIGN(0x1000);
-  .data : { *(.data) }
+  .rela.dyn : { *(.rela .rela*) }
+  .data : { *(.data*) }
 }

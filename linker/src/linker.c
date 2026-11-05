@@ -82,6 +82,8 @@ static int minild_link_static_pipeline(
     state.nmagic = options != NULL && options->nmagic;
     state.static_pie_requested =
         options != NULL && options->static_pie_requested;
+    state.kernel_shared_image =
+        options != NULL && options->kernel_shared_no_dynamic_relocations;
     state.fix_cortex_a53_843419 =
         options != NULL && options->fix_cortex_a53_843419;
     state.max_page_size =
@@ -141,8 +143,6 @@ static int minild_link_static_pipeline(
             have_script ? MINILD_PROJECTION_SCRIPT :
             garbage_collect ? MINILD_PROJECTION_GC :
                               MINILD_PROJECTION_MERGED) ||
-        (options != NULL && options->kernel_shared_no_dynamic_relocations &&
-         !minild_target_validate_kernel_shared_relocations(&state)) ||
         ((garbage_collect || have_script) &&
          !minild_restore_input_order(&state)) ||
         !minild_allocate_common(&state) ||
@@ -150,6 +150,8 @@ static int minild_link_static_pipeline(
          * targets reserve synthetic relocation storage, even without GC.
          * Layout still owns the final output placement decision. */
         (have_script && !minild_select_script_inputs(&state, &script)) ||
+        (state.kernel_shared_image &&
+         !minild_target_validate_kernel_shared_relocations(&state)) ||
         (garbage_collect && !minild_gc_prune_static(&state, entry_symbol)) ||
         (garbage_collect && !have_script &&
          (!minild_gc_group_default_output_classes(&state) ||
@@ -184,6 +186,7 @@ static int minild_link_static_pipeline(
     ok = true;
 
 done:
+    free(state.script_forward_guesses);
     minild_output_plan_destroy(&output_plan);
     minild_layout_destroy(&layout);
     minild_script_destroy(&script);

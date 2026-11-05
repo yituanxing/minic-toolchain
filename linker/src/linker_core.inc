@@ -226,6 +226,11 @@ typedef struct MiniLdSymbolResolver {
 
 typedef struct MiniLdTargetProfile MiniLdTargetProfile;
 
+typedef struct MiniLdScriptForwardGuess {
+    const char *name; /* borrowed from the lifetime of parsed script AST */
+    uint64_t value;
+} MiniLdScriptForwardGuess;
+
 static void symbol_resolver_destroy(MiniLdSymbolResolver *resolver);
 static void work_sections_destroy(MiniLdSectionWorkspace *work);
 
@@ -245,6 +250,18 @@ typedef struct MiniLdState {
     bool relocatable_output;
     bool nmagic;
     bool static_pie_requested;
+    /* Target-owned ET_DYN kernel image: linker emits rebasing RELA records
+     * without installing their absolute values into the image bytes. */
+    bool kernel_shared_image;
+    /* Script layout may contain a bounded forward dependency, such as an
+     * image-end expression in the calculation of page-table allocation.
+     * Only placement expressions consume estimates; completed assignments
+     * are re-evaluated and checkpointed until they stop changing. */
+    bool script_forward_allow;
+    bool script_forward_changed;
+    MiniLdScriptForwardGuess *script_forward_guesses;
+    size_t script_forward_guess_count;
+    size_t script_forward_guess_capacity;
     bool fix_cortex_a53_843419;
     uint64_t max_page_size;
     bool orphan_handling_error;

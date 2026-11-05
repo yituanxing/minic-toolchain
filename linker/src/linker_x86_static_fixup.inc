@@ -203,6 +203,7 @@ static bool minild_x86_apply_static_relocations(
         minild_x86_static_fixup_class,
         minild_x86_resolve_static_got_target,
         NULL,
+        NULL,
         NULL
     };
 

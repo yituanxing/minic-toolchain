@@ -289,22 +289,30 @@ bool minild_emulation_supports_kernel_shared_image(const char *emulation) {
 }
 
 /* AArch64's Linux kernel -shared -Bsymbolic -T link is not a user-space
- * DSO.  It has no dynamic relocation writer, so only expressions unchanged
- * by a common 4KiB-aligned rebase of S and P can be materialized statically.
+ * DSO.  Target-owned R_AARCH64_RELATIVE records in .rela.dyn preserve
+ * allocated absolute pointers without pre-applying their image-base values.
+ * Other relocations admitted here can be materialized statically because
+ * they are unchanged by a common 4KiB-aligned rebase of S and P.
  *
  *   PC-relative: (S + delta) - (P + delta) = S - P, including ADR/LD/branch
  *                immediates and full-width PREL data fields.
  *   Page-relative: PAGE(S + delta) - PAGE(P + delta) = PAGE(S) - PAGE(P).
  *   Low 12:      (S + delta) & 0xfff = S & 0xfff.
  *
- * Absolute pointer/data MOVW, GOT/TLS and static resolver relocations need
- * preserved runtime .rela.dyn (or an equivalent target-owned relocation
- * engine), which this mode cannot silently synthesize. Keep those rejected.
+ * MOVW, GOT/TLS and static resolver relocations require their own runtime
+ * handling and must not silently be accepted as ordinary static fixups.
  * This policy applies only to the specifically admitted kernel ET_DYN mode. */
+#ifndef R_AARCH64_GOTPCREL32
+#define R_AARCH64_GOTPCREL32 315
+#endif
 static bool minild_aarch64_kernel_rebase_invariant(uint32_t type) {
     switch (type) {
     /* No value, or a full-width PC-relative scalar. */
     case R_AARCH64_NONE:
+    /* Converted to R_AARCH64_RELATIVE where the target is image-relative. */
+    case R_AARCH64_ABS64:
+    /* Post-layout checked: only image-invariant absolute values are legal. */
+    case R_AARCH64_ABS32:
     case R_AARCH64_PREL32:
     case R_AARCH64_PREL64:
     /* PC-relative and page-relative A64 instruction fields. */
@@ -323,6 +331,16 @@ static bool minild_aarch64_kernel_rebase_invariant(uint32_t type) {
     case R_AARCH64_LDST32_ABS_LO12_NC:
     case R_AARCH64_LDST64_ABS_LO12_NC:
     case R_AARCH64_LDST128_ABS_LO12_NC:
+    /* GOT address calculations are invariant under common rebasing; the
+     * actual GOT pointer is separately emitted as R_AARCH64_RELATIVE. */
+    case R_AARCH64_GOTREL64:
+    case R_AARCH64_GOTREL32:
+    case R_AARCH64_GOT_LD_PREL19:
+    case R_AARCH64_LD64_GOTOFF_LO15:
+    case R_AARCH64_ADR_GOT_PAGE:
+    case R_AARCH64_LD64_GOT_LO12_NC:
+    case R_AARCH64_LD64_GOTPAGE_LO15:
+    case R_AARCH64_GOTPCREL32:
         return true;
     default:
         return false;
@@ -347,10 +365,19 @@ static bool minild_target_validate_kernel_shared_relocations(
         if ((state->work.sections[reloc->section].flags & SHF_ALLOC) == 0U) {
             continue;
         }
+        if (state->work.sections[reloc->section].gc_discarded ||
+            state->work.sections[reloc->section].script_discard) {
+            continue;
+        }
         if (!minild_aarch64_kernel_rebase_invariant(type)) {
             fprintf(state->diagnostics,
-                    "minic-ld: unsupported-kernel-shared-runtime-relocation:%u\n",
-                    (unsigned)type);
+                    "minic-ld: unsupported-kernel-shared-runtime-relocation:%u"
+                    ":source=%s:target=%s:offset=0x%llx\n",
+                    (unsigned)type,
+                    state->work.sections[reloc->section].name,
+                    reloc->symbol < state->resolver.count
+                        ? state->resolver.entries[reloc->symbol].name : "<none>",
+                    (unsigned long long)reloc->offset);
             return false;
         }
     }

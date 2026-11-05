@@ -184,7 +184,6 @@ static bool minild_static_program_plan_build(
                 uint32_t combined_flags = prev->flags | next->flags;
                 uint64_t page_size = minild_static_page_size(state);
                 bool ordered, same_page, linear_gap, plain_contiguous;
-                bool safe_permissions;
 
                 if (prev->vaddr > UINT64_MAX - prev->mem_size ||
                     prev->laddr > UINT64_MAX - prev->mem_size ||
@@ -230,23 +229,17 @@ static bool minild_static_program_plan_build(
                       prev->mem_size <= UINT64_MAX - vgap - next->file_size));
                 plain_contiguous = linear_gap && vgap == 0U &&
                     prev->file_size == prev->mem_size;
-                /* Do not create an RWX load by merging an RX section with
-                 * an independent RW section. If a member is already RWX,
-                 * however, coalescing it with adjacent sections in the
-                 * same mapped page cannot introduce a new W+X page.
-                 * Linux .init.pi is explicitly WAX and may share its page
-                 * with its preceding RW initialization metadata. */
-                safe_permissions =
-                    (combined_flags & (PF_W | PF_X)) != (PF_W | PF_X) ||
-                    (prev->flags & (PF_W | PF_X)) == (PF_W | PF_X) ||
-                    (next->flags & (PF_W | PF_X)) == (PF_W | PF_X);
-
                 /* A loader maps PT_LOAD at page granularity.  Separate RX
                  * text and R rodata mappings inside one page would let the
                  * later mapping remove execute permission from _start.
                  * Preserve distinct protection at page boundaries, but
-                 * coalesce same-page spans only when file/VMA/LMA advance
-                 * together (including zero-filled alignment holes).
+                 * coalesce affine same-page spans even when their union is
+                 * RWX.  GNU BFD does this for scripts that place an RW
+                 * fragment immediately before an RX fragment on the same
+                 * load page (notably the AArch64 Linux init region); refusing
+                 * the union would instead emit overlapping LOAD mappings
+                 * with incompatible permissions.  The page affinity and
+                 * file/VMA/LMA relation are mandatory, not permission flags.
                  * A BSS tail is padded with real zero file bytes only if a
                  * later file-backed section re-enters the same load page.
                  * Non-linear AT() mapping cannot share that load.
@@ -255,7 +248,7 @@ static bool minild_static_program_plan_build(
                 if ((state->nmagic && plain_contiguous) ||
                     (!state->nmagic &&
                      ((plain_contiguous && prev->flags == next->flags) ||
-                      (same_page && linear_gap && safe_permissions)))) {
+                      (same_page && linear_gap)))) {
                     if (next->file_size != 0U) {
                         prev->file_size = prev->mem_size + vgap +
                                           next->file_size;

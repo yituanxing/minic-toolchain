@@ -159,20 +159,37 @@ print('MINILD_AARCH64_A53_843419=PASS kernel_et_dyn=1 static_exec=1 '
       'writes_adrp_excluded=1 reloc_migrated=1 branch_roundtrip=4')
 PY
 
-# A full absolute pointer would change when the ET_DYN kernel moves, so it
-# must still fail the target's no-runtime-dynamic-relocations allowlist.
+# An allocated absolute pointer requires a runtime relocation under KASLR;
+# --no-apply-dynamic-relocs reserves R_AARCH64_RELATIVE without altering its
+# original input slot.  The erratum patch itself remains independent.
 "$MINIAS" --target=aarch64 -march=armv8-a -mabi=lp64 \
     -o "$work/forbidden.o" \
     "$repo/tests/linker/fixtures/aarch64-cortex-a53-843419-abs64.S"
-if "$MINILD" "${kernel_args[@]}" --fix-cortex-a53-843419 \
-    -o "$work/forbidden.elf" "$work/erratum.o" "$work/forbidden.o" \
-    >"$work/forbidden.log" 2>&1; then
-    echo 'MINILD_AARCH64_A53_843419=FAIL absolute_pointer_accepted' >&2
-    exit 1
-fi
-grep -Fq 'unsupported-kernel-shared-runtime-relocation:257' \
-    "$work/forbidden.log"
-echo 'MINILD_AARCH64_A53_843419=PASS reject_abs64=1'
+"$MINILD" "${kernel_args[@]}" --fix-cortex-a53-843419 \
+    -o "$work/relative.elf" "$work/erratum.o" "$work/forbidden.o" \
+    >"$work/relative.log" 2>&1
+readelf -Wr "$work/relative.elf" >"$work/relative.relocs"
+grep -Fq 'R_AARCH64_RELATIVE' "$work/relative.relocs"
+python3 - "$work/relative.elf" <<'PY_REBASE'
+import struct,sys
+b=open(sys.argv[1],'rb').read()
+off=struct.unpack_from('<Q',b,40)[0]
+num,shstrings=struct.unpack_from('<HH',b,60)
+sections=[struct.unpack_from('<IIQQQQIIQQ',b,off+i*64) for i in range(num)]
+pool=b[sections[shstrings][4]:sections[shstrings][4]+sections[shstrings][5]]
+name=lambda sec: pool[sec[0]:pool.index(0,sec[0])].decode()
+s={name(sec):sec for sec in sections}
+rela=s['.rela.dyn']
+data=s['.data']
+assert rela[5]==24
+ro,info,addend=struct.unpack_from('<QQq',b,rela[4])
+assert info&0xffffffff==1027 and info>>32==0
+assert data[3]<=ro<=(data[3]+data[5]-8)
+ptr=data[4]+ro-data[3]
+assert b[ptr:ptr+8]==b'\0'*8
+assert addend>=s['.text'][3]
+print('MINILD_AARCH64_A53_843419=PASS relative_pointer=1 deferred_slot=1')
+PY_REBASE
 
 # The script-generated .pad is absent on trial #1 and appears only AFTER the
 # target grows .text by appending an erratum island.  A fixed-point coordinator

@@ -178,22 +178,14 @@ LDS
     -o "$work/script-page.o" "$work/script-page.s"
 "$MINILD" -melf64lriscv -T "$work/script-page.lds" \
     -o "$work/script-page.elf" "$work/script-page.o"
-if "$MINILD" -melf64lriscv -T "$work/script-page-wx.lds" \
-    -o "$work/script-page-wx.elf" "$work/script-page.o" \
-    >"$work/script-page-wx.stdout" 2>"$work/script-page-wx.stderr"; then
-    echo 'MINILD_SEGMENT_CHECK=FAIL same-page-RX-RW unexpectedly-accepted' >&2
-    exit 1
-fi
-if ! grep -q 'unsafe-script-load-page-overlap' "$work/script-page-wx.stderr"; then
-    echo 'MINILD_SEGMENT_CHECK=FAIL same-page-RX-RW missing-diagnostic' >&2
-    exit 1
-fi
+"$MINILD" -melf64lriscv -T "$work/script-page-wx.lds" \
+    -o "$work/script-page-wx.elf" "$work/script-page.o"
 
-# Linux .init.pi deliberately collects writable executable pieces in one
-# output area.  When one side *already* requires RWX, joining an adjacent RW
-# section on that very page does not invent an RWX permission class.  This
-# differs from the RX+RW negative case above, where neither side requested
-# RWX and the linker must reject an implicit permission escalation.
+# Linux's AArch64 init range deliberately places writable .got metadata
+# immediately before executable .init.text within the same loader page.
+# GNU BFD merges that page into an RWE PT_LOAD, including cases where neither
+# input section independently has W+X.  Disjoint PT_LOADs with conflicting
+# flags would instead remap part of executable memory.
 cat >"$work/script-page-existing-rwx.s" <<'ASM'
 .section .pi.rw,"aw",@progbits
 .globl pi_rw_value
@@ -455,7 +447,20 @@ assert rodata[4] % 4096 == rodata[3] % 4096 and (
     loads[2][2] % 4096 == loads[2][3] % 4096), (
     'script output sections must have mmap-compatible file addresses', rodata, data, bss)
 print('MINILD_SEGMENT_CHECK=PASS mode=script-same-page RX+R=coalesced '
-      'RW=separate-page BSS=NOBITS-only W+X=fail-closed GNU+QEMU=if-available')
+      'RW=separate-page BSS=NOBITS-only GNU+QEMU=if-available')
+
+
+raw, ph, names = inspect('script-page-wx.elf', 2)
+loads = [p for p in ph if p[0] == 1]
+assert len(loads) == 1 and loads[0][1] == 7, (
+    'same-page RX+RW needs one RWE mapping', ph)
+for name in ('.text', '.data', '.rodata', '.bss'):
+    assert covers(loads[0], one(names, name)), (
+        'same-page RX+RW section not in unified LOAD', name, loads)
+assert loads[0][2] % 4096 == loads[0][3] % 4096, (
+    'same-page RWE file/VMA congruence', loads)
+print('MINILD_SEGMENT_CHECK=PASS mode=script-same-page RX+RW=RWE '
+      'one-mapping page-compatible')
 
 
 raw, ph, names = inspect('script-page-existing-rwx.elf', 2)
@@ -484,7 +489,7 @@ if (base / 'script-page-existing-rwx-gnu.elf').is_file():
     assert gnu_raw[gnu_rw[4]:gnu_rw[4] + 8] == raw[rw[4]:rw[4] + 8]
     assert gnu_raw[gnu_rwx[4]:gnu_rwx[4] + 8] == raw[rwx[4]:rwx[4] + 8]
 print('MINILD_SEGMENT_CHECK=PASS mode=script-existing-RWX '
-      'RW+RWX=same-page-coalesced RX+RW=still-rejected GNU+QEMU=if-available')
+      'RW+RWX=same-page-coalesced GNU+QEMU=if-available')
 
 
 raw, ph, names = inspect('static-default.elf', 2)

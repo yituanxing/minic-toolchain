@@ -266,6 +266,10 @@ static bool minild_output_plan_build(const MiniLdState *state,
         if (part->align > output->align) {
             output->align = part->align;
         }
+        if (command != SIZE_MAX && layout->script_outputs != NULL &&
+            layout->script_outputs[command].align > output->align) {
+            output->align = layout->script_outputs[command].align;
+        }
         if (part->size == 0U && output->have_content) {
             continue;
         }

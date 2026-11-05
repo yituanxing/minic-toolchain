@@ -6,6 +6,8 @@ static bool minild_riscv_apply_static_relocations(
     const MiniLdStaticTargetPlan *plan) {
     const MiniLdRiscvStaticGot *got = plan->target_data;
     MiniLdTargetRelocPairs pairs;
+    uint64_t gp_address = 0U;
+    bool have_gp;
     size_t i;
 
     if (got == NULL) {
@@ -16,6 +18,7 @@ static bool minild_riscv_apply_static_relocations(
                                        false, state->diagnostics)) {
         return false;
     }
+    have_gp = minild_rv_relax_gp_address(state, layout, &gp_address);
 
     /* Keep input order for arithmetic ADD/SUB/SET and absolute writes.
      * Instruction encoding and HI20 pairing remain target-local. */
@@ -43,6 +46,39 @@ static bool minild_riscv_apply_static_relocations(
             goto fail;
         }
         target = minild_target_signed_bits(operands.target_bits);
+
+        if (reloc->type == R_RISCV_GPREL_I ||
+            reloc->type == R_RISCV_GPREL_S) {
+            uint32_t insn;
+            const int64_t absolute = minild_target_signed_bits(
+                operands.target_bits);
+            const int64_t delta = minild_target_signed_bits(
+                operands.target_bits - gp_address);
+            const bool use_zero = absolute >= -2048 && absolute <= 2047;
+            const int64_t immediate = use_zero ? absolute : delta;
+
+            if ((!use_zero &&
+                 (!have_gp || delta < -2048 || delta > 2047)) ||
+                section->type == SHT_NOBITS || reloc->offset > SIZE_MAX ||
+                !range_ok((size_t)reloc->offset, 4U, section->size)) {
+                fprintf(state->diagnostics,
+                        "minic-ld: riscv-gprel-range-or-base:%s:%llu\n",
+                        section->name, (unsigned long long)reloc->offset);
+                goto fail;
+            }
+            insn = load_u32le(section->data + (size_t)reloc->offset);
+            insn = (insn & ~UINT32_C(0x000f8000)) |
+                   (use_zero ? 0U : UINT32_C(0x00018000)); /* x0 or gp */
+            store_u32le(section->data + (size_t)reloc->offset, insn);
+            if (!(reloc->type == R_RISCV_GPREL_I
+                      ? static_patch_itype(section, reloc->offset,
+                                           immediate, state->diagnostics)
+                      : static_patch_stype(section, reloc->offset,
+                                           immediate, state->diagnostics))) {
+                goto fail;
+            }
+            continue;
+        }
 
         /* Local-exec TLS relocations encode S - TP (+ A), not S + A.  The
          * TPREL_ADD record is a non-mutating binding marker for the add tp

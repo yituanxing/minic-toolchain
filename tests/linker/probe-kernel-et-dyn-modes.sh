@@ -86,6 +86,7 @@ for spec in \
         "  . = $base;" \
         '  .text : { *(.text.entry) }' \
         '  . = ALIGN(0x1000);' \
+        '  .rela.dyn : { __rela_start = .; *(.rela .rela*); __rela_end = .; }' \
         '  .data : { *(.data.ptr) }' \
         '}' >"$work/$arch/vmlinux.lds"
 
@@ -136,16 +137,38 @@ for spec in \
                 -o "$work/$arch/kernel.elf" "$work/$arch/entry.o" \
                 >"$work/$arch/kernel.log" 2>&1 || die kernel_shared
             check_elf "$work/$arch/kernel.elf" "$machine" dyn
-            if "$MINILD" -m "$emulation" -shared -Bsymbolic \
+            "$MINILD" -m "$emulation" -shared -Bsymbolic \
                     --no-apply-dynamic-relocs -T "$work/$arch/vmlinux.lds" \
-                    -o "$work/$arch/must-reject.elf" \
+                    -o "$work/$arch/kernel-relative.elf" \
                     "$work/$arch/entry.o" "$work/$arch/pointer.o" \
-                    >"$work/$arch/reject.log" 2>&1; then
-                die unsafe_abs64_accepted
-            fi
-            grep -q 'unsupported-kernel-shared-runtime-relocation' \
-                "$work/$arch/reject.log" || die missing_relocation_diagnostic
-            [[ ! -e "$work/$arch/must-reject.elf" ]] || die rejected_elf_written
+                    >"$work/$arch/kernel-relative.log" 2>&1 ||
+                die kernel_relative_conversion
+            check_elf "$work/$arch/kernel-relative.elf" "$machine" dyn
+            python3 - "$work/$arch/kernel-relative.elf" "$base" <<'PY_RELATIVE'
+import struct,sys
+b=open(sys.argv[1],'rb').read()
+base=int(sys.argv[2],0)
+shoff=struct.unpack_from('<Q',b,40)[0]
+shentsize,shnum,shstridx=struct.unpack_from('<HHH',b,58)
+headers=[struct.unpack_from('<IIQQQQIIQQ',b,shoff+i*shentsize)
+         for i in range(shnum)]
+names=headers[shstridx]
+strtab=b[names[4]:names[4]+names[5]]
+def section_name(header):
+    start=header[0]
+    return strtab[start:strtab.find(b'\0',start)].decode()
+sections={section_name(h):h for h in headers}
+assert '.rela.dyn' in sections and '.data' in sections
+rela=sections['.rela.dyn']
+assert rela[1]==4 and rela[5]==24, 'expected exactly one RELA'
+roff,info,addend=struct.unpack_from('<QQq',b,rela[4])
+assert info & 0xffffffff == 1027 and info>>32==0, 'R_AARCH64_RELATIVE'
+data=sections['.data']
+assert roff==data[3], 'r_offset must address pointer slot'
+assert addend==base, 'r_addend must be the image target address'
+assert b[data[4]:data[4]+8]==b'\0'*8, '--no-apply must keep original data bytes'
+print('MINILD_KERNEL_ET_DYN=PASS kernel_AARCH64_RELATIVE=1 deferred_input_slot=1')
+PY_RELATIVE
             ;;
     esac
     case "$arch" in
@@ -174,4 +197,4 @@ if "$MINILD" -m elf64lriscv -shared -Bsymbolic \
         >"$work/rv64/ordinary-shared.log" 2>&1; then
     die non_aarch_kernel_shared_accepted
 fi
-echo 'MINILD_KERNEL_ET_DYN=COMPLETE script_all_targets=5/5 kernel_modes=3/3 unsafe_relocations=REJECT'
+echo 'MINILD_KERNEL_ET_DYN=COMPLETE script_all_targets=5/5 kernel_modes=3/3 aarch64_runtime_rebase=RELA'

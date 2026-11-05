@@ -51,9 +51,50 @@ typedef struct MiniLdAarch64StaticGot {
     size_t ifunc_got_section;
     size_t ifunc_rela_section;
     size_t ifunc_count;
+    /* Kernel ET_DYN KASLR table; independent from static-IFUNC .rela.plt. */
+    size_t kernel_rela_section;
+    size_t kernel_relative_reserved_count;
     bool present;
     MiniLdAarch64ErratumPlan erratum843419;
 } MiniLdAarch64StaticGot;
+
+typedef struct MiniLdAarch64KernelRelativeRecord {
+    uint64_t place;
+    uint64_t addend;
+} MiniLdAarch64KernelRelativeRecord;
+
+static int minild_aarch64_kernel_relative_compare(const void *a,
+                                                   const void *b) {
+    const MiniLdAarch64KernelRelativeRecord *left = a;
+    const MiniLdAarch64KernelRelativeRecord *right = b;
+
+    if (left->place < right->place) return -1;
+    if (left->place > right->place) return 1;
+    return 0;
+}
+
+/* The image's allocated definitions move with the KASLR slide; SHN_ABS
+ * constants, discarded/non-allocated sections and undefined weak zero do
+ * not.  Both RELA creation and source-byte retention share this predicate. */
+static bool minild_aarch64_kernel_symbol_rebases(
+    const MiniLdState *state, size_t symbol_index) {
+    const MiniLdResolvedSymbol *symbol;
+
+    if (!state->kernel_shared_image ||
+        symbol_index >= state->resolver.count) {
+        return false;
+    }
+    symbol = &state->resolver.entries[symbol_index];
+    return symbol->section >= 0 &&
+           (size_t)symbol->section < state->work.count &&
+           (state->work.sections[symbol->section].flags & SHF_ALLOC) != 0U;
+}
+
+static bool minild_aarch64_kernel_relative_target(
+    const MiniLdState *state, const MiniLdReloc *reloc) {
+    return reloc->type == R_AARCH64_ABS64 &&
+           minild_aarch64_kernel_symbol_rebases(state, reloc->symbol);
+}
 
 static bool minild_aarch64_static_uses_got(uint32_t type);
 
@@ -199,6 +240,7 @@ static bool minild_aarch64_reserve_static_relocations(
     got->ifunc_stub_section = SIZE_MAX;
     got->ifunc_got_section = SIZE_MAX;
     got->ifunc_rela_section = SIZE_MAX;
+    got->kernel_rela_section = SIZE_MAX;
     got->symbol_count = state->resolver.count;
     if (got->symbol_count > SIZE_MAX / sizeof(*got->slot_offsets)) {
         fprintf(state->diagnostics,
@@ -321,6 +363,52 @@ static bool minild_aarch64_reserve_static_relocations(
         }
         offsets[reloc->symbol] = aligned;
     }
+    if (state->kernel_shared_image) {
+        MiniLdSection *rela;
+
+        /* Reserve after target GOT slot deduplication. Both direct ABS64
+         * pointers and GOT-owned pointers need KASLR RELATIVE slots.  The
+         * future script may turn some ABS64 references into absolute
+         * constants, leaving harmless R_NONE capacity holes. */
+        for (i = 0U; i < state->relocations.count; ++i) {
+            const MiniLdReloc *reloc = &state->relocations.entries[i];
+            const MiniLdSection *source;
+
+            if (reloc->type != R_AARCH64_ABS64) continue;
+            if (reloc->section >= state->work.count) {
+                fprintf(state->diagnostics,
+                        "minic-ld: aarch64-kernel-relative-invalid-source\n");
+                return false;
+            }
+            source = &state->work.sections[reloc->section];
+            if ((source->flags & SHF_ALLOC) != 0U &&
+                !source->gc_discarded && !source->script_discard) {
+                ++got->kernel_relative_reserved_count;
+            }
+        }
+        for (i = 0U; i < got->symbol_count; ++i) {
+            if (got->slot_offsets[i] != SIZE_MAX) {
+                ++got->kernel_relative_reserved_count;
+            }
+        }
+        if (got->kernel_relative_reserved_count != 0U) {
+            if (got->kernel_relative_reserved_count >
+                    SIZE_MAX / sizeof(Elf64_Rela) ||
+                !find_or_add_section(state, ".rela.dyn", SHT_RELA,
+                                     SHF_ALLOC, 8U, sizeof(Elf64_Rela),
+                                     &got->kernel_rela_section)) {
+                fprintf(state->diagnostics,
+                        "minic-ld: aarch64-kernel-relative-reserve-overflow\n");
+                return false;
+            }
+            rela = &state->work.sections[got->kernel_rela_section];
+            rela->gc_discarded = false;
+            if (!section_append_zero(rela,
+                    got->kernel_relative_reserved_count * sizeof(Elf64_Rela))) {
+                return false;
+            }
+        }
+    }
     return true;
 }
 
@@ -338,6 +426,128 @@ static bool minild_aarch64_fill_static_relocations(
     if (layout == NULL || layout->work == NULL ||
         (got->present && got->section >= state->work.count)) {
         return false;
+    }
+    if (state->kernel_shared_image) {
+        /* A 32-bit absolute field cannot encode a rebased 64-bit address.
+         * Linux's arm64 head emits ABS32 for script-computed image size and
+         * flags; those absolute constants are not runtime relocations. */
+        for (i = 0U; i < state->relocations.count; ++i) {
+            const MiniLdReloc *reloc = &state->relocations.entries[i];
+            MiniLdSection *source;
+            bool live;
+
+            if (reloc->type != R_AARCH64_ABS32) continue;
+            if (!minild_static_reloc_source(
+                    state, layout, reloc,
+                    "aarch64-kernel-abs32-invalid-source", &source, &live)) {
+                return false;
+            }
+            if (live && (source->flags & SHF_ALLOC) != 0U &&
+                reloc->symbol < state->resolver.count) {
+                const MiniLdResolvedSymbol *symbol =
+                    &state->resolver.entries[reloc->symbol];
+
+                if (symbol->section >= 0 &&
+                    (size_t)symbol->section < state->work.count &&
+                    (state->work.sections[symbol->section].flags & SHF_ALLOC) != 0U) {
+                    fprintf(state->diagnostics,
+                            "minic-ld: unsupported-aarch64-kernel-rebased-abs32:%s\n",
+                            symbol->name);
+                    return false;
+                }
+            }
+        }
+    }
+    if (got->kernel_relative_reserved_count != 0U) {
+        MiniLdAarch64KernelRelativeRecord *records;
+        MiniLdSection *rela;
+        size_t count = 0U;
+
+        if (got->kernel_rela_section >= state->work.count) {
+            return false;
+        }
+        rela = &state->work.sections[got->kernel_rela_section];
+        records = malloc(got->kernel_relative_reserved_count *
+                         sizeof(*records));
+        if (records == NULL) {
+            fprintf(state->diagnostics,
+                    "minic-ld: out-of-memory:aarch64-kernel-relative-records\n");
+            return false;
+        }
+        for (i = 0U; i < state->relocations.count; ++i) {
+            const MiniLdReloc *reloc = &state->relocations.entries[i];
+            MiniLdStaticRelocOperands operands;
+            MiniLdSection *source;
+            bool live;
+
+            if (!minild_aarch64_kernel_relative_target(state, reloc)) {
+                continue;
+            }
+            if (!minild_static_reloc_source(state, layout, reloc,
+                                           "aarch64-kernel-relative-source",
+                                           &source, &live)) {
+                free(records);
+                return false;
+            }
+            if (!live || (source->flags & SHF_ALLOC) == 0U) {
+                continue;
+            }
+            if (source->type == SHT_NOBITS ||
+                reloc->offset > SIZE_MAX ||
+                !range_ok((size_t)reloc->offset, 8U, source->size) ||
+                !minild_static_reloc_operands(
+                    state, layout, reloc,
+                    "aarch64-kernel-relative-place-overflow", &operands) ||
+                count >= got->kernel_relative_reserved_count) {
+                free(records);
+                fprintf(state->diagnostics,
+                        "minic-ld: aarch64-kernel-relative-capacity-or-source\n");
+                return false;
+            }
+            records[count].place = operands.place;
+            records[count].addend = operands.target_bits;
+            ++count;
+        }
+        if (got->present && got->section < state->work.count) {
+            uint64_t got_base = layout->work[got->section].vaddr;
+
+            for (i = 0U; i < got->symbol_count; ++i) {
+                uint64_t target;
+                size_t slot_offset = got->slot_offsets[i];
+
+                if (slot_offset == SIZE_MAX ||
+                    !minild_aarch64_kernel_symbol_rebases(state, i)) {
+                    continue;
+                }
+                if (count >= got->kernel_relative_reserved_count ||
+                    slot_offset > UINT64_MAX - got_base ||
+                    !minild_layout_resolve_symbol(state, layout, i,
+                                                  &target)) {
+                    free(records);
+                    fprintf(state->diagnostics,
+                            "minic-ld: aarch64-kernel-got-relative-invalid\n");
+                    return false;
+                }
+                records[count].place = got_base + (uint64_t)slot_offset;
+                records[count].addend = target;
+                ++count;
+            }
+        }
+        qsort(records, count, sizeof(*records),
+              minild_aarch64_kernel_relative_compare);
+        for (i = 0U; i < count; ++i) {
+            size_t offset = i * sizeof(Elf64_Rela);
+
+            if (!range_ok(offset, sizeof(Elf64_Rela), rela->size)) {
+                free(records);
+                return false;
+            }
+            store_u64le(rela->data + offset, records[i].place);
+            store_u64le(rela->data + offset + 8U,
+                        ELF64_R_INFO(0U, R_AARCH64_RELATIVE));
+            store_u64le(rela->data + offset + 16U, records[i].addend);
+        }
+        free(records);
     }
     if (got->present) {
         section = &state->work.sections[got->section];
@@ -364,6 +574,12 @@ static bool minild_aarch64_fill_static_relocations(
                 } else if (!minild_layout_resolve_symbol(state, layout,
                                                           i, &value)) {
                     return false;
+                }
+                if (!tls_ie && state->kernel_shared_image &&
+                    minild_aarch64_kernel_symbol_rebases(state, i)) {
+                    /* --no-apply-dynamic-relocs: RELATIVE record owns this
+                     * pointer; leave the input zero in the GOT slot. */
+                    continue;
                 }
                 if (!range_ok(offset, 8U, section->size)) {
                     fprintf(state->diagnostics,

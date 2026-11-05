@@ -139,11 +139,18 @@ static bool minild_aarch64_843419_sequence(uint32_t adrp, uint32_t second,
 }
 
 static bool minild_aarch64_843419_mapping(const char *name, bool *code) {
-    if (name[0] != '$' || (name[1] != 'x' && name[1] != 'd') ||
-        (name[2] != '\0' && name[2] != '.')) {
+    const char *marker = strrchr(name, '$');
+
+    /* Kernel PI objects run `objcopy --prefix-symbols`, which renames
+     * assembler mapping labels like $x to __pi_$x. The last dollar marker
+     * still encodes the same code/data boundary; do not accidentally mark
+     * the entire executable section as unknown (or blindly all code). */
+    if (marker == NULL ||
+        (marker[1] != 'x' && marker[1] != 'd') ||
+        (marker[2] != '\0' && marker[2] != '.')) {
         return false;
     }
-    *code = name[1] == 'x';
+    *code = marker[1] == 'x';
     return true;
 }
 
@@ -215,6 +222,7 @@ static bool minild_aarch64_843419_prepare(MiniLdState *state,
 
         if (sym->section < 0 ||
             ELF64_ST_BIND(sym->info) != STB_LOCAL ||
+            ELF64_ST_TYPE(sym->info) != STT_NOTYPE ||
             !minild_aarch64_843419_mapping(sym->name, &code)) {
             continue;
         }
@@ -452,10 +460,47 @@ static bool minild_aarch64_replan_static_layout(
              * An input executable with unknown code-vs-data boundaries
              * cannot honestly be certified free of the A53 hazard. */
             if (errata->input_owned[section_index] != 0U) {
+                size_t input_id;
+
                 fprintf(state->diagnostics,
                         "minic-ld: aarch64-843419-missing-code-mapping:%s\n",
                         section->input_name != NULL ?
                             section->input_name : section->name);
+                for (input_id = 0U;
+                     input_id < state->work.placement_count; ++input_id) {
+                    const MiniLdInputSection *input;
+                    const MiniLdInputFile *file;
+                    size_t symbol_id, mapping_count = 0U;
+
+                    if (state->work.placements[input_id].work_section !=
+                        section_index) {
+                        continue;
+                    }
+                    input = &state->inputs.sections[input_id];
+                    if (input->file >= state->inputs.file_count) {
+                        fprintf(state->diagnostics,
+                                "minic-ld: aarch64-843419-invalid-input-file:%zu\n",
+                                input->file);
+                        break;
+                    }
+                    file = &state->inputs.files[input->file];
+                    for (symbol_id = file->first_symbol;
+                         symbol_id < file->first_symbol + file->symbol_count;
+                         ++symbol_id) {
+                        const MiniLdInputSymbol *sym =
+                            &state->inputs.symbols[symbol_id];
+                        bool code;
+
+                        if (sym->input_section == input_id &&
+                            minild_aarch64_843419_mapping(sym->name, &code)) {
+                            ++mapping_count;
+                        }
+                    }
+                    fprintf(state->diagnostics,
+                            "minic-ld: aarch64-843419-mapping-source:%s:%s:count=%zu\n",
+                            file->path, input->name, mapping_count);
+                    break;
+                }
                 return false;
             }
             continue;

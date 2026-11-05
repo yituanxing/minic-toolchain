@@ -358,6 +358,8 @@ static MiniLdTargetRelocClass minild_target_reloc_class(uint32_t type) {
     case R_RISCV_64:
         return MINILD_TARGET_RELOC_ABS64;
     case R_RISCV_PCREL_HI20:
+    case R_RISCV_GPREL_I:
+    case R_RISCV_GPREL_S:
     case R_RISCV_HI20:
     case R_RISCV_LO12_I:
     case R_RISCV_LO12_S:

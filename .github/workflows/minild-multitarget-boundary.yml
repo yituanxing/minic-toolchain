@@ -68,7 +68,11 @@ jobs:
             check-minild-static-script-discard-reloc-reserve \
             check-minild-script-output-entsize-coalescing \
             check-minild-script-top-level-empty-statements \
+            check-minild-script-forward-placement-fixedpoint \
             check-minild-static-merge-input-pool-identity \
+            check-minild-static-merge-bfd-order \
+            check-minild-synthetic-byte-phdr-flags \
+            check-minild-static-script-load-page-coalesce \
             check-minild-static-nonalloc-relocations \
             check-minild-x86-crt-got-relax \
             check-minild-target-default-symbols \
@@ -76,9 +80,11 @@ jobs:
             check-minild-riscv-abi-integration \
             check-minild-riscv-final-fixup-parity \
             check-minild-riscv-u-type-boundary \
+            check-minild-riscv-gp-align-relax \
             check-minild-rv32-addsub64 \
             check-minild-segment-plan \
             check-minild-final-elf-audit \
+            check-minild-final-elf-kernel-entry \
             check-minild-script-merge-section-flags \
             check-minild-script-ro-after-init \
             check-minild-script-mixed-bss \

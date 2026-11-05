@@ -35,7 +35,29 @@ typedef struct MiniLdMergeInputAtom {
     size_t source;
     size_t length;
     size_t alignment;
+    size_t canonical;
 } MiniLdMergeInputAtom;
+
+/* GNU BFD's merge.c first de-duplicates *whole* input atoms, chooses suffix
+ * owners with a reverse-lexicographic ordering, and only then packs the
+ * surviving atoms in first-encounter order.  The suffix-sort order is not
+ * the output-byte order. */
+typedef struct MiniLdMergeUniqueAtom {
+    size_t section;
+    size_t source;
+    size_t length;
+    size_t alignment;
+    size_t destination;
+    size_t suffix_owner;
+} MiniLdMergeUniqueAtom;
+
+typedef struct MiniLdMergeSortedAtom {
+    const unsigned char *bytes;
+    size_t length;
+    size_t alignment;
+    size_t tail_mod;
+    size_t canonical;
+} MiniLdMergeSortedAtom;
 
 typedef struct MiniLdMergeGroup {
     size_t leader;
@@ -54,6 +76,9 @@ typedef struct MiniLdMergeGroup {
     MiniLdMergeInputAtom *atoms;
     size_t atom_count;
     size_t atom_capacity;
+    MiniLdMergeUniqueAtom *unique;
+    size_t unique_count;
+    bool pad_trailing;
 } MiniLdMergeGroup;
 
 /* Build a complete pool before folding it.  Online insertion misses the
@@ -79,25 +104,27 @@ static bool minild_merge_gather_atom(MiniLdMergeGroup *group,
         group->atom_capacity = capacity;
     }
     group->atoms[group->atom_count++] =
-        (MiniLdMergeInputAtom){section, source, length, alignment};
+        (MiniLdMergeInputAtom){section, source, length, alignment, SIZE_MAX};
     return true;
 }
 
-static int minild_merge_atom_compare(const void *left, const void *right) {
-    const MiniLdMergeInputAtom *a = left, *b = right;
-    if (a->length != b->length) {
-        return a->length > b->length ? -1 : 1;
+static int minild_merge_reverse_atom_compare(const void *left,
+                                              const void *right) {
+    const MiniLdMergeSortedAtom *a = left, *b = right;
+    size_t i;
+    size_t limit = a->length < b->length ? a->length : b->length;
+    if (a->tail_mod != b->tail_mod) {
+        return a->tail_mod < b->tail_mod ? -1 : 1;
     }
-    if (a->alignment != b->alignment) {
-        return a->alignment > b->alignment ? -1 : 1;
+    for (i = 0U; i < limit; ++i) {
+        unsigned char av = a->bytes[a->length - 1U - i];
+        unsigned char bv = b->bytes[b->length - 1U - i];
+        if (av != bv) {
+            return av < bv ? -1 : 1;
+        }
     }
-    if (a->section != b->section) {
-        return a->section < b->section ? -1 : 1;
-    }
-    if (a->source != b->source) {
-        return a->source < b->source ? -1 : 1;
-    }
-    return 0;
+    return a->length == b->length ? 0 :
+           a->length < b->length ? -1 : 1;
 }
 
 static int minild_merge_piece_compare(const void *left, const void *right) {
@@ -173,11 +200,11 @@ static bool minild_merge_grow_slots(MiniLdMergeGroup *group,
     return true;
 }
 
-static bool minild_merge_find_atom(const MiniLdMergeGroup *group,
-                                   const unsigned char *bytes,
-                                   size_t length, uint64_t hash,
-                                   size_t required_align,
-                                   size_t *offset) {
+static bool minild_merge_lookup_unique(const MiniLdMergeGroup *group,
+                                       const MiniLdState *state,
+                                       const unsigned char *bytes,
+                                       size_t length, uint64_t hash,
+                                       size_t *canonical) {
     size_t i;
     if (group->slot_capacity == 0U) {
         return false;
@@ -185,12 +212,11 @@ static bool minild_merge_find_atom(const MiniLdMergeGroup *group,
     i = (size_t)hash & (group->slot_capacity - 1U);
     while (group->slots[i].occupied) {
         const MiniLdMergeAtomSlot *slot = &group->slots[i];
+        const MiniLdMergeUniqueAtom *atom = &group->unique[slot->offset];
         if (slot->hash == hash && slot->length == length &&
-            slot->offset % required_align == 0U &&
-            slot->offset <= group->size &&
-            length <= group->size - slot->offset &&
-            memcmp(group->data + slot->offset, bytes, length) == 0) {
-            *offset = slot->offset;
+            memcmp(state->work.sections[atom->section].data + atom->source,
+                   bytes, length) == 0) {
+            *canonical = slot->offset;
             return true;
         }
         i = (i + 1U) & (group->slot_capacity - 1U);
@@ -245,49 +271,170 @@ static bool minild_merge_append_bytes(MiniLdMergeGroup *group,
     return true;
 }
 
-static bool minild_merge_atom(MiniLdMergeGroup *group,
-                              const unsigned char *bytes, size_t length,
-                              size_t required_align,
-                              size_t *destination) {
-    const bool strings = (group->flags & SHF_STRINGS) != 0U;
-    const size_t width = (size_t)group->entsize;
-    const uint64_t hash = minild_merge_reverse_hash(bytes, length);
-    size_t count = strings ? length / width : 1U;
-    size_t offset;
+/* Insert each distinct atom exactly once while retaining its earliest input
+ * position; repeated entries only strengthen the canonical alignment. */
+static bool minild_merge_register_unique(MiniLdMergeGroup *group,
+                                         MiniLdState *state,
+                                         MiniLdMergeInputAtom *atom) {
+    const MiniLdSection *source = &state->work.sections[atom->section];
+    const unsigned char *bytes = source->data + atom->source;
+    const uint64_t hash = minild_merge_reverse_hash(bytes, atom->length);
+    size_t canonical;
 
-    if (minild_merge_find_atom(group, bytes, length, hash,
-                               required_align, destination)) {
+    if (minild_merge_lookup_unique(group, state, bytes, atom->length,
+                                   hash, &canonical)) {
+        MiniLdMergeUniqueAtom *unique = &group->unique[canonical];
+        if (unique->alignment < atom->alignment) {
+            unique->alignment = atom->alignment;
+        }
+        atom->canonical = canonical;
         return true;
     }
-    if (count > SIZE_MAX - group->slot_count ||
-        !minild_merge_grow_slots(group, group->slot_count + count) ||
-        !minild_merge_append_bytes(group, bytes, length, required_align,
-                                   &offset)) {
+    if (group->unique_count == group->atom_count ||
+        !minild_merge_grow_slots(group, group->slot_count + 1U)) {
         return false;
     }
-    *destination = offset;
-    if (strings) {
-        /* Hash every aligned suffix, including the terminator.  This folds
-         * common suffixes in O(total input bytes), unlike an O(n^2) scan of
-         * all previous strings. */
-        uint64_t suffix_hash = UINT64_C(1469598103934665603);
-        size_t cursor = length;
-        while (cursor != 0U) {
-            size_t j;
-            for (j = 0U; j < width; ++j) {
-                suffix_hash = (suffix_hash * UINT64_C(1099511628211)) ^
-                              bytes[--cursor];
-            }
-            /* Keep all placements of a suffix. A previous copy may have
-             * insufficient alignment for a later, stronger-aligned source. */
-            minild_merge_insert_atom(group, suffix_hash,
-                                     offset + cursor, length - cursor);
-        }
-        *destination = offset;
-    } else {
-        minild_merge_insert_atom(group, hash, offset, length);
-    }
+    canonical = group->unique_count++;
+    group->unique[canonical] =
+        (MiniLdMergeUniqueAtom){atom->section, atom->source,
+                                atom->length, atom->alignment, 0U,
+                                SIZE_MAX};
+    atom->canonical = canonical;
+    minild_merge_insert_atom(group, hash, canonical, atom->length);
     return true;
+}
+
+static bool minild_merge_map_add(MiniLdMergeSectionMap *map,
+                                 uint64_t source, uint64_t length,
+                                 uint64_t destination);
+
+static bool minild_merge_assign_group(MiniLdMergeGroup *group,
+                                      MiniLdState *state,
+                                      MiniLdMergeSectionMap *maps) {
+    MiniLdMergeSortedAtom *sorted = NULL;
+    size_t width = (size_t)group->entsize;
+    size_t uniform_align = 0U;
+    size_t i;
+    bool ok = false;
+
+    if (group->atom_count > SIZE_MAX / sizeof(*group->unique)) {
+        return false;
+    }
+    group->unique = calloc(group->atom_count, sizeof(*group->unique));
+    if (group->unique == NULL) {
+        return false;
+    }
+    for (i = 0U; i < group->atom_count; ++i) {
+        if (!minild_merge_register_unique(group, state, &group->atoms[i])) {
+            return false;
+        }
+    }
+    if ((group->flags & SHF_STRINGS) != 0U) {
+        if (group->unique_count > SIZE_MAX / sizeof(*sorted)) {
+            return false;
+        }
+        sorted = malloc(group->unique_count * sizeof(*sorted));
+        if (sorted == NULL) {
+            return false;
+        }
+        for (i = 0U; i < group->unique_count; ++i) {
+            const MiniLdMergeUniqueAtom *atom = &group->unique[i];
+            const MiniLdSection *section =
+                &state->work.sections[atom->section];
+            sorted[i].canonical = i;
+            sorted[i].bytes = section->data + atom->source;
+            sorted[i].length = atom->length - width;
+            sorted[i].alignment = atom->alignment;
+            if (uniform_align == 0U) {
+                uniform_align = atom->alignment;
+            } else if (uniform_align != atom->alignment) {
+                uniform_align = SIZE_MAX;
+            }
+        }
+        for (i = 0U; i < group->unique_count; ++i) {
+            sorted[i].tail_mod =
+                uniform_align != SIZE_MAX && uniform_align > width
+                    ? sorted[i].length & (uniform_align - 1U) : 0U;
+        }
+        qsort(sorted, group->unique_count, sizeof(*sorted),
+              minild_merge_reverse_atom_compare);
+        if (group->unique_count != 0U) {
+            size_t owner = sorted[group->unique_count - 1U].canonical;
+            for (i = group->unique_count - 1U; i != 0U; --i) {
+                const MiniLdMergeSortedAtom *candidate = &sorted[i - 1U];
+                MiniLdMergeUniqueAtom *small =
+                    &group->unique[candidate->canonical];
+                const MiniLdMergeUniqueAtom *large = &group->unique[owner];
+                const unsigned char *large_bytes =
+                    state->work.sections[large->section].data + large->source;
+                const unsigned char *small_bytes = candidate->bytes;
+                if (large->length > small->length &&
+                    large->alignment >= small->alignment &&
+                    ((large->length - small->length) &
+                     (small->alignment - 1U)) == 0U &&
+                    memcmp(large_bytes + large->length - small->length,
+                           small_bytes, small->length) == 0) {
+                    small->suffix_owner = owner;
+                } else {
+                    owner = candidate->canonical;
+                }
+            }
+        }
+    }
+    /* GNU's suffix sorter does not determine packing order: the surviving
+     * unique atoms go out in their original first-encounter order. */
+    for (i = 0U; i < group->unique_count; ++i) {
+        MiniLdMergeUniqueAtom *atom = &group->unique[i];
+        const MiniLdSection *source = &state->work.sections[atom->section];
+        if (atom->suffix_owner != SIZE_MAX) {
+            continue;
+        }
+        if (!minild_merge_append_bytes(
+                group, source->data + atom->source, atom->length,
+                atom->alignment, &atom->destination)) {
+            goto done;
+        }
+    }
+    for (i = 0U; i < group->unique_count; ++i) {
+        MiniLdMergeUniqueAtom *atom = &group->unique[i];
+        if (atom->suffix_owner != SIZE_MAX) {
+            const MiniLdMergeUniqueAtom *parent =
+                &group->unique[atom->suffix_owner];
+            /* The backward suffix scan never promotes a folded candidate
+             * to owner: GNU BFD's `e = cmp` only occurs on a failed fold.
+             * Consequently each parent already has a packed destination;
+             * no parent-of-parent chain or second adjustment is possible. */
+            if (parent->suffix_owner != SIZE_MAX) {
+                goto done;
+            }
+            atom->destination =
+                parent->destination + parent->length - atom->length;
+        }
+    }
+    /* BFD pads the merged output to sh_addralign if *all* original
+     * participating input sections were individually padded to that
+     * alignment.  For an unpadded input it leaves the output exact-sized. */
+    if (group->pad_trailing) {
+        const unsigned char zero = 0U;
+        size_t unused_offset;
+        if (!minild_merge_append_bytes(group, &zero, 0U,
+                                       (size_t)group->align,
+                                       &unused_offset)) {
+            goto done;
+        }
+    }
+    for (i = 0U; i < group->atom_count; ++i) {
+        const MiniLdMergeInputAtom *atom = &group->atoms[i];
+        if (!minild_merge_map_add(&maps[atom->section], atom->source,
+                                  atom->length,
+                                  group->unique[atom->canonical].destination)) {
+            goto done;
+        }
+    }
+    ok = true;
+done:
+    free(sorted);
+    return ok;
 }
 
 static bool minild_merge_map_add(MiniLdMergeSectionMap *map,
@@ -503,19 +650,16 @@ static bool minild_merge_live_sections(MiniLdState *state,
             continue;
         }
         for (j = 0U; j < group_count; ++j) {
-            const MiniLdSection *leader =
-                &state->work.sections[groups[j].leader];
             if (groups[j].owner == owner &&
                 groups[j].flags == source->flags &&
                 groups[j].entsize == source->entsize &&
-                (((source->flags & SHF_STRINGS) != 0U) ||
-                 groups[j].align == source->align) &&
-                /* A script output command owns placement, not an ELF merge
-                 * atom namespace.  GNU BFD keeps .rodata.str1.1 and
-                 * .rodata.str1.8 in distinct pools even when one script
-                 * output collects both; combining them can change all
-                 * following symbol coordinates and section lengths. */
-                strcmp(leader->input_name, source->input_name) == 0) {
+                /* GNU BFD merge.c partitions SEC_MERGE by *input section
+                 * alignment_power*, entity width, flags and output owner.
+                 * A script's .rodata command does not let 1- and 8-aligned
+                 * string fragments deduplicate each other, while two
+                 * differently named fragments with equal alignment may
+                 * legitimately share one atom namespace. */
+                groups[j].align == source->align) {
                 break;
             }
         }
@@ -525,17 +669,17 @@ static bool minild_merge_live_sections(MiniLdState *state,
             groups[j].flags = source->flags;
             groups[j].align = source->align;
             groups[j].entsize = source->entsize;
+            groups[j].pad_trailing = true;
             ++group_count;
         }
         group = &groups[j];
-        /* The canonical output member must advertise the strongest input
-         * sh_addralign.  Each actual atom retains its own source-derived
-         * gcd(sh_addralign,offset) requirement below; strings from 1- and
-         * 8-aligned input fragments may therefore share the same pool. */
-        if (source->align > group->align) {
-            group->align = source->align;
-        }
+        /* By construction this pool has one input sh_addralign.  Individual
+         * atoms still inherit gcd(sh_addralign, source_offset). */
         ++group->input_count;
+        if (source->align == 0U ||
+            source->size % (size_t)source->align != 0U) {
+            group->pad_trailing = false;
+        }
         if (group->input_bytes <= SIZE_MAX - source->size) {
             group->input_bytes += source->size;
         }
@@ -598,23 +742,8 @@ static bool minild_merge_live_sections(MiniLdState *state,
     }
     for (i = 0U; i < group_count; ++i) {
         MiniLdMergeGroup *group = &groups[i];
-        if ((group->flags & SHF_STRINGS) != 0U) {
-            qsort(group->atoms, group->atom_count, sizeof(group->atoms[0]),
-                  minild_merge_atom_compare);
-        }
-        for (j = 0U; j < group->atom_count; ++j) {
-            const MiniLdMergeInputAtom *atom = &group->atoms[j];
-            const MiniLdSection *source = &state->work.sections[atom->section];
-            size_t destination;
-            if (!minild_merge_atom(group, source->data + atom->source,
-                                   atom->length, atom->alignment,
-                                   &destination) ||
-                !minild_merge_map_add(&maps[atom->section],
-                                      (uint64_t)atom->source,
-                                      (uint64_t)atom->length,
-                                      (uint64_t)destination)) {
-                goto done;
-            }
+        if (!minild_merge_assign_group(group, state, maps)) {
+            goto done;
         }
     }
     /* Binary-search source coordinates, not the physically reordered atom
@@ -773,6 +902,7 @@ done:
             free(groups[i].data);
             free(groups[i].slots);
             free(groups[i].atoms);
+            free(groups[i].unique);
         }
     }
     free(maps);

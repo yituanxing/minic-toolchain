@@ -167,25 +167,28 @@ static bool static_run_layout_to_fixed_point(
         return false;
     }
     state->static_canonical_work_count = checkpoint.section_count;
+    state->script_forward_allow = script != NULL;
     for (round = 0U; round < max_rounds; ++round) {
-        bool changed = false;
+        bool changed;
+        bool target_changed = false;
         size_t placed_sections;
         size_t placed_symbols;
 
+        state->script_forward_changed = false;
         if (!(script != NULL
                   ? static_build_script_layout(state, script, layout, 0U)
                   : static_build_layout(state, layout))) {
             goto done;
         }
-        if (state->target->replan_static_layout == NULL) {
-            ok = true;
-            goto done;
-        }
+        changed = state->script_forward_changed;
         placed_sections = state->work.count;
         placed_symbols = state->resolver.count;
-        if (!state->target->replan_static_layout(
-                state, layout, plan, &changed)) {
-            goto done;
+        if (state->target->replan_static_layout != NULL) {
+            if (!state->target->replan_static_layout(
+                    state, layout, plan, &target_changed)) {
+                goto done;
+            }
+            changed = changed || target_changed;
         }
         /* Replanning may rewrite bytes and relocation coordinates only.
          * New work-section or canonical-symbol identities must be reserved
@@ -208,9 +211,13 @@ static bool static_run_layout_to_fixed_point(
         }
     }
     fprintf(state->diagnostics,
-            "minic-ld: target-static-layout-did-not-converge:%s:rounds=%u\n",
+            "minic-ld: %s:%s:rounds=%u\n",
+            state->script_forward_guess_count != 0U ?
+                "script-forward-layout-did-not-converge" :
+                "target-static-layout-did-not-converge",
             state->target->emulation, max_rounds);
 done:
+    state->script_forward_allow = false;
     free(checkpoint.script_symbols);
     return ok;
 }

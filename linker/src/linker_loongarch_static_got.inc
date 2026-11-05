@@ -130,9 +130,11 @@ static bool minild_loongarch_static_uses_tls_le(uint32_t type) {
     }
 }
 
-/* Script matching and GC select source sections before static target
- * reservation.  Synthetic GOT/IPLT/.rela.dyn capacity belongs to surviving
- * relocation consumers, not to sections the script will later discard. */
+/* Script matching and GC select sources before static target reservation.
+ * GOT/IPLT slots belong only to surviving relocation consumers.  GNU BFD's
+ * global-symbol dynamic relocation capacity can survive a later script
+ * /DISCARD/ as R_LARCH_NONE; section-local dynrel lists follow their own
+ * discarded-source lifetime.  Do not count non-ALLOC metadata. */
 static bool minild_loongarch_static_reloc_source_live(
     const MiniLdState *state, const MiniLdReloc *reloc, bool *live) {
     const MiniLdSection *source;
@@ -263,19 +265,39 @@ static bool minild_loongarch_reserve_static_relocations(
         for (i = 0U; i < state->relocations.count; ++i) {
             const MiniLdReloc *reloc = &state->relocations.entries[i];
             uint32_t type = reloc->type;
+            const MiniLdSection *source;
             bool live;
 
+            if (reloc->section >= state->work.count) {
+                fprintf(state->diagnostics,
+                        "minic-ld: loongarch-static-reserve-invalid-source\n");
+                return false;
+            }
+            source = &state->work.sections[reloc->section];
+            /* Count allocated dynamic-reloc candidates before final source
+             * pruning, but not local-symbol reservations whose own source
+             * section was discarded.  GNU BFD tracks global and local
+             * symbols through distinct dynrel lists. */
+            if (type == R_LARCH_64 && (source->flags & SHF_ALLOC) != 0U &&
+                reloc->symbol < state->resolver.count &&
+                (!(source->gc_discarded || source->script_discard) ||
+                 ELF64_ST_BIND(state->resolver.entries[reloc->symbol].info)
+                     != STB_LOCAL)) {
+                if (got->relative_reserved_count == SIZE_MAX) {
+                    fprintf(state->diagnostics,
+                            "minic-ld: loongarch-static-relative-reserve-overflow\n");
+                    return false;
+                }
+                ++got->relative_reserved_count;
+            }
             if (!minild_loongarch_static_reloc_source_live(state, reloc,
                                                           &live)) {
                 return false;
             }
-            if (!live) {
+            if (!live || (source->flags & SHF_ALLOC) == 0U) {
                 continue;
             }
 
-            if (type == R_LARCH_64) {
-                ++got->relative_reserved_count;
-            }
             if (type == R_LARCH_64 ||
                 minild_loongarch_static_uses_got(type) ||
                 minild_loongarch_static_uses_tls_ie(type)) {
@@ -328,7 +350,8 @@ static bool minild_loongarch_reserve_static_relocations(
         if (!minild_loongarch_static_reloc_source_live(state, reloc, &live)) {
             return false;
         }
-        if (!live) {
+        if (!live ||
+            (state->work.sections[reloc->section].flags & SHF_ALLOC) == 0U) {
             continue;
         }
 

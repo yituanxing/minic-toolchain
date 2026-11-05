@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# GNU keeps distinct ELF SHF_MERGE input-section classes as separate pools,
-# even when one linker-script output command collects both classes.
+# GNU keeps SHF_MERGE inputs with different sh_addralign in separate pools,
+# even when one linker-script output command collects both classes. Input
+# names happen to differ here, but alignment (not name) is the GNU pool key.
 set -Eeuo pipefail
 
 repo=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
@@ -75,6 +76,6 @@ mini, mb, mp = read(sys.argv[2])
 assert gp[0] != gp[1], ('GNU unexpectedly coalesced distinct pools', gp)
 assert (gnu[5], gb, gp) == (mini[5], mb, mp), (
     'GNU/Mini pool layout mismatch', (gnu[5], gp), (mini[5], mp))
-print('MINILD_MERGE_POOL_IDENTITY=PASS distinct_input_name_pools=1 '
+print('MINILD_MERGE_POOL_IDENTITY=PASS distinct_input_alignment_pools=1 '
       'GNU_elf_bytes_and_pointers=exact')
 PY

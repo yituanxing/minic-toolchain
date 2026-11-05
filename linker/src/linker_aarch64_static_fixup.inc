@@ -415,7 +415,8 @@ static bool minild_aarch64_apply_static_relocations(
         minild_aarch64_static_fixup_class,
         minild_aarch64_static_resolve_target,
         minild_nonriscv_word_instruction_width,
-        minild_aarch64_static_write_instruction
+        minild_aarch64_static_write_instruction,
+        minild_aarch64_kernel_relative_target
     };
 
     return minild_nonriscv_apply_with_ops(state, layout, plan, &ops) &&

@@ -1,13 +1,22 @@
 #!/usr/bin/env bash
-# Source-script ownership must precede target synthetic relocation capacity:
-# /DISCARD/ never allocates LoongArch static-PIE R_RELATIVE, GOT or IPLT slots.
+# GNU LoongArch static PIE reserves R_LARCH_64 runtime relocation slots
+# before /DISCARD/ removes input sections.  Discarded allocated references
+# consume zero-filled R_NONE slots, not output GOT/IPLT entries.  Non-ALLOC
+# debug references do not reserve runtime relocation capacity.
 set -Eeuo pipefail
 
 repo=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
 minias=${MINIAS:-"$repo/build/release/bin/minic-as"}
 minild=${MINILD:-"$repo/build/release/bin/minic-ld"}
 work=$(mktemp -d "${TMPDIR:-/tmp}/minild-static-discard-reserve.XXXXXX")
-trap 'rm -rf -- "$work"' EXIT
+finish() {
+    if [[ ${MINILD_STATIC_DISCARD_KEEP:-0} == 1 ]]; then
+        echo "MINILD_STATIC_DISCARD_ARTIFACTS=$work"
+    else
+        rm -r -- "$work"
+    fi
+}
+trap finish EXIT
 
 cat >"$work/image.lds" <<'LDS'
 OUTPUT_ARCH(loongarch)
@@ -39,6 +48,8 @@ live_pointer:
 discarded_pointer:
     .quad _start
     .quad _start
+.section .debug_noise,"",@progbits
+    .quad _start
 ASM
 cat >"$work/dead_only.s" <<'ASM'
 .text
@@ -48,6 +59,8 @@ _start:
 .section .data.dead,"aw",@progbits
 .globl discarded_pointer
 discarded_pointer:
+    .quad _start
+.section .debug_noise,"",@progbits
     .quad _start
 ASM
 cat >"$work/absolute.s" <<'ASM'
@@ -93,14 +106,18 @@ assert '.data.dead' not in live
 assert live['.got'][5] == 8
 relocs = [struct.unpack_from('<QQQ', bytes_of('.rela.dyn'), off)
           for off in range(0, live['.rela.dyn'][5], 24)]
-assert relocs == [(live['.data'][3], 3, live['.text'][3]), (0, 0, 0)], relocs
+assert relocs == [(live['.data'][3], 3, live['.text'][3])] + \
+                 [(0, 0, 0)] * 3, relocs
 assert struct.unpack_from('<2Q', bytes_of('.data')) == (
     live['.text'][3], 0x12345678)
 
 dead, unused = extract(sys.argv[2])
 assert '.data.dead' not in dead
 assert '.got' not in dead or dead['.got'][5] == 0
-assert '.rela.dyn' not in dead or dead['.rela.dyn'][5] == 0
-print('MINILD_STATIC_SCRIPT_DISCARD_RESERVE=PASS mixed_relative=1 none=1 '
-      'discarded_relative=0 dead_only_synthetic_got=0 dead_only_rela_dyn=0')
+assert '.rela.dyn' in dead and dead['.rela.dyn'][5] == 24
+assert unused('.rela.dyn') == b'\0' * 24
+print('MINILD_STATIC_SCRIPT_DISCARD_RESERVE=PASS mixed_relative=1 none=3 '
+      'dead_only_relative=0 dead_only_none=1 '
+      'discarded_runtime_relocs=NONE nonalloc_no_reservation=true '
+      'dead_only_synthetic_got=0')
 PY

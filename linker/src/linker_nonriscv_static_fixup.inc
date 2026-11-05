@@ -28,6 +28,10 @@ typedef struct MiniLdNonRiscvStaticOps {
                               const MiniLdReloc *reloc,
                               uint64_t target, uint64_t place,
                               bool undefined_weak);
+    /* A target may preserve the original bytes of an allocated runtime
+     * relocation whose fully resolved RELA record was already emitted by
+     * its post-layout writer (e.g. AArch64 --no-apply-dynamic-relocs). */
+    bool (*defer_fixup)(const MiniLdState *, const MiniLdReloc *);
 } MiniLdNonRiscvStaticOps;
 
 static size_t minild_nonriscv_word_instruction_width(uint32_t type) {
@@ -170,6 +174,10 @@ static bool minild_nonriscv_apply_with_ops(
                 &state->resolver.entries[reloc->symbol];
             undefined_weak = symbol->section == MINILD_SECTION_UNDEF &&
                 ELF64_ST_BIND(symbol->info) == STB_WEAK;
+        }
+        if (ops->defer_fixup != NULL &&
+            ops->defer_fixup(state, reloc)) {
+            continue;
         }
         if (!minild_nonriscv_write_fixup(section, reloc, machine, kind, ops,
                                          operands.target_bits, operands.place,

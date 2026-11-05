@@ -509,7 +509,8 @@ static bool minild_loongarch_apply_static_relocations(
         minild_loongarch_static_fixup_class,
         minild_loongarch_static_resolve_target,
         minild_loongarch_static_instruction_width,
-        minild_loongarch_static_write_instruction
+        minild_loongarch_static_write_instruction,
+        NULL
     };
 
     return minild_loongarch_static_validate_aligns(state, layout) &&

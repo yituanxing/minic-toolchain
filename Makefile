@@ -740,6 +740,12 @@ check-minild-kernel-et-dyn-modes: $(MINIAS_BINARY) $(MINILD_BINARY)
 	MINILD="$(abspath $(MINILD_BINARY))" \
 	bash tests/linker/probe-kernel-et-dyn-modes.sh
 
+.PHONY: check-minild-script-forward-placement-fixedpoint
+check-minild-script-forward-placement-fixedpoint: $(MINIAS_BINARY) $(MINILD_BINARY)
+	MINIAS="$(abspath $(MINIAS_BINARY))" \
+	MINILD="$(abspath $(MINILD_BINARY))" \
+	bash tests/linker/probe-script-forward-placement-fixedpoint.sh
+
 .PHONY: check-minild-x86-final-emit-relocs
 check-minild-x86-final-emit-relocs: $(MINILD_BINARY)
 	MINILD="$(abspath $(MINILD_BINARY))" \
@@ -763,6 +769,12 @@ check-minild-riscv-u-type-boundary: $(MINIAS_BINARY) $(MINILD_BINARY)
 	MINIAS="$(abspath $(MINIAS_BINARY))" \
 	MINILD="$(abspath $(MINILD_BINARY))" \
 	bash tests/linker/probe-riscv-u-type-boundary.sh
+
+.PHONY: check-minild-riscv-gp-align-relax
+check-minild-riscv-gp-align-relax: $(MINIAS_BINARY) $(MINILD_BINARY)
+	MINIAS="$(abspath $(MINIAS_BINARY))" \
+	MINILD="$(abspath $(MINILD_BINARY))" \
+	bash tests/linker/probe-riscv-gp-align-relax.sh
 
 .PHONY: check-minild-aarch64-cortex-a53-843419
 check-minild-aarch64-cortex-a53-843419: $(MINIAS_BINARY) $(MINILD_BINARY)
@@ -798,6 +810,16 @@ check-minild-script-top-level-empty-statements: $(MINILD_BINARY)
 	MINILD="$(abspath $(MINILD_BINARY))" \
 	bash tests/linker/probe-script-top-level-empty-statements.sh
 
+.PHONY: check-minild-synthetic-byte-phdr-flags
+check-minild-synthetic-byte-phdr-flags: $(MINILD_BINARY)
+	MINILD="$(abspath $(MINILD_BINARY))" \
+	bash tests/linker/probe-synthetic-byte-phdr-flags.sh
+
+.PHONY: check-minild-static-script-load-page-coalesce
+check-minild-static-script-load-page-coalesce: $(MINILD_BINARY)
+	MINILD="$(abspath $(MINILD_BINARY))" \
+	bash tests/linker/probe-static-script-load-page-coalesce.sh
+
 # Linux-facing linker invariants are exercised across all five ELF targets
 # before any expensive vmlinux re-link or QEMU boot attempt.
 .PHONY: check-minild-static-build-id-sha1 check-minild-static-merge-five-target check-minild-static-merge-strings
@@ -818,6 +840,11 @@ check-minild-static-merge-strings: $(MINILD_BINARY)
 check-minild-static-merge-input-pool-identity: $(MINILD_BINARY)
 	MINILD="$(abspath $(MINILD_BINARY))" \
 	bash tests/linker/probe-static-merge-input-pool-identity.sh
+
+.PHONY: check-minild-static-merge-bfd-order
+check-minild-static-merge-bfd-order: $(MINILD_BINARY)
+	MINILD="$(abspath $(MINILD_BINARY))" \
+	bash tests/linker/probe-static-merge-bfd-order.sh
 
 .PHONY: check-minild-riscv-pie-relax-fixedpoint check-minild-x86-linux-kbuild-options check-minild-x86-linux-pc64 check-minild-x86-script-info check-minild-x86-script-synthetic-nobits check-minild-static-script-pure-nobits-phdr
 check-minild-riscv-pie-relax-fixedpoint: $(MINIAS_BINARY) $(MINILD_BINARY)
@@ -850,9 +877,11 @@ check-minild-five-arch-linux-linker-boundary: \
 	check-minild-static-merge-five-target \
 	check-minild-static-merge-strings \
 	check-minild-static-merge-input-pool-identity \
+	check-minild-static-merge-bfd-order \
 	check-minild-static-build-id-sha1 \
 	check-minild-riscv-static-relax-fixedpoint \
 	check-minild-riscv-u-type-boundary \
+	check-minild-riscv-gp-align-relax \
 	check-minild-riscv-pie-relax-fixedpoint \
 	check-minild-aarch64-cortex-a53-843419 \
 	check-minild-aarch64-static-instruction-relocs \
@@ -860,6 +889,9 @@ check-minild-five-arch-linux-linker-boundary: \
 	check-minild-static-script-discard-reloc-reserve \
 	check-minild-script-output-entsize-coalescing \
 	check-minild-script-top-level-empty-statements \
+	check-minild-script-forward-placement-fixedpoint \
+	check-minild-synthetic-byte-phdr-flags \
+	check-minild-static-script-load-page-coalesce \
 	check-minild-x86-linux-kbuild-options \
 	check-minild-x86-linux-pc64 \
 	check-minild-x86-script-info \
@@ -1012,6 +1044,10 @@ check-minild-output-script-edges: $(MINIAS_BINARY) $(MINILD_BINARY)
 .PHONY: check-minild-final-elf-audit
 check-minild-final-elf-audit:
 	bash tests/linker/probe-final-elf-audit.sh
+
+.PHONY: check-minild-final-elf-kernel-entry
+check-minild-final-elf-kernel-entry:
+	bash tests/linker/probe-final-elf-kernel-entry.sh
 
 .PHONY: check-minild-script-merge-section-flags
 check-minild-script-merge-section-flags: $(MINIAS_BINARY) $(MINILD_BINARY)

@@ -21,6 +21,9 @@ typedef struct MiniLdLayoutWorkPlacement {
 typedef struct MiniLdLayoutScriptOutput {
     /* Borrowed from the parsed script; never owned by a working section. */
     const char *name;
+    /* Effective output-section sh_addralign: explicit : ALIGN(expr) and
+     * participating input-section alignment, never inferred from VMA bits. */
+    uint64_t align;
     uint64_t start;
     uint64_t end;
     size_t file_base;

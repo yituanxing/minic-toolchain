@@ -105,6 +105,7 @@ SECTIONS {
     . = 0x2000;
     .text : { *(.text) }
     . = ALIGN(0x1000);
+    .rela.dyn : { *(.rela .rela*) }
     .data : { *(.data*) }
 }
 LDS
@@ -170,20 +171,50 @@ PY_KERNEL
 readelf -h "$work/kernel-pcrel-nc.elf" | grep -q 'Type:.*DYN'
 echo 'MINILD_AARCH64_KERNEL_PCREL=PASS adrp_nc_rebase_invariant=1'
 
-# ABS64 cannot be made rebase-invariant by pretending that -Bsymbolic is a
-# request for an ordinary static link. Reject it until runtime RELA exists.
+# True allocated absolute pointers need a runtime R_AARCH64_RELATIVE, not a
+# static S+A write.  --no-apply-dynamic-relocs retains their input zero bytes.
+"$MINILD" -maarch64linux -EL -shared -Bsymbolic --no-undefined \
+    --no-apply-dynamic-relocs --pic-veneer -z notext \
+    -T "$work/layout.lds" -o "$work/kernel-relative.elf" \
+    "$work/kernel-pcrel.o" "$work/kernel-absolute.o" "$work/defs.o" \
+    >"$work/kernel-relative.stdout" 2>"$work/kernel-relative.stderr"
+python3 - "$work/kernel-relative.elf" <<'PY_RELA'
+import struct,sys
+b=open(sys.argv[1],'rb').read()
+shoff=struct.unpack_from('<Q',b,40)[0]
+shnum,shnames=struct.unpack_from('<HH',b,60)
+s=[struct.unpack_from('<IIQQQQIIQQ',b,shoff+i*64) for i in range(shnum)]
+pool=b[s[shnames][4]:s[shnames][4]+s[shnames][5]]
+def name(sec):
+    off=sec[0]
+    return pool[off:pool.index(0,off)].decode()
+sec={name(x):x for x in s}
+rela=sec['.rela.dyn']
+data=sec['.data']
+assert rela[5] == 24 and rela[1] == 4, 'one actual ELF64 RELA'
+roff,info,addend=struct.unpack_from('<QQq',b,rela[4])
+assert (info & 0xffffffff)==1027 and (info>>32)==0
+assert data[3]<=roff and roff+8<=data[3]+data[5], 'runtime pointer location'
+assert addend>=sec['.text'][3], 'RELA addend uses resolved image VMA'
+off=data[4]+roff-data[3]
+assert b[off:off+8]==b'\0'*8, 'dynamic pointer was pre-applied'
+print('MINILD_AARCH64_KERNEL_RELATIVE=PASS records=1 original_bytes_preserved=1')
+PY_RELA
+
+# MOVW encodes a non-relocatable absolute pointer in code; R_RELATIVE on an
+# 8-byte data slot cannot repair that instruction. Preserve fail-closed mode.
 if "$MINILD" -maarch64linux -EL -shared -Bsymbolic --no-undefined \
     --no-apply-dynamic-relocs --pic-veneer -z notext \
-    -T "$work/layout.lds" -o "$work/kernel-unsafe.elf" \
-    "$work/kernel-pcrel.o" "$work/kernel-absolute.o" "$work/defs.o" \
+    -T "$work/layout.lds" -o "$work/kernel-unsafe-movw.elf" \
+    "$work/entry.o" "$work/defs.o" \
     >"$work/kernel-unsafe.stdout" 2>"$work/kernel-unsafe.stderr"; then
-    echo 'MINILD_AARCH64_KERNEL_PCREL=FAIL absolute_runtime_pointer_accepted' >&2
+    echo 'MINILD_AARCH64_KERNEL_PCREL=FAIL absolute_MovW_runtime_pointer_accepted' >&2
     exit 1
 fi
-grep -q 'unsupported-kernel-shared-runtime-relocation:257' \
+grep -q 'unsupported-kernel-shared-runtime-relocation:26' \
     "$work/kernel-unsafe.stderr"
-test ! -e "$work/kernel-unsafe.elf"
-echo 'MINILD_AARCH64_KERNEL_PCREL=PASS unsafe_abs64_rejected=1'
+test ! -e "$work/kernel-unsafe-movw.elf"
+echo 'MINILD_AARCH64_KERNEL_PCREL=PASS unsafe_movw_rejected=1'
 
 # The high 64-bit address must survive every group without unsigned-host
 # narrowing or a 32-bit G2/G3 shift.  G3 is the checked final chunk.

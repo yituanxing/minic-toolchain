@@ -10,10 +10,18 @@
  */
 typedef enum MiniLdRiscvRelaxKind {
     MINILD_RV_RELAX_ALIGN,
-    MINILD_RV_RELAX_CALL
+    MINILD_RV_RELAX_CALL,
+    MINILD_RV_RELAX_GP
 } MiniLdRiscvRelaxKind;
 
 enum { MINILD_RV_RELAX_ELF_FLAG_RVC = 0x0001U };
+
+typedef struct MiniLdRiscvGpLo {
+    size_t relocation_index;
+    size_t source_symbol;
+    int64_t source_addend;
+    uint32_t source_type;
+} MiniLdRiscvGpLo;
 
 typedef struct MiniLdRiscvRelaxSite {
     size_t original_offset;
@@ -26,6 +34,12 @@ typedef struct MiniLdRiscvRelaxSite {
     bool call_eligible;
     /* 8=AUIPC/JALR, 4=JAL, 2=C.J/C.JAL. */
     unsigned call_width;
+    /* A GP-relaxed HI can feed several LO12 uses at the same AUIPC anchor.
+     * All must be relaxable before deleting the single HI instruction. */
+    MiniLdRiscvGpLo *gp_los;
+    size_t gp_lo_count;
+    size_t gp_lo_capacity;
+    bool gp_eligible;
 } MiniLdRiscvRelaxSite;
 
 typedef struct MiniLdRiscvRelaxSection {
@@ -92,6 +106,10 @@ static void minild_riscv_relax_plan_destroy(MiniLdRiscvRelaxPlan *plan) {
     }
     if (plan->sections != NULL) {
         for (i = 0U; i < plan->section_count; ++i) {
+            size_t j;
+            for (j = 0U; j < plan->sections[i].site_count; ++j) {
+                free(plan->sections[i].sites[j].gp_los);
+            }
             free(plan->sections[i].original_bytes);
             free(plan->sections[i].sites);
         }
@@ -126,6 +144,51 @@ static bool minild_rv_relax_add_site(MiniLdRiscvRelaxSection *section,
     }
     section->sites[section->site_count++] = site;
     return true;
+}
+
+static bool minild_rv_relax_add_gp_lo(MiniLdRiscvRelaxSite *site,
+                                      MiniLdRiscvGpLo lo) {
+    MiniLdRiscvGpLo *grown;
+    size_t capacity;
+
+    if (site->gp_lo_count == site->gp_lo_capacity) {
+        capacity = site->gp_lo_capacity == 0U ? 2U :
+                   site->gp_lo_capacity * 2U;
+        if (capacity < site->gp_lo_capacity ||
+            capacity > SIZE_MAX / sizeof(*grown)) {
+            return false;
+        }
+        grown = realloc(site->gp_los, capacity * sizeof(*grown));
+        if (grown == NULL) {
+            return false;
+        }
+        site->gp_los = grown;
+        site->gp_lo_capacity = capacity;
+    }
+    site->gp_los[site->gp_lo_count++] = lo;
+    return true;
+}
+
+/* Every LO12 names the local label on the corresponding AUIPC, not the
+ * ultimate data symbol.  Search original anchors after sorting the sites;
+ * relocation workspace order is not guaranteed and Linux has many HI/LOs. */
+static MiniLdRiscvRelaxSite *minild_rv_relax_gp_at(
+    MiniLdRiscvRelaxSection *section, uint64_t anchor) {
+    size_t low = 0U;
+    size_t high = section->site_count;
+
+    while (low < high) {
+        size_t mid = low + (high - low) / 2U;
+        if (section->sites[mid].original_offset < anchor) {
+            low = mid + 1U;
+        } else {
+            high = mid;
+        }
+    }
+    return low < section->site_count &&
+                   section->sites[low].original_offset == anchor &&
+                   section->sites[low].kind == MINILD_RV_RELAX_GP
+               ? &section->sites[low] : NULL;
 }
 
 /* The input relocation workspace does not guarantee sorting by offset.
@@ -207,7 +270,8 @@ static MiniLdRiscvRelaxPlan *minild_rv_relax_capture(MiniLdState *state) {
         if (reloc->section >= plan->section_count ||
             (reloc->type != R_RISCV_ALIGN &&
              reloc->type != R_RISCV_CALL &&
-             reloc->type != R_RISCV_CALL_PLT)) {
+             reloc->type != R_RISCV_CALL_PLT &&
+             reloc->type != R_RISCV_PCREL_HI20)) {
             continue;
         }
         section = &plan->sections[reloc->section];
@@ -221,6 +285,26 @@ static MiniLdRiscvRelaxPlan *minild_rv_relax_capture(MiniLdState *state) {
             }
             site.kind = MINILD_RV_RELAX_ALIGN;
             site.original_size = (size_t)reloc->addend;
+        } else if (reloc->type == R_RISCV_PCREL_HI20) {
+            const MiniLdSection *input =
+                &state->work.sections[reloc->section];
+            uint32_t instruction;
+
+            if (!minild_rv_relax_has_marker(
+                    markers, marker_count, reloc->section, reloc->offset) ||
+                reloc->offset > SIZE_MAX ||
+                input->type == SHT_NOBITS ||
+                !range_ok((size_t)reloc->offset, 4U, input->size)) {
+                continue;
+            }
+            instruction = load_u32le(input->data + (size_t)reloc->offset);
+            if ((instruction & UINT32_C(0x7f)) != UINT32_C(0x17) ||
+                ((instruction >> 7U) & 31U) == 0U) {
+                continue;
+            }
+            site.kind = MINILD_RV_RELAX_GP;
+            site.original_size = 4U;
+            site.gp_eligible = true;
         } else {
             site.kind = MINILD_RV_RELAX_CALL;
             site.original_size = 8U;
@@ -283,6 +367,68 @@ static MiniLdRiscvRelaxPlan *minild_rv_relax_capture(MiniLdState *state) {
                 goto error;
             }
             cursor = site->original_offset + site->original_size;
+        }
+    }
+    /* Pair all PCREL_LO12 relocations with their original HI20 label, even
+     * when a LO itself lacks RELAX: that unrelaxed reference must prevent
+     * deleting the shared AUIPC.  A single HI may feed several LOs. */
+    for (i = 0U; i < plan->reloc_count; ++i) {
+        const MiniLdReloc *reloc = &state->relocations.entries[i];
+        const MiniLdResolvedSymbol *anchor;
+        MiniLdRiscvRelaxSection *section;
+        MiniLdRiscvRelaxSite *site;
+        MiniLdRiscvGpLo lo;
+        uint64_t anchor_offset;
+        uint32_t original_insn;
+        uint32_t hi_insn;
+
+        if ((reloc->type != R_RISCV_PCREL_LO12_I &&
+             reloc->type != R_RISCV_PCREL_LO12_S) ||
+            reloc->symbol >= state->resolver.count ||
+            reloc->section >= plan->section_count) {
+            continue;
+        }
+        anchor = &state->resolver.entries[reloc->symbol];
+        if (anchor->section < 0 ||
+            (size_t)anchor->section >= plan->section_count ||
+            !minild_target_checked_add_u64_s64(
+                anchor->value, reloc->addend, &anchor_offset)) {
+            continue;
+        }
+        section = &plan->sections[anchor->section];
+        site = minild_rv_relax_gp_at(section, anchor_offset);
+        if (site == NULL) {
+            continue;
+        }
+        /* A cross-section LO anchor can be legitimate ELF input, but the
+         * deleted HI and its dependent instruction must share a relaxed
+         * work section here.  Leave such a pair untouched. */
+        if (reloc->section != (size_t)anchor->section ||
+            !minild_rv_relax_has_marker(
+                markers, marker_count, reloc->section, reloc->offset) ||
+            reloc->offset > SIZE_MAX ||
+            !range_ok((size_t)reloc->offset, 4U,
+                      state->work.sections[reloc->section].size)) {
+            site->gp_eligible = false;
+            continue;
+        }
+        original_insn = load_u32le(
+            state->work.sections[reloc->section].data +
+            (size_t)reloc->offset);
+        hi_insn = load_u32le(
+            state->work.sections[anchor->section].data +
+            site->original_offset);
+        if (((original_insn >> 15U) & 31U) !=
+            ((hi_insn >> 7U) & 31U)) {
+            site->gp_eligible = false;
+            continue;
+        }
+        lo.relocation_index = i;
+        lo.source_symbol = reloc->symbol;
+        lo.source_addend = reloc->addend;
+        lo.source_type = reloc->type;
+        if (!minild_rv_relax_add_gp_lo(site, lo)) {
+            goto error;
         }
     }
     free(markers);
@@ -380,6 +526,113 @@ static bool minild_rv_relax_resolve_call_target(
     return true;
 }
 
+static bool minild_rv_relax_gp_address(const MiniLdState *state,
+                                       const MiniLdLayout *layout,
+                                       uint64_t *address) {
+    MiniLdReloc synthetic = {0};
+    size_t index = symbol_resolver_lookup(&state->resolver,
+                                          "__global_pointer$");
+
+    if (index == SIZE_MAX ||
+        state->resolver.entries[index].section == MINILD_SECTION_UNDEF) {
+        return false;
+    }
+    synthetic.symbol = index;
+    return minild_rv_relax_resolve_call_target(
+               state, layout, &synthetic, address) && *address != 0U;
+}
+
+/* GNU's CALL shrink guard uses the output section's declared alignment,
+ * not the accidental trailing-zero bits in the selected VMA.  Script
+ * `: ALIGN(expr)` may be much stricter than any member input section. */
+static uint64_t minild_rv_relax_call_output_alignment(
+    const MiniLdState *state, const MiniLdLayout *layout,
+    size_t source, size_t target) {
+    uint64_t alignment = state->work.sections[target].align;
+
+    if (layout->scripted && layout->work != NULL) {
+        size_t a = layout->work[source].owner_command;
+        size_t b = layout->work[target].owner_command;
+        if (a != SIZE_MAX && a == b &&
+            a < layout->script_command_count &&
+            layout->script_outputs != NULL &&
+            layout->script_outputs[a].align > alignment) {
+            alignment = layout->script_outputs[a].align;
+        }
+    }
+    return alignment == 0U ? 1U : alignment;
+}
+
+/* The HI20 destination is S+A while LO12 addends refer to the HI anchor.
+ * Every matching LO must fit GP signed-12 and no data/code/merge alias may
+ * be silently rewritten.  Re-evaluate on every candidate complete layout. */
+static bool minild_rv_relax_gp_site_fits(
+    const MiniLdState *state, const MiniLdLayout *layout,
+    const MiniLdRiscvRelaxSite *site, uint64_t gp, bool have_gp,
+    int gp_section, uint64_t max_alignment) {
+    const MiniLdReloc *hi = &state->relocations.entries[
+        site->relocation_index];
+    const MiniLdResolvedSymbol *symbol;
+    uint64_t reserve_size = 0U;
+    uint64_t target;
+    size_t i;
+
+    if (!site->gp_eligible || site->gp_lo_count == 0U ||
+        hi->symbol >= state->resolver.count ||
+        !minild_rv_relax_resolve_call_target(state, layout, hi, &target)) {
+        return false;
+    }
+    symbol = &state->resolver.entries[hi->symbol];
+    if ((symbol->section == MINILD_SECTION_UNDEF &&
+         ELF64_ST_BIND(symbol->info) != STB_WEAK) ||
+        (symbol->section >= 0 &&
+         (state->work.sections[symbol->section].flags &
+          (SHF_EXECINSTR | SHF_MERGE)) != 0U)) {
+        return false;
+    }
+    if (symbol->size != 0U &&
+        hi->addend >= 0 && (uint64_t)hi->addend <= symbol->size) {
+        reserve_size = symbol->size - (uint64_t)hi->addend;
+    }
+    if (gp_section >= 0 && symbol->section >= 0 &&
+        ((gp_section == symbol->section) ||
+         (layout->scripted &&
+          layout->work[gp_section].owner_command != SIZE_MAX &&
+          layout->work[gp_section].owner_command ==
+              layout->work[symbol->section].owner_command))) {
+        max_alignment = minild_rv_relax_call_output_alignment(
+            state, layout, (size_t)gp_section,
+            (size_t)symbol->section);
+    }
+    for (i = 0U; i < site->gp_lo_count; ++i) {
+        const MiniLdRiscvGpLo *lo = &site->gp_los[i];
+        const int64_t absolute = minild_target_signed_bits(
+            target + (uint64_t)lo->source_addend);
+        const int64_t delta = minild_target_signed_bits(
+            target + (uint64_t)lo->source_addend - gp);
+        if (absolute < -2048 || absolute > 2047) {
+            const uint64_t margin = max_alignment + reserve_size;
+            if (!have_gp || max_alignment > UINT64_MAX - reserve_size ||
+                margin > INT64_MAX ||
+                (delta >= 0 &&
+                 (uint64_t)delta + margin > INT64_C(2047)) ||
+                (delta < 0 &&
+                 (UINT64_C(0) - (uint64_t)delta) + margin >
+                     INT64_C(2048))) {
+                return false;
+            }
+        }
+        if (
+            (hi->addend > 0 &&
+             lo->source_addend > INT64_MAX - hi->addend) ||
+            (hi->addend < 0 &&
+             lo->source_addend < INT64_MIN - hi->addend)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 static bool minild_rv_relax_rebuild_section(
     MiniLdState *state, const MiniLdLayout *layout,
     MiniLdRiscvRelaxSection *source, size_t index, bool *changed) {
@@ -436,6 +689,18 @@ static bool minild_rv_relax_rebuild_section(
                         "minic-ld: riscv-relax-align-invalid:%s:%zu\n",
                         section->name, site->original_offset);
                 goto done;
+            }
+        } else if (site->kind == MINILD_RV_RELAX_GP) {
+            final_size = site->gp_eligible && site->final_size == 0U
+                             ? 0U : 4U;
+            if (final_size != 0U) {
+                if (!range_ok(output_size, 4U,
+                              source->original_size)) {
+                    goto done;
+                }
+                memcpy(output + output_size,
+                       source->original_bytes + site->original_offset, 4U);
+                output_size += 4U;
             }
         } else if (site->call_width != 8U) {
             /* Final target relocation will encode the selected immediate. */
@@ -503,6 +768,10 @@ static bool minild_riscv_replan_image_layout(
     MiniLdRiscvRelaxPlan **plan_slot, bool *changed,
     MiniLdRiscvRelaxCallPolicy call_policy, void *call_policy_data) {
     MiniLdRiscvRelaxPlan *plan;
+    uint64_t gp = 0U;
+    uint64_t max_alignment = 1U;
+    bool have_gp = false;
+    int gp_section = MINILD_SECTION_UNDEF;
     size_t i;
 
     if (plan_slot == NULL || changed == NULL) {
@@ -520,6 +789,28 @@ static bool minild_riscv_replan_image_layout(
         }
     }
     plan = *plan_slot;
+    /* Shared-library GP accesses require symbol preemption semantics and
+     * stay as PC-relative pairs; this optimization is for ET_EXEC only. */
+    if (call_policy == NULL) {
+        size_t gp_index = symbol_resolver_lookup(&state->resolver,
+                                                 "__global_pointer$");
+        have_gp = minild_rv_relax_gp_address(state, layout, &gp);
+        if (gp_index != SIZE_MAX) {
+            gp_section = state->resolver.entries[gp_index].section;
+        }
+        for (i = 0U; i < state->work.count; ++i) {
+            if (state->work.sections[i].align > max_alignment) {
+                max_alignment = state->work.sections[i].align;
+            }
+        }
+        if (layout->scripted && layout->script_outputs != NULL) {
+            for (i = 0U; i < layout->script_command_count; ++i) {
+                if (layout->script_outputs[i].align > max_alignment) {
+                    max_alignment = layout->script_outputs[i].align;
+                }
+            }
+        }
+    }
 
     /* Scan on the *current complete layout*; the outer coordinator keeps
      * refreshing VMA and script-defined symbols until no deletion changes
@@ -539,6 +830,15 @@ static bool minild_riscv_replan_image_layout(
             int64_t jal_displacement;
             int64_t rvc_displacement;
             bool forward_same_section;
+            uint64_t same_output_alignment = 0U;
+            int target_section = MINILD_SECTION_UNDEF;
+            if (site->kind == MINILD_RV_RELAX_GP) {
+                site->final_size = minild_rv_relax_gp_site_fits(
+                                       state, layout, site,
+                                       gp, have_gp, gp_section,
+                                       max_alignment) ? 0U : 4U;
+                continue;
+            }
             if (site->kind != MINILD_RV_RELAX_CALL) {
                 continue;
             }
@@ -559,6 +859,9 @@ static bool minild_riscv_replan_image_layout(
                 reloc->symbol < state->resolver.count &&
                 state->resolver.entries[reloc->symbol].section == (int)i &&
                 displacement > 0;
+            if (reloc->symbol < state->resolver.count) {
+                target_section = state->resolver.entries[reloc->symbol].section;
+            }
             jal_displacement = displacement;
             rvc_displacement = displacement;
             /* A forward target in the *same* input section moves as this
@@ -573,6 +876,41 @@ static bool minild_riscv_replan_image_layout(
                     rvc_displacement -= 6;
                 } else if (site->final_size == 4U) {
                     rvc_displacement -= 2;
+                }
+            }
+            if (target_section >= 0 &&
+                (size_t)target_section < plan->section_count &&
+                ((size_t)target_section == i ||
+                 (layout->scripted &&
+                  layout->work[i].owner_command != SIZE_MAX &&
+                  layout->work[i].owner_command ==
+                      layout->work[target_section].owner_command))) {
+                same_output_alignment =
+                    minild_rv_relax_call_output_alignment(
+                        state, layout, i, (size_t)target_section);
+            }
+            /* GNU BFD conservatively reserves sh_addralign of the target
+             * output section even for same-output CALLs. This prevents
+             * over-shrinking high-alignment Linux init text and matches
+             * GNU's generic range policy (not a Linux-specific constant). */
+            if (same_output_alignment != 0U) {
+                if (same_output_alignment > INT64_MAX) {
+                    continue;
+                }
+                if (jal_displacement >= 0) {
+                    if (jal_displacement >
+                        INT64_MAX - (int64_t)same_output_alignment) {
+                        continue;
+                    }
+                    jal_displacement += (int64_t)same_output_alignment;
+                    rvc_displacement += (int64_t)same_output_alignment;
+                } else {
+                    if (jal_displacement <
+                        INT64_MIN + (int64_t)same_output_alignment) {
+                        continue;
+                    }
+                    jal_displacement -= (int64_t)same_output_alignment;
+                    rvc_displacement -= (int64_t)same_output_alignment;
                 }
             }
             if ((jal_displacement & 1) == 0 &&
@@ -650,6 +988,32 @@ static bool minild_riscv_replan_image_layout(
         size_t j;
         for (j = 0U; j < section->site_count; ++j) {
             const MiniLdRiscvRelaxSite *site = &section->sites[j];
+            if (site->kind == MINILD_RV_RELAX_GP) {
+                const MiniLdReloc *hi = &state->relocations.entries[
+                    site->relocation_index];
+                size_t k;
+
+                for (k = 0U; k < site->gp_lo_count; ++k) {
+                    const MiniLdRiscvGpLo *saved = &site->gp_los[k];
+                    MiniLdReloc *lo = &state->relocations.entries[
+                        saved->relocation_index];
+
+                    lo->symbol = saved->source_symbol;
+                    lo->addend = saved->source_addend;
+                    lo->type = saved->source_type;
+                    if (site->final_size == 0U) {
+                        lo->symbol = hi->symbol;
+                        lo->addend = hi->addend + saved->source_addend;
+                        lo->type = saved->source_type ==
+                                   R_RISCV_PCREL_LO12_I
+                                       ? R_RISCV_GPREL_I : R_RISCV_GPREL_S;
+                    }
+                }
+                if (site->final_size == 0U) {
+                    state->relocations.entries[
+                        site->relocation_index].type = R_RISCV_NONE;
+                }
+            }
             if (site->kind == MINILD_RV_RELAX_CALL &&
                 site->call_width != 8U) {
                 state->relocations.entries[site->relocation_index].type =

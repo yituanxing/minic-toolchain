@@ -114,8 +114,10 @@ for bits in 32 64; do
         -o "$work/$bits-iteration.elf" "$work/$bits-iteration.o"
 done
 
-# A CALL at +1MiB must consider its own deletion when its target follows
-# in the same section; otherwise no pass ever makes the first change.
+# GNU BFD conservatively bounds a CALL to a same-output-section target by
+# that output section's sh_addralign.  A +1MiB forward call therefore stays
+# AUIPC/JALR at this boundary: BFD must not assume its own future deletion
+# makes an otherwise out-of-range relocation fit.
 cat >"$work/self-shrink.s" <<'ASM'
 .option relax
 .text
@@ -277,10 +279,13 @@ for bits in (32, 64):
     text_vma, text_file, text_size = section(path, '.text')
     first = struct.unpack_from(
         '<I', path.read_bytes(), text_file + start-text_vma)[0]
-    assert first & 0x7f == 0x6f, (bits, hex(first))
-    assert target-start == 1048572, (bits,target-start)
+    second = struct.unpack_from(
+        '<I', path.read_bytes(), text_file + start-text_vma+4)[0]
+    assert first & 0x7f == 0x17, (bits, hex(first))
+    assert second & 0x707f == 0x67, (bits, hex(second))
+    assert target-start == 1048576, (bits,target-start)
     print(f'MINILD_RV_RELAX_SELF=PASS rv={bits} '
-          f'JAL_boundary={target-start}')
+          f'AUIPC_JALR_boundary={target-start}')
 
 for bits, expected_delta in ((32, 4), (64, 6)):
     path = root / f'{bits}-compressed.elf'
