@@ -838,6 +838,12 @@ check-minild-aarch64-discarded-dynrel: $(MINIAS_BINARY) $(MINILD_BINARY)
 	MINILD="$(abspath $(MINILD_BINARY))" \
 	bash tests/linker/probe-aarch64-discarded-dynrel.sh
 
+.PHONY: check-minild-aarch64-kernel-provide-dynordinals
+check-minild-aarch64-kernel-provide-dynordinals: $(MINIAS_BINARY) $(MINILD_BINARY)
+	MINIAS="$(abspath $(MINIAS_BINARY))" \
+	MINILD="$(abspath $(MINILD_BINARY))" \
+	bash tests/linker/probe-aarch64-kernel-provide-dynordinals.sh
+
 .PHONY: check-minild-aarch64-kernel-got-bfd-order
 check-minild-aarch64-kernel-got-bfd-order: $(MINIAS_BINARY) $(MINILD_BINARY)
 	MINIAS="$(abspath $(MINIAS_BINARY))" \
@@ -899,6 +905,10 @@ check-minild-script-top-level-empty-statements: $(MINILD_BINARY)
 check-minild-script-provide-gnu: $(MINILD_BINARY)
 	MINILD="$(abspath $(MINILD_BINARY))" \
 	bash tests/linker/probe-script-provide-gnu.sh
+
+.PHONY: check-minild-gnu-bfd-local-dyn-index
+check-minild-gnu-bfd-local-dyn-index:
+	bash tests/linker/probe-gnu-bfd-local-dyn-index.sh
 
 .PHONY: check-minild-synthetic-byte-phdr-flags
 check-minild-synthetic-byte-phdr-flags: $(MINILD_BINARY)
@@ -977,6 +987,7 @@ check-minild-five-arch-linux-linker-boundary: \
 	check-minild-aarch64-static-instruction-relocs \
 	check-minild-aarch64-merge-insn-relocs \
 	check-minild-aarch64-discarded-dynrel \
+	check-minild-aarch64-kernel-provide-dynordinals \
 	check-minild-aarch64-kernel-got-bfd-order \
 	check-minild-loongarch-static-pie \
 	check-minild-loongarch-pcala-relax-fixedpoint \
@@ -988,6 +999,7 @@ check-minild-five-arch-linux-linker-boundary: \
 	check-minild-script-data-width-flags \
 	check-minild-script-top-level-empty-statements \
 	check-minild-script-provide-gnu \
+	check-minild-gnu-bfd-local-dyn-index \
 	check-minild-script-forward-placement-fixedpoint \
 	check-minild-synthetic-byte-phdr-flags \
 	check-minild-static-script-load-page-coalesce \

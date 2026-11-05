@@ -63,6 +63,27 @@ jobs:
           esac
           echo 'MINILD_TWOARCH_TOOLS=PASS kernels_C_compiled=0'
 
+      # Catch missing cross-glibc headers/libs before downloading 270 MB of
+      # immutable GNU Linux objects. This is a syntax-only userspace probe,
+      # never a Linux kernel source compilation or a link step.
+      - name: Fail early unless the exact GNU userspace cross sysroot is usable
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          case '${{ matrix.arch }}' in
+            aarch64) cc=aarch64-linux-gnu-gcc ;;
+            loongarch64) cc=loongarch64-linux-gnu-gcc-13 ;;
+          esac
+          printf '#include <errno.h>\n#include <stdint.h>\nint main(void){return EINVAL;}\n' |
+            "$cc" -x c -std=c11 -fsyntax-only -
+          cross_libc=$("$cc" -print-file-name=libc.a)
+          [[ "$cross_libc" != libc.a && -s "$cross_libc" ]] || {
+            echo "MINILD_TWOARCH_SYSROOT=FAIL missing_cross_static_libc=$cross_libc" >&2
+            exit 1
+          }
+          printf 'MINILD_TWOARCH_SYSROOT=PASS arch=%s static_libc=%s kernel_C_compiles=0\n' \
+            '${{ matrix.arch }}' "$cross_libc"
+
       - name: Restore immutable original GNU Kbuild object tree if cached
         id: golden_cache
         uses: actions/cache/restore@v4

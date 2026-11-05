@@ -16,6 +16,7 @@ typedef struct MiniLdScriptDeferredOutputSymbol {
     size_t output_command;
     uint64_t dot;
     bool hidden;
+    bool provide;
     bool pending;
 } MiniLdScriptDeferredOutputSymbol;
 
@@ -80,7 +81,8 @@ static bool script_layout_defer_byte(MiniLdScriptLayoutState *script_state,
 
 static bool script_layout_defer_output_symbol(
     MiniLdScriptLayoutState *script_state, const char *name,
-    MiniLdScriptExprId expression, size_t output_command, bool hidden) {
+    MiniLdScriptExprId expression, size_t output_command, bool hidden,
+    bool provide) {
     MiniLdScriptDeferredOutputSymbol *entry;
 
     if (script_state->deferred_output_count ==
@@ -112,6 +114,7 @@ static bool script_layout_defer_output_symbol(
     entry->output_command = output_command;
     entry->dot = script_state->dot;
     entry->hidden = hidden;
+    entry->provide = provide;
     entry->pending = true;
     return true;
 }
@@ -508,6 +511,25 @@ static bool script_layout_hide_symbol(MiniLdScriptLayoutState *script_state,
     script_state->state->resolver.entries[index].other =
         (unsigned char)((script_state->state->resolver.entries[index].other &
                          ~(unsigned char)0x03U) | STV_HIDDEN);
+    return true;
+}
+
+/* A PROVIDE assignment becomes source provenance only after it actually
+ * defines a canonical symbol.  Speculative declarations and skipped
+ * PROVIDEs must not contribute BFD forced-local dynamic symbol ordinals. */
+static bool script_layout_mark_provided(MiniLdScriptLayoutState *script_state,
+                                        const char *name) {
+    size_t index = symbol_resolver_lookup(&script_state->state->resolver,
+                                          name);
+
+    if (index == SIZE_MAX ||
+        script_state->state->resolver.entries[index].section ==
+            MINILD_SECTION_UNDEF) {
+        fprintf(script_state->state->diagnostics,
+                "minic-ld: linker-script-missing-provided-symbol:%s\n", name);
+        return false;
+    }
+    script_state->state->resolver.entries[index].script_provided = true;
     return true;
 }
 
@@ -1478,7 +1500,8 @@ static bool script_layout_process_output(MiniLdScriptLayoutState *script_state,
                 if (!script_layout_defer_output_symbol(
                         script_state, item->value.symbol.name,
                         item->value.symbol.expression, command_index,
-                        item->value.symbol.hidden)) {
+                        item->value.symbol.hidden,
+                        item->value.symbol.provide)) {
                     return false;
                 }
                 break;
@@ -1491,7 +1514,10 @@ static bool script_layout_process_output(MiniLdScriptLayoutState *script_state,
                                              value) ||
                 (item->value.symbol.hidden &&
                  !script_layout_hide_symbol(script_state,
-                                            item->value.symbol.name))) {
+                                            item->value.symbol.name)) ||
+                (item->value.symbol.provide &&
+                 !script_layout_mark_provided(script_state,
+                                              item->value.symbol.name))) {
                 return false;
             }
             break;
@@ -2050,7 +2076,10 @@ static bool static_build_script_layout(MiniLdState *state,
                     command->value.symbol.expression, value) ||
                 (command->value.symbol.hidden &&
                  !script_layout_hide_symbol(&script_state,
-                                            command->value.symbol.name))) {
+                                            command->value.symbol.name)) ||
+                (command->value.symbol.provide &&
+                 !script_layout_mark_provided(&script_state,
+                                              command->value.symbol.name))) {
                 goto done;
             }
             break;
@@ -2095,7 +2124,10 @@ static bool static_build_script_layout(MiniLdState *state,
                                                  entry->name, value) ||
                     (entry->hidden &&
                      !script_layout_hide_symbol(&script_state,
-                                                entry->name))) {
+                                                entry->name)) ||
+                    (entry->provide &&
+                     !script_layout_mark_provided(&script_state,
+                                                  entry->name))) {
                     goto done;
                 }
                 script_state.dot = saved_dot;
@@ -2144,7 +2176,10 @@ static bool static_build_script_layout(MiniLdState *state,
                         command->value.symbol.expression, value) ||
                     (command->value.symbol.hidden &&
                      !script_layout_hide_symbol(&script_state,
-                                                command->value.symbol.name))) {
+                                                command->value.symbol.name)) ||
+                    (command->value.symbol.provide &&
+                     !script_layout_mark_provided(&script_state,
+                                                  command->value.symbol.name))) {
                     goto done;
                 }
                 script_state.dot = saved_dot;

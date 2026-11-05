@@ -509,6 +509,76 @@ PY_PE
   echo "MINILD_TWOARCH_IMAGE=PASS arch=$arch Image_from_MiniLD=true postlink_GNU_objcopy=true EFI_zboot_owner=$([[ $arch == loongarch64 ]] && echo MiniLD || echo not_applicable)"
 }
 
+# arm64 boot protocol, Linux 6.6.143 Documentation/arch/arm64/booting.rst:
+#     0x08 u64 text_offset, 0x10 u64 image_size, 0x18 u64 flags,
+#     0x38 u32 magic ('ARM\x64'). The instructions at 0x00 can legitimately
+# differ between two independently linked images; don't byte-compare them.
+# Likewise image_size may change with section/BSS placement, so audit the
+# values and require each image to cover its own file, but never invent a
+# GNU-exact-size criterion that could reject a valid alternate linker layout.
+arm64_image_header() {
+  [[ $# == 4 ]] || die 'usage=arm64-header IMAGE GNU_IMAGE LANE EVIDENCE'
+  local candidate=$1 control=$2 lane=$3 ev=$4
+  [[ $lane == GNU || $lane == MINILD ]] || die invalid_arm64_header_lane
+  file "$candidate"; file "$control"
+  mkdir -p "$ev"
+  python3 - "$candidate" "$control" "$lane" <<'PY_ARM64_HEADER' | tee "$ev/AArch64-$lane-image-header.txt"
+from pathlib import Path
+import struct
+import sys
+
+candidate, control = map(Path, sys.argv[1:3])
+lane = sys.argv[3]
+
+def read_header(path):
+    with path.open('rb') as image:
+        header = image.read(64)
+    size = path.stat().st_size
+    if size < 64 or len(header) != 64:
+        raise SystemExit(f'MINILD_ARM64_IMAGE_HEADER=FAIL lane={lane} short_Image={path} size={size}')
+    # ARM64 Image is little-endian for this frozen GNU kernel configuration.
+    magic = struct.unpack_from('<I', header, 0x38)[0]
+    text_offset, image_size, flags = struct.unpack_from('<QQQ', header, 0x08)
+    if magic != 0x644d5241:  # LE bytes: 41 52 4d 64, i.e. 'ARM\x64'
+        raise SystemExit(f'MINILD_ARM64_IMAGE_HEADER=FAIL lane={lane} magic=0x{magic:08x} image={path}')
+    if image_size == 0 or image_size < size:
+        raise SystemExit(f'MINILD_ARM64_IMAGE_HEADER=FAIL lane={lane} invalid_memory_size={image_size} file_bytes={size} image={path}')
+    return dict(path=str(path), file_bytes=size, text_offset=text_offset,
+                image_size=image_size, flags=flags, magic=magic,
+                bss_and_padding=image_size - size)
+
+gnu = read_header(control)
+new = read_header(candidate)
+for name, val in [('GNU', gnu), (lane, new)]:
+    print('MINILD_ARM64_IMAGE_HEADER_FIELD '
+          f'kind={name} magic=0x{val["magic"]:08x} '
+          f'text_offset=0x{val["text_offset"]:x} '
+          f'image_size={val["image_size"]} flags=0x{val["flags"]:x} '
+          f'file_bytes={val["file_bytes"]} '
+          f'bss_padding={val["bss_and_padding"]}')
+
+# The original GNU Kbuild uses the very same kernel .config, platform and
+# boot ABI; changing either field risks QEMU loading the MiniLD image at
+# the wrong address or interpreting different memory-placement semantics.
+for key in ('text_offset', 'flags'):
+    if new[key] != gnu[key]:
+        raise SystemExit('MINILD_ARM64_IMAGE_HEADER=FAIL '
+                         f'lane={lane} GNU_vs_MiniLD_{key} '
+                         f'gnu=0x{gnu[key]:x} mini=0x{new[key]:x}')
+
+size_delta = new['image_size'] - gnu['image_size']
+file_delta = new['file_bytes'] - gnu['file_bytes']
+padding_delta = new['bss_and_padding'] - gnu['bss_and_padding']
+print('MINILD_ARM64_IMAGE_HEADER=PASS '
+      f'lane={lane} magic=0x{new["magic"]:08x} '
+      'boot_abi_matches_GNU=true '
+      f'image_size_delta={size_delta:+d} '
+      f'file_size_delta={file_delta:+d} '
+      f'bss_padding_delta={padding_delta:+d} '
+      'memory_extent_valid=true')
+PY_ARM64_HEADER
+}
+
 qemu_p1() {
   [[ $# == 5 ]] || die 'usage=qemu-p1 ARCH GNU-or-MINILD OUT WORK EVIDENCE'
   arch_profile "$1"
@@ -523,6 +593,9 @@ qemu_p1() {
     loongarch64:MINILD) image="$out/arch/loongarch/boot/vmlinuz.efi.minild" ;;
   esac
   file "$image"
+  if [[ $arch == aarch64 ]]; then
+    arm64_image_header "$image" "$out/arch/arm64/boot/Image" "$lane" "$ev"
+  fi
   if [[ $lane == GNU ]]; then
     sha256sum --quiet -c "$ev/original-GNU-image.sha256" || die tampered_GNU_QEMU_image
     sha256sum --quiet -c "$ev/original-GNU-vmlinux.sha256" || die tampered_GNU_control_vmlinux
@@ -603,6 +676,7 @@ case "${1:-}" in
   verify-golden) shift; verify_golden "$@" ;;
   full-link) shift; full_link "$@" ;;
   image) shift; image "$@" ;;
+  arm64-header) shift; arm64_image_header "$@" ;;
   qemu-p1) shift; qemu_p1 "$@" ;;
   audit-final) shift; audit_final "$@" ;;
   guard-make) shift; guard_make "$@" ;;

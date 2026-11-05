@@ -72,6 +72,11 @@ typedef struct MiniLdResolvedSymbol {
      * stays truly undefined until the script evaluator assigns its value;
      * it must not count as an original undefined reference for PROVIDE. */
     bool script_planned_defined;
+    /* Provenance of an actually evaluated PROVIDE/PROVIDE_HIDDEN script
+     * assignment, independent of speculative/shared declaration state.
+     * BFD preserves pre-script hidden-UND dynamic candidates that are later
+     * defined by PROVIDE as forced-local dynsym ordinals. */
+    bool script_provided;
     /* Known SHN_ABS before shared dynamic relocation reservation; false
      * is conservative for dot/section-relative script expressions. */
     bool script_planned_absolute;

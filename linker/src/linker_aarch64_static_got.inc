@@ -71,6 +71,13 @@ typedef struct MiniLdAarch64GotOrder {
     bool local;
 } MiniLdAarch64GotOrder;
 
+typedef struct MiniLdAarch64KernelDynRecord {
+    uint64_t place;
+    uint32_t type;
+    size_t symbol;
+    int64_t addend;
+} MiniLdAarch64KernelDynRecord;
+
 /* BFD allocates AArch64 global GOT slots through elf_link_hash_traverse,
  * rather than from the order in which input relocations were encountered.
  * The hash table grows at 75% occupancy using libiberty's prime sequence;
@@ -189,6 +196,212 @@ static bool minild_aarch64_kernel_order_got(MiniLdState *state,
     free(order);
     free(slots);
     return true;
+}
+
+static bool minild_aarch64_kernel_undefined_weak(
+    const MiniLdState *state, size_t symbol_index) {
+    const MiniLdResolvedSymbol *symbol;
+
+    if (symbol_index >= state->resolver.count) return false;
+    symbol = &state->resolver.entries[symbol_index];
+    return symbol->section == MINILD_SECTION_UNDEF &&
+           ELF64_ST_BIND(symbol->info) == STB_WEAK &&
+           ELF64_ST_VISIBILITY(symbol->other) == STV_DEFAULT;
+}
+
+/* GNU records a hidden undefined input symbol as a dynamic candidate while
+ * reading a PIC object.  A later linker-script PROVIDE may define it and
+ * force local binding; BFD's dynsym renumbering retains it in the local
+ * prefix *before* unresolved weak global symbols.  InputGraph preserves the
+ * original UND/visibility after the canonical resolver is rewritten.  The
+ * kernel's script discards ordinary dynamic metadata, so no output-section
+ * dynsym records precede this local prefix (unlike a normal shared DSO). */
+static bool minild_aarch64_kernel_forced_local_dyn_count(
+    const MiniLdState *state, size_t *count_out) {
+    unsigned char *seen;
+    size_t i, count = 0U;
+
+    seen = calloc(state->resolver.count == 0U ? 1U :
+                  state->resolver.count, sizeof(*seen));
+    if (seen == NULL) return false;
+    for (i = 0U; i < state->inputs.symbol_count; ++i) {
+        const MiniLdInputSymbol *source = &state->inputs.symbols[i];
+        const MiniLdResolvedSymbol *resolved;
+        size_t canonical = source->canonical_symbol;
+
+        if (canonical >= state->resolver.count || seen[canonical] != 0U ||
+            source->elf_section != SHN_UNDEF ||
+            ELF64_ST_BIND(source->info) == STB_LOCAL ||
+            ELF64_ST_VISIBILITY(source->other) != STV_HIDDEN) {
+            continue;
+        }
+        resolved = &state->resolver.entries[canonical];
+        if (!resolved->script_provided ||
+            resolved->section == MINILD_SECTION_UNDEF) {
+            continue;
+        }
+        seen[canonical] = 1U;
+        ++count;
+    }
+    free(seen);
+    *count_out = count;
+    return true;
+}
+
+static int minild_aarch64_kernel_dyn_record_compare(const void *left,
+                                                      const void *right) {
+    const MiniLdAarch64KernelDynRecord *a = left;
+    const MiniLdAarch64KernelDynRecord *b = right;
+    /* GNU appends .rela.got's GLOB_DAT entries before input-section ABS64
+     * dynamic entries, each group's records ordered by relocation place. */
+    if (a->type != b->type) {
+        if (a->type == R_AARCH64_GLOB_DAT) return -1;
+        if (b->type == R_AARCH64_GLOB_DAT) return 1;
+    }
+    if (a->place < b->place) return -1;
+    if (a->place > b->place) return 1;
+    return 0;
+}
+
+static bool minild_aarch64_kernel_emit_weak_dynrels(
+    MiniLdState *state, const MiniLdLayout *layout,
+    const MiniLdAarch64StaticGot *got) {
+    MiniLdAarch64GotOrder *dyn_symbols = NULL;
+    MiniLdAarch64KernelDynRecord *records = NULL;
+    size_t *dynamic_index = NULL;
+    unsigned char *needed = NULL;
+    size_t local_count, dynamic_count = 0U, record_count = 0U;
+    size_t bucket_count = minild_aarch64_bfd_hash_capacity(state);
+    size_t i;
+    bool ok = false;
+
+    if (got->kernel_rela_section == SIZE_MAX) return true;
+    if (!minild_aarch64_kernel_forced_local_dyn_count(state, &local_count) ||
+        got->symbol_count > SIZE_MAX / sizeof(*dynamic_index)) return false;
+    needed = calloc(got->symbol_count == 0U ? 1U :
+                    got->symbol_count, sizeof(*needed));
+    dynamic_index = malloc((got->symbol_count == 0U ? 1U :
+                            got->symbol_count) * sizeof(*dynamic_index));
+    if (needed == NULL || dynamic_index == NULL) goto out;
+    for (i = 0U; i < got->symbol_count; ++i) {
+        dynamic_index[i] = SIZE_MAX;
+        if (got->slot_offsets[i] != SIZE_MAX &&
+            minild_aarch64_kernel_undefined_weak(state, i)) {
+            needed[i] = 1U;
+        }
+    }
+    for (i = 0U; i < state->relocations.count; ++i) {
+        const MiniLdReloc *reloc = &state->relocations.entries[i];
+        MiniLdSection *source;
+        bool live;
+
+        if (reloc->type != R_AARCH64_ABS64 ||
+            !minild_aarch64_kernel_undefined_weak(state, reloc->symbol)) {
+            continue;
+        }
+        if (!minild_static_reloc_source(state, layout, reloc,
+                                       "aarch64-kernel-weak-source",
+                                       &source, &live)) goto out;
+        if (live && (source->flags & SHF_ALLOC) != 0U) {
+            needed[reloc->symbol] = 1U;
+        }
+    }
+    for (i = 0U; i < got->symbol_count; ++i) {
+        if (needed[i] != 0U) ++dynamic_count;
+    }
+    if (dynamic_count == 0U) {
+        ok = true;
+        goto out;
+    }
+    if (dynamic_count > SIZE_MAX / sizeof(*dyn_symbols) ||
+        got->kernel_relative_reserved_count > SIZE_MAX / sizeof(*records)) {
+        goto out;
+    }
+    dyn_symbols = malloc(dynamic_count * sizeof(*dyn_symbols));
+    records = malloc(got->kernel_relative_reserved_count * sizeof(*records));
+    if (dyn_symbols == NULL || records == NULL) goto out;
+    dynamic_count = 0U;
+    for (i = 0U; i < got->symbol_count; ++i) {
+        if (needed[i] == 0U) continue;
+        dyn_symbols[dynamic_count].symbol = i;
+        dyn_symbols[dynamic_count].original_offset = SIZE_MAX;
+        dyn_symbols[dynamic_count].local = false;
+        dyn_symbols[dynamic_count].hash_bucket =
+            minild_aarch64_bfd_hash_bucket(
+                state->resolver.entries[i].name, bucket_count);
+        ++dynamic_count;
+    }
+    qsort(dyn_symbols, dynamic_count, sizeof(*dyn_symbols),
+          minild_aarch64_got_order_compare);
+    for (i = 0U; i < dynamic_count; ++i) {
+        if (local_count > SIZE_MAX - i - 1U) goto out;
+        dynamic_index[dyn_symbols[i].symbol] = local_count + i + 1U;
+    }
+    if (got->present && got->section < state->work.count) {
+        uint64_t got_base = layout->work[got->section].vaddr;
+        for (i = 0U; i < got->symbol_count; ++i) {
+            size_t offset = got->slot_offsets[i];
+            if (offset == SIZE_MAX || dynamic_index[i] == SIZE_MAX) continue;
+            if (record_count >= got->kernel_relative_reserved_count ||
+                offset > UINT64_MAX - got_base) goto out;
+            records[record_count].place = got_base + (uint64_t)offset;
+            records[record_count].type = R_AARCH64_GLOB_DAT;
+            records[record_count].symbol = i;
+            records[record_count].addend = 0;
+            ++record_count;
+        }
+    }
+    for (i = 0U; i < state->relocations.count; ++i) {
+        const MiniLdReloc *reloc = &state->relocations.entries[i];
+        MiniLdStaticRelocOperands operands;
+        MiniLdSection *source;
+        bool live;
+
+        if (reloc->type != R_AARCH64_ABS64 ||
+            reloc->symbol >= got->symbol_count ||
+            dynamic_index[reloc->symbol] == SIZE_MAX) continue;
+        if (!minild_static_reloc_source(state, layout, reloc,
+                                       "aarch64-kernel-weak-source",
+                                       &source, &live)) goto out;
+        if (!live || (source->flags & SHF_ALLOC) == 0U) continue;
+        if (source->type == SHT_NOBITS || reloc->offset > SIZE_MAX ||
+            !range_ok((size_t)reloc->offset, 8U, source->size) ||
+            !minild_static_reloc_operands(
+                state, layout, reloc,
+                "aarch64-kernel-weak-place", &operands) ||
+            record_count >= got->kernel_relative_reserved_count) goto out;
+        records[record_count].place = operands.place;
+        records[record_count].type = R_AARCH64_ABS64;
+        records[record_count].symbol = reloc->symbol;
+        records[record_count].addend = reloc->addend;
+        ++record_count;
+    }
+    if (record_count > got->kernel_relative_reserved_count) goto out;
+    qsort(records, record_count, sizeof(*records),
+          minild_aarch64_kernel_dyn_record_compare);
+    for (i = 0U; i < record_count; ++i) {
+        MiniLdSection *rela = &state->work.sections[got->kernel_rela_section];
+        size_t entry = got->kernel_relative_reserved_count - record_count + i;
+        size_t offset;
+        if (entry > SIZE_MAX / sizeof(Elf64_Rela)) goto out;
+        offset = entry * sizeof(Elf64_Rela);
+        if (!range_ok(offset, sizeof(Elf64_Rela), rela->size)) goto out;
+        store_u64le(rela->data + offset, records[i].place);
+        store_u64le(rela->data + offset + 8U,
+                    ELF64_R_INFO(dynamic_index[records[i].symbol],
+                                 records[i].type));
+        store_u64le(rela->data + offset + 16U,
+                    (uint64_t)records[i].addend);
+    }
+    ok = true;
+out:
+    if (!ok) fprintf(state->diagnostics,
+                     "minic-ld: aarch64-kernel-weak-dynrel-invalid\n");
+    free(needed);
+    free(dynamic_index);
+    free(dyn_symbols);
+    free(records);
+    return ok;
 }
 
 static int minild_aarch64_kernel_relative_compare(const void *a,
@@ -772,6 +985,10 @@ static bool minild_aarch64_fill_static_relocations(
                 store_u64le(section->data + offset, value);
             }
         }
+    }
+    if (state->kernel_shared_image &&
+        !minild_aarch64_kernel_emit_weak_dynrels(state, layout, got)) {
+        return false;
     }
     if (got->ifunc_count != 0U) {
         MiniLdSection *stub = &state->work.sections[got->ifunc_stub_section];
