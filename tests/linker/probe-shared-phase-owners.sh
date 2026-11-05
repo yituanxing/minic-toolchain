@@ -162,7 +162,7 @@ if 'shared->symbols[' not in pre or \
     raise SystemExit('MINILD_SHARED_PHASE_STRUCTURE=FAIL symbol_plan_consumers')
 
 # ET_DYN only projects ordinary dynamic RELA records. The RISC-V leaf owns
-# final HI/LO instruction fixups, CALL/PLT patching and PLT instruction words;
+# final HI/LO instruction fixups, CALL/PLT patching and checked PLT words;
 # the shared mode may still reserve slots and name JUMP_SLOT relocations.
 target_fixup = (src / 'linker_riscv_fixup.inc').read_text(encoding='utf-8')
 shared_apply = sources['linker_shared_reloc_apply.inc']
@@ -170,9 +170,10 @@ shared_target = sources['linker_shared_riscv_target.inc']
 shared_abi = sources['linker_shared_target_abi.inc']
 shared_riscv_abi = sources['linker_shared_riscv_abi.inc']
 final_writer = (src / 'linker_final_elf_image.inc').read_text(encoding='utf-8')
-if len(re.findall(r'\bstatic\s+void\s+minild_target_emit_plt_entry\s*\(',
+if len(re.findall(r'\bstatic\s+bool\s+minild_target_emit_plt_entry\s*\(',
                   target_fixup)) != 1 or \
         shared_target.count('minild_target_emit_plt_entry(') != 1 or \
+        '!minild_target_emit_plt_entry(' not in shared_target or \
         'minild_target_emit_plt_entry(' in shared_apply or \
         re.search(r'\bR_RISCV_\w+\b|\bminild_riscv_\w+\b|'
                   r'\bminild_target_apply_(?:final_instruction|pcrel_lo12)\s*\(|'
