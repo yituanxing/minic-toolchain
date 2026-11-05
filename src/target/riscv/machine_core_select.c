@@ -1565,6 +1565,203 @@ static bool rv_core_memory(RvCoreSelection *sel,
     if (!rv_emit_volatile(sel, opcode, is_volatile, ops, 2U)) return false;
     return !load || rv_store(sel, ins->result, RV_T1);
 }
+
+/* Checked arithmetic has two distinct results: the C pointer's stored
+ * integer and the Core SSA boolean. A full-XLEN multiply may call compiler-rt
+ * twice, so no physical t/a register or pre-call address is allowed to
+ * survive across those calls. Store the integer through its verified Core
+ * pointer before reconstructing the flag, and use the otherwise unwritten
+ * SSA boolean slot as an internal word-sized product spill between calls. */
+static bool rv_checked_store_result(RvCoreSelection *sel,
+    MinicCoreValueId address, unsigned size, unsigned low) {
+    unsigned i;
+    if (sel->xlen != 64U || size == 0U || size > 8U ||
+        low == RV_T0 || low == RV_T1 ||
+        !rv_load(sel, address, RV_T0)) return false;
+    /* Byte-exact transport also supports a packed/unaligned output pointer.
+     * No speculative aligned sd/sw is permitted without proven alignment. */
+    for (i = 0U; i < size; ++i) {
+        if ((i == 0U
+                ? !rv_rr(sel, MINIC_RISCV_MACHINE_MV, RV_T1, low)
+                : !rv_rri(sel, MINIC_RISCV_MACHINE_SRLI,
+                    RV_T1, low, (int64_t)(i * 8U))) ||
+            !rv_byte_transfer(sel, false, RV_T1, RV_T0, i, false))
+            return false;
+    }
+    return true;
+}
+
+static bool rv_checked_call(RvCoreSelection *sel, const char *helper) {
+    MinicMachineOperand op = {0};
+    if (helper == NULL || helper[0] == '\0') return false;
+    op.kind = MINIC_MACHINE_OPERAND_SYMBOL;
+    op.value.symbol.name = (char *)helper;
+    op.value.symbol.relocation = MINIC_RISCV_MACHINE_RELOC_CALL;
+    return rv_emit(sel, MINIC_RISCV_MACHINE_CALL_DIRECT, &op, 1U);
+}
+
+/* LP64 checked-add/sub/mul is an entire target-neutral Core instruction
+ * family. The old RV64 emitter is a semantic reference only; every operation
+ * here produces actual selected MachineIR, including the compiler-rt calls.
+ * Input/pointee types must be identical for the 18 canonical GNU builtins.
+ * Mixed-width/signed arithmetic is a separate admission case and remains
+ * fail-closed rather than silently changing the old overflow contract. */
+static bool rv_core_checked_overflow(RvCoreSelection *sel,
+    const MinicCoreInstruction *ins) {
+    const MinicCoreFunction *fn = sel->plan->core;
+    const MinicCoreTypeContext *types = fn->type_context;
+    const MinicCoreValueId left = ins->value.integer_overflow.left;
+    const MinicCoreValueId right = ins->value.integer_overflow.right;
+    const MinicCoreValueId address =
+        ins->value.integer_overflow.result_address;
+    const MinicCoreIntegerOverflowOperator op =
+        ins->value.integer_overflow.operator_kind;
+    const MinicCoreType *pointer, *result, *flag;
+    MinicCoreTypeId pointee;
+    unsigned size;
+    bool sign;
+    if (sel->xlen != 64U || types == NULL ||
+        left >= fn->value_count || right >= fn->value_count ||
+        address >= fn->value_count || ins->result >= fn->value_count ||
+        (op != MINIC_CORE_INTEGER_OVERFLOW_ADD &&
+         op != MINIC_CORE_INTEGER_OVERFLOW_SUBTRACT &&
+         op != MINIC_CORE_INTEGER_OVERFLOW_MULTIPLY)) return false;
+    pointer = minic_core_type_get(types, minic_core_type_unqualified(types,
+        fn->values[address].core_type_id));
+    flag = minic_core_type_get(types, minic_core_type_unqualified(types,
+        ins->core_type_id));
+    if (pointer == NULL || pointer->kind != MINIC_CORE_TYPE_POINTER ||
+        !pointer->has_layout || pointer->size != 8U ||
+        flag == NULL || flag->kind != MINIC_CORE_TYPE_INTEGER ||
+        !flag->value.integer.is_bool ||
+        minic_core_type_unqualified(types,
+            fn->values[ins->result].core_type_id) !=
+            minic_core_type_unqualified(types, ins->core_type_id))
+        return false;
+    pointee = minic_core_type_unqualified(types,
+        pointer->value.pointer.pointee);
+    result = minic_core_type_get(types, pointee);
+    if (result == NULL || result->kind != MINIC_CORE_TYPE_INTEGER ||
+        !result->has_layout || result->value.integer.is_bool ||
+        (result->size != 1U && result->size != 2U &&
+         result->size != 4U && result->size != 8U) ||
+        result->value.integer.bit_width != result->size * 8U ||
+        minic_core_type_unqualified(types,
+            fn->values[left].core_type_id) != pointee ||
+        minic_core_type_unqualified(types,
+            fn->values[right].core_type_id) != pointee)
+        return false;
+    size = (unsigned)result->size;
+    sign = result->value.integer.is_signed;
+    if (op == MINIC_CORE_INTEGER_OVERFLOW_MULTIPLY) {
+        if (!minic_riscv_machine_checked_mul_runtime_call(fn, ins,
+                sel->xlen) ||
+            !sel->plan->frame->saves_return_address ||
+            !rv_load(sel, left, RV_A0) ||
+            !rv_load(sel, right, RV_A1) ||
+            !rv_checked_call(sel, "__muldi3") ||
+            !rv_rr(sel, MINIC_RISCV_MACHINE_MV, RV_T2, RV_A0))
+            return false;
+    } else if (!rv_load(sel, left, RV_T0) ||
+               !rv_load(sel, right, RV_T1) ||
+               !rv_rrr(sel, op == MINIC_CORE_INTEGER_OVERFLOW_ADD ?
+                   MINIC_RISCV_MACHINE_ADD : MINIC_RISCV_MACHINE_SUB,
+                   RV_T2, RV_T0, RV_T1)) return false;
+
+    if (size < 8U || op == MINIC_CORE_INTEGER_OVERFLOW_MULTIPLY) {
+        if (size < 8U) {
+            /* A promoted <=32-bit add/sub or multiply fits entirely in
+             * signed/unsigned 64-bit scratch; truncation detects overflow. */
+            if (!rv_rr(sel, MINIC_RISCV_MACHINE_MV, RV_T4, RV_T2) ||
+                !rv_normalize(sel, RV_T2, size, sign) ||
+                !rv_rrr(sel, MINIC_RISCV_MACHINE_XOR,
+                    RV_T4, RV_T4, RV_T2) ||
+                !rv_rr(sel, MINIC_RISCV_MACHINE_SNEZ, RV_T4, RV_T4))
+                return false;
+        } else {
+            /* The low product is stored before dividing, as in GCC's
+             * __builtin_mul_overflow contract. All t registers are caller
+             * clobbered, so both operands are reread after the call. */
+            if (!rv_checked_store_result(sel, address, size, RV_T2) ||
+                !rv_store(sel, ins->result, RV_T2) ||
+                !rv_load(sel, ins->result, RV_A0) ||
+                !rv_load(sel, right, RV_A1)) return false;
+            if (sign) {
+                /* __divdi3 must never receive the mathematically undefined
+                 * MIN/-1 pair. Change that denominator to +1 for this
+                 * internal verification call; the original pair is reread
+                 * below and independently sets the overflow predicate. */
+                if (!rv_load(sel, left, RV_T0) ||
+                    !rv_li(sel, RV_T5, INT64_MIN) ||
+                    !rv_rrr(sel, MINIC_RISCV_MACHINE_XOR,
+                        RV_T5, RV_T5, RV_T0) ||
+                    !rv_rr(sel, MINIC_RISCV_MACHINE_SEQZ, RV_T5, RV_T5) ||
+                    !rv_li(sel, RV_T6, -1) ||
+                    !rv_rrr(sel, MINIC_RISCV_MACHINE_XOR,
+                        RV_T6, RV_T6, RV_A1) ||
+                    !rv_rr(sel, MINIC_RISCV_MACHINE_SEQZ, RV_T6, RV_T6) ||
+                    !rv_rrr(sel, MINIC_RISCV_MACHINE_AND,
+                        RV_T5, RV_T5, RV_T6) ||
+                    !rv_rri(sel, MINIC_RISCV_MACHINE_SLLI,
+                        RV_T5, RV_T5, 1) ||
+                    !rv_rrr(sel, MINIC_RISCV_MACHINE_ADD,
+                        RV_A1, RV_A1, RV_T5)) return false;
+            }
+            if (!rv_rr(sel, MINIC_RISCV_MACHINE_SEQZ, RV_T5, RV_A1) ||
+                !rv_rrr(sel, MINIC_RISCV_MACHINE_OR,
+                    RV_A1, RV_A1, RV_T5) ||
+                !rv_checked_call(sel, sign ? "__divdi3" : "__udivdi3") ||
+                !rv_load(sel, left, RV_T0) ||
+                !rv_rrr(sel, MINIC_RISCV_MACHINE_XOR,
+                    RV_T4, RV_A0, RV_T0) ||
+                !rv_rr(sel, MINIC_RISCV_MACHINE_SNEZ, RV_T4, RV_T4) ||
+                !rv_load(sel, right, RV_T1) ||
+                !rv_rr(sel, MINIC_RISCV_MACHINE_SNEZ, RV_T1, RV_T1) ||
+                !rv_rrr(sel, MINIC_RISCV_MACHINE_AND,
+                    RV_T4, RV_T4, RV_T1)) return false;
+            if (sign) {
+                /* Integer division's MIN/-1 corner is defined by neither
+                 * C division nor the ordinary inverse-product check. */
+                if (!rv_load(sel, left, RV_T0) ||
+                    !rv_li(sel, RV_T5, INT64_MIN) ||
+                    !rv_rrr(sel, MINIC_RISCV_MACHINE_XOR,
+                        RV_T5, RV_T5, RV_T0) ||
+                    !rv_rr(sel, MINIC_RISCV_MACHINE_SEQZ, RV_T5, RV_T5) ||
+                    !rv_load(sel, right, RV_T1) ||
+                    !rv_li(sel, RV_T6, -1) ||
+                    !rv_rrr(sel, MINIC_RISCV_MACHINE_XOR,
+                        RV_T6, RV_T6, RV_T1) ||
+                    !rv_rr(sel, MINIC_RISCV_MACHINE_SEQZ, RV_T6, RV_T6) ||
+                    !rv_rrr(sel, MINIC_RISCV_MACHINE_AND,
+                        RV_T5, RV_T5, RV_T6) ||
+                    !rv_rrr(sel, MINIC_RISCV_MACHINE_OR,
+                        RV_T4, RV_T4, RV_T5)) return false;
+            }
+            return rv_store(sel, ins->result, RV_T4);
+        }
+    } else if (!sign) {
+        if (!rv_rrr(sel, MINIC_RISCV_MACHINE_SLTU,
+                RV_T4, op == MINIC_CORE_INTEGER_OVERFLOW_ADD ?
+                    RV_T2 : RV_T0,
+                op == MINIC_CORE_INTEGER_OVERFLOW_ADD ?
+                    RV_T0 : RV_T1)) return false;
+    } else {
+        /* ADD: ~(lhs^rhs)&(lhs^sum); SUB: (lhs^rhs)&(lhs^diff).
+         * Sign bit alone is the true signed-XLEN overflow predicate. */
+        if (!rv_rrr(sel, MINIC_RISCV_MACHINE_XOR,
+                RV_T4, RV_T0, RV_T1) ||
+            (op == MINIC_CORE_INTEGER_OVERFLOW_ADD &&
+             !rv_rr(sel, MINIC_RISCV_MACHINE_NOT, RV_T4, RV_T4)) ||
+            !rv_rrr(sel, MINIC_RISCV_MACHINE_XOR,
+                RV_T5, RV_T0, RV_T2) ||
+            !rv_rrr(sel, MINIC_RISCV_MACHINE_AND,
+                RV_T4, RV_T4, RV_T5) ||
+            !rv_rri(sel, MINIC_RISCV_MACHINE_SRLI,
+                RV_T4, RV_T4, 63)) return false;
+    }
+    return rv_checked_store_result(sel, address, size, RV_T2) &&
+        rv_store(sel, ins->result, RV_T4);
+}
 static bool rv_core_field_address(RvCoreSelection *sel,
     const MinicCoreInstruction *ins) {
     const size_t offset = ins->value.field_address.byte_offset;
@@ -2157,6 +2354,8 @@ static bool rv_core_instruction(RvCoreSelection *sel,
     case MINIC_CORE_INSTRUCTION_DOUBLE_MULTIPLY:
     case MINIC_CORE_INSTRUCTION_DOUBLE_DIVIDE:
         return rv_core_runtime_binary(sel, ins);
+    case MINIC_CORE_INSTRUCTION_INTEGER_OVERFLOW:
+        return rv_core_checked_overflow(sel, ins);
     case MINIC_CORE_INSTRUCTION_DOUBLE_EQUAL:
     case MINIC_CORE_INSTRUCTION_DOUBLE_LESS:
     case MINIC_CORE_INSTRUCTION_DOUBLE_LESS_EQUAL:
