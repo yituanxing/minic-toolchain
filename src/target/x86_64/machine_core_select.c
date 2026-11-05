@@ -5486,6 +5486,7 @@ static bool x86_source_checksum_carry(X86CoreSelector *sel,
     unsigned int form_id, partial = 0U, bits;
     size_t count, i, seed = SIZE_MAX;
     bool is_partial;
+    bool trace;
     if (ins->kind != MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM ||
         ins->result != MINIC_CORE_VALUE_INVALID ||
         sel->core->inline_asms == NULL ||
@@ -5494,6 +5495,7 @@ static bool x86_source_checksum_carry(X86CoreSelector *sel,
     source = &sel->core->inline_asms[
         ins->value.structured_inline_asm.inline_asm_id];
     form_id = source->target_machine_form_id;
+    trace = getenv("MINIC_X86_TYPED_REJECT_TRACE") != NULL;
     is_partial = form_id == MINIC_X86_MACHINE_ASM_CSUM_PARTIAL;
     if (form_id != MINIC_X86_MACHINE_ASM_ADD32_CARRY &&
         form_id != MINIC_X86_MACHINE_ASM_TCPUDP_NOFOLD &&
@@ -5505,6 +5507,22 @@ static bool x86_source_checksum_carry(X86CoreSelector *sel,
         partial == 2U ? 6U : 3U) :
         form_id == MINIC_X86_MACHINE_ASM_TCPUDP_NOFOLD ? 5U : 3U;
     roles = ins->value.structured_inline_asm.operands;
+    if (trace) fprintf(stderr,
+        "x86 checksum source: form=%u partial=%u variant=%u count=%zu"
+        " actual=%zu owner=%u unique=%u volatile=%u goto=%u"
+        " effective_mem=%u explicit_mem=%u reg_clobbers=%zu"
+        " immediates=%zu template_ok=%u\n",
+        form_id,partial,source->target_machine_form_variant,count,
+        ins->value.structured_inline_asm.operand_count,
+        (unsigned int)source->operand_plan_owner,
+        (unsigned int)(source->source_asm_unique_id != 0U),
+        (unsigned int)source->is_volatile,(unsigned int)source->is_goto,
+        (unsigned int)source->has_memory_clobber,
+        (unsigned int)source->explicit_memory_clobber,
+        source->register_clobber_count,source->resolved_immediate_count,
+        (unsigned int)minic_x86_64_typed_machine_form_matches_template(
+            form_id,source->target_machine_form_variant,
+            source->template_text,source->template_length));
     if (roles == NULL || (is_partial && (partial == 0U || partial > 6U)) ||
         ins->value.structured_inline_asm.operand_count != count ||
         source->target_machine_form_variant != 0U ||
@@ -5520,6 +5538,7 @@ static bool x86_source_checksum_carry(X86CoreSelector *sel,
             form_id,source->target_machine_form_variant,
             source->template_text,source->template_length))
         return false;
+    if (trace) fprintf(stderr,"x86 checksum pass: stage=source-seal\n");
     bits = is_partial ? 64U : 32U;
     if (form_id == MINIC_X86_MACHINE_ASM_ADD32_CARRY) seed = 1U;
     else if (form_id == MINIC_X86_MACHINE_ASM_CHECKSUM) seed = 2U;
@@ -5533,6 +5552,22 @@ static bool x86_source_checksum_carry(X86CoreSelector *sel,
                 MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT) :
                 memory ? MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT :
                     MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+        if (trace) fprintf(stderr,
+            "x86 checksum role: index=%zu actual_index=%zu kind=%u"
+            " expected=%u tie=%u expected_tie=%u tied_index=%zu"
+            " early=%u physical_early=%u physical_rw=%u fixed=%u"
+            " type_width_ok=%u\n",
+            i,roles[i].operand_index,(unsigned int)roles[i].kind,
+            (unsigned int)expected,
+            (unsigned int)roles[i].has_tied_output,(unsigned int)tied,
+            roles[i].tied_output_index,(unsigned int)roles[i].early_clobber,
+            (unsigned int)roles[i].physical_early_clobber,
+            (unsigned int)roles[i].physical_read_write,
+            (unsigned int)roles[i].has_fixed_register_binding,
+            (unsigned int)((i == 0U || memory) ?
+                x86_asm_gp_lvalue_width(sel,roles[i].value,bits/8U) :
+                x86_asm_gp_input_width(sel,roles[i].value,
+                    is_partial ? 8U : 4U)));
         if (roles[i].operand_index != i ||
             roles[i].kind != expected || roles[i].early_clobber ||
             roles[i].physical_early_clobber ||
@@ -5547,6 +5582,7 @@ static bool x86_source_checksum_carry(X86CoreSelector *sel,
                     is_partial ? 8U : 4U)))
             return false;
     }
+    if (trace) fprintf(stderr,"x86 checksum pass: stage=roles\n");
     if (is_partial) {
         if (!x86_core_load(sel,roles[0].value,MINIC_X86_REG_R11) ||
             !x86_2(sel,MINIC_X86_MI_MOV64_AR,
@@ -5554,6 +5590,7 @@ static bool x86_source_checksum_carry(X86CoreSelector *sel,
                 x86_reg(MINIC_X86_REG_RAX,64U))) return false;
     } else if (!x86_core_load(sel,roles[seed].value,
             MINIC_X86_REG_RAX)) return false;
+    if (trace) fprintf(stderr,"x86 checksum pass: stage=seed-load\n");
     for (i = 1U; i < count; ++i) {
         unsigned int reg;
         if (i == seed) continue;
@@ -5565,6 +5602,7 @@ static bool x86_source_checksum_carry(X86CoreSelector *sel,
         else reg = MINIC_X86_REG_R10;
         if (!x86_core_load(sel,roles[i].value,reg)) return false;
     }
+    if (trace) fprintf(stderr,"x86 checksum pass: stage=input-loads\n");
     for (i = 0U; i < count; ++i) {
         unsigned int reg = MINIC_X86_REG_RAX;
         const char *constraint;
@@ -5595,6 +5633,7 @@ static bool x86_source_checksum_carry(X86CoreSelector *sel,
                     MINIC_MACHINE_REGISTER_WRITE :
                 MINIC_MACHINE_REGISTER_READ;
     }
+    if (trace) fprintf(stderr,"x86 checksum pass: stage=bindings\n");
     flags.reg = (MinicMachineRegister){
         0U,64U,MINIC_MACHINE_REGISTER_FLAGS};
     flags.access = MINIC_MACHINE_REGISTER_CLOBBER;
@@ -5604,6 +5643,7 @@ static bool x86_source_checksum_carry(X86CoreSelector *sel,
             bindings,count,&flags,1U,false,false) ||
         !x86_core_load(sel,roles[0].value,MINIC_X86_REG_R11))
         return false;
+    if (trace) fprintf(stderr,"x86 checksum pass: stage=source-emit-and-output-address\n");
     return x86_2(sel,is_partial ? MINIC_X86_MI_MOV64_RA :
             MINIC_X86_MI_MOV32_RA,
         x86_reg(MINIC_X86_REG_RAX,bits),
