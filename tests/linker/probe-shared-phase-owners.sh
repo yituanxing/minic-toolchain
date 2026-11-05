@@ -247,6 +247,13 @@ if not re.search(r'\(\*shared_abi\)\s*\(void\)', target_profile) or \
         not re.search(r'\btarget->link_shared\s*\(', linker_entry):
     raise SystemExit('MINILD_SHARED_PHASE_STRUCTURE=FAIL '
                      'target_shared_callbacks_missing')
+if len(re.findall(r'\bbool\s+separate_code_default\s*;', target_profile)) != 1 or \
+        len(re.findall(r'\bbool\s+map_static_elf_headers\s*;', target_profile)) != 1 or \
+        not re.search(r'\bbool\s+separate_code_default\s*;\s*'
+                      r'\bbool\s+map_static_elf_headers\s*;',
+                      target_profile):
+    raise SystemExit('MINILD_SHARED_PHASE_STRUCTURE=FAIL '
+                     'target_segment_policy_fields')
 profile_rows = {
     row_name: row_body
     for row_name, row_body in re.findall(
@@ -254,42 +261,49 @@ profile_rows = {
         target_profile.split('static const MiniLdTargetProfile minild_target_profiles[] = {', 1)[1]
                       .split('\n};', 1)[0], re.S)
 }
-expected_profiles = {
-    'elf64lriscv': ('ELFCLASS64', 'EM_RISCV'),
-    'elf32lriscv': ('ELFCLASS32', 'EM_RISCV'),
-    'elf_x86_64': ('ELFCLASS64', 'EM_X86_64'),
-    'elf_i386': ('ELFCLASS32', 'EM_386'),
-    'aarch64linux': ('ELFCLASS64', 'EM_AARCH64'),
-    'elf64loongarch': ('ELFCLASS64', 'EM_LOONGARCH'),
-}
-if set(profile_rows) != set(expected_profiles):
+if set(profile_rows) != {'elf64lriscv', 'elf32lriscv', 'elf_x86_64',
+                         'elf_i386', 'aarch64linux', 'elf64loongarch'}:
     raise SystemExit('MINILD_SHARED_PHASE_STRUCTURE=FAIL '
                      f'target_profile_count={sorted(profile_rows)}')
-for emulation, (elf_class, machine) in expected_profiles.items():
-    if not re.search(r'^\s*,\s*' + elf_class + r'\s*,\s*ELFDATA2LSB\s*,\s*' +
-                     machine + r'\s*,', profile_rows[emulation]):
+# The final initializer fields have six independent owners: shared-ABI
+# callback, shared-link callback, psABI e_flags validator, target BFD
+# separate-code default, ELF-header mapping policy and REL addend reader.
+# Validate ALL six descriptors against these exact contracts so adding an
+# unrelated scalar field cannot silently shift hooks/flags by one slot.
+# AArch64 defaults to noseparate-code (GNU Linux kernel); the others use
+# separate-code.  Neither policy grants ET_DYN shared hooks to x86/AArch/LA.
+expected_profile_tails = {
+    'elf64lriscv': (
+        'minild_riscv_shared_target_abi',
+        'minild_link_shared_elf64_riscv_inputs_options',
+        'NULL', 'true', 'true', 'NULL',
+    ),
+    'elf32lriscv': (
+        'NULL', 'minild_link_elf32_compat_vdso',
+        'NULL', 'true', 'true', 'NULL',
+    ),
+    'elf_x86_64': (
+        'NULL', 'NULL', 'minild_zero_elf_flags',
+        'true', 'true', 'NULL',
+    ),
+    'elf_i386': (
+        'NULL', 'NULL', 'minild_zero_elf_flags',
+        'true', 'true', 'minild_i386_implicit_addend',
+    ),
+    'aarch64linux': (
+        'NULL', 'NULL', 'minild_zero_elf_flags',
+        'false', 'true', 'NULL',
+    ),
+    'elf64loongarch': (
+        'NULL', 'NULL', 'minild_loongarch_v1_elf_flags',
+        'true', 'true', 'NULL',
+    ),
+}
+for emulation, fields in expected_profile_tails.items():
+    tail_pattern = r',\s*'.join(re.escape(field) for field in fields)
+    if not re.search(tail_pattern + r'\s*$', profile_rows[emulation].strip()):
         raise SystemExit('MINILD_SHARED_PHASE_STRUCTURE=FAIL '
-                         f'target_profile_abi={emulation}')
-if not re.search(r'minild_riscv_shared_target_abi\s*,\s*'
-                 r'minild_link_shared_elf64_riscv_inputs_options',
-                 profile_rows['elf64lriscv']) or \
-        not re.search(r'NULL\s*,\s*minild_link_elf32_compat_vdso',
-                      profile_rows['elf32lriscv']):
-    raise SystemExit('MINILD_SHARED_PHASE_STRUCTURE=FAIL '
-                     'riscv_shared_backend_bindings')
-for emulation in ('elf_x86_64', 'aarch64linux', 'elf64loongarch'):
-    if not re.search(r'NULL\s*,\s*NULL\s*,\s*'
-                     r'minild_\w+_elf_flags\s*,\s*(?:true|false)\s*,\s*'
-                     r'NULL\s*$',
-                     profile_rows[emulation].strip()):
-        raise SystemExit('MINILD_SHARED_PHASE_STRUCTURE=FAIL '
-                         f'unsupported_shared_hooks={emulation}')
-if not re.search(r'NULL\s*,\s*NULL\s*,\s*'
-                 r'minild_zero_elf_flags\s*,\s*true\s*,\s*'
-                 r'minild_i386_implicit_addend\s*$',
-                 profile_rows['elf_i386'].strip()):
-    raise SystemExit('MINILD_SHARED_PHASE_STRUCTURE=FAIL '
-                     'unsupported_shared_hooks=elf_i386')
+                         f'target_profile_tail={emulation}')
 for name in ('linker_shared_reloc_scan.inc',
              'linker_shared_reloc_apply.inc'):
     code = sources[name]
