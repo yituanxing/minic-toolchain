@@ -288,6 +288,23 @@ if len(sys.argv) == 9:
         mtypes = types(mini_bytes('.rela.dyn')) if mini_n else []
         gtypes = types(gnu_bytes('.rela.dyn')) if gnu_n else []
         assert mtypes == gtypes, (label, 'rela.dyn relocation types', mtypes, gtypes)
+        if mini_bytes('.rela.dyn') != gnu_bytes('.rela.dyn'):
+            print(f'MINILD_LOONG_GNU_RELA_BYTE_DIFFERENCE={label}',flush=True)
+            for producer, sections in (('mini',mini),('gnu',gnu)):
+                print(f'MINILD_LOONG_GNU_RELA_LAYOUT={label}:{producer} ' +
+                      ' '.join(f'{name}:vaddr={sections[name][3]:#x}'
+                               f':offset={sections[name][4]:#x}'
+                               f':size={sections[name][5]:#x}'
+                               for name in ('.text','.data','.rela.dyn')
+                               if name in sections),flush=True)
+            for producer, contents in (('mini',mini_bytes('.rela.dyn')),
+                                       ('gnu',gnu_bytes('.rela.dyn'))):
+                for index in range(0,len(contents),24):
+                    offset, info, addend = struct.unpack_from('<QQq',contents,index)
+                    print(f'MINILD_LOONG_GNU_RELA_RECORD={label}:{producer} '
+                          f'index={index//24} offset={offset:#x} '
+                          f'type={info&0xffffffff} sym={info>>32} '
+                          f'addend={addend:#x}',flush=True)
         assert mini_bytes('.rela.dyn') == gnu_bytes('.rela.dyn'), \
             (label, 'rela.dyn byte parity')
     print('MINILD_STATIC_SCRIPT_DISCARD_GNU_ORACLE=PASS modes=live,dead_only '
