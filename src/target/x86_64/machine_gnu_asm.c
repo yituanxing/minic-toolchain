@@ -663,6 +663,23 @@ static bool x86_emit_source_asm(FILE *out,
             "  rdseed %rax\n",out) != EOF;
     }
     if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_MXCSR) {
+        /* Explicit 32-bit CPU control state transfer; the sole true
+         * MachineIR memory operand is verified to be (%r10). */
+        const unsigned int form = instruction->source_asm_machine_form_variant;
+        if (form != 1U && form != 2U) return false;
+        return fputs(form == 1U ? "  ldmxcsr (%r10)\n" :
+            "  stmxcsr (%r10)\n",out) != EOF;
+    }
+    if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_UNWIND_CONTEXT) {
+        /* ORC captures the live instruction/stack/frame pointers in three
+         * separately validated 64-bit physical register outputs. */
+        return fputs("  leaq 0(%rip), %rax\n"
+            "  movq %rsp, %r10\n"
+            "  movq %rbp, %r11\n",out) != EOF;
+    }
+    if (instruction->source_asm_machine_form_id ==
             MINIC_X86_MACHINE_ASM_PKRU) {
         /* Source and MachineIR validate the exact byte sequence and
          * EAX/ECX/EDX roles. Print only the two known CPU-state opcodes. */

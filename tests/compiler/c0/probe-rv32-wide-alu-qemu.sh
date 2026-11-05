@@ -42,6 +42,59 @@ int virtio_feature32_test(const struct VirtioDev *dev, void *context) {
   U features = dev->config->get_features(context);
   return (features & (1ULL << 32)) != 0ULL;
 }
+
+struct VirtioModelConfig { U (*get_features)(void *); };
+struct VirtioModelDriver {
+  const unsigned *feature_table;
+  unsigned feature_table_size;
+  const unsigned *feature_table_legacy;
+  unsigned feature_table_size_legacy;
+};
+struct VirtioModelDev {
+  const struct VirtioModelConfig *config;
+  unsigned char prefix[564];
+  U features;
+};
+struct VirtioModelTrace {
+  U callback_bits;
+  U driver_bits;
+  U legacy_bits;
+  U selected_bits;
+  U transported_bits;
+};
+void virtio_probe_model(struct VirtioModelDev *dev,
+                        const struct VirtioModelDriver *drv,
+                        void *context, struct VirtioModelTrace *trace) {
+  unsigned i;
+  U device_features = dev->config->get_features(context);
+  U driver_features = 0ULL;
+  U driver_features_legacy;
+  trace->callback_bits = device_features;
+  for (i = 0U; i < drv->feature_table_size; i++) {
+    unsigned f = drv->feature_table[i];
+    driver_features |= (1ULL << f);
+  }
+  trace->driver_bits = driver_features;
+  if (drv->feature_table_legacy) {
+    driver_features_legacy = 0ULL;
+    for (i = 0U; i < drv->feature_table_size_legacy; i++) {
+      unsigned f = drv->feature_table_legacy[i];
+      driver_features_legacy |= (1ULL << f);
+    }
+  } else {
+    driver_features_legacy = driver_features;
+  }
+  trace->legacy_bits = driver_features_legacy;
+  if (device_features & (1ULL << 32))
+    dev->features = driver_features & device_features;
+  else
+    dev->features = driver_features_legacy & device_features;
+  trace->selected_bits = dev->features;
+  for (i = 28U; i < 42U; i++)
+    if (device_features & (1ULL << i))
+      dev->features |= (1ULL << i);
+  trace->transported_bits = dev->features;
+}
 SRC
 "$MINIC_CC" --target=riscv32-linux -march=rv32i -mabi=ilp32 \
   -S "$work/wide.i" -o "$work/wide.s"
@@ -82,6 +135,102 @@ static volatile U values[10] = {
   0x7fffffffffffffffULL, 0x8000000000000000ULL
 };
 static const unsigned shifts[7] = {0U,1U,7U,31U,32U,33U,63U};
+
+struct VirtioModelConfig { U (*get_features)(void *); };
+struct VirtioModelDriver {
+  const unsigned *feature_table;
+  unsigned feature_table_size;
+  const unsigned *feature_table_legacy;
+  unsigned feature_table_size_legacy;
+};
+struct VirtioModelDev {
+  const struct VirtioModelConfig *config;
+  unsigned char prefix[564];
+  U features;
+};
+struct VirtioModelTrace {
+  U callback_bits;
+  U driver_bits;
+  U legacy_bits;
+  U selected_bits;
+  U transported_bits;
+};
+extern void virtio_probe_model(struct VirtioModelDev *, const struct VirtioModelDriver *,
+                               void *, struct VirtioModelTrace *);
+static U virtio_model_get_features(void *context) { return *(volatile U *)context; }
+static const struct VirtioModelConfig virtio_model_config = { virtio_model_get_features };
+static const unsigned model_driver_table[10] = {0U,7U,28U,31U,32U,35U,39U,40U,41U,63U};
+static const unsigned model_legacy_table[5] = {1U,7U,31U,33U,63U};
+static const U model_cases[9] = {
+  0ULL, (1ULL<<31), (1ULL<<32), ((1ULL<<32)|(1ULL<<28)),
+  ((1ULL<<32)|(1ULL<<40)), (1ULL<<41), (1ULL<<63),
+  0xffffffffffffffffULL, 0x123456789abcdef0ULL
+};
+static void reference_virtio_model(struct VirtioModelDev *dev,
+                                    const struct VirtioModelDriver *drv,
+                                    void *context, struct VirtioModelTrace *trace) {
+  unsigned i;
+  U device_features = dev->config->get_features(context);
+  U driver_features = 0ULL;
+  U driver_features_legacy;
+  trace->callback_bits = device_features;
+  for (i = 0U; i < drv->feature_table_size; i++) {
+    unsigned f = drv->feature_table[i];
+    driver_features |= (1ULL << f);
+  }
+  trace->driver_bits = driver_features;
+  if (drv->feature_table_legacy) {
+    driver_features_legacy = 0ULL;
+    for (i = 0U; i < drv->feature_table_size_legacy; i++) {
+      unsigned f = drv->feature_table_legacy[i];
+      driver_features_legacy |= (1ULL << f);
+    }
+  } else {
+    driver_features_legacy = driver_features;
+  }
+  trace->legacy_bits = driver_features_legacy;
+  if (device_features & (1ULL << 32))
+    dev->features = driver_features & device_features;
+  else
+    dev->features = driver_features_legacy & device_features;
+  trace->selected_bits = dev->features;
+  for (i = 28U; i < 42U; i++)
+    if (device_features & (1ULL << i))
+      dev->features |= (1ULL << i);
+  trace->transported_bits = dev->features;
+}
+static int test_virtio_model(void) {
+  unsigned i, variant;
+  static struct VirtioModelDev minic_dev, gnu_dev;
+  struct VirtioModelTrace minic_trace, gnu_trace;
+  struct VirtioModelDriver drv;
+  drv.feature_table = model_driver_table;
+  drv.feature_table_size = 10U;
+  drv.feature_table_legacy = (const unsigned *)0;
+  drv.feature_table_size_legacy = 0U;
+  minic_dev.config = &virtio_model_config;
+  gnu_dev.config = &virtio_model_config;
+  if ((unsigned)((char *)&minic_dev.features - (char *)&minic_dev) != 568U)
+    return 17;
+  for (variant = 0U; variant < 2U; variant++) {
+    drv.feature_table_legacy = variant ? model_legacy_table : (const unsigned *)0;
+    drv.feature_table_size_legacy = variant ? 5U : 0U;
+    for (i = 0U; i < 9U; i++) {
+      virtio_feature_value = model_cases[i];
+      minic_dev.features = 0ULL;
+      gnu_dev.features = 0ULL;
+      virtio_probe_model(&minic_dev, &drv, (void *)&virtio_feature_value, &minic_trace);
+      reference_virtio_model(&gnu_dev, &drv, (void *)&virtio_feature_value, &gnu_trace);
+      if (minic_trace.callback_bits != gnu_trace.callback_bits) return 18;
+      if (minic_trace.driver_bits != gnu_trace.driver_bits) return 19;
+      if (minic_trace.legacy_bits != gnu_trace.legacy_bits) return 20;
+      if (minic_trace.selected_bits != gnu_trace.selected_bits) return 21;
+      if (minic_trace.transported_bits != gnu_trace.transported_bits) return 22;
+      if (minic_dev.features != gnu_dev.features) return 23;
+    }
+  }
+  return 0;
+}
 static int test(void) {
   unsigned i,j,k;
   for (i=0;i<10U;++i) {
@@ -131,7 +280,9 @@ static int test_virtio(void) {
 }
 int main(void) {
   int result=test();
-  return result !=0 ? result : test_virtio();
+  if (result != 0) return result;
+  result = test_virtio();
+  return result != 0 ? result : test_virtio_model();
 }
 SRC
 cat >"$work/start.s" <<'SRC'
@@ -161,10 +312,15 @@ for mode in gnu minic-gas minic-as; do
   esac
   riscv64-linux-gnu-ld -m elf32lriscv -static -e _start \
     -o "$work/$mode.elf" "$work/start.o" "$work/driver.o" "$obj" "${rt[@]}"
-  if ! timeout 30s qemu-riscv32 "$work/$mode.elf"; then
-    echo "RV32_I64_ALU=FAIL mode=$mode" >&2
+  set +e
+  timeout 30s qemu-riscv32 "$work/$mode.elf"
+  status=$?
+  set -e
+  if [ "$status" -ne 0 ]; then
+    echo "RV32_I64_ALU=FAIL mode=$mode exit=$status (virtio_model_phase_18_callback_19_driver_20_legacy_21_selected_22_transport_23_store)" >&2
     exit 1
   fi
 done
 echo "RV32_I64_ALU=PASS checks=1500 functions=22 ISA=rv32i ABI=ilp32 GNU_C=1 GNU_AS=1 MiniAS=1 QEMU=1 upstream_llvm_DI_arithmetic=1"
 echo "RV32_VIRTIO_FEATURE32=PASS cases=7 indirect_u64_callback_a0_a1=1 shift32=1 wide_bitwise_and=1 GNU_C=1 GNU_AS=1 MiniAS=1 QEMU=1"
+echo "RV32_VIRTIO_MODEL=PASS cases=9 variants=2 feature_table=1ull_dynamic_shift transport_28_41=1 struct_feature_offset=568 GNU_C=1 GNU_AS=1 MiniAS=1 QEMU=1"\n

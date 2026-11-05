@@ -16,8 +16,12 @@ for case_name in load_xor_store sha3_eor3; do
     "$gnu_cc" -E -P -x c "$source_file" -o "$work/$case_name.i"
     "$gnu_cc" -static -O2 "$source_file" -o "$work/$case_name.gnu.elf"
     "$qemu" -cpu max "$work/$case_name.gnu.elf"
-    "$minic_cc" --target=aarch64-linux -S "$work/$case_name.i" \
-        -o "$work/$case_name.minic.s"
+    if ! "$minic_cc" --target=aarch64-linux -S "$work/$case_name.i" \
+            -o "$work/$case_name.minic.s"; then
+        printf '%s\n' "AARCH64_NEON_STAGE3=FAIL stage=minic_compile case=$case_name" >&2
+        sed -n '80,110{=;p;}' "$work/$case_name.i" >&2
+        exit 1
+    fi
     "$gnu_cc" -static "$work/$case_name.minic.s" -o "$work/$case_name.minic.elf"
     "$qemu" -cpu max "$work/$case_name.minic.elf"
 done

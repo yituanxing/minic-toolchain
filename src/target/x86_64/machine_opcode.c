@@ -2231,6 +2231,89 @@ static bool x86_source_random_seed_contract(
         data->value.physical.access == MINIC_MACHINE_REGISTER_WRITE;
 }
 
+
+/* A sealed 32-bit MXCSR control-word transfer has exactly one true memory
+ * operand (R10), with independently checked read/write and compiler effects. */
+static bool x86_source_mxcsr_contract(
+    const MinicTargetInfo *target, const MinicMachineInstruction *ins) {
+    const unsigned int form = minic_x86_64_linux_mxcsr_form(
+        ins->source_asm_template,ins->source_asm_length);
+    const bool reading = form == 1U;
+    const unsigned int effects = MINIC_MACHINE_EFFECT_SOURCE_ASM |
+        MINIC_MACHINE_EFFECT_VOLATILE |
+        MINIC_MACHINE_EFFECT_COMPILER_BARRIER |
+        (reading ? MINIC_MACHINE_EFFECT_MEMORY_READ :
+            MINIC_MACHINE_EFFECT_MEMORY_WRITE);
+    const MinicMachineOperand *op;
+    const MinicMachineAddress *addr;
+    const bool named = memchr(ins->source_asm_template,'[',
+        ins->source_asm_length) != NULL;
+    if (ins->source_asm_machine_form_id != MINIC_X86_MACHINE_ASM_MXCSR ||
+        (form != 1U && form != 2U) ||
+        ins->source_asm_machine_form_variant != form ||
+        ins->source_asm_terminates_block ||
+        ins->source_asm_permits_fallthrough ||
+        ins->effects != effects ||
+        ins->operand_count != 1U || ins->operands == NULL ||
+        ins->implicit_count != 0U || ins->implicit != NULL ||
+        !minic_x86_64_typed_machine_form_matches_template(
+            ins->source_asm_machine_form_id,
+            ins->source_asm_machine_form_variant,
+            ins->source_asm_template,ins->source_asm_length))
+        return false;
+    op = &ins->operands[0];
+    if (op->kind != MINIC_MACHINE_OPERAND_ADDRESS ||
+        op->asm_constraint == NULL ||
+        strcmp(op->asm_constraint,reading ? "m" : "=m") != 0 ||
+        (named ? op->asm_name == NULL ||
+            strcmp(op->asm_name,"val") != 0 : op->asm_name != NULL))
+        return false;
+    addr = &op->value.address;
+    return minic_x86_64_machine_validate_address(target,addr,NULL) &&
+        addr->has_base &&
+        addr->base.bank == MINIC_MACHINE_REGISTER_GENERAL &&
+        addr->base.number == MINIC_X86_REG_R10 &&
+        addr->base.width_bits == 64U &&
+        !addr->has_index && !addr->has_segment &&
+        !addr->has_symbol && addr->displacement == 0;
+}
+
+/* The three ORC register values are snapshots of hardware state, not
+ * address operands or aliases. Reject all forged widths/roles/effects. */
+static bool x86_source_unwind_context_contract(
+    const MinicMachineInstruction *ins) {
+    static const unsigned int output_registers[3] = {
+        MINIC_X86_REG_RAX, MINIC_X86_REG_R10, MINIC_X86_REG_R11
+    };
+    size_t i;
+    if (ins->source_asm_machine_form_id !=
+            MINIC_X86_MACHINE_ASM_UNWIND_CONTEXT ||
+        ins->source_asm_machine_form_variant != 0U ||
+        ins->source_asm_terminates_block ||
+        ins->source_asm_permits_fallthrough ||
+        ins->effects != (MINIC_MACHINE_EFFECT_SOURCE_ASM |
+            MINIC_MACHINE_EFFECT_VOLATILE) ||
+        ins->operand_count != 3U || ins->operands == NULL ||
+        ins->implicit_count != 0U || ins->implicit != NULL ||
+        !minic_x86_64_typed_machine_form_matches_template(
+            ins->source_asm_machine_form_id,
+            ins->source_asm_machine_form_variant,
+            ins->source_asm_template,ins->source_asm_length))
+        return false;
+    for (i = 0U; i < 3U; ++i) {
+        const MinicMachineOperand *op = &ins->operands[i];
+        if (op->kind != MINIC_MACHINE_OPERAND_REGISTER ||
+            op->asm_name != NULL || op->asm_constraint == NULL ||
+            strcmp(op->asm_constraint,"=r") != 0 ||
+            op->value.physical.reg.bank != MINIC_MACHINE_REGISTER_GENERAL ||
+            op->value.physical.reg.number != output_registers[i] ||
+            op->value.physical.reg.width_bits != 64U ||
+            op->value.physical.access != MINIC_MACHINE_REGISTER_WRITE)
+            return false;
+    }
+    return true;
+}
+
 static bool x86_source_pkru_contract(const MinicMachineInstruction *ins) {
     static const unsigned int read_registers[3] = {
         MINIC_X86_REG_RAX, MINIC_X86_REG_RDX, MINIC_X86_REG_RCX
@@ -2591,6 +2674,12 @@ bool minic_x86_64_machine_validate_source_asm(const MinicTargetInfo *target,
     if (instruction->source_asm_machine_form_id ==
             MINIC_X86_MACHINE_ASM_PKRU)
         return x86_source_pkru_contract(instruction);
+    if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_MXCSR)
+        return x86_source_mxcsr_contract(target,instruction);
+    if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_UNWIND_CONTEXT)
+        return x86_source_unwind_context_contract(instruction);
     if (instruction->source_asm_machine_form_id ==
             MINIC_X86_MACHINE_ASM_MSR)
         return x86_source_msr_contract(instruction);
