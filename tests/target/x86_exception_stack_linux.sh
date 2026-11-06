@@ -15,9 +15,9 @@ gcc -E -P -x c "$fixture" -o "$tmpdir/linux.i"
     -o "$tmpdir/minic.s"
 gcc -c -x assembler "$tmpdir/minic.s" -o "$tmpdir/minic.o"
 
-readelf -h "$tmpdir/minic.o" | rg -q 'Type:[[:space:]]*REL \(Relocatable file\)'
-readelf -h "$tmpdir/minic.o" | rg -q 'Machine:[[:space:]]*Advanced Micro Devices X86-64'
-readelf -Wr "$tmpdir/minic.o" | rg -q '\.rela\.discard\.reachable'
+readelf -h "$tmpdir/minic.o" | grep -Eq 'Type:[[:space:]]*REL \(Relocatable file\)'
+readelf -h "$tmpdir/minic.o" | grep -Eq 'Machine:[[:space:]]*Advanced Micro Devices X86-64'
+readelf -Wr "$tmpdir/minic.o" | grep -Eq '\.rela\.discard\.reachable'
 
 relocations=$(readelf -Wr "$tmpdir/minic.o")
 reachable_count=$(printf '%s\n' "$relocations" | awk '
@@ -31,7 +31,7 @@ if [[ "$reachable_count" != 4 ]]; then
 fi
 for symbol in exception_target irq_target1 irq_target2 softirq_target \
     irq_enter_rcu irq_exit_rcu; do
-    if ! printf '%s\n' "$relocations" | rg -q "R_X86_64_PLT32[[:space:]]+[^[:space:]]*[[:space:]]+$symbol"; then
+    if ! printf '%s\n' "$relocations" | grep -Eq "R_X86_64_PLT32[[:space:]]+[^[:space:]]*[[:space:]]+$symbol"; then
         printf 'missing direct PLT32 call relocation for %s\n' "$symbol" >&2
         exit 1
     fi

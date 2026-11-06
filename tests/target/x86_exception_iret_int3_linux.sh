@@ -15,18 +15,18 @@ gcc -E -P -x c "$fixture" -o "$tmpdir/linux.i"
     -o "$tmpdir/minic.s"
 gcc -c -x assembler "$tmpdir/minic.s" -o "$tmpdir/minic.o"
 
-readelf -h "$tmpdir/minic.o" | rg -q 'Type:[[:space:]]*REL \(Relocatable file\)'
-readelf -h "$tmpdir/minic.o" | rg -q 'Machine:[[:space:]]*Advanced Micro Devices X86-64'
-rg -q '^  movw %ss, %r11w$' "$tmpdir/minic.s"
-rg -q '^  movw %cs, %r11w$' "$tmpdir/minic.s"
-rg -q '^  iretq$' "$tmpdir/minic.s"
-rg -q '^  movl %r11d, \(%r10\)$' "$tmpdir/minic.s"
-rg -q '^int3_selftest_ip:$' "$tmpdir/minic.s"
-rg -q '^986:$' "$tmpdir/minic.s"
-rg -q '^  int3$' "$tmpdir/minic.s"
+readelf -h "$tmpdir/minic.o" | grep -Eq 'Type:[[:space:]]*REL \(Relocatable file\)'
+readelf -h "$tmpdir/minic.o" | grep -Eq 'Machine:[[:space:]]*Advanced Micro Devices X86-64'
+grep -Eq '^  movw %ss, %r11w$' "$tmpdir/minic.s"
+grep -Eq '^  movw %cs, %r11w$' "$tmpdir/minic.s"
+grep -Eq '^  iretq$' "$tmpdir/minic.s"
+grep -Eq '^  movl %r11d, \(%r10\)$' "$tmpdir/minic.s"
+grep -Eq '^int3_selftest_ip:$' "$tmpdir/minic.s"
+grep -Eq '^986:$' "$tmpdir/minic.s"
+grep -Eq '^  int3$' "$tmpdir/minic.s"
 
 relocations=$(readelf -Wr "$tmpdir/minic.o")
-printf '%s\n' "$relocations" | rg -q '\.rela\.discard\.noendbr'
+printf '%s\n' "$relocations" | grep -Eq '\.rela\.discard\.noendbr'
 noendbr_count=$(printf '%s\n' "$relocations" | awk '
     /^Relocation section / { noendbr = ($0 ~ /\.rela\.discard\.noendbr/) }
     noendbr && /R_X86_64_32[[:space:]]/ { ++count }
