@@ -151,7 +151,9 @@ static const A64Spec a64_specs[MINIC_A64_MACHINE_NOP + 1U] = {
     [MINIC_A64_MACHINE_STR_FP_D] = {"str", A64_FORM_FP_MEMORY, W, 8},
     [MINIC_A64_MACHINE_STR_FP_Q] = {"str", A64_FORM_FP_MEMORY, W, 16},
     [MINIC_A64_MACHINE_VECTOR_EOR_16B] = {"eor", A64_FORM_VEC_RRR, 0},
+    [MINIC_A64_MACHINE_VECTOR_EOR_8B] = {"eor", A64_FORM_VEC_RRR, 0},
     [MINIC_A64_MACHINE_VECTOR_ADD_16B] = {"add", A64_FORM_VEC_RRR, 0},
+    [MINIC_A64_MACHINE_VECTOR_ADD_8B] = {"add", A64_FORM_VEC_RRR, 0},
     [MINIC_A64_MACHINE_VECTOR_ADD_2D] = {"add", A64_FORM_VEC_RRR, 0},
     OP(NOP, "nop", NONE, 0)
 };
@@ -814,7 +816,8 @@ static bool a64_serialize(FILE *out, const MinicMachineFunction *function,
     case A64_FORM_VEC_RRR: {
         /* ADD is lane-wise. XOR is bitwise and uses its canonical 16B form. */
         const char *lanes = ins->opcode == MINIC_A64_MACHINE_VECTOR_ADD_2D ?
-            "2d" : "16b";
+            "2d" : (ins->opcode == MINIC_A64_MACHINE_VECTOR_EOR_8B ||
+                     ins->opcode == MINIC_A64_MACHINE_VECTOR_ADD_8B) ? "8b" : "16b";
         return snprintf(a, sizeof(a), "v%u.%s", o[0].value.physical.reg.number, lanes) > 0 &&
             snprintf(b, sizeof(b), "v%u.%s", o[1].value.physical.reg.number, lanes) > 0 &&
             snprintf(c, sizeof(c), "v%u.%s", o[2].value.physical.reg.number, lanes) > 0 &&

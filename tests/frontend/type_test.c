@@ -70,20 +70,30 @@ static int test_header_fixed_vector_xor_type(void) {
         7U, MINIC_BUILTIN_DECLARATION_FIXED_VECTOR128_STORAGE);
     MinicType opaque = minic_type_header_builtin(
         5U, MINIC_BUILTIN_DECLARATION_HEADER_ONLY_OPAQUE);
+    MinicType vector_d = minic_type_header_builtin(
+        10U, MINIC_BUILTIN_DECLARATION_FIXED_VECTOR64_STORAGE);
     MinicType qualified, pointer, result;
 
     if (!minic_type_add_const(vector_u8, &qualified) ||
         !minic_type_pointer_to(vector_u8, &pointer) ||
         minic_type_is_fixed_vector128_storage(pointer) ||
-        !minic_type_fixed_vector128_xor_result(vector_u8, qualified, &result) ||
+        !minic_type_fixed_vector128_binary_result(vector_u8, qualified, &result) ||
         !minic_type_equal(result, vector_u8) ||
-        !minic_type_fixed_vector128_xor_result(qualified, vector_u8, &result) ||
+        !minic_type_fixed_vector128_binary_result(qualified, vector_u8, &result) ||
         !minic_type_equal(result, vector_u8) ||
-        minic_type_fixed_vector128_xor_result(vector_u8, vector_u64, &result) ||
-        minic_type_fixed_vector128_xor_result(vector_u8, opaque, &result) ||
-        minic_type_fixed_vector128_xor_result(opaque, opaque, &result) ||
-        minic_type_fixed_vector128_xor_result(pointer, pointer, &result) ||
-        minic_type_fixed_vector128_xor_result(vector_u8, vector_u8, NULL))
+        minic_type_fixed_vector128_binary_result(vector_u8, vector_u64, &result) ||
+        minic_type_fixed_vector128_binary_result(vector_u8, opaque, &result) ||
+        minic_type_fixed_vector128_binary_result(opaque, opaque, &result) ||
+        minic_type_fixed_vector128_binary_result(pointer, pointer, &result) ||
+        minic_type_fixed_vector128_binary_result(vector_u8, vector_u8, NULL) ||
+        !minic_type_is_fixed_vector64_storage(vector_d) ||
+        minic_type_is_fixed_vector64_storage(vector_u8) ||
+        !minic_type_is_fixed_vector_register_storage(vector_u8) ||
+        !minic_type_is_fixed_vector_register_storage(vector_d) ||
+        minic_type_is_fixed_vector_register_storage(opaque) ||
+        !minic_type_fixed_vector_binary_result(vector_d, vector_d, &result) ||
+        !minic_type_equal(result, vector_d) ||
+        minic_type_fixed_vector_binary_result(vector_d, vector_u8, &result))
         return fail("fixed-vector source identity and XOR result admission");
     return 0;
 }

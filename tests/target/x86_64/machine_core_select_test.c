@@ -928,8 +928,8 @@ done:
 
 /* Four existing SysV record-parameter classes from call_plan.c. Typed
  * selection must read their sealed incoming positions and preserve odd
- * payload tails, stack-memory structs, and the empty-record fail-closed
- * policy without inventing a second ABI classifier. */
+ * payload tails and stack-memory structs. GNU zero-sized records have a
+ * genuine empty transport (no physical parameter copy), not a failure. */
 static bool scenario_parameter_object(size_t bytes,
     MinicX86ArgClass kind, bool stack, bool forge) {
     MinicCoreTypeContext types;
@@ -1007,9 +1007,18 @@ static bool scenario_parameter_object(size_t bytes,
     frame.incoming_arguments.calling_convention =
         MINIC_CALLING_CONVENTION_DEFAULT;
     stage = "select";
-    if (kind == MINIC_X86_ARG_RECORD_EMPTY || forge) {
+    if (forge) {
         okay = !minic_x86_64_machine_select_core_subset(
             &machine, &target, &core, &frame);
+        goto done;
+    }
+    if (kind == MINIC_X86_ARG_RECORD_EMPTY) {
+        okay = bytes == 0U &&
+            minic_x86_64_machine_select_core_subset(
+                &machine, &target, &core, &frame) &&
+            minic_core_function_mark_reachable_blocks(&core,
+                reachable, 1U) &&
+            minic_machine_core_coverage_verify(&core,reachable,&machine);
         goto done;
     }
     if (!minic_x86_64_machine_select_core_subset(

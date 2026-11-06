@@ -2074,7 +2074,10 @@ static bool parse_function_inner(MinicParser *parser, bool is_internal) {
         !minic_type_is_pointer(return_type) && !minic_type_is_float(return_type) &&
         !minic_type_is_double(return_type) &&
         !minic_type_is_long_double(return_type) &&
-        !minic_type_is_record(return_type)) {
+        !minic_type_is_record(return_type) &&
+        !(minic_type_is_fixed_vector_register_storage(return_type) &&
+          minic_target_info_language_type_supported_for_type(
+              parser->invocation, return_type))) {
         minic_parser_error(parser, "unsupported function return type");
         return false;
     }
@@ -2270,7 +2273,9 @@ static bool parse_function_inner(MinicParser *parser, bool is_internal) {
     }
     if (!minic_parser_materialize_cleanup_contexts(parser, MINIC_CLEANUP_CONTEXT_ROOT) ||
         ((!minic_type_is_pointer(return_type) && !minic_type_is_double(return_type) &&
-          !minic_type_is_record(return_type) && !minic_parser_add_default_return(parser)) ||
+          !minic_type_is_record(return_type) &&
+          !minic_type_is_fixed_vector_register_storage(return_type) &&
+          !minic_parser_add_default_return(parser)) ||
          !minic_parser_expect(parser, MINIC_TOKEN_RBRACE, "expected '}'"))) {
         return false;
     }

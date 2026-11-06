@@ -299,6 +299,69 @@ MinicCoreLowerStatus minic_core_lower_internal_reload_scalar_value(MinicCoreLowe
         context, span, type, address_id, false, value_id);
 }
 
+/* The source-to-Core ABI boundary may snapshot a first-class register
+ * vector just as it snapshots a scalar, but its physical payload must remain
+ * a vector. No INTEGER_BITCAST, scalar STORE or record copy is involved. */
+static MinicCoreLowerStatus core_vector_object_transfer(
+    MinicCoreLowerContext *context, MinicSourceSpan span, MinicType type,
+    MinicCoreObjectId object_id, MinicCoreValueId *value_id, bool store) {
+    MinicCoreInstruction ins;
+    MinicType pointer;
+    MinicCoreValueId address;
+    if (context == NULL || context->function == NULL || value_id == NULL ||
+        !minic_type_is_fixed_vector_register_storage(type) ||
+        minic_type_is_const(type) || minic_type_is_volatile(type) ||
+        object_id >= context->function->object_count ||
+        !minic_type_equal(context->source->source_draft->object_types[object_id], type) ||
+        !minic_type_pointer_to(type, &pointer) ||
+        core_scalar_object_address(context, span, pointer, object_id,
+                                   &address) != MINIC_CORE_LOWER_OK)
+        return MINIC_CORE_LOWER_ERROR;
+    (void)memset(&ins, 0, sizeof(ins));
+    ins.span = span;
+    ins.result = MINIC_CORE_VALUE_INVALID;
+    if (store) {
+        if (*value_id >= context->function->value_count ||
+            !minic_type_equal(minic_core_function_source_value_type(
+                context->source, *value_id), type))
+            return MINIC_CORE_LOWER_ERROR;
+        ins.kind = MINIC_CORE_INSTRUCTION_VECTOR_REGISTER_STORE;
+        ins.value.store.address = address;
+        ins.value.store.stored_value = *value_id;
+        return minic_core_function_append_source_effect_instruction(
+            context->source, context->block_id, &ins, minic_type_void())
+                ? MINIC_CORE_LOWER_OK : MINIC_CORE_LOWER_ERROR;
+    }
+    ins.kind = MINIC_CORE_INSTRUCTION_VECTOR_REGISTER_LOAD;
+    ins.value.load.address = address;
+    return minic_core_function_append_source_value_instruction(
+        context->source, context->block_id, &ins, type, value_id)
+            ? MINIC_CORE_LOWER_OK : MINIC_CORE_LOWER_ERROR;
+}
+
+MinicCoreLowerStatus minic_core_lower_internal_store_vector_value(
+    MinicCoreLowerContext *context, MinicSourceSpan span, MinicType type,
+    MinicCoreObjectId object, MinicCoreValueId value) {
+    return core_vector_object_transfer(context, span, type, object, &value, true);
+}
+
+MinicCoreLowerStatus minic_core_lower_internal_spill_vector_value(
+    MinicCoreLowerContext *context, MinicSourceSpan span, MinicType type,
+    MinicCoreValueId value, MinicCoreObjectId *object) {
+    if (context == NULL || object == NULL ||
+        !minic_type_is_fixed_vector_register_storage(type) ||
+        !minic_core_function_add_object(context->source, span, type, object))
+        return MINIC_CORE_LOWER_ERROR;
+    return minic_core_lower_internal_store_vector_value(
+        context, span, type, *object, value);
+}
+
+MinicCoreLowerStatus minic_core_lower_internal_reload_vector_value(
+    MinicCoreLowerContext *context, MinicSourceSpan span, MinicType type,
+    MinicCoreObjectId object, MinicCoreValueId *value) {
+    return core_vector_object_transfer(context, span, type, object, value, false);
+}
+
 MinicCoreLowerStatus minic_core_lower_internal_lower_scalar_equality_operands(MinicCoreLowerContext *context,
                                                            MinicExpressionId left_id,
                                                            MinicExpressionId right_id,

@@ -135,8 +135,8 @@ bool minic_multi_direct_lp64_function_preflight(
         arch == NULL || !minic_direct_lp64_abi_policy_valid(abi)) return false;
     verified = minic_core_function_facts_verified(facts, fn) ||
                minic_core_function_verify(fn);
-    return_valid = minic_lp64_core_valid_return_with_indirect(
-        fn->type_context, minic_core_function_return_type(fn), abi->core_indirect_return);
+    return_valid = minic_lp64_core_valid_return_with_policy(
+        fn->type_context, minic_core_function_return_type(fn), abi);
     visibility_valid =
         module_decl->visibility == MINIC_CORE_MODULE_VISIBILITY_DEFAULT ||
         minic_multi_elf_module_visibility_directive(module_decl->visibility) != NULL;

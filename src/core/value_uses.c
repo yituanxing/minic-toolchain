@@ -66,8 +66,8 @@ bool minic_core_visit_instruction_value_uses(const MinicCoreFunction *function,
     case MINIC_CORE_INSTRUCTION_INTEGER_LESS:
     case MINIC_CORE_INSTRUCTION_POINTER_LESS:
     case MINIC_CORE_INSTRUCTION_SCALAR_EQUAL:
-    case MINIC_CORE_INSTRUCTION_FIXED_VECTOR128_XOR:
-    case MINIC_CORE_INSTRUCTION_FIXED_VECTOR128_ADD:
+    case MINIC_CORE_INSTRUCTION_VECTOR_REGISTER_XOR:
+    case MINIC_CORE_INSTRUCTION_VECTOR_REGISTER_ADD:
         return core_visit_value_use(instruction->value.binary.left, visitor, context) &&
                core_visit_value_use(instruction->value.binary.right, visitor, context);
 
@@ -102,7 +102,7 @@ bool minic_core_visit_instruction_value_uses(const MinicCoreFunction *function,
         return core_visit_value_use(instruction->value.pointer_offset.base, visitor, context) &&
                core_visit_value_use(instruction->value.pointer_offset.index, visitor, context);
     case MINIC_CORE_INSTRUCTION_LOAD:
-    case MINIC_CORE_INSTRUCTION_FIXED_VECTOR128_LOAD:
+    case MINIC_CORE_INSTRUCTION_VECTOR_REGISTER_LOAD:
         return core_visit_value_use(instruction->value.load.address, visitor, context);
     case MINIC_CORE_INSTRUCTION_ATOMIC_LOAD:
         return core_visit_value_use(instruction->value.atomic_load.address, visitor, context);
@@ -112,7 +112,7 @@ bool minic_core_visit_instruction_value_uses(const MinicCoreFunction *function,
                core_visit_value_use(
                    instruction->value.atomic_store.stored_value, visitor, context);
     case MINIC_CORE_INSTRUCTION_STORE:
-    case MINIC_CORE_INSTRUCTION_FIXED_VECTOR128_STORE:
+    case MINIC_CORE_INSTRUCTION_VECTOR_REGISTER_STORE:
         return core_visit_value_use(instruction->value.store.address, visitor, context) &&
                core_visit_value_use(instruction->value.store.stored_value, visitor, context);
     case MINIC_CORE_INSTRUCTION_RECORD_LOAD:

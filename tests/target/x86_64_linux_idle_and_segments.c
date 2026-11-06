@@ -35,3 +35,25 @@ void linux_sti_mwait(unsigned long eax, unsigned long ecx) {
     asm volatile("sti; .byte 0x0f, 0x01, 0xc9;"
                  : : "a" (eax), "c" (ecx));
 }
+
+/* Linux also uses 32-bit hint/extension operands. MachineIR must bind the
+ * corresponding 32-bit A/B/C/D parts without losing a 64-bit address or
+ * treating RBX as caller-saved. */
+void linux_monitor_u32(const void *address, unsigned int ext,
+                       unsigned int hints) {
+    asm volatile(".byte 0x0f, 0x01, 0xc8;"
+                 : : "a" (address), "c" (ext), "d" (hints));
+}
+
+void linux_mwaitx_u32(unsigned int eax, unsigned int ebx,
+                      unsigned int ecx) {
+    asm volatile(".byte 0x0f, 0x01, 0xfb;"
+                 : : "a" (eax), "b" (ebx), "c" (ecx));
+}
+
+/* Linux's wider XSAVE/ptrace selectors use zero-extended 32-bit registers,
+ * including FS/GS forms without an explicit compiler memory fence. */
+void linux_read_segments_u32(unsigned int *dst) {
+    asm("movl %%fs,%0" : "=r" (dst[0]));
+    asm("movl %%gs,%0" : "=r" (dst[1]));
+}

@@ -102,6 +102,25 @@ static bool minic_lp64_plan_types(
                 gp = abi->record_registers == MINIC_DIRECT_LP64_RECORD_WHOLE_OR_STACK &&
                      used == 0U ? abi->gp_argument_registers : gp + used;
             }
+        } else if (abi->core_register_vector != NULL &&
+                   abi->core_register_vector(core_types, core_ids[j], &size) &&
+                   (size == 8U || size == 16U) &&
+                   (!variadic || j < fixed)) {
+            /* AAPCS64 D/Q vectors occupy one SIMD/FPR register regardless
+             * of their width; a spilled Q needs a 16-aligned stack slot. */
+            loc->kind = MINIC_LP64_ARGUMENT_VECTOR;
+            loc->size_bytes = size;
+            loc->chunks = size / 8U;
+            if (fp < abi->fp_argument_registers) {
+                loc->fp_first = fp;
+                loc->fp_registers = 1U;
+            } else {
+                if (size == 16U) stack += stack & 1U;
+                loc->stack_first = stack;
+                loc->stack_slots = size / 8U;
+                stack += loc->stack_slots;
+            }
+            ++fp;
         } else if (lp64_call_core_integer_128(core)) {
             /* TI is an integral 16-byte scalar, not a single GP word.
              * AAPCS64 C.10/C.11 mandates even GPR pairs and whole aligned
@@ -300,8 +319,8 @@ static bool minic_lp64_admit_call(
              : ins->result == MINIC_CORE_VALUE_INVALID ||
                ins->result >= fn->value_count ||
                fn->values[ins->result].core_type_id != ins->core_type_id) ||
-            !minic_lp64_core_valid_return_with_indirect(
-                core_types, ins->core_type_id, abi->core_indirect_return))) {
+            !minic_lp64_core_valid_return_with_policy(
+                core_types, ins->core_type_id, abi))) {
             const MinicCoreType *diagnostic_type =
                 lp64_call_core_base(core_types, ins->core_type_id);
             if (getenv("MINIC_BACKEND_CENSUS") != NULL)
@@ -313,8 +332,8 @@ static bool minic_lp64_admit_call(
                     diagnostic_type != NULL ? (int)diagnostic_type->kind : -1,
                     lp64_call_core_float_format(diagnostic_type,
                         MINIC_CORE_FLOAT_BINARY128) ? 1 : 0,
-                    minic_lp64_core_valid_return_with_indirect(
-                        core_types, ins->core_type_id, abi->core_indirect_return) ? 1 : 0,
+                    minic_lp64_core_valid_return_with_policy(
+                        core_types, ins->core_type_id, abi) ? 1 : 0,
                     ins->result < fn->value_count &&
                     fn->values[ins->result].core_type_id == ins->core_type_id ? 1 : 0);
             return false;
@@ -342,16 +361,14 @@ static bool minic_lp64_admit_call(
                           arch, name, i, count, parameter_count,
                           is_variadic ? 1 : 0,
                           ins->kind == MINIC_CORE_INSTRUCTION_INDIRECT_CALL ? 1 : 0,
-                          minic_lp64_core_valid_return_with_indirect(
-                              core_types, call.core_return_type_id,
-                              abi->core_indirect_return) ? 1 : 0);
+                          minic_lp64_core_valid_return_with_policy(
+                              core_types, call.core_return_type_id, abi) ? 1 : 0);
         if (call.core_return_type_id != ins->core_type_id ||
             /* Fixed binary64 call results are transferred from the target FP
              * ABI result register; aggregate and other types still fail closed. */
             (!record_result &&
-             !minic_lp64_core_valid_return_with_indirect(
-                 core_types, call.core_return_type_id,
-                 abi->core_indirect_return)) ||
+             !minic_lp64_core_valid_return_with_policy(
+                 core_types, call.core_return_type_id, abi)) ||
             /* Original BusyBox ascii has a 24-argument printf. The existing
              * AAPCS64/LP64D call emitter already classifies outgoing GP/FP
              * and spill arguments by cursor, without fixed 16-element
@@ -411,18 +428,22 @@ static bool minic_lp64_admit_call(
                                               MINIC_CORE_TYPE_INVALID);
                 return false;
             }
-            if (!minic_lp64_core_valid_parameter_type(core_types, core_actual))
+            if (!minic_lp64_core_valid_parameter_with_policy(
+                    core_types, core_actual, abi))
                 return false;
             if (j < parameter_count) {
-                if (!minic_lp64_core_valid_parameter_type(
-                        core_types, call.core_parameter_type_ids[j]) ||
+                if (!minic_lp64_core_valid_parameter_with_policy(
+                        core_types, call.core_parameter_type_ids[j], abi) ||
                     call.core_parameter_type_ids[j] != core_actual)
                     return false;
             } else {
                 /* Lua source uses size_t/long-long variadic arguments.
                  * Preserve 32-bit promotions and classify full LP64
                  * integer values in the native general-purpose registers. */
+                size_t vector_bytes;
                 if (!is_variadic ||
+                    (abi->core_register_vector != NULL &&
+                     abi->core_register_vector(core_types, core_actual, &vector_bytes)) ||
                     (!lp64_call_core_float_format(base, MINIC_CORE_FLOAT_BINARY128) &&
                      !lp64_call_core_float_format(base, MINIC_CORE_FLOAT_BINARY64) &&
                      base->kind != MINIC_CORE_TYPE_POINTER &&

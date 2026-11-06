@@ -59,6 +59,12 @@ static inline bool minic_core_abi_value_shape(
             return false;
         shape->float_format = type->value.floating.format;
         return true;
+    case MINIC_CORE_TYPE_VECTOR:
+        return type->has_layout &&
+               type->value.vector.representation ==
+                   MINIC_CORE_VECTOR_REGISTER_VALUE &&
+               (type->size == 8U || type->size == 16U) &&
+               type->alignment == type->size;
     default:
         return false;
     }

@@ -8,5 +8,7 @@
  * no parallel Core-to-FILE* vector instruction writer exists here. */
 bool minic_aarch64_neon_vector128_core_type(const MinicCoreTypeContext *,
                                             MinicCoreTypeId);
+bool minic_aarch64_neon_register_vector_core_type(
+    const MinicCoreTypeContext *, MinicCoreTypeId, size_t *);
 
 #endif

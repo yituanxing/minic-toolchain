@@ -260,7 +260,8 @@ MinicBuiltinDeclarationRole minic_type_builtin_declaration_role(MinicType type) 
     case MINIC_TYPE_BASE_TARGET_BUILTIN:
         if (type.target_builtin_id == 0U) return MINIC_BUILTIN_DECLARATION_INVALID;
         if (type.target_builtin_role == MINIC_BUILTIN_DECLARATION_HEADER_ONLY_OPAQUE ||
-            type.target_builtin_role == MINIC_BUILTIN_DECLARATION_FIXED_VECTOR128_STORAGE)
+            type.target_builtin_role == MINIC_BUILTIN_DECLARATION_FIXED_VECTOR128_STORAGE ||
+            type.target_builtin_role == MINIC_BUILTIN_DECLARATION_FIXED_VECTOR64_STORAGE)
             return type.target_builtin_role;
         return MINIC_BUILTIN_DECLARATION_INVALID;
     default:
@@ -276,7 +277,8 @@ MinicType minic_type_header_builtin(unsigned int builtin_id,
     MinicType type;
     if (builtin_id == 0U ||
         (role != MINIC_BUILTIN_DECLARATION_HEADER_ONLY_OPAQUE &&
-         role != MINIC_BUILTIN_DECLARATION_FIXED_VECTOR128_STORAGE))
+         role != MINIC_BUILTIN_DECLARATION_FIXED_VECTOR128_STORAGE &&
+         role != MINIC_BUILTIN_DECLARATION_FIXED_VECTOR64_STORAGE))
         return minic_type_void();
     type = minic_type_scalar(MINIC_TYPE_BASE_TARGET_BUILTIN);
     type.target_builtin_id = builtin_id;
@@ -289,6 +291,29 @@ bool minic_type_is_fixed_vector128_storage(MinicType type) {
         minic_type_builtin_declaration_role(type) !=
             MINIC_BUILTIN_DECLARATION_FIXED_VECTOR128_STORAGE)
         return false;
+    return true;
+}
+
+bool minic_type_is_fixed_vector64_storage(MinicType type) {
+    return type.pointer_depth == 0U &&
+           minic_type_builtin_declaration_role(type) ==
+               MINIC_BUILTIN_DECLARATION_FIXED_VECTOR64_STORAGE;
+}
+
+bool minic_type_is_fixed_vector_register_storage(MinicType type) {
+    return minic_type_is_fixed_vector128_storage(type) ||
+           minic_type_is_fixed_vector64_storage(type);
+}
+
+bool minic_type_fixed_vector_binary_result(MinicType left, MinicType right,
+                                           MinicType *result) {
+    MinicType left_value, right_value;
+    if (result == NULL || !minic_type_is_fixed_vector_register_storage(left) ||
+        !minic_type_unqualified(left, &left_value) ||
+        !minic_type_unqualified(right, &right_value) ||
+        !minic_type_equal(left_value, right_value))
+        return false;
+    *result = left_value;
     return true;
 }
 

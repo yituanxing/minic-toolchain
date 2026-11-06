@@ -62,20 +62,34 @@ grep -F 'unsupported GCC pragma directive' "$work/xor.minic.stderr" >/dev/null
 grep -F '  eor v16.16b, v16.16b, v17.16b' "$work/alu.minic.s" >/dev/null
 "$gnu_cc" -c "$work/alu.minic.s" -o "$work/alu.minic.o"
 
-# AAPCS64 V-register by-value function ABI remains independently gated.
+# AAPCS64 Q-register by-value function ABI is independently typed and
+# transported through q0 rather than integer GPR pairs.
 "$gnu_cc" -E -P -x c \
     "$root/tests/compiler/c0/aarch64_neon_unsupported_abi.c" \
     -o "$work/unsupported-abi.i"
 "$gnu_cc" -O2 -c \
     "$root/tests/compiler/c0/aarch64_neon_unsupported_abi.c" \
     -o "$work/unsupported-abi.gnu.o"
-if "$minic_cc" --target=aarch64-linux -S \
+"$minic_cc" --target=aarch64-linux -S \
     "$work/unsupported-abi.i" -o "$work/unsupported-abi.minic.s" \
-    >"$work/unsupported-abi.stdout" \
-    2>"$work/unsupported-abi.stderr"; then
-    printf '%s\n' 'FAIL MiniC silently admitted unfinished vector by-value ABI' >&2
-    exit 1
-fi
-grep -F 'unsupported function return type' "$work/unsupported-abi.stderr" >/dev/null
+    >"$work/typed-abi.stdout" 2>"$work/typed-abi.stderr"
+grep -F '  str q0,' "$work/unsupported-abi.minic.s" >/dev/null
+grep -F '  ldr q0,' "$work/unsupported-abi.minic.s" >/dev/null
+"$gnu_cc" -c "$work/unsupported-abi.minic.s" -o "$work/typed-abi.minic.o"
 
-printf '%s\n' 'PASS AArch64 NEON stage2 layout=MiniC+GNU/QEMU(native) ALU=MiniC-Q-object intrinsics=GNU/QEMU(reference) MiniC-full-header/ABI=honest-FAIL other-ISA=reject'
+# Full D-vector ABI execution: true 8B values, by-value direct/indirect
+# calls and the ninth SIMD argument spilling to AAPCS64's stack overflow.
+"$gnu_cc" -E -P -x c \
+    "$root/tests/compiler/c0/aarch64_neon_vector64_abi.c" \
+    -o "$work/d-vector-abi.i"
+"$gnu_cc" -static -O2 \
+    "$root/tests/compiler/c0/aarch64_neon_vector64_abi.c" \
+    -o "$work/d-vector-abi.gnu.elf"
+"$qemu" "$work/d-vector-abi.gnu.elf"
+"$minic_cc" --target=aarch64-linux -S \
+    "$work/d-vector-abi.i" -o "$work/d-vector-abi.minic.s"
+"$gnu_cc" -static "$work/d-vector-abi.minic.s" \
+    -o "$work/d-vector-abi.minic.elf"
+"$qemu" "$work/d-vector-abi.minic.elf"
+
+printf '%s\n' 'PASS AArch64 NEON stage2 layout=MiniC+GNU/QEMU ALU=MiniC-Q-object Q-ABI=typed D-ABI=GNU/MiniC-QEMU intrinsics=GNU/QEMU(reference) MiniC-full-header=honest-FAIL other-ISA=reject'

@@ -412,10 +412,12 @@ static MinicCoreLowerStatus core_prepare_call_argument(
             context, source, type, &argument->value.object_id);
     }
     argument->kind = MINIC_CORE_CALL_ARGUMENT_VALUE;
-    status = fixed
-        ? minic_core_lower_internal_lower_scalar_assignment_value(
-              context, type, source, &argument->value.value_id)
-        : lower_expression(context, source, &argument->value.value_id);
+    status = minic_type_is_fixed_vector_register_storage(type)
+        ? lower_expression(context, source, &argument->value.value_id)
+        : fixed
+          ? minic_core_lower_internal_lower_scalar_assignment_value(
+                context, type, source, &argument->value.value_id)
+          : lower_expression(context, source, &argument->value.value_id);
     if (status != MINIC_CORE_LOWER_OK) {
         if (direct_name != NULL) {
             (void)fprintf(stderr,
@@ -446,9 +448,11 @@ static MinicCoreLowerStatus core_prepare_call_argument(
             immediate_fact->bits = integer.bits;
         }
     }
-    return minic_core_lower_internal_spill_scalar_value(
-        context, call->span, type, argument->value.value_id,
-        snapshot_object);
+    return minic_type_is_fixed_vector_register_storage(type)
+        ? minic_core_lower_internal_spill_vector_value(
+              context, call->span, type, argument->value.value_id, snapshot_object)
+        : minic_core_lower_internal_spill_scalar_value(
+              context, call->span, type, argument->value.value_id, snapshot_object);
 }
 
 /* Evaluate each source expression exactly once before replaying saved SSA
@@ -478,8 +482,11 @@ static MinicCoreLowerStatus core_reload_call_arguments(
                 return MINIC_CORE_LOWER_ERROR;
             continue;
         }
-        status = minic_core_lower_internal_reload_scalar_value(
-            context, call->span, types[i], snapshots[i], &reloaded);
+        status = minic_type_is_fixed_vector_register_storage(types[i])
+            ? minic_core_lower_internal_reload_vector_value(
+                  context, call->span, types[i], snapshots[i], &reloaded)
+            : minic_core_lower_internal_reload_scalar_value(
+                  context, call->span, types[i], snapshots[i], &reloaded);
         if (status != MINIC_CORE_LOWER_OK) return status;
         /* Reloading an aligned integer parameter removes the storage-only
          * qualifier from its SSA value. Re-express the fixed argument in
@@ -552,7 +559,8 @@ static MinicCoreLowerStatus core_lower_direct_call_impl(
                !minic_type_equal(callee->return_type, expression->type) ||
                callee->is_variadic)
             : (returns_record || (!returns_void &&
-               !core_memory_scalar_type(callee->return_type))))) {
+               !core_memory_scalar_type(callee->return_type) &&
+               !minic_type_is_fixed_vector_register_storage(callee->return_type))))) {
         return MINIC_CORE_LOWER_UNSUPPORTED;
     }
 
@@ -592,7 +600,8 @@ static MinicCoreLowerStatus core_lower_direct_call_impl(
         if (argument_index < callee->parameter_count) {
             argument_types[argument_index] = callee->parameter_types[argument_index];
             if (!core_memory_scalar_type(argument_types[argument_index]) &&
-                !minic_type_is_record(argument_types[argument_index]))
+                !minic_type_is_record(argument_types[argument_index]) &&
+                !minic_type_is_fixed_vector_register_storage(argument_types[argument_index]))
                 return MINIC_CORE_LOWER_UNSUPPORTED;
         } else {
             const MinicExpression *argument_expression = minic_c0_program_expression(
@@ -782,7 +791,8 @@ static MinicCoreLowerStatus core_lower_indirect_call_impl(MinicCoreLowerContext 
     returns_record = minic_type_is_record(signature->return_type);
     if (result_object != NULL ? !returns_record :
         (returns_record || (!returns_void &&
-         !core_memory_scalar_type(signature->return_type)))) {
+         !core_memory_scalar_type(signature->return_type) &&
+         !minic_type_is_fixed_vector_register_storage(signature->return_type)))) {
         return MINIC_CORE_LOWER_UNSUPPORTED;
     }
 
@@ -802,7 +812,8 @@ static MinicCoreLowerStatus core_lower_indirect_call_impl(MinicCoreLowerContext 
         if (fixed) {
             argument_types[argument_index] = signature->parameter_types[argument_index];
             if (!minic_type_is_record(argument_types[argument_index]) &&
-                !core_memory_scalar_type(argument_types[argument_index])) {
+                !core_memory_scalar_type(argument_types[argument_index]) &&
+                !minic_type_is_fixed_vector_register_storage(argument_types[argument_index])) {
                 free(arguments);
                 return MINIC_CORE_LOWER_UNSUPPORTED;
             }

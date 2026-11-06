@@ -159,7 +159,7 @@ static MinicCoreLowerStatus minic_core_lower_assignment_pair_impl(MinicCoreLower
     if (minic_type_is_gnu_fixed_vector(target->type))
         return core_lower_gnu_vector16_storage_copy(
             context, target, source, target_id, source_id, span, result_value);
-    if (minic_type_is_fixed_vector128_storage(target->type)) {
+    if (minic_type_is_fixed_vector_register_storage(target->type)) {
         MinicCoreInstruction store;
         MinicType store_source_type = minic_type_void();
         MinicCoreValueId vector_value, target_address;
@@ -179,7 +179,7 @@ static MinicCoreLowerStatus minic_core_lower_assignment_pair_impl(MinicCoreLower
         status = lower_address(context, target_id, &target_address);
         if (status != MINIC_CORE_LOWER_OK) return status;
         (void)memset(&store, 0, sizeof(store));
-        store.kind = MINIC_CORE_INSTRUCTION_FIXED_VECTOR128_STORE;
+        store.kind = MINIC_CORE_INSTRUCTION_VECTOR_REGISTER_STORE;
         store.span = span;
         store_source_type = minic_type_void();
         store.result = MINIC_CORE_VALUE_INVALID;

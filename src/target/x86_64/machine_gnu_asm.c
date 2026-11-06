@@ -282,6 +282,91 @@ static const MinicMachineSourceAsmTemplatePolicy x86_prefetchw_alt_policy = {
     NULL
 };
 
+/* The only substitution in Linux's feature-gated WRMSR alternative is its
+ * exact integer feature ID. The three architectural register inputs have
+ * already been physically checked and do not appear as GNU placeholders. */
+static bool x86_source_alternative_wrmsr_form(
+    const MinicMachineFunction *function,
+    const MinicMachineInstruction *instruction, void *context) {
+    (void)context;
+    return function != NULL && function->target != NULL &&
+        instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_ALTERNATIVE_WRMSR &&
+        minic_x86_64_machine_validate_source_asm(function->target,
+            instruction,NULL);
+}
+
+static bool x86_source_alternative_wrmsr_binding(
+    const MinicMachineFunction *function,
+    const MinicMachineInstruction *instruction, size_t index,
+    void *context) {
+    return index < 4U &&
+        x86_source_alternative_wrmsr_form(function,instruction,context);
+}
+
+static bool x86_source_alternative_wrmsr_operand(
+    FILE *output, const MinicMachineFunction *function,
+    const MinicMachineInstruction *instruction,
+    const MinicMachineGNUAsmLabels *labels, size_t index,
+    unsigned char modifier, void *context) {
+    (void)labels;
+    if (modifier != 'c' ||
+        !x86_source_alternative_wrmsr_binding(function,
+            instruction,index,context)) return false;
+    return output == NULL ||
+        fprintf(output,"%" PRId64,
+            instruction->operands[3].value.integer) >= 0;
+}
+
+static const MinicMachineSourceAsmTemplatePolicy
+    x86_alternative_wrmsr_policy = {
+        x86_source_alternative_wrmsr_form,
+        x86_source_alternative_wrmsr_binding,
+        x86_source_alternative_wrmsr_operand,
+        NULL
+    };
+
+/* The original Linux clear_page three-CALL alternatives are matched as one
+ * complete 666-byte source grammar. Only the three already proven FUNCTION
+ * symbols are interpolated; the `.skip`, feature records and local-label
+ * references are otherwise unmodified. GAS owns the final relocations. */
+static bool x86_three_call_alt_form(const MinicMachineFunction *function,
+    const MinicMachineInstruction *instruction, void *context) {
+    (void)context;
+    return function != NULL && function->target != NULL &&
+        instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_THREE_CALL_ALTERNATIVE &&
+        minic_x86_64_machine_validate_source_asm(
+            function->target,instruction,NULL);
+}
+
+static bool x86_three_call_alt_binding(const MinicMachineFunction *function,
+    const MinicMachineInstruction *instruction, size_t index, void *context) {
+    return index < 6U &&
+        x86_three_call_alt_form(function,instruction,context);
+}
+
+static bool x86_three_call_alt_operand(FILE *output,
+    const MinicMachineFunction *function,
+    const MinicMachineInstruction *instruction,
+    const MinicMachineGNUAsmLabels *labels, size_t index,
+    unsigned char modifier, void *context) {
+    (void)labels;
+    if (modifier != 'c' || index < 2U || index >= 5U ||
+        !x86_three_call_alt_binding(function,instruction,index,context))
+        return false;
+    return output == NULL ||
+        (fputs(instruction->operands[index].value.symbol.name,output) != EOF &&
+         fputs("@PLT",output) != EOF);
+}
+
+static const MinicMachineSourceAsmTemplatePolicy x86_three_call_alt_policy = {
+    x86_three_call_alt_form,
+    x86_three_call_alt_binding,
+    x86_three_call_alt_operand,
+    NULL
+};
+
 /* Both CMPXCHG16B forms use actual R11-relative 16-byte memory, fixed
  * RAX:RDX and RBX:RCX pairs, and the complete source-matched Linux patch
  * metadata. Only `%[ptr]`, `%P[var]` and `%[var]` can interpolate their
@@ -424,6 +509,117 @@ static const MinicMachineSourceAsmTemplatePolicy x86_bug_c_policy = {
     x86_source_bug_c_form,
     x86_source_bug_c_binding,
     x86_source_bug_c_operand,
+    NULL
+};
+
+/* Linux x86 static-key metadata is emitted from an exact, independently
+ * verified three-operand source form: link-time PREL64 key, bounded flags,
+ * and one actual Machine block label. The template engine is only a GNU
+ * placeholder formatter; it cannot admit arbitrary instructions or labels. */
+static bool x86_jump_label_form(const MinicMachineFunction *function,
+    const MinicMachineInstruction *instruction, void *context) {
+    (void)context;
+    return function != NULL && function->target != NULL &&
+        instruction->source_asm_machine_form_id == 0U &&
+        instruction->source_asm_terminates_block &&
+        instruction->source_asm_permits_fallthrough &&
+        minic_x86_64_machine_validate_source_asm(
+            function->target,instruction,NULL);
+}
+
+static bool x86_jump_label_binding(const MinicMachineFunction *function,
+    const MinicMachineInstruction *instruction, size_t index,
+    void *context) {
+    return index < 3U &&
+        x86_jump_label_form(function,instruction,context);
+}
+
+static bool x86_jump_label_operand(FILE *output,
+    const MinicMachineFunction *function,
+    const MinicMachineInstruction *instruction,
+    const MinicMachineGNUAsmLabels *labels, size_t index,
+    unsigned char modifier, void *context) {
+    const MinicMachineOperand *op = &instruction->operands[index];
+    if (!x86_jump_label_binding(function,instruction,index,context) ||
+        (index == 2U ? modifier != 'l' : modifier != 'c'))
+        return false;
+    if (output == NULL) return true;
+    if (index == 0U) {
+        if (fputs(op->value.symbol.name,output) == EOF) return false;
+        return op->value.symbol.addend == 0 ||
+            fprintf(output,"%+" PRId64,op->value.symbol.addend) >= 0;
+    }
+    if (index == 1U)
+        return fprintf(output,"%" PRId64,op->value.integer) >= 0;
+    return labels != NULL && labels->names != NULL &&
+        op->value.block_id < labels->count &&
+        labels->names[op->value.block_id] != NULL &&
+        fputs(labels->names[op->value.block_id],output) != EOF;
+}
+
+static const MinicMachineSourceAsmTemplatePolicy x86_jump_label_policy = {
+    x86_jump_label_form,
+    x86_jump_label_binding,
+    x86_jump_label_operand,
+    NULL
+};
+
+/* GNU x86 _static_cpu_has: the target verifies the entire dual-alternative
+ * template and five physical operands BEFORE any GNU interpolation. `%c`
+ * emits plain feature decimal, `%P` a PC-relative symbol+byte displacement,
+ * plain `i` a `$` immediate bitmask, and `%l` a real Machine CFG label. */
+static bool x86_cpu_has_goto_form(const MinicMachineFunction *function,
+    const MinicMachineInstruction *instruction, void *context) {
+    (void)context;
+    return function != NULL && function->target != NULL &&
+        instruction->source_asm_machine_form_id == 0U &&
+        instruction->source_asm_terminates_block &&
+        instruction->source_asm_permits_fallthrough &&
+        minic_x86_64_linux_cpu_has_goto_form(
+            instruction->source_asm_template,
+            instruction->source_asm_length) &&
+        minic_x86_64_machine_validate_source_asm(
+            function->target,instruction,NULL);
+}
+
+static bool x86_cpu_has_goto_binding(const MinicMachineFunction *function,
+    const MinicMachineInstruction *instruction, size_t index,
+    void *context) {
+    return index < 5U &&
+        x86_cpu_has_goto_form(function,instruction,context);
+}
+
+static bool x86_cpu_has_goto_operand(FILE *output,
+    const MinicMachineFunction *function,
+    const MinicMachineInstruction *instruction,
+    const MinicMachineGNUAsmLabels *labels, size_t index,
+    unsigned char modifier, void *context) {
+    const MinicMachineOperand *op = &instruction->operands[index];
+    if (!x86_cpu_has_goto_binding(function,instruction,index,context) ||
+        (index == 0U ? modifier != 'c' :
+         index == 1U ? modifier != 0U :
+         index == 2U ? modifier != 'P' : modifier != 'l'))
+        return false;
+    if (output == NULL) return true;
+    if (index == 0U) return fprintf(output,"%" PRId64,
+        op->value.integer) >= 0;
+    if (index == 1U) return fprintf(output,"$%" PRId64,
+        op->value.integer) >= 0;
+    if (index == 2U) {
+        if (fputs(op->value.symbol.name,output) == EOF) return false;
+        return op->value.symbol.addend == 0 ||
+            fprintf(output,"%+" PRId64,op->value.symbol.addend) >= 0;
+    }
+    return labels != NULL && labels->names != NULL &&
+        op->value.block_id < labels->count &&
+        labels->names[op->value.block_id] != NULL &&
+        fputs(labels->names[op->value.block_id],output) != EOF;
+}
+
+static const MinicMachineSourceAsmTemplatePolicy x86_cpu_has_goto_policy = {
+    x86_cpu_has_goto_form,
+    x86_cpu_has_goto_binding,
+    x86_cpu_has_goto_operand,
     NULL
 };
 
@@ -598,8 +794,42 @@ static bool x86_emit_source_asm(FILE *out,
     if (out == NULL || function == NULL ||
         !minic_x86_64_machine_validate_source_asm(function->target,
             instruction, context)) return false;
+    if (instruction->source_asm_machine_form_id == 0U &&
+        instruction->source_asm_terminates_block &&
+        instruction->source_asm_permits_fallthrough)
+        return fputs("  ",out) != EOF &&
+            minic_machine_source_asm_template_emit(out,function,
+                instruction,labels,
+                minic_x86_64_linux_cpu_has_goto_form(
+                    instruction->source_asm_template,
+                    instruction->source_asm_length)
+                    ? &x86_cpu_has_goto_policy : &x86_jump_label_policy) &&
+            fputc('\n',out) != EOF;
     if (instruction->source_asm_machine_form_id == 0U)
         return true; /* Empty volatile asm has an effect but zero bytes. */
+    if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_MONITOR_WAIT) {
+        static const char *const idle_hardware[] = {
+            "  monitor\n", "  monitorx\n", "  mwait\n",
+            "  mwaitx\n", "  sti\n  mwait\n"
+        };
+        variant = instruction->source_asm_machine_form_variant;
+        return variant >= 1U && variant <= 5U &&
+            fputs(idle_hardware[variant - 1U],out) != EOF;
+    }
+    if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_SEGMENT_READ) {
+        static const char *const selector[] = {
+            "es","ds","fs","gs","ds","es","ss","cs","fs","gs"
+        };
+        const MinicMachineOperand *op = &instruction->operands[0];
+        variant = instruction->source_asm_machine_form_variant;
+        return variant >= 1U && variant <= 10U &&
+            fprintf(out,"  mov%c %%%s, %%r10%c\n",
+                op->value.physical.reg.width_bits == 16U ? 'w' : 'l',
+                selector[variant-1U],
+                op->value.physical.reg.width_bits == 16U ? 'w' : 'd') >= 0;
+    }
     if (instruction->source_asm_machine_form_id ==
             MINIC_X86_MACHINE_ASM_NOSPEC)
         return true; /* CMP/SBB are already selected physical Machine opcodes. */
@@ -657,6 +887,102 @@ static bool x86_emit_source_asm(FILE *out,
             minic_machine_source_asm_template_emit(out,function,
                 instruction,labels,&x86_prefetchw_alt_policy) &&
             fputc('\n',out) != EOF;
+    if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_ALTERNATIVE_WRMSR)
+        return fputs("  ",out) != EOF &&
+            minic_machine_source_asm_template_emit(out,function,
+                instruction,labels,&x86_alternative_wrmsr_policy) &&
+            fputc('\n',out) != EOF;
+    if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_THREE_CALL_ALTERNATIVE)
+        return fputs("  ",out) != EOF &&
+            minic_machine_source_asm_template_emit(out,function,
+                instruction,labels,&x86_three_call_alt_policy) &&
+            fputc('\n',out) != EOF;
+    if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_XSETBV)
+        return fputs("  xsetbv\n",out) != EOF;
+    if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_IDLE_CLFLUSH_ALT)
+        return fputs(
+            "661:\n"
+            "662:\n"
+            ".skip -(((6651f-6641f)-(662b-661b)) > 0) * "
+                "((6651f-6641f)-(662b-661b)),0x90\n"
+            "663:\n"
+            ".pushsection .altinstructions,\"a\"\n"
+            " .long 661b - .\n"
+            " .long 6641f - .\n"
+            " .4byte (22*32 + (7))\n"
+            " .byte 663b-661b\n"
+            " .byte 6651f-6641f\n"
+            ".popsection\n"
+            ".pushsection .altinstr_replacement, \"ax\"\n"
+            "6641:\n"
+            "  clflush (%rax)\n"
+            "6651:\n"
+            ".popsection\n",out) != EOF;
+    if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_PAT_CLFLUSHOPT)
+        return fputs(
+            "661:\n"
+            "  .byte 0x3e; clflush (%r10)\n"
+            "662:\n"
+            ".skip -(((6651f-6641f)-(662b-661b)) > 0) * "
+                "((6651f-6641f)-(662b-661b)),0x90\n"
+            "663:\n"
+            ".pushsection .altinstructions,\"a\"\n"
+            " .long 661b - .\n"
+            " .long 6641f - .\n"
+            " .4byte (9*32+23)\n"
+            " .byte 663b-661b\n"
+            " .byte 6651f-6641f\n"
+            ".popsection\n"
+            ".pushsection .altinstr_replacement, \"ax\"\n"
+            "6641:\n"
+            "  .byte 0x66; clflush (%r10)\n"
+            "6651:\n"
+            ".popsection\n",out) != EOF;
+    if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_PRIVILEGED_ZERO) {
+        static const char *const exact[7] = {
+            "  hlt\n", "  wbinvd\n", "  swapgs\n",
+            "  .byte 0x0f, 0x01, 0xe8\n",
+            "  outb %al, $0x80\n", "  outb %al, $0xed\n",
+            "  int3\n"
+        };
+        const unsigned int form = instruction->source_asm_machine_form_variant;
+        return form >= 4U && form <= 10U &&
+            fputs(exact[form-4U],out) != EOF;
+    }
+    if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_PREEMPT_GS_DEC)
+        /* The following selected SETZ observes this exact DECL's ZF. */
+        return fputs("  decl %gs:(%r10)\n",out) != EOF;
+    if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_BOOT_STRING &&
+        instruction->source_asm_machine_form_variant == 1U)
+        return fputs("  repe; cmpsb\n",out) != EOF;
+    if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_BOOT_STRING &&
+        instruction->source_asm_machine_form_variant == 2U)
+        return fputs("  divl %r10d\n",out) != EOF;
+    if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_BOOT_STRING &&
+        instruction->source_asm_machine_form_variant == 3U)
+        return fputs("  rep; movsq\n  movq %r10, %rcx\n  rep; movsb\n",out) != EOF;
+    if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_CONTROL_REGISTER) {
+        static const char *const instructions[8] = {
+            "  movq %cr0, %rax\n", "  movq %cr2, %rax\n",
+            "  movq %cr3, %rax\n", "  movq %cr4, %rax\n",
+            "  movq %rax, %cr2\n", "  movq %rax, %cr3\n",
+            "  movq %rax, %cr0\n", "  movq %rax, %cr4\n"
+        };
+        const unsigned int form = instruction->source_asm_machine_form_variant;
+        return form >= 1U && form <= 8U &&
+            fputs(instructions[form-1U],out) != EOF;
+    }
     if (instruction->source_asm_machine_form_id ==
             MINIC_X86_MACHINE_ASM_CMPXCHG128)
         return fputs("  ",out) != EOF &&
@@ -729,6 +1055,15 @@ static bool x86_emit_source_asm(FILE *out,
     if (instruction->source_asm_machine_form_id == MINIC_X86_MACHINE_ASM_BOOT_FLAGS &&
         instruction->source_asm_machine_form_variant == 2U)
         return fputs("  btsl %r11d, (%r10)\n",out) != EOF;
+    if (instruction->source_asm_machine_form_id == MINIC_X86_MACHINE_ASM_BOOT_FLAGS &&
+        instruction->source_asm_machine_form_variant == 1U)
+        return fputs("  btl %r11d, (%r10)\n",out) != EOF;
+    if (instruction->source_asm_machine_form_id == MINIC_X86_MACHINE_ASM_BOOT_FLAGS &&
+        instruction->source_asm_machine_form_variant == 4U)
+        return fputs("  pushfq\n  pushfq\n  popq %r10\n"
+            "  movq %r10, %r11\n  xorq %rax, %r11\n"
+            "  pushq %r11\n  popfq\n  pushfq\n"
+            "  popq %r11\n  popfq\n",out) != EOF;
     if (instruction->source_asm_machine_form_id == MINIC_X86_MACHINE_ASM_DELAY_WAIT)
         return fputs("  ",out) != EOF &&
             minic_machine_source_asm_template_emit(out,function,
@@ -742,6 +1077,28 @@ static bool x86_emit_source_asm(FILE *out,
         return fputs(instruction->source_asm_machine_form_variant == 1U ?
             "  call __SCT__preempt_schedule\n" :
             "  call __SCT__preempt_schedule_notrace\n", out) != EOF;
+    }
+    if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_PV_INDIRECT_CALL) {
+        const unsigned int type_number =
+            (unsigned int)instruction->operands[5].value.integer;
+        if (!minic_x86_64_machine_validate_source_asm(function->target,
+                instruction,NULL)) return false;
+        return fprintf(out,
+            "771:\n"
+            "999:\n"
+            ".pushsection .discard.retpoline_safe\n"
+            " .long 999b\n"
+            ".popsection\n"
+            "  call *(%%r10)\n"
+            "772:\n"
+            ".pushsection .parainstructions,\"a\"\n"
+            " .balign 8\n"
+            " .quad 771b\n"
+            " .byte %u\n"
+            " .byte 772b-771b\n"
+            " .balign 8\n"
+            ".popsection\n",type_number) >= 0;
     }
     if (instruction->source_asm_machine_form_id == MINIC_X86_MACHINE_ASM_LAR_SELECTOR ||
         instruction->source_asm_machine_form_id == MINIC_X86_MACHINE_ASM_IDENTITY_LOAD)
@@ -802,6 +1159,9 @@ static bool x86_emit_source_asm(FILE *out,
             "  fwait\n"
             "  fninit\n",out) != EOF;
     }
+    if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_X87_PROBE)
+        return fputs("  fninit\n  fnstsw (%r10)\n  fnstcw (%r11)\n",out) != EOF;
     if (instruction->source_asm_machine_form_id ==
             MINIC_X86_MACHINE_ASM_RANDOM_SEED) {
         /* The source operand name is sealed to RAX by MachineIR; RDRAND/

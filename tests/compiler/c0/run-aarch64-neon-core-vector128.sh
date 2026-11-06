@@ -47,8 +47,8 @@ grep -F '  add v16.2d, v16.2d, v17.2d' "$work/add.s" >/dev/null
 grep -F '  eor v16.16b, v16.16b, v17.16b' "$work/const-alu.s" >/dev/null
 
 # The target registry, not generic C Frontend or Core IR, owns the complete
-# GNU/AAPCS64 short-vector spelling inventory. Opaque names are legal in
-# header typedef declarations but not sized as real D-register objects.
+# GNU/AAPCS64 short-vector spelling inventory. D byte-lane vectors are now
+# modeled; remaining unsupported lane families stay opaque and fail closed.
 "$host_cc" -E -P -x c \
     "$root/tests/compiler/c0/aarch64_neon_named_header_types.c" \
     -o "$work/header-types.i"
@@ -61,13 +61,14 @@ if "$minic_cc" --target=x86_64-linux -S "$work/header-types.i" \
     exit 1
 fi
 grep -F 'expected type name' "$work/header-types.x86.stderr" >/dev/null
-printf '%s\n' 'typedef __Int8x8_t a64_opaque_d_vector;' \
+printf '%s\n' 'typedef __Int16x4_t a64_opaque_d_vector;' \
     'int main(void) { a64_opaque_d_vector unsupported_object; return (int)sizeof(unsupported_object); }' \
     >"$work/header-types-unsupported.i"
+rm -f "$work/header-types-unsupported.s"
 if "$minic_cc" --target=aarch64-linux -S "$work/header-types-unsupported.i" \
     -o "$work/header-types-unsupported.s" >"$work/header-types-unsupported.stdout" \
     2>"$work/header-types-unsupported.stderr"; then
-    printf '%s\n' 'FAIL header-only AArch64 D-vector acquired object storage' >&2
+    printf '%s\n' 'FAIL unmodeled AArch64 D-vector acquired object storage' >&2
     exit 1
 fi
 test ! -e "$work/header-types-unsupported.s"
@@ -81,7 +82,7 @@ if "$minic_cc" --target=x86_64-linux -S "$work/vector.i" \
 fi
 grep -F 'expected type name' "$work/vector.x86.stderr" >/dev/null
 
-for bad in vector128_unsupported_add unsupported_abi invalid_mixed_xor; do
+for bad in vector128_unsupported_add invalid_mixed_xor; do
     "$host_cc" -E -P -x c \
         "$root/tests/compiler/c0/aarch64_neon_$bad.c" \
         -o "$work/$bad.i"
@@ -93,4 +94,14 @@ for bad in vector128_unsupported_add unsupported_abi invalid_mixed_xor; do
     fi
 done
 
-printf '%s\n' 'PASS AArch64 typed vector128 Core->Q eor/add(16B,2D), load/store, foreign ISA reject, unsupported mixed-lane ADD/ABI/XOR; QEMU runtime=NOT_TESTED'
+# AAPCS64 Q-vector identity is a typed FPR-bank call, never an integer-pair
+# surrogate. This former negative becomes a positive ABI emission assertion.
+"$host_cc" -E -P -x c \
+    "$root/tests/compiler/c0/aarch64_neon_unsupported_abi.c" \
+    -o "$work/typed-q-abi.i"
+"$minic_cc" --target=aarch64-linux -S "$work/typed-q-abi.i" \
+    -o "$work/typed-q-abi.s"
+grep -F '  str q0,' "$work/typed-q-abi.s" >/dev/null
+grep -F '  ldr q0,' "$work/typed-q-abi.s" >/dev/null
+
+printf '%s\n' 'PASS AArch64 typed Q-vector eor/add(16B,2D), load/store, Q ABI, foreign ISA reject, unsupported mixed-lane ADD/XOR; QEMU runtime=NOT_TESTED'

@@ -128,7 +128,8 @@ static const MinicTargetSourceDescriptor minic_source_aarch64 = {
         .long_double_significand_bits = 113U,
         .language_type_capabilities = MINIC_TARGET_LANG_EXTENDED_FLOAT_DECLARATIONS |
             MINIC_TARGET_LANG_OPAQUE_VECTOR_HEADER_DECLARATIONS |
-            MINIC_TARGET_LANG_FIXED_VECTOR128_STORAGE_DECLARATIONS,
+            MINIC_TARGET_LANG_FIXED_VECTOR128_STORAGE_DECLARATIONS |
+            MINIC_TARGET_LANG_FIXED_VECTOR64_STORAGE_DECLARATIONS,
         .gnu_sizeof_void_is_one = true,
         .gnu_sizeof_function_is_one = true,
     },

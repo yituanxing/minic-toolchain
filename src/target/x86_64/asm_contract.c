@@ -110,14 +110,20 @@ bool minic_x86_64_typed_machine_form_matches_template(
         return variant == 1U &&
             minic_x86_64_linux_ip_here_template(text, length);
     case MINIC_X86_MACHINE_ASM_BUG_TABLE_C_IMMEDIATE:
-        return variant != 0U && variant ==
-            minic_x86_64_linux_bug_table_c_form(text, length);
+        form = minic_x86_64_linux_bug_table_c_form(text, length);
+        /* Core renumbers the named source operands before MachineIR, so
+         * variant 2's normalized template also has the numeric spelling. */
+        return form != 0U && (variant == form ||
+            (variant == 2U && form == 3U));
     case MINIC_X86_MACHINE_ASM_NOP_CONST_I:
         return variant == 1U && length == 3U &&
             memcmp(text,"nop",3U) == 0;
     case MINIC_X86_MACHINE_ASM_ZERO_BARRIER:
         form = minic_x86_64_linux_zero_barrier_form(text, length);
         break;
+    case MINIC_X86_MACHINE_ASM_PRIVILEGED_ZERO:
+        form = minic_x86_64_linux_privileged_zero_form(text,length);
+        return form >= 4U && form <= 10U && variant == form;
     case MINIC_X86_MACHINE_ASM_FXSAVE:
         form = minic_x86_64_linux_fxsave_form(text, length);
         break;
@@ -390,6 +396,10 @@ bool minic_x86_64_typed_machine_form_matches_template(
     /* The source-qualified descriptor's memory direction must reach MIR. */
     if (form_id == MINIC_X86_MACHINE_ASM_LIDT)
         return form != 0U && variant == form;
+    /* All eight privileged CRn forms have distinct hardware direction and
+     * register identities; carry that precise selection into MachineIR. */
+    if (form_id == MINIC_X86_MACHINE_ASM_CONTROL_REGISTER)
+        return form != 0U && variant == form;
     /* All other newly tagged source families publish variant zero; their
      * machine parser independently owns the exact opcode and width. */
     if (form_id >= MINIC_X86_MACHINE_ASM_CRASH_REGISTER &&
@@ -402,6 +412,36 @@ bool minic_x86_64_typed_machine_form_matches_template(
  * are *typed* source operands, not arbitrary assembler substitution.  All
  * labels, section order, and optional unreachable metadata are part of the
  * matched identity; a machine operand can never authorize extra source ASM. */
+/* GCC's original Linux WARN_ON grammar includes whitespace and assembler
+ * comments after the four directives. Match the COMPLETE normalized grammar
+ * (including sections and local labels), never a source prefix. Comments are
+ * not instructions, but GNU `%c` operands remain typed and verified later. */
+static bool x86_bug_table_compact(const char *text, size_t length,
+    char *compact, size_t capacity) {
+    bool comment = false;
+    size_t i, n = 0U;
+    if (text == NULL || compact == NULL || capacity == 0U ||
+        length > 2048U) return false;
+    for (i = 0U; i < length; ++i) {
+        const char ch = text[i];
+        if (ch == '\0') return false;
+        if (ch == '\n') {
+            comment = false;
+            continue;
+        }
+        if (comment) continue;
+        if (ch == '#') {
+            comment = true;
+            continue;
+        }
+        if (ch == ' ' || ch == '\t' || ch == '\r') continue;
+        if (n + 1U >= capacity) return false;
+        compact[n++] = ch;
+    }
+    compact[n] = '\0';
+    return true;
+}
+
 unsigned int minic_x86_64_linux_bug_table_c_form(
     const char *text, size_t length) {
     static const char numeric[] =
@@ -437,13 +477,24 @@ unsigned int minic_x86_64_linux_bug_table_c_form(
         ".word %c2\n"
         ".org 2b+%c3\n"
         ".popsection\n";
+    char actual[1024], expected[1024];
     if (text == NULL || strlen(text) != length) return 0U;
     if (length == sizeof(numeric)-1U &&
         memcmp(text,numeric,sizeof(numeric)-1U) == 0) return 1U;
     if (length == sizeof(named)-1U &&
         memcmp(text,named,sizeof(named)-1U) == 0) return 2U;
     if (length == sizeof(named_core)-1U &&
-        memcmp(text,named_core,sizeof(named_core)-1U) == 0) return 2U;
+        memcmp(text,named_core,sizeof(named_core)-1U) == 0) return 3U;
+    if (!x86_bug_table_compact(text,length,actual,sizeof(actual))) return 0U;
+    if (x86_bug_table_compact(numeric,sizeof(numeric)-1U,
+            expected,sizeof(expected)) && strcmp(actual,expected) == 0)
+        return 1U;
+    if (x86_bug_table_compact(named,sizeof(named)-1U,
+            expected,sizeof(expected)) && strcmp(actual,expected) == 0)
+        return 2U;
+    if (x86_bug_table_compact(named_core,sizeof(named_core)-1U,
+            expected,sizeof(expected)) && strcmp(actual,expected) == 0)
+        return 3U;
     return 0U;
 }
 

@@ -405,7 +405,7 @@ static bool core_is_function(const MinicCoreFunction *function, MinicCoreTypeId 
 static bool core_is_vector(const MinicCoreFunction *function, MinicCoreTypeId id) {
     const MinicCoreType *type = core_type(function, id);
     return type != NULL && type->kind == MINIC_CORE_TYPE_VECTOR && type->has_layout &&
-           type->size == 16U;
+           (type->size == 8U || type->size == 16U);
 }
 
 static bool core_is_unsigned_integer(const MinicCoreFunction *function,
@@ -434,6 +434,9 @@ static bool core_is_scalar(const MinicCoreFunction *function, MinicCoreTypeId id
     const MinicCoreType *type = core_type(function, id);
     return type != NULL && (type->kind == MINIC_CORE_TYPE_INTEGER ||
                             type->kind == MINIC_CORE_TYPE_POINTER ||
+                            (core_is_vector(function, id) &&
+                             type->value.vector.representation ==
+                                 MINIC_CORE_VECTOR_REGISTER_VALUE) ||
                             (type->kind == MINIC_CORE_TYPE_FLOAT &&
                              (type->value.floating.format == MINIC_CORE_FLOAT_BINARY32 ||
                               type->value.floating.format == MINIC_CORE_FLOAT_BINARY64 ||
@@ -463,13 +466,13 @@ static bool available_pointer_pointee(const MinicCoreFunction *function,
            core_pointee(function, function->values[address].core_type_id, pointee);
 }
 
-/* The Core vector has a final 16-byte layout and a typed element. Source
+/* The Core vector has a final 8- or 16-byte layout and a typed element. Source
  * ACLE memory forms may address a whole vector or an 8-bit storage carrier,
  * except uint64x2 which admits a full 64-bit unsigned scalar carrier.
  * UINT8X16 and POLY8X16 have identical Core execution layout; their source
  * signed-char admission difference must be settled by typed Source/Semantic
  * before this source-independent verifier runs. */
-static bool vector128_memory_pointee(const MinicCoreFunction *function,
+static bool vector_register_memory_pointee(const MinicCoreFunction *function,
                                      MinicCoreTypeId vector, MinicCoreTypeId pointee) {
     const MinicCoreType *vec = core_type(function, vector);
     const MinicCoreType *element;
@@ -1164,7 +1167,7 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
                ct_equal(destination_type, instruction->core_type_id) &&
                ct_equal(source_type, instruction->core_type_id);
     }
-    case MINIC_CORE_INSTRUCTION_FIXED_VECTOR128_LOAD: {
+    case MINIC_CORE_INSTRUCTION_VECTOR_REGISTER_LOAD: {
         MinicCoreTypeId pointee, unqualified;
         return instruction_result_is_valid(function, instruction) &&
                ct_is_vector_register_value(instruction->core_type_id) &&
@@ -1172,9 +1175,9 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
                ct_equal(instruction->core_type_id, unqualified) &&
                available_pointer_pointee(function, available_values,
                    instruction->value.load.address, &pointee) &&
-               vector128_memory_pointee(function, instruction->core_type_id, pointee);
+               vector_register_memory_pointee(function, instruction->core_type_id, pointee);
     }
-    case MINIC_CORE_INSTRUCTION_FIXED_VECTOR128_STORE: {
+    case MINIC_CORE_INSTRUCTION_VECTOR_REGISTER_STORE: {
         MinicCoreTypeId pointee;
         const MinicCoreValueId value = instruction->value.store.stored_value;
         return instruction->result == MINIC_CORE_VALUE_INVALID &&
@@ -1183,11 +1186,11 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
                ct_is_vector_register_value(function->values[value].core_type_id) &&
                available_pointer_pointee(function, available_values,
                    instruction->value.store.address, &pointee) &&
-               vector128_memory_pointee(function, function->values[value].core_type_id,
+               vector_register_memory_pointee(function, function->values[value].core_type_id,
                                         pointee);
     }
-    case MINIC_CORE_INSTRUCTION_FIXED_VECTOR128_XOR:
-    case MINIC_CORE_INSTRUCTION_FIXED_VECTOR128_ADD:
+    case MINIC_CORE_INSTRUCTION_VECTOR_REGISTER_XOR:
+    case MINIC_CORE_INSTRUCTION_VECTOR_REGISTER_ADD:
         if (!instruction_result_is_valid(function, instruction) ||
             !ct_is_vector_register_value(instruction->core_type_id) ||
             instruction->value.binary.left >= function->value_count ||

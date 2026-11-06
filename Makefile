@@ -1598,6 +1598,58 @@ check-x86-linux-control-state: $(MINIC_CC_BINARY)
 	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
 	sh tests/target/run-linux-x86-control-state.sh
 
+.PHONY: check-x86-linux-fpu-probe
+check-x86-linux-fpu-probe: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	sh tests/target/run-linux-x86-fpu-probe.sh
+
+.PHONY: check-x86-linux-boot-string
+check-x86-linux-boot-string: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	sh tests/target/run-linux-x86-boot-string.sh
+
+.PHONY: check-x86-linux-control-register
+check-x86-linux-control-register: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	sh tests/target/run-linux-x86-control-register.sh
+
+.PHONY: check-x86-linux-bug-table-variants
+check-x86-linux-bug-table-variants: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	sh tests/target/run-linux-x86-bug-table-variants.sh
+
+.PHONY: check-x86-linux-boot-flags
+check-x86-linux-boot-flags: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	sh tests/target/run-linux-x86-boot-flags.sh
+
+.PHONY: check-x86-linux-cache-privileged
+check-x86-linux-cache-privileged: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	sh tests/target/run-linux-x86-cache-privileged.sh
+
+.PHONY: check-x86-linux-paravirt-indirect-call
+check-x86-linux-paravirt-indirect-call: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	sh tests/target/run-linux-x86-paravirt-indirect-call.sh
+
+.PHONY: check-x86-linux-three-call-alternative
+check-x86-linux-three-call-alternative: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	sh tests/target/run-linux-x86-three-call-alternative.sh
+
+.PHONY: check-aarch64-neon-register-vector-abi
+check-aarch64-neon-register-vector-abi: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	sh tests/compiler/c0/run-aarch64-neon-register-vector-abi.sh
+
+check-fast: check-x86-linux-fpu-probe check-x86-linux-boot-string \
+	check-x86-linux-control-register check-x86-linux-bug-table-variants \
+	check-x86-linux-boot-flags check-x86-linux-cache-privileged \
+	check-x86-linux-paravirt-indirect-call \
+	check-x86-linux-three-call-alternative \
+	check-aarch64-neon-register-vector-abi
+
 .PHONY: check-linux-three-arch-trap-state
 check-linux-three-arch-trap-state: $(MINIC_CC_BINARY)
 	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \

@@ -221,6 +221,13 @@ static bool target_source_builtin_registry_valid(
                 entry->vector_element < MINIC_TARGET_BUILTIN_SCALAR_FLOAT32 ||
                 entry->vector_element > MINIC_TARGET_BUILTIN_SCALAR_UNSIGNED_LONG_LONG)
                 return false;
+        } else if (entry->role == MINIC_BUILTIN_DECLARATION_FIXED_VECTOR64_STORAGE) {
+            if (entry->required_capability !=
+                    MINIC_TARGET_LANG_FIXED_VECTOR64_STORAGE_DECLARATIONS ||
+                entry->core_import != MINIC_TARGET_BUILTIN_CORE_IMPORT_VECTOR64 ||
+                entry->vector_element < MINIC_TARGET_BUILTIN_SCALAR_FLOAT32 ||
+                entry->vector_element > MINIC_TARGET_BUILTIN_SCALAR_UNSIGNED_LONG_LONG)
+                return false;
         } else return false;
         for (j = 0U; j < i; ++j)
             if (entry->id == policy->builtin_types[j].id ||

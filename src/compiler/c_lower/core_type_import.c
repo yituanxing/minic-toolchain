@@ -277,7 +277,8 @@ static bool import_vector(MinicCoreTypeImporter *importer, MinicType source,
         element.is_plain_char = source.is_plain_char;
     } else if (minic_target_info_source_builtin_type_descriptor(
                    importer->invocation, source, &descriptor) &&
-               descriptor.core_import == MINIC_TARGET_BUILTIN_CORE_IMPORT_VECTOR128) {
+               (descriptor.core_import == MINIC_TARGET_BUILTIN_CORE_IMPORT_VECTOR128 ||
+                descriptor.core_import == MINIC_TARGET_BUILTIN_CORE_IMPORT_VECTOR64)) {
         type.value.vector.representation = MINIC_CORE_VECTOR_REGISTER_VALUE;
         switch (descriptor.vector_element) {
         case MINIC_TARGET_BUILTIN_SCALAR_FLOAT32: element = minic_type_float(); break;
@@ -450,6 +451,7 @@ static bool import_type(MinicCoreTypeImporter *importer, MinicType source,
                 importer->invocation, source, &descriptor)) return false;
         switch (descriptor.core_import) {
         case MINIC_TARGET_BUILTIN_CORE_IMPORT_VECTOR128:
+        case MINIC_TARGET_BUILTIN_CORE_IMPORT_VECTOR64:
             return import_vector(importer, source, result, depth + 1U);
         case MINIC_TARGET_BUILTIN_CORE_IMPORT_OPAQUE:
             return import_source_opaque(importer, source.target_builtin_id, false, result);

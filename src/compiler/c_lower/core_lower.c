@@ -171,7 +171,7 @@ MinicCoreLowerStatus minic_core_lower_internal_local_object(MinicCoreLowerContex
     }
     if (!core_memory_scalar_type(local->type) &&
         !minic_type_is_record(local->type) &&
-        !minic_type_is_fixed_vector128_storage(local->type)) {
+        !minic_type_is_fixed_vector_register_storage(local->type)) {
         return MINIC_CORE_LOWER_UNSUPPORTED;
     }
     /* A runtime VLA has no static object extent. Its single-evaluated bound
@@ -253,7 +253,8 @@ static MinicCoreLowerStatus lower_parameter_ingress(MinicCoreLowerContext *conte
             }
             continue;
         }
-        if (!core_memory_scalar_type(parameter_value_type)) {
+        if (!core_memory_scalar_type(parameter_value_type) &&
+            !minic_type_is_fixed_vector_register_storage(parameter_value_type)) {
             (void)fprintf(stderr,
                           "CORE_M158_INGRESS_DETAIL function=%s parameter=%zu nonscalar=1\n",
                           context->source_function->name,
@@ -286,6 +287,13 @@ static MinicCoreLowerStatus lower_parameter_ingress(MinicCoreLowerContext *conte
                     context->source, context->block_id, &instruction,
                     instruction_source_type, &parameter_value)) {
                 return MINIC_CORE_LOWER_ERROR;
+            }
+            if (minic_type_is_fixed_vector_register_storage(parameter_value_type)) {
+                status = minic_core_lower_internal_store_vector_value(
+                    context, parameter->name_span, parameter_value_type,
+                    object_id, parameter_value);
+                if (status != MINIC_CORE_LOWER_OK) return status;
+                continue;
             }
             if (context->source_function->is_integer_specialization &&
                 context->source_function->specialization_integer_known[parameter_index] &&
@@ -541,6 +549,17 @@ static MinicCoreLowerStatus lower_return(MinicCoreLowerContext *context,
                                                    context->source_function->return_type,
                                                    statement->expression,
                                                    &terminator.return_value);
+        } else if (minic_type_is_fixed_vector_register_storage(
+                       context->source_function->return_type)) {
+            const MinicExpression *return_expr = minic_c0_program_expression(
+                context->body->program, statement->expression);
+            MinicType unqualified;
+            if (return_expr == NULL ||
+                !minic_type_unqualified(return_expr->type, &unqualified) ||
+                !minic_type_equal(unqualified, context->source_function->return_type))
+                return MINIC_CORE_LOWER_UNSUPPORTED;
+            status = lower_expression(context, statement->expression,
+                                      &terminator.return_value);
         } else if (minic_type_is_record(context->source_function->return_type)) {
             const MinicExpression *expression;
 
@@ -615,6 +634,12 @@ static MinicCoreLowerStatus lower_return(MinicCoreLowerContext *context,
             if (status != MINIC_CORE_LOWER_OK) {
                 return status;
             }
+        } else if (minic_type_is_fixed_vector_register_storage(
+                       context->source_function->return_type)) {
+            status = minic_core_lower_internal_spill_vector_value(
+                context, statement->span, context->source_function->return_type,
+                terminator.return_value, &cleanup_return_object);
+            if (status != MINIC_CORE_LOWER_OK) return status;
         }
         status = lower_cleanup_contexts(context, statement->cleanup_context,
                                         statement->cleanup_stop_context);
@@ -628,6 +653,12 @@ static MinicCoreLowerStatus lower_return(MinicCoreLowerContext *context,
             if (status != MINIC_CORE_LOWER_OK) {
                 return status;
             }
+        } else if (minic_type_is_fixed_vector_register_storage(
+                       context->source_function->return_type)) {
+            status = minic_core_lower_internal_reload_vector_value(
+                context, statement->span, context->source_function->return_type,
+                cleanup_return_object, &terminator.return_value);
+            if (status != MINIC_CORE_LOWER_OK) return status;
         }
     }
     return minic_core_function_set_terminator(context->function, context->block_id, &terminator)

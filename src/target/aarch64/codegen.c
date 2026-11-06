@@ -3,6 +3,7 @@
 #include "target/aarch64/machine_opcode.h"
 #include "target/aarch64/abi.h"
 #include "target/aarch64/asm_contract.h"
+#include "target/aarch64/neon_emit.h"
 #include "target/common/direct_function_emit.h"
 #include "target/common/direct_program_emit.h"
 #include <stdio.h>
@@ -27,7 +28,8 @@ static const MinicDirectLP64AbiPolicy aarch64_abi_policy = {
     .extra_variadic_cursor_bytes = 32U,
     .variadic_requires_public_stack_alignment = false,
     .core_indirect_record = minic_aarch64_indirect_record_core,
-    .core_indirect_return = minic_aarch64_indirect_record_core
+    .core_indirect_return = minic_aarch64_indirect_record_core,
+    .core_register_vector = minic_aarch64_neon_register_vector_core_type
 };
 
 

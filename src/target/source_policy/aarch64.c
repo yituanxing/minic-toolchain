@@ -35,9 +35,10 @@ const MinicTargetAsmSourcePolicy minic_aarch64_asm_source_policy = {
         "GNU asm 'I' input requires an AArch64 unsigned imm12 (optional shift 12)",
 };
 
-/* Header-only AArch64 nominal types stay target-owned. Four NEON byte/word
- * spellings have genuine 16-byte typed Core storage; other ACLE short-vector
- * names are source declarations only, with no ABI, arithmetic or ISA grant.
+/* Header-only AArch64 nominal types stay target-owned. Four Q-register
+ * spellings and two D byte-lane spellings have genuine typed Core storage,
+ * arithmetic and AAPCS64 vector ABI. Other ACLE short-vector names remain
+ * source declarations only, with no ABI, arithmetic or ISA grant.
  * The IDs are local to this policy, never a generic C enum. */
 static const MinicTargetSourceBuiltinTypeDescriptor aarch_builtin_types[] = {
     {1U, "__Float32x4_t", MINIC_BUILTIN_DECLARATION_HEADER_ONLY_OPAQUE,
@@ -71,13 +72,13 @@ static const MinicTargetSourceBuiltinTypeDescriptor aarch_builtin_types[] = {
      MINIC_TARGET_LANG_FIXED_VECTOR128_STORAGE_DECLARATIONS,
      MINIC_TARGET_BUILTIN_CORE_IMPORT_VECTOR128,
      MINIC_TARGET_BUILTIN_SCALAR_UNSIGNED_CHAR},
-    /* GNU AArch64 arm_neon.h and AAPCS64 short-vector spelling inventory.
-     * These are declaration-only nominal identities. In particular, the
-     * 64-bit D vectors and the 128-bit kinds without typed MachineIR paths
-     * get no storage/ABI/intrinsic/ISA authority from a typedef alone. */
-    {10U, "__Int8x8_t", MINIC_BUILTIN_DECLARATION_HEADER_ONLY_OPAQUE,
-     MINIC_TARGET_LANG_OPAQUE_VECTOR_HEADER_DECLARATIONS,
-     MINIC_TARGET_BUILTIN_CORE_IMPORT_NONE, MINIC_TARGET_BUILTIN_SCALAR_NONE},
+    /* D-register 8-bit lane vectors now have real 64-bit Core storage;
+     * a machine ABI is independently checked by AAPCS64. The other ACLE
+     * types remain opaque until their full lane/ABI forms are modeled. */
+    {10U, "__Int8x8_t", MINIC_BUILTIN_DECLARATION_FIXED_VECTOR64_STORAGE,
+     MINIC_TARGET_LANG_FIXED_VECTOR64_STORAGE_DECLARATIONS,
+     MINIC_TARGET_BUILTIN_CORE_IMPORT_VECTOR64,
+     MINIC_TARGET_BUILTIN_SCALAR_SIGNED_CHAR},
     {11U, "__Int16x4_t", MINIC_BUILTIN_DECLARATION_HEADER_ONLY_OPAQUE,
      MINIC_TARGET_LANG_OPAQUE_VECTOR_HEADER_DECLARATIONS,
      MINIC_TARGET_BUILTIN_CORE_IMPORT_NONE, MINIC_TARGET_BUILTIN_SCALAR_NONE},
@@ -105,9 +106,10 @@ static const MinicTargetSourceBuiltinTypeDescriptor aarch_builtin_types[] = {
     {19U, "__Poly64x1_t", MINIC_BUILTIN_DECLARATION_HEADER_ONLY_OPAQUE,
      MINIC_TARGET_LANG_OPAQUE_VECTOR_HEADER_DECLARATIONS,
      MINIC_TARGET_BUILTIN_CORE_IMPORT_NONE, MINIC_TARGET_BUILTIN_SCALAR_NONE},
-    {20U, "__Uint8x8_t", MINIC_BUILTIN_DECLARATION_HEADER_ONLY_OPAQUE,
-     MINIC_TARGET_LANG_OPAQUE_VECTOR_HEADER_DECLARATIONS,
-     MINIC_TARGET_BUILTIN_CORE_IMPORT_NONE, MINIC_TARGET_BUILTIN_SCALAR_NONE},
+    {20U, "__Uint8x8_t", MINIC_BUILTIN_DECLARATION_FIXED_VECTOR64_STORAGE,
+     MINIC_TARGET_LANG_FIXED_VECTOR64_STORAGE_DECLARATIONS,
+     MINIC_TARGET_BUILTIN_CORE_IMPORT_VECTOR64,
+     MINIC_TARGET_BUILTIN_SCALAR_UNSIGNED_CHAR},
     {21U, "__Uint16x4_t", MINIC_BUILTIN_DECLARATION_HEADER_ONLY_OPAQUE,
      MINIC_TARGET_LANG_OPAQUE_VECTOR_HEADER_DECLARATIONS,
      MINIC_TARGET_BUILTIN_CORE_IMPORT_NONE, MINIC_TARGET_BUILTIN_SCALAR_NONE},

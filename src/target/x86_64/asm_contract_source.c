@@ -851,6 +851,7 @@ static bool x86_linux_pv_indirect_call_source(const MinicTargetInvocation *invoc
     static const char *const input_regs[] = {"D", "S", "d", "c"};
     static const char *const clobbers[] = {"cc", "rax", "r8", "r9", "r10", "r11"};
     const MinicExpression *address, *type_number, *stack;
+    const MinicFixedRegisterBinding *fixed;
     size_t i;
     if (!program || !src || !contract || !src->is_volatile || src->is_goto ||
         !minic_x86_64_linux_pv_indirect_call_form(src->template_text,
@@ -886,10 +887,18 @@ static bool x86_linux_pv_indirect_call_source(const MinicTargetInvocation *invoc
         !minic_type_is_integer(type_number->type) ||
         address->value_category != MINIC_VALUE_LVALUE ||
         !minic_type_is_pointer(address->type)) return false;
+    /* The fifth GNU output is the physical +r(current_stack_pointer), not
+     * an ordinary scalar input. Count it as a Core output while enforcing
+     * that the C declaration really binds architectural RSP. */
+    if (stack->kind != MINIC_EXPRESSION_FIXED_REGISTER) return false;
+    fixed = minic_c0_program_fixed_register_binding(
+        program, stack->value.fixed_register_binding_id);
+    if (!fixed || !fixed->register_name ||
+        strcmp(fixed->register_name,"rsp") != 0) return false;
     contract->operand_count = 5U + src->input_count;
     for (i = 0U; i < 4U; ++i)
         contract->kinds[i] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
-    contract->kinds[4] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+    contract->kinds[4] = MINIC_CORE_STRUCTURED_INLINE_ASM_FIXED_REGISTER_READWRITE;
     contract->kinds[5] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
     contract->kinds[6] = MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT;
     for (i = 7U; i < contract->operand_count; ++i)
@@ -1485,10 +1494,10 @@ static bool x86_linux_three_call_alternative_source(const MinicTargetInvocation 
     if (!value || !minic_type_is_pointer(value->type)) return false;
     contract->operand_count = 6U;
     contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
-    /* A CALL restores RSP before the instruction ends. Preserve its fixed
-     * identity as an input Core value: there is no addressable C lvalue for
-     * a hardware stack pointer and no post-asm register write to commit. */
-    contract->kinds[1] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+    /* This is a GNU +r *output* bound to the real fixed RSP, despite no
+     * addressable C lvalue to write back. Preserve its physical read/write
+     * identity and the leading-output-prefix invariant. */
+    contract->kinds[1] = MINIC_CORE_STRUCTURED_INLINE_ASM_FIXED_REGISTER_READWRITE;
     for (i = 2U; i < 6U; ++i)
         contract->kinds[i] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
     contract->implicit_memory_effect = true;
@@ -1559,6 +1568,7 @@ static bool x86_linux_control_register_source(const MinicTargetInvocation *invoc
         contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
     }
     contract->implicit_memory_effect = true;
+    contract->target_machine_form_variant = form;
     return true;
 }
 
@@ -5199,12 +5209,16 @@ static bool x86_linux_bug_table_c_source(
     for (i = 0U; i < 4U; ++i) {
         const MinicInlineAsmOperand *input = &source->inputs[i];
         if (!target_constraint_is(input,"i") ||
-            (variant == 1U ? input->name != NULL :
+            (variant != 2U ? input->name != NULL :
                 (input->name == NULL ||
                  input->name_length != strlen(names[i]) ||
                  memcmp(input->name,names[i],input->name_length) != 0)))
             return false;
         expression = minic_c0_program_expression(program,input->expression);
+        /* A real Linux WARN_ON passes local `__auto_type __flags` and
+         * `sizeof(struct bug_entry)`, not necessarily literal AST nodes.
+         * The later Core immediate-fact gate must prove their exact numeric
+         * values before any MachineIR is admitted. */
         if (expression == NULL || (i == 0U ?
                 (!minic_type_is_pointer(expression->type) ||
                  (expression->kind != MINIC_EXPRESSION_GLOBAL_OBJECT &&
@@ -5213,10 +5227,7 @@ static bool x86_linux_bug_table_c_source(
                   expression->kind != MINIC_EXPRESSION_CAST &&
                   expression->kind != MINIC_EXPRESSION_BITCAST &&
                   expression->kind != MINIC_EXPRESSION_CONVERSION)) :
-                (expression->kind != MINIC_EXPRESSION_INTEGER ||
-                 (i == 3U ? expression->value.integer_value != 12 :
-                    expression->value.integer_value < 0 ||
-                    expression->value.integer_value > 65535))))
+                !minic_type_is_integer(expression->type)))
             return false;
         contract->kinds[i] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
     }
@@ -5395,6 +5406,32 @@ static bool x86_linux_zero_barrier_qualifier(const MinicTargetInvocation *invoca
     (void)program;
     return x86_linux_zero_barrier_source(source, contract);
 }
+/* Existing zero-barrier forms 8..10 already own CLI/STI/STI;HLT. The same
+ * finite privileged ISA inventory also describes HLT, WBINVD, SWAPGS,
+ * SERIALIZE, two fixed immediate-port OUTBs and INT3. None may become a
+ * generic arbitrary-template passthrough. WBINVD and SWAPGS require GNU's
+ * explicit "memory" contract; port IO exposes an implicit AL source. */
+static bool x86_linux_privileged_zero_source(
+    const MinicTargetInvocation *invocation,
+    const MinicC0Program *program, const MinicInlineAsm *source,
+    MinicTargetInlineAsmContract *contract) {
+    const unsigned int form = source ?
+        minic_x86_64_linux_privileged_zero_form(
+            source->template_text,source->template_length) : 0U;
+    (void)invocation;
+    (void)program;
+    if (!source || !contract || form < 4U || form > 10U ||
+        !source->is_volatile || source->is_goto ||
+        source->output_count != 0U || source->input_count != 0U ||
+        source->label_count != 0U || source->register_clobber_count != 0U ||
+        source->clobber_count != (source->has_memory_clobber ? 1U : 0U) ||
+        ((form == 5U || form == 6U) && !source->has_memory_clobber))
+        return false;
+    contract->operand_count = 0U;
+    contract->target_machine_form_variant = form;
+    contract->implicit_memory_effect = form == 5U || form == 6U;
+    return true;
+}
 /* GNU lowercase `i` is generic constant input, distinct from x86 ISA `I`.
  * Capture a source-validated typed integer instead of silently dropping its
  * C operand on a zero-operand NOP machine path. */
@@ -5525,6 +5562,7 @@ static const MinicX86SourceQualifierEntry minic_x86_source_qualifiers[] = {
     X86_SOURCE_TYPED(x86_linux_bug_table_c_source, BUG_TABLE_C_IMMEDIATE),
     X86_SOURCE_TYPED(x86_nop_const_i_source, NOP_CONST_I),
     X86_SOURCE_TYPED(x86_linux_zero_barrier_qualifier, ZERO_BARRIER),
+    X86_SOURCE_TYPED(x86_linux_privileged_zero_source, PRIVILEGED_ZERO),
     X86_SOURCE_TYPED(x86_linux_ip_here_source, IP_HERE),
     X86_SOURCE_TYPED(x86_add32_carry_source, ADD32_CARRY),
     X86_SOURCE_TYPED(x86_linux_tcpudp_nofold_source, TCPUDP_NOFOLD),

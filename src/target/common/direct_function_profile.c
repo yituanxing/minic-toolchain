@@ -51,7 +51,7 @@ MinicDirectLP64ProfileResult minic_multi_direct_lp64_profile_function(
     for (i = 0U; i < minic_core_function_parameter_count(fn); ++i) {
         size_t record_size, record_slots;
         const MinicCoreTypeId id = minic_core_function_parameter_types(fn)[i];
-        if (!minic_lp64_core_valid_parameter_type(fn->type_context, id) &&
+        if (!minic_lp64_core_valid_parameter_with_policy(fn->type_context, id, abi) &&
             !minic_multi_empty_record_core(fn->type_context, id) &&
             !minic_multi_gp_record_core(fn->type_context, id,
                                         &record_size, &record_slots) &&
@@ -83,6 +83,7 @@ MinicDirectLP64ProfileResult minic_multi_direct_lp64_profile_function(
              * nonempty argument kinds exhaust GRs. */
             if (loc->stack_slots != 0U) {
                 if (loc->kind == MINIC_LP64_ARGUMENT_FP ||
+                    loc->kind == MINIC_LP64_ARGUMENT_VECTOR ||
                     (loc->kind == MINIC_LP64_ARGUMENT_WIDE &&
                      abi->long_double_in_fp_register &&
                      direct_profile_core_float_format(fn->type_context,

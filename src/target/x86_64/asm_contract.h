@@ -186,7 +186,10 @@ typedef enum MinicX86MachineAsmForm {
      * even when the opcode itself (`nop`) does not reference the input. */
     MINIC_X86_MACHINE_ASM_NOP_CONST_I,
     /* Linux array_index_mask_nospec, typed 32/64-bit CMP then 64-bit SBB. */
-    MINIC_X86_MACHINE_ASM_NOSPEC
+    MINIC_X86_MACHINE_ASM_NOSPEC,
+    /* Fixed privileged zero-operand CPU/cache/port state forms. Append only
+     * so all previously sealed MachineIR form numbers stay unchanged. */
+    MINIC_X86_MACHINE_ASM_PRIVILEGED_ZERO
 } MinicX86MachineAsmForm;
 
 /* RAID6's fixed XMM/YMM/ZMM and opmask-register GNU templates. Every

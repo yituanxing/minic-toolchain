@@ -56,7 +56,10 @@ typedef enum MinicBuiltinDeclarationRole {
     MINIC_BUILTIN_DECLARATION_STANDARD_FLOAT,
     MINIC_BUILTIN_DECLARATION_EXTENDED_FLOAT,
     MINIC_BUILTIN_DECLARATION_HEADER_ONLY_OPAQUE,
-    MINIC_BUILTIN_DECLARATION_FIXED_VECTOR128_STORAGE
+    MINIC_BUILTIN_DECLARATION_FIXED_VECTOR128_STORAGE,
+    /* AAPCS64 D-register values have a distinct 8-byte machine storage
+     * identity; a header typedef alone still cannot grant an ABI. */
+    MINIC_BUILTIN_DECLARATION_FIXED_VECTOR64_STORAGE
 } MinicBuiltinDeclarationRole;
 
 typedef enum MinicIntegerSign {
@@ -145,10 +148,14 @@ MinicType minic_type_header_builtin(unsigned int builtin_id,
                                     MinicBuiltinDeclarationRole role);
 /* Source C object identity, not a machine SIMD operation or ISA permit. */
 bool minic_type_is_fixed_vector128_storage(MinicType type);
+bool minic_type_is_fixed_vector64_storage(MinicType type);
+bool minic_type_is_fixed_vector_register_storage(MinicType type);
 /* Source C identity and CV-qualification check shared by parser and verifier.
  * Target admission of each builtin kind is deliberately the caller's duty. */
 bool minic_type_fixed_vector128_binary_result(MinicType left, MinicType right,
                                             MinicType *result);
+bool minic_type_fixed_vector_binary_result(MinicType left, MinicType right,
+                                           MinicType *result);
 MinicType minic_type_function(MinicFunctionTypeId function_type_id);
 MinicType minic_type_record(MinicRecordId record_id);
 MinicType minic_type_array(MinicArrayTypeId array_type_id);

@@ -280,6 +280,41 @@ static bool a64_wide_core_slot(A64CoreSelection *sel,
         value, offset) && *offset <= MINIC_LARGE_FRAME_MAX - 16U;
 }
 
+static bool a64_vector_core_bytes(const MinicCoreFunction *fn,
+    MinicCoreTypeId id, size_t *bytes) {
+    return fn != NULL &&
+        minic_aarch64_neon_register_vector_core_type(fn->type_context, id, bytes);
+}
+
+static bool a64_vector_value_transfer(A64CoreSelection *sel,
+    MinicCoreValueId value, const MinicA64FrameView *view,
+    unsigned int reg, bool store) {
+    const MinicCoreFunction *fn = sel->ctx->fn;
+    size_t bytes, at;
+    if (value >= fn->value_count ||
+        !a64_vector_core_bytes(fn, fn->values[value].core_type_id, &bytes) ||
+        !(bytes == 16U ? a64_wide_core_slot(sel, value, &at) :
+          minic_lp64_frame_plan_value_slot(sel->ctx->frame_plan, value, &at)))
+        return false;
+    const MinicA64FrameRegister physical = {
+        bytes == 16U ? MINIC_A64_REG_Q : MINIC_A64_REG_D, reg};
+    return store ? minic_a64_machine_emit_frame_store(
+            &sel->builder, view, minic_a64_owned_slot(at), physical,
+            (MinicA64ScratchPolicy){0U, 0U}) :
+        minic_a64_machine_emit_frame_load(
+            &sel->builder, view, minic_a64_owned_slot(at), physical,
+            (MinicA64ScratchPolicy){0U, 0U});
+}
+
+static bool a64_vector_core_slot(A64CoreSelection *sel,
+    MinicCoreValueId value, size_t *slot, size_t *bytes) {
+    const MinicCoreFunction *fn = sel->ctx->fn;
+    return value < fn->value_count &&
+        a64_vector_core_bytes(fn, fn->values[value].core_type_id, bytes) &&
+        (*bytes == 16U ? a64_wide_core_slot(sel, value, slot) :
+         minic_lp64_frame_plan_value_slot(sel->ctx->frame_plan, value, slot));
+}
+
 static bool a64_wide_float(const MinicCoreFunction *fn,
     MinicCoreTypeId id) {
     const MinicCoreType *type = fn->type_context != NULL ?
@@ -618,6 +653,30 @@ static bool a64_parameter(A64CoreSelection *sel,
     if (a64_wide_integer(fn, ins->core_type_id) ||
         a64_wide_float(fn, ins->core_type_id))
         return a64_wide_parameter(sel, ins, location);
+    {
+        size_t vector_bytes;
+        if (a64_vector_core_bytes(fn, ins->core_type_id, &vector_bytes)) {
+            unsigned int regno;
+            if (location->kind != MINIC_LP64_ARGUMENT_VECTOR ||
+                location->size_bytes != vector_bytes ||
+                ((location->fp_registers == 1U) == (location->stack_slots != 0U)) ||
+                location->gp_registers != 0U) return false;
+            regno = location->fp_registers == 1U ?
+                (unsigned int)location->fp_first : 9U;
+            if (regno >= 10U ||
+                (location->fp_registers == 0U &&
+                 (location->stack_slots != vector_bytes / 8U ||
+                  location->stack_first > SIZE_MAX / 8U ||
+                  !minic_a64_machine_emit_frame_load(&sel->builder, &sel->view,
+                      (MinicA64FrameRef){MINIC_A64_FRAME_INCOMING,
+                      location->stack_first * 8U},
+                      (MinicA64FrameRegister){vector_bytes == 16U ?
+                          MINIC_A64_REG_Q : MINIC_A64_REG_D, regno},
+                      (MinicA64ScratchPolicy){0U, 0U})))) return false;
+            return a64_vector_value_transfer(sel, ins->result, &sel->view,
+                regno, true);
+        }
+    }
     if (!a64_scalar_abi(fn, ins->core_type_id, &shape) ||
         shape.kind == MINIC_CORE_TYPE_VOID) return false;
     if (shape.kind == MINIC_CORE_TYPE_FLOAT) {
@@ -757,6 +816,34 @@ static bool a64_unpack_record_chunk(A64CoreSelection *sel,
     return true;
 }
 
+static bool a64_call_vector_argument(A64CoreSelection *sel,
+    MinicCoreValueId value, const MinicLP64ArgumentLocation *location,
+    const MinicA64FrameView *live) {
+    const MinicCoreFunction *fn = sel->ctx->fn;
+    size_t bytes;
+    unsigned int regno;
+    if (value >= fn->value_count ||
+        !a64_vector_core_bytes(fn, fn->values[value].core_type_id, &bytes) ||
+        location->kind != MINIC_LP64_ARGUMENT_VECTOR ||
+        location->size_bytes != bytes || location->gp_registers != 0U ||
+        ((location->fp_registers == 1U) == (location->stack_slots != 0U)))
+        return false;
+    regno = location->fp_registers == 1U ?
+        (unsigned int)location->fp_first : 9U;
+    if (regno >= 10U ||
+        (location->fp_registers == 0U &&
+         (location->stack_slots != bytes / 8U ||
+          location->stack_first > SIZE_MAX / 8U))) return false;
+    if (!a64_vector_value_transfer(sel, value, live, regno, false)) return false;
+    return location->fp_registers == 1U ||
+        minic_a64_machine_emit_frame_store(&sel->builder, live,
+            (MinicA64FrameRef){MINIC_A64_FRAME_OUTGOING,
+                location->stack_first * 8U},
+            (MinicA64FrameRegister){bytes == 16U ?
+                MINIC_A64_REG_Q : MINIC_A64_REG_D, regno},
+            (MinicA64ScratchPolicy){0U, 0U});
+}
+
 static bool a64_call_record_argument(A64CoreSelection *sel,
     MinicCoreObjectId id, const MinicLP64ArgumentLocation *location,
     const MinicA64FrameView *live) {
@@ -885,6 +972,7 @@ static bool a64_call(A64CoreSelection *sel,
         (result.kind != MINIC_CORE_TYPE_RECORD &&
          !a64_wide_integer(fn, ins->core_type_id) &&
          !a64_wide_float(fn, ins->core_type_id) &&
+         !a64_vector_core_bytes(fn, ins->core_type_id, &(size_t){0U}) &&
          !a64_scalar_abi(fn, ins->core_type_id, &result)) ||
         begin > fn->call_argument_count ||
         count > fn->call_argument_count - begin) return false;
@@ -911,6 +999,13 @@ static bool a64_call(A64CoreSelection *sel,
         }
         if (arg->kind != MINIC_CORE_CALL_ARGUMENT_VALUE ||
             arg->value.value_id >= fn->value_count) return false;
+        if (a64_vector_core_bytes(fn,
+                fn->values[arg->value.value_id].core_type_id,
+                &(size_t){0U})) {
+            if (!a64_call_vector_argument(sel, arg->value.value_id,
+                    location, &live)) return false;
+            continue;
+        }
         if (a64_wide_integer(fn,
                 fn->values[arg->value.value_id].core_type_id) ||
             a64_wide_float(fn,
@@ -1012,6 +1107,8 @@ static bool a64_call(A64CoreSelection *sel,
     if (result.kind == MINIC_CORE_TYPE_VOID) return true;
     if (result.kind == MINIC_CORE_TYPE_RECORD)
         return a64_call_record_result(sel, ins, result_object);
+    if (a64_vector_core_bytes(fn, ins->core_type_id, &(size_t){0U}))
+        return a64_vector_value_transfer(sel, ins->result, &sel->view, 0U, true);
     if (a64_wide_integer(fn, ins->core_type_id)) {
         size_t at;
         return a64_wide_core_slot(sel, ins->result, &at) &&
@@ -1381,8 +1478,10 @@ static bool a64_memory_register(A64CoreSelection *sel,
     MinicMachineOperand operands[2];
     if (displacement > (size_t)INT64_MAX) return false;
     address.value.address.displacement = (int64_t)displacement;
-    operands[0] = vector ? a64_vector(reg,
+    operands[0] = vector ? (bits == 64U ? a64_fp(reg, 64U,
         store ? MINIC_MACHINE_REGISTER_READ : MINIC_MACHINE_REGISTER_WRITE) :
+        a64_vector(reg,
+        store ? MINIC_MACHINE_REGISTER_READ : MINIC_MACHINE_REGISTER_WRITE)) :
         a64_gp(reg, bits,
             store ? MINIC_MACHINE_REGISTER_READ : MINIC_MACHINE_REGISTER_WRITE);
     operands[1] = address;
@@ -3191,25 +3290,28 @@ static bool a64_wide_memory(A64CoreSelection *sel,
     const MinicCoreInstruction *ins) {
     const MinicCoreFunction *fn = sel->ctx->fn;
     const MinicLP64FramePlan *frame = sel->ctx->frame_plan;
-    const bool vector = ins->kind == MINIC_CORE_INSTRUCTION_FIXED_VECTOR128_LOAD ||
-        ins->kind == MINIC_CORE_INSTRUCTION_FIXED_VECTOR128_STORE ||
-        ins->kind == MINIC_CORE_INSTRUCTION_FIXED_VECTOR128_XOR ||
-        ins->kind == MINIC_CORE_INSTRUCTION_FIXED_VECTOR128_ADD;
+    const bool vector = ins->kind == MINIC_CORE_INSTRUCTION_VECTOR_REGISTER_LOAD ||
+        ins->kind == MINIC_CORE_INSTRUCTION_VECTOR_REGISTER_STORE ||
+        ins->kind == MINIC_CORE_INSTRUCTION_VECTOR_REGISTER_XOR ||
+        ins->kind == MINIC_CORE_INSTRUCTION_VECTOR_REGISTER_ADD;
     const bool load = ins->kind == MINIC_CORE_INSTRUCTION_LOAD ||
-        ins->kind == MINIC_CORE_INSTRUCTION_FIXED_VECTOR128_LOAD;
+        ins->kind == MINIC_CORE_INSTRUCTION_VECTOR_REGISTER_LOAD;
     const bool vol = !vector && (load ? ins->value.load.is_volatile :
         ins->value.store.is_volatile);
     MinicCoreValueId address, payload;
     size_t wide_slot;
-    if (ins->kind == MINIC_CORE_INSTRUCTION_FIXED_VECTOR128_XOR ||
-        ins->kind == MINIC_CORE_INSTRUCTION_FIXED_VECTOR128_ADD) {
+    if (ins->kind == MINIC_CORE_INSTRUCTION_VECTOR_REGISTER_XOR ||
+        ins->kind == MINIC_CORE_INSTRUCTION_VECTOR_REGISTER_ADD) {
         const MinicCoreValueId left = ins->value.binary.left;
         const MinicCoreValueId right = ins->value.binary.right;
-        size_t lhs, rhs, result;
+        size_t lhs, rhs, result, vector_bytes, lhs_bytes, rhs_bytes, result_bytes;
         const MinicCoreType *vec = minic_core_type_get(fn->type_context,
             minic_core_type_unqualified(fn->type_context, ins->core_type_id));
-        const bool add = ins->kind == MINIC_CORE_INSTRUCTION_FIXED_VECTOR128_ADD;
-        const uint32_t opcode = !add ? MINIC_A64_MACHINE_VECTOR_EOR_16B :
+        const bool add = ins->kind == MINIC_CORE_INSTRUCTION_VECTOR_REGISTER_ADD;
+        const uint32_t opcode = vec != NULL && vec->size == 8U ?
+            (add ? MINIC_A64_MACHINE_VECTOR_ADD_8B :
+                   MINIC_A64_MACHINE_VECTOR_EOR_8B) :
+            !add ? MINIC_A64_MACHINE_VECTOR_EOR_16B :
             vec != NULL && vec->value.vector.element_count == 2U ?
                 MINIC_A64_MACHINE_VECTOR_ADD_2D :
                 MINIC_A64_MACHINE_VECTOR_ADD_16B;
@@ -3219,31 +3321,35 @@ static bool a64_wide_memory(A64CoreSelection *sel,
             a64_vector(17U, MINIC_MACHINE_REGISTER_READ)
         };
         return left < fn->value_count && right < fn->value_count &&
-            minic_aarch64_neon_vector128_core_type(fn->type_context,
-                ins->core_type_id) &&
-            a64_wide_core_slot(sel, left, &lhs) &&
-            a64_wide_core_slot(sel, right, &rhs) &&
-            a64_wide_core_slot(sel, ins->result, &result) &&
+            a64_vector_core_bytes(fn, ins->core_type_id, &vector_bytes) &&
+            a64_vector_core_slot(sel, left, &lhs, &lhs_bytes) &&
+            a64_vector_core_slot(sel, right, &rhs, &rhs_bytes) &&
+            a64_vector_core_slot(sel, ins->result, &result, &result_bytes) &&
+            lhs_bytes == vector_bytes && rhs_bytes == vector_bytes &&
+            result_bytes == vector_bytes &&
             minic_a64_machine_emit_frame_load(&sel->builder, &sel->view,
                 minic_a64_owned_slot(lhs),
-                (MinicA64FrameRegister){MINIC_A64_REG_Q, 16U},
+                (MinicA64FrameRegister){vector_bytes == 16U ?
+                    MINIC_A64_REG_Q : MINIC_A64_REG_D, 16U},
                 (MinicA64ScratchPolicy){0U, 0U}) &&
             minic_a64_machine_emit_frame_load(&sel->builder, &sel->view,
                 minic_a64_owned_slot(rhs),
-                (MinicA64FrameRegister){MINIC_A64_REG_Q, 17U},
+                (MinicA64FrameRegister){vector_bytes == 16U ?
+                    MINIC_A64_REG_Q : MINIC_A64_REG_D, 17U},
                 (MinicA64ScratchPolicy){0U, 0U}) &&
             a64_emit(sel, opcode, ops, 3U) &&
             minic_a64_machine_emit_frame_store(&sel->builder, &sel->view,
                 minic_a64_owned_slot(result),
-                (MinicA64FrameRegister){MINIC_A64_REG_Q, 16U},
+                (MinicA64FrameRegister){vector_bytes == 16U ?
+                    MINIC_A64_REG_Q : MINIC_A64_REG_D, 16U},
                 (MinicA64ScratchPolicy){0U, 0U});
     }
+    size_t vector_bytes = 16U;
     if (load) {
         if (vector) {
             address = ins->value.load.address;
-            if (!minic_aarch64_neon_vector128_core_type(fn->type_context,
-                    ins->core_type_id) ||
-                !a64_wide_core_slot(sel, ins->result, &wide_slot))
+            if (!a64_vector_core_bytes(fn, ins->core_type_id, &vector_bytes) ||
+                !a64_vector_core_slot(sel, ins->result, &wide_slot, &vector_bytes))
                 return false;
         } else if (!minic_multi_direct_wide_scalar_load_location(fn,
                 ins, frame, &address, &wide_slot)) return false;
@@ -3254,9 +3360,8 @@ static bool a64_wide_memory(A64CoreSelection *sel,
         address = ins->value.store.address;
         if (payload >= fn->value_count) return false;
         if (vector) {
-            if (!minic_aarch64_neon_vector128_core_type(fn->type_context,
-                    fn->values[payload].core_type_id) ||
-                !a64_wide_core_slot(sel, payload, &wide_slot)) return false;
+            if (!a64_vector_core_slot(sel, payload, &wide_slot,
+                    &vector_bytes)) return false;
         } else if (!minic_multi_direct_wide_store_shape(fn, ins,
                 frame, &wide_slot)) return false;
         if (!minic_lp64_frame_plan_value_slot(frame, address, &offset))
@@ -3268,14 +3373,18 @@ static bool a64_wide_memory(A64CoreSelection *sel,
             fn->values[payload].core_type_id)) {
         if (!load && !minic_a64_machine_emit_frame_load(&sel->builder,
                 &sel->view, minic_a64_owned_slot(wide_slot),
-                (MinicA64FrameRegister){MINIC_A64_REG_Q, 16U},
+                (MinicA64FrameRegister){vector_bytes == 16U ?
+                    MINIC_A64_REG_Q : MINIC_A64_REG_D, 16U},
                 (MinicA64ScratchPolicy){0U, 0U})) return false;
-        if (!a64_memory_register(sel, load ? MINIC_A64_MACHINE_LDR_FP_Q :
-                MINIC_A64_MACHINE_STR_FP_Q, true, 16U, 128U,
+        if (!a64_memory_register(sel, vector_bytes == 8U ?
+                    (load ? MINIC_A64_MACHINE_LDR_FP_D : MINIC_A64_MACHINE_STR_FP_D) :
+                    (load ? MINIC_A64_MACHINE_LDR_FP_Q : MINIC_A64_MACHINE_STR_FP_Q),
+                true, 16U, (unsigned int)(vector_bytes * 8U),
                 A64_T1, 0U, !load, vol)) return false;
         return !load || minic_a64_machine_emit_frame_store(&sel->builder,
             &sel->view, minic_a64_owned_slot(wide_slot),
-            (MinicA64FrameRegister){MINIC_A64_REG_Q, 16U},
+            (MinicA64FrameRegister){vector_bytes == 16U ?
+                MINIC_A64_REG_Q : MINIC_A64_REG_D, 16U},
             (MinicA64ScratchPolicy){0U, 0U});
     }
     if (!a64_wide_integer(fn, load ? ins->core_type_id :
@@ -4337,10 +4446,10 @@ static bool a64_core_instruction(A64CoreSelection *sel,
             &candidate, NULL) &&
             minic_machine_builder_emit_source_asm_typed(&sel->builder, &input);
     }
-    case MINIC_CORE_INSTRUCTION_FIXED_VECTOR128_LOAD:
-    case MINIC_CORE_INSTRUCTION_FIXED_VECTOR128_STORE:
-    case MINIC_CORE_INSTRUCTION_FIXED_VECTOR128_XOR:
-    case MINIC_CORE_INSTRUCTION_FIXED_VECTOR128_ADD:
+    case MINIC_CORE_INSTRUCTION_VECTOR_REGISTER_LOAD:
+    case MINIC_CORE_INSTRUCTION_VECTOR_REGISTER_STORE:
+    case MINIC_CORE_INSTRUCTION_VECTOR_REGISTER_XOR:
+    case MINIC_CORE_INSTRUCTION_VECTOR_REGISTER_ADD:
         return a64_wide_memory(sel, ins);
     case MINIC_CORE_INSTRUCTION_RECORD_LOAD:
     case MINIC_CORE_INSTRUCTION_RECORD_COPY:
@@ -4708,6 +4817,11 @@ static bool a64_terminate(A64CoreSelection *sel, size_t core_id) {
             return a64_return_record(sel, term, ret_type) &&
                 minic_a64_machine_emit_epilogue(&sel->builder,
                     sel->ctx->machine_frame);
+        if (a64_vector_core_bytes(fn, ret_type, &(size_t){0U}))
+            return a64_vector_value_transfer(sel, term->return_value,
+                       &sel->view, 0U, false) &&
+                   minic_a64_machine_emit_epilogue(&sel->builder,
+                       sel->ctx->machine_frame);
         if (a64_wide_integer(fn, ret_type) ||
             a64_wide_float(fn, ret_type)) {
             size_t at;

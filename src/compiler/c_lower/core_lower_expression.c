@@ -188,7 +188,7 @@ MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
                    : MINIC_CORE_LOWER_ERROR;
     }
     if (expression->value_category == MINIC_VALUE_LVALUE &&
-        minic_type_is_fixed_vector128_storage(expression->type)) {
+        minic_type_is_fixed_vector_register_storage(expression->type)) {
         MinicCoreValueId address_id;
         MinicType unqualified_type;
         MinicCoreLowerStatus status;
@@ -199,7 +199,7 @@ MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
         status = lower_address(context, expression_id, &address_id);
         if (status != MINIC_CORE_LOWER_OK) return status;
         (void)memset(&instruction, 0, sizeof(instruction));
-        instruction.kind = MINIC_CORE_INSTRUCTION_FIXED_VECTOR128_LOAD;
+        instruction.kind = MINIC_CORE_INSTRUCTION_VECTOR_REGISTER_LOAD;
         instruction.span = expression->span;
         instruction_source_type = unqualified_type;
         instruction.result = MINIC_CORE_VALUE_INVALID;
@@ -229,12 +229,12 @@ MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
         return MINIC_CORE_LOWER_UNSUPPORTED;
     }
     if (expression->kind == MINIC_EXPRESSION_LVALUE_READ &&
-        minic_type_is_fixed_vector128_storage(expression->type)) {
+        minic_type_is_fixed_vector_register_storage(expression->type)) {
         const MinicExpression *operand = minic_c0_program_expression(
             context->body->program, expression->value.unary.operand);
         MinicType operand_value_type;
         if (operand == NULL || operand->value_category != MINIC_VALUE_LVALUE ||
-            !minic_type_is_fixed_vector128_storage(operand->type) ||
+            !minic_type_is_fixed_vector_register_storage(operand->type) ||
             !minic_type_unqualified(operand->type, &operand_value_type) ||
             !minic_type_equal(operand_value_type, expression->type))
             return MINIC_CORE_LOWER_UNSUPPORTED;
@@ -288,7 +288,8 @@ MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
             target->value_category != MINIC_VALUE_LVALUE ||
             minic_type_is_const(target->type) ||
             !minic_type_unqualified(target->type, &stored_type) ||
-            !core_memory_scalar_type(stored_type) ||
+            (!core_memory_scalar_type(stored_type) &&
+             !minic_type_is_fixed_vector_register_storage(stored_type)) ||
             !minic_type_unqualified(expression->type, &expression_value_type) ||
             !minic_type_equal(expression_value_type, stored_type)) {
             return MINIC_CORE_LOWER_UNSUPPORTED;

@@ -101,3 +101,22 @@ bool minic_lp64_core_valid_return_with_indirect(
            (policy != NULL && minic_lp64_core_kind(context, id, MINIC_CORE_TYPE_RECORD) &&
             policy(context, id, &bytes) && bytes > 16U);
 }
+
+bool minic_lp64_core_valid_parameter_with_policy(
+    const MinicCoreTypeContext *context, MinicCoreTypeId id,
+    const MinicDirectLP64AbiPolicy *abi) {
+    size_t bytes = 0U;
+    return minic_lp64_core_valid_parameter_type(context, id) ||
+        (abi != NULL && abi->core_register_vector != NULL &&
+         abi->core_register_vector(context, id, &bytes) &&
+         (bytes == 8U || bytes == 16U));
+}
+
+bool minic_lp64_core_valid_return_with_policy(
+    const MinicCoreTypeContext *context, MinicCoreTypeId id,
+    const MinicDirectLP64AbiPolicy *abi) {
+    return abi != NULL &&
+        (minic_lp64_core_valid_return_with_indirect(
+             context, id, abi->core_indirect_return) ||
+         minic_lp64_core_valid_parameter_with_policy(context, id, abi));
+}

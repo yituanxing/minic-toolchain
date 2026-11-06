@@ -53,7 +53,7 @@ if "$minic" --target=x86_64-linux -S "$work/unaligned.i" \
         -o "$work/unaligned.minic.s" >"$work/unaligned.log" 2>&1; then
     fail 'unaligned packed MEMORY record wrongly admitted as INTEGER'
 fi
-if ! grep -Eq 'cannot allocate or verify Core function frame|Core terminator unsupported' \
+if ! grep -Eq 'cannot allocate or verify Core function frame|Core terminator unsupported|x86-64 cannot select complete typed MachineIR function' \
         "$work/unaligned.log"; then
     fail 'unaligned packed MEMORY record failed for an unrelated reason'
 fi

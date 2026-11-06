@@ -216,6 +216,26 @@ static int verify_language_admission(void) {
                 return 1;
             }
         }
+        {
+            MinicType d_signed = minic_type_void();
+            MinicType d_unsigned = minic_type_void();
+            MinicTargetSourceBuiltinTypeDescriptor desc;
+            const bool signed_found = minic_target_info_named_builtin_type(
+                t, "__Int8x8_t", 10U, &d_signed);
+            const bool unsigned_found = minic_target_info_named_builtin_type(
+                t, "__Uint8x8_t", 11U, &d_unsigned);
+            if (signed_found != is_arm || unsigned_found != is_arm ||
+                (is_arm &&
+                 (!minic_type_is_fixed_vector64_storage(d_signed) ||
+                  !minic_type_is_fixed_vector64_storage(d_unsigned) ||
+                  !minic_target_info_source_builtin_type_descriptor(t, d_signed, &desc) ||
+                  desc.core_import != MINIC_TARGET_BUILTIN_CORE_IMPORT_VECTOR64 ||
+                  !minic_target_info_language_type_supported_for_type(t, d_signed) ||
+                  !minic_target_info_language_type_supported_for_type(t, d_unsigned)))) {
+                (void)fprintf(stderr, "FAIL 64-bit D-vector source registry: %s\n", names[i]);
+                return 1;
+            }
+        }
         if (minic_target_info_language_type_supported_for_type(
                 t, first_opaque) != is_arm ||
             minic_target_info_language_type_supported_for_type(

@@ -7,6 +7,8 @@
 
 typedef bool (*MinicDirectLP64CoreIndirectRecord)(
     const MinicCoreTypeContext *, MinicCoreTypeId, size_t *);
+typedef bool (*MinicDirectLP64CoreRegisterVector)(
+    const MinicCoreTypeContext *, MinicCoreTypeId, size_t *);
 
 /* These describe physical ABI behavior, not architecture identities. Two
  * targets with matching pointer widths need not use the same call ABI. */
@@ -38,6 +40,9 @@ typedef struct MinicDirectLP64AbiPolicy {
      * fail-closed once the Core function has an attached type context. */
     MinicDirectLP64CoreIndirectRecord core_indirect_record;
     MinicDirectLP64CoreIndirectRecord core_indirect_return;
+    /* Target-verified native vector width, transported in the SIMD/FPR bank.
+     * NULL prevents other LP64 targets from accidentally accepting AdvSIMD. */
+    MinicDirectLP64CoreRegisterVector core_register_vector;
     MinicDirectLP64RecordRegisters record_registers;
     MinicDirectLP64WideRegisters wide_registers;
     bool long_double_in_fp_register;

@@ -37,7 +37,8 @@ typedef enum MinicTargetLanguageCapability {
     MINIC_TARGET_LANG_OPAQUE_VECTOR_HEADER_DECLARATIONS = 1U << 1,
     MINIC_TARGET_LANG_FIXED_VECTOR128_STORAGE_DECLARATIONS = 1U << 2,
     MINIC_TARGET_LANG_MS_X64_FUNCTION_POINTER_DECLARATIONS = 1U << 3,
-    MINIC_TARGET_LANG_GNU_FIXED_VECTOR_STORAGE = 1U << 4
+    MINIC_TARGET_LANG_GNU_FIXED_VECTOR_STORAGE = 1U << 4,
+    MINIC_TARGET_LANG_FIXED_VECTOR64_STORAGE_DECLARATIONS = 1U << 5
 } MinicTargetLanguageCapability;
 
 /* The source target owns *all* builtin header type names and identities.
@@ -45,7 +46,8 @@ typedef enum MinicTargetLanguageCapability {
 typedef enum MinicTargetBuiltinCoreImportKind {
     MINIC_TARGET_BUILTIN_CORE_IMPORT_NONE = 0,
     MINIC_TARGET_BUILTIN_CORE_IMPORT_OPAQUE,
-    MINIC_TARGET_BUILTIN_CORE_IMPORT_VECTOR128
+    MINIC_TARGET_BUILTIN_CORE_IMPORT_VECTOR128,
+    MINIC_TARGET_BUILTIN_CORE_IMPORT_VECTOR64
 } MinicTargetBuiltinCoreImportKind;
 
 typedef enum MinicTargetBuiltinScalarElementKind {

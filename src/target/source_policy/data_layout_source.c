@@ -398,6 +398,14 @@ static bool minic_data_layout_type_depth(const MinicTargetInvocation *invocation
         *alignment = invocation->machine.data_layout->fixed_vector128_alignment;
         return minic_data_layout_apply_explicit_alignment(type, alignment);
     }
+    if (minic_type_builtin_declaration_role(type) ==
+        MINIC_BUILTIN_DECLARATION_FIXED_VECTOR64_STORAGE) {
+        if (!minic_target_info_language_type_supported_for_type(
+                invocation, type)) return false;
+        *size = 8U;
+        *alignment = 8U;
+        return minic_data_layout_apply_explicit_alignment(type, alignment);
+    }
     if (minic_type_is_gnu_fixed_vector(type)) {
         size_t scalar_size;
         size_t scalar_alignment;

@@ -351,7 +351,8 @@ bool minic_core_ir_call_scalar_type(MinicType type) {
        still decides the physical floating registers. */
     return minic_type_is_integer(type) || minic_type_is_pointer(type) ||
            minic_type_is_float(type) || minic_type_is_double(type) ||
-           minic_type_is_long_double(type);
+           minic_type_is_long_double(type) ||
+           minic_type_is_fixed_vector_register_storage(type);
 }
 
 bool minic_core_ir_call_parameter_type(MinicType type) {

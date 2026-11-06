@@ -100,6 +100,17 @@ MinicCoreLowerStatus minic_core_lower_internal_reload_scalar_value(MinicCoreLowe
                                                 MinicType type,
                                                 MinicCoreObjectId object_id,
                                                 MinicCoreValueId *value_id);
+/* A register vector has its own typed Core LOAD/STORE. It must never pass
+ * through scalar integer slots or a record byte-copy surrogate. */
+MinicCoreLowerStatus minic_core_lower_internal_spill_vector_value(
+    MinicCoreLowerContext *, MinicSourceSpan, MinicType,
+    MinicCoreValueId, MinicCoreObjectId *);
+MinicCoreLowerStatus minic_core_lower_internal_reload_vector_value(
+    MinicCoreLowerContext *, MinicSourceSpan, MinicType,
+    MinicCoreObjectId, MinicCoreValueId *);
+MinicCoreLowerStatus minic_core_lower_internal_store_vector_value(
+    MinicCoreLowerContext *, MinicSourceSpan, MinicType,
+    MinicCoreObjectId, MinicCoreValueId);
 MinicCoreLowerStatus minic_core_lower_internal_append_integer_conversion(MinicCoreLowerContext *context,
                                                       MinicSourceSpan span,
                                                       MinicType target_type,

@@ -909,7 +909,8 @@ bool minic_multi_direct_machine_instruction_shape(
         const MinicCoreType *vector = direct_core_type(fn, ins->core_type_id);
         if (vector == NULL || vector->kind != MINIC_CORE_TYPE_VECTOR ||
             vector->value.vector.representation != MINIC_CORE_VECTOR_REGISTER_VALUE ||
-            !vector->has_layout || vector->size != 16U ||
+            !vector->has_layout ||
+            (vector->size != 8U && vector->size != 16U) ||
             ins->result >= fn->value_count || fn->values == NULL ||
             fn->values[ins->result].core_type_id != ins->core_type_id)
             return false;

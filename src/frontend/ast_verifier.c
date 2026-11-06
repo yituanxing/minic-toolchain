@@ -232,10 +232,10 @@ static bool verify_binary_type(const MinicC0Program *program,
     }
     if ((expression->value.binary.operator_kind == MINIC_BINARY_BITWISE_XOR ||
          expression->value.binary.operator_kind == MINIC_BINARY_ADD) &&
-        minic_type_is_fixed_vector128_storage(left->type)) {
+        minic_type_is_fixed_vector_register_storage(left->type)) {
         MinicType result_type;
         return minic_target_info_language_type_supported_for_type(target, left->type) &&
-               minic_type_fixed_vector128_binary_result(left->type, right->type,
+               minic_type_fixed_vector_binary_result(left->type, right->type,
                                                          &result_type) &&
                minic_type_equal(expression->type, result_type);
     }
@@ -681,7 +681,7 @@ static bool verify_expression(const MinicC0Program *program,
                (minic_type_is_integer(expression->type) ||
                 minic_type_is_pointer(expression->type) || minic_type_is_double(expression->type) ||
                 minic_type_is_record(expression->type) ||
-                (minic_type_is_fixed_vector128_storage(expression->type) &&
+                (minic_type_is_fixed_vector_register_storage(expression->type) &&
                  minic_target_info_language_type_supported_for_type(
                      target, expression->type)));
     case MINIC_EXPRESSION_ASSIGNMENT:
