@@ -892,6 +892,21 @@ bool minic_multi_direct_machine_instruction_shape(
                    fn, ins, allow_variadic_double_result,
                    &shape->result_offset);
     }
+    /* Vector ALU has a typed SSA result, not a memory effect. Its 16-byte
+     * frame transport and native opcode are target-owned (AArch64 today).
+     * Never run this through the scalar-result gate, which cannot admit a
+     * register vector, or classify the register operation as a LOAD/STORE. */
+    if (minic_core_instruction_is_vector_arithmetic(ins->kind)) {
+        const MinicCoreType *vector = direct_core_type(fn, ins->core_type_id);
+        if (vector == NULL || vector->kind != MINIC_CORE_TYPE_VECTOR ||
+            vector->value.vector.representation != MINIC_CORE_VECTOR_REGISTER_VALUE ||
+            !vector->has_layout || vector->size != 16U ||
+            ins->result >= fn->value_count || fn->values == NULL ||
+            fn->values[ins->result].core_type_id != ins->core_type_id)
+            return false;
+        shape->family = MINIC_DIRECT_MACHINE_RESIDUAL;
+        return true;
+    }
     if (!minic_multi_direct_result_slot_offset(
             fn, ins, allow_variadic_double_result, &shape->result_offset))
         return false;

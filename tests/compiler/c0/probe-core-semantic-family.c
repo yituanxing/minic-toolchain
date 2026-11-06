@@ -36,7 +36,18 @@ int main(void) {
             MINIC_CORE_FAMILY_MEMORY ||
         minic_core_instruction_semantic_family(
             MINIC_CORE_INSTRUCTION_FIXED_VECTOR128_XOR) !=
-            MINIC_CORE_FAMILY_MEMORY ||
+            MINIC_CORE_FAMILY_VECTOR ||
+        minic_core_instruction_semantic_family(
+            MINIC_CORE_INSTRUCTION_FIXED_VECTOR128_ADD) !=
+            MINIC_CORE_FAMILY_VECTOR ||
+        minic_core_instruction_is_memory_access(
+            MINIC_CORE_INSTRUCTION_FIXED_VECTOR128_ADD) ||
+        minic_core_instruction_is_memory_access(
+            MINIC_CORE_INSTRUCTION_FIXED_VECTOR128_XOR) ||
+        !minic_core_instruction_is_vector_arithmetic(
+            MINIC_CORE_INSTRUCTION_FIXED_VECTOR128_XOR) ||
+        !minic_core_instruction_is_vector_arithmetic(
+            MINIC_CORE_INSTRUCTION_FIXED_VECTOR128_ADD) ||
         !minic_core_instruction_is_call(MINIC_CORE_INSTRUCTION_INDIRECT_CALL) ||
         !minic_core_instruction_is_integer_scalar(MINIC_CORE_INSTRUCTION_INTEGER_CLZ) ||
         !minic_core_instruction_is_floating_scalar(MINIC_CORE_INSTRUCTION_FLOAT_DIVIDE) ||

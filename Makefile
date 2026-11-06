@@ -985,6 +985,19 @@ check-core-ir-shapes-source: $(MINIC_CC_BINARY)
 check-core-type-verifier:
 	bash tests/core/run-core-type-verifier.sh "$(CC)"
 
+# Keep the CoreType vector extent/ABI contract independently testable: no
+# target ISA, frontend snapshot, cross compiler or Linux image is required.
+.PHONY: check-core-vector-layout-contract
+check-core-vector-layout-contract:
+	@mkdir -p "$(BUILD_DIR)/tests"
+	$(CC) -std=c11 -Wall -Wextra -Wpedantic -Werror $(MINIC_INCLUDES) \
+	  src/core/core_type.c \
+	  tests/compiler/c0/probe-core-vector-layout-contract.c \
+	  -o "$(BUILD_DIR)/tests/core-vector-layout-contract"
+	"$(BUILD_DIR)/tests/core-vector-layout-contract"
+
+check-fast: check-core-vector-layout-contract
+
 RV64_CORETYPE_TARGET_ADMISSION_BINARY := $(BUILD_DIR)/tests/target/riscv64/coretype-target-admission
 $(RV64_CORETYPE_TARGET_ADMISSION_BINARY): tests/target/riscv64/coretype_target_admission_test.c $(MINIC_OBJECTS)
 	@mkdir -p "$(dir $@)"

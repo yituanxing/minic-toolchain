@@ -17,6 +17,8 @@ typedef enum MinicCoreSemanticFamily {
     MINIC_CORE_FAMILY_CALL,
     MINIC_CORE_FAMILY_INLINE_ASM,
     MINIC_CORE_FAMILY_BARRIER,
+    /* Pure register-valued vector arithmetic, never a memory access. */
+    MINIC_CORE_FAMILY_VECTOR,
 } MinicCoreSemanticFamily;
 
 static inline MinicCoreSemanticFamily minic_core_instruction_semantic_family(
@@ -72,9 +74,10 @@ static inline MinicCoreSemanticFamily minic_core_instruction_semantic_family(
     case MINIC_CORE_INSTRUCTION_VECTOR_STORAGE_COPY:
     case MINIC_CORE_INSTRUCTION_FIXED_VECTOR128_LOAD:
     case MINIC_CORE_INSTRUCTION_FIXED_VECTOR128_STORE:
+        return MINIC_CORE_FAMILY_MEMORY;
     case MINIC_CORE_INSTRUCTION_FIXED_VECTOR128_XOR:
     case MINIC_CORE_INSTRUCTION_FIXED_VECTOR128_ADD:
-        return MINIC_CORE_FAMILY_MEMORY;
+        return MINIC_CORE_FAMILY_VECTOR;
     case MINIC_CORE_INSTRUCTION_RECORD_LOAD:
     case MINIC_CORE_INSTRUCTION_RECORD_COPY:
         return MINIC_CORE_FAMILY_RECORD;
@@ -117,6 +120,10 @@ static inline bool minic_core_instruction_is_floating_scalar(MinicCoreInstructio
 
 static inline bool minic_core_instruction_is_call(MinicCoreInstructionKind kind) {
     return minic_core_instruction_semantic_family(kind) == MINIC_CORE_FAMILY_CALL;
+}
+
+static inline bool minic_core_instruction_is_vector_arithmetic(MinicCoreInstructionKind kind) {
+    return minic_core_instruction_semantic_family(kind) == MINIC_CORE_FAMILY_VECTOR;
 }
 
 static inline bool minic_core_instruction_is_memory_access(MinicCoreInstructionKind kind) {

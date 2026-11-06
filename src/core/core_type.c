@@ -144,11 +144,22 @@ static bool type_references_valid(const MinicCoreTypeContext *context,
             if (type->value.function.parameters[i] >= context->type_count)
                 return false;
         return true;
-    case MINIC_CORE_TYPE_VECTOR:
-        return type->value.vector.element < context->type_count &&
-               type->value.vector.element_count != 0U &&
+    case MINIC_CORE_TYPE_VECTOR: {
+        const MinicCoreType *element = minic_core_type_get(
+            context, type->value.vector.element);
+        const size_t count = type->value.vector.element_count;
+        /* An imported vector is a complete physical object, regardless of
+         * whether its values live in registers or only in memory. An
+         * arbitrary type declaration must never forge a narrower object
+         * than the element/count pair and reach a backend's native Q move. */
+        return type->has_layout && element != NULL && element->has_layout &&
+               element->size != 0U && element->alignment != 0U &&
+               count != 0U && count <= SIZE_MAX / element->size &&
+               type->size == count * element->size &&
+               type->alignment >= element->alignment &&
                (type->value.vector.representation == MINIC_CORE_VECTOR_STORAGE_ONLY ||
                 type->value.vector.representation == MINIC_CORE_VECTOR_REGISTER_VALUE);
+    }
     case MINIC_CORE_TYPE_OPAQUE:
         return !type->has_layout;
     case MINIC_CORE_TYPE_ALIGNED: {

@@ -35,6 +35,7 @@ on:
       - 'tests/compiler/c0/block-extern-incomplete.c'
       - 'tests/compiler/c0/probe-rv32-frame-access.c'
       - 'tests/compiler/c0/probe-core-semantic-family.c'
+      - 'tests/compiler/c0/probe-core-vector-layout-contract.c'
       - 'tests/compiler/c0/probe-core-block-walk.c'
       - 'tests/compiler/c0/probe-direct-lp64-dispatch.c'
       - 'tests/compiler/c0/probe-core-facts-one-pass.c'
@@ -187,6 +188,8 @@ jobs:
             -Isrc -Iinclude tests/compiler/c0/probe-core-semantic-family.c \
             -o "$RUNNER_TEMP/minic-core-semantic-family"
           "$RUNNER_TEMP/minic-core-semantic-family"
+          make MODE=release BUILD_DIR=build/minic-native-backend \
+            check-core-vector-layout-contract
       - name: Strictly compile all MiniC targets without apt or QEMU prerequisites
         shell: bash
         run: |

@@ -46,9 +46,11 @@ static int run(void) {
         !add_vector(&types, u8, 16U, true, 16U, &bytes) ||
         !add_vector(&types, s8, 16U, true, 16U, &signed_bytes) ||
         !add_vector(&types, u8, 16U, false, 16U, &nonbuiltin) ||
-        !add_vector(&types, u8, 16U, true, 8U, &misaligned) ||
-        !add_vector(&types, u8, 8U, true, 16U, &wrong_count))
+        !add_vector(&types, u8, 16U, true, 8U, &misaligned))
         return 1;
+    /* An impossible register-vector layout is rejected by CoreType before
+     * it could ever reach the AArch64 native instruction selector. */
+    if (add_vector(&types, u8, 8U, true, 16U, &wrong_count)) return 1;
     pointer_type.kind = MINIC_CORE_TYPE_POINTER;
     pointer_type.has_layout = true;
     pointer_type.size = 8U;
@@ -69,7 +71,6 @@ static int run(void) {
         minic_aarch64_neon_vector128_core_type(&types, pointer) ||
         minic_aarch64_neon_vector128_core_type(&types, nonbuiltin) ||
         minic_aarch64_neon_vector128_core_type(&types, misaligned) ||
-        minic_aarch64_neon_vector128_core_type(&types, wrong_count) ||
         minic_aarch64_neon_vector128_core_type(NULL, words) ||
         minic_aarch64_neon_vector128_core_type(&types, MINIC_CORE_TYPE_INVALID))
         return 2;

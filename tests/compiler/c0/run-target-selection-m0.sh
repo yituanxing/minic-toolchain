@@ -116,7 +116,11 @@ echo "PASS: ARM64 and LoongArch64 emit distinct Core integer-return assembly; ta
     -S "$temporary_dir/basic.i" -o "$temporary_dir/rv32.s"
 grep -F 'main:' "$temporary_dir/rv32.s" >/dev/null
 grep -F '.option norvc' "$temporary_dir/rv32.s" >/dev/null
-grep -F 'sw ra,' "$temporary_dir/rv32.s" >/dev/null
+# The machine renderer is allowed to spell RA as its physical register x1.
+# Confirm both sides of the prologue/epilogue rather than matching only GAS
+# ABI aliases from the retired text emitter.
+grep -Eq '^[[:space:]]*sw[[:space:]]+(ra|x1),' "$temporary_dir/rv32.s"
+grep -Eq '^[[:space:]]*lw[[:space:]]+(ra|x1),' "$temporary_dir/rv32.s"
 if grep -E '(^|[[:space:]])(sd|ld|addw|subw|mul|div|rem|fadd\.|vsetvli)([[:space:]]|$)' \
         "$temporary_dir/rv32.s" >/dev/null; then
     echo "FAIL: strict RV32I emitted an incompatible/non-I instruction" >&2
