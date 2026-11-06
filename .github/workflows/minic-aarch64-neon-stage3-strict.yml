@@ -32,6 +32,18 @@ jobs:
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
+      # Temporary workspace recovery: the connected GitHub artifact route can
+      # materialize these exact-head sources when direct git DNS is unavailable.
+      - name: Bundle exact PR-head MiniC source snapshot
+        run: |
+          tar -czf /tmp/minic-source-snapshot.tar.gz \
+            Makefile include src tools tests/compiler/c0 tests/target .github/workflows
+      - name: Publish exact-head source snapshot
+        uses: actions/upload-artifact@v4
+        with:
+          name: minic-source-checkout
+          path: /tmp/minic-source-snapshot.tar.gz
+          retention-days: 1
       - name: Install real AArch64 GNU assembler, compiler and QEMU
         run: |
           sudo apt-get -o Acquire::Retries=3 update
