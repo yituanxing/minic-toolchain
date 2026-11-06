@@ -1948,6 +1948,11 @@ if [[ "${COHORT_ACTION:-all}" == verify && "$cohort_scope" == FULL_C_UNIVERSE &&
   rv64_softarith_kbuild_args=(
     "--eval=arch/riscv/purgatory/purgatory.ro: $rv64_runtime/muldi3.o $rv64_runtime/div.o $rv64_runtime/softfp/multi3.o"
     "--eval=vmlinux: KBUILD_VMLINUX_LIBS += $rv64_archive"
+    # GNU Make parses --eval rules before Kbuild's own Makefile. Without
+    # resetting the default goal, recursive Kbuild makes with no explicit
+    # target silently select purgatory.ro instead of their original `all`,
+    # reusing the golden Image despite the 2064 overlaid MiniC .o files.
+    "--eval=.DEFAULT_GOAL :="
   )
   {
     printf '%s\n' 'profile=RV64I/LP64' 'linux_original_C_owners=2064' \
@@ -2110,7 +2115,25 @@ trial() {
           return 0
         fi
       done
-      echo "RV64I_SOFTARITH_KBUILD=PASS trial=$name purgatory_ro=linked purgatory_chk=linked vmlinux=linked image=linked original_MiniC_C=$n" | tee -a "$d/link.log"
+      # Existing files alone do NOT certify a native link: the golden output
+      # snapshot already contains all four. Require the real GNU Kbuild
+      # archiver, linker and Image objcopy in this trial's fresh command log.
+      for native_step in 'AR[[:space:]]+vmlinux\.a' \
+                         'LD[[:space:]]+.*vmlinux' \
+                         'OBJCOPY[[:space:]]+arch/riscv/boot/Image'; do
+        if ! grep -Eq "^[[:space:]]+$native_step([[:space:]]|$)" "$d/link.log"; then
+          echo "RV64I_SOFTARITH_KBUILD=FAIL no_native_step=$native_step" | tee -a "$d/link.log"
+          TRIAL_VERDICT=LINK_FAIL
+          return 0
+        fi
+      done
+      trial_image_sha=$(sha256sum "$out/arch/riscv/boot/Image" | cut -d' ' -f1)
+      if [[ "$trial_image_sha" == "$gnu_image_sha" ]]; then
+        echo "RV64I_SOFTARITH_KBUILD=FAIL image_unchanged_from_gnu_golden sha=$trial_image_sha" | tee -a "$d/link.log"
+        TRIAL_VERDICT=LINK_FAIL
+        return 0
+      fi
+      echo "RV64I_SOFTARITH_KBUILD=PASS trial=$name native_ar=observed native_ld=observed native_objcopy=observed image_sha=$trial_image_sha purgatory_ro=present purgatory_chk=present original_MiniC_C=$n" | tee -a "$d/link.log"
     fi
     link_finished=$(date +%s%N)
     echo "COHORT_TIMING trial=$name stage=gnu_first_link elapsed_ms=$(((link_finished-link_started)/1000000))" 
