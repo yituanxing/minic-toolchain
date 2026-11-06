@@ -3470,6 +3470,11 @@ bool minic_x86_64_machine_validate_source_asm(const MinicTargetInfo *target,
         MINIC_MACHINE_EFFECT_VOLATILE;
     if (form <= 4U || form >= 8U)
         expected |= MINIC_MACHINE_EFFECT_COMPILER_BARRIER;
+    /* PAUSE, REP;NOP, FNINIT permit the optional GNU memory clobber.
+     * Core-origin coverage independently authenticates its presence. */
+    if (form >= 5U && form <= 7U &&
+        (instruction->effects & MINIC_MACHINE_EFFECT_COMPILER_BARRIER) != 0U)
+        expected |= MINIC_MACHINE_EFFECT_COMPILER_BARRIER;
     if (form == 1U) {
         const MinicMachineRegisterEffect *flags;
         expected |= MINIC_MACHINE_EFFECT_MEMORY_READ |
