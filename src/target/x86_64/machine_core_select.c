@@ -7538,6 +7538,100 @@ static bool x86_source_exception_stack_call(X86CoreSelector *sel,
          x86_1(sel,MINIC_X86_MI_POP64_R,x86_reg(MINIC_X86_REG_R12,64U)));
 }
 
+/* Two original Linux 6.6.143 instruction-sequence contracts:
+ * sync_core's IRET-to-self and alternatives' INT3 call emulation selftest.
+ * Only the complete source template is admitted; the target owns the
+ * physical RSP, RDI, R10/R11 placement and the objtool no-ENDBR record. */
+static bool x86_source_iret_int3(X86CoreSelector *sel,
+    const MinicCoreInstruction *ins) {
+    const MinicCoreInlineAsm *source;
+    const MinicCoreStructuredInlineAsmOperand *roles;
+    const MinicCoreFixedRegisterBinding *fixed;
+    MinicMachineOperand operands[2] = {0};
+    MinicMachineRegisterEffect implicit[2] = {0};
+    bool iret;
+    if (sel == NULL || ins == NULL ||
+        ins->kind != MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM ||
+        ins->result != MINIC_CORE_VALUE_INVALID ||
+        sel->core->inline_asms == NULL ||
+        ins->value.structured_inline_asm.inline_asm_id >=
+            sel->core->inline_asm_count) return false;
+    source = &sel->core->inline_asms[
+        ins->value.structured_inline_asm.inline_asm_id];
+    iret = source->target_machine_form_id == MINIC_X86_MACHINE_ASM_IRET_TO_SELF;
+    if (!iret && source->target_machine_form_id !=
+            MINIC_X86_MACHINE_ASM_INT3_SELFTEST) return false;
+    roles = ins->value.structured_inline_asm.operands;
+    if (!roles || ins->value.structured_inline_asm.operand_count != 2U ||
+        !source->is_volatile || source->is_goto ||
+        !source->has_memory_clobber ||
+        source->operand_plan_owner != MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED ||
+        source->source_asm_unique_id == 0U ||
+        source->resolved_immediate_count != 0U ||
+        source->target_machine_form_variant != 0U ||
+        source->register_clobber_count != (iret ? 1U : 0U) ||
+        (iret && (!source->register_clobbers ||
+            !source->register_clobbers[0].name ||
+            strcmp(source->register_clobbers[0].name,"cc") != 0)) ||
+        !minic_x86_64_typed_machine_form_matches_template(
+            source->target_machine_form_id,0U,
+            source->template_text,source->template_length) ||
+        roles[0].operand_index != 0U || roles[1].operand_index != 1U ||
+        roles[0].value >= sel->core->value_count ||
+        roles[1].value >= sel->core->value_count ||
+        roles[0].kind != (iret ?
+            MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT :
+            MINIC_CORE_STRUCTURED_INLINE_ASM_FIXED_REGISTER_READWRITE) ||
+        roles[1].kind != (iret ?
+            MINIC_CORE_STRUCTURED_INLINE_ASM_FIXED_REGISTER_READWRITE :
+            MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT) ||
+        roles[0].physical_early_clobber != iret ||
+        roles[0].physical_read_write == iret ||
+        roles[1].physical_read_write != iret ||
+        roles[1].physical_early_clobber ||
+        roles[0].has_tied_output || roles[1].has_tied_output ||
+        roles[0].early_clobber || roles[1].early_clobber) return false;
+    if ((iret && (roles[0].has_fixed_register_binding ||
+            !roles[1].has_fixed_register_binding)) ||
+        (!iret && (!roles[0].has_fixed_register_binding ||
+            roles[1].has_fixed_register_binding))) return false;
+    if ((iret ? roles[1].fixed_register_binding_id :
+            roles[0].fixed_register_binding_id) >=
+            sel->core->fixed_register_binding_count) return false;
+    fixed = &sel->core->fixed_register_bindings[iret ?
+        roles[1].fixed_register_binding_id : roles[0].fixed_register_binding_id];
+    if (fixed->register_name == NULL ||
+        strcmp(fixed->register_name,"rsp") != 0) return false;
+    if (!x86_core_load(sel,iret ? roles[0].value : roles[1].value,
+            iret ? MINIC_X86_REG_R10 : MINIC_X86_REG_RDI)) return false;
+    if (iret) {
+        /* R10 is an output lvalue address. The instruction writes the
+         * temporary 32-bit selector in R11, then stores to that address. */
+        operands[0] = x86_reg(MINIC_X86_REG_R10,64U);
+        operands[0].asm_constraint = "=&r";
+        operands[0].value.physical.access = MINIC_MACHINE_REGISTER_READ;
+        operands[1] = x86_reg(MINIC_X86_REG_RSP,64U);
+        operands[1].asm_constraint = "+r";
+        operands[1].value.physical.access =
+            MINIC_MACHINE_REGISTER_READ | MINIC_MACHINE_REGISTER_WRITE;
+        implicit[0] = x86_scalar_flags_clobber();
+        implicit[1] = (MinicMachineRegisterEffect){
+            .reg={MINIC_X86_REG_R11,64U,MINIC_MACHINE_REGISTER_GENERAL},
+            .access=MINIC_MACHINE_REGISTER_CLOBBER};
+    } else {
+        operands[0] = x86_reg(MINIC_X86_REG_RSP,64U);
+        operands[0].asm_constraint = "+r";
+        operands[0].value.physical.access =
+            MINIC_MACHINE_REGISTER_READ | MINIC_MACHINE_REGISTER_WRITE;
+        operands[1] = x86_reg(MINIC_X86_REG_RDI,64U);
+        operands[1].asm_constraint = "D";
+        operands[1].value.physical.access = MINIC_MACHINE_REGISTER_READ;
+    }
+    return minic_machine_builder_emit_core_source_asm(&sel->builder,source,
+        MINIC_MACHINE_EFFECT_MEMORY_READ | MINIC_MACHINE_EFFECT_MEMORY_WRITE,
+        operands,2U,iret ? implicit : NULL,iret ? 2U : 0U,false,false);
+}
+
 static bool x86_source_pv_indirect_call(X86CoreSelector *sel,
     const MinicCoreInstruction *ins) {
     static const unsigned int registers[4] = {
@@ -8849,6 +8943,7 @@ static bool x86_core_instruction(X86CoreSelector *sel,
             x86_source_delay_wait(sel, ins) ||
             x86_source_preempt_static_call(sel, ins) ||
             x86_source_exception_stack_call(sel, ins) ||
+            x86_source_iret_int3(sel, ins) ||
             x86_source_three_call_alternative(sel, ins) ||
             x86_source_pv_indirect_call(sel, ins) ||
             x86_source_lowlevel_halt(sel, ins) ||

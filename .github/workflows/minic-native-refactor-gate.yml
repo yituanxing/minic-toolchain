@@ -242,6 +242,14 @@ jobs:
           MINIC_CC="$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc" \
           BUILD_DIR=build/minic-native-backend \
             sh tests/compiler/c0/probe-x86-linux-descriptor-machineir.sh
+      - name: Original Linux x86 exception IRQ IRET and INT3 MachineIR GNU ELF oracles
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          compiler="$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
+          bash tests/target/x86_exception_stack_linux.sh "$compiler"
+          bash tests/target/x86_exception_iret_int3_linux.sh "$compiler"
+          bash tests/compiler/c0/probe-x86-linux-softirq-stack-native.sh "$compiler"
       - name: Linux privileged IRQ RFLAGS and compiler barrier MachineIR differential
         shell: bash
         run: |

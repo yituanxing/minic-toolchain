@@ -882,6 +882,33 @@ static bool x86_emit_source_asm(FILE *out,
             fputs("  popq %rsp\n",out) != EOF;
     }
     if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_IRET_TO_SELF)
+        return fputs("  xorl %r11d, %r11d\n"
+                     "  movw %ss, %r11w\n"
+                     "  pushq %r11\n"
+                     "  pushq %rsp\n"
+                     "  addq $8, (%rsp)\n"
+                     "  pushfq\n"
+                     "  xorl %r11d, %r11d\n"
+                     "  movw %cs, %r11w\n"
+                     "  pushq %r11\n"
+                     "  pushq $1f\n"
+                     "  iretq\n"
+                     "1:\n"
+                     "  movl %r11d, (%r10)\n",out) != EOF;
+    if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_INT3_SELFTEST)
+        return fputs("int3_selftest_ip:\n"
+                     "986:\n"
+                     "  .pushsection .discard.noendbr\n"
+                     "  .long 986b\n"
+                     "  .popsection\n"
+                     "  int3\n"
+                     "  nop\n"
+                     "  nop\n"
+                     "  nop\n"
+                     "  nop\n",out) != EOF;
+    if (instruction->source_asm_machine_form_id ==
             MINIC_X86_MACHINE_ASM_MONITOR_WAIT) {
         static const char *const idle_hardware[] = {
             "  monitor\n", "  monitorx\n", "  mwait\n",

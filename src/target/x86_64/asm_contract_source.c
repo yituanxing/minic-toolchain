@@ -945,6 +945,7 @@ static bool x86_linux_iret_to_self_source(const MinicTargetInvocation *invocatio
                                           MinicTargetInlineAsmContract *contract) {
     (void)invocation;
     const MinicExpression *tmp, *stack;
+    const MinicFixedRegisterBinding *stack_fixed;
     if (!program || !src || !contract || !src->is_volatile || src->is_goto ||
         !minic_x86_64_linux_iret_to_self_form(src->template_text, src->template_length) ||
         src->output_count != 2U || !src->outputs || src->input_count ||
@@ -957,10 +958,16 @@ static bool x86_linux_iret_to_self_source(const MinicTargetInvocation *invocatio
     stack = minic_c0_program_expression(program, src->outputs[1].expression);
     if (!tmp || !stack || tmp->value_category != MINIC_VALUE_LVALUE ||
         !minic_type_equal(tmp->type, minic_type_unsigned_int()) ||
-        !minic_type_equal(stack->type, minic_type_unsigned_long())) return false;
+        !minic_type_equal(stack->type, minic_type_unsigned_long()) ||
+        stack->kind != MINIC_EXPRESSION_FIXED_REGISTER) return false;
+    stack_fixed = minic_c0_program_fixed_register_binding(
+        program, stack->value.fixed_register_binding_id);
+    if (!stack_fixed || !stack_fixed->register_name ||
+        strcmp(stack_fixed->register_name, "rsp") != 0) return false;
     contract->operand_count = 2U;
     contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
-    contract->kinds[1] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+    contract->kinds[1] =
+        MINIC_CORE_STRUCTURED_INLINE_ASM_FIXED_REGISTER_READWRITE;
     contract->implicit_memory_effect = true;
     return true;
 }
@@ -970,6 +977,7 @@ static bool x86_linux_int3_selftest_source(const MinicTargetInvocation *invocati
                                             MinicTargetInlineAsmContract *contract) {
     (void)invocation;
     const MinicExpression *stack, *address;
+    const MinicFixedRegisterBinding *stack_fixed;
     if (!program || !src || !contract || !src->is_volatile || src->is_goto ||
         !minic_x86_64_linux_int3_selftest_form(src->template_text, src->template_length) ||
         src->output_count != 1U || !src->outputs || src->input_count != 1U ||
@@ -981,9 +989,15 @@ static bool x86_linux_int3_selftest_source(const MinicTargetInvocation *invocati
     address = minic_c0_program_expression(program, src->inputs[0].expression);
     if (!stack || !address ||
         !minic_type_equal(stack->type, minic_type_unsigned_long()) ||
-        !minic_type_is_pointer(address->type)) return false;
+        !minic_type_is_pointer(address->type) ||
+        stack->kind != MINIC_EXPRESSION_FIXED_REGISTER) return false;
+    stack_fixed = minic_c0_program_fixed_register_binding(
+        program, stack->value.fixed_register_binding_id);
+    if (!stack_fixed || !stack_fixed->register_name ||
+        strcmp(stack_fixed->register_name, "rsp") != 0) return false;
     contract->operand_count = 2U;
-    contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+    contract->kinds[0] =
+        MINIC_CORE_STRUCTURED_INLINE_ASM_FIXED_REGISTER_READWRITE;
     contract->kinds[1] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
     contract->implicit_memory_effect = true;
     return true;
