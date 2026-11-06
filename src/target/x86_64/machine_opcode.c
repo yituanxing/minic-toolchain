@@ -4701,6 +4701,22 @@ bool minic_x86_64_machine_validate_source_asm(const MinicTargetInfo *target,
     if (instruction->source_asm_machine_form_id ==
             MINIC_X86_MACHINE_ASM_NOP_CONST_I)
         return x86_source_nop_const_i_contract(instruction);
+    if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_ZSTD_PADDING)
+        return instruction->operand_count == 0U &&
+            instruction->operands == NULL &&
+            instruction->implicit_count == 0U &&
+            instruction->implicit == NULL &&
+            !instruction->source_asm_terminates_block &&
+            !instruction->source_asm_permits_fallthrough &&
+            instruction->effects ==
+                (MINIC_MACHINE_EFFECT_SOURCE_ASM |
+                 MINIC_MACHINE_EFFECT_VOLATILE) &&
+            minic_x86_64_typed_machine_form_matches_template(
+                instruction->source_asm_machine_form_id,
+                instruction->source_asm_machine_form_variant,
+                instruction->source_asm_template,
+                instruction->source_asm_length);
     if (instruction->source_asm_machine_form_id == 0U &&
         instruction->source_asm_machine_form_variant == 0U &&
         instruction->source_asm_length == 0U)

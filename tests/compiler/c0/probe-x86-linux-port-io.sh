@@ -28,11 +28,23 @@ for op in out in;do
  grep -Eq "[[:space:]]$op[[:space:]]" "$w/gnu.dump"
  grep -Eq "[[:space:]]$op[[:space:]]" "$w/mini.dump"
 done
+# GNU extended asm without outputs is implicitly volatile. A port OUT is
+# still a valid original-source form when the explicit keyword is omitted.
+sed 's/asm volatile("outb/asm("outb/' "$w/io.i" >"$w/implicit.i"
+cc -x c -O0 -c "$w/implicit.i" -o "$w/implicit-gnu.o"
+"$minic" --target=x86_64-linux -S "$w/implicit.i" -o "$w/implicit.s"
+cc -x assembler -c "$w/implicit.s" -o "$w/implicit-mini.o"
+objdump -d "$w/implicit-gnu.o" >"$w/implicit-gnu.dump"
+objdump -d "$w/implicit-mini.o" >"$w/implicit-mini.dump"
+grep -Eq '[[:space:]]out[[:space:]]' "$w/implicit-gnu.dump"
+grep -Eq '[[:space:]]out[[:space:]]' "$w/implicit-mini.dump"
 sed 's/outb %b0, %w1/outb %b0, %w1; cli/' "$w/io.i" >"$w/evil.i"
 sed 's/"Nd"(p)/"r"(p)/' "$w/io.i" >"$w/constraint.i"
 sed 's/void mini_outb(u8 v,u16 p)/void mini_outb(u8 v,u32 p)/' \
  "$w/io.i" >"$w/width.i"
-sed 's/asm volatile("outb/asm("outb/' "$w/io.i" >"$w/nonvolatile.i"
+# IN has an output operand, so removing volatile really does make it
+# nonvolatile; unlike OUT, this must not silently pass the hardware contract.
+sed 's/asm volatile("inb/asm("inb/' "$w/io.i" >"$w/nonvolatile.i"
 for bad in evil constraint width nonvolatile;do
  if "$minic" --target=x86_64-linux -S "$w/$bad.i" \
       -o "$w/$bad.s" >/dev/null 2>&1;then
@@ -40,4 +52,4 @@ for bad in evil constraint width nonvolatile;do
  fi
  test ! -e "$w/$bad.s"
 done
-echo 'MINIC_X86_LINUX_PORT_IO=PASS widths=3 directions=2 machine=6 negative=4'
+echo 'MINIC_X86_LINUX_PORT_IO=PASS widths=3 directions=2 machine=6 implicit_volatile_out=1 negative=4'

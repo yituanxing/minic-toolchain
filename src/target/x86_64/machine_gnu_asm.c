@@ -1292,6 +1292,18 @@ static bool x86_emit_source_asm(FILE *out,
     if (instruction->source_asm_machine_form_id ==
             MINIC_X86_MACHINE_ASM_NOP_CONST_I)
         return fputs("  nop\n",out) != EOF;
+    if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_ZSTD_PADDING) {
+        static const char *const emitted[] = {
+            "  nop\n", "  .p2align 3\n", "  .p2align 4\n",
+            "  .p2align 5\n", "  .p2align 6\n"
+        };
+        const unsigned int form = instruction->source_asm_machine_form_variant;
+        if (form == 0U || form > sizeof(emitted)/sizeof(emitted[0]) ||
+            !minic_x86_64_machine_validate_source_asm(function->target,
+                instruction, NULL)) return false;
+        return fputs(emitted[form-1U],out) != EOF;
+    }
     if (instruction->source_asm_machine_form_id == MINIC_X86_MACHINE_ASM_MMIO_READ ||
         instruction->source_asm_machine_form_id == MINIC_X86_MACHINE_ASM_MMIO_WRITE ||
         instruction->source_asm_machine_form_id == MINIC_X86_MACHINE_ASM_ATOMIC_XCHG) {

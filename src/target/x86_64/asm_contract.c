@@ -121,6 +121,9 @@ bool minic_x86_64_typed_machine_form_matches_template(
     case MINIC_X86_MACHINE_ASM_ZERO_BARRIER:
         form = minic_x86_64_linux_zero_barrier_form(text, length);
         break;
+    case MINIC_X86_MACHINE_ASM_ZSTD_PADDING:
+        form = minic_x86_64_linux_zstd_padding_form(text, length);
+        break;
     case MINIC_X86_MACHINE_ASM_PRIVILEGED_ZERO:
         form = minic_x86_64_linux_privileged_zero_form(text,length);
         return form >= 4U && form <= 10U && variant == form;
@@ -1362,6 +1365,23 @@ bool minic_x86_64_linux_zstd_p2align_form(const char *text, size_t length) {
      * instruction alignment at an inner loop entry. Whitelist this exact
      * assembler directive; never transport arbitrary basic-asm text. */
     return minic_x86_64_compact_asm_equals(text, length, ".p2align6");
+}
+
+/* Restore the five exact original Linux ZSTD loop-padding forms formerly
+ * handled by the direct x86 emitter. They are assembler directives / NOP,
+ * not permission to pass arbitrary basic-asm strings to GNU as. */
+unsigned int minic_x86_64_linux_zstd_padding_form(
+    const char *text, size_t length) {
+    static const char *const exact[] = {
+        "nop", ".p2align 3", ".p2align 4", ".p2align 5"
+    };
+    size_t i;
+    if (text == NULL) return 0U;
+    for (i = 0U; i < sizeof(exact)/sizeof(exact[0]); ++i)
+        if (length == strlen(exact[i]) &&
+            memcmp(text, exact[i], length) == 0)
+            return (unsigned int)(i + 1U);
+    return minic_x86_64_linux_zstd_p2align_form(text, length) ? 5U : 0U;
 }
 
 /* 6.6 arch/x86/include/asm/kexec.h crash_setup_regs() stores 16-bit CPU

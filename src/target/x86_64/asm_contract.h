@@ -87,6 +87,7 @@ typedef enum MinicX86MachineAsmForm {
     MINIC_X86_MACHINE_ASM_KVM_MOVDQA,
     MINIC_X86_MACHINE_ASM_IP_HERE,
     MINIC_X86_MACHINE_ASM_ZERO_BARRIER,
+    MINIC_X86_MACHINE_ASM_ZSTD_PADDING,
     MINIC_X86_MACHINE_ASM_FXSAVE,
     MINIC_X86_MACHINE_ASM_LAR_SELECTOR,
     MINIC_X86_MACHINE_ASM_IDENTITY_LOAD,
@@ -333,6 +334,7 @@ bool minic_x86_64_linux_muldiv_u64_form(const char *, size_t);
 bool minic_x86_64_linux_via_xstore_form(const char *, size_t);
 /* ZSTD basic GNU ASM alignment directive, with no operand side effects. */
 bool minic_x86_64_linux_zstd_p2align_form(const char *, size_t);
+unsigned int minic_x86_64_linux_zstd_padding_form(const char *, size_t);
 unsigned int minic_x86_64_linux_crash_segment_snapshot_form(const char *, size_t);
 unsigned int minic_x86_64_linux_xstate_fault_form(const char *, size_t);
 bool minic_x86_64_linux_xrstor_alternative_form(const char *, size_t);

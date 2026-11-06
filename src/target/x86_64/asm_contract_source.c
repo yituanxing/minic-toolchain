@@ -5433,6 +5433,28 @@ static bool x86_linux_zero_barrier_qualifier(const MinicTargetInvocation *invoca
     (void)program;
     return x86_linux_zero_barrier_source(source, contract);
 }
+/* Original Linux lib/zstd's loop padding is GNU basic asm with no C
+ * operands. Its source occurrence is implicitly volatile, but has no
+ * hardware memory or compiler clobber. */
+static bool x86_linux_zstd_padding_source(
+    const MinicTargetInvocation *invocation,
+    const MinicC0Program *program, const MinicInlineAsm *source,
+    MinicTargetInlineAsmContract *contract) {
+    unsigned int form;
+    (void)invocation;
+    (void)program;
+    if (source == NULL || contract == NULL || !source->is_volatile ||
+        source->is_goto || source->output_count != 0U ||
+        source->input_count != 0U || source->label_count != 0U ||
+        source->clobber_count != 0U || source->has_memory_clobber ||
+        source->register_clobber_count != 0U) return false;
+    form = minic_x86_64_linux_zstd_padding_form(
+        source->template_text, source->template_length);
+    if (form == 0U) return false;
+    contract->operand_count = 0U;
+    contract->target_machine_form_variant = form;
+    return true;
+}
 /* Existing zero-barrier forms 8..10 already own CLI/STI/STI;HLT. The same
  * finite privileged ISA inventory also describes HLT, WBINVD, SWAPGS,
  * SERIALIZE, two fixed immediate-port OUTBs and INT3. None may become a
@@ -5589,6 +5611,7 @@ static const MinicX86SourceQualifierEntry minic_x86_source_qualifiers[] = {
     X86_SOURCE_TYPED(x86_linux_bug_table_c_source, BUG_TABLE_C_IMMEDIATE),
     X86_SOURCE_TYPED(x86_nop_const_i_source, NOP_CONST_I),
     X86_SOURCE_TYPED(x86_linux_zero_barrier_qualifier, ZERO_BARRIER),
+    X86_SOURCE_TYPED(x86_linux_zstd_padding_source, ZSTD_PADDING),
     X86_SOURCE_TYPED(x86_linux_privileged_zero_source, PRIVILEGED_ZERO),
     X86_SOURCE_TYPED(x86_linux_ip_here_source, IP_HERE),
     X86_SOURCE_TYPED(x86_add32_carry_source, ADD32_CARRY),

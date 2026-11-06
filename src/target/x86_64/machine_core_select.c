@@ -2818,6 +2818,39 @@ static bool x86_source_zero_barrier(X86CoreSelector *sel,
         source, effects, NULL, 0U, implicit, implicit_count, false, false);
 }
 
+/* Reattach the original ZSTD alignment/NOP source family to physical
+ * MachineIR. All five spellings have no operand, clobber or register effect;
+ * the independent machine validator checks the finite grammar again. */
+static bool x86_source_zstd_padding(X86CoreSelector *sel,
+    const MinicCoreInstruction *ins) {
+    const MinicCoreInlineAsm *source;
+    MinicCoreInlineAsmId id;
+    unsigned int form;
+    if (ins->kind == MINIC_CORE_INSTRUCTION_OPAQUE_INLINE_ASM)
+        id = ins->value.inline_asm_id;
+    else if (ins->kind == MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM &&
+        ins->value.structured_inline_asm.operand_count == 0U)
+        id = ins->value.structured_inline_asm.inline_asm_id;
+    else return false;
+    if (sel->core->inline_asms == NULL ||
+        id >= sel->core->inline_asm_count) return false;
+    source = &sel->core->inline_asms[id];
+    form = minic_x86_64_linux_zstd_padding_form(
+        source->template_text, source->template_length);
+    if (form == 0U || !source->is_volatile || source->is_goto ||
+        source->source_asm_unique_id == 0U ||
+        source->target_machine_form_id != MINIC_X86_MACHINE_ASM_ZSTD_PADDING ||
+        source->target_machine_form_variant != form ||
+        source->operand_plan_owner != MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED ||
+        source->has_memory_clobber || source->explicit_memory_clobber ||
+        source->register_clobber_count != 0U ||
+        source->resolved_immediate_count != 0U ||
+        source->goto_second_target != MINIC_CORE_BLOCK_INVALID)
+        return false;
+    return minic_machine_builder_emit_core_source_asm(&sel->builder,
+        source, 0U, NULL, 0U, NULL, 0U, false, false);
+}
+
 /* Exhaust the exact Linux privileged zero-input inventory that is not
  * already owned by ZERO_BARRIER's CLI/STI/STI-HLT forms. No operand-less
  * opaque Core instruction is allowed to supply arbitrary ISA bytes. */
@@ -8952,6 +8985,7 @@ static bool x86_core_instruction(X86CoreSelector *sel,
         return x86_source_jump_label(sel, ins, instruction_id) ||
             x86_source_cpu_has_goto(sel, ins, instruction_id) ||
             x86_source_zero_barrier(sel, ins) ||
+            x86_source_zstd_padding(sel, ins) ||
             x86_source_privileged_zero(sel, ins) ||
             x86_source_mmio_or_xchg(sel, ins) ||
             x86_uaccess_call(sel, ins) ||
