@@ -1300,7 +1300,7 @@ static bool x86_linux_preempt_static_call_source(const MinicTargetInvocation *in
     if (!fixed || !fixed->register_name ||
         strcmp(fixed->register_name, "rsp") != 0) return false;
     contract->operand_count = 1U;
-    contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+    contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_FIXED_REGISTER_READWRITE;
     /* Like an ordinary externally visible call, the trampoline can modify
      * arbitrary memory even without a GNU `memory` compiler clobber. */
     contract->implicit_memory_effect = true;

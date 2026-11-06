@@ -9,6 +9,7 @@ on:
       - 'tests/compiler/c0/probe-minic-driver-target-catalog.sh'
       - 'tests/compiler/c0/probe-x86-kbuild-mitigations.sh'
       - 'tests/compiler/c0/probe-x86-kbuild-thunk-inline.sh'
+      - 'tests/compiler/c0/probe-x86-preempt-static-call-machineir.sh'
       - 'tests/compiler/c0/probe-x86-core-dead-ssa-writeback.sh'
       - 'tests/compiler/c0/x86_kbuild_mitigations.c'
       - 'tests/compiler/c0/probe-target-language-abi-options.sh'
@@ -71,6 +72,7 @@ on:
       - 'tests/compiler/c0/probe-minic-driver-target-catalog.sh'
       - 'tests/compiler/c0/probe-x86-kbuild-mitigations.sh'
       - 'tests/compiler/c0/probe-x86-kbuild-thunk-inline.sh'
+      - 'tests/compiler/c0/probe-x86-preempt-static-call-machineir.sh'
       - 'tests/compiler/c0/probe-x86-core-dead-ssa-writeback.sh'
       - 'tests/compiler/c0/x86_kbuild_mitigations.c'
       - 'tests/compiler/c0/probe-target-language-abi-options.sh'
@@ -220,6 +222,13 @@ jobs:
               BUILD_DIR=build/minic-native-backend \
               sh "tests/compiler/c0/$probe"
           done
+      - name: x86 Linux fixed-RSP preempt trampoline MachineIR and native GNU differential
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          MINIC_CC="$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc" \
+          BUILD_DIR=build/minic-native-backend \
+            sh tests/compiler/c0/probe-x86-preempt-static-call-machineir.sh
       - name: Four Target-owned GNU section marker and MachineIR printer contracts
         shell: bash
         run: |

@@ -727,6 +727,13 @@ static bool x86_emit_source_asm(FILE *out,
             fputc('\n',out) != EOF;
     if (instruction->source_asm_machine_form_id == MINIC_X86_MACHINE_ASM_DELAY_MUL)
         return fputs("  mull %edx\n",out) != EOF;
+    if (instruction->source_asm_machine_form_id == MINIC_X86_MACHINE_ASM_PREEMPT_STATIC_CALL) {
+        if (!minic_x86_64_machine_validate_source_asm(function->target,
+                instruction, NULL)) return false;
+        return fputs(instruction->source_asm_machine_form_variant == 1U ?
+            "  call __SCT__preempt_schedule\n" :
+            "  call __SCT__preempt_schedule_notrace\n", out) != EOF;
+    }
     if (instruction->source_asm_machine_form_id == MINIC_X86_MACHINE_ASM_LAR_SELECTOR ||
         instruction->source_asm_machine_form_id == MINIC_X86_MACHINE_ASM_IDENTITY_LOAD)
         return fputs("  ",out) != EOF &&

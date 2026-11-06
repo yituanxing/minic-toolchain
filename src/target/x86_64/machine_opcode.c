@@ -3201,6 +3201,39 @@ static bool x86_source_boot_bit_contract(const MinicMachineInstruction *ins) {
         idx->value.physical.access == MINIC_MACHINE_REGISTER_READ;
 }
 
+/* A Linux preemption trampoline can only bind the exact source-qualified
+ * +r physical RSP operand. No arbitrary CALL or forged Core effect passes. */
+static bool x86_source_preempt_static_call_contract(
+    const MinicMachineInstruction *ins) {
+    const MinicMachineOperand *reg;
+    const unsigned int effects = MINIC_MACHINE_EFFECT_SOURCE_ASM |
+        MINIC_MACHINE_EFFECT_VOLATILE |
+        MINIC_MACHINE_EFFECT_COMPILER_BARRIER |
+        MINIC_MACHINE_EFFECT_CALL |
+        MINIC_MACHINE_EFFECT_MEMORY_READ |
+        MINIC_MACHINE_EFFECT_MEMORY_WRITE;
+    if (ins->source_asm_machine_form_id !=
+            MINIC_X86_MACHINE_ASM_PREEMPT_STATIC_CALL ||
+        (ins->source_asm_machine_form_variant != 1U &&
+         ins->source_asm_machine_form_variant != 2U) ||
+        ins->effects != effects || ins->operand_count != 1U ||
+        ins->operands == NULL || ins->implicit_count != 0U ||
+        ins->implicit != NULL ||
+        !minic_x86_64_typed_machine_form_matches_template(
+            ins->source_asm_machine_form_id,
+            ins->source_asm_machine_form_variant,
+            ins->source_asm_template, ins->source_asm_length)) return false;
+    reg = &ins->operands[0];
+    return reg->kind == MINIC_MACHINE_OPERAND_REGISTER &&
+        reg->asm_name == NULL && reg->asm_constraint != NULL &&
+        strcmp(reg->asm_constraint, "+r") == 0 &&
+        reg->value.physical.reg.bank == MINIC_MACHINE_REGISTER_GENERAL &&
+        reg->value.physical.reg.number == MINIC_X86_REG_RSP &&
+        reg->value.physical.reg.width_bits == 64U &&
+        reg->value.physical.access ==
+            (MINIC_MACHINE_REGISTER_READ | MINIC_MACHINE_REGISTER_WRITE);
+}
+
 /* Machine ownership of the complete zero-operand Linux ordering family.
  * Every form has an exact Source-validated variant. No other source syntax
  * can pass this physical proof, even if its textual mnemonic looks similar. */
@@ -3274,6 +3307,8 @@ bool minic_x86_64_machine_validate_source_asm(const MinicTargetInfo *target,
         return x86_source_delay_wait_contract(instruction);
     if (instruction->source_asm_machine_form_id == MINIC_X86_MACHINE_ASM_DELAY_MUL)
         return x86_source_delay_mul_contract(instruction);
+    if (instruction->source_asm_machine_form_id == MINIC_X86_MACHINE_ASM_PREEMPT_STATIC_CALL)
+        return x86_source_preempt_static_call_contract(instruction);
     if (instruction->source_asm_machine_form_id == MINIC_X86_MACHINE_ASM_LAR_SELECTOR ||
         instruction->source_asm_machine_form_id == MINIC_X86_MACHINE_ASM_IDENTITY_LOAD)
         return x86_source_legacy_scalar_contract(instruction);

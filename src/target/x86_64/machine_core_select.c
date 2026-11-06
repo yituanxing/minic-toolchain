@@ -6219,6 +6219,62 @@ static bool x86_source_delay_wait(X86CoreSelector *sel,
         src,0U,binding,3U,NULL,0U,false,false);
 }
 
+/* A Linux preemption static-call +r(current_stack_pointer) keeps RSP live
+ * across the trampoline; it is not a C assignment to the stack pointer.
+ * The Source-side qualifier proves the two exact symbols, and MachineIR
+ * independently seals the physical RSP binding and hardware call effects. */
+static bool x86_source_preempt_static_call(X86CoreSelector *sel,
+    const MinicCoreInstruction *ins) {
+    const MinicCoreInlineAsm *src;
+    const MinicCoreStructuredInlineAsmOperand *role;
+    const MinicCoreFixedRegisterBinding *fixed;
+    MinicMachineOperand physical;
+    unsigned int variant;
+    const MinicCoreType *type;
+    if (sel == NULL || ins == NULL ||
+        ins->kind != MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM ||
+        ins->result != MINIC_CORE_VALUE_INVALID ||
+        ins->value.structured_inline_asm.operand_count != 1U ||
+        ins->value.structured_inline_asm.inline_asm_id >= sel->core->inline_asm_count ||
+        sel->core->inline_asms == NULL) return false;
+    src = &sel->core->inline_asms[ins->value.structured_inline_asm.inline_asm_id];
+    if (src->target_machine_form_id != MINIC_X86_MACHINE_ASM_PREEMPT_STATIC_CALL)
+        return false;
+    variant = src->target_machine_form_variant;
+    role = ins->value.structured_inline_asm.operands;
+    if ((variant != 1U && variant != 2U) ||
+        src->operand_plan_owner != MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED ||
+        !src->is_volatile || src->is_goto || !src->has_memory_clobber ||
+        src->explicit_memory_clobber || !src->implicit_memory_effect ||
+        src->register_clobber_count != 0U || src->resolved_immediate_count != 0U ||
+        src->source_asm_unique_id == 0U ||
+        src->goto_second_target != MINIC_CORE_BLOCK_INVALID ||
+        !minic_x86_64_typed_machine_form_matches_template(
+            src->target_machine_form_id, variant,
+            src->template_text, src->template_length) ||
+        role->operand_index != 0U ||
+        role->kind != MINIC_CORE_STRUCTURED_INLINE_ASM_FIXED_REGISTER_READWRITE ||
+        !role->physical_read_write || role->early_clobber ||
+        role->physical_early_clobber || role->has_tied_output ||
+        !role->has_fixed_register_binding ||
+        role->fixed_register_binding_id >= sel->core->fixed_register_binding_count ||
+        role->value >= sel->core->value_count) return false;
+    fixed = &sel->core->fixed_register_bindings[role->fixed_register_binding_id];
+    type = x86_type(sel, sel->core->values[role->value].core_type_id);
+    if (fixed->register_name == NULL || fixed->register_name_length != 3U ||
+        memcmp(fixed->register_name, "rsp", 3U) != 0 ||
+        type == NULL || type->kind != MINIC_CORE_TYPE_INTEGER ||
+        !type->has_layout || type->size != 8U) return false;
+    physical = x86_reg(MINIC_X86_REG_RSP, 64U);
+    physical.asm_constraint = "+r";
+    physical.value.physical.access =
+        MINIC_MACHINE_REGISTER_READ | MINIC_MACHINE_REGISTER_WRITE;
+    return minic_machine_builder_emit_core_source_asm(&sel->builder,
+        src, MINIC_MACHINE_EFFECT_CALL |
+             MINIC_MACHINE_EFFECT_MEMORY_READ | MINIC_MACHINE_EFFECT_MEMORY_WRITE,
+        &physical, 1U, NULL, 0U, false, false);
+}
+
 /* Source-admitted kernel HLT is a zero-operand privileged instruction,
  * not a no-op barrier. Preserve it as an exact typed Machine source opcode;
  * tests assemble it but never execute HLT in user mode. */
@@ -6982,6 +7038,7 @@ static bool x86_core_instruction(X86CoreSelector *sel,
             x86_source_legacy_scalar(sel, ins) ||
             x86_source_delay_mul(sel, ins) ||
             x86_source_delay_wait(sel, ins) ||
+            x86_source_preempt_static_call(sel, ins) ||
             x86_source_lowlevel_halt(sel, ins) ||
             x86_source_movnti(sel, ins) ||
             x86_source_boot_bit(sel, ins) ||
