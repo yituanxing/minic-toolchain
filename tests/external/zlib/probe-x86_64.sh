@@ -40,7 +40,7 @@ set --
 for source in $sources; do set -- "$@" "$src/$source"; done
 "$HOST_CC" -O0 -std=c11 -I"$src" "$src/test/example.c" "$@" \
     -o "$work/zlib-gcc.bin" || { echo "FAIL zlib x86: GCC reference build" >&2; exit 1; }
-"$work/zlib-gcc.bin" >"$work/gcc.out" 2>"$work/gcc.err" || {
+(cd "$work" && "$work/zlib-gcc.bin") >"$work/gcc.out" 2>"$work/gcc.err" || {
     echo "FAIL zlib x86: GCC reference runtime" >&2
     tail -n 30 "$work/gcc.err" >&2
     exit 1
@@ -91,7 +91,7 @@ fi
 "$HOST_CC" -O0 -std=c11 -I"$src" "$src/test/example.c" "$@" \
     -o "$work/zlib-minic.bin"
 set +e
-"$work/zlib-minic.bin" >"$work/minic.out" 2>"$work/minic.err"
+(cd "$work" && "$work/zlib-minic.bin") >"$work/minic.out" 2>"$work/minic.err"
 status=$?
 set -e
 if test "$status" -ne 0 || ! cmp -s "$work/gcc.out" "$work/minic.out" ||
@@ -106,11 +106,14 @@ echo "PASS zlib x86-64 complete TUs=$passed oracle=GCC byte-exact example exit=0
 # Stronger independent runtime evidence: use upstream's unmodified minigzip
 # as both GCC and MiniC-library clients. Cross-decompress each produced
 # stream, compare against the exact original, and compare gzip bytes.
-"$HOST_CC" -O0 -std=c11 -I"$src" "$src/test/minigzip.c" "$@" \
+# With strict C11, glibc hides fileno() without an explicit POSIX feature
+# level. Keep upstream minigzip.c untouched and give both clients the same
+# POSIX declaration environment; no MiniC code is involved in these clients.
+"$HOST_CC" -O0 -std=c11 -D_POSIX_C_SOURCE=200809L -I"$src" "$src/test/minigzip.c" "$@" \
     -o "$work/minigzip-minic.bin"
 set --
 for source in $sources; do set -- "$@" "$src/$source"; done
-"$HOST_CC" -O0 -std=c11 -I"$src" "$src/test/minigzip.c" "$@" \
+"$HOST_CC" -O0 -std=c11 -D_POSIX_C_SOURCE=200809L -I"$src" "$src/test/minigzip.c" "$@" \
     -o "$work/minigzip-gcc.bin"
 python3 - >"$work/payload.bin" <<'PY'
 import sys

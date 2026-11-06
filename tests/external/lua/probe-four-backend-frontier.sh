@@ -8,7 +8,8 @@ work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT HUP INT TERM
 release=5.5.0
 expected=57ccc32bbbd005cab75bcc52444052535af691789dba2b9016d5c50640d68b3d
-if ! timeout 120s curl -fsSL --retry 2 --retry-delay 1 \
+if ! timeout 250s curl --http1.1 -fsSL --retry 5 --retry-all-errors \
+        --retry-delay 2 --connect-timeout 15 --max-time 90 --retry-max-time 240 \
         "https://www.lua.org/ftp/lua-$release.tar.gz" \
         -o "$work/lua.tar.gz"; then
     echo "FOUR_BACKEND_LUA_ORACLE=FAIL stage=download" >&2
