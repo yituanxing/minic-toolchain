@@ -2291,6 +2291,7 @@ static bool x86_apic_amd_alt_source(const MinicTargetInvocation *invocation,
        src->has_memory_clobber||src->input_count!=3U||!src->inputs||
        src->output_count!=(form==1U?2U:0U)||
        (form==1U&&!src->outputs))return false;
+    contract->target_machine_form_variant=form;
     if(form==1U){
         const MinicExpression *reg,*mem,*seed,*memory_input,*zero;
         if(!c_is(&src->outputs[0],"=r")||

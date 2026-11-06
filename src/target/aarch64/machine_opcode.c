@@ -160,6 +160,10 @@ static const A64Spec a64_specs[MINIC_A64_MACHINE_NOP + 1U] = {
     [MINIC_A64_MACHINE_VECTOR_ADD_SCALAR_D] = {"add", A64_FORM_VEC_RRR, 0},
     [MINIC_A64_MACHINE_VECTOR_ADD_8H] = {"add", A64_FORM_VEC_RRR, 0},
     [MINIC_A64_MACHINE_VECTOR_ADD_4S] = {"add", A64_FORM_VEC_RRR, 0},
+    [MINIC_A64_MACHINE_VECTOR_FADD_2S] = {"fadd", A64_FORM_VEC_RRR, 0},
+    [MINIC_A64_MACHINE_VECTOR_FADD_SCALAR_D] = {"fadd", A64_FORM_VEC_RRR, 0},
+    [MINIC_A64_MACHINE_VECTOR_FADD_4S] = {"fadd", A64_FORM_VEC_RRR, 0},
+    [MINIC_A64_MACHINE_VECTOR_FADD_2D] = {"fadd", A64_FORM_VEC_RRR, 0},
     OP(NOP, "nop", NONE, 0)
 };
 
@@ -819,17 +823,21 @@ static bool a64_serialize(FILE *out, const MinicMachineFunction *function,
                 spec->name, a, base, addr->displacement) >= 0;
     }
     case A64_FORM_VEC_RRR: {
-        /* ADD is lane-wise. XOR is bitwise and uses its canonical 16B form. */
-        const bool scalar_d = ins->opcode == MINIC_A64_MACHINE_VECTOR_ADD_SCALAR_D;
-        const char *lanes = ins->opcode == MINIC_A64_MACHINE_VECTOR_ADD_2D ?
+        /* ADD/FADD are typed lane-wise; EOR is bitwise canonical 8B/16B. */
+        const bool scalar_d = ins->opcode == MINIC_A64_MACHINE_VECTOR_ADD_SCALAR_D ||
+            ins->opcode == MINIC_A64_MACHINE_VECTOR_FADD_SCALAR_D;
+        const char *lanes = (ins->opcode == MINIC_A64_MACHINE_VECTOR_ADD_2D ||
+            ins->opcode == MINIC_A64_MACHINE_VECTOR_FADD_2D) ?
             "2d" : ins->opcode == MINIC_A64_MACHINE_VECTOR_ADD_4H ? "4h" :
-            ins->opcode == MINIC_A64_MACHINE_VECTOR_ADD_2S ? "2s" :
+            (ins->opcode == MINIC_A64_MACHINE_VECTOR_ADD_2S ||
+             ins->opcode == MINIC_A64_MACHINE_VECTOR_FADD_2S) ? "2s" :
             ins->opcode == MINIC_A64_MACHINE_VECTOR_ADD_8H ? "8h" :
-            ins->opcode == MINIC_A64_MACHINE_VECTOR_ADD_4S ? "4s" :
+            (ins->opcode == MINIC_A64_MACHINE_VECTOR_ADD_4S ||
+             ins->opcode == MINIC_A64_MACHINE_VECTOR_FADD_4S) ? "4s" :
             (ins->opcode == MINIC_A64_MACHINE_VECTOR_EOR_8B ||
              ins->opcode == MINIC_A64_MACHINE_VECTOR_ADD_8B) ? "8b" : "16b";
         if (scalar_d)
-            return fprintf(out, "  add d%u, d%u, d%u\n",
+            return fprintf(out, "  %s d%u, d%u, d%u\n", spec->name,
                 o[0].value.physical.reg.number,
                 o[1].value.physical.reg.number,
                 o[2].value.physical.reg.number) >= 0;

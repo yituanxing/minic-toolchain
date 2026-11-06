@@ -400,6 +400,10 @@ bool minic_x86_64_typed_machine_form_matches_template(
      * register identities; carry that precise selection into MachineIR. */
     if (form_id == MINIC_X86_MACHINE_ASM_CONTROL_REGISTER)
         return form != 0U && variant == form;
+    /* The APIC alternative has distinct source operand and hardware shapes:
+     * MMIO MOV/XCHG or accumulator DIV. Retain that distinction in MIR. */
+    if (form_id == MINIC_X86_MACHINE_ASM_APIC_AMD_ALT)
+        return form != 0U && variant == form;
     /* Most other tagged source families publish variant zero; the explicit
      * privileged/debug families above carry their exact physical variant. */
     if (form_id >= MINIC_X86_MACHINE_ASM_CRASH_REGISTER &&

@@ -2772,12 +2772,59 @@ static bool x86_source_alternative_wrmsr_contract(
     {
         const MinicMachineOperand *feature = &ins->operands[3];
         return feature->kind == MINIC_MACHINE_OPERAND_INTEGER &&
-            feature->value.integer == 180 &&
+            feature->value.integer >= 0 &&
+            (uint64_t)feature->value.integer <= UINT32_MAX &&
             feature->asm_name != NULL &&
             strcmp(feature->asm_name,"feature") == 0 &&
             feature->asm_constraint != NULL &&
             strcmp(feature->asm_constraint,constraints[3]) == 0;
     }
+}
+
+/* The ELF alternative metadata remains source-owned, but every operand is
+ * physical and independently sealed before its GNU template is emitted. */
+static bool x86_source_apic_amd_alt_contract(
+    const MinicTargetInfo *target, const MinicMachineInstruction *ins) {
+    const unsigned int form = ins->source_asm_machine_form_variant;
+    const unsigned int effects = MINIC_MACHINE_EFFECT_SOURCE_ASM |
+        MINIC_MACHINE_EFFECT_VOLATILE;
+    if (form == 1U) {
+        const MinicMachineOperand *zero;
+        if (!x86_scalar_machine_base(ins,
+                MINIC_X86_MACHINE_ASM_APIC_AMD_ALT,1U,
+                effects | MINIC_MACHINE_EFFECT_COMPILER_BARRIER |
+                    MINIC_MACHINE_EFFECT_MEMORY_READ |
+                    MINIC_MACHINE_EFFECT_MEMORY_WRITE,5U,false) ||
+            !x86_scalar_machine_gp(&ins->operands[0],MINIC_X86_REG_RAX,
+                32U,MINIC_MACHINE_REGISTER_WRITE,"=r",NULL) ||
+            !x86_scalar_machine_mem(target,&ins->operands[1],
+                MINIC_X86_REG_R10,"=m",NULL) ||
+            !x86_scalar_machine_gp(&ins->operands[3],MINIC_X86_REG_RAX,
+                32U,MINIC_MACHINE_REGISTER_READ,"0",NULL) ||
+            !x86_scalar_machine_mem(target,&ins->operands[4],
+                MINIC_X86_REG_R11,"m",NULL)) return false;
+        zero = &ins->operands[2];
+        return zero->kind == MINIC_MACHINE_OPERAND_INTEGER &&
+            zero->value.integer == 0 && zero->asm_name == NULL &&
+            zero->asm_constraint != NULL &&
+            strcmp(zero->asm_constraint,"i") == 0;
+    }
+    if (form == 2U) {
+        static const unsigned int regs[3] = {
+            MINIC_X86_REG_RAX, MINIC_X86_REG_RDX, MINIC_X86_REG_R10
+        };
+        static const char *const constraints[3] = {"a","d","r"};
+        size_t i;
+        if (!x86_scalar_machine_base(ins,
+                MINIC_X86_MACHINE_ASM_APIC_AMD_ALT,2U,
+                effects,3U,false)) return false;
+        for (i = 0U; i < 3U; ++i)
+            if (!x86_scalar_machine_gp(&ins->operands[i],regs[i],32U,
+                    MINIC_MACHINE_REGISTER_READ,constraints[i],NULL))
+                return false;
+        return true;
+    }
+    return false;
 }
 
 static bool x86_source_xsetbv_contract(const MinicMachineInstruction *ins) {
@@ -4361,6 +4408,9 @@ bool minic_x86_64_machine_validate_source_asm(const MinicTargetInfo *target,
     if (instruction->source_asm_machine_form_id ==
             MINIC_X86_MACHINE_ASM_ALTERNATIVE_WRMSR)
         return x86_source_alternative_wrmsr_contract(instruction);
+    if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_APIC_AMD_ALT)
+        return x86_source_apic_amd_alt_contract(target,instruction);
     if (instruction->source_asm_machine_form_id ==
             MINIC_X86_MACHINE_ASM_XSETBV)
         return x86_source_xsetbv_contract(instruction);

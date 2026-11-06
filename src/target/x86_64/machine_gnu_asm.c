@@ -326,6 +326,56 @@ static const MinicMachineSourceAsmTemplatePolicy
         NULL
     };
 
+/* Emit exactly the admitted Linux APIC AMD alternative grammar, substituting
+ * only verified physical register and memory bindings. GNU AS resolves the
+ * two .altinstructions PC-relative section relocations. */
+static bool x86_apic_amd_alt_form(
+    const MinicMachineFunction *function,
+    const MinicMachineInstruction *instruction, void *context) {
+    (void)context;
+    return function != NULL && function->target != NULL &&
+        instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_APIC_AMD_ALT &&
+        minic_x86_64_machine_validate_source_asm(function->target,
+            instruction,NULL);
+}
+
+static bool x86_apic_amd_alt_binding(
+    const MinicMachineFunction *function,
+    const MinicMachineInstruction *instruction, size_t index,
+    void *context) {
+    return index < instruction->operand_count &&
+        x86_apic_amd_alt_form(function,instruction,context);
+}
+
+static bool x86_apic_amd_alt_operand(FILE *output,
+    const MinicMachineFunction *function,
+    const MinicMachineInstruction *instruction,
+    const MinicMachineGNUAsmLabels *labels, size_t index,
+    unsigned char modifier, void *context) {
+    const unsigned int form = instruction->source_asm_machine_form_variant;
+    (void)labels;
+    if (!x86_apic_amd_alt_binding(function,instruction,index,context))
+        return false;
+    if (form == 1U && index == 1U && modifier == 'P')
+        return output == NULL ||
+            x86_emit_address(output,&instruction->operands[1].value.address);
+    if (modifier != 0U) return false;
+    if ((form == 1U && index == 0U) ||
+        (form == 2U && index == 2U))
+        return output == NULL ||
+            x86_emit_register(output,&instruction->operands[index]);
+    return false;
+}
+
+static const MinicMachineSourceAsmTemplatePolicy
+    x86_apic_amd_alt_policy = {
+        x86_apic_amd_alt_form,
+        x86_apic_amd_alt_binding,
+        x86_apic_amd_alt_operand,
+        NULL
+    };
+
 /* The original Linux clear_page three-CALL alternatives are matched as one
  * complete 666-byte source grammar. Only the three already proven FUNCTION
  * symbols are interpolated; the `.skip`, feature records and local-label
@@ -892,6 +942,12 @@ static bool x86_emit_source_asm(FILE *out,
         return fputs("  ",out) != EOF &&
             minic_machine_source_asm_template_emit(out,function,
                 instruction,labels,&x86_alternative_wrmsr_policy) &&
+            fputc('\n',out) != EOF;
+    if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_APIC_AMD_ALT)
+        return fputs("  ",out) != EOF &&
+            minic_machine_source_asm_template_emit(out,function,
+                instruction,labels,&x86_apic_amd_alt_policy) &&
             fputc('\n',out) != EOF;
     if (instruction->source_asm_machine_form_id ==
             MINIC_X86_MACHINE_ASM_THREE_CALL_ALTERNATIVE)

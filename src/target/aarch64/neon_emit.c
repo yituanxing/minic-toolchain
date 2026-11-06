@@ -1,5 +1,22 @@
 #include "target/aarch64/neon_emit.h"
 
+/* Register vectors are typed lanes, never an untyped 64/128-bit integer.
+ * In particular, FP lanes admit only the architected binary32/binary64
+ * AdvSIMD representations; half/bfloat/scalable declarations stay opaque. */
+static bool aarch64_neon_element_lane_bytes(const MinicCoreType *element) {
+    if (element == NULL || !element->has_layout) return false;
+    if (element->kind == MINIC_CORE_TYPE_INTEGER)
+        return !element->value.integer.is_bool &&
+            (element->size == 1U || element->size == 2U ||
+             element->size == 4U || element->size == 8U) &&
+            element->value.integer.bit_width == element->size * 8U;
+    if (element->kind == MINIC_CORE_TYPE_FLOAT)
+        return (element->size == 4U &&
+                element->value.floating.format == MINIC_CORE_FLOAT_BINARY32) ||
+            (element->size == 8U &&
+             element->value.floating.format == MINIC_CORE_FLOAT_BINARY64);
+    return false;
+}
 
 bool minic_aarch64_neon_vector128_core_type(
     const MinicCoreTypeContext *types, MinicCoreTypeId id) {
@@ -13,12 +30,8 @@ bool minic_aarch64_neon_vector128_core_type(
         return false;
     element = minic_core_type_get(types,
         minic_core_type_unqualified(types, vector->value.vector.element));
-    if (element == NULL || element->kind != MINIC_CORE_TYPE_INTEGER ||
-        !element->has_layout || element->value.integer.is_bool) return false;
-    return (element->size == 1U || element->size == 2U ||
-            element->size == 4U || element->size == 8U) &&
-           element->value.integer.bit_width == element->size * 8U &&
-           vector->value.vector.element_count == 16U / element->size;
+    if (!aarch64_neon_element_lane_bytes(element)) return false;
+    return vector->value.vector.element_count == 16U / element->size;
 }
 
 bool minic_aarch64_neon_register_vector_core_type(
@@ -37,13 +50,8 @@ bool minic_aarch64_neon_register_vector_core_type(
         return false;
     element = minic_core_type_get(types,
         minic_core_type_unqualified(types, vector->value.vector.element));
-    if (element == NULL || element->kind != MINIC_CORE_TYPE_INTEGER ||
-        !element->has_layout ||
-        (element->size != 1U && element->size != 2U &&
-         element->size != 4U && element->size != 8U) ||
-        element->value.integer.bit_width != element->size * 8U ||
-        vector->value.vector.element_count != 8U / element->size ||
-        element->value.integer.is_bool) return false;
+    if (!aarch64_neon_element_lane_bytes(element) ||
+        vector->value.vector.element_count != 8U / element->size) return false;
     *bytes = 8U;
     return true;
 }

@@ -5267,18 +5267,128 @@ static bool x86_source_alternative_wrmsr(X86CoreSelector *sel,
         sel->core->values[roles[3].value].definition];
     if (feature->kind != MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT ||
         feature->result != roles[3].value ||
-        feature->value.integer_value != 180) return false;
+        feature->value.integer_value < 0 ||
+        (uint64_t)feature->value.integer_value > UINT32_MAX) return false;
     for (i = 0U; i < 3U; ++i) {
         if (!x86_core_load(sel,roles[i].value,regs[i])) return false;
         bindings[i] = x86_reg(regs[i],32U);
         bindings[i].asm_constraint = (char *)constraints[i];
         bindings[i].value.physical.access = MINIC_MACHINE_REGISTER_READ;
     }
-    bindings[3] = x86_imm(180);
+    bindings[3] = x86_imm(feature->value.integer_value);
     bindings[3].asm_constraint = (char *)constraints[3];
     bindings[3].asm_name = "feature";
     return minic_machine_builder_emit_core_source_asm(&sel->builder,source,
         0U,bindings,4U,NULL,0U,false,false);
+}
+
+/* Both AMD APIC Linux alternatives are complete GNU patch sites. The MMIO
+ * variant has a real output, tied input and two independently qualified
+ * memory operands; the divider variant fixes EAX/EDX and its divisor to
+ * source-proven integer constants. Preserve both forms as physical MIR. */
+static bool x86_apic_core_constant(const X86CoreSelector *sel,
+    MinicCoreValueId value, int64_t expected) {
+    const MinicCoreInstruction *constant;
+    if (value >= sel->core->value_count ||
+        !minic_core_function_value_is_kind(sel->core,value,
+            MINIC_CORE_TYPE_INTEGER) ||
+        sel->core->values[value].definition >=
+            sel->core->instruction_count) return false;
+    constant = &sel->core->instructions[
+        sel->core->values[value].definition];
+    return constant->kind == MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT &&
+        constant->result == value &&
+        constant->value.integer_value == expected;
+}
+
+static bool x86_source_apic_amd_alt(X86CoreSelector *sel,
+    const MinicCoreInstruction *ins) {
+    const MinicCoreInlineAsm *source;
+    const MinicCoreStructuredInlineAsmOperand *roles;
+    MinicMachineOperand bindings[5];
+    const unsigned int regs[3] = {
+        MINIC_X86_REG_RAX, MINIC_X86_REG_RDX, MINIC_X86_REG_R10
+    };
+    const char *const constraints[3] = {"a","d","r"};
+    unsigned int form;
+    size_t i;
+    if (ins->kind != MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM ||
+        ins->result != MINIC_CORE_VALUE_INVALID ||
+        sel->core->inline_asms == NULL ||
+        ins->value.structured_inline_asm.inline_asm_id >=
+            sel->core->inline_asm_count) return false;
+    source = &sel->core->inline_asms[
+        ins->value.structured_inline_asm.inline_asm_id];
+    roles = ins->value.structured_inline_asm.operands;
+    form = source->target_machine_form_variant;
+    if (source->target_machine_form_id !=
+            MINIC_X86_MACHINE_ASM_APIC_AMD_ALT ||
+        (form != 1U && form != 2U) ||
+        source->operand_plan_owner != MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED ||
+        source->source_asm_unique_id == 0U || !source->is_volatile ||
+        source->is_goto ||
+        source->has_memory_clobber != (form == 1U) ||
+        source->explicit_memory_clobber ||
+        source->implicit_memory_effect != (form == 1U) ||
+        source->register_clobber_count != 0U ||
+        source->resolved_immediate_count != 0U ||
+        source->goto_second_target != MINIC_CORE_BLOCK_INVALID ||
+        roles == NULL || ins->value.structured_inline_asm.operand_count !=
+            (form == 1U ? 5U : 3U) ||
+        !minic_x86_64_typed_machine_form_matches_template(
+            source->target_machine_form_id,form,
+            source->template_text,source->template_length)) return false;
+    for (i = 0U; i < (form == 1U ? 5U : 3U); ++i)
+        if (roles[i].operand_index != i ||
+            roles[i].has_fixed_register_binding || roles[i].early_clobber ||
+            roles[i].physical_early_clobber || roles[i].physical_read_write ||
+            roles[i].has_tied_output != (form == 1U && i == 3U) ||
+            (form == 1U && i == 3U && roles[i].tied_output_index != 0U))
+            return false;
+    if (form == 1U) {
+        if (roles[0].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT ||
+            roles[1].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_OUTPUT ||
+            roles[2].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT ||
+            roles[3].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT ||
+            roles[4].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT ||
+            !x86_asm_gp_lvalue_width(sel,roles[0].value,4U) ||
+            !x86_asm_gp_lvalue_width(sel,roles[1].value,4U) ||
+            !x86_apic_core_constant(sel,roles[2].value,0) ||
+            !x86_asm_gp_input_width(sel,roles[3].value,4U) ||
+            !x86_asm_gp_lvalue_width(sel,roles[4].value,4U) ||
+            !x86_core_load(sel,roles[3].value,MINIC_X86_REG_RAX) ||
+            !x86_core_load(sel,roles[1].value,MINIC_X86_REG_R10) ||
+            !x86_core_load(sel,roles[4].value,MINIC_X86_REG_R11))
+            return false;
+        bindings[0] = x86_reg(MINIC_X86_REG_RAX,32U);
+        bindings[0].asm_constraint = "=r";
+        bindings[0].value.physical.access = MINIC_MACHINE_REGISTER_WRITE;
+        bindings[1] = x86_addr(MINIC_X86_REG_R10,0);
+        bindings[1].asm_constraint = "=m";
+        bindings[2] = x86_imm(0);
+        bindings[2].asm_constraint = "i";
+        bindings[3] = x86_reg(MINIC_X86_REG_RAX,32U);
+        bindings[3].asm_constraint = "0";
+        bindings[3].value.physical.access = MINIC_MACHINE_REGISTER_READ;
+        bindings[4] = x86_addr(MINIC_X86_REG_R11,0);
+        bindings[4].asm_constraint = "m";
+        return minic_machine_builder_emit_core_source_asm(&sel->builder,
+            source,MINIC_MACHINE_EFFECT_MEMORY_READ |
+                MINIC_MACHINE_EFFECT_MEMORY_WRITE,
+            bindings,5U,NULL,0U,false,false) &&
+            x86_scalar_output_store(sel,roles[0].value,MINIC_X86_REG_RAX,4U);
+    }
+    for (i = 0U; i < 3U; ++i) {
+        if (roles[i].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT ||
+            !x86_apic_core_constant(sel,roles[i].value,i == 2U ? 1 : 0) ||
+            !x86_asm_gp_input_width(sel,roles[i].value,4U) ||
+            !x86_core_load(sel,roles[i].value,regs[i])) return false;
+        bindings[i] = x86_reg(regs[i],32U);
+        bindings[i].asm_constraint = (char *)constraints[i];
+        bindings[i].value.physical.access = MINIC_MACHINE_REGISTER_READ;
+    }
+    return minic_machine_builder_emit_core_source_asm(&sel->builder,
+        source,0U,bindings,3U,NULL,0U,false,false);
 }
 
 /* The XCR0/XSS hardware write consumes all three 32-bit fixed registers.
@@ -8565,6 +8675,7 @@ static bool x86_core_instruction(X86CoreSelector *sel,
             x86_source_nospec(sel, ins) ||
             x86_source_unwind_context(sel, ins) ||
             x86_source_alternative_wrmsr(sel, ins) ||
+            x86_source_apic_amd_alt(sel, ins) ||
             x86_source_xsetbv(sel, ins) ||
             x86_source_monitor_wait(sel, ins) ||
             x86_source_segment_read(sel, ins) ||

@@ -3307,6 +3307,7 @@ static bool a64_wide_memory(A64CoreSelection *sel,
         size_t lhs, rhs, result, vector_bytes, lhs_bytes, rhs_bytes, result_bytes;
         const MinicCoreType *vec = minic_core_type_get(fn->type_context,
             minic_core_type_unqualified(fn->type_context, ins->core_type_id));
+        const MinicCoreType *element;
         const bool add = ins->kind == MINIC_CORE_INSTRUCTION_VECTOR_REGISTER_ADD;
         uint32_t opcode = MINIC_A64_MACHINE_VECTOR_EOR_16B;
         const MinicMachineOperand ops[] = {
@@ -3315,7 +3316,32 @@ static bool a64_wide_memory(A64CoreSelection *sel,
             a64_vector(17U, MINIC_MACHINE_REGISTER_READ)
         };
         if (vec == NULL || vec->kind != MINIC_CORE_TYPE_VECTOR) return false;
-        if (vec->size == 8U) {
+        element = minic_core_type_get(fn->type_context,
+            minic_core_type_unqualified(fn->type_context,
+                vec->value.vector.element));
+        if (element == NULL) return false;
+        /* Floating vectors use FP arithmetic by element kind, not their
+         * byte-size lookalikes. Reject bitwise float vectors explicitly. */
+        if (element->kind == MINIC_CORE_TYPE_FLOAT) {
+            if (!add) return false;
+            if (element->size == 4U &&
+                element->value.floating.format == MINIC_CORE_FLOAT_BINARY32) {
+                if (vec->size == 8U && vec->value.vector.element_count == 2U)
+                    opcode = MINIC_A64_MACHINE_VECTOR_FADD_2S;
+                else if (vec->size == 16U && vec->value.vector.element_count == 4U)
+                    opcode = MINIC_A64_MACHINE_VECTOR_FADD_4S;
+                else return false;
+            } else if (element->size == 8U &&
+                element->value.floating.format == MINIC_CORE_FLOAT_BINARY64) {
+                if (vec->size == 8U && vec->value.vector.element_count == 1U)
+                    opcode = MINIC_A64_MACHINE_VECTOR_FADD_SCALAR_D;
+                else if (vec->size == 16U && vec->value.vector.element_count == 2U)
+                    opcode = MINIC_A64_MACHINE_VECTOR_FADD_2D;
+                else return false;
+            } else return false;
+        } else if (element->kind != MINIC_CORE_TYPE_INTEGER ||
+                   element->value.integer.is_bool) return false;
+        else if (vec->size == 8U) {
             if (!add) opcode = MINIC_A64_MACHINE_VECTOR_EOR_8B;
             else switch (vec->value.vector.element_count) {
             case 8U: opcode = MINIC_A64_MACHINE_VECTOR_ADD_8B; break;
@@ -3324,7 +3350,7 @@ static bool a64_wide_memory(A64CoreSelection *sel,
             case 1U: opcode = MINIC_A64_MACHINE_VECTOR_ADD_SCALAR_D; break;
             default: return false;
             }
-        } else if (add) {
+        } else if (vec->size == 16U && add) {
             switch (vec->value.vector.element_count) {
             case 16U: opcode = MINIC_A64_MACHINE_VECTOR_ADD_16B; break;
             case 8U: opcode = MINIC_A64_MACHINE_VECTOR_ADD_8H; break;
@@ -3332,7 +3358,7 @@ static bool a64_wide_memory(A64CoreSelection *sel,
             case 2U: opcode = MINIC_A64_MACHINE_VECTOR_ADD_2D; break;
             default: return false;
             }
-        }
+        } else if (vec->size != 16U) return false;
         return left < fn->value_count && right < fn->value_count &&
             a64_vector_core_bytes(fn, ins->core_type_id, &vector_bytes) &&
             a64_vector_core_slot(sel, left, &lhs, &lhs_bytes) &&

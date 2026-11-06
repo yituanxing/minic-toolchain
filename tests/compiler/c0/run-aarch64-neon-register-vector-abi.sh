@@ -51,4 +51,37 @@ grep -F '  bl ninth8' "$work/vector64_abi.s" >/dev/null
 # the caller's stack overflow area; the callee reloads its ninth argument.
 grep -Eq '^  ldr d9, \[sp, #[0-9]+\]$' "$work/vector64_abi.s"
 
-printf '%s\n' 'PASS AArch64 D-vector 8B/4H/2S/scalar-D add, D xor/ABI, direct/indirect typed v0 return, ninth vector stack overflow, x86 rejection; QEMU=NOT_TESTED'
+"$host_cc" -E -P -x c \
+    "$root/tests/compiler/c0/aarch64_neon_float_lanes.c" \
+    -o "$work/float_lanes.i"
+"$minic_cc" --target=aarch64-linux -S "$work/float_lanes.i" \
+    -o "$work/float_lanes.s"
+grep -F '  fadd v16.2s, v16.2s, v17.2s' "$work/float_lanes.s" >/dev/null
+grep -F '  fadd d16, d16, d17' "$work/float_lanes.s" >/dev/null
+grep -F '  fadd v16.4s, v16.4s, v17.4s' "$work/float_lanes.s" >/dev/null
+grep -F '  fadd v16.2d, v16.2d, v17.2d' "$work/float_lanes.s" >/dev/null
+grep -F '  str d0,' "$work/float_lanes.s" >/dev/null
+grep -F '  ldr d0,' "$work/float_lanes.s" >/dev/null
+grep -F '  str q0,' "$work/float_lanes.s" >/dev/null
+grep -F '  ldr q0,' "$work/float_lanes.s" >/dev/null
+grep -F '  blr x16' "$work/float_lanes.s" >/dev/null
+grep -Eq '^  ldr d9, \[sp, #[0-9]+\]$' "$work/float_lanes.s"
+if "$minic_cc" --target=x86_64-linux -S "$work/float_lanes.i" \
+        -o "$work/float_lanes.x86.s" >"$work/float_lanes.x86.stdout" \
+        2>"$work/float_lanes.x86.stderr"; then
+    printf '%s\n' 'FAIL AArch64 floating D/Q vector types leaked to x86' >&2
+    exit 1
+fi
+for invalid in float_xor_invalid float16_opaque_invalid; do
+    "$host_cc" -E -P -x c \
+        "$root/tests/compiler/c0/aarch64_neon_$invalid.c" \
+        -o "$work/$invalid.i"
+    if "$minic_cc" --target=aarch64-linux -S "$work/$invalid.i" \
+            -o "$work/$invalid.s" >"$work/$invalid.stdout" \
+            2>"$work/$invalid.stderr"; then
+        printf '%s\n' "FAIL AArch64 invalid floating SIMD operation admitted: $invalid" >&2
+        exit 1
+    fi
+done
+
+printf '%s\n' 'PASS AArch64 integer D vector lane ADD/XOR and floating D/Q FADD by 2S/scalar-D/4S/2D, AAPCS64 SIMD v0/ninth/indirect ABI, x86 and invalid FP rejection; QEMU=NOT_TESTED'

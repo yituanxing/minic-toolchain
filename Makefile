@@ -3193,6 +3193,15 @@ check-gnu-cleanup-asm-lifetime: $(MINIC_CC_BINARY)
 	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
 	  bash tests/compiler/c0/probe-gnu-cleanup-goto-lifetime.sh
 
+# Both source-qualified Linux AMD APIC patch-site alternatives and WRMSR
+# feature immediates retain their physical operands and GNU ELF relocations.
+.PHONY: check-x86-linux-apic-amd-alt
+check-x86-linux-apic-amd-alt: $(MINIC_CC_BINARY)
+	MINIC_CC=$(MINIC_CC_BINARY) MINIC_SOURCE_ROOT=$(CURDIR) \
+		sh tests/target/run-linux-x86-apic-amd-alt.sh
+
+check-fast: check-x86-linux-apic-amd-alt
+
 # Descriptor-table instructions have a strict 10-byte packed Core record
 # memory operand, unlike scalar integer loads/stores; verify true GNU ELF
 # emission without trying to execute privileged LIDT/LGDT in user mode.
