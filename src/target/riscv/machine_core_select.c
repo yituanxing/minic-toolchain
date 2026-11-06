@@ -7,6 +7,7 @@
 #include "target/riscv/typed_memory.h"
 #include "target/common/core_machine_asm.h"
 #include "target/common/core_scalar_conversion.h"
+#include "target/common/core_numeric_shape.h"
 #include "target/common/core_floating_shape.h"
 #include "target/common/core_extended_float_runtime.h"
 #include "target/common/machine_core_coverage.h"
@@ -2202,6 +2203,91 @@ static bool rv_core_checked32(RvCoreSelection *sel,
         result->value.integer.is_signed);
 }
 
+/* GNU builtins add mathematical operands before narrowing to signed i32.
+ * For signed i32 s and unsigned64/u32 u, s is already >= INT32_MIN,
+ * therefore the only possible overflow is u > INT32_MAX - s.  Comparing
+ * the unsigned operand to that exact, nonnegative threshold also catches
+ * the 65-bit carry of UINT64_MAX + positive s without a 128-bit libcall. */
+static bool rv_core_checked64_mixed_add(RvCoreSelection *sel,
+    const MinicCoreInstruction *ins, bool signed_left,
+    bool unsigned_is_32) {
+    const MinicCoreValueId signed_id = signed_left ?
+        ins->value.integer_overflow.left :
+        ins->value.integer_overflow.right;
+    const MinicCoreValueId unsigned_id = signed_left ?
+        ins->value.integer_overflow.right :
+        ins->value.integer_overflow.left;
+    const MinicCoreValueId address =
+        ins->value.integer_overflow.result_address;
+    if (!rv_load(sel, signed_id, RV_T0) ||
+        !rv_normalize(sel, RV_T0, 4U, true) ||
+        !rv_load(sel, unsigned_id, RV_T1) ||
+        (unsigned_is_32 && !rv_normalize(sel, RV_T1, 4U, false)) ||
+        !rv_li(sel, RV_T3, INT32_MAX) ||
+        !rv_rrr(sel, MINIC_RISCV_MACHINE_SUB,
+            RV_T3, RV_T3, RV_T0) ||
+        !rv_rrr(sel, MINIC_RISCV_MACHINE_SLTU,
+            RV_T4, RV_T3, RV_T1) ||
+        !rv_rrr(sel, MINIC_RISCV_MACHINE_ADD,
+            RV_T2, RV_T0, RV_T1)) return false;
+    return rv_checked_store_result(sel, address, 4U, RV_T2) &&
+        rv_store(sel, ins->result, RV_T4);
+}
+
+/* Both unsigned operands are nonnegative: either operand above INT32_MAX,
+ * or their sum above INT32_MAX, makes the i32 destination overflow. */
+static bool rv_core_checked64_u64_u32_add(RvCoreSelection *sel,
+    const MinicCoreInstruction *ins, bool wide_left) {
+    const MinicCoreValueId wide = wide_left ?
+        ins->value.integer_overflow.left :
+        ins->value.integer_overflow.right;
+    const MinicCoreValueId narrow = wide_left ?
+        ins->value.integer_overflow.right :
+        ins->value.integer_overflow.left;
+    if (!rv_load(sel, wide, RV_T0) ||
+        !rv_load(sel, narrow, RV_T1) ||
+        !rv_normalize(sel, RV_T1, 4U, false) ||
+        !rv_li(sel, RV_T3, INT32_MAX) ||
+        !rv_rrr(sel, MINIC_RISCV_MACHINE_SLTU,
+            RV_T4, RV_T3, RV_T1) ||
+        !rv_rrr(sel, MINIC_RISCV_MACHINE_SUB,
+            RV_T3, RV_T3, RV_T1) ||
+        !rv_rrr(sel, MINIC_RISCV_MACHINE_SLTU,
+            RV_T5, RV_T3, RV_T0) ||
+        !rv_rrr(sel, MINIC_RISCV_MACHINE_OR,
+            RV_T4, RV_T4, RV_T5) ||
+        !rv_rrr(sel, MINIC_RISCV_MACHINE_ADD,
+            RV_T2, RV_T0, RV_T1)) return false;
+    return rv_checked_store_result(sel,
+            ins->value.integer_overflow.result_address, 4U, RV_T2) &&
+        rv_store(sel, ins->result, RV_T4);
+}
+
+/* A signed/unsigned pair of 32-bit operands has an exact product in 64
+ * bits.  Base-I uses __muldi3, then compares the entire mathematical
+ * product with the requested signed/unsigned 32-bit destination. */
+static bool rv_core_checked64_mixed_mul(RvCoreSelection *sel,
+    const MinicCoreInstruction *ins, bool signed_left,
+    bool signed_right, bool signed_result) {
+    const MinicCoreFunction *fn = sel->plan->core;
+    if (!minic_riscv_machine_checked_mul_runtime_call(fn, ins, 64U) ||
+        !sel->plan->frame->saves_return_address ||
+        !rv_load(sel, ins->value.integer_overflow.left, RV_A0) ||
+        !rv_normalize(sel, RV_A0, 4U, signed_left) ||
+        !rv_load(sel, ins->value.integer_overflow.right, RV_A1) ||
+        !rv_normalize(sel, RV_A1, 4U, signed_right) ||
+        !rv_checked_call(sel, "__muldi3") ||
+        !rv_rr(sel, MINIC_RISCV_MACHINE_MV, RV_T2, RV_A0) ||
+        !rv_rr(sel, MINIC_RISCV_MACHINE_MV, RV_T4, RV_T2) ||
+        !rv_normalize(sel, RV_T2, 4U, signed_result) ||
+        !rv_rrr(sel, MINIC_RISCV_MACHINE_XOR,
+            RV_T4, RV_T4, RV_T2) ||
+        !rv_rr(sel, MINIC_RISCV_MACHINE_SNEZ, RV_T4, RV_T4)) return false;
+    return rv_checked_store_result(sel,
+            ins->value.integer_overflow.result_address, 4U, RV_T2) &&
+        rv_store(sel, ins->result, RV_T4);
+}
+
 static bool rv_core_checked_overflow(RvCoreSelection *sel,
     const MinicCoreInstruction *ins) {
     const MinicCoreFunction *fn = sel->plan->core;
@@ -2214,6 +2300,7 @@ static bool rv_core_checked_overflow(RvCoreSelection *sel,
         ins->value.integer_overflow.operator_kind;
     const MinicCoreType *pointer, *result, *flag;
     MinicCoreTypeId pointee;
+    bool signed_left, signed_right, signed_result;
     unsigned size;
     bool sign;
     if (sel->xlen == 32U) return rv_core_checked32(sel, ins);
@@ -2242,7 +2329,27 @@ static bool rv_core_checked_overflow(RvCoreSelection *sel,
         !result->has_layout || result->value.integer.is_bool ||
         (result->size != 1U && result->size != 2U &&
          result->size != 4U && result->size != 8U) ||
-        result->value.integer.bit_width != result->size * 8U ||
+        result->value.integer.bit_width != result->size * 8U)
+        return false;
+    if (op == MINIC_CORE_INTEGER_OVERFLOW_ADD) {
+        if (minic_core_integer_overflow_mixed_add_i32_shape(fn, ins,
+                &signed_left))
+            return rv_core_checked64_mixed_add(sel, ins,
+                signed_left, false);
+        if (minic_core_integer_overflow_i32_u32_to_i32_shape(fn, ins,
+                &signed_left))
+            return rv_core_checked64_mixed_add(sel, ins,
+                signed_left, true);
+        if (minic_core_integer_overflow_u64_u32_to_i32_shape(fn, ins,
+                &signed_left))
+            return rv_core_checked64_u64_u32_add(sel, ins, signed_left);
+    } else if (op == MINIC_CORE_INTEGER_OVERFLOW_MULTIPLY &&
+        minic_core_integer_overflow_mixed_multiply_i32_shape(fn, ins,
+            &signed_left, &signed_right, &signed_result)) {
+        return rv_core_checked64_mixed_mul(sel, ins,
+            signed_left, signed_right, signed_result);
+    }
+    if (
         minic_core_type_unqualified(types,
             fn->values[left].core_type_id) != pointee ||
         minic_core_type_unqualified(types,
@@ -3293,9 +3400,27 @@ static bool rv_core_mixed_source_asm(RvCoreSelection *sel,
     for (i = 0U; i < count; ++i) {
         if (physicals[i] != 0U) continue;
         for (j = RV_A0; j <= RV_A7 && reserved[j]; ++j) {}
-        if (j > RV_A7) return false;
-        physicals[i] = (unsigned)j;
-        reserved[j] = true;
+        if (j <= RV_A7) {
+            physicals[i] = (unsigned)j;
+            reserved[j] = true;
+            continue;
+        }
+        /* Real Linux IRQ stack-switch ASM clobbers every a/t register and
+         * still needs one or two source operands. The original GNU-ASM plan
+         * already selected saved s-registers and reserved stack slots for
+         * them. Borrow ONLY those finalized frame saves: choosing an
+         * arbitrary unsaved s-register would violate the psABI. */
+        if (sel->plan->frame->callee_saved == NULL) return false;
+        for (j = 0U; j < sel->plan->frame->callee_saved_count; ++j) {
+            const unsigned saved =
+                sel->plan->frame->callee_saved[j].register_number;
+            if (saved >= 32U || reserved[saved] ||
+                !minic_riscv_gpr_callee_saved(saved)) continue;
+            physicals[i] = saved;
+            reserved[saved] = true;
+            break;
+        }
+        if (j == sel->plan->frame->callee_saved_count) return false;
     }
     for (i = 0U; i < count; ++i) {
         const MinicCoreStructuredInlineAsmOperand *role = &roles[i];

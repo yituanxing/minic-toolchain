@@ -327,10 +327,9 @@ bool minic_parser_gnu_inline_asm_statement(MinicParser *parser) {
         free(template_text);
         return false;
     }
-    /* GNU *basic* asm has only a template, with no colon-separated operand
-     * sections. It is implicitly volatile even when the source omitted the
-     * modifier. Do not extend that inference to nonvolatile GNU *extended*
-     * asm: its operand/clobber contracts retain their original semantics. */
+    /* GNU basic asm is implicitly volatile. For extended asm, the same is
+     * true only when it has no outputs; decide that after parsing the output
+     * list so genuine nonvolatile extended asm with outputs stays distinct. */
     if (parser->current.kind == MINIC_TOKEN_RPAREN) {
         is_volatile = true;
     }
@@ -456,6 +455,20 @@ bool minic_parser_gnu_inline_asm_statement(MinicParser *parser) {
          * still declines this form: x86 user-access exception tables need
          * a dedicated output+label+fault-path lowering before any machine
          * bytes may be emitted. Do not discard outputs to fake success. */
+    }
+    /* GNU extended asm with no output operands is implicitly volatile even
+     * when it has scalar inputs and a memory clobber. Linux RISC-V TLB
+     * alternative sequences rely on this exact source-language rule. */
+    {
+        const MinicInlineAsm *parsed =
+            minic_c0_program_inline_asm(parser->program, inline_asm_id);
+        if (parsed == NULL ||
+            (parsed->output_count == 0U &&
+             !minic_c0_program_set_inline_asm_volatile(
+                 parser->program, inline_asm_id, true))) {
+            minic_parser_error(parser, "cannot finalize GNU asm volatile semantics");
+            return false;
+        }
     }
     if (!minic_c0_program_set_inline_asm_memory_clobber(
             parser->program, inline_asm_id, has_memory_clobber)) {

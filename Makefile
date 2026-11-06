@@ -711,6 +711,20 @@ check-direct-lp64-asm-capacity: $(MINIC_CC_BINARY)
 
 check-fast: check-direct-lp64-asm-capacity
 
+.PHONY: check-riscv-source-asm-saved-operands
+check-riscv-source-asm-saved-operands: $(MINIC_CC_BINARY)
+	@MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+		sh tests/compiler/c0/run-riscv-source-asm-saved-operands.sh
+
+check-fast: check-riscv-source-asm-saved-operands
+
+.PHONY: check-riscv-mixed-checked-overflow
+check-riscv-mixed-checked-overflow: $(MINIC_CC_BINARY)
+	@MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+		sh tests/compiler/c0/run-riscv-mixed-checked-overflow.sh
+
+check-fast: check-riscv-mixed-checked-overflow
+
 $(DIRECT_LP64_ASM_UNIT_BINARY): tests/compiler/c0/direct_lp64_asm_preflight_unit.c \
 		src/core/core_type.c src/target/common/lp64_scalar.c \
 		$(BUILD_DIR)/obj/src/frontend/type.o
@@ -1691,6 +1705,13 @@ check-long-double-literal-precision: $(MINIC_CC_BINARY)
 .PHONY: check-asm-operand-plan
 check-asm-operand-plan: $(MINIC_CC_BINARY)
 	bash tests/core/run-asm-operand-plan.sh "$(abspath $(MINIC_CC_BINARY))"
+
+.PHONY: check-riscv-extended-zero-output-volatile
+check-riscv-extended-zero-output-volatile: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	sh tests/compiler/c0/run-riscv-extended-zero-output-volatile.sh
+
+check-fast: check-riscv-extended-zero-output-volatile
 
 .PHONY: check-loongarch64-record-copy-size
 check-loongarch64-record-copy-size: $(MINIC_CC_BINARY)

@@ -2,6 +2,7 @@
 #define MINIC_TARGET_RISCV_INSTRUCTION_SELECT_H
 
 #include "core/core_ir.h"
+#include "target/common/core_numeric_shape.h"
 #include "target/riscv/isa_features.h"
 #include <stdbool.h>
 #include <stddef.h>
@@ -18,6 +19,7 @@ static inline bool minic_riscv_machine_checked_mul_runtime_call(
     const MinicCoreType *pointer, *flag, *result;
     MinicCoreTypeId pointee;
     MinicCoreValueId left, right, address;
+    bool signed_left, signed_right, signed_result;
     if (fn == NULL || ins == NULL || xlen != 64U ||
         ins->kind != MINIC_CORE_INSTRUCTION_INTEGER_OVERFLOW ||
         ins->value.integer_overflow.operator_kind !=
@@ -50,10 +52,12 @@ static inline bool minic_riscv_machine_checked_mul_runtime_call(
         (result->size == 1U || result->size == 2U ||
          result->size == 4U || result->size == 8U) &&
         result->value.integer.bit_width == result->size * 8U &&
-        minic_core_type_unqualified(types,
+        ((minic_core_type_unqualified(types,
             fn->values[left].core_type_id) == pointee &&
-        minic_core_type_unqualified(types,
-            fn->values[right].core_type_id) == pointee;
+          minic_core_type_unqualified(types,
+            fn->values[right].core_type_id) == pointee) ||
+         minic_core_integer_overflow_mixed_multiply_i32_shape(fn, ins,
+             &signed_left, &signed_right, &signed_result));
 }
 
 /* The single Core→RISC-V typed Machine implicit-CALL inventory. The

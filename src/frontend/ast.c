@@ -875,6 +875,15 @@ bool minic_c0_program_set_inline_asm_memory_clobber(MinicC0Program *program,
     return true;
 }
 
+bool minic_c0_program_set_inline_asm_volatile(MinicC0Program *program,
+                                              MinicInlineAsmId inline_asm_id,
+                                              bool is_volatile) {
+    if (program == NULL || inline_asm_id >= program->inline_asm_count)
+        return false;
+    program->inline_asms[inline_asm_id].is_volatile = is_volatile;
+    return true;
+}
+
 bool minic_c0_program_set_inline_asm_goto(MinicC0Program *program,
                                           MinicInlineAsmId inline_asm_id,
                                           bool is_goto) {

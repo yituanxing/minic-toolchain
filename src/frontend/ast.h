@@ -738,6 +738,9 @@ bool minic_c0_program_add_inline_asm_register_clobber(MinicC0Program *program,
 bool minic_c0_program_set_inline_asm_memory_clobber(MinicC0Program *program,
                                                     MinicInlineAsmId inline_asm_id,
                                                     bool has_memory_clobber);
+bool minic_c0_program_set_inline_asm_volatile(MinicC0Program *program,
+                                              MinicInlineAsmId inline_asm_id,
+                                              bool is_volatile);
 bool minic_c0_program_set_inline_asm_goto(MinicC0Program *program,
                                           MinicInlineAsmId inline_asm_id,
                                           bool is_goto);
