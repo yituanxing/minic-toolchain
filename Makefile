@@ -998,6 +998,27 @@ check-core-vector-layout-contract:
 
 check-fast: check-core-vector-layout-contract
 
+# Source-free seal for complete record field bounds, bitfields and flexible
+# array tails, independently of any target ABI or cross-toolchain.
+.PHONY: check-core-record-layout-contract
+check-core-record-layout-contract:
+	@mkdir -p "$(BUILD_DIR)/tests"
+	$(CC) -std=c11 -Wall -Wextra -Wpedantic -Werror $(MINIC_INCLUDES) \
+	  src/core/core_type.c \
+	  tests/compiler/c0/probe-core-record-layout-contract.c \
+	  -o "$(BUILD_DIR)/tests/core-record-layout-contract"
+	"$(BUILD_DIR)/tests/core-record-layout-contract"
+
+# No physical memory action for empty GNU records. GNU and MiniC must both
+# execute the pointer-producing expressions, on a real native ELF.
+.PHONY: check-zero-record-five-targets
+check-zero-record-five-targets: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" \
+	BUILD_DIR="$(abspath $(BUILD_DIR))" \
+	sh tests/compiler/c0/probe-zero-record-five-targets.sh
+
+check-fast: check-core-record-layout-contract check-zero-record-five-targets
+
 RV64_CORETYPE_TARGET_ADMISSION_BINARY := $(BUILD_DIR)/tests/target/riscv64/coretype-target-admission
 $(RV64_CORETYPE_TARGET_ADMISSION_BINARY): tests/target/riscv64/coretype_target_admission_test.c $(MINIC_OBJECTS)
 	@mkdir -p "$(dir $@)"

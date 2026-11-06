@@ -237,11 +237,20 @@ bool minic_multi_direct_record_load_extent(
         !direct_core_pointer_pointee(fn, fn->values[*source].core_type_id,
                                      &pointee_id) ||
         !direct_core_equal_unqualified(fn, pointee_id, ins->core_type_id) ||
-        !minic_lp64_frame_plan_object(frame_plan, dst, object_offset) ||
         (record = direct_core_type(fn, ins->core_type_id)) == NULL ||
         record->kind != MINIC_CORE_TYPE_RECORD || !record->has_layout ||
-        record->size == 0U || record->alignment == 0U ||
+        record->alignment == 0U ||
         record->size > (16U * 1024U * 1024U))
+        return false;
+    /* A GNU zero-size record has a real Core identity but no snapshot bytes.
+     * Requiring an allocated frame slot here would fabricate physical storage
+     * for an otherwise effect-free C value copy. */
+    if (record->size == 0U) {
+        *object_offset = 0U;
+        *bytes = 0U;
+        return true;
+    }
+    if (!minic_lp64_frame_plan_object(frame_plan, dst, object_offset))
         return false;
     *bytes = record->size;
     return true;

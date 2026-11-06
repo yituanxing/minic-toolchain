@@ -18,15 +18,15 @@ test -s "$assembly"
 for symbol in pointer_aligned_size prefix_aligned_size over_aligned_size over_aligned_holder_size over_aligned_holder_offset designated_only_size designated_aligned_size; do
     grep -F "$symbol:" "$assembly" >/dev/null
 done
-size8=$(grep -c '  li a0, 8' "$assembly" || true)
-size16=$(grep -c '  li a0, 16' "$assembly" || true)
-size32=$(grep -c '  li a0, 32' "$assembly" || true)
+size8=$(grep -Ec '^[[:space:]]*li[[:space:]]+([[:alnum:]]+),[[:space:]]*8$' "$assembly" || true)
+size16=$(grep -Ec '^[[:space:]]*li[[:space:]]+([[:alnum:]]+),[[:space:]]*16$' "$assembly" || true)
+size32=$(grep -Ec '^[[:space:]]*li[[:space:]]+([[:alnum:]]+),[[:space:]]*32$' "$assembly" || true)
 test "$size8" -ge 1
 test "$size16" -ge 3
 test "$size32" -ge 1
 
-sed -n '/designated_only_size:/,/^\.size/p' "$assembly" | grep -F '  li a0, 8' >/dev/null
-sed -n '/designated_aligned_size:/,/^\.size/p' "$assembly" | grep -F '  li a0, 16' >/dev/null
+sed -n '/designated_only_size:/,/^\.size/p' "$assembly" | grep -E '^[[:space:]]*li[[:space:]]+([[:alnum:]]+),[[:space:]]*8$' >/dev/null
+sed -n '/designated_aligned_size:/,/^\.size/p' "$assembly" | grep -E '^[[:space:]]*li[[:space:]]+([[:alnum:]]+),[[:space:]]*16$' >/dev/null
 
 for invalid in invalid_record_designated_init_arguments invalid_union_designated_init; do
     "$host_cc" -E -P -std=gnu11 -x c "$root/tests/compiler/c0/$invalid.c" -o "$work/$invalid.i"

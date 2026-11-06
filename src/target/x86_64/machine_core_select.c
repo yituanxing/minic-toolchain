@@ -2078,12 +2078,12 @@ static bool x86_parameter_object(X86CoreSelector *sel,
 static bool x86_record_copy(X86CoreSelector *sel,
     const MinicCoreInstruction *ins) {
     size_t bytes;
-    /* A zero-byte Core copy has no physical R/W effects. Existing coverage
-     * requires both, so reject until the zero-size coverage rule is sealed;
-     * never invent a memory access for an empty GNU record. */
-    if (!minic_multi_direct_record_copy_extent(sel->core, ins, &bytes) ||
-        bytes == 0U ||
-        !x86_record_pointer(sel,
+    if (!minic_multi_direct_record_copy_extent(sel->core, ins, &bytes))
+        return false;
+    /* Pointer expressions have already been evaluated into Core SSA values.
+     * Copying an empty record performs no machine memory access. */
+    if (bytes == 0U) return true;
+    if (!x86_record_pointer(sel,
             ins->value.record_copy.destination_address, MINIC_X86_REG_R10) ||
         !x86_record_pointer(sel,
             ins->value.record_copy.source_address, MINIC_X86_REG_R11))
@@ -2104,8 +2104,9 @@ static bool x86_record_load(X86CoreSelector *sel,
     plan.object_count = sel->frame->object_count;
     plan.object_offsets = sel->frame->object_offsets;
     if (!minic_multi_direct_record_load_extent(sel->core, ins,
-            &plan, &source, &offset, &bytes) ||
-        sel->frame->object_storage.objects == NULL ||
+            &plan, &source, &offset, &bytes)) return false;
+    if (bytes == 0U) return true;
+    if (sel->frame->object_storage.objects == NULL ||
         bytes > sel->frame->object_storage.objects[destination].extent ||
         !x86_record_pointer(sel, source, MINIC_X86_REG_R11) ||
         !x86_object_address(sel, destination, MINIC_X86_REG_R10))

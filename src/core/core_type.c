@@ -128,9 +128,49 @@ static bool type_references_valid(const MinicCoreTypeContext *context,
         if (type->value.record.field_count > SIZE_MAX / sizeof(*type->value.record.fields) ||
             (type->value.record.field_count != 0U && type->value.record.fields == NULL))
             return false;
-        for (i = 0U; i < type->value.record.field_count; ++i)
-            if (type->value.record.fields[i].type_id >= context->type_count)
+        /* Incomplete nominal records may carry a provisional source-resolved
+         * size/alignment for recursive pointers, but not fabricated fields. */
+        if (!type->value.record.is_complete)
+            return type->value.record.field_count == 0U;
+        if (!type->has_layout) return false;
+        for (i = 0U; i < type->value.record.field_count; ++i) {
+            const MinicCoreRecordField *field = &type->value.record.fields[i];
+            const MinicCoreType *storage = minic_core_type_get(context, field->type_id);
+            const MinicCoreType *base;
+            size_t remaining;
+            if (storage == NULL || field->alignment == 0U ||
+                (field->alignment & (field->alignment - 1U)) != 0U ||
+                field->byte_offset > type->size || field->bit_offset >= 8U)
                 return false;
+            base = minic_core_type_get(context,
+                minic_core_type_unqualified(context, field->type_id));
+            if (base == NULL) return false;
+            remaining = type->size - field->byte_offset;
+            if (field->is_bit_field) {
+                size_t occupied;
+                /* Bit offsets are byte-relative. A zero-width barrier may be
+                 * at the end of a record. Nonzero widths must fit both their
+                 * declared integer carrier and the containing object. */
+                if (base->kind != MINIC_CORE_TYPE_INTEGER ||
+                    !storage->has_layout || storage->size > SIZE_MAX / 8U ||
+                    field->bit_width > storage->size * 8U)
+                    return false;
+                occupied = field->bit_width / 8U +
+                    ((field->bit_offset + field->bit_width % 8U + 7U) / 8U);
+                if (occupied > remaining) return false;
+            } else {
+                if (field->bit_offset != 0U || field->bit_width != 0U)
+                    return false;
+                if (!storage->has_layout) {
+                    /* Only a trailing incomplete array (a flexible member)
+                     * can lack layout inside a complete record. */
+                    if (i + 1U != type->value.record.field_count ||
+                        base->kind != MINIC_CORE_TYPE_ARRAY ||
+                        base->value.array.is_complete)
+                        return false;
+                } else if (storage->size > remaining) return false;
+            }
+        }
         return true;
     case MINIC_CORE_TYPE_FUNCTION:
         if (type->value.function.parameter_count >
@@ -152,11 +192,20 @@ static bool type_references_valid(const MinicCoreTypeContext *context,
          * whether its values live in registers or only in memory. An
          * arbitrary type declaration must never forge a narrower object
          * than the element/count pair and reach a backend's native Q move. */
+        /* GNU/target vector lanes are numerical scalars. A matching byte
+         * extent cannot turn a pointer, bool, record or nested vector into a
+         * legal SIMD register payload. Both natural and strengthened storage
+         * alignments must be powers of two. */
         return type->has_layout && element != NULL && element->has_layout &&
+               (element->kind == MINIC_CORE_TYPE_INTEGER ||
+                element->kind == MINIC_CORE_TYPE_FLOAT) &&
+               !(element->kind == MINIC_CORE_TYPE_INTEGER &&
+                 element->value.integer.is_bool) &&
                element->size != 0U && element->alignment != 0U &&
                count != 0U && count <= SIZE_MAX / element->size &&
                type->size == count * element->size &&
                type->alignment >= element->alignment &&
+               (type->alignment & (type->alignment - 1U)) == 0U &&
                (type->value.vector.representation == MINIC_CORE_VECTOR_STORAGE_ONLY ||
                 type->value.vector.representation == MINIC_CORE_VECTOR_REGISTER_VALUE);
     }

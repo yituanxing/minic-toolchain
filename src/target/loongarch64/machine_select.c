@@ -1905,8 +1905,9 @@ static bool loong_select_record_transfer(LoongSelector *sel,
     if (ins->kind == MINIC_CORE_INSTRUCTION_RECORD_LOAD) {
         if (!minic_multi_direct_record_load_extent(fn, ins,
                 sel->ctx->frame_plan, &source,
-                &destination_offset, &bytes) ||
-            !loong_load_value(sel, source, LOONG_T2, true) ||
+                &destination_offset, &bytes)) return false;
+        if (bytes == 0U) return true;
+        if (!loong_load_value(sel, source, LOONG_T2, true) ||
             !loong_local_frame_address(sel, LOONG_T1,
                 destination_offset)) return false;
         source_volatile = ins->value.record_load.is_volatile;
@@ -1915,6 +1916,7 @@ static bool loong_select_record_transfer(LoongSelector *sel,
         if (ins->kind == MINIC_CORE_INSTRUCTION_RECORD_COPY) {
             if (!minic_multi_direct_record_copy_extent(fn, ins, &bytes))
                 return false;
+            if (bytes == 0U) return true;
             source = ins->value.record_copy.source_address;
             destination = ins->value.record_copy.destination_address;
             source_volatile = ins->value.record_copy.source_volatile;

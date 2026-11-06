@@ -3435,8 +3435,9 @@ static bool a64_record_transfer(A64CoreSelection *sel,
     bool source_volatile, destination_volatile;
     if (ins->kind == MINIC_CORE_INSTRUCTION_RECORD_LOAD) {
         if (!minic_multi_direct_record_load_extent(fn, ins, frame,
-                &source, &dest_offset, &bytes) ||
-            !a64_load_core(sel, source, A64_T0, 64U) ||
+                &source, &dest_offset, &bytes)) return false;
+        if (bytes == 0U) return true;
+        if (!a64_load_core(sel, source, A64_T0, 64U) ||
             !minic_a64_machine_emit_frame_address(&sel->builder, &sel->view,
                 minic_a64_owned_slot(dest_offset), A64_T1,
                 (MinicA64ScratchPolicy){0U, 0U})) return false;
@@ -3445,6 +3446,7 @@ static bool a64_record_transfer(A64CoreSelection *sel,
     } else if (ins->kind == MINIC_CORE_INSTRUCTION_RECORD_COPY) {
         if (!minic_multi_direct_record_copy_extent(fn, ins, &bytes))
             return false;
+        if (bytes == 0U) return true;
         source = ins->value.record_copy.source_address;
         destination = ins->value.record_copy.destination_address;
         if (!a64_load_core(sel, source, A64_T0, 64U) ||

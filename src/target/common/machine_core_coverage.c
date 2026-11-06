@@ -11,8 +11,23 @@ typedef struct CoreMachineDemand {
     unsigned int required_effects;
 } CoreMachineDemand;
 
-static CoreMachineDemand core_machine_demand(
+/* A zero-sized record retains all source expression/ordering semantics,
+ * but its LOAD/COPY has no machine memory operation or volatile access. */
+static bool empty_core_record_operation(const MinicCoreFunction *core,
     const MinicCoreInstruction *instruction) {
+    const MinicCoreType *record;
+    if (core == NULL || instruction == NULL || core->type_context == NULL ||
+        (instruction->kind != MINIC_CORE_INSTRUCTION_RECORD_COPY &&
+         instruction->kind != MINIC_CORE_INSTRUCTION_RECORD_LOAD))
+        return false;
+    record = minic_core_type_get(core->type_context,
+        minic_core_type_unqualified(core->type_context, instruction->core_type_id));
+    return record != NULL && record->kind == MINIC_CORE_TYPE_RECORD &&
+           record->has_layout && record->size == 0U;
+}
+
+static CoreMachineDemand core_machine_demand(
+    const MinicCoreFunction *core, const MinicCoreInstruction *instruction) {
     const CoreMachineDemand pure = {true, false, 0U};
     const CoreMachineDemand origin = {true, true, 0U};
     const CoreMachineDemand read = {true, true,
@@ -87,6 +102,7 @@ static CoreMachineDemand core_machine_demand(
         return read;
     case MINIC_CORE_INSTRUCTION_RECORD_LOAD:
     case MINIC_CORE_INSTRUCTION_RECORD_COPY:
+        return empty_core_record_operation(core, instruction) ? pure : read_write;
     case MINIC_CORE_INSTRUCTION_VECTOR_STORAGE_COPY:
     case MINIC_CORE_INSTRUCTION_VARIADIC_NEXT_SCALAR:
     case MINIC_CORE_INSTRUCTION_VARIADIC_COPY:
@@ -448,7 +464,7 @@ bool minic_machine_core_coverage_verify_with_policy(
             const size_t id = block->instructions[j];
             failure_core_instruction = id;
             if (id >= core->instruction_count || owner[id] != SIZE_MAX ||
-                !core_machine_demand(&core->instructions[id]).recognized)
+                !core_machine_demand(core, &core->instructions[id]).recognized)
                 goto cleanup;
             owner[id] = i;
         }
@@ -653,7 +669,7 @@ bool minic_machine_core_coverage_verify_with_policy(
         if (owner[i] == SIZE_MAX || !reachable_blocks[owner[i]]) continue;
         failure_core_instruction = i;
         failure_core_block = owner[i];
-        demand = core_machine_demand(&core->instructions[i]);
+        demand = core_machine_demand(core, &core->instructions[i]);
         if (demand.requires_origin &&
             (!seen[i] || (effects[i] & demand.required_effects) !=
                           demand.required_effects))
@@ -673,10 +689,12 @@ bool minic_machine_core_coverage_verify_with_policy(
             (effects[i] & MINIC_MACHINE_EFFECT_VOLATILE) == 0U)
             goto cleanup;
         if (core->instructions[i].kind == MINIC_CORE_INSTRUCTION_RECORD_LOAD &&
+            !empty_core_record_operation(core, &core->instructions[i]) &&
             core->instructions[i].value.record_load.is_volatile &&
             (effects[i] & MINIC_MACHINE_EFFECT_VOLATILE) == 0U)
             goto cleanup;
         if (core->instructions[i].kind == MINIC_CORE_INSTRUCTION_RECORD_COPY &&
+            !empty_core_record_operation(core, &core->instructions[i]) &&
             (core->instructions[i].value.record_copy.source_volatile ||
              core->instructions[i].value.record_copy.destination_volatile) &&
             (effects[i] & MINIC_MACHINE_EFFECT_VOLATILE) == 0U)

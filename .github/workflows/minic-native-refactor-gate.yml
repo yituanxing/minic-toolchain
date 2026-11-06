@@ -36,6 +36,13 @@ on:
       - 'tests/compiler/c0/probe-rv32-frame-access.c'
       - 'tests/compiler/c0/probe-core-semantic-family.c'
       - 'tests/compiler/c0/probe-core-vector-layout-contract.c'
+      - 'tests/compiler/c0/probe-core-record-layout-contract.c'
+      - 'tests/compiler/c0/probe-zero-record-five-targets.sh'
+      - 'tests/compiler/c0/zero_record_noop_sideeffects.c'
+      - 'tests/compiler/c0/run-gnu-empty-records.sh'
+      - 'tests/compiler/c0/run-gnu-zero-length-record-arrays.sh'
+      - 'tests/compiler/c0/run-gnu-record-alignment.sh'
+      - 'tests/compiler/c0/run-gnu-aligned-record-fields.sh'
       - 'tests/compiler/c0/probe-core-block-walk.c'
       - 'tests/compiler/c0/probe-direct-lp64-dispatch.c'
       - 'tests/compiler/c0/probe-core-facts-one-pass.c'
@@ -189,7 +196,7 @@ jobs:
             -o "$RUNNER_TEMP/minic-core-semantic-family"
           "$RUNNER_TEMP/minic-core-semantic-family"
           make MODE=release BUILD_DIR=build/minic-native-backend \
-            check-core-vector-layout-contract
+            check-core-vector-layout-contract check-core-record-layout-contract
       - name: Strictly compile all MiniC targets without apt or QEMU prerequisites
         shell: bash
         run: |
@@ -197,6 +204,18 @@ jobs:
           make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/minic-native-backend all
           test -x build/minic-native-backend/bin/minic
           test -x build/minic-native-backend/bin/minic-cc
+      - name: Source-free record layout and five-target GNU empty record differential
+        run: |
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/minic-native-backend \
+            check-core-record-layout-contract check-zero-record-five-targets
+          for probe in run-gnu-empty-records.sh \
+                       run-gnu-zero-length-record-arrays.sh \
+                       run-gnu-record-alignment.sh \
+                       run-gnu-aligned-record-fields.sh; do
+            MINIC="$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc" \
+              BUILD_DIR=build/minic-native-backend \
+              sh "tests/compiler/c0/$probe"
+          done
       - name: Four Target-owned GNU section marker and MachineIR printer contracts
         shell: bash
         run: |
