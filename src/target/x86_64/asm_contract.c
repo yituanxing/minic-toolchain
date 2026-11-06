@@ -387,6 +387,9 @@ bool minic_x86_64_typed_machine_form_matches_template(
         return form != 0U && variant == form;
     if (form_id == MINIC_X86_MACHINE_ASM_GS_TIED_ALU)
         return form != 0U && variant == form;
+    /* The source-qualified descriptor's memory direction must reach MIR. */
+    if (form_id == MINIC_X86_MACHINE_ASM_LIDT)
+        return form != 0U && variant == form;
     /* All other newly tagged source families publish variant zero; their
      * machine parser independently owns the exact opcode and width. */
     if (form_id >= MINIC_X86_MACHINE_ASM_CRASH_REGISTER &&

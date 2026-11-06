@@ -2945,6 +2945,39 @@ static bool x86_source_nop_const_i_contract(
 /* Old x86 Linux special_insns/source contracts use actual address and R10
  * register operands in the new physical IR. The exact recognized Source
  * spelling and fixed names are retained, but no legacy text emitter is used. */
+/* A source-tagged x86 descriptor form is not sufficient: independently
+ * seal the physical 10-byte memory operand, opcode and direction at MIR. */
+static bool x86_source_descriptor_table_contract(
+    const MinicMachineInstruction *ins) {
+    const MinicMachineOperand *operand;
+    const unsigned int form = ins->source_asm_machine_form_variant;
+    unsigned int expected;
+    if (ins->source_asm_machine_form_id != MINIC_X86_MACHINE_ASM_LIDT ||
+        form < 1U || form > 4U ||
+        ins->operand_count != 1U || ins->operands == NULL ||
+        ins->implicit_count != 0U || ins->implicit != NULL ||
+        !minic_x86_64_typed_machine_form_matches_template(
+            ins->source_asm_machine_form_id,form,
+            ins->source_asm_template,ins->source_asm_length))
+        return false;
+    expected = MINIC_MACHINE_EFFECT_SOURCE_ASM |
+        MINIC_MACHINE_EFFECT_VOLATILE |
+        MINIC_MACHINE_EFFECT_COMPILER_BARRIER |
+        (form <= 2U ? MINIC_MACHINE_EFFECT_MEMORY_READ :
+            MINIC_MACHINE_EFFECT_MEMORY_WRITE);
+    if (ins->effects != expected) return false;
+    operand = &ins->operands[0];
+    return operand->kind == MINIC_MACHINE_OPERAND_ADDRESS &&
+        operand->asm_name == NULL && operand->asm_constraint != NULL &&
+        strcmp(operand->asm_constraint,form <= 2U ? "m" : "=m") == 0 &&
+        operand->value.address.has_base &&
+        !operand->value.address.has_index && !operand->value.address.has_symbol &&
+        operand->value.address.base.bank == MINIC_MACHINE_REGISTER_GENERAL &&
+        operand->value.address.base.number == MINIC_X86_REG_R10 &&
+        operand->value.address.base.width_bits == 64U &&
+        operand->value.address.displacement == 0;
+}
+
 static bool x86_source_legacy_memory_contract(
     const MinicMachineInstruction *ins) {
     const MinicMachineOperand *op;
@@ -3289,6 +3322,8 @@ bool minic_x86_64_machine_validate_source_asm(const MinicTargetInfo *target,
     if (instruction->source_asm_machine_form_id ==
             MINIC_X86_MACHINE_ASM_IP_HERE)
         return x86_source_ip_here_contract(instruction);
+    if (instruction->source_asm_machine_form_id == MINIC_X86_MACHINE_ASM_LIDT)
+        return x86_source_descriptor_table_contract(instruction);
     if (instruction->source_asm_machine_form_id == MINIC_X86_MACHINE_ASM_FXSAVE ||
         instruction->source_asm_machine_form_id == MINIC_X86_MACHINE_ASM_VERW_CLEAR ||
         instruction->source_asm_machine_form_id == MINIC_X86_MACHINE_ASM_TLB_CACHE)

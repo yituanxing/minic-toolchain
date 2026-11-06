@@ -1013,6 +1013,11 @@ static bool x86_linux_lidt_source(const MinicTargetInvocation *invocation,
     contract->kinds[0] = src->output_count
                              ? MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_OUTPUT
                              : MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT;
+    /* Exact privileged instruction variant: 1=LIDT 2=LGDT 3=SGDT 4=SIDT.
+     * Must remain target-owned across Core -> typed MachineIR. */
+    contract->target_machine_form_variant =
+        minic_x86_64_linux_descriptor_table_form(
+            src->template_text, src->template_length);
     contract->implicit_memory_effect = true;
     return true;
 }

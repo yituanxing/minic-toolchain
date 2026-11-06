@@ -702,6 +702,14 @@ static bool x86_emit_source_asm(FILE *out,
                 &instruction->operands[1].value.address)) return false;
         return fprintf(out,", %s\n",width == 32U ? "%eax" : "%rax") >= 0;
     }
+    if (instruction->source_asm_machine_form_id == MINIC_X86_MACHINE_ASM_LIDT) {
+        static const char *const forms[] = {"lidt", "lgdt", "sgdt", "sidt"};
+        const unsigned int variant = instruction->source_asm_machine_form_variant;
+        if (variant < 1U || variant > 4U ||
+            !minic_x86_64_machine_validate_source_asm(function->target,
+                instruction,NULL)) return false;
+        return fprintf(out,"  %s (%%r10)\n",forms[variant-1U]) >= 0;
+    }
     if (instruction->source_asm_machine_form_id == MINIC_X86_MACHINE_ASM_FXSAVE ||
         instruction->source_asm_machine_form_id == MINIC_X86_MACHINE_ASM_VERW_CLEAR ||
         instruction->source_asm_machine_form_id == MINIC_X86_MACHINE_ASM_TLB_CACHE)
