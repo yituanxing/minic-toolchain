@@ -8,6 +8,17 @@ qemu=${QEMU_AARCH64:-qemu-aarch64}
 work=${BUILD_DIR:-"$root/build/debug"}/tests/aarch64-neon-stage3-strict
 mkdir -p "$work"
 
+# Existing supported 128-bit NEON addition receives a real two-ELF GNU/QEMU
+# differential, before probing the much larger full arm_neon.h surface.
+add_src="$root/tests/compiler/c0/aarch64_neon_vector128_add_core.c"
+"$gnu_cc" -E -P -x c "$add_src" -o "$work/native-add.i"
+"$gnu_cc" -static -O2 "$add_src" -o "$work/native-add.gnu.elf"
+"$qemu" -cpu max "$work/native-add.gnu.elf"
+"$minic_cc" --target=aarch64-linux -S "$work/native-add.i" -o "$work/native-add.minic.s"
+"$gnu_cc" -static "$work/native-add.minic.s" -o "$work/native-add.minic.elf"
+"$qemu" -cpu max "$work/native-add.minic.elf"
+echo 'AARCH64_VECTOR128_ADD_QEMU=PASS GNU/MiniC real 16B+2D addition'
+
 # This is a future green gate, intentionally independent of the Stage2
 # fail-closed contract. Missing tools or unsupported MiniC semantics are FAIL,
 # never SKIP/PASS. Both compilers see the SAME GNU-preprocessed TU.

@@ -292,7 +292,7 @@ bool minic_type_is_fixed_vector128_storage(MinicType type) {
     return true;
 }
 
-bool minic_type_fixed_vector128_xor_result(MinicType left, MinicType right,
+bool minic_type_fixed_vector128_binary_result(MinicType left, MinicType right,
                                             MinicType *result) {
     MinicType left_value, right_value;
     if (result == NULL || !minic_type_is_fixed_vector128_storage(left) ||

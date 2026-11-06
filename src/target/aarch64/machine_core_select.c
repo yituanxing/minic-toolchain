@@ -3193,17 +3193,26 @@ static bool a64_wide_memory(A64CoreSelection *sel,
     const MinicLP64FramePlan *frame = sel->ctx->frame_plan;
     const bool vector = ins->kind == MINIC_CORE_INSTRUCTION_FIXED_VECTOR128_LOAD ||
         ins->kind == MINIC_CORE_INSTRUCTION_FIXED_VECTOR128_STORE ||
-        ins->kind == MINIC_CORE_INSTRUCTION_FIXED_VECTOR128_XOR;
+        ins->kind == MINIC_CORE_INSTRUCTION_FIXED_VECTOR128_XOR ||
+        ins->kind == MINIC_CORE_INSTRUCTION_FIXED_VECTOR128_ADD;
     const bool load = ins->kind == MINIC_CORE_INSTRUCTION_LOAD ||
         ins->kind == MINIC_CORE_INSTRUCTION_FIXED_VECTOR128_LOAD;
     const bool vol = !vector && (load ? ins->value.load.is_volatile :
         ins->value.store.is_volatile);
     MinicCoreValueId address, payload;
     size_t wide_slot;
-    if (ins->kind == MINIC_CORE_INSTRUCTION_FIXED_VECTOR128_XOR) {
+    if (ins->kind == MINIC_CORE_INSTRUCTION_FIXED_VECTOR128_XOR ||
+        ins->kind == MINIC_CORE_INSTRUCTION_FIXED_VECTOR128_ADD) {
         const MinicCoreValueId left = ins->value.binary.left;
         const MinicCoreValueId right = ins->value.binary.right;
         size_t lhs, rhs, result;
+        const MinicCoreType *vec = minic_core_type_get(fn->type_context,
+            minic_core_type_unqualified(fn->type_context, ins->core_type_id));
+        const bool add = ins->kind == MINIC_CORE_INSTRUCTION_FIXED_VECTOR128_ADD;
+        const uint32_t opcode = !add ? MINIC_A64_MACHINE_VECTOR_EOR_16B :
+            vec != NULL && vec->value.vector.element_count == 2U ?
+                MINIC_A64_MACHINE_VECTOR_ADD_2D :
+                MINIC_A64_MACHINE_VECTOR_ADD_16B;
         const MinicMachineOperand ops[] = {
             a64_vector(16U, MINIC_MACHINE_REGISTER_WRITE),
             a64_vector(16U, MINIC_MACHINE_REGISTER_READ),
@@ -3223,7 +3232,7 @@ static bool a64_wide_memory(A64CoreSelection *sel,
                 minic_a64_owned_slot(rhs),
                 (MinicA64FrameRegister){MINIC_A64_REG_Q, 17U},
                 (MinicA64ScratchPolicy){0U, 0U}) &&
-            a64_emit(sel, MINIC_A64_MACHINE_VECTOR_EOR_16B, ops, 3U) &&
+            a64_emit(sel, opcode, ops, 3U) &&
             minic_a64_machine_emit_frame_store(&sel->builder, &sel->view,
                 minic_a64_owned_slot(result),
                 (MinicA64FrameRegister){MINIC_A64_REG_Q, 16U},
@@ -4329,6 +4338,7 @@ static bool a64_core_instruction(A64CoreSelection *sel,
     case MINIC_CORE_INSTRUCTION_FIXED_VECTOR128_LOAD:
     case MINIC_CORE_INSTRUCTION_FIXED_VECTOR128_STORE:
     case MINIC_CORE_INSTRUCTION_FIXED_VECTOR128_XOR:
+    case MINIC_CORE_INSTRUCTION_FIXED_VECTOR128_ADD:
         return a64_wide_memory(sel, ins);
     case MINIC_CORE_INSTRUCTION_RECORD_LOAD:
     case MINIC_CORE_INSTRUCTION_RECORD_COPY:

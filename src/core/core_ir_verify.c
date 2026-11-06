@@ -1187,6 +1187,7 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
                                         pointee);
     }
     case MINIC_CORE_INSTRUCTION_FIXED_VECTOR128_XOR:
+    case MINIC_CORE_INSTRUCTION_FIXED_VECTOR128_ADD:
         if (!instruction_result_is_valid(function, instruction) ||
             !ct_is_vector_register_value(instruction->core_type_id) ||
             instruction->value.binary.left >= function->value_count ||

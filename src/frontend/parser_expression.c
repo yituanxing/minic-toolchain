@@ -2406,12 +2406,12 @@ static bool binary_result_type(const MinicTargetInvocation *target,
     if (result == NULL) {
         return false;
     }
-    /* Typed fixed-vector storage permits precisely the source-qualified XOR
-     * identity; this does not admit general GNU vectors or machine SIMD. */
-    if (kind == MINIC_TOKEN_CARET &&
+    /* Exact target-owned 128-bit vector identities may perform native
+     * lane-wise ADD or bitwise XOR; no general GNU vector ISA is implied. */
+    if ((kind == MINIC_TOKEN_CARET || kind == MINIC_TOKEN_PLUS) &&
         minic_type_is_fixed_vector128_storage(left) &&
         minic_target_info_language_type_supported_for_type(target, left)) {
-        if (minic_type_fixed_vector128_xor_result(left, right, result))
+        if (minic_type_fixed_vector128_binary_result(left, right, result))
             return true;
     }
     if (binary_is_logical(kind)) {

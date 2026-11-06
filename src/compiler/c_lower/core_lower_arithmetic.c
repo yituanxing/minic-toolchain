@@ -261,7 +261,8 @@ MinicCoreLowerStatus minic_core_lower_try_arithmetic_binary(
     instruction.result = MINIC_CORE_VALUE_INVALID;
 
     if (expression->kind == MINIC_EXPRESSION_BINARY &&
-        expression->value.binary.operator_kind == MINIC_BINARY_BITWISE_XOR &&
+        (expression->value.binary.operator_kind == MINIC_BINARY_BITWISE_XOR ||
+         expression->value.binary.operator_kind == MINIC_BINARY_ADD) &&
         minic_type_is_fixed_vector128_storage(expression->type)) {
         MinicCoreValueId left, right;
         MinicCoreLowerStatus status;
@@ -280,7 +281,9 @@ MinicCoreLowerStatus minic_core_lower_try_arithmetic_binary(
             !minic_type_equal(minic_core_function_source_value_type(context->source, right),
                               expression->type))
             return MINIC_CORE_LOWER_UNSUPPORTED;
-        instruction.kind = MINIC_CORE_INSTRUCTION_FIXED_VECTOR128_XOR;
+        instruction.kind = expression->value.binary.operator_kind ==
+            MINIC_BINARY_ADD ? MINIC_CORE_INSTRUCTION_FIXED_VECTOR128_ADD :
+            MINIC_CORE_INSTRUCTION_FIXED_VECTOR128_XOR;
         instruction.value.binary.left = left;
         instruction.value.binary.right = right;
         return minic_core_function_append_source_value_instruction(

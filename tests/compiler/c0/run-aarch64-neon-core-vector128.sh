@@ -28,6 +28,15 @@ grep -Eq '^[[:space:]]*ldr[[:space:]]+q16,[[:space:]]*\[x10(,[[:space:]]*#0)?\][
 grep -Eq '^[[:space:]]*str[[:space:]]+q16,[[:space:]]*\[x10(,[[:space:]]*#0)?\][[:space:]]*$' \
     "$work/vector.s"
 
+# Both admitted lane layouts must lower ADD to native, correctly sized lanes.
+"$host_cc" -E -P -x c \
+    "$root/tests/compiler/c0/aarch64_neon_vector128_add_core.c" \
+    -o "$work/add.i"
+"$minic_cc" --target=aarch64-linux -S "$work/add.i" \
+    -o "$work/add.s"
+grep -F '  add v16.16b, v16.16b, v17.16b' "$work/add.s" >/dev/null
+grep -F '  add v16.2d, v16.2d, v17.2d' "$work/add.s" >/dev/null
+
 # The original Stage2 const vector-pointer ALU probe is now a positive
 # AArch64 Core/V-register case; it never passes a vector across the C ABI.
 "$host_cc" -E -P -x c \
@@ -84,4 +93,4 @@ for bad in vector128_unsupported_add unsupported_abi invalid_mixed_xor; do
     fi
 done
 
-printf '%s\n' 'PASS AArch64 typed vector128 Core->Q eor x2 + const-pointer ALU, load/store, foreign ISA reject, unsupported add/ABI/mixed-lane reject; QEMU runtime=NOT_TESTED'
+printf '%s\n' 'PASS AArch64 typed vector128 Core->Q eor/add(16B,2D), load/store, foreign ISA reject, unsupported mixed-lane ADD/ABI/XOR; QEMU runtime=NOT_TESTED'

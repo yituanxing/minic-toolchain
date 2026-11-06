@@ -149,13 +149,14 @@ typedef enum MinicCoreInstructionKind {
      * ISA permission, V-register ABI and exact intrinsics remain target owned. */
     MINIC_CORE_INSTRUCTION_FIXED_VECTOR128_LOAD,
     MINIC_CORE_INSTRUCTION_FIXED_VECTOR128_STORE,
-    MINIC_CORE_INSTRUCTION_FIXED_VECTOR128_XOR
+    MINIC_CORE_INSTRUCTION_FIXED_VECTOR128_XOR,
+    MINIC_CORE_INSTRUCTION_FIXED_VECTOR128_ADD
 } MinicCoreInstructionKind;
 
 /* One exclusive upper bound for opcode-indexed tables and diagnostics.
  * Keep this adjacent to the last real opcode as the IR vocabulary grows;
  * it is intentionally not an instruction-kind enum member. */
-enum { MINIC_CORE_INSTRUCTION_KIND_COUNT = MINIC_CORE_INSTRUCTION_FIXED_VECTOR128_XOR + 1U };
+enum { MINIC_CORE_INSTRUCTION_KIND_COUNT = MINIC_CORE_INSTRUCTION_FIXED_VECTOR128_ADD + 1U };
 
 /* M91_BUILTIN_UNREACHABLE_TERMINATOR: unreachable is a CFG fact, not a
    value-producing instruction and not an invented target trap. */

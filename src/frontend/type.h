@@ -147,7 +147,7 @@ MinicType minic_type_header_builtin(unsigned int builtin_id,
 bool minic_type_is_fixed_vector128_storage(MinicType type);
 /* Source C identity and CV-qualification check shared by parser and verifier.
  * Target admission of each builtin kind is deliberately the caller's duty. */
-bool minic_type_fixed_vector128_xor_result(MinicType left, MinicType right,
+bool minic_type_fixed_vector128_binary_result(MinicType left, MinicType right,
                                             MinicType *result);
 MinicType minic_type_function(MinicFunctionTypeId function_type_id);
 MinicType minic_type_record(MinicRecordId record_id);
