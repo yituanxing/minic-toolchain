@@ -11,17 +11,27 @@ typedef struct CoreMachineDemand {
     unsigned int required_effects;
 } CoreMachineDemand;
 
-/* A zero-sized record retains all source expression/ordering semantics,
- * but its LOAD/COPY has no machine memory operation or volatile access. */
+/* Empty record ingress and transfer carry a checked Core shape, but no
+ * physical bytes. The target must never invent a memory access on their
+ * Core origin. Pointer/call operands remain independently observable. */
 static bool empty_core_record_operation(const MinicCoreFunction *core,
     const MinicCoreInstruction *instruction) {
     const MinicCoreType *record;
-    if (core == NULL || instruction == NULL || core->type_context == NULL ||
-        (instruction->kind != MINIC_CORE_INSTRUCTION_RECORD_COPY &&
-         instruction->kind != MINIC_CORE_INSTRUCTION_RECORD_LOAD))
+    MinicCoreTypeId type_id;
+    if (core == NULL || instruction == NULL || core->type_context == NULL)
         return false;
+    if (instruction->kind == MINIC_CORE_INSTRUCTION_PARAMETER_OBJECT) {
+        const MinicCoreObjectId object =
+            instruction->value.parameter_object.object_id;
+        if (object >= core->object_count || core->objects == NULL)
+            return false;
+        type_id = core->objects[object].core_type_id;
+    } else if (instruction->kind == MINIC_CORE_INSTRUCTION_RECORD_COPY ||
+               instruction->kind == MINIC_CORE_INSTRUCTION_RECORD_LOAD) {
+        type_id = instruction->core_type_id;
+    } else return false;
     record = minic_core_type_get(core->type_context,
-        minic_core_type_unqualified(core->type_context, instruction->core_type_id));
+        minic_core_type_unqualified(core->type_context, type_id));
     return record != NULL && record->kind == MINIC_CORE_TYPE_RECORD &&
            record->has_layout && record->size == 0U;
 }
@@ -92,6 +102,7 @@ static CoreMachineDemand core_machine_demand(
     case MINIC_CORE_INSTRUCTION_FIXED_REGISTER_WRITE:
         return origin;
     case MINIC_CORE_INSTRUCTION_PARAMETER_OBJECT:
+        return empty_core_record_operation(core, instruction) ? pure : write;
     case MINIC_CORE_INSTRUCTION_STORE:
     case MINIC_CORE_INSTRUCTION_ATOMIC_STORE:
     case MINIC_CORE_INSTRUCTION_FIXED_VECTOR128_STORE:

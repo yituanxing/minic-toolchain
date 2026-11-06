@@ -2008,22 +2008,23 @@ static bool x86_parameter_object(X86CoreSelector *sel,
         minic_core_function_parameter_types(sel->core) == NULL ||
         object >= sel->core->object_count ||
         sel->core->objects == NULL ||
-        sel->frame->object_storage.objects == NULL ||
         !minic_x86_64_core_record_abi_compatible(
             sel->core->type_context,
             sel->core->objects[object].core_type_id,
             minic_core_function_parameter_types(sel->core)[position]) ||
         (record = x86_type(sel,
             sel->core->objects[object].core_type_id)) == NULL ||
-        record->kind != MINIC_CORE_TYPE_RECORD || !record->has_layout ||
-        record->size > sel->frame->object_storage.objects[object].extent)
+        record->kind != MINIC_CORE_TYPE_RECORD || !record->has_layout)
         return false;
     loc = &plan->locations[position];
     payload = loc->record_bytes;
-    /* Empty GNU records legitimately have no physical write; the current
-     * Machine coverage contract cannot mark a zero-byte write as an effect.
-     * Reject explicitly rather than fabricate a store. */
+    /* SysV AMD64 passes a zero-size GNU record with no GP register, stack
+     * slot or memory write. Its Core parameter object has a real type, but
+     * never requires a fictitious frame allocation or physical transfer. */
     if (loc->kind == MINIC_X86_ARG_RECORD_EMPTY)
+        return record->size == 0U && payload == 0U;
+    if (sel->frame->object_storage.objects == NULL ||
+        record->size > sel->frame->object_storage.objects[object].extent)
         return false;
     if (payload != record->size || payload == 0U ||
         (loc->kind != MINIC_X86_ARG_RECORD_ONE_GP &&

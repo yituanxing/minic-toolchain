@@ -569,6 +569,41 @@ static int check_empty_record_machine_effects(void) {
     if (!minic_machine_core_coverage_verify(&core, reachable, &machine)) {
         error = 10; goto done;
     }
+    /* Empty by-value PARAMETER_OBJECT also has no physical bytes. It must
+     * not require a fake memory write, nor accept a target-generated one. */
+    {
+        MinicCoreObject parameter = {0};
+        parameter.core_type_id = empty_id;
+        core.objects = &parameter;
+        core.object_count = 1U;
+        core_ins.kind = MINIC_CORE_INSTRUCTION_PARAMETER_OBJECT;
+        core_ins.core_type_id = MINIC_CORE_TYPE_INVALID;
+        core_ins.value.parameter_object.object_id = 0U;
+        core_ins.value.parameter_object.parameter_index = 0U;
+        physical.effects = 0U;
+        if (!minic_machine_core_coverage_verify(&core, reachable, &machine)) {
+            error = 11; goto done;
+        }
+        physical.effects = MINIC_MACHINE_EFFECT_MEMORY_WRITE;
+        if (minic_machine_core_coverage_verify(&core, reachable, &machine)) {
+            error = 12; goto done;
+        }
+        physical.effects = MINIC_MACHINE_EFFECT_MEMORY_READ;
+        if (minic_machine_core_coverage_verify(&core, reachable, &machine)) {
+            error = 13; goto done;
+        }
+        parameter.core_type_id = nonempty_id;
+        physical.effects = 0U;
+        if (minic_machine_core_coverage_verify(&core, reachable, &machine)) {
+            error = 14; goto done;
+        }
+        physical.effects = MINIC_MACHINE_EFFECT_MEMORY_WRITE;
+        if (!minic_machine_core_coverage_verify(&core, reachable, &machine)) {
+            error = 15; goto done;
+        }
+        core.objects = NULL;
+        core.object_count = 0U;
+    }
 done:
     minic_core_type_context_destroy(&types);
     return error;

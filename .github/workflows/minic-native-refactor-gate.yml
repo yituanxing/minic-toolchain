@@ -38,6 +38,7 @@ on:
       - 'tests/compiler/c0/probe-core-vector-layout-contract.c'
       - 'tests/compiler/c0/probe-core-record-layout-contract.c'
       - 'tests/compiler/c0/probe-zero-record-five-targets.sh'
+      - 'tests/compiler/c0/run-x86_64-record-array-sret-sysv.sh'
       - 'tests/compiler/c0/zero_record_noop_sideeffects.c'
       - 'tests/compiler/c0/run-gnu-empty-records.sh'
       - 'tests/compiler/c0/run-gnu-zero-length-record-arrays.sh'
@@ -207,7 +208,10 @@ jobs:
       - name: Source-free record layout and five-target GNU empty record differential
         run: |
           make MODE=release CFLAGS=-Werror BUILD_DIR=build/minic-native-backend \
-            check-core-record-layout-contract check-zero-record-five-targets
+            check-core-record-layout-contract check-zero-record-five-targets \
+            check-machine-core-coverage
+          MINIC_CC="$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc" \
+            HOST_CC=cc bash tests/compiler/c0/run-x86_64-record-array-sret-sysv.sh
           for probe in run-gnu-empty-records.sh \
                        run-gnu-zero-length-record-arrays.sh \
                        run-gnu-record-alignment.sh \
