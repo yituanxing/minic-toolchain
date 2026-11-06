@@ -15,6 +15,12 @@ extern void __compiletime_assert_dynamic(void)
     __attribute__((error("dynamic assertion must not be dropped")));
 extern void __compiletime_assert_effectful(void)
     __attribute__((error("effectful initializer must not be elided")));
+extern void __compiletime_assert_minmax_signedness(void)
+    __attribute__((error("matching int signedness must be proved")));
+extern void __compiletime_assert_auto_type_qualifiers(void)
+    __attribute__((error("GNU __auto_type dropped the wrong qualifiers")));
+extern void __compiletime_assert_minmax_dynamic(void)
+    __attribute__((error("genuine signedness mismatch must survive")));
 
 void mini_jump_label_init(void) {
     if (!((int){0} == 0))
@@ -57,6 +63,57 @@ int mini_pidns_memfd_noexec_scope_loop(struct mini_pid_namespace *ns) {
         scope = scope > value ? scope : value;
     }
     return scope;
+}
+
+/* Linux minmax.h uses __auto_type on READ_ONCE's const-volatile lvalue,
+ * then compares each local's typeof-derived signedness mask.  GNU C drops
+ * the initializer's top-level cv qualifiers on __auto_type, so the mask is
+ * a pure type fact even though its initializer must still perform a volatile
+ * load.  This is the exact class found in seven Linux 6.6 source owners. */
+#define MINI_SIGN_USE(v) \
+    ((((typeof(v))(-1)) < (typeof(v))1) \
+        ? (2 + (__builtin_constant_p((long long)(v) >= 0) && \
+                ((long long)(v) >= 0))) \
+        : (1 + 2 * (sizeof(v) < 4)))
+#define MINI_MAX_SIGNED(x, y) ({ \
+    __auto_type __x = (x); \
+    __auto_type __y = (y); \
+    do { \
+        if (!(!(!((MINI_SIGN_USE(__x)) & (MINI_SIGN_USE(__y)))))) \
+            __compiletime_assert_minmax_signedness(); \
+    } while (0); \
+    (__x > __y ? __x : __y); \
+})
+
+int mini_pidns_read_once_max(struct mini_pid_namespace *ns) {
+    int scope = 0;
+    for (; ns; ns = ns->parent)
+        scope = MINI_MAX_SIGNED(scope, MINI_READ_ONCE(ns->memfd_noexec_scope));
+    return scope;
+}
+
+int mini_pidns_volatile_max(const volatile int *address, int other) {
+    return MINI_MAX_SIGNED(other, *address);
+}
+
+int mini_pidns_auto_type_qualifiers(const volatile int *address,
+                                    const int *const pointer) {
+    __auto_type number = *address;
+    __auto_type const_number = *pointer;
+    __auto_type deduced_pointer = pointer;
+    if (!__builtin_types_compatible_p(typeof(number), int) ||
+        !__builtin_types_compatible_p(typeof(const_number), int) ||
+        !__builtin_types_compatible_p(typeof(deduced_pointer), const int *))
+        __compiletime_assert_auto_type_qualifiers();
+    return number + const_number + *deduced_pointer;
+}
+
+int mini_pidns_mismatched_signedness(int signed_value, unsigned long unsigned_value) {
+    __auto_type x = signed_value;
+    __auto_type y = unsigned_value;
+    if (!(MINI_SIGN_USE(x) & MINI_SIGN_USE(y)))
+        __compiletime_assert_minmax_dynamic();
+    return x;
 }
 
 void mini_runtime_assert_survives(int runtime_value) {

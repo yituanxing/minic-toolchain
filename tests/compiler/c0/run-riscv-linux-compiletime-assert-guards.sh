@@ -13,7 +13,7 @@ for arch in riscv32 riscv64; do
         -o "$work/$arch.s"
     # Actual Linux jump_label.c ATOMIC_INIT(0/1) compile-time assertions
     # and the native-word READ_ONCE guard must never escape into GNU LD.
-    if grep -E 'call __compiletime_assert_(304|305|329)([^0-9]|$)' \
+    if grep -E 'call __compiletime_assert_(304|305|329|minmax_signedness|auto_type_qualifiers)([^A-Za-z0-9_]|$)' \
         "$work/$arch.s"; then
         echo "LINUX_COMPILETIME_ASSERT=FAIL target=$arch constant_guard_leaked" >&2
         exit 1
@@ -23,5 +23,6 @@ for arch in riscv32 riscv64; do
     # must retain their unresolved fail-closed calls.
     grep -Fq 'call __compiletime_assert_dynamic' "$work/$arch.s"
     grep -Fq 'call __compiletime_assert_effectful' "$work/$arch.s"
-    echo "LINUX_COMPILETIME_ASSERT=PASS target=$arch scalar_init=2 rwonce=2 fail_closed=2"
+    grep -Fq 'call __compiletime_assert_minmax_dynamic' "$work/$arch.s"
+    echo "LINUX_COMPILETIME_ASSERT=PASS target=$arch scalar_init=2 rwonce=2 minmax_signedness=2 auto_type_cv=3 fail_closed=3"
 done

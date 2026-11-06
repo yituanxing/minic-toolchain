@@ -932,7 +932,14 @@ bool minic_parser_local_decl_auto_type(MinicParser *parser) {
         return false;
     }
     initializer_span = initializer->span;
-    initializer_type = initializer->type;
+    /* GNU __auto_type deduces the initializer's value type, not the
+     * top-level cv-qualification of the lvalue it reads.  In particular,
+     * READ_ONCE's const-volatile lvalue initializes an ordinary auto local;
+     * carrying volatile onto that local hides compile-time typeof guards. */
+    if (!minic_type_unqualified(initializer->type, &initializer_type)) {
+        minic_parser_error(parser, "invalid GNU __auto_type initializer qualifiers");
+        return false;
+    }
     local.type = initializer_type;
     local.declaration_block = parser->current_block;
     local.has_declaration_block =
