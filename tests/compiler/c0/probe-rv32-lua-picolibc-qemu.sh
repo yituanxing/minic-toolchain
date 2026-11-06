@@ -24,7 +24,8 @@ expected=57ccc32bbbd005cab75bcc52444052535af691789dba2b9016d5c50640d68b3d
 for cmd in curl sha256sum "$BARE_CC" "$RISCV_CC" qemu-riscv32; do
   command -v "$cmd" >/dev/null
 done
-curl -fsSL --retry 3 --retry-delay 2 --max-time 120 \
+curl --http1.1 -fsSL --retry 5 --retry-all-errors --retry-delay 2 \
+  --connect-timeout 15 --max-time 90 --retry-max-time 240 \
   "https://www.lua.org/ftp/lua-5.5.0.tar.gz" -o "$work/lua.tar.gz"
 printf '%s  %s\n' "$expected" "$work/lua.tar.gz" | sha256sum -c - >/dev/null
 tar -xzf "$work/lua.tar.gz" -C "$work"
