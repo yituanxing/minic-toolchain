@@ -864,11 +864,9 @@ static bool scenario_record_transfer(size_t bytes, unsigned int mode,
             &machine, &target, &core, &frame);
         goto done;
     }
-    if (bytes == 0U) {
-        okay = !minic_x86_64_machine_select_core_subset(
-            &machine, &target, &core, &frame);
-        goto done;
-    }
+    /* Empty GNU records are genuine Core values; only their memory transfer
+     * is empty. Still verify all argument values, origins and machine effects
+     * instead of expecting the selector to reject a legal C operation. */
     if (!minic_x86_64_machine_select_core_subset(
             &machine, &target, &core, &frame) ||
         !minic_core_function_mark_reachable_blocks(&core,
@@ -880,6 +878,13 @@ static bool scenario_record_transfer(size_t bytes, unsigned int mode,
     for (i = 0U; i < machine.blocks[1].instruction_count; ++i) {
         const MinicMachineInstruction *op =
             &machine.blocks[1].instructions[i];
+        /* Parameter materialization may legitimately access its own frame.
+         * The *empty record instruction* itself must not perform any R/W. */
+        if (bytes == 0U && op->has_core_origin &&
+            op->core_instruction_id == core.instruction_count - 1U &&
+            (op->effects & (MINIC_MACHINE_EFFECT_MEMORY_READ |
+                            MINIC_MACHINE_EFFECT_MEMORY_WRITE)) != 0U)
+            goto done;
         if (op->opcode == MINIC_X86_MI_REP_MOVSB) ++rep;
         if (op->effects & MINIC_MACHINE_EFFECT_MEMORY_READ) {
             ++reads;
@@ -892,6 +897,7 @@ static bool scenario_record_transfer(size_t bytes, unsigned int mode,
                 ++volatile_writes;
         }
     }
+    if (bytes == 0U && rep != 0U) goto done;
     if (bytes != 0U && (reads == 0U || writes == 0U ||
          (bytes > 128U) != (rep == 1U) ||
          (volatile_source && volatile_reads == 0U) ||
@@ -2776,6 +2782,6 @@ int main(int argc, char **argv) {
     for (source_form = 0U; source_form <= 7U; ++source_form)
         if (!scenario_source_zero_barrier(source_form)) return 1;
     if (!scenario_uaccess_call_opcode()) return 1;
-    puts("X86_CORE_MIR=PASS cycle=1 physical_alu=1 parameter=1 sse2=1 direct_call=1 mixed_vararg_stack=1 indirect_call=1 ms_shadow_stack=1 record_copy=1 record_load=1 vector_storage=1 record_abi=1 record_return=13/13 volatile=1 empty_record_reject=1 rep_movsb=1 pic_symbol=1 got_weak=1 head_32s_typed=1 relaxed_atomic=1 compiler_barrier=1 origin=1 fail_closed=1 bitscan_zero_nonzero=1 overflow_32_64=1 va_arg=1 alloca=1 block_address=1 fp_boundary=1 zero_asm=8/8 uaccess_physical=4/4");
+    puts("X86_CORE_MIR=PASS cycle=1 physical_alu=1 parameter=1 sse2=1 direct_call=1 mixed_vararg_stack=1 indirect_call=1 ms_shadow_stack=1 record_copy=1 record_load=1 vector_storage=1 record_abi=1 record_return=13/13 volatile=1 empty_record_noop=1 rep_movsb=1 pic_symbol=1 got_weak=1 head_32s_typed=1 relaxed_atomic=1 compiler_barrier=1 origin=1 fail_closed=1 bitscan_zero_nonzero=1 overflow_32_64=1 va_arg=1 alloca=1 block_address=1 fp_boundary=1 zero_asm=8/8 uaccess_physical=4/4");
     return 0;
 }

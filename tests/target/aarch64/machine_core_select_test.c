@@ -1757,6 +1757,7 @@ static bool a64_call_test_record_type(MinicCoreTypeContext *types,
     type.value.array.is_complete = true;
     if (!minic_core_type_register(types, &type, &array_id)) return false;
     field.type_id = array_id;
+    field.alignment = 1U;
     type = (MinicCoreType){0};
     type.kind = MINIC_CORE_TYPE_RECORD;
     type.has_layout = true;
@@ -2346,6 +2347,7 @@ static bool run_hfa_record_call_case(void) {
     type.value.floating.format = MINIC_CORE_FLOAT_BINARY64;
     if (!minic_core_type_register(&types, &type, &double_id)) goto done;
     fields[0].type_id = fields[1].type_id = double_id;
+    fields[0].alignment = fields[1].alignment = 8U;
     fields[1].byte_offset = 8U;
     type = (MinicCoreType){0};
     type.kind = MINIC_CORE_TYPE_RECORD;

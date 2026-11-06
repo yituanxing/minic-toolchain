@@ -432,6 +432,7 @@ static bool test_record_type(MinicCoreTypeContext *types, size_t bytes,
     type.value.array.is_complete = true;
     if (!minic_core_type_register(types, &type, &array_id)) return false;
     field.type_id = array_id;
+    field.alignment = 1U;
     type = (MinicCoreType){0};
     type.kind = MINIC_CORE_TYPE_RECORD;
     type.has_layout = true;

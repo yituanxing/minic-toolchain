@@ -2378,6 +2378,7 @@ check-machine-core-coverage:
 	mkdir -p "$(BUILD_DIR)/tests"
 	$(CC) -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror $(MINIC_INCLUDES) \
 	  tests/target/machine_core_coverage_test.c \
+	  src/core/core_type.c \
 	  src/target/common/machine_core_coverage.c \
 	  -o "$(BUILD_DIR)/tests/machine-core-coverage"
 	"$(BUILD_DIR)/tests/machine-core-coverage"
@@ -2782,6 +2783,7 @@ check-x86-machine-core-select:
 	  -ffunction-sections -fdata-sections -Wl,--gc-sections \
 	  tests/target/x86_64/machine_core_select_test.c \
 	  src/core/core_ir.c src/core/core_type.c src/core/core_ir_verify.c \
+	  src/core/value_uses.c \
 	  src/core/module_ir.c src/target/data_layout.c \
 	  src/target/target_info.c \
 	  src/target/common/machine_ir.c \
