@@ -725,6 +725,30 @@ check-riscv-mixed-checked-overflow: $(MINIC_CC_BINARY)
 
 check-fast: check-riscv-mixed-checked-overflow
 
+# RV64I keeps its established libgcc helper ABI. The original Linux kernel
+# needs a strictly I-only upstream runtime archive at KBUILD_VMLINUX_LIBS;
+# the fast check proves the compiler-side contract without cross-tool installs.
+.PHONY: check-rv64i-linux-softarith-source check-rv64i-linux-softarith-runtime
+check-rv64i-linux-softarith-source: $(MINIC_CC_BINARY)
+	@MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+		MINIC_RV64_SOFTARITH_SOURCE_ONLY=1 \
+		bash tests/compiler/c0/run-rv64i-linux-softarith-runtime.sh
+
+check-rv64i-linux-softarith-runtime: $(MINIC_CC_BINARY)
+	@MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+		bash tests/compiler/c0/run-rv64i-linux-softarith-runtime.sh
+
+check-fast: check-rv64i-linux-softarith-source
+
+# Linux BUILD_BUG_ON / READ_ONCE constant guards must not leak undefined
+# __compiletime_assert_* references into the original GNU Kbuild linker.
+.PHONY: check-riscv-linux-compiletime-assert-guards
+check-riscv-linux-compiletime-assert-guards: $(MINIC_CC_BINARY)
+	@MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+		sh tests/compiler/c0/run-riscv-linux-compiletime-assert-guards.sh
+
+check-fast: check-riscv-linux-compiletime-assert-guards
+
 $(DIRECT_LP64_ASM_UNIT_BINARY): tests/compiler/c0/direct_lp64_asm_preflight_unit.c \
 		src/core/core_type.c src/target/common/lp64_scalar.c \
 		$(BUILD_DIR)/obj/src/frontend/type.o

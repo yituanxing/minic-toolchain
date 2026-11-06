@@ -1912,6 +1912,56 @@ if [[ "${COHORT_MINIPP_DYNAMIC_HEADERS:-0}" == 1 ]]; then
   test -x "$COHORT_MINIPP_HEADER_CPP" && test -x "$COHORT_MINIAS_HEADER_AS"
   echo 'MINIPP_DYNAMIC_HEADER=ENABLED affected_only=4 stable_native_C=2060 GNU_predefines_reference_only=true'
 fi
+# A strict RV64I C compiler is permitted to call the documented LP64 GNU
+# software-arithmetic ABI. The original Linux freestanding Kbuild link has
+# no implicit libgcc, so reuse the project's already pinned I-only runtime
+# archive (the same accepted pattern as RV32I's full original Linux link).
+# The external providers do NOT replace any of the 2064 Linux MiniC C owners.
+# Purgatory links independently: adding only to vmlinux's library group does
+# not satisfy purgatory.ro's separate -r/-z nodefaultlib symbol closure.
+rv64_softarith_kbuild_args=()
+if [[ "${COHORT_ACTION:-all}" == verify && "$cohort_scope" == FULL_C_UNIVERSE &&
+      "$n" == 2064 &&
+      ( "${MINIC_CURRENT_MAIN_SEVEN_RECHECK:-0}" == 1 ||
+        "${MINIC_KBUILD_RV64I_ORIGIN_AUDIT:-0}" == 1 ) ]]; then
+  softarith="$ev/rv64i-softarith"
+  bash "$repo/tests/compiler/c0/build-rv64-gcc-runtime.sh" "$softarith" \
+      >"$ev/rv64i-softarith-build.log" 2>&1 || {
+    echo 'RV64I_SOFTARITH=FAIL upstream_archive_build' >&2
+    tail -n 80 "$ev/rv64i-softarith-build.log" >&2
+    exit 8
+  }
+  rv64_runtime="$softarith/build/runtime/riscv64/rv64i-lp64"
+  rv64_archive="$rv64_runtime/libminic-rt.a"
+  test -s "$rv64_archive"
+  rv64_defined_symbols=$(riscv64-linux-gnu-nm -g --defined-only "$rv64_archive" | awk '{print $NF}')
+  for provider in __muldi3 __udivdi3 __umoddi3 __divdi3 __moddi3 __multi3; do
+    grep -Fxq "$provider" <<<"$rv64_defined_symbols" || {
+      echo "RV64I_SOFTARITH=FAIL missing=$provider" >&2
+      exit 8
+    }
+  done
+  # Two pinned GNU libgcc .S primitives plus compiler-rt __multi3 provide
+  # purgatory's transitive arithmetic dependency without touching any of its
+  # original source/object files. GNU Make appends actual file prerequisites
+  # to the existing Kbuild real-prereqs, not a new linker command.
+  rv64_softarith_kbuild_args=(
+    "--eval=arch/riscv/purgatory/purgatory.ro: $rv64_runtime/muldi3.o $rv64_runtime/div.o $rv64_runtime/softfp/multi3.o"
+    "--eval=vmlinux: KBUILD_VMLINUX_LIBS += $rv64_archive"
+  )
+  {
+    printf '%s\n' 'profile=RV64I/LP64' 'linux_original_C_owners=2064' \
+      'libgcc_source=GNU_14.2.0' 'compiler_rt_source=LLVM_19.1.7' \
+      'purgatory_prerequisites=muldi3.o,div.o,multi3.o' \
+      'kbuild_archive_seam=vmlinux:KBUILD_VMLINUX_LIBS'
+    sha256sum "$rv64_archive" "$rv64_runtime/muldi3.o" \
+      "$rv64_runtime/div.o" "$rv64_runtime/softfp/multi3.o" \
+      "$repo/third_party/gcc-riscv-14.2.0/muldi3.S" \
+      "$repo/third_party/gcc-riscv-14.2.0/div.S" \
+      "$repo/third_party/llvm-compiler-rt-19.1.7/multi3.c"
+  } >"$softarith/abi-isa-provenance.txt"
+  echo "RV64I_SOFTARITH=PASS upstream=GNU_libgcc_14.2.0,LLVM_compiler_rt_19.1.7 isa=rv64i abi=lp64 providers=6 archive_sha256=$(sha256sum "$rv64_archive" | cut -d' ' -f1) purgatory_owners=3 original_MiniC_C=$n"
+fi
 trial() {
   name="$1"; count="$2"; profile="$3"; mode="${4:-prefix}"
   # Experimental overlays never modify the authenticated 2064-object pool.
@@ -2022,7 +2072,7 @@ trial() {
     # Kbuild unexpectedly recompiles >64 C TUs, NOT after a whole kernel.
     # setsid groups all make children so cancellation terminates compilation.
     setsid make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
-      "${native_kbuild_args[@]}" \
+      "${native_kbuild_args[@]}" "${rv64_softarith_kbuild_args[@]}" \
       -j4 Image >"$d/link.log" 2>&1 &
     link_pid=$!
     link_full_recompile=0
@@ -2049,6 +2099,18 @@ trial() {
       printf '%s\t%s\t%s\t%s\n' "$name" "$count" LINK_FAIL - >>"$ev/results.tsv"
       TRIAL_VERDICT=LINK_FAIL
       return 0
+    fi
+    if [[ -n "${rv64_archive:-}" ]]; then
+      for linked in arch/riscv/purgatory/purgatory.ro \
+                    arch/riscv/purgatory/purgatory.chk \
+                    vmlinux arch/riscv/boot/Image; do
+        if [[ ! -s "$out/$linked" ]]; then
+          echo "RV64I_SOFTARITH_KBUILD=FAIL absent_link_output=$linked" | tee -a "$d/link.log"
+          TRIAL_VERDICT=LINK_FAIL
+          return 0
+        fi
+      done
+      echo "RV64I_SOFTARITH_KBUILD=PASS trial=$name purgatory_ro=linked purgatory_chk=linked vmlinux=linked image=linked original_MiniC_C=$n" | tee -a "$d/link.log"
     fi
     link_finished=$(date +%s%N)
     echo "COHORT_TIMING trial=$name stage=gnu_first_link elapsed_ms=$(((link_finished-link_started)/1000000))" 
@@ -2179,7 +2241,7 @@ PY_RISCV_DYNAMIC
       printf 'timing_%s_header_reconcile_ms=%s\n' "$name" "$(((regen_finished-regen_started)/1000000))" >>"$ev/identity.txt"
       second_started=$(date +%s%N)
       if ! make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
-      "${native_kbuild_args[@]}" \
+      "${native_kbuild_args[@]}" "${rv64_softarith_kbuild_args[@]}" \
           -j4 Image >"$d/link-reconciled.log" 2>&1; then
         echo "COHORT_LINK=FAIL name=$name stage=gnu_link_after_header_reconcile"
         tail -n 65 "$d/link-reconciled.log"
@@ -2212,7 +2274,7 @@ PY_RISCV_DYNAMIC
       if [[ "$repair_result" == *"COHORT_KBUILD_REPAIR=APPLIED"* ]]; then
         second_started=$(date +%s%N)
         if ! make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
-      "${native_kbuild_args[@]}" \
+      "${native_kbuild_args[@]}" "${rv64_softarith_kbuild_args[@]}" \
           -j4 Image >"$d/link-repaired.log" 2>&1; then
           echo "COHORT_LINK=FAIL name=$name stage=guarded_second_link"
           tail -n 70 "$d/link-repaired.log"
@@ -2232,7 +2294,8 @@ PY_RISCV_DYNAMIC
           >>"$d/guard.log"
         second_started=$(date +%s%N)
         if ! make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
-          "${native_kbuild_args[@]}" -j4 Image >"$d/link-native-S-reconcile.log" 2>&1; then
+          "${native_kbuild_args[@]}" "${rv64_softarith_kbuild_args[@]}" \
+          -j4 Image >"$d/link-native-S-reconcile.log" 2>&1; then
           echo "COHORT_LINK=FAIL name=$name stage=native_s_second_link"
           tail -n 65 "$d/link-native-S-reconcile.log"
           TRIAL_VERDICT=LINK_FAIL

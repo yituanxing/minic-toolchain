@@ -252,6 +252,36 @@ bool minic_core_cfg_pure_call_argument(const MinicCoreLowerContext *context,
                minic_core_cfg_pure_call_argument(context,
                                            expression->value.subscript.index,
                                            depth + 1U);
+    case MINIC_EXPRESSION_COMPOUND_LITERAL: {
+        const MinicBlock *initializer;
+        const MinicStatement *assignment;
+        const MinicExpression *destination;
+        /* GNU `(int){0}` is an lvalue backed by a fresh scalar local,
+         * rather than an ISO C integer constant expression.  For CFG-only
+         * reachability proofs, its single initializer is effect-free when
+         * it writes precisely that fresh local from a pure expression.
+         * Aggregate, pointer and effectful initializers remain unproved. */
+        if (!minic_type_is_integer(expression->type)) return false;
+        initializer = minic_c0_program_block(
+            context->body->program,
+            expression->value.compound_literal.initializer_block);
+        if (initializer == NULL || initializer->statement_count != 1U)
+            return false;
+        assignment = minic_c0_program_statement(
+            context->body->program, initializer->statements[0]);
+        if (assignment == NULL || assignment->kind != MINIC_STATEMENT_ASSIGN ||
+            assignment->expression == MINIC_EXPRESSION_INVALID ||
+            assignment->target_expression == MINIC_EXPRESSION_INVALID)
+            return false;
+        destination = minic_c0_program_expression(
+            context->body->program, assignment->target_expression);
+        return destination != NULL &&
+               destination->kind == MINIC_EXPRESSION_LOCAL &&
+               destination->value.local_id ==
+                   expression->value.compound_literal.local_id &&
+               minic_core_cfg_pure_call_argument(
+                   context, assignment->expression, depth + 1U);
+    }
     case MINIC_EXPRESSION_BINARY:
         return expression->value.binary.operator_kind != MINIC_BINARY_COMMA &&
                minic_core_cfg_pure_call_argument(context,
