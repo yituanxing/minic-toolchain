@@ -3718,6 +3718,10 @@ jobs:
             build/linux-runtime-gcc-cohort-v1/rv64i-softarith/abi-isa-provenance.txt
             build/linux-runtime-gcc-cohort-v1/rv64i-softarith/rv64-runtime-objects.rsp
             build/linux-runtime-gcc-cohort-v1/rv64i-softarith/rv64-runtime.dis
+            build/linux-runtime-gcc-cohort-v1/rv64i-softarith/rv64i-efistub-runtime.dis
+            build/linux-runtime-gcc-cohort-v1/rv64i-softarith/rv64i-pi-runtime.dis
+            build/linux-runtime-gcc-cohort-v1/assert-source-replay.log
+            build/linux-runtime-gcc-cohort-v1/assert-source-replay/
             build/linux-runtime-gcc-cohort-v1/minic-identity.txt
             build/linux-runtime-gcc-cohort-v1/minic-manifest.sha256
             build/linux-runtime-gcc-cohort-v1/gcc-preflight.log

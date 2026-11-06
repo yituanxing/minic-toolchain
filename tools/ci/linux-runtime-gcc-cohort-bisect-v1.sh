@@ -1933,7 +1933,11 @@ if [[ "${COHORT_ACTION:-all}" == verify && "$cohort_scope" == FULL_C_UNIVERSE &&
   }
   rv64_runtime="$softarith/build/runtime/riscv64/rv64i-lp64"
   rv64_archive="$rv64_runtime/libminic-rt.a"
+  rv64_efi_archive="$softarith/rv64i-efistub-runtime.a"
+  rv64_pi_archive="$softarith/rv64i-pi-runtime.a"
   test -s "$rv64_archive"
+  test -s "$rv64_efi_archive"
+  test -s "$rv64_pi_archive"
   rv64_defined_symbols=$(riscv64-linux-gnu-nm -g --defined-only "$rv64_archive" | awk '{print $NF}')
   for provider in __muldi3 __udivdi3 __umoddi3 __divdi3 __moddi3 __multi3; do
     grep -Fxq "$provider" <<<"$rv64_defined_symbols" || {
@@ -1941,67 +1945,16 @@ if [[ "${COHORT_ACTION:-all}" == verify && "$cohort_scope" == FULL_C_UNIVERSE &&
       exit 8
     }
   done
-  # Original Linux EFI stub and position-independent early boot objects use
-  # GNU objcopy symbol/section namespaces. Reuse only the three already
-  # validated RV64I/LP64 upstream provider objects; do not introduce GCC C
-  # compilation or unprefixed linker aliases in these independent regions.
-  # Flags are the exact RISC-V Kbuild STUBCOPY/PI objcopy policies.
-  boot_runtime="$softarith/boot-runtime"
-  mkdir -p "$boot_runtime"
-  boot_objects=()
-  for namespace in efistub pi; do
-    if [[ "$namespace" == efistub ]]; then
-      boot_flags=(--prefix-symbols=__efistub_ --prefix-alloc-sections=.init)
-      prefix=__efistub_
-      boot_section=.init.text
-    else
-      boot_flags=(--prefix-symbols=__pi_ --remove-section=.note.gnu.property --prefix-alloc-sections=.init.pi)
-      prefix=__pi_
-      boot_section=.init.pi.text
-    fi
-    for base in muldi3 div multi3; do
-      case "$base" in
-        muldi3|div) source_object="$rv64_runtime/$base.o" ;;
-        multi3) source_object="$rv64_runtime/softfp/multi3.o" ;;
-      esac
-      boot_object="$boot_runtime/$namespace-$base.o"
-      riscv64-linux-gnu-objcopy "${boot_flags[@]}" "$source_object" "$boot_object"
-      riscv64-linux-gnu-readelf -W -S "$boot_object" | grep -Fq "$boot_section" || {
-        echo "RV64I_BOOT_SOFTARITH=FAIL section=$boot_section object=$boot_object" >&2; exit 8;
-      }
-      boot_objects+=("$boot_object")
-    done
-    boot_symbols=$(riscv64-linux-gnu-nm -g --defined-only "${boot_objects[@]}" | awk '{print $NF}')
-    for provider in __muldi3 __udivdi3 __umoddi3 __divdi3 __moddi3 __multi3; do
-      grep -Fxq "$prefix$provider" <<<"$boot_symbols" || {
-        echo "RV64I_BOOT_SOFTARITH=FAIL missing=$prefix$provider" >&2; exit 8;
-      }
-    done
-  done
-  rv64_boot_archive="$boot_runtime/libminic-boot-rt.a"
-  riscv64-linux-gnu-ar crsD "$rv64_boot_archive" "${boot_objects[@]}"
-  test -s "$rv64_boot_archive"
-  python3 - "$rv64_runtime" "$boot_runtime" <<'PY_BOOT_ELF'
-from pathlib import Path
-import struct,sys
-runtime,boot=map(Path,sys.argv[1:])
-for namespace in ('efistub','pi'):
-    for base in ('muldi3','div','multi3'):
-        original=runtime/('softfp/multi3.o' if base=='multi3' else base+'.o')
-        transformed=boot/(namespace+'-'+base+'.o')
-        before,after=(p.read_bytes()[:52] for p in (original,transformed))
-        assert before[:6]==after[:6]==b'\x7fELF\x02\x01'
-        assert struct.unpack_from('<H',before,18)[0]==struct.unpack_from('<H',after,18)[0]==243
-        assert before[48:52]==after[48:52], (namespace,base,'ABI_flags_changed')
-PY_BOOT_ELF
-  echo "RV64I_BOOT_SOFTARITH=PASS upstream_objects=3 prefix_domains=efistub,pi GNU_objcopy=1 ISA=rv64i ABI=lp64 archive_sha256=$(sha256sum "$rv64_boot_archive" | cut -d' ' -f1)"
   # Two pinned GNU libgcc .S primitives plus compiler-rt __multi3 provide
   # purgatory's transitive arithmetic dependency without touching any of its
   # original source/object files. GNU Make appends actual file prerequisites
   # to the existing Kbuild real-prereqs, not a new linker command.
   rv64_softarith_kbuild_args=(
     "--eval=arch/riscv/purgatory/purgatory.ro: $rv64_runtime/muldi3.o $rv64_runtime/div.o $rv64_runtime/softfp/multi3.o"
-    "--eval=vmlinux: KBUILD_VMLINUX_LIBS += $rv64_archive $rv64_boot_archive"
+    # Original Linux's EFI stub and arch/riscv/kernel/pi objcopy their
+    # objects into distinct early-code symbol/section namespaces. Pull their
+    # identical RV64I-only providers via the same native GNU linker group.
+    "--eval=vmlinux: KBUILD_VMLINUX_LIBS += $rv64_archive $rv64_efi_archive $rv64_pi_archive"
     # GNU Make parses --eval rules before Kbuild's own Makefile. Without
     # resetting the default goal, recursive Kbuild makes with no explicit
     # target silently select purgatory.ro instead of their original `all`,
@@ -2013,11 +1966,10 @@ PY_BOOT_ELF
       'libgcc_source=GNU_14.2.0' 'compiler_rt_source=LLVM_19.1.7' \
       'purgatory_prerequisites=muldi3.o,div.o,multi3.o' \
       'kbuild_archive_seam=vmlinux:KBUILD_VMLINUX_LIBS' \
-      'boot_domains=Linux_RISCV_EFI_STUB,PI' \
-      'boot_objcopy=GNU_Kbuild_prefix_alloc_sections_and_symbols'
-    sha256sum "$rv64_archive" "$rv64_runtime/muldi3.o" \
+      'early_namespaces=efi_stub:init,pi:init.pi'
+    sha256sum "$rv64_archive" "$rv64_efi_archive" "$rv64_pi_archive" \
+      "$rv64_runtime/muldi3.o" \
       "$rv64_runtime/div.o" "$rv64_runtime/softfp/multi3.o" \
-      "$rv64_boot_archive" "${boot_objects[@]}" \
       "$repo/third_party/gcc-riscv-14.2.0/muldi3.S" \
       "$repo/third_party/gcc-riscv-14.2.0/div.S" \
       "$repo/third_party/llvm-compiler-rt-19.1.7/multi3.c"
@@ -2500,11 +2452,14 @@ PY_NATIVE_S_VERIFY
   # transform record, and a verified selected C owner as its input. Nothing
   # else in the GCC object universe is allowed to drift.
   python3 - "$out" "$prov/gcc-objects.sha256" "$objects_file" \
-    "$d/selected-objects.txt" "$last_link_source_dir" "$gold_snapshot" <<'PY_GNU_NONSELECTED'
+    "$d/selected-objects.txt" "$last_link_source_dir" "$gold_snapshot" \
+    "${rv64_archive:-}" "${softarith:-}/abi-isa-provenance.txt" <<'PY_GNU_NONSELECTED'
 from pathlib import Path
 import hashlib, os, re, struct, sys
 
-out,manifest,universe,selected,link_dir,golden=map(Path,sys.argv[1:])
+out,manifest,universe,selected,link_dir,golden=map(Path,sys.argv[1:7])
+rv64_archive_name=sys.argv[7]
+rv64_softarith_provenance=Path(sys.argv[8])
 native_union=os.environ.get("COHORT_NATIVE_UNION")=="1"
 native_trace_dir=Path(os.environ.get("NATIVE_TRACE_DIR","/nonexistent-native-traces"))
 native_objcopy_trace=(native_trace_dir/"miniobjcopy.trace").read_text() if (native_union and (native_trace_dir/"miniobjcopy.trace").is_file()) else ""
@@ -2574,11 +2529,34 @@ def derivation(name):
                 "arch/riscv/purgatory/ctype.o",
                 "arch/riscv/purgatory/sha256.o",
                 "arch/riscv/purgatory/string.o"}
-        if (owners <= chosen and
+        if (owners <= all_c and
             emitted("LD","arch/riscv/purgatory/purgatory.ro") and
             emitted("LD","arch/riscv/purgatory/purgatory.chk") and
             emitted("AS",name)):
-            return "purgatory:" + ",".join(sorted(owners))
+            if owners <= chosen:
+                return "purgatory:" + ",".join(sorted(owners))
+            # The pinned RV64I/LP64 library supplies three extra standalone
+            # assembly/runtime objects to purgatory.ro. They legitimately
+            # change the resulting .chk/.incbin/.o even when a prefix trial
+            # retains all four ORIGINAL GNU purgatory C owners. Never treat
+            # that ELF transform as a new C owner or permit other drift.
+            if rv64_archive_name and rv64_softarith_provenance.is_file():
+                archive=Path(rv64_archive_name)
+                required=[archive, archive.parent/'muldi3.o',
+                          archive.parent/'div.o',
+                          archive.parent/'softfp/multi3.o']
+                certified={}
+                for line in rv64_softarith_provenance.read_text().splitlines():
+                    pieces=line.split(maxsplit=1)
+                    if len(pieces)==2 and re.fullmatch(r'[0-9a-f]{64}',pieces[0]):
+                        certified[pieces[1]]=pieces[0]
+                auth=all(p.is_file() and
+                         certified.get(str(p))==hashlib.sha256(p.read_bytes()).hexdigest()
+                         for p in required)
+                marker=re.search(r'(?m)^RV64I_SOFTARITH_KBUILD=PASS trial='
+                                 +re.escape(link_dir.name)+r'\s', linked)
+                if auth and marker:
+                    return 'purgatory:rv64i-lp64-pinned-softarith-3-objects'
     if name=="arch/riscv/kernel/compat_vdso/compat_vdso.o" and native_union:
         # Unlike the regular vDSO's MiniC-selected C owners, compat-vDSO is
         # assembled from a 32-bit DSO after a native MiniObjcopy rewrite.
@@ -3732,6 +3710,33 @@ case "$TRIAL_VERDICT" in
       *) echo "COHORT_RESULT=INCONCLUSIVE stage=full_or_p1"; exit 8 ;;
     esac ;;
   FAIL|LINK_FAIL)
+    # A real GNU vmlinux link may expose multiple unrelated Linux owner
+    # constant-guard failures at once. Prefix-bisecting 2064 cached objects
+    # cannot explain a nested READ_ONCE/BUILD_BUG_ON macro's original form.
+    # Re-run ONLY the seven failing real Kbuild owners using their original
+    # GNU -E command and this exact MiniC, preserve .i/.s, and attest that
+    # every replayed .o is byte-identical to the certified candidate pool.
+    # Failure evidence is uploaded by the workflow; this never counts as
+    # a new producer, a GCC C fallback, or a successful GNU link.
+    if [[ "$cohort_scope" == FULL_C_UNIVERSE && "$n" == 2064 &&
+          "$TRIAL_VERDICT" == LINK_FAIL ]] &&
+       grep -Eq '__compiletime_assert_[[:digit:]]+' \
+         "$ev/trials/full_all/link.log"; then
+      echo 'ASSERT_SOURCE_REPLAY=START owners=7 reason=original_link_assert_relocations'
+      assert_capture=INCONCLUSIVE
+      if bash "$repo/tests/compiler/c0/capture-rv64-linux-assert-owners.sh" \
+          "$src" "$out" "$minic" "$ev/minic" \
+          "$ev/assert-source-replay" \
+          >"$ev/assert-source-replay.log" 2>&1; then
+        assert_capture=PASS
+        echo 'ASSERT_SOURCE_REPLAY=PASS seven_original_inputs_preserved'
+      else
+        echo 'ASSERT_SOURCE_REPLAY=INCONCLUSIVE diagnostics_incomplete'
+        tail -n 50 "$ev/assert-source-replay.log"
+      fi
+      echo "COHORT_RESULT=FAIL stage=original_asm_assert_link captured_seven_owners=$assert_capture QEMU=NOT_RUN"
+      exit 9
+    fi
     # On the cached native-tool union path, a linker/archiver/objcopy
     # command is shared by ALL subsets. A failing Kbuild tool boundary is
     # not evidence that any specific MiniC owner is incorrect. Never waste
