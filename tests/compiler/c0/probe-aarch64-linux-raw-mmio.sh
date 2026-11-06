@@ -170,6 +170,42 @@ for name in gnu mini; do
     "$qemu" "$work/$name.elf" || rc=$?
     test "$rc" -eq 42 || { echo "MMIO $name QEMU exit=$rc" >&2; exit 1; }
 done
+# GNU extended asm with zero output operands is implicitly volatile, even
+# when its source omits the explicit qualifier. The raw store and prefetch
+# helpers are both zero-output forms: removing `volatile` from either is a
+# valid, hardware-equivalent GNU source, not an unsafe mutation. Verify both
+# with the original GNU compiler and MiniC through GNU AS/LD and real QEMU.
+python3 - "$work/raw-io.i" "$work" <<'PY'
+import pathlib, sys
+src = pathlib.Path(sys.argv[1]).read_text()
+dest = pathlib.Path(sys.argv[2])
+equivalent = {
+    'implicit-raw8': ('asm volatile("strb', 'asm("strb'),
+    'implicit-prefetch': ('asm volatile("prfm', 'asm("prfm'),
+}
+for name, (old, new) in equivalent.items():
+    if old not in src:
+        raise SystemExit('missing original GNU implicit-volatile fixture ' + name)
+    (dest / (name + '.i')).write_text(src.replace(old, new, 1))
+PY
+for good in implicit-raw8 implicit-prefetch; do
+    "$gnu" -static -O0 -x c "$work/$good.i" -o "$work/$good.gnu.elf"
+    "$cc" --target=aarch64-linux -S "$work/$good.i" -o "$work/$good.mini.s"
+    if test "$good" = implicit-raw8; then
+        grep -Fq 'strb w9, [x10]' "$work/$good.mini.s"
+    else
+        grep -Fq 'prfm pldl1keep, [x9]' "$work/$good.mini.s"
+    fi
+    "$gnu" -static -O0 -x assembler "$work/$good.mini.s" -o "$work/$good.mini.elf"
+    for compiler in gnu mini; do
+        rc=0
+        "$qemu" "$work/$good.$compiler.elf" || rc=$?
+        test "$rc" -eq 42 || {
+            echo "MMIO $good $compiler QEMU exit=$rc" >&2
+            exit 1
+        }
+    done
+done
 python3 - "$work/raw-io.i" "$work" <<'PY'
 import pathlib,sys
 src=pathlib.Path(sys.argv[1]).read_text()
@@ -179,11 +215,9 @@ samples={
   "wrong-constraint": ('"r"(ptr)', '"Qo"(*ptr)'),
   "wrong-width": ('"strh %w0, [%1]"', '"str %w0, [%1]"'),
   "wrong-input": ('"rZ"(val)', '"i"(val)'),
-  "no-volatile": ('asm volatile("strb', 'asm("strb'),
   "added-clobber": ('"r"(ptr));', '"r"(ptr) : "memory");'),
   "prefetch-extra": ('"prfm pldl1keep, %a0\\n"', '"prfm pldl1keep, %a0; nop\\n"'),
   "prefetch-constraint": ('"p"(ptr));', '"i"(ptr));'),
-  "prefetch-nonvolatile": ('asm volatile("prfm', 'asm("prfm'),
   "read-cpucap": ('" .hword 91\\n"', '" .hword 92\\n"'),
   "read-new-insn": ('"ldarb %w0, [%1]\\n"', '"ldarh %w0, [%1]\\n"'),
   "read-old-insn": ('"ldrb %w0, [%1]\\n"', '"ldrb %w0, [%1]; nop\\n"'),
@@ -194,11 +228,11 @@ for name,(old,new) in samples.items():
     if old not in src: raise SystemExit("bad original GNU mutation "+name)
     (dest/("bad-"+name+".i")).write_text(src.replace(old,new,1))
 PY
-for bad in extra-instruction wrong-constraint wrong-width wrong-input            no-volatile added-clobber prefetch-extra prefetch-constraint prefetch-nonvolatile read-cpucap read-new-insn read-old-insn read-output read-input; do
+for bad in extra-instruction wrong-constraint wrong-width wrong-input            added-clobber prefetch-extra prefetch-constraint read-cpucap read-new-insn read-old-insn read-output read-input; do
     if "$cc" --target=aarch64-linux -S "$work/bad-$bad.i"         -o "$work/bad-$bad.s" >"$work/$bad.out" 2>"$work/$bad.err"; then
         echo "FAIL raw MMIO unsafe mutation accepted: $bad" >&2
         exit 1
     fi
     test ! -e "$work/bad-$bad.s"
 done
-echo 'MINIC_AARCH64_LINUX_RAW_MMIO_GNU_QEMU=PASS store_widths=4 read_alt_widths=4 prefetch_hints=2 negative=14 cpucap=91 PREL32=8 target_hardware=1'
+echo 'MINIC_AARCH64_LINUX_RAW_MMIO_GNU_QEMU=PASS store_widths=4 read_alt_widths=4 prefetch_hints=2 implicit_volatile=2 negative=12 cpucap=91 PREL32=8 target_hardware=1'
