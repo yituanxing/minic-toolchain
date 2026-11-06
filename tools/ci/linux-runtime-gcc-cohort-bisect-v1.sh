@@ -1941,13 +1941,67 @@ if [[ "${COHORT_ACTION:-all}" == verify && "$cohort_scope" == FULL_C_UNIVERSE &&
       exit 8
     }
   done
+  # Original Linux EFI stub and position-independent early boot objects use
+  # GNU objcopy symbol/section namespaces. Reuse only the three already
+  # validated RV64I/LP64 upstream provider objects; do not introduce GCC C
+  # compilation or unprefixed linker aliases in these independent regions.
+  # Flags are the exact RISC-V Kbuild STUBCOPY/PI objcopy policies.
+  boot_runtime="$softarith/boot-runtime"
+  mkdir -p "$boot_runtime"
+  boot_objects=()
+  for namespace in efistub pi; do
+    if [[ "$namespace" == efistub ]]; then
+      boot_flags=(--prefix-symbols=__efistub_ --prefix-alloc-sections=.init)
+      prefix=__efistub_
+      boot_section=.init.text
+    else
+      boot_flags=(--prefix-symbols=__pi_ --remove-section=.note.gnu.property --prefix-alloc-sections=.init.pi)
+      prefix=__pi_
+      boot_section=.init.pi.text
+    fi
+    for base in muldi3 div multi3; do
+      case "$base" in
+        muldi3|div) source_object="$rv64_runtime/$base.o" ;;
+        multi3) source_object="$rv64_runtime/softfp/multi3.o" ;;
+      esac
+      boot_object="$boot_runtime/$namespace-$base.o"
+      riscv64-linux-gnu-objcopy "${boot_flags[@]}" "$source_object" "$boot_object"
+      riscv64-linux-gnu-readelf -W -S "$boot_object" | grep -Fq "$boot_section" || {
+        echo "RV64I_BOOT_SOFTARITH=FAIL section=$boot_section object=$boot_object" >&2; exit 8;
+      }
+      boot_objects+=("$boot_object")
+    done
+    boot_symbols=$(riscv64-linux-gnu-nm -g --defined-only "${boot_objects[@]}" | awk '{print $NF}')
+    for provider in __muldi3 __udivdi3 __umoddi3 __divdi3 __moddi3 __multi3; do
+      grep -Fxq "$prefix$provider" <<<"$boot_symbols" || {
+        echo "RV64I_BOOT_SOFTARITH=FAIL missing=$prefix$provider" >&2; exit 8;
+      }
+    done
+  done
+  rv64_boot_archive="$boot_runtime/libminic-boot-rt.a"
+  riscv64-linux-gnu-ar crsD "$rv64_boot_archive" "${boot_objects[@]}"
+  test -s "$rv64_boot_archive"
+  python3 - "$rv64_runtime" "$boot_runtime" <<'PY_BOOT_ELF'
+from pathlib import Path
+import struct,sys
+runtime,boot=map(Path,sys.argv[1:])
+for namespace in ('efistub','pi'):
+    for base in ('muldi3','div','multi3'):
+        original=runtime/('softfp/multi3.o' if base=='multi3' else base+'.o')
+        transformed=boot/(namespace+'-'+base+'.o')
+        before,after=(p.read_bytes()[:52] for p in (original,transformed))
+        assert before[:6]==after[:6]==b'\x7fELF\x02\x01'
+        assert struct.unpack_from('<H',before,18)[0]==struct.unpack_from('<H',after,18)[0]==243
+        assert before[48:52]==after[48:52], (namespace,base,'ABI_flags_changed')
+PY_BOOT_ELF
+  echo "RV64I_BOOT_SOFTARITH=PASS upstream_objects=3 prefix_domains=efistub,pi GNU_objcopy=1 ISA=rv64i ABI=lp64 archive_sha256=$(sha256sum "$rv64_boot_archive" | cut -d' ' -f1)"
   # Two pinned GNU libgcc .S primitives plus compiler-rt __multi3 provide
   # purgatory's transitive arithmetic dependency without touching any of its
   # original source/object files. GNU Make appends actual file prerequisites
   # to the existing Kbuild real-prereqs, not a new linker command.
   rv64_softarith_kbuild_args=(
     "--eval=arch/riscv/purgatory/purgatory.ro: $rv64_runtime/muldi3.o $rv64_runtime/div.o $rv64_runtime/softfp/multi3.o"
-    "--eval=vmlinux: KBUILD_VMLINUX_LIBS += $rv64_archive"
+    "--eval=vmlinux: KBUILD_VMLINUX_LIBS += $rv64_archive $rv64_boot_archive"
     # GNU Make parses --eval rules before Kbuild's own Makefile. Without
     # resetting the default goal, recursive Kbuild makes with no explicit
     # target silently select purgatory.ro instead of their original `all`,
@@ -1958,9 +2012,12 @@ if [[ "${COHORT_ACTION:-all}" == verify && "$cohort_scope" == FULL_C_UNIVERSE &&
     printf '%s\n' 'profile=RV64I/LP64' 'linux_original_C_owners=2064' \
       'libgcc_source=GNU_14.2.0' 'compiler_rt_source=LLVM_19.1.7' \
       'purgatory_prerequisites=muldi3.o,div.o,multi3.o' \
-      'kbuild_archive_seam=vmlinux:KBUILD_VMLINUX_LIBS'
+      'kbuild_archive_seam=vmlinux:KBUILD_VMLINUX_LIBS' \
+      'boot_domains=Linux_RISCV_EFI_STUB,PI' \
+      'boot_objcopy=GNU_Kbuild_prefix_alloc_sections_and_symbols'
     sha256sum "$rv64_archive" "$rv64_runtime/muldi3.o" \
       "$rv64_runtime/div.o" "$rv64_runtime/softfp/multi3.o" \
+      "$rv64_boot_archive" "${boot_objects[@]}" \
       "$repo/third_party/gcc-riscv-14.2.0/muldi3.S" \
       "$repo/third_party/gcc-riscv-14.2.0/div.S" \
       "$repo/third_party/llvm-compiler-rt-19.1.7/multi3.c"
