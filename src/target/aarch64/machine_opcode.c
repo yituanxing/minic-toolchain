@@ -155,6 +155,11 @@ static const A64Spec a64_specs[MINIC_A64_MACHINE_NOP + 1U] = {
     [MINIC_A64_MACHINE_VECTOR_ADD_16B] = {"add", A64_FORM_VEC_RRR, 0},
     [MINIC_A64_MACHINE_VECTOR_ADD_8B] = {"add", A64_FORM_VEC_RRR, 0},
     [MINIC_A64_MACHINE_VECTOR_ADD_2D] = {"add", A64_FORM_VEC_RRR, 0},
+    [MINIC_A64_MACHINE_VECTOR_ADD_4H] = {"add", A64_FORM_VEC_RRR, 0},
+    [MINIC_A64_MACHINE_VECTOR_ADD_2S] = {"add", A64_FORM_VEC_RRR, 0},
+    [MINIC_A64_MACHINE_VECTOR_ADD_SCALAR_D] = {"add", A64_FORM_VEC_RRR, 0},
+    [MINIC_A64_MACHINE_VECTOR_ADD_8H] = {"add", A64_FORM_VEC_RRR, 0},
+    [MINIC_A64_MACHINE_VECTOR_ADD_4S] = {"add", A64_FORM_VEC_RRR, 0},
     OP(NOP, "nop", NONE, 0)
 };
 
@@ -815,9 +820,19 @@ static bool a64_serialize(FILE *out, const MinicMachineFunction *function,
     }
     case A64_FORM_VEC_RRR: {
         /* ADD is lane-wise. XOR is bitwise and uses its canonical 16B form. */
+        const bool scalar_d = ins->opcode == MINIC_A64_MACHINE_VECTOR_ADD_SCALAR_D;
         const char *lanes = ins->opcode == MINIC_A64_MACHINE_VECTOR_ADD_2D ?
-            "2d" : (ins->opcode == MINIC_A64_MACHINE_VECTOR_EOR_8B ||
-                     ins->opcode == MINIC_A64_MACHINE_VECTOR_ADD_8B) ? "8b" : "16b";
+            "2d" : ins->opcode == MINIC_A64_MACHINE_VECTOR_ADD_4H ? "4h" :
+            ins->opcode == MINIC_A64_MACHINE_VECTOR_ADD_2S ? "2s" :
+            ins->opcode == MINIC_A64_MACHINE_VECTOR_ADD_8H ? "8h" :
+            ins->opcode == MINIC_A64_MACHINE_VECTOR_ADD_4S ? "4s" :
+            (ins->opcode == MINIC_A64_MACHINE_VECTOR_EOR_8B ||
+             ins->opcode == MINIC_A64_MACHINE_VECTOR_ADD_8B) ? "8b" : "16b";
+        if (scalar_d)
+            return fprintf(out, "  add d%u, d%u, d%u\n",
+                o[0].value.physical.reg.number,
+                o[1].value.physical.reg.number,
+                o[2].value.physical.reg.number) >= 0;
         return snprintf(a, sizeof(a), "v%u.%s", o[0].value.physical.reg.number, lanes) > 0 &&
             snprintf(b, sizeof(b), "v%u.%s", o[1].value.physical.reg.number, lanes) > 0 &&
             snprintf(c, sizeof(c), "v%u.%s", o[2].value.physical.reg.number, lanes) > 0 &&

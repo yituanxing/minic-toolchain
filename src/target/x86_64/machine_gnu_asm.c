@@ -984,6 +984,46 @@ static bool x86_emit_source_asm(FILE *out,
             fputs(instructions[form-1U],out) != EOF;
     }
     if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_BOOT_SEGMENTS)
+        return instruction->source_asm_machine_form_variant == 1U &&
+            fputs("  movl %eax, %ds\n  movl %eax, %ss\n"
+                  "  movl %eax, %es\n",out) != EOF;
+    if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_DEBUG_REGISTER) {
+        static const unsigned int debug_registers[6] = {0U,1U,2U,3U,6U,7U};
+        const unsigned int form = instruction->source_asm_machine_form_variant;
+        const bool read = form >= 1U && form <= 6U;
+        const unsigned int index = read ? form-1U : form-7U;
+        if (form < 1U || form > 12U) return false;
+        /* DR7's fake memory input is only an ordering dependency. It must
+         * not turn into a memory access to Linux's sentinel 0x1000. */
+        return fprintf(out,read ? "  movq %%db%u, %%rax\n" :
+            "  movq %%rax, %%db%u\n",debug_registers[index]) >= 0;
+    }
+    if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_TASK_CONTROL) {
+        const unsigned int form = instruction->source_asm_machine_form_variant;
+        const unsigned int bits = instruction->operands[0].value.physical.reg.width_bits;
+        const char *name = bits == 16U ? "%ax" :
+            bits == 32U ? "%eax" : bits == 64U ? "%rax" : NULL;
+        return name != NULL && (form == 1U ? bits == 16U : form == 2U) &&
+            fprintf(out,"  %s %s\n",form == 1U ? "ltr" : "str",name) >= 0;
+    }
+    if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_VDSO_CPUNODE)
+        return instruction->source_asm_machine_form_variant == 1U &&
+            fputs("  661:\n  lsl %r11w, %eax\n  662:\n"
+                  "  .skip -(((6651f-6641f)-(662b-661b))>0)*"
+                  "((6651f-6641f)-(662b-661b)), 0x90\n"
+                  "  663:\n  .pushsection .altinstructions,\"a\"\n"
+                  "  .long 661b - .\n  .long 6641f - .\n"
+                  "  .4byte (16*32+22)\n"
+                  "  .byte 663b - 661b\n  .byte 6651f - 6641f\n"
+                  "  .popsection\n"
+                  "  .pushsection .altinstr_replacement,\"ax\"\n"
+                  "  6641:\n  .byte 0xf3,0x0f,0xc7,0xf8\n"
+                  "  6651:\n  .popsection\n",out) != EOF;
+    if (instruction->source_asm_machine_form_id ==
             MINIC_X86_MACHINE_ASM_CMPXCHG128)
         return fputs("  ",out) != EOF &&
             minic_machine_source_asm_template_emit(out,function,

@@ -24,6 +24,25 @@ for probe in vector64_basic vector64_abi; do
     fi
 done
 
+"$host_cc" -E -P -x c \
+    "$root/tests/compiler/c0/aarch64_neon_vector64_lanes.c" \
+    -o "$work/vector64_lanes.i"
+"$minic_cc" --target=aarch64-linux -S "$work/vector64_lanes.i" \
+    -o "$work/vector64_lanes.s"
+for lanes in 8b 4h 2s; do
+    grep -F "  add v16.$lanes, v16.$lanes, v17.$lanes" \
+        "$work/vector64_lanes.s" >/dev/null
+done
+grep -F '  add d16, d16, d17' "$work/vector64_lanes.s" >/dev/null
+grep -F '  eor v16.8b, v16.8b, v17.8b' "$work/vector64_lanes.s" >/dev/null
+grep -F '  blr x16' "$work/vector64_lanes.s" >/dev/null
+grep -Eq '^  ldr d9, \[sp, #[0-9]+\]$' "$work/vector64_lanes.s"
+if "$minic_cc" --target=x86_64-linux -S "$work/vector64_lanes.i" \
+        -o "$work/vector64_lanes.x86.s" >/dev/null 2>&1; then
+    printf '%s\n' 'FAIL AArch64 D-lane vector types leaked to x86' >&2
+    exit 1
+fi
+
 grep -F '  bl add_d' "$work/vector64_basic.s" >/dev/null
 grep -F '  bl add8' "$work/vector64_abi.s" >/dev/null
 grep -F '  blr x16' "$work/vector64_abi.s" >/dev/null
@@ -32,4 +51,4 @@ grep -F '  bl ninth8' "$work/vector64_abi.s" >/dev/null
 # the caller's stack overflow area; the callee reloads its ninth argument.
 grep -Eq '^  ldr d9, \[sp, #[0-9]+\]$' "$work/vector64_abi.s"
 
-printf '%s\n' 'PASS AArch64 64-bit D-vector add/xor, direct and indirect typed v0 return, eight FPR args plus stack overflow, x86 rejection; QEMU=NOT_TESTED'
+printf '%s\n' 'PASS AArch64 D-vector 8B/4H/2S/scalar-D add, D xor/ABI, direct/indirect typed v0 return, ninth vector stack overflow, x86 rejection; QEMU=NOT_TESTED'

@@ -3308,18 +3308,31 @@ static bool a64_wide_memory(A64CoreSelection *sel,
         const MinicCoreType *vec = minic_core_type_get(fn->type_context,
             minic_core_type_unqualified(fn->type_context, ins->core_type_id));
         const bool add = ins->kind == MINIC_CORE_INSTRUCTION_VECTOR_REGISTER_ADD;
-        const uint32_t opcode = vec != NULL && vec->size == 8U ?
-            (add ? MINIC_A64_MACHINE_VECTOR_ADD_8B :
-                   MINIC_A64_MACHINE_VECTOR_EOR_8B) :
-            !add ? MINIC_A64_MACHINE_VECTOR_EOR_16B :
-            vec != NULL && vec->value.vector.element_count == 2U ?
-                MINIC_A64_MACHINE_VECTOR_ADD_2D :
-                MINIC_A64_MACHINE_VECTOR_ADD_16B;
+        uint32_t opcode = MINIC_A64_MACHINE_VECTOR_EOR_16B;
         const MinicMachineOperand ops[] = {
             a64_vector(16U, MINIC_MACHINE_REGISTER_WRITE),
             a64_vector(16U, MINIC_MACHINE_REGISTER_READ),
             a64_vector(17U, MINIC_MACHINE_REGISTER_READ)
         };
+        if (vec == NULL || vec->kind != MINIC_CORE_TYPE_VECTOR) return false;
+        if (vec->size == 8U) {
+            if (!add) opcode = MINIC_A64_MACHINE_VECTOR_EOR_8B;
+            else switch (vec->value.vector.element_count) {
+            case 8U: opcode = MINIC_A64_MACHINE_VECTOR_ADD_8B; break;
+            case 4U: opcode = MINIC_A64_MACHINE_VECTOR_ADD_4H; break;
+            case 2U: opcode = MINIC_A64_MACHINE_VECTOR_ADD_2S; break;
+            case 1U: opcode = MINIC_A64_MACHINE_VECTOR_ADD_SCALAR_D; break;
+            default: return false;
+            }
+        } else if (add) {
+            switch (vec->value.vector.element_count) {
+            case 16U: opcode = MINIC_A64_MACHINE_VECTOR_ADD_16B; break;
+            case 8U: opcode = MINIC_A64_MACHINE_VECTOR_ADD_8H; break;
+            case 4U: opcode = MINIC_A64_MACHINE_VECTOR_ADD_4S; break;
+            case 2U: opcode = MINIC_A64_MACHINE_VECTOR_ADD_2D; break;
+            default: return false;
+            }
+        }
         return left < fn->value_count && right < fn->value_count &&
             a64_vector_core_bytes(fn, ins->core_type_id, &vector_bytes) &&
             a64_vector_core_slot(sel, left, &lhs, &lhs_bytes) &&

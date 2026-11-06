@@ -37,6 +37,16 @@ grep -Eq '^[[:space:]]*str[[:space:]]+q16,[[:space:]]*\[x10(,[[:space:]]*#0)?\][
 grep -F '  add v16.16b, v16.16b, v17.16b' "$work/add.s" >/dev/null
 grep -F '  add v16.2d, v16.2d, v17.2d' "$work/add.s" >/dev/null
 
+"$host_cc" -E -P -x c \
+    "$root/tests/compiler/c0/aarch64_neon_vector128_lanes.c" \
+    -o "$work/q-lanes.i"
+"$minic_cc" --target=aarch64-linux -S "$work/q-lanes.i" -o "$work/q-lanes.s"
+for lanes in 8h 4s 2d; do
+    grep -F "  add v16.$lanes, v16.$lanes, v17.$lanes" "$work/q-lanes.s" >/dev/null
+done
+grep -F '  eor v16.16b, v16.16b, v17.16b' "$work/q-lanes.s" >/dev/null
+grep -Eq '^  ldr q9, \[sp, #[0-9]+\]$' "$work/q-lanes.s"
+
 # The original Stage2 const vector-pointer ALU probe is now a positive
 # AArch64 Core/V-register case; it never passes a vector across the C ABI.
 "$host_cc" -E -P -x c \
@@ -47,8 +57,8 @@ grep -F '  add v16.2d, v16.2d, v17.2d' "$work/add.s" >/dev/null
 grep -F '  eor v16.16b, v16.16b, v17.16b' "$work/const-alu.s" >/dev/null
 
 # The target registry, not generic C Frontend or Core IR, owns the complete
-# GNU/AAPCS64 short-vector spelling inventory. D byte-lane vectors are now
-# modeled; remaining unsupported lane families stay opaque and fail closed.
+# GNU/AAPCS64 short-vector spelling inventory. All integer D-lane layouts
+# are now modeled; floating/half-precision families remain opaque.
 "$host_cc" -E -P -x c \
     "$root/tests/compiler/c0/aarch64_neon_named_header_types.c" \
     -o "$work/header-types.i"
@@ -61,14 +71,14 @@ if "$minic_cc" --target=x86_64-linux -S "$work/header-types.i" \
     exit 1
 fi
 grep -F 'expected type name' "$work/header-types.x86.stderr" >/dev/null
-printf '%s\n' 'typedef __Int16x4_t a64_opaque_d_vector;' \
+printf '%s\n' 'typedef __Float16x4_t a64_opaque_d_vector;' \
     'int main(void) { a64_opaque_d_vector unsupported_object; return (int)sizeof(unsupported_object); }' \
     >"$work/header-types-unsupported.i"
 rm -f "$work/header-types-unsupported.s"
 if "$minic_cc" --target=aarch64-linux -S "$work/header-types-unsupported.i" \
     -o "$work/header-types-unsupported.s" >"$work/header-types-unsupported.stdout" \
     2>"$work/header-types-unsupported.stderr"; then
-    printf '%s\n' 'FAIL unmodeled AArch64 D-vector acquired object storage' >&2
+    printf '%s\n' 'FAIL unmodeled AArch64 half-float D-vector acquired object storage' >&2
     exit 1
 fi
 test ! -e "$work/header-types-unsupported.s"
@@ -104,4 +114,4 @@ done
 grep -F '  str q0,' "$work/typed-q-abi.s" >/dev/null
 grep -F '  ldr q0,' "$work/typed-q-abi.s" >/dev/null
 
-printf '%s\n' 'PASS AArch64 typed Q-vector eor/add(16B,2D), load/store, Q ABI, foreign ISA reject, unsupported mixed-lane ADD/XOR; QEMU runtime=NOT_TESTED'
+printf '%s\n' 'PASS AArch64 typed Q-vector eor/add(16B,8H,4S,2D), load/store, Q ABI, foreign ISA reject, unsupported mixed-lane ADD/XOR; QEMU runtime=NOT_TESTED'

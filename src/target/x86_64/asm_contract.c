@@ -237,7 +237,7 @@ bool minic_x86_64_typed_machine_form_matches_template(
         break;
     case MINIC_X86_MACHINE_ASM_TASK_CONTROL:
         form = (unsigned int)minic_x86_64_linux_task_control_form(text, length);
-        break;
+        return form >= 1U && form <= 2U && variant == form;
     case MINIC_X86_MACHINE_ASM_IRET_TO_SELF:
         form = (unsigned int)minic_x86_64_linux_iret_to_self_form(text, length);
         break;
@@ -318,7 +318,7 @@ bool minic_x86_64_typed_machine_form_matches_template(
         break;
     case MINIC_X86_MACHINE_ASM_DEBUG_REGISTER:
         form = (unsigned int)minic_x86_64_linux_debug_register_form(text, length);
-        break;
+        return form >= 1U && form <= 12U && variant == form;
     case MINIC_X86_MACHINE_ASM_ALTERNATIVE_WRMSR:
         form = (unsigned int)minic_x86_64_linux_alternative_wrmsr_form(text, length);
         break;
@@ -330,7 +330,7 @@ bool minic_x86_64_typed_machine_form_matches_template(
         break;
     case MINIC_X86_MACHINE_ASM_BOOT_SEGMENTS:
         form = (unsigned int)minic_x86_64_linux_boot_segments_template(text, length);
-        break;
+        return form == 1U && variant == 1U;
     case MINIC_X86_MACHINE_ASM_LIDT:
         form = (unsigned int)minic_x86_64_linux_descriptor_table_form(text, length);
         break;
@@ -400,8 +400,8 @@ bool minic_x86_64_typed_machine_form_matches_template(
      * register identities; carry that precise selection into MachineIR. */
     if (form_id == MINIC_X86_MACHINE_ASM_CONTROL_REGISTER)
         return form != 0U && variant == form;
-    /* All other newly tagged source families publish variant zero; their
-     * machine parser independently owns the exact opcode and width. */
+    /* Most other tagged source families publish variant zero; the explicit
+     * privileged/debug families above carry their exact physical variant. */
     if (form_id >= MINIC_X86_MACHINE_ASM_CRASH_REGISTER &&
         form_id <= MINIC_X86_MACHINE_ASM_CSUM_PARTIAL)
         return form != 0U && variant == 0U;

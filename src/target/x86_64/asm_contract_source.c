@@ -932,6 +932,7 @@ static bool x86_linux_task_control_source(const MinicTargetInvocation *invocatio
     contract->kinds[0] = form == 1U
         ? MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT
         : MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
+    contract->target_machine_form_variant = form;
     return true;
 }
 
@@ -1053,6 +1054,7 @@ static bool x86_linux_boot_segments_source(const MinicTargetInvocation *invocati
     contract->operand_count = 1U;
     contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
     contract->implicit_memory_effect = true;
+    contract->target_machine_form_variant = 1U;
     return true;
 }
 
@@ -5394,6 +5396,7 @@ static bool x86_linux_debug_register_source(const MinicTargetInvocation *invocat
     if (dr7)
         contract->kinds[1] = MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT;
     contract->implicit_memory_effect = true;
+    contract->target_machine_form_variant = form;
     return true;
 }
 /* The source-level ABI recognizers share one admission signature. This

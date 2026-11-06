@@ -1613,6 +1613,16 @@ check-x86-linux-control-register: $(MINIC_CC_BINARY)
 	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
 	sh tests/target/run-linux-x86-control-register.sh
 
+.PHONY: check-x86-linux-debug-boot
+check-x86-linux-debug-boot: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	sh tests/target/run-linux-x86-debug-boot.sh
+
+.PHONY: check-x86-linux-task-vdso
+check-x86-linux-task-vdso: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	sh tests/target/run-linux-x86-task-vdso.sh
+
 .PHONY: check-x86-linux-bug-table-variants
 check-x86-linux-bug-table-variants: $(MINIC_CC_BINARY)
 	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
@@ -1645,6 +1655,7 @@ check-aarch64-neon-register-vector-abi: $(MINIC_CC_BINARY)
 
 check-fast: check-x86-linux-fpu-probe check-x86-linux-boot-string \
 	check-x86-linux-control-register check-x86-linux-bug-table-variants \
+	check-x86-linux-debug-boot check-x86-linux-task-vdso \
 	check-x86-linux-boot-flags check-x86-linux-cache-privileged \
 	check-x86-linux-paravirt-indirect-call \
 	check-x86-linux-three-call-alternative \

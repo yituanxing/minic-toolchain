@@ -287,6 +287,11 @@ static bool import_vector(MinicCoreTypeImporter *importer, MinicType source,
             element = minic_type_unsigned_long_long(); break;
         case MINIC_TARGET_BUILTIN_SCALAR_SIGNED_CHAR: element = minic_type_signed_char(); break;
         case MINIC_TARGET_BUILTIN_SCALAR_UNSIGNED_CHAR: element = minic_type_unsigned_char(); break;
+        case MINIC_TARGET_BUILTIN_SCALAR_SIGNED_SHORT: element = minic_type_short(); break;
+        case MINIC_TARGET_BUILTIN_SCALAR_UNSIGNED_SHORT: element = minic_type_unsigned_short(); break;
+        case MINIC_TARGET_BUILTIN_SCALAR_SIGNED_INT: element = minic_type_int(); break;
+        case MINIC_TARGET_BUILTIN_SCALAR_UNSIGNED_INT: element = minic_type_unsigned_int(); break;
+        case MINIC_TARGET_BUILTIN_SCALAR_SIGNED_LONG_LONG: element = minic_type_long_long(); break;
         default: return false;
         }
     } else return false;
