@@ -427,6 +427,10 @@ static bool dump_instruction(FILE *output,
         return fprintf(output, "  %%%" PRIu32 " = vector128.xor %%%" PRIu32 ", %%%" PRIu32 "\n",
                        instruction->result, instruction->value.binary.left,
                        instruction->value.binary.right) >= 0;
+    case MINIC_CORE_INSTRUCTION_FIXED_VECTOR128_ADD:
+        return fprintf(output, "  %%%" PRIu32 " = vector128.add %%%" PRIu32 ", %%%" PRIu32 "\n",
+                       instruction->result, instruction->value.binary.left,
+                       instruction->value.binary.right) >= 0;
     case MINIC_CORE_INSTRUCTION_OPAQUE_INLINE_ASM: {
         const MinicCoreInlineAsm *inline_asm;
 

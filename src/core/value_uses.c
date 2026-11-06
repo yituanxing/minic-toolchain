@@ -67,6 +67,7 @@ bool minic_core_visit_instruction_value_uses(const MinicCoreFunction *function,
     case MINIC_CORE_INSTRUCTION_POINTER_LESS:
     case MINIC_CORE_INSTRUCTION_SCALAR_EQUAL:
     case MINIC_CORE_INSTRUCTION_FIXED_VECTOR128_XOR:
+    case MINIC_CORE_INSTRUCTION_FIXED_VECTOR128_ADD:
         return core_visit_value_use(instruction->value.binary.left, visitor, context) &&
                core_visit_value_use(instruction->value.binary.right, visitor, context);
 
