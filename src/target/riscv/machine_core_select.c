@@ -3179,6 +3179,35 @@ static bool rv_core_scalar_output_source_asm(RvCoreSelection *sel,
             sign, false);
 }
 
+/* A GNU non-earlyclobber output is written after all inputs have been read.
+ * Two distinct local C bindings may therefore name the same fixed physical
+ * register in those two phases (e.g. Linux vDSO ecall: a0 input + a0 result).
+ * This is the same phase-alias rule as the former RV64 ASM plan: never admit
+ * two inputs, two outputs, a read/write output, an earlyclobber output or a
+ * third operand on the same physical register. */
+static bool rv_core_fixed_asm_phase_alias_safe(
+    const MinicCoreStructuredInlineAsmOperand *roles,
+    const unsigned physicals[8], size_t current, unsigned physical) {
+    const MinicCoreStructuredInlineAsmOperand *prior = NULL;
+    const MinicCoreStructuredInlineAsmOperand *now = &roles[current];
+    const MinicCoreStructuredInlineAsmOperand *output;
+    size_t i;
+    for (i = 0U; i < current; ++i) {
+        if (physicals[i] != physical) continue;
+        if (prior != NULL) return false;
+        prior = &roles[i];
+    }
+    if (prior == NULL ||
+        !((prior->kind == MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT &&
+           now->kind == MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT) ||
+          (prior->kind == MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT &&
+           now->kind == MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT)))
+        return false;
+    output = prior->kind == MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT ?
+        prior : now;
+    return !output->early_clobber && !output->physical_early_clobber;
+}
+
 /* One physical GNU source-ASM binder for mixed memory/register forms and
  * multiple register outputs. Every operand owns a distinct caller-saved a
  * register; Core frame transfers use t-register scratch. Fixed a-register
@@ -3242,7 +3271,9 @@ static bool rv_core_mixed_source_asm(RvCoreSelection *sel,
             !fixed->is_local ||
             !minic_riscv_gpr_id(fixed->register_name,
                 fixed->register_name_length, &id) ||
-            id < RV_A0 || id > RV_A7 || reserved[id] ||
+            id < RV_A0 || id > RV_A7 ||
+            (reserved[id] && !rv_core_fixed_asm_phase_alias_safe(
+                roles, physicals, i, id)) ||
             (role->kind != MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT &&
              role->kind != MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE &&
              role->kind != MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT) ||
