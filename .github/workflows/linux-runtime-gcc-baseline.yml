@@ -140,11 +140,40 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          sudo apt-get -o Acquire::Retries=3 update
-          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
-            gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
-            libc6-dev-riscv64-cross bc bison flex libelf-dev libssl-dev \
-            make curl xz-utils cpio gzip file python3 qemu-system-misc opensbi
+          # Preserve Ubuntu's signed package versions, but avoid the Azure
+          # mirror stalls already diagnosed in the seven-shard/receiver lanes.
+          # Ubuntu 24.04 may resolve mirror+file from apt-mirrors.txt, so
+          # rewriting ubuntu.sources alone does not redirect the downloads.
+          for sources in /etc/apt/apt-mirrors.txt \
+                         /etc/apt/sources.list.d/ubuntu.sources; do
+            if [[ -f "$sources" ]] && grep -q 'azure.archive.ubuntu.com' "$sources"; then
+              sudo sed -i 's#azure.archive.ubuntu.com#archive.ubuntu.com#g' "$sources"
+            fi
+          done
+          if grep -q 'azure.archive.ubuntu.com' /etc/apt/apt-mirrors.txt 2>/dev/null; then
+            echo 'RV64_GNU_GOLDEN_APT=FAIL still_azure_mirrorlist' >&2
+            exit 14
+          fi
+          packages=(gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu
+                    libc6-dev-riscv64-cross bc bison flex libelf-dev libssl-dev
+                    make curl xz-utils cpio gzip file python3 qemu-system-misc opensbi)
+          timeout 120s sudo apt-get -o Acquire::Retries=2 \
+            -o Acquire::http::Timeout=30 update -qq
+          if ! timeout 300s sudo apt-get -o Acquire::Retries=2 \
+               -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 \
+               -o DPkg::Lock::Timeout=60 install -y --no-install-recommends \
+               "${packages[@]}"; then
+            echo 'RV64_GNU_GOLDEN_APT=RETRY fresh_package_indexes=1'
+            timeout 120s sudo apt-get -o Acquire::Retries=2 \
+              -o Acquire::http::Timeout=30 update -qq
+            timeout 300s sudo apt-get -o Acquire::Retries=2 \
+              -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 \
+              -o DPkg::Lock::Timeout=60 install -y --no-install-recommends \
+              "${packages[@]}"
+          fi
+          command -v riscv64-linux-gnu-gcc
+          command -v qemu-system-riscv64
+          echo 'RV64_GNU_GOLDEN_APT=PASS gnu_and_qemu=true'
 
       - name: Identify exact GNU toolchain/Kconfig object-cache identity
         if: env.RV64_FULL_ACTIVE == '1'
