@@ -705,7 +705,7 @@ static bool x86_emit_source_asm(FILE *out,
     }
     if (instruction->source_asm_machine_form_id == MINIC_X86_MACHINE_ASM_LIDT) {
         static const char *const forms[] = {"lidt", "lgdt", "sgdt", "sidt"};
-        const unsigned int variant = instruction->source_asm_machine_form_variant;
+        variant = instruction->source_asm_machine_form_variant;
         if (variant < 1U || variant > 4U ||
             !minic_x86_64_machine_validate_source_asm(function->target,
                 instruction,NULL)) return false;
