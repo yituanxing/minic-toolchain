@@ -64,7 +64,9 @@ static bool x86_source_matched_form(
     const MinicMachineInstruction *instruction, void *context) {
     (void)context;
     return function != NULL && function->target != NULL &&
-        (instruction->source_asm_machine_form_id ==
+        ((instruction->source_asm_machine_form_id == MINIC_X86_MACHINE_ASM_BOOT_FLAGS &&
+          instruction->source_asm_machine_form_variant == 3U) ||
+         instruction->source_asm_machine_form_id ==
              MINIC_X86_MACHINE_ASM_CPUID_MATCHED ||
          instruction->source_asm_machine_form_id ==
              MINIC_X86_MACHINE_ASM_MULACC_MATCHED ||
@@ -105,6 +107,90 @@ static const MinicMachineSourceAsmTemplatePolicy x86_matched_policy = {
     x86_source_matched_form,
     x86_source_matched_binding,
     x86_source_matched_operand,
+    NULL
+};
+
+/* One typed MachineIR source-template renderer for the old FXSAVE,
+ * VERW and TLB cache contracts. The independent machine validator must
+ * prove a physical R10/address binding before interpolating GNU operands. */
+static bool x86_source_legacy_memory_form(
+    const MinicMachineFunction *function,
+    const MinicMachineInstruction *instruction, void *context) {
+    (void)context;
+    return function != NULL && function->target != NULL &&
+        (instruction->source_asm_machine_form_id == MINIC_X86_MACHINE_ASM_FXSAVE ||
+         instruction->source_asm_machine_form_id == MINIC_X86_MACHINE_ASM_VERW_CLEAR ||
+         instruction->source_asm_machine_form_id == MINIC_X86_MACHINE_ASM_TLB_CACHE) &&
+        minic_x86_64_machine_validate_source_asm(function->target,
+            instruction,NULL);
+}
+static bool x86_source_legacy_memory_binding(
+    const MinicMachineFunction *function,
+    const MinicMachineInstruction *instruction, size_t index, void *context) {
+    return index == 0U &&
+        x86_source_legacy_memory_form(function,instruction,context);
+}
+static bool x86_source_legacy_memory_operand(
+    FILE *output, const MinicMachineFunction *function,
+    const MinicMachineInstruction *instruction,
+    const MinicMachineGNUAsmLabels *labels, size_t index,
+    unsigned char modifier, void *context) {
+    const MinicMachineOperand *op = &instruction->operands[0];
+    (void)labels;
+    if (modifier != 0U ||
+        !x86_source_legacy_memory_binding(function,instruction,index,context))
+        return false;
+    if (output == NULL) return true;
+    return op->kind == MINIC_MACHINE_OPERAND_ADDRESS ?
+        x86_emit_address(output,&op->value.address) :
+        x86_emit_register(output,op);
+}
+static const MinicMachineSourceAsmTemplatePolicy x86_legacy_memory_policy = {
+    x86_source_legacy_memory_form,
+    x86_source_legacy_memory_binding,
+    x86_source_legacy_memory_operand,
+    NULL
+};
+
+/* LAR and the identity load bind named Source operands to verified
+ * physical Machine registers/addresses.  The template emitter expands only
+ * these two exact grammar forms, never arbitrary user assembly text. */
+static bool x86_source_legacy_scalar_form(
+    const MinicMachineFunction *function,
+    const MinicMachineInstruction *instruction, void *context) {
+    (void)context;
+    return function != NULL && function->target != NULL &&
+        (instruction->source_asm_machine_form_id == MINIC_X86_MACHINE_ASM_LAR_SELECTOR ||
+         instruction->source_asm_machine_form_id == MINIC_X86_MACHINE_ASM_IDENTITY_LOAD ||
+         instruction->source_asm_machine_form_id == MINIC_X86_MACHINE_ASM_DELAY_WAIT) &&
+        minic_x86_64_machine_validate_source_asm(function->target,
+            instruction,NULL);
+}
+static bool x86_source_legacy_scalar_binding(
+    const MinicMachineFunction *function,
+    const MinicMachineInstruction *instruction, size_t index, void *context) {
+    return index < instruction->operand_count &&
+        x86_source_legacy_scalar_form(function,instruction,context);
+}
+static bool x86_source_legacy_scalar_operand(
+    FILE *output, const MinicMachineFunction *function,
+    const MinicMachineInstruction *instruction,
+    const MinicMachineGNUAsmLabels *labels, size_t index,
+    unsigned char modifier, void *context) {
+    const MinicMachineOperand *op;
+    (void)labels;
+    if (modifier != 0U || !x86_source_legacy_scalar_binding(function,
+            instruction,index,context)) return false;
+    if (output == NULL) return true;
+    op = &instruction->operands[index];
+    return op->kind == MINIC_MACHINE_OPERAND_ADDRESS ?
+        x86_emit_address(output,&op->value.address) :
+        x86_emit_register(output,op);
+}
+static const MinicMachineSourceAsmTemplatePolicy x86_legacy_scalar_policy = {
+    x86_source_legacy_scalar_form,
+    x86_source_legacy_scalar_binding,
+    x86_source_legacy_scalar_operand,
     NULL
 };
 
@@ -533,7 +619,9 @@ static bool x86_emit_source_asm(FILE *out,
             minic_machine_source_asm_template_emit(out, function,
                 instruction, labels, &x86_accumulator_policy) &&
             fputc('\n', out) != EOF;
-    if (instruction->source_asm_machine_form_id ==
+    if ((instruction->source_asm_machine_form_id == MINIC_X86_MACHINE_ASM_BOOT_FLAGS &&
+         instruction->source_asm_machine_form_variant == 3U) ||
+        instruction->source_asm_machine_form_id ==
             MINIC_X86_MACHINE_ASM_CPUID_MATCHED ||
         instruction->source_asm_machine_form_id ==
             MINIC_X86_MACHINE_ASM_MULACC_MATCHED ||
@@ -614,6 +702,37 @@ static bool x86_emit_source_asm(FILE *out,
                 &instruction->operands[1].value.address)) return false;
         return fprintf(out,", %s\n",width == 32U ? "%eax" : "%rax") >= 0;
     }
+    if (instruction->source_asm_machine_form_id == MINIC_X86_MACHINE_ASM_FXSAVE ||
+        instruction->source_asm_machine_form_id == MINIC_X86_MACHINE_ASM_VERW_CLEAR ||
+        instruction->source_asm_machine_form_id == MINIC_X86_MACHINE_ASM_TLB_CACHE)
+        return fputs("  ",out) != EOF &&
+            minic_machine_source_asm_template_emit(out,function,
+                instruction,labels,&x86_legacy_memory_policy) &&
+            fputc('\n',out) != EOF;
+    if (instruction->source_asm_machine_form_id == MINIC_X86_MACHINE_ASM_LOWLEVEL_SCALAR &&
+        (instruction->source_asm_machine_form_variant == 7U ||
+         instruction->source_asm_machine_form_variant == 8U))
+        return fputs(instruction->source_asm_machine_form_variant == 7U ?
+            "  movntil %r11d, (%r10)\n" : "  movntiq %r11, (%r10)\n",out) != EOF;
+    if (instruction->source_asm_machine_form_id == MINIC_X86_MACHINE_ASM_LOWLEVEL_SCALAR &&
+        instruction->source_asm_machine_form_variant == 1U)
+        return fputs("  hlt\n",out) != EOF;
+    if (instruction->source_asm_machine_form_id == MINIC_X86_MACHINE_ASM_BOOT_FLAGS &&
+        instruction->source_asm_machine_form_variant == 2U)
+        return fputs("  btsl %r11d, (%r10)\n",out) != EOF;
+    if (instruction->source_asm_machine_form_id == MINIC_X86_MACHINE_ASM_DELAY_WAIT)
+        return fputs("  ",out) != EOF &&
+            minic_machine_source_asm_template_emit(out,function,
+                instruction,labels,&x86_legacy_scalar_policy) &&
+            fputc('\n',out) != EOF;
+    if (instruction->source_asm_machine_form_id == MINIC_X86_MACHINE_ASM_DELAY_MUL)
+        return fputs("  mull %edx\n",out) != EOF;
+    if (instruction->source_asm_machine_form_id == MINIC_X86_MACHINE_ASM_LAR_SELECTOR ||
+        instruction->source_asm_machine_form_id == MINIC_X86_MACHINE_ASM_IDENTITY_LOAD)
+        return fputs("  ",out) != EOF &&
+            minic_machine_source_asm_template_emit(out,function,
+                instruction,labels,&x86_legacy_scalar_policy) &&
+            fputc('\n',out) != EOF;
     if (instruction->source_asm_machine_form_id ==
             MINIC_X86_MACHINE_ASM_IP_HERE)
         /* Keep GNU's actual instruction-relative counter, not the address
