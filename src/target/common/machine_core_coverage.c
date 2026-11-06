@@ -670,6 +670,13 @@ bool minic_machine_core_coverage_verify_with_policy(
         failure_core_instruction = i;
         failure_core_block = owner[i];
         demand = core_machine_demand(core, &core->instructions[i]);
+        /* An empty Core record has no physical byte access. Do not merely
+         * waive the required effects: an erroneous selector must not hide a
+         * fabricated load/store behind an otherwise accepted zero-byte copy. */
+        if (empty_core_record_operation(core, &core->instructions[i]) &&
+            (effects[i] & (MINIC_MACHINE_EFFECT_MEMORY_READ |
+                           MINIC_MACHINE_EFFECT_MEMORY_WRITE)) != 0U)
+            goto cleanup;
         if (demand.requires_origin &&
             (!seen[i] || (effects[i] & demand.required_effects) !=
                           demand.required_effects))

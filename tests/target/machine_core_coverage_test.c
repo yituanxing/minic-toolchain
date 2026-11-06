@@ -476,10 +476,113 @@ static int check_structured_scalar_asm_bindings(void) {
     return minic_machine_core_coverage_verify(&core, reachable, &machine) ? 0 : 6;
 }
 
+/* The Core->Machine boundary must not merely *permit* zero-byte record
+ * operations to fold away: it must reject a target that fabricates a memory
+ * load/store with that Core origin. Record transfer source expression effects
+ * are separate Core instructions and remain independently required. */
+static int check_empty_record_machine_effects(void) {
+    MinicCoreTypeContext types;
+    MinicCoreType record = {0};
+    MinicCoreTypeId empty_id, nonempty_id;
+    MinicCoreInstruction core_ins = {0};
+    MinicCoreInstructionId id = 0U;
+    MinicCoreBlock core_block = {0};
+    MinicCoreFunction core = {0};
+    MinicMachineInstruction physical = {0};
+    MinicMachineBlock blocks[2] = {{0}};
+    MinicMachineFunction machine = {0};
+    const bool reachable[] = {true};
+    int error = 0;
+
+    minic_core_type_context_initialize(&types);
+    record.kind = MINIC_CORE_TYPE_RECORD;
+    record.has_layout = true;
+    record.alignment = 1U;
+    record.value.record.is_complete = true;
+    if (!minic_core_type_register(&types, &record, &empty_id)) {
+        error = 1; goto done;
+    }
+    record.size = 8U;
+    if (!minic_core_type_register(&types, &record, &nonempty_id)) {
+        error = 2; goto done;
+    }
+    core_ins.kind = MINIC_CORE_INSTRUCTION_RECORD_COPY;
+    core_ins.core_type_id = empty_id;
+    core_ins.value.record_copy.source_volatile = true;
+    core_ins.value.record_copy.destination_volatile = true;
+    core_block.instructions = &id;
+    core_block.instruction_count = 1U;
+    core_block.has_terminator = true;
+    core_block.terminator.kind = MINIC_CORE_TERMINATOR_RETURN;
+    core.blocks = &core_block;
+    core.block_count = 1U;
+    core.instructions = &core_ins;
+    core.instruction_count = 1U;
+    core.type_context = &types;
+    blocks[0].machine_auxiliary = true;
+    blocks[0].has_fallthrough = true;
+    blocks[0].fallthrough_target = 1U;
+    blocks[1].has_core_block_origin = true;
+    blocks[1].core_block_id = 0U;
+    machine.blocks = blocks;
+    machine.block_count = 2U;
+    if (!minic_machine_core_coverage_verify(&core, reachable, &machine)) {
+        error = 3; goto done;
+    }
+    physical.kind = MINIC_MACHINE_INSTRUCTION_SELECTED;
+    physical.has_core_origin = true;
+    physical.core_instruction_id = 0U;
+    physical.core_block_id = 0U;
+    blocks[1].instructions = &physical;
+    blocks[1].instruction_count = 1U;
+    physical.effects = MINIC_MACHINE_EFFECT_MEMORY_READ;
+    if (minic_machine_core_coverage_verify(&core, reachable, &machine)) {
+        error = 4; goto done;
+    }
+    physical.effects = MINIC_MACHINE_EFFECT_MEMORY_WRITE;
+    if (minic_machine_core_coverage_verify(&core, reachable, &machine)) {
+        error = 5; goto done;
+    }
+    physical.effects = 0U;
+    if (!minic_machine_core_coverage_verify(&core, reachable, &machine)) {
+        error = 6; goto done;
+    }
+    core_ins.kind = MINIC_CORE_INSTRUCTION_RECORD_LOAD;
+    core_ins.value.record_load.is_volatile = true;
+    physical.effects = MINIC_MACHINE_EFFECT_MEMORY_READ |
+        MINIC_MACHINE_EFFECT_MEMORY_WRITE;
+    if (minic_machine_core_coverage_verify(&core, reachable, &machine)) {
+        error = 7; goto done;
+    }
+    physical.effects = 0U;
+    if (!minic_machine_core_coverage_verify(&core, reachable, &machine)) {
+        error = 8; goto done;
+    }
+    /* Contrast: non-empty record LOAD still requires real memory effects. */
+    core_ins.core_type_id = nonempty_id;
+    if (minic_machine_core_coverage_verify(&core, reachable, &machine)) {
+        error = 9; goto done;
+    }
+    physical.effects = MINIC_MACHINE_EFFECT_MEMORY_READ |
+        MINIC_MACHINE_EFFECT_MEMORY_WRITE |
+        MINIC_MACHINE_EFFECT_VOLATILE;
+    if (!minic_machine_core_coverage_verify(&core, reachable, &machine)) {
+        error = 10; goto done;
+    }
+done:
+    minic_core_type_context_destroy(&types);
+    return error;
+}
+
 int main(void) {
     int error = check();
     if (error != 0) {
         fprintf(stderr, "MACHINE_CORE_COVERAGE=FAIL case=%d\n", error);
+        return 1;
+    }
+    error = check_empty_record_machine_effects();
+    if (error != 0) {
+        fprintf(stderr, "MACHINE_CORE_COVERAGE=FAIL empty_record_case=%d\n", error);
         return 1;
     }
     error = check_cfg_edges();
@@ -502,6 +605,6 @@ int main(void) {
         fprintf(stderr, "MACHINE_CORE_COVERAGE=FAIL scalar_asm_case=%d\n", error);
         return 1;
     }
-    puts("MACHINE_CORE_COVERAGE=PASS effect_origin=1 no_dropped_core=1 cfg_edges=1 asm_goto=1 unreachable_effects=1 compiler_barrier=1 scalar_asm_bindings=8");
+    puts("MACHINE_CORE_COVERAGE=PASS effect_origin=1 no_dropped_core=1 cfg_edges=1 asm_goto=1 unreachable_effects=1 compiler_barrier=1 scalar_asm_bindings=8 empty_record_no_physical_memory=1");
     return 0;
 }

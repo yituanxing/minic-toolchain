@@ -2732,6 +2732,9 @@ int main(int argc, char **argv) {
         !scenario_planned_scalar_call(true, false) ||
         !scenario_planned_scalar_call(false, true) ||
         !scenario_record_transfer(0U, 0U, false, false) ||
+        !scenario_record_transfer(0U, 0U, true, true) ||
+        !scenario_record_transfer(0U, 1U, false, false) ||
+        !scenario_record_transfer(0U, 1U, true, false) ||
         !scenario_record_transfer(7U, 0U, true, true) ||
         !scenario_record_transfer(129U, 0U, false, false) ||
         !scenario_record_transfer(32U, 1U, true, false) ||
