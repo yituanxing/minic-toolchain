@@ -4230,6 +4230,72 @@ static bool x86_source_cpu_has_goto_contract(
 }
 
 /* Independently seal the complete physical Linux paravirt CALL ABI. */
+/* Seal the old Linux irq_stack.h physical stack exchange, not just a GNU
+ * string. Function calls and objtool reachability must remain relocatable;
+ * R11/RSP are live +r operands and RCU args are held in R12/R13. */
+static bool x86_source_exception_stack_call_contract(
+    const MinicMachineInstruction *ins) {
+    static const unsigned int clobbers[8] = {
+        MINIC_X86_REG_RAX,MINIC_X86_REG_RCX,MINIC_X86_REG_RDX,
+        MINIC_X86_REG_RSI,MINIC_X86_REG_RDI,MINIC_X86_REG_R8,
+        MINIC_X86_REG_R9,MINIC_X86_REG_R10
+    };
+    const bool irq = ins->source_asm_machine_form_id ==
+        MINIC_X86_MACHINE_ASM_IRQ_STACK_CALL;
+    const unsigned int form = ins->source_asm_machine_form_variant;
+    const size_t count = irq ? (form == 1U ? 5U : form == 2U ? 6U :
+        form == 3U ? 4U : 0U) : 7U;
+    const unsigned int effects = MINIC_MACHINE_EFFECT_SOURCE_ASM |
+        MINIC_MACHINE_EFFECT_VOLATILE |
+        MINIC_MACHINE_EFFECT_COMPILER_BARRIER |
+        MINIC_MACHINE_EFFECT_CALL |
+        MINIC_MACHINE_EFFECT_MEMORY_READ |
+        MINIC_MACHINE_EFFECT_MEMORY_WRITE;
+    size_t i;
+    if (count == 0U || (!irq && (ins->source_asm_machine_form_id !=
+            MINIC_X86_MACHINE_ASM_EXCEPTION_STACK_CALL || form != 0U)) ||
+        ins->effects != effects || ins->operand_count != count ||
+        ins->operands == NULL || ins->implicit_count != 9U ||
+        ins->implicit == NULL || ins->source_asm_terminates_block ||
+        ins->source_asm_permits_fallthrough ||
+        !minic_x86_64_typed_machine_form_matches_template(
+            ins->source_asm_machine_form_id,form,
+            ins->source_asm_template,ins->source_asm_length)) return false;
+    for (i = 0U; i < 9U; ++i) {
+        const MinicMachineRegisterEffect *reg = &ins->implicit[i];
+        if (reg->access != MINIC_MACHINE_REGISTER_CLOBBER ||
+            reg->reg.width_bits != 64U ||
+            reg->reg.bank != (i == 0U ? MINIC_MACHINE_REGISTER_FLAGS :
+                MINIC_MACHINE_REGISTER_GENERAL) ||
+            reg->reg.number != (i == 0U ? 0U : clobbers[i-1U])) return false;
+    }
+    for (i = 0U; i < count; ++i) {
+        const MinicMachineOperand *op = &ins->operands[i];
+        const unsigned int reg = i == 0U || i == 3U ? MINIC_X86_REG_R11 :
+            i == 1U ? MINIC_X86_REG_RSP : irq ?
+                (i == 4U ? MINIC_X86_REG_R12 : MINIC_X86_REG_R13) :
+                (i == 4U ? MINIC_X86_REG_RDI : i == 5U ?
+                    MINIC_X86_REG_RSI : MINIC_X86_REG_RDX);
+        const char *const constraint = i < 2U ? "+r" :
+            i == 2U ? "i" : "r";
+        if (op->asm_name != NULL || op->asm_constraint == NULL ||
+            strcmp(op->asm_constraint,constraint) != 0) return false;
+        if (i == 2U) {
+            if (op->kind != MINIC_MACHINE_OPERAND_SYMBOL ||
+                !minic_core_inline_asm_symbol_valid(op->value.symbol.name) ||
+                op->value.symbol.relocation != MINIC_X86_MACHINE_RELOC_PLT32 ||
+                op->value.symbol.addend != 0) return false;
+        } else if (op->kind != MINIC_MACHINE_OPERAND_REGISTER ||
+            op->value.physical.reg.bank != MINIC_MACHINE_REGISTER_GENERAL ||
+            op->value.physical.reg.number != reg ||
+            op->value.physical.reg.width_bits != 64U ||
+            op->value.physical.access != (i < 2U ?
+                MINIC_MACHINE_REGISTER_READ | MINIC_MACHINE_REGISTER_WRITE :
+                MINIC_MACHINE_REGISTER_READ)) return false;
+    }
+    return true;
+}
+
 static bool x86_source_pv_indirect_call_contract(
     const MinicMachineInstruction *ins) {
     static const unsigned int regs[4] = {
@@ -4389,6 +4455,9 @@ bool minic_x86_64_machine_validate_source_asm(const MinicTargetInfo *target,
         return x86_source_delay_mul_contract(instruction);
     if (instruction->source_asm_machine_form_id == MINIC_X86_MACHINE_ASM_PREEMPT_STATIC_CALL)
         return x86_source_preempt_static_call_contract(instruction);
+    if (instruction->source_asm_machine_form_id == MINIC_X86_MACHINE_ASM_EXCEPTION_STACK_CALL ||
+        instruction->source_asm_machine_form_id == MINIC_X86_MACHINE_ASM_IRQ_STACK_CALL)
+        return x86_source_exception_stack_call_contract(instruction);
     if (instruction->source_asm_machine_form_id == MINIC_X86_MACHINE_ASM_PV_INDIRECT_CALL)
         return x86_source_pv_indirect_call_contract(instruction);
     if (instruction->source_asm_machine_form_id == MINIC_X86_MACHINE_ASM_THREE_CALL_ALTERNATIVE)

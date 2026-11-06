@@ -389,9 +389,13 @@ static bool x86_linux_exception_stack_call_source(const MinicTargetInvocation *i
             return false;
     }
     contract->operand_count = 7U;
-    /* Both GNU +r outputs keep the original values unchanged after this
-     * balanced stack operation; Core keeps their scalar input identities. */
-    for (i = 0U; i < 7U; ++i)
+    /* These are genuine GNU +r input/output constraints. The machine
+     * operation restores both registers, but Core must retain their
+     * read/write ownership and the fixed-RSP identity. */
+    contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE;
+    contract->kinds[1] =
+        MINIC_CORE_STRUCTURED_INLINE_ASM_FIXED_REGISTER_READWRITE;
+    for (i = 2U; i < 7U; ++i)
         contract->kinds[i] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
     contract->implicit_memory_effect = true;
     return true;
@@ -1440,12 +1444,17 @@ static bool x86_linux_irq_stack_call_source(const MinicTargetInvocation *invocat
         if (!input || !minic_type_is_integer(input->type)) return false;
     }
     contract->operand_count = 2U + src->input_count;
-    /* ASM never writes the R11 `tos` value and restores RSP before exit.
-     * GNU's +r modes are register-liveness contracts, not C stores. Keep
-     * both in their live SSA form so address-of a register local is avoided. */
-    for (i = 0U; i < contract->operand_count; ++i)
+    /* Both GNU +r outputs are fixed physical registers with true read/write
+     * liveness, even though the stack exchange leaves their final values
+     * unchanged. The source qualifier owns this contract. */
+    contract->kinds[0] =
+        MINIC_CORE_STRUCTURED_INLINE_ASM_FIXED_REGISTER_READWRITE;
+    contract->kinds[1] =
+        MINIC_CORE_STRUCTURED_INLINE_ASM_FIXED_REGISTER_READWRITE;
+    for (i = 2U; i < contract->operand_count; ++i)
         contract->kinds[i] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
     contract->implicit_memory_effect = true;
+    contract->target_machine_form_variant = form;
     return true;
 }
 

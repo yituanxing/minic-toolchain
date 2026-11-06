@@ -100,7 +100,7 @@ static int verify_target_builtin_registry_rejection(void) {
     MinicTargetSourceBuiltinTypeDescriptor entries[2];
     const MinicTargetSourceBuiltinTypeDescriptor *registered;
     MinicType builtin = minic_type_header_builtin(
-        1U, MINIC_BUILTIN_DECLARATION_HEADER_ONLY_OPAQUE);
+        1U, MINIC_BUILTIN_DECLARATION_FIXED_VECTOR128_STORAGE);
     if (!minic_target_invocation_begin(
             &invocation, minic_target_info_for_architecture(
                 MINIC_TARGET_ARCH_AARCH64))) return 1;
@@ -125,16 +125,16 @@ static int verify_target_builtin_registry_rejection(void) {
         return 4;
     entries[1] = registered[1];
 
-    entries[0].core_import = MINIC_TARGET_BUILTIN_CORE_IMPORT_VECTOR128;
+    entries[0].core_import = MINIC_TARGET_BUILTIN_CORE_IMPORT_OPAQUE;
     if (minic_target_info_source_builtin_type_descriptor(
             &invocation, builtin, NULL)) return 5;
     entries[0] = registered[0];
-    entries[0].vector_element = MINIC_TARGET_BUILTIN_SCALAR_UNSIGNED_CHAR;
+    entries[0].vector_element = MINIC_TARGET_BUILTIN_SCALAR_NONE;
     if (minic_target_info_source_builtin_type_descriptor(
             &invocation, builtin, NULL)) return 6;
     entries[0] = registered[0];
     entries[0].required_capability =
-        MINIC_TARGET_LANG_FIXED_VECTOR128_STORAGE_DECLARATIONS;
+        MINIC_TARGET_LANG_OPAQUE_VECTOR_HEADER_DECLARATIONS;
     if (minic_target_info_source_builtin_type_descriptor(
             &invocation, builtin, NULL)) return 7;
 
@@ -171,7 +171,7 @@ static int verify_language_admission(void) {
         MinicType vector_type;
         MinicType vector_pointer;
         MinicType first_opaque = minic_type_header_builtin(
-            1U, MINIC_BUILTIN_DECLARATION_HEADER_ONLY_OPAQUE);
+            3U, MINIC_BUILTIN_DECLARATION_HEADER_ONLY_OPAQUE);
         size_t builtin_index;
         bool is_arm = i == 3U;
         bool has_extended_float = i != 0U;
@@ -192,7 +192,8 @@ static int verify_language_admission(void) {
              ++builtin_index) {
             MinicType discovered = minic_type_void();
             MinicTargetSourceBuiltinTypeDescriptor descriptor;
-            MinicBuiltinDeclarationRole expected_role = builtin_index < 5U
+            MinicBuiltinDeclarationRole expected_role =
+                builtin_index >= 2U && builtin_index < 5U
                 ? MINIC_BUILTIN_DECLARATION_HEADER_ONLY_OPAQUE
                 : MINIC_BUILTIN_DECLARATION_FIXED_VECTOR128_STORAGE;
             bool admitted = minic_target_info_named_builtin_type(
@@ -208,9 +209,9 @@ static int verify_language_admission(void) {
                             descriptor.role != expected_role ||
                             (descriptor.core_import ==
                              MINIC_TARGET_BUILTIN_CORE_IMPORT_VECTOR128) !=
-                                (builtin_index >= 5U))) ||
+                                (builtin_index < 2U || builtin_index >= 5U))) ||
                 (is_arm && minic_type_is_fixed_vector128_storage(discovered) !=
-                               (builtin_index >= 5U))) {
+                               (builtin_index < 2U || builtin_index >= 5U))) {
                 (void)fprintf(stderr, "FAIL target builtin registry: %s: %s\n",
                               names[i], builtin_names[builtin_index]);
                 return 1;
@@ -243,7 +244,7 @@ static int verify_language_admission(void) {
                     999U, MINIC_BUILTIN_DECLARATION_HEADER_ONLY_OPAQUE)) ||
             minic_target_info_language_type_supported_for_type(
                 t, minic_type_header_builtin(
-                    1U, MINIC_BUILTIN_DECLARATION_FIXED_VECTOR128_STORAGE))) {
+                    3U, MINIC_BUILTIN_DECLARATION_FIXED_VECTOR128_STORAGE))) {
             (void)fprintf(stderr, "FAIL target builtin identity forgery: %s\n", names[i]);
             return 1;
         }

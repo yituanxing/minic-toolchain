@@ -404,6 +404,8 @@ bool minic_x86_64_typed_machine_form_matches_template(
      * MMIO MOV/XCHG or accumulator DIV. Retain that distinction in MIR. */
     if (form_id == MINIC_X86_MACHINE_ASM_APIC_AMD_ALT)
         return form != 0U && variant == form;
+    if (form_id == MINIC_X86_MACHINE_ASM_IRQ_STACK_CALL)
+        return form >= 1U && form <= 3U && variant == form;
     /* Most other tagged source families publish variant zero; the explicit
      * privileged/debug families above carry their exact physical variant. */
     if (form_id >= MINIC_X86_MACHINE_ASM_CRASH_REGISTER &&
@@ -811,8 +813,16 @@ bool minic_x86_64_linux_exception_stack_call_form(
         "movq%6,%%rdxmovq%5,%%rsimovq%4,%%rdi"
         "call%c2998:.pushsection.discard.reachable"
         ".long998b.popsectionpopq%%rsp";
+    /* Named %[tos] is GNU operand zero (a tied +r output), not the
+     * duplicate input %[top] at index three. Core normalizes accordingly. */
+    static const char core_numeric[] =
+        "movq%%rsp,(%0)movq%0,%%rsp"
+        "movq%6,%%rdxmovq%5,%%rsimovq%4,%%rdi"
+        "call%c2998:.pushsection.discard.reachable"
+        ".long998b.popsectionpopq%%rsp";
     return minic_x86_64_compact_asm_equals(text, length, named) ||
-           minic_x86_64_compact_asm_equals(text, length, numeric);
+           minic_x86_64_compact_asm_equals(text, length, numeric) ||
+           minic_x86_64_compact_asm_equals(text, length, core_numeric);
 }
 
 
@@ -1406,6 +1416,20 @@ unsigned int minic_x86_64_linux_irq_stack_call_form(
         "call%c2" "998:.pushsection.discard.reachable"
         ".long998b.popsectionpopq%%rsp"
     };
+    static const char *const core_numeric[] = {
+        "movq%%rsp,(%0)movq%0,%%rsp"
+        "callirq_enter_rcumovq%4,%%rdi"
+        "call%c2" "998:.pushsection.discard.reachable"
+        ".long998b.popsectioncallirq_exit_rcupopq%%rsp",
+        "movq%%rsp,(%0)movq%0,%%rsp"
+        "callirq_enter_rcumovq%5,%%rsi"
+        "movq%4,%%rdicall%c2" "998:"
+        ".pushsection.discard.reachable.long998b.popsection"
+        "callirq_exit_rcupopq%%rsp",
+        "movq%%rsp,(%0)movq%0,%%rsp"
+        "call%c2" "998:.pushsection.discard.reachable"
+        ".long998b.popsectionpopq%%rsp"
+    };
     char compact[512];
     size_t i, n = 0U;
     if (text == NULL || length == 0U || length >= sizeof(compact)) return 0U;
@@ -1418,7 +1442,9 @@ unsigned int minic_x86_64_linux_irq_stack_call_form(
     compact[n] = '\0';
     for (i = 0U; i < 3U; ++i)
         if (strcmp(compact, named[i]) == 0 ||
-            strcmp(compact, numeric[i]) == 0) return (unsigned int)i + 1U;
+            strcmp(compact, numeric[i]) == 0 ||
+            strcmp(compact, core_numeric[i]) == 0)
+            return (unsigned int)i + 1U;
     return 0U;
 }
 

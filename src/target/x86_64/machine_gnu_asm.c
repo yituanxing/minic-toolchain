@@ -858,6 +858,30 @@ static bool x86_emit_source_asm(FILE *out,
     if (instruction->source_asm_machine_form_id == 0U)
         return true; /* Empty volatile asm has an effect but zero bytes. */
     if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_EXCEPTION_STACK_CALL ||
+        instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_IRQ_STACK_CALL) {
+        const bool irq = instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_IRQ_STACK_CALL;
+        const unsigned int form = instruction->source_asm_machine_form_variant;
+        const char *symbol = instruction->operands[2].value.symbol.name;
+        /* RCU arguments are already selected into the callee-saved R12/R13;
+         * all frame-dependent loads execute before the temporary RSP swap.
+         * The physical Machine verifier seals the direct callee relocation. */
+        return fputs("  movq %rsp, (%r11)\n  movq %r11, %rsp\n",out) != EOF &&
+            (!irq || form == 3U ||
+             (fputs("  call irq_enter_rcu\n  movq %r12, %rdi\n",out) != EOF &&
+              (form != 2U || fputs("  movq %r13, %rsi\n",out) != EOF))) &&
+            fprintf(out,"  call %s\n",symbol) >= 0 &&
+            fputs("998:\n"
+                  "  .pushsection .discard.reachable\n"
+                  "  .long 998b\n"
+                  "  .popsection\n",out) != EOF &&
+            (!irq || form == 3U ||
+             fputs("  call irq_exit_rcu\n",out) != EOF) &&
+            fputs("  popq %rsp\n",out) != EOF;
+    }
+    if (instruction->source_asm_machine_form_id ==
             MINIC_X86_MACHINE_ASM_MONITOR_WAIT) {
         static const char *const idle_hardware[] = {
             "  monitor\n", "  monitorx\n", "  mwait\n",

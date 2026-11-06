@@ -149,10 +149,13 @@ MinicCoreLowerStatus core_asm_try_target_register_contract(
         }
         if (bind->kind == MINIC_CORE_STRUCTURED_INLINE_ASM_FIXED_REGISTER_READWRITE) {
             /* A fixed machine register is a scalar location, not a C
-             * addressable object. Keep the source read and physical +r
-             * output role separate; the target later proves exact placement. */
+             * addressable object. Both a fixed-register expression and a
+             * GNU register local can name the qualified physical binding.
+             * Read the scalar value, never manufacture a C address for +r;
+             * the target later proves exact physical register placement. */
             if (source_expression == NULL ||
-                source_expression->kind != MINIC_EXPRESSION_FIXED_REGISTER ||
+                (source_expression->kind != MINIC_EXPRESSION_FIXED_REGISTER &&
+                 source_expression->kind != MINIC_EXPRESSION_LOCAL) ||
                 !bind->has_fixed_register_binding) {
                 free(normalized);
                 return MINIC_CORE_LOWER_UNSUPPORTED;

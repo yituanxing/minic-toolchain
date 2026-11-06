@@ -1395,19 +1395,38 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
                 fixed = &function->fixed_register_bindings[
                     binding->fixed_register_binding_id];
                 input_value = &function->values[binding->value];
-                if (fixed->is_local ||
-                    fixed->core_type_id != input_value->core_type_id ||
+                if (fixed->core_type_id != input_value->core_type_id ||
                     input_value->definition >= function->instruction_count)
                     return false;
-                /* An arbitrary scalar input plus forged fixed-binding ID
-                 * cannot constitute a physical GNU +r tied operand. Only
-                 * this exact hardware-register read is its before-value;
-                 * the ASM effect owns the physical register's after-state. */
                 source_read = &function->instructions[input_value->definition];
-                if (source_read->kind != MINIC_CORE_INSTRUCTION_FIXED_REGISTER_READ ||
+                if (fixed->is_local) {
+                    /* A GNU register local is ordinary C scalar storage
+                     * before its target-qualified asm use. Its read must
+                     * originate in a real Core object, not an arbitrary SSA
+                     * constant masquerading as the fixed +r before-value. */
+                    MinicCoreValueId address;
+                    const MinicCoreValue *address_value;
+                    const MinicCoreInstruction *address_def;
+                    if (source_read->kind != MINIC_CORE_INSTRUCTION_LOAD)
+                        return false;
+                    address = source_read->value.load.address;
+                    if (address >= function->value_count) return false;
+                    address_value = &function->values[address];
+                    if (address_value->definition >=
+                        function->instruction_count) return false;
+                    address_def = &function->instructions[
+                        address_value->definition];
+                    if (address_def->kind != MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS ||
+                        address_def->value.object_id >= function->object_count ||
+                        !ct_equal(function->objects[
+                            address_def->value.object_id].core_type_id,
+                            input_value->core_type_id)) return false;
+                } else if (source_read->kind !=
+                        MINIC_CORE_INSTRUCTION_FIXED_REGISTER_READ ||
                     source_read->value.fixed_register_binding_id !=
-                        binding->fixed_register_binding_id)
+                        binding->fixed_register_binding_id) {
                     return false;
+                }
                 break;
             }
             case MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT:

@@ -7394,6 +7394,150 @@ static bool x86_source_preempt_static_call(X86CoreSelector *sel,
  * are input-only and the corresponding 4 GNU outputs are separate writable
  * C lvalues; +r(current_stack_pointer) denotes the unmodified physical RSP.
  * Every relocation/constant/register is frozen in typed MachineIR. */
+/* Original Linux exception/IRQ stack calls: retain the old backend's
+ * physical calling convention, including R11/RSP stack exchange, the
+ * callee-saved R12/R13 values across irq_enter_rcu, and the objtool PC32
+ * reachability record. The source template and its C operands have already
+ * been qualified; this selector only binds physical MachineIR resources. */
+static bool x86_source_exception_stack_call(X86CoreSelector *sel,
+    const MinicCoreInstruction *ins) {
+    static const unsigned int clobber_regs[8] = {
+        MINIC_X86_REG_RAX,MINIC_X86_REG_RCX,MINIC_X86_REG_RDX,
+        MINIC_X86_REG_RSI,MINIC_X86_REG_RDI,MINIC_X86_REG_R8,
+        MINIC_X86_REG_R9,MINIC_X86_REG_R10
+    };
+    static const char *const clobber_names[9] = {
+        "cc","rax","rcx","rdx","rsi","rdi","r8","r9","r10"
+    };
+    const MinicCoreInlineAsm *source;
+    const MinicCoreStructuredInlineAsmOperand *roles;
+    const MinicCoreInstruction *callee;
+    const MinicCoreFixedRegisterBinding *fixed;
+    MinicMachineRegisterEffect implicit[9] = {0};
+    MinicMachineOperand bindings[7] = {0};
+    const char *symbol;
+    size_t i, count;
+    unsigned int form;
+    bool irq;
+    if (sel == NULL || ins == NULL ||
+        ins->kind != MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM ||
+        ins->result != MINIC_CORE_VALUE_INVALID ||
+        sel->core->inline_asms == NULL ||
+        ins->value.structured_inline_asm.inline_asm_id >=
+            sel->core->inline_asm_count) return false;
+    source = &sel->core->inline_asms[
+        ins->value.structured_inline_asm.inline_asm_id];
+    irq = source->target_machine_form_id == MINIC_X86_MACHINE_ASM_IRQ_STACK_CALL;
+    if (!irq && source->target_machine_form_id !=
+            MINIC_X86_MACHINE_ASM_EXCEPTION_STACK_CALL) return false;
+    form = source->target_machine_form_variant;
+    count = irq ? (form == 1U ? 5U : form == 2U ? 6U :
+        form == 3U ? 4U : 0U) : 7U;
+    roles = ins->value.structured_inline_asm.operands;
+    if (count == 0U || roles == NULL ||
+        ins->value.structured_inline_asm.operand_count != count ||
+        (!irq && form != 0U) || !source->is_volatile || source->is_goto ||
+        !source->has_memory_clobber ||
+        source->operand_plan_owner != MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED ||
+        source->source_asm_unique_id == 0U ||
+        source->register_clobber_count != 9U ||
+        source->register_clobbers == NULL ||
+        source->resolved_immediate_count != 0U ||
+        source->goto_second_target != MINIC_CORE_BLOCK_INVALID ||
+        !minic_x86_64_typed_machine_form_matches_template(
+            source->target_machine_form_id,form,
+            source->template_text,source->template_length)) return false;
+    for (i = 0U; i < 9U; ++i) {
+        if (source->register_clobbers[i].name == NULL ||
+            strcmp(source->register_clobbers[i].name,clobber_names[i]) != 0)
+            return false;
+        implicit[i] = i == 0U ? x86_scalar_flags_clobber() :
+            (MinicMachineRegisterEffect){
+                .reg={clobber_regs[i-1U],64U,MINIC_MACHINE_REGISTER_GENERAL},
+                .access=MINIC_MACHINE_REGISTER_CLOBBER};
+    }
+    for (i = 0U; i < count; ++i) {
+        const MinicCoreStructuredInlineAsmOperand *op = &roles[i];
+        const MinicCoreStructuredInlineAsmOperandKind expected = i == 0U ?
+            (irq ? MINIC_CORE_STRUCTURED_INLINE_ASM_FIXED_REGISTER_READWRITE :
+                MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE) :
+            i == 1U ? MINIC_CORE_STRUCTURED_INLINE_ASM_FIXED_REGISTER_READWRITE :
+            MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+        if (op->operand_index != i || op->value >= sel->core->value_count ||
+            op->kind != expected || op->early_clobber ||
+            op->physical_early_clobber || op->has_tied_output ||
+            (i < 2U && !op->physical_read_write) ||
+            (i >= 2U && op->physical_read_write)) return false;
+        if (i == 0U && !irq && op->has_fixed_register_binding) {
+            if (op->fixed_register_binding_id >=
+                    sel->core->fixed_register_binding_count) return false;
+            fixed = &sel->core->fixed_register_bindings[
+                op->fixed_register_binding_id];
+            if (fixed->register_name == NULL ||
+                strcmp(fixed->register_name,"r11") != 0) return false;
+        }
+        if ((irq && i == 0U) || i == 1U || i == 3U) {
+            if (!op->has_fixed_register_binding ||
+                op->fixed_register_binding_id >=
+                    sel->core->fixed_register_binding_count) return false;
+            fixed = &sel->core->fixed_register_bindings[
+                op->fixed_register_binding_id];
+            if (fixed->register_name == NULL ||
+                strcmp(fixed->register_name,i == 1U ? "rsp" : "r11") != 0)
+                return false;
+        } else if (i != 0U && op->has_fixed_register_binding) return false;
+    }
+    if (sel->core->values[roles[2].value].definition >=
+            sel->core->instruction_count) return false;
+    callee = &sel->core->instructions[
+        sel->core->values[roles[2].value].definition];
+    if (callee->kind != MINIC_CORE_INSTRUCTION_FUNCTION_ADDRESS ||
+        callee->value.function_symbol_id >=
+            sel->core->function_symbol_count ||
+        sel->core->function_symbols == NULL ||
+        (symbol = sel->core->function_symbols[
+            callee->value.function_symbol_id].name) == NULL ||
+        !minic_core_inline_asm_symbol_valid(symbol)) return false;
+    /* On the original stack, save the RCU arguments in callee-saved GPRs.
+     * Loading them after the RSP switch would address the wrong frame. */
+    if (irq && form != 3U &&
+        (!x86_1(sel,MINIC_X86_MI_PUSH64_R,x86_reg(MINIC_X86_REG_R12,64U)) ||
+         !x86_1(sel,MINIC_X86_MI_PUSH64_R,x86_reg(MINIC_X86_REG_R13,64U)) ||
+         !x86_core_load(sel,roles[4].value,MINIC_X86_REG_R12) ||
+         (form == 2U && !x86_core_load(sel,roles[5].value,MINIC_X86_REG_R13))))
+        return false;
+    if (!irq &&
+        (!x86_core_load(sel,roles[6].value,MINIC_X86_REG_RDX) ||
+         !x86_core_load(sel,roles[5].value,MINIC_X86_REG_RSI) ||
+         !x86_core_load(sel,roles[4].value,MINIC_X86_REG_RDI))) return false;
+    if (!x86_core_load(sel,roles[3].value,MINIC_X86_REG_R11)) return false;
+    bindings[0] = x86_reg(MINIC_X86_REG_R11,64U);
+    bindings[1] = x86_reg(MINIC_X86_REG_RSP,64U);
+    for (i = 0U; i < 2U; ++i) {
+        bindings[i].asm_constraint = "+r";
+        bindings[i].value.physical.access =
+            MINIC_MACHINE_REGISTER_READ | MINIC_MACHINE_REGISTER_WRITE;
+    }
+    bindings[2] = x86_symbol(symbol,MINIC_X86_MACHINE_RELOC_PLT32);
+    bindings[2].asm_constraint = "i";
+    for (i = 3U; i < count; ++i) {
+        const unsigned int reg = i == 3U ? MINIC_X86_REG_R11 :
+            irq ? (i == 4U ? MINIC_X86_REG_R12 : MINIC_X86_REG_R13) :
+            (i == 4U ? MINIC_X86_REG_RDI : i == 5U ?
+                MINIC_X86_REG_RSI : MINIC_X86_REG_RDX);
+        bindings[i] = x86_reg(reg,64U);
+        bindings[i].asm_constraint = "r";
+        bindings[i].value.physical.access = MINIC_MACHINE_REGISTER_READ;
+    }
+    if (!minic_machine_builder_emit_core_source_asm(&sel->builder,source,
+            MINIC_MACHINE_EFFECT_CALL | MINIC_MACHINE_EFFECT_MEMORY_READ |
+                MINIC_MACHINE_EFFECT_MEMORY_WRITE,
+            bindings,count,implicit,9U,false,false)) return false;
+    return !irq || form == 3U ||
+        (x86_1(sel,MINIC_X86_MI_POP64_R,x86_reg(MINIC_X86_REG_R13,64U)) &&
+         x86_1(sel,MINIC_X86_MI_POP64_R,x86_reg(MINIC_X86_REG_R12,64U)));
+}
+
 static bool x86_source_pv_indirect_call(X86CoreSelector *sel,
     const MinicCoreInstruction *ins) {
     static const unsigned int registers[4] = {
@@ -8704,6 +8848,7 @@ static bool x86_core_instruction(X86CoreSelector *sel,
             x86_source_delay_mul(sel, ins) ||
             x86_source_delay_wait(sel, ins) ||
             x86_source_preempt_static_call(sel, ins) ||
+            x86_source_exception_stack_call(sel, ins) ||
             x86_source_three_call_alternative(sel, ins) ||
             x86_source_pv_indirect_call(sel, ins) ||
             x86_source_lowlevel_halt(sel, ins) ||
