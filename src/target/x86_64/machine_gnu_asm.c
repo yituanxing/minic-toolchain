@@ -590,7 +590,8 @@ static bool x86_emit_source_asm(FILE *out,
     const MinicMachineGNUAsmLabels *labels, void *context) {
     static const char *const hardware[] = {
         "  lock; addl $0, -4(%rsp)\n", "  mfence\n", "  lfence\n",
-        "  sfence\n", "  pause\n", "  rep; nop\n", "  fninit\n"
+        "  sfence\n", "  pause\n", "  rep; nop\n", "  fninit\n",
+        "  cli\n", "  sti\n", "  sti\n  hlt\n"
     };
     unsigned int variant;
     (void)labels;

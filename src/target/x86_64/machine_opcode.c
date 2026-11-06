@@ -3468,7 +3468,8 @@ bool minic_x86_64_machine_validate_source_asm(const MinicTargetInfo *target,
         return false;
     expected = MINIC_MACHINE_EFFECT_SOURCE_ASM |
         MINIC_MACHINE_EFFECT_VOLATILE;
-    if (form <= 4U) expected |= MINIC_MACHINE_EFFECT_COMPILER_BARRIER;
+    if (form <= 4U || form >= 8U)
+        expected |= MINIC_MACHINE_EFFECT_COMPILER_BARRIER;
     if (form == 1U) {
         const MinicMachineRegisterEffect *flags;
         expected |= MINIC_MACHINE_EFFECT_MEMORY_READ |
@@ -3478,6 +3479,13 @@ bool minic_x86_64_machine_validate_source_asm(const MinicTargetInfo *target,
             flags->reg.bank != MINIC_MACHINE_REGISTER_FLAGS ||
             flags->reg.number != 0U || flags->reg.width_bits != 64U ||
             flags->access != MINIC_MACHINE_REGISTER_CLOBBER) return false;
+    } else if (form >= 8U) {
+        const MinicMachineRegisterEffect *flags = instruction->implicit;
+        if (instruction->implicit_count != 1U || flags == NULL ||
+            flags->reg.bank != MINIC_MACHINE_REGISTER_FLAGS ||
+            flags->reg.number != 0U || flags->reg.width_bits != 64U ||
+            flags->access != MINIC_MACHINE_REGISTER_CLOBBER)
+            return false;
     } else if (instruction->implicit_count != 0U ||
                instruction->implicit != NULL) return false;
     return instruction->effects == expected;

@@ -1686,7 +1686,8 @@ static bool x86_linux_zero_barrier_source(
         source->template_text, source->template_length);
     if (form == 0U) return false;
     mem = source->has_memory_clobber;
-    if (form <= 4U && !mem) return false;
+    /* CLI/STI and STI;HLT require Linux's compiler memory clobber. */
+    if ((form <= 4U || form >= 8U) && !mem) return false;
     if (form == 1U) {
         if (source->clobber_count != 2U ||
             source->register_clobber_count != 1U ||

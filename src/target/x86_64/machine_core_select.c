@@ -2787,7 +2787,8 @@ static bool x86_source_zero_barrier(X86CoreSelector *sel,
         (form = minic_x86_64_zero_barrier_form_exact(
             source->template_text, source->template_length)) == 0U ||
         source->target_machine_form_variant != form ||
-        (form <= 4U && !source->has_memory_clobber)) return false;
+        ((form <= 4U || form >= 8U) &&
+         !source->has_memory_clobber)) return false;
     if (form == 1U) {
         const MinicCoreInlineAsmRegisterClobber *clobber;
         if (source->register_clobber_count != 1U ||
@@ -2803,6 +2804,16 @@ static bool x86_source_zero_barrier(X86CoreSelector *sel,
         effects = MINIC_MACHINE_EFFECT_MEMORY_READ |
             MINIC_MACHINE_EFFECT_MEMORY_WRITE;
     } else if (source->register_clobber_count != 0U) return false;
+    if (form >= 8U) {
+        /* CLI/STI and STI;HLT alter architectural IF in RFLAGS. Keep that
+         * physical clobber explicit; GNU 'memory' is ordering, not an
+         * invented hardware memory operation. */
+        flags.reg = (MinicMachineRegister){
+            0U, 64U, MINIC_MACHINE_REGISTER_FLAGS};
+        flags.access = MINIC_MACHINE_REGISTER_CLOBBER;
+        implicit = &flags;
+        implicit_count = 1U;
+    }
     return minic_machine_builder_emit_core_source_asm(&sel->builder,
         source, effects, NULL, 0U, implicit, implicit_count, false, false);
 }

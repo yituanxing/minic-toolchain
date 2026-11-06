@@ -9,7 +9,8 @@ static inline unsigned int minic_x86_64_zero_barrier_form_exact(
     const char *text, size_t length) {
     static const char *const exact[] = {
         "lock;addl$0,-4(%%rsp)",
-        "mfence", "lfence", "sfence", "pause", "rep;nop", "fninit"
+        "mfence", "lfence", "sfence", "pause", "rep;nop", "fninit",
+        "cli", "sti", "sti;hlt"
     };
     char compact[64];
     size_t i, n = 0U;
