@@ -71,7 +71,10 @@ bool minic_aarch64_linux_cap_asm_goto_source(const MinicInlineAsm *s) {
     const bool callback_form = s != NULL &&
         aarch64_linux_cap_goto_text(s->template_text, s->template_length,
                                     true, true);
-    return s != NULL && s->is_goto && !s->is_volatile &&
+    /* GNU asm goto is implicitly volatile, even without an explicit
+     * qualifier. The front-end now records that semantic effect, so the
+     * exact Linux alternative must retain its dedicated Core CFG route. */
+    return s != NULL && s->is_goto && s->is_volatile &&
            s->output_count == 0U && s->input_count == 1U &&
            s->inputs != NULL && s->label_count == 1U && s->labels != NULL &&
            s->clobber_count == 0U && !s->has_memory_clobber &&
