@@ -7632,6 +7632,71 @@ static bool x86_source_iret_int3(X86CoreSelector *sel,
         operands,2U,iret ? implicit : NULL,iret ? 2U : 0U,false,false);
 }
 
+/* Linux alternatives' relocation selftest is a complete patch-site, not
+ * arbitrary GNU extended asm. Resolve its `m` operand from the Core global
+ * address, rather than silently substituting the old hardcoded symbol. */
+static bool x86_source_alt_reloc_selftest(X86CoreSelector *sel,
+    const MinicCoreInstruction *ins) {
+    const MinicCoreInlineAsm *source;
+    const MinicCoreStructuredInlineAsmOperand *role;
+    const MinicCoreInstruction *definition;
+    const char *name;
+    MinicMachineOperand binding;
+    MinicMachineRegisterEffect clobber;
+    if (!sel || !ins ||
+        ins->kind != MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM ||
+        ins->result != MINIC_CORE_VALUE_INVALID ||
+        sel->core->inline_asms == NULL ||
+        ins->value.structured_inline_asm.inline_asm_id >=
+            sel->core->inline_asm_count ||
+        ins->value.structured_inline_asm.operand_count != 1U) return false;
+    source = &sel->core->inline_asms[
+        ins->value.structured_inline_asm.inline_asm_id];
+    role = &ins->value.structured_inline_asm.operands[0];
+    if (source->target_machine_form_id !=
+            MINIC_X86_MACHINE_ASM_ALT_RELOC_SELFTEST ||
+        source->target_machine_form_variant != 0U ||
+        source->operand_plan_owner != MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED ||
+        source->source_asm_unique_id == 0U ||
+        source->resolved_immediate_count != 0U ||
+        !source->is_volatile || source->is_goto ||
+        !source->has_memory_clobber || source->explicit_memory_clobber ||
+        !source->implicit_memory_effect ||
+        source->register_clobber_count != 1U ||
+        !source->register_clobbers ||
+        !source->register_clobbers[0].name ||
+        strcmp(source->register_clobbers[0].name,"rdi") != 0 ||
+        !minic_x86_64_typed_machine_form_matches_template(
+            source->target_machine_form_id,0U,
+            source->template_text,source->template_length) ||
+        role->operand_index != 0U ||
+        role->kind != MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT ||
+        role->value >= sel->core->value_count ||
+        role->has_fixed_register_binding || role->has_tied_output ||
+        role->early_clobber || role->physical_early_clobber ||
+        role->physical_read_write ||
+        sel->core->values[role->value].definition >=
+            sel->core->instruction_count) return false;
+    definition = &sel->core->instructions[
+        sel->core->values[role->value].definition];
+    if (definition->kind != MINIC_CORE_INSTRUCTION_GLOBAL_ADDRESS ||
+        definition->result != role->value ||
+        definition->value.global_id >= sel->core->global_count ||
+        sel->core->globals == NULL) return false;
+    name = sel->core->globals[definition->value.global_id].name;
+    if (!minic_core_inline_asm_symbol_valid(name)) return false;
+    binding = x86_symbol(name,MINIC_X86_MACHINE_RELOC_PC32);
+    binding.asm_constraint = "m";
+    binding.asm_name = memchr(source->template_text,'[',
+        source->template_length) ? "mem" : NULL;
+    clobber.reg = (MinicMachineRegister){
+        MINIC_X86_REG_RDI,64U,MINIC_MACHINE_REGISTER_GENERAL};
+    clobber.access = MINIC_MACHINE_REGISTER_CLOBBER;
+    return minic_machine_builder_emit_core_source_asm(&sel->builder,source,
+        MINIC_MACHINE_EFFECT_MEMORY_READ | MINIC_MACHINE_EFFECT_MEMORY_WRITE,
+        &binding,1U,&clobber,1U,false,false);
+}
+
 static bool x86_source_pv_indirect_call(X86CoreSelector *sel,
     const MinicCoreInstruction *ins) {
     static const unsigned int registers[4] = {
@@ -8944,6 +9009,7 @@ static bool x86_core_instruction(X86CoreSelector *sel,
             x86_source_preempt_static_call(sel, ins) ||
             x86_source_exception_stack_call(sel, ins) ||
             x86_source_iret_int3(sel, ins) ||
+            x86_source_alt_reloc_selftest(sel, ins) ||
             x86_source_three_call_alternative(sel, ins) ||
             x86_source_pv_indirect_call(sel, ins) ||
             x86_source_lowlevel_halt(sel, ins) ||

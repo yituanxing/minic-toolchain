@@ -4356,6 +4356,43 @@ static bool x86_source_iret_int3_contract(
     return true;
 }
 
+/* Linux alt_reloc_selftest carries one real memory symbol into its ELF
+ * replacement section. The typed operand is the sole relocation authority;
+ * no target-global name is implicit in this contract. */
+static bool x86_source_alt_reloc_selftest_contract(
+    const MinicMachineInstruction *ins) {
+    const MinicMachineOperand *op;
+    const bool named = ins && ins->source_asm_template &&
+        memchr(ins->source_asm_template,'[',ins->source_asm_length) != NULL;
+    if (!ins || ins->source_asm_machine_form_id !=
+            MINIC_X86_MACHINE_ASM_ALT_RELOC_SELFTEST ||
+        ins->source_asm_machine_form_variant != 0U ||
+        ins->effects != (MINIC_MACHINE_EFFECT_SOURCE_ASM |
+            MINIC_MACHINE_EFFECT_VOLATILE |
+            MINIC_MACHINE_EFFECT_COMPILER_BARRIER |
+            MINIC_MACHINE_EFFECT_MEMORY_READ |
+            MINIC_MACHINE_EFFECT_MEMORY_WRITE) ||
+        ins->operand_count != 1U || ins->operands == NULL ||
+        ins->implicit_count != 1U || ins->implicit == NULL ||
+        ins->source_asm_terminates_block ||
+        ins->source_asm_permits_fallthrough ||
+        !minic_x86_64_typed_machine_form_matches_template(
+            ins->source_asm_machine_form_id,0U,
+            ins->source_asm_template,ins->source_asm_length)) return false;
+    op = &ins->operands[0];
+    if (op->kind != MINIC_MACHINE_OPERAND_SYMBOL ||
+        !minic_core_inline_asm_symbol_valid(op->value.symbol.name) ||
+        op->value.symbol.relocation != MINIC_X86_MACHINE_RELOC_PC32 ||
+        op->value.symbol.addend != 0 ||
+        !op->asm_constraint || strcmp(op->asm_constraint,"m") != 0 ||
+        (named ? !op->asm_name || strcmp(op->asm_name,"mem") != 0 :
+            op->asm_name != NULL)) return false;
+    return ins->implicit[0].reg.bank == MINIC_MACHINE_REGISTER_GENERAL &&
+        ins->implicit[0].reg.number == MINIC_X86_REG_RDI &&
+        ins->implicit[0].reg.width_bits == 64U &&
+        ins->implicit[0].access == MINIC_MACHINE_REGISTER_CLOBBER;
+}
+
 static bool x86_source_pv_indirect_call_contract(
     const MinicMachineInstruction *ins) {
     static const unsigned int regs[4] = {
@@ -4521,6 +4558,8 @@ bool minic_x86_64_machine_validate_source_asm(const MinicTargetInfo *target,
     if (instruction->source_asm_machine_form_id == MINIC_X86_MACHINE_ASM_IRET_TO_SELF ||
         instruction->source_asm_machine_form_id == MINIC_X86_MACHINE_ASM_INT3_SELFTEST)
         return x86_source_iret_int3_contract(instruction);
+    if (instruction->source_asm_machine_form_id == MINIC_X86_MACHINE_ASM_ALT_RELOC_SELFTEST)
+        return x86_source_alt_reloc_selftest_contract(instruction);
     if (instruction->source_asm_machine_form_id == MINIC_X86_MACHINE_ASM_PV_INDIRECT_CALL)
         return x86_source_pv_indirect_call_contract(instruction);
     if (instruction->source_asm_machine_form_id == MINIC_X86_MACHINE_ASM_THREE_CALL_ALTERNATIVE)

@@ -1,6 +1,6 @@
-/* MC-062: the GNU 'm' operand may name any addressable lvalue. The MiniC
- * machine adapter currently hardcodes __alt_reloc_selftest_addr. Compile
- * without ALT_GOOD for failing source; ALT_GOOD for positive control. */
+/* MC-062: the GNU 'm' operand may name either global lvalue. Regression for
+ * the historical hardcoded __alt_reloc_selftest_addr machine replacement.
+ * Default is the alternate symbol; ALT_GOOD selects the Linux symbol. */
 extern void __alt_reloc_selftest(void);
 #ifdef ALT_GOOD
 unsigned long __alt_reloc_selftest_addr;

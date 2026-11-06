@@ -909,6 +909,31 @@ static bool x86_emit_source_asm(FILE *out,
                      "  nop\n"
                      "  nop\n",out) != EOF;
     if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_ALT_RELOC_SELFTEST) {
+        /* The actual typed `m` binding determines the PC32 relocation in
+         * .altinstr_replacement; the historical fixed-symbol printer lost
+         * legal GNU source operands (MC-062). */
+        const char *symbol = instruction->operands[0].value.symbol.name;
+        return fputs("661:\n"
+                     "662:\n"
+                     "  .skip -(((6651f-6641f)-(662b-661b)) > 0) * "
+                         "((6651f-6641f)-(662b-661b)),0x90\n"
+                     "663:\n"
+                     "  .pushsection .altinstructions,\"a\"\n"
+                     "  .long 661b - .\n"
+                     "  .long 6641f - .\n"
+                     "  .4byte (3*32+21)\n"
+                     "  .byte 663b-661b\n"
+                     "  .byte 6651f-6641f\n"
+                     "  .popsection\n"
+                     "  .pushsection .altinstr_replacement,\"ax\"\n"
+                     "6641:\n",out) != EOF &&
+            fprintf(out,"  leaq %s(%%rip), %%rdi\n",symbol) >= 0 &&
+            fputs("  call __alt_reloc_selftest\n"
+                  "6651:\n"
+                  "  .popsection\n",out) != EOF;
+    }
+    if (instruction->source_asm_machine_form_id ==
             MINIC_X86_MACHINE_ASM_MONITOR_WAIT) {
         static const char *const idle_hardware[] = {
             "  monitor\n", "  monitorx\n", "  mwait\n",
