@@ -93,14 +93,14 @@ if command -v "$gnu_as" >/dev/null 2>&1 &&
     "$gnu_objcopy" --dump-section "__ex_table=$work/ex_table.bin" "$work/uaccess.o"
     stage=gnu-ex-table-bytes
     entry_bytes=$(wc -c <"$work/ex_table.bin")
-    if [ "$entry_bytes" -ne 60 ]; then
-        echo "AARCH64_UACCESS=FAIL GNU __ex_table bytes=$entry_bytes expected=60" >&2
+    if [ "$entry_bytes" -ne 96 ]; then
+        echo "AARCH64_UACCESS=FAIL GNU __ex_table bytes=$entry_bytes expected=96" >&2
         exit 1
     fi
     stage=gnu-ex-table-relocations
     relocations=$(grep -c 'R_AARCH64_PREL32' "$work/relocations" || true)
-    if [ "$relocations" -ne 10 ]; then
-        echo "AARCH64_UACCESS=FAIL GNU __ex_table PREL32 relocations=$relocations expected=10" >&2
+    if [ "$relocations" -ne 16 ]; then
+        echo "AARCH64_UACCESS=FAIL GNU __ex_table PREL32 relocations=$relocations expected=16" >&2
         grep -E 'Relocation section|R_AARCH64_PREL32' "$work/relocations" >&2 || true
         exit 1
     fi
