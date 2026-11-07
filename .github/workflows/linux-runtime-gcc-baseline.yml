@@ -3626,9 +3626,13 @@ jobs:
         if: (github.event_name == 'workflow_dispatch' && inputs.mode == 'rv64-full') || (github.event_name == 'pull_request' && needs.rv64-campaign-gate.outputs.run == 'true')
         timeout-minutes: 20
         shell: bash
+        env:
+          COHORT_P1_EXACT_FAILED_GDB: ${{ (github.event_name == 'pull_request' && needs.rv64-campaign-gate.outputs.p1_gdb == 'true') && '1' || '0' }}
         run: |
           set -Eeuo pipefail
           ev="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-v1"
+          # Do not use the loop's $work, which is rebound to each QEMU trial.
+          kbuild_out="$GITHUB_WORKSPACE/build/linux-runtime-gcc/out"
           image="$ev/trials/full_all_verified/Image"
           initramfs="$ev/runtime-initramfs.cpio.gz"
           test -s "$image" && test -s "$initramfs"
@@ -3670,11 +3674,50 @@ jobs:
             "$MINIC_EXPECTED_HEAD_SHA" "$image_sha" \
             "${LINUX_RUNTIME_QEMU_MEMORY:-512M}" "${LINUX_RUNTIME_INITRD_LOAD_ADDR:-default}" \
             > "$root/identity.txt"
+          capture_failed_repeat_gdb() {
+            local reason="$1" failing_attempt="$2"
+            local diag="$ev/p1-gdb-stack" linked="$kbuild_out/vmlinux"
+            local kbuild_image="$kbuild_out/arch/riscv/boot/Image"
+            [[ "${COHORT_P1_EXACT_FAILED_GDB:-0}" == 1 ]] || return 0
+            mkdir -p "$diag" || return 0
+            # Only the genuine current GNU Kbuild pair is valid for symbols.
+            # A golden or separately rebuilt vmlinux would misdiagnose frames.
+            if [[ ! -s "$linked" || ! -s "$kbuild_image" ||
+                  ! -s "$custom_dtb" || ! -s "$initramfs" ]] ||
+               ! cmp -s "$image" "$kbuild_image" ||
+               [[ "$(sha256sum "$kbuild_image" | cut -d' ' -f1)" != "$image_sha" ]]; then
+              echo "RV64_REPEAT_GDB=INCONCLUSIVE attempt=$failing_attempt reason=unpaired_inputs_or_image_sha_mismatch original_repeat=FAIL" \
+                | tee "$diag/repeat-receiver.log"
+              return 0
+            fi
+            {
+              printf 'trial=repeat_%s\noriginal_repeat=FAIL\nfailure_reason=%s\n' "$failing_attempt" "$reason"
+              printf 'image_sha256=%s\nimage_and_current_Kbuild_image=byte_identical\n' "$image_sha"
+              printf 'vmlinux=current_Kbuild_output\nGDB_verdict=diagnostic_only\n'
+              sha256sum "$image" "$linked" "$custom_dtb" "$initramfs"
+            } >"$diag/repeat-exact-input-identity.txt" || return 0
+            echo "RV64_REPEAT_GDB=START attempt=$failing_attempt image_sha=$image_sha no_C_compile=true no_Kbuild_link=true original_repeat=FAIL"
+            if P1_GDB_IRQ_REENTRY=1 bash tools/ci/linux-runtime-p1-gdb-stack-v1.sh \
+                 "$image" "$linked" "$initramfs" "$custom_dtb" "$diag" 65 \
+                 >"$diag/repeat-receiver.log" 2>&1; then
+              echo "RV64_REPEAT_GDB=CAPTURED attempt=$failing_attempt diagnostic_only=true"
+            else
+              echo "RV64_REPEAT_GDB=INCONCLUSIVE attempt=$failing_attempt gdb_timing_perturbed=true original_repeat=FAIL"
+            fi
+            if gzip -1 -c "$linked" >"$diag/vmlinux.gz"; then
+              echo "RV64_REPEAT_GDB_ELF=ARCHIVED sha256=$(sha256sum "$linked" | cut -d' ' -f1)"
+            else
+              rm -f -- "$diag/vmlinux.gz"
+              echo "RV64_REPEAT_GDB_ELF=INCONCLUSIVE compression_failed=true original_repeat=FAIL"
+            fi
+            return 0
+          }
           for attempt in $(seq 1 12); do
             work="$root/trials/$attempt"
             mkdir -p "$work"
             test "$(sha256sum "$image" | cut -d' ' -f1)" = "$image_sha"
-            if ! LINUX_RUNTIME_CUSTOM_DTB="$custom_dtb" \
+            boot_rc=0
+            if LINUX_RUNTIME_CUSTOM_DTB="$custom_dtb" \
                  LINUX_RUNTIME_INITRD_LOAD_ADDR="$initrd_load" \
                  LINUX_RUNTIME_QEMU_MEMORY="$qemu_memory" \
                  LINUX_IMAGE="$image" INITRAMFS="$initramfs" \
@@ -3682,14 +3725,19 @@ jobs:
                  LINUX_RUNTIME_PROFILE=p1 QEMU_TIMEOUT_SECONDS=45 \
                  bash tests/external/linux/runtime_boot.sh \
                    >"$work/runtime_boot.log" 2>&1; then
-              echo "RV64_FULL_REPEAT=FAIL attempt=$attempt stage=runtime_boot" >&2
+              :
+            else
+              boot_rc=$?
+              echo "RV64_FULL_REPEAT=FAIL attempt=$attempt stage=runtime_boot rc=$boot_rc" >&2
               tail -n 80 "$work/runtime_boot.log" >&2
+              capture_failed_repeat_gdb runtime_boot "$attempt" || :
               exit 1
             fi
             # The old runtime_boot.sh accepts status 124/143 if guest markers
             # exist. This stricter campaign explicitly rejects timeout/TERM.
             grep -Fq 'LINUX_RUNTIME_BOOT lane=rdinit-init qemu_status=0 ' "$work/runtime_boot.log" || {
               echo "RV64_FULL_REPEAT=FAIL attempt=$attempt qemu_did_not_exit_cleanly" >&2
+              capture_failed_repeat_gdb qemu_nonzero_exit "$attempt" || :
               exit 1
             }
             grep -Fq 'LINUX_RUNTIME_EXACT=PASS release=6.6.143 profile=p1 lanes=1/1' "$work/runtime_boot.log"

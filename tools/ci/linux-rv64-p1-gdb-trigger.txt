@@ -3,6 +3,9 @@
 # the same last commit. The compiler profile and seven-shard cache key are
 # unaffected. Never use historical [linux-*] experiment commit-message tags.
 diagnostic=on-original-failed-image
+# 2026-11-07 rearm for first independent P1 reboot failure in #42326981145:
+# full_all_verified already passed, so capture GDB from repeat 1/12's
+# immutable Image and matching current Kbuild vmlinux without another link.
 # 2026-11-07 rearm after the 68bc6129 Actions YAML 21000-expression parse failure:
 # rerun only the exact-head 2064-owner receiver, preserving P1 FAIL and
 # attaching the same-Kbuild Image/vmlinux IRQ-stack diagnostic on failure.
