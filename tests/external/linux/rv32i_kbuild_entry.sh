@@ -80,19 +80,60 @@ if [[ "$mode" == shard ]]; then
     exit 9
   }
   echo "RV32I_SHARD_GNU_PREPARE=PASS shard=$RV32I_SHARD golden_object_hashes=unchanged"
+  # Strict partial-owner source epoch: the ORIGINAL GNU .cmd, source .c,
+  # complete generated headers, exact current compiler/profile and GNU tool
+  # binaries all bind the same checkpoint identity. A valid old run artifact
+  # may preserve successes after a single shard has failed, but never lets
+  # an unproven or different-epoch C owner enter the final 1741 union.
+  partial="$shard/partial"
+  partial_helper="$GITHUB_WORKSPACE/tools/ci/linux-rv32i-shard-partial-v1.py"
+  python3 "$partial_helper" --mode init --partial "$partial" \
+    --out "$out" --root "$GITHUB_WORKSPACE" \
+    --provenance "$prov" --selected "$shard/full-objects.txt" \
+    --minic "$MINIC_CC" --source "$src" \
+    --gnu-gcc "$(command -v riscv64-linux-gnu-gcc)" \
+    --gnu-as "$(command -v riscv64-linux-gnu-as)"
+  if [[ -n "${RV32I_SHARD_RESUME:-}" ]]; then
+    test -d "$RV32I_SHARD_RESUME"
+    python3 "$partial_helper" --mode resume --partial "$partial" \
+      --out "$out" --resume "$RV32I_SHARD_RESUME"
+  fi
+  declare -A resumed=()
+  if [[ -s "$partial/checkpoint/resumed-owners.txt" ]]; then
+    while IFS= read -r owner; do
+      resumed["$owner"]=1
+      printf '%s\n' "$owner" >>"$shard/mini-success-objects.txt"
+      printf '%s  %s\n' "$(sha256sum "$out/$owner" | cut -d' ' -f1)" "$owner" >>"$shard/mini-object-hashes.sha256"
+    done <"$partial/checkpoint/resumed-owners.txt"
+  fi
   compile_rc=0
+  missing_owners=()
   for owner in "${owners[@]}"; do
     test -s "$out/$owner"
-    # Force Kbuild to route the selected C owner through MiniC, while GNU
-    # remains authoritative for every other part of the golden tree.
-    rm -f -- "$out/$owner"
+    if [[ -z "${resumed[$owner]:-}" ]]; then
+      # Force only non-restored C owners through genuine Kbuild current MiniC;
+      # no object is ever accepted merely because an old GNU .o exists.
+      rm -f -- "$out/$owner"
+      missing_owners+=("$owner")
+    fi
   done
-  MINIC="$MINIC_CC" REAL_CC=riscv64-linux-gnu-gcc \
-    MINIC_KBUILD_RV32I_ORIGIN_AUDIT=1 MINIC_PRESERVE_FAILURE_INPUTS=1 \
-    MINIC_KBUILD_SUCCESS_TRACE="$shard/mini-success-objects.txt" \
-    MINIC_KBUILD_OBJECT_HASH_TRACE="$shard/mini-object-hashes.sha256" \
-    make "${gnu_args[@]}" KBUILD_NOCMDDEP=1 -j6 -k CC="$GITHUB_WORKSPACE/tests/external/linux/stage2_kbuild_cc.sh" \
-      "${owners[@]}" >"$shard/compile.log" 2>&1 || compile_rc=$?
+  if ((${#missing_owners[@]})); then
+    MINIC="$MINIC_CC" REAL_CC=riscv64-linux-gnu-gcc \
+      MINIC_KEEP_INTERMEDIATES=1 MINIC_KBUILD_RV32I_ORIGIN_AUDIT=1 MINIC_PRESERVE_FAILURE_INPUTS=1 \
+      MINIC_KBUILD_RV32_PARTIAL_DIR="$partial" \
+      MINIC_KBUILD_RV32_PARTIAL_OUT="$out" \
+      MINIC_KBUILD_RV32_PARTIAL_HELPER="$partial_helper" \
+      MINIC_KBUILD_SUCCESS_TRACE="$shard/mini-success-objects.txt" \
+      MINIC_KBUILD_OBJECT_HASH_TRACE="$shard/mini-object-hashes.sha256" \
+      make "${gnu_args[@]}" KBUILD_NOCMDDEP=1 -j6 -k CC="$GITHUB_WORKSPACE/tests/external/linux/stage2_kbuild_cc.sh" \
+        "${missing_owners[@]}" >"$shard/compile.log" 2>&1 || compile_rc=$?
+  else
+    echo "RV32I_SHARD_SWEEP=REUSED authenticated_current_C=${#owners[@]} current_compiler_identical=true" >"$shard/compile.log"
+  fi
+  # Like 3-ISA's fail-closed checkpoint seal, reject an overwritten success,
+  # missing .s, stray Kbuild C owner or regenerated-input drift immediately.
+  python3 "$partial_helper" --mode verify --partial "$partial" --out "$out" \
+    --root "$GITHUB_WORKSPACE" --minic "$MINIC_CC"
   : >"$shard/compile-blockers.txt"
   for owner in "${owners[@]}"; do
     if [[ -s "$out/$owner" ]]; then

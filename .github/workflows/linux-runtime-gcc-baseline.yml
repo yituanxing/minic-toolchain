@@ -1655,19 +1655,75 @@ jobs:
             build/rv32i-linux-entry/shard-${{ matrix.shard }}/cohort.log
           key: ${{ steps.rv32_candidate.outputs.key }}
 
+      # Optional recovery from a PREVIOUS, completed red current-compiler
+      # campaign. A new one-shot marker may append resume_run=<run-id>; no
+      # old-success object is trusted without checking frozen source/GNU .cmd,
+      # real GNU -E bytes, MiniC source/profile SHA, binary SHA, GAS and ELF32.
+      - name: Authenticate optional preceding RV32 partial-owner run
+        id: rv32_partial_request
+        if: needs.rv32-current-campaign-gate.outputs.run == 'true' && steps.rv32_candidate_cache.outputs.cache-hit != 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -Eeuo pipefail
+          marker=tools/ci/linux-rv32-current-runtime-trigger.txt
+          resume=$(sed -n 's/^resume_run=//p' "$marker")
+          if [[ -n "$resume" ]]; then
+            [[ "$resume" =~ ^[1-9][0-9]{7,14}$ ]]
+            test "$resume" != "$GITHUB_RUN_ID"
+            gh api "repos/$GITHUB_REPOSITORY/actions/runs/$resume" | \
+              python3 -c '
+          import json,sys
+          run=json.load(sys.stdin)
+          assert run["path"] == ".github/workflows/linux-runtime-gcc-baseline.yml", "foreign partial producer workflow"
+          assert run["head_branch"] == "refactor/minic-target-language-boundary", "foreign partial producer branch"
+          assert run["status"] == "completed" and run["conclusion"] in ("failure","cancelled","timed_out"), "previous run not red/completed"
+          print("RV32I_PREVIOUS_PARTIAL_RUN=AUTHENTICATED run="+str(run["id"]))
+          '
+            echo "run_id=$resume" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Restore the prior RV32 shard's per-owner SHA checkpoint
+        if: needs.rv32-current-campaign-gate.outputs.run == 'true' && steps.rv32_partial_request.outputs.run_id != ''
+        uses: actions/download-artifact@v4
+        with:
+          repository: ${{ github.repository }}
+          github-token: ${{ github.token }}
+          run-id: ${{ steps.rv32_partial_request.outputs.run_id }}
+          name: rv32i-shard-checkpoint-${{ matrix.shard }}
+          path: build/rv32i-linux-entry/partial-resume-${{ matrix.shard }}
+
       - name: Sweep ALL authentic RV32 C owners assigned to this shard
         if: (contains(github.event.head_commit.message, '[linux-rv32i-kbuild]') || (github.event_name == 'pull_request' && contains(github.event.pull_request.title, '[minic-full]')))
         shell: bash
         timeout-minutes: 60
         run: |
           set -Eeuo pipefail
+          resume_path=
+          if [[ -n '${{ steps.rv32_partial_request.outputs.run_id }}' ]]; then
+            resume_path="$GITHUB_WORKSPACE/build/rv32i-linux-entry/partial-resume-${{ matrix.shard }}"
+            test -s "$resume_path/checkpoint/identity.json"
+          fi
           make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/rv32i-linux-tools \
             build/rv32i-linux-tools/bin/minic-cc
           MINIC_CC="$GITHUB_WORKSPACE/build/rv32i-linux-tools/bin/minic-cc" \
+          RV32I_SHARD_RESUME="$resume_path" \
           RV32I_LINUX_MODE=shard RV32I_SHARD=${{ matrix.shard }} \
           RV32I_LINUX_SOURCE="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0/linux-6.6.143" \
           RV32I_LINUX_WORK="$GITHUB_WORKSPACE/build/rv32i-linux-entry" \
             bash tests/external/linux/rv32i_kbuild_entry.sh
+
+      - name: Preserve every exact-source current MiniC success before shard failure
+        if: always() && needs.rv32-current-campaign-gate.outputs.run == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: rv32i-shard-checkpoint-${{ matrix.shard }}
+          path: build/rv32i-linux-entry/shard-${{ matrix.shard }}/partial/
+          include-hidden-files: true
+          if-no-files-found: ignore
+          compression-level: 2
+          retention-days: 14
 
       - name: Retain certified RV32 objects even if later link or QEMU fails
         if: (contains(github.event.head_commit.message, '[linux-rv32i-kbuild]') || (github.event_name == 'pull_request' && contains(github.event.pull_request.title, '[minic-full]'))) && steps.rv32_candidate_cache.outputs.cache-hit != 'true'

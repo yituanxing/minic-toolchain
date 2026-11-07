@@ -14,7 +14,9 @@ if [[ "${GITHUB_EVENT_NAME:-}" == push &&
    grep -Fxq 'mode=original-1741-current-head' "$marker" &&
    grep -Fxq 'gnu_config_sha256=4c6c19f79741a8a31ec52ad57b1a6bc56b81dd6996cbf5e1bdc63f587d85244c' "$marker" &&
    grep -Eq '^nonce=20261107-[1-9][0-9]*$' "$marker" &&
-   [[ "$(wc -l < "$marker")" -eq 4 ]] &&
+   ( [[ "$(wc -l < "$marker")" -eq 4 ]] ||
+     ( [[ "$(wc -l < "$marker")" -eq 5 ]] &&
+       tail -n 1 "$marker" | grep -Eq '^resume_run=[1-9][0-9]{7,14}$' ) ) &&
    git log -1 --format=%B | grep -Fq '[linux-rv32i-kbuild]' &&
    git diff --quiet HEAD^ HEAD -- \
      tools/ci/linux-rv64-runtime-trigger.txt \

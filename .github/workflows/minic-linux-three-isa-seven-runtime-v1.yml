@@ -994,7 +994,9 @@ jobs:
           include-hidden-files: true
           if-no-files-found: error
           compression-level: 2
-          retention-days: 7
+          # This exact-HEAD Loong full-Linux attempt is expensive to repeat;
+          # retain its seven immutable current-source objects for diagnosis.
+          retention-days: ${{ matrix.target == 'loongarch64' && 30 || 7 }}
       - name: Preserve authentic first GNU -E / MiniC / GNU AS failures
         if: failure()
         uses: actions/upload-artifact@v4
@@ -1173,6 +1175,17 @@ jobs:
         timeout-minutes: 65
         run: |
           set -Eeuo pipefail
+          # An explicit one-target Loong PR/push marker is a bounded cached
+          # candidate replay, not permission to spend 65 minutes rebuilding
+          # original GNU Linux after a missing/rejected immutable golden.
+          # Preserve normal workflow_dispatch and other target behavior.
+          if [[ '${{ github.event_name }}' != workflow_dispatch &&
+                '${{ needs.gate.outputs.partial_target }}' == loongarch64 &&
+                '${{ needs.gate.outputs.regenerate }}' != true &&
+                '${{ needs.gate.outputs.reuse_objects }}' != true ]]; then
+            echo 'LOONG_CURRENT_2723_GNU_GOLDEN=FAIL_AUTHENTICATED_CACHE_MISS_NO_REBUILD' >&2
+            exit 1
+          fi
           if [[ '${{ steps.gnu-cache.outputs.cache-hit }}' == true ]]; then
             # GitHub caches are immutable: a rejected exact hit cannot be
             # overwritten. The fresh tree is still accepted on its own SHA;
@@ -1635,6 +1648,9 @@ jobs:
             build/minic-seven-receiver-${{ matrix.target }}/candidate/gnu-link-failure-summary.json
             build/minic-seven-receiver-${{ matrix.target }}/candidate/postlink-c-owner-census.json
             build/minic-seven-receiver-${{ matrix.target }}/candidate/postlink-*-c-owner-census.json
+            build/minic-seven-receiver-${{ matrix.target }}/candidate/postlink-target-elf64-objects.sha256
+            build/minic-seven-receiver-${{ matrix.target }}/candidate/postlink-*-target-elf64-objects.sha256
+            build/minic-seven-receiver-${{ matrix.target }}/candidate/postlink-gnu-c-fallback.json
             build/minic-seven-receiver-${{ matrix.target }}/candidate/postlink-live-gnu-e-minic-c*-receipt.json
             build/minic-seven-receiver-${{ matrix.target }}/candidate/link-failure-owner-diagnostics/
             build/minic-seven-receiver-${{ matrix.target }}/candidate/boot/
@@ -1652,7 +1668,7 @@ jobs:
             build/minic-seven-receiver-${{ matrix.target }}/loong-vdso-pin/
             build/minic-seven-receiver-${{ matrix.target }}/loong-vdso-cohort/
           if-no-files-found: warn
-          retention-days: 14
+          retention-days: ${{ matrix.target == 'loongarch64' && 30 || 14 }}
 
   strict-three-isa-result:
     needs: [gate, minic-binary, original-gnu-golden, seven-independent-runners, original-gnu-ld-qemu-receivers]

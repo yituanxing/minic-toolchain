@@ -130,17 +130,18 @@ fi
 
 cleanup() {
   local rc=$?
-  if [[ "$keep" != 1 ]]; then
-    if [[ "$preserve_failure" == 1 && "$rc" -ne 0 ]]; then
-      # Keep ONLY failed TUs: a 2064-owner sweep must not retain 2064 .i files.
-      # GNU-preprocessed .i and MiniC diagnostics stay paired to this owner.
-      if [[ -s "$preprocessed" ]]; then
-        cp -a -- "$preprocessed" "$failed_i"
-      fi
-      if [[ -s "$minic_stderr" ]]; then
-        cp -a -- "$minic_stderr" "$failed_stderr"
-      fi
+  if [[ "$preserve_failure" == 1 && "$rc" -ne 0 ]]; then
+    # Also keep the bounded diagnostic aliases when an RV32 partial-owner
+    # campaign retains successful .s/.i for atomic checkpointing. Failure
+    # evidence cannot disappear just because KEEP_INTERMEDIATES=1.
+    if [[ -s "$preprocessed" ]]; then
+      cp -a -- "$preprocessed" "$failed_i"
     fi
+    if [[ -s "$minic_stderr" ]]; then
+      cp -a -- "$minic_stderr" "$failed_stderr"
+    fi
+  fi
+  if [[ "$keep" != 1 ]]; then
     [[ "$source_file" == *.i ]] || rm -f "$preprocessed"
     rm -f "$assembly" "${base}.perf-baseline.s" "$minic_stdout" "$minic_stderr"
   fi
@@ -351,6 +352,21 @@ done
 
 [[ -z "$trace" ]] || printf 'assemble input=%q output=%q\n' "$assembly" "$output_file" >>"$trace"
 "$real_cc" "${asm_args[@]}" -x assembler -c "$assembly" -o "$output_file"
+
+# Reuse the proven three-ISA per-owner seven-shard checkpoint discipline for
+# an opt-in RV32 current-HEAD campaign. Saving is ordered: atomic .s/.o,
+# then atomic JSON receipt. Only GNU-E -> CURRENT MiniC-S -> GNU-AS can reach
+# this point; the cache cannot turn a GNU-C object into a MiniC success.
+if [[ -n "${MINIC_KBUILD_RV32_PARTIAL_DIR:-}" ]]; then
+  : "${MINIC_KBUILD_RV32_PARTIAL_HELPER:?required RV32 checkpoint helper}"
+  : "${MINIC_KBUILD_RV32_PARTIAL_OUT:?required original Kbuild O= directory}"
+  python3 "$MINIC_KBUILD_RV32_PARTIAL_HELPER" --mode capture \
+    --partial "$MINIC_KBUILD_RV32_PARTIAL_DIR" \
+    --out "$MINIC_KBUILD_RV32_PARTIAL_OUT" \
+    --minic "$minic" \
+    --owner "$output_file" --object "$output_file" \
+    --preprocessed "$preprocessed" --assembly "$assembly"
+fi
 
 
 # A route record alone cannot prove that the final object was not replaced
