@@ -9,6 +9,7 @@
 
 static bool x86_emit_register(FILE *, const MinicMachineOperand *);
 static bool x86_emit_address(FILE *, const MinicMachineAddress *);
+static bool x86_emit_symbol(FILE *, const char *, int64_t, unsigned int);
 static const char *x86_gp_name(const MinicMachineRegister *);
 
 static bool x86_source_accumulator_form(
@@ -1654,6 +1655,27 @@ static bool x86_emit_source_asm(FILE *out,
          * of the containing function or a fabricated linker symbol. */
         return fputs("  leaq 0(%rip), %rax\n",out) != EOF;
     if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_PM_TRACE) {
+        const MinicMachineOperand *line, *filename;
+        if (function == NULL || function->target == NULL ||
+            !minic_x86_64_machine_validate_source_asm(function->target,
+                instruction,NULL)) return false;
+        line = &instruction->operands[1];
+        filename = &instruction->operands[2];
+        /* GNU numeric 1f is scoped to the next record in .tracedata.
+         * MOVQ's absolute .tracedata reference is R_X86_64_32S; the
+         * filename's true pointer gets its own R_X86_64_64 relocation. */
+        return fputs("  movq $1f, %r10\n"
+                     "  .section .tracedata,\"a\"\n"
+                     "1:\n  .word ",out) != EOF &&
+            fprintf(out,"%" PRId64,line->value.integer) >= 0 &&
+            fputs("\n  .quad ",out) != EOF &&
+            x86_emit_symbol(out,filename->value.symbol.name,
+                filename->value.symbol.addend,
+                filename->value.symbol.relocation) &&
+            fputs("\n  .previous\n",out) != EOF;
+    }
+    if (instruction->source_asm_machine_form_id ==
             MINIC_X86_MACHINE_ASM_BUG_TABLE_C_IMMEDIATE)
         return fputs("  ",out) != EOF &&
             minic_machine_source_asm_template_emit(out,function,
@@ -2005,10 +2027,16 @@ static bool x86_emit_source_asm(FILE *out,
                 locked ? "" : "  ",desc->opcode) >= 0;
     }
     if (instruction->source_asm_machine_form_id ==
-            MINIC_X86_MACHINE_ASM_LOCK_BITCC)
-        /* 671 names THIS locked instruction, not the following flag store. */
+            MINIC_X86_MACHINE_ASM_LOCK_BITCC) {
+        const unsigned int form = minic_x86_64_linux_lock_bitcc_form(
+            instruction->source_asm_template,
+            instruction->source_asm_length);
+        /* 671 names THIS locked instruction, never the later SETC/SETS. */
+        if (form != 1U && form != 2U) return false;
         return x86_emit_scalar_smp_lock(out) &&
-            fputs("btsl $8, (%r10)\n",out) != EOF;
+            fputs(form == 1U ? "btsl $8, (%r10)\n" :
+                "andb %r11b, (%r10)\n",out) != EOF;
+    }
     if (instruction->source_asm_machine_form_id ==
             MINIC_X86_MACHINE_ASM_MXCSR) {
         /* Explicit 32-bit CPU control state transfer; the sole true

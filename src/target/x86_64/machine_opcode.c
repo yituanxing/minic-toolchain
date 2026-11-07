@@ -3490,8 +3490,20 @@ static bool x86_source_linux_lock_bitcc_contract(
     const bool named = memchr(ins->source_asm_template,'[',
         ins->source_asm_length) != NULL;
     const MinicMachineOperand *bit;
-    if (minic_x86_64_linux_lock_bitcc_form(ins->source_asm_template,
-            ins->source_asm_length) != 1U ||
+    const unsigned int form = minic_x86_64_linux_lock_bitcc_form(
+        ins->source_asm_template,ins->source_asm_length);
+    if (form == 2U)
+        /* GNU `ir` is represented by a safe physical byte register even
+         * when GCC could alternatively select an immediate: both are
+         * architecturally equivalent, but no arbitrary template is copied. */
+        return x86_scalar_machine_base(ins,
+                MINIC_X86_MACHINE_ASM_LOCK_BITCC,0U,effects,3U,true) &&
+            x86_scalar_machine_cc(&ins->operands[0],"=@ccs") &&
+            x86_scalar_machine_mem(target,&ins->operands[1],
+                MINIC_X86_REG_R10,"+m",NULL) &&
+            x86_scalar_machine_gp(&ins->operands[2],MINIC_X86_REG_R11,
+                8U,MINIC_MACHINE_REGISTER_READ,"ir",NULL);
+    if (form != 1U ||
         !x86_scalar_machine_base(ins,MINIC_X86_MACHINE_ASM_LOCK_BITCC,
             0U,effects,3U,true) ||
         !x86_scalar_machine_mem(target,&ins->operands[0],
@@ -3504,6 +3516,32 @@ static bool x86_source_linux_lock_bitcc_contract(
         (named ? bit->asm_name != NULL &&
             strcmp(bit->asm_name,"val") == 0 : bit->asm_name == NULL) &&
         bit->value.integer == 8;
+}
+
+/* PM_TRACE is an ELF metadata producer: the first binding is the actual
+ * 64-bit pointer output, the second a bounded u16, and the third a direct
+ * relocation against the C string-literal symbol, not a runtime pointer. */
+static bool x86_source_pm_trace_contract(
+    const MinicMachineInstruction *ins) {
+    const MinicMachineOperand *line,*filename;
+    if (!x86_scalar_machine_base(ins,MINIC_X86_MACHINE_ASM_PM_TRACE,
+            1U,MINIC_MACHINE_EFFECT_SOURCE_ASM |
+                MINIC_MACHINE_EFFECT_VOLATILE,3U,false) ||
+        !x86_scalar_machine_gp(&ins->operands[0],MINIC_X86_REG_R10,
+            64U,MINIC_MACHINE_REGISTER_WRITE,"=r",NULL))
+        return false;
+    line = &ins->operands[1];
+    filename = &ins->operands[2];
+    return line->kind == MINIC_MACHINE_OPERAND_INTEGER &&
+        line->asm_name == NULL && line->asm_constraint != NULL &&
+        strcmp(line->asm_constraint,"i") == 0 &&
+        line->value.integer >= 0 && line->value.integer <= 65535 &&
+        filename->kind == MINIC_MACHINE_OPERAND_SYMBOL &&
+        filename->asm_name == NULL && filename->asm_constraint != NULL &&
+        strcmp(filename->asm_constraint,"i") == 0 &&
+        minic_core_inline_asm_symbol_valid(filename->value.symbol.name) &&
+        filename->value.symbol.relocation ==
+            MINIC_X86_MACHINE_RELOC_ABSOLUTE;
 }
 
 static bool x86_source_mxcsr_contract(
@@ -6424,6 +6462,9 @@ bool minic_x86_64_machine_validate_source_asm(const MinicTargetInfo *target,
     if (instruction->source_asm_machine_form_id ==
             MINIC_X86_MACHINE_ASM_LOCK_BITCC)
         return x86_source_linux_lock_bitcc_contract(target,instruction);
+    if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_PM_TRACE)
+        return x86_source_pm_trace_contract(instruction);
     if (instruction->source_asm_machine_form_id ==
             MINIC_X86_MACHINE_ASM_UNWIND_CONTEXT)
         return x86_source_unwind_context_contract(instruction);

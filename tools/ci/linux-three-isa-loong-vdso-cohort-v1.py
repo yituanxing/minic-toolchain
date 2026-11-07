@@ -237,15 +237,17 @@ def probe(args: argparse.Namespace) -> int:
         if not record["single_owner_partition_preserved"]:
             record["verdict"] = "DIAGNOSTIC_INCONCLUSIVE_OTHER_C_OWNER_DRIFT"
             return 2
-        if record["extra_gnu_cc_owners"]:
-            record["verdict"] = "DIAGNOSTIC_INCONCLUSIVE_ADDITIONAL_GNU_CC"
-            return 2
+        # Preserve the actual mixed EFI bytes even when a later diagnostic
+        # guard rules out causal interpretation or a QEMU run.
         target_image = exact(original / image_rel)
         shutil.copyfile(target_image, trial / "mixed-one-gnu-vdso.efi")
         record["mixed_image_sha256"] = digest(target_image)
         if record["mixed_image_sha256"] in (record["all_mini_c_candidate_image_sha256"],
                                              info["original_gnu_image_sha256"]):
             record["verdict"] = "DIAGNOSTIC_INCONCLUSIVE_UNCHANGED_IMAGE"
+            return 2
+        if record["extra_gnu_cc_owners"]:
+            record["verdict"] = "DIAGNOSTIC_INCONCLUSIVE_ADDITIONAL_GNU_CC"
             return 2
         oracle = sibling("linux-three-isa-gnu-qemu-v1.py", "loong_probe_qemu")
         diff = sibling("linux-four-isa-runtime-diff-v1.py", "loong_probe_diff")
@@ -286,6 +288,12 @@ def probe(args: argparse.Namespace) -> int:
               f"owner_origin={record.get('postlink_vdso_origin', 'NOT_RUN')} "
               f"build_restored={record['original_build_restored']} "
               "diagnostic_only=true strict_acceptance=false qualification=MIXED_NOT_CERTIFIED")
+        print("LOONG_VDSO_COHORT_EXTRA_GNU_CC=" + json.dumps({
+            "count": len(record.get("extra_gnu_cc_owners", [])),
+            "owners_first20": record.get("extra_gnu_cc_owners", [])[:20],
+            "other_c_owner_sha_drifts": len(record.get("other_c_owner_drifts", [])),
+            "full_receipt": str(trial / "diagnostic-receipt.json")},
+            sort_keys=True, separators=(",", ":")))
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -239,7 +239,7 @@ bool minic_x86_64_machine_select_prologue(MinicMachineBuilder *builder,
     MinicMachineFunction *function;
     const MinicTargetInfo *target;
     size_t entry, spill = SIZE_MAX, ready, i;
-    bool use_fp_spill;
+    bool use_fp_spill, can_clobber_xmm;
     if (builder == NULL || out == NULL ||
         (function = builder->function) == NULL ||
         (target = function->target) == NULL ||
@@ -247,9 +247,9 @@ bool minic_x86_64_machine_select_prologue(MinicMachineBuilder *builder,
         function->block_count != 0U ||
         !minic_x86_64_machine_validate_abi(target,
             frame->calling_convention, NULL)) return false;
-    use_fp_spill = frame->has_varargs &&
-        (minic_x86_64_target_codegen_options(target) &
-         MINIC_X86_CODEGEN_NO_SSE) == 0U;
+    can_clobber_xmm = (minic_x86_64_target_codegen_options(target) &
+        MINIC_X86_CODEGEN_NO_SSE) == 0U;
+    use_fp_spill = frame->has_varargs && can_clobber_xmm;
     if (!minic_machine_builder_create_block(
             builder, NULL, false, true, &entry) || entry != 0U)
         return false;
@@ -273,14 +273,18 @@ bool minic_x86_64_machine_select_prologue(MinicMachineBuilder *builder,
             x86_imm((int64_t)frame->frame_size),
             x86_gp(MINIC_X86_REG_RSP, 64U))) return false;
     if (frame->ms_gp_save_offset != 0U) {
-        /* The physical encoding is fixed by the MS x64 ABI: RDI/RSI and
-         * XMM6..15. Module-frame layout owns their individual slots. */
+        /* RDI/RSI are always nonvolatile. Under -mno-sse the physical
+         * selector cannot generate an XMM clobber (and preflight rejects
+         * SSE opcodes), so emitting MOVDQU merely to save unused XMM6..15
+         * would violate the target ISA restriction. Preserve the normal
+         * MS x64 vector save set when SSE generation is enabled. */
         for (i = 0U; i < 2U; ++i)
             if (!x86_save_gp(builder, x86_ms_nonvolatile_gp[i],
                     frame->ms_gp_save_offset + i * 8U)) return false;
-        for (i = 0U; i < 10U; ++i)
-            if (!x86_save_xmm(builder, (unsigned int)(i + 6U),
-                    frame->ms_xmm_save_offset + i * 16U)) return false;
+        if (can_clobber_xmm)
+            for (i = 0U; i < 10U; ++i)
+                if (!x86_save_xmm(builder, (unsigned int)(i + 6U),
+                        frame->ms_xmm_save_offset + i * 16U)) return false;
     }
     if (frame->has_sret &&
         !x86_save_gp(builder, MINIC_X86_REG_RDI,
@@ -338,16 +342,20 @@ bool minic_x86_64_machine_select_prologue(MinicMachineBuilder *builder,
 bool minic_x86_64_machine_select_epilogue(MinicMachineBuilder *builder,
     const MinicX86MachineFrameView *frame) {
     const MinicTargetInfo *target;
+    bool can_clobber_xmm;
     size_t i;
     if (builder == NULL || builder->function == NULL ||
         !builder->has_position ||
         (target = builder->function->target) == NULL ||
         !x86_frame_view_valid(builder->function, frame)) return false;
+    can_clobber_xmm = (minic_x86_64_target_codegen_options(target) &
+        MINIC_X86_CODEGEN_NO_SSE) == 0U;
     if (frame->ms_gp_save_offset != 0U) {
         /* XMM0 and RAX contain the return value and must remain untouched. */
-        for (i = 0U; i < 10U; ++i)
-            if (!x86_restore_xmm(builder, (unsigned int)(6U + i),
-                    frame->ms_xmm_save_offset + i * 16U)) return false;
+        if (can_clobber_xmm)
+            for (i = 0U; i < 10U; ++i)
+                if (!x86_restore_xmm(builder, (unsigned int)(6U + i),
+                        frame->ms_xmm_save_offset + i * 16U)) return false;
         for (i = 0U; i < 2U; ++i)
             if (!x86_restore_gp(builder, x86_ms_nonvolatile_gp[i],
                     frame->ms_gp_save_offset + i * 8U)) return false;
