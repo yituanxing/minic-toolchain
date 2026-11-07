@@ -445,6 +445,13 @@ if "$minic_cc" -S "$workdir/mutated_xsave_alt.i" --target=x86_64-linux \
     printf 'FAIL: corrupted XSAVE CPU feature admitted\n' >&2
     exit 1
 fi
+sed 's/0x0f,0xc7,0x1f/0x0f,0xc7,0x1e/g' \
+    "$workdir/x86_64_linux_xstate_alternatives.i" > "$workdir/mutated_xrstor_alt.i"
+if "$minic_cc" -S "$workdir/mutated_xrstor_alt.i" --target=x86_64-linux \
+    -o "$workdir/mutated_xrstor_alt.s" >/dev/null 2>&1; then
+    printf 'FAIL: corrupted XRSTOR CPU alternative opcode admitted\n' >&2
+    exit 1
+fi
 sed 's/__jump_table/__jump_bad_table/g' \
     "$workdir/x86_64_linux_jump_label.i" > "$workdir/mutated_jump.i"
 if "$minic_cc" -S "$workdir/mutated_jump.i" --target=x86_64-linux \

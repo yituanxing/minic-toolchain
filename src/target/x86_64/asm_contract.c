@@ -285,7 +285,8 @@ bool minic_x86_64_typed_machine_form_matches_template(
         break;
     case MINIC_X86_MACHINE_ASM_FPU_USER_FRAME:
         form = (unsigned int)minic_x86_64_linux_fpu_user_frame_form(text, length);
-        break;
+        return form != 0U &&
+            (variant == form || variant == (form | 0x100U));
     case MINIC_X86_MACHINE_ASM_FPU_KERNEL_RESTORE:
         form = (unsigned int)minic_x86_64_linux_fpu_kernel_restore_form(text, length);
         break;

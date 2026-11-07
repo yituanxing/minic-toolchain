@@ -4243,6 +4243,19 @@ static bool x86_linux_fpu_user_frame_source(const MinicTargetInvocation *invocat
         minic_x86_64_linux_fpu_user_frame_form(
             source->template_text, source->template_length) : 0U;
     MinicType plain;
+    const bool named = source && source->template_text &&
+        memchr(source->template_text,'[',
+        source->template_length) != NULL;
+    const bool named_output = source && source->output_count >= 2U &&
+        source->outputs &&
+        source->outputs[1].name_length == 2U &&
+        source->outputs[1].name &&
+        memcmp(source->outputs[1].name,"fx",2U) == 0;
+    const bool named_input = source && source->input_count >= 2U &&
+        source->inputs &&
+        source->inputs[1].name_length == 2U &&
+        source->inputs[1].name &&
+        memcmp(source->inputs[1].name,"fx",2U) == 0;
     if (!program || !source || !contract || !form ||
         !source->is_volatile || source->is_goto ||
         source->output_count != 2U || !source->outputs ||
@@ -4252,7 +4265,8 @@ static bool x86_linux_fpu_user_frame_source(const MinicTargetInvocation *invocat
         !target_constraint_is(&source->outputs[0], "=a") ||
         !target_constraint_is(&source->outputs[1], "=m") ||
         !target_constraint_is(&source->inputs[0], "0") ||
-        !target_constraint_is(&source->inputs[1], "m"))
+        !target_constraint_is(&source->inputs[1], "m") ||
+        (named && named_output == named_input))
         return false;
     error = minic_c0_program_expression(
         program, source->outputs[0].expression);
@@ -4279,6 +4293,11 @@ static bool x86_linux_fpu_user_frame_source(const MinicTargetInvocation *invocat
     contract->kinds[2] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
     contract->kinds[3] = MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT;
     contract->implicit_memory_effect = true;
+    /* Source-only GNU symbolic-name resolution does not belong in Core IR.
+     * Carry the normalized single `fx` owner in the opaque target variant,
+     * so the physical selector can honor both `%[fx]` output and input. */
+    contract->target_machine_form_variant = form |
+        (named && named_input ? 0x100U : 0U);
     return true;
 }
 /* Previously the two MXCSR memory forms were claimed by Core's generic

@@ -152,6 +152,55 @@ static const MinicMachineSourceAsmTemplatePolicy x86_legacy_memory_policy = {
     NULL
 };
 
+/* FPU user-frame templates are complete, Source-qualified assembler
+ * fragments. GNU placeholder expansion is constrained to the separately
+ * verified output/input FPU addresses; the STAC/CLAC and exception-table
+ * bytes remain verbatim parts of that one MachineIR instruction. */
+static bool x86_source_fpu_user_frame_form(
+    const MinicMachineFunction *function,
+    const MinicMachineInstruction *instruction, void *context) {
+    (void)context;
+    return function && function->target &&
+        (instruction->source_asm_machine_form_id ==
+             MINIC_X86_MACHINE_ASM_FPU_USER_FRAME ||
+         instruction->source_asm_machine_form_id ==
+             MINIC_X86_MACHINE_ASM_FXRSTOR_SAFE ||
+         instruction->source_asm_machine_form_id ==
+             MINIC_X86_MACHINE_ASM_XSAVE_TRIPLE_ALTERNATIVE ||
+         instruction->source_asm_machine_form_id ==
+             MINIC_X86_MACHINE_ASM_XRSTOR_ALTERNATIVE) &&
+        minic_x86_64_machine_validate_source_asm(
+            function->target,instruction,NULL);
+}
+static bool x86_source_fpu_user_frame_binding(
+    const MinicMachineFunction *function,
+    const MinicMachineInstruction *instruction, size_t index,
+    void *context) {
+    return index < instruction->operand_count &&
+        x86_source_fpu_user_frame_form(function,instruction,context);
+}
+static bool x86_source_fpu_user_frame_operand(
+    FILE *output, const MinicMachineFunction *function,
+    const MinicMachineInstruction *instruction,
+    const MinicMachineGNUAsmLabels *labels, size_t index,
+    unsigned char modifier, void *context) {
+    (void)labels;
+    if ((index != 0U && index != 1U && index != 3U) || modifier != 0U ||
+        !x86_source_fpu_user_frame_binding(function,instruction,index,context))
+        return false;
+    if (output == NULL) return true;
+    return index == 0U ?
+        x86_emit_register(output,&instruction->operands[index]) :
+        x86_emit_address(output,&instruction->operands[index].value.address);
+}
+static const MinicMachineSourceAsmTemplatePolicy
+    x86_fpu_user_frame_policy = {
+    x86_source_fpu_user_frame_form,
+    x86_source_fpu_user_frame_binding,
+    x86_source_fpu_user_frame_operand,
+    NULL
+};
+
 /* LAR and the identity load bind named Source operands to verified
  * physical Machine registers/addresses.  The template emitter expands only
  * these two exact grammar forms, never arbitrary user assembly text. */
@@ -1356,6 +1405,18 @@ static bool x86_emit_source_asm(FILE *out,
         return fputs("  ",out) != EOF &&
             minic_machine_source_asm_template_emit(out,function,
                 instruction,labels,&x86_legacy_memory_policy) &&
+            fputc('\n',out) != EOF;
+    if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_FPU_USER_FRAME ||
+        instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_FXRSTOR_SAFE ||
+        instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_XSAVE_TRIPLE_ALTERNATIVE ||
+        instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_XRSTOR_ALTERNATIVE)
+        return fputs("  ",out) != EOF &&
+            minic_machine_source_asm_template_emit(out,function,
+                instruction,labels,&x86_fpu_user_frame_policy) &&
             fputc('\n',out) != EOF;
     if (instruction->source_asm_machine_form_id == MINIC_X86_MACHINE_ASM_LOWLEVEL_SCALAR &&
         (instruction->source_asm_machine_form_variant == 7U ||

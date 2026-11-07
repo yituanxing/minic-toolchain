@@ -4084,6 +4084,143 @@ static bool x86_source_nop_const_i_contract(
 /* Independent hardware/ELF proof of Linux TASK_SIZE_MAX's two MOVABS patch
  * alternatives.  A matched Source form cannot forge physical output, the
  * dummy input, the canonical 47/56-bit ceilings, or an arbitrary template. */
+/* The C source qualifier cannot forge the hardware EAX tie, the two real
+ * memory addresses, or the type-15 exception/paired SMAP patch template.
+ * Recheck the entire physical form at the MachineIR boundary. */
+static bool x86_source_fpu_user_frame_contract(
+    const MinicTargetInfo *target, const MinicMachineInstruction *ins) {
+    const MinicMachineOperand *op;
+    const unsigned int variant = ins->source_asm_machine_form_variant;
+    const bool safe = ins->source_asm_machine_form_id ==
+        MINIC_X86_MACHINE_ASM_FXRSTOR_SAFE;
+    const unsigned int form = safe ? minic_x86_64_linux_fxrstor_safe_form(
+            ins->source_asm_template,ins->source_asm_length) :
+        minic_x86_64_linux_fpu_user_frame_form(
+            ins->source_asm_template,ins->source_asm_length);
+    const bool named = memchr(ins->source_asm_template,'[',
+        ins->source_asm_length) != NULL;
+    const bool named_input = (variant & 0x100U) != 0U;
+    size_t i;
+    if (!target || (!safe && ins->source_asm_machine_form_id !=
+            MINIC_X86_MACHINE_ASM_FPU_USER_FRAME) ||
+        form < 1U || form > (safe ? 2U : 6U) ||
+        (safe ? variant != 0U :
+            (variant != form && variant != (form | 0x100U))) ||
+        ins->source_asm_terminates_block ||
+        ins->source_asm_permits_fallthrough ||
+        ins->effects != (MINIC_MACHINE_EFFECT_SOURCE_ASM |
+            MINIC_MACHINE_EFFECT_VOLATILE |
+            MINIC_MACHINE_EFFECT_COMPILER_BARRIER |
+            MINIC_MACHINE_EFFECT_MEMORY_READ |
+            MINIC_MACHINE_EFFECT_MEMORY_WRITE) ||
+        ins->operand_count != 4U || !ins->operands ||
+        ins->implicit_count != 0U || ins->implicit != NULL ||
+        !minic_x86_64_typed_machine_form_matches_template(
+            ins->source_asm_machine_form_id,variant,
+            ins->source_asm_template,ins->source_asm_length)) return false;
+    for (i = 0U; i < 4U; ++i) {
+        const char *const constraint = i == 0U ? (safe ? "=r" : "=a") :
+            i == 1U ? "=m" : i == 2U ? "0" : "m";
+        const char *const name = named &&
+            (i == (named_input ? 3U : 1U)) ? "fx" : NULL;
+        op = &ins->operands[i];
+        if (!op->asm_constraint ||
+            strcmp(op->asm_constraint,constraint) != 0 ||
+            (name ? !op->asm_name || strcmp(op->asm_name,name) != 0 :
+                op->asm_name != NULL)) return false;
+        if (i == 0U || i == 2U) {
+            if (op->kind != MINIC_MACHINE_OPERAND_REGISTER ||
+                op->value.physical.reg.bank !=
+                    MINIC_MACHINE_REGISTER_GENERAL ||
+                op->value.physical.reg.number != MINIC_X86_REG_RAX ||
+                op->value.physical.reg.width_bits != 32U ||
+                op->value.physical.access != (i == 0U ?
+                    MINIC_MACHINE_REGISTER_WRITE :
+                    MINIC_MACHINE_REGISTER_READ)) return false;
+        } else {
+            const MinicMachineAddress *address = &op->value.address;
+            if (op->kind != MINIC_MACHINE_OPERAND_ADDRESS ||
+                !minic_x86_64_machine_validate_address(
+                    target,address,NULL) ||
+                !address->has_base || address->has_index ||
+                address->has_segment || address->has_symbol ||
+                address->displacement != 0 ||
+                address->base.bank != MINIC_MACHINE_REGISTER_GENERAL ||
+                address->base.number != (i == 1U ?
+                    MINIC_X86_REG_R10 : MINIC_X86_REG_R11) ||
+                address->base.width_bits != 64U) return false;
+        }
+    }
+    return true;
+}
+
+/* The XSAVE family writes through hardware RDI even though GNU lists its
+ * register-indirect destination as an `m` ordering operand. All three CPU
+ * patch alternatives and the type-17 register-encoded exception fixup are
+ * admitted as one exact fingerprint, never by textual opcode heuristics. */
+static bool x86_source_xsave_triple_alt_contract(
+    const MinicTargetInfo *target, const MinicMachineInstruction *ins) {
+    static const unsigned int registers[4] = {
+        MINIC_X86_REG_RDI,MINIC_X86_REG_R10,
+        MINIC_X86_REG_RAX,MINIC_X86_REG_RDX
+    };
+    static const char *const constraints[4] = {"D","m","a","d"};
+    const bool restoring = ins->source_asm_machine_form_id ==
+        MINIC_X86_MACHINE_ASM_XRSTOR_ALTERNATIVE;
+    const size_t offset = restoring ? 0U : 1U;
+    const size_t count = offset + 4U;
+    size_t i;
+    if (!target || (!restoring && ins->source_asm_machine_form_id !=
+            MINIC_X86_MACHINE_ASM_XSAVE_TRIPLE_ALTERNATIVE) ||
+        ins->source_asm_machine_form_variant != 0U ||
+        !(restoring ? minic_x86_64_linux_xrstor_alternative_form(
+                ins->source_asm_template,ins->source_asm_length) :
+            minic_x86_64_linux_xsave_triple_alternative_form(
+                ins->source_asm_template,ins->source_asm_length)) ||
+        !minic_x86_64_typed_machine_form_matches_template(
+            ins->source_asm_machine_form_id,0U,
+            ins->source_asm_template,ins->source_asm_length) ||
+        ins->source_asm_terminates_block ||
+        ins->source_asm_permits_fallthrough ||
+        ins->effects != (MINIC_MACHINE_EFFECT_SOURCE_ASM |
+            MINIC_MACHINE_EFFECT_VOLATILE |
+            MINIC_MACHINE_EFFECT_COMPILER_BARRIER |
+            MINIC_MACHINE_EFFECT_MEMORY_READ |
+            (restoring ? 0U : MINIC_MACHINE_EFFECT_MEMORY_WRITE)) ||
+        ins->operand_count != count || !ins->operands ||
+        ins->implicit_count != 0U || ins->implicit != NULL)
+        return false;
+    for (i = 0U; i < count; ++i) {
+        const MinicMachineOperand *op = &ins->operands[i];
+        const bool err = !restoring && i == 0U;
+        const size_t idx = err ? 0U : i-offset;
+        if (!op->asm_constraint ||
+            strcmp(op->asm_constraint,err ? "=r" : constraints[idx]) != 0 ||
+            op->asm_name != NULL) return false;
+        if (i == offset+1U) {
+            const MinicMachineAddress *addr = &op->value.address;
+            if (op->kind != MINIC_MACHINE_OPERAND_ADDRESS ||
+                !minic_x86_64_machine_validate_address(target,addr,NULL) ||
+                !addr->has_base || addr->has_index ||
+                addr->has_segment || addr->has_symbol ||
+                addr->displacement != 0 ||
+                addr->base.bank != MINIC_MACHINE_REGISTER_GENERAL ||
+                addr->base.number != MINIC_X86_REG_R10 ||
+                addr->base.width_bits != 64U) return false;
+        } else if (op->kind != MINIC_MACHINE_OPERAND_REGISTER ||
+            op->value.physical.reg.bank !=
+                MINIC_MACHINE_REGISTER_GENERAL ||
+            op->value.physical.reg.number != (err ?
+                MINIC_X86_REG_R11 : registers[idx]) ||
+            op->value.physical.reg.width_bits != (!err && idx == 0U ?
+                64U : 32U) ||
+            op->value.physical.access != (err ?
+                MINIC_MACHINE_REGISTER_WRITE :
+                MINIC_MACHINE_REGISTER_READ)) return false;
+    }
+    return true;
+}
+
 static bool x86_source_task_size_alt_contract(
     const MinicMachineInstruction *ins) {
     static const int64_t expected[3] = {
@@ -5435,6 +5572,16 @@ bool minic_x86_64_machine_validate_source_asm(const MinicTargetInfo *target,
     if (instruction->source_asm_machine_form_id ==
             MINIC_X86_MACHINE_ASM_TASK_SIZE_ALT)
         return x86_source_task_size_alt_contract(instruction);
+    if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_FPU_USER_FRAME ||
+        instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_FXRSTOR_SAFE)
+        return x86_source_fpu_user_frame_contract(target,instruction);
+    if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_XSAVE_TRIPLE_ALTERNATIVE ||
+        instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_XRSTOR_ALTERNATIVE)
+        return x86_source_xsave_triple_alt_contract(target,instruction);
     if (instruction->source_asm_machine_form_id ==
             MINIC_X86_MACHINE_ASM_APIC_AMD_ALT)
         return x86_source_apic_amd_alt_contract(target,instruction);
