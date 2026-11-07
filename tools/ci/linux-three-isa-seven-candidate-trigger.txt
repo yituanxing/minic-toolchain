@@ -1,4 +1,4 @@
-target=aarch64
+target=loongarch64
 input_run=42366441631
-nonce=20261107-3
+nonce=20261107-4
 mode=candidate-only
