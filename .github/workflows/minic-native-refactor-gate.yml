@@ -14,6 +14,7 @@ on:
       - 'tests/compiler/c0/probe-x86-linux-irq-state-machineir.sh'
       - 'tests/compiler/c0/probe-x86-linux-zero-barrier-memory-clobber.sh'
       - 'tests/compiler/c0/probe-x86-linux-paravirt-patch-site.sh'
+      - 'tests/compiler/c0/probe-core-gp-forward.sh'
       - 'tests/compiler/c0/probe-x86-core-dead-ssa-writeback.sh'
       - 'tests/compiler/c0/x86_kbuild_mitigations.c'
       - 'tests/compiler/c0/probe-target-language-abi-options.sh'
@@ -81,6 +82,7 @@ on:
       - 'tests/compiler/c0/probe-x86-linux-irq-state-machineir.sh'
       - 'tests/compiler/c0/probe-x86-linux-zero-barrier-memory-clobber.sh'
       - 'tests/compiler/c0/probe-x86-linux-paravirt-patch-site.sh'
+      - 'tests/compiler/c0/probe-core-gp-forward.sh'
       - 'tests/compiler/c0/probe-x86-core-dead-ssa-writeback.sh'
       - 'tests/compiler/c0/x86_kbuild_mitigations.c'
       - 'tests/compiler/c0/probe-target-language-abi-options.sh'
@@ -525,6 +527,8 @@ jobs:
             "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic"
           MINIC_CC="$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc" \
             bash tests/compiler/c0/probe-x86-core-dead-ssa-writeback.sh
+          MINIC_CC="$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc" \
+            bash tests/compiler/c0/probe-core-gp-forward.sh
           bash tests/compiler/c0/probe-x86-nospec-native.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
           bash tests/compiler/c0/probe-linux-declaration-gates.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
           bash tests/compiler/c0/probe-linux-global-prefix-attributes.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"

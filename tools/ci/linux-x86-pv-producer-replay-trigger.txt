@@ -1,0 +1,4 @@
+producer_run=42384023426
+producer_commit=8972cd6
+mode=old-seven-plus-current-pv-producers
+nonce=20261107-1

@@ -76,6 +76,17 @@ env:
 # SHA-certified Stage2 Linux 2064 opt-in after Stage2 500/500 identity pass.
 
 jobs:
+  # Explicit push-subject opt-in + the exact HEAD marker check happens inside
+  # this called workflow. Reuse OLD 2758 MiniC ELF objects and regenerate
+  # ONLY the authenticated 12 actual 3-byte PV .parainstructions producers.
+  # This is mixed-compiler diagnostic P0, never current-head strict Linux PASS.
+  x86-pv-producer-replay:
+    if: github.ref == 'refs/heads/refactor/minic-target-language-boundary' && github.event_name == 'push' && contains(github.event.head_commit.message, '[x86-pv-producer-replay]')
+    uses: ./.github/workflows/linux-x86-pv-producer-replay.yml
+    permissions:
+      contents: read
+      actions: read
+
   # Exact one-shot push subject or explicit manual dispatch: immutable
   # ace5bd140 producer objects (1737 untouched) + exact current-HEAD
   # block/blk-mq.o and three live vdso-offsets.h dependent C owners, all via
