@@ -221,6 +221,51 @@ python3 "$repo/tools/ci/linux-runtime-minic-route-audit-v1.py" \
   --success-trace "$dest/success.txt" \
   --object-digest-trace "$dest/candidates.sha256" \
   --candidates "$out" >"$dest/route-audit.log"
+if [[ "${COHORT_P1_EIGHT_OWNER:-0}" == 1 ]]; then
+  # The existing exact-eight replay already keeps these GNU-preprocessed
+  # inputs. Archive only three historically high-ROI owners for same-.i
+  # old/new compiler attribution; never regenerate or compile another TU.
+  # The output lives under the receiver's existing evidence artifact.
+  snapshot_dir="$dest/source-snapshots"
+  mkdir -p "$snapshot_dir"
+  printf 'owner\tinput_sha256\tinput_bytes\tgzip_sha256\tgzip_bytes\n' \
+    >"$dest/source-snapshots.tsv"
+  for target in net/ipv6/ip6_output.o net/ipv6/tcp_ipv6.o mm/slub.o; do
+    grep -Fxq "$target" "$dest/selected.txt" || {
+      echo "P1_RX_SOURCE_CAPTURE=FAIL target_not_selected=$target" >&2; exit 8;
+    }
+    source_i="$out/${target%.o}.minic-stage2.i"
+    source_stderr="$out/${target%.o}.minic-stage2.minic.stderr"
+    stem="${target##*/}"
+    stem="${stem%.o}"
+    [[ -f "$source_i" && ! -L "$source_i" && -s "$source_i" &&
+       -f "$source_stderr" && ! -L "$source_stderr" && -s "$source_stderr" ]] || {
+      echo "P1_RX_SOURCE_CAPTURE=FAIL missing_exact_replay_input=$target" >&2; exit 8;
+    }
+    source_bytes=$(stat -c '%s' "$source_i")
+    [[ "$source_bytes" -gt 0 && "$source_bytes" -le $((64 * 1024 * 1024)) ]] || {
+      echo "P1_RX_SOURCE_CAPTURE=FAIL oversized_input=$target bytes=$source_bytes" >&2; exit 8;
+    }
+    compressed="$snapshot_dir/$stem.i.gz"
+    gzip -n -9 -c -- "$source_i" >"$compressed"
+    gzip -t -- "$compressed" && gzip -dc -- "$compressed" | cmp -s - "$source_i" || {
+      echo "P1_RX_SOURCE_CAPTURE=FAIL compressed_source_mismatch=$target" >&2; exit 8;
+    }
+    # Frame accounting is paired with the exact input, rather than a
+    # similarly named function emitted by some other object.
+    grep '^CORE_FRAME_REUSE function=' "$source_stderr" \
+      >"$snapshot_dir/$stem.frame.log" || {
+        echo "P1_RX_SOURCE_CAPTURE=FAIL missing_frame_accounting=$target" >&2; exit 8;
+      }
+    input_sha=$(sha256sum "$source_i" | cut -d' ' -f1)
+    gzip_sha=$(sha256sum "$compressed" | cut -d' ' -f1)
+    gzip_bytes=$(stat -c '%s' "$compressed")
+    printf '%s\t%s\t%s\t%s\t%s\n' \
+      "$target" "$input_sha" "$source_bytes" "$gzip_sha" "$gzip_bytes" \
+      >>"$dest/source-snapshots.tsv"
+    echo "P1_RX_SOURCE_CAPTURE=PASS owner=$target input_sha=$input_sha bytes=$source_bytes"
+  done
+fi
 if [[ "$single_owner" == 1 ]]; then
   # The instrumentation prints to a per-TU stderr file, not replay.log.
   stderr="$out/net/ipv6/ip6_output.minic-stage2.minic.stderr"

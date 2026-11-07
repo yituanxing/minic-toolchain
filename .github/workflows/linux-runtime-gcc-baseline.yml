@@ -3860,6 +3860,8 @@ jobs:
             build/linux-runtime-gcc-cohort-v1/p1-defined-crossblock/*.log
             build/linux-runtime-gcc-cohort-v1/p1-defined-crossblock/*.txt
             build/linux-runtime-gcc-cohort-v1/p1-defined-crossblock/*.sha256
+            build/linux-runtime-gcc-cohort-v1/p1-defined-crossblock/source-snapshots/*.i.gz
+            build/linux-runtime-gcc-cohort-v1/p1-defined-crossblock/source-snapshots/*.frame.log
             build/linux-runtime-gcc-cohort-v1/p1-defined-ip6-only/*.tsv
             build/linux-runtime-gcc-cohort-v1/p1-defined-ip6-only/*.log
             build/linux-runtime-gcc-cohort-v1/p1-defined-ip6-only/*.txt
