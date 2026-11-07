@@ -1,7 +1,7 @@
 name: x86 Linux historical PV-producer P0 diagnosis (mixed compiler, NOT strict)
 
 # Called ONLY by the already-registered Linux Runtime GCC Baseline workflow's
-# exact HEAD push marker gate. It has no independent push/pull-request trigger.
+# exact PR-HEAD marker gate. This preserves access to the historical PR cache.
 on:
   workflow_call:
 
@@ -13,6 +13,7 @@ env:
   GNU_WORK: ${{ github.workspace }}/build/minic-linux-gnu-x86_64
   RESULT: ${{ github.workspace }}/build/minic-x86-pv-producer-diagnostic
   OLD_RUN: '42384023426'
+  RELAY_HEAD: ${{ github.event.pull_request.head.sha }}
 
 jobs:
   x86-pv-producer-only:
@@ -21,16 +22,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 2
           persist-credentials: false
 
-      - name: Exact one-shot push marker, no old-seven current-HEAD rerun
+      - name: Exact one-shot PR-head marker, no old-seven current-HEAD rerun
         shell: bash
         run: |
           set -Eeuo pipefail
-          test "$GITHUB_EVENT_NAME" = push
-          test "$GITHUB_REF" = refs/heads/refactor/minic-target-language-boundary
-          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$GITHUB_EVENT_NAME" = pull_request
+          test "$GITHUB_HEAD_REF" = refactor/minic-target-language-boundary
+          test "$(git rev-parse HEAD)" = "$RELAY_HEAD"
           git rev-parse --verify HEAD^ >/dev/null
           marker=tools/ci/linux-x86-pv-producer-replay-trigger.txt
           test -s "$marker"
@@ -44,7 +46,7 @@ jobs:
           [[ "${rows[3]}" =~ ^nonce=20261107-[0-9]{1,5}$ ]]
           test -s tools/ci/linux-x86-pv-producer-owners.json
           python3 -m py_compile tools/ci/linux-x86-pv-producer-replay-v1.py
-          echo "X86_PV_REPLAY_GATE=PASS head=$GITHUB_SHA old_run=$OLD_RUN strict=false"
+          echo "X86_PV_REPLAY_GATE=PASS head=$RELAY_HEAD old_run=$OLD_RUN strict=false"
 
       - name: Check official historical 7-shard source-run and artifact identities
         shell: bash
@@ -123,7 +125,7 @@ jobs:
           make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/minic-x86-pv-current \
             build/minic-x86-pv-current/bin/minic build/minic-x86-pv-current/bin/minic-cc
           test -x build/minic-x86-pv-current/bin/minic-cc
-          echo "X86_PV_CURRENT_COMPILER=PASS sha=$GITHUB_SHA"
+          echo "X86_PV_CURRENT_COMPILER=PASS sha=$RELAY_HEAD"
 
       - name: Restore the original full GNU 6.6.143 x86 Kbuild cache; no expensive fallback
         uses: actions/cache/restore@v4
@@ -170,7 +172,7 @@ jobs:
             --incoming "$GITHUB_WORKSPACE/build/minic-x86-old-seven" \
             --old-minic "$GITHUB_WORKSPACE/build/minic-x86-old-bin/bin/minic" \
             --new-minic "$GITHUB_WORKSPACE/build/minic-x86-pv-current/bin/minic" \
-            --new-source-sha "$GITHUB_SHA" \
+            --new-source-sha "$RELAY_HEAD" \
             --producer-owner-file "$GITHUB_WORKSPACE/tools/ci/linux-x86-pv-producer-owners.json" \
             --output "$RESULT/replay"
 
