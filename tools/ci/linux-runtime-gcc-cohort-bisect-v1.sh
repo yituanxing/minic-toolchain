@@ -3413,6 +3413,14 @@ fi
 # and pinned GCC reference (no C compilation), overlay one *GCC* .o per
 # trial, allow Kbuild to regenerate only derived link artifacts, then run the
 # original P1 syscall oracle. This is a causal diagnostic, NOT a MiniC PASS.
+if [[ "${COHORT_P1_EIGHT_OWNER:-0}" == 1 ]]; then
+  [[ "$cohort_scope" == FULL_C_UNIVERSE && "$n" == 2064 &&
+     "${COHORT_ACTION:-all}" == verify ]] || {
+    echo "P1_EIGHT_OWNER=ERROR require_exact_2064_verify" >&2; exit 8;
+  }
+  export COHORT_P1_STACK_OWNER_SWAPS=1 COHORT_P1_DEFINED_CROSSBLOCK=1
+  echo "P1_EIGHT_OWNER=OPT_IN frozen=2064 selected=8 original_neighbors=2056 default_backend_unchanged=true"
+fi
 if [[ "${COHORT_P1_STACK_OWNER_SWAPS:-0}" == 1 ]]; then
   [[ "$cohort_scope" == FULL_C_UNIVERSE && "$n" == 2064 && "${COHORT_ACTION:-all}" == verify ]] || {
     echo "COHORT_P1_OWNER=ERROR require_frozen_full_2064_verify" >&2
@@ -3472,6 +3480,22 @@ PY_FRAME_PROLOGUE
   trial p1_full_minic "$n" p1
   baseline_verdict="$TRIAL_VERDICT"
   baseline_image_sha="$image_sha"
+  if [[ "${COHORT_P1_EIGHT_OWNER:-0}" == 1 && "$baseline_verdict" == PASS ]]; then
+    # The frozen all-MiniC Image is timing-sensitive: an initial PASS does
+    # not refute the recorded IRQ underflow. Repeat *identical bytes* before
+    # deciding whether this same-run control reproduced the bug.
+    for attempt in 2 3 4; do
+      trial "p1_eight_control_$attempt" "$n" p1
+      [[ "$image_sha" == "$baseline_image_sha" ]] || {
+        echo "P1_EIGHT_OWNER=ERROR control_image_sha_changed" >&2; exit 8;
+      }
+      echo "P1_EIGHT_OWNER=CONTROL attempt=$attempt verdict=$TRIAL_VERDICT image_sha=$image_sha"
+      if [[ "$TRIAL_VERDICT" == FAIL ]]; then
+        baseline_verdict=FAIL
+        break
+      fi
+    done
+  fi
   if [[ "${COHORT_P1_PAIR_DEBUG:-0}" == 1 ]]; then
     # GDB observes the exact already-linked all-MiniC FAILED control.
     # No new compiler invocation, no new Image link, no object changes.
