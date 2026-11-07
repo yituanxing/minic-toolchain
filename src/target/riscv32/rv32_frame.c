@@ -6,6 +6,7 @@
 #include "target/common/core_object_reuse.h"
 #include "target/common/core_object_storage.h"
 #include "target/common/core_frame_layout.h"
+#include "target/riscv/register_identity.h"
 #include <limits.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -39,6 +40,42 @@ static bool rv32_frame_reject(const char *stage, size_t index,
 static bool rv32_align(size_t value, size_t by, size_t *out) {
     return by != 0U && (by & (by - 1U)) == 0U &&
            minic_core_frame_align_up(value, by, out);
+}
+
+/* MachineIR's mixed inline-ASM selector consumes a0-a7 before borrowing
+ * finalized, callee-saved frame slots. IRQ stack-switch templates clobber
+ * every caller-saved register and still need ordinary `r` inputs. Keep the
+ * ABI register policy here, in RV32's frame owner; Core remains target free. */
+static size_t rv32_asm_saved_gpr_need(const MinicCoreFunction *function) {
+    size_t needed = 0U, i;
+    for (i = 0U; i < function->instruction_count; ++i) {
+        const MinicCoreInstruction *ins = &function->instructions[i];
+        const MinicCoreInlineAsm *source;
+        size_t j, occupied = 0U, operands;
+        bool blocked[8] = {false};
+        if (ins->kind != MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM ||
+            ins->value.structured_inline_asm.inline_asm_id >=
+                function->inline_asm_count ||
+            function->inline_asms == NULL) continue;
+        source = &function->inline_asms[
+            ins->value.structured_inline_asm.inline_asm_id];
+        operands = ins->value.structured_inline_asm.operand_count;
+        if (source->register_clobber_count != 0U &&
+            source->register_clobbers == NULL) continue;
+        for (j = 0U; j < source->register_clobber_count; ++j) {
+            const MinicCoreInlineAsmRegisterClobber *clobber =
+                &source->register_clobbers[j];
+            unsigned id;
+            if (minic_riscv_gpr_id(clobber->name,
+                    clobber->name_length, &id) && id >= 10U && id <= 17U)
+                blocked[id - 10U] = true;
+        }
+        for (j = 0U; j < 8U; ++j) occupied += blocked[j] ? 1U : 0U;
+        if (operands > 8U - occupied &&
+            operands - (8U - occupied) > needed)
+            needed = operands - (8U - occupied);
+    }
+    return needed;
 }
 
 /* A wide ILP32 operand remains ONE semantic Core SSA value. */
@@ -186,6 +223,25 @@ bool rv32_frame_init_with_storage(Rv32Frame *frame,
         return rv32_frame_reject("spill_total", 0U, f,
                                  MINIC_CORE_TYPE_INVALID);
     next = value_base + peak_bytes;
+    /* The selector never invents unsaved s-registers. Preserve only the
+     * shortage observed in this function's actual source-ASM operands. */
+    {
+        static const unsigned candidate_ids[11] = {
+            9U, 18U, 19U, 20U, 21U, 22U, 23U, 24U, 25U, 26U, 27U
+        };
+        size_t saved_base;
+        frame->asm_saved_gpr_count = rv32_asm_saved_gpr_need(f);
+        if (frame->asm_saved_gpr_count > 11U ||
+            !rv32_align(next, 4U, &saved_base) ||
+            frame->asm_saved_gpr_count > (SIZE_MAX - saved_base) / 4U)
+            return rv32_frame_reject("asm_saved_gprs", 0U, f,
+                                     MINIC_CORE_TYPE_INVALID);
+        for (i = 0U; i < frame->asm_saved_gpr_count; ++i)
+            frame->asm_saved_gprs[i] = (MinicRiscvPhysicalCalleeSave){
+                candidate_ids[i], saved_base + i * 4U
+            };
+        next = saved_base + frame->asm_saved_gpr_count * 4U;
+    }
     /* RV64 already handled over-aligned Core locals: the incoming sp only
      * guarantees 16-byte ABI alignment, even when object offsets align to
      * 32 or 64. Align the real frame base and restore the ORIGINAL incoming
@@ -250,7 +306,9 @@ bool rv32_machine_physical_frame(const Rv32Frame *frame,
         .has_hidden_result_pointer = frame->abi.indirect_return,
         .has_dynamic_stack = frame->has_dynamic_stack,
         .has_dynamic_stack_alignment = frame->has_dynamic_stack_alignment,
-        .variadic = frame->is_variadic
+        .variadic = frame->is_variadic,
+        .callee_saved = frame->asm_saved_gprs,
+        .callee_saved_count = frame->asm_saved_gpr_count
     };
     return true;
 }

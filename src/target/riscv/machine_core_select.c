@@ -1359,16 +1359,30 @@ static bool rv_core_binary(RvCoreSelection *sel,
     const MinicCoreFunction *fn = sel->plan->core;
     unsigned bytes, left_bytes, right_bytes;
     bool sign, pointer, left_sign, right_sign, left_ptr, right_ptr;
+    bool wide_shift_count = false;
     uint32_t op;
     if (ins->value.binary.left >= fn->value_count ||
         ins->value.binary.right >= fn->value_count ||
         !rv_type(sel, ins->core_type_id, &bytes, &sign, &pointer) ||
         !rv_type(sel, fn->values[ins->value.binary.left].core_type_id,
             &left_bytes, &left_sign, &left_ptr) ||
-        !rv_type(sel, fn->values[ins->value.binary.right].core_type_id,
-            &right_bytes, &right_sign, &right_ptr) ||
+        (!rv_type(sel, fn->values[ins->value.binary.right].core_type_id,
+            &right_bytes, &right_sign, &right_ptr) &&
+         /* A scalar C shift may carry a wider integer count. Counts outside
+          * the left operand width are undefined by C; only the low XLEN
+          * word is required for the architecturally defined cases. Keep
+          * other binary operators' scalar type contracts unchanged. */
+         !((ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_LEFT ||
+            ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_RIGHT) &&
+           rv_wide_integer(sel,
+               fn->values[ins->value.binary.right].core_type_id,
+               &right_sign) &&
+           (wide_shift_count = true))) ||
         !rv_load(sel, ins->value.binary.left, RV_T0) ||
-        !rv_load(sel, ins->value.binary.right, RV_T1)) return false;
+        !(wide_shift_count
+              ? rv_value_chunk(sel, ins->value.binary.right, 0U,
+                    RV_T1, true)
+              : rv_load(sel, ins->value.binary.right, RV_T1))) return false;
     switch (ins->kind) {
     case MINIC_CORE_INSTRUCTION_INTEGER_ADD:
         op = MINIC_RISCV_MACHINE_ADD; break;
@@ -1609,7 +1623,10 @@ static bool rv_core_parameter_object(RvCoreSelection *sel,
             fn->objects[object].core_type_id) !=
             minic_core_type_unqualified(types,
                 minic_core_function_parameter_types(fn)[idx]) ||
-        !rv_formal_placement(sel, idx, &loc) || !loc.record ||
+        !rv_formal_placement(sel, idx, &loc) ||
+        /* psABI ignores a zero-sized record entirely. There is no scalar
+         * register or stack value to load, despite its C record type. */
+        (!loc.record && !loc.ignored) ||
         !rv_object_offset(sel, object, loc.bytes, &offset)) return false;
     if (loc.ignored) return true;
     if (loc.indirect) {

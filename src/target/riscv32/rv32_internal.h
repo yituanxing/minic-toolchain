@@ -34,6 +34,10 @@ typedef struct Rv32Frame {
     bool is_variadic;
     size_t varargs_size;
     size_t varargs_offset;
+    /* Source ASM may exhaust caller-saved a0-a7 (IRQ stack switch).
+     * Reserve only the required ILP32 saved-register slots, before lowering. */
+    MinicRiscvPhysicalCalleeSave asm_saved_gprs[11];
+    size_t asm_saved_gpr_count;
     size_t *object_offsets;
     size_t *value_offsets;
     MinicCoreObjectStoragePlan object_storage;
