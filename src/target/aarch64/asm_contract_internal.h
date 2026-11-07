@@ -66,6 +66,14 @@ enum Aarch64MachineAsmForm {
     AARCH64_MACHINE_ASM_SHA3_EOR3
 };
 
+/* Linux's AArch64 __jump_table key is a minimum 8-byte-aligned static_key
+ * address plus optional bit-0 branch flag. Inline specialization can fold
+ * &key_array[i] into symbol + a nonzero byte offset; it must not silently
+ * discard the offset or admit other low bits into the branch flag field. */
+static inline bool aarch64_linux_jump_key_addend(int64_t addend) {
+    return addend >= 0 && (addend & INT64_C(7)) <= 1;
+}
+
 /* Pure ISA recognition: no C AST, GNU operands, or Core instruction types.
  * `normalized` only changes those GNU patterns that use numeric operand
  * placeholders on the emitted machine side. 0 means not a sealed form. */

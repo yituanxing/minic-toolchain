@@ -320,6 +320,59 @@ static const MinicMachineSourceAsmTemplatePolicy a64_one_gp_policy = {
     NULL
 };
 
+/* KVM's exact ALTERNATIVE_CB VA mask uses one live +r x9 and leaves its
+ * section/callback/PREL32 directives with GNU GAS. Machine rejects a
+ * partially substituted template or a different physical binding. */
+static bool a64_kvm_va_mask_form(const MinicMachineFunction *fn,
+    const MinicMachineInstruction *ins, void *context) {
+    (void)context;
+    return fn != NULL && fn->target != NULL &&
+        fn->target->architecture == MINIC_TARGET_ARCH_AARCH64 &&
+        ins != NULL &&
+        ins->source_asm_machine_form_id == AARCH64_MACHINE_ASM_KVM_VA_MASK &&
+        ins->source_asm_machine_form_variant == 0U &&
+        ins->kind == MINIC_MACHINE_INSTRUCTION_SOURCE_ASM &&
+        ins->effects == (MINIC_MACHINE_EFFECT_SOURCE_ASM |
+                         MINIC_MACHINE_EFFECT_VOLATILE) &&
+        ins->operand_count == 1U && ins->operands != NULL &&
+        ins->implicit_count == 0U &&
+        !ins->source_asm_terminates_block &&
+        !ins->source_asm_permits_fallthrough &&
+        aarch64_linux_kvm_va_mask_form(ins->source_asm_template,
+            ins->source_asm_length);
+}
+
+static bool a64_kvm_va_mask_binding(const MinicMachineFunction *fn,
+    const MinicMachineInstruction *ins, size_t index, void *context) {
+    const MinicMachineOperand *op;
+    if (index != 0U || !a64_kvm_va_mask_form(fn, ins, context))
+        return false;
+    op = &ins->operands[0];
+    return op->kind == MINIC_MACHINE_OPERAND_REGISTER &&
+        op->asm_constraint != NULL && strcmp(op->asm_constraint, "+r") == 0 &&
+        op->asm_name == NULL &&
+        op->value.physical.reg.bank == MINIC_MACHINE_REGISTER_GENERAL &&
+        op->value.physical.reg.number == 9U &&
+        op->value.physical.reg.width_bits == 64U &&
+        op->value.physical.access == (MINIC_MACHINE_REGISTER_READ |
+                                     MINIC_MACHINE_REGISTER_WRITE);
+}
+
+static bool a64_kvm_va_mask_operand(FILE *output,
+    const MinicMachineFunction *fn, const MinicMachineInstruction *ins,
+    const MinicMachineGNUAsmLabels *labels, size_t index,
+    unsigned char modifier, void *context) {
+    (void)labels;
+    return modifier == 0U &&
+        a64_kvm_va_mask_binding(fn, ins, index, context) &&
+        (output == NULL || fputs("x9", output) >= 0);
+}
+
+static const MinicMachineSourceAsmTemplatePolicy a64_kvm_va_mask_policy = {
+    a64_kvm_va_mask_form, a64_kvm_va_mask_binding,
+    a64_kvm_va_mask_operand, NULL
+};
+
 /* The physical source-ASM representation of Linux arm64 io.h's raw writes
  * and feature-91 acquire-read alternatives. Both source templates are
  * reclassified by the immutable ISA catalog before any GNU substitution.
@@ -669,8 +722,7 @@ static bool a64_source_goto_policy_form(const MinicMachineFunction *fn,
             value->asm_name == NULL &&
             value->value.symbol.relocation ==
                 MINIC_A64_RELOC_SOURCE_IMMEDIATE &&
-            (value->value.symbol.addend == 0 ||
-             value->value.symbol.addend == 1);
+            aarch64_linux_jump_key_addend(value->value.symbol.addend);
     return value->kind == MINIC_MACHINE_OPERAND_INTEGER &&
         value->asm_name != NULL &&
         strcmp(value->asm_name, "cpucap") == 0 &&
@@ -714,7 +766,8 @@ static bool a64_source_goto_policy_operand(FILE *output,
         if (output == NULL) return true;
         return op->value.symbol.addend == 0 ?
             fprintf(output, "%s", op->value.symbol.name) >= 0 :
-            fprintf(output, "%s+1", op->value.symbol.name) >= 0;
+            fprintf(output, "%s+%" PRId64, op->value.symbol.name,
+                op->value.symbol.addend) >= 0;
     }
     if (modifier != 0U) return false;
     return output == NULL ||
@@ -1195,6 +1248,26 @@ static bool a64_machine_pstate_alternative(
                          MINIC_MACHINE_EFFECT_COMPILER_BARRIER);
 }
 
+/* Independent physical Machine proof for Linux's five supported
+ * ALTERNATIVE(BARRIER) variants. Their .altinstructions and .org length
+ * assertions must survive verbatim and cannot become an opaque NOP. */
+static bool a64_machine_barrier_alternative(
+    const MinicMachineInstruction *ins) {
+    return ins != NULL && ins->source_asm_template != NULL &&
+        ins->source_asm_machine_form_id ==
+            AARCH64_MACHINE_ASM_BARRIER_ALTERNATIVE &&
+        ins->source_asm_machine_form_variant == 0U &&
+        ins->kind == MINIC_MACHINE_INSTRUCTION_SOURCE_ASM &&
+        ins->operand_count == 0U && ins->implicit_count == 0U &&
+        !ins->source_asm_terminates_block &&
+        !ins->source_asm_permits_fallthrough &&
+        ins->effects == (MINIC_MACHINE_EFFECT_SOURCE_ASM |
+                         MINIC_MACHINE_EFFECT_VOLATILE |
+                         MINIC_MACHINE_EFFECT_COMPILER_BARRIER) &&
+        aarch64_linux_barrier_alternative(ins->source_asm_template,
+            ins->source_asm_length) != NULL;
+}
+
 /* Three exact Linux source-ASM families: exclusive compare/wait, MMIO
  * dependency ordering and fault-recoverable unaligned zero-pad. Never accept
  * arbitrary GNU template bytes or unbound compiler-selected registers. */
@@ -1327,6 +1400,7 @@ bool minic_aarch64_machine_source_asm_validate(
           minic_machine_source_asm_template_preflight(&function,
               instruction, &a64_kexec_crash_policy) ||
          a64_machine_pstate_alternative(instruction) ||
+         a64_machine_barrier_alternative(instruction) ||
          a64_machine_extra_source_form(instruction) ||
          minic_machine_source_asm_template_preflight(&function,
              instruction, &a64_hyp_spin_policy) ||
@@ -1342,6 +1416,8 @@ bool minic_aarch64_machine_source_asm_validate(
              instruction, &a64_tlbi_template_policy) ||
          minic_machine_source_asm_template_preflight(&function,
              instruction, &a64_one_gp_policy) ||
+         minic_machine_source_asm_template_preflight(&function,
+             instruction, &a64_kvm_va_mask_policy) ||
          minic_machine_source_asm_template_preflight(&function,
              instruction, &a64_raw_io_policy) ||
          minic_machine_source_asm_template_preflight(&function,
@@ -1460,6 +1536,13 @@ bool minic_aarch64_machine_source_asm_emit(
     if (a64_one_gp_form(instruction))
         return minic_machine_source_asm_template_emit(output, function,
             instruction, labels, &a64_one_gp_policy) &&
+            ((instruction->source_asm_length != 0U &&
+              instruction->source_asm_template[
+                  instruction->source_asm_length - 1U] == '\n') ||
+             fputc('\n', output) != EOF);
+    if (a64_kvm_va_mask_form(function, instruction, NULL))
+        return minic_machine_source_asm_template_emit(output, function,
+            instruction, labels, &a64_kvm_va_mask_policy) &&
             ((instruction->source_asm_length != 0U &&
               instruction->source_asm_template[
                   instruction->source_asm_length - 1U] == '\n') ||

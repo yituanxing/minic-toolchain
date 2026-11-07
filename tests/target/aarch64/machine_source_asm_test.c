@@ -1,5 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
 #include "target/aarch64/machine_source_asm.h"
+#include "target/aarch64/machine_opcode.h"
 #include "target/aarch64/asm_contract_internal.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -48,6 +49,206 @@ int main(void) {
     len = fread(bytes, 1U, sizeof(bytes), out);
     fclose(out);
     if (len != 4U || memcmp(bytes, "nop\n", 4U) != 0) return 1;
+    {
+        static const char linux_at_barrier[] =
+            ".if 1 == 1\n"
+            "661:\n\tnop\n662:\n"
+            ".pushsection .altinstructions,\"a\"\n"
+            " .word 661b - .\n .word 663f - .\n .hword 71\n"
+            " .byte 662b-661b\n .byte 664f-663f\n"
+            ".popsection\n.subsection 1\n"
+            "663:\n\tdmb sy\n664:\n"
+            ".org . - (664b-663b) + (662b-661b)\n"
+            ".org . - (662b-661b) + (664b-663b)\n"
+            ".previous\n.endif\n";
+        char changed[sizeof(linux_at_barrier)];
+        FILE *selected;
+        memset(&ins, 0, sizeof(ins));
+        ins.kind = MINIC_MACHINE_INSTRUCTION_SOURCE_ASM;
+        ins.effects = MINIC_MACHINE_EFFECT_SOURCE_ASM |
+            MINIC_MACHINE_EFFECT_VOLATILE |
+            MINIC_MACHINE_EFFECT_COMPILER_BARRIER;
+        ins.source_asm_machine_form_id =
+            AARCH64_MACHINE_ASM_BARRIER_ALTERNATIVE;
+        ins.source_asm_template = (char *)linux_at_barrier;
+        ins.source_asm_length = sizeof(linux_at_barrier) - 1U;
+        if (!minic_aarch64_machine_source_asm_validate(&target, &ins, NULL))
+            return 1;
+        selected = open_test_output();
+        if (selected == NULL ||
+            !minic_aarch64_machine_source_asm_emit(
+                selected, &fn, &ins, NULL, NULL) ||
+            fflush(selected) != 0 || fseek(selected, 0L, SEEK_END) != 0 ||
+            ftell(selected) != (long)sizeof(linux_at_barrier)) {
+            if (selected != NULL) fclose(selected);
+            return 1;
+        }
+        fclose(selected);
+        ins.effects &= ~MINIC_MACHINE_EFFECT_COMPILER_BARRIER;
+        if (minic_aarch64_machine_source_asm_validate(&target, &ins, NULL))
+            return 1;
+        ins.effects |= MINIC_MACHINE_EFFECT_COMPILER_BARRIER;
+        memcpy(changed, linux_at_barrier, sizeof(changed));
+        {
+            char *cap = strstr(changed, ".hword 71");
+            if (cap == NULL) return 1;
+            cap[7] = '2';
+        }
+        ins.source_asm_template = changed;
+        if (minic_aarch64_machine_source_asm_validate(&target, &ins, NULL))
+            return 1;
+        ins.source_asm_template = (char *)linux_at_barrier;
+        ins.source_asm_machine_form_id = 0U;
+        if (minic_aarch64_machine_source_asm_validate(&target, &ins, NULL))
+            return 1;
+        memset(&ins, 0, sizeof(ins));
+        ins.kind = MINIC_MACHINE_INSTRUCTION_SOURCE_ASM;
+    }
+    {
+        /* Inlined Linux static keys may be elements of an external array:
+         * symbol+32 is a real key, not a misplaced bit-0 branch flag. */
+        static const char key_goto[] =
+            "1:\tnop\n"
+            ".pushsection __jump_table,\"aw\"\n"
+            ".align 3\n"
+            ".long 1b - ., %l[l_yes] - .\n"
+            ".quad %c0 - .\n"
+            ".popsection\n";
+        MinicMachineOperand bindings[2] = {{0}};
+        const char *const names[] = {".Lkey_yes"};
+        const MinicMachineGNUAsmLabels labels = {names, 1U};
+        char selected_bytes[512] = {0};
+        FILE *selected;
+        memset(&ins, 0, sizeof(ins));
+        ins.kind = MINIC_MACHINE_INSTRUCTION_SOURCE_ASM;
+        ins.effects = MINIC_MACHINE_EFFECT_SOURCE_ASM |
+            MINIC_MACHINE_EFFECT_VOLATILE |
+            MINIC_MACHINE_EFFECT_BRANCH;
+        ins.source_asm_template = (char *)key_goto;
+        ins.source_asm_length = sizeof(key_goto) - 1U;
+        ins.source_asm_terminates_block = true;
+        ins.source_asm_permits_fallthrough = true;
+        ins.operand_count = 2U;
+        ins.operands = bindings;
+        bindings[0].kind = MINIC_MACHINE_OPERAND_SYMBOL;
+        bindings[0].asm_constraint = "i";
+        bindings[0].value.symbol.name = "perf_swevent_enabled";
+        bindings[0].value.symbol.relocation =
+            MINIC_A64_RELOC_SOURCE_IMMEDIATE;
+        bindings[0].value.symbol.addend = 32;
+        bindings[1].kind = MINIC_MACHINE_OPERAND_BLOCK;
+        bindings[1].asm_name = "l_yes";
+        bindings[1].value.block_id = 0U;
+        if (!minic_aarch64_machine_source_asm_validate(&target, &ins, NULL))
+            return 1;
+        selected = open_test_output();
+        if (selected == NULL ||
+            !minic_aarch64_machine_source_asm_emit(
+                selected, &fn, &ins, &labels, NULL) ||
+            fflush(selected) != 0 || fseek(selected, 0L, SEEK_SET) != 0) {
+            if (selected != NULL) fclose(selected);
+            return 1;
+        }
+        len = fread(selected_bytes, 1U, sizeof(selected_bytes) - 1U,
+            selected);
+        fclose(selected);
+        selected_bytes[len] = '\0';
+        if (strstr(selected_bytes, ".quad perf_swevent_enabled+32 - .") == NULL ||
+            strstr(selected_bytes, ".Lkey_yes") == NULL ||
+            strstr(selected_bytes, "%c0") != NULL) return 1;
+        bindings[0].value.symbol.addend = 33;
+        if (!minic_aarch64_machine_source_asm_validate(&target, &ins, NULL))
+            return 1;
+        bindings[0].value.symbol.addend = 2;
+        if (minic_aarch64_machine_source_asm_validate(&target, &ins, NULL))
+            return 1;
+        bindings[0].value.symbol.addend = -8;
+        if (minic_aarch64_machine_source_asm_validate(&target, &ins, NULL))
+            return 1;
+        memset(&ins, 0, sizeof(ins));
+        ins.kind = MINIC_MACHINE_INSTRUCTION_SOURCE_ASM;
+    }
+    {
+        static const char kvm_va_mask[] =
+            ".if 1 == 1\n"
+            "661:\n"
+            "\tand %0, %0, #1\n"
+            "\tror %0, %0, #1\n"
+            "\tadd %0, %0, #0\n"
+            "\tadd %0, %0, #0, lsl 12\n"
+            "\tror %0, %0, #63\n"
+            "662:\n"
+            ".pushsection .altinstructions,\"a\"\n"
+            " .word 661b - .\n"
+            " .word kvm_update_va_mask - .\n"
+            " .hword (1 << 15) | (1)\n"
+            " .byte 662b - 661b\n"
+            " .byte 664f - 663f\n"
+            ".popsection\n"
+            "663:\n664:\n"
+            ".endif\n";
+        static const char alien_callback[] =
+            ".if 1 == 1\n661:\n\tand %0, %0, #1\n\t"
+            "ror %0, %0, #1\n\tadd %0, %0, #0\n\t"
+            "add %0, %0, #0, lsl 12\n\tror %0, %0, #63\n"
+            "662:\n.pushsection .altinstructions,\"a\"\n"
+            ".word 661b - .\n.word forbidden_callback - .\n"
+            ".hword (1 << 15) | (1)\n.byte 662b - 661b\n"
+            ".byte 664f - 663f\n.popsection\n663:\n664:\n.endif\n";
+        MinicMachineOperand binding = {0};
+        char selected_bytes[1024] = {0};
+        FILE *selected;
+        memset(&ins, 0, sizeof(ins));
+        binding.kind = MINIC_MACHINE_OPERAND_REGISTER;
+        binding.value.physical.reg = (MinicMachineRegister){9U, 64U,
+            MINIC_MACHINE_REGISTER_GENERAL};
+        binding.value.physical.access = MINIC_MACHINE_REGISTER_READ |
+            MINIC_MACHINE_REGISTER_WRITE;
+        binding.asm_constraint = "+r";
+        ins.kind = MINIC_MACHINE_INSTRUCTION_SOURCE_ASM;
+        ins.effects = MINIC_MACHINE_EFFECT_SOURCE_ASM |
+            MINIC_MACHINE_EFFECT_VOLATILE;
+        ins.source_asm_machine_form_id = AARCH64_MACHINE_ASM_KVM_VA_MASK;
+        ins.source_asm_template = (char *)kvm_va_mask;
+        ins.source_asm_length = sizeof(kvm_va_mask) - 1U;
+        ins.operand_count = 1U;
+        ins.operands = &binding;
+        if (!minic_aarch64_machine_source_asm_validate(&target, &ins, NULL))
+            return 1;
+        selected = open_test_output();
+        if (selected == NULL ||
+            !minic_aarch64_machine_source_asm_emit(
+                selected, &fn, &ins, NULL, NULL) ||
+            fflush(selected) != 0 || fseek(selected, 0L, SEEK_SET) != 0) {
+            if (selected != NULL) fclose(selected);
+            return 1;
+        }
+        len = fread(selected_bytes, 1U, sizeof(selected_bytes) - 1U,
+            selected);
+        fclose(selected);
+        selected_bytes[len] = '\0';
+        if (strstr(selected_bytes, "and x9, x9, #1") == NULL ||
+            strstr(selected_bytes, "kvm_update_va_mask") == NULL ||
+            strstr(selected_bytes, ".altinstructions") == NULL ||
+            strstr(selected_bytes, "%0") != NULL) return 1;
+        binding.value.physical.reg.number = 10U;
+        if (minic_aarch64_machine_source_asm_validate(&target, &ins, NULL))
+            return 1;
+        binding.value.physical.reg.number = 9U;
+        binding.value.physical.access = MINIC_MACHINE_REGISTER_READ;
+        if (minic_aarch64_machine_source_asm_validate(&target, &ins, NULL))
+            return 1;
+        binding.value.physical.access = MINIC_MACHINE_REGISTER_READ |
+            MINIC_MACHINE_REGISTER_WRITE;
+        ins.source_asm_template = (char *)alien_callback;
+        ins.source_asm_length = sizeof(alien_callback) - 1U;
+        if (minic_aarch64_machine_source_asm_validate(&target, &ins, NULL))
+            return 1;
+        ins.source_asm_template = (char *)kvm_va_mask;
+        ins.source_asm_length = sizeof(kvm_va_mask) - 1U;
+        memset(&ins, 0, sizeof(ins));
+        ins.kind = MINIC_MACHINE_INSTRUCTION_SOURCE_ASM;
+    }
     {
         static const char daif_source[] =
             "msr\tdaifset, #0xf\t\t// local_daif_mask\n";

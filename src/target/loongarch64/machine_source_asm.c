@@ -376,10 +376,49 @@ static bool loong_source_operand(FILE *out,
 static bool loong_source_validate_form(const MinicMachineFunction *fn,
     const MinicMachineInstruction *ins, void *context) {
     unsigned int form, reg, access;
+    size_t i;
     (void)context;
     if (fn == NULL || fn->target == NULL || ins == NULL ||
         fn->target->architecture != MINIC_TARGET_ARCH_LOONGARCH64 ||
         !loong_source_form(ins)) return false;
+    if (ins->source_asm_machine_form_id == LOONG_DESC_VDSO) {
+        static const unsigned int registers[] = {4U, 11U, 4U, 5U};
+        static const char *const constraints[] = {"+r", "r", "r", "r"};
+        const unsigned int effects = MINIC_MACHINE_EFFECT_SOURCE_ASM |
+            MINIC_MACHINE_EFFECT_VOLATILE |
+            MINIC_MACHINE_EFFECT_COMPILER_BARRIER |
+            MINIC_MACHINE_EFFECT_MEMORY_READ |
+            MINIC_MACHINE_EFFECT_MEMORY_WRITE;
+        if (ins->source_asm_machine_form_variant != 0U ||
+            ins->operand_count != 4U || ins->operands == NULL ||
+            ins->implicit_count != 9U || ins->implicit == NULL ||
+            ins->effects != effects || ins->source_asm_terminates_block ||
+            ins->source_asm_permits_fallthrough) return false;
+        for (i = 0U; i < 4U; ++i) {
+            const MinicMachineOperand *operand = &ins->operands[i];
+            if (operand->kind != MINIC_MACHINE_OPERAND_REGISTER ||
+                operand->value.physical.reg.bank !=
+                    MINIC_MACHINE_REGISTER_GENERAL ||
+                operand->value.physical.reg.width_bits != 64U ||
+                operand->value.physical.reg.number != registers[i] ||
+                operand->value.physical.access != (i == 0U
+                    ? MINIC_MACHINE_REGISTER_READ |
+                      MINIC_MACHINE_REGISTER_WRITE
+                    : MINIC_MACHINE_REGISTER_READ) ||
+                operand->asm_constraint == NULL ||
+                strcmp(operand->asm_constraint, constraints[i]) != 0)
+                return false;
+        }
+        for (i = 0U; i < 9U; ++i) {
+            const MinicMachineRegisterEffect *clobber = &ins->implicit[i];
+            if (clobber->reg.bank != MINIC_MACHINE_REGISTER_GENERAL ||
+                clobber->reg.width_bits != 64U ||
+                clobber->reg.number != 12U + (unsigned int)i ||
+                clobber->access != MINIC_MACHINE_REGISTER_CLOBBER)
+                return false;
+        }
+        return true;
+    }
     if (ins->source_asm_machine_form_id == LOONG_DESC_FPR_TRANSFER) {
         const MinicMachineRegisterEffect *effect = ins->implicit;
         form = loong_linux_fpr_transfer_form(ins->source_asm_template,

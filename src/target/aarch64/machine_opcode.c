@@ -233,7 +233,7 @@ static bool a64_relocation(const MinicTargetInfo *target,
         ((addend == 0 && reloc >= MINIC_A64_RELOC_DIRECT &&
           reloc <= MINIC_A64_RELOC_GOT_LO12) ||
          (reloc == MINIC_A64_RELOC_SOURCE_IMMEDIATE &&
-          (addend == 0 || addend == 1)));
+          aarch64_linux_jump_key_addend(addend)));
 }
 
 static bool a64_address(const MinicTargetInfo *target,

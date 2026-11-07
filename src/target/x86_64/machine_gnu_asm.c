@@ -1162,6 +1162,28 @@ static bool x86_emit_source_asm(FILE *out,
                 instruction,labels,&x86_cmpxchg128_policy) &&
             fputc('\n',out) != EOF;
     if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_GEN_ENDBR)
+        return minic_x86_64_machine_validate_source_asm(function->target,
+                instruction,NULL) &&
+            fputs("  movl $~0xfa1e0ff3, %eax\n  notl %eax\n",out) != EOF;
+    if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_SEGMENT_LOAD_EXTABLE) {
+        static const char *const selectors[] = {"fs","gs","ds","es","ss"};
+        variant = instruction->source_asm_machine_form_variant;
+        if (variant < 1U || variant > 5U ||
+            !minic_x86_64_machine_validate_source_asm(function->target,
+                instruction,NULL)) return false;
+        return fprintf(out,
+            "  1: movw %%ax, %%%s\n"
+            "  2:\n"
+            "  .pushsection \"__ex_table\",\"a\"\n"
+            "  .balign 4\n"
+            "  .long (1b) - .\n"
+            "  .long (2b) - .\n"
+            "  .long 5\n"
+            "  .popsection\n",selectors[variant-1U]) >= 0;
+    }
+    if (instruction->source_asm_machine_form_id ==
             MINIC_X86_MACHINE_ASM_CRASH_REGISTER) {
         const unsigned int form = instruction->source_asm_machine_form_variant;
         /* Canonical GNU physical ISA spellings preserve the historical
@@ -1177,7 +1199,7 @@ static bool x86_emit_source_asm(FILE *out,
                     &instruction->operands[0].value.address) &&
                 fputc('\n',out) != EOF;
         }
-        if (form == 17U)
+        if (form == 17U || form == 19U)
             return fputs("  pushfq\n  popq (%r11)\n",out) != EOF;
         return form == 18U && fputs("  leaq 0(%rip), %rax\n",out) != EOF;
     }
@@ -1328,6 +1350,38 @@ static bool x86_emit_source_asm(FILE *out,
         return fputs(form_id == MINIC_X86_MACHINE_ASM_MMIO_READ ?
             reads[index] : form_id == MINIC_X86_MACHINE_ASM_MMIO_WRITE ?
                 writes[index] : exchanges[index],out) != EOF;
+    }
+    if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_PCI_MMCONFIG) {
+        static const char *const reads[] = {
+            "  movb (%r10), %al\n", "  movw (%r10), %ax\n",
+            "  movl (%r10), %eax\n"
+        };
+        static const char *const writes[] = {
+            "  movb %al, (%r10)\n", "  movw %ax, (%r10)\n",
+            "  movl %eax, (%r10)\n"
+        };
+        const unsigned int width = instruction->source_asm_machine_form_variant;
+        const bool reading = minic_x86_64_linux_pci_mmconfig_form(
+            instruction->source_asm_template,
+            instruction->source_asm_length, false) != 0U;
+        const unsigned int index = width == 1U ? 0U :
+            width == 2U ? 1U : 2U;
+        if ((width != 1U && width != 2U && width != 4U) ||
+            !minic_x86_64_machine_validate_source_asm(function->target,
+                instruction, NULL)) return false;
+        return fputs(reading ? reads[index] : writes[index],out) != EOF;
+    }
+    if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_REP_STOS) {
+        const size_t width = minic_x86_64_linux_rep_stos_width(
+            instruction->source_asm_template,
+            instruction->source_asm_length);
+        if ((width != 2U && width != 4U && width != 8U) ||
+            !minic_x86_64_machine_validate_source_asm(function->target,
+                instruction, NULL)) return false;
+        return fputs(width == 2U ? "  rep; stosw\n" :
+            width == 4U ? "  rep; stosl\n" : "  rep; stosq\n",out) != EOF;
     }
     if (instruction->source_asm_machine_form_id ==
             MINIC_X86_MACHINE_ASM_FDIV_BUG) {

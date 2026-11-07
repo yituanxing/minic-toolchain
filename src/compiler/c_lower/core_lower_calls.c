@@ -5,6 +5,7 @@
 #include "compiler/inline_specialize_common.h"
 #include "frontend/const_eval.h"
 #include "frontend/expression_semantics.h"
+#include "target/backend_source.h"
 #include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -559,6 +560,102 @@ static bool core_gnu_straight_expression(
     }
 }
 
+/* GNU `extern inline always_inline` may wrap one qualified output-asm in a
+ * local result object and return that object (Linux's native flags reader).
+ * This is source-shape expansion, not a new machine form or a general
+ * statement inliner. All ISA, template and constraint approval comes from
+ * the selected source backend; the existing Core ASM lowering then creates
+ * the exact typed memory effect and the normal scalar LOAD produces the
+ * caller's return value. The unreachable synthetic default return is parser
+ * metadata and never becomes a second machine effect. */
+static MinicCoreLowerStatus core_lower_qualified_local_asm_inline(
+    MinicCoreLowerContext *context, const MinicExpression *call,
+    const MinicFunction *callee, MinicCoreValueId *result, bool *handled) {
+    const MinicC0Program *program;
+    const MinicBlock *body;
+    const MinicStatement *asm_statement, *return_statement, *default_return;
+    const MinicInlineAsm *asm_source;
+    const MinicExpression *output, *return_expr, *default_expr;
+    const MinicLocal *local;
+    MinicTargetInlineAsmContract contract = {0};
+    MinicCoreObjectId local_object = MINIC_CORE_OBJECT_INVALID;
+    MinicCoreLocalIntegerConstant local_constant = {0};
+    const MinicFunction *old_owner;
+    MinicCoreObjectId *old_objects;
+    MinicCoreLocalIntegerConstant *old_constants;
+    MinicCoreLowerStatus status;
+    if (handled == NULL) return MINIC_CORE_LOWER_ERROR;
+    *handled = false;
+    if (context == NULL || context->body == NULL ||
+        (program = context->body->program) == NULL ||
+        context->target == NULL || callee == NULL || result == NULL ||
+        call == NULL || !callee->is_gnu_inline_only ||
+        !callee->is_always_inline || context->gnu_inline_call_depth >= 8U ||
+        callee->parameter_count != 0U || call->value.call.argument_count != 0U ||
+        callee->local_count != 1U || callee->body_block == MINIC_BLOCK_INVALID ||
+        (body = minic_c0_program_block(program, callee->body_block)) == NULL ||
+        body->statement_count != 3U ||
+        (asm_statement = minic_c0_program_statement(program,
+            body->statements[0])) == NULL ||
+        (return_statement = minic_c0_program_statement(program,
+            body->statements[1])) == NULL ||
+        (default_return = minic_c0_program_statement(program,
+            body->statements[2])) == NULL ||
+        asm_statement->kind != MINIC_STATEMENT_INLINE_ASM ||
+        return_statement->kind != MINIC_STATEMENT_RETURN ||
+        default_return->kind != MINIC_STATEMENT_RETURN ||
+        asm_statement->cleanup_context != asm_statement->cleanup_stop_context ||
+        return_statement->cleanup_context != return_statement->cleanup_stop_context ||
+        default_return->cleanup_context != default_return->cleanup_stop_context ||
+        asm_statement->inline_asm_id == MINIC_INLINE_ASM_INVALID ||
+        (asm_source = minic_c0_program_inline_asm(
+            program, asm_statement->inline_asm_id)) == NULL ||
+        !asm_source->is_volatile || asm_source->is_goto ||
+        asm_source->output_count != 1U || asm_source->outputs == NULL ||
+        asm_source->input_count != 0U || asm_source->label_count != 0U ||
+        return_statement->expression == MINIC_EXPRESSION_INVALID ||
+        (return_expr = minic_c0_program_expression(
+            program, return_statement->expression)) == NULL ||
+        return_expr->kind != MINIC_EXPRESSION_LOCAL ||
+        (output = minic_c0_program_expression(
+            program, asm_source->outputs[0].expression)) == NULL ||
+        output->kind != MINIC_EXPRESSION_LOCAL ||
+        output->value.local_id != callee->local_begin ||
+        return_expr->value.local_id != callee->local_begin ||
+        (local = minic_c0_program_local(program, callee->local_begin)) == NULL ||
+        !minic_type_equal(local->type, callee->return_type) ||
+        !minic_type_is_integer(local->type) ||
+        default_return->expression == MINIC_EXPRESSION_INVALID ||
+        (default_expr = minic_c0_program_expression(
+            program, default_return->expression)) == NULL ||
+        default_expr->kind != MINIC_EXPRESSION_INTEGER ||
+        default_expr->value.integer_value != 0 ||
+        !minic_source_backend_qualify_inline_asm(
+            minic_source_backend_for_target(&context->target->machine),
+            context->target, program, asm_source, &contract) ||
+        contract.owner == MINIC_ASM_OPERAND_PLAN_NONE ||
+        contract.target_machine_form_id == 0U ||
+        contract.operand_count != 1U ||
+        contract.kinds[0] != MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_OUTPUT)
+        return MINIC_CORE_LOWER_UNSUPPORTED;
+    *handled = true;
+    old_owner = context->source_function;
+    old_objects = context->local_objects;
+    old_constants = context->local_integer_constants;
+    context->source_function = callee;
+    context->local_objects = &local_object;
+    context->local_integer_constants = &local_constant;
+    ++context->gnu_inline_call_depth;
+    status = minic_core_lower_inline_asm(context, asm_statement);
+    if (status == MINIC_CORE_LOWER_OK)
+        status = lower_expression(context, return_statement->expression, result);
+    --context->gnu_inline_call_depth;
+    context->source_function = old_owner;
+    context->local_objects = old_objects;
+    context->local_integer_constants = old_constants;
+    return status;
+}
+
 static MinicCoreLowerStatus core_lower_straight_gnu_inline(
     MinicCoreLowerContext *context, const MinicExpression *call,
     const MinicFunction *callee, MinicCoreValueId *result) {
@@ -690,9 +787,15 @@ static MinicCoreLowerStatus core_lower_direct_call_impl(
         return MINIC_CORE_LOWER_UNSUPPORTED;
     }
     if (value_id != NULL && callee->is_gnu_inline_only &&
-        callee->is_always_inline)
+        callee->is_always_inline) {
+        bool handled = false;
+        MinicCoreLowerStatus inline_status =
+            core_lower_qualified_local_asm_inline(
+                context, expression, callee, value_id, &handled);
+        if (handled) return inline_status;
         return core_lower_straight_gnu_inline(
             context, expression, callee, value_id);
+    }
 
     /* CONFIG-off internal void helpers with no effects can be elided only
      * when every original call argument is independently pure. Record

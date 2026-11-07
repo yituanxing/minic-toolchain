@@ -1615,8 +1615,7 @@ static bool a64_linux_source_asm_goto(A64CoreSelection *sel,
         bindings[0].asm_name = immediate->asm_name;
     } else {
         if (!minic_core_inline_asm_relocation_valid(immediate) ||
-            (immediate->byte_addend != 0 &&
-             immediate->byte_addend != 1))
+            !aarch64_linux_jump_key_addend(immediate->byte_addend))
             return false;
         bindings[0] = a64_symbol(immediate->symbol,
             MINIC_A64_RELOC_SOURCE_IMMEDIATE);
@@ -1659,6 +1658,33 @@ static bool a64_linux_pstate_alternative_zero(A64CoreSelection *sel,
         source->target_machine_form_variant != 0U ||
         source->operand_plan_owner != MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED ||
         !source->has_memory_clobber ||
+        source->register_clobber_count != 0U ||
+        source->resolved_immediate_count != 0U ||
+        source->symbol_reference_count != 0U ||
+        source->deferred_immediate_symbol != NULL ||
+        ins->result != MINIC_CORE_VALUE_INVALID ||
+        ins->value.structured_inline_asm.operand_count != 0U ||
+        !minic_core_function_type_is_kind(fn, ins->core_type_id,
+            MINIC_CORE_TYPE_VOID)) return false;
+    return minic_machine_builder_emit_core_source_asm(&sel->builder,
+        source, 0U, NULL, 0U, NULL, 0U, false, false);
+}
+
+/* The kernel AT/PAR ordering sequence uses an exact feature-71
+ * ALTERNATIVE(NOP, DMB SY), including patch-site .org constraints. Its
+ * zero-operand Core form was source-qualified but not yet selected into
+ * typed MachineIR. Preserve the entire source record for GNU GAS. */
+static bool a64_linux_barrier_alternative_zero(A64CoreSelection *sel,
+    const MinicCoreInstruction *ins, const MinicCoreInlineAsm *source) {
+    const MinicCoreFunction *fn = sel->ctx->fn;
+    if (source->target_machine_form_id !=
+            AARCH64_MACHINE_ASM_BARRIER_ALTERNATIVE ||
+        source->target_machine_form_variant != 0U ||
+        aarch64_linux_barrier_alternative(source->template_text,
+            source->template_length) == NULL ||
+        !source->is_volatile || source->is_goto ||
+        !source->has_memory_clobber || !source->implicit_memory_effect ||
+        source->operand_plan_owner != MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED ||
         source->register_clobber_count != 0U ||
         source->resolved_immediate_count != 0U ||
         source->symbol_reference_count != 0U ||
@@ -2153,6 +2179,51 @@ static bool a64_linux_one_gp_source(A64CoreSelection *sel,
         source, cache ? MINIC_MACHINE_EFFECT_MEMORY_READ |
                         MINIC_MACHINE_EFFECT_MEMORY_WRITE : 0U,
         &binding, 1U, NULL, 0U, false, false);
+}
+
+/* __kern_hyp_va() is Linux's one-register KVM VA-mask ALTERNATIVE_CB. The
+ * callback/feature record remains source-owned; the already-qualified +r
+ * unsigned-long lvalue is loaded into x9, used by the exact five-op GNU
+ * template, and written back only after that template completes. */
+static bool a64_linux_kvm_va_mask_source(A64CoreSelection *sel,
+    const MinicCoreInstruction *ins, const MinicCoreInlineAsm *source) {
+    const MinicCoreFunction *fn = sel->ctx->fn;
+    const MinicCoreStructuredInlineAsmOperand *op =
+        ins->value.structured_inline_asm.operands;
+    MinicMachineOperand binding = a64_gp(A64_T0, 64U,
+        MINIC_MACHINE_REGISTER_READ | MINIC_MACHINE_REGISTER_WRITE);
+    if (source->target_machine_form_id != AARCH64_MACHINE_ASM_KVM_VA_MASK ||
+        source->target_machine_form_variant != 0U ||
+        !aarch64_linux_kvm_va_mask_form(
+            source->template_text, source->template_length) ||
+        source->operand_plan_owner != MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED ||
+        !source->is_volatile || source->is_goto ||
+        source->has_memory_clobber || source->implicit_memory_effect ||
+        source->register_clobber_count != 0U ||
+        source->resolved_immediate_count != 0U ||
+        source->symbol_reference_count != 0U ||
+        source->deferred_immediate_symbol != NULL ||
+        ins->result != MINIC_CORE_VALUE_INVALID ||
+        !minic_core_function_type_is_kind(fn, ins->core_type_id,
+            MINIC_CORE_TYPE_VOID) ||
+        ins->value.structured_inline_asm.operand_count != 1U ||
+        op == NULL || sel->ctx->machine_frame->has_dynamic_stack ||
+        op->operand_index != 0U ||
+        op->kind != MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE ||
+        op->has_fixed_register_binding || op->early_clobber ||
+        op->physical_early_clobber || !op->physical_read_write ||
+        op->has_tied_output ||
+        !aarch64_asm_core_integer(fn, op->value, true, 8U, -1))
+        return false;
+    binding.asm_constraint = "+r";
+    return a64_load_core(sel, op->value, A64_T1, 64U) &&
+        a64_memory_register(sel, MINIC_A64_MACHINE_LDR_X, false,
+            A64_T0, 64U, A64_T1, 0U, false, false) &&
+        minic_machine_builder_emit_core_source_asm(&sel->builder,
+            source, 0U, &binding, 1U, NULL, 0U, false, false) &&
+        a64_load_core(sel, op->value, A64_T1, 64U) &&
+        a64_memory_register(sel, MINIC_A64_MACHINE_STR_X, false,
+            A64_T0, 64U, A64_T1, 0U, true, false);
 }
 
 /* GNU BRK I(imm) is a source-qualified hardware trap, not the zero-
@@ -4620,6 +4691,9 @@ static bool a64_core_instruction(A64CoreSelection *sel,
         if (source->target_machine_form_id ==
                 AARCH64_MACHINE_ASM_PSTATE_ALTERNATIVE)
             return a64_linux_pstate_alternative_zero(sel, ins, source);
+        if (source->target_machine_form_id ==
+                AARCH64_MACHINE_ASM_BARRIER_ALTERNATIVE)
+            return a64_linux_barrier_alternative_zero(sel, ins, source);
         if (source->target_machine_form_id == AARCH64_MACHINE_ASM_KEXEC_CRASH)
             return a64_linux_kexec_crash_source(sel, ins, source);
         if (source->target_machine_form_id == AARCH64_MACHINE_ASM_BRK)
@@ -4637,6 +4711,8 @@ static bool a64_core_instruction(A64CoreSelection *sel,
             source->target_machine_form_id == AARCH64_MACHINE_ASM_CACHE_OP ||
             source->target_machine_form_id == AARCH64_MACHINE_ASM_PREFETCH)
             return a64_linux_one_gp_source(sel, ins, source);
+        if (source->target_machine_form_id == AARCH64_MACHINE_ASM_KVM_VA_MASK)
+            return a64_linux_kvm_va_mask_source(sel, ins, source);
         if (source->target_machine_form_id == AARCH64_MACHINE_ASM_MRS ||
             source->target_machine_form_id == AARCH64_MACHINE_ASM_MSR ||
             source->target_machine_form_id == AARCH64_MACHINE_ASM_ENCODED_SYSREG_READ ||

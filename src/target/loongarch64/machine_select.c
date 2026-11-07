@@ -33,7 +33,8 @@
 
 enum {
     LOONG_ZERO = 0U, LOONG_RA = 1U, LOONG_SP = 3U,
-    LOONG_A0 = 4U, LOONG_T0 = 12U, LOONG_T1 = 13U,
+    LOONG_A0 = 4U, LOONG_A1 = 5U, LOONG_A7 = 11U,
+    LOONG_T0 = 12U, LOONG_T1 = 13U,
     LOONG_T2 = 14U, LOONG_T3 = 15U, LOONG_T4 = 16U,
     LOONG_T5 = 17U, LOONG_T6 = 18U, LOONG_T7 = 19U,
     LOONG_S0 = 23U, LOONG_ASM_TRANSFER_SLOTS = 3U
@@ -3243,6 +3244,89 @@ static bool loong_structured_memory_asm(LoongSelector *sel,
     }
 }
 
+/* Restore the former target-owned Linux VDSO fallback syscall ABI.  The
+ * GNU source contains no %operands, so selecting generic scalar registers
+ * would silently pass the wrong syscall number and pointer arguments.
+ * C ingress already sealed this exact volatile template and its constraints;
+ * here Core fixed-register witnesses are checked again before MachineIR. */
+static bool loong_select_vdso_syscall(LoongSelector *sel,
+    const MinicCoreInstruction *ins, const MinicCoreInlineAsm *source) {
+    static const char *const expected_fixed[] = {"a0", "a7", "a0", "a1"};
+    static const unsigned int registers[] = {
+        LOONG_A0, LOONG_A7, LOONG_A0, LOONG_A1
+    };
+    static char *const constraints[] = {"+r", "r", "r", "r"};
+    const MinicCoreFunction *fn = sel->ctx->fn;
+    const MinicCoreStructuredInlineAsmOperand *roles =
+        ins->value.structured_inline_asm.operands;
+    MinicMachineOperand bindings[4] = {{0}};
+    MinicMachineRegisterEffect clobbers[9] = {0};
+    size_t i;
+    if (source->target_machine_form_id != LOONG_DESC_VDSO ||
+        source->target_machine_form_variant != 0U ||
+        source->operand_plan_owner != MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED ||
+        !source->is_volatile || source->is_goto ||
+        !source->has_memory_clobber ||
+        source->register_clobber_count != 9U ||
+        source->register_clobbers == NULL ||
+        !loong_linux_vdso_syscall_form(source->template_text,
+            source->template_length) ||
+        ins->value.structured_inline_asm.operand_count != 4U ||
+        roles == NULL || fn->fixed_register_bindings == NULL ||
+        !loong_structured_scalar_shape(fn, roles[0].value, 8U, true, 1) ||
+        !loong_structured_scalar_shape(fn, roles[1].value, 8U, false, 1) ||
+        (!minic_core_function_value_is_kind(fn, roles[2].value,
+             MINIC_CORE_TYPE_POINTER) &&
+         !loong_structured_scalar_shape(fn, roles[2].value, 4U, false, 1)) ||
+        !minic_core_function_value_is_kind(fn, roles[3].value,
+             MINIC_CORE_TYPE_POINTER)) return false;
+    for (i = 0U; i < 4U; ++i) {
+        const MinicCoreFixedRegisterBinding *fixed;
+        if (roles[i].operand_index != i ||
+            roles[i].value >= fn->value_count ||
+            roles[i].early_clobber ||
+            roles[i].has_tied_output ||
+            !roles[i].has_fixed_register_binding ||
+            roles[i].fixed_register_binding_id >=
+                fn->fixed_register_binding_count ||
+            roles[i].kind != (i == 0U
+                ? MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE
+                : MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT))
+            return false;
+        fixed = &fn->fixed_register_bindings[
+            roles[i].fixed_register_binding_id];
+        if (!fixed->is_local || fixed->register_name == NULL ||
+            fixed->register_name_length != 2U ||
+            memcmp(fixed->register_name, expected_fixed[i], 2U) != 0)
+            return false;
+        bindings[i] = loong_gp(registers[i],
+            i == 0U ? MINIC_MACHINE_REGISTER_READ |
+                MINIC_MACHINE_REGISTER_WRITE : MINIC_MACHINE_REGISTER_READ);
+        bindings[i].asm_constraint = constraints[i];
+    }
+    for (i = 0U; i < 9U; ++i) {
+        const MinicCoreInlineAsmRegisterClobber *clobber =
+            &source->register_clobbers[i];
+        if (clobber->name == NULL || clobber->name_length != 3U ||
+            clobber->name[0] != '$' || clobber->name[1] != 't' ||
+            clobber->name[2] != (char)('0' + i)) return false;
+        clobbers[i].reg = loong_reg(LOONG_T0 + (unsigned int)i);
+        clobbers[i].access = MINIC_MACHINE_REGISTER_CLOBBER;
+    }
+    /* The output '+r' describes $a0, already loaded from tv.  As in the
+     * old backend, do not read uninitialized C ret before the syscall. */
+    return loong_load_value(sel, roles[1].value, LOONG_A7, true) &&
+        loong_load_value(sel, roles[2].value, LOONG_A0,
+            minic_core_function_value_is_kind(fn, roles[2].value,
+                MINIC_CORE_TYPE_POINTER)) &&
+        loong_load_value(sel, roles[3].value, LOONG_A1, true) &&
+        minic_machine_builder_emit_core_source_asm(&sel->builder,
+            source, MINIC_MACHINE_EFFECT_MEMORY_READ |
+                MINIC_MACHINE_EFFECT_MEMORY_WRITE,
+            bindings, 4U, clobbers, 9U, false, false) &&
+        loong_structured_store(sel, roles[0].value, LOONG_A0, 8U);
+}
+
 static bool loong_select_structured_asm(LoongSelector *sel,
     const MinicCoreInstruction *ins) {
     const MinicCoreFunction *fn = sel->ctx->fn;
@@ -3273,6 +3357,8 @@ static bool loong_select_structured_asm(LoongSelector *sel,
     if (ins->value.structured_inline_asm.operand_count == 0U)
         return minic_loongarch64_select_core_source_asm(
             &sel->builder, sel->ctx, ins);
+    if (source->target_machine_form_id == LOONG_DESC_VDSO)
+        return loong_select_vdso_syscall(sel, ins, source);
     if (source->target_machine_form_id ==
         MINIC_LOONG_MACHINE_ASM_HINT_DBAR)
         return minic_loongarch64_select_core_dbar_hint(

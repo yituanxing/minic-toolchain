@@ -399,6 +399,10 @@ bool minic_x86_64_typed_machine_form_matches_template(
     /* The source-qualified descriptor's memory direction must reach MIR. */
     if (form_id == MINIC_X86_MACHINE_ASM_LIDT)
         return form != 0U && variant == form;
+    /* Segment-selector exception tables are physically distinct FS/GS/DS/ES/SS
+     * writes; keep the admitted selector identity sealed into MachineIR. */
+    if (form_id == MINIC_X86_MACHINE_ASM_SEGMENT_LOAD_EXTABLE)
+        return form >= 1U && form <= 5U && variant == form;
     /* All eight privileged CRn forms have distinct hardware direction and
      * register identities; carry that precise selection into MachineIR. */
     if (form_id == MINIC_X86_MACHINE_ASM_CONTROL_REGISTER)
@@ -409,6 +413,11 @@ bool minic_x86_64_typed_machine_form_matches_template(
         return form != 0U && variant == form;
     if (form_id == MINIC_X86_MACHINE_ASM_IRQ_STACK_CALL)
         return form >= 1U && form <= 3U && variant == form;
+    /* PCI MMCONFIG's exact byte/word/dword accumulator width is a hardware
+     * ABI restriction, unlike the width-agnostic source-only form tags. */
+    if (form_id == MINIC_X86_MACHINE_ASM_PCI_MMCONFIG)
+        return (form == 1U || form == 2U || form == 4U) &&
+            variant == form;
     /* Most other tagged source families publish variant zero; the explicit
      * privileged/debug families above carry their exact physical variant. */
     if (form_id >= MINIC_X86_MACHINE_ASM_CRASH_REGISTER &&
@@ -696,6 +705,11 @@ unsigned int minic_x86_64_linux_crash_misc_snapshot_form(
     const char *text, size_t length) {
     if (minic_x86_64_compact_asm_equals(text, length, "pushfq;popq%0")) return 1U;
     if (minic_x86_64_compact_asm_equals(text, length, "lea0(%%rip),%0")) return 2U;
+    /* Linux native_save_fl(): the source comment and generic `pushf` spelling
+     * are sealed here, then canonicalized to the existing 64-bit FLAGS dump.
+     * The =rm/memory-clobber contract is verified separately at C ingress. */
+    if (minic_x86_64_compact_asm_equals(
+            text, length, "#__raw_save_flagspushf;pop%0")) return 3U;
     return 0U;
 }
 

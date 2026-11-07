@@ -203,15 +203,18 @@ static bool x86_linux_crash_register_source(const MinicTargetInvocation *invocat
         src->template_text, src->template_length) : 0U;
     const unsigned int misc = src ? minic_x86_64_linux_crash_misc_snapshot_form(
         src->template_text, src->template_length) : 0U;
-    const bool memory_output = gpr != 0U || misc == 1U;
+    const bool native_flags = misc == 3U;
+    const bool memory_output = gpr != 0U || misc == 1U || native_flags;
     const MinicExpression *out;
     MinicType plain;
     if (!program || !src || !contract || (!gpr && !misc) ||
         src->is_goto || src->is_volatile != memory_output ||
         src->output_count != 1U || src->input_count != 0U || !src->outputs ||
-        src->label_count || src->has_memory_clobber || src->clobber_count ||
+        src->label_count || src->has_memory_clobber != native_flags ||
+        src->clobber_count != (native_flags ? 1U : 0U) ||
         src->register_clobber_count ||
-        !target_constraint_is(&src->outputs[0], memory_output ? "=m" : "=r"))
+        !target_constraint_is(&src->outputs[0],
+            native_flags ? "=rm" : memory_output ? "=m" : "=r"))
         return false;
     out = minic_c0_program_expression(program, src->outputs[0].expression);
     if (!out || out->value_category != MINIC_VALUE_LVALUE ||
@@ -550,6 +553,7 @@ static bool x86_linux_pci_mmconfig_source(const MinicTargetInvocation *invocatio
         MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT :
         MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
     contract->kinds[1] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+    contract->target_machine_form_variant = width;
     contract->implicit_memory_effect = true;
     return true;
 }
@@ -4039,9 +4043,11 @@ static bool x86_linux_segment_load_extable_source(const MinicTargetInvocation *i
     (void)invocation;
     const MinicExpression *value;
     MinicType type;
+    const unsigned int form = source ?
+        minic_x86_64_linux_segment_load_extable_form(
+            source->template_text,source->template_length) : 0U;
     if (!program || !source || !contract ||
-        !minic_x86_64_linux_segment_load_extable_form(
-            source->template_text, source->template_length) ||
+        !form ||
         !source->is_volatile || source->is_goto || source->output_count ||
         source->input_count != 1U || !source->inputs ||
         source->label_count || source->clobber_count != 1U ||
@@ -4055,6 +4061,7 @@ static bool x86_linux_segment_load_extable_source(const MinicTargetInvocation *i
     contract->operand_count = 1U;
     contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
     contract->implicit_memory_effect = true;
+    contract->target_machine_form_variant = form;
     return true;
 }
 
@@ -5388,7 +5395,11 @@ static bool x86_linux_debug_register_source(const MinicTargetInvocation *invocat
     const MinicExpression *value, *dummy;
     MinicType plain;
     if (!program || !source || !contract || !form || source->is_goto ||
-        source->is_volatile != dr7 || source->output_count != (read ? 1U : 0U) ||
+        /* GNU output-free extended ASM is implicitly volatile even without
+         * an explicit `volatile` keyword. DR7's dummy memory forms are
+         * explicitly volatile; only the five plain DR reads are not. */
+        source->is_volatile != (dr7 || !read) ||
+        source->output_count != (read ? 1U : 0U) ||
         source->input_count != (read ? (dr7 ? 1U : 0U) : (dr7 ? 2U : 1U)) ||
         (read && !source->outputs) ||
         (source->input_count && !source->inputs) ||
