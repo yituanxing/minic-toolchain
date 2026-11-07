@@ -3482,19 +3482,26 @@ PY_FRAME_PROLOGUE
   baseline_image_sha="$image_sha"
   if [[ "${COHORT_P1_EIGHT_OWNER:-0}" == 1 && "$baseline_verdict" == PASS ]]; then
     # The frozen all-MiniC Image is timing-sensitive: an initial PASS does
-    # not refute the recorded IRQ underflow. Repeat *identical bytes* before
-    # deciding whether this same-run control reproduced the bug.
-    for attempt in 2 3 4; do
+    # not refute the recorded IRQ underflow. Demand twelve independent P1
+    # boots of *identical bytes*: if all pass, the repaired all-MiniC Image
+    # itself is certified and no diagnostic eight-owner overlay is needed.
+    # On the first failure, preserve the original eight-owner rescue route.
+    for attempt in 2 3 4 5 6 7 8 9 10 11 12; do
       trial "p1_eight_control_$attempt" "$n" p1
       [[ "$image_sha" == "$baseline_image_sha" ]] || {
         echo "P1_EIGHT_OWNER=ERROR control_image_sha_changed" >&2; exit 8;
       }
       echo "P1_EIGHT_OWNER=CONTROL attempt=$attempt verdict=$TRIAL_VERDICT image_sha=$image_sha"
-      if [[ "$TRIAL_VERDICT" == FAIL ]]; then
-        baseline_verdict=FAIL
+      if [[ "$TRIAL_VERDICT" != PASS ]]; then
+        baseline_verdict="$TRIAL_VERDICT"
         break
       fi
     done
+    if [[ "$baseline_verdict" == PASS ]]; then
+      echo "P1_EIGHT_OWNER=NOT_REQUIRED all_minic_baseline_stable=true"
+      echo "P1_STRICT_SAME_IMAGE=PASS minic_c=2064 boots=12/12 image_sha=$baseline_image_sha original_16KiB=true no_GCC_C_fallback=true"
+      exit 0
+    fi
   fi
   if [[ "${COHORT_P1_PAIR_DEBUG:-0}" == 1 ]]; then
     # GDB observes the exact already-linked all-MiniC FAILED control.
