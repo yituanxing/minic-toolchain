@@ -17,6 +17,9 @@ on:
       - 'tests/external/busybox/probe-four-backend-frontier.sh'
       - 'tests/external/busybox/check-pinned-1361-source.sh'
       - 'tests/compiler/c0/probe-aarch64-pie-extern-got.sh'
+      - 'tests/compiler/c0/probe-aarch64-linux-jump-label.sh'
+      - 'tests/compiler/c0/probe-aarch64-linux-kvm-kern-hyp-va-callback.sh'
+      - 'tests/compiler/c0/aarch64_linux_kvm_kern_hyp_va_callback.c'
       - 'tests/vendor/tiny-aes-c/**'
       - 'Makefile'
   workflow_dispatch:
@@ -34,6 +37,9 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
       - name: Install proven AArch64 GNU cross tools and QEMU
         timeout-minutes: 12
         shell: bash
@@ -63,7 +69,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: build/aarch-stage4-ci/obj
-          key: minic-aarch-stage4-objects-v1-${{ runner.os }}-${{ runner.arch }}-${{ github.sha }}
+          key: minic-aarch-stage4-objects-v1-${{ runner.os }}-${{ runner.arch }}-${{ github.event.pull_request.head.sha || github.sha }}
       - name: Build MiniC once for both original software projects
         run: make -j2 MODE=release CFLAGS=-Werror BUILD_DIR=build/aarch-stage4-ci build/aarch-stage4-ci/bin/minic-cc
       - name: Save exact-SHA compiler objects before runtime gates
@@ -71,7 +77,25 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: build/aarch-stage4-ci/obj
-          key: minic-aarch-stage4-objects-v1-${{ runner.os }}-${{ runner.arch }}-${{ github.sha }}
+          key: minic-aarch-stage4-objects-v1-${{ runner.os }}-${{ runner.arch }}-${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Linux jump-label and KVM callback exact-head GNU assembler smoke
+        shell: bash
+        env:
+          MINIC_CC: ${{ github.workspace }}/build/aarch-stage4-ci/bin/minic-cc
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse HEAD)" = '${{ github.event.pull_request.head.sha || github.sha }}'
+          command -v aarch64-linux-gnu-gcc
+          mkdir -p build/aarch-stage4-ci/evidence
+          sh tests/compiler/c0/probe-aarch64-linux-jump-label.sh |
+            tee build/aarch-stage4-ci/evidence/linux-jump-label.receipt
+          grep -Fxq 'AARCH64_JUMP_LABEL_GNU_AS=PASS' \
+            build/aarch-stage4-ci/evidence/linux-jump-label.receipt
+          sh tests/compiler/c0/probe-aarch64-linux-kvm-kern-hyp-va-callback.sh |
+            tee build/aarch-stage4-ci/evidence/linux-kvm-va-callback.receipt
+          grep -Fxq 'AARCH64_KVM_VA_CALLBACK_GNU_AS=PASS' \
+            build/aarch-stage4-ci/evidence/linux-kvm-va-callback.receipt
 
       - name: Record exact compiler and pinned original software origins
         shell: bash

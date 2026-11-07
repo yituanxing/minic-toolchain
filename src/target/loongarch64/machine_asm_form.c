@@ -16,6 +16,17 @@ unsigned int loong_linux_jump_label_form(
         ".long1b-.,%l[l_yes]-..quad%0-..popsection");
 }
 
+bool minic_loongarch64_jump_key_relocation_valid(
+    const char *symbol, int64_t addend) {
+    MinicCoreInlineAsmImmediate source_witness = {0};
+    source_witness.kind = MINIC_CORE_INLINE_ASM_IMMEDIATE_SYMBOL;
+    source_witness.symbol = (char *)symbol;
+    source_witness.byte_addend = addend;
+    /* Machine is not a second C expression evaluator: this is the same
+     * bounded symbol-plus-byte-addend witness the source/Core gate sealed. */
+    return minic_core_inline_asm_relocation_valid(&source_witness);
+}
+
 bool minic_loongarch64_linux_jump_label_asm_goto_core(
     const MinicCoreInlineAsm *source) {
     return minic_multi_linux_jump_label_asm_goto_core(

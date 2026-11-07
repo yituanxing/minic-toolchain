@@ -57,12 +57,13 @@ if test -n "${MINIC_JUMP_BASELINE_CC:-}"; then
     fi
     echo 'AARCH64_LINUX_JUMP_LABEL_DIFF=PASS asm_byte_identical=1'
 fi
-grep -Fq '1: nop' "$work/jump.s"
-grep -Fq '1: b .Lmini_arm_' "$work/jump.s"
-test "$(grep -Fc '.pushsection __jump_table,"aw"' "$work/jump.s")" -eq 3
-test "$(grep -Fc '.balign 8' "$work/jump.s")" -eq 3
-grep -Fq '.quad local_key - .' "$work/jump.s"
-grep -Fq '.quad external_key - .' "$work/jump.s"
+grep -Eq '^1:[[:space:]]+nop([[:space:]]|$)' "$work/jump.s"
+grep -Eq '^1:[[:space:]]+b[[:space:]]+\.L[^[:space:]]+' "$work/jump.s"
+test "$(grep -Ec '^[[:space:]]*\.pushsection[[:space:]]+__jump_table,[[:space:]]*"aw"' "$work/jump.s")" -eq 3
+# AArch GAS .align 3 and .balign 8 both specify an eight-byte boundary.
+test "$(grep -Ec '^[[:space:]]*\.(align[[:space:]]+3|balign[[:space:]]+8)([[:space:]]|$)' "$work/jump.s")" -eq 3
+grep -Eq '^[[:space:]]*\.quad[[:space:]]+local_key[[:space:]]*-[[:space:]]*\.' "$work/jump.s"
+grep -Eq '^[[:space:]]*\.quad[[:space:]]+external_key[[:space:]]*-[[:space:]]*\.' "$work/jump.s"
 echo 'AARCH64_LINUX_JUMP_LABEL=PASS site=3 PREL32=6 PREL64=3 inline_clone=1'
 
 cross=${AARCH64_CC:-aarch64-linux-gnu-gcc}

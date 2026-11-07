@@ -1,5 +1,6 @@
 #include "target/loongarch64/machine_opcode.h"
 #include "target/loongarch64/machine_target_state.h"
+#include "target/loongarch64/machine_asm_form.h"
 
 #include <inttypes.h>
 #include <limits.h>
@@ -263,7 +264,7 @@ static bool loong_relocation(const MinicTargetInfo *target,
         target->architecture != MINIC_TARGET_ARCH_LOONGARCH64 ||
         symbol == NULL || symbol[0] == '\0') return false;
     if (reloc == MINIC_LOONG_RELOC_JUMP_LABEL_KEY)
-        return addend == 0 || addend == 1;
+        return minic_loongarch64_jump_key_relocation_valid(symbol, addend);
     return addend == 0 && reloc >= MINIC_LOONG_RELOC_DIRECT &&
         reloc <= MINIC_LOONG_RELOC_PC_LO12;
 }

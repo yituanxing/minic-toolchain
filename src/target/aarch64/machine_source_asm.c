@@ -373,6 +373,57 @@ static const MinicMachineSourceAsmTemplatePolicy a64_kvm_va_mask_policy = {
     a64_kvm_va_mask_operand, NULL
 };
 
+/* XPACLRI's GNU +r transport is bound to physical x30: `hint #7` affects
+ * LR itself, even though the template does not spell a %0 placeholder. */
+static bool a64_xpaclri_policy_form(const MinicMachineFunction *fn,
+    const MinicMachineInstruction *ins, void *context) {
+    (void)context;
+    return fn != NULL && fn->target != NULL &&
+        fn->target->architecture == MINIC_TARGET_ARCH_AARCH64 &&
+        ins != NULL && ins->kind == MINIC_MACHINE_INSTRUCTION_SOURCE_ASM &&
+        ins->source_asm_machine_form_id == AARCH64_MACHINE_ASM_XPACLRI &&
+        ins->source_asm_machine_form_variant == 0U &&
+        ins->effects == (MINIC_MACHINE_EFFECT_SOURCE_ASM |
+                         MINIC_MACHINE_EFFECT_VOLATILE) &&
+        ins->operand_count == 1U && ins->operands != NULL &&
+        ins->implicit_count == 0U &&
+        !ins->source_asm_terminates_block &&
+        !ins->source_asm_permits_fallthrough &&
+        aarch64_linux_xpaclri_form(ins->source_asm_template,
+            ins->source_asm_length);
+}
+
+static bool a64_xpaclri_policy_binding(const MinicMachineFunction *fn,
+    const MinicMachineInstruction *ins, size_t index, void *context) {
+    const MinicMachineOperand *op;
+    if (index != 0U || !a64_xpaclri_policy_form(fn, ins, context))
+        return false;
+    op = &ins->operands[0];
+    return op->kind == MINIC_MACHINE_OPERAND_REGISTER &&
+        op->asm_constraint != NULL && strcmp(op->asm_constraint, "+r") == 0 &&
+        op->asm_name == NULL &&
+        op->value.physical.reg.bank == MINIC_MACHINE_REGISTER_GENERAL &&
+        op->value.physical.reg.number == 30U &&
+        op->value.physical.reg.width_bits == 64U &&
+        op->value.physical.access == (MINIC_MACHINE_REGISTER_READ |
+                                     MINIC_MACHINE_REGISTER_WRITE);
+}
+
+static bool a64_xpaclri_policy_operand(FILE *output,
+    const MinicMachineFunction *fn, const MinicMachineInstruction *ins,
+    const MinicMachineGNUAsmLabels *labels, size_t index,
+    unsigned char modifier, void *context) {
+    (void)labels;
+    return modifier == 0U &&
+        a64_xpaclri_policy_binding(fn, ins, index, context) &&
+        (output == NULL || fputs("x30", output) >= 0);
+}
+
+static const MinicMachineSourceAsmTemplatePolicy a64_xpaclri_policy = {
+    a64_xpaclri_policy_form, a64_xpaclri_policy_binding,
+    a64_xpaclri_policy_operand, NULL
+};
+
 /* The physical source-ASM representation of Linux arm64 io.h's raw writes
  * and feature-91 acquire-read alternatives. Both source templates are
  * reclassified by the immutable ISA catalog before any GNU substitution.
@@ -468,6 +519,7 @@ static const MinicMachineSourceAsmTemplatePolicy a64_raw_io_policy = {
  * their following typed store reaches the source lvalue. */
 static bool a64_sysreg_source_form(const MinicMachineInstruction *ins) {
     uint32_t variant = 0U;
+    Aarch64LinuxVheSysregAlternative alternative = {0};
     const char *text;
     size_t len;
     bool valid = false;
@@ -476,7 +528,11 @@ static bool a64_sysreg_source_form(const MinicMachineInstruction *ins) {
         ins->source_asm_terminates_block ||
         ins->source_asm_permits_fallthrough ||
         ins->effects != (MINIC_MACHINE_EFFECT_SOURCE_ASM |
-                         MINIC_MACHINE_EFFECT_VOLATILE)) return false;
+                         MINIC_MACHINE_EFFECT_VOLATILE |
+                         (ins->source_asm_machine_form_id ==
+                            AARCH64_MACHINE_ASM_VHE_SYSREG_ALTERNATIVE ?
+                            MINIC_MACHINE_EFFECT_COMPILER_BARRIER : 0U)))
+        return false;
     text = ins->source_asm_template;
     len = ins->source_asm_length;
     switch (ins->source_asm_machine_form_id) {
@@ -494,6 +550,12 @@ static bool a64_sysreg_source_form(const MinicMachineInstruction *ins) {
         variant = aarch64_linux_encoded_sysreg_write_form(text, len);
         valid = variant != 0U;
         break;
+    case AARCH64_MACHINE_ASM_VHE_SYSREG_ALTERNATIVE:
+        /* Both original .irp/.macro arms and their feature-47/50
+         * .altinstructions relocation are recognized as one sealed form. */
+        valid = aarch64_linux_vhe_sysreg_alternative_form(text, len,
+            &alternative);
+        break;
     default: return false;
     }
     return valid && ins->source_asm_machine_form_variant == variant;
@@ -510,9 +572,15 @@ static bool a64_sysreg_policy_form(const MinicMachineFunction *fn,
 static bool a64_sysreg_policy_binding(const MinicMachineFunction *fn,
     const MinicMachineInstruction *ins, size_t index, void *context) {
     const MinicMachineOperand *operand;
+    Aarch64LinuxVheSysregAlternative alternative = {0};
+    const bool vhe = ins != NULL &&
+        ins->source_asm_machine_form_id == AARCH64_MACHINE_ASM_VHE_SYSREG_ALTERNATIVE;
     const bool output = ins != NULL &&
         (ins->source_asm_machine_form_id == AARCH64_MACHINE_ASM_MRS ||
-         ins->source_asm_machine_form_id == AARCH64_MACHINE_ASM_ENCODED_SYSREG_READ);
+         ins->source_asm_machine_form_id == AARCH64_MACHINE_ASM_ENCODED_SYSREG_READ ||
+         (vhe && aarch64_linux_vhe_sysreg_alternative_form(
+             ins->source_asm_template, ins->source_asm_length,
+             &alternative) && alternative.is_read));
     const bool tegra = ins != NULL &&
         ins->source_asm_machine_form_id == AARCH64_MACHINE_ASM_MSR &&
         aarch64_linux_msr_register(ins->source_asm_template,
@@ -524,6 +592,7 @@ static bool a64_sysreg_policy_binding(const MinicMachineFunction *fn,
         ins->operands == NULL) return false;
     operand = &ins->operands[index];
     return operand->kind == MINIC_MACHINE_OPERAND_REGISTER &&
+        (!vhe || operand->asm_name == NULL) &&
         operand->asm_constraint != NULL &&
         strcmp(operand->asm_constraint, output ? "=r" : tegra ? "r" : "rZ") == 0 &&
         operand->value.physical.reg.bank == MINIC_MACHINE_REGISTER_GENERAL &&
@@ -540,6 +609,12 @@ static bool a64_sysreg_policy_operand(FILE *output,
     (void)labels;
     const bool msr = ins != NULL &&
         ins->source_asm_machine_form_id == AARCH64_MACHINE_ASM_MSR;
+    Aarch64LinuxVheSysregAlternative alternative = {0};
+    const bool vhe_write = ins != NULL &&
+        ins->source_asm_machine_form_id == AARCH64_MACHINE_ASM_VHE_SYSREG_ALTERNATIVE &&
+        aarch64_linux_vhe_sysreg_alternative_form(
+            ins->source_asm_template, ins->source_asm_length,
+            &alternative) && !alternative.is_read;
     const bool tegra = msr &&
         aarch64_linux_msr_register(ins->source_asm_template,
             ins->source_asm_length) != NULL &&
@@ -547,7 +622,7 @@ static bool a64_sysreg_policy_operand(FILE *output,
             ins->source_asm_length), "s3_0_c15_c0_4") == 0;
     return modifier == (ins != NULL &&
         (ins->source_asm_machine_form_id == AARCH64_MACHINE_ASM_ENCODED_SYSREG_WRITE ||
-         (msr && !tegra)) ? 'x' : 0U) &&
+         vhe_write || (msr && !tegra)) ? 'x' : 0U) &&
         a64_sysreg_policy_binding(fn, ins, index, context) &&
         (output == NULL || fputs("x9", output) >= 0);
 }
@@ -1268,6 +1343,135 @@ static bool a64_machine_barrier_alternative(
             ins->source_asm_length) != NULL;
 }
 
+/* SMCCC has no textual GNU substitution operands, but its ABI is not
+ * operand-free: the already sealed original Linux source binds four returns
+ * to x0..x3 and one to eight arguments to x0..x7. Revalidate this complete
+ * typed physical contract on MachineIR before serializing either SMC/HVC. */
+static bool a64_machine_smccc_form(const MinicMachineInstruction *ins) {
+    size_t i;
+    unsigned int variant;
+    const unsigned int effects = MINIC_MACHINE_EFFECT_SOURCE_ASM |
+        MINIC_MACHINE_EFFECT_VOLATILE |
+        MINIC_MACHINE_EFFECT_COMPILER_BARRIER |
+        MINIC_MACHINE_EFFECT_MEMORY_READ |
+        MINIC_MACHINE_EFFECT_MEMORY_WRITE;
+    if (ins == NULL ||
+        ins->source_asm_machine_form_id != AARCH64_MACHINE_ASM_SMCCC ||
+        (variant = aarch64_linux_smccc_form(ins->source_asm_template,
+            ins->source_asm_length)) == 0U ||
+        ins->source_asm_machine_form_variant != variant ||
+        ins->effects != effects ||
+        ins->operand_count < 5U || ins->operand_count > 12U ||
+        ins->operands == NULL || ins->implicit_count != 0U ||
+        ins->source_asm_terminates_block ||
+        ins->source_asm_permits_fallthrough)
+        return false;
+    for (i = 0U; i < ins->operand_count; ++i) {
+        const MinicMachineOperand *operand = &ins->operands[i];
+        const bool output = i < 4U;
+        if (operand->kind != MINIC_MACHINE_OPERAND_REGISTER ||
+            operand->asm_name != NULL || operand->asm_constraint == NULL ||
+            strcmp(operand->asm_constraint, output ? "=r" : "r") != 0 ||
+            operand->value.physical.reg.bank != MINIC_MACHINE_REGISTER_GENERAL ||
+            operand->value.physical.reg.number != (output ? i : i - 4U) ||
+            operand->value.physical.reg.width_bits != 64U ||
+            operand->value.physical.access != (output ?
+                MINIC_MACHINE_REGISTER_WRITE : MINIC_MACHINE_REGISTER_READ))
+            return false;
+    }
+    return true;
+}
+
+static bool a64_machine_vdso_svc_form(const MinicMachineInstruction *ins) {
+    static const unsigned int regs[] = {0U, 0U, 1U, 8U};
+    const unsigned int effects = MINIC_MACHINE_EFFECT_SOURCE_ASM |
+        MINIC_MACHINE_EFFECT_VOLATILE |
+        MINIC_MACHINE_EFFECT_COMPILER_BARRIER |
+        MINIC_MACHINE_EFFECT_MEMORY_READ |
+        MINIC_MACHINE_EFFECT_MEMORY_WRITE;
+    size_t i;
+    if (ins == NULL ||
+        ins->source_asm_machine_form_id != AARCH64_MACHINE_ASM_SVC ||
+        !aarch64_linux_svc_form(ins->source_asm_template,
+            ins->source_asm_length) ||
+        ins->source_asm_machine_form_variant != 0U ||
+        ins->effects != effects || ins->operand_count != 4U ||
+        ins->operands == NULL || ins->implicit_count != 0U ||
+        ins->source_asm_terminates_block ||
+        ins->source_asm_permits_fallthrough) return false;
+    for (i = 0U; i < 4U; ++i) {
+        const MinicMachineOperand *op = &ins->operands[i];
+        const bool output = i == 0U;
+        if (op->kind != MINIC_MACHINE_OPERAND_REGISTER ||
+            op->asm_name != NULL || op->asm_constraint == NULL ||
+            strcmp(op->asm_constraint, output ? "=r" : "r") != 0 ||
+            op->value.physical.reg.bank != MINIC_MACHINE_REGISTER_GENERAL ||
+            op->value.physical.reg.width_bits != 64U ||
+            op->value.physical.reg.number != regs[i] ||
+            op->value.physical.access != (output ?
+                MINIC_MACHINE_REGISTER_WRITE : MINIC_MACHINE_REGISTER_READ))
+            return false;
+    }
+    return true;
+}
+
+static bool a64_machine_vdso_timer_form(const MinicMachineInstruction *ins) {
+    const unsigned int effects = MINIC_MACHINE_EFFECT_SOURCE_ASM |
+        MINIC_MACHINE_EFFECT_VOLATILE |
+        MINIC_MACHINE_EFFECT_COMPILER_BARRIER;
+    const MinicMachineOperand *op;
+    unsigned int variant;
+    if (ins == NULL ||
+        ins->source_asm_machine_form_id !=
+            AARCH64_MACHINE_ASM_TIMER_ALTERNATIVE ||
+        (variant = aarch64_linux_timer_alternative_form(
+            ins->source_asm_template, ins->source_asm_length)) == 0U ||
+        ins->source_asm_machine_form_variant != variant ||
+        ins->effects != effects || ins->operand_count != 1U ||
+        ins->operands == NULL || ins->implicit_count != 0U ||
+        ins->source_asm_terminates_block ||
+        ins->source_asm_permits_fallthrough) return false;
+    op = &ins->operands[0];
+    return op->kind == MINIC_MACHINE_OPERAND_REGISTER &&
+        op->asm_name == NULL && op->asm_constraint != NULL &&
+        strcmp(op->asm_constraint, "=r") == 0 &&
+        op->value.physical.reg.bank == MINIC_MACHINE_REGISTER_GENERAL &&
+        op->value.physical.reg.number == 9U &&
+        op->value.physical.reg.width_bits == 64U &&
+        op->value.physical.access == MINIC_MACHINE_REGISTER_WRITE;
+}
+
+static bool a64_machine_vdso_counter_ordering_form(
+    const MinicMachineInstruction *ins) {
+    const unsigned int effects = MINIC_MACHINE_EFFECT_SOURCE_ASM |
+        MINIC_MACHINE_EFFECT_VOLATILE |
+        MINIC_MACHINE_EFFECT_COMPILER_BARRIER |
+        MINIC_MACHINE_EFFECT_MEMORY_READ;
+    size_t i;
+    if (ins == NULL || ins->source_asm_machine_form_id !=
+            AARCH64_MACHINE_ASM_COUNTER_ORDERING ||
+        !aarch64_linux_counter_ordering_form(ins->source_asm_template,
+            ins->source_asm_length) ||
+        ins->source_asm_machine_form_variant != 0U ||
+        ins->effects != effects || ins->operand_count != 2U ||
+        ins->operands == NULL || ins->implicit_count != 0U ||
+        ins->source_asm_terminates_block ||
+        ins->source_asm_permits_fallthrough) return false;
+    for (i = 0U; i < 2U; ++i) {
+        const MinicMachineOperand *op = &ins->operands[i];
+        if (op->kind != MINIC_MACHINE_OPERAND_REGISTER ||
+            op->asm_name != NULL || op->asm_constraint == NULL ||
+            strcmp(op->asm_constraint, i == 0U ? "=r" : "r") != 0 ||
+            op->value.physical.reg.bank != MINIC_MACHINE_REGISTER_GENERAL ||
+            op->value.physical.reg.width_bits != 64U ||
+            op->value.physical.reg.number != 9U + i ||
+            op->value.physical.access != (i == 0U ?
+                MINIC_MACHINE_REGISTER_WRITE : MINIC_MACHINE_REGISTER_READ))
+            return false;
+    }
+    return true;
+}
+
 /* Three exact Linux source-ASM families: exclusive compare/wait, MMIO
  * dependency ordering and fault-recoverable unaligned zero-pad. Never accept
  * arbitrary GNU template bytes or unbound compiler-selected registers. */
@@ -1401,6 +1605,10 @@ bool minic_aarch64_machine_source_asm_validate(
               instruction, &a64_kexec_crash_policy) ||
          a64_machine_pstate_alternative(instruction) ||
          a64_machine_barrier_alternative(instruction) ||
+         a64_machine_smccc_form(instruction) ||
+         a64_machine_vdso_svc_form(instruction) ||
+         a64_machine_vdso_timer_form(instruction) ||
+         a64_machine_vdso_counter_ordering_form(instruction) ||
          a64_machine_extra_source_form(instruction) ||
          minic_machine_source_asm_template_preflight(&function,
              instruction, &a64_hyp_spin_policy) ||
@@ -1418,6 +1626,8 @@ bool minic_aarch64_machine_source_asm_validate(
              instruction, &a64_one_gp_policy) ||
          minic_machine_source_asm_template_preflight(&function,
              instruction, &a64_kvm_va_mask_policy) ||
+         minic_machine_source_asm_template_preflight(&function,
+             instruction, &a64_xpaclri_policy) ||
          minic_machine_source_asm_template_preflight(&function,
              instruction, &a64_raw_io_policy) ||
          minic_machine_source_asm_template_preflight(&function,
@@ -1442,6 +1652,84 @@ bool minic_aarch64_machine_source_asm_emit(
         return minic_machine_source_asm_template_emit(output, function,
             instruction, labels, &a64_sha3_eor3_policy) &&
             fputc('\n', output) != EOF;
+    if (a64_machine_smccc_form(instruction))
+        return fputs(instruction->source_asm_machine_form_variant == 1U ?
+            "  hvc #0\n" : "  smc #0\n", output) != EOF;
+    if (a64_machine_vdso_svc_form(instruction))
+        return fputs("  svc #0\n", output) != EOF;
+    if (a64_machine_vdso_timer_form(instruction)) {
+        const unsigned int variant =
+            instruction->source_asm_machine_form_variant;
+        /* S3_3_C14_C0_{1,2} -> S3_3_C14_C0_{5,6}. Both original GNU
+         * branches are exactly sealed; only resolve their physical Rt=x9
+         * and preserve feature-19 PREL32 patch metadata and .org lengths. */
+        const uint32_t mrs_base = UINT32_C(0xd5300000) |
+            (3U << 19) | (3U << 16) | (14U << 12) | 9U;
+        return fprintf(output,
+            ".if 1 == 1\n"
+            "661:\n"
+            "  isb\n"
+            "  .inst 0x%08x\n"
+            "662:\n"
+            ".pushsection .altinstructions,\"a\"\n"
+            "  .word 661b - .\n"
+            "  .word 663f - .\n"
+            "  .hword 19\n"
+            "  .byte 662b-661b\n"
+            "  .byte 664f-663f\n"
+            ".popsection\n"
+            ".subsection 1\n"
+            "663:\n"
+            "  nop\n"
+            "  .inst 0x%08x\n"
+            "664:\n"
+            "  .org . - (664b-663b) + (662b-661b)\n"
+            "  .org . - (662b-661b) + (664b-663b)\n"
+            ".previous\n"
+            ".endif\n",
+            (unsigned)(mrs_base | (variant << 5)),
+            (unsigned)(mrs_base | ((4U + variant) << 5))) >= 0;
+    }
+    if (a64_machine_vdso_counter_ordering_form(instruction))
+        return fputs("  eor x9, x10, x10\n"
+                     "  add x9, sp, x9\n"
+                     "  ldr xzr, [x9]\n", output) != EOF;
+    if (instruction->source_asm_machine_form_id ==
+            AARCH64_MACHINE_ASM_VHE_SYSREG_ALTERNATIVE) {
+        Aarch64LinuxVheSysregAlternative pair = {0};
+        /* Original feature-47/50 GNU alternatives have exactly two
+         * validated MRS_S/MSR_S encodings. Resolve the macro-owned Rt to
+         * the physical x9 binding and preserve the Linux patch metadata,
+         * PREL32 relocations and both equal-length instruction arms. */
+        if (!a64_sysreg_source_form(instruction) ||
+            !a64_sysreg_policy_binding(function, instruction, 0U, NULL) ||
+            !aarch64_linux_vhe_sysreg_alternative_form(
+                instruction->source_asm_template,
+                instruction->source_asm_length, &pair)) return false;
+        return fprintf(output,
+            ".if 1 == 1\n"
+            "661:\n"
+            "  .inst 0x%08x\n"
+            "662:\n"
+            ".pushsection .altinstructions,\"a\"\n"
+            "  .word 661b - .\n"
+            "  .word 663f - .\n"
+            "  .hword %u\n"
+            "  .byte 662b-661b\n"
+            "  .byte 664f-663f\n"
+            ".popsection\n"
+            ".subsection 1\n"
+            "663:\n"
+            "  .inst 0x%08x\n"
+            "664:\n"
+            "  .org . - (664b-663b) + (662b-661b)\n"
+            "  .org . - (662b-661b) + (664b-663b)\n"
+            ".previous\n"
+            ".endif\n",
+            (unsigned)((pair.old_opcode & ~31U) | 9U),
+            pair.capability,
+            (unsigned)((pair.new_opcode & ~31U) | 9U)) >= 0;
+    }
     if (a64_machine_extra_source_form(instruction)) {
         if (instruction->source_asm_machine_form_id ==
                 AARCH64_MACHINE_ASM_IO_DEPENDENCY)
@@ -1543,6 +1831,13 @@ bool minic_aarch64_machine_source_asm_emit(
     if (a64_kvm_va_mask_form(function, instruction, NULL))
         return minic_machine_source_asm_template_emit(output, function,
             instruction, labels, &a64_kvm_va_mask_policy) &&
+            ((instruction->source_asm_length != 0U &&
+              instruction->source_asm_template[
+                  instruction->source_asm_length - 1U] == '\n') ||
+             fputc('\n', output) != EOF);
+    if (a64_xpaclri_policy_form(function, instruction, NULL))
+        return minic_machine_source_asm_template_emit(output, function,
+            instruction, labels, &a64_xpaclri_policy) &&
             ((instruction->source_asm_length != 0U &&
               instruction->source_asm_template[
                   instruction->source_asm_length - 1U] == '\n') ||

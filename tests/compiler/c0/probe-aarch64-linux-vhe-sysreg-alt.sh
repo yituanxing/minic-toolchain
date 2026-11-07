@@ -78,6 +78,7 @@ test "$(grep -Fc '.hword 50' "$work/vhe.s")" -eq 8
 test "$(grep -Fc '.hword 47' "$work/vhe.s")" -eq 8
 test "$(grep -Ec '^  \.inst 0xd53[0-9a-f]{5}$' "$work/vhe.s")" -eq 16
 test "$(grep -Ec '^  \.inst 0xd51[0-9a-f]{5}$' "$work/vhe.s")" -eq 16
+test "$(grep -Ec '^  \.inst 0xd5[13][0-9a-f]{4}9$' "$work/vhe.s")" -eq 32
 test "$(grep -Fc '.org . -' "$work/vhe.s")" -eq 32
 echo 'AARCH64_VHE_SYSREG_ALT=PASS feature50 read4 write4 feature47 CNT{P,V}_{CTL,CVAL} read4 write4 patches16'
 if command -v aarch64-linux-gnu-as >/dev/null 2>&1; then

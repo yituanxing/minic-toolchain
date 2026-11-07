@@ -3327,6 +3327,130 @@ static bool loong_select_vdso_syscall(LoongSelector *sel,
         loong_structured_store(sel, roles[0].value, LOONG_A0, 8U);
 }
 
+/* prepare_frametrace in Linux 6.6.143 saves the architectural GPR file
+ * through a pointer and stores the PC into an unsigned-long output lvalue.
+ * The sealed, exact source template owns those 34 instructions; this selector
+ * only materializes the two physical address operands.  The `=m` output is
+ * an address, never an uninitialized scalar register or a Core writeback. */
+static bool loong_select_frametrace(LoongSelector *sel,
+    const MinicCoreInstruction *ins, const MinicCoreInlineAsm *source) {
+    const MinicCoreFunction *fn = sel->ctx->fn;
+    const MinicCoreStructuredInlineAsmOperand *roles =
+        ins->value.structured_inline_asm.operands;
+    MinicMachineOperand bindings[2] = {{0}};
+    size_t i;
+    if (source->target_machine_form_id != LOONG_DESC_FRAMETRACE ||
+        source->target_machine_form_variant != 0U ||
+        source->operand_plan_owner != MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED ||
+        !source->is_volatile || source->is_goto ||
+        !source->has_memory_clobber || source->register_clobber_count ||
+        !loong_linux_frametrace_template(source->template_text,
+            source->template_length) ||
+        ins->value.structured_inline_asm.operand_count != 2U ||
+        roles == NULL ||
+        !loong_structured_scalar_shape(fn, roles[0].value, 8U, true, 0) ||
+        !minic_core_function_value_is_kind(fn, roles[1].value,
+            MINIC_CORE_TYPE_POINTER)) return false;
+    for (i = 0U; i < 2U; ++i)
+        if (roles[i].operand_index != i ||
+            roles[i].has_fixed_register_binding ||
+            roles[i].has_tied_output || roles[i].early_clobber ||
+            roles[i].physical_early_clobber ||
+            roles[i].physical_read_write ||
+            roles[i].kind != (i == 0U
+                ? MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_OUTPUT
+                : MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT))
+            return false;
+    if (!loong_load_value(sel, roles[0].value, LOONG_T1, true) ||
+        !loong_load_value(sel, roles[1].value, LOONG_T0, true))
+        return false;
+    bindings[0] = loong_address(LOONG_T1, 0, MINIC_LOONG_ADDRESS_IMM12);
+    bindings[0].asm_constraint = "=m";
+    bindings[1] = loong_gp(LOONG_T0, MINIC_MACHINE_REGISTER_READ);
+    bindings[1].asm_constraint = "r";
+    return minic_machine_builder_emit_core_source_asm(&sel->builder,
+        source, MINIC_MACHINE_EFFECT_MEMORY_READ |
+            MINIC_MACHINE_EFFECT_MEMORY_WRITE,
+        bindings, 2U, NULL, 0U, false, false);
+}
+
+/* do_vint switches to the per-CPU IRQ stack and calls the real handler.
+ * The sealed GNU form writes $s0/$sp and bl writes $ra, regardless of the
+ * explicit C clobber list. Save both across the source ASM even when the
+ * Core function has no other call; physical inputs are materialized before
+ * the 16-byte aligned temporary stack spill changes SP-relative offsets. */
+static bool loong_select_irq_switch(LoongSelector *sel,
+    const MinicCoreInstruction *ins, const MinicCoreInlineAsm *source) {
+    const MinicCoreFunction *fn = sel->ctx->fn;
+    const MinicCoreStructuredInlineAsmOperand *roles =
+        ins->value.structured_inline_asm.operands;
+    MinicMachineOperand bindings[2] = {{0}};
+    MinicMachineRegisterEffect implicit[20];
+    size_t i;
+    if (source->target_machine_form_id !=
+            MINIC_LOONG_MACHINE_ASM_IRQ_SWITCH ||
+        source->target_machine_form_variant != 1U ||
+        source->operand_plan_owner != MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED ||
+        !source->is_volatile || source->is_goto ||
+        !source->has_memory_clobber ||
+        source->register_clobber_count != 18U ||
+        source->register_clobbers == NULL ||
+        !loong_linux_irq_switch_template(source->template_text,
+            source->template_length, true) ||
+        ins->value.structured_inline_asm.operand_count != 2U ||
+        roles == NULL ||
+        !loong_structured_scalar_shape(fn, roles[0].value, 8U, false, 0) ||
+        !minic_core_function_value_is_kind(fn, roles[1].value,
+            MINIC_CORE_TYPE_POINTER)) return false;
+    for (i = 0U; i < 2U; ++i)
+        if (roles[i].operand_index != i ||
+            roles[i].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT ||
+            roles[i].early_clobber || roles[i].physical_early_clobber ||
+            roles[i].physical_read_write || roles[i].has_tied_output ||
+            roles[i].has_fixed_register_binding) return false;
+    memset(implicit, 0, sizeof(implicit));
+    for (i = 0U; i < 18U; ++i) {
+        const MinicCoreInlineAsmRegisterClobber *clobber =
+            &source->register_clobbers[i];
+        if (!loong_linux_irq_switch_clobber(
+                clobber->name, clobber->name_length, i)) return false;
+        implicit[i].reg = loong_reg(i < 8U ? LOONG_A0 + (unsigned int)i :
+            i == 8U ? LOONG_S0 : LOONG_T0 + (unsigned int)i - 9U);
+        implicit[i].access = MINIC_MACHINE_REGISTER_CLOBBER;
+    }
+    implicit[18].reg = loong_reg(LOONG_RA);
+    implicit[18].access = MINIC_MACHINE_REGISTER_CLOBBER;
+    implicit[19].reg = loong_reg(LOONG_SP);
+    implicit[19].access = MINIC_MACHINE_REGISTER_READ |
+        MINIC_MACHINE_REGISTER_WRITE;
+    if (!loong_load_value(sel, roles[0].value, LOONG_T0, true) ||
+        !loong_load_value(sel, roles[1].value, LOONG_T1, true))
+        return false;
+    bindings[0] = loong_gp(LOONG_T0, MINIC_MACHINE_REGISTER_READ);
+    bindings[0].asm_constraint = "r";
+    bindings[0].asm_name = "stk";
+    bindings[1] = loong_gp(LOONG_T1, MINIC_MACHINE_REGISTER_READ);
+    bindings[1].asm_constraint = "r";
+    bindings[1].asm_name = "regs";
+    return loong_rri(&sel->builder, MINIC_LOONG_MACHINE_ADDI_D,
+               LOONG_SP, LOONG_SP, -16) &&
+        loong_memory(&sel->builder, MINIC_LOONG_MACHINE_ST_D,
+            LOONG_RA, LOONG_SP, 0, MINIC_LOONG_ADDRESS_IMM12, false) &&
+        loong_memory(&sel->builder, MINIC_LOONG_MACHINE_ST_D,
+            LOONG_S0, LOONG_SP, 8, MINIC_LOONG_ADDRESS_IMM12, false) &&
+        minic_machine_builder_emit_core_source_asm(&sel->builder,
+            source, MINIC_MACHINE_EFFECT_CALL |
+                MINIC_MACHINE_EFFECT_MEMORY_READ |
+                MINIC_MACHINE_EFFECT_MEMORY_WRITE,
+            bindings, 2U, implicit, 20U, false, false) &&
+        loong_memory(&sel->builder, MINIC_LOONG_MACHINE_LD_D,
+            LOONG_S0, LOONG_SP, 8, MINIC_LOONG_ADDRESS_IMM12, true) &&
+        loong_memory(&sel->builder, MINIC_LOONG_MACHINE_LD_D,
+            LOONG_RA, LOONG_SP, 0, MINIC_LOONG_ADDRESS_IMM12, true) &&
+        loong_rri(&sel->builder, MINIC_LOONG_MACHINE_ADDI_D,
+            LOONG_SP, LOONG_SP, 16);
+}
+
 static bool loong_select_structured_asm(LoongSelector *sel,
     const MinicCoreInstruction *ins) {
     const MinicCoreFunction *fn = sel->ctx->fn;
@@ -3359,6 +3483,10 @@ static bool loong_select_structured_asm(LoongSelector *sel,
             &sel->builder, sel->ctx, ins);
     if (source->target_machine_form_id == LOONG_DESC_VDSO)
         return loong_select_vdso_syscall(sel, ins, source);
+    if (source->target_machine_form_id == LOONG_DESC_FRAMETRACE)
+        return loong_select_frametrace(sel, ins, source);
+    if (source->target_machine_form_id == MINIC_LOONG_MACHINE_ASM_IRQ_SWITCH)
+        return loong_select_irq_switch(sel, ins, source);
     if (source->target_machine_form_id ==
         MINIC_LOONG_MACHINE_ASM_HINT_DBAR)
         return minic_loongarch64_select_core_dbar_hint(

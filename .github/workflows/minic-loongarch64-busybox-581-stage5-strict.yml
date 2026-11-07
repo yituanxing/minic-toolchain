@@ -14,6 +14,8 @@ on:
       - 'src/target/loongarch64/**'
       - 'src/target/common/**'
       - 'src/target/source_policy/**'
+      - 'tests/compiler/c0/probe-loongarch64-linux-jump-label.sh'
+      - 'tests/compiler/c0/probe-loongarch64-linux-vdso-syscall.sh'
       - 'Makefile'
   workflow_dispatch:
 
@@ -26,6 +28,75 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Independent short source/assembler gate. This must not inherit the
+  # deliberate one-shot 581-owner marker used by the large Stage5 job.
+  loongarch64-gnu-as-smoke:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - name: Install LoongArch64 GNU assembler without original software
+        shell: bash
+        timeout-minutes: 10
+        run: |
+          set -Eeuo pipefail
+          for sources in /etc/apt/apt-mirrors.txt /etc/apt/sources.list.d/ubuntu.sources; do
+            if [[ -f "$sources" ]] && grep -q 'azure.archive.ubuntu.com' "$sources"; then
+              sudo sed -i 's#azure.archive.ubuntu.com#archive.ubuntu.com#g' "$sources"
+            fi
+          done
+          timeout 120s sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 update -qq
+          timeout 240s sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 \
+            -o Acquire::https::Timeout=30 -o DPkg::Lock::Timeout=60 \
+            install -y --no-install-recommends \
+            gcc-13-loongarch64-linux-gnu binutils-loongarch64-linux-gnu make
+          command -v loongarch64-linux-gnu-gcc-13
+          command -v loongarch64-linux-gnu-as
+      - name: Restore exact-head MiniC native objects
+        id: compiler_cache
+        uses: actions/cache/restore@v4
+        with:
+          path: build/loong-as-smoke-ci/obj
+          key: minic-loong-as-smoke-v1-${{ runner.os }}-${{ runner.arch }}-${{ github.event.pull_request.head.sha }}
+      - name: Build exact-head MiniC once
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse HEAD)" = '${{ github.event.pull_request.head.sha }}'
+          make -j2 MODE=release CFLAGS=-Werror BUILD_DIR=build/loong-as-smoke-ci \
+            build/loong-as-smoke-ci/bin/minic-cc
+          test -x build/loong-as-smoke-ci/bin/minic-cc
+      - name: Save exact-head MiniC native objects before asm gates
+        if: steps.compiler_cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: build/loong-as-smoke-ci/obj
+          key: minic-loong-as-smoke-v1-${{ runner.os }}-${{ runner.arch }}-${{ github.event.pull_request.head.sha }}
+      - name: Linux jump-label and vDSO exact-head GNU assembler smoke
+        shell: bash
+        env:
+          MINIC_CC: ${{ github.workspace }}/build/loong-as-smoke-ci/bin/minic-cc
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse HEAD)" = '${{ github.event.pull_request.head.sha }}'
+          command -v loongarch64-linux-gnu-as
+          command -v loongarch64-linux-gnu-gcc-13
+          mkdir -p build/loong-as-smoke-ci/evidence
+          sh tests/compiler/c0/probe-loongarch64-linux-jump-label.sh |
+            tee build/loong-as-smoke-ci/evidence/linux-jump-label.receipt
+          grep -Fxq 'MINIC_LOONGARCH64_JUMP_LABEL_GNU_AS=PASS __jump_table=4' \
+            build/loong-as-smoke-ci/evidence/linux-jump-label.receipt
+          sh tests/compiler/c0/probe-loongarch64-linux-vdso-syscall.sh |
+            tee build/loong-as-smoke-ci/evidence/linux-vdso-syscall.receipt
+          grep -Fxq 'MINIC_LOONG_VDSO_SYSCALL_GNU_AS=PASS' \
+            build/loong-as-smoke-ci/evidence/linux-vdso-syscall.receipt
+          printf 'LOONGARCH64_GNU_AS_SMOKE=PASS sha=%s jump_label=1 vdso=1 full581=NOT_RUN\n' \
+            "$(git rev-parse HEAD)"
+
   stage5-eligibility-only:
     runs-on: ubuntu-24.04
     outputs:

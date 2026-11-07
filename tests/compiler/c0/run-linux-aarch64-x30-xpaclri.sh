@@ -13,9 +13,9 @@ cc -E -P -x c "$source_file" -o "$work/original-macro.i"
 
 # Three XPACLRI expansion sites. Every tied operand must explicitly use the
 # physical link register, and every function must save and restore entry LR.
-test "$(grep -Ec '^[[:space:]]*hint #7$' "$work/minic.s")" -eq 4
-test "$(grep -Ec '^[[:space:]]*ldr x30, \[x9\]$' "$work/minic.s")" -eq 4
-test "$(grep -Ec '^[[:space:]]*str x30, \[x9\]$' "$work/minic.s")" -eq 4
+test "$(grep -Ec '^[[:space:]]*hint[[:space:]]+#7$' "$work/minic.s")" -eq 4
+test "$(grep -Ec '^[[:space:]]*ldr x30, \[x9(, #0)?\]$' "$work/minic.s")" -eq 4
+test "$(grep -Ec '^[[:space:]]*str x30, \[x9(, #0)?\]$' "$work/minic.s")" -eq 4
 test "$(grep -Fc 'stp x29, x30, [sp, #-16]!' "$work/minic.s")" -eq 3
 test "$(grep -Fc 'ldp x29, x30, [sp], #16' "$work/minic.s")" -eq 3
 

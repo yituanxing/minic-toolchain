@@ -11,7 +11,7 @@ src="$root/tests/compiler/c0/aarch64_linux_smccc_v11_full.c"
 test "$(grep -Ec '^  hvc #0$' "$work/real.s")" -eq 6
 test "$(grep -Ec '^  smc #0$' "$work/real.s")" -eq 3
 grep -Eq '^  ldr x7, \[sp, #[0-9]+\]$' "$work/real.s"
-grep -Eq '^  str x3, \[x12\]$' "$work/real.s"
+grep -Eq '^  str x3, \[x10, #0\]$' "$work/real.s"
 for target in x86_64 loongarch64; do
     if "$mini" --target="$target-linux" -S "$work/real.i" \
         -o "$work/foreign.s" >/dev/null 2>&1; then

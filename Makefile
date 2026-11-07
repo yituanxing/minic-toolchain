@@ -2864,6 +2864,8 @@ check-riscv-machine-core-select:
 	  tests/target/riscv_machine_core_select_test.c \
 	  src/core/core_ir.c src/core/core_type.c src/core/core_ir_verify.c \
 	  src/target/common/machine_ir.c \
+	  src/target/common/core_numeric_shape.c \
+	  src/target/common/lp64_scalar.c \
 	  src/target/common/machine_builder.c \
 	  src/target/common/machine_ir_verify.c \
 	  src/target/common/machine_gnu_asm.c \

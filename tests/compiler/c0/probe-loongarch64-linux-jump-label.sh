@@ -9,6 +9,7 @@ work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT HUP INT TERM
 cat >"$work/jump.i" <<'SRC'
 static int local_key;
+static int key_array[64];
 extern int external_key;
 int loong_static_branch(void) {
     asm goto(
@@ -63,6 +64,19 @@ int loong_static_branch_key_plus_one(void) {
 l_yes:
     return 1;
 }
+int loong_static_branch_array_member(void) {
+    asm goto(
+        "1:\tnop\t\t\t\n\t"
+        ".pushsection\t__jump_table, \"aw\"\t\n\t"
+        ".align\t3\t\t\t\n\t"
+        ".long\t\t1b - ., %l[l_yes] - .\t\n\t"
+        ".quad\t\t%0 - .\t\t\t\n\t"
+        ".popsection\t\t\t\t\n\t"
+        : : "i"(&key_array[28]) : : l_yes);
+    return 0;
+l_yes:
+    return 1;
+}
 SRC
 "$MINIC_CC" --target=loongarch64-linux -fPIE -S \
   "$work/jump.i" -o "$work/jump.s"
@@ -78,17 +92,18 @@ if test -n "${MINIC_JUMP_BASELINE_CC:-}"; then
 fi
 grep -Eq '1:[[:space:]]+nop' "$work/jump.s"
 grep -Eq '1:[[:space:]]+b[[:space:]]+\.Luser_' "$work/jump.s"
-test "$(grep -Ec '\.pushsection[[:space:]]+__jump_table,[[:space:]]*"aw"' "$work/jump.s")" -eq 4
-test "$(grep -Ec '\.align[[:space:]]+3' "$work/jump.s")" -eq 4
+test "$(grep -Ec '\.pushsection[[:space:]]+__jump_table,[[:space:]]*"aw"' "$work/jump.s")" -eq 5
+test "$(grep -Ec '\.align[[:space:]]+3' "$work/jump.s")" -eq 5
 grep -Eq '\.quad[[:space:]]+local_key[[:space:]]*-[[:space:]]*\.' "$work/jump.s"
 grep -Eq '\.quad[[:space:]]+external_key[[:space:]]*-[[:space:]]*\.' "$work/jump.s"
 grep -Eq '\.quad[[:space:]]+local_key\+1[[:space:]]*-[[:space:]]*\.' "$work/jump.s"
-echo 'MINIC_LOONGARCH64_JUMP_LABEL_SHAPE=PASS nop=3 branch=1 PREL32=4 PREL64=4 symbolic_inline_clone=1 key_addend=+1'
+grep -Eq '\.quad[[:space:]]+key_array\+112[[:space:]]*-[[:space:]]*\.' "$work/jump.s"
+echo 'MINIC_LOONGARCH64_JUMP_LABEL_SHAPE=PASS nop=4 branch=1 PREL32=5 PREL64=5 symbolic_inline_clone=1 key_addends=+1,+112'
 
 cross=${LOONGARCH64_CC:-loongarch64-linux-gnu-gcc-13}
 if command -v "$cross" >/dev/null 2>&1; then
     "$cross" -c -x assembler "$work/jump.s" -o "$work/jump.o"
-    echo 'MINIC_LOONGARCH64_JUMP_LABEL_GNU_AS=PASS __jump_table=4'
+    echo 'MINIC_LOONGARCH64_JUMP_LABEL_GNU_AS=PASS __jump_table=5'
 else
     echo 'MINIC_LOONGARCH64_JUMP_LABEL_GNU_AS=SKIP missing Loong GNU assembler'
 fi
@@ -114,14 +129,30 @@ fi
 test ! -e "$work/wrong-modifier.s"
 echo 'MINIC_LOONGARCH64_JUMP_LABEL_MODIFIER=PASS wrong_percent_c0=rejected'
 
-# A non-Boolean byte displacement is not a qualified Linux static-key
-# relocation: it must fail MachineIR, even though GNU itself could spell it.
-sed 's/\[1\]) : : l_yes/\[2\]) : : l_yes/' "$work/jump.i" > "$work/wrong-addend.i"
+# Non-jump-label GNU expressions must not inherit this exact key relocation
+# authority, even when the same legal symbol-plus-offset spelling is used.
+sed 's/"i"(\&key_array\[28\])/"r"(\&key_array[28])/' \
+  "$work/jump.i" > "$work/wrong-key-constraint.i"
 if "$MINIC_CC" --target=loongarch64-linux -fPIE -S \
-    "$work/wrong-addend.i" -o "$work/wrong-addend.s" \
-    >/dev/null 2>"$work/wrong-addend.err"; then
-    echo 'MINIC_LOONGARCH64_JUMP_LABEL=FAIL non-Boolean key addend admitted' >&2
+    "$work/wrong-key-constraint.i" -o "$work/wrong-key-constraint.s" \
+    >/dev/null 2>"$work/wrong-key-constraint.err"; then
+    echo 'MINIC_LOONGARCH64_JUMP_LABEL=FAIL non-immediate key admitted' >&2
     exit 1
 fi
-test ! -e "$work/wrong-addend.s"
-echo 'MINIC_LOONGARCH64_JUMP_LABEL_ADDEND=PASS plus_one=emitted plus_two=rejected'
+test ! -e "$work/wrong-key-constraint.s"
+echo 'MINIC_LOONGARCH64_JUMP_LABEL_ADDEND=PASS plus_one=emitted array_plus_112=emitted wrong_constraint=rejected'
+
+# Authenticated full GNU-preprocessed Linux traps.i is supplied by the owner
+# artifact rather than fabricated here. Its real inline-specialized static
+# key addresses perf_swevent_enabled+112 and must survive M1 intact.
+if test -n "${LOONG_TRAPS_ORIGINAL_I:-}"; then
+    test -f "$LOONG_TRAPS_ORIGINAL_I"
+    MINIC_BACKEND_CENSUS=1 "$MINIC_CC" --target=loongarch64-linux \
+        -fshort-wchar -funsigned-char -fno-pie -mabi=lp64s -S \
+        "$LOONG_TRAPS_ORIGINAL_I" -o "$work/traps.s" \
+        2>"$work/traps.err"
+    grep -Fq 'MINIC_BACKEND_CENSUS arch=loongarch64 scanned=167 rejected=0' \
+        "$work/traps.err"
+    grep -Fq 'perf_swevent_enabled+112 - .' "$work/traps.s"
+    echo 'MINIC_LOONGARCH64_TRAPS_CENSUS=PASS original_gnu_i=167/167 key_addend=+112'
+fi

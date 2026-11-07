@@ -18,6 +18,9 @@ stage=uaccess-asm-width
 for spec in 'read_u8:ldtrb w10:strb w10' \
             'read_u16:ldtrh w10:strh w10' \
             'read_u32:ldtr w10:str w10' \
+            'read_u8_wide:ldtrb w10:str x10' \
+            'read_u16_wide:ldtrh w10:str x10' \
+            'read_u32_wide:ldtr w10:str x10' \
             'read_u64:ldtr x10:str x10' \
             'read_pointer:ldtr x10:str x10'; do
     function_name=${spec%%:*}
@@ -132,4 +135,4 @@ if [ "$gnu_elf" = PASS ] && command -v "$gnu_cc" >/dev/null 2>&1 &&
     gnu_qemu=PASS
 fi
 stage=complete
-echo "AARCH64_ABI_AUDIT=PASS uaccess_widths=1,2,4,8 pointer_output=1 negative_u128=1 fp_pointer_record=3 HFA_reject=1 GNU_AS_ELF=$gnu_elf GNU_QEMU=$gnu_qemu"
+echo "AARCH64_ABI_AUDIT=PASS uaccess_widths=1,2,4,8 wide_carriers=1,2,4 pointer_output=1 negative_u128=1 fp_pointer_record=3 HFA_reject=1 GNU_AS_ELF=$gnu_elf GNU_QEMU=$gnu_qemu"

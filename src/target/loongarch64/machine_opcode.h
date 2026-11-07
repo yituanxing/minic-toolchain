@@ -21,8 +21,8 @@ typedef enum MinicLoongMachineRelocation {
     MINIC_LOONG_RELOC_PC_HI20,
     MINIC_LOONG_RELOC_PC_LO12,
     /* Only an exact Linux static-key SOURCE_ASM __jump_table relocation.
-     * The Boolean branch byte selects key or key+1, never a generic
-     * LoongArch instruction/address displacement. */
+     * Static keys inside arrays/records carry a verified member byte offset
+     * plus the Boolean branch byte. Never a generic LoongArch relocation. */
     MINIC_LOONG_RELOC_JUMP_LABEL_KEY
 } MinicLoongMachineRelocation;
 

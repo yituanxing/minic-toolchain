@@ -1265,6 +1265,16 @@ static bool x86_emit_source_asm(FILE *out,
             fputc('\n',out) != EOF;
     if (instruction->source_asm_machine_form_id == MINIC_X86_MACHINE_ASM_DELAY_MUL)
         return fputs("  mull %edx\n",out) != EOF;
+    if (instruction->source_asm_machine_form_id == MINIC_X86_MACHINE_ASM_PVCLOCK_SCALE) {
+        if (!minic_x86_64_machine_validate_source_asm(function->target,
+                instruction,NULL)) return false;
+        return fputs("  mulq %r10\n  shrdq $32, %rdx, %rax\n",out) != EOF;
+    }
+    if (instruction->source_asm_machine_form_id == MINIC_X86_MACHINE_ASM_VDSO_SYSCALL) {
+        if (!minic_x86_64_machine_validate_source_asm(function->target,
+                instruction,NULL)) return false;
+        return fputs("  syscall\n",out) != EOF;
+    }
     if (instruction->source_asm_machine_form_id == MINIC_X86_MACHINE_ASM_PREEMPT_STATIC_CALL) {
         if (!minic_x86_64_machine_validate_source_asm(function->target,
                 instruction, NULL)) return false;

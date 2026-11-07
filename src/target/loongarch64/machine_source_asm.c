@@ -82,7 +82,7 @@ static bool loong_source_opaque(const MinicMachineInstruction *ins) {
     if (ins->source_asm_machine_form_id == 0U &&
         ins->source_asm_machine_form_variant == 0U &&
         loong_linux_jump_label_form(ins->source_asm_template,
-            ins->source_asm_length) != 0U)
+            ins->source_asm_length) != 0U) {
         return ins->operand_count == 2U && ins->operands != NULL &&
             ins->implicit_count == 0U && ins->source_asm_terminates_block &&
             ins->source_asm_permits_fallthrough &&
@@ -100,12 +100,14 @@ static bool loong_source_opaque(const MinicMachineInstruction *ins) {
             strcmp(ins->operands[0].asm_constraint, "i") == 0 &&
             ins->operands[0].value.symbol.relocation ==
                 MINIC_LOONG_RELOC_JUMP_LABEL_KEY &&
-            (ins->operands[0].value.symbol.addend == 0 ||
-             ins->operands[0].value.symbol.addend == 1) &&
+            minic_loongarch64_jump_key_relocation_valid(
+                ins->operands[0].value.symbol.name,
+                ins->operands[0].value.symbol.addend) &&
             ins->operands[1].kind == MINIC_MACHINE_OPERAND_BLOCK &&
             ins->operands[1].asm_constraint == NULL &&
             ins->operands[1].asm_name != NULL &&
             strcmp(ins->operands[1].asm_name, "l_yes") == 0;
+    }
     if (ins->operand_count != 0U || ins->implicit_count != 0U ||
         ins->source_asm_machine_form_variant != 0U ||
         ins->source_asm_terminates_block ||
@@ -265,8 +267,8 @@ static bool loong_source_constraint(const MinicTargetInfo *target,
             (jump_key
                 ? (operand->value.symbol.relocation !=
                        MINIC_LOONG_RELOC_JUMP_LABEL_KEY ||
-                   (operand->value.symbol.addend != 0 &&
-                    operand->value.symbol.addend != 1))
+                   !minic_loongarch64_jump_key_relocation_valid(
+                       symbol, operand->value.symbol.addend))
                 : (operand->value.symbol.relocation !=
                        MINIC_LOONG_RELOC_DIRECT ||
                    operand->value.symbol.addend != 0))) return false;
@@ -362,10 +364,13 @@ static bool loong_source_operand(FILE *out,
     case MINIC_MACHINE_OPERAND_SYMBOL:
         if (operand->value.symbol.relocation ==
                 MINIC_LOONG_RELOC_JUMP_LABEL_KEY) {
-            if (operand->value.symbol.addend == 1)
-                return fprintf(out, "%s+1",
-                    operand->value.symbol.name) >= 0;
-            if (operand->value.symbol.addend != 0) return false;
+            if (!minic_loongarch64_jump_key_relocation_valid(
+                    operand->value.symbol.name,
+                    operand->value.symbol.addend)) return false;
+            if (operand->value.symbol.addend != 0)
+                return fprintf(out, "%s%+" PRId64,
+                    operand->value.symbol.name,
+                    operand->value.symbol.addend) >= 0;
         }
         return fputs(operand->value.symbol.name, out) >= 0;
     default:
@@ -381,6 +386,74 @@ static bool loong_source_validate_form(const MinicMachineFunction *fn,
     if (fn == NULL || fn->target == NULL || ins == NULL ||
         fn->target->architecture != MINIC_TARGET_ARCH_LOONGARCH64 ||
         !loong_source_form(ins)) return false;
+    if (ins->source_asm_machine_form_id ==
+            MINIC_LOONG_MACHINE_ASM_IRQ_SWITCH) {
+        const MinicMachineOperand *stk, *regs;
+        const unsigned int effects = MINIC_MACHINE_EFFECT_SOURCE_ASM |
+            MINIC_MACHINE_EFFECT_VOLATILE |
+            MINIC_MACHINE_EFFECT_COMPILER_BARRIER |
+            MINIC_MACHINE_EFFECT_MEMORY_READ |
+            MINIC_MACHINE_EFFECT_MEMORY_WRITE |
+            MINIC_MACHINE_EFFECT_CALL;
+        if (ins->source_asm_machine_form_variant != 1U ||
+            ins->operand_count != 2U || ins->operands == NULL ||
+            ins->implicit_count != 20U || ins->implicit == NULL ||
+            ins->effects != effects || ins->source_asm_terminates_block ||
+            ins->source_asm_permits_fallthrough) return false;
+        stk = &ins->operands[0];
+        regs = &ins->operands[1];
+        for (i = 0U; i < 20U; ++i) {
+            const MinicMachineRegisterEffect *e = &ins->implicit[i];
+            const unsigned int number = i < 8U ? 4U + (unsigned int)i :
+                i == 8U ? 23U : i < 18U ? 12U + (unsigned int)i - 9U :
+                i == 18U ? 1U : 3U;
+            if (e->reg.bank != MINIC_MACHINE_REGISTER_GENERAL ||
+                e->reg.width_bits != 64U || e->reg.number != number ||
+                e->access != (i == 19U
+                    ? MINIC_MACHINE_REGISTER_READ |
+                      MINIC_MACHINE_REGISTER_WRITE
+                    : MINIC_MACHINE_REGISTER_CLOBBER)) return false;
+        }
+        return stk->kind == MINIC_MACHINE_OPERAND_REGISTER &&
+            stk->asm_constraint && strcmp(stk->asm_constraint, "r") == 0 &&
+            stk->asm_name && strcmp(stk->asm_name, "stk") == 0 &&
+            stk->value.physical.reg.bank == MINIC_MACHINE_REGISTER_GENERAL &&
+            stk->value.physical.reg.number == 12U &&
+            stk->value.physical.access == MINIC_MACHINE_REGISTER_READ &&
+            regs->kind == MINIC_MACHINE_OPERAND_REGISTER &&
+            regs->asm_constraint && strcmp(regs->asm_constraint, "r") == 0 &&
+            regs->asm_name && strcmp(regs->asm_name, "regs") == 0 &&
+            regs->value.physical.reg.bank == MINIC_MACHINE_REGISTER_GENERAL &&
+            regs->value.physical.reg.number == 13U &&
+            regs->value.physical.access == MINIC_MACHINE_REGISTER_READ;
+    }
+    if (ins->source_asm_machine_form_id == LOONG_DESC_FRAMETRACE) {
+        const MinicMachineOperand *mem, *ptr;
+        const unsigned int effects = MINIC_MACHINE_EFFECT_SOURCE_ASM |
+            MINIC_MACHINE_EFFECT_VOLATILE |
+            MINIC_MACHINE_EFFECT_COMPILER_BARRIER |
+            MINIC_MACHINE_EFFECT_MEMORY_READ |
+            MINIC_MACHINE_EFFECT_MEMORY_WRITE;
+        if (ins->source_asm_machine_form_variant != 0U ||
+            ins->operand_count != 2U || ins->operands == NULL ||
+            ins->implicit_count != 0U || ins->effects != effects ||
+            ins->source_asm_terminates_block ||
+            ins->source_asm_permits_fallthrough) return false;
+        mem = &ins->operands[0];
+        ptr = &ins->operands[1];
+        return mem->kind == MINIC_MACHINE_OPERAND_ADDRESS &&
+            mem->asm_constraint != NULL &&
+            strcmp(mem->asm_constraint, "=m") == 0 &&
+            mem->value.address.base.bank == MINIC_MACHINE_REGISTER_GENERAL &&
+            mem->value.address.base.number == 13U &&
+            mem->value.address.displacement == 0 &&
+            ptr->kind == MINIC_MACHINE_OPERAND_REGISTER &&
+            ptr->asm_constraint != NULL &&
+            strcmp(ptr->asm_constraint, "r") == 0 &&
+            ptr->value.physical.reg.bank == MINIC_MACHINE_REGISTER_GENERAL &&
+            ptr->value.physical.reg.number == 12U &&
+            ptr->value.physical.access == MINIC_MACHINE_REGISTER_READ;
+    }
     if (ins->source_asm_machine_form_id == LOONG_DESC_VDSO) {
         static const unsigned int registers[] = {4U, 11U, 4U, 5U};
         static const char *const constraints[] = {"+r", "r", "r", "r"};

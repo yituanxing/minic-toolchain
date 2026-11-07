@@ -8,14 +8,24 @@ trap 'rm -rf "$work"' EXIT HUP INT TERM
     "$root/tests/compiler/c0/aarch64_linux_kvm_kern_hyp_va_callback.c" \
     -o "$work/mask.i"
 "$minic" --target=aarch64-linux -S "$work/mask.i" -o "$work/mask.s"
-test "$(grep -c '^  \.word kvm_update_va_mask - \.$' "$work/mask.s")" -eq 1
-test "$(grep -c '^  \.hword (1 << 15) | (1)$' "$work/mask.s")" -eq 1
-test "$(grep -c '^  \.word 661b - \.$' "$work/mask.s")" -eq 1
-test "$(grep -c '^  \.org ' "$work/mask.s")" -eq 0
+test "$(grep -Ec '^[[:space:]]*\.word[[:space:]]+kvm_update_va_mask[[:space:]]*-[[:space:]]*\.$' "$work/mask.s")" -eq 1
+test "$(grep -Ec '^[[:space:]]*\.hword[[:space:]]+\(1 << 15\) \| \(1\)$' "$work/mask.s")" -eq 1
+test "$(grep -Ec '^[[:space:]]*\.word[[:space:]]+661b[[:space:]]*-[[:space:]]*\.$' "$work/mask.s")" -eq 1
+test "$(grep -Ec '^[[:space:]]*\.org([[:space:]]|$)' "$work/mask.s")" -eq 0
 for opcode in 'and x9, x9, #1' 'ror x9, x9, #1' \
-    'add x9, x9, #0' 'add x9, x9, #0, lsl #12' 'ror x9, x9, #63'; do
+    'add x9, x9, #0' 'ror x9, x9, #63'; do
     grep -Fq "$opcode" "$work/mask.s"
 done
+# GCC/GAS accepts an optional '#' before an AArch64 shift immediate.
+grep -Eq 'add[[:space:]]+x9, x9, #0, lsl[[:space:]]+#?12([[:space:]]|$)' "$work/mask.s"
+cross=${AARCH64_CC:-aarch64-linux-gnu-gcc}
+if command -v "$cross" >/dev/null 2>&1; then
+    "$cross" -c -x assembler "$work/mask.s" -o "$work/mask.o"
+    test -s "$work/mask.o"
+    echo 'AARCH64_KVM_VA_CALLBACK_GNU_AS=PASS'
+else
+    echo 'AARCH64_KVM_VA_CALLBACK_GNU_AS=SKIP missing AArch64 GNU assembler'
+fi
 # RV32/RV64 still have an existing generic GNU-ASM passthrough path;
 # C-only -S on those targets does not imply acceptance by their assembler.
 for target in x86_64 loongarch64; do

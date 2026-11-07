@@ -37,6 +37,18 @@ void read_u16(unsigned short *user, unsigned short *result) {
 void read_u32(unsigned int *user, unsigned int *result) {
     GET_USER_MNEMONIC("ldtr %w1, [%2]", *result, user);
 }
+/* Linux's real __get_user uses an unsigned-long temporary for narrow
+ * hardware loads. AArch64 W-register results zero-extend into X-registers:
+ * all eight bytes of the C carrier must be written after LDTRB/H/W. */
+void read_u8_wide(unsigned char *user, unsigned long *result) {
+    GET_USER_MNEMONIC("ldtrb %w1, [%2]", *result, user);
+}
+void read_u16_wide(unsigned short *user, unsigned long *result) {
+    GET_USER_MNEMONIC("ldtrh %w1, [%2]", *result, user);
+}
+void read_u32_wide(unsigned int *user, unsigned long *result) {
+    GET_USER_MNEMONIC("ldtr %w1, [%2]", *result, user);
+}
 void read_u64(unsigned long *user, unsigned long *result) {
     GET_USER_MNEMONIC("ldtr %x1, [%2]", *result, user);
 }
@@ -61,9 +73,15 @@ int main(void) {
     unsigned short half_result = 0U;
     unsigned int word_result = 0U;
     unsigned long dword_result = 0U;
+    unsigned long wide_byte = ~0UL;
+    unsigned long wide_half = ~0UL;
+    unsigned long wide_word = ~0UL;
     read_u8((unsigned char *)&byte, &pair);
     read_u16((unsigned short *)&half, &half_result);
     read_u32((unsigned int *)&word, &word_result);
+    read_u8_wide((unsigned char *)&byte, &wide_byte);
+    read_u16_wide((unsigned short *)&half, &wide_half);
+    read_u32_wide((unsigned int *)&word, &wide_word);
     read_u64((unsigned long *)&dword, &dword_result);
     read_pointer((void **)&pointer_source, &pointer_result);
     /* A nonzero result is a bitmask: it distinguishes the 1/2/4/8-byte
@@ -73,6 +91,9 @@ int main(void) {
     if (pair.value != byte) failures |= 2;
     if (half_result != half) failures |= 4;
     if (word_result != word) failures |= 8;
+    if (wide_byte != byte) failures |= 1;
+    if (wide_half != half) failures |= 4;
+    if (wide_word != word) failures |= 8;
     if (dword_result != dword) failures |= 16;
     if (pointer_result != pointer_source) failures |= 32;
     return failures;
