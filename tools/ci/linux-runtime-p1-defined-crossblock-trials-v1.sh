@@ -300,7 +300,7 @@ for line in (ev/"minic-manifest.sha256").read_text().splitlines():
         assert actual==digest, "unrelated MiniC owner changed: "+target
         untouched += 1
 assert matched in (1,4,5,6,7,8) and untouched==2064-matched
-    print(f"P1_DEFINED_CROSSBLOCK=POOL_ISOLATED selected_targets={matched} original_neighbors={untouched}")
+print(f"P1_DEFINED_CROSSBLOCK=POOL_ISOLATED selected_targets={matched} original_neighbors={untouched}")
 PY_VERIFY
 echo "P1_DEFINED_CROSSBLOCK=OBJECT_DELTA selected=$(wc -l <"$dest/selected.txt") sha_changed=$changed frozen_neighbors=$((2064-$(wc -l <"$dest/selected.txt")))"
 if [[ "$rx_roi" == 1 ]]; then
