@@ -88,7 +88,7 @@ jobs:
           mkdir -p build/loong-as-smoke-ci/evidence
           sh tests/compiler/c0/probe-loongarch64-linux-jump-label.sh |
             tee build/loong-as-smoke-ci/evidence/linux-jump-label.receipt
-          grep -Fxq 'MINIC_LOONGARCH64_JUMP_LABEL_GNU_AS=PASS __jump_table=4' \
+          grep -Fxq 'MINIC_LOONGARCH64_JUMP_LABEL_GNU_AS=PASS __jump_table=5' \
             build/loong-as-smoke-ci/evidence/linux-jump-label.receipt
           sh tests/compiler/c0/probe-loongarch64-linux-vdso-syscall.sh |
             tee build/loong-as-smoke-ci/evidence/linux-vdso-syscall.receipt
