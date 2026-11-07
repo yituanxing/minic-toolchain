@@ -1569,13 +1569,13 @@ static bool x86_emit_source_asm(FILE *out,
             "  .byte 0x48, 0x0f, 0xc7, 0x1f\n", /* XRSTORS64 */
             "  .byte 0x48, 0x0f, 0xc7, 0x2f\n"  /* XSAVES64 */
         };
-        const unsigned int variant =
+        const unsigned int xstate_variant =
             instruction->source_asm_machine_form_variant;
-        if (variant < 1U || variant > 4U ||
+        if (xstate_variant < 1U || xstate_variant > 4U ||
             !minic_x86_64_machine_validate_source_asm(function->target,
                 instruction,NULL)) return false;
         return fputs("1:\n",out) != EOF &&
-            fputs(opcode[variant - 1U],out) != EOF &&
+            fputs(opcode[xstate_variant - 1U],out) != EOF &&
             fputs("  xorl %eax, %eax\n"
                   "2:\n"
                   "  .pushsection \"__ex_table\",\"a\"\n"
