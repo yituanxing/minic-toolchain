@@ -9936,6 +9936,46 @@ static bool x86_source_movnti(X86CoreSelector *sel,
         bindings,2U,NULL,0U,false,false);
 }
 
+/* Linux arch___change_bit() uses an input-only GNU "m" with an explicit
+ * memory clobber, although BTCQ itself reads and writes the referenced
+ * 64-bit word.  Keep the exact Source-qualified constraint and bind the
+ * physical RMW semantics independently in MachineIR.  A register bit index
+ * is always valid for GNU "Ir" and preserves cross-word bit addressing. */
+static bool x86_source_lowlevel_btcq(X86CoreSelector *sel,
+    const MinicCoreInstruction *ins) {
+    const MinicCoreInlineAsm *source;
+    const MinicCoreStructuredInlineAsmOperand *roles;
+    MinicMachineOperand bindings[2];
+    MinicMachineRegisterEffect flags = x86_scalar_flags_clobber();
+    if (!x86_scalar_source_base(sel,ins,
+            MINIC_X86_MACHINE_ASM_LOWLEVEL_SCALAR,&source,&roles) ||
+        source->target_machine_form_variant != 6U ||
+        !source->is_volatile || !source->has_memory_clobber ||
+        !source->explicit_memory_clobber ||
+        !source->implicit_memory_effect ||
+        ins->value.structured_inline_asm.operand_count != 2U ||
+        !x86_scalar_role(&roles[0],0U,
+            MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT) ||
+        !x86_scalar_role(&roles[1],1U,
+            MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT) ||
+        roles[0].physical_read_write || roles[0].has_tied_output ||
+        roles[1].physical_read_write || roles[1].has_tied_output ||
+        !x86_asm_gp_lvalue_width(sel,roles[0].value,8U) ||
+        !x86_asm_gp_input_width(sel,roles[1].value,8U) ||
+        !x86_core_load(sel,roles[0].value,MINIC_X86_REG_R10) ||
+        !x86_core_load(sel,roles[1].value,MINIC_X86_REG_R11)) return false;
+    bindings[0] = x86_addr(MINIC_X86_REG_R10,0);
+    bindings[0].asm_constraint = "m";
+    bindings[1] = x86_reg(MINIC_X86_REG_R11,64U);
+    bindings[1].asm_constraint = "Ir";
+    bindings[1].value.physical.access = MINIC_MACHINE_REGISTER_READ;
+    return minic_machine_builder_emit_core_source_asm(&sel->builder,
+        source,MINIC_MACHINE_EFFECT_MEMORY_READ |
+            MINIC_MACHINE_EFFECT_MEMORY_WRITE,
+        bindings,2U,&flags,1U,false,false);
+}
+
+
 /* Boot flag update: exact GNU +m/Ir BTSL with 32-bit bit index and
  * the real 32-bit memory RMW effect. No widening to BTSQ or fake flags. */
 static bool x86_source_boot_test_bit(X86CoreSelector *sel,
@@ -11084,6 +11124,7 @@ static bool x86_core_instruction(X86CoreSelector *sel,
             x86_source_lowlevel_descriptor(sel, ins) ||
             x86_source_lowlevel_segment(sel, ins) ||
             x86_source_movnti(sel, ins) ||
+            x86_source_lowlevel_btcq(sel, ins) ||
             x86_source_boot_bit(sel, ins) ||
             x86_source_boot_test_bit(sel, ins) ||
             x86_source_boot_eflags(sel, ins) ||

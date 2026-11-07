@@ -1453,6 +1453,12 @@ static bool x86_emit_source_asm(FILE *out,
         instruction->source_asm_machine_form_variant == 1U)
         return fputs("  hlt\n",out) != EOF;
     if (instruction->source_asm_machine_form_id == MINIC_X86_MACHINE_ASM_LOWLEVEL_SCALAR &&
+        instruction->source_asm_machine_form_variant == 6U) {
+        if (!minic_x86_64_machine_validate_source_asm(function->target,
+                instruction,NULL)) return false;
+        return fputs("  btcq %r11, (%r10)\n",out) != EOF;
+    }
+    if (instruction->source_asm_machine_form_id == MINIC_X86_MACHINE_ASM_LOWLEVEL_SCALAR &&
         (instruction->source_asm_machine_form_variant == 2U ||
          instruction->source_asm_machine_form_variant == 5U)) {
         if (!minic_x86_64_machine_validate_source_asm(function->target,

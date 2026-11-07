@@ -5056,6 +5056,57 @@ static bool x86_source_movnti_contract(const MinicMachineInstruction *ins) {
         src->value.physical.access == MINIC_MACHINE_REGISTER_READ;
 }
 
+/* This is an actual 64-bit memory read-modify-write despite GNU's input-only
+ * "m" operand. Do not accept a 32-bit word, an unbound address, another
+ * instruction template or an altered flag/memory-effect contract. */
+static bool x86_source_lowlevel_btcq_contract(
+    const MinicMachineInstruction *ins) {
+    const MinicMachineOperand *mem, *bit;
+    if (ins->source_asm_machine_form_id !=
+            MINIC_X86_MACHINE_ASM_LOWLEVEL_SCALAR ||
+        ins->source_asm_machine_form_variant != 6U ||
+        ins->operand_count != 2U || ins->operands == NULL ||
+        ins->implicit_count != 1U || ins->implicit == NULL ||
+        ins->source_asm_terminates_block ||
+        ins->source_asm_permits_fallthrough ||
+        ins->effects != (MINIC_MACHINE_EFFECT_SOURCE_ASM |
+            MINIC_MACHINE_EFFECT_VOLATILE |
+            MINIC_MACHINE_EFFECT_COMPILER_BARRIER |
+            MINIC_MACHINE_EFFECT_MEMORY_READ |
+            MINIC_MACHINE_EFFECT_MEMORY_WRITE) ||
+        ins->implicit[0].reg.bank != MINIC_MACHINE_REGISTER_FLAGS ||
+        ins->implicit[0].reg.number != 0U ||
+        ins->implicit[0].reg.width_bits != 64U ||
+        ins->implicit[0].access != MINIC_MACHINE_REGISTER_CLOBBER ||
+        !minic_x86_64_typed_machine_form_matches_template(
+            ins->source_asm_machine_form_id,6U,
+            ins->source_asm_template,ins->source_asm_length)) return false;
+    mem = &ins->operands[0];
+    bit = &ins->operands[1];
+    return mem->kind == MINIC_MACHINE_OPERAND_ADDRESS &&
+        mem->asm_constraint && strcmp(mem->asm_constraint,"m") == 0 &&
+        mem->asm_name == NULL &&
+        mem->value.address.target_mode == 0U &&
+        mem->value.address.has_base &&
+        !mem->value.address.has_index &&
+        !mem->value.address.has_segment &&
+        !mem->value.address.has_symbol &&
+        mem->value.address.scale == 1U &&
+        mem->value.address.displacement == 0 &&
+        mem->value.address.relocation == 0U &&
+        mem->value.address.addend == 0 &&
+        mem->value.address.base.bank == MINIC_MACHINE_REGISTER_GENERAL &&
+        mem->value.address.base.number == MINIC_X86_REG_R10 &&
+        mem->value.address.base.width_bits == 64U &&
+        bit->kind == MINIC_MACHINE_OPERAND_REGISTER &&
+        bit->asm_constraint && strcmp(bit->asm_constraint,"Ir") == 0 &&
+        bit->asm_name == NULL &&
+        bit->value.physical.reg.bank == MINIC_MACHINE_REGISTER_GENERAL &&
+        bit->value.physical.reg.number == MINIC_X86_REG_R11 &&
+        bit->value.physical.reg.width_bits == 64U &&
+        bit->value.physical.access == MINIC_MACHINE_REGISTER_READ;
+}
+
 static bool x86_source_boot_bit_contract(const MinicMachineInstruction *ins) {
     const MinicMachineOperand *mem, *idx;
     if (ins->source_asm_machine_form_id != MINIC_X86_MACHINE_ASM_BOOT_FLAGS ||
@@ -5743,6 +5794,9 @@ bool minic_x86_64_machine_validate_source_asm(const MinicTargetInfo *target,
     if (instruction->source_asm_machine_form_id == MINIC_X86_MACHINE_ASM_LOWLEVEL_SCALAR &&
         instruction->source_asm_machine_form_variant == 1U)
         return x86_source_lowlevel_halt_contract(instruction);
+    if (instruction->source_asm_machine_form_id == MINIC_X86_MACHINE_ASM_LOWLEVEL_SCALAR &&
+        instruction->source_asm_machine_form_variant == 6U)
+        return x86_source_lowlevel_btcq_contract(instruction);
     if (instruction->source_asm_machine_form_id == MINIC_X86_MACHINE_ASM_LOWLEVEL_SCALAR &&
         (instruction->source_asm_machine_form_variant == 2U ||
          instruction->source_asm_machine_form_variant == 5U))
