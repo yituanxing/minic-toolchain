@@ -122,6 +122,12 @@ static CoreMachineDemand core_machine_demand(
     case MINIC_CORE_INSTRUCTION_VARIADIC_ARGUMENT_ADDRESS:
         return write;
     case MINIC_CORE_INSTRUCTION_CALL:
+        if (instruction->value.call.machine_builtin_effect ==
+            MINIC_MACHINE_BUILTIN_EFFECT_READ)
+            return read;
+        if (instruction->value.call.machine_builtin_effect ==
+            MINIC_MACHINE_BUILTIN_EFFECT_WRITE)
+            return write;
         /* Core represents a validated extended-float numerical intrinsic
          * using CALL's operand/signature carrier. Physical x87 or target
          * native arithmetic is not a machine CALL. Demand provenance so

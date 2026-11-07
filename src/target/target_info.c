@@ -57,6 +57,8 @@ static const MinicTargetMachineDescriptor minic_machine_aarch64 = {
     .target = {
         .fixed_register_read = minic_aarch64_machine_fixed_register_read,
         .local_fixed_register = minic_aarch64_machine_local_fixed_register,
+        .machine_builtin_form_lookup = minic_aarch64_machine_builtin_form,
+        .machine_builtin_effect_lookup = minic_aarch64_machine_builtin_effect,
         .variadic_scalar_read_kind = MINIC_VARIADIC_SCALAR_READ_ABI_CURSOR,
         .variadic_copy_kind = MINIC_VARIADIC_COPY_ABI_STATE,
         .pic_lowering_supported = true,
@@ -194,4 +196,11 @@ bool minic_target_info_machine_builtin_form(
            target->machine_builtin_form_lookup(
                target, internal_callee, length, argument_count,
                mnemonic, immediate_index);
+}
+
+MinicMachineBuiltinEffect minic_target_info_machine_builtin_effect(
+    const MinicTargetInfo *target, const char *internal_callee, size_t length) {
+    return target != NULL && target->machine_builtin_effect_lookup != NULL
+        ? target->machine_builtin_effect_lookup(target, internal_callee, length)
+        : MINIC_MACHINE_BUILTIN_EFFECT_NONE;
 }

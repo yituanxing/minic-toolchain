@@ -3631,7 +3631,7 @@ jobs:
       # not twelve independent boots. The explicit current-HEAD campaign
       # must also pass twelve NEW QEMU processes on one immutable Image.
       - name: Reboot the exact RV64 all-MiniC Image twelve times with strict P1
-        if: (github.event_name == 'workflow_dispatch' && inputs.mode == 'rv64-full') || (github.event_name == 'pull_request' && needs.rv64-campaign-gate.outputs.run == 'true')
+        if: ((github.event_name == 'workflow_dispatch' && inputs.mode == 'rv64-full') || (github.event_name == 'pull_request' && needs.rv64-campaign-gate.outputs.run == 'true')) && !(github.event_name == 'pull_request' && needs.rv64-campaign-gate.outputs.p1_eight == 'true')
         timeout-minutes: 20
         shell: bash
         env:
@@ -3759,6 +3759,18 @@ jobs:
           test "$(grep -c $'\tPASS$' "$root/repeats.tsv")" -eq 12
           echo "RV64_FULL_IDENTICAL_IMAGE=PASS repeats=12/12 syscalls_each=12/12 image_sha256=$image_sha head=$MINIC_EXPECTED_HEAD_SHA"
 
+      # The eight-owner diagnostic route already performs twelve distinct
+      # QEMU P1 boots in the preceding cohort step. Re-authenticate all
+      # twelve actual Images, clean exits and Python oracles without repeating
+      # a second twelve-boot campaign against the obsolete full_all path.
+      - name: Authenticate RV64 strict 12-boot P1 evidence from eight-owner cohort
+        if: github.event_name == 'pull_request' && needs.rv64-campaign-gate.outputs.run == 'true' && needs.rv64-campaign-gate.outputs.p1_eight == 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          bash tools/ci/linux-runtime-p1-strict12-evidence-v1.sh \
+            "$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-v1"
+
       - name: Authenticate Stage4 2064-object Linux QEMU P1 runtime
         if: contains(github.event.head_commit.message, '[minic-bootstrap-stage4-linux2064]')
         shell: bash
@@ -3848,6 +3860,10 @@ jobs:
             build/linux-runtime-gcc-cohort-v1/p1-gdb-stack-experiment/*.bin
             build/linux-runtime-gcc-cohort-v1/p1-gdb-stack-experiment/*.tsv
             build/linux-runtime-gcc-cohort-v1/trials/*/qemu/rdinit-init.log
+            build/linux-runtime-gcc-cohort-v1/trials/p1_full_minic/runtime.log
+            build/linux-runtime-gcc-cohort-v1/trials/p1_full_minic/p1-strict-oracle.log
+            build/linux-runtime-gcc-cohort-v1/trials/p1_eight_control_*/runtime.log
+            build/linux-runtime-gcc-cohort-v1/trials/p1_eight_control_*/p1-strict-oracle.log
             build/linux-runtime-gcc-cohort-v1/p1-frame-components/*.tsv
             build/linux-runtime-gcc-cohort-v1/p1-frame-components/*.log
             build/linux-runtime-gcc-cohort-v1/p1-frame-components/*.sha256

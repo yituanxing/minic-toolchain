@@ -933,6 +933,14 @@ static bool parse_cast(MinicParser *parser, MinicExpressionId *expression_id) {
         *expression_id = operand_id;
         return true;
     }
+    /* GCC arm_neon.h wraps the result of a typed machine builtin in an
+     * explicit identical vector cast. There is no representation change. */
+    if (operand != NULL &&
+        minic_type_is_fixed_vector_register_storage(target_type) &&
+        minic_type_equal(target_type, operand->type)) {
+        *expression_id = operand_id;
+        return true;
+    }
     if (operand == NULL ||
         (!minic_type_is_void(target_type) &&
          !minic_type_cast_compatible(target_type, operand->type) &&

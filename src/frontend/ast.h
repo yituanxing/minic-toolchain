@@ -449,6 +449,12 @@ typedef struct MinicFunction {
     bool is_defined;
     bool is_internal;
     bool is_inline;
+    /* GNU extern inline owns a parsed body for inlining, never an ELF symbol.
+     * A body is retained only for the independently checked always_inline form. */
+    bool is_gnu_inline_only;
+    bool is_always_inline;
+    /* Set exclusively by target-owned builtin parser admission. */
+    bool is_target_machine_builtin;
     bool is_noreturn;
     bool is_constructor; /* Emit ELF .init_array pointer at startup. */
     bool is_referenced;

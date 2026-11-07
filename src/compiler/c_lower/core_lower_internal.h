@@ -41,6 +41,7 @@ typedef struct MinicCoreLowerContext {
     MinicCoreObjectId *local_objects;
     MinicCoreLocalIntegerConstant *local_integer_constants;
     unsigned int cfg_constant_call_depth;
+    unsigned int gnu_inline_call_depth;
     MinicCoreBlockId *statement_blocks;
     size_t statement_block_count;
 } MinicCoreLowerContext;

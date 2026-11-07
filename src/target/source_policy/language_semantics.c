@@ -290,6 +290,10 @@ bool minic_target_info_named_builtin_type(const MinicTargetInvocation *target,
         spelling == NULL) return false;
     policy = target->source_info.source_language_policy;
     if (!target_source_builtin_registry_valid(policy)) return false;
+    /* GCC registers target-prefixed intQI/intDI as ordinary scalar C types,
+     * not opaque or vector storage. Preserve their real type identity. */
+    if (policy->named_scalar_type != NULL &&
+        policy->named_scalar_type(spelling, length, type)) return true;
     for (i = 0U; i < policy->builtin_type_count; ++i) {
         const MinicTargetSourceBuiltinTypeDescriptor *entry = &policy->builtin_types[i];
         MinicType candidate;

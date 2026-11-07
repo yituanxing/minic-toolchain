@@ -1498,6 +1498,26 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
         parameters = signature->value.function.parameters;
         parameter_count = signature->value.function.parameter_count;
         is_variadic = signature->value.function.is_variadic;
+        if (instruction->value.call.machine_builtin_effect !=
+            MINIC_MACHINE_BUILTIN_EFFECT_NONE) {
+            const MinicMachineBuiltinEffect effect =
+                instruction->value.call.machine_builtin_effect;
+            const size_t expected = effect == MINIC_MACHINE_BUILTIN_EFFECT_READ ? 1U : 2U;
+            if ((effect != MINIC_MACHINE_BUILTIN_EFFECT_READ &&
+                 effect != MINIC_MACHINE_BUILTIN_EFFECT_WRITE) ||
+                instruction->value.call.extended_float_operation !=
+                    MINIC_CORE_EXT_FLOAT_NONE ||
+                is_variadic || parameter_count != expected ||
+                !ct_is_pointer(parameters[0]) ||
+                (effect == MINIC_MACHINE_BUILTIN_EFFECT_READ &&
+                 (!ct_is_vector_register_value(return_type) ||
+                  core_type(function, return_type)->size != 16U)) ||
+                (effect == MINIC_MACHINE_BUILTIN_EFFECT_WRITE &&
+                 (!ct_is_void(return_type) ||
+                  !ct_is_vector_register_value(parameters[1]) ||
+                  core_type(function, parameters[1])->size != 16U)))
+                return false;
+        }
         if ((!is_variadic &&
              instruction->value.call.argument_count != parameter_count) ||
             (is_variadic &&

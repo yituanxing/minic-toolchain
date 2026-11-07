@@ -1,4 +1,5 @@
 # Independent exact-head PR consent: the last commit must edit this marker
+# 2026-11-07 strict 12-boot receiver: no duplicate legacy twelve-boot run; require 12 exact-image checks, P1 oracle and clean qemu_status=0, with per-trial evidence artifacts.
 # AND linux-rv64-runtime-trigger.txt. Do not use historical [linux-*] tags.
 # Only the frozen 2064-owner RV64 verify receiver may enable this experiment.
 2026-11-07 eight-owner crossblock plus discarded-address equality reproduction

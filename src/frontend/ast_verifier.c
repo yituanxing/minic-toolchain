@@ -1905,7 +1905,12 @@ bool minic_c0_program_verify_target_detailed(const MinicC0Program *program,
             function->local_count > program->local_count - function->local_begin ||
             (function->is_internal && function->is_weak) ||
             (function->is_defined && function->body_block >= program->block_count) ||
-            (!function->is_defined && function->body_block != MINIC_BLOCK_INVALID)) {
+            (!function->is_defined && function->body_block != MINIC_BLOCK_INVALID &&
+             !function->is_gnu_inline_only) ||
+            (function->is_gnu_inline_only &&
+             (function->is_defined || !function->is_always_inline ||
+              !function->is_inline || function->body_block >= program->block_count ||
+              function->parameter_count > function->local_count))) {
             MINIC_AST_VERIFY_FAIL(minic_c0_ast_verify_stage_default_reason(stage));
         }
         for (parameter_index = 0U; parameter_index < function->parameter_count; ++parameter_index) {

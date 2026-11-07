@@ -2238,6 +2238,15 @@ static bool parse_function_inner(MinicParser *parser, bool is_internal) {
             parser, function_id, &function_diagnostic)) {
         return false;
     }
+    {
+        MinicFunction *fn = &parser->program->functions[function_id];
+        fn->is_always_inline =
+            function_attribute_list_has_kind(&deferred_attributes,
+                                             MINIC_ATTRIBUTE_ALWAYS_INLINE) ||
+            function_attribute_list_has_kind(&declarator_attributes,
+                                             MINIC_ATTRIBUTE_ALWAYS_INLINE);
+        fn->is_gnu_inline_only = is_gnu_extern_inline && fn->is_always_inline;
+    }
     parser->current_function = function_id;
     parser->current_function_name_object = MINIC_GLOBAL_OBJECT_INVALID;
     if (is_main) {
@@ -2291,8 +2300,10 @@ static bool parse_function_inner(MinicParser *parser, bool is_internal) {
          * remains the sole concrete implementation. */
         MinicFunction *fn = &parser->program->functions[function_id];
         fn->is_defined = false;
-        fn->body_block = MINIC_BLOCK_INVALID;
-        fn->local_count = 0U;
+        if (!fn->is_gnu_inline_only) {
+            fn->body_block = MINIC_BLOCK_INVALID;
+            fn->local_count = 0U;
+        }
     }
     minic_parser_end_scope(parser);
     parser->current_function = MINIC_FUNCTION_INVALID;

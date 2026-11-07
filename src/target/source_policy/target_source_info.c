@@ -121,6 +121,7 @@ static const MinicTargetSourceDescriptor minic_source_x86_64 = {
 static const MinicTargetSourceDescriptor minic_source_aarch64 = {
     .source = {
         .asm_source_policy = &minic_aarch64_asm_source_policy,
+        .machine_builtin_policy = &minic_aarch64_machine_builtin_policy,
         .source_language_policy = &minic_aarch64_source_language_policy,
         .va_cursor_source_abi_policy = &minic_aarch64_va_cursor_source_abi_policy,
         .integer_model = &minic_lp64_unsigned_char_integer_model,

@@ -7,6 +7,24 @@ static bool aarch_register_is(const char *name, size_t length, const char *expec
     return strlen(expected) == length && memcmp(name, expected, length) == 0;
 }
 
+/* GCC13 aarch64-builtins.cc registers these exact spellings against
+ * intQI_type_node and intDI_type_node. LP64's intDI is canonical long
+ * (GCC tree.cc chooses LONG_TYPE_SIZE before LONG_LONG_TYPE_SIZE).
+ * In the header they appear only as
+ * typed pointer casts for ld1/st1; they are ordinary signed C scalars,
+ * not fresh vectors or a permission to emit other AdvSIMD instructions. */
+static bool aarch_named_scalar_type(const char *name, size_t length, MinicType *type) {
+    if (aarch_register_is(name, length, "__builtin_aarch64_simd_qi")) {
+        if (type != NULL) *type = minic_type_signed_char();
+        return true;
+    }
+    if (aarch_register_is(name, length, "__builtin_aarch64_simd_di")) {
+        if (type != NULL) *type = minic_type_long();
+        return true;
+    }
+    return false;
+}
+
 static bool aarch_register_clobber(const char *name, size_t length) {
     /* Recognizing NZCV 'cc' never authorizes arbitrary machine asm. */
     return aarch_register_is(name, length, "cc");
@@ -177,6 +195,82 @@ static const MinicTargetSourceBuiltinTypeDescriptor aarch_builtin_types[] = {
      MINIC_TARGET_BUILTIN_CORE_IMPORT_NONE, MINIC_TARGET_BUILTIN_SCALAR_NONE}
 };
 
+/* Only four GCC13 arm_neon.h AdvSIMD memory builtins are executable here.
+ * The compiler preserves the original spelling in the parsed wrapper body;
+ * this target source policy alone maps it to an unspellable Core callee. */
+static bool aarch_machine_builtin_signature(
+    const MinicTargetInvocation *target, const char *spelling, size_t length,
+    char *callee, size_t capacity, MinicType *result,
+    MinicType arguments[3], size_t *argc,
+    const char **mnemonic, size_t *immediate_index) {
+    static const char source_prefix[] = "__builtin_aarch64_";
+    static const char internal_prefix[] = "__minic_target_builtin_aarch64_";
+    const char *suffix;
+    size_t suffix_length;
+    bool load, bytes;
+    bool header_only_reduction;
+    MinicType scalar, pointer, vector;
+    if (target == NULL || spelling == NULL || callee == NULL || result == NULL ||
+        arguments == NULL || argc == NULL || mnemonic == NULL ||
+        immediate_index == NULL || length <= sizeof(source_prefix) - 1U ||
+        memcmp(spelling, source_prefix, sizeof(source_prefix) - 1U) != 0)
+        return false;
+    suffix = spelling + sizeof(source_prefix) - 1U;
+    suffix_length = length - (sizeof(source_prefix) - 1U);
+    /* GCC13 declares this signed widening add-long (8 x i8 -> 8 x i16)
+     * in the same system header. Source signature only: native emission
+     * is NOT granted, including when directly called from user code. */
+    header_only_reduction = aarch_register_is(suffix, suffix_length, "saddlv8qi");
+    load = aarch_register_is(suffix, suffix_length, "ld1v16qi_us") ||
+           aarch_register_is(suffix, suffix_length, "ld1v2di_us");
+    if (!header_only_reduction && !load &&
+        !aarch_register_is(suffix, suffix_length, "st1v16qi_su") &&
+        !aarch_register_is(suffix, suffix_length, "st1v2di_su")) return false;
+    bytes = aarch_register_is(suffix, suffix_length, "ld1v16qi_us") ||
+            aarch_register_is(suffix, suffix_length, "st1v16qi_su");
+    if (sizeof(internal_prefix) - 1U + suffix_length >= capacity) return false;
+    (void)memcpy(callee, internal_prefix, sizeof(internal_prefix) - 1U);
+    (void)memcpy(callee + sizeof(internal_prefix) - 1U, suffix, suffix_length);
+    callee[sizeof(internal_prefix) - 1U + suffix_length] = '\0';
+    if (header_only_reduction) {
+        *result = minic_type_header_builtin(
+            24U, MINIC_BUILTIN_DECLARATION_FIXED_VECTOR128_STORAGE);
+        arguments[0] = minic_type_header_builtin(
+            10U, MINIC_BUILTIN_DECLARATION_FIXED_VECTOR64_STORAGE);
+        if (!minic_target_info_language_type_supported_for_type(target, *result) ||
+            !minic_target_info_language_type_supported_for_type(target, arguments[0]))
+            return false;
+        *argc = 1U;
+        *mnemonic = "unsupported-aarch64-saddlv8qi";
+        *immediate_index = SIZE_MAX;
+        return true;
+    }
+    /* _us/_su use signed intQI/intDI pointer ingress, even though their
+     * actual Q-register result/input remains an unsigned vector. */
+    scalar = bytes ? minic_type_signed_char() : minic_type_long();
+    if (load && !minic_type_add_const(scalar, &scalar)) return false;
+    if (!minic_type_pointer_to(scalar, &pointer)) return false;
+    vector = minic_type_header_builtin(bytes ? 6U : 7U,
+                                      MINIC_BUILTIN_DECLARATION_FIXED_VECTOR128_STORAGE);
+    if (!minic_target_info_language_type_supported_for_type(target, vector)) return false;
+    arguments[0] = pointer;
+    if (load) {
+        *result = vector;
+        *argc = 1U;
+    } else {
+        *result = minic_type_void();
+        arguments[1] = vector;
+        *argc = 2U;
+    }
+    *mnemonic = load ? "ldr" : "str";
+    *immediate_index = SIZE_MAX;
+    return true;
+}
+
+const MinicTargetMachineBuiltinPolicy minic_aarch64_machine_builtin_policy = {
+    .signature = aarch_machine_builtin_signature,
+};
+
 static bool aarch_header_opaque_return(const MinicTargetInvocation *target,
                                        MinicType type) {
     MinicTargetSourceBuiltinTypeDescriptor descriptor;
@@ -234,6 +328,7 @@ static bool aarch_pragma_internal_header(
 const MinicTargetSourceLanguagePolicy minic_aarch64_source_language_policy = {
     .builtin_types = aarch_builtin_types,
     .builtin_type_count = sizeof(aarch_builtin_types) / sizeof(aarch_builtin_types[0]),
+    .named_scalar_type = aarch_named_scalar_type,
     .header_opaque_return = aarch_header_opaque_return,
     .header_attribute = aarch_header_attribute,
     .gnu_pragma_target_options = aarch_pragma_target_options,

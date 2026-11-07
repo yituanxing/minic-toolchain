@@ -2076,7 +2076,8 @@ static bool parse_target_builtin(
             candidate->name_length != strlen(internal_name) ||
             memcmp(candidate->name, internal_name, candidate->name_length) != 0)
             continue;
-        if (candidate->is_defined || candidate->is_variadic ||
+        if (!candidate->is_target_machine_builtin || candidate->is_defined ||
+            candidate->is_variadic ||
             candidate->parameter_count != parameter_count ||
             !minic_type_equal(candidate->return_type, result_type)) {
             minic_parser_error(parser, "target builtin reserved callee conflict");
@@ -2100,6 +2101,7 @@ static bool parse_target_builtin(
         minic_parser_error(parser, "cannot declare target machine builtin");
         return false;
     }
+    parser->program->functions[function_id].is_target_machine_builtin = true;
     begin = parser->current.span.begin;
     if (!minic_parser_advance(parser) ||
         !minic_parser_expect(parser, MINIC_TOKEN_LPAREN,

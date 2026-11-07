@@ -504,6 +504,132 @@ static MinicCoreLowerStatus core_reload_call_arguments(
     return MINIC_CORE_LOWER_OK;
 }
 
+/* Deliberately narrow GNU always_inline expansion. Real GCC13 NEON wrappers
+ * are one return/expression statement with at most two formal parameters;
+ * every caller argument is snapshotted exactly once BEFORE changing the local
+ * binding scope. No statement CFG, local declarations or aliasing machinery. */
+static bool core_gnu_straight_expression(
+    const MinicCoreLowerContext *context, MinicExpressionId id,
+    unsigned int depth) {
+    const MinicC0Program *program;
+    const MinicExpression *expression;
+    if (context == NULL || context->body == NULL ||
+        (program = context->body->program) == NULL || depth >= 24U ||
+        (expression = minic_c0_program_expression(program, id)) == NULL)
+        return false;
+    switch (expression->kind) {
+    case MINIC_EXPRESSION_LOCAL:
+        return context->source_function != NULL &&
+            expression->value.local_id >= context->source_function->local_begin &&
+            expression->value.local_id - context->source_function->local_begin <
+                context->source_function->parameter_count;
+    case MINIC_EXPRESSION_INTEGER:
+        return true;
+    case MINIC_EXPRESSION_CAST:
+    case MINIC_EXPRESSION_BITCAST:
+    case MINIC_EXPRESSION_CONVERSION:
+    case MINIC_EXPRESSION_DISCARD:
+    case MINIC_EXPRESSION_LVALUE_READ:
+        return core_gnu_straight_expression(
+            context, expression->value.unary.operand, depth + 1U);
+    case MINIC_EXPRESSION_BINARY:
+        return expression->value.binary.operator_kind == MINIC_BINARY_BITWISE_XOR &&
+            core_gnu_straight_expression(
+                context, expression->value.binary.left, depth + 1U) &&
+            core_gnu_straight_expression(
+                context, expression->value.binary.right, depth + 1U);
+    case MINIC_EXPRESSION_CALL: {
+        const MinicFunction *called;
+        size_t i;
+        if (expression->value.call.function_id == MINIC_FUNCTION_INVALID ||
+            (called = minic_c0_program_function(
+                program, expression->value.call.function_id)) == NULL ||
+            (!called->is_target_machine_builtin &&
+             !(called->is_gnu_inline_only && called->is_always_inline)) ||
+            expression->value.call.argument_count > 2U ||
+            expression->value.call.argument_count != called->parameter_count)
+            return false;
+        for (i = 0U; i < expression->value.call.argument_count; ++i)
+            if (!core_gnu_straight_expression(
+                context, minic_c0_call_argument(expression, i), depth + 1U))
+                return false;
+        return true;
+    }
+    default: return false;
+    }
+}
+
+static MinicCoreLowerStatus core_lower_straight_gnu_inline(
+    MinicCoreLowerContext *context, const MinicExpression *call,
+    const MinicFunction *callee, MinicCoreValueId *result) {
+    const MinicBlock *body;
+    const MinicStatement *statement;
+    const MinicFunction *owner;
+    MinicCoreObjectId *old_objects;
+    MinicCoreLocalIntegerConstant *old_constants;
+    MinicCoreObjectId snapshots[2] = {MINIC_CORE_OBJECT_INVALID,
+                                      MINIC_CORE_OBJECT_INVALID};
+    MinicCoreLocalIntegerConstant constants[2] = {0};
+    MinicCoreLowerContext proof;
+    MinicCoreLowerStatus status;
+    size_t i;
+    if (context == NULL || callee == NULL || result == NULL ||
+        !callee->is_gnu_inline_only || !callee->is_always_inline ||
+        context->gnu_inline_call_depth >= 8U ||
+        callee->parameter_count > 2U ||
+        callee->parameter_count != call->value.call.argument_count ||
+        callee->local_count != callee->parameter_count ||
+        callee->body_block == MINIC_BLOCK_INVALID ||
+        (body = minic_c0_program_block(
+            context->body->program, callee->body_block)) == NULL ||
+        (body->statement_count != 1U && body->statement_count != 2U) ||
+        (statement = minic_c0_program_statement(
+            context->body->program, body->statements[0])) == NULL ||
+        (statement->kind != MINIC_STATEMENT_RETURN &&
+         statement->kind != MINIC_STATEMENT_EXPRESSION) ||
+        (body->statement_count == 2U &&
+         (minic_c0_program_statement(
+              context->body->program, body->statements[1]) == NULL ||
+          minic_c0_program_statement(
+              context->body->program, body->statements[1])->kind != MINIC_STATEMENT_RETURN ||
+          minic_c0_program_statement(
+              context->body->program, body->statements[1])->expression !=
+              MINIC_EXPRESSION_INVALID)) ||
+        statement->cleanup_context != statement->cleanup_stop_context ||
+        statement->expression == MINIC_EXPRESSION_INVALID ||
+        (minic_type_is_void(callee->return_type)
+            ? statement->kind != MINIC_STATEMENT_EXPRESSION
+            : statement->kind != MINIC_STATEMENT_RETURN))
+        return MINIC_CORE_LOWER_UNSUPPORTED;
+    proof = *context;
+    proof.source_function = callee;
+    if (!core_gnu_straight_expression(&proof, statement->expression, 0U))
+        return MINIC_CORE_LOWER_UNSUPPORTED;
+    for (i = 0U; i < callee->parameter_count; ++i) {
+        MinicCoreCallArgument argument;
+        if (!core_memory_scalar_type(callee->parameter_types[i]) &&
+            !minic_type_is_fixed_vector_register_storage(callee->parameter_types[i]))
+            return MINIC_CORE_LOWER_UNSUPPORTED;
+        status = core_prepare_call_argument(
+            context, call, i, callee->parameter_types[i], true, NULL,
+            &argument, &snapshots[i], NULL);
+        if (status != MINIC_CORE_LOWER_OK) return status;
+    }
+    owner = context->source_function;
+    old_objects = context->local_objects;
+    old_constants = context->local_integer_constants;
+    context->source_function = callee;
+    context->local_objects = snapshots;
+    context->local_integer_constants = constants;
+    ++context->gnu_inline_call_depth;
+    status = lower_expression(context, statement->expression, result);
+    --context->gnu_inline_call_depth;
+    context->source_function = owner;
+    context->local_objects = old_objects;
+    context->local_integer_constants = old_constants;
+    return status;
+}
+
 /* Direct scalar, void, and record calls share their one callee resolution,
  * source-order argument snapshot, Core callee registration, and CALL append
  * owner. Indirect calls retain their distinct first-class callee path below. */
@@ -563,6 +689,10 @@ static MinicCoreLowerStatus core_lower_direct_call_impl(
                !minic_type_is_fixed_vector_register_storage(callee->return_type))))) {
         return MINIC_CORE_LOWER_UNSUPPORTED;
     }
+    if (value_id != NULL && callee->is_gnu_inline_only &&
+        callee->is_always_inline)
+        return core_lower_straight_gnu_inline(
+            context, expression, callee, value_id);
 
     /* CONFIG-off internal void helpers with no effects can be elided only
      * when every original call argument is independently pure. Record
@@ -685,6 +815,12 @@ static MinicCoreLowerStatus core_lower_direct_call_impl(
     instruction.value.call.argument_begin = argument_begin;
     instruction.value.call.argument_count = argument_count;
     instruction.value.call.result_object = MINIC_CORE_OBJECT_INVALID;
+    /* Source parser sealing and target machine registry must both agree.
+     * Ordinary declarations with similar spellings remain actual CALLs. */
+    if (callee->is_target_machine_builtin && context->target != NULL)
+        instruction.value.call.machine_builtin_effect =
+            minic_target_info_machine_builtin_effect(
+                &context->target->machine, callee_name, callee_name_length);
     if (result_object != NULL) {
         if (!minic_core_function_add_object(
                 context->source, expression->span, callee->return_type, result_object))

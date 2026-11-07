@@ -2,6 +2,7 @@
 #define MINIC_CORE_CORE_IR_H
 
 #include "common/source_location.h"
+#include "common/machine_builtin_effect.h"
 #include "core/core_type.h"
 
 #include <stdbool.h>
@@ -594,6 +595,9 @@ typedef struct MinicCoreInstruction {
             /* NONE denotes a real external CALL. A nonzero tag owns the
              * numerical semantics and cannot be inferred from callee.name. */
             MinicCoreExtendedFloatOperation extended_float_operation;
+            /* Source/target-sealed intrinsic effects; never inferred from
+             * external symbol spelling by Core or machine coverage. */
+            MinicMachineBuiltinEffect machine_builtin_effect;
             /* M86_DIRECT_RECORD_CALL_RESULT: aggregate call results remain
                address-backed Core objects rather than becoming aggregate SSA. */
             MinicCoreObjectId result_object;

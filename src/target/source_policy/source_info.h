@@ -73,6 +73,12 @@ typedef struct MinicTargetSourceBuiltinTypeDescriptor {
     MinicTargetBuiltinScalarElementKind vector_element;
 } MinicTargetSourceBuiltinTypeDescriptor;
 
+/* GCC can register target-prefixed names for *ordinary scalar C types*.
+ * Keep those names in the selected source policy; do not give them a
+ * fictitious opaque/vector storage role or a new machine representation. */
+typedef bool (*MinicTargetNamedBuiltinScalarTypePolicy)(
+    const char *spelling, size_t length, MinicType *type);
+
 typedef enum MinicTargetGnuFunctionAttributeKind {
     MINIC_TARGET_GNU_FUNCTION_NOCF_CHECK = 0,
     MINIC_TARGET_GNU_FUNCTION_INDIRECT_BRANCH,

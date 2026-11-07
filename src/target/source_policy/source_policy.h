@@ -55,6 +55,7 @@ typedef struct MinicTargetSourceLanguagePolicy {
      * owns the name, nominal identity, admission and Core ingress shape. */
     const MinicTargetSourceBuiltinTypeDescriptor *builtin_types;
     size_t builtin_type_count;
+    MinicTargetNamedBuiltinScalarTypePolicy named_scalar_type;
     bool (*header_opaque_return)(const MinicTargetInvocation *, MinicType);
     bool (*header_attribute)(const MinicTargetInvocation *, const char *, size_t);
     bool (*gnu_function_attribute_name)(const char *, size_t);
@@ -87,6 +88,7 @@ extern const MinicTargetAsmSourcePolicy minic_riscv32_asm_source_policy;
 extern const MinicTargetAsmSourcePolicy minic_riscv64_asm_source_policy;
 extern const MinicTargetAsmSourcePolicy minic_x86_64_asm_source_policy;
 extern const MinicTargetAsmSourcePolicy minic_aarch64_asm_source_policy;
+extern const MinicTargetMachineBuiltinPolicy minic_aarch64_machine_builtin_policy;
 extern const MinicTargetSourceLanguagePolicy minic_x86_64_source_language_policy;
 extern const MinicTargetSourceLanguagePolicy minic_aarch64_source_language_policy;
 extern const MinicTargetVaCursorSourceAbiPolicy minic_x86_64_va_cursor_source_abi_policy;

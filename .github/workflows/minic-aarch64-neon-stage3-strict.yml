@@ -22,7 +22,9 @@ on:
       - 'src/target/source_policy/target_source_info.c'
       - 'src/target/source_policy/data_layout_source.c'
       - 'tests/compiler/c0/aarch64_neon*'
+      - 'tests/compiler/c0/aarch64_gnu_neon_inline_*'
       - 'tests/compiler/c0/run-aarch64-neon-*'
+      - 'tests/compiler/c0/run-aarch64-gnu-neon-*'
       - 'Makefile'
   workflow_dispatch:
 
@@ -71,8 +73,28 @@ jobs:
           MINIC_CC="$GITHUB_WORKSPACE/build/aarch-neon-ci/bin/minic-cc" \
           BUILD_DIR=build/aarch-neon-ci \
             sh tests/compiler/c0/run-aarch64-neon-core-vector128.sh
+      - name: GNU AArch64 six NEON inline wrappers and strict negative preflight
+        run: |
+          MINIC_CC="$GITHUB_WORKSPACE/build/aarch-neon-ci/bin/minic-cc" \
+          BUILD_DIR=build/aarch-neon-ci \
+            sh tests/compiler/c0/run-aarch64-gnu-neon-inline-six.sh
       - name: Strict same-GNU-i, two-ELF, GNU/MiniC/QEMU real machine differential
         run: |
           MINIC_CC="$GITHUB_WORKSPACE/build/aarch-neon-ci/bin/minic-cc" \
           BUILD_DIR=build/aarch-neon-ci \
             sh tests/compiler/c0/run-aarch64-neon-stage3-strict.sh
+      # Preserve the *exact* GNU-preprocessed source consumed by MiniC on a
+      # failed real-machine gate, including the full rather than abbreviated
+      # first diagnostic. This never changes the gate's success criteria.
+      - name: Preserve failing GNU AArch64 Stage3 source and diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: aarch64-neon-stage3-failure-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            build/aarch-neon-ci/tests/aarch64-neon-stage3-strict/load_xor_store.i
+            build/aarch-neon-ci/tests/aarch64-neon-stage3-strict/load_xor_store.minic.stderr
+            build/aarch-neon-ci/tests/aarch64-neon-stage3-strict/sha3_eor3.i
+            build/aarch-neon-ci/tests/aarch64-neon-stage3-strict/sha3_eor3.minic.stderr
+          if-no-files-found: ignore
+          retention-days: 7

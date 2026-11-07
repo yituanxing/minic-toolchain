@@ -60,6 +60,32 @@ static bool a64_variadic(A64CoreSelection *, const MinicCoreInstruction *,
     MinicCoreInstructionId);
 static bool a64_wide_shift(A64CoreSelection *, const MinicCoreInstruction *,
     MinicCoreInstructionId);
+static bool a64_wide_memory(A64CoreSelection *, const MinicCoreInstruction *);
+
+static bool a64_neon_builtin_memory_shape(const MinicCoreFunction *fn,
+    MinicCoreTypeId pointer_id, MinicCoreTypeId vector_id,
+    size_t element_bytes, size_t element_count) {
+    const MinicCoreType *ptr, *pointee, *vec, *lane;
+    ptr = minic_core_type_get(fn->type_context,
+        minic_core_type_unqualified(fn->type_context, pointer_id));
+    vec = minic_core_type_get(fn->type_context,
+        minic_core_type_unqualified(fn->type_context, vector_id));
+    if (ptr == NULL || ptr->kind != MINIC_CORE_TYPE_POINTER ||
+        vec == NULL || vec->kind != MINIC_CORE_TYPE_VECTOR ||
+        vec->value.vector.representation != MINIC_CORE_VECTOR_REGISTER_VALUE ||
+        !vec->has_layout || vec->size != 16U ||
+        vec->value.vector.element_count != element_count) return false;
+    pointee = minic_core_type_get(fn->type_context,
+        minic_core_type_unqualified(fn->type_context, ptr->value.pointer.pointee));
+    lane = minic_core_type_get(fn->type_context,
+        minic_core_type_unqualified(fn->type_context, vec->value.vector.element));
+    return pointee != NULL && lane != NULL &&
+        pointee->kind == MINIC_CORE_TYPE_INTEGER &&
+        lane->kind == MINIC_CORE_TYPE_INTEGER &&
+        pointee->value.integer.is_signed && !lane->value.integer.is_signed &&
+        !pointee->value.integer.is_bool && !lane->value.integer.is_bool &&
+        pointee->size == element_bytes && lane->size == element_bytes;
+}
 
 static MinicMachineOperand a64_gp(unsigned int reg, unsigned int bits,
     unsigned int access) {
@@ -949,6 +975,82 @@ static bool a64_call_record_result(A64CoreSelection *sel,
     return true;
 }
 
+/* Four exact GCC13 ACLE memory forms, selected without a fictitious BL.
+ * Both the sealed side effect and independent machine spelling/signature must
+ * match; an ordinary source symbol cannot opt into a memory operation. */
+static bool a64_neon_builtin_memory(A64CoreSelection *sel,
+    const MinicCoreInstruction *ins) {
+    const MinicCoreFunction *fn = sel->ctx->fn;
+    const MinicCoreCallee *callee;
+    const MinicCoreType *signature;
+    const MinicCoreCallArgument *args;
+    const MinicMachineBuiltinEffect effect = ins->value.call.machine_builtin_effect;
+    const size_t count = effect == MINIC_MACHINE_BUILTIN_EFFECT_READ ? 1U : 2U;
+    MinicCoreInstruction access;
+    MinicMachineBuiltinEffect registry_effect;
+    size_t registry_count, immediate_index, vector_bytes;
+    size_t lane_bytes, lane_count;
+    const char *mnemonic;
+    if ((effect != MINIC_MACHINE_BUILTIN_EFFECT_READ &&
+         effect != MINIC_MACHINE_BUILTIN_EFFECT_WRITE) ||
+        ins->value.call.callee_id >= fn->callee_count ||
+        ins->value.call.argument_count != count ||
+        ins->value.call.argument_begin > fn->call_argument_count ||
+        count > fn->call_argument_count - ins->value.call.argument_begin ||
+        ins->value.call.extended_float_operation != MINIC_CORE_EXT_FLOAT_NONE)
+        return false;
+    callee = &fn->callees[ins->value.call.callee_id];
+    if (callee->name == NULL) return false;
+    registry_effect = minic_target_info_machine_builtin_effect(
+        sel->ctx->target, callee->name, strlen(callee->name));
+    lane_count = strstr(callee->name, "v16qi") != NULL ? 16U : 2U;
+    lane_bytes = lane_count == 16U ? 1U : 8U;
+    if (registry_effect != effect ||
+        !minic_target_info_machine_builtin_form(
+            sel->ctx->target, callee->name, strlen(callee->name),
+            &registry_count, &mnemonic, &immediate_index) ||
+        registry_count != count || immediate_index != SIZE_MAX ||
+        strcmp(mnemonic, effect == MINIC_MACHINE_BUILTIN_EFFECT_READ ? "ldr" : "str") != 0)
+        return false;
+    signature = minic_core_type_get(fn->type_context,
+        minic_core_type_unqualified(fn->type_context, callee->core_function_type_id));
+    if (signature == NULL || signature->kind != MINIC_CORE_TYPE_FUNCTION ||
+        signature->value.function.is_variadic ||
+        signature->value.function.parameter_count != count ||
+        signature->value.function.parameters == NULL ||
+        signature->value.function.return_type != ins->core_type_id) return false;
+    if (!a64_neon_builtin_memory_shape(fn,
+            signature->value.function.parameters[0],
+            effect == MINIC_MACHINE_BUILTIN_EFFECT_READ
+                ? ins->core_type_id : signature->value.function.parameters[1],
+            lane_bytes, lane_count)) return false;
+    args = fn->call_arguments + ins->value.call.argument_begin;
+    if (args[0].kind != MINIC_CORE_CALL_ARGUMENT_VALUE ||
+        args[0].value.value_id >= fn->value_count ||
+        fn->values[args[0].value.value_id].core_type_id !=
+            signature->value.function.parameters[0]) return false;
+    access = *ins;
+    if (effect == MINIC_MACHINE_BUILTIN_EFFECT_READ) {
+        if (!a64_vector_core_bytes(fn, ins->core_type_id, &vector_bytes) ||
+            vector_bytes != 16U || ins->result >= fn->value_count) return false;
+        access.kind = MINIC_CORE_INSTRUCTION_VECTOR_REGISTER_LOAD;
+        access.value.load.address = args[0].value.value_id;
+    } else {
+        if (args[1].kind != MINIC_CORE_CALL_ARGUMENT_VALUE ||
+            args[1].value.value_id >= fn->value_count ||
+            fn->values[args[1].value.value_id].core_type_id !=
+                signature->value.function.parameters[1] ||
+            !a64_vector_core_bytes(fn,
+                signature->value.function.parameters[1], &vector_bytes) ||
+            vector_bytes != 16U || ins->result != MINIC_CORE_VALUE_INVALID)
+            return false;
+        access.kind = MINIC_CORE_INSTRUCTION_VECTOR_REGISTER_STORE;
+        access.value.store.address = args[0].value.value_id;
+        access.value.store.stored_value = args[1].value.value_id;
+    }
+    return a64_wide_memory(sel, &access);
+}
+
 static bool a64_call(A64CoreSelection *sel,
     const MinicCoreInstruction *ins) {
     const MinicCoreFunction *fn = sel->ctx->fn;
@@ -965,6 +1067,18 @@ static bool a64_call(A64CoreSelection *sel,
     MinicCoreAbiValueShape result;
     MinicA64FrameView live = sel->view;
     size_t call_id, i;
+    if (!indirect) {
+        const MinicMachineBuiltinEffect effect =
+            ins->value.call.machine_builtin_effect;
+        if (effect != MINIC_MACHINE_BUILTIN_EFFECT_NONE)
+            return a64_neon_builtin_memory(sel, ins);
+        if (ins->value.call.callee_id < fn->callee_count) {
+            const char *name = fn->callees[ins->value.call.callee_id].name;
+            static const char reserved[] = "__minic_target_builtin_aarch64_";
+            if (name != NULL && strncmp(name, reserved, sizeof(reserved) - 1U) == 0)
+                return false;
+        }
+    }
     if (fn->instructions == NULL || ins < fn->instructions ||
         ins >= fn->instructions + fn->instruction_count ||
         sel->ctx->outgoing_calls == NULL ||

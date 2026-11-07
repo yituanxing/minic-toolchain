@@ -3,6 +3,7 @@
 
 #include "common/call_frame_address.h"
 #include "common/calling_convention.h"
+#include "common/machine_builtin_effect.h"
 #include "target/data_layout.h"
 #include "target/machine_register.h"
 #include "target/target_catalog.h"
@@ -36,6 +37,8 @@ struct MinicTargetInfo;
 typedef bool (*MinicTargetMachineBuiltinFormLookup)(
     const struct MinicTargetInfo *, const char *, size_t,
     size_t *, const char **, size_t *);
+typedef MinicMachineBuiltinEffect (*MinicTargetMachineBuiltinEffectLookup)(
+    const struct MinicTargetInfo *, const char *, size_t);
 
 typedef struct MinicTargetInfo {
     MinicTargetArchitecture architecture;
@@ -45,6 +48,7 @@ typedef struct MinicTargetInfo {
     MinicMachineRegisterRecognizer fixed_register_write;
     MinicMachineRegisterRecognizer local_fixed_register;
     MinicTargetMachineBuiltinFormLookup machine_builtin_form_lookup;
+    MinicTargetMachineBuiltinEffectLookup machine_builtin_effect_lookup;
     const MinicDataLayout *data_layout;
     unsigned int call_lowering_capabilities;
     bool call_frame_return_address_level0;
@@ -74,6 +78,8 @@ bool minic_target_info_machine_builtin_form(
     const MinicTargetInfo *target, const char *internal_callee, size_t length,
     size_t *argument_count,
     const char **mnemonic, size_t *immediate_index);
+MinicMachineBuiltinEffect minic_target_info_machine_builtin_effect(
+    const MinicTargetInfo *target, const char *internal_callee, size_t length);
 
 bool minic_target_info_function_calling_convention_scalar_call_supported(
     const MinicTargetInfo *target, MinicFunctionCallingConvention convention);

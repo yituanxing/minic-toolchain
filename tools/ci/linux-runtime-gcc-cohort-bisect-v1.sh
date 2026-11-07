@@ -3480,6 +3480,12 @@ PY_FRAME_PROLOGUE
   trial p1_full_minic "$n" p1
   baseline_verdict="$TRIAL_VERDICT"
   baseline_image_sha="$image_sha"
+  if [[ "${COHORT_P1_EIGHT_OWNER:-0}" == 1 && "$baseline_verdict" == PASS ]] &&
+     ! grep -Fq 'LINUX_RUNTIME_BOOT lane=rdinit-init qemu_status=0 ' \
+       "$ev/trials/p1_full_minic/runtime.log"; then
+    echo 'P1_STRICT_SAME_IMAGE=FAIL trial=p1_full_minic reason=qemu_not_clean_exit' >&2
+    exit 8
+  fi
   if [[ "${COHORT_P1_EIGHT_OWNER:-0}" == 1 && "$baseline_verdict" == PASS ]]; then
     # The frozen all-MiniC Image is timing-sensitive: an initial PASS does
     # not refute the recorded IRQ underflow. Demand twelve independent P1
@@ -3491,6 +3497,12 @@ PY_FRAME_PROLOGUE
       [[ "$image_sha" == "$baseline_image_sha" ]] || {
         echo "P1_EIGHT_OWNER=ERROR control_image_sha_changed" >&2; exit 8;
       }
+      if [[ "$TRIAL_VERDICT" == PASS ]] &&
+         ! grep -Fq 'LINUX_RUNTIME_BOOT lane=rdinit-init qemu_status=0 ' \
+           "$ev/trials/p1_eight_control_$attempt/runtime.log"; then
+        echo "P1_STRICT_SAME_IMAGE=FAIL trial=p1_eight_control_$attempt reason=qemu_not_clean_exit" >&2
+        exit 8
+      fi
       echo "P1_EIGHT_OWNER=CONTROL attempt=$attempt verdict=$TRIAL_VERDICT image_sha=$image_sha"
       if [[ "$TRIAL_VERDICT" != PASS ]]; then
         baseline_verdict="$TRIAL_VERDICT"
