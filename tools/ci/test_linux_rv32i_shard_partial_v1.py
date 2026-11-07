@@ -119,6 +119,30 @@ class ResumeTest(unittest.TestCase):
         return dict(self.identity["generated_headers"],
                     **{"include/generated/vdso-offsets.h": "d" * 64})
 
+    def prepare_direct_resume(self):
+        self.freeze_dynamic_header_epoch(affected=False)
+        self.prepare_resume()
+        pinned = self.now / "checkpoint/pinned-gnu-cmd/init"
+        pinned.mkdir(parents=True)
+        shutil.copyfile(self.cmd, pinned / ".main.o.cmd")
+        (self.now / "checkpoint/frozen-selected.txt").write_text(self.owner + "\n")
+        rv32.seven.atomic_json(self.now / "checkpoint/frozen-header-snapshot.json",
+                              {"schema": rv32.regen.SCHEMA,
+                               "headers": self.identity["generated_headers"]})
+        wrapper = self.root / "tests/external/linux/stage2_kbuild_cc.sh"
+        wrapper.parent.mkdir(parents=True)
+        wrapper.write_text("#!/bin/sh\nexit 1\n")
+        self.identity["stage2_wrapper_sha256"] = rv32.sha(wrapper)
+        route_guard = self.root / "tools/ci/linux-runtime-minic-route-audit-v1.py"
+        route_guard.parent.mkdir(parents=True, exist_ok=True)
+        route_guard.write_text("#!/usr/bin/env python3\n")
+        self.identity["stage2_route_guard_sha256"] = rv32.sha(route_guard)
+        rv32.seven.atomic_json(self.now / "checkpoint/identity.json", self.identity)
+        rv32.seven.atomic_json(self.old / "checkpoint/identity.json", self.identity)
+        with patch.object(rv32, "preprocessed_sha", return_value="f" * 64):
+            rv32.restore(self.a)
+        (self.out / self.owner).unlink()
+
     def test_real_vdso_header_change_without_dependent_c_is_sha_sealed(self):
         after = self.freeze_dynamic_header_epoch(affected=False)
         self.record_success()
@@ -222,6 +246,61 @@ class ResumeTest(unittest.TestCase):
         self.assertEqual((self.now / "checkpoint/resumed-owners.txt").read_text(), "")
         self.assertFalse((self.now / "checkpoint/owners" / (self.owner + ".json")).exists())
         self.assertEqual((self.out / self.owner).read_bytes(), elf32_riscv(b"GOLDEN"))
+
+    def test_direct_resume_rebuilds_missing_owner_with_pinned_gnu_command_and_final_sha(self):
+        self.prepare_direct_resume()
+        called = []
+
+        def fake_direct_replay(out, pinned, selected, wrapper, minic, success, hashes):
+            self.assertEqual(selected.read_text(), self.owner + "\n")
+            self.assertEqual(rv32.regen.pinned_kbuild_cc_args(pinned, self.owner),
+                             rv32.regen.pinned_kbuild_cc_args(self.out, self.owner))
+            called.append(self.owner)
+            self.preprocessed.write_text("new genuine original GNU-E bytes\n")
+            self.assembly.write_text(".text\nnew original GNU epoch assembly\n")
+            (self.out / self.owner).write_bytes(elf32_riscv(b"REPLAYED_CURRENT_MINIC"))
+            rv32.capture(self.a)
+
+        with patch.object(rv32, "source_profile", return_value=self.identity["current_compiler_source_profile_sha256"]), \
+             patch.object(rv32.regen, "generated", return_value=self.identity["generated_headers"]), \
+             patch.object(rv32.regen, "replay_affected", side_effect=fake_direct_replay):
+            rv32.replay_missing(self.a)
+            rv32.verify(self.a)
+        self.assertEqual(called, [self.owner])
+        self.assertEqual(rv32.seven.json_file(
+            self.now / "checkpoint/owners" / (self.owner + ".json"))["obj_sha256"],
+                         rv32.sha(self.out / self.owner))
+
+    def test_direct_resume_refuses_global_kconfig_header_drift_before_compilation(self):
+        self.prepare_direct_resume()
+        changed = dict(self.identity["generated_headers"])
+        changed["include/generated/autoconf.h"] = "f" * 64
+        with patch.object(rv32, "source_profile", return_value=self.identity["current_compiler_source_profile_sha256"]), \
+             patch.object(rv32.regen, "generated", return_value=changed), \
+             patch.object(rv32.regen, "replay_affected") as replay:
+            with self.assertRaisesRegex(ValueError, "generated header epoch drift before direct replay"):
+                rv32.replay_missing(self.a)
+        replay.assert_not_called()
+
+    def test_direct_resume_does_not_trust_forged_resumed_owner_list(self):
+        self.prepare_direct_resume()
+        (self.now / "checkpoint/resumed-owners.txt").write_text(self.owner + "\n" + self.owner + "\n")
+        with patch.object(rv32, "source_profile", return_value=self.identity["current_compiler_source_profile_sha256"]), \
+             patch.object(rv32.regen, "generated", return_value=self.identity["generated_headers"]), \
+             patch.object(rv32.regen, "replay_affected") as replay:
+            with self.assertRaisesRegex(ValueError, "duplicate authenticated resume owners"):
+                rv32.replay_missing(self.a)
+        replay.assert_not_called()
+
+    def test_direct_resume_does_not_accept_old_gnu_object_as_new_mini_c(self):
+        self.prepare_direct_resume()
+        (self.out / self.owner).write_bytes(elf32_riscv(b"OLD_GNU_NO_PROOF"))
+        with patch.object(rv32, "source_profile", return_value=self.identity["current_compiler_source_profile_sha256"]), \
+             patch.object(rv32.regen, "generated", return_value=self.identity["generated_headers"]), \
+             patch.object(rv32.regen, "replay_affected") as replay:
+            with self.assertRaisesRegex(ValueError, "still has stale GNU object"):
+                rv32.replay_missing(self.a)
+        replay.assert_not_called()
 
     def test_drifted_compiler_profile_and_generated_input_epochs_rejected(self):
         receipt = self.prepare_resume()

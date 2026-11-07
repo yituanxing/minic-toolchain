@@ -10,6 +10,7 @@ recomputed GNU-E bytes. A mismatched artifact is rejected, never promoted.
 from __future__ import annotations
 
 import argparse
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import importlib.util
 import json
 import os
@@ -383,6 +384,115 @@ def restore(a):
           f"remaining_C={len(identity(a)['rows'])-len(names)}")
 
 
+def replay_missing(a):
+    """Compile only authenticated resume misses from their original GNU .cmd.
+
+    A selected-target `make CC=stage2_kbuild_cc.sh` also re-enters Kconfig
+    syncconfig on some clean runners. That changes autoconf.h/rustc_cfg for
+    *every* C owner, invalidating the entire GNU original input epoch.
+    Reuse the existing bounded direct-wrapper replay instead: it executes
+    the exact frozen GNU command for each missing owner, with real GNU-E,
+    current MiniC-S, GNU-AS and the wrapper's atomic capture. Never weaken
+    the generated-header guard to make an incompatible Kconfig epoch pass.
+    """
+    idn = identity(a)
+    if a.minic is None or sha(a.minic) != idn["current_minic_compiler_sha256"]:
+        raise ValueError("current MiniC binary drift before direct missing-owner replay")
+    if a.root is None or source_profile(a.root) != idn["current_compiler_source_profile_sha256"]:
+        raise ValueError("current MiniC source profile drift before direct replay")
+    wrapper = a.root / "tests/external/linux/stage2_kbuild_cc.sh"
+    if sha(wrapper) != idn["stage2_wrapper_sha256"]:
+        raise ValueError("stage2 compiler wrapper drift before direct replay")
+    route_guard = a.root / "tools/ci/linux-runtime-minic-route-audit-v1.py"
+    if sha(route_guard) != idn["stage2_route_guard_sha256"]:
+        raise ValueError("MiniC/GNU-AS route guard drift before direct replay")
+    pinned, selected, _snapshot = pinned_gnu(a, idn)
+    if regen.generated(a.out) != idn["generated_headers"]:
+        raise ValueError("GNU generated header epoch drift before direct replay")
+    resumed_file = a.partial / "checkpoint/resumed-owners.txt"
+    if not resumed_file.is_file() or resumed_file.is_symlink():
+        raise ValueError("direct replay requires authenticated resume manifest")
+    resumed = resumed_file.read_text().splitlines()
+    selected_owners = owner_paths(selected)
+    if len(resumed) != len(set(resumed)) or not set(resumed) <= set(selected_owners):
+        raise ValueError("noncanonical or duplicate authenticated resume owners")
+    for name in resumed:
+        row = get_row(idn, name)
+        proof = seven.json_file(a.partial / "checkpoint/owners" / (name + ".json"))
+        if (proof.get("status") != STATUS or proof.get("object") != name or
+                proof.get("cmd_sha256") != row["cmd_sha256"] or
+                proof.get("source_sha256") != row["source_sha256"] or
+                sha(a.out / name) != proof.get("obj_sha256") or
+                sha(a.partial / "staged" / name) != proof.get("obj_sha256")):
+            raise ValueError(f"unauthenticated restored owner before direct replay: {name}")
+    missing = [name for name in selected_owners if name not in set(resumed)]
+    for name in missing:
+        if (a.partial / "checkpoint/owners" / (name + ".json")).exists():
+            raise ValueError(f"unrestored owner already has checkpoint: {name}")
+        if (a.out / name).exists():
+            raise ValueError(f"unrestored owner still has stale GNU object: {name}")
+    if not missing:
+        print(f"RV32I_SEVEN_DIRECT_REPLAY=PASS missing=0 cached={len(resumed)}")
+        return
+
+    directory = a.partial / "checkpoint/direct-missing-replay"
+    directory.mkdir(parents=True, exist_ok=True)
+    env = {"MINIC_KEEP_INTERMEDIATES": "1",
+           "MINIC_KBUILD_RV32I_ORIGIN_AUDIT": "1",
+           "MINIC_PRESERVE_FAILURE_INPUTS": "1",
+           "MINIC_KBUILD_RV32_PARTIAL_DIR": str(a.partial.resolve()),
+           "MINIC_KBUILD_RV32_PARTIAL_OUT": str(a.out.resolve()),
+           "MINIC_KBUILD_RV32_PARTIAL_HELPER": str(Path(__file__).resolve())}
+    previous = {key: os.environ.get(key) for key in env}
+    os.environ.update(env)
+
+    def one(index: int, name: str):
+        # One independent owner per call (<=16 cap). Even when a compiler
+        # owner fails, workers still attempt the rest and retain successful
+        # atomic checkpoints for another SHA-authenticated resume.
+        selection = directory / f"{index:04d}.selected.txt"
+        selection.write_text(name + "\n")
+        regen.replay_affected(a.out, pinned, selection, wrapper, a.minic,
+                              directory / f"{index:04d}.success.txt",
+                              directory / f"{index:04d}.sha256")
+
+    failures = []
+    try:
+        with ThreadPoolExecutor(max_workers=min(6, len(missing))) as pool:
+            tasks = {pool.submit(one, index, name): name
+                     for index, name in enumerate(missing)}
+            for task in as_completed(tasks):
+                name = tasks[task]
+                try:
+                    task.result()
+                except (ValueError, OSError, regen.GuardError, subprocess.CalledProcessError) as exc:
+                    failures.append(f"{name}: {exc}")
+                    print(f"RV32I_SEVEN_DIRECT_REPLAY_OWNER=FAIL owner={name} reason={exc}",
+                          file=sys.stderr, flush=True)
+    finally:
+        for key, old in previous.items():
+            if old is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = old
+    if regen.generated(a.out) != idn["generated_headers"]:
+        raise ValueError("GNU generated header epoch drift during direct replay")
+    if failures:
+        raise ValueError(f"direct missing-owner MiniC replay failed {len(failures)}/{len(missing)}; "
+                         f"first={failures[0]}")
+    for name in missing:
+        proof = seven.json_file(a.partial / "checkpoint/owners" / (name + ".json"))
+        row = get_row(idn, name)
+        if (proof.get("status") != STATUS or proof.get("object") != name or
+                proof.get("cmd_sha256") != row["cmd_sha256"] or
+                proof.get("source_sha256") != row["source_sha256"] or
+                sha(a.out / name) != proof.get("obj_sha256") or
+                sha(a.partial / "staged" / name) != proof.get("obj_sha256")):
+            raise ValueError(f"direct replay owner lacks atomic MiniC/GNU-AS proof: {name}")
+    print(f"RV32I_SEVEN_DIRECT_REPLAY=PASS rebuilt={len(missing)} cached={len(resumed)} "
+          "direct_original_GNU_cmd=true Kbuild_syncconfig_avoided=true")
+
+
 def verify(a):
     idn = identity(a)
     if a.minic is None or sha(a.minic) != idn["current_minic_compiler_sha256"]:
@@ -458,7 +568,7 @@ def publish_traces(a):
 
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument("--mode", choices=("init", "capture", "resume", "reconcile", "verify", "publish-traces"), required=True)
+    p.add_argument("--mode", choices=("init", "capture", "resume", "replay-missing", "reconcile", "verify", "publish-traces"), required=True)
     p.add_argument("--partial", type=Path, required=True)
     p.add_argument("--out", type=Path, required=True)
     p.add_argument("--root", type=Path)
@@ -487,6 +597,8 @@ def main():
             if a.resume is None:
                 raise ValueError("resume requires previous partial candidate artifact")
             restore(a)
+        elif a.mode == "replay-missing":
+            replay_missing(a)
         elif a.mode == "reconcile":
             reconcile(a)
         elif a.mode == "publish-traces":
