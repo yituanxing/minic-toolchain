@@ -17,6 +17,17 @@ import sys
 import zipfile
 
 
+# One authoritative bound for both the GNU-Kbuild live-source replay and its
+# postlink receipt.  Official PR #674 runs proved exactly these three C owners
+# are regenerated, including VDSO2C -> CC vdso-image-64.o.  A new owner must
+# be investigated and explicitly added; no GNU-C fallback is ever admitted.
+ALLOWED_POSTLINK_LIVE_C = frozenset({
+    "arch/x86/boot/compressed/misc.o",
+    "arch/x86/boot/compressed/kaslr.o",
+    "arch/x86/entry/vdso/vdso-image-64.o",
+})
+
+
 def load(sibling: str, name: str):
     source = Path(__file__).with_name(sibling)
     spec = importlib.util.spec_from_file_location(name, source)
@@ -149,21 +160,13 @@ def main() -> int:
               "no_GCC_C_fallback=1", flush=True)
         image = c.relink(a.gnu_work, a.output, rows, all_results,
                          data, golden,
-                         allowed_live_c_owners=frozenset({
-                             "arch/x86/boot/compressed/misc.o",
-                             "arch/x86/boot/compressed/kaslr.o",
-                             # Official PR #674 run 42388166967 observed
-                             # this regenerated C after the first GNU relink.
-                             # It must undergo authentic GNU-E -> current
-                             # MiniC-S -> GNU-AS, never retain GNU C output.
-                             "arch/x86/entry/vdso/vdso-image-64.o"}))
+                         allowed_live_c_owners=ALLOWED_POSTLINK_LIVE_C)
         live = []
         for receipt_path in sorted(a.output.glob("postlink-live-gnu-e-minic-c*receipt.json")):
             receipt = json.loads(receipt_path.read_text())
             for entry in receipt["live_recompiled"]:
                 name = entry["object"]
-                pv.valid(name in {"arch/x86/boot/compressed/misc.o",
-                                  "arch/x86/boot/compressed/kaslr.o"} and
+                pv.valid(name in ALLOWED_POSTLINK_LIVE_C and
                          entry["actual_logged_gnu_cc"] and
                          entry["live_minic_object_sha256"],
                          f"unauthenticated live GNU-E/current MiniC owner: {name}")

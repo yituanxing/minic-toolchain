@@ -46,7 +46,7 @@ jobs:
              grep -Fxq 'source_sha=1558d0943b12115b3e3fb89121ce564108c1eca9' "$marker" &&
              grep -Fxq 'original_candidate_run=42384023426' "$marker" &&
              grep -Fxq 'original_candidate_sha=8972cd6a7273a34abd2fb7643d198f69cecf8c13' "$marker" &&
-             grep -Fxq 'nonce=2026-11-07-original-8972-paravirt12-live-vdso-runtime' "$marker" &&
+             grep -Fxq 'nonce=2026-11-07-original-8972-paravirt12-unified-live-receipt' "$marker" &&
              { [[ '${{ github.event_name }}' == workflow_dispatch ]] ||
                { git rev-parse --verify HEAD^ >/dev/null 2>&1 &&
                  ! git diff --quiet HEAD^ HEAD -- "$marker"; }; }; then
