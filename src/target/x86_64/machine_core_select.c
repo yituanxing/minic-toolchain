@@ -8482,12 +8482,58 @@ static bool x86_source_gs_tied_alu(X86CoreSelector *sel,
  * record and an absolute pointer to that record, not a run-time string or
  * pseudo instruction. Its GNU `i` arguments arrive as a Core integer
  * constant and a separately preserved source ELF object reference. */
+/* The source symbol itself is insufficient: the structured input must also
+ * descend from that same immutable string global with a zero byte offset.
+ * In particular, a runtime filename pointer must never become a GNU `i`
+ * symbol just because Source recorded some other static string. */
+static bool x86_pm_trace_global_symbol(const MinicCoreFunction *core,
+    MinicCoreValueId value, const char **symbol) {
+    size_t depth;
+    if (core == NULL || symbol == NULL || core->values == NULL ||
+        core->instructions == NULL || core->globals == NULL) return false;
+    for (depth = 0U; depth < 6U; ++depth) {
+        const MinicCoreInstruction *def;
+        if (value >= core->value_count ||
+            core->values[value].definition >= core->instruction_count)
+            return false;
+        def = &core->instructions[core->values[value].definition];
+        if (def->kind == MINIC_CORE_INSTRUCTION_GLOBAL_ADDRESS) {
+            if (def->value.global_id >= core->global_count ||
+                !minic_core_inline_asm_symbol_valid(
+                    core->globals[def->value.global_id].name)) return false;
+            *symbol = core->globals[def->value.global_id].name;
+            return true;
+        }
+        if (def->kind == MINIC_CORE_INSTRUCTION_SCALAR_BITCAST) {
+            value = def->value.operand;
+            continue;
+        }
+        if (def->kind == MINIC_CORE_INSTRUCTION_POINTER_OFFSET) {
+            const MinicCoreValueId index = def->value.pointer_offset.index;
+            const MinicCoreInstruction *constant;
+            if (def->value.pointer_offset.subtract ||
+                def->value.pointer_offset.element_size != 1U ||
+                index >= core->value_count ||
+                core->values[index].definition >= core->instruction_count)
+                return false;
+            constant = &core->instructions[core->values[index].definition];
+            if (constant->kind != MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT ||
+                constant->value.integer_value != 0U) return false;
+            value = def->value.pointer_offset.base;
+            continue;
+        }
+        return false;
+    }
+    return false;
+}
+
 static bool x86_source_pm_trace(X86CoreSelector *sel,
     const MinicCoreInstruction *ins) {
     const MinicCoreInlineAsm *source;
     const MinicCoreStructuredInlineAsmOperand *roles;
     const MinicCoreInstruction *line;
     const MinicCoreInlineAsmSymbolReference *filename;
+    const char *bound_filename;
     MinicMachineOperand bindings[3];
     size_t i, definition;
     if (sel == NULL || ins == NULL ||
@@ -8519,6 +8565,8 @@ static bool x86_source_pm_trace(X86CoreSelector *sel,
         roles == NULL ||
         !x86_asm_gp_lvalue_width(sel,roles[0].value,8U) ||
         !x86_asm_gp_input_width(sel,roles[2].value,8U) ||
+        !x86_pm_trace_global_symbol(sel->core,roles[2].value,
+            &bound_filename) ||
         roles[1].value >= sel->core->value_count) return false;
     for (i = 0U; i < 3U; ++i)
         if (roles[i].operand_index != i ||
@@ -8539,7 +8587,9 @@ static bool x86_source_pm_trace(X86CoreSelector *sel,
         line->value.integer_value > 65535 ||
         filename->kind != MINIC_CORE_INLINE_ASM_SYMBOL_OBJECT ||
         !minic_core_inline_asm_symbol_valid(filename->name) ||
-        filename->name_length != strlen(filename->name)) return false;
+        filename->name_length != strlen(filename->name) ||
+        filename->byte_addend != 0 ||
+        strcmp(filename->name,bound_filename) != 0) return false;
     bindings[0] = x86_reg(MINIC_X86_REG_R10,64U);
     bindings[0].value.physical.access = MINIC_MACHINE_REGISTER_WRITE;
     bindings[0].asm_constraint = "=r";

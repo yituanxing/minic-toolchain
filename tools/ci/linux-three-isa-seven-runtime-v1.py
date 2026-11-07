@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path, PurePosixPath
 import re
 import shutil
@@ -187,6 +188,77 @@ def verify_input(root: Path, target: str, shard: int, c) -> tuple[list[dict], di
     return rows, identity
 
 
+def checkpoint_identity(a: argparse.Namespace, c, original: dict) -> dict:
+    """Bind partial objects to one frozen corpus, actual compiler and tools.
+
+    Historical GNU input compiler SHAs are deliberately *not* the current
+    candidate compiler.  The current binary pair and each Python codegen/
+    flags driver must instead match for a restored owner to be trusted.
+    """
+    return {"schema": "minic-three-isa-seven-partial-objects-v1",
+            "input_identity": original, "compiler": c.compiler_pair(a.minic),
+            "gnu_tools": gnu_as_identity(c, a.target),
+            "candidate_driver_sha256": file_sha(Path(c.__file__)),
+            "seven_runner_driver_sha256": file_sha(Path(__file__))}
+
+
+def atomic_json(path: Path, value: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    try:
+        with temporary.open("x") as stream:
+            json.dump(value, stream, sort_keys=True, indent=2)
+            stream.write("\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def checkpoint_owner(output: Path, result: dict) -> None:
+    name = safe_owner(result["object"])
+    atomic_json(output / "checkpoint" / "owners" / (str(name) + ".json"), result)
+    print(f"THREE_ISA_SEVEN_OWNER_CHECKPOINT owner={name} "
+          f"status={result['status']} elapsed={result.get('elapsed_seconds', 0)}",
+          flush=True)
+
+
+def resume_owners(a: argparse.Namespace, c, rows: list[dict],
+                  expected: dict) -> dict[str, dict]:
+    if getattr(a, "resume", None) is None:
+        return {}
+    previous = a.resume
+    if json_file(previous / "checkpoint/identity.json") != expected:
+        raise ValueError("refuse partial owner checkpoint from another compiler/source/tool epoch")
+    selected: dict[str, dict] = {}
+    for row in rows:
+        name = safe_owner(row["object"])
+        record = previous / "checkpoint/owners" / (str(name) + ".json")
+        if not record.exists():
+            continue
+        result = json_file(record)
+        if result.get("object") != row["object"] or result.get("input_sha256") != row["sha256"]:
+            raise ValueError(f"foreign partial owner record {name}")
+        if result.get("status") != "MINIC_S_GNU_AS_PASS":
+            continue  # Never cache failures as successful compiler objects.
+        for suffix, digest in ((".s", "asm_sha256"), (".o", "obj_sha256")):
+            src = c.required(previous / "staged" / name.with_suffix(suffix))
+            if not isinstance(result.get(digest), str) or file_sha(src) != result[digest]:
+                raise ValueError(f"partial MiniC owner SHA mismatch {name}")
+        obj = previous / "staged" / name
+        c.elf_machine(obj, c.TARGETS[a.target][5])
+        c.validate_original_abi(obj, a.target, row)
+        for suffix in (".s", ".o"):
+            src = previous / "staged" / name.with_suffix(suffix)
+            dst = a.output / "staged" / name.with_suffix(suffix)
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, dst)
+        selected[str(name)] = result
+        checkpoint_owner(a.output, result)
+    return selected
+
+
 def produce(a: argparse.Namespace, c) -> None:
     if a.output.exists():
         raise ValueError("refuse to reuse candidate object shard output")
@@ -199,8 +271,15 @@ def produce(a: argparse.Namespace, c) -> None:
     data = {"target": a.target, "gcc": c.TARGETS[a.target][2],
             "machine": c.TARGETS[a.target][5]}
     a.output.mkdir(parents=True)
+    identity_for_resume = checkpoint_identity(a, c, identity)
+    atomic_json(a.output / "checkpoint/identity.json", identity_for_resume)
+    previous = resume_owners(a, c, rows, identity_for_resume)
+    print(f"THREE_ISA_SEVEN_RESUME target={a.target} shard={a.shard} "
+          f"verified_owners={len(previous)}/{len(rows)}", flush=True)
     results = c.make_objects(rows, a.input, a.minic, a.output,
-                             data, a.workers, a.timeout)
+                             data, a.workers, a.timeout,
+                             on_result=lambda row: checkpoint_owner(a.output, row),
+                             resumed=previous)
     (a.output / "results.json").write_text(json.dumps(results, indent=2) + "\n")
     failures = [row for row in results if row["status"] != "MINIC_S_GNU_AS_PASS"]
     if failures:
@@ -619,6 +698,8 @@ def main() -> None:
     parser.add_argument("--minic", type=Path)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--timeout", type=int, default=240)
+    parser.add_argument("--resume", type=Path,
+                        help="explicit old partial artifact, exact SHA reauthentication required")
     parser.add_argument("--workers", type=int, default=2)
     a = parser.parse_args()
     if a.mode == "selftest":
@@ -637,6 +718,8 @@ def main() -> None:
             not a.input or a.shard is None or not 0 <= a.shard < 7 or
             not 1 <= a.workers <= 8):
         parser.error("shard modes require --input --shard 0..6 --workers 1..8")
+    if a.resume is not None and a.mode != "produce":
+        parser.error("--resume is accepted only for a fresh produce output")
     if a.mode in ("cache-store", "cache-load") and not all((a.cache, a.cache_identity)):
         parser.error("cache-store/cache-load require --cache --cache-identity")
     if a.mode == "receive" and (not a.incoming or not a.gnu_boot_logs):

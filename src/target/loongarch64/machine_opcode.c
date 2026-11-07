@@ -6,6 +6,7 @@
 #include <inttypes.h>
 #include <limits.h>
 #include <stdio.h>
+#include <stdint.h>
 #include <string.h>
 
 typedef enum LoongForm {
@@ -723,6 +724,92 @@ static bool loong_block_name(const MinicMachineOperand *operand,
     return true;
 }
 
+/* Keep this small post-selection omission target-owned.  In particular,
+ * neither source ASM nor a C volatile frame read is subject to a textual
+ * rewrite: only adjacent, verified physical MachineIR instructions qualify.
+ * Locate the owning block by its contiguous instruction-array allocation;
+ * the lookup is bounded by block count rather than by instruction count. */
+static bool loong_can_omit_selected(const MinicMachineFunction *fn,
+    const MinicMachineInstruction *ins) {
+    size_t bi;
+    uintptr_t current;
+    if (fn == NULL || ins == NULL || fn->blocks == NULL ||
+        (ins->opcode != MINIC_LOONG_MACHINE_LD_FRAME_D &&
+         ins->opcode != MINIC_LOONG_MACHINE_LD_D &&
+         ins->opcode != MINIC_LOONG_MACHINE_B) ||
+        ins->has_selected_source_asm_seal) return false;
+    current = (uintptr_t)(const void *)ins;
+    for (bi = 0U; bi < fn->block_count; ++bi) {
+        const MinicMachineBlock *block = &fn->blocks[bi];
+        uintptr_t start;
+        size_t bytes, ii;
+        if (block->instructions == NULL ||
+            block->instruction_count > SIZE_MAX / sizeof(*ins)) continue;
+        bytes = block->instruction_count * sizeof(*ins);
+        start = (uintptr_t)(const void *)block->instructions;
+        if (current < start || current - start >= bytes ||
+            (current - start) % sizeof(*ins) != 0U) continue;
+        ii = (size_t)((current - start) / sizeof(*ins));
+        if (ins->opcode == MINIC_LOONG_MACHINE_B)
+            return ii + 1U == block->instruction_count &&
+                bi + 1U < fn->block_count &&
+                ins->operand_count == 1U &&
+                ins->operands[0].kind == MINIC_MACHINE_OPERAND_BLOCK &&
+                ins->operands[0].value.block_id == fn->blocks[bi + 1U].id;
+        if (ii != 0U && ins->operand_count == 2U &&
+            ins->effects == MINIC_MACHINE_EFFECT_MEMORY_READ &&
+            ins->implicit_count == 0U) {
+            const MinicMachineInstruction *prev = &block->instructions[ii - 1U];
+            unsigned int curr_base, prev_base;
+            int64_t curr_offset, prev_offset;
+            const MinicMachineRegister *dst = &ins->operands[0].value.physical.reg;
+            const MinicMachineRegister *src;
+            if (prev->kind != MINIC_MACHINE_INSTRUCTION_SELECTED ||
+                prev->opcode != (ins->opcode == MINIC_LOONG_MACHINE_LD_D
+                                    ? MINIC_LOONG_MACHINE_ST_D
+                                    : MINIC_LOONG_MACHINE_ST_FRAME_D) ||
+                prev->effects != MINIC_MACHINE_EFFECT_MEMORY_WRITE ||
+                prev->has_selected_source_asm_seal ||
+                prev->operand_count != 2U || prev->implicit_count != 0U ||
+                prev->operands[0].kind != MINIC_MACHINE_OPERAND_REGISTER ||
+                ins->operands[0].kind != MINIC_MACHINE_OPERAND_REGISTER)
+                return false;
+            src = &prev->operands[0].value.physical.reg;
+            if (dst->number != src->number || dst->bank != src->bank ||
+                dst->width_bits != src->width_bits) return false;
+            if (ins->opcode == MINIC_LOONG_MACHINE_LD_D) {
+                const MinicMachineAddress *before, *after;
+                if (prev->operands[1].kind != MINIC_MACHINE_OPERAND_ADDRESS ||
+                    ins->operands[1].kind != MINIC_MACHINE_OPERAND_ADDRESS)
+                    return false;
+                before = &prev->operands[1].value.address;
+                after = &ins->operands[1].value.address;
+                return before->target_mode == MINIC_LOONG_ADDRESS_IMM12 &&
+                    after->target_mode == before->target_mode &&
+                    before->has_base && after->has_base &&
+                    !before->has_index && !after->has_index &&
+                    !before->has_segment && !after->has_segment &&
+                    !before->has_symbol && !after->has_symbol &&
+                    before->base.bank == MINIC_MACHINE_REGISTER_GENERAL &&
+                    after->base.bank == before->base.bank &&
+                    before->base.number == 3U &&
+                    after->base.number == before->base.number &&
+                    before->base.width_bits == 64U &&
+                    after->base.width_bits == before->base.width_bits &&
+                    before->displacement == after->displacement;
+            }
+            return loong_frame_offset(fn, &prev->operands[1],
+                    &prev_base, &prev_offset) &&
+                loong_frame_offset(fn, &ins->operands[1],
+                    &curr_base, &curr_offset) &&
+                curr_base == 3U && prev_base == curr_base &&
+                prev_offset == curr_offset;
+        }
+        return false;
+    }
+    return false;
+}
+
 static bool loong_serialize(FILE *out, const MinicMachineFunction *function,
     const MinicMachineInstruction *ins,
     const MinicMachineGNUAsmLabels *labels, void *context) {
@@ -735,6 +822,7 @@ static bool loong_serialize(FILE *out, const MinicMachineFunction *function,
     (void)context;
     if (out == NULL || function == NULL || spec == NULL ||
         !loong_legal_selected(function, ins, NULL)) return false;
+    if (loong_can_omit_selected(function, ins)) return true;
     switch (spec->form) {
     case L_FORM_BUILTIN_RR_WR:
     case L_FORM_BUILTIN_RR_RD:

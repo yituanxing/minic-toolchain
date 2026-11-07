@@ -376,11 +376,38 @@ def effective_minic_flags(row: dict, target: str) -> list[str]:
     return flags
 
 
+def run_owner_process(command: list[str], timeout: int, cwd: Path | None = None) -> subprocess.CompletedProcess:
+    """A MiniC driver spawns minic-cc; timeout must kill the whole owner tree.
+
+    subprocess.run(timeout=...) only kills the driver PID.  The independent
+    minic-cc child then survives, contends with the following 394 owners, and
+    is eventually reaped only by the GitHub runner's final orphan cleanup.
+    """
+    import os
+    import signal
+    process = subprocess.Popen(command, cwd=cwd, text=True,
+                               stdout=subprocess.PIPE,
+                               stderr=subprocess.PIPE,
+                               start_new_session=True)
+    try:
+        stdout, stderr = process.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        process.communicate()
+        raise
+    return subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
+
+
 def make_objects(rows: list[dict], work: Path, compiler: Path, output: Path,
-                 data: dict, workers: int, timeout: int) -> list[dict]:
+                 data: dict, workers: int, timeout: int,
+                 on_result=None, resumed: dict[str, dict] | None = None) -> list[dict]:
     frozen, staging = work / "frozen", output / "staged"
-    staging.mkdir(parents=True, exist_ok=False)
+    staging.mkdir(parents=True, exist_ok=bool(resumed))
     gcc = data["gcc"]
+    resumed = resumed or {}
 
     def one(row: dict) -> dict:
         name = PurePosixPath(row["object"])
@@ -397,7 +424,7 @@ def make_objects(rows: list[dict], work: Path, compiler: Path, output: Path,
             command = [str(compiler), f"--target={data['target']}-linux",
                        *effective_minic_flags(row, data["target"]),
                        "-S", str(source), "-o", str(asm)]
-            cc = subprocess.run(command, text=True, capture_output=True, timeout=timeout)
+            cc = run_owner_process(command, timeout=timeout)
             if cc.returncode or not asm.is_file() or not asm.stat().st_size:
                 failure_stderr.write_text(cc.stderr)
                 result.update(status="MINIC_S_FAIL", detail=cc.stderr[-600:])
@@ -407,9 +434,8 @@ def make_objects(rows: list[dict], work: Path, compiler: Path, output: Path,
             # directory. `.incbin "kernel/config_data.gz"` and other genuine
             # relative assembly inputs must resolve against THAT directory,
             # not this CI tool's repository checkout working directory.
-            ass = subprocess.run(gnu_assembler_command(gcc, row, asm, obj),
-                                 cwd=work / "build", text=True,
-                                 capture_output=True, timeout=timeout)
+            ass = run_owner_process(gnu_assembler_command(gcc, row, asm, obj),
+                                    cwd=work / "build", timeout=timeout)
             if ass.returncode or not obj.is_file() or not obj.stat().st_size:
                 failure_stderr.write_text(ass.stderr)
                 result.update(status="GNU_TARGET_AS_FAIL", detail=ass.stderr[-600:])
@@ -425,9 +451,22 @@ def make_objects(rows: list[dict], work: Path, compiler: Path, output: Path,
         finally:
             result["elapsed_seconds"] = round(time.monotonic() - started, 3)
 
+    ordered: list[dict | None] = [None] * len(rows)
     with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
-        results = list(pool.map(one, rows))
-    return results
+        futures = {pool.submit(one, row): i for i, row in enumerate(rows)
+                   if row["object"] not in resumed}
+        for i, row in enumerate(rows):
+            if row["object"] in resumed:
+                ordered[i] = resumed[row["object"]]
+        for future in concurrent.futures.as_completed(futures):
+            i = futures[future]
+            result = future.result()
+            if on_result is not None:
+                on_result(result)
+            ordered[i] = result
+    if any(result is None for result in ordered):
+        raise Rejected("incomplete per-owner MiniC result collection")
+    return ordered
 
 
 def failed_owner_family(result: dict) -> str:
@@ -1485,7 +1524,9 @@ def rebuild_live_kbuild_c_owners(work: Path, output: Path, rows: list[dict],
                                 expected: dict[str, str], data: dict,
                                 compiler: Path, timeout: int,
                                 first_link_log: str, epoch: int = 1,
-                                link_log_path: Path | None = None) -> tuple[dict[str, str], bool]:
+                                link_log_path: Path | None = None,
+                                allowed_live_c_owners: frozenset[str] | None = None
+                                ) -> tuple[dict[str, str], bool]:
     """Recompile C owners regenerated by a *successful* original GNU relink.
 
     GNU Kbuild can embed a newly linked MiniC vDSO into generated C and
@@ -1513,6 +1554,9 @@ def rebuild_live_kbuild_c_owners(work: Path, output: Path, rows: list[dict],
                     output / f"postlink-{tag}-target-elf64-objects.sha256")
     changed = live_kbuild_recompiled_owner_names(
         first, rows, expected, data["target"], first_link_log)
+    if allowed_live_c_owners is not None and not set(changed).issubset(allowed_live_c_owners):
+        raise Rejected(f"bounded live MiniC source epoch disallows C owners: "
+                       f"{sorted(set(changed) - allowed_live_c_owners)}")
     by_name = {row["object"]: row for row in rows}
     dynamic = (output / ("postlink-live-gnu-e-minic-c" if epoch == 1
                          else f"postlink-live-gnu-e-minic-c-epoch-{epoch}")).resolve()
@@ -1598,7 +1642,8 @@ def rebuild_live_kbuild_c_owners(work: Path, output: Path, rows: list[dict],
 
 def relink(work: Path, output: Path, rows: list[dict], results: list[dict],
            data: dict, gnu_receipt: dict, compiler: Path | None = None,
-           timeout: int = 180) -> Path:
+           timeout: int = 180,
+           allowed_live_c_owners: frozenset[str] | None = None) -> Path:
     # The seven-runner receiver imports this canonical producer and passes
     # the exact candidate_inputs() identity without a separate compiler arg.
     # Authenticate the stored absolute path against both executable SHAs.
@@ -1711,7 +1756,8 @@ def relink(work: Path, output: Path, rows: list[dict], results: list[dict],
     for epoch in range(1, 9):
         updated, live_c_recompiled = rebuild_live_kbuild_c_owners(
             work, output, rows, expected, data, compiler, timeout,
-            current_link_log, epoch=epoch, link_log_path=current_log_path)
+            current_link_log, epoch=epoch, link_log_path=current_log_path,
+            allowed_live_c_owners=allowed_live_c_owners)
         if not second_relink_required(live_c_recompiled, expected, updated):
             # The previous epoch's link was already checked with its exact
             # regenerated-owner domain. In particular, x86 Kbuild may finish
@@ -1772,7 +1818,8 @@ def relink(work: Path, output: Path, rows: list[dict], results: list[dict],
 
 def boot_and_compare(data: dict, output: Path, initramfs: Path,
                      firmware: Path | None, image: Path,
-                     gnu_receipt: dict, golden_logs: Path) -> dict:
+                     gnu_receipt: dict, golden_logs: Path,
+                     source_epoch_metadata: dict | None = None) -> dict:
     oracle = module("minic_qemu_oracle", "linux-three-isa-gnu-qemu-v1.py")
     qemu = oracle.executable(oracle.TARGETS[data["target"]]["qemu"])
     if data["target"] == "loongarch64":
@@ -1799,6 +1846,14 @@ def boot_and_compare(data: dict, output: Path, initramfs: Path,
                   golden_c_owners=data["gnu_c_owners"],
                   minic_c_owners=data["gnu_c_owners"], gnu_c_fallback_count=0,
                   lanes=[], verdict="MINIC_QEMU_NOT_CERTIFIED")
+    if source_epoch_metadata is not None:
+        # In a cached mixed compiler-epoch repair, these MiniC C objects were
+        # NOT all generated by data['compiler_sha256']. Persist this caveat in
+        # the QEMU receipt before any P0/P1 comparator sees it.
+        if (source_epoch_metadata.get("mixed_source_epochs") is not True or
+                source_epoch_metadata.get("strict_current_head_linux_certified") is not False):
+            raise Rejected("mixed compiler source epochs require explicit non-strict provenance")
+        result.update(source_epoch_metadata)
     for profile in ("p0", "p1"):
         lane = oracle.run_lane(data["target"], qemu, image, initramfs, firmware,
                                profile, "2G", 240, boot_dir)

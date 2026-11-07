@@ -9,6 +9,7 @@ import importlib.util
 import json
 from pathlib import Path
 import subprocess
+import struct
 import tempfile
 import types
 import unittest
@@ -260,6 +261,86 @@ class DiagnosticFixture(unittest.TestCase):
         boot = args[-1]
         put(boot / "p0.log", b"GNU_PASS=1\n")
         return {"lane": "p0", "verdict": "GNU_QEMU_RUNTIME_PASS"}
+
+
+class LoongLiveEpochNegativeTests(unittest.TestCase):
+    def test_vdso_pt_load_measures_mapping_span_not_text_size(self):
+        with tempfile.TemporaryDirectory(prefix="minic-loong-vdso-phdr-") as tmp:
+            path = Path(tmp) / "vdso.so.dbg"
+            data = bytearray(18000)
+            data[:6] = b"\x7fELF\x02\x01"
+            struct.pack_into("<H", data, 18, 258)
+            struct.pack_into("<Q", data, 32, 64)
+            struct.pack_into("<HH", data, 54, 56, 1)
+            struct.pack_into("<IIQQQQQQ", data, 64, 1, 5, 0, 0, 0,
+                             16536, 16536, 16384)
+            put(path, bytes(data))
+            result = diag.vdso_elf_layout(path)
+            self.assertEqual(result["pt_load_span_bytes"], 16536)
+            self.assertEqual(result["required_16k_mapping_pages"], 2)
+            self.assertEqual(result["required_4k_mapping_pages"], 5)
+            self.assertNotIn("guest_mapping_page_count", result)
+            data[18] = 62  # A foreign machine cannot be treated as Loong evidence.
+            put(path, bytes(data))
+            self.assertEqual(diag.vdso_elf_layout(path)["verdict"], "INVALID_LOONG_PHDR")
+
+    def test_exact_owner_lists_and_authenticated_live_vdso_sha(self):
+        with tempfile.TemporaryDirectory(prefix="minic-loong-live-epoch-") as tmp:
+            root = Path(tmp)
+            work, candidate = root / "gnu-work", root / "candidate"
+            image_sha = put(work / "build/arch/loongarch/boot/vmlinux.efi", b"candidate efi")
+            put(candidate / "candidate-receipt.json", json.dumps({
+                "schema": "minic-three-isa-candidate-build-v1", "target": "loongarch64",
+                "candidate_image_sha256": image_sha}).encode())
+            names = ("arch/loongarch/kernel/vdso.o", "fs/exec.o")
+            rows = [{"object": name, "sha256": hashlib.sha256(
+                ("frozen-i:" + name).encode()).hexdigest()} for name in names]
+            self.assertEqual(diag.select_owners(rows, "gnu-plus-list", [names[0]]), [names[0]])
+            self.assertEqual(diag.select_owners(rows, "minic-except-list", [names[0]]), [names[1]])
+            for unsafe in ([], [names[0], names[0]], ["fs/unknown.o"], list(names)):
+                with self.assertRaises(diag.DiagnosticError):
+                    diag.select_owners(rows, "gnu-plus-list", unsafe)
+            frozen = {name: hashlib.sha256(("frozen:" + name).encode()).hexdigest()
+                      for name in names}
+            final = {}
+            for name in names:
+                value = ("live:" if name == names[0] else "frozen:") + name
+                final[name] = put(work / "build" / name, value.encode())
+            target = candidate / "postlink-live-gnu-e-minic-c/arch/loongarch/kernel/vdso"
+            live_i = put(target.with_suffix(".live.gnu.i"), b"late-generated-offsets")
+            live_o = put(target.with_suffix(".live.minic.o"), ("live:" + names[0]).encode())
+            self.assertEqual(live_o, final[names[0]])
+            sha_lines = "".join(f"{sha}  {name}\n" for name, sha in final.items()).encode()
+            manifest_sha = put(candidate / "postlink-target-elf64-objects.sha256", sha_lines)
+            report = {"target": "loongarch64", "verdict": "POSTLINK_ALL_C_MINIC_SHA_PASS",
+                      "postlink_target_object_manifest_sha256": manifest_sha}
+            receipt_sha = put(candidate / "postlink-c-owner-census.json",
+                              json.dumps(report).encode())
+            regenerated = {"schema": "minic-three-isa-live-kbuild-c-regeneration-v1",
+                           "verdict": "LIVE_MINIC_C_SHA_POSTLINK_PASS",
+                           "final_postlink_census_sha256": receipt_sha,
+                           "live_recompiled": [{"object": names[0],
+                               "original_frozen_i_sha256": rows[0]["sha256"],
+                               "live_gnu_i_sha256": live_i,
+                               "live_minic_object_sha256": live_o,
+                               "live_input_differs_from_original_frozen": True,
+                               "actual_logged_gnu_cc": True}]}
+            put(candidate / "postlink-live-gnu-e-minic-c-receipt.json",
+                json.dumps(regenerated).encode())
+            authenticated, evidence = diag.verify_final_candidate_live_owners(
+                rows, work, candidate, frozen)
+            self.assertEqual(authenticated, final)
+            self.assertEqual(evidence["frozen_live_source_i_differences"], [names[0]])
+            self.assertEqual(evidence["frozen_live_object_sha_differences"], [names[0]])
+            # A current frozen .o cannot silently replace late MiniC vDSO.
+            put(work / "build" / names[0], ("frozen:" + names[0]).encode())
+            with self.assertRaises(diag.DiagnosticError):
+                diag.verify_final_candidate_live_owners(rows, work, candidate, frozen)
+            put(work / "build" / names[0], ("live:" + names[0]).encode())
+            # A changed regenerated GNU .i is a different source epoch.
+            put(target.with_suffix(".live.gnu.i"), b"tampered-header")
+            with self.assertRaises(diag.DiagnosticError):
+                diag.verify_final_candidate_live_owners(rows, work, candidate, frozen)
 
 
 if __name__ == "__main__":

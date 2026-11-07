@@ -21,6 +21,7 @@ import os
 from pathlib import Path, PurePosixPath
 import re
 import shutil
+import struct
 import subprocess
 import sys
 
@@ -28,8 +29,11 @@ import sys
 TARGET = "x86_64"
 COMPRESSED_PREFIX = "arch/x86/boot/compressed/"
 COMPRESSED_COUNT = 12
-MODES = ("gnu-plus-compressed", "minic-except-compressed")
+MODES = ("gnu-plus-compressed", "minic-except-compressed",
+         "gnu-plus-list", "minic-except-list")
 SCHEMA = "minic-three-isa-boot-cohort-diagnostic-v1"
+LOONG_FIRMWARE_SHA256 = "b375639ebcf7a873d2cab67f0c9c1c6c208fc3f1bcba4083172fa20c4fb7e1ab"
+LOONG_HISTORICAL_SOURCE_EPOCH = "ace5bd14026c08ab343ea77df979a11f8c7a1a80"
 
 
 class DiagnosticError(ValueError):
@@ -109,9 +113,16 @@ def select_owners(rows: list[dict], mode: str,
                   extra_owners: list[str] | None = None) -> list[str]:
     if mode not in MODES:
         raise DiagnosticError(f"unsupported diagnostic selection: {mode}")
-    compressed = set(compressed_owners(rows))
     all_names = [safe_owner(row["object"]) for row in rows]
     extras = [safe_owner(name) for name in (extra_owners or [])]
+    if mode.endswith("-list"):
+        if (not extras or len(extras) != len(set(extras)) or
+                not set(extras).issubset(all_names) or len(extras) == len(all_names)):
+            raise DiagnosticError("exact C-owner list must be nonempty, distinct, known, and partial")
+        chosen = set(extras)
+        return [name for name in all_names if
+                (name in chosen if mode == "gnu-plus-list" else name not in chosen)]
+    compressed = set(compressed_owners(rows))
     if extras:
         if mode != "gnu-plus-compressed":
             raise DiagnosticError("extra owners require GNU plus MiniC compressed baseline")
@@ -166,6 +177,78 @@ def verify_staged(rows: list[dict], staged: Path, result_path: Path,
     return verified
 
 
+def verify_final_candidate_live_owners(rows: list[dict], work: Path,
+                                       candidate_dir: Path,
+                                       frozen: dict[str, str]) -> tuple[dict[str, str], dict]:
+    """Attest postlink live MiniC objects; never substitute stale frozen vDSO."""
+    candidate_receipt = read_json(candidate_dir / "candidate-receipt.json")
+    if (candidate_receipt.get("schema") != "minic-three-isa-candidate-build-v1" or
+            candidate_receipt.get("target") != "loongarch64" or
+            not re.fullmatch(r"[0-9a-f]{64}", candidate_receipt.get("candidate_image_sha256") or "") or
+            digest(file(work / "build/arch/loongarch/boot/vmlinux.efi")) !=
+            candidate_receipt["candidate_image_sha256"]):
+        raise DiagnosticError("official all-MiniC Loong EFI image SHA changed")
+    report = read_json(candidate_dir / "postlink-c-owner-census.json")
+    manifest = file(candidate_dir / "postlink-target-elf64-objects.sha256")
+    if (report.get("target") != "loongarch64" or
+            report.get("verdict") != "POSTLINK_ALL_C_MINIC_SHA_PASS" or
+            report.get("postlink_target_object_manifest_sha256") != digest(manifest)):
+        raise DiagnosticError("unattested final Loong all-MiniC postlink census")
+    expected = {safe_owner(row["object"]): row for row in rows}
+    final = {}
+    for line in manifest.read_text().splitlines():
+        match = re.fullmatch(r"([0-9a-f]{64})  (.+\.o)", line)
+        if not match:
+            raise DiagnosticError("malformed final postlink object SHA manifest")
+        name = safe_owner(match[2])
+        if name in final:
+            raise DiagnosticError("duplicate final candidate C owner")
+        final[name] = match[1]
+    if set(final) != set(expected) or len(final) != len(rows):
+        raise DiagnosticError("final Loong C-owner universe changed")
+    for name, sha in final.items():
+        if digest(file(work / "build" / name)) != sha:
+            raise DiagnosticError(f"official final candidate object changed: {name}")
+    live = {}
+    for receipt_file in sorted(candidate_dir.glob("postlink-live-gnu-e-minic-c*-receipt.json")):
+        receipt = read_json(receipt_file)
+        if (receipt.get("schema") != "minic-three-isa-live-kbuild-c-regeneration-v1" or
+                receipt.get("verdict") != "LIVE_MINIC_C_SHA_POSTLINK_PASS" or
+                receipt.get("final_postlink_census_sha256") != digest(
+                    candidate_dir / "postlink-c-owner-census.json")):
+            raise DiagnosticError("unrecognized live source-generation epoch receipt")
+        directory_name = receipt_file.name.removesuffix("-receipt.json")
+        for entry in receipt.get("live_recompiled", []):
+            name = safe_owner(entry["object"])
+            row = expected.get(name)
+            if (row is None or entry.get("original_frozen_i_sha256") != row["sha256"] or
+                    entry.get("actual_logged_gnu_cc") is not True):
+                raise DiagnosticError(f"unattested live C source epoch: {name}")
+            owner = PurePosixPath(name)
+            source = candidate_dir / directory_name / owner.parent / owner.stem
+            source_i = file(source.with_suffix(".live.gnu.i"))
+            source_o = file(source.with_suffix(".live.minic.o"))
+            differs = digest(source_i) != row["sha256"]
+            if (digest(source_i) != entry.get("live_gnu_i_sha256") or
+                    digest(source_o) != entry.get("live_minic_object_sha256") or
+                    differs != entry.get("live_input_differs_from_original_frozen")):
+                raise DiagnosticError(f"changed live GNU-E/MiniC-S evidence: {name}")
+            live[name] = {"sha256": digest(source_o), "source_epoch": directory_name,
+                          "frozen_gnu_i_sha256": row["sha256"],
+                          "live_gnu_i_sha256": digest(source_i),
+                          "live_input_differs_from_original_frozen": differs}
+    unknown = [name for name, sha in final.items()
+               if sha != frozen[name] and (name not in live or sha != live[name]["sha256"])]
+    if unknown:
+        raise DiagnosticError(f"final MiniC owners differ from both frozen and authenticated live epochs: {unknown[:8]}")
+    return final, {"historical_candidate_image_sha256": candidate_receipt["candidate_image_sha256"],
+                   "live_regenerated_owners": live,
+                   "frozen_live_object_sha_differences": sorted(name for name in final
+                                                                if final[name] != frozen[name]),
+                   "frozen_live_source_i_differences": sorted(name for name, entry in live.items()
+                                                              if entry["live_input_differs_from_original_frozen"])}
+
+
 def verify_gnu_owner_snapshot(snapshot: Path, original: dict[str, str]) -> None:
     directory(snapshot)
     for name, expected in original.items():
@@ -193,12 +276,19 @@ def prepare(a: argparse.Namespace) -> None:
     minic = file(a.minic.absolute())
     candidate = load_sibling("linux-three-isa-minic-candidate-v1.py", "boot_cohort_candidate")
     verifier = load_sibling("linux-three-isa-gnu-cache-verify-v1.py", "boot_cohort_gnu_cache")
-    checked = verifier.verify_cache(TARGET, work, "gcc", golden_receipt)
+    gcc = candidate.TARGETS[TARGET][2]
+    checked = verifier.verify_cache(TARGET, work, gcc, golden_receipt)
     rows, details = candidate.candidate_inputs(TARGET, work, minic,
                                                 read_json(golden_receipt), initramfs)
     if checked["owners"] != len(rows):
         raise DiagnosticError("GNU golden census differs from original seven-way owners")
-    compressed = compressed_owners(rows)
+    compressed = compressed_owners(rows) if TARGET == "x86_64" else []
+    firmware_arg = getattr(a, "firmware", None)
+    if TARGET == "loongarch64":
+        if firmware_arg is None or digest(file(firmware_arg.absolute())) != LOONG_FIRMWARE_SHA256:
+            raise DiagnosticError("LoongArch diagnostic requires pinned authentic QEMU EFI firmware")
+    elif firmware_arg is not None:
+        raise DiagnosticError("non-LoongArch snapshot cannot accept EFI firmware")
     original = {safe_owner(row["object"]): digest(file(out / row["object"])) for row in rows}
     snapshot_dir.mkdir(parents=True)
     snapshot = snapshot_dir / "pristine-gnu-build"
@@ -207,11 +297,15 @@ def prepare(a: argparse.Namespace) -> None:
     receipt = {"schema": SCHEMA, "phase": "prepared-pristine-gnu",
                "official_runtime_certified": False, "diagnostic_only": True,
                "target": TARGET, "gnu_work": str(work),
+               "historical_compiler_source_epoch": (
+                   LOONG_HISTORICAL_SOURCE_EPOCH if TARGET == "loongarch64" else None),
                "gnu_receipt": str(golden_receipt),
                "gnu_receipt_sha256": digest(golden_receipt),
                "gnu_p0_log": str(file(golden_receipt.parent / "p0.log")),
                "gnu_p0_log_sha256": digest(golden_receipt.parent / "p0.log"),
                "initramfs": str(initramfs), "initramfs_sha256": digest(initramfs),
+               "firmware": str(firmware_arg.absolute()) if firmware_arg else None,
+               "firmware_sha256": LOONG_FIRMWARE_SHA256 if firmware_arg else None,
                "source_sha256": details["source_sha256"],
                "config_sha256": details["config_sha256"],
                "gnu_image_sha256": details["golden_image_sha256"],
@@ -309,6 +403,8 @@ def probe(a: argparse.Namespace) -> int:
             info.get("gnu_work") != str(work) or
             info.get("diagnostic_only") is not True):
         raise DiagnosticError("foreign/non-diagnostic pristine GNU snapshot")
+    if TARGET == "loongarch64" and info.get("historical_compiler_source_epoch") != LOONG_HISTORICAL_SOURCE_EPOCH:
+        raise DiagnosticError("foreign Loong historical compiler source epoch")
     trial = a.trial_dir.resolve(strict=False)
     if trial.exists() or trial.is_relative_to(work):
         raise DiagnosticError("trial output must be new and outside GNU_WORK")
@@ -324,8 +420,19 @@ def probe(a: argparse.Namespace) -> int:
     if any(compiler[k] != info[k] for k in ("compiler_driver_sha256", "compiler_cc_sha256")):
         raise DiagnosticError("MiniC producer revision differs from snapshot")
     rows = source_rows(work)
-    if len(rows) != info["original_owner_count"] or compressed_owners(rows) != info["compressed_owners"]:
-        raise DiagnosticError("changed original GNU x86 compressed C-owner domain")
+    if (len(rows) != info["original_owner_count"] or
+            (compressed_owners(rows) if TARGET == "x86_64" else []) != info["compressed_owners"]):
+        raise DiagnosticError("changed original GNU seven-shard C-owner domain")
+    firmware = None
+    firmware_arg = getattr(a, "firmware", None)
+    if TARGET == "loongarch64":
+        if (firmware_arg is None or info.get("firmware_sha256") != LOONG_FIRMWARE_SHA256 or
+                str(firmware_arg.absolute()) != info.get("firmware") or
+                digest(file(firmware_arg.absolute())) != LOONG_FIRMWARE_SHA256):
+            raise DiagnosticError("original LoongArch EFI firmware SHA/path changed")
+        firmware = firmware_arg.absolute()
+    elif firmware_arg is not None:
+        raise DiagnosticError("foreign EFI firmware for x86 GNU baseline")
     original = info["original_gnu_c_owner_sha256"]
     snapshot = directory(snapshot_dir / "pristine-gnu-build")
     if (digest(file(snapshot / ".config")) != info["config_sha256"] or
@@ -336,11 +443,25 @@ def probe(a: argparse.Namespace) -> int:
     if staged.is_relative_to(work / "build") or a.results.resolve().is_relative_to(work / "build"):
         raise DiagnosticError("staged MiniC objects/results must remain outside replaced O=build")
     minic_objects = verify_staged(rows, staged, file(a.results),
-                                  lambda path, row: candidate.elf_machine(path, 62))
+                                  lambda path, row: candidate.elf_machine(
+                                      path, candidate.TARGETS[TARGET][5]))
+    if TARGET == "loongarch64":
+        if len(rows) != 2723:
+            raise DiagnosticError("Loong source epoch has wrong 2723-C owner count")
+        minic_objects, live_epoch = verify_final_candidate_live_owners(
+            rows, work, directory(staged.parent), minic_objects)
+    else:
+        live_epoch = {"live_regenerated_owners": {},
+                      "frozen_live_object_sha_differences": [],
+                      "frozen_live_source_i_differences": []}
     extra_file = file(a.extra_owners_file.absolute()) if a.extra_owners_file else None
     extra_owners = json.loads(extra_file.read_text()) if extra_file else []
     if not isinstance(extra_owners, list):
         raise DiagnosticError("extra owner selection must be a JSON string array")
+    if TARGET == "x86_64" and a.mode.endswith("-list"):
+        raise DiagnosticError("list-based cohorts are LoongArch diagnostic only")
+    if TARGET == "loongarch64" and not a.mode.endswith("-list"):
+        raise DiagnosticError("compressed-specific cohorts are x86-only")
     selected = select_owners(rows, a.mode, extra_owners)
     trial.mkdir(parents=True)
     original_backup = work / "build-before-cohort-diagnostic"
@@ -348,6 +469,9 @@ def probe(a: argparse.Namespace) -> int:
         raise DiagnosticError("original official Kbuild backup exists; recover it first")
     record = {"schema": SCHEMA, "phase": "diagnostic-only-mixed-C-objects",
               "target": TARGET, "mode": a.mode, "diagnostic_only": True,
+              "historical_compiler_source_epoch": (
+                  LOONG_HISTORICAL_SOURCE_EPOCH if TARGET == "loongarch64" else None),
+              "current_head_strict_acceptance_allowed": False,
               "strict_qualification_allowed": False, "zero_gnu_c_fallback": False,
               "extra_owner_selection_sha256": digest(extra_file) if extra_file else None,
               "extra_owner_selection": extra_owners,
@@ -355,6 +479,9 @@ def probe(a: argparse.Namespace) -> int:
               "original_manifest_sha256": info["original_manifest_sha256"],
               "selected_minic_owners": selected,
               "selected_minic_sha256": {name: minic_objects[name] for name in selected},
+              "candidate_live_source_epoch_attestation": live_epoch,
+              "selected_live_source_i_differences": sorted(
+                  set(selected) & set(live_epoch["frozen_live_source_i_differences"])),
               "original_official_build_restored": False,
               "verdict": "DIAGNOSTIC_INCOMPLETE"}
     original_moved = False
@@ -373,14 +500,18 @@ def probe(a: argparse.Namespace) -> int:
         copy_independent_tree(snapshot, out)
         for name in selected:
             destination = file(out / name)
-            shutil.copyfile(file(staged / name), destination)
+            source = (file(original_backup / name) if TARGET == "loongarch64"
+                      else file(staged / name))
+            shutil.copyfile(source, destination)
             os.utime(destination, None)  # force original incremental GNU Kbuild link
             if digest(destination) != minic_objects[name]:
                 raise DiagnosticError(f"mixed MiniC object copy failed: {name}")
         record["before_link_selected_sha256"] = {
             name: digest(file(out / name)) for name in selected}
+        arch, prefix, gcc, goal, image_name, machine = candidate.TARGETS[TARGET]
         command = ["make", "-C", str(work / "linux-6.6.143"), "O=" + str(out),
-                   "ARCH=x86", "CROSS_COMPILE=", "CC=gcc", "-j4", "bzImage"]
+                   "ARCH=" + arch, "CROSS_COMPILE=" + prefix, "CC=" + gcc,
+                   "-j4", goal]
         env = dict(os.environ, KBUILD_BUILD_USER="minic", KBUILD_BUILD_HOST="minic-ci",
                    KBUILD_BUILD_TIMESTAMP="Thu Jan  1 00:00:00 UTC 1970")
         link = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -394,8 +525,8 @@ def probe(a: argparse.Namespace) -> int:
         actual = live_census(out, trial)
         record.update(reconcile_owners(rows, original, minic_objects, selected,
                                        actual, link.stdout))
-        record["candidate_image_sha256"] = (digest(out / "arch/x86/boot/bzImage")
-                                             if (out / "arch/x86/boot/bzImage").is_file() else None)
+        record["candidate_image_sha256"] = (digest(out / image_name)
+                                             if (out / image_name).is_file() else None)
         if link.returncode:
             record["verdict"] = "DIAGNOSTIC_GNU_KBUILD_LINK_FAIL"
             return 2
@@ -421,9 +552,10 @@ def probe(a: argparse.Namespace) -> int:
         diff = load_sibling("linux-four-isa-runtime-diff-v1.py", "boot_cohort_semantic_diff")
         (trial / "boot").mkdir()
         try:
-            lane = oracle.run_lane(TARGET, oracle.executable("qemu-system-x86_64"),
-                                   file(out / "arch/x86/boot/bzImage"),
-                                   Path(info["initramfs"]), None, "p0", "2G",
+            qemu_binary = "qemu-system-loongarch64" if TARGET == "loongarch64" else "qemu-system-x86_64"
+            lane = oracle.run_lane(TARGET, oracle.executable(qemu_binary),
+                                   file(out / image_name),
+                                   Path(info["initramfs"]), firmware, "p0", "2G",
                                    a.qemu_timeout, trial / "boot")
             record["p0_lane"] = lane
             events = diff.compare(Path(info["gnu_p0_log"]).read_text(errors="replace"),
@@ -439,7 +571,17 @@ def probe(a: argparse.Namespace) -> int:
             record["p0_observation"] = "FAIL_OR_SEMANTIC_MISMATCH"
             if getattr(exc, "lane_receipt", None):
                 record["p0_lane"] = exc.lane_receipt
-            record["verdict"] = ("DIAGNOSTIC_INCONCLUSIVE_OWNER_DRIFT" if drift
+            if TARGET == "loongarch64" and (trial / "boot/p0.log").is_file():
+                guest = (trial / "boot/p0.log").read_text(errors="replace")
+                fault = re.search(r"do_page_fault\(\): sending SIGSEGV to init for invalid read access from ([0-9a-f]+)", guest)
+                record["fault_va_observed"] = fault[1] if fault else None
+                if (fault is not None
+                        and "era = 0000000120015ca4 in init" in guest
+                        and "Kernel panic - not syncing: Attempted to kill init! exitcode=0x0000000b" in guest):
+                    record["p0_observation"] = "REPRODUCED_ORIGINAL_INIT_SIGSEGV_FRONTIER"
+            record["verdict"] = ("DIAGNOSTIC_INCONCLUSIVE_OWNER_DRIFT" if drift else
+                                 "DIAGNOSTIC_P0_REPRODUCES_INIT_SIGSEGV" if
+                                 record["p0_observation"] == "REPRODUCED_ORIGINAL_INIT_SIGSEGV_FRONTIER"
                                  else "DIAGNOSTIC_P0_FAIL_OR_INCONCLUSIVE")
             return 2
     except (OSError, ValueError, subprocess.SubprocessError) as exc:
@@ -478,33 +620,104 @@ def probe(a: argparse.Namespace) -> int:
                   f"{json.dumps(owners[:15], separators=(',', ':'))}")
 
 
+def vdso_elf_layout(path: Path) -> dict:
+    """Read ELF64 PT_LOAD spans without assuming .text size equals mapping size."""
+    if not path.is_file():
+        return {"present": False}
+    blob = file(path).read_bytes()
+    item = {"present": True, "sha256": digest(path), "file_size_bytes": len(blob)}
+    if (len(blob) < 64 or blob[:4] != b"\x7fELF" or blob[4] != 2 or blob[5] != 1):
+        return dict(item, elf64_le=False, verdict="NOT_PARSEABLE_ELF64_LE")
+    machine = struct.unpack_from("<H", blob, 18)[0]
+    phoff = struct.unpack_from("<Q", blob, 32)[0]
+    phentsize, phnum = struct.unpack_from("<HH", blob, 54)
+    if machine != 258 or phentsize < 56 or phnum > 256 or phoff + phentsize * phnum > len(blob):
+        return dict(item, elf64_le=True, machine=machine, verdict="INVALID_LOONG_PHDR")
+    load = []
+    for index in range(phnum):
+        kind, flags, offset, vaddr, paddr, filesz, memsz, alignment = struct.unpack_from(
+            "<IIQQQQQQ", blob, phoff + index * phentsize)
+        if kind != 1:
+            continue
+        if filesz > memsz or offset + filesz > len(blob) or vaddr + memsz >= 1 << 64:
+            return dict(item, elf64_le=True, machine=machine,
+                        verdict="INVALID_LOONG_PT_LOAD_BOUNDS")
+        load.append({"vaddr": vaddr, "file_offset": offset, "file_size_bytes": filesz,
+                     "memory_size_bytes": memsz, "align_bytes": alignment, "flags": flags})
+    if not load:
+        return dict(item, elf64_le=True, machine=machine,
+                    verdict="NO_PT_LOAD_FOUND")
+    first = min(segment["vaddr"] for segment in load)
+    end = max(segment["vaddr"] + segment["memory_size_bytes"] for segment in load)
+    return dict(item, elf64_le=True, machine=machine, load_segments=load,
+                pt_load_span_bytes=end - first,
+                required_4k_mapping_pages=(end + 4095) // 4096 - first // 4096,
+                required_16k_mapping_pages=(end + 16383) // 16384 - first // 16384,
+                verdict="ELF64_PT_LOAD_STRUCTURALLY_PARSED_NOT_RUNTIME_MAPPING_PROOF")
+
+
+def capture_vdso_layout(a: argparse.Namespace) -> None:
+    """Diagnostic-only GNU/final-MiniC ELF sizes; no guest mapping assertion."""
+    pristine = directory(a.gnu_build)
+    candidate = directory(a.candidate_build)
+    relative = ("arch/loongarch/vdso/vdso.so", "arch/loongarch/vdso/vdso.so.dbg")
+    report = {"schema": "minic-loong-vdso-layout-evidence-v1", "diagnostic_only": True,
+              "strict_qualification_allowed": False,
+              "vdso_info_size_runtime_proven": False,
+              "guest_vdso_mapping_page_count_proven": False,
+              "note": "PT_LOAD page counts are required estimates, not proven guest mappings",
+              "images": {label: {name: vdso_elf_layout(out / name) for name in relative}
+                         for label, out in (("pristine_gnu", pristine),
+                                            ("final_minic", candidate))}}
+    if not any(item["present"] for image in report["images"].values()
+               for item in image.values()):
+        raise DiagnosticError("neither pristine nor MiniC has measurable Loong vDSO ELF")
+    write_json(a.output, report)
+    print("LOONG_VDSO_ELF_PHDR_EVIDENCE=CAPTURED runtime_mapping_unproven=true")
+
+
 def main(argv: list[str] | None = None) -> int:
+    global TARGET
     p = argparse.ArgumentParser(description=__doc__)
     sub = p.add_subparsers(dest="command", required=True)
     prep = sub.add_parser("prepare", help="snapshot independently certified GNU Kbuild before official overlay")
+    prep.add_argument("--target", choices=("x86_64", "loongarch64"), default="x86_64")
     prep.add_argument("--gnu-work", type=Path, required=True)
     prep.add_argument("--gnu-receipt", type=Path, required=True)
     prep.add_argument("--initramfs", type=Path, required=True)
     prep.add_argument("--minic", type=Path, required=True)
+    prep.add_argument("--firmware", type=Path)
     prep.add_argument("--snapshot-dir", type=Path, required=True)
     test = sub.add_parser("probe", help="never certify: mixed GNU/MiniC C cohort and P0")
+    test.add_argument("--target", choices=("x86_64", "loongarch64"), default="x86_64")
     test.add_argument("--gnu-work", type=Path, required=True)
     test.add_argument("--snapshot-dir", type=Path, required=True)
     test.add_argument("--minic", type=Path, required=True)
     test.add_argument("--staged", type=Path, required=True)
     test.add_argument("--results", type=Path, required=True)
+    test.add_argument("--firmware", type=Path)
     test.add_argument("--trial-dir", type=Path, required=True)
     test.add_argument("--mode", choices=MODES, required=True)
     test.add_argument("--extra-owners-file", type=Path,
-                      help="SHA-recorded JSON list of additional exact C owners over the 12 MiniC compressed baseline; diagnostic only")
+                      help="SHA-recorded JSON exact C-owner list (Loong), or extra x86 compressed owners; diagnostic only")
     test.add_argument("--link-timeout", type=int, default=900)
     test.add_argument("--qemu-timeout", type=int, default=240)
-    test.add_argument("--max-live-cc", type=int, default=32)
+    test.add_argument("--max-live-cc", type=int)
+    layout = sub.add_parser("vdso-layout", help="read-only Loong vDSO ELF/PT_LOAD GNU vs final MiniC")
+    layout.add_argument("--gnu-build", type=Path, required=True)
+    layout.add_argument("--candidate-build", type=Path, required=True)
+    layout.add_argument("--output", type=Path, required=True)
     a = p.parse_args(argv)
     try:
+        if a.command == "vdso-layout":
+            capture_vdso_layout(a)
+            return 0
+        TARGET = a.target
         if a.command == "prepare":
             prepare(a)
             return 0
+        if a.max_live_cc is None:
+            a.max_live_cc = 0 if TARGET == "loongarch64" else 32
         if not 1 <= a.link_timeout <= 3600 or not 30 <= a.qemu_timeout <= 900:
             raise DiagnosticError("invalid bounded GNU link/QEMU timeout")
         if not 0 <= a.max_live_cc <= 64:

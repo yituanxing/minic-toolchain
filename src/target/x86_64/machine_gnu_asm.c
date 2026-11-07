@@ -2139,6 +2139,13 @@ static bool x86_emit_source_asm(FILE *out,
             MINIC_X86_MACHINE_ASM_CHECKSUM)
         return fputs("  addl %r10d, %eax\n  adcl $0xffff, %eax\n",out) != EOF;
     if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_IPV6_CHECKSUM)
+        return fputs("  addq (%r10), %rax\n"
+                     "  adcq 8(%r10), %rax\n"
+                     "  adcq (%r11), %rax\n"
+                     "  adcq 8(%r11), %rax\n"
+                     "  adcq $0, %rax\n",out) != EOF;
+    if (instruction->source_asm_machine_form_id ==
             MINIC_X86_MACHINE_ASM_TCPUDP_NOFOLD)
         return fputs("  addl %r10d, %eax\n"
                      "  adcl %r11d, %eax\n"

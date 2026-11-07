@@ -13,6 +13,10 @@ on:
         description: 'Explicitly replay SHA-verified candidate C objects from the pinned 21-shard producer run'
         type: boolean
         default: false
+      loong_cached_cohort_diagnostic:
+        description: 'Opt-in failure-only LoongArch mixed C-owner P0 diagnosis with the exact 2026-11-07 2723-object cache; never strict acceptance'
+        type: boolean
+        default: false
       fresh_source_targets:
         description: 'Refresh original GNU input artifacts for this target scope; none uses an existing frozen input run'
         type: choice
@@ -31,6 +35,10 @@ on:
         description: 'Source-export Actions run ID for frozen input reuse; must contain all selected original .i/.cmd shard artifacts'
         type: string
         default: '41181106144'
+      resume_candidate_run_id:
+        description: 'Explicit prior FAILED candidate run containing per-owner partial artifacts; resume only identical SHA corpus/compiler/tools'
+        type: string
+        default: ''
   # GitHub App ref updates can suppress downstream push-triggered Actions.
   # Keep the proven PR entry point, but admit its expensive jobs ONLY when
   # HEAD itself changed the explicit one-shot trigger marker.
@@ -63,6 +71,8 @@ env:
   # All 21 original MiniC C/GNU AS object shards must be SHA-proven against
   # the byte-identical compiler pair before receiver-only replay is accepted.
   MINIC_LINUX_PINNED_OBJECT_RUN: '41181106144'
+  # Immutable original 2723-owner LoongArch/GNU-AS producer and compiler pair.
+  MINIC_LINUX_LOONG_COHORT_OBJECT_RUN: '42378020139'
 
 concurrency:
   # One exact candidate HEAD shared by push and PR events.  A GitHub App
@@ -148,6 +158,7 @@ jobs:
       source_scope: ${{ steps.decide.outputs.source_scope }}
       partial_target: ${{ steps.decide.outputs.partial_target }}
       input_run: ${{ steps.decide.outputs.input_run }}
+      resume_run: ${{ steps.decide.outputs.resume_run }}
       producer_targets: ${{ steps.decide.outputs.producer_targets }}
       receiver_targets: ${{ steps.decide.outputs.receiver_targets }}
     steps:
@@ -162,6 +173,7 @@ jobs:
           REQUESTED_SOURCE_SCOPE: ${{ inputs.fresh_source_targets }}
           REQUESTED_CANDIDATE_SCOPE: ${{ inputs.candidate_target }}
           REQUESTED_FROZEN_INPUT_RUN: ${{ inputs.frozen_input_run_id }}
+          REQUESTED_RESUME_RUN: ${{ inputs.resume_candidate_run_id }}
         run: |
           set -Eeuo pipefail
           active=false
@@ -173,6 +185,7 @@ jobs:
           source_scope=none
           candidate_scope=all
           input_run="$MINIC_LINUX_PINNED_INPUT_RUN"
+          resume_run=''
           source_refresh_marker=false
           candidate_marker=false
           if [[ '${{ github.event_name }}' == workflow_dispatch ]]; then
@@ -186,6 +199,7 @@ jobs:
             source_scope="${REQUESTED_SOURCE_SCOPE:-none}"
             candidate_scope="${REQUESTED_CANDIDATE_SCOPE:-all}"
             input_run="${REQUESTED_FROZEN_INPUT_RUN:-$MINIC_LINUX_PINNED_INPUT_RUN}"
+            resume_run="${REQUESTED_RESUME_RUN:-}"
             if [[ "$source_scope" != none ]]; then
               regenerate=true
             fi
@@ -291,6 +305,15 @@ jobs:
             echo 'Frozen original-source run ID must be an explicit decimal Actions run ID' >&2
             exit 1
           fi
+          if [[ -n "$resume_run" ]]; then
+            if [[ ! "$resume_run" =~ ^[0-9]{8,15}$ ||
+                  "$resume_run" == '${{ github.run_id }}' ||
+                  "$regenerate" == true || "$reuse_objects" == true ||
+                  "$source_only" == true ]]; then
+              echo 'Partial resume requires an earlier explicit run ID and identical frozen-input candidate mode' >&2
+              exit 1
+            fi
+          fi
           if [[ "$source_only" == true && "$regenerate" != true ]]; then
             echo 'Original inputs-only capture requires explicit original GNU regeneration' >&2
             exit 1
@@ -322,6 +345,12 @@ jobs:
             echo 'x86-only development needs the pinned GNU .i/.cmd and seven fresh exact-HEAD MiniC shards' >&2
             exit 1
           fi
+          if [[ '${{ inputs.loong_cached_cohort_diagnostic }}' == true &&
+                ( "$reuse_objects" != true || "$candidate_scope" != loongarch64 ||
+                  "$source_scope" != none || "$regenerate" == true ) ]]; then
+            echo 'Loong cached cohort requires receiver-only replay of the exact pinned Loong objects; no GNU regeneration' >&2
+            exit 1
+          fi
           producer_targets='["x86_64","aarch64","loongarch64"]'
           receiver_targets='["x86_64","aarch64","loongarch64"]'
           if [[ "$only_aarch64" == true ]]; then
@@ -351,6 +380,7 @@ jobs:
           echo "source_scope=$source_scope" >> "$GITHUB_OUTPUT"
           echo "partial_target=$partial_target" >> "$GITHUB_OUTPUT"
           echo "input_run=$input_run" >> "$GITHUB_OUTPUT"
+          echo "resume_run=$resume_run" >> "$GITHUB_OUTPUT"
           echo "producer_targets=$producer_targets" >> "$GITHUB_OUTPUT"
           echo "receiver_targets=$receiver_targets" >> "$GITHUB_OUTPUT"
           echo "MINIC_LINUX_SEVEN_EXACT_HEAD_GATE=$active regenerate=$regenerate reuse_objects=$reuse_objects source_only=$source_only source_scope=$source_scope partial_target=$partial_target input_run=$input_run producers=$producer_targets receivers=$receiver_targets sha=$(git rev-parse HEAD)"
@@ -360,8 +390,10 @@ jobs:
             echo "Commit: $(git rev-parse HEAD)"
             echo "Producer targets: $producer_targets"
             echo "Receiver targets: $receiver_targets"
-            if [[ "$reuse_objects" == true ]]; then
-              echo 'Candidate objects: pinned producer run 41133698941 (byte-identical compiler pair mandatory).'
+            if [[ '${{ inputs.loong_cached_cohort_diagnostic }}' == true ]]; then
+              echo 'DIAGNOSTIC_ONLY: historical ACE5 compiler/2723 C objects from official run 42378020139; current HEAD not eligible for compiler/Linux strict acceptance.'
+            elif [[ "$reuse_objects" == true ]]; then
+              echo "Candidate objects: pinned producer run $MINIC_LINUX_PINNED_OBJECT_RUN (byte-identical current compiler pair mandatory)."
             fi
             echo 'A gate success is never Linux C/LD/QEMU acceptance.'
           } >> "$GITHUB_STEP_SUMMARY"
@@ -382,12 +414,14 @@ jobs:
           python3 -m py_compile tools/ci/linux-three-isa-seven-runtime-v1.py tools/ci/linux-three-isa-minic-candidate-v1.py
           python3 tools/ci/linux-three-isa-seven-runtime-v1.py selftest
           python3 tools/ci/test_linux_three_isa_seven_runtime_v1.py
+          python3 tools/ci/test_linux_three_isa_seven_partial_v1.py
           python3 tools/ci/test_linux_three_isa_candidate_marker_gate_v1.py
           python3 tools/ci/linux-three-isa-minic-candidate-v1.py --self-test
           python3 tools/ci/test_linux_three_isa_candidate_shard_cache_v1.py
           python3 tools/ci/linux-three-isa-loongarch64-early-boot-pc-v1.py --self-test
           python3 -m unittest tools/ci/test_linux_three_isa_boot_cohort_diagnostic_v1.py
       - name: Build exactly one immutable MiniC and minic-cc for all 21 workers
+        if: inputs.loong_cached_cohort_diagnostic != true
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -405,17 +439,26 @@ jobs:
           MINIC_CC="$PWD/build/minic-seven-bin/bin/minic-cc" \
             BUILD_DIR="$PWD/build/minic-seven-bin" \
             bash tests/compiler/c0/run-x86-gnu-vector-size-copy.sh
+      - name: Use only authentic ACE5 compiler binaries for historical Loong cohort diagnosis
+        if: inputs.loong_cached_cohort_diagnostic == true
+        uses: actions/download-artifact@v4
+        with:
+          name: minic-linux-seven-compiler
+          repository: ${{ github.repository }}
+          run-id: ${{ env.MINIC_LINUX_LOONG_COHORT_OBJECT_RUN }}
+          github-token: ${{ github.token }}
+          path: build/minic-seven-bin/bin
       - name: Restore pinned producer's immutable MiniC compiler pair for receiver-only replay
         if: needs.gate.outputs.reuse_objects == 'true'
         uses: actions/download-artifact@v4
         with:
           name: minic-linux-seven-compiler
           repository: ${{ github.repository }}
-          run-id: ${{ env.MINIC_LINUX_PINNED_OBJECT_RUN }}
+          run-id: ${{ inputs.loong_cached_cohort_diagnostic == true && env.MINIC_LINUX_LOONG_COHORT_OBJECT_RUN || env.MINIC_LINUX_PINNED_OBJECT_RUN }}
           github-token: ${{ github.token }}
           path: ${{ runner.temp }}/pinned-minic-seven-compiler
       - name: Require byte-identical MiniC and minic-cc before reusing 21 candidate shards
-        if: needs.gate.outputs.reuse_objects == 'true'
+        if: needs.gate.outputs.reuse_objects == 'true' && inputs.loong_cached_cohort_diagnostic != true
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -762,6 +805,7 @@ jobs:
       OUTPUT: ${{ github.workspace }}/build/minic-seven-object-${{ matrix.target }}-${{ matrix.shard }}
       CACHE: ${{ github.workspace }}/build/minic-seven-cache-${{ matrix.target }}-${{ matrix.shard }}
       IDENTITY: ${{ github.workspace }}/build/minic-seven-cache-identity-${{ matrix.target }}-${{ matrix.shard }}.json
+      RESUME: ${{ github.workspace }}/build/minic-seven-resume-${{ matrix.target }}-${{ matrix.shard }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -871,16 +915,61 @@ jobs:
             --minic "$GITHUB_WORKSPACE/build/minic-seven-bin/bin/minic" \
             --input "$INPUT" --output "$OUTPUT" \
             --cache "$CACHE" --cache-identity "$IDENTITY"
+      - name: Verify partial artifact comes from this exact commit and workflow
+        if: needs.gate.outputs.resume_run != '' && steps.candidate-cache.outputs.cache-hit != 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RESUME_RUN_ID: ${{ needs.gate.outputs.resume_run }}
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -Eeuo pipefail
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RESUME_RUN_ID" |
+            python3 -c '
+          import json, os, sys
+          run = json.load(sys.stdin)
+          assert run["head_sha"] == os.environ["EXPECTED_SHA"], "partial prior run belongs to another compiler HEAD"
+          assert run["path"] == ".github/workflows/minic-linux-three-isa-seven-runtime-v1.yml", "foreign partial workflow"
+          assert run["status"] == "completed" and run["conclusion"] in ("failure", "cancelled", "timed_out"), "partial run not terminated red"
+          print("MINIC_PARTIAL_PREVIOUS_RUN_HEAD_SHA=PASS run=" + os.environ["RESUME_RUN_ID"])
+          '
+      - name: Download explicitly selected FAILED run's partial MiniC objects
+        if: needs.gate.outputs.resume_run != '' && steps.candidate-cache.outputs.cache-hit != 'true'
+        uses: actions/download-artifact@v4
+        with:
+          name: minic-linux-seven-partial-${{ matrix.target }}-${{ matrix.shard }}
+          path: ${{ env.RESUME }}
+          repository: ${{ github.repository }}
+          run-id: ${{ needs.gate.outputs.resume_run }}
+          github-token: ${{ github.token }}
       - name: Compile every original Kbuild C owner on one real independent runner
+        id: producer
         if: steps.candidate-cache.outputs.cache-hit != 'true'
         shell: bash
         timeout-minutes: 45
         run: |
           set -Eeuo pipefail
+          resume_args=()
+          if [[ -n '${{ needs.gate.outputs.resume_run }}' ]]; then
+            resume_args=(--resume "$RESUME")
+          fi
           python3 tools/ci/linux-three-isa-seven-runtime-v1.py produce \
             --target '${{ matrix.target }}' --shard '${{ matrix.shard }}' \
             --minic "$GITHUB_WORKSPACE/build/minic-seven-bin/bin/minic" \
-            --input "$INPUT" --output "$OUTPUT" --workers 2 --timeout 240
+            --input "$INPUT" --output "$OUTPUT" --workers 2 --timeout 240 \
+            "${resume_args[@]}"
+      - name: Preserve per-owner MiniC + GNU AS objects even when shard fails
+        if: always() && (steps.producer.outcome == 'failure' || steps.producer.outcome == 'cancelled')
+        uses: actions/upload-artifact@v4
+        with:
+          name: minic-linux-seven-partial-${{ matrix.target }}-${{ matrix.shard }}
+          path: |
+            ${{ env.OUTPUT }}/checkpoint/
+            ${{ env.OUTPUT }}/staged/
+          include-hidden-files: true
+          if-no-files-found: ignore
+          compression-level: 2
+          retention-days: 30
       - name: Preserve authenticated candidate cache before any LD/QEMU failure
         if: steps.object-key.outputs.enabled == 'true' && steps.candidate-cache.outputs.cache-hit != 'true'
         shell: bash
@@ -955,8 +1044,37 @@ jobs:
           # Receiver-only mode consumes the reviewed original producer run,
           # after minic-binary proved that both compiler binaries are identical.
           repository: ${{ github.repository }}
-          run-id: ${{ needs.gate.outputs.reuse_objects == 'true' && env.MINIC_LINUX_PINNED_OBJECT_RUN || github.run_id }}
+          run-id: ${{ needs.gate.outputs.reuse_objects == 'true' && (inputs.loong_cached_cohort_diagnostic == true && env.MINIC_LINUX_LOONG_COHORT_OBJECT_RUN || env.MINIC_LINUX_PINNED_OBJECT_RUN) || github.run_id }}
           github-token: ${{ github.token }}
+      - name: Verify exact official Loong seven-object and compiler ZIP SHA metadata before reuse
+        if: matrix.target == 'loongarch64' && inputs.loong_cached_cohort_diagnostic == true
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPOSITORY: ${{ github.repository }}
+        run: |
+          python3 - <<'PY'
+          import json, os, urllib.request
+          expected = {
+              'minic-linux-seven-compiler': (13576945126, '61226efc1e940c4080484ab648b1ee8329e39dfff789a4088121f64422089b79'),
+              'minic-linux-seven-objects-loongarch64-0': (13575833950, 'a453258db76ebe13cafd98e3603a6186160c6688a96e3faa39ed051ed371ea5a'),
+              'minic-linux-seven-objects-loongarch64-1': (13576292959, '3e5a19746a181eba9ee46bfadfd6aff90685beb3f15111ff2a5c747f68abfc5b'),
+              'minic-linux-seven-objects-loongarch64-2': (13575704526, '40e1d6749fb18e641deafa74981b5425b257f11aa3ab513776276f656c314d58'),
+              'minic-linux-seven-objects-loongarch64-3': (13575998576, '3d2588e2de011db9d0c9a5e03c41837e4789c1dea0b8728403195de8811afecb'),
+              'minic-linux-seven-objects-loongarch64-4': (13576666982, '1b015d9c775ea77db3bc96056d46dff3ab68981946089467c41c804ded411cf2'),
+              'minic-linux-seven-objects-loongarch64-5': (13576576488, '2e6cd683dbf8737ba270c0332d2fed07084f50ff92badfbdb712bbbbd932e0b3'),
+              'minic-linux-seven-objects-loongarch64-6': (13576442748, '15c5354d3aac4903978acb8d201e157d7547b513c2f1793d9d7df7a41c3a5bc7'),
+          }
+          url = 'https://api.github.com/repos/' + os.environ['GH_REPOSITORY'] + '/actions/runs/42378020139/artifacts?per_page=100'
+          req = urllib.request.Request(url, headers={'Authorization': 'Bearer ' + os.environ['GH_TOKEN'], 'Accept': 'application/vnd.github+json'})
+          with urllib.request.urlopen(req, timeout=20) as response:
+              artifacts = json.load(response)['artifacts']
+          found = {a['name']: a for a in artifacts}
+          for name, (id_, sha) in expected.items():
+              a = found.get(name)
+              assert a and a['id'] == id_ and a.get('digest') == 'sha256:' + sha and not a['expired'], name
+          print('LOONG_CACHED_COHORT_OFFICIAL_ZIP_METADATA=PASS count=8 run=42378020139')
+          PY
       - name: Reject partial/foreign seven-shard objects before costly GNU cache
         shell: bash
         run: |
@@ -1166,6 +1284,20 @@ jobs:
             --initramfs "$RUNTIME_OUTPUT/runtime-initramfs.cpio.gz" \
             --minic "$GITHUB_WORKSPACE/build/minic-seven-bin/bin/minic" \
             --snapshot-dir "$RUNTIME_OUTPUT/x86-pristine-cohort-snapshot"
+      - name: Freeze complete pristine Loong GNU Kbuild for exact cached C-owner cohort diagnosis
+        if: matrix.target == 'loongarch64' && inputs.loong_cached_cohort_diagnostic == true
+        shell: bash
+        timeout-minutes: 15
+        run: |
+          set -Eeuo pipefail
+          python3 tools/ci/linux-three-isa-boot-cohort-diagnostic-v1.py prepare \
+            --target loongarch64 --gnu-work "$GNU_WORK" \
+            --gnu-receipt "$RUNTIME_OUTPUT/boot/gnu-qemu-receipt.json" \
+            --initramfs "$RUNTIME_OUTPUT/runtime-initramfs.cpio.gz" \
+            --firmware "$RUNTIME_OUTPUT/QEMU_EFI.fd" \
+            --minic "$GITHUB_WORKSPACE/build/minic-seven-bin/bin/minic" \
+            --snapshot-dir "$RUNTIME_OUTPUT/loong-pristine-cohort-snapshot"
+          echo 'LOONG_COHORT_HISTORICAL_COMPILER_SOURCE_EPOCH=ace5bd14026c08ab343ea77df979a11f8c7a1a80 current_HEAD_not_certified=true'
       - name: Original GNU Kbuild LD of ALL MiniC C objects and candidate QEMU P0/P1
         shell: bash
         timeout-minutes: 95
@@ -1183,6 +1315,10 @@ jobs:
             --initramfs "$RUNTIME_OUTPUT/runtime-initramfs.cpio.gz" \
             --incoming "$GITHUB_WORKSPACE/build/minic-seven-incoming" \
             --output "$RUNTIME_OUTPUT/candidate" "${args[@]}"
+          if [[ '${{ inputs.loong_cached_cohort_diagnostic }}' == true ]]; then
+            echo 'LOONG_COHORT_HISTORICAL_ACE5_REPLAY_ONLY_NO_CURRENT_HEAD_ACCEPTANCE' >&2
+            exit 2
+          fi
       - name: Capture only failed AArch64 zero-serial early-boot PC and exception trace
         if: failure() && matrix.target == 'aarch64'
         continue-on-error: true
@@ -1271,6 +1407,115 @@ jobs:
           else
             echo "X86_EARLY_OWNER_COHORT=diagnostic_failure_or_inconclusive official_strict_P0=0"
           fi
+      - name: Diagnose Loong static init SIGSEGV using SHA-frozen GNU/MiniC seed and bounded bisection
+        if: failure() && matrix.target == 'loongarch64' && inputs.loong_cached_cohort_diagnostic == true
+        continue-on-error: true
+        shell: bash
+        timeout-minutes: 65
+        run: |
+          set -Eeuo pipefail
+          test -s "$RUNTIME_OUTPUT/loong-pristine-cohort-snapshot/prepare.json"
+          test -s "$RUNTIME_OUTPUT/candidate/boot/p0.log"
+          python3 tools/ci/linux-three-isa-boot-cohort-diagnostic-v1.py vdso-layout \
+            --gnu-build "$RUNTIME_OUTPUT/loong-pristine-cohort-snapshot/pristine-gnu-build" \
+            --candidate-build "$GNU_WORK/build" \
+            --output "$RUNTIME_OUTPUT/loong-vdso-elf-phdr-evidence.json"
+          python3 - "$RUNTIME_OUTPUT/candidate/postlink-c-owner-census.json" \
+                    "$RUNTIME_OUTPUT/candidate/boot/p0.log" \
+                    "$GNU_WORK/frozen/manifest.json" \
+                    "$RUNTIME_OUTPUT/loong-cohort-seed.json" <<'PY'
+          import json, pathlib, sys
+          census, boot, manifest, selected = map(pathlib.Path, sys.argv[1:])
+          assert json.loads(census.read_text())['verdict'] == 'POSTLINK_ALL_C_MINIC_SHA_PASS'
+          log = boot.read_text(errors='replace')
+          assert 'do_page_fault(): sending SIGSEGV to init for invalid read access from ' in log
+          assert 'era = 0000000120015ca4 in init' in log
+          assert 'Kernel panic - not syncing: Attempted to kill init! exitcode=0x0000000b' in log
+          owners = [row['object'] for row in json.loads(manifest.read_text())['rows']]
+          assert len(owners) == 2723 and len(set(owners)) == 2723
+          # Test the two vDSO body codegen owners first. kernel/vdso.o is a
+          # generated late C owner with a different frozen/live GNU-E epoch;
+          # swapping it together with these two obscures the ELF-size test.
+          priority = ('arch/loongarch/vdso/vgetcpu.o',
+                      'arch/loongarch/vdso/vgettimeofday.o')
+          assert set(priority).issubset(owners), 'actual Loong original C owners differ'
+          selected.write_text(json.dumps(list(priority), indent=2) + '\n')
+          print('LOONG_COHORT_SEED=PASS total=2723 selected=2 diagnostic_only=true')
+          PY
+          probe() {
+            local mode="$1" depth="$2" owners="$3" trial="$RUNTIME_OUTPUT/loong-cohort-${depth}-${mode}"
+            if python3 tools/ci/linux-three-isa-boot-cohort-diagnostic-v1.py probe \
+                --target loongarch64 --gnu-work "$GNU_WORK" \
+                --snapshot-dir "$RUNTIME_OUTPUT/loong-pristine-cohort-snapshot" \
+                --minic "$GITHUB_WORKSPACE/build/minic-seven-bin/bin/minic" \
+                --firmware "$RUNTIME_OUTPUT/QEMU_EFI.fd" \
+                --staged "$RUNTIME_OUTPUT/candidate/staged" \
+                --results "$RUNTIME_OUTPUT/candidate/all-c-owners-result.json" \
+                --trial-dir "$trial" --mode "$mode" \
+                --extra-owners-file "$owners" --max-live-cc 0 \
+                --link-timeout 360 --qemu-timeout 90; then
+              echo "LOONG_COHORT depth=$depth mode=$mode GNU_P0_MATCH=1 diagnostic_only=true"
+            else
+              echo "LOONG_COHORT depth=$depth mode=$mode GNU_P0_MATCH=0_or_inconclusive diagnostic_only=true"
+            fi
+          }
+          selected="$RUNTIME_OUTPUT/loong-cohort-seed.json"
+          probe gnu-plus-list 0 "$selected"
+          probe minic-except-list 0 "$selected"
+          # If authenticated ELF PT_LOAD already requires >1 16-KiB mapping
+          # page while pristine GNU requires one, do not spend six further
+          # long QEMU probes on broad C-owner bisection. The actual runtime
+          # vdso_info.size field/mapping still needs separate proof.
+          if python3 - "$RUNTIME_OUTPUT/loong-vdso-elf-phdr-evidence.json" <<'PY'
+          import json, pathlib, sys
+          x = json.loads(pathlib.Path(sys.argv[1]).read_text())['images']
+          for path in ('arch/loongarch/vdso/vdso.so', 'arch/loongarch/vdso/vdso.so.dbg'):
+              g, m = x['pristine_gnu'][path], x['final_minic'][path]
+              if g.get('required_16k_mapping_pages') == 1 and m.get('required_16k_mapping_pages', 0) > 1:
+                  print('LOONG_VDSO_PT_LOAD_SIZE_DIFF=GNU_ONE_PAGE_MINIC_MULTIPAGE; no broad bisection')
+                  raise SystemExit(0)
+          raise SystemExit(2)
+          PY
+          then
+            echo 'LOONG_COHORT_BISECT_STOP=authenticated_vdso_PT_LOAD_multpage_source_mapping_unproven'
+            exit 0
+          fi
+          for depth in 1 2 3; do
+            prior=$((depth - 1))
+            next="$RUNTIME_OUTPUT/loong-cohort-depth-${depth}.json"
+            if ! python3 - "$GNU_WORK/frozen/manifest.json" "$selected" \
+                      "$RUNTIME_OUTPUT/loong-cohort-${prior}-gnu-plus-list/diagnostic-receipt.json" \
+                      "$RUNTIME_OUTPUT/loong-cohort-${prior}-minic-except-list/diagnostic-receipt.json" \
+                      "$next" <<'PY'
+          import json, pathlib, sys
+          manifest, selection, positive, negative, nextfile = map(pathlib.Path, sys.argv[1:])
+          names = [row['object'] for row in json.loads(manifest.read_text())['rows']]
+          chosen = set(json.loads(selection.read_text()))
+          p, n = json.loads(positive.read_text()), json.loads(negative.read_text())
+          passing = 'DIAGNOSTIC_P0_MATCHES_GNU_NOT_ACCEPTANCE'
+          failing = 'DIAGNOSTIC_P0_REPRODUCES_INIT_SIGSEGV'
+          if p.get('verdict') == failing and n.get('verdict') == passing:
+              candidates = [name for name in names if name in chosen]
+          elif p.get('verdict') == passing and n.get('verdict') == failing:
+              candidates = [name for name in names if name not in chosen]
+          else:
+              print(f'LOONG_COHORT_BISECT_STOP=interaction_or_owner_drift_plus_{p.get("verdict")}_minus_{n.get("verdict")}')
+              raise SystemExit(2)
+          if len(candidates) <= 1:
+              print(f'LOONG_COHORT_BISECT_STOP=single_candidate domain={candidates}')
+              raise SystemExit(2)
+          half = candidates[:len(candidates) // 2]
+          nextfile.write_text(json.dumps(half, indent=2) + '\n')
+          print(f'LOONG_COHORT_BISECT_CONTINUE=depth={nextfile.stem} domain={len(candidates)} next={len(half)}')
+          PY
+            then
+              break
+            fi
+            selected="$next"
+            probe gnu-plus-list "$depth" "$selected"
+            probe minic-except-list "$depth" "$selected"
+          done
+          echo 'LOONG_COHORT_DIAGNOSTIC_ONLY=true strict_acceptance=false gnu_control_unchanged=true'
       - name: Capture failed Loong EFI-to-Linux PC and register snapshots without changing oracle
         if: failure() && matrix.target == 'loongarch64'
         continue-on-error: true
@@ -1398,6 +1643,9 @@ jobs:
             build/minic-seven-receiver-${{ matrix.target }}/x86-cohort-gnu-plus-compressed/
             build/minic-seven-receiver-${{ matrix.target }}/x86-cohort-minic-except-compressed/
             build/minic-seven-receiver-${{ matrix.target }}/x86-cohort-early-owners/
+            build/minic-seven-receiver-${{ matrix.target }}/loong-cohort-*/
+            build/minic-seven-receiver-${{ matrix.target }}/loong-cohort-*.json
+            build/minic-seven-receiver-${{ matrix.target }}/loong-vdso-elf-phdr-evidence.json
             build/minic-seven-receiver-${{ matrix.target }}/x86-early-extra-owners.json
             build/minic-seven-receiver-${{ matrix.target }}/loong-early-trace/
             build/minic-seven-receiver-${{ matrix.target }}/loong-gnu-control.efi

@@ -380,8 +380,125 @@ static bool run_loong(void) {
     return true;
 }
 
+static size_t count_pattern(const char *text, const char *pattern) {
+    size_t count = 0U;
+    const size_t length = strlen(pattern);
+    while ((text = strstr(text, pattern)) != NULL) {
+        ++count;
+        text += length;
+    }
+    return count;
+}
+
+/* This deliberately exercises physical FRAME owners, not arbitrary textual
+ * `st.d/ld.d` matches: an intervening core-volatility claim or a different
+ * register must preserve the load.  Only an actual next-block unconditional
+ * transfer may disappear from emitted GNU assembly. */
+static bool run_loong_adjacent_frame_peephole(bool distinct_register,
+    bool volatile_read, bool native_address, unsigned int address_variant,
+    bool branch_nonfallthrough) {
+    MinicTargetInfo target = {0};
+    MinicMachineGNUAsmPolicy policy = {0};
+    MinicMachineFunction function = {0};
+    MinicMachineFrameObject object = {0};
+    MinicMachineOperand operands[2];
+    size_t entry, next, gap = 0U, frame_id;
+    FILE *out = NULL;
+    char buffer[4096];
+    size_t length;
+    bool ok = false;
+    const char *stage = "initialize";
+    target.architecture = MINIC_TARGET_ARCH_LOONGARCH64;
+    target.data_layout = minic_loongarch64_linux_data_layout();
+    if (!minic_loongarch64_machine_gnu_asm_policy_initialize(&target, &policy) ||
+        !minic_machine_function_initialize(&function, &target,
+            "loong_size_peephole", MINIC_LOONG_MACHINE_FEATURE_BASE |
+                MINIC_LOONG_MACHINE_FEATURE_FP))
+        return false;
+    function.frame_alignment = 16U;
+    function.frame_size = 32U;
+    object = (MinicMachineFrameObject){.area = MINIC_MACHINE_FRAME_LOCAL,
+        .base = MINIC_MACHINE_FRAME_BASE_STACK_POINTER,
+        .size_bytes = 8U, .alignment_bytes = 8U,
+        .has_fixed_offset = true, .fixed_offset = 16};
+    stage = "block construction";
+    if (!minic_machine_function_add_frame_object(&function, &object, &frame_id) ||
+        !minic_machine_function_add_block(&function, NULL, false, &entry) ||
+        (branch_nonfallthrough &&
+            !minic_machine_function_add_block(&function, NULL, false, &gap)) ||
+        !minic_machine_function_add_block(&function, NULL, false, &next)) goto done;
+    stage = "store";
+    operands[0] = reg(12U, 64U, MINIC_MACHINE_REGISTER_READ);
+    operands[1] = native_address ?
+        address(3U, MINIC_LOONG_ADDRESS_IMM12, 16) : frame(frame_id);
+    if (!append(&function, &policy, entry,
+            native_address ? MINIC_LOONG_MACHINE_ST_D :
+                             MINIC_LOONG_MACHINE_ST_FRAME_D,
+            MINIC_MACHINE_EFFECT_MEMORY_WRITE, operands, 2U)) goto done;
+    stage = "load";
+    operands[0] = reg(distinct_register ? 13U : 12U, 64U,
+        MINIC_MACHINE_REGISTER_WRITE);
+    if (native_address && address_variant != 0U)
+        operands[1] = address(address_variant == 2U ? 4U : 3U,
+            MINIC_LOONG_ADDRESS_IMM12, address_variant == 1U ? 24 : 16);
+    if (!append(&function, &policy, entry,
+            native_address ? MINIC_LOONG_MACHINE_LD_D :
+                             MINIC_LOONG_MACHINE_LD_FRAME_D,
+            MINIC_MACHINE_EFFECT_MEMORY_READ |
+                (volatile_read ? MINIC_MACHINE_EFFECT_VOLATILE : 0U),
+            operands, 2U)) goto done;
+    stage = "branch/verify";
+    operands[0] = block(next);
+    if (!append(&function, &policy, entry, MINIC_LOONG_MACHINE_B,
+            MINIC_MACHINE_EFFECT_BRANCH, operands, 1U)) goto done;
+    stage = "successor";
+    if (!minic_machine_block_add_successor(&function, entry, next)) goto done;
+    stage = "next return";
+    if (branch_nonfallthrough &&
+        !append(&function, &policy, gap, MINIC_LOONG_MACHINE_RET,
+            MINIC_MACHINE_EFFECT_RETURN, NULL, 0U)) goto done;
+    if (!append(&function, &policy, next, MINIC_LOONG_MACHINE_RET,
+            MINIC_MACHINE_EFFECT_RETURN, NULL, 0U)) goto done;
+    stage = "verify";
+    if (!minic_machine_function_verify(&function, &policy.verify)) goto done;
+    stage = "emit";
+    out = open_test_output();
+    if (out == NULL || !minic_machine_gnu_asm_emit_body(out, &function, &policy) ||
+        fflush(out) != 0 || fseek(out, 0, SEEK_SET) != 0) goto done;
+    length = fread(buffer, 1U, sizeof(buffer) - 1U, out);
+    buffer[length] = '\0';
+    ok = count_pattern(buffer, "  st.d $t0, $sp, 16\n") == 1U &&
+        count_pattern(buffer, address_variant == 2U ? "  ld.d $t0, $a0, 16\n" :
+            address_variant == 1U ? "  ld.d $t0, $sp, 24\n" :
+            distinct_register ? "  ld.d $t1, $sp, 16\n" :
+                                "  ld.d $t0, $sp, 16\n") ==
+            ((distinct_register || volatile_read || address_variant != 0U)
+                ? 1U : 0U) &&
+        count_pattern(buffer, "  b .Lminic_mir_") ==
+            (branch_nonfallthrough ? 1U : 0U);
+    if (!ok) fprintf(stderr, "Loong size peephole emission:\n%s\n", buffer);
+done:
+    if (!ok) fprintf(stderr, "Loong size peephole failed at %s distinct=%d volatile=%d native=%d variant=%u nonfallthrough=%d\n",
+        stage, distinct_register ? 1 : 0, volatile_read ? 1 : 0,
+        native_address ? 1 : 0, address_variant,
+        branch_nonfallthrough ? 1 : 0);
+    if (out != NULL) fclose(out);
+    minic_machine_function_destroy(&function);
+    return ok;
+}
+
 int main(void) {
-    if (!run_a64() || !run_loong()) return EXIT_FAILURE;
+    if (!run_a64() || !run_loong() ||
+        !run_loong_adjacent_frame_peephole(false, false, false, 0U, false) ||
+        !run_loong_adjacent_frame_peephole(true, false, false, 0U, false) ||
+        !run_loong_adjacent_frame_peephole(false, true, false, 0U, false) ||
+        !run_loong_adjacent_frame_peephole(false, false, true, 0U, false) ||
+        !run_loong_adjacent_frame_peephole(true, false, true, 0U, false) ||
+        !run_loong_adjacent_frame_peephole(false, true, true, 0U, false) ||
+        !run_loong_adjacent_frame_peephole(false, false, true, 1U, false) ||
+        !run_loong_adjacent_frame_peephole(false, false, true, 2U, false) ||
+        !run_loong_adjacent_frame_peephole(false, false, true, 0U, true))
+        return EXIT_FAILURE;
     puts("AArch64+LoongArch64 physical MIR -> verify -> GNU: PASS");
     return EXIT_SUCCESS;
 }

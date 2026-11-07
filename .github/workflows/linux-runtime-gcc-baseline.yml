@@ -51,13 +51,14 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: 'GNU reference only, or exact-head RV64 all-MiniC Linux 2064 P0/P1'
+        description: 'GNU reference, RV64 full, or RV32 single-owner cached manual replay'
         required: true
         type: choice
         default: gcc-baseline
         options:
           - gcc-baseline
           - rv64-full
+          - rv32-owner-replay
 
 permissions:
   contents: read
@@ -75,6 +76,17 @@ env:
 # SHA-certified Stage2 Linux 2064 opt-in after Stage2 500/500 identity pass.
 
 jobs:
+  # Exact one-shot push subject or explicit manual dispatch: immutable
+  # ace5bd140 producer objects (1740 untouched) + exact current-HEAD
+  # block/blk-mq.o GNU-E/MiniC-S/GNU-AS + GNU LD and P1. Both paths skip the
+  # original seven producer shards and resolve this reusable at the same SHA.
+  rv32-one-owner-replay:
+    if: github.ref == 'refs/heads/refactor/minic-target-language-boundary' && ((github.event_name == 'workflow_dispatch' && inputs.mode == 'rv32-owner-replay') || (github.event_name == 'push' && contains(github.event.head_commit.message, '[rv32-one-owner-replay]')))
+    uses: ./.github/workflows/linux-rv32i-single-owner-replay.yml
+    permissions:
+      contents: read
+      actions: read
+
   # A marker AND the existing [linux-rv32i-kbuild] commit tag are required.
   # This preserves the proven seven-shard GNU/ELF32 pipeline without changing
   # PR titles, opening generic RV64 campaigns, or replaying stale markers.
@@ -334,7 +346,7 @@ jobs:
           retention-days: 7
 
   gcc-runtime:
-    if: (github.event_name == 'workflow_dispatch' && inputs.mode != 'rv64-full') || contains(github.event.head_commit.message, '[linux-runtime-gcc]')
+    if: (github.event_name == 'workflow_dispatch' && inputs.mode == 'gcc-baseline') || contains(github.event.head_commit.message, '[linux-runtime-gcc]')
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:

@@ -1,0 +1,241 @@
+name: LoongArch cached ACE5 2720 + current two + live one vDSO P0/P1 diagnostic
+
+# Separate ONE-runner diagnostic. Neither this marker nor this workflow is
+# included in the strict three-ISA seven-runner workflow's push/PR paths.
+# PR synchronize is a fallback when GitHub App ref updates suppress push.
+on:
+  workflow_dispatch:
+    inputs:
+      explicit_mixed_epoch_diagnostic:
+        description: 'I understand this is 2720 ACE5 plus 3 current C owners, NOT a strict 2723-current-HEAD pass'
+        type: boolean
+        default: false
+  push:
+    branches: [refactor/minic-target-language-boundary]
+    paths: [tools/ci/linux-loong-three-owner-replay-trigger.txt]
+  pull_request:
+    paths:
+      - '.github/workflows/minic-loong-three-owner-cached-replay-v1.yml'
+      - 'tools/ci/linux-loong-three-owner-replay-trigger.txt'
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: minic-loong-three-owner-cached-${{ github.event.pull_request.head.sha || github.sha }}
+  cancel-in-progress: true
+
+jobs:
+  exact-marker:
+    runs-on: ubuntu-24.04
+    outputs:
+      active: ${{ steps.check.outputs.active }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 2
+          persist-credentials: false
+      - id: check
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          if [[ '${{ github.event_name }}' == pull_request ]]; then
+            test '${{ github.event.pull_request.head.ref }}' = refactor/minic-target-language-boundary
+          else
+            test "$GITHUB_REF" = refs/heads/refactor/minic-target-language-boundary
+          fi
+          test "$(git rev-parse HEAD)" = '${{ github.event.pull_request.head.sha || github.sha }}'
+          active=false
+          marker=tools/ci/linux-loong-three-owner-replay-trigger.txt
+          if [[ '${{ github.event_name }}' == workflow_dispatch &&
+                '${{ inputs.explicit_mixed_epoch_diagnostic }}' == true ]]; then
+            active=true
+          elif [[ '${{ github.event_name }}' == push ||
+                  '${{ github.event_name }}' == pull_request ]] &&
+               git rev-parse --verify HEAD^ >/dev/null 2>&1 &&
+               ! git diff --quiet HEAD^ HEAD -- "$marker" &&
+               grep -Fxq 'mode=loong-ace5-2720-current-2-live-1' "$marker" &&
+               grep -Fxq 'old_run=42378020139' "$marker" &&
+               grep -Fxq 'frozen_source_run=42366441631' "$marker" &&
+               grep -Eq '^nonce=20261107-[a-z0-9-]{4,40}$' "$marker" &&
+               test "$(wc -l < "$marker")" -eq 4; then
+            active=true
+          fi
+          echo "active=$active" >> "$GITHUB_OUTPUT"
+          echo "LOONG_THREE_OWNER_EXACT_GATE=$active head=$(git rev-parse HEAD)"
+
+  repair-and-gnu-qemu:
+    needs: [exact-marker]
+    if: needs.exact-marker.outputs.active == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 130
+    env:
+      GNU_WORK: ${{ github.workspace }}/build/minic-linux-gnu-loongarch64
+      RUN_ROOT: ${{ github.workspace }}/build/loong-three-owner-replay
+      LOONG_FIRMWARE_URL: https://raw.githubusercontent.com/loongson/Firmware/9e2b59f4f0d0c40258fade9769cd93c8034fd436/LoongArchVirtMachine/QEMU_EFI.fd
+      LOONG_FIRMWARE_SHA256: b375639ebcf7a873d2cab67f0c9c1c6c208fc3f1bcba4083172fa20c4fb7e1ab
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Prove eight original ACE5 artifact ZIP IDs and digests before any long job
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 tools/ci/linux-loong-three-owner-replay-v1.py \
+            --verify-official-artifacts --repository '${{ github.repository }}'
+      - uses: actions/download-artifact@v4
+        with:
+          name: minic-linux-seven-compiler
+          repository: ${{ github.repository }}
+          run-id: '42378020139'
+          github-token: ${{ github.token }}
+          path: build/loong-old-minic/bin
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: minic-linux-seven-objects-loongarch64-*
+          repository: ${{ github.repository }}
+          run-id: '42378020139'
+          github-token: ${{ github.token }}
+          merge-multiple: false
+          path: build/loong-old-shards
+      - name: Install only original GNU Loong tools, QEMU and Kbuild prerequisites
+        timeout-minutes: 16
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get -o Acquire::Retries=3 update -qq
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            gcc-13-loongarch64-linux-gnu binutils-loongarch64-linux-gnu \
+            libc6-dev-loong64-cross qemu-system-misc build-essential \
+            bc bison flex libelf-dev libssl-dev cpio gzip curl xz-utils make python3
+          chmod +x build/loong-old-minic/bin/minic build/loong-old-minic/bin/minic-cc
+          python3 tools/ci/linux-three-isa-seven-runtime-v1.py preflight \
+            --target loongarch64 --minic "$GITHUB_WORKSPACE/build/loong-old-minic/bin/minic" \
+            --incoming "$GITHUB_WORKSPACE/build/loong-old-shards"
+      - name: Build CURRENT HEAD compiler pair, never recompile 2723 Linux C owners
+        timeout-minutes: 15
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/loong-current-minic \
+            build/loong-current-minic/bin/minic build/loong-current-minic/bin/minic-cc
+          sha256sum build/loong-current-minic/bin/minic build/loong-current-minic/bin/minic-cc
+      - name: Compute unchanged GNU golden cache identity
+        id: cache-key
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          signature=$(
+            {
+              printf '%s\n' \
+                'cache_contract=three-isa-gnu-golden-precandidate-v1' \
+                'linux=6.6.143' \
+                'linux_tar_sha256=dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932' \
+                'config_profile=broad' \
+                'gnu_qemu_p0_p1_must_rerun=true' \
+                'target=loongarch64' \
+                "gnu_work=$GNU_WORK" \
+                "workspace=$GITHUB_WORKSPACE"
+              for tool in loongarch64-linux-gnu-gcc-13 loongarch64-linux-gnu-ld loongarch64-linux-gnu-as gcc ld as make bison flex bc; do
+                exe=$(command -v "$tool")
+                printf '%s:%s:%s\n' "$tool" "$exe" "$(sha256sum "$exe" | cut -d' ' -f1)"
+              done
+              sha256sum \
+                tools/ci/linux-three-isa-golden-v1.sh \
+                tools/ci/linux-three-isa-golden-v1.py \
+                tools/ci/linux-three-isa-freeze-i-v1.py \
+                tools/ci/linux-runtime-gcc-full-c-objects-v1.py \
+                tools/ci/linux-three-isa-common.config
+            } | sha256sum | cut -c1-32
+          )
+          echo "key=linux-three-isa-gnu-golden-6.6.143-loongarch64-$signature" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache/restore@v4
+        id: gnu-cache
+        continue-on-error: true
+        with:
+          path: ${{ env.GNU_WORK }}
+          key: ${{ steps.cache-key.outputs.key }}
+          restore-keys: |
+            linux-three-isa-gnu-golden-6.6.143-loongarch64-
+      - name: Authenticate existing pristine GNU cache before reuse
+        id: gnu-verified
+        if: steps.gnu-cache.outcome == 'success' && steps.gnu-cache.outputs.cache-matched-key != ''
+        continue-on-error: true
+        run: |
+          python3 tools/ci/linux-three-isa-gnu-cache-verify-v1.py \
+            --target loongarch64 --gnu-work "$GNU_WORK" --gcc loongarch64-linux-gnu-gcc-13
+          echo 'valid=true' >> "$GITHUB_OUTPUT"
+      - name: Obtain complete pristine GNU golden only on authenticated cache miss
+        if: steps.gnu-verified.outputs.valid != 'true'
+        timeout-minutes: 65
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          if [[ -e "$GNU_WORK" || -L "$GNU_WORK" ]]; then
+            mv "$GNU_WORK" "$RUNNER_TEMP/rejected-gnu-loong-$GITHUB_RUN_ATTEMPT"
+          fi
+          MINIC_LINUX_CONFIG_PROFILE=broad bash tools/ci/linux-three-isa-golden-v1.sh \
+            loongarch64 "$GNU_WORK"
+      - name: Independently validate pristine GNU source and actual P0/P1
+        timeout-minutes: 16
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 tools/ci/linux-three-isa-gnu-cache-verify-v1.py \
+            --target loongarch64 --gnu-work "$GNU_WORK" --gcc loongarch64-linux-gnu-gcc-13
+          mkdir -p "$RUN_ROOT"
+          curl --proto '=https' --tlsv1.2 -fL --retry 3 \
+            "$LOONG_FIRMWARE_URL" -o "$RUN_ROOT/QEMU_EFI.fd"
+          printf '%s  %s\n' "$LOONG_FIRMWARE_SHA256" "$RUN_ROOT/QEMU_EFI.fd" | sha256sum -c -
+          RISCV_CC=loongarch64-linux-gnu-gcc-13 BUILD_DIR="$RUN_ROOT/initramfs" \
+            OUTPUT_INITRAMFS="$RUN_ROOT/runtime-initramfs.cpio.gz" \
+            bash tests/external/linux/build_runtime_initramfs.sh
+          python3 tools/ci/linux-three-isa-gnu-qemu-v1.py \
+            --target loongarch64 --gnu-work "$GNU_WORK" \
+            --initramfs "$RUN_ROOT/runtime-initramfs.cpio.gz" \
+            --initramfs-root "$RUN_ROOT/initramfs/root" \
+            --output "$RUN_ROOT/gnu-boot" --timeout 240 \
+            --firmware "$RUN_ROOT/QEMU_EFI.fd" --firmware-sha256 "$LOONG_FIRMWARE_SHA256"
+      - uses: actions/cache/save@v4
+        if: steps.gnu-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        with:
+          path: ${{ env.GNU_WORK }}
+          key: ${{ steps.cache-key.outputs.key }}
+      - name: Two CURRENT frozen vDSO C owners, one bounded live C owner, GNU LD then real QEMU P0/P1
+        timeout-minutes: 45
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -Eeuo pipefail
+          python3 tools/ci/linux-loong-three-owner-replay-v1.py \
+            --repository '${{ github.repository }}' \
+            --old-minic "$GITHUB_WORKSPACE/build/loong-old-minic/bin/minic" \
+            --minic "$GITHUB_WORKSPACE/build/loong-current-minic/bin/minic" \
+            --incoming "$GITHUB_WORKSPACE/build/loong-old-shards" \
+            --gnu-work "$GNU_WORK" --gnu-receipt "$RUN_ROOT/gnu-boot/gnu-qemu-receipt.json" \
+            --gnu-boot-logs "$RUN_ROOT/gnu-boot" \
+            --firmware "$RUN_ROOT/QEMU_EFI.fd" \
+            --initramfs "$RUN_ROOT/runtime-initramfs.cpio.gz" \
+            --output "$RUN_ROOT/mixed-candidate"
+      - name: Retain mixed-epoch postlink SHA, live source and QEMU evidence (even on failure)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: loong-ace5-2720-current-two-live-one-vdso-replay
+          path: |
+            ${{ env.RUN_ROOT }}/mixed-candidate/**/*.json
+            ${{ env.RUN_ROOT }}/mixed-candidate/**/*.log
+            ${{ env.RUN_ROOT }}/mixed-candidate/**/*.txt
+            ${{ env.RUN_ROOT }}/mixed-candidate/**/*.sha256
+            ${{ env.RUN_ROOT }}/mixed-candidate/evidence/
+            ${{ env.RUN_ROOT }}/mixed-candidate/current-frozen-two/staged/arch/loongarch/vdso/
+            ${{ env.RUN_ROOT }}/mixed-candidate/postlink-live-gnu-e-minic-c/arch/loongarch/kernel/
+            ${{ env.RUN_ROOT }}/gnu-boot/gnu-qemu-receipt.json
+            ${{ env.RUN_ROOT }}/gnu-boot/*.log
+          if-no-files-found: ignore
+          retention-days: 30
