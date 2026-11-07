@@ -1890,6 +1890,9 @@ bool aarch64_machine_asm_identify(const char *text, size_t length,
         return true; \
     } \
 } while (0)
+    A64_MACHINE_FORM(length == sizeof(".arch_extension sha3\neor3 %0.16b, %1.16b, %2.16b, %3.16b") - 1U &&
+                     memcmp(text, ".arch_extension sha3\neor3 %0.16b, %1.16b, %2.16b, %3.16b", length) == 0,
+                     SHA3_EOR3, 0U);
     /* Preserve the prior machine dispatch priority where pattern families
      * might overlap; do not let a broader opcode family shadow an exact
      * Linux alternative or memory model. */

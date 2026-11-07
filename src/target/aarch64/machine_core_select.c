@@ -61,6 +61,8 @@ static bool a64_variadic(A64CoreSelection *, const MinicCoreInstruction *,
 static bool a64_wide_shift(A64CoreSelection *, const MinicCoreInstruction *,
     MinicCoreInstructionId);
 static bool a64_wide_memory(A64CoreSelection *, const MinicCoreInstruction *);
+static bool a64_load_core(A64CoreSelection *, MinicCoreValueId,
+    unsigned int, unsigned int);
 
 static bool a64_neon_builtin_memory_shape(const MinicCoreFunction *fn,
     MinicCoreTypeId pointer_id, MinicCoreTypeId vector_id,
@@ -339,6 +341,90 @@ static bool a64_vector_core_slot(A64CoreSelection *sel,
         a64_vector_core_bytes(fn, fn->values[value].core_type_id, bytes) &&
         (*bytes == 16U ? a64_wide_core_slot(sel, value, slot) :
          minic_lp64_frame_plan_value_slot(sel->ctx->frame_plan, value, slot));
+}
+
+static bool a64_sha3_vector_core_type(const MinicCoreFunction *fn,
+    const MinicCoreType *vector) {
+    const MinicCoreType *lane;
+    if (vector == NULL || vector->kind != MINIC_CORE_TYPE_VECTOR ||
+        vector->value.vector.representation != MINIC_CORE_VECTOR_REGISTER_VALUE ||
+        !vector->has_layout || vector->size != 16U ||
+        vector->value.vector.element_count != 2U)
+        return false;
+    lane = minic_core_type_get(fn->type_context,
+        minic_core_type_unqualified(fn->type_context,
+            vector->value.vector.element));
+    return lane != NULL && lane->has_layout &&
+        lane->kind == MINIC_CORE_TYPE_INTEGER && !lane->value.integer.is_signed &&
+        !lane->value.integer.is_bool && lane->size == 8U &&
+        lane->value.integer.bit_width == 64U;
+}
+
+/* Four independent Q registers carry an exact GNU `=w,w,w,w` NEON
+ * EOR3 contract through MachineIR. Core retains typed vector values and
+ * the output lvalue address; the GNU assembler owns SHA3 encoding. */
+static bool a64_sha3_eor3_source(A64CoreSelection *sel,
+    const MinicCoreInstruction *ins, const MinicCoreInlineAsm *source) {
+    const MinicCoreFunction *fn = sel->ctx->fn;
+    const MinicCoreStructuredInlineAsmOperand *ops =
+        ins->value.structured_inline_asm.operands;
+    MinicMachineOperand bindings[4];
+    const MinicCoreType *out;
+    size_t i, bytes;
+    if (source->target_machine_form_id != AARCH64_MACHINE_ASM_SHA3_EOR3 ||
+        source->target_machine_form_variant != 0U ||
+        source->operand_plan_owner != MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED ||
+        source->register_clobber_count != 0U ||
+        source->resolved_immediate_count != 0U ||
+        source->symbol_reference_count != 0U ||
+        source->deferred_immediate_symbol != NULL ||
+        source->has_memory_clobber || !source->is_volatile || source->is_goto ||
+        ins->result != MINIC_CORE_VALUE_INVALID ||
+        !minic_core_function_type_is_kind(fn, ins->core_type_id,
+            MINIC_CORE_TYPE_VOID) ||
+        ins->value.structured_inline_asm.operand_count != 4U ||
+        sel->ctx->machine_frame->has_dynamic_stack ||
+        ops[0].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT ||
+        ops[0].value >= fn->value_count)
+        return false;
+    out = aarch64_asm_core_type(fn, ops[0].value, true);
+    if (out == NULL || out->kind != MINIC_CORE_TYPE_VECTOR ||
+        out->value.vector.representation != MINIC_CORE_VECTOR_REGISTER_VALUE ||
+        out->size != 16U || !a64_sha3_vector_core_type(fn, out))
+        return false;
+    for (i = 0U; i < 4U; ++i) {
+        const MinicCoreStructuredInlineAsmOperand *op = &ops[i];
+        const MinicCoreType *type;
+        if (op->operand_index != i || op->value >= fn->value_count ||
+            op->has_fixed_register_binding || op->early_clobber ||
+            op->physical_early_clobber || op->physical_read_write ||
+            op->has_tied_output ||
+            op->kind != (i == 0U
+                ? MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT
+                : MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT))
+            return false;
+        type = aarch64_asm_core_type(fn, op->value, i == 0U);
+        if (type == NULL || type->kind != MINIC_CORE_TYPE_VECTOR ||
+            type->value.vector.representation != MINIC_CORE_VECTOR_REGISTER_VALUE ||
+            type->size != 16U ||
+            (i != 0U && !a64_sha3_vector_core_type(fn, type)) ||
+            (i != 0U && !a64_vector_core_bytes(fn,
+                fn->values[op->value].core_type_id, &bytes)))
+            return false;
+        bindings[i] = a64_vector(16U + (unsigned int)i,
+            i == 0U ? MINIC_MACHINE_REGISTER_WRITE : MINIC_MACHINE_REGISTER_READ);
+        bindings[i].asm_constraint = i == 0U ? "=w" : "w";
+    }
+    if (!a64_vector_value_transfer(sel, ops[1].value, &sel->view, 17U, false) ||
+        !a64_vector_value_transfer(sel, ops[2].value, &sel->view, 18U, false) ||
+        !a64_vector_value_transfer(sel, ops[3].value, &sel->view, 19U, false) ||
+        !minic_machine_builder_emit_core_source_asm(&sel->builder,
+            source, 0U, bindings, 4U, NULL, 0U, false, false) ||
+        !a64_load_core(sel, ops[0].value, 14U, 64U) ||
+        !a64_memory_register(sel, MINIC_A64_MACHINE_STR_FP_Q,
+            true, 16U, 128U, 14U, 0U, true, false))
+        return false;
+    return true;
 }
 
 static bool a64_wide_float(const MinicCoreFunction *fn,
@@ -4495,6 +4581,8 @@ static bool a64_core_instruction(A64CoreSelection *sel,
             fn->inline_asm_count) return false;
         source = &fn->inline_asms[
             ins->value.structured_inline_asm.inline_asm_id];
+        if (source->target_machine_form_id == AARCH64_MACHINE_ASM_SHA3_EOR3)
+            return a64_sha3_eor3_source(sel, ins, source);
         if (source->target_machine_form_id ==
                 AARCH64_MACHINE_ASM_PSTATE_ALTERNATIVE)
             return a64_linux_pstate_alternative_zero(sel, ins, source);

@@ -1235,6 +1235,60 @@ static bool a64_machine_extra_source_form(const MinicMachineInstruction *ins) {
     return true;
 }
 
+/* AArch64 SHA3's four GNU `w` operands are vector registers, not GPRs.
+ * Keep the complete original `.arch_extension` and `eor3` text; the common
+ * GNU template expander replaces only %0..%3, leaving `.16b` intact. */
+static bool a64_sha3_eor3_policy_form(const MinicMachineFunction *fn,
+    const MinicMachineInstruction *ins, void *context) {
+    uint32_t form = 0U, variant = 0U;
+    (void)context;
+    return fn != NULL && fn->target != NULL &&
+        fn->target->architecture == MINIC_TARGET_ARCH_AARCH64 &&
+        ins != NULL && ins->source_asm_machine_form_id == AARCH64_MACHINE_ASM_SHA3_EOR3 &&
+        ins->source_asm_machine_form_variant == 0U &&
+        ins->source_asm_template != NULL &&
+        aarch64_machine_asm_identify(ins->source_asm_template,
+            ins->source_asm_length, true, &form, &variant) &&
+        form == AARCH64_MACHINE_ASM_SHA3_EOR3 && variant == 0U &&
+        ins->effects == (MINIC_MACHINE_EFFECT_SOURCE_ASM |
+                         MINIC_MACHINE_EFFECT_VOLATILE) &&
+        ins->operand_count == 4U && ins->operands != NULL &&
+        ins->implicit_count == 0U && !ins->source_asm_terminates_block &&
+        !ins->source_asm_permits_fallthrough;
+}
+
+static bool a64_sha3_eor3_policy_binding(const MinicMachineFunction *fn,
+    const MinicMachineInstruction *ins, size_t index, void *context) {
+    const MinicMachineOperand *op;
+    if (!a64_sha3_eor3_policy_form(fn, ins, context) || index >= 4U)
+        return false;
+    op = &ins->operands[index];
+    return op->kind == MINIC_MACHINE_OPERAND_REGISTER &&
+        op->asm_name == NULL && op->asm_constraint != NULL &&
+        strcmp(op->asm_constraint, index == 0U ? "=w" : "w") == 0 &&
+        op->value.physical.reg.bank == MINIC_MACHINE_REGISTER_VECTOR &&
+        op->value.physical.reg.number == 16U + index &&
+        op->value.physical.reg.width_bits == 128U &&
+        op->value.physical.access == (index == 0U ?
+            MINIC_MACHINE_REGISTER_WRITE : MINIC_MACHINE_REGISTER_READ);
+}
+
+static bool a64_sha3_eor3_policy_operand(FILE *output,
+    const MinicMachineFunction *fn, const MinicMachineInstruction *ins,
+    const MinicMachineGNUAsmLabels *labels, size_t index,
+    unsigned char modifier, void *context) {
+    (void)labels;
+    return modifier == 0U && a64_sha3_eor3_policy_binding(fn, ins, index, context) &&
+        (output == NULL || fprintf(output, "v%u", 16U + (unsigned int)index) >= 0);
+}
+
+static const MinicMachineSourceAsmTemplatePolicy a64_sha3_eor3_policy = {
+    a64_sha3_eor3_policy_form,
+    a64_sha3_eor3_policy_binding,
+    a64_sha3_eor3_policy_operand,
+    NULL
+};
+
 bool minic_aarch64_machine_source_asm_validate(
     const MinicTargetInfo *target, const MinicMachineInstruction *instruction,
     void *context) {
@@ -1248,6 +1302,8 @@ bool minic_aarch64_machine_source_asm_validate(
         instruction->kind == MINIC_MACHINE_INSTRUCTION_SOURCE_ASM &&
         (instruction->effects & MINIC_MACHINE_EFFECT_SOURCE_ASM) != 0U &&
         (a64_machine_opaque_hint(instruction) ||
+          minic_machine_source_asm_template_preflight(&function,
+              instruction, &a64_sha3_eor3_policy) ||
           minic_machine_source_asm_template_preflight(&function,
               instruction, &a64_brk_policy) ||
           minic_machine_source_asm_template_preflight(&function,
@@ -1288,6 +1344,10 @@ bool minic_aarch64_machine_source_asm_emit(
         !minic_aarch64_machine_source_asm_validate(
             function->target, instruction, context))
         return false;
+    if (instruction->source_asm_machine_form_id == AARCH64_MACHINE_ASM_SHA3_EOR3)
+        return minic_machine_source_asm_template_emit(output, function,
+            instruction, labels, &a64_sha3_eor3_policy) &&
+            fputc('\n', output) != EOF;
     if (a64_machine_extra_source_form(instruction)) {
         if (instruction->source_asm_machine_form_id ==
                 AARCH64_MACHINE_ASM_IO_DEPENDENCY)

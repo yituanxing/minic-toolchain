@@ -21,6 +21,8 @@ typedef struct MinicTargetAsmSourcePolicy {
     bool (*register_clobber)(const char *, size_t);
     bool (*source_clobber)(const char *, size_t);
     bool (*memory_input_constraint)(const char *, size_t);
+    /* Target-owned GNU SIMD register grammar, without admitting an opcode. */
+    bool (*vector_register_input_constraint)(const char *, size_t, MinicType);
     bool (*immediate_constraint)(const char *, size_t, int64_t);
     bool immediate_may_defer;
     const char *immediate_diagnostic;

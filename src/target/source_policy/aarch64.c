@@ -35,6 +35,15 @@ static bool aarch_memory_input(const char *constraint, size_t length) {
     return length == 1U && constraint[0] == 'Q';
 }
 
+static bool aarch_vector_register_input(const char *constraint, size_t length,
+                                        MinicType type) {
+    /* GCC AArch64 `w` is the SIMD/FP register class. Restrict source
+     * admission to currently transported 128-bit NEON values; this alone
+     * does not authorize an arbitrary inline instruction. */
+    return length == 1U && constraint[0] == 'w' &&
+           minic_type_is_fixed_vector128_storage(type);
+}
+
 static bool aarch_immediate(const char *constraint, size_t length, int64_t value) {
     /* GCC AArch64 'I': unsigned imm12, optionally left shifted by 12. */
     return length == 1U && constraint[0] == 'I' &&
@@ -47,6 +56,7 @@ const MinicTargetAsmSourcePolicy minic_aarch64_asm_source_policy = {
     .local_fixed_register = minic_aarch64_machine_local_fixed_register,
     .register_clobber = aarch_register_clobber,
     .memory_input_constraint = aarch_memory_input,
+    .vector_register_input_constraint = aarch_vector_register_input,
     .immediate_constraint = aarch_immediate,
     .immediate_may_defer = true,
     .immediate_diagnostic =

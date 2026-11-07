@@ -12,6 +12,9 @@ bool minic_c0_inline_asm_input_value_supported(
     if (minic_type_is_integer(expression->type) ||
         minic_type_is_pointer(expression->type))
         return true;
+    if (minic_target_info_inline_asm_vector_register_input_constraint_supported(
+            target, constraint, length, expression->type))
+        return true;
     /* GNU memory constraints denote addressable C storage, not an aggregate
      * coerced into a GPR. AArch64 Q (base + zero offset) admits Linux's
      * smp_load_acquire(&union), while x86 Q denotes a register class and

@@ -1447,7 +1447,11 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
                     ((binding->kind == MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT ||
                       binding->kind == MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE) &&
                      !ct_is_integer(value_type) &&
-                     !ct_is_pointer(value_type))) {
+                     !ct_is_pointer(value_type) &&
+                     !(inline_asm->operand_plan_owner ==
+                           MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED &&
+                       inline_asm->target_machine_form_id != 0U &&
+                       ct_is_vector_register_value(value_type)))) {
                     return false;
                 }
                 if (binding->kind == MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE) {
@@ -1456,7 +1460,12 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
                 break;
             case MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT:
                 if (!ct_is_integer(function->values[binding->value].core_type_id) &&
-                    !ct_is_pointer(function->values[binding->value].core_type_id)) {
+                    !ct_is_pointer(function->values[binding->value].core_type_id) &&
+                    !(inline_asm->operand_plan_owner ==
+                          MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED &&
+                      inline_asm->target_machine_form_id != 0U &&
+                      ct_is_vector_register_value(
+                          function->values[binding->value].core_type_id))) {
                     return false;
                 }
                 break;

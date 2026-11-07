@@ -150,7 +150,7 @@ bool minic_aarch64_requires_qualified_input_asm(const MinicInlineAsm *src) {
         "strb", "strh", "str",
         /* Original Linux CMPXCHG begins with PRFM and named operands;
          * rejected constraints/modes must not escape into generic Core. */
-        "prfm", "1:", ".arch_extension lse", "rbit"
+        "prfm", "1:", ".arch_extension lse", ".arch_extension sha3", "rbit"
     };
     char prefix[64];
     const char *const single[] = {prefix};
@@ -1215,6 +1215,37 @@ bool minic_aarch64_qualify_inline_asm(
     MinicType plain;
     size_t i;
     if (invocation == NULL) return false;
+    if (program != NULL && src != NULL && contract != NULL &&
+        !src->is_goto && !src->is_volatile &&
+        src->output_count == 1U && src->input_count == 3U &&
+        src->outputs != NULL && src->inputs != NULL &&
+        src->label_count == 0U && src->clobber_count == 0U &&
+        src->register_clobber_count == 0U && !src->has_memory_clobber &&
+        constraint(&src->outputs[0], "=w") &&
+        src->template_text != NULL && src->template_length != 0U) {
+        uint32_t form = 0U, variant = 0U;
+        const MinicExpression *output = minic_c0_program_expression(
+            program, src->outputs[0].expression);
+        if (aarch64_machine_asm_identify(src->template_text,
+                src->template_length, false, &form, &variant) &&
+            form == AARCH64_MACHINE_ASM_SHA3_EOR3 && variant == 0U &&
+            output != NULL && output->value_category == MINIC_VALUE_LVALUE &&
+            !minic_type_is_const(output->type) &&
+            minic_type_is_fixed_vector128_storage(output->type)) {
+            for (i = 0U; i < 3U; ++i) {
+                const MinicExpression *input = minic_c0_program_expression(
+                    program, src->inputs[i].expression);
+                if (!constraint(&src->inputs[i], "w") || input == NULL ||
+                    !minic_type_equal(input->type, output->type))
+                    return false;
+            }
+            contract->operand_count = 4U;
+            contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
+            for (i = 1U; i < 4U; ++i)
+                contract->kinds[i] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+            return true;
+        }
+    }
     /* AArch64 admits the GNU source roles only with exact types and
      * the original exclusive-load control-flow template. */
     if (program && src && contract && src->is_volatile && !src->is_goto &&

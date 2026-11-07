@@ -819,6 +819,16 @@ bool minic_target_info_inline_asm_memory_input_constraint_supported(
             policy->memory_input_constraint(constraint, constraint_length));
 }
 
+bool minic_target_info_inline_asm_vector_register_input_constraint_supported(
+    const MinicTargetInvocation *target, const char *constraint,
+    size_t constraint_length, MinicType operand_type) {
+    const MinicTargetAsmSourcePolicy *policy = minic_target_source_policy(target);
+    return policy != NULL && constraint != NULL &&
+           policy->vector_register_input_constraint != NULL &&
+           policy->vector_register_input_constraint(
+               constraint, constraint_length, operand_type);
+}
+
 bool minic_target_info_inline_asm_immediate_constraint_supported(
     const MinicTargetInvocation *target, const char *constraint,
     size_t constraint_length, int64_t value) {
