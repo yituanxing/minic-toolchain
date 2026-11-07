@@ -25,6 +25,7 @@
 #include "target/common/lp64_aggregate.h"
 #include "target/common/lp64_scalar.h"
 #include "core/address_alignment.h"
+#include "core/value_uses.h"
 #include "core/symbol_identity.h"
 #include "core/address_alignment.h"
 #include <limits.h>
@@ -54,6 +55,12 @@ typedef struct LoongMemoryHelper {
     size_t entry, loop, exit;
     bool active;
 } LoongMemoryHelper;
+
+typedef struct LoongSSAWriteback {
+    size_t block_id;
+    size_t instruction_id;
+    MinicCoreValueId value;
+} LoongSSAWriteback;
 
 enum {
     LOONG_HELPER_LOAD4 = 0U, LOONG_HELPER_LOAD8,
@@ -101,7 +108,508 @@ typedef struct LoongSelector {
     LoongMemoryRoute *memory_routes;
     LoongMemoryHelper *memory_helpers;
     bool *reachable;
+    /* Only Core-proven single-use stack address producers consumed through
+     * the target's exact direct-frame LOAD/STORE path. */
+    bool *folded_direct_addresses;
+    size_t *ssa_use_counts;
+    LoongSSAWriteback *ssa_writebacks;
+    size_t ssa_writeback_count;
+    size_t ssa_writeback_capacity;
 } LoongSelector;
+
+/* Restore the old Loong backend's exact frame reload forwarding at the
+ * physical MachineIR boundary. This is deliberately not a CoreIR pass,
+ * register allocator, or a textual assembler peephole: one physical GPR
+ * remains equivalent to an exact stack slot until an actual clobber or an
+ * unknown memory write. All side-effecting reads and unknown instructions
+ * remain in the MachineFunction. */
+typedef struct LoongCachedFrameSlot {
+    unsigned int base;
+    int64_t offset;
+} LoongCachedFrameSlot;
+
+typedef struct LoongCachedRegister {
+    LoongCachedFrameSlot slots[16];
+    size_t count;
+} LoongCachedRegister;
+
+/* A writeback can be elided only if the originating Core instruction is a
+ * pure value producer. In particular va_start and va_arg *require* memory
+ * effects: their selected stack writes must not be mistaken for ordinary
+ * compiler-owned SSA spills. Keep this list explicit and fail closed when
+ * a new Core instruction is added. */
+static bool loong_core_is_pure_value(const MinicCoreInstruction *ins) {
+    if (ins == NULL) return false;
+    switch (ins->kind) {
+    case MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT:
+    case MINIC_CORE_INSTRUCTION_FLOATING_CONSTANT:
+    case MINIC_CORE_INSTRUCTION_INTEGER_ADD:
+    case MINIC_CORE_INSTRUCTION_INTEGER_SUBTRACT:
+    case MINIC_CORE_INSTRUCTION_INTEGER_MULTIPLY:
+    case MINIC_CORE_INSTRUCTION_INTEGER_DIVIDE:
+    case MINIC_CORE_INSTRUCTION_INTEGER_REMAINDER:
+    case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_AND:
+    case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_XOR:
+    case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_OR:
+    case MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_LEFT:
+    case MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_RIGHT:
+    case MINIC_CORE_INSTRUCTION_INTEGER_LESS:
+    case MINIC_CORE_INSTRUCTION_POINTER_LESS:
+    case MINIC_CORE_INSTRUCTION_SCALAR_EQUAL:
+    case MINIC_CORE_INSTRUCTION_INTEGER_CONVERSION:
+    case MINIC_CORE_INSTRUCTION_INTEGER_TO_DOUBLE:
+    case MINIC_CORE_INSTRUCTION_DOUBLE_TO_INTEGER:
+    case MINIC_CORE_INSTRUCTION_SCALAR_BITCAST:
+    case MINIC_CORE_INSTRUCTION_INTEGER_NEGATE:
+    case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_NOT:
+    case MINIC_CORE_INSTRUCTION_INTEGER_CLZ:
+    case MINIC_CORE_INSTRUCTION_INTEGER_CTZ:
+    case MINIC_CORE_INSTRUCTION_SCALAR_IS_ZERO:
+    case MINIC_CORE_INSTRUCTION_PARAMETER:
+    case MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS:
+    case MINIC_CORE_INSTRUCTION_GLOBAL_ADDRESS:
+    case MINIC_CORE_INSTRUCTION_FUNCTION_ADDRESS:
+    case MINIC_CORE_INSTRUCTION_BLOCK_ADDRESS:
+    case MINIC_CORE_INSTRUCTION_FIELD_ADDRESS:
+    case MINIC_CORE_INSTRUCTION_POINTER_OFFSET:
+    case MINIC_CORE_INSTRUCTION_CALL_FRAME_ADDRESS:
+    case MINIC_CORE_INSTRUCTION_DOUBLE_ADD:
+    case MINIC_CORE_INSTRUCTION_DOUBLE_SUBTRACT:
+    case MINIC_CORE_INSTRUCTION_DOUBLE_MULTIPLY:
+    case MINIC_CORE_INSTRUCTION_DOUBLE_DIVIDE:
+    case MINIC_CORE_INSTRUCTION_DOUBLE_EQUAL:
+    case MINIC_CORE_INSTRUCTION_DOUBLE_LESS:
+    case MINIC_CORE_INSTRUCTION_DOUBLE_LESS_EQUAL:
+    case MINIC_CORE_INSTRUCTION_DOUBLE_NEGATE:
+    case MINIC_CORE_INSTRUCTION_FLOAT_TO_DOUBLE:
+    case MINIC_CORE_INSTRUCTION_DOUBLE_TO_FLOAT:
+    case MINIC_CORE_INSTRUCTION_FLOAT_ADD:
+    case MINIC_CORE_INSTRUCTION_FLOAT_SUBTRACT:
+    case MINIC_CORE_INSTRUCTION_FLOAT_MULTIPLY:
+    case MINIC_CORE_INSTRUCTION_FLOAT_DIVIDE:
+    case MINIC_CORE_INSTRUCTION_VECTOR_REGISTER_XOR:
+    case MINIC_CORE_INSTRUCTION_VECTOR_REGISTER_ADD:
+        return true;
+    default:
+        return false;
+    }
+}
+
+static bool loong_frame_cache_slot(const MinicMachineInstruction *ins,
+    bool *store, unsigned int *reg, unsigned int *base, int64_t *offset,
+    size_t *width) {
+    const MinicMachineOperand *value, *address;
+    if (ins == NULL || ins->kind != MINIC_MACHINE_INSTRUCTION_SELECTED ||
+        ins->operand_count != 2U || ins->operands == NULL ||
+        (ins->effects & MINIC_MACHINE_EFFECT_VOLATILE) != 0U)
+        return false;
+    value = &ins->operands[0];
+    address = &ins->operands[1];
+    if (value->kind != MINIC_MACHINE_OPERAND_REGISTER ||
+        value->value.physical.reg.bank != MINIC_MACHINE_REGISTER_GENERAL ||
+        address->kind != MINIC_MACHINE_OPERAND_ADDRESS ||
+        !address->value.address.has_base ||
+        address->value.address.has_index ||
+        address->value.address.has_segment ||
+        address->value.address.has_symbol ||
+        address->value.address.base.bank != MINIC_MACHINE_REGISTER_GENERAL ||
+        (address->value.address.base.number != LOONG_SP &&
+         address->value.address.base.number != LOONG_S0) ||
+        address->value.address.displacement < 0)
+        return false;
+    switch (ins->opcode) {
+    case MINIC_LOONG_MACHINE_LD_D:
+    case MINIC_LOONG_MACHINE_LDPTR_D:
+        *store = false; *width = 8U; break;
+    case MINIC_LOONG_MACHINE_LD_W:
+    case MINIC_LOONG_MACHINE_LDPTR_W:
+        *store = false; *width = 4U; break;
+    case MINIC_LOONG_MACHINE_ST_D:
+    case MINIC_LOONG_MACHINE_STPTR_D:
+        *store = true; *width = 8U; break;
+    case MINIC_LOONG_MACHINE_ST_W:
+    case MINIC_LOONG_MACHINE_STPTR_W:
+        *store = true; *width = 4U; break;
+    case MINIC_LOONG_MACHINE_ST_H: *store = true; *width = 2U; break;
+    case MINIC_LOONG_MACHINE_ST_B: *store = true; *width = 1U; break;
+    default: return false;
+    }
+    if ((*store && value->value.physical.access !=
+                       MINIC_MACHINE_REGISTER_READ) ||
+        (!*store && value->value.physical.access !=
+                        MINIC_MACHINE_REGISTER_WRITE)) return false;
+    *reg = value->value.physical.reg.number;
+    *base = address->value.address.base.number;
+    *offset = address->value.address.displacement;
+    return true;
+}
+
+static void loong_frame_cache_forget(LoongCachedRegister cache[8],
+    unsigned int reg) {
+    if (reg >= LOONG_T0 && reg <= LOONG_T7)
+        cache[reg - LOONG_T0].count = 0U;
+    else if (reg == LOONG_SP || reg == LOONG_S0)
+        memset(cache, 0, 8U * sizeof(*cache));
+}
+
+static bool loong_frame_cache_contains(const LoongCachedRegister *reg,
+    unsigned int base, int64_t offset) {
+    size_t i;
+    for (i = 0U; i < reg->count; ++i)
+        if (reg->slots[i].base == base && reg->slots[i].offset == offset)
+            return true;
+    return false;
+}
+
+static void loong_frame_cache_add(LoongCachedRegister cache[8],
+    unsigned int reg, unsigned int base, int64_t offset) {
+    LoongCachedRegister *entry;
+    if (reg < LOONG_T0 || reg > LOONG_T7) return;
+    entry = &cache[reg - LOONG_T0];
+    if (entry->count < 16U &&
+        !loong_frame_cache_contains(entry, base, offset))
+        entry->slots[entry->count++] =
+            (LoongCachedFrameSlot){base, offset};
+}
+
+static void loong_frame_cache_invalidate_store(
+    LoongCachedRegister cache[8], unsigned int base,
+    int64_t offset, size_t width) {
+    size_t r;
+    for (r = 0U; r < 8U; ++r) {
+        size_t i = 0U;
+        while (i < cache[r].count) {
+            const LoongCachedFrameSlot slot = cache[r].slots[i];
+            if (slot.base == base &&
+                offset < slot.offset + 8 &&
+                slot.offset < offset + (int64_t)width) {
+                cache[r].slots[i] = cache[r].slots[--cache[r].count];
+                continue;
+            }
+            ++i;
+        }
+    }
+}
+
+static bool loong_machine_forward_exact_frame_reloads(
+    MinicMachineFunction *machine, const MinicCoreFunction *core) {
+    size_t block_id;
+    for (block_id = 0U; block_id < machine->block_count; ++block_id) {
+        MinicMachineBlock *block = &machine->blocks[block_id];
+        LoongCachedRegister cache[8];
+        size_t i = 0U;
+        memset(cache, 0, sizeof(cache));
+        while (i < block->instruction_count) {
+            const MinicMachineInstruction *ins = &block->instructions[i];
+            bool is_store = false;
+            unsigned int reg = 0U, base = 0U;
+            int64_t offset = 0;
+            size_t width = 0U, j;
+            const bool exact = loong_frame_cache_slot(ins, &is_store,
+                &reg, &base, &offset, &width);
+            /* Core LOAD has an independently verified semantic memory-read
+             * effect. Only compiler-owned SSA reloads may disappear. */
+            const bool pure_core_origin = ins->has_core_origin &&
+                ins->core_instruction_id < core->instruction_count &&
+                loong_core_is_pure_value(
+                    &core->instructions[ins->core_instruction_id]);
+            if (exact && !is_store && width == 8U &&
+                pure_core_origin &&
+                reg >= LOONG_T0 && reg <= LOONG_T7 &&
+                loong_frame_cache_contains(&cache[reg - LOONG_T0],
+                    base, offset)) {
+                if (!minic_machine_block_erase_instruction(machine,
+                        block_id, i)) return false;
+                continue;
+            }
+            if (ins->kind != MINIC_MACHINE_INSTRUCTION_SELECTED ||
+                (ins->effects & (MINIC_MACHINE_EFFECT_VOLATILE |
+                    MINIC_MACHINE_EFFECT_COMPILER_BARRIER |
+                    MINIC_MACHINE_EFFECT_CALL | MINIC_MACHINE_EFFECT_BRANCH |
+                    MINIC_MACHINE_EFFECT_RETURN |
+                    MINIC_MACHINE_EFFECT_SOURCE_ASM)) != 0U ||
+                ((ins->effects & MINIC_MACHINE_EFFECT_MEMORY_WRITE) != 0U &&
+                 (!exact || !is_store)))
+                memset(cache, 0, sizeof(cache));
+            else {
+                if (exact && is_store)
+                    loong_frame_cache_invalidate_store(cache,
+                        base, offset, width);
+                for (j = 0U; j < ins->operand_count; ++j) {
+                    const MinicMachineOperand *op = &ins->operands[j];
+                    if (op->kind == MINIC_MACHINE_OPERAND_REGISTER &&
+                        (op->value.physical.access &
+                            (MINIC_MACHINE_REGISTER_WRITE |
+                             MINIC_MACHINE_REGISTER_CLOBBER)) != 0U)
+                        loong_frame_cache_forget(cache,
+                            op->value.physical.reg.number);
+                }
+                for (j = 0U; j < ins->implicit_count; ++j)
+                    if ((ins->implicit[j].access &
+                            (MINIC_MACHINE_REGISTER_WRITE |
+                             MINIC_MACHINE_REGISTER_CLOBBER)) != 0U)
+                        loong_frame_cache_forget(cache,
+                            ins->implicit[j].reg.number);
+                if (exact && width == 8U)
+                    loong_frame_cache_add(cache, reg, base, offset);
+            }
+            ++i;
+        }
+    }
+    return true;
+}
+
+static int loong_ssa_writeback_compare(const void *lhs, const void *rhs) {
+    const LoongSSAWriteback *a = lhs, *b = rhs;
+    if (a->block_id != b->block_id)
+        return a->block_id < b->block_id ? -1 : 1;
+    if (a->instruction_id != b->instruction_id)
+        return a->instruction_id < b->instruction_id ? -1 : 1;
+    return 0;
+}
+
+/* Only these physical operations are guaranteed to have produced an already
+ * sign-extended 32-bit $t0. This is exactly the old target's word-width
+ * exception for eliding an adjacent SSA word writeback plus reload. */
+static bool loong_ssa_native_sext32(const MinicMachineInstruction *ins) {
+    if (ins == NULL || ins->kind != MINIC_MACHINE_INSTRUCTION_SELECTED ||
+        ins->operand_count == 0U || ins->operands == NULL ||
+        ins->operands[0].kind != MINIC_MACHINE_OPERAND_REGISTER ||
+        ins->operands[0].value.physical.reg.number != LOONG_T0 ||
+        ins->operands[0].value.physical.reg.bank !=
+            MINIC_MACHINE_REGISTER_GENERAL ||
+        (ins->operands[0].value.physical.access &
+            MINIC_MACHINE_REGISTER_WRITE) == 0U) return false;
+    switch (ins->opcode) {
+    case MINIC_LOONG_MACHINE_LD_W:
+    case MINIC_LOONG_MACHINE_LDPTR_W:
+    case MINIC_LOONG_MACHINE_LD_B:
+    case MINIC_LOONG_MACHINE_LD_BU:
+    case MINIC_LOONG_MACHINE_LD_H:
+    case MINIC_LOONG_MACHINE_LD_HU:
+    case MINIC_LOONG_MACHINE_LI_W:
+    case MINIC_LOONG_MACHINE_ADD_W:
+    case MINIC_LOONG_MACHINE_ADDI_W:
+    case MINIC_LOONG_MACHINE_SUB_W:
+    case MINIC_LOONG_MACHINE_MUL_W:
+    case MINIC_LOONG_MACHINE_DIV_W:
+    case MINIC_LOONG_MACHINE_DIV_WU:
+    case MINIC_LOONG_MACHINE_MOD_W:
+    case MINIC_LOONG_MACHINE_MOD_WU:
+    case MINIC_LOONG_MACHINE_SLLI_W:
+    case MINIC_LOONG_MACHINE_SRAI_W:
+    case MINIC_LOONG_MACHINE_SRLI_W:
+    case MINIC_LOONG_MACHINE_SLL_W:
+    case MINIC_LOONG_MACHINE_SRA_W:
+    case MINIC_LOONG_MACHINE_SRL_W:
+    case MINIC_LOONG_MACHINE_SLT:
+    case MINIC_LOONG_MACHINE_SLTU:
+    case MINIC_LOONG_MACHINE_SLTI:
+    case MINIC_LOONG_MACHINE_SLTUI:
+    /* ANDI uses a zero-extended unsigned 12-bit mask, so its 64-bit result
+     * is within [0,4095] and necessarily already sign extended from 32. */
+    case MINIC_LOONG_MACHINE_ANDI:
+    case MINIC_LOONG_MACHINE_BSTRPICK_W:
+    /* Count-leading/trailing instructions produce a value in [0,64]. */
+    case MINIC_LOONG_MACHINE_CLZ_D:
+    case MINIC_LOONG_MACHINE_CTZ_D:
+        return true;
+    default: return false;
+    }
+}
+
+
+/* ST.W followed by LD.W is not an identity unless the producer is already
+ * sign extended. Preserve the exact Loong architectural narrowing by
+ * rewriting the consumer to selected SLLI.W t0,t0,0, not by assuming C
+ * integer promotions or dropping the width change. */
+static bool loong_ssa_replace_reload_with_word_sext(
+    MinicMachineInstruction *ins, unsigned int source_reg) {
+    MinicMachineOperand *grown;
+    if (ins == NULL || ins->kind != MINIC_MACHINE_INSTRUCTION_SELECTED ||
+        (ins->opcode != MINIC_LOONG_MACHINE_LD_W &&
+         ins->opcode != MINIC_LOONG_MACHINE_LDPTR_W) ||
+        ins->operand_count != 2U || ins->implicit_count != 0U ||
+        ins->operands == NULL || ins->operands[1].kind !=
+            MINIC_MACHINE_OPERAND_ADDRESS ||
+        ins->operands[1].value.address.has_symbol ||
+        ins->operands[1].asm_constraint != NULL ||
+        ins->operands[1].asm_name != NULL) return false;
+    grown = realloc(ins->operands, 3U * sizeof(*grown));
+    if (grown == NULL) return false;
+    ins->operands = grown;
+    ins->opcode = MINIC_LOONG_MACHINE_SLLI_W;
+    ins->effects = 0U;
+    ins->operand_count = 3U;
+    memset(&grown[0], 0, 3U * sizeof(*grown));
+    grown[0].kind = grown[1].kind = MINIC_MACHINE_OPERAND_REGISTER;
+    grown[0].value.physical.reg =
+        (MinicMachineRegister){LOONG_T0, 64U,
+            MINIC_MACHINE_REGISTER_GENERAL};
+    grown[1].value.physical.reg =
+        (MinicMachineRegister){source_reg, 64U,
+            MINIC_MACHINE_REGISTER_GENERAL};
+    grown[0].value.physical.access = MINIC_MACHINE_REGISTER_WRITE;
+    grown[1].value.physical.access = MINIC_MACHINE_REGISTER_READ;
+    grown[2].kind = MINIC_MACHINE_OPERAND_INTEGER;
+    grown[2].value.integer = 0;
+    return true;
+}
+
+static bool loong_ssa_replace_reload_with_move(
+    MinicMachineInstruction *ins, unsigned int source_reg) {
+    if (ins == NULL || ins->kind != MINIC_MACHINE_INSTRUCTION_SELECTED ||
+        (ins->opcode != MINIC_LOONG_MACHINE_LD_D &&
+         ins->opcode != MINIC_LOONG_MACHINE_LDPTR_D) ||
+        ins->operand_count != 2U || ins->implicit_count != 0U ||
+        ins->operands == NULL || ins->operands[1].kind !=
+            MINIC_MACHINE_OPERAND_ADDRESS ||
+        ins->operands[1].value.address.has_symbol ||
+        ins->operands[1].asm_constraint != NULL ||
+        ins->operands[1].asm_name != NULL) return false;
+    ins->opcode = MINIC_LOONG_MACHINE_MOVE;
+    ins->effects = 0U;
+    memset(&ins->operands[1], 0, sizeof(ins->operands[1]));
+    ins->operands[1].kind = MINIC_MACHINE_OPERAND_REGISTER;
+    ins->operands[1].value.physical.reg =
+        (MinicMachineRegister){source_reg, 64U,
+            MINIC_MACHINE_REGISTER_GENERAL};
+    ins->operands[1].value.physical.access = MINIC_MACHINE_REGISTER_READ;
+    return true;
+}
+
+/* ABI parameter ingress is a pure Core value. For a one-use GPR parameter,
+ * the immediately following frame reload can read the still-live original
+ * incoming register directly. This is the old Loong `SSA_PARAMETER` case,
+ * now expressed solely as typed instructions with exact Core provenance. */
+static bool loong_machine_forward_parameters(LoongSelector *sel) {
+    MinicMachineFunction *machine = sel->builder.function;
+    const MinicCoreFunction *fn = sel->ctx->fn;
+    size_t block_id;
+    for (block_id = 0U; block_id < machine->block_count; ++block_id) {
+        MinicMachineBlock *block = &machine->blocks[block_id];
+        size_t i = block->instruction_count;
+        while (i > 1U) {
+            MinicMachineInstruction *st = &block->instructions[i - 2U];
+            MinicMachineInstruction *ld = &block->instructions[i - 1U];
+            const MinicCoreInstruction *origin;
+            bool store1, store2;
+            unsigned int reg1, reg2, base1, base2;
+            int64_t off1, off2;
+            size_t width1, width2;
+            if (!st->has_core_origin ||
+                st->core_instruction_id >= fn->instruction_count ||
+                !loong_frame_cache_slot(st, &store1, &reg1, &base1,
+                    &off1, &width1) ||
+                !loong_frame_cache_slot(ld, &store2, &reg2, &base2,
+                    &off2, &width2) ||
+                !store1 || store2 || reg1 < LOONG_A0 || reg1 > LOONG_A7 ||
+                reg2 != LOONG_T0 || base1 != base2 || off1 != off2 ||
+                width1 != width2) { --i; continue; }
+            origin = &fn->instructions[st->core_instruction_id];
+            if (origin->kind != MINIC_CORE_INSTRUCTION_PARAMETER ||
+                origin->result >= fn->value_count ||
+                sel->ssa_use_counts[origin->result] != 1U) {
+                --i;
+                continue;
+            }
+            if (!((width1 == 8U &&
+                   loong_ssa_replace_reload_with_move(ld, reg1)) ||
+                  (width1 == 4U &&
+                   loong_ssa_replace_reload_with_word_sext(ld, reg1))) ||
+                !minic_machine_block_erase_instruction(machine,
+                    block_id, i - 2U)) return false;
+            --i;
+        }
+    }
+    return true;
+}
+
+/* The original Loong emitter tagged compiler-owned SSA spill sites. Restore
+ * the same precise proof using selection-time side records, never source-C
+ * objects or text rewriting. One semantic Core use and two adjacent native
+ * frame instructions mean the temporary memory slot is unobservable. */
+static bool loong_machine_forward_single_use_spills(LoongSelector *sel) {
+    size_t k;
+    MinicMachineFunction *machine = sel->builder.function;
+    qsort(sel->ssa_writebacks, sel->ssa_writeback_count,
+        sizeof(*sel->ssa_writebacks), loong_ssa_writeback_compare);
+    for (k = sel->ssa_writeback_count; k != 0U; --k) {
+        const LoongSSAWriteback *mark = &sel->ssa_writebacks[k - 1U];
+        MinicMachineBlock *block;
+        const MinicMachineInstruction *st, *ld;
+        bool store1, store2;
+        unsigned int reg1, reg2, base1, base2;
+        int64_t off1, off2;
+        size_t width1, width2;
+        if (mark->value >= sel->ctx->fn->value_count ||
+            sel->ssa_use_counts[mark->value] != 1U ||
+            mark->block_id >= machine->block_count) continue;
+        block = &machine->blocks[mark->block_id];
+        if (mark->instruction_id + 1U >= block->instruction_count) continue;
+        st = &block->instructions[mark->instruction_id];
+        if (!st->has_core_origin ||
+            st->core_instruction_id >= sel->ctx->fn->instruction_count ||
+            !loong_core_is_pure_value(
+                &sel->ctx->fn->instructions[st->core_instruction_id]))
+            continue;
+        ld = &block->instructions[mark->instruction_id + 1U];
+        if (!loong_frame_cache_slot(st, &store1, &reg1, &base1,
+                &off1, &width1) ||
+            !loong_frame_cache_slot(ld, &store2, &reg2, &base2,
+                &off2, &width2) ||
+            !store1 || store2 || reg1 != LOONG_T0 ||
+            reg2 != LOONG_T0 || base1 != base2 || off1 != off2 ||
+            (width1 == 8U && width2 != 8U) ||
+            (width1 == 4U && width2 != 4U))
+            continue;
+        if (width1 == 4U &&
+            (mark->instruction_id == 0U ||
+             !loong_ssa_native_sext32(
+                &block->instructions[mark->instruction_id - 1U]))) {
+            if (!loong_ssa_replace_reload_with_word_sext(
+                    &block->instructions[mark->instruction_id + 1U],
+                    LOONG_T0) ||
+                !minic_machine_block_erase_instruction(machine,
+                    mark->block_id, mark->instruction_id)) return false;
+            continue;
+        }
+        if (!minic_machine_block_erase_instruction(machine,
+                mark->block_id, mark->instruction_id + 1U) ||
+            !minic_machine_block_erase_instruction(machine,
+                mark->block_id, mark->instruction_id)) return false;
+    }
+    return true;
+}
+
+static bool loong_machine_drop_redundant_word_sext(
+    MinicMachineFunction *machine) {
+    size_t block_id;
+    for (block_id = 0U; block_id < machine->block_count; ++block_id) {
+        MinicMachineBlock *block = &machine->blocks[block_id];
+        size_t i = block->instruction_count;
+        while (i > 1U) {
+            const MinicMachineInstruction *ins =
+                &block->instructions[i - 1U];
+            const bool zero_word_shift =
+                ins->kind == MINIC_MACHINE_INSTRUCTION_SELECTED &&
+                ins->opcode == MINIC_LOONG_MACHINE_SLLI_W &&
+                ins->operand_count == 3U && ins->operands != NULL &&
+                ins->operands[0].kind == MINIC_MACHINE_OPERAND_REGISTER &&
+                ins->operands[0].value.physical.reg.number == LOONG_T0 &&
+                ins->operands[1].kind == MINIC_MACHINE_OPERAND_REGISTER &&
+                ins->operands[1].value.physical.reg.number == LOONG_T0 &&
+                ins->operands[2].kind == MINIC_MACHINE_OPERAND_INTEGER &&
+                ins->operands[2].value.integer == 0;
+            if (zero_word_shift &&
+                loong_ssa_native_sext32(&block->instructions[i - 2U]) &&
+                !minic_machine_block_erase_instruction(
+                    machine, block_id, i - 1U)) return false;
+            --i;
+        }
+    }
+    return true;
+}
 
 static size_t loong_address_root_alignment(
     const MinicCoreFunction *fn, const MinicCoreInstruction *origin,
@@ -136,6 +644,82 @@ static size_t loong_known_address_alignment(
     const MinicCoreFunction *fn, MinicCoreValueId address) {
     return minic_core_address_known_alignment_bounded(
         fn, address, loong_address_root_alignment, NULL, 16U);
+}
+
+/* Historical Loong scalar frame folding, restored at the typed selector.
+ * Only an actual Core OBJECT_ADDRESS (or a constant field projection of it)
+ * can prove this exact native stack address. Arbitrary pointer values and
+ * calls are never treated as frame memory even if numerically identical. */
+static bool loong_static_frame_address(const LoongSelector *sel,
+    MinicCoreValueId value, unsigned int depth, size_t *offset) {
+    const MinicCoreFunction *fn = sel->ctx->fn;
+    const MinicCoreInstruction *origin;
+    size_t base, extra;
+    if (depth > 16U || value >= fn->value_count ||
+        fn->values[value].definition >= fn->instruction_count)
+        return false;
+    origin = &fn->instructions[fn->values[value].definition];
+    if (origin->result != value) return false;
+    if (origin->kind == MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS)
+        return minic_lp64_frame_plan_object(sel->ctx->frame_plan,
+            origin->value.object_id, offset);
+    if (origin->kind != MINIC_CORE_INSTRUCTION_FIELD_ADDRESS ||
+        !loong_static_frame_address(sel,
+            origin->value.field_address.base, depth + 1U, &base))
+        return false;
+    extra = origin->value.field_address.byte_offset;
+    if (base > MINIC_LARGE_FRAME_MAX ||
+        extra > MINIC_LARGE_FRAME_MAX - base) return false;
+    *offset = base + extra;
+    return true;
+}
+
+static bool loong_prepare_direct_frame_address_consumers(LoongSelector *sel) {
+    const MinicCoreFunction *fn = sel->ctx->fn;
+    size_t *uses = sel->ssa_use_counts;
+    size_t i;
+    if (fn->value_count == 0U) return true;
+    if (uses == NULL || !minic_core_function_value_use_counts(
+            fn, uses, fn->value_count)) return false;
+    for (i = 0U; i < fn->instruction_count; ++i) {
+        const MinicCoreInstruction *ins = &fn->instructions[i];
+        MinicCoreValueId address;
+        size_t width, offset;
+        bool sign, pointer;
+        if (ins->kind == MINIC_CORE_INSTRUCTION_LOAD &&
+            !ins->value.load.is_volatile) {
+            address = ins->value.load.address;
+            if (!minic_multi_direct_scalar_load_shape(fn, ins,
+                    &width, &sign, &pointer)) continue;
+        } else if (ins->kind == MINIC_CORE_INSTRUCTION_STORE &&
+                   !ins->value.store.is_volatile) {
+            address = ins->value.store.address;
+            if (!minic_multi_direct_scalar_store_shape(fn, ins,
+                    &width, &sign, &pointer)) continue;
+        } else continue;
+        if (pointer) width = 8U;
+        if (address < fn->value_count && uses[address] == 1U &&
+            (width == 1U || width == 2U || width == 4U || width == 8U) &&
+            loong_known_address_alignment(fn, address) >= width &&
+            loong_static_frame_address(sel, address, 0U, &offset))
+            sel->folded_direct_addresses[address] = true;
+    }
+    /* Resolve exact constant field-address ancestry only when its one
+     * consumer already vanished into a direct physical frame address. */
+    for (i = fn->instruction_count; i != 0U; --i) {
+        const MinicCoreInstruction *ins = &fn->instructions[i - 1U];
+        const MinicCoreValueId result = ins->result;
+        const MinicCoreValueId base =
+            ins->kind == MINIC_CORE_INSTRUCTION_FIELD_ADDRESS
+                ? ins->value.field_address.base : MINIC_CORE_VALUE_INVALID;
+        size_t offset;
+        if (result < fn->value_count &&
+            sel->folded_direct_addresses[result] &&
+            base < fn->value_count && uses[base] == 1U &&
+            loong_static_frame_address(sel, base, 0U, &offset))
+            sel->folded_direct_addresses[base] = true;
+    }
+    return true;
 }
 
 static bool loong_local_frame_address(LoongSelector *,
@@ -608,6 +1192,32 @@ static bool loong_copy_record_bytes(LoongSelector *sel,
     return true;
 }
 
+static bool loong_record_ssa_writeback(LoongSelector *sel,
+    MinicCoreValueId value) {
+    MinicMachineBlock *block;
+    LoongSSAWriteback *grown;
+    size_t capacity;
+    if (!sel->builder.has_position ||
+        sel->builder.current_block >= sel->builder.function->block_count)
+        return false;
+    block = &sel->builder.function->blocks[sel->builder.current_block];
+    if (block->instruction_count == 0U) return false;
+    if (sel->ssa_writeback_count == sel->ssa_writeback_capacity) {
+        capacity = sel->ssa_writeback_capacity != 0U
+            ? sel->ssa_writeback_capacity * 2U : 32U;
+        if (capacity <= sel->ssa_writeback_capacity ||
+            capacity > SIZE_MAX / sizeof(*grown)) return false;
+        grown = realloc(sel->ssa_writebacks, capacity * sizeof(*grown));
+        if (grown == NULL) return false;
+        sel->ssa_writebacks = grown;
+        sel->ssa_writeback_capacity = capacity;
+    }
+    sel->ssa_writebacks[sel->ssa_writeback_count++] =
+        (LoongSSAWriteback){sel->builder.current_block,
+                            block->instruction_count - 1U, value};
+    return true;
+}
+
 static bool loong_store_value(LoongSelector *sel,
     const MinicCoreInstruction *ins, unsigned int reg, bool force_64) {
     const MinicCoreFunction *fn = sel->ctx->fn;
@@ -622,7 +1232,8 @@ static bool loong_store_value(LoongSelector *sel,
     return loong_frame_memory(&sel->builder,
         (bytes == 8U || force_64) ? MINIC_LOONG_MACHINE_ST_D :
         MINIC_LOONG_MACHINE_ST_W, reg, offset,
-        sel->ctx->machine_frame->has_dynamic_stack, false);
+        sel->ctx->machine_frame->has_dynamic_stack, false) &&
+        (reg != LOONG_T0 || loong_record_ssa_writeback(sel, ins->result));
 }
 
 /* Exactly the sub-word normalization sequence used by the old Loong
@@ -1762,6 +2373,7 @@ static bool loong_select_memory(LoongSelector *sel,
         ? (atomic ? ins->value.atomic_load.address : ins->value.load.address)
         : (atomic ? ins->value.atomic_store.address : ins->value.store.address);
     size_t bytes;
+    size_t direct_offset = 0U;
     bool sign, pointer;
     bool floating_transport;
     uint32_t opcode;
@@ -1845,7 +2457,14 @@ static bool loong_select_memory(LoongSelector *sel,
         /* FP values retain their exact IEEE payload in the owned frame slot;
          * unaligned source pointers still use the byte-safe GP transport. */
     }
-    if (!loong_load_value(sel, address, LOONG_T1, true)) return false;
+    /* This proven frame path existed in the native Loong backend before
+     * MachineIR. Keep the source-observable volatile and atomic paths on
+     * their original selected instructions. */
+    const bool direct_frame = !atomic && !vol &&
+        loong_known_address_alignment(fn, address) >= bytes &&
+        loong_static_frame_address(sel, address, 0U, &direct_offset);
+    if (!direct_frame && !loong_load_value(sel, address, LOONG_T1, true))
+        return false;
     if (!is_load) {
         const MinicCoreValueId value = atomic
             ? ins->value.atomic_store.stored_value
@@ -1874,7 +2493,12 @@ static bool loong_select_memory(LoongSelector *sel,
                  bytes == 4U ? MINIC_LOONG_MACHINE_ST_W :
                                MINIC_LOONG_MACHINE_ST_D;
     }
-    if (bytes == 1U || atomic ||
+    if (direct_frame) {
+        if (!loong_frame_memory(&sel->builder, opcode, LOONG_T0,
+                direct_offset,
+                sel->ctx->machine_frame->has_dynamic_stack, is_load))
+            return false;
+    } else if (bytes == 1U || atomic ||
         loong_known_address_alignment(fn, address) >= bytes) {
         if (!loong_memory_volatile(&sel->builder, opcode, LOONG_T0,
                 LOONG_T1, 0, is_load, vol)) return false;
@@ -4314,11 +4938,15 @@ static bool loong_select_core(LoongSelector *sel,
             loong_store_value(sel, ins, LOONG_T0, true);
     }
     case MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS:
+        if (ins->result < fn->value_count &&
+            sel->folded_direct_addresses[ins->result]) return true;
         if (!minic_multi_direct_object_address_location(fn, ins,
                 sel->ctx->frame_plan, &offset) ||
             !loong_local_frame_address(sel, LOONG_T0, offset)) return false;
         return loong_store_value(sel, ins, LOONG_T0, true);
     case MINIC_CORE_INSTRUCTION_FIELD_ADDRESS:
+        if (ins->result < fn->value_count &&
+            sel->folded_direct_addresses[ins->result]) return true;
         if (!minic_multi_direct_field_address_shape(fn, ins,
                 &base, &bytes) ||
             !loong_load_value(sel, base, LOONG_T0, true) ||
@@ -4960,6 +5588,12 @@ bool minic_loongarch64_select_machine(MinicMachineFunction *machine,
     sel.memory_helpers = calloc(count * LOONG_HELPER_COUNT,
         sizeof(*sel.memory_helpers));
     sel.reachable = calloc(count, sizeof(*sel.reachable));
+    sel.folded_direct_addresses = calloc(
+        fn->value_count != 0U ? fn->value_count : 1U,
+        sizeof(*sel.folded_direct_addresses));
+    sel.ssa_use_counts = calloc(
+        fn->value_count != 0U ? fn->value_count : 1U,
+        sizeof(*sel.ssa_use_counts));
     if (sel.block_ids == NULL || sel.aux_true == NULL ||
         sel.aux_false == NULL || sel.alloc_trap == NULL ||
         sel.alloc_continue == NULL || sel.u64_high == NULL ||
@@ -4969,7 +5603,9 @@ bool minic_loongarch64_select_machine(MinicMachineFunction *machine,
         sel.asm_write_done == NULL ||
         sel.goto_emit == NULL || sel.goto_continue == NULL ||
         sel.memory_routes == NULL || sel.memory_helpers == NULL ||
-        sel.reachable == NULL ||
+        sel.reachable == NULL || sel.folded_direct_addresses == NULL ||
+        sel.ssa_use_counts == NULL ||
+        !loong_prepare_direct_frame_address_consumers(&sel) ||
         !minic_machine_builder_initialize(&sel.builder, machine))
         goto cleanup;
     for (i = 0U; i < count; ++i)
@@ -5133,7 +5769,11 @@ bool minic_loongarch64_select_machine(MinicMachineFunction *machine,
             goto cleanup;
         }
     }
-    if (!loong_emit_memory_helpers(&sel)) goto cleanup;
+    if (!loong_emit_memory_helpers(&sel) ||
+        !loong_machine_forward_single_use_spills(&sel) ||
+        !loong_machine_forward_parameters(&sel) ||
+        !loong_machine_forward_exact_frame_reloads(machine, fn) ||
+        !loong_machine_drop_redundant_word_sext(machine)) goto cleanup;
     success = true;
 cleanup:
     free(sel.block_ids);
@@ -5154,5 +5794,8 @@ cleanup:
     free(sel.memory_routes);
     free(sel.memory_helpers);
     free(sel.reachable);
+    free(sel.folded_direct_addresses);
+    free(sel.ssa_use_counts);
+    free(sel.ssa_writebacks);
     return success;
 }

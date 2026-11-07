@@ -2679,6 +2679,7 @@ check-loong-machine-mir-select:
 	  src/target/common/machine_ir_verify.c \
 	  src/target/common/machine_gnu_asm.c \
 	  src/target/common/machine_source_asm_template.c \
+	  src/core/value_uses.c \
 	  src/target/loongarch64/machine_opcode.c \
 	  src/target/loongarch64/machine_gnu_asm.c \
 	  src/target/loongarch64/machine_asm_form.c \
@@ -2787,6 +2788,7 @@ check-loong-machine-core-select:
 	  src/target/common/machine_gnu_asm.c \
 	  src/target/common/machine_source_asm_template.c \
 	  src/target/common/machine_core_coverage.c \
+	  src/core/value_uses.c \
 	  src/target/common/lp64_scalar.c \
 	  src/target/common/lp64_frame.c \
 	  src/target/common/lp64_aggregate.c \

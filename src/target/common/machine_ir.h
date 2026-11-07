@@ -287,6 +287,10 @@ bool minic_machine_block_set_fallthrough(MinicMachineFunction *, size_t from,
  * strings. The caller may immediately destroy its input buffers. */
 bool minic_machine_block_append_instruction(MinicMachineFunction *,
     size_t block_id, const MinicMachineInstruction *);
+/* Erase one owned physical instruction while retaining all block identities,
+ * successors, Core provenance of remaining instructions, and ELF sections. */
+bool minic_machine_block_erase_instruction(MinicMachineFunction *,
+    size_t block_id, size_t instruction_id);
 void minic_machine_function_destroy(MinicMachineFunction *);
 
 #endif

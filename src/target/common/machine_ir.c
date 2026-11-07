@@ -72,6 +72,24 @@ static void machine_instruction_destroy(MinicMachineInstruction *ins) {
     memset(ins, 0, sizeof(*ins));
 }
 
+bool minic_machine_block_erase_instruction(MinicMachineFunction *function,
+    size_t block_id, size_t instruction_id) {
+    MinicMachineBlock *block;
+    if (function == NULL || block_id >= function->block_count) return false;
+    block = &function->blocks[block_id];
+    if (instruction_id >= block->instruction_count) return false;
+    machine_instruction_destroy(&block->instructions[instruction_id]);
+    if (instruction_id + 1U < block->instruction_count)
+        memmove(&block->instructions[instruction_id],
+            &block->instructions[instruction_id + 1U],
+            (block->instruction_count - instruction_id - 1U) *
+                sizeof(*block->instructions));
+    --block->instruction_count;
+    memset(&block->instructions[block->instruction_count], 0,
+        sizeof(*block->instructions));
+    return true;
+}
+
 void minic_machine_function_destroy(MinicMachineFunction *function) {
     size_t block_id;
     if (function == NULL) return;

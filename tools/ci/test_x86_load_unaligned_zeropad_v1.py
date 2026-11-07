@@ -44,8 +44,8 @@ class X86ZeropadTest(unittest.TestCase):
         original = self.dir / (name + ".i")
         assembly = self.dir / (name + ".s")
         original.write_text(code)
-        proc = subprocess.run([str(COMPILER), "-S", "--target=x86_64-linux",
-                               str(original), "-o", str(assembly)],
+        proc = subprocess.run([str(COMPILER), "-S", str(original),
+                               "--target=x86_64-linux", "-o", str(assembly)],
                               capture_output=True, text=True, timeout=90)
         if expect_success:
             self.assertEqual(proc.returncode, 0, proc.stderr)
@@ -109,8 +109,9 @@ class X86ZeropadTest(unittest.TestCase):
                 raw = Path(path).resolve()
                 self.assertTrue(raw.is_file(), raw)
                 assembly = self.dir / ("linux_" + str(index) + ".s")
-                proc = subprocess.run([str(COMPILER), "-S",
-                    "--target=x86_64-linux", str(raw), "-o", str(assembly)],
+                proc = subprocess.run([str(COMPILER), "-S", str(raw),
+                    "--target=x86_64-linux", "-fshort-wchar",
+                    "-funsigned-char", "-o", str(assembly)],
                     capture_output=True, text=True, timeout=180)
                 self.assertEqual(proc.returncode, 0, proc.stderr)
                 self.check_object(assembly)

@@ -9507,6 +9507,51 @@ static bool x86_source_lowlevel_descriptor(X86CoreSelector *sel,
         src,MINIC_MACHINE_EFFECT_MEMORY_READ,bindings,2U,NULL,0U,false,false);
 }
 
+/* SLDT is a memory-output descriptor read; the GNU `=m` output really
+ * stores 16 bits at the C lvalue.  `mov %0,%%fs` instead consumes the low
+ * 16 bits of a GNU `rm` input and updates the architectural FS selector.
+ * Keep both exact source-qualified variants as separate physical effects. */
+static bool x86_source_lowlevel_segment(X86CoreSelector *sel,
+    const MinicCoreInstruction *ins) {
+    const MinicCoreInlineAsm *src;
+    const MinicCoreStructuredInlineAsmOperand *roles;
+    MinicMachineOperand binding;
+    unsigned int form, bits;
+    if (!x86_scalar_source_base(sel,ins,MINIC_X86_MACHINE_ASM_LOWLEVEL_SCALAR,
+            &src,&roles)) return false;
+    form = src->target_machine_form_variant;
+    if ((form != 3U && form != 4U) || !src->has_memory_clobber ||
+        !src->implicit_memory_effect ||
+        (form == 4U && !src->is_volatile) ||
+        ins->value.structured_inline_asm.operand_count != 1U ||
+        !x86_scalar_role(&roles[0],0U,form == 3U ?
+            MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_OUTPUT :
+            MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT) ||
+        roles[0].physical_read_write || roles[0].has_tied_output)
+        return false;
+    if (form == 3U) {
+        if (!x86_asm_gp_lvalue_width(sel,roles[0].value,2U) ||
+            !x86_core_load(sel,roles[0].value,MINIC_X86_REG_R10))
+            return false;
+        binding = x86_addr(MINIC_X86_REG_R10,0);
+        binding.asm_constraint = "=m";
+        return minic_machine_builder_emit_core_source_asm(&sel->builder,
+            src,MINIC_MACHINE_EFFECT_MEMORY_WRITE,&binding,1U,
+            NULL,0U,false,false);
+    }
+    for (bits = 16U; bits <= 64U; bits *= 2U)
+        if (x86_asm_gp_input_width(sel,roles[0].value,bits / 8U))
+            break;
+    if (bits > 64U || !x86_core_load(sel,roles[0].value,MINIC_X86_REG_R10))
+        return false;
+    binding = x86_reg(MINIC_X86_REG_R10,bits);
+    binding.value.physical.access = MINIC_MACHINE_REGISTER_READ;
+    binding.asm_constraint = "rm";
+    return minic_machine_builder_emit_core_source_asm(&sel->builder,
+        src,MINIC_MACHINE_EFFECT_MEMORY_WRITE,&binding,1U,
+        NULL,0U,false,false);
+}
+
 /* Linux write-combining MOVNTI: physical output memory address and
  * integer source register. Emit only the Source-qualified 32/64-bit forms. */
 static bool x86_source_movnti(X86CoreSelector *sel,
@@ -10702,6 +10747,7 @@ static bool x86_core_instruction(X86CoreSelector *sel,
             x86_source_pv_indirect_call(sel, ins) ||
             x86_source_lowlevel_halt(sel, ins) ||
             x86_source_lowlevel_descriptor(sel, ins) ||
+            x86_source_lowlevel_segment(sel, ins) ||
             x86_source_movnti(sel, ins) ||
             x86_source_boot_bit(sel, ins) ||
             x86_source_boot_test_bit(sel, ins) ||

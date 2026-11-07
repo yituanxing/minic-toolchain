@@ -1434,6 +1434,14 @@ static bool x86_emit_source_asm(FILE *out,
         return fputs(instruction->source_asm_machine_form_variant == 2U ?
             "  lldt %r10w\n" : "  invpcid (%r10), %r11\n",out) != EOF;
     }
+    if (instruction->source_asm_machine_form_id == MINIC_X86_MACHINE_ASM_LOWLEVEL_SCALAR &&
+        (instruction->source_asm_machine_form_variant == 3U ||
+         instruction->source_asm_machine_form_variant == 4U)) {
+        if (!minic_x86_64_machine_validate_source_asm(function->target,
+                instruction,NULL)) return false;
+        return fputs(instruction->source_asm_machine_form_variant == 3U ?
+            "  sldt (%r10)\n" : "  movw %r10w, %fs\n",out) != EOF;
+    }
     if (instruction->source_asm_machine_form_id == MINIC_X86_MACHINE_ASM_BOOT_FLAGS &&
         instruction->source_asm_machine_form_variant == 2U)
         return fputs("  btsl %r11d, (%r10)\n",out) != EOF;
