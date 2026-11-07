@@ -1,0 +1,102 @@
+name: MiniC AArch64 original Linux 6.6 shard2 GNU AS
+
+# One frozen, SHA-verified eight-owner source/assembly recovery lane.
+# Never rebuild Linux or infer Linux Image/QEMU P1 from a relocatable .o.
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/minic-aarch64-original-shard2-gnu-as.yml'
+      - 'tools/ci/minic-aarch64-original-shard2-gnu-as-v1.py'
+      - 'src/compiler/**'
+      - 'src/core/**'
+      - 'src/frontend/**'
+      - 'src/target/aarch64/**'
+      - 'src/target/common/**'
+      - 'src/target/source_policy/**'
+      - 'Makefile'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: minic-aarch64-original-shard2-${{ github.event.pull_request.head.sha || github.sha }}
+  cancel-in-progress: true
+
+jobs:
+  exact-original-eight-gnu-as:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Reuse only the finished pinned Linux .i and .cmd artifact
+        uses: actions/download-artifact@v4
+        with:
+          run-id: 42345808682
+          github-token: ${{ github.token }}
+          name: minic-linux-seven-failure-aarch64-2
+          path: ${{ runner.temp }}/aarch64-original-shard2
+
+      - name: Install AArch64 GNU binutils
+        shell: bash
+        timeout-minutes: 8
+        run: |
+          set -Eeuo pipefail
+          for sources in /etc/apt/apt-mirrors.txt /etc/apt/sources.list.d/ubuntu.sources; do
+            if [[ -f "$sources" ]] && grep -q 'azure.archive.ubuntu.com' "$sources"; then
+              sudo sed -i 's#azure.archive.ubuntu.com#archive.ubuntu.com#g' "$sources"
+            fi
+          done
+          timeout 120s sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 update -qq
+          timeout 240s sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 \
+            -o DPkg::Lock::Timeout=60 install -y --no-install-recommends binutils-aarch64-linux-gnu
+          command -v aarch64-linux-gnu-as
+          command -v aarch64-linux-gnu-readelf
+
+      - name: Restore compiler objects at exact source SHA
+        id: obj_cache
+        uses: actions/cache/restore@v4
+        with:
+          path: build/aarch-original-shard2-ci/obj
+          key: minic-aarch-original-shard2-v1-${{ runner.os }}-${{ runner.arch }}-${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Build exact HEAD MiniC with Werror
+        run: make -j2 MODE=release CFLAGS=-Werror BUILD_DIR=build/aarch-original-shard2-ci build/aarch-original-shard2-ci/bin/minic-cc
+
+      - name: Save compiler objects before original-source diagnostics
+        if: steps.obj_cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: build/aarch-original-shard2-ci/obj
+          key: minic-aarch-original-shard2-v1-${{ runner.os }}-${{ runner.arch }}-${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: SHA-verify and reassemble eight authentic Linux owner sources
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse HEAD)" = '${{ github.event.pull_request.head.sha || github.sha }}'
+          mkdir -p build/aarch-original-shard2-ci/evidence
+          python3 tools/ci/minic-aarch64-original-shard2-gnu-as-v1.py \
+            --artifact-root "$RUNNER_TEMP/aarch64-original-shard2" \
+            --minic build/aarch-original-shard2-ci/bin/minic-cc \
+            --output build/aarch-original-shard2-ci/evidence \
+            | tee build/aarch-original-shard2-ci/original-eight.receipt
+          grep -Fxq \
+            'AARCH_ORIGINAL_SHARD2_GNU_AS=PASS originals=8/8 source_run=42345808682 gcc_fallback=NO full_Linux_Image_P1=NOT_RUN' \
+            build/aarch-original-shard2-ci/original-eight.receipt
+
+      - name: Preserve original-head proof and exact failure diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: minic-aarch64-original-shard2-${{ github.event.pull_request.head.sha || github.sha }}
+          path: |
+            build/aarch-original-shard2-ci/original-eight.receipt
+            build/aarch-original-shard2-ci/evidence/*
+          if-no-files-found: warn
+          retention-days: 14
