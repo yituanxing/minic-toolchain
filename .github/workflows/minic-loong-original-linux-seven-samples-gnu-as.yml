@@ -8,11 +8,6 @@ on:
   pull_request:
     paths:
       - '.github/workflows/minic-loong-original-linux-seven-samples-gnu-as.yml'
-  push:
-    branches: [refactor/minic-target-language-boundary]
-    paths:
-      - '.github/workflows/minic-loong-original-linux-seven-samples-gnu-as.yml'
-
 permissions:
   contents: read
   actions: read

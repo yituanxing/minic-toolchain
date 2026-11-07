@@ -10,12 +10,6 @@ on:
       - '.github/workflows/minic-loong-original-linux-shard2-gnu-as.yml'
       - 'tools/ci/minic-loong-original-shard2-gnu-as.py'
       - 'src/target/loongarch64/**'
-  push:
-    branches: [refactor/minic-target-language-boundary]
-    paths:
-      - '.github/workflows/minic-loong-original-linux-shard2-gnu-as.yml'
-      - 'tools/ci/minic-loong-original-shard2-gnu-as.py'
-
 permissions:
   contents: read
   actions: read

@@ -51,7 +51,7 @@ LOONG_SOURCE_NEGATIVES = (
     ("dbar_suffix", ROOT / "tests/target/loongarch64/dbar_machine_immediate.c", "MINIC_BAD_DBAR_SUFFIX"),
     ("dbar_constraint", ROOT / "tests/target/loongarch64/dbar_machine_immediate.c", "MINIC_BAD_DBAR_CONSTRAINT"),
     ("dbar_dynamic", ROOT / "tests/target/loongarch64/dbar_machine_immediate.c", "MINIC_BAD_DBAR_DYNAMIC"),
-    ("clock_cpu_id_historical", ROOT / "tests/compiler/mir-migration/loong_scalar_source_forms.c", "MINIC_LOONG_CLOCK_CPU_ID_HISTORICAL_NEGATIVE"),
+    ("clock_cpu_id_missing_memory", ROOT / "tests/compiler/mir-migration/loong_scalar_source_forms.c", "MINIC_LOONG_CLOCK_CPU_ID_MISSING_MEMORY_NEGATIVE"),
 )
 TARGETS = ("aarch64", "loongarch64")
 FIVE = ("riscv32", "riscv64", "x86_64", "aarch64", "loongarch64")
@@ -233,6 +233,7 @@ def check_functional_shapes(asm, arch, case):
                        "loong_scalar_fpr_read:", "loong_scalar_fpr_write:",
                        "loong_scalar_clock:",
                        "loong_scalar_clock_named:",
+                       "loong_scalar_clock_cpu_id:",
                        "loong_scalar_clock_vdso_base:",
                        "loong_scalar_clock_counter_only:",
                        "loong_scalar_invtlb:",
@@ -241,7 +242,7 @@ def check_functional_shapes(asm, arch, case):
                        "rdtime.d", "la.pcrel", "invtlb 0", "csrrd "):
             demand(marker in asm,
                    f"{key}: sealed scalar hardware form missing {marker}")
-        demand(asm.count("# MINIC_SOURCE_INLINE_ASM_BEGIN") == 13,
+        demand(asm.count("# MINIC_SOURCE_INLINE_ASM_BEGIN") == 14,
                f"{key}: physical SOURCE_ASM occurrence count changed")
     elif case == "packed_uaccess_output":
         # Twelve original GNU Linux user-access source instructions (four

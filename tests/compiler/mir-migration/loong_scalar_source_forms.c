@@ -48,18 +48,19 @@ unsigned long loong_scalar_clock_vdso_base(void) {
     return vdso_base;
 }
 
-/* The source decoder advertises CLOCK variant 4, but historical source
- * admission rejects it: CPU_ID demands an explicit memory clobber while
- * simultaneously requiring clobber_count == 0. Keep this genuine GNU C
- * form as an intentional negative until source compatibility is widened. */
-#ifdef MINIC_LOONG_CLOCK_CPU_ID_HISTORICAL_NEGATIVE
+/* Real Linux vDSO CPU-ID form: the sole explicit memory clobber is legal.
+ * Removing it must still fail the target-qualified source contract. */
 int loong_scalar_clock_cpu_id(void) {
     int cpu_id;
+#ifdef MINIC_LOONG_CLOCK_CPU_ID_MISSING_MEMORY_NEGATIVE
+    __asm__ __volatile__("rdtime.d $zero, %0"
+        : "=r"(cpu_id));
+#else
     __asm__ __volatile__("rdtime.d $zero, %0"
         : "=r"(cpu_id) : : "memory");
+#endif
     return cpu_id;
 }
-#endif
 
 unsigned long loong_scalar_clock_counter_only(void) {
     unsigned long counter_only;

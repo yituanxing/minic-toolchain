@@ -45,7 +45,12 @@ def main():
     frozen = load_local("original_loong_freeze", ci / "linux-three-isa-freeze-i-v1.py")
     candidate = load_local("original_loong_candidate", ci / "linux-three-isa-minic-candidate-v1.py")
 
-    root = args.artifact / "failed-owner-diagnostics"
+    # The shared candidate producer invokes GNU AS with cwd=work/build.
+    # Pass absolute staging paths: relative build/... targets would otherwise
+    # be interpreted below work/build and every assembly would fail before
+    # reading a byte of the genuine generated .s source.
+    root = args.artifact.resolve() / "failed-owner-diagnostics"
+    output_root = args.output.resolve()
     index_path = root / "index.json"
     index = json.loads(index_path.read_text())
     samples = index.get("samples")
@@ -53,9 +58,9 @@ def main():
             index.get("sample_count") != 8 or
             not isinstance(samples, list) or len(samples) != 8):
         raise ValueError("not the eight original GNU failure-owner samples")
-    if args.output.exists():
+    if output_root.exists():
         raise ValueError("refuse existing output (possible stale AS evidence)")
-    work = args.output / "input"
+    work = output_root / "input"
     work.joinpath("frozen").mkdir(parents=True)
     work.joinpath("build").mkdir(parents=True)
     rows = []
@@ -109,10 +114,10 @@ def main():
     compiler = args.minic.resolve(strict=True)
     data = {"target": "loongarch64", "gcc": gcc,
             "machine": candidate.TARGETS["loongarch64"][5]}
-    output = args.output / "candidate"
+    output = output_root / "candidate"
     results = candidate.make_objects(rows, work, compiler, output,
                                      data, workers=2, timeout=300)
-    (args.output / "results.json").write_text(json.dumps(results, indent=2) + "\n")
+    (output_root / "results.json").write_text(json.dumps(results, indent=2) + "\n")
     for result in results:
         print(f"ORIGINAL_LOONG_SHARD2_OWNER={result['object']} "
               f"status={result['status']} input_sha={result['input_sha256']} "

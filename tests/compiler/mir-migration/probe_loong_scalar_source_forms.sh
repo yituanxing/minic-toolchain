@@ -33,7 +33,7 @@ reject() {
 test -x "$minic" || fail "missing compiler: $minic"
 cc -std=gnu11 -Wall -Wextra -Werror -fsyntax-only "$source_file"
 cc -std=gnu11 -Wall -Wextra -Werror -fsyntax-only \
-    -DMINIC_LOONG_CLOCK_CPU_ID_HISTORICAL_NEGATIVE "$source_file"
+    -DMINIC_LOONG_CLOCK_CPU_ID_MISSING_MEMORY_NEGATIVE "$source_file"
 cc -E -P -std=gnu11 -x c "$source_file" -o "$work/original.i"
 "$minic" --target=loongarch64-linux -S "$work/original.i" \
     -o "$work/original.s" || fail 'valid source rejected'
@@ -43,6 +43,7 @@ for entry in loong_scalar_cacop loong_scalar_cpucfg \
              loong_scalar_fpr_read loong_scalar_fpr_write \
              loong_scalar_clock loong_scalar_clock_named \
              loong_scalar_clock_vdso_base \
+             loong_scalar_clock_cpu_id \
              loong_scalar_clock_counter_only loong_scalar_invtlb \
              loong_scalar_frametrace_csr; do
     contains "^${entry}:$" "$work/original.s"
@@ -72,8 +73,9 @@ contains '^  la\.pcrel \$[a-z0-9]+, _start$' \
     "$work/loong_scalar_clock_vdso_base.s"
 contains '^  rdtime\.d \$[a-z0-9]+, \$zero$' \
     "$work/loong_scalar_clock_counter_only.s"
-test "$(grep -Ec '^  rdtime\.d ' "$work/original.s")" -eq 3 ||
-    fail 'CLOCK instruction count must cover numeric/named/counter_only'
+contains '^  rdtime\.d \$zero, \$[a-z0-9]+$' "$work/original.s"
+test "$(grep -Ec '^  rdtime\.d ' "$work/original.s")" -eq 4 ||
+    fail 'CLOCK instruction count must cover numeric/named/cpu-id/counter_only'
 test "$(grep -Ec '^  invtlb 0,' "$work/original.s")" -eq 4 ||
     fail 'missing INVTLB operand variant'
 contains '^  invtlb 0, \$[a-z0-9]+, \$[a-z0-9]+$' "$work/original.s"
@@ -86,7 +88,7 @@ contains '^  invtlb 0, \$zero, \$zero$' "$work/original.s"
 for name in cacop-template cacop-constraint cpucfg-template \
             cpucfg-constraint fpr-template clock-template \
             clock-named-constraint clock-vdso-volatile \
-            clock-cpu-id-historical clock-counter-memory \
+            clock-cpu-id-missing-memory clock-counter-memory \
             invtlb-template invtlb-constraint csr-template; do
     case "$name" in
         cacop-template)
@@ -112,9 +114,9 @@ for name in cacop-template cacop-constraint cpucfg-template \
         clock-vdso-volatile)
             sed 's/__asm__("la\.pcrel %0, _start"/__asm__ __volatile__("la.pcrel %0, _start"/' \
                 "$work/original.i" >"$work/$name.i" ;;
-        clock-cpu-id-historical)
+        clock-cpu-id-missing-memory)
             cc -E -P -std=gnu11 -x c \
-                -DMINIC_LOONG_CLOCK_CPU_ID_HISTORICAL_NEGATIVE \
+                -DMINIC_LOONG_CLOCK_CPU_ID_MISSING_MEMORY_NEGATIVE \
                 "$source_file" -o "$work/$name.i" ;;
         clock-counter-memory)
             sed 's/"=r"(counter_only));/"=r"(counter_only) : : "memory");/' \
@@ -135,4 +137,4 @@ for name in cacop-template cacop-constraint cpucfg-template \
 done
 
 printf '%s\n' \
-  'LOONG_SCALAR_MIR=PASS CACOP=1 CPUCFG=1 FPR=2 CLOCK=4 HISTORICAL_CLOCK_CPU_ID_REJECT=1 INVTLB=4 FRAMETRACE_CSR=1 negative=13 GNU_AS=NOT_RUN QEMU=NOT_RUN'
+  'LOONG_SCALAR_MIR=PASS CACOP=1 CPUCFG=1 FPR=2 CLOCK=5 CPU_ID_MEMORY_REQUIRED=1 INVTLB=4 FRAMETRACE_CSR=1 negative=13 GNU_AS=NOT_RUN QEMU=NOT_RUN'
