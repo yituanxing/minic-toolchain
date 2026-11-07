@@ -327,6 +327,14 @@ bool minic_target_info_header_attribute_supported(const MinicTargetInvocation *t
            policy->header_attribute(target, spelling, length);
 }
 
+bool minic_target_info_gnu_neon_header_inline_liveness(
+    const MinicTargetInvocation *target) {
+    const MinicTargetSourceLanguagePolicy *policy =
+        (target == NULL || target->source_info.integer_model == NULL)
+            ? NULL : target->source_info.source_language_policy;
+    return policy != NULL && policy->gnu_neon_header_inline_liveness;
+}
+
 bool minic_target_info_gnu_function_security_attribute_supported(
     const MinicTargetInvocation *target, const char *attribute, size_t length) {
     const MinicTargetSourceLanguagePolicy *policy =

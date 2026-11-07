@@ -51,6 +51,9 @@ typedef struct MinicTargetAliasAbiPolicy {
  * linker/ELF contract. A caller checks C syntax/arity; the registered target
  * decides which source spellings and qualified values it may admit. */
 typedef struct MinicTargetSourceLanguagePolicy {
+    /* Admit a source-only, exact GNU system-header inline liveness prepass.
+     * This never grants a builtin signature, ABI or machine instruction. */
+    bool gnu_neon_header_inline_liveness;
     /* Immutable target-owned source builtin type registry. One descriptor
      * owns the name, nominal identity, admission and Core ingress shape. */
     const MinicTargetSourceBuiltinTypeDescriptor *builtin_types;

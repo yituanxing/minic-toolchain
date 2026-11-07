@@ -136,6 +136,7 @@ MINIC_SOURCES := \
 	src/frontend/ast_function.c \
 	src/frontend/ast_global.c \
 	src/frontend/lexer.c \
+	src/frontend/gnu_neon_inline_filter.c \
 	src/frontend/binary128_literal.c \
 	src/frontend/parser_constant.c \
 	src/frontend/parser_attribute.c \

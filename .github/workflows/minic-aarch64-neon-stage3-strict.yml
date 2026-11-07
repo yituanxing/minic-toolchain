@@ -23,8 +23,10 @@ on:
       - 'src/target/source_policy/data_layout_source.c'
       - 'tests/compiler/c0/aarch64_neon*'
       - 'tests/compiler/c0/aarch64_gnu_neon_inline_*'
+      - 'tests/compiler/c0/aarch64_gnu_inline_lazy_*'
       - 'tests/compiler/c0/run-aarch64-neon-*'
       - 'tests/compiler/c0/run-aarch64-gnu-neon-*'
+      - 'tests/compiler/c0/run-aarch64-gnu-inline-*'
       - 'Makefile'
   workflow_dispatch:
 
@@ -78,6 +80,11 @@ jobs:
           MINIC_CC="$GITHUB_WORKSPACE/build/aarch-neon-ci/bin/minic-cc" \
           BUILD_DIR=build/aarch-neon-ci \
             sh tests/compiler/c0/run-aarch64-gnu-neon-inline-six.sh
+      - name: GNU13 header-inline liveness and fail-closed source boundary
+        run: |
+          MINIC_CC="$GITHUB_WORKSPACE/build/aarch-neon-ci/bin/minic-cc" \
+          BUILD_DIR=build/aarch-neon-ci \
+            sh tests/compiler/c0/run-aarch64-gnu-inline-lazy-negatives.sh
       - name: Strict same-GNU-i, two-ELF, GNU/MiniC/QEMU real machine differential
         run: |
           MINIC_CC="$GITHUB_WORKSPACE/build/aarch-neon-ci/bin/minic-cc" \

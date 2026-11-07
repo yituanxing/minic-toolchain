@@ -2,6 +2,7 @@
 #include "frontend/declaration_sema.h"
 #include "frontend/parser.h"
 #include "frontend/parser_internal.h"
+#include "frontend/gnu_neon_inline_filter.h"
 #include "frontend/parser_external_object.h"
 
 #include <limits.h>
@@ -2545,6 +2546,7 @@ bool minic_parse_c0_program_for_target(const char *path,
                                        MinicC0Program *program,
                                        MinicDiagnostic *diagnostic) {
     MinicParser parser;
+    char *filtered_source = NULL;
     bool success;
 
     (void)memset(&parser, 0, sizeof(parser));
@@ -2557,6 +2559,12 @@ bool minic_parse_c0_program_for_target(const char *path,
     if (invocation == NULL) {
         return false;
     }
+    if (!minic_gnu_neon_inline_filter(path, source, length,
+                                      invocation, &filtered_source)) {
+        return false;
+    }
+    if (filtered_source != NULL) source = filtered_source;
+    parser.source = source;
     parser.default_visibility = MINIC_SYMBOL_VISIBILITY_DEFAULT;
     parser.visibility_depth = 0U;
     parser.current_block = MINIC_BLOCK_INVALID;
@@ -2573,6 +2581,7 @@ bool minic_parse_c0_program_for_target(const char *path,
         if (!minic_parser_materialize_builtin_va_list_source_type(
                 &parser, &cursor_source_type)) {
             minic_parser_error(&parser, "cannot materialize target va_list source type");
+            free(filtered_source);
             return false;
         }
     }
@@ -2667,6 +2676,7 @@ bool minic_parse_c0_program_for_target(const char *path,
     parser.switch_contexts = NULL;
     free(parser.pending_function_aliases);
     parser.pending_function_aliases = NULL;
+    free(filtered_source);
     return success;
 }
 

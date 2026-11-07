@@ -192,6 +192,11 @@ static const MinicTargetSourceBuiltinTypeDescriptor aarch_builtin_types[] = {
      MINIC_TARGET_BUILTIN_CORE_IMPORT_NONE, MINIC_TARGET_BUILTIN_SCALAR_NONE},
     {40U, "__fp16", MINIC_BUILTIN_DECLARATION_HEADER_ONLY_OPAQUE,
      MINIC_TARGET_LANG_OPAQUE_VECTOR_HEADER_DECLARATIONS,
+     MINIC_TARGET_BUILTIN_CORE_IMPORT_NONE, MINIC_TARGET_BUILTIN_SCALAR_NONE},
+    /* GCC 13's BF16 island declares an alias used only by header wrappers.
+     * Keep it source-only until AAPCS64 BF16 semantics are implemented. */
+    {41U, "__bf16", MINIC_BUILTIN_DECLARATION_HEADER_ONLY_OPAQUE,
+     MINIC_TARGET_LANG_OPAQUE_VECTOR_HEADER_DECLARATIONS,
      MINIC_TARGET_BUILTIN_CORE_IMPORT_NONE, MINIC_TARGET_BUILTIN_SCALAR_NONE}
 };
 
@@ -326,6 +331,7 @@ static bool aarch_pragma_internal_header(
 }
 
 const MinicTargetSourceLanguagePolicy minic_aarch64_source_language_policy = {
+    .gnu_neon_header_inline_liveness = true,
     .builtin_types = aarch_builtin_types,
     .builtin_type_count = sizeof(aarch_builtin_types) / sizeof(aarch_builtin_types[0]),
     .named_scalar_type = aarch_named_scalar_type,
