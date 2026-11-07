@@ -9,9 +9,11 @@ extern int side_effect_guard(int *);
 extern int volatile_guard(volatile int *);
 extern int runtime_guard(int);
 extern int side_effect_runtime_guard(int *, int);
+extern int field_prep_conditional_guard(void);
 
 static int runtime_calls;
 void ordinary_runtime_call(void) { ++runtime_calls; }
+int runtime_value_for_conditional_guard(void) { ++runtime_calls; return 2; }
 
 int main(void) {
     int side_value = 9;
@@ -32,20 +34,22 @@ int main(void) {
     int ternary_true = runtime_ternary_builtin_guard(1);
     int and_false = runtime_and_builtin_guard(0);
     int and_true = runtime_and_builtin_guard(1);
+    int field_prep_guard = field_prep_conditional_guard();
 
     printf("min=%u,%u clamp=%lu,%lu known=%d side=%d,%d volatile=%d "
            "runtime=%d,%d calls=%d ternary=%d,%d and=%d,%d "
-           "side-runtime=%d,%d,%d\n",
+           "side-runtime=%d,%d,%d field-prep=%d\n",
            min_small, min_large, clamp_small, clamp_large, known,
            side_result, side_value, volatile_result,
            runtime_small, runtime_hit, runtime_calls,
            ternary_false, ternary_true, and_false, and_true,
-           side_runtime_false, side_runtime_true, side_runtime);
+           side_runtime_false, side_runtime_true, side_runtime, field_prep_guard);
     return (min_small != 7 || min_large != 16384 ||
             clamp_small != 9 || clamp_large != 370 || known != 1 ||
             side_result != 9 || side_value != 9 || volatile_result != 13 ||
             runtime_small != 8 || runtime_hit != 17 || runtime_calls != 1 ||
             ternary_false != 12 || ternary_true != 12 ||
             and_false != 11 || and_true != 11 ||
-            side_runtime_false != 9 || side_runtime_true != 5 || side_runtime != 5);
+            side_runtime_false != 9 || side_runtime_true != 5 || side_runtime != 5 ||
+            field_prep_guard != 31);
 }

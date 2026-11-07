@@ -78,6 +78,20 @@ int volatile_guard(volatile int *address) {
 /* Keep an actually reachable runtime call, verifying that the conditional
  * elimination is restricted to proven constant conditions. */
 extern void ordinary_runtime_call(void);
+extern int runtime_value_for_conditional_guard(void);
+extern void __field_prep_conditional_assert(void)
+    __attribute__((error("runtime FIELD_PREP operand must not trigger build guard")));
+
+/* Exact Linux FIELD_PREP shape: __builtin_constant_p inspects a runtime
+ * expression without evaluating it. The selected `: 0` arm is pure, while
+ * the unreachable `?` arm includes a runtime call. */
+int field_prep_conditional_guard(void) {
+    if (!(!(__builtin_constant_p(runtime_value_for_conditional_guard() != 0) ?
+            (runtime_value_for_conditional_guard() > 1) : 0)))
+        __field_prep_conditional_assert();
+    return 31;
+}
+
 int runtime_guard(int value) {
     if (value == 73) {
         ordinary_runtime_call();

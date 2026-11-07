@@ -4090,6 +4090,7 @@ static bool x86_linux_lkgs_extable_source(const MinicTargetInvocation *invocatio
     contract->operand_count = 1U;
     contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE;
     contract->implicit_memory_effect = true;
+    contract->target_machine_form_variant = 1U;
     return true;
 }
 
@@ -4988,9 +4989,11 @@ static bool x86_linux_segment_register_extable_source(const MinicTargetInvocatio
     (void)invocation;
     const MinicExpression *selector;
     MinicType type;
+    const unsigned int form = source ?
+        minic_x86_64_linux_segment_register_extable_form(
+            source->template_text, source->template_length) : 0U;
     if (!program || !source || !contract ||
-        !minic_x86_64_linux_segment_register_extable_form(
-            source->template_text, source->template_length) ||
+        !form ||
         !source->is_volatile || source->is_goto ||
         source->output_count != 1U || !source->outputs ||
         source->input_count || source->label_count ||
@@ -5008,6 +5011,7 @@ static bool x86_linux_segment_register_extable_source(const MinicTargetInvocatio
     contract->operand_count = 1U;
     contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE;
     contract->implicit_memory_effect = true;
+    contract->target_machine_form_variant = form;
     return true;
 }
 

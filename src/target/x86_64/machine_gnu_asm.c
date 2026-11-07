@@ -1271,6 +1271,38 @@ static bool x86_emit_source_asm(FILE *out,
             "  .popsection\n",selectors[variant-1U]) >= 0;
     }
     if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_SEGMENT_REGISTER_EXTABLE) {
+        static const char *const selectors[] = {"es","ds","ss"};
+        variant = instruction->source_asm_machine_form_variant;
+        if (variant < 1U || variant > 3U ||
+            !minic_x86_64_machine_validate_source_asm(function->target,
+                instruction,NULL)) return false;
+        /* GNU's extable_type_reg macro resolves R10D to register number 10.
+         * Preserve the two fault-relative words and type-17 fixup as exact
+         * physical ELF relocations, with no assembler macro expansion. */
+        return fprintf(out,
+            "  1: movl %%r10d, %%%s\n"
+            "  .pushsection \"__ex_table\",\"a\"\n"
+            "  .balign 4\n"
+            "  .long (1b) - .\n"
+            "  .long (1b) - .\n"
+            "  .long 17 | (10 << 8)\n"
+            "  .popsection\n",selectors[variant-1U]) >= 0;
+    }
+    if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_LKGS_EXTABLE) {
+        if (!minic_x86_64_machine_validate_source_asm(function->target,
+                instruction,NULL)) return false;
+        /* Original LKGS macro resolves `%k[sel]` to EDI (register 7). */
+        return fputs("  1: .byte 0xf2,0x0f,0x00,0xf7\n"
+            "  .pushsection \"__ex_table\",\"a\"\n"
+            "  .balign 4\n"
+            "  .long (1b) - .\n"
+            "  .long (1b) - .\n"
+            "  .long 17 | (7 << 8)\n"
+            "  .popsection\n",out) != EOF;
+    }
+    if (instruction->source_asm_machine_form_id ==
             MINIC_X86_MACHINE_ASM_CRASH_REGISTER) {
         const unsigned int form = instruction->source_asm_machine_form_variant;
         /* Canonical GNU physical ISA spellings preserve the historical
@@ -1333,6 +1365,14 @@ static bool x86_emit_source_asm(FILE *out,
     if (instruction->source_asm_machine_form_id == MINIC_X86_MACHINE_ASM_LOWLEVEL_SCALAR &&
         instruction->source_asm_machine_form_variant == 1U)
         return fputs("  hlt\n",out) != EOF;
+    if (instruction->source_asm_machine_form_id == MINIC_X86_MACHINE_ASM_LOWLEVEL_SCALAR &&
+        (instruction->source_asm_machine_form_variant == 2U ||
+         instruction->source_asm_machine_form_variant == 5U)) {
+        if (!minic_x86_64_machine_validate_source_asm(function->target,
+                instruction,NULL)) return false;
+        return fputs(instruction->source_asm_machine_form_variant == 2U ?
+            "  lldt %r10w\n" : "  invpcid (%r10), %r11\n",out) != EOF;
+    }
     if (instruction->source_asm_machine_form_id == MINIC_X86_MACHINE_ASM_BOOT_FLAGS &&
         instruction->source_asm_machine_form_variant == 2U)
         return fputs("  btsl %r11d, (%r10)\n",out) != EOF;

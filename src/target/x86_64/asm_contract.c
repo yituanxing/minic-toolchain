@@ -412,6 +412,10 @@ bool minic_x86_64_typed_machine_form_matches_template(
      * writes; keep the admitted selector identity sealed into MachineIR. */
     if (form_id == MINIC_X86_MACHINE_ASM_SEGMENT_LOAD_EXTABLE)
         return form >= 1U && form <= 5U && variant == form;
+    if (form_id == MINIC_X86_MACHINE_ASM_SEGMENT_REGISTER_EXTABLE)
+        return form >= 1U && form <= 3U && variant == form;
+    if (form_id == MINIC_X86_MACHINE_ASM_LKGS_EXTABLE)
+        return form != 0U && variant == 1U;
     /* All eight privileged CRn forms have distinct hardware direction and
      * register identities; carry that precise selection into MachineIR. */
     if (form_id == MINIC_X86_MACHINE_ASM_CONTROL_REGISTER)

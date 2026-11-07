@@ -14,7 +14,7 @@ mkdir -p "$work"
 "$minic_cc" --target=riscv64-linux -march=rv64i -mabi=lp64 \
     -S "$work/guard.i" -o "$work/guard.rv64.s"
 
-if grep -E '(call|callq|jal|bl).*(__min_compiletime_assert|__clamp_compiletime_assert)' \
+if grep -E '(call|callq|jal|bl).*(__min_compiletime_assert|__clamp_compiletime_assert|__field_prep_conditional_assert)' \
         "$work/guard.x86.s" "$work/guard.rv64.s" >/dev/null; then
     printf '%s\n' 'FAIL builtin_constant_p: unreachable compile-time assert call emitted' >&2
     exit 1

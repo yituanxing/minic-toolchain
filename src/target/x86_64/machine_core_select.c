@@ -6786,6 +6786,76 @@ static bool x86_source_segment_load_extable(X86CoreSelector *sel,
         MINIC_MACHINE_EFFECT_MEMORY_WRITE,&binding,1U,NULL,0U,false,false);
 }
 
+/* Linux loadsegment(ES/DS/SS) uses a GNU +r 16-bit C selector, forced
+ * through a 32-bit `%k0` machine register. The fault handler's type-17
+ * __ex_table record encodes the chosen physical GPR number, so carry the
+ * actual ES/DS/SS variant and a fixed R10D read/write operand in typed MIR.
+ * The C selector is loaded and stored as 16 bits; the hardware reads only
+ * the selector half of R10D. */
+static bool x86_source_segment_register_extable(X86CoreSelector *sel,
+    const MinicCoreInstruction *ins) {
+    const MinicCoreInlineAsm *source;
+    const MinicCoreStructuredInlineAsmOperand *roles;
+    MinicMachineOperand binding;
+    unsigned int form;
+    if (!x86_scalar_source_base(sel,ins,
+            MINIC_X86_MACHINE_ASM_SEGMENT_REGISTER_EXTABLE,&source,&roles))
+        return false;
+    form = source->target_machine_form_variant;
+    if (form < 1U || form > 3U || !source->is_volatile ||
+        !source->has_memory_clobber || !source->explicit_memory_clobber ||
+        !source->implicit_memory_effect ||
+        ins->value.structured_inline_asm.operand_count != 1U ||
+        !x86_scalar_role(&roles[0],0U,
+            MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE) ||
+        !roles[0].physical_read_write || roles[0].has_tied_output ||
+        !x86_asm_gp_lvalue_width(sel,roles[0].value,2U) ||
+        !x86_core_load(sel,roles[0].value,MINIC_X86_REG_RDI) ||
+        !x86_2(sel,MINIC_X86_MI_MOVZWQ_AR,
+            x86_addr(MINIC_X86_REG_RDI,0),x86_reg(MINIC_X86_REG_R10,64U)))
+        return false;
+    binding = x86_reg(MINIC_X86_REG_R10,32U);
+    binding.asm_constraint = "+r";
+    binding.value.physical.access =
+        MINIC_MACHINE_REGISTER_READ | MINIC_MACHINE_REGISTER_WRITE;
+    return minic_machine_builder_emit_core_source_asm(&sel->builder,source,
+            MINIC_MACHINE_EFFECT_MEMORY_WRITE,&binding,1U,NULL,0U,false,false) &&
+        x86_scalar_output_store(sel,roles[0].value,MINIC_X86_REG_R10,2U);
+}
+
+/* LKGS's opcode has an architectural DI operand, independently of GNU's
+ * +D spelling. The type-17 exception entry also names DI, not a freely
+ * allocated GP register. Keep that fixed ABI in MachineIR, and store the
+ * resulting low 16 bits back through a separate R10 address register. */
+static bool x86_source_lkgs_extable(X86CoreSelector *sel,
+    const MinicCoreInstruction *ins) {
+    const MinicCoreInlineAsm *source;
+    const MinicCoreStructuredInlineAsmOperand *roles;
+    MinicMachineOperand binding;
+    if (!x86_scalar_source_base(sel,ins,MINIC_X86_MACHINE_ASM_LKGS_EXTABLE,
+            &source,&roles) || source->target_machine_form_variant != 1U ||
+        !source->is_volatile || !source->has_memory_clobber ||
+        source->explicit_memory_clobber || !source->implicit_memory_effect ||
+        ins->value.structured_inline_asm.operand_count != 1U ||
+        !x86_scalar_role(&roles[0],0U,
+            MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE) ||
+        !roles[0].physical_read_write || roles[0].has_tied_output ||
+        !x86_asm_gp_lvalue_width(sel,roles[0].value,2U) ||
+        !x86_core_load(sel,roles[0].value,MINIC_X86_REG_R10) ||
+        !x86_2(sel,MINIC_X86_MI_MOVZWQ_AR,
+            x86_addr(MINIC_X86_REG_R10,0),x86_reg(MINIC_X86_REG_RDI,64U)))
+        return false;
+    binding = x86_reg(MINIC_X86_REG_RDI,32U);
+    binding.asm_constraint = "+D";
+    binding.value.physical.access =
+        MINIC_MACHINE_REGISTER_READ | MINIC_MACHINE_REGISTER_WRITE;
+    return minic_machine_builder_emit_core_source_asm(&sel->builder,source,
+            MINIC_MACHINE_EFFECT_MEMORY_WRITE,&binding,1U,NULL,0U,false,false) &&
+        x86_core_load(sel,roles[0].value,MINIC_X86_REG_R10) &&
+        x86_2(sel,MINIC_X86_MI_MOV16_RA,
+            x86_reg(MINIC_X86_REG_RDI,16U),x86_addr(MINIC_X86_REG_R10,0));
+}
+
 static bool x86_source_debug_register(X86CoreSelector *sel,
     const MinicCoreInstruction *ins) {
     const MinicCoreInlineAsm *source;
@@ -9128,6 +9198,63 @@ static bool x86_source_lowlevel_halt(X86CoreSelector *sel,
             src,0U,NULL,0U,NULL,0U,false,false);
 }
 
+/* Linux LLDT and INVPCID are already strictly admitted by the target C
+ * Source contract.  Bind the selector value in a physical GP register and
+ * the 16-byte INVPCID descriptor through its actual memory address.  The
+ * hardware selector is always the low 16 bits, while INVPCID's type is a
+ * full x86-64 GP value.  Do not route either through generic source ASM. */
+static bool x86_source_lowlevel_descriptor(X86CoreSelector *sel,
+    const MinicCoreInstruction *ins) {
+    const MinicCoreInlineAsm *src;
+    const MinicCoreStructuredInlineAsmOperand *roles;
+    const MinicCoreType *type;
+    MinicCoreTypeId pointee;
+    MinicMachineOperand bindings[2];
+    unsigned int form, bits;
+    if (!x86_scalar_source_base(sel,ins,MINIC_X86_MACHINE_ASM_LOWLEVEL_SCALAR,
+            &src,&roles)) return false;
+    form = src->target_machine_form_variant;
+    if ((form != 2U && form != 5U) || !src->is_volatile ||
+        !src->implicit_memory_effect ||
+        !src->has_memory_clobber ||
+        ins->value.structured_inline_asm.operand_count !=
+            (form == 2U ? 1U : 2U) ||
+        !x86_scalar_role(&roles[0],0U,
+            form == 2U ? MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT :
+                MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT) ||
+        roles[0].physical_read_write || roles[0].has_tied_output)
+        return false;
+    if (form == 2U) {
+        for (bits = 16U; bits <= 64U; bits *= 2U)
+            if (x86_asm_gp_input_width(sel,roles[0].value,bits / 8U))
+                break;
+        if (bits > 64U || !x86_core_load(sel,roles[0].value,MINIC_X86_REG_R10))
+            return false;
+        bindings[0] = x86_reg(MINIC_X86_REG_R10,bits);
+        bindings[0].value.physical.access = MINIC_MACHINE_REGISTER_READ;
+        bindings[0].asm_constraint = "q";
+        return minic_machine_builder_emit_core_source_asm(&sel->builder,
+            src,0U,bindings,1U,NULL,0U,false,false);
+    }
+    if (!x86_scalar_role(&roles[1],1U,
+            MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT) ||
+        roles[1].physical_read_write || roles[1].has_tied_output ||
+        !minic_lp64_core_pointer_pointee(sel->core->type_context,
+            sel->core->values[roles[0].value].core_type_id,&pointee) ||
+        (type = x86_type(sel,pointee)) == NULL || !type->has_layout ||
+        type->kind != MINIC_CORE_TYPE_RECORD || type->size != 16U ||
+        !x86_asm_gp_input_width(sel,roles[1].value,8U) ||
+        !x86_core_load(sel,roles[0].value,MINIC_X86_REG_R10) ||
+        !x86_core_load(sel,roles[1].value,MINIC_X86_REG_R11)) return false;
+    bindings[0] = x86_addr(MINIC_X86_REG_R10,0);
+    bindings[0].asm_constraint = "m";
+    bindings[1] = x86_reg(MINIC_X86_REG_R11,64U);
+    bindings[1].value.physical.access = MINIC_MACHINE_REGISTER_READ;
+    bindings[1].asm_constraint = "r";
+    return minic_machine_builder_emit_core_source_asm(&sel->builder,
+        src,MINIC_MACHINE_EFFECT_MEMORY_READ,bindings,2U,NULL,0U,false,false);
+}
+
 /* Linux write-combining MOVNTI: physical output memory address and
  * integer source register. Emit only the Source-qualified 32/64-bit forms. */
 static bool x86_source_movnti(X86CoreSelector *sel,
@@ -10288,6 +10415,8 @@ static bool x86_core_instruction(X86CoreSelector *sel,
             x86_source_boot_movs(sel, ins) ||
             x86_source_control_register(sel, ins) ||
             x86_source_segment_load_extable(sel, ins) ||
+            x86_source_segment_register_extable(sel, ins) ||
+            x86_source_lkgs_extable(sel, ins) ||
             x86_source_boot_segments(sel, ins) ||
             x86_source_debug_register(sel, ins) ||
             x86_source_task_control(sel, ins) ||
@@ -10317,6 +10446,7 @@ static bool x86_core_instruction(X86CoreSelector *sel,
             x86_source_three_call_alternative(sel, ins) ||
             x86_source_pv_indirect_call(sel, ins) ||
             x86_source_lowlevel_halt(sel, ins) ||
+            x86_source_lowlevel_descriptor(sel, ins) ||
             x86_source_movnti(sel, ins) ||
             x86_source_boot_bit(sel, ins) ||
             x86_source_boot_test_bit(sel, ins) ||
