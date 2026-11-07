@@ -4214,9 +4214,58 @@ jobs:
           sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 install -y --no-install-recommends \
             gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
             bc bison flex libssl-dev libelf-dev make python3 file xz-utils
+      # The shared composite intentionally fails on a branch-scoped cache miss.
+      # Current-HEAD RV32 is an independent opt-in: seed the SAME SHA-pinned
+      # source key on this branch before releasing its seven workers.
       - uses: ./.github/actions/linux-runtime-restore-fixture
+        if: needs.rv32-current-campaign-gate.outputs.run != 'true'
         with:
           fixture: source
+      - name: Restore pinned RV32 source when already available on this branch
+        if: needs.rv32-current-campaign-gate.outputs.run == 'true'
+        id: rv32_current_source_cache
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-expanded-kbuild-v0/linux-6.6.143
+          key: linux-source-6.6.143-dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932-v1
+      - name: Reconstitute SHA-pinned original RV32 source after branch cache miss
+        if: needs.rv32-current-campaign-gate.outputs.run == 'true' && steps.rv32_current_source_cache.outputs.cache-hit != 'true'
+        timeout-minutes: 12
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          root="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0"
+          mkdir -p "$root"
+          test ! -e "$root/linux-6.6.143" || {
+            echo 'RV32I_ORIGINAL_SOURCE=FAIL unexpected_partial_source_tree' >&2
+            exit 1
+          }
+          archive="$RUNNER_TEMP/minic-rv32-6.6.143-original-linux.tar.xz"
+          curl --proto '=https' --tlsv1.2 -fLSs --retry 3 --retry-delay 3 \
+            --connect-timeout 20 --max-time 300 \
+            https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.6.143.tar.xz \
+            -o "$archive"
+          printf '%s  %s\n' dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932 "$archive" | sha256sum -c -
+          tar -xJf "$archive" -C "$root"
+          test -s "$root/linux-6.6.143/Makefile"
+          echo 'RV32I_ORIGINAL_SOURCE=PASS sha256=dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932 archive=upstream_verified'
+      - name: Verify source identity before any RV32 GNU configuration
+        if: needs.rv32-current-campaign-gate.outputs.run == 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          source=build/linux-expanded-kbuild-v0/linux-6.6.143
+          test -s "$source/Makefile"
+          grep -Eq '^VERSION[[:space:]]*=[[:space:]]*6$' "$source/Makefile"
+          grep -Eq '^PATCHLEVEL[[:space:]]*=[[:space:]]*6$' "$source/Makefile"
+          grep -Eq '^SUBLEVEL[[:space:]]*=[[:space:]]*143$' "$source/Makefile"
+          echo "RV32I_ORIGINAL_SOURCE=VERIFIED cache_hit=${{ steps.rv32_current_source_cache.outputs.cache-hit }} version=6.6.143"
+      - name: Save verified RV32 original source for seven dependent workers
+        if: needs.rv32-current-campaign-gate.outputs.run == 'true' && steps.rv32_current_source_cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: build/linux-expanded-kbuild-v0/linux-6.6.143
+          key: linux-source-6.6.143-dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932-v1
       - name: Derive original RV32 Kconfig without compiling any kernel objects
         shell: bash
         run: |
