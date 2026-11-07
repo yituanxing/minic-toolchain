@@ -3,4 +3,4 @@
 # change only this file in the last PR-head commit. Expired input fails closed.
 source_run=41212514498
 source_merge_commit=796f2b44fada71218a22fc506ae50ecfe6b43342
-nonce=2026-11-07-preserve-once
+nonce=2026-11-07-preserve-existing-v2

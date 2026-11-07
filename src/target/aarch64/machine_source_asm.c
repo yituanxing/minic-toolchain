@@ -1243,9 +1243,9 @@ static const MinicMachineSourceAsmTemplatePolicy a64_cmpxchg_policy = {
  * source templates. Core only carries scalar/memory roles; Machine seals
  * exact physical GPRs, GNU constraints, true memory effects and imm bits. */
 typedef struct {
-    unsigned int regs[5];
-    const char *constraints[5], *names[5];
-    bool outputs[5], immediate;
+    unsigned int regs[8];
+    const char *constraints[8], *names[8];
+    bool outputs[8], readwrites[8], immediate;
     size_t count, memory;
 } A64AtomicPhysicalForm;
 
@@ -1270,7 +1270,58 @@ static bool a64_atomic_physical_form(
         ins->implicit_count != 0U) return false;
     memset(p, 0, sizeof(*p));
     id = ins->source_asm_machine_form_id;
-    if (id == AARCH64_MACHINE_ASM_UACCESS_BIC) {
+    if (id == AARCH64_MACHINE_ASM_FUTEX) {
+        static const unsigned int regs[8] =
+            {9U,12U,10U,13U,14U,11U,15U,16U};
+        const unsigned int form = aarch64_linux_futex_form(
+            ins->source_asm_template,ins->source_asm_length);
+        const bool compare = form == 6U;
+        if (form == 0U ||
+            ins->source_asm_machine_form_variant != form ||
+            ins->effects != mem_effects) return false;
+        p->count = compare ? 8U : 7U; p->memory = 2U;
+        for (i = 0U; i < p->count; ++i) {
+            p->regs[i] = regs[i];
+            p->constraints[i] = i == 0U ?
+                (compare ? "+r" : "=&r") :
+                i == 1U || i == 3U ? "=&r" :
+                i == 2U ? "+Q" : i == 4U ? "+r" :
+                i == p->count - 1U ? "Ir" : "r";
+            p->outputs[i] = i < 5U && i != 2U;
+            p->readwrites[i] = (i == 0U && compare) || i == 4U;
+        }
+    } else if (id == AARCH64_MACHINE_ASM_CMPXCHG128) {
+        static const unsigned int regs[8] =
+            {10U,9U,12U,13U,11U,14U,15U,16U};
+        static const char *const names[8] =
+            {"v","rl","rh","tmp","ol","oh","nl","nh"};
+        const unsigned int form = aarch64_linux_cmpxchg128_form(
+            ins->source_asm_template,ins->source_asm_length);
+        const bool named = strstr(ins->source_asm_template,"%[v]") != NULL;
+        if ((form != 1U && form != 2U) ||
+            ins->source_asm_machine_form_variant != form ||
+            ins->effects != mem_effects)
+            return false;
+        p->count = 8U; p->memory = 0U;
+        for (i = 0U; i < 8U; ++i) {
+            p->regs[i] = regs[i];
+            p->constraints[i] = i == 0U ? "+Q" :
+                i < 4U ? "=&r" : "r";
+            p->names[i] = named ? names[i] : NULL;
+            p->outputs[i] = i > 0U && i < 4U;
+        }
+    } else if (id == AARCH64_MACHINE_ASM_ATOMIC_DEC_POSITIVE) {
+        if (ins->source_asm_machine_form_variant != 0U ||
+            !aarch64_linux_atomic_dec_positive_form(
+                ins->source_asm_template, ins->source_asm_length) ||
+            ins->effects != mem_effects)
+            return false;
+        p->count = 3U; p->memory = 2U;
+        p->regs[0] = 9U; p->regs[1] = 12U; p->regs[2] = 10U;
+        p->constraints[0] = "=&r"; p->outputs[0] = true;
+        p->constraints[1] = "=&r"; p->outputs[1] = true;
+        p->constraints[2] = "+Q";
+    } else if (id == AARCH64_MACHINE_ASM_UACCESS_BIC) {
         if (!aarch64_linux_uaccess_bic_template(ins->source_asm_template,
                 ins->source_asm_length) ||
             ins->source_asm_machine_form_variant != 0U ||
@@ -1385,8 +1436,10 @@ static bool a64_atomic_policy_binding(
         op->value.physical.reg.bank==MINIC_MACHINE_REGISTER_GENERAL &&
         op->value.physical.reg.number==p.regs[index] &&
         op->value.physical.reg.width_bits==64U &&
-        op->value.physical.access==(p.outputs[index]?
-            MINIC_MACHINE_REGISTER_WRITE:MINIC_MACHINE_REGISTER_READ);
+        op->value.physical.access==(p.outputs[index] ?
+            (MINIC_MACHINE_REGISTER_WRITE |
+                (p.readwrites[index] ? MINIC_MACHINE_REGISTER_READ : 0U)) :
+            MINIC_MACHINE_REGISTER_READ);
 }
 
 static bool a64_atomic_policy_operand(FILE *out,

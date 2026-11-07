@@ -40,12 +40,14 @@ on:
       - 'tools/ci/linux-three-isa-seven-runtime-trigger.txt'
       - 'tools/ci/linux-three-isa-seven-source-refresh-trigger.txt'
       - 'tools/ci/linux-three-isa-seven-candidate-trigger.txt'
+      - 'tools/ci/linux-rv32-history-preserve-trigger.txt'
   push:
     branches: [refactor/minic-target-language-boundary]
     paths:
       - 'tools/ci/linux-three-isa-seven-runtime-trigger.txt'
       - 'tools/ci/linux-three-isa-seven-source-refresh-trigger.txt'
       - 'tools/ci/linux-three-isa-seven-candidate-trigger.txt'
+      - 'tools/ci/linux-rv32-history-preserve-trigger.txt'
 
 permissions:
   contents: read
@@ -69,6 +71,71 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # This job is a historical retention operation only. A new PR-only workflow
+  # is not necessarily registered on the repository default branch, so keep
+  # the one-shot archival gate on this already-registered runtime workflow.
+  # It never builds candidate C, links Linux, or starts QEMU.
+  rv32-historical-evidence-preserve:
+    if: github.event_name == 'pull_request' || github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 2
+          persist-credentials: false
+      - name: Require this exact PR HEAD to change the historical marker
+        id: admit
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          marker=tools/ci/linux-rv32-history-preserve-trigger.txt
+          active=false
+          if git rev-parse --verify HEAD^ >/dev/null 2>&1 &&
+              ! git diff --quiet HEAD^ HEAD -- "$marker" &&
+              grep -Fxq 'source_run=41212514498' "$marker" &&
+              grep -Fxq 'source_merge_commit=796f2b44fada71218a22fc506ae50ecfe6b43342' "$marker" &&
+              grep -Fxq 'nonce=2026-11-07-preserve-existing-v2' "$marker"; then
+            active=true
+          fi
+          echo "active=$active" >> "$GITHUB_OUTPUT"
+          echo "RV32_HISTORY_PRESERVE_GATE=$active original_run=41212514498 current_head=$(git rev-parse HEAD)"
+      - name: Restore all nine original 2026-10-31 GNU and MiniC artifacts
+        if: steps.admit.outputs.active == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          repository: yituanxing/minic-toolchain
+          run-id: '41212514498'
+          github-token: ${{ github.token }}
+          pattern: '*'
+          merge-multiple: false
+          path: build/rv32-history-preserve/source-run-41212514498
+      - name: Verify historical 1741 ELF32 objects and twelve original QEMU boots
+        if: steps.admit.outputs.active == 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          base=build/rv32-history-preserve
+          python3 tools/ci/verify_rv32_history_bundle_v1.py \
+            --input "$base/source-run-41212514498" \
+            --receipt "$base/HISTORICAL-NOT-CURRENT-HEAD-VERDICT.json"
+          sha256sum "$base/source-run-41212514498"/linux-rv32i-seven-shard-Image-*/out/arch/riscv/boot/Image
+      - name: Retain independently verified historical evidence for ninety days
+        if: steps.admit.outputs.active == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: rv32i-original-1741-12boot-history-41212514498
+          path: build/rv32-history-preserve/
+          if-no-files-found: error
+          retention-days: 90
+          compression-level: 0
+      - name: Mark historical-only result, never current compiler acceptance
+        if: steps.admit.outputs.active == 'true'
+        run: |
+          echo 'RV32_HISTORY_PRESERVE=PASS historical_MiniC_C=1741/1741 historical_QEMU_P1=12/12 current_MiniC_C=NOT_RUN current_QEMU_P1=NOT_RUN'
+          echo 'Historical input run #41212514498, nine original artifacts, SHA-verified and retained 90 days. No current-head compilation or QEMU was executed.' >> "$GITHUB_STEP_SUMMARY"
+
   gate:
     runs-on: ubuntu-24.04
     outputs:

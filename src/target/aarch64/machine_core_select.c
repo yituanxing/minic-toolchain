@@ -2656,6 +2656,236 @@ static bool a64_linux_old_atomic_source(A64CoreSelection *sel,
     return true;
 }
 
+/* Linux atomic64_dec_if_positive keeps the 64-bit value/status outputs in
+ * sealed physical registers while its +Q object stays memory-resident. */
+static bool a64_linux_dec_positive_source(A64CoreSelection *sel,
+    const MinicCoreInstruction *ins, const MinicCoreInlineAsm *source) {
+    const MinicCoreFunction *fn = sel->ctx->fn;
+    const MinicCoreStructuredInlineAsmOperand *ops =
+        ins->value.structured_inline_asm.operands;
+    MinicMachineOperand bindings[3];
+    size_t i;
+    if (source->target_machine_form_id !=
+            AARCH64_MACHINE_ASM_ATOMIC_DEC_POSITIVE ||
+        source->target_machine_form_variant != 0U ||
+        !aarch64_linux_atomic_dec_positive_form(source->template_text,
+            source->template_length) ||
+        source->operand_plan_owner != MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED ||
+        !source->is_volatile || source->is_goto ||
+        !source->has_memory_clobber ||
+        source->register_clobber_count != 1U ||
+        source->resolved_immediate_count != 0U ||
+        source->symbol_reference_count != 0U ||
+        source->deferred_immediate_symbol != NULL ||
+        ins->result != MINIC_CORE_VALUE_INVALID ||
+        !minic_core_function_type_is_kind(fn, ins->core_type_id,
+            MINIC_CORE_TYPE_VOID) ||
+        ops == NULL || ins->value.structured_inline_asm.operand_count != 3U ||
+        sel->ctx->machine_frame->has_dynamic_stack)
+        return false;
+    for (i = 0U; i < 3U; ++i) {
+        if (ops[i].operand_index != i ||
+            ops[i].kind != (i == 2U ?
+                MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE :
+                MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT) ||
+            ops[i].value >= fn->value_count ||
+            ops[i].has_fixed_register_binding || ops[i].has_tied_output ||
+            ops[i].early_clobber ||
+            ops[i].physical_early_clobber != (i < 2U) ||
+            ops[i].physical_read_write != (i == 2U) ||
+            (i == 2U ?
+                !aarch64_stlr_memory_carrier_core(fn, ops[i].value, 8U) :
+                !aarch64_asm_core_integer(fn, ops[i].value, true, 8U, -1)))
+            return false;
+        bindings[i] = a64_gp(i == 0U ? 9U : i == 1U ? 12U : 10U,
+            64U, i < 2U ? MINIC_MACHINE_REGISTER_WRITE :
+                MINIC_MACHINE_REGISTER_READ);
+        bindings[i].asm_constraint = i < 2U ? "=&r" : "+Q";
+    }
+    if (!a64_atomic_load_core_preserving(sel, ops[2].value, 10U, 64U, 0U) ||
+        !minic_machine_builder_emit_core_source_asm(&sel->builder,
+            source, MINIC_MACHINE_EFFECT_MEMORY_READ |
+                    MINIC_MACHINE_EFFECT_MEMORY_WRITE,
+            bindings, 3U, NULL, 0U, false, false))
+        return false;
+    for (i = 0U; i < 2U; ++i) {
+        if (!a64_atomic_load_core_preserving(sel, ops[i].value, 14U,
+                64U, (UINT32_C(1) << 9) | (UINT32_C(1) << 12)) ||
+            !a64_memory_register(sel, MINIC_A64_MACHINE_STR_X, false,
+                i == 0U ? 9U : 12U, 64U, 14U, 0U, true, false))
+            return false;
+    }
+    return true;
+}
+
+/* 128-bit LL/SC compare-exchange: one memory carrier, three outputs,
+ * four scalar inputs, independently sealed to machine GPRs. */
+static bool a64_linux_cmpxchg128_source(A64CoreSelection *sel,
+    const MinicCoreInstruction *ins, const MinicCoreInlineAsm *source) {
+    const MinicCoreFunction *fn = sel->ctx->fn;
+    const MinicCoreStructuredInlineAsmOperand *ops =
+        ins->value.structured_inline_asm.operands;
+    static const unsigned int regs[8] = {10U,9U,12U,13U,11U,14U,15U,16U};
+    static const char *const names[8] =
+        {"v","rl","rh","tmp","ol","oh","nl","nh"};
+    MinicMachineOperand bindings[8];
+    uint32_t preserve = UINT32_C(1) << 10;
+    const unsigned int form = aarch64_linux_cmpxchg128_form(
+        source->template_text,source->template_length);
+    const bool named = source->template_text != NULL &&
+        strstr(source->template_text,"%[v]") != NULL;
+    size_t i;
+    if (source->target_machine_form_id != AARCH64_MACHINE_ASM_CMPXCHG128 ||
+        (form != 1U && form != 2U) ||
+        source->target_machine_form_variant != form ||
+        source->operand_plan_owner != MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED ||
+        !source->is_volatile || source->is_goto ||
+        !source->has_memory_clobber ||
+        source->explicit_memory_clobber != (form == 2U) ||
+        source->register_clobber_count != 1U ||
+        source->resolved_immediate_count != 0U ||
+        source->symbol_reference_count != 0U ||
+        source->deferred_immediate_symbol != NULL ||
+        ins->result != MINIC_CORE_VALUE_INVALID ||
+        !minic_core_function_type_is_kind(fn,ins->core_type_id,
+            MINIC_CORE_TYPE_VOID) ||
+        ops == NULL || ins->value.structured_inline_asm.operand_count != 8U ||
+        sel->ctx->machine_frame->has_dynamic_stack) return false;
+    for (i = 0U; i < 8U; ++i) {
+        const MinicCoreStructuredInlineAsmOperandKind kind = i == 0U ?
+            MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE :
+            i < 4U ? MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT :
+                MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+        const size_t width = i == 0U ? 16U : i == 3U ? 4U : 8U;
+        if (ops[i].operand_index != i || ops[i].kind != kind ||
+            ops[i].value >= fn->value_count ||
+            ops[i].has_fixed_register_binding || ops[i].has_tied_output ||
+            ops[i].early_clobber ||
+            ops[i].physical_early_clobber != (i > 0U && i < 4U) ||
+            ops[i].physical_read_write != (i == 0U) ||
+            (i == 0U ?
+                !aarch64_stlr_memory_carrier_core(fn,ops[i].value,width) :
+                !aarch64_asm_core_integer(fn,ops[i].value,i < 4U,width,-1)))
+            return false;
+        bindings[i] = a64_gp(regs[i],64U,
+            i > 0U && i < 4U ? MINIC_MACHINE_REGISTER_WRITE :
+                MINIC_MACHINE_REGISTER_READ);
+        bindings[i].asm_constraint = i == 0U ? "+Q" :
+            i < 4U ? "=&r" : "r";
+        bindings[i].asm_name = named ? (char *)names[i] : NULL;
+    }
+    if (!a64_atomic_load_core_preserving(sel,ops[0].value,10U,64U,0U))
+        return false;
+    for (i = 4U; i < 8U; ++i) {
+        if (!a64_atomic_load_core_preserving(sel,ops[i].value,
+                regs[i],64U,preserve)) return false;
+        preserve |= UINT32_C(1) << regs[i];
+    }
+    if (!minic_machine_builder_emit_core_source_asm(&sel->builder,source,
+            MINIC_MACHINE_EFFECT_MEMORY_READ |
+                MINIC_MACHINE_EFFECT_MEMORY_WRITE,
+            bindings,8U,NULL,0U,false,false)) return false;
+    for (i = 1U; i < 4U; ++i) {
+        const bool status = i == 3U;
+        if (!a64_atomic_load_core_preserving(sel,ops[i].value,14U,64U,
+                (UINT32_C(1) << 9) | (UINT32_C(1) << 12) |
+                (UINT32_C(1) << 13)) ||
+            !a64_memory_register(sel,status ? MINIC_A64_MACHINE_STR_W :
+                MINIC_A64_MACHINE_STR_X,false,regs[i],
+                status ? 32U : 64U,14U,0U,true,false)) return false;
+    }
+    return true;
+}
+
+/* Original arm64 futex inline LL/SC includes two precise typed exception
+ * recovery records, and for CMPXCHG the retry budget/output pair is live
+ * across both faulting accesses. Keep all complete source-Machine roles. */
+static bool a64_linux_futex_source(A64CoreSelection *sel,
+    const MinicCoreInstruction *ins, const MinicCoreInlineAsm *source) {
+    const MinicCoreFunction *fn = sel->ctx->fn;
+    const MinicCoreStructuredInlineAsmOperand *ops =
+        ins->value.structured_inline_asm.operands;
+    static const unsigned int regs[8] = {9U,12U,10U,13U,14U,11U,15U,16U};
+    MinicMachineOperand bindings[8];
+    const unsigned int mode = aarch64_linux_futex_form(
+        source->template_text,source->template_length);
+    const bool compare = mode == 6U;
+    const size_t count = compare ? 8U : 7U;
+    uint32_t preserve = UINT32_C(1) << 10;
+    size_t i;
+    if (source->target_machine_form_id != AARCH64_MACHINE_ASM_FUTEX ||
+        mode == 0U || source->target_machine_form_variant != mode ||
+        source->operand_plan_owner != MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED ||
+        !source->is_volatile || source->is_goto ||
+        !source->has_memory_clobber || !source->implicit_memory_effect ||
+        source->register_clobber_count != 0U ||
+        source->resolved_immediate_count != 0U ||
+        source->symbol_reference_count != 0U ||
+        source->deferred_immediate_symbol != NULL ||
+        ins->result != MINIC_CORE_VALUE_INVALID ||
+        !minic_core_function_type_is_kind(fn,ins->core_type_id,
+            MINIC_CORE_TYPE_VOID) ||
+        ops == NULL || ins->value.structured_inline_asm.operand_count != count ||
+        sel->ctx->machine_frame->has_dynamic_stack) return false;
+    for (i = 0U; i < count; ++i) {
+        const bool readwrite = (i == 0U && compare) || i == 4U;
+        const MinicCoreStructuredInlineAsmOperandKind kind = i == 2U ?
+            MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE :
+            readwrite ? MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE :
+            i < 5U ? MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT :
+                MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+        if (ops[i].operand_index != i || ops[i].kind != kind ||
+            ops[i].value >= fn->value_count ||
+            ops[i].has_fixed_register_binding || ops[i].has_tied_output ||
+            ops[i].early_clobber ||
+            ops[i].physical_early_clobber != (i < 5U &&
+                i != 2U && !readwrite) ||
+            ops[i].physical_read_write != (i == 2U || readwrite) ||
+            (i == 2U ?
+                !aarch64_stlr_memory_carrier_core(fn,ops[i].value,4U) :
+                !aarch64_asm_core_integer(fn,ops[i].value,i < 5U,4U,-1)))
+            return false;
+        bindings[i] = a64_gp(regs[i],64U,i < 5U && i != 2U ?
+            (readwrite ? MINIC_MACHINE_REGISTER_READ |
+                MINIC_MACHINE_REGISTER_WRITE : MINIC_MACHINE_REGISTER_WRITE) :
+            MINIC_MACHINE_REGISTER_READ);
+        bindings[i].asm_constraint = i == 0U ?
+            (compare ? "+r" : "=&r") : i == 1U || i == 3U ?
+            "=&r" : i == 2U ? "+Q" : i == 4U ? "+r" :
+            (i == count - 1U ? "Ir" : "r");
+    }
+    if (!a64_atomic_load_core_preserving(sel,ops[2].value,10U,64U,0U))
+        return false;
+    if (compare) {
+        if (!a64_atomic_load_core_preserving(sel,ops[0].value,
+                9U,32U,preserve)) return false;
+        preserve |= UINT32_C(1) << 9;
+    }
+    if (!a64_atomic_load_core_preserving(sel,ops[4].value,
+            14U,32U,preserve)) return false;
+    preserve |= UINT32_C(1) << 14;
+    for (i = 5U; i < count; ++i) {
+        if (!a64_atomic_load_core_preserving(sel,ops[i].value,
+                regs[i],32U,preserve)) return false;
+        preserve |= UINT32_C(1) << regs[i];
+    }
+    if (!minic_machine_builder_emit_core_source_asm(&sel->builder,source,
+            MINIC_MACHINE_EFFECT_MEMORY_READ |
+                MINIC_MACHINE_EFFECT_MEMORY_WRITE,
+            bindings,count,NULL,0U,false,false)) return false;
+    for (i = 0U; i < 5U; ++i) {
+        const uint32_t keep = (UINT32_C(1) << 9) |
+            (UINT32_C(1) << 12) | (UINT32_C(1) << 13) |
+            (UINT32_C(1) << 14);
+        if (i == 2U) continue;
+        if (!a64_atomic_load_core_preserving(sel,ops[i].value,
+                17U,64U,keep) ||
+            !a64_memory_register(sel,MINIC_A64_MACHINE_STR_W,
+                false,regs[i],32U,17U,0U,true,false)) return false;
+    }
+    return true;
+}
+
 /* Original Linux uaccess __uaccess_mask_ptr: one canonical BIC xN,xM,#bit55.
  * The Core immediate is proven from the *actual* SSA constant definition;
  * a matching source string cannot reclassify a runtime-valued mask. */
@@ -5330,6 +5560,13 @@ static bool a64_core_instruction(A64CoreSelection *sel,
             source->target_machine_form_id == AARCH64_MACHINE_ASM_ATOMIC_RETURN ||
             source->target_machine_form_id == AARCH64_MACHINE_ASM_XCHG)
             return a64_linux_old_atomic_source(sel, ins, source);
+        if (source->target_machine_form_id ==
+                AARCH64_MACHINE_ASM_ATOMIC_DEC_POSITIVE)
+            return a64_linux_dec_positive_source(sel, ins, source);
+        if (source->target_machine_form_id == AARCH64_MACHINE_ASM_CMPXCHG128)
+            return a64_linux_cmpxchg128_source(sel, ins, source);
+        if (source->target_machine_form_id == AARCH64_MACHINE_ASM_FUTEX)
+            return a64_linux_futex_source(sel, ins, source);
         if (source->target_machine_form_id == AARCH64_MACHINE_ASM_UACCESS_BIC)
             return a64_linux_uaccess_bic_source(sel, ins, source);
         if (source->target_machine_form_id == AARCH64_MACHINE_ASM_PERCPU_ALTERNATIVE ||
