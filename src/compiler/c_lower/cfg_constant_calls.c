@@ -256,6 +256,9 @@ bool minic_core_cfg_pure_call_argument(const MinicCoreLowerContext *context,
         const MinicBlock *initializer;
         const MinicStatement *assignment;
         const MinicExpression *destination;
+        if (minic_type_is_record(expression->type))
+            return minic_core_cfg_pure_record_compound_initializer(
+                context, expression, depth + 1U);
         /* GNU `(int){0}` is an lvalue backed by a fresh scalar local,
          * rather than an ISO C integer constant expression.  For CFG-only
          * reachability proofs, its single initializer is effect-free when
@@ -290,16 +293,30 @@ bool minic_core_cfg_pure_call_argument(const MinicCoreLowerContext *context,
                minic_core_cfg_pure_call_argument(context,
                                            expression->value.binary.right,
                                            depth + 1U);
-    case MINIC_EXPRESSION_CONDITIONAL:
+    case MINIC_EXPRESSION_CONDITIONAL: {
+        MinicConstValue condition;
+        bool is_zero;
+        if (!minic_core_cfg_pure_call_argument(context,
+                expression->value.conditional.condition, depth + 1U))
+            return false;
+        /* GNU FIELD_PREP guards use __builtin_constant_p(runtime) ?
+         * complicated statement-expression : 0. The unselected arm is
+         * never evaluated, so its local writes/calls cannot disqualify
+         * an otherwise pure, exactly proven condition. Unknown conditions
+         * retain the conservative both-arms proof. */
+        if (context->target != NULL &&
+            core_const_eval_integer_with_locals(context,
+                expression->value.conditional.condition, &condition) &&
+            minic_const_value_is_zero(context->body->program,
+                context->target, &condition, &is_zero))
+            return minic_core_cfg_pure_call_argument(context,
+                is_zero ? expression->value.conditional.when_false :
+                          expression->value.conditional.when_true, depth + 1U);
         return minic_core_cfg_pure_call_argument(context,
-                                           expression->value.conditional.condition,
-                                           depth + 1U) &&
+                expression->value.conditional.when_true, depth + 1U) &&
                minic_core_cfg_pure_call_argument(context,
-                                           expression->value.conditional.when_true,
-                                           depth + 1U) &&
-               minic_core_cfg_pure_call_argument(context,
-                                           expression->value.conditional.when_false,
-                                           depth + 1U);
+                expression->value.conditional.when_false, depth + 1U);
+    }
     case MINIC_EXPRESSION_STATEMENT:
         /* GNU ({...}) is not automatically pure.  Only the single shared
          * no-effect guard proof may certify its prefix; its result must

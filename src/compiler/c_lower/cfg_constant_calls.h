@@ -5,6 +5,10 @@
 /* Pure-call operand admission: an unsupported shape is NOT a proof. */
 bool minic_core_cfg_pure_call_argument(const MinicCoreLowerContext *,
                                        MinicExpressionId, unsigned int);
+/* A record compound literal is pure only when its bounded initializer writes
+ * fields of its own fresh backing object using pure scalar values. */
+bool minic_core_cfg_pure_record_compound_initializer(
+    const MinicCoreLowerContext *, const MinicExpression *, unsigned int);
 /* A GNU statement expression may write its own nonescaping, block-owned
  * scratch locals without producing an observable effect. */
 bool minic_core_cfg_pure_statement_local_assignments(

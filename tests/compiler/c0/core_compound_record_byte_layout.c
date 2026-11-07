@@ -72,8 +72,26 @@ int compound_record_dynamic_field(u8 value) {
     return ((u8 *)&(struct request_desc_header){ .cci = value })[0];
 }
 
+/* An initializer may also call a function with effects. A compile-time
+ * byte-layout proof must never erase or speculate that call. */
+static unsigned int compound_record_effect_count;
+
+static u8 compound_record_effectful_value(void) {
+    ++compound_record_effect_count;
+    return 9;
+}
+
+int compound_record_effectful_field(void) {
+    return ((u8 *)&(struct request_desc_header){
+        .cci = compound_record_effectful_value()
+    })[0];
+}
+
 int main(void) {
     return compound_record_layout_guards() == 10 &&
            compound_record_dynamic_field(7) == 7 &&
-           compound_record_dynamic_field(13) == 13 ? 0 : 1;
+           compound_record_dynamic_field(13) == 13 &&
+           compound_record_effectful_field() == 9 &&
+           compound_record_effectful_field() == 9 &&
+           compound_record_effect_count == 2 ? 0 : 1;
 }

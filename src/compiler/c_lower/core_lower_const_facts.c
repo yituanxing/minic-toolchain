@@ -983,6 +983,56 @@ static bool core_cfg_compound_member_layout(
     return true;
 }
 
+/* A record compound literal's initializer is an effect-free temporary only
+ * when every write remains inside its own backing local. Reuse the exact
+ * member-chain/DataLayout owner proof from byte-constant evaluation; merely
+ * checking that the RHS values are constant would admit writes through an
+ * unrelated pointer or an escaping compound literal. */
+bool minic_core_cfg_pure_record_compound_initializer(
+    const MinicCoreLowerContext *context, const MinicExpression *compound,
+    unsigned int depth) {
+    const MinicC0Program *program;
+    const MinicBlock *initializer;
+    const MinicLocal *local;
+    size_t i;
+    if (context == NULL || context->body == NULL ||
+        (program = context->body->program) == NULL || context->target == NULL ||
+        compound == NULL || compound->kind != MINIC_EXPRESSION_COMPOUND_LITERAL ||
+        !minic_type_is_record(compound->type) ||
+        minic_type_is_volatile(compound->type) || depth > 32U)
+        return false;
+    local = minic_c0_program_local(
+        program, compound->value.compound_literal.local_id);
+    initializer = minic_c0_program_block(
+        program, compound->value.compound_literal.initializer_block);
+    if (local == NULL || initializer == NULL || local->is_register_storage ||
+        !minic_type_equal(local->type, compound->type) ||
+        initializer->statement_count > 512U)
+        return false;
+    for (i = 0U; i < initializer->statement_count; ++i) {
+        const MinicStatement *statement = minic_c0_program_statement(
+            program, initializer->statements[i]);
+        const MinicExpression *target;
+        size_t byte_offset, bit_offset;
+        if (statement == NULL || statement->kind != MINIC_STATEMENT_ASSIGN ||
+            statement->cleanup_context != statement->cleanup_stop_context ||
+            statement->target_expression == MINIC_EXPRESSION_INVALID ||
+            statement->expression == MINIC_EXPRESSION_INVALID ||
+            (target = minic_c0_program_expression(
+                program, statement->target_expression)) == NULL ||
+            target->kind != MINIC_EXPRESSION_MEMBER ||
+            !minic_type_is_integer(target->type) ||
+            minic_type_is_volatile(target->type) ||
+            !core_cfg_compound_member_layout(program, context->target, target,
+                compound->value.compound_literal.local_id, 0U,
+                &byte_offset, &bit_offset) ||
+            !minic_core_cfg_pure_call_argument(
+                context, statement->expression, depth + 1U))
+            return false;
+    }
+    return true;
+}
+
 /* GNU-style aggregate layout tests inspect bytes of a constant record
  * compound literal.  Build a bounded, bit-accurate image from its frontend
  * initializer assignments: unknown padding is never treated as constant.
