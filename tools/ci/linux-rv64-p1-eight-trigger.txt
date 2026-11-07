@@ -7,3 +7,4 @@
 2026-11-07 rearm exact eight-owner replay only to retain three pinned GNU .i input and frame provenance artifacts; do not change compiler identity, cached C pool, or P1 acceptance rules
 2026-11-07 strict same-Image eight-owner P1 after RV64 source fix f3354e064; compare current exact GNU .i against historical frame results, run adversarial GNU/QEMU differential and twelve independent boots; never count frame size, cache or three successful boots as twelve
 2026-11-07 strict stable-baseline completion after #42338051693; 4/4 full-MiniC baseline PASS caused historical diagnostic to exit INCONCLUSIVE. Reboot identical Image 12 times with SHA invariance and exact P1 oracle; if any FAIL, perform original eight-owner rescue; no certifying skip.
+2026-11-07 current exact-HEAD 2064-owner LP64 static Image independently verified P1 twelve-boot campaign; GNU golden and candidate Kbuild/link identity required, no historical cached 4/4 substitution.
