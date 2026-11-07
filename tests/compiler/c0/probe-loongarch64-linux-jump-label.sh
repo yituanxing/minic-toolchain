@@ -50,6 +50,19 @@ l_yes:
     return 1;
 }
 int inline_static_branch_call(void) { return inline_static_branch(&local_key); }
+int loong_static_branch_key_plus_one(void) {
+    asm goto(
+        "1:\tnop\t\t\t\n\t"
+        ".pushsection\t__jump_table, \"aw\"\t\n\t"
+        ".align\t3\t\t\t\n\t"
+        ".long\t\t1b - ., %l[l_yes] - .\t\n\t"
+        ".quad\t\t%0 - .\t\t\t\n\t"
+        ".popsection\t\t\t\t\n\t"
+        : : "i"(&((char *)&local_key)[1]) : : l_yes);
+    return 0;
+l_yes:
+    return 1;
+}
 SRC
 "$MINIC_CC" --target=loongarch64-linux -fPIE -S \
   "$work/jump.i" -o "$work/jump.s"
@@ -65,16 +78,17 @@ if test -n "${MINIC_JUMP_BASELINE_CC:-}"; then
 fi
 grep -Eq '1:[[:space:]]+nop' "$work/jump.s"
 grep -Eq '1:[[:space:]]+b[[:space:]]+\.Luser_' "$work/jump.s"
-test "$(grep -Ec '\.pushsection[[:space:]]+__jump_table,[[:space:]]*"aw"' "$work/jump.s")" -eq 3
-test "$(grep -Ec '\.align[[:space:]]+3' "$work/jump.s")" -eq 3
+test "$(grep -Ec '\.pushsection[[:space:]]+__jump_table,[[:space:]]*"aw"' "$work/jump.s")" -eq 4
+test "$(grep -Ec '\.align[[:space:]]+3' "$work/jump.s")" -eq 4
 grep -Eq '\.quad[[:space:]]+local_key[[:space:]]*-[[:space:]]*\.' "$work/jump.s"
 grep -Eq '\.quad[[:space:]]+external_key[[:space:]]*-[[:space:]]*\.' "$work/jump.s"
-echo 'MINIC_LOONGARCH64_JUMP_LABEL_SHAPE=PASS nop=2 branch=1 PREL32=3 PREL64=3 symbolic_inline_clone=1'
+grep -Eq '\.quad[[:space:]]+local_key\+1[[:space:]]*-[[:space:]]*\.' "$work/jump.s"
+echo 'MINIC_LOONGARCH64_JUMP_LABEL_SHAPE=PASS nop=3 branch=1 PREL32=4 PREL64=4 symbolic_inline_clone=1 key_addend=+1'
 
 cross=${LOONGARCH64_CC:-loongarch64-linux-gnu-gcc-13}
 if command -v "$cross" >/dev/null 2>&1; then
     "$cross" -c -x assembler "$work/jump.s" -o "$work/jump.o"
-    echo 'MINIC_LOONGARCH64_JUMP_LABEL_GNU_AS=PASS __jump_table=3'
+    echo 'MINIC_LOONGARCH64_JUMP_LABEL_GNU_AS=PASS __jump_table=4'
 else
     echo 'MINIC_LOONGARCH64_JUMP_LABEL_GNU_AS=SKIP missing Loong GNU assembler'
 fi
@@ -99,3 +113,15 @@ if "$MINIC_CC" --target=loongarch64-linux -fPIE -S \
 fi
 test ! -e "$work/wrong-modifier.s"
 echo 'MINIC_LOONGARCH64_JUMP_LABEL_MODIFIER=PASS wrong_percent_c0=rejected'
+
+# A non-Boolean byte displacement is not a qualified Linux static-key
+# relocation: it must fail MachineIR, even though GNU itself could spell it.
+sed 's/\[1\]) : : l_yes/\[2\]) : : l_yes/' "$work/jump.i" > "$work/wrong-addend.i"
+if "$MINIC_CC" --target=loongarch64-linux -fPIE -S \
+    "$work/wrong-addend.i" -o "$work/wrong-addend.s" \
+    >/dev/null 2>"$work/wrong-addend.err"; then
+    echo 'MINIC_LOONGARCH64_JUMP_LABEL=FAIL non-Boolean key addend admitted' >&2
+    exit 1
+fi
+test ! -e "$work/wrong-addend.s"
+echo 'MINIC_LOONGARCH64_JUMP_LABEL_ADDEND=PASS plus_one=emitted plus_two=rejected'

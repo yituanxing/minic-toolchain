@@ -3744,7 +3744,7 @@ static bool loong_select_linux_jump_label(LoongSelector *sel,
     bindings[0].asm_constraint = "i";
     bindings[0].value.symbol.name =
         source->resolved_immediates[0].symbol;
-    bindings[0].value.symbol.relocation = MINIC_LOONG_RELOC_DIRECT;
+    bindings[0].value.symbol.relocation = MINIC_LOONG_RELOC_JUMP_LABEL_KEY;
     bindings[0].value.symbol.addend =
         source->resolved_immediates[0].byte_addend;
     bindings[1].kind = MINIC_MACHINE_OPERAND_BLOCK;

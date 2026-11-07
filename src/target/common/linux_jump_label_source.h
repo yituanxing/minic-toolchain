@@ -14,7 +14,7 @@ static inline bool minic_multi_qualify_linux_jump_label_asm_goto(
     const MinicInlineAsmLabel *label;
     const MinicExpression *expression;
     if (form == NULL || program == NULL || source == NULL ||
-        !source->is_goto || source->is_volatile ||
+        !source->is_goto || !source->is_volatile ||
         source->output_count != 0U || source->input_count != 1U ||
         source->inputs == NULL || source->label_count != 1U ||
         source->labels == NULL || source->clobber_count != 0U ||

@@ -19,7 +19,11 @@ typedef enum MinicLoongMachineRelocation {
     MINIC_LOONG_RELOC_DIRECT = 1,
     MINIC_LOONG_RELOC_GLOBAL,
     MINIC_LOONG_RELOC_PC_HI20,
-    MINIC_LOONG_RELOC_PC_LO12
+    MINIC_LOONG_RELOC_PC_LO12,
+    /* Only an exact Linux static-key SOURCE_ASM __jump_table relocation.
+     * The Boolean branch byte selects key or key+1, never a generic
+     * LoongArch instruction/address displacement. */
+    MINIC_LOONG_RELOC_JUMP_LABEL_KEY
 } MinicLoongMachineRelocation;
 
 typedef enum MinicLoongMachineOpcode {

@@ -1501,6 +1501,40 @@ static bool a64_integer_conversion(A64CoreSelection *sel,
 }
 
 
+/* Inline specialization retains the source operand's ELF-object liveness
+ * as a Core symbol reference. That reference is not a second GNU operand:
+ * it must match the *one* already-resolved static-key relocation exactly.
+ * MachineIR keeps the single typed relocation and retains closed admission. */
+static bool a64_goto_symbol_roots(const MinicCoreModule *module,
+    const MinicCoreInlineAsm *source) {
+    const MinicCoreInlineAsmSymbolReference *ref;
+    const MinicCoreInlineAsmImmediate *immediate;
+    size_t i;
+    if (source == NULL) return false;
+    if (source->symbol_reference_count == 0U) return true;
+    if (module == NULL || source->symbol_reference_count != 1U ||
+        source->symbol_references == NULL ||
+        source->resolved_immediate_count != 1U) return false;
+    immediate = &source->resolved_immediates[0];
+    ref = &source->symbol_references[0];
+    if (!minic_core_inline_asm_relocation_valid(immediate) ||
+        ref->kind != MINIC_CORE_INLINE_ASM_SYMBOL_OBJECT ||
+        ref->name == NULL ||
+        ref->name_length != strlen(immediate->symbol) ||
+        memcmp(ref->name, immediate->symbol, ref->name_length) != 0 ||
+        ref->byte_addend != immediate->byte_addend) return false;
+    /* A GNU immediate names the final Module-level ELF object; it need not
+     * appear in fn->globals[] when no ordinary Core load uses that object.
+     * The Core closure keeps the exact object through this liveness edge. */
+    for (i = 0U; i < module->global_count; ++i)
+        if (module->globals[i].name != NULL &&
+            strlen(module->globals[i].name) == ref->name_length &&
+            memcmp(module->globals[i].name, ref->name,
+                ref->name_length) == 0)
+            return true;
+    return false;
+}
+
 /* Linux static-key/capability asm-goto stays an exact source-owned section
  * record, with a typed immediate, an actual C-label edge, and fallthrough.
  * Place it in its own terminal Machine block so the original Core block can
@@ -1534,7 +1568,7 @@ static bool a64_linux_source_asm_goto(A64CoreSelection *sel,
         source->target_machine_form_variant != 0U ||
         source->has_memory_clobber || source->implicit_memory_effect ||
         source->register_clobber_count != 0U ||
-        source->symbol_reference_count != 0U ||
+        !a64_goto_symbol_roots(sel->ctx->module, source) ||
         (!cap_baked && source->deferred_immediate_symbol != NULL) ||
         source->resolved_immediate_count != (cap_baked ? 0U : 1U) ||
         source->goto_second_target != MINIC_CORE_BLOCK_INVALID ||

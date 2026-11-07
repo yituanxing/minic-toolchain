@@ -48,6 +48,40 @@ int main(void) {
     len = fread(bytes, 1U, sizeof(bytes), out);
     fclose(out);
     if (len != 4U || memcmp(bytes, "nop\n", 4U) != 0) return 1;
+    {
+        static const char daif_source[] =
+            "msr\tdaifset, #0xf\t\t// local_daif_mask\n";
+        static const char tampered[] =
+            "msr\tdaifset, #0xf\t\t// local_daif_mask\n\tnop";
+        FILE *selected;
+        char rendered[sizeof(daif_source) + 8U] = {0};
+        ins.effects = MINIC_MACHINE_EFFECT_SOURCE_ASM |
+            MINIC_MACHINE_EFFECT_VOLATILE |
+            MINIC_MACHINE_EFFECT_COMPILER_BARRIER;
+        ins.source_asm_template = (char *)daif_source;
+        ins.source_asm_length = sizeof(daif_source) - 1U;
+        if (!minic_aarch64_machine_source_asm_validate(
+                &target, &ins, NULL)) return 1;
+        selected = open_test_output();
+        if (selected == NULL ||
+            !minic_aarch64_machine_source_asm_emit(
+                selected, &fn, &ins, NULL, NULL) ||
+            fflush(selected) != 0 || fseek(selected, 0L, SEEK_SET) != 0) {
+            if (selected != NULL) fclose(selected);
+            return 1;
+        }
+        len = fread(rendered, 1U, sizeof(rendered), selected);
+        fclose(selected);
+        if (len != sizeof(daif_source) ||
+            memcmp(rendered, daif_source, sizeof(daif_source) - 1U) != 0 ||
+            rendered[len - 1U] != '\n') return 1;
+        ins.source_asm_template = (char *)tampered;
+        ins.source_asm_length = sizeof(tampered) - 1U;
+        if (minic_aarch64_machine_source_asm_validate(
+                &target, &ins, NULL)) return 1;
+        ins.source_asm_template = (char *)daif_source;
+        ins.source_asm_length = sizeof(daif_source) - 1U;
+    }
     ins.source_asm_template = "br x0";
     ins.source_asm_length = 5U;
     if (minic_aarch64_machine_source_asm_validate(&target, &ins, NULL))

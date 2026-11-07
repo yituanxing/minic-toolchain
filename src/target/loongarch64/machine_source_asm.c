@@ -98,6 +98,10 @@ static bool loong_source_opaque(const MinicMachineInstruction *ins) {
             ins->operands[0].kind == MINIC_MACHINE_OPERAND_SYMBOL &&
             ins->operands[0].asm_constraint != NULL &&
             strcmp(ins->operands[0].asm_constraint, "i") == 0 &&
+            ins->operands[0].value.symbol.relocation ==
+                MINIC_LOONG_RELOC_JUMP_LABEL_KEY &&
+            (ins->operands[0].value.symbol.addend == 0 ||
+             ins->operands[0].value.symbol.addend == 1) &&
             ins->operands[1].kind == MINIC_MACHINE_OPERAND_BLOCK &&
             ins->operands[1].asm_constraint == NULL &&
             ins->operands[1].asm_name != NULL &&
@@ -252,10 +256,20 @@ static bool loong_source_constraint(const MinicTargetInfo *target,
     if (operand->kind == MINIC_MACHINE_OPERAND_SYMBOL) {
         const char *symbol = operand->value.symbol.name;
         const unsigned char *p = (const unsigned char *)symbol;
+        const bool jump_key = ins->source_asm_machine_form_id == 0U &&
+            ins->source_asm_terminates_block &&
+            loong_linux_jump_label_form(ins->source_asm_template,
+                ins->source_asm_length) != 0U;
         if (strcmp(c + i, "i") != 0 || !p ||
             !(*p == '_' || *p == '.' || isalpha(*p)) ||
-            operand->value.symbol.relocation != MINIC_LOONG_RELOC_DIRECT ||
-            operand->value.symbol.addend != 0) return false;
+            (jump_key
+                ? (operand->value.symbol.relocation !=
+                       MINIC_LOONG_RELOC_JUMP_LABEL_KEY ||
+                   (operand->value.symbol.addend != 0 &&
+                    operand->value.symbol.addend != 1))
+                : (operand->value.symbol.relocation !=
+                       MINIC_LOONG_RELOC_DIRECT ||
+                   operand->value.symbol.addend != 0))) return false;
         for (++p; *p; ++p)
             if (*p != '_' && *p != '.' && *p != '$' && !isalnum(*p))
                 return false;
@@ -346,6 +360,13 @@ static bool loong_source_operand(FILE *out,
             return fputs("$zero", out) >= 0;
         return fprintf(out, "%" PRId64, operand->value.integer) >= 0;
     case MINIC_MACHINE_OPERAND_SYMBOL:
+        if (operand->value.symbol.relocation ==
+                MINIC_LOONG_RELOC_JUMP_LABEL_KEY) {
+            if (operand->value.symbol.addend == 1)
+                return fprintf(out, "%s+1",
+                    operand->value.symbol.name) >= 0;
+            if (operand->value.symbol.addend != 0) return false;
+        }
         return fputs(operand->value.symbol.name, out) >= 0;
     default:
         return false;

@@ -92,6 +92,24 @@ static bool a64_machine_opaque_hint(const MinicMachineInstruction *instruction) 
     if (aarch64_barrier_template(instruction->source_asm_template,
             instruction->source_asm_length) != NULL)
         return true;
+    /* Original Linux local_daif_mask() carries a four-bit PSTATE update,
+     * sometimes with the exact `// local_daif_mask` source annotation.
+     * Source admission already proves this closed ISA form. MachineIR must
+     * independently retain the exact zero-operand privileged instruction,
+     * including its GNU memory clobber when present; a plain barrier/hint
+     * recognizer cannot recognize the #0xf and annotated spellings. */
+    if (instruction->source_asm_machine_form_id == 0U &&
+        (instruction->effects ==
+             (MINIC_MACHINE_EFFECT_SOURCE_ASM |
+              MINIC_MACHINE_EFFECT_VOLATILE) ||
+         instruction->effects ==
+             (MINIC_MACHINE_EFFECT_SOURCE_ASM |
+              MINIC_MACHINE_EFFECT_VOLATILE |
+              MINIC_MACHINE_EFFECT_COMPILER_BARRIER)) &&
+        minic_aarch64_linux_daif_immediate_form(
+            instruction->source_asm_template,
+            instruction->source_asm_length) != 0U)
+        return true;
     /* A Linux BUG_ON() is a *single*, self-contained zero-operand source
      * effect. Its paired numeric labels and ELF __bug_table relocations are
      * part of the same typed MachineIR instruction. Reuse the admission

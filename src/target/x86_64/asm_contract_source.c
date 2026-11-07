@@ -1355,7 +1355,7 @@ bool minic_x86_64_qualify_inline_asm_goto(
      * materialized as a runtime register in StructuredInlineAsm. */
     (void)memset(&contract, 0, sizeof(contract));
     if (x86_linux_jump_label_source(program, source, &contract)) return true;
-    if (!program || !source || !source->is_goto || source->is_volatile ||
+    if (!program || !source || !source->is_goto || !source->is_volatile ||
         !minic_x86_64_linux_cpu_has_goto_form(
             source->template_text, source->template_length) ||
         source->output_count != 0U || source->input_count != 3U ||
@@ -4628,7 +4628,7 @@ static bool x86_linux_jump_label_source(
     if (!program || !source || !contract ||
         !minic_x86_64_linux_jump_label_form(
             source->template_text, source->template_length) ||
-        !source->is_goto || source->is_volatile ||
+        !source->is_goto || !source->is_volatile ||
         source->output_count || source->input_count != 2U ||
         !source->inputs || source->label_count != 1U || !source->labels ||
         source->clobber_count || source->register_clobber_count ||
