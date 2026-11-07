@@ -130,8 +130,15 @@ if [[ "$mode" == shard ]]; then
   else
     echo "RV32I_SHARD_SWEEP=REUSED authenticated_current_C=${#owners[@]} current_compiler_identical=true" >"$shard/compile.log"
   fi
+  # The selected-target GNU Kbuild can regenerate real RV32 vDSO offsets
+  # despite `vdso_prepare` being up-to-date. Reconcile ONLY known changed
+  # generated headers using the frozen original GNU .cmd dependency closure;
+  # any dependent current MiniC owner is replayed with fresh GNU-E/GNU-AS.
+  # Unknown changes fail closed and preserve all previously sealed .o/.s.
+  python3 "$partial_helper" --mode reconcile --partial "$partial" \
+    --out "$out" --root "$GITHUB_WORKSPACE" --minic "$MINIC_CC"
   # Like 3-ISA's fail-closed checkpoint seal, reject an overwritten success,
-  # missing .s, stray Kbuild C owner or regenerated-input drift immediately.
+  # missing .s, stray Kbuild C owner or unauthenticated generated-input drift.
   python3 "$partial_helper" --mode verify --partial "$partial" --out "$out" \
     --root "$GITHUB_WORKSPACE" --minic "$MINIC_CC"
   : >"$shard/compile-blockers.txt"
@@ -199,6 +206,11 @@ PY_FAILURE_GROUPS
     echo "RV32I_SHARD_BLOCKERS=COLLECTED shard=$RV32I_SHARD failed=$failed frozen=$kept make_errors=$(wc -l <"$shard/make-diagnostics.txt")"
     exit 5
   fi
+  # Kbuild may compile a header-dependent owner more than once. Publish only
+  # each final SHA-proven MiniC/GNU-AS object before the original route audit.
+  python3 "$partial_helper" --mode publish-traces --partial "$partial" \
+    --out "$out" --success-trace "$shard/mini-success-objects.txt" \
+    --digest-trace "$shard/mini-object-hashes.sha256"
   python3 "$GITHUB_WORKSPACE/tools/ci/linux-runtime-minic-route-audit-v1.py" \
     --objects-file "$shard/full-objects.txt" \
     --success-trace "$shard/mini-success-objects.txt" \

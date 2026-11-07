@@ -152,6 +152,20 @@ def initialize(a):
     path = a.partial / "checkpoint/identity.json"
     if path.exists() and seven.json_file(path) != identity:
         raise ValueError("existing shard checkpoint identity mismatch")
+    # The later selected-target Kbuild can rebuild the real RV32 vDSO and
+    # change vdso-offsets.h. Keep the ORIGINAL GNU .cmd dependency graph before
+    # any MiniC wrapper replaces .cmd metadata; never infer dependencies from
+    # the later, mutable output tree.
+    pinned = a.partial / "checkpoint/pinned-gnu-cmd"
+    for row in identity["rows"]:
+        owner = Path(row["object"])
+        cmd = a.out / owner.parent / ("." + owner.name + ".cmd")
+        if sha(cmd) != row["cmd_sha256"]:
+            raise ValueError(f"original GNU .cmd drift while sealing {owner}")
+        atomic_stage(cmd, pinned / owner.parent / ("." + owner.name + ".cmd"))
+    atomic_stage(a.selected, a.partial / "checkpoint/frozen-selected.txt")
+    seven.atomic_json(a.partial / "checkpoint/frozen-header-snapshot.json",
+                      {"schema": regen.SCHEMA, "headers": identity["generated_headers"]})
     seven.atomic_json(path, identity)
     print(f"RV32I_SEVEN_PARTIAL_INIT=PASS shard={identity['shard']} "
           f"owners={len(identity['rows'])} current_compiler={identity['current_minic_compiler_sha256']}")
@@ -159,6 +173,74 @@ def initialize(a):
 
 def identity(a):
     return seven.json_file(a.partial / "checkpoint/identity.json")
+
+
+def pinned_gnu(a, idn: dict) -> tuple[Path, Path, Path]:
+    checkpoint = a.partial / "checkpoint"
+    pinned = checkpoint / "pinned-gnu-cmd"
+    selected = checkpoint / "frozen-selected.txt"
+    snapshot = checkpoint / "frozen-header-snapshot.json"
+    if owner_paths(selected) != [r["object"] for r in idn["rows"]]:
+        raise ValueError("frozen GNU C-owner membership differs from checkpoint")
+    if seven.json_file(snapshot) != {
+            "schema": regen.SCHEMA, "headers": idn["generated_headers"]}:
+        raise ValueError("frozen GNU generated-header epoch is unauthenticated")
+    for row in idn["rows"]:
+        path = Path(row["object"])
+        cmd = pinned / path.parent / ("." + path.name + ".cmd")
+        if sha(cmd) != row["cmd_sha256"]:
+            raise ValueError(f"frozen original GNU .cmd SHA differs: {path}")
+    return pinned, selected, snapshot
+
+
+def header_delta(a, idn: dict) -> tuple[dict, list[str], list[str]]:
+    pinned, selected, snapshot = pinned_gnu(a, idn)
+    affected_file = a.partial / "checkpoint/dynamic-header-affected.txt"
+    changed, affected = regen.header_impact(a.out, snapshot, pinned,
+                                            selected, affected_file)
+    return regen.generated(a.out), changed, affected
+
+
+def reconcile(a):
+    idn = identity(a)
+    if a.minic is None or sha(a.minic) != idn["current_minic_compiler_sha256"]:
+        raise ValueError("current MiniC binary drift during header reconciliation")
+    if a.root is None or source_profile(a.root) != idn["current_compiler_source_profile_sha256"]:
+        raise ValueError("current MiniC source profile drift during header reconciliation")
+    pinned, selected, _snapshot = pinned_gnu(a, idn)
+    now, changed, affected = header_delta(a, idn)
+    if affected:
+        # An actual changed-header C dependency is never excused by a marker.
+        # Replay ONLY the dependency-closed original GNU .cmd selected owners,
+        # with the same current MiniC and GNU-AS route as the original sweep.
+        # The stage2 wrapper atomically replaces each success checkpoint.
+        env = {"MINIC_KEEP_INTERMEDIATES": "1",
+               "MINIC_KBUILD_RV32I_ORIGIN_AUDIT": "1",
+               "MINIC_KBUILD_RV32_PARTIAL_DIR": str(a.partial.resolve()),
+               "MINIC_KBUILD_RV32_PARTIAL_OUT": str(a.out.resolve()),
+               "MINIC_KBUILD_RV32_PARTIAL_HELPER": str(Path(__file__).resolve())}
+        previous = {key: os.environ.get(key) for key in env}
+        os.environ.update(env)
+        affected_file = a.partial / "checkpoint/dynamic-header-affected.txt"
+        try:
+            regen.replay_affected(
+                a.out, pinned, affected_file,
+                a.root / "tests/external/linux/stage2_kbuild_cc.sh", a.minic,
+                a.partial / "checkpoint/dynamic-header-success.txt",
+                a.partial / "checkpoint/dynamic-header-hashes.sha256")
+        finally:
+            for key, old in previous.items():
+                if old is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = old
+    if regen.generated(a.out) != now:
+        raise ValueError("generated GNU headers kept drifting during dynamic MiniC replay")
+    seven.atomic_json(a.partial / "checkpoint/post-generated-header-epoch.json",
+                      {"schema": SCHEMA, "headers": now,
+                       "changed": changed, "recompiled": affected})
+    print(f"RV32I_SEVEN_HEADER_RECONCILE=PASS changed={len(changed)} "
+          f"dependency_closed_current_C={len(affected)} no_GNU_C_fallback=true")
 
 
 def get_row(idn: dict, owner: str) -> dict:
@@ -212,10 +294,10 @@ def capture(a):
     print(f"RV32I_SEVEN_OWNER_CHECKPOINT=PASS owner={owner} object_sha={result['obj_sha256']}")
 
 
-def preprocessed_sha(out: Path, owner: str) -> str:
+def preprocessed_sha(out: Path, owner: str, pinned: Path | None = None) -> str:
     # Exactly the GNU-E invocation in stage2_kbuild_cc.sh, derived from the
     # original .cmd; neither GNU -c nor MiniC -S is called on cache HIT.
-    original = regen.pinned_kbuild_cc_args(out, owner)
+    original = regen.pinned_kbuild_cc_args(pinned or out, owner)
     sources = [arg for i, arg in enumerate(original)
                if arg.endswith(".c") and (not i or original[i-1] not in ("-include", "-imacros"))]
     if len(sources) != 1:
@@ -252,6 +334,17 @@ def verified_owners(a, previous: Path, copy: bool) -> list[str]:
     folder = previous / "checkpoint/owners"
     if not folder.is_dir() or folder.is_symlink():
         return []
+    # Existing red campaigns can contain successes from both sides of the
+    # real vDSO offsets regeneration. Authentic old final-header owners with
+    # a differing fresh GNU-E input are NEVER reused: only a proved original
+    # GNU `.cmd` dependency on the two recognized dynamic headers permits
+    # skipping and recompiling that owner. Everything else remains fail-closed.
+    dynamic = set()
+    if (a.partial / "checkpoint/pinned-gnu-cmd").is_dir():
+        pinned, _selected, _snapshot = pinned_gnu(a, current)
+        dynamic = set(regen.selected_generated_header_dependents(
+            pinned, [r["object"] for r in current["rows"]],
+            ["include/generated/vdso-offsets.h", "include/generated/compile.h"]))
     found = []
     for p in sorted(folder.rglob("*.json")):
         if p.is_symlink():
@@ -273,6 +366,10 @@ def verified_owners(a, previous: Path, copy: bool) -> list[str]:
         if not isinstance(expected_i, str) or not re.fullmatch(r"[0-9a-f]{64}", expected_i):
             raise ValueError(f"bad old GNU-E source digest: {name}")
         if preprocessed_sha(a.out, name) != expected_i:
+            if name in dynamic:
+                print(f"RV32I_SEVEN_PARTIAL_DYNAMIC_REBUILD=REQUIRED owner={name} "
+                      "original_GNU_E_SHA_changed=true")
+                continue
             raise ValueError(f"current GNU-E differs from frozen successful input: {name}")
         shards.check_elf(a.out / name, saved, name, 32)
         if copy:
@@ -322,15 +419,54 @@ def verify(a):
             if sha(p) != proof.get(key):
                 raise ValueError(f"SHA drift in completed C-owner checkpoint {name}")
         found.add(name)
-    if regen.generated(a.out) != idn["generated_headers"]:
-        raise ValueError("generated GNU headers drifted during current MiniC shard")
+    live = regen.generated(a.out)
+    if live != idn["generated_headers"]:
+        pinned, _selected, _snapshot = pinned_gnu(a, idn)
+        now, changed, affected = header_delta(a, idn)
+        post = seven.json_file(a.partial / "checkpoint/post-generated-header-epoch.json")
+        if post != {"schema": SCHEMA, "headers": now, "changed": changed,
+                    "recompiled": affected} or now != live:
+            raise ValueError("generated GNU headers drifted without authenticated dependency replay")
+        # An affected owner must have a saved CURRENT GNU-E digest matching
+        # the FINAL regenerated header bytes, not merely a valid old ELF.
+        for name in affected:
+            proof = seven.json_file(local / (name + ".json"))
+            if preprocessed_sha(a.out, name, pinned) != proof.get("input_sha256"):
+                raise ValueError(f"dynamic GNU header owner not replayed: {name}")
     print(f"RV32I_SEVEN_PARTIAL_VERIFY=PASS current_C={len(found)} "
           f"expected_C={len(expected)} missing_C={len(expected-found)} no_GNU_C_fallback=true")
 
 
+def publish_traces(a):
+    """Replace parallel Kbuild traces with exactly one final sealed SHA/owner.
+
+    A generated-header replay can compile one C owner twice; the first hash
+    is intentionally obsolete and must not masquerade as the final object.
+    """
+    idn = identity(a)
+    successes, hashes = [], []
+    for row in idn["rows"]:
+        owner = row["object"]
+        proof = seven.json_file(a.partial / "checkpoint/owners" / (owner + ".json"))
+        if (proof.get("object") != owner or proof.get("status") != STATUS or
+                proof.get("cmd_sha256") != row["cmd_sha256"] or
+                proof.get("source_sha256") != row["source_sha256"] or
+                sha(a.out / owner) != proof.get("obj_sha256") or
+                sha(a.partial / "staged" / owner) != proof.get("obj_sha256")):
+            raise ValueError(f"final per-owner MiniC/GNU-AS provenance absent: {owner}")
+        successes.append(owner)
+        hashes.append(f"{proof['obj_sha256']}  {owner}")
+    if not a.success_trace or not a.digest_trace:
+        raise ValueError("final trace publication needs two explicit output paths")
+    a.success_trace.write_text("\n".join(successes) + "\n")
+    a.digest_trace.write_text("\n".join(hashes) + "\n")
+    print(f"RV32I_SEVEN_FINAL_TRACES=PASS current_C={len(successes)} "
+          "one_final_SHA_per_owner=true")
+
+
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument("--mode", choices=("init", "capture", "resume", "verify"), required=True)
+    p.add_argument("--mode", choices=("init", "capture", "resume", "reconcile", "verify", "publish-traces"), required=True)
     p.add_argument("--partial", type=Path, required=True)
     p.add_argument("--out", type=Path, required=True)
     p.add_argument("--root", type=Path)
@@ -345,6 +481,8 @@ def main():
     p.add_argument("--preprocessed", type=Path)
     p.add_argument("--assembly", type=Path)
     p.add_argument("--resume", type=Path)
+    p.add_argument("--success-trace", type=Path)
+    p.add_argument("--digest-trace", type=Path)
     a = p.parse_args()
     try:
         if a.mode == "init":
@@ -357,10 +495,14 @@ def main():
             if a.resume is None:
                 raise ValueError("resume requires previous partial candidate artifact")
             restore(a)
+        elif a.mode == "reconcile":
+            reconcile(a)
+        elif a.mode == "publish-traces":
+            publish_traces(a)
         else:
             verify(a)
         return 0
-    except (ValueError, OSError, subprocess.CalledProcessError,
+    except (ValueError, OSError, regen.GuardError, subprocess.CalledProcessError,
             subprocess.TimeoutExpired, json.JSONDecodeError) as exc:
         print(f"RV32I_SEVEN_PARTIAL=FAIL mode={a.mode} reason={exc}", file=sys.stderr)
         return 8

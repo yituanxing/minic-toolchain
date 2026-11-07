@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 from pathlib import Path
+import shutil
 import struct
 import tempfile
 import unittest
@@ -94,6 +95,95 @@ class ResumeTest(unittest.TestCase):
         rv32.seven.atomic_json(self.now / "checkpoint/identity.json", self.identity)
         (self.out / self.owner).write_bytes(elf32_riscv(b"GOLDEN"))
         return receipt
+
+    def freeze_dynamic_header_epoch(self, affected: bool):
+        """Seal original GNU dependency syntax before any wrapper mutation."""
+        self.cmd.write_text(
+            "savedcmd_init/main.o := riscv64-linux-gnu-gcc -O2 -march=rv32ima "
+            f"-mabi=ilp32 -c {self.source} -o init/main.o\n"
+            "deps_init/main.o := init/main.c include/generated/autoconf.h"
+            + (" include/generated/vdso-offsets.h" if affected else "") + "\n")
+        self.identity["rows"][0]["cmd_sha256"] = rv32.sha(self.cmd)
+        self.identity["generated_headers"] = {
+            "include/generated/autoconf.h": "a" * 64,
+            "include/generated/vdso-offsets.h": "b" * 64,
+        }
+        rv32.seven.atomic_json(self.old / "checkpoint/identity.json", self.identity)
+        pinned = self.old / "checkpoint/pinned-gnu-cmd/init"
+        pinned.mkdir(parents=True)
+        shutil.copyfile(self.cmd, pinned / ".main.o.cmd")
+        (self.old / "checkpoint/frozen-selected.txt").write_text(self.owner + "\n")
+        rv32.seven.atomic_json(self.old / "checkpoint/frozen-header-snapshot.json",
+                              {"schema": rv32.regen.SCHEMA,
+                               "headers": self.identity["generated_headers"]})
+        return dict(self.identity["generated_headers"],
+                    **{"include/generated/vdso-offsets.h": "d" * 64})
+
+    def test_real_vdso_header_change_without_dependent_c_is_sha_sealed(self):
+        after = self.freeze_dynamic_header_epoch(affected=False)
+        self.record_success()
+        with patch.object(rv32.regen, "generated", return_value=after), \
+             patch.object(rv32, "source_profile", return_value=self.identity["current_compiler_source_profile_sha256"]), \
+             patch.object(rv32.regen, "replay_affected") as replay:
+            rv32.reconcile(self.a)
+            rv32.verify(self.a)
+        replay.assert_not_called()
+        self.assertEqual(rv32.seven.json_file(
+            self.old / "checkpoint/post-generated-header-epoch.json")["changed"],
+                         ["include/generated/vdso-offsets.h"])
+
+    def test_vdso_dependent_c_must_replay_current_gnu_e_before_sha_seal(self):
+        after = self.freeze_dynamic_header_epoch(affected=True)
+        self.record_success()
+        with patch.object(rv32.regen, "generated", return_value=after), \
+             patch.object(rv32, "source_profile", return_value=self.identity["current_compiler_source_profile_sha256"]), \
+             patch.object(rv32.regen, "replay_affected") as replay:
+            with patch.object(rv32, "preprocessed_sha", return_value="0" * 64):
+                rv32.reconcile(self.a)
+                with self.assertRaisesRegex(ValueError, "dynamic GNU header owner not replayed"):
+                    rv32.verify(self.a)
+            replay.assert_called_once()
+            # Simulate the wrapper's actual compiler path producing new .i
+            # and atomic .o/.s receipt on changed generated-header input.
+            self.preprocessed.write_text("changed GNU-E under regenerated offsets\n")
+            rv32.capture(self.a)
+            with patch.object(rv32, "preprocessed_sha", return_value=rv32.sha(self.preprocessed)):
+                rv32.verify(self.a)
+
+    def test_unrelated_generated_header_change_remains_hard_failure(self):
+        after = self.freeze_dynamic_header_epoch(affected=False)
+        after["include/generated/autoconf.h"] = "f" * 64
+        self.record_success()
+        with patch.object(rv32.regen, "generated", return_value=after), \
+             patch.object(rv32, "source_profile", return_value=self.identity["current_compiler_source_profile_sha256"]):
+            with self.assertRaisesRegex(rv32.regen.GuardError, "unsupported generated-header changes"):
+                rv32.reconcile(self.a)
+
+    def test_resume_skips_only_dynamic_header_dependent_mismatched_gnu_e(self):
+        self.freeze_dynamic_header_epoch(affected=True)
+        self.prepare_resume()
+        # `prepare_resume` creates a new current shard: its current frozen
+        # original `.cmd` must be present to authenticate the dependency edge.
+        pinned = self.now / "checkpoint/pinned-gnu-cmd/init"
+        pinned.mkdir(parents=True)
+        shutil.copyfile(self.cmd, pinned / ".main.o.cmd")
+        (self.now / "checkpoint/frozen-selected.txt").write_text(self.owner + "\n")
+        rv32.seven.atomic_json(self.now / "checkpoint/frozen-header-snapshot.json",
+                              {"schema": rv32.regen.SCHEMA,
+                               "headers": self.identity["generated_headers"]})
+        with patch.object(rv32, "preprocessed_sha", return_value="f" * 64):
+            rv32.restore(self.a)
+        self.assertEqual((self.now / "checkpoint/resumed-owners.txt").read_text(), "")
+        self.assertEqual((self.out / self.owner).read_bytes(), elf32_riscv(b"GOLDEN"))
+
+    def test_final_sha_trace_uses_one_authenticated_object(self):
+        self.record_success()
+        self.a.success_trace = self.root / "success.txt"
+        self.a.digest_trace = self.root / "hashes.txt"
+        rv32.publish_traces(self.a)
+        self.assertEqual(self.a.success_trace.read_text(), self.owner + "\n")
+        self.assertEqual(self.a.digest_trace.read_text(),
+                         rv32.sha(self.out / self.owner) + "  " + self.owner + "\n")
 
     def test_compile_success_is_staged_before_atomic_owner_receipt(self):
         proof = self.record_success()
