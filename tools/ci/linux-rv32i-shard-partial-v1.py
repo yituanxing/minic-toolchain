@@ -334,17 +334,11 @@ def verified_owners(a, previous: Path, copy: bool) -> list[str]:
     folder = previous / "checkpoint/owners"
     if not folder.is_dir() or folder.is_symlink():
         return []
-    # Existing red campaigns can contain successes from both sides of the
-    # real vDSO offsets regeneration. Authentic old final-header owners with
-    # a differing fresh GNU-E input are NEVER reused: only a proved original
-    # GNU `.cmd` dependency on the two recognized dynamic headers permits
-    # skipping and recompiling that owner. Everything else remains fail-closed.
-    dynamic = set()
-    if (a.partial / "checkpoint/pinned-gnu-cmd").is_dir():
-        pinned, _selected, _snapshot = pinned_gnu(a, current)
-        dynamic = set(regen.selected_generated_header_dependents(
-            pinned, [r["object"] for r in current["rows"]],
-            ["include/generated/vdso-offsets.h", "include/generated/compile.h"]))
+    # A previous red build can have C inputs on both sides of Kbuild's real
+    # generated-header transition. A cached .o is admissible ONLY when fresh
+    # original GNU-E reproduces its exact old bytes. Mismatch means reject
+    # that individual cache hit and force the real current MiniC/GNU-AS sweep
+    # to recompile it. Never promote an old .o or silently count it as PASS.
     found = []
     for p in sorted(folder.rglob("*.json")):
         if p.is_symlink():
@@ -366,11 +360,9 @@ def verified_owners(a, previous: Path, copy: bool) -> list[str]:
         if not isinstance(expected_i, str) or not re.fullmatch(r"[0-9a-f]{64}", expected_i):
             raise ValueError(f"bad old GNU-E source digest: {name}")
         if preprocessed_sha(a.out, name) != expected_i:
-            if name in dynamic:
-                print(f"RV32I_SEVEN_PARTIAL_DYNAMIC_REBUILD=REQUIRED owner={name} "
-                      "original_GNU_E_SHA_changed=true")
-                continue
-            raise ValueError(f"current GNU-E differs from frozen successful input: {name}")
+            print(f"RV32I_SEVEN_PARTIAL_GNU_E_MISMATCH=REBUILD_REQUIRED owner={name} "
+                  "cached_object_rejected=true no_GNU_C_fallback=true")
+            continue
         shards.check_elf(a.out / name, saved, name, 32)
         if copy:
             atomic_stage(saved, a.out / name)

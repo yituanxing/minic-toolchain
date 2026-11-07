@@ -159,7 +159,7 @@ class ResumeTest(unittest.TestCase):
             with self.assertRaisesRegex(rv32.regen.GuardError, "unsupported generated-header changes"):
                 rv32.reconcile(self.a)
 
-    def test_resume_skips_only_dynamic_header_dependent_mismatched_gnu_e(self):
+    def test_resume_rejects_mismatched_gnu_e_even_for_dynamic_header_dependent(self):
         self.freeze_dynamic_header_epoch(affected=True)
         self.prepare_resume()
         # `prepare_resume` creates a new current shard: its current frozen
@@ -215,11 +215,12 @@ class ResumeTest(unittest.TestCase):
         pp.assert_not_called()
         self.assertEqual((self.out / self.owner).read_bytes(), elf32_riscv(b"GOLDEN"))
 
-    def test_changed_gnu_e_bytes_rejected(self):
+    def test_changed_gnu_e_bytes_force_current_mini_c_rebuild_not_old_object(self):
         self.prepare_resume()
         with patch.object(rv32, "preprocessed_sha", return_value="f" * 64):
-            with self.assertRaisesRegex(ValueError, "GNU-E differs"):
-                rv32.restore(self.a)
+            rv32.restore(self.a)
+        self.assertEqual((self.now / "checkpoint/resumed-owners.txt").read_text(), "")
+        self.assertFalse((self.now / "checkpoint/owners" / (self.owner + ".json")).exists())
         self.assertEqual((self.out / self.owner).read_bytes(), elf32_riscv(b"GOLDEN"))
 
     def test_drifted_compiler_profile_and_generated_input_epochs_rejected(self):
