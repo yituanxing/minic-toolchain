@@ -13,6 +13,24 @@ on:
         description: 'Explicitly replay SHA-verified candidate C objects from the pinned 21-shard producer run'
         type: boolean
         default: false
+      fresh_source_targets:
+        description: 'Refresh original GNU input artifacts for this target scope; none uses an existing frozen input run'
+        type: choice
+        default: none
+        options: [none, all, x86_64, aarch64, loongarch64]
+      fresh_inputs_only:
+        description: 'Export original GNU .i/.cmd and SHA receipts only; skip every MiniC candidate shard and LD/QEMU receiver'
+        type: boolean
+        default: false
+      candidate_target:
+        description: 'Scope current MiniC candidate C shards and QEMU receivers (not three-ISA acceptance if partial)'
+        type: choice
+        default: all
+        options: [all, x86_64, aarch64, loongarch64]
+      frozen_input_run_id:
+        description: 'Source-export Actions run ID for frozen input reuse; must contain all selected original .i/.cmd shard artifacts'
+        type: string
+        default: '41181106144'
   # GitHub App ref updates can suppress downstream push-triggered Actions.
   # Keep the proven PR entry point, but admit its expensive jobs ONLY when
   # HEAD itself changed the explicit one-shot trigger marker.
@@ -20,10 +38,12 @@ on:
     paths:
       - '.github/workflows/minic-linux-three-isa-seven-runtime-v1.yml'
       - 'tools/ci/linux-three-isa-seven-runtime-trigger.txt'
+      - 'tools/ci/linux-three-isa-seven-source-refresh-trigger.txt'
   push:
     branches: [refactor/minic-target-language-boundary]
     paths:
       - 'tools/ci/linux-three-isa-seven-runtime-trigger.txt'
+      - 'tools/ci/linux-three-isa-seven-source-refresh-trigger.txt'
 
 permissions:
   contents: read
@@ -31,8 +51,10 @@ permissions:
 
 env:
   # One reviewed original GNU/Kbuild producer; not the current MiniC revision.
-  # To refresh on this branch, push the marker with [minic-regen-gnu] in the
-  # head commit subject, then promote the new run only after full P0/P1 PASS.
+  # The default 2026-10-31 producer's short-lived artifacts may have expired.
+  # Use dispatch fresh_source_targets=all,fresh_inputs_only=true once, retain
+  # original frozen inputs for 90 days and pin that source-export run ID in a
+  # later candidate replay. Never silently reconstruct C inputs from GCC C.
   MINIC_LINUX_PINNED_INPUT_RUN: '41181106144'
   # All 21 original MiniC C/GNU AS object shards must be SHA-proven against
   # the byte-identical compiler pair before receiver-only replay is accepted.
@@ -53,6 +75,10 @@ jobs:
       reuse_objects: ${{ steps.decide.outputs.reuse_objects }}
       only_aarch64: ${{ steps.decide.outputs.only_aarch64 }}
       only_x86_64: ${{ steps.decide.outputs.only_x86_64 }}
+      source_only: ${{ steps.decide.outputs.source_only }}
+      source_scope: ${{ steps.decide.outputs.source_scope }}
+      partial_target: ${{ steps.decide.outputs.partial_target }}
+      input_run: ${{ steps.decide.outputs.input_run }}
       producer_targets: ${{ steps.decide.outputs.producer_targets }}
       receiver_targets: ${{ steps.decide.outputs.receiver_targets }}
     steps:
@@ -63,6 +89,10 @@ jobs:
       - name: Authenticate explicit marker push or manual dispatch
         id: decide
         shell: bash
+        env:
+          REQUESTED_SOURCE_SCOPE: ${{ inputs.fresh_source_targets }}
+          REQUESTED_CANDIDATE_SCOPE: ${{ inputs.candidate_target }}
+          REQUESTED_FROZEN_INPUT_RUN: ${{ inputs.frozen_input_run_id }}
         run: |
           set -Eeuo pipefail
           active=false
@@ -70,6 +100,11 @@ jobs:
           reuse_objects=false
           only_aarch64=false
           only_x86_64=false
+          source_only=false
+          source_scope=none
+          candidate_scope=all
+          input_run="$MINIC_LINUX_PINNED_INPUT_RUN"
+          source_refresh_marker=false
           if [[ '${{ github.event_name }}' == workflow_dispatch ]]; then
             active=true
             if [[ '${{ inputs.regenerate_original_gnu }}' == true ]]; then
@@ -78,6 +113,15 @@ jobs:
             if [[ '${{ inputs.reuse_candidate_objects }}' == true ]]; then
               reuse_objects=true
             fi
+            source_scope="${REQUESTED_SOURCE_SCOPE:-none}"
+            candidate_scope="${REQUESTED_CANDIDATE_SCOPE:-all}"
+            input_run="${REQUESTED_FROZEN_INPUT_RUN:-$MINIC_LINUX_PINNED_INPUT_RUN}"
+            if [[ "$source_scope" != none ]]; then
+              regenerate=true
+            fi
+            if [[ '${{ inputs.fresh_inputs_only }}' == true ]]; then
+              source_only=true
+            fi
           elif [[ '${{ github.event_name }}' == push ]]; then
             # push.paths matches the entire pushed range, not necessarily HEAD.
             # Require the marker in this exact commit, as with pull_request.
@@ -85,10 +129,21 @@ jobs:
                ! git diff --quiet HEAD^ HEAD -- tools/ci/linux-three-isa-seven-runtime-trigger.txt; then
               active=true
             fi
+            if git rev-parse --verify HEAD^ >/dev/null 2>&1 &&
+               ! git diff --quiet HEAD^ HEAD -- tools/ci/linux-three-isa-seven-source-refresh-trigger.txt; then
+              active=true
+              source_refresh_marker=true
+            fi
           elif [[ '${{ github.event_name }}' == pull_request ]] &&
                git rev-parse --verify HEAD^ >/dev/null 2>&1 &&
                ! git diff --quiet HEAD^ HEAD -- tools/ci/linux-three-isa-seven-runtime-trigger.txt; then
             active=true
+          fi
+          if [[ '${{ github.event_name }}' == pull_request ]] &&
+             git rev-parse --verify HEAD^ >/dev/null 2>&1 &&
+             ! git diff --quiet HEAD^ HEAD -- tools/ci/linux-three-isa-seven-source-refresh-trigger.txt; then
+            active=true
+            source_refresh_marker=true
           fi
           if [[ "$active" == true && '${{ github.event_name }}' != workflow_dispatch ]]; then
             # A one-shot HEAD subject is shared by push and PR delivery. The
@@ -107,12 +162,50 @@ jobs:
               only_x86_64=true
             fi
           fi
+          if [[ "$source_refresh_marker" == true ]]; then
+            # Exact one-shot, source-only marker. A regular source/CI commit
+            # cannot restart 21 expensive MiniC candidate workers.
+            mapfile -t source_marker < tools/ci/linux-three-isa-seven-source-refresh-trigger.txt
+            if [[ "${#source_marker[@]}" != 3 ||
+                  ! "${source_marker[0]}" =~ ^sources=(all|x86_64|aarch64|loongarch64)$ ||
+                  "${source_marker[1]}" != 'mode=input-only' ||
+                  ! "${source_marker[2]}" =~ ^nonce=[0-9]{8}-[0-9]{1,5}$ ]]; then
+              echo 'Source-refresh marker requires validated sources/mode/nonce and is always input-only' >&2
+              exit 1
+            fi
+            source_scope="${source_marker[0]#sources=}"
+            source_only=true
+            regenerate=true
+          fi
           if [[ "$regenerate" == true && "$reuse_objects" == true ]]; then
             echo 'Refuse simultaneous original-GNU regeneration and candidate-object reuse' >&2
             exit 1
           fi
+          if [[ ! "$input_run" =~ ^[0-9]{8,15}$ ]]; then
+            echo 'Frozen original-source run ID must be an explicit decimal Actions run ID' >&2
+            exit 1
+          fi
+          if [[ "$source_only" == true && "$regenerate" != true ]]; then
+            echo 'Original inputs-only capture requires explicit original GNU regeneration' >&2
+            exit 1
+          fi
+          if [[ "$source_scope" != none && "$source_scope" != all &&
+                "$source_scope" != x86_64 && "$source_scope" != aarch64 &&
+                "$source_scope" != loongarch64 ]]; then
+            echo 'Unsupported original-source scope' >&2
+            exit 1
+          fi
+          if [[ "$candidate_scope" != all && "$candidate_scope" != x86_64 &&
+                "$candidate_scope" != aarch64 && "$candidate_scope" != loongarch64 ]]; then
+            echo 'Unsupported MiniC candidate target' >&2
+            exit 1
+          fi
+          if [[ "$source_scope" != none && "$candidate_scope" != all && "$source_scope" != "$candidate_scope" ]]; then
+            echo 'Source regeneration and MiniC candidate scopes disagree' >&2
+            exit 1
+          fi
           if [[ "$only_aarch64" == true && "$reuse_objects" != true ]]; then
-            echo 'AArch64-only receiver replay requires SHA-verified reused candidate objects' >&2
+            echo 'Legacy AArch64-only receiver replay requires SHA-verified reused candidate objects' >&2
             exit 1
           fi
           if [[ "$only_aarch64" == true && "$only_x86_64" == true ]]; then
@@ -132,17 +225,32 @@ jobs:
             producer_targets='["x86_64"]'
             receiver_targets='["x86_64"]'
           fi
+          selected="$candidate_scope"
+          if [[ "$source_scope" != none ]]; then
+            selected="$source_scope"
+          fi
+          if [[ "$selected" != all ]]; then
+            producer_targets="[\"$selected\"]"
+            receiver_targets="[\"$selected\"]"
+          fi
+          partial_target="$selected"
+          if [[ "$only_aarch64" == true ]]; then partial_target=aarch64; fi
+          if [[ "$only_x86_64" == true ]]; then partial_target=x86_64; fi
           echo "run=$active" >> "$GITHUB_OUTPUT"
           echo "regenerate=$regenerate" >> "$GITHUB_OUTPUT"
           echo "reuse_objects=$reuse_objects" >> "$GITHUB_OUTPUT"
           echo "only_aarch64=$only_aarch64" >> "$GITHUB_OUTPUT"
           echo "only_x86_64=$only_x86_64" >> "$GITHUB_OUTPUT"
+          echo "source_only=$source_only" >> "$GITHUB_OUTPUT"
+          echo "source_scope=$source_scope" >> "$GITHUB_OUTPUT"
+          echo "partial_target=$partial_target" >> "$GITHUB_OUTPUT"
+          echo "input_run=$input_run" >> "$GITHUB_OUTPUT"
           echo "producer_targets=$producer_targets" >> "$GITHUB_OUTPUT"
           echo "receiver_targets=$receiver_targets" >> "$GITHUB_OUTPUT"
-          echo "MINIC_LINUX_SEVEN_EXACT_HEAD_GATE=$active regenerate=$regenerate reuse_objects=$reuse_objects only_aarch64=$only_aarch64 only_x86_64=$only_x86_64 producers=$producer_targets receivers=$receiver_targets sha=$(git rev-parse HEAD)"
+          echo "MINIC_LINUX_SEVEN_EXACT_HEAD_GATE=$active regenerate=$regenerate reuse_objects=$reuse_objects source_only=$source_only source_scope=$source_scope partial_target=$partial_target input_run=$input_run producers=$producer_targets receivers=$receiver_targets sha=$(git rev-parse HEAD)"
           {
             echo '### MiniC Linux 3x7 exact-head campaign'
-            echo "Run: $active; regenerate GNU input: $regenerate; reuse SHA-verified objects: $reuse_objects; AArch64-only diagnostics: $only_aarch64; x86-only fresh development: $only_x86_64"
+            echo "Run: $active; GNU source refresh: $source_scope; source-only: $source_only; MiniC target: $partial_target; pinned frozen source run: $input_run; reused objects: $reuse_objects"
             echo "Commit: $(git rev-parse HEAD)"
             echo "Producer targets: $producer_targets"
             echo "Receiver targets: $receiver_targets"
@@ -233,7 +341,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [x86_64, aarch64, loongarch64]
+        target: ${{ fromJSON(needs.gate.outputs.producer_targets) }}
     env:
       GNU_WORK: ${{ github.workspace }}/build/minic-linux-gnu-${{ matrix.target }}
       RUNTIME_OUTPUT: ${{ github.workspace }}/build/minic-seven-gnu-boot-${{ matrix.target }}
@@ -401,6 +509,61 @@ jobs:
             --gnu-receipt "$RUNTIME_OUTPUT/boot/gnu-qemu-receipt.json" \
             --initramfs "$RUNTIME_OUTPUT/runtime-initramfs.cpio.gz" \
             --output "$GITHUB_WORKSPACE/build/minic-seven-export-${{ matrix.target }}"
+      - name: Require complete original owner census and historical original GNU input SHA parity
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 - "$GITHUB_WORKSPACE/build/minic-seven-export-${{ matrix.target }}" '${{ matrix.target }}' \
+            "tools/ci/fixtures/linux-6.6.143-original-input-sha-${{ matrix.target }}.tsv" <<'PY'
+          import hashlib, json, pathlib, sys
+          root, target = pathlib.Path(sys.argv[1]), sys.argv[2]
+          historic = pathlib.Path(sys.argv[3])
+          identities = [json.loads((root / str(shard) / 'identity.json').read_text())
+                        for shard in range(7)]
+          total = {'x86_64': 2758, 'aarch64': 4108, 'loongarch64': 2723}[target]
+          expected = [len(range(shard, total, 7)) for shard in range(7)]
+          actual = [row['shard_c_owners'] for row in identities]
+          assert all(row['target'] == target and row['shard'] == shard
+                     and row['total_c_owners'] == total
+                     for shard, row in enumerate(identities)), f'{target} source owner identity mismatch'
+          assert actual == expected, f'{target} frozen source owner shards changed: {actual}'
+          for field in ('frozen_manifest_sha256', 'original_config_sha256',
+                        'original_owner_list_sha256', 'gnu_c_owner_manifest_sha256'):
+              assert len({row[field] for row in identities}) == 1, f'{target} source {field} inconsistent'
+          # The 2026-10-31 original-GNU receiver is the known-good historical
+          # baseline. This fingerprint checks the old config/owner universe;
+          # the TSV below additionally checks every original GNU -E byte SHA.
+          historical_ids = {
+              'x86_64': (
+                  'e2ec24b7076d99ac9c1bf842ded47e91ba6dfacacc28dd027ec6487d8709e264',
+                  'f12e533e1a4079f13aca28e314f56570fe22f8fed1da89b1a98289acc62a715d'),
+              'aarch64': (
+                  '36279e6a49dd79ac1d302e871c326a1aaff4522b2fd2968a9755296ac5293f8c',
+                  '45ce687974258eb80f1bedb62c55646180d2df8e9ffc069c106adcef9243cc5f'),
+              'loongarch64': (
+                  '5cd1dcd0cd3db4f8d2713fd3fbd0a550198fd4f0c4598a31b290b1600573b9d2',
+                  '64f7be34f20e9c752079f03510c6151b22e4479a71500448a275976b32077592'),
+          }
+          if target in historical_ids:
+              old_config, old_owner_manifest = historical_ids[target]
+              assert identities[0]['original_config_sha256'] == old_config, 'historic GNU config SHA changed'
+              assert identities[0]['gnu_c_owner_manifest_sha256'] == old_owner_manifest, 'historic GNU C owner manifest SHA changed'
+          manifest = json.loads((root / '0/frozen/manifest.json').read_text())
+          current = sorted(f"{row['object']}\t{row['sha256']}" for row in manifest['rows'])
+          reference = sorted(line for line in historic.read_text().splitlines() if line)
+          assert len(reference) == total and len(set(reference)) == total, 'historic GNU SHA fixture incomplete'
+          assert len(current) == total and len(set(current)) == total, 'current GNU SHA owner census corrupt'
+          if current != reference:
+              mismatch = next(((old, new) for old, new in zip(reference, current) if old != new), None)
+              raise AssertionError(f'{target} original GNU .i differs from historical pinned source: {mismatch}')
+          owner_input_sha = hashlib.sha256(('\n'.join(current) + '\n').encode()).hexdigest()
+          print('ORIGINAL_LINUX_C_OWNERS=PASS target=' + target + ' total=' + str(total)
+                + ' shards=' + str(actual)
+                + ' historical_i_sha_pairs=' + str(len(current)) + '/' + str(total)
+                + ' owner_input_sha=' + owner_input_sha
+                + ' manifest_sha=' + identities[0]['frozen_manifest_sha256']
+                + ' config_sha=' + identities[0]['original_config_sha256'])
+          PY
       - uses: actions/upload-artifact@v4
         with:
           name: minic-linux-seven-input-${{ matrix.target }}-0
@@ -408,7 +571,7 @@ jobs:
           if-no-files-found: error
           include-hidden-files: true
           compression-level: 3
-          retention-days: 7
+          retention-days: 90
       - uses: actions/upload-artifact@v4
         with:
           name: minic-linux-seven-input-${{ matrix.target }}-1
@@ -416,7 +579,7 @@ jobs:
           if-no-files-found: error
           include-hidden-files: true
           compression-level: 3
-          retention-days: 7
+          retention-days: 90
       - uses: actions/upload-artifact@v4
         with:
           name: minic-linux-seven-input-${{ matrix.target }}-2
@@ -424,7 +587,7 @@ jobs:
           if-no-files-found: error
           include-hidden-files: true
           compression-level: 3
-          retention-days: 7
+          retention-days: 90
       - uses: actions/upload-artifact@v4
         with:
           name: minic-linux-seven-input-${{ matrix.target }}-3
@@ -432,7 +595,7 @@ jobs:
           if-no-files-found: error
           include-hidden-files: true
           compression-level: 3
-          retention-days: 7
+          retention-days: 90
       - uses: actions/upload-artifact@v4
         with:
           name: minic-linux-seven-input-${{ matrix.target }}-4
@@ -440,7 +603,7 @@ jobs:
           if-no-files-found: error
           include-hidden-files: true
           compression-level: 3
-          retention-days: 7
+          retention-days: 90
       - uses: actions/upload-artifact@v4
         with:
           name: minic-linux-seven-input-${{ matrix.target }}-5
@@ -448,7 +611,7 @@ jobs:
           if-no-files-found: error
           include-hidden-files: true
           compression-level: 3
-          retention-days: 7
+          retention-days: 90
       - uses: actions/upload-artifact@v4
         with:
           name: minic-linux-seven-input-${{ matrix.target }}-6
@@ -456,7 +619,7 @@ jobs:
           if-no-files-found: error
           include-hidden-files: true
           compression-level: 3
-          retention-days: 7
+          retention-days: 90
       - name: Preserve exact original GNU P0/P1 runtime evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -466,7 +629,7 @@ jobs:
             build/minic-seven-gnu-boot-${{ matrix.target }}/boot/
             build/minic-linux-gnu-${{ matrix.target }}/evidence/
           if-no-files-found: warn
-          retention-days: 7
+          retention-days: 90
 
   seven-independent-runners:
     needs: [gate, minic-binary, original-gnu-golden]
@@ -474,6 +637,7 @@ jobs:
     # evidence: each independent worker requires *its* real input artifact.
     if: >-
       always() && needs.gate.outputs.run == 'true' &&
+      needs.gate.outputs.source_only != 'true' &&
       needs.gate.outputs.reuse_objects != 'true' &&
       needs.minic-binary.result == 'success' &&
       (needs.gate.outputs.regenerate != 'true' ||
@@ -507,7 +671,7 @@ jobs:
           # Normal runs use the reviewed frozen producer. Explicit GNU input
           # regeneration must consume this SAME run's new 21 artifacts.
           repository: ${{ github.repository }}
-          run-id: ${{ needs.gate.outputs.regenerate == 'true' && github.run_id || env.MINIC_LINUX_PINNED_INPUT_RUN }}
+          run-id: ${{ needs.gate.outputs.regenerate == 'true' && github.run_id || needs.gate.outputs.input_run }}
           github-token: ${{ github.token }}
       - uses: actions/download-artifact@v4
         with:
@@ -611,7 +775,10 @@ jobs:
     needs: [gate, minic-binary, seven-independent-runners]
     # Always provision each target receiver independently, including when
     # another target failed. Missing any of the seven objects is a hard FAIL.
-    if: always() && needs.gate.outputs.run == 'true' && needs.minic-binary.result == 'success'
+    if: >-
+      always() && needs.gate.outputs.run == 'true' &&
+      needs.gate.outputs.source_only != 'true' &&
+      needs.minic-binary.result == 'success'
     runs-on: ubuntu-24.04
     timeout-minutes: 150
     strategy:
@@ -1057,7 +1224,7 @@ jobs:
           retention-days: 14
 
   strict-three-isa-result:
-    needs: [gate, minic-binary, seven-independent-runners, original-gnu-ld-qemu-receivers]
+    needs: [gate, minic-binary, original-gnu-golden, seven-independent-runners, original-gnu-ld-qemu-receivers]
     if: always() && needs.gate.outputs.run == 'true'
     runs-on: ubuntu-24.04
     steps:
@@ -1065,24 +1232,36 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          echo 'MINIC_LINUX_SEVEN_INPUT_RUN=${{ needs.gate.outputs.regenerate == 'true' && github.run_id || env.MINIC_LINUX_PINNED_INPUT_RUN }}'
+          echo 'MINIC_LINUX_SEVEN_INPUT_RUN=${{ needs.gate.outputs.regenerate == 'true' && github.run_id || needs.gate.outputs.input_run }}'
           echo 'MINIC_LINUX_SEVEN_21_C_SHARDS=${{ needs.seven-independent-runners.result }}'
           echo 'MINIC_LINUX_SEVEN_GNU_LD_QEMU=${{ needs.original-gnu-ld-qemu-receivers.result }}'
+          if [[ '${{ needs.gate.outputs.source_only }}' == true ]]; then
+            # The input producer itself runs pristine GNU P0/P1 and preserves
+            # independently SHA-checked original -E/.o.cmd for 90 days. This
+            # is intentionally NOT a MiniC runtime test.
+            test '${{ needs.minic-binary.result }}' = success
+            test '${{ needs.original-gnu-golden.result }}' = success
+            test '${{ needs.seven-independent-runners.result }}' = skipped
+            test '${{ needs.original-gnu-ld-qemu-receivers.result }}' = skipped
+            echo 'MINIC_LINUX_FROZEN_SOURCE_EXPORT=PASS scope=${{ needs.gate.outputs.source_scope }} run_id=${{ github.run_id }} retention_days=90 MiniC_C=NOT_RUN GNU_LD_CANDIDATE=NOT_RUN QEMU_CANDIDATE=NOT_RUN'
+            echo '### Original GNU source/input capture only — NOT MiniC Linux runtime acceptance' >> "$GITHUB_STEP_SUMMARY"
+            echo 'Frozen source artifacts retained 90 days. Pin this run ID for future exact-head MiniC candidate shards.' >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
           if [[ '${{ needs.gate.outputs.only_aarch64 }}' == true ]]; then
-            # Deliberately red full-acceptance gate: a single reused AArch64
-            # receiver is useful diagnostic evidence but NEVER 3-ISA PASS.
+            # Legacy receiver-only replay remains SHA locked to its compiler.
             echo 'MINIC_LINUX_SEVEN_RUNTIME=PARTIAL_RECEIVER_REPLAY_NOT_FULL_ACCEPTANCE targets=aarch64_only'
             echo '### PARTIAL_RECEIVER_REPLAY — NOT 3-ISA ACCEPTANCE' >> "$GITHUB_STEP_SUMMARY"
             if [[ '${{ needs.minic-binary.result }}' == success &&
                   '${{ needs.seven-independent-runners.result }}' == skipped &&
                   '${{ needs.original-gnu-ld-qemu-receivers.result }}' == success ]]; then
               echo 'MINIC_LINUX_AARCH64_ONLY_RECEIVER=PASS_REUSED_SHA_VERIFIED source_run=${{ env.MINIC_LINUX_PINNED_OBJECT_RUN }}'
-              echo 'AArch64 receiver passed with 21 SHA-verified reused shards; x86 and LoongArch were NOT RUN.' >> "$GITHUB_STEP_SUMMARY"
+              echo 'AArch64 receiver passed with SHA-verified reused shards; x86 and LoongArch were NOT RUN.' >> "$GITHUB_STEP_SUMMARY"
             else
               echo 'MINIC_LINUX_AARCH64_ONLY_RECEIVER=FAIL_OR_INCOMPLETE'
-              echo 'AArch64 receiver did not complete successfully; x86 and LoongArch were NOT RUN.' >> "$GITHUB_STEP_SUMMARY"
+              echo 'AArch64 reused-object receiver did not complete successfully; x86 and LoongArch were NOT RUN.' >> "$GITHUB_STEP_SUMMARY"
             fi
-            echo '::error::PARTIAL_RECEIVER_REPLAY cannot satisfy strict three-ISA acceptance'
+            echo '::error::AArch64-only evidence cannot satisfy strict three-ISA acceptance'
             exit 1
           fi
           if [[ '${{ needs.gate.outputs.only_x86_64 }}' == true ]]; then
@@ -1100,6 +1279,21 @@ jobs:
               echo 'x86-64 development did not fully pass. AArch64/LoongArch64 were NOT RUN.' >> "$GITHUB_STEP_SUMMARY"
             fi
             echo '::error::PARTIAL_REPLAY cannot satisfy strict three-ISA acceptance'
+            exit 1
+          fi
+          if [[ '${{ needs.gate.outputs.partial_target }}' != all ]]; then
+            echo 'MINIC_LINUX_SEVEN_RUNTIME=PARTIAL_CURRENT_MINIC_NOT_THREE_ISA target=${{ needs.gate.outputs.partial_target }}'
+            echo '### One-target current MiniC Linux campaign — NOT 3-ISA acceptance' >> "$GITHUB_STEP_SUMMARY"
+            if [[ '${{ needs.minic-binary.result }}' == success &&
+                  '${{ needs.seven-independent-runners.result }}' == success &&
+                  '${{ needs.original-gnu-ld-qemu-receivers.result }}' == success ]]; then
+              echo 'MINIC_LINUX_ONE_TARGET=PASS_7_FRESH_SHARDS_GNU_LD_QEMU target=${{ needs.gate.outputs.partial_target }}'
+              echo 'This single target passed all seven current MiniC shards and GNU LD/QEMU. Other two targets were NOT RUN.' >> "$GITHUB_STEP_SUMMARY"
+            else
+              echo 'MINIC_LINUX_ONE_TARGET=FAIL_OR_INCOMPLETE target=${{ needs.gate.outputs.partial_target }}'
+              echo 'This single target failed or is incomplete. Other two targets were NOT RUN.' >> "$GITHUB_STEP_SUMMARY"
+            fi
+            echo '::error::Single-target result cannot satisfy strict three-ISA acceptance'
             exit 1
           fi
           test '${{ needs.minic-binary.result }}' = success
