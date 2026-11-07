@@ -4500,9 +4500,10 @@ static bool x86_linux_xstate_fault_source(const MinicTargetInvocation *invocatio
     (void)invocation;
     const MinicExpression *err, *ptr, *mem, *low, *high;
     MinicType pointee, plain;
+    unsigned int variant;
     if (!program || !source || !contract ||
-        !minic_x86_64_linux_xstate_fault_form(
-            source->template_text, source->template_length) ||
+        (variant = minic_x86_64_linux_xstate_fault_form(
+            source->template_text, source->template_length)) == 0U ||
         !source->is_volatile || source->is_goto ||
         source->output_count != 1U || !source->outputs ||
         source->input_count != 4U || !source->inputs ||
@@ -4537,6 +4538,7 @@ static bool x86_linux_xstate_fault_source(const MinicTargetInvocation *invocatio
     contract->kinds[2] = MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT;
     contract->kinds[3] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
     contract->kinds[4] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+    contract->target_machine_form_variant = variant;
     contract->implicit_memory_effect = true;
     return true;
 }

@@ -2296,6 +2296,69 @@ static bool x86_source_rep_uaccess_alternative_contract(
     return true;
 }
 
+/* XSAVE-family fault sites require physical RDI:[memory], EAX/EDX feature
+ * masks, EAX error output, and the source-authenticated type-15 exception
+ * record.  No raw source can bypass the physical MachineIR verification. */
+static bool x86_source_xstate_fault_contract(
+    const MinicMachineInstruction *ins) {
+    static const unsigned int regs[5] = {
+        MINIC_X86_REG_RAX, MINIC_X86_REG_RDI, 0U,
+        MINIC_X86_REG_RAX, MINIC_X86_REG_RDX
+    };
+    static const unsigned int widths[5] = { 32U, 64U, 0U, 32U, 32U };
+    static const char *const constraints[5] = {
+        "=a", "D", "m", "a", "d"
+    };
+    const unsigned int variant = minic_x86_64_linux_xstate_fault_form(
+        ins->source_asm_template,ins->source_asm_length);
+    const unsigned int effects = MINIC_MACHINE_EFFECT_SOURCE_ASM |
+        MINIC_MACHINE_EFFECT_VOLATILE |
+        MINIC_MACHINE_EFFECT_MEMORY_READ |
+        MINIC_MACHINE_EFFECT_MEMORY_WRITE |
+        MINIC_MACHINE_EFFECT_COMPILER_BARRIER;
+    const bool named = strstr(ins->source_asm_template,"%[err]") != NULL;
+    size_t i;
+    if (ins->source_asm_machine_form_id !=
+            MINIC_X86_MACHINE_ASM_XSTATE_FAULT ||
+        variant < 1U || variant > 4U ||
+        ins->source_asm_machine_form_variant != variant ||
+        ins->source_asm_terminates_block ||
+        ins->source_asm_permits_fallthrough ||
+        ins->effects != effects || ins->operand_count != 5U ||
+        !ins->operands || ins->implicit_count != 0U ||
+        ins->implicit != NULL ||
+        !minic_x86_64_typed_machine_form_matches_template(
+            ins->source_asm_machine_form_id,variant,
+            ins->source_asm_template,ins->source_asm_length)) return false;
+    for (i = 0U; i < 5U; ++i) {
+        const MinicMachineOperand *op = &ins->operands[i];
+        if (!op->asm_constraint ||
+            strcmp(op->asm_constraint,constraints[i]) != 0 ||
+            (i == 0U ? (named ? !op->asm_name ||
+                strcmp(op->asm_name,"err") != 0 :
+                op->asm_name != NULL) : op->asm_name != NULL)) return false;
+        if (i == 2U) {
+            if (op->kind != MINIC_MACHINE_OPERAND_ADDRESS ||
+                !op->value.address.has_base ||
+                op->value.address.has_index ||
+                op->value.address.has_symbol ||
+                op->value.address.displacement != 0 ||
+                op->value.address.base.bank !=
+                    MINIC_MACHINE_REGISTER_GENERAL ||
+                op->value.address.base.number != MINIC_X86_REG_RDI ||
+                op->value.address.base.width_bits != 64U) return false;
+        } else if (op->kind != MINIC_MACHINE_OPERAND_REGISTER ||
+            op->value.physical.reg.bank !=
+                MINIC_MACHINE_REGISTER_GENERAL ||
+            op->value.physical.reg.number != regs[i] ||
+            op->value.physical.reg.width_bits != widths[i] ||
+            op->value.physical.access != (i == 0U ?
+                MINIC_MACHINE_REGISTER_WRITE :
+                MINIC_MACHINE_REGISTER_READ)) return false;
+    }
+    return true;
+}
+
 /* Revalidate every physical tied GNU output/input after Core lowering.
  * Source admission alone never authorizes a raw string-copy template. */
 static bool x86_source_iomem_copy_contract(
@@ -5366,6 +5429,9 @@ bool minic_x86_64_machine_validate_source_asm(const MinicTargetInfo *target,
         instruction->source_asm_machine_form_id ==
             MINIC_X86_MACHINE_ASM_REP_STOSB_ALTERNATIVE)
         return x86_source_rep_uaccess_alternative_contract(instruction);
+    if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_XSTATE_FAULT)
+        return x86_source_xstate_fault_contract(instruction);
     if (instruction->source_asm_machine_form_id ==
             MINIC_X86_MACHINE_ASM_ADD32_CARRY ||
         instruction->source_asm_machine_form_id ==

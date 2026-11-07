@@ -429,6 +429,10 @@ bool minic_x86_64_typed_machine_form_matches_template(
     if (form_id == MINIC_X86_MACHINE_ASM_PCI_MMCONFIG)
         return (form == 1U || form == 2U || form == 4U) &&
             variant == form;
+    /* The four XSAVE-family ModRM encodings have distinct instructions;
+     * preserve their exact authenticated opcode variant into physical MIR. */
+    if (form_id == MINIC_X86_MACHINE_ASM_XSTATE_FAULT)
+        return form >= 1U && form <= 4U && variant == form;
     /* Most other tagged source families publish variant zero; the explicit
      * privileged/debug families above carry their exact physical variant. */
     if (form_id >= MINIC_X86_MACHINE_ASM_CRASH_REGISTER &&

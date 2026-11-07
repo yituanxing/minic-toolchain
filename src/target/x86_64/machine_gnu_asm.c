@@ -1562,6 +1562,30 @@ static bool x86_emit_source_asm(FILE *out,
             fputc('\n',out) != EOF;
     }
     if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_XSTATE_FAULT) {
+        static const char *const opcode[4] = {
+            "  .byte 0x48, 0x0f, 0xae, 0x27\n", /* XSAVE64 */
+            "  .byte 0x48, 0x0f, 0xae, 0x2f\n", /* XRSTOR64 */
+            "  .byte 0x48, 0x0f, 0xc7, 0x1f\n", /* XRSTORS64 */
+            "  .byte 0x48, 0x0f, 0xc7, 0x2f\n"  /* XSAVES64 */
+        };
+        const unsigned int variant =
+            instruction->source_asm_machine_form_variant;
+        if (variant < 1U || variant > 4U ||
+            !minic_x86_64_machine_validate_source_asm(function->target,
+                instruction,NULL)) return false;
+        return fputs("1:\n",out) != EOF &&
+            fputs(opcode[variant - 1U],out) != EOF &&
+            fputs("  xorl %eax, %eax\n"
+                  "2:\n"
+                  "  .pushsection \"__ex_table\",\"a\"\n"
+                  "  .balign 4\n"
+                  "  .long (1b) - .\n"
+                  "  .long (2b) - .\n"
+                  "  .long 15\n"
+                  "  .popsection\n",out) != EOF;
+    }
+    if (instruction->source_asm_machine_form_id ==
             MINIC_X86_MACHINE_ASM_FDIV_BUG) {
         /* Proven original x87 kernel test: binary64 loads, stacked DIV/MUL,
          * FISTP store with live x87 rounding, FWAIT, and both FNINITs. */
