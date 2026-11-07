@@ -4,6 +4,10 @@
 # this design. GNU owns CPP/AS/link/CRT/libc; MiniC owns ONLY selected applets.
 set -eu
 : "${MINIC_CC:?set MINIC_CC}"
+case "${FOUR_BACKEND_BUSYBOX_AARCH64_PIE:-0}" in
+  0|1) ;;
+  *) echo 'FOUR_BACKEND_BUSYBOX_PIE=INVALID opt_in_must_be_0_or_1' >&2; exit 1 ;;
+esac
 targets=${FOUR_BACKEND_TARGETS-'aarch64 loongarch64'}
 selected=0
 seen=' '
@@ -54,6 +58,15 @@ for target in $targets; do
     loongarch64) gcc=loongarch64-linux-gnu-gcc-13; qemu=qemu-loongarch64
                  prefix=loongarch64-linux-gnu-; sysroot=/usr/loongarch64-linux-gnu ;;
   esac
+  # Original GNU cross-Kbuild links a PIE. AArch64 libc interposable data
+  # (e.g. optind) must use GOT relocation, not ADR_PREL_PG_HI21. The target
+  # compiler already proves this with probe-aarch64-pie-extern-got.sh.
+  # This is a Stage4 opt-in, preserving every historical default ISA route.
+  minic_pie_flag=
+  if [ "$target" = aarch64 ] &&
+     [ "${FOUR_BACKEND_BUSYBOX_AARCH64_PIE:-0}" = 1 ]; then
+    minic_pie_flag=-fPIE
+  fi
   src="$work/$target/src"
   mkdir -p "$src" "$work/$target/gnu" "$work/$target/mini"
   (cd "$root" && tar -cf - .) | (cd "$src" && tar -xf -)
@@ -101,7 +114,7 @@ PY
       continue
     fi
     if ! timeout 90s env MINIC_M1_TRACE=1 MINIC_BACKEND_CENSUS=1 \
-        "$MINIC_CC" --target="$target-linux" -S "$inp" -o "$asm" \
+        "$MINIC_CC" --target="$target-linux" ${minic_pie_flag:+$minic_pie_flag} -S "$inp" -o "$asm" \
         2>"$work/$target/$stem.mini.err"; then
       blocked=$((blocked+1))
       first=$(grep -m 1 -E 'MINIC_BACKEND_REJECT|error:' \
@@ -114,6 +127,19 @@ PY
       blocked=$((blocked+1))
       echo "FOUR_BACKEND_BUSYBOX_TU=BLOCKED target=$target source=$file stage=GNU_AS"
       tail -n 5 "$work/$target/$stem.as.err"; continue
+    fi
+    if [ "$target" = aarch64 ] && [ -n "$minic_pie_flag" ] &&
+       [ "$file" = coreutils/cat.c ]; then
+      relocation_log="$work/$target/$stem.relocations"
+      if ! grep -Fq ':got:optind' "$asm" ||
+         ! aarch64-linux-gnu-readelf -rW "$work/$target/$stem.mini.o" >"$relocation_log" ||
+         ! grep -Eq 'R_AARCH64_ADR_GOT_PAGE.*optind' "$relocation_log" ||
+         grep -Eq 'R_AARCH64_ADR_PREL_PG_HI21.*optind' "$relocation_log"; then
+        echo "FOUR_BACKEND_BUSYBOX_PIE_GOT=BLOCKED target=$target source=$file reason=missing_GOT_or_unsafe_PREL" >&2
+        blocked=$((blocked+1))
+        continue
+      fi
+      echo "FOUR_BACKEND_BUSYBOX_PIE_GOT=PASS target=$target source=$file symbol=optind relocation=R_AARCH64_ADR_GOT_PAGE"
     fi
     passed=$((passed+1))
     echo "FOUR_BACKEND_BUSYBOX_TU=PASS target=$target source=$file MiniC_GNU_AS=1"

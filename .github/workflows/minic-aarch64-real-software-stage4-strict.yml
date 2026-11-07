@@ -16,6 +16,7 @@ on:
       - 'tests/external/tiny-aes-c/**'
       - 'tests/external/busybox/probe-four-backend-frontier.sh'
       - 'tests/external/busybox/check-pinned-1361-source.sh'
+      - 'tests/compiler/c0/probe-aarch64-pie-extern-got.sh'
       - 'tests/vendor/tiny-aes-c/**'
       - 'Makefile'
   workflow_dispatch:
@@ -100,6 +101,16 @@ jobs:
           grep -Fxq 'FOUR_BACKEND_TINYAES_ACCEPT=PASS targets=1 original_AES128_ECB=1 GNU_QEMU_diff=1' build/aarch-stage4-ci/evidence/tiny-aes.receipt
           grep -Fxq 'FOUR_BACKEND_TINYAES=PASS target=aarch64 original_source=1 GNU_AS_LD=1 QEMU_byte_exact=1' build/aarch-stage4-ci/evidence/tiny-aes.receipt
 
+      - name: Reuse original AArch64 PIE optind/puts GNU and QEMU oracle
+        shell: bash
+        env:
+          MINIC_CC: ${{ github.workspace }}/build/aarch-stage4-ci/bin/minic-cc
+        run: |
+          set -Eeuo pipefail
+          sh tests/compiler/c0/probe-aarch64-pie-extern-got.sh | tee build/aarch-stage4-ci/evidence/pie-got.receipt
+          grep -Fxq 'AARCH64_PIE_EXTERN_GOT=PASS linkage=pie GNU_QEMU_byte_exact=1 libc_data=optind libc_function=puts TU_static=1' build/aarch-stage4-ci/evidence/pie-got.receipt
+          grep -Fxq 'AARCH64_PIE_EXTERN_GOT=PASS linkage=static GNU_QEMU_byte_exact=1 libc_data=optind libc_function=puts TU_static=1' build/aarch-stage4-ci/evidence/pie-got.receipt
+
       - name: Original BusyBox 1.36.1 GNU Kconfig and nine MiniC Kbuild owners
         shell: bash
         timeout-minutes: 16
@@ -107,6 +118,7 @@ jobs:
           MINIC_CC: ${{ github.workspace }}/build/aarch-stage4-ci/bin/minic-cc
           FOUR_BACKEND_TARGETS: aarch64
           FOUR_BACKEND_BUSYBOX_NINE_REQUIRE: '1'
+          FOUR_BACKEND_BUSYBOX_AARCH64_PIE: '1'
           FOUR_BACKEND_BUSYBOX_WORK_DIR: ${{ github.workspace }}/build/aarch-stage4-ci/evidence/busybox-work
         run: |
           set -Eeuo pipefail
@@ -114,6 +126,7 @@ jobs:
           receipt=build/aarch-stage4-ci/evidence/busybox-nine.receipt
           grep -Fxq 'FOUR_BACKEND_BUSYBOX_NINE_ACCEPT=PASS targets=1 original_Kbuild_owners=9 GNU_QEMU_differential=1' "$receipt"
           grep -Fxq 'FOUR_BACKEND_BUSYBOX_MIXED=PASS target=aarch64 MiniC_Kbuild_owners=9 GNU_remaining_owners=yes original_Kconfig_Kbuild=1 QEMU_GNU_byte_exact=1 full_MiniC=NO' "$receipt"
+          grep -Fxq 'FOUR_BACKEND_BUSYBOX_PIE_GOT=PASS target=aarch64 source=coreutils/cat.c symbol=optind relocation=R_AARCH64_ADR_GOT_PAGE' "$receipt"
           test "$(grep -c '^FOUR_BACKEND_BUSYBOX_TU=PASS target=aarch64 source=.* MiniC_GNU_AS=1$' "$receipt")" -eq 9
           test "$(grep -c '^FOUR_BACKEND_BUSYBOX_APPLET=PASS name=.* GNU_QEMU_byte_exact=1$' "$receipt")" -eq 9
           sha256sum build/aarch-stage4-ci/evidence/tiny-aes-work/aarch64.i build/aarch-stage4-ci/evidence/busybox-work/aarch64/*.i | tee build/aarch-stage4-ci/evidence/gnu-preprocessed.sha256
@@ -137,6 +150,9 @@ jobs:
             build/aarch-stage4-ci/evidence/busybox-work/aarch64/*.i
             build/aarch-stage4-ci/evidence/busybox-work/aarch64/*.err
             build/aarch-stage4-ci/evidence/busybox-work/aarch64/*.out
+            build/aarch-stage4-ci/evidence/busybox-work/aarch64/cat.relocations
+            build/aarch-stage4-ci/evidence/busybox-work/aarch64/cat.s
+            build/aarch-stage4-ci/evidence/busybox-work/aarch64/cat.mini.o
             build/aarch-stage4-ci/evidence/busybox-work/aarch64/src/.config
             build/aarch-stage4-ci/evidence/busybox-work/aarch64/src/busybox_unstripped.out
           if-no-files-found: warn
