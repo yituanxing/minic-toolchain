@@ -127,6 +127,12 @@ bool minic_x86_64_typed_machine_form_matches_template(
     case MINIC_X86_MACHINE_ASM_PRIVILEGED_ZERO:
         form = minic_x86_64_linux_privileged_zero_form(text,length);
         return form >= 4U && form <= 10U && variant == form;
+    case MINIC_X86_MACHINE_ASM_AMX_TILERELEASE:
+        return variant == 1U &&
+            minic_x86_64_linux_amx_tilerelease_form(text,length);
+    case MINIC_X86_MACHINE_ASM_X87_FWAIT_FAULT:
+        return variant == 1U &&
+            minic_x86_64_linux_x87_fwait_fault_form(text,length);
     case MINIC_X86_MACHINE_ASM_FXSAVE:
         form = minic_x86_64_linux_fxsave_form(text, length);
         break;
@@ -289,7 +295,7 @@ bool minic_x86_64_typed_machine_form_matches_template(
             (variant == form || variant == (form | 0x100U));
     case MINIC_X86_MACHINE_ASM_FPU_KERNEL_RESTORE:
         form = (unsigned int)minic_x86_64_linux_fpu_kernel_restore_form(text, length);
-        break;
+        return form >= 1U && form <= 3U && variant == form;
     case MINIC_X86_MACHINE_ASM_FXRSTOR_SAFE:
         form = (unsigned int)minic_x86_64_linux_fxrstor_safe_form(text, length);
         break;

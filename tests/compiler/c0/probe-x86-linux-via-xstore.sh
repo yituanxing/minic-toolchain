@@ -22,8 +22,9 @@ sed 's/mini_xstore/gnu_xstore/g' "$d/mini.i" >"$d/gnu.c"
 cc -std=gnu11 -O0 -S "$d/gnu.c" -o "$d/gnu.s"
 "$minic" --target=x86_64-linux -S "$d/mini.i" -o "$d/mini.s"
 grep -F '.byte 0x0f, 0xa7, 0xc0' "$d/mini.s" >/dev/null
-grep -F 'movl %edx, (%r11)' "$d/mini.s" >/dev/null
-grep -F 'movq %rdi, (%r11)' "$d/mini.s" >/dev/null
+grep -F 'movq %rdi, %r10' "$d/mini.s" >/dev/null
+grep -F 'movl %edx, (%rdi)' "$d/mini.s" >/dev/null
+grep -F 'movq %r10, (%rdi)' "$d/mini.s" >/dev/null
 cc -c -x assembler "$d/gnu.s" -o "$d/gnu.o"
 cc -c -x assembler "$d/mini.s" -o "$d/mini.o"
 test "$(objdump -d "$d/gnu.o" | grep -ic '0f a7 c0')" -eq 1

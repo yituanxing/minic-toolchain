@@ -2249,6 +2249,12 @@ check-core-inline-statement-constant-guard: $(MINIC_CC_BINARY)
 	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" BUILD_DIR="$(abspath $(BUILD_DIR))" \
 	sh tests/compiler/c0/probe-core-inline-statement-constant-guard.sh
 
+.PHONY: check-linux-rv32-bounce-shortcircuit
+check-linux-rv32-bounce-shortcircuit: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" BUILD_DIR="$(abspath $(BUILD_DIR))" \
+	sh tests/compiler/c0/probe-linux-rv32-bounce-shortcircuit.sh
+check-fast: check-linux-rv32-bounce-shortcircuit
+
 .PHONY: check-aarch64-fixmap-opaque-asm-clone
 check-aarch64-fixmap-opaque-asm-clone: $(MINIC_CC_BINARY)
 	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \

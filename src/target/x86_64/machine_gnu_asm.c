@@ -1107,6 +1107,12 @@ static bool x86_emit_source_asm(FILE *out,
             minic_machine_source_asm_template_emit(out, function,
                 instruction, labels, &x86_accumulator_policy) &&
             fputc('\n', out) != EOF;
+    if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_ZSTD_CPUID)
+        return fputs("  cpuid\n",out) != EOF;
+    if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_VIA_XSTORE)
+        return fputs("  .byte 0x0f, 0xa7, 0xc0\n",out) != EOF;
     if ((instruction->source_asm_machine_form_id == MINIC_X86_MACHINE_ASM_BOOT_FLAGS &&
          instruction->source_asm_machine_form_variant == 3U) ||
         instruction->source_asm_machine_form_id ==
@@ -1248,6 +1254,40 @@ static bool x86_emit_source_asm(FILE *out,
         const unsigned int form = instruction->source_asm_machine_form_variant;
         return form >= 4U && form <= 10U &&
             fputs(exact[form-4U],out) != EOF;
+    }
+    if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_AMX_TILERELEASE)
+        return fputs("  .byte 0xc4, 0xe2, 0x78, 0x49, 0xc0\n",out) != EOF;
+    if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_X87_FWAIT_FAULT)
+        return fputs("1: fwait\n"
+            "2:\n"
+            ".pushsection \"__ex_table\",\"a\"\n"
+            ".balign 4\n"
+            ".long (1b) - .\n"
+            ".long (2b) - .\n"
+            ".long 1\n"
+            ".popsection\n",out) != EOF;
+    if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_X87_FILD_PREPARE)
+        return fputs("  fnclex\n  emms\n  fildl (%r10)\n",out) != EOF;
+    if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_FPU_KERNEL_RESTORE) {
+        static const char *const opcodes[] = {
+            "  fxrstor (%r11)\n", "  fxrstorq (%r11)\n",
+            "  frstor (%r11)\n"
+        };
+        const unsigned int form = instruction->source_asm_machine_form_variant;
+        return form >= 1U && form <= 3U &&
+            fputs("1:\n",out) != EOF &&
+            fputs(opcodes[form - 1U],out) != EOF &&
+            fputs("2:\n"
+                " .pushsection \"__ex_table\",\"a\"\n"
+                " .balign 4\n"
+                " .long (1b) - .\n"
+                " .long (2b) - .\n"
+                " .long 6\n"
+                " .popsection\n",out) != EOF;
     }
     if (instruction->source_asm_machine_form_id ==
             MINIC_X86_MACHINE_ASM_PREEMPT_GS_DEC)
@@ -1642,6 +1682,12 @@ static bool x86_emit_source_asm(FILE *out,
                 instruction, NULL)) return false;
         return fputs(emitted[form-1U],out) != EOF;
     }
+    if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_EFI_KERNEL_TRANSFER) {
+        if (!minic_x86_64_machine_validate_source_asm(function->target,
+                instruction, NULL)) return false;
+        return fputs("  jmp *%r11\n",out) != EOF;
+    }
     if (instruction->source_asm_machine_form_id == MINIC_X86_MACHINE_ASM_MMIO_READ ||
         instruction->source_asm_machine_form_id == MINIC_X86_MACHINE_ASM_MMIO_WRITE ||
         instruction->source_asm_machine_form_id == MINIC_X86_MACHINE_ASM_ATOMIC_XCHG) {
@@ -1717,6 +1763,20 @@ static bool x86_emit_source_asm(FILE *out,
                          "  movsb\n"
                          "2:\n", out) != EOF;
         return fputs(form == 1U ? "  movsb\n" : "  movsw\n",out) != EOF;
+    }
+    if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_REP_STRING_IO) {
+        static const char *const spellings[6] = {
+            "  rep; outsb\n", "  rep; outsw\n", "  rep; outsl\n",
+            "  rep; insb\n", "  rep; insw\n", "  rep; insl\n"
+        };
+        const unsigned int form = minic_x86_64_linux_rep_string_io_form(
+            instruction->source_asm_template,
+            instruction->source_asm_length);
+        if (form < 1U || form > 6U ||
+            !minic_x86_64_machine_validate_source_asm(function->target,
+                instruction,NULL)) return false;
+        return fputs(spellings[form - 1U],out) != EOF;
     }
     if (instruction->source_asm_machine_form_id ==
             MINIC_X86_MACHINE_ASM_I915_MOVNTDQA) {
@@ -1944,6 +2004,11 @@ static bool x86_emit_source_asm(FILE *out,
             fprintf(out,"%s%s (%%r10)\n",
                 locked ? "" : "  ",desc->opcode) >= 0;
     }
+    if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_LOCK_BITCC)
+        /* 671 names THIS locked instruction, not the following flag store. */
+        return x86_emit_scalar_smp_lock(out) &&
+            fputs("btsl $8, (%r10)\n",out) != EOF;
     if (instruction->source_asm_machine_form_id ==
             MINIC_X86_MACHINE_ASM_MXCSR) {
         /* Explicit 32-bit CPU control state transfer; the sole true

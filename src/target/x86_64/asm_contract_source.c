@@ -4472,6 +4472,7 @@ static bool x86_linux_fpu_kernel_restore_source(const MinicTargetInvocation *inv
     contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_OUTPUT;
     contract->kinds[1] = MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT;
     contract->implicit_memory_effect = true;
+    contract->target_machine_form_variant = form;
     return true;
 }
 
@@ -5567,6 +5568,44 @@ static bool x86_linux_privileged_zero_source(
     contract->implicit_memory_effect = form == 5U || form == 6U;
     return true;
 }
+/* Linux uses the five raw VEX bytes of TILERELEASE so older GNU assemblers
+ * can build the FPU core. Admit only the exact zero-operand volatile form;
+ * hardware tile-state mutation does not imply a C memory clobber. */
+static bool x86_linux_amx_tilerelease_source(
+    const MinicTargetInvocation *invocation,
+    const MinicC0Program *program, const MinicInlineAsm *source,
+    MinicTargetInlineAsmContract *contract) {
+    (void)invocation;
+    (void)program;
+    if (!source || !contract || !source->is_volatile || source->is_goto ||
+        source->output_count != 0U || source->input_count != 0U ||
+        source->label_count != 0U || source->clobber_count != 0U ||
+        source->has_memory_clobber || source->register_clobber_count != 0U ||
+        !minic_x86_64_linux_amx_tilerelease_form(
+            source->template_text,source->template_length)) return false;
+    contract->operand_count = 0U;
+    contract->target_machine_form_variant = 1U;
+    return true;
+}
+/* The exact FWAIT fault site transports Linux's type-1 exception-table
+ * relocation pair. It is a volatile zero-input instruction, not a compiler
+ * memory barrier; rejecting extra clobbers keeps that Source contract exact. */
+static bool x86_linux_x87_fwait_fault_source(
+    const MinicTargetInvocation *invocation,
+    const MinicC0Program *program, const MinicInlineAsm *source,
+    MinicTargetInlineAsmContract *contract) {
+    (void)invocation;
+    (void)program;
+    if (!source || !contract || !source->is_volatile || source->is_goto ||
+        source->output_count != 0U || source->input_count != 0U ||
+        source->label_count != 0U || source->clobber_count != 0U ||
+        source->has_memory_clobber || source->register_clobber_count != 0U ||
+        !minic_x86_64_linux_x87_fwait_fault_form(
+            source->template_text,source->template_length)) return false;
+    contract->operand_count = 0U;
+    contract->target_machine_form_variant = 1U;
+    return true;
+}
 /* GNU lowercase `i` is generic constant input, distinct from x86 ISA `I`.
  * Capture a source-validated typed integer instead of silently dropping its
  * C operand on a zero-operand NOP machine path. */
@@ -5732,6 +5771,8 @@ static const MinicX86SourceQualifierEntry minic_x86_source_qualifiers[] = {
     X86_SOURCE_TYPED(x86_linux_zero_barrier_qualifier, ZERO_BARRIER),
     X86_SOURCE_TYPED(x86_linux_zstd_padding_source, ZSTD_PADDING),
     X86_SOURCE_TYPED(x86_linux_privileged_zero_source, PRIVILEGED_ZERO),
+    X86_SOURCE_TYPED(x86_linux_amx_tilerelease_source, AMX_TILERELEASE),
+    X86_SOURCE_TYPED(x86_linux_x87_fwait_fault_source, X87_FWAIT_FAULT),
     X86_SOURCE_TYPED(x86_linux_ip_here_source, IP_HERE),
     X86_SOURCE_TYPED(x86_add32_carry_source, ADD32_CARRY),
     X86_SOURCE_TYPED(x86_linux_tcpudp_nofold_source, TCPUDP_NOFOLD),

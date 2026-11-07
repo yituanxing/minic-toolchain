@@ -32,7 +32,19 @@ int main(void) {
         {MINIC_X86_MACHINE_ASM_CRASH_SEGMENT_SNAPSHOT, 5U, "movl %%fs, %%eax;"},
         {MINIC_X86_MACHINE_ASM_CRASH_SEGMENT_SNAPSHOT, 6U, "movl %%gs, %%eax;"},
         {MINIC_X86_MACHINE_ASM_X87_PROBE, 0U,
-         "fninit ; fnstsw %0 ; fnstcw %1"}
+         "fninit ; fnstsw %0 ; fnstcw %1"},
+        {MINIC_X86_MACHINE_ASM_AMX_TILERELEASE, 1U,
+         ".byte 0xc4, 0xe2, 0x78, 0x49, 0xc0"},
+        {MINIC_X86_MACHINE_ASM_X87_FWAIT_FAULT, 1U,
+         "1: fwait\n2:\n .pushsection \"__ex_table\",\"a\"\n"
+         " .balign 4\n .long (1b) - .\n .long (2b) - .\n"
+         " .long 1\n .popsection\n"},
+        {MINIC_X86_MACHINE_ASM_X87_FILD_PREPARE, 0U,
+         "fnclex\n\temms\n\tfildl %[addr]"},
+        {MINIC_X86_MACHINE_ASM_FPU_KERNEL_RESTORE, 2U,
+         "1:fxrstorq %1\n2:\n .pushsection \"__ex_table\",\"a\"\n"
+         " .balign 4\n .long (1b) - .\n .long (2b) - .\n"
+         " .long 6\n .popsection\n"}
     };
     size_t i;
     for (i = 0U; i < sizeof(positive)/sizeof(positive[0]); ++i)
@@ -72,6 +84,16 @@ int main(void) {
         UINT32_MAX, 0U, "cpuid", 5U));
     assert(!minic_x86_64_typed_machine_form_matches_template(
         MINIC_X86_MACHINE_ASM_ZSTD_CPUID, 0U, NULL, 0U));
-    puts("PASS x86 typed machine forms including six crash selector variants, forged form/variant/template fail-closed");
+    assert(!minic_x86_64_typed_machine_form_matches_template(
+        MINIC_X86_MACHINE_ASM_AMX_TILERELEASE, 1U,
+        ".byte 0xc4, 0xe2, 0x78, 0x49, 0xc1",
+        strlen(".byte 0xc4, 0xe2, 0x78, 0x49, 0xc1")));
+    assert(!minic_x86_64_typed_machine_form_matches_template(
+        MINIC_X86_MACHINE_ASM_AMX_TILERELEASE, 1U,
+        "tilerelease", 11U));
+    assert(!minic_x86_64_typed_machine_form_matches_template(
+        MINIC_X86_MACHINE_ASM_X87_FWAIT_FAULT, 1U,
+        "1: fwait\n2:\n", strlen("1: fwait\n2:\n")));
+    puts("PASS x86 typed machine forms including 13 FPU families and six crash selector variants, forged form/variant/template fail-closed");
     return 0;
 }
