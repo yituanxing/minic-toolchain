@@ -4863,9 +4863,17 @@ static bool x86_linux_smap_alternative_source(const MinicTargetInvocation *invoc
         minic_x86_64_linux_smap_alternative_form(
             source->template_text, source->template_length) : 0U;
     const MinicInlineAsmOperand *operand;
-    if (!program || !source || !contract || (form != 3U && form != 4U) ||
+    if (!program || !source || !contract || form == 0U ||
         !source->is_volatile || source->is_goto || source->label_count ||
-        !source->has_memory_clobber || source->clobber_count != 2U ||
+        !source->has_memory_clobber) return false;
+    if (form == 1U || form == 2U) {
+        if (source->clobber_count != 1U || source->register_clobber_count ||
+            source->output_count || source->input_count) return false;
+        contract->target_machine_form_variant = form;
+        contract->implicit_memory_effect = true;
+        return true;
+    }
+    if (source->clobber_count != 2U ||
         source->register_clobber_count != 1U ||
         !source->register_clobbers ||
         !clobber_is(&source->register_clobbers[0], "cc") ||
@@ -4885,6 +4893,42 @@ static bool x86_linux_smap_alternative_source(const MinicTargetInvocation *invoc
     contract->kinds[0] = form == 3U ?
         MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT :
         MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+    contract->implicit_memory_effect = true;
+    contract->target_machine_form_variant = form;
+    return true;
+}
+
+/* Linux's weak WRMSR fence is a patchable MFENCE/LFENCE pair, with a
+ * feature-specific zero-length replacement. The complete section metadata
+ * is authenticated by the target-owned exact source matcher. */
+static bool x86_linux_weak_wrmsr_fence_source(
+    const MinicTargetInvocation *invocation, const MinicC0Program *program,
+    const MinicInlineAsm *source, MinicTargetInlineAsmContract *contract) {
+    (void)invocation;
+    (void)program;
+    if (!source || !contract || !source->is_volatile || source->is_goto ||
+        !minic_x86_64_linux_weak_wrmsr_fence_form(
+            source->template_text, source->template_length) ||
+        source->output_count || source->input_count || source->label_count ||
+        source->clobber_count != 1U || !source->has_memory_clobber ||
+        source->register_clobber_count) return false;
+    contract->target_machine_form_variant = 1U;
+    contract->implicit_memory_effect = true;
+    return true;
+}
+
+static bool x86_linux_lfence_alternative_source(
+    const MinicTargetInvocation *invocation, const MinicC0Program *program,
+    const MinicInlineAsm *source, MinicTargetInlineAsmContract *contract) {
+    (void)invocation;
+    (void)program;
+    if (!source || !contract || !source->is_volatile || source->is_goto ||
+        !minic_x86_64_linux_lfence_alternative_form(
+            source->template_text,source->template_length) ||
+        source->output_count || source->input_count || source->label_count ||
+        source->clobber_count != 1U || !source->has_memory_clobber ||
+        source->register_clobber_count) return false;
+    contract->target_machine_form_variant = 1U;
     contract->implicit_memory_effect = true;
     return true;
 }
@@ -5522,6 +5566,36 @@ static bool x86_nop_const_i_source(const MinicTargetInvocation *invocation,
     contract->target_machine_form_variant = 1U;
     return true;
 }
+/* The input `i` is a compile-time label witness for Linux's exact
+ * .discard.unreachable relocation. It is not an ignored generic operand. */
+static bool x86_linux_unreachable_annotation_source(
+    const MinicTargetInvocation *invocation,
+    const MinicC0Program *program, const MinicInlineAsm *source,
+    MinicTargetInlineAsmContract *contract) {
+    const MinicExpression *expression;
+    const unsigned int label = source ?
+        minic_x86_64_linux_unreachable_label(
+            source->template_text,source->template_length) : 0U;
+    (void)invocation;
+    if (!program || !source || !contract || !label ||
+        !source->is_volatile || source->is_goto ||
+        source->output_count || source->input_count != 1U ||
+        !source->inputs || source->label_count ||
+        source->clobber_count || source->register_clobber_count ||
+        source->has_memory_clobber ||
+        !target_constraint_is(&source->inputs[0],"i") ||
+        source->inputs[0].name != NULL) return false;
+    expression = minic_c0_program_expression(program,
+        source->inputs[0].expression);
+    if (!expression || expression->kind != MINIC_EXPRESSION_INTEGER ||
+        !minic_type_is_integer(expression->type) ||
+        expression->value.integer_value != (long long)label) return false;
+    contract->operand_count = 1U;
+    contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+    contract->capture_typed_immediate_inputs = true;
+    contract->target_machine_form_variant = 1U;
+    return true;
+}
 typedef bool (*MinicX86SourceQualifier)(
     const MinicTargetInvocation *, const MinicC0Program *, const MinicInlineAsm *,
     MinicTargetInlineAsmContract *);
@@ -5597,6 +5671,8 @@ static const MinicX86SourceQualifierEntry minic_x86_source_qualifiers[] = {
     X86_SOURCE_TYPED(x86_linux_xrstor_alternative_source, XRSTOR_ALTERNATIVE),
     X86_SOURCE_TYPED(x86_linux_xsave_triple_alternative_source, XSAVE_TRIPLE_ALTERNATIVE),
     X86_SOURCE_TYPED(x86_linux_smap_alternative_source, SMAP_ALTERNATIVE),
+    X86_SOURCE_TYPED(x86_linux_weak_wrmsr_fence_source, WEAK_WRMSR_FENCE),
+    X86_SOURCE_TYPED(x86_linux_lfence_alternative_source, LFENCE_ALTERNATIVE),
     X86_SOURCE_TYPED(x86_linux_segment_register_extable_source, SEGMENT_REGISTER_EXTABLE),
     X86_SOURCE_TYPED(x86_linux_put_user_call_source, PUT_USER_CALL),
     X86_SOURCE_TYPED(x86_linux_get_user_call_source, GET_USER_CALL),
@@ -5621,6 +5697,7 @@ static const MinicX86SourceQualifierEntry minic_x86_source_qualifiers[] = {
     X86_SOURCE_TYPED(x86_gs_tied_alu_source, GS_TIED_ALU),
     X86_SOURCE_TYPED(x86_linux_bug_table_c_source, BUG_TABLE_C_IMMEDIATE),
     X86_SOURCE_TYPED(x86_nop_const_i_source, NOP_CONST_I),
+    X86_SOURCE_TYPED(x86_linux_unreachable_annotation_source, UNREACHABLE_ANNOTATION),
     X86_SOURCE_TYPED(x86_linux_zero_barrier_qualifier, ZERO_BARRIER),
     X86_SOURCE_TYPED(x86_linux_zstd_padding_source, ZSTD_PADDING),
     X86_SOURCE_TYPED(x86_linux_privileged_zero_source, PRIVILEGED_ZERO),

@@ -110,11 +110,49 @@ static bool core_asm_id_for_instruction(const MinicCoreInstruction *ins,
     }
 }
 
+/* An operand-bearing, target-qualified inline assembly form is a sealed
+ * machine instruction, not a source-level reference to a C function sharing
+ * its opcode name. Leave opaque/pure-mnemonic assembly on the existing
+ * conservative symbol-retention path.
+ * Linux's static `invtlb()` wrapper is one such case: the real function
+ * callsites were specialized to constant GNU `i` operands, but mistaking
+ * the literal `invtlb` mnemonic for a relocation resurrects its otherwise
+ * dead unspecialized body. Continue scanning every operand token and every
+ * explicit symbol reference; exempt only the first instruction mnemonic. */
+static bool asm_target_mnemonic_collision(const MinicCoreInlineAsm *assembly,
+                                          bool operands_present,
+                                          const char *symbol) {
+    size_t begin = 0U;
+    size_t length;
+    if (assembly == NULL || symbol == NULL || !operands_present ||
+        assembly->operand_plan_owner != MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED ||
+        assembly->target_machine_form_id == 0U ||
+        assembly->template_text == NULL)
+        return false;
+    while (begin < assembly->template_length &&
+           (assembly->template_text[begin] == ' ' ||
+            assembly->template_text[begin] == '\t' ||
+            assembly->template_text[begin] == '\r' ||
+            assembly->template_text[begin] == '\n')) ++begin;
+    length = strlen(symbol);
+    return length != 0U && length <= assembly->template_length - begin &&
+        memcmp(assembly->template_text + begin, symbol, length) == 0 &&
+        (begin + length == assembly->template_length ||
+         assembly->template_text[begin + length] == ' ' ||
+         assembly->template_text[begin + length] == '\t' ||
+         assembly->template_text[begin + length] == '\r' ||
+         assembly->template_text[begin + length] == '\n') &&
+        !minic_core_asm_names_symbol(
+            assembly->template_text + begin + length,
+            assembly->template_length - begin - length, symbol);
+}
+
 /* Only a live Core instruction can contribute these edges. Literal GNU ASM
  * text has no C operand identity: conservatively resolve whole assembler
  * tokens, while typed operand references remain exact and source-independent. */
 static bool scan_core_inline_asm(ModuleClosure *c,
-                                  const MinicCoreInlineAsm *assembly) {
+                                  const MinicCoreInlineAsm *assembly,
+                                  bool operands_present) {
     const MinicCoreModule *m = &c->set->module;
     size_t i;
     for (i = 0U; i < assembly->symbol_reference_count; ++i) {
@@ -135,7 +173,9 @@ static bool scan_core_inline_asm(ModuleClosure *c,
         if (f->name != NULL &&
             minic_core_asm_names_symbol(assembly->template_text,
                 assembly->template_length, f->name) &&
-            !enqueue_named_function(c, f->name, strlen(f->name))) return false;
+            !asm_target_mnemonic_collision(assembly, operands_present, f->name)) {
+            if (!enqueue_named_function(c, f->name, strlen(f->name))) return false;
+        }
     }
     for (i = 0U; i < m->global_count; ++i) {
         const MinicCoreModuleGlobal *g = &m->globals[i];
@@ -198,7 +238,9 @@ static bool scan_core_function(ModuleClosure *c, size_t id) {
                 MinicCoreInlineAsmId asm_id;
                 if (core_asm_id_for_instruction(ins, &asm_id) &&
                     (asm_id >= fn->inline_asm_count ||
-                     !scan_core_inline_asm(c, &fn->inline_asms[asm_id]))) goto done;
+                     !scan_core_inline_asm(c, &fn->inline_asms[asm_id],
+                        ins->kind == MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM &&
+                        ins->value.structured_inline_asm.operand_count != 0U))) goto done;
             }
             /* BLOCK_ADDRESS denotes a Core-local block, not a TU symbol. */
         }

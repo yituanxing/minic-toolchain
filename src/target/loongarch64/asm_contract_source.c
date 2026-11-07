@@ -59,7 +59,8 @@ static bool loong_linux_clock_source(
     size_t i;
     if (!program || !src || !contract || form == LOONG_CLOCK_NONE ||
         src->is_goto || src->output_count != count || src->input_count ||
-        !src->outputs || src->label_count || src->clobber_count ||
+        !src->outputs || src->label_count ||
+        src->clobber_count != (form == LOONG_CLOCK_CPU_ID ? 1U : 0U) ||
         src->register_clobber_count ||
         src->has_memory_clobber != (form == LOONG_CLOCK_CPU_ID) ||
         src->is_volatile != (form != LOONG_CLOCK_VDSO_BASE)) return false;

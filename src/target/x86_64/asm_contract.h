@@ -190,7 +190,10 @@ typedef enum MinicX86MachineAsmForm {
     MINIC_X86_MACHINE_ASM_NOSPEC,
     /* Fixed privileged zero-operand CPU/cache/port state forms. Append only
      * so all previously sealed MachineIR form numbers stay unchanged. */
-    MINIC_X86_MACHINE_ASM_PRIVILEGED_ZERO
+    MINIC_X86_MACHINE_ASM_PRIVILEGED_ZERO,
+    MINIC_X86_MACHINE_ASM_WEAK_WRMSR_FENCE,
+    MINIC_X86_MACHINE_ASM_UNREACHABLE_ANNOTATION,
+    MINIC_X86_MACHINE_ASM_LFENCE_ALTERNATIVE
 } MinicX86MachineAsmForm;
 
 /* RAID6's fixed XMM/YMM/ZMM and opmask-register GNU templates. Every
@@ -229,6 +232,7 @@ unsigned int minic_x86_64_linux_crash_misc_snapshot_form(const char *, size_t);
 bool minic_x86_64_linux_alt_reloc_selftest_form(const char *, size_t);
 bool minic_x86_64_linux_real_mode_far_jump_form(const char *, size_t);
 bool minic_x86_64_linux_unreachable_opaque(const char *, size_t);
+unsigned int minic_x86_64_linux_unreachable_label(const char *, size_t);
 /* Shared exact GNU whitespace compaction for source/physical MMIO contracts. */
 bool minic_x86_64_compact_asm_equals(const char *, size_t, const char *);
 unsigned int minic_x86_64_linux_mmio_read_form(const char *, size_t);

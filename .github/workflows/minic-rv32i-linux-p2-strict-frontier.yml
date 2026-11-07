@@ -16,8 +16,44 @@ permissions:
   contents: read
   actions: read
 
+# A PR's paths filter includes the accumulated diff from the base branch.
+# Unrelated future commits would therefore rebuild 38 GNU modules and rerun
+# P2 even when the proven RV32 compiler/kernel inputs have not changed.
+# Only an explicitly marked PR head or a manual dispatch spends this budget.
+concurrency:
+  group: minic-rv32i-p2-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
+  p2-eligibility-only:
+    runs-on: ubuntu-24.04
+    outputs:
+      run_p2: ${{ steps.scope.outputs.run_p2 }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Admit only explicitly marked exact PR head or manual dispatch
+        id: scope
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -Eeuo pipefail
+          printf 'RV32I_P2_HEAD=%s\n' "$(git rev-parse HEAD)"
+          if [[ "$EVENT_NAME" == workflow_dispatch ]] ||
+              git log -1 --pretty=%B | grep -Fq '[rv32-p2-full18]'; then
+            printf 'run_p2=true\n' >> "$GITHUB_OUTPUT"
+            echo 'RV32I_P2=ELIGIBLE full18=NOT_YET_RUN'
+          else
+            printf 'run_p2=false\n' >> "$GITHUB_OUTPUT"
+            echo 'RV32I_P2=SKIP reason=head_commit_without_marker full18=NOT_RUN'
+          fi
+
   rv32i-p2-real-qemu:
+    needs: p2-eligibility-only
+    if: needs.p2-eligibility-only.outputs.run_p2 == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:

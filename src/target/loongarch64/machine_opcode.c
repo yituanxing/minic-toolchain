@@ -274,7 +274,12 @@ static bool loong_register(const MinicTargetInfo *target,
         return reg->number <= 31U &&
             (reg->width_bits == 32U || reg->width_bits == 64U);
     case MINIC_MACHINE_REGISTER_FLOAT:
-        return !minic_loongarch64_target_soft_float_abi(target) && reg->number <= 31U &&
+        /* LP64S prohibits *compiler-generated* FPU code, not the kernel's
+         * explicit, typed `movfr2gr.d` / `movgr2fr.d` register transfers.
+         * Their exact source form and fixed $fN binding are proven before
+         * MachineIR preflight. Generated FP opcodes remain gated by the
+         * separate FEATURE_FP contract and the LP64S ABI rejection. */
+        return reg->number <= 31U &&
             (reg->width_bits == 32U || reg->width_bits == 64U);
     case MINIC_MACHINE_REGISTER_VECTOR:
         /* Explicit source LSX/LASX uses the vector file even when the

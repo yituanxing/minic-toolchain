@@ -616,20 +616,19 @@ MinicCoreLowerStatus minic_core_lower_try_arithmetic_compound(
                 !minic_type_equal(expression_value_type, stored_type)) {
                 return MINIC_CORE_LOWER_UNSUPPORTED;
             }
+            /* An explicit alignment qualifies the addressed object, not the
+             * scalar register value produced by compound arithmetic. */
+            if (stored_type.pointer_depth == 0U)
+                stored_type.explicit_alignment = 0U;
             status = lower_address(context, expression->value.binary.left, &address);
             if (status != MINIC_CORE_LOWER_OK) {
                 return status;
             }
-            (void)memset(&instruction, 0, sizeof(instruction));
-            instruction.kind = MINIC_CORE_INSTRUCTION_LOAD;
-            instruction.span = target->span;
-            instruction_source_type = stored_type;
-            instruction.result = MINIC_CORE_VALUE_INVALID;
-            instruction.value.load.address = address;
-            instruction.value.load.is_volatile = minic_type_is_volatile(target->type);
-            if (!minic_core_function_append_source_value_instruction(
-                    context->source, context->block_id, &instruction, instruction_source_type, &current) ||
-                address >= context->function->value_count) {
+            status = minic_core_lower_internal_emit_scalar_load(
+                context, target->span, stored_type, address,
+                minic_type_is_volatile(target->type), &current);
+            if (status != MINIC_CORE_LOWER_OK) return status;
+            if (address >= context->function->value_count) {
                 return MINIC_CORE_LOWER_ERROR;
             }
             address_type = minic_core_function_source_value_type(context->source, address);
@@ -772,6 +771,8 @@ MinicCoreLowerStatus minic_core_lower_try_arithmetic_compound(
             context->target == NULL) {
             return MINIC_CORE_LOWER_UNSUPPORTED;
         }
+        if (stored_type.pointer_depth == 0U)
+            stored_type.explicit_alignment = 0U;
         shift_assignment =
             expression->value.binary.operator_kind == MINIC_BINARY_SHIFT_LEFT ||
             expression->value.binary.operator_kind == MINIC_BINARY_SHIFT_RIGHT;
@@ -796,17 +797,10 @@ MinicCoreLowerStatus minic_core_lower_try_arithmetic_compound(
         if (status != MINIC_CORE_LOWER_OK) {
             return status;
         }
-        (void)memset(&instruction, 0, sizeof(instruction));
-        instruction.kind = MINIC_CORE_INSTRUCTION_LOAD;
-        instruction.span = target->span;
-        instruction_source_type = stored_type;
-        instruction.result = MINIC_CORE_VALUE_INVALID;
-        instruction.value.load.address = address;
-        instruction.value.load.is_volatile = minic_type_is_volatile(target->type);
-        if (!minic_core_function_append_source_value_instruction(
-                context->source, context->block_id, &instruction, instruction_source_type, &current)) {
-            return MINIC_CORE_LOWER_ERROR;
-        }
+        status = minic_core_lower_internal_emit_scalar_load(
+            context, target->span, stored_type, address,
+            minic_type_is_volatile(target->type), &current);
+        if (status != MINIC_CORE_LOWER_OK) return status;
         status =
             minic_core_lower_internal_append_integer_conversion(context, target->span, common_type, current, &current_common);
         if (status != MINIC_CORE_LOWER_OK) {

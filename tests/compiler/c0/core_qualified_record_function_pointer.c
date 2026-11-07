@@ -73,6 +73,28 @@ AlignedU64 call_aligned_u64(AlignedU64 input) {
     return echo_aligned_u64(copy);
 }
 
+/* Linux mpt3sas writes through an aligned integer typedef and then uses
+ * |= on that same field. The storage address retains the ABI alignment,
+ * whereas Core LOAD yields an unaligned scalar SSA value. Exercise both
+ * direct and aggregate-member compound updates across every Target. */
+typedef struct ResponseFrame {
+    AlignedU64 address;
+} ResponseFrame;
+
+unsigned long long update_aligned_response(ResponseFrame *frame,
+                                           unsigned long long high_bits) {
+    frame->address |= high_bits;
+    frame->address += 1ULL;
+    return frame->address;
+}
+
+typedef double AlignedDouble __attribute__((aligned(16)));
+
+double update_aligned_float(AlignedDouble *result, double increment) {
+    *result += increment;
+    return *result;
+}
+
 _Static_assert(!__builtin_types_compatible_p(EfiGuid *, const EfiGuid *),
                "discarding pointee const is not allowed by C types");
 

@@ -767,6 +767,82 @@ static const MinicMachineSourceAsmTemplatePolicy a64_sysreg_policy = {
     NULL
 };
 
+/* The Linux original .irp/.equ MRS_S grammar is sealed upstream. Resolve
+ * only its two admitted encodings: RNDR and RNDRRS write x9 then consume
+ * their NZCV with CSET w10. The implicit flag clobber is physical MachineIR
+ * state, never a free-form source ASM shortcut. */
+static bool a64_rng_sysreg_form(const MinicMachineInstruction *ins) {
+    size_t i;
+    unsigned int variant;
+    if (ins == NULL || ins->kind != MINIC_MACHINE_INSTRUCTION_SOURCE_ASM ||
+        ins->source_asm_machine_form_id != AARCH64_MACHINE_ASM_RNG_SYSREG ||
+        (variant = aarch64_linux_rng_sysreg_form(ins->source_asm_template,
+            ins->source_asm_length)) == 0U ||
+        ins->source_asm_machine_form_variant != variant ||
+        ins->effects != (MINIC_MACHINE_EFFECT_SOURCE_ASM |
+                         MINIC_MACHINE_EFFECT_VOLATILE) ||
+        ins->operand_count != 2U || ins->operands == NULL ||
+        ins->implicit_count != 1U || ins->implicit == NULL ||
+        ins->implicit[0].reg.bank != MINIC_MACHINE_REGISTER_FLAGS ||
+        ins->implicit[0].reg.number != 0U ||
+        ins->implicit[0].reg.width_bits != 4U ||
+        ins->implicit[0].access != MINIC_MACHINE_REGISTER_CLOBBER ||
+        ins->source_asm_terminates_block ||
+        ins->source_asm_permits_fallthrough) return false;
+    for (i = 0U; i < 2U; ++i) {
+        const MinicMachineOperand *op = &ins->operands[i];
+        if (op->kind != MINIC_MACHINE_OPERAND_REGISTER ||
+            op->asm_name != NULL || op->asm_constraint == NULL ||
+            strcmp(op->asm_constraint, "=r") != 0 ||
+            op->value.physical.reg.bank != MINIC_MACHINE_REGISTER_GENERAL ||
+            op->value.physical.reg.number != 9U + (unsigned int)i ||
+            op->value.physical.reg.width_bits != (i == 0U ? 64U : 32U) ||
+            op->value.physical.access != MINIC_MACHINE_REGISTER_WRITE)
+            return false;
+    }
+    return true;
+}
+
+/* Type-2 Linux user cache-fault recovery requires two PREL32 relocations
+ * and a status-register number in the exception table. Recheck both sealed
+ * roles before admitting the hardware operation or writing its table. */
+static const char *a64_user_cache_fault_form(
+    const MinicMachineInstruction *ins) {
+    const MinicMachineOperand *status, *addr;
+    const char *opcode;
+    if (ins == NULL || ins->kind != MINIC_MACHINE_INSTRUCTION_SOURCE_ASM ||
+        ins->source_asm_machine_form_id != AARCH64_MACHINE_ASM_USER_CACHE_FAULT ||
+        ins->source_asm_machine_form_variant != 0U ||
+        (opcode = aarch64_linux_user_cache_fault_form(
+            ins->source_asm_template, ins->source_asm_length)) == NULL ||
+        ins->effects != (MINIC_MACHINE_EFFECT_SOURCE_ASM |
+                         MINIC_MACHINE_EFFECT_VOLATILE |
+                         MINIC_MACHINE_EFFECT_COMPILER_BARRIER |
+                         MINIC_MACHINE_EFFECT_MEMORY_READ |
+                         MINIC_MACHINE_EFFECT_MEMORY_WRITE) ||
+        ins->operand_count != 2U || ins->operands == NULL ||
+        ins->implicit_count != 0U || ins->source_asm_terminates_block ||
+        ins->source_asm_permits_fallthrough) return NULL;
+    status = &ins->operands[0];
+    addr = &ins->operands[1];
+    if (status->kind != MINIC_MACHINE_OPERAND_REGISTER ||
+        status->asm_name != NULL || status->asm_constraint == NULL ||
+        strcmp(status->asm_constraint, "=r") != 0 ||
+        status->value.physical.reg.bank != MINIC_MACHINE_REGISTER_GENERAL ||
+        status->value.physical.reg.number != 9U ||
+        status->value.physical.reg.width_bits != 32U ||
+        status->value.physical.access != MINIC_MACHINE_REGISTER_WRITE ||
+        addr->kind != MINIC_MACHINE_OPERAND_REGISTER ||
+        addr->asm_name != NULL || addr->asm_constraint == NULL ||
+        strcmp(addr->asm_constraint, "r") != 0 ||
+        addr->value.physical.reg.bank != MINIC_MACHINE_REGISTER_GENERAL ||
+        addr->value.physical.reg.number != 10U ||
+        addr->value.physical.reg.width_bits != 64U ||
+        addr->value.physical.access != MINIC_MACHINE_REGISTER_READ)
+        return NULL;
+    return opcode;
+}
+
 /* The full original Linux user-access template is one faulting machine
  * effect plus its associated GNU __ex_table fixup.  x9 carries the errno
  * read/write operand, x10 the user scalar, and x11 the user pointer.  The
@@ -1770,6 +1846,8 @@ bool minic_aarch64_machine_source_asm_validate(
              instruction, &a64_raw_io_policy) ||
          minic_machine_source_asm_template_preflight(&function,
              instruction, &a64_sysreg_policy) ||
+         a64_rng_sysreg_form(instruction) ||
+         a64_user_cache_fault_form(instruction) != NULL ||
          minic_machine_source_asm_template_preflight(&function,
              instruction, &a64_uaccess_policy) ||
          minic_aarch64_machine_lse_casp128_validate(&function, instruction) ||
@@ -1801,6 +1879,27 @@ bool minic_aarch64_machine_source_asm_emit(
     if (a64_machine_smccc_form(instruction))
         return fputs(instruction->source_asm_machine_form_variant == 1U ?
             "  hvc #0\n" : "  smc #0\n", output) != EOF;
+    if (a64_rng_sysreg_form(instruction)) {
+        const unsigned int variant =
+            instruction->source_asm_machine_form_variant;
+        return fprintf(output, "  .inst 0x%08x\n  cset w10, ne\n",
+            (unsigned)(UINT32_C(0xd53b2409) | ((variant - 1U) << 5))) >= 0;
+    }
+    if (a64_user_cache_fault_form(instruction) != NULL) {
+        const char *operation = a64_user_cache_fault_form(instruction);
+        return fprintf(output,
+            "1: %s, x10\n"
+            "  mov w9, #0\n"
+            "2:\n"
+            ".pushsection __ex_table,\"a\"\n"
+            "  .align 2\n"
+            "  .long (1b - .)\n"
+            "  .long (2b - .)\n"
+            "  .short 2\n"
+            "  .short %u\n"
+            ".popsection\n",
+            operation, (unsigned)(9U | (31U << 5))) >= 0;
+    }
     if (a64_machine_vdso_svc_form(instruction))
         return fputs("  svc #0\n", output) != EOF;
     if (a64_machine_vdso_timer_form(instruction)) {

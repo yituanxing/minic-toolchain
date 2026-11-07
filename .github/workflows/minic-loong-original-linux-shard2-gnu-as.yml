@@ -1,0 +1,92 @@
+name: MiniC original Linux LoongArch64 shard2 GNU AS
+
+# Eight unmodified GNU Linux 6.6.143 .i/.o.cmd pairs, from the authenticated
+# first-failure artifact of official seven-runner #42345808682. This is not
+# a broad 3x7 campaign, not GNU LD/QEMU, and not a Linux boot acceptance.
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - '.github/workflows/minic-loong-original-linux-shard2-gnu-as.yml'
+      - 'tools/ci/minic-loong-original-shard2-gnu-as.py'
+      - 'src/target/loongarch64/**'
+  push:
+    branches: [refactor/minic-target-language-boundary]
+    paths:
+      - '.github/workflows/minic-loong-original-linux-shard2-gnu-as.yml'
+      - 'tools/ci/minic-loong-original-shard2-gnu-as.py'
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  original-loongarch64-shard2:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Prepare real GNU LoongArch64 ELF64 LP64S assembler
+        shell: bash
+        timeout-minutes: 10
+        run: |
+          set -Eeuo pipefail
+          for sources in /etc/apt/apt-mirrors.txt /etc/apt/sources.list.d/ubuntu.sources; do
+            if [[ -f "$sources" ]] && grep -q 'azure.archive.ubuntu.com' "$sources"; then
+              sudo sed -i 's#azure.archive.ubuntu.com#archive.ubuntu.com#g' "$sources"
+            fi
+          done
+          timeout 120s sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 update -qq
+          timeout 240s sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 \
+            -o Acquire::https::Timeout=30 -o DPkg::Lock::Timeout=60 \
+            install -y --no-install-recommends \
+            gcc-13-loongarch64-linux-gnu binutils-loongarch64-linux-gnu
+          command -v loongarch64-linux-gnu-gcc-13
+          command -v loongarch64-linux-gnu-as
+      - name: Restore immutable original GNU Linux owner and .cmd evidence
+        uses: actions/download-artifact@v4
+        with:
+          repository: yituanxing/minic-toolchain
+          run-id: '42345808682'
+          name: minic-linux-seven-failure-loongarch64-2
+          path: build/original-loongarch64-shard2
+          github-token: ${{ github.token }}
+      - name: Build exact current MiniC compiler
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release CFLAGS=-Werror \
+            build/release/bin/minic-cc build/release/bin/minic
+          test -x build/release/bin/minic-cc
+          bash tests/compiler/c0/probe-loongarch64-packed-asm-output.sh \
+            build/release/bin/minic-cc
+          MINIC=build/release/bin/minic \
+            MINIC_CC=build/release/bin/minic-cc \
+            bash tests/compiler/c0/probe-target-language-abi-options.sh
+      - name: Verify all eight original GNU SHA inputs, MiniC -S and GNU AS
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 tools/ci/minic-loong-original-shard2-gnu-as.py \
+            --artifact build/original-loongarch64-shard2 \
+            --minic build/release/bin/minic-cc \
+            --output build/loongarch64-shard2-gnu-as-replay \
+            | tee build/loongarch64-shard2-gnu-as-receipt.txt
+          grep -Fxq 'MINIC_LINUX_ORIGINAL_LOONG_SHARD2_GNU_AS=PASS owners=8/8 original_GNU_i_cmd_SHA=16/16 MiniC_S=8/8 GNU_AS_ELF64_LP64S=8/8 GNU_LD_QEMU=NOT_RUN Linux_P1=NOT_CLAIMED' \
+            build/loongarch64-shard2-gnu-as-receipt.txt
+          printf 'LOONGARCH64_ORIGINAL_LINUX_SHARD2=PASS source_run=42345808682 sample_artifact=13563955475 head=%s\n' \
+            "$(git rev-parse HEAD)"
+      - name: Preserve per-owner SHA and GNU AS result receipts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: minic-loongarch64-original-shard2-as-receipts
+          path: |
+            build/loongarch64-shard2-gnu-as-replay/results.json
+            build/loongarch64-shard2-gnu-as-receipt.txt
+            build/loongarch64-shard2-gnu-as-replay/candidate/staged/**/*.tool-stderr.txt
+          if-no-files-found: ignore
+          retention-days: 30

@@ -855,8 +855,71 @@ static bool x86_emit_source_asm(FILE *out,
                     instruction->source_asm_length)
                     ? &x86_cpu_has_goto_policy : &x86_jump_label_policy) &&
             fputc('\n',out) != EOF;
+    if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_KERNEL_NOFAULT_GOTO) {
+        const unsigned int form = minic_x86_64_linux_kernel_nofault_goto_form(
+            instruction->source_asm_template,
+            instruction->source_asm_length);
+        static const char *const sizes[] = {"b","w","l","q"};
+        static const char *const regs[] = {"%al","%ax","%eax","%rax"};
+        const size_t index = form ? (form - 1U) % 4U : 4U;
+        const size_t block = instruction->operands[2].value.block_id;
+        if (!form || index >= 4U || !labels || !labels->names ||
+            block >= labels->count || !labels->names[block]) return false;
+        return fprintf(out,"1:\n  mov%s %s,%s\n"
+            "  .pushsection \"__ex_table\",\"a\"\n"
+            "  .balign 4\n  .long (1b) - .\n  .long (%s) - .\n"
+            "  .long 3\n  .popsection\n",
+            sizes[index],form <= 4U ? "(%r10)" : regs[index],
+            form <= 4U ? regs[index] : "(%r10)",labels->names[block]) >= 0;
+    }
     if (instruction->source_asm_machine_form_id == 0U)
         return true; /* Empty volatile asm has an effect but zero bytes. */
+    if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_REAL_MODE_FAR_JUMP)
+        /* R10 is the authenticated 6-byte far pointer; EDI is the live
+         * otherwise-unprinted GNU D input for the restart trampoline. */
+        return fputs("  ljmpl *(%r10)\n",out) != EOF;
+    if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_SMAP_ALTERNATIVE ||
+        instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_WEAK_WRMSR_FENCE ||
+        instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_LFENCE_ALTERNATIVE) {
+        const bool smap = instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_SMAP_ALTERNATIVE;
+        const bool lfence = instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_LFENCE_ALTERNATIVE;
+        const unsigned int form = instruction->source_asm_machine_form_variant;
+        const char *replacement = lfence ? "  lfence\n" : !smap ? "" :
+            form == 1U ? "  .byte 0x0f,0x01,0xca\n" :
+            form == 2U ? "  .byte 0x0f,0x01,0xcb\n" :
+            form == 3U ? "  pushf\n  popq %rax\n  .byte 0x0f,0x01,0xca\n" :
+            form == 4U ? "  pushq %rax\n  popf\n" : NULL;
+        const char *feature = lfence ? "(20*32+2)" :
+            smap ? "(9*32+20)" :
+            "(((1 << 0) << 16) | ((11*32+27)))";
+        if (replacement == NULL ||
+            !minic_x86_64_machine_validate_source_asm(
+                function->target,instruction,NULL)) return false;
+        /* The full alternatives metadata is part of the architectural
+         * effect. Never reduce SMAP to an unconditional STAC/CLAC or lose
+         * the weak WRMSR fence's inverted-feature replacement. */
+        return fprintf(out,"661:\n%s662:\n"
+            "  .skip -(((6651f-6641f)-(662b-661b)) > 0) * "
+            "((6651f-6641f)-(662b-661b)),0x90\n"
+            "663:\n"
+            "  .pushsection .altinstructions,\"a\"\n"
+            "  .long 661b - .\n"
+            "  .long 6641f - .\n"
+            "  .4byte %s\n"
+            "  .byte 663b-661b\n"
+            "  .byte 6651f-6641f\n"
+            "  .popsection\n"
+            "  .pushsection .altinstr_replacement, \"ax\"\n"
+            "6641:\n%s6651:\n  .popsection\n",
+            smap || lfence ? "" : "  mfence; lfence\n",feature,replacement) >= 0;
+    }
     if (instruction->source_asm_machine_form_id ==
             MINIC_X86_MACHINE_ASM_EXCEPTION_STACK_CALL ||
         instruction->source_asm_machine_form_id ==
@@ -1366,6 +1429,14 @@ static bool x86_emit_source_asm(FILE *out,
     if (instruction->source_asm_machine_form_id ==
             MINIC_X86_MACHINE_ASM_NOP_CONST_I)
         return fputs("  nop\n",out) != EOF;
+    if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_UNREACHABLE_ANNOTATION) {
+        const unsigned int label = minic_x86_64_linux_unreachable_label(
+            instruction->source_asm_template,instruction->source_asm_length);
+        return label != 0U &&
+            fprintf(out,"%u:\n  .pushsection .discard.unreachable\n"
+                "  .long %ub - .\n  .popsection\n",label,label) >= 0;
+    }
     if (instruction->source_asm_machine_form_id ==
             MINIC_X86_MACHINE_ASM_ZSTD_PADDING) {
         static const char *const emitted[] = {

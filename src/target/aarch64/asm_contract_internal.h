@@ -115,7 +115,9 @@ static inline bool aarch64_asm_core_bool(
     const MinicCoreType *type = aarch64_asm_core_type(fn, value, pointee);
     return type && type->has_layout && type->kind == MINIC_CORE_TYPE_INTEGER &&
         type->size == 1U && type->value.integer.is_bool &&
-        type->value.integer.bit_width == 1U;
+        /* Sealed Core carries the ABI storage width; a bool is one byte,
+         * not a one-bit physical integer register. */
+        type->value.integer.bit_width == 8U;
 }
 
 static inline bool aarch64_asm_core_pointer(

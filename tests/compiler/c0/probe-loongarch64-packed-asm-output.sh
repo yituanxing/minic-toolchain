@@ -12,6 +12,14 @@ trap 'rm -rf "$dir"' EXIT
 cc -std=gnu11 -Wall -Wextra -Werror -fsyntax-only "$src"
 cc -E -P -x c "$src" -o "$dir/source.i"
 "$mini" --target=loongarch64-linux -S "$dir/source.i" -o "$dir/mini.s"
+# Original LoongArch Linux uses LP64S.  Source-declared FPR transfers are
+# still hardware instructions even though the compiler must never select
+# FP arithmetic or assign FP argument registers under that C ABI.
+"$mini" --target=loongarch64-linux -mabi=lp64s \
+  -fshort-wchar -funsigned-char -fno-PIE \
+  -S "$dir/source.i" -o "$dir/loong-lp64s.s"
+grep -Fq 'movfr2gr.d $t0, $f0' "$dir/loong-lp64s.s"
+! grep -Eq '^  (fadd|fsub|fmul|fdiv)\.' "$dir/loong-lp64s.s"
 
 for fn in loong_fpr_packed loong_percpu_packed; do
   sed -n "/^${fn}:/,/^\.size ${fn},/p" "$dir/mini.s" > "$dir/$fn.s"
@@ -71,5 +79,11 @@ for bad in bad-fpr-register bad-percpu-base; do
     exit 1
   fi
   test ! -e "$dir/bad.s"
+  if "$mini" --target=loongarch64-linux -mabi=lp64s -S \
+      "$dir/bad.i" -o "$dir/bad-lp64s.s" >/dev/null 2>&1; then
+    echo "LOONG_PACKED_ASM_OUTPUT_UNQUALIFIED=lp64s-$bad" >&2
+    exit 1
+  fi
+  test ! -e "$dir/bad-lp64s.s"
 done
-echo 'LOONG_PACKED_ASM_OUTPUT=PASS GNU_C_SOURCE=PASS guarded_native_and_byte_scatter=2 negatives=2 Loong_QEMU=NOT_RUN'
+echo 'LOONG_PACKED_ASM_OUTPUT=PASS GNU_C_SOURCE=PASS guarded_native_and_byte_scatter=2 lp64s_source_FPR=1 negatives=4 Loong_QEMU=NOT_RUN'

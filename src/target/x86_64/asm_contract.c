@@ -304,6 +304,15 @@ bool minic_x86_64_typed_machine_form_matches_template(
     case MINIC_X86_MACHINE_ASM_SMAP_ALTERNATIVE:
         form = (unsigned int)minic_x86_64_linux_smap_alternative_form(text, length);
         break;
+    case MINIC_X86_MACHINE_ASM_WEAK_WRMSR_FENCE:
+        form = (unsigned int)minic_x86_64_linux_weak_wrmsr_fence_form(text, length);
+        break;
+    case MINIC_X86_MACHINE_ASM_UNREACHABLE_ANNOTATION:
+        form = minic_x86_64_linux_unreachable_label(text,length) != 0U;
+        break;
+    case MINIC_X86_MACHINE_ASM_LFENCE_ALTERNATIVE:
+        form = minic_x86_64_linux_lfence_alternative_form(text,length);
+        break;
     case MINIC_X86_MACHINE_ASM_SEGMENT_REGISTER_EXTABLE:
         form = (unsigned int)minic_x86_64_linux_segment_register_extable_form(text, length);
         break;
@@ -413,6 +422,8 @@ bool minic_x86_64_typed_machine_form_matches_template(
         return form != 0U && variant == form;
     if (form_id == MINIC_X86_MACHINE_ASM_IRQ_STACK_CALL)
         return form >= 1U && form <= 3U && variant == form;
+    if (form_id == MINIC_X86_MACHINE_ASM_SMAP_ALTERNATIVE)
+        return form >= 1U && form <= 4U && variant == form;
     /* PCI MMCONFIG's exact byte/word/dword accumulator width is a hardware
      * ABI restriction, unlike the width-agnostic source-only form tags. */
     if (form_id == MINIC_X86_MACHINE_ASM_PCI_MMCONFIG)
@@ -904,6 +915,20 @@ bool minic_x86_64_linux_unreachable_opaque(const char *text, size_t length) {
     return snprintf(expected, sizeof(expected),
         "%u:.pushsection.discard.unreachable.long%ub-..popsection",
         label, label) > 0 && strcmp(compact, expected) == 0;
+}
+
+/* Only a fully authenticated .discard.unreachable template may expose its
+ * numeric source label. Consumers must also match the GNU `i` witness. */
+unsigned int minic_x86_64_linux_unreachable_label(const char *text,
+    size_t length) {
+    unsigned int label = 0U;
+    size_t i = 0U;
+    if (!minic_x86_64_linux_unreachable_opaque(text,length)) return 0U;
+    while (i < length && text[i] >= '0' && text[i] <= '9') {
+        label = label * 10U + (unsigned int)(text[i] - '0');
+        ++i;
+    }
+    return label;
 }
 
 

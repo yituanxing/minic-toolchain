@@ -21,7 +21,9 @@ on:
       - 'tests/compiler/c0/probe-aarch64-linux-kvm-kern-hyp-va-callback.sh'
       - 'tests/compiler/c0/probe-aarch64-linux-qcom-pstate-ssbs.sh'
       - 'tests/compiler/c0/probe-aarch64-linux-kvm-at-fixup.sh'
+      - 'tests/compiler/c0/probe-aarch64-linux-rng-user-cache.sh'
       - 'tests/compiler/c0/aarch64_linux_kvm_at_fixup.c'
+      - 'tests/compiler/c0/aarch64_linux_rng_user_cache.c'
       - 'tests/compiler/c0/aarch64_linux_qcom_pstate_ssbs.c'
       - 'tests/compiler/c0/aarch64_linux_kvm_kern_hyp_va_callback.c'
       - 'tests/vendor/tiny-aes-c/**'
@@ -112,6 +114,12 @@ jobs:
             tee build/aarch-stage4-ci/evidence/linux-kvm-at-fixup.receipt
           grep -Fxq 'AARCH_KVM_AT_FIXUP=PASS reloc_pair=2 negatives=5 GNU_AS=PASS' \
             build/aarch-stage4-ci/evidence/linux-kvm-at-fixup.receipt
+          sh tests/compiler/c0/probe-aarch64-linux-rng-user-cache.sh |
+            tee build/aarch-stage4-ci/evidence/linux-rng-user-cache.receipt
+          grep -Fq 'AARCH64_RNG_CACHE_FAULT=PASS rng=2 cache=4 negatives=6' \
+            build/aarch-stage4-ci/evidence/linux-rng-user-cache.receipt
+          grep -Fq 'GNU_AS=PASS' \
+            build/aarch-stage4-ci/evidence/linux-rng-user-cache.receipt
 
       - name: Record exact compiler and pinned original software origins
         shell: bash
