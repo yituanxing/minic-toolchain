@@ -1069,6 +1069,25 @@ static bool x86_emit_source_asm(FILE *out,
                 op->value.physical.reg.width_bits == 16U ? 'w' : 'd') >= 0;
     }
     if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_FSGSBASE) {
+        static const char *const fsgsbase_hardware[] = {
+            "  rdfsbase %r10\n", "  rdgsbase %r10\n",
+            "  wrfsbase %r10\n", "  wrgsbase %r10\n"
+        };
+        variant = instruction->source_asm_machine_form_variant;
+        return variant >= 1U && variant <= 4U &&
+            fputs(fsgsbase_hardware[variant-1U],out) != EOF;
+    }
+    if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_CRASH_SEGMENT_SNAPSHOT) {
+        static const char *const segments[] = {
+            "ss", "cs", "ds", "es", "fs", "gs"
+        };
+        variant = instruction->source_asm_machine_form_variant;
+        return variant >= 1U && variant <= 6U &&
+            fprintf(out,"  movl %%%s, %%eax\n",segments[variant-1U]) >= 0;
+    }
+    if (instruction->source_asm_machine_form_id ==
             MINIC_X86_MACHINE_ASM_NOSPEC)
         return true; /* CMP/SBB are already selected physical Machine opcodes. */
     if (instruction->source_asm_machine_form_id ==
@@ -1170,6 +1189,13 @@ static bool x86_emit_source_asm(FILE *out,
     if (instruction->source_asm_machine_form_id ==
             MINIC_X86_MACHINE_ASM_XSETBV)
         return fputs("  xsetbv\n",out) != EOF;
+    if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_KEXEC_LOAD_SEGMENTS)
+        return fputs("  movl %eax, %ds\n"
+            "  movl %eax, %es\n"
+            "  movl %eax, %ss\n"
+            "  movl %eax, %fs\n"
+            "  movl %eax, %gs\n",out) != EOF;
     if (instruction->source_asm_machine_form_id ==
             MINIC_X86_MACHINE_ASM_IDLE_CLFLUSH_ALT)
         return fputs(
@@ -1475,6 +1501,34 @@ static bool x86_emit_source_asm(FILE *out,
             form >= 1U && form <= 3U;
     }
     if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_KVM_HYPERCALL_ALT) {
+        if (minic_x86_64_linux_kvm_hypercall_direct_form(
+                instruction->source_asm_template,
+                instruction->source_asm_length))
+            return fputs("  vmmcall\n",out) != EOF;
+        /* Linux's original Intel VMCALL site and AMD VMMCALL replacement
+         * must both survive GNU AS, with one 12-byte alternative record.
+         * A bare vmcall loses feature-controlled boot patching. */
+        return fputs("661:\n"
+            "  vmcall\n"
+            "662:\n"
+            "  .skip -(((6651f-6641f)-(662b-661b)) > 0) * "
+                "((6651f-6641f)-(662b-661b)),0x90\n"
+            "663:\n"
+            "  .pushsection .altinstructions,\"a\"\n"
+            "  .long 661b - .\n"
+            "  .long 6641f - .\n"
+            "  .4byte (8*32+15)\n"
+            "  .byte 663b-661b\n"
+            "  .byte 6651f-6641f\n"
+            "  .popsection\n"
+            "  .pushsection .altinstr_replacement,\"ax\"\n"
+            "6641:\n"
+            "  vmmcall\n"
+            "6651:\n"
+            "  .popsection\n",out) != EOF;
+    }
+    if (instruction->source_asm_machine_form_id ==
             MINIC_X86_MACHINE_ASM_VMWARE_STEALCLOCK_ALT) {
         /* Preserve both original GNU ALTERNATIVE_2 feature relocations,
          * including the maximum replacement-length padding expression.
@@ -1657,6 +1711,58 @@ static bool x86_emit_source_asm(FILE *out,
                          "  movsb\n"
                          "2:\n", out) != EOF;
         return fputs(form == 1U ? "  movsb\n" : "  movsw\n",out) != EOF;
+    }
+    if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_I915_MOVNTDQA) {
+        const unsigned int form = instruction->source_asm_machine_form_variant;
+        const size_t count = form >= 3U ? 4U : 1U;
+        const char *store = form == 1U || form == 3U ? "movaps" : "movups";
+        size_t i;
+        for (i = 0U; i < count; ++i)
+            if (fprintf(out,"  movntdqa %zu(%%rax), %%xmm%zu\n",
+                    i * 16U,i) < 0) return false;
+        for (i = 0U; i < count; ++i)
+            if (fprintf(out,"  %s %%xmm%zu, %zu(%%r10)\n",
+                    store,i,i * 16U) < 0) return false;
+        return true;
+    }
+    if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_FLUSHCACHE_COPY) {
+        const unsigned int form = minic_x86_64_linux_flushcache_copy_form(
+            instruction->source_asm_template,
+            instruction->source_asm_length);
+        if (form == 4U) {
+            size_t index;
+            /* Only the two hashed original CLWB ALTERNATIVE spellings are
+             * admitted at Source and rechecked against R10/RAX here. Keep
+             * all feature records and exact original replacement bytes. */
+            for (index = 0U; index < instruction->source_asm_length; ++index) {
+                if (instruction->source_asm_template[index] == '%' &&
+                    index + 1U < instruction->source_asm_length &&
+                    instruction->source_asm_template[index + 1U] == '1') {
+                    if (fputs("%rax",out) == EOF) return false;
+                    ++index;
+                } else if (fputc(instruction->source_asm_template[index],out) == EOF)
+                    return false;
+            }
+            return fputc('\n',out) != EOF;
+        }
+        if (form == 1U)
+            return fputs("  movq (%rax), %r8\n"
+                "  movq 8(%rax), %r9\n"
+                "  movq 16(%rax), %r10\n"
+                "  movq 24(%rax), %r11\n"
+                "  movnti %r8, (%rcx)\n"
+                "  movnti %r9, 8(%rcx)\n"
+                "  movnti %r10, 16(%rcx)\n"
+                "  movnti %r11, 24(%rcx)\n",out) != EOF;
+        if (form == 2U)
+            return fputs("  movq (%rax), %r8\n"
+                "  movnti %r8, (%rcx)\n",out) != EOF;
+        if (form == 3U)
+            return fputs("  movl (%rax), %r8d\n"
+                "  movnti %r8d, (%rcx)\n",out) != EOF;
+        return false;
     }
     if (instruction->source_asm_machine_form_id ==
             MINIC_X86_MACHINE_ASM_REP_MOVSB_ALTERNATIVE ||

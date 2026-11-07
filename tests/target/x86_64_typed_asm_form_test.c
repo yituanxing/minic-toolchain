@@ -25,6 +25,12 @@ int main(void) {
         {MINIC_X86_MACHINE_ASM_MONITOR_WAIT, 1U, ".byte 0x0f,0x01,0xc8;"},
         {MINIC_X86_MACHINE_ASM_SEGMENT_READ, 1U, "mov %%es, %0"},
         {MINIC_X86_MACHINE_ASM_FSGSBASE, 1U, "rdfsbase %0"},
+        {MINIC_X86_MACHINE_ASM_CRASH_SEGMENT_SNAPSHOT, 1U, "movl %%ss, %%eax;"},
+        {MINIC_X86_MACHINE_ASM_CRASH_SEGMENT_SNAPSHOT, 2U, "movl %%cs, %%eax;"},
+        {MINIC_X86_MACHINE_ASM_CRASH_SEGMENT_SNAPSHOT, 3U, "movl %%ds, %%eax;"},
+        {MINIC_X86_MACHINE_ASM_CRASH_SEGMENT_SNAPSHOT, 4U, "movl %%es, %%eax;"},
+        {MINIC_X86_MACHINE_ASM_CRASH_SEGMENT_SNAPSHOT, 5U, "movl %%fs, %%eax;"},
+        {MINIC_X86_MACHINE_ASM_CRASH_SEGMENT_SNAPSHOT, 6U, "movl %%gs, %%eax;"},
         {MINIC_X86_MACHINE_ASM_X87_PROBE, 0U,
          "fninit ; fnstsw %0 ; fnstcw %1"}
     };
@@ -54,9 +60,18 @@ int main(void) {
     assert(!minic_x86_64_typed_machine_form_matches_template(
         MINIC_X86_MACHINE_ASM_ATOMIC_XCHG, 4U, "xchgb %b0, %1", 13U));
     assert(!minic_x86_64_typed_machine_form_matches_template(
+        MINIC_X86_MACHINE_ASM_CRASH_SEGMENT_SNAPSHOT, 2U,
+        "movl %%ss, %%eax;", strlen("movl %%ss, %%eax;")));
+    assert(!minic_x86_64_typed_machine_form_matches_template(
+        MINIC_X86_MACHINE_ASM_CRASH_SEGMENT_SNAPSHOT, 0U,
+        "movl %%ss, %%eax;", strlen("movl %%ss, %%eax;")));
+    assert(!minic_x86_64_typed_machine_form_matches_template(
+        MINIC_X86_MACHINE_ASM_CRASH_SEGMENT_SNAPSHOT, 1U,
+        "movq %%ss, %%rax;", strlen("movq %%ss, %%rax;")));
+    assert(!minic_x86_64_typed_machine_form_matches_template(
         UINT32_MAX, 0U, "cpuid", 5U));
     assert(!minic_x86_64_typed_machine_form_matches_template(
         MINIC_X86_MACHINE_ASM_ZSTD_CPUID, 0U, NULL, 0U));
-    puts("PASS x86 typed machine forms 9 admitted families, forged form/variant/template fail-closed");
+    puts("PASS x86 typed machine forms including six crash selector variants, forged form/variant/template fail-closed");
     return 0;
 }

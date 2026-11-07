@@ -192,6 +192,35 @@ static bool core_record_pointer_source(
     return true;
 }
 
+bool minic_core_const_global_record_pure_getter(
+    const MinicCoreLowerContext *context, MinicExpressionId call_id) {
+    const MinicC0Program *program;
+    const MinicExpression *call;
+    const MinicGlobalObject *object;
+    const MinicArrayType *array;
+    MinicCoreConstGlobalArrayElement element;
+    MinicType object_type;
+    if (context == NULL || context->body == NULL ||
+        (program = context->body->program) == NULL ||
+        (call = minic_c0_program_expression(program, call_id)) == NULL ||
+        call->kind != MINIC_EXPRESSION_CALL ||
+        !core_record_pointer_source(context, call_id, 0U, &element))
+        return false;
+    object = minic_c0_program_global_object(program, element.object_id);
+    if (object == NULL || !object->is_internal || !object->is_read_only ||
+        object->is_extern || object->is_thread_local ||
+        object->relocation_count != 0U ||
+        object->union_selection_count != 0U ||
+        !minic_type_unqualified(object->type, &object_type) ||
+        !minic_type_is_array(object_type) ||
+        (array = minic_c0_program_array_type(
+            program, object_type.array_type_id)) == NULL ||
+        array->is_zero_length || element.index < 0 ||
+        (uint64_t)element.index >= array->element_count)
+        return false;
+    return true;
+}
+
 bool minic_core_const_global_record_scalar(
     const MinicCoreLowerContext *context, MinicExpressionId expression_id,
     MinicConstValue *value) {

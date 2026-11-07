@@ -417,6 +417,10 @@ bool minic_x86_64_typed_machine_form_matches_template(
         return form >= 1U && form <= 3U && variant == form;
     if (form_id == MINIC_X86_MACHINE_ASM_LKGS_EXTABLE)
         return form != 0U && variant == 1U;
+    /* Each crash snapshot reads a different architectural segment register.
+     * Preserve that six-way physical identity after Source qualification. */
+    if (form_id == MINIC_X86_MACHINE_ASM_CRASH_SEGMENT_SNAPSHOT)
+        return form >= 1U && form <= 6U && variant == form;
     /* All eight privileged CRn forms have distinct hardware direction and
      * register identities; carry that precise selection into MachineIR. */
     if (form_id == MINIC_X86_MACHINE_ASM_CONTROL_REGISTER)

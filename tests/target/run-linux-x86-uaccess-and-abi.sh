@@ -45,8 +45,9 @@ done
 objdump -d "$workdir/x86_64_linux_pkru.o" > "$workdir/pkru.dump"
 if ! grep -Eq 'rdpkru' "$workdir/pkru.dump" ||
    ! grep -Eq 'wrpkru' "$workdir/pkru.dump" ||
-   ! grep -Fq 'movl %edx, (%r11)' "$workdir/x86_64_linux_pkru.s" ||
-   ! grep -Fq 'movl %eax, (%r11)' "$workdir/x86_64_linux_pkru.s"; then
+   # R10/R11 are scratch address registers, not part of the PKRU ISA contract.
+   ! grep -Eq 'movl %edx, \(%r1[01]\)' "$workdir/x86_64_linux_pkru.s" ||
+   ! grep -Eq 'movl %eax, \(%r1[01]\)' "$workdir/x86_64_linux_pkru.s"; then
     printf 'FAIL: x86 Linux PKRU fixed-GPR inputs or dual 32-bit outputs lost\n' >&2
     exit 1
 fi
@@ -62,10 +63,10 @@ if ! grep -Fq 'fwait' "$workdir/x86_64_linux_fdiv_bug.s"; then
     printf 'FAIL: x86 Linux FPU FDIV FWAIT synchronization was dropped\n' >&2
     exit 1
 fi
-if ! grep -Fq 'movl %ds, %eax' "$workdir/x86_64_linux_ds_regset.s" ||
-   ! grep -Fq 'movl %eax, (%r11)' "$workdir/x86_64_linux_ds_regset.s" ||
-   ! grep -Fq 'movw %es, %ax' "$workdir/x86_64_linux_ds_regset.s" ||
-   ! grep -Fq 'movw %ax, (%r11)' "$workdir/x86_64_linux_ds_regset.s"; then
+if ! grep -Fq 'movl %ds, %r10d' "$workdir/x86_64_linux_ds_regset.s" ||
+   ! grep -Fq 'movl %r10d, (%rdi)' "$workdir/x86_64_linux_ds_regset.s" ||
+   ! grep -Fq 'movw %es, %r10w' "$workdir/x86_64_linux_ds_regset.s" ||
+   ! grep -Fq 'movw %r10w, (%rdi)' "$workdir/x86_64_linux_ds_regset.s"; then
     printf 'FAIL: Linux regset 32-bit DS/16-bit ES selector store was mis-sized\n' >&2
     exit 1
 fi
@@ -125,8 +126,8 @@ do
         exit 1
     fi
 done
-if ! grep -Fq '%ss,%ax' "$workdir/debug.dump" ||
-   ! grep -Fq '%cs,%ax' "$workdir/debug.dump" ||
+if ! grep -Eq '%ss,%(ax|r10w)' "$workdir/debug.dump" ||
+   ! grep -Eq '%cs,%(ax|r10w)' "$workdir/debug.dump" ||
    ! grep -Fq 'movq %rax, %gs:(%r10)' "$workdir/x86_64_linux_debug_register.s"; then
     printf 'FAIL: Linux x86 selector or GS pointer state transfer absent\n' >&2
     exit 1
@@ -145,10 +146,23 @@ do
         exit 1
     fi
 done
+for mode in 1 2 3 4 5
+do
+    "$host_cc" -E -P -DMINIC_FSGSBASE_NEGATIVE="$mode" \
+        "$source_root/tests/target/x86_64_linux_fsgsbase_reject.c" \
+        -o "$workdir/fsgsbase-reject-$mode.i"
+    if "$minic_cc" -S "$workdir/fsgsbase-reject-$mode.i" \
+        --target=x86_64-linux -fshort-wchar -funsigned-char -fno-PIE \
+        -o "$workdir/fsgsbase-reject-$mode.s" >/dev/null 2>&1; then
+        printf 'FAIL: malformed FSGSBASE source case %s was accepted\n' "$mode" >&2
+        exit 1
+    fi
+done
 readelf -x __ex_table "$workdir/x86_64_linux_thread_state.o" > "$workdir/thread.extable"
 readelf -r "$workdir/x86_64_linux_thread_state.o" > "$workdir/thread.reloc"
 if ! grep -Fq '11070000' "$workdir/thread.extable" ||
-   ! grep -Fq '11000000' "$workdir/thread.extable" ||
+   # The type-17 reg field must identify the physical input GPR (R10 here).
+   ! grep -Fq '110a0000' "$workdir/thread.extable" ||
    ! grep -Fq '.rela__ex_table' "$workdir/thread.reloc" ||
    [ "$(grep -c 'R_X86_64_PC32' "$workdir/thread.reloc")" -ne 8 ]; then
     printf 'FAIL: LKGS / ES / DS / SS type-17 exception fixup lost\n' >&2
@@ -249,7 +263,7 @@ do
         exit 1
     fi
 done
-if [ "$(grep -c '  setc %cl' "$workdir/x86_64_linux_rng_flag.s")" -ne 2 ]; then
+if [ "$(grep -Ec '  setc %(cl|r11b)' "$workdir/x86_64_linux_rng_flag.s")" -ne 2 ]; then
     printf 'FAIL: hardware RNG carry flag was not materialized before output stores\n' >&2
     exit 1
 fi
@@ -295,7 +309,8 @@ if [ "$(grep -c 'R_X86_64_PC32' "$workdir/xstate-alt.reloc")" -ne 12 ] ||
    [ "$(printf '%s' "$xstate_features" | grep -o '40010000' | wc -l)" -ne 1 ] ||
    [ "$(printf '%s' "$xstate_features" | grep -o '41010000' | wc -l)" -ne 1 ] ||
    [ "$(printf '%s' "$xstate_features" | grep -o '43010000' | wc -l)" -ne 2 ] ||
-   ! grep -Fq '1100f2ff' "$workdir/xstate-alt.extable" ||
+   # The alternative uses R11 for the error register (17 | 11<<8).
+   ! grep -Fq '110bf2ff' "$workdir/xstate-alt.extable" ||
    ! grep -Fq '06000000' "$workdir/xstate-alt.extable"; then
     printf 'FAIL: XSAVE ALTERNATIVE_3/XSAVES features or type-17/type-6 recovery lost\n' >&2
     exit 1

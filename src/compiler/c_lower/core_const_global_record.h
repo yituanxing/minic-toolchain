@@ -10,4 +10,10 @@ bool minic_core_const_global_record_scalar(
     const MinicCoreLowerContext *context, MinicExpressionId expression_id,
     MinicConstValue *value);
 
+/* Pure static-inline getter of an in-bounds, TU-local immutable array
+ * element, with every reachable guard proven non-effectful. This is only a
+ * CFG purity fact; it never invents an integer value or rewrites Core IR. */
+bool minic_core_const_global_record_pure_getter(
+    const MinicCoreLowerContext *context, MinicExpressionId call_id);
+
 #endif

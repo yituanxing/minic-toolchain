@@ -1,4 +1,5 @@
 #include "compiler/c_lower/cfg_constant_calls.h"
+#include "compiler/c_lower/core_const_global_record.h"
 #include "compiler/c_lower/local_facts.h"
 #include "compiler/c_lower/opt_pure_statement.h"
 #include "frontend/const_eval.h"
@@ -343,7 +344,8 @@ bool minic_core_cfg_pure_call_argument(const MinicCoreLowerContext *context,
          * effects. This is needed by Linux AArch64 __fls(mask) inside
          * BUILD_BUG_ON guards after a KVM flag's constant mask specializes. */
         return minic_core_cfg_constant_inline_call(context, expression, &folded) ||
-               core_cfg_pure_pointer_getter_call(context, expression, depth + 1U);
+               core_cfg_pure_pointer_getter_call(context, expression, depth + 1U) ||
+               minic_core_const_global_record_pure_getter(context, expression_id);
     }
     default:
         return false;

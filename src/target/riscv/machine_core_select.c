@@ -3169,6 +3169,41 @@ static bool rv_core_asm_lvalue(RvCoreSelection *sel,
     return pointer != NULL && pointer->kind == MINIC_CORE_TYPE_POINTER &&
         rv_type(sel, pointer->value.pointer.pointee, bytes, sign, &ptr);
 }
+/* RV32 GNU =r binds a DI-mode result to two consecutive GPRs, with the
+ * address-backed C result owning both 32-bit words. The source ASM itself
+ * may write only the low register; the untouched high register is then
+ * indeterminate, as in the original GNU operand contract. Never synthesize
+ * a zero/sign extension that was not present in the source instruction. */
+static bool rv_core_asm_wide_output_lvalue(RvCoreSelection *sel,
+    MinicCoreValueId address, bool *sign) {
+    const MinicCoreFunction *fn = sel->plan->core;
+    const MinicCoreTypeContext *types = fn->type_context;
+    const MinicCoreType *pointer;
+    if (sel->xlen != 32U || types == NULL || sign == NULL ||
+        address >= fn->value_count) return false;
+    pointer = minic_core_type_get(types, minic_core_type_unqualified(types,
+        fn->values[address].core_type_id));
+    return pointer != NULL && pointer->kind == MINIC_CORE_TYPE_POINTER &&
+        rv_wide_integer(sel, pointer->value.pointer.pointee, sign);
+}
+static bool rv_core_asm_wide_output_store(RvCoreSelection *sel,
+    MinicCoreValueId address, unsigned low, unsigned high) {
+    unsigned part, byte;
+    if (sel->xlen != 32U || !rv_load(sel, address, RV_T2)) return false;
+    for (part = 0U; part < 2U; ++part) {
+        if (!rv_rr(sel, MINIC_RISCV_MACHINE_MV, RV_T0,
+                part == 0U ? low : high)) return false;
+        for (byte = 0U; byte < 4U; ++byte)
+            if ((byte == 0U
+                    ? !rv_rr(sel, MINIC_RISCV_MACHINE_MV,
+                        RV_T1, RV_T0)
+                    : !rv_rri(sel, MINIC_RISCV_MACHINE_SRLI,
+                        RV_T1, RV_T0, (int64_t)(byte * 8U))) ||
+                !rv_byte_transfer(sel, false, RV_T1,
+                    RV_T2, part * 4U + byte, false)) return false;
+    }
+    return true;
+}
 static bool rv_core_asm_lvalue_transfer(RvCoreSelection *sel,
     MinicCoreValueId address, unsigned bytes, bool sign, bool load) {
     unsigned i;
@@ -3346,10 +3381,12 @@ static bool rv_core_mixed_source_asm(RvCoreSelection *sel,
     MinicMachineOperand bindings[8];
     MinicMachineRegisterEffect clobbers[MINIC_MACHINE_MAX_REGISTER_EFFECTS];
     unsigned physicals[8] = {0};
+    unsigned pair_highs[8] = {0};
+    bool wide_outputs[8] = {false};
     bool reserved[32] = {false};
     unsigned widths[8] = {0};
     bool signs[8] = {0};
-    size_t i, j, outputs = 0U, results = 0U;
+    size_t i, j, outputs = 0U, results = 0U, implicit_pairs = 0U;
     unsigned int effects = 0U;
     if ((source->operand_plan_owner != MINIC_ASM_OPERAND_PLAN_GENERIC_STRUCTURED &&
          !(source->operand_plan_owner == MINIC_ASM_OPERAND_PLAN_NONE &&
@@ -3367,6 +3404,20 @@ static bool rv_core_mixed_source_asm(RvCoreSelection *sel,
         source->deferred_immediate_symbol != NULL ||
         count == 0U || count > 8U ||
         !minic_core_asm_output_operand_count(ins, &outputs)) return false;
+    /* Plan every DI output's adjacent second register before assigning any
+     * generic operand. A late reservation could steal a later input's GPR. */
+    for (i = 0U; i < count; ++i) {
+        const MinicCoreStructuredInlineAsmOperand *role = &roles[i];
+        bool signed_pair;
+        if (role->kind == MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT &&
+            rv_core_asm_wide_output_lvalue(sel, role->value, &signed_pair)) {
+            if (role->has_fixed_register_binding ||
+                role->has_tied_output || source->template_length == 0U ||
+                strstr(source->template_text, "%H") != NULL)
+                return false;
+            wide_outputs[i] = true;
+        }
+    }
     /* All source clobbers must be recognized caller-saved physical GPRs.
      * Callee-saved registers require an explicit MachineIR save/restore
      * contract and are intentionally not admitted by this family. */
@@ -3416,12 +3467,19 @@ static bool rv_core_mixed_source_asm(RvCoreSelection *sel,
     }
     for (i = 0U; i < count; ++i) {
         if (physicals[i] != 0U) continue;
-        for (j = RV_A0; j <= RV_A7 && reserved[j]; ++j) {}
+        for (j = RV_A0; j <= RV_A7 &&
+                (reserved[j] || (wide_outputs[i] &&
+                    (j == RV_A7 || reserved[j + 1U]))); ++j) {}
         if (j <= RV_A7) {
             physicals[i] = (unsigned)j;
             reserved[j] = true;
+            if (wide_outputs[i]) {
+                pair_highs[i] = (unsigned)(j + 1U);
+                reserved[j + 1U] = true;
+            }
             continue;
         }
+        if (wide_outputs[i]) return false;
         /* Real Linux IRQ stack-switch ASM clobbers every a/t register and
          * still needs one or two source operands. The original GNU-ASM plan
          * already selected saved s-registers and reserved stack slots for
@@ -3480,8 +3538,12 @@ static bool rv_core_mixed_source_asm(RvCoreSelection *sel,
         case MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT:
         case MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE:
             if (i >= outputs || role->value >= fn->value_count ||
-                !rv_core_asm_lvalue(sel, role->value,
-                    &widths[i], &signs[i]) ||
+                !(wide_outputs[i]
+                    ? (rv_core_asm_wide_output_lvalue(sel, role->value,
+                           &signs[i]) &&
+                       (widths[i] = 2U * (sel->xlen / 8U), true))
+                    : rv_core_asm_lvalue(sel, role->value,
+                           &widths[i], &signs[i])) ||
                 (role->physical_read_write != (role->kind ==
                     MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE) &&
                  !(source->operand_plan_owner == MINIC_ASM_OPERAND_PLAN_NONE &&
@@ -3516,6 +3578,18 @@ static bool rv_core_mixed_source_asm(RvCoreSelection *sel,
          ins->result != MINIC_CORE_VALUE_INVALID) ||
         (results != 0U && ins->result == MINIC_CORE_VALUE_INVALID))
         return false;
+    /* A DI source output writes a pair in GNU's physical register model.
+     * The upper register may remain undefined by an `lw` template; record
+     * that as an implicit WRITE effect instead of manufacturing its bits. */
+    for (i = 0U; i < count; ++i)
+        if (wide_outputs[i]) {
+            const size_t slot = source->register_clobber_count + implicit_pairs;
+            if (slot >= MINIC_MACHINE_MAX_REGISTER_EFFECTS) return false;
+            clobbers[slot].reg = (MinicMachineRegister){pair_highs[i],
+                (uint16_t)sel->xlen, MINIC_MACHINE_REGISTER_GENERAL};
+            clobbers[slot].access = MINIC_MACHINE_REGISTER_WRITE;
+            ++implicit_pairs;
+        }
     for (i = 0U; i < count; ++i) {
         const MinicCoreStructuredInlineAsmOperand *role = &roles[i];
         const unsigned physical = physicals[i];
@@ -3569,20 +3643,24 @@ static bool rv_core_mixed_source_asm(RvCoreSelection *sel,
     }
     if (!minic_machine_builder_emit_core_source_asm(&sel->builder, source,
             effects, bindings, count,
-            source->register_clobber_count != 0U ? clobbers : NULL,
-            source->register_clobber_count, false, false)) return false;
+            source->register_clobber_count + implicit_pairs != 0U ? clobbers : NULL,
+            source->register_clobber_count + implicit_pairs, false, false)) return false;
     for (i = 0U; i < outputs; ++i) {
         const MinicCoreStructuredInlineAsmOperand *role = &roles[i];
         const unsigned physical = physicals[i];
         if (role->kind == MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_RESULT ||
             role->kind == MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT ||
             role->kind == MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE) {
-            if (!rv_rr(sel, MINIC_RISCV_MACHINE_MV, RV_T0, physical) ||
-                !rv_normalize(sel, RV_T0, widths[i], signs[i])) return false;
+            if (!wide_outputs[i] &&
+                (!rv_rr(sel, MINIC_RISCV_MACHINE_MV, RV_T0, physical) ||
+                 !rv_normalize(sel, RV_T0, widths[i], signs[i]))) return false;
             if (role->kind == MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_RESULT) {
                 if (!rv_store(sel, ins->result, RV_T0)) return false;
-            } else if (!rv_core_asm_lvalue_transfer(sel, role->value,
-                       widths[i], signs[i], false)) return false;
+            } else if (!(wide_outputs[i]
+                    ? rv_core_asm_wide_output_store(sel, role->value,
+                        physical, pair_highs[i])
+                    : rv_core_asm_lvalue_transfer(sel, role->value,
+                        widths[i], signs[i], false))) return false;
         }
     }
     return true;

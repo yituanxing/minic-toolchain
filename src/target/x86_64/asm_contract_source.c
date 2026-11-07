@@ -597,7 +597,10 @@ static bool x86_linux_i915_movntdqa_source(const MinicTargetInvocation *invocati
     const unsigned int form = source ? minic_x86_64_linux_i915_movntdqa_form(
         source->template_text, source->template_length) : 0U;
     size_t i;
-    if (!program || !source || !contract || !form || source->is_volatile ||
+    /* GNU extended asm without outputs is implicitly volatile, even if the
+     * Linux source spells it as bare `asm`. Keep C ingress aligned with that
+     * frontend rule before attaching a physical MachineIR form identity. */
+    if (!program || !source || !contract || !form || !source->is_volatile ||
         source->is_goto || source->label_count || source->output_count ||
         !source->inputs || source->input_count != 2U ||
         !source->has_memory_clobber || source->clobber_count != 1U ||
@@ -759,7 +762,7 @@ static bool x86_linux_flushcache_copy_source(const MinicTargetInvocation *invoca
         src->has_memory_clobber != (form != 4U) ||
         src->clobber_count != (form == 4U ? 0U : (form == 1U ? 5U : 2U)) ||
         src->register_clobber_count != (form == 4U ? 0U : (form == 1U ? 4U : 1U)) ||
-        src->is_volatile != (form == 4U)) return false;
+        !src->is_volatile) return false;
     if (form == 4U) {
         expr = minic_c0_program_expression(program, src->outputs[0].expression);
         if (!target_constraint_is(&src->outputs[0], "+m") || !expr ||
@@ -1131,9 +1134,11 @@ static bool x86_linux_crash_segment_snapshot_source(const MinicTargetInvocation 
     (void)invocation;
     const MinicExpression *output;
     MinicType type;
+    const unsigned int form = source ?
+        minic_x86_64_linux_crash_segment_snapshot_form(
+            source->template_text,source->template_length) : 0U;
     if (!program || !source || !contract ||
-        !minic_x86_64_linux_crash_segment_snapshot_form(
-            source->template_text, source->template_length) ||
+        !form ||
         !source->is_volatile || source->is_goto || source->label_count ||
         source->output_count != 1U || source->input_count || !source->outputs ||
         source->clobber_count || source->has_memory_clobber ||
@@ -1149,6 +1154,7 @@ static bool x86_linux_crash_segment_snapshot_source(const MinicTargetInvocation 
           minic_type_equal(type, minic_type_unsigned_long()))) return false;
     contract->operand_count = 1U;
     contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
+    contract->target_machine_form_variant = form;
     return true;
 }
 
