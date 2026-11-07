@@ -2684,6 +2684,7 @@ check-loong-machine-mir-select:
 	  src/target/loongarch64/machine_asm_form.c \
 	  src/target/loongarch64/machine_source_asm.c \
 	  src/target/loongarch64/machine_select.c \
+	  src/target/loongarch64/simd_asm.c \
 	  src/target/loongarch64/machine_builtin_select.c \
 	  src/target/loongarch64/machine_llsc_select.c \
 	  src/target/loongarch64/machine_llsc_extended_select.c \
@@ -2808,6 +2809,7 @@ check-loong-machine-core-select:
 	  src/target/loongarch64/machine_csr_source_select.c \
 	  src/target/loongarch64/machine_scalar_source_select.c \
 	  src/target/loongarch64/machine_uaccess_select.c \
+	  src/target/loongarch64/simd_asm.c \
 	  -o "$(BUILD_DIR)/tests/loong-machine-core-select"
 	"$(BUILD_DIR)/tests/loong-machine-core-select"
 
