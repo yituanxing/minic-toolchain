@@ -82,6 +82,7 @@ jobs:
     timeout-minutes: 5
     outputs:
       run: ${{ steps.decide.outputs.run }}
+      p1_gdb: ${{ steps.decide.outputs.p1_gdb }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -104,8 +105,17 @@ jobs:
              [[ "${{ contains(github.event.pull_request.title, '[minic-full]') }}" == true ]]; then
             active=false
           fi
+          # An independent, last-commit consent marker only for the exact-head
+          # PR receiver. Do not repurpose historical [linux-*] experiment tags:
+          # the canonical full-2064 receiver explicitly rejects those tags.
+          p1_gdb=false
+          if [[ "$active" == true ]] && \
+             ! git diff --quiet HEAD^ HEAD -- tools/ci/linux-rv64-p1-gdb-trigger.txt; then
+            p1_gdb=true
+          fi
           printf 'run=%s\n' "$active" >>"$GITHUB_OUTPUT"
-          echo "RV64_FULL_PR_GATE=$active head=$(git rev-parse HEAD)"
+          printf 'p1_gdb=%s\n' "$p1_gdb" >>"$GITHUB_OUTPUT"
+          echo "RV64_FULL_PR_GATE=$active p1_gdb=$p1_gdb head=$(git rev-parse HEAD)"
 
   # A cached original GNU Kbuild Image is an optimization, not a prerequisite
   # for running the user's exact-head MiniC campaign. Historical branch-scoped
@@ -2194,7 +2204,7 @@ jobs:
           retention-days: 7
 
       - name: Install P1 RISC-V GDB debugger
-        if: contains(github.event.head_commit.message, '[linux-runtime-gdb-stack]') || contains(github.event.head_commit.message, '[linux-runtime-p1-pair-debug]') || contains(github.event.head_commit.message, '[linux-runtime-p1-sched-chain]')
+        if: contains(github.event.head_commit.message, '[linux-runtime-gdb-stack]') || contains(github.event.head_commit.message, '[linux-runtime-p1-pair-debug]') || contains(github.event.head_commit.message, '[linux-runtime-p1-sched-chain]') || (github.event_name == 'pull_request' && needs.rv64-campaign-gate.outputs.p1_gdb == 'true')
         timeout-minutes: 5
         run: |
           sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 install -y --no-install-recommends gdb-multiarch
@@ -3449,6 +3459,10 @@ jobs:
           # do not rerun a second CI just to restore a freshly built full cache.
           # Bare [linux-runtime-gcc-sharded] retains its original no-swap path.
           export COHORT_P1_STACK_OWNER_SWAPS=${{ (contains(github.event.head_commit.message, '[linux-runtime-stack-owners]') || (contains(github.event.head_commit.message, '[linux-runtime-gcc-sharded]') && contains(github.event.head_commit.message, '[linux-runtime-p1-defined-crossblock]'))) && '1' || '0' }}
+          # Canonical, no-experiment-tag exact-PR path: observe the failure in
+          # the same runner immediately after GNU Kbuild linked its vmlinux.
+          # It never selects new C owners or changes the P0/P1 verdict.
+          export COHORT_P1_EXACT_FAILED_GDB=${{ (github.event_name == 'pull_request' && needs.rv64-campaign-gate.outputs.p1_gdb == 'true') && '1' || '0' }}
           export COHORT_P1_IDENTICAL_IMAGE_REPEAT=${{ contains(github.event.head_commit.message, '[linux-runtime-repeat-image]') && '1' || '0' }}
           export COHORT_P1_GDB_STACK=${{ (contains(github.event.head_commit.message, '[linux-runtime-gdb-stack]') || contains(github.event.head_commit.message, '[linux-runtime-p1-sched-chain]')) && '1' || '0' }}
           export P1_GDB_SCHED_CHAIN=${{ contains(github.event.head_commit.message, '[linux-runtime-p1-sched-chain]') && '1' || '0' }}
@@ -3771,6 +3785,7 @@ jobs:
             build/linux-runtime-gcc-cohort-v1/p1-gdb-stack/*.nm
             build/linux-runtime-gcc-cohort-v1/p1-gdb-stack/*.bin
             build/linux-runtime-gcc-cohort-v1/p1-gdb-stack/*.tsv
+            build/linux-runtime-gcc-cohort-v1/p1-gdb-stack/vmlinux.gz
             build/linux-runtime-gcc-cohort-v1/p1-gdb-stack-experiment/*.log
             build/linux-runtime-gcc-cohort-v1/p1-gdb-stack-experiment/*.txt
             build/linux-runtime-gcc-cohort-v1/p1-gdb-stack-experiment/*.gdb

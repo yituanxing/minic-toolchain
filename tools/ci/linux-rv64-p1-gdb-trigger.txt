@@ -1,0 +1,5 @@
+# Optional read-only P1 GDB on the exact same current 2064-owner Kbuild Image.
+# For a PR one-shot, change this marker AND linux-rv64-runtime-trigger.txt in
+# the same last commit. The compiler profile and seven-shard cache key are
+# unaffected. Never use historical [linux-*] experiment commit-message tags.
+diagnostic=on-original-failed-image

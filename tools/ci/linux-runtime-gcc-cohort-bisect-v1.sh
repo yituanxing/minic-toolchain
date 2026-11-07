@@ -3003,6 +3003,48 @@ PY_LARGEST_TUS
       elif grep -REqi 'Linux version 6\.6\.143|Kernel panic|Oops:|Unable to handle|BUG:' "$d/qemu-p1" 2>/dev/null; then
         echo "COHORT_P1=FAIL name=$name rc=$p1_rc"
         verdict=FAIL
+        if [[ "${COHORT_P1_EXACT_FAILED_GDB:-0}" == 1 && "$name" == full_all_verified &&
+              "$cohort_scope" == FULL_C_UNIVERSE && "$n" == 2064 ]]; then
+          # The old PR run's artifact contains Image but no vmlinux. Capture
+          # both only while this SAME Kbuild output directory still exists;
+          # restoring an unrelated GNU golden vmlinux is never acceptable.
+          gdb_dir="$ev/p1-gdb-stack"
+          mkdir -p "$gdb_dir"
+          if [[ -s "$out/vmlinux" && -s "$out/arch/riscv/boot/Image" &&
+                -s "${LINUX_RUNTIME_CUSTOM_DTB:-}" &&
+                -s "$ev/runtime-initramfs.cpio.gz" ]] &&
+             cmp -s "$d/Image" "$out/arch/riscv/boot/Image" &&
+             [[ "$(sha256sum "$d/Image" | cut -d' ' -f1)" == "$image_sha" ]]; then
+            {
+              printf 'trial=%s\nimage_sha256=%s\n' "$name" "$image_sha"
+              printf 'image_and_kbuild_output=byte_identical\n'
+              printf 'vmlinux=matching_current_trial_kbuild_output\n'
+              printf 'P1_verdict=FAIL\nGDB_verdict=diagnostic_only\n'
+              sha256sum "$d/Image" "$out/vmlinux" "${LINUX_RUNTIME_CUSTOM_DTB}"
+            } >"$gdb_dir/exact-input-identity.txt"
+            echo "COHORT_P1_EXACT_GDB=START trial=$name image_sha=$image_sha no_new_link=true no_C_compilation=true"
+            P1_GDB_IRQ_REENTRY=1 \
+              bash "$repo/tools/ci/linux-runtime-p1-gdb-stack-v1.sh" \
+                "$d/Image" "$out/vmlinux" "$ev/runtime-initramfs.cpio.gz" \
+                "$LINUX_RUNTIME_CUSTOM_DTB" "$gdb_dir" 65 \
+                >"$gdb_dir/receiver.log" 2>&1 || {
+              echo "COHORT_P1_EXACT_GDB=INCONCLUSIVE diagnostic_probe_failed=true original_P1=FAIL"
+            }
+            # Archive the matching GNU linked ELF for later offline symbol
+            # analysis. The Image itself is already kept by this workflow;
+            # compression preserves ELF bytes and costs no new build step.
+            if gzip -1 -c "$out/vmlinux" >"$gdb_dir/vmlinux.gz"; then
+              echo "COHORT_P1_EXACT_GDB_ELF=ARCHIVED sha256=$(sha256sum "$out/vmlinux" | cut -d' ' -f1) gzip=true"
+            else
+              rm -f -- "$gdb_dir/vmlinux.gz"
+              echo "COHORT_P1_EXACT_GDB_ELF=INCONCLUSIVE reason=compression_failed original_P1=FAIL"
+            fi
+            echo "COHORT_P1_EXACT_GDB=COMPLETE trial=$name image_sha=$image_sha original_P1=FAIL read_only=true"
+          else
+            echo "COHORT_P1_EXACT_GDB=INCONCLUSIVE trial=$name reason=unpaired_inputs_or_image_identity_mismatch original_P1=FAIL" \
+              | tee "$gdb_dir/receiver.log"
+          fi
+        fi
       else
         echo "COHORT_P1=INCONCLUSIVE name=$name rc=$p1_rc"
         verdict=INCONCLUSIVE
