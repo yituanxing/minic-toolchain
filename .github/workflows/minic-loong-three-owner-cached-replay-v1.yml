@@ -79,7 +79,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          # The default pull_request checkout is a synthetic PR merge SHA.
+          # Build only the exact original PR HEAD compiler and Kbuild driver.
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
+      - name: Require exact current compiler source before any expensive work
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          expected='${{ github.event.pull_request.head.sha || github.sha }}'
+          test "$(git rev-parse HEAD)" = "$expected"
+          echo "LOONG_THREE_OWNER_SOURCE_BIND=PASS source_head=$expected"
       - name: Prove eight original ACE5 artifact ZIP IDs and digests before any long job
         env:
           GH_TOKEN: ${{ github.token }}

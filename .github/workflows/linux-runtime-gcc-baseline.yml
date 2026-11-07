@@ -77,9 +77,9 @@ env:
 
 jobs:
   # Exact one-shot push subject or explicit manual dispatch: immutable
-  # ace5bd140 producer objects (1740 untouched) + exact current-HEAD
-  # block/blk-mq.o GNU-E/MiniC-S/GNU-AS + GNU LD and P1. Both paths skip the
-  # original seven producer shards and resolve this reusable at the same SHA.
+  # ace5bd140 producer objects (1737 untouched) + exact current-HEAD
+  # block/blk-mq.o and three live vdso-offsets.h dependent C owners, all via
+  # GNU-E/MiniC-S/GNU-AS + GNU LD and P1. Reuses original seven producer shards.
   rv32-one-owner-replay:
     if: github.ref == 'refs/heads/refactor/minic-target-language-boundary' && ((github.event_name == 'workflow_dispatch' && inputs.mode == 'rv32-owner-replay') || (github.event_name == 'push' && contains(github.event.head_commit.message, '[rv32-one-owner-replay]')))
     uses: ./.github/workflows/linux-rv32i-single-owner-replay.yml

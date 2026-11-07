@@ -1,4 +1,4 @@
-name: RV32 Linux one-owner cached replay
+name: RV32 Linux bounded four-owner cached replay
 
 # Manually invoked by the EXISTING default-branch runtime workflow via
 # workflow_dispatch mode=rv32-owner-replay. No push/PR trigger here.
@@ -15,7 +15,7 @@ env:
   RV32I_BASE_RUN: '42378012759'
 
 jobs:
-  rv32-one-owner:
+  rv32-four-owner:
     runs-on: ubuntu-24.04
     timeout-minutes: 95
     steps:
@@ -24,7 +24,7 @@ jobs:
           persist-credentials: false
           fetch-depth: 2
 
-      - name: Bind source tree to explicit one-owner replay request
+      - name: Bind source tree to explicit bounded four-owner replay request
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -33,25 +33,27 @@ jobs:
           marker=tools/ci/linux-rv32-one-owner-replay-trigger.txt
           test -s "$marker"
           mapfile -t replay_request <"$marker"
-          if [[ "${#replay_request[@]}" != 4 ||
+          if [[ "${#replay_request[@]}" != 5 ||
                 "${replay_request[0]}" != owner=block/blk-mq.o ||
-                "${replay_request[1]}" != producer_run=42378012759 ||
-                "${replay_request[2]}" != producer_commit=ace5bd14026c08ab343ea77df979a11f8c7a1a80 ||
-                ! "${replay_request[3]}" =~ ^nonce=20261107-[0-9]{1,5}$ ]]; then
-            echo 'RV32I_OWNER_REPLAY=FAIL invalid exact-run marker' >&2
+                "${replay_request[1]}" != mode=current_four_old_1737_exact_vdso_offsets ||
+                "${replay_request[2]}" != producer_run=42378012759 ||
+                "${replay_request[3]}" != producer_commit=ace5bd14026c08ab343ea77df979a11f8c7a1a80 ||
+                ! "${replay_request[4]}" =~ ^nonce=20261107-[0-9]{1,5}$ ]]; then
+            echo 'RV32I_FOUR_OWNER_REPLAY=FAIL invalid exact-run marker' >&2
             exit 1
           fi
           if [[ "$GITHUB_EVENT_NAME" == push ]]; then
             git rev-parse --verify HEAD^ >/dev/null
             if git diff --quiet HEAD^ HEAD -- "$marker"; then
-              echo 'RV32I_OWNER_REPLAY=FAIL stale repeated push marker' >&2
+              echo 'RV32I_FOUR_OWNER_REPLAY=FAIL stale repeated push marker' >&2
               exit 1
             fi
           fi
           test -f tools/ci/linux-runtime-gcc-shards-v1.py
           test -f tests/external/linux/stage2_kbuild_cc.sh
           test -f tools/ci/linux-runtime-kbuild-regeneration-guard-v1.py
-          echo "RV32I_REPLAY_CURRENT_SOURCE=PASS sha=$GITHUB_SHA exact_old_producer=$RV32I_BASE_SHA run=$RV32I_BASE_RUN selected_C=block/blk-mq.o"
+          test -f tools/ci/linux-rv32i-four-owner-replay-v1.py
+          echo "RV32I_REPLAY_CURRENT_SOURCE=PASS sha=$GITHUB_SHA exact_old_producer=$RV32I_BASE_SHA run=$RV32I_BASE_RUN primary_C=block/blk-mq.o generated_header_C=3 expected_current_C=4 old_cached_C=1737"
 
       - name: Install pinned GNU tools and QEMU
         timeout-minutes: 12
@@ -143,7 +145,7 @@ jobs:
                "$(sha256sum "$current_cc" | cut -d' ' -f1)"
           echo "RV32I_REPLAY_COMPILERS=PASS old_source=$RV32I_BASE_SHA old_artifact_run=42378020139 old_binary_sha=$old_expected new_binary_sha=$(sha256sum "$current_cc" | cut -d' ' -f1)"
 
-      - name: Authenticate all 1741 old objects and replace only blk-mq
+      - name: Authenticate all 1741 old objects and replay bounded four-owner cohort
         timeout-minutes: 55
         shell: bash
         run: |
@@ -155,7 +157,9 @@ jobs:
           RV32I_LINUX_SOURCE="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0/linux-6.6.143" \
           RV32I_LINUX_WORK="$GITHUB_WORKSPACE/build/rv32i-linux-entry" \
             bash tests/external/linux/rv32i_kbuild_entry.sh
-          echo "RV32I_OWNER_REPLAY_LINK=PASS source=$GITHUB_SHA prior_run=$RV32I_BASE_RUN current_head_C=1 reused_old_C=1740 full_current_head_C=false"
+          test -s build/rv32i-linux-entry/merged/four-owner-attestation.txt
+          test "$(wc -l <build/rv32i-linux-entry/merged/four-owner-final-manifest.sha256)" -eq 1741
+          echo "RV32I_FOUR_OWNER_REPLAY_LINK=PASS source=$GITHUB_SHA prior_run=$RV32I_BASE_RUN current_head_C=4 reused_old_C=1737 full_current_head_C=false"
 
       - name: Boot actual replay Image in RV32 QEMU
         timeout-minutes: 3
@@ -169,7 +173,7 @@ jobs:
           RV32I_QEMU_TIMEOUT_SECONDS=25 \
             bash tools/ci/linux-rv32i-qemu-p0-v1.sh
 
-      - name: Require current one-owner Image shell and P1 12/12 on one SHA
+      - name: Require bounded four-owner Image shell and P1 12/12 on one SHA
         timeout-minutes: 25
         shell: bash
         run: |
@@ -197,13 +201,14 @@ jobs:
           done
           test "$(awk -F '\t' '$3=="PASS"{n++} END{print n+0}' "$dir/p1-repeats.tsv")" -eq 12
           test "$(tail -n +2 "$dir/p1-repeats.tsv" | cut -f2 | sort -u | wc -l)" -eq 1
-          echo "RV32I_CACHED_OWNER_REPLAY_P1=PASS 12/12 old_C=1740 current_C=1 full_current_head_C=false image_sha256=$sha"
+          test "$(sed -n 's/^image_sha256=//p' build/rv32i-linux-entry/merged/four-owner-attestation.txt)" = "$sha"
+          echo "RV32I_CACHED_FOUR_OWNER_REPLAY_P1=PASS 12/12 old_C=1737 current_C=4 mixed_epochs=true full_current_head_C=false image_sha256=$sha"
 
-      - name: Preserve provenance and the single freshly preprocessed input
+      - name: Preserve four-owner source provenance and current GNU-preprocessed inputs
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: linux-rv32i-one-owner-replay-${{ github.sha }}
+          name: linux-rv32i-four-owner-replay-${{ github.sha }}
           retention-days: 7
           if-no-files-found: warn
           path: |
@@ -211,15 +216,31 @@ jobs:
             build/rv32i-linux-entry/merged/minic-manifest-before-replay.sha256
             build/rv32i-linux-entry/merged/minic-manifest.sha256
             build/rv32i-linux-entry/merged/owner-replay-attestation.txt
+            build/rv32i-linux-entry/merged/four-owner-attestation.txt
+            build/rv32i-linux-entry/merged/four-owner-final-manifest.sha256
             build/rv32i-linux-entry/merged/replay-owner.txt
             build/rv32i-linux-entry/merged/owner-replay.log
             build/rv32i-linux-entry/merged/owner-replay-hashes.sha256
+            build/rv32i-linux-entry/merged/owner-replay-success.txt
+            build/rv32i-linux-entry/merged/header-affected-objects.txt
+            build/rv32i-linux-entry/merged/header-replay-success.txt
+            build/rv32i-linux-entry/merged/header-replay-hashes.sha256
+            build/rv32i-linux-entry/merged/header-replay.log
+            build/rv32i-linux-entry/merged/generated-before.json
+            build/rv32i-linux-entry/merged/generated-after-first-link.json
             build/rv32i-linux-entry/merged/gnu-prepare.log
             build/rv32i-linux-entry/merged/minic-relink.log
             build/rv32i-linux-entry/merged/minic-relink-retry.log
             build/rv32i-linux-entry/merged/header-impact.log
             build/rv32i-linux-entry/merged/union-result.txt
             build/rv32i-linux-entry/out/block/blk-mq.minic-stage2.i
+            build/rv32i-linux-entry/out/block/blk-mq.minic-stage2.s
+            build/rv32i-linux-entry/out/arch/riscv/kernel/alternative.minic-stage2.i
+            build/rv32i-linux-entry/out/arch/riscv/kernel/alternative.minic-stage2.s
+            build/rv32i-linux-entry/out/arch/riscv/kernel/signal.minic-stage2.i
+            build/rv32i-linux-entry/out/arch/riscv/kernel/signal.minic-stage2.s
+            build/rv32i-linux-entry/out/arch/riscv/kernel/vdso.minic-stage2.i
+            build/rv32i-linux-entry/out/arch/riscv/kernel/vdso.minic-stage2.s
             build/rv32i-linux-entry/out/arch/riscv/boot/Image
             build/rv32i-linux-entry/replay-qemu-p0/*.log
             build/rv32i-linux-entry/replay-qemu-p1/source-identity.txt

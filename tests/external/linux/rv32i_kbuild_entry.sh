@@ -177,10 +177,11 @@ PY_FAILURE_GROUPS
   exit 0
 fi
 if [[ "$mode" == union ]]; then
-  # An explicitly bounded receiver can reuse a previously certified seven-
-  # shard producer while recompiling exactly one canonical C owner. The old
-  # MiniC binary is ONLY used to authenticate immutable source artifacts;
-  # the current MINIC_CC must compile the replayed owner.
+  # Bounded mixed-epoch replay: first compile one canonical C owner, then
+  # replay exactly three live vdso-offsets.h consumers if GNU Kbuild changes
+  # that generated header. All other 1737 C owners stay byte-exact to the
+  # old seven-shard MiniC producer. The old compiler ONLY authenticates the
+  # old cache; the current MiniC produces all four replayed owners.
   replay_owner=${RV32I_REPLAY_OWNER:-}
   producer_minic=$MINIC_CC
   if [[ -n "$replay_owner" ]]; then
@@ -325,10 +326,11 @@ if not fresh_i.is_file() or fresh_i.stat().st_size == 0 or not cmd.is_file() or 
 with (merged / 'owner-replay-attestation.txt').open('w') as f:
     for key, value in (
         ('replay_owner', owner), ('source_mode', 'fresh_GNU_E_from_original_frozen_Kbuild_cmd'),
+        ('attestation_scope', 'primary_stage_only_before_generated_header_dependent_replay'),
         ('producer_commit', os.environ.get('RV32I_BASE_SHA', 'unknown')),
         ('current_commit', os.environ.get('GITHUB_SHA', 'unknown')),
-        ('original_C_owners', '1741'), ('replayed_C_owners', '1'),
-        ('unchanged_cached_C_owners', '1740'),
+        ('original_C_owners', '1741'), ('primary_stage_replayed_C_owners', '1'),
+        ('primary_stage_unchanged_cached_C_owners', '1740'),
         ('canonical_original_C_sha256', digest(canonical_src)),
         ('old_1741_manifest_sha256', digest(merged / 'minic-manifest-before-replay.sha256')),
         ('producer_minic_sha256', digest(Path(producer))),
@@ -336,7 +338,7 @@ with (merged / 'owner-replay-attestation.txt').open('w') as f:
         ('original_owner_sha256', old_sha), ('replayed_owner_sha256', new_sha),
         ('frozen_cmd_sha256', digest(cmd)), ('fresh_preprocessed_i_sha256', digest(fresh_i))):
         f.write(f'{key}={value}\n')
-print(f'RV32I_OWNER_REPLAY=PASS owner={owner} old_sha={old_sha} new_sha={new_sha} unchanged_cached=1740 fresh_i={digest(fresh_i)}')
+print(f'RV32I_PRIMARY_OWNER_REPLAY=PASS owner={owner} old_sha={old_sha} new_sha={new_sha} interim_unchanged_cached=1740 final_header_replay=pending fresh_i={digest(fresh_i)}')
 PY_SINGLE_OWNER
     (cd "$merged" && sha256sum --quiet -c minic-manifest.sha256)
   fi
@@ -449,14 +451,17 @@ PY_RV32_LINK_INPUTS
     | tee "$merged/header-impact.log"
   python3 "$regen_guard" --mode snapshot --out "$out" \
     --evidence "$merged/generated-after-first-link.json"
-  if [[ -n "$replay_owner" && -s "$merged/header-affected-objects.txt" ]]; then
-    echo 'RV32I_OWNER_REPLAY=FAIL generated_headers_require_more_than_one_C_recompile' >&2
-    exit 8
+  if [[ -n "$replay_owner" ]]; then
+    # The prior official one-owner run proved an actual vdso-offsets.h delta
+    # and exactly these three source owners. Fail closed on ANY different
+    # generated input or dependency closure; never expand to a large sweep.
+    python3 "$GITHUB_WORKSPACE/tools/ci/linux-rv32i-four-owner-replay-v1.py" \
+      --mode gate --merged "$merged" --out "$out" || exit 8
   fi
   if [[ -s "$merged/header-affected-objects.txt" ]]; then
     : >"$merged/header-replay-success.txt"
     : >"$merged/header-replay-hashes.sha256"
-    MINIC_KBUILD_RV32I_ORIGIN_AUDIT=1 \
+    MINIC_KEEP_INTERMEDIATES=1 MINIC_KBUILD_RV32I_ORIGIN_AUDIT=1 \
       python3 "$regen_guard" --mode replay --out "$out" \
         --evidence "$merged/generated-before.json" \
         --golden-out "$merged/gnu-cmd" \
@@ -563,7 +568,14 @@ PY_UNION
   riscv64-linux-gnu-readelf -h "$out/vmlinux" >"$merged/minic-vmlinux-elf.txt"
   grep -Eq 'Class:[[:space:]]+ELF32' "$merged/minic-vmlinux-elf.txt"
   if [[ -n "$replay_owner" ]]; then
-    printf 'RV32I_OWNER_REPLAY_LINK=PASS ELF32=1 old_producer_C=1740 current_head_C=1 original_Kbuild=true full_current_head_C=false image_sha256=%s QEMU_P1=NOT_RUN\n' \
+    # This independently verifies ALL 1741 final C SHA digests (not just the
+    # four replaced files), both GNU-E and current-MiniC intermediate hashes,
+    # exact original Kbuild .cmd/source identities and the old/new header.
+    python3 "$GITHUB_WORKSPACE/tools/ci/linux-rv32i-four-owner-replay-v1.py" \
+      --mode attest --merged "$merged" --out "$out" \
+      --linux-source "$src" --producer-minic "$producer_minic" \
+      --current-minic "$MINIC_CC" || exit 8
+    printf 'RV32I_FOUR_OWNER_REPLAY_LINK=PASS ELF32=1 old_producer_C=1737 current_head_C=4 original_Kbuild=true mixed_epochs=true full_current_head_C=false image_sha256=%s QEMU_P1=NOT_RUN\n' \
       "$(sha256sum "$out/arch/riscv/boot/Image" | cut -d' ' -f1)" | tee "$merged/union-result.txt"
   else
     printf 'RV32I_UNION_LINK=PASS ELF32=1 full_MiniC_C=true original_GNU_Kbuild=true image_sha256=%s QEMU_P1=NOT_RUN\n' \
