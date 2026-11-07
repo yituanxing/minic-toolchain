@@ -13,6 +13,7 @@ on:
       - 'tests/compiler/c0/probe-x86-linux-descriptor-machineir.sh'
       - 'tests/compiler/c0/probe-x86-linux-irq-state-machineir.sh'
       - 'tests/compiler/c0/probe-x86-linux-zero-barrier-memory-clobber.sh'
+      - 'tests/compiler/c0/probe-x86-linux-paravirt-patch-site.sh'
       - 'tests/compiler/c0/probe-x86-core-dead-ssa-writeback.sh'
       - 'tests/compiler/c0/x86_kbuild_mitigations.c'
       - 'tests/compiler/c0/probe-target-language-abi-options.sh'
@@ -79,6 +80,7 @@ on:
       - 'tests/compiler/c0/probe-x86-linux-descriptor-machineir.sh'
       - 'tests/compiler/c0/probe-x86-linux-irq-state-machineir.sh'
       - 'tests/compiler/c0/probe-x86-linux-zero-barrier-memory-clobber.sh'
+      - 'tests/compiler/c0/probe-x86-linux-paravirt-patch-site.sh'
       - 'tests/compiler/c0/probe-x86-core-dead-ssa-writeback.sh'
       - 'tests/compiler/c0/x86_kbuild_mitigations.c'
       - 'tests/compiler/c0/probe-target-language-abi-options.sh'
@@ -532,6 +534,9 @@ jobs:
           bash tests/compiler/c0/probe-x86-linux-checksum-fold.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
           bash tests/compiler/c0/probe-x86-linux-msr-extable.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
           bash tests/compiler/c0/probe-x86-linux-hweight-alternative.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
+          MINIC_CC="$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc" \
+            BUILD_DIR="$GITHUB_WORKSPACE/build/minic-native-backend" \
+            bash tests/compiler/c0/probe-x86-linux-paravirt-patch-site.sh
           bash tests/compiler/c0/probe-x86-linux-clock-msr.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
           bash tests/compiler/c0/probe-x86-linux-port-io.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
           bash tests/compiler/c0/probe-x86-linux-atomic-rmw.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
