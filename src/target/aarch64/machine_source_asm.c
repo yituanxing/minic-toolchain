@@ -110,6 +110,17 @@ static bool a64_machine_opaque_hint(const MinicMachineInstruction *instruction) 
             instruction->source_asm_template,
             instruction->source_asm_length) != 0U)
         return true;
+    /* Linux 6.6 spectre_v4_enable_hw_mitigation emits exact PSTATE SSBS
+     * .inst encodings as zero-operand volatile GNU source ASM, without a
+     * memory clobber. C source admission already recognizes these four
+     * privileged selectors; MachineIR separately seals the exact encoding. */
+    if (instruction->source_asm_machine_form_id == 0U &&
+        instruction->effects == (MINIC_MACHINE_EFFECT_SOURCE_ASM |
+                                 MINIC_MACHINE_EFFECT_VOLATILE) &&
+        minic_aarch64_linux_pstate_imm_opcode(
+            instruction->source_asm_template,
+            instruction->source_asm_length) != 0U)
+        return true;
     /* A Linux BUG_ON() is a *single*, self-contained zero-operand source
      * effect. Its paired numeric labels and ELF __bug_table relocations are
      * part of the same typed MachineIR instruction. Reuse the admission
@@ -422,6 +433,128 @@ static bool a64_xpaclri_policy_operand(FILE *output,
 static const MinicMachineSourceAsmTemplatePolicy a64_xpaclri_policy = {
     a64_xpaclri_policy_form, a64_xpaclri_policy_binding,
     a64_xpaclri_policy_operand, NULL
+};
+
+/* The Qualcomm source form carries the old LR in one early-clobber x9
+ * output while sixteen BL-to-next-instruction operations poison the return
+ * predictor. Preserve the original .rept sequence, and reject any forged
+ * register, effect or operand role before GNU template substitution. */
+static bool a64_qcom_policy_form(const MinicMachineFunction *fn,
+    const MinicMachineInstruction *ins, void *context) {
+    (void)context;
+    return fn != NULL && fn->target != NULL &&
+        fn->target->architecture == MINIC_TARGET_ARCH_AARCH64 &&
+        ins != NULL && ins->kind == MINIC_MACHINE_INSTRUCTION_SOURCE_ASM &&
+        ins->source_asm_machine_form_id ==
+            AARCH64_MACHINE_ASM_QCOM_RETURN_STACK &&
+        ins->source_asm_machine_form_variant == 0U &&
+        ins->effects == (MINIC_MACHINE_EFFECT_SOURCE_ASM |
+                         MINIC_MACHINE_EFFECT_VOLATILE) &&
+        ins->operand_count == 1U && ins->operands != NULL &&
+        ins->implicit_count == 0U &&
+        !ins->source_asm_terminates_block &&
+        !ins->source_asm_permits_fallthrough &&
+        aarch64_linux_qcom_return_stack_form(ins->source_asm_template,
+            ins->source_asm_length);
+}
+
+static bool a64_qcom_policy_binding(const MinicMachineFunction *fn,
+    const MinicMachineInstruction *ins, size_t index, void *context) {
+    const MinicMachineOperand *op;
+    if (index != 0U || !a64_qcom_policy_form(fn, ins, context)) return false;
+    op = &ins->operands[0];
+    return op->kind == MINIC_MACHINE_OPERAND_REGISTER &&
+        op->asm_constraint != NULL &&
+        strcmp(op->asm_constraint, "=&r") == 0 &&
+        op->asm_name == NULL &&
+        op->value.physical.reg.bank == MINIC_MACHINE_REGISTER_GENERAL &&
+        op->value.physical.reg.number == 9U &&
+        op->value.physical.reg.width_bits == 64U &&
+        op->value.physical.access == MINIC_MACHINE_REGISTER_WRITE;
+}
+
+static bool a64_qcom_policy_operand(FILE *output,
+    const MinicMachineFunction *fn, const MinicMachineInstruction *ins,
+    const MinicMachineGNUAsmLabels *labels, size_t index,
+    unsigned char modifier, void *context) {
+    (void)labels;
+    return modifier == 0U &&
+        a64_qcom_policy_binding(fn, ins, index, context) &&
+        (output == NULL || fputs("x9", output) >= 0);
+}
+
+static const MinicMachineSourceAsmTemplatePolicy a64_qcom_policy = {
+    a64_qcom_policy_form, a64_qcom_policy_binding,
+    a64_qcom_policy_operand, NULL
+};
+
+/* Linux EL2 AT S1E1R fault recovery has five sealed physical roles. The
+ * source contains the real __kvm_ex_table PREL32 pair, restored SPSR/ELR
+ * instructions and a fixed -EFAULT immediate; no ordinary `at` reduction
+ * is valid. */
+static bool a64_kvm_at_fixup_form(const MinicMachineFunction *fn,
+    const MinicMachineInstruction *ins, void *context) {
+    (void)context;
+    return fn != NULL && fn->target != NULL &&
+        fn->target->architecture == MINIC_TARGET_ARCH_AARCH64 &&
+        ins != NULL && ins->kind == MINIC_MACHINE_INSTRUCTION_SOURCE_ASM &&
+        ins->source_asm_machine_form_id == AARCH64_MACHINE_ASM_KVM_AT_FIXUP &&
+        ins->source_asm_machine_form_variant == 0U &&
+        ins->effects == (MINIC_MACHINE_EFFECT_SOURCE_ASM |
+                         MINIC_MACHINE_EFFECT_VOLATILE |
+                         MINIC_MACHINE_EFFECT_COMPILER_BARRIER |
+                         MINIC_MACHINE_EFFECT_MEMORY_READ |
+                         MINIC_MACHINE_EFFECT_MEMORY_WRITE) &&
+        ins->operand_count == 5U && ins->operands != NULL &&
+        ins->implicit_count == 0U &&
+        !ins->source_asm_terminates_block &&
+        !ins->source_asm_permits_fallthrough &&
+        aarch64_linux_kvm_at_fixup_template(ins->source_asm_template,
+            ins->source_asm_length);
+}
+
+static bool a64_kvm_at_fixup_binding(const MinicMachineFunction *fn,
+    const MinicMachineInstruction *ins, size_t index, void *context) {
+    static const char *const constraints[] = {
+        "+r", "=&r", "=&r", "r", "i"
+    };
+    const MinicMachineOperand *op;
+    if (index >= 5U || !a64_kvm_at_fixup_form(fn, ins, context))
+        return false;
+    op = &ins->operands[index];
+    if (op->asm_name != NULL || op->asm_constraint == NULL ||
+        strcmp(op->asm_constraint, constraints[index]) != 0)
+        return false;
+    if (index == 4U)
+        return op->kind == MINIC_MACHINE_OPERAND_INTEGER &&
+            op->value.integer == -14;
+    return op->kind == MINIC_MACHINE_OPERAND_REGISTER &&
+        op->value.physical.reg.bank == MINIC_MACHINE_REGISTER_GENERAL &&
+        op->value.physical.reg.number == 9U + (unsigned int)index &&
+        op->value.physical.reg.width_bits == (index == 0U ? 32U : 64U) &&
+        op->value.physical.access == (index == 0U ?
+            MINIC_MACHINE_REGISTER_READ | MINIC_MACHINE_REGISTER_WRITE :
+            index < 3U ? MINIC_MACHINE_REGISTER_WRITE :
+            MINIC_MACHINE_REGISTER_READ);
+}
+
+static bool a64_kvm_at_fixup_operand(FILE *output,
+    const MinicMachineFunction *fn, const MinicMachineInstruction *ins,
+    const MinicMachineGNUAsmLabels *labels, size_t index,
+    unsigned char modifier, void *context) {
+    (void)labels;
+    if (!a64_kvm_at_fixup_binding(fn, ins, index, context)) return false;
+    if (index == 4U) return modifier == 0U &&
+        (output == NULL || fputs("#-14", output) >= 0);
+    if (modifier != 0U && !(index == 0U && modifier == 'w'))
+        return false;
+    return output == NULL || fprintf(output,
+        "%c%u", index == 0U ? 'w' : 'x', 9U + (unsigned int)index) >= 0;
+}
+
+static const MinicMachineSourceAsmTemplatePolicy a64_kvm_at_fixup_policy = {
+    a64_kvm_at_fixup_form, a64_kvm_at_fixup_binding,
+    a64_kvm_at_fixup_operand, NULL
 };
 
 /* The physical source-ASM representation of Linux arm64 io.h's raw writes
@@ -1417,8 +1550,7 @@ static bool a64_machine_vdso_svc_form(const MinicMachineInstruction *ins) {
 
 static bool a64_machine_vdso_timer_form(const MinicMachineInstruction *ins) {
     const unsigned int effects = MINIC_MACHINE_EFFECT_SOURCE_ASM |
-        MINIC_MACHINE_EFFECT_VOLATILE |
-        MINIC_MACHINE_EFFECT_COMPILER_BARRIER;
+        MINIC_MACHINE_EFFECT_VOLATILE;
     const MinicMachineOperand *op;
     unsigned int variant;
     if (ins == NULL ||
@@ -1427,7 +1559,9 @@ static bool a64_machine_vdso_timer_form(const MinicMachineInstruction *ins) {
         (variant = aarch64_linux_timer_alternative_form(
             ins->source_asm_template, ins->source_asm_length)) == 0U ||
         ins->source_asm_machine_form_variant != variant ||
-        ins->effects != effects || ins->operand_count != 1U ||
+        (ins->effects != effects &&
+         ins->effects != (effects | MINIC_MACHINE_EFFECT_COMPILER_BARRIER)) ||
+        ins->operand_count != 1U ||
         ins->operands == NULL || ins->implicit_count != 0U ||
         ins->source_asm_terminates_block ||
         ins->source_asm_permits_fallthrough) return false;
@@ -1629,6 +1763,10 @@ bool minic_aarch64_machine_source_asm_validate(
          minic_machine_source_asm_template_preflight(&function,
              instruction, &a64_xpaclri_policy) ||
          minic_machine_source_asm_template_preflight(&function,
+             instruction, &a64_qcom_policy) ||
+         minic_machine_source_asm_template_preflight(&function,
+             instruction, &a64_kvm_at_fixup_policy) ||
+         minic_machine_source_asm_template_preflight(&function,
              instruction, &a64_raw_io_policy) ||
          minic_machine_source_asm_template_preflight(&function,
              instruction, &a64_sysreg_policy) ||
@@ -1651,6 +1789,14 @@ bool minic_aarch64_machine_source_asm_emit(
     if (instruction->source_asm_machine_form_id == AARCH64_MACHINE_ASM_SHA3_EOR3)
         return minic_machine_source_asm_template_emit(output, function,
             instruction, labels, &a64_sha3_eor3_policy) &&
+            fputc('\n', output) != EOF;
+    if (a64_qcom_policy_form(function, instruction, NULL))
+        return minic_machine_source_asm_template_emit(output, function,
+            instruction, labels, &a64_qcom_policy) &&
+            fputc('\n', output) != EOF;
+    if (a64_kvm_at_fixup_form(function, instruction, NULL))
+        return minic_machine_source_asm_template_emit(output, function,
+            instruction, labels, &a64_kvm_at_fixup_policy) &&
             fputc('\n', output) != EOF;
     if (a64_machine_smccc_form(instruction))
         return fputs(instruction->source_asm_machine_form_variant == 1U ?

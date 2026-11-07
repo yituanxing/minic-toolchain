@@ -16,6 +16,8 @@ on:
       - 'src/target/source_policy/**'
       - 'tests/compiler/c0/probe-loongarch64-linux-jump-label.sh'
       - 'tests/compiler/c0/probe-loongarch64-linux-vdso-syscall.sh'
+      - 'tests/compiler/c0/probe-loongarch64-linux-simd-machineir.sh'
+      - 'tests/compiler/c0/loongarch64_linux_simd_machineir.i'
       - 'Makefile'
   workflow_dispatch:
 
@@ -76,7 +78,7 @@ jobs:
         with:
           path: build/loong-as-smoke-ci/obj
           key: minic-loong-as-smoke-v1-${{ runner.os }}-${{ runner.arch }}-${{ github.event.pull_request.head.sha }}
-      - name: Linux jump-label and vDSO exact-head GNU assembler smoke
+      - name: Linux jump-label, vDSO and LSX/LASX exact-head GNU assembler smoke
         shell: bash
         env:
           MINIC_CC: ${{ github.workspace }}/build/loong-as-smoke-ci/bin/minic-cc
@@ -94,7 +96,21 @@ jobs:
             tee build/loong-as-smoke-ci/evidence/linux-vdso-syscall.receipt
           grep -Fxq 'MINIC_LOONG_VDSO_SYSCALL_GNU_AS=PASS' \
             build/loong-as-smoke-ci/evidence/linux-vdso-syscall.receipt
-          printf 'LOONGARCH64_GNU_AS_SMOKE=PASS sha=%s jump_label=1 vdso=1 full581=NOT_RUN\n' \
+          sh tests/compiler/c0/probe-loongarch64-linux-simd-machineir.sh |
+            tee build/loong-as-smoke-ci/evidence/linux-simd-machineir.receipt
+          grep -Fxq 'MINIC_LOONG_SIMD_MACHINEIR_NEGATIVE=PASS invalid-offset=reject' \
+            build/loong-as-smoke-ci/evidence/linux-simd-machineir.receipt
+          "$MINIC_CC" --target=loongarch64-linux -S \
+            tests/compiler/c0/loongarch64_linux_simd_machineir.i \
+            -o build/loong-as-smoke-ci/evidence/linux-simd-machineir.s
+          loongarch64-linux-gnu-as \
+            -o build/loong-as-smoke-ci/evidence/linux-simd-machineir.o \
+            build/loong-as-smoke-ci/evidence/linux-simd-machineir.s
+          loongarch64-linux-gnu-readelf -h \
+            build/loong-as-smoke-ci/evidence/linux-simd-machineir.o |
+            grep -Eq 'Machine:[[:space:]]+LoongArch'
+          echo 'MINIC_LOONG_SIMD_GNU_AS=PASS LSX=1 LASX=1 original_target=1'
+          printf 'LOONGARCH64_GNU_AS_SMOKE=PASS sha=%s jump_label=1 vdso=1 simd=1 full581=NOT_RUN\n' \
             "$(git rev-parse HEAD)"
 
   stage5-eligibility-only:

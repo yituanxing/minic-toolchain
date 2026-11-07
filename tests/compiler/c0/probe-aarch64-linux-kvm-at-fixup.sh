@@ -1,64 +1,47 @@
-#!/usr/bin/env bash
-# Exact Linux 6.6 KVM __translate_far_to_hpfar GNU inline asm:
-# AT S1E1R, SPSR/ELR save and fixup, and its two-word __kvm_ex_table entry.
-set -Eeuo pipefail
-mini=${1:?MiniC compiler}
-test -x "$mini"
+#!/bin/sh
+set -eu
+root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
+mini=${1:-${MINIC_CC:-"$root/build/release/bin/minic-cc"}}
+host=${HOST_CC:-cc}
 work=$(mktemp -d)
-trap 'rm -rf "$work"' EXIT
-cat > "$work/at-fixup.c" <<'C'
-typedef unsigned long long u64;
-int kvm_translate_far(u64 far) {
-  int err = 0;
-  u64 spsr, elr;
-  asm volatile(
-      "\tmrs\t%1, spsr_el2\n"
-      "\tmrs\t%2, elr_el2\n"
-      "1:\tat\t" "s1e1r" ", %3\n"
-      "\tisb\n"
-      "\tb\t9f\n"
-      "2:\tmsr\tspsr_el2, %1\n"
-      "\tmsr\telr_el2, %2\n"
-      "\tmov\t%w0, %4\n"
-      "9:\n"
-      "\t.pushsection\t__kvm_ex_table, \"a\"\n"
-      "\t.align\t\t3\n"
-      "\t.long\t\t(" "1b" " - .), (" "2b" " - .)\n"
-      "\t.popsection\n"
-      : "+r"(err), "=&r"(spsr), "=&r"(elr) : "r"(far), "i"(-14));
-  return err;
-}
-C
-cc -E -P -x c "$work/at-fixup.c" -o "$work/at-fixup.i"
-"$mini" --target=aarch64-linux -S "$work/at-fixup.i" -o "$work/at-fixup.s"
-test "$(grep -Ec '^  mrs x10, spsr_el2$' "$work/at-fixup.s")" -eq 1
-test "$(grep -Ec '^  mrs x11, elr_el2$' "$work/at-fixup.s")" -eq 1
-test "$(grep -Ec '^1: at s1e1r, x14$' "$work/at-fixup.s")" -eq 1
-test "$(grep -Ec '^2: msr spsr_el2, x10$' "$work/at-fixup.s")" -eq 1
-test "$(grep -Ec '^  msr elr_el2, x11$' "$work/at-fixup.s")" -eq 1
-test "$(grep -Ec '^  mov w9, #-14$' "$work/at-fixup.s")" -eq 1
-test "$(grep -Fc '.pushsection __kvm_ex_table, "a"' "$work/at-fixup.s")" -eq 1
-test "$(grep -Fc '.long (1b - .), (2b - .)' "$work/at-fixup.s")" -eq 1
-echo 'AARCH64_KVM_AT_FIXUP=PASS AT=S1E1R restore=SPSR+ELR exception_table=2xPREL32'
-if command -v aarch64-linux-gnu-as >/dev/null 2>&1; then
-  aarch64-linux-gnu-as "$work/at-fixup.s" -o "$work/at-fixup.o"
-  echo 'AARCH64_KVM_AT_FIXUP_GAS=PASS'
-else
-  echo 'AARCH64_KVM_AT_FIXUP_GAS=SKIP'
-fi
-for changed in bad-op bad-fixup bad-table bad-immediate bad-constraint; do
-  case "$changed" in
-    bad-op) sed 's/s1e1r/s1e1w/g' "$work/at-fixup.i" > "$work/$changed.i" ;;
-    bad-fixup) sed 's/msr\\tspsr_el2/msr\\telr_el2/g' "$work/at-fixup.i" > "$work/$changed.i" ;;
-    bad-table) sed 's/__kvm_ex_table/__bad_ex_table/g' "$work/at-fixup.i" > "$work/$changed.i" ;;
-    bad-immediate) sed 's/"i"(-14)/"i"(-13)/g' "$work/at-fixup.i" > "$work/$changed.i" ;;
-    bad-constraint) sed 's/"+r"(err)/"=r"(err)/g' "$work/at-fixup.i" > "$work/$changed.i" ;;
-  esac
-  if "$mini" --target=aarch64-linux -S "$work/$changed.i" -o "$work/$changed.s" \
-      >/dev/null 2>"$work/$changed.err"; then
-    echo "AARCH64_KVM_AT_FIXUP=FAIL unsafe GNU template $changed accepted" >&2
-    exit 1
-  fi
-  test ! -e "$work/$changed.s"
+trap 'rm -rf "$work"' EXIT HUP INT TERM
+src="$root/tests/compiler/c0/aarch64_linux_kvm_at_fixup.c"
+
+"$host" -E -P -std=gnu11 "$src" -o "$work/owner.i"
+MINIC_BACKEND_CENSUS=1 "$mini" --target=aarch64-linux -S \
+    "$work/owner.i" -o "$work/minic.s" 2>"$work/owner.log"
+grep -Fq 'MINIC_BACKEND_CENSUS arch=aarch64 scanned=1 rejected=0' \
+    "$work/owner.log"
+grep -Fq 'mrs x10, spsr_el2' "$work/minic.s"
+grep -Fq 'mrs x11, elr_el2' "$work/minic.s"
+grep -Fq 'at s1e1r, x12' "$work/minic.s"
+grep -Fq 'msr spsr_el2, x10' "$work/minic.s"
+grep -Fq 'msr elr_el2, x11' "$work/minic.s"
+grep -Fq 'mov w9, #-14' "$work/minic.s"
+grep -Fq '.pushsection __kvm_ex_table, "a"' "$work/minic.s"
+grep -Fq '.long (1b - .), (2b - .)' "$work/minic.s"
+
+# A changed exception handler, an invalid PREL32 entry, or an unexpected
+# immediate must fail at target admission; do not silently emit GNU text.
+sed 's/msr elr_el2/msr far_el2/' "$src" >"$work/sysreg.c"
+sed 's/\.long (1b - \.), (2b - \.)/.long (1b - .), (3b - .)/' \
+    "$src" >"$work/prel32.c"
+sed 's/"i"(-14)/"i"(-13)/' "$src" >"$work/immediate.c"
+sed 's/s1e1r/s1e1w/' "$src" >"$work/operation.c"
+sed 's/"+r"(err)/"=r"(err)/' "$src" >"$work/constraint.c"
+for bad in sysreg prel32 immediate operation constraint; do
+    "$host" -E -P -std=gnu11 "$work/$bad.c" -o "$work/$bad.i"
+    if "$mini" --target=aarch64-linux -S "$work/$bad.i" \
+        -o "$work/$bad.s" >"$work/$bad.out" 2>"$work/$bad.err"; then
+        echo "AARCH_KVM_AT_FIXUP=FAIL accepted=$bad" >&2
+        exit 1
+    fi
+    test ! -s "$work/$bad.s"
 done
-echo 'AARCH64_KVM_AT_FIXUP_NEGATIVE=PASS 5/5'
+
+if command -v aarch64-linux-gnu-as >/dev/null 2>&1; then
+    aarch64-linux-gnu-as "$work/minic.s" -o "$work/owner.o"
+    echo 'AARCH_KVM_AT_FIXUP=PASS reloc_pair=2 negatives=5 GNU_AS=PASS'
+else
+    echo 'AARCH_KVM_AT_FIXUP=PASS reloc_pair=2 negatives=5 GNU_AS=SKIP(toolchain-unavailable)'
+fi

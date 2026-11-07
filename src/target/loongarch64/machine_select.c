@@ -10,6 +10,8 @@
 #include "target/loongarch64/machine_csr_source_select.h"
 #include "target/loongarch64/machine_scalar_source_select.h"
 #include "target/loongarch64/machine_uaccess_select.h"
+#include "target/loongarch64/simd_asm_syntax.h"
+#include "target/loongarch64/simd_asm.h"
 #include "target/loongarch64/machine_target_state.h"
 #include "target/common/core_block_walk.h"
 #include "target/common/core_machine_asm.h"
@@ -3451,6 +3453,227 @@ static bool loong_select_irq_switch(LoongSelector *sel,
             LOONG_SP, LOONG_SP, 16);
 }
 
+static uint32_t loong_simd_machine_opcode(const LoongSimdInstruction *ins) {
+    static const uint32_t lsx[] = {
+        MINIC_LOONG_MACHINE_VLD, MINIC_LOONG_MACHINE_VST,
+        MINIC_LOONG_MACHINE_VXOR_V, MINIC_LOONG_MACHINE_VANDI_B,
+        MINIC_LOONG_MACHINE_VORI_B, MINIC_LOONG_MACHINE_VSLTI_B,
+        MINIC_LOONG_MACHINE_VSLLI_B, MINIC_LOONG_MACHINE_VSRLI_B,
+        MINIC_LOONG_MACHINE_VSHUF_B, 0U
+    };
+    static const uint32_t lasx[] = {
+        MINIC_LOONG_MACHINE_XVLD, MINIC_LOONG_MACHINE_XVST,
+        MINIC_LOONG_MACHINE_XVXOR_V, MINIC_LOONG_MACHINE_XVANDI_B,
+        MINIC_LOONG_MACHINE_XVORI_B, MINIC_LOONG_MACHINE_XVSLTI_B,
+        MINIC_LOONG_MACHINE_XVSLLI_B, MINIC_LOONG_MACHINE_XVSRLI_B,
+        MINIC_LOONG_MACHINE_XVSHUF_B,
+        MINIC_LOONG_MACHINE_XVREPLVE0_Q
+    };
+    if (ins == NULL || (unsigned int)ins->op >=
+        sizeof(lsx)/sizeof(lsx[0])) return 0U;
+    return ins->lasx ? lasx[ins->op] : lsx[ins->op];
+}
+
+/* Linux's original LSX/LASX sources carry fixed vector accumulators across
+ * successive GNU asm statements. Convert each qualified source instruction
+ * into an explicit selected MachineIR opcode/register/offset, preserving the
+ * exact vector register identity and memory access direction. Never pass the
+ * original template to a target-output text escape path. */
+static bool loong_select_simd(LoongSelector *sel,
+    const MinicCoreInstruction *ins, const MinicCoreInlineAsm *source) {
+    const MinicCoreFunction *fn = sel->ctx->fn;
+    const MinicCoreStructuredInlineAsmOperand *roles =
+        ins->value.structured_inline_asm.operands;
+    LoongSimdProgram program;
+    size_t i, j;
+    if (source->target_machine_form_id != MINIC_LOONG_MACHINE_ASM_SIMD ||
+        source->operand_plan_owner != MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED ||
+        !source->is_volatile || source->is_goto ||
+        source->register_clobber_count != 0U ||
+        !minic_loongarch64_simd_parse(
+            source->template_text, source->template_length, &program) ||
+        source->target_machine_form_variant != (program.uses_lasx
+            ? MINIC_LOONG_MACHINE_SIMD_LASX
+            : MINIC_LOONG_MACHINE_SIMD_LSX) ||
+        ins->value.structured_inline_asm.operand_count !=
+            program.operand_count || roles == NULL ||
+        program.operand_count == 0U) return false;
+    for (i = 0U; i < program.operand_count; ++i) {
+        size_t bytes;
+        bool sign, pointer;
+        if (roles[i].operand_index != i || roles[i].early_clobber ||
+            roles[i].has_fixed_register_binding ||
+            roles[i].value >= fn->value_count ||
+            !loong_scalar_type(fn, fn->values[roles[i].value].core_type_id,
+                &bytes, &sign, &pointer) || bytes != 8U || !pointer)
+            return false;
+        if (roles[i].kind == MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT) {
+            if (!source->has_memory_clobber) return false;
+        } else if (roles[i].kind ==
+                MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT) {
+            if (!program.memory_read[i] || program.memory_written[i]) return false;
+        } else if (roles[i].kind ==
+                MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_OUTPUT) {
+            if (!program.memory_written[i] || program.memory_read[i]) return false;
+        } else if (roles[i].kind !=
+                MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE ||
+            !program.memory_read[i] || !program.memory_written[i]) return false;
+    }
+    for (i = 0U; i < program.count; ++i) {
+        const LoongSimdInstruction *v = &program.instructions[i];
+        const uint32_t opcode = loong_simd_machine_opcode(v);
+        MinicMachineOperand operands[4] = {{0}};
+        size_t count;
+        unsigned int width = v->lasx ? 256U : 128U;
+        if (!opcode) return false;
+        if (v->op == LOONG_SIMD_LOAD || v->op == LOONG_SIMD_STORE) {
+            if (v->operand_index >= program.operand_count ||
+                !loong_load_value(sel, roles[v->operand_index].value,
+                    LOONG_T0, true)) return false;
+            count = 2U;
+            operands[1] = loong_address(LOONG_T0, v->memory_offset,
+                MINIC_LOONG_ADDRESS_IMM12);
+        } else if (v->op == LOONG_SIMD_SHUFFLE) {
+            count = 4U;
+        } else if (v->op == LOONG_SIMD_REPLICATE) {
+            count = 2U;
+        } else {
+            count = 3U;
+        }
+        for (j = 0U; j < count; ++j) {
+            if (j == 1U &&
+                (v->op == LOONG_SIMD_LOAD || v->op == LOONG_SIMD_STORE))
+                continue;
+            if (j == 2U && (v->op == LOONG_SIMD_AND_IMMEDIATE ||
+                            v->op == LOONG_SIMD_OR_IMMEDIATE ||
+                            v->op == LOONG_SIMD_SLTI ||
+                            v->op == LOONG_SIMD_SLLI ||
+                            v->op == LOONG_SIMD_SRLI)) {
+                operands[j] = loong_imm(v->immediate);
+                continue;
+            }
+            operands[j].kind = MINIC_MACHINE_OPERAND_REGISTER;
+            operands[j].value.physical.reg = (MinicMachineRegister){
+                v->registers[j], (uint16_t)width,
+                MINIC_MACHINE_REGISTER_VECTOR};
+            operands[j].value.physical.access = j == 0U
+                ? (v->op == LOONG_SIMD_STORE
+                    ? MINIC_MACHINE_REGISTER_READ
+                    : MINIC_MACHINE_REGISTER_WRITE)
+                : MINIC_MACHINE_REGISTER_READ;
+        }
+        if (i == 0U) {
+            MinicMachineGNUAsmPolicy policy = {0};
+            MinicMachineOpcodeContract contract = {0};
+            if (!minic_loongarch64_machine_gnu_asm_policy_initialize(
+                    sel->builder.function->target, &policy) ||
+                !policy.verify.lookup_opcode ||
+                !policy.verify.lookup_opcode(
+                    sel->builder.function->target, opcode, &contract,
+                    policy.context) ||
+                contract.operand_count != count ||
+                !minic_machine_builder_emit_selected(&sel->builder, opcode,
+                    contract.required_effects | MINIC_MACHINE_EFFECT_VOLATILE |
+                    (source->has_memory_clobber
+                        ? MINIC_MACHINE_EFFECT_COMPILER_BARRIER : 0U),
+                    operands, count,
+                    contract.implicit_count ? contract.implicit : NULL,
+                    contract.implicit_count) ||
+                !minic_machine_builder_seal_selected_source_asm(
+                    &sel->builder, source->target_machine_form_id,
+                    source->target_machine_form_variant,
+                    source->source_asm_unique_id))
+                return false;
+        } else if (!loong_selected_volatile(&sel->builder, opcode, operands, count,
+                v->op == LOONG_SIMD_LOAD || v->op == LOONG_SIMD_STORE))
+            return false;
+    }
+    return true;
+}
+
+bool minic_loongarch64_machine_prove_selected_source_asm(
+    const MinicCoreFunction *fn, const MinicCoreInstruction *origin,
+    const MinicCoreInlineAsm *source, const MinicMachineFunction *machine,
+    const MinicMachineInstruction *sealed, void *context) {
+    LoongSimdProgram program;
+    size_t block, index, seen = 0U, seals = 0U;
+    (void)context;
+    if (fn == NULL || origin == NULL || source == NULL || machine == NULL ||
+        machine->target == NULL ||
+        machine->target->architecture != MINIC_TARGET_ARCH_LOONGARCH64 ||
+        sealed == NULL || !sealed->has_selected_source_asm_seal ||
+        source->target_machine_form_id != MINIC_LOONG_MACHINE_ASM_SIMD ||
+        source->operand_plan_owner != MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED ||
+        source->register_clobber_count != 0U || !source->is_volatile ||
+        source->is_goto || source->resolved_immediate_count != 0U ||
+        source->symbol_reference_count != 0U ||
+        !minic_loongarch64_simd_parse(
+            source->template_text, source->template_length, &program) ||
+        program.operand_count !=
+            origin->value.structured_inline_asm.operand_count ||
+        source->target_machine_form_variant !=
+            (program.uses_lasx ? MINIC_LOONG_MACHINE_SIMD_LASX
+                               : MINIC_LOONG_MACHINE_SIMD_LSX))
+        return false;
+    for (block = 0U; block < machine->block_count; ++block) {
+        const MinicMachineBlock *b = &machine->blocks[block];
+        for (index = 0U; index < b->instruction_count; ++index) {
+            const MinicMachineInstruction *ins = &b->instructions[index];
+            const LoongSimdInstruction *v;
+            size_t j, regs;
+            if (!ins->has_core_origin ||
+                ins->core_block_id != sealed->core_block_id ||
+                ins->core_instruction_id != sealed->core_instruction_id ||
+                ins->kind != MINIC_MACHINE_INSTRUCTION_SELECTED ||
+                ins->opcode < MINIC_LOONG_MACHINE_VLD ||
+                ins->opcode > MINIC_LOONG_MACHINE_XVREPLVE0_Q)
+                continue;
+            if (seen >= program.count) return false;
+            v = &program.instructions[seen];
+            if (ins->opcode != loong_simd_machine_opcode(v)) return false;
+            if (ins->has_selected_source_asm_seal) {
+                if (ins != sealed || seen != 0U) return false;
+                ++seals;
+            }
+            if (v->op == LOONG_SIMD_LOAD || v->op == LOONG_SIMD_STORE) {
+                if (ins->operand_count != 2U ||
+                    ins->operands[1].kind != MINIC_MACHINE_OPERAND_ADDRESS ||
+                    ins->operands[1].value.address.displacement !=
+                        v->memory_offset ||
+                    ins->operands[1].value.address.base.number != LOONG_T0)
+                    return false;
+                regs = 1U;
+            } else if (v->op == LOONG_SIMD_SHUFFLE) {
+                regs = 4U;
+            } else if (v->op == LOONG_SIMD_REPLICATE) {
+                regs = 2U;
+            } else if (v->op == LOONG_SIMD_AND_IMMEDIATE ||
+                       v->op == LOONG_SIMD_OR_IMMEDIATE ||
+                       v->op == LOONG_SIMD_SLTI ||
+                       v->op == LOONG_SIMD_SLLI ||
+                       v->op == LOONG_SIMD_SRLI) {
+                if (ins->operands[2].kind != MINIC_MACHINE_OPERAND_INTEGER ||
+                    ins->operands[2].value.integer != v->immediate)
+                    return false;
+                regs = 2U;
+            } else {
+                regs = 3U;
+            }
+            for (j = 0U; j < regs; ++j)
+                if (ins->operands[j].kind != MINIC_MACHINE_OPERAND_REGISTER ||
+                    ins->operands[j].value.physical.reg.bank !=
+                        MINIC_MACHINE_REGISTER_VECTOR ||
+                    ins->operands[j].value.physical.reg.number !=
+                        v->registers[j] ||
+                    ins->operands[j].value.physical.reg.width_bits !=
+                        (v->lasx ? 256U : 128U))
+                    return false;
+            ++seen;
+        }
+    }
+    return seen == program.count && seals == 1U;
+}
+
 static bool loong_select_structured_asm(LoongSelector *sel,
     const MinicCoreInstruction *ins) {
     const MinicCoreFunction *fn = sel->ctx->fn;
@@ -3481,6 +3704,8 @@ static bool loong_select_structured_asm(LoongSelector *sel,
     if (ins->value.structured_inline_asm.operand_count == 0U)
         return minic_loongarch64_select_core_source_asm(
             &sel->builder, sel->ctx, ins);
+    if (source->target_machine_form_id == MINIC_LOONG_MACHINE_ASM_SIMD)
+        return loong_select_simd(sel, ins, source);
     if (source->target_machine_form_id == LOONG_DESC_VDSO)
         return loong_select_vdso_syscall(sel, ins, source);
     if (source->target_machine_form_id == LOONG_DESC_FRAMETRACE)

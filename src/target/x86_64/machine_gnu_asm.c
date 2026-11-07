@@ -1265,6 +1265,48 @@ static bool x86_emit_source_asm(FILE *out,
             fputc('\n',out) != EOF;
     if (instruction->source_asm_machine_form_id == MINIC_X86_MACHINE_ASM_DELAY_MUL)
         return fputs("  mull %edx\n",out) != EOF;
+    if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_VMWARE_HYPERCALL) {
+        unsigned int form;
+        if (!minic_x86_64_machine_validate_source_asm(function->target,
+                instruction,NULL)) return false;
+        form = minic_x86_64_linux_vmware_hypercall_form(
+            instruction->source_asm_template,
+            instruction->source_asm_length);
+        return fputs(form == 1U ? "  vmcall\n" :
+            form == 2U ? "  vmmcall\n" :
+            form == 3U ? "  inl (%dx), %eax\n" : "",out) != EOF &&
+            form >= 1U && form <= 3U;
+    }
+    if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_VMWARE_STEALCLOCK_ALT) {
+        /* Preserve both original GNU ALTERNATIVE_2 feature relocations,
+         * including the maximum replacement-length padding expression.
+         * The old I/O path is the fallback when neither feature is set. */
+        static const char max_replacement[] =
+            "((6651f-6641f) ^ (((6651f-6641f) ^ (6652f-6642f)) & "
+            "-(-((6651f-6641f) < (6652f-6642f)))))";
+        if (!minic_x86_64_machine_validate_source_asm(function->target,
+                instruction,NULL)) return false;
+        return fputs("661:\n  movw $0x5658, %dx\n  inl (%dx), %eax\n"
+                     "662:\n",out) != EOF &&
+            fprintf(out, "  .skip -(((%s) - (662b-661b)) > 0) * "
+                "((%s) - (662b-661b)),0x90\n",
+                max_replacement,max_replacement) >= 0 &&
+            fputs("663:\n"
+              "  .pushsection .altinstructions,\"a\"\n"
+              "  .long 661b - .\n  .long 6641f - .\n"
+              "  .4byte (8*32+18)\n"
+              "  .byte 663b-661b\n  .byte 6651f-6641f\n"
+              "  .long 661b - .\n  .long 6642f - .\n"
+              "  .4byte (8*32+19)\n"
+              "  .byte 663b-661b\n  .byte 6652f-6642f\n"
+              "  .popsection\n"
+              "  .pushsection .altinstr_replacement,\"ax\"\n"
+              "6641:\n  vmcall\n6651:\n"
+              "6642:\n  vmmcall\n6652:\n"
+              "  .popsection\n",out) != EOF;
+    }
     if (instruction->source_asm_machine_form_id == MINIC_X86_MACHINE_ASM_PVCLOCK_SCALE) {
         if (!minic_x86_64_machine_validate_source_asm(function->target,
                 instruction,NULL)) return false;
@@ -1392,6 +1434,25 @@ static bool x86_emit_source_asm(FILE *out,
                 instruction, NULL)) return false;
         return fputs(width == 2U ? "  rep; stosw\n" :
             width == 4U ? "  rep; stosl\n" : "  rep; stosq\n",out) != EOF;
+    }
+    if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_IOMEM_COPY) {
+        const unsigned int form = minic_x86_64_linux_iomem_copy_form(
+            instruction->source_asm_template,
+            instruction->source_asm_length);
+        if (form < 1U || form > 3U ||
+            !minic_x86_64_machine_validate_source_asm(function->target,
+                instruction, NULL)) return false;
+        if (form == 3U)
+            return fputs("  rep; movsl\n"
+                         "  testb $2, %al\n"
+                         "  je 1f\n"
+                         "  movsw\n"
+                         "1: testb $1, %al\n"
+                         "  je 2f\n"
+                         "  movsb\n"
+                         "2:\n", out) != EOF;
+        return fputs(form == 1U ? "  movsb\n" : "  movsw\n",out) != EOF;
     }
     if (instruction->source_asm_machine_form_id ==
             MINIC_X86_MACHINE_ASM_FDIV_BUG) {

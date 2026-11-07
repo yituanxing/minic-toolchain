@@ -119,7 +119,8 @@ static bool loong_simd_same_machine_effects(
         const LoongSimdInstruction *b = &machine->instructions[i];
         if (a->op != b->op || a->lasx != b->lasx ||
             a->operand_index != b->operand_index ||
-            a->memory_offset != b->memory_offset) return false;
+            a->memory_offset != b->memory_offset ||
+            a->immediate != b->immediate) return false;
         for (j = 0U; j < 4U; ++j)
             if (a->registers[j] != b->registers[j]) return false;
     }

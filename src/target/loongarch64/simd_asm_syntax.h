@@ -27,6 +27,7 @@ typedef struct LoongSimdInstruction {
     unsigned int registers[4];
     size_t operand_index;
     int memory_offset;
+    int immediate;
     char machine_line[192];
 } LoongSimdInstruction;
 

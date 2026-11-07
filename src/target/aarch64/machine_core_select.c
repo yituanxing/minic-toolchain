@@ -2281,6 +2281,127 @@ static bool a64_linux_xpaclri_source(A64CoreSelection *sel,
             30U, 64U, A64_T0, 0U, true, false);
 }
 
+/* Qualcomm's 16 BL-to-next-instruction sequence dirties the architectural
+ * LR transiently, then restores it from the early-clobber output register.
+ * It must not become ordinary calls, and the selected output must be a real
+ * writable 64-bit C carrier, even though the current Linux owner discards it. */
+static bool a64_linux_qcom_return_stack_source(A64CoreSelection *sel,
+    const MinicCoreInstruction *ins, const MinicCoreInlineAsm *source) {
+    const MinicCoreFunction *fn = sel->ctx->fn;
+    const MinicCoreStructuredInlineAsmOperand *op =
+        ins->value.structured_inline_asm.operands;
+    MinicMachineOperand output = a64_gp(A64_T0, 64U,
+        MINIC_MACHINE_REGISTER_WRITE);
+    if (source->target_machine_form_id !=
+            AARCH64_MACHINE_ASM_QCOM_RETURN_STACK ||
+        source->target_machine_form_variant != 0U ||
+        !aarch64_linux_qcom_return_stack_form(
+            source->template_text, source->template_length) ||
+        source->operand_plan_owner != MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED ||
+        !source->is_volatile || source->is_goto ||
+        source->has_memory_clobber || source->implicit_memory_effect ||
+        source->register_clobber_count != 0U ||
+        source->resolved_immediate_count != 0U ||
+        source->symbol_reference_count != 0U ||
+        source->deferred_immediate_symbol != NULL ||
+        ins->result != MINIC_CORE_VALUE_INVALID ||
+        !minic_core_function_type_is_kind(fn, ins->core_type_id,
+            MINIC_CORE_TYPE_VOID) ||
+        ins->value.structured_inline_asm.operand_count != 1U ||
+        op == NULL || sel->ctx->machine_frame->has_dynamic_stack ||
+        op->operand_index != 0U ||
+        op->kind != MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT ||
+        op->has_fixed_register_binding || op->early_clobber ||
+        !op->physical_early_clobber || op->physical_read_write ||
+        op->has_tied_output || op->value >= fn->value_count ||
+        !aarch64_asm_core_integer(fn, op->value, true, 8U, -1))
+        return false;
+    output.asm_constraint = "=&r";
+    return minic_machine_builder_emit_core_source_asm(&sel->builder,
+            source, 0U, &output, 1U, NULL, 0U, false, false) &&
+        a64_load_core(sel, op->value, A64_T1, 64U) &&
+        a64_memory_register(sel, MINIC_A64_MACHINE_STR_X, false,
+            A64_T0, 64U, A64_T1, 0U, true, false);
+}
+
+/* Original KVM __translate_far_to_hpfar() wraps AT S1E1R in an EL2
+ * exception-table fixup. Preserve the two PREL32 relocations and all five
+ * distinct GNU roles; dropping SPSR/ELR restoration changes hyp fault
+ * behavior. The immediate must be the exact -EFAULT value, not a dynamic
+ * scalar (or a later rerendering of the source expression). */
+static bool a64_linux_kvm_at_fixup_source(A64CoreSelection *sel,
+    const MinicCoreInstruction *ins, const MinicCoreInlineAsm *source) {
+    const MinicCoreFunction *fn = sel->ctx->fn;
+    const MinicCoreStructuredInlineAsmOperand *ops =
+        ins->value.structured_inline_asm.operands;
+    const MinicCoreInstruction *literal;
+    MinicMachineOperand bindings[5];
+    size_t i;
+    if (source->target_machine_form_id != AARCH64_MACHINE_ASM_KVM_AT_FIXUP ||
+        source->target_machine_form_variant != 0U ||
+        !aarch64_linux_kvm_at_fixup_template(
+            source->template_text, source->template_length) ||
+        source->operand_plan_owner != MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED ||
+        !source->is_volatile || source->is_goto ||
+        !source->has_memory_clobber || !source->implicit_memory_effect ||
+        source->register_clobber_count != 0U ||
+        source->resolved_immediate_count != 0U ||
+        source->symbol_reference_count != 0U ||
+        source->deferred_immediate_symbol != NULL ||
+        ins->result != MINIC_CORE_VALUE_INVALID ||
+        !minic_core_function_type_is_kind(fn, ins->core_type_id,
+            MINIC_CORE_TYPE_VOID) ||
+        ins->value.structured_inline_asm.operand_count != 5U ||
+        ops == NULL || sel->ctx->machine_frame->has_dynamic_stack)
+        return false;
+    for (i = 0U; i < 5U; ++i) {
+        const MinicCoreStructuredInlineAsmOperand *op = &ops[i];
+        if (op->operand_index != i || op->value >= fn->value_count ||
+            op->has_fixed_register_binding || op->early_clobber ||
+            op->physical_early_clobber != (i == 1U || i == 2U) ||
+            op->physical_read_write != (i == 0U) ||
+            op->has_tied_output ||
+            op->kind != (i == 0U ?
+                MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE :
+                i < 3U ? MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT :
+                MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT) ||
+            !aarch64_asm_core_integer(fn, op->value, i < 3U,
+                i == 0U || i == 4U ? 4U : 8U, -1))
+            return false;
+        bindings[i] = i == 4U ? a64_immediate(-14) :
+            a64_gp(9U + (unsigned int)i, i == 0U ? 32U : 64U,
+                i == 0U ? MINIC_MACHINE_REGISTER_READ |
+                    MINIC_MACHINE_REGISTER_WRITE :
+                i < 3U ? MINIC_MACHINE_REGISTER_WRITE :
+                MINIC_MACHINE_REGISTER_READ);
+        bindings[i].asm_constraint = i == 0U ? "+r" :
+            i < 3U ? "=&r" : i == 3U ? "r" : "i";
+    }
+    if (fn->values[ops[4].value].definition >= fn->instruction_count)
+        return false;
+    literal = &fn->instructions[fn->values[ops[4].value].definition];
+    if (literal->kind != MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT ||
+        literal->result != ops[4].value ||
+        (uint32_t)literal->value.integer_value != UINT32_C(0xfffffff2))
+        return false;
+    return a64_load_core(sel, ops[3].value, 12U, 64U) &&
+        a64_load_core(sel, ops[0].value, 13U, 64U) &&
+        a64_memory_register(sel, MINIC_A64_MACHINE_LDR_W, false,
+            9U, 32U, 13U, 0U, false, false) &&
+        minic_machine_builder_emit_core_source_asm(&sel->builder, source,
+            MINIC_MACHINE_EFFECT_MEMORY_READ | MINIC_MACHINE_EFFECT_MEMORY_WRITE,
+            bindings, 5U, NULL, 0U, false, false) &&
+        a64_load_core(sel, ops[0].value, 13U, 64U) &&
+        a64_memory_register(sel, MINIC_A64_MACHINE_STR_W, false,
+            9U, 32U, 13U, 0U, true, false) &&
+        a64_load_core(sel, ops[1].value, 13U, 64U) &&
+        a64_memory_register(sel, MINIC_A64_MACHINE_STR_X, false,
+            10U, 64U, 13U, 0U, true, false) &&
+        a64_load_core(sel, ops[2].value, 13U, 64U) &&
+        a64_memory_register(sel, MINIC_A64_MACHINE_STR_X, false,
+            11U, 64U, 13U, 0U, true, false);
+}
+
 /* GNU BRK I(imm) is a source-qualified hardware trap, not the zero-
  * immediate BRK #0 used for compiler-generated unreachable paths. Keep its
  * immutable Core integer fact as a typed Machine integer operand; neither a
@@ -3280,7 +3401,7 @@ static bool a64_linux_timer_alternative_source(A64CoreSelection *sel,
         variant == 0U || source->target_machine_form_variant != variant ||
         source->operand_plan_owner != MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED ||
         !source->is_volatile || source->is_goto ||
-        !source->has_memory_clobber || source->register_clobber_count != 0U ||
+        source->register_clobber_count != 0U ||
         source->resolved_immediate_count != 0U ||
         source->symbol_reference_count != 0U ||
         source->deferred_immediate_symbol != NULL ||
@@ -5048,6 +5169,11 @@ static bool a64_core_instruction(A64CoreSelection *sel,
             return a64_linux_kvm_va_mask_source(sel, ins, source);
         if (source->target_machine_form_id == AARCH64_MACHINE_ASM_XPACLRI)
             return a64_linux_xpaclri_source(sel, ins, source);
+        if (source->target_machine_form_id ==
+                AARCH64_MACHINE_ASM_QCOM_RETURN_STACK)
+            return a64_linux_qcom_return_stack_source(sel, ins, source);
+        if (source->target_machine_form_id == AARCH64_MACHINE_ASM_KVM_AT_FIXUP)
+            return a64_linux_kvm_at_fixup_source(sel, ins, source);
         if (source->target_machine_form_id == AARCH64_MACHINE_ASM_MRS ||
             source->target_machine_form_id == AARCH64_MACHINE_ASM_MSR ||
             source->target_machine_form_id == AARCH64_MACHINE_ASM_VHE_SYSREG_ALTERNATIVE ||

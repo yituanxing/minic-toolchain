@@ -178,6 +178,7 @@ static bool loong_simd_line(char *line, LoongSimdInstruction *ins,
                  imm != 0x0f && imm != 0x1d) ||
                 (form->op != LOONG_SIMD_AND_IMMEDIATE &&
                  imm != form->required_imm)) return false;
+            ins->immediate = imm;
         } else if (!loong_simd_register(
                        argv[i], form->lasx, &ins->registers[i]))
             return false;

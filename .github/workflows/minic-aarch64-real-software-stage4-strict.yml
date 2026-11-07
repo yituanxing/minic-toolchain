@@ -19,6 +19,10 @@ on:
       - 'tests/compiler/c0/probe-aarch64-pie-extern-got.sh'
       - 'tests/compiler/c0/probe-aarch64-linux-jump-label.sh'
       - 'tests/compiler/c0/probe-aarch64-linux-kvm-kern-hyp-va-callback.sh'
+      - 'tests/compiler/c0/probe-aarch64-linux-qcom-pstate-ssbs.sh'
+      - 'tests/compiler/c0/probe-aarch64-linux-kvm-at-fixup.sh'
+      - 'tests/compiler/c0/aarch64_linux_kvm_at_fixup.c'
+      - 'tests/compiler/c0/aarch64_linux_qcom_pstate_ssbs.c'
       - 'tests/compiler/c0/aarch64_linux_kvm_kern_hyp_va_callback.c'
       - 'tests/vendor/tiny-aes-c/**'
       - 'Makefile'
@@ -79,7 +83,7 @@ jobs:
           path: build/aarch-stage4-ci/obj
           key: minic-aarch-stage4-objects-v1-${{ runner.os }}-${{ runner.arch }}-${{ github.event.pull_request.head.sha || github.sha }}
 
-      - name: Linux jump-label and KVM callback exact-head GNU assembler smoke
+      - name: Linux jump-label KVM callback and QCOM SSBS exact-head GNU assembler smoke
         shell: bash
         env:
           MINIC_CC: ${{ github.workspace }}/build/aarch-stage4-ci/bin/minic-cc
@@ -88,6 +92,10 @@ jobs:
           test "$(git rev-parse HEAD)" = '${{ github.event.pull_request.head.sha || github.sha }}'
           command -v aarch64-linux-gnu-gcc
           mkdir -p build/aarch-stage4-ci/evidence
+          make MODE=release check-a64-machine-source-asm |
+            tee build/aarch-stage4-ci/evidence/machine-source-asm.receipt
+          grep -Fq 'A64_MACHINE_SOURCE_ASM=PASS' \
+            build/aarch-stage4-ci/evidence/machine-source-asm.receipt
           sh tests/compiler/c0/probe-aarch64-linux-jump-label.sh |
             tee build/aarch-stage4-ci/evidence/linux-jump-label.receipt
           grep -Fxq 'AARCH64_JUMP_LABEL_GNU_AS=PASS' \
@@ -96,6 +104,14 @@ jobs:
             tee build/aarch-stage4-ci/evidence/linux-kvm-va-callback.receipt
           grep -Fxq 'AARCH64_KVM_VA_CALLBACK_GNU_AS=PASS' \
             build/aarch-stage4-ci/evidence/linux-kvm-va-callback.receipt
+          sh tests/compiler/c0/probe-aarch64-linux-qcom-pstate-ssbs.sh |
+            tee build/aarch-stage4-ci/evidence/linux-qcom-ssbs.receipt
+          grep -Fxq 'AARCH_QCOM_SSBS=PASS qcom_bl=16 pstate=2 negatives=3 GNU_AS=PASS' \
+            build/aarch-stage4-ci/evidence/linux-qcom-ssbs.receipt
+          sh tests/compiler/c0/probe-aarch64-linux-kvm-at-fixup.sh |
+            tee build/aarch-stage4-ci/evidence/linux-kvm-at-fixup.receipt
+          grep -Fxq 'AARCH_KVM_AT_FIXUP=PASS reloc_pair=2 negatives=5 GNU_AS=PASS' \
+            build/aarch-stage4-ci/evidence/linux-kvm-at-fixup.receipt
 
       - name: Record exact compiler and pinned original software origins
         shell: bash

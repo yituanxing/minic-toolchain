@@ -704,6 +704,146 @@ int main(void) {
             return 1;
     }
     {
+        MinicMachineOperand output = {0};
+        static char qcom[] =
+            "mov %0, x30\n.rept 16\nbl . + 4\n.endr\nmov x30, %0\n";
+        char emitted[2048];
+        FILE *selected;
+        memset(&ins, 0, sizeof(ins));
+        ins.kind = MINIC_MACHINE_INSTRUCTION_SOURCE_ASM;
+        ins.effects = MINIC_MACHINE_EFFECT_SOURCE_ASM |
+            MINIC_MACHINE_EFFECT_VOLATILE;
+        ins.source_asm_machine_form_id = AARCH64_MACHINE_ASM_QCOM_RETURN_STACK;
+        ins.source_asm_template = qcom;
+        ins.source_asm_length = sizeof(qcom) - 1U;
+        ins.operand_count = 1U;
+        ins.operands = &output;
+        output.kind = MINIC_MACHINE_OPERAND_REGISTER;
+        output.asm_constraint = "=&r";
+        output.value.physical.reg = (MinicMachineRegister){
+            9U, 64U, MINIC_MACHINE_REGISTER_GENERAL};
+        output.value.physical.access = MINIC_MACHINE_REGISTER_WRITE;
+        if (!minic_aarch64_machine_source_asm_validate(&target, &ins, NULL))
+            return 1;
+        selected = open_test_output();
+        if (selected == NULL ||
+            !minic_aarch64_machine_source_asm_emit(selected, &fn,
+                &ins, NULL, NULL) || fflush(selected) != 0 ||
+            fseek(selected, 0L, SEEK_SET) != 0) {
+            if (selected != NULL) fclose(selected);
+            return 1;
+        }
+        len = fread(emitted, 1U, sizeof(emitted) - 1U, selected);
+        fclose(selected);
+        emitted[len] = '\0';
+        if (strstr(emitted, "mov x9, x30") == NULL ||
+            strstr(emitted, ".rept 16") == NULL ||
+            strstr(emitted, "bl . + 4") == NULL ||
+            strstr(emitted, "mov x30, x9") == NULL)
+            return 1;
+        output.value.physical.reg.number = 10U;
+        if (minic_aarch64_machine_source_asm_validate(&target, &ins, NULL))
+            return 1;
+        output.value.physical.reg.number = 9U;
+        ins.effects |= MINIC_MACHINE_EFFECT_COMPILER_BARRIER;
+        if (minic_aarch64_machine_source_asm_validate(&target, &ins, NULL))
+            return 1;
+        ins.effects &= ~MINIC_MACHINE_EFFECT_COMPILER_BARRIER;
+        output.asm_constraint = "=r";
+        if (minic_aarch64_machine_source_asm_validate(&target, &ins, NULL))
+            return 1;
+    }
+    {
+        /* KVM hyp AT S1E1R: same immutable source and five GNU bindings as
+         * Linux's __translate_far_to_hpfar, including both PREL32 records. */
+        static char kvm_at[] =
+            "mrs %1,spsr_el2\n"
+            "mrs %2,elr_el2\n"
+            "1:at s1e1r,%3\n"
+            "isb\n"
+            "b 9f\n"
+            "2:msr spsr_el2,%1\n"
+            "msr elr_el2,%2\n"
+            "mov %w0,%4\n"
+            "9:.pushsection __kvm_ex_table,\"a\"\n"
+            ".align 3\n"
+            ".long (1b - .),(2b - .)\n"
+            ".popsection\n";
+        MinicMachineOperand bindings[5] = {{0}};
+        char emitted[2048];
+        FILE *selected;
+        size_t i;
+        memset(&ins, 0, sizeof(ins));
+        ins.kind = MINIC_MACHINE_INSTRUCTION_SOURCE_ASM;
+        ins.effects = MINIC_MACHINE_EFFECT_SOURCE_ASM |
+            MINIC_MACHINE_EFFECT_VOLATILE |
+            MINIC_MACHINE_EFFECT_COMPILER_BARRIER |
+            MINIC_MACHINE_EFFECT_MEMORY_READ |
+            MINIC_MACHINE_EFFECT_MEMORY_WRITE;
+        ins.source_asm_machine_form_id = AARCH64_MACHINE_ASM_KVM_AT_FIXUP;
+        ins.source_asm_template = kvm_at;
+        ins.source_asm_length = sizeof(kvm_at) - 1U;
+        ins.operand_count = 5U;
+        ins.operands = bindings;
+        for (i = 0U; i < 5U; ++i) {
+            MinicMachineOperand *op = &bindings[i];
+            op->asm_constraint = i == 0U ? "+r" :
+                i < 3U ? "=&r" : i == 3U ? "r" : "i";
+            if (i == 4U) {
+                op->kind = MINIC_MACHINE_OPERAND_INTEGER;
+                op->value.integer = -14;
+            } else {
+                op->kind = MINIC_MACHINE_OPERAND_REGISTER;
+                op->value.physical.reg = (MinicMachineRegister){
+                    9U + (unsigned int)i, i == 0U ? 32U : 64U,
+                    MINIC_MACHINE_REGISTER_GENERAL};
+                op->value.physical.access = i == 0U ?
+                    MINIC_MACHINE_REGISTER_READ |
+                    MINIC_MACHINE_REGISTER_WRITE :
+                    i < 3U ? MINIC_MACHINE_REGISTER_WRITE :
+                    MINIC_MACHINE_REGISTER_READ;
+            }
+        }
+        if (!minic_aarch64_machine_source_asm_validate(&target, &ins, NULL))
+            return 1;
+        selected = open_test_output();
+        if (selected == NULL ||
+            !minic_aarch64_machine_source_asm_emit(selected, &fn, &ins,
+                NULL, NULL) || fflush(selected) != 0 ||
+            fseek(selected, 0L, SEEK_SET) != 0) {
+            if (selected != NULL) fclose(selected);
+            return 1;
+        }
+        len = fread(emitted, 1U, sizeof(emitted) - 1U, selected);
+        fclose(selected);
+        emitted[len] = '\0';
+        if (strstr(emitted, "mrs x10,spsr_el2") == NULL ||
+            strstr(emitted, "mrs x11,elr_el2") == NULL ||
+            strstr(emitted, "1:at s1e1r,x12") == NULL ||
+            strstr(emitted, "msr spsr_el2,x10") == NULL ||
+            strstr(emitted, "msr elr_el2,x11") == NULL ||
+            strstr(emitted, "mov w9,#-14") == NULL ||
+            strstr(emitted, ".long (1b - .),(2b - .)") == NULL)
+            return 1;
+        bindings[4].value.integer = -13;
+        if (minic_aarch64_machine_source_asm_validate(&target, &ins, NULL))
+            return 1;
+        bindings[4].value.integer = -14;
+        bindings[1].value.physical.reg.number = 10U;
+        bindings[1].value.physical.access = MINIC_MACHINE_REGISTER_READ;
+        if (minic_aarch64_machine_source_asm_validate(&target, &ins, NULL))
+            return 1;
+        bindings[1].value.physical.access = MINIC_MACHINE_REGISTER_WRITE;
+        ins.effects &= ~MINIC_MACHINE_EFFECT_COMPILER_BARRIER;
+        if (minic_aarch64_machine_source_asm_validate(&target, &ins, NULL))
+            return 1;
+        ins.effects |= MINIC_MACHINE_EFFECT_COMPILER_BARRIER;
+        ins.source_asm_template = "at s1e1r,%3";
+        ins.source_asm_length = strlen(ins.source_asm_template);
+        if (minic_aarch64_machine_source_asm_validate(&target, &ins, NULL))
+            return 1;
+    }
+    {
         /* Both feature-19 CNTPCT/CNTVCT replacements preserve one complete
          * patch pair, x9 output, and the original SP-dependent memory read. */
         static const char prefix[] = ".if1==1661:isbmrs%0,";
@@ -779,9 +919,13 @@ int main(void) {
                     &target, &ins, NULL)) return 1;
             result.asm_constraint = "=r";
             ins.effects &= ~MINIC_MACHINE_EFFECT_COMPILER_BARRIER;
-            if (minic_aarch64_machine_source_asm_validate(
+            if (!minic_aarch64_machine_source_asm_validate(
                     &target, &ins, NULL)) return 1;
             ins.effects |= MINIC_MACHINE_EFFECT_COMPILER_BARRIER;
+            ins.effects |= MINIC_MACHINE_EFFECT_MEMORY_READ;
+            if (minic_aarch64_machine_source_asm_validate(
+                    &target, &ins, NULL)) return 1;
+            ins.effects &= ~MINIC_MACHINE_EFFECT_MEMORY_READ;
             ins.source_asm_machine_form_variant = 3U;
             if (minic_aarch64_machine_source_asm_validate(
                     &target, &ins, NULL)) return 1;

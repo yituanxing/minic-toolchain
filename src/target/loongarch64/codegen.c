@@ -130,7 +130,9 @@ static bool loongarch64_emit_function(
         .qualify_opaque_asm = minic_loongarch64_qualified_opaque_asm,
         .select_machine = minic_loongarch64_select_machine,
         .initialize_machine_asm_policy =
-            minic_loongarch64_machine_gnu_asm_policy_initialize
+            minic_loongarch64_machine_gnu_asm_policy_initialize,
+        .prove_selected_source_asm =
+            minic_loongarch64_machine_prove_selected_source_asm
     };
     if (target == NULL || fn == NULL) return false;
     if (minic_loongarch64_target_soft_float_abi(target)) {

@@ -2231,6 +2231,65 @@ static bool x86_source_rep_stos_contract(
     return true;
 }
 
+/* Revalidate every physical tied GNU output/input after Core lowering.
+ * Source admission alone never authorizes a raw string-copy template. */
+static bool x86_source_iomem_copy_contract(
+    const MinicMachineInstruction *ins) {
+    static const unsigned int single_regs[4] = {
+        MINIC_X86_REG_RDI, MINIC_X86_REG_RSI,
+        MINIC_X86_REG_RDI, MINIC_X86_REG_RSI
+    };
+    static const char *const single_constraints[4] = {
+        "=&D", "=&S", "0", "1"
+    };
+    static const unsigned int rep_regs[7] = {
+        MINIC_X86_REG_RCX, MINIC_X86_REG_RDI, MINIC_X86_REG_RSI,
+        MINIC_X86_REG_RCX, MINIC_X86_REG_RAX,
+        MINIC_X86_REG_RDI, MINIC_X86_REG_RSI
+    };
+    static const char *const rep_constraints[7] = {
+        "=&c", "=&D", "=&S", "0", "q", "1", "2"
+    };
+    const unsigned int form = minic_x86_64_linux_iomem_copy_form(
+        ins->source_asm_template, ins->source_asm_length);
+    const unsigned int *regs = form == 3U ? rep_regs : single_regs;
+    const char *const *constraints = form == 3U ?
+        rep_constraints : single_constraints;
+    const size_t outputs = form == 3U ? 3U : 2U;
+    const size_t count = form == 3U ? 7U : 4U;
+    const unsigned int effects = MINIC_MACHINE_EFFECT_SOURCE_ASM |
+        MINIC_MACHINE_EFFECT_VOLATILE |
+        MINIC_MACHINE_EFFECT_MEMORY_READ |
+        MINIC_MACHINE_EFFECT_MEMORY_WRITE |
+        MINIC_MACHINE_EFFECT_COMPILER_BARRIER;
+    size_t i;
+    if (form == 0U || ins->source_asm_machine_form_id !=
+            MINIC_X86_MACHINE_ASM_IOMEM_COPY ||
+        ins->source_asm_machine_form_variant != 0U ||
+        ins->source_asm_terminates_block ||
+        ins->source_asm_permits_fallthrough ||
+        ins->effects != effects || ins->operand_count != count ||
+        ins->operands == NULL || ins->implicit_count != 0U ||
+        ins->implicit != NULL ||
+        !minic_x86_64_typed_machine_form_matches_template(
+            MINIC_X86_MACHINE_ASM_IOMEM_COPY, 0U,
+            ins->source_asm_template, ins->source_asm_length))
+        return false;
+    for (i = 0U; i < count; ++i) {
+        const MinicMachineOperand *op = &ins->operands[i];
+        if (op->kind != MINIC_MACHINE_OPERAND_REGISTER ||
+            op->asm_name != NULL || op->asm_constraint == NULL ||
+            strcmp(op->asm_constraint, constraints[i]) != 0 ||
+            op->value.physical.reg.bank != MINIC_MACHINE_REGISTER_GENERAL ||
+            op->value.physical.reg.number != regs[i] ||
+            op->value.physical.reg.width_bits != 64U ||
+            op->value.physical.access != (i < outputs ?
+                MINIC_MACHINE_REGISTER_WRITE : MINIC_MACHINE_REGISTER_READ))
+            return false;
+    }
+    return true;
+}
+
 static bool x86_source_counter_contract(const MinicMachineInstruction *ins) {
     static const unsigned int registers[3] = {
         MINIC_X86_REG_RAX, MINIC_X86_REG_RDX, MINIC_X86_REG_RCX
@@ -3996,6 +4055,67 @@ static bool x86_source_delay_mul_contract(const MinicMachineInstruction *ins) {
     return true;
 }
 
+/* Revalidate the sealed physical register ABI after Core lowering. Source
+ * approval never authorizes a different opcode, register, or alternative. */
+static bool x86_source_vmware_contract(const MinicMachineInstruction *ins) {
+    static const unsigned int hypercall_regs[4] = {
+        MINIC_X86_REG_RAX, MINIC_X86_REG_RCX,
+        MINIC_X86_REG_RDX, MINIC_X86_REG_RBX
+    };
+    static const unsigned int alt_regs[6] = {
+        MINIC_X86_REG_RAX, MINIC_X86_REG_RBX,
+        MINIC_X86_REG_RCX, MINIC_X86_REG_RDX,
+        MINIC_X86_REG_RSI, MINIC_X86_REG_RDI
+    };
+    static const char *const hypercall_out[4] = {"=a","=c","=d","=b"};
+    static const char *const hypercall_in[4] = {"a","c","d","b"};
+    static const char *const alt_out[2] = {"=a","=c"};
+    static const char *const alt_in[6] = {"a","b","c","d","S","D"};
+    const bool alt = ins->source_asm_machine_form_id ==
+        MINIC_X86_MACHINE_ASM_VMWARE_STEALCLOCK_ALT;
+    const size_t outputs = alt ? 2U : 4U;
+    size_t i;
+    if (!alt && ins->source_asm_machine_form_id !=
+            MINIC_X86_MACHINE_ASM_VMWARE_HYPERCALL) return false;
+    if (ins->source_asm_machine_form_variant != 0U ||
+        ins->operand_count != 8U || ins->operands == NULL ||
+        ins->implicit_count != 0U || ins->implicit != NULL ||
+        ins->source_asm_terminates_block ||
+        ins->source_asm_permits_fallthrough ||
+        (ins->effects & (MINIC_MACHINE_EFFECT_SOURCE_ASM |
+            MINIC_MACHINE_EFFECT_COMPILER_BARRIER)) !=
+            (MINIC_MACHINE_EFFECT_SOURCE_ASM |
+             MINIC_MACHINE_EFFECT_COMPILER_BARRIER) ||
+        (ins->effects & ~(unsigned int)(MINIC_MACHINE_EFFECT_SOURCE_ASM |
+            MINIC_MACHINE_EFFECT_COMPILER_BARRIER |
+            MINIC_MACHINE_EFFECT_VOLATILE)) != 0U ||
+        (alt && (ins->effects & MINIC_MACHINE_EFFECT_VOLATILE) == 0U) ||
+        !minic_x86_64_typed_machine_form_matches_template(
+            ins->source_asm_machine_form_id,0U,
+            ins->source_asm_template,ins->source_asm_length)) return false;
+    for (i = 0U; i < 8U; ++i) {
+        const bool output = i < outputs;
+        const size_t j = output ? i : i - outputs;
+        const unsigned int reg = alt ? (output ?
+            (i == 0U ? MINIC_X86_REG_RAX : MINIC_X86_REG_RCX) :
+            alt_regs[j]) : hypercall_regs[j];
+        const char *const constraint = output ?
+            (alt ? alt_out[j] : hypercall_out[j]) :
+            (alt ? alt_in[j] : hypercall_in[j]);
+        const MinicMachineOperand *op = &ins->operands[i];
+        if (op->kind != MINIC_MACHINE_OPERAND_REGISTER ||
+            op->asm_name != NULL || op->asm_constraint == NULL ||
+            strcmp(op->asm_constraint,constraint) != 0 ||
+            op->value.physical.reg.bank != MINIC_MACHINE_REGISTER_GENERAL ||
+            op->value.physical.reg.number != reg ||
+            op->value.physical.reg.width_bits != 32U ||
+            op->value.physical.access != (output ?
+                MINIC_MACHINE_REGISTER_WRITE : MINIC_MACHINE_REGISTER_READ))
+            return false;
+    }
+    return true;
+}
+
 static bool x86_source_pvclock_scale_contract(const MinicMachineInstruction *ins) {
     static const char *const constraints[4] = {"=a", "=d", "0", "rm"};
     static const unsigned int regs[4] = {
@@ -4800,6 +4920,9 @@ bool minic_x86_64_machine_validate_source_asm(const MinicTargetInfo *target,
         return x86_source_delay_wait_contract(instruction);
     if (instruction->source_asm_machine_form_id == MINIC_X86_MACHINE_ASM_DELAY_MUL)
         return x86_source_delay_mul_contract(instruction);
+    if (instruction->source_asm_machine_form_id == MINIC_X86_MACHINE_ASM_VMWARE_HYPERCALL ||
+        instruction->source_asm_machine_form_id == MINIC_X86_MACHINE_ASM_VMWARE_STEALCLOCK_ALT)
+        return x86_source_vmware_contract(instruction);
     if (instruction->source_asm_machine_form_id == MINIC_X86_MACHINE_ASM_PVCLOCK_SCALE)
         return x86_source_pvclock_scale_contract(instruction);
     if (instruction->source_asm_machine_form_id == MINIC_X86_MACHINE_ASM_VDSO_SYSCALL)
@@ -4932,6 +5055,9 @@ bool minic_x86_64_machine_validate_source_asm(const MinicTargetInfo *target,
     if (instruction->source_asm_machine_form_id ==
             MINIC_X86_MACHINE_ASM_REP_STOS)
         return x86_source_rep_stos_contract(instruction);
+    if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_IOMEM_COPY)
+        return x86_source_iomem_copy_contract(instruction);
     if (instruction->source_asm_machine_form_id ==
             MINIC_X86_MACHINE_ASM_ADD32_CARRY ||
         instruction->source_asm_machine_form_id ==

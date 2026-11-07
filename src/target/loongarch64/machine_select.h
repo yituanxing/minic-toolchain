@@ -9,6 +9,10 @@
  * ported. The production codegen does not register a partial selector. */
 bool minic_loongarch64_select_machine(MinicMachineFunction *,
     const MinicDirectLP64BlockContext *);
+bool minic_loongarch64_machine_prove_selected_source_asm(
+    const MinicCoreFunction *, const MinicCoreInstruction *,
+    const MinicCoreInlineAsm *, const MinicMachineFunction *,
+    const MinicMachineInstruction *, void *);
 
 /* Separately reusable, complete physical frame lowering. Every operation
  * goes through the target opcode contract, never assembler text. */
