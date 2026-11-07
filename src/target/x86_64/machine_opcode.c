@@ -1548,6 +1548,58 @@ static bool x86_source_lkgs_extable_contract(const MinicMachineInstruction *ins)
             (MINIC_MACHINE_REGISTER_READ | MINIC_MACHINE_REGISTER_WRITE);
 }
 
+/* Independently enforce the word-load/exception-table type-20 ABI after
+ * Core selection.  The GNU printer must never interpret an untrusted
+ * source template as physical machine operands or a generic nofault MOV. */
+static bool x86_source_load_unaligned_zeropad_contract(
+    const MinicMachineInstruction *ins) {
+    const MinicMachineOperand *out, *mem;
+    const bool named = ins->source_asm_template &&
+        strstr(ins->source_asm_template,"%[mem]") != NULL;
+    if (ins->source_asm_machine_form_id !=
+            MINIC_X86_MACHINE_ASM_LOAD_UNALIGNED_ZEROPAD ||
+        ins->source_asm_machine_form_variant != 0U ||
+        ins->operand_count != 2U || !ins->operands ||
+        ins->implicit_count != 0U || ins->implicit != NULL ||
+        ins->source_asm_terminates_block ||
+        ins->source_asm_permits_fallthrough ||
+        ins->effects != (MINIC_MACHINE_EFFECT_SOURCE_ASM |
+            MINIC_MACHINE_EFFECT_VOLATILE |
+            MINIC_MACHINE_EFFECT_COMPILER_BARRIER |
+            MINIC_MACHINE_EFFECT_MEMORY_READ) ||
+        !minic_x86_64_linux_load_unaligned_zeropad_form(
+            ins->source_asm_template,ins->source_asm_length) ||
+        !minic_x86_64_typed_machine_form_matches_template(
+            ins->source_asm_machine_form_id,0U,
+            ins->source_asm_template,ins->source_asm_length)) return false;
+    out = &ins->operands[0];
+    mem = &ins->operands[1];
+    return out->kind == MINIC_MACHINE_OPERAND_REGISTER &&
+        out->asm_constraint && strcmp(out->asm_constraint,"=r") == 0 &&
+        (named ? out->asm_name && strcmp(out->asm_name,"ret") == 0 :
+            out->asm_name == NULL) &&
+        out->value.physical.reg.bank == MINIC_MACHINE_REGISTER_GENERAL &&
+        out->value.physical.reg.number == MINIC_X86_REG_RAX &&
+        out->value.physical.reg.width_bits == 64U &&
+        out->value.physical.access == MINIC_MACHINE_REGISTER_WRITE &&
+        mem->kind == MINIC_MACHINE_OPERAND_ADDRESS &&
+        mem->asm_constraint && strcmp(mem->asm_constraint,"m") == 0 &&
+        (named ? mem->asm_name && strcmp(mem->asm_name,"mem") == 0 :
+            mem->asm_name == NULL) &&
+        mem->value.address.target_mode == 0U &&
+        mem->value.address.has_base &&
+        !mem->value.address.has_index &&
+        !mem->value.address.has_segment &&
+        !mem->value.address.has_symbol &&
+        mem->value.address.scale == 1U &&
+        mem->value.address.displacement == 0 &&
+        mem->value.address.relocation == 0U &&
+        mem->value.address.addend == 0 &&
+        mem->value.address.base.bank == MINIC_MACHINE_REGISTER_GENERAL &&
+        mem->value.address.base.number == MINIC_X86_REG_R10 &&
+        mem->value.address.base.width_bits == 64U;
+}
+
 static bool x86_source_crash_register_contract(
     const MinicTargetInfo *target,
     const MinicMachineInstruction *ins) {
@@ -5407,6 +5459,9 @@ bool minic_x86_64_machine_validate_source_asm(const MinicTargetInfo *target,
     if (instruction->source_asm_machine_form_id ==
             MINIC_X86_MACHINE_ASM_SEGMENT_LOAD_EXTABLE)
         return x86_source_segment_load_extable_contract(instruction);
+    if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_LOAD_UNALIGNED_ZEROPAD)
+        return x86_source_load_unaligned_zeropad_contract(instruction);
     if (instruction->source_asm_machine_form_id ==
             MINIC_X86_MACHINE_ASM_SEGMENT_REGISTER_EXTABLE)
         return x86_source_segment_register_extable_contract(instruction);

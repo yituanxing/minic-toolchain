@@ -6993,6 +6993,51 @@ static bool x86_source_segment_load_extable(X86CoreSelector *sel,
         MINIC_MACHINE_EFFECT_MEMORY_WRITE,&binding,1U,NULL,0U,false,false);
 }
 
+/* load_unaligned_zeropad() is a fault-tolerant *word* load.  Linux's
+ * type-20 exception-table handler completes a partially accessible word;
+ * treating this as an ordinary MOV or the type-3 nofault path is wrong.
+ * Source qualification seals both GNU named and numbered spellings; the
+ * selector independently binds their output and dereferenced input. */
+static bool x86_source_load_unaligned_zeropad(X86CoreSelector *sel,
+    const MinicCoreInstruction *ins) {
+    const MinicCoreInlineAsm *source;
+    const MinicCoreStructuredInlineAsmOperand *roles;
+    MinicCoreTypeId pointee;
+    MinicMachineOperand bindings[2];
+    bool named;
+    if (!x86_scalar_source_base(sel,ins,
+            MINIC_X86_MACHINE_ASM_LOAD_UNALIGNED_ZEROPAD,
+            &source,&roles) ||
+        source->target_machine_form_variant != 0U ||
+        !source->is_volatile || !source->has_memory_clobber ||
+        source->explicit_memory_clobber || !source->implicit_memory_effect ||
+        ins->value.structured_inline_asm.operand_count != 2U ||
+        !x86_scalar_role(&roles[0],0U,
+            MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT) ||
+        !x86_scalar_role(&roles[1],1U,
+            MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT) ||
+        roles[0].physical_read_write || roles[0].has_tied_output ||
+        roles[1].physical_read_write || roles[1].has_tied_output ||
+        !x86_asm_gp_lvalue_width(sel,roles[0].value,8U) ||
+        !x86_asm_gp_lvalue_width(sel,roles[1].value,8U) ||
+        !minic_lp64_core_pointer_pointee(sel->core->type_context,
+            sel->core->values[roles[1].value].core_type_id,&pointee) ||
+        !x86_core_load(sel,roles[1].value,MINIC_X86_REG_R10)) return false;
+    named = strstr(source->template_text,"%[mem]") != NULL;
+    bindings[0] = x86_reg(MINIC_X86_REG_RAX,64U);
+    bindings[0].asm_constraint = "=r";
+    bindings[0].asm_name = named ? "ret" : NULL;
+    bindings[0].value.physical.access = MINIC_MACHINE_REGISTER_WRITE;
+    bindings[1] = x86_addr(MINIC_X86_REG_R10,0);
+    bindings[1].asm_constraint = "m";
+    bindings[1].asm_name = named ? "mem" : NULL;
+    return minic_machine_builder_emit_core_source_asm(&sel->builder,source,
+            MINIC_MACHINE_EFFECT_MEMORY_READ,bindings,2U,
+            NULL,0U,false,false) &&
+        x86_scalar_output_store(sel,roles[0].value,MINIC_X86_REG_RAX,8U);
+}
+
+
 /* Linux loadsegment(ES/DS/SS) uses a GNU +r 16-bit C selector, forced
  * through a 32-bit `%k0` machine register. The fault handler's type-17
  * __ex_table record encodes the chosen physical GPR number, so carry the
@@ -10624,6 +10669,7 @@ static bool x86_core_instruction(X86CoreSelector *sel,
             x86_source_boot_movs(sel, ins) ||
             x86_source_control_register(sel, ins) ||
             x86_source_segment_load_extable(sel, ins) ||
+            x86_source_load_unaligned_zeropad(sel, ins) ||
             x86_source_segment_register_extable(sel, ins) ||
             x86_source_lkgs_extable(sel, ins) ||
             x86_source_boot_segments(sel, ins) ||

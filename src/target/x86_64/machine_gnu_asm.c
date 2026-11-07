@@ -1687,6 +1687,23 @@ static bool x86_emit_source_asm(FILE *out,
                   "  .popsection\n",out) != EOF;
     }
     if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_LOAD_UNALIGNED_ZEROPAD) {
+        /* Hardware RIP of the faulting MOV is entry 1; the fault fixup
+         * resumes at 2.  The third word MUST be type 20 (unaligned
+         * zeropad), never type 3 (ordinary usercopy nofault). */
+        if (!minic_x86_64_machine_validate_source_asm(function->target,
+                instruction,NULL)) return false;
+        return fputs("1:\n"
+                     "  movq (%r10), %rax\n"
+                     "2:\n"
+                     "  .pushsection \"__ex_table\",\"a\"\n"
+                     "  .balign 4\n"
+                     "  .long (1b) - .\n"
+                     "  .long (2b) - .\n"
+                     "  .long 20\n"
+                     "  .popsection\n",out) != EOF;
+    }
+    if (instruction->source_asm_machine_form_id ==
             MINIC_X86_MACHINE_ASM_FDIV_BUG) {
         /* Proven original x87 kernel test: binary64 loads, stacked DIV/MUL,
          * FISTP store with live x87 rounding, FWAIT, and both FNINITs. */
