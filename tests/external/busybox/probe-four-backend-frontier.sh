@@ -4,8 +4,28 @@
 # this design. GNU owns CPP/AS/link/CRT/libc; MiniC owns ONLY selected applets.
 set -eu
 : "${MINIC_CC:?set MINIC_CC}"
-work=$(mktemp -d)
-trap 'rm -rf "$work"' EXIT HUP INT TERM
+targets=${FOUR_BACKEND_TARGETS-'aarch64 loongarch64'}
+selected=0
+seen=' '
+for target in $targets; do
+  case "$target" in
+    aarch64|loongarch64) ;;
+    *) echo "FOUR_BACKEND_TARGETS=INVALID target=$target" >&2; exit 1 ;;
+  esac
+  case "$seen" in
+    *" $target "*) echo "FOUR_BACKEND_TARGETS=DUPLICATE target=$target" >&2; exit 1 ;;
+  esac
+  seen="$seen$target "
+  selected=$((selected+1))
+done
+test "$selected" -gt 0 || { echo 'FOUR_BACKEND_TARGETS=EMPTY' >&2; exit 1; }
+if [ -n "${FOUR_BACKEND_BUSYBOX_WORK_DIR:-}" ]; then
+  work=$FOUR_BACKEND_BUSYBOX_WORK_DIR
+  mkdir -p "$work"
+else
+  work=$(mktemp -d)
+  trap 'rm -rf "$work"' EXIT HUP INT TERM
+fi
 commit=1a64f6a20aaf6ea4dbba68bbfa8cc1ab7e5c57c4
 mkdir -p "$work/upstream"
 timeout 120s curl -fsSL --retry 2 \
@@ -26,7 +46,8 @@ sources='coreutils/cat.c coreutils/echo.c coreutils/head.c coreutils/wc.c findut
 next_targets=0
 wide_targets=0
 all_targets=0
-for target in aarch64 loongarch64; do
+mixed_targets=0
+for target in $targets; do
   case "$target" in
     aarch64) gcc=aarch64-linux-gnu-gcc; qemu=qemu-aarch64
              prefix=aarch64-linux-gnu-; sysroot=/usr/aarch64-linux-gnu ;;
@@ -163,6 +184,7 @@ PY
     continue
   fi
   echo "FOUR_BACKEND_BUSYBOX_MIXED=PASS target=$target MiniC_Kbuild_owners=9 GNU_remaining_owners=yes original_Kconfig_Kbuild=1 QEMU_GNU_byte_exact=1 full_MiniC=NO"
+  mixed_targets=$((mixed_targets+1))
 
   # One *class-level* survey per ISA: no extra CI job and no changes to
   # the certified nine-owner binary. These are untouched upstream BusyBox
@@ -297,24 +319,31 @@ editors/cmp.c editors/diff.c networking/ping.c
   fi
 done
 if [ "${FOUR_BACKEND_BUSYBOX_NEXT:-0}" = 1 ]; then
-  if [ "$next_targets" -ne 2 ]; then
+  if [ "$next_targets" -ne "$selected" ]; then
     echo "FOUR_BACKEND_BUSYBOX_NEXT_ACCEPT=FAIL reason=missing_target completed=$next_targets" >&2
     exit 1
   fi
-  echo "FOUR_BACKEND_BUSYBOX_NEXT_ACCEPT=PASS targets=2 original_Kbuild_owners=83 min_MiniC_owners=81 GNU_QEMU_differential=1"
+  echo "FOUR_BACKEND_BUSYBOX_NEXT_ACCEPT=PASS targets=$selected original_Kbuild_owners=83 min_MiniC_owners=81 GNU_QEMU_differential=1"
 fi
 if [ "${FOUR_BACKEND_BUSYBOX_WIDE:-0}" = 1 ]; then
-  if [ "$wide_targets" -ne 2 ]; then
+  if [ "$wide_targets" -ne "$selected" ]; then
     echo "FOUR_BACKEND_BUSYBOX_WIDE_ACCEPT=FAIL reason=missing_target completed=$wide_targets" >&2
     exit 1
   fi
-  echo "FOUR_BACKEND_BUSYBOX_WIDE_ACCEPT=PASS targets=2 original_Kbuild_owners=179 min_AArch64_MiniC=175 min_LoongArch64_MiniC=175 GNU_QEMU_differential=1"
+  echo "FOUR_BACKEND_BUSYBOX_WIDE_ACCEPT=PASS targets=$selected original_Kbuild_owners=179 min_AArch64_MiniC=175 min_LoongArch64_MiniC=175 GNU_QEMU_differential=1"
 fi
 if [ "${FOUR_BACKEND_BUSYBOX_ALLYES:-0}" = 1 ]; then
-  if [ "$all_targets" -ne 2 ]; then
+  if [ "$all_targets" -ne "$selected" ]; then
     echo "FOUR_BACKEND_BUSYBOX_ALL_ACCEPT=FAIL reason=missing_ISA completed=$all_targets" >&2
     exit 1
   fi
-  echo "FOUR_BACKEND_BUSYBOX_ALL_ACCEPT=PASS targets=2 original_Kbuild_owners=581 min_AArch64_MiniC=581 min_LoongArch64_MiniC=581 GNU_C_fallbacks=0 GNU_QEMU_fixtures=38 all_C_owners_MiniC=YES assembler_linker=GNU full_all_MiniC=NO"
+  echo "FOUR_BACKEND_BUSYBOX_ALL_ACCEPT=PASS targets=$selected original_Kbuild_owners=581 min_AArch64_MiniC=581 min_LoongArch64_MiniC=581 GNU_C_fallbacks=0 GNU_QEMU_fixtures=38 all_C_owners_MiniC=YES assembler_linker=GNU full_all_MiniC=NO"
+fi
+if [ "${FOUR_BACKEND_BUSYBOX_NINE_REQUIRE:-0}" = 1 ]; then
+  if [ "$mixed_targets" -ne "$selected" ]; then
+    echo "FOUR_BACKEND_BUSYBOX_NINE_ACCEPT=FAIL targets=$selected passed=$mixed_targets" >&2
+    exit 1
+  fi
+  echo "FOUR_BACKEND_BUSYBOX_NINE_ACCEPT=PASS targets=$selected original_Kbuild_owners=9 GNU_QEMU_differential=1"
 fi
 echo "FOUR_BACKEND_BUSYBOX_DISCOVERY=COMPLETE source_pinned=1 no_all_MiniC_claim=1"

@@ -1,0 +1,143 @@
+name: MiniC AArch64 Real Software Stage4 Strict
+
+# Stage3 proves fixed-vector NEON/SHA3. Stage4 reuses the original project's
+# already pinned software/object-swap harnesses, with one target and one built
+# MiniC. No Linux P1 claim or broad Kbuild/581-owner campaign is made here.
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/minic-aarch64-real-software-stage4-strict.yml'
+      - 'src/frontend/**'
+      - 'src/core/**'
+      - 'src/compiler/c_lower/**'
+      - 'src/target/aarch64/**'
+      - 'src/target/source_policy/**'
+      - 'src/target/common/**'
+      - 'tests/external/tiny-aes-c/**'
+      - 'tests/external/busybox/probe-four-backend-frontier.sh'
+      - 'tests/external/busybox/check-pinned-1361-source.sh'
+      - 'tests/vendor/tiny-aes-c/**'
+      - 'Makefile'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: minic-aarch64-stage4-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  aarch64-gnu-minic-real-software:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install proven AArch64 GNU cross tools and QEMU
+        timeout-minutes: 12
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          for sources in /etc/apt/apt-mirrors.txt /etc/apt/sources.list.d/ubuntu.sources; do
+            if [[ -f "$sources" ]] && grep -q 'azure.archive.ubuntu.com' "$sources"; then
+              sudo sed -i 's#azure.archive.ubuntu.com#archive.ubuntu.com#g' "$sources"
+            fi
+          done
+          packages=(gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu
+                    libc6-dev-arm64-cross qemu-user make curl)
+          timeout 120s sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 update -qq
+          if ! timeout 240s sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o DPkg::Lock::Timeout=60 install -y --no-install-recommends "${packages[@]}"; then
+            timeout 120s sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 update -qq
+            timeout 240s sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o DPkg::Lock::Timeout=60 install -y --no-install-recommends "${packages[@]}"
+          fi
+          command -v aarch64-linux-gnu-gcc
+          command -v qemu-aarch64
+          command -v python3
+
+      # Cache only at an identical GitHub checkout SHA. Save directly after
+      # successful compiler build so a later genuine software failure cannot
+      # discard this expensive-but-reusable host build.
+      - name: Restore exact-SHA native compiler objects
+        id: compiler_cache
+        uses: actions/cache/restore@v4
+        with:
+          path: build/aarch-stage4-ci/obj
+          key: minic-aarch-stage4-objects-v1-${{ runner.os }}-${{ runner.arch }}-${{ github.sha }}
+      - name: Build MiniC once for both original software projects
+        run: make -j2 MODE=release CFLAGS=-Werror BUILD_DIR=build/aarch-stage4-ci build/aarch-stage4-ci/bin/minic-cc
+      - name: Save exact-SHA compiler objects before runtime gates
+        if: steps.compiler_cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: build/aarch-stage4-ci/obj
+          key: minic-aarch-stage4-objects-v1-${{ runner.os }}-${{ runner.arch }}-${{ github.sha }}
+
+      - name: Record exact compiler and pinned original software origins
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mkdir -p build/aarch-stage4-ci/evidence
+          {
+            printf 'SOURCE_SHA=%s\n' "$(git rev-parse HEAD)"
+            printf 'MINIC_COMPILER_SHA256=%s\n' "$(sha256sum build/aarch-stage4-ci/bin/minic-cc | cut -d' ' -f1)"
+            printf 'AES_C_GIT_BLOB=%s\n' "$(git hash-object tests/vendor/tiny-aes-c/upstream/aes.c)"
+            printf 'AES_H_GIT_BLOB=%s\n' "$(git hash-object tests/vendor/tiny-aes-c/upstream/aes.h)"
+            printf 'BUSYBOX_UPSTREAM_COMMIT=1a64f6a20aaf6ea4dbba68bbfa8cc1ab7e5c57c4\n'
+            aarch64-linux-gnu-gcc --version | head -n 1
+            qemu-aarch64 --version | head -n 1
+          } | tee build/aarch-stage4-ci/evidence/origins.txt
+
+      - name: Original pinned tiny-AES 128 ECB GNU vs MiniC same-source QEMU
+        shell: bash
+        env:
+          MINIC_CC: ${{ github.workspace }}/build/aarch-stage4-ci/bin/minic-cc
+          FOUR_BACKEND_TARGETS: aarch64
+          FOUR_BACKEND_TINYAES_REQUIRE: '1'
+          FOUR_BACKEND_TINYAES_WORK_DIR: ${{ github.workspace }}/build/aarch-stage4-ci/evidence/tiny-aes-work
+        run: |
+          set -Eeuo pipefail
+          sh tests/external/tiny-aes-c/probe-four-backend-frontier.sh | tee build/aarch-stage4-ci/evidence/tiny-aes.receipt
+          grep -Fxq 'FOUR_BACKEND_TINYAES_ACCEPT=PASS targets=1 original_AES128_ECB=1 GNU_QEMU_diff=1' build/aarch-stage4-ci/evidence/tiny-aes.receipt
+          grep -Fxq 'FOUR_BACKEND_TINYAES=PASS target=aarch64 original_source=1 GNU_AS_LD=1 QEMU_byte_exact=1' build/aarch-stage4-ci/evidence/tiny-aes.receipt
+
+      - name: Original BusyBox 1.36.1 GNU Kconfig and nine MiniC Kbuild owners
+        shell: bash
+        timeout-minutes: 16
+        env:
+          MINIC_CC: ${{ github.workspace }}/build/aarch-stage4-ci/bin/minic-cc
+          FOUR_BACKEND_TARGETS: aarch64
+          FOUR_BACKEND_BUSYBOX_NINE_REQUIRE: '1'
+          FOUR_BACKEND_BUSYBOX_WORK_DIR: ${{ github.workspace }}/build/aarch-stage4-ci/evidence/busybox-work
+        run: |
+          set -Eeuo pipefail
+          sh tests/external/busybox/probe-four-backend-frontier.sh | tee build/aarch-stage4-ci/evidence/busybox-nine.receipt
+          receipt=build/aarch-stage4-ci/evidence/busybox-nine.receipt
+          grep -Fxq 'FOUR_BACKEND_BUSYBOX_NINE_ACCEPT=PASS targets=1 original_Kbuild_owners=9 GNU_QEMU_differential=1' "$receipt"
+          grep -Fxq 'FOUR_BACKEND_BUSYBOX_MIXED=PASS target=aarch64 MiniC_Kbuild_owners=9 GNU_remaining_owners=yes original_Kconfig_Kbuild=1 QEMU_GNU_byte_exact=1 full_MiniC=NO' "$receipt"
+          test "$(grep -c '^FOUR_BACKEND_BUSYBOX_TU=PASS target=aarch64 source=.* MiniC_GNU_AS=1$' "$receipt")" -eq 9
+          test "$(grep -c '^FOUR_BACKEND_BUSYBOX_APPLET=PASS name=.* GNU_QEMU_byte_exact=1$' "$receipt")" -eq 9
+          sha256sum build/aarch-stage4-ci/evidence/tiny-aes-work/aarch64.i build/aarch-stage4-ci/evidence/busybox-work/aarch64/*.i | tee build/aarch-stage4-ci/evidence/gnu-preprocessed.sha256
+          printf '%s\n' 'AARCH64_STAGE4_STRICT=PASS AES_1/1 BusyBox_C_owners=9/9 applets_QEMU=9/9 GNU_C_remaining=YES Linux_P1_claim=NO'
+
+      # These are original GNU-preprocessed units and first GNU/AS/MiniC/QEMU
+      # diagnostics. Never package the entire downloaded BusyBox worktree.
+      # Preserve successes as replayable receipts, failures as diagnostics.
+      - name: Preserve exact Stage4 original-software evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: minic-aarch64-stage4-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            build/aarch-stage4-ci/evidence/*.txt
+            build/aarch-stage4-ci/evidence/*.receipt
+            build/aarch-stage4-ci/evidence/*.sha256
+            build/aarch-stage4-ci/evidence/tiny-aes-work/*.i
+            build/aarch-stage4-ci/evidence/tiny-aes-work/*.err
+            build/aarch-stage4-ci/evidence/tiny-aes-work/*.out
+            build/aarch-stage4-ci/evidence/busybox-work/aarch64/*.i
+            build/aarch-stage4-ci/evidence/busybox-work/aarch64/*.err
+            build/aarch-stage4-ci/evidence/busybox-work/aarch64/*.out
+            build/aarch-stage4-ci/evidence/busybox-work/aarch64/src/.config
+            build/aarch-stage4-ci/evidence/busybox-work/aarch64/src/busybox_unstripped.out
+          if-no-files-found: warn
+          retention-days: 7

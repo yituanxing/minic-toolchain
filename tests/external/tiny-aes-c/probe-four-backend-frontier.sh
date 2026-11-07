@@ -11,12 +11,32 @@ fixture="$root/tests/external/tiny-aes-c/aes128_ecb_vectors.c"
 headers="$root/tests/external/tiny-aes-c/include"
 test "$(git -C "$root" hash-object "$vendor/aes.c")" = 4481f7b24ec964019d38669842913fd571d28ba3
 test "$(git -C "$root" hash-object "$vendor/aes.h")" = b29b6683549632676ec11c06eb86efd02964db57
-work=$(mktemp -d)
-trap 'rm -rf "$work"' EXIT HUP INT TERM
+targets=${FOUR_BACKEND_TARGETS-'aarch64 loongarch64'}
+selected=0
+seen=' '
+for target in $targets; do
+    case "$target" in
+        aarch64|loongarch64) ;;
+        *) echo "FOUR_BACKEND_TARGETS=INVALID target=$target" >&2; exit 1 ;;
+    esac
+    case "$seen" in
+        *" $target "*) echo "FOUR_BACKEND_TARGETS=DUPLICATE target=$target" >&2; exit 1 ;;
+    esac
+    seen="$seen$target "
+    selected=$((selected+1))
+done
+test "$selected" -gt 0 || { echo 'FOUR_BACKEND_TARGETS=EMPTY' >&2; exit 1; }
+if [ -n "${FOUR_BACKEND_TINYAES_WORK_DIR:-}" ]; then
+    work=$FOUR_BACKEND_TINYAES_WORK_DIR
+    mkdir -p "$work"
+else
+    work=$(mktemp -d)
+    trap 'rm -rf "$work"' EXIT HUP INT TERM
+fi
 passed=0
 blocked=0
 failed=0
-for target in aarch64 loongarch64; do
+for target in $targets; do
     case "$target" in
         aarch64) gcc=aarch64-linux-gnu-gcc; qemu=qemu-aarch64 ;;
         loongarch64) gcc=loongarch64-linux-gnu-gcc-13; qemu=qemu-loongarch64 ;;
@@ -99,15 +119,15 @@ for target in aarch64 loongarch64; do
     passed=$((passed + 1))
 done
 
-echo "FOUR_BACKEND_TINYAES_FRONTIER=COMPLETE architectures=2 verified_runtime=$passed blocked=$blocked"
+echo "FOUR_BACKEND_TINYAES_FRONTIER=COMPLETE architectures=$selected verified_runtime=$passed blocked=$blocked"
 if [ "$failed" -ne 0 ]; then
     echo "FOUR_BACKEND_TINYAES_RUNTIME=FAIL failed_targets=$failed" >&2
     exit 1
 fi
 if [ "${FOUR_BACKEND_TINYAES_REQUIRE:-0}" = "1" ]; then
-    if [ "$passed" -ne 2 ] || [ "$blocked" -ne 0 ]; then
+    if [ "$passed" -ne "$selected" ] || [ "$blocked" -ne 0 ]; then
         echo "FOUR_BACKEND_TINYAES_ACCEPT=FAIL passed=$passed blocked=$blocked" >&2
         exit 1
     fi
-    echo "FOUR_BACKEND_TINYAES_ACCEPT=PASS targets=2 original_AES128_ECB=1 GNU_QEMU_diff=1"
+    echo "FOUR_BACKEND_TINYAES_ACCEPT=PASS targets=$selected original_AES128_ECB=1 GNU_QEMU_diff=1"
 fi
