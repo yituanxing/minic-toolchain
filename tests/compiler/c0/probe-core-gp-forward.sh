@@ -117,11 +117,14 @@ test "$gnu_status" -eq 42 && test "$minic_status" -eq "$gnu_status" &&
     || fail "GNU/MiniC native runtime mismatch gnu=$gnu_status minic=$minic_status gp_baseline=$baseline_status address_baseline=$address_baseline_status"
 "${HOST_CC:-cc}" -E -P -std=gnu11 -x c -DMINIC_GP_REJECT_ALIGN_ALLOCA \
     "$root/tests/compiler/c0/core_gp_forward.c" -o "$work/forbidden.i"
-if "$minic" --target=x86_64-linux -S "$work/forbidden.i" \
+if MINIC_X86_TYPED_REJECT_TRACE=1 \
+        "$minic" --target=x86_64-linux -S "$work/forbidden.i" \
         -o "$work/forbidden.s" 2> "$work/forbidden.err"; then
     fail 'x86 admitted aligned RSP locals together with moving-stack alloca'
 fi
-grep -Fq 'x86-64 Core instruction unsupported: function minic_gp_reject_aligned_alloca' \
-    "$work/forbidden.err" \
+{ grep -Fq 'x86-64 Core instruction unsupported: function minic_gp_reject_aligned_alloca' \
+      "$work/forbidden.err" ||
+  grep -Fq 'x86 typed select reject: function=minic_gp_reject_aligned_alloca stage=core-instructions' \
+      "$work/forbidden.err"; } \
     || fail 'x86 aligned-allocation rejection lacked the exact Core owner'
 echo "CORE_GP_FORWARD=PASS loong_cycles=$roundtrips native_strict=42 aarch64_s=1 x86_gp_text=$baseline_bytes->$x86_bytes x86_gp_instructions=$baseline_instructions->$x86_instructions x86_object_text=$address_baseline_bytes->$x86_bytes x86_object_instructions=$address_baseline_instructions->$x86_instructions x86_native_differential=42"

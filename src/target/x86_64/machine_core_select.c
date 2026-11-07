@@ -48,6 +48,21 @@ typedef struct X86CoreSelector {
     /* Common Core semantic use census; never inferred from Machine registers. */
     size_t *value_uses;
     X86AuxBlocks *instruction_aux;
+    /* Restore the proven one-instruction %rax transport from the pre-MIR
+     * backend. It never crosses a Core instruction or basic-block boundary. */
+    bool gp_forward_source_valid;
+    MinicCoreValueId gp_forward_source_id;
+    bool gp_elide_result_store_valid;
+    MinicCoreValueId gp_elide_result_store_id;
+    bool enable_adjacent_gp_forward;
+    /* An exact adjacent Core OBJECT_ADDRESS -> scalar LOAD/STORE pair may
+     * consume the frame slot directly. Keep this proof block-local: neither
+     * an intervening instruction nor a branch may borrow the address. */
+    bool direct_object_producer;
+    bool direct_object_consumer;
+    bool direct_object_enabled;
+    MinicCoreValueId direct_object_value;
+    MinicCoreObjectId direct_object_id;
 } X86CoreSelector;
 
 static MinicMachineOperand x86_reg(unsigned int number, unsigned int bits) {
@@ -178,6 +193,9 @@ static bool x86_slot(X86CoreSelector *sel, MinicCoreValueId value,
 static bool x86_core_load(X86CoreSelector *sel, MinicCoreValueId value,
     unsigned int reg) {
     MinicMachineOperand slot;
+    if (sel != NULL && reg == MINIC_X86_REG_RAX &&
+        sel->gp_forward_source_valid &&
+        sel->gp_forward_source_id == value) return true;
     return x86_slot(sel, value, &slot) &&
         x86_2(sel, MINIC_X86_MI_MOV64_FRBP_R,
             slot, x86_reg(reg, 64U));
@@ -191,6 +209,9 @@ static bool x86_core_store(X86CoreSelector *sel, MinicCoreValueId value,
     /* The producing instruction still executes; only its unused SSA frame
      * writeback can disappear. In particular, do not discard volatile loads,
      * atomics, function calls, or any other observable Core instruction. */
+    if (reg == MINIC_X86_REG_RAX &&
+        sel->gp_elide_result_store_valid &&
+        sel->gp_elide_result_store_id == value) return true;
     if (sel->value_uses[value] == 0U) return true;
     return x86_slot(sel, value, &slot) &&
         x86_2(sel, MINIC_X86_MI_MOV64_R_FRBP,
@@ -264,23 +285,91 @@ static bool x86_i128_store(X86CoreSelector *sel, MinicCoreValueId id,
 
 /* Reuse the sealed x86 frame's object geometry. These are physical addresses
  * consumed by existing Core record transfers, never a new object layout. */
-static bool x86_object_address(X86CoreSelector *sel,
-    MinicCoreObjectId object, unsigned int reg) {
-    MinicMachineOperand slot;
+static bool x86_object_slot(X86CoreSelector *sel,
+    MinicCoreObjectId object, MinicMachineOperand *slot) {
     size_t offset;
     const bool rsp_based = sel->frame->objects_from_aligned_rsp;
-    if (object >= sel->frame->object_count ||
+    if (slot == NULL || object >= sel->frame->object_count ||
         sel->frame->object_offsets == NULL) return false;
     offset = sel->frame->object_offsets[object];
-    if (offset > INT32_MAX ||
-        !minic_x86_64_machine_frame_slot(&sel->builder,
+    return offset <= INT32_MAX &&
+        minic_x86_64_machine_frame_slot(&sel->builder,
             rsp_based ? MINIC_MACHINE_FRAME_BASE_STACK_POINTER :
                 MINIC_MACHINE_FRAME_BASE_FRAME_POINTER,
             MINIC_MACHINE_FRAME_LOCAL, 1U, 1U,
-            rsp_based ? (int64_t)offset : -(int64_t)offset, &slot))
+            rsp_based ? (int64_t)offset : -(int64_t)offset, slot);
+}
+
+/* Ordinary scalar memory opcodes take a typed physical address, while LEA
+ * uses the MachineFrame operand. Both derive from the same sealed FramePlan
+ * offset and base, so aligned RSP locals never become fictitious RBP slots. */
+static bool x86_object_memory(X86CoreSelector *sel,
+    MinicCoreObjectId object, MinicMachineOperand *address) {
+    MinicMachineOperand checked_slot;
+    size_t offset;
+    bool rsp_based;
+    if (address == NULL || !x86_object_slot(sel, object, &checked_slot))
         return false;
+    offset = sel->frame->object_offsets[object];
+    rsp_based = sel->frame->objects_from_aligned_rsp;
+    *address = x86_addr(rsp_based ? MINIC_X86_REG_RSP : MINIC_X86_REG_RBP,
+        rsp_based ? (int64_t)offset : -(int64_t)offset);
+    return true;
+}
+
+static bool x86_object_address(X86CoreSelector *sel,
+    MinicCoreObjectId object, unsigned int reg) {
+    MinicMachineOperand slot;
+    if (!x86_object_slot(sel, object, &slot)) return false;
+    const bool rsp_based = sel->frame->objects_from_aligned_rsp;
     return x86_2(sel, rsp_based ? MINIC_X86_MI_LEA64_FRSP_R :
         MINIC_X86_MI_LEA64_FRBP_R, slot, x86_reg(reg, 64U));
+}
+
+/* Preserve the old x86 native direct-object-address optimization, but prove
+ * it from typed Core and the exact target frame. A pointer must be used just
+ * once, immediately in this Core block, by a scalar integer/pointer IO.
+ * Record, x87, i128, calls, atomics, ASM and cross-block uses stay untouched.
+ * The consumer still emits its real memory read/write with volatility. */
+static const MinicCoreType *x86_type(const X86CoreSelector *sel,
+    MinicCoreTypeId id);
+static bool x86_scalar_shape(const X86CoreSelector *sel,
+    MinicCoreTypeId id, size_t *bytes, bool *is_signed, bool *is_bool);
+
+static bool x86_direct_object_pair(X86CoreSelector *sel,
+    const MinicCoreInstruction *producer,
+    const MinicCoreInstruction *consumer) {
+    MinicCoreValueId address, payload;
+    const MinicCoreType *type;
+    size_t bytes;
+    bool sign, is_bool;
+    if (sel == NULL || producer == NULL || consumer == NULL ||
+        producer->kind != MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS ||
+        producer->value.object_id >= sel->frame->object_count ||
+        producer->result >= sel->core->value_count ||
+        sel->value_uses[producer->result] != 1U ||
+        sel->frame->object_offsets == NULL ||
+        (type = x86_type(sel,
+            sel->core->values[producer->result].core_type_id)) == NULL ||
+        type->kind != MINIC_CORE_TYPE_POINTER) return false;
+    if (consumer->kind == MINIC_CORE_INSTRUCTION_LOAD) {
+        address = consumer->value.load.address;
+        payload = consumer->result;
+        type = x86_type(sel, consumer->core_type_id);
+    } else if (consumer->kind == MINIC_CORE_INSTRUCTION_STORE) {
+        address = consumer->value.store.address;
+        payload = consumer->value.store.stored_value;
+        type = payload < sel->core->value_count ?
+            x86_type(sel, sel->core->values[payload].core_type_id) : NULL;
+    } else return false;
+    return address == producer->result &&
+        payload < sel->core->value_count && type != NULL &&
+        (type->kind == MINIC_CORE_TYPE_INTEGER ||
+         type->kind == MINIC_CORE_TYPE_POINTER) &&
+        x86_scalar_shape(sel, consumer->kind == MINIC_CORE_INSTRUCTION_LOAD ?
+            consumer->core_type_id :
+            sel->core->values[payload].core_type_id,
+            &bytes, &sign, &is_bool);
 }
 
 /* An early kernel head numeric VMA is a link address, while memory is still
@@ -1094,13 +1183,19 @@ static bool x86_scalar_memory(X86CoreSelector *sel,
     }
     floating = x86_float_shape(sel, load ? ins->core_type_id :
         sel->core->values[payload].core_type_id, &fp_double);
-    if (
-        (!floating && !x86_scalar_shape(sel, load ? ins->core_type_id :
+    if (!floating && !x86_scalar_shape(sel, load ? ins->core_type_id :
             sel->core->values[payload].core_type_id,
-            &bytes, &sign, &is_bool)) ||
-        !x86_record_pointer(sel, address, MINIC_X86_REG_R11)) return false;
+            &bytes, &sign, &is_bool)) return false;
     if (floating) bytes = fp_double ? 8U : 4U;
-    memory = x86_addr(MINIC_X86_REG_R11, 0);
+    if (sel->direct_object_consumer &&
+        sel->direct_object_value == address) {
+        if (floating || !x86_object_memory(sel,
+                sel->direct_object_id, &memory)) return false;
+    } else {
+        if (!x86_record_pointer(sel, address, MINIC_X86_REG_R11))
+            return false;
+        memory = x86_addr(MINIC_X86_REG_R11, 0);
+    }
     if (load) {
         switch (bytes) {
         case 1U: opcode = sign ? MINIC_X86_MI_MOVSBQ_AR :
@@ -12069,21 +12164,10 @@ static bool x86_core_instruction(X86CoreSelector *sel,
     case MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS: {
         MinicMachineOperand slot;
         MinicCoreObjectId object = ins->value.object_id;
-        size_t offset;
-        bool aligned;
-        if (object >= sel->frame->object_count ||
-            sel->frame->object_offsets == NULL) return false;
-        offset = sel->frame->object_offsets[object];
-        aligned = sel->frame->objects_from_aligned_rsp;
-        if (offset > INT32_MAX ||
-            !minic_x86_64_machine_frame_slot(&sel->builder,
-                aligned ? MINIC_MACHINE_FRAME_BASE_STACK_POINTER :
-                    MINIC_MACHINE_FRAME_BASE_FRAME_POINTER,
-                MINIC_MACHINE_FRAME_LOCAL, 1U, 1U,
-                aligned ? (int64_t)offset : -(int64_t)offset,
-                &slot) ||
-            !x86_2(sel, aligned ? MINIC_X86_MI_LEA64_FRSP_R :
-                MINIC_X86_MI_LEA64_FRBP_R,
+        if (sel->direct_object_producer) return true;
+        if (!x86_object_slot(sel, object, &slot) ||
+            !x86_2(sel, sel->frame->objects_from_aligned_rsp ?
+                MINIC_X86_MI_LEA64_FRSP_R : MINIC_X86_MI_LEA64_FRBP_R,
                 slot, x86_reg(MINIC_X86_REG_RAX, 64U))) return false;
         return x86_result(sel, ins);
     }
@@ -12295,6 +12379,73 @@ static bool x86_core_terminator(X86CoreSelector *sel, size_t core_id) {
     }
 }
 
+/* Previously proven on the original x86 backend: two adjacent, pure scalar
+ * Core instructions may transport the first result directly in %rax if it
+ * has exactly one use and the next instruction reads its left/only operand
+ * from that same register. This is target-owned MachineIR selection, not
+ * a Core rewrite, a register allocator, or textual assembly substitution. */
+static bool x86_adjacent_gp_binary_kind(MinicCoreInstructionKind kind) {
+    switch (kind) {
+    case MINIC_CORE_INSTRUCTION_INTEGER_ADD:
+    case MINIC_CORE_INSTRUCTION_INTEGER_SUBTRACT:
+    case MINIC_CORE_INSTRUCTION_INTEGER_MULTIPLY:
+    case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_AND:
+    case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_XOR:
+    case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_OR:
+    case MINIC_CORE_INSTRUCTION_INTEGER_DIVIDE:
+    case MINIC_CORE_INSTRUCTION_INTEGER_REMAINDER:
+    case MINIC_CORE_INSTRUCTION_INTEGER_LESS:
+    case MINIC_CORE_INSTRUCTION_SCALAR_EQUAL:
+    case MINIC_CORE_INSTRUCTION_POINTER_LESS:
+        return true;
+    default: return false;
+    }
+}
+
+static bool x86_adjacent_gp_unary_kind(MinicCoreInstructionKind kind) {
+    return kind == MINIC_CORE_INSTRUCTION_INTEGER_NEGATE ||
+           kind == MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_NOT ||
+           kind == MINIC_CORE_INSTRUCTION_SCALAR_IS_ZERO;
+}
+
+static bool x86_adjacent_gp_forward(X86CoreSelector *sel,
+    const MinicCoreInstruction *producer,
+    const MinicCoreInstruction *consumer) {
+    MinicCoreValueId result;
+    size_t bytes;
+    bool sign, is_bool, consumes;
+    if (sel == NULL || producer == NULL || consumer == NULL ||
+        sel->value_uses == NULL) return false;
+    result = producer->result;
+    if (result == MINIC_CORE_VALUE_INVALID ||
+        result >= sel->core->value_count || sel->value_uses[result] != 1U ||
+        !x86_scalar_shape(sel,
+            sel->core->values[result].core_type_id, &bytes, &sign, &is_bool))
+        return false;
+    if (!x86_adjacent_gp_binary_kind(producer->kind) &&
+        !x86_adjacent_gp_unary_kind(producer->kind) &&
+        producer->kind != MINIC_CORE_INSTRUCTION_LOAD &&
+        producer->kind != MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT &&
+        producer->kind != MINIC_CORE_INSTRUCTION_INTEGER_CONVERSION)
+        return false;
+    if (x86_adjacent_gp_binary_kind(consumer->kind)) {
+        consumes = consumer->value.binary.left == result;
+    } else if (x86_adjacent_gp_unary_kind(consumer->kind) ||
+               consumer->kind == MINIC_CORE_INSTRUCTION_INTEGER_CONVERSION) {
+        consumes = consumer->value.operand == result;
+    } else if (consumer->kind == MINIC_CORE_INSTRUCTION_STORE) {
+        /* The kernel head's address-rebase path may itself require RAX as a
+         * temporary when resolving the STORE destination. Keep it on the
+         * original independent stack path. */
+        consumes = !sel->frame->kernel_head_link_addresses &&
+            consumer->value.store.stored_value == result;
+    } else return false;
+    if (!consumes || (consumer->kind != MINIC_CORE_INSTRUCTION_STORE &&
+        !x86_scalar_shape(sel, consumer->core_type_id,
+            &bytes, &sign, &is_bool))) return false;
+    return true;
+}
+
 bool minic_x86_64_machine_select_core_subset(
     MinicMachineFunction *machine, const MinicTargetInfo *target,
     const MinicCoreFunction *core, const MinicX86Frame *frame) {
@@ -12317,6 +12468,12 @@ bool minic_x86_64_machine_select_core_subset(
     sel.core = core;
     sel.frame = frame;
     sel.target = target;
+    sel.enable_adjacent_gp_forward =
+        getenv("MINIC_X86_DISABLE_ADJACENT_GP_FORWARD") == NULL;
+    /* Same-compiler diagnostic A/B, read once per function rather than for
+     * every Core instruction in a large original Linux translation unit. */
+    sel.direct_object_enabled =
+        getenv("MINIC_X86_DISABLE_DIRECT_OBJECT_ADDRESS") == NULL;
     sel.blocks = malloc(count * sizeof(*sel.blocks));
     sel.false_blocks = malloc(count * sizeof(*sel.false_blocks));
     sel.reachable = calloc(count, sizeof(*sel.reachable));
@@ -12486,6 +12643,9 @@ bool minic_x86_64_machine_select_core_subset(
     for (i = 0U; i < count; ++i) {
         const MinicCoreBlock *block = &core->blocks[i];
         size_t j;
+        bool previous_direct = false;
+        MinicCoreValueId previous_value = MINIC_CORE_VALUE_INVALID;
+        MinicCoreObjectId previous_object = MINIC_CORE_OBJECT_INVALID;
         if (!sel.reachable[i]) continue;
         if (!block->has_terminator ||
             !minic_machine_builder_position_at(&sel.builder,
@@ -12498,11 +12658,31 @@ bool minic_x86_64_machine_select_core_subset(
              MINIC_X86_CODEGEN_IBT_ENDBR) != 0U &&
             !x86_0(&sel, MINIC_X86_MI_ENDBR64)) goto cleanup;
         phase = "core-instructions";
+        sel.gp_forward_source_valid = false;
+        sel.gp_elide_result_store_valid = false;
         for (j = 0U; j < block->instruction_count; ++j) {
             MinicCoreInstructionId id;
             const MinicCoreInstruction *ins;
+            const MinicCoreInstruction *next = NULL;
+            bool forward_to_next = false;
+            bool direct_to_next = false;
             if (!minic_core_block_instruction_at(core, block, j,
                     &id, &ins)) goto cleanup;
+            if (j + 1U < block->instruction_count) {
+                MinicCoreInstructionId next_id;
+                if (!minic_core_block_instruction_at(core, block, j + 1U,
+                        &next_id, &next)) goto cleanup;
+                if (sel.enable_adjacent_gp_forward)
+                    forward_to_next = x86_adjacent_gp_forward(&sel, ins, next);
+                if (sel.direct_object_enabled)
+                    direct_to_next = x86_direct_object_pair(&sel, ins, next);
+            }
+            sel.gp_elide_result_store_valid = forward_to_next;
+            sel.gp_elide_result_store_id = ins->result;
+            sel.direct_object_producer = direct_to_next;
+            sel.direct_object_consumer = previous_direct;
+            sel.direct_object_value = previous_value;
+            sel.direct_object_id = previous_object;
             if (getenv("MINIC_X86_TYPED_SELECT_TRACE") != NULL)
                 fprintf(stderr,
                     "x86 typed select: function=%s block=%zu instruction=%zu kind=%u result=%u type=%u\n",
@@ -12540,7 +12720,19 @@ bool minic_x86_64_machine_select_core_subset(
                 }
                 goto cleanup;
             }
+            sel.gp_forward_source_valid = forward_to_next;
+            sel.gp_forward_source_id = ins->result;
+            previous_direct = direct_to_next;
+            previous_value = ins->result;
+            previous_object = ins->kind == MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS
+                ? ins->value.object_id : MINIC_CORE_OBJECT_INVALID;
         }
+        /* A basic-block or terminator boundary invalidates both adjacent
+         * proofs, irrespective of physical block-splitting in MachineIR. */
+        sel.gp_forward_source_valid = false;
+        sel.gp_elide_result_store_valid = false;
+        sel.direct_object_producer = false;
+        sel.direct_object_consumer = false;
         minic_machine_builder_clear_origin(&sel.builder);
         phase = "core-terminator";
         if (!x86_core_terminator(&sel, i)) {

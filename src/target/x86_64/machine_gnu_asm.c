@@ -1627,6 +1627,12 @@ static bool x86_emit_source_asm(FILE *out,
             (unsigned int)instruction->operands[5].value.integer;
         if (!minic_x86_64_machine_validate_source_asm(function->target,
                 instruction,NULL)) return false;
+        /* Linux replaces this entire 771..772 site with a five-byte rel32
+         * CALL.  Our register-based memory carrier is a three-byte indirect
+         * CALL, so leave two executable NOP bytes in the same patch site.
+         * Otherwise paravirt_patch() returns 5 with p->len == 3 and the
+         * original kernel BUG_ON(used > p->len) fires during boot.  This is
+         * only for the exact source-validated PV form, never generic ASM. */
         return fprintf(out,
             "771:\n"
             "999:\n"
@@ -1634,6 +1640,7 @@ static bool x86_emit_source_asm(FILE *out,
             " .long 999b\n"
             ".popsection\n"
             "  call *(%%r10)\n"
+            "  .skip 5 - (. - 771b), 0x90\n"
             "772:\n"
             ".pushsection .parainstructions,\"a\"\n"
             " .balign 8\n"
