@@ -9,6 +9,95 @@ static int fail(const char *message)
     return 1;
 }
 
+static int test_builtin_declaration_roles(void) {
+    static const struct {
+        MinicTypeBaseKind kind;
+        MinicBuiltinDeclarationRole role;
+    } cases[] = {
+        {MINIC_TYPE_BASE_FLOAT, MINIC_BUILTIN_DECLARATION_STANDARD_FLOAT},
+        {MINIC_TYPE_BASE_DOUBLE, MINIC_BUILTIN_DECLARATION_STANDARD_FLOAT},
+        {MINIC_TYPE_BASE_LONG_DOUBLE, MINIC_BUILTIN_DECLARATION_STANDARD_FLOAT},
+        {MINIC_TYPE_BASE_FLOAT128, MINIC_BUILTIN_DECLARATION_EXTENDED_FLOAT},
+        {MINIC_TYPE_BASE_FLOAT32, MINIC_BUILTIN_DECLARATION_EXTENDED_FLOAT},
+        {MINIC_TYPE_BASE_FLOAT64, MINIC_BUILTIN_DECLARATION_EXTENDED_FLOAT},
+        {MINIC_TYPE_BASE_FLOAT32X, MINIC_BUILTIN_DECLARATION_EXTENDED_FLOAT},
+        {MINIC_TYPE_BASE_FLOAT64X, MINIC_BUILTIN_DECLARATION_EXTENDED_FLOAT}
+    };
+    size_t index;
+
+    for (index = 0U; index < sizeof(cases) / sizeof(cases[0]); ++index) {
+        MinicType type = minic_type_void();
+        type.base_kind = cases[index].kind;
+        if (minic_type_builtin_declaration_role(type) != cases[index].role) {
+            return fail("extended C builtin declaration trait classification");
+        }
+    }
+    if (minic_type_builtin_declaration_role(minic_type_void()) !=
+            MINIC_BUILTIN_DECLARATION_INVALID ||
+        minic_type_builtin_declaration_role(minic_type_int()) !=
+            MINIC_BUILTIN_DECLARATION_INVALID ||
+        !minic_type_is_void(minic_type_header_builtin(
+            0U, MINIC_BUILTIN_DECLARATION_HEADER_ONLY_OPAQUE)) ||
+        !minic_type_is_void(minic_type_header_builtin(
+            1U, MINIC_BUILTIN_DECLARATION_STANDARD_FLOAT)) ||
+        minic_type_header_builtin(1U, MINIC_BUILTIN_DECLARATION_HEADER_ONLY_OPAQUE).base_kind !=
+            MINIC_TYPE_BASE_TARGET_BUILTIN ||
+        minic_type_header_builtin(2U, MINIC_BUILTIN_DECLARATION_FIXED_VECTOR128_STORAGE).base_kind !=
+            MINIC_TYPE_BASE_TARGET_BUILTIN ||
+        minic_type_builtin_declaration_role(minic_type_header_builtin(
+            1U, MINIC_BUILTIN_DECLARATION_HEADER_ONLY_OPAQUE)) !=
+            MINIC_BUILTIN_DECLARATION_HEADER_ONLY_OPAQUE ||
+        !minic_type_is_fixed_vector128_storage(
+            minic_type_header_builtin(2U, MINIC_BUILTIN_DECLARATION_FIXED_VECTOR128_STORAGE)) ||
+        minic_type_is_fixed_vector128_storage(
+            minic_type_header_builtin(1U, MINIC_BUILTIN_DECLARATION_HEADER_ONLY_OPAQUE)) ||
+        minic_type_equal(minic_type_header_builtin(
+            1U, MINIC_BUILTIN_DECLARATION_HEADER_ONLY_OPAQUE),
+                         minic_type_header_builtin(
+            2U, MINIC_BUILTIN_DECLARATION_HEADER_ONLY_OPAQUE))) {
+        /* __builtin_va_list now materializes a canonical record/array C
+         * type per translation unit, not a special frontend scalar kind.
+         * Its shape and identity are tested by four-target-model-m0. */
+        return fail("builtin declaration trait rejects non-vector ISA identity");
+    }
+    return 0;
+}
+
+static int test_header_fixed_vector_xor_type(void) {
+    MinicType vector_u8 = minic_type_header_builtin(
+        6U, MINIC_BUILTIN_DECLARATION_FIXED_VECTOR128_STORAGE);
+    MinicType vector_u64 = minic_type_header_builtin(
+        7U, MINIC_BUILTIN_DECLARATION_FIXED_VECTOR128_STORAGE);
+    MinicType opaque = minic_type_header_builtin(
+        5U, MINIC_BUILTIN_DECLARATION_HEADER_ONLY_OPAQUE);
+    MinicType vector_d = minic_type_header_builtin(
+        10U, MINIC_BUILTIN_DECLARATION_FIXED_VECTOR64_STORAGE);
+    MinicType qualified, pointer, result;
+
+    if (!minic_type_add_const(vector_u8, &qualified) ||
+        !minic_type_pointer_to(vector_u8, &pointer) ||
+        minic_type_is_fixed_vector128_storage(pointer) ||
+        !minic_type_fixed_vector128_binary_result(vector_u8, qualified, &result) ||
+        !minic_type_equal(result, vector_u8) ||
+        !minic_type_fixed_vector128_binary_result(qualified, vector_u8, &result) ||
+        !minic_type_equal(result, vector_u8) ||
+        minic_type_fixed_vector128_binary_result(vector_u8, vector_u64, &result) ||
+        minic_type_fixed_vector128_binary_result(vector_u8, opaque, &result) ||
+        minic_type_fixed_vector128_binary_result(opaque, opaque, &result) ||
+        minic_type_fixed_vector128_binary_result(pointer, pointer, &result) ||
+        minic_type_fixed_vector128_binary_result(vector_u8, vector_u8, NULL) ||
+        !minic_type_is_fixed_vector64_storage(vector_d) ||
+        minic_type_is_fixed_vector64_storage(vector_u8) ||
+        !minic_type_is_fixed_vector_register_storage(vector_u8) ||
+        !minic_type_is_fixed_vector_register_storage(vector_d) ||
+        minic_type_is_fixed_vector_register_storage(opaque) ||
+        !minic_type_fixed_vector_binary_result(vector_d, vector_d, &result) ||
+        !minic_type_equal(result, vector_d) ||
+        minic_type_fixed_vector_binary_result(vector_d, vector_u8, &result))
+        return fail("fixed-vector source identity and XOR result admission");
+    return 0;
+}
+
 int main(void)
 {
     MinicType void_type;
@@ -31,6 +120,12 @@ int main(void)
     MinicType pointer_to_pointer_type;
     MinicType pointer_to_const_pointer_type;
     MinicType const_pointer_to_pointer_type;
+    MinicType const_void_type;
+    MinicType const_void_pointer_type;
+    MinicType volatile_void_type;
+    MinicType volatile_void_pointer_type;
+    MinicType volatile_pointer_object_type;
+    MinicType pointer_to_volatile_pointer_type;
     MinicType record_type;
     MinicType other_record_type;
     MinicType record_pointer_type;
@@ -38,6 +133,11 @@ int main(void)
     MinicType unqualified_type;
     MinicType malformed_type;
     MinicType overflow_type;
+
+    if (test_builtin_declaration_roles() != 0 ||
+        test_header_fixed_vector_xor_type() != 0) {
+        return 1;
+    }
 
     void_type = minic_type_void();
     if (!minic_type_is_void(void_type) ||
@@ -240,6 +340,28 @@ int main(void)
         !minic_type_pointee(pointer_to_pointer_type, &recovered_type) ||
         !minic_type_equal(recovered_type, pointer_type)) {
         return fail("pointee recovery");
+    }
+    if (!minic_type_add_const(void_type, &const_void_type) ||
+        !minic_type_pointer_to(const_void_type, &const_void_pointer_type) ||
+        !minic_type_add_volatile(void_type, &volatile_void_type) ||
+        !minic_type_pointer_to(volatile_void_type, &volatile_void_pointer_type) ||
+        !minic_type_add_volatile(pointer_type, &volatile_pointer_object_type) ||
+        !minic_type_pointer_to(volatile_pointer_object_type,
+                               &pointer_to_volatile_pointer_type) ||
+        !minic_type_assignment_compatible(void_pointer_type, pointer_to_pointer_type) ||
+        minic_type_assignment_compatible(void_pointer_type,
+                                         pointer_to_const_pointer_type) ||
+        minic_type_assignment_compatible(void_pointer_type,
+                                         pointer_to_volatile_pointer_type) ||
+        !minic_type_assignment_compatible(const_void_pointer_type,
+                                          pointer_to_const_pointer_type) ||
+        !minic_type_assignment_compatible(volatile_void_pointer_type,
+                                          pointer_to_volatile_pointer_type) ||
+        minic_type_assignment_compatible(pointer_to_pointer_type,
+                                         const_void_pointer_type) ||
+        minic_type_assignment_compatible(pointer_to_pointer_type,
+                                         volatile_void_pointer_type)) {
+        return fail("void pointer conversion preserves immediate pointee qualifiers");
     }
 
     record_type = minic_type_record(3U);

@@ -58,47 +58,71 @@ MINIC_CFLAGS  := -std=c11 $(COMMON_WARNINGS) $(MODE_CFLAGS) $(CFLAGS)
 MINIC_LDFLAGS := $(MODE_LDFLAGS) $(LDFLAGS)
 MINIC_INCLUDES := -Iinclude -Isrc
 
+TARGET_SOURCE_POLICY_SOURCES := \
+	src/target/source_policy/data_layout_source.c \
+	src/target/source_policy/target_source_info.c \
+	src/target/source_policy/language_semantics.c \
+	src/target/source_policy/riscv32.c \
+	src/target/source_policy/riscv64.c \
+	src/target/source_policy/x86_64.c \
+	src/target/source_policy/aarch64.c \
+	src/target/source_policy/loongarch64.c
+
+TARGET_MACHINE_REGISTER_SOURCES := \
+	src/target/riscv32/machine_register.c \
+	src/target/riscv64/machine_register.c \
+	src/target/x86_64/machine_register.c \
+	src/target/aarch64/machine_register.c \
+	src/target/loongarch64/machine_register.c
+
 MINIC_SOURCES := \
 	src/compiler/compiler.c \
 	src/compiler/core_function_set.c \
+	src/compiler/module_ir_build.c \
+	src/compiler/global_payload.c \
+	src/compiler/inline_specialize_common.c \
 	src/compiler/inline_integer.c \
 	src/compiler/inline_symbolic.c \
 	src/compiler/inline_boolean.c \
-	src/compiler/inline_reference.c \
 	src/compiler/core_reachability.c \
 	src/core/core_ir.c \
+	src/compiler/c_lower/core_ir_source.c \
+	src/core/core_type.c \
+	src/core/module_ir.c \
+	src/compiler/c_lower/core_type_import.c \
 	src/core/core_ir_verify.c \
 	src/core/core_ir_dump.c \
 	src/core/value_uses.c \
-	src/core/reentry_index.c \
-	src/core/core_lower.c \
-	src/core/core_lower_expression.c \
-	src/core/core_lower_address.c \
-	src/core/core_lower_scalar_values.c \
-	src/core/core_lower_bit_fields.c \
-	src/core/core_lower_assignments.c \
-	src/core/core_lower_record.c \
-	src/core/core_lower_varargs.c \
-	src/core/core_lower_local_effects.c \
-	src/core/core_lower_loop.c \
-	src/core/core_lower_if.c \
-	src/core/core_lower_switch.c \
-	src/core/core_lower_calls.c \
-	src/core/core_lower_expr_flow.c \
-	src/core/core_lower_expr_scalar.c \
-	src/core/core_lower_arithmetic.c \
-	src/core/core_lower_const_facts.c \
-	src/core/cfg_constant_calls.c \
-	src/core/local_facts.c \
-	src/core/source_loop_shapes.c \
-	src/core/core_lower_bool.c \
-	src/core/core_lower_types.c \
-	src/core/core_lower_metadata.c \
-	src/core/core_lower_asm.c \
-	src/core/core_lower_asm_target.c \
-	src/core/core_lower_asm_operands.c \
-	src/core/core_lower_asm_structured.c \
-	src/core/core_lower_asm_scalar_forms.c \
+	src/compiler/c_lower/reentry_index.c \
+	src/compiler/c_lower/core_lower.c \
+	src/compiler/c_lower/core_lower_expression.c \
+	src/compiler/c_lower/core_lower_address.c \
+	src/compiler/c_lower/core_lower_scalar_values.c \
+	src/compiler/c_lower/core_lower_bit_fields.c \
+	src/compiler/c_lower/core_lower_assignments.c \
+	src/compiler/c_lower/core_lower_record.c \
+	src/compiler/c_lower/core_lower_varargs.c \
+	src/compiler/c_lower/core_lower_local_effects.c \
+	src/compiler/c_lower/core_lower_loop.c \
+	src/compiler/c_lower/core_lower_if.c \
+	src/compiler/c_lower/core_lower_switch.c \
+	src/compiler/c_lower/core_lower_calls.c \
+	src/compiler/c_lower/core_lower_expr_flow.c \
+	src/compiler/c_lower/core_lower_expr_scalar.c \
+	src/compiler/c_lower/core_lower_arithmetic.c \
+	src/compiler/c_lower/core_lower_const_facts.c \
+	src/compiler/c_lower/core_const_global_record.c \
+	src/compiler/c_lower/cfg_constant_calls.c \
+	src/compiler/c_lower/local_facts.c \
+	src/compiler/c_lower/source_loop_shapes.c \
+	src/compiler/c_lower/core_lower_bool.c \
+	src/compiler/c_lower/core_lower_types.c \
+	src/compiler/c_lower/core_lower_metadata.c \
+	src/compiler/c_lower/core_lower_asm.c \
+	src/compiler/c_lower/core_lower_asm_target.c \
+	src/compiler/c_lower/core_lower_asm_operands.c \
+	src/compiler/c_lower/core_lower_asm_structured.c \
+	src/compiler/c_lower/core_lower_asm_scalar_forms.c \
 	src/frontend/attribute.c \
 	src/frontend/ast.c \
 	src/frontend/expression_semantics.c \
@@ -112,6 +136,8 @@ MINIC_SOURCES := \
 	src/frontend/ast_function.c \
 	src/frontend/ast_global.c \
 	src/frontend/lexer.c \
+	src/frontend/gnu_neon_inline_filter.c \
+	src/frontend/binary128_literal.c \
 	src/frontend/parser_constant.c \
 	src/frontend/parser_attribute.c \
 	src/frontend/parser_declarator.c \
@@ -140,21 +166,38 @@ MINIC_SOURCES := \
 	src/frontend/parser_runtime_initializer.c \
 	src/frontend/parser_string.c \
 	src/frontend/parser_type.c \
-	src/frontend/parser_type_query.c \
 	src/frontend/parser_typedef.c \
 	src/frontend/token.c \
 	src/frontend/type.c \
 	src/target/data_layout.c \
 	src/target/target_info.c \
 	src/target/target_catalog.c \
+	src/target/target_machine_options.c \
+	src/target/machine_options/riscv.c \
+	src/target/machine_options/aarch64.c \
+	src/target/machine_options/loongarch64.c \
+	src/target/machine_options/x86_64.c \
+	$(TARGET_SOURCE_POLICY_SOURCES) \
+	$(TARGET_MACHINE_REGISTER_SOURCES) \
 	src/target/backend.c \
+	src/target/backend_source.c \
 	src/target/backend_core_usage.c \
 	src/target/common/global_emit.c \
+	src/target/common/module_global_emit.c \
+	src/target/common/elf_module_symbol_info.c \
+	src/target/common/program_visit.c \
+	src/target/common/program_emit.c \
 	src/target/common/direct_program_emit.c \
 	src/target/common/direct_preflight.c \
 	src/target/common/direct_function_profile.c \
 	src/target/common/direct_function_plan.c \
 	src/target/common/core_function_plan.c \
+	src/target/common/machine_ir.c \
+	src/target/common/machine_builder.c \
+	src/target/common/machine_core_coverage.c \
+	src/target/common/machine_ir_verify.c \
+	src/target/common/machine_gnu_asm.c \
+	src/target/common/machine_source_asm_template.c \
 	src/target/common/core_function_facts.c \
 	src/target/common/core_numeric_shape.c \
 	src/target/common/core_value_slots.c \
@@ -164,38 +207,27 @@ MINIC_SOURCES := \
 	src/target/common/direct_call_plan.c \
 	src/target/common/direct_instruction_semantics.c \
 	src/target/common/direct_residual_plan.c \
+	src/target/common/aggregate_shape.c \
 	src/target/common/lp64_aggregate.c \
 	src/target/common/lp64_scalar.c \
 	src/target/common/lp64_frame.c \
 	src/target/riscv/isa_resolve.c \
+	src/target/riscv/machine_opcode.c \
+	src/target/riscv/machine_gnu_asm.c \
+	src/target/riscv/machine_frame_select.c \
+	src/target/riscv/machine_core_select.c \
 	src/target/riscv64/isa.c \
 	src/target/riscv32/rv32_emit.c \
-	src/target/riscv32/rv32_integer_emit.c \
-	src/target/riscv32/rv32_wide_emit.c \
-	src/target/riscv32/rv32_fp_emit.c \
-	src/target/riscv32/rv32_memory_emit.c \
 	src/target/riscv32/rv32_frame.c \
 	src/target/riscv32/rv32_scalar.c \
-	src/target/riscv32/rv32_call.c \
 	src/target/riscv32/rv32_abi_plan.c \
 	src/target/riscv32/rv32_abi_cursor.c \
 	src/target/riscv32/rv32_global_emit.c \
 	src/target/riscv64/abi.c \
-	src/target/riscv64/codegen_support.c \
-	src/target/riscv64/core_codegen.c \
 	src/target/riscv64/core_admission.c \
 	src/target/riscv64/function_abi_plan.c \
-	src/target/riscv64/memory_emit.c \
-	src/target/riscv/record_copy_bytes.c \
-	src/target/riscv/word_operations.c \
-	src/target/riscv64/inline_asm_emit.c \
-	src/target/riscv64/call_emit.c \
-	src/target/riscv64/scalar_emit.c \
 	src/target/riscv64/runtime_libcall.c \
-	src/target/riscv64/fp_emit.c \
-	src/target/riscv64/overflow_emit.c \
 	src/target/riscv64/frame_layout.c \
-	src/target/riscv64/frame_access.c \
 	src/target/riscv64/asm_plan.c \
 	src/target/common/core_spill_layout.c \
 	src/target/common/core_object_intervals.c \
@@ -206,40 +238,62 @@ MINIC_SOURCES := \
 	src/target/riscv64/codegen_function.c \
 	src/target/riscv64/global_emit.c \
 	src/target/x86_64/codegen.c \
-	src/target/x86_64/machine_emit.c \
+	src/target/x86_64/machine_opcode.c \
+	src/target/x86_64/machine_gnu_asm.c \
+	src/target/x86_64/machine_frame_select.c \
+	src/target/x86_64/machine_core_select.c \
 	src/target/x86_64/asm_contract.c \
-	src/target/x86_64/machine_asm.c \
-	src/target/x86_64/machine_support.c \
-	src/target/x86_64/machine_fp.c \
-	src/target/x86_64/machine_call.c \
+	src/target/x86_64/asm_contract_source.c \
+	src/target/x86_64/machine_raid6_source_policy.c \
 	src/target/x86_64/abi.c \
 	src/target/x86_64/call_plan.c \
 	src/target/x86_64/frame.c \
 	src/target/x86_64/global_emit.c \
 	src/target/aarch64/abi.c \
+	src/target/aarch64/machine_opcode.c \
+	src/target/aarch64/machine_gnu_asm.c \
+	src/target/aarch64/machine_frame_select.c \
+	src/target/aarch64/machine_core_select.c \
+	src/target/aarch64/machine_source_asm.c \
+	src/target/aarch64/machine_sysreg_contract.c \
+	src/target/aarch64/machine_lse_source_select.c \
 	src/target/aarch64/codegen.c \
-	src/target/aarch64/block_emit.c \
-	src/target/aarch64/residual_emit.c \
-	src/target/aarch64/scalar_normalize.c \
-	src/target/aarch64/memory_emit.c \
-	src/target/aarch64/call_emit.c \
-	src/target/aarch64/integer_emit.c \
-	src/target/aarch64/fp_emit.c \
-	src/target/aarch64/asm_legalize.c \
+	src/target/aarch64/frame_emit.c \
+	src/target/aarch64/neon_emit.c \
+	src/target/aarch64/asm_contract.c \
+	src/target/aarch64/asm_contract_source.c \
 	src/target/loongarch64/codegen.c \
-	src/target/loongarch64/block_emit.c \
-	src/target/loongarch64/residual_emit.c \
-	src/target/loongarch64/scalar_normalize.c \
-	src/target/loongarch64/memory_emit.c \
-	src/target/loongarch64/call_emit.c \
-	src/target/loongarch64/integer_emit.c \
-	src/target/loongarch64/fp_emit.c \
-	src/target/loongarch64/frame_emit.c \
+	src/target/loongarch64/machine_opcode.c \
+	src/target/loongarch64/machine_gnu_asm.c \
+	src/target/loongarch64/machine_asm_form.c \
+	src/target/loongarch64/machine_select.c \
+	src/target/loongarch64/machine_builtin_select.c \
+	src/target/loongarch64/machine_llsc_select.c \
+	src/target/loongarch64/machine_llsc_extended_select.c \
+	src/target/loongarch64/machine_pte_select.c \
+	src/target/loongarch64/machine_csr_source_select.c \
+	src/target/loongarch64/machine_scalar_source_select.c \
+	src/target/loongarch64/machine_uaccess_select.c \
+	src/target/loongarch64/machine_source_asm.c \
+	src/target/loongarch64/asm_contract_source.c \
+	src/target/loongarch64/simd_asm.c \
+	src/target/loongarch64/simd_source_policy.c \
 	tools/minic-cc/main.c
 MINIC_OBJECTS := $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(MINIC_SOURCES))
 MINIC_CC_BINARY := $(BUILD_DIR)/bin/minic-cc
-MINIC_DRIVER_OBJECTS := $(BUILD_DIR)/obj/tools/minic/main.o \
-	$(BUILD_DIR)/obj/src/target/target_catalog.o
+FUNCTION_DIAGNOSTIC_TEST_OBJECT := $(BUILD_DIR)/obj/tests/frontend/function_diagnostic_attribute_test.o
+FUNCTION_DIAGNOSTIC_TEST_BINARY := $(BUILD_DIR)/tests/frontend/function-diagnostic-attribute-test
+BACKEND_MODULE_ARENA_TEST_OBJECT := $(BUILD_DIR)/obj/tests/target/backend_module_arena_test.o
+BACKEND_MODULE_ARENA_TEST_BINARY := $(BUILD_DIR)/tests/target/backend-module-arena-test
+DIRECT_LP64_ASM_UNIT_BINARY := $(BUILD_DIR)/tests/compiler/c0/direct-lp64-asm-preflight-unit
+MINIC_DRIVER_SOURCES := \
+	src/target/target_catalog.c \
+	src/target/driver_stage_recipe.c \
+	src/target/riscv64/driver_stage_recipe.c \
+	tools/minic/driver_cli.c \
+	tools/minic/driver_pipeline.c \
+	tools/minic/main.c
+MINIC_DRIVER_OBJECTS := $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(MINIC_DRIVER_SOURCES))
 # The compiler boundary stays in minic-cc. minic is the user-facing staged
 # driver and preserves the historical -S preprocessed-input compatibility path.
 MINIC_BINARY  := $(BUILD_DIR)/bin/minic
@@ -337,6 +391,13 @@ RECORD_TEST_SOURCES := \
 RECORD_TEST_OBJECTS := $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(RECORD_TEST_SOURCES))
 RECORD_TEST_BINARY  := $(BUILD_DIR)/tests/frontend/record-test
 
+SEMANTIC_SNAPSHOT_TEST_SOURCES := \
+	src/frontend/ast.c \
+	src/frontend/type.c \
+	tests/frontend/semantic_snapshot_test.c
+SEMANTIC_SNAPSHOT_TEST_OBJECTS := $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(SEMANTIC_SNAPSHOT_TEST_SOURCES))
+SEMANTIC_SNAPSHOT_TEST_BINARY := $(BUILD_DIR)/tests/frontend/semantic-snapshot-test
+
 TYPE_ALIAS_TEST_SOURCES := \
 	src/frontend/ast.c \
 	src/frontend/type.c \
@@ -347,6 +408,7 @@ TYPE_ALIAS_TEST_BINARY  := $(BUILD_DIR)/tests/frontend/type-alias-test
 AST_CONTRACT_TEST_SOURCES := \
 	src/frontend/ast.c \
 	src/frontend/expression_semantics.c \
+	src/frontend/const_eval.c \
 	src/frontend/ast_global.c \
 	src/frontend/ast_traversal.c \
 	src/frontend/ast_verifier.c \
@@ -355,6 +417,8 @@ AST_CONTRACT_TEST_SOURCES := \
 	src/target/data_layout.c \
 	src/target/target_info.c \
 	src/target/target_catalog.c \
+	$(TARGET_SOURCE_POLICY_SOURCES) \
+	$(TARGET_MACHINE_REGISTER_SOURCES) \
 	tests/frontend/ast_contract_test.c
 AST_CONTRACT_TEST_OBJECTS := $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(AST_CONTRACT_TEST_SOURCES))
 AST_CONTRACT_TEST_BINARY  := $(BUILD_DIR)/tests/frontend/ast-contract-test
@@ -365,15 +429,15 @@ LAYOUT_TEST_SOURCES := \
 	src/target/data_layout.c \
 	src/target/target_info.c \
 	src/target/target_catalog.c \
+	$(TARGET_SOURCE_POLICY_SOURCES) \
+	$(TARGET_MACHINE_REGISTER_SOURCES) \
 	tests/target/riscv64/layout_test.c
 LAYOUT_TEST_OBJECTS := $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(LAYOUT_TEST_SOURCES))
 LAYOUT_TEST_BINARY  := $(BUILD_DIR)/tests/target/riscv64/layout-test
 
 RV64_ABI_TEST_SOURCES := \
-	src/frontend/ast.c \
-	src/frontend/ast_global.c \
-	src/frontend/type.c \
-	src/target/data_layout.c \
+	src/core/core_type.c \
+	src/target/common/aggregate_shape.c \
 	src/target/riscv64/abi.c \
 	src/target/riscv64/function_abi_plan.c \
 	tests/target/riscv64/abi_test.c
@@ -381,7 +445,7 @@ RV64_ABI_TEST_OBJECTS := $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(RV64_ABI_TEST_SOU
 RV64_ABI_TEST_BINARY  := $(BUILD_DIR)/tests/target/riscv64/abi-test
 
 .PHONY: runtime-fourarch runtime-fourarch-reference runtime-rv64i check-rv64i-runtime-archive all help prepare check check-fast check-four-backend-lua-frontier check-four-backend-lua-accept check-four-backend-zlib-frontier check-four-backend-zlib-accept check-target-selection-m0 check-four-backend-m39-lp64-bitops check-four-backend-m15-scalar-return check-four-backend-m14-shift check-four-backend-m13-narrow-arith check-four-backend-m12-bitwise check-four-backend-m11-index check-four-backend-m10-mod check-four-backend-m9-unsigned check-four-backend-m8-narrow check-four-backend-m7-frame check-four-backend-m6-address check-four-backend-m5-pointer check-four-backend-m4-global check-four-backend-m38-fp-varargs check-four-backend-m37-fp-arith check-four-backend-m36-lp64-mul check-four-backend-m35-ptr-to-lp64 check-four-backend-m34-fp-call-result check-four-backend-m33-pointer-less check-four-backend-m32-unreachable check-four-backend-m31-float-promote check-four-backend-m30-fp-call check-four-backend-m29-double-cmp check-four-backend-m28-int-double check-four-backend-m27-fp-parameter check-four-backend-m26-double-div check-four-backend-m25-double-transport check-four-backend-m24-indirect-call check-four-backend-m23-lp64-compare check-four-backend-m22-lp64-conv check-four-backend-m21-lp64-add check-four-backend-m20-lp64-abi check-four-backend-m19-ptr-compare check-four-backend-m18-varargs check-four-backend-m17-record check-four-backend-cjson-accept check-four-backend-cjson-frontier check-four-backend-tinyaes-accept check-four-backend-tinyaes-frontier check-four-backend-m3-call check-four-backend-m2-stack check-four-backend-m2 check-four-backend-m1 check-four-target-model-m0 check-x86_64-busybox-all-eligible check-x86_64-busybox-complex-five check-x86_64-busybox-host-link check-elf-constructors check-x86_64-one-gp-sysv check-x86_64-busybox-allyes-discovery check-x86_64-busybox-12 check-x86_64-sqlite-frontier check-x86_64-m1 check-x86_64-tinyaes check-x86_64-cjson check-x86_64-abi-elf check-x86_64-lua-frontier check-x86_64-zlib-frontier check-minias-a0 check-minipp-a0 check-minielf-reader-a0 check-mininm-a0 check-mininm-a1 check-miniobjcopy-a0 check-miniobjcopy-a1 check-minicstrip-a0 check-miniar-a0 check-miniar-a1 check-minild-a0 check-minild-a1 check-minild-a2 check-minild-a3 check-minild-a4 check-minild-a5 check-minild-a6 check-minild-script-a0 check-minild-script-a1 check-token-model check-lexer \
-	check-type check-record check-type-alias check-ast-contract check-layout check-rv64-abi \
+	check-type check-record check-semantic-snapshot check-type-alias check-ast-contract check-layout check-rv64-abi \
 	check-static-functions \
 	check-unsigned-declarations check-long-types check-for-loops check-unbounded-for-break \
 	check-prefix-decrement-update check-cast-expressions \
@@ -419,6 +483,7 @@ help:
 		"  make check-minild-script-a0 Parse the Linux linker-script subset" \
 		"  make check-minild-script-a1 Validate script-directed ET_EXEC symbol semantics" \
 		"  make check-fast         Run the fast frontend and C0 gates" \
+		"  make check-rv32-wide-branch-condition Compare RV32 64-bit branch truth under GNU/MiniC QEMU" \
 		"  make check-token-model  Run the token data-model unit gate" \
 		"  make check-lexer        Run the C0 lexer unit gate" \
 		"  make check-type         Run the frontend type-value unit gate" \
@@ -514,7 +579,198 @@ $(MINIC_CC_BINARY): $(MINIC_OBJECTS)
 	@mkdir -p "$(dir $@)"
 	$(CC) $(MINIC_OBJECTS) $(MINIC_LDFLAGS) -o "$@"
 
-$(MINIC_BINARY): $(MINIC_DRIVER_OBJECTS)
+$(FUNCTION_DIAGNOSTIC_TEST_BINARY): $(filter-out $(BUILD_DIR)/obj/tools/minic-cc/main.o,$(MINIC_OBJECTS)) $(FUNCTION_DIAGNOSTIC_TEST_OBJECT)
+	@mkdir -p "$(dir $@)"
+	$(CC) $^ $(MINIC_LDFLAGS) -o "$@"
+
+$(BACKEND_MODULE_ARENA_TEST_BINARY): $(filter-out $(BUILD_DIR)/obj/tools/minic-cc/main.o,$(MINIC_OBJECTS)) $(BACKEND_MODULE_ARENA_TEST_OBJECT)
+	@mkdir -p "$(dir $@)"
+	$(CC) $^ $(MINIC_LDFLAGS) -o "$@"
+
+.PHONY: check-backend-module-arena
+check-backend-module-arena: $(BACKEND_MODULE_ARENA_TEST_BINARY)
+	"$(BACKEND_MODULE_ARENA_TEST_BINARY)"
+
+check-fast: check-backend-module-arena
+
+.PHONY: check-function-diagnostic-attribute
+check-function-diagnostic-attribute: $(FUNCTION_DIAGNOSTIC_TEST_BINARY)
+	"$(FUNCTION_DIAGNOSTIC_TEST_BINARY)"
+
+.PHONY: check-gnu-constant-bitfield-helper-cfg
+check-gnu-constant-bitfield-helper-cfg: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+		sh tests/compiler/c0/probe-gnu-constant-bitfield-helper-cfg.sh
+
+.PHONY: check-gnu-linux-kmalloc-index-bool-guard
+check-gnu-linux-kmalloc-index-bool-guard: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+		sh tests/compiler/c0/probe-gnu-linux-kmalloc-index-bool-guard.sh
+
+.PHONY: check-gnu-linux-kbuild-disjoint-bitmask-assert
+check-gnu-linux-kbuild-disjoint-bitmask-assert: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" BUILD_DIR="$(abspath $(BUILD_DIR))" \
+		sh tests/compiler/c0/probe-gnu-linux-kbuild-disjoint-bitmask-assert.sh
+
+.PHONY: check-gnu-linux-memory-encode-page-boolean-range
+check-gnu-linux-memory-encode-page-boolean-range: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" \
+		sh tests/compiler/c0/probe-gnu-linux-memory-encode-page-boolean-range.sh
+
+.PHONY: check-core-cfg-effectful-boolean-fact-barrier
+check-core-cfg-effectful-boolean-fact-barrier: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+		sh tests/compiler/c0/probe-core-cfg-effectful-boolean-fact-barrier.sh
+
+check-fast: check-core-cfg-effectful-boolean-fact-barrier
+
+check-fast: check-gnu-linux-memory-encode-page-boolean-range
+
+.PHONY: check-gnu-linux-nvme-prp-guard
+check-gnu-linux-nvme-prp-guard: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+		sh tests/compiler/c0/probe-gnu-linux-nvme-prp-guard.sh
+
+.PHONY: check-gnu-linux-i915-irq-known-zero
+check-gnu-linux-i915-irq-known-zero: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+		sh tests/compiler/c0/probe-gnu-linux-i915-irq-known-zero.sh
+
+.PHONY: check-gnu-linux-bpf-union-zero
+check-gnu-linux-bpf-union-zero: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+		sh tests/compiler/c0/probe-gnu-linux-bpf-union-zero.sh
+
+.PHONY: check-gnu-linux-task-mmu-swp-pfn-guard
+check-gnu-linux-task-mmu-swp-pfn-guard: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+		sh tests/compiler/c0/probe-gnu-linux-task-mmu-swp-pfn-guard.sh
+
+.PHONY: check-gnu-linux-kaslr-addr-range-guard
+check-gnu-linux-kaslr-addr-range-guard: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+		sh tests/compiler/c0/probe-gnu-linux-kaslr-addr-range-guard.sh
+
+.PHONY: check-gnu-linux-nf-conntrack-size
+check-gnu-linux-nf-conntrack-size: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+		sh tests/compiler/c0/probe-gnu-linux-nf-conntrack-size.sh
+
+.PHONY: check-gnu-linux-ioremap-inline-arg-guard
+check-gnu-linux-ioremap-inline-arg-guard: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+		sh tests/compiler/c0/probe-gnu-linux-ioremap-inline-arg-guard.sh
+
+.PHONY: check-netlink-warn-branch
+check-netlink-warn-branch: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	BUILD_DIR="$(abspath $(BUILD_DIR))" \
+		sh tests/compiler/c0/probe-netlink-warn-branch.sh
+
+check-fast: check-gnu-linux-ioremap-inline-arg-guard check-netlink-warn-branch
+
+.PHONY: check-rv32-wide-branch-condition
+check-rv32-wide-branch-condition: $(MINIC_CC_BINARY)
+	@MINIC_CC="$(abspath $(MINIC_CC_BINARY))" bash tests/compiler/c0/run-rv32-wide-branch-condition.sh
+
+check-fast: check-rv32-wide-branch-condition
+
+# RV32 integer/memory emits only sealed ILP32 CoreType; SSA values no longer
+# carry a redundant source-C descriptor.
+.PHONY: check-rv32-coretype-scalar
+check-rv32-coretype-scalar:
+	HOST_CC="$(CC)" bash tests/target/riscv32/run-coretype-scalar.sh
+
+check-fast: check-rv32-coretype-scalar
+
+# Both RISC-V XLENs share the same Core-only object alignment proof; the
+# source-C DataLayout fallback must remain retired.
+.PHONY: check-riscv-coretype-root-alignment
+check-riscv-coretype-root-alignment:
+	HOST_CC="$(CC)" bash tests/target/riscv/run-coretype-root-alignment.sh
+
+check-fast: check-riscv-coretype-root-alignment
+
+.PHONY: check-rv32-empty-record-return
+check-rv32-empty-record-return: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	sh tests/compiler/c0/probe-rv32-empty-record-return.sh
+
+check-fast: check-rv32-empty-record-return
+
+.PHONY: check-rv32-constructor-init-array
+check-rv32-constructor-init-array: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" \
+	bash tests/compiler/c0/run-rv32-constructor-init-array.sh
+
+check-fast: check-rv32-constructor-init-array
+
+.PHONY: check-direct-lp64-asm-capacity
+check-direct-lp64-asm-capacity: $(MINIC_CC_BINARY)
+	@MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+		bash tests/compiler/c0/probe-direct-lp64-asm-capacity.sh
+
+check-fast: check-direct-lp64-asm-capacity
+
+.PHONY: check-riscv-source-asm-saved-operands
+check-riscv-source-asm-saved-operands: $(MINIC_CC_BINARY)
+	@MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+		sh tests/compiler/c0/run-riscv-source-asm-saved-operands.sh
+
+check-fast: check-riscv-source-asm-saved-operands
+
+.PHONY: check-riscv-mixed-checked-overflow
+check-riscv-mixed-checked-overflow: $(MINIC_CC_BINARY)
+	@MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+		sh tests/compiler/c0/run-riscv-mixed-checked-overflow.sh
+
+check-fast: check-riscv-mixed-checked-overflow
+
+# RV64I keeps its established libgcc helper ABI. The original Linux kernel
+# needs a strictly I-only upstream runtime archive at KBUILD_VMLINUX_LIBS;
+# the fast check proves the compiler-side contract without cross-tool installs.
+.PHONY: check-rv64i-linux-softarith-source check-rv64i-linux-softarith-runtime
+check-rv64i-linux-softarith-source: $(MINIC_CC_BINARY)
+	@MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+		MINIC_RV64_SOFTARITH_SOURCE_ONLY=1 \
+		bash tests/compiler/c0/run-rv64i-linux-softarith-runtime.sh
+
+check-rv64i-linux-softarith-runtime: $(MINIC_CC_BINARY)
+	@MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+		bash tests/compiler/c0/run-rv64i-linux-softarith-runtime.sh
+
+check-fast: check-rv64i-linux-softarith-source
+
+# Linux BUILD_BUG_ON / READ_ONCE constant guards must not leak undefined
+# __compiletime_assert_* references into the original GNU Kbuild linker.
+.PHONY: check-riscv-linux-compiletime-assert-guards
+check-riscv-linux-compiletime-assert-guards: $(MINIC_CC_BINARY)
+	@MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+		sh tests/compiler/c0/run-riscv-linux-compiletime-assert-guards.sh
+
+check-fast: check-riscv-linux-compiletime-assert-guards
+
+$(DIRECT_LP64_ASM_UNIT_BINARY): tests/compiler/c0/direct_lp64_asm_preflight_unit.c \
+		src/core/core_type.c src/target/common/lp64_scalar.c \
+		$(BUILD_DIR)/obj/src/frontend/type.o
+	@mkdir -p "$(dir $@)"
+	$(CC) $(CPPFLAGS) $(MINIC_INCLUDES) $(MINIC_CFLAGS) \
+		-ffunction-sections -fdata-sections "$<" \
+		src/core/core_type.c src/target/common/lp64_scalar.c \
+		"$(BUILD_DIR)/obj/src/frontend/type.o" $(MINIC_LDFLAGS) \
+		-Wl,--gc-sections -o "$@"
+
+.PHONY: check-direct-lp64-asm-preflight-unit
+check-direct-lp64-asm-preflight-unit: $(DIRECT_LP64_ASM_UNIT_BINARY)
+	"$(DIRECT_LP64_ASM_UNIT_BINARY)"
+
+check-fast: check-direct-lp64-asm-preflight-unit
+
+# The staged driver invokes the sibling minic-cc at runtime. An order-only
+# prerequisite prevents parallel `make -j check-fast` from launching it while
+# the compiler binary is still being relinked, without relinking the driver
+# for every compiler implementation change.
+$(MINIC_BINARY): $(MINIC_DRIVER_OBJECTS) | $(MINIC_CC_BINARY)
 	@mkdir -p "$(dir $@)"
 	$(CC) $(MINIC_DRIVER_OBJECTS) $(MINIC_LDFLAGS) -o "$@"
 
@@ -707,6 +963,10 @@ $(RECORD_TEST_BINARY): $(RECORD_TEST_OBJECTS)
 	@mkdir -p "$(dir $@)"
 	$(CC) $(RECORD_TEST_OBJECTS) $(MINIC_LDFLAGS) -o "$@"
 
+$(SEMANTIC_SNAPSHOT_TEST_BINARY): $(SEMANTIC_SNAPSHOT_TEST_OBJECTS)
+	@mkdir -p "$(dir $@)"
+	$(CC) $(SEMANTIC_SNAPSHOT_TEST_OBJECTS) $(MINIC_LDFLAGS) -o "$@"
+
 $(TYPE_ALIAS_TEST_BINARY): $(TYPE_ALIAS_TEST_OBJECTS)
 	@mkdir -p "$(dir $@)"
 	$(CC) $(TYPE_ALIAS_TEST_OBJECTS) $(MINIC_LDFLAGS) -o "$@"
@@ -729,11 +989,95 @@ check-token-model: $(TOKEN_MODEL_TEST_BINARY)
 check-lexer: $(LEXER_TEST_BINARY)
 	"$(abspath $(LEXER_TEST_BINARY))"
 
+.PHONY: check-binary128-literal-oracle
+check-binary128-literal-oracle:
+	@mkdir -p "$(BUILD_DIR)/tests/frontend"
+	$(CC) $(CPPFLAGS) $(MINIC_INCLUDES) $(MINIC_CFLAGS) \
+		src/frontend/binary128_literal.c tests/frontend/binary128_literal_oracle_test.c \
+		$(MINIC_LDFLAGS) -o "$(BUILD_DIR)/tests/frontend/binary128_literal_oracle_test"
+	"$(abspath $(BUILD_DIR))/tests/frontend/binary128_literal_oracle_test"
+
+.PHONY: check-core-language-boundary
+check-core-language-boundary:
+	bash tests/core/check-core-language-boundary.sh "$(CC)"
+
+.PHONY: check-target-abstraction-boundary
+check-target-abstraction-boundary:
+	bash tests/core/check-target-abstraction-boundary.sh "$(CC)"
+
+# check-core-types already executes the Core language boundary script.
+check-fast: check-target-abstraction-boundary
+
+.PHONY: check-core-types
+check-core-types:
+	bash tests/core/run-core-types.sh "$(CC)"
+
+.PHONY: check-core-ir-shapes
+check-core-ir-shapes: check-core-types
+	bash tests/core/run-core-ir-shapes.sh "$(CC)"
+
+.PHONY: check-core-ir-shapes-source
+check-core-ir-shapes-source: $(MINIC_CC_BINARY)
+	bash tests/core/run-core-ir-shapes-source.sh "$(abspath $(MINIC_CC_BINARY))"
+
+.PHONY: check-core-type-verifier
+check-core-type-verifier:
+	bash tests/core/run-core-type-verifier.sh "$(CC)"
+
+# Keep the CoreType vector extent/ABI contract independently testable: no
+# target ISA, frontend snapshot, cross compiler or Linux image is required.
+.PHONY: check-core-vector-layout-contract
+check-core-vector-layout-contract:
+	@mkdir -p "$(BUILD_DIR)/tests"
+	$(CC) -std=c11 -Wall -Wextra -Wpedantic -Werror $(MINIC_INCLUDES) \
+	  src/core/core_type.c \
+	  tests/compiler/c0/probe-core-vector-layout-contract.c \
+	  -o "$(BUILD_DIR)/tests/core-vector-layout-contract"
+	"$(BUILD_DIR)/tests/core-vector-layout-contract"
+
+check-fast: check-core-vector-layout-contract
+
+# Source-free seal for complete record field bounds, bitfields and flexible
+# array tails, independently of any target ABI or cross-toolchain.
+.PHONY: check-core-record-layout-contract
+check-core-record-layout-contract:
+	@mkdir -p "$(BUILD_DIR)/tests"
+	$(CC) -std=c11 -Wall -Wextra -Wpedantic -Werror $(MINIC_INCLUDES) \
+	  src/core/core_type.c \
+	  tests/compiler/c0/probe-core-record-layout-contract.c \
+	  -o "$(BUILD_DIR)/tests/core-record-layout-contract"
+	"$(BUILD_DIR)/tests/core-record-layout-contract"
+
+# No physical memory action for empty GNU records. GNU and MiniC must both
+# execute the pointer-producing expressions, on a real native ELF.
+.PHONY: check-zero-record-five-targets
+check-zero-record-five-targets: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" \
+	BUILD_DIR="$(abspath $(BUILD_DIR))" \
+	sh tests/compiler/c0/probe-zero-record-five-targets.sh
+
+check-fast: check-core-record-layout-contract check-zero-record-five-targets
+
+RV64_CORETYPE_TARGET_ADMISSION_BINARY := $(BUILD_DIR)/tests/target/riscv64/coretype-target-admission
+$(RV64_CORETYPE_TARGET_ADMISSION_BINARY): tests/target/riscv64/coretype_target_admission_test.c $(MINIC_OBJECTS)
+	@mkdir -p "$(dir $@)"
+	$(CC) $(CPPFLAGS) $(MINIC_INCLUDES) $(MINIC_CFLAGS) \
+		tests/target/riscv64/coretype_target_admission_test.c \
+		$(filter-out $(BUILD_DIR)/obj/tools/minic-cc/main.o,$(MINIC_OBJECTS)) \
+		$(MINIC_LDFLAGS) -o "$@"
+
+.PHONY: check-rv64-coretype-target-admission
+check-rv64-coretype-target-admission: $(RV64_CORETYPE_TARGET_ADMISSION_BINARY)
+	sh tests/target/riscv64/probe-coretype-target-admission.sh "$(abspath $(RV64_CORETYPE_TARGET_ADMISSION_BINARY))"
+
 check-type: $(TYPE_TEST_BINARY)
 	"$(abspath $(TYPE_TEST_BINARY))"
 
 check-record: $(RECORD_TEST_BINARY)
 	"$(abspath $(RECORD_TEST_BINARY))"
+
+check-semantic-snapshot: $(SEMANTIC_SNAPSHOT_TEST_BINARY)
+	"$(abspath $(SEMANTIC_SNAPSHOT_TEST_BINARY))"
 
 check-type-alias: $(TYPE_ALIAS_TEST_BINARY)
 	"$(abspath $(TYPE_ALIAS_TEST_BINARY))"
@@ -1151,6 +1495,13 @@ check-x86_64-one-gp-sysv: $(MINIC_CC_BINARY)
 	HOST_CC="$(CC)" \
 	sh tests/compiler/c0/run-x86_64-one-gp-sysv.sh
 
+.PHONY: check-x86_64-sysv-odd-record-abi
+check-x86_64-sysv-odd-record-abi: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	bash tests/compiler/c0/probe-x86-sysv-odd-record-abi.sh
+
+check-fast: check-x86_64-sysv-odd-record-abi
+
 check-x86_64-m1: $(MINIC_CC_BINARY)
 	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" \
 	HOST_CC="$(CC)" \
@@ -1281,11 +1632,699 @@ check-x86_64-busybox-allyes-discovery: $(MINIC_CC_BINARY)
 	  BUSYBOX_ALLYES_REPORT_DIR="$(abspath $(BUILD_DIR))/busybox-allyes-sweep" \
 	  sh tests/external/busybox/probe-x86_64.sh
 
-check-fast: check-target-selection-m0 check-x86_64-m1 check-token-model check-lexer check-type check-record check-type-alias check-ast-contract check-layout check-rv64-abi check-static-functions check-unsigned-declarations check-long-types check-for-loops check-unbounded-for-break check-prefix-decrement-update check-cast-expressions check-unsigned-char-layout check-pointer-subscripts check-pointer-arithmetic check-pointer-object-const check-const-locals check-global-objects check-bitwise-xor check-integer-bit-operations check-pointer-members check-expression-statements check-postfix-subscripts check-compound-xor-assignment $(MINIC_BINARY)
+.PHONY: check-x86-linux-control-state
+check-x86-linux-control-state: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	sh tests/target/run-linux-x86-control-state.sh
+
+.PHONY: check-x86-linux-fpu-probe
+check-x86-linux-fpu-probe: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	sh tests/target/run-linux-x86-fpu-probe.sh
+
+.PHONY: check-x86-linux-boot-string
+check-x86-linux-boot-string: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	sh tests/target/run-linux-x86-boot-string.sh
+
+.PHONY: check-x86-linux-control-register
+check-x86-linux-control-register: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	sh tests/target/run-linux-x86-control-register.sh
+
+.PHONY: check-x86-linux-debug-boot
+check-x86-linux-debug-boot: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	sh tests/target/run-linux-x86-debug-boot.sh
+
+.PHONY: check-x86-linux-task-vdso
+check-x86-linux-task-vdso: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	sh tests/target/run-linux-x86-task-vdso.sh
+
+.PHONY: check-x86-linux-bug-table-variants
+check-x86-linux-bug-table-variants: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	sh tests/target/run-linux-x86-bug-table-variants.sh
+
+.PHONY: check-x86-linux-boot-flags
+check-x86-linux-boot-flags: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	sh tests/target/run-linux-x86-boot-flags.sh
+
+.PHONY: check-x86-linux-cache-privileged
+check-x86-linux-cache-privileged: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	sh tests/target/run-linux-x86-cache-privileged.sh
+
+.PHONY: check-x86-linux-paravirt-indirect-call
+check-x86-linux-paravirt-indirect-call: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	sh tests/target/run-linux-x86-paravirt-indirect-call.sh
+
+.PHONY: check-x86-linux-three-call-alternative
+check-x86-linux-three-call-alternative: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	sh tests/target/run-linux-x86-three-call-alternative.sh
+
+.PHONY: check-aarch64-neon-register-vector-abi
+check-aarch64-neon-register-vector-abi: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	sh tests/compiler/c0/run-aarch64-neon-register-vector-abi.sh
+
+check-fast: check-x86-linux-fpu-probe check-x86-linux-boot-string \
+	check-x86-linux-control-register check-x86-linux-bug-table-variants \
+	check-x86-linux-debug-boot check-x86-linux-task-vdso \
+	check-x86-linux-boot-flags check-x86-linux-cache-privileged \
+	check-x86-linux-paravirt-indirect-call \
+	check-x86-linux-three-call-alternative \
+	check-aarch64-neon-register-vector-abi
+
+.PHONY: check-linux-three-arch-trap-state
+check-linux-three-arch-trap-state: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	sh tests/target/run-linux-three-arch-trap-state.sh
+
+.PHONY: check-x86-linux-uaccess-and-abi
+check-x86-linux-uaccess-and-abi: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	sh tests/target/run-linux-x86-uaccess-and-abi.sh
+
+.PHONY: check-linux-symbolic-integer-and-record
+check-linux-symbolic-integer-and-record: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	sh tests/target/run-linux-symbolic-integer-and-record.sh
+
+.PHONY: check-packed-bitfield-field-layout
+check-packed-bitfield-field-layout: $(MINIC_CC_BINARY)
+	bash tests/compiler/c0/run-packed-bitfield-field-layout.sh "$(abspath $(MINIC_CC_BINARY))"
+
+.PHONY: check-packed-zero-width-bitfield-barrier
+check-packed-zero-width-bitfield-barrier: $(MINIC_CC_BINARY)
+	bash tests/compiler/c0/run-packed-zero-width-bitfield-barrier.sh "$(abspath $(MINIC_CC_BINARY))"
+
+.PHONY: check-long-double-literal-precision
+check-long-double-literal-precision: $(MINIC_CC_BINARY)
+	bash tests/compiler/c0/run-long-double-literal-precision.sh "$(abspath $(MINIC_CC_BINARY))"
+
+.PHONY: check-asm-operand-plan
+check-asm-operand-plan: $(MINIC_CC_BINARY)
+	bash tests/core/run-asm-operand-plan.sh "$(abspath $(MINIC_CC_BINARY))"
+
+.PHONY: check-riscv-extended-zero-output-volatile
+check-riscv-extended-zero-output-volatile: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	sh tests/compiler/c0/run-riscv-extended-zero-output-volatile.sh
+
+check-fast: check-riscv-extended-zero-output-volatile
+
+.PHONY: check-loongarch64-record-copy-size
+check-loongarch64-record-copy-size: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" \
+	bash tests/compiler/c0/probe-loongarch64-record-copy-size.sh
+
+.PHONY: check-loongarch64-frame-fold
+check-loongarch64-frame-fold: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	bash tests/compiler/c0/probe-loongarch64-frame-fold.sh
+
+.PHONY: check-core-value-use-counts
+check-core-value-use-counts:
+	bash tests/compiler/c0/probe-core-value-use-counts.sh
+
+.PHONY: check-core-call-dump
+check-core-call-dump:
+	HOST_CC="$(CC)" bash tests/compiler/c0/probe-core-call-dump.sh
+
+.PHONY: check-mc089-x87-ordered-comparisons
+check-mc089-x87-ordered-comparisons: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	sh tests/compiler/c0/probe-mc089-x87-ordered-comparisons.sh
+
+check-fast: check-mc089-x87-ordered-comparisons
+
+check-fast: check-core-call-dump
+
+.PHONY: check-core-dead-ssa-writeback
+check-core-dead-ssa-writeback: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	bash tests/compiler/c0/probe-core-dead-ssa-writeback.sh
+
+.PHONY: check-core-gp-forward
+check-core-gp-forward: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	bash tests/compiler/c0/probe-core-gp-forward.sh
+
+.PHONY: check-core-literal-branch-guard
+check-core-literal-branch-guard: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" \
+	bash tests/compiler/c0/probe-core-literal-branch-guard.sh
+
+.PHONY: check-core-literal-branch-fold
+check-core-literal-branch-fold:
+	bash tests/compiler/c0/probe-core-literal-branch-fold.sh
+
+.PHONY: check-core-function-designator-nonnull
+check-core-function-designator-nonnull: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" \
+	bash tests/compiler/c0/probe-core-function-designator-nonnull.sh
+
+check-fast: check-loongarch64-record-copy-size check-loongarch64-frame-fold check-core-value-use-counts check-core-dead-ssa-writeback check-core-gp-forward check-core-literal-branch-guard check-core-literal-branch-fold check-core-function-designator-nonnull
+
+.PHONY: check-gnu-builtin-constant-p-if-guard
+check-gnu-builtin-constant-p-if-guard: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	sh tests/compiler/c0/run-gnu-builtin-constant-p-if-guard.sh
+
+.PHONY: check-gnu-runtime-if-effect-facts
+check-gnu-runtime-if-effect-facts: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	sh tests/compiler/c0/run-gnu-runtime-if-effect-facts.sh
+
+.PHONY: check-gnu-if-condition-local-owner
+check-gnu-if-condition-local-owner: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	sh tests/compiler/c0/run-gnu-if-condition-local-owner.sh
+
+.PHONY: check-elf-hidden-undefined-pic-source
+check-elf-hidden-undefined-pic-source: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" MINIC_SOURCE_ONLY=1 \
+	sh tests/compiler/c0/probe-elf-hidden-undefined-pic.sh
+
+.PHONY: check-x86-pic-hidden-undefined-weak
+check-x86-pic-hidden-undefined-weak: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	sh tests/compiler/c0/probe-x86-pic-hidden-undefined-weak.sh
+
+check-fast: check-x86-pic-hidden-undefined-weak
+
+.PHONY: check-x86-vdso-hidden-unused
+check-x86-vdso-hidden-unused: $(MINIC_CC_BINARY)
+	HOST_CC="$(CC)" sh tests/compiler/c0/probe-x86-vdso-hidden-unused.sh \
+		"$(abspath $(MINIC_CC_BINARY))"
+
+.PHONY: check-x86-reachable-gnu-runtime
+check-x86-reachable-gnu-runtime: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	sh tests/compiler/c0/probe-x86-reachable-gnu-runtime.sh
+
+.PHONY: check-x86-kernel-head-link-address
+check-x86-kernel-head-link-address: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	bash tests/compiler/c0/probe-x86-kernel-head-link-address.sh
+
+check-fast: check-x86-kernel-head-link-address
+
+.PHONY: check-core-indirect-local-fact-escape
+check-core-indirect-local-fact-escape: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	bash tests/compiler/c0/probe-core-indirect-local-fact-escape.sh
+
+check-fast: check-core-indirect-local-fact-escape
+
+.PHONY: check-external-char-array-redeclaration
+check-external-char-array-redeclaration: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	bash tests/compiler/c0/probe-external-char-array-redeclaration.sh
+
+check-fast: check-external-char-array-redeclaration
+
+.PHONY: check-tagged-bare-record-members
+check-tagged-bare-record-members: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	bash tests/compiler/c0/probe-tagged-bare-record-members.sh
+
+check-fast: check-tagged-bare-record-members
+
+.PHONY: check-anonymous-qualified-record-members
+check-anonymous-qualified-record-members: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	bash tests/compiler/c0/probe-anonymous-qualified-record-members.sh
+
+check-fast: check-anonymous-qualified-record-members
+
+.PHONY: check-incomplete-enum-coretype
+check-incomplete-enum-coretype: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" bash tests/compiler/c0/probe-incomplete-enum-coretype.sh
+
+check-fast: check-incomplete-enum-coretype
+
+.PHONY: check-core-late-live-closure
+check-core-late-live-closure: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+		bash tests/compiler/c0/probe-core-late-live-closure.sh
+
+check-fast: check-core-late-live-closure
+
+.PHONY: check-x86-linux-smp-xadd-i64
+check-x86-linux-smp-xadd-i64: $(MINIC_CC_BINARY)
+	bash tests/compiler/c0/probe-x86-linux-abi-carry-xadd.sh "$(abspath $(MINIC_CC_BINARY))"
+
+check-fast: check-x86-linux-smp-xadd-i64
+
+.PHONY: check-x86-linux-percpu-xadd-enum
+check-x86-linux-percpu-xadd-enum: $(MINIC_CC_BINARY)
+	bash tests/compiler/c0/probe-x86-linux-percpu-xadd-enum.sh "$(abspath $(MINIC_CC_BINARY))"
+
+check-fast: check-x86-linux-percpu-xadd-enum
+
+.PHONY: check-record-field-declarator-realloc
+check-record-field-declarator-realloc: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	sh tests/compiler/c0/probe-record-field-declarator-realloc.sh
+
+check-fast: check-record-field-declarator-realloc
+
+.PHONY: check-record-field-function-pointer-realloc
+check-record-field-function-pointer-realloc: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	sh tests/compiler/c0/probe-record-field-function-pointer-realloc.sh
+
+check-fast: check-record-field-function-pointer-realloc
+
+.PHONY: check-static-chained-array-arena
+check-static-chained-array-arena: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	bash tests/compiler/c0/probe-static-chained-array-arena.sh
+
+check-fast: check-static-chained-array-arena
+
+.PHONY: check-rv32-pointer-widening-source check-rv32-pointer-widening-qemu
+check-rv32-pointer-widening-source: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	bash tests/compiler/c0/probe-rv32-pointer-widening-source.sh
+
+check-rv32-pointer-widening-qemu: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" \
+	bash tests/compiler/c0/probe-rv32-pointer-widening-qemu.sh
+
+check-fast: check-rv32-pointer-widening-source
+
+.PHONY: check-parameter-tag-scope
+check-parameter-tag-scope: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	bash tests/compiler/c0/probe-parameter-tag-scope.sh
+
+check-fast: check-parameter-tag-scope
+
+.PHONY: check-owned-call-designator-rollback
+check-owned-call-designator-rollback: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	bash tests/compiler/c0/probe-owned-call-designator-rollback.sh
+
+check-fast: check-owned-call-designator-rollback
+
+.PHONY: check-static-record-backward-arena
+check-static-record-backward-arena: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	bash tests/compiler/c0/probe-static-record-backward-arena.sh
+
+check-fast: check-static-record-backward-arena
+
+.PHONY: check-x86-head-inline-section
+check-x86-head-inline-section: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	bash tests/compiler/c0/probe-x86-head-inline-section.sh
+
+check-fast: check-x86-head-inline-section
+
+.PHONY: check-attributed-record-forward-declarations
+check-attributed-record-forward-declarations: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	bash tests/compiler/c0/probe-attributed-record-forward-declarations.sh
+
+check-fast: check-attributed-record-forward-declarations
+
+.PHONY: check-runtime-nested-array-arena-growth
+check-runtime-nested-array-arena-growth: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	sh tests/compiler/c0/probe-runtime-nested-array-arena-growth.sh
+
+.PHONY: check-runtime-record-positional-arena-growth
+check-runtime-record-positional-arena-growth: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	sh tests/compiler/c0/probe-runtime-record-positional-arena-growth.sh
+
+check-fast: check-runtime-nested-array-arena-growth check-runtime-record-positional-arena-growth
+
+.PHONY: check-mc035-runtime-range-once-arena
+check-mc035-runtime-range-once-arena: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	sh tests/compiler/c0/probe-mc035-runtime-range-once-arena.sh
+
+check-fast: check-mc035-runtime-range-once-arena
+
+.PHONY: check-runtime-record-tagged-arena-growth
+check-runtime-record-tagged-arena-growth: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	sh tests/compiler/c0/probe-runtime-record-tagged-arena-growth.sh
+
+check-fast: check-runtime-record-tagged-arena-growth
+
+.PHONY: check-return-assignment-expression
+check-return-assignment-expression: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	sh tests/compiler/c0/probe-return-assignment-expression.sh
+
+check-fast: check-return-assignment-expression
+
+.PHONY: check-builtin-lexeme-contract
+check-builtin-lexeme-contract: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	sh tests/compiler/c0/probe-builtin-lexeme-contract.sh
+
+check-fast: check-builtin-lexeme-contract
+
+.PHONY: check-mc001-symbolic-closure-arena
+check-mc001-symbolic-closure-arena: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	sh tests/compiler/c0/probe-mc001-symbolic-closure-arena.sh
+
+check-fast: check-mc001-symbolic-closure-arena
+
+.PHONY: check-mc006-shared-call-relocations
+check-mc006-shared-call-relocations: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	sh tests/compiler/c0/probe-mc006-shared-call-relocations.sh
+
+check-fast: check-mc006-shared-call-relocations
+
+.PHONY: check-mc033-statement-update-facts
+check-mc033-statement-update-facts: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	sh tests/compiler/c0/probe-mc033-statement-update-facts.sh
+
+check-fast: check-mc033-statement-update-facts
+
+.PHONY: check-mc036-record-conditional-facts
+check-mc036-record-conditional-facts: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	sh tests/compiler/c0/probe-mc036-record-conditional-facts.sh
+
+check-fast: check-mc036-record-conditional-facts
+
+.PHONY: check-mc038-anonymous-designator-runtime
+check-mc038-anonymous-designator-runtime: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	sh tests/compiler/c0/probe-mc038-anonymous-designator-runtime.sh
+
+check-fast: check-mc038-anonymous-designator-runtime
+
+.PHONY: check-alignment-attribute-semantic-arena
+check-alignment-attribute-semantic-arena: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	sh tests/compiler/c0/probe-alignment-attribute-semantic-arena.sh
+
+check-fast: check-alignment-attribute-semantic-arena
+
+.PHONY: check-mc034-static-designator-pointer-pair
+check-mc034-static-designator-pointer-pair: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	sh tests/compiler/c0/probe-mc034-static-designator-pointer-pair.sh
+
+check-fast: check-mc034-static-designator-pointer-pair
+
+.PHONY: check-x86-pat-clflushopt-alt
+check-x86-pat-clflushopt-alt: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	sh tests/compiler/c0/probe-x86-pat-clflushopt-alt.sh
+
+check-fast: check-x86-pat-clflushopt-alt
+
+.PHONY: check-static-local-owner-reachability
+check-static-local-owner-reachability: $(MINIC_CC_BINARY)
+	MINIC="$(abspath $(MINIC_CC_BINARY))" BUILD_DIR="$(abspath $(BUILD_DIR))" \
+	bash tests/compiler/c0/run-static-local-owner-reachability.sh
+
+.PHONY: check-direct-lp64-reachable-source-labels
+check-direct-lp64-reachable-source-labels: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" BUILD_DIR="$(abspath $(BUILD_DIR))" \
+	sh tests/compiler/c0/probe-direct-lp64-reachable-source-labels.sh
+
+.PHONY: check-rv64-pic-elf-nonpreemptible
+check-rv64-pic-elf-nonpreemptible: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" MINIC_PIC_ASM_ONLY=1 \
+	sh tests/compiler/c0/probe-rv64-pic-glibc-got.sh
+
+.PHONY: check-aarch64-fixmap-cross-static-const
+check-aarch64-fixmap-cross-static-const: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	sh tests/compiler/c0/probe-aarch64-fixmap-cross-static-const.sh
+
+.PHONY: check-aarch64-fp-pointer-record-abi
+check-aarch64-fp-pointer-record-abi: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	sh tests/compiler/c0/probe-aarch64-fp-pointer-record-abi.sh
+
+check-fast: check-aarch64-fp-pointer-record-abi
+
+.PHONY: check-core-overflow-enum-origin
+check-core-overflow-enum-origin: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" \
+	bash tests/compiler/c0/probe-core-overflow-enum-origin.sh
+
+check-fast: check-core-overflow-enum-origin
+
+.PHONY: check-recursive-zero-int128-global-source
+check-recursive-zero-int128-global-source: $(MINIC_CC_BINARY)
+	MINIC_RECURSIVE_INT128_SOURCE_ONLY=1 \
+	bash tests/compiler/c0/probe-recursive-zero-int128-global.sh \
+	"$(abspath $(MINIC_CC_BINARY))"
+
+check-fast: check-recursive-zero-int128-global-source
+
+.PHONY: check-core-module-rollback
+check-core-module-rollback:
+	@mkdir -p "$(BUILD_DIR)/tests/core"
+	$(CC) $(CPPFLAGS) $(MINIC_INCLUDES) $(MINIC_CFLAGS) \
+		tests/core/module_ir_rollback_test.c \
+		src/core/module_ir.c src/core/core_type.c $(MINIC_LDFLAGS) \
+		-o "$(BUILD_DIR)/tests/core/module-ir-rollback"
+	"$(abspath $(BUILD_DIR))/tests/core/module-ir-rollback"
+
+check-fast: check-core-module-rollback
+
+.PHONY: check-core-module-fragment-contract
+check-core-module-fragment-contract:
+	@mkdir -p "$(BUILD_DIR)/tests/core"
+	$(CC) $(CPPFLAGS) $(MINIC_INCLUDES) $(MINIC_CFLAGS) \
+		tests/core/module_ir_fragment_contract_test.c \
+		src/core/module_ir.c src/core/core_type.c $(MINIC_LDFLAGS) \
+		-o "$(BUILD_DIR)/tests/core/module-ir-fragment-contract"
+	"$(abspath $(BUILD_DIR))/tests/core/module-ir-fragment-contract"
+
+check-fast: check-core-module-fragment-contract
+
+.PHONY: check-inline-specialize-common
+check-inline-specialize-common:
+	@mkdir -p "$(BUILD_DIR)/tests/compiler"
+	$(CC) $(CPPFLAGS) $(MINIC_INCLUDES) $(MINIC_CFLAGS) \
+		tests/compiler/inline_specialize_common_test.c \
+		src/compiler/inline_specialize_common.c $(MINIC_LDFLAGS) \
+		-o "$(BUILD_DIR)/tests/compiler/inline-specialize-common"
+	"$(abspath $(BUILD_DIR))/tests/compiler/inline-specialize-common"
+
+check-fast: check-inline-specialize-common
+
+.PHONY: check-p43-direct-record-callsite
+check-p43-direct-record-callsite: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+		bash tests/compiler/c0/probe-p43-direct-record-callsite.sh
+
+check-fast: check-p43-direct-record-callsite
+
+.PHONY: check-p43-inline-call-plan-identity
+check-p43-inline-call-plan-identity:
+	HOST_CC="$(CC)" bash tests/compiler/c0/probe-p43-inline-call-plan-identity.sh
+
+check-fast: check-p43-inline-call-plan-identity
+
+.PHONY: check-p44-live-asm-roots
+check-p44-live-asm-roots: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+		bash tests/compiler/c0/probe-p44-live-asm-roots.sh
+
+check-fast: check-p44-live-asm-roots
+
+.PHONY: check-p44-mutating-symbolic-asm
+check-p44-mutating-symbolic-asm: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+		bash tests/compiler/c0/probe-p44-inline-asm-mutating-symbolic.sh
+
+check-fast: check-p44-mutating-symbolic-asm
+
+.PHONY: check-mc058-specialization-correctness
+check-mc058-specialization-correctness: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" \
+		HOST_CC="$(CC)" \
+		bash tests/compiler/c0/probe-mc058-specialization-correctness.sh
+
+check-fast: check-mc058-specialization-correctness
+
+# P41: verify the C type/fact boundary as a single GNU differential family.
+.PHONY: check-p41-typed-asm-and-live-facts
+check-p41-typed-asm-and-live-facts: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+		bash tests/compiler/c0/probe-p41-asm-specialized-integer-width.sh
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+		bash tests/compiler/c0/probe-p41-bounded-or-specialization.sh
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+		bash tests/compiler/c0/probe-p41-volatile-record-member.sh
+
+check-fast: check-p41-typed-asm-and-live-facts
+
+.PHONY: check-loongarch64-linux-va-fixed-overflow
+check-loongarch64-linux-va-fixed-overflow: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" \
+	bash tests/compiler/c0/probe-loongarch64-linux-va-fixed-overflow.sh
+
+check-fast: check-loongarch64-linux-va-fixed-overflow
+
+.PHONY: check-static-const-source-boundaries
+check-static-const-source-boundaries: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	sh tests/compiler/c0/probe-static-const-source-boundaries.sh
+
+.PHONY: check-x86-reachable-vma-assert
+check-x86-reachable-vma-assert: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" BUILD_DIR="$(abspath $(BUILD_DIR))" \
+	sh tests/compiler/c0/probe-x86-reachable-vma-assert.sh
+
+check-fast: check-packed-zero-width-bitfield-barrier
+check-fast: check-binary128-literal-oracle check-long-double-literal-precision
+check-fast: check-core-ir-shapes check-core-ir-shapes-source check-core-type-verifier check-rv64-coretype-target-admission
+check-fast: check-x86-reachable-vma-assert check-static-const-source-boundaries check-aarch64-fixmap-cross-static-const check-rv64-pic-elf-nonpreemptible check-elf-hidden-undefined-pic-source check-x86-vdso-hidden-unused check-x86-reachable-gnu-runtime check-gnu-if-condition-local-owner check-direct-lp64-reachable-source-labels check-static-local-owner-reachability check-gnu-runtime-if-effect-facts check-gnu-builtin-constant-p-if-guard check-asm-operand-plan check-x86-linux-control-state check-linux-three-arch-trap-state check-x86-linux-uaccess-and-abi check-linux-symbolic-integer-and-record check-packed-bitfield-field-layout check-target-selection-m0 check-x86_64-m1 check-token-model check-lexer check-type check-record check-semantic-snapshot check-type-alias check-layout check-rv64-abi check-static-functions check-unsigned-declarations check-long-types check-for-loops check-unbounded-for-break check-prefix-decrement-update check-cast-expressions check-unsigned-char-layout check-pointer-subscripts check-pointer-arithmetic check-pointer-object-const check-const-locals check-global-objects check-bitwise-xor check-integer-bit-operations check-pointer-members check-expression-statements check-postfix-subscripts check-compound-xor-assignment $(MINIC_BINARY) $(MINIAS_BINARY)
 	MINIC="$(abspath $(MINIC_BINARY))" \
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" \
 	HOST_CC="$(CC)" \
 	BUILD_DIR="$(abspath $(BUILD_DIR))" \
 	sh tests/compiler/c0/run.sh
+
+check-fast: check-function-diagnostic-attribute check-gnu-constant-bitfield-helper-cfg check-gnu-linux-kmalloc-index-bool-guard check-gnu-linux-i915-irq-known-zero check-gnu-linux-bpf-union-zero check-gnu-linux-task-mmu-swp-pfn-guard check-gnu-linux-kaslr-addr-range-guard check-gnu-linux-nf-conntrack-size check-gnu-linux-nvme-prp-guard check-linux-empty-static-stub-cfi check-gnu-linux-static-field-guard check-core-same-global-address-order check-core-compound-record-byte-layout check-core-literal-rhs-snapshot check-core-rhs-no-cfg-snapshot check-gnu-linux-zoned-constant-switch check-gnu-const-global-record check-gnu-dead-file-static-object-graph check-core-inline-statement-constant-guard check-core-field-get-contiguous-mask-guard check-aarch64-fixmap-opaque-asm-clone check-aarch64-weak-direct-call-got check-minic-linux-quick-replay check-linux-gnu-cache-verify check-loongarch64-record-chunk-native-word check-loongarch64-immediate-core-fold check-gnu-linux-kbuild-disjoint-bitmask-assert
+
+.PHONY: check-minic-linux-quick-replay
+check-minic-linux-quick-replay: $(MINIC_CC_BINARY)
+	python3 tests/compiler/c0/test-minic-linux-quick-replay.py --minic "$(abspath $(MINIC_CC_BINARY))"
+
+.PHONY: check-linux-gnu-cache-verify
+check-linux-gnu-cache-verify:
+	python3 tools/ci/test_linux_three_isa_gnu_cache_verify_v1.py
+
+.PHONY: check-loongarch64-record-chunk-native-word
+check-loongarch64-record-chunk-native-word: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	bash tests/compiler/c0/probe-loongarch64-record-chunk-native-word.sh
+
+.PHONY: check-aarch64-weak-direct-call-got
+check-aarch64-weak-direct-call-got: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	sh tests/compiler/c0/probe-aarch64-weak-direct-call-got.sh
+
+.PHONY: check-core-rhs-no-cfg-snapshot
+check-core-rhs-no-cfg-snapshot: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" BUILD_DIR="$(abspath $(BUILD_DIR))" \
+	sh tests/compiler/c0/probe-core-rhs-no-cfg-snapshot.sh
+
+.PHONY: check-core-field-get-contiguous-mask-guard
+check-core-field-get-contiguous-mask-guard: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" BUILD_DIR="$(abspath $(BUILD_DIR))" \
+	sh tests/compiler/c0/probe-core-field-get-contiguous-mask-guard.sh
+
+.PHONY: check-gnu-dead-file-static-object-graph
+check-gnu-dead-file-static-object-graph: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	sh tests/compiler/c0/probe-gnu-dead-file-static-object-graph.sh
+
+.PHONY: check-core-module-reachability-closure
+check-core-module-reachability-closure: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" CC="$(CC)" \
+	sh tests/compiler/c0/probe-core-module-reachability-closure.sh
+
+# One acceptance surface covers the complete Core+Module reachability owner,
+# including the historical GNU ASM/static-label errors and pure Core CFG.
+check-fast: check-core-module-reachability-closure
+
+.PHONY: check-core-inline-statement-constant-guard
+check-core-inline-statement-constant-guard: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" BUILD_DIR="$(abspath $(BUILD_DIR))" \
+	sh tests/compiler/c0/probe-core-inline-statement-constant-guard.sh
+
+.PHONY: check-linux-rv32-bounce-shortcircuit
+check-linux-rv32-bounce-shortcircuit: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" BUILD_DIR="$(abspath $(BUILD_DIR))" \
+	sh tests/compiler/c0/probe-linux-rv32-bounce-shortcircuit.sh
+check-fast: check-linux-rv32-bounce-shortcircuit
+
+.PHONY: check-aarch64-fixmap-opaque-asm-clone
+check-aarch64-fixmap-opaque-asm-clone: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	sh tests/compiler/c0/probe-aarch64-fixmap-opaque-asm-clone.sh
+
+.PHONY: check-aarch64-fixmap-cross-static-const-bug-asm
+check-aarch64-fixmap-cross-static-const-bug-asm: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	sh tests/compiler/c0/probe-aarch64-fixmap-cross-static-const-bug-asm.sh
+
+# Keep source-owned BUG table sections and clone behavior in the fast gate.
+check-fast: check-aarch64-fixmap-cross-static-const-bug-asm
+
+.PHONY: check-aarch64-typed-extended-float-abi
+check-aarch64-typed-extended-float-abi: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	sh tests/compiler/c0/probe-aarch64-typed-extended-float-abi.sh
+
+check-fast: check-aarch64-typed-extended-float-abi
+
+.PHONY: check-typed-extended-float-runtime
+check-typed-extended-float-runtime: $(MINIC_CC_BINARY)
+	mkdir -p "$(BUILD_DIR)/tests"
+	TMPDIR="$(abspath $(BUILD_DIR)/tests)" \
+	  bash tests/compiler/c0/probe-typed-extended-float-runtime.sh \
+	  "$(abspath $(MINIC_CC_BINARY))"
+
+# The same typed binary128 Core value and runtime ABI must reach every
+# production backend; this short probe also runs the x86 native differential.
+check-fast: check-typed-extended-float-runtime
+
+.PHONY: check-loongarch64-immediate-core-fold
+check-loongarch64-immediate-core-fold: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" BUILD_DIR="$(abspath $(BUILD_DIR))" \
+	sh tests/compiler/c0/probe-loongarch64-immediate-core-fold.sh
+
+.PHONY: check-gnu-const-global-record
+check-gnu-const-global-record: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" BUILD_DIR="$(abspath $(BUILD_DIR))" \
+	sh tests/compiler/c0/probe-gnu-const-global-record.sh
+
+.PHONY: check-linux-empty-static-stub-cfi
+check-linux-empty-static-stub-cfi: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" BUILD_DIR="$(abspath $(BUILD_DIR))" \
+	sh tests/compiler/c0/probe-linux-empty-static-stub-cfi.sh
+
+.PHONY: check-gnu-linux-static-field-guard
+check-gnu-linux-static-field-guard: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	sh tests/compiler/c0/probe-gnu-linux-static-field-guard.sh
+
+.PHONY: check-core-same-global-address-order
+check-core-same-global-address-order: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" BUILD_DIR="$(abspath $(BUILD_DIR))" \
+	sh tests/compiler/c0/probe-core-same-global-address-order.sh
+
+.PHONY: check-core-compound-record-byte-layout
+check-core-compound-record-byte-layout: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" BUILD_DIR="$(abspath $(BUILD_DIR))" \
+	sh tests/compiler/c0/probe-core-compound-record-byte-layout.sh
+
+.PHONY: check-core-literal-rhs-snapshot
+check-core-literal-rhs-snapshot: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" BUILD_DIR="$(abspath $(BUILD_DIR))" \
+	sh tests/compiler/c0/probe-core-literal-rhs-snapshot.sh
+
+.PHONY: check-gnu-linux-zoned-constant-switch
+check-gnu-linux-zoned-constant-switch: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" CC="$(CC)" \
+	sh tests/compiler/c0/probe-gnu-linux-zoned-constant-switch.sh
 
 check: check-fast
 
@@ -1371,13 +2410,883 @@ distclean:
 -include $(LEXER_TEST_OBJECTS:.o=.d)
 -include $(TYPE_TEST_OBJECTS:.o=.d)
 -include $(RECORD_TEST_OBJECTS:.o=.d)
+-include $(SEMANTIC_SNAPSHOT_TEST_OBJECTS:.o=.d)
 -include $(TYPE_ALIAS_TEST_OBJECTS:.o=.d)
 -include $(AST_CONTRACT_TEST_OBJECTS:.o=.d)
 -include $(LAYOUT_TEST_OBJECTS:.o=.d)
 -include $(RV64_ABI_TEST_OBJECTS:.o=.d)
+-include $(FUNCTION_DIAGNOSTIC_TEST_OBJECT:.o=.d)
+-include $(BACKEND_MODULE_ARENA_TEST_OBJECT:.o=.d)
 
 # Cross-target semantics/options smoke without the GNU QEMU toolchains.
 .PHONY: check-minic-target-abi-options
 check-minic-target-abi-options: $(MINIC_BINARY) $(MINIC_CC_BINARY)
 	MINIC="$(abspath $(MINIC_BINARY))" MINIC_CC="$(abspath $(MINIC_CC_BINARY))" \
 	bash tests/compiler/c0/probe-target-language-abi-options.sh
+
+.PHONY: check-rv64-lp64d-union-fp-abi
+check-rv64-lp64d-union-fp-abi: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	bash tests/compiler/c0/probe-rv64-lp64d-union-fp-abi.sh
+
+check-fast: check-rv64-lp64d-union-fp-abi
+
+# RV64 GlobalEmissionPlan migration: the source/differential gate does not
+# need cross GNU tools and is included in check-fast. The separate opt-in
+# ELF/QEMU gate fails closed (BLOCKED/2) when cross tools are unavailable.
+.PHONY: check-rv64-global-plan-source check-rv64-global-plan-gnu-elf
+check-rv64-global-plan-source: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" BUILD_DIR="$(abspath $(BUILD_DIR))" \
+	  sh tests/compiler/c0/run-rv64-global-plan-abi.sh
+
+check-fast: check-rv64-global-plan-source
+
+check-rv64-global-plan-gnu-elf: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" BUILD_DIR="$(abspath $(BUILD_DIR))" \
+	  MINIC_RV64_GLOBAL_GNU_ELF=1 sh tests/compiler/c0/run-rv64-global-plan-abi.sh
+
+# RV32 GlobalEmissionPlan migration: same GNU-preprocessed C -> MiniC .s
+# source gate (optionally byte-diff C39), plus a strict GNU ELF32/QEMU target.
+# Source is short and requires no cross tools; the full gate fails BLOCKED/2
+# when GNU RV32 as/ld/readelf or qemu-riscv32 is missing.
+.PHONY: check-rv32-global-plan-source check-rv32-global-plan-gnu-elf
+check-rv32-global-plan-source: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" BUILD_DIR="$(abspath $(BUILD_DIR))" \
+	  sh tests/compiler/c0/run-rv32-global-plan-abi.sh
+
+check-fast: check-rv32-global-plan-source
+
+check-rv32-global-plan-gnu-elf: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" BUILD_DIR="$(abspath $(BUILD_DIR))" \
+	  MINIC_RV32_GLOBAL_GNU_ELF=1 sh tests/compiler/c0/run-rv32-global-plan-abi.sh
+
+# Shared Linux static-key ASM source/Core grammar; A64 and Loong keep their
+# own exact %c0/%0, branch spelling and ELF metadata emission.
+.PHONY: check-common-linux-jump-label-contract
+check-common-linux-jump-label-contract:
+	mkdir -p "$(BUILD_DIR)/tests"
+	$(CC) $(MINIC_CFLAGS) $(MINIC_INCLUDES) \
+	  tests/target/common_linux_jump_label_contract.c \
+	  -o "$(BUILD_DIR)/tests/common-linux-jump-label-contract"
+	"$(BUILD_DIR)/tests/common-linux-jump-label-contract"
+
+check-fast: check-common-linux-jump-label-contract
+
+# Thin target-owned MIR data model and whole-function verifier. Production
+# backends will migrate complete function paths after the C/Core boundary is
+# closed; this contract test does not imply that migration has occurred.
+.PHONY: check-machine-ir-contract
+check-machine-ir-contract:
+	mkdir -p "$(BUILD_DIR)/tests"
+	$(CC) -std=c11 -Wall -Wextra -Wpedantic -Werror $(MINIC_INCLUDES) \
+	  tests/target/machine_ir_contract_test.c \
+	  src/target/common/machine_ir.c \
+	  src/target/common/machine_builder.c \
+	  src/target/common/machine_ir_verify.c \
+	  -o "$(BUILD_DIR)/tests/machine-ir-contract"
+	"$(BUILD_DIR)/tests/machine-ir-contract"
+
+check-fast: check-machine-ir-contract
+
+.PHONY: check-machine-core-coverage
+check-machine-core-coverage:
+	mkdir -p "$(BUILD_DIR)/tests"
+	$(CC) -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror $(MINIC_INCLUDES) \
+	  tests/target/machine_core_coverage_test.c \
+	  src/core/core_type.c \
+	  src/target/common/machine_core_coverage.c \
+	  -o "$(BUILD_DIR)/tests/machine-core-coverage"
+	"$(BUILD_DIR)/tests/machine-core-coverage"
+
+check-fast: check-machine-core-coverage
+
+.PHONY: check-machine-production-preflight
+check-machine-production-preflight:
+	mkdir -p "$(BUILD_DIR)/tests"
+	$(CC) -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror $(MINIC_INCLUDES) \
+	  tests/target/machine_production_preflight_test.c \
+	  src/core/core_type.c \
+	  src/target/common/machine_ir.c \
+	  src/target/common/machine_builder.c \
+	  src/target/common/machine_ir_verify.c \
+	  src/target/common/machine_core_coverage.c \
+	  src/target/common/machine_gnu_asm.c \
+	  -o "$(BUILD_DIR)/tests/machine-production-preflight"
+	"$(BUILD_DIR)/tests/machine-production-preflight"
+
+check-fast: check-machine-production-preflight
+
+.PHONY: check-machine-source-asm-template
+check-machine-source-asm-template:
+	mkdir -p "$(BUILD_DIR)/tests"
+	$(CC) -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror $(MINIC_INCLUDES) \
+	  tests/target/machine_source_asm_template_test.c \
+	  src/target/common/machine_source_asm_template.c \
+	  -o "$(BUILD_DIR)/tests/machine-source-asm-template"
+	"$(BUILD_DIR)/tests/machine-source-asm-template"
+
+check-fast: check-machine-source-asm-template
+
+.PHONY: check-machine-gnu-asm
+check-machine-gnu-asm:
+	mkdir -p "$(BUILD_DIR)/tests"
+	$(CC) -std=c11 -Wall -Wextra -Wpedantic -Werror $(MINIC_INCLUDES) \
+	  tests/target/machine_gnu_asm_test.c \
+	  src/target/common/machine_ir.c \
+	  src/target/common/machine_builder.c \
+	  src/target/common/machine_ir_verify.c \
+	  src/target/common/machine_gnu_asm.c \
+	  -o "$(BUILD_DIR)/tests/machine-gnu-asm"
+	"$(BUILD_DIR)/tests/machine-gnu-asm"
+
+check-fast: check-machine-gnu-asm
+
+# Real target-owned physical opcode contracts. These exercise the typed
+# builder/verifier/GNU body writer, not the old Core-to-FILE* backends.
+.PHONY: check-riscv-machine-gnu-asm
+check-riscv-machine-gnu-asm:
+	mkdir -p "$(BUILD_DIR)/tests"
+	$(CC) -std=c11 -Wall -Wextra -Wpedantic -Werror $(MINIC_INCLUDES) \
+	  tests/target/riscv_machine_gnu_asm_test.c \
+	  src/target/common/machine_ir.c \
+	  src/target/common/machine_builder.c \
+	  src/target/common/machine_ir_verify.c \
+	  src/target/common/machine_gnu_asm.c \
+	  src/target/riscv/machine_opcode.c \
+	  src/target/riscv/machine_gnu_asm.c \
+	  -o "$(BUILD_DIR)/tests/riscv-machine-gnu-asm"
+	"$(BUILD_DIR)/tests/riscv-machine-gnu-asm"
+
+check-fast: check-riscv-machine-gnu-asm
+
+.PHONY: check-direct-machine-gnu-asm
+check-direct-machine-gnu-asm:
+	mkdir -p "$(BUILD_DIR)/tests"
+	$(CC) -std=c11 -Wall -Wextra -Wpedantic -Werror $(MINIC_INCLUDES) \
+	  tests/target/direct_machine_gnu_asm_test.c \
+	  src/target/data_layout.c \
+	  src/target/common/machine_ir.c \
+	  src/target/common/machine_builder.c \
+	  src/target/common/machine_ir_verify.c \
+	  src/target/common/machine_gnu_asm.c \
+	  src/target/common/machine_source_asm_template.c \
+	  src/core/core_ir.c \
+	  src/core/core_type.c \
+	  src/core/core_ir_verify.c \
+	  src/target/aarch64/machine_opcode.c \
+	  src/target/aarch64/machine_gnu_asm.c \
+	  src/target/aarch64/machine_source_asm.c \
+	  src/target/aarch64/asm_contract.c \
+	  src/target/aarch64/machine_sysreg_contract.c \
+	  src/target/aarch64/machine_lse_source_select.c \
+	  src/target/loongarch64/machine_opcode.c \
+	  src/target/loongarch64/machine_gnu_asm.c \
+	  src/target/loongarch64/machine_asm_form.c \
+	  src/target/loongarch64/simd_asm.c \
+	  src/target/loongarch64/machine_source_asm.c \
+	  -o "$(BUILD_DIR)/tests/direct-machine-gnu-asm"
+	"$(BUILD_DIR)/tests/direct-machine-gnu-asm"
+
+check-fast: check-direct-machine-gnu-asm
+
+# Five Linux-target Core->MachineIR migration: historical pre-MIR byte goldens
+# remain as an archive; each switched target must instead prove the real typed
+# output inode and semantic shapes. The current mixed-target gate separates
+# these facts explicitly, without permitting legacy fallback within a target.
+.PHONY: check-a64-loong-mir-golden check-a64-loong-mir-production \
+        check-five-machine-mir-golden check-five-machine-mir-production \
+        check-loong-machine-mir-production check-mir-migration-current \
+        check-x86-machine-runtime
+check-a64-loong-mir-golden: $(MINIC_CC_BINARY)
+	python3 tests/compiler/mir-migration/probe_machine_ir.py \
+	  --mode golden --minic-cc "$(abspath $(MINIC_CC_BINARY))" \
+	  --build-dir "$(abspath $(BUILD_DIR))" --host-cc "$(CC)"
+
+check-five-machine-mir-golden: $(MINIC_CC_BINARY)
+	python3 tests/compiler/mir-migration/probe_machine_ir.py \
+	  --mode golden --targets five --minic-cc "$(abspath $(MINIC_CC_BINARY))" \
+	  --build-dir "$(abspath $(BUILD_DIR))" --host-cc "$(CC)"
+
+check-a64-loong-mir-production: $(MINIC_CC_BINARY)
+	python3 tests/compiler/mir-migration/probe_machine_ir.py \
+	  --mode production --minic-cc "$(abspath $(MINIC_CC_BINARY))" \
+	  --build-dir "$(abspath $(BUILD_DIR))" --host-cc "$(CC)"
+
+check-five-machine-mir-production: $(MINIC_CC_BINARY)
+	python3 tests/compiler/mir-migration/probe_machine_ir.py \
+	  --mode production --targets five \
+	  --minic-cc "$(abspath $(MINIC_CC_BINARY))" \
+	  --build-dir "$(abspath $(BUILD_DIR))" --host-cc "$(CC)"
+
+check-loong-machine-mir-production: $(MINIC_CC_BINARY)
+	python3 tests/compiler/mir-migration/probe_machine_ir.py \
+	  --mode production --targets loongarch64 \
+	  --minic-cc "$(abspath $(MINIC_CC_BINARY))" \
+	  --build-dir "$(abspath $(BUILD_DIR))" --host-cc "$(CC)"
+	bash tests/compiler/mir-migration/probe_loong_llsc_extended_forms.sh \
+	  "$(abspath $(MINIC_CC_BINARY))"
+
+# RV32 production is now one live typed writer with no old golden fallback.
+# The remaining legacy targets still require their frozen-byte contracts;
+# the all-five production gate is the final no-legacy milestone.
+check-mir-migration-current: $(MINIC_CC_BINARY)
+	python3 tests/compiler/mir-migration/probe_machine_ir.py \
+	  --mode production --targets riscv32 \
+	  --minic-cc "$(abspath $(MINIC_CC_BINARY))" \
+	  --build-dir "$(abspath $(BUILD_DIR))" --host-cc "$(CC)"
+	@for arch in riscv64 x86_64 aarch64; do \
+	  python3 tests/compiler/mir-migration/probe_machine_ir.py \
+	    --mode golden --targets "$$arch" \
+	    --minic-cc "$(abspath $(MINIC_CC_BINARY))" \
+	    --build-dir "$(abspath $(BUILD_DIR))" --host-cc "$(CC)" || exit; \
+	done
+	$(MAKE) MODE=$(MODE) BUILD_DIR=$(BUILD_DIR) \
+	  check-loong-machine-mir-production
+
+# Small executable oracle: compare GCC's native binary to MiniC assembly
+# linked by that same GCC. This is not a five-target or Linux runtime claim.
+check-x86-machine-runtime: $(MINIC_CC_BINARY)
+	python3 tests/compiler/mir-migration/probe_x86_native.py \
+	  --minic-cc "$(abspath $(MINIC_CC_BINARY))" \
+	  --build-dir "$(abspath $(BUILD_DIR))" --host-cc "$(CC)"
+
+.PHONY: check-a64-machine-mir-frame-select
+check-a64-machine-mir-frame-select:
+	mkdir -p "$(BUILD_DIR)/tests"
+	$(CC) -std=c11 -Wall -Wextra -Wpedantic -Werror $(MINIC_INCLUDES) \
+	  -ffunction-sections -fdata-sections -Wl,--gc-sections \
+	  tests/target/aarch64/machine_frame_select_test.c \
+	  src/target/common/machine_ir.c \
+	  src/target/common/machine_builder.c \
+	  src/target/common/machine_ir_verify.c \
+	  src/target/common/machine_gnu_asm.c \
+	  src/target/data_layout.c \
+	  src/target/aarch64/machine_frame_select.c \
+	  src/target/aarch64/frame_emit.c \
+	  src/target/aarch64/machine_opcode.c \
+	  src/target/aarch64/machine_gnu_asm.c \
+	  src/target/aarch64/machine_source_asm.c \
+	  src/target/aarch64/asm_contract.c \
+	  src/target/aarch64/machine_sysreg_contract.c \
+	  src/target/aarch64/machine_lse_source_select.c \
+	  src/target/common/machine_source_asm_template.c \
+	  -o "$(BUILD_DIR)/tests/a64-machine-mir-frame-select"
+	"$(BUILD_DIR)/tests/a64-machine-mir-frame-select"
+
+.PHONY: check-loong-machine-mir-select
+check-loong-machine-mir-select:
+	mkdir -p "$(BUILD_DIR)/tests"
+	$(CC) -std=c11 -Wall -Wextra -Wpedantic -Werror $(MINIC_INCLUDES) \
+	  -ffunction-sections -fdata-sections -Wl,--gc-sections \
+	  tests/target/loongarch64/machine_select_test.c \
+	  src/target/data_layout.c \
+	  src/target/common/machine_ir.c \
+	  src/target/common/machine_builder.c \
+	  src/target/common/machine_ir_verify.c \
+	  src/target/common/machine_gnu_asm.c \
+	  src/target/common/machine_source_asm_template.c \
+	  src/core/value_uses.c \
+	  src/target/loongarch64/machine_opcode.c \
+	  src/target/loongarch64/machine_gnu_asm.c \
+	  src/target/loongarch64/machine_asm_form.c \
+	  src/target/loongarch64/machine_source_asm.c \
+	  src/target/loongarch64/machine_select.c \
+	  src/target/loongarch64/simd_asm.c \
+	  src/target/loongarch64/machine_builtin_select.c \
+	  src/target/loongarch64/machine_llsc_select.c \
+	  src/target/loongarch64/machine_llsc_extended_select.c \
+	  src/target/loongarch64/machine_pte_select.c \
+	  src/target/loongarch64/machine_csr_source_select.c \
+	  src/target/loongarch64/machine_scalar_source_select.c \
+	  src/target/loongarch64/machine_uaccess_select.c \
+	  -o "$(BUILD_DIR)/tests/loong-machine-mir-select"
+	"$(BUILD_DIR)/tests/loong-machine-mir-select"
+
+# The 25 sealed LoongArch source builtins map to 22 *native* typed opcodes.
+# Check physical operands, CSR imm14 and GNU printing without a CALL/BL shim.
+.PHONY: check-loong-machine-builtin-opcode
+check-loong-machine-builtin-opcode:
+	mkdir -p "$(BUILD_DIR)/tests"
+	$(CC) -std=c11 -Wall -Wextra -Wpedantic -Werror $(MINIC_INCLUDES) \
+	  -ffunction-sections -fdata-sections -Wl,--gc-sections \
+	  tests/target/loongarch64/machine_builtin_opcode_test.c \
+	  src/target/data_layout.c \
+	  src/target/common/machine_ir.c \
+	  src/target/common/machine_builder.c \
+	  src/target/common/machine_ir_verify.c \
+	  src/target/common/machine_gnu_asm.c \
+	  src/target/common/machine_source_asm_template.c \
+	  src/target/loongarch64/machine_opcode.c \
+	  src/target/loongarch64/machine_gnu_asm.c \
+	  src/target/loongarch64/machine_asm_form.c \
+	  src/target/loongarch64/machine_source_asm.c \
+	  -o "$(BUILD_DIR)/tests/loong-machine-builtin-opcode"
+	"$(BUILD_DIR)/tests/loong-machine-builtin-opcode"
+
+.PHONY: check-a64-machine-core-select
+check-a64-machine-core-select:
+	mkdir -p "$(BUILD_DIR)/tests"
+	$(CC) -std=c11 -Wall -Wextra -Wpedantic -Werror $(MINIC_INCLUDES) \
+	  -ffunction-sections -fdata-sections -Wl,--gc-sections \
+	  tests/target/aarch64/machine_core_select_test.c \
+	  src/core/core_ir.c src/core/core_type.c \
+	  src/core/core_ir_verify.c src/core/module_ir.c \
+	  src/target/data_layout.c \
+	  src/target/target_info.c \
+	  src/target/common/machine_ir.c \
+	  src/target/common/machine_builder.c \
+	  src/target/common/machine_ir_verify.c \
+	  src/target/common/machine_gnu_asm.c \
+	  src/target/common/machine_core_coverage.c \
+	  src/target/common/machine_source_asm_template.c \
+	  src/target/common/lp64_scalar.c \
+	  src/target/common/lp64_frame.c \
+	  src/target/common/lp64_aggregate.c \
+	  src/target/common/aggregate_shape.c \
+	  src/target/common/core_numeric_shape.c \
+	  src/target/common/direct_instruction_semantics.c \
+	  src/target/common/direct_call_plan.c \
+	  src/target/common/core_call_view.c \
+	  src/target/common/core_call_index.c \
+	  src/target/common/direct_residual_plan.c \
+	  src/target/common/elf_module_symbol_info.c \
+	  src/target/aarch64/abi.c \
+	  src/target/aarch64/machine_opcode.c \
+	  src/target/aarch64/machine_gnu_asm.c \
+	  src/target/aarch64/machine_source_asm.c \
+	  src/target/aarch64/asm_contract.c \
+	  src/target/aarch64/machine_sysreg_contract.c \
+	  src/target/aarch64/machine_lse_source_select.c \
+	  src/target/aarch64/machine_frame_select.c \
+	  src/target/aarch64/machine_core_select.c \
+	  src/target/aarch64/frame_emit.c \
+	  src/target/aarch64/neon_emit.c \
+	  -o "$(BUILD_DIR)/tests/a64-machine-core-select"
+	"$(BUILD_DIR)/tests/a64-machine-core-select"
+
+.PHONY: check-loong-machine-source-asm
+check-loong-machine-source-asm:
+	mkdir -p "$(BUILD_DIR)/tests"
+	$(CC) -std=c11 -Wall -Wextra -Wpedantic -Werror $(MINIC_INCLUDES) \
+	  -ffunction-sections -fdata-sections -Wl,--gc-sections \
+	  tests/target/loong_machine_source_asm_test.c \
+	  src/target/loongarch64/machine_source_asm.c \
+	  src/target/loongarch64/simd_asm.c \
+	  src/target/loongarch64/machine_asm_form.c \
+	  src/target/common/machine_source_asm_template.c \
+	  src/target/common/machine_ir.c \
+	  src/target/common/machine_builder.c \
+	  -o "$(BUILD_DIR)/tests/loong-machine-source-asm"
+	"$(BUILD_DIR)/tests/loong-machine-source-asm"
+
+.PHONY: check-loong-machine-core-select
+check-loong-machine-core-select:
+	mkdir -p "$(BUILD_DIR)/tests"
+	$(CC) -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Wstrict-prototypes -Wmissing-prototypes -Werror $(MINIC_INCLUDES) \
+	  -ffunction-sections -fdata-sections -Wl,--gc-sections \
+	  tests/target/loongarch64/machine_core_select_test.c \
+	  src/core/core_ir.c src/core/core_type.c src/core/core_ir_verify.c \
+	  src/core/module_ir.c src/target/data_layout.c \
+	  src/target/target_info.c \
+	  src/target/common/machine_ir.c \
+	  src/target/common/machine_builder.c \
+	  src/target/common/machine_ir_verify.c \
+	  src/target/common/machine_gnu_asm.c \
+	  src/target/common/machine_source_asm_template.c \
+	  src/target/common/machine_core_coverage.c \
+	  src/core/value_uses.c \
+	  src/target/common/lp64_scalar.c \
+	  src/target/common/lp64_frame.c \
+	  src/target/common/lp64_aggregate.c \
+	  src/target/common/aggregate_shape.c \
+	  src/target/common/core_numeric_shape.c \
+	  src/target/common/direct_instruction_semantics.c \
+	  src/target/common/direct_residual_plan.c \
+	  src/target/common/direct_call_plan.c \
+	  src/target/common/core_call_view.c \
+	  src/target/common/core_call_index.c \
+	  src/target/common/elf_module_symbol_info.c \
+	  src/target/loongarch64/machine_opcode.c \
+	  src/target/loongarch64/machine_gnu_asm.c \
+	  src/target/loongarch64/machine_asm_form.c \
+	  src/target/loongarch64/machine_source_asm.c \
+	  src/target/loongarch64/machine_select.c \
+	  src/target/loongarch64/machine_builtin_select.c \
+	  src/target/loongarch64/machine_llsc_select.c \
+	  src/target/loongarch64/machine_llsc_extended_select.c \
+	  src/target/loongarch64/machine_pte_select.c \
+	  src/target/loongarch64/machine_csr_source_select.c \
+	  src/target/loongarch64/machine_scalar_source_select.c \
+	  src/target/loongarch64/machine_uaccess_select.c \
+	  src/target/loongarch64/simd_asm.c \
+	  -o "$(BUILD_DIR)/tests/loong-machine-core-select"
+	"$(BUILD_DIR)/tests/loong-machine-core-select"
+
+.PHONY: check-a64-machine-source-asm
+check-a64-machine-source-asm:
+	mkdir -p "$(BUILD_DIR)/tests"
+	$(CC) -std=c11 -Wall -Wextra -Wpedantic -Werror $(MINIC_INCLUDES) \
+	  tests/target/aarch64/machine_source_asm_test.c \
+	  src/target/aarch64/machine_source_asm.c \
+	  src/target/aarch64/asm_contract.c \
+	  src/target/aarch64/machine_sysreg_contract.c \
+	  src/target/aarch64/machine_lse_source_select.c \
+	  src/target/common/machine_source_asm_template.c \
+	  -o "$(BUILD_DIR)/tests/a64-machine-source-asm"
+	"$(BUILD_DIR)/tests/a64-machine-source-asm"
+
+.PHONY: check-x86-machine-frame-select
+check-x86-machine-frame-select:
+	mkdir -p "$(BUILD_DIR)/tests"
+	$(CC) -std=c11 -Wall -Wextra -Wpedantic -Werror $(MINIC_INCLUDES) \
+	  -ffunction-sections -fdata-sections -Wl,--gc-sections \
+	  tests/target/x86_64/machine_frame_select_test.c \
+	  src/target/data_layout.c \
+	  src/target/common/machine_ir.c \
+	  src/target/common/machine_builder.c \
+	  src/target/common/machine_ir_verify.c \
+	  src/target/common/machine_gnu_asm.c \
+	  src/target/x86_64/machine_opcode.c \
+	  src/target/x86_64/machine_gnu_asm.c \
+	  src/target/x86_64/machine_frame_select.c \
+	  -o "$(BUILD_DIR)/tests/x86-machine-frame-select"
+	"$(BUILD_DIR)/tests/x86-machine-frame-select"
+
+.PHONY: check-riscv-machine-frame-select
+check-riscv-machine-frame-select:
+	mkdir -p "$(BUILD_DIR)/tests"
+	$(CC) -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror $(MINIC_INCLUDES) \
+	  tests/target/riscv_machine_frame_select_test.c \
+	  src/target/riscv/machine_frame_select.c \
+	  src/target/riscv/machine_opcode.c \
+	  src/target/riscv/machine_gnu_asm.c \
+	  src/target/common/machine_ir.c \
+	  src/target/common/machine_builder.c \
+	  src/target/common/machine_ir_verify.c \
+	  src/target/common/machine_gnu_asm.c \
+	  -o "$(BUILD_DIR)/tests/riscv-machine-frame-select"
+	"$(BUILD_DIR)/tests/riscv-machine-frame-select"
+
+.PHONY: check-riscv-machine-core-select
+check-riscv-machine-core-select:
+	mkdir -p "$(BUILD_DIR)/tests"
+	$(CC) -std=c11 -Wall -Wextra -Wpedantic -Werror $(MINIC_INCLUDES) \
+	  -ffunction-sections -fdata-sections -Wl,--gc-sections \
+	  tests/target/riscv_machine_core_select_test.c \
+	  src/core/core_ir.c src/core/core_type.c src/core/core_ir_verify.c \
+	  src/target/common/machine_ir.c \
+	  src/target/common/core_numeric_shape.c \
+	  src/target/common/lp64_scalar.c \
+	  src/target/common/machine_builder.c \
+	  src/target/common/machine_ir_verify.c \
+	  src/target/common/machine_gnu_asm.c \
+	  src/target/common/machine_core_coverage.c \
+	  src/target/common/core_call_view.c \
+	  src/target/common/core_call_index.c \
+	  src/target/common/aggregate_shape.c \
+	  src/target/common/elf_module_symbol_info.c \
+	  src/target/riscv32/rv32_abi_plan.c \
+	  src/target/riscv32/rv32_abi_cursor.c \
+	  src/target/riscv32/rv32_scalar.c \
+	  src/target/riscv64/abi.c \
+	  src/target/riscv64/function_abi_plan.c \
+	  src/target/riscv64/frame_requirements.c \
+	  src/target/riscv/machine_core_select.c \
+	  src/target/riscv/machine_frame_select.c \
+	  src/target/riscv/machine_opcode.c \
+	  src/target/riscv/machine_gnu_asm.c \
+	  -o "$(BUILD_DIR)/tests/riscv-machine-core-select"
+	"$(BUILD_DIR)/tests/riscv-machine-core-select"
+
+.PHONY: check-x86-machine-core-select
+check-x86-machine-core-select:
+	mkdir -p "$(BUILD_DIR)/tests"
+	$(CC) -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Wstrict-prototypes -Wmissing-prototypes -Werror $(MINIC_INCLUDES) \
+	  -ffunction-sections -fdata-sections -Wl,--gc-sections \
+	  tests/target/x86_64/machine_core_select_test.c \
+	  src/core/core_ir.c src/core/core_type.c src/core/core_ir_verify.c \
+	  src/core/value_uses.c \
+	  src/core/module_ir.c src/target/data_layout.c \
+	  src/target/target_info.c \
+	  src/target/common/machine_ir.c \
+	  src/target/common/machine_builder.c \
+	  src/target/common/machine_ir_verify.c \
+	  src/target/common/machine_gnu_asm.c \
+	  src/target/common/machine_source_asm_template.c \
+	  src/target/common/machine_core_coverage.c \
+	  src/target/common/lp64_scalar.c \
+	  src/target/common/lp64_frame.c \
+	  src/target/common/aggregate_shape.c \
+	  src/target/common/core_numeric_shape.c \
+	  src/target/common/direct_instruction_semantics.c \
+	  src/target/common/direct_residual_plan.c \
+	  src/target/common/elf_module_symbol_info.c \
+	  src/target/x86_64/abi.c \
+	  src/target/x86_64/asm_contract.c \
+	  src/target/x86_64/machine_raid6_source_policy.c \
+	  src/target/x86_64/machine_opcode.c \
+	  src/target/x86_64/machine_gnu_asm.c \
+	  src/target/x86_64/machine_frame_select.c \
+	  src/target/x86_64/machine_core_select.c \
+	  -o "$(BUILD_DIR)/tests/x86-machine-core-select"
+	"$(BUILD_DIR)/tests/x86-machine-core-select"
+	TMPDIR="$(abspath $(BUILD_DIR))/tests" \
+	  bash tests/target/x86_64/check_machine_fp_differential.sh \
+	  "$(abspath $(BUILD_DIR))/tests/x86-machine-core-select"
+
+# Structural parity is a focused, native-host gate: all five target selectors
+# must accept their proven Core subsets, reject unsupported whole functions,
+# and satisfy Core-origin/effect coverage before the production path is switched.
+# Keep Linux and expensive full-compiler suites separate from this gate.
+.PHONY: check-five-machine-core-select
+check-five-machine-core-select: check-machine-ir-contract \
+	check-machine-core-coverage check-machine-source-asm-template \
+	check-riscv-machine-core-select check-x86-machine-core-select \
+	check-a64-machine-core-select check-loong-machine-core-select \
+	check-loong-machine-builtin-opcode
+
+.PHONY: check-x86-machine-gnu-asm
+check-x86-machine-gnu-asm:
+	mkdir -p "$(BUILD_DIR)/tests"
+	$(CC) -std=c11 -Wall -Wextra -Wpedantic -Werror $(MINIC_INCLUDES) \
+	  tests/target/x86_machine_gnu_asm_test.c \
+	  src/target/data_layout.c \
+	  src/target/common/machine_ir.c \
+	  src/target/common/machine_builder.c \
+	  src/target/common/machine_ir_verify.c \
+	  src/target/common/machine_gnu_asm.c \
+	  src/target/common/machine_source_asm_template.c \
+	  src/target/x86_64/asm_contract.c \
+	  src/target/x86_64/machine_raid6_source_policy.c \
+	  src/target/x86_64/machine_opcode.c \
+	  src/target/x86_64/machine_gnu_asm.c \
+	  -o "$(BUILD_DIR)/tests/x86-machine-gnu-asm"
+	"$(BUILD_DIR)/tests/x86-machine-gnu-asm"
+
+check-fast: check-x86-machine-gnu-asm
+
+# Source ASM and local labels are sealed to canonical owned symbol identities
+# before Core publication. All five machine consumers validate these names
+# without reopening frontend statement tables or interpolating untrusted text.
+.PHONY: check-target-sealed-symbol-contract
+check-target-sealed-symbol-contract:
+	mkdir -p "$(BUILD_DIR)/tests"
+	$(CC) -std=c11 -Wall -Wextra -Wpedantic -Werror $(MINIC_INCLUDES) \
+	  -ffunction-sections -fdata-sections -Wl,--gc-sections \
+	  tests/target/target_sealed_symbol_contract.c \
+	  src/target/common/module_global_emit.c \
+	  src/core/module_ir.c \
+	  -o "$(BUILD_DIR)/tests/target-sealed-symbol-contract"
+	"$(BUILD_DIR)/tests/target-sealed-symbol-contract"
+
+check-fast: check-target-sealed-symbol-contract
+
+# Core owns the local asm-goto symbol, and frontend cleanup lifetimes are
+# enforced at source resolution before these taken edges enter Core CFG.
+.PHONY: check-frontend-asm-goto-cleanup-lifetime
+check-frontend-asm-goto-cleanup-lifetime: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" \
+	  sh tests/frontend/p24_asm_goto_cleanup_regression.sh
+
+check-fast: check-frontend-asm-goto-cleanup-lifetime
+
+# The Core/machine header closure must never drag in the C AST. A standalone
+# translation unit catches accidental transitive dependencies before backend
+# implementation files can mask them with a frontend include of their own.
+.PHONY: check-target-machine-header-boundary
+check-target-machine-header-boundary:
+	$(CC) -std=c11 $(COMMON_WARNINGS) -Werror -Iinclude -Isrc \
+		-fsyntax-only tests/target/machine_header_ast_boundary.c
+	@echo "TARGET_MACHINE_HEADER_BOUNDARY=PASS c_ast=absent c_type=absent"
+
+check-fast: check-target-machine-header-boundary
+
+# Target-specific ISA/ABI/mitigation admission is dispatched exclusively
+# through the generated target registration table; generic driver code does
+# not know per-architecture option spellings.
+.PHONY: check-target-machine-options-registry
+check-target-machine-options-registry:
+	mkdir -p "$(BUILD_DIR)/tests"
+	$(CC) -std=c11 -Wall -Wextra -Wpedantic -Werror $(MINIC_INCLUDES) \
+	  tests/target/machine_options_registry_test.c \
+	  src/target/target_catalog.c src/target/target_machine_options.c \
+	  src/target/machine_options/riscv.c \
+	  src/target/machine_options/aarch64.c \
+	  src/target/machine_options/loongarch64.c \
+	  src/target/machine_options/x86_64.c \
+	  src/target/riscv/isa_resolve.c \
+	  -o "$(BUILD_DIR)/tests/target-machine-options-registry"
+	"$(BUILD_DIR)/tests/target-machine-options-registry"
+
+check-fast: check-target-machine-options-registry
+
+# x86 Linux structured ASM families retire legacy machine-side template
+# dispatch; GNU ELF/native is available on the host, no cross toolchain.
+.PHONY: check-x86-typed-five-legacy
+check-x86-typed-five-legacy: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" BUILD_DIR="$(abspath $(BUILD_DIR))" \
+	  sh tests/compiler/c0/run-x86-typed-five-legacy-abi.sh
+
+check-fast: check-x86-typed-five-legacy
+
+# R5 x86: six further typed families; GNU native + byte-for-byte R4 parity
+# when MINIC_X86_TYPED_BASELINE_CC points to the preceding compiler.
+.PHONY: check-x86-typed-six-legacy
+check-x86-typed-six-legacy: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" BUILD_DIR="$(abspath $(BUILD_DIR))" \
+	  sh tests/compiler/c0/run-x86-typed-six-legacy-abi.sh
+
+check-fast: check-x86-typed-six-legacy
+
+# Loong Linux descriptor ownership is checked by a real linked machine gate:
+# all backend references remain available, but the compiler CLI main is not.
+LOONG_TYPED_DESCRIPTOR_TEST_BINARY := $(BUILD_DIR)/tests/target/loongarch64-typed-descriptor
+LOONG_TYPED_DESCRIPTOR_TEST_OBJECTS := $(filter-out $(BUILD_DIR)/obj/tools/minic-cc/main.o,$(MINIC_OBJECTS))
+
+.PHONY: check-loong-typed-descriptors
+check-loong-typed-descriptors: $(LOONG_TYPED_DESCRIPTOR_TEST_OBJECTS)
+	mkdir -p "$(BUILD_DIR)/tests/target"
+	$(CC) $(CPPFLAGS) $(MINIC_INCLUDES) $(MINIC_CFLAGS) \
+	  tests/target/loongarch64_typed_descriptor_test.c \
+	  $(LOONG_TYPED_DESCRIPTOR_TEST_OBJECTS) $(MINIC_LDFLAGS) \
+	  -o "$(LOONG_TYPED_DESCRIPTOR_TEST_BINARY)"
+	"$(abspath $(LOONG_TYPED_DESCRIPTOR_TEST_BINARY))"
+
+check-fast: check-loong-typed-descriptors
+
+# The C/GNU ASM admission descriptor must never be part of MinicBackend.
+# Both source and machine dispatch use the same target registration inventory.
+.PHONY: check-backend-source-registration
+check-backend-source-registration: $(LOONG_TYPED_DESCRIPTOR_TEST_OBJECTS)
+	mkdir -p "$(BUILD_DIR)/tests/target"
+	$(CC) $(CPPFLAGS) $(MINIC_INCLUDES) $(MINIC_CFLAGS) \
+	  tests/target/backend_source_registration_test.c \
+	  $(LOONG_TYPED_DESCRIPTOR_TEST_OBJECTS) $(MINIC_LDFLAGS) \
+	  -o "$(BUILD_DIR)/tests/target/backend-source-registration"
+	"$(abspath $(BUILD_DIR)/tests/target/backend-source-registration)"
+
+check-fast: check-backend-source-registration
+
+# Real AArch64/x86-64 physical ASM emission must depend on sealed CoreType
+# alone. The public Core schema no longer retains C descriptors: require
+# byte-identical repeated output and reject malformed Core types with zero bytes.
+TYPED_ASM_CORE_POISON_TEST_BINARY := $(BUILD_DIR)/tests/target/typed-asm-core-poison
+
+.PHONY: check-typed-asm-core-poison
+check-typed-asm-core-poison: $(LOONG_TYPED_DESCRIPTOR_TEST_OBJECTS)
+	mkdir -p "$(BUILD_DIR)/tests/target"
+	$(CC) $(CPPFLAGS) $(MINIC_INCLUDES) $(MINIC_CFLAGS) \
+	  tests/target/typed_asm_core_poison_test.c \
+	  $(LOONG_TYPED_DESCRIPTOR_TEST_OBJECTS) $(MINIC_LDFLAGS) \
+	  -o "$(TYPED_ASM_CORE_POISON_TEST_BINARY)"
+	"$(abspath $(TYPED_ASM_CORE_POISON_TEST_BINARY))"
+
+check-fast: check-typed-asm-core-poison
+
+# All target-qualified GNU ASM forms must be sealed into a machine-owned
+# FormId before Core dispatch; generic structured Core ASM deliberately
+# remains ID 0. Test Source admission, direct machine poison, and GNU output.
+P45_MACHINE_FORM_TEST_BINARY := $(BUILD_DIR)/tests/target/p45-machine-form-boundary
+
+.PHONY: check-p45-machine-form-boundary
+check-p45-machine-form-boundary: $(LOONG_TYPED_DESCRIPTOR_TEST_OBJECTS) $(MINIC_CC_BINARY)
+	@mkdir -p "$(BUILD_DIR)/tests/target"
+	$(CC) $(CPPFLAGS) $(MINIC_INCLUDES) $(MINIC_CFLAGS) \
+	  tests/target/p45_machine_form_boundary_test.c \
+	  $(LOONG_TYPED_DESCRIPTOR_TEST_OBJECTS) $(MINIC_LDFLAGS) \
+	  -o "$(P45_MACHINE_FORM_TEST_BINARY)"
+	"$(abspath $(P45_MACHINE_FORM_TEST_BINARY))"
+	bash tests/compiler/c0/probe-p45-machine-form-trace.sh \
+	  "$(abspath $(MINIC_CC_BINARY))"
+
+check-fast: check-p45-machine-form-boundary
+
+# The original 16 AArch64 per-CPU LL/SC variants have named GNU operands.
+# Core canonicalization erases tmp/ret name differences: machine variants
+# must carry only properties still independently recognizable afterward.
+.PHONY: check-p451-a64-percpu-normalized
+check-p451-a64-percpu-normalized: $(MINIC_CC_BINARY)
+	bash tests/compiler/c0/probe-p451-a64-percpu-normalized.sh \
+	  "$(abspath $(MINIC_CC_BINARY))"
+
+check-fast: check-p451-a64-percpu-normalized
+
+# P46 verifies both the five-ISA source output contract and native SysV
+# behavior while collapsing target machine copies and Loong text passes.
+.PHONY: check-p46-aggregate-and-loong-oracle
+check-p46-aggregate-and-loong-oracle: $(MINIC_CC_BINARY)
+	bash tests/compiler/c0/probe-p46-oracle.sh \
+	  "$(abspath $(MINIC_CC_BINARY))"
+
+# An early x86 kernel .head.text aggregate uses independent source/dest
+# physical memory addresses, but retains link VMA for numeric casts.
+.PHONY: check-p46-x86-head-aggregate
+check-p46-x86-head-aggregate: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" \
+	  bash tests/compiler/c0/probe-p46-head-aggregate.sh
+
+check-fast: check-p46-aggregate-and-loong-oracle check-p46-x86-head-aggregate
+
+# The x86 global object plan is an ELF ABI contract, not merely emitted
+# source: compare GNU/MiniC native execution, named section types, symbol
+# sizes, relocation counts and invalid nonzero .bss initializers.
+.PHONY: check-x86-global-plan-abi
+check-x86-global-plan-abi: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" BUILD_DIR="$(abspath $(BUILD_DIR))" \
+	  sh tests/compiler/c0/run-x86-global-plan-abi.sh
+
+# Reuse the existing RV32/RV64 source-only targets defined above; the
+# separate opt-in cross GNU ELF/QEMU targets retain their BLOCKED semantics.
+.PHONY: check-five-isa-global-section-source
+check-five-isa-global-section-source: $(MINIC_CC_BINARY)
+	@for target in x86_64 aarch64 loongarch64 riscv32 riscv64; do \
+	  MINIC_SECTION_ONLY=1 bash tests/compiler/c0/probe-linux-global-section-reloc.sh \
+	    "$(abspath $(MINIC_CC_BINARY))" "$$target" || exit $$?; \
+	done
+	@echo 'P47_FIVE_ISA_GLOBAL_SECTION_SOURCE=PASS targets=5 GNU_ELF=NOT_RUN QEMU=NOT_RUN'
+
+# One focused fail-closed gate for P47's five-ISA ELF global-output boundary.
+# P46 exercises GNU AS/LD and real native x86 runtime, while RV32/RV64 and
+# the remaining ISAs are source-only until separately certified under QEMU.
+.PHONY: check-p47-five-isa-output-smoke
+check-p47-five-isa-output-smoke: check-p46-aggregate-and-loong-oracle check-p46-x86-head-aggregate check-x86-global-plan-abi check-rv32-global-plan-source check-rv64-global-plan-source check-five-isa-global-section-source
+
+check-fast: check-x86-global-plan-abi check-five-isa-global-section-source
+
+# One complete P48 x86 early-head memory provenance proof: local pointer
+# slots, dynamic offsets, CFG join, aggregate pointer field and opaque alias
+# boundary. GNU same-source controls and real ELF displaced native runtime
+# must both run; this is not a full Linux QEMU boot certification.
+.PHONY: check-p48-x86-head-local-provenance
+check-p48-x86-head-local-provenance: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	  bash tests/compiler/c0/probe-p48-head-local-provenance.sh
+
+check-fast: check-p48-x86-head-local-provenance
+
+# P50: one source-to-machine RISC-V vararg alignment ABI regression.
+# GNU cross-ELF/QEMU execution is a separate strict existing-workflow gate.
+.PHONY: check-p50-riscv-overaligned-varargs
+check-p50-riscv-overaligned-varargs: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	bash tests/compiler/c0/probe-riscv-overaligned-varargs.sh
+
+check-fast: check-p50-riscv-overaligned-varargs
+
+# Source -> Core -> normalized-machine ASM proof is a single admission
+# contract. Check whole instruction families, including hostile rewrites,
+# without requiring cross GNU/QEMU tools or granting opaque source IDs power.
+A64_NORMALIZED_SEAL_TEST_BINARY := $(BUILD_DIR)/tests/compiler/c0/a64-normalized-seal
+
+.PHONY: check-a64-normalized-seal
+check-a64-normalized-seal: $(LOONG_TYPED_DESCRIPTOR_TEST_OBJECTS)
+	@mkdir -p "$(BUILD_DIR)/tests/compiler/c0"
+	$(CC) $(CPPFLAGS) $(MINIC_INCLUDES) $(MINIC_CFLAGS) \
+	  tests/compiler/c0/probe-a64-normalized-seal.c \
+	  $(LOONG_TYPED_DESCRIPTOR_TEST_OBJECTS) $(MINIC_LDFLAGS) \
+	  -o "$(A64_NORMALIZED_SEAL_TEST_BINARY)"
+	"$(abspath $(A64_NORMALIZED_SEAL_TEST_BINARY))"
+
+.PHONY: check-loong-scalar-normalized-seal
+check-loong-scalar-normalized-seal: $(MINIC_CC_BINARY)
+	@mkdir -p "$(BUILD_DIR)/tests/compiler/c0"
+	$(CC) $(CPPFLAGS) $(MINIC_INCLUDES) $(MINIC_CFLAGS) \
+	  -ffunction-sections -fdata-sections -Wl,--gc-sections \
+	  tests/compiler/c0/probe-loong-scalar-normalized-seal.c \
+	  src/target/loongarch64/machine_asm_form.c \
+	  src/target/loongarch64/asm_contract_source.c $(MINIC_LDFLAGS) \
+	  -o "$(BUILD_DIR)/tests/compiler/c0/loong-scalar-normalized-seal"
+	"$(abspath $(BUILD_DIR))/tests/compiler/c0/loong-scalar-normalized-seal"
+	bash tests/compiler/c0/probe-loong-scalar-source-rank.sh \
+	  "$(abspath $(MINIC_CC_BINARY))"
+
+check-fast: check-a64-normalized-seal check-loong-scalar-normalized-seal
+
+# R6 x86: eight further legacy ASM families, including GNU-owned ELF
+# .tracedata/.altinstructions and original VDSO/syscall native contracts.
+.PHONY: check-x86-typed-eight-legacy
+check-x86-typed-eight-legacy: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" BUILD_DIR="$(abspath $(BUILD_DIR))" \
+	  sh tests/compiler/c0/run-x86-typed-eight-legacy-abi.sh
+
+check-fast: check-x86-typed-eight-legacy
+
+# R6 Loong: four INVTLB variants and LL/SC ADD_UNLESS widths. Real GNU
+# cross assembler/QEMU remains a separate strict target environment.
+.PHONY: check-loong-typed-scalar
+check-loong-typed-scalar: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" BUILD_DIR="$(abspath $(BUILD_DIR))" \
+	  sh tests/compiler/c0/run-loongarch64-typed-invtlb-add-unless.sh
+
+check-fast: check-loong-typed-scalar
+
+# Array source identity is shared by Frontend, Core ingress and five machine
+# emitters. Compile all five targets, compare GNU/MiniC x86 native behavior,
+# and require fail-closed rejection for invalid C array types.
+.PHONY: check-array-shape-convergence
+check-array-shape-convergence: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	  sh tests/compiler/c0/run-array-shape-convergence.sh
+
+check-fast: check-array-shape-convergence
+
+# Array address-of validation must compare *effective* element qualifiers:
+# const/volatile on a record lvalue also qualify flexible/incomplete, GNU
+# zero-length and fixed array members without changing their stored extent.
+.PHONY: check-qualified-array-address-verifier
+check-qualified-array-address-verifier: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	  bash tests/compiler/c0/probe-qualified-array-address-verifier.sh
+
+check-fast: check-qualified-array-address-verifier
+
+# C-to-Core function signature ingress, qualified record storage and GNU
+# cleanup inline-asm are shared frontend/Core contracts. Keep their GNU
+# differential and five-ISA source probes in the regular fast gate.
+.PHONY: check-core-qualified-record-function-pointer check-gnu-cleanup-asm-lifetime
+check-core-qualified-record-function-pointer: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	  bash tests/compiler/c0/probe-core-qualified-record-function-pointer.sh
+
+check-gnu-cleanup-asm-lifetime: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	  bash tests/compiler/c0/probe-gnu-cleanup-goto-lifetime.sh
+
+# Both source-qualified Linux AMD APIC patch-site alternatives and WRMSR
+# feature immediates retain their physical operands and GNU ELF relocations.
+.PHONY: check-x86-linux-apic-amd-alt
+check-x86-linux-apic-amd-alt: $(MINIC_CC_BINARY)
+	MINIC_CC=$(MINIC_CC_BINARY) MINIC_SOURCE_ROOT=$(CURDIR) \
+		sh tests/target/run-linux-x86-apic-amd-alt.sh
+
+check-fast: check-x86-linux-apic-amd-alt
+
+# Descriptor-table instructions have a strict 10-byte packed Core record
+# memory operand, unlike scalar integer loads/stores; verify true GNU ELF
+# emission without trying to execute privileged LIDT/LGDT in user mode.
+.PHONY: check-x86-linux-descriptor-table-elf
+check-x86-linux-descriptor-table-elf: $(MINIC_CC_BINARY)
+	bash tests/compiler/c0/probe-x86-linux-descriptor-table-elf.sh \
+	  "$(abspath $(MINIC_CC_BINARY))"
+
+check-fast: check-core-qualified-record-function-pointer \
+	check-gnu-cleanup-asm-lifetime check-x86-linux-descriptor-table-elf
+
+# Materialized typedef and fixed local arrays must retain the same C semantics
+# across all five emitters. Host GNU provides
+# native runtime and 16 independent invalid-input oracles (80 target rejects).
+.PHONY: check-array-local-materialization
+check-array-local-materialization: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	  sh tests/compiler/c0/run-array-local-materialization.sh
+
+check-fast: check-array-local-materialization
+
+# Record-field typedef and declarator arrays share one complete ArrayType;
+# verify static initializer slots, designated rewrites and relocations.
+.PHONY: check-static-field-typedef-array
+check-static-field-typedef-array: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	  sh tests/compiler/c0/run-static-field-typedef-array.sh
+
+check-fast: check-static-field-typedef-array

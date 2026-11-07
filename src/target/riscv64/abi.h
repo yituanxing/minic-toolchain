@@ -1,7 +1,7 @@
 #ifndef MINIC_TARGET_RISCV64_ABI_H
 #define MINIC_TARGET_RISCV64_ABI_H
 
-#include "frontend/ast.h"
+#include "core/core_type.h"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -45,34 +45,21 @@ typedef struct MinicRiscv64AbiArgumentLocation {
     size_t stack_slot_count;
 } MinicRiscv64AbiArgumentLocation;
 
-bool minic_riscv64_classify_abi_value_profile(
-    const MinicC0Program *, MinicType, bool lp64_soft_float,
-    MinicRiscv64AbiValue *);
-bool minic_riscv64_classify_abi_value(const MinicC0Program *program,
-                                      MinicType type,
-                                      MinicRiscv64AbiValue *result);
-
 void minic_riscv64_abi_cursor_initialize(MinicRiscv64AbiCursor *cursor);
-bool minic_riscv64_abi_cursor_initialize_for_return_profile(
-    const MinicC0Program *, MinicType, bool lp64_soft_float,
-    MinicRiscv64AbiCursor *, MinicRiscv64AbiValue *);
-bool minic_riscv64_abi_cursor_initialize_for_return(const MinicC0Program *program,
-                                                    MinicType return_type,
-                                                    MinicRiscv64AbiCursor *cursor,
-                                                    MinicRiscv64AbiValue *return_value);
 /* Shared RV64 named-prefix cursor validation for variadic functions. */
 bool minic_riscv64_abi_variadic_prefix_from_cursor(
     const MinicRiscv64AbiCursor *, size_t *, size_t *);
-bool minic_riscv64_abi_classify_value_profile(
-    const MinicC0Program *, MinicType, bool lp64_soft_float,
-    MinicRiscv64AbiValue *);
-bool minic_riscv64_abi_classify_value(const MinicC0Program *program,
-                                      MinicType type,
-                                      MinicRiscv64AbiValue *value);
-bool minic_riscv64_abi_place_argument(const MinicC0Program *program,
-                                      MinicType type,
-                                      bool is_fixed_parameter,
-                                      MinicRiscv64AbiCursor *cursor,
-                                      MinicRiscv64AbiArgumentLocation *location);
+/* Canonical Core-owned execution types. No source-C placement API remains. */
+bool minic_riscv64_abi_classify_core_value_profile(
+    const MinicCoreTypeContext *types, MinicCoreTypeId type_id,
+    bool lp64_soft_float, MinicRiscv64AbiValue *value);
+bool minic_riscv64_abi_cursor_initialize_for_core_return_profile(
+    const MinicCoreTypeContext *types, MinicCoreTypeId return_type,
+    bool lp64_soft_float, MinicRiscv64AbiCursor *cursor,
+    MinicRiscv64AbiValue *return_value);
+bool minic_riscv64_abi_place_core_argument(
+    const MinicCoreTypeContext *types, MinicCoreTypeId type_id,
+    bool is_fixed_parameter, MinicRiscv64AbiCursor *cursor,
+    MinicRiscv64AbiArgumentLocation *location);
 
 #endif

@@ -12,7 +12,7 @@ mkdir -p "$work"
 "$host_cc" -E -P -x c "$source" -o "$work/input.i"
 "$minic" -S "$work/input.i" -o "$work/output.s"
 test -s "$work/output.s"
-grep -F 'nested_function_pointer_type_name:' "$work/output.s" >/dev/null
+grep -F 'resolve_nested_function_pointer:' "$work/output.s" >/dev/null
 grep -F 'jalr ra, t0, 0' "$work/output.s" >/dev/null
 
 if command -v riscv64-linux-gnu-gcc >/dev/null 2>&1; then

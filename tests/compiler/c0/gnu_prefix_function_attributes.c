@@ -1,3 +1,27 @@
+/* Real GNU kernel libc prototypes use __const__ and __const.
+ * These qualify C types and cannot be target-specific expressions. */
+extern void *minic_probe_memcpy(void *dst, __const__ void *src, unsigned long len);
+int minic_probe_const_underscored(const __const__ int *p) { return *p; }
+int minic_probe_const_plain(const __const int *p) { return *p; }
+
+/* Linux no_instrument_function has both spellings; GCC artificial only
+ * changes debug-inline call-site attribution, not code or call ABI. */
+__attribute__((no_instrument_function))
+int linux_noinstr_plain(int value) { return value + 1; }
+
+__attribute__((__no_instrument_function__))
+int linux_noinstr_underscored(int value) { return value - 1; }
+
+static inline __attribute__((artificial))
+int linux_artificial_plain(int value) { return value + 2; }
+
+static inline __attribute__((__artificial__))
+int linux_artificial_underscored(int value) { return value - 2; }
+
+int linux_artificial_calls(int value) {
+    return linux_artificial_plain(value) + linux_artificial_underscored(value);
+}
+
 static inline __attribute__((__gnu_inline__)) __attribute__((__unused__))
     __attribute__((__no_instrument_function__)) __attribute__((__always_inline__)) const int *
 prefix_attribute_identity(const int *value)
@@ -45,9 +69,18 @@ void instrumentation_policy_aliases(void)
 }
 
 static inline __attribute__((gnu_inline)) __attribute__((always_inline))
-size_t prefix_plain_spelling_identity(size_t value)
+/* Standalone .i regression: no libc typedefs are injected by GNU -E -P.
+ * This fixture tests GNU attribute spelling, not external stddef.h owners. */
+unsigned long prefix_plain_spelling_identity(unsigned long value)
 {
     return value;
+}
+
+/* The unused static inline body need not own a separate ELF symbol.
+ * Exercise the plain spelling through a live caller instead. */
+unsigned long call_prefix_plain_spelling_identity(unsigned long value)
+{
+    return prefix_plain_spelling_identity(value);
 }
 
 /* Official Zstd includes GCC no_sanitize("undefined") attributes.

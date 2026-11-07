@@ -5,6 +5,38 @@
 
 /* The optional textual Core dump is a consumer, never an IR mutation owner.
  * Preserve pre-dump verification and the existing printed format verbatim. */
+static const MinicCoreType *dump_base_type(const MinicCoreFunction *function,
+                                           MinicCoreTypeId id) {
+    if (function == NULL || function->type_context == NULL) return NULL;
+    return minic_core_function_type_get(
+        function, minic_core_type_unqualified(function->type_context, id));
+}
+
+static bool dump_type_is_record(const MinicCoreFunction *function,
+                                MinicCoreTypeId core_id) {
+    const MinicCoreType *type = dump_base_type(function, core_id);
+    return type != NULL && type->kind == MINIC_CORE_TYPE_RECORD;
+}
+
+static bool dump_call_arguments(FILE *output, const MinicCoreFunction *function,
+                                size_t argument_begin, size_t argument_count) {
+    size_t index;
+
+    for (index = 0U; index < argument_count; ++index) {
+        const MinicCoreCallArgument *argument =
+            &function->call_arguments[argument_begin + index];
+        if (index != 0U && fprintf(output, ", ") < 0) return false;
+        if (argument->kind == MINIC_CORE_CALL_ARGUMENT_VALUE) {
+            if (fprintf(output, "%%%" PRIu32, argument->value.value_id) < 0) return false;
+        } else if (argument->kind == MINIC_CORE_CALL_ARGUMENT_OBJECT) {
+            if (fprintf(output, "%%o%" PRIu32, argument->value.object_id) < 0) return false;
+        } else {
+            return false;
+        }
+    }
+    return true;
+}
+
 static bool dump_instruction(FILE *output,
                              const MinicCoreFunction *function,
                              const MinicCoreInstruction *instruction) {
@@ -15,19 +47,23 @@ static bool dump_instruction(FILE *output,
                        instruction->result,
                        instruction->value.integer_value) >= 0;
     case MINIC_CORE_INSTRUCTION_FLOATING_CONSTANT:
-        if (minic_type_is_long_double(instruction->type)) {
+        {
+            const MinicCoreType *type = dump_base_type(function, instruction->core_type_id);
+            if (type == NULL || type->kind != MINIC_CORE_TYPE_FLOAT ||
+                !type->has_layout || type->size == 0U) return false;
+            if (type->size > 8U ||
+                type->value.floating.format == MINIC_CORE_FLOAT_X87_EXTENDED80 ||
+                type->value.floating.format == MINIC_CORE_FLOAT_BINARY128)
+                return fprintf(output,
+                    "  %%%" PRIu32 " = const.wide_float.bits 0x%016" PRIx64 "%016" PRIx64 "\n",
+                    instruction->result, instruction->value.floating128_bits.high,
+                    instruction->value.floating128_bits.low) >= 0;
             return fprintf(output,
-                           "  %%%" PRIu32 " = const.long_double.bits 0x%016" PRIx64 "%016" PRIx64 "\n",
-                           instruction->result,
-                           instruction->value.floating128_bits.high,
-                           instruction->value.floating128_bits.low) >= 0;
+                type->size == 4U
+                    ? "  %%%" PRIu32 " = const.float.bits 0x%08" PRIx64 "\n"
+                    : "  %%%" PRIu32 " = const.double.bits 0x%016" PRIx64 "\n",
+                instruction->result, instruction->value.floating_bits) >= 0;
         }
-        return fprintf(output,
-                       minic_type_is_float(instruction->type)
-                           ? "  %%%" PRIu32 " = const.float.bits 0x%08" PRIx64 "\n"
-                           : "  %%%" PRIu32 " = const.double.bits 0x%016" PRIx64 "\n",
-                       instruction->result,
-                       instruction->value.floating_bits) >= 0;
     case MINIC_CORE_INSTRUCTION_FLOAT_ADD:
         return fprintf(output,
                        "  %%%" PRIu32 " = add.float %%%" PRIu32 ", %%%" PRIu32 "\n",
@@ -260,8 +296,10 @@ static bool dump_instruction(FILE *output,
                        instruction->value.call_frame_address.level) >= 0;
     case MINIC_CORE_INSTRUCTION_VARIADIC_ARGUMENT_ADDRESS:
         return fprintf(output,
-                       "  %%%" PRIu32 " = variadic.argument.address\n",
-                       instruction->result) >= 0;
+                       "  %%%" PRIu32 " = variadic.argument.address.%s\n",
+                       instruction->result,
+                       instruction->value.variadic_address.copy_destination
+                           ? "copy-destination" : "start") >= 0;
     case MINIC_CORE_INSTRUCTION_VARIADIC_COPY:
         return fprintf(output,
                        "  variadic.copy %%%" PRIu32 ", %%%" PRIu32 "\n",
@@ -285,6 +323,11 @@ static bool dump_instruction(FILE *output,
                        "  %%%" PRIu32 " = fixed.register.read binding=%zu\n",
                        instruction->result,
                        instruction->value.fixed_register_binding_id) >= 0;
+    case MINIC_CORE_INSTRUCTION_FIXED_REGISTER_WRITE:
+        return fprintf(output,
+                       "  fixed.register.write binding=%zu, %" PRIu32 "\n",
+                       instruction->value.fixed_register_write.binding_id,
+                       instruction->value.fixed_register_write.source) >= 0;
     case MINIC_CORE_INSTRUCTION_PARAMETER_OBJECT:
         return fprintf(output,
                        "  parameter.object %zu, %%o%" PRIu32 "\n",
@@ -318,11 +361,10 @@ static bool dump_instruction(FILE *output,
                        function->function_symbols[instruction->value.function_symbol_id].name) >= 0;
     case MINIC_CORE_INSTRUCTION_FIELD_ADDRESS:
         return fprintf(output,
-                       "  %%%" PRIu32 " = field.addr %%%" PRIu32 ", record=%zu, field=%zu\n",
+                       "  %%%" PRIu32 " = field.addr %%%" PRIu32 ", byte_offset=%zu\n",
                        instruction->result,
                        instruction->value.field_address.base,
-                       instruction->value.field_address.record_id,
-                       instruction->value.field_address.field_index) >= 0;
+                       instruction->value.field_address.byte_offset) >= 0;
     case MINIC_CORE_INSTRUCTION_POINTER_OFFSET:
         return fprintf(output,
                        "  %%%" PRIu32 " = pointer.offset %%%" PRIu32 ", %%%" PRIu32
@@ -358,9 +400,37 @@ static bool dump_instruction(FILE *output,
                        instruction->value.record_load.destination_object) >= 0;
     case MINIC_CORE_INSTRUCTION_RECORD_COPY:
         return fprintf(output,
-                       "  record.copy %%%" PRIu32 ", %%%" PRIu32 "\n",
+                       "  record.copy%s%s %%%" PRIu32 ", %%%" PRIu32 "\n",
+                       instruction->value.record_copy.source_volatile
+                           ? ".source_volatile" : "",
+                       instruction->value.record_copy.destination_volatile
+                           ? ".destination_volatile" : "",
                        instruction->value.record_copy.source_address,
                        instruction->value.record_copy.destination_address) >= 0;
+    case MINIC_CORE_INSTRUCTION_VECTOR_STORAGE_COPY:
+        return fprintf(output,
+                       "  vector.storage.copy%s%s %%%" PRIu32 ", %%%" PRIu32 "\n",
+                       instruction->value.vector_storage_copy.source_volatile
+                           ? ".source_volatile" : "",
+                       instruction->value.vector_storage_copy.destination_volatile
+                           ? ".destination_volatile" : "",
+                       instruction->value.vector_storage_copy.source_address,
+                       instruction->value.vector_storage_copy.destination_address) >= 0;
+    case MINIC_CORE_INSTRUCTION_VECTOR_REGISTER_LOAD:
+        return fprintf(output, "  %%%" PRIu32 " = vector.register.load %%%" PRIu32 "\n",
+                       instruction->result, instruction->value.load.address) >= 0;
+    case MINIC_CORE_INSTRUCTION_VECTOR_REGISTER_STORE:
+        return fprintf(output, "  vector.register.store %%%" PRIu32 ", %%%" PRIu32 "\n",
+                       instruction->value.store.stored_value,
+                       instruction->value.store.address) >= 0;
+    case MINIC_CORE_INSTRUCTION_VECTOR_REGISTER_XOR:
+        return fprintf(output, "  %%%" PRIu32 " = vector.register.xor %%%" PRIu32 ", %%%" PRIu32 "\n",
+                       instruction->result, instruction->value.binary.left,
+                       instruction->value.binary.right) >= 0;
+    case MINIC_CORE_INSTRUCTION_VECTOR_REGISTER_ADD:
+        return fprintf(output, "  %%%" PRIu32 " = vector.register.add %%%" PRIu32 ", %%%" PRIu32 "\n",
+                       instruction->result, instruction->value.binary.left,
+                       instruction->value.binary.right) >= 0;
     case MINIC_CORE_INSTRUCTION_OPAQUE_INLINE_ASM: {
         const MinicCoreInlineAsm *inline_asm;
 
@@ -374,91 +444,6 @@ static bool dump_instruction(FILE *output,
                        inline_asm->is_volatile ? " volatile" : "",
                        inline_asm->has_memory_clobber ? " memory" : "") >= 0;
     }
-    case MINIC_CORE_INSTRUCTION_REGISTER_OUTPUT_INLINE_ASM: {
-        const MinicCoreInlineAsm *inline_asm;
-
-        if (function == NULL || instruction->value.inline_asm_id >= function->inline_asm_count) {
-            return false;
-        }
-        inline_asm = &function->inline_asms[instruction->value.inline_asm_id];
-        return fprintf(output,
-                       "  %%%" PRIu32 " = asm.register_output id=%" PRIu32 "%s%s\n",
-                       instruction->result,
-                       instruction->value.inline_asm_id,
-                       inline_asm->is_volatile ? " volatile" : "",
-                       inline_asm->has_memory_clobber ? " memory" : "") >= 0;
-    }
-    case MINIC_CORE_INSTRUCTION_REGISTER_OUTPUT_INPUT_INLINE_ASM: {
-        const MinicCoreInlineAsm *inline_asm;
-        MinicCoreInlineAsmId inline_asm_id;
-
-        inline_asm_id = instruction->value.register_output_input_inline_asm.inline_asm_id;
-        if (function == NULL || inline_asm_id >= function->inline_asm_count) {
-            return false;
-        }
-        inline_asm = &function->inline_asms[inline_asm_id];
-        return fprintf(output,
-                       "  %%%" PRIu32 " = asm.register_output_input id=%" PRIu32
-                       " %%%" PRIu32 "%s%s\n",
-                       instruction->result,
-                       inline_asm_id,
-                       instruction->value.register_output_input_inline_asm.operand,
-                       inline_asm->is_volatile ? " volatile" : "",
-                       inline_asm->has_memory_clobber ? " memory" : "") >= 0;
-    }
-    case MINIC_CORE_INSTRUCTION_MEMORY_READWRITE_SCALAR_INPUT_INLINE_ASM: {
-        const MinicCoreInlineAsm *inline_asm;
-        MinicCoreInlineAsmId inline_asm_id;
-        size_t register_index;
-
-        inline_asm_id = instruction->value.memory_readwrite_scalar_input_inline_asm.inline_asm_id;
-        register_index =
-            instruction->value.memory_readwrite_scalar_input_inline_asm.register_output_operand_index;
-        if (function == NULL || inline_asm_id >= function->inline_asm_count) {
-            return false;
-        }
-        inline_asm = &function->inline_asms[inline_asm_id];
-        if (register_index == SIZE_MAX) {
-            return fprintf(output,
-                           "  asm.memory_rw_input id=%" PRIu32 " mem=%%%" PRIu32
-                           " input=%%%" PRIu32 " operands=%zu,-,%zu%s%s\n",
-                           inline_asm_id,
-                           instruction->value.memory_readwrite_scalar_input_inline_asm.memory_address,
-                           instruction->value.memory_readwrite_scalar_input_inline_asm.operand,
-                           instruction->value.memory_readwrite_scalar_input_inline_asm.memory_operand_index,
-                           instruction->value.memory_readwrite_scalar_input_inline_asm.scalar_input_operand_index,
-                           inline_asm->is_volatile ? " volatile" : "",
-                           inline_asm->has_memory_clobber ? " memory" : "") >= 0;
-        }
-        return fprintf(output,
-                       "  %%%" PRIu32 " = asm.memory_rw_input id=%" PRIu32
-                       " mem=%%%" PRIu32 " input=%%%" PRIu32 " operands=%zu,%zu,%zu%s%s\n",
-                       instruction->result,
-                       inline_asm_id,
-                       instruction->value.memory_readwrite_scalar_input_inline_asm.memory_address,
-                       instruction->value.memory_readwrite_scalar_input_inline_asm.operand,
-                       instruction->value.memory_readwrite_scalar_input_inline_asm.memory_operand_index,
-                       register_index,
-                       instruction->value.memory_readwrite_scalar_input_inline_asm.scalar_input_operand_index,
-                       inline_asm->is_volatile ? " volatile" : "",
-                       inline_asm->has_memory_clobber ? " memory" : "") >= 0;
-    }
-    case MINIC_CORE_INSTRUCTION_SCALAR_INPUT_INLINE_ASM: {
-        const MinicCoreInlineAsm *inline_asm;
-        MinicCoreInlineAsmId inline_asm_id;
-
-        inline_asm_id = instruction->value.scalar_input_inline_asm.inline_asm_id;
-        if (function == NULL || inline_asm_id >= function->inline_asm_count) {
-            return false;
-        }
-        inline_asm = &function->inline_asms[inline_asm_id];
-        return fprintf(output,
-                       "  asm.scalar_input id=%" PRIu32 " %%%" PRIu32 "%s%s\n",
-                       inline_asm_id,
-                       instruction->value.scalar_input_inline_asm.operand,
-                       inline_asm->is_volatile ? " volatile" : "",
-                       inline_asm->has_memory_clobber ? " memory" : "") >= 0;
-    }
     case MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM: {
         MinicCoreInlineAsmId inline_asm_id;
         const MinicCoreInlineAsm *inline_asm;
@@ -468,24 +453,33 @@ static bool dump_instruction(FILE *output,
             return false;
         }
         inline_asm = &function->inline_asms[inline_asm_id];
-        return fprintf(output,
-                       "  asm.structured id=%" PRIu32 " operands=%zu%s%s\n",
-                       inline_asm_id,
-                       instruction->value.structured_inline_asm.operand_count,
-                       inline_asm->is_volatile ? " volatile" : "",
-                       inline_asm->has_memory_clobber ? " memory" : "") >= 0;
+        if (instruction->result != MINIC_CORE_VALUE_INVALID &&
+            fprintf(output, "  %%%" PRIu32 " =", instruction->result) < 0)
+            return false;
+        if (fprintf(output,
+                    instruction->result == MINIC_CORE_VALUE_INVALID
+                        ? "  asm.structured id=%" PRIu32 " operands=%zu%s%s"
+                        : " asm.structured id=%" PRIu32 " operands=%zu%s%s",
+                    inline_asm_id,
+                    instruction->value.structured_inline_asm.operand_count,
+                    inline_asm->is_volatile ? " volatile" : "",
+                    inline_asm->has_memory_clobber ? " memory" : "") < 0)
+            return false;
+        if (inline_asm->deferred_immediate_symbol != NULL &&
+            fprintf(output, " deferred=%s", inline_asm->deferred_immediate_symbol) < 0)
+            return false;
+        return fputc('\n', output) != EOF;
     }
     case MINIC_CORE_INSTRUCTION_COMPILER_BARRIER:
         return fprintf(output, "  compiler.barrier\n") >= 0;
     case MINIC_CORE_INSTRUCTION_CALL: {
         const MinicCoreCallee *callee;
-        size_t argument_index;
 
         if (function == NULL || instruction->value.call.callee_id >= function->callee_count) {
             return false;
         }
         callee = &function->callees[instruction->value.call.callee_id];
-        if (minic_type_is_record(callee->return_type)) {
+        if (dump_type_is_record(function, instruction->core_type_id)) {
             if (fprintf(output,
                         "  %%o%" PRIu32 " = call @",
                         instruction->value.call.result_object) < 0) {
@@ -502,37 +496,24 @@ static bool dump_instruction(FILE *output,
             fprintf(output, "(") < 0) {
             return false;
         }
-        for (argument_index = 0U; argument_index < instruction->value.call.argument_count;
-             ++argument_index) {
-            const MinicCoreCallArgument *argument =
-                &function->call_arguments[instruction->value.call.argument_begin + argument_index];
-
-            if (argument_index != 0U && fprintf(output, ", ") < 0) {
-                return false;
-            }
-            if (argument->kind == MINIC_CORE_CALL_ARGUMENT_VALUE) {
-                if (fprintf(output, "%%%" PRIu32, argument->value.value_id) < 0) {
-                    return false;
-                }
-            } else if (argument->kind == MINIC_CORE_CALL_ARGUMENT_OBJECT) {
-                if (fprintf(output, "%%o%" PRIu32, argument->value.object_id) < 0) {
-                    return false;
-                }
-            } else {
-                return false;
-            }
-        }
+        if (!dump_call_arguments(output, function, instruction->value.call.argument_begin,
+                                 instruction->value.call.argument_count)) return false;
         return fprintf(output, ")\n") >= 0;
     }
     case MINIC_CORE_INSTRUCTION_INDIRECT_CALL: {
-        size_t argument_index;
-
         if (function == NULL ||
             instruction->value.indirect_call.signature_id >= function->call_signature_count ||
             instruction->value.indirect_call.callee >= function->value_count) {
             return false;
         }
-        if (instruction->result == MINIC_CORE_VALUE_INVALID) {
+        if (dump_type_is_record(function, instruction->core_type_id)) {
+            if (fprintf(output,
+                        "  %%o%" PRIu32 " = call.indirect %%%" PRIu32 "(",
+                        instruction->value.indirect_call.result_object,
+                        instruction->value.indirect_call.callee) < 0) {
+                return false;
+            }
+        } else if (instruction->result == MINIC_CORE_VALUE_INVALID) {
             if (fprintf(output,
                         "  call.indirect %%%" PRIu32 "(",
                         instruction->value.indirect_call.callee) < 0) {
@@ -544,27 +525,9 @@ static bool dump_instruction(FILE *output,
                            instruction->value.indirect_call.callee) < 0) {
             return false;
         }
-        for (argument_index = 0U;
-             argument_index < instruction->value.indirect_call.argument_count;
-             ++argument_index) {
-            const MinicCoreCallArgument *argument = &function->call_arguments[
-                instruction->value.indirect_call.argument_begin + argument_index];
-
-            if (argument_index != 0U && fprintf(output, ", ") < 0) {
-                return false;
-            }
-            if (argument->kind == MINIC_CORE_CALL_ARGUMENT_VALUE) {
-                if (fprintf(output, "%%%" PRIu32, argument->value.value_id) < 0) {
-                    return false;
-                }
-            } else if (argument->kind == MINIC_CORE_CALL_ARGUMENT_OBJECT) {
-                if (fprintf(output, "%%o%" PRIu32, argument->value.object_id) < 0) {
-                    return false;
-                }
-            } else {
-                return false;
-            }
-        }
+        if (!dump_call_arguments(output, function,
+                                 instruction->value.indirect_call.argument_begin,
+                                 instruction->value.indirect_call.argument_count)) return false;
         return fprintf(output,
                        ") signature=%" PRIu32 "\n",
                        instruction->value.indirect_call.signature_id) >= 0;
@@ -578,7 +541,7 @@ static bool dump_terminator(FILE *output,
                             const MinicCoreTerminator *terminator) {
     switch (terminator->kind) {
     case MINIC_CORE_TERMINATOR_RETURN:
-        if (function != NULL && minic_type_is_record(function->return_type)) {
+        if (dump_type_is_record(function, minic_core_function_return_type(function))) {
             return fprintf(output, "  return.object %%o%" PRIu32 "\n", terminator->return_object) >=
                    0;
         }
@@ -615,9 +578,8 @@ bool minic_core_function_dump(FILE *output, const MinicCoreFunction *function) {
     }
     for (index = 0U; index < function->object_count; ++index) {
         if (fprintf(output,
-                    "object %%o%" PRIu32 "%s\n",
-                    (MinicCoreObjectId)index,
-                    minic_type_is_volatile(function->objects[index].type) ? " volatile" : "") < 0) {
+                    "object %%o%" PRIu32 "\n",
+                    (MinicCoreObjectId)index) < 0) {
             return false;
         }
     }

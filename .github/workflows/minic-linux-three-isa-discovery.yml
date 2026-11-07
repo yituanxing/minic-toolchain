@@ -1,0 +1,298 @@
+name: MiniC Linux three-ISA native defconfig and seven-way MiniC census
+on:
+  pull_request:
+    # Deliberately opt-in: ordinary compiler fixes reuse the frozen inputs
+    # locally/at the next explicit campaign, not full GNU Kbuild per commit.
+    paths:
+      - '.github/workflows/minic-linux-three-isa-discovery.yml'
+      - 'tools/ci/linux-three-isa-golden-v1.sh'
+      - 'tools/ci/linux-three-isa-common.config'
+      - 'tools/ci/linux-three-isa-golden-v1.py'
+      - 'tools/ci/linux-three-isa-freeze-i-v1.py'
+      - 'tools/ci/linux-three-isa-seven-probe-v1.py'
+      - 'tools/ci/linux-three-isa-focused-inputs-v1.py'
+      - 'tools/ci/linux-three-isa-summary-v1.py'
+      - 'tools/ci/linux-three-isa-strict-source-gate-v1.py'
+      - 'tools/ci/linux-three-isa-owner-delta-v1.py'
+      - 'tools/ci/linux-three-isa-owner-delta-selftest-v1.py'
+      - 'tools/ci/linux-three-isa-trigger.txt'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  # A frozen 21-shard attestation belongs to its exact compiler commit. A
+  # newer concurrent PR push must not erase those already-running receipts.
+  # The explicit trigger-file gate below still limits expensive campaigns.
+  group: three-linux-i-${{ github.ref }}-${{ github.event.pull_request.head.sha || github.sha }}
+  cancel-in-progress: false
+jobs:
+  # The PR contains this workflow, so GitHub's PR-wide path filter matches
+  # EVERY subsequent compiler-source commit. A tiny exact-HEAD gate restores
+  # the intended opt-in boundary: ordinary L1/L2 fixes do not rebuild three
+  # full GNU kernels or spawn 21 shards. Bump the campaign trigger only at a
+  # cumulative acceptance boundary, or use workflow_dispatch explicitly.
+  campaign-gate:
+    runs-on: ubuntu-24.04
+    outputs:
+      run: ${{ steps.decide.outputs.run }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 2
+      - name: Gate expensive GNU Linux source census on exact commit intent
+        id: decide
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          active=false
+          if [[ "${{ github.event_name }}" == workflow_dispatch ]]; then
+            active=true
+          elif git rev-parse --verify HEAD^ >/dev/null 2>&1 &&
+               ! git diff --quiet HEAD^ HEAD -- tools/ci/linux-three-isa-trigger.txt; then
+            active=true
+          fi
+          echo "run=$active" >> "$GITHUB_OUTPUT"
+          echo "THREE_ISA_CENSUS_GATE=$active head=$(git rev-parse HEAD)"
+  self-test:
+    needs: campaign-gate
+    if: needs.campaign-gate.outputs.run == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Validate GNU Kbuild C owner identity and seven-shard compiler route
+        run: |
+          set -Eeuo pipefail
+          bash -n tools/ci/linux-three-isa-golden-v1.sh
+          python3 -m py_compile tools/ci/linux-three-isa-golden-v1.py tools/ci/linux-three-isa-freeze-i-v1.py tools/ci/linux-three-isa-seven-probe-v1.py tools/ci/linux-three-isa-focused-inputs-v1.py tools/ci/linux-three-isa-summary-v1.py tools/ci/linux-three-isa-summary-phase-selftest-v1.py tools/ci/linux-three-isa-owner-delta-v1.py tools/ci/linux-three-isa-owner-delta-selftest-v1.py
+          python3 tools/ci/linux-three-isa-frontier-selftest-v1.py
+          python3 tools/ci/linux-three-isa-summary-phase-selftest-v1.py
+          python3 tools/ci/linux-three-isa-strict-source-gate-v1.py --self-test
+          python3 tools/ci/linux-three-isa-owner-delta-selftest-v1.py
+          python3 tools/ci/linux-three-isa-focused-inputs-v1.py --self-test
+          python3 tools/ci/linux-three-isa-golden-v1.py --self-test
+          python3 tools/ci/linux-three-isa-freeze-i-v1.py selftest
+  minic-producer:
+    needs: self-test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Build ONE strict MiniC binary for 21 shards
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/three-linux-compiler all
+          test -x build/three-linux-compiler/bin/minic-cc
+          bash tests/compiler/c0/probe-linux-core-asm-unclaimed-census.sh \
+            "$GITHUB_WORKSPACE/build/three-linux-compiler/bin/minic-cc"
+          sha256sum build/three-linux-compiler/bin/minic-cc
+      - uses: actions/upload-artifact@v4
+        with:
+          name: three-linux-minic-${{ github.event.pull_request.head.sha || github.sha }}
+          path: build/three-linux-compiler/bin/minic-cc
+          retention-days: 7
+          if-no-files-found: error
+  original-gnu:
+    needs: self-test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [x86_64, aarch64, loongarch64]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Install original GNU Kbuild toolchain only once per cache producer
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          for f in /etc/apt/apt-mirrors.txt /etc/apt/sources.list.d/ubuntu.sources; do
+            if [[ -f "$f" ]]; then
+              sudo sed -i 's#azure.archive.ubuntu.com#archive.ubuntu.com#g' "$f"
+            fi
+          done
+          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 update
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            build-essential bc bison flex libelf-dev libssl-dev cpio curl xz-utils python3
+          case "${{ matrix.target }}" in
+            x86_64) ;;
+            aarch64)
+              sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+                gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu ;;
+            loongarch64)
+              sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+                gcc-13-loongarch64-linux-gnu binutils-loongarch64-linux-gnu ;;
+          esac
+      - name: Compute GNU-cache identity independent of MiniC HEAD
+        id: gnu-version
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          case "${{ matrix.target }}" in
+            x86_64) cc=gcc ;;
+            aarch64) cc=aarch64-linux-gnu-gcc ;;
+            loongarch64) cc=loongarch64-linux-gnu-gcc-13 ;;
+          esac
+          trip=$("$cc" -dumpmachine)
+          version=$("$cc" -dumpfullversion)
+          printf 'value=%s\n' "$(printf '%s:%s\n' "$trip" "$version" | sha256sum | cut -d' ' -f1)" >>"$GITHUB_OUTPUT"
+      - name: Restore persistent GNU .i corpus (no repeat GNU Kbuild on cache hit)
+        uses: actions/cache@v4
+        id: gnu-cache
+        with:
+          path: |
+            ${{ runner.temp }}/minic-linux-${{ matrix.target }}/evidence
+            ${{ runner.temp }}/minic-linux-${{ matrix.target }}/frozen
+          key: linux66-gnu-i-${{ matrix.target }}-broad-v1-${{ hashFiles('tools/ci/linux-three-isa-golden-v1.sh','tools/ci/linux-three-isa-golden-v1.py','tools/ci/linux-three-isa-freeze-i-v1.py','tools/ci/linux-runtime-gcc-full-c-objects-v1.py') }}-${{ steps.gnu-version.outputs.value }}
+      - name: GNU original Linux 6.6.143 native defconfig Kbuild + GNU -E .i
+        if: steps.gnu-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          MINIC_LINUX_CONFIG_PROFILE=broad bash tools/ci/linux-three-isa-golden-v1.sh \
+            "${{ matrix.target }}" "$RUNNER_TEMP/minic-linux-${{ matrix.target }}"
+      - name: Verify SHA-bound frozen GNU .i corpus on fresh and cached results
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          case "${{ matrix.target }}" in
+            x86_64) cc=gcc ;;
+            aarch64) cc=aarch64-linux-gnu-gcc ;;
+            loongarch64) cc=loongarch64-linux-gnu-gcc-13 ;;
+          esac
+          python3 tools/ci/linux-three-isa-freeze-i-v1.py verify \
+            --target "${{ matrix.target }}" --gcc "$cc" \
+            --evidence "$RUNNER_TEMP/minic-linux-${{ matrix.target }}/evidence" \
+            --frozen "$RUNNER_TEMP/minic-linux-${{ matrix.target }}/frozen"
+          python3 -c 'import json,sys; p=json.load(open(sys.argv[1])); assert p["target"]==sys.argv[2] and p["config_profile"]=="broad", p; print("THREE_ISA_NATIVE_DEFCONFIG=PASS target="+p["target"]+" original_C_owners="+str(p["gnu_c_owners"]))' \
+            "$RUNNER_TEMP/minic-linux-${{ matrix.target }}/evidence/discovery.json" "${{ matrix.target }}"
+          echo "THREE_ISA_GNU_E_CACHE_HIT=${{ steps.gnu-cache.outputs.cache-hit }}"
+      - name: Export immutable GNU .i snapshots to seven MiniC consumers
+        uses: actions/upload-artifact@v4
+        with:
+          name: three-linux-gnu-i-${{ matrix.target }}-${{ github.event.pull_request.head.sha || github.sha }}
+          path: |
+            ${{ runner.temp }}/minic-linux-${{ matrix.target }}/evidence
+            ${{ runner.temp }}/minic-linux-${{ matrix.target }}/frozen
+          compression-level: 3
+          retention-days: 7
+          if-no-files-found: error
+      - name: Preserve GNU baseline diagnostics even on Kbuild failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: three-linux-failure-${{ matrix.target }}-${{ github.event.pull_request.head.sha || github.sha }}
+          path: ${{ runner.temp }}/minic-linux-${{ matrix.target }}/evidence/
+          retention-days: 7
+          if-no-files-found: warn
+  seven-way-minic:
+    needs: [original-gnu, minic-producer]
+    # Do not allocate 21 runners against missing GNU .i artifacts.
+    # Failed GNU stages retain their own bounded diagnostic artifacts.
+    if: needs.original-gnu.result == 'success' && needs.minic-producer.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      max-parallel: 21
+      matrix:
+        target: [x86_64, aarch64, loongarch64]
+        shard: [0, 1, 2, 3, 4, 5, 6]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: three-linux-gnu-i-${{ matrix.target }}-${{ github.event.pull_request.head.sha || github.sha }}
+          path: ${{ runner.temp }}/minic-linux-${{ matrix.target }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: three-linux-minic-${{ github.event.pull_request.head.sha || github.sha }}
+          path: build/three-linux-shard-bin
+      - name: Scan one of seven frozen original GNU C cohorts with MiniC -S
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          chmod +x build/three-linux-shard-bin/minic-cc
+          python3 tools/ci/linux-three-isa-seven-probe-v1.py \
+            --target "${{ matrix.target }}" --shard "${{ matrix.shard }}" \
+            --minic "$GITHUB_WORKSPACE/build/three-linux-shard-bin/minic-cc" \
+            --frozen "$RUNNER_TEMP/minic-linux-${{ matrix.target }}/frozen" \
+            --output "$RUNNER_TEMP/minic-three-scan-${{ matrix.target }}-${{ matrix.shard }}" \
+            --workers 2
+      - name: Preserve only SHA-verified failing GNU .i inputs for next-frontier reproduction
+        if: success()
+        # This is a diagnostic convenience, not part of the immutable -S census.
+        # A huge focused corpus or an archive error must never erase 21 valid
+        # per-file compiler reports or prevent the census-summary job.
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 tools/ci/linux-three-isa-focused-inputs-v1.py \
+            --frozen "$RUNNER_TEMP/minic-linux-${{ matrix.target }}/frozen" \
+            --report "$RUNNER_TEMP/minic-three-scan-${{ matrix.target }}-${{ matrix.shard }}/report.json" \
+            --output "$RUNNER_TEMP/minic-three-scan-${{ matrix.target }}-${{ matrix.shard }}/failed-gnu-i"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: three-linux-errors-${{ matrix.target }}-${{ matrix.shard }}-${{ github.event.pull_request.head.sha || github.sha }}
+          path: |
+            ${{ runner.temp }}/minic-three-scan-${{ matrix.target }}-${{ matrix.shard }}/report.json
+            ${{ runner.temp }}/minic-three-scan-${{ matrix.target }}-${{ matrix.shard }}/failed-gnu-i
+          retention-days: 14
+          if-no-files-found: warn
+  census-summary:
+    needs: seven-way-minic
+    if: needs.seven-way-minic.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: three-linux-errors-*-${{ github.event.pull_request.head.sha || github.sha }}
+          path: build/three-linux-seven-reports
+      - name: One grouped cross-ISA error classification from 21 parallel shards
+        run: |
+          set -Eeuo pipefail
+          python3 tools/ci/linux-three-isa-summary-v1.py \
+            --root build/three-linux-seven-reports \
+            --output build/three-linux-all-root-causes.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: three-linux-root-causes-${{ github.event.pull_request.head.sha || github.sha }}
+          path: build/three-linux-all-root-causes.json
+          retention-days: 14
+          if-no-files-found: error
+  strict-source-gate:
+    needs: census-summary
+    # A diagnostic census intentionally succeeds with failing TUs so every
+    # error survives. This separate acceptance job MUST fail if even one C
+    # owner failed; success here still says nothing about GNU AS/link/QEMU.
+    if: needs.census-summary.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: three-linux-root-causes-${{ github.event.pull_request.head.sha || github.sha }}
+          path: build/three-linux-strict-receipt
+      - name: Fail closed on any missing or failed MiniC C owner
+        run: |
+          set -Eeuo pipefail
+          python3 tools/ci/linux-three-isa-strict-source-gate-v1.py \
+            --summary build/three-linux-strict-receipt/three-linux-all-root-causes.json

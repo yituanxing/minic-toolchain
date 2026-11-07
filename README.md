@@ -20,7 +20,7 @@ C (.c) -> MiniPP (.i) -> MiniC (.s) -> MiniAS (.o)
 
 All **2064/2064** real C objects passed across seven shards. The native RV32 ELF32 compat-vDSO link was also qualified in this integrated run. GNU utilities can still serve documented build probes, pinned macro references, and differential oracles; this is not a claim that every project operation is GNU-free or that future compiler revisions are already certified.
 
-MiniPP, MiniAS, MiniAR, MiniLD, ELF/object tools and the staged `minic` driver remain separately executable and have independent scopes of acceptance. The near-term goal is **lean pre-bootstrap consolidation**, not immediate construction of another frontend, an RV32 C backend, or an LLVM-scale framework. See the [lean compiler and pre-bootstrap convergence plan](docs/architecture/lean-compiler-and-prebootstrap-convergence-2026-10-16.md).
+MiniPP, MiniAS, MiniAR, MiniLD, ELF/object tools and the staged `minic` driver remain separately executable and have independent scopes of acceptance. The [lean compiler and pre-bootstrap convergence plan](docs/architecture/lean-compiler-and-prebootstrap-convergence-2026-10-16.md) records an earlier design stage; its statement that an RV32 C backend was not yet planned is **historical**, since `src/target/riscv32/` now implements one. For current compiler boundaries, evidence and cleanup work, use the [MiniC architecture index](docs/architecture/README.md).
 
 ## Current implementation
 
@@ -79,8 +79,12 @@ GitHub Actions runs the complete clean-checkout gate on Ubuntu 24.04, including 
 
 See:
 
+- [`docs/architecture/README.md`](docs/architecture/README.md) — current MiniC compiler architecture/document index; links the living contracts, all issue evidence, review snapshots, and cleanup dependencies
 - [`docs/architecture/principles.md`](docs/architecture/principles.md)
-- [`docs/architecture/compiler-development-roadmap.md`](docs/architecture/compiler-development-roadmap.md)
+- [`docs/architecture/compiler-development-roadmap.md`](docs/architecture/compiler-development-roadmap.md) — frozen historical roadmap; use the architecture index and living contracts for current work
+- [`docs/architecture/minic-global-contract-map.md`](docs/architecture/minic-global-contract-map.md) — living pipeline, ownership, module boundaries, and target-extension contracts
+- [`docs/architecture/minic-function-contract-register.md`](docs/architecture/minic-function-contract-register.md) — evidence-graded audit of critical function contracts and outstanding coverage
+- [`docs/architecture/minic-issue-register.md`](docs/architecture/minic-issue-register.md) — ongoing bugs, risks, design debt, and verified non-issues
 - [`docs/standards/implementation-language.md`](docs/standards/implementation-language.md)
 - [`docs/standards/validation-toolchain.md`](docs/standards/validation-toolchain.md)
 - [`docs/DEVIATIONS.md`](docs/DEVIATIONS.md)

@@ -183,6 +183,21 @@ static bool parse_indirect_arguments(MinicParser *parser,
                                      const MinicFunctionType *function_type) {
     size_t argument_index;
 
+    /* An EFI/MS ABI callback is a distinct C function-pointer type. Admit
+     * only the target-verified fixed scalar calling convention; aggregates,
+     * 128-bit arguments, long double and variadic calls have different Win64
+     * transport rules and must not fall through to SysV lowering. */
+    if (function_type != NULL &&
+        function_type->calling_convention == MINIC_CALLING_CONVENTION_MS_X64 &&
+        !minic_parser_calling_convention_fixed_scalar_supported(
+            parser, function_type->calling_convention,
+            function_type->return_type, function_type->parameter_types,
+            function_type->parameter_count, function_type->is_variadic)) {
+        minic_parser_error(parser,
+            "ms_abi indirect call requires supported fixed-scalar Microsoft x64 ABI");
+        return false;
+    }
+
     if (function_type == NULL || function_type->parameter_count > MINIC_MAX_FUNCTION_PARAMETERS ||
         !minic_parser_advance(parser)) {
         return false;

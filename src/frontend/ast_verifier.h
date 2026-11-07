@@ -2,7 +2,7 @@
 #define MINIC_FRONTEND_AST_VERIFIER_H
 
 #include "frontend/ast.h"
-#include "target/target_info.h"
+#include "target/source_policy/source_info.h"
 
 typedef enum MinicC0AstForm { MINIC_C0_AST_PARSED = 0, MINIC_C0_AST_NORMALIZED } MinicC0AstForm;
 
@@ -38,7 +38,7 @@ typedef struct MinicC0AstVerifyFailure {
 const char *minic_c0_ast_verify_stage_name(MinicC0AstVerifyStage stage);
 bool minic_c0_program_verify_target_detailed(const MinicC0Program *program,
                                              MinicC0AstForm form,
-                                             const MinicTargetInfo *target,
+                                             const MinicTargetInvocation *target,
                                              MinicC0AstVerifyFailure *failure);
 bool minic_c0_program_verify_detailed(const MinicC0Program *program,
                                       MinicC0AstForm form,
@@ -46,7 +46,7 @@ bool minic_c0_program_verify_detailed(const MinicC0Program *program,
 
 bool minic_c0_program_verify_target(const MinicC0Program *program,
                                     MinicC0AstForm form,
-                                    const MinicTargetInfo *target);
+                                    const MinicTargetInvocation *target);
 bool minic_c0_program_verify(const MinicC0Program *program, MinicC0AstForm form);
 
 #endif

@@ -1,0 +1,14 @@
+[
+  "arch/x86/kernel/process.o",
+  "drivers/tty/serial/8250/8250_port.o",
+  "arch/x86/mm/tlb.o",
+  "mm/mmap.o",
+  "arch/x86/mm/extable.o",
+  "arch/x86/mm/pgtable.o",
+  "drivers/i2c/busses/i2c-i801.o",
+  "drivers/acpi/processor_idle.o",
+  "drivers/video/console/vgacon.o",
+  "drivers/usb/host/pci-quirks.o",
+  "drivers/clocksource/i8253.o",
+  "arch/x86/kernel/reboot.o"
+]

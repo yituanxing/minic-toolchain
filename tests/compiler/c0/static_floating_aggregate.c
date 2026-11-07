@@ -14,10 +14,10 @@ static const struct {
 static const union {
     double real;
     unsigned long long bits;
-} floatingZero = {0};
+} floatingZero __attribute__((used)) = {0};
 
-static const double integerToDouble = 7;
-static const float unsignedToFloat = 9u;
+static const double integerToDouble __attribute__((used)) = 7;
+static const float unsignedToFloat __attribute__((used)) = 9u;
 
 float static_floating_aggregate_limit(int index)
 {

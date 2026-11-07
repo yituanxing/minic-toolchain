@@ -1,6 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
 #include "target/riscv64/isa.h"
-#include "frontend/ast.h"
+#include "target/riscv64/core_type_query.h"
 #include "core/core_ir.h"
 
 #include <ctype.h>
@@ -25,7 +25,8 @@ static bool reject(char *why, size_t cap, const char *message) {
 static bool core_operand_is_i128(const MinicCoreFunction *function,
                                  MinicCoreValueId value) {
     return function != NULL && value < function->value_count &&
-           minic_type_is_int128_integer(function->values[value].type);
+           minic_riscv64_core_is_i128(
+               function, function->values[value].core_type_id);
 }
 
 bool minic_riscv_isa_admit_core_instruction(
@@ -36,13 +37,15 @@ bool minic_riscv_isa_admit_core_instruction(
     const char *machine = NULL;
     const char *extension = NULL;
     if (isa == NULL || !isa->strict_isa || instruction == NULL) return true;
+    if (function == NULL || function->type_context == NULL)
+        return reject(reason, capacity, "RV64 strict ISA requires sealed Core types");
     /* Reject unqualified two-limb operations BEFORE even the first emitted
      * instruction. A 32-bit base ISA has no obligation to implement a C
      * compiler extension such as __int128, but it must not miscompile one. */
     switch (instruction->kind) {
     case MINIC_CORE_INSTRUCTION_INTEGER_CLZ:
     case MINIC_CORE_INSTRUCTION_INTEGER_CTZ:
-        if (minic_type_is_int128_integer(instruction->type))
+        if (minic_riscv64_core_is_i128(function, instruction->core_type_id))
             return reject(reason, capacity,
                           "__int128 operation has no qualified two-limb lowering");
         break;
@@ -67,7 +70,7 @@ bool minic_riscv_isa_admit_core_instruction(
          * select the same compiler-rt pair comparison on I and IM. */
         break;
     case MINIC_CORE_INSTRUCTION_SCALAR_BITCAST:
-        if (minic_type_is_int128_integer(instruction->type) ||
+        if (minic_riscv64_core_is_i128(function, instruction->core_type_id) ||
             core_operand_is_i128(function, instruction->value.operand))
             return reject(reason, capacity,
                           "__int128 scalar bitcast has no qualified pair lowering");
@@ -78,7 +81,7 @@ bool minic_riscv_isa_admit_core_instruction(
     case MINIC_CORE_INSTRUCTION_INTEGER_MULTIPLY:
         /* <=64-bit RV64I uses __muldi3; 128-bit uses upstream
          * compiler-rt __multi3 with integer-register LP64 calling ABI. */
-        if (!minic_type_is_int128_integer(instruction->type) ||
+        if (!minic_riscv64_core_is_i128(function, instruction->core_type_id) ||
             !minic_riscv_codegen_has(isa, MINIC_RISCV_FEATURE_M))
             return true;
         required = MINIC_RISCV_FEATURE_M;
@@ -132,6 +135,9 @@ bool minic_riscv_isa_admit_core_instruction(
     case MINIC_CORE_INSTRUCTION_FLOAT_TO_DOUBLE:
     case MINIC_CORE_INSTRUCTION_DOUBLE_TO_FLOAT:
     case MINIC_CORE_INSTRUCTION_DOUBLE_TO_INTEGER:
+        /* FIXME(MC-053): LP64 softfloat supports the arithmetic opcodes
+         * above, but these comparisons/conversions/negation still lack
+         * corresponding libgcc+ABI lowering and must remain fail-closed. */
         required = MINIC_RISCV_FEATURE_F | MINIC_RISCV_FEATURE_D;
         machine = "fadd.d";
         extension = "F/D";
@@ -143,12 +149,16 @@ bool minic_riscv_isa_admit_core_instruction(
      * family used as a diagnostic placeholder. This is useful when a
      * compiler-rt translation unit contains many inline helper functions. */
     if (getenv("MINIC_RV64I_CORE_REJECT_TRACE") != NULL) {
+        const MinicCoreType *type =
+            minic_riscv64_core_base_type(function, instruction->core_type_id);
         (void)fprintf(stderr,
-            "RV64I_CORE_REJECT kind=%d base=%d sign=%d rank=%d "
+            "RV64I_CORE_REJECT kind=%d core_kind=%d sign=%d bits=%u "
             "result=%u machine=%s\n",
-            (int)instruction->kind, (int)instruction->type.base_kind,
-            (int)instruction->type.integer_sign,
-            (int)instruction->type.integer_rank,
+            (int)instruction->kind, type != NULL ? (int)type->kind : -1,
+            type != NULL && type->kind == MINIC_CORE_TYPE_INTEGER
+                ? (int)type->value.integer.is_signed : -1,
+            type != NULL && type->kind == MINIC_CORE_TYPE_INTEGER
+                ? type->value.integer.bit_width : 0U,
             (unsigned)instruction->result,
             machine == NULL ? "(none)" : machine);
         (void)minic_core_function_dump(stderr, function);

@@ -1,6 +1,6 @@
 typedef unsigned int u32;
 
-static const u32 runnable_avg_yN_inv[] __attribute__((__unused__)) = {
+static const u32 runnable_avg_yN_inv[] __attribute__((__unused__, used)) = {
     0xffffffff,
     2,
     3,

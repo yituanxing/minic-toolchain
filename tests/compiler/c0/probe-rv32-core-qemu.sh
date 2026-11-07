@@ -568,10 +568,26 @@ qemu-riscv32 "$work/prog-native.elf"
 echo 'RV32_NATIVE_CHAIN=PASS minic_C=true minic_as_ELF32=true GNU_LD=true qemu_riscv32=true'
 riscv64-linux-gnu-readelf -h "$work/prog.elf" |
   grep -q 'Class:.*ELF32'
-# The 64-bit shift count checks both XLENs. The new 4096-byte
-# pointer multiplication must use a Base-I shift, not M or a libcall.
-grep -q 'bnez t5, .Lshift_wide_count_wide_ge64_' "$work/core.s"
-grep -Fq 'slli t1, t1, 12' "$work/core.s"
+# The 64-bit shift count checks both XLENs. MachineIR now lowers this
+# without a branch (two unsigned range checks and a high-count-word mask),
+# whereas the retired FILE* emitter used a branch to a named local label.
+# Check the target algorithm, not the retired label or a register allocator's
+# particular choice of t5. The actual 0..64+ shifts were executed above.
+shift_count_asm="$(sed -n '/^shift_wide_count:/,/^\.size shift_wide_count/p' "$work/core.s")"
+for op in sltu seqz srl sll; do
+    if ! grep -Eq "^[[:space:]]+$op[[:space:]]" <<< "$shift_count_asm"; then
+        echo "RV32_COUNT64=FAIL missing_base_i_shift_check=$op" >&2
+        exit 1
+    fi
+done
+# The 4096-byte pointer multiplication must use a Base-I 12-bit shift,
+# independent of which physical register MachineIR selected; the odd-sized
+# stride must still call the software integer multiply implementation.
+stride_pow2_asm="$(sed -n '/^rv32_stride_pow2:/,/^\.size rv32_stride_pow2/p' "$work/core.s")"
+if ! grep -Eq '^[[:space:]]+slli[[:space:]]+[^,]+,[[:space:]]*[^,]+,[[:space:]]*12[[:space:]]*$' <<< "$stride_pow2_asm"; then
+    echo 'RV32_STRIDE_POW2=FAIL missing_base_i_shift_12' >&2
+    exit 1
+fi
 grep -Fq 'call __mulsi3' "$work/core.s"
 for symbol in __addsf3 __subsf3 __mulsf3 __divsf3; do
     grep -Fq "call $symbol" "$work/core.s" || {

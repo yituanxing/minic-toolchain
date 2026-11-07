@@ -1,4 +1,5 @@
 #include "frontend/parser_gnu_inline_asm.h"
+#include "frontend/expression_semantics.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -92,7 +93,9 @@ static bool parse_gnu_inline_asm_output(MinicParser *parser, MinicInlineAsmId in
         return false;
     }
     operand_expression = minic_c0_program_expression(parser->program, operand_id);
-    if (operand_expression == NULL || operand_expression->value_category != MINIC_VALUE_LVALUE) {
+    if (!minic_c0_inline_asm_output_value_supported(
+            parser->program, parser->invocation, operand_expression,
+            constraint, constraint_length)) {
         free(constraint);
         minic_parser_error(parser, "GNU asm output operand requires an lvalue");
         return false;
@@ -146,8 +149,8 @@ static bool parse_gnu_inline_asm_input(MinicParser *parser, MinicInlineAsmId inl
         return false;
     }
     operand_expression = minic_c0_program_expression(parser->program, operand_id);
-    if (operand_expression == NULL || (!minic_type_is_integer(operand_expression->type) &&
-                                       !minic_type_is_pointer(operand_expression->type))) {
+    if (!minic_c0_inline_asm_input_value_supported(
+            parser->invocation, operand_expression, constraint, constraint_length)) {
         free(constraint);
         minic_parser_error(parser,
                            "GNU asm input operand currently requires an integer or pointer");
@@ -158,30 +161,48 @@ static bool parse_gnu_inline_asm_input(MinicParser *parser, MinicInlineAsmId inl
         MinicExpression folded;
         MinicSourceSpan operand_span;
         int64_t immediate_value;
+        bool is_constant;
 
         operand_span = operand_expression->span;
-        if (!minic_const_eval_integer(
-                parser->program, parser->target_info, operand_id, &constant) ||
-            !minic_const_value_as_int64(
-                parser->program, parser->target_info, &constant, &immediate_value) ||
-            !minic_target_info_inline_asm_immediate_constraint_supported(
-                parser->target_info, constraint, constraint_length, immediate_value)) {
+        is_constant = minic_const_eval_integer(
+            parser->program, parser->invocation, operand_id, &constant) &&
+            minic_const_value_as_int64(
+                parser->program, parser->invocation, &constant, &immediate_value);
+        if (is_constant) {
+            /* Even in an inline helper, a known but illegal immediate must
+             * not be accepted as deferred target assembly. */
+            if (!minic_target_info_inline_asm_immediate_constraint_supported(
+                    parser->invocation, constraint, constraint_length, immediate_value)) {
+                free(constraint);
+                minic_parser_error(
+                    parser, "%s",
+                    minic_target_info_inline_asm_immediate_constraint_diagnostic(
+                        parser->invocation));
+                return false;
+            }
+            (void)memset(&folded, 0, sizeof(folded));
+            folded.kind = MINIC_EXPRESSION_INTEGER;
+            folded.span = operand_span;
+            folded.type = constant.type;
+            folded.value_category = MINIC_VALUE_RVALUE;
+            folded.value.integer_value = immediate_value;
+            if (!minic_parser_add_expression(parser, &folded, &operand_id)) {
+                free(constraint);
+                minic_parser_error(parser, "cannot store GNU asm immediate operand");
+                return false;
+            }
+        } else if (!minic_target_info_inline_asm_immediate_may_defer(parser->invocation)) {
             free(constraint);
-            minic_parser_error(parser,
-                               "GNU asm 'I' input requires a signed 12-bit integer constant");
+            minic_parser_error(
+                parser, "%s",
+                minic_target_info_inline_asm_immediate_constraint_diagnostic(
+                    parser->invocation));
             return false;
         }
-        (void)memset(&folded, 0, sizeof(folded));
-        folded.kind = MINIC_EXPRESSION_INTEGER;
-        folded.span = operand_span;
-        folded.type = constant.type;
-        folded.value_category = MINIC_VALUE_RVALUE;
-        folded.value.integer_value = immediate_value;
-        if (!minic_parser_add_expression(parser, &folded, &operand_id)) {
-            free(constraint);
-            minic_parser_error(parser, "cannot store GNU asm immediate operand");
-            return false;
-        }
+        /* For a GNU always-inline function, a target I-constraint may become
+         * an integer constant only after caller specialization. Retain that
+         * expression. Core must validate the *actual* ISA range after facts
+         * and inlining; an unresolved I is never silently emitted. */
     }
     if (!minic_c0_program_add_inline_asm_input(parser->program,
                                                inline_asm_id,
@@ -214,6 +235,19 @@ static bool parse_gnu_inline_asm_label(MinicParser *parser, MinicInlineAsmId inl
     name = parser->source + name_span.begin.offset;
     name_length = minic_parser_span_length(name_span);
     target_statement = minic_parser_find_label_statement(parser, name_span);
+    if (target_statement != MINIC_STATEMENT_INVALID) {
+        const MinicStatement *target =
+            minic_c0_program_statement(parser->program, target_statement);
+        /* A taken asm-goto edge cannot execute source cleanup callbacks.
+         * Preserve the source label, but fail closed across cleanup scopes
+         * until Core has explicit cleanup-on-branch-edge semantics. */
+        if (target == NULL || target->kind != MINIC_STATEMENT_LABEL ||
+            target->cleanup_context != parser->cleanup_context) {
+            minic_parser_error(parser,
+                               "GNU asm goto cannot cross a GNU cleanup lifetime");
+            return false;
+        }
+    }
     return minic_c0_program_add_inline_asm_label(
                parser->program, inline_asm_id, name, name_length, target_statement) &&
            minic_parser_advance(parser);
@@ -228,6 +262,7 @@ bool minic_parser_gnu_inline_asm_statement(MinicParser *parser) {
     size_t template_length;
     bool is_volatile;
     bool is_goto;
+    bool has_inline_qualifier;
     bool has_memory_clobber;
 
     if (!minic_parser_gnu_inline_asm_starts(parser)) {
@@ -238,12 +273,31 @@ bool minic_parser_gnu_inline_asm_statement(MinicParser *parser) {
     template_length = 0U;
     is_volatile = false;
     is_goto = false;
+    has_inline_qualifier = false;
     has_memory_clobber = false;
 
     if (!minic_parser_advance(parser)) {
         return false;
     }
     for (;;) {
+        /* Original x86 Linux 6.6.143 uses
+         *   asm __inline volatile("...": ...);
+         * GCC's asm inline modifier adjusts the optimizer's size estimate,
+         * not the instruction/operand/clobber semantics. MiniC does not
+         * size-estimate an asm block, so it remains parse-only. The lexer
+         * already canonicalizes inline/__inline/__inline__ into KW_INLINE.
+         * Leave backend qualification and machine clobbers unchanged. */
+        if (parser->current.kind == MINIC_TOKEN_KW_INLINE) {
+            if (has_inline_qualifier) {
+                minic_parser_error(parser, "duplicate inline qualifier on GNU asm");
+                return false;
+            }
+            has_inline_qualifier = true;
+            if (!minic_parser_advance(parser)) {
+                return false;
+            }
+            continue;
+        }
         if (current_is_gnu_volatile(parser)) {
             if (is_volatile) {
                 minic_parser_error(parser, "duplicate volatile qualifier on GNU asm");
@@ -272,6 +326,12 @@ bool minic_parser_gnu_inline_asm_statement(MinicParser *parser) {
         !minic_parser_parse_string_text(parser, &template_text, &template_length, &template_span)) {
         free(template_text);
         return false;
+    }
+    /* GNU basic asm is implicitly volatile. For extended asm, the same is
+     * true only when it has no outputs; decide that after parsing the output
+     * list so genuine nonvolatile extended asm with outputs stays distinct. */
+    if (parser->current.kind == MINIC_TOKEN_RPAREN) {
+        is_volatile = true;
     }
     if (!minic_c0_program_add_inline_asm(
             parser->program, template_text, template_length, is_volatile, false, &inline_asm_id) ||
@@ -334,10 +394,16 @@ bool minic_parser_gnu_inline_asm_statement(MinicParser *parser) {
             }
             if (clobber_length == 6U && memcmp(clobber, "memory", 6U) == 0) {
                 has_memory_clobber = true;
-            } else if (!minic_target_info_inline_asm_register_clobber_supported(
-                           parser->target_info, clobber, clobber_length)) {
+            } else if (!minic_target_info_inline_asm_source_clobber_supported(
+                           parser->invocation, clobber, clobber_length)) {
+                /* Fail closed, but identify the actual physical register or
+                 * special token. Previously 771 three-ISA Linux failures all
+                 * collapsed to one un-actionable identical diagnostic. No
+                 * target register admission is broadened by this change. */
+                minic_parser_error(parser,
+                                   "unsupported GNU asm register clobber for target: %.*s",
+                                   (int)clobber_length, clobber);
                 free(clobber);
-                minic_parser_error(parser, "unsupported GNU asm register clobber for target");
                 return false;
             } else if (!minic_c0_program_add_inline_asm_register_clobber(
                            parser->program, inline_asm_id, clobber, clobber_length)) {
@@ -378,9 +444,29 @@ bool minic_parser_gnu_inline_asm_statement(MinicParser *parser) {
         const MinicInlineAsm *inline_asm;
 
         inline_asm = minic_c0_program_inline_asm(parser->program, inline_asm_id);
-        if (inline_asm == NULL || inline_asm->output_count != 0U || inline_asm->label_count == 0U) {
+        if (inline_asm == NULL || inline_asm->label_count == 0U) {
             minic_parser_error(parser,
-                               "GNU asm goto currently requires no outputs and at least one label");
+                               "GNU asm goto requires at least one label");
+            return false;
+        }
+        /* GCC 11+ GNU asm goto MAY contain output operands. Preserve
+         * their lvalue, constraints, input operands and branch labels in
+         * the AST. Core's narrow zero-output static-key implementation
+         * still declines this form: x86 user-access exception tables need
+         * a dedicated output+label+fault-path lowering before any machine
+         * bytes may be emitted. Do not discard outputs to fake success. */
+    }
+    /* GNU extended asm with no output operands is implicitly volatile even
+     * when it has scalar inputs and a memory clobber. Linux RISC-V TLB
+     * alternative sequences rely on this exact source-language rule. */
+    {
+        const MinicInlineAsm *parsed =
+            minic_c0_program_inline_asm(parser->program, inline_asm_id);
+        if (parsed == NULL ||
+            (parsed->output_count == 0U &&
+             !minic_c0_program_set_inline_asm_volatile(
+                 parser->program, inline_asm_id, true))) {
+            minic_parser_error(parser, "cannot finalize GNU asm volatile semantics");
             return false;
         }
     }
@@ -397,6 +483,8 @@ bool minic_parser_gnu_inline_asm_statement(MinicParser *parser) {
     statement.target_expression = MINIC_EXPRESSION_INVALID;
     statement.expression = MINIC_EXPRESSION_INVALID;
     statement.target_statement = MINIC_STATEMENT_INVALID;
+    statement.cleanup_context = parser->cleanup_context;
+    statement.cleanup_stop_context = MINIC_CLEANUP_CONTEXT_ROOT;
     statement.inline_asm_id = inline_asm_id;
     statement.then_block = MINIC_BLOCK_INVALID;
     statement.else_block = MINIC_BLOCK_INVALID;

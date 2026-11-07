@@ -2,105 +2,46 @@
 #define MINIC_TARGET_COMMON_PROGRAM_EMIT_H
 
 #include "target/common/program_visit.h"
-#include <stdint.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <unistd.h>
 
-/* POSIX functions may be hidden by strict C11 header feature macros.
- * Repeated compatible declarations work in GNU/POSIX host toolchains. */
-extern int mkstemp(char *);
-extern FILE *fdopen(int, const char *);
-
-/* One output transaction and one global/Core walk for ALL five targets.
- * Core declarations/definitions and cleanup are common; ABI, source-ASM
- * provenance, section syntax and machine instructions remain target-owned.
- * In particular, no LP64-only calling convention or frame offsets enter
- * this interface. Every callback sees the original target and Core mapping. */
+/* A single Common output transaction for all five machine targets.
+ * Callbacks retain physical ISA/ABI and GNU directive policy ownership. */
 typedef bool (*MinicProgramEmitStage)(
-    FILE *, const MinicC0Program *, const MinicTargetInfo *,
+    FILE *, const MinicCoreModule *, const MinicTargetInfo *,
     const MinicCoreFunction *, size_t, bool, void *);
 typedef bool (*MinicProgramEmitFinalize)(
     const char *, const MinicTargetInfo *, void *);
 
 typedef struct MinicProgramEmitConfig {
-    MinicProgramVisitGlobal emit_global;
     MinicProgramVisitPreparedFunction emit_function;
-    MinicProgramEmitStage prefix; /* before globals: e.g. RV32 .option norvc */
-    MinicProgramEmitStage between; /* file-scope asm / declaration bindings */
-    const char *trailer;          /* optional target GNU-stack note */
-    MinicProgramEmitFinalize finalize; /* strict ISA audit or legalization */
+    MinicProgramEmitStage prefix;
+    MinicProgramEmitStage between;
+    const char *trailer;
+    MinicProgramEmitFinalize finalize;
     MinicProgramFunctionSelection selection;
-    bool continue_after_failure; /* opt-in census; never retain partial .s */
+    bool continue_after_failure;
 } MinicProgramEmitConfig;
 
-static inline bool minic_program_emit_write(
-    const char *path, const MinicC0Program *program,
+/* Public module writers and the backend facade share one admission check:
+ * complete Core Module validity plus matching live-function type ownership.
+ * This runs once before any target-specific planning or output transaction. */
+bool minic_program_emit_module_preflight(
+    const MinicCoreModule *module, const MinicCoreFunction *functions,
+    size_t function_count);
+
+/* Source ASM is copied only from a finalized, sealed ModuleIR. */
+bool minic_program_emit_source_file_asm_module(
+    FILE *out, const MinicCoreModule *module);
+
+/* Output remains private until all target stages, close and finalization
+ * succeed. Failure never replaces an earlier complete assembly file. */
+bool minic_program_emit_write_module(
+    const char *path, const MinicCoreModule *module,
     const MinicTargetInfo *target, const MinicCoreFunction *functions,
     size_t function_count, bool function_sections,
-    const MinicProgramEmitConfig *config, void *context) {
-    FILE *out;
-    char *temporary;
-    size_t path_length;
-    int descriptor;
-    bool ok;
-    bool functions_ok;
-    if (path == NULL || program == NULL || target == NULL ||
-        config == NULL || config->emit_global == NULL ||
-        config->emit_function == NULL ||
-        function_count != program->function_count ||
-        (function_count != 0U && functions == NULL))
-        return false;
-    /* Stage next to the destination, without touching the last good .s.
-     * Both output and ISA finalizers operate on this private file. Only a
-     * successful close/finalization may atomically replace the public path. */
-    path_length = strlen(path);
-    if (path_length > SIZE_MAX - sizeof(".minic-XXXXXX")) return false;
-    temporary = malloc(path_length + sizeof(".minic-XXXXXX"));
-    if (temporary == NULL) return false;
-    memcpy(temporary, path, path_length);
-    memcpy(temporary + path_length, ".minic-XXXXXX",
-           sizeof(".minic-XXXXXX"));
-    descriptor = mkstemp(temporary);
-    if (descriptor < 0) { free(temporary); return false; }
-    out = fdopen(descriptor, "wb");
-    if (out == NULL) {
-        (void)close(descriptor);
-        (void)remove(temporary);
-        free(temporary);
-        return false;
-    }
-    ok = config->prefix == NULL ||
-         config->prefix(out, program, target, functions, function_count,
-                        function_sections, context);
-    if (ok)
-        ok = minic_program_visit_globals(
-            out, program, target, config->emit_global, context);
-    if (ok && config->between != NULL)
-        ok = config->between(out, program, target, functions, function_count,
-                             function_sections, context);
-    if (ok || config->continue_after_failure) {
-        functions_ok = minic_program_visit_prepared_functions(
-            out, program, target, functions, function_count,
-            function_sections, config->selection, config->continue_after_failure,
-            config->emit_function, context);
-        ok = ok && functions_ok;
-    }
-    if (ok && config->trailer != NULL && fputs(config->trailer, out) == EOF)
-        ok = false;
-    /* Preserve the write error even if close also fails. Never finalize
-     * or leave a partial output after an unsuccessful machine emission. */
-    if (fclose(out) != 0) ok = false;
-    if (ok && config->finalize != NULL)
-        ok = config->finalize(temporary, target, context);
-    if (ok && rename(temporary, path) != 0)
-        ok = false;
-    if (!ok) (void)remove(temporary);
-    free(temporary);
-    return ok;
-}
+    const MinicProgramEmitConfig *config, void *context,
+    MinicProgramVisitModuleGlobal visit_module_global);
 
 #endif

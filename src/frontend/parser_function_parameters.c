@@ -7,14 +7,16 @@
 #include <string.h>
 /* Function signatures, formal parameter grammar and parameter type adjustment. */
 
-bool minic_parser_function_signature_matches(const MinicFunction *function,
+bool minic_parser_function_signature_matches(const MinicC0Program *program,
+                                             const MinicFunction *function,
                                              MinicType return_type,
                                              const MinicType *parameter_types,
                                              size_t parameter_count,
                                              bool is_variadic) {
     size_t parameter_index;
 
-    if (function == NULL || !minic_type_equal(function->return_type, return_type) ||
+    if (program == NULL || function == NULL ||
+        !minic_c0_types_compatible(program, function->return_type, return_type) ||
         function->parameter_count != parameter_count || function->is_variadic != is_variadic) {
         return false;
     }
@@ -22,10 +24,43 @@ bool minic_parser_function_signature_matches(const MinicFunction *function,
         MinicType parameter_type;
 
         if (!minic_type_unqualified(parameter_types[parameter_index], &parameter_type) ||
-            !minic_type_equal(function->parameter_types[parameter_index], parameter_type)) {
+            !minic_c0_types_compatible(program,
+                function->parameter_types[parameter_index], parameter_type)) {
             return false;
         }
     }
+    return true;
+}
+
+static bool calling_convention_scalar_type_supported(
+    const MinicParser *parser, MinicType type, bool allow_void) {
+    unsigned int width;
+    if (allow_void && minic_type_is_void(type)) return true;
+    if (minic_type_is_pointer(type) || minic_type_is_float(type) ||
+        minic_type_is_double(type)) return true;
+    return minic_type_is_integer(type) &&
+           !minic_type_is_int128_integer(type) &&
+           minic_target_info_integer_width(
+               parser->invocation, parser->program, type, &width) &&
+           width != 0U && width <= 64U;
+}
+
+bool minic_parser_calling_convention_fixed_scalar_supported(
+    const MinicParser *parser, MinicFunctionCallingConvention convention,
+    MinicType return_type, const MinicType *parameter_types,
+    size_t parameter_count, bool is_variadic) {
+    size_t i;
+    if (parser == NULL || parser->invocation == NULL || is_variadic ||
+        parameter_count > MINIC_MAX_FUNCTION_PARAMETERS ||
+        (parameter_count != 0U && parameter_types == NULL) ||
+        !minic_target_info_function_calling_convention_scalar_call_supported(
+            &parser->invocation->machine, convention) ||
+        !calling_convention_scalar_type_supported(parser, return_type, true))
+        return false;
+    for (i = 0U; i < parameter_count; ++i)
+        if (!calling_convention_scalar_type_supported(
+                parser, parameter_types[i], false))
+            return false;
     return true;
 }
 
@@ -39,12 +74,17 @@ static bool parse_function_pointer_parameter_declarator(MinicParser *parser,
 
     if (parser == NULL || name_span == NULL || has_name == NULL || parameter_type == NULL ||
         !minic_parser_parse_parenthesized_function_declarator(
-            parser, require_name, false, &declarator)) {
+            parser, require_name, false, &declarator, false)) {
         return false;
     }
     if (!minic_parser_build_function_declarator_type(
             parser, return_type, &declarator, parameter_type)) {
         minic_parser_error(parser, "cannot build function pointer parameter type");
+        return false;
+    }
+    if (!minic_parser_apply_function_pointer_declarator_attributes(
+            parser, &declarator.attributes, parameter_type,
+            "unsupported GNU ABI attribute on function pointer parameter")) {
         return false;
     }
     *name_span = declarator.name_span;
@@ -155,12 +195,10 @@ static bool adjust_array_parameter_type(MinicParser *parser,
     }
     if (parser->current.kind == MINIC_TOKEN_LBRACKET) {
         bool saw_static;
-        bool has_outer_bound;
         bool consumed_named_bound;
         size_t ignored_outer_bound;
 
         saw_static = false;
-        has_outer_bound = false;
         consumed_named_bound = false;
         if (!minic_parser_advance(parser)) {
             return false;
@@ -193,10 +231,7 @@ static bool adjust_array_parameter_type(MinicParser *parser,
                 !minic_parser_parse_fixed_array_bound(parser, &ignored_outer_bound)) {
                 return false;
             }
-            has_outer_bound = true;
         }
-        (void)has_outer_bound;
-        (void)ignored_outer_bound;
 
         pointee_type = *parameter_type;
         if (parser->current.kind == MINIC_TOKEN_LBRACKET) {
@@ -475,7 +510,15 @@ bool minic_parser_parse_parameter_list(MinicParser *parser,
             return false;
         }
 
-        if (!is_function_pointer_parameter && !is_pointer_to_array_parameter &&
+        /* A parenthesized function-pointer declarator can itself be an
+         * array parameter: `int (*callbacks[])(struct ctx *)`. C adjusts
+         * its outer array to a pointer-to-function-pointer exactly like
+         * `int callbacks[]`; the transient incomplete array descriptor
+         * must be retired. Do NOT adjust plain `int (*callback)(...)` or
+         * a genuine pointer-to-array `int (*array)[N]`. Linux KVM VMX's
+         * nested_vmx_hardware_setup(exit_handlers) requires this distinction. */
+        if (!is_pointer_to_array_parameter &&
+            (!is_function_pointer_parameter || minic_type_is_array(parameter_type)) &&
             !adjust_array_parameter_type(
                 parser, &parameter_type, parameter_array_type_begin,
                 prior_parameter_names, parameter_types, *parameter_count)) {

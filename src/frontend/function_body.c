@@ -6,13 +6,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-typedef bool (*MinicExpressionIdReadVisitor)(MinicExpressionId expression_id, void *context);
-
-typedef struct MinicExpressionIdReadContext {
-    MinicExpressionIdReadVisitor visitor;
-    void *context;
-} MinicExpressionIdReadContext;
-
 typedef struct MinicFunctionBodyValidation {
     const MinicC0Program *program;
     MinicFunctionId *block_owners;
@@ -70,37 +63,87 @@ MinicBlockId minic_c0_function_body_root_block(const MinicFunctionBodyView *view
     return function != NULL && function->is_defined ? function->body_block : MINIC_BLOCK_INVALID;
 }
 
-bool minic_c0_function_body_owns_local(const MinicFunctionBodyView *view, MinicLocalId local_id) {
-    const MinicFunction *function;
-
-    function = minic_c0_function_body_function(view);
-    return function != NULL && function->is_defined && local_id >= function->local_begin &&
-           local_id - function->local_begin < function->local_count;
+/* A parameter's entry specialization facts belong to the parameter object,
+ * not to every later value read from its LocalId. The Program retains source
+ * expressions after clones reuse FunctionBodies; scan every possible source
+ * write/escape only once and key the result by canonical source LocalId.
+ * This deliberately treats even an unreachable write as a kill: no CFG proof
+ * is needed for an AST-time speculative specialization. */
+static MinicLocalId stable_parameter_direct_local(
+    const MinicC0Program *program, MinicExpressionId expression_id) {
+    const MinicExpression *expression =
+        minic_c0_program_expression(program, expression_id);
+    return expression != NULL && expression->kind == MINIC_EXPRESSION_LOCAL
+        ? expression->value.local_id : MINIC_LOCAL_INVALID;
 }
 
-static bool visit_read_expression_id(MinicExpressionId *expression_id, void *opaque_context) {
-    MinicExpressionIdReadContext *context;
-
-    if (expression_id == NULL || opaque_context == NULL) {
+bool minic_c0_program_stable_parameter_locals(
+    const MinicC0Program *program, bool *stable, size_t stable_count) {
+    size_t index;
+    if (program == NULL || stable_count != program->local_count ||
+        (stable_count != 0U && (stable == NULL || program->locals == NULL)) ||
+        (program->function_count != 0U && program->functions == NULL) ||
+        (program->statement_count != 0U && program->statements == NULL) ||
+        (program->expression_count != 0U && program->expressions == NULL) ||
+        (program->inline_asm_count != 0U && program->inline_asms == NULL))
         return false;
-    }
-    context = (MinicExpressionIdReadContext *)opaque_context;
-    return context->visitor(*expression_id, context->context);
-}
+    if (stable_count != 0U) (void)memset(stable, 0, stable_count * sizeof(*stable));
 
-static bool visit_expression_child_ids(const MinicExpression *expression,
-                                       MinicExpressionIdReadVisitor visitor,
-                                       void *context) {
-    MinicExpression copy;
-    MinicExpressionIdReadContext read_context;
-
-    if (expression == NULL || visitor == NULL) {
-        return false;
+    for (index = 0U; index < program->function_count; ++index) {
+        const MinicFunction *function = &program->functions[index];
+        size_t parameter;
+        if (!function->is_defined) continue;
+        if (function->local_begin > stable_count ||
+            function->parameter_count > stable_count - function->local_begin ||
+            function->parameter_count > function->local_count) return false;
+        for (parameter = 0U; parameter < function->parameter_count; ++parameter) {
+            MinicLocalId local_id = function->local_begin + parameter;
+            /* A volatile parameter is an observable memory read, not an
+             * immutable substituted entry value (even without source writes). */
+            stable[local_id] =
+                !minic_type_is_volatile(program->locals[local_id].type);
+        }
     }
-    copy = *expression;
-    read_context.visitor = visitor;
-    read_context.context = context;
-    return minic_c0_expression_visit_child_id_refs(&copy, visit_read_expression_id, &read_context);
+
+    for (index = 0U; index < program->statement_count; ++index) {
+        const MinicStatement *statement = &program->statements[index];
+        MinicLocalId local;
+        if (statement->kind != MINIC_STATEMENT_ASSIGN &&
+            statement->kind != MINIC_STATEMENT_RECORD_COPY &&
+            statement->kind != MINIC_STATEMENT_RECORD_INITIALIZE &&
+            statement->kind != MINIC_STATEMENT_XOR_ASSIGN) continue;
+        local = stable_parameter_direct_local(program, statement->target_expression);
+        if (local < stable_count) stable[local] = false;
+    }
+    for (index = 0U; index < program->expression_count; ++index) {
+        const MinicExpression *expression = &program->expressions[index];
+        MinicLocalId local = MINIC_LOCAL_INVALID;
+        if (expression->kind == MINIC_EXPRESSION_ADDRESS_OF) {
+            local = stable_parameter_direct_local(program, expression->value.unary.operand);
+        } else if (expression->kind == MINIC_EXPRESSION_ASSIGNMENT ||
+                   expression->kind == MINIC_EXPRESSION_COMPOUND_ASSIGNMENT) {
+            local = stable_parameter_direct_local(program, expression->value.binary.left);
+        } else if (expression->kind == MINIC_EXPRESSION_UNARY &&
+                   (expression->value.unary.operator_kind == MINIC_UNARY_PRE_INCREMENT ||
+                    expression->value.unary.operator_kind == MINIC_UNARY_PRE_DECREMENT ||
+                    expression->value.unary.operator_kind == MINIC_UNARY_POST_INCREMENT ||
+                    expression->value.unary.operator_kind == MINIC_UNARY_POST_DECREMENT)) {
+            local = stable_parameter_direct_local(program, expression->value.unary.operand);
+        }
+        if (local < stable_count) stable[local] = false;
+    }
+    for (index = 0U; index < program->inline_asm_count; ++index) {
+        const MinicInlineAsm *inline_asm = &program->inline_asms[index];
+        size_t output;
+        if (inline_asm->output_count != 0U && inline_asm->outputs == NULL)
+            return false;
+        for (output = 0U; output < inline_asm->output_count; ++output) {
+            MinicLocalId local = stable_parameter_direct_local(
+                program, inline_asm->outputs[output].expression);
+            if (local < stable_count) stable[local] = false;
+        }
+    }
+    return true;
 }
 
 static bool validation_storage_is_valid(const MinicC0Program *program) {
@@ -513,7 +556,8 @@ static bool process_expression(MinicFunctionBodyValidation *validation,
         return false;
     }
 
-    return visit_expression_child_ids(expression, enqueue_expression_visitor, validation);
+    return minic_c0_expression_visit_child_ids(
+        expression, enqueue_expression_visitor, validation);
 }
 
 static bool validate_semantic_edges(const MinicFunctionBodyValidation *validation) {
@@ -770,30 +814,65 @@ static bool enqueue_emission_function(const MinicC0Program *program,
     return true;
 }
 
+/* A static local initializer may take the address of another inline
+ * function. This edge exists only if the local object's enclosing function
+ * will itself be emitted. File-scope globals are unconditional roots. */
+static bool enqueue_emission_global_relocations(const MinicC0Program *program,
+                                                const MinicGlobalObject *object,
+                                                bool *reachable,
+                                                MinicFunctionId *queue,
+                                                size_t *queue_count) {
+    size_t index;
+    for (index = 0U; index < object->relocation_count; ++index) {
+        const MinicGlobalRelocation *relocation = &object->relocations[index];
+        if (relocation->target_kind == MINIC_GLOBAL_RELOCATION_FUNCTION &&
+            !enqueue_emission_function(program,
+                                       (MinicFunctionId)relocation->target_id,
+                                       reachable, queue, queue_count))
+            return false;
+    }
+    return true;
+}
+
 bool minic_c0_program_recompute_inline_emission_references(MinicC0Program *program) {
     MinicFunctionBodyValidation validation;
     bool *reachable = NULL;
     bool *processed = NULL;
     MinicFunctionId *queue = NULL;
+    size_t *owned_global_heads = NULL;
+    size_t *owned_global_next = NULL;
     size_t queue_count = 0U;
     size_t queue_cursor = 0U;
     size_t function_index;
     size_t object_index;
     bool success = false;
 
-    if (program == NULL || !initialize_validation(program, &validation) ||
-        !assign_local_owners(&validation)) {
+    if (!initialize_validation(program, &validation)) {
+        return false;
+    }
+    if (!assign_local_owners(&validation)) {
+        destroy_validation(&validation);
         return false;
     }
     reachable = calloc(program->function_count == 0U ? 1U : program->function_count,
                        sizeof(*reachable));
     processed = calloc(program->function_count == 0U ? 1U : program->function_count,
                        sizeof(*processed));
-    queue = malloc((program->function_count == 0U ? 1U : program->function_count) *
-                   sizeof(*queue));
-    if (reachable == NULL || processed == NULL || queue == NULL) {
+    if (reachable == NULL || processed == NULL ||
+        !allocate_array((void **)&queue,
+                        program->function_count == 0U ? 1U : program->function_count,
+                        sizeof(*queue)) ||
+        !allocate_array((void **)&owned_global_heads,
+                        program->function_count == 0U ? 1U : program->function_count,
+                        sizeof(*owned_global_heads)) ||
+        !allocate_array((void **)&owned_global_next,
+                        program->global_object_count == 0U ? 1U : program->global_object_count,
+                        sizeof(*owned_global_next))) {
         goto done;
     }
+
+    for (function_index = 0U; function_index < program->function_count; ++function_index)
+        owned_global_heads[function_index] = SIZE_MAX;
 
     /* Preserve the compiler's established emission policy for every definition
      * except internal inline functions. Those are the only entities for which
@@ -818,18 +897,15 @@ bool minic_c0_program_recompute_inline_emission_references(MinicC0Program *progr
     }
     for (object_index = 0U; object_index < program->global_object_count; ++object_index) {
         const MinicGlobalObject *object = &program->global_objects[object_index];
-        size_t relocation_index;
-        for (relocation_index = 0U; relocation_index < object->relocation_count;
-             ++relocation_index) {
-            const MinicGlobalRelocation *relocation = &object->relocations[relocation_index];
-            if (relocation->target_kind == MINIC_GLOBAL_RELOCATION_FUNCTION &&
-                !enqueue_emission_function(program,
-                                           (MinicFunctionId)relocation->target_id,
-                                           reachable,
-                                           queue,
-                                           &queue_count)) {
+        MinicFunctionId owner = object->owner_function;
+        if (owner == MINIC_FUNCTION_INVALID) {
+            if (!enqueue_emission_global_relocations(
+                    program, object, reachable, queue, &queue_count))
                 goto done;
-            }
+        } else {
+            if (owner >= program->function_count) goto done;
+            owned_global_next[object_index] = owned_global_heads[owner];
+            owned_global_heads[owner] = object_index;
         }
     }
 
@@ -841,6 +917,14 @@ bool minic_c0_program_recompute_inline_emission_references(MinicC0Program *progr
             continue;
         }
         processed[function_id] = true;
+        for (object_index = owned_global_heads[function_id];
+             object_index != SIZE_MAX;
+             object_index = owned_global_next[object_index]) {
+            if (!enqueue_emission_global_relocations(
+                    program, &program->global_objects[object_index],
+                    reachable, queue, &queue_count))
+                goto done;
+        }
         if (!validate_one_function(&validation, function_id)) {
             goto done;
         }
@@ -875,6 +959,8 @@ bool minic_c0_program_recompute_inline_emission_references(MinicC0Program *progr
     success = true;
 
 done:
+    free(owned_global_next);
+    free(owned_global_heads);
     free(queue);
     free(processed);
     free(reachable);

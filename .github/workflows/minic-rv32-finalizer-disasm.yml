@@ -1,0 +1,95 @@
+name: RV32 VirtIO frozen/current finalizer machine-code audit
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/minic-rv32-finalizer-disasm.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  historic-finalizer-diff:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 6
+    steps:
+      - name: Retrieve immutable 32nd P2 18-of-18 evidence only
+        uses: actions/download-artifact@v4
+        with:
+          repository: yituanxing/minic-toolchain
+          run-id: '42090175196'
+          name: rv32i-p2-strict-0db0ccc47f005a74e3e7878da48309a3834ee981
+          github-token: ${{ github.token }}
+          path: finalizer-evidence
+      - name: Compare original 2-owner frozen finalizer with proven 3-owner MiniC
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mapfile -t old < <(find finalizer-evidence -type f -name frozen-finalizer.dis)
+          mapfile -t new < <(find finalizer-evidence -type f -name current-finalizer.dis)
+          test "${#old[@]}" -eq 1 && test "${#new[@]}" -eq 1
+          test -s "${old[0]}" && test -s "${new[0]}"
+          mkdir -p finalizer-diff
+          cp "${old[0]}" finalizer-diff/frozen-finalizer.dis
+          cp "${new[0]}" finalizer-diff/current-finalizer.dis
+          echo 'RV32_FINALIZER_ARCHIVE=PASS exact_p2_18_of_18_run=42090175196'
+          echo '==== OLD OCT31 vp_finalize_features ====='
+          tail -n 220 "${old[0]}"
+          echo '==== CURRENT vp_finalize_features ====='
+          tail -n 220 "${new[0]}"
+          echo '==== CURRENT bit32 middle rows 220..365 ====='
+          sed -n '220,365p' "${new[0]}"
+          if diff -u "${old[0]}" "${new[0]}" > finalizer-diff/old-vs-new.diff; then
+            echo 'RV32_FINALIZER_DIFF=IDENTICAL'
+          else
+            rc=$?
+            test "$rc" -eq 1
+            echo 'RV32_FINALIZER_DIFF=CHANGED'
+            tail -n 220 finalizer-diff/old-vs-new.diff
+          fi
+      - name: Download only the original October RV32 frozen shard0
+        uses: actions/download-artifact@v4
+        with:
+          repository: yituanxing/minic-toolchain
+          run-id: '41212514498'
+          name: shard-0
+          github-token: ${{ github.token }}
+          path: original-shard0
+      - name: Install one RV32 GNU object inspection tool
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          for sources in /etc/apt/apt-mirrors.txt /etc/apt/sources.list.d/ubuntu.sources; do
+            if [[ -f "$sources" ]] && grep -q azure.archive.ubuntu.com "$sources"; then
+              sudo sed -i 's#azure.archive.ubuntu.com#archive.ubuntu.com#g' "$sources"
+            fi
+          done
+          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=15 update -qq
+          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=15 install -y --no-install-recommends binutils-riscv64-linux-gnu
+      - name: Prove frozen inline-specialization callee machine code
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mapfile -t objs < <(find original-shard0 -type f -path '*/minic/drivers/virtio/virtio_pci_modern.o')
+          test "${#objs[@]}" -eq 1 && test -s "${objs[0]}"
+          riscv64-linux-gnu-readelf -Ws "${objs[0]}" > finalizer-diff/frozen-owner-symbols.txt
+          grep -F '__minic_inline_spec_7861_8' finalizer-diff/frozen-owner-symbols.txt || {
+            echo 'RV32_FINALIZER_HELPER=UNAVAILABLE symbol_undefined_or_renamed' >&2
+            exit 1
+          }
+          riscv64-linux-gnu-objdump -dr --disassemble=__minic_inline_spec_7861_8 "${objs[0]}" >finalizer-diff/frozen-inline-spec.dis
+          grep -Fq '<__minic_inline_spec_7861_8>:' finalizer-diff/frozen-inline-spec.dis || {
+            echo 'RV32_FINALIZER_HELPER=UNAVAILABLE no_local_body' >&2
+            exit 1
+          }
+          echo 'RV32_FINALIZER_HELPER=AVAILABLE exact_frozen_owner=true'
+          sed -n '1,300p' finalizer-diff/frozen-inline-spec.dis
+      - name: Preserve machine-code comparison
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rv32i-virtio-finalizer-frozen-v-current
+          path: finalizer-diff
+          if-no-files-found: error

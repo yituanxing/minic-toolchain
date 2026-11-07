@@ -8,6 +8,16 @@ qemu=${QEMU_RISCV64:-qemu-riscv64}
 work=${BUILD_DIR:-"$root/build/debug"}/tests/compiler-c0-switch-nested-break-rv64
 source="$root/tests/compiler/c0/switch_nested_break_rv64.c"
 
+if ! command -v "$riscv_cc" >/dev/null 2>&1 ||
+   ! command -v "$qemu" >/dev/null 2>&1; then
+    if test "${REQUIRE_RISCV_RUNTIME:-0}" = 1; then
+        echo 'FAIL compiler/c0/switch_nested_break_rv64: required GNU/QEMU tools absent' >&2
+        exit 1
+    fi
+    echo 'SKIP compiler/c0/switch_nested_break_rv64: GNU/QEMU not installed'
+    exit 0
+fi
+
 rm -rf "$work"
 mkdir -p "$work"
 "$riscv_cc" -E -P -std=gnu11 -x c "$source" -o "$work/probe.i"

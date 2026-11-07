@@ -12,7 +12,9 @@ work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT HUP INT TERM
 release=5.5.0
 sha256=57ccc32bbbd005cab75bcc52444052535af691789dba2b9016d5c50640d68b3d
-curl -fsSL "https://www.lua.org/ftp/lua-$release.tar.gz" -o "$work/lua.tar.gz"
+curl --http1.1 -fsSL --retry 5 --retry-all-errors --retry-delay 2 \
+  --connect-timeout 15 --max-time 90 --retry-max-time 240 \
+  "https://www.lua.org/ftp/lua-$release.tar.gz" -o "$work/lua.tar.gz"
 printf '%s  %s\n' "$sha256" "$work/lua.tar.gz" | sha256sum -c -
 tar -xzf "$work/lua.tar.gz" -C "$work"
 vendor="$work/lua-$release"

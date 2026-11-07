@@ -1,0 +1,113 @@
+name: MiniC AArch64 NEON Stage3 Strict
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/minic-aarch64-neon-stage3-strict.yml'
+      - 'src/frontend/type.*'
+      - 'src/frontend/parser_expression.c'
+      - 'src/frontend/parser_pragma.c'
+      - 'src/frontend/ast_verifier.c'
+      - 'src/core/core_ir.*'
+      - 'src/core/core_ir_verify.c'
+      - 'src/core/core_ir_dump.c'
+      - 'src/core/value_uses.c'
+      - 'src/compiler/c_lower/core_lower*.c'
+      - 'src/target/aarch64/**'
+      - 'src/target/common/core_value_slots.c'
+      - 'src/target/common/core_instruction_family.h'
+      - 'src/target/source_policy/aarch64.c'
+      - 'src/target/target_info.c'
+      - 'src/target/data_layout.c'
+      - 'src/target/source_policy/target_source_info.c'
+      - 'src/target/source_policy/data_layout_source.c'
+      - 'tests/compiler/c0/aarch64_neon*'
+      - 'tests/compiler/c0/aarch64_gnu_neon_inline_*'
+      - 'tests/compiler/c0/aarch64_gnu_inline_lazy_*'
+      - 'tests/compiler/c0/run-aarch64-neon-*'
+      - 'tests/compiler/c0/run-aarch64-gnu-neon-*'
+      - 'tests/compiler/c0/run-aarch64-gnu-inline-*'
+      - 'Makefile'
+  workflow_dispatch:
+
+jobs:
+  aarch64-neon-real-gnu-minic-qemu:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install real AArch64 GNU assembler, compiler and QEMU
+        timeout-minutes: 12
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          for sources in /etc/apt/apt-mirrors.txt \
+                         /etc/apt/sources.list.d/ubuntu.sources; do
+            if [[ -f "$sources" ]] && grep -q 'azure.archive.ubuntu.com' "$sources"; then
+              sudo sed -i 's#azure.archive.ubuntu.com#archive.ubuntu.com#g' "$sources"
+            fi
+          done
+          packages=(gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu
+                    libc6-dev-arm64-cross qemu-user make)
+          timeout 120s sudo apt-get -o Acquire::Retries=2 \
+            -o Acquire::http::Timeout=30 update -qq
+          if ! timeout 240s sudo apt-get -o Acquire::Retries=2 \
+               -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 \
+               -o DPkg::Lock::Timeout=60 install -y --no-install-recommends \
+               "${packages[@]}"; then
+            timeout 120s sudo apt-get -o Acquire::Retries=2 \
+              -o Acquire::http::Timeout=30 update -qq
+            timeout 240s sudo apt-get -o Acquire::Retries=2 \
+              -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 \
+              -o DPkg::Lock::Timeout=60 install -y --no-install-recommends \
+              "${packages[@]}"
+          fi
+          command -v aarch64-linux-gnu-gcc
+          command -v qemu-aarch64
+      - name: Build MiniC native host compiler
+        run: make -j2 MODE=release BUILD_DIR=build/aarch-neon-ci build/aarch-neon-ci/bin/minic-cc
+      - name: Native typed 128-bit machine emitter contract
+        run: |
+          BUILD_DIR=build/aarch-neon-ci \
+            sh tests/compiler/c0/run-aarch64-neon-machine-contract.sh
+      - name: Typed AArch64 128-bit Core and native Q assembly preflight
+        run: |
+          MINIC_CC="$GITHUB_WORKSPACE/build/aarch-neon-ci/bin/minic-cc" \
+          BUILD_DIR=build/aarch-neon-ci \
+            sh tests/compiler/c0/run-aarch64-neon-core-vector128.sh
+      - name: GNU AArch64 six NEON inline wrappers and strict negative preflight
+        run: |
+          MINIC_CC="$GITHUB_WORKSPACE/build/aarch-neon-ci/bin/minic-cc" \
+          BUILD_DIR=build/aarch-neon-ci \
+            sh tests/compiler/c0/run-aarch64-gnu-neon-inline-six.sh
+      - name: GNU13 header-inline liveness and fail-closed source boundary
+        run: |
+          MINIC_CC="$GITHUB_WORKSPACE/build/aarch-neon-ci/bin/minic-cc" \
+          BUILD_DIR=build/aarch-neon-ci \
+            sh tests/compiler/c0/run-aarch64-gnu-inline-lazy-negatives.sh
+      - name: SHA3 GNU Q-register MachineIR contract and nine strict negatives
+        run: |
+          MINIC_CC="$GITHUB_WORKSPACE/build/aarch-neon-ci/bin/minic-cc" \
+          BUILD_DIR=build/aarch-neon-ci \
+            sh tests/compiler/c0/run-aarch64-neon-sha3-contract.sh
+      - name: Strict same-GNU-i, two-ELF, GNU/MiniC/QEMU real machine differential
+        run: |
+          MINIC_CC="$GITHUB_WORKSPACE/build/aarch-neon-ci/bin/minic-cc" \
+          BUILD_DIR=build/aarch-neon-ci \
+            sh tests/compiler/c0/run-aarch64-neon-stage3-strict.sh
+      # Preserve the *exact* GNU-preprocessed source consumed by MiniC on a
+      # failed real-machine gate, including the full rather than abbreviated
+      # first diagnostic. This never changes the gate's success criteria.
+      - name: Preserve failing GNU AArch64 Stage3 source and diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: aarch64-neon-stage3-failure-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            build/aarch-neon-ci/tests/aarch64-neon-stage3-strict/load_xor_store.i
+            build/aarch-neon-ci/tests/aarch64-neon-stage3-strict/load_xor_store.minic.stderr
+            build/aarch-neon-ci/tests/aarch64-neon-stage3-strict/sha3_eor3.i
+            build/aarch-neon-ci/tests/aarch64-neon-stage3-strict/sha3_eor3.minic.stderr
+            build/aarch-neon-ci/tests/aarch64-neon-stage3-strict/sha3_contract_*
+          if-no-files-found: ignore
+          retention-days: 7

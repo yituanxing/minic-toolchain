@@ -9,7 +9,7 @@ mkdir -p "$work"
 
 cat >"$work/global-inferred.c" <<'SRC'
 struct token { int id; const char *pattern; };
-static const struct token tokens[] = {
+static const struct token tokens[] __attribute__((used)) = {
     { 1, "one" },
     { 2, "two" },
 };

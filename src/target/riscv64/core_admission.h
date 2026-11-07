@@ -5,11 +5,8 @@
 #include "target/common/core_function_facts.h"
 #include "target/common/core_object_storage.h"
 bool minic_riscv64_core_function_admit_profile(
-    const MinicC0Program *, const MinicCoreFunction *,
+    bool require_prepared_abi, const MinicCoreFunction *,
     MinicRiscv64FunctionAbiPlan *, bool lp64_soft_float,
     const MinicCoreFunctionFacts *facts,
     const MinicCoreObjectStoragePlan *storage);
-bool minic_riscv64_core_function_admit(
-    const MinicC0Program *, const MinicCoreFunction *,
-    MinicRiscv64FunctionAbiPlan *);
 #endif

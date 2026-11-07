@@ -3,7 +3,6 @@
 #include "core/core_ir.h"
 #include "target/common/core_call_view.h"
 #include "target/riscv64/abi.h"
-#include "frontend/ast.h"
 #include <stdbool.h>
 #include <stddef.h>
 /* RV64-owned psABI CALL planning, with immutable Common CALL identities. */
@@ -22,7 +21,7 @@ typedef struct MinicRiscv64CallPlanCache {
     size_t maximum_stack_bytes;
 } MinicRiscv64CallPlanCache;
 bool minic_riscv64_call_plan_cache_build(
-    const MinicC0Program *, const MinicCoreFunction *, bool lp64_soft_float,
+    const MinicCoreFunction *, bool lp64_soft_float,
     const MinicCoreCallIndex *, MinicRiscv64CallPlanCache *);
 void minic_riscv64_call_plan_cache_destroy(MinicRiscv64CallPlanCache *);
 

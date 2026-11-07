@@ -21,6 +21,7 @@ for test_script in \
     run-integer-constant-bitwise.sh \
     run-unsigned-64-literals.sh \
     run-builtin-va-list.sh \
+    run-aarch64-builtin-va-list-declaration.sh \
     run-restrict-qualifiers.sh \
     run-gnu-extension-declaration.sh \
     run-builtin-expect.sh \
@@ -34,6 +35,7 @@ for test_script in \
     run-gnu-zero-length-record-arrays.sh \
     run-record-forward-declarations.sh \
     run-record-multi-declarators.sh \
+    run-xgene-parenthesized-pointer-record-field.sh \
     run-record-typedef-array-fields.sh \
     run-volatile-qualifiers.sh \
     run-array-bound-sizeof.sh \
@@ -67,6 +69,10 @@ for test_script in \
     run-static-mutable-arrays.sh \
     run-static-preformed-array-zero.sh \
     run-static-fixed-record-array-zero.sh \
+    run-static-multidimensional-array-relocation.sh \
+    run-static-integer-floating-const-initializer.sh \
+    run-incomplete-function-pointer-array-lifetime.sh \
+    run-static-integer-pointer-cast-comparison.sh \
     run-static-aggregate-array-designators.sh \
     run-prefix-update-expressions.sh \
     run-function-designator-calls.sh \
@@ -81,6 +87,9 @@ for test_script in \
     run-gnu-empty-records.sh \
     run-gnu-extension-prefix-declarations.sh \
     run-gnu-prefix-function-attributes.sh \
+    run-gnu-is-constexpr-bitfield.sh \
+    run-record-array-range-once.sh \
+    run-x86-security-function-attributes.sh \
     run-gnu-format-cold-attributes.sh \
     run-anonymous-record-members.sh \
     run-block-scope-record-tags.sh \

@@ -1,0 +1,19 @@
+{
+  "schema": "minic-linux-original-input-sha-provenance-v1",
+  "linux_version": "6.6.143",
+  "target": "x86_64",
+  "fixture": "linux-6.6.143-original-input-sha-x86_64.tsv",
+  "fixture_format": "owner<TAB>input_sha256; UTF-8, LF, no header, bytewise ascending owner",
+  "fixture_sha256": "4637e32d2c99538744bb2a89f7cd02e64d7a490d3b5147c6ff22d2e7b52d765d",
+  "owner_count": 2758,
+  "github_repository": "yituanxing/minic-toolchain",
+  "github_run_id": 41181106144,
+  "github_artifact_id": 13034824219,
+  "artifact_zip_sha256": "99e62105bf52ee0b8ff9e9c02fc9313122968bb82bb9ef59cc701b5d0739c1a2",
+  "source_entry": "candidate/all-c-owners-result.json",
+  "linux_source_sha256": "dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932",
+  "gnu_config_sha256": "e2ec24b7076d99ac9c1bf842ded47e91ba6dfacacc28dd027ec6487d8709e264",
+  "gnu_c_owner_manifest_sha256": "f12e533e1a4079f13aca28e314f56570fe22f8fed1da89b1a98289acc62a715d",
+  "original_gnu_bzimage_sha256": "a1b861392da7dc8d103e4a3c3935ec74f75252e9da0835ff7ffa2f9167bc9a37",
+  "historical_minic_bzimage_sha256": "45ca26dbfe305316712322bb5b1e756f4c3727237845ecd9ff1ac53f6c03e3a3"
+}

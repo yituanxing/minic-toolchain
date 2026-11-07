@@ -19,13 +19,18 @@ typedef struct MinicCoreCallView {
     const MinicCoreCallee *callee;             /* direct, otherwise NULL */
     const MinicCoreCallSignature *signature;   /* indirect, otherwise NULL */
     const MinicCoreCallArgument *arguments;    /* NULL when count == 0 */
-    const MinicType *parameter_types;
-    MinicType return_type;
+    /* The type-checked Core signature, independent of a C frontend arena.
+     * CoreType IDs are the sole type view handed to machine ABI planners;
+     * nominal source descriptors remain owned by Core's legacy ingress. */
+    const MinicCoreTypeId *core_parameter_type_ids;
+    MinicCoreTypeId core_return_type_id;
+    MinicCoreTypeId core_function_type_id; /* direct or indirect */
     MinicCoreValueId function_pointer;         /* indirect only */
     size_t argument_begin;
     size_t argument_count;
     size_t parameter_count;
     bool is_variadic;
+    MinicFunctionCallingConvention calling_convention;
     MinicCoreCallReturnForm return_form;
 } MinicCoreCallView;
 
@@ -36,15 +41,15 @@ bool minic_core_call_view_build(const MinicCoreFunction *,
                                 const MinicCoreInstruction *,
                                 MinicCoreCallView *);
 
-/* The actual Core value/object type. Declared fixed-parameter types are
- * separate: psABI-specific type matching remains with target validation. */
-bool minic_core_call_argument_actual_type(const MinicCoreFunction *,
-                                           const MinicCoreCallArgument *,
-                                           MinicType *);
+/* The actual value/object type is a CoreType identity, never a parallel
+ * source descriptor. Requires an attached CoreTypeContext. */
+bool minic_core_call_argument_actual_core_type(const MinicCoreFunction *,
+                                               const MinicCoreCallArgument *,
+                                               MinicCoreTypeId *);
 /* Common checked argument/record identity, all five backend call planners. */
-bool minic_core_call_view_argument_type(const MinicCoreFunction *,
-                                        const MinicCoreCallView *, size_t,
-                                        MinicType *);
+bool minic_core_call_view_argument_core_type(const MinicCoreFunction *,
+                                             const MinicCoreCallView *, size_t,
+                                             MinicCoreTypeId *);
 
 /* Once-per-definition, machine-independent CALL semantic index. Only real
  * CALL IDs are stored, in ascending order; no per-instruction pointer table.

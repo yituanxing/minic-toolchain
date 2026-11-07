@@ -27,22 +27,31 @@ int core_block_spill_reuse(int x)
 }
 SRC
 
-MINIC_BOOTSTRAP_TRACE=1 "$minic" -S "$work/input.c" -o "$work/output.s"   >"$work/stdout" 2>"$work/trace"
+MINIC_CORE_FRAME_TRACE=1 "$minic" -S "$work/input.c" -o "$work/output.s" \
+  >"$work/stdout" 2>"$work/trace"
 
 python3 - "$work/trace" <<'PY'
 import re
 import sys
 
 text = open(sys.argv[1], encoding="utf-8", errors="replace").read()
+# The legacy target-specific core-codegen-frame trace was removed with
+# MachineIR. The RV64 physical frame emits CORE_FRAME_REUSE only after
+# consuming Common's SSA last-use planner. The physical peak is in bytes,
+# not the old value_count-sized linear slot allocation.
 matches = re.findall(
-    r"stage=core-codegen-frame state=end function=core_block_spill_reuse "
-    r"frame_size=(\d+) value_slots=(\d+) values=(\d+)",
+    r"^CORE_FRAME_REUSE function=core_block_spill_reuse "
+    r"frame=(\d+) value_bytes=(\d+) values=(\d+) objects=(\d+)$",
     text,
+    re.MULTILINE,
 )
 if len(matches) != 1:
-    raise SystemExit("missing or duplicate frame trace")
-frame, slots, values = map(int, matches[0])
-if not (0 < slots < values):
+    raise SystemExit("missing or duplicate Core frame reuse trace:\n" + text[-2000:])
+frame, value_bytes, values, objects = map(int, matches[0])
+if value_bytes % 8 != 0:
+    raise SystemExit(f"invalid RV64 Core scalar units: bytes={value_bytes} objects={objects}")
+slots = value_bytes // 8
+if not (0 < slots < values and frame >= value_bytes):
     raise SystemExit(f"spill reuse inactive: frame={frame} slots={slots} values={values}")
 print(
     "PASS compiler/c0/core-block-spill-reuse "

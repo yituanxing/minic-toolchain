@@ -2,48 +2,41 @@
 #define MINIC_TARGET_BACKEND_H
 
 #include "core/core_ir.h"
-#include "frontend/ast.h"
 #include "minic/compiler.h"
 #include "target/target_info.h"
 
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
+
+typedef struct MinicCoreModule MinicCoreModule;
 
 /*
  * Core/Target seam: compiler.c owns C semantics and Core IR; the selected
  * backend owns ABI lowering, frame planning, instruction selection and
  * machine emission. Neither physical registers nor frame offsets cross
- * back into Core. A future Machine IR belongs inside this boundary:
+ * back into Core. Production machine functions follow the sealed path:
  *
- *   Core -> backend lower -> [optional Machine IR + passes] -> emitter
+ *   Core -> target-owned typed Machine IR -> whole-function verification
+ *        -> GNU assembly serializer
  *
- * Backend callbacks currently emit directly to GNU assembly. Introducing
- * Machine IR must not require a new frontend target dispatch.
+ * Optimization passes are deliberately absent at this stage. The frontend
+ * must not know or enumerate the backends' physical machine choices.
  */
-typedef bool (*MinicBackendEmitProgram)(
-    const char *output_path, const MinicC0Program *program,
-    const MinicTargetInfo *target, const MinicCoreFunction *functions,
+/* A fully sealed translation-unit module is the only machine-side
+ * data/symbol boundary. Source-C admission precedes this callback. */
+typedef bool (*MinicBackendEmitModule)(
+    const char *output_path, const MinicTargetInfo *target,
+    const MinicCoreFunction *functions,
     size_t function_count, bool function_sections,
-    MinicDiagnostic *diagnostic);
-
-/* Target selects operand roles; Core materializes their semantic values.
- * No physical registers, ISA opcodes or frame offsets enter Core IR. */
-typedef struct MinicTargetInlineAsmContract {
-    size_t operand_count;
-    MinicCoreStructuredInlineAsmOperandKind kinds[MINIC_CORE_STRUCTURED_INLINE_ASM_OPERAND_LIMIT];
-} MinicTargetInlineAsmContract;
-
-typedef bool (*MinicBackendQualifyInlineAsm)(
-    const MinicC0Program *, const MinicInlineAsm *, MinicTargetInlineAsmContract *);
+    const MinicCoreModule *module, MinicDiagnostic *diagnostic);
 
 typedef struct MinicBackend {
-    MinicTargetArchitecture architecture;
-    const char *name;
-    /* This is the only Core-to-machine handoff in the compile driver.
-     * Today: direct GNU text. Future: lower, optimize and emit Machine IR. */
-    MinicBackendEmitProgram emit_program;
-    /* Optional target contract for GNU multi-operand inline assembly. */
-    MinicBackendQualifyInlineAsm qualify_inline_asm;
+    /* Sole Core-to-machine handoff. The five selected production target
+     * profiles emit typed Machine IR before GNU serialization. A failed
+     * typed admission never falls back to direct emission. The separate
+     * RV64 LP64D legacy ABI branch remains explicitly outside that seal. */
+    MinicBackendEmitModule emit_module;
     /* True only when the machine emitter omits unreachable Core blocks.
      * Core call-graph pruning must use exactly the same emitted CFG roots. */
     bool emit_reachable_core_blocks_only;
@@ -52,16 +45,13 @@ typedef struct MinicBackend {
 /* Fail closed on unknown architecture. No default or host fallback. */
 const MinicBackend *minic_backend_for_target(const MinicTargetInfo *target);
 
-/* Source-level admission query; absence means defer to existing Core probes. */
-bool minic_backend_qualify_inline_asm(
-    const MinicBackend *, const MinicC0Program *, const MinicInlineAsm *,
-    MinicTargetInlineAsmContract *);
-
-/* Stable driver-facing emission seam. Machine IR can be inserted here. */
-bool minic_backend_emit_assembly(
+/* Sole production handoff. There is deliberately no fallback to the C global
+ * emitter when a non-NULL sealed module fails target admission. */
+bool minic_backend_emit_assembly_with_module(
     const MinicBackend *backend, const char *output_path,
-    const MinicC0Program *program, const MinicTargetInfo *target,
+    const MinicTargetInfo *target,
     const MinicCoreFunction *functions, size_t function_count,
-    bool function_sections, MinicDiagnostic *diagnostic);
+    bool function_sections, const MinicCoreModule *module,
+    MinicDiagnostic *diagnostic);
 
 #endif

@@ -15,7 +15,9 @@ mkdir -p "$work"
 "$minic" -S \
     "$work/flexible_array_member.i" \
     -o "$work/flexible_array_member.s"
-grep -F '  addi a0, a0, 3' "$work/flexible_array_member.s" >/dev/null
+# Field offset is the ABI invariant; the chosen address register is not.
+awk '$1 == "addi" && $2 == $3 && $4 == "3" { found = 1 }
+     END { exit !found }' "$work/flexible_array_member.s"
 printf '%s\n' 'PASS compiler/c0/flexible_array_member packed-size=3 payload-offset=3'
 
 

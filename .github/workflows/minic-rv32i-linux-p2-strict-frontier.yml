@@ -1,0 +1,457 @@
+name: MiniC RV32I P2 strict nine, canonical eleven, full eighteen QEMU
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/minic-rv32i-linux-p2-strict-frontier.yml
+      - tests/external/linux/runtime_initramfs/rv32-p2-raw.c
+      - tests/external/linux/runtime_initramfs/rv32-p2-canonical11-raw.c
+      - tests/external/linux/runtime_initramfs/rv32-p2-full18-raw.c
+      - tests/external/linux/runtime_initramfs/rv32-init-raw.c
+      - tools/ci/linux-rv32i-qemu-p0-v1.sh
+      - tools/ci/linux-rv32i-p2-refresh-virtio-v1.sh
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+# A PR's paths filter includes the accumulated diff from the base branch.
+# Unrelated future commits would therefore rebuild 38 GNU modules and rerun
+# P2 even when the proven RV32 compiler/kernel inputs have not changed.
+# Only an explicitly marked PR head or a manual dispatch spends this budget.
+concurrency:
+  group: minic-rv32i-p2-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  p2-eligibility-only:
+    runs-on: ubuntu-24.04
+    outputs:
+      run_p2: ${{ steps.scope.outputs.run_p2 }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Admit only explicitly marked exact PR head or manual dispatch
+        id: scope
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -Eeuo pipefail
+          printf 'RV32I_P2_HEAD=%s\n' "$(git rev-parse HEAD)"
+          if [[ "$EVENT_NAME" == workflow_dispatch ]] ||
+              git log -1 --pretty=%B | grep -Fq '[rv32-p2-full18]'; then
+            printf 'run_p2=true\n' >> "$GITHUB_OUTPUT"
+            echo 'RV32I_P2=ELIGIBLE full18=NOT_YET_RUN'
+          else
+            printf 'run_p2=false\n' >> "$GITHUB_OUTPUT"
+            echo 'RV32I_P2=SKIP reason=head_commit_without_marker full18=NOT_RUN'
+          fi
+
+  rv32i-p2-real-qemu:
+    needs: p2-eligibility-only
+    if: needs.p2-eligibility-only.outputs.run_p2 == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      KBUILD_BUILD_USER: minic
+      KBUILD_BUILD_HOST: minic-ci
+      KBUILD_BUILD_TIMESTAMP: Thu Jan  1 00:00:00 UTC 1970
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Install exact RV32 guest and QEMU requirements
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          # Proven Ubuntu 24.04 Azure archive workaround from RV32 GPU source-owner lane.
+          for sources in /etc/apt/apt-mirrors.txt /etc/apt/sources.list.d/ubuntu.sources; do
+            if [[ -f "$sources" ]] && grep -q 'azure.archive.ubuntu.com' "$sources"; then
+              sudo sed -i 's#azure.archive.ubuntu.com#archive.ubuntu.com#g' "$sources"
+            fi
+          done
+          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=15 update -qq
+          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=15 install -y --no-install-recommends \
+            gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
+            qemu-system-misc opensbi cpio device-tree-compiler e2fsprogs \
+            bc bison flex libssl-dev libelf-dev make python3 xz-utils
+          test -s /usr/lib/riscv32-linux-gnu/opensbi/generic/fw_dynamic.bin
+          command -v qemu-system-riscv32
+
+      - name: Restore immutable 1741/1741 MiniC Linux 6.6.143 Image
+        uses: actions/download-artifact@v4
+        with:
+          repository: yituanxing/minic-toolchain
+          run-id: '41212514498'
+          name: linux-rv32i-seven-shard-Image-796f2b44fada71218a22fc506ae50ecfe6b43342
+          github-token: ${{ github.token }}
+          path: build/rv32-p2-strict/source
+
+      - name: Restore original GNU Kbuild configuration from same pinned Image build
+        uses: actions/download-artifact@v4
+        with:
+          repository: yituanxing/minic-toolchain
+          run-id: '41212514498'
+          name: linux-rv32i-original-kbuild-796f2b44fada71218a22fc506ae50ecfe6b43342
+          github-token: ${{ github.token }}
+          path: build/rv32-p2-strict/original-kbuild
+
+      - name: Build 38 exact-config GNU ELF32 RISC-V modules, without touching MiniC Image
+        shell: bash
+        timeout-minutes: 12
+        run: |
+          set -Eeuo pipefail
+          root="$GITHUB_WORKSPACE/build/rv32-p2-strict"
+          src="$root/linux-6.6.143"
+          out="$root/modules-kbuild"
+          original="$root/original-kbuild/out/.config"
+          modules="$root/modules"
+          mkdir -p "$out" "$modules"
+          test -s "$original"
+          printf '%s  %s\n' \
+            4c6c19f79741a8a31ec52ad57b1a6bc56b81dd6996cbf5e1bdc63f587d85244c \
+            "$original" | sha256sum -c -
+          # Both source and config are immutable provenance of Image build
+          # 41212514498; the kernel Image itself is never recompiled/relinked.
+          archive="$root/linux-6.6.143.tar.xz"
+          curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors \
+            https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.6.143.tar.xz \
+            -o "$archive"
+          printf '%s  %s\n' \
+            dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932 \
+            "$archive" | sha256sum -c -
+          tar -xJf "$archive" -C "$root"
+          cp "$original" "$out/.config"
+          make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
+            -j4 modules_prepare >"$root/modules-prepare.log" 2>&1
+          # Kbuild's GCC capability discovery adds only these two bools.
+          # No Image Kconfig feature may silently change to pass a test.
+          sed -e '/^CONFIG_CC_CAN_LINK=y$/d' \
+              -e '/^CONFIG_CC_CAN_LINK_STATIC=y$/d' \
+              "$out/.config" | cmp - "$original" || {
+            echo 'RV32I_P2_MODULES=FAIL original_Kconfig_feature_drift' >&2
+            diff -u "$original" "$out/.config" || true
+            exit 1
+          }
+          grep -E '^CONFIG_(MODULES|CRYPTO_SHA256|CRYPTO_SHA512|CRYPTO_SHA3|CRYPTO_BLAKE2B|OVERLAY_FS)=' "$original"
+          # The original Image artifact has no Module.symvers. CONFIG_MODVERSIONS=n
+          # means runtime symbol CRCs are not needed; WARN is solely to let
+          # modpost emit .ko. Real guest finit_module MUST succeed later.
+          for target in lib/crypto/libsha256.ko \
+            crypto/sha256_generic.ko crypto/sha512_generic.ko \
+            crypto/sha3_generic.ko crypto/blake2b_generic.ko \
+            fs/overlayfs/overlay.ko; do
+            echo "RV32I_P2_KBUILD_START=$target"
+            KBUILD_MODPOST_WARN=1 make -C "$src" O="$out" ARCH=riscv \
+              CROSS_COMPILE=riscv64-linux-gnu- -j4 "$target" \
+              >>"$root/modules-build.log" 2>&1
+            test -s "$out/$target"
+            install -m 644 "$out/$target" "$modules/$(basename "$target")"
+          done
+          # Exact Kbuild original =m dependencies for five new real checks:
+          # iptables4+6; Btrfs registration (CRC/XOR/RAID6/compression);
+          # device-mapper ioctl. ext4 and virtio-blk are already builtin.
+          for target in \
+            net/netfilter/x_tables.ko net/netfilter/xt_tcpudp.ko \
+            net/ipv4/netfilter/ip_tables.ko net/ipv4/netfilter/iptable_filter.ko \
+            net/ipv6/netfilter/ip6_tables.ko net/ipv6/netfilter/ip6table_filter.ko \
+            lib/libcrc32c.ko crypto/xor.ko lib/raid6/raid6_pq.ko \
+            lib/zlib_deflate/zlib_deflate.ko lib/lzo/lzo_compress.ko \
+            fs/btrfs/btrfs.ko drivers/md/dm-mod.ko; do
+            echo "RV32I_C11_KBUILD_START=$target"
+            # Linux 6.6.143 arch/riscv/kernel/module-sections.c::duplicate_rela()
+            # scans preceding relocs for every CALL_PLT: quadratic per RELA
+            # section. Normal RV32 Btrfs has 19,753 CALL_PLT in ONE enormous
+            # .rela.text (62k+ relocations) and hangs under genuine QEMU.
+            # GNU -ffunction-sections partitions that section into distinct
+            # functions without changing the pinned MiniC Image or Kconfig.
+            # Only Btrfs needs this scoped, provenance-recorded workaround.
+            kcflags=
+            if [[ "$target" == fs/btrfs/btrfs.ko ]]; then
+              kcflags=-ffunction-sections
+            fi
+            KBUILD_MODPOST_WARN=1 make -C "$src" O="$out" ARCH=riscv \
+              CROSS_COMPILE=riscv64-linux-gnu- KCFLAGS="$kcflags" -j4 "$target" \
+              >>"$root/modules-build.log" 2>&1
+            test -s "$out/$target"
+            if [[ "$target" == fs/btrfs/btrfs.ko ]]; then
+              max_calls=$(riscv64-linux-gnu-readelf -Wr "$out/$target" |
+                awk '/^Relocation section/ { section=$3 }
+                     /R_RISCV_CALL_PLT/ {
+                       if (++calls[section]>max) max=calls[section]
+                     }
+                     END { print max+0 }')
+              [[ "$max_calls" =~ ^[0-9]+$ && "$max_calls" -gt 0 && "$max_calls" -le 400 ]] || {
+                echo "RV32I_C11_BTRFS=FAIL quadratic_relocation_section max_calls=$max_calls" >&2
+                exit 3
+              }
+              printf 'RV32I_C11_BTRFS_RELA=PASS max_calls_per_section=%s max_allowed=400 compiler_flag=-ffunction-sections\n' "$max_calls"
+            fi
+            install -m 644 "$out/$target" "$modules/$(basename "$target")"
+          done
+          # Remaining seven canonical P2 checks: conntrack, bridge/veth,
+          # br-netfilter, KVM, PCI virtio GPU and PCI NVMe; all real modules.
+          # Function sections avoid the RISC-V module_loader O(N^2) RELA
+          # scan identified and recovered in the Btrfs 11/18 progression.
+          for target in \
+            net/ipv4/netfilter/nf_defrag_ipv4.ko \
+            net/ipv6/netfilter/nf_defrag_ipv6.ko net/netfilter/nf_conntrack.ko \
+            net/llc/llc.ko net/802/stp.ko net/bridge/bridge.ko \
+            net/bridge/br_netfilter.ko drivers/net/veth.ko \
+            arch/riscv/kvm/kvm.ko \
+            drivers/i2c/i2c-core.ko \
+            drivers/video/backlight/backlight.ko \
+            drivers/gpu/drm/drm_panel_orientation_quirks.ko \
+            drivers/gpu/drm/drm.ko \
+            drivers/gpu/drm/drm_kms_helper.ko \
+            drivers/gpu/drm/drm_shmem_helper.ko \
+            drivers/virtio/virtio_dma_buf.ko \
+            drivers/gpu/drm/virtio/virtio-gpu.ko \
+            drivers/nvme/host/nvme-core.ko drivers/nvme/host/nvme.ko; do
+            echo "RV32I_F18_KBUILD_START=$target"
+            KBUILD_MODPOST_WARN=1 make -C "$src" O="$out" ARCH=riscv \
+              CROSS_COMPILE=riscv64-linux-gnu- KCFLAGS=-ffunction-sections \
+              -j4 "$target" >>"$root/modules-build.log" 2>&1
+            test -s "$out/$target"
+            max_calls=$(riscv64-linux-gnu-readelf -Wr "$out/$target" |
+              awk '/^Relocation section/ { section=$3 }
+                   /R_RISCV_CALL_PLT/ {
+                     if (++calls[section]>max) max=calls[section]
+                   }
+                   END { print max+0 }')
+            [[ "$max_calls" =~ ^[0-9]+$ && "$max_calls" -le 400 ]] || {
+              echo "RV32I_F18_MODULE_RELA=FAIL target=$target max_calls=$max_calls" >&2
+              exit 3
+            }
+            echo "RV32I_F18_MODULE_RELA=PASS target=$target max_calls=$max_calls"
+            install -m 644 "$out/$target" "$modules/$(basename "$target")"
+          done
+          for file in "$modules"/*.ko; do
+            riscv64-linux-gnu-readelf -h "$file" | grep -Eq 'Class:[[:space:]]+ELF32'
+            riscv64-linux-gnu-readelf -p .modinfo "$file" | \
+              grep -Eq 'vermagic=6\.6\.143 mod_unload riscv([[:space:]]|$)'
+            sha256sum "$file"
+          done
+          test "$(find "$modules" -name '*.ko' -type f | wc -l)" -eq 38
+          echo 'RV32I_P2_MODULES=BUILT count=38 original_config_verified=true runtime_load_not_yet_verified=true'
+
+      - name: Execute nine required RV32I/ILP32 P2 operations in real QEMU
+        shell: bash
+        timeout-minutes: 5
+        run: |
+          set -Eeuo pipefail
+          image="$GITHUB_WORKSPACE/build/rv32-p2-strict/source/out/arch/riscv/boot/Image"
+          test -s "$image"
+          expected=a762cb8ba55a3cbb52a1f85e61d40524941c8226a33cb35daf2bff1acd75a5a2
+          actual=$(sha256sum "$image" | cut -d' ' -f1)
+          test "$actual" = "$expected"
+          work="$GITHUB_WORKSPACE/build/rv32-p2-strict/run"
+          mkdir -p "$work"
+          set +e
+          RV32I_QEMU_IMAGE="$image" RV32I_QEMU_WORK="$work" \
+            RV32I_QEMU_P2_MODULE_DIR="$GITHUB_WORKSPACE/build/rv32-p2-strict/modules" \
+            RV32I_QEMU_P1=1 RV32I_QEMU_P2=1 \
+            RV32I_QEMU_TIMEOUT_SECONDS=90 \
+            bash tools/ci/linux-rv32i-qemu-p0-v1.sh \
+            >"$GITHUB_WORKSPACE/build/rv32-p2-strict/runner.log" 2>&1
+          rc=$?
+          set -e
+          printf 'qemu_lane_exit=%s\nsource_Image_sha256=%s\nscope=NOT_FULL_P2\n' \
+            "$rc" "$actual" >"$GITHUB_WORKSPACE/build/rv32-p2-strict/verdict.txt"
+          tail -n 160 "$GITHUB_WORKSPACE/build/rv32-p2-strict/runner.log"
+          echo 'RV32_P2_REQUIRED=9 skip_allowed=0 full_P2_18=NOT_CERTIFIED'
+          exit "$rc"
+
+      - name: Prepare real persistent ext4 fixture for canonical 11 of 18
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          root="$GITHUB_WORKSPACE/build/rv32-p2-strict"
+          truncate -s 128M "$root/canonical11-ext4.raw"
+          mkfs.ext4 -F -q "$root/canonical11-ext4.raw"
+          sha256sum "$root/canonical11-ext4.raw" >"$root/canonical11-ext4-sha256.txt"
+          echo 'RV32I_P2_C11_EXT4=PREPARED real_ext4=true qemu_virtio_disk=true'
+
+      - name: Extend proven nine operations to eleven canonical P2 checks in real QEMU
+        shell: bash
+        timeout-minutes: 8
+        run: |
+          set -Eeuo pipefail
+          root="$GITHUB_WORKSPACE/build/rv32-p2-strict"
+          image="$root/source/out/arch/riscv/boot/Image"
+          actual=$(sha256sum "$image" | cut -d' ' -f1)
+          test "$actual" = a762cb8ba55a3cbb52a1f85e61d40524941c8226a33cb35daf2bff1acd75a5a2
+          work="$root/canonical11-run"
+          mkdir -p "$work"
+          set +e
+          RV32I_QEMU_IMAGE="$image" RV32I_QEMU_WORK="$work" \
+            RV32I_QEMU_P2_MODULE_DIR="$root/modules" \
+            RV32I_QEMU_P2_EXT4_IMAGE="$root/canonical11-ext4.raw" \
+            RV32I_QEMU_P1=1 RV32I_QEMU_P2=1 \
+            RV32I_QEMU_P2_CANONICAL11=1 \
+            RV32I_QEMU_TIMEOUT_SECONDS=120 \
+            bash tools/ci/linux-rv32i-qemu-p0-v1.sh \
+            >"$root/canonical11-runner.log" 2>&1
+          rc=$?
+          set -e
+          printf 'qemu_lane_exit=%s\nsource_Image_sha256=%s\ncanonical=11/18\nscope=NOT_FULL_P2\n' \
+            "$rc" "$actual" >"$root/canonical11-verdict.txt"
+          tail -n 160 "$root/canonical11-runner.log"
+          echo 'RV32_P2_CANONICAL_REQUIRED=11 skip_allowed=0 full_P2_18=NOT_CERTIFIED'
+          exit "$rc"
+
+      # The Oct31 1741-owner Image passes 11/18, but its historical MiniC
+      # drivers/virtio/virtio.c object cannot negotiate GPU modern feature32.
+      # The parallel source-owner differential proved that *current* MiniC
+      # can compile the pristine original virtio.c under exact Kbuild flags.
+      # Updating both virtio core and virtio_pci_modern_dev still hit a false
+      # negative in old MiniC-compiled virtio_pci_modern.c::vp_finalize_features
+      # despite sysfs bit32=1. Compile those three exact original owners,
+      # keep 1738 frozen owners byte-identical, and require GPU+full18 QEMU.
+      - name: Restore exact GNU Kbuild owner cache for three MiniC virtio source owners
+        id: golden
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            build/rv32i-linux-entry/out
+            build/rv32i-linux-entry/provenance
+          key: linux-gnu-golden-rv32i-v1-6.6.143-4c6c19f79741a8a31ec52ad57b1a6bc56b81dd6996cbf5e1bdc63f587d85244c-0c2a199ea3ae14d3-0703113036a30806-d072447ef15a2074
+          fail-on-cache-miss: true
+
+      - name: Restore seven original MiniC owner shards; preserve 1738 frozen C owners
+        uses: actions/download-artifact@v4
+        with:
+          repository: yituanxing/minic-toolchain
+          run-id: '41212514498'
+          pattern: shard-*
+          merge-multiple: false
+          github-token: ${{ github.token }}
+          path: build/rv32-p2-strict/shards
+
+      - name: Compile three current MiniC original virtio source owners and GNU-relink Image
+        shell: bash
+        timeout-minutes: 9
+        run: |
+          set -Eeuo pipefail
+          test '${{ steps.golden.outputs.cache-hit }}' = true
+          bash tools/ci/linux-rv32i-p2-refresh-virtio-v1.sh
+
+      - name: Real QEMU GPU feature32 preflight for three exact current MiniC owners
+        shell: bash
+        timeout-minutes: 3
+        run: |
+          set -Eeuo pipefail
+          root="$GITHUB_WORKSPACE/build/rv32-p2-strict"
+          image="$GITHUB_WORKSPACE/build/rv32i-linux-entry/out/arch/riscv/boot/Image"
+          expected=$(sed -n 's/^current_Image_sha256=//p' "$root/refresh-virtio/provenance.txt")
+          test -n "$expected"
+          test "$(sha256sum "$image" | cut -d' ' -f1)" = "$expected"
+          mkdir -p "$root/current-gpu-only"
+          RV32I_QEMU_IMAGE="$image" RV32I_QEMU_WORK="$root/current-gpu-only" \
+            RV32I_QEMU_P1=1 RV32I_QEMU_GPU_DIAG=1 \
+            RV32I_QEMU_GPU_MODULE_DIR="$root/modules" \
+            RV32I_QEMU_TIMEOUT_SECONDS=120 \
+            bash tools/ci/linux-rv32i-qemu-p0-v1.sh \
+            >"$root/current-gpu-only.log" 2>&1 || {
+              echo 'RV32_P2_CURRENT_GPU=FAIL isolated_original_Linux_three_MiniC_owners' >&2
+              tail -n 120 "$root/current-gpu-only.log" >&2
+              exit 1
+            }
+          grep -Fq 'RV32I_GPU_FEATURE_DIAG=PASS' "$root/current-gpu-only/qemu-serial.log"
+          echo "RV32_P2_CURRENT_GPU=PASS current_MiniC_owners=3 all_frozen_MiniC_others=1738 GNU_modules=8 genuine_QEMU=true image_sha256=$expected scope=NOT_FULL_P2"
+
+      - name: Prepare a real NVMe PCI namespace backing store
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          root="$GITHUB_WORKSPACE/build/rv32-p2-strict"
+          truncate -s 64M "$root/full18-nvme.raw"
+          sha256sum "$root/full18-nvme.raw" >"$root/full18-nvme-sha256.txt"
+
+      - name: Execute all canonical P2 eighteen checks in one genuine RV32I QEMU boot
+        shell: bash
+        timeout-minutes: 9
+        run: |
+          set -Eeuo pipefail
+          root="$GITHUB_WORKSPACE/build/rv32-p2-strict"
+          image="$GITHUB_WORKSPACE/build/rv32i-linux-entry/out/arch/riscv/boot/Image"
+          actual=$(sha256sum "$image" | cut -d' ' -f1)
+          expected=$(sed -n 's/^current_Image_sha256=//p' "$root/refresh-virtio/provenance.txt")
+          test -n "$expected" && test "$actual" = "$expected"
+          work="$root/full18-run"
+          mkdir -p "$work"
+          set +e
+          RV32I_QEMU_IMAGE="$image" RV32I_QEMU_WORK="$work" \
+            RV32I_QEMU_P2_MODULE_DIR="$root/modules" \
+            RV32I_QEMU_P2_EXT4_IMAGE="$root/canonical11-ext4.raw" \
+            RV32I_QEMU_P2_NVME_IMAGE="$root/full18-nvme.raw" \
+            RV32I_QEMU_P1=1 RV32I_QEMU_P2=1 \
+            RV32I_QEMU_P2_CANONICAL11=1 RV32I_QEMU_P2_FULL18=1 \
+            RV32I_QEMU_TIMEOUT_SECONDS=240 \
+            bash tools/ci/linux-rv32i-qemu-p0-v1.sh \
+            >"$root/full18-runner.log" 2>&1
+          rc=$?
+          set -e
+          printf 'qemu_lane_exit=%s\nsource_Image_sha256=%s\ncanonical=18/18_REQUIRED\n' \
+            "$rc" "$actual" >"$root/full18-verdict.txt"
+          tail -n 190 "$root/full18-runner.log"
+          echo 'RV32_P2_FULL_REQUIRED=18 skip_allowed=0 module_load_required=38 full_P2_only_if_real_QEMU=PASS'
+          exit "$rc"
+
+      - name: Retain raw QEMU evidence even on real failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rv32i-p2-strict-${{ github.sha }}
+          path: |
+            build/rv32-p2-strict/verdict.txt
+            build/rv32-p2-strict/runner.log
+            build/rv32-p2-strict/modules-prepare.log
+            build/rv32-p2-strict/modules-build.log
+            build/rv32-p2-strict/run/rv32-p2-module-sha256.txt
+            build/rv32-p2-strict/run/module-*-modinfo.txt
+            build/rv32-p2-strict/run/qemu-serial.log
+            build/rv32-p2-strict/run/provenance.txt
+            build/rv32-p2-strict/run/runtime-p2-elf.txt
+            build/rv32-p2-strict/run/runtime-p2-disassembly.txt
+            build/rv32-p2-strict/canonical11-verdict.txt
+            build/rv32-p2-strict/canonical11-runner.log
+            build/rv32-p2-strict/canonical11-ext4-sha256.txt
+            build/rv32-p2-strict/canonical11-run/qemu-serial.log
+            build/rv32-p2-strict/canonical11-run/rv32-p2-module-sha256.txt
+            build/rv32-p2-strict/canonical11-run/runtime-p2-canonical11-elf.txt
+            build/rv32-p2-strict/canonical11-run/runtime-p2-canonical11-disassembly.txt
+            build/rv32-p2-strict/refresh-virtio/provenance.txt
+            build/rv32-p2-strict/refresh-virtio/virtio-original-source.sha256
+            build/rv32-p2-strict/refresh-virtio/virtio_pci_modern_dev-original-source.sha256
+            build/rv32-p2-strict/refresh-virtio/virtio_pci_modern-original-source.sha256
+            build/rv32-p2-strict/refresh-virtio/candidate-hashes.sha256
+            build/rv32-p2-strict/refresh-virtio/*-kbuild-route
+            build/rv32-p2-strict/refresh-virtio/*-success-owners
+            build/rv32-p2-strict/refresh-virtio/*-object-hashes
+            build/rv32-p2-strict/refresh-virtio/*-one-owner.log
+            build/rv32-p2-strict/refresh-virtio/gnu-relink.log
+            build/rv32-p2-strict/refresh-virtio/*-finalizer-symbol.txt
+            build/rv32-p2-strict/refresh-virtio/*-finalizer.dis
+            build/rv32-p2-strict/refresh-virtio/*-finalizer-full.dis
+            build/rv32-p2-strict/refresh-virtio/pre-repair-*.audit
+            build/rv32-p2-strict/refresh-virtio/gnu-relink-repair-*.log
+            build/rv32-p2-strict/current-gpu-only.log
+            build/rv32-p2-strict/current-gpu-only/qemu-serial.log
+            build/rv32-p2-strict/full18-verdict.txt
+            build/rv32-p2-strict/full18-runner.log
+            build/rv32-p2-strict/full18-nvme-sha256.txt
+            build/rv32-p2-strict/full18-run/qemu-serial.log
+            build/rv32-p2-strict/full18-run/qemu-pci-version.txt
+            build/rv32-p2-strict/full18-run/qemu-pci-gpu-properties.txt
+            build/rv32-p2-strict/full18-run/qemu-pci-guest-errors.log
+            build/rv32-p2-strict/full18-run/qemu-pci-trace-events.txt
+            build/rv32-p2-strict/full18-run/rv32-p2-module-sha256.txt
+            build/rv32-p2-strict/full18-run/runtime-p2-full18-elf.txt
+            build/rv32-p2-strict/full18-run/runtime-p2-full18-disassembly.txt
+          if-no-files-found: warn

@@ -1,13 +1,13 @@
 #ifndef MINIC_TARGET_RISCV64_FRAME_LAYOUT_H
 #define MINIC_TARGET_RISCV64_FRAME_LAYOUT_H
 #include "core/core_ir.h"
-#include "frontend/ast.h"
 #include "target/riscv64/asm_plan.h"
 #include "target/riscv64/abi.h"
 #include "target/common/core_object_reuse.h"
 #include "target/riscv64/record_snapshot.h"
 #include "target/riscv64/function_abi_plan.h"
 #include "target/riscv64/frame_requirements.h"
+#include "target/riscv/machine_frame_select.h"
 #include "target/common/core_object_storage.h"
 #include "target/common/core_function_facts.h"
 #include <stdbool.h>
@@ -32,11 +32,16 @@ typedef struct MinicRiscv64CoreFrame {
     size_t *value_offsets;
     MinicRiscv64AbiArgumentLocation *parameter_locations;
     size_t parameter_location_count;
+    /* The same prepared return classification transfers with the locations.
+     * MIR must never ask a caller to reconstruct an already-consumed plan. */
+    MinicRiscv64AbiValue return_abi_value;
+    bool has_return_abi_value;
     MinicRiscv64AbiCursor named_parameter_cursor;
     bool has_named_parameter_cursor;
     /* M177_CONSTANT_SWITCH_CFG_OWNER: suppress target emission of Core blocks
        that have no executable predecessor after semantic CFG pruning. */
-    bool *reachable_blocks;
+    const bool *reachable_blocks;
+    bool *owned_reachable_blocks;
     size_t value_base_offset;
     size_t outgoing_argument_size;
     size_t dynamic_call_area_size;
@@ -64,17 +69,20 @@ typedef struct MinicRiscv64CoreFrame {
 /* Consume a prevalidated ABI plan. This transfers ownership of parameter
  * locations to the frame; the input plan becomes empty on success. */
 bool minic_riscv64_core_frame_initialize_with_storage(
-    const MinicC0Program *, const MinicCoreFunction *,
+    const MinicCoreFunction *,
     MinicRiscv64CoreFrame *, MinicRiscv64FunctionAbiPlan *, bool, bool,
     const MinicCoreFunctionFacts *, const MinicCoreObjectStoragePlan *);
 void minic_riscv64_core_frame_destroy(MinicRiscv64CoreFrame *);
-bool minic_riscv64_core_frame_parameter_location(
-    const MinicRiscv64CoreFrame *, size_t, MinicRiscv64AbiArgumentLocation *);
-bool minic_riscv64_core_frame_object_offset(
-    const MinicC0Program *, const MinicCoreFunction *,
-    const MinicRiscv64CoreFrame *, MinicCoreObjectId, size_t *);
-bool minic_riscv64_core_frame_value_offset(
-    const MinicRiscv64CoreFrame *, MinicCoreValueId, size_t *);
+/* Adapter of existing LP64 layout, borrowing its ABI, spill and ASM-save
+ * placements. The caller owns the callee-save array for the MIR lifetime. */
+bool minic_riscv64_machine_physical_frame(
+    const MinicRiscv64CoreFrame *, MinicRiscvPhysicalFrame *,
+    MinicRiscvPhysicalCalleeSave *, size_t);
+/* Borrow the one already-consumed, fully finalized frame ABI, including its
+ * retained return classification. No second ABI classification is legal. */
+bool minic_riscv64_core_frame_abi_view(
+    const MinicRiscv64CoreFrame *, MinicRiscv64FunctionAbiView *);
 bool minic_riscv64_core_frame_mark_reachable_blocks(
-    const MinicCoreFunction *, MinicRiscv64CoreFrame *);
+    const MinicCoreFunction *, const MinicCoreFunctionFacts *,
+    MinicRiscv64CoreFrame *);
 #endif

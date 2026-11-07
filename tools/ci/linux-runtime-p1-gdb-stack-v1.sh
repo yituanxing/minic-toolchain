@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Read-only P1 stack-boundary diagnosis on the EXACT certified failing Image.
 # Record the CPU0 per-CPU IRQ-stack allocation independently of current->stack.
-# Breakpoints are armed only after tcp_v6_connect to avoid boot-time storms.
+# Default breakpoints are armed only after tcp_v6_connect. The separate
+# fault-only mode uses just one handle_bad_stack hardware breakpoint.
 # GDB changes execution timing; this is never a P1 PASS certificate.
 # Evidence contract: docs/ci/linux-p1-task-irq-stack-diagnosis-2026-10-12.md
 set -Eeuo pipefail
@@ -34,6 +35,7 @@ import sys
 nm, commands_path, symbols_path, vmlinux, port, evidence_dir = sys.argv[1:]
 sched_chain = os.environ.get('P1_GDB_SCHED_CHAIN') == '1'
 irq_reentry = os.environ.get('P1_GDB_IRQ_REENTRY') == '1'
+minimal_fault_only = os.environ.get('P1_GDB_MINIMAL_FAULT_ONLY') == '1'
 symbols = {}
 for line in Path(nm).read_text(errors="replace").splitlines():
     parts = line.split()
@@ -44,10 +46,91 @@ for line in Path(nm).read_text(errors="replace").splitlines():
             pass
 # Required data addresses must be read through CPU0's per-CPU offset, not
 # treated as ordinary absolute .data objects. QEMU runs with -smp 1.
-required = ("tcp_v6_connect", "irq_stack_ptr", "__per_cpu_offset")
+required = (("handle_bad_stack", "irq_stack_ptr", "__per_cpu_offset")
+            if minimal_fault_only else
+            ("tcp_v6_connect", "irq_stack_ptr", "__per_cpu_offset"))
 missing = [name for name in required if name not in symbols]
 if missing:
     raise SystemExit("P1_GDB=INCONCLUSIVE missing_linked_symbols=" + ",".join(missing))
+if minimal_fault_only:
+    # The uninstrumented same-Image P1 repeat already proved IPv6 can panic
+    # with IRQ SP below its allocation. Stop only at the emergency handler:
+    # no TCP gate and no high-frequency timer, IRQ, slab or RB breakpoints.
+    handler = symbols["handle_bad_stack"][0]
+    irq_ptr = symbols["irq_stack_ptr"][0]
+    percpu_offset = symbols["__per_cpu_offset"][0]
+    lines = [
+        "set confirm off", "set pagination off", "set height 0",
+        "set print pretty off", "set architecture riscv:rv64",
+        f"file {vmlinux}", f"target remote 127.0.0.1:{port}",
+        f"hbreak *0x{handler:x}", "commands 1", "silent",
+        "set $p1_emergency_sp = (unsigned long)$sp",
+        "set $p1_regs = (unsigned long)$a0",
+        f"set $p1_percpu_offset = *(unsigned long*)0x{percpu_offset:x}",
+        f"set $p1_irq_ptr_slot = (unsigned long)0x{irq_ptr:x} + $p1_percpu_offset",
+        "set $p1_irq_base = *(unsigned long*)$p1_irq_ptr_slot",
+        "set $p1_irq_top = $p1_irq_base + 16384",
+        "set $p1_task_lo = (unsigned long)0",
+        'printf "P1_GDB_IRQ_LAYOUT irq_base=%#lx irq_top=%#lx irq_ptr_slot=%#lx percpu_offset=%#lx handler_sp=%#lx task_lo=%#lx\\n", (unsigned long)$p1_irq_base, (unsigned long)$p1_irq_top, (unsigned long)$p1_irq_ptr_slot, (unsigned long)$p1_percpu_offset, (unsigned long)$sp, (unsigned long)$p1_task_lo',
+        'printf "P1_GDB_OVERFLOW_HANDLER emergency_sp=%#lx irq_base=%#lx irq_top=%#lx task_ptr=%#lx pt_regs=%#lx\\n", (unsigned long)$p1_emergency_sp, (unsigned long)$p1_irq_base, (unsigned long)$p1_irq_top, (unsigned long)$tp, (unsigned long)$p1_regs',
+    ]
+    for reg, offset in (("epc", 0), ("ra", 8), ("sp", 16),
+                        ("status", 256), ("badaddr", 264), ("cause", 272)):
+        lines.append(f"set $p1_fault_{reg} = *(unsigned long*)($p1_regs + {offset})")
+    # On RISC-V, tp is current's task_struct pointer. Only export a task
+    # stack if its base is independently verified: prefer DWARF struct type,
+    # else infer the *unique* stack-field offset from init_task/init_stack.
+    # An IRQ-underflow SP is NOT a valid task-stack base.
+    init_task = symbols.get("init_task")
+    init_stack = symbols.get("init_stack")
+    lines += [
+        "python", "import gdb", "import struct",
+        "_p1_taskbase = 0", "_p1_source = 'unavailable'",
+        "try:",
+        "    _p1_taskbase = int(gdb.parse_and_eval('((struct task_struct *)$tp)->stack'))",
+        "    _p1_source = 'task_struct_debug_type'",
+        "except Exception:", "    pass",
+    ]
+    if init_task and init_stack:
+        lines += [
+            "if not _p1_taskbase:",
+            "    try:",
+            f"        _p1_init = bytes(gdb.selected_inferior().read_memory(0x{init_task[0]:x}, 512))",
+            f"        _p1_needle = struct.pack('<Q', 0x{init_stack[0]:x})",
+            "        _p1_offsets = [i for i in range(0, len(_p1_init)-7, 8) if _p1_init[i:i+8] == _p1_needle]",
+            "        if len(_p1_offsets) == 1:",
+            "            _p1_tp = int(gdb.parse_and_eval('$tp'))",
+            "            _p1_raw = bytes(gdb.selected_inferior().read_memory(_p1_tp + _p1_offsets[0], 8))",
+            "            _p1_taskbase = struct.unpack('<Q', _p1_raw)[0]",
+            "            _p1_source = 'unique_init_task_stack_field'",
+            "    except Exception:", "        pass",
+        ]
+    lines += [
+        "if _p1_taskbase and _p1_taskbase % 16384 == 0:",
+        "    try:",
+        "        gdb.selected_inferior().read_memory(_p1_taskbase, 16384)",
+        "        gdb.execute('set $p1_task_lo = (unsigned long)0x%x' % _p1_taskbase)",
+        f"        gdb.execute('dump binary memory {evidence_dir}/task-stack.bin 0x%x 0x%x' % (_p1_taskbase, _p1_taskbase+16384))",
+        "        gdb.write('P1_GDB_TASK_STACK=CAPTURED base=0x%x bytes=16384 source=%s\\n' % (_p1_taskbase, _p1_source))",
+        "    except Exception:",
+        "        gdb.write('P1_GDB_TASK_STACK=INCONCLUSIVE unreadable_task_stack\\n')",
+        "else:",
+        "    gdb.write('P1_GDB_TASK_STACK=INCONCLUSIVE unverified_task_struct_stack\\n')",
+        "end",
+        'printf "P1_FIRSTFAULT epc=%#lx ra=%#lx sp=%#lx status=%#lx badaddr=%#lx cause=%#lx irq_base=%#lx irq_top=%#lx task_lo=%#lx\\n", (unsigned long)$p1_fault_epc, (unsigned long)$p1_fault_ra, (unsigned long)$p1_fault_sp, (unsigned long)$p1_fault_status, (unsigned long)$p1_fault_badaddr, (unsigned long)$p1_fault_cause, (unsigned long)$p1_irq_base, (unsigned long)$p1_irq_top, (unsigned long)$p1_task_lo',
+        "x/36gx $p1_regs",
+        f"dump binary memory {evidence_dir}/irq-stack.bin $p1_irq_base $p1_irq_top",
+        # Stop the debugger as soon as the first fault is captured. A 65s
+        # timeout with a resumed guest is not useful diagnostic evidence.
+        "quit", "end", "continue",
+    ]
+    Path(commands_path).write_text("\n".join(lines) + "\n")
+    Path(symbols_path).write_text(f"handle_bad_stack\t0x{handler:x}\n")
+    print("P1_GDB_MINIMAL_FAULT_ONLY=ARMED breakpoints=1 "
+          "target=handle_bad_stack tcp_gate=false irq_timer_slab_breakpoints=0 "
+          "irq_stack_ptr=0x%x __per_cpu_offset=0x%x" %
+          (irq_ptr, percpu_offset))
+    raise SystemExit(0)
 targets = (
     "tcp_v6_connect", "ip6_xmit", "ip6_finish_output2",
     "do_irq", "handle_riscv_irq", "riscv_timer_interrupt",
@@ -208,6 +291,14 @@ grep -aE 'Insufficient stack space|Kernel panic|BUG:|Oops:' "$dest/qemu-serial.l
 if ! grep -aFq 'P1_GDB_IRQ_LAYOUT irq_base=' "$dest/gdb.log"; then
   echo "P1_GDB=INCONCLUSIVE no_percpu_irq_layout_observed"
   exit 8
+fi
+if [[ "${P1_GDB_MINIMAL_FAULT_ONLY:-0}" == 1 ]]; then
+  if ! grep -aFq 'P1_FIRSTFAULT epc=' "$dest/gdb.log"; then
+    echo "P1_GDB_MINIMAL_FAULT_ONLY=INCONCLUSIVE no_firstfault_capture debugger_rc=$rc original_P1=UNMODIFIED"
+    exit 8
+  fi
+  echo "P1_GDB_MINIMAL_FAULT_ONLY=CAPTURED breakpoints=1 firstfault=true irq_layout=true gdb_timing_perturbed=true no_P1_pass_inference=true"
+  exit 0
 fi
 if ! grep -aFq 'P1_GDB_FRAME name=' "$dest/gdb.log"; then
   echo "P1_GDB=INCONCLUSIVE no_post_tcp_trace"

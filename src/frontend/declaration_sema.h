@@ -55,13 +55,15 @@ typedef enum MinicDeclarationExternalObjectCreateStatus {
     MINIC_DECLARATION_EXTERNAL_OBJECT_CREATE_COMMIT_FAILED
 } MinicDeclarationExternalObjectCreateStatus;
 
-bool minic_declaration_array_suffix_valid(const MinicDeclarationArraySuffix *suffix);
-
 MinicDeclarationArrayMaterializeStatus
 minic_declaration_materialize_array_suffix(MinicC0Program *program,
                                            MinicType element_type,
                                            const MinicDeclarationArraySuffix *suffix,
                                            MinicType *type);
+
+bool minic_declaration_instantiate_incomplete_array_object_type(MinicC0Program *program,
+                                                                MinicType declared_type,
+                                                                MinicType *object_type);
 
 bool minic_declaration_external_object_types_compatible(const MinicC0Program *program,
                                                         MinicType existing_type,
@@ -70,9 +72,6 @@ bool minic_declaration_external_object_types_compatible(const MinicC0Program *pr
 bool minic_declaration_merge_external_array_composite_type(MinicC0Program *program,
                                                            MinicType existing_type,
                                                            MinicType declared_type);
-
-bool minic_declaration_external_object_attributes_valid(
-    const MinicDeclarationExternalObjectAttributes *attributes);
 
 bool minic_declaration_apply_object_attributes(
     MinicC0Program *program,

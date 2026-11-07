@@ -26,17 +26,63 @@ SRC
 "$MINIC_CC" --target=riscv32-linux -march=rv32i -mabi=ilp32 \
   -S "$work/rv32.i" -o "$work/rv32.s"
 test -s "$work/rv32.s"
-for pattern in \
-  'sltu t5, t4, t0' 'sltu t5, t0, t2' \
-  'snez t4, t0' 'not t0, t0' 'not t1, t1' \
-  'xor t0, t0, t2' 'and t1, t1, t3' 'or t1, t1, t3' \
-  '_rv32_clz_loop_' '_rv32_ctz_loop_' 'add t1, t1, t4' \
-  '_wide_ge32_' '_wide_ge64_' 'bnez t5,'; do
-  grep -Fq "$pattern" "$work/rv32.s" || {
-    echo "RISCV_SHARED_WORD_OPS=FAIL rv32-missing:$pattern" >&2
+# MachineIR is the only RV32/RV64 emitter. Inspect each selected function's
+# exact Base-I physical register forms (numeric xN and equivalent psABI
+# spellings), without tying correctness to removed direct-emitter loop labels.
+# The current bit scans and 2*XLEN shifts are deliberately branch-free.
+require_form() {
+  target=$1
+  fn=$2
+  form=$3
+  # POSIX awk reserves `function`; choose an ordinary selector name.
+  awk -v selected_fn="$fn" '
+    $0 == selected_fn ":" { found = 1 }
+    found { print }
+    found && $1 == ".size" && $2 == selected_fn "," { exit }
+  ' "$work/$target.s" | grep -Eq "$form" || {
+    printf 'RISCV_SHARED_WORD_OPS=FAIL %s function=%s missing_MachineIR_form=%s\n' \
+      "$target" "$fn" "$form" >&2
     exit 1
   }
-done
+}
+require_function_set() {
+  target=$1
+  for fn in pair_add pair_sub pair_xor pair_and pair_or pair_not pair_neg \
+            pair_shl pair_shr pair_sar bit_clz bit_ctz; do
+    count=$(grep -Ec "^$fn:$" "$work/$target.s" || :)
+    if [ "$count" -ne 1 ]; then
+      printf 'RISCV_SHARED_WORD_OPS=FAIL %s function=%s count=%s\n' \
+        "$target" "$fn" "$count" >&2
+      exit 1
+    fi
+  done
+}
+require_pair_forms() {
+  target=$1
+  require_function_set "$target"
+  # Wide ADD carry, SUB borrow and both 2*XLEN bitwise lanes.
+  require_form "$target" pair_add '^  sltu (x30|t5), (x29|t4), (x5|t0)$'
+  require_form "$target" pair_add '^  add (x6|t1), (x6|t1), (x30|t5)$'
+  require_form "$target" pair_sub '^  sltu (x30|t5), (x5|t0), (x7|t2)$'
+  require_form "$target" pair_xor '^  xor (x5|t0), (x5|t0), (x7|t2)$'
+  require_form "$target" pair_and '^  and (x6|t1), (x6|t1), (x28|t3)$'
+  require_form "$target" pair_or '^  or (x6|t1), (x6|t1), (x28|t3)$'
+  require_form "$target" pair_not '^  not (x5|t0), (x5|t0)$'
+  require_form "$target" pair_not '^  not (x6|t1), (x6|t1)$'
+  require_form "$target" pair_neg '^  snez (x7|t2), (x5|t0)$'
+  # Select the [0,XLEN), [XLEN,2*XLEN), >=2*XLEN cases with
+  # register comparisons/masks, not deleted _wide_ge* branch islands.
+  require_form "$target" pair_shl '^  sltu (x12|a2), (x7|t2), (x14|a4)$'
+  require_form "$target" pair_shr '^  sltu (x13|a3), (x7|t2), (x14|a4)$'
+  require_form "$target" pair_sar '^  sra (x16|a6), (x6|t1), (x10|a0)$'
+  # CLZ/CTZ use an unrolled bit-search with Core SSA, not stale named loops.
+  require_form "$target" bit_clz '^  srl (x5|t0), (x5|t0), (x28|t3)$'
+  require_form "$target" bit_ctz '^  srl (x5|t0), (x5|t0), (x28|t3)$'
+}
+require_pair_forms rv32
+test "$(grep -Ec '^pair_shl_wide_count:$' "$work/rv32.s" || :)" -eq 1
+# A two-word shift count must mask out all counts with nonzero upper word.
+require_form rv32 pair_shl_wide_count '^  seqz (x14|a4), (x30|t5)$'
 
 cat > "$work/rv64.i" <<'SRC'
 typedef unsigned __int128 U;
@@ -57,18 +103,7 @@ SRC
 "$MINIC_CC" --target=riscv64-linux -march=rv64i -mabi=lp64 \
   -S "$work/rv64.i" -o "$work/rv64.s"
 test -s "$work/rv64.s"
-for pattern in \
-  'sltu t5, t4, t0' 'sltu t5, t0, t2' \
-  'snez t4, t0' 'not t0, t0' 'not t1, t1' \
-  'xor t0, t0, t2' 'and t1, t1, t3' 'or t1, t1, t3' \
-  '_core_clz_loop_' '_core_ctz_loop_' \
-  '_core_i128_shl_ge64_' '_core_i128_shr_ge64_' \
-  '_core_i128_shl_ge128_' '_core_i128_shr_ge128_'; do
-  grep -Fq "$pattern" "$work/rv64.s" || {
-    echo "RISCV_SHARED_WORD_OPS=FAIL rv64-missing:$pattern" >&2
-    exit 1
-  }
-done
+require_pair_forms rv64
 if grep -Eq '^[[:space:]]+(mul|mulw|div|rem|clz|ctz)[[:space:]]' \
    "$work/rv32.s" "$work/rv64.s"; then
   echo "RISCV_SHARED_WORD_OPS=FAIL unexpected non-I instruction" >&2

@@ -19,5 +19,5 @@ mkdir -p "$work"
 grep -F '.Lminic_string_0:' "$work/static_local_string_array.s" >/dev/null
 grep -F '.size .Lminic_string_0, 4' "$work/static_local_string_array.s" >/dev/null
 grep -F '  .byte 97' "$work/static_local_string_array.s" >/dev/null
-grep -F '  lbu a0, 0(a0)' "$work/static_local_string_array.s" >/dev/null
+grep -Eq '^[[:space:]]+lbu[[:space:]]+[a-z][a-z0-9]*, 0\([a-z][a-z0-9]*\)$' "$work/static_local_string_array.s"
 printf '%s\n' 'PASS compiler/c0/static_local_string_array inferred-bound=4 initializer=string static-storage=yes'

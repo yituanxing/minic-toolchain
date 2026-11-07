@@ -1,0 +1,168 @@
+#!/bin/sh
+# M188: prune only unreachable, target-neutral constant-switch C segments.
+# An externally re-entered label must keep its otherwise-dead source body.
+set -eu
+root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
+: "${MINIC_CC:?set MINIC_CC to strict built minic-cc}"
+work=${BUILD_DIR:-"$root/build/debug"}/tests/minic-core-constant-switch
+mkdir -p "$work"
+cat > "$work/constant-switch.i" <<'SRC'
+int constant_size(void) {
+    int answer = 0;
+    switch (sizeof(void *)) {
+    case 1:
+        __asm__ __volatile__("minic_unsupported_dead_hw" : : "r"(answer) : "memory");
+        break;
+    case 2:
+        __asm__ __volatile__("minic_unsupported_dead_hw" : : "r"(answer) : "memory");
+        break;
+    case 4: answer = 42; break;
+    case 8: answer = 42; break;
+    default: answer = 99; break;
+    }
+    return answer;
+}
+int reentry(int early) {
+    int result = 0;
+    if (early) goto EARLY;
+    switch (sizeof(void *)) {
+    case 1: EARLY: result = 43; break;
+    case 8: result = 42; break;
+    default: result = 41; break;
+    }
+    return result;
+}
+int reentry_prefix(int early) {
+    int result = 0;
+    if (early) goto PREFIX;
+    switch (sizeof(void *)) {
+    PREFIX: result = 40;
+    case 1: result += 1; break;
+    case 4: result = 42; break;
+    case 8: result = 42; break;
+    default: result = 99; break;
+    }
+    return result;
+}
+int suffix_after_break(void) {
+    int result = 42;
+    switch (sizeof(char)) {
+    case 1: break;
+    case 2: __asm__ __volatile__("minic_unsupported_dead_hw" : : "r"(result)); break;
+    case 4: __asm__ __volatile__("minic_unsupported_dead_hw" : : "r"(result)); break;
+    default: result = 9; break;
+    }
+    return result;
+}
+int suffix_after_return(void) {
+    switch (sizeof(char)) {
+    case 1: return 42;
+    case 2: __asm__ __volatile__("minic_unsupported_dead_hw"); return 43;
+    default: return 44;
+    }
+}
+int suffix_reentry(int early) {
+    int result = 42;
+    if (early) goto AFTER;
+    switch (sizeof(char)) {
+    case 1: break;
+    case 2: AFTER: result = 43; break;
+    default: result = 44; break;
+    }
+    return result;
+}
+int suffix_conditional(int early) {
+    switch (sizeof(char)) {
+    case 1: if (early) break;
+    case 2: return 43;
+    default: return 44;
+    }
+    return 42;
+}
+int main(void) {
+    return constant_size() == 42 && reentry(1) == 43 &&
+           reentry(0) == 42 && reentry_prefix(1) == 41 &&
+           reentry_prefix(0) == 42 &&
+           suffix_after_break() == 42 && suffix_after_return() == 42 &&
+           suffix_reentry(0) == 42 && suffix_reentry(1) == 43 &&
+           suffix_conditional(0) == 43 && suffix_conditional(1) == 42
+               ? 0 : 1;
+}
+SRC
+for target in riscv32-linux riscv64-linux x86_64-linux aarch64-linux loongarch64-linux; do
+    "$MINIC_CC" --target="$target" -S "$work/constant-switch.i" \
+        -o "$work/$target.s"
+    test -s "$work/$target.s"
+    if grep -Fq 'minic_unsupported_dead_hw' "$work/$target.s"; then
+        echo "FAIL $target emitted unreachable machine template" >&2
+        exit 1
+    fi
+done
+# All three LP64 MachineIR printers now use the shared target-neutral
+# .Lminic_mir_<function>_<block> spelling from machine_internal_label()
+# (src/target/common/machine_gnu_asm.c). Compare *actual machine CFG*
+# blocks across the three targets: retain external C goto reentry, exclude
+# unreachable constant-switch arms, and reject wrong/missing block counts.
+# grep returns 1 for zero matches; allow the explicit equality check below
+# to emit an actionable FAIL rather than silently stopping under set -e.
+rv64_blocks=$(grep -Ec '^\.Lminic_mir_[^:]+_[0-9]+:' "$work/riscv64-linux.s" || :)
+aarch64_blocks=$(grep -Ec '^\.Lminic_mir_[^:]+_[0-9]+:' "$work/aarch64-linux.s" || :)
+loongarch64_blocks=$(grep -Ec '^\.Lminic_mir_[^:]+_[0-9]+:' "$work/loongarch64-linux.s" || :)
+# A MachineIR block is not a Core block. RV64 creates a far-entry
+# island for every reachable Core block and two branch auxiliaries; AArch64
+# and LoongArch64 use different auxiliaries. Check presence individually,
+# never require their emitted Machine CFG block counts to be identical.
+if [ "$rv64_blocks" -eq 0 ] || [ "$aarch64_blocks" -eq 0 ] ||
+   [ "$loongarch64_blocks" -eq 0 ]; then
+    printf 'FAIL missing MachineIR LP64 blocks rv64=%s aarch64=%s loongarch64=%s\n' \
+      "$rv64_blocks" "$aarch64_blocks" "$loongarch64_blocks" >&2
+    exit 1
+fi
+# Source LABEL statements lower to canonical sealed .Luser_<statement-id>
+# Core block identities, carried unchanged through all five MachineIR
+# targets (src/core/symbol_identity.h and compiler/c_lower/core_lower.c).
+# EARLY, PREFIX and AFTER must each remain reachable despite the constant
+# switch's otherwise-dead cases. Three distinct aliases on each target,
+# with exact shared identities, prove that the Core label/reentry roots
+# survived target lowering without conflating ISA-specific Machine aux.
+reference_core_labels=''
+for target in riscv32-linux riscv64-linux x86_64-linux aarch64-linux loongarch64-linux; do
+    labels=$(grep -E '^\.Luser_[0-9]+:$' "$work/$target.s" || :)
+    label_count=$(printf '%s\n' "$labels" | grep -Ec '^\.Luser_[0-9]+:$' || :)
+    distinct_labels=$(printf '%s\n' "$labels" | LC_ALL=C sort -u)
+    distinct_count=$(printf '%s\n' "$distinct_labels" |
+        grep -Ec '^\.Luser_[0-9]+:$' || :)
+    if [ "$label_count" -ne 3 ] || [ "$distinct_count" -ne 3 ]; then
+        printf 'FAIL %s lost/duplicated Core source reentry labels count=%s unique=%s\n' \
+          "$target" "$label_count" "$distinct_count" >&2
+        exit 1
+    fi
+    if [ -z "$reference_core_labels" ]; then
+        reference_core_labels=$distinct_labels
+    elif [ "$distinct_labels" != "$reference_core_labels" ]; then
+        printf 'FAIL %s changed cross-target Core source reentry identities\n' "$target" >&2
+        exit 1
+    fi
+done
+cc -O0 -no-pie -fno-pie -x c "$work/constant-switch.i" -o "$work/gnu"
+cc -O0 -no-pie -fno-pie -x assembler "$work/x86_64-linux.s" -o "$work/minic"
+"$work/gnu"
+"$work/minic"
+# A nonconstant source selector must NEVER be mistaken for a dead case.
+cat > "$work/dynamic-switch.i" <<'SRC'
+int dynamic_switch(int value) {
+    switch (value) {
+    case 1: __asm__ __volatile__("minic_unsupported_dead_hw" : : "r"(value) : "memory"); break;
+    default: return 42;
+    }
+    return 0;
+}
+int main(void) { return dynamic_switch(1); }
+SRC
+if "$MINIC_CC" --target=x86_64-linux -S "$work/dynamic-switch.i" \
+    -o "$work/dynamic-switch.s" >"$work/dynamic-switch.out" \
+    2>"$work/dynamic-switch.err"; then
+    echo 'FAIL dynamic switch pruned executable unknown GNU asm' >&2
+    exit 1
+fi
+echo "MINIC_CORE_CONSTANT_SWITCH_DEAD_SOURCE=PASS five_targets=5 rv64_machine_blocks=$rv64_blocks aarch64_machine_blocks=$aarch64_blocks loongarch64_machine_blocks=$loongarch64_blocks sealed_core_reentry_labels=3 external_goto=6 suffix_break=1 suffix_return=1 conditional_fallthrough=1 dynamic_negative=1"

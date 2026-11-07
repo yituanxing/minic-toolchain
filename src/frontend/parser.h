@@ -3,7 +3,7 @@
 
 #include "frontend/ast.h"
 #include "minic/compiler.h"
-#include "target/target_info.h"
+#include "target/source_policy/source_info.h"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -12,7 +12,7 @@
 bool minic_parse_c0_program_for_target(const char *path,
                                        const char *source,
                                        size_t length,
-                                       const MinicTargetInfo *target_info,
+                                       const MinicTargetInvocation *invocation,
                                        MinicC0Program *program,
                                        MinicDiagnostic *diagnostic);
 

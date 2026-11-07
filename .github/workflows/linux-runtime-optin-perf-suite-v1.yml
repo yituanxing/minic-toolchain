@@ -1272,14 +1272,14 @@ jobs:
           elif [[ "${{ contains(github.event.head_commit.message, '[minic-core-lazy-ab]') && '1' || '0' }}" == 1 ||
                 "${{ contains(github.event.head_commit.message, '[minic-core-lazy-ab500]') && '1' || '0' }}" == 1 ]]; then
             trial=core-lazy
-            source_file=src/core/core_lower.c
+            source_file=src/compiler/c_lower/core_lower.c
             # The last QEMU-certified eager index source: no unrelated diff.
             parent=b45298017b90569385b24a7e7636be666cef8cd2
           elif [[ "${{ contains(github.event.head_commit.message, '[minic-core-reentry-ab]') && '1' || '0' }}" == 1 ||
                 "${{ contains(github.event.head_commit.message, '[minic-core-reentry-ab500]') && '1' || '0' }}" == 1 ||
                 "${{ contains(github.event.head_commit.message, '[minic-core-regression-triage]') && '1' || '0' }}" == 1 ]]; then
             trial=core-reentry
-            source_file=src/core/core_lower.c
+            source_file=src/compiler/c_lower/core_lower.c
             parent=3bcb2594b2a0fe9a5c34ea2937363e595d9fe172
           elif [[ "${{ contains(github.event.head_commit.message, '[minic-integer-owner-ab]') && '1' || '0' }}" == 1 ||
                 "${{ contains(github.event.head_commit.message, '[minic-integer-owner-ab500]') && '1' || '0' }}" == 1 ]]; then
@@ -1314,7 +1314,7 @@ jobs:
           if [[ "$trial" == core-reentry ]]; then
             # Restore ALL three changed production files, not just core_lower.c.
             # Both compilers must use their own exact SHA-pinned native profile.
-            git show "$parent:src/core/core_lower.h" > src/core/core_lower.h
+            git show "$parent:src/compiler/c_lower/core_lower.h" > src/compiler/c_lower/core_lower.h
             git show "$parent:src/compiler/compiler.c" > src/compiler/compiler.c
             git show "$parent:docs/ci/native-runtime44-perf4-validated-sha1.txt" \
               > docs/ci/native-runtime44-perf4-validated-sha1.txt

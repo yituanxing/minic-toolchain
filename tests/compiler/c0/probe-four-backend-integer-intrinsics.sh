@@ -44,6 +44,25 @@ static int checks(void) {
         __builtin_ctzll(8UL) != 3 ||
         __builtin_ctzll(0x100000000UL) != 32)
         return 16;
+    /* Generic GNU overflow uses infinite precision, including a 65th bit
+     * when an unsigned LP64 operand meets a signed 32-bit operand. */
+    {
+        unsigned long large = 0x80000000UL;
+        int small = -1;
+        if (__builtin_add_overflow(large, small, &s32) ||
+            s32 != 2147483647) return 17;
+        large = ~0UL;
+        small = 1;
+        if (!__builtin_add_overflow(large, small, &s32) ||
+            s32 != 0) return 18;
+        large = 0UL;
+        small = -1;
+        if (__builtin_add_overflow(small, large, &s32) ||
+            s32 != -1) return 19;
+        large = 0x80000001UL;
+        if (!__builtin_add_overflow(small, large, &s32) ||
+            s32 != (-2147483647-1)) return 20;
+    }
     return 0;
 }
 int main(void) { return checks() == 0 ? 42 : 1; }
@@ -70,6 +89,6 @@ for target in aarch64 loongarch64; do
   done
   cmp "$w/$target.gnu.out" "$w/$target.mini.out"
   cmp "$w/$target.gnu.err" "$w/$target.mini.err"
-  echo "INTEGER_INTRINSICS=PASS target=$target signed=1 unsigned=1 widths=32,64 add=1 sub=1 mul=1 clz=1 ctz=1 GNU_QEMU=1"
+  echo "INTEGER_INTRINSICS=PASS target=$target signed=1 unsigned=1 widths=32,64 add=1 sub=1 mul=1 mixed_add=1 clz=1 ctz=1 GNU_QEMU=1"
 done
 echo "INTEGER_INTRINSICS_ACCEPT=PASS targets=2"

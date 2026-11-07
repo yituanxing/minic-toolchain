@@ -164,7 +164,8 @@ MinicTypeAliasId minic_parser_find_type_alias(const MinicParser *parser,
     }
 
     ((MinicParser *)parser)->perf_typedef_queries += 1U;
-    if (minic_parser_typedef_index_sync((MinicParser *)parser)) {
+    if (parser->cache_owner == parser &&
+        minic_parser_typedef_index_sync((MinicParser *)parser)) {
         bool consistent = false;
         MinicTypeAliasId id = minic_parser_typedef_index_lookup(
             (MinicParser *)parser, name_span, &consistent);
@@ -194,18 +195,17 @@ static bool parse_parenthesized_function_typedef(MinicParser *parser,
     MinicParsedFunctionDeclarator declarator;
 
     if (parser == NULL || name_span == NULL || aliased_type == NULL ||
-        !minic_parser_parse_parenthesized_function_declarator(parser, true, false, &declarator)) {
-        return false;
-    }
-    if (declarator.attributes.count != 0U) {
-        minic_parser_error(
-            parser,
-            "GNU attributes inside function pointer typedef declarators are not implemented yet");
+        !minic_parser_parse_parenthesized_function_declarator(parser, true, false, &declarator, false)) {
         return false;
     }
     if (!minic_parser_build_function_declarator_type(
             parser, return_type, &declarator, aliased_type)) {
         minic_parser_error(parser, "cannot build function pointer typedef type");
+        return false;
+    }
+    if (!minic_parser_apply_function_pointer_declarator_attributes(
+            parser, &declarator.attributes, aliased_type,
+            "unsupported GNU attribute in function-pointer typedef")) {
         return false;
     }
     *name_span = declarator.name_span;
@@ -351,7 +351,7 @@ static bool apply_integer_typedef_mode(MinicParser *parser,
         mapped = is_unsigned ? minic_type_unsigned_int128() : minic_type_int128();
     } else if (typedef_mode_name_is(mode_name, mode_name_length, "word")) {
         if (!minic_target_info_word_integer_type(
-                parser->target_info,
+                parser->invocation,
                 is_unsigned ? MINIC_INTEGER_SIGN_UNSIGNED : MINIC_INTEGER_SIGN_SIGNED,
                 &mapped)) {
             minic_parser_error(parser, "cannot resolve target GNU word integer mode");
@@ -393,6 +393,44 @@ static bool consume_typedef_attribute(MinicParser *parser,
      * representation. libselinux exposes security_context_t this way.
      * Preserve the alias and do not rewrite the source or erase layout attrs. */
     if (descriptor->kind == MINIC_ATTRIBUTE_DEPRECATED) {
+        return true;
+    }
+    if (descriptor->kind == MINIC_ATTRIBUTE_VECTOR_SIZE) {
+        const MinicDataLayout *layout;
+        MinicType vector;
+        size_t element_size;
+        size_t element_alignment;
+        size_t bytes = 0U;
+
+        if (!minic_target_info_language_type_supported(
+                parser->invocation, MINIC_TYPE_BASE_GNU_FIXED_VECTOR)) {
+            minic_parser_error(parser,
+                               "GNU vector_size storage is unsupported on this target");
+            return false;
+        }
+        if (!minic_parser_apply_alignment_attribute(
+                parser, attribute, "vector size", &bytes)) {
+            return false;
+        }
+        layout = minic_target_info_data_layout(&parser->invocation->machine);
+        if (layout == NULL ||
+            !minic_data_layout_type(parser->invocation, parser->program, *context->aliased_type,
+                                    &element_size, &element_alignment) ||
+            element_size == 0U || bytes % element_size != 0U ||
+            !minic_type_gnu_fixed_vector(*context->aliased_type, bytes, &vector)) {
+            minic_parser_error(parser,
+                               "GNU vector_size requires a positive power-of-two "
+                               "multiple of an integral or floating scalar element");
+            return false;
+        }
+        (void)element_alignment;
+        if (!minic_data_layout_type(parser->invocation, parser->program, vector,
+                                    &element_size, &element_alignment)) {
+            minic_parser_error(parser,
+                               "GNU vector_size width is unsupported by target storage layout");
+            return false;
+        }
+        *context->aliased_type = vector;
         return true;
     }
     if (descriptor->kind == MINIC_ATTRIBUTE_ALIGNED) {
@@ -641,9 +679,7 @@ static bool parse_one_typedef_declarator(
             is_function_declarator = true;
         }
     }
-    if ((parser->scope_count == 0U &&
-         minic_parser_find_type_alias(parser, name_span) != MINIC_TYPE_ALIAS_INVALID) ||
-        (parser->scope_count != 0U &&
+    if ((parser->scope_count != 0U &&
          minic_parser_name_bound_in_current_scope(parser, name_span)) ||
         pending_typedef_name_exists(parser, *aliases, *alias_count, name_span)) {
         minic_parser_error(parser, "duplicate typedef name");
@@ -669,6 +705,24 @@ static bool parse_one_typedef_declarator(
         !apply_typedef_declaration_head_attributes(parser, post_type_attributes, &aliased_type) ||
         !parse_typedef_attributes(parser, &aliased_type)) {
         return false;
+    }
+    /* C permits redeclaring a typedef in the same scope when its type is
+     * compatible. GCC's aarch64 arm_neon.h repeats `typedef __fp16 float16_t`
+     * under a later feature pragma. Keep the original canonical alias and
+     * reject a conflicting redeclaration. This does not relax name binding
+     * for ordinary identifiers or typedefs in nested scopes. */
+    if (parser->scope_count == 0U) {
+        MinicTypeAliasId existing_id = minic_parser_find_type_alias(parser, name_span);
+        if (existing_id != MINIC_TYPE_ALIAS_INVALID) {
+            const MinicTypeAlias *existing = minic_c0_program_type_alias(
+                parser->program, existing_id);
+            if (existing == NULL ||
+                !minic_c0_types_compatible(parser->program, existing->type, aliased_type)) {
+                minic_parser_error(parser, "duplicate typedef name with incompatible type");
+                return false;
+            }
+            return true;
+        }
     }
     if (!append_pending_typedef_alias(
             aliases, alias_count, alias_capacity, name_span, aliased_type)) {

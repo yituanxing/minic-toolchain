@@ -21,25 +21,6 @@ static bool minic_type_pointer_qualifiers_are_valid(MinicType type) {
            (type.pointer_volatile_qualifiers >> type.pointer_depth) == 0U;
 }
 
-static MinicType minic_type_integer(MinicIntegerSign sign, MinicIntegerRank rank) {
-    MinicType type;
-
-    type.base_kind = MINIC_TYPE_BASE_INT;
-    type.record_id = MINIC_RECORD_INVALID;
-    type.array_type_id = MINIC_ARRAY_TYPE_INVALID;
-    type.function_type_id = MINIC_FUNCTION_TYPE_INVALID;
-    type.enum_id = MINIC_ENUM_INVALID;
-    type.integer_sign = sign;
-    type.integer_rank = rank;
-    type.is_plain_char = false;
-    type.base_qualifiers = MINIC_TYPE_QUALIFIER_NONE;
-    type.pointer_qualifiers = MINIC_TYPE_QUALIFIER_NONE;
-    type.pointer_volatile_qualifiers = MINIC_TYPE_QUALIFIER_NONE;
-    type.pointer_depth = 0U;
-    type.explicit_alignment = 0U;
-    return type;
-}
-
 static MinicType minic_type_scalar(MinicTypeBaseKind base_kind) {
     MinicType type;
 
@@ -56,7 +37,49 @@ static MinicType minic_type_scalar(MinicTypeBaseKind base_kind) {
     type.pointer_volatile_qualifiers = MINIC_TYPE_QUALIFIER_NONE;
     type.pointer_depth = 0U;
     type.explicit_alignment = 0U;
+    type.gnu_vector_element_kind = MINIC_TYPE_BASE_VOID;
+    type.gnu_vector_bytes = 0U;
+    type.target_builtin_id = 0U;
+    type.target_builtin_role = MINIC_BUILTIN_DECLARATION_INVALID;
     return type;
+}
+
+static MinicType minic_type_integer(MinicIntegerSign sign, MinicIntegerRank rank) {
+    MinicType type = minic_type_scalar(MINIC_TYPE_BASE_INT);
+
+    type.integer_sign = sign;
+    type.integer_rank = rank;
+    return type;
+}
+
+bool minic_type_gnu_fixed_vector(MinicType element_type, size_t bytes, MinicType *result) {
+    MinicType type;
+    if (result == NULL || element_type.pointer_depth != 0U ||
+        element_type.base_qualifiers != MINIC_TYPE_QUALIFIER_NONE ||
+        element_type.gnu_vector_bytes != 0U ||
+        bytes == 0U || (bytes & (bytes - 1U)) != 0U ||
+        !((element_type.base_kind == MINIC_TYPE_BASE_INT &&
+           element_type.integer_rank != MINIC_INTEGER_RANK_BOOL &&
+           element_type.integer_rank != MINIC_INTEGER_RANK_NONE) ||
+          element_type.base_kind == MINIC_TYPE_BASE_FLOAT ||
+          element_type.base_kind == MINIC_TYPE_BASE_DOUBLE ||
+          element_type.base_kind == MINIC_TYPE_BASE_LONG_DOUBLE)) {
+        return false;
+    }
+    type = minic_type_scalar(MINIC_TYPE_BASE_GNU_FIXED_VECTOR);
+    type.gnu_vector_element_kind = element_type.base_kind;
+    type.gnu_vector_bytes = bytes;
+    type.integer_sign = element_type.integer_sign;
+    type.integer_rank = element_type.integer_rank;
+    type.is_plain_char = element_type.is_plain_char;
+    *result = type;
+    return true;
+}
+
+bool minic_type_is_gnu_fixed_vector(MinicType type) {
+    return type.pointer_depth == 0U &&
+           type.base_kind == MINIC_TYPE_BASE_GNU_FIXED_VECTOR &&
+           type.gnu_vector_bytes != 0U;
 }
 
 static bool minic_type_same_unqualified_identity(MinicType left, MinicType right) {
@@ -74,7 +97,11 @@ static bool minic_type_same_unqualified_identity(MinicType left, MinicType right
            left.array_type_id == right.array_type_id &&
            left.function_type_id == right.function_type_id && left.enum_id == right.enum_id &&
            left.integer_sign == right.integer_sign && left.integer_rank == right.integer_rank &&
-           left.is_plain_char == right.is_plain_char && left.pointer_depth == right.pointer_depth;
+           left.is_plain_char == right.is_plain_char && left.pointer_depth == right.pointer_depth &&
+           left.gnu_vector_element_kind == right.gnu_vector_element_kind &&
+           left.gnu_vector_bytes == right.gnu_vector_bytes &&
+           left.target_builtin_id == right.target_builtin_id &&
+           left.target_builtin_role == right.target_builtin_role;
 }
 
 static bool minic_type_pointer_qualification_compatible(MinicType target, MinicType source) {
@@ -218,35 +245,88 @@ MinicType minic_type_float64x(void) {
     return minic_type_scalar(MINIC_TYPE_BASE_FLOAT64X);
 }
 
-/* This function recognizes declared ABI builtin identities, but does not
- * assign invented sizes or scalar machine operations to NEON/SVE vectors. */
-MinicType minic_type_aarch64_header_builtin(MinicTypeBaseKind base_kind) {
-    if (base_kind < MINIC_TYPE_BASE_AARCH64_FLOAT32X4 ||
-        base_kind > MINIC_TYPE_BASE_AARCH64_SVE_BOOL)
-        return minic_type_void();
-    return minic_type_scalar(base_kind);
+MinicBuiltinDeclarationRole minic_type_builtin_declaration_role(MinicType type) {
+    switch (type.base_kind) {
+    case MINIC_TYPE_BASE_FLOAT:
+    case MINIC_TYPE_BASE_DOUBLE:
+    case MINIC_TYPE_BASE_LONG_DOUBLE:
+        return MINIC_BUILTIN_DECLARATION_STANDARD_FLOAT;
+    case MINIC_TYPE_BASE_FLOAT128:
+    case MINIC_TYPE_BASE_FLOAT32:
+    case MINIC_TYPE_BASE_FLOAT64:
+    case MINIC_TYPE_BASE_FLOAT32X:
+    case MINIC_TYPE_BASE_FLOAT64X:
+        return MINIC_BUILTIN_DECLARATION_EXTENDED_FLOAT;
+    case MINIC_TYPE_BASE_TARGET_BUILTIN:
+        if (type.target_builtin_id == 0U) return MINIC_BUILTIN_DECLARATION_INVALID;
+        if (type.target_builtin_role == MINIC_BUILTIN_DECLARATION_HEADER_ONLY_OPAQUE ||
+            type.target_builtin_role == MINIC_BUILTIN_DECLARATION_FIXED_VECTOR128_STORAGE ||
+            type.target_builtin_role == MINIC_BUILTIN_DECLARATION_FIXED_VECTOR64_STORAGE)
+            return type.target_builtin_role;
+        return MINIC_BUILTIN_DECLARATION_INVALID;
+    default:
+        return MINIC_BUILTIN_DECLARATION_INVALID;
+    }
 }
 
-/* A distinct, pointer-sized runtime proxy. It must never be mistaken for
- * the actual SysV array type in C type-layout queries. */
-MinicType minic_type_x86_va_list_cursor(void) {
-    MinicType result;
-    if (!minic_type_pointer_to(
-            minic_type_scalar(MINIC_TYPE_BASE_X86_VA_LIST_CURSOR), &result))
+/* Source-level declaration identity; target source policy controls admission.
+ * Both opaque-only and storage-capable kinds remain distinct from machine
+ * support and must never be inferred to imply a register calling convention. */
+MinicType minic_type_header_builtin(unsigned int builtin_id,
+                                    MinicBuiltinDeclarationRole role) {
+    MinicType type;
+    if (builtin_id == 0U ||
+        (role != MINIC_BUILTIN_DECLARATION_HEADER_ONLY_OPAQUE &&
+         role != MINIC_BUILTIN_DECLARATION_FIXED_VECTOR128_STORAGE &&
+         role != MINIC_BUILTIN_DECLARATION_FIXED_VECTOR64_STORAGE))
         return minic_type_void();
-    return result;
+    type = minic_type_scalar(MINIC_TYPE_BASE_TARGET_BUILTIN);
+    type.target_builtin_id = builtin_id;
+    type.target_builtin_role = role;
+    return type;
 }
 
-bool minic_type_is_x86_va_list_cursor(MinicType type) {
-    return type.base_kind == MINIC_TYPE_BASE_X86_VA_LIST_CURSOR &&
-           type.pointer_depth == 1U &&
-           type.record_id == MINIC_RECORD_INVALID &&
-           type.array_type_id == MINIC_ARRAY_TYPE_INVALID &&
-           type.function_type_id == MINIC_FUNCTION_TYPE_INVALID &&
-           type.enum_id == MINIC_ENUM_INVALID &&
-           type.integer_sign == MINIC_INTEGER_SIGN_NONE &&
-           type.integer_rank == MINIC_INTEGER_RANK_NONE &&
-           !type.is_plain_char;
+bool minic_type_is_fixed_vector128_storage(MinicType type) {
+    if (type.pointer_depth != 0U ||
+        minic_type_builtin_declaration_role(type) !=
+            MINIC_BUILTIN_DECLARATION_FIXED_VECTOR128_STORAGE)
+        return false;
+    return true;
+}
+
+bool minic_type_is_fixed_vector64_storage(MinicType type) {
+    return type.pointer_depth == 0U &&
+           minic_type_builtin_declaration_role(type) ==
+               MINIC_BUILTIN_DECLARATION_FIXED_VECTOR64_STORAGE;
+}
+
+bool minic_type_is_fixed_vector_register_storage(MinicType type) {
+    return minic_type_is_fixed_vector128_storage(type) ||
+           minic_type_is_fixed_vector64_storage(type);
+}
+
+bool minic_type_fixed_vector_binary_result(MinicType left, MinicType right,
+                                           MinicType *result) {
+    MinicType left_value, right_value;
+    if (result == NULL || !minic_type_is_fixed_vector_register_storage(left) ||
+        !minic_type_unqualified(left, &left_value) ||
+        !minic_type_unqualified(right, &right_value) ||
+        !minic_type_equal(left_value, right_value))
+        return false;
+    *result = left_value;
+    return true;
+}
+
+bool minic_type_fixed_vector128_binary_result(MinicType left, MinicType right,
+                                            MinicType *result) {
+    MinicType left_value, right_value;
+    if (result == NULL || !minic_type_is_fixed_vector128_storage(left) ||
+        !minic_type_unqualified(left, &left_value) ||
+        !minic_type_unqualified(right, &right_value) ||
+        !minic_type_equal(left_value, right_value))
+        return false;
+    *result = left_value;
+    return true;
 }
 
 MinicType minic_type_function(MinicFunctionTypeId function_type_id) {
@@ -299,6 +379,16 @@ bool minic_type_add_volatile(MinicType type, MinicType *result) {
         result->pointer_volatile_qualifiers |= 1U << (type.pointer_depth - 1U);
     }
     return true;
+}
+
+bool minic_type_record_member(MinicType record_type, MinicType field_type,
+                              MinicType *result) {
+    if (result == NULL || !minic_type_is_record(record_type)) return false;
+    *result = field_type;
+    return (!minic_type_is_const(record_type) ||
+            minic_type_add_const(*result, result)) &&
+           (!minic_type_is_volatile(record_type) ||
+            minic_type_add_volatile(*result, result));
 }
 
 bool minic_type_unqualified(MinicType type, MinicType *result) {
@@ -367,13 +457,13 @@ static bool minic_type_void_object_pointer_compatible(MinicType target, MinicTyp
         (source_is_void && minic_type_is_function(target_pointee))) {
         return false;
     }
-    /* A pointer object is itself an object, so T ** is compatible with void *.
-       Preserve the existing qualifier check for the one-level object case. */
-    if ((target_is_void && source.pointer_depth > 1U) ||
-        (source_is_void && target.pointer_depth > 1U)) {
-        return true;
-    }
-    return (source_pointee.base_qualifiers & ~target_pointee.base_qualifiers) == 0U;
+    /* A pointer object is itself an object, so T ** may convert to void *.
+     * Its immediate pointee can nevertheless be a const/volatile pointer
+     * object. Checking only base_qualifiers silently discards that object's
+     * qualifiers for nested pointers. */
+    return (!minic_type_is_const(source_pointee) || minic_type_is_const(target_pointee)) &&
+           (!minic_type_is_volatile(source_pointee) ||
+            minic_type_is_volatile(target_pointee));
 }
 
 bool minic_type_assignment_compatible(MinicType target, MinicType source) {

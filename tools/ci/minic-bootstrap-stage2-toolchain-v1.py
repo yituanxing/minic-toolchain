@@ -34,7 +34,7 @@ PROFILES={
     "minic-objcopy":("MINIOBJCOPY_SOURCES",[ELF_READER,ELF_BIN,ELF_RW],["elf/include"]),
     "minic-nm":("MININM_SOURCES",[ELF_READER,ARCHIVE],["archiver/include","elf/include"]),
     "minic-strip":("MINISTRIP_SOURCES",[ELF_READER,ELF_RW],["elf/include"]),
-    "minic":(None,[],["include","src"]),
+    "minic":("MINIC_DRIVER_SOURCES",[],["include","src"]),
 }
 CANONICAL=("minic-cpp","minic-as","minic-ar","minic-ld","minic-objcopy","minic-nm","minic-strip","minic")
 
@@ -74,10 +74,10 @@ def source_plan(requested):
     for tool in requested:
         variable,elf,include=PROFILES[tool]
         # Makefile explicitly places ELF .o BEFORE the target-specific units.
-        sources=elf+(source_group(mf,variable) if variable else ["tools/minic/main.c"])
+        sources=elf+source_group(mf,variable)
         if len(sources)!=len(set(sources)):
             raise RuntimeError("duplicate link C source "+tool)
-        if (variable and not sources[-1].endswith("/main.c")):
+        if not sources[-1].endswith("/main.c"):
             raise RuntimeError("unexpected CLI entry "+tool)
         for src in sources:
             if not (ROOT/src).is_file():raise RuntimeError("missing "+src)

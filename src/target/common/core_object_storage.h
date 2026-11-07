@@ -2,8 +2,6 @@
 #define MINIC_TARGET_COMMON_CORE_OBJECT_STORAGE_H
 
 #include "core/core_ir.h"
-#include "frontend/ast.h"
-#include "target/data_layout.h"
 #include <stdbool.h>
 #include <stddef.h>
 
@@ -19,13 +17,14 @@ typedef struct MinicCoreObjectStoragePlan {
     MinicCoreObjectStorage *objects;
 } MinicCoreObjectStoragePlan;
 
-/* Type layout + repeated objects + explicit alignment, checked once. */
-bool minic_core_object_storage(const MinicC0Program *,
-                               const MinicDataLayout *,
-                               const MinicCoreObject *,
-                               MinicCoreObjectStorage *);
+/* Core-owned type layout + repeated objects + explicit alignment.  This is
+ * the normal compiler path: an invalid or unlaid-out CoreType fails closed,
+ * without consulting the C frontend's DataLayout. */
+bool minic_core_object_storage_resolved(const MinicCoreTypeContext *,
+                                        const MinicCoreObject *,
+                                        MinicCoreObjectStorage *);
+
 bool minic_core_object_storage_plan_build(
-    const MinicC0Program *, const MinicDataLayout *,
     const MinicCoreFunction *, MinicCoreObjectStoragePlan *);
 void minic_core_object_storage_plan_destroy(
     MinicCoreObjectStoragePlan *);
@@ -35,7 +34,6 @@ void minic_core_object_storage_plan_destroy(
  * offsets, ABI alignment and spill lifetimes remain target-owned.
  * Acquire only into a zero-initialized (unowned) plan; always release. */
 bool minic_core_object_storage_plan_acquire(
-    const MinicC0Program *, const MinicDataLayout *,
     const MinicCoreFunction *, const MinicCoreObjectStoragePlan *shared,
     MinicCoreObjectStoragePlan *result, bool *borrowed);
 void minic_core_object_storage_plan_release(

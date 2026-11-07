@@ -106,6 +106,21 @@ static int p2_requested(void) {
     if(!bad(fd))(void)C1(SYS_CLOSE,fd);
     return n>0 && has(line,(word)n,"minic_runtime=p2");
 }
+static int p2_c11_requested(void) {
+    char line[1024];
+    long fd=C4(SYS_OPENAT,AT_FDCWD,"/proc/cmdline",O_RDONLY,0);
+    long n=bad(fd)?-1:C3(SYS_READ,fd,line,sizeof(line)-1);
+    if(!bad(fd))(void)C1(SYS_CLOSE,fd);
+    return n>0 && (has(line,(word)n,"minic_runtime=p2canonical11") ||
+                   has(line,(word)n,"minic_runtime=p2full18"));
+}
+static int p2_full18_requested(void) {
+    char line[1024];
+    long fd=C4(SYS_OPENAT,AT_FDCWD,"/proc/cmdline",O_RDONLY,0);
+    long n=bad(fd)?-1:C3(SYS_READ,fd,line,sizeof(line)-1);
+    if(!bad(fd))(void)C1(SYS_CLOSE,fd);
+    return n>0 && has(line,(word)n,"minic_runtime=p2full18");
+}
 static void run_p2(void) {
     long child=C5(SYS_CLONE,SIGCHLD,0,0,0,0);
     if(child==0) {
@@ -120,6 +135,38 @@ static void run_p2(void) {
     u32 info[32];zero(info,sizeof(info));
     long rv=C5(SYS_WAITID,1,child,info,4,0);
     check("RV32I_P2_CHILD",rv==0&&info[2]==1&&
+          info[3]==(u32)child&&info[5]==0);
+}
+static void run_p2_c11(void) {
+    long child=C5(SYS_CLONE,SIGCHLD,0,0,0,0);
+    if(child==0) {
+        char *const args[]={"runtime-p2-canonical11",0};
+        char *const env[]={"PATH=/bin",0};
+        (void)C3(SYS_EXECVE,"/bin/runtime-p2-canonical11",args,env);
+        say("RV32I_P2_C11_EXECVE=FAIL\n");
+        (void)C1(SYS_EXIT,127);
+        for(;;)__asm__ volatile("nop");
+    }
+    if(bad(child)){check("RV32I_P2_C11_CHILD",0);return;}
+    u32 info[32];zero(info,sizeof(info));
+    long rv=C5(SYS_WAITID,1,child,info,4,0);
+    check("RV32I_P2_C11_CHILD",rv==0&&info[2]==1&&
+          info[3]==(u32)child&&info[5]==0);
+}
+static void run_p2_full18(void) {
+    long child=C5(SYS_CLONE,SIGCHLD,0,0,0,0);
+    if(child==0) {
+        char *const args[]={"runtime-p2-full18",0};
+        char *const env[]={"PATH=/bin",0};
+        (void)C3(SYS_EXECVE,"/bin/runtime-p2-full18",args,env);
+        say("RV32I_P2_F18_EXECVE=FAIL\n");
+        (void)C1(SYS_EXIT,127);
+        for(;;)__asm__ volatile("nop");
+    }
+    if(bad(child)){check("RV32I_P2_F18_CHILD",0);return;}
+    u32 info[32];zero(info,sizeof(info));
+    long rv=C5(SYS_WAITID,1,child,info,4,0);
+    check("RV32I_P2_F18_CHILD",rv==0&&info[2]==1&&
           info[3]==(u32)child&&info[5]==0);
 }
 static int run_probe(void) {
@@ -156,10 +203,18 @@ __attribute__((noreturn,used)) void _start(void){
     (void)mount_fs("devtmpfs","/dev","INIT_DEVTMPFS_MOUNT");
     int p1=cmdline();
     int p2=p2_requested();
+    int p2c11=p2_c11_requested();
+    int p2f18=p2_full18_requested();
     (void)tmpfs_rw();
-    if(p1)(void)run_probe();
+    if(p1||p2f18)(void)run_probe();
     if(p2)run_p2();
+    if(p2c11)run_p2_c11();
+    if(p2f18)run_p2_full18();
     if(fails==0) {
+        /* Only three genuinely successful RV32I child exits (9 frontier,
+         * canonical11 expansion and remaining7), plus P1, may certify the
+         * full canonical18 endpoint. Never emit it for a partial mode. */
+        if(p2f18)say("RUNTIME_V2_P2_FULL_END pass=18 fail=0 skip=0\n");
         say("USER_SHELL_OK\n");
         say("DONE_COMMANDS\n");
         say("MINIC_LINUX_RUNTIME_INIT_END fail=0\n");

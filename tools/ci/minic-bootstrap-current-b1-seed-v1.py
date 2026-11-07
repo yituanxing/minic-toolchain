@@ -65,7 +65,7 @@ def sources():
             " extra=" + str(sorted(set(actual)-set(wanted))))
     if (not actual or actual[-1] != "tools/minic-cc/main.c" or
             "src/core/core_lower_bool.c" not in actual or
-            "tools/minic/main.c" in actual):
+            any(src.startswith("tools/minic/") for src in actual)):
         raise RuntimeError("compiler stage source list/entry is not canonical")
     for src in actual:
         if not (ROOT / src).is_file():

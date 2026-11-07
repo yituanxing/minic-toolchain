@@ -1,5 +1,2 @@
-const void opaque_symbol;
-
-int main(void) {
-    return 0;
-}
+static void not_an_object;
+int main(void) { return 0; }

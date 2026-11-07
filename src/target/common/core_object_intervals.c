@@ -1,6 +1,5 @@
 #include "target/common/core_object_intervals.h"
 #include "core/value_uses.h"
-#include "target/data_layout.h"
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -296,6 +295,9 @@ static bool core_object_interval_build_index(
                 begin=instruction->value.call.argument_begin;
                 count=instruction->value.call.argument_count;
             } else if (instruction->kind == MINIC_CORE_INSTRUCTION_INDIRECT_CALL) {
+                if (instruction->value.indirect_call.result_object < object_count) {
+                    disqualified[instruction->value.indirect_call.result_object]=1U;
+                }
                 begin=instruction->value.indirect_call.argument_begin;
                 count=instruction->value.indirect_call.argument_count;
             }
@@ -361,14 +363,15 @@ unavailable:
 }
 
 bool minic_core_object_interval(
-    const MinicC0Program *program, const MinicCoreFunction *function,
-    MinicCoreObjectId object_id, const MinicDataLayout *layout,
+    const MinicCoreFunction *function, MinicCoreObjectId object_id,
     size_t unit_bytes, const MinicCoreObjectIntervalAnalysis *analysis,
     CoreScalarObjectInterval *interval) {
     size_t object_size;
     size_t object_alignment;
+    bool scalar_storage;
 
-    if (program == NULL || function == NULL || layout == NULL ||
+    if (function == NULL || function->type_context == NULL ||
+        function->objects == NULL ||
         (unit_bytes != 4U && unit_bytes != 8U) || interval == NULL ||
         object_id >= function->object_count) {
         return false;
@@ -379,17 +382,23 @@ bool minic_core_object_interval(
     interval->first_position = SIZE_MAX;
     interval->last_position = 0U;
 
-    if (!(minic_type_is_integer(function->objects[object_id].type) ||
-           minic_type_is_pointer(function->objects[object_id].type) ||
-           minic_type_is_float(function->objects[object_id].type) ||
-           minic_type_is_double(function->objects[object_id].type) ||
-           minic_type_is_long_double(function->objects[object_id].type)) ||
-        function->objects[object_id].element_count != 1U ||
-        !minic_data_layout_type(layout,
-                                program,
-                                function->objects[object_id].type,
-                                &object_size,
-                                &object_alignment) ||
+    {
+        const MinicCoreTypeId id = minic_core_type_unqualified(
+            function->type_context, function->objects[object_id].core_type_id);
+        const MinicCoreType *type = minic_core_type_get(function->type_context, id);
+        const MinicCoreType *storage_type = minic_core_type_get(
+            function->type_context, function->objects[object_id].core_type_id);
+        /* Failed type/layout admission forfeits storage reuse. The shared
+         * CoreObjectStorage plan separately rejects invalid objects. */
+        if (type == NULL || storage_type == NULL || !storage_type->has_layout)
+            return true;
+        scalar_storage = type->kind == MINIC_CORE_TYPE_INTEGER ||
+                         type->kind == MINIC_CORE_TYPE_POINTER ||
+                         type->kind == MINIC_CORE_TYPE_FLOAT;
+        object_size = storage_type->size;
+        object_alignment = storage_type->alignment;
+    }
+    if (!scalar_storage ||
         object_size == 0U || object_size > unit_bytes || object_alignment == 0U ||
         object_alignment > unit_bytes ||
         function->objects[object_id].explicit_alignment > unit_bytes) {

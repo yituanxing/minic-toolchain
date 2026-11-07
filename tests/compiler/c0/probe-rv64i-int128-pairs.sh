@@ -34,6 +34,11 @@ done
 for function in ti_add ti_sub ti_and ti_or ti_xor ti_not ti_neg ti_shl ti_shr ti_sar ti_div ti_mod ti_udiv ti_umod; do
   grep -F "$function:" "$work/pair.s" >/dev/null
 done
+if grep -Eq '^[[:space:]]+call[[:space:]]+__(ashlti3|ashrti3|lshrti3)' \
+    "$work/pair.s"; then
+  echo 'RV64I_I128_PAIRS=FAIL typed_pair_shift_requires_unlinked_runtime' >&2
+  exit 1
+fi
 if grep -Eq '^[[:space:]]*(mul|mulhu|mulh|mulhsu|div|divu|rem|remu|fadd|fsub|fmul)[.[:space:]]' "$work/pair.s"; then
   echo "RV64I_I128_PAIRS=FAIL non-I compiler instruction" >&2
   exit 1

@@ -11,66 +11,47 @@ typedef struct MinicEnumNumericValue {
     uint64_t unsigned_value;
 } MinicEnumNumericValue;
 
-static bool append_enum_tag(MinicParser *parser, MinicSourceSpan name_span, MinicEnumId enum_id) {
-    MinicParserEnumTag *resized;
-    size_t new_capacity;
-
-    if (parser == NULL || enum_id == MINIC_ENUM_INVALID) {
-        return false;
-    }
-    if (parser->enum_tag_count == parser->enum_tag_capacity) {
-        new_capacity = parser->enum_tag_capacity == 0U ? 8U : parser->enum_tag_capacity * 2U;
-        if (new_capacity < parser->enum_tag_capacity ||
-            new_capacity > SIZE_MAX / sizeof(*parser->enum_tags)) {
-            minic_parser_error(parser, "too many enum tags");
-            return false;
-        }
-        resized = (MinicParserEnumTag *)realloc(parser->enum_tags,
-                                                new_capacity * sizeof(*parser->enum_tags));
-        if (resized == NULL) {
-            minic_parser_error(parser, "out of memory while binding enum tag");
-            return false;
-        }
-        parser->enum_tags = resized;
-        parser->enum_tag_capacity = new_capacity;
-    }
-    parser->enum_tags[parser->enum_tag_count].name_span = name_span;
-    parser->enum_tags[parser->enum_tag_count].enum_id = enum_id;
-    parser->enum_tag_count += 1U;
-    return true;
-}
-
-MinicEnumId minic_parser_find_enum_tag(const MinicParser *parser, MinicSourceSpan name_span) {
-    size_t index;
-
-    if (parser == NULL) {
-        return MINIC_ENUM_INVALID;
-    }
-    for (index = parser->enum_tag_count; index > 0U; --index) {
-        if (minic_parser_span_equals(parser, name_span, parser->enum_tags[index - 1U].name_span)) {
-            return parser->enum_tags[index - 1U].enum_id;
-        }
-    }
-    return MINIC_ENUM_INVALID;
-}
-
 static bool
 create_named_enum(MinicParser *parser, MinicSourceSpan name_span, MinicEnumId *enum_id) {
     if (!minic_c0_program_add_enum(parser->program,
                                    parser->source + name_span.begin.offset,
                                    minic_parser_span_length(name_span),
                                    enum_id) ||
-        !append_enum_tag(parser, name_span, *enum_id)) {
+        !minic_parser_bind_enum_tag(parser, name_span, *enum_id)) {
         minic_parser_error(parser, "cannot create enum tag entity");
         return false;
     }
     return true;
 }
 
-static bool
-get_or_create_enum_tag(MinicParser *parser, MinicSourceSpan name_span, MinicEnumId *enum_id) {
-    *enum_id = minic_parser_find_enum_tag(parser, name_span);
-    return *enum_id != MINIC_ENUM_INVALID || create_named_enum(parser, name_span, enum_id);
+/* One semantic lookup for all C tag kinds: a different-kind tag is visible,
+ * not absent. Only a definition or standalone forward declaration may shadow
+ * a binding in an enclosing scope. */
+static bool get_or_create_enum_tag(MinicParser *parser, MinicSourceSpan name_span,
+                                   bool current_scope_only, bool is_definition,
+                                   MinicEnumId *enum_id) {
+    const MinicParserTagBinding *tag;
+
+    if (!minic_parser_resolve_tag(parser, name_span, MINIC_PARSER_TAG_ENUM,
+                                  current_scope_only, &tag)) {
+        return false;
+    }
+    if (tag != NULL) {
+        *enum_id = tag->entity.enum_id;
+        return true;
+    }
+    /* GNU C allows `enum E { ... }` to shadow an outer struct/union E.
+     * The nonstandard incomplete `enum E;` does not have that privilege:
+     * GCC diagnoses the visible different-kind tag as a constraint failure. */
+    if (current_scope_only && !is_definition) {
+        const MinicParserTagBinding *visible = minic_parser_find_tag(parser, name_span);
+
+        if (visible != NULL && visible->kind != MINIC_PARSER_TAG_ENUM) {
+            minic_parser_error(parser, "enum forward declaration sees a different tag kind");
+            return false;
+        }
+    }
+    return create_named_enum(parser, name_span, enum_id);
 }
 
 static MinicEnumeratorId
@@ -272,7 +253,8 @@ MinicEnumeratorId minic_parser_find_enum_constant(
     return minic_parser_enum_global_linear_fallback(
         parser, name_span, global_count);
 #endif
-    if (!minic_parser_enum_global_index_sync(parser, global_count) ||
+    if (parser->cache_owner != parser ||
+        !minic_parser_enum_global_index_sync(parser, global_count) ||
         parser->perf_enum_name_slot_capacity == 0U) {
         return minic_parser_enum_global_linear_fallback(parser, name_span, global_count);
     }
@@ -347,10 +329,6 @@ void minic_parser_destroy_enum_constants(MinicParser *parser) {
     parser->enum_constants = NULL;
     parser->enum_constant_count = 0U;
     parser->enum_constant_capacity = 0U;
-    free(parser->enum_tags);
-    parser->enum_tags = NULL;
-    parser->enum_tag_count = 0U;
-    parser->enum_tag_capacity = 0U;
 }
 
 static bool
@@ -359,7 +337,7 @@ signed_type_fits(MinicParser *parser, MinicType type, int64_t minimum, uint64_t 
     int64_t type_minimum;
     uint64_t type_maximum;
 
-    if (!minic_target_info_integer_width(parser->target_info, parser->program, type, &bits) ||
+    if (!minic_target_info_integer_width(parser->invocation, parser->program, type, &bits) ||
         bits == 0U || bits > 64U || minic_type_is_unsigned_integer(type)) {
         return false;
     }
@@ -377,7 +355,7 @@ static bool unsigned_type_fits(MinicParser *parser, MinicType type, uint64_t max
     unsigned int bits;
     uint64_t type_maximum;
 
-    if (!minic_target_info_integer_width(parser->target_info, parser->program, type, &bits) ||
+    if (!minic_target_info_integer_width(parser->invocation, parser->program, type, &bits) ||
         bits == 0U || bits > 64U || !minic_type_is_unsigned_integer(type)) {
         return false;
     }
@@ -425,7 +403,7 @@ static bool normalize_value_bits(MinicParser *parser,
     unsigned int width;
     uint64_t raw;
 
-    if (!minic_target_info_integer_width(parser->target_info, parser->program, type, &width) ||
+    if (!minic_target_info_integer_width(parser->invocation, parser->program, type, &width) ||
         width == 0U || width > 64U) {
         return false;
     }
@@ -445,7 +423,7 @@ static bool const_value_to_numeric(MinicParser *parser,
 
     if (constant == NULL || value == NULL || !minic_type_is_integer(constant->type) ||
         !minic_target_info_integer_width(
-            parser->target_info, parser->program, constant->type, &width) ||
+            parser->invocation, parser->program, constant->type, &width) ||
         width == 0U || width > 64U) {
         return false;
     }
@@ -482,7 +460,7 @@ static bool parse_enum_integer_value(MinicParser *parser,
     expression = minic_c0_program_expression(parser->program, expression_id);
     if (expression == NULL || !minic_type_is_integer(expression->type) ||
         !minic_const_eval_integer(
-            parser->program, parser->target_info, expression_id, &constant_value)) {
+            parser->program, parser->invocation, expression_id, &constant_value)) {
         minic_parser_error(parser, "enum initializer must be an integer constant expression");
         return false;
     }
@@ -685,7 +663,13 @@ bool minic_parser_parse_enum_specifier(MinicParser *parser, MinicType *enum_type
     if (parser->current.kind != MINIC_TOKEN_LBRACE) {
         const MinicEnum *entity;
 
-        if (!has_tag || !get_or_create_enum_tag(parser, tag_span, &enum_id)) {
+        /* A tag-only declaration (`enum E;`) introduces/redeclares E in
+         * THIS scope; `enum E value` merely refers to the closest visible
+         * tag. This mirrors the record-tag scope model and GNU C. */
+        if (!has_tag ||
+            !get_or_create_enum_tag(parser, tag_span,
+                                    parser->current.kind == MINIC_TOKEN_SEMICOLON,
+                                    false, &enum_id)) {
             if (!has_tag) {
                 minic_parser_error(parser, "expected enum tag or definition");
             }
@@ -703,7 +687,7 @@ bool minic_parser_parse_enum_specifier(MinicParser *parser, MinicType *enum_type
     if (has_tag) {
         const MinicEnum *existing;
 
-        if (!get_or_create_enum_tag(parser, tag_span, &enum_id)) {
+        if (!get_or_create_enum_tag(parser, tag_span, true, true, &enum_id)) {
             return false;
         }
         existing = minic_c0_program_enum(parser->program, enum_id);

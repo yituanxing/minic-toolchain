@@ -130,17 +130,18 @@ fi
 
 cleanup() {
   local rc=$?
-  if [[ "$keep" != 1 ]]; then
-    if [[ "$preserve_failure" == 1 && "$rc" -ne 0 ]]; then
-      # Keep ONLY failed TUs: a 2064-owner sweep must not retain 2064 .i files.
-      # GNU-preprocessed .i and MiniC diagnostics stay paired to this owner.
-      if [[ -s "$preprocessed" ]]; then
-        cp -a -- "$preprocessed" "$failed_i"
-      fi
-      if [[ -s "$minic_stderr" ]]; then
-        cp -a -- "$minic_stderr" "$failed_stderr"
-      fi
+  if [[ "$preserve_failure" == 1 && "$rc" -ne 0 ]]; then
+    # Also keep the bounded diagnostic aliases when an RV32 partial-owner
+    # campaign retains successful .s/.i for atomic checkpointing. Failure
+    # evidence cannot disappear just because KEEP_INTERMEDIATES=1.
+    if [[ -s "$preprocessed" ]]; then
+      cp -a -- "$preprocessed" "$failed_i"
     fi
+    if [[ -s "$minic_stderr" ]]; then
+      cp -a -- "$minic_stderr" "$failed_stderr"
+    fi
+  fi
+  if [[ "$keep" != 1 ]]; then
     [[ "$source_file" == *.i ]] || rm -f "$preprocessed"
     rm -f "$assembly" "${base}.perf-baseline.s" "$minic_stdout" "$minic_stderr"
   fi
@@ -258,17 +259,24 @@ elif [[ "$rv32i_origin_audit" == 1 ]]; then
     exit 2
   fi
   minic_target_args=(--target=riscv32-linux -march=rv32i -mabi=ilp32)
-  # The actual GCC Kbuild -fshort-wchar is a C type/ABI option, not ISA.
-  # Pass it through unchanged instead of altering the Linux header,
-  # preprocessing L"..." bytes, or overriding RV32's normal wchar model.
-  for arg in "${args[@]}"; do
-    case "$arg" in
-      -fshort-wchar|-fno-short-wchar) minic_target_args+=("$arg") ;;
-    esac
-  done
   [[ -z "$trace" ]] ||
     printf 'minic rv32i_origin_audit=1 isa=rv32i abi=ilp32 source=%q\n' "$preprocessed" >>"$trace"
 fi
+# GNU -E freezes tokens, not invocation-scoped C ABI or relocation policy.
+# Preserve these original Kbuild flags for EVERY MiniC compiler route.  In
+# particular, RV64 EFI's L"SecureBoot" must remain 16-bit -fshort-wchar;
+# previously only RV32 forwarded this option and all RV64 EFI callers failed
+# their correctly strict indirect function-call type check.
+minic_language_args=()
+for arg in "${args[@]}"; do
+  case "$arg" in
+    -fshort-wchar|-fno-short-wchar|-fsigned-char|-funsigned-char|\
+    -fno-signed-char|-fno-unsigned-char|-ffunction-sections|\
+    -fno-function-sections|-fPIE|-fpie|-fPIC|-fpic|\
+    -fno-pie|-fno-PIE|-fno-pic|-fno-PIC)
+      minic_language_args+=("$arg") ;;
+  esac
+done
 set +e
 if [[ -n "${MINIC_PERF_AB_BASELINE:-}" ]]; then
   # Strict opt-in: time old and new compilers on the SAME GNU-generated .i,
@@ -283,14 +291,17 @@ if [[ -n "${MINIC_PERF_AB_BASELINE:-}" ]]; then
 else
   if [[ "$rv64i_origin_audit" == 1 ]]; then
     MINIC_RV64I_ASM_AUDIT=1 CORE_FAST_TRACE=${CORE_FAST_TRACE:-1} \
-      "$minic" "${minic_target_args[@]}" -S "$preprocessed" -o "$assembly" \
+      "$minic" "${minic_target_args[@]}" "${minic_language_args[@]}" \
+      -S "$preprocessed" -o "$assembly" \
       >"$minic_stdout" 2>"$minic_stderr"
   elif [[ "$rv32i_origin_audit" == 1 ]]; then
     CORE_FAST_TRACE=${CORE_FAST_TRACE:-1} \
-      "$minic" "${minic_target_args[@]}" -S "$preprocessed" -o "$assembly" \
+      "$minic" "${minic_target_args[@]}" "${minic_language_args[@]}" \
+      -S "$preprocessed" -o "$assembly" \
       >"$minic_stdout" 2>"$minic_stderr"
   else
-    CORE_FAST_TRACE=${CORE_FAST_TRACE:-1} "$minic" -S "$preprocessed" -o "$assembly" \
+    CORE_FAST_TRACE=${CORE_FAST_TRACE:-1} \
+      "$minic" "${minic_language_args[@]}" -S "$preprocessed" -o "$assembly" \
       >"$minic_stdout" 2>"$minic_stderr"
   fi
   status=$?
@@ -341,6 +352,21 @@ done
 
 [[ -z "$trace" ]] || printf 'assemble input=%q output=%q\n' "$assembly" "$output_file" >>"$trace"
 "$real_cc" "${asm_args[@]}" -x assembler -c "$assembly" -o "$output_file"
+
+# Reuse the proven three-ISA per-owner seven-shard checkpoint discipline for
+# an opt-in RV32 current-HEAD campaign. Saving is ordered: atomic .s/.o,
+# then atomic JSON receipt. Only GNU-E -> CURRENT MiniC-S -> GNU-AS can reach
+# this point; the cache cannot turn a GNU-C object into a MiniC success.
+if [[ -n "${MINIC_KBUILD_RV32_PARTIAL_DIR:-}" ]]; then
+  : "${MINIC_KBUILD_RV32_PARTIAL_HELPER:?required RV32 checkpoint helper}"
+  : "${MINIC_KBUILD_RV32_PARTIAL_OUT:?required original Kbuild O= directory}"
+  python3 "$MINIC_KBUILD_RV32_PARTIAL_HELPER" --mode capture \
+    --partial "$MINIC_KBUILD_RV32_PARTIAL_DIR" \
+    --out "$MINIC_KBUILD_RV32_PARTIAL_OUT" \
+    --minic "$minic" \
+    --owner "$output_file" --object "$output_file" \
+    --preprocessed "$preprocessed" --assembly "$assembly"
+fi
 
 
 # A route record alone cannot prove that the final object was not replaced

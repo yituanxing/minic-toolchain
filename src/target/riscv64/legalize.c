@@ -1,33 +1,13 @@
 #include "target/riscv64/legalize.h"
 #include "target/common/core_call_view.h"
 #include "target/riscv64/abi.h"
-#include "target/data_layout.h"
-#include <stdint.h>
-#include <limits.h>
-
-/* Original target scalar gate remains shared by RV64 object analysis
- * and instruction-admission queries. */
-bool minic_riscv64_scalar_type(MinicType type) {
-    return minic_type_is_integer(type) || minic_type_is_pointer(type) ||
-           minic_type_is_float(type) || minic_type_is_double(type) ||
-           minic_type_is_long_double(type);
-}
+#include "target/riscv64/core_type_query.h"
+#include "target/common/lp64_scalar.h"
+#include "target/common/core_scalar_conversion.h"
 
 /* Existing production RV64 instruction and calling-convention legal gates.
- * Moved from core_codegen.c without changing any comparisons or fallbacks.
+ * Moved from core_codegen.c. Executable type admission is Core-only.
  * ISA emission and actual register/stack placement remain target-owned. */
-bool minic_riscv64_core_integer_type_is_signed(const MinicCoreFunction *function,
-                                        MinicType type,
-                                        bool *is_signed) {
-    MinicType effective_type;
-
-    if (is_signed == NULL ||
-        !minic_core_function_effective_integer_type(function, type, &effective_type)) {
-        return false;
-    }
-    *is_signed = minic_type_is_signed_integer(effective_type);
-    return true;
-}
 
 bool minic_riscv64_core_field_address_supported(const MinicCoreInstruction *instruction,
                                          size_t *field_offset) {
@@ -40,206 +20,147 @@ bool minic_riscv64_core_field_address_supported(const MinicCoreInstruction *inst
     return true;
 }
 
-bool minic_riscv64_core_record_load_supported(const MinicC0Program *program,
-                                       const MinicCoreFunction *function,
+bool minic_riscv64_core_record_load_supported(const MinicCoreFunction *function,
                                        const MinicCoreInstruction *instruction,
                                        size_t *record_size) {
-    MinicCoreObjectId destination_object;
-    MinicCoreValueId source_address;
-    MinicType record_type;
-    MinicType source_pointee;
-    MinicType source_type;
-    size_t alignment;
-    size_t size;
-
-    if (program == NULL || function == NULL || instruction == NULL ||
+    const MinicCoreTypeContext *types;
+    const MinicCoreType *record;
+    MinicCoreTypeId source_pointee_id;
+    if (function == NULL || function->type_context == NULL || instruction == NULL ||
         instruction->kind != MINIC_CORE_INSTRUCTION_RECORD_LOAD ||
         instruction->result != MINIC_CORE_VALUE_INVALID ||
-        !minic_type_is_record(instruction->type) ||
-        !minic_type_unqualified(instruction->type, &record_type) ||
-        !minic_type_equal(record_type, instruction->type)) {
+        instruction->value.record_load.destination_object >= function->object_count ||
+        instruction->value.record_load.source_address >= function->value_count)
         return false;
-    }
-    destination_object = instruction->value.record_load.destination_object;
-    source_address = instruction->value.record_load.source_address;
-    if (destination_object >= function->object_count || source_address >= function->value_count ||
-        !minic_type_equal(function->objects[destination_object].type, instruction->type) ||
-        !minic_type_pointee(function->values[source_address].type, &source_pointee) ||
-        !minic_type_unqualified(source_pointee, &source_type) ||
-        !minic_type_equal(source_type, instruction->type) ||
-        instruction->value.record_load.is_volatile != minic_type_is_volatile(source_pointee) ||
-        !minic_data_layout_type(
-            minic_default_data_layout(), program, instruction->type, &size, &alignment) ||
-        size == 0U) {
+    types = function->type_context;
+    if (!minic_lp64_core_kind(types, instruction->core_type_id,
+                             MINIC_CORE_TYPE_RECORD) ||
+        !minic_lp64_core_equal_unqualified(
+            types, function->objects[
+                instruction->value.record_load.destination_object].core_type_id,
+            instruction->core_type_id) ||
+        !minic_lp64_core_pointer_pointee(
+            types, function->values[
+                instruction->value.record_load.source_address].core_type_id,
+            &source_pointee_id) ||
+        !minic_lp64_core_equal_unqualified(
+            types, source_pointee_id, instruction->core_type_id)) return false;
+    record = minic_riscv64_core_base_type(function, instruction->core_type_id);
+    if (record == NULL || !record->has_layout ||
+        record->size == 0U || record->alignment == 0U)
         return false;
-    }
-    (void)alignment;
-    if (record_size != NULL) {
-        *record_size = size;
-    }
+    if (record_size != NULL) *record_size = record->size;
     return true;
 }
 
-bool minic_riscv64_core_record_copy_supported(const MinicC0Program *program,
-                                       const MinicCoreFunction *function,
+bool minic_riscv64_core_record_copy_supported(const MinicCoreFunction *function,
                                        const MinicCoreInstruction *instruction) {
-    MinicType destination_pointee;
-    MinicType destination_type;
-    MinicType source_pointee;
-    MinicType source_type;
-    size_t alignment;
-    size_t size;
-
-    if (program == NULL || function == NULL || instruction == NULL ||
+    const MinicCoreTypeContext *types;
+    const MinicCoreType *record;
+    MinicCoreTypeId destination_pointee_id, source_pointee_id;
+    if (function == NULL || function->type_context == NULL || instruction == NULL ||
         instruction->kind != MINIC_CORE_INSTRUCTION_RECORD_COPY ||
-        instruction->result != MINIC_CORE_VALUE_INVALID || !minic_type_is_record(instruction->type) ||
+        instruction->result != MINIC_CORE_VALUE_INVALID ||
         instruction->value.record_copy.destination_address >= function->value_count ||
-        instruction->value.record_copy.source_address >= function->value_count ||
-        !minic_type_pointee(
-            function->values[instruction->value.record_copy.destination_address].type,
-            &destination_pointee) ||
-        !minic_type_pointee(function->values[instruction->value.record_copy.source_address].type,
-                            &source_pointee) ||
-        !minic_type_unqualified(destination_pointee, &destination_type) ||
-        !minic_type_unqualified(source_pointee, &source_type) ||
-        !minic_type_equal(destination_type, instruction->type) ||
-        !minic_type_equal(source_type, instruction->type) ||
-        !minic_data_layout_type(
-            minic_default_data_layout(), program, instruction->type, &size, &alignment)) {
+        instruction->value.record_copy.source_address >= function->value_count)
         return false;
-    }
+    types = function->type_context;
+    if (!minic_lp64_core_kind(types, instruction->core_type_id,
+                             MINIC_CORE_TYPE_RECORD) ||
+        !minic_lp64_core_pointer_pointee(
+            types, function->values[
+                instruction->value.record_copy.destination_address].core_type_id,
+            &destination_pointee_id) ||
+        !minic_lp64_core_pointer_pointee(
+            types, function->values[
+                instruction->value.record_copy.source_address].core_type_id,
+            &source_pointee_id) ||
+        !minic_lp64_core_equal_unqualified(
+            types, destination_pointee_id, instruction->core_type_id) ||
+        !minic_lp64_core_equal_unqualified(
+            types, source_pointee_id, instruction->core_type_id)) return false;
+    record = minic_riscv64_core_base_type(function, instruction->core_type_id);
     /* M167_ZERO_RECORD_COPY: GNU empty records are addressable semantic
        objects. RECORD_COPY has already evaluated both address operands; with
        zero storage bytes the target action is an intentional no-op. */
-    return alignment != 0U;
+    return record != NULL && record->has_layout && record->alignment != 0U;
 }
 
 bool minic_riscv64_core_call_frame_address_supported(
-    const MinicCoreInstruction *instruction) {
-    MinicType pointee;
-
-    return instruction != NULL &&
-           instruction->kind == MINIC_CORE_INSTRUCTION_CALL_FRAME_ADDRESS &&
-           (instruction->value.call_frame_address.kind == MINIC_CORE_CALL_FRAME_ADDRESS_RETURN ||
-            instruction->value.call_frame_address.kind == MINIC_CORE_CALL_FRAME_ADDRESS_FRAME) &&
-           instruction->value.call_frame_address.level == 0U &&
-           minic_type_pointee(instruction->type, &pointee) && minic_type_is_void(pointee);
+    const MinicCoreFunction *function, const MinicCoreInstruction *instruction) {
+    if (instruction == NULL ||
+        instruction->kind != MINIC_CORE_INSTRUCTION_CALL_FRAME_ADDRESS ||
+        (instruction->value.call_frame_address.kind != MINIC_CORE_CALL_FRAME_ADDRESS_RETURN &&
+         instruction->value.call_frame_address.kind != MINIC_CORE_CALL_FRAME_ADDRESS_FRAME) ||
+        instruction->value.call_frame_address.level != 0U ||
+        function == NULL || function->type_context == NULL) return false;
+    {
+        MinicCoreTypeId core_pointee;
+        return minic_lp64_core_pointer_pointee(
+                   function->type_context, instruction->core_type_id, &core_pointee) &&
+               minic_lp64_core_kind(function->type_context, core_pointee,
+                                    MINIC_CORE_TYPE_VOID);
+    }
 }
 
-bool minic_riscv64_core_scalar_bitcast_supported(const MinicC0Program *program,
-                                          const MinicCoreFunction *function,
+bool minic_riscv64_core_scalar_bitcast_supported(const MinicCoreFunction *function,
                                           const MinicCoreInstruction *instruction) {
-    const MinicCoreValue *source;
-    size_t source_size;
-    size_t source_alignment;
-    size_t target_size;
-    size_t target_alignment;
-    if (program == NULL || function == NULL || instruction == NULL ||
-        instruction->kind != MINIC_CORE_INSTRUCTION_SCALAR_BITCAST ||
-        instruction->value.operand >= function->value_count) {
-        return false;
-    }
-    source = &function->values[instruction->value.operand];
-    if (!minic_core_scalar_bitcast_types_valid(instruction->type, source->type) ||
-        !minic_data_layout_type(
-            minic_default_data_layout(), program, source->type, &source_size, &source_alignment) ||
-        !minic_data_layout_type(minic_default_data_layout(),
-                                program,
-                                instruction->type,
-                                &target_size,
-                                &target_alignment)) {
-        return false;
-    }
-    (void)source_alignment;
-    (void)target_alignment;
-    return source_size != 0U && source_size <= 8U && target_size != 0U && target_size <= 8U;
+    MinicCoreScalarBitcastShape cast;
+    return minic_core_scalar_bitcast_shape(function, instruction, &cast) &&
+           cast.source_bytes <= 8U && cast.target_bytes <= 8U;
 }
 
-bool minic_riscv64_core_integer_type_range_fits(const MinicC0Program *program,
-                                         const MinicCoreFunction *function,
-                                         MinicType source_type,
-                                         MinicType result_type) {
-    MinicType effective_source;
-    MinicType effective_result;
-    size_t source_alignment;
-    size_t source_size;
-    size_t result_alignment;
-    size_t result_size;
+bool minic_riscv64_core_integer_type_range_fits(
+    const MinicCoreFunction *function, MinicCoreTypeId source_type,
+    MinicCoreTypeId result_type) {
+    const MinicCoreType *source = minic_riscv64_core_base_type(function, source_type);
+    const MinicCoreType *result = minic_riscv64_core_base_type(function, result_type);
     bool source_signed;
     bool result_signed;
 
-    if (program == NULL || function == NULL ||
-        !minic_type_is_integer(source_type) || !minic_type_is_integer(result_type) ||
-        !minic_core_function_effective_integer_type(function, source_type, &effective_source) ||
-        !minic_core_function_effective_integer_type(function, result_type, &effective_result) ||
-        !minic_data_layout_type(
-            minic_default_data_layout(), program, source_type, &source_size, &source_alignment) ||
-        !minic_data_layout_type(
-            minic_default_data_layout(), program, result_type, &result_size, &result_alignment) ||
-        source_size == 0U || source_size > 8U || result_size == 0U || result_size > 8U) {
+    if (source == NULL || result == NULL ||
+        source->kind != MINIC_CORE_TYPE_INTEGER ||
+        result->kind != MINIC_CORE_TYPE_INTEGER ||
+        !source->has_layout || !result->has_layout ||
+        source->size == 0U || source->size > 8U ||
+        result->size == 0U || result->size > 8U) {
         return false;
     }
-    (void)source_alignment;
-    (void)result_alignment;
-    source_signed = minic_type_is_signed_integer(effective_source);
-    result_signed = minic_type_is_signed_integer(effective_result);
-    if ((!source_signed && !minic_type_is_unsigned_integer(effective_source)) ||
-        (!result_signed && !minic_type_is_unsigned_integer(effective_result))) {
-        return false;
-    }
+    source_signed = source->value.integer.is_signed;
+    result_signed = result->value.integer.is_signed;
     if (source_signed == result_signed) {
-        return source_size <= result_size;
+        return source->size <= result->size;
     }
     /* Every unsigned N-bit value fits a signed result only when the result has
        strictly more value bits. A signed range never wholly fits unsigned. */
-    return !source_signed && result_signed && source_size < result_size;
+    return !source_signed && result_signed && source->size < result->size;
 }
 
 bool minic_riscv64_core_integer_overflow_xlen_scratch_exact(
-    const MinicC0Program *program,
-    MinicType left_type,
-    MinicType right_type,
-    size_t result_size) {
-    size_t left_alignment;
-    size_t left_size;
-    size_t right_alignment;
-    size_t right_size;
-
-    if (program == NULL || result_size == 0U || result_size >= 8U ||
-        !minic_data_layout_type(
-            minic_default_data_layout(), program, left_type, &left_size, &left_alignment) ||
-        !minic_data_layout_type(
-            minic_default_data_layout(), program, right_type, &right_size, &right_alignment)) {
-        return false;
-    }
-    (void)left_alignment;
-    (void)right_alignment;
-    return left_size != 0U && right_size != 0U &&
-           left_size <= result_size && right_size <= result_size;
+    const MinicCoreFunction *function, MinicCoreTypeId left_type,
+    MinicCoreTypeId right_type, size_t result_size) {
+    const MinicCoreType *left = minic_riscv64_core_base_type(function, left_type);
+    const MinicCoreType *right = minic_riscv64_core_base_type(function, right_type);
+    return result_size > 0U && result_size < 8U &&
+           left != NULL && right != NULL &&
+           left->kind == MINIC_CORE_TYPE_INTEGER &&
+           right->kind == MINIC_CORE_TYPE_INTEGER &&
+           left->has_layout && right->has_layout &&
+           left->size > 0U && right->size > 0U &&
+           left->size <= result_size && right->size <= result_size;
 }
 
-bool minic_riscv64_core_integer_overflow_supported(const MinicC0Program *program,
-                                            const MinicCoreFunction *function,
-                                            const MinicCoreInstruction *instruction,
-                                            MinicType *result_type,
-                                            size_t *result_size,
-                                            bool *is_unsigned) {
-    MinicType effective_left_type;
-    MinicType effective_result_type;
-    MinicType effective_right_type;
-    MinicType left_type;
-    MinicType pointee;
-    MinicType right_type;
-    size_t alignment;
-    size_t left_alignment;
-    size_t left_size;
-    size_t right_alignment;
-    size_t right_size;
+bool minic_riscv64_core_integer_overflow_supported(
+    const MinicCoreFunction *function, const MinicCoreInstruction *instruction,
+    MinicCoreTypeId *result_type, size_t *result_size, bool *is_unsigned) {
+    const MinicCoreType *result, *left, *right, *flag;
+    MinicCoreTypeId pointee_id, left_id, right_id;
+    size_t left_size, right_size;
     bool result_is_unsigned;
 
-    if (program == NULL || function == NULL || instruction == NULL ||
+    if (function == NULL || function->type_context == NULL ||
+        instruction == NULL || result_size == NULL ||
         instruction->kind != MINIC_CORE_INSTRUCTION_INTEGER_OVERFLOW ||
-        !minic_type_equal(instruction->type, minic_type_bool()) ||
         (instruction->value.integer_overflow.operator_kind != MINIC_CORE_INTEGER_OVERFLOW_ADD &&
          instruction->value.integer_overflow.operator_kind !=
              MINIC_CORE_INTEGER_OVERFLOW_SUBTRACT &&
@@ -248,57 +169,60 @@ bool minic_riscv64_core_integer_overflow_supported(const MinicC0Program *program
         instruction->value.integer_overflow.left >= function->value_count ||
         instruction->value.integer_overflow.right >= function->value_count ||
         instruction->value.integer_overflow.result_address >= function->value_count ||
-        !minic_type_pointee(
-            function->values[instruction->value.integer_overflow.result_address].type, &pointee) ||
-        !minic_type_is_integer(pointee) || minic_type_is_bool_integer(pointee) ||
-        minic_type_is_const(pointee) || minic_type_is_volatile(pointee) ||
-        !minic_data_layout_type(
-            minic_default_data_layout(), program, pointee, result_size, &alignment) ||
-        *result_size == 0U || *result_size > 8U ||
-        !minic_core_function_effective_integer_type(function, pointee, &effective_result_type)) {
+        !minic_lp64_core_pointer_pointee(
+            function->type_context,
+            function->values[instruction->value.integer_overflow.result_address].core_type_id,
+            &pointee_id)) {
         return false;
     }
-    (void)alignment;
-    left_type = function->values[instruction->value.integer_overflow.left].type;
-    right_type = function->values[instruction->value.integer_overflow.right].type;
-    if (!minic_type_is_integer(left_type) || !minic_type_is_integer(right_type) ||
-        !minic_core_function_effective_integer_type(function, left_type, &effective_left_type) ||
-        !minic_core_function_effective_integer_type(function, right_type, &effective_right_type) ||
-        !minic_data_layout_type(
-            minic_default_data_layout(), program, left_type, &left_size, &left_alignment) ||
-        !minic_data_layout_type(
-            minic_default_data_layout(), program, right_type, &right_size, &right_alignment) ||
-        left_size == 0U || left_size > 8U || right_size == 0U || right_size > 8U) {
-        return false;
-    }
-    (void)left_alignment;
-    (void)right_alignment;
-    result_is_unsigned = minic_type_is_unsigned_integer(effective_result_type);
+    flag = minic_riscv64_core_base_type(function, instruction->core_type_id);
+    result = minic_riscv64_core_base_type(function, pointee_id);
+    left_id = function->values[instruction->value.integer_overflow.left].core_type_id;
+    right_id = function->values[instruction->value.integer_overflow.right].core_type_id;
+    left = minic_riscv64_core_base_type(function, left_id);
+    right = minic_riscv64_core_base_type(function, right_id);
+    if (flag == NULL || flag->kind != MINIC_CORE_TYPE_INTEGER ||
+        !flag->value.integer.is_bool ||
+        result == NULL || result->kind != MINIC_CORE_TYPE_INTEGER ||
+        result->value.integer.is_bool || !result->has_layout ||
+        result->size == 0U || result->size > 8U ||
+        left == NULL || right == NULL ||
+        left->kind != MINIC_CORE_TYPE_INTEGER ||
+        right->kind != MINIC_CORE_TYPE_INTEGER ||
+        !left->has_layout || !right->has_layout ||
+        left->size == 0U || left->size > 8U ||
+        right->size == 0U || right->size > 8U) return false;
+    *result_size = result->size;
+    left_size = left->size;
+    right_size = right->size;
+    result_is_unsigned = !result->value.integer.is_signed;
 
-    if ((!minic_type_equal(left_type, pointee) || !minic_type_equal(right_type, pointee)) &&
-        !(minic_riscv64_core_integer_type_range_fits(program, function, left_type, pointee) &&
-          minic_riscv64_core_integer_type_range_fits(program, function, right_type, pointee)) &&
+    if ((!minic_lp64_core_equal_unqualified(function->type_context, left_id, pointee_id) ||
+         !minic_lp64_core_equal_unqualified(function->type_context, right_id, pointee_id)) &&
+        !(minic_riscv64_core_integer_type_range_fits(function, left_id, pointee_id) &&
+          minic_riscv64_core_integer_type_range_fits(function, right_id, pointee_id)) &&
         !minic_riscv64_core_integer_overflow_xlen_scratch_exact(
-            program, left_type, right_type, *result_size)) {
+            function, left_id, right_id, *result_size)) {
         bool left_is_result;
         bool right_is_result;
-        const MinicType *other_effective_type;
+        const MinicCoreType *other;
 
         /* Preserve the established narrow signed-result extension for the
            one mixed case whose full unsigned operand range does not fit. */
-        left_is_result = minic_type_equal(left_type, pointee);
-        right_is_result = minic_type_equal(right_type, pointee);
+        left_is_result = minic_lp64_core_equal_unqualified(
+            function->type_context, left_id, pointee_id);
+        right_is_result = minic_lp64_core_equal_unqualified(
+            function->type_context, right_id, pointee_id);
         if ((instruction->value.integer_overflow.operator_kind !=
                  MINIC_CORE_INTEGER_OVERFLOW_ADD &&
              instruction->value.integer_overflow.operator_kind !=
                  MINIC_CORE_INTEGER_OVERFLOW_MULTIPLY) ||
             result_is_unsigned || *result_size >= 8U || left_is_result == right_is_result ||
-            !minic_type_is_signed_integer(effective_result_type)) {
+            !result->value.integer.is_signed) {
             return false;
         }
-        other_effective_type =
-            left_is_result ? &effective_right_type : &effective_left_type;
-        if (!minic_type_is_unsigned_integer(*other_effective_type)) {
+        other = left_is_result ? right : left;
+        if (other->value.integer.is_signed) {
             return false;
         }
         if (instruction->value.integer_overflow.operator_kind ==
@@ -308,7 +232,7 @@ bool minic_riscv64_core_integer_overflow_supported(const MinicC0Program *program
         }
     }
     if (result_type != NULL) {
-        *result_type = pointee;
+        *result_type = pointee_id;
     }
     if (is_unsigned != NULL) {
         *is_unsigned = result_is_unsigned;
@@ -317,34 +241,218 @@ bool minic_riscv64_core_integer_overflow_supported(const MinicC0Program *program
 }
 
 
-/* The ABI cursor owns the placement; CALL admission checks the *same*
- * two-XLEN machine shape for direct and indirect signed/unsigned int128
- * and IEEE binary128 long double. Keep it in one location so widening
- * indirect CALL support cannot silently diverge from direct CALLs. */
-static bool rv64_wide_call_argument_supported(
-    MinicType type, const MinicRiscv64AbiArgumentLocation *location) {
-    return location != NULL &&
-        (minic_type_is_long_double(type) ||
-         minic_type_is_int128_integer(type)) &&
-        location->value.kind == MINIC_RISCV64_ABI_VALUE_WIDE_SCALAR &&
-        location->value.storage_size == 16U &&
-        location->value.slot_count == 2U &&
-        location->floating_register_count == 0U &&
-        location->integer_register_count + location->stack_slot_count == 2U &&
-        location->integer_register_begin <= 8U &&
-        location->integer_register_count <=
-            8U - location->integer_register_begin;
+static bool rv64_core_abi_scalar(const MinicCoreType *type) {
+    return type != NULL &&
+        (type->kind == MINIC_CORE_TYPE_INTEGER ||
+         type->kind == MINIC_CORE_TYPE_POINTER ||
+         (type->kind == MINIC_CORE_TYPE_FLOAT &&
+          (type->value.floating.format == MINIC_CORE_FLOAT_BINARY32 ||
+           type->value.floating.format == MINIC_CORE_FLOAT_BINARY64 ||
+           type->value.floating.format == MINIC_CORE_FLOAT_BINARY128)));
 }
 
-bool minic_riscv64_core_direct_call_supported(const MinicC0Program *program,
+static bool rv64_core_abi_wide(const MinicCoreType *type) {
+    return type != NULL &&
+        ((type->kind == MINIC_CORE_TYPE_INTEGER &&
+          type->value.integer.bit_width == 128U) ||
+         (type->kind == MINIC_CORE_TYPE_FLOAT &&
+          type->value.floating.format == MINIC_CORE_FLOAT_BINARY128));
+}
+
+/* Only resolved type IDs drive production ABI admission. The prepared
+ * locations came from the same Core call view, so machine placement is
+ * checked for structural validity without reopening a C function table. */
+static bool rv64_core_call_arguments_resolved_supported(
+    const MinicCoreFunction *function, const MinicCoreCallView *call,
+    const MinicRiscv64PreparedCall *prepared, bool direct_call) {
+    size_t index;
+    if (function == NULL || function->type_context == NULL || call == NULL ||
+        prepared == NULL || prepared->argument_count != call->argument_count ||
+        call->argument_count > function->call_argument_count ||
+        call->argument_begin > function->call_argument_count ||
+        call->argument_count > function->call_argument_count - call->argument_begin ||
+        (call->argument_count != 0U && call->arguments == NULL) ||
+        call->parameter_count > call->argument_count ||
+        (call->parameter_count != 0U && call->core_parameter_type_ids == NULL))
+        return false;
+    for (index = 0U; index < call->argument_count; ++index) {
+        const MinicCoreCallArgument *argument = &call->arguments[index];
+        const MinicRiscv64AbiArgumentLocation location = prepared->arguments[index];
+        const bool fixed = index < call->parameter_count;
+        const MinicCoreType *type;
+        MinicCoreTypeId actual_type;
+        MinicCoreTypeId type_id;
+        if (!minic_core_call_view_argument_core_type(
+                function, call, index, &actual_type)) return false;
+        type_id = fixed ? call->core_parameter_type_ids[index] : actual_type;
+        type = minic_riscv64_core_base_type(function, type_id);
+        if (type == NULL || (!fixed &&
+            (!call->is_variadic ||
+             (!rv64_core_abi_scalar(type) &&
+              (!direct_call || type->kind != MINIC_CORE_TYPE_RECORD)))))
+            return false;
+        if (rv64_core_abi_scalar(type)) {
+            bool is_fp = type->kind == MINIC_CORE_TYPE_FLOAT &&
+                (type->value.floating.format == MINIC_CORE_FLOAT_BINARY32 ||
+                 type->value.floating.format == MINIC_CORE_FLOAT_BINARY64);
+            bool is_double = is_fp &&
+                type->value.floating.format == MINIC_CORE_FLOAT_BINARY64;
+            if (argument->kind != MINIC_CORE_CALL_ARGUMENT_VALUE ||
+                argument->value.value_id >= function->value_count) return false;
+            if (location.floating_register_count != 0U) {
+                if (!fixed || !is_fp ||
+                    location.value.kind != MINIC_RISCV64_ABI_VALUE_FLOAT ||
+                    location.floating_register_count != 1U ||
+                    location.floating_register_begin >= 8U ||
+                    location.integer_register_count != 0U ||
+                    location.stack_slot_count != 0U) return false;
+            } else if (location.value.kind == MINIC_RISCV64_ABI_VALUE_WIDE_SCALAR) {
+                if (!rv64_core_abi_wide(type) ||
+                    location.value.storage_size != 16U ||
+                    location.value.slot_count != 2U ||
+                    location.integer_register_count + location.stack_slot_count != 2U ||
+                    location.integer_register_begin > 8U ||
+                    location.integer_register_count >
+                        8U - location.integer_register_begin) return false;
+            } else if (location.floating_register_count != 0U ||
+                       (location.value.kind != MINIC_RISCV64_ABI_VALUE_INTEGER &&
+                        !(location.value.kind == MINIC_RISCV64_ABI_VALUE_FLOAT &&
+                          (fixed || is_double) && is_fp)) ||
+                       !((location.integer_register_count == 1U &&
+                          location.integer_register_begin < 8U &&
+                          location.stack_slot_count == 0U) ||
+                         (location.integer_register_count == 0U &&
+                          location.stack_slot_count == 1U))) return false;
+            continue;
+        }
+        if (type->kind != MINIC_CORE_TYPE_RECORD ||
+            argument->kind != MINIC_CORE_CALL_ARGUMENT_OBJECT ||
+            (!direct_call && !fixed) ||
+            argument->value.object_id >= function->object_count ||
+            minic_core_type_unqualified(function->type_context,
+                function->objects[argument->value.object_id].core_type_id) !=
+            minic_core_type_unqualified(function->type_context, type_id))
+            return false;
+        switch (location.value.kind) {
+        case MINIC_RISCV64_ABI_VALUE_IGNORE:
+            if (location.value.slot_count != 0U ||
+                location.integer_register_count != 0U ||
+                location.stack_slot_count != 0U) return false;
+            break;
+        case MINIC_RISCV64_ABI_VALUE_AGGREGATE:
+            if (location.value.slot_count == 0U || location.value.slot_count > 2U ||
+                location.value.slot_count !=
+                    location.integer_register_count + location.stack_slot_count ||
+                location.integer_register_begin + location.integer_register_count > 8U)
+                return false;
+            break;
+        case MINIC_RISCV64_ABI_VALUE_INDIRECT:
+            if (location.value.slot_count != 1U ||
+                !((location.integer_register_count == 1U &&
+                   location.integer_register_begin < 8U &&
+                   location.stack_slot_count == 0U) ||
+                  (location.integer_register_count == 0U &&
+                   location.stack_slot_count == 1U))) return false;
+            break;
+        default: return false;
+        }
+    }
+    return true;
+}
+
+/* ABI legality is independent of whether the callee address is a symbol or
+ * an SSA pointer. One checked CoreCallView, one immutable RV64 prepared
+ * placement and one transfer shape checker cover both. We must not rerun a
+ * default LP64D cursor here: the frame/caller may target soft-float LP64.
+ * Only the intentionally unsupported *indirect*
+ * unnamed-record path remains a policy difference: its machine emitter does
+ * not yet transport those aggregates. Never widen admission ahead of emit. */
+static bool rv64_core_call_arguments_supported(
+    const MinicCoreFunction *function,
+    const MinicCoreCallView *call, const MinicRiscv64PreparedCall *prepared,
+    bool direct_call) {
+    return rv64_core_call_arguments_resolved_supported(
+        function, call, prepared, direct_call);
+}
+
+/* The verified call view owns the result representation for both direct
+ * symbol calls and SSA-pointer calls. Return ABI legality must therefore be
+ * checked by one target policy, not two subtly different call-site copies. */
+static bool rv64_core_call_return_supported(
+    const MinicCoreFunction *function, const MinicCoreCallView *call,
+    const MinicRiscv64AbiValue *value) {
+    const MinicCoreType *core;
+    if (function == NULL || function->type_context == NULL ||
+        call == NULL || value == NULL)
+        return false;
+    core = minic_riscv64_core_base_type(function, call->core_return_type_id);
+    if (core == NULL) return false;
+    switch (value->kind) {
+    case MINIC_RISCV64_ABI_VALUE_VOID:
+        return call->return_form == MINIC_CORE_CALL_RETURN_VOID;
+    case MINIC_RISCV64_ABI_VALUE_INTEGER:
+        return call->return_form == MINIC_CORE_CALL_RETURN_VALUE;
+    case MINIC_RISCV64_ABI_VALUE_FLOAT:
+        return call->return_form == MINIC_CORE_CALL_RETURN_VALUE &&
+               core->kind == MINIC_CORE_TYPE_FLOAT &&
+               (core->value.floating.format == MINIC_CORE_FLOAT_BINARY32 ||
+                core->value.floating.format == MINIC_CORE_FLOAT_BINARY64);
+    case MINIC_RISCV64_ABI_VALUE_WIDE_SCALAR:
+        return call->return_form == MINIC_CORE_CALL_RETURN_VALUE &&
+               rv64_core_abi_wide(core) &&
+               value->storage_size == 16U && value->slot_count == 2U;
+    case MINIC_RISCV64_ABI_VALUE_AGGREGATE:
+        return call->return_form == MINIC_CORE_CALL_RETURN_OBJECT &&
+               core->kind == MINIC_CORE_TYPE_RECORD &&
+               value->slot_count >= 1U && value->slot_count <= 2U;
+    case MINIC_RISCV64_ABI_VALUE_INDIRECT:
+        return call->return_form == MINIC_CORE_CALL_RETURN_OBJECT &&
+               core->kind == MINIC_CORE_TYPE_RECORD &&
+               value->storage_size > 16U &&
+               value->slot_count == 1U;
+    default: return false;
+    }
+}
+
+/* Standalone (no ABI cursor) Core admission has deliberately narrower
+ * capability than the production prepared-call path: at most eight scalar
+ * VALUE arguments. Once a type snapshot is attached the proof must use its
+ * Core IDs, not the C signatures retained for legacy fixture producers. */
+static bool rv64_core_preparedless_call_supported(
+    const MinicCoreFunction *function, const MinicCoreCallView *call) {
+    const MinicCoreType *return_type;
+    size_t argument_index;
+    if (function == NULL || function->type_context == NULL || call == NULL ||
+        call->argument_count > 8U ||
+        (call->parameter_count != 0U && call->core_parameter_type_ids == NULL))
+        return false;
+    return_type = minic_riscv64_core_base_type(function, call->core_return_type_id);
+    if (return_type == NULL ||
+        (return_type->kind != MINIC_CORE_TYPE_VOID &&
+         !rv64_core_abi_scalar(return_type))) return false;
+    for (argument_index = 0U; argument_index < call->argument_count; ++argument_index) {
+        const MinicCoreCallArgument *argument = &call->arguments[argument_index];
+        MinicCoreTypeId type_id;
+        if (argument->kind != MINIC_CORE_CALL_ARGUMENT_VALUE ||
+            argument->value.value_id >= function->value_count ||
+            !minic_core_call_view_argument_core_type(
+                function, call, argument_index, &type_id)) return false;
+        if (argument_index < call->parameter_count)
+            type_id = call->core_parameter_type_ids[argument_index];
+        else if (!call->is_variadic) return false;
+        if (!rv64_core_abi_scalar(minic_riscv64_core_base_type(function, type_id)))
+            return false;
+    }
+    return true;
+}
+
+bool minic_riscv64_core_direct_call_supported(bool require_prepared_abi,
                                        const MinicCoreFunction *function,
                                        const MinicCoreInstruction *instruction,
-                                       const MinicCoreCallView *semantic_view) {
+                                       const MinicCoreCallView *semantic_view,
+                                       const MinicRiscv64PreparedCall *prepared) {
     MinicCoreCallView call;
     const MinicCoreCallee *callee;
-    MinicRiscv64AbiCursor cursor;
-    MinicRiscv64AbiValue return_value;
-    size_t argument_index;
 
     /* The already-admitted Common FunctionPlan supplies an immutable
      * semantic view. A standalone caller still builds a checked view once. */
@@ -355,338 +463,37 @@ bool minic_riscv64_core_direct_call_supported(const MinicC0Program *program,
     callee = call.callee;
     if (callee->name == NULL || callee->name_length == 0U)
         return false;
-    if (program == NULL) {
-        if ((!minic_type_is_void(callee->return_type) &&
-             !minic_riscv64_scalar_type(callee->return_type)) ||
-            instruction->value.call.argument_count > 8U) {
-            return false;
-        }
-        for (argument_index = 0U; argument_index < instruction->value.call.argument_count;
-             ++argument_index) {
-            const MinicCoreCallArgument *argument = &function->call_arguments[
-                instruction->value.call.argument_begin + argument_index];
-            if (argument->kind != MINIC_CORE_CALL_ARGUMENT_VALUE) {
-                return false;
-            }
-            if (argument_index < callee->parameter_count) {
-                if (!minic_riscv64_scalar_type(callee->parameter_types[argument_index])) {
-                    return false;
-                }
-            } else if (argument->value.value_id >= function->value_count ||
-                       !minic_riscv64_scalar_type(function->values[argument->value.value_id].type)) {
-                return false;
-            }
-        }
-        return true;
-    }
-    /* M86_DIRECT_RECORD_CALL_RESULT: mirror the existing callee-side
-       one/two-slot aggregate return ABI on direct call sites. */
-    if (!minic_riscv64_abi_cursor_initialize_for_return(
-            program, callee->return_type, &cursor, &return_value)) {
+    if (!require_prepared_abi)
+        return function != NULL && function->type_context != NULL &&
+               rv64_core_preparedless_call_supported(function, &call);
+    if (prepared == NULL ||
+        !rv64_core_call_return_supported(function, &call, &prepared->return_value)) {
         return false;
     }
-    if (return_value.kind == MINIC_RISCV64_ABI_VALUE_AGGREGATE) {
-        if (return_value.slot_count == 0U || return_value.slot_count > 2U ||
-            !minic_type_is_record(callee->return_type) ||
-            instruction->value.call.result_object >= function->object_count ||
-            !minic_type_equal(
-                function->objects[instruction->value.call.result_object].type,
-                callee->return_type)) {
-            return false;
-        }
-    } else if (return_value.kind == MINIC_RISCV64_ABI_VALUE_INDIRECT) {
-        if (!minic_type_is_record(callee->return_type) || return_value.storage_size <= 16U ||
-            return_value.slot_count != 1U ||
-            instruction->value.call.result_object >= function->object_count ||
-            !minic_type_equal(
-                function->objects[instruction->value.call.result_object].type,
-                callee->return_type)) {
-            return false;
-        }
-    } else if (return_value.kind == MINIC_RISCV64_ABI_VALUE_WIDE_SCALAR) {
-        if ((!minic_type_is_long_double(callee->return_type) &&
-             !minic_type_is_int128_integer(callee->return_type)) ||
-            return_value.storage_size != 16U || return_value.slot_count != 2U ||
-            instruction->value.call.result_object != MINIC_CORE_OBJECT_INVALID) {
-            return false;
-        }
-    } else if (return_value.kind != MINIC_RISCV64_ABI_VALUE_VOID &&
-               return_value.kind != MINIC_RISCV64_ABI_VALUE_INTEGER &&
-               !(return_value.kind == MINIC_RISCV64_ABI_VALUE_FLOAT &&
-                 (minic_type_is_float(callee->return_type) ||
-                  minic_type_is_double(callee->return_type)))) {
-        return false;
-    }
-    for (argument_index = 0U; argument_index < instruction->value.call.argument_count;
-         ++argument_index) {
-        const MinicCoreCallArgument *argument = &function->call_arguments[
-            instruction->value.call.argument_begin + argument_index];
-        MinicRiscv64AbiArgumentLocation location;
-        MinicType argument_type;
-        bool is_fixed_parameter;
-
-        is_fixed_parameter = argument_index < callee->parameter_count;
-        if (is_fixed_parameter) {
-            argument_type = callee->parameter_types[argument_index];
-        } else {
-            if (!callee->is_variadic) {
-                return false;
-            }
-            if (argument->kind == MINIC_CORE_CALL_ARGUMENT_VALUE) {
-                if (argument->value.value_id >= function->value_count) {
-                    return false;
-                }
-                argument_type = function->values[argument->value.value_id].type;
-                if (!minic_riscv64_scalar_type(argument_type)) {
-                    return false;
-                }
-            } else if (argument->kind == MINIC_CORE_CALL_ARGUMENT_OBJECT) {
-                if (argument->value.object_id >= function->object_count) {
-                    return false;
-                }
-                argument_type = function->objects[argument->value.object_id].type;
-                if (!minic_type_is_record(argument_type)) {
-                    return false;
-                }
-            } else {
-                return false;
-            }
-        }
-        if (!minic_riscv64_abi_place_argument(
-                program, argument_type, is_fixed_parameter, &cursor, &location)) {
-            return false;
-        }
-        if (minic_riscv64_scalar_type(argument_type)) {
-            if (argument->kind != MINIC_CORE_CALL_ARGUMENT_VALUE ||
-                argument->value.value_id >= function->value_count) {
-                return false;
-            }
-            if (location.floating_register_count != 0U) {
-                if (!is_fixed_parameter ||
-                    location.value.kind != MINIC_RISCV64_ABI_VALUE_FLOAT ||
-                    (!minic_type_is_float(argument_type) &&
-                     !minic_type_is_double(argument_type)) ||
-                    location.floating_register_count != 1U ||
-                    location.floating_register_begin >= 8U ||
-                    location.integer_register_count != 0U ||
-                    location.stack_slot_count != 0U) {
-                    return false;
-                }
-            } else if (location.value.kind == MINIC_RISCV64_ABI_VALUE_WIDE_SCALAR) {
-                if (!rv64_wide_call_argument_supported(
-                        argument_type, &location)) {
-                    return false;
-                }
-            } else {
-                if ((location.value.kind != MINIC_RISCV64_ABI_VALUE_INTEGER &&
-                     !(location.value.kind == MINIC_RISCV64_ABI_VALUE_FLOAT &&
-                       !is_fixed_parameter && minic_type_is_double(argument_type))) ||
-                    !((location.integer_register_count == 1U &&
-                       location.integer_register_begin < 8U &&
-                       location.stack_slot_count == 0U) ||
-                      (location.integer_register_count == 0U &&
-                       location.stack_slot_count == 1U))) {
-                    return false;
-                }
-            }
-        } else if (minic_type_is_record(argument_type)) {
-            MinicCoreObjectId object_id;
-
-            if (argument->kind != MINIC_CORE_CALL_ARGUMENT_OBJECT) {
-                return false;
-            }
-            object_id = argument->value.object_id;
-            if (object_id >= function->object_count ||
-                !minic_type_equal(function->objects[object_id].type, argument_type)) {
-                return false;
-            }
-            if (location.value.kind == MINIC_RISCV64_ABI_VALUE_IGNORE) {
-                if (location.value.slot_count != 0U || location.integer_register_count != 0U ||
-                    location.stack_slot_count != 0U) {
-                    return false;
-                }
-            } else if (location.value.kind == MINIC_RISCV64_ABI_VALUE_AGGREGATE) {
-                if (location.value.slot_count == 0U || location.value.slot_count > 2U ||
-                    location.value.slot_count !=
-                        location.integer_register_count + location.stack_slot_count ||
-                    location.integer_register_begin + location.integer_register_count > 8U) {
-                    return false;
-                }
-            } else if (location.value.kind == MINIC_RISCV64_ABI_VALUE_INDIRECT) {
-                if (location.value.slot_count != 1U ||
-                    !((location.integer_register_count == 1U &&
-                       location.integer_register_begin < 8U &&
-                       location.stack_slot_count == 0U) ||
-                      (location.integer_register_count == 0U &&
-                       location.stack_slot_count == 1U))) {
-                    return false;
-                }
-            } else {
-                return false;
-            }
-        } else {
-            return false;
-        }
-    }
-    return true;
+    return rv64_core_call_arguments_supported(function, &call, prepared, true);
 }
 
 /* M151_INDIRECT_CALL_BATCH_OWNER: validate indirect arguments through the
    same register-only RV64 ABI classifier used by direct calls. */
-bool minic_riscv64_core_indirect_call_supported(const MinicC0Program *program,
+bool minic_riscv64_core_indirect_call_supported(bool require_prepared_abi,
                                          const MinicCoreFunction *function,
                                          const MinicCoreInstruction *instruction,
-                                         const MinicCoreCallView *semantic_view) {
+                                         const MinicCoreCallView *semantic_view,
+                                         const MinicRiscv64PreparedCall *prepared) {
     MinicCoreCallView call;
-    const MinicCoreCallSignature *signature;
-    MinicRiscv64AbiCursor cursor;
-    MinicRiscv64AbiValue return_value;
-    size_t argument_index;
 
     if (!(semantic_view != NULL ? (call = *semantic_view, true) :
           minic_core_call_view_build(function, instruction, &call)) ||
         call.signature == NULL)
         return false;
-    signature = call.signature;
-    if (program == NULL) {
-        if ((!minic_type_is_void(signature->return_type) &&
-             !minic_riscv64_scalar_type(signature->return_type)) ||
-            instruction->value.indirect_call.argument_count > 8U) {
-            return false;
-        }
-        for (argument_index = 0U;
-             argument_index < instruction->value.indirect_call.argument_count;
-             ++argument_index) {
-            const MinicCoreCallArgument *argument = &function->call_arguments[
-                instruction->value.indirect_call.argument_begin + argument_index];
-            if (argument->kind != MINIC_CORE_CALL_ARGUMENT_VALUE ||
-                argument->value.value_id >= function->value_count) {
-                return false;
-            }
-            if (argument_index < signature->parameter_count) {
-                if (!minic_riscv64_scalar_type(signature->parameter_types[argument_index])) {
-                    return false;
-                }
-            } else if (!signature->is_variadic ||
-                       !minic_riscv64_scalar_type(function->values[argument->value.value_id].type)) {
-                return false;
-            }
-        }
-        return true;
-    }
-    if (!minic_riscv64_abi_cursor_initialize_for_return(
-            program, signature->return_type, &cursor, &return_value) ||
-        (return_value.kind != MINIC_RISCV64_ABI_VALUE_VOID &&
-         return_value.kind != MINIC_RISCV64_ABI_VALUE_INTEGER &&
-         !(return_value.kind == MINIC_RISCV64_ABI_VALUE_FLOAT &&
-           (minic_type_is_float(signature->return_type) ||
-            minic_type_is_double(signature->return_type))) &&
-         !(return_value.kind == MINIC_RISCV64_ABI_VALUE_WIDE_SCALAR &&
-           (minic_type_is_long_double(signature->return_type) ||
-            minic_type_is_int128_integer(signature->return_type)) &&
-           return_value.storage_size == 16U &&
-           return_value.slot_count == 2U))) {
+    if (!require_prepared_abi)
+        return function != NULL && function->type_context != NULL &&
+               rv64_core_preparedless_call_supported(function, &call);
+    if (prepared == NULL ||
+        !rv64_core_call_return_supported(function, &call, &prepared->return_value)) {
         return false;
     }
-    for (argument_index = 0U;
-         argument_index < instruction->value.indirect_call.argument_count;
-         ++argument_index) {
-        const MinicCoreCallArgument *argument = &function->call_arguments[
-            instruction->value.indirect_call.argument_begin + argument_index];
-        MinicRiscv64AbiArgumentLocation location;
-        MinicType argument_type;
-        bool is_fixed_parameter = argument_index < signature->parameter_count;
-
-        if (is_fixed_parameter) {
-            argument_type = signature->parameter_types[argument_index];
-        } else {
-            if (!signature->is_variadic ||
-                argument->kind != MINIC_CORE_CALL_ARGUMENT_VALUE ||
-                argument->value.value_id >= function->value_count) {
-                return false;
-            }
-            argument_type = function->values[argument->value.value_id].type;
-            if (!minic_riscv64_scalar_type(argument_type)) {
-                return false;
-            }
-        }
-        if (!minic_riscv64_abi_place_argument(
-                program, argument_type, is_fixed_parameter, &cursor, &location)) {
-            return false;
-        }
-        if (minic_riscv64_scalar_type(argument_type)) {
-            if (argument->kind != MINIC_CORE_CALL_ARGUMENT_VALUE ||
-                argument->value.value_id >= function->value_count) {
-                return false;
-            }
-            if (location.floating_register_count != 0U) {
-                if (!is_fixed_parameter ||
-                    location.value.kind != MINIC_RISCV64_ABI_VALUE_FLOAT ||
-                    (!minic_type_is_float(argument_type) &&
-                     !minic_type_is_double(argument_type)) ||
-                    location.floating_register_count != 1U ||
-                    location.floating_register_begin >= 8U ||
-                    location.integer_register_count != 0U ||
-                    location.stack_slot_count != 0U) {
-                    return false;
-                }
-            } else if (location.value.kind ==
-                       MINIC_RISCV64_ABI_VALUE_WIDE_SCALAR) {
-                if (!rv64_wide_call_argument_supported(
-                        argument_type, &location))
-                    return false;
-            } else {
-                if ((location.value.kind != MINIC_RISCV64_ABI_VALUE_INTEGER &&
-                     !(location.value.kind == MINIC_RISCV64_ABI_VALUE_FLOAT &&
-                       !is_fixed_parameter && minic_type_is_double(argument_type))) ||
-                    !((location.integer_register_count == 1U &&
-                       location.integer_register_begin < 8U &&
-                       location.stack_slot_count == 0U) ||
-                      (location.integer_register_count == 0U &&
-                       location.stack_slot_count == 1U))) {
-                    return false;
-                }
-            }
-        } else if (is_fixed_parameter && minic_type_is_record(argument_type)) {
-            MinicCoreObjectId object_id;
-
-            if (argument->kind != MINIC_CORE_CALL_ARGUMENT_OBJECT) {
-                return false;
-            }
-            object_id = argument->value.object_id;
-            if (object_id >= function->object_count ||
-                !minic_type_equal(function->objects[object_id].type, argument_type)) {
-                return false;
-            }
-            if (location.value.kind == MINIC_RISCV64_ABI_VALUE_IGNORE) {
-                if (location.value.slot_count != 0U || location.integer_register_count != 0U ||
-                    location.stack_slot_count != 0U) {
-                    return false;
-                }
-            } else if (location.value.kind == MINIC_RISCV64_ABI_VALUE_AGGREGATE) {
-                if (location.value.slot_count == 0U || location.value.slot_count > 2U ||
-                    location.value.slot_count !=
-                        location.integer_register_count + location.stack_slot_count ||
-                    location.integer_register_begin + location.integer_register_count > 8U) {
-                    return false;
-                }
-            } else if (location.value.kind == MINIC_RISCV64_ABI_VALUE_INDIRECT) {
-                if (location.value.slot_count != 1U ||
-                    !((location.integer_register_count == 1U &&
-                       location.integer_register_begin < 8U &&
-                       location.stack_slot_count == 0U) ||
-                      (location.integer_register_count == 0U &&
-                       location.stack_slot_count == 1U))) {
-                    return false;
-                }
-            } else {
-                return false;
-            }
-        } else {
-            return false;
-        }
-    }
-    return true;
+    return rv64_core_call_arguments_supported(function, &call, prepared, false);
 }
 
 

@@ -16,8 +16,12 @@ mkdir -p "$tree/bin" "$tree/proc" "$tree/dev" "$tree/sys" "$tree/tmp"
   "$root/tests/external/linux/runtime_initramfs/minish.c" -o "$tree/bin/sh"
 "$cc" -static -O2 -Wall -Wextra -Werror \
   "$root/tests/external/linux/runtime_initramfs/probe.c" -o "$tree/bin/runtime-probe"
-
 file "$tree/init" "$tree/bin/sh" "$tree/bin/runtime-probe"
+if [ "${ENABLE_P2:-0}" = 1 ]; then
+  "$cc" -static -O2 -Wall -Wextra -Werror \
+    "$root/tests/external/linux/runtime_initramfs/p2_probe.c" -o "$tree/bin/p2-probe"
+  file "$tree/bin/p2-probe"
+fi
 mkdir -p "$(dirname "$out")"
 (
   cd "$tree"

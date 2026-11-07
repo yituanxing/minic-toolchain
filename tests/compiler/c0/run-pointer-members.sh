@@ -29,7 +29,7 @@ printf '%s\n' "PASS compiler/c0/pointer_member normalized=core-field-address"
 grep -F ".Lmain_core_bb" "$work/direct_record_member.s" >/dev/null
 grep -E '^[[:space:]]+addi[[:space:]]+[^,]+,[[:space:]]*[^,]+,[[:space:]]*4$' \
     "$work/direct_record_member.s" >/dev/null
-grep -E '^[[:space:]]+la[[:space:]]+[^,]+,[[:space:]]*global_pair$' \
+grep -E '^[[:space:]]+lla[[:space:]]+[^,]+,[[:space:]]*global_pair$' \
     "$work/direct_record_member.s" >/dev/null
 printf '%s\n' "PASS compiler/c0/direct_record_member normalized=core-field-address"
 

@@ -37,6 +37,7 @@ int main(void)
     const MinicRecord *other_anonymous_record;
     const MinicRecord *hooks_record;
     const MinicRecordField *field;
+    const MinicArrayType *field_array;
     char record_name[] = "AES_ctx";
     char array_field_name[] = "RoundKey";
     char pointer_field_name[] = "Next";
@@ -159,15 +160,16 @@ int main(void)
         return fail("record metadata");
     }
     field = minic_c0_record_field(record, 0U);
+    field_array = field == NULL || !minic_type_is_array(field->type)
+                      ? NULL : minic_c0_program_array_type(&program, field->type.array_type_id);
     if (field == NULL || strcmp(field->name, "RoundKey") != 0 ||
-        field->element_count != 176U ||
-        !minic_type_equal(field->type, integer_type)) {
+        field_array == NULL || field_array->element_count != 176U ||
+        !minic_type_equal(field_array->element_type, integer_type)) {
         minic_c0_program_destroy(&program);
         return fail("array field metadata");
     }
     field = minic_c0_record_field(record, 1U);
     if (field == NULL || strcmp(field->name, "Next") != 0 ||
-        field->element_count != 1U ||
         !minic_type_equal(field->type, pointer_type)) {
         minic_c0_program_destroy(&program);
         return fail("pointer field metadata");

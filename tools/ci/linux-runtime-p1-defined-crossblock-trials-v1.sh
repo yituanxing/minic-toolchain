@@ -61,6 +61,19 @@ if [[ "$single_owner" != 1 && "${COHORT_P1_DISCARD_EQ:-0}" != 1 ]] &&
   unset MINIC_P1_CROSSBLOCK_FUNCTION
   echo "P1_RX_ROI=START method=first_write_single_block_no_address_escape owners=4 no_kernel_link=true"
 fi
+if [[ "${COHORT_P1_EIGHT_OWNER:-0}" == 1 ]]; then
+  [[ "$single_owner" != 1 && "${COHORT_P1_DISCARD_EQ:-0}" != 1 ]] || {
+    echo "P1_EIGHT_OWNER=ERROR conflicting_single_owner_or_discard_flags" >&2; exit 8;
+  }
+  rx_roi=0
+  rx_bundle=1
+  rx_bundle_page=1
+  rx_bundle_dev=1
+  rx_bundle_timer=1
+  rx_bundle_neigh=1
+  unset MINIC_P1_CROSSBLOCK_FUNCTION
+  echo "P1_EIGHT_OWNER=START exact_owners=8 selected_only=true pure_discarded_eq=true repeats=12"
+fi
 if [[ "$single_owner" == 1 ]]; then
   # Preserve old codegen in every function except one suspect frame;
   # only ip6_finish_output2 is permitted to use the experimental allocator.
@@ -177,7 +190,8 @@ fi
 # (2) independently GCC/QEMU-tested elimination of discarded local-address
 #     equality before CoreObject materialization.
 # This is an exact eight-owner opt-in, NOT global production promotion.
-if git -C "$repo" log -1 --format=%B | grep -Fq '[linux-runtime-p1-combine-discard]'; then
+if [[ "${COHORT_P1_EIGHT_OWNER:-0}" == 1 ]] ||
+   git -C "$repo" log -1 --format=%B | grep -Fq '[linux-runtime-p1-combine-discard]'; then
   [[ "$rx_bundle_timer" == 1 && "$rx_bundle_neigh" == 1 &&
      "$single_owner" != 1 ]] || {
     echo "P1_COMBINED_DISCARD=FAIL require_exact_eight_owner_bundle" >&2
@@ -207,6 +221,51 @@ python3 "$repo/tools/ci/linux-runtime-minic-route-audit-v1.py" \
   --success-trace "$dest/success.txt" \
   --object-digest-trace "$dest/candidates.sha256" \
   --candidates "$out" >"$dest/route-audit.log"
+if [[ "${COHORT_P1_EIGHT_OWNER:-0}" == 1 ]]; then
+  # The existing exact-eight replay already keeps these GNU-preprocessed
+  # inputs. Archive only three historically high-ROI owners for same-.i
+  # old/new compiler attribution; never regenerate or compile another TU.
+  # The output lives under the receiver's existing evidence artifact.
+  snapshot_dir="$dest/source-snapshots"
+  mkdir -p "$snapshot_dir"
+  printf 'owner\tinput_sha256\tinput_bytes\tgzip_sha256\tgzip_bytes\n' \
+    >"$dest/source-snapshots.tsv"
+  for target in net/ipv6/ip6_output.o net/ipv6/tcp_ipv6.o mm/slub.o; do
+    grep -Fxq "$target" "$dest/selected.txt" || {
+      echo "P1_RX_SOURCE_CAPTURE=FAIL target_not_selected=$target" >&2; exit 8;
+    }
+    source_i="$out/${target%.o}.minic-stage2.i"
+    source_stderr="$out/${target%.o}.minic-stage2.minic.stderr"
+    stem="${target##*/}"
+    stem="${stem%.o}"
+    [[ -f "$source_i" && ! -L "$source_i" && -s "$source_i" &&
+       -f "$source_stderr" && ! -L "$source_stderr" && -s "$source_stderr" ]] || {
+      echo "P1_RX_SOURCE_CAPTURE=FAIL missing_exact_replay_input=$target" >&2; exit 8;
+    }
+    source_bytes=$(stat -c '%s' "$source_i")
+    [[ "$source_bytes" -gt 0 && "$source_bytes" -le $((64 * 1024 * 1024)) ]] || {
+      echo "P1_RX_SOURCE_CAPTURE=FAIL oversized_input=$target bytes=$source_bytes" >&2; exit 8;
+    }
+    compressed="$snapshot_dir/$stem.i.gz"
+    gzip -n -9 -c -- "$source_i" >"$compressed"
+    gzip -t -- "$compressed" && gzip -dc -- "$compressed" | cmp -s - "$source_i" || {
+      echo "P1_RX_SOURCE_CAPTURE=FAIL compressed_source_mismatch=$target" >&2; exit 8;
+    }
+    # Frame accounting is paired with the exact input, rather than a
+    # similarly named function emitted by some other object.
+    grep '^CORE_FRAME_REUSE function=' "$source_stderr" \
+      >"$snapshot_dir/$stem.frame.log" || {
+        echo "P1_RX_SOURCE_CAPTURE=FAIL missing_frame_accounting=$target" >&2; exit 8;
+      }
+    input_sha=$(sha256sum "$source_i" | cut -d' ' -f1)
+    gzip_sha=$(sha256sum "$compressed" | cut -d' ' -f1)
+    gzip_bytes=$(stat -c '%s' "$compressed")
+    printf '%s\t%s\t%s\t%s\t%s\n' \
+      "$target" "$input_sha" "$source_bytes" "$gzip_sha" "$gzip_bytes" \
+      >>"$dest/source-snapshots.tsv"
+    echo "P1_RX_SOURCE_CAPTURE=PASS owner=$target input_sha=$input_sha bytes=$source_bytes"
+  done
+fi
 if [[ "$single_owner" == 1 ]]; then
   # The instrumentation prints to a per-TU stderr file, not replay.log.
   stderr="$out/net/ipv6/ip6_output.minic-stage2.minic.stderr"
@@ -286,8 +345,9 @@ for line in (ev/"minic-manifest.sha256").read_text().splitlines():
         assert actual==digest, "unrelated MiniC owner changed: "+target
         untouched += 1
 assert matched in (1,4,5,6,7,8) and untouched==2064-matched
-print(f"P1_DEFINED_CROSSBLOCK=POOL_ISOLATED changed_targets={matched} original_neighbors={untouched}")
+print(f"P1_DEFINED_CROSSBLOCK=POOL_ISOLATED selected_targets={matched} original_neighbors={untouched}")
 PY_VERIFY
+echo "P1_DEFINED_CROSSBLOCK=OBJECT_DELTA selected=$(wc -l <"$dest/selected.txt") sha_changed=$changed frozen_neighbors=$((2064-$(wc -l <"$dest/selected.txt")))"
 if [[ "$rx_roi" == 1 ]]; then
   # Parse ORIGINAL compiler records for each exact ELF owner separately.
   # Do not use the legacy multi-TU component parser (duplicate inlined

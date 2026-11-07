@@ -26,7 +26,9 @@ typedef unsigned long word;
 #define CLONE 220
 #define WAITID 95
 #define EXIT 93
+#define FINIT_MODULE 273
 #define AF_INET 2
+#define AF_INET6 10
 #define AF_ALG 38
 #define SOCK_STREAM 1
 #define SOCK_DGRAM 2
@@ -57,15 +59,77 @@ static void say(const char*s){(void)S3(WRITE,1,s,len(s));}
 static void zero(void *ptr,word n){unsigned char*p=ptr;while(n--)*p++=0;}
 static int bad(long n){return (word)n >= (word)-4095;}
 static void closefd(long n){if(!bad(n))(void)S1(CLOSE,n);}
+static void say_long(long x){
+ static const char hex[]="0123456789abcdef";
+ char buf[8];word at=sizeof(buf);unsigned long n;
+ if(x<0){say("-");n=(unsigned long)(-(x+1))+1;}else n=(unsigned long)x;
+ say("0x");
+ do{buf[--at]=hex[n&15];n>>=4;}while(n&&at);
+ (void)S3(WRITE,1,buf+at,sizeof(buf)-at);
+}
+/* Modules match the original MiniC Image's unmodified 6.6.143 Kconfig:
+ * CONFIG_CRYPTO_SHA*=m, CONFIG_CRYPTO_BLAKE2B=m, CONFIG_OVERLAY_FS=m.
+ * The kernel's AF_ALG interface is built-in. No autoload is presumed when
+ * PID1 has only this raw ELF32 binary and no modprobe helper.
+ * Each module must be actually accepted by Linux finit_module(2). */
+static int load_module(const char*name){
+ char path[128];const char *prefix="/lib/modules/";
+ word p=0,i=0;
+ while(prefix[i]&&p+1<sizeof(path))path[p++]=prefix[i++];
+ i=0;while(name[i]&&p+4<sizeof(path))path[p++]=name[i++];
+ if(name[i]){say("RV32I_P2_MODULE_FAIL path_overflow ");say(name);say("\n");return 0;}
+ path[p++]='.';path[p++]='k';path[p++]='o';path[p]=0;
+ long fd=S4(OPENAT,AT_FDCWD,path,0,0);
+ if(bad(fd)){
+  say("RV32I_P2_MODULE_FAIL open ");say(name);say(" errno=");say_long(fd);say("\n");
+  return 0;
+ }
+ long rc=S3(FINIT_MODULE,fd,"",0);
+ closefd(fd);
+ if(rc!=0){
+  say("RV32I_P2_MODULE_FAIL finit_module ");say(name);say(" errno=");say_long(rc);say("\n");
+  return 0;
+ }
+ say("RV32I_P2_MODULE_PASS ");say(name);say("\n");
+ return 1;
+}
+static int load_p2_modules(void){
+ int ok=1;
+ /* libsha256 exports sha224_final/sha256_final/sha256_update; module
+  * Kbuild's depends field is empty without original Module.symvers. */
+ ok=load_module("libsha256")&&ok;
+ ok=load_module("sha256_generic")&&ok;
+ ok=load_module("sha512_generic")&&ok;
+ ok=load_module("sha3_generic")&&ok;
+ ok=load_module("blake2b_generic")&&ok;
+ ok=load_module("overlay")&&ok;
+ return ok;
+}
 static int equal(const unsigned char*a,const unsigned char*b,word n){
- for(word i=0;i<n;i++)if(a[i]!=b[i])return 0;return 1;
+ for(word i=0;i<n;i++){
+  if(a[i]!=b[i])return 0;
+ }
+ return 1;
+}
+static int same(const char*a,const char*b){
+ return len(a)==len(b)&&equal((const unsigned char*)a,(const unsigned char*)b,len(a));
 }
 static int core_ok=0,core_fail=0,extra_ok=0,extra_unavailable=0,extra_fail=0;
 static void stage(const char*name){
  say("RV32I_P2_STAGE ");say(name);say("\n");
 }
 static void mark(const char*name,int status,int core){
- if(status==1){say("RV32I_P2_PASS ");say(name);say("\n");if(core)core_ok++;else extra_ok++;}
+ if(status==1){
+  say("RV32I_P2_PASS ");say(name);say("\n");
+  if(core){
+   core_ok++;
+   if(same(name,"ipv6-tcp-loopback"))say("RUNTIME_V2_IPV6_TCP=PASS\n");
+  }else{
+   extra_ok++;
+   /* Canonical P2 marker accompanies an actually verified operation. */
+   say("FUNCTION_PASS ");say(name);say("\n");
+  }
+ }
  else if(status==0){say("RV32I_P2_UNAVAILABLE ");say(name);say("\n");extra_unavailable++;}
  else{say("RV32I_P2_FAIL ");say(name);say("\n");if(core)core_fail++;else extra_fail++;}
 }
@@ -149,6 +213,41 @@ static void ipv4_tcp_test(void){
  ok=handshake&&waited==0&&info[2]==1&&info[3]==(u32)child&&info[5]==0;
  mark("ipv4-tcp-loopback",ok?1:-1,1);
 }
+struct sin6{
+ unsigned short family,port;u32 flowinfo;
+ unsigned char ip[16];u32 scope_id;
+};
+static void ipv6_tcp_test(void){
+ stage("ipv6-tcp-enter");
+ struct sin6 addr;zero(&addr,sizeof(addr));
+ addr.family=AF_INET6;addr.ip[15]=1; /* ::1; no host route or NIC dependency */
+ if(!loopback_up()){mark("ipv6-tcp-loopback",-1,1);return;}
+ long listener=S3(SOCKET,AF_INET6,SOCK_STREAM,0);
+ u32 alen=sizeof(addr);
+ int ok=!bad(listener)&&S3(BIND,listener,&addr,sizeof(addr))==0&&
+  S3(GETSOCKNAME,listener,&addr,&alen)==0&&alen==sizeof(addr)&&
+  S2(LISTEN,listener,1)==0;
+ if(!ok){closefd(listener);mark("ipv6-tcp-loopback",-1,1);return;}
+ long client=S3(SOCKET,AF_INET6,SOCK_STREAM,0);
+ ok=!bad(client)&&S3(CONNECT,client,&addr,sizeof(addr))==0&&
+  S3(WRITE,client,"RV32V6!",7)==7;
+ long accepted=ok?S4(ACCEPT4,listener,0,0,0):-1;
+ char got[8];zero(got,sizeof(got));
+ word total=0;
+ while(ok&&!bad(accepted)&&total<7){
+  long n=S3(READ,accepted,got+total,7-total);
+  if(n<=0){ok=0;break;}
+  total+=(word)n;
+ }
+ ok=ok&&!bad(accepted)&&total==7&&
+  equal((const unsigned char*)got,(const unsigned char*)"RV32V6!",7)&&
+  S3(WRITE,accepted,"OK",2)==2;
+ char reply[2]={0,0};
+ if(ok)ok=S3(READ,client,reply,2)==2&&
+  equal((const unsigned char*)reply,(const unsigned char*)"OK",2);
+ closefd(accepted);closefd(client);closefd(listener);
+ mark("ipv6-tcp-loopback",ok?1:-1,1);
+}
 struct algaddr{
  unsigned short family; char type[14]; u32 feat;u32 mask;char name[64];
 };
@@ -180,8 +279,20 @@ static void crypto_test(void){
  static const unsigned char sha3[32]={
  0x3a,0x98,0x5d,0xa7,0x4f,0xe2,0x25,0xb2,0x04,0x5c,0x17,0x2d,0x6b,0xd3,0x90,0xbd,
  0x85,0x5f,0x08,0x6e,0x3e,0x9d,0x52,0x5b,0x46,0xbf,0xe2,0x45,0x11,0x43,0x15,0x32};
+ static const unsigned char sha512[64]={
+ 0xdd,0xaf,0x35,0xa1,0x93,0x61,0x7a,0xba,0xcc,0x41,0x73,0x49,0xae,0x20,0x41,0x31,
+ 0x12,0xe6,0xfa,0x4e,0x89,0xa9,0x7e,0xa2,0x0a,0x9e,0xee,0xe6,0x4b,0x55,0xd3,0x9a,
+ 0x21,0x92,0x99,0x2a,0x27,0x4f,0xc1,0xa8,0x36,0xba,0x3c,0x23,0xa3,0xfe,0xeb,0xbd,
+ 0x45,0x4d,0x44,0x23,0x64,0x3c,0xe8,0x0e,0x2a,0x9a,0xc9,0x4f,0xa5,0x4c,0xa4,0x9f};
+ static const unsigned char blake2b[64]={
+ 0xba,0x80,0xa5,0x3f,0x98,0x1c,0x4d,0x0d,0x6a,0x27,0x97,0xb6,0x9f,0x12,0xf6,0xe9,
+ 0x4c,0x21,0x2f,0x14,0x68,0x5a,0xc4,0xb7,0x4b,0x12,0xbb,0x6f,0xdb,0xff,0xa2,0xd1,
+ 0x7d,0x87,0xc5,0x39,0x2a,0xab,0x79,0x2d,0xc2,0x52,0xd5,0xde,0x45,0x33,0xcc,0x95,
+ 0x18,0xd3,0x8a,0xa8,0xdb,0xf1,0x92,0x5a,0xb9,0x23,0x86,0xed,0xd4,0x00,0x99,0x23};
  mark("afalg-sha256-abc",digest_test("sha256",sha256,32),0);
+ mark("afalg-sha512-abc",digest_test("sha512",sha512,64),0);
  mark("afalg-sha3-256-abc",digest_test("sha3-256",sha3,32),0);
+ mark("afalg-blake2b-512-abc",digest_test("blake2b-512",blake2b,64),0);
 }
 static void overlay_test(void){
  stage("overlay-enter");
@@ -221,16 +332,24 @@ static void overlay_test(void){
 }
 __attribute__((noreturn,used)) void _start(void){
  say("RV32I_P2_BEGIN scope=runtime-frontier-not-full-P2\n");
+ if(!load_p2_modules()){
+   say("RV32I_P2_FRONTIER=FAIL required_kernel_module_load\n");
+   (void)S1(EXIT,1);
+   for(;;)__asm__ volatile("nop");
+ }
  tmpfs_rename_test();
  ipv4_udp_test();
  ipv4_tcp_test();
+ ipv6_tcp_test();
  crypto_test();
  overlay_test();
- if(core_fail==0&&core_ok==3&&extra_fail==0){
-   say("RV32I_P2_FRONTIER=PASS core=3 optional_capabilities_reported=true\n");
+ /* A partial/unsupported optional capability never makes the P2 frontier
+  * pass. The complete historical 18-check P2 remains a separate contract. */
+ if(core_fail==0&&core_ok==4&&extra_fail==0&&extra_unavailable==0&&extra_ok==5){
+   say("RV32I_P2_FRONTIER=PASS core=4 optional=5 unavailable=0\n");
  }else{
-   say("RV32I_P2_FRONTIER=FAIL core_or_supported_capability\n");
+   say("RV32I_P2_FRONTIER=FAIL incomplete_or_failed_capability\n");
  }
- (void)S1(EXIT,(core_fail==0&&core_ok==3&&extra_fail==0)?0:1);
+ (void)S1(EXIT,(core_fail==0&&core_ok==4&&extra_fail==0&&extra_unavailable==0&&extra_ok==5)?0:1);
  for(;;)__asm__ volatile("nop");
 }

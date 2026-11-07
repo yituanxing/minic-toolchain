@@ -1,11 +1,5 @@
 #include "target/riscv64/record_snapshot.h"
-#include "target/riscv64/legalize.h"
-#include "core/value_uses.h"
-#include "target/data_layout.h"
-#include <stdint.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
+#include "target/riscv64/core_type_query.h"
 
 /* Reuse the original optional cache and same per-function liveness
  * heuristics; no new machine representation or changed ABI constraints. */
@@ -135,6 +129,10 @@ static bool core_record_snapshot_single_call_candidate(
             instruction->value.call.result_object == candidate) {
             return false;
         }
+        if (instruction->kind == MINIC_CORE_INSTRUCTION_INDIRECT_CALL &&
+            instruction->value.indirect_call.result_object == candidate) {
+            return false;
+        }
     }
     if (producer_count != 1U || producer == MINIC_CORE_INSTRUCTION_INVALID ||
         !core_instruction_block_position(function,
@@ -161,10 +159,11 @@ bool minic_riscv64_record_call_result_snapshot_reuse_candidate(
     const MinicCoreInstruction *call;
     size_t i;
 
-    if (function == NULL || candidate_out == NULL ||
+    if (function == NULL || function->type_context == NULL ||
+        candidate_out == NULL ||
         result_object >= function->object_count ||
-        !minic_type_is_record(function->objects[result_object].type) ||
-        function->objects[result_object].element_count != 1U) {
+        !minic_riscv64_core_is_record(
+            function, function->objects[result_object].core_type_id)) {
         return false;
     }
     for (instruction_index = 0U; instruction_index < function->instruction_count;
@@ -202,9 +201,11 @@ bool minic_riscv64_record_call_result_snapshot_reuse_candidate(
         }
         candidate_object = &function->objects[candidate];
         result = &function->objects[result_object];
-        if (candidate_object->element_count != result->element_count ||
-            candidate_object->explicit_alignment != result->explicit_alignment ||
-            !minic_type_equal(candidate_object->type, result->type)) {
+        if (candidate_object->explicit_alignment != result->explicit_alignment ||
+            /* Preserve the source-C qualified nominal identity check:
+             * Core importer interns one ID per fully qualified Record.
+             * A distinct but layout-identical record cannot borrow storage. */
+            candidate_object->core_type_id != result->core_type_id) {
             continue;
         }
         *candidate_out = candidate;

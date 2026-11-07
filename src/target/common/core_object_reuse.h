@@ -2,7 +2,6 @@
 #define MINIC_TARGET_COMMON_CORE_OBJECT_REUSE_H
 #include "target/common/core_object_intervals.h"
 #include "core/core_ir.h"
-#include "frontend/ast.h"
 #include <stdbool.h>
 #include <stddef.h>
 /* Entire conservative object slot-reuse result owned by one RV64 frame.
@@ -14,8 +13,7 @@ typedef struct MinicCoreObjectReusePlan {
     bool prepared, crossblock_enabled;
 } MinicCoreObjectReusePlan;
 bool minic_core_object_reuse_plan_build(
-    const MinicC0Program *, const MinicCoreFunction *,
-    const MinicDataLayout *, size_t unit_bytes, bool,
+    const MinicCoreFunction *, size_t unit_bytes, bool,
     MinicCoreObjectReusePlan *);
 bool minic_core_object_reuse_plan_get(
     const MinicCoreObjectReusePlan *, MinicCoreObjectId,

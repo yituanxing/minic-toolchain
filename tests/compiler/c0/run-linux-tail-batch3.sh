@@ -11,7 +11,7 @@ struct show {
     __attribute__((__format__(printf, 2, 0)))
     void (*showfn)(struct show *show, const char *fmt, void *args);
 };
-static struct show state;
+static struct show state __attribute__((used));
 int main(void) { return sizeof(state) == 8 ? 0 : 1; }
 SRC
 "$minic" -S "$work/field-head.c" -o "$work/field-head.s"

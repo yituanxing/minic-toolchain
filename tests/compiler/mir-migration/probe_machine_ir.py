@@ -1,0 +1,517 @@
+#!/usr/bin/env python3
+"""Strict no-cross-toolchain GNU -S A/B and real MachineIR body-call gate.
+
+--mode golden: old direct-backend golden/differential coverage, currently green.
+--mode production: additionally preload an ELF call-stack witness and prove
+    GNU output ran *through* minic_machine_gnu_asm_emit_body.  This does not
+    trust stdout, diagnostics, a linked-but-unused symbol or a .s marker.
+
+Production tracing requires a Linux ELF *host* and an unstripped MiniC.
+Neither ptrace permissions nor target AS/QEMU are used. Intentionally opt-in: the
+targets' complete Core->MIR selectors must exist before this test turns green.
+"""
+
+import argparse
+import difflib
+import hashlib
+import os
+from pathlib import Path
+import re
+import subprocess
+import sys
+
+
+ROOT = Path(__file__).resolve().parents[3]
+CASES = (
+    "arith_call_frame", "cfg_global", "entry_backedge",
+    "aggregate_abi", "fp_scalar_abi", "packed_memory", "indirect_control",
+    "variadic_calls", "wide_integer", "inline_positive",
+)
+LOONG_PRODUCTION_EXTRAS = {
+    "record_copy_aux_layout": ROOT / "tests/target/loongarch64/record_copy_aux_layout.c",
+    "int128_pair_semantics": ROOT / "tests/target/loongarch64/int128_pair_semantics.c",
+    "opaque_source_isa_family": ROOT / "tests/target/loongarch64/opaque_source_isa_family.c",
+    "nospec_structured_mir": ROOT / "tests/target/loongarch64/nospec_structured_mir.c",
+    "machine_builtin_family": ROOT / "tests/target/loongarch64/machine_builtin_family.c",
+    "small_xchg_structured": ROOT / "tests/compiler/c0/loong-linux-small-xchg.c",
+    "named_store_mb_structured": ROOT / "tests/compiler/c0/loong-linux-named-store-mb.c",
+    "packed_hardware_results": ROOT / "tests/compiler/c0/loongarch64_packed_hardware_asm_results.c",
+    "percpu_structured_source": ROOT / "tests/target/loongarch64/percpu_structured_source.c",
+    "dbar_machine_immediate": ROOT / "tests/target/loongarch64/dbar_machine_immediate.c",
+    "loong_scalar_source_forms": ROOT / "tests/compiler/mir-migration/loong_scalar_source_forms.c",
+    "packed_uaccess_output": ROOT / "tests/compiler/c0/loongarch64_packed_uaccess_output.c",
+    "loong_llsc_extended_forms": ROOT / "tests/compiler/mir-migration/loong_llsc_extended_forms.c",
+}
+LOONG_LEGACY_NEGATIVE = ROOT / "tests/target/loongarch64/int128_pair_legacy_unsupported.c"
+LOONG_SOURCE_NEGATIVES = (
+    ("opaque_native_multi", ROOT / "tests/target/loongarch64/opaque_source_isa_negative.c", None),
+    ("bug_bad_path", ROOT / "tests/target/loongarch64/opaque_bugtable_negative.c", "MINIC_BAD_BUG_PATH"),
+    ("bug_bad_label", ROOT / "tests/target/loongarch64/opaque_bugtable_negative.c", "MINIC_BAD_BUG_LABEL"),
+    ("bug_bad_opcode", ROOT / "tests/target/loongarch64/opaque_bugtable_negative.c", "MINIC_BAD_BUG_NATIVE"),
+    ("dbar_suffix", ROOT / "tests/target/loongarch64/dbar_machine_immediate.c", "MINIC_BAD_DBAR_SUFFIX"),
+    ("dbar_constraint", ROOT / "tests/target/loongarch64/dbar_machine_immediate.c", "MINIC_BAD_DBAR_CONSTRAINT"),
+    ("dbar_dynamic", ROOT / "tests/target/loongarch64/dbar_machine_immediate.c", "MINIC_BAD_DBAR_DYNAMIC"),
+    ("clock_cpu_id_missing_memory", ROOT / "tests/compiler/mir-migration/loong_scalar_source_forms.c", "MINIC_LOONG_CLOCK_CPU_ID_MISSING_MEMORY_NEGATIVE"),
+)
+TARGETS = ("aarch64", "loongarch64")
+FIVE = ("riscv32", "riscv64", "x86_64", "aarch64", "loongarch64")
+TRACED_FUNCTION = "minic_machine_gnu_asm_emit_body"
+# These combinations were already unsupported by the legacy direct backends.
+# MachineIR migration cannot turn them into required new language features.
+# Both modes preserve the original diagnostic and no-partial-output boundary.
+LEGACY_UNSUPPORTED = {
+    ("x86_64", "inline_positive"): "source-ASM Core instruction",
+    ("riscv32", "wide_integer"): "ILP32 128-bit frame allocation",
+    ("loongarch64", "wide_integer"): "128-bit Core operation/ABI",
+}
+
+
+class Failure(Exception):
+    pass
+
+
+def run(args, *, cwd=None, env=None):
+    proc = subprocess.run(args, cwd=cwd, env=env, text=True, capture_output=True)
+    return proc
+
+
+def demand(condition, message):
+    if not condition:
+        raise Failure(message)
+
+
+def read_goldens():
+    hashes = {}
+    for raw in (Path(__file__).with_name("golden.sha256")).read_text().splitlines():
+        if raw and not raw.startswith("#"):
+            digest, case = raw.split()
+            demand(len(digest) == 64 and all(c in "0123456789abcdef" for c in digest),
+                   f"malformed SHA-256 baseline: {case}")
+            demand(case not in hashes, f"duplicate SHA-256 baseline: {case}")
+            hashes[case] = digest
+    return hashes
+
+
+def check_label_integrity(asm, key):
+    """Do not let a golden update hide a dangling Core CFG/source label."""
+    names = set(re.findall(r"(?m)^(\.L(?:mini_\w+|minic_mir_\w+|user_\d+)):", asm))
+    references = set(re.findall(r"\.L(?:mini_\w+|minic_mir_\w+|user_\d+)", asm))
+    demand(references <= names, f"{key}: dangling branch/source labels: {sorted(references - names)}")
+
+
+def check_functional_shapes(asm, arch, case):
+    key = f"{arch}/{case}"
+    if case == "arith_call_frame":
+        for symbol in ("mir_callee:", "mir_frame:", "main:"):
+            demand(symbol in asm, f"{key}: missing {symbol}")
+        demand(bool(re.search(r"(?m)^\s*(?:bl|call)\s+mir_callee(?:@PLT)?\s*$", asm)),
+               f"{key}: call to mir_callee missing")
+        if arch == "aarch64":
+            demand("x29" in asm and "sp" in asm, f"{key}: AAPCS64 frame absent")
+        elif arch == "loongarch64":
+            demand("$sp" in asm and "$ra" in asm, f"{key}: LA64 frame absent")
+    elif case == "cfg_global":
+        for marker in ("mir_cfg:", "mir_table:", "mir_global_ptr:"):
+            demand(marker in asm, f"{key}: global/relocation missing {marker}")
+        demand(re.search(r"(?m)^\s*\.(?:8byte|4byte|quad|long|dword|word)\s+mir_table\b", asm),
+               f"{key}: global relocation to mir_table absent")
+        demand(len(re.findall(r"(?m)^\.L\w+:", asm)) >= 5,
+               f"{key}: target CFG labels unexpectedly absent")
+    elif case == "entry_backedge":
+        demand("mir_backedge:" in asm, f"{key}: missing loop function")
+        demand(len(re.findall(r"(?m)^\.L\w+:", asm)) >= 2,
+               f"{key}: loop labels unexpectedly absent")
+    elif case == "aggregate_abi":
+        for marker in ("mir_make_record:", "mir_use_record:",
+                       "mir_aggregate_sink:", "main:"):
+            demand(marker in asm, f"{key}: aggregate ABI symbol missing: {marker}")
+    elif case == "fp_scalar_abi":
+        for marker in ("mir_fp_callee:", "mir_fp_bridge:",
+                       "mir_fp_sink:", "main:"):
+            demand(marker in asm, f"{key}: floating ABI symbol missing: {marker}")
+    elif case == "packed_memory":
+        for marker in ("mir_packed_update:", "mir_packed_global:",
+                       "mir_packed_sink:", "main:"):
+            demand(marker in asm, f"{key}: packed access symbol missing: {marker}")
+    elif case == "indirect_control":
+        for marker in ("mir_dispatch:", "mir_indirect_target:", "main:"):
+            demand(marker in asm, f"{key}: indirect branch symbol missing: {marker}")
+        demand(len(re.findall(r"(?m)^\.L\w+:", asm)) >= 4,
+               f"{key}: computed goto labels missing")
+    elif case == "variadic_calls":
+        for marker in ("mir_variadic_sum:", "mir_variadic_bridge:",
+                       "mir_variadic_sink:", "main:"):
+            demand(marker in asm, f"{key}: variadic ABI symbol missing: {marker}")
+    elif case == "wide_integer":
+        for marker in ("mir_wide_mul:", "mir_wide_compare:",
+                       "mir_wide_sink:", "main:"):
+            demand(marker in asm, f"{key}: 128-bit integer symbol missing: {marker}")
+    elif case == "inline_positive":
+        demand("mir_inline:" in asm, f"{key}: missing mir_inline")
+        demand(len(re.findall(r"(?m)^\s*nop\s*$", asm)) == 1,
+               f"{key}: source-owned inline ASM must appear exactly once")
+    elif case == "record_copy_aux_layout":
+        for marker in ("loong_record_copy_before_alloc:",
+                       "loong_record_copy_before_float_conversion:"):
+            demand(marker in asm, f"{key}: missing {marker}")
+        demand("$sp" in asm, f"{key}: dynamic LP64D frame absent")
+    elif case == "int128_pair_semantics":
+        for marker in ("loong_u128_pair_arithmetic:", "loong_u128_pair_compare:",
+                       "loong_i128_arithmetic_shift:", "loong_i128_signed_less:"):
+            demand(marker in asm, f"{key}: missing {marker}")
+    elif case == "opaque_source_isa_family":
+        for marker in ("loong_opaque_idle:", "loong_opaque_tlbrd:",
+                       "loong_opaque_barrier:", "loong_opaque_hotplug:",
+                       "dbar 0x700", "ibar 0"):
+            demand(marker in asm, f"{key}: missing {marker}")
+    elif case == "nospec_structured_mir":
+        demand("loong_nospec_mir:" in asm,
+               f"{key}: missing source-owned GNU nospec function")
+        for opcode in (r"sltu\s+\$t2,\s*\$t0,\s*\$t1",
+                       r"sub\.d\s+\$t2,\s*\$zero,\s*\$t2"):
+            demand(bool(re.search(opcode, asm)),
+                   f"{key}: sealed source register binding missing: {opcode}")
+    elif case == "machine_builtin_family":
+        for marker in ("loong_builtin_cpucfg:", "loong_builtin_assertions:",
+                       "loong_builtin_crc_w_b_w:", "loong_builtin_iocsrrd_b:",
+                       "loong_builtin_csrrd_w:", "loong_builtin_csrxchg_d:"):
+            demand(marker in asm, f"{key}: missing {marker}")
+        for opcode in ("cpucfg", "asrtle.d", "crcc.w.", "iocsrrd.", "csrxchg"):
+            demand(opcode in asm, f"{key}: lost typed builtin instruction {opcode}")
+        demand(not re.search(r"(?m)^\s*bl\s+__minic_target_builtin_", asm),
+               f"{key}: compiler builtin was emitted as an external call")
+    elif case == "small_xchg_structured":
+        demand("linux_xchg_small:" in asm, f"{key}: missing LL/SC helper")
+        for opcode in (r"1:\s*ll\.w\s+\$t5,\s*\$t4,\s*0",
+                       r"sc\.w\s+\$t6,\s*\$t7,\s*0",
+                       r"st\.w\s+\$t5,\s*\$t7,\s*0",
+                       r"st\.w\s+\$t6,\s*\$t7,\s*0"):
+            demand(bool(re.search(opcode, asm)),
+                   f"{key}: structured physical ASM/writeback missing {opcode}")
+    elif case == "named_store_mb_structured":
+        for marker in ("linux_store_mb32:", "linux_store_mb64:",
+                       "linux_store_mb_guarded:"):
+            demand(marker in asm, f"{key}: missing {marker}")
+        for opcode in (r"amswap_db\.w\s+\$t2,\s*\$t0,\s*\$t1",
+                       r"amswap_db\.d\s+\$t2,\s*\$t0,\s*\$t1",
+                       r"st\.d\s+\$t2,\s*\$t1,\s*0"):
+            demand(bool(re.search(opcode, asm)),
+                   f"{key}: sealed atomic store/native writeback missing {opcode}")
+    elif case == "packed_hardware_results":
+        for symbol in ("packed_pte_result:", "packed_amo_fetch:",
+                       "packed_xchg:", "packed_csr_xchg:"):
+            demand(symbol in asm, f"{key}: missing {symbol}")
+        for opcode in ("ll.d $t4, $t1, 0", "sc.d $t4, $t1, 0",
+                       "amadd_db.d $t2, $t0, $t1",
+                       "amswap_db.d $t2, $t0, $t1",
+                       "csrxchg $t1, $t0, 0"):
+            demand(opcode in asm, f"{key}: native sealed ASM missing {opcode}")
+        demand(len(re.findall(r"\bandi\s+\$t3,\s*\$t[12],\s*7", asm)) >= 5,
+               f"{key}: packed read/write runtime alignment checks missing")
+    elif case == "percpu_structured_source":
+        for symbol in ("percpu_read_b:", "percpu_read_d:",
+                       "percpu_write_b:", "percpu_write_d:",
+                       "percpu_amo_add_w:", "percpu_amo_and_d:",
+                       "percpu_amo_or_d:", "percpu_reset_fcsr:",
+                       "percpu_packed_read:", "percpu_packed_amo:"):
+            demand(symbol in asm, f"{key}: missing {symbol}")
+        for opcode in ("ldx.b", "ldx.h", "ldx.w", "ldx.d",
+                       "stx.b", "stx.h", "stx.w", "stx.d",
+                       "amadd.w", "amadd.d", "amand.w", "amand.d",
+                       "amor.w", "amor.d", "movgr2fcsr"):
+            demand(opcode in asm, f"{key}: sealed perCPU ISA missing {opcode}")
+        demand(len(re.findall(r"\bandi\s+\$t3,\s+\$t1,\s+7", asm)) >= 2,
+               f"{key}: packed perCPU native/byte stores missing alignment guards")
+    elif case == "dbar_machine_immediate":
+        for marker in ("minic_loong_dbar_18:", "minic_loong_dbar_1792:",
+                       "dbar 18", "dbar 1792"):
+            demand(marker in asm, f"{key}: sealed DBAR hardware form missing {marker}")
+        demand(asm.count("# MINIC_SOURCE_INLINE_ASM_BEGIN") == 2,
+               f"{key}: physical SOURCE_ASM occurrence count changed")
+    elif case == "loong_scalar_source_forms":
+        for marker in ("loong_scalar_cacop:", "loong_scalar_cpucfg:",
+                       "loong_scalar_fpr_read:", "loong_scalar_fpr_write:",
+                       "loong_scalar_clock:",
+                       "loong_scalar_clock_named:",
+                       "loong_scalar_clock_cpu_id:",
+                       "loong_scalar_clock_vdso_base:",
+                       "loong_scalar_clock_counter_only:",
+                       "loong_scalar_invtlb:",
+                       "loong_scalar_frametrace_csr:",
+                       "cacop 8", "cpucfg ", "movfr2gr.d", "movgr2fr.d",
+                       "rdtime.d", "la.pcrel", "invtlb 0", "csrrd "):
+            demand(marker in asm,
+                   f"{key}: sealed scalar hardware form missing {marker}")
+        demand(asm.count("# MINIC_SOURCE_INLINE_ASM_BEGIN") == 14,
+               f"{key}: physical SOURCE_ASM occurrence count changed")
+    elif case == "packed_uaccess_output":
+        # Twelve original GNU Linux user-access source instructions (four
+        # packed reads and all eight large-sentinel get/put variants) must
+        # reach the actual MachineIR serializer. Their exception-table
+        # relocation grammar and physical GPR aliases are ABI data, not
+        # ignorable assembler comments or a generic source-asm fallback.
+        for name in ("packed_uaccess_byte", "packed_uaccess_half",
+                     "packed_uaccess_word", "packed_uaccess_wide_carrier"):
+            demand(f"{name}:" in asm, f"{key}: missing packed {name}")
+        for action in ("get", "put"):
+            for width in ("byte", "half", "word", "double"):
+                demand(f"linux_large_{action}_{width}:" in asm,
+                       f"{key}: lost Linux user-{action} {width}")
+        demand(asm.count("# MINIC_SOURCE_INLINE_ASM_BEGIN") == 12 and
+               asm.count('.pushsection __ex_table, "a"') == 12 and
+               asm.count(".long ((1b) - .)") == 12 and
+               asm.count(".long ((2b) - .)") == 12 and
+               asm.count(".short (2)") == 12,
+               f"{key}: source-owned faulting ASM/exception table lost")
+        for opcode in (r"1:\s*ld\.b\s+\$t1,\s*\$t4,\s*0",
+                       r"1:\s*ld\.h\s+\$t1,\s*\$t4,\s*0",
+                       r"1:\s*ld\.w\s+\$t1,\s*\$t4,\s*0",
+                       r"1:\s*ld\.d\s+\$t1,\s*\$t4,\s*0",
+                       r"1:\s*st\.b\s+\$t2,\s*\$t4,\s*0",
+                       r"1:\s*st\.h\s+\$t2,\s*\$t4,\s*0",
+                       r"1:\s*st\.w\s+\$t2,\s*\$t4,\s*0",
+                       r"1:\s*st\.d\s+\$t2,\s*\$t4,\s*0"):
+            demand(bool(re.search(opcode, asm)),
+                   f"{key}: sealed faulting user instruction missing: {opcode}")
+        demand(asm.count('.equ .L__gpr_num_$t\\num, 12+\\num') == 12 and
+               asm.count('.short ((((.L__gpr_num_$t0) << 0) | '
+                         '((.L__gpr_num_$t1) << 5)))') == 8 and
+               asm.count('.short ((((.L__gpr_num_$t0) << 0) | '
+                         '((.L__gpr_num_zero) << 5)))') == 4,
+               f"{key}: typed error/result GPR exception fixup changed")
+        demand(len(re.findall(r"\bandi\s+\$t3,\s*\$t2,\s*3", asm)) >= 4 and
+               len(re.findall(r"\bandi\s+\$t3,\s*\$t7,\s*3", asm)) >= 4,
+               f"{key}: packed error ingress/egress alignment guards absent")
+    elif case == "loong_llsc_extended_forms":
+        # All four original Linux LL/SC families remain original SOURCE_ASM,
+        # with MachineIR carrying the physical faulting load/store operands,
+        # output lvalue ingress/egress and source-owned exception metadata.
+        for marker in ("loong_futex_cmpxchg:", "loong_add_unless_w:",
+                       "loong_add_unless_d:", "loong_futex_set:",
+                       "loong_futex_add:", "loong_futex_or:",
+                       "loong_futex_and:", "loong_futex_xor:",
+                       "loong_sub_positive_addi_w:",
+                       "loong_sub_positive_addi_d:",
+                       "loong_sub_positive_sub_w:",
+                       "loong_sub_positive_sub_d:"):
+            demand(marker in asm, f"{key}: missing sealed LL/SC {marker}")
+        demand(asm.count("# MINIC_SOURCE_INLINE_ASM_BEGIN") == 12 and
+               asm.count('.pushsection __ex_table, "a"') == 12,
+               f"{key}: source-owned LL/SC/exception-table count changed")
+        for operation in (r"1:\s*ll\.w\s+\$t1,\s*\$t4,\s*0",
+                          r"sc\.w\s+\$t0,\s*\$t5,\s*0",
+                          r"0:\s*ll\.w\s+\$t0,\s*\$t2,\s*0",
+                          r"0:\s*ll\.d\s+\$t0,\s*\$t2,\s*0",
+                          r"addi\.w\s+\$t1,\s*\$t2,\s*-1",
+                          r"addi\.d\s+\$t1,\s*\$t2,\s*-1",
+                          r"sub\.w\s+\$t1,\s*\$t2,\s*\$t5",
+                          r"sub\.d\s+\$t1,\s*\$t2,\s*\$t5"):
+            demand(bool(re.search(operation, asm)),
+                   f"{key}: sealed LL/SC machine binding absent: {operation}")
+        for operation in (r"move\s+\$t0,\s+\$t2",
+                          r"add\.w\s+\$t0,\s*\$t1,\s*\$t2",
+                          r"or\s+\$t0,\s*\$t1,\s*\$t2",
+                          r"and\s+\$t0,\s*\$t1,\s*\$t2",
+                          r"xor\s+\$t0,\s*\$t1,\s*\$t2"):
+            demand(bool(re.search(operation, asm)),
+                   f"{key}: futex RMW ISA family missing: {operation}")
+        demand(asm.count('.short ((((.L__gpr_num_$t6) << 0) | '
+                         '((.L__gpr_num_zero) << 5)))') >= 2,
+               f"{key}: futex error fixup lost selected physical register")
+    else:
+        raise Failure(f"unknown MIR test fixture {case}")
+    check_label_integrity(asm, key)
+
+
+def symbol_vaddr(binary, name):
+    proc = run(["nm", "-anS", str(binary)])
+    demand(proc.returncode == 0, f"nm failed on {binary}: {proc.stderr}")
+    hits = [(int(parts[0], 16), int(parts[1], 16))
+            for line in proc.stdout.splitlines()
+            if (parts := line.split()) and len(parts) == 4
+            and parts[3] == name and parts[2].upper() == "T"]
+    demand(len(hits) == 1, f"{binary}: expected exactly one unstripped {name}, got {len(hits)}")
+    with binary.open("rb") as handle:
+        header = handle.read(20)
+    demand(header[:4] == b"\x7fELF", f"{binary}: cannot trace non-ELF binary")
+    endian = "little" if header[5] == 1 else "big"
+    elf_type = int.from_bytes(header[16:18], endian)
+    demand(elf_type in (2, 3), f"{binary}: unsupported ELF type {elf_type}")
+    return hits[0]
+
+
+def build_witness(host_cc, work):
+    shared = work / "mir-call-witness.so"
+    proc = run([host_cc, "-std=c11", "-O0", "-g", "-shared", "-fPIC",
+                "-Wall", "-Wextra", "-Werror", str(Path(__file__).with_name(
+                    "mir_call_witness.c")), "-ldl", "-o", str(shared)])
+    demand(proc.returncode == 0, f"cannot build host MIR call witness: {proc.stderr}")
+    return shared
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--mode", choices=("golden", "production"), required=True)
+    parser.add_argument("--targets", choices=("a64-loong", "five") + FIVE,
+                        default="a64-loong")
+    parser.add_argument("--minic-cc", type=Path, required=True)
+    parser.add_argument("--build-dir", type=Path, default=ROOT / "build/debug")
+    parser.add_argument("--host-cc", default="cc")
+    parser.add_argument("--baseline-cc", type=Path,
+                        help="optional old compiler: generate and show unified diff on mismatch")
+    parser.add_argument("--case", action="append",
+                        choices=CASES + tuple(LOONG_PRODUCTION_EXTRAS),
+                        help="run only these named fixture(s) for an incremental regression")
+    args = parser.parse_args()
+    binary = args.minic_cc.resolve(strict=True)
+    baseline = args.baseline_cc.resolve(strict=True) if args.baseline_cc else None
+    work = args.build_dir.resolve() / "tests/mir-migration"
+    work.mkdir(parents=True, exist_ok=True)
+    golden = read_goldens()
+    archs = (FIVE if args.targets == "five" else
+             TARGETS if args.targets == "a64-loong" else (args.targets,))
+    loong_only_production = args.mode == "production" and archs == ("loongarch64",)
+    cases = tuple(args.case) if args.case else (
+        CASES + tuple(LOONG_PRODUCTION_EXTRAS) if loong_only_production else CASES)
+    witness = None
+    function_start = None
+    function_size = None
+    if args.mode == "production":
+        function_start, function_size = symbol_vaddr(binary, TRACED_FUNCTION)
+        witness = build_witness(args.host_cc, work)
+    calls = 0
+    positives = 0
+    unsupported = 0
+    changed_assembly = 0
+    for case in cases:
+        if case in LOONG_PRODUCTION_EXTRAS:
+            demand(loong_only_production,
+                   f"{case}: only the LoongArch64 production gate may run this case")
+        source = LOONG_PRODUCTION_EXTRAS.get(
+            case, Path(__file__).with_name(case + ".c"))
+        preprocessed = work / (case + ".i")
+        proc = run([args.host_cc, "-E", "-P", "-std=gnu11", "-x", "c",
+                    str(source), "-o", str(preprocessed)])
+        demand(proc.returncode == 0, f"GNU preprocess {case}: {proc.stderr}")
+        for arch in archs:
+            key = f"{arch}/{case}"
+            output = work / f"{arch}-{case}.s"
+            output.unlink(missing_ok=True)
+            command = [f"--target={arch}-linux", "-S", str(preprocessed),
+                       "-o", str(output)]
+            env = None
+            marker = work / f"witness-{arch}-{case}.txt"
+            if args.mode == "production":
+                marker.unlink(missing_ok=True)
+                env = os.environ.copy()
+                env.update({"LD_PRELOAD": str(witness),
+                            "MINIC_MIR_WITNESS_START": hex(function_start),
+                            "MINIC_MIR_WITNESS_SIZE": hex(function_size),
+                            "MINIC_MIR_WITNESS_PATH": str(marker),
+                            "MINIC_MIR_OUTPUT_PATH": str(output)})
+            proc = run([str(binary)] + command, env=env)
+            if (arch, case) in LEGACY_UNSUPPORTED:
+                demand(proc.returncode != 0 and not output.exists() and
+                       "error:" in proc.stderr,
+                       f"{key}: legacy gap admitted or left partial output: "
+                       f"{proc.stderr}")
+                print(f"MIR_LEGACY_UNSUPPORTED=PASS target={arch} "
+                      f"case={case} gap={LEGACY_UNSUPPORTED[(arch, case)]}")
+                unsupported += 1
+                continue
+            demand(proc.returncode == 0 and output.is_file(),
+                   f"{key}: MiniC failed ({proc.returncode}): {proc.stderr}")
+            if args.mode == "production":
+                evidence = marker.read_text().split() if marker.is_file() else []
+                published = output.stat()
+                demand(len(evidence) == 3 and
+                       evidence[0] == "typed-MIR-serializer-call" and
+                       evidence[1].isdigit() and evidence[2].isdigit() and
+                       int(evidence[1]) == published.st_dev and
+                       int(evidence[2]) == published.st_ino,
+                       f"{key}: output inode was not written by live "
+                       f"{TRACED_FUNCTION} (old FILE* path or throwaway stream)")
+                calls += 1
+            payload = output.read_bytes()
+            demand(bool(payload), f"{key}: empty .s")
+            asm = payload.decode("utf-8")
+            check_functional_shapes(asm, arch, case)
+            digest = hashlib.sha256(payload).hexdigest()
+            if case in LOONG_PRODUCTION_EXTRAS:
+                print(f"MIR_LOONG_TYPED_COMPOSITION=PASS case={case} "
+                      f"target={arch} bytes={len(payload)} typed_emitter=verified")
+                positives += 1
+                continue
+            # The historical direct output must stay byte-identical in golden
+            # mode. A typed selector is free to choose a different *correct*
+            # machine encoding; production mode instead requires a real
+            # serializer-call witness and the shape/CFG checks above. It still
+            # needs actual GNU/target runtime differential before Linux signoff.
+            demand(key in golden,
+                   f"{key}: missing committed baseline golden")
+            if args.mode == "golden" and digest != golden[key]:
+                detail = ""
+                if baseline is not None:
+                    old = work / f"baseline-{arch}-{case}.s"
+                    old_run = run([str(baseline), f"--target={arch}-linux", "-S",
+                                   str(preprocessed), "-o", str(old)])
+                    demand(old_run.returncode == 0, f"old compiler failed: {old_run.stderr}")
+                    delta = difflib.unified_diff(old.read_text().splitlines(),
+                                                 asm.splitlines(), fromfile="baseline",
+                                                 tofile="current", lineterm="")
+                    detail = "\n" + "\n".join(list(delta)[:60])
+                raise Failure(f"{key}: golden divergence expected={golden[key]} "
+                              f"actual={digest}, output={output}{detail}")
+            if args.mode == "production" and digest != golden[key]:
+                changed_assembly += 1
+                print(f"MIR_TYPED_DIFFERENTIAL=PASS target={arch} case={case} "
+                      f"legacy_sha256={golden[key]} typed_sha256={digest} "
+                      "reference=shape_only_needs_runtime")
+            else:
+                print(f"MIR_AB_GOLDEN=PASS target={arch} case={case} bytes={len(payload)} sha256={digest}")
+            positives += 1
+
+    if loong_only_production:
+        loong_negatives = (("i128_multiply", LOONG_LEGACY_NEGATIVE, None),) + LOONG_SOURCE_NEGATIVES
+        for name, negative_source, macro in loong_negatives:
+            unsupported_i = work / f"loong_{name}_unsupported.i"
+            unsupported_s = work / f"loong_{name}_unsupported.s"
+            unsupported_s.unlink(missing_ok=True)
+            preprocess = [args.host_cc, "-E", "-P", "-std=gnu11", "-x", "c"]
+            if macro is not None:
+                preprocess.append(f"-D{macro}=1")
+            proc = run(preprocess + [str(negative_source), "-o", str(unsupported_i)])
+            demand(proc.returncode == 0,
+                   f"GNU preprocess old unsupported Loong {name}: {proc.stderr}")
+            proc = run([str(binary), "--target=loongarch64-linux", "-S",
+                        str(unsupported_i), "-o", str(unsupported_s)])
+            demand(proc.returncode != 0 and not unsupported_s.exists() and
+                   "error:" in proc.stderr,
+                   f"Loong {name} lost old fail-closed contract")
+            print(f"MIR_LOONG_LEGACY_NEGATIVE=PASS operation={name}")
+    negative = Path(__file__).with_name("inline_negative.c")
+    neg_i = work / "inline_negative.i"
+    proc = run([args.host_cc, "-E", "-P", "-std=gnu11", "-x", "c",
+                str(negative), "-o", str(neg_i)])
+    demand(proc.returncode == 0, f"GNU preprocess negative: {proc.stderr}")
+    for arch in archs:
+        output = work / f"negative-{arch}.s"
+        output.unlink(missing_ok=True)
+        proc = run([str(binary), f"--target={arch}-linux", "-S", str(neg_i),
+                    "-o", str(output)])
+        demand(proc.returncode != 0, f"{arch}: missing operand in source ASM admitted")
+        demand(not output.exists(), f"{arch}: negative source ASM emitted partial .s")
+        demand("error:" in proc.stderr and "Segmentation fault" not in proc.stderr,
+               f"{arch}: bad negative diagnostic: {proc.stderr}")
+        print(f"MIR_ASM_NEGATIVE=PASS target={arch} rejected=unbound_operand")
+    print(f"MIR_MIGRATION={args.mode.upper()}_PASS targets={len(archs)} positive={positives} "
+          f"legacy_unsupported={unsupported} negative={len(archs) + (1 + len(LOONG_SOURCE_NEGATIVES) if loong_only_production else 0)} "
+          f"typed_emitter_calls={calls} changed_assembly={changed_assembly}")
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except (Failure, OSError, UnicodeError) as error:
+        print(f"MIR_MIGRATION=FAIL {error}", file=sys.stderr)
+        sys.exit(1)

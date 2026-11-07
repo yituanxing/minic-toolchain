@@ -65,19 +65,94 @@ if [[ "$mode" == shard ]]; then
   : >"$shard/mini-success-objects.txt"
   : >"$shard/mini-object-hashes.sha256"
   : >"$shard/compile.log"
+  # The restored GNU out/ tree is on a different runner. Complete generated
+  # headers and RV32 vDSO prerequisites with original GNU tools before
+  # evicting selected C owners. Otherwise Kbuild can rebuild hwprobe.o as an
+  # unselected side effect while CC points at MiniC and corrupt shard scope.
+  if ! make "${gnu_args[@]}" KBUILD_NOCMDDEP=1 -j4 prepare vdso_prepare \
+      >"$shard/gnu-prepare.log" 2>&1; then
+    echo 'RV32I_SHARD_GNU_PREPARE=FAIL' >&2
+    tail -n 60 "$shard/gnu-prepare.log" >&2
+    exit 9
+  fi
+  (cd "$out" && sha256sum --quiet -c "$prov/gcc-objects.sha256") || {
+    echo 'RV32I_SHARD_GNU_PREPARE=FAIL original_object_drift' >&2
+    exit 9
+  }
+  echo "RV32I_SHARD_GNU_PREPARE=PASS shard=$RV32I_SHARD golden_object_hashes=unchanged"
+  # Strict partial-owner source epoch: the ORIGINAL GNU .cmd, source .c,
+  # complete generated headers, exact current compiler/profile and GNU tool
+  # binaries all bind the same checkpoint identity. A valid old run artifact
+  # may preserve successes after a single shard has failed, but never lets
+  # an unproven or different-epoch C owner enter the final 1741 union.
+  partial="$shard/partial"
+  partial_helper="$GITHUB_WORKSPACE/tools/ci/linux-rv32i-shard-partial-v1.py"
+  python3 "$partial_helper" --mode init --partial "$partial" \
+    --out "$out" --root "$GITHUB_WORKSPACE" \
+    --provenance "$prov" --selected "$shard/full-objects.txt" \
+    --minic "$MINIC_CC" --source "$src" \
+    --gnu-gcc "$(command -v riscv64-linux-gnu-gcc)" \
+    --gnu-as "$(command -v riscv64-linux-gnu-as)"
+  if [[ -n "${RV32I_SHARD_RESUME:-}" ]]; then
+    test -d "$RV32I_SHARD_RESUME"
+    python3 "$partial_helper" --mode resume --partial "$partial" \
+      --out "$out" --resume "$RV32I_SHARD_RESUME"
+  fi
+  declare -A resumed=()
+  if [[ -s "$partial/checkpoint/resumed-owners.txt" ]]; then
+    while IFS= read -r owner; do
+      resumed["$owner"]=1
+      printf '%s\n' "$owner" >>"$shard/mini-success-objects.txt"
+      printf '%s  %s\n' "$(sha256sum "$out/$owner" | cut -d' ' -f1)" "$owner" >>"$shard/mini-object-hashes.sha256"
+    done <"$partial/checkpoint/resumed-owners.txt"
+  fi
   compile_rc=0
+  missing_owners=()
   for owner in "${owners[@]}"; do
     test -s "$out/$owner"
-    # Force Kbuild to route the selected C owner through MiniC, while GNU
-    # remains authoritative for every other part of the golden tree.
-    rm -f -- "$out/$owner"
+    if [[ -z "${resumed[$owner]:-}" ]]; then
+      # Force only non-restored C owners through genuine Kbuild current MiniC;
+      # no object is ever accepted merely because an old GNU .o exists.
+      rm -f -- "$out/$owner"
+      missing_owners+=("$owner")
+    fi
   done
-  MINIC="$MINIC_CC" REAL_CC=riscv64-linux-gnu-gcc \
-    MINIC_KBUILD_RV32I_ORIGIN_AUDIT=1 MINIC_PRESERVE_FAILURE_INPUTS=1 \
-    MINIC_KBUILD_SUCCESS_TRACE="$shard/mini-success-objects.txt" \
-    MINIC_KBUILD_OBJECT_HASH_TRACE="$shard/mini-object-hashes.sha256" \
-    make "${gnu_args[@]}" -j6 -k CC="$GITHUB_WORKSPACE/tests/external/linux/stage2_kbuild_cc.sh" \
-      "${owners[@]}" >"$shard/compile.log" 2>&1 || compile_rc=$?
+  if ((${#missing_owners[@]})); then
+    if [[ -n "${RV32I_SHARD_RESUME:-}" ]]; then
+      # The exact source/compiler/header/.cmd identity was checked by init
+      # and resume. Directly replay only real cache misses using the original
+      # GNU Kbuild C commands; invoking make with CC=wrapper here triggers
+      # Kconfig syncconfig and rewrites global autoconf.h/rustc_cfg inputs.
+      python3 "$partial_helper" --mode replay-missing --partial "$partial" \
+        --out "$out" --root "$GITHUB_WORKSPACE" --minic "$MINIC_CC" \
+        >"$shard/compile.log" 2>&1 || compile_rc=$?
+    else
+      # Fresh campaigns still use real selected-owner Kbuild with -k; the
+      # partial artifact persists every successful compile for later resume.
+      MINIC="$MINIC_CC" REAL_CC=riscv64-linux-gnu-gcc \
+        MINIC_KEEP_INTERMEDIATES=1 MINIC_KBUILD_RV32I_ORIGIN_AUDIT=1 MINIC_PRESERVE_FAILURE_INPUTS=1 \
+        MINIC_KBUILD_RV32_PARTIAL_DIR="$partial" \
+        MINIC_KBUILD_RV32_PARTIAL_OUT="$out" \
+        MINIC_KBUILD_RV32_PARTIAL_HELPER="$partial_helper" \
+        MINIC_KBUILD_SUCCESS_TRACE="$shard/mini-success-objects.txt" \
+        MINIC_KBUILD_OBJECT_HASH_TRACE="$shard/mini-object-hashes.sha256" \
+        make "${gnu_args[@]}" KBUILD_NOCMDDEP=1 -j6 -k CC="$GITHUB_WORKSPACE/tests/external/linux/stage2_kbuild_cc.sh" \
+          "${missing_owners[@]}" >"$shard/compile.log" 2>&1 || compile_rc=$?
+    fi
+  else
+    echo "RV32I_SHARD_SWEEP=REUSED authenticated_current_C=${#owners[@]} current_compiler_identical=true" >"$shard/compile.log"
+  fi
+  # The selected-target GNU Kbuild can regenerate real RV32 vDSO offsets
+  # despite `vdso_prepare` being up-to-date. Reconcile ONLY known changed
+  # generated headers using the frozen original GNU .cmd dependency closure;
+  # any dependent current MiniC owner is replayed with fresh GNU-E/GNU-AS.
+  # Unknown changes fail closed and preserve all previously sealed .o/.s.
+  python3 "$partial_helper" --mode reconcile --partial "$partial" \
+    --out "$out" --root "$GITHUB_WORKSPACE" --minic "$MINIC_CC"
+  # Like 3-ISA's fail-closed checkpoint seal, reject an overwritten success,
+  # missing .s, stray Kbuild C owner or unauthenticated generated-input drift.
+  python3 "$partial_helper" --mode verify --partial "$partial" --out "$out" \
+    --root "$GITHUB_WORKSPACE" --minic "$MINIC_CC"
   : >"$shard/compile-blockers.txt"
   for owner in "${owners[@]}"; do
     if [[ -s "$out/$owner" ]]; then
@@ -143,6 +218,11 @@ PY_FAILURE_GROUPS
     echo "RV32I_SHARD_BLOCKERS=COLLECTED shard=$RV32I_SHARD failed=$failed frozen=$kept make_errors=$(wc -l <"$shard/make-diagnostics.txt")"
     exit 5
   fi
+  # Kbuild may compile a header-dependent owner more than once. Publish only
+  # each final SHA-proven MiniC/GNU-AS object before the original route audit.
+  python3 "$partial_helper" --mode publish-traces --partial "$partial" \
+    --out "$out" --success-trace "$shard/mini-success-objects.txt" \
+    --digest-trace "$shard/mini-object-hashes.sha256"
   python3 "$GITHUB_WORKSPACE/tools/ci/linux-runtime-minic-route-audit-v1.py" \
     --objects-file "$shard/full-objects.txt" \
     --success-trace "$shard/mini-success-objects.txt" \
@@ -162,6 +242,24 @@ PY_FAILURE_GROUPS
   exit 0
 fi
 if [[ "$mode" == union ]]; then
+  # Bounded mixed-epoch replay: first compile one canonical C owner, then
+  # replay exactly three live vdso-offsets.h consumers if GNU Kbuild changes
+  # that generated header. All other 1737 C owners stay byte-exact to the
+  # old seven-shard MiniC producer. The old compiler ONLY authenticates the
+  # old cache; the current MiniC produces all four replayed owners.
+  replay_owner=${RV32I_REPLAY_OWNER:-}
+  producer_minic=$MINIC_CC
+  if [[ -n "$replay_owner" ]]; then
+    [[ "$replay_owner" == block/blk-mq.o ]] || {
+      echo "RV32I_OWNER_REPLAY=FAIL unexpected_owner=$replay_owner" >&2; exit 8;
+    }
+    : "${RV32I_REPLAY_PRODUCER_MINIC:?required exact old MiniC for shard SHA authentication}"
+    producer_minic=$RV32I_REPLAY_PRODUCER_MINIC
+    test -x "$producer_minic"
+    test "$(realpath "$producer_minic")" != "$(realpath "$MINIC_CC")" || {
+      echo 'RV32I_OWNER_REPLAY=FAIL old_and_new_compilers_identical' >&2; exit 8;
+    }
+  fi
   # The same merge logic and seven immutable shard contracts used by RV64,
   # parameterized for real ELF32 instead of substituting a five-owner smoke.
   test -s "$prov/gcc-baseline.txt"
@@ -176,7 +274,7 @@ if [[ "$mode" == union ]]; then
   python3 "$GITHUB_WORKSPACE/tools/ci/linux-runtime-gcc-shards-v1.py" merge \
     --elf-class 32 --full "$prov/full-c-objects.txt" \
     --shards "$RV32I_LINUX_WORK" --evidence "$merged" \
-    --out "$out" --provenance "$prov" --minic "$MINIC_CC" \
+    --out "$out" --provenance "$prov" --minic "$producer_minic" \
     --assembler "$(command -v riscv64-linux-gnu-as)"
   (cd "$merged" && sha256sum --quiet -c minic-manifest.sha256)
   # The receiver restores a GNU golden out/ tree from cache. Its generated
@@ -217,6 +315,98 @@ PY_FREEZE_GNU_CMDS
     [[ "$line" != \#* && -n "$line" ]] || continue
     install -m 644 "$merged/minic/$line" "$out/$line"
   done <"$prov/full-c-objects.txt"
+
+  if [[ -n "$replay_owner" ]]; then
+    test "$(grep -Fxc "$replay_owner" "$prov/full-c-objects.txt")" -eq 1
+    cp -a "$merged/minic-manifest.sha256" "$merged/minic-manifest-before-replay.sha256"
+    printf '%s\n' "$replay_owner" >"$merged/replay-owner.txt"
+    : >"$merged/owner-replay-success.txt"
+    : >"$merged/owner-replay-hashes.sha256"
+    # This existing path reads the ORIGINAL frozen GNU .o.cmd and directly
+    # invokes GNU -E -> NEW MiniC -S -> GNU AS for one C translation unit.
+    # Keep the fresh .i for inspection: it did NOT exist in the old artifact.
+    MINIC_KEEP_INTERMEDIATES=1 MINIC_KBUILD_RV32I_ORIGIN_AUDIT=1 \
+      python3 "$GITHUB_WORKSPACE/tools/ci/linux-runtime-kbuild-regeneration-guard-v1.py" \
+        --mode replay --out "$out" \
+        --evidence "$merged/owner-replay-evidence.json" \
+        --golden-out "$merged/gnu-cmd" \
+        --selected "$merged/replay-owner.txt" \
+        --wrapper "$GITHUB_WORKSPACE/tests/external/linux/stage2_kbuild_cc.sh" \
+        --minic "$MINIC_CC" \
+        --success-trace "$merged/owner-replay-success.txt" \
+        --digest-trace "$merged/owner-replay-hashes.sha256" \
+        >"$merged/owner-replay.log" 2>&1 || {
+          echo 'RV32I_OWNER_REPLAY=FAIL exact_GNU_E_new_MiniC_S_GNU_AS' >&2
+          tail -n 90 "$merged/owner-replay.log" >&2
+          exit 8
+        }
+    python3 "$GITHUB_WORKSPACE/tools/ci/linux-runtime-minic-route-audit-v1.py" \
+      --objects-file "$merged/replay-owner.txt" \
+      --success-trace "$merged/owner-replay-success.txt" \
+      --object-digest-trace "$merged/owner-replay-hashes.sha256" \
+      --candidates "$out"
+    if riscv64-linux-gnu-nm -u "$out/$replay_owner" | grep -Eq '[[:space:]]__blk_queue_bounce$'; then
+      echo 'RV32I_OWNER_REPLAY=FAIL residual_undefined___blk_queue_bounce' >&2
+      exit 8
+    fi
+    python3 - "$out" "$merged" "$replay_owner" "$MINIC_CC" "$producer_minic" "$src" <<'PY_SINGLE_OWNER'
+from pathlib import Path
+import hashlib
+import os
+import shutil
+import sys
+
+out, merged = map(Path, sys.argv[1:3])
+owner, current, producer, linux_src = sys.argv[3:]
+def digest(path):
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+manifest = merged / 'minic-manifest.sha256'
+prior = (merged / 'minic-manifest-before-replay.sha256').read_text().splitlines()
+if len(prior) != 1741:
+    raise SystemExit('RV32I_OWNER_REPLAY=FAIL old_universe_not_1741')
+expected = {name.removeprefix('minic/'): sha for sha, name in
+            (line.split('  ', 1) for line in prior)}
+if len(expected) != 1741 or owner not in expected:
+    raise SystemExit('RV32I_OWNER_REPLAY=FAIL missing_or_duplicate_owner')
+candidate = out / owner
+if not candidate.is_file() or candidate.is_symlink():
+    raise SystemExit('RV32I_OWNER_REPLAY=FAIL missing_new_object')
+new_sha = digest(candidate)
+old_sha = expected[owner]
+if new_sha == old_sha:
+    raise SystemExit('RV32I_OWNER_REPLAY=FAIL no_new_object_bytes')
+for name, old in expected.items():
+    if name != owner and digest(merged / 'minic' / name) != old:
+        raise SystemExit(f'RV32I_OWNER_REPLAY=FAIL changed_legacy_candidate={name}')
+shutil.copy2(candidate, merged / 'minic' / owner)
+replacement = [f'{new_sha}  minic/{owner}' if name == f'minic/{owner}' else f'{sha}  {name}'
+               for sha, name in (line.split('  ', 1) for line in prior)]
+manifest.write_text('\n'.join(replacement) + '\n')
+cmd = merged / 'gnu-cmd' / 'block/.blk-mq.o.cmd'
+fresh_i = out / 'block/blk-mq.minic-stage2.i'
+canonical_src = Path(linux_src) / 'block/blk-mq.c'
+if not fresh_i.is_file() or fresh_i.stat().st_size == 0 or not cmd.is_file() or not canonical_src.is_file():
+    raise SystemExit('RV32I_OWNER_REPLAY=FAIL fresh_i_or_frozen_cmd_missing')
+with (merged / 'owner-replay-attestation.txt').open('w') as f:
+    for key, value in (
+        ('replay_owner', owner), ('source_mode', 'fresh_GNU_E_from_original_frozen_Kbuild_cmd'),
+        ('attestation_scope', 'primary_stage_only_before_generated_header_dependent_replay'),
+        ('producer_commit', os.environ.get('RV32I_BASE_SHA', 'unknown')),
+        ('current_commit', os.environ.get('GITHUB_SHA', 'unknown')),
+        ('original_C_owners', '1741'), ('primary_stage_replayed_C_owners', '1'),
+        ('primary_stage_unchanged_cached_C_owners', '1740'),
+        ('canonical_original_C_sha256', digest(canonical_src)),
+        ('old_1741_manifest_sha256', digest(merged / 'minic-manifest-before-replay.sha256')),
+        ('producer_minic_sha256', digest(Path(producer))),
+        ('current_minic_sha256', digest(Path(current))),
+        ('original_owner_sha256', old_sha), ('replayed_owner_sha256', new_sha),
+        ('frozen_cmd_sha256', digest(cmd)), ('fresh_preprocessed_i_sha256', digest(fresh_i))):
+        f.write(f'{key}={value}\n')
+print(f'RV32I_PRIMARY_OWNER_REPLAY=PASS owner={owner} old_sha={old_sha} new_sha={new_sha} interim_unchanged_cached=1740 final_header_replay=pending fresh_i={digest(fresh_i)}')
+PY_SINGLE_OWNER
+    (cd "$merged" && sha256sum --quiet -c minic-manifest.sha256)
+  fi
 
   # RV32I deliberately has no hardware M extension. The original Linux
   # kernel is built with rv32ima, but MiniC's I-only C objects therefore
@@ -326,10 +516,17 @@ PY_RV32_LINK_INPUTS
     | tee "$merged/header-impact.log"
   python3 "$regen_guard" --mode snapshot --out "$out" \
     --evidence "$merged/generated-after-first-link.json"
+  if [[ -n "$replay_owner" ]]; then
+    # The prior official one-owner run proved an actual vdso-offsets.h delta
+    # and exactly these three source owners. Fail closed on ANY different
+    # generated input or dependency closure; never expand to a large sweep.
+    python3 "$GITHUB_WORKSPACE/tools/ci/linux-rv32i-four-owner-replay-v1.py" \
+      --mode gate --merged "$merged" --out "$out" || exit 8
+  fi
   if [[ -s "$merged/header-affected-objects.txt" ]]; then
     : >"$merged/header-replay-success.txt"
     : >"$merged/header-replay-hashes.sha256"
-    MINIC_KBUILD_RV32I_ORIGIN_AUDIT=1 \
+    MINIC_KEEP_INTERMEDIATES=1 MINIC_KBUILD_RV32I_ORIGIN_AUDIT=1 \
       python3 "$regen_guard" --mode replay --out "$out" \
         --evidence "$merged/generated-before.json" \
         --golden-out "$merged/gnu-cmd" \
@@ -435,8 +632,20 @@ PY_UNION
   test -s "$out/arch/riscv/boot/Image"
   riscv64-linux-gnu-readelf -h "$out/vmlinux" >"$merged/minic-vmlinux-elf.txt"
   grep -Eq 'Class:[[:space:]]+ELF32' "$merged/minic-vmlinux-elf.txt"
-  printf 'RV32I_UNION_LINK=PASS ELF32=1 full_MiniC_C=true original_GNU_Kbuild=true image_sha256=%s QEMU_P1=NOT_RUN\n' \
-    "$(sha256sum "$out/arch/riscv/boot/Image" | cut -d' ' -f1)" | tee "$merged/union-result.txt"
+  if [[ -n "$replay_owner" ]]; then
+    # This independently verifies ALL 1741 final C SHA digests (not just the
+    # four replaced files), both GNU-E and current-MiniC intermediate hashes,
+    # exact original Kbuild .cmd/source identities and the old/new header.
+    python3 "$GITHUB_WORKSPACE/tools/ci/linux-rv32i-four-owner-replay-v1.py" \
+      --mode attest --merged "$merged" --out "$out" \
+      --linux-source "$src" --producer-minic "$producer_minic" \
+      --current-minic "$MINIC_CC" || exit 8
+    printf 'RV32I_FOUR_OWNER_REPLAY_LINK=PASS ELF32=1 old_producer_C=1737 current_head_C=4 original_Kbuild=true mixed_epochs=true full_current_head_C=false image_sha256=%s QEMU_P1=NOT_RUN\n' \
+      "$(sha256sum "$out/arch/riscv/boot/Image" | cut -d' ' -f1)" | tee "$merged/union-result.txt"
+  else
+    printf 'RV32I_UNION_LINK=PASS ELF32=1 full_MiniC_C=true original_GNU_Kbuild=true image_sha256=%s QEMU_P1=NOT_RUN\n' \
+      "$(sha256sum "$out/arch/riscv/boot/Image" | cut -d' ' -f1)" | tee "$merged/union-result.txt"
+  fi
   exit 0
 fi
 actual_version=$(make "${gnu_args[@]}" -s kernelversion)

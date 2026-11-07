@@ -133,9 +133,9 @@ static bool static_pointer_offset_bytes(const MinicParser *parser,
 
     if (parser == NULL || byte_offset == NULL ||
         !minic_const_eval_integer(
-            parser->program, parser->target_info, offset_expression_id, &constant) ||
-        !minic_const_value_as_int64(parser->program, parser->target_info, &constant, &count) ||
-        !minic_data_layout_type(minic_target_info_data_layout(parser->target_info),
+            parser->program, parser->invocation, offset_expression_id, &constant) ||
+        !minic_const_value_as_int64(parser->program, parser->invocation, &constant, &count) ||
+        !minic_data_layout_type(parser->invocation,
                                 parser->program,
                                 pointee_type,
                                 &size,
@@ -408,7 +408,7 @@ static bool static_pointer_mask_bits(const MinicParser *parser, uint64_t value, 
     if (parser == NULL || bits == NULL) {
         return false;
     }
-    layout = minic_target_info_data_layout(parser->target_info);
+    layout = minic_target_info_data_layout(&parser->invocation->machine);
     if (layout == NULL || layout->pointer_size == 0U || layout->pointer_size > 8U) {
         return false;
     }
@@ -438,7 +438,7 @@ static bool static_pointer_integer_constant_bits(const MinicParser *parser,
     operand = minic_c0_program_expression(parser->program, expression->value.unary.operand);
     if (operand == NULL || !minic_type_is_integer(operand->type) ||
         !minic_const_eval_integer(
-            parser->program, parser->target_info, expression->value.unary.operand, &constant)) {
+            parser->program, parser->invocation, expression->value.unary.operand, &constant)) {
         return false;
     }
     return static_pointer_mask_bits(parser, constant.bits, bits);
@@ -457,19 +457,19 @@ static bool static_pointer_absolute_offset_bits(const MinicParser *parser,
 
     if (parser == NULL || byte_offset_bits == NULL ||
         !minic_const_eval_integer(
-            parser->program, parser->target_info, offset_expression_id, &constant) ||
-        !minic_target_info_sizeof_type(parser->target_info, parser->program, pointee_type, &size) ||
+            parser->program, parser->invocation, offset_expression_id, &constant) ||
+        !minic_target_info_sizeof_type(parser->invocation, parser->program, pointee_type, &size) ||
         size == 0U) {
         return false;
     }
     if (minic_const_value_as_int64(
-            parser->program, parser->target_info, &constant, &signed_count)) {
+            parser->program, parser->invocation, &constant, &signed_count)) {
         count_bits = (uint64_t)signed_count;
     } else {
         unsigned int width;
 
         if (!minic_target_info_integer_width(
-                parser->target_info, parser->program, constant.type, &width) ||
+                parser->invocation, parser->program, constant.type, &width) ||
             width == 0U || width > 64U) {
             return false;
         }
@@ -512,7 +512,7 @@ static bool static_absolute_lvalue_address_bits(const MinicParser *parser,
         record = minic_c0_program_record(parser->program, expression->value.member.record_id);
         if (base == NULL || record == NULL ||
             !minic_data_layout_record_field_offset(
-                minic_target_info_data_layout(parser->target_info),
+                parser->invocation,
                 parser->program,
                 record,
                 expression->value.member.field_index,
@@ -761,11 +761,11 @@ static bool static_pointer_initializer_from_expression(MinicParser *parser,
         MinicExpressionId selected_id;
 
         if (minic_const_eval_integer(parser->program,
-                                     parser->target_info,
+                                     parser->invocation,
                                      expression->value.conditional.condition,
                                      &condition_constant) &&
             minic_const_value_as_int64(
-                parser->program, parser->target_info, &condition_constant, &condition_value)) {
+                parser->program, parser->invocation, &condition_constant, &condition_value)) {
             selected_id = condition_value != 0 ? expression->value.conditional.when_true
                                                : expression->value.conditional.when_false;
             return static_pointer_initializer_from_expression(parser, selected_id, initializer);
@@ -863,14 +863,14 @@ static bool static_floating_constant_value(MinicParser *parser,
         MinicConstValue constant;
 
         if (!minic_const_eval_integer(
-                parser->program, parser->target_info, expression_id, &constant)) {
+                parser->program, parser->invocation, expression_id, &constant)) {
             return false;
         }
         if (minic_type_is_unsigned_integer(constant.type)) {
             MinicConstValue widened;
 
             if (!minic_const_value_convert_integer(parser->program,
-                                                   parser->target_info,
+                                                   parser->invocation,
                                                    &constant,
                                                    minic_type_unsigned_long_long(),
                                                    &widened)) {
@@ -882,7 +882,7 @@ static bool static_floating_constant_value(MinicParser *parser,
             int64_t signed_value;
 
             if (!minic_const_value_as_int64(
-                    parser->program, parser->target_info, &constant, &signed_value)) {
+                    parser->program, parser->invocation, &constant, &signed_value)) {
                 return false;
             }
             *value = (double)signed_value;

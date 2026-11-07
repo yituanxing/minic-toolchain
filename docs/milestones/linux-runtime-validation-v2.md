@@ -256,3 +256,67 @@ The historical 145-module / 203-function gate remains the P3 release oracle.
 The remaining compiler-phase integration action is only to qualify a
 MiniC-built Image through P1.  No further runtime-test architecture work is
 required before starting the native preprocessor module.
+
+## 2026-10-31: five-ISA P2/P3 strict-verification follow-up
+
+The paragraph above records the earlier *compiler V1* scope; it does not
+certify completion of the later five-ISA P2/P3 release gate.
+
+Verified separately: x86-64, RV32, RV64, AArch64 and LoongArch64 each have
+real Linux 6.6.143 MiniC P0/P1 QEMU evidence. On RV64, the original historical
+guest asset has additionally passed its 145/145 module and 203/203 function
+gate under both a newly built MiniC Image and an exact-config GNU reference
+Image. These are different tiers and must not be conflated.
+
+Full P2 is **18 distinct checks on each target**, with P0 and P1 in the same
+boot (40 manifest checks), QEMU exit code zero, one normal poweroff, and zero
+FAIL, SKIP or UNAVAILABLE results. The `p2_probe.c` guest has been expanded
+from four to eleven real operations (four original block/filesystem probes,
+IPv4/IPv6 netfilter getsockopt, IPv6 TCP connect/send/receive, and four AF_ALG
+`abc` known-answer digests). It is **still only a frontier**, and fails its
+own process exit status unless **all eleven** operations pass; no combination
+of its markers certifies full P2. The full P2
+oracle separately requires `RUNTIME_V2_P2_FULL_END pass=18 fail=0 skip=0` and
+the 18 canonical manifest markers **exactly once**. This new endpoint must be
+emitted only after 18 real guest operations, not synthetically in a host log.
+
+The strict log checker requires QEMU's actual exit status as a separate input:
+
+```sh
+python3 tests/external/linux/runtime_v2_log_check.py \
+    --profile p2 --log "$QEMU_LOG" --qemu-rc "$QEMU_EXIT_CODE"
+```
+
+`--qemu-timeout`, a missing/nonzero QEMU code, duplicate or missing P2 result,
+any negative/skip marker, missing full endpoint, or missing poweroff fails
+closed. The checker is only the **log-level** oracle: the caller must still
+record and check the target's ELF ABI, Image/config/initrd SHA-256, QEMU device
+list and exact GNU-versus-MiniC artifact identities. Synthetic unit tests
+exercise positive and adversarial oracle cases; they are not guest evidence.
+
+The historical P3 archive `natural145-v024-cold-overlay.cpio` is **RV64-only**:
+all 145 `.ko` and the static guest `/init` have RISC-V ELF machine type. Its
+145 module IDs include RISC-V KVM and Sunxi/StarFive SoC drivers; the guest C
+test source is not present in the current repository. The
+`legacy_145_runtime_bridge.py` oracle pins the original archive checksum,
+original 145/203 ID-set fingerprints, QEMU rc, poweroff and ABI/error checks.
+It must not be generalized to other ISAs by replacing architecture flags or
+repeating PASS strings. Each new ISA requires a target-native GNU-and-MiniC
+module/config/initrd pair and an audited equivalent 203-test guest before
+receiving P3 PASS. No missing or platform-inapplicable test is counted PASS.
+
+RV64 frontier comparison (exact same gzip initramfs, same QEMU command shape):
+the current MiniC and GNU Images each returned QEMU rc=0 and clean poweroff;
+the IPv6 TCP probe passed, while the ten other operations reported SKIP
+because required built-in features/modules or the ext4 test disk were absent.
+Both P2 guest exits were nonzero and both **fail full P2**. Their clean QEMU
+exits are not probe PASS. Rebuilding feature-complete per-ISA `.config`,
+matching modules and QEMU devices is prerequisite to the 18-check run.
+In particular, the pinned Linux 6.6.143 tree has no
+`arch/loongarch/kvm/` implementation; the canonical P2 `kvm-device-created`
+check cannot be certified there from this source tree by enabling a config
+symbol alone. This is a **hard target-capability gap**, not a permitted SKIP.
+
+**Open as of this note:** five-ISA P2 **18/18 not yet run**; four non-RV64 P3
+equivalent guest assets **not yet built**. `PASS` belongs only to tiers with
+complete, recorded QEMU and oracle evidence, never to skipped jobs or markers.

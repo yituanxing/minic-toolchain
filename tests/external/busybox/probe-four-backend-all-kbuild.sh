@@ -13,8 +13,23 @@ prefix=$4
 qemu=$5
 sysroot=$6
 repo=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
-work=$(mktemp -d)
-trap 'rm -rf "$work"' EXIT HUP INT TERM
+case "${FOUR_BACKEND_BUSYBOX_AARCH64_PIE:-0}" in
+  0|1) ;;
+  *) echo 'FOUR_BACKEND_BUSYBOX_ALL_PIE=INVALID opt_in_must_be_0_or_1' >&2; exit 1 ;;
+esac
+# Keep original ephemeral behavior. A named, *new* run directory is an
+# explicit CI evidence opt-in; never delete or overwrite previous evidence.
+if [ -n "${FOUR_BACKEND_BUSYBOX_ALL_WORK_DIR:-}" ]; then
+  work=$FOUR_BACKEND_BUSYBOX_ALL_WORK_DIR
+  if [ -e "$work" ]; then
+    echo "FOUR_BACKEND_BUSYBOX_ALL_WORK=REFUSE_EXISTING path=$work" >&2
+    exit 1
+  fi
+  mkdir -p "$work"
+else
+  work=$(mktemp -d)
+  trap 'rm -rf "$work"' EXIT HUP INT TERM
+fi
 src="$work/src"
 report="$work/report"
 mkdir -p "$src" "$report"
@@ -22,13 +37,24 @@ mkdir -p "$src" "$report"
 echo "FOUR_BACKEND_BUSYBOX_ALL_KBUILD_START target=$target original_commit=1a64f6a20aaf6ea4dbba68bbfa8cc1ab7e5c57c4 mode=upstream_allyesconfig"
 # Reuse x86's host-link-compatible upstream Kconfig policy with the actual
 # cross GNU compiler. Source and Kbuild itself remain pristine.
+# GNU cross Kbuild can link PIE. Replacing it with non-PIE MiniC C objects
+# gives unsafe relocations against interposable libc data (AArch optind is
+# already proven by Stage4). The existing target-qualified MiniC -fPIE path
+# is requested only for the exact opted-in AArch64 Stage5 run; preserve the
+# original RISCV/x86 behavior and leave legacy AArch/Loong defaults alone.
+minic_pic=$(case "$target" in
+  riscv64|x86_64) printf 1 ;;
+  aarch64) printf '%s' "${FOUR_BACKEND_BUSYBOX_AARCH64_PIE:-0}" ;;
+  *) printf 0 ;;
+esac)
+echo "FOUR_BACKEND_BUSYBOX_ALL_MINIC_PIE=MODE target=$target enabled=$minic_pic original_Kbuild=1"
 if timeout 900s env CROSS_COMPILE="$prefix" \
     PKG_CONFIG=pkg-config \
     BUSYBOX_ALLYES_LINK_COMPATIBLE=1 \
     BUSYBOX_ALLYES_MIXED_BULK=1 \
     BUSYBOX_ALLYES_CROSS_PREFIX="$prefix" \
     BUSYBOX_ALLYES_MINIC_TARGET="$target-linux" \
-    BUSYBOX_ALLYES_MINIC_PIC="$(if [ "$target" = riscv64 ]; then printf 1; else printf 0; fi)" \
+    BUSYBOX_ALLYES_MINIC_PIC="$minic_pic" \
     BUSYBOX_ALLYES_QEMU="$qemu" \
     BUSYBOX_ALLYES_SYSROOT="$sysroot" \
     python3 "$repo/tests/external/busybox/allyes_sweep.py" \

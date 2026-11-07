@@ -1,9 +1,97 @@
 #include "frontend/ast.h"
+#include "frontend/ast_traversal.h"
 #include "frontend/ast_verifier.h"
 #include "frontend/cast_normalization.h"
+#include "target/source_policy/source_info.h"
 
 #include <stdbool.h>
 #include <string.h>
+
+typedef struct MinicTestChildIds {
+    MinicExpressionId values[MINIC_MAX_FUNCTION_PARAMETERS + 1U];
+    size_t count;
+} MinicTestChildIds;
+
+static bool collect_child_id(MinicExpressionId id, void *opaque) {
+    MinicTestChildIds *ids = opaque;
+    if (ids == NULL || ids->count >= MINIC_MAX_FUNCTION_PARAMETERS + 1U)
+        return false;
+    ids->values[ids->count++] = id;
+    return true;
+}
+
+static bool increment_child_id(MinicExpressionId *id, void *opaque) {
+    (void)opaque;
+    if (id == NULL || *id == SIZE_MAX) return false;
+    *id += 1U;
+    return true;
+}
+
+/* A source CALL may have up to 56 separately allocated overflow arguments.
+ * Old nominally-const walkers would write each value back through the same
+ * heap pointer, even when given a shallow copy of the Expression. Keep the
+ * backing array in read-only storage to enforce the new physical contract. */
+static int test_const_call_child_visitor(void) {
+    static const uint32_t readonly_overflow[
+        MINIC_MAX_FUNCTION_PARAMETERS - MINIC_CALL_INLINE_ARGUMENTS] = {101U, 102U};
+    uint32_t writable_overflow[
+        MINIC_MAX_FUNCTION_PARAMETERS - MINIC_CALL_INLINE_ARGUMENTS];
+    MinicExpression call;
+    MinicTestChildIds ids = {{0}, 0U};
+    size_t i;
+
+    (void)memset(&call, 0, sizeof(call));
+    call.kind = MINIC_EXPRESSION_CALL;
+    call.value.call.function_id = 3U;
+    call.value.call.callee = MINIC_EXPRESSION_INVALID;
+    call.value.call.argument_count = MINIC_MAX_FUNCTION_PARAMETERS;
+    for (i = 0U; i < MINIC_CALL_INLINE_ARGUMENTS; ++i)
+        call.value.call.arguments[i] = (uint32_t)(i + 10U);
+    /* The cast does not grant writes: a const visitor must only load from
+     * the borrowed C representation, whose historical ABI is `uint32_t *`. */
+    call.value.call.overflow_arguments = (uint32_t *)(const void *)readonly_overflow;
+    if (!minic_c0_expression_visit_child_ids(&call, collect_child_id, &ids) ||
+        ids.count != MINIC_MAX_FUNCTION_PARAMETERS || ids.values[0] != 10U ||
+        ids.values[MINIC_CALL_INLINE_ARGUMENTS] != 101U ||
+        ids.values[MINIC_CALL_INLINE_ARGUMENTS + 1U] != 102U ||
+        ids.values[MINIC_MAX_FUNCTION_PARAMETERS - 1U] != 0U ||
+        call.value.call.overflow_arguments != (uint32_t *)(const void *)readonly_overflow)
+        return 90;
+
+    /* The indirect CALL's function-expression edge precedes all arguments. */
+    call.value.call.function_id = MINIC_FUNCTION_INVALID;
+    call.value.call.callee = 777U;
+    (void)memset(&ids, 0, sizeof(ids));
+    if (!minic_c0_expression_visit_child_ids(&call, collect_child_id, &ids) ||
+        ids.count != MINIC_MAX_FUNCTION_PARAMETERS + 1U ||
+        ids.values[0] != 777U || ids.values[1] != 10U ||
+        ids.values[1U + MINIC_CALL_INLINE_ARGUMENTS] != 101U ||
+        call.value.call.callee != 777U) return 91;
+
+    /* A real rewriting pass keeps the same edge order, and *can* mutate
+     * the independent overflow array. No writable visitor is used by a
+     * validator, ModuleIR importer, or Core constant-fact query. */
+    (void)memcpy(writable_overflow, readonly_overflow, sizeof(writable_overflow));
+    call.value.call.overflow_arguments = writable_overflow;
+    if (!minic_c0_expression_remap_child_ids(&call, increment_child_id, NULL) ||
+        call.value.call.callee != 778U ||
+        call.value.call.arguments[0] != 11U ||
+        call.value.call.arguments[MINIC_CALL_INLINE_ARGUMENTS - 1U] !=
+            10U + MINIC_CALL_INLINE_ARGUMENTS ||
+        writable_overflow[0] != 102U || writable_overflow[1] != 103U)
+        return 92;
+
+    call.value.call.argument_count = MINIC_MAX_FUNCTION_PARAMETERS + 1U;
+    if (minic_c0_expression_visit_child_ids(&call, collect_child_id, &ids) ||
+        minic_c0_expression_remap_child_ids(&call, increment_child_id, NULL))
+        return 93;
+    call.value.call.argument_count = MINIC_CALL_INLINE_ARGUMENTS + 1U;
+    call.value.call.overflow_arguments = NULL;
+    if (minic_c0_expression_visit_child_ids(&call, collect_child_id, &ids) ||
+        minic_c0_expression_remap_child_ids(&call, increment_child_id, NULL))
+        return 94;
+    return 0;
+}
 
 static MinicSourceSpan test_span(size_t offset) {
     MinicSourceSpan span;
@@ -119,7 +207,6 @@ static int test_pointer_bitcast_identity(void) {
     minic_c0_local_initialize(&local);
     local.name_span = test_span(0U);
     local.type = int_pointer;
-    local.element_count = 1U;
     if (!minic_c0_program_add_local(&program, &local, &local_id)) {
         minic_c0_program_destroy(&program);
         return 4;
@@ -214,7 +301,6 @@ static int test_malformed_contracts(void) {
     local.name_span = test_span(0U);
     local.type = minic_type_int();
     local.type.is_plain_char = true;
-    local.element_count = 1U;
     if (!minic_c0_program_add_local(&program, &local, &local_id) ||
         minic_c0_program_verify(&program, MINIC_C0_AST_PARSED)) {
         minic_c0_program_destroy(&program);
@@ -227,7 +313,6 @@ static int test_malformed_contracts(void) {
     local.name_span = test_span(0U);
     local.type = minic_type_int();
     local.type.function_type_id = 0U;
-    local.element_count = 1U;
     if (!minic_c0_program_add_local(&program, &local, &local_id) ||
         minic_c0_program_verify(&program, MINIC_C0_AST_PARSED)) {
         minic_c0_program_destroy(&program);
@@ -240,13 +325,74 @@ static int test_malformed_contracts(void) {
     local.name_span = test_span(0U);
     local.type = minic_type_int();
     local.type.pointer_qualifiers = 1U;
-    local.element_count = 1U;
     if (!minic_c0_program_add_local(&program, &local, &local_id) ||
         minic_c0_program_verify(&program, MINIC_C0_AST_PARSED)) {
         minic_c0_program_destroy(&program);
         return 14;
     }
     minic_c0_program_destroy(&program);
+    return 0;
+}
+
+static bool verify_builtin_local(const MinicTargetInvocation *target, MinicType type) {
+    MinicC0Program program;
+    MinicLocal local;
+    MinicLocalId local_id;
+    bool valid;
+
+    minic_c0_program_initialize(&program);
+    minic_c0_local_initialize(&local);
+    local.name_span = test_span(0U);
+    local.type = type;
+    if (!minic_c0_program_add_local(&program, &local, &local_id)) {
+        minic_c0_program_destroy(&program);
+        return false;
+    }
+    valid = minic_c0_program_verify_target(&program, MINIC_C0_AST_PARSED, target);
+    minic_c0_program_destroy(&program);
+    return valid;
+}
+
+/* The type-role adapter centralizes extended language declarations. The
+ * builtin va_list source identity is now Program-owned and shape-checked by
+ * TargetInfo, rather than a frontend-only scalar base-kind. */
+static int test_builtin_type_target_admission(void) {
+    static const MinicTargetArchitecture architectures[] = {
+        MINIC_TARGET_ARCH_RISCV32,
+        MINIC_TARGET_ARCH_RISCV64,
+        MINIC_TARGET_ARCH_X86_64,
+        MINIC_TARGET_ARCH_AARCH64,
+        MINIC_TARGET_ARCH_LOONGARCH64
+    };
+    size_t index;
+
+    for (index = 0U; index < sizeof(architectures) / sizeof(architectures[0]); ++index) {
+        MinicTargetInvocation invocation;
+        const MinicTargetInvocation *target = &invocation;
+        MinicType malformed, sve_builtin, forged_role, forged_id;
+        bool is_aarch64, has_extended_float;
+
+        is_aarch64 = architectures[index] == MINIC_TARGET_ARCH_AARCH64;
+        has_extended_float = architectures[index] != MINIC_TARGET_ARCH_RISCV32;
+        malformed = minic_type_float128();
+        malformed.integer_rank = MINIC_INTEGER_RANK_INT;
+        sve_builtin = minic_type_header_builtin(
+            5U, MINIC_BUILTIN_DECLARATION_HEADER_ONLY_OPAQUE);
+        forged_role = minic_type_header_builtin(
+            5U, MINIC_BUILTIN_DECLARATION_FIXED_VECTOR128_STORAGE);
+        forged_id = minic_type_header_builtin(
+            999U, MINIC_BUILTIN_DECLARATION_HEADER_ONLY_OPAQUE);
+        if (!minic_target_invocation_begin(
+                &invocation, minic_target_info_for_architecture(architectures[index])) ||
+            !verify_builtin_local(target, minic_type_float()) ||
+            verify_builtin_local(target, minic_type_float128()) != has_extended_float ||
+            verify_builtin_local(target, malformed) ||
+            verify_builtin_local(target, sve_builtin) != is_aarch64 ||
+            verify_builtin_local(target, forged_role) ||
+            verify_builtin_local(target, forged_id)) {
+            return 90;
+        }
+    }
     return 0;
 }
 
@@ -260,7 +406,6 @@ static int test_verify_failure_provenance(void) {
     minic_c0_local_initialize(&local);
     local.name_span = test_span(0U);
     local.type = minic_type_int();
-    local.element_count = 1U;
     local.explicit_alignment = 3U;
     if (!minic_c0_program_add_local(&program, &local, &local_id) ||
         minic_c0_program_verify_detailed(&program, MINIC_C0_AST_PARSED, &failure) ||
@@ -271,6 +416,175 @@ static int test_verify_failure_provenance(void) {
     }
     minic_c0_program_destroy(&program);
     return 0;
+}
+
+/* A VLA is identified by its complete runtime count/address pair, not by a
+ * second C-array extent stored alongside the element type. The verifier must
+ * reject a half-published pair and a forged pair of hidden locals. */
+static int test_runtime_array_pair_contract(void) {
+    MinicC0Program program;
+    MinicLocal local;
+    MinicLocalId array_id, count_id, address_id;
+    MinicType pointer_type;
+    MinicC0AstVerifyFailure failure;
+    int result = 0;
+
+    minic_c0_program_initialize(&program);
+    if (!minic_type_pointer_to(minic_type_int(), &pointer_type)) {
+        result = 100;
+        goto finish;
+    }
+    minic_c0_local_initialize(&local);
+    local.name_span = test_span(0U);
+    local.type = minic_type_int();
+    if (!minic_c0_program_add_local(&program, &local, &array_id)) {
+        result = 101;
+        goto finish;
+    }
+    local.name_span = test_span(1U);
+    local.type = minic_type_unsigned_long();
+    if (!minic_c0_program_add_local(&program, &local, &count_id)) {
+        result = 102;
+        goto finish;
+    }
+    local.name_span = test_span(2U);
+    local.type = pointer_type;
+    if (!minic_c0_program_add_local(&program, &local, &address_id)) {
+        result = 103;
+        goto finish;
+    }
+    if (!minic_c0_program_verify(&program, MINIC_C0_AST_PARSED)) {
+        result = 104;
+        goto finish;
+    }
+    program.locals[array_id].dynamic_count_local_id = count_id;
+    if (minic_c0_program_verify_detailed(&program, MINIC_C0_AST_PARSED, &failure) ||
+        failure.stage != MINIC_C0_AST_VERIFY_LOCAL || failure.index != array_id) {
+        result = 105;
+        goto finish;
+    }
+    program.locals[array_id].dynamic_address_local_id = address_id;
+    if (!minic_c0_program_verify(&program, MINIC_C0_AST_PARSED)) {
+        result = 106;
+        goto finish;
+    }
+    /* A bound local is an integer, never an allocation-address local. */
+    program.locals[array_id].dynamic_count_local_id = address_id;
+    if (minic_c0_program_verify_detailed(&program, MINIC_C0_AST_PARSED, &failure) ||
+        failure.stage != MINIC_C0_AST_VERIFY_LOCAL || failure.index != array_id) {
+        result = 107;
+        goto finish;
+    }
+    program.locals[array_id].dynamic_count_local_id = count_id;
+    program.locals[count_id].type = minic_type_int();
+    if (minic_c0_program_verify_detailed(&program, MINIC_C0_AST_PARSED, &failure) ||
+        failure.stage != MINIC_C0_AST_VERIFY_LOCAL || failure.index != array_id) {
+        result = 108;
+        goto finish;
+    }
+finish:
+    minic_c0_program_destroy(&program);
+    return result;
+}
+
+static int test_flexible_record_tail_contract(void) {
+    MinicC0Program program;
+    MinicRecordId record_id;
+    MinicType incomplete_type;
+    int result = 0;
+
+    minic_c0_program_initialize(&program);
+    if (!minic_c0_program_add_record(&program, "Tail", 4U, &record_id) ||
+        !minic_c0_record_add_field(&program, record_id, "length", 6U,
+                                    minic_type_unsigned_int(), 1U) ||
+        !minic_c0_program_add_incomplete_array_type(
+            &program, minic_type_unsigned_char(), &incomplete_type) ||
+        !minic_c0_record_add_field(&program, record_id, "bytes", 5U,
+                                    incomplete_type, 1U) ||
+        !minic_c0_program_finish_record(&program, record_id)) {
+        result = 109;
+        goto finish;
+    }
+    program.records[record_id].fields[1].is_flexible_array = true;
+    if (!minic_c0_program_verify(&program, MINIC_C0_AST_PARSED)) {
+        result = 110;
+        goto finish;
+    }
+    program.records[record_id].is_union = true;
+    if (minic_c0_program_verify(&program, MINIC_C0_AST_PARSED)) {
+        result = 111;
+        goto finish;
+    }
+finish:
+    minic_c0_program_destroy(&program);
+    return result;
+}
+
+/* Even a directly synthesized AST must not smuggle a GNU asm-goto edge
+ * across cleanup scopes: Core cannot run callbacks on the taken edge. */
+static int test_asm_goto_cleanup_edge_contract(void) {
+    MinicC0Program program;
+    MinicExpressionId cleanup_expression;
+    MinicCleanupContextId cleanup_context;
+    MinicInlineAsmId inline_asm_id;
+    MinicStatement label;
+    MinicStatement inline_asm_statement;
+    MinicStatementId label_id;
+    MinicStatementId inline_asm_statement_id;
+    int failure = 0;
+
+    minic_c0_program_initialize(&program);
+    (void)memset(&label, 0, sizeof(label));
+    (void)memset(&inline_asm_statement, 0, sizeof(inline_asm_statement));
+    label.kind = MINIC_STATEMENT_LABEL;
+    label.span = test_span(0U);
+    label.target_expression = MINIC_EXPRESSION_INVALID;
+    label.expression = MINIC_EXPRESSION_INVALID;
+    label.target_statement = MINIC_STATEMENT_INVALID;
+    label.then_block = MINIC_BLOCK_INVALID;
+    label.else_block = MINIC_BLOCK_INVALID;
+    inline_asm_statement.kind = MINIC_STATEMENT_INLINE_ASM;
+    inline_asm_statement.span = test_span(1U);
+    inline_asm_statement.target_expression = MINIC_EXPRESSION_INVALID;
+    inline_asm_statement.expression = MINIC_EXPRESSION_INVALID;
+    inline_asm_statement.target_statement = MINIC_STATEMENT_INVALID;
+    inline_asm_statement.then_block = MINIC_BLOCK_INVALID;
+    inline_asm_statement.else_block = MINIC_BLOCK_INVALID;
+
+    if (!add_integer(&program, 1, &cleanup_expression) ||
+        !minic_c0_program_add_cleanup_context(&program, MINIC_CLEANUP_CONTEXT_ROOT,
+                                              cleanup_expression, &cleanup_context) ||
+        !minic_c0_program_add_statement(&program, &label, &label_id) ||
+        !minic_c0_program_add_inline_asm(&program, "nop", 3U, true, false, &inline_asm_id) ||
+        !minic_c0_program_set_inline_asm_goto(&program, inline_asm_id, true) ||
+        !minic_c0_program_add_inline_asm_label(&program, inline_asm_id, "destination", 11U,
+                                                label_id)) {
+        failure = 91;
+        goto finish;
+    }
+    inline_asm_statement.inline_asm_id = inline_asm_id;
+    if (!minic_c0_program_add_statement(&program, &inline_asm_statement,
+                                         &inline_asm_statement_id) ||
+        !minic_c0_program_verify(&program, MINIC_C0_AST_PARSED)) {
+        failure = 92;
+        goto finish;
+    }
+    program.statements[label_id].cleanup_context = cleanup_context;
+    if (minic_c0_program_verify(&program, MINIC_C0_AST_PARSED)) {
+        failure = 93;
+        goto finish;
+    }
+    program.statements[inline_asm_statement_id].cleanup_context = cleanup_context;
+    if (!minic_c0_program_verify(&program, MINIC_C0_AST_PARSED)) {
+        failure = 94;
+        goto finish;
+    }
+    program.statements[inline_asm_statement_id].cleanup_context = cleanup_context + 1U;
+    if (minic_c0_program_verify(&program, MINIC_C0_AST_PARSED))
+        failure = 95;
+finish:
+    minic_c0_program_destroy(&program);
+    return failure;
 }
 
 /* New semantic fields must acquire safe defaults in the owning constructor, not parser call sites. */
@@ -312,8 +626,8 @@ static int test_semantic_entity_defaults(void) {
         function->visibility != MINIC_SYMBOL_VISIBILITY_DEFAULT ||
         !minic_type_equal(function->return_type, minic_type_int()) ||
         function->parameter_count != 0U || function->is_defined ||
-        field->explicit_alignment != 0U || field->is_array || field->is_packed ||
-        field->is_bit_field || field->is_flexible_array || field->is_zero_length_array ||
+        field->explicit_alignment != 0U || field->is_packed ||
+        field->is_bit_field || field->is_flexible_array ||
         field->is_anonymous_member ||
         object->alias_target != MINIC_GLOBAL_OBJECT_INVALID ||
         object->section_name != NULL || object->section_name_length != 0U ||
@@ -571,7 +885,23 @@ int main(void) {
     if (status != 0) {
         return status;
     }
+    status = test_builtin_type_target_admission();
+    if (status != 0) {
+        return status;
+    }
     status = test_verify_failure_provenance();
+    if (status != 0) {
+        return status;
+    }
+    status = test_runtime_array_pair_contract();
+    if (status != 0) {
+        return status;
+    }
+    status = test_flexible_record_tail_contract();
+    if (status != 0) {
+        return status;
+    }
+    status = test_asm_goto_cleanup_edge_contract();
     if (status != 0) {
         return status;
     }
@@ -584,6 +914,10 @@ int main(void) {
         return status;
     }
     status = test_call_argument_overflow_normalization();
+    if (status != 0) {
+        return status;
+    }
+    status = test_const_call_child_visitor();
     if (status != 0) {
         return status;
     }
