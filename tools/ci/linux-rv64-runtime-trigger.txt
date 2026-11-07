@@ -1,4 +1,8 @@
 # 2026-11-07 exact P1 failed-Image GDB relay: reuse cached 2064 original Linux owners, pair each failed Image with its matching Kbuild vmlinux, record IRQ/task stack entry evidence, and retain the original P1 verdict. Both runtime and independent GDB markers opt in on this last PR commit.
+# 2026-11-07 retry of run #42326190120: repair GitHub workflow expression-length
+# parsing by splitting the existing GNU link/QEMU and optional native-union
+# checks; preserve the exact MiniC profile cache and all original 2064 C owners.
+# The independent P1 GDB marker changes in this very same last PR commit.
 # 2026-10-30 exact-head recertification: all original RV64 Linux 6.6.143
 # C owners through current MiniC, GNU linker and genuine P0/P1, followed by
 # 12 separate QEMU P1 boots of the same SHA-locked kernel Image. Any failed
