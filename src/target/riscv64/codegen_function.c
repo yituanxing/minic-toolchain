@@ -80,7 +80,7 @@ static bool rv64_emit_typed_function(
         !minic_riscv64_asm_function_plan_build(
             function, &old_frame.asm_plan) ||
         !minic_riscv64_core_frame_initialize_with_storage(
-            function, &old_frame, &abi, lp64_soft_float,
+            function, &old_frame, &abi, true,
             minic_riscv64_needs_machine_runtime_call(isa, function),
             facts, storage)) goto done;
     frame_ready = true;
