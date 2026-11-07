@@ -2764,6 +2764,7 @@ check-loong-machine-source-asm:
 	  -ffunction-sections -fdata-sections -Wl,--gc-sections \
 	  tests/target/loong_machine_source_asm_test.c \
 	  src/target/loongarch64/machine_source_asm.c \
+	  src/target/loongarch64/simd_asm.c \
 	  src/target/loongarch64/machine_asm_form.c \
 	  src/target/common/machine_source_asm_template.c \
 	  src/target/common/machine_ir.c \

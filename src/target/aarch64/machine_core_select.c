@@ -2128,13 +2128,18 @@ static bool a64_linux_one_gp_source(A64CoreSelection *sel,
     const uint32_t form = source->target_machine_form_id;
     const bool cache = form == AARCH64_MACHINE_ASM_CACHE_OP;
     const bool prefetch = form == AARCH64_MACHINE_ASM_PREFETCH;
+    const bool wfxt = form == AARCH64_MACHINE_ASM_WFXT;
     const char *cache_op = cache ? aarch64_linux_cache_op_form(
         source->template_text, source->template_length) : NULL;
     const bool efi = cache &&
         aarch64_linux_efi_unclobbered_cache_form(cache_op);
     MinicMachineOperand binding = a64_gp(A64_T0, 64U,
         MINIC_MACHINE_REGISTER_READ);
-    if (source->target_machine_form_variant != 0U ||
+    if ((wfxt ?
+            source->target_machine_form_variant != aarch64_linux_wfxt_form(
+                source->template_text, source->template_length) ||
+            source->target_machine_form_variant == 0U :
+            source->target_machine_form_variant != 0U) ||
         source->operand_plan_owner != MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED ||
         ins->result != MINIC_CORE_VALUE_INVALID ||
         !minic_core_function_type_is_kind(fn, ins->core_type_id,
@@ -2151,7 +2156,12 @@ static bool a64_linux_one_gp_source(A64CoreSelection *sel,
         operand->physical_read_write || operand->has_fixed_register_binding ||
         operand->has_tied_output || operand->value >= fn->value_count)
         return false;
-    if (form == AARCH64_MACHINE_ASM_AT_S1E1R) {
+    if (wfxt) {
+        if (!source->is_volatile || !source->has_memory_clobber ||
+            !source->implicit_memory_effect ||
+            !aarch64_asm_core_integer(fn, operand->value, false, 8U, 0))
+            return false;
+    } else if (form == AARCH64_MACHINE_ASM_AT_S1E1R) {
         if (!source->is_volatile || source->has_memory_clobber ||
             source->implicit_memory_effect ||
             !aarch64_linux_at_s1e1r_template(source->template_text,
@@ -3074,7 +3084,9 @@ static bool a64_linux_uaccess_source(A64CoreSelection *sel,
  * before any source output is written. Materialize only its record pointer
  * into x0 before the first STP; x9/x10 are real early-clobber outputs and
  * their C lvalues must be stored strictly AFTER the final PC/PSTATE STP.
- * This is one target-qualified 675-byte hardware form, not generic GNU ASM. */
+ * This writes the first 272 bytes, including the complete Linux 336-byte
+ * pt_regs record's GPR/SP/PC/PSTATE prefix. It is one target-qualified
+ * 675-byte hardware form, not generic GNU ASM. */
 static bool a64_linux_kexec_crash_source(A64CoreSelection *sel,
     const MinicCoreInstruction *ins, const MinicCoreInlineAsm *source) {
     const MinicCoreFunction *fn = sel->ctx->fn;
@@ -3104,7 +3116,8 @@ static bool a64_linux_kexec_crash_source(A64CoreSelection *sel,
     record = aarch64_asm_core_type(fn, ops[2].value, true);
     if (record == NULL || !record->has_layout ||
         record->kind != MINIC_CORE_TYPE_RECORD ||
-        record->size != 272U || record->alignment != 8U ||
+        (record->size != 272U && record->size != 336U) ||
+        record->alignment != 8U ||
         !aarch64_asm_core_pointer(fn, ops[2].value, false))
         return false;
     for (i = 0U; i < 3U; ++i) {
@@ -4376,6 +4389,11 @@ static bool a64_parameter_object(A64CoreSelection *sel,
             sel->ctx->incoming_plan, sel->ctx->frame_plan,
             &location, &offset)) return false;
     size = location->size_bytes;
+    if (location->kind == MINIC_LP64_ARGUMENT_EMPTY_RECORD)
+        return size == 0U && location->chunks == 0U &&
+            location->gp_registers == 0U &&
+            location->fp_registers == 0U &&
+            location->stack_slots == 0U;
     if (location->kind == MINIC_LP64_ARGUMENT_INDIRECT_RECORD) {
         if (size == 0U || size > 2048U ||
             ((location->gp_registers == 1U) ==
@@ -5273,7 +5291,8 @@ static bool a64_core_instruction(A64CoreSelection *sel,
             return a64_linux_bit_reverse(sel, ins, source);
         if (source->target_machine_form_id == AARCH64_MACHINE_ASM_TLBI)
             return a64_linux_tlbi(sel, ins, source);
-        if (source->target_machine_form_id == AARCH64_MACHINE_ASM_AT_S1E1R ||
+        if (source->target_machine_form_id == AARCH64_MACHINE_ASM_WFXT ||
+            source->target_machine_form_id == AARCH64_MACHINE_ASM_AT_S1E1R ||
             source->target_machine_form_id == AARCH64_MACHINE_ASM_CACHE_OP ||
             source->target_machine_form_id == AARCH64_MACHINE_ASM_PREFETCH)
             return a64_linux_one_gp_source(sel, ins, source);

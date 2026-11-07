@@ -63,6 +63,50 @@ int main(void) {
     asm_instruction.source_asm_length = strlen(asm_instruction.source_asm_template);
     REQUIRE(!minic_loongarch64_machine_validate_source_asm(
         &target, &asm_instruction, NULL));
+    /* Original Linux RAID6 has separate, operand-free volatile vector ASM
+     * that preserves the architectural $vr/$xr register file. Admission
+     * must use the exact original LSX/LASX grammar, not arbitrary source. */
+    asm_instruction.source_asm_template = "vori.b $vr4, $vr0, 0";
+    asm_instruction.source_asm_length = strlen(asm_instruction.source_asm_template);
+    REQUIRE(minic_loongarch64_machine_validate_source_asm(
+        &target, &asm_instruction, NULL));
+    asm_instruction.source_asm_template = "vxor.v $vr4, $vr4, $vr8";
+    asm_instruction.source_asm_length = strlen(asm_instruction.source_asm_template);
+    REQUIRE(minic_loongarch64_machine_validate_source_asm(
+        &target, &asm_instruction, NULL));
+    output = tmpfile();
+    REQUIRE(output != NULL);
+    REQUIRE(minic_loongarch64_machine_emit_source_asm(
+        output, &function, &asm_instruction, &labels, NULL));
+    REQUIRE(fseek(output, 0, SEEK_SET) == 0);
+    count = fread(text, 1U, sizeof(text) - 1U, output);
+    REQUIRE(fclose(output) == 0);
+    text[count] = '\0';
+    REQUIRE(strstr(text, "vxor.v $vr4, $vr4, $vr8") != NULL);
+    asm_instruction.source_asm_template = "xvxor.v $xr4, $xr4, $xr8";
+    asm_instruction.source_asm_length = strlen(asm_instruction.source_asm_template);
+    REQUIRE(minic_loongarch64_machine_validate_source_asm(
+        &target, &asm_instruction, NULL));
+    asm_instruction.effects |= MINIC_MACHINE_EFFECT_COMPILER_BARRIER;
+    REQUIRE(!minic_loongarch64_machine_validate_source_asm(
+        &target, &asm_instruction, NULL));
+    asm_instruction.effects &= ~MINIC_MACHINE_EFFECT_COMPILER_BARRIER;
+    asm_instruction.source_asm_template = "vxor.v $vr4, $vr4, $vr33";
+    asm_instruction.source_asm_length = strlen(asm_instruction.source_asm_template);
+    REQUIRE(!minic_loongarch64_machine_validate_source_asm(
+        &target, &asm_instruction, NULL));
+    asm_instruction.source_asm_template = "vxor.v $vr4, $vr4, $vr8; .globl injected";
+    asm_instruction.source_asm_length = strlen(asm_instruction.source_asm_template);
+    REQUIRE(!minic_loongarch64_machine_validate_source_asm(
+        &target, &asm_instruction, NULL));
+    asm_instruction.source_asm_template = "vunknown.v $vr4, $vr4, $vr8";
+    asm_instruction.source_asm_length = strlen(asm_instruction.source_asm_template);
+    REQUIRE(!minic_loongarch64_machine_validate_source_asm(
+        &target, &asm_instruction, NULL));
+    asm_instruction.source_asm_template = "vxor.v $vr4, %0, $vr8";
+    asm_instruction.source_asm_length = strlen(asm_instruction.source_asm_template);
+    REQUIRE(!minic_loongarch64_machine_validate_source_asm(
+        &target, &asm_instruction, NULL));
     asm_instruction.source_asm_template = "dbar %0";
     asm_instruction.source_asm_length = 7U;
     asm_instruction.source_asm_machine_form_id =

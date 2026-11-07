@@ -1,0 +1,84 @@
+name: Preserve immutable historical RV32 1741 MiniC Linux receipts
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/minic-rv32-history-preserve.yml
+      - tools/ci/verify_rv32_history_bundle_v1.py
+      - tools/ci/linux-rv32-history-preserve-trigger.txt
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: minic-rv32-historical-preserve-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  one-shot-gate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      active: ${{ steps.scope.outputs.active }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 2
+          persist-credentials: false
+      - name: Admit only an explicit exact-HEAD historical-preservation request
+        id: scope
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          active=false
+          marker=tools/ci/linux-rv32-history-preserve-trigger.txt
+          if git rev-parse --verify HEAD^ >/dev/null 2>&1 && \
+              ! git diff --quiet HEAD^ HEAD -- "$marker" && \
+              grep -Fxq 'source_run=41212514498' "$marker" && \
+              grep -Fxq 'source_merge_commit=796f2b44fada71218a22fc506ae50ecfe6b43342' "$marker"; then
+            active=true
+          fi
+          echo "active=$active" >>"$GITHUB_OUTPUT"
+          echo "RV32_HISTORY_PRESERVE_GATE=$active exact_head=$(git rev-parse HEAD)"
+
+  preserve-original-receipts:
+    needs: one-shot-gate
+    if: needs.one-shot-gate.outputs.active == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - name: Restore nine original historical source-run artifacts
+        uses: actions/download-artifact@v4
+        with:
+          repository: yituanxing/minic-toolchain
+          run-id: '41212514498'
+          github-token: ${{ github.token }}
+          pattern: '*'
+          merge-multiple: false
+          path: build/rv32-history-preserve/source-run-41212514498
+      - name: Prove original 1741 ELF32 objects and twelve real historical QEMU boots
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          base=build/rv32-history-preserve
+          python3 tools/ci/verify_rv32_history_bundle_v1.py \
+            --input "$base/source-run-41212514498" \
+            --receipt "$base/HISTORICAL-NOT-CURRENT-HEAD-VERDICT.json"
+          sha256sum "$base/source-run-41212514498"/linux-rv32i-seven-shard-Image-*/out/arch/riscv/boot/Image
+      - name: Preserve all original artifact contents plus SHA/P1 receipt for ninety days
+        uses: actions/upload-artifact@v4
+        with:
+          name: rv32i-original-1741-12boot-history-41212514498
+          path: build/rv32-history-preserve/
+          if-no-files-found: error
+          retention-days: 90
+          compression-level: 0
+      - name: State the strict distinction from current MiniC Linux acceptance
+        run: |
+          echo 'RV32_HISTORY_PRESERVE=PASS original_run=41212514498 historical_C=1741/1741 historical_QEMU_P1=12/12 current_MiniC_C=NOT_RUN current_Image=NOT_RUN current_QEMU_P1=NOT_RUN'

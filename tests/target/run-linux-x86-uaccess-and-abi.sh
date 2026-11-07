@@ -368,6 +368,20 @@ if "$minic_cc" -S "$workdir/mutated_rep.i" --target=x86_64-linux \
     printf 'FAIL: invalid REP MOVSB alternative admitted\n' >&2
     exit 1
 fi
+sed 's/rep_stos_alternative/rep_stos_mismatched/g' \
+    "$workdir/x86_64_linux_smap_rep_alternative.i" > "$workdir/mutated_stos.i"
+if "$minic_cc" -S "$workdir/mutated_stos.i" --target=x86_64-linux \
+    -o "$workdir/mutated_stos.s" >/dev/null 2>&1; then
+    printf 'FAIL: mutated REP STOSB alternative relocation target admitted\n' >&2
+    exit 1
+fi
+sed 's/asm("rsp")/asm("r12")/g' \
+    "$workdir/x86_64_linux_smap_rep_alternative.i" > "$workdir/mutated_rep_rsp.i"
+if "$minic_cc" -S "$workdir/mutated_rep_rsp.i" --target=x86_64-linux \
+    -o "$workdir/mutated_rep_rsp.s" >/dev/null 2>&1; then
+    printf 'FAIL: REP alternative lost fixed RSP binding validation\n' >&2
+    exit 1
+fi
 sed 's/0x01,0xca/0x01,0xcc/g' \
     "$workdir/x86_64_linux_smap_rep_alternative.i" > "$workdir/mutated_smap.i"
 if "$minic_cc" -S "$workdir/mutated_smap.i" --target=x86_64-linux \

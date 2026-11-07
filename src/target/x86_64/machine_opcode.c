@@ -2231,6 +2231,71 @@ static bool x86_source_rep_stos_contract(
     return true;
 }
 
+/* Linux's authenticated REP MOVSB/STOSB alternatives are physical read/write
+ * outputs, with the live RSP dependency and complete patch/exception source
+ * bytes. Validate the architectural binding before GNU serialization. */
+static bool x86_source_rep_uaccess_alternative_contract(
+    const MinicMachineInstruction *ins) {
+    const bool movsb = ins->source_asm_machine_form_id ==
+        MINIC_X86_MACHINE_ASM_REP_MOVSB_ALTERNATIVE;
+    static const unsigned int movsb_regs[4] = {
+        MINIC_X86_REG_RCX, MINIC_X86_REG_RDI,
+        MINIC_X86_REG_RSI, MINIC_X86_REG_RSP
+    };
+    static const unsigned int stosb_regs[4] = {
+        MINIC_X86_REG_RCX, MINIC_X86_REG_RDI,
+        MINIC_X86_REG_RSP, MINIC_X86_REG_RAX
+    };
+    static const char *const movsb_constraints[4] = {
+        "+c", "+D", "+S", "+r"
+    };
+    static const char *const stosb_constraints[4] = {
+        "+c", "+D", "+r", "a"
+    };
+    const unsigned int *regs = movsb ? movsb_regs : stosb_regs;
+    const char *const *constraints = movsb ?
+        movsb_constraints : stosb_constraints;
+    const unsigned int expected_effects = MINIC_MACHINE_EFFECT_SOURCE_ASM |
+        MINIC_MACHINE_EFFECT_VOLATILE |
+        MINIC_MACHINE_EFFECT_MEMORY_READ |
+        MINIC_MACHINE_EFFECT_MEMORY_WRITE |
+        MINIC_MACHINE_EFFECT_COMPILER_BARRIER;
+    size_t i;
+    if ((!movsb && ins->source_asm_machine_form_id !=
+            MINIC_X86_MACHINE_ASM_REP_STOSB_ALTERNATIVE) ||
+        ins->source_asm_machine_form_variant != 0U ||
+        ins->source_asm_terminates_block ||
+        ins->source_asm_permits_fallthrough ||
+        ins->effects != expected_effects ||
+        ins->operand_count != 4U || !ins->operands ||
+        ins->implicit_count != (movsb ? 1U : 0U) ||
+        (!movsb && ins->implicit != NULL) ||
+        !minic_x86_64_typed_machine_form_matches_template(
+            ins->source_asm_machine_form_id, 0U,
+            ins->source_asm_template, ins->source_asm_length))
+        return false;
+    if (movsb && (!ins->implicit ||
+        ins->implicit[0].reg.bank != MINIC_MACHINE_REGISTER_GENERAL ||
+        ins->implicit[0].reg.number != MINIC_X86_REG_RAX ||
+        ins->implicit[0].reg.width_bits != 64U ||
+        ins->implicit[0].access != MINIC_MACHINE_REGISTER_CLOBBER))
+        return false;
+    for (i = 0U; i < 4U; ++i) {
+        const MinicMachineOperand *op = &ins->operands[i];
+        if (op->kind != MINIC_MACHINE_OPERAND_REGISTER ||
+            op->asm_name != NULL || !op->asm_constraint ||
+            strcmp(op->asm_constraint,constraints[i]) != 0 ||
+            op->value.physical.reg.bank != MINIC_MACHINE_REGISTER_GENERAL ||
+            op->value.physical.reg.number != regs[i] ||
+            op->value.physical.reg.width_bits != 64U ||
+            op->value.physical.access != (!movsb && i == 3U ?
+                MINIC_MACHINE_REGISTER_READ :
+                MINIC_MACHINE_REGISTER_READ | MINIC_MACHINE_REGISTER_WRITE))
+            return false;
+    }
+    return true;
+}
+
 /* Revalidate every physical tied GNU output/input after Core lowering.
  * Source admission alone never authorizes a raw string-copy template. */
 static bool x86_source_iomem_copy_contract(
@@ -2742,6 +2807,32 @@ static bool x86_source_scalar_cmpxchg_contract(
             named ? "new" : NULL);
 }
 
+
+/* ZF from the exact Linux testb immediate is carried as one sealed FLAGS
+ * output; the memory operand must remain a byte at an actual GP address. */
+static bool x86_source_testcc_contract(
+    const MinicTargetInfo *target, const MinicMachineInstruction *ins) {
+    const unsigned int form = minic_x86_64_linux_testcc_form(
+        ins->source_asm_template,ins->source_asm_length);
+    const unsigned int effects = MINIC_MACHINE_EFFECT_SOURCE_ASM |
+        MINIC_MACHINE_EFFECT_VOLATILE |
+        MINIC_MACHINE_EFFECT_MEMORY_READ |
+        MINIC_MACHINE_EFFECT_COMPILER_BARRIER;
+    const MinicMachineOperand *mask;
+    if ((form != 1U && form != 2U) ||
+        !x86_scalar_machine_base(ins,MINIC_X86_MACHINE_ASM_TESTCC,
+            0U,effects,3U,true) ||
+        !x86_scalar_machine_cc(&ins->operands[0],
+            form == 1U ? "=@ccnz" : "=@ccz") ||
+        !x86_scalar_machine_mem(target,&ins->operands[1],
+            MINIC_X86_REG_R10,"m",NULL)) return false;
+    mask = &ins->operands[2];
+    return mask->kind == MINIC_MACHINE_OPERAND_INTEGER &&
+        mask->asm_constraint != NULL &&
+        strcmp(mask->asm_constraint,"i") == 0 &&
+        mask->asm_name == NULL && mask->value.integer >= 0 &&
+        mask->value.integer <= 255;
+}
 
 static bool x86_source_scalar_bitops_contract(
     const MinicTargetInfo *target, const MinicMachineInstruction *ins) {
@@ -3868,6 +3959,53 @@ static bool x86_source_nop_const_i_contract(
         input->asm_constraint != NULL &&
         strcmp(input->asm_constraint,"i") == 0 &&
         input->asm_name == NULL;
+}
+
+/* Independent hardware/ELF proof of Linux TASK_SIZE_MAX's two MOVABS patch
+ * alternatives.  A matched Source form cannot forge physical output, the
+ * dummy input, the canonical 47/56-bit ceilings, or an arbitrary template. */
+static bool x86_source_task_size_alt_contract(
+    const MinicMachineInstruction *ins) {
+    static const int64_t expected[3] = {
+        0, (INT64_C(1) << 47) - (INT64_C(1) << 12),
+        (INT64_C(1) << 56) - (INT64_C(1) << 12)
+    };
+    static const char *const names[3] = {NULL,"small","large"};
+    const MinicMachineOperand *reg;
+    size_t i;
+    if (!ins || ins->source_asm_machine_form_id !=
+            MINIC_X86_MACHINE_ASM_TASK_SIZE_ALT ||
+        ins->source_asm_machine_form_variant != 0U ||
+        ins->operand_count != 4U || !ins->operands ||
+        ins->implicit_count != 0U || ins->implicit != NULL ||
+        ins->source_asm_terminates_block ||
+        ins->source_asm_permits_fallthrough ||
+        ins->effects != (MINIC_MACHINE_EFFECT_SOURCE_ASM |
+            MINIC_MACHINE_EFFECT_VOLATILE) ||
+        !minic_x86_64_typed_machine_form_matches_template(
+            ins->source_asm_machine_form_id,0U,
+            ins->source_asm_template,ins->source_asm_length)) return false;
+    reg = &ins->operands[0];
+    if (reg->kind != MINIC_MACHINE_OPERAND_REGISTER ||
+        reg->asm_name || !reg->asm_constraint ||
+        strcmp(reg->asm_constraint,"=r") != 0 ||
+        reg->value.physical.reg.bank != MINIC_MACHINE_REGISTER_GENERAL ||
+        reg->value.physical.reg.number != MINIC_X86_REG_RAX ||
+        reg->value.physical.reg.width_bits != 64U ||
+        reg->value.physical.access != MINIC_MACHINE_REGISTER_WRITE)
+        return false;
+    for (i = 1U; i < 4U; ++i) {
+        const MinicMachineOperand *input = &ins->operands[i];
+        if (input->kind != MINIC_MACHINE_OPERAND_INTEGER ||
+            input->value.integer != expected[i-1U] ||
+            !input->asm_constraint ||
+            strcmp(input->asm_constraint,"i") != 0 ||
+            (names[i-1U] ?
+                (!input->asm_name ||
+                 strcmp(input->asm_name,names[i-1U]) != 0) :
+                input->asm_name != NULL)) return false;
+    }
+    return true;
 }
 
 static bool x86_source_unreachable_annotation_contract(
@@ -5116,6 +5254,9 @@ bool minic_x86_64_machine_validate_source_asm(const MinicTargetInfo *target,
             MINIC_X86_MACHINE_ASM_ALTERNATIVE_WRMSR)
         return x86_source_alternative_wrmsr_contract(instruction);
     if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_TASK_SIZE_ALT)
+        return x86_source_task_size_alt_contract(instruction);
+    if (instruction->source_asm_machine_form_id ==
             MINIC_X86_MACHINE_ASM_APIC_AMD_ALT)
         return x86_source_apic_amd_alt_contract(target,instruction);
     if (instruction->source_asm_machine_form_id ==
@@ -5190,6 +5331,9 @@ bool minic_x86_64_machine_validate_source_asm(const MinicTargetInfo *target,
             MINIC_X86_MACHINE_ASM_BITOPS)
         return x86_source_scalar_bitops_contract(target,instruction);
     if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_TESTCC)
+        return x86_source_testcc_contract(target,instruction);
+    if (instruction->source_asm_machine_form_id ==
             MINIC_X86_MACHINE_ASM_ATOMIC_CC)
         return x86_source_scalar_atomic_cc_contract(target,instruction);
     if (instruction->source_asm_machine_form_id ==
@@ -5217,6 +5361,11 @@ bool minic_x86_64_machine_validate_source_asm(const MinicTargetInfo *target,
     if (instruction->source_asm_machine_form_id ==
             MINIC_X86_MACHINE_ASM_IOMEM_COPY)
         return x86_source_iomem_copy_contract(instruction);
+    if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_REP_MOVSB_ALTERNATIVE ||
+        instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_REP_STOSB_ALTERNATIVE)
+        return x86_source_rep_uaccess_alternative_contract(instruction);
     if (instruction->source_asm_machine_form_id ==
             MINIC_X86_MACHINE_ASM_ADD32_CARRY ||
         instruction->source_asm_machine_form_id ==

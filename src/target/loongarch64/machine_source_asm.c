@@ -126,6 +126,15 @@ static bool loong_source_opaque(const MinicMachineInstruction *ins) {
         (ins->effects & MINIC_MACHINE_EFFECT_VOLATILE) != 0U;
     linux_bug.has_memory_clobber =
         (ins->effects & MINIC_MACHINE_EFFECT_COMPILER_BARRIER) != 0U;
+    /* Linux RAID6's operand-free LSX/LASX statements have fixed $vr/$xr
+     * accumulators live across distinct volatile asms. Core already admitted
+     * this exact target grammar, but MachineIR must independently re-parse
+     * the physical source before the GNU template printer may emit it.
+     * No arbitrary mnemonic, % operand, clobber or directive is admitted. */
+    if (ins->effects == (MINIC_MACHINE_EFFECT_SOURCE_ASM |
+                         MINIC_MACHINE_EFFECT_VOLATILE) &&
+        minic_loongarch64_simd_qualify_opaque(&linux_bug))
+        return true;
     if (minic_multi_direct_linux_bug_asm(&linux_bug,
             "10000", "10001", "10002", "break1", false))
         return true;

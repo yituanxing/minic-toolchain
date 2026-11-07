@@ -1159,9 +1159,10 @@ static bool aarch64_linux_lse_source(
 
 /* The original arm64 kexec crash register snapshot is an exact privileged
  * GNU hardware template. Its output temporaries are 64-bit writable lvalues;
- * the input points to a complete 31-GPR + SP/PC/PSTATE 272-byte AAPCS64
- * record. In particular the short-record regression must be rejected before
- * it can reach the physical Machine emitter. */
+ * the input points to a complete 31-GPR + SP/PC/PSTATE 272-byte prefix.
+ * Linux 6.6 pt_regs carries another 64 bytes after that prefix (336 total);
+ * both the prefix-only and complete ABI records are valid. Reject smaller
+ * records before they reach the physical Machine emitter. */
 static bool aarch64_linux_kexec_crash_source(
     const MinicTargetInvocation *invocation, const MinicC0Program *program,
     const MinicInlineAsm *src, MinicTargetInlineAsmContract *contract) {
@@ -1198,7 +1199,8 @@ static bool aarch64_linux_kexec_crash_source(
         !minic_type_unqualified(pointee, &plain) ||
         !minic_type_is_record(plain) ||
         !minic_data_layout_type(invocation, program, plain, &size,
-            &alignment) || size != 272U || alignment != 8U)
+        &alignment) || (size != 272U && size != 336U) ||
+        alignment != 8U)
         return false;
     contract->operand_count = 3U;
     contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;

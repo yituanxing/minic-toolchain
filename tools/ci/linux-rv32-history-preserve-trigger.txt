@@ -1,0 +1,6 @@
+# Historical RV32I compiler evidence, NOT a current HEAD acceptance marker.
+# To request exactly one authenticated copy while source artifacts still exist,
+# change only this file in the last PR-head commit. Expired input fails closed.
+source_run=41212514498
+source_merge_commit=796f2b44fada71218a22fc506ae50ecfe6b43342
+nonce=2026-11-07-preserve-once

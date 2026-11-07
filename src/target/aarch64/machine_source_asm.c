@@ -121,6 +121,15 @@ static bool a64_machine_opaque_hint(const MinicMachineInstruction *instruction) 
             instruction->source_asm_template,
             instruction->source_asm_length) != 0U)
         return true;
+    /* Cavium ThunderX's read-after-read workaround uses exactly four or
+     * eight NOPs, with no operands or hidden side effects. */
+    if (instruction->source_asm_machine_form_id == 0U &&
+        instruction->effects == (MINIC_MACHINE_EFFECT_SOURCE_ASM |
+                                 MINIC_MACHINE_EFFECT_VOLATILE) &&
+        minic_aarch64_linux_rept_nop_count(
+            instruction->source_asm_template,
+            instruction->source_asm_length) != 0U)
+        return true;
     /* A Linux BUG_ON() is a *single*, self-contained zero-operand source
      * effect. Its paired numeric labels and ELF __bug_table relocations are
      * part of the same typed MachineIR instruction. Reuse the admission
@@ -264,8 +273,15 @@ static bool a64_one_gp_form(const MinicMachineInstruction *ins) {
     if (ins == NULL || ins->operand_count != 1U ||
         ins->implicit_count != 0U || ins->source_asm_terminates_block ||
         ins->source_asm_permits_fallthrough ||
-        ins->source_asm_machine_form_variant != 0U) return false;
+        (ins->source_asm_machine_form_id != AARCH64_MACHINE_ASM_WFXT &&
+         ins->source_asm_machine_form_variant != 0U)) return false;
     switch (ins->source_asm_machine_form_id) {
+    case AARCH64_MACHINE_ASM_WFXT:
+        return ins->effects == (source | vol | barrier) &&
+            ins->source_asm_machine_form_variant != 0U &&
+            ins->source_asm_machine_form_variant ==
+                aarch64_linux_wfxt_form(ins->source_asm_template,
+                    ins->source_asm_length);
     case AARCH64_MACHINE_ASM_AT_S1E1R:
         return ins->effects == (source | vol) &&
             aarch64_linux_at_s1e1r_template(ins->source_asm_template,

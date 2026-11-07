@@ -1083,6 +1083,30 @@ static bool x86_emit_source_asm(FILE *out,
                 instruction,labels,&x86_alternative_wrmsr_policy) &&
             fputc('\n',out) != EOF;
     if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_TASK_SIZE_ALT)
+        /* Both 64-bit immediates, the 528 feature bit and complete paired
+         * PREL32 ELF patch records were independently sealed by MachineIR.
+         * Never print unchecked source text or a standalone first MOV. */
+        return fputs(
+            "661:\n"
+            "  movq $140737488351232, %rax\n"
+            "662:\n"
+            "  .skip -(((6651f-6641f)-(662b-661b)) > 0) * "
+              "((6651f-6641f)-(662b-661b)),0x90\n"
+            "663:\n"
+            "  .pushsection .altinstructions,\"a\"\n"
+            "  .long 661b - .\n"
+            "  .long 6641f - .\n"
+            "  .4byte (16*32+16)\n"
+            "  .byte 663b-661b\n"
+            "  .byte 6651f-6641f\n"
+            "  .popsection\n"
+            "  .pushsection .altinstr_replacement,\"ax\"\n"
+            "6641:\n"
+            "  movq $72057594037923840, %rax\n"
+            "6651:\n"
+            "  .popsection\n",out) != EOF;
+    if (instruction->source_asm_machine_form_id ==
             MINIC_X86_MACHINE_ASM_APIC_AMD_ALT)
         return fputs("  ",out) != EOF &&
             minic_machine_source_asm_template_emit(out,function,
@@ -1526,6 +1550,18 @@ static bool x86_emit_source_asm(FILE *out,
         return fputs(form == 1U ? "  movsb\n" : "  movsw\n",out) != EOF;
     }
     if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_REP_MOVSB_ALTERNATIVE ||
+        instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_REP_STOSB_ALTERNATIVE) {
+        /* Only the exact 506-byte source-verified grammar is admitted by the
+         * physical contract. It has no operand substitutions: each byte of
+         * its alternative and __ex_table records must remain unchanged. */
+        return fwrite(instruction->source_asm_template, 1U,
+                instruction->source_asm_length,out) ==
+                    instruction->source_asm_length &&
+            fputc('\n',out) != EOF;
+    }
+    if (instruction->source_asm_machine_form_id ==
             MINIC_X86_MACHINE_ASM_FDIV_BUG) {
         /* Proven original x87 kernel test: binary64 loads, stacked DIV/MUL,
          * FISTP store with live x87 rounding, FWAIT, and both FNINITs. */
@@ -1603,6 +1639,13 @@ static bool x86_emit_source_asm(FILE *out,
         return fprintf(out,"%s%s %s, (%%r11)\n",
             desc->locked ? "" : "  ",desc->op,desc->new_reg) >= 0;
     }
+    if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_TESTCC)
+        /* Verified MachineIR seals the one-byte memory source, the exact
+         * imm8 mask and the ZF output; SETZ/SETNZ is emitted as its
+         * own physical Machine instruction immediately after this test. */
+        return fprintf(out,"  testb $%lld, (%%r10)\n",
+            (long long)instruction->operands[2].value.integer) >= 0;
     if (instruction->source_asm_machine_form_id ==
             MINIC_X86_MACHINE_ASM_BITOPS) {
         const MinicX86BitopsForm form = minic_x86_64_linux_bitops_form(
