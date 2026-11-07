@@ -3697,7 +3697,7 @@ jobs:
               sha256sum "$image" "$linked" "$custom_dtb" "$initramfs"
             } >"$diag/repeat-exact-input-identity.txt" || return 0
             echo "RV64_REPEAT_GDB=START attempt=$failing_attempt image_sha=$image_sha no_C_compile=true no_Kbuild_link=true original_repeat=FAIL"
-            if P1_GDB_IRQ_REENTRY=1 bash tools/ci/linux-runtime-p1-gdb-stack-v1.sh \
+            if P1_GDB_MINIMAL_FAULT_ONLY=1 bash tools/ci/linux-runtime-p1-gdb-stack-v1.sh \
                  "$image" "$linked" "$initramfs" "$custom_dtb" "$diag" 65 \
                  >"$diag/repeat-receiver.log" 2>&1; then
               echo "RV64_REPEAT_GDB=CAPTURED attempt=$failing_attempt diagnostic_only=true"

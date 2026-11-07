@@ -3,6 +3,9 @@
 # the same last commit. The compiler profile and seven-shard cache key are
 # unaffected. Never use historical [linux-*] experiment commit-message tags.
 diagnostic=on-original-failed-image
+# 2026-11-07 rearm for #42328020176: the 65s multi-breakpoint GDB run
+# changed IPv6 timing and missed firstfault. Single handle_bad_stack hbreak
+# on the same Image/vmlinux only; original P1 repeat FAIL remains authoritative.
 # 2026-11-07 rearm for first independent P1 reboot failure in #42326981145:
 # full_all_verified already passed, so capture GDB from repeat 1/12's
 # immutable Image and matching current Kbuild vmlinux without another link.

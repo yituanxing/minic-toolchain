@@ -3023,7 +3023,7 @@ PY_LARGEST_TUS
               sha256sum "$d/Image" "$out/vmlinux" "${LINUX_RUNTIME_CUSTOM_DTB}"
             } >"$gdb_dir/exact-input-identity.txt"
             echo "COHORT_P1_EXACT_GDB=START trial=$name image_sha=$image_sha no_new_link=true no_C_compilation=true"
-            P1_GDB_IRQ_REENTRY=1 \
+            P1_GDB_MINIMAL_FAULT_ONLY=1 \
               bash "$repo/tools/ci/linux-runtime-p1-gdb-stack-v1.sh" \
                 "$d/Image" "$out/vmlinux" "$ev/runtime-initramfs.cpio.gz" \
                 "$LINUX_RUNTIME_CUSTOM_DTB" "$gdb_dir" 65 \
