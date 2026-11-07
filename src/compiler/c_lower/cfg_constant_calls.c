@@ -290,29 +290,27 @@ bool minic_core_cfg_pure_call_argument(const MinicCoreLowerContext *context,
         const MinicBinaryOperator op = expression->value.binary.operator_kind;
         const MinicExpressionId left = expression->value.binary.left;
         const MinicExpressionId right = expression->value.binary.right;
-        /* C evaluates the left operand before deciding whether a short-
-         * circuited right operand is evaluated.  A provably pure and false
-         * left side of && (or true left side of ||) therefore makes even a
-         * side-effecting right subtree unreachable.  Linux's disabled
-         * CONFIG_BOUNCE helper uses precisely this: its ignored branch
-         * contains the intentionally undefined __blk_queue_bounce symbol.
-         * Never omit left-side effects or an unknown right-side execution. */
+        if (op == MINIC_BINARY_COMMA ||
+            !minic_core_cfg_pure_call_argument(context,left,depth + 1U))
+            return false;
+        /* The ordinary both-pure case needs no constant evaluation. This
+         * fast path also avoids recursively asking Core's rich constant
+         * evaluator to prove every intermediate Linux `&&`/`||` subtree. */
+        if (minic_core_cfg_pure_call_argument(context,right,depth + 1U))
+            return true;
         if (op == MINIC_BINARY_LOGICAL_AND || op == MINIC_BINARY_LOGICAL_OR) {
             MinicConstValue evaluated;
             bool left_is_zero;
-            if (minic_core_cfg_pure_call_argument(context, left, depth + 1U) &&
-                core_const_eval_integer_with_locals(context, left, &evaluated) &&
+            /* Only an effectful right subtree needs a short-circuit proof.
+             * A non-pure left subtree is never safe to discard. */
+            if (core_const_eval_integer_with_locals(context,left,&evaluated) &&
                 minic_const_value_is_zero(context->body->program,
-                                          context->target, &evaluated,
-                                          &left_is_zero) &&
+                    context->target,&evaluated,&left_is_zero) &&
                 ((op == MINIC_BINARY_LOGICAL_AND && left_is_zero) ||
-                 (op == MINIC_BINARY_LOGICAL_OR && !left_is_zero))) {
+                 (op == MINIC_BINARY_LOGICAL_OR && !left_is_zero)))
                 return true;
-            }
         }
-        return op != MINIC_BINARY_COMMA &&
-               minic_core_cfg_pure_call_argument(context, left, depth + 1U) &&
-               minic_core_cfg_pure_call_argument(context, right, depth + 1U);
+        return false;
     }
     case MINIC_EXPRESSION_CONDITIONAL: {
         MinicConstValue condition;

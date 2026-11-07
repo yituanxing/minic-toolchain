@@ -1973,6 +1973,43 @@ static bool x86_source_ip_here_contract(const MinicMachineInstruction *ins) {
 /* CF-sensitive checksum operands are independently sealed before the GNU
  * serializer prints any ADD/ADC instruction.  MachineIR has no C types:
  * only the exact physical register, memory, ties and FLAGS effects remain. */
+static bool x86_scalar_machine_base(const MinicMachineInstruction *,
+    uint32_t, uint32_t, unsigned int, size_t, bool);
+static bool x86_scalar_machine_gp(const MinicMachineOperand *,
+    unsigned int, unsigned int, unsigned int, const char *, const char *);
+
+/* Original IPv6 checksum: RAX holds the tied 64-bit seed/result, R10 and
+ * R11 point at two independent 16-byte address values. The following
+ * emitter executes a single five-instruction ADD/ADC carry chain. */
+static bool x86_source_ipv6_checksum_contract(
+    const MinicMachineInstruction *ins) {
+    static const unsigned int regs[4] = {
+        MINIC_X86_REG_RAX, MINIC_X86_REG_RAX,
+        MINIC_X86_REG_R10, MINIC_X86_REG_R11
+    };
+    static const char *const constraints[4] = {
+        "=r", "[sum]", "r", "r"
+    };
+    static const char *const names[4] = {
+        "sum", NULL, "saddr", "daddr"
+    };
+    const unsigned int effects = MINIC_MACHINE_EFFECT_SOURCE_ASM |
+        MINIC_MACHINE_EFFECT_VOLATILE |
+        MINIC_MACHINE_EFFECT_MEMORY_READ |
+        MINIC_MACHINE_EFFECT_COMPILER_BARRIER;
+    size_t i;
+    if (!x86_scalar_machine_base(ins,
+            MINIC_X86_MACHINE_ASM_IPV6_CHECKSUM,1U,effects,4U,true))
+        return false;
+    for (i = 0U; i < 4U; ++i)
+        if (!x86_scalar_machine_gp(&ins->operands[i],
+                regs[i],64U,i == 0U ? MINIC_MACHINE_REGISTER_WRITE :
+                    MINIC_MACHINE_REGISTER_READ,
+                constraints[i],names[i]))
+            return false;
+    return true;
+}
+
 static bool x86_source_checksum_carry_contract(
     const MinicTargetInfo *target, const MinicMachineInstruction *ins) {
     static const unsigned int tcp_regs[5] = {
@@ -6431,6 +6468,9 @@ bool minic_x86_64_machine_validate_source_asm(const MinicTargetInfo *target,
     if (instruction->source_asm_machine_form_id ==
             MINIC_X86_MACHINE_ASM_XSTATE_FAULT)
         return x86_source_xstate_fault_contract(instruction);
+    if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_IPV6_CHECKSUM)
+        return x86_source_ipv6_checksum_contract(instruction);
     if (instruction->source_asm_machine_form_id ==
             MINIC_X86_MACHINE_ASM_ADD32_CARRY ||
         instruction->source_asm_machine_form_id ==

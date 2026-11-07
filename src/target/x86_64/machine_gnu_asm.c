@@ -2096,6 +2096,15 @@ static bool x86_emit_source_asm(FILE *out,
             fputc('\n',out) != EOF;
 
     if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_IPV6_CHECKSUM)
+        /* Two 16-byte IPv6 address operands.  Preserve incoming and
+         * propagated CF across every ADC and the final end-around carry. */
+        return fputs("  addq (%r10), %rax\n"
+                     "  adcq 8(%r10), %rax\n"
+                     "  adcq (%r11), %rax\n"
+                     "  adcq 8(%r11), %rax\n"
+                     "  adcq $0, %rax\n",out) != EOF;
+    if (instruction->source_asm_machine_form_id ==
             MINIC_X86_MACHINE_ASM_ADD32_CARRY)
         return fputs("  addl %r10d, %eax\n  adcl $0, %eax\n",out) != EOF;
     if (instruction->source_asm_machine_form_id ==

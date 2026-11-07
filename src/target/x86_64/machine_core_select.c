@@ -8423,6 +8423,94 @@ static bool x86_source_gs_tied_alu(X86CoreSelector *sel,
  * ADD from ADC would let intervening Core traffic destroy CF.  Keep the
  * complete proven GNU form in one source-ASM MachineIR instruction; tied
  * inputs occupy the exact same RAX carrier as their output. */
+/* Linux csum_ipv6_magic uses two genuine 128-bit address operands and a
+ * tied 64-bit seed.  ADD/ADC must execute as one contiguous CF chain;
+ * independent additions, arithmetic on the pointer values, or a plain
+ * Core add would silently corrupt checksums on carry propagation. */
+static bool x86_source_ipv6_checksum(X86CoreSelector *sel,
+    const MinicCoreInstruction *ins) {
+    const MinicCoreInlineAsm *source;
+    const MinicCoreStructuredInlineAsmOperand *roles;
+    MinicMachineOperand bindings[4];
+    MinicMachineRegisterEffect flags = {0};
+    static const unsigned int regs[4] = {
+        MINIC_X86_REG_RAX, MINIC_X86_REG_RAX,
+        MINIC_X86_REG_R10, MINIC_X86_REG_R11
+    };
+    static const char *const constraints[4] = {
+        "=r", "[sum]", "r", "r"
+    };
+    static const char *const names[4] = {
+        "sum", NULL, "saddr", "daddr"
+    };
+    size_t i;
+    if (sel == NULL || ins == NULL ||
+        ins->kind != MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM ||
+        ins->result != MINIC_CORE_VALUE_INVALID ||
+        sel->core->inline_asms == NULL ||
+        ins->value.structured_inline_asm.inline_asm_id >=
+            sel->core->inline_asm_count ||
+        ins->value.structured_inline_asm.operand_count != 4U)
+        return false;
+    source = &sel->core->inline_asms[
+        ins->value.structured_inline_asm.inline_asm_id];
+    roles = ins->value.structured_inline_asm.operands;
+    if (source->target_machine_form_id !=
+            MINIC_X86_MACHINE_ASM_IPV6_CHECKSUM ||
+        source->target_machine_form_variant != 1U ||
+        source->operand_plan_owner != MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED ||
+        source->source_asm_unique_id == 0U ||
+        !source->is_volatile || source->is_goto ||
+        !source->implicit_memory_effect ||
+        !source->has_memory_clobber || source->explicit_memory_clobber ||
+        source->register_clobber_count != 0U ||
+        source->resolved_immediate_count != 0U ||
+        source->goto_second_target != MINIC_CORE_BLOCK_INVALID ||
+        !minic_x86_64_typed_machine_form_matches_template(
+            source->target_machine_form_id,
+            source->target_machine_form_variant,
+            source->template_text,source->template_length) ||
+        roles == NULL)
+        return false;
+    for (i = 0U; i < 4U; ++i) {
+        const bool tied = i == 1U;
+        if (roles[i].operand_index != i ||
+            roles[i].kind != (i == 0U ?
+                MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT :
+                MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT) ||
+            roles[i].has_fixed_register_binding ||
+            roles[i].early_clobber || roles[i].physical_early_clobber ||
+            roles[i].physical_read_write ||
+            roles[i].has_tied_output != tied ||
+            (tied && roles[i].tied_output_index != 0U) ||
+            !(i == 0U ?
+                x86_asm_gp_lvalue_width(sel,roles[i].value,8U) :
+                x86_asm_gp_input_width(sel,roles[i].value,8U)))
+            return false;
+    }
+    if (!x86_core_load(sel,roles[1].value,MINIC_X86_REG_RAX) ||
+        !x86_core_load(sel,roles[2].value,MINIC_X86_REG_R10) ||
+        !x86_core_load(sel,roles[3].value,MINIC_X86_REG_R11))
+        return false;
+    for (i = 0U; i < 4U; ++i) {
+        bindings[i] = x86_reg(regs[i],64U);
+        bindings[i].asm_constraint = (char *)constraints[i];
+        bindings[i].asm_name = (char *)names[i];
+        bindings[i].value.physical.access = i == 0U ?
+            MINIC_MACHINE_REGISTER_WRITE : MINIC_MACHINE_REGISTER_READ;
+    }
+    flags.reg = (MinicMachineRegister){
+        0U,64U,MINIC_MACHINE_REGISTER_FLAGS};
+    flags.access = MINIC_MACHINE_REGISTER_CLOBBER;
+    return minic_machine_builder_emit_core_source_asm(&sel->builder,source,
+            MINIC_MACHINE_EFFECT_MEMORY_READ,bindings,4U,&flags,1U,
+            false,false) &&
+        x86_core_load(sel,roles[0].value,MINIC_X86_REG_R11) &&
+        x86_2(sel,MINIC_X86_MI_MOV64_RA,
+            x86_reg(MINIC_X86_REG_RAX,64U),
+            x86_addr(MINIC_X86_REG_R11,0));
+}
+
 static bool x86_source_checksum_carry(X86CoreSelector *sel,
     const MinicCoreInstruction *ins) {
     const MinicCoreInlineAsm *source;
@@ -11631,6 +11719,7 @@ static bool x86_core_instruction(X86CoreSelector *sel,
             x86_source_hweight(sel, ins) ||
             x86_source_counter(sel, ins) ||
             x86_source_percpu_gs(sel, ins) ||
+            x86_source_ipv6_checksum(sel, ins) ||
             x86_source_checksum_carry(sel, ins) ||
             x86_source_ip_fast_csum(sel, ins) ||
             x86_source_gs_atomic_extended(sel, ins) ||
