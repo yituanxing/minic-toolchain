@@ -1,0 +1,4 @@
+target=x86_64
+input_run=42366441631
+nonce=20261107-2
+mode=candidate-only

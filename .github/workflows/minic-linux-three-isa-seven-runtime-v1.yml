@@ -39,11 +39,13 @@ on:
       - '.github/workflows/minic-linux-three-isa-seven-runtime-v1.yml'
       - 'tools/ci/linux-three-isa-seven-runtime-trigger.txt'
       - 'tools/ci/linux-three-isa-seven-source-refresh-trigger.txt'
+      - 'tools/ci/linux-three-isa-seven-candidate-trigger.txt'
   push:
     branches: [refactor/minic-target-language-boundary]
     paths:
       - 'tools/ci/linux-three-isa-seven-runtime-trigger.txt'
       - 'tools/ci/linux-three-isa-seven-source-refresh-trigger.txt'
+      - 'tools/ci/linux-three-isa-seven-candidate-trigger.txt'
 
 permissions:
   contents: read
@@ -105,6 +107,7 @@ jobs:
           candidate_scope=all
           input_run="$MINIC_LINUX_PINNED_INPUT_RUN"
           source_refresh_marker=false
+          candidate_marker=false
           if [[ '${{ github.event_name }}' == workflow_dispatch ]]; then
             active=true
             if [[ '${{ inputs.regenerate_original_gnu }}' == true ]]; then
@@ -134,6 +137,11 @@ jobs:
               active=true
               source_refresh_marker=true
             fi
+            if git rev-parse --verify HEAD^ >/dev/null 2>&1 &&
+               ! git diff --quiet HEAD^ HEAD -- tools/ci/linux-three-isa-seven-candidate-trigger.txt; then
+              active=true
+              candidate_marker=true
+            fi
           elif [[ '${{ github.event_name }}' == pull_request ]] &&
                git rev-parse --verify HEAD^ >/dev/null 2>&1 &&
                ! git diff --quiet HEAD^ HEAD -- tools/ci/linux-three-isa-seven-runtime-trigger.txt; then
@@ -144,6 +152,12 @@ jobs:
              ! git diff --quiet HEAD^ HEAD -- tools/ci/linux-three-isa-seven-source-refresh-trigger.txt; then
             active=true
             source_refresh_marker=true
+          fi
+          if [[ '${{ github.event_name }}' == pull_request ]] &&
+             git rev-parse --verify HEAD^ >/dev/null 2>&1 &&
+             ! git diff --quiet HEAD^ HEAD -- tools/ci/linux-three-isa-seven-candidate-trigger.txt; then
+            active=true
+            candidate_marker=true
           fi
           if [[ "$active" == true && '${{ github.event_name }}' != workflow_dispatch ]]; then
             # A one-shot HEAD subject is shared by push and PR delivery. The
@@ -176,6 +190,31 @@ jobs:
             source_scope="${source_marker[0]#sources=}"
             source_only=true
             regenerate=true
+          fi
+          if [[ "$candidate_marker" == true ]]; then
+            # The separately reviewed original GNU source-export job has
+            # already completed. One explicit marker may replay only ONE
+            # architecture's seven current MiniC owners; never all 21.
+            if [[ "$source_refresh_marker" == true ]]; then
+              echo 'Source-only regeneration and candidate-only replay cannot share one HEAD' >&2
+              exit 1
+            fi
+            mapfile -t candidate_lines < tools/ci/linux-three-isa-seven-candidate-trigger.txt
+            if [[ "${#candidate_lines[@]}" != 4 ||
+                  ! "${candidate_lines[0]}" =~ ^target=(x86_64|aarch64|loongarch64)$ ||
+                  ! "${candidate_lines[1]}" =~ ^input_run=[1-9][0-9]{7,14}$ ||
+                  ! "${candidate_lines[2]}" =~ ^nonce=[0-9]{8}-[0-9]{1,5}$ ||
+                  "${candidate_lines[3]}" != 'mode=candidate-only' ]]; then
+              echo 'Candidate marker requires one target, real input-run ID, nonce, candidate-only mode' >&2
+              exit 1
+            fi
+            if [[ "$regenerate" == true || "$reuse_objects" == true ||
+                  "$only_aarch64" == true || "$only_x86_64" == true ]]; then
+              echo 'One-target current MiniC replay refuses conflicting GNU/reuse/legacy marker flags' >&2
+              exit 1
+            fi
+            candidate_scope="${candidate_lines[0]#target=}"
+            input_run="${candidate_lines[1]#input_run=}"
           fi
           if [[ "$regenerate" == true && "$reuse_objects" == true ]]; then
             echo 'Refuse simultaneous original-GNU regeneration and candidate-object reuse' >&2
@@ -276,6 +315,7 @@ jobs:
           python3 -m py_compile tools/ci/linux-three-isa-seven-runtime-v1.py tools/ci/linux-three-isa-minic-candidate-v1.py
           python3 tools/ci/linux-three-isa-seven-runtime-v1.py selftest
           python3 tools/ci/test_linux_three_isa_seven_runtime_v1.py
+          python3 tools/ci/test_linux_three_isa_candidate_marker_gate_v1.py
           python3 tools/ci/linux-three-isa-minic-candidate-v1.py --self-test
           python3 tools/ci/test_linux_three_isa_candidate_shard_cache_v1.py
           python3 tools/ci/linux-three-isa-loongarch64-early-boot-pc-v1.py --self-test
@@ -673,6 +713,46 @@ jobs:
           repository: ${{ github.repository }}
           run-id: ${{ needs.gate.outputs.regenerate == 'true' && github.run_id || needs.gate.outputs.input_run }}
           github-token: ${{ github.token }}
+      - name: Authenticate 90-day frozen GNU source against the historical original Linux corpus
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 - "$INPUT" '${{ matrix.target }}' '${{ matrix.shard }}' \
+            "tools/ci/fixtures/linux-6.6.143-original-input-sha-${{ matrix.target }}.tsv" <<'PY'
+          import hashlib, json, pathlib, sys
+          root, target, shard, fixture = pathlib.Path(sys.argv[1]), sys.argv[2], int(sys.argv[3]), pathlib.Path(sys.argv[4])
+          historic = {
+              'x86_64': (2758, 'e2ec24b7076d99ac9c1bf842ded47e91ba6dfacacc28dd027ec6487d8709e264',
+                         'f12e533e1a4079f13aca28e314f56570fe22f8fed1da89b1a98289acc62a715d'),
+              'aarch64': (4108, '36279e6a49dd79ac1d302e871c326a1aaff4522b2fd2968a9755296ac5293f8c',
+                          '45ce687974258eb80f1bedb62c55646180d2df8e9ffc069c106adcef9243cc5f'),
+              'loongarch64': (2723, '5cd1dcd0cd3db4f8d2713fd3fbd0a550198fd4f0c4598a31b290b1600573b9d2',
+                              '64f7be34f20e9c752079f03510c6151b22e4479a71500448a275976b32077592'),
+          }
+          fixture_sha = {
+              'x86_64': '4637e32d2c99538744bb2a89f7cd02e64d7a490d3b5147c6ff22d2e7b52d765d',
+              'aarch64': 'd6dcf0145700fa87f7e5cfbba63b7d06ab960fb2e94867e6ab1eb5f8f6a676bc',
+              'loongarch64': '7e1e6602cde12d11fbe3eedc4c42e571bebb728d23a359726a4bb3cf0aecff50',
+          }
+          assert hashlib.sha256(fixture.read_bytes()).hexdigest() == fixture_sha[target], 'historic GNU source SHA fixture changed'
+          total, config_sha, owner_sha = historic[target]
+          identity = json.loads((root / 'identity.json').read_text())
+          manifest_path = root / 'frozen/manifest.json'
+          manifest = json.loads(manifest_path.read_text())
+          assert (identity['target'], identity['shard'], identity['total_c_owners']) == (target, shard, total)
+          assert identity['shard_c_owners'] == len(range(shard, total, 7))
+          assert identity['frozen_manifest_sha256'] == hashlib.sha256(manifest_path.read_bytes()).hexdigest()
+          assert identity['original_config_sha256'] == config_sha
+          assert identity['gnu_c_owner_manifest_sha256'] == owner_sha
+          rows = manifest['rows']
+          current = sorted(f"{row['object']}\t{row['sha256']}" for row in rows)
+          original = sorted(line for line in fixture.read_text().splitlines() if line)
+          assert len(current) == total and len(set(current)) == total
+          assert current == original, f'{target} source input SHA differs from official historical run'
+          print('MINIC_CANDIDATE_FROZEN_SOURCE_SHA=PASS target=' + target + ' shard=' + str(shard)
+                + ' current_original=' + str(total) + '/' + str(total)
+                + ' source_run=${{ needs.gate.outputs.regenerate == 'true' && github.run_id || needs.gate.outputs.input_run }}')
+          PY
       - uses: actions/download-artifact@v4
         with:
           name: minic-linux-seven-compiler
