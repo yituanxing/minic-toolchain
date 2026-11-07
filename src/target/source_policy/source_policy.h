@@ -63,6 +63,10 @@ typedef struct MinicTargetSourceLanguagePolicy {
     MinicTargetNamedBuiltinScalarTypePolicy named_scalar_type;
     bool (*header_opaque_return)(const MinicTargetInvocation *, MinicType);
     bool (*header_attribute)(const MinicTargetInvocation *, const char *, size_t);
+    /* Unreferenced, header-only GNU vector ABI declarations must never
+     * become callable C symbols while their distinct PCS is unsupported. */
+    bool (*header_unreferenced_vector_declaration)(
+        const MinicTargetInvocation *, const char *, size_t, MinicType);
     bool (*gnu_function_attribute_name)(const char *, size_t);
     bool (*gnu_function_attribute_value)(
         MinicTargetGnuFunctionAttributeKind, const char *, size_t);

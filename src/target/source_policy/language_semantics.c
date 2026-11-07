@@ -327,6 +327,17 @@ bool minic_target_info_header_attribute_supported(const MinicTargetInvocation *t
            policy->header_attribute(target, spelling, length);
 }
 
+bool minic_target_info_header_unreferenced_vector_declaration(
+    const MinicTargetInvocation *target, const char *name,
+    size_t name_length, MinicType return_type) {
+    const MinicTargetSourceLanguagePolicy *policy =
+        (target == NULL || target->source_info.integer_model == NULL)
+            ? NULL : target->source_info.source_language_policy;
+    return policy != NULL && policy->header_unreferenced_vector_declaration != NULL &&
+           policy->header_unreferenced_vector_declaration(
+               target, name, name_length, return_type);
+}
+
 bool minic_target_info_gnu_neon_header_inline_liveness(
     const MinicTargetInvocation *target) {
     const MinicTargetSourceLanguagePolicy *policy =

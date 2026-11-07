@@ -79,6 +79,12 @@ static bool function_attribute_list_has_used(const MinicParsedAttributeList *att
     return function_attribute_list_has_kind(attributes, MINIC_ATTRIBUTE_USED);
 }
 
+static bool function_attribute_list_is_glibc_vector_pcs(
+    const MinicParser *parser, const MinicParsedAttributeList *attributes) {
+    return attributes != NULL && attributes->count == 1U &&
+           glibc_header_vector_pcs_attribute(parser, &attributes->values[0]);
+}
+
 static bool function_attribute_argument_token(MinicParser *parser,
                                               const MinicParsedAttribute *attribute,
                                               MinicTokenKind expected_kind,
@@ -1311,6 +1317,7 @@ static bool parse_function_inner(MinicParser *parser, bool is_internal) {
     bool is_function_pointer_object;
     bool has_preparsed_function_parameters;
     bool has_parameter_scope;
+    bool unreferenced_vector_pcs_header_decl;
     bool is_inline;
     bool is_gnu_extern_inline;
     bool is_noreturn;
@@ -1341,6 +1348,7 @@ static bool parse_function_inner(MinicParser *parser, bool is_internal) {
     is_function_pointer_object = false;
     has_preparsed_function_parameters = false;
     has_parameter_scope = false;
+    unreferenced_vector_pcs_header_decl = false;
     is_inline = false;
     is_gnu_extern_inline = false;
     is_noreturn = false;
@@ -1916,6 +1924,19 @@ static bool parse_function_inner(MinicParser *parser, bool is_internal) {
         }
         return minic_parser_external_object_weak(parser, name_span, object_is_weak);
     }
+    /* GNU13 glibc mathvec headers declare vector PCS `_ZGVnN{2,4}v...`
+     * symbols that MiniC cannot call or define with their alternate ABI.
+     * Admit *only* the exact standalone external prototype so we can discard
+     * the symbol entirely. Real references then fail to resolve in the C
+     * parser rather than silently using the default ABI. */
+    unreferenced_vector_pcs_header_decl =
+        !is_internal && !is_inline && !is_register_declaration &&
+        declarator_attributes.count == 0U &&
+        function_attribute_list_is_glibc_vector_pcs(parser, &deferred_attributes) &&
+        minic_target_info_header_unreferenced_vector_declaration(
+            parser->invocation,
+            parser->source + name_span.begin.offset,
+            minic_parser_span_length(name_span), return_type);
     if (!apply_function_attribute_list(
             parser,
             &deferred_attributes,
@@ -1923,8 +1944,9 @@ static bool parse_function_inner(MinicParser *parser, bool is_internal) {
             is_internal,
             is_inline,
             is_extern_declaration,
-            !is_internal && minic_target_info_header_opaque_vector_return(
-                                parser->invocation, return_type),
+            unreferenced_vector_pcs_header_decl ||
+                (!is_internal && minic_target_info_header_opaque_vector_return(
+                                    parser->invocation, return_type)),
             &calling_convention,
             section_name,
             sizeof(section_name),
@@ -1995,6 +2017,18 @@ static bool parse_function_inner(MinicParser *parser, bool is_internal) {
                                               &alias_symbol_literal,
                                               &calling_convention)) {
         return false;
+    }
+    if (unreferenced_vector_pcs_header_decl) {
+        if (parser->current.kind != MINIC_TOKEN_SEMICOLON || has_assembler_name ||
+            is_weak || is_noreturn || force_emit || has_section ||
+            is_constructor || alias_symbol_literal.end.offset != 0U) {
+            minic_parser_error(parser,
+                "AArch64 vector PCS is unsupported outside unused glibc mathvec prototypes");
+            return false;
+        }
+        /* No symbol is installed in Program. A later use cannot be emitted
+         * as an ordinary AAPCS64 call. Parameter scope closes in wrapper. */
+        return minic_parser_advance(parser);
     }
     if (function_id != MINIC_FUNCTION_INVALID) {
         existing_function = minic_c0_program_function(parser->program, function_id);

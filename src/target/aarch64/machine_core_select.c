@@ -4999,6 +4999,8 @@ static bool a64_terminate(A64CoreSelection *sel, size_t core_id) {
         size_t width;
         bool sign, pointer;
         size_t true_target;
+        size_t false_fallthrough;
+        size_t deferred_false = SIZE_MAX;
         const MinicMachineOperand conditional[] = {
             a64_gp(A64_T0, 64U, MINIC_MACHINE_REGISTER_READ),
             a64_block(0U)
@@ -5012,6 +5014,23 @@ static bool a64_terminate(A64CoreSelection *sel, size_t core_id) {
             sel->false_blocks[core_id] == SIZE_MAX ||
             !a64_load_core(sel, condition, A64_T0,
                 width == 8U ? 64U : 32U)) return false;
+        false_fallthrough = sel->false_blocks[core_id];
+        /* A long record copy may have introduced a real MachineCFG loop
+         * after the reserved Core/conditional blocks. Subsequent Core
+         * instructions then occupy its out-of-line done block. Keep the
+         * hardware fallthrough physically adjacent instead of pretending
+         * an earlier reserved false edge is the next GNU instruction.
+         * The reserved original false edge remains a typed branch target. */
+        if (false_fallthrough != sel->builder.current_block + 1U) {
+            const size_t source = sel->builder.current_block;
+            if (source + 1U != sel->builder.function->block_count ||
+                !minic_machine_builder_create_block(&sel->builder, NULL,
+                    false, true, &false_fallthrough) ||
+                false_fallthrough != source + 1U ||
+                !minic_machine_builder_position_at(&sel->builder, source))
+                return false;
+            deferred_false = sel->false_blocks[core_id];
+        }
         true_target = sel->true_blocks[core_id] == SIZE_MAX
             ? sel->blocks[tt] : sel->true_blocks[core_id];
         op[0] = conditional[0];
@@ -5021,12 +5040,17 @@ static bool a64_terminate(A64CoreSelection *sel, size_t core_id) {
         if (!a64_emit(sel, MINIC_A64_MACHINE_CBNZ, op, 2U) ||
             !minic_machine_builder_add_successor(&sel->builder, true_target) ||
             !minic_machine_builder_add_successor(&sel->builder,
-                sel->false_blocks[core_id]) ||
+                false_fallthrough) ||
             !minic_machine_builder_set_fallthrough(&sel->builder,
-                sel->false_blocks[core_id]) ||
+                false_fallthrough) ||
             !minic_machine_builder_position_at(&sel->builder,
-                sel->false_blocks[core_id]) ||
-            !a64_branch(sel, sel->blocks[ff])) return false;
+                false_fallthrough) ||
+            !a64_branch(sel, deferred_false != SIZE_MAX
+                ? deferred_false : sel->blocks[ff])) return false;
+        if (deferred_false != SIZE_MAX &&
+            (!minic_machine_builder_position_at(&sel->builder,
+                deferred_false) ||
+             !a64_branch(sel, sel->blocks[ff]))) return false;
         if (sel->true_blocks[core_id] != SIZE_MAX) {
             if (!minic_machine_builder_position_at(&sel->builder,
                     sel->true_blocks[core_id]) ||

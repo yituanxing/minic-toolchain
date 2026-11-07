@@ -303,6 +303,30 @@ static bool aarch_header_attribute(const MinicTargetInvocation *target,
            aarch_register_is(name, length, "__aarch64_vector_pcs__");
 }
 
+/* The GNU13 glibc math-vector header declares external libm vector entry
+ * points in an ABI MiniC deliberately does not implement. Their prototypes
+ * are source metadata only: discard the exact declarations and leave their
+ * names UNBOUND, so attempting to call one is a compile-time error rather
+ * than an incorrectly lowered default-AAPCS64 call. Do not generalize to
+ * user-defined vector PCS functions or arbitrary extern symbols. */
+static bool aarch_header_unreferenced_vector_declaration(
+    const MinicTargetInvocation *target, const char *name, size_t name_length,
+    MinicType return_type) {
+    static const char v4[] = "_ZGVnN4v";
+    static const char v2[] = "_ZGVnN2v";
+    MinicTargetSourceBuiltinTypeDescriptor descriptor;
+    if (name == NULL || name_length < sizeof(v4) ||
+        (memcmp(name, v4, sizeof(v4) - 1U) != 0 &&
+         memcmp(name, v2, sizeof(v2) - 1U) != 0))
+        return false;
+    return target != NULL && return_type.pointer_depth == 0U &&
+           minic_target_info_source_builtin_type_descriptor(
+               target, return_type, &descriptor) &&
+           descriptor.role == MINIC_BUILTIN_DECLARATION_FIXED_VECTOR128_STORAGE &&
+           (descriptor.vector_element == MINIC_TARGET_BUILTIN_SCALAR_FLOAT32 ||
+            descriptor.vector_element == MINIC_TARGET_BUILTIN_SCALAR_FLOAT64);
+}
+
 /* GCC's arm_neon.h selects the architectural AdvSIMD baseline with
  * `target("+nothing+simd")`. AArch64's existing scalar FP emitter already
  * operates under this ISA baseline. This is ONLY source option selection:
@@ -347,6 +371,7 @@ const MinicTargetSourceLanguagePolicy minic_aarch64_source_language_policy = {
     .named_scalar_type = aarch_named_scalar_type,
     .header_opaque_return = aarch_header_opaque_return,
     .header_attribute = aarch_header_attribute,
+    .header_unreferenced_vector_declaration = aarch_header_unreferenced_vector_declaration,
     .gnu_pragma_target_options = aarch_pragma_target_options,
     .gnu_pragma_internal_header = aarch_pragma_internal_header,
 };

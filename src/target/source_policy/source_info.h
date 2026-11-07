@@ -156,6 +156,9 @@ bool minic_target_info_machine_builtin_signature(
     const char **mnemonic, size_t *immediate_index);
 bool minic_target_info_header_attribute_supported(
     const MinicTargetInvocation *target, const char *spelling, size_t length);
+bool minic_target_info_header_unreferenced_vector_declaration(
+    const MinicTargetInvocation *target, const char *name,
+    size_t name_length, MinicType return_type);
 bool minic_target_info_gnu_neon_header_inline_liveness(
     const MinicTargetInvocation *target);
 bool minic_target_info_gnu_function_security_attribute_supported(
