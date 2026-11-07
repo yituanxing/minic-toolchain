@@ -1139,6 +1139,19 @@ jobs:
           assert got == expected, 'pristine Loong EFI differs from passing GNU golden'
           print('LOONG_PRISTINE_GNU_EFI_PINNED=' + got)
           PY
+      - name: Pin exactly one original Loong GNU vDSO C object before candidate overlay
+        if: matrix.target == 'loongarch64'
+        continue-on-error: true
+        shell: bash
+        timeout-minutes: 3
+        run: |
+          set -Eeuo pipefail
+          python3 tools/ci/linux-three-isa-loong-vdso-cohort-v1.py pin \
+            --gnu-work "$GNU_WORK" \
+            --gnu-receipt "$RUNTIME_OUTPUT/boot/gnu-qemu-receipt.json" \
+            --initramfs "$RUNTIME_OUTPUT/runtime-initramfs.cpio.gz" \
+            --minic "$GITHUB_WORKSPACE/build/minic-seven-bin/bin/minic" \
+            --output "$RUNTIME_OUTPUT/loong-vdso-pin"
       - name: Snapshot pristine x86 GNU Kbuild for bounded RV-style C-owner cohort diagnosis
         if: matrix.target == 'x86_64'
         continue-on-error: true
@@ -1278,6 +1291,26 @@ jobs:
             --nm /usr/bin/loongarch64-linux-gnu-nm \
             --qemu /usr/bin/qemu-system-loongarch64 \
             --output "$RUNTIME_OUTPUT/loong-early-trace"
+      - name: Diagnose Loong init SIGSEGV with one original GNU vDSO glue object
+        if: failure() && matrix.target == 'loongarch64'
+        continue-on-error: true
+        shell: bash
+        timeout-minutes: 22
+        run: |
+          set -Eeuo pipefail
+          test -f "$RUNTIME_OUTPUT/loong-vdso-pin/pin.json"
+          test -f "$RUNTIME_OUTPUT/candidate/postlink-c-owner-census.json"
+          python3 tools/ci/linux-three-isa-loong-vdso-cohort-v1.py probe \
+            --gnu-work "$GNU_WORK" \
+            --gnu-receipt "$RUNTIME_OUTPUT/boot/gnu-qemu-receipt.json" \
+            --gnu-p0 "$RUNTIME_OUTPUT/boot/p0.log" \
+            --initramfs "$RUNTIME_OUTPUT/runtime-initramfs.cpio.gz" \
+            --firmware "$RUNTIME_OUTPUT/QEMU_EFI.fd" \
+            --minic "$GITHUB_WORKSPACE/build/minic-seven-bin/bin/minic" \
+            --pinned "$RUNTIME_OUTPUT/loong-vdso-pin" \
+            --census "$RUNTIME_OUTPUT/candidate/postlink-c-owner-census.json" \
+            --failed-p0 "$RUNTIME_OUTPUT/candidate/boot/p0.log" \
+            --trial "$RUNTIME_OUTPUT/loong-vdso-cohort"
       - name: Preserve failed x86 final MiniC candidate bzImage without rebuilding
         if: failure() && matrix.target == 'x86_64'
         continue-on-error: true
@@ -1367,6 +1400,9 @@ jobs:
             build/minic-seven-receiver-${{ matrix.target }}/x86-cohort-early-owners/
             build/minic-seven-receiver-${{ matrix.target }}/x86-early-extra-owners.json
             build/minic-seven-receiver-${{ matrix.target }}/loong-early-trace/
+            build/minic-seven-receiver-${{ matrix.target }}/loong-gnu-control.efi
+            build/minic-seven-receiver-${{ matrix.target }}/loong-vdso-pin/
+            build/minic-seven-receiver-${{ matrix.target }}/loong-vdso-cohort/
           if-no-files-found: warn
           retention-days: 14
 
