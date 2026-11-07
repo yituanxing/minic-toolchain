@@ -232,12 +232,15 @@ def run(a) -> int:
         # old objects and the few new producers; all later generated C epochs
         # are recompiled by the historical MiniC (never GCC as C fallback).
         # A minimal genuine Kbuild generated-source wave is admitted only for
-        # compressed boot owners and these PV producers. An unexpected large
+        # compressed boot owners, the single vDSO image owner recorded in the
+        # historical receiver's source epoch 1 (run 42384023426), and the
+        # selected PV producers. An unexpected large
         # new C compilation cohort must stop here instead of silently growing
         # into a 2758-owner rerun or accepting a GNU C fallback.
         allowed_live = frozenset(
             row["object"] for row in rows
             if row["object"].startswith("arch/x86/boot/compressed/") or
+            row["object"] == "arch/x86/entry/vdso/vdso-image-64.o" or
             row["object"] in selected)
         if len(allowed_live) > 50:
             raise ValueError("unbounded postlink generated-source whitelist")
