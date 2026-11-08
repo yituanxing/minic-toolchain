@@ -3,3 +3,4 @@
 # comparisons against the current candidate, with original tinyAES/cJSON .i.
 # Re-arm only after meaningful compiler source/perf-harness changes.
 2026-11-08 performance-candidate-review-pending
+2026-11-08 rerun-once-after-push-pr-concurrency-isolation candidate=1f217fc
