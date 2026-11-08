@@ -210,7 +210,16 @@ jobs:
           p1_eight=false
           if [[ "$active" == true ]] && \
              ! git diff --quiet HEAD^ HEAD -- tools/ci/linux-rv64-p1-eight-trigger.txt; then
-            p1_eight=true
+            # The historical marker always opted into the optional eight-owner
+            # diagnostic. A new, exact-last-line explicit mode keeps the same
+            # two-file push consent but requests the canonical 2064-owner
+            # Image + twelve independent strict P1 boots instead. Never
+            # infer the mode from a stale comment or an earlier PR commit.
+            if [[ $(tail -n 1 tools/ci/linux-rv64-p1-eight-trigger.txt) == 'mode=rv64-full' ]]; then
+              echo 'RV64_FULL_MARKER_MODE=strict_full_same_image_12_boots'
+            else
+              p1_eight=true
+            fi
           fi
           printf 'run=%s\n' "$active" >>"$GITHUB_OUTPUT"
           printf 'p1_gdb=%s\n' "$p1_gdb" >>"$GITHUB_OUTPUT"

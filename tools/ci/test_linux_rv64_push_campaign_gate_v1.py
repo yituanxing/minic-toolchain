@@ -33,7 +33,9 @@ def git(work: Path, *args: str) -> None:
 
 
 def verdict(event: str, ref: str, head_ref: str, changed: tuple[str, ...],
-            *, title_full: bool = False, unrelated_last: bool = False) -> dict[str, str]:
+            *, title_full: bool = False, unrelated_last: bool = False,
+            strict_full: bool = False,
+            trailing_after_mode: bool = False) -> dict[str, str]:
     script = actual_gate()
     replacements = {
         "${{ github.event_name }}": event,
@@ -58,7 +60,12 @@ def verdict(event: str, ref: str, head_ref: str, changed: tuple[str, ...],
         git(work, "add", ".")
         git(work, "commit", "-qm", "seed")
         for path in changed:
-            (work / path).write_text("exact-head consent\n")
+            value = "exact-head consent\n"
+            if path == STRICT12 and strict_full:
+                value += "mode=rv64-full\n"
+                if trailing_after_mode:
+                    value += "this-line-revokes-explicit-mode\n"
+            (work / path).write_text(value)
         if not changed:
             (work / "unrelated").write_text("unrelated\n")
         git(work, "add", ".")
@@ -81,6 +88,20 @@ class RV64PushGate(unittest.TestCase):
         self.assertEqual(verdict("push", f"refs/heads/{BRANCH}", "",
                                  (RUNTIME, STRICT12)),
                          {"run": "true", "p1_gdb": "false", "p1_eight": "true"})
+
+    def test_push_two_markers_explicit_strict_full_skips_optional_eight(self):
+        self.assertEqual(verdict("push", f"refs/heads/{BRANCH}", "",
+                                 (RUNTIME, STRICT12), strict_full=True),
+                         {"run": "true", "p1_gdb": "false", "p1_eight": "false"})
+
+    def test_strict_full_must_be_the_final_marker_line(self):
+        self.assertEqual(verdict("push", f"refs/heads/{BRANCH}", "",
+                                 (RUNTIME, STRICT12), strict_full=True,
+                                 trailing_after_mode=True)["p1_eight"], "true")
+
+    def test_strict_full_without_both_markers_is_not_admitted(self):
+        self.assertEqual(verdict("push", f"refs/heads/{BRANCH}", "",
+                                 (STRICT12,), strict_full=True)["run"], "false")
 
     def test_push_runtime_only_refused(self):
         self.assertEqual(verdict("push", f"refs/heads/{BRANCH}", "",
