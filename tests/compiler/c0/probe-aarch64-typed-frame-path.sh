@@ -121,11 +121,21 @@ awk '
         next
     }
     stage == 1 {
-        stage=($0 ~ /^  ldrb w11, \[x9, #0\]$/) ? 2 : 0
+        # Adjacent record bytes may use a strict post-indexed pair after
+        # MachineIR selection.  Require the source/destination forms to
+        # match; a mismatched pointer advance is not a valid copy.
+        if ($0 ~ /^  ldrb w11, \[x9, #0\]$/) {
+            copy_form="fixed"; stage=2
+        } else if ($0 ~ /^  ldrb w11, \[x9\], #1$/) {
+            copy_form="post"; stage=2
+        } else stage=0
         next
     }
     stage == 2 {
-        if ($0 ~ /^  strb w11, \[x10, #0\]$/) copied=1
+        if ((copy_form == "fixed" &&
+             $0 ~ /^  strb w11, \[x10, #0\]$/) ||
+            (copy_form == "post" &&
+             $0 ~ /^  strb w11, \[x10\], #1$/)) copied=1
         stage=0
     }
     END { exit !(complete && saved && invoked && copied) }
@@ -148,7 +158,19 @@ awk '
         if (reload == slot) reloaded=1
         next
     }
-    reloaded && /^  strb w11, \[x10, #0\]$/ { copied=1 }
+    reloaded && /^  ldrb w11, \[x9, #0\]$/ {
+        copy_form="fixed"; copy_stage=1; next
+    }
+    reloaded && /^  ldrb w11, \[x9\], #1$/ {
+        copy_form="post"; copy_stage=1; next
+    }
+    copy_stage {
+        if ((copy_form == "fixed" &&
+             $0 ~ /^  strb w11, \[x10, #0\]$/) ||
+            (copy_form == "post" &&
+             $0 ~ /^  strb w11, \[x10\], #1$/)) copied=1
+        copy_stage=0
+    }
     END { exit !(complete && anchored && saved && invoked && reloaded && copied) }
 ' "$scratch/record.s"
 # The 2048-byte nested record creates a >4 KiB owned frame.  Check the

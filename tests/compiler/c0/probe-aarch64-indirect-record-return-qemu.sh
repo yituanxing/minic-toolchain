@@ -20,6 +20,34 @@ require_contains() {
         fail "missing expected machine proof: $1 in $2"
     fi
 }
+# Every byte copied by the typed AArch64 return path must advance BOTH
+# pointers by one. The original selector emitted four separate instructions;
+# the current selector fuses each address increment into the corresponding
+# post-index load/store. Check the complete consecutive machine sequence, not
+# just the presence of an LDRB and STRB somewhere in the function.
+count_typed_copy_bytes() {
+    local body=$1 observed
+    observed=$(awk '
+        function bad() { exit 2 }
+        /^  ldrb w11, \[x9\], #1$/ {
+            if (getline <= 0 || $0 != "  strb w11, [x10], #1") bad()
+            count++
+            next
+        }
+        /^  ldrb w11, \[x9(, #0)?\]$/ {
+            if (getline <= 0 ||
+                $0 !~ /^  strb w11, \[x10(, #0)?\]$/) bad()
+            if (getline <= 0 || $0 != "  add x9, x9, #1") bad()
+            if (getline <= 0 || $0 != "  add x10, x10, #1") bad()
+            count++
+            next
+        }
+        /^  strb w11, \[x10(, #0)?\]$/ ||
+        /^  strb w11, \[x10\], #1$/ { bad() }
+        END { if (count == 0) exit 2; print count }
+    ' "$body") || fail "incomplete x9-to-x10 typed byte-copy machine chain in $body"
+    printf '%s\n' "$observed"
+}
 function_assembly() {
     local name=$1
     awk -v symbol="$name" '
@@ -45,22 +73,18 @@ require_saved_x8_copy_slot() {
             fail "$name did not reload the exact saved x8 slot"
         fi
     fi
-    # The typed Core byte-copy is a precise four-op ISA chain. It uses
-    # w11 as the byte value, x9 as source, and x10 as destination; both
-    # pointers advance explicitly instead of old GNU post-index addressing.
-    require_contains '^  ldrb w11, \[x9(, #0)?\]$' "$body"
-    require_contains '^  strb w11, \[x10(, #0)?\]$' "$body"
-    require_contains '^  add x9, x9, #1$' "$body"
-    require_contains '^  add x10, x10, #1$' "$body"
+    # The saved x8 result pointer must feed an actual source/destination
+    # copy chain, including both increments, independent of ISA spelling.
+    count_typed_copy_bytes "$body" >/dev/null
 }
-# Short AAPCS64 results (<=64 bytes) lower to a literal four-op copy per
-# byte, with no x12 copy-length constant. Prove each source record's
-# complete return bound by counting the exact typed STRB machine template
+# Short AAPCS64 results (<=64 bytes) lower to a literal copy per byte,
+# with no x12 copy-length constant. Prove each source record's
+# complete return bound by counting the exact typed copy machine sequence
 # inside its own callee, independent of unrelated C initialization code.
 require_unrolled_return_copy() {
     local name=$1 expected=$2 body="$work/${1}.body" observed
     function_assembly "$name" >"$body"
-    observed=$(grep -Ec '^  strb w11, \[x10(, #0)?\]$' "$body") || true
+    observed=$(count_typed_copy_bytes "$body") || fail "$name copy-chain count"
     [[ "$observed" =~ ^[0-9]+$ ]] || fail "$name missing typed byte-copy count"
     (( observed >= expected )) ||
         fail "$name copied fewer than ${expected} literal result bytes: ${observed}"
@@ -116,14 +140,15 @@ require_contains '^  bl gnu_make_three$' "$work/aarch64.s"
 require_contains '^  bl gnu_make_eighteen$' "$work/aarch64.s"
 require_contains '^  bl gnu_tap$' "$work/aarch64.s"
 # Exact native copy-step hardware; A64_T0=x9, A64_T1=x10, byte=w11.
-# Above-64-byte copies use x12 countdown + CBNZ MachineIR CFG, not
-# source-language NZCV/B.NE numeric-label control flow.
-require_contains '^  ldrb w11, \[x9(, #0)?\]$' "$work/aarch64.s"
-require_contains '^  strb w11, \[x10(, #0)?\]$' "$work/aarch64.s"
-require_contains '^  add x9, x9, #1$' "$work/aarch64.s"
-require_contains '^  add x10, x10, #1$' "$work/aarch64.s"
-require_contains '^  sub x12, x12, #1$' "$work/aarch64.s"
-require_contains '^  cbnz x12, [^[:space:]]+$' "$work/aarch64.s"
+# Above-64-byte copies use an x12 countdown in MachineIR CFG. Both the
+# explicit SUB/CBNZ and flag-setting SUBS/B.NE spellings preserve that loop.
+count_typed_copy_bytes "$work/aarch64.s" >/dev/null
+if grep -Eq '^  subs x12, x12, #1$' "$work/aarch64.s"; then
+    require_contains '^  b.ne [^[:space:]]+$' "$work/aarch64.s"
+else
+    require_contains '^  sub x12, x12, #1$' "$work/aarch64.s"
+    require_contains '^  cbnz x12, [^[:space:]]+$' "$work/aarch64.s"
+fi
 require_contains '^  movz x12, #144(, lsl #0)?$' "$work/aarch64.s"
 # Sizes up to 64 never need x12: demand a complete byte-copy chain in
 # each callee, including the 17-byte and exact 64-byte classification edges.
