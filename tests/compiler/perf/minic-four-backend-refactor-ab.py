@@ -54,6 +54,11 @@ def asm_opcode_lines(path):
 
 
 def compile_one(driver, target, source, asm):
+    # A reused output can turn a broken or skipped compilation into an
+    # apparently fast and correct A/B sample.  Every timed invocation must
+    # create its own fresh assembly; callers should use a new --output dir.
+    if asm.exists() or asm.is_symlink():
+        raise RuntimeError("A/B output already exists before compilation: " + str(asm))
     command = ([str(driver), "--target=" + target] + list(TARGET_OPTIONS.get(target, ())) +
                ["-S", str(source), "-o", str(asm)])
     pre = resource.getrusage(resource.RUSAGE_CHILDREN)
