@@ -110,6 +110,16 @@ echo 'CORE_MODULE_DUPLICATE_FUNCTION_SYMBOL=PASS call_initializer_five_ISA=5 liv
     "$root/src/core/core_type.c" -o "$work/core-duplicate-object"
 "$work/core-duplicate-object"
 
+# Indexed raw-ASM token closure must be identical to the original per-name
+# matcher, including malformed/nonportable names on independent Core input.
+"$host_cc" -std=c11 -Wall -Wextra -Werror -ffunction-sections -fdata-sections \
+    -Wl,--gc-sections -I"$root/src" \
+    "$root/tests/compiler/c0/probe-core-inline-asm-token-closure.c" \
+    "$root/src/compiler/core_reachability.c" \
+    "$root/src/core/core_ir.c" "$root/src/core/module_ir.c" \
+    "$root/src/core/core_type.c" -o "$work/core-inline-asm-token"
+"$work/core-inline-asm-token"
+
 # MC-064: x86-specific %c0 would require a different backend ASM grammar;
 # use the original RV64 GNU-valid %0 symbolic immediate in all variants.
 # With only -S available, insist the referenced local definition is present;

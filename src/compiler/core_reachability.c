@@ -1,5 +1,6 @@
 #include "compiler/core_reachability.h"
 #include "core/core_ir.h"
+#include "core/symbol_identity.h"
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -21,6 +22,7 @@ typedef struct ModuleClosure {
     size_t function_head, function_count, object_head, object_count;
     ModuleObjectSymbol *symbols;
     MinicCoreModuleFunctionNameIndex function_names;
+    bool asm_names_token_safe;
 } ModuleClosure;
 
 static int compare_object_symbol(const void *a, const void *b) {
@@ -147,6 +149,68 @@ static bool asm_target_mnemonic_collision(const MinicCoreInlineAsm *assembly,
             assembly->template_length - begin - length, symbol);
 }
 
+static bool asm_name_byte(unsigned char c) {
+    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+           (c >= '0' && c <= '9') || c == '_' || c == '.' || c == '$';
+}
+
+/* The public Core ASM matcher searches whole assembler tokens. Usually all
+ * Module symbol spellings are in its portable alphabet, so scan the template
+ * once and resolve each token in the already-built Module name indexes.
+ * Preserve the original matcher for forged/out-of-subset Module spellings:
+ * tokenizing such a spelling could otherwise split a valid exact match. */
+static bool scan_core_inline_asm_token_names(ModuleClosure *c,
+                                             const MinicCoreInlineAsm *assembly,
+                                             bool operands_present) {
+    const char *text = assembly->template_text;
+    size_t cursor = 0U;
+    while (cursor < assembly->template_length) {
+        size_t begin, first, last, j;
+        if (!asm_name_byte((unsigned char)text[cursor])) {
+            ++cursor;
+            continue;
+        }
+        begin = cursor++;
+        while (cursor < assembly->template_length &&
+               asm_name_byte((unsigned char)text[cursor])) ++cursor;
+        if (!minic_core_module_function_name_index_find(
+                &c->function_names, text + begin, cursor - begin,
+                &first, &last)) return false;
+        for (j = first; j < last; ++j) {
+            const size_t id = c->function_names.entries[j].function_index;
+            const char *name = c->set->module.function_symbols[id].name;
+            if (!asm_target_mnemonic_collision(assembly, operands_present, name) &&
+                !enqueue_function(c, id)) return false;
+        }
+        if (!enqueue_named_object(c, text + begin, cursor - begin)) return false;
+    }
+    return true;
+}
+
+static bool scan_core_inline_asm_unusual_names(ModuleClosure *c,
+                                                const MinicCoreInlineAsm *assembly,
+                                                bool operands_present) {
+    const MinicCoreModule *m = &c->set->module;
+    size_t i;
+    for (i = 0U; i < m->function_count; ++i) {
+        const MinicCoreModuleFunctionSymbol *f = &m->function_symbols[i];
+        if (f->name != NULL &&
+            minic_core_asm_names_symbol(assembly->template_text,
+                assembly->template_length, f->name) &&
+            !asm_target_mnemonic_collision(assembly, operands_present, f->name)) {
+            if (!enqueue_named_function(c, f->name, strlen(f->name))) return false;
+        }
+    }
+    for (i = 0U; i < m->global_count; ++i) {
+        const MinicCoreModuleGlobal *g = &m->globals[i];
+        if (g->name != NULL &&
+            minic_core_asm_names_symbol(assembly->template_text,
+                assembly->template_length, g->name) &&
+            !enqueue_named_object(c, g->name, strlen(g->name))) return false;
+    }
+    return true;
+}
+
 /* Only a live Core instruction can contribute these edges. Literal GNU ASM
  * text has no C operand identity: conservatively resolve whole assembler
  * tokens, while typed operand references remain exact and source-independent. */
@@ -168,23 +232,9 @@ static bool scan_core_inline_asm(ModuleClosure *c,
         for (i = 0U; i < m->global_count; ++i)
             if (!enqueue_object(c, i)) return false;
     if (assembly->template_text == NULL) return false;
-    for (i = 0U; i < m->function_count; ++i) {
-        const MinicCoreModuleFunctionSymbol *f = &m->function_symbols[i];
-        if (f->name != NULL &&
-            minic_core_asm_names_symbol(assembly->template_text,
-                assembly->template_length, f->name) &&
-            !asm_target_mnemonic_collision(assembly, operands_present, f->name)) {
-            if (!enqueue_named_function(c, f->name, strlen(f->name))) return false;
-        }
-    }
-    for (i = 0U; i < m->global_count; ++i) {
-        const MinicCoreModuleGlobal *g = &m->globals[i];
-        if (g->name != NULL &&
-            minic_core_asm_names_symbol(assembly->template_text,
-                assembly->template_length, g->name) &&
-            !enqueue_named_object(c, g->name, strlen(g->name))) return false;
-    }
-    return true;
+    return c->asm_names_token_safe ?
+        scan_core_inline_asm_token_names(c, assembly, operands_present) :
+        scan_core_inline_asm_unusual_names(c, assembly, operands_present);
 }
 
 static bool scan_core_function(ModuleClosure *c, size_t id) {
@@ -295,11 +345,17 @@ static bool initialize_closure(ModuleClosure *c) {
         c->owned_next == NULL || c->symbols == NULL) return false;
     if (!minic_core_module_function_name_index_build(
             m, &c->function_names)) return false;
+    c->asm_names_token_safe = true;
+    for (i = 0U; i < m->function_count; ++i)
+        if (!minic_core_assembler_symbol_lexically_safe(
+                m->function_symbols[i].name)) c->asm_names_token_safe = false;
     for (i = 0U; i < m->function_count; ++i) c->owned_heads[i] = SIZE_MAX;
     for (i = 0U; i < m->global_count; ++i) {
         const MinicCoreModuleGlobal *g = &m->globals[i];
         const size_t owner = g->owner_function_index;
         if (g->name == NULL || g->name[0] == '\0') return false;
+        if (!minic_core_assembler_symbol_lexically_safe(g->name))
+            c->asm_names_token_safe = false;
         c->symbols[i].name = g->name;
         c->symbols[i].length = strlen(g->name);
         c->symbols[i].id = i;
