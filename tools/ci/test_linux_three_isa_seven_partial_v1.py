@@ -36,7 +36,14 @@ def test_child_killed(candidate, root):
     child = int(pidfile.read_text())
     for _ in range(20):
         proc = Path(f"/proc/{child}/stat")
-        if not proc.exists() or proc.read_text().split(") ", 1)[1][0] == "Z":
+        try:
+            state = proc.read_text().split(") ", 1)[1][0]
+        except (FileNotFoundError, ProcessLookupError):
+            # The timed-out subprocess may exit between a path-exists
+            # probe and the actual /proc read. ESRCH/ENOENT both prove that
+            # this particular PID is no longer a running child.
+            break
+        if state == "Z":
             break
         time.sleep(0.05)
     else:
