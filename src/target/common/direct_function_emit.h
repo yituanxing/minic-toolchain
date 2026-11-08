@@ -48,6 +48,7 @@ static inline bool minic_multi_direct_lp64_emit_function(
     MinicDirectLP64BlockContext ctx = {0};
     MinicMachineFunction machine = {0};
     MinicMachineGNUAsmPolicy machine_policy = {0};
+    MinicMachineGNUAsmPrepared *prepared_body = NULL;
     MinicMachineCoreCoveragePolicy core_asm_policy = {0};
     const char *name;
     const char *section;
@@ -107,8 +108,8 @@ static inline bool minic_multi_direct_lp64_emit_function(
         machine.frame_alignment != config->abi->stack_alignment ||
         machine.has_dynamic_stack != plan.machine_frame.has_dynamic_stack ||
         !config->initialize_machine_asm_policy(target, &machine_policy) ||
-        !minic_machine_production_preflight(
-            &source, &machine, &machine_policy)) {
+        !minic_machine_production_preflight_prepare(
+            &source, &machine, &machine_policy, &prepared_body)) {
         (void)minic_multi_direct_machine_reject(fn,
             config->architecture, name, "machine_function_preflight",
             SIZE_MAX, SIZE_MAX, __LINE__);
@@ -135,7 +136,7 @@ static inline bool minic_multi_direct_lp64_emit_function(
                 name, config->elf_function_type, name) < 0)
         goto output_failed;
 
-    if (!minic_machine_gnu_asm_emit_body(out, &machine, &machine_policy))
+    if (!minic_machine_gnu_asm_emit_prepared_body(out, prepared_body))
         goto cleanup;
 
     if (fprintf(out, ".size %s,.-%s\n", name, name) < 0 ||
@@ -158,6 +159,7 @@ output_finish_failed:
         fn, config->architecture, name, "function_finish",
         SIZE_MAX, SIZE_MAX, __LINE__);
 cleanup:
+    minic_machine_gnu_asm_prepared_destroy(prepared_body);
     minic_machine_function_destroy(&machine);
     minic_multi_direct_lp64_function_plan_destroy(&plan);
     return ok;

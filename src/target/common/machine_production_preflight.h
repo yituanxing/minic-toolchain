@@ -26,10 +26,13 @@ typedef struct MinicMachineProductionSource {
     const MinicMachineCoreCoveragePolicy *core_asm_policy;
 } MinicMachineProductionSource;
 
-static inline bool minic_machine_production_preflight(
+static inline bool minic_machine_production_preflight_prepare(
     const MinicMachineProductionSource *source,
     const MinicMachineFunction *selected,
-    const MinicMachineGNUAsmPolicy *policy) {
+    const MinicMachineGNUAsmPolicy *policy,
+    MinicMachineGNUAsmPrepared **prepared) {
+    if (prepared == NULL) return false;
+    *prepared = NULL;
     if (source == NULL || source->core == NULL ||
         source->reachable_blocks == NULL || source->target == NULL ||
         source->symbol == NULL || source->symbol[0] == '\0' ||
@@ -47,7 +50,21 @@ static inline bool minic_machine_production_preflight(
     return minic_machine_core_coverage_verify_with_policy(
             source->core, source->reachable_blocks, selected,
             source->core_asm_policy) &&
-        minic_machine_gnu_asm_preflight(selected, policy);
+        minic_machine_gnu_asm_prepare_body(selected, policy, prepared);
+}
+
+/* Standalone checks keep their previous one-shot contract; production
+ * callers retain the prepared plan through the body emission so they never
+ * reverify the same physical instructions or rebuild labels in the writer. */
+static inline bool minic_machine_production_preflight(
+    const MinicMachineProductionSource *source,
+    const MinicMachineFunction *selected,
+    const MinicMachineGNUAsmPolicy *policy) {
+    MinicMachineGNUAsmPrepared *prepared = NULL;
+    bool ok = minic_machine_production_preflight_prepare(
+        source, selected, policy, &prepared);
+    minic_machine_gnu_asm_prepared_destroy(prepared);
+    return ok;
 }
 
 #endif

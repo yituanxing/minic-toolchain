@@ -56,6 +56,7 @@ static bool rv64_emit_typed_function(
     MinicRiscvCoreMachinePlan bridge = {0};
     MinicMachineFunction machine = {0};
     MinicMachineGNUAsmPolicy policy = {0};
+    MinicMachineGNUAsmPrepared *prepared_body = NULL;
     size_t source_asm_id;
     bool okay = false;
     bool frame_ready = false;
@@ -107,11 +108,12 @@ static bool rv64_emit_typed_function(
         };
         if (!minic_riscv_machine_select_core_subset(&machine, &bridge) ||
             !minic_riscv_machine_gnu_asm_policy(target, &policy) ||
-            !minic_machine_production_preflight(&source, &machine, &policy))
+            !minic_machine_production_preflight_prepare(
+                &source, &machine, &policy, &prepared_body))
             goto done;
     }
     okay = minic_riscv_emit_function_symbol_begin(out, symbol) &&
-        minic_machine_gnu_asm_emit_body(out, &machine, &policy) &&
+        minic_machine_gnu_asm_emit_prepared_body(out, prepared_body) &&
         minic_riscv_emit_function_symbol_end(out, symbol);
 done:
     if (!okay && getenv("MINIC_RV_MACHINE_TRACE") != NULL)
@@ -119,6 +121,7 @@ done:
             symbol != NULL && symbol->symbol_name != NULL ?
                 symbol->symbol_name : "<unknown>",
             (unsigned)frame_ready, isa != NULL ? (unsigned)isa->abi : 0U);
+    minic_machine_gnu_asm_prepared_destroy(prepared_body);
     minic_machine_function_destroy(&machine);
     minic_riscv64_core_frame_destroy(&old_frame);
     minic_riscv64_function_abi_plan_destroy(&abi);

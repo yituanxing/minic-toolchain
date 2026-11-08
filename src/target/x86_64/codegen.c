@@ -1045,6 +1045,7 @@ static bool x86_emit_function(FILE *out,
     MinicX86Frame frame = {0};
     MinicMachineFunction machine = {0};
     MinicMachineGNUAsmPolicy machine_policy = {0};
+    MinicMachineGNUAsmPrepared *prepared_body = NULL;
     const char *name = module_decl->name;
     const char *section_name = module_decl->section_name;
     const size_t explicit_alignment = module_decl->explicit_alignment;
@@ -1180,8 +1181,8 @@ static bool x86_emit_function(FILE *out,
         const bool has_policy = selected &&
             minic_x86_64_machine_gnu_asm_policy(target, &machine_policy);
         const bool sealed = has_policy &&
-            minic_machine_production_preflight(
-                &source, &machine, &machine_policy);
+            minic_machine_production_preflight_prepare(
+                &source, &machine, &machine_policy, &prepared_body);
         if (!sealed) {
             if (getenv("MINIC_X86_TYPED_REJECT_TRACE") != NULL) {
                 const bool covered = has_policy &&
@@ -1236,7 +1237,7 @@ static bool x86_emit_function(FILE *out,
         goto done;
     if (fprintf(out, ".type %s,@function\n%s:\n", name, name) < 0)
         goto done;
-    if (!minic_machine_gnu_asm_emit_body(out, &machine, &machine_policy) ||
+    if (!minic_machine_gnu_asm_emit_prepared_body(out, prepared_body) ||
         fprintf(out, ".size %s,.-%s\n", name, name) < 0 ||
         (is_constructor &&
          fprintf(out, ".section .init_array,\"aw\",@init_array\n"
@@ -1244,6 +1245,7 @@ static bool x86_emit_function(FILE *out,
         goto done;
     success = true;
 done:
+    minic_machine_gnu_asm_prepared_destroy(prepared_body);
     minic_machine_function_destroy(&machine);
     free(head_direct_data_globals);
     free(head_vma_cast_globals);

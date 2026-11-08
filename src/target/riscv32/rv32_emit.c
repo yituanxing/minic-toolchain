@@ -78,6 +78,7 @@ static bool rv32_func(FILE *out, const MinicCoreModule *module,
     {
         MinicMachineFunction machine = {0};
         MinicMachineGNUAsmPolicy policy = {0};
+        MinicMachineGNUAsmPrepared *prepared_body = NULL;
         MinicRiscvPhysicalFrame physical = {0};
         MinicRiscvCoreMachinePlan bridge = {0};
         const MinicMachineProductionSource source = {
@@ -104,8 +105,8 @@ static bool rv32_func(FILE *out, const MinicCoreModule *module,
             }
             if (admitted) {
                 reject_stage = "preflight";
-                admitted = minic_machine_production_preflight(
-                    &source, &machine, &policy);
+                admitted = minic_machine_production_preflight_prepare(
+                    &source, &machine, &policy, &prepared_body);
             }
         }
         if (!admitted && getenv("MINIC_RV_MACHINE_TRACE") != NULL)
@@ -116,8 +117,9 @@ static bool rv32_func(FILE *out, const MinicCoreModule *module,
             rv32_diag(diag, "<rv32-machine>",
                 "rv32i: complete typed MachineIR function rejected");
         ok = admitted && minic_riscv_emit_function_symbol_begin(out, &sym) &&
-            minic_machine_gnu_asm_emit_body(out, &machine, &policy) &&
+            minic_machine_gnu_asm_emit_prepared_body(out, prepared_body) &&
             minic_riscv_emit_function_symbol_end(out, &sym);
+        minic_machine_gnu_asm_prepared_destroy(prepared_body);
         minic_machine_function_destroy(&machine);
         goto done;
     }

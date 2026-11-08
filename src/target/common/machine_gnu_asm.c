@@ -10,6 +10,12 @@ typedef struct MachineOwnedLabels {
     size_t count;
 } MachineOwnedLabels;
 
+struct MinicMachineGNUAsmPrepared {
+    const MinicMachineFunction *function;
+    MinicMachineGNUAsmPolicy policy;
+    MachineOwnedLabels owned;
+};
+
 static void machine_owned_labels_destroy(MachineOwnedLabels *labels) {
     size_t i;
     if (labels == NULL) return;
@@ -240,6 +246,35 @@ static bool machine_gnu_asm_prepare(const MinicMachineFunction *function,
     return true;
 }
 
+bool minic_machine_gnu_asm_prepare_body(
+    const MinicMachineFunction *function,
+    const MinicMachineGNUAsmPolicy *policy,
+    MinicMachineGNUAsmPrepared **prepared) {
+    MinicMachineGNUAsmPrepared *owned;
+    if (prepared == NULL) return false;
+    *prepared = NULL;
+    if (function == NULL || policy == NULL) return false;
+    owned = calloc(1U, sizeof(*owned));
+    if (owned == NULL) return false;
+    owned->function = function;
+    owned->policy = *policy;
+    if (!machine_gnu_asm_prepare(function, &owned->policy,
+                                 &owned->owned)) {
+        machine_owned_labels_destroy(&owned->owned);
+        free(owned);
+        return false;
+    }
+    *prepared = owned;
+    return true;
+}
+
+void minic_machine_gnu_asm_prepared_destroy(
+    MinicMachineGNUAsmPrepared *prepared) {
+    if (prepared == NULL) return;
+    machine_owned_labels_destroy(&prepared->owned);
+    free(prepared);
+}
+
 bool minic_machine_gnu_asm_preflight(
     const MinicMachineFunction *function,
     const MinicMachineGNUAsmPolicy *policy) {
@@ -249,17 +284,18 @@ bool minic_machine_gnu_asm_preflight(
     return ok;
 }
 
-bool minic_machine_gnu_asm_emit_body(FILE *output,
-    const MinicMachineFunction *function,
-    const MinicMachineGNUAsmPolicy *policy) {
-    MachineOwnedLabels owned = {0};
+bool minic_machine_gnu_asm_emit_prepared_body(FILE *output,
+    const MinicMachineGNUAsmPrepared *prepared) {
     MinicMachineGNUAsmLabels view;
     size_t i;
     bool ok = false;
-    if (output == NULL || !machine_gnu_asm_prepare(function, policy, &owned))
-        goto done;
-    view.names = (const char *const *)owned.names;
-    view.count = owned.count;
+    const MinicMachineFunction *function;
+    const MinicMachineGNUAsmPolicy *policy;
+    if (output == NULL || prepared == NULL) return false;
+    function = prepared->function;
+    policy = &prepared->policy;
+    view.names = (const char *const *)prepared->owned.names;
+    view.count = prepared->owned.count;
     for (i = 0U; i < function->block_count; ++i) {
         const MinicMachineBlock *block = &function->blocks[i];
         size_t j;
@@ -296,6 +332,17 @@ bool minic_machine_gnu_asm_emit_body(FILE *output,
     }
     ok = !ferror(output);
 done:
-    machine_owned_labels_destroy(&owned);
+    return ok;
+}
+
+bool minic_machine_gnu_asm_emit_body(FILE *output,
+    const MinicMachineFunction *function,
+    const MinicMachineGNUAsmPolicy *policy) {
+    MinicMachineGNUAsmPrepared *prepared = NULL;
+    bool ok;
+    if (output == NULL || !minic_machine_gnu_asm_prepare_body(
+            function, policy, &prepared)) return false;
+    ok = minic_machine_gnu_asm_emit_prepared_body(output, prepared);
+    minic_machine_gnu_asm_prepared_destroy(prepared);
     return ok;
 }

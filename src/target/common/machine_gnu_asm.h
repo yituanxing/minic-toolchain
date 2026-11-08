@@ -43,6 +43,22 @@ typedef struct MinicMachineGNUAsmPolicy {
     void *context;
 } MinicMachineGNUAsmPolicy;
 
+/* A sealed, owned emission plan. Preparation validates the complete physical
+ * MachineFunction and owns its label spelling exactly once, before any ELF
+ * envelope is printed. The MachineFunction and target context must remain
+ * alive and unchanged through emission. The opaque plan cannot be forged by
+ * ordinary target callers or used as a substitute for Core coverage. */
+typedef struct MinicMachineGNUAsmPrepared MinicMachineGNUAsmPrepared;
+
+bool minic_machine_gnu_asm_prepare_body(
+    const MinicMachineFunction *function,
+    const MinicMachineGNUAsmPolicy *policy,
+    MinicMachineGNUAsmPrepared **prepared);
+bool minic_machine_gnu_asm_emit_prepared_body(
+    FILE *output, const MinicMachineGNUAsmPrepared *prepared);
+void minic_machine_gnu_asm_prepared_destroy(
+    MinicMachineGNUAsmPrepared *prepared);
+
 /* The Module/ELF writer calls this before emitting the section/global/type
  * envelope. It verifies all machine content, including outlined fragments,
  * label uniqueness and availability of source-owned ASM serializers. */

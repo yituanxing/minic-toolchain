@@ -34,6 +34,7 @@ static FILE *probe_stream(void) {
 }
 
 enum ProbeOpcode { PROBE_JUMP = 1, PROBE_RET };
+static size_t probe_opcode_lookup_count;
 
 static bool probe_features(const MinicTargetInfo *target,
     uint64_t features, void *context) {
@@ -70,6 +71,7 @@ static bool probe_opcode(const MinicTargetInfo *target, uint32_t opcode,
     MinicMachineOpcodeContract *contract, void *context) {
     (void)target;
     (void)context;
+    ++probe_opcode_lookup_count;
     memset(contract, 0, sizeof(*contract));
     if (opcode == PROBE_JUMP) {
         contract->operand_count = 1U;
@@ -184,11 +186,14 @@ int main(void) {
     MinicMachineSourceAsmInput typed_asm = {0};
     MinicCoreInlineAsm sealed_empty_asm = {0};
     FILE *output = NULL;
+    FILE *prepared_output = NULL;
     FILE *at_output = NULL;
     FILE *rejected = NULL;
     FILE *accepted = NULL;
     FILE *accepted_typed = NULL;
     FILE *accepted_empty = NULL;
+    MinicMachineGNUAsmPrepared *prepared_plan = NULL;
+    size_t prepared_lookups;
     size_t only_block;
     bool success = false;
     unsigned int stage = 0U;
@@ -228,6 +233,32 @@ int main(void) {
             "\t.long .Lmir_entry_address - .\n"
             "\t.popsection\n")) goto done;
     stage = 2U;
+    /* The one-shot writer plan must reuse the already verified opcode
+     * contracts and label spelling. It snapshots the policy instead of
+     * consulting a modified caller-owned policy during emission. */
+    probe_opcode_lookup_count = 0U;
+    prepared_output = probe_stream();
+    if (prepared_output == NULL ||
+        !minic_machine_gnu_asm_prepare_body(
+            &function, &policy, &prepared_plan) ||
+        probe_opcode_lookup_count == 0U) goto done;
+    prepared_lookups = probe_opcode_lookup_count;
+    policy.section_type_marker = MINIC_MACHINE_GNU_SECTION_TYPE_AT;
+    if (!minic_machine_gnu_asm_emit_prepared_body(
+            prepared_output, prepared_plan) ||
+        probe_opcode_lookup_count != prepared_lookups ||
+        !verify_output(prepared_output,
+            ".Lmir_entry_address:\n"
+            ".Lmir_before_jump:\n"
+            "\tb .Lminic_mir_mir_probe_1\n"
+            ".Lminic_mir_mir_probe_1:\n"
+            ".Lmir_exit_address:\n"
+            "\tret\n"
+            "\t.pushsection __jump_table,\"aw\",%progbits\n"
+            "\t.long .Lmir_entry_address - .\n"
+            "\t.popsection\n")) goto done;
+    minic_machine_gnu_asm_prepared_destroy(prepared_plan);
+    prepared_plan = NULL;
     /* The very same synthetic AArch64 MachineFunction must use the
      * target-supplied policy, never an architecture branch in Common. */
     policy.section_type_marker = MINIC_MACHINE_GNU_SECTION_TYPE_AT;
@@ -388,11 +419,13 @@ int main(void) {
     success = true;
 done:
     if (output != NULL) fclose(output);
+    if (prepared_output != NULL) fclose(prepared_output);
     if (at_output != NULL) fclose(at_output);
     if (rejected != NULL) fclose(rejected);
     if (accepted != NULL) fclose(accepted);
     if (accepted_typed != NULL) fclose(accepted_typed);
     if (accepted_empty != NULL) fclose(accepted_empty);
+    minic_machine_gnu_asm_prepared_destroy(prepared_plan);
     minic_machine_function_destroy(&empty_function);
     minic_machine_function_destroy(&source_function);
     minic_machine_function_destroy(&function);
