@@ -10,4 +10,5 @@
 2026-11-07 current exact-HEAD 2064-owner LP64 static Image independently verified P1 twelve-boot campaign; GNU golden and candidate Kbuild/link identity required, no historical cached 4/4 substitution.
 # 2026-11-08 compiler f4d7d01 full current GNU Kbuild Image and twelve independent strict P1 boot receipts, not eight-owner replay
 # 2026-11-08 optimized source c95363a exact-head full 2064-owner GNU Kbuild and strict twelve independent same-Image P1 boots; this marker changes together with linux-rv64-runtime-trigger.txt in one commit.
+# 2026-11-08 source 8708f818 full 2064-owner GNU Kbuild and fresh 12/12 identical-image P1; both markers atomically rearmed, not historical eight-owner diagnostic.
 mode=rv64-full
