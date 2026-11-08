@@ -2,6 +2,7 @@
 set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
+. "$root/tests/compiler/c0/machine-cfg-contract.sh"
 minic=${MINIC:-"$root/build/debug/bin/minic"}
 host_cc=${HOST_CC:-${CC:-cc}}
 work=${BUILD_DIR:-"$root/build/debug"}/tests/compiler-c0-pointer-object-const
@@ -15,8 +16,7 @@ mkdir -p "$work"
     "$work/pointer_object_const.i" \
     -o "$work/pointer_object_const.s"
 grep -F ".globl main" "$work/pointer_object_const.s" >/dev/null
-grep -F ".Lmain_core_bb" "$work/pointer_object_const.s" >/dev/null
-grep -F ".Lmain_core_return:" "$work/pointer_object_const.s" >/dev/null
+require_machine_function_cfg "$work/pointer_object_const.s" main 2
 grep -F "  call read_value" "$work/pointer_object_const.s" >/dev/null
 # The semantic contract is that *fixed = 9 reaches a 32-bit store through the
 # Core pointer/object path.  Do not pin the temporary register allocation used

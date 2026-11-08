@@ -32,8 +32,13 @@ check_cursor() {
         active && /^  addi.d \$sp, \$sp, -[0-9]+$/ && frame == 0 {
             frame=-($4+0)
         }
-        active && /^  li.d \$t0, [0-9]+$/ && frame != 0 {
-            offset=$3+0
+        # Typed MachineIR emits the same frame-relative VA pointer as
+        # ADDI.D t0,sp,offset when the positive offset fits signed 12-bit;
+        # the previous emitter used LI.D for the offset materialization.
+        # Preserve the entry-SP-relative ABI check across both encodings.
+        active && (/^  li.d \$t0, [0-9]+$/ ||
+                   /^  addi.d \$t0, \$sp, [0-9]+$/) && frame != 0 {
+            offset=$NF+0
             if (offset == frame-64+gp*8) count++
         }
         active && $0 ~ "^\\.size "symbol"," { active=0 }

@@ -6,9 +6,10 @@
 > 修正文档漂移。不得在本阶段移动目录、拆出新层、统一不同 ABI、改 IR 合同，
 > 或把 Bug 修复混入“净删行数”。
 
-> **最新覆盖率请看 C33。** C1～C32 所用的 339 文件分母是历史快照，
-> 当前 HEAD 实际为 342 个生产 C/H/def 文件（Frontend 71、Compiler 11、
-> Core 48、Target 212）；旧批次的当时数字不回写，也不把路径扫描算作深读。
+> **历史完整审读止于 C38：当时 342/342。** C1～C32 的 339 分母及
+> C38 的 342 分母均为各自源码快照，不能作为现在的审读覆盖率。
+> 2026-11-08 的 `c95363a` 源树现有 **414** 个生产 C/H/def 文件；
+> 当前逐文件完整深读覆盖率**未重新认证**，不得声称 414/414。
 
 ## 工作边界与统计口径
 
@@ -1437,6 +1438,52 @@ producer jobs 实际 **SKIPPED**，不可算 Linux P0/P1 PASS；
 RV32 full18、AArch64 NEON Stage3、x86 nested-KVM preflight 均有失败，
 LoongArch P2 当次仍运行中。C38 的 Actions 需以本批**新远端 SHA**
 重新取证，不能继承 C37 绿色状态。
+
+## 2026-11-08 当前源码清点：历史 C38 覆盖率失效（非新一轮全文深读）
+
+**基准和证据边界：** 当前 `refactor/minic-target-language-boundary` 源码
+`c95363a25a669c0367db514a882312de5269dfac`，按 `src/` 下的
+`*.c`、`*.h`、`*.def` 计数，总数 **414**：`common/` 4、
+`compiler/` 61、`core/` 13、`frontend/` 73、`target/` 263。
+与 C38 所用的 C37 父基线 `af5b72e8` 的 **342** 个路径清单相比，
+Git tree blob 清单按文件路径差分为：**新增路径 183、移除路径 111、
+保留但内容变化 185、净增 72**。其中有 **40 对**旧
+`src/core/<name>` 与新 `src/compiler/c_lower/<name>` 的同名迁移候选；
+去除此类可对应路径，仍有 **143 个新增路径、71 个退役路径**。
+这些是**路径及 Git blob 对照数字**，不等于已证明 40 对内容完全相同，
+更不等于 71 个被删文件的全部逻辑已退役或 143 个新文件均是全新功能。
+
+现存 [机器后端审读 manifest](minic-backend-review-ledger.json) 的 **262**
+项与 `c95363a` Git index blob 再对照：**169 项指纹相符**（仅
+`full` 2、`targeted` 8、`inventory` 159），**93 项指纹漂移**
+（`targeted` 2、`inventory` 91）；目标源码还存在未登记的
+`src/target/target_registration.def`。因此这份 manifest 自身也
+**不是 263/263 Target 深读证明**；指纹相符的 `inventory` 仍只是清点。
+
+本次只对 TargetInfo/DataLayout、Target/ABI/ISA 配置、Machine IR
+物理操作数与选择/验证/发射主链做**结构及关键调用链核查**，并检索
+源码语言依赖边界；**没有对当前 414 个文件逐行阅读全文**。
+当前 `src/target/common/machine_ir.h` 以机器 opcode、物理寄存器、
+block/frame/operand 为主，不直接持有 C AST/CType；
+`src/target/backend.c` 的五目标入口通过已选 MachineFunction 的
+preflight/verify 与机器输出路径，`source_policy/` 和 `backend_source.*`
+负责 C/GNU source qualification。AArch64/LoongArch 的
+`src/target/common/direct_function_emit.h` 名称虽然保留 `direct`，
+仍是**现役机器发射路径**，不得按历史遗留直接清除。
+
+**验收与遗留问题严格分开：** 当前源码对应的五目标 Linux/QEMU
+累计 **13,394/13,394** 官方用例通过，是当前运行矩阵的有效证明，
+不能反推架构审计 414/414 或所有 GNU 语义缺口关闭。
+截至本次清点，[MC 问题台账](minic-issue-register.md) 索引仍有
+**23 项 OPEN（P0 1、P1 13、P2 9）**，例如 MC-007/008、MC-037、
+MC-068、MC-069（AArch64 vDSO 重定位）、MC-070（Loong B26 越界）、
+MC-072（computed-goto 标签）、MC-076（唯一 OPEN P0，部分路径仍有
+异址证明缺口）、MC-080（间接变参 Record，五目标 0/5）；仍标
+`FIXED-UNVERIFIED` 的专项也应分别核验。MC-084 的定点优化已记修复，
+**不得误标 OPEN**。这里的 OPEN 计数取自问题台账索引，非新增复现结论。
+下一轮真正的完整源码审读必须重新生成 414 项固定 HEAD manifest，
+逐路径登记 `FULL_READ / CALL_CHAIN_ONLY / INVENTORY_ONLY`、owner、
+已跑 fixture 和未覆盖依赖，完成后才可更新覆盖率分子。
 
 ## 后续批次进度规则
 

@@ -442,6 +442,143 @@ static size_t x86_head_memory_addresses(
     }
 }
 
+/* A head CALL can transport a physical pointer selected by its caller into
+ * another function, where a pointer-to-integer cast observes the wrong VMA.
+ * The local-slot proof cannot see across this ABI boundary.  Recognize only
+ * the narrow, same-module parameter-to-numeric path for a fail-closed gate;
+ * a helper that only dereferences the incoming physical pointer remains
+ * legal.  Do not infer a positive interprocedural alias contract here. */
+static bool x86_head_callee_parameter_numeric(
+    const MinicCoreFunction *callee, size_t parameter_index,
+    bool *unproven) {
+    const MinicCoreInstruction **defs = NULL;
+    bool *derived = NULL, *derived_objects = NULL;
+    bool changed, numeric = false;
+    size_t i;
+    if (unproven != NULL) *unproven = false;
+    if (callee == NULL ||
+        callee->value_count > SIZE_MAX / sizeof(*derived) ||
+        callee->value_count > SIZE_MAX / sizeof(*defs) ||
+        callee->object_count > SIZE_MAX / sizeof(*derived_objects)) {
+        if (unproven != NULL) *unproven = true;
+        return false;
+    }
+    derived = calloc(callee->value_count == 0U ? 1U : callee->value_count,
+                     sizeof(*derived));
+    derived_objects = calloc(callee->object_count == 0U ? 1U :
+                             callee->object_count, sizeof(*derived_objects));
+    defs = calloc(callee->value_count == 0U ? 1U : callee->value_count,
+                  sizeof(*defs));
+    if (derived == NULL || derived_objects == NULL || defs == NULL) {
+        if (unproven != NULL) *unproven = true;
+        goto done;
+    }
+    for (i = 0U; i < callee->instruction_count; ++i) {
+        const MinicCoreInstruction *ins = &callee->instructions[i];
+        if (ins->result < callee->value_count) defs[ins->result] = ins;
+        if (ins->kind == MINIC_CORE_INSTRUCTION_PARAMETER &&
+            ins->value.parameter_index == parameter_index &&
+            ins->result < callee->value_count &&
+            x86_function_kind(callee, ins->core_type_id,
+                              MINIC_CORE_TYPE_POINTER))
+            derived[ins->result] = true;
+    }
+    do {
+        changed = false;
+        for (i = 0U; i < callee->instruction_count; ++i) {
+            const MinicCoreInstruction *ins = &callee->instructions[i];
+            MinicCoreValueId source = MINIC_CORE_VALUE_INVALID;
+            X86HeadLocalAddress address;
+            if (ins->kind == MINIC_CORE_INSTRUCTION_STORE &&
+                ins->value.store.stored_value < callee->value_count &&
+                derived[ins->value.store.stored_value] &&
+                x86_head_local_address(callee, defs, ins->value.store.address,
+                                       &address) &&
+                !derived_objects[address.object]) {
+                derived_objects[address.object] = true;
+                changed = true;
+            }
+            if (ins->kind == MINIC_CORE_INSTRUCTION_LOAD &&
+                ins->result < callee->value_count && !derived[ins->result] &&
+                x86_function_kind(callee, ins->core_type_id,
+                                  MINIC_CORE_TYPE_POINTER) &&
+                x86_head_local_address(callee, defs, ins->value.load.address,
+                                       &address) && derived_objects[address.object]) {
+                derived[ins->result] = true;
+                changed = true;
+            }
+            if (ins->kind == MINIC_CORE_INSTRUCTION_FIELD_ADDRESS)
+                source = ins->value.field_address.base;
+            else if (ins->kind == MINIC_CORE_INSTRUCTION_POINTER_OFFSET)
+                source = ins->value.pointer_offset.base;
+            else if (ins->kind == MINIC_CORE_INSTRUCTION_SCALAR_BITCAST)
+                source = ins->value.operand;
+            if (source >= callee->value_count || !derived[source]) continue;
+            if (ins->kind == MINIC_CORE_INSTRUCTION_SCALAR_BITCAST &&
+                x86_function_kind(callee, ins->core_type_id,
+                                  MINIC_CORE_TYPE_INTEGER)) {
+                numeric = true;
+                goto done;
+            }
+            if (ins->result < callee->value_count &&
+                !derived[ins->result] &&
+                x86_function_kind(callee, ins->core_type_id,
+                                  MINIC_CORE_TYPE_POINTER)) {
+                derived[ins->result] = true;
+                changed = true;
+            }
+        }
+    } while (changed);
+done:
+    free(defs);
+    free(derived);
+    free(derived_objects);
+    return numeric;
+}
+
+static bool x86_head_call_numeric_alias(
+    const MinicCoreFunction *caller,
+    const MinicCoreInstruction *call,
+    const MinicCoreFunction *module_functions,
+    size_t module_function_count,
+    const X86HeadAddressOrigin *origins,
+    const bool *direct) {
+    const MinicCoreCallee *callee;
+    size_t i, j, begin, count;
+    if (caller == NULL || call == NULL || module_functions == NULL ||
+        call->kind != MINIC_CORE_INSTRUCTION_CALL ||
+        call->value.call.callee_id >= caller->callee_count)
+        return false;
+    callee = &caller->callees[call->value.call.callee_id];
+    begin = call->value.call.argument_begin;
+    count = call->value.call.argument_count;
+    if (begin > caller->call_argument_count ||
+        count > caller->call_argument_count - begin) return false;
+    for (i = 0U; i < count; ++i) {
+        const MinicCoreCallArgument *arg = &caller->call_arguments[begin + i];
+        X86HeadAddressOrigin origin;
+        if (arg->kind != MINIC_CORE_CALL_ARGUMENT_VALUE ||
+            arg->value.value_id >= caller->value_count ||
+            !x86_function_kind(caller,
+                caller->values[arg->value.value_id].core_type_id,
+                MINIC_CORE_TYPE_POINTER)) continue;
+        origin = origins[arg->value.value_id];
+        if (origin.global >= caller->global_count ||
+            !direct[origin.global] || origin.crossed_vma_cast) continue;
+        for (j = 0U; j < module_function_count; ++j) {
+            const MinicCoreFunction *target = &module_functions[j];
+            bool unproven = false;
+            if (target->name == NULL || callee->name == NULL ||
+                target->name_length != callee->name_length ||
+                memcmp(target->name, callee->name,
+                       callee->name_length) != 0) continue;
+            if (x86_head_callee_parameter_numeric(target, i, &unproven) ||
+                unproven) return true;
+        }
+    }
+    return false;
+}
+
 /* Compute ONE checked early-address plan for all machine consumers. The
  * direct/global, scalar-cast and memory-rebase arrays are three different
  * views of this same source-of-truth, not three independently guessed role
@@ -452,7 +589,9 @@ static size_t x86_head_memory_addresses(
 static bool x86_head_plan_address_roles(
     const MinicCoreFunction *fn, const bool *reachable, bool *direct,
     MinicCoreGlobalId *vma_cast_globals,
-    MinicCoreGlobalId *memory_rebase_globals, bool *unproven_local) {
+    MinicCoreGlobalId *memory_rebase_globals, bool *unproven_local,
+    bool *unproven_call, const MinicCoreFunction *module_functions,
+    size_t module_function_count) {
     const MinicCoreInstruction **defs = NULL;
     X86HeadAddressOrigin *origins = NULL, *previous_origins = NULL;
     X86HeadAddressOrigin *out_states = NULL, *scratch = NULL;
@@ -462,6 +601,7 @@ static bool x86_head_plan_address_roles(
     size_t slot_count = 0U, pass = 0U, pass_limit, i, j;
     bool success = false, changed;
     if (unproven_local != NULL) *unproven_local = false;
+    if (unproven_call != NULL) *unproven_call = false;
     if (fn == NULL || reachable == NULL || direct == NULL ||
         vma_cast_globals == NULL || memory_rebase_globals == NULL ||
         fn->value_count > SIZE_MAX / sizeof(*defs) ||
@@ -530,6 +670,7 @@ static bool x86_head_plan_address_roles(
             ++slot_count;
         }
     }
+
     if (slot_count != 0U) {
         if (fn->block_count > SIZE_MAX / slot_count ||
             fn->block_count * slot_count > SIZE_MAX / sizeof(*out_states) ||
@@ -654,6 +795,26 @@ static bool x86_head_plan_address_roles(
                     x86_head_origin_from_value(fn, origins, addresses[k]);
                 if (origin.global < fn->global_count)
                     direct[origin.global] = true;
+            }
+        }
+    }
+
+    /* Refuse the observed cross-function VMA wrongcode before selecting any
+     * machine instructions.  This is intentionally scoped to a callee whose
+     * matching pointer parameter is proven to be interpreted numerically;
+     * blindly rejecting every head pointer argument would also reject
+     * legitimate early physical-dereference helpers. */
+    for (i = 0U; i < fn->block_count; ++i) {
+        const MinicCoreBlock *block = &fn->blocks[i];
+        if (!reachable[i]) continue;
+        for (j = 0U; j < block->instruction_count; ++j) {
+            const MinicCoreInstructionId id = block->instructions[j];
+            if (id >= fn->instruction_count) goto done;
+            if (x86_head_call_numeric_alias(fn, &fn->instructions[id],
+                    module_functions, module_function_count,
+                    origins, direct)) {
+                if (unproven_call != NULL) *unproven_call = true;
+                goto done;
             }
         }
     }
@@ -833,6 +994,8 @@ static bool x86_emit_function(FILE *out,
                               const MinicCoreObjectStoragePlan *storage,
                               size_t function_id, bool function_sections,
                               bool inherited_head_address_context,
+                              const MinicCoreFunction *module_functions,
+                              size_t module_function_count,
                               MinicDiagnostic *diag, const char *path) {
     MinicX86Frame frame = {0};
     MinicMachineFunction machine = {0};
@@ -945,13 +1108,16 @@ static bool x86_emit_function(FILE *out,
             head_vma_cast_globals[i] = MINIC_CORE_GLOBAL_INVALID;
             head_memory_rebase_globals[i] = MINIC_CORE_GLOBAL_INVALID;
         }
-        bool unproven_local = false;
+        bool unproven_local = false, unproven_call = false;
         if (!x86_head_plan_address_roles(
                 fn, reachable, head_direct_data_globals,
                 head_vma_cast_globals, head_memory_rebase_globals,
-                &unproven_local)) {
+                &unproven_local, &unproven_call,
+                module_functions, module_function_count)) {
             x86_error(diag, path, unproven_local
                 ? "x86-64 early head unproven local address provenance"
+                : unproven_call
+                ? "x86-64 early head unproven cross-function numeric pointer provenance"
                 : "x86-64 cannot plan early head address roles");
             goto done;
         }
@@ -1048,6 +1214,8 @@ typedef struct MinicX86VisitContext {
     const char *path;
     const bool *head_address_context;
     const MinicCoreModule *module;
+    const MinicCoreFunction *functions;
+    size_t function_count;
 } MinicX86VisitContext;
 
 /* An unannotated static helper called exclusively from .head.text executes
@@ -1200,6 +1368,7 @@ static bool x86_visit_function(
                              function_sections,
                              ctx->head_address_context != NULL &&
                              ctx->head_address_context[index],
+                             ctx->functions, ctx->function_count,
                              ctx->diagnostic, ctx->path);
 }
 
@@ -1244,7 +1413,8 @@ static bool x86_write_core_module_impl(
         MINIC_PROGRAM_FUNCTION_LIVE_DEFINITIONS, false
     };
     bool success;
-    MinicX86VisitContext visits = { diagnostic, path, NULL, module };
+    MinicX86VisitContext visits = { diagnostic, path, NULL, module,
+                                   core_functions, core_function_count };
     if (path == NULL || module == NULL || target == NULL ||
         target->architecture != MINIC_TARGET_ARCH_X86_64 ||
         (core_function_count != 0U && core_functions == NULL) ||

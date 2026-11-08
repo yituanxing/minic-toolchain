@@ -410,6 +410,52 @@ int main(void) {
     CHECK(!minic_machine_production_preflight(&source, &machine, &policy));
     policy.verify.lookup_opcode = probe_opcode;
     CHECK(minic_machine_production_preflight(&source, &machine, &policy));
+    /* GNU emission must reject generated names colliding with any exported,
+     * alias or selected local marker, even when the MachineIR's source labels
+     * themselves are otherwise lexically valid and individually unique. */
+    {
+        char *const saved = machine.blocks[entry].exported_label;
+        machine.blocks[entry].exported_label =
+            ".Lminic_mir_production_probe_1";
+        CHECK(!minic_machine_gnu_asm_preflight(&machine, &policy));
+        machine.blocks[entry].exported_label = saved;
+        CHECK(minic_machine_gnu_asm_preflight(&machine, &policy));
+    }
+    {
+        const MinicMachineInstruction local = {
+            .kind = MINIC_MACHINE_INSTRUCTION_LOCAL_LABEL,
+            .local_label_name = ".Lminic_mir_production_probe_1"
+        };
+        CHECK(minic_machine_block_append_instruction(&machine, entry, &local));
+        CHECK(!minic_machine_gnu_asm_preflight(&machine, &policy));
+        CHECK(minic_machine_block_erase_instruction(&machine, entry, 0U));
+        CHECK(minic_machine_gnu_asm_preflight(&machine, &policy));
+    }
+    CHECK(minic_machine_block_add_alias_label(&machine, entry,
+        ".Ldistinct_external_alias"));
+    CHECK(minic_machine_gnu_asm_preflight(&machine, &policy));
+    CHECK(minic_machine_block_add_alias_label(&machine, entry,
+        ".Lminic_mir_production_probe_1"));
+    CHECK(!minic_machine_gnu_asm_preflight(&machine, &policy));
+    {
+        MinicMachineFunction one = {0};
+        size_t only = SIZE_MAX;
+        CHECK(minic_machine_function_initialize(&one, &target,
+            "one_block_proof", 0U));
+        CHECK(!minic_machine_gnu_asm_preflight(&one, &policy));
+        CHECK(minic_machine_function_add_block(&one, NULL, false, &only));
+        CHECK(only == 0U);
+        {
+            const MinicMachineInstruction ret = {
+                .kind = MINIC_MACHINE_INSTRUCTION_SELECTED,
+                .opcode = PROBE_RETURN,
+                .effects = MINIC_MACHINE_EFFECT_RETURN
+            };
+            CHECK(minic_machine_block_append_instruction(&one, only, &ret));
+        }
+        CHECK(minic_machine_gnu_asm_preflight(&one, &policy));
+        minic_machine_function_destroy(&one);
+    }
     minic_machine_function_destroy(&machine);
     return check_selected_source_asm();
 }

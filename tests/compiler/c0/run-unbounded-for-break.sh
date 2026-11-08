@@ -2,6 +2,7 @@
 set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
+. "$root/tests/compiler/c0/machine-cfg-contract.sh"
 minic=${MINIC:-"$root/build/debug/bin/minic"}
 host_cc=${HOST_CC:-${CC:-cc}}
 work=${BUILD_DIR:-"$root/build/debug"}/tests/compiler-c0-unbounded-for-break
@@ -20,8 +21,7 @@ mkdir -p "$work"
 # contain Core blocks/return and exactly two conditional branches: an empty for
 # condition must not synthesize an additional guard branch.  The Core emitter
 # may choose beqz or bnez according to successor ordering.
-grep -F ".Lmain_core_bb" "$work/unbounded_for_break.s" >/dev/null
-grep -F ".Lmain_core_return:" "$work/unbounded_for_break.s" >/dev/null
+require_machine_function_cfg "$work/unbounded_for_break.s" main 2
 branch_count=$(grep -Ec '^[[:space:]]+(beqz|bnez)[[:space:]]' "$work/unbounded_for_break.s" || true)
 if [ "$branch_count" -ne 2 ]; then
     printf '%s\n' \

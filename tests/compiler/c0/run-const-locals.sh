@@ -2,6 +2,7 @@
 set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
+. "$root/tests/compiler/c0/machine-cfg-contract.sh"
 minic=${MINIC:-"$root/build/debug/bin/minic"}
 host_cc=${HOST_CC:-${CC:-cc}}
 work=${BUILD_DIR:-"$root/build/debug"}/tests/compiler-c0-const-locals
@@ -41,12 +42,14 @@ compile_success \
     const_local \
     "$root/tests/programs/c0/const_local.c"
 grep -F ".type preserve_value, @function" "$work/const_local.s" >/dev/null
-grep -F ".Lpreserve_value_core_bb" "$work/const_local.s" >/dev/null
-grep -F ".Lpreserve_value_core_return:" "$work/const_local.s" >/dev/null
+require_machine_function_cfg "$work/const_local.s" preserve_value 2
 # Core emits XLEN arithmetic and then applies the semantic integer conversion;
 # keep this gate on operations rather than the legacy emitter's W-form choice.
 grep -E '^[[:space:]]+add[[:space:]]+' "$work/const_local.s" >/dev/null
-grep -E '^[[:space:]]+mul[[:space:]]+' "$work/const_local.s" >/dev/null
+# RV64I without M must lower this multiplication through __muldi3.
+if ! grep -E '^[[:space:]]+mul[[:space:]]+' "$work/const_local.s" >/dev/null; then
+    grep -E '^[[:space:]]+call[[:space:]]+__muldi3$' "$work/const_local.s" >/dev/null
+fi
 grep -F "  call preserve_value" "$work/const_local.s" >/dev/null
 printf '%s\n' "PASS compiler/c0/const_local normalized=core-const-local"
 

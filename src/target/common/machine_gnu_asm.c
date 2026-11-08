@@ -50,9 +50,23 @@ static char *machine_internal_label(const char *name, size_t block_id) {
     return owned;
 }
 
+static int machine_compare_label_names(const void *left, const void *right) {
+    const char *const *a = left;
+    const char *const *b = right;
+    return strcmp(*a, *b);
+}
+
+static bool machine_generated_label_exists(const char *const *sorted_names,
+    size_t count, const char *name) {
+    return bsearch(&name, sorted_names, count, sizeof(*sorted_names),
+                   machine_compare_label_names) != NULL;
+}
+
 static bool machine_owned_labels_initialize(MachineOwnedLabels *labels,
     const MinicMachineFunction *function) {
     size_t i;
+    const char **sorted_names = NULL;
+    bool valid = false;
     if (function->block_count > SIZE_MAX / sizeof(*labels->names))
         return false;
     labels->names = calloc(function->block_count, sizeof(*labels->names));
@@ -60,7 +74,6 @@ static bool machine_owned_labels_initialize(MachineOwnedLabels *labels,
     labels->count = function->block_count;
     for (i = 0U; i < function->block_count; ++i) {
         const char *exported = function->blocks[i].exported_label;
-        size_t other;
         if (exported != NULL) {
             labels->names[i] = machine_label_copy(exported);
         } else if (i == 0U) {
@@ -69,26 +82,41 @@ static bool machine_owned_labels_initialize(MachineOwnedLabels *labels,
             labels->names[i] = machine_internal_label(function->name, i);
         }
         if (labels->names[i] == NULL) return false;
-        for (other = 0U; other < i; ++other)
-            if (strcmp(labels->names[i], labels->names[other]) == 0)
-                return false;
-        /* Generated names must not collide with an externally visible
-         * Core/address-taken alias or a target-selected local marker. */
-        for (other = 0U; other < function->block_count; ++other) {
-            const MinicMachineBlock *block = &function->blocks[other];
-            size_t j;
-            for (j = 0U; j < block->alias_count; ++j)
-                if (strcmp(labels->names[i], block->alias_labels[j]) == 0)
-                    return false;
-            for (j = 0U; j < block->instruction_count; ++j) {
-                const MinicMachineInstruction *ins = &block->instructions[j];
-                if (ins->kind == MINIC_MACHINE_INSTRUCTION_LOCAL_LABEL &&
-                    strcmp(labels->names[i], ins->local_label_name) == 0)
-                    return false;
-            }
+    }
+    /* The old validation rescanned every alias and selected local marker for
+     * every generated block label: O(blocks * (blocks + instructions)).  Own
+     * the same labels, index them once, and preserve exact collision rejects
+     * without interpreting source ASM or weakening the MachineIR verifier. */
+    sorted_names = malloc(function->block_count * sizeof(*sorted_names));
+    if (sorted_names == NULL) return false;
+    for (i = 0U; i < function->block_count; ++i)
+        sorted_names[i] = labels->names[i];
+    qsort(sorted_names, function->block_count, sizeof(*sorted_names),
+          machine_compare_label_names);
+    for (i = 1U; i < function->block_count; ++i)
+        if (strcmp(sorted_names[i - 1U], sorted_names[i]) == 0)
+            goto done;
+    /* Generated names must not collide with an externally visible
+     * Core/address-taken alias or a target-selected local marker. */
+    for (i = 0U; i < function->block_count; ++i) {
+        const MinicMachineBlock *block = &function->blocks[i];
+        size_t j;
+        for (j = 0U; j < block->alias_count; ++j)
+            if (machine_generated_label_exists(sorted_names,
+                    function->block_count, block->alias_labels[j]))
+                goto done;
+        for (j = 0U; j < block->instruction_count; ++j) {
+            const MinicMachineInstruction *ins = &block->instructions[j];
+            if (ins->kind == MINIC_MACHINE_INSTRUCTION_LOCAL_LABEL &&
+                machine_generated_label_exists(sorted_names,
+                    function->block_count, ins->local_label_name))
+                goto done;
         }
     }
-    return true;
+    valid = true;
+done:
+    free(sorted_names);
+    return valid;
 }
 
 static bool machine_emit_data_reference(FILE *output,

@@ -2,6 +2,7 @@
 set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
+. "$root/tests/compiler/c0/machine-cfg-contract.sh"
 minic=${MINIC:-"$root/build/debug/bin/minic"}
 host_cc=${HOST_CC:-${CC:-cc}}
 work=${BUILD_DIR:-"$root/build/debug"}/tests/compiler-c0
@@ -19,9 +20,7 @@ compile_source() {
     # Core owns the production function route. Keep this contract on route
     # identity and CFG shape, not on frame/register allocation policy.
     grep -F ".globl main" "$work/$name.s" >/dev/null
-    grep -F ".Lmain_core_bb" "$work/$name.s" >/dev/null
-    grep -F ".Lmain_core_return:" "$work/$name.s" >/dev/null
-    grep -E '^[[:space:]]+ret$' "$work/$name.s" >/dev/null
+    require_machine_function_cfg "$work/$name.s" main 2
 }
 
 expect_instructions() {
@@ -36,26 +35,12 @@ expect_instructions() {
                 # still prove that the source operation is emitted.
                 ;;
             "j .Lmain_return")
-                # Core return edges use a far PC-relative transfer so bootstrap
-                # functions are not limited by JAL's signed 21-bit displacement.
-                if ! grep -F "  j .Lmain_core_return" "$work/$name.s" >/dev/null; then
-                    grep -F "  lla t6, .Lmain_core_return" "$work/$name.s" >/dev/null
-                    grep -F "  jalr zero, t6, 0" "$work/$name.s" >/dev/null
-                fi
-                ;;
-            "j .Lif_"*)
-                if ! grep -E '^[[:space:]]+j[[:space:]]+\.Lmain_core_bb[0-9]+$' "$work/$name.s" >/dev/null; then
-                    grep -E '^[[:space:]]+lla[[:space:]]+t6,[[:space:]]*\.Lmain_core_bb[0-9]+$' "$work/$name.s" >/dev/null
-                    grep -F "  jalr zero, t6, 0" "$work/$name.s" >/dev/null
-                fi
-                ;;
-            "beqz a0, .Lif_"*)
-                # Current Core conditional terminators keep only a local beqz
-                # and transfer both successors through the far-jump sequence.
-                if ! grep -E '^[[:space:]]+bnez[[:space:]]+[^,]+,[[:space:]]*\.Lmain_core_bb[0-9]+$' "$work/$name.s" >/dev/null; then
-                    grep -E '^[[:space:]]+beqz[[:space:]]+t0,[[:space:]]*1f$' "$work/$name.s" >/dev/null
-                    test "$(grep -E -c '^[[:space:]]+lla[[:space:]]+t6,[[:space:]]*\.Lmain_core_bb[0-9]+$' "$work/$name.s")" -ge 2
-                fi
+                # An adjacent MachineIR return block is a fallthrough edge;
+                # emitted J versus fallthrough is a code-size decision.
+                # compile_source already checked >=2 real block definitions
+                # and the final RV64 ret. True if-CFG semantics are tested
+                # with the GNU/MiniC executable differential below.
+                require_machine_function_cfg "$work/$name.s" main 2
                 ;;
             "li a0, "*)
                 immediate=${instruction#"li a0, "}
@@ -79,10 +64,25 @@ expect_instructions() {
                 grep -E "^[[:space:]]+xori[[:space:]]+[^,]+,[[:space:]]*[^,]+,[[:space:]]*$immediate$" \
                     "$work/$name.s" >/dev/null
                 ;;
-            addw\ *|subw\ *|mulw\ *|divw\ *|remw\ *|negw\ *)
+            addw\ *|subw\ *|negw\ *)
                 opcode=${instruction%% *}
                 opcode=${opcode%w}
                 grep -E "^[[:space:]]+$opcode[[:space:]]+" "$work/$name.s" >/dev/null
+                ;;
+            mulw\ *|divw\ *|remw\ *)
+                # The RV64I selector deliberately does not emit M-extension
+                # MUL/DIV/REM.  Verify either the target opcode on an M-capable
+                # profile or the exact signed psABI helper on RV64I.
+                opcode=${instruction%% *}
+                opcode=${opcode%w}
+                case "$opcode" in
+                    mul) helper=__muldi3 ;;
+                    div) helper=__divdi3 ;;
+                    rem) helper=__moddi3 ;;
+                esac
+                if ! grep -E "^[[:space:]]+$opcode[[:space:]]+" "$work/$name.s" >/dev/null; then
+                    grep -E "^[[:space:]]+call[[:space:]]+$helper$" "$work/$name.s" >/dev/null
+                fi
                 ;;
             snez\ *)
                 # Core has SCALAR_EQUAL + SCALAR_IS_ZERO rather than a target-

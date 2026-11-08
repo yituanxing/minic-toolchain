@@ -20,7 +20,10 @@ sed 's/mini_xadd/gnu_xadd/' "$d/good.i" >"$d/oracle.i"
 "$cc" --target=x86_64-linux -S "$d/good.i" -o "$d/good.s"
 gcc -c -x assembler "$d/good.s" -o "$d/good.o"
 gcc -O0 -c -x c "$d/oracle.i" -o "$d/oracle.o"
-grep -Fq 'xaddl %r10d, %gs:(%r11)' "$d/good.s"
+# Physical register allocation is not an ABI: the semantic contract is a
+# 32-bit XADDL with a GS-segment memory reference and a GP operand. GNU AS
+# plus the differential native execution below prove the exact effects.
+grep -Eq '^[[:space:]]+xaddl %[a-z0-9]+, %gs:\(%[a-z0-9]+\)$' "$d/good.s"
 readelf -h "$d/good.o" | grep -Fq 'Advanced Micro Devices X86-64'
 
 cat >"$d/driver.c" <<'SRC'

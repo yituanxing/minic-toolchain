@@ -27,7 +27,10 @@ for symbol in loong_word_echo loong_pair_echo; do
         exit 1
     fi
 done
-body loong_tail_echo | grep -Eq '^  st\.b \$t0, \$t2, 6$'
+# The frame-owned seven-byte argument tail is now addressed directly via
+# SP, not a redundant copied T2 base. Keep exact byte index 6 and forbid
+# any whole-word frame access in this partial-tail function below.
+body loong_tail_echo | grep -Eq '^  st\.b \$t0, \$sp, 6$'
 body loong_tail_echo | grep -Eq '^  ld\.bu \$t0, \$sp, 6$'
 if body loong_tail_echo | grep -Eq '^  (st\.d|ld\.d) .*\$sp,'; then
     echo 'LOONGARCH64_RECORD_CHUNK=FAIL overread_or_overwrite_partial_tail' >&2

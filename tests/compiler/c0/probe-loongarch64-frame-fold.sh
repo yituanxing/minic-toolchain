@@ -62,7 +62,14 @@ grep -Fq '  sub.d $sp, $sp, $t3' "$work/large.s" \
     || fail 'large frame allocation missing'
 grep -Fq '  add.d $sp, $sp, $t3' "$work/large.s" \
     || fail 'large frame restoration missing'
-grep -Fq '  add.d $t0, $sp, $t0' "$work/large.s" \
+# The typed selector materializes the small local-base offset directly with
+# ADDI.D before storing the escaping address in its large (>12-bit) frame
+# slot. The old `add.d $t0,$sp,$t0` spelling is not the ABI requirement.
+awk '/^  addi\.d \$t0, \$sp, [0-9]+$/ {
+         if (getline > 0 && $0 ~ /^  stptr\.d \$t0, \$sp, [0-9]+$/)
+             found++
+     }
+     END { exit !(found >= 2) }' "$work/large.s" \
     || fail 'large frame object address missing'
 
 printf 'LOONG_FRAME_FOLD=PASS work_lines=%s escape_lines=%s packed_lines=%s\n' \

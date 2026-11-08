@@ -4557,16 +4557,31 @@ static bool a64_wide_memory(A64CoreSelection *sel,
 /* Physical x9=source, x10=destination.  Short composites are exact linear
  * copies; large Linux records get a real MachineCFG loop, not hundreds of
  * thousands of duplicated assembly strings or a hidden libc call. */
+static bool a64_copy_post_byte(A64CoreSelection *sel, uint32_t opcode,
+    unsigned int base, bool store, bool vol) {
+    const MinicMachineOperand operands[3] = {
+        a64_gp(11U, 32U, store ? MINIC_MACHINE_REGISTER_READ :
+            MINIC_MACHINE_REGISTER_WRITE),
+        a64_gp(base, 64U, MINIC_MACHINE_REGISTER_READ |
+            MINIC_MACHINE_REGISTER_WRITE),
+        a64_immediate(1)
+    };
+    if (!a64_emit(sel, opcode, operands, 3U)) return false;
+    if (vol) {
+        MinicMachineBlock *block = &sel->builder.function->blocks[
+            sel->builder.current_block];
+        block->instructions[block->instruction_count - 1U].effects |=
+            MINIC_MACHINE_EFFECT_VOLATILE;
+    }
+    return true;
+}
+
 static bool a64_copy_one_byte(A64CoreSelection *sel,
     bool source_volatile, bool destination_volatile) {
-    return a64_memory_register(sel, MINIC_A64_MACHINE_LDRB,
-            false, 11U, 32U, A64_T0, 0U, false, source_volatile) &&
-        a64_memory_register(sel, MINIC_A64_MACHINE_STRB,
-            false, 11U, 32U, A64_T1, 0U, true, destination_volatile) &&
-        a64_rri(sel, MINIC_A64_MACHINE_ADD_IMM,
-            64U, A64_T0, A64_T0, 1) &&
-        a64_rri(sel, MINIC_A64_MACHINE_ADD_IMM,
-            64U, A64_T1, A64_T1, 1);
+    return a64_copy_post_byte(sel, MINIC_A64_MACHINE_LDRB_POST,
+            A64_T0, false, source_volatile) &&
+        a64_copy_post_byte(sel, MINIC_A64_MACHINE_STRB_POST,
+            A64_T1, true, destination_volatile);
 }
 
 static bool a64_copy_bytes(A64CoreSelection *sel,
@@ -4593,11 +4608,11 @@ static bool a64_copy_bytes(A64CoreSelection *sel,
             !minic_machine_builder_position_at(&sel->builder, loop) ||
             !a64_copy_one_byte(sel, source_volatile,
                 destination_volatile) ||
-            !a64_rri(sel, MINIC_A64_MACHINE_SUB_IMM, 64U,
+            !a64_rri(sel, MINIC_A64_MACHINE_SUBS_IMM, 64U,
                 A64_T3, A64_T3, 1)) return false;
-        branch[0] = a64_gp(A64_T3, 64U, MINIC_MACHINE_REGISTER_READ);
+        branch[0] = a64_immediate(1); /* NE: nonzero counted-loop remainder. */
         branch[1] = a64_block(loop);
-        return a64_emit(sel, MINIC_A64_MACHINE_CBNZ, branch, 2U) &&
+        return a64_emit(sel, MINIC_A64_MACHINE_B_COND, branch, 2U) &&
             minic_machine_builder_add_successor(&sel->builder, loop) &&
             minic_machine_builder_add_successor(&sel->builder, done) &&
             minic_machine_builder_set_fallthrough(&sel->builder, done) &&

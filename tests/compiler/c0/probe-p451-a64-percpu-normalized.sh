@@ -57,15 +57,15 @@ for bits in 8 16 32 64; do
         grep -Fq "percpu_${bits}_${op}:" "$work/percpu-llsc.p451.s"
     done
 done
-test "$(grep -Ec '^[[:space:]]*ldxr(b|h)?[[:space:]]' \
+test "$(grep -Ec '^[[:space:]]*([0-9]+:[[:space:]]*)?ldxr(b|h)?[[:space:]]' \
     "$work/percpu-llsc.p451.s")" -eq 16
 test "$(grep -Ec '^[[:space:]]*stxr(b|h)?[[:space:]]' \
     "$work/percpu-llsc.p451.s")" -eq 16
-test "$(grep -Ec '^[[:space:]]*ldxrb[[:space:]]' \
+test "$(grep -Ec '^[[:space:]]*([0-9]+:[[:space:]]*)?ldxrb[[:space:]]' \
     "$work/percpu-llsc.p451.s")" -eq 4
-test "$(grep -Ec '^[[:space:]]*ldxrh[[:space:]]' \
+test "$(grep -Ec '^[[:space:]]*([0-9]+:[[:space:]]*)?ldxrh[[:space:]]' \
     "$work/percpu-llsc.p451.s")" -eq 4
-test "$(grep -Ec '^[[:space:]]*ldxr[[:space:]]' \
+test "$(grep -Ec '^[[:space:]]*([0-9]+:[[:space:]]*)?ldxr[[:space:]]' \
     "$work/percpu-llsc.p451.s")" -eq 8
 for alu in add bic orr; do
     grep -Eq "^[[:space:]]*$alu[[:space:]]" "$work/percpu-llsc.p451.s"

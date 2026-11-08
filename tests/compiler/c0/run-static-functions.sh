@@ -37,7 +37,9 @@ printf '%s\n' "PASS compiler/c0/static_functions"
     -o "$work/pointer_return.i"
 "$minic" -S "$work/pointer_return.i" -o "$work/pointer_return.s"
 grep -F ".type identity, @function" "$work/pointer_return.s" >/dev/null
-grep -F ".Lidentity_core_return:" "$work/pointer_return.s" >/dev/null
+# The MachineIR backend assigns block-local labels; the old hand-emitter's
+# .Lidentity_core_return spelling is not part of the ABI or the test contract.
+grep -Eq '^\.Lminic_mir_identity_[0-9]+:$' "$work/pointer_return.s"
 grep -F "  call identity" "$work/pointer_return.s" >/dev/null
 printf '%s\n' "PASS compiler/c0/pointer_return"
 

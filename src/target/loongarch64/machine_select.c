@@ -1137,6 +1137,7 @@ static bool loong_copy_record_bytes(LoongSelector *sel,
     const MinicCoreInstruction *origin, size_t bytes,
     bool source_volatile, bool destination_volatile) {
     MinicMachineBuilder *b = &sel->builder;
+    MinicMachineOperand loop_branch[2] = {{0}};
     size_t byte;
     size_t loop, done, before;
     if (bytes == 0U || bytes > 16U * 1024U * 1024U) return false;
@@ -1182,11 +1183,17 @@ static bool loong_copy_record_bytes(LoongSelector *sel,
         !loong_rri(b, MINIC_LOONG_MACHINE_ADDI_D,
             LOONG_T1, LOONG_T1, 1) ||
         !loong_rri(b, MINIC_LOONG_MACHINE_ADDI_D,
-            LOONG_T3, LOONG_T3, -1) ||
-        !loong_rr(b, MINIC_LOONG_MACHINE_MOVE, LOONG_T0, LOONG_T3))
+            LOONG_T3, LOONG_T3, -1))
         return false;
+    /* The ordinary loong_branch helper intentionally reads T0. This counted
+     * loop owns its live iteration count in T3, so select its explicit typed
+     * register operand rather than inserting a redundant MOVE T0, T3. */
+    loop_branch[0] = loong_gp(LOONG_T3, MINIC_MACHINE_REGISTER_READ);
+    loop_branch[1].kind = MINIC_MACHINE_OPERAND_BLOCK;
+    loop_branch[1].value.block_id = loop;
     if (!minic_machine_builder_add_successor(b, done) ||
-        !loong_branch(sel, MINIC_LOONG_MACHINE_BNEZ, loop, true, false) ||
+        !loong_selected(b, MINIC_LOONG_MACHINE_BNEZ, loop_branch, 2U) ||
+        !minic_machine_builder_add_successor(b, loop) ||
         !minic_machine_builder_set_fallthrough(b, done) ||
         !minic_machine_builder_position_at(b, done)) return false;
     return true;

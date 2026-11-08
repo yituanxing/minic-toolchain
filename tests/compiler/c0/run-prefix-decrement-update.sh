@@ -2,6 +2,7 @@
 set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
+. "$root/tests/compiler/c0/machine-cfg-contract.sh"
 minic=${MINIC:-"$root/build/debug/bin/minic"}
 host_cc=${HOST_CC:-${CC:-cc}}
 work=${BUILD_DIR:-"$root/build/debug"}/tests/compiler-c0-prefix-decrement-update
@@ -18,8 +19,7 @@ mkdir -p "$work"
 # Core normalizes --value as value + (-1): materialize one, negate it, then
 # perform the integer add.  Keep the contract on that normalized operation and
 # Core CFG instead of the legacy AST emitter's addi -1 peephole.
-grep -F ".Lmain_core_bb" "$work/prefix_decrement_update.s" >/dev/null
-grep -F ".Lmain_core_return:" "$work/prefix_decrement_update.s" >/dev/null
+require_machine_function_cfg "$work/prefix_decrement_update.s" main 2
 grep -E '^[[:space:]]+li[[:space:]]+[^,]+,[[:space:]]*1$' \
     "$work/prefix_decrement_update.s" >/dev/null
 grep -E '^[[:space:]]+neg[[:space:]]' \

@@ -1,0 +1,5 @@
+# Explicit, bounded one-shot paired A/B run. A push changing this marker
+# launches both c638 early-refactor (four ISA) and 5e4 recent five-ISA
+# comparisons against the current candidate, with original tinyAES/cJSON .i.
+# Re-arm only after meaningful compiler source/perf-harness changes.
+2026-11-08 performance-candidate-review-pending

@@ -1416,9 +1416,10 @@ static bool run_record_loop_case(void) {
     stage = "loop-invariants";
     ok = strstr(assembly, "  b .Lminic_mir_a64_record_loop_2\n") == NULL &&
         strstr(assembly, "  movz x12, #128, lsl #0\n.Lminic_mir_a64_record_loop_2:\n") != NULL &&
-        strstr(assembly, "  ldrb w11, [x9, #0]\n") != NULL &&
-        strstr(assembly, "  strb w11, [x10, #0]\n") != NULL &&
-        strstr(assembly, "  cbnz x12, .Lminic_mir_a64_record_loop_2\n") != NULL &&
+        strstr(assembly, "  ldrb w11, [x9], #1\n") != NULL &&
+        strstr(assembly, "  strb w11, [x10], #1\n") != NULL &&
+        strstr(assembly, "  subs x12, x12, #1\n") != NULL &&
+        strstr(assembly, "  b.ne .Lminic_mir_a64_record_loop_2\n") != NULL &&
         strstr(assembly, "  ret\n") != NULL;
 cleanup:
     if (!ok) {
@@ -1535,8 +1536,10 @@ static bool run_record_parameter_case(size_t bytes, bool indirect,
         for (j = 0U; j < block->instruction_count; ++j) {
             const MinicMachineInstruction *m = &block->instructions[j];
             if (!m->has_core_origin || m->core_instruction_id != 0U) continue;
-            if (m->opcode == MINIC_A64_MACHINE_STRB) ++writes;
-            if (m->opcode == MINIC_A64_MACHINE_LDRB) ++reads;
+            if (m->opcode == MINIC_A64_MACHINE_STRB ||
+                m->opcode == MINIC_A64_MACHINE_STRB_POST) ++writes;
+            if (m->opcode == MINIC_A64_MACHINE_LDRB ||
+                m->opcode == MINIC_A64_MACHINE_LDRB_POST) ++reads;
         }
     }
     stage = "physical-serialization";
@@ -1550,7 +1553,7 @@ static bool run_record_parameter_case(size_t bytes, bool indirect,
     ok = writes == (bytes > 64U ? 1U : bytes) &&
         reads == (indirect ? (bytes > 64U ? 1U : bytes) : 0U) &&
         (bytes > 64U ? auxiliary >= 2U : auxiliary == 0U) &&
-        strstr(assembly, indirect ? "  strb w11, [x10, #0]\n" :
+        strstr(assembly, indirect ? "  strb w11, [x10], #1\n" :
             "  strb w9, [x10, #0]\n") != NULL &&
         (incoming_stack ||
          strstr(assembly, "  mov x9, x0\n") != NULL) &&
@@ -3094,7 +3097,7 @@ static bool run_record_return_case(size_t bytes) {
     if (bytes == 32U &&
         (strstr(assembly, "  str x8, [sp, #32]\n") == NULL ||
          strstr(assembly, "  ldr x10, [sp, #32]\n") == NULL ||
-         strstr(assembly, "  strb w11, [x10, #0]\n") == NULL))
+         strstr(assembly, "  strb w11, [x10], #1\n") == NULL))
         goto done;
     stage = "reject-indirect-result-without-x8";
     minic_machine_function_destroy(&machine);

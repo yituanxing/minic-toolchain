@@ -2,6 +2,7 @@
 set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
+. "$root/tests/compiler/c0/machine-cfg-contract.sh"
 minic=${MINIC:-"$root/build/debug/bin/minic"}
 host_cc=${HOST_CC:-${CC:-cc}}
 work=${BUILD_DIR:-"$root/build/debug"}/tests/compiler-c0-global-objects
@@ -42,13 +43,15 @@ compile_success \
     "$root/tests/programs/c0/global_array_read.c"
 grep -F ".section .rodata" "$work/global_array_read.s" >/dev/null
 grep -F "table:" "$work/global_array_read.s" >/dev/null
-grep -F ".Lread_table_core_bb" "$work/global_array_read.s" >/dev/null
-grep -F ".Lread_table_core_return:" "$work/global_array_read.s" >/dev/null
+require_machine_function_cfg "$work/global_array_read.s" read_table 2
 # Core owns pointer stride semantically; the RV64 emitter need not preserve the
 # legacy emitter's strength-reduced slli-by-two peephole for int indexing.
 grep -E '^[[:space:]]+lla[[:space:]]+[^,]+,[[:space:]]*table$' \
     "$work/global_array_read.s" >/dev/null
-grep -E '^[[:space:]]+mul[[:space:]]+' "$work/global_array_read.s" >/dev/null
+# Four-byte int index scaling is strength-reduced to SLLI by the RV64I
+# machine selector; requiring MUL would force an unsupported M extension.
+grep -E '^[[:space:]]+slli[[:space:]]+[^,]+,[[:space:]]*[^,]+,[[:space:]]*2$' \
+    "$work/global_array_read.s" >/dev/null
 grep -E '^[[:space:]]+lw[[:space:]]+[^,]+,[[:space:]]*0\([^)]*\)$' \
     "$work/global_array_read.s" >/dev/null
 grep -F "  call read_table" "$work/global_array_read.s" >/dev/null

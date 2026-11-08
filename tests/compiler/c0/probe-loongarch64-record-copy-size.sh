@@ -20,8 +20,10 @@ test "$(grep -Fc '  li.d $t3, 32' "$work/output.s")" -ge 2 \
     || fail 'record copy/load counters'
 grep -Fq '  addi.d $t3, $t3, -1' "$work/output.s" \
     || fail 'record copy decrement'
-grep -Fq '  bnez $t3, 1b' "$work/output.s" \
-    || fail 'record copy loop branch'
+# MachineIR gives each counted-loop block a unique, typed label; the old
+# numeric assembler-local `1b` spelling is no longer the branch target.
+test "$(grep -Ec '^  bnez \$t3, \.Lminic_mir_[a-zA-Z0-9_]+_[0-9]+$' \
+    "$work/output.s")" -ge 2 || fail 'record copy loop branch'
 test "$(wc -l < "$work/output.s")" -lt 400 \
     || fail 'unexpected large source assembly'
 echo 'LOONGARCH64_RECORD_COPY_SIZE=PASS record_bytes=32 bounded_byte_loop=1'

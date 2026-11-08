@@ -69,15 +69,17 @@ for pic_flag in -fPIC -fPIE; do
         "$pic_flag" -S "$work/probe.i" -o "$work/rv32-$pic_flag.s"
     for symbol in hidden_data hidden_function; do
         grep -Fxq ".hidden $symbol" "$work/rv32-$pic_flag.s"
-        grep -Fxq "  lla t0, $symbol" "$work/rv32-$pic_flag.s"
-        if grep -Fxq "  la t0, $symbol" "$work/rv32-$pic_flag.s"; then
+        # GNU spellings t0 and x5 designate the same physical RV32 register.
+        # MachineIR emits canonical x5; retain the historical alias oracle.
+        grep -Eq "^  lla (t0|x5), $symbol$" "$work/rv32-$pic_flag.s"
+        if grep -Eq "^  la (t0|x5), $symbol$" "$work/rv32-$pic_flag.s"; then
             echo "FAIL: RV32 $pic_flag hidden $symbol used preemptible GOT" >&2
             exit 1
         fi
     done
     for symbol in default_data default_function; do
-        grep -Fxq "  la t0, $symbol" "$work/rv32-$pic_flag.s"
-        if grep -Fxq "  lla t0, $symbol" "$work/rv32-$pic_flag.s"; then
+        grep -Eq "^  la (t0|x5), $symbol$" "$work/rv32-$pic_flag.s"
+        if grep -Eq "^  lla (t0|x5), $symbol$" "$work/rv32-$pic_flag.s"; then
             echo "FAIL: RV32 $pic_flag default $symbol lost GOT" >&2
             exit 1
         fi

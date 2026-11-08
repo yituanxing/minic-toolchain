@@ -176,9 +176,11 @@ static bool rv_rri(RvCoreSelection *sel, uint32_t opcode,
 static bool rv_j(RvCoreSelection *sel, size_t to) {
     const size_t current = sel->builder.current_block;
     if (to == current + 1U) {
-        const MinicMachineOperand ops[] = {rv_target(to, false)};
-        return rv_emit(sel, MINIC_RISCV_MACHINE_J_BLOCK, ops, 1U) &&
-            minic_machine_builder_add_successor(&sel->builder, to);
+        /* The next physical Machine block is the exact branch destination.
+         * Keep its CFG successor, but let adjacency carry control flow:
+         * emitting an unconditional J_BLOCK would execute the same edge. */
+        return minic_machine_builder_add_successor(&sel->builder, to) &&
+            minic_machine_builder_set_fallthrough(&sel->builder, to);
     }
     /* A far Core edge first lands in an auxiliary addressable dispatch block,
      * adjacent to the primary Core block. Thus Core indirect-entry metadata
@@ -424,6 +426,12 @@ static bool rv_normalize(RvCoreSelection *sel, unsigned reg,
     const unsigned shift = sel->xlen - bytes * 8U;
     if (bytes == 0U || bytes > sel->xlen / 8U) return false;
     if (shift == 0U) return true;
+    /* RV64I ADDIW with a zero immediate is the exact signed i32 extension:
+     * low 32 bits are preserved and bit 31 is propagated through XLEN.
+     * Keep unsigned Core i32 zero-extension on SLLI/SRLI; only signed Core
+     * i32 and psABI's signed-extended outgoing i32 may take this path. */
+    if (sel->xlen == 64U && bytes == 4U && sign)
+        return rv_rri(sel, MINIC_RISCV_MACHINE_ADDIW, reg, reg, 0);
     return rv_rri(sel, MINIC_RISCV_MACHINE_SLLI, reg, reg, (int64_t)shift) &&
         rv_rri(sel, sign ? MINIC_RISCV_MACHINE_SRAI :
             MINIC_RISCV_MACHINE_SRLI, reg, reg, (int64_t)shift);

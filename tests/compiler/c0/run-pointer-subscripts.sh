@@ -29,7 +29,18 @@ compile_success \
     "$root/tests/compiler/c0/pointer_subscript_const.c"
 grep -F ".type read_const, @function" \
     "$work/pointer_subscript_const.s" >/dev/null
-grep -E '^[[:space:]]+lw[[:space:]]+[^,]+,[[:space:]]*0\([^)]*\)$' "$work/pointer_subscript_const.s" >/dev/null
+# The const pointer parameter has no natural 4-byte alignment guarantee in
+# Core.  A wide LW would be unsafe; the current target reconstructs the exact
+# 32-bit value from four unsigned byte lanes, shifts and ORs.
+for offset in 0 1 2 3; do
+    grep -E "^[[:space:]]+lbu[[:space:]]+[^,]+,[[:space:]]*${offset}\\([^)]*\\)$" \
+        "$work/pointer_subscript_const.s" >/dev/null
+done
+for shift in 8 16 24; do
+    grep -E "^[[:space:]]+slli[[:space:]]+[^,]+,[[:space:]]*[^,]+,[[:space:]]*${shift}$" \
+        "$work/pointer_subscript_const.s" >/dev/null
+done
+test "$(grep -Ec '^[[:space:]]+or[[:space:]]+' "$work/pointer_subscript_const.s")" -ge 3
 printf '%s\n' "PASS compiler/c0/pointer_subscript_const"
 
 "$host_cc" -E -P -x c \

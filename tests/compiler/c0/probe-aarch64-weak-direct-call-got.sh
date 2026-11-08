@@ -21,13 +21,18 @@ done
 asm="$probe_dir/aarch64.s"
 for symbol in minic_missing_weak_call minic_present_weak_call; do
     grep -Fq ".weak $symbol" "$asm"
-    test "$(grep -Fc "adrp x16, :got:$symbol" "$asm")" -eq 1
-    test "$(grep -Fc "ldr x16, [x16, :got_lo12:$symbol]" "$asm")" -eq 1
+    # The normalized MachineIR selector materializes the same GOT address
+    # separately for the weak-null test and the eventual indirect call.
+    # Both uses must retain a matched GOT page + low12 relocation; the call
+    # itself moves the loaded target into the ABI scratch register x16.
+    test "$(grep -Fc "adrp x9, :got:$symbol" "$asm")" -eq 2
+    test "$(grep -Fc "ldr x9, [x9, :got_lo12:$symbol]" "$asm")" -eq 2
     if grep -Fq "  bl $symbol" "$asm"; then
         echo "ERROR: undefined weak direct CALL26 retained: $symbol" >&2
         exit 1
     fi
 done
+test "$(grep -Fc '  mov x16, x9' "$asm")" -eq 2
 test "$(grep -Fc '  blr x16' "$asm")" -eq 2
 
 # Negative boundary: strong undefined and TU-defined weak function are not

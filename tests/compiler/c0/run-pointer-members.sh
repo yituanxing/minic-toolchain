@@ -2,6 +2,7 @@
 set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
+. "$root/tests/compiler/c0/machine-cfg-contract.sh"
 minic=${MINIC:-"$root/build/debug/bin/minic"}
 host_cc=${HOST_CC:-${CC:-cc}}
 work=${BUILD_DIR:-"$root/build/debug"}/tests/compiler-c0-pointer-members
@@ -12,7 +13,7 @@ mkdir -p "$work"
     "$root/tests/programs/c0/pointer_member.c" \
     -o "$work/pointer_member.i"
 "$minic" -S "$work/pointer_member.i" -o "$work/pointer_member.s"
-grep -F ".Lsum_four_core_bb" "$work/pointer_member.s" >/dev/null
+require_machine_function_cfg "$work/pointer_member.s" sum_four 2
 grep -E '^[[:space:]]+addi[[:space:]]+[^,]+,[[:space:]]*[^,]+,[[:space:]]*4$' \
     "$work/pointer_member.s" >/dev/null
 grep -E '^[[:space:]]+addi[[:space:]]+[^,]+,[[:space:]]*[^,]+,[[:space:]]*20$' \
@@ -26,7 +27,7 @@ printf '%s\n' "PASS compiler/c0/pointer_member normalized=core-field-address"
 "$minic" -S \
     "$work/direct_record_member.i" \
     -o "$work/direct_record_member.s"
-grep -F ".Lmain_core_bb" "$work/direct_record_member.s" >/dev/null
+require_machine_function_cfg "$work/direct_record_member.s" main 2
 grep -E '^[[:space:]]+addi[[:space:]]+[^,]+,[[:space:]]*[^,]+,[[:space:]]*4$' \
     "$work/direct_record_member.s" >/dev/null
 grep -E '^[[:space:]]+lla[[:space:]]+[^,]+,[[:space:]]*global_pair$' \

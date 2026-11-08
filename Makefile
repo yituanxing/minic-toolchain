@@ -726,6 +726,15 @@ check-riscv-mixed-checked-overflow: $(MINIC_CC_BINARY)
 
 check-fast: check-riscv-mixed-checked-overflow
 
+# RV64I signed i32 canonicalization uses a single ADDIW; preserve unsigned
+# zero-extension and reject leaking RV64 word instructions into RV32I.
+.PHONY: check-rv64-addiw-normalize
+check-rv64-addiw-normalize: $(MINIC_CC_BINARY)
+	@MINIC_CC="$(abspath $(MINIC_CC_BINARY))" \
+		sh tests/compiler/c0/probe-rv64-addiw-normalize.sh
+
+check-fast: check-rv64-addiw-normalize
+
 # RV64I keeps its established libgcc helper ABI. The original Linux kernel
 # needs a strictly I-only upstream runtime archive at KBUILD_VMLINUX_LIBS;
 # the fast check proves the compiler-side contract without cross-tool installs.
@@ -2720,6 +2729,7 @@ check-loong-machine-builtin-opcode:
 	  src/target/loongarch64/machine_gnu_asm.c \
 	  src/target/loongarch64/machine_asm_form.c \
 	  src/target/loongarch64/machine_source_asm.c \
+	  src/target/loongarch64/simd_asm.c \
 	  -o "$(BUILD_DIR)/tests/loong-machine-builtin-opcode"
 	"$(BUILD_DIR)/tests/loong-machine-builtin-opcode"
 
@@ -3163,6 +3173,17 @@ check-p48-x86-head-local-provenance: $(MINIC_CC_BINARY)
 	  bash tests/compiler/c0/probe-p48-head-local-provenance.sh
 
 check-fast: check-p48-x86-head-local-provenance
+
+# P49 closes the observed MC-076 cross-function numeric helper alias by
+# refusing ambiguous physical-pointer ABI transport. Its GNU same-source
+# oracle physically relocates .head.text and .head.data; a physical-only
+# helper remains an accepted positive source contract.
+.PHONY: check-p49-x86-head-crosscall-provenance
+check-p49-x86-head-crosscall-provenance: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	  bash tests/compiler/c0/probe-p49-head-crosscall-provenance.sh
+
+check-fast: check-p49-x86-head-crosscall-provenance
 
 # P50: one source-to-machine RISC-V vararg alignment ABI regression.
 # GNU cross-ELF/QEMU execution is a separate strict existing-workflow gate.

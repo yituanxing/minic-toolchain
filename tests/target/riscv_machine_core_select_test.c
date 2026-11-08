@@ -252,10 +252,14 @@ static bool run(unsigned xlen, bool compiler_barrier,
         machine.blocks[2].machine_auxiliary ||
         !machine.blocks[2].has_core_block_origin ||
         machine.blocks[2].core_block_id != 0U ||
+        /* Both loop edges are non-adjacent. They must remain explicit
+         * branches, never be mistaken for a physical fallthrough. */
+        machine.blocks[2].has_fallthrough ||
         !machine.blocks[3].machine_auxiliary ||
         machine.blocks[4].machine_auxiliary ||
         !machine.blocks[4].has_core_block_origin ||
         machine.blocks[4].core_block_id != 1U ||
+        machine.blocks[4].has_fallthrough ||
         !minic_machine_core_coverage_verify(&fn, reachable, &machine) ||
         !minic_riscv_machine_gnu_asm_policy(&target, &policy) ||
         !minic_machine_gnu_asm_preflight(&machine, &policy)) {
@@ -467,6 +471,12 @@ static bool run_scalar_extended(unsigned xlen, MinicCoreInstructionKind binary,
             xlen,fn.value_count,fn.object_count,fn.instruction_count);
         goto done;
     }
+    /* A one-Core-block function's return edge lands directly on the
+     * physical epilogue. It must be an explicit verified Machine CFG edge
+     * with fallthrough metadata, not a redundant unconditional J_BLOCK. */
+    if (machine.block_count != 4U ||
+        !machine.blocks[2].has_fallthrough ||
+        machine.blocks[2].fallthrough_target != 3U) goto done;
     stage = "coverage";
     if (!minic_machine_core_coverage_verify(&fn, reachable, &machine)) goto done;
     stage = "preflight";
@@ -490,6 +500,7 @@ static bool run_scalar_extended(unsigned xlen, MinicCoreInstructionKind binary,
                           strstr(assembly, "  rem x") == NULL :
                           strstr(assembly, "  add x5, x5, x6") != NULL) &&
         strstr(assembly, "  neg x5, x5") != NULL &&
+        strstr(assembly, "  j .Lminic_mir_rv_scalar_core_3") == NULL &&
         strstr(assembly, "  ret") != NULL;
     if (!ok) fprintf(stderr, "RV%u scalar asm:\n%s\n", xlen, assembly);
 done:

@@ -2,6 +2,7 @@
 set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
+. "$root/tests/compiler/c0/machine-cfg-contract.sh"
 minic=${MINIC:-"$root/build/debug/bin/minic"}
 host_cc=${HOST_CC:-${CC:-cc}}
 work=${BUILD_DIR:-"$root/build/debug"}/tests/compiler-c0-compound-xor-assignment
@@ -15,8 +16,7 @@ mkdir -p "$work"
     "$work/compound_xor_assignment.i" \
     -o "$work/compound_xor_assignment.s"
 
-grep -F ".Lmain_core_bb" "$work/compound_xor_assignment.s" >/dev/null
-grep -F ".Lmain_core_return:" "$work/compound_xor_assignment.s" >/dev/null
+require_machine_function_cfg "$work/compound_xor_assignment.s" main 2
 call_count=$(grep -c -F "  call pick" "$work/compound_xor_assignment.s" || true)
 if test "$call_count" -ne 1; then
     printf '%s\n' \

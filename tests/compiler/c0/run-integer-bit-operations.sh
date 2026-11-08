@@ -2,6 +2,7 @@
 set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
+. "$root/tests/compiler/c0/machine-cfg-contract.sh"
 minic=${MINIC:-"$root/build/debug/bin/minic"}
 host_cc=${HOST_CC:-${CC:-cc}}
 work=${BUILD_DIR:-"$root/build/debug"}/tests/compiler-c0-integer-bit-operations
@@ -14,8 +15,7 @@ mkdir -p "$work"
 "$minic" -S \
     "$work/integer_bit_operations.i" \
     -o "$work/integer_bit_operations.s"
-grep -F ".Lmain_core_bb" "$work/integer_bit_operations.s" >/dev/null
-grep -F ".Lmain_core_return:" "$work/integer_bit_operations.s" >/dev/null
+require_machine_function_cfg "$work/integer_bit_operations.s" main 2
 # Core emits XLEN shifts and applies the semantic result conversion separately.
 # Preserve signed-vs-unsigned right-shift and bitwise-AND ownership without
 # binding the legacy emitter's W-form or temporary registers.

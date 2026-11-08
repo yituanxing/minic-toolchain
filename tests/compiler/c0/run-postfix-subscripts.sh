@@ -2,6 +2,7 @@
 set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
+. "$root/tests/compiler/c0/machine-cfg-contract.sh"
 minic=${MINIC:-"$root/build/debug/bin/minic"}
 host_cc=${HOST_CC:-${CC:-cc}}
 work=${BUILD_DIR:-"$root/build/debug"}/tests/compiler-c0-postfix-subscripts
@@ -14,14 +15,16 @@ mkdir -p "$work"
 "$minic" -S \
     "$work/postfix_subscript.i" \
     -o "$work/postfix_subscript.s"
-grep -F ".Lexercise_core_bb" "$work/postfix_subscript.s" >/dev/null
-grep -F ".Lexercise_core_return:" "$work/postfix_subscript.s" >/dev/null
+require_machine_function_cfg "$work/postfix_subscript.s" exercise 2
 # The semantic owner is multidimensional pointer stride.  Core materializes
-# both the 12-byte Row stride and the 4-byte int stride through multiply rather
-# than requiring the legacy emitter's slli strength reduction.
-grep -E '^[[:space:]]+li[[:space:]]+[^,]+,[[:space:]]*12$' \
+# both the 12-byte Row stride and the 4-byte int stride.  The RV64I selector
+# lowers 12*x as the exact 4*x+8*x pair and 4*x as a shift; an emitted MUL
+# would incorrectly require the disabled M extension.
+grep -E '^[[:space:]]+slli[[:space:]]+[^,]+,[[:space:]]*[^,]+,[[:space:]]*2$' \
     "$work/postfix_subscript.s" >/dev/null
-grep -E '^[[:space:]]+mul[[:space:]]+' "$work/postfix_subscript.s" >/dev/null
+grep -E '^[[:space:]]+slli[[:space:]]+[^,]+,[[:space:]]*[^,]+,[[:space:]]*3$' \
+    "$work/postfix_subscript.s" >/dev/null
+grep -E '^[[:space:]]+add[[:space:]]+' "$work/postfix_subscript.s" >/dev/null
 grep -E '^[[:space:]]+sw[[:space:]]+[^,]+,[[:space:]]*0\([^)]*\)$' \
     "$work/postfix_subscript.s" >/dev/null
 printf '%s\n' "PASS compiler/c0/postfix_subscript normalized=core-pointer-stride"

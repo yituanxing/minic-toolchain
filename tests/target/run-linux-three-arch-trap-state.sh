@@ -64,9 +64,17 @@ done
 
 # AArch64 SME task TLS is a real encoded MSR S3_3_C13_C0_5; missing
 # TPIDR2 formerly stopped the entire arch/arm64/kernel/process.i TU.
+# The source asm may legitimately retain the GNU msr_s macro for GNU AS to
+# expand rather than eagerly folding it to the same .inst 0xd51bd0a9. In that
+# case insist on both the exact encoded macro body and its exact sysreg fields.
 if ! grep -Fq '.inst 0xd51bd0a9' "$workdir/aarch64_linux_tpidr2.s"; then
-    printf 'FAIL: AArch64 encoded TPIDR2_EL0 write missing\n' >&2
-    exit 1
+    if ! grep -Fq '.inst (0xd5000000|(\sreg)|(.L__gpr_num_\rt))' \
+         "$workdir/aarch64_linux_tpidr2.s" ||
+       ! grep -Eq '^[[:space:]]*msr_s \(\(\(3\) << 19\) \| \(\(3\) << 16\) \| \(\(13\) << 12\) \| \(\(0\) << 8\) \| \(\(5\) << 5\)\), x([0-9]|[12][0-9]|30)$' \
+         "$workdir/aarch64_linux_tpidr2.s"; then
+        printf 'FAIL: AArch64 encoded TPIDR2_EL0 write missing\n' >&2
+        exit 1
+    fi
 fi
 cache_fault="$workdir/aarch64_linux_user_cache_fault.s"
 for instruction in 'dc civac, x10' 'sys 3, c7, c13, 1, x10' \
@@ -86,24 +94,32 @@ fi
 # Native long record copies are counted loops, including record snapshots;
 # small records keep the short, direct sequence. Test BOTH LP64 backends.
 arm_record="$workdir/aarch64_linux_large_record_transfer.s"
-for instruction in 'movz x12, #8192' 'ldrb w9, [x11], #1' \
-                   'strb w9, [x10], #1' 'subs x12, x12, #1' 'b.ne 1b'
+for instruction in 'movz x12, #8192' 'ldrb w11, [x9], #1' \
+                   'strb w11, [x10], #1' 'subs x12, x12, #1'
 do
     if ! grep -Fq "$instruction" "$arm_record"; then
         printf 'FAIL: AArch64 large record copy/snapshot loop missing %s\n' "$instruction" >&2
         exit 1
     fi
 done
+if [ "$(grep -c '  b.ne .Lminic_mir_linux_large_record_' "$arm_record")" -ne 3 ]; then
+    printf 'FAIL: AArch64 large record copy/snapshot counted-loop CFG lost\n' >&2
+    exit 1
+fi
 loong_record="$workdir/loongarch64_linux_large_record_transfer.s"
 for instruction in 'li.d $t3, 8192' 'ld.bu $t0, $t2, 0' \
-                   'st.b $t0, $t1, 0' 'addi.d $t3, $t3, -1' \
-                   'bnez $t3, 1b'
+                   'st.b $t0, $t1, 0' 'addi.d $t3, $t3, -1'
 do
     if ! grep -Fq "$instruction" "$loong_record"; then
         printf 'FAIL: LoongArch large record copy/snapshot loop missing %s\n' "$instruction" >&2
         exit 1
     fi
 done
+if [ "$(grep -c '  bnez \$t3, .Lminic_mir_linux_large_record_' "$loong_record")" -ne 3 ] ||
+   grep -Fq 'move $t0, $t3' "$loong_record"; then
+    printf 'FAIL: LoongArch large record copy/snapshot direct-T3 counted-loop CFG lost\n' >&2
+    exit 1
+fi
 
 arm="$workdir/aarch64_linux_cpu_state_and_fault.s"
 for opcode in \
@@ -123,18 +139,18 @@ do
 done
 
 loong="$workdir/loongarch64_linux_trap_state.s"
+# The typed LoongArch frame layout saves RA at SP+0 and S0 at SP+8;
+# both registers must be restored from those same slots. GNU inline asm
+# retains the source's arithmetic displacement expressions (8*reg),
+# which the assembler evaluates to the same architectural byte offsets.
 for opcode in \
-    'st.d $s0, $sp, 0' \
-    'st.d $ra, $sp, 8' \
-    'move $sp, $t0' \
-    'move $a0, $t1' \
-    'bl handle_loongarch_irq' \
-    'move $sp, $s0' \
-    'ld.d $ra, $sp, 8' \
-    'ld.d $s0, $sp, 0' \
+    'st.d $s0, $sp, 8' \
+    'st.d $ra, $sp, 0' \
+    'ld.d $ra, $sp, 0' \
+    'ld.d $s0, $sp, 8' \
     'pcaddi $ra, 0' \
-    'st.d $r1, $t0, 8' \
-    'st.d $r31, $t0, 248' \
+    'st.d $r1,$t0,8*1' \
+    'st.d $r31,$t0,8*31' \
     'movgr2fcsr $fcsr0, $t0'
 do
     if ! grep -Fq "$opcode" "$loong"; then
@@ -142,9 +158,24 @@ do
         exit 1
     fi
 done
+# GNU inline asm preserves the source's tabs and optional comma spaces,
+# whereas typed Machine IR emits normalized spacing. Verify the exact
+# instruction/operand identity without imposing one whitespace rendering.
+for opcode in \
+    'move[[:space:]]+\$s0,[[:space:]]*\$sp' \
+    'move[[:space:]]+\$sp,[[:space:]]*\$t0' \
+    'move[[:space:]]+\$a0,[[:space:]]*\$t1' \
+    'bl[[:space:]]+handle_loongarch_irq' \
+    'move[[:space:]]+\$sp,[[:space:]]*\$s0'
+do
+    if ! grep -Eq "^[[:space:]]*$opcode$" "$loong"; then
+        printf 'FAIL: LoongArch IRQ stack-switch inline asm %s absent\n' "$opcode" >&2
+        exit 1
+    fi
+done
 for csr in 0 1 2 4 5 7
 do
-    if ! grep -Fq "csrrd \$t0, $csr" "$loong"; then
+    if ! grep -Fq "csrrd \$t0, 0x$csr" "$loong"; then
         printf 'FAIL: LoongArch Linux trap CSR %s absent\n' "$csr" >&2
         exit 1
     fi
