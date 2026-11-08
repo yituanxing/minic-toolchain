@@ -9,4 +9,5 @@
 2026-11-07 strict stable-baseline completion after #42338051693; 4/4 full-MiniC baseline PASS caused historical diagnostic to exit INCONCLUSIVE. Reboot identical Image 12 times with SHA invariance and exact P1 oracle; if any FAIL, perform original eight-owner rescue; no certifying skip.
 2026-11-07 current exact-HEAD 2064-owner LP64 static Image independently verified P1 twelve-boot campaign; GNU golden and candidate Kbuild/link identity required, no historical cached 4/4 substitution.
 # 2026-11-08 compiler f4d7d01 full current GNU Kbuild Image and twelve independent strict P1 boot receipts, not eight-owner replay
+# 2026-11-08 optimized source c95363a exact-head full 2064-owner GNU Kbuild and strict twelve independent same-Image P1 boots; this marker changes together with linux-rv64-runtime-trigger.txt in one commit.
 mode=rv64-full

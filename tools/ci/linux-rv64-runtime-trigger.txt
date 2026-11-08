@@ -46,3 +46,4 @@
 # 2026-11-08 exact-head RV64 strict full rerun: restore authenticated GNU Kbuild and seven current MiniC shards, preserve all 2064 C owner identities, GNU LD/QEMU P0/P1 and twelve fresh same-Image P1; no optional eight-owner diagnostic on this campaign.
 
 # 2026-11-08 optimized compiler f4d7d01, exact current RV64 2064-owner GNU-AS/LD/QEMU P0/P1 plus twelve independent same-Image P1; never use prior candidate objects.
+# 2026-11-08 optimized source c95363a current-branch fresh 2064-owner MiniC compile, GNU AS/LD, QEMU P0/P1 and 12 same-Image independent P1 boots; atomic paired marker recertification after RV64 GP forwarding and MachineIR closure.
