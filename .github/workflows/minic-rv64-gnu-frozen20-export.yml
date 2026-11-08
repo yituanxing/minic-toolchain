@@ -1,0 +1,247 @@
+name: MiniC RV64 GNU frozen 20-TU export (opt-in)
+
+# One runner, GNU source-preprocessing only. This is NOT a Linux build, a
+# MiniC qualification or a QEMU receipt. Never rebuild a missing golden cache.
+on:
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: "Type EXPORT20 to restore the exact GNU golden and export 20 .i"
+        required: true
+        type: string
+  push:
+    branches:
+      - refactor/minic-target-language-boundary
+    paths:
+      - .github/workflows/minic-rv64-gnu-frozen20-export.yml
+      - tools/ci/minic-rv64-gnu-frozen20-export.py
+
+permissions:
+  contents: read
+
+jobs:
+  frozen20-export:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'push' &&
+       contains(github.event.head_commit.message, '[minic-perf-corpus-export]'))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 22
+    env:
+      SOURCE: build/linux-expanded-kbuild-v0/linux-6.6.143
+      GNU_WORK: build/linux-runtime-gcc
+      EXPORT: build/gnu20-frozen-export
+      CONFIRMATION: ${{ inputs.confirmation || '' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Require explicit export authorization and unchanged producer
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          if [[ "$GITHUB_EVENT_NAME" == workflow_dispatch && "$CONFIRMATION" != EXPORT20 ]]; then
+            echo 'FROZEN20_EXPORT=FAIL confirmation_must_equal_EXPORT20' >&2
+            exit 2
+          fi
+          python3 -m py_compile tools/ci/minic-rv64-gnu-frozen20-export.py
+          test -f tools/ci/linux-runtime-gcc-full-c-objects-v1.py
+          echo "FROZEN20_EXPORT_REQUEST=PASS head=$GITHUB_SHA source=existing_GNU_cache only_20_i=true"
+
+      - name: Restore pinned original Linux 6.6.143 sources, no download fallback
+        id: source-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ env.SOURCE }}
+          key: linux-source-6.6.143-dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932-v1
+          fail-on-cache-miss: true
+
+      - name: Verify original source cache hit before installing tools
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "${{ steps.source-cache.outputs.cache-hit }}" = true
+          test -s "$SOURCE/Makefile"
+          grep -Eq '^VERSION = 6$' "$SOURCE/Makefile"
+          grep -Eq '^PATCHLEVEL = 6$' "$SOURCE/Makefile"
+          grep -Eq '^SUBLEVEL = 143$' "$SOURCE/Makefile"
+          echo 'FROZEN20_ORIGINAL_SOURCE=PASS exact_key=true release=6.6.143'
+
+      - name: Install only original RV64 GNU Kbuild preprocessing dependencies
+        shell: bash
+        timeout-minutes: 9
+        run: |
+          set -Eeuo pipefail
+          # Reuse the exact source-producer's Ubuntu 24.04 mirror preflight;
+          # Azure mirror stalls previously consumed entire long CI runners.
+          for sources in /etc/apt/apt-mirrors.txt \
+                         /etc/apt/sources.list.d/ubuntu.sources; do
+            if [[ -f "$sources" ]] && grep -q 'azure.archive.ubuntu.com' "$sources"; then
+              sudo sed -i 's#azure.archive.ubuntu.com#archive.ubuntu.com#g' "$sources"
+            fi
+          done
+          if grep -q 'azure.archive.ubuntu.com' /etc/apt/apt-mirrors.txt 2>/dev/null; then
+            echo 'FROZEN20_GNU_APT=FAIL still_azure_mirrorlist' >&2
+            exit 14
+          fi
+          packages=(gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu
+                    libc6-dev-riscv64-cross bc bison flex libelf-dev libssl-dev
+                    make python3)
+          timeout 120s sudo apt-get -o Acquire::Retries=2 \
+            -o Acquire::http::Timeout=30 update -qq
+          if ! timeout 300s sudo apt-get -o Acquire::Retries=2 \
+               -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 \
+               -o DPkg::Lock::Timeout=60 install -y --no-install-recommends \
+               "${packages[@]}" >/dev/null; then
+            echo 'FROZEN20_GNU_APT=RETRY fresh_package_indexes=1'
+            timeout 120s sudo apt-get -o Acquire::Retries=2 \
+              -o Acquire::http::Timeout=30 update -qq
+            timeout 300s sudo apt-get -o Acquire::Retries=2 \
+              -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 \
+              -o DPkg::Lock::Timeout=60 install -y --no-install-recommends \
+              "${packages[@]}" >/dev/null
+          fi
+          command -v riscv64-linux-gnu-gcc >/dev/null
+          command -v riscv64-linux-gnu-ld >/dev/null
+
+      - name: Match exact recently certified original GNU tool binaries
+        id: gnu-key
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          cfg=eeb04f304ebfb97a1079c187dc0c2ea3cc61fc50a55aa3cc776237c16ab19bbe
+          gcc_sig=$(sha256sum "$(command -v riscv64-linux-gnu-gcc)" | cut -c1-16)
+          ld_sig=$(sha256sum "$(command -v riscv64-linux-gnu-ld)" | cut -c1-16)
+          test "$gcc_sig" = 0c2a199ea3ae14d3
+          test "$ld_sig" = 0703113036a30806
+          key="linux-gnu-golden-v1-6.6.143-$cfg-$gcc_sig-$ld_sig"
+          echo "key=$key" >> "$GITHUB_OUTPUT"
+          echo "FROZEN20_ORIGINAL_GNU_KEY=PASS key=$key"
+
+      - name: Restore certified original GNU Linux build and command metadata
+        id: gnu-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ${{ env.GNU_WORK }}/out
+            ${{ env.GNU_WORK }}/provenance
+          key: ${{ steps.gnu-key.outputs.key }}
+          fail-on-cache-miss: true
+
+      - name: Validate cached config, object hashes and all C owners
+        shell: bash
+        timeout-minutes: 6
+        run: |
+          set -Eeuo pipefail
+          test "${{ steps.gnu-cache.outputs.cache-hit }}" = true
+          out="$GNU_WORK/out"
+          prov="$GNU_WORK/provenance"
+          cfg=eeb04f304ebfb97a1079c187dc0c2ea3cc61fc50a55aa3cc776237c16ab19bbe
+          test "$(sha256sum "$out/.config" | cut -d' ' -f1)" = "$cfg"
+          grep -Fxq 'schema=linux-gnu-exact-config-v1' "$prov/gcc-baseline.txt"
+          grep -Fxq 'linux_release=6.6.143' "$prov/gcc-baseline.txt"
+          grep -Fxq 'linux_archive_sha256=dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932' "$prov/gcc-baseline.txt"
+          grep -Fxq "config_sha256=$cfg" "$prov/gcc-baseline.txt"
+          grep -Fxq 'qemu_contract=full_and_p1_passed' "$prov/gcc-baseline.txt"
+          test "$(sha256sum "$out/vmlinux" | cut -d' ' -f1)" = \
+            "$(sed -n 's/^vmlinux_sha256=//p' "$prov/gcc-baseline.txt")"
+          test "$(sha256sum "$out/arch/riscv/boot/Image" | cut -d' ' -f1)" = \
+            "$(sed -n 's/^image_sha256=//p' "$prov/gcc-baseline.txt")"
+          test "$(wc -l < "$prov/original-c-owners.txt")" -eq 2065
+          test "$(grep -Ec '^[^#[:space:]]+\.o$' "$prov/original-c-owners.txt")" -eq 2064
+          (
+            cd "$out"
+            sha256sum --status --check "$(realpath "../provenance/gcc-objects.sha256")"
+          )
+          python3 tools/ci/linux-runtime-gcc-full-c-objects-v1.py \
+            --out "$out" --manifest "$prov/gcc-objects.sha256" \
+            --output "$RUNNER_TEMP/frozen20-owners.txt" \
+            --excluded "$RUNNER_TEMP/frozen20-excluded.tsv" \
+            --min-c-objects 2064
+          cmp "$RUNNER_TEMP/frozen20-owners.txt" "$prov/original-c-owners.txt"
+          echo 'FROZEN20_GNU_PROVENANCE=PASS owner_count=2064 cached_C_objects=SHA_verified'
+
+      - name: Select exactly 10 hot, 5 middle, 5 light original GNU C owners
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mkdir -p "$EXPORT"
+          python3 tools/ci/minic-rv64-gnu-frozen20-export.py select \
+            --out "$GNU_WORK/out" \
+            --owners "$GNU_WORK/provenance/original-c-owners.txt" \
+            --historical tests/compiler/perf/minic-linux-phase20-selected-2026-10-16.tsv \
+            --selection "$EXPORT/selection.tsv"
+          test "$(wc -l < "$EXPORT/selection.tsv")" -eq 21
+          find "$GNU_WORK/out" -type f -name '*.o' -printf '%P\t%T@\n' \
+            | LC_ALL=C sort >"$RUNNER_TEMP/frozen20-object-times.before"
+          find "$GNU_WORK/out" -type f -name '.*.o.cmd' -printf '%P\t%T@\n' \
+            | LC_ALL=C sort >"$RUNNER_TEMP/frozen20-gnu-cmd-times.before"
+
+      - name: Preprocess only the selected 20 Kbuild C targets
+        shell: bash
+        timeout-minutes: 10
+        run: |
+          set -Eeuo pipefail
+          export KBUILD_BUILD_USER=minic KBUILD_BUILD_HOST=minic-ci
+          export KBUILD_BUILD_TIMESTAMP='Thu Jan  1 00:00:00 UTC 1970'
+          i=0
+          while IFS=$'\t' read -r group owner source_class historical_ms object_bytes; do
+            if [[ "$group" == group ]]; then continue; fi
+            [[ "$owner" =~ ^[a-zA-Z0-9_./+-]+\.o$ ]] || exit 31
+            [[ "$owner" != /* && "$owner" != *../* && "$owner" != *//* ]] || exit 32
+            target="${owner%.o}.i"
+            test -f "$GNU_WORK/out/${owner%/*}/.${owner##*/}.cmd"
+            # The recovered GNU golden must not supply this result already:
+            # each of the 20 .i files must be newly generated in THIS run.
+            test ! -e "$GNU_WORK/out/$target"
+            test ! -L "$GNU_WORK/out/$target"
+            timeout 180s make --no-print-directory -j1 \
+              -C "$SOURCE" O="$GITHUB_WORKSPACE/$GNU_WORK/out" \
+              ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- V=1 "$target"
+            test -s "$GNU_WORK/out/$target"
+            i=$((i+1))
+            echo "FROZEN20_PREPROCESS owner=$owner target=$target count=$i"
+          done <"$EXPORT/selection.tsv"
+          test "$i" -eq 20
+          find "$GNU_WORK/out" -type f -name '*.o' -printf '%P\t%T@\n' \
+            | LC_ALL=C sort >"$RUNNER_TEMP/frozen20-object-times.after"
+          cmp "$RUNNER_TEMP/frozen20-object-times.before" "$RUNNER_TEMP/frozen20-object-times.after"
+          find "$GNU_WORK/out" -type f -name '.*.o.cmd' -printf '%P\t%T@\n' \
+            | LC_ALL=C sort >"$RUNNER_TEMP/frozen20-gnu-cmd-times.after"
+          cmp "$RUNNER_TEMP/frozen20-gnu-cmd-times.before" "$RUNNER_TEMP/frozen20-gnu-cmd-times.after"
+          test "$(sha256sum "$GNU_WORK/out/.config" | cut -d' ' -f1)" = \
+            eeb04f304ebfb97a1079c187dc0c2ea3cc61fc50a55aa3cc776237c16ab19bbe
+          (
+            cd "$GNU_WORK/out"
+            sha256sum --status --check "$(realpath "../provenance/gcc-objects.sha256")"
+          )
+          echo 'FROZEN20_NO_OBJECT_REBUILD=PASS unchanged_object_paths_mtimes_and_SHA=true'
+
+      - name: Copy and hash only 20 frozen preprocessed Linux inputs
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 tools/ci/minic-rv64-gnu-frozen20-export.py pack \
+            --out "$GNU_WORK/out" --selection "$EXPORT/selection.tsv" \
+            --artifact "$EXPORT/artifact" \
+            --original-provenance "$GNU_WORK/provenance/gcc-baseline.txt" \
+            --object-manifest "$GNU_WORK/provenance/gcc-objects.sha256" \
+            --config "$GNU_WORK/out/.config" \
+            --source-key linux-source-6.6.143-dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932-v1 \
+            --gnu-key "${{ steps.gnu-key.outputs.key }}" \
+            --head "$GITHUB_SHA"
+          (
+            cd "$EXPORT/artifact"
+            test "$(wc -l < SHA256SUMS)" -eq 20
+            sha256sum --status --check SHA256SUMS
+            test "$(find inputs -type f -name '*.i' | wc -l)" -eq 20
+            test -s provenance.txt
+          )
+          echo "FROZEN20_EXPORT=PASS owners=20 head=$GITHUB_SHA old_GNU_QEMU_provenance_verified=true"
+
+      - name: Upload only the 20 .i and their SHA/provenance index
+        uses: actions/upload-artifact@v4
+        with:
+          name: minic-original-gnu-linux-6.6.143-rv64-frozen20-${{ github.sha }}
+          path: ${{ env.EXPORT }}/artifact/
+          if-no-files-found: error
+          retention-days: 7
