@@ -154,11 +154,12 @@ static bool run_case(bool unsupported) {
     length = fread(text, 1U, sizeof(text) - 1U, output);
     text[length] = '\0';
     failure_stage = "text-branch-invariants";
-    /* Function entry branches to the Core entry's private label. The second
-     * branch (the Core backedge) also targets that label, never a64_cycle. */
+    /* The prologue now falls directly into the physically adjacent entry;
+     * only the Core backedge needs an explicit private-label branch. */
     ok = strstr(text, "a64_cycle:\n") == NULL &&
          strstr(text, "  b .Lminic_mir_a64_cycle_1\n") != NULL &&
-         strstr(text, "  b .Lminic_mir_a64_cycle_2\n") != NULL &&
+         strstr(text, "  b .Lminic_mir_a64_cycle_2\n") == NULL &&
+         strstr(text, "  mov x29, sp\n.Lminic_mir_a64_cycle_1:\n") != NULL &&
          strstr(text, ".Lminic_mir_a64_cycle_1:\n") != NULL &&
          strstr(text, ".Lminic_mir_a64_cycle_2:\n") != NULL &&
          strstr(text, "  b a64_cycle\n") == NULL;
@@ -1413,7 +1414,8 @@ static bool run_record_loop_case(void) {
     n = fread(assembly, 1U, sizeof(assembly) - 1U, out);
     assembly[n] = '\0';
     stage = "loop-invariants";
-    ok = strstr(assembly, "  b .Lminic_mir_a64_record_loop_2\n") != NULL &&
+    ok = strstr(assembly, "  b .Lminic_mir_a64_record_loop_2\n") == NULL &&
+        strstr(assembly, "  movz x12, #128, lsl #0\n.Lminic_mir_a64_record_loop_2:\n") != NULL &&
         strstr(assembly, "  ldrb w11, [x9, #0]\n") != NULL &&
         strstr(assembly, "  strb w11, [x10, #0]\n") != NULL &&
         strstr(assembly, "  cbnz x12, .Lminic_mir_a64_record_loop_2\n") != NULL &&

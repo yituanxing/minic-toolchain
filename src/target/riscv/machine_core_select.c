@@ -318,6 +318,11 @@ static bool rv_value_chunk(RvCoreSelection *sel, MinicCoreValueId id,
     offset += chunk * word;
     if (offset > sel->plan->frame->frame_size ||
         word > sel->plan->frame->frame_size - offset) return false;
+    /* The low word is exactly the ordinary private SSA value slot. Reuse
+     * the proven same-block adjacent store/load forwarding in that path;
+     * the high word still requires its explicit separate frame transfer. */
+    if (chunk == 0U)
+        return load ? rv_load(sel, id, reg) : rv_store(sel, id, reg);
     return minic_riscv_machine_select_frame_transfer(&sel->builder, reg,
         sel->plan->frame->has_dynamic_stack ? RV_S0 : RV_SP,
         offset, load, (unsigned)word);

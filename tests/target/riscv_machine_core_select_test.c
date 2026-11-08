@@ -1766,7 +1766,8 @@ static bool run_wide_condition(unsigned xlen, bool explicit_zero,
               strstr(assembly, xlen == 32U ? "  lw x6, 36(x2)" :
                   "  ld x6, 40(x2)") != NULL &&
               strstr(assembly, "  or x5, x5, x6") != NULL
-            : strstr(assembly, "  ld x5, 32(x2)") != NULL &&
+            : (strstr(assembly, "  ld x5, 32(x2)") != NULL ||
+               strstr(assembly, "  mv x5, x10") != NULL) &&
               strstr(assembly, "  or x5, x5, x6") == NULL);
 done:
     if (!okay) fprintf(stderr,

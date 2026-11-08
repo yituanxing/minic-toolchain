@@ -5879,6 +5879,14 @@ static bool a64_core_instruction(A64CoreSelection *sel,
 
 static bool a64_branch(A64CoreSelection *sel, size_t to) {
     const MinicMachineOperand target[] = {a64_block(to)};
+    /* A physical successor needs no B instruction. MachineIR verifies that
+     * a fallthrough target is immediately adjacent and remains a CFG edge. */
+    if (sel->builder.has_position && sel->builder.function != NULL &&
+        sel->builder.current_block < sel->builder.function->block_count &&
+        to == sel->builder.current_block + 1U &&
+        to < sel->builder.function->block_count)
+        return minic_machine_builder_add_successor(&sel->builder, to) &&
+            minic_machine_builder_set_fallthrough(&sel->builder, to);
     return a64_emit(sel, MINIC_A64_MACHINE_B, target, 1U) &&
         minic_machine_builder_add_successor(&sel->builder, to);
 }
