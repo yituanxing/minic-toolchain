@@ -56,17 +56,28 @@ for spec in ninth:a0:8 tenth_mixed:a2:8 spill_mixed:STACK:8 \
     ' "$work/hard.s"
 done
 
-for spec in 'call_ninth:  ld x10, ' \
+# Match the actual outgoing ninth GPR argument, not a redundant post-call
+# reload of the return value. Same-register private-slot forwarding may
+# legitimately remove that reload without changing the LP64D call ABI.
+for spec in 'call_ninth:  mv x10, x5' \
             'call_tenth_mixed:  mv x12, x5' \
             'call_spill_mixed:  sd x5, 0(x2)' \
-            'call_ninth_float:  ld x10, ' \
+            'call_ninth_float:  mv x10, x5' \
             'call_indirect_ninth:  jalr ra, 0(x5)'; do
     name=${spec%%:*}
     expected=${spec#*:}
     awk -v name="$name" -v expected="$expected" '
         $0 == name ":" { inside = 1; found = 1; next }
         inside && index($0, ".size " name ",") == 1 { inside = 0; done = 1 }
-        inside && index($0, expected) == 1 { proof++ }
+        inside && index($0, expected) == 1 {
+            if (name == "call_ninth" || name == "call_ninth_float") {
+                # Prove x10 is the argument of this precise call, not an
+                # unrelated register move elsewhere in the function.
+                callee = substr(name, 6)
+                if (getline next_line > 0 && next_line == "  call " callee)
+                    proof++
+            } else proof++
+        }
         END { if (!found || !done || proof == 0) exit 1 }
     ' "$work/hard.s" || { echo "RV64_HARDFLOAT_NINTH=FAIL outgoing $name" >&2; exit 1; }
 done
