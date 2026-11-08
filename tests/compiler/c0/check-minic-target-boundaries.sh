@@ -132,8 +132,12 @@ done
 # and serialize verified MachineIR. The old trusted FILE* producer is gone.
 has src/target/riscv64/codegen_function.c 'static bool rv64_emit_typed_function('
 has src/target/riscv64/codegen_function.c 'minic_riscv_machine_select_core_subset('
-has src/target/riscv64/codegen_function.c 'minic_machine_production_preflight('
-has src/target/riscv64/codegen_function.c 'minic_machine_gnu_asm_emit_body('
+# The production writer retains a verified, owned emission plan across the
+# function envelope; its standalone compatibility entrypoints remain public.
+has src/target/riscv64/codegen_function.c 'minic_machine_production_preflight_prepare('
+has src/target/riscv64/codegen_function.c 'minic_machine_gnu_asm_emit_prepared_body('
+has src/target/common/machine_production_preflight.h 'minic_machine_production_preflight('
+has src/target/common/machine_gnu_asm.c 'minic_machine_gnu_asm_emit_body('
 lacks src/target/riscv64/codegen_function.c 'minic_riscv64_emit_core_function_with_symbol_with_storage_module_trusted('
 # Module symbols have one alias identity (target index + canonical target
 # name in the same Module), not a second owned alias spelling or boolean.
@@ -676,8 +680,8 @@ has src/target/riscv/machine_core_select.c 'minic_machine_builder_mark_core_bloc
 has src/target/x86_64/machine_core_select.c 'minic_core_block_instruction_at('
 has src/target/x86_64/machine_core_select.c 'minic_machine_builder_mark_core_block('
 has src/target/x86_64/codegen.c 'minic_x86_64_machine_select_core_subset('
-has src/target/x86_64/codegen.c 'minic_machine_production_preflight('
-has src/target/x86_64/codegen.c 'minic_machine_gnu_asm_emit_body('
+has src/target/x86_64/codegen.c 'minic_machine_production_preflight_prepare('
+has src/target/x86_64/codegen.c 'minic_machine_gnu_asm_emit_prepared_body('
 lacks src/target/x86_64/codegen.c 'minic_core_block_walk_next('
 # The one-way typed x86 production cutover physically retires its entire
 # FILE* instruction-emitter dependency cluster; pure target Source admission
@@ -719,8 +723,8 @@ exists src/target/common/direct_function_emit.h
 has src/target/common/direct_function_emit.h 'minic_multi_direct_lp64_function_plan_prepare('
 has src/target/common/direct_function_emit.h 'minic_multi_module_emit_elf_symbol_visibility('
 has src/target/common/direct_function_emit.h 'config->select_machine(&machine, &ctx)'
-has src/target/common/direct_function_emit.h 'minic_machine_production_preflight('
-has src/target/common/direct_function_emit.h 'minic_machine_gnu_asm_emit_body(out, &machine, &machine_policy)'
+has src/target/common/direct_function_emit.h 'minic_machine_production_preflight_prepare('
+has src/target/common/direct_function_emit.h 'minic_machine_gnu_asm_emit_prepared_body(out, prepared_body)'
 lacks src/target/common/direct_function_emit.h 'config->emit_prologue(out, &ctx)'
 lacks src/target/common/direct_function_emit.h 'config->emit_core_blocks(out, &ctx)'
 lacks src/target/common/direct_function_emit.h 'rewrite_dynamic_asm'
@@ -1019,8 +1023,8 @@ for removed in src/target/riscv32/rv32_integer_emit.c \
   lacks Makefile "$removed"
 done
 has src/target/riscv32/rv32_emit.c 'minic_riscv_machine_select_core_subset('
-has src/target/riscv32/rv32_emit.c 'minic_machine_production_preflight('
-has src/target/riscv32/rv32_emit.c 'minic_machine_gnu_asm_emit_body('
+has src/target/riscv32/rv32_emit.c 'minic_machine_production_preflight_prepare('
+has src/target/riscv32/rv32_emit.c 'minic_machine_gnu_asm_emit_prepared_body('
 if compgen -G 'src/target/riscv64/rv32_*' >/dev/null; then
   fail 'RV32 machine implementation was reintroduced under RV64'
 fi
@@ -1245,7 +1249,7 @@ has src/target/x86_64/codegen.c 'minic_x86_64_frame_init_with_storage('
 has src/target/riscv/machine_core_select.c 'plan->frame->frame_size'
 has src/target/riscv64/codegen_function.c 'rv64_emit_typed_function(file, module, target,'
 has src/target/riscv64/codegen_function.c 'minic_riscv_machine_select_core_subset(&machine, &bridge)'
-has src/target/riscv64/codegen_function.c 'minic_machine_production_preflight(&source, &machine, &policy)'
+has src/target/riscv64/codegen_function.c 'minic_machine_production_preflight_prepare('
 lacks src/target/riscv64/codegen_function.c 'minic_riscv64_emit_core_function_with_symbol_with_storage_module_trusted('
 has src/target/aarch64/codegen.c 'minic_multi_direct_lp64_emit_function('
 has src/target/loongarch64/codegen.c 'minic_multi_direct_lp64_emit_function('

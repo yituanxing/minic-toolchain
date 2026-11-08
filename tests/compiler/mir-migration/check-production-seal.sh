@@ -45,15 +45,17 @@ forbid "$backend" 'MinicC0Program'
 for file in src/target/riscv32/rv32_emit.c \
             src/target/riscv64/codegen_function.c \
             src/target/x86_64/codegen.c; do
-    need "$file" 'minic_machine_production_preflight('
-    need "$file" 'minic_machine_gnu_asm_emit_body('
+    need "$file" 'minic_machine_production_preflight_prepare('
+    need "$file" 'minic_machine_gnu_asm_emit_prepared_body('
     forbid "$file" 'MinicC0Program'
 done
 need src/target/riscv32/rv32_emit.c 'minic_riscv_machine_select_core_subset('
 need src/target/riscv64/codegen_function.c 'minic_riscv_machine_select_core_subset('
 need src/target/x86_64/codegen.c 'minic_x86_64_machine_select_core_subset('
-need src/target/common/direct_function_emit.h 'minic_machine_production_preflight('
-need src/target/common/direct_function_emit.h 'minic_machine_gnu_asm_emit_body('
+need src/target/common/direct_function_emit.h 'minic_machine_production_preflight_prepare('
+need src/target/common/direct_function_emit.h 'minic_machine_gnu_asm_emit_prepared_body('
+need src/target/common/machine_production_preflight.h 'minic_machine_production_preflight('
+need src/target/common/machine_gnu_asm.c 'minic_machine_gnu_asm_emit_body('
 for target in aarch64 loongarch64; do
     file="src/target/$target/codegen.c"
     need "$file" '.select_machine = minic_'
