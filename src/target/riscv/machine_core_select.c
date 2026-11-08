@@ -1738,6 +1738,7 @@ static bool rv_core_payload_memory(RvCoreSelection *sel,
     const MinicCoreType *type) {
     const size_t word = sel->xlen / 8U;
     size_t i, j, chunks;
+    bool native_chunks_supported = true;
     if (type == NULL || !type->has_layout ||
         !((type->kind == MINIC_CORE_TYPE_FLOAT &&
             (type->size == 4U || type->size == 8U ||
@@ -1750,6 +1751,46 @@ static bool rv_core_payload_memory(RvCoreSelection *sel,
         type->size > 2U * word ||
         !rv_load(sel, address, RV_T0)) return false;
     chunks = (type->size + word - 1U) / word;
+    for (i = 0U; i < chunks; ++i) {
+        const size_t count = type->size - i * word < word ?
+            type->size - i * word : word;
+        /* Core permits arbitrary whole-byte integer widths (for example
+         * 24- and 48-bit integers), whereas RV I has only 1/2/4/8-byte
+         * memory opcodes. An unsupported chunk is a bytewise fallback,
+         * never a reason to reject otherwise supported Core memory. */
+        if (rv_memory_opcode(sel, load, (unsigned)count, false) ==
+            MINIC_RISCV_MACHINE_INVALID) {
+            native_chunks_supported = false;
+            break;
+        }
+    }
+    /* A wide IEEE/raw-integer payload is not intrinsically byte-addressed.
+     * Its *address provenance*, rather than the C pointee type, may prove
+     * that native RV I loads/stores are safe. Keep the existing byte-exact
+     * path for packed or otherwise unproven pointers, and preserve volatile
+     * transfer granularity rather than silently changing visible accesses. */
+    if (!is_volatile && native_chunks_supported &&
+        minic_riscv_address_alignment(sel->plan->core, address) >=
+            (type->size < word ? type->size : word)) {
+        for (i = 0U; i < chunks; ++i) {
+            const size_t count = type->size - i * word < word ?
+                type->size - i * word : word;
+            const uint32_t opcode = rv_memory_opcode(sel, load,
+                (unsigned)count, false);
+            MinicMachineOperand ops[2];
+            if (opcode == MINIC_RISCV_MACHINE_INVALID ||
+                (!load && !rv_value_chunk(sel, source, i, RV_T1, true)))
+                return false;
+            ops[0] = rv_reg(sel->xlen, RV_T1, load ?
+                MINIC_MACHINE_REGISTER_WRITE : MINIC_MACHINE_REGISTER_READ);
+            ops[1] = rv_addr(sel->xlen, RV_T0);
+            ops[1].value.address.displacement = (int64_t)(i * word);
+            if (!rv_emit(sel, opcode, ops, 2U) ||
+                (load && !rv_value_chunk(sel, ins->result, i, RV_T1, false)))
+                return false;
+        }
+        return true;
+    }
     for (i = 0U; i < chunks; ++i) {
         const size_t count = type->size - i * word < word ?
             type->size - i * word : word;
@@ -4148,8 +4189,9 @@ static bool rv_core_terminator(RvCoreSelection *sel, size_t core_id) {
     }
 }
 
-bool minic_riscv_machine_select_core_subset(MinicMachineFunction *machine,
-    const MinicRiscvCoreMachinePlan *plan) {
+static bool riscv_machine_select_core_impl(MinicMachineFunction *machine,
+    const MinicRiscvCoreMachinePlan *plan,
+    bool defer_physical_preflight) {
     RvCoreSelection sel = {0};
     MinicRiscvIsa isa = {0};
     MinicMachineGNUAsmPolicy policy = {0};
@@ -4385,7 +4427,8 @@ bool minic_riscv_machine_select_core_subset(MinicMachineFunction *machine,
     reject_phase = "gnu_policy";
     if (!minic_riscv_machine_gnu_asm_policy(target, &policy)) goto done;
     reject_phase = "gnu_preflight";
-    if (!minic_machine_gnu_asm_preflight(machine, &policy)) goto done;
+    if (!defer_physical_preflight &&
+        !minic_machine_gnu_asm_preflight(machine, &policy)) goto done;
     success = true;
 done:
     if (!success && getenv("MINIC_RV_MACHINE_TRACE") != NULL)
@@ -4406,4 +4449,14 @@ done:
     free(sel.asm_goto_continuations);
     if (!success) minic_machine_function_destroy(machine);
     return success;
+}
+
+bool minic_riscv_machine_select_core_subset(MinicMachineFunction *machine,
+    const MinicRiscvCoreMachinePlan *plan) {
+    return riscv_machine_select_core_impl(machine, plan, false);
+}
+
+bool minic_riscv_machine_select_core_for_production(
+    MinicMachineFunction *machine, const MinicRiscvCoreMachinePlan *plan) {
+    return riscv_machine_select_core_impl(machine, plan, true);
 }

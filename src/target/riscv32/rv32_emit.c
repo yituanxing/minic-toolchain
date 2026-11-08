@@ -97,7 +97,7 @@ static bool rv32_func(FILE *out, const MinicCoreModule *module,
                 .object_offset_count = fr.object_count
             };
             reject_stage = "select";
-            admitted = minic_riscv_machine_select_core_subset(
+            admitted = minic_riscv_machine_select_core_for_production(
                 &machine, &bridge);
             if (admitted) {
                 reject_stage = "policy";

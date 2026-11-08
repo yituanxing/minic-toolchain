@@ -49,9 +49,9 @@ for file in src/target/riscv32/rv32_emit.c \
     need "$file" 'minic_machine_gnu_asm_emit_prepared_body('
     forbid "$file" 'MinicC0Program'
 done
-need src/target/riscv32/rv32_emit.c 'minic_riscv_machine_select_core_subset('
-need src/target/riscv64/codegen_function.c 'minic_riscv_machine_select_core_subset('
-need src/target/x86_64/codegen.c 'minic_x86_64_machine_select_core_subset('
+need src/target/riscv32/rv32_emit.c 'minic_riscv_machine_select_core_for_production('
+need src/target/riscv64/codegen_function.c 'minic_riscv_machine_select_core_for_production('
+need src/target/x86_64/codegen.c 'minic_x86_64_machine_select_core_for_production('
 need src/target/common/direct_function_emit.h 'minic_machine_production_preflight_prepare('
 need src/target/common/direct_function_emit.h 'minic_machine_gnu_asm_emit_prepared_body('
 need src/target/common/machine_production_preflight.h 'minic_machine_production_preflight('
@@ -63,6 +63,14 @@ for target in aarch64 loongarch64; do
     need "$file" 'minic_multi_direct_lp64_emit_function('
     forbid "$file" 'MinicC0Program'
 done
+need src/target/aarch64/codegen.c \
+    'minic_aarch64_machine_select_core_for_production'
+need src/target/riscv/machine_core_select.c \
+    'minic_riscv_machine_select_core_subset('
+need src/target/x86_64/machine_core_select.c \
+    'minic_x86_64_machine_select_core_subset('
+need src/target/aarch64/machine_core_select.c \
+    'minic_aarch64_machine_select_core_subset('
 
 # The Core and machine input contracts do not contain the source language's
 # type arena or Program graph. Source-specific admission may still live in

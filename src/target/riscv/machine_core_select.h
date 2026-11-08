@@ -38,4 +38,11 @@ typedef struct MinicRiscvCoreMachinePlan {
 bool minic_riscv_machine_select_core_subset(MinicMachineFunction *,
     const MinicRiscvCoreMachinePlan *);
 
+/* Internal production-only variant: Core selection and coverage remain
+ * mandatory, but the physical verifier is performed exactly once by the
+ * immediately following production_preflight_prepare before ELF output.
+ * Standalone callers MUST use the fully verified selector above. */
+bool minic_riscv_machine_select_core_for_production(MinicMachineFunction *,
+    const MinicRiscvCoreMachinePlan *);
+
 #endif

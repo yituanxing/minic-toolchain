@@ -1184,6 +1184,135 @@ done:
     minic_core_type_context_destroy(&types);
     return ok;
 }
+
+/* Core integer payloads may have legal whole-byte widths that RV I cannot
+ * transfer as a single memory instruction.  An explicitly aligned Core local
+ * proves address alignment, but must never turn a 4+3 (RV32) or 8+3 (RV64)
+ * payload into an invalid native opcode instead of the bytewise fallback. */
+static bool run_odd_width_payload(unsigned xlen) {
+    MinicCoreFunction fn = {0};
+    MinicCoreTypeContext types;
+    MinicCoreType type = {0};
+    MinicCoreTypeId void_t, odd_t, pointer_t;
+    MinicCoreBlockId entry;
+    MinicCoreValueId address, loaded;
+    MinicCoreInstruction ins = {0};
+    MinicCoreTerminator term = {0};
+    MinicRiscvCoreMachinePlan plan = {0};
+    Rv32FunctionAbiPlan abi32 = {0};
+    MinicRiscv64FunctionAbiPlan abi64 = {0};
+    MinicCoreCallIndex calls64 = {0};
+    MinicRiscvPhysicalFrame frame = {0};
+    MinicMachineFunction machine = {0};
+    MinicTargetInfo target = {0};
+    MinicRiscvIsa isa = {0};
+    MinicDataLayout layout = {0};
+    const bool reachable[] = {true};
+    const size_t bytes = xlen == 64U ? 11U : 7U;
+    const size_t value_offsets[] = {0U, 16U};
+    const size_t object_offsets[] = {64U};
+    size_t i, j, reads = 0U, writes = 0U;
+    bool ok = false;
+    const char *stage = "init";
+    minic_core_type_context_initialize(&types);
+    minic_core_function_initialize(&fn);
+    fn.name = malloc(sizeof("rv_odd_width_payload"));
+    if (fn.name == NULL) goto done;
+    memcpy(fn.name, "rv_odd_width_payload", sizeof("rv_odd_width_payload"));
+    fn.name_length = sizeof("rv_odd_width_payload") - 1U;
+    type.kind = MINIC_CORE_TYPE_VOID;
+    if (!minic_core_type_register(&types, &type, &void_t)) goto done;
+    type = (MinicCoreType){0};
+    type.kind = MINIC_CORE_TYPE_INTEGER;
+    type.has_layout = true;
+    type.size = bytes;
+    type.alignment = 1U;
+    type.value.integer.bit_width = (unsigned)(bytes * 8U);
+    if (!minic_core_type_register(&types, &type, &odd_t)) goto done;
+    type = (MinicCoreType){0};
+    type.kind = MINIC_CORE_TYPE_POINTER;
+    type.has_layout = true;
+    type.size = type.alignment = xlen / 8U;
+    type.value.pointer.pointee = odd_t;
+    if (!minic_core_type_register(&types, &type, &pointer_t) ||
+        !minic_core_function_define_signature(&fn, &types, void_t,
+            NULL, 0U, MINIC_CALLING_CONVENTION_DEFAULT, false) ||
+        !minic_core_function_add_block(&fn, &entry)) goto done;
+    fn.objects = calloc(1U, sizeof(*fn.objects));
+    if (fn.objects == NULL) goto done;
+    fn.objects[0].core_type_id = odd_t;
+    fn.objects[0].explicit_alignment = xlen / 8U;
+    fn.object_count = fn.object_capacity = 1U;
+    stage = "Core";
+    ins.kind = MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS;
+    ins.core_type_id = pointer_t;
+    ins.value.object_id = 0U;
+    if (!minic_core_function_append_value_instruction(&fn,
+        entry, &ins, &address)) goto done;
+    ins = (MinicCoreInstruction){0};
+    ins.kind = MINIC_CORE_INSTRUCTION_LOAD;
+    ins.core_type_id = odd_t;
+    ins.value.load.address = address;
+    if (!minic_core_function_append_value_instruction(&fn,
+        entry, &ins, &loaded)) goto done;
+    ins = (MinicCoreInstruction){0};
+    ins.kind = MINIC_CORE_INSTRUCTION_STORE;
+    ins.core_type_id = void_t;
+    ins.result = MINIC_CORE_VALUE_INVALID;
+    ins.value.store.address = address;
+    ins.value.store.stored_value = loaded;
+    if (!minic_core_function_append_effect_instruction(&fn,
+        entry, &ins)) goto done;
+    term.kind = MINIC_CORE_TERMINATOR_RETURN;
+    term.return_value = MINIC_CORE_VALUE_INVALID;
+    term.return_object = MINIC_CORE_OBJECT_INVALID;
+    if (!minic_core_function_set_terminator(&fn, entry, &term) ||
+        !minic_core_function_attach_type_context(&fn, &types) ||
+        !minic_core_function_verify(&fn)) goto done;
+    stage = "select";
+    layout.byte_order = MINIC_BYTE_ORDER_LITTLE;
+    layout.pointer_size = layout.pointer_alignment = xlen / 8U;
+    target.architecture = xlen == 32U ?
+        MINIC_TARGET_ARCH_RISCV32 : MINIC_TARGET_ARCH_RISCV64;
+    target.data_layout = &layout;
+    isa.xlen = xlen;
+    isa.abi = xlen == 32U ? MINIC_RISCV_ABI_ILP32 : MINIC_RISCV_ABI_LP64;
+    isa.strict_isa = true;
+    if (!minic_riscv_target_isa_store(&target, &isa)) goto done;
+    frame.frame_size = 256U;
+    frame.stack_alignment = 16U;
+    plan.target = &target;
+    plan.core = &fn;
+    plan.frame = &frame;
+    plan.value_offsets = value_offsets;
+    plan.value_offset_count = 2U;
+    plan.object_offsets = object_offsets;
+    plan.object_offset_count = 1U;
+    if (!prepare_old_rv_abi(&fn, xlen, 0U,
+            &abi32, &abi64, &calls64, &plan) ||
+        !minic_riscv_machine_select_core_subset(&machine, &plan) ||
+        !minic_machine_core_coverage_verify(&fn, reachable, &machine)) goto done;
+    stage = "bytewise";
+    for (i = 0U; i < machine.block_count; ++i)
+        for (j = 0U; j < machine.blocks[i].instruction_count; ++j) {
+            const MinicMachineInstruction *m =
+                &machine.blocks[i].instructions[j];
+            if (m->opcode == MINIC_RISCV_MACHINE_LBU) ++reads;
+            if (m->opcode == MINIC_RISCV_MACHINE_SB) ++writes;
+        }
+    ok = reads >= bytes && writes >= bytes;
+done:
+    if (!ok) fprintf(stderr,
+        "RV%u odd payload %zuB failed at %s LBU=%zu SB=%zu\n",
+        xlen, bytes, stage, reads, writes);
+    minic_machine_function_destroy(&machine);
+    rv32_function_abi_plan_destroy(&abi32);
+    minic_riscv64_function_abi_plan_destroy(&abi64);
+    minic_core_call_index_destroy(&calls64);
+    minic_core_function_destroy(&fn);
+    minic_core_type_context_destroy(&types);
+    return ok;
+}
 static bool run_indirect_call(unsigned xlen, bool stack_case) {
     MinicCoreFunction fn = {0};
     MinicCoreTypeContext types;
@@ -2116,6 +2245,7 @@ int main(void) {
         !run_dynamic_stack(32U) ||
         !run_dynamic_stack(64U) ||
         !run_memory_family(32U) || !run_memory_family(64U) ||
+        !run_odd_width_payload(32U) || !run_odd_width_payload(64U) ||
         !run_indirect_call(32U, false) || !run_indirect_call(64U, false) ||
         !run_indirect_call(32U, true) || !run_indirect_call(64U, true) ||
         !run_record_parameter(32U, 5U, false, false) ||

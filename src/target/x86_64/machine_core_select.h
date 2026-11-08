@@ -11,4 +11,10 @@ bool minic_x86_64_machine_select_core_subset(
     MinicMachineFunction *, const MinicTargetInfo *,
     const MinicCoreFunction *, const MinicX86Frame *);
 
+/* Production-only selection; the mandatory producer-owned prepared gate
+ * performs full physical verification before the first ELF envelope byte. */
+bool minic_x86_64_machine_select_core_for_production(
+    MinicMachineFunction *, const MinicTargetInfo *,
+    const MinicCoreFunction *, const MinicX86Frame *);
+
 #endif

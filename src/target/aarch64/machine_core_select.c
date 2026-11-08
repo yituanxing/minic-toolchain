@@ -6124,8 +6124,9 @@ static bool a64_derive_generated_features(A64CoreSelection *sel) {
     return true;
 }
 
-bool minic_aarch64_machine_select_core_subset(
-    MinicMachineFunction *machine, const MinicDirectLP64BlockContext *ctx) {
+static bool a64_machine_select_core_impl(
+    MinicMachineFunction *machine, const MinicDirectLP64BlockContext *ctx,
+    bool defer_physical_preflight) {
     const MinicCoreFunction *fn;
     A64CoreSelection sel = {0};
     size_t count, prologue, i;
@@ -6324,7 +6325,7 @@ bool minic_aarch64_machine_select_core_subset(
         (void)fprintf(stderr,
             "MINIC_A64_MIR_REJECT function=%s phase=generated_features blocks=%zu\n",
             ctx->name, machine->block_count);
-    if (ok) {
+    if (ok && !defer_physical_preflight) {
         ok = minic_machine_gnu_asm_preflight(machine, &sel.policy);
         if (!ok && getenv("MINIC_M1_TRACE") != NULL)
             (void)fprintf(stderr,
@@ -6343,4 +6344,14 @@ cleanup:
     free(sel.variadic_blocks);
     if (!ok) minic_machine_function_destroy(machine);
     return ok;
+}
+
+bool minic_aarch64_machine_select_core_subset(
+    MinicMachineFunction *machine, const MinicDirectLP64BlockContext *ctx) {
+    return a64_machine_select_core_impl(machine, ctx, false);
+}
+
+bool minic_aarch64_machine_select_core_for_production(
+    MinicMachineFunction *machine, const MinicDirectLP64BlockContext *ctx) {
+    return a64_machine_select_core_impl(machine, ctx, true);
 }

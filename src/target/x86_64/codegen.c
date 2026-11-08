@@ -1176,7 +1176,7 @@ static bool x86_emit_function(FILE *out,
             .core = fn, .reachable_blocks = reachable,
             .target = target, .symbol = name
         };
-        const bool selected = minic_x86_64_machine_select_core_subset(
+        const bool selected = minic_x86_64_machine_select_core_for_production(
             &machine, target, fn, &frame);
         const bool has_policy = selected &&
             minic_x86_64_machine_gnu_asm_policy(target, &machine_policy);

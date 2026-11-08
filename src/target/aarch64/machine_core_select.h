@@ -10,6 +10,12 @@
 bool minic_aarch64_machine_select_core_subset(MinicMachineFunction *,
     const MinicDirectLP64BlockContext *);
 
+/* Internal production variant. Only the direct-function emitter may call
+ * it, and MUST commit the full physical prepared gate before any GNU ELF
+ * envelope. The standalone selector above remains fully verified. */
+bool minic_aarch64_machine_select_core_for_production(MinicMachineFunction *,
+    const MinicDirectLP64BlockContext *);
+
 /* Independent target Core-operand/ISA proof for a selected Linux GNU ASM
  * occurrence. The common coverage verifier requires it for every seal. */
 bool minic_aarch64_machine_prove_selected_source_asm(

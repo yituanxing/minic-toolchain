@@ -131,7 +131,7 @@ done
 # prepared Core/ABI/frame contract, validate production coverage/preflight
 # and serialize verified MachineIR. The old trusted FILE* producer is gone.
 has src/target/riscv64/codegen_function.c 'static bool rv64_emit_typed_function('
-has src/target/riscv64/codegen_function.c 'minic_riscv_machine_select_core_subset('
+has src/target/riscv64/codegen_function.c 'minic_riscv_machine_select_core_for_production('
 # The production writer retains a verified, owned emission plan across the
 # function envelope; its standalone compatibility entrypoints remain public.
 has src/target/riscv64/codegen_function.c 'minic_machine_production_preflight_prepare('
@@ -570,7 +570,7 @@ for consumer in src/target/x86_64/machine_core_select.c \
 done
 # RV32 production is now an explicit Core->physical MachineIR selector,
 # not the removed FILE* family dispatcher.
-has src/target/riscv32/rv32_emit.c 'minic_riscv_machine_select_core_subset('
+has src/target/riscv32/rv32_emit.c 'minic_riscv_machine_select_core_for_production('
 has src/target/riscv/machine_core_select.c 'static bool rv_core_instruction('
 has src/target/riscv/machine_core_select.c 'MINIC_CORE_INSTRUCTION_INTEGER_ADD'
 lacks src/target/common/direct_instruction_semantics.c 'minic_multi_direct_memory_machine_kind('
@@ -679,7 +679,7 @@ has src/target/riscv/machine_core_select.c 'minic_core_function_mark_reachable_b
 has src/target/riscv/machine_core_select.c 'minic_machine_builder_mark_core_block('
 has src/target/x86_64/machine_core_select.c 'minic_core_block_instruction_at('
 has src/target/x86_64/machine_core_select.c 'minic_machine_builder_mark_core_block('
-has src/target/x86_64/codegen.c 'minic_x86_64_machine_select_core_subset('
+has src/target/x86_64/codegen.c 'minic_x86_64_machine_select_core_for_production('
 has src/target/x86_64/codegen.c 'minic_machine_production_preflight_prepare('
 has src/target/x86_64/codegen.c 'minic_machine_gnu_asm_emit_prepared_body('
 lacks src/target/x86_64/codegen.c 'minic_core_block_walk_next('
@@ -701,7 +701,7 @@ has src/target/x86_64/machine_opcode.c \
   'minic_x86_64_machine_validate_source_asm('
 has src/target/x86_64/machine_gnu_asm.c \
   'minic_machine_source_asm_template_emit('
-has src/target/riscv32/rv32_emit.c 'minic_riscv_machine_select_core_subset('
+has src/target/riscv32/rv32_emit.c 'minic_riscv_machine_select_core_for_production('
 has src/target/riscv/machine_core_select.c 'minic_machine_builder_mark_core_block('
 has src/target/riscv/machine_core_select.c 'static bool rv_core_instruction('
 has src/target/riscv/machine_core_select.c 'rv_core_terminator('
@@ -742,7 +742,7 @@ python3 tools/ci/minic-backend-review-ledger.py --check
 # AArch64 now selects the whole function into physical MachineIR.  The
 # previous block dispatcher and per-family FILE* callbacks are gone.
 has src/target/aarch64/codegen.c \
-  '.select_machine = minic_aarch64_machine_select_core_subset'
+  '.select_machine = minic_aarch64_machine_select_core_for_production'
 has src/target/aarch64/codegen.c \
   'minic_aarch64_machine_gnu_asm_policy_initialize'
 has src/target/aarch64/machine_core_select.c \
@@ -1022,7 +1022,7 @@ for removed in src/target/riscv32/rv32_integer_emit.c \
   [[ ! -e "$removed" ]] || fail "legacy RV32 FILE* emitter returned: $removed"
   lacks Makefile "$removed"
 done
-has src/target/riscv32/rv32_emit.c 'minic_riscv_machine_select_core_subset('
+has src/target/riscv32/rv32_emit.c 'minic_riscv_machine_select_core_for_production('
 has src/target/riscv32/rv32_emit.c 'minic_machine_production_preflight_prepare('
 has src/target/riscv32/rv32_emit.c 'minic_machine_gnu_asm_emit_prepared_body('
 if compgen -G 'src/target/riscv64/rv32_*' >/dev/null; then
@@ -1109,7 +1109,7 @@ lacks src/target/riscv32/rv32_frame.c 'minic_core_call_view_build('
 lacks src/target/riscv/machine_core_select.c 'minic_riscv32_abi_place('
 lacks src/target/riscv/machine_core_select.c 'minic_core_call_view_build('
 lacks src/target/riscv/machine_core_select.c 'for (size_t j = 0U; j < idx; ++j)'
-has src/target/riscv32/rv32_emit.c 'minic_riscv_machine_select_core_subset('
+has src/target/riscv32/rv32_emit.c 'minic_riscv_machine_select_core_for_production('
 has src/target/riscv/machine_core_select.c 'MINIC_CORE_INSTRUCTION_FLOAT_ADD'
 has src/target/riscv/machine_core_select.c 'MINIC_CORE_INSTRUCTION_LOAD'
 lacks src/target/riscv32/rv32_emit.c 'call __mulsi3'
@@ -1248,7 +1248,7 @@ has src/target/common/core_function_plan.c 'minic_core_object_storage_plan_destr
 has src/target/x86_64/codegen.c 'minic_x86_64_frame_init_with_storage('
 has src/target/riscv/machine_core_select.c 'plan->frame->frame_size'
 has src/target/riscv64/codegen_function.c 'rv64_emit_typed_function(file, module, target,'
-has src/target/riscv64/codegen_function.c 'minic_riscv_machine_select_core_subset(&machine, &bridge)'
+has src/target/riscv64/codegen_function.c 'minic_riscv_machine_select_core_for_production('
 has src/target/riscv64/codegen_function.c 'minic_machine_production_preflight_prepare('
 lacks src/target/riscv64/codegen_function.c 'minic_riscv64_emit_core_function_with_symbol_with_storage_module_trusted('
 has src/target/aarch64/codegen.c 'minic_multi_direct_lp64_emit_function('

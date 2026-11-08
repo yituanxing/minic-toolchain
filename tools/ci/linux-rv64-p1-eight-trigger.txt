@@ -12,4 +12,5 @@
 # 2026-11-08 optimized source c95363a exact-head full 2064-owner GNU Kbuild and strict twelve independent same-Image P1 boots; this marker changes together with linux-rv64-runtime-trigger.txt in one commit.
 # 2026-11-08 source 8708f818 full 2064-owner GNU Kbuild and fresh 12/12 identical-image P1; both markers atomically rearmed, not historical eight-owner diagnostic.
 # 2026-11-08 closure batch exact-head full 2064-owner GNU Kbuild and strict same-Image 12/12 P1 after e652462 MachineIR oracle fixes; do not select historical eight-owner diagnostic.
+# 2026-11-08 performance closure: paired strict-full marker with fresh exact-head five-ISA selector verification ownership and alignment-safe RV I payload; twelve independent P1 boots of the same GNU-linked SHA-checked Image.
 mode=rv64-full

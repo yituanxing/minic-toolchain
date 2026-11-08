@@ -47,7 +47,7 @@ static bool aarch64_emit_function(
         .init_array_type = "%init_array",
         .init_word_directive = "xword",
         .qualify_opaque_asm = minic_aarch64_qualified_opaque_asm,
-        .select_machine = minic_aarch64_machine_select_core_subset,
+        .select_machine = minic_aarch64_machine_select_core_for_production,
         .initialize_machine_asm_policy =
             minic_aarch64_machine_gnu_asm_policy_initialize,
         .prove_selected_source_asm =

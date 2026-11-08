@@ -106,7 +106,8 @@ static bool rv64_emit_typed_function(
             .core = function, .reachable_blocks = old_frame.reachable_blocks,
             .target = target, .symbol = symbol->symbol_name
         };
-        if (!minic_riscv_machine_select_core_subset(&machine, &bridge) ||
+        if (!minic_riscv_machine_select_core_for_production(
+                &machine, &bridge) ||
             !minic_riscv_machine_gnu_asm_policy(target, &policy) ||
             !minic_machine_production_preflight_prepare(
                 &source, &machine, &policy, &prepared_body))

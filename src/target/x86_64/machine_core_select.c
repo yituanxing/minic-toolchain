@@ -12446,9 +12446,10 @@ static bool x86_adjacent_gp_forward(X86CoreSelector *sel,
     return true;
 }
 
-bool minic_x86_64_machine_select_core_subset(
+static bool x86_machine_select_core_impl(
     MinicMachineFunction *machine, const MinicTargetInfo *target,
-    const MinicCoreFunction *core, const MinicX86Frame *frame) {
+    const MinicCoreFunction *core, const MinicX86Frame *frame,
+    bool defer_physical_preflight) {
     X86CoreSelector sel = {0};
     MinicX86MachinePrologue prologue = {0};
     size_t i, count;
@@ -12744,7 +12745,8 @@ bool minic_x86_64_machine_select_core_subset(
         }
     }
     phase = "gnu-asm-preflight";
-    ok = minic_machine_gnu_asm_preflight(machine, &sel.policy);
+    ok = defer_physical_preflight ||
+        minic_machine_gnu_asm_preflight(machine, &sel.policy);
 cleanup:
     if (!ok && getenv("MINIC_X86_TYPED_REJECT_TRACE") != NULL)
         fprintf(stderr,
@@ -12757,4 +12759,16 @@ cleanup:
     free(sel.instruction_aux);
     if (!ok) minic_machine_function_destroy(machine);
     return ok;
+}
+
+bool minic_x86_64_machine_select_core_subset(
+    MinicMachineFunction *machine, const MinicTargetInfo *target,
+    const MinicCoreFunction *core, const MinicX86Frame *frame) {
+    return x86_machine_select_core_impl(machine, target, core, frame, false);
+}
+
+bool minic_x86_64_machine_select_core_for_production(
+    MinicMachineFunction *machine, const MinicTargetInfo *target,
+    const MinicCoreFunction *core, const MinicX86Frame *frame) {
+    return x86_machine_select_core_impl(machine, target, core, frame, true);
 }

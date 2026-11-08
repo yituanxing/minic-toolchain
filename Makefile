@@ -691,6 +691,15 @@ check-riscv-coretype-root-alignment:
 
 check-fast: check-riscv-coretype-root-alignment
 
+# Statically aligned raw IEEE payloads use RV I word accesses; packed and
+# pointer-parameter addresses remain guarded bytewise, without F/D emission.
+.PHONY: check-riscv-aligned-payload-memory
+check-riscv-aligned-payload-memory: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" \
+	bash tests/compiler/c0/probe-riscv-aligned-payload-memory.sh
+
+check-fast: check-riscv-aligned-payload-memory
+
 .PHONY: check-rv32-empty-record-return
 check-rv32-empty-record-return: $(MINIC_CC_BINARY)
 	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
