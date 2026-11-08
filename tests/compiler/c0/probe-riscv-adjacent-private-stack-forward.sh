@@ -30,6 +30,14 @@ def body(name):
 
 functions = {name: body('mini_stack_forward_' + name)
              for name in ('chain', 'call', 'asm', 'branch', 'large')}
+# The sealed far-entry and its immediately following Core block are separate
+# addressable MachineIR blocks. They must now fall through without a fake j.
+for name, assembly in functions.items():
+    prefix = '.Lminic_mir_mini_stack_forward_' + name
+    if not any(before == prefix + '_1:' and after == prefix + '_2:'
+               for before, after in zip(assembly, assembly[1:])):
+        raise SystemExit('RV_ADJACENT_PRIVATE_STACK=FAIL far_entry_fallthrough=' +
+                         name)
 word = re.compile(r'^(s[dw]|l[dw]) x([0-9]+), ([0-9]+)\(x([0-9]+)\)$')
 stores = loads = 0
 for name, assembly in functions.items():
@@ -62,7 +70,8 @@ if not any((match := re.fullmatch(r'li x31, ([0-9]+)', line)) and
                line == 'add x31, x2, x31' for line in large):
     raise SystemExit('RV_ADJACENT_PRIVATE_STACK=FAIL large_frame=' + target)
 print('RV_ADJACENT_PRIVATE_STACK=PASS target=' + target +
-      ' exact_adjacent=elided call_asm_branch=retained large_frame=retained' +
+      ' exact_adjacent=elided far_entry=fallthrough' +
+      ' call_asm_branch=retained large_frame=retained' +
       ' actual_stores=' + str(stores) + ' actual_loads=' + str(loads))
 PY_VERIFY
 done

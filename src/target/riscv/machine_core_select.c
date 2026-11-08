@@ -4274,9 +4274,17 @@ bool minic_riscv_machine_select_core_subset(MinicMachineFunction *machine,
         reject_phase = "block_entry";
         reject_block = i;
         reject_terminator_kind = UINT_MAX;
-        if (!rv_position_at(&sel,
+        if (sel.far_entries[i] == SIZE_MAX ||
+            sel.core_blocks[i] != sel.far_entries[i] + 1U ||
+            !rv_position_at(&sel,
                 sel.far_entries[i]) ||
-            !rv_j(&sel, sel.core_blocks[i])) goto done;
+            /* The dispatch island is immediately before its Core block.
+             * Preserve an explicit CFG edge, but let physical fallthrough
+             * replace the otherwise unconditional J_BLOCK instruction. */
+            !minic_machine_builder_add_successor(&sel.builder,
+                sel.core_blocks[i]) ||
+            !minic_machine_builder_set_fallthrough(&sel.builder,
+                sel.core_blocks[i])) goto done;
         if (!rv_position_at(&sel,
             sel.core_blocks[i])) goto done;
         for (j = 0U; j < block->instruction_count; ++j) {
