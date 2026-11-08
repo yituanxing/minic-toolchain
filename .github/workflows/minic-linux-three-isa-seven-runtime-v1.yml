@@ -34,7 +34,7 @@ on:
       frozen_input_run_id:
         description: 'Source-export Actions run ID for frozen input reuse; must contain all selected original .i/.cmd shard artifacts'
         type: string
-        default: '41181106144'
+        default: '42366441631'
       resume_candidate_run_id:
         description: 'Explicit prior FAILED candidate run containing per-owner partial artifacts; resume only identical SHA corpus/compiler/tools'
         type: string
@@ -63,11 +63,10 @@ permissions:
 
 env:
   # One reviewed original GNU/Kbuild producer; not the current MiniC revision.
-  # The default 2026-10-31 producer's short-lived artifacts may have expired.
-  # Use dispatch fresh_source_targets=all,fresh_inputs_only=true once, retain
-  # original frozen inputs for 90 days and pin that source-export run ID in a
-  # later candidate replay. Never silently reconstruct C inputs from GCC C.
-  MINIC_LINUX_PINNED_INPUT_RUN: '41181106144'
+  # Reuse the independently SHA-audited 2026-11-07 original GNU source-export
+  # receipts (9589/9589 .i/.cmd across 21 shards). The earlier 41181106144
+  # artifacts have expired; never silently reconstruct C from a GNU fallback.
+  MINIC_LINUX_PINNED_INPUT_RUN: '42366441631'
   # All 21 original MiniC C/GNU AS object shards must be SHA-proven against
   # the byte-identical compiler pair before receiver-only replay is accepted.
   MINIC_LINUX_PINNED_OBJECT_RUN: '41181106144'
