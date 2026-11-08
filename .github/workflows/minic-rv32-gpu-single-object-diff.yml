@@ -3,13 +3,39 @@ name: RV32 virtio GPU source-owner differential
 on:
   workflow_dispatch:
   pull_request:
-    paths:
-      - .github/workflows/minic-rv32-gpu-single-object-diff.yml
 permissions:
   contents: read
   actions: read
 jobs:
+  frozen-gpu-eligibility:
+    runs-on: ubuntu-24.04
+    outputs:
+      run_diagnostic: ${{ steps.scope.outputs.run_diagnostic }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Admit only explicit frozen GPU diagnostic requests
+        id: scope
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -Eeuo pipefail
+          echo "RV32_GPU_DIAGNOSTIC_HEAD=$(git rev-parse HEAD)"
+          if [[ "$EVENT_NAME" == workflow_dispatch ]] ||
+              git log -1 --pretty=%B | grep -Fq '[rv32-gpu-frozen-diff]'; then
+            echo 'run_diagnostic=true' >> "$GITHUB_OUTPUT"
+            echo 'RV32_GPU_DIAGNOSTIC=ELIGIBLE frozen_shards_still_required=true'
+          else
+            echo 'run_diagnostic=false' >> "$GITHUB_OUTPUT"
+            echo 'RV32_GPU_DIAGNOSTIC=SKIP reason=exact_head_unmarked frozen_baseline_not_run=true'
+          fi
+
   single-object:
+    needs: frozen-gpu-eligibility
+    if: needs.frozen-gpu-eligibility.outputs.run_diagnostic == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     env:

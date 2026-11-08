@@ -8,7 +8,35 @@ permissions:
   contents: read
 
 jobs:
+  nested-vmx-eligibility:
+    runs-on: ubuntu-24.04
+    outputs:
+      run_preflight: ${{ steps.scope.outputs.run_preflight }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Admit only explicit nested-VMX preflight requests
+        id: scope
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -Eeuo pipefail
+          echo "KVM_PREFLIGHT_HEAD=$(git rev-parse HEAD)"
+          if [[ "$EVENT_NAME" == workflow_dispatch ]] ||
+              git log -1 --pretty=%B | grep -Fq '[x86-kvm-nested-preflight]'; then
+            echo 'run_preflight=true' >> "$GITHUB_OUTPUT"
+            echo 'KVM_PREFLIGHT=ELIGIBLE guest_nested_vmx_still_required=true'
+          else
+            echo 'run_preflight=false' >> "$GITHUB_OUTPUT"
+            echo 'KVM_PREFLIGHT=SKIP reason=exact_head_unmarked nested_vmx_not_tested=true'
+          fi
+
   x86-kvm-real-guest-preflight:
+    needs: nested-vmx-eligibility
+    if: needs.nested-vmx-eligibility.outputs.run_preflight == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:

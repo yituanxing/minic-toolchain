@@ -38,7 +38,23 @@ typedef struct RvCoreSelection {
     size_t *dynamic_overflow;
     size_t *asm_goto_continuations;
     size_t epilogue_block;
+    /* A proven *adjacent* private SSA spill is still in its source GPR.
+     * No general register allocation or cross-block value reuse is implied. */
+    bool adjacent_store_valid;
+    size_t adjacent_store_block;
+    size_t adjacent_store_after_count;
+    MinicCoreValueId adjacent_store_value;
+    size_t adjacent_store_offset;
+    unsigned adjacent_store_reg;
+    unsigned adjacent_store_base;
 } RvCoreSelection;
+
+static bool rv_position_at(RvCoreSelection *sel, size_t block) {
+    /* A cursor round trip is a CFG boundary even if the returned block has
+     * the same instruction count. Never carry a physical GPR fact through it. */
+    sel->adjacent_store_valid = false;
+    return minic_machine_builder_position_at(&sel->builder, block);
+}
 
 static MinicMachineOperand rv_reg(unsigned xlen, unsigned id,
                                   unsigned access) {
@@ -240,18 +256,45 @@ static bool rv_value_slot(const RvCoreSelection *sel, MinicCoreValueId value,
 static bool rv_load(RvCoreSelection *sel, MinicCoreValueId value,
                     unsigned reg) {
     size_t offset;
-    return rv_value_slot(sel, value, &offset) &&
+    const unsigned base = sel->plan->frame->has_dynamic_stack ? RV_S0 : RV_SP;
+    if (!rv_value_slot(sel, value, &offset)) return false;
+    if (sel->adjacent_store_valid &&
+        sel->adjacent_store_value == value &&
+        sel->adjacent_store_reg == reg &&
+        sel->adjacent_store_base == base &&
+        sel->adjacent_store_offset == offset &&
+        sel->builder.has_position &&
+        sel->builder.current_block == sel->adjacent_store_block &&
+        sel->builder.function != NULL &&
+        sel->builder.current_block < sel->builder.function->block_count &&
+        sel->builder.function->blocks[sel->builder.current_block].instruction_count ==
+            sel->adjacent_store_after_count)
+        return true;
+    return
         minic_riscv_machine_select_frame_transfer(&sel->builder, reg,
-            sel->plan->frame->has_dynamic_stack ? RV_S0 : RV_SP,
+            base,
             offset, true, sel->xlen / 8U);
 }
 static bool rv_store(RvCoreSelection *sel, MinicCoreValueId value,
                      unsigned reg) {
     size_t offset;
-    return rv_value_slot(sel, value, &offset) &&
-        minic_riscv_machine_select_frame_transfer(&sel->builder, reg,
-            sel->plan->frame->has_dynamic_stack ? RV_S0 : RV_SP,
-            offset, false, sel->xlen / 8U);
+    const unsigned base = sel->plan->frame->has_dynamic_stack ? RV_S0 : RV_SP;
+    sel->adjacent_store_valid = false;
+    if (!rv_value_slot(sel, value, &offset) ||
+        !minic_riscv_machine_select_frame_transfer(&sel->builder, reg,
+            base, offset, false, sel->xlen / 8U) ||
+        !sel->builder.has_position || sel->builder.function == NULL ||
+        sel->builder.current_block >= sel->builder.function->block_count)
+        return false;
+    sel->adjacent_store_valid = true;
+    sel->adjacent_store_block = sel->builder.current_block;
+    sel->adjacent_store_after_count =
+        sel->builder.function->blocks[sel->builder.current_block].instruction_count;
+    sel->adjacent_store_value = value;
+    sel->adjacent_store_offset = offset;
+    sel->adjacent_store_reg = reg;
+    sel->adjacent_store_base = base;
+    return true;
 }
 
 /* These offsets are owned by the OLD finalized frame. The adapter only
@@ -928,7 +971,7 @@ static bool rv_core_dynamic_stack(RvCoreSelection *sel,
             sel->dynamic_check2[id]) ||
         !minic_machine_builder_set_fallthrough(&sel->builder,
             sel->dynamic_check2[id]) ||
-        !minic_machine_builder_position_at(&sel->builder,
+        !rv_position_at(sel,
             sel->dynamic_check2[id]) ||
         !rv_li(sel, RV_T1, -16) ||
         !rv_rrr(sel, MINIC_RISCV_MACHINE_AND,
@@ -946,7 +989,7 @@ static bool rv_core_dynamic_stack(RvCoreSelection *sel,
             sel->dynamic_overflow[id]) ||
         !minic_machine_builder_set_fallthrough(&sel->builder,
             sel->dynamic_overflow[id]) ||
-        !minic_machine_builder_position_at(&sel->builder,
+        !rv_position_at(sel,
             sel->dynamic_commit[id]) ||
         !rv_rrr(sel, MINIC_RISCV_MACHINE_SUB,
             RV_SP, RV_SP, RV_T2) ||
@@ -955,7 +998,7 @@ static bool rv_core_dynamic_stack(RvCoreSelection *sel,
             RV_T0, RV_SP, RV_T0) ||
         !rv_store(sel, ins->result, RV_T0) ||
         !rv_j(sel, sel->dynamic_continue[id]) ||
-        !minic_machine_builder_position_at(&sel->builder,
+        !rv_position_at(sel,
             sel->dynamic_continue[id])) return false;
     return true;
 }
@@ -3738,7 +3781,7 @@ static bool rv_core_source_asm_goto(RvCoreSelection *sel,
              sel->core_blocks[source->goto_second_target])) ||
         !minic_machine_builder_add_successor(&sel->builder, continuation) ||
         !minic_machine_builder_set_fallthrough(&sel->builder, continuation) ||
-        !minic_machine_builder_position_at(&sel->builder, continuation))
+        !rv_position_at(sel, continuation))
         return false;
     return true;
 }
@@ -4024,10 +4067,10 @@ static bool rv_core_terminator(RvCoreSelection *sel, size_t core_id) {
             !rv_branch_zero(sel, false, RV_T0, other) ||
             !minic_machine_builder_add_successor(&sel->builder, aux) ||
             !minic_machine_builder_set_fallthrough(&sel->builder, aux) ||
-            !minic_machine_builder_position_at(&sel->builder, aux))
+            !rv_position_at(sel, aux))
             return false;
         return rv_j(sel, sel->core_blocks[yes]) &&
-            minic_machine_builder_position_at(&sel->builder, other) &&
+            rv_position_at(sel, other) &&
             rv_j(sel, sel->core_blocks[no]);
     }
     case MINIC_CORE_TERMINATOR_INDIRECT_BRANCH: {
@@ -4231,10 +4274,10 @@ bool minic_riscv_machine_select_core_subset(MinicMachineFunction *machine,
         reject_phase = "block_entry";
         reject_block = i;
         reject_terminator_kind = UINT_MAX;
-        if (!minic_machine_builder_position_at(&sel.builder,
+        if (!rv_position_at(&sel,
                 sel.far_entries[i]) ||
             !rv_j(&sel, sel.core_blocks[i])) goto done;
-        if (!minic_machine_builder_position_at(&sel.builder,
+        if (!rv_position_at(&sel,
             sel.core_blocks[i])) goto done;
         for (j = 0U; j < block->instruction_count; ++j) {
             const MinicCoreInstructionId instruction_id =
@@ -4261,7 +4304,7 @@ bool minic_riscv_machine_select_core_subset(MinicMachineFunction *machine,
             const MinicCoreInstructionId instruction_id =
                 block->instructions[j];
             if (sel.dynamic_overflow[instruction_id] == SIZE_MAX) continue;
-            if (!minic_machine_builder_position_at(&sel.builder,
+            if (!rv_position_at(&sel,
                     sel.dynamic_overflow[instruction_id]) ||
                 !rv_emit(&sel, MINIC_RISCV_MACHINE_EBREAK, NULL, 0U))
                 goto done;
