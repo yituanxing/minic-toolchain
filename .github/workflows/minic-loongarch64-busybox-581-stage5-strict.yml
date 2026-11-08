@@ -3,6 +3,8 @@ name: MiniC LoongArch64 Original BusyBox 581 Stage5 Strict
 # Exact original BusyBox 1.36.1 allyesconfig Kbuild owners: every C object
 # compiled by MiniC, GNU-only AS/LD, SHA-verified 581 owners and 38 real
 # GNU/QEMU byte-exact applets. No inference from historical green CI.
+# One-shot PR recertification: changing this workflow schedules the gate;
+# [loong-stage5-581] in the exact HEAD activates the real 581-owner job.
 on:
   pull_request:
     paths:

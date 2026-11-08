@@ -2,6 +2,8 @@ name: MiniC AArch64 Original BusyBox 581 Stage5 Strict
 
 # Original 1.36.1 allyesconfig: all 581 C object owners from MiniC, all
 # assembler/linker work from GNU, and 38 QEMU fixtures byte-equal to GNU.
+# One-shot PR recertification: changing this workflow schedules the gate;
+# [aarch-stage5-581] in the exact HEAD activates the real 581-owner job.
 on:
   pull_request:
     paths:
