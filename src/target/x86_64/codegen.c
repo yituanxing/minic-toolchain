@@ -450,12 +450,13 @@ static size_t x86_head_memory_addresses(
  * legal.  Do not infer a positive interprocedural alias contract here. */
 static bool x86_head_callee_parameter_numeric(
     const MinicCoreFunction *callee, size_t parameter_index,
-    bool *unproven) {
+    bool *unproven, bool *returns_pointer) {
     const MinicCoreInstruction **defs = NULL;
     bool *derived = NULL, *derived_objects = NULL;
     bool changed, numeric = false;
     size_t i;
     if (unproven != NULL) *unproven = false;
+    if (returns_pointer != NULL) *returns_pointer = false;
     if (callee == NULL ||
         callee->value_count > SIZE_MAX / sizeof(*derived) ||
         callee->value_count > SIZE_MAX / sizeof(*defs) ||
@@ -529,6 +530,22 @@ static bool x86_head_callee_parameter_numeric(
             }
         }
     } while (changed);
+    /* A pointer returned unchanged can be interpreted numerically by the
+     * caller even though the callee itself never casts it.  A physical
+     * caller argument must not silently become a link-VMA integer across
+     * that ABI round-trip. */
+    if (returns_pointer != NULL) {
+        for (i = 0U; i < callee->block_count; ++i) {
+            const MinicCoreBlock *block = &callee->blocks[i];
+            const MinicCoreValueId value = block->terminator.return_value;
+            if (block->has_terminator &&
+                block->terminator.kind == MINIC_CORE_TERMINATOR_RETURN &&
+                value < callee->value_count && derived[value]) {
+                *returns_pointer = true;
+                break;
+            }
+        }
+    }
 done:
     free(defs);
     free(derived);
@@ -539,6 +556,7 @@ done:
 static bool x86_head_call_numeric_alias(
     const MinicCoreFunction *caller,
     const MinicCoreInstruction *call,
+    const bool *reachable,
     const MinicCoreFunction *module_functions,
     size_t module_function_count,
     const X86HeadAddressOrigin *origins,
@@ -567,13 +585,40 @@ static bool x86_head_call_numeric_alias(
             !direct[origin.global] || origin.crossed_vma_cast) continue;
         for (j = 0U; j < module_function_count; ++j) {
             const MinicCoreFunction *target = &module_functions[j];
-            bool unproven = false;
+            bool unproven = false, returns_pointer = false;
+            bool caller_observes_numeric = false;
+            size_t block_index, ins_index;
             if (target->name == NULL || callee->name == NULL ||
                 target->name_length != callee->name_length ||
                 memcmp(target->name, callee->name,
                        callee->name_length) != 0) continue;
-            if (x86_head_callee_parameter_numeric(target, i, &unproven) ||
+            if (x86_head_callee_parameter_numeric(target, i, &unproven,
+                                                  &returns_pointer) ||
                 unproven) return true;
+            if (!returns_pointer || call->result >= caller->value_count ||
+                reachable == NULL) continue;
+            for (block_index = 0U; block_index < caller->block_count;
+                 ++block_index) {
+                const MinicCoreBlock *block = &caller->blocks[block_index];
+                if (!reachable[block_index]) continue;
+                for (ins_index = 0U; ins_index < block->instruction_count;
+                     ++ins_index) {
+                    const MinicCoreInstructionId id =
+                        block->instructions[ins_index];
+                    const MinicCoreInstruction *ins;
+                    if (id >= caller->instruction_count) return true;
+                    ins = &caller->instructions[id];
+                    if (ins->kind == MINIC_CORE_INSTRUCTION_SCALAR_BITCAST &&
+                        ins->value.operand == call->result &&
+                        x86_function_kind(caller, ins->core_type_id,
+                                          MINIC_CORE_TYPE_INTEGER)) {
+                        caller_observes_numeric = true;
+                        break;
+                    }
+                }
+                if (caller_observes_numeric) break;
+            }
+            if (caller_observes_numeric) return true;
         }
     }
     return false;
@@ -811,7 +856,7 @@ static bool x86_head_plan_address_roles(
             const MinicCoreInstructionId id = block->instructions[j];
             if (id >= fn->instruction_count) goto done;
             if (x86_head_call_numeric_alias(fn, &fn->instructions[id],
-                    module_functions, module_function_count,
+                    reachable, module_functions, module_function_count,
                     origins, direct)) {
                 if (unproven_call != NULL) *unproven_call = true;
                 goto done;

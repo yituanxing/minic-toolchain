@@ -1236,6 +1236,13 @@ static bool loong_store_value(LoongSelector *sel,
             &bytes, &sign, &pointer)) return false;
     (void)sign;
     (void)pointer;
+    /* The shared Core census proves this compiler-owned SSA spill has no
+     * consumers. Keep the selected computation (including possible ALU
+     * traps), but do not write its dead result to a stack slot. A memory,
+     * ASM or variadic effect is never eligible for this elision. */
+    if (sel->ssa_use_counts != NULL &&
+        sel->ssa_use_counts[ins->result] == 0U &&
+        loong_core_is_pure_value(ins)) return true;
     return loong_frame_memory(&sel->builder,
         (bytes == 8U || force_64) ? MINIC_LOONG_MACHINE_ST_D :
         MINIC_LOONG_MACHINE_ST_W, reg, offset,
@@ -2619,10 +2626,11 @@ static bool loong_select_parameter_object(LoongSelector *sel,
     if (!minic_multi_direct_parameter_object_location(sel->ctx->fn, ins,
             sel->ctx->incoming_plan, sel->ctx->frame_plan,
             &location, &object_offset) || location == NULL) return false;
-    /* Empty records have no physical write. The Core effect-coverage gate
-     * must first model them as explicitly effect-free before admission. */
+    /* The shared Core effect-coverage gate already classifies a complete
+     * zero-byte Record parameter as pure. Preserve its ABI placement but
+     * emit no spurious stack write for its zero physical payload. */
     if (location->kind == MINIC_LP64_ARGUMENT_EMPTY_RECORD)
-        return false;
+        return true;
     if (location->kind == MINIC_LP64_ARGUMENT_INDIRECT_RECORD) {
         if (location->gp_registers != 0U) {
             if (location->gp_first >= 8U ||

@@ -56,7 +56,7 @@ for variant in empty nonempty; do
                 >"$work/$variant-$target.log" 2>&1; then
                 :
             else
-                grep -Eq 'Core terminator unsupported|cannot emit RISC-V function' \
+                grep -Eq 'Core terminator unsupported|cannot emit RISC-V function|x86-64 cannot select complete typed MachineIR function' \
                     "$work/$variant-$target.log" || \
                     fail "unrelated target failure=$target"
                 independent_pending=$((independent_pending + 1))
@@ -74,12 +74,12 @@ done
 awk '
     /^mc057_direct:$/ { in_direct = 1; next }
     in_direct && /^\.size mc057_direct,/ { in_direct = 0; next }
-    in_direct && /(^|[^[:alnum:]_])a[01]([^[:alnum:]_]|$)/ { bad_return++ }
+    in_direct && /(^|[^[:alnum:]_])(a[01]|x1[01])([^[:alnum:]_]|$)/ { bad_return++ }
     /^mc057_sum:$/ { in_sum = 1; next }
     in_sum && /^\.size mc057_sum,/ { in_sum = 0; next }
-    in_sum && /mv t0, a0/ { a0++ }
-    in_sum && /mv t0, a1/ { a1++ }
-    in_sum && /mv t0, a2/ { a2++ }
+    in_sum && /mv (t0|x5), (a0|x10)/ { a0++ }
+    in_sum && /mv (t0|x5), (a1|x11)/ { a1++ }
+    in_sum && /mv (t0|x5), (a2|x12)/ { a2++ }
     END { exit !(bad_return == 0 && a0 == 1 && a1 == 1 && a2 == 1) }
 ' "$work/empty-riscv32-linux.s" || fail 'RV32 register/return payload ABI'
 

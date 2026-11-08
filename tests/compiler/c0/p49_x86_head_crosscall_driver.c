@@ -6,7 +6,11 @@
 
 extern volatile unsigned long p49_head_global;
 extern unsigned long p49_head_entry(unsigned long);
+#ifdef P49_POINTER_RETURN
+extern volatile unsigned long *p49_head_helper(volatile unsigned long *);
+#else
 extern unsigned long p49_head_helper(volatile unsigned long *);
+#endif
 
 typedef unsigned long (*P49Entry)(unsigned long);
 

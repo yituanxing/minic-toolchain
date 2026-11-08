@@ -408,11 +408,15 @@ static void operand(MinicMachineOpcodeContract *contract, size_t index,
     contract->register_access[index] = access;
 }
 
-bool minic_riscv_machine_lookup_opcode_contract(
+/* Caller already resolved this opcode against the immutable per-invocation
+ * target.  Reuse that resolution when the strict selected-instruction verifier
+ * also needs the contract: looking it up a second time used to repeat the
+ * TargetInfo ISA snapshot and feature admission for every emitted instruction.
+ * The public entry point still validates arbitrary external callers. */
+static bool riscv_machine_fill_opcode_contract(
     const MinicTargetInfo *target, uint32_t opcode,
-    MinicMachineOpcodeContract *contract, void *context) {
-    MinicRiscvMachineOpcodeInfo info;
-    unsigned xlen;
+    const MinicRiscvMachineOpcodeInfo *info, unsigned xlen,
+    MinicMachineOpcodeContract *contract) {
     const unsigned read = MINIC_MACHINE_REGISTER_READ;
     const unsigned write = MINIC_MACHINE_REGISTER_WRITE;
     const unsigned memread = MINIC_MACHINE_EFFECT_MEMORY_READ;
@@ -420,15 +424,13 @@ bool minic_riscv_machine_lookup_opcode_contract(
     const unsigned barrier = MINIC_MACHINE_EFFECT_COMPILER_BARRIER;
     const unsigned branch = MINIC_MACHINE_EFFECT_BRANCH;
     const unsigned call = MINIC_MACHINE_EFFECT_CALL;
-    (void)context;
-    if (contract == NULL || !riscv_machine_target(target, &xlen) ||
-        !minic_riscv_machine_opcode_info(target, opcode, &info)) return false;
+    if (contract == NULL || info == NULL) return false;
     memset(contract, 0, sizeof(*contract));
     if (riscv_machine_fp_features(opcode) != 0U &&
         minic_riscv_target_isa(target).strict_isa)
         contract->required_generated_features =
             riscv_machine_fp_features(opcode);
-    switch (info.form) {
+    switch (info->form) {
     case MINIC_RISCV_MACHINE_FORM_NONE:
         break;
     case MINIC_RISCV_MACHINE_FORM_REGISTER:
@@ -466,12 +468,12 @@ bool minic_riscv_machine_lookup_opcode_contract(
     case MINIC_RISCV_MACHINE_FORM_STORE_FRAME:
         contract->operand_count = 2U;
         operand(contract, 0U, MINIC_MACHINE_OPERAND_REGISTER,
-                info.form == MINIC_RISCV_MACHINE_FORM_LOAD ||
-                info.form == MINIC_RISCV_MACHINE_FORM_LOAD_FRAME
+                info->form == MINIC_RISCV_MACHINE_FORM_LOAD ||
+                info->form == MINIC_RISCV_MACHINE_FORM_LOAD_FRAME
                     ? write : read);
         operand(contract, 1U,
-                info.form == MINIC_RISCV_MACHINE_FORM_LOAD_FRAME ||
-                info.form == MINIC_RISCV_MACHINE_FORM_STORE_FRAME
+                info->form == MINIC_RISCV_MACHINE_FORM_LOAD_FRAME ||
+                info->form == MINIC_RISCV_MACHINE_FORM_STORE_FRAME
                     ? MINIC_MACHINE_OPERAND_FRAME
                     : MINIC_MACHINE_OPERAND_ADDRESS, 0U);
         break;
@@ -596,6 +598,18 @@ bool minic_riscv_machine_lookup_opcode_contract(
         break;
     }
     return true;
+}
+
+bool minic_riscv_machine_lookup_opcode_contract(
+    const MinicTargetInfo *target, uint32_t opcode,
+    MinicMachineOpcodeContract *contract, void *context) {
+    MinicRiscvMachineOpcodeInfo info;
+    unsigned xlen;
+    (void)context;
+    if (contract == NULL || !riscv_machine_target(target, &xlen) ||
+        !minic_riscv_machine_opcode_info(target, opcode, &info)) return false;
+    return riscv_machine_fill_opcode_contract(target, opcode, &info, xlen,
+                                              contract);
 }
 
 static bool immediate_range(int64_t immediate, int64_t minimum,
@@ -756,8 +770,8 @@ bool minic_riscv_machine_validate_selected_instruction(
     if (ins == NULL || ins->kind != MINIC_MACHINE_INSTRUCTION_SELECTED ||
         !riscv_machine_target(target, &xlen) ||
         !minic_riscv_machine_opcode_info(target, ins->opcode, &info) ||
-        !minic_riscv_machine_lookup_opcode_contract(target, ins->opcode,
-                                                      &contract, context) ||
+        !riscv_machine_fill_opcode_contract(target, ins->opcode, &info, xlen,
+                                            &contract) ||
         ins->operand_count != contract.operand_count ||
         (ins->operand_count != 0U && ins->operands == NULL))
         return false;

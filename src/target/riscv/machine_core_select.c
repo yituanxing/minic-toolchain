@@ -2817,7 +2817,6 @@ static bool rv_core_call_arguments(RvCoreSelection *sel,
                 has_record_result) ||
             (has_scalar_result &&
              call32->view.return_form != MINIC_CORE_CALL_RETURN_VALUE) ||
-            (has_record_result && call32->record_return_size == 0U) ||
             (count != 0U && call32->arguments == NULL)) return false;
     } else {
         if (sel->plan->semantic_calls64 == NULL ||
@@ -2860,7 +2859,12 @@ static bool rv_core_call_arguments(RvCoreSelection *sel,
             if (!rv_call_placement(sel, call32, call64, i, &loc))
                 return false;
             if (loc.ignored) {
-                if (arg->kind != MINIC_CORE_CALL_ARGUMENT_OBJECT) return false;
+                size_t extent;
+                if (arg->kind != MINIC_CORE_CALL_ARGUMENT_OBJECT ||
+                    arg->value.object_id >= fn->object_count ||
+                    !rv_record_extent(sel,
+                        fn->objects[arg->value.object_id].core_type_id,
+                        &extent) || extent != 0U) return false;
                 continue;
             }
             if ((pass == 0U && loc.stack_count == 0U) ||
@@ -2934,8 +2938,19 @@ static bool rv_core_call_arguments(RvCoreSelection *sel,
             indirect = call64->return_value.kind ==
                 MINIC_RISCV64_ABI_VALUE_INDIRECT;
         }
-        if (size == 0U ||
-            !rv_object_offset(sel, record_result, size, &offset)) return false;
+        if (size == 0U) {
+            size_t extent;
+            if (indirect || sel->xlen != 32U ||
+                record_result >= fn->object_count ||
+                !rv_record_extent(sel,
+                    fn->objects[record_result].core_type_id, &extent) ||
+                extent != 0U) return false;
+            /* The call still executes, but no hidden pointer or return
+             * register is used for an ILP32 empty aggregate result. */
+            return true;
+        }
+        if (!rv_object_offset(sel, record_result, size, &offset))
+            return false;
         if (indirect && !rv_frame_address(sel, RV_A0, offset)) return false;
     }
     return true;
@@ -2954,7 +2969,7 @@ static bool rv_core_call_result(RvCoreSelection *sel,
         if (sel->xlen == 32U) {
             const Rv32CallAbiPlan *call =
                 rv32_function_abi_call(sel->plan->abi32, instruction_id);
-            if (call == NULL || call->record_return_size == 0U)
+            if (call == NULL)
                 return false;
             size = call->record_return_size;
             indirect = call->indirect_return;
@@ -2971,6 +2986,14 @@ static bool rv_core_call_result(RvCoreSelection *sel,
             size = call->return_value.storage_size;
             indirect = call->return_value.kind ==
                 MINIC_RISCV64_ABI_VALUE_INDIRECT;
+        }
+        if (size == 0U) {
+            size_t extent;
+            return sel->xlen == 32U && !indirect &&
+                record_result < fn->object_count &&
+                rv_record_extent(sel,
+                    fn->objects[record_result].core_type_id, &extent) &&
+                extent == 0U;
         }
         if (indirect) return true; /* callee writes to caller snapshot */
         chunks = (size + word - 1U) / word;
@@ -4002,7 +4025,25 @@ static bool rv_core_terminator(RvCoreSelection *sel, size_t core_id) {
                 if (!indirect && ret->kind !=
                     MINIC_RISCV64_ABI_VALUE_AGGREGATE) return false;
             }
-            if (size == 0U || !rv_object_offset(sel,
+            if (size == 0U) {
+                size_t extent;
+                const MinicCoreTypeContext *types = fn->type_context;
+                /* A complete GNU zero-byte Record still owns a Core
+                 * return object, but transports no physical ABI payload.
+                 * Keep its type/object check while bypassing the frame
+                 * offset and a0/a1 chunk paths, which require bytes. */
+                if (indirect || types == NULL ||
+                    term->return_object >= fn->object_count ||
+                    !rv_record_extent(sel,
+                        minic_core_function_return_type(fn), &extent) ||
+                    extent != 0U ||
+                    minic_core_type_unqualified(types,
+                        fn->objects[term->return_object].core_type_id) !=
+                    minic_core_type_unqualified(types,
+                        minic_core_function_return_type(fn))) return false;
+                return rv_j(sel, sel->epilogue_block);
+            }
+            if (!rv_object_offset(sel,
                     term->return_object, size, &offset)) return false;
             if (indirect) {
                 if (!minic_riscv_machine_select_frame_transfer(
