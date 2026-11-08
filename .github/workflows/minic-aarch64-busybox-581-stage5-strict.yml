@@ -143,16 +143,23 @@ jobs:
           FOUR_BACKEND_BUSYBOX_ALL_WORK_DIR: ${{ github.workspace }}/build/aarch-stage5-ci/evidence/full581
         run: |
           set -Eeuo pipefail
-          sh tests/external/busybox/probe-four-backend-all-kbuild.sh \
+          python3 tests/external/busybox/check-full-c-binary-contract.py |
+            tee build/aarch-stage5-ci/evidence/full-c-contract.receipt
+          grep -Fxq 'CROSS_FULL_C_BUSYBOX_CONTRACT=PASS tests=5 negative_cases=26 targets=aarch64,loongarch64 static_wiring=YES not_runtime=YES' \
+            build/aarch-stage5-ci/evidence/full-c-contract.receipt
+          sh tests/external/busybox/probe-aarch64-full-c-busybox.sh \
             "$GITHUB_WORKSPACE/build/aarch-stage5-ci/source/upstream" \
-            aarch64 aarch64-linux-gnu-gcc aarch64-linux-gnu- qemu-aarch64 /usr/aarch64-linux-gnu |
+            aarch64-linux-gnu-gcc aarch64-linux-gnu- qemu-aarch64 /usr/aarch64-linux-gnu |
             tee build/aarch-stage5-ci/evidence/full581.receipt
           receipt=build/aarch-stage5-ci/evidence/full581.receipt
           grep -Fxq 'FOUR_BACKEND_BUSYBOX_ALL_MINIC_PIE=MODE target=aarch64 enabled=1 original_Kbuild=1' "$receipt"
           grep -Fxq 'BUSYBOX_MIXED_BULK_CROSS_RUNTIME=PASS cases=38 GNU_QEMU_byte_exact=1' "$receipt"
           grep -Fxq 'FOUR_BACKEND_BUSYBOX_ALL_ACCEPT=PASS target=aarch64 original_Kbuild_owners=581 MiniC_owners=581 GNU_fallbacks=0 SHA256_verified=581 GNU_QEMU_fixtures=38 strict=1 all_C_owners_MiniC=YES assembler_linker=GNU full_all_MiniC=NO' "$receipt"
+          grep -Fxq 'BUSYBOX_FULL_C_BINARY=PASS target=aarch64 original_Kbuild_owners=581 MiniC_C_owners=581 GNU_C_fallbacks=0 SHA256_verified=581 GNU_AS_LD=YES original_and_MiniC_ELF_differ=YES QEMU_byte_exact=38/38 full_C_MiniC=YES full_toolchain_MiniC=NO' "$receipt"
+          grep -Fxq 'FOUR_BACKEND_BUSYBOX_FULL_C_BINARY=PASS target=aarch64 owners=581/581 GNU_AS_LD=YES QEMU_byte_exact=38/38 full_C_MiniC=YES full_toolchain_MiniC=NO' "$receipt"
           grep -Fxq 'FOUR_BACKEND_BUSYBOX_ALL_KBUILD_END target=aarch64 authenticated_mixed_build=1 full_MiniC=NO' "$receipt"
           echo 'AARCH64_STAGE5_581=PASS original_Kbuild_owners=581 MiniC_owners=581 GNU_C_fallbacks=0 GNU_QEMU_fixtures=38 GNU_AS_LD=YES'
+          echo 'AARCH64_FULL_C_BUSYBOX=PASS MiniC_C_owners=581/581 GNU_AS_LD=YES whole_BusyBox_QEMU=38/38 full_toolchain_MiniC=NO'
       # Only receipts, SHA manifest, and first 3 failing owners; never
       # upload all 581 gigantic preprocessed inputs or the BusyBox tree.
       - name: Collect bounded SHA and first-failing-owner diagnostic artifacts

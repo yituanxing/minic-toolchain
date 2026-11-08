@@ -17,6 +17,16 @@ case "${FOUR_BACKEND_BUSYBOX_AARCH64_PIE:-0}" in
   0|1) ;;
   *) echo 'FOUR_BACKEND_BUSYBOX_ALL_PIE=INVALID opt_in_must_be_0_or_1' >&2; exit 1 ;;
 esac
+case "${FOUR_BACKEND_BUSYBOX_FULL_C_BINARY:-0}" in
+  0|1) ;;
+  *) echo 'FOUR_BACKEND_BUSYBOX_FULL_C_BINARY=INVALID opt_in_must_be_0_or_1' >&2; exit 1 ;;
+esac
+if [ "${FOUR_BACKEND_BUSYBOX_FULL_C_BINARY:-0}" = 1 ]; then
+  case "$target" in
+    aarch64|loongarch64) ;;
+    *) echo "FOUR_BACKEND_BUSYBOX_FULL_C_BINARY=FAIL stage=unsupported-target target=$target" >&2; exit 1 ;;
+  esac
+fi
 # Keep original ephemeral behavior. A named, *new* run directory is an
 # explicit CI evidence opt-in; never delete or overwrite previous evidence.
 if [ -n "${FOUR_BACKEND_BUSYBOX_ALL_WORK_DIR:-}" ]; then
@@ -55,6 +65,7 @@ if timeout 900s env CROSS_COMPILE="$prefix" \
     BUSYBOX_ALLYES_CROSS_PREFIX="$prefix" \
     BUSYBOX_ALLYES_MINIC_TARGET="$target-linux" \
     BUSYBOX_ALLYES_MINIC_PIC="$minic_pic" \
+    BUSYBOX_ALLYES_FULL_C_BUSYBOX="${FOUR_BACKEND_BUSYBOX_FULL_C_BINARY:-0}" \
     BUSYBOX_ALLYES_QEMU="$qemu" \
     BUSYBOX_ALLYES_SYSROOT="$sysroot" \
     python3 "$repo/tests/external/busybox/allyes_sweep.py" \
@@ -65,7 +76,7 @@ if timeout 900s env CROSS_COMPILE="$prefix" \
 else
     scan_rc=$?
 fi
-grep -E '^(BUSYBOX_ALLYES_(CONFIG=|HOST_EXCLUSIONS=|GCC_KBUILD=|GCC_BUILD_DIAGNOSTIC=|GCC_FIRST_ERRORS=|GCC_SEQUENTIAL=|GCC_REAL_ERRORS |GCC_STOP_CONTEXT |GCC_FINAL_LINK_LOG=|GCC_FINAL_LINK_CAUSE |GCC_FINAL_LINK_FIRST_LINES=|GCC_FINAL_LINK_LAST_LINES=|GCC_LINK_FEATURES=|GCC_LINK_ATTEMPTS=|FRONTIER=|SCAN=|GCC_RUNTIME_ORACLE=)|BUSYBOX_MIXED_BULK(_CROSS_RUNTIME=|_CROSS_COHORT=|_SOURCE=|_REAL_OWNERS=|_RUNTIME=|_RUNTIME_DIFF|=))' \
+grep -E '^(BUSYBOX_ALLYES_(CONFIG=|HOST_EXCLUSIONS=|GCC_KBUILD=|GCC_BUILD_DIAGNOSTIC=|GCC_FIRST_ERRORS=|GCC_SEQUENTIAL=|GCC_REAL_ERRORS |GCC_STOP_CONTEXT |GCC_FINAL_LINK_LOG=|GCC_FINAL_LINK_CAUSE |GCC_FINAL_LINK_FIRST_LINES=|GCC_FINAL_LINK_LAST_LINES=|GCC_LINK_FEATURES=|GCC_LINK_ATTEMPTS=|FRONTIER=|SCAN=|GCC_RUNTIME_ORACLE=)|BUSYBOX_MIXED_BULK(_CROSS_RUNTIME=|_CROSS_COHORT=|_SOURCE=|_REAL_OWNERS=|_RUNTIME=|_RUNTIME_DIFF|=)|BUSYBOX_FULL_C_BINARY=)' \
   "$work/probe.out" || true
 grep -E '^BUSYBOX_ALLYES_BLOCKER ' "$work/probe.out" | head -n 30 || true
 grep -E '^BUSYBOX_ALLYES_CORE_REJECT ' "$work/probe.out" | head -n 65 || true
@@ -136,4 +147,11 @@ if [ -z "$mini" ] || [ -z "$gnu" ] || [ "$mini" -lt "$floor" ] ||
   exit 1
 fi
 echo "FOUR_BACKEND_BUSYBOX_ALL_ACCEPT=PASS target=$target original_Kbuild_owners=$mini MiniC_owners=$mini GNU_fallbacks=$gnu SHA256_verified=$mini GNU_QEMU_fixtures=38 strict=1 all_C_owners_MiniC=YES assembler_linker=GNU full_all_MiniC=NO"
+if [ "${FOUR_BACKEND_BUSYBOX_FULL_C_BINARY:-0}" = 1 ]; then
+  grep -Fxq "BUSYBOX_FULL_C_BINARY=PASS target=$target original_Kbuild_owners=581 MiniC_C_owners=581 GNU_C_fallbacks=0 SHA256_verified=581 GNU_AS_LD=YES original_and_MiniC_ELF_differ=YES QEMU_byte_exact=38/38 full_C_MiniC=YES full_toolchain_MiniC=NO" "$work/probe.out" || {
+    echo "FOUR_BACKEND_BUSYBOX_FULL_C_BINARY=FAIL stage=missing-real-linked-QEMU-proof" >&2
+    exit 1
+  }
+  echo "FOUR_BACKEND_BUSYBOX_FULL_C_BINARY=PASS target=$target owners=581/581 GNU_AS_LD=YES QEMU_byte_exact=38/38 full_C_MiniC=YES full_toolchain_MiniC=NO"
+fi
 echo "FOUR_BACKEND_BUSYBOX_ALL_KBUILD_END target=$target authenticated_mixed_build=1 full_MiniC=NO"
