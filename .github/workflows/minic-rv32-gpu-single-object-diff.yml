@@ -25,6 +25,36 @@ jobs:
           set -Eeuo pipefail
           bash -n tools/ci/linux-rv32i-qemu-p0-v1.sh
           echo 'RV32_GPU_DIFF_PREFLIGHT=PASS bash_syntax'
+      - name: Restore 7 frozen MiniC shards from exact original Image run
+        uses: actions/download-artifact@v4
+        with:
+          repository: yituanxing/minic-toolchain
+          run-id: '41212514498'
+          pattern: shard-*
+          merge-multiple: false
+          github-token: ${{ github.token }}
+          path: build/rv32-gpu-diff/shards
+      - name: Reject missing exact frozen source artifacts before package install
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          root=build/rv32-gpu-diff/shards
+          # actions/download-artifact with a pattern returns success even when
+          # the old run has zero matching artifacts. Historical #41212514498
+          # currently exposes no artifacts; don't spend ~25 minutes only to
+          # discover that no original compiler output can be authenticated.
+          for i in {0..6}; do
+            if [[ ! -d "$root/shard-$i" ]]; then
+              echo "RV32_GPU_DIFF=BLOCKED immutable_frozen_shard_missing=$i source_run=41212514498" >&2
+              echo 'Restore a SHA-verified original seven-shard bundle; never substitute current MiniC objects for the frozen baseline.' >&2
+              exit 3
+            fi
+            test -s "$root/shard-$i/minic-manifest.sha256" || {
+              echo "RV32_GPU_DIFF=BLOCKED frozen_shard_manifest_missing=$i" >&2
+              exit 3
+            }
+          done
+          echo 'RV32_GPU_FROZEN_INPUT=PASS seven_shards_present=true exact_historical_run=41212514498'
       - name: Install original toolchain and QEMU
         timeout-minutes: 5
         run: |
@@ -62,15 +92,6 @@ jobs:
           test "$(sha256sum "$base/out/.config" | cut -d' ' -f1)" = 4c6c19f79741a8a31ec52ad57b1a6bc56b81dd6996cbf5e1bdc63f587d85244c
           (cd "$base/out" && sha256sum --quiet -c ../provenance/gcc-objects.sha256)
           echo 'RV32_GPU_GNU=PASS original_1741_objects_sha_verified=true'
-      - name: Restore 7 frozen MiniC shards from exact original Image run
-        uses: actions/download-artifact@v4
-        with:
-          repository: yituanxing/minic-toolchain
-          run-id: '41212514498'
-          pattern: shard-*
-          merge-multiple: false
-          github-token: ${{ github.token }}
-          path: build/rv32-gpu-diff/shards
       - name: Attest just two source-owner MiniC candidates
         run: |
           set -Eeuo pipefail

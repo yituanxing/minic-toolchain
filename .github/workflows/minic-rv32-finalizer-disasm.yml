@@ -31,6 +31,14 @@ jobs:
           mapfile -t new < <(find finalizer-evidence -type f -name current-finalizer.dis)
           test "${#old[@]}" -eq 1 && test "${#new[@]}" -eq 1
           test -s "${old[0]}" && test -s "${new[0]}"
+          # The original 2026-10-31 run #41212514498 no longer exposes
+          # artifact bytes. The immutable 18/18 P2 receipt archives the two
+          # function disassemblies, but NOT the frozen ELF32 .o or the body of
+          # its out-of-line helper. Never invent a current-owner substitution.
+          grep -Fxq 'canonical=18/18_REQUIRED' finalizer-evidence/full18-verdict.txt
+          grep -Fxq 'MiniC_C_owners=1738_frozen_plus_3_current' finalizer-evidence/refresh-virtio/provenance.txt
+          grep -Fq 'R_RISCV_CALL_PLT' "${old[0]}"
+          grep -Fq '__minic_inline_spec_7861_8' "${old[0]}"
           mkdir -p finalizer-diff
           cp "${old[0]}" finalizer-diff/frozen-finalizer.dis
           cp "${new[0]}" finalizer-diff/current-finalizer.dis
@@ -49,43 +57,15 @@ jobs:
             echo 'RV32_FINALIZER_DIFF=CHANGED'
             tail -n 220 finalizer-diff/old-vs-new.diff
           fi
-      - name: Download only the original October RV32 frozen shard0
-        uses: actions/download-artifact@v4
-        with:
-          repository: yituanxing/minic-toolchain
-          run-id: '41212514498'
-          name: shard-0
-          github-token: ${{ github.token }}
-          path: original-shard0
-      - name: Install one RV32 GNU object inspection tool
+      - name: Attest archive scope and unresolved historical helper-body provenance
         shell: bash
         run: |
           set -Eeuo pipefail
-          for sources in /etc/apt/apt-mirrors.txt /etc/apt/sources.list.d/ubuntu.sources; do
-            if [[ -f "$sources" ]] && grep -q azure.archive.ubuntu.com "$sources"; then
-              sudo sed -i 's#azure.archive.ubuntu.com#archive.ubuntu.com#g' "$sources"
-            fi
-          done
-          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=15 update -qq
-          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=15 install -y --no-install-recommends binutils-riscv64-linux-gnu
-      - name: Prove frozen inline-specialization callee machine code
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          mapfile -t objs < <(find original-shard0 -type f -path '*/minic/drivers/virtio/virtio_pci_modern.o')
-          test "${#objs[@]}" -eq 1 && test -s "${objs[0]}"
-          riscv64-linux-gnu-readelf -Ws "${objs[0]}" > finalizer-diff/frozen-owner-symbols.txt
-          grep -F '__minic_inline_spec_7861_8' finalizer-diff/frozen-owner-symbols.txt || {
-            echo 'RV32_FINALIZER_HELPER=UNAVAILABLE symbol_undefined_or_renamed' >&2
-            exit 1
-          }
-          riscv64-linux-gnu-objdump -dr --disassemble=__minic_inline_spec_7861_8 "${objs[0]}" >finalizer-diff/frozen-inline-spec.dis
-          grep -Fq '<__minic_inline_spec_7861_8>:' finalizer-diff/frozen-inline-spec.dis || {
-            echo 'RV32_FINALIZER_HELPER=UNAVAILABLE no_local_body' >&2
-            exit 1
-          }
-          echo 'RV32_FINALIZER_HELPER=AVAILABLE exact_frozen_owner=true'
-          sed -n '1,300p' finalizer-diff/frozen-inline-spec.dis
+          {
+            echo 'RV32_FINALIZER_ARCHIVE=PASS original_P2_run=42090175196 frozen_function=true current_function=true'
+            echo 'RV32_FINALIZER_HELPER=NOT_ATTESTED exact_original_ELF_missing=1'
+            echo 'RV32_FINALIZER_CURRENT_HEAD=NOT_RUN archived_compiler_epoch_only=1'
+          } | tee finalizer-diff/receipt.txt
       - name: Preserve machine-code comparison
         if: always()
         uses: actions/upload-artifact@v4
