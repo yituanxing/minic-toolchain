@@ -606,10 +606,51 @@ bool minic_riscv_machine_lookup_opcode_contract(
     MinicRiscvMachineOpcodeInfo info;
     unsigned xlen;
     (void)context;
-    if (contract == NULL || !riscv_machine_target(target, &xlen) ||
+    if (contract == NULL ||
         !minic_riscv_machine_opcode_info(target, opcode, &info)) return false;
+    /* opcode_info already verified the exact XLEN/ABI machine state. */
+    xlen = target->architecture == MINIC_TARGET_ARCH_RISCV32 ? 32U : 64U;
     return riscv_machine_fill_opcode_contract(target, opcode, &info, xlen,
                                               contract);
+}
+
+/* The selected-instruction validator independently checks ISA admission,
+ * immediates, frame references and real CFG edges. Its only use of a freshly
+ * reconstructed opcode contract was the operand count; the generic physical
+ * MachineIR verifier owns the full register/effect contract check. Keep a
+ * separate, exhaustive form arity check here instead of rebuilding the same
+ * full contract twice per selected instruction. */
+static bool riscv_machine_form_operand_count(MinicRiscvMachineForm form,
+                                             size_t *operand_count) {
+    if (operand_count == NULL) return false;
+    switch (form) {
+    case MINIC_RISCV_MACHINE_FORM_NONE:
+        *operand_count = 0U;
+        return true;
+    case MINIC_RISCV_MACHINE_FORM_REGISTER:
+    case MINIC_RISCV_MACHINE_FORM_BLOCK:
+    case MINIC_RISCV_MACHINE_FORM_SYMBOL:
+        *operand_count = 1U;
+        return true;
+    case MINIC_RISCV_MACHINE_FORM_REGISTER_REGISTER:
+    case MINIC_RISCV_MACHINE_FORM_REGISTER_IMMEDIATE:
+    case MINIC_RISCV_MACHINE_FORM_LOAD:
+    case MINIC_RISCV_MACHINE_FORM_STORE:
+    case MINIC_RISCV_MACHINE_FORM_LOAD_FRAME:
+    case MINIC_RISCV_MACHINE_FORM_STORE_FRAME:
+    case MINIC_RISCV_MACHINE_FORM_REGISTER_BLOCK:
+    case MINIC_RISCV_MACHINE_FORM_REGISTER_SYMBOL:
+    case MINIC_RISCV_MACHINE_FORM_FENCE_MASK:
+        *operand_count = 2U;
+        return true;
+    case MINIC_RISCV_MACHINE_FORM_REGISTER_REGISTER_IMMEDIATE:
+    case MINIC_RISCV_MACHINE_FORM_REGISTER_REGISTER_REGISTER:
+    case MINIC_RISCV_MACHINE_FORM_REGISTER_REGISTER_BLOCK:
+        *operand_count = 3U;
+        return true;
+    default:
+        return false;
+    }
 }
 
 static bool immediate_range(int64_t immediate, int64_t minimum,
@@ -761,20 +802,19 @@ bool minic_riscv_machine_validate_selected_instruction(
     const MinicMachineFunction *fn, const MinicMachineInstruction *ins,
     void *context) {
     MinicRiscvMachineOpcodeInfo info;
-    MinicMachineOpcodeContract contract;
+    size_t operand_count;
     unsigned xlen;
     int64_t immediate;
     size_t index;
     const MinicTargetInfo *target = fn != NULL ? fn->target : NULL;
     (void)context;
     if (ins == NULL || ins->kind != MINIC_MACHINE_INSTRUCTION_SELECTED ||
-        !riscv_machine_target(target, &xlen) ||
         !minic_riscv_machine_opcode_info(target, ins->opcode, &info) ||
-        !riscv_machine_fill_opcode_contract(target, ins->opcode, &info, xlen,
-                                            &contract) ||
-        ins->operand_count != contract.operand_count ||
+        !riscv_machine_form_operand_count(info.form, &operand_count) ||
+        ins->operand_count != operand_count ||
         (ins->operand_count != 0U && ins->operands == NULL))
         return false;
+    xlen = target->architecture == MINIC_TARGET_ARCH_RISCV32 ? 32U : 64U;
     if (riscv_machine_fp_features(ins->opcode) != 0U) {
         for (index = 0U; index < ins->operand_count; ++index) {
             MinicMachineRegisterBank required_bank;
