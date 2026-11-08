@@ -97,6 +97,10 @@ if [[ "$mode" == shard ]]; then
     test -d "$RV32I_SHARD_RESUME"
     python3 "$partial_helper" --mode resume --partial "$partial" \
       --out "$out" --resume "$RV32I_SHARD_RESUME"
+  else
+    # Fresh selected-owner replay has no older MiniC successes to restore.
+    # The same authenticated direct path must work with an empty receipt.
+    : >"$partial/checkpoint/resumed-owners.txt"
   fi
   declare -A resumed=()
   if [[ -s "$partial/checkpoint/resumed-owners.txt" ]]; then
@@ -118,27 +122,14 @@ if [[ "$mode" == shard ]]; then
     fi
   done
   if ((${#missing_owners[@]})); then
-    if [[ -n "${RV32I_SHARD_RESUME:-}" ]]; then
-      # The exact source/compiler/header/.cmd identity was checked by init
-      # and resume. Directly replay only real cache misses using the original
-      # GNU Kbuild C commands; invoking make with CC=wrapper here triggers
-      # Kconfig syncconfig and rewrites global autoconf.h/rustc_cfg inputs.
-      python3 "$partial_helper" --mode replay-missing --partial "$partial" \
-        --out "$out" --root "$GITHUB_WORKSPACE" --minic "$MINIC_CC" \
-        >"$shard/compile.log" 2>&1 || compile_rc=$?
-    else
-      # Fresh campaigns still use real selected-owner Kbuild with -k; the
-      # partial artifact persists every successful compile for later resume.
-      MINIC="$MINIC_CC" REAL_CC=riscv64-linux-gnu-gcc \
-        MINIC_KEEP_INTERMEDIATES=1 MINIC_KBUILD_RV32I_ORIGIN_AUDIT=1 MINIC_PRESERVE_FAILURE_INPUTS=1 \
-        MINIC_KBUILD_RV32_PARTIAL_DIR="$partial" \
-        MINIC_KBUILD_RV32_PARTIAL_OUT="$out" \
-        MINIC_KBUILD_RV32_PARTIAL_HELPER="$partial_helper" \
-        MINIC_KBUILD_SUCCESS_TRACE="$shard/mini-success-objects.txt" \
-        MINIC_KBUILD_OBJECT_HASH_TRACE="$shard/mini-object-hashes.sha256" \
-        make "${gnu_args[@]}" KBUILD_NOCMDDEP=1 -j6 -k CC="$GITHUB_WORKSPACE/tests/external/linux/stage2_kbuild_cc.sh" \
-          "${missing_owners[@]}" >"$shard/compile.log" 2>&1 || compile_rc=$?
-    fi
+    # Both fresh and partial-resume runs execute the pinned, original GNU
+    # .cmd via the existing authenticated GNU-E -> MiniC-S -> GNU-AS route.
+    # Re-entering selected-object make (even with KBUILD_NOCMDDEP) triggers
+    # syncconfig on restored runner trees, rewriting global autoconf.h and
+    # rustc_cfg and invalidating the entire frozen GNU source epoch.
+    python3 "$partial_helper" --mode replay-missing --partial "$partial" \
+      --out "$out" --root "$GITHUB_WORKSPACE" --minic "$MINIC_CC" \
+      >"$shard/compile.log" 2>&1 || compile_rc=$?
   else
     echo "RV32I_SHARD_SWEEP=REUSED authenticated_current_C=${#owners[@]} current_compiler_identical=true" >"$shard/compile.log"
   fi
