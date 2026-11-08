@@ -11,6 +11,102 @@
     } \
 } while (0)
 
+/* Exercise multiple hash-index rehashes, same-shape duplicates and nominal
+ * referents after their record body has been completed. */
+static int check_large_type_index(void) {
+    MinicCoreTypeContext context;
+    MinicCoreType type;
+    MinicCoreTypeId integers[192], pointers[192];
+    MinicCoreTypeId a, b, a_pointer, b_pointer, repeated;
+    size_t i, before;
+    minic_core_type_context_initialize(&context);
+    for (i = 0U; i < 192U; ++i) {
+        (void)memset(&type, 0, sizeof(type));
+        type.kind = MINIC_CORE_TYPE_INTEGER;
+        type.has_layout = true;
+        type.size = i + 1U;
+        type.alignment = 1U;
+        type.value.integer.bit_width = (unsigned int)((i + 1U) * 8U);
+        CHECK(minic_core_type_register(&context, &type, &integers[i]));
+        CHECK(minic_core_type_register(&context, &type, &repeated));
+        CHECK(repeated == integers[i]);
+        (void)memset(&type, 0, sizeof(type));
+        type.kind = MINIC_CORE_TYPE_POINTER;
+        type.has_layout = true;
+        type.size = 8U;
+        type.alignment = 8U;
+        type.value.pointer.pointee = integers[i];
+        CHECK(minic_core_type_register(&context, &type, &pointers[i]));
+        CHECK(minic_core_type_register(&context, &type, &repeated));
+        CHECK(repeated == pointers[i]);
+    }
+    CHECK(context.type_index_capacity >= 512U);
+    for (i = 0U; i < 192U; ++i) {
+        (void)memset(&type, 0, sizeof(type));
+        type.kind = MINIC_CORE_TYPE_INTEGER;
+        type.has_layout = true;
+        type.size = i + 1U;
+        type.alignment = 1U;
+        type.value.integer.bit_width = (unsigned int)((i + 1U) * 8U);
+        CHECK(minic_core_type_register(&context, &type, &repeated));
+        CHECK(repeated == integers[i]);
+        type.kind = MINIC_CORE_TYPE_POINTER;
+        type.size = 8U;
+        type.alignment = 8U;
+        type.value.pointer.pointee = integers[i];
+        CHECK(minic_core_type_register(&context, &type, &repeated));
+        CHECK(repeated == pointers[i]);
+    }
+    (void)memset(&type, 0, sizeof(type));
+    type.kind = MINIC_CORE_TYPE_RECORD;
+    CHECK(minic_core_type_register(&context, &type, &a));
+    CHECK(minic_core_type_register(&context, &type, &b));
+    CHECK(a != b);
+    (void)memset(&type, 0, sizeof(type));
+    type.kind = MINIC_CORE_TYPE_POINTER;
+    type.has_layout = true;
+    type.size = 8U;
+    type.alignment = 8U;
+    type.value.pointer.pointee = a;
+    CHECK(minic_core_type_register(&context, &type, &a_pointer));
+    type.value.pointer.pointee = b;
+    CHECK(minic_core_type_register(&context, &type, &b_pointer));
+    CHECK(a_pointer != b_pointer);
+    (void)memset(&type, 0, sizeof(type));
+    type.kind = MINIC_CORE_TYPE_RECORD;
+    type.has_layout = true;
+    type.size = 1U;
+    type.alignment = 1U;
+    type.value.record.is_complete = true;
+    CHECK(minic_core_type_complete_record(&context, a, &type));
+    (void)memset(&type, 0, sizeof(type));
+    type.kind = MINIC_CORE_TYPE_POINTER;
+    type.has_layout = true;
+    type.size = 8U;
+    type.alignment = 8U;
+    type.value.pointer.pointee = a;
+    CHECK(minic_core_type_register(&context, &type, &repeated));
+    CHECK(repeated == a_pointer);
+    before = context.type_count;
+    type.value.pointer.pointee = MINIC_CORE_TYPE_INVALID;
+    CHECK(!minic_core_type_register(&context, &type, &repeated));
+    CHECK(context.type_count == before);
+    /* A caller-owned descriptor may be an entry in `types`; registering a
+     * second nominal instance must snapshot it before reallocating arena. */
+    (void)memset(&type, 0, sizeof(type));
+    type.kind = MINIC_CORE_TYPE_RECORD;
+    while (context.type_count < context.type_capacity)
+        CHECK(minic_core_type_register(&context, &type, &repeated));
+    before = context.type_count;
+    CHECK(minic_core_type_register(&context, &context.types[a], &repeated));
+    CHECK(repeated == before);
+    CHECK(minic_core_type_get(&context, repeated)->kind == MINIC_CORE_TYPE_RECORD);
+    CHECK(minic_core_type_get(&context, repeated)->value.record.is_complete);
+    minic_core_type_context_destroy(&context);
+    CHECK(context.type_index == NULL && context.type_index_capacity == 0U);
+    return 0;
+}
+
 int main(void) {
     MinicCoreTypeContext context;
     MinicCoreType type;
@@ -254,6 +350,7 @@ int main(void) {
 
     minic_core_type_context_destroy(&context);
     CHECK(context.types == NULL && context.type_count == 0U);
+    CHECK(check_large_type_index() == 0);
     (void)puts("CORE_TYPE_CONTEXT=PASS scalar pointer recursive_record fixed_zero_incomplete_array function_abi ownership rollback");
     return 0;
 }

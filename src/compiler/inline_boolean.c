@@ -529,7 +529,7 @@ static bool minic_add_inline_boolean_range_specialization(
  * section as well as the transitive clone owners below, preserving integer,
  * symbolic and Boolean-range facts verbatim. */
 static bool minic_close_original_inline_caller_sections(
-    MinicC0Program *program, const MinicInlineCallPlan *call_plan) {
+    MinicC0Program *program, MinicInlineCallPlan *call_plan) {
     MinicInlineInitialOwners owners = {0};
     size_t expression_index;
     size_t added = 0U;
@@ -538,7 +538,7 @@ static bool minic_close_original_inline_caller_sections(
     if (!minic_inline_spec_sections_present(program) ||
         program->expression_count == 0U) return true;
     if (!minic_inline_initial_owners_build(
-            program, program->function_count, &owners) || !owners.ready) {
+            program, program->function_count, call_plan, &owners) || !owners.ready) {
         minic_inline_initial_owners_destroy(&owners);
         (void)fprintf(stderr, "MINIC_INLINE_ORIGINAL_SECTION_OWNER_INDEX=FAIL\n");
         return false;
@@ -609,7 +609,7 @@ static bool minic_specialize_inline_boolean_range_calls_for_pass(
         return false;
     }
     if (!minic_inline_initial_owners_build(
-            program, program->function_count, &initial_owners)) {
+            program, program->function_count, call_plan, &initial_owners)) {
         (void)fprintf(stderr, "MINIC_INLINE_SECTION_OWNER_INDEX=FAIL boolean\n");
         return false;
     }
@@ -761,7 +761,7 @@ static bool minic_specialize_inline_boolean_range_calls_for_pass(
                 boolean_index_attempted = true;
                 boolean_index_builds += 1U;
                 if (!minic_inline_call_worklist_build(
-                        program, boolean_function_limit, &worklist)) {
+                        program, boolean_function_limit, call_plan, &worklist)) {
                     minic_inline_call_worklist_destroy(&worklist);
                     return false;
                 }

@@ -121,6 +121,11 @@ typedef struct MinicCoreTypeContext {
     MinicCoreType *types;
     size_t type_count;
     size_t type_capacity;
+    /* Private structural interning index. Entries are stable TypeIds, never
+     * pointers into the reallocatable types arena. Nominal types are absent. */
+    MinicCoreTypeId *type_index;
+    size_t type_index_capacity;
+    size_t type_index_count;
 } MinicCoreTypeContext;
 
 void minic_core_type_context_initialize(MinicCoreTypeContext *context);

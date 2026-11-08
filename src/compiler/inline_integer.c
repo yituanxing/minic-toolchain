@@ -94,7 +94,7 @@ static bool minic_static_integer_claim_block(
  * those aliases, so do not specialize such a source in the first place. */
 static unsigned char *minic_static_integer_blocked_sources(
     const MinicC0Program *program, const MinicTargetInvocation *target,
-    const MinicInlineCallPlan *call_plan) {
+    MinicInlineCallPlan *call_plan) {
     unsigned char *blocked;
     const MinicSourceBackend *backend;
     unsigned char *inline_has_external_guard = NULL;
@@ -132,8 +132,8 @@ static unsigned char *minic_static_integer_blocked_sources(
             goto blocked_error;
         }
         owners = (MinicFunctionId *)malloc(program->expression_count * sizeof(*owners));
-        if (owners == NULL || !minic_perf_program_build_expression_source_owners(
-                program, program->function_count, owners, program->expression_count)) {
+        if (owners == NULL || !minic_inline_call_plan_copy_source_owners(
+                call_plan, program->function_count, owners, program->expression_count)) {
             goto blocked_error;
         }
         for (index = 0U; index < program->expression_count; ++index) {
@@ -528,7 +528,7 @@ bool minic_specialize_inline_integer_calls(MinicC0Program *program,
     }
     original_function_count = program->function_count;
     if (!minic_inline_initial_owners_build(program, original_function_count,
-                                           &initial_owners)) {
+                                           call_plan, &initial_owners)) {
         (void)fprintf(stderr, "MINIC_INLINE_SECTION_OWNER_INDEX=FAIL integer\n");
         return false;
     }
@@ -714,7 +714,7 @@ bool minic_specialize_inline_integer_calls(MinicC0Program *program,
          * source; unowned/shared and late-appended expressions still visit
          * each caller. Allocation failure reverts to the complete scan. */
         if (!minic_inline_call_worklist_build(
-                program, original_function_count, &calls)) {
+                program, original_function_count, call_plan, &calls)) {
             free(stable_parameter_locals);
             minic_core_reentry_index_destroy(pure_guard_reentry_index);
             return false;

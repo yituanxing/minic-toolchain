@@ -38,6 +38,12 @@ typedef struct MinicInlineCallPlan {
     const MinicC0Program *program;
     MinicFunctionId *selected;
     size_t selected_count;
+    /* Immutable canonical FunctionBody ownership during specialization.
+     * Every later specialized FunctionId borrows its source body, while
+     * symbolic closed expressions are appended outside those bodies. */
+    MinicFunctionId *source_owners;
+    size_t source_owner_count;
+    size_t source_function_limit;
 } MinicInlineCallPlan;
 
 bool minic_inline_call_plan_initialize(
@@ -48,6 +54,9 @@ bool minic_inline_call_plan_set(
     MinicInlineCallPlan *plan, MinicExpressionId expression_id,
     MinicFunctionId function_id);
 void minic_inline_call_plan_destroy(MinicInlineCallPlan *plan);
+bool minic_inline_call_plan_copy_source_owners(
+    MinicInlineCallPlan *plan, size_t function_limit,
+    MinicFunctionId *owners, size_t owner_count);
 
 void minic_inline_spec_key_clear(MinicInlineSpecializationKey *key);
 bool minic_inline_spec_key_from_function(
@@ -93,6 +102,7 @@ typedef struct MinicInlineInitialOwners {
 
 bool minic_inline_initial_owners_build(
     const MinicC0Program *program, size_t function_limit,
+    MinicInlineCallPlan *call_plan,
     MinicInlineInitialOwners *owners);
 MinicFunctionId minic_inline_initial_owners_get(
     const MinicInlineInitialOwners *owners, size_t expression_index);
@@ -126,6 +136,7 @@ typedef struct MinicInlineCallCursor {
 
 bool minic_inline_call_worklist_build(
     const MinicC0Program *program, size_t source_function_limit,
+    MinicInlineCallPlan *call_plan,
     MinicInlineCallWorklist *worklist);
 void minic_inline_call_worklist_destroy(MinicInlineCallWorklist *worklist);
 void minic_inline_call_cursor_begin(

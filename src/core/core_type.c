@@ -19,6 +19,7 @@ void minic_core_type_context_destroy(MinicCoreTypeContext *context) {
     if (context == NULL) return;
     for (i = 0U; i < context->type_count; ++i) type_destroy(&context->types[i]);
     free(context->types);
+    free(context->type_index);
     minic_core_type_context_initialize(context);
 }
 
@@ -75,6 +76,111 @@ static bool type_equal(const MinicCoreType *left, const MinicCoreType *right) {
     case MINIC_CORE_TYPE_OPAQUE:
     default: return false;
     }
+}
+
+/* Shape equality remains authoritative in type_equal; hashes are merely a
+ * collision filter. In particular, incomplete and completed records, opaque
+ * declarations and function signatures retain independent nominal IDs. */
+static bool type_is_nominal(MinicCoreTypeKind kind) {
+    return kind == MINIC_CORE_TYPE_RECORD || kind == MINIC_CORE_TYPE_FUNCTION ||
+           kind == MINIC_CORE_TYPE_OPAQUE;
+}
+
+static size_t type_shape_hash(const MinicCoreType *type) {
+    uint64_t hash = UINT64_C(14695981039346656037);
+#define MIX(x) do { hash = (hash ^ (uint64_t)(x)) * UINT64_C(1099511628211); } while (0)
+    MIX(type->kind);
+    MIX(type->has_layout);
+    MIX(type->size);
+    MIX(type->alignment);
+    MIX(type->has_abi_alignment_override);
+    switch (type->kind) {
+    case MINIC_CORE_TYPE_INTEGER:
+        MIX(type->value.integer.bit_width);
+        MIX(type->value.integer.is_signed);
+        MIX(type->value.integer.is_bool);
+        break;
+    case MINIC_CORE_TYPE_FLOAT:
+        MIX(type->value.floating.format);
+        break;
+    case MINIC_CORE_TYPE_POINTER:
+        MIX(type->value.pointer.pointee);
+        break;
+    case MINIC_CORE_TYPE_ARRAY:
+        MIX(type->value.array.element);
+        MIX(type->value.array.count);
+        MIX(type->value.array.is_complete);
+        break;
+    case MINIC_CORE_TYPE_VECTOR:
+        MIX(type->value.vector.element);
+        MIX(type->value.vector.element_count);
+        MIX(type->value.vector.representation);
+        break;
+    case MINIC_CORE_TYPE_ALIGNED:
+        MIX(type->value.aligned.base);
+        break;
+    case MINIC_CORE_TYPE_VOID:
+    default:
+        break;
+    }
+#undef MIX
+    return (size_t)hash;
+}
+
+/* Load is always below 75%, so every probe sequence has an empty terminator.
+ * The complete replacement table is constructed before publication; OOM
+ * cannot corrupt the previous index or change the source type identities. */
+static bool type_index_reserve(MinicCoreTypeContext *context, size_t needed) {
+    MinicCoreTypeId *slots;
+    size_t capacity, i, indexed = 0U;
+    if (context->type_index_capacity != 0U &&
+        needed <= context->type_index_capacity - context->type_index_capacity / 4U)
+        return true;
+    capacity = context->type_index_capacity != 0U ? context->type_index_capacity : 64U;
+    while (needed > capacity - capacity / 4U) {
+        if (capacity > SIZE_MAX / 2U) return false;
+        capacity *= 2U;
+    }
+    if (capacity > SIZE_MAX / sizeof(*slots)) return false;
+    slots = malloc(capacity * sizeof(*slots));
+    if (slots == NULL) return false;
+    for (i = 0U; i < capacity; ++i) slots[i] = MINIC_CORE_TYPE_INVALID;
+    for (i = 0U; i < context->type_count; ++i) {
+        size_t slot;
+        if (type_is_nominal(context->types[i].kind)) continue;
+        slot = type_shape_hash(&context->types[i]) & (capacity - 1U);
+        while (slots[slot] != MINIC_CORE_TYPE_INVALID)
+            slot = (slot + 1U) & (capacity - 1U);
+        slots[slot] = i;
+        indexed += 1U;
+    }
+    free(context->type_index);
+    context->type_index = slots;
+    context->type_index_capacity = capacity;
+    context->type_index_count = indexed;
+    return true;
+}
+
+static MinicCoreTypeId type_index_find(const MinicCoreTypeContext *context,
+                                       const MinicCoreType *type) {
+    size_t slot;
+    if (context->type_index_capacity == 0U) return MINIC_CORE_TYPE_INVALID;
+    slot = type_shape_hash(type) & (context->type_index_capacity - 1U);
+    while (context->type_index[slot] != MINIC_CORE_TYPE_INVALID) {
+        MinicCoreTypeId existing = context->type_index[slot];
+        if (type_equal(&context->types[existing], type)) return existing;
+        slot = (slot + 1U) & (context->type_index_capacity - 1U);
+    }
+    return MINIC_CORE_TYPE_INVALID;
+}
+
+static void type_index_insert(MinicCoreTypeContext *context,
+                              const MinicCoreType *type, MinicCoreTypeId id) {
+    size_t slot = type_shape_hash(type) & (context->type_index_capacity - 1U);
+    while (context->type_index[slot] != MINIC_CORE_TYPE_INVALID)
+        slot = (slot + 1U) & (context->type_index_capacity - 1U);
+    context->type_index[slot] = id;
+    context->type_index_count += 1U;
 }
 
 static bool type_references_valid(const MinicCoreTypeContext *context,
@@ -260,22 +366,50 @@ bool minic_core_type_register(MinicCoreTypeContext *context,
                               const MinicCoreType *type,
                               MinicCoreTypeId *id) {
     MinicCoreType copied;
-    size_t capacity;
+    MinicCoreType input;
+    size_t capacity, i;
     MinicCoreType *resized;
-    size_t i;
+    bool nominal;
+    MinicCoreTypeId existing;
     if (context == NULL || type == NULL || id == NULL ||
         type->kind > MINIC_CORE_TYPE_ALIGNED || !type_references_valid(context, type))
         return false;
-    if (type->kind != MINIC_CORE_TYPE_RECORD && type->kind != MINIC_CORE_TYPE_OPAQUE &&
-        type->kind != MINIC_CORE_TYPE_FUNCTION)
-        for (i = 0U; i < context->type_count; ++i)
-            if (type_equal(&context->types[i], type)) {
-                *id = i;
+    nominal = type_is_nominal(type->kind);
+    if (!nominal) {
+        if (context->type_index_capacity == 0U) {
+            /* A duplicate must remain discoverable even if building the
+             * first index would fail allocation. Small arenas also avoid
+             * hashing until the linear scan is actually costly. */
+            for (i = 0U; i < context->type_count; ++i)
+                if (type_equal(&context->types[i], type)) {
+                    *id = i;
+                    return true;
+                }
+            if (context->type_count >= 32U) {
+                size_t needed = 0U;
+                for (i = 0U; i < context->type_count; ++i)
+                    if (!type_is_nominal(context->types[i].kind)) needed += 1U;
+                if (needed == SIZE_MAX || !type_index_reserve(context, needed + 1U))
+                    return false;
+            }
+        } else {
+            existing = type_index_find(context, type);
+            if (existing != MINIC_CORE_TYPE_INVALID) {
+                *id = existing;
                 return true;
             }
+            if (context->type_index_count == SIZE_MAX ||
+                !type_index_reserve(context, context->type_index_count + 1U))
+                return false;
+        }
+    }
     if (context->type_count == SIZE_MAX) return false;
+    /* `type` may point into the arena that the following realloc moves. */
+    input = *type;
     if (context->type_count == context->type_capacity) {
-        capacity = context->type_capacity != 0U ? context->type_capacity * 2U : 16U;
+        capacity = context->type_capacity == 0U ? 16U :
+            context->type_capacity > SIZE_MAX / 2U ? context->type_count + 1U :
+            context->type_capacity * 2U;
         if (capacity < context->type_count + 1U) capacity = context->type_count + 1U;
         if (capacity > SIZE_MAX / sizeof(*context->types)) return false;
         resized = realloc(context->types, capacity * sizeof(*context->types));
@@ -283,9 +417,11 @@ bool minic_core_type_register(MinicCoreTypeContext *context,
         context->types = resized;
         context->type_capacity = capacity;
     }
-    if (!copy_owned(&copied, type)) return false;
+    if (!copy_owned(&copied, &input)) return false;
     *id = context->type_count;
     context->types[context->type_count++] = copied;
+    if (!nominal && context->type_index_capacity != 0U)
+        type_index_insert(context, &copied, *id);
     return true;
 }
 

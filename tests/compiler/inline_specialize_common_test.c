@@ -93,12 +93,14 @@ static int test_fact_key(void) {
 
 static int test_owners_and_calls(void) {
     MinicExpression expressions[10] = {0};
-    MinicFunction functions[3] = {0};
+    MinicFunction functions[4] = {0};
     MinicC0Program program = {0};
+    MinicInlineCallPlan plan = {0};
     MinicInlineInitialOwners initial = {0};
     MinicInlineCallWorklist worklist = {0};
     MinicInlineCallCursor cursor;
     MinicExpressionId actual;
+    MinicFunctionId wrong_count[10];
     size_t i;
     static const size_t expected_source0[] = {0U, 2U, 4U, 6U, 7U, 9U};
     static const size_t expected_source1[] = {1U, 2U, 5U, 6U, 7U, 9U};
@@ -109,6 +111,8 @@ static int test_owners_and_calls(void) {
     program.expression_count = 7U;
     functions[0].section_name = ".init.text";
     functions[0].section_name_length = 10U;
+    functions[2].is_integer_specialization = true;
+    functions[3].is_integer_specialization = true;
     for (i = 0U; i < 10U; ++i) {
         expressions[i].kind = i == 3U || i == 8U
             ? MINIC_EXPRESSION_INTEGER : MINIC_EXPRESSION_CALL;
@@ -116,7 +120,8 @@ static int test_owners_and_calls(void) {
             ? MINIC_FUNCTION_INVALID : 0U;
     }
     CHECK(minic_inline_spec_sections_present(&program), 20);
-    CHECK(minic_inline_initial_owners_build(&program, 2U, &initial), 21);
+    CHECK(minic_inline_call_plan_initialize(&plan, &program), 42);
+    CHECK(minic_inline_initial_owners_build(&program, 2U, &plan, &initial), 21);
     CHECK(initial.ready &&
           minic_inline_initial_owners_get(&initial, 0U) == 0U &&
           minic_inline_initial_owners_get(&initial, 6U) == MINIC_FUNCTION_INVALID, 22);
@@ -125,14 +130,42 @@ static int test_owners_and_calls(void) {
     program.function_count = 4U;
     CHECK(minic_inline_initial_owners_get(&initial, 6U) ==
           MINIC_FUNCTION_INVALID, 36);
-    program.function_count = 3U;
     minic_inline_initial_owners_destroy(&initial);
+    /* The canonical ownership snapshot survives specialized clone appends.
+     * Even a failed oracle is not consulted on this proven append-only path. */
     fail_owner_oracle = true;
-    CHECK(!minic_inline_initial_owners_build(&program, 2U, &initial), 23);
+    CHECK(minic_inline_initial_owners_build(&program, 4U, &plan, &initial) &&
+          initial.ready && minic_inline_initial_owners_get(&initial, 1U) == 1U &&
+          minic_inline_initial_owners_get(&initial, 6U) ==
+              MINIC_FUNCTION_INVALID, 43);
+    minic_inline_initial_owners_destroy(&initial);
+    /* A symbolic closed expression appended beyond the snapshot is unowned;
+     * a caller passing a stale length must be rejected outright. */
+    program.expression_count = 8U;
+    CHECK(!minic_inline_call_plan_copy_source_owners(
+              &plan, 4U, wrong_count, 7U), 46);
+    CHECK(minic_inline_initial_owners_build(&program, 4U, &plan, &initial) &&
+          minic_inline_initial_owners_get(&initial, 7U) ==
+              MINIC_FUNCTION_INVALID, 47);
+    minic_inline_initial_owners_destroy(&initial);
+    program.expression_count = 7U;
+    /* Ordinary new functions are NOT guaranteed to share a source body.
+     * A cache hit must instead rerun the original oracle, which is forced
+     * to fail here so accidental stale reuse cannot pass this test. */
+    functions[3].is_integer_specialization = false;
+    CHECK(!minic_inline_initial_owners_build(&program, 4U, &plan, &initial), 48);
+    minic_inline_initial_owners_destroy(&initial);
+    functions[3].is_integer_specialization = true;
+    fail_owner_oracle = false;
+    program.function_count = 3U;
+    minic_inline_call_plan_destroy(&plan);
+    CHECK(minic_inline_call_plan_initialize(&plan, &program), 44);
+    fail_owner_oracle = true;
+    CHECK(!minic_inline_initial_owners_build(&program, 2U, &plan, &initial), 23);
     minic_inline_initial_owners_destroy(&initial);
     fail_owner_oracle = false;
 
-    CHECK(minic_inline_call_worklist_build(&program, 2U, &worklist), 24);
+    CHECK(minic_inline_call_worklist_build(&program, 2U, &plan, &worklist), 24);
     CHECK(worklist.ready && worklist.owner_ready &&
           worklist.call_count == 6U && worklist.valid_call_count == 5U, 25);
     program.expression_count = 10U; /* Two CALLs appended after index build. */
@@ -150,8 +183,10 @@ static int test_owners_and_calls(void) {
     CHECK(!minic_inline_call_cursor_next(&cursor, &program, &actual), 31);
     minic_inline_call_worklist_destroy(&worklist);
 
+    minic_inline_call_plan_destroy(&plan);
+    CHECK(minic_inline_call_plan_initialize(&plan, &program), 45);
     fail_owner_oracle = true;
-    CHECK(minic_inline_call_worklist_build(&program, 2U, &worklist) &&
+    CHECK(minic_inline_call_worklist_build(&program, 2U, &plan, &worklist) &&
           !worklist.ready && !worklist.owner_ready, 32);
     minic_inline_call_cursor_begin(&worklist, 0U, &cursor);
     for (i = 0U; i < sizeof(expected_fallback) / sizeof(expected_fallback[0]); ++i)
@@ -162,10 +197,11 @@ static int test_owners_and_calls(void) {
     fail_owner_oracle = false;
     functions[0].section_name = NULL;
     functions[0].section_name_length = 0U;
-    CHECK(minic_inline_initial_owners_build(&program, 2U, &initial) &&
+    CHECK(minic_inline_initial_owners_build(&program, 2U, &plan, &initial) &&
           !initial.ready &&
           minic_inline_initial_owners_get(&initial, 0U) == MINIC_FUNCTION_INVALID, 35);
     minic_inline_initial_owners_destroy(&initial);
+    minic_inline_call_plan_destroy(&plan);
     return 0;
 }
 

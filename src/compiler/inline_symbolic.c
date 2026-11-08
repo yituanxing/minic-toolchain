@@ -669,7 +669,7 @@ bool minic_specialize_inline_symbolic_calls(
      * facts, never let a modified pointer or integer parameter masquerade
      * as the original call value. */
     if (!minic_inline_initial_owners_build(
-            program, original_function_count, &initial_owners)) {
+            program, original_function_count, call_plan, &initial_owners)) {
         (void)fprintf(stderr, "MINIC_INLINE_SECTION_OWNER_INDEX=FAIL symbolic\n");
         free(stable_locals);
         return false;
@@ -787,7 +787,7 @@ bool minic_specialize_inline_symbolic_calls(
          * Common retains append-only expression IDs and an OOM full-scan
          * fallback, preserving the historical shared FunctionBody closure. */
         if (!minic_inline_call_worklist_build(
-                program, original_function_count, &worklist)) {
+                program, original_function_count, call_plan, &worklist)) {
             free(stable_locals);
             return false;
         }

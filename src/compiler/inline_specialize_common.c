@@ -1,6 +1,7 @@
 #include "compiler/inline_specialize_common.h"
 #include "frontend/function_body.h"
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -53,7 +54,9 @@ bool minic_inline_source_has_opaque_asm_reference(
 bool minic_inline_call_plan_initialize(
     MinicInlineCallPlan *plan, const MinicC0Program *program) {
     if (plan == NULL || program == NULL || plan->program != NULL ||
-        plan->selected != NULL || plan->selected_count != 0U)
+        plan->selected != NULL || plan->selected_count != 0U ||
+        plan->source_owners != NULL || plan->source_owner_count != 0U ||
+        plan->source_function_limit != 0U)
         return false;
     plan->program = program;
     return true;
@@ -108,7 +111,93 @@ bool minic_inline_call_plan_set(
 void minic_inline_call_plan_destroy(MinicInlineCallPlan *plan) {
     if (plan == NULL) return;
     free(plan->selected);
+    free(plan->source_owners);
     (void)memset(plan, 0, sizeof(*plan));
+}
+
+/* The canonical FunctionBody graph is immutable throughout the three inline
+ * specialization passes.  Their generated functions are marked specialized
+ * and borrow existing bodies; appended symbolic expressions do not become
+ * children of canonical source bodies.  This snapshot therefore needs one
+ * verified owner walk, not a full traversal for every direct/transitive pass.
+ * Unknown and ambiguous ownership is normalized to INVALID so a later clone
+ * count cannot accidentally turn the old ambiguity sentinel into an owner.
+ * If a future producer adds an ordinary function, use the original oracle. */
+bool minic_inline_call_plan_copy_source_owners(
+    MinicInlineCallPlan *plan, size_t function_limit,
+    MinicFunctionId *owners, size_t owner_count) {
+    const MinicC0Program *program;
+    size_t i;
+    if (plan == NULL || (program = plan->program) == NULL ||
+        (owner_count != 0U && owners == NULL) ||
+        owner_count != program->expression_count ||
+        function_limit > program->function_count)
+        return false;
+    if (plan->source_owners != NULL &&
+        function_limit >= plan->source_function_limit &&
+        owner_count >= plan->source_owner_count) {
+        bool source_prefix_stable = true;
+        for (i = plan->source_function_limit; i < function_limit; ++i) {
+            if (!program->functions[i].is_integer_specialization) {
+                source_prefix_stable = false;
+                break;
+            }
+        }
+        if (source_prefix_stable) {
+            (void)memcpy(owners, plan->source_owners,
+                         plan->source_owner_count * sizeof(*owners));
+            for (i = plan->source_owner_count; i < owner_count; ++i)
+                owners[i] = MINIC_FUNCTION_INVALID;
+            /* Opt-in exact original-oracle check for frozen Linux/clone-heavy
+             * acceptance. Never let an invalidated source graph silently
+             * reuse stale ownership during a diagnostic run. */
+            if (getenv("MINIC_INLINE_OWNER_CACHE_VERIFY") != NULL) {
+                MinicFunctionId *fresh;
+                bool matches = true;
+                if (owner_count > SIZE_MAX / sizeof(*fresh)) return false;
+                fresh = malloc((owner_count == 0U ? 1U : owner_count) *
+                               sizeof(*fresh));
+                if (fresh == NULL) return false;
+                if (!minic_perf_program_build_expression_source_owners(
+                        program, function_limit, fresh, owner_count)) {
+                    free(fresh);
+                    return false;
+                }
+                for (i = 0U; i < owner_count; ++i) {
+                    const MinicFunctionId actual = fresh[i] < function_limit
+                        ? fresh[i] : MINIC_FUNCTION_INVALID;
+                    if (owners[i] != actual) {
+                        (void)fprintf(stderr,
+                            "MINIC_INLINE_OWNER_CACHE_MISMATCH expression=%zu "
+                            "cached=%zu actual=%zu limit=%zu\n",
+                            i, (size_t)owners[i], (size_t)actual, function_limit);
+                        matches = false;
+                        break;
+                    }
+                }
+                free(fresh);
+                if (!matches) return false;
+            }
+            return true;
+        }
+    }
+    if (!minic_perf_program_build_expression_source_owners(
+            program, function_limit, owners, owner_count))
+        return false;
+    /* Optional cache: OOM must retain exactly the old verified owner result. */
+    if (plan->source_owners == NULL && owner_count != 0U &&
+        owner_count <= SIZE_MAX / sizeof(*owners)) {
+        MinicFunctionId *snapshot = malloc(owner_count * sizeof(*owners));
+        if (snapshot != NULL) {
+            for (i = 0U; i < owner_count; ++i)
+                snapshot[i] = owners[i] < function_limit
+                    ? owners[i] : MINIC_FUNCTION_INVALID;
+            plan->source_owners = snapshot;
+            plan->source_owner_count = owner_count;
+            plan->source_function_limit = function_limit;
+        }
+    }
+    return true;
 }
 
 void minic_inline_spec_key_clear(MinicInlineSpecializationKey *key) {
@@ -226,6 +315,7 @@ void minic_inline_initial_owners_destroy(MinicInlineInitialOwners *owners) {
 
 bool minic_inline_initial_owners_build(
     const MinicC0Program *program, size_t function_limit,
+    MinicInlineCallPlan *call_plan,
     MinicInlineInitialOwners *owners) {
     MinicFunctionId *data;
     if (program == NULL || owners == NULL || owners->owners != NULL ||
@@ -239,8 +329,8 @@ bool minic_inline_initial_owners_build(
     if (program->expression_count > SIZE_MAX / sizeof(*data)) return false;
     data = malloc(program->expression_count * sizeof(*data));
     if (data == NULL) return false;
-    if (!minic_perf_program_build_expression_source_owners(
-            program, function_limit, data, program->expression_count)) {
+    if (!minic_inline_call_plan_copy_source_owners(
+            call_plan, function_limit, data, program->expression_count)) {
         free(data);
         return false;
     }
@@ -272,6 +362,7 @@ void minic_inline_call_worklist_destroy(MinicInlineCallWorklist *worklist) {
 
 bool minic_inline_call_worklist_build(
     const MinicC0Program *program, size_t source_function_limit,
+    MinicInlineCallPlan *call_plan,
     MinicInlineCallWorklist *worklist) {
     MinicFunctionId *owners = NULL;
     size_t *offsets = NULL, *calls = NULL, *writes = NULL;
@@ -297,8 +388,8 @@ bool minic_inline_call_worklist_build(
     n = source_function_limit;
     owners = malloc(expression_count * sizeof(*owners));
     if (owners == NULL ||
-        !minic_perf_program_build_expression_source_owners(
-            program, n, owners, expression_count)) goto fallback;
+        !minic_inline_call_plan_copy_source_owners(
+            call_plan, n, owners, expression_count)) goto fallback;
     worklist->owner_ready = true;
     offsets = calloc(n + 2U, sizeof(*offsets));
     calls = malloc(expression_count * sizeof(*calls));
