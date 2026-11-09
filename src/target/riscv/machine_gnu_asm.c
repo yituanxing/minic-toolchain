@@ -79,9 +79,12 @@ static bool riscv_machine_emit_selected(FILE *output,
     const char *symbol = NULL;
     unsigned r0 = 0U, r1 = 0U, r2 = 0U;
     (void)context;
+    /* The sealed prepared body has already verified this instruction through
+     * policy->verify.validate_selected_instruction. Revalidating while printing
+     * duplicates expensive branch-location scans and cannot strengthen a
+     * MachineFunction that must remain unchanged through emission. */
     if (output == NULL || fn == NULL || ins == NULL ||
-        !minic_riscv_machine_opcode_info(fn->target, ins->opcode, &desc) ||
-        !minic_riscv_machine_validate_selected_instruction(fn, ins, NULL))
+        !minic_riscv_machine_opcode_info(fn->target, ins->opcode, &desc))
         return false;
     operand = ins->operands;
     if (ins->operand_count != 0U && operand == NULL) return false;
