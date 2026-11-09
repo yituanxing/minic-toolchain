@@ -6,3 +6,4 @@
 2026-11-08 rerun-once-after-push-pr-concurrency-isolation candidate=1f217fc
 2026-11-08 batch-p0-zerorecord-opcode-next-candidate baseline=6647b76
 2026-11-08 post-MachineIR-double-to-single-verify and proven-aligned-RV-I-payload candidate; exact-source cJSON/tinyAES five-ISA paired ABBA against pinned early/recent history
+2026-11-09 measured-post-CoreType-hashcons-inline-owner-snapshot-indexed-asm candidate=bca199925ede frozen AES/cJSON five-ISA ABBA; compiler-throughput-only
