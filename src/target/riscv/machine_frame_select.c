@@ -45,7 +45,10 @@ static MinicMachineOperand rv_integer(int64_t number) {
 
 static MinicMachineOperand rv_address(unsigned xlen, unsigned base,
                                      int64_t displacement) {
-    MinicMachineOperand result = {0};
+    MinicMachineOperand result;
+    /* Initializing a union's first member does not initialize its larger
+     * address alternative. Zero the entire relocation-bearing operand. */
+    (void)memset(&result, 0, sizeof(result));
     result.kind = MINIC_MACHINE_OPERAND_ADDRESS;
     result.value.address.target_mode =
         MINIC_RISCV_MACHINE_ADDRESS_BASE_DISPLACEMENT;

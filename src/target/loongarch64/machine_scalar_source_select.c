@@ -7,6 +7,7 @@
 
 #include <limits.h>
 #include <stdint.h>
+#include <string.h>
 
 enum { SCALAR_T0 = 12U, SCALAR_T1 = 13U };
 
@@ -54,7 +55,8 @@ static MinicMachineOperand scalar_immediate(int64_t value,
 
 static MinicMachineOperand scalar_address(unsigned int base,
     const char *constraint) {
-    MinicMachineOperand result = {0};
+    MinicMachineOperand result;
+    (void)memset(&result, 0, sizeof(result));
     result.kind = MINIC_MACHINE_OPERAND_ADDRESS;
     result.value.address.target_mode = MINIC_LOONG_ADDRESS_IMM12;
     result.value.address.has_base = true;

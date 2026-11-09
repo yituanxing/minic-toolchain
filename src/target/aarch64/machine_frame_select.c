@@ -29,7 +29,8 @@ static MinicMachineOperand a64_immediate(int64_t value) {
 
 static MinicMachineOperand a64_memory(unsigned int base, size_t offset,
     MinicA64MachineAddressMode mode) {
-    MinicMachineOperand result = {0};
+    MinicMachineOperand result;
+    (void)memset(&result, 0, sizeof(result));
     result.kind = MINIC_MACHINE_OPERAND_ADDRESS;
     result.value.address.target_mode = mode;
     result.value.address.has_base = true;

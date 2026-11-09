@@ -36,7 +36,8 @@ static MinicMachineOperand x86_block(size_t id) {
 }
 
 static MinicMachineOperand x86_symbol(const char *name, uint32_t relocation) {
-    MinicMachineOperand operand = {0};
+    MinicMachineOperand operand;
+    (void)memset(&operand, 0, sizeof(operand));
     operand.kind = MINIC_MACHINE_OPERAND_SYMBOL;
     operand.value.symbol.name = (char *)name;
     operand.value.symbol.relocation = relocation;
@@ -44,7 +45,8 @@ static MinicMachineOperand x86_symbol(const char *name, uint32_t relocation) {
 }
 
 static MinicMachineOperand x86_address(unsigned int base, int64_t offset) {
-    MinicMachineOperand operand = {0};
+    MinicMachineOperand operand;
+    (void)memset(&operand, 0, sizeof(operand));
     operand.kind = MINIC_MACHINE_OPERAND_ADDRESS;
     operand.value.address.has_base = true;
     operand.value.address.base = (MinicMachineRegister){

@@ -5,6 +5,7 @@
 #include "target/loongarch64/asm_contract_internal.h"
 #include "target/loongarch64/machine_asm_form.h"
 #include "target/loongarch64/machine_opcode.h"
+#include <string.h>
 
 enum { PTE_T0 = 12U, PTE_T1 = 13U, PTE_T4 = 16U };
 
@@ -28,7 +29,8 @@ static MinicMachineOperand pte_gp(unsigned int number,
 }
 
 static MinicMachineOperand pte_memory(unsigned int base) {
-    MinicMachineOperand operand = {0};
+    MinicMachineOperand operand;
+    (void)memset(&operand, 0, sizeof(operand));
     operand.kind = MINIC_MACHINE_OPERAND_ADDRESS;
     operand.value.address.has_base = true;
     operand.value.address.base = pte_register(base);

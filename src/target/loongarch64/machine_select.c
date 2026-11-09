@@ -765,7 +765,8 @@ static MinicMachineOperand loong_imm(int64_t value) {
 
 static MinicMachineOperand loong_address(unsigned int base, int64_t offset,
     uint32_t mode) {
-    MinicMachineOperand o = {0};
+    MinicMachineOperand o;
+    (void)memset(&o, 0, sizeof(o));
     o.kind = MINIC_MACHINE_OPERAND_ADDRESS;
     o.value.address.target_mode = mode;
     o.value.address.has_base = true;
@@ -3022,7 +3023,8 @@ static bool loong_select_call(LoongSelector *sel,
     bool native_builtin = false;
     size_t j;
     uint32_t opcode;
-    MinicMachineOperand operands[2] = {{0}};
+    MinicMachineOperand operands[2];
+    (void)memset(operands, 0, sizeof(operands));
     if (sel->ctx->outgoing_calls == NULL ||
         ins < fn->instructions || call_id >= fn->instruction_count ||
         (count != 0U && (begin > fn->call_argument_count ||
@@ -3453,7 +3455,8 @@ static bool loong_source_symbol(LoongSelector *sel,
     MinicElfModuleSymbolFacts facts;
     bool local;
     uint32_t opcode;
-    MinicMachineOperand operands[2] = {{0}};
+    MinicMachineOperand operands[2];
+    (void)memset(operands, 0, sizeof(operands));
     if (ins->kind == MINIC_CORE_INSTRUCTION_GLOBAL_ADDRESS) {
         if (!minic_multi_direct_global_address_symbol(fn, ins, &symbol))
             return false;

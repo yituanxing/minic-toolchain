@@ -7,6 +7,7 @@
 #include "target/loongarch64/machine_opcode.h"
 
 #include <stdint.h>
+#include <string.h>
 
 enum { UACCESS_T0 = 12U, UACCESS_T1 = 13U,
        UACCESS_T2 = 14U, UACCESS_T4 = 16U };
@@ -31,7 +32,8 @@ static MinicMachineOperand uaccess_gp(unsigned int number,
 
 static MinicMachineOperand uaccess_memory(unsigned int number,
     const char *constraint) {
-    MinicMachineOperand operand = {0};
+    MinicMachineOperand operand;
+    (void)memset(&operand, 0, sizeof(operand));
     operand.kind = MINIC_MACHINE_OPERAND_ADDRESS;
     operand.value.address.has_base = true;
     operand.value.address.base = uaccess_register(number);

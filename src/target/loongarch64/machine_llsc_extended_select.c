@@ -48,7 +48,8 @@ static MinicMachineOperand ext_gp(unsigned int number,
 
 static MinicMachineOperand ext_mem(unsigned int base,
     const char *constraint, const char *name) {
-    MinicMachineOperand operand = {0};
+    MinicMachineOperand operand;
+    (void)memset(&operand, 0, sizeof(operand));
     operand.kind = MINIC_MACHINE_OPERAND_ADDRESS;
     operand.value.address.target_mode = MINIC_LOONG_ADDRESS_IMM12;
     operand.value.address.has_base = true;

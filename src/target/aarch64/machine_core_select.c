@@ -127,7 +127,8 @@ static MinicMachineOperand a64_immediate(int64_t value) {
 }
 
 static MinicMachineOperand a64_symbol(const char *name, uint32_t reloc) {
-    MinicMachineOperand op = {0};
+    MinicMachineOperand op;
+    (void)memset(&op, 0, sizeof(op));
     op.kind = MINIC_MACHINE_OPERAND_SYMBOL;
     op.value.symbol.name = (char *)name;
     op.value.symbol.relocation = reloc;
@@ -149,7 +150,8 @@ static MinicMachineOperand a64_block_address(size_t id) {
 }
 
 static MinicMachineOperand a64_address(unsigned int reg) {
-    MinicMachineOperand op = {0};
+    MinicMachineOperand op;
+    (void)memset(&op, 0, sizeof(op));
     op.kind = MINIC_MACHINE_OPERAND_ADDRESS;
     op.value.address.target_mode = MINIC_A64_ADDRESS_UNSIGNED;
     op.value.address.has_base = true;

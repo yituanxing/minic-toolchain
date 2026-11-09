@@ -1,5 +1,5 @@
 target=rv64-current-selfhost
 scope=214-current-compiler-c-owners
 gate=stage0-stage1-stage2-16-shards
-nonce=20261109-02
-reason=record-copy-cfg-source-address-regression
+nonce=20261109-03
+reason=all-five-machine-operand-union-address-symbol-zero-initialization

@@ -87,7 +87,8 @@ static MinicMachineOperand rv_target(size_t block, bool address) {
     return op;
 }
 static MinicMachineOperand rv_addr(unsigned xlen, unsigned base) {
-    MinicMachineOperand op = {0};
+    MinicMachineOperand op;
+    (void)memset(&op, 0, sizeof(op));
     op.kind = MINIC_MACHINE_OPERAND_ADDRESS;
     op.value.address.target_mode =
         MINIC_RISCV_MACHINE_ADDRESS_BASE_DISPLACEMENT;
@@ -612,10 +613,11 @@ static bool rv_core_runtime_binary(RvCoreSelection *sel,
     const MinicCoreType *result, *left, *right;
     const size_t word = sel->xlen / 8U;
     const char *helper = NULL;
-    MinicMachineOperand symbol = {0};
+    MinicMachineOperand symbol;
     MinicRiscvIsa isa = {0};
     size_t chunks, i, operand_index, size;
     bool integer, sign;
+    (void)memset(&symbol, 0, sizeof(symbol));
     if (!minic_riscv_machine_implicit_runtime_call(fn, ins, sel->xlen) ||
         types == NULL || lhs >= fn->value_count ||
         rhs >= fn->value_count || !sel->plan->frame->saves_return_address ||
@@ -699,7 +701,8 @@ static bool rv_core_runtime_unary_float(RvCoreSelection *sel,
     const char *helper = NULL;
     size_t source_size = 0U, result_size = 0U, chunks, i;
     bool integer, sign;
-    MinicMachineOperand symbol = {0};
+    MinicMachineOperand symbol;
+    (void)memset(&symbol, 0, sizeof(symbol));
     if (!minic_core_floating_shape(fn, ins, &shape) ||
         !minic_riscv_target_isa_load(sel->plan->target, &isa) ||
         (sel->xlen == 32U && isa.abi != MINIC_RISCV_ABI_ILP32) ||
@@ -780,10 +783,11 @@ static bool rv_core_runtime_double_compare(RvCoreSelection *sel,
     const MinicCoreFunction *fn = sel->plan->core;
     MinicCoreFloatingShape shape = {0};
     MinicRiscvIsa isa = {0};
-    MinicMachineOperand symbol = {0};
+    MinicMachineOperand symbol;
     const size_t chunks = 8U / (sel->xlen / 8U);
     const char *helper;
     size_t i, index;
+    (void)memset(&symbol, 0, sizeof(symbol));
     if (!minic_riscv_machine_implicit_runtime_call(fn, ins, sel->xlen) ||
         !minic_core_floating_shape(fn, ins, &shape) ||
         !minic_riscv_target_isa_load(sel->plan->target, &isa) ||
@@ -1908,7 +1912,8 @@ static bool rv_checked_store_result(RvCoreSelection *sel,
 }
 
 static bool rv_checked_call(RvCoreSelection *sel, const char *helper) {
-    MinicMachineOperand op = {0};
+    MinicMachineOperand op;
+    (void)memset(&op, 0, sizeof(op));
     if (helper == NULL || helper[0] == '\0') return false;
     op.kind = MINIC_MACHINE_OPERAND_SYMBOL;
     op.value.symbol.name = (char *)helper;
@@ -2745,7 +2750,8 @@ static bool rv_core_symbol(RvCoreSelection *sel,
     const char *symbol = NULL;
     MinicElfModuleSymbolKind kind;
     uint32_t reloc;
-    MinicMachineOperand ops[2] = {{0}};
+    MinicMachineOperand ops[2];
+    (void)memset(ops, 0, sizeof(ops));
     if (ins->kind == MINIC_CORE_INSTRUCTION_GLOBAL_ADDRESS) {
         if (ins->value.global_id >= fn->global_count) return false;
         symbol = fn->globals[ins->value.global_id].name;
@@ -3096,7 +3102,8 @@ static bool rv_core_call(RvCoreSelection *sel,
     const MinicCoreFunction *fn = sel->plan->core;
     const MinicCoreCallee *callee;
     const char *symbol;
-    MinicMachineOperand op = {0};
+    MinicMachineOperand op;
+    (void)memset(&op, 0, sizeof(op));
     if (ins->value.call.callee_id >= fn->callee_count) return false;
     callee = &fn->callees[ins->value.call.callee_id];
     symbol = ins->value.call.extended_float_operation ==

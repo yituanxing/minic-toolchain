@@ -34,7 +34,8 @@ static MinicMachineOperand ll_gp(unsigned int n, unsigned int access,
 
 static MinicMachineOperand ll_memory(unsigned int base,
     const char *constraint, const char *name) {
-    MinicMachineOperand result = {0};
+    MinicMachineOperand result;
+    (void)memset(&result, 0, sizeof(result));
     result.kind = MINIC_MACHINE_OPERAND_ADDRESS;
     result.value.address.target_mode = MINIC_LOONG_ADDRESS_IMM12;
     result.value.address.has_base = true;
