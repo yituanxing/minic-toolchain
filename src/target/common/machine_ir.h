@@ -197,6 +197,9 @@ typedef struct MinicMachineInstruction {
     /* Implicit physical defs/uses/clobbers; never inferred from a C type. */
     MinicMachineRegisterEffect *implicit;
     size_t implicit_count;
+    /* Stored arrays belong to the containing MachineFunction's slab.
+     * Strings inside operands remain owned by this individual instruction. */
+    bool arrays_in_function_storage;
     /* The original Core position is diagnostic-only; no Core pointers live
      * inside a machine function. */
     bool has_core_origin;
@@ -254,6 +257,8 @@ typedef struct MinicMachineBlock {
     size_t instruction_capacity;
 } MinicMachineBlock;
 
+typedef struct MinicMachineArenaChunk MinicMachineArenaChunk;
+
 typedef struct MinicMachineFunction {
     const MinicTargetInfo *target; /* immutable target registry descriptor */
     MinicTargetArchitecture architecture;
@@ -269,6 +274,7 @@ typedef struct MinicMachineFunction {
     MinicMachineBlock *blocks;
     size_t block_count;
     size_t block_capacity;
+    MinicMachineArenaChunk *array_storage; /* private function-owned slabs */
 } MinicMachineFunction;
 
 bool minic_machine_function_initialize(MinicMachineFunction *,
