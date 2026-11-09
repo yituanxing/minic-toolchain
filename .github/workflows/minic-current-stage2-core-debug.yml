@@ -1,0 +1,195 @@
+name: MiniC Stage1 Core IR Failure Diagnostics (seed reuse)
+
+# Diagnostic ONLY. Reuse the exact failing 214-C Stage1 seed; do not rebuild
+# Stage0, regenerate GCC .i, or pretend a trace is a Stage2/Stage4 PASS.
+on:
+  push:
+    branches:
+      - refactor/minic-target-language-boundary
+    paths:
+      - .github/workflows/minic-current-stage2-core-debug.yml
+      - tools/ci/minic-current-stage2-core-debug-trigger.txt
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  core-ir-repro:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[minic-stage2-core-debug]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 22
+    steps:
+      - name: Checkout exact compiler source that produced Stage1
+        uses: actions/checkout@v4
+        with:
+          ref: e22ae6787a269182955ca73b7768cf3ebc0fedd3
+          persist-credentials: false
+
+      - name: Verify historical artifact identity before downloading
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -Eeuo pipefail
+          artifact=$(gh api repos/"$GITHUB_REPOSITORY"/actions/artifacts/13666097011)
+          printf '%s' "$artifact" | python3 -c '
+          import json,sys
+          a=json.load(sys.stdin)
+          if (a.get("id") != 13666097011 or
+              a.get("name") != "minic-current-stage1-seed" or
+              a.get("expired") is not False or
+              a.get("workflow_run",{}).get("id") != 42601049201):
+              raise SystemExit("STAGE1_DEBUG_ARTIFACT_PROVENANCE=FAIL")
+          print("STAGE1_DEBUG_ARTIFACT_PROVENANCE=PASS original_run=42601049201 artifact=13666097011")
+          '
+
+      - name: Download exact same-run Stage1 seed and original GCC .i
+        uses: actions/download-artifact@v4
+        with:
+          name: minic-current-stage1-seed
+          run-id: 42601049201
+          repository: ${{ github.repository }}
+          github-token: ${{ github.token }}
+          path: build/bootstrap-current-b1
+
+      - name: Install only QEMU guest runner
+        shell: bash
+        timeout-minutes: 12
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends qemu-user
+          command -v qemu-riscv64
+
+      - name: Reproduce three actual compiler failures with full Core trace
+        shell: bash
+        timeout-minutes: 10
+        run: |
+          set -Eeuo pipefail
+          python3 -u - <<'PY'
+          import hashlib
+          import os
+          from pathlib import Path
+          import subprocess
+
+          bound_head = 'e22ae6787a269182955ca73b7768cf3ebc0fedd3'
+          seed = Path('build/bootstrap-current-b1/seed')
+          out = Path('build/bootstrap-current-b1/core-debug')
+          out.mkdir(parents=True, exist_ok=True)
+          def sha(path):
+              h = hashlib.sha256()
+              with path.open('rb') as f:
+                  for chunk in iter(lambda: f.read(1048576), b''):
+                      h.update(chunk)
+              return h.hexdigest()
+          current_head = subprocess.run(
+              ['git','rev-parse','HEAD'],capture_output=True,text=True,
+              timeout=15,check=True).stdout.strip()
+          if (current_head != bound_head or
+                  (seed / 'source-commit.txt').read_text().strip() != bound_head):
+              raise RuntimeError('STAGE1_DEBUG=FAIL original source commit mismatch')
+          sources = (seed / 'sources.normalized').read_text().splitlines()
+          if len(sources) != 214:
+              raise RuntimeError('STAGE1_DEBUG=FAIL unexpected original compiler source count')
+          raw = [s + '\t' + sha(Path(s)) for s in sources]
+          if raw != (seed / 'source-sha256.tsv').read_text().splitlines():
+              raise RuntimeError('STAGE1_DEBUG=FAIL original C file SHA mismatch')
+          def rows(path):
+              result = []
+              for line in path.read_text().splitlines():
+                  fields = line.split('\t')
+                  if len(fields) != 3:
+                      raise RuntimeError('invalid original seed manifest row')
+                  result.append(tuple(fields))
+              return result
+          manifest = rows(seed / 'stage0-manifest.tsv')
+          inputs = rows(seed / 'input-sha256.tsv')
+          if (len(manifest) != len(sources) or len(inputs) != len(sources) or
+                  [row[1] for row in manifest] != sources or
+                  [row[1] for row in inputs] != sources):
+              raise RuntimeError('STAGE1_DEBUG=FAIL original full source ownership mismatch')
+          stage1 = seed / 'minic-stage1-rv64'
+          if sha(stage1) != (seed / 'stage1-binary.sha256').read_text().split()[0]:
+              raise RuntimeError('STAGE1_DEBUG=FAIL Stage1 ELF SHA differs')
+          stage1.chmod(0o755)
+          env = dict(os.environ,
+              MINIC_CORE_VERIFY_TRACE='1',
+              MINIC_CORE_EXPR_FAILURE_TRACE='1',
+              MINIC_CORE_FRAME_TRACE='1',
+              MINIC_CORE_FAILURE_CENSUS='1',
+              MINIC_BOOTSTRAP_TRACE='1',
+              MINIC_LINUX_FULL_CROSSBLOCK='1',
+              MINIC_OPT_PURE_DISCARDED_ADDRESS_EQ='1')
+          def run_capture(label, argv, timeout=180):
+              log = out / (label + '.log')
+              with log.open('wb') as f:
+                  try:
+                      p = subprocess.run([str(a) for a in argv], env=env,
+                                         stdout=f, stderr=subprocess.STDOUT,
+                                         timeout=timeout, check=False)
+                      rc = p.returncode
+                  except subprocess.TimeoutExpired:
+                      rc = 124
+              tail = log.read_text(errors='replace').splitlines()[-20:]
+              print(f'STAGE1_CORE_DEBUG_RUN label={label} exit={rc} log_sha256={sha(log)}', flush=True)
+              for line in tail:
+                  print('TRACE_TAIL ' + line[:300], flush=True)
+              return rc
+
+          # Both controls are recorded; return42 requires exact Stage1 output.
+          help_rc = run_capture('control-help', ['qemu-riscv64',stage1,'--help'],60)
+          ret_asm = out / 'return_42.control.s'
+          control_rc = run_capture(
+              'control-return42',
+              ['qemu-riscv64',stage1,'-S',seed / 'return_42.i','-o',ret_asm],120)
+          if (control_rc != 0 or not ret_asm.is_file() or
+                  sha(ret_asm) != sha(seed / 'return_42.stage1.s')):
+              raise RuntimeError('STAGE1_DEBUG=FAIL control compiler drift')
+
+          targets = {
+              0: 'src/compiler/compiler.c',
+              1: 'src/compiler/core_function_set.c',
+              2: 'src/compiler/module_ir_build.c',
+          }
+          report = [
+              'STAGE1_CORE_DEBUG=DIAGNOSTIC_ONLY',
+              'source_commit=' + bound_head,
+              'source_run=42601049201',
+              'seed_artifact=13666097011',
+              'stage1_elf_sha256=' + sha(stage1),
+              'control_help_rc=' + str(help_rc),
+              'control_return42_asm_sha256=' + sha(ret_asm),
+              'core_trace_env=MINIC_CORE_VERIFY_TRACE,MINIC_CORE_EXPR_FAILURE_TRACE,MINIC_CORE_FRAME_TRACE,MINIC_CORE_FAILURE_CENSUS,MINIC_BOOTSTRAP_TRACE',
+          ]
+          for shard, source in targets.items():
+              i = sources.index(source)
+              key = source.replace('/', '__').replace('.', '_')
+              if i % 16 != shard:
+                  raise RuntimeError('STAGE1_DEBUG=FAIL wrong original shard assignment')
+              mkey, msrc, before = manifest[i]
+              ikey, isrc, input_sha = inputs[i]
+              pre = seed / 'i' / (key + '.i')
+              old = seed / 's' / (key + '.s')
+              if ((mkey, msrc) != (key, source) or
+                      (ikey, isrc) != (key, source) or
+                      sha(pre) != input_sha or sha(old) != before):
+                  raise RuntimeError('STAGE1_DEBUG=FAIL original .i/.s SHA mismatch')
+              asm = out / (key + '.stage1.s')
+              rc = run_capture(f'shard-{shard}-{key}',
+                               ['qemu-riscv64',stage1,'-S',pre,'-o',asm],180)
+              report.append(f'shard={shard}\tsource={source}\texit={rc}\tinput_sha256={input_sha}\tstage0_asm_sha256={before}')
+          (out / 'provenance-and-rc.tsv').write_text('\n'.join(report) + '\n')
+          print('STAGE1_CORE_DEBUG=COMPLETE samples=3 stage2_full_replay=NOT_RUN', flush=True)
+          PY
+
+      - name: Preserve exact source provenance and all Core traces
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: minic-stage1-core-failure-debug-${{ github.run_id }}
+          path: build/bootstrap-current-b1/core-debug/
+          if-no-files-found: warn
+          retention-days: 30
+          compression-level: 6
