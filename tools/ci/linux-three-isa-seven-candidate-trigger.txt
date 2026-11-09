@@ -1,4 +1,4 @@
-target=x86_64
+target=aarch64
 input_run=42366441631
-nonce=20261109-30
+nonce=20261109-31
 mode=candidate-only
