@@ -12,3 +12,18 @@
 ## Claim boundary
 
 This proves current-source MiniC C compilation through original Kbuild preprocessing, GNU assembly/link and true QEMU RV32I kernel boot/syscall P1, with a reproducible same-Image identity. It does **not** independently prove MiniPP/MiniAS/MiniLD as a fully native chain, all RV32 P2/P3 scenarios, current Stage3/Stage4 fixed-point self-hosting, or the x86-64/AArch64/LoongArch64 full Linux Image/QEMU gates. Previous RV64 2064/2064 and same-Image 12/12 evidence remains separate in `docs/ci/minic-compiler-throughput-2026-11-09.md`.
+
+## Re-certification after RISC-V sealed-preflight emission change
+
+An independent fresh current-head run, with all 1741 original RV32I Linux 6.6.143 C owners and no GNU C fallback, completed on source commit `334e3e59f131a60949c54df26d439d204d99bbce`, which includes the new RISC-V verified-prepared-emit path.
+
+- Source run: https://github.com/yituanxing/minic-toolchain/actions/runs/42591386538
+- Seven independent real MiniC C / GNU AS shards: 7/7 success.
+- Original Kbuild GNU link / genuine RV32I ELF32 Linux guest P0/P1: PASS.
+- Same immutable Image 12/12 independent boots, each with 12/12 syscall oracle PASS.
+- Final receiver log: `RV32I_CURRENT_HEAD_P1=PASS boots=12/12 syscalls=12/12 MiniC_C=1741/1741 original_Kbuild=true ELF32=true immutable_Image=4c8b0d39e5b950000bd858dc303008327636b2d95384b040f3f46f9baca995c9`.
+- Image SHA-256 `4c8b0d39e5b950000bd858dc303008327636b2d95384b040f3f46f9baca995c9`.
+- Source Image artifact ID `13662125724`, SHA-256 `2962cd8d814f55d27a631bf741a4e447e1b2e12a622368a3581a816d96a78964`, expires 2026-11-16 UTC.
+- Original GNU/Kbuild metadata artifact ID `13660763995`, SHA-256 `32aea7ff1cfc0eae3785f95277400f7877ae44e30c894e00934e4408b2eadd9a`.
+
+This replaces the earlier `d2307913` proof as the newest exact compiler-source RV32I P1 acceptance; it does not upgrade native tools or P2/P3 scope.
