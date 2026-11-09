@@ -16,4 +16,5 @@
 # 2026-11-08 combined CoreType hash-cons + inline-owner-snapshot exact-HEAD strict 2064-owner GNU Linux 6.6.143 and twelve independent P1 same-Image boots; fail on any wrong SHA, object, exit or P1 oracle.
 # 2026-11-08 indexed live-ASM token scan recertification: commit 900267b3 new exact-head original GNU Linux 2064 C owners, GNU AS/LD and QEMU P0/P1, then twelve independent same-Image strict P1 boots. Preserve unsafe-name fallback and all existing original software checks.
 # 2026-11-09 compiler own-throughput recovery, same-head strict full scope after run 42563417488 validated 500/500; require current exact MiniC 2064/2064 GNU AS/LD and all twelve current same-Image P1 oracles, preserving failures as failures.
+# 2026-11-09 paired with RV64 current-head sealed-preflight strict 2064-owner and identical-Image twelve-boot campaign; actual QEMU P1 oracle required.
 mode=rv64-full
