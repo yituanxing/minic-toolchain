@@ -1,4 +1,4 @@
 # Replace both fields with a VERIFIED successful Stage2 selfhost run.
 # Only then use a commit message containing [minic-current-stage4].
-source_commit=6d549b0be75fd739a4cfcca27e81718b874e4ae8
-stage2_run_id=42603693146
+source_commit=9660812407f3d8d9ef885e3f6e88781a5437d1f4
+stage2_run_id=42605852821
