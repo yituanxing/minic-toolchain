@@ -48,8 +48,37 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # One-shot PR recertification without broad [minic-full] fan-out to RV32.
+  # The exact HEAD commit must explicitly request the expensive x86 gate.
+  x86-exact-head-eligibility:
+    runs-on: ubuntu-24.04
+    outputs:
+      run_full: ${{ steps.scope.outputs.run_full }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Authenticate dedicated x86 PR-head marker
+        id: scope
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -Eeuo pipefail
+          printf 'MINIC_X86_EXACT_HEAD=%s\n' "$(git rev-parse HEAD)"
+          if [[ "$EVENT_NAME" == pull_request ]] &&
+             git log -1 --pretty=%B | grep -Fq '[minic-x86-full]'; then
+            echo 'run_full=true' >> "$GITHUB_OUTPUT"
+            echo 'MINIC_X86_FULL=ELIGIBLE verification=NOT_YET_RUN'
+          else
+            echo 'run_full=false' >> "$GITHUB_OUTPUT"
+            echo 'MINIC_X86_FULL=SKIP no_dedicated_exact_head_marker'
+          fi
+
   x86-real-software:
-    if: (github.event_name == 'workflow_dispatch' && (inputs.mode == 'all' || inputs.mode == 'software')) || (github.event_name == 'pull_request' && contains(github.event.pull_request.title, '[minic-full]'))
+    needs: x86-exact-head-eligibility
+    if: (github.event_name == 'workflow_dispatch' && (inputs.mode == 'all' || inputs.mode == 'software')) || (github.event_name == 'pull_request' && (contains(github.event.pull_request.title, '[minic-full]') || needs.x86-exact-head-eligibility.outputs.run_full == 'true'))
     name: x86-64 pinned AES/cJSON/zlib/Lua/SQLite/TinyCC
     runs-on: ubuntu-24.04
     timeout-minutes: 75
@@ -121,7 +150,8 @@ jobs:
           echo 'MINIC_X86_SOFTWARE_ALL=PASS projects=6 original_sources=1 GNU_differential=1'
 
   x86-busybox-frontier:
-    if: github.event_name == 'push' || inputs.mode == 'all' || inputs.mode == 'busybox' || (github.event_name == 'pull_request' && contains(github.event.pull_request.title, '[minic-full]'))
+    needs: x86-exact-head-eligibility
+    if: github.event_name == 'push' || inputs.mode == 'all' || inputs.mode == 'busybox' || (github.event_name == 'pull_request' && (contains(github.event.pull_request.title, '[minic-full]') || needs.x86-exact-head-eligibility.outputs.run_full == 'true'))
     name: x86-64 original BusyBox 593/593 MiniC C owners (zero GNU C fallback)
     runs-on: ubuntu-24.04
     timeout-minutes: 75
