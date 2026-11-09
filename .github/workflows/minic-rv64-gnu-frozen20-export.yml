@@ -245,3 +245,4 @@ jobs:
           path: ${{ env.EXPORT }}/artifact/
           if-no-files-found: error
           retention-days: 7
+# Export request 2026-11-09: freeze original Linux hot/mid/light owners for compiler CPU regression ABBA; workflow semantics unchanged.
