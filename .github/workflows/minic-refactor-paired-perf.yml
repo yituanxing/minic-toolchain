@@ -337,74 +337,33 @@ jobs:
           print("MINIC_LAYOUT_BATCH_AB=PASS sample=real-linux-fsync speedup="+str(d["candidate_speedup"]))
           PY
           cat "$RUNNER_TEMP/minic-refactor-perf/result/layout-batch-fsync.log" >> "$GITHUB_STEP_SUMMARY"
-      - name: Pair the authentic first500 Linux Kbuild inputs before promotion
+      # The refactor baseline has pre-existing Linux rejects. Compare all
+      # 500 inputs, classify both-fail separately, and never report first500
+      # as complete Linux acceptance when even one baseline TU is rejected.
+      - name: Audit Linux first500 eligibility, exact assembly and compiler speed
         shell: bash
         timeout-minutes: 24
         run: |
           set -Eeuo pipefail
           export MINIC_LINUX_FULL_CROSSBLOCK=1
           export MINIC_OPT_PURE_DISCARDED_ADDRESS_EQ=1
-          python3 - "$GITHUB_WORKSPACE/build/linux-perf-corpus" \
-            "$RUNNER_TEMP/minic-refactor-perf/layout-before/build/perf-ab/bin/minic-cc" \
-            "$GITHUB_WORKSPACE/build/perf-ab/bin/minic-cc" \
-            "$RUNNER_TEMP/minic-refactor-perf/result/layout-batch-first500" <<'PY'
-          import subprocess,sys,json
-          from pathlib import Path
-          corpus, before, after, out = [Path(p).resolve() for p in sys.argv[1:]]
-          rows = (corpus/'selected-tus.txt').read_text().splitlines()
-          assert len(rows) == 500
-          assert sum(1 for s in (corpus/'inputs.sha256').read_text().splitlines() if s) == 500
-          subprocess.run(['sha256sum', '--status', '--check', str(corpus/'inputs.sha256')],check=True)
-          out.mkdir(parents=True,exist_ok=True)
-          work = out/'tmp'
-          work.mkdir(exist_ok=True)
-          owners=[]
-          names=set()
-          tool='tools/ci/linux-perf-2064-paired-compile-v1.py'
-          log=out/'paired.tsv'
-          for number,row in enumerate(rows):
-              fields=row.split('\t',3)
-              if len(fields)!=4: raise SystemExit('bad frozen owner manifest row')
-              index,owner,rel,unit=fields
-              if owner in names or not index.isdigit(): raise SystemExit('bad duplicate owner')
-              names.add(owner); owners.append(owner)
-              source=(corpus/'kbuild'/rel).resolve()
-              root=(corpus/'kbuild').resolve()
-              if not source.is_relative_to(root) or not source.is_file():
-                  raise SystemExit('invalid frozen Kbuild source '+str(source))
-              command=['python3',tool,'pair',
-                       '--baseline',str(before),'--candidate',str(after),
-                       '--input',str(source),
-                       '--assembly',str(work/(index+'-after.s')),
-                       '--baseline-assembly',str(work/(index+'-before.s')),
-                       '--stdout',str(work/'candidate.stdout'),
-                       '--stderr',str(work/'candidate.stderr'),
-                       '--log',str(log),'--owner',owner]
-              result=subprocess.run(command,text=True,capture_output=True)
-              if result.returncode:
-                  print('MINIC_FIRST500_FAIL index='+index+' owner='+owner,flush=True)
-                  print((result.stdout+result.stderr)[-3000:],flush=True)
-                  raise SystemExit(result.returncode)
-              if (number+1)%25==0:
-                  print('MINIC_FIRST500_PROGRESS owners='+str(number+1)+'/500',flush=True)
-          (out/'owners.txt').write_text('\n'.join(owners)+'\n')
-          subprocess.run(['python3',tool,'summarize','--log',str(log),
-                          '--objects-file',str(out/'owners.txt'),
-                          '--out',str(out/'summary.json')],check=True)
-          summary=json.loads((out/'summary.json').read_text())
-          assert summary['objects']==500 and summary['raw_kbuild_compiler_invocations']==500
-          status='PROMOTABLE' if summary['speedup']>=1.04 else 'NOT_PROMOTED_STOP'
-          print('MINIC_LAYOUT_BATCH_FIRST500='+status+
-                ' speedup='+str(summary['speedup'])+
-                ' regressions='+str(summary['regressions']),flush=True)
-          PY
+          python3 tools/ci/linux-perf-first500-eligible-paired-v1.py \
+            --corpus "$GITHUB_WORKSPACE/build/linux-perf-corpus" \
+            --baseline "$RUNNER_TEMP/minic-refactor-perf/layout-before/build/perf-ab/bin/minic-cc" \
+            --candidate "$GITHUB_WORKSPACE/build/perf-ab/bin/minic-cc" \
+            --output "$RUNNER_TEMP/minic-refactor-perf/result/layout-batch-first500" \
+            | tee "$RUNNER_TEMP/minic-refactor-perf/result/layout-batch-first500.log"
           python3 - "$RUNNER_TEMP/minic-refactor-perf/result/layout-batch-first500/summary.json" <<'PY'
-          import json,sys
+          import json,sys,os
           d=json.load(open(sys.argv[1]))
-          with open(__import__('os').environ['GITHUB_STEP_SUMMARY'],'a') as out:
-              out.write('\n\nReal GNU Linux 6.6.143 first500 A/B: '+str(d['objects'])+
-                  ' byte-identical owners, paired speedup '+str(d['speedup'])+
-                  'x, regressed owners '+str(d['regressions'])+'\n')
+          counts=d['status_counts']
+          with open(os.environ['GITHUB_STEP_SUMMARY'],'a') as out:
+              out.write('\n\nReal GNU Linux 6.6.143 first500 eligibility audit: '+
+                  str(counts['both_pass'])+' both-pass byte-identical owners, '+
+                  str(counts['both_fail'])+' inherited rejects, '+
+                  str(counts['candidate_only_fail'])+' candidate-only fails, '+
+                  str(counts['assembly_mismatch'])+' SHA mismatches. '+
+                  'Speedup ONLY on eligible subset: '+str(d['eligible_wall_speedup'])+'x.\n')
           PY
       - uses: actions/upload-artifact@v4
         if: always()
@@ -422,7 +381,8 @@ jobs:
             ${{ runner.temp }}/minic-refactor-perf/result/layout-batch-fsync/paired-result.json
             ${{ runner.temp }}/minic-refactor-perf/result/layout-batch-fsync.log
             ${{ runner.temp }}/minic-refactor-perf/result/layout-batch-first500/summary.json
-            ${{ runner.temp }}/minic-refactor-perf/result/layout-batch-first500/paired.tsv
+            ${{ runner.temp }}/minic-refactor-perf/result/layout-batch-first500/details.json
+            ${{ runner.temp }}/minic-refactor-perf/result/layout-batch-first500.log
             ${{ runner.temp }}/minic-refactor-perf/result/phase-*/phases.json
             ${{ runner.temp }}/minic-refactor-perf/result/phase-*.log
             ${{ runner.temp }}/minic-refactor-perf/result/hotspot-*/summary.json

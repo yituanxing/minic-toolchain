@@ -9,3 +9,4 @@
 2026-11-09 measured-post-CoreType-hashcons-inline-owner-snapshot-indexed-asm candidate=bca199925ede frozen AES/cJSON five-ISA ABBA; compiler-throughput-only
 layout-import-batch-paired-linux-fsync-2026-11-09
 layout-import-batch-first500-paired-2026-11-09
+first500-classify-preexisting-indirect-call-rejections-2026-11-09
