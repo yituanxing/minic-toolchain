@@ -75,7 +75,7 @@ def main():
     root = (corpus / "kbuild").resolve()
     names = set()
     details = []
-    totals = {"both_pass": 0, "both_fail": 0,
+    totals = {"both_pass": 0, "both_fail": 0, "both_no_assembly": 0,
               "candidate_only_fail": 0, "candidate_only_pass": 0,
               "assembly_mismatch": 0}
     before_wall = after_wall = before_cpu = after_cpu = 0.0
@@ -110,7 +110,12 @@ def main():
             else:
                 classification = "assembly_mismatch"
         elif not a["accepted"] and not b["accepted"]:
-            classification = "both_fail"
+            # A source may legitimately produce no materialized .s even when
+            # both compiler processes exit 0. Track this separately from
+            # actual compiler rejection; neither is a comparable timing pair.
+            classification = ("both_no_assembly"
+                              if a["returncode"] == 0 and b["returncode"] == 0
+                              else "both_fail")
         elif a["accepted"]:
             classification = "candidate_only_fail"
         else:
@@ -145,8 +150,16 @@ def main():
         ],
         "inherited_failure_examples": [
             {"owner": d["owner"],
+             "baseline_rc": d["baseline"]["returncode"],
+             "candidate_rc": d["candidate"]["returncode"],
              "baseline_stderr": d["baseline"]["stderr_tail"]}
             for d in details if d["classification"] == "both_fail"
+        ][:12],
+        "no_assembly_examples": [
+            {"owner": d["owner"],
+             "baseline_rc": d["baseline"]["returncode"],
+             "candidate_rc": d["candidate"]["returncode"]}
+            for d in details if d["classification"] == "both_no_assembly"
         ][:12],
     }
     (output / "summary.json").write_text(json.dumps(result, indent=2) + "\n")
