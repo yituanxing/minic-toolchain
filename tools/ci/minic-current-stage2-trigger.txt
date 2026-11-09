@@ -1,5 +1,5 @@
 target=rv64-current-selfhost
 scope=214-current-compiler-c-owners
 gate=stage0-stage1-stage2-16-shards
-nonce=20261109-05
-reason=source-bound-stage4-native-soft-float-abi-and-preflight-audit
+nonce=20261109-06
+reason=stage4-native-soft-abi-profile-removes-stale-lp64d-macro-overlay

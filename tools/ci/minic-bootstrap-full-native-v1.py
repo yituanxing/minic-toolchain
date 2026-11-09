@@ -31,7 +31,7 @@ INCLUDES = ("include", "src", "elf/include", "archiver/include",
             "preprocessor/target", "linker/include", "linker/src")
 NATIVE = ("minic-cc", "minic-cpp", "minic-as", "minic-ar", "minic-ld",
           "minic-nm", "minic-strip", "minic-objcopy", "minic")
-RV64_FLAGS = ("-std=gnu11", "-fshort-wchar", "-funsigned-char", "-fno-PIE",
+RV64_FLAGS = ("-std=gnu11", "-fno-PIE",
               "-mabi=lp64", "-march=rv64imac_zicsr_zifencei_zihintpause",
               "-mcmodel=medany")
 
@@ -430,26 +430,15 @@ def rounds(binaries, sources, all_sources, hdr, libraries, out, workers, probe=F
                 work / "logs/target-predefines.log", env=env)
         if not macros.is_file() or macros.stat().st_size < 1000:
             raise RuntimeError(name + " native target predefines missing")
-        # The pinned kernel profile is soft-float. These sources use the
-        # lp64d cross-glibc sysroot. Overlay the ABI before any libc include.
-        overlay = work / "target-lp64d-overlay.h"
+        # The pinned native profile is soft-float lp64 with the matching musl
+        # sysroot. Preserve the target's soft ABI predefines; do not re-label
+        # a soft-call object as lp64d just to satisfy old glibc headers.
+        overlay = work / "target-softfloat-musl-overlay.h"
         # The forced include is an absolute file path. MiniPP's nested quoted
         # include lookup is directory-relative, so put the pinned native macro
         # definitions DIRECTLY in this overlay rather than #include "/abs".
         overlay.write_text(macros.read_text() +
-                           "\n#define __STRICT_ANSI__ 1\n"
-                           "#undef __CHAR_UNSIGNED__\n"
-                           "#undef __WCHAR_TYPE__\n"
-                           "#define __WCHAR_TYPE__ int\n"
-                           "#undef __SIZEOF_WCHAR_T__\n"
-                           "#define __SIZEOF_WCHAR_T__ 4\n"
-                           "#undef __WCHAR_MAX__\n"
-                           "#define __WCHAR_MAX__ 2147483647\n"
-                           "#undef __WCHAR_MIN__\n"
-                           "#define __WCHAR_MIN__ (-2147483647-1)\n"
-                           "#undef __riscv_float_abi_soft\n"
-                           "#define __riscv_float_abi_double 1\n"
-                           "#define __riscv_flen 64\n")
+                           "\n#define __STRICT_ANSI__ 1\n")
         completed = []
         failures = []
         prior_rows = {}
