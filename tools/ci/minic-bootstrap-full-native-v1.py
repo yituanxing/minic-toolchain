@@ -31,7 +31,7 @@ INCLUDES = ("include", "src", "elf/include", "archiver/include",
             "preprocessor/target", "linker/include", "linker/src")
 NATIVE = ("minic-cc", "minic-cpp", "minic-as", "minic-ar", "minic-ld",
           "minic-nm", "minic-strip", "minic-objcopy", "minic")
-RV64_FLAGS = ("-std=gnu11", "-fno-PIE",
+RV64_FLAGS = ("-std=gnu11", "-fshort-wchar", "-funsigned-char", "-fno-PIE",
               "-mabi=lp64", "-march=rv64imac_zicsr_zifencei_zihintpause",
               "-mcmodel=medany")
 
@@ -430,15 +430,34 @@ def rounds(binaries, sources, all_sources, hdr, libraries, out, workers, probe=F
                 work / "logs/target-predefines.log", env=env)
         if not macros.is_file() or macros.stat().st_size < 1000:
             raise RuntimeError(name + " native target predefines missing")
-        # The pinned native profile is soft-float lp64 with the matching musl
-        # sysroot. Preserve the target's soft ABI predefines; do not re-label
-        # a soft-call object as lp64d just to satisfy old glibc headers.
+        macro_body = macros.read_text()
+        if ("#define __riscv_float_abi_soft 1" not in macro_body or
+                "#define __riscv_float_abi_double" in macro_body or
+                "#define __riscv_flen" in macro_body):
+            raise RuntimeError(name + " native target macro ABI is not soft-float")
+        # MiniPP's independently certified target-macro profile requires its
+        # exact seven-option GNU11 tuple, including a short-wchar/unsigned-
+        # char reference context. The actual native compiler is invoked
+        # without these two reference-only flags. Correct their type macros
+        # to the 4-byte wchar/signed-char musl execution profile without
+        # ever impersonating lp64d or a hard-float register ABI.
         overlay = work / "target-softfloat-musl-overlay.h"
         # The forced include is an absolute file path. MiniPP's nested quoted
         # include lookup is directory-relative, so put the pinned native macro
         # definitions DIRECTLY in this overlay rather than #include "/abs".
-        overlay.write_text(macros.read_text() +
-                           "\n#define __STRICT_ANSI__ 1\n")
+        overlay.write_text(macro_body +
+                           "\n#define __STRICT_ANSI__ 1\n"
+                           "#undef __CHAR_UNSIGNED__\n"
+                           "#undef __WCHAR_TYPE__\n"
+                           "#define __WCHAR_TYPE__ int\n"
+                           "#undef __SIZEOF_WCHAR_T__\n"
+                           "#define __SIZEOF_WCHAR_T__ 4\n"
+                           "#undef __WCHAR_WIDTH__\n"
+                           "#define __WCHAR_WIDTH__ 32\n"
+                           "#undef __WCHAR_MAX__\n"
+                           "#define __WCHAR_MAX__ 2147483647\n"
+                           "#undef __WCHAR_MIN__\n"
+                           "#define __WCHAR_MIN__ (-2147483647-1)\n")
         completed = []
         failures = []
         prior_rows = {}
