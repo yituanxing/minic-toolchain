@@ -25,3 +25,19 @@ The 593 C objects selected by the full original BusyBox Kbuild were produced by 
 ## Scope and remaining milestones
 
 This proves original C compiler + GNU AS/LD real software success, not a fully native MiniPP/MiniAS/MiniLD toolchain and not an original Linux x86-64 Image/QEMU P0/P1 certification. A separate one-target, seven-shard original Linux 6.6.143 current-source candidate replay was requested in commit `ba269b019ac9bc98382d8a598837117d2b5d3f2a`; its outcome must be read independently from https://github.com/yituanxing/minic-toolchain/actions/runs/42586675669.
+
+## Original Linux 6.6.143 current-source GNU/QEMU P0/P1 proof
+
+A subsequent exact-head one-target seven-shard replay `ba269b019ac9bc98382d8a598837117d2b5d3f2a` **PASSED x86-64 original Linux** with the same compiler code and only the one-shot candidate marker changed.
+
+- Official run: https://github.com/yituanxing/minic-toolchain/actions/runs/42586675669
+- Source-export GNU input: run `42366441631`, all 21 original `.i/.cmd` shards independently SHA verified.
+- Current MiniC compiler binary job `129060111604`: success.
+- Seven original Linux candidate shards, each `394/394` MiniC C / GNU AS, zero GNU C fallback; total `2758/2758` fresh MiniC C owners.
+- Real GNU Kbuild/LD/QEMU receiver job `129061414584`: success; its log contains `THREE_ISA_SEVEN_RECEIVER=MINIC_ALL_C_GNU_LINK_QEMU_RUNTIME_PASS target=x86_64 owners=2758`.
+- Original GNU P0/P1 reference: `THREE_ISA_GNU_QEMU=PASS target=x86_64 lanes=2/2`.
+- MiniC-linked real QEMU: `MINIC_LINUX_RUNTIME_DIFF=PASS target=x86_64 profile=p0 GNU_AND_MINIC_ACTUALLY_BOOTED=1` and the same for `profile=p1`.
+- Receiver artifact `13660481610`: `minic-linux-seven-receiver-x86_64`, SHA-256 `199b3c23a0e317c2abe933fefac5e7b4dbbf0b4ce1585e1f5d5ba815dfa0529e`, expiration 2026-11-23 UTC.
+- Seven candidate object artifacts and exact compiler artifact are associated with the same run; verify them before reuse (retention through 2026-11-16 UTC).
+
+**Important summary caveat:** workflow conclusion `failure` comes exclusively from deliberate `strict-three-isa-result` gate `129065164146`: `MINIC_LINUX_SEVEN_RUNTIME=PARTIAL_CURRENT_MINIC_NOT_THREE_ISA target=x86_64` and `MINIC_LINUX_ONE_TARGET=PASS_7_FRESH_SHARDS_GNU_LD_QEMU target=x86_64`. This requested one-target campaign passes x86 but cannot certify the other two targets. Do not misclassify the x86 receiver's genuine PASS as a Linux failure or infer three-ISA PASS from it.
