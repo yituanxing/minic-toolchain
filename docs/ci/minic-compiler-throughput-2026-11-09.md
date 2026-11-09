@@ -1,6 +1,6 @@
 # MiniC compiler-throughput recovery: DataLayout import batching (2026-11-09)
 
-**Decision: keep / performance gate passed on eligible Linux owners; runtime acceptance not yet full.**
+**Decision: keep / all 500 frozen Linux owners compile with identical assembly and pass the throughput gate; runtime acceptance not yet full.**
 
 ## Scope and cause
 
@@ -78,12 +78,28 @@ indirect-call rejects, and 1.13813x throughput versus `dd08e4a` on that
 nonempty subset (two layout changes combined). Its other three owners exited
 0 on both arms but were excluded for having no nonempty `.s`. The backend's
 transactional module writer creates an output file on every successful return,
-so these outputs are expected to be zero-byte files. GNU as can
-assemble a zero-byte `.s`. Config-disabled kernel translation units need not
-emit any function or global symbol. Treat an existing empty output as valid,
-and retain `empty_assembly_pairs` in the new report; a missing output file or
-nonzero exit remains a failure. The exact new 500-owner speed is pending a
-fresh paired run. No Linux QEMU runtime success is implied by this gate.
+so these outputs are zero-byte files. GNU as can assemble a zero-byte `.s`.
+Config-disabled kernel translation units need not emit any function or global
+symbol. Treat an existing empty output as valid, and retain
+`empty_assembly_pairs` in the report; a missing output file or nonzero exit
+remains a failure.
+
+**The corrected real first500 gate now passes all 500 owners**:
+[#42563417488](https://github.com/yituanxing/minic-toolchain/actions/runs/42563417488),
+compiler/head `1ca6b2994b1d7bb61102ea076944b59ed0b6c441`, paired-ab job
+`128984609606`, SUCCESS. Original and refactored candidate both compile
+**500/500** with **0** failures or assembly SHA mismatches; this includes
+**3** valid zero-byte assembly pairs, not failures. Same-run frozen ABI-corrected
+Linux owner paired wall speedup is **1.09733x**; CPU speedup is **1.09739x**.
+Pinned GNU Linux `fs/ext4/fsync.o` 4/arm paired P50 is
+**334.707 → 288.580 ms (1.1598x)** with byte-identical assembly. Verified
+artifact `13651110492`, SHA-256
+`6ed983294934fcc0b4f661eed2dccb9a9a9cbad1e0f9a5647e285debca9418a3`.
+These one-run aggregate values are **not** the separate 497-owner 1.13813x
+sample, nor evidence for proportional kernel end-to-end wall improvement.
+Compiler compile-and-assembly equivalence is proven for this frozen first500
+scope; 2064-owner GNU AS/LD/QEMU P1 and five-target runtime acceptance remain
+unproved for the refactored candidate.
 
 ## Historical decision reuse and next gate
 
@@ -94,8 +110,10 @@ The current importer-specific change passes the predeclared 1.04x gate even
 across all **eligible** frozen first500 inputs.
 
 Do not redo previously rejected tiny Lexer, Parser enum, RV64 layout, or Core
-source-bucket micro-optimizations. Next: restore the remaining four actual
-indirect-call C-to-Core/type ABI correctness failures, adjudicate the three
-zero-output cases, and then reattempt a **complete** Linux acceptance gate
-before any 2064/QEMU claim. Five-target target-code quality optimization
-remains deliberately deferred.
+source-bucket micro-optimizations. The four indirect-call rejects were caused
+by missing replay flags; all four now compile with actual Kbuild C language ABI
+flags, and the three zero-output owners are legitimate empty `.s` files.
+**Next:** maintain this complete first500 regression gate; validate the
+refactored compiler through a fresh **2064/2064 GNU AS → GNU LD → QEMU P1**
+before claiming Linux runtime recovery. Five-target target-code quality
+optimization remains deliberately deferred.
