@@ -1,5 +1,5 @@
 target=rv64-current-selfhost
 scope=214-current-compiler-c-owners
 gate=stage0-stage1-stage2-16-shards
-nonce=20261109-03
-reason=all-five-machine-operand-union-address-symbol-zero-initialization
+nonce=20261109-04
+reason=full-provisional-record-core-type-union-init-verified-by-3-real-stage1-inputs
