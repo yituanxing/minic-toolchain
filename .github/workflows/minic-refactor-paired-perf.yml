@@ -217,22 +217,31 @@ jobs:
           import shutil
           source=Path("build/linux-perf-materialize")
           corpus=Path("build/linux-perf-corpus")
-          (corpus/"kbuild").mkdir(parents=True,exist_ok=True)
-          shutil.copy2(source/"selected-tus.txt",corpus/"selected-tus.txt")
+          (corpus/"kbuild"/"frozen").mkdir(parents=True,exist_ok=True)
+          original=(source/"selected-tus.txt").read_text().splitlines()
+          shutil.copy2(source/"selected-tus.txt",corpus/"original-selected-tus.txt")
           manifest=source/"tu-manifest.txt"
           if manifest.is_file(): shutil.copy2(manifest,corpus/"tu-manifest.txt")
-          for row in (source/"selected-tus.txt").read_text().splitlines():
+          lines=[]
+          workspace=Path.cwd().resolve()
+          seen=set()
+          for row in original:
               columns=row.split("\t",3)
-              if len(columns)!=4: raise SystemExit("invalid historical Kbuild row")
-              rel_i=Path(columns[2])
-              if rel_i.is_absolute() or ".." in rel_i.parts:
-                  raise SystemExit("unsafe Kbuild input path")
-              src=source/"kbuild"/rel_i
-              dst=corpus/"kbuild"/rel_i
-              if not src.is_file() or src.stat().st_size==0:
-                  raise SystemExit("missing frozen input "+str(src))
-              dst.parent.mkdir(parents=True,exist_ok=True)
+              if len(columns)!=4 or columns[1] in seen:
+                  raise SystemExit("invalid or duplicate historical Kbuild row")
+              seen.add(columns[1])
+              index,owner,rel_i,unit=columns
+              if not index.isdigit(): raise SystemExit("invalid Kbuild index")
+              src=(source/"kbuild"/rel_i).resolve()
+              if not src.is_relative_to(workspace) or not src.is_file() or src.stat().st_size==0:
+                  raise SystemExit("untrusted or missing GNU Kbuild input "+str(src))
+              canonical="frozen/tu-"+index.zfill(5)+".i"
+              dst=corpus/"kbuild"/canonical
+              if dst.exists(): raise SystemExit("duplicate frozen input "+canonical)
               shutil.copy2(src,dst)
+              lines.append("\t".join((index,owner,canonical,unit)))
+          if len(lines)!=500: raise SystemExit("not 500 authentic selected owners")
+          (corpus/"selected-tus.txt").write_text("\n".join(lines)+"\n")
           print("MINIC_LINUX_CORPUS=RESEEDED owners=500")
           PY
           find build/linux-perf-corpus/kbuild -type f -name '*.i' -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > build/linux-perf-corpus/inputs.sha256
@@ -275,6 +284,8 @@ jobs:
           print("MINIC_LINUX_FSYNC=VERIFIED input_bytes=" + str(output.stat().st_size))
           PY
           sha256sum "$RUNNER_TEMP/minic-refactor-perf/inputs/frozen-linux-fsync.i"
+          export MINIC_LINUX_FULL_CROSSBLOCK=1
+          export MINIC_OPT_PURE_DISCARDED_ADDRESS_EQ=1
           python3 tools/ci/linux-perf-host-hotspot-profiler-v1.py \
             --input "$RUNNER_TEMP/minic-refactor-perf/inputs/frozen-linux-fsync.i" \
             --debug-compiler "$GITHUB_WORKSPACE/build/perf-profile/bin/minic-cc" \
@@ -316,6 +327,6 @@ jobs:
             ${{ runner.temp }}/minic-refactor-perf/result/hotspot-*.log
             build/linux-perf-corpus/selected-tus.txt
             build/linux-perf-corpus/inputs.sha256
-            build/linux-perf-corpus/kbuild/fs/ext4/fsync.i
-            build/linux-perf-corpus/kbuild/kernel/bpf/btf.i
+            build/linux-perf-corpus/original-selected-tus.txt
+            ${{ runner.temp }}/minic-refactor-perf/inputs/frozen-linux-*.i
           if-no-files-found: warn
