@@ -1,6 +1,6 @@
 # MiniC compiler-throughput recovery: DataLayout import batching (2026-11-09)
 
-**Decision: keep / all 500 frozen Linux owners compile with identical assembly and pass the throughput gate; runtime acceptance not yet full.**
+**Decision: keep / first500 throughput gate passed; RV64 GNU/MiniC Linux 2064 + QEMU P1 and same-Image 12/12 reboots certified. Other four target architectures and all-native toolchain remain independent gates.**
 
 ## Scope and cause
 
@@ -98,8 +98,50 @@ artifact `13651110492`, SHA-256
 These one-run aggregate values are **not** the separate 497-owner 1.13813x
 sample, nor evidence for proportional kernel end-to-end wall improvement.
 Compiler compile-and-assembly equivalence is proven for this frozen first500
-scope; 2064-owner GNU AS/LD/QEMU P1 and five-target runtime acceptance remain
-unproved for the refactored candidate.
+scope; the subsequent **RV64** full runtime receipt is separately documented
+below. Five-target runtime acceptance is not implied by either gate.
+
+## Full RV64 Linux runtime recertification after throughput recovery
+
+The exact current-source campaign [#42564660566](https://github.com/yituanxing/minic-toolchain/actions/runs/42564660566)
+finished **SUCCESS** at `fe5d2115b6181e48c668ab05cfc3d1a51df5ceb9`.
+The authenticated seven producer jobs all completed successfully, and the
+receiver's *actual job log*, not just the green workflow, reports:
+
+- `MINIC_CURRENT_MAIN_PROFILE=CHECKED_OUT_SOURCE_VALIDATED sha=fe5d2115...`
+- `GNU_MINIC_SHARD_MERGE=PASS objects=2064 shards=7`
+- `COHORT_LINK=REUSED name=full_all_verified selection=prefix:2064`
+- `COHORT_P1=PASS name=full_all_verified syscalls=12 python_era_oracle=PASS`
+- `COHORT_RESULT=PASS candidate_objects=2064 scope=FULL_C_UNIVERSE same_config=true`
+- `RV64_FULL_IDENTICAL_IMAGE=PASS repeats=12/12 syscalls_each=12/12`
+
+Each of twelve genuinely separate identical-Image QEMU P1 reboots reported
+`RV64_FULL_REPEAT=PASS attempt=N/12` and `qemu_exit=0`. Their exact GNU-linked
+kernel Image SHA-256 was
+`63806b69e4341b0ad4bb08489dd666b36c6bd803532680ed065836eb4d368321`.
+Receiver evidence artifact `13650953608` has SHA-256
+`e3d2865e9d58fcbce16486a21017e8698329b848f287986766fab9d3d92f2e04`.
+`COHORT_LINK=REUSED` means the receiver reused the **same campaign's newly
+verified 2064 MiniC objects** after seven-shard merging, not a historical
+MiniC object cache. This certifies GNU preprocessing → current MiniC → GNU AS
+and GNU LD → QEMU on RV64; it **does not certify MiniPP/MiniAS/MiniLD as a
+combined native chain, nor RV32/x86-64/AArch64/LoongArch64 runtime**.
+
+## Rejected new candidate experiments (do not retry without new evidence)
+
+- Parser builtin prefix prefilter in `parser_builtins.c`: exact `fsync.i`
+  output SHA unchanged, pinned local 4/arm ABBA wall median
+  **632.370→657.331 ms = 0.962x**. No production patch retained.
+- Importer-local FUNCTION signature hash in `core_type_import.c`: preserves
+  full ABI signature comparison and passes Type/Layout/CoreType and sanitizer
+  contracts; exact `fsync.i` output SHA unchanged, pinned local 4/arm ABBA wall
+  median **477.305→480.945 ms = 0.9924x**. No production patch retained.
+
+Both were below the historical **1.04x** promotion threshold. The old full
+signature canonicalization itself must remain because distinct source function
+types with identical ABI signatures require one canonical Core Function TypeId
+for exact indirect-call verification. A theoretical O(F^2) count alone is not
+evidence of a profitable host CPU optimization.
 
 ## Historical decision reuse and next gate
 
@@ -113,7 +155,7 @@ Do not redo previously rejected tiny Lexer, Parser enum, RV64 layout, or Core
 source-bucket micro-optimizations. The four indirect-call rejects were caused
 by missing replay flags; all four now compile with actual Kbuild C language ABI
 flags, and the three zero-output owners are legitimate empty `.s` files.
-**Next:** maintain this complete first500 regression gate; validate the
-refactored compiler through a fresh **2064/2064 GNU AS → GNU LD → QEMU P1**
-before claiming Linux runtime recovery. Five-target target-code quality
-optimization remains deliberately deferred.
+**Next:** preserve both the complete first500 throughput gate and the
+now-certified **2064/2064 RV64 GNU AS → GNU LD → QEMU P1 same-Image 12/12**
+receipt. Continue remaining target architecture/runtime gaps independently;
+five-target generated-code quality optimization remains deliberately deferred.
