@@ -137,6 +137,23 @@ jobs:
           cat "$RUNNER_TEMP/minic-refactor-perf/result/recent-aes/summary.md" >> "$GITHUB_STEP_SUMMARY"
           printf '\n\n' >> "$GITHUB_STEP_SUMMARY"
           cat "$RUNNER_TEMP/minic-refactor-perf/result/recent-cjson/summary.md" >> "$GITHUB_STEP_SUMMARY"
+      # Diagnostic only: compare the current compiler with itself, since
+      # historical refactor builds legitimately emit different assembly.
+      # This reuses the existing phase tracer and never turns its timing into
+      # a claimed old/new compiler speedup.
+      - name: Inspect current compiler phase costs on frozen upstream inputs
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 tools/ci/linux-perf-phase-trace-v1.py --self-test
+          compiler="$GITHUB_WORKSPACE/build/perf-ab/bin/minic-cc"
+          for fixture in original-cjson-1.7.19 original-aes128-ecb; do
+            python3 tools/ci/linux-perf-phase-trace-v1.py \
+              --input "$RUNNER_TEMP/minic-refactor-perf/inputs/$fixture.i" \
+              --baseline "$compiler" --candidate "$compiler" \
+              --out "$RUNNER_TEMP/minic-refactor-perf/result/phase-$fixture" \
+              | tee "$RUNNER_TEMP/minic-refactor-perf/result/phase-$fixture.log"
+          done
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -150,4 +167,6 @@ jobs:
             ${{ runner.temp }}/minic-refactor-perf/result/recent-aes/results.json
             ${{ runner.temp }}/minic-refactor-perf/result/recent-cjson/summary.md
             ${{ runner.temp }}/minic-refactor-perf/result/recent-cjson/results.json
+            ${{ runner.temp }}/minic-refactor-perf/result/phase-*/phases.json
+            ${{ runner.temp }}/minic-refactor-perf/result/phase-*.log
           if-no-files-found: warn
