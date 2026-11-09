@@ -3,62 +3,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* MachineFunction-owned slabs amortize the two array allocations that were
- * previously made for every selected instruction. The builder's inputs remain
- * borrowed: operand metadata and strings are still deep-copied. Individual
- * erased instructions release strings immediately; array storage lives until
- * the complete machine function is destroyed. */
-struct MinicMachineArenaChunk {
-    struct MinicMachineArenaChunk *next;
-    size_t used;
-    size_t capacity;
-    max_align_t align_storage;
-    unsigned char bytes[];
-};
-
-_Static_assert(offsetof(MinicMachineArenaChunk, bytes) %
-                   _Alignof(max_align_t) == 0U,
-               "machine operand slab must preserve fundamental alignment");
-
-static void *machine_array_storage_alloc(MinicMachineFunction *function,
-                                         size_t count, size_t element_size) {
-    const size_t alignment = _Alignof(max_align_t);
-    MinicMachineArenaChunk *chunk;
-    size_t bytes, aligned, capacity;
-    unsigned char *result;
-    if (function == NULL || count == 0U || element_size == 0U ||
-        count > SIZE_MAX / element_size) return NULL;
-    bytes = count * element_size;
-    chunk = function->array_storage;
-    if (chunk != NULL && chunk->used <= SIZE_MAX - (alignment - 1U)) {
-        aligned = (chunk->used + alignment - 1U) & ~(alignment - 1U);
-        if (aligned <= chunk->capacity &&
-            bytes <= chunk->capacity - aligned) {
-            result = chunk->bytes + aligned;
-            chunk->used = aligned + bytes;
-            memset(result, 0, bytes);
-            return result;
-        }
-    }
-    if (bytes > SIZE_MAX - (alignment - 1U)) return NULL;
-    capacity = 4096U;
-    while (capacity < bytes + alignment - 1U) {
-        if (capacity > SIZE_MAX / 2U) return NULL;
-        capacity *= 2U;
-    }
-    if (capacity > SIZE_MAX - offsetof(MinicMachineArenaChunk, bytes))
-        return NULL;
-    chunk = malloc(offsetof(MinicMachineArenaChunk, bytes) + capacity);
-    if (chunk == NULL) return NULL;
-    chunk->next = function->array_storage;
-    chunk->used = bytes;
-    chunk->capacity = capacity;
-    function->array_storage = chunk;
-    result = chunk->bytes;
-    memset(result, 0, bytes);
-    return result;
-}
-
 static char *machine_copy_string(const char *text) {
     size_t length;
     char *copy;
@@ -116,10 +60,8 @@ static void machine_instruction_destroy(MinicMachineInstruction *ins) {
         free(operand->asm_constraint);
         free(operand->asm_name);
     }
-    if (!ins->arrays_in_function_storage) {
-        free(ins->operands);
-        free(ins->implicit);
-    }
+    free(ins->operands);
+    free(ins->implicit);
     free(ins->source_asm_template);
     free(ins->local_label_name);
     if (ins->directive != NULL) {
@@ -167,14 +109,6 @@ void minic_machine_function_destroy(MinicMachineFunction *function) {
     free(function->blocks);
     free(function->frame_objects);
     free(function->name);
-    {
-        MinicMachineArenaChunk *chunk = function->array_storage;
-        while (chunk != NULL) {
-            MinicMachineArenaChunk *next = chunk->next;
-            free(chunk);
-            chunk = next;
-        }
-    }
     memset(function, 0, sizeof(*function));
 }
 
@@ -323,17 +257,14 @@ bool minic_machine_block_append_instruction(MinicMachineFunction *function,
     copy.source_asm_template = NULL;
     copy.local_label_name = NULL;
     copy.directive = NULL;
-    copy.arrays_in_function_storage = true;
     if (input->operand_count != 0U) {
-        copy.operands = machine_array_storage_alloc(function,
-            input->operand_count, sizeof(*copy.operands));
+        copy.operands = calloc(input->operand_count, sizeof(*copy.operands));
         if (copy.operands == NULL) goto fail;
     }
     if (input->implicit_count != 0U) {
         if (input->implicit_count > SIZE_MAX / sizeof(*copy.implicit))
             goto fail;
-        copy.implicit = machine_array_storage_alloc(function,
-            input->implicit_count, sizeof(*copy.implicit));
+        copy.implicit = malloc(input->implicit_count * sizeof(*copy.implicit));
         if (copy.implicit == NULL) goto fail;
         memcpy(copy.implicit, input->implicit,
                input->implicit_count * sizeof(*copy.implicit));
