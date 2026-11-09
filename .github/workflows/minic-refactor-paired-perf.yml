@@ -305,10 +305,10 @@ jobs:
               assert "src/compiler/compiler.c" in report or "minic_compile_preprocessed_file" in report
           print("MINIC_LINUX_HOST_HOTSPOT=PASS owner=fs/ext4/fsync.o real_minic_cc=true")
           PY
-      # One-factor parser early builtin prefix gate A/B: compare against the
-      # immediate pre-gate compiler HEAD with identical frozen GNU Linux .i.
+      # One-factor MachineIR operand/effect slab A/B: compare against the
+      # immediate pre-slab compiler HEAD with identical frozen GNU Linux .i.
       # Reuse the existing same-host fsync/first500 checks and SHA gates.
-      - name: Verify parser builtin gate semantics and GNU Linux fsync speed
+      - name: Verify one-factor MachineIR slab semantics and GNU Linux fsync speed
         shell: bash
         env:
           LAYOUT_BASE_SHA: 21f07bcb8daa6829a5afcff07cc98cdbb34467a8
@@ -335,13 +335,13 @@ jobs:
           d=json.load(open(sys.argv[1]))
           assert d["assembly_identical"] and d["input_sha256"]=="3fffda07f8f70b7ac633758b85a3392a1ad1f9a3aa5b1a023cd9b34263b0532e"
           assert d["compiler_sha256"]["before"]!=d["compiler_sha256"]["after"]
-          print("MINIC_PARSER_BUILTIN_GATE_AB=PASS sample=real-linux-fsync speedup="+str(d["candidate_speedup"]))
+          print("MINIC_LAYOUT_BATCH_AB=PASS sample=real-linux-fsync speedup="+str(d["candidate_speedup"]))
           PY
           cat "$RUNNER_TEMP/minic-refactor-perf/result/layout-batch-fsync.log" >> "$GITHUB_STEP_SUMMARY"
       # The refactor baseline has pre-existing Linux rejects. Compare all
       # 500 inputs, classify both-fail separately, and never report first500
       # as complete Linux acceptance when even one baseline TU is rejected.
-      - name: Audit Linux first500 parser builtin gate speed and exact assembly
+      - name: Audit Linux first500 one-factor MachineIR slab speed and exact assembly
         shell: bash
         timeout-minutes: 24
         run: |
