@@ -305,13 +305,13 @@ jobs:
               assert "src/compiler/compiler.c" in report or "minic_compile_preprocessed_file" in report
           print("MINIC_LINUX_HOST_HOTSPOT=PASS owner=fs/ext4/fsync.o real_minic_cc=true")
           PY
-      # One factor only: batch all C record field layout queries during the
-      # post-parse C-to-Core import. Historical RV64 layout validation trial
-      # is a different caller and was already rejected below 1.04x.
-      - name: Verify DataLayout batch semantics and paired GNU Linux fsync speed
+      # One-factor MachineIR operand/effect slab A/B: compare against the
+      # immediate pre-slab compiler HEAD with identical frozen GNU Linux .i.
+      # Reuse the existing same-host fsync/first500 checks and SHA gates.
+      - name: Verify one-factor MachineIR slab semantics and GNU Linux fsync speed
         shell: bash
         env:
-          LAYOUT_BASE_SHA: dd08e4a83abfcb1b286d17edae297afa70319021
+          LAYOUT_BASE_SHA: 21f07bcb8daa6829a5afcff07cc98cdbb34467a8
         run: |
           set -Eeuo pipefail
           make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/perf-ab check-layout
@@ -341,7 +341,7 @@ jobs:
       # The refactor baseline has pre-existing Linux rejects. Compare all
       # 500 inputs, classify both-fail separately, and never report first500
       # as complete Linux acceptance when even one baseline TU is rejected.
-      - name: Audit Linux first500 eligibility, exact assembly and compiler speed
+      - name: Audit Linux first500 one-factor MachineIR slab speed and exact assembly
         shell: bash
         timeout-minutes: 24
         run: |
