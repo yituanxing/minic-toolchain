@@ -50,6 +50,26 @@ nonempty `.s`: `mm/shmem_quota.o`, `mm/highmem.o`,
 the audit script has since been corrected to call them `both_no_assembly`.
 No claimed performance includes these seven.
 
+### Subsequent Linux replay ABI audit
+
+The first500 numbers above describe the original **bare `-S` replay**, not a
+faithful reproduction of GNU Kbuild's invocation-scoped C language ABI.
+Linux 6.6.143 sets `-fshort-wchar -funsigned-char` in `KBUILD_CFLAGS`, but the
+first500 and frozen-differential drivers had not forwarded them to MiniC.
+The existing EFI indirect-call negative test deliberately reproduces the
+same diagnostic under normal 32-bit `wchar_t`; the four dual failures must
+therefore be **reclassified after a fresh paired run with both Kbuild flags**,
+not treated as established compiler correctness bugs. The three rc0/no-asm
+units also require separate original-GNU output-root analysis.
+
+The paired harness now records `kbuild_language_flags` and forwards the
+known frozen RV64 C ABI in both arms. The 2064 Kbuild wrapper instead forwards
+the actual target/language flags captured from each compiler invocation.
+Neither mechanism proves all other per-owner original code-generation
+options were replayed; future campaigns should retain complete original
+Kbuild command provenance. Do not reuse the 493-owner 1.05982x figure as a
+new ABI-corrected benchmark result.
+
 ## Historical decision reuse and next gate
 
 Historical `rv64-record-layout-single-walk-v1` optimized a DIFFERENT

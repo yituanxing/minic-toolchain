@@ -313,6 +313,24 @@ int main(void) {
         minic_c0_program_destroy(&program);
         return fail("common translation-unit record/global layout validation");
     }
+    /* Admission must still reject a malformed member after eliminating the
+     * redundant per-field full-record validation walks. The first complete
+     * record type query alone has to check every member. */
+    {
+        MinicRecordField *member = &program.records[record_id].fields[1U];
+        bool original_bit_field = member->is_bit_field;
+        size_t original_bit_width = member->bit_width;
+        MinicDataLayoutProgramCheck status;
+        member->is_bit_field = true;
+        member->bit_width = SIZE_MAX;
+        status = minic_data_layout_validate_program(&invocation, &program);
+        member->is_bit_field = original_bit_field;
+        member->bit_width = original_bit_width;
+        if (status != MINIC_DATA_LAYOUT_PROGRAM_INVALID_RECORD) {
+            minic_c0_program_destroy(&program);
+            return fail("complete-record member validation after single walk");
+        }
+    }
     hooks_record = minic_c0_program_record(&program, hooks_record_id);
     {
         size_t size;

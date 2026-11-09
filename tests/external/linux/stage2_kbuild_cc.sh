@@ -281,7 +281,14 @@ set +e
 if [[ -n "${MINIC_PERF_AB_BASELINE:-}" ]]; then
   # Strict opt-in: time old and new compilers on the SAME GNU-generated .i,
   # preserve normal candidate assembler output, and require identical .s.
+  # A .i loses the original invocation-scoped C ABI options; forward the
+  # Kbuild target/language options to BOTH arms exactly as for normal replay.
+  perf_minic_args=()
+  for arg in "${minic_target_args[@]}" "${minic_language_args[@]}"; do
+    perf_minic_args+=("--minic-arg=$arg")
+  done
   python3 "${BASH_SOURCE[0]%/*}/../../../tools/ci/linux-perf-2064-paired-compile-v1.py" pair \
+    "${perf_minic_args[@]}" \
     --baseline "$MINIC_PERF_AB_BASELINE" --candidate "$minic" \
     --input "$preprocessed" --assembly "$assembly" \
     --baseline-assembly "${base}.perf-baseline.s" \

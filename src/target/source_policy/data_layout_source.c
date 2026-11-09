@@ -581,17 +581,15 @@ MinicDataLayoutProgramCheck minic_data_layout_validate_program(
         return MINIC_DATA_LAYOUT_PROGRAM_INVALID_INPUT;
     for (record_index = 0U; record_index < program->record_count; ++record_index) {
         const MinicRecord *record = &program->records[record_index];
-        size_t bytes, alignment, field_index;
+        size_t bytes, alignment;
         if (!record->is_complete) continue;
+        /* Querying a complete record already validates every member in the
+         * canonical record_depth walk (including bit-fields, packing and
+         * flexible tails). Repeating record_field_layout for each member
+         * restarted that same full walk F times, making admission O(F^2). */
         if (!minic_data_layout_type(invocation, program,
                 minic_type_record(record_index), &bytes, &alignment))
             return MINIC_DATA_LAYOUT_PROGRAM_INVALID_RECORD;
-        for (field_index = 0U; field_index < record->field_count; ++field_index) {
-            size_t offset, bit_offset;
-            if (!minic_data_layout_record_field_layout(
-                    invocation, program, record, field_index, &offset, &bit_offset))
-                return MINIC_DATA_LAYOUT_PROGRAM_INVALID_RECORD;
-        }
     }
     for (object_index = 0U; object_index < program->global_object_count; ++object_index) {
         size_t bytes, alignment;

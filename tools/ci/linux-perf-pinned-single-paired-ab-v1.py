@@ -20,13 +20,14 @@ def sha(path):
             h.update(data)
     return h.hexdigest()
 
-def one(driver, source, asm):
+def one(driver, source, asm, minic_args):
     # Serial A/B: RUSAGE_CHILDREN also accounts for minic's minic-cc child.
     # Wall regressions without corresponding user/system CPU regressions
     # can be machine scheduling/cache noise rather than extra compiler work.
     usage_before = resource.getrusage(resource.RUSAGE_CHILDREN)
     start = time.perf_counter_ns()
-    p = subprocess.run([str(driver), "-S", str(source), "-o", str(asm)],
+    p = subprocess.run([str(driver), *minic_args,
+                        "-S", str(source), "-o", str(asm)],
                        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                        timeout=120, text=True, errors="replace", check=False)
     ms = (time.perf_counter_ns()-start) / 1e6
@@ -45,6 +46,8 @@ def main():
     for name in ("input", "baseline_driver", "candidate_driver", "out"):
         p.add_argument("--"+name.replace("_","-"), type=Path, required=True)
     p.add_argument("--repeats", type=int, choices=(2,4), default=4)
+    p.add_argument("--minic-arg", action="append", default=[],
+                   help="Repeat original source ABI/target options for both arms")
     args = p.parse_args()
     inp = args.input.resolve()
     drivers = {"before":args.baseline_driver.resolve(),
@@ -60,14 +63,15 @@ def main():
     expected = None
     # Warm each compiler and its input once; exclude warm-up from timing.
     for name in ("before","after"):
-        z = one(drivers[name], inp, args.out/(name+"-warm.s"))
+        z = one(drivers[name], inp, args.out/(name+"-warm.s"), args.minic_arg)
         expected = expected or z["sha256"]
         if z["sha256"] != expected:
             raise RuntimeError("warmup output diverged")
     for k in range(args.repeats):
         order = ("before","after") if k % 2 == 0 else ("after","before")
         for name in order:
-            z = one(drivers[name], inp, args.out/(name+"-"+str(k)+".s"))
+            z = one(drivers[name], inp, args.out/(name+"-"+str(k)+".s"),
+                    args.minic_arg)
             if z["sha256"] != expected:
                 raise RuntimeError("assembly mismatch: "+name+" repetition="+str(k))
             records.append({"iteration":k,"mode":name,**z})
@@ -76,6 +80,7 @@ def main():
     result = {"schema":"minic-linux-real-one-owner-paired-v1",
               "input_sha256":sha(inp),"compiler_sha256":compilers,
               "repeat_per_arm":args.repeats,"warmup_per_arm":1,
+              "minic_args":args.minic_arg,
               "assembly_sha256":expected,"assembly_identical":True,
               "baseline_median_ms":before,"candidate_median_ms":after,
               "candidate_speedup":round(before/after,4),"records":records}

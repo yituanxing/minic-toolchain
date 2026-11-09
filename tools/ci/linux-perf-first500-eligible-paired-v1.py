@@ -15,6 +15,8 @@ import subprocess
 import sys
 import time
 
+from linux_kbuild_language_flags import RV64_LINUX_KBUILD_LANGUAGE_FLAGS
+
 
 def sha(path):
     h = hashlib.sha256()
@@ -29,7 +31,8 @@ def compile_owner(compiler, source, output):
     start = time.perf_counter_ns()
     try:
         process = subprocess.run(
-            [str(compiler), "-S", str(source), "-o", str(output)],
+            [str(compiler), *RV64_LINUX_KBUILD_LANGUAGE_FLAGS,
+             "-S", str(source), "-o", str(output)],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             timeout=180, check=False)
         rc = process.returncode
@@ -134,6 +137,7 @@ def main():
         "schema": "minic-real-linux-first500-eligibility-paired-v1",
         "scope": "Only both-pass unchanged-assembly subset is timed",
         "corpus_sha256_manifest": sha(hashes), "owners": len(details),
+        "kbuild_language_flags": list(RV64_LINUX_KBUILD_LANGUAGE_FLAGS),
         "baseline_sha256": sha(before), "candidate_sha256": sha(after),
         "status_counts": totals,
         "eligible_baseline_wall_ms": round(before_wall, 3),
