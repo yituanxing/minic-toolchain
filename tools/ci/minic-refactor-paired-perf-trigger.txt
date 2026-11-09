@@ -14,3 +14,4 @@ first500-replay-original-kbuild-c-abi-and-validator-singlewalk-2026-11-09
 first500-admit-zero-byte-kbuild-assembly-but-reject-missing-artifact-2026-11-09
 2026-11-09 exact post-refactor sealed-RISCV-preflight compiler-throughput A-B after original Linux five-ISA native GNU-QEMU recert; preserve Codegen-SHA, CPU RSS, freeze 500 Linux source, compare historical best
 2026-11-09 MachineIR function-owned array slab candidate; frozen GNU Linux and same-runner ABBA source semantics check
+2026-11-09 MachineIR slab Loong mutable-operand detach; one-factor performance and strict runtime replay

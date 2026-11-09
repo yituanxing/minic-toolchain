@@ -435,8 +435,18 @@ static bool loong_ssa_replace_reload_with_word_sext(
         ins->operands[1].value.address.has_symbol ||
         ins->operands[1].asm_constraint != NULL ||
         ins->operands[1].asm_name != NULL) return false;
-    grown = realloc(ins->operands, 3U * sizeof(*grown));
-    if (grown == NULL) return false;
+    /* The MachineFunction slab owns the original borrowed-copy array.
+     * A Loong word-reload rewrite changes its width, so detach this one
+     * instruction to ordinary heap storage before replacing the operands.
+     * No implicit array exists on this path. */
+    if (ins->arrays_in_function_storage) {
+        grown = malloc(3U * sizeof(*grown));
+        if (grown == NULL) return false;
+        ins->arrays_in_function_storage = false;
+    } else {
+        grown = realloc(ins->operands, 3U * sizeof(*grown));
+        if (grown == NULL) return false;
+    }
     ins->operands = grown;
     ins->opcode = MINIC_LOONG_MACHINE_SLLI_W;
     ins->effects = 0U;
