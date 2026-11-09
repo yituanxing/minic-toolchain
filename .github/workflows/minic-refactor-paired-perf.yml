@@ -176,52 +176,26 @@ jobs:
               --timeout 600 \
               | tee "$RUNNER_TEMP/minic-refactor-perf/result/hotspot-$fixture.log"
           done
-      # Only re-use authentic historical GNU Kbuild inputs. Never regenerate
-      # an unverified kernel in this lightweight diagnostic workflow.
+      # Only reuse authentic, SHA-frozen GNU Linux Kbuild inputs.
       - name: Restore SHA-frozen Linux first500 corpus for host profile
-        id: linux-corpus-restore
         uses: actions/cache/restore@v4
         with:
           path: build/linux-perf-corpus
           key: linux-6.6.143-first500-rv64-v1-${{ hashFiles('tests/external/linux/batch_probe.sh', 'tests/external/linux/probe.sh', 'tests/external/linux/replay-indices.txt') }}
           fail-on-cache-miss: true
-      - name: Verify frozen GNU Linux input and profile host compiler
+      - name: Verify frozen GNU Linux fsync input and profile host compiler
         shell: bash
         run: |
           set -Eeuo pipefail
           corpus="$GITHUB_WORKSPACE/build/linux-perf-corpus"
           test -s "$corpus/selected-tus.txt"
-          test "$(grep -cve '^[[:space:]]*        if: always()
-        with:
-          name: minic-four-backend-refactor-paired-ab
-          path: |
-            ${{ runner.temp }}/minic-refactor-perf/result/aes/summary.md
-            ${{ runner.temp }}/minic-refactor-perf/result/aes/results.json
-            ${{ runner.temp }}/minic-refactor-perf/result/cjson/summary.md
-            ${{ runner.temp }}/minic-refactor-perf/result/cjson/results.json
-            ${{ runner.temp }}/minic-refactor-perf/result/recent-aes/summary.md
-            ${{ runner.temp }}/minic-refactor-perf/result/recent-aes/results.json
-            ${{ runner.temp }}/minic-refactor-perf/result/recent-cjson/summary.md
-            ${{ runner.temp }}/minic-refactor-perf/result/recent-cjson/results.json
-            ${{ runner.temp }}/minic-refactor-perf/result/phase-*/phases.json
-            ${{ runner.temp }}/minic-refactor-perf/result/phase-*.log
-            ${{ runner.temp }}/minic-refactor-perf/result/hotspot-*/summary.json
-            ${{ runner.temp }}/minic-refactor-perf/result/hotspot-*/callgrind-self.txt
-            ${{ runner.temp }}/minic-refactor-perf/result/hotspot-*/callgrind-inclusive.txt
-            ${{ runner.temp }}/minic-refactor-perf/result/hotspot-*/perf-top.txt
-            ${{ runner.temp }}/minic-refactor-perf/result/hotspot-*.log
-            ${{ runner.temp }}/minic-refactor-perf/result/hotspot-linux-fsync/summary.json
-            ${{ runner.temp }}/minic-refactor-perf/result/hotspot-linux-fsync/callgrind-self.txt
-            ${{ runner.temp }}/minic-refactor-perf/result/hotspot-linux-fsync/callgrind-inclusive.txt
-            ${{ runner.temp }}/minic-refactor-perf/result/hotspot-linux-fsync/perf-top.txt
-          if-no-files-found: warn
- "$corpus/selected-tus.txt")" -eq 500
+          test "$(grep -cve '^[[:space:]]*$' "$corpus/selected-tus.txt")" -eq 500
           test "$(wc -l < "$corpus/inputs.sha256")" -eq 500
           sha256sum --status --check "$corpus/inputs.sha256"
           echo 'MINIC_LINUX_CORPUS=VERIFIED owners=500 sha256=500'
           python3 - "$corpus" "$RUNNER_TEMP/minic-refactor-perf/inputs" <<'PY'
           from pathlib import Path
-          import sys
+          import sys, shutil
           corpus, dest = (Path(s).resolve() for s in sys.argv[1:])
           kbuild = (corpus / "kbuild").resolve()
           entries = {}
@@ -231,11 +205,10 @@ jobs:
                   raise SystemExit("invalid or duplicate selected-tu row")
               entries[columns[1]] = columns[2]
           if len(entries) != 500 or "fs/ext4/fsync.o" not in entries:
-              raise SystemExit("missing authentic fs/ext4/fsync.o in first500")
+              raise SystemExit("missing authentic fs/ext4/fsync.o")
           source = (kbuild / entries["fs/ext4/fsync.o"]).resolve()
           if not source.is_relative_to(kbuild) or not source.is_file():
-              raise SystemExit("invalid fsync frozen Kbuild path")
-          import shutil
+              raise SystemExit("invalid fsync Kbuild path")
           output = dest / "frozen-linux-fsync.i"
           shutil.copyfile(source, output)
           print("MINIC_LINUX_FSYNC=VERIFIED input_bytes=" + str(output.stat().st_size))
