@@ -10,9 +10,9 @@ Run: python3 tools/ci/minic-bootstrap-current-b1-seed-v1.py --work build/bootstr
 """
 import argparse
 import hashlib
+import importlib.util
 import os
 from pathlib import Path
-import re
 import shutil
 import subprocess
 import sys
@@ -47,13 +47,11 @@ def command(args, *, output=None, env=None, timeout=240, stdout=None, stderr=Non
 
 def sources():
     mfile = (ROOT / "Makefile").read_text()
-    m = re.search(
-        r"(?ms)^MINIC_SOURCES\s*:=\s*\\\s*\n(.*?)(?=^MINIC_OBJECTS\s*:)",
-        mfile)
-    if m is None:
-        raise RuntimeError("MINIC_SOURCES missing from Makefile")
-    wanted = [x.strip().rstrip("\\").strip()
-              for x in m.group(1).splitlines() if x.strip()]
+    path = ROOT / "tools/ci/minic-bootstrap-stage2-toolchain-v1.py"
+    spec = importlib.util.spec_from_file_location("minic_bootstrap_sources", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    wanted = module.source_group(mfile, "MINIC_SOURCES")
     actual = [x.strip() for x in
               (ROOT / "tests/compiler/bootstrap/b0-sources.txt").read_text().splitlines()
               if x.strip() and not x.lstrip().startswith("#")]
@@ -64,7 +62,7 @@ def sources():
             " missing=" + str(sorted(set(wanted)-set(actual))) +
             " extra=" + str(sorted(set(actual)-set(wanted))))
     if (not actual or actual[-1] != "tools/minic-cc/main.c" or
-            "src/core/core_lower_bool.c" not in actual or
+            "src/compiler/c_lower/core_lower_bool.c" not in actual or
             any(src.startswith("tools/minic/") for src in actual)):
         raise RuntimeError("compiler stage source list/entry is not canonical")
     for src in actual:
@@ -91,6 +89,19 @@ def main():
     for x in (seed / "i", seed / "s", seed / "logs"):
         x.mkdir(parents=True, exist_ok=True)
     (seed / "sources.normalized").write_text("\n".join(selected) + "\n")
+    # A later Stage4 run must use this exact Git commit, including headers,
+    # Makefile, bootstrap scripts and other inputs not listed as C owners.
+    commit = subprocess.run(
+        ["git", "rev-parse", "--verify", "HEAD"], cwd=ROOT,
+        check=True, capture_output=True, text=True).stdout.strip()
+    if len(commit) != 40 or any(c not in "0123456789abcdef" for c in commit):
+        raise RuntimeError("invalid source commit identity")
+    (seed / "source-commit.txt").write_text(commit + "\n")
+    # Bind any later bootstrap handoff to the exact current raw C inputs;
+    # source names and preprocessed input hashes alone are not sufficient.
+    source_hashes = {src: sha(ROOT / src) for src in selected}
+    (seed / "source-sha256.tsv").write_text(
+        "".join(src + "\t" + source_hashes[src] + "\n" for src in selected))
     logs = seed / "logs"
     env = dict(os.environ,
                MINIC_LINUX_FULL_CROSSBLOCK="1",
@@ -181,6 +192,8 @@ def main():
         raise RuntimeError("return_42 runtime timed out") from None
     if ret != 42:
         raise RuntimeError("Stage1 return_42 smoke got " + str(ret))
+    if any(sha(ROOT / src) != digest for src, digest in source_hashes.items()):
+        raise RuntimeError("source changed during B1 seed compile")
     (seed / "return_42.stage1.sha256").write_text(sha(asm) + "  " + str(asm) + "\n")
     print("BOOTSTRAP_B1_STAGE1_EXEC=PASS return_42=42", flush=True)
     print("BOOTSTRAP_B1_SEED=PASS selected=" + str(len(selected)) +

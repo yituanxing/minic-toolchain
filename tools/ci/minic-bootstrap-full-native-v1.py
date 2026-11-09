@@ -24,7 +24,6 @@ import sys
 import time
 
 ROOT = Path(__file__).resolve().parents[2]
-STAGE2_SHA = "17e76f14befdd46b18d62b4ab90cbf15cd724e281b216039a252528208b6f94d"
 CFLAGS = dict(MINIC_LINUX_FULL_CROSSBLOCK="1",
               MINIC_OPT_PURE_DISCARDED_ADDRESS_EQ="1")
 INCLUDES = ("include", "src", "elf/include", "archiver/include",
@@ -89,24 +88,126 @@ def inventory():
     return source_lists, all_sources
 
 
-def verify_seed(stage2, artifact):
-    if sha(stage2) != STAGE2_SHA:
-        raise RuntimeError("uncertified Stage2 compiler")
+def verify_seed(stage2, artifact, bootstrap_work, source_lists):
+    """Bind native seeds to the *current* B1 fixed point and exact C inputs.
+
+    Historic Stage2 ELF hashes and 30-TU tool manifests are intentionally not
+    trusted here. The B1 seed, replay outputs and eight-tool provenance must
+    be supplied together and agree with the current production source tree.
+    """
+    bootstrap_work = bootstrap_work.resolve()
+    seed = bootstrap_work / "seed"
+    stage2_dir = bootstrap_work / "stage2"
+    stage1 = seed / "minic-stage1-rv64"
+    stage0 = bootstrap_work / "stage0/bin/minic-cc"
+    expected_sources = source_lists["minic-cc"]
+
+    receipt_path = stage2_dir / "stage2-fixed-point.txt"
+    receipt = {}
+    for line in receipt_path.read_text().splitlines():
+        parts = line.split("=", 1)
+        if len(parts) != 2 or parts[0] in receipt:
+            raise RuntimeError("invalid current B1 fixed-point receipt")
+        receipt[parts[0]] = parts[1]
+    if set(receipt) != {"stage1_elf_sha256", "stage2_elf_sha256",
+                        "loadable_image_sha256", "source_count"}:
+        raise RuntimeError("incomplete current B1 fixed-point receipt")
+    if (not stage0.is_file() or not stage1.is_file() or not stage2.is_file() or
+        receipt["stage1_elf_sha256"] != sha(stage1) or
+        receipt["stage2_elf_sha256"] != sha(stage2) or
+        receipt["source_count"] != str(len(expected_sources)) or
+        (seed / "stage0-binary.sha256").read_text().split()[0] != sha(stage0) or
+        (seed / "stage1-binary.sha256").read_text().split()[0] != sha(stage1) or
+        (stage2_dir / "stage2-binary.sha256").read_text().split()[0] != sha(stage2)):
+        raise RuntimeError("CURRENT_B1_SEED=FAIL Stage0/Stage1/Stage2 binding")
+    for name in ("minic-stage1.load.bin", "minic-stage2.load.bin"):
+        p = stage2_dir / name
+        if not p.is_file() or sha(p) != receipt["loadable_image_sha256"]:
+            raise RuntimeError("CURRENT_B1_SEED=FAIL loadable fixed point " + name)
+
+    if (seed / "sources.normalized").read_text().splitlines() != expected_sources:
+        raise RuntimeError("CURRENT_B1_SEED=FAIL source list differs from Makefile")
+    try:
+        current_commit = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=ROOT, check=True,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            text=True, timeout=15).stdout.strip()
+    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+        raise RuntimeError("CURRENT_B1_SEED=FAIL cannot identify current commit") from exc
+    source_commit = (seed / "source-commit.txt").read_text().strip()
+    if (not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", source_commit) or
+            source_commit != current_commit):
+        raise RuntimeError("CURRENT_B1_SEED=FAIL source commit differs")
+    identities = (seed / "source-sha256.tsv").read_text().splitlines()
+    expected_identities = [src + "\t" + sha(ROOT / src) for src in expected_sources]
+    if identities != expected_identities:
+        raise RuntimeError("CURRENT_B1_SEED=FAIL current source contents differ")
+
+    stage0_rows = (seed / "stage0-manifest.tsv").read_text().splitlines()
+    input_rows = (seed / "input-sha256.tsv").read_text().splitlines()
+    if len(stage0_rows) != len(expected_sources) or len(input_rows) != len(expected_sources):
+        raise RuntimeError("CURRENT_B1_SEED=FAIL incomplete per-TU manifests")
+    keys = set()
+    for src, stage0_row, input_row in zip(expected_sources, stage0_rows, input_rows):
+        fields = stage0_row.split("\t")
+        inputs = input_row.split("\t")
+        key = src.replace("/", "__").replace(".", "_")
+        if (len(fields) != 3 or len(inputs) != 3 or key in keys or
+            fields[:2] != [key, src] or inputs[:2] != [key, src]):
+            raise RuntimeError("CURRENT_B1_SEED=FAIL source key " + src)
+        keys.add(key)
+        for path, wanted in (
+            (seed / "i" / (key + ".i"), inputs[2]),
+            (seed / "s" / (key + ".s"), fields[2]),
+            (stage2_dir / "s" / (key + ".s"), fields[2]),
+        ):
+            if not path.is_file() or sha(path) != wanted:
+                raise RuntimeError("CURRENT_B1_SEED=FAIL per-TU SHA " + str(path))
+
+    module_path = ROOT / "tools/ci/minic-bootstrap-stage2-toolchain-v1.py"
+    spec = importlib.util.spec_from_file_location("mini_source_plan_seed", module_path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    plan, tool_sources = module.source_plan(module.CANONICAL)
     report = json.loads((artifact / "summary.json").read_text())
-    if report["stage2_sha256"] != STAGE2_SHA or len(report["tus"]) != 30:
-        raise RuntimeError("wrong Stage2-built toolchain manifest")
-    if set(report["binaries"]) != set(NATIVE) - {"minic-cc"}:
-        raise RuntimeError("not the certified eight-tool build")
+    if (report.get("selected_tools") != list(module.CANONICAL) or
+        report.get("stage0_sha256") != sha(stage0) or
+        report.get("stage2_sha256") != sha(stage2) or
+        not isinstance(report.get("tus"), list) or
+        [r.get("source") for r in report["tus"] if isinstance(r, dict)] != tool_sources or
+        len(report["tus"]) != len(tool_sources)):
+        raise RuntimeError("CURRENT_STAGE2_TOOLS=FAIL source-bound toolchain manifest")
+    for row in report["tus"]:
+        src = row["source"]
+        key = src.replace("/", "__").replace(".", "_")
+        for file, field in (
+            (artifact / "i" / (key + ".i"), "input_sha256"),
+            (artifact / "s/stage0" / (key + ".s"), "asm_sha256"),
+            (artifact / "s/stage2" / (key + ".s"), "asm_sha256"),
+        ):
+            if not file.is_file() or sha(file) != row.get(field):
+                raise RuntimeError("CURRENT_STAGE2_TOOLS=FAIL input/asm SHA " + src)
+    if (not isinstance(report.get("binaries"), dict) or
+        set(report["binaries"]) != set(NATIVE) - {"minic-cc"}):
+        raise RuntimeError("CURRENT_STAGE2_TOOLS=FAIL incomplete eight-tool set")
     binaries = {"minic-cc": stage2}
     for name in NATIVE:
         if name == "minic-cc":
             continue
+        entry = report["binaries"][name]
+        expected = plan["#" + name]["sources"]
         elf = artifact / "bin" / name
-        if not elf.is_file() or sha(elf) != report["binaries"][name]["sha256"]:
-            raise RuntimeError("Stage2-built tool checksum mismatch " + name)
+        if (not isinstance(entry, dict) or not elf.is_file() or
+            sha(elf) != entry.get("sha256") or
+            entry.get("linked_sources") != len(expected) or
+            type(entry.get("help_rc")) is not int or
+            entry.get("help_rc") in (-11, 139, -6, 134)):
+            raise RuntimeError("CURRENT_STAGE2_TOOLS=FAIL ELF/owner SHA " + name)
         elf.chmod(elf.stat().st_mode | 0o111)
         binaries[name] = elf
     stage2.chmod(stage2.stat().st_mode | 0o111)
+    print("CURRENT_B1_SEED=PASS stage2_sha=%s compiler_tus=%d tool_tus=%d tools=%d" %
+          (sha(stage2), len(expected_sources), len(tool_sources), len(binaries)), flush=True)
     return binaries
 
 
@@ -483,6 +584,8 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--stage2", type=Path, required=True)
     parser.add_argument("--toolchain", type=Path, required=True)
+    parser.add_argument("--bootstrap-work", type=Path, required=True,
+                        help="Current B1 seed + Stage2 replay directory; never use historic binary receipts")
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--workers", type=int, choices=(1, 2, 4), default=4)
     parser.add_argument("--resume-stage3", type=Path, default=None,
@@ -499,7 +602,7 @@ def main():
     sources, all_sources = inventory()
     stage2 = args.stage2.resolve()
     artifact = args.toolchain.resolve()
-    seed = verify_seed(stage2, artifact)
+    seed = verify_seed(stage2, artifact, args.bootstrap_work, sources)
     hdr, libraries = prebuilt_runtime()
     if args.musl_headers is not None:
         if args.musl_build is None:

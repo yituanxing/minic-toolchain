@@ -61,11 +61,37 @@ def execute(argv, *, env=None, timeout=240, log=None, check=True):
     return p,round(time.monotonic()-start,3)
 
 def source_group(makefile,variable):
-    m=re.search(r"(?ms)^"+variable+r"\s*:=\s*\\\s*\n(.*?)(?=^\w+_OBJECTS\s*:)",makefile)
-    if not m:raise RuntimeError("Makefile source group missing "+variable)
-    sources=[r.strip().rstrip("\\").strip() for r in m.group(1).splitlines() if r.strip()]
-    if not sources or len(sources)!=len(set(sources)):raise RuntimeError("invalid "+variable)
-    return sources
+    # Read literal, line-continuation C source groups only.  MINIC_SOURCES
+    # includes shared target-policy/register groups; an unexpanded $(...)
+    # would otherwise become a bogus C input in the native bootstrap.
+    def expand(name,stack):
+        if name in stack:
+            raise RuntimeError("recursive Makefile source group "+" -> ".join(stack+(name,)))
+        m=re.search(r"(?m)^"+re.escape(name)+r"[ \t]*:=[ \t]*\\[ \t]*$",makefile)
+        if not m:
+            raise RuntimeError("Makefile source group missing "+name)
+        result=[]
+        complete=False
+        for line in makefile[m.end():].lstrip("\r\n").splitlines():
+            item=line.strip()
+            if not item:
+                raise RuntimeError("empty Makefile source group entry "+name)
+            more=item.endswith("\\")
+            item=item[:-1].strip() if more else item
+            ref=re.fullmatch(r"\$\(([A-Z][A-Z0-9_]*_SOURCES)\)",item)
+            if ref:
+                result.extend(expand(ref.group(1),stack+(name,)))
+            elif re.fullmatch(r"[A-Za-z0-9_./-]+\.c",item) and not item.startswith(("/","../")) and "/../" not in item:
+                result.append(item)
+            else:
+                raise RuntimeError("unsupported Makefile source entry "+name+": "+item)
+            if not more:
+                complete=True
+                break
+        if not complete or not result or len(result)!=len(set(result)):
+            raise RuntimeError("invalid "+name)
+        return result
+    return expand(variable,())
 
 def source_plan(requested):
     mf=(ROOT/"Makefile").read_text()
