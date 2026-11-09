@@ -250,8 +250,7 @@ def command(binaries, tool, *args):
 
 def native_pp(binaries, src, target, macros, hdr, logs, env):
     argv = command(binaries, "minic-cpp", "-E", "-P", "-undef", "-nostdinc",
-                   "-DNDEBUG", "-D__riscv_float_abi_double=1",
-                   "-D__riscv_flen=64",
+                   "-DNDEBUG", "-D__riscv_float_abi_soft=1",
                    *["-I" + str(ROOT / x) for x in INCLUDES],
                    *["-I" + str(p) for p in hdr],
                    "-include", macros, "-o", target, ROOT / src)
