@@ -1,0 +1,268 @@
+name: MiniC Incremental Stage1 Core-Type Patch Probe
+
+# Diagnostic-only fast A/B: use the original 214-C GNU/Stage0 seed from
+# run 42601049201, replace ONLY the recompiled core_type_import.c assembly,
+# relink a hybrid Stage1 and retry the ORIGINAL failing GCC .i files.
+# This does NOT certify Stage2, Stage3, Stage4, or a complete compiler rebuild.
+on:
+  push:
+    branches:
+      - refactor/minic-target-language-boundary
+    paths:
+      - .github/workflows/minic-current-stage1-hybrid-core-type.yml
+      - tools/ci/minic-current-stage1-hybrid-trigger.txt
+      - src/compiler/c_lower/core_type_import.c
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  one-source-hybrid-stage1:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[minic-hybrid-core-type]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout candidate source without modifying old seed
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Bind original failed Stage1 artifact
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -Eeuo pipefail
+          gh api repos/"$GITHUB_REPOSITORY"/actions/artifacts/13666097011 | python3 -c '
+          import json,sys
+          a=json.load(sys.stdin)
+          if (a.get("id") != 13666097011 or
+              a.get("name") != "minic-current-stage1-seed" or
+              a.get("expired") is not False or
+              a.get("workflow_run",{}).get("id") != 42601049201):
+              raise SystemExit("HYBRID_STAGE1_ARTIFACT=FAIL")
+          print("HYBRID_STAGE1_ARTIFACT=PASS original_run=42601049201 artifact=13666097011")
+          '
+
+      - name: Download exact old 214-source Stage1 seed
+        uses: actions/download-artifact@v4
+        with:
+          name: minic-current-stage1-seed
+          run-id: 42601049201
+          repository: ${{ github.repository }}
+          github-token: ${{ github.token }}
+          path: build/bootstrap-current-b1
+
+      - name: Install GNU RV64 oracle and QEMU
+        shell: bash
+        timeout-minutes: 12
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
+            libc6-dev-riscv64-cross qemu-user
+          command -v riscv64-linux-gnu-gcc
+          command -v qemu-riscv64
+
+      - name: Compile one patched source and replay original failing GCC inputs
+        shell: bash
+        timeout-minutes: 17
+        run: |
+          set -Eeuo pipefail
+          python3 -u - <<'PY'
+          import hashlib
+          import os
+          from pathlib import Path
+          import subprocess
+          import sys
+          base = Path('build/bootstrap-current-b1')
+          seed = base / 'seed'
+          out = base / 'hybrid-core-type'
+          out.mkdir(parents=True, exist_ok=True)
+          original_commit = 'e22ae6787a269182955ca73b7768cf3ebc0fedd3'
+          changed_source = 'src/compiler/c_lower/core_type_import.c'
+          def sha(path):
+              h = hashlib.sha256()
+              with path.open('rb') as f:
+                  for block in iter(lambda: f.read(1048576), b''):
+                      h.update(block)
+              return h.hexdigest()
+          def manifest(path):
+              rows = []
+              for line in path.read_text().splitlines():
+                  fields = line.split('\t')
+                  if len(fields) != 3:
+                      raise RuntimeError('malformed original seed manifest')
+                  rows.append(tuple(fields))
+              return rows
+          def execute(name, argv, timeout=180, expected=0, env=None):
+              log = out / (name + '.log')
+              with log.open('wb') as f:
+                  p = subprocess.run([str(a) for a in argv], env=env,
+                                     stdout=f, stderr=subprocess.STDOUT,
+                                     timeout=timeout, check=False)
+              print(f'HYBRID_CMD name={name} rc={p.returncode} log_sha256={sha(log)}',flush=True)
+              if p.returncode != expected:
+                  for line in log.read_text(errors='replace').splitlines()[-25:]:
+                      print('HYBRID_ERROR ' + line[:300],flush=True)
+                  raise RuntimeError(f'{name}: exit {p.returncode} expected {expected}')
+              return log
+
+          git_head = subprocess.run(['git','rev-parse','HEAD'],check=True,
+                                    capture_output=True,text=True,timeout=15).stdout.strip()
+          if (seed / 'source-commit.txt').read_text().strip() != original_commit:
+              raise RuntimeError('old seed commit changed')
+          # No unrelated headers, build configuration or ownership inputs may
+          # change in a purported one-C-owner causal check. Only diagnosis,
+          # the focused regression, and the importer/source-seed hook differ.
+          allowed_changes = {
+              changed_source,
+              '.github/workflows/minic-current-stage2-core-debug.yml',
+              '.github/workflows/minic-current-stage1-hybrid-core-type.yml',
+              'tools/ci/minic-bootstrap-current-b1-seed-v1.py',
+              'tests/compiler/c0/core_provisional_record_union_init.c',
+              'tests/compiler/c0/run-core-provisional-record-union-init.sh',
+          }
+          changed_paths = set(subprocess.run(
+              ['git','diff','--name-only',original_commit,git_head],
+              check=True,capture_output=True,text=True,timeout=15
+          ).stdout.splitlines())
+          if changed_paths != allowed_changes:
+              raise RuntimeError('HYBRID_STAGE1=FAIL unexpected git file delta: '+repr(sorted(changed_paths ^ allowed_changes)))
+          sources = (seed / 'sources.normalized').read_text().splitlines()
+          stage0_rows = manifest(seed / 'stage0-manifest.tsv')
+          input_rows = manifest(seed / 'input-sha256.tsv')
+          if (len(sources) != 214 or len(stage0_rows) != 214 or
+                  len(input_rows) != 214 or
+                  [r[1] for r in stage0_rows] != sources or
+                  [r[1] for r in input_rows] != sources or
+                  sources.count(changed_source) != 1):
+              raise RuntimeError('original 214 source order not verified')
+          old_identities = (seed / 'source-sha256.tsv').read_text().splitlines()
+          if len(old_identities) != len(sources):
+              raise RuntimeError('original C source identity manifest incomplete')
+          changed = []
+          for src, identity in zip(sources, old_identities):
+              parts = identity.split('\t')
+              if len(parts) != 2 or parts[0] != src:
+                  raise RuntimeError('original C source identity order differs')
+              actual = sha(Path(src))
+              if actual != parts[1]:
+                  changed.append(src)
+          if changed != [changed_source]:
+              raise RuntimeError('HYBRID_STAGE1=FAIL must change exactly core_type_import.c, got ' + repr(changed))
+          stage0 = base / 'stage0/bin/minic-cc'
+          stage1_old = seed / 'minic-stage1-rv64'
+          if (sha(stage0) != (seed / 'stage0-binary.sha256').read_text().split()[0] or
+                  sha(stage1_old) != (seed / 'stage1-binary.sha256').read_text().split()[0]):
+              raise RuntimeError('original Stage0/Stage1 binary SHA invalid')
+          stage0.chmod(0o755)
+          env = dict(os.environ,MINIC_LINUX_FULL_CROSSBLOCK='1',
+                     MINIC_OPT_PURE_DISCARDED_ADDRESS_EQ='1')
+          core_key = changed_source.replace('/','__').replace('.','_')
+          modified_i = out / (core_key + '.patched.i')
+          modified_s = out / (core_key + '.patched.s')
+          execute('gnu-preprocess-single-owner',[
+              'riscv64-linux-gnu-gcc','-E','-P','-std=c11',
+              '-Iinclude','-Isrc',changed_source,'-o',modified_i],
+              timeout=90,env=env)
+          execute('old-stage0-compile-single-owner',[
+              stage0,'-S',modified_i,'-o',modified_s],timeout=180,env=env)
+          if not modified_s.is_file() or modified_s.stat().st_size == 0:
+              raise RuntimeError('updated single-source assembly missing')
+          asm_paths=[]
+          for (key,src,expected_asm),(ikey,isrc,expected_input) in zip(stage0_rows,input_rows):
+              if (key,src) != (ikey,isrc):
+                  raise RuntimeError('old Stage0 .i/.s manifest differs')
+              old_i = seed / 'i' / (key + '.i')
+              old_s = seed / 's' / (key + '.s')
+              if sha(old_i) != expected_input or sha(old_s) != expected_asm:
+                  raise RuntimeError('old seed input/assembly SHA invalid: ' + src)
+              asm_paths.append(modified_s if src == changed_source else old_s)
+          candidate = out / 'minic-stage1-hybrid-rv64'
+          execute('gnu-link-214-asm-hybrid-stage1',[
+              'riscv64-linux-gnu-gcc','-static',*asm_paths,'-o',candidate],
+              timeout=480,env=env)
+          candidate.chmod(0o755)
+
+          probe_env = dict(env,MINIC_BOOTSTRAP_TRACE='1',
+                           MINIC_CORE_FAILURE_CENSUS='1',
+                           MINIC_CORE_VERIFY_TRACE='1',
+                           MINIC_CORE_EXPR_FAILURE_TRACE='1',
+                           MINIC_CORE_FRAME_TRACE='1')
+          return42_s = out / 'return42.hybrid.s'
+          execute('hybrid-stage1-return42-control',[
+              'qemu-riscv64',candidate,'-S',seed / 'return_42.i','-o',return42_s],
+              timeout=180,env=probe_env)
+          if sha(return42_s) != sha(seed / 'return_42.stage1.s'):
+              raise RuntimeError('HYBRID_STAGE1=FAIL return42 assembly drift')
+
+          report=[
+              'HYBRID_STAGE1_DIAG=DIAGNOSTIC_ONLY',
+              'original_commit='+original_commit,
+              'candidate_commit='+git_head,
+              'original_seed_run=42601049201',
+              'original_seed_artifact=13666097011',
+              'original_stage0_sha256='+sha(stage0),
+              'old_stage1_sha256='+sha(stage1_old),
+              'candidate_hybrid_stage1_sha256='+sha(candidate),
+              'changed_owner='+changed_source,
+              'changed_owner_old_raw_sha256='+old_identities[sources.index(changed_source)].split('\t')[1],
+              'changed_owner_new_raw_sha256='+sha(Path(changed_source)),
+              'changed_owner_new_i_sha256='+sha(modified_i),
+              'changed_owner_new_s_sha256='+sha(modified_s),
+              'unchanged_stage0_assembly_count=213',
+              'patched_stage0_assembly_count=1',
+              'return42_control=SHA_IDENTICAL',
+          ]
+          # Prioritize the earliest failed shard. Avoid full 16-shard retry.
+          failed = []
+          for shard,src in [
+              (1,'src/compiler/core_function_set.c'),
+              (0,'src/compiler/compiler.c'),
+              (2,'src/compiler/module_ir_build.c')]:
+              index=sources.index(src)
+              if index % 16 != shard:
+                  raise RuntimeError('original failed TU shard identity changed')
+              key=src.replace('/','__').replace('.','_')
+              target=out / (key + '.candidate.s')
+              result=subprocess.run(
+                  ['qemu-riscv64',str(candidate),'-S',
+                   str(seed / 'i' / (key + '.i')),'-o',str(target)],
+                  env=probe_env,timeout=240,check=False,
+                  stdout=subprocess.PIPE,stderr=subprocess.STDOUT)
+              log=out/(f'shard-{shard}-candidate.log')
+              log.write_bytes(result.stdout)
+              expected_asm=stage0_rows[index][2]
+              actual_sha=sha(target) if target.is_file() else 'MISSING'
+              same_sha=actual_sha == expected_asm
+              report.append(
+                  f'shard={shard}\tsource={src}\trc={result.returncode}'
+                  f'\tasm_sha={actual_sha}\tbaseline_sha={expected_asm}'
+                  f'\tasm_identical={same_sha}')
+              (out/'hybrid-probe-receipt.txt').write_text('\n'.join(report)+'\n')
+              print(f'HYBRID_STAGE1_SAMPLE shard={shard} source={src} rc={result.returncode} sha_identical={same_sha}',flush=True)
+              if result.returncode != 0 or not same_sha:
+                  failed.append(src)
+                  for line in log.read_text(errors='replace').splitlines()[-30:]:
+                      print('HYBRID_TRACE_TAIL '+line[:320],flush=True)
+          if failed:
+              raise RuntimeError('HYBRID_STAGE1=FAIL original sample blockers '+','.join(failed))
+          report.append('HYBRID_STAGE1_DIAG=PASS_ORIGINAL_3_TU_EXACT_ASM Stage2_FULL_FIXED_POINT=NOT_RUN')
+          (out/'hybrid-probe-receipt.txt').write_text('\n'.join(report)+'\n')
+          print('HYBRID_STAGE1_DIAG=PASS_ORIGINAL_3_TU_EXACT_ASM Stage2_FULL_FIXED_POINT=NOT_RUN',flush=True)
+          PY
+
+      - name: Keep incremental diagnostics and hybrid ELF, even on failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: minic-hybrid-core-type-probe-${{ github.run_id }}
+          path: build/bootstrap-current-b1/hybrid-core-type/
+          if-no-files-found: warn
+          retention-days: 30
+          compression-level: 6

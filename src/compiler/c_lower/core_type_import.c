@@ -99,11 +99,15 @@ static bool import_array(MinicCoreTypeImporter *importer, MinicType element,
 static bool import_record(MinicCoreTypeImporter *importer, MinicType source,
                           MinicCoreTypeId *result, unsigned depth) {
     const MinicRecord *record;
-    MinicCoreType type = {0};
+    MinicCoreType type;
     MinicCoreRecordField *fields = NULL;
     MinicDataLayoutRecordField *layout_fields = NULL;
     MinicCoreTypeId id;
     size_t i;
+    /* The integer alternative is smaller than the record alternative.
+     * A union's {0} initializer does not clear record.field_count or
+     * record.is_complete; provisional registration must see both as zero. */
+    (void)memset(&type, 0, sizeof(type));
     if (source.record_id >= importer->record_count) return false;
     id = importer->record_types[source.record_id];
     if (id != MINIC_CORE_TYPE_INVALID) {

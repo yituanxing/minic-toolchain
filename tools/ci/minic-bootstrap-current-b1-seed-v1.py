@@ -144,6 +144,16 @@ def main():
             timeout=120, stdout=log, stderr=subprocess.STDOUT)
     print("BOOTSTRAP_B1_MACHINE_OPERAND_INIT=PASS targets=5 runtime=x86_64",
           flush=True)
+    # CoreType's RECORD union alternative is wider than its INTEGER first
+    # member. A provisional recursive record must publish an entirely zeroed
+    # member graph before registration; exercise both struct and union.
+    with (logs / "core-provisional-record-union-init.log").open("wb") as log:
+        command(
+            ["sh", "tests/compiler/c0/run-core-provisional-record-union-init.sh"],
+            env=dict(env, MINIC_CC=str(stage0), BUILD_DIR=str(work / "stage0")),
+            timeout=120, stdout=log, stderr=subprocess.STDOUT)
+    print("BOOTSTRAP_B1_CORE_RECORD_UNION_INIT=PASS targets=5 runtime=x86_64",
+          flush=True)
 
     manifest_rows = []
     input_rows = []
