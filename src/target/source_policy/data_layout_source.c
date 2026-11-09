@@ -142,7 +142,8 @@ static bool minic_data_layout_record_depth(const MinicTargetInvocation *invocati
                                            size_t *requested_offset,
                                            size_t *requested_bit_offset,
                                            size_t *size,
-                                           size_t *alignment) {
+                                           size_t *alignment,
+                                           MinicDataLayoutRecordField *all_fields) {
     size_t storage_bits;
     size_t record_alignment;
     size_t pack_alignment;
@@ -278,6 +279,11 @@ static bool minic_data_layout_record_depth(const MinicTargetInvocation *invocati
                 field_alignment > record_alignment) {
                 record_alignment = field_alignment;
             }
+        }
+        if (all_fields != NULL) {
+            all_fields[index].byte_offset = field_offset;
+            all_fields[index].bit_offset = field_bit_offset;
+            all_fields[index].storage_alignment = field_alignment;
         }
         if (requested_offset != NULL && index == requested_field) {
             *requested_offset = field_offset;
@@ -460,7 +466,8 @@ static bool minic_data_layout_type_depth(const MinicTargetInvocation *invocation
 
         record = minic_c0_program_record(program, type.record_id);
         if (!minic_data_layout_record_depth(
-                invocation, program, record, depth + 1U, SIZE_MAX, NULL, NULL, size, alignment)) {
+                invocation, program, record, depth + 1U, SIZE_MAX, NULL, NULL,
+                size, alignment, NULL)) {
             return false;
         }
         return minic_data_layout_apply_explicit_alignment(type, alignment);
@@ -646,7 +653,23 @@ bool minic_data_layout_record_field_layout(const MinicTargetInvocation *invocati
         return false;
     }
     return minic_data_layout_record_depth(
-        invocation, program, record, 0U, field_index, offset, bit_offset, &size, &alignment);
+        invocation, program, record, 0U, field_index, offset, bit_offset,
+        &size, &alignment, NULL);
+}
+
+bool minic_data_layout_record_fields_layout(
+    const MinicTargetInvocation *invocation,
+    const MinicC0Program *program, const MinicRecord *record,
+    MinicDataLayoutRecordField *fields, size_t field_count) {
+    size_t size;
+    size_t alignment;
+    if (record == NULL || field_count != record->field_count ||
+        (field_count != 0U && fields == NULL)) return false;
+    /* The single-field and batch APIs share the exact same validator and
+     * packing walk. A failed layout never publishes a success result. */
+    return minic_data_layout_record_depth(
+        invocation, program, record, 0U, SIZE_MAX, NULL, NULL,
+        &size, &alignment, fields);
 }
 
 bool minic_data_layout_record_field_offset(const MinicTargetInvocation *invocation,

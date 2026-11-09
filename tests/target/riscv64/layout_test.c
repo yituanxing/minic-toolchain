@@ -7,11 +7,47 @@
 
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 static int fail(const char *message) {
     (void)fprintf(stderr, "FAIL target/riscv64/layout: %s\n", message);
     return 1;
+}
+
+/* A batch layout snapshot must preserve every scalar public layout query,
+ * including the ABI-visible storage alignment of packed/bit-field owners. */
+static bool batch_layout_matches_scalars(
+    const MinicTargetInvocation *invocation, const MinicC0Program *program,
+    const MinicRecord *record) {
+    MinicDataLayoutRecordField *fields = NULL;
+    size_t i;
+    bool valid = true;
+    if (record == NULL || record->field_count == SIZE_MAX ||
+        record->field_count > SIZE_MAX / sizeof(*fields)) return false;
+    if (record->field_count != 0U) {
+        fields = malloc(record->field_count * sizeof(*fields));
+        if (fields == NULL) return false;
+    }
+    if (!minic_data_layout_record_fields_layout(
+            invocation, program, record, fields, record->field_count) ||
+        minic_data_layout_record_fields_layout(
+            invocation, program, record, fields, record->field_count + 1U) ||
+        (record->field_count != 0U &&
+         minic_data_layout_record_fields_layout(
+             invocation, program, record, NULL, record->field_count))) valid = false;
+    for (i = 0U; valid && i < record->field_count; ++i) {
+        size_t offset, bit_offset, alignment;
+        if (!minic_data_layout_record_field_layout(
+                invocation, program, record, i, &offset, &bit_offset) ||
+            !minic_data_layout_record_field_storage_alignment(
+                invocation, program, record, i, &alignment) ||
+            fields[i].byte_offset != offset ||
+            fields[i].bit_offset != bit_offset ||
+            fields[i].storage_alignment != alignment) valid = false;
+    }
+    free(fields);
+    return valid;
 }
 
 int main(void) {
@@ -340,6 +376,13 @@ int main(void) {
             minic_c0_program_destroy(&program);
             return fail("record field layout");
         }
+    }
+
+    if (!batch_layout_matches_scalars(&invocation, &program, record) ||
+        !batch_layout_matches_scalars(&invocation, &program, floating_record) ||
+        !batch_layout_matches_scalars(&invocation, &program, hooks_record)) {
+        minic_c0_program_destroy(&program);
+        return fail("single-walk record batch layout matches scalar API");
     }
 
     {

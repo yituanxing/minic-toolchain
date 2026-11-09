@@ -305,6 +305,38 @@ jobs:
               assert "src/compiler/compiler.c" in report or "minic_compile_preprocessed_file" in report
           print("MINIC_LINUX_HOST_HOTSPOT=PASS owner=fs/ext4/fsync.o real_minic_cc=true")
           PY
+      # One factor only: batch all C record field layout queries during the
+      # post-parse C-to-Core import. Historical RV64 layout validation trial
+      # is a different caller and was already rejected below 1.04x.
+      - name: Verify DataLayout batch semantics and paired GNU Linux fsync speed
+        shell: bash
+        env:
+          LAYOUT_BASE_SHA: dd08e4a83abfcb1b286d17edae297afa70319021
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/perf-ab check-layout
+          git fetch --no-tags --depth=1 origin "$LAYOUT_BASE_SHA"
+          git worktree add --detach "$RUNNER_TEMP/minic-refactor-perf/layout-before" "$LAYOUT_BASE_SHA"
+          test "$(git -C "$RUNNER_TEMP/minic-refactor-perf/layout-before" rev-parse HEAD)" = "$LAYOUT_BASE_SHA"
+          make -C "$RUNNER_TEMP/minic-refactor-perf/layout-before" \
+            -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/perf-ab all
+          export MINIC_LINUX_FULL_CROSSBLOCK=1
+          export MINIC_OPT_PURE_DISCARDED_ADDRESS_EQ=1
+          python3 tools/ci/linux-perf-pinned-single-paired-ab-v1.py \
+            --input "$RUNNER_TEMP/minic-refactor-perf/inputs/frozen-linux-fsync.i" \
+            --baseline-driver "$RUNNER_TEMP/minic-refactor-perf/layout-before/build/perf-ab/bin/minic-cc" \
+            --candidate-driver "$GITHUB_WORKSPACE/build/perf-ab/bin/minic-cc" \
+            --out "$RUNNER_TEMP/minic-refactor-perf/result/layout-batch-fsync" \
+            --repeats 4 \
+            | tee "$RUNNER_TEMP/minic-refactor-perf/result/layout-batch-fsync.log"
+          python3 - "$RUNNER_TEMP/minic-refactor-perf/result/layout-batch-fsync/paired-result.json" <<'PY'
+          import json,sys
+          d=json.load(open(sys.argv[1]))
+          assert d["assembly_identical"] and d["input_sha256"]=="3fffda07f8f70b7ac633758b85a3392a1ad1f9a3aa5b1a023cd9b34263b0532e"
+          assert d["compiler_sha256"]["before"]!=d["compiler_sha256"]["after"]
+          print("MINIC_LAYOUT_BATCH_AB=PASS sample=real-linux-fsync speedup="+str(d["candidate_speedup"]))
+          PY
+          cat "$RUNNER_TEMP/minic-refactor-perf/result/layout-batch-fsync.log" >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -318,6 +350,8 @@ jobs:
             ${{ runner.temp }}/minic-refactor-perf/result/recent-aes/results.json
             ${{ runner.temp }}/minic-refactor-perf/result/recent-cjson/summary.md
             ${{ runner.temp }}/minic-refactor-perf/result/recent-cjson/results.json
+            ${{ runner.temp }}/minic-refactor-perf/result/layout-batch-fsync/paired-result.json
+            ${{ runner.temp }}/minic-refactor-perf/result/layout-batch-fsync.log
             ${{ runner.temp }}/minic-refactor-perf/result/phase-*/phases.json
             ${{ runner.temp }}/minic-refactor-perf/result/phase-*.log
             ${{ runner.temp }}/minic-refactor-perf/result/hotspot-*/summary.json

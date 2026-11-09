@@ -45,6 +45,18 @@ bool minic_data_layout_record_field_alignment(const struct MinicTargetInvocation
 bool minic_data_layout_record_field_storage_alignment(
     const struct MinicTargetInvocation *invocation, const MinicC0Program *program,
     const MinicRecord *record, size_t field_index, size_t *alignment);
+/* One complete source-policy layout walk can publish all field placements.
+ * The caller owns this short-lived result array; no mutable C program state
+ * is cached, and no C storage metadata enters Core IR or Machine IR. */
+typedef struct MinicDataLayoutRecordField {
+    size_t byte_offset;
+    size_t bit_offset;
+    size_t storage_alignment;
+} MinicDataLayoutRecordField;
+bool minic_data_layout_record_fields_layout(
+    const struct MinicTargetInvocation *invocation,
+    const MinicC0Program *program, const MinicRecord *record,
+    MinicDataLayoutRecordField *fields, size_t field_count);
 bool minic_data_layout_record_field_layout(const struct MinicTargetInvocation *invocation,
                                            const MinicC0Program *program,
                                            const MinicRecord *record,

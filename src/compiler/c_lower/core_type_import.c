@@ -101,6 +101,7 @@ static bool import_record(MinicCoreTypeImporter *importer, MinicType source,
     const MinicRecord *record;
     MinicCoreType type = {0};
     MinicCoreRecordField *fields = NULL;
+    MinicDataLayoutRecordField *layout_fields = NULL;
     MinicCoreTypeId id;
     size_t i;
     if (source.record_id >= importer->record_count) return false;
@@ -135,7 +136,17 @@ static bool import_record(MinicCoreTypeImporter *importer, MinicType source,
             record->field_count > SIZE_MAX / sizeof(*fields)) return false;
         fields = calloc(record->field_count, sizeof(*fields));
         if (fields == NULL) return false;
+        if (record->field_count > SIZE_MAX / sizeof(*layout_fields))
+            goto failed;
+        layout_fields = malloc(record->field_count * sizeof(*layout_fields));
+        if (layout_fields == NULL) goto failed;
     }
+    /* A completed source record is immutable during this importer pass.
+     * Compute all offsets, bit offsets and storage alignments in the ONE
+     * authoritative DataLayout walk, not once per imported field. */
+    if (!minic_data_layout_record_fields_layout(
+            importer->invocation, importer->program, record,
+            layout_fields, record->field_count)) goto failed;
     type.value.record.fields = fields;
     type.value.record.field_count = record->field_count;
     for (i = 0U; i < record->field_count; ++i) {
@@ -144,24 +155,14 @@ static bool import_record(MinicCoreTypeImporter *importer, MinicType source,
         const MinicCoreType *array_storage;
         MinicArrayObjectInfo array_info;
         bool field_array;
-        MinicType field_layout_type;
-        size_t field_size, field_alignment;
         field_array = minic_c0_record_field_array_object_info(
             importer->program, source.record_id, i, &array_info);
-        /* A fully materialized flexible member has an incomplete outer
-         * ArrayType.  Preserve that ArrayType in sealed Core record metadata,
-         * but ask DataLayout for its complete element's storage alignment.
-         * A flexible tail contributes zero size to the enclosing record. */
-        field_layout_type = field_array && array_info.is_incomplete &&
-                            field->is_flexible_array
-                                ? array_info.element_type : field->type;
-        if (!import_type(importer, field->type, &field_type, depth + 1U) ||
-            !minic_data_layout_type(importer->invocation, importer->program,
-                                    field_layout_type, &field_size, &field_alignment) ||
-            !minic_data_layout_record_field_layout(importer->invocation, importer->program,
-                                                   record, i, &fields[i].byte_offset,
-                                                   &fields[i].bit_offset))
+        /* The batch DataLayout walk has already validated each field's C
+         * storage, including the incomplete flexible tail's element type. */
+        if (!import_type(importer, field->type, &field_type, depth + 1U))
             goto failed;
+        fields[i].byte_offset = layout_fields[i].byte_offset;
+        fields[i].bit_offset = layout_fields[i].bit_offset;
         /* Record field types are already complete source ArrayTypes (or a
          * legal incomplete flexible tail).  Type import must not synthesize
          * a second array dimension from declarator metadata. */
@@ -180,18 +181,16 @@ static bool import_record(MinicCoreTypeImporter *importer, MinicType source,
         fields[i].is_bit_field = field->is_bit_field;
         fields[i].bit_width = field->is_bit_field ? field->bit_width : 0U;
         fields[i].has_nondefault_layout_policy = field->is_packed;
-        if (!minic_data_layout_record_field_storage_alignment(
-                importer->invocation, importer->program, record, i,
-                &fields[i].alignment)) {
-            goto failed;
-        }
+        fields[i].alignment = layout_fields[i].storage_alignment;
     }
     type.value.record.is_complete = true;
     if (!minic_core_type_complete_record(importer->context, id, &type)) goto failed;
+    free(layout_fields);
     free(fields);
     *result = id;
     return true;
 failed:
+    free(layout_fields);
     free(fields);
     return false;
 }
