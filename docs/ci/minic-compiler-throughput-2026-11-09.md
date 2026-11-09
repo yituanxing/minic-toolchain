@@ -159,3 +159,14 @@ flags, and the three zero-output owners are legitimate empty `.s` files.
 now-certified **2064/2064 RV64 GNU AS → GNU LD → QEMU P1 same-Image 12/12**
 receipt. Continue remaining target architecture/runtime gaps independently;
 five-target generated-code quality optimization remains deliberately deferred.
+
+## Stable current-compiler same-runner paired A/B — 2026-11-09 later recertification
+
+Official push [run #42592630648](https://github.com/yituanxing/minic-toolchain/actions/runs/42592630648), real `paired-ab` job `129077650975` concluded `success` at source commit `e5bf93791b0c4fb39b531d833ade0e05ffd792c7` (compiler source equivalent to `a2b6b729`, later commits are CI markers/docs).
+
+- Frozen original GNU Linux 6.6.143 `first500`: `MINIC_FIRST500_AUDIT=COMPLETE owners=500 both_pass=500 both_fail=0 ... candidate_only_fail=0 candidate_only_pass=0 assembly_mismatch=0 empty_assembly_pairs=3 eligible_wall_speedup=1.13612 eligible_cpu_speedup=1.13618`. Eligible subset is 500/500 here; wall improvement ≈11.98% and CPU improvement ≈11.99% against the immediately preceding DataLayout batch optimization baseline, **not** every historical MiniC revision.
+- Exact GNU Linux `fsync.i`: same SHA input/output and four-round paired A/B `MINIC_ONE_OWNER_AB=PASS ... bytes_identical=true repeat=4 before_p50_ms=465.962 after_p50_ms=380.097 speedup=1.2259`. Wall improvement ≈18.43% on this TU.
+- Original upstream tinyAES/cJSON five-ISA differential tasks also passed. Comparisons against much older early-refactor commits intentionally show *non-identical* assembly and materially different frontend/backend coverage; e.g. early four-ISA cJSON baseline speedups below 1.0 against old limited compiler. This is not apples-to-apples proof that the current fully-featured compiler is the all-time fastest.
+- Artifact ID `13662063903` `minic-four-backend-refactor-paired-ab`, SHA-256 `fd7d82175429b9c9cc0cdb1ffa9c5d5f8e85068f65efb84d0dd7da23b9da29ad`, expires 2027-02-07 UTC; contains paired source results, Callgrind, CPU/RSS and 500-TU reports.
+
+Verdict: the batch-importer throughput win survived complete five-target real-Linux recertification; neither correctness regressions nor stale candidate-only failures were observed in the 500 source A/B. The isolated effect of the RISC-V sealed-MIR duplicate verification removal is **not quantified** by this benchmark; do not attribute the entire 1.13612x aggregate speedup to that micro-cut.
