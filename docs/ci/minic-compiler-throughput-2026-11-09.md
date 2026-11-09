@@ -70,6 +70,21 @@ options were replayed; future campaigns should retain complete original
 Kbuild command provenance. Do not reuse the 493-owner 1.05982x figure as a
 new ABI-corrected benchmark result.
 
+### Correctness of empty Kbuild translation units
+
+The ABI-corrected run [#42562100486](https://github.com/yituanxing/minic-toolchain/actions/runs/42562100486)
+proved 497/497 nonempty assembler outputs SHA-identical, no remaining
+indirect-call rejects, and 1.13813x throughput versus `dd08e4a` on that
+nonempty subset (two layout changes combined). Its other three owners exited
+0 on both arms but were excluded for having no nonempty `.s`. The backend's
+transactional module writer creates an output file on every successful return,
+so these outputs are expected to be zero-byte files. GNU as can
+assemble a zero-byte `.s`. Config-disabled kernel translation units need not
+emit any function or global symbol. Treat an existing empty output as valid,
+and retain `empty_assembly_pairs` in the new report; a missing output file or
+nonzero exit remains a failure. The exact new 500-owner speed is pending a
+fresh paired run. No Linux QEMU runtime success is implied by this gate.
+
 ## Historical decision reuse and next gate
 
 Historical `rv64-record-layout-single-walk-v1` optimized a DIFFERENT

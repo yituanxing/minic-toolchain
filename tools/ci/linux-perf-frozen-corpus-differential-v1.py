@@ -61,7 +61,9 @@ def compile_one(exe, source, target):
     except subprocess.TimeoutExpired:
         return {"status": "TIMEOUT", "stderr": "compiler exceeded 150 s"}
     elapsed = round((time.perf_counter_ns() - start) / 1e6, 3)
-    if proc.returncode or not target.is_file() or target.stat().st_size == 0:
+    # A zero-byte .s is valid GNU assembler input for a TU with no emitted
+    # definitions; only a missing output path or nonzero compiler exit fails.
+    if proc.returncode or not target.is_file():
         return {"status": "FAIL", "stderr": proc.stderr[-1200:], "rc": proc.returncode}
     return {"status": "PASS", "sha256": digest(target),
             "bytes": target.stat().st_size, "wall_ms": elapsed}

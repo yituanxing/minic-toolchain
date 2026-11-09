@@ -346,6 +346,7 @@ jobs:
         timeout-minutes: 24
         run: |
           set -Eeuo pipefail
+          python3 tools/ci/test_linux_perf_empty_assembly_v1.py
           export MINIC_LINUX_FULL_CROSSBLOCK=1
           export MINIC_OPT_PURE_DISCARDED_ADDRESS_EQ=1
           python3 tools/ci/linux-perf-first500-eligible-paired-v1.py \
@@ -362,6 +363,7 @@ jobs:
               out.write('\n\nReal GNU Linux 6.6.143 first500 eligibility audit: '+
                   str(counts['both_pass'])+' both-pass byte-identical owners, '+
                   str(counts['both_fail'])+' inherited rejects, '+
+                  str(d['empty_assembly_pairs'])+' both-empty valid asm owners, '+
                   str(counts['candidate_only_fail'])+' candidate-only fails, '+
                   str(counts['assembly_mismatch'])+' SHA mismatches. '+
                   'Speedup ONLY on eligible subset: '+str(d['eligible_wall_speedup'])+'x.\n')

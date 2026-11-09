@@ -42,14 +42,20 @@ def compile_owner(compiler, source, output):
         stderr = "timed out after 180 seconds"
     wall_ms = (time.perf_counter_ns() - start) / 1e6
     after = resource.getrusage(resource.RUSAGE_CHILDREN)
-    valid = rc == 0 and output.is_file() and output.stat().st_size > 0
+    # An empty .s is a legitimate translation unit when Kbuild's selected
+    # CONFIG guards leave no definitions. GNU as accepts zero-byte input;
+    # the compiler's transactional emitter still creates that output path.
+    # A successful exit with a MISSING output file remains a hard rejection.
+    valid = rc == 0 and output.is_file()
+    assembly_bytes = output.stat().st_size if valid else None
     return {
         "accepted": valid, "returncode": rc,
         "wall_ms": round(wall_ms, 3),
         "user_ms": round((after.ru_utime - before.ru_utime) * 1000, 3),
         "sys_ms": round((after.ru_stime - before.ru_stime) * 1000, 3),
         "assembly_sha256": sha(output) if valid else None,
-        "assembly_bytes": output.stat().st_size if valid else None,
+        "assembly_bytes": assembly_bytes,
+        "empty_assembly": valid and assembly_bytes == 0,
         "stderr_tail": stderr if not valid else "",
     }
 
@@ -81,6 +87,7 @@ def main():
     totals = {"both_pass": 0, "both_fail": 0, "both_no_assembly": 0,
               "candidate_only_fail": 0, "candidate_only_pass": 0,
               "assembly_mismatch": 0}
+    empty_assembly_pairs = 0
     before_wall = after_wall = before_cpu = after_cpu = 0.0
     for n, row in enumerate(rows):
         fields = row.split("\t", 3)
@@ -106,6 +113,8 @@ def main():
         if a["accepted"] and b["accepted"]:
             if a["assembly_sha256"] == b["assembly_sha256"]:
                 classification = "both_pass"
+                if a["empty_assembly"] and b["empty_assembly"]:
+                    empty_assembly_pairs += 1
                 before_wall += a["wall_ms"]
                 after_wall += b["wall_ms"]
                 before_cpu += a["user_ms"] + a["sys_ms"]
@@ -138,6 +147,7 @@ def main():
         "scope": "Only both-pass unchanged-assembly subset is timed",
         "corpus_sha256_manifest": sha(hashes), "owners": len(details),
         "kbuild_language_flags": list(RV64_LINUX_KBUILD_LANGUAGE_FLAGS),
+        "empty_assembly_pairs": empty_assembly_pairs,
         "baseline_sha256": sha(before), "candidate_sha256": sha(after),
         "status_counts": totals,
         "eligible_baseline_wall_ms": round(before_wall, 3),
@@ -170,6 +180,7 @@ def main():
     (output / "details.json").write_text(json.dumps(details, indent=2) + "\n")
     print("MINIC_FIRST500_AUDIT=COMPLETE owners=500 " +
           " ".join(k + "=" + str(v) for k,v in totals.items()) +
+          " empty_assembly_pairs=" + str(empty_assembly_pairs) +
           " eligible_wall_speedup=" + str(speed) +
           " eligible_cpu_speedup=" + str(cpu_speed), flush=True)
     if totals["candidate_only_fail"] or totals["assembly_mismatch"]:

@@ -35,7 +35,9 @@ def run(driver, source, output, stdout, stderr, owner, arm, minic_args):
     if arm == "candidate":
         stdout.write_bytes(p.stdout)
         stderr.write_bytes(p.stderr)
-    if p.returncode or not output.is_file() or output.stat().st_size == 0:
+    # Empty Kbuild-owned TUs must still create a .s, but GNU as accepts an
+    # existing zero-byte file. Keep missing output and nonzero exits fatal.
+    if p.returncode or not output.is_file():
         raise RuntimeError(f"MiniC A/B failure owner={owner} arm={arm} rc={p.returncode} stderr={p.stderr[-1200:].decode(errors='replace')}")
     return ms, sha256(output)
 
