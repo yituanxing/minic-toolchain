@@ -29,6 +29,9 @@ jobs:
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
+          # The provenance check diffs against an older original seed commit.
+          # Shallow checkout's default one commit cannot resolve that SHA.
+          fetch-depth: 12
 
       - name: Bind original failed Stage1 artifact
         shell: bash
