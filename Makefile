@@ -1592,6 +1592,8 @@ check-x86_64-busybox-12: $(MINIC_CC_BINARY)
 # MiniC x86 target owner (currently 582/594), retain explicit GNU fallbacks.
 # Verify every original owner receipt+SHA and compare whole linked executable
 # against original GNU across 11 deterministic applet cases. Fail closed.
+# The Ubuntu GNU reference defaults to PIE. Compile MiniC shadow C owners
+# with matching -fPIE so interposable libc references survive the GNU PIE link.
 check-x86_64-busybox-all-eligible: $(MINIC_CC_BINARY)
 	@python3 tests/external/busybox/test_mixed_bulk_coverage.py
 	@set -eu; \
@@ -1600,7 +1602,7 @@ check-x86_64-busybox-all-eligible: $(MINIC_CC_BINARY)
 	if env -u MAKEFLAGS -u MAKEOVERRIDES -u MFLAGS -u GNUMAKEFLAGS -u CFLAGS \
 	   MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
 	   BUSYBOX_X86_64_ALLYES_DISCOVERY=1 BUSYBOX_ALLYES_LINK_COMPATIBLE=1 \
-	   BUSYBOX_ALLYES_MIXED_BULK=1 \
+	   BUSYBOX_ALLYES_MIXED_BULK=1 BUSYBOX_ALLYES_MINIC_PIC=1 \
 	   BUSYBOX_ALLYES_REPORT_DIR="$(abspath $(BUILD_DIR))/busybox-bulk-mixed" \
 	   sh tests/external/busybox/probe-x86_64.sh >"$$log" 2>&1; then \
 	   cat "$$log"; \
