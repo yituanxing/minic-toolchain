@@ -13,8 +13,33 @@ prefix=$4
 qemu=$5
 sysroot=$6
 repo=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
-work=$(mktemp -d)
-trap 'rm -rf "$work"' EXIT HUP INT TERM
+case "${FOUR_BACKEND_BUSYBOX_AARCH64_PIE:-0}" in
+  0|1) ;;
+  *) echo 'FOUR_BACKEND_BUSYBOX_ALL_PIE=INVALID opt_in_must_be_0_or_1' >&2; exit 1 ;;
+esac
+case "${FOUR_BACKEND_BUSYBOX_FULL_C_BINARY:-0}" in
+  0|1) ;;
+  *) echo 'FOUR_BACKEND_BUSYBOX_FULL_C_BINARY=INVALID opt_in_must_be_0_or_1' >&2; exit 1 ;;
+esac
+if [ "${FOUR_BACKEND_BUSYBOX_FULL_C_BINARY:-0}" = 1 ]; then
+  case "$target" in
+    aarch64|loongarch64) ;;
+    *) echo "FOUR_BACKEND_BUSYBOX_FULL_C_BINARY=FAIL stage=unsupported-target target=$target" >&2; exit 1 ;;
+  esac
+fi
+# Keep original ephemeral behavior. A named, *new* run directory is an
+# explicit CI evidence opt-in; never delete or overwrite previous evidence.
+if [ -n "${FOUR_BACKEND_BUSYBOX_ALL_WORK_DIR:-}" ]; then
+  work=$FOUR_BACKEND_BUSYBOX_ALL_WORK_DIR
+  if [ -e "$work" ]; then
+    echo "FOUR_BACKEND_BUSYBOX_ALL_WORK=REFUSE_EXISTING path=$work" >&2
+    exit 1
+  fi
+  mkdir -p "$work"
+else
+  work=$(mktemp -d)
+  trap 'rm -rf "$work"' EXIT HUP INT TERM
+fi
 src="$work/src"
 report="$work/report"
 mkdir -p "$src" "$report"
@@ -22,13 +47,25 @@ mkdir -p "$src" "$report"
 echo "FOUR_BACKEND_BUSYBOX_ALL_KBUILD_START target=$target original_commit=1a64f6a20aaf6ea4dbba68bbfa8cc1ab7e5c57c4 mode=upstream_allyesconfig"
 # Reuse x86's host-link-compatible upstream Kconfig policy with the actual
 # cross GNU compiler. Source and Kbuild itself remain pristine.
+# GNU cross Kbuild can link PIE. Replacing it with non-PIE MiniC C objects
+# gives unsafe relocations against interposable libc data (AArch optind is
+# already proven by Stage4). The existing target-qualified MiniC -fPIE path
+# is requested only for the exact opted-in AArch64 Stage5 run; preserve the
+# original RISCV/x86 behavior and leave legacy AArch/Loong defaults alone.
+minic_pic=$(case "$target" in
+  riscv64|x86_64) printf 1 ;;
+  aarch64) printf '%s' "${FOUR_BACKEND_BUSYBOX_AARCH64_PIE:-0}" ;;
+  *) printf 0 ;;
+esac)
+echo "FOUR_BACKEND_BUSYBOX_ALL_MINIC_PIE=MODE target=$target enabled=$minic_pic original_Kbuild=1"
 if timeout 900s env CROSS_COMPILE="$prefix" \
     PKG_CONFIG=pkg-config \
     BUSYBOX_ALLYES_LINK_COMPATIBLE=1 \
     BUSYBOX_ALLYES_MIXED_BULK=1 \
     BUSYBOX_ALLYES_CROSS_PREFIX="$prefix" \
     BUSYBOX_ALLYES_MINIC_TARGET="$target-linux" \
-    BUSYBOX_ALLYES_MINIC_PIC="$(if [ "$target" = riscv64 ]; then printf 1; else printf 0; fi)" \
+    BUSYBOX_ALLYES_MINIC_PIC="$minic_pic" \
+    BUSYBOX_ALLYES_FULL_C_BUSYBOX="${FOUR_BACKEND_BUSYBOX_FULL_C_BINARY:-0}" \
     BUSYBOX_ALLYES_QEMU="$qemu" \
     BUSYBOX_ALLYES_SYSROOT="$sysroot" \
     python3 "$repo/tests/external/busybox/allyes_sweep.py" \
@@ -39,7 +76,7 @@ if timeout 900s env CROSS_COMPILE="$prefix" \
 else
     scan_rc=$?
 fi
-grep -E '^(BUSYBOX_ALLYES_(CONFIG=|HOST_EXCLUSIONS=|GCC_KBUILD=|GCC_BUILD_DIAGNOSTIC=|GCC_FIRST_ERRORS=|GCC_SEQUENTIAL=|GCC_REAL_ERRORS |GCC_STOP_CONTEXT |GCC_FINAL_LINK_LOG=|GCC_FINAL_LINK_CAUSE |GCC_FINAL_LINK_FIRST_LINES=|GCC_FINAL_LINK_LAST_LINES=|GCC_LINK_FEATURES=|GCC_LINK_ATTEMPTS=|FRONTIER=|SCAN=|GCC_RUNTIME_ORACLE=)|BUSYBOX_MIXED_BULK(_CROSS_RUNTIME=|_CROSS_COHORT=|_SOURCE=|_REAL_OWNERS=|_RUNTIME=|_RUNTIME_DIFF|=))' \
+grep -E '^(BUSYBOX_ALLYES_(CONFIG=|HOST_EXCLUSIONS=|GCC_KBUILD=|GCC_BUILD_DIAGNOSTIC=|GCC_FIRST_ERRORS=|GCC_SEQUENTIAL=|GCC_REAL_ERRORS |GCC_STOP_CONTEXT |GCC_FINAL_LINK_LOG=|GCC_FINAL_LINK_CAUSE |GCC_FINAL_LINK_FIRST_LINES=|GCC_FINAL_LINK_LAST_LINES=|GCC_LINK_FEATURES=|GCC_LINK_ATTEMPTS=|FRONTIER=|SCAN=|GCC_RUNTIME_ORACLE=)|BUSYBOX_MIXED_BULK(_CROSS_RUNTIME=|_CROSS_COHORT=|_SOURCE=|_REAL_OWNERS=|_RUNTIME=|_RUNTIME_DIFF|=)|BUSYBOX_FULL_C_BINARY=)' \
   "$work/probe.out" || true
 grep -E '^BUSYBOX_ALLYES_BLOCKER ' "$work/probe.out" | head -n 30 || true
 grep -E '^BUSYBOX_ALLYES_CORE_REJECT ' "$work/probe.out" | head -n 65 || true
@@ -110,4 +147,11 @@ if [ -z "$mini" ] || [ -z "$gnu" ] || [ "$mini" -lt "$floor" ] ||
   exit 1
 fi
 echo "FOUR_BACKEND_BUSYBOX_ALL_ACCEPT=PASS target=$target original_Kbuild_owners=$mini MiniC_owners=$mini GNU_fallbacks=$gnu SHA256_verified=$mini GNU_QEMU_fixtures=38 strict=1 all_C_owners_MiniC=YES assembler_linker=GNU full_all_MiniC=NO"
+if [ "${FOUR_BACKEND_BUSYBOX_FULL_C_BINARY:-0}" = 1 ]; then
+  grep -Fxq "BUSYBOX_FULL_C_BINARY=PASS target=$target original_Kbuild_owners=581 MiniC_C_owners=581 GNU_C_fallbacks=0 SHA256_verified=581 GNU_AS_LD=YES original_and_MiniC_ELF_differ=YES QEMU_byte_exact=38/38 full_C_MiniC=YES full_toolchain_MiniC=NO" "$work/probe.out" || {
+    echo "FOUR_BACKEND_BUSYBOX_FULL_C_BINARY=FAIL stage=missing-real-linked-QEMU-proof" >&2
+    exit 1
+  }
+  echo "FOUR_BACKEND_BUSYBOX_FULL_C_BINARY=PASS target=$target owners=581/581 GNU_AS_LD=YES QEMU_byte_exact=38/38 full_C_MiniC=YES full_toolchain_MiniC=NO"
+fi
 echo "FOUR_BACKEND_BUSYBOX_ALL_KBUILD_END target=$target authenticated_mixed_build=1 full_MiniC=NO"

@@ -4,38 +4,44 @@
 #include "core/core_ir.h"
 #include "target/common/core_function_facts.h"
 #include "target/common/core_object_storage.h"
-#include "frontend/ast.h"
 #include "minic/compiler.h"
 #include "target/target_info.h"
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdio.h>
 
+typedef struct MinicCoreModule MinicCoreModule;
+typedef struct MinicCoreModuleFunctionSymbol MinicCoreModuleFunctionSymbol;
+
 /* Two tested direct LP64 backends share the TU-level failure/cleanup and
  * GNU/ELF output lifecycle, NOT instruction selection or ABI register banks.
  * Machine IR would replace the individual function callbacks, not this
  * target-neutral object/function serialization loop. */
 typedef bool (*MinicMultiDirectEmitFunction)(
-    FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
-    const MinicFunction *decl, const MinicCoreFunction *fn,
+    FILE *out, const MinicTargetInfo *target,
+    const MinicCoreModule *module,
+    const MinicCoreModuleFunctionSymbol *module_decl,
+    const MinicCoreFunction *fn,
     const MinicCoreFunctionFacts *facts,
     const MinicCoreObjectStoragePlan *storage, size_t function_id,
     bool function_sections);
 
-typedef struct MinicMultiDirectProgramConfig {
+typedef struct MinicMultiDirectModuleConfig {
     MinicTargetArchitecture architecture;
     const char *architecture_name; /* diagnostic/trace lowercase ISA name */
     const char *display_name;      /* AArch64 / LoongArch64 */
     const char *gnu_stack_note;    /* literal encoded GNU .note directive */
+    const char *elf_function_type; /* target GNU AS type spelling, e.g. %function */
+    const char *elf_object_type;   /* target GNU AS type spelling, e.g. %object */
     MinicMultiDirectEmitFunction emit_function;
-    bool (*finalize_output)(const char *path); /* optional target-only legalization */
-} MinicMultiDirectProgramConfig;
+} MinicMultiDirectModuleConfig;
 
-bool minic_multi_direct_write_program(
-    const char *path, const MinicC0Program *program,
+/* Sealed ModuleIR is the sole ELF and function symbol authority. */
+bool minic_multi_direct_write_module(
+    const char *path,
     const MinicTargetInfo *target, const MinicCoreFunction *core_functions,
     size_t core_function_count, bool function_sections,
-    const MinicMultiDirectProgramConfig *config,
+    const MinicCoreModule *module, const MinicMultiDirectModuleConfig *config,
     MinicDiagnostic *diagnostic);
 
 /* Shared byte-identical opt-in Core reject diagnostics. The caller passes

@@ -1,4 +1,6 @@
 #include "core/value_uses.h"
+#include <stdint.h>
+#include <string.h>
 
 /* Extracted without rewriting the tested RV64 Core SSA use enumeration. */
 static bool core_visit_value_use(MinicCoreValueId value_id,
@@ -64,6 +66,8 @@ bool minic_core_visit_instruction_value_uses(const MinicCoreFunction *function,
     case MINIC_CORE_INSTRUCTION_INTEGER_LESS:
     case MINIC_CORE_INSTRUCTION_POINTER_LESS:
     case MINIC_CORE_INSTRUCTION_SCALAR_EQUAL:
+    case MINIC_CORE_INSTRUCTION_VECTOR_REGISTER_XOR:
+    case MINIC_CORE_INSTRUCTION_VECTOR_REGISTER_ADD:
         return core_visit_value_use(instruction->value.binary.left, visitor, context) &&
                core_visit_value_use(instruction->value.binary.right, visitor, context);
 
@@ -89,12 +93,16 @@ bool minic_core_visit_instruction_value_uses(const MinicCoreFunction *function,
     case MINIC_CORE_INSTRUCTION_VARIADIC_NEXT_SCALAR:
         return core_visit_value_use(instruction->value.operand, visitor, context);
 
+    case MINIC_CORE_INSTRUCTION_FIXED_REGISTER_WRITE:
+        return core_visit_value_use(
+            instruction->value.fixed_register_write.source, visitor, context);
     case MINIC_CORE_INSTRUCTION_FIELD_ADDRESS:
         return core_visit_value_use(instruction->value.field_address.base, visitor, context);
     case MINIC_CORE_INSTRUCTION_POINTER_OFFSET:
         return core_visit_value_use(instruction->value.pointer_offset.base, visitor, context) &&
                core_visit_value_use(instruction->value.pointer_offset.index, visitor, context);
     case MINIC_CORE_INSTRUCTION_LOAD:
+    case MINIC_CORE_INSTRUCTION_VECTOR_REGISTER_LOAD:
         return core_visit_value_use(instruction->value.load.address, visitor, context);
     case MINIC_CORE_INSTRUCTION_ATOMIC_LOAD:
         return core_visit_value_use(instruction->value.atomic_load.address, visitor, context);
@@ -104,6 +112,7 @@ bool minic_core_visit_instruction_value_uses(const MinicCoreFunction *function,
                core_visit_value_use(
                    instruction->value.atomic_store.stored_value, visitor, context);
     case MINIC_CORE_INSTRUCTION_STORE:
+    case MINIC_CORE_INSTRUCTION_VECTOR_REGISTER_STORE:
         return core_visit_value_use(instruction->value.store.address, visitor, context) &&
                core_visit_value_use(instruction->value.store.stored_value, visitor, context);
     case MINIC_CORE_INSTRUCTION_RECORD_LOAD:
@@ -119,27 +128,23 @@ bool minic_core_visit_instruction_value_uses(const MinicCoreFunction *function,
                    instruction->value.record_copy.destination_address, visitor, context) &&
                core_visit_value_use(
                    instruction->value.record_copy.source_address, visitor, context);
-    case MINIC_CORE_INSTRUCTION_REGISTER_OUTPUT_INPUT_INLINE_ASM:
+    case MINIC_CORE_INSTRUCTION_VECTOR_STORAGE_COPY:
         return core_visit_value_use(
-            instruction->value.register_output_input_inline_asm.operand, visitor, context);
-    case MINIC_CORE_INSTRUCTION_MEMORY_READWRITE_SCALAR_INPUT_INLINE_ASM:
-        return core_visit_value_use(
-                   instruction->value.memory_readwrite_scalar_input_inline_asm.memory_address,
-                   visitor,
-                   context) &&
+                   instruction->value.vector_storage_copy.destination_address,
+                   visitor, context) &&
                core_visit_value_use(
-                   instruction->value.memory_readwrite_scalar_input_inline_asm.operand,
-                   visitor,
-                   context);
-    case MINIC_CORE_INSTRUCTION_SCALAR_INPUT_INLINE_ASM:
-        return core_visit_value_use(
-            instruction->value.scalar_input_inline_asm.operand, visitor, context);
+                   instruction->value.vector_storage_copy.source_address,
+                   visitor, context);
     case MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM:
         if (instruction->value.structured_inline_asm.operand_count >
             MINIC_CORE_STRUCTURED_INLINE_ASM_OPERAND_LIMIT) {
             return false;
         }
         for (i = 0U; i < instruction->value.structured_inline_asm.operand_count; ++i) {
+            /* REGISTER_RESULT defines instruction->result; it is not a use. */
+            if (instruction->value.structured_inline_asm.operands[i].kind ==
+                MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_RESULT)
+                continue;
             if (!core_visit_value_use(
                     instruction->value.structured_inline_asm.operands[i].value,
                     visitor,
@@ -172,7 +177,6 @@ bool minic_core_visit_instruction_value_uses(const MinicCoreFunction *function,
     case MINIC_CORE_INSTRUCTION_FUNCTION_ADDRESS:
     case MINIC_CORE_INSTRUCTION_BLOCK_ADDRESS:
     case MINIC_CORE_INSTRUCTION_OPAQUE_INLINE_ASM:
-    case MINIC_CORE_INSTRUCTION_REGISTER_OUTPUT_INLINE_ASM:
     case MINIC_CORE_INSTRUCTION_COMPILER_BARRIER:
     case MINIC_CORE_INSTRUCTION_CALL_FRAME_ADDRESS:
     case MINIC_CORE_INSTRUCTION_VARIADIC_ARGUMENT_ADDRESS:
@@ -200,5 +204,57 @@ bool minic_core_visit_terminator_value_uses(const MinicCoreTerminator *terminato
         return true;
     }
     return false;
+}
+
+typedef struct CoreValueUseCountContext {
+    size_t *counts;
+    size_t capacity;
+} CoreValueUseCountContext;
+
+static bool core_value_count_use(MinicCoreValueId value, void *opaque) {
+    CoreValueUseCountContext *context = (CoreValueUseCountContext *)opaque;
+    if (context == NULL || context->counts == NULL ||
+        value >= context->capacity || context->counts[value] == SIZE_MAX)
+        return false;
+    ++context->counts[value];
+    return true;
+}
+
+bool minic_core_function_value_use_counts(const MinicCoreFunction *function,
+    size_t *counts, size_t capacity) {
+    CoreValueUseCountContext context;
+    size_t block_id;
+    size_t unused_slot = 0U;
+    if (function == NULL || capacity < function->value_count ||
+        function->value_count > SIZE_MAX / sizeof(*counts) ||
+        (function->block_count != 0U && function->blocks == NULL) ||
+        (function->value_count != 0U && counts == NULL))
+        return false;
+    context.counts = counts != NULL ? counts : &unused_slot;
+    context.capacity = function->value_count;
+    if (function->value_count != 0U)
+        (void)memset(context.counts, 0,
+                     function->value_count * sizeof(*counts));
+    for (block_id = 0U; block_id < function->block_count; ++block_id) {
+        const MinicCoreBlock *block = &function->blocks[block_id];
+        size_t ordinal;
+        if (!block->has_terminator ||
+            (block->instruction_count != 0U && block->instructions == NULL))
+            return false;
+        for (ordinal = 0U; ordinal < block->instruction_count; ++ordinal) {
+            const MinicCoreInstructionId instruction_id =
+                block->instructions[ordinal];
+            if (instruction_id >= function->instruction_count ||
+                function->instructions == NULL ||
+                !minic_core_visit_instruction_value_uses(
+                    function, &function->instructions[instruction_id],
+                    core_value_count_use, &context))
+                return false;
+        }
+        if (!minic_core_visit_terminator_value_uses(
+                &block->terminator, core_value_count_use, &context))
+            return false;
+    }
+    return true;
 }
 

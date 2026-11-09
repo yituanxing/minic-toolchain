@@ -82,7 +82,7 @@ if "$minic" -S "$root/tests/compiler/c0/invalid_function_pointer_typedef_interle
     printf '%s\n' 'FAIL compiler/c0/deferred_declarator_attributes: interleaved function-pointer typedef attribute widened silently' >&2
     exit 1
 fi
-grep -F 'GNU attributes inside function pointer typedef declarators are not implemented yet' \
+grep -F 'unsupported GNU attribute in function-pointer typedef' \
     "$work/invalid-fp-typedef-attr.stderr" >/dev/null
 
 printf '%s\n' 'PASS compiler/c0/deferred_declarator_attributes pre-pointer=generic post-pointer=generic interleaved-return-pointer=generic parameter-type-attr-before-pointer=generic function-target=late object-target=late section=preserved noinline=parse-only noclone=parse-only+function-only+zero-arg used=parse-only+function-object+zero-arg fp-object-interleaved=collected+object-routed typedef-interleaved=fail-closed'

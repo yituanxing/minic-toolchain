@@ -24,7 +24,8 @@ expected=57ccc32bbbd005cab75bcc52444052535af691789dba2b9016d5c50640d68b3d
 for cmd in curl sha256sum "$BARE_CC" "$RISCV_CC" qemu-riscv32; do
   command -v "$cmd" >/dev/null
 done
-curl -fsSL --retry 3 --retry-delay 2 --max-time 120 \
+curl --http1.1 -fsSL --retry 5 --retry-all-errors --retry-delay 2 \
+  --connect-timeout 15 --max-time 90 --retry-max-time 240 \
   "https://www.lua.org/ftp/lua-5.5.0.tar.gz" -o "$work/lua.tar.gz"
 printf '%s  %s\n' "$expected" "$work/lua.tar.gz" | sha256sum -c - >/dev/null
 tar -xzf "$work/lua.tar.gz" -C "$work"
@@ -55,6 +56,15 @@ for source in "${sources[@]}"; do
     blocked=$((blocked+1))
     echo "RV32_LUA_TU=BLOCKED source=$source stage=MiniC" >&2
     head -n 14 "$work/obj/$stem.minic.err" >&2
+    # Re-run ONLY the rejected GNU-preprocessed TU with the existing
+    # RV32 selector diagnostics. Keep the original failure verdict and
+    # never substitute GNU-compiled objects for MiniC failures.
+    MINIC_RV_MACHINE_TRACE=1 "$MINIC_CC" --target=riscv32-linux \
+      "${target[@]}" -S "$work/obj/$stem.i" \
+      -o "$work/obj/$stem.trace.s" \
+      >"$work/obj/$stem.trace.out" 2>"$work/obj/$stem.trace.err" || :
+    grep -E "^RV32_TYPED_REJECT(_PHASE|_STAGE)?" \
+      "$work/obj/$stem.trace.err" >&2 || :
     line=$(sed -n "s/.*$stem\\.i:\\([0-9][0-9]*\\):.*/\\1/p" \
        "$work/obj/$stem.minic.err" | head -n 1)
     if [[ -n "$line" ]]; then

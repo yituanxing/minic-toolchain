@@ -1,11 +1,10 @@
 #include "target/common/core_spill_layout.h"
 #include "core/value_uses.h"
-#include "target/data_layout.h"
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
-/* RV64-proven per-block SSA last-use allocator shared by RV32 and RV64.
- * The physical stack geometry comes from the target DataLayout and XLEN. */
+/* RV64-proven per-block SSA last-use allocator shared by all five targets.
+ * Sealed Core type layout supplies widths; physical XLEN/stack base is ABI-owned. */
 /* IRQ_FRAME_REUSE_V0: Core SSA availability is reset at every basic-block
    boundary. Reuse physical spill slots inside one block only after the last
    semantic use of a value. A result is allocated before the current
@@ -14,32 +13,36 @@
 /* IRQ_FRAME_PACK_V0: Core scalar spill values are block-local. Keep the
    existing conservative no-liveness-reuse contract, but do not spend 16 bytes
    on every <= XLEN value merely because int128 needs a two-XLEN pair. */
-static bool core_value_spill_slot_size(const MinicC0Program *program,
-                                       const MinicCoreFunction *function,
-                                       const MinicDataLayout *layout,
+static bool core_value_spill_slot_size(const MinicCoreFunction *function,
                                        size_t unit_bytes,
                                        MinicCoreValueId value_id,
                                        size_t *cached_slot_sizes,
                                        size_t *slot_size) {
     size_t value_size;
     size_t value_alignment;
+    const MinicCoreType *resolved;
 
-    if (program == NULL || function == NULL || slot_size == NULL ||
+    if (function == NULL || function->type_context == NULL ||
+        (function->value_count != 0U && function->values == NULL) ||
+        slot_size == NULL ||
         cached_slot_sizes == NULL || value_id >= function->value_count)
         return false;
     if (cached_slot_sizes[value_id] != 0U) {
         *slot_size = cached_slot_sizes[value_id];
         return true;
     }
-    if (!minic_data_layout_type(layout,
-                                program,
-                                function->values[value_id].type,
-                                &value_size,
-                                &value_alignment) ||
-        value_size == 0U || value_size > 2U * unit_bytes) {
+    /* SSA spill geometry is immutable Core execution data. Malformed Core
+     * types fail without reopening the frontend layout table. */
+    resolved = minic_core_type_get(function->type_context,
+                     function->values[value_id].core_type_id);
+    if (resolved == NULL || !resolved->has_layout)
+        return false;
+    value_size = resolved->size;
+    value_alignment = resolved->alignment;
+    if (value_alignment == 0U || value_size == 0U ||
+        value_size > 2U * unit_bytes) {
         return false;
     }
-    (void)value_alignment;
     *slot_size = value_size > unit_bytes ? 2U * unit_bytes : unit_bytes;
     cached_slot_sizes[value_id] = *slot_size;
     return true;
@@ -62,9 +65,7 @@ static bool core_spill_count_use(MinicCoreValueId value_id, void *opaque) {
 }
 
 typedef struct CoreSpillConsumeContext {
-    const MinicC0Program *program;
     const MinicCoreFunction *function;
-    const MinicDataLayout *layout;
     size_t unit_bytes;
     size_t *cached_slot_sizes;
     size_t *remaining_uses;
@@ -80,13 +81,13 @@ static bool core_spill_consume_use(MinicCoreValueId value_id, void *opaque) {
     size_t start;
     size_t i;
 
-    if (context == NULL || context->program == NULL || context->function == NULL ||
+    if (context == NULL || context->function == NULL ||
         context->remaining_uses == NULL || context->active_units == NULL ||
         context->occupied_units == NULL || value_id >= context->function->value_count ||
         context->remaining_uses[value_id] == 0U ||
         context->active_units[value_id] == SIZE_MAX ||
         !core_value_spill_slot_size(
-            context->program, context->function, context->layout,
+            context->function,
             context->unit_bytes, value_id, context->cached_slot_sizes,
             &slot_size) ||
         (slot_size != context->unit_bytes &&
@@ -139,7 +140,7 @@ static bool core_spill_find_units(const bool *occupied_units,
     return false;
 }
 
-/* The function workspace caches each immutable value's DataLayout slot size
+/* The function workspace caches each immutable Core value's slot size
  * across all SSA reads/releases; do not repeat type-layout calculation.
  * The old algorithm calloc/malloc'd
  * three arrays in every block (and walked all blocks twice); that dominated
@@ -152,10 +153,8 @@ typedef struct CoreSpillWorkspace {
     size_t occupied_capacity;
 } CoreSpillWorkspace;
 
-static bool core_block_reused_spill_layout(const MinicC0Program *program,
-                                           const MinicCoreFunction *function,
+static bool core_block_reused_spill_layout(const MinicCoreFunction *function,
                                            const MinicCoreBlock *block,
-                                           const MinicDataLayout *layout,
                                            size_t unit_bytes,
                                            size_t value_base_offset,
                                            size_t *value_offsets,
@@ -171,7 +170,8 @@ static bool core_block_reused_spill_layout(const MinicC0Program *program,
     CoreSpillConsumeContext consume_context;
     bool ok = false;
 
-    if (program == NULL || function == NULL || block == NULL || layout == NULL ||
+    if (function == NULL || function->type_context == NULL || block == NULL ||
+        (block->instruction_count != 0U && block->instructions == NULL) ||
         peak_bytes == NULL || workspace == NULL ||
         (unit_bytes != 4U && unit_bytes != 8U) ||
         value_base_offset % unit_bytes != 0U) {
@@ -190,7 +190,7 @@ static bool core_block_reused_spill_layout(const MinicC0Program *program,
             continue;
         }
         if (instruction->result >= function->value_count ||
-            !core_value_spill_slot_size(program, function, layout, unit_bytes,
+            !core_value_spill_slot_size(function, unit_bytes,
                                         instruction->result,
                                         workspace->cached_slot_sizes, &slot_size) ||
             (slot_size != unit_bytes && slot_size != 2U * unit_bytes) ||
@@ -238,9 +238,7 @@ static bool core_block_reused_spill_layout(const MinicC0Program *program,
         goto done;
     }
 
-    consume_context.program = program;
     consume_context.function = function;
-    consume_context.layout = layout;
     consume_context.unit_bytes = unit_bytes;
     consume_context.cached_slot_sizes = workspace->cached_slot_sizes;
     consume_context.remaining_uses = remaining_uses;
@@ -261,7 +259,7 @@ static bool core_block_reused_spill_layout(const MinicC0Program *program,
             MinicCoreValueId result = instruction->result;
 
             if (result >= function->value_count || active_units[result] != SIZE_MAX ||
-                !core_value_spill_slot_size(program, function, layout, unit_bytes,
+                !core_value_spill_slot_size(function, unit_bytes,
                                             result, workspace->cached_slot_sizes,
                                             &slot_size) ||
                 (slot_size != unit_bytes && slot_size != 2U * unit_bytes)) {
@@ -301,7 +299,7 @@ static bool core_block_reused_spill_layout(const MinicC0Program *program,
             size_t start = active_units[result];
             size_t i;
             if (start == SIZE_MAX ||
-                !core_value_spill_slot_size(program, function, layout, unit_bytes,
+                !core_value_spill_slot_size(function, unit_bytes,
                                             result, workspace->cached_slot_sizes,
                                             &slot_size) ||
                 (slot_size != unit_bytes && slot_size != 2U * unit_bytes)) {
@@ -337,15 +335,16 @@ done:
  * and RV64 retain identical last-use rules, 4B/8B units, placement order
  * and ABI-chosen stack base. The only public spill API is this one. */
 bool minic_core_function_reused_spill_layout(
-    const MinicC0Program *program, const MinicCoreFunction *function,
-    const MinicDataLayout *layout, size_t unit_bytes,
+    const MinicCoreFunction *function, size_t unit_bytes,
     size_t value_base_offset, size_t *value_offsets,
     size_t *peak_bytes, size_t *failed_block) {
     CoreSpillWorkspace workspace = {0};
     size_t block_index, maximum = 0U;
     bool ok = false;
     if (failed_block != NULL) *failed_block = SIZE_MAX;
-    if (program == NULL || function == NULL || layout == NULL ||
+    if (function == NULL || function->type_context == NULL ||
+        (function->value_count != 0U && function->values == NULL) ||
+        (function->instruction_count != 0U && function->instructions == NULL) ||
         peak_bytes == NULL || (unit_bytes != 4U && unit_bytes != 8U) ||
         value_base_offset % unit_bytes != 0U ||
         (function->value_count != 0U && value_offsets == NULL) ||
@@ -370,8 +369,8 @@ bool minic_core_function_reused_spill_layout(
     for (block_index = 0U; block_index < function->block_count; ++block_index) {
         size_t block_bytes;
         if (!core_block_reused_spill_layout(
-                program, function, &function->blocks[block_index],
-                layout, unit_bytes, value_base_offset, value_offsets,
+                function, &function->blocks[block_index],
+                unit_bytes, value_base_offset, value_offsets,
                 &block_bytes, &workspace)) {
             if (failed_block != NULL) *failed_block = block_index;
             goto done;

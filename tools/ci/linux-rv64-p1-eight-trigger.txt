@@ -1,0 +1,20 @@
+# Independent exact-head PR consent: the last commit must edit this marker
+# 2026-11-07 strict 12-boot receiver: no duplicate legacy twelve-boot run; require 12 exact-image checks, P1 oracle and clean qemu_status=0, with per-trial evidence artifacts.
+# AND linux-rv64-runtime-trigger.txt. Do not use historical [linux-*] tags.
+# Only the frozen 2064-owner RV64 verify receiver may enable this experiment.
+2026-11-07 eight-owner crossblock plus discarded-address equality reproduction
+2026-11-07 retry after #42330949281 Python POOL_ISOLATED indentation error; no compiler profile change
+2026-11-07 rearm exact eight-owner replay only to retain three pinned GNU .i input and frame provenance artifacts; do not change compiler identity, cached C pool, or P1 acceptance rules
+2026-11-07 strict same-Image eight-owner P1 after RV64 source fix f3354e064; compare current exact GNU .i against historical frame results, run adversarial GNU/QEMU differential and twelve independent boots; never count frame size, cache or three successful boots as twelve
+2026-11-07 strict stable-baseline completion after #42338051693; 4/4 full-MiniC baseline PASS caused historical diagnostic to exit INCONCLUSIVE. Reboot identical Image 12 times with SHA invariance and exact P1 oracle; if any FAIL, perform original eight-owner rescue; no certifying skip.
+2026-11-07 current exact-HEAD 2064-owner LP64 static Image independently verified P1 twelve-boot campaign; GNU golden and candidate Kbuild/link identity required, no historical cached 4/4 substitution.
+# 2026-11-08 compiler f4d7d01 full current GNU Kbuild Image and twelve independent strict P1 boot receipts, not eight-owner replay
+# 2026-11-08 optimized source c95363a exact-head full 2064-owner GNU Kbuild and strict twelve independent same-Image P1 boots; this marker changes together with linux-rv64-runtime-trigger.txt in one commit.
+# 2026-11-08 source 8708f818 full 2064-owner GNU Kbuild and fresh 12/12 identical-image P1; both markers atomically rearmed, not historical eight-owner diagnostic.
+# 2026-11-08 closure batch exact-head full 2064-owner GNU Kbuild and strict same-Image 12/12 P1 after e652462 MachineIR oracle fixes; do not select historical eight-owner diagnostic.
+# 2026-11-08 performance closure: paired strict-full marker with fresh exact-head five-ISA selector verification ownership and alignment-safe RV I payload; twelve independent P1 boots of the same GNU-linked SHA-checked Image.
+# 2026-11-08 combined CoreType hash-cons + inline-owner-snapshot exact-HEAD strict 2064-owner GNU Linux 6.6.143 and twelve independent P1 same-Image boots; fail on any wrong SHA, object, exit or P1 oracle.
+# 2026-11-08 indexed live-ASM token scan recertification: commit 900267b3 new exact-head original GNU Linux 2064 C owners, GNU AS/LD and QEMU P0/P1, then twelve independent same-Image strict P1 boots. Preserve unsafe-name fallback and all existing original software checks.
+# 2026-11-09 compiler own-throughput recovery, same-head strict full scope after run 42563417488 validated 500/500; require current exact MiniC 2064/2064 GNU AS/LD and all twelve current same-Image P1 oracles, preserving failures as failures.
+# 2026-11-09 paired with RV64 current-head sealed-preflight strict 2064-owner and identical-Image twelve-boot campaign; actual QEMU P1 oracle required.
+mode=rv64-full

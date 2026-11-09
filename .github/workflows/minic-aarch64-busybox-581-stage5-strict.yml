@@ -1,0 +1,225 @@
+name: MiniC AArch64 Original BusyBox 581 Stage5 Strict
+
+# Original 1.36.1 allyesconfig: all 581 C object owners from MiniC, all
+# assembler/linker work from GNU, and 38 QEMU fixtures byte-equal to GNU.
+# One-shot PR recertification: changing this workflow schedules the gate;
+# [aarch-stage5-581] in the exact HEAD activates the real 581-owner job.
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/minic-aarch64-busybox-581-stage5-strict.yml'
+      - 'tests/external/busybox/**'
+      - 'src/frontend/**'
+      - 'src/core/**'
+      - 'src/compiler/c_lower/**'
+      - 'src/target/aarch64/**'
+      - 'src/target/common/**'
+      - 'src/target/source_policy/**'
+      - 'Makefile'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: minic-aarch64-stage5-581-${{ github.ref }}
+  # A later unrelated PR push must not cancel the expensive explicitly
+  # requested run merely to execute its cheap eligibility-only gate.
+  cancel-in-progress: false
+
+jobs:
+  # PR paths are cumulative; only an explicit marker on the actual head
+  # commit may start a long 581-owner pass. This job is NOT an acceptance.
+  stage5-eligibility-only:
+    runs-on: ubuntu-24.04
+    outputs:
+      run_581: ${{ steps.scope.outputs.run_581 }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Check real PR head commit marker
+        id: scope
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -Eeuo pipefail
+          printf 'AARCH64_STAGE5_PR_HEAD_SHA=%s\n' "$(git rev-parse HEAD)"
+          if [[ "$EVENT_NAME" == workflow_dispatch ]] ||
+              git log -1 --pretty=%B | grep -Fq '[aarch-stage5-581]'; then
+            printf 'run_581=true\n' >> "$GITHUB_OUTPUT"
+            echo 'AARCH64_STAGE5_581=ELIGIBLE verification=NOT_YET_RUN'
+          else
+            printf 'run_581=false\n' >> "$GITHUB_OUTPUT"
+            echo 'AARCH64_STAGE5_581=SKIP reason=head_commit_without_marker verified_581=NO'
+          fi
+
+  aarch64-original-581-mini-c-gnu-qemu:
+    needs: stage5-eligibility-only
+    if: needs.stage5-eligibility-only.outputs.run_581 == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Preflight AArch64 GNU cross tools and QEMU
+        shell: bash
+        timeout-minutes: 10
+        run: |
+          set -Eeuo pipefail
+          for sources in /etc/apt/apt-mirrors.txt /etc/apt/sources.list.d/ubuntu.sources; do
+            if [[ -f "$sources" ]] && grep -q 'azure.archive.ubuntu.com' "$sources"; then
+              sudo sed -i 's#azure.archive.ubuntu.com#archive.ubuntu.com#g' "$sources"
+            fi
+          done
+          packages=(gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu
+                    libc6-dev-arm64-cross qemu-user make curl)
+          timeout 120s sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 update -qq
+          if ! timeout 240s sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o DPkg::Lock::Timeout=60 install -y --no-install-recommends "${packages[@]}"; then
+            timeout 120s sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 update -qq
+            timeout 240s sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o DPkg::Lock::Timeout=60 install -y --no-install-recommends "${packages[@]}"
+          fi
+          command -v aarch64-linux-gnu-gcc
+          command -v qemu-aarch64
+          command -v python3
+          command -v timeout
+      - name: Restore pinned BusyBox commit tarball
+        id: source_cache
+        uses: actions/cache/restore@v4
+        with:
+          path: build/aarch-stage5-ci/download/busybox-1a64f6a20aaf6ea4dbba68bbfa8cc1ab7e5c57c4.tar.gz
+          key: minic-aarch-stage5-original-busybox-1361-1a64f6a20aaf6ea4dbba68bbfa8cc1ab7e5c57c4-v1
+      - name: Preflight pinned original source identity
+        shell: bash
+        timeout-minutes: 5
+        run: |
+          set -Eeuo pipefail
+          commit=1a64f6a20aaf6ea4dbba68bbfa8cc1ab7e5c57c4
+          tarball="build/aarch-stage5-ci/download/busybox-"${commit}".tar.gz"
+          mkdir -p build/aarch-stage5-ci/download build/aarch-stage5-ci/source/upstream build/aarch-stage5-ci/evidence
+          if [[ ! -s "$tarball" ]]; then
+            timeout 120s curl -fsSL --retry 2 \
+              "https://github.com/mirror/busybox/archive/"${commit}".tar.gz" -o "$tarball"
+          fi
+          tar -xzf "$tarball" -C build/aarch-stage5-ci/source/upstream --strip-components=1
+          sh tests/external/busybox/check-pinned-1361-source.sh \
+            build/aarch-stage5-ci/source/upstream |
+            tee build/aarch-stage5-ci/evidence/pinned-source.receipt
+          grep -Fxq "BUSYBOX_PINNED_SOURCE=PASS release=1.36.1 commit=$commit" \
+            build/aarch-stage5-ci/evidence/pinned-source.receipt
+          sha256sum "$tarball" | tee build/aarch-stage5-ci/evidence/pinned-tarball.sha256
+      - name: Cache verified original tarball for next explicit run
+        if: steps.source_cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: build/aarch-stage5-ci/download/busybox-1a64f6a20aaf6ea4dbba68bbfa8cc1ab7e5c57c4.tar.gz
+          key: minic-aarch-stage5-original-busybox-1361-1a64f6a20aaf6ea4dbba68bbfa8cc1ab7e5c57c4-v1
+      - name: Build MiniC once with -Werror and record SHA
+        shell: bash
+        timeout-minutes: 9
+        run: |
+          set -Eeuo pipefail
+          make -j2 MODE=release CFLAGS=-Werror BUILD_DIR=build/aarch-stage5-ci \
+            build/aarch-stage5-ci/bin/minic-cc
+          test -x build/aarch-stage5-ci/bin/minic-cc
+          {
+            printf 'SOURCE_SHA=%s\n' "$(git rev-parse HEAD)"
+            printf 'MINIC_COMPILER_SHA256=%s\n' "$(sha256sum build/aarch-stage5-ci/bin/minic-cc | cut -d' ' -f1)"
+            printf 'BUSYBOX_UPSTREAM_COMMIT=1a64f6a20aaf6ea4dbba68bbfa8cc1ab7e5c57c4\n'
+            printf 'AARCH64_MINIC_EXPLICIT_FPIE=YES\n'
+            aarch64-linux-gnu-gcc --version | head -n 1
+            qemu-aarch64 --version | head -n 1
+          } | tee build/aarch-stage5-ci/evidence/origins.txt
+      - name: One full original 581 owner and GNU/QEMU 38-fixture run
+        shell: bash
+        timeout-minutes: 19
+        env:
+          MINIC_CC: ${{ github.workspace }}/build/aarch-stage5-ci/bin/minic-cc
+          FOUR_BACKEND_BUSYBOX_AARCH64_PIE: '1'
+          FOUR_BACKEND_BUSYBOX_ALL_WORK_DIR: ${{ github.workspace }}/build/aarch-stage5-ci/evidence/full581
+        run: |
+          set -Eeuo pipefail
+          python3 tests/external/busybox/check-full-c-binary-contract.py |
+            tee build/aarch-stage5-ci/evidence/full-c-contract.receipt
+          grep -Fxq 'CROSS_FULL_C_BUSYBOX_CONTRACT=PASS tests=5 negative_cases=26 targets=aarch64,loongarch64 static_wiring=YES not_runtime=YES' \
+            build/aarch-stage5-ci/evidence/full-c-contract.receipt
+          sh tests/external/busybox/probe-aarch64-full-c-busybox.sh \
+            "$GITHUB_WORKSPACE/build/aarch-stage5-ci/source/upstream" \
+            aarch64-linux-gnu-gcc aarch64-linux-gnu- qemu-aarch64 /usr/aarch64-linux-gnu |
+            tee build/aarch-stage5-ci/evidence/full581.receipt
+          receipt=build/aarch-stage5-ci/evidence/full581.receipt
+          grep -Fxq 'FOUR_BACKEND_BUSYBOX_ALL_MINIC_PIE=MODE target=aarch64 enabled=1 original_Kbuild=1' "$receipt"
+          grep -Fxq 'BUSYBOX_MIXED_BULK_CROSS_RUNTIME=PASS cases=38 GNU_QEMU_byte_exact=1' "$receipt"
+          grep -Fxq 'FOUR_BACKEND_BUSYBOX_ALL_ACCEPT=PASS target=aarch64 original_Kbuild_owners=581 MiniC_owners=581 GNU_fallbacks=0 SHA256_verified=581 GNU_QEMU_fixtures=38 strict=1 all_C_owners_MiniC=YES assembler_linker=GNU full_all_MiniC=NO' "$receipt"
+          grep -Fxq 'BUSYBOX_FULL_C_BINARY=PASS target=aarch64 original_Kbuild_owners=581 MiniC_C_owners=581 GNU_C_fallbacks=0 SHA256_verified=581 GNU_AS_LD=YES original_and_MiniC_ELF_differ=YES QEMU_byte_exact=38/38 full_C_MiniC=YES full_toolchain_MiniC=NO' "$receipt"
+          grep -Fxq 'FOUR_BACKEND_BUSYBOX_FULL_C_BINARY=PASS target=aarch64 owners=581/581 GNU_AS_LD=YES QEMU_byte_exact=38/38 full_C_MiniC=YES full_toolchain_MiniC=NO' "$receipt"
+          grep -Fxq 'FOUR_BACKEND_BUSYBOX_ALL_KBUILD_END target=aarch64 authenticated_mixed_build=1 full_MiniC=NO' "$receipt"
+          echo 'AARCH64_STAGE5_581=PASS original_Kbuild_owners=581 MiniC_owners=581 GNU_C_fallbacks=0 GNU_QEMU_fixtures=38 GNU_AS_LD=YES'
+          echo 'AARCH64_FULL_C_BUSYBOX=PASS MiniC_C_owners=581/581 GNU_AS_LD=YES whole_BusyBox_QEMU=38/38 full_toolchain_MiniC=NO'
+      # Only receipts, SHA manifest, and first 3 failing owners; never
+      # upload all 581 gigantic preprocessed inputs or the BusyBox tree.
+      - name: Collect bounded SHA and first-failing-owner diagnostic artifacts
+        if: always()
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib, json, shutil
+          evidence = Path("build/aarch-stage5-ci/evidence")
+          report = evidence / "full581" / "report"
+          evidence.mkdir(parents=True, exist_ok=True)
+          failed = []
+          digest = []
+          for path in sorted((report / "per-tu").glob("*/result.json")):
+              try:
+                  row = json.loads(path.read_text(encoding="utf-8"))
+              except (ValueError, OSError):
+                  failed.append((path.parent, {"error": "unreadable_result"}))
+                  continue
+              preprocessed = path.parent / "input.i"
+              if preprocessed.is_file():
+                  digest.append((str(row.get("source", "")), hashlib.sha256(preprocessed.read_bytes()).hexdigest()))
+              if any(row.get(stage) != 0 for stage in ("gcc", "cpp", "minic", "assembler")):
+                  failed.append((path.parent, row))
+          (evidence / "preprocessed-owners.sha256").write_text(
+              "".join(f"{sha}  {src}\n" for src, sha in sorted(digest)), encoding="utf-8")
+          if failed:
+              first = evidence / "first-failing-tu"
+              first.mkdir(exist_ok=True)
+              for index, (directory, row) in enumerate(failed[:3], 1):
+                  dest = first / f"failure-{index}"
+                  dest.mkdir()
+                  (dest / "metadata.json").write_text(json.dumps(row, indent=2), encoding="utf-8")
+                  for file in ("input.i", "cpp.err", "minic.err", "as.err", "trace.err", "result.json"):
+                      src = directory / file
+                      if src.is_file():
+                          shutil.copyfile(src, dest / file)
+          print(f"AARCH64_STAGE5_EVIDENCE owners_sha256={len(digest)} failed_owners={len(failed)} first_saved={min(3, len(failed))}")
+          PY
+      - name: Preserve bounded original GNU Kbuild and MiniC QEMU evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: minic-aarch64-stage5-581-${{ github.run_id }}-${{ github.run_attempt }}
+          if-no-files-found: warn
+          retention-days: 30
+          path: |
+            build/aarch-stage5-ci/evidence/*.txt
+            build/aarch-stage5-ci/evidence/*.receipt
+            build/aarch-stage5-ci/evidence/*.sha256
+            build/aarch-stage5-ci/evidence/full581/probe.out
+            build/aarch-stage5-ci/evidence/full581/probe.err
+            build/aarch-stage5-ci/evidence/full581/report/summary.json
+            build/aarch-stage5-ci/evidence/full581/report/bulk-kbuild-owner-manifest.json
+            build/aarch-stage5-ci/evidence/full581/report/bulk.make.out
+            build/aarch-stage5-ci/evidence/full581/report/bulk.make.err
+            build/aarch-stage5-ci/evidence/full581/report/build.err
+            build/aarch-stage5-ci/evidence/full581/report/gnu-sequential.err
+            build/aarch-stage5-ci/evidence/full581/report/gnu-link-attempts.log
+            build/aarch-stage5-ci/evidence/full581/src/busybox_unstripped.out
+            build/aarch-stage5-ci/evidence/first-failing-tu/**

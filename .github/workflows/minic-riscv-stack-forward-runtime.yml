@@ -1,0 +1,105 @@
+# Explicit, short genuine GNU-AS/LD/QEMU gate for RV32/RV64 Core SSA spills.
+# It does not relink a Linux Image or certify the full five-ISA Linux matrix.
+name: MiniC RISC-V adjacent private-stack GNU QEMU (opt-in)
+
+on:
+  pull_request:
+    paths:
+      - 'src/target/riscv/**'
+      - 'tests/compiler/c0/*riscv*stack_forward*'
+      - '.github/workflows/minic-riscv-stack-forward-runtime.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  qemu-eligibility:
+    runs-on: ubuntu-24.04
+    outputs:
+      run_probe: ${{ steps.scope.outputs.run_probe }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Only run costly cross-toolchain job on exact opt-in HEAD
+        id: scope
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -Eeuo pipefail
+          echo "RISCV_STACK_FORWARD_HEAD=$(git rev-parse HEAD)"
+          if [[ "$EVENT_NAME" == workflow_dispatch ]] ||
+              git log -1 --pretty=%B | grep -Fq '[riscv-stack-forward-qemu]'; then
+            echo 'run_probe=true' >> "$GITHUB_OUTPUT"
+            echo 'RISCV_STACK_FORWARD_GATE=ELIGIBLE true_GNU_QEMU=true'
+          else
+            echo 'run_probe=false' >> "$GITHUB_OUTPUT"
+            echo 'RISCV_STACK_FORWARD_GATE=SKIP exact_head_unmarked=true'
+          fi
+
+  original-gnu-qemu:
+    needs: qemu-eligibility
+    if: needs.qemu-eligibility.outputs.run_probe == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Install original RISC-V GNU assembler/linker and real QEMU
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          for src in /etc/apt/apt-mirrors.txt /etc/apt/sources.list.d/ubuntu.sources; do
+            if [[ -f "$src" ]] && grep -q azure.archive.ubuntu.com "$src"; then
+              sudo sed -i 's#azure.archive.ubuntu.com#archive.ubuntu.com#g' "$src"
+            fi
+          done
+          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 update -qq
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
+            libc6-dev-riscv64-cross qemu-user
+          command -v riscv64-linux-gnu-gcc
+          command -v riscv64-linux-gnu-ld
+          command -v qemu-riscv32
+          command -v qemu-riscv64
+      - name: Build one exact-HEAD MiniC compiler
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/riscv-stack-forward all
+          git rev-parse HEAD
+          sha256sum build/riscv-stack-forward/bin/minic-cc build/riscv-stack-forward/bin/minic
+      - name: Inspect RV32 and RV64 exact-adjacent, barrier, and large-offset assembly
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          MINIC_CC="$PWD/build/riscv-stack-forward/bin/minic-cc" \
+            BUILD_DIR="$PWD/build/riscv-stack-forward" \
+            bash tests/compiler/c0/probe-riscv-adjacent-private-stack-forward.sh
+      - name: Execute the exact MiniC fixture using real GNU AS, LD, and QEMU
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          MINIC_CC="$PWD/build/riscv-stack-forward/bin/minic-cc" \
+            bash tests/compiler/c0/probe-riscv-adjacent-private-stack-forward-qemu.sh
+      - name: Execute independent RV32/RV64 GNU-vs-MiniC register ABI differential
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          MINIC_CC="$PWD/build/riscv-stack-forward/bin/minic-cc" \
+            bash tests/compiler/c0/probe-riscv-register-abi-boundary-qemu.sh
+      - name: Execute pinned upstream cJSON 1.7.19 using GNU AS/LD and QEMU
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          MINIC="$PWD/build/riscv-stack-forward/bin/minic" \
+            BUILD_DIR="$PWD/build/riscv-stack-forward" \
+            RISCV_CC=riscv64-linux-gnu-gcc \
+            QEMU_RISCV64=qemu-riscv64 \
+            timeout 600s sh tests/external/cjson/probe.sh
+          echo 'RISCV_STACK_FORWARD_RUNTIME=PASS RV32+RV64 true_QEMU cJSON_original=true'

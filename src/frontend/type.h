@@ -3,6 +3,7 @@
 
 #include <stdbool.h>
 #include <stddef.h>
+#include "common/calling_convention.h"
 
 typedef size_t MinicRecordId;
 typedef size_t MinicArrayTypeId;
@@ -27,28 +28,39 @@ typedef enum MinicTypeBaseKind {
     /* Genuine IEEE binary128 type, distinct from x86 80-bit long double.
      * Append to preserve existing serialized base-kind identifiers. */
     MINIC_TYPE_BASE_FLOAT128,
-    /* x86 SysV va_list is an array[1] of a 24-byte tag. For now the
-     * runtime uses a pointer to a 24-byte frame-owned tag, not that array
-     * representation. Preserve this distinct identity so sizeof cannot
-     * silently report sizeof(void*) for __builtin_va_list. */
-    MINIC_TYPE_BASE_X86_VA_LIST_CURSOR,
     /* GNU/ISO TS 18661 extended FP types are distinct C identities even
      * when they share x86 storage and argument representation with float,
-     * double or long double. Do not alias these to standard C types. */
-    MINIC_TYPE_BASE_FLOAT32,
+     * double or long double. Do not alias these to standard C types. Keep
+     * the historical numeric value 11: value 10 is retired cursor-proxy
+     * source representation, not reusable for an unrelated C type. */
+    MINIC_TYPE_BASE_FLOAT32 = 11,
     MINIC_TYPE_BASE_FLOAT64,
     MINIC_TYPE_BASE_FLOAT32X,
     MINIC_TYPE_BASE_FLOAT64X,
-    /* AArch64 glibc declares GCC's NEON/SVE builtin vector types even when
-     * the C program never uses SIMD. Preserve separate opaque identities:
-     * typedef parsing is supported; layout and machine operations reject
-     * until each vector ABI has been implemented and verified. */
-    MINIC_TYPE_BASE_AARCH64_FLOAT32X4,
-    MINIC_TYPE_BASE_AARCH64_FLOAT64X2,
-    MINIC_TYPE_BASE_AARCH64_SVE_FLOAT32,
-    MINIC_TYPE_BASE_AARCH64_SVE_FLOAT64,
-    MINIC_TYPE_BASE_AARCH64_SVE_BOOL
+    /* GNU vector_size(N) is a target-neutral C type identity, distinct
+     * from every target builtin vector. Storage does not grant SIMD ALU or
+     * by-value calling convention support. Its historical numeric value 24
+     * remains stable; 15..23 are retired former architecture-specific kinds. */
+    MINIC_TYPE_BASE_GNU_FIXED_VECTOR = 24,
+    /* All target-owned header builtin identities share one source category.
+     * The selected SourcePolicy validates target_builtin_id and role. */
+    MINIC_TYPE_BASE_TARGET_BUILTIN
 } MinicTypeBaseKind;
+
+/* Source-language declaration shape only: this neither approves an extension
+ * for a target nor promises an executable machine value/ABI. TargetInfo owns
+ * admission; this centralized compatibility adapter lets the verifier avoid
+ * naming individual target ISA types. */
+typedef enum MinicBuiltinDeclarationRole {
+    MINIC_BUILTIN_DECLARATION_INVALID = 0,
+    MINIC_BUILTIN_DECLARATION_STANDARD_FLOAT,
+    MINIC_BUILTIN_DECLARATION_EXTENDED_FLOAT,
+    MINIC_BUILTIN_DECLARATION_HEADER_ONLY_OPAQUE,
+    MINIC_BUILTIN_DECLARATION_FIXED_VECTOR128_STORAGE,
+    /* AAPCS64 D-register values have a distinct 8-byte machine storage
+     * identity; a header typedef alone still cannot grant an ABI. */
+    MINIC_BUILTIN_DECLARATION_FIXED_VECTOR64_STORAGE
+} MinicBuiltinDeclarationRole;
 
 typedef enum MinicIntegerSign {
     MINIC_INTEGER_SIGN_NONE = 0,
@@ -89,7 +101,21 @@ typedef struct MinicType {
     MinicFunctionTypeId function_type_id;
     MinicEnumId enum_id;
     size_t explicit_alignment;
+    /* For GNU fixed vectors the element's scalar base kind and integer
+     * sign/rank/plain-char identity live alongside the total byte size.
+     * All ordinary C types leave these two fields zeroed. */
+    MinicTypeBaseKind gnu_vector_element_kind;
+    size_t gnu_vector_bytes;
+    /* Target-local header builtin identity. Zero/INVALID for all ordinary C
+     * types; not a machine ISA request or vector calling-convention grant. */
+    unsigned int target_builtin_id;
+    MinicBuiltinDeclarationRole target_builtin_role;
 } MinicType;
+
+MinicBuiltinDeclarationRole minic_type_builtin_declaration_role(MinicType type);
+
+bool minic_type_gnu_fixed_vector(MinicType element_type, size_t bytes, MinicType *result);
+bool minic_type_is_gnu_fixed_vector(MinicType type);
 
 MinicType minic_type_void(void);
 MinicType minic_type_bool(void);
@@ -115,15 +141,30 @@ MinicType minic_type_float32(void);
 MinicType minic_type_float64(void);
 MinicType minic_type_float32x(void);
 MinicType minic_type_float64x(void);
-/* Header-only opaque AArch64 builtin SIMD identities, not scalar aliases. */
-MinicType minic_type_aarch64_header_builtin(MinicTypeBaseKind base_kind);
-MinicType minic_type_x86_va_list_cursor(void);
-bool minic_type_is_x86_va_list_cursor(MinicType type);
+/* Construct only registered header builtin declaration identities (opaque or
+ * fixed-width storage). The selected target still admits the actual spelling
+ * and type separately; this never grants machine SIMD or a vector call ABI. */
+MinicType minic_type_header_builtin(unsigned int builtin_id,
+                                    MinicBuiltinDeclarationRole role);
+/* Source C object identity, not a machine SIMD operation or ISA permit. */
+bool minic_type_is_fixed_vector128_storage(MinicType type);
+bool minic_type_is_fixed_vector64_storage(MinicType type);
+bool minic_type_is_fixed_vector_register_storage(MinicType type);
+/* Source C identity and CV-qualification check shared by parser and verifier.
+ * Target admission of each builtin kind is deliberately the caller's duty. */
+bool minic_type_fixed_vector128_binary_result(MinicType left, MinicType right,
+                                            MinicType *result);
+bool minic_type_fixed_vector_binary_result(MinicType left, MinicType right,
+                                           MinicType *result);
 MinicType minic_type_function(MinicFunctionTypeId function_type_id);
 MinicType minic_type_record(MinicRecordId record_id);
 MinicType minic_type_array(MinicArrayTypeId array_type_id);
 bool minic_type_add_const(MinicType type, MinicType *result);
 bool minic_type_add_volatile(MinicType type, MinicType *result);
+/* A struct/union member lvalue inherits both object qualifiers from its
+ * containing record; its declared pointer-pointee qualifiers are unchanged. */
+bool minic_type_record_member(MinicType record_type, MinicType field_type,
+                              MinicType *result);
 bool minic_type_unqualified(MinicType type, MinicType *result);
 bool minic_type_pointer_to(MinicType pointee, MinicType *result);
 bool minic_type_pointee(MinicType pointer, MinicType *result);

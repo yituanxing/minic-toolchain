@@ -19,7 +19,10 @@ grep -F "  .byte 255" "$work/unsigned_char_layout.s" >/dev/null
 grep -F ".size table, 4" "$work/unsigned_char_layout.s" >/dev/null
 grep -F "  lbu " "$work/unsigned_char_layout.s" >/dev/null
 grep -F "  sb " "$work/unsigned_char_layout.s" >/dev/null
-grep -E '^[[:space:]]+andi[[:space:]]+[^,]+,[[:space:]]*[^,]+,[[:space:]]*255$' "$work/unsigned_char_layout.s" >/dev/null
+# RV64I LBU already zero-extends; other byte-valued conversions may use the
+# exact (SLLI 56, SRLI 56) pair instead of an ANDI 255 immediate.
+grep -E '^[[:space:]]+slli[[:space:]]+[^,]+,[[:space:]]*[^,]+,[[:space:]]*56$' "$work/unsigned_char_layout.s" >/dev/null
+grep -E '^[[:space:]]+srli[[:space:]]+[^,]+,[[:space:]]*[^,]+,[[:space:]]*56$' "$work/unsigned_char_layout.s" >/dev/null
 if grep -E '^[[:space:]]+slli[[:space:]]+[^,]+,[[:space:]]*[^,]+,[[:space:]]*2$' "$work/unsigned_char_layout.s" >/dev/null; then
     printf '%s\n' \
         "FAIL compiler/c0/unsigned_char_layout: byte pointer used four-byte scaling" >&2
@@ -37,7 +40,8 @@ grep -F "  .byte 128" "$work/plain_char_semantics.s" >/dev/null
 grep -F "  .byte 255" "$work/plain_char_semantics.s" >/dev/null
 grep -F "  lbu " "$work/plain_char_semantics.s" >/dev/null
 grep -F "  sb " "$work/plain_char_semantics.s" >/dev/null
-grep -E '^[[:space:]]+andi[[:space:]]+[^,]+,[[:space:]]*[^,]+,[[:space:]]*255$' "$work/plain_char_semantics.s" >/dev/null
+grep -E '^[[:space:]]+slli[[:space:]]+[^,]+,[[:space:]]*[^,]+,[[:space:]]*56$' "$work/plain_char_semantics.s" >/dev/null
+grep -E '^[[:space:]]+srli[[:space:]]+[^,]+,[[:space:]]*[^,]+,[[:space:]]*56$' "$work/plain_char_semantics.s" >/dev/null
 if grep -F "  lb " "$work/plain_char_semantics.s" >/dev/null; then
     printf '%s\n' \
         "FAIL compiler/c0/plain_char_semantics: RV64 plain char used signed byte load" >&2

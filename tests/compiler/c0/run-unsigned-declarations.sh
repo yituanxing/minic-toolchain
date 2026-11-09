@@ -2,6 +2,7 @@
 set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
+. "$root/tests/compiler/c0/machine-cfg-contract.sh"
 minic=${MINIC:-"$root/build/debug/bin/minic"}
 host_cc=${HOST_CC:-${CC:-cc}}
 work=${BUILD_DIR:-"$root/build/debug"}/tests/compiler-c0-unsigned
@@ -16,8 +17,7 @@ mkdir -p "$work"
     -o "$work/unsigned_declarations.s"
 
 grep -F ".globl main" "$work/unsigned_declarations.s" >/dev/null
-grep -F ".Lmain_core_bb0:" "$work/unsigned_declarations.s" >/dev/null
-grep -F ".Lmain_core_return:" "$work/unsigned_declarations.s" >/dev/null
+require_machine_function_cfg "$work/unsigned_declarations.s" main 2
 printf '%s\n' "PASS compiler/c0/unsigned_declarations"
 
 "$host_cc" -E -P -x c \

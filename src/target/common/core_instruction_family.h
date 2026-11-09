@@ -17,6 +17,8 @@ typedef enum MinicCoreSemanticFamily {
     MINIC_CORE_FAMILY_CALL,
     MINIC_CORE_FAMILY_INLINE_ASM,
     MINIC_CORE_FAMILY_BARRIER,
+    /* Pure register-valued vector arithmetic, never a memory access. */
+    MINIC_CORE_FAMILY_VECTOR,
 } MinicCoreSemanticFamily;
 
 static inline MinicCoreSemanticFamily minic_core_instruction_semantic_family(
@@ -69,7 +71,13 @@ static inline MinicCoreSemanticFamily minic_core_instruction_semantic_family(
     case MINIC_CORE_INSTRUCTION_STORE:
     case MINIC_CORE_INSTRUCTION_ATOMIC_LOAD:
     case MINIC_CORE_INSTRUCTION_ATOMIC_STORE:
+    case MINIC_CORE_INSTRUCTION_VECTOR_STORAGE_COPY:
+    case MINIC_CORE_INSTRUCTION_VECTOR_REGISTER_LOAD:
+    case MINIC_CORE_INSTRUCTION_VECTOR_REGISTER_STORE:
         return MINIC_CORE_FAMILY_MEMORY;
+    case MINIC_CORE_INSTRUCTION_VECTOR_REGISTER_XOR:
+    case MINIC_CORE_INSTRUCTION_VECTOR_REGISTER_ADD:
+        return MINIC_CORE_FAMILY_VECTOR;
     case MINIC_CORE_INSTRUCTION_RECORD_LOAD:
     case MINIC_CORE_INSTRUCTION_RECORD_COPY:
         return MINIC_CORE_FAMILY_RECORD;
@@ -83,6 +91,7 @@ static inline MinicCoreSemanticFamily minic_core_instruction_semantic_family(
         return MINIC_CORE_FAMILY_ADDRESS;
     case MINIC_CORE_INSTRUCTION_PARAMETER:
     case MINIC_CORE_INSTRUCTION_FIXED_REGISTER_READ:
+    case MINIC_CORE_INSTRUCTION_FIXED_REGISTER_WRITE:
     case MINIC_CORE_INSTRUCTION_PARAMETER_OBJECT:
     case MINIC_CORE_INSTRUCTION_CALL_FRAME_ADDRESS:
     case MINIC_CORE_INSTRUCTION_VARIADIC_ARGUMENT_ADDRESS:
@@ -93,10 +102,6 @@ static inline MinicCoreSemanticFamily minic_core_instruction_semantic_family(
     case MINIC_CORE_INSTRUCTION_INDIRECT_CALL:
         return MINIC_CORE_FAMILY_CALL;
     case MINIC_CORE_INSTRUCTION_OPAQUE_INLINE_ASM:
-    case MINIC_CORE_INSTRUCTION_REGISTER_OUTPUT_INLINE_ASM:
-    case MINIC_CORE_INSTRUCTION_REGISTER_OUTPUT_INPUT_INLINE_ASM:
-    case MINIC_CORE_INSTRUCTION_MEMORY_READWRITE_SCALAR_INPUT_INLINE_ASM:
-    case MINIC_CORE_INSTRUCTION_SCALAR_INPUT_INLINE_ASM:
     case MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM:
         return MINIC_CORE_FAMILY_INLINE_ASM;
     case MINIC_CORE_INSTRUCTION_COMPILER_BARRIER:
@@ -115,6 +120,10 @@ static inline bool minic_core_instruction_is_floating_scalar(MinicCoreInstructio
 
 static inline bool minic_core_instruction_is_call(MinicCoreInstructionKind kind) {
     return minic_core_instruction_semantic_family(kind) == MINIC_CORE_FAMILY_CALL;
+}
+
+static inline bool minic_core_instruction_is_vector_arithmetic(MinicCoreInstructionKind kind) {
+    return minic_core_instruction_semantic_family(kind) == MINIC_CORE_FAMILY_VECTOR;
 }
 
 static inline bool minic_core_instruction_is_memory_access(MinicCoreInstructionKind kind) {

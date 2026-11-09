@@ -1,13 +1,15 @@
 #ifndef MINIC_CORE_CORE_IR_H
 #define MINIC_CORE_CORE_IR_H
 
-#include "frontend/token.h"
-#include "frontend/type.h"
+#include "common/source_location.h"
+#include "common/machine_builtin_effect.h"
+#include "core/core_type.h"
 
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <string.h>
 
 typedef uint32_t MinicCoreValueId;
 typedef uint32_t MinicCoreInstructionId;
@@ -91,12 +93,10 @@ typedef enum MinicCoreInstructionKind {
     /* M80_ADDRESS_BACKED_RECORD_COPY: byte-preserving aggregate memory copy. */
     MINIC_CORE_INSTRUCTION_RECORD_COPY,
     MINIC_CORE_INSTRUCTION_OPAQUE_INLINE_ASM,
-    MINIC_CORE_INSTRUCTION_REGISTER_OUTPUT_INLINE_ASM,
-    MINIC_CORE_INSTRUCTION_REGISTER_OUTPUT_INPUT_INLINE_ASM,
-    MINIC_CORE_INSTRUCTION_MEMORY_READWRITE_SCALAR_INPUT_INLINE_ASM,
-    MINIC_CORE_INSTRUCTION_SCALAR_INPUT_INLINE_ASM,
-    /* M67_STRUCTURED_MULTI_OPERAND_INLINE_ASM: target-neutral operand bindings. */
-    MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM,
+    /* Four retired scalar-ASM opcode numbers remain unassigned. Preserve the
+     * numeric identity of all subsequent Core instructions without retaining
+     * a parallel instruction representation or accepting their old encodings. */
+    MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM = MINIC_CORE_INSTRUCTION_OPAQUE_INLINE_ASM + 5,
     MINIC_CORE_INSTRUCTION_COMPILER_BARRIER,
     MINIC_CORE_INSTRUCTION_CALL_FRAME_ADDRESS,
     /* M123_VARIADIC_ARGUMENT_ADDRESS: semantic origin of a va_list cursor.
@@ -140,8 +140,24 @@ typedef enum MinicCoreInstructionKind {
     /* va_copy is a value copy of the target's ABI cursor state, NOT
      * assignment of the frontend's pointer-shaped va_list proxy.
      * Both Core operands are pointer SSA values; target copies its real tag. */
-    MINIC_CORE_INSTRUCTION_VARIADIC_COPY
+    MINIC_CORE_INSTRUCTION_VARIADIC_COPY,
+    /* Target-neutral effect, register destination identity plus SSA source.
+     * Append after frozen enum values to preserve established IR numbering. */
+    MINIC_CORE_INSTRUCTION_FIXED_REGISTER_WRITE,
+    /* Address-backed vector lvalue storage copy: no register value or call ABI. */
+    MINIC_CORE_INSTRUCTION_VECTOR_STORAGE_COPY,
+    /* True 128-bit typed vector value operations; never scalar/record copy.
+     * ISA permission, V-register ABI and exact intrinsics remain target owned. */
+    MINIC_CORE_INSTRUCTION_VECTOR_REGISTER_LOAD,
+    MINIC_CORE_INSTRUCTION_VECTOR_REGISTER_STORE,
+    MINIC_CORE_INSTRUCTION_VECTOR_REGISTER_XOR,
+    MINIC_CORE_INSTRUCTION_VECTOR_REGISTER_ADD
 } MinicCoreInstructionKind;
+
+/* One exclusive upper bound for opcode-indexed tables and diagnostics.
+ * Keep this adjacent to the last real opcode as the IR vocabulary grows;
+ * it is intentionally not an instruction-kind enum member. */
+enum { MINIC_CORE_INSTRUCTION_KIND_COUNT = MINIC_CORE_INSTRUCTION_VECTOR_REGISTER_ADD + 1U };
 
 /* M91_BUILTIN_UNREACHABLE_TERMINATOR: unreachable is a CFG fact, not a
    value-producing instruction and not an invented target trap. */
@@ -155,16 +171,11 @@ typedef enum MinicCoreTerminatorKind {
 } MinicCoreTerminatorKind;
 
 typedef struct MinicCoreValue {
-    MinicType type;
+    /* One definition owns the source draft type during C lowering. A sealed
+     * Core SSA value carries no duplicate C descriptor. */
+    MinicCoreTypeId core_type_id;
     MinicCoreInstructionId definition;
 } MinicCoreValue;
-
-/* Core owns the semantic integer representation of enums referenced by a
-   function. Backends must not recover enum compatibility from Semantic AST. */
-typedef struct MinicCoreEnumType {
-    MinicEnumId enum_id;
-    MinicType effective_integer_type;
-} MinicCoreEnumType;
 
 /* Fixed-register spelling is target metadata, but ownership belongs to Core
    once lowering commits the function. Backends consume this opaque binding
@@ -172,17 +183,15 @@ typedef struct MinicCoreEnumType {
 typedef struct MinicCoreFixedRegisterBinding {
     char *register_name;
     size_t register_name_length;
-    MinicType type;
+    MinicCoreTypeId core_type_id;
     bool is_local;
 } MinicCoreFixedRegisterBinding;
 
 typedef struct MinicCoreObject {
     MinicSourceSpan span;
-    MinicType type;
-    /* M95_REPEATED_LOCAL_OBJECT: legacy frontend arrays carry element type
-       plus an explicit count. Keep Core object addressing element-typed while
-       owning the complete repeated storage extent. Ordinary objects use 1. */
-    size_t element_count;
+    /* The entire storage extent is owned by CoreType. A repeated object is
+     * represented by a first-class Core array, not an extra object count. */
+    MinicCoreTypeId core_type_id;
     /* Zero means natural DataLayout alignment. Nonzero alignment is captured
        from source object semantics during AST -> Core lowering. */
     size_t explicit_alignment;
@@ -191,7 +200,7 @@ typedef struct MinicCoreObject {
 typedef struct MinicCoreGlobal {
     char *name;
     size_t name_length;
-    MinicType type;
+    MinicCoreTypeId core_type_id;
 } MinicCoreGlobal;
 
 typedef struct MinicCoreFunctionSymbol {
@@ -202,24 +211,16 @@ typedef struct MinicCoreFunctionSymbol {
 typedef struct MinicCoreCallee {
     char *name;
     size_t name_length;
-    MinicType return_type;
-    MinicType *parameter_types;
-    size_t parameter_count;
-    /* BATCH_D_VARIADIC_DIRECT_CALL: parameter_types is the fixed prefix;
-       variadic tail types are the semantic types of VALUE arguments. */
-    bool is_variadic;
+    /* One nominal Core FUNCTION owns the executable direct-call contract.
+     * The name is independent: synthetic libcalls need no Module declaration. */
+    MinicCoreTypeId core_function_type_id;
 } MinicCoreCallee;
 
-/* M83_FIRST_CLASS_INDIRECT_CALL: Core owns enough static signature data to
-   verify an indirect call without consulting frontend Program state. */
+/* M83_FIRST_CLASS_INDIRECT_CALL: one nominal Core FUNCTION identity owns the
+   entire indirect-call contract (return, formals, varargs and convention).
+   Call planners resolve these facts through the sealed Core type arena. */
 typedef struct MinicCoreCallSignature {
-    MinicFunctionTypeId function_type_id;
-    MinicType return_type;
-    MinicType *parameter_types;
-    size_t parameter_count;
-    /* M150_INDIRECT_VARIADIC_CALL_SIGNATURE_OWNER: parameter_types is the
-       fixed prefix; variadic tail VALUE arguments carry their own scalar type. */
-    bool is_variadic;
+    MinicCoreTypeId core_function_type_id;
 } MinicCoreCallSignature;
 
 /* M85_RECORD_CALL_ARGUMENT: Core call arguments carry semantic storage form,
@@ -239,16 +240,152 @@ typedef struct MinicCoreCallArgument {
     } value;
 } MinicCoreCallArgument;
 
+/* An extended-precision numerical operation is a typed Core semantic, not
+ * a CALL recognized by the spelling of a GNU compiler-runtime symbol.
+ * Physical x87/binary128 lowering and the fallback runtime ABI are chosen by
+ * the target; ordinary external calls with identical symbol names remain
+ * ordinary calls and never inherit these operation semantics. */
+typedef enum MinicCoreExtendedFloatOperation {
+    MINIC_CORE_EXT_FLOAT_NONE = 0,
+    MINIC_CORE_EXT_FLOAT_ADD,
+    MINIC_CORE_EXT_FLOAT_SUBTRACT,
+    MINIC_CORE_EXT_FLOAT_MULTIPLY,
+    MINIC_CORE_EXT_FLOAT_DIVIDE,
+    MINIC_CORE_EXT_FLOAT_NEGATE,
+    /* Ordered predicates produce canonical i32 0/1, including for NaNs.
+     * They do not expose a target compiler-runtime comparison status. */
+    MINIC_CORE_EXT_FLOAT_EQUAL,
+    MINIC_CORE_EXT_FLOAT_LESS,
+    MINIC_CORE_EXT_FLOAT_LESS_EQUAL,
+    MINIC_CORE_EXT_FLOAT_FROM_BINARY32,
+    MINIC_CORE_EXT_FLOAT_FROM_BINARY64,
+    MINIC_CORE_EXT_FLOAT_TO_BINARY32,
+    MINIC_CORE_EXT_FLOAT_TO_BINARY64,
+    MINIC_CORE_EXT_FLOAT_FROM_SIGNED32,
+    MINIC_CORE_EXT_FLOAT_FROM_UNSIGNED32,
+    MINIC_CORE_EXT_FLOAT_FROM_SIGNED64,
+    MINIC_CORE_EXT_FLOAT_FROM_UNSIGNED64,
+    MINIC_CORE_EXT_FLOAT_TO_SIGNED32,
+    MINIC_CORE_EXT_FLOAT_TO_UNSIGNED32,
+    MINIC_CORE_EXT_FLOAT_TO_SIGNED64,
+    MINIC_CORE_EXT_FLOAT_TO_UNSIGNED64
+} MinicCoreExtendedFloatOperation;
+
 typedef struct MinicCoreInlineAsmRegisterClobber {
     char *name;
     size_t name_length;
 } MinicCoreInlineAsmRegisterClobber;
+
+/* Source/Generic/Target admission is a semantic Core provenance decision,
+ * not an ISA type. The target validates actual machine opcode forms. */
+typedef enum MinicAsmOperandPlanOwner {
+    MINIC_ASM_OPERAND_PLAN_NONE = 0,
+    MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED,
+    MINIC_ASM_OPERAND_PLAN_GENERIC_STRUCTURED
+} MinicAsmOperandPlanOwner;
+
+/* An emitted Core ASM effect can reference a linker-visible name even when
+ * its operand is an immediate rather than an ordinary Core address value.
+ * The spelling and byte displacement are immutable, owned Core facts; no
+ * source ExpressionId or target relocation policy crosses this boundary. */
+typedef enum MinicCoreInlineAsmSymbolKind {
+    MINIC_CORE_INLINE_ASM_SYMBOL_FUNCTION = 0,
+    MINIC_CORE_INLINE_ASM_SYMBOL_OBJECT
+} MinicCoreInlineAsmSymbolKind;
+
+typedef struct MinicCoreInlineAsmSymbolReference {
+    MinicCoreInlineAsmSymbolKind kind;
+    char *name;
+    size_t name_length;
+    int64_t byte_addend;
+} MinicCoreInlineAsmSymbolReference;
+
+/* GNU `i` operands cross into Core as a proven constant or one ELF symbol
+ * plus a signed BYTE displacement. Machine stages must not recover types by
+ * reparsing source-formatted decimal or assembler relocation expressions. */
+typedef enum MinicCoreInlineAsmImmediateKind {
+    MINIC_CORE_INLINE_ASM_IMMEDIATE_INVALID = 0,
+    MINIC_CORE_INLINE_ASM_IMMEDIATE_INTEGER,
+    MINIC_CORE_INLINE_ASM_IMMEDIATE_SYMBOL
+} MinicCoreInlineAsmImmediateKind;
+
+/* Four typed GNU `i` inputs cover Linux BUG/WARN symbol, line, flags and
+ * entry size; target-specific source qualifiers may admit a smaller set.
+ * The RISC-V asm-goto CFG contract remains independently capped at three. */
+#define MINIC_CORE_INLINE_ASM_IMMEDIATE_LIMIT 4U
+
+typedef struct MinicCoreInlineAsmImmediate {
+    MinicCoreInlineAsmImmediateKind kind;
+    int64_t integer;
+    char *symbol;
+    int64_t byte_addend;
+    /* Owned GNU symbolic input name, if the source operand was named.
+     * This is distinct from the target-neutral relocation symbol above. */
+    char *asm_name;
+} MinicCoreInlineAsmImmediate;
+
+/* A precise ELF name or name+byte-addend witness; no assembler syntax. The
+ * formatter is for final target output, never a semantic parsing step. */
+static inline bool minic_core_inline_asm_symbol_valid(const char *symbol) {
+    size_t i, length;
+    if (symbol == NULL) return false;
+    length = strlen(symbol);
+    if (length == 0U || length > 128U ||
+        !((symbol[0] >= 'a' && symbol[0] <= 'z') ||
+          (symbol[0] >= 'A' && symbol[0] <= 'Z') ||
+          symbol[0] == '_' || symbol[0] == '.')) return false;
+    for (i = 1U; i < length; ++i) {
+        const char ch = symbol[i];
+        if ((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') ||
+            (ch >= '0' && ch <= '9') || ch == '_' || ch == '.' ||
+            ch == '$') continue;
+        return false;
+    }
+    return true;
+}
+
+static inline bool minic_core_inline_asm_relocation_valid(
+    const MinicCoreInlineAsmImmediate *immediate) {
+    uint64_t magnitude;
+    size_t length, digits = 1U;
+    if (immediate == NULL ||
+        immediate->kind != MINIC_CORE_INLINE_ASM_IMMEDIATE_SYMBOL ||
+        immediate->integer != 0 ||
+        !minic_core_inline_asm_symbol_valid(immediate->symbol)) return false;
+    length = strlen(immediate->symbol);
+    if (immediate->byte_addend == 0) return true;
+    magnitude = immediate->byte_addend < 0
+        ? (uint64_t)(-(immediate->byte_addend + 1)) + 1U
+        : (uint64_t)immediate->byte_addend;
+    while (magnitude >= 10U) {
+        magnitude /= 10U;
+        ++digits;
+    }
+    /* One signed byte displacement, bounded without rendering any target
+     * expression. The assembler owns its eventual syntax. */
+    return digits < 128U && length <= 128U - 1U - digits;
+}
 
 typedef struct MinicCoreInlineAsm {
     char *template_text;
     size_t template_length;
     bool is_volatile;
     bool has_memory_clobber;
+    /* Immutable typed source-admission result. The source-form fingerprint
+     * remains entirely in the C ingress; machine emission consumes this
+     * normalized operand/effect contract and its target-owned form ID. */
+    MinicAsmOperandPlanOwner operand_plan_owner;
+    /* Opaque target-produced ASM dispatch facts. A source hash is only
+     * provenance; it must never be interpreted as this machine form ID. */
+    uint32_t target_machine_form_id;
+    uint32_t target_machine_form_variant;
+    /* Module-sealed translation-unit occurrence identity. Zero is permitted
+     * only during C->Core construction; MachineIR source ASM carries the
+     * nonzero value verbatim for GNU %= expansion. This is not a C AST ID,
+     * a target opcode, or a hash of the source template. */
+    uint64_t source_asm_unique_id;
+    bool explicit_memory_clobber;
+    bool implicit_memory_effect;
     /* BATCH_L_STRUCTURED_REGISTER_READWRITE: keep register-clobber spelling
        as opaque target metadata. Core does not interpret register names; the
        selected backend only uses them to avoid operand/clobber collisions. */
@@ -259,11 +396,35 @@ typedef struct MinicCoreInlineAsm {
        instead of hiding it inside target assembly text. The first supported
        seam is one label plus one deferred immediate input. */
     bool is_goto;
-    size_t source_inline_asm_id;
+    /* Immutable machine-local relocation symbol for an unresolved `asm goto`
+     * `%0` immediate. NULL if every immediate has already been resolved;
+     * non-goto structured ASM dispatch uses its sealed machine-form ID and
+     * must not retain a borrowed source Program statement identity. */
+    char *deferred_immediate_symbol;
     MinicCoreBlockId goto_target;
+    /* Second CFG destination for a TARGET-qualified multi-label asm-goto.
+     * Existing one-label forms leave this as INVALID. */
+    MinicCoreBlockId goto_second_target;
+    /* Owned source GNU label names in the same order as the Core BlockIds.
+     * NULL denotes an unnamed/positional label; no source AST is retained. */
+    char *goto_label_names[2];
+    /* Immutable typed numeric constants or relocation witnesses; target
+     * emission formats machine syntax exactly once at its final boundary. */
+    MinicCoreInlineAsmImmediate resolved_immediates[MINIC_CORE_INLINE_ASM_IMMEDIATE_LIMIT];
+    size_t resolved_immediate_count;
+    /* These references root definitions only when the corresponding Core
+     * instruction survives the post-lowering reachable-block closure. */
+    MinicCoreInlineAsmSymbolReference *symbol_references;
+    size_t symbol_reference_count;
+    size_t symbol_reference_capacity;
+    /* Source operands with uninspectable nested expressions may reference
+     * static storage; preserve it only when this exact ASM effect is live. */
+    bool preserve_all_static_objects;
 } MinicCoreInlineAsm;
 
-#define MINIC_CORE_STRUCTURED_INLINE_ASM_OPERAND_LIMIT 8U
+/* Core-wide bound for GNU extended-asm operand roles. Keep this independent
+ * from the smaller operand counts of ISA-specific machine templates. */
+#define MINIC_CORE_STRUCTURED_INLINE_ASM_OPERAND_LIMIT 16U
 
 typedef enum MinicCoreStructuredInlineAsmOperandKind {
     MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT = 0,
@@ -278,7 +439,19 @@ typedef enum MinicCoreStructuredInlineAsmOperandKind {
        pointees and never require post-asm writeback. */
     MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT,
     MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE,
-    MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT
+    MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT,
+    /* An SSA register output, unlike REGISTER_OUTPUT's address-backed lvalue.
+     * The sole result lives in instruction->result; operand.value is INVALID.
+     * This allows a mixed +A memory output and =r result to retain the
+     * original GNU operand positions without adding a synthetic Core store. */
+    MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_RESULT,
+    /* Target-qualified GNU +r on an explicit fixed hardware register.
+     * Unlike REGISTER_READWRITE, this is a scalar SSA read paired with a
+     * physical register binding, NOT the address of a C lvalue. This is still
+     * a tied physical input/output: native lowering must preserve the
+     * before-value and the after-ASM register state without a fabricated
+     * memory writeback. Only target-proven forms may select this role. */
+    MINIC_CORE_STRUCTURED_INLINE_ASM_FIXED_REGISTER_READWRITE
 } MinicCoreStructuredInlineAsmOperandKind;
 
 typedef struct MinicCoreStructuredInlineAsmOperand {
@@ -293,12 +466,21 @@ typedef struct MinicCoreStructuredInlineAsmOperand {
     /* M126A_GENERIC_STRUCTURED_ASM: preserve GCC `&` early-clobber semantics
        as target-neutral scheduling/allocation metadata. */
     bool early_clobber;
+    /* Normalized native physical-register early-clobber constraint. Unlike
+     * `early_clobber` above this describes the native operand assignment,
+     * not Core value/address transport. A target may represent `=&r` as a
+     * Core MEMORY_OUTPUT (aggregate result) while still requiring a distinct
+     * physical register from all live inputs. */
+    bool physical_early_clobber;
+    bool physical_read_write;
+    bool has_tied_output;
+    size_t tied_output_index;
 } MinicCoreStructuredInlineAsmOperand;
 
 typedef struct MinicCoreInstruction {
     MinicCoreInstructionKind kind;
     MinicSourceSpan span;
-    MinicType type;
+    MinicCoreTypeId core_type_id;
     MinicCoreValueId result;
     union {
         int64_t integer_value;
@@ -318,8 +500,19 @@ typedef struct MinicCoreInstruction {
             MinicCoreValueId result_address;
         } integer_overflow;
         MinicCoreValueId operand;
+        /* An ABI cursor has independently addressable state. va_start
+         * initializes it from the incoming register/stack banks, whereas
+         * va_copy allocates an uninitialized destination which the copy
+         * effect fills before exposing it to source-level consumers. */
+        struct {
+            bool copy_destination;
+        } variadic_address;
         size_t parameter_index;
         size_t fixed_register_binding_id;
+        struct {
+            size_t binding_id;
+            MinicCoreValueId source;
+        } fixed_register_write;
         struct {
             MinicCoreCallFrameAddressKind kind;
             unsigned int level;
@@ -334,10 +527,9 @@ typedef struct MinicCoreInstruction {
         MinicCoreBlockId block_id;
         struct {
             MinicCoreValueId base;
-            MinicRecordId record_id;
-            size_t field_index;
-            /* Target-neutral DataLayout result captured at AST -> Core lowering.
-               Backends consume the byte displacement without reopening record AST. */
+            /* A source-independent displacement inside one complete Core
+             * record. The C ingress resolves member identity and bit-field
+             * carrier legality before publishing this physical address. */
             size_t byte_offset;
         } field_address;
         struct {
@@ -374,29 +566,23 @@ typedef struct MinicCoreInstruction {
         struct {
             MinicCoreValueId destination_address;
             MinicCoreValueId source_address;
+            /* Explicit access effects, not inherited from a language type.
+             * Both byte-copy sides may be volatile independently. */
+            bool destination_volatile;
+            bool source_volatile;
         } record_copy;
+        struct {
+            MinicCoreValueId destination_address;
+            MinicCoreValueId source_address;
+            bool destination_volatile;
+            bool source_volatile;
+        } vector_storage_copy;
         /* Target ABI state-copy: left=destination cursor pointer, right=source. */
         struct {
             MinicCoreValueId destination;
             MinicCoreValueId source;
         } variadic_copy;
         MinicCoreInlineAsmId inline_asm_id;
-        struct {
-            MinicCoreInlineAsmId inline_asm_id;
-            MinicCoreValueId operand;
-        } register_output_input_inline_asm;
-        struct {
-            MinicCoreInlineAsmId inline_asm_id;
-            MinicCoreValueId memory_address;
-            MinicCoreValueId operand;
-            size_t memory_operand_index;
-            size_t register_output_operand_index;
-            size_t scalar_input_operand_index;
-        } memory_readwrite_scalar_input_inline_asm;
-        struct {
-            MinicCoreInlineAsmId inline_asm_id;
-            MinicCoreValueId operand;
-        } scalar_input_inline_asm;
         struct {
             MinicCoreInlineAsmId inline_asm_id;
             size_t operand_count;
@@ -406,6 +592,12 @@ typedef struct MinicCoreInstruction {
             MinicCoreCalleeId callee_id;
             size_t argument_begin;
             size_t argument_count;
+            /* NONE denotes a real external CALL. A nonzero tag owns the
+             * numerical semantics and cannot be inferred from callee.name. */
+            MinicCoreExtendedFloatOperation extended_float_operation;
+            /* Source/target-sealed intrinsic effects; never inferred from
+             * external symbol spelling by Core or machine coverage. */
+            MinicMachineBuiltinEffect machine_builtin_effect;
             /* M86_DIRECT_RECORD_CALL_RESULT: aggregate call results remain
                address-backed Core objects rather than becoming aggregate SSA. */
             MinicCoreObjectId result_object;
@@ -415,9 +607,52 @@ typedef struct MinicCoreInstruction {
             MinicCoreCallSignatureId signature_id;
             size_t argument_begin;
             size_t argument_count;
+            /* Indirect and direct aggregate returns obey the same Core
+             * ownership contract: result bytes live in an object, and
+             * machine-specific ABI placement is deferred to Target. */
+            MinicCoreObjectId result_object;
         } indirect_call;
     } value;
 } MinicCoreInstruction;
+
+/* Output roles are already encoded in typed Core operands, so neither Core
+ * nor machine emitters carry a second GNU source output-count shadow.
+ * Output operands form one leading prefix; reject malformed independent
+ * Core producers instead of guessing a count. */
+static inline bool minic_core_asm_output_operand_count(
+    const MinicCoreInstruction *instruction, size_t *output_count) {
+    size_t i, count = 0U;
+    bool seen_input = false;
+    if (instruction == NULL || output_count == NULL ||
+        instruction->kind != MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM ||
+        instruction->value.structured_inline_asm.operand_count >
+            MINIC_CORE_STRUCTURED_INLINE_ASM_OPERAND_LIMIT)
+        return false;
+    for (i = 0U; i < instruction->value.structured_inline_asm.operand_count; ++i) {
+        bool output;
+        switch (instruction->value.structured_inline_asm.operands[i].kind) {
+        case MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT:
+        case MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_RESULT:
+        case MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE:
+        case MINIC_CORE_STRUCTURED_INLINE_ASM_FIXED_REGISTER_READWRITE:
+        case MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_OUTPUT:
+        case MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE:
+            output = true;
+            break;
+        case MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT:
+        case MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT:
+            output = false;
+            break;
+        default:
+            return false;
+        }
+        if (output && seen_input) return false;
+        if (output) ++count;
+        else seen_input = true;
+    }
+    *output_count = count;
+    return true;
+}
 
 typedef struct MinicCoreTerminator {
     MinicCoreTerminatorKind kind;
@@ -439,26 +674,25 @@ typedef struct MinicCoreBlock {
     size_t instruction_capacity;
     MinicCoreTerminator terminator;
     bool has_terminator;
-    /* RUNTIME_R1_LOCAL_LABEL_RELOCATION: stable source-label identity.
-       Static data relocations use the TU-local .Luser_<statement-id> symbol;
-       Core owns the CFG block and carries only the identity needed for the
-       backend to emit a colocated alias without reopening Semantic AST. */
-    size_t source_label_id;
+    /* A block may be reached through an opaque/indirect transfer even if it
+     * has no assembler-visible alias (for example a specialized function).
+     * This is control flow, not a source-language clone or label flag. */
+    bool indirect_entry;
+    /* Optional exported assembler-local alias. Module data relocations use
+     * this exact symbol, and only the canonical owner publishes it. A block
+     * may be an indirect entry without exporting any symbol. */
+    char *local_label_symbol;
 } MinicCoreBlock;
 
 typedef struct MinicCoreFunction {
     char *name;
     size_t name_length;
-    MinicType return_type;
-    MinicType *parameter_types;
-    size_t parameter_count;
-    /* Integer-specialization clones share Semantic statement ids with their
-       source. Their executable Core block labels are already function-scoped,
-       so do not also export the source-id .Luser_* compatibility aliases. */
-    bool suppress_source_label_aliases;
-    MinicCoreEnumType *enum_types;
-    size_t enum_type_count;
-    size_t enum_type_capacity;
+    /* The attached type arena is borrowed and must outlive this function and
+     * all target consumers. */
+    const MinicCoreTypeContext *type_context;
+    /* The sole sealed definition signature: return, formals, ABI convention
+       and variadic policy all live in one nominal Core FUNCTION type. */
+    MinicCoreTypeId core_function_type_id;
     MinicCoreFixedRegisterBinding *fixed_register_bindings;
     size_t fixed_register_binding_count;
     size_t fixed_register_binding_capacity;
@@ -495,61 +729,73 @@ typedef struct MinicCoreFunction {
     MinicCoreBlockId entry_block;
 } MinicCoreFunction;
 
-bool minic_core_scalar_bitcast_types_valid(MinicType target_type, MinicType source_type);
+/* For independent Core producers that have already populated all snapshots.
+ * Both paths reject invalid/incomplete type identities and object layouts. */
+bool minic_core_function_attach_type_context(MinicCoreFunction *function,
+                                             const MinicCoreTypeContext *context);
+bool minic_core_function_verify_core_type_snapshot(const MinicCoreFunction *function);
+const MinicCoreType *minic_core_function_type_get(const MinicCoreFunction *function,
+                                                  MinicCoreTypeId id);
+/* Execution-kind queries for sealed Core types; never infer C rank or ABI. */
+bool minic_core_function_type_is_kind(const MinicCoreFunction *function,
+                                     MinicCoreTypeId id, MinicCoreTypeKind kind);
+bool minic_core_function_value_is_kind(const MinicCoreFunction *function,
+                                      MinicCoreValueId id, MinicCoreTypeKind kind);
+/* Fully resolved element extent for private objects; explicit object alignment
+ * remains independent of the underlying element's natural ABI alignment. */
+bool minic_core_function_object_layout(const MinicCoreFunction *function,
+                                       MinicCoreObjectId object_id,
+                                       size_t *size, size_t *alignment);
+
 void minic_core_function_initialize(MinicCoreFunction *function);
 void minic_core_function_destroy(MinicCoreFunction *function);
-bool minic_core_function_set_signature(MinicCoreFunction *function,
-                                       const char *name,
-                                       size_t name_length,
-                                       MinicType return_type,
-                                       const MinicType *parameter_types,
-                                       size_t parameter_count);
-bool minic_core_function_add_enum_type(MinicCoreFunction *function,
-                                       MinicEnumId enum_id,
-                                       MinicType effective_integer_type);
-bool minic_core_function_effective_integer_type(const MinicCoreFunction *function,
-                                                MinicType type,
-                                                MinicType *effective_type);
-bool minic_core_function_add_fixed_register_binding(MinicCoreFunction *function,
-                                                    const char *register_name,
-                                                    size_t register_name_length,
-                                                    MinicType type,
-                                                    bool is_local,
-                                                    size_t *binding_id);
+static inline const MinicCoreType *minic_core_function_signature_type(
+    const MinicCoreFunction *function) {
+    const MinicCoreType *type;
+    if (function == NULL || function->type_context == NULL ||
+        function->core_function_type_id == MINIC_CORE_TYPE_INVALID)
+        return NULL;
+    type = minic_core_type_get(function->type_context,
+        minic_core_type_unqualified(function->type_context,
+                                    function->core_function_type_id));
+    return type != NULL && type->kind == MINIC_CORE_TYPE_FUNCTION ? type : NULL;
+}
+/* A one-shot, language-independent producer API. It publishes a complete
+ * FUNCTION identity, not parallel signature fields on CoreFunction. */
+bool minic_core_function_define_signature(MinicCoreFunction *function,
+    MinicCoreTypeContext *context, MinicCoreTypeId return_type,
+    const MinicCoreTypeId *parameters, size_t parameter_count,
+    MinicFunctionCallingConvention convention, bool is_variadic);
+static inline MinicCoreTypeId minic_core_function_return_type(
+    const MinicCoreFunction *function) {
+    const MinicCoreType *type = minic_core_function_signature_type(function);
+    return type == NULL ? MINIC_CORE_TYPE_INVALID : type->value.function.return_type;
+}
+static inline const MinicCoreTypeId *minic_core_function_parameter_types(
+    const MinicCoreFunction *function) {
+    const MinicCoreType *type = minic_core_function_signature_type(function);
+    return type == NULL ? NULL : type->value.function.parameters;
+}
+static inline size_t minic_core_function_parameter_count(
+    const MinicCoreFunction *function) {
+    const MinicCoreType *type = minic_core_function_signature_type(function);
+    return type == NULL ? 0U : type->value.function.parameter_count;
+}
+static inline MinicFunctionCallingConvention minic_core_function_calling_convention(
+    const MinicCoreFunction *function) {
+    const MinicCoreType *type = minic_core_function_signature_type(function);
+    return type == NULL ? (MinicFunctionCallingConvention)-1 :
+                          type->value.function.calling_convention;
+}
+static inline bool minic_core_function_is_variadic(const MinicCoreFunction *function) {
+    const MinicCoreType *type = minic_core_function_signature_type(function);
+    return type != NULL && type->value.function.is_variadic;
+}
 bool minic_core_function_add_block(MinicCoreFunction *function, MinicCoreBlockId *block_id);
 bool minic_core_function_add_function_symbol(MinicCoreFunction *function,
                                              const char *name,
                                              size_t name_length,
                                              MinicCoreFunctionSymbolId *symbol_id);
-bool minic_core_function_add_object(MinicCoreFunction *function,
-                                    MinicSourceSpan span,
-                                    MinicType type,
-                                    MinicCoreObjectId *object_id);
-bool minic_core_function_add_repeated_object(MinicCoreFunction *function,
-                                             MinicSourceSpan span,
-                                             MinicType element_type,
-                                             size_t element_count,
-                                             MinicCoreObjectId *object_id);
-bool minic_core_function_add_global(MinicCoreFunction *function,
-                                    const char *name,
-                                    size_t name_length,
-                                    MinicType type,
-                                    MinicCoreGlobalId *global_id);
-bool minic_core_function_add_callee(MinicCoreFunction *function,
-                                    const char *name,
-                                    size_t name_length,
-                                    MinicType return_type,
-                                    const MinicType *parameter_types,
-                                    size_t parameter_count,
-                                    bool is_variadic,
-                                    MinicCoreCalleeId *callee_id);
-bool minic_core_function_add_call_signature(MinicCoreFunction *function,
-                                            MinicFunctionTypeId function_type_id,
-                                            MinicType return_type,
-                                            const MinicType *parameter_types,
-                                            size_t parameter_count,
-                                            bool is_variadic,
-                                            MinicCoreCallSignatureId *signature_id);
 bool minic_core_function_add_opaque_inline_asm(MinicCoreFunction *function,
                                                const char *template_text,
                                                size_t template_length,
@@ -561,6 +807,10 @@ bool minic_core_function_add_inline_asm_register_clobber(
     MinicCoreInlineAsmId inline_asm_id,
     const char *name,
     size_t name_length);
+bool minic_core_function_add_inline_asm_symbol_reference(
+    MinicCoreFunction *function, MinicCoreInlineAsmId inline_asm_id,
+    MinicCoreInlineAsmSymbolKind kind, const char *name,
+    size_t name_length, int64_t byte_addend);
 bool minic_core_function_append_call_arguments(MinicCoreFunction *function,
                                                const MinicCoreCallArgument *arguments,
                                                size_t argument_count,
@@ -575,11 +825,22 @@ bool minic_core_function_append_effect_instruction(MinicCoreFunction *function,
 bool minic_core_function_set_terminator(MinicCoreFunction *function,
                                         MinicCoreBlockId block_id,
                                         const MinicCoreTerminator *terminator);
-/* Conservative CFG reachability shared by every target. Ordinary source
- * labels are roots because indirect branches / function-level gotos may
- * reenter them even when lexical control flow cannot. */
+/* Post-lowering semantic canonicalization. A branch consuming a literal Core
+ * INTEGER_CONSTANT has exactly one possible successor; preserving the other
+ * arm would create executable references to impossible GNU compile-time
+ * assertions. This changes only CFG edges, never instruction side effects. */
+size_t minic_core_function_fold_literal_branches(MinicCoreFunction *function);
+/* Conservative CFG reachability shared by every target. Explicit local
+ * exports and indirect entries are distinct roots; live ASM-goto and block
+ * address producers contribute their own CFG successors. */
 bool minic_core_function_mark_reachable_blocks(const MinicCoreFunction *function,
                                                bool *reachable, size_t capacity);
+/* Machine-independent indirect landing-pad census. A reachable BLOCK_ADDRESS
+ * makes its destination an indirect entry even for an independent Core
+ * producer that did not pre-mark the target block. */
+bool minic_core_function_mark_indirect_entries(const MinicCoreFunction *function,
+                                               const bool *reachable,
+                                               bool *indirect_entries, size_t capacity);
 bool minic_core_function_verify(const MinicCoreFunction *function);
 bool minic_core_function_dump(FILE *output, const MinicCoreFunction *function);
 

@@ -1,0 +1,397 @@
+name: MiniC Current Source Stage2 Selfhost
+
+# Rebuild the current compiler with itself: 214+ real C files, 16 independent
+# QEMU replay shards, then a source- and SHA-bound exact fixed-point receiver.
+# GNU -E/AS/LD/CRT are explicit bootstrap seeds; this is NOT native Stage4.
+on:
+  push:
+    branches:
+      - refactor/minic-target-language-boundary
+    paths:
+      - .github/workflows/minic-current-stage2-selfhost.yml
+      - tools/ci/minic-current-stage2-trigger.txt
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: minic-current-stage2-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  seed:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[minic-current-stage2]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 95
+    steps:
+      - name: Checkout exact candidate source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Fail-closed complete current-source preflight
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          import hashlib
+          import importlib.util
+          from pathlib import Path
+          script = Path('tools/ci/minic-bootstrap-current-b1-seed-v1.py')
+          spec = importlib.util.spec_from_file_location('current_b1_seed', script)
+          module = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(module)
+          sources = module.sources()
+          if len(sources) < 214:
+              raise SystemExit('CURRENT_STAGE2_INVENTORY=FAIL unexpected source loss')
+          digest = hashlib.sha256(Path('tests/compiler/bootstrap/b0-sources.txt').read_bytes()).hexdigest()
+          print(f'CURRENT_STAGE2_INVENTORY=PASS C_owners={len(sources)} manifest_sha256={digest}')
+          PY
+          python3 tools/ci/minic-bootstrap-source-inventory-test-v1.py
+          python3 tools/ci/minic-bootstrap-source-binding-test-v1.py
+
+      - name: Install declared GNU and QEMU bootstrap oracles
+        shell: bash
+        timeout-minutes: 15
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            build-essential make gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
+            libc6-dev-riscv64-cross qemu-user ca-certificates file
+          command -v riscv64-linux-gnu-gcc
+          command -v riscv64-linux-gnu-objcopy
+          command -v qemu-riscv64
+
+      - name: Build Stage0 and recompile every current C owner to Stage1
+        shell: bash
+        timeout-minutes: 75
+        run: |
+          set -Eeuo pipefail
+          python3 -u tools/ci/minic-bootstrap-current-b1-seed-v1.py \
+            --work build/bootstrap-current-b1
+
+      - name: Upload pinned source-bound Stage1 seed
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: minic-current-stage1-seed
+          path: |
+            build/bootstrap-current-b1/seed/
+            build/bootstrap-current-b1/stage0/bin/minic-cc
+          if-no-files-found: warn
+          retention-days: 30
+          compression-level: 6
+
+  replay:
+    needs: seed
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      max-parallel: 16
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+    steps:
+      - name: Checkout exact candidate source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Install QEMU user runtime
+        shell: bash
+        timeout-minutes: 12
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends qemu-user
+
+      - name: Restore Stage1 from this run only
+        uses: actions/download-artifact@v4
+        with:
+          name: minic-current-stage1-seed
+          path: build/bootstrap-current-b1
+
+      - name: Replay assigned full-source cohort under QEMU
+        shell: bash
+        timeout-minutes: 60
+        env:
+          SHARD_ID: ${{ matrix.shard }}
+        run: |
+          set -Eeuo pipefail
+          python3 -u - <<'PY'
+          import hashlib
+          import os
+          from pathlib import Path
+          import subprocess
+          seed = Path('build/bootstrap-current-b1/seed')
+          shard = int(os.environ['SHARD_ID'])
+          work = Path('build/bootstrap-current-b1/replay') / f'shard-{shard}'
+          (work / 's').mkdir(parents=True, exist_ok=True)
+          (work / 'logs').mkdir(parents=True, exist_ok=True)
+          def sha(path):
+              h = hashlib.sha256()
+              with path.open('rb') as f:
+                  for part in iter(lambda: f.read(1048576), b''):
+                      h.update(part)
+              return h.hexdigest()
+          def rows(path):
+              result = []
+              for line in path.read_text().splitlines():
+                  fields = line.split('\t')
+                  if len(fields) != 3:
+                      raise RuntimeError('invalid three-column manifest')
+                  result.append(tuple(fields))
+              return result
+          all_rows = rows(seed / 'stage0-manifest.tsv')
+          inputs = rows(seed / 'input-sha256.tsv')
+          source_list = (seed / 'sources.normalized').read_text().splitlines()
+          if len(all_rows) < 214 or len(inputs) != len(all_rows) or len(source_list) != len(all_rows):
+              raise RuntimeError('incomplete current compiler source cohort')
+          if [r[1] for r in all_rows] != source_list:
+              raise RuntimeError('Stage1 source inventory order mismatch')
+          if (seed / 'source-commit.txt').read_text().strip() != os.environ['GITHUB_SHA']:
+              raise RuntimeError('current source commit differs from Stage1 seed')
+          raw_identities = [src + '\t' + sha(Path(src)) for src in source_list]
+          if (seed / 'source-sha256.tsv').read_text().splitlines() != raw_identities:
+              raise RuntimeError('raw current C source identity differs from Stage1 seed')
+          if len({r[0] for r in all_rows}) != len(all_rows):
+              raise RuntimeError('Stage1 source keys repeat')
+          stage1 = seed / 'minic-stage1-rv64'
+          if sha(stage1) != (seed / 'stage1-binary.sha256').read_text().split()[0]:
+              raise RuntimeError('Stage1 ELF hash drift')
+          stage1.chmod(0o755)
+          env = dict(os.environ, MINIC_LINUX_FULL_CROSSBLOCK='1',
+                     MINIC_OPT_PURE_DISCARDED_ADDRESS_EQ='1')
+          out_rows = []
+          for index, ((key, src, expected), (ikey, isrc, input_sha)) in enumerate(zip(all_rows, inputs)):
+              if (key, src) != (ikey, isrc):
+                  raise RuntimeError('Stage1 input manifest key mismatch')
+              if index % 16 != shard:
+                  continue
+              pre = seed / 'i' / (key + '.i')
+              old = seed / 's' / (key + '.s')
+              target = work / 's' / (key + '.s')
+              log = work / 'logs' / (key + '.log')
+              if not pre.is_file() or not old.is_file() or sha(pre) != input_sha or sha(old) != expected:
+                  raise RuntimeError('source seed .i/.s SHA drift ' + src)
+              print(f'CURRENT_STAGE2_REPLAY_BEGIN shard={shard} index={index} source={src}', flush=True)
+              with log.open('wb') as f:
+                  p = subprocess.run(['qemu-riscv64', str(stage1), '-S', str(pre), '-o', str(target)],
+                                     env=env, stdout=f, stderr=subprocess.STDOUT, timeout=1200,
+                                     check=False)
+              if p.returncode != 0 or not target.is_file() or sha(target) != expected:
+                  raise RuntimeError(f'CURRENT_STAGE2_REPLAY_FAIL shard={shard} source={src} rc={p.returncode} log={log}')
+              out_rows.append(f'{index}\t{key}\t{src}\t{expected}')
+              print(f'CURRENT_STAGE2_REPLAY_PASS shard={shard} source={src}', flush=True)
+          expected_shard_count = len([i for i in range(len(all_rows)) if i % 16 == shard])
+          if len(out_rows) != expected_shard_count:
+              raise RuntimeError('shard not complete')
+          (work / f'shard-{shard}.tsv').write_text('\n'.join(out_rows) + '\n')
+          print(f'CURRENT_STAGE2_SHARD=PASS shard={shard} objects={len(out_rows)} total={len(all_rows)} source_sha={os.environ["GITHUB_SHA"]}', flush=True)
+          PY
+
+      - name: Upload this shard and failure diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: minic-current-stage2-shard-${{ matrix.shard }}
+          path: build/bootstrap-current-b1/replay/shard-${{ matrix.shard }}/
+          if-no-files-found: warn
+          retention-days: 30
+          compression-level: 6
+
+  stage2-fixed-point:
+    needs: [seed, replay]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - name: Checkout exact candidate source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Install declared GNU and QEMU bootstrap oracles
+        shell: bash
+        timeout-minutes: 15
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu libc6-dev-riscv64-cross qemu-user
+
+      - name: Restore same-run Stage1
+        uses: actions/download-artifact@v4
+        with:
+          name: minic-current-stage1-seed
+          path: build/bootstrap-current-b1
+
+      - name: Restore all 16 same-run QEMU assembly shards
+        uses: actions/download-artifact@v4
+        with:
+          pattern: minic-current-stage2-shard-*
+          path: build/bootstrap-current-b1/replay
+          merge-multiple: true
+
+      - name: Verify all 214+ sources, link Stage2, and execute fixed point
+        shell: bash
+        timeout-minutes: 23
+        run: |
+          set -Eeuo pipefail
+          python3 -u - <<'PY'
+          import hashlib
+          import importlib.util
+          import os
+          from pathlib import Path
+          import shutil
+          import subprocess
+          seed = Path('build/bootstrap-current-b1/seed')
+          replay = Path('build/bootstrap-current-b1/replay')
+          stage2dir = Path('build/bootstrap-current-b1/stage2')
+          stage2dir.mkdir(parents=True, exist_ok=True)
+          def sha(path):
+              h = hashlib.sha256()
+              with path.open('rb') as f:
+                  for part in iter(lambda: f.read(1048576), b''):
+                      h.update(part)
+              return h.hexdigest()
+          def triples(path):
+              result = []
+              for line in path.read_text().splitlines():
+                  fields = line.split('\t')
+                  if len(fields) != 3:
+                      raise RuntimeError('invalid three-column seed manifest')
+                  result.append(tuple(fields))
+              return result
+          def check(argv, *, timeout, expected=0):
+              p = subprocess.run([str(a) for a in argv], timeout=timeout, check=False)
+              if p.returncode != expected:
+                  raise RuntimeError(f'command failed rc={p.returncode}, expected={expected}: {argv[:3]}')
+          spec = importlib.util.spec_from_file_location(
+              'current_b1_seed', 'tools/ci/minic-bootstrap-current-b1-seed-v1.py')
+          module = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(module)
+          actual_sources = module.sources()
+          seed_sources = (seed / 'sources.normalized').read_text().splitlines()
+          rows = triples(seed / 'stage0-manifest.tsv')
+          inputs = triples(seed / 'input-sha256.tsv')
+          if (len(rows) < 214 or len(rows) != len(inputs) or
+                  [r[1] for r in rows] != actual_sources or seed_sources != actual_sources):
+              raise RuntimeError('CURRENT_STAGE2=FAIL source-bound manifest changed')
+          if (seed / 'source-commit.txt').read_text().strip() != os.environ['GITHUB_SHA']:
+              raise RuntimeError('CURRENT_STAGE2=FAIL source commit differs from Stage1 seed')
+          raw_identities = [src + '\t' + sha(Path(src)) for src in actual_sources]
+          if (seed / 'source-sha256.tsv').read_text().splitlines() != raw_identities:
+              raise RuntimeError('CURRENT_STAGE2=FAIL raw C source hashes differ from Stage1 seed')
+          if len({r[0] for r in rows}) != len(rows):
+              raise RuntimeError('duplicate seed source key')
+          stage1 = seed / 'minic-stage1-rv64'
+          if sha(stage1) != (seed / 'stage1-binary.sha256').read_text().split()[0]:
+              raise RuntimeError('Stage1 ELF checksum mismatch')
+          stage1.chmod(0o755)
+          for (key, src, assembly_hash), (ikey, isrc, source_hash) in zip(rows, inputs):
+              if (key, src) != (ikey, isrc):
+                  raise RuntimeError('Stage1 input binding diverged')
+              if (sha(seed / 'i' / (key + '.i')) != source_hash or
+                      sha(seed / 's' / (key + '.s')) != assembly_hash):
+                  raise RuntimeError('Stage1 .i or .s checksum mismatch ' + src)
+          witnessed = {}
+          for shard in range(16):
+              witness = replay / f'shard-{shard}.tsv'
+              if not witness.is_file():
+                  raise RuntimeError('missing shard receipt ' + str(shard))
+              for line in witness.read_text().splitlines():
+                  fields = line.split('\t')
+                  if len(fields) != 4:
+                      raise RuntimeError('bad shard witness row')
+                  idx = int(fields[0])
+                  if idx < 0 or idx >= len(rows) or idx % 16 != shard or idx in witnessed:
+                      raise RuntimeError('foreign or duplicate shard witness')
+                  if tuple(fields[1:]) != rows[idx]:
+                      raise RuntimeError('wrong source/hash in shard receipt')
+                  observed = replay / 's' / (fields[1] + '.s')
+                  if sha(observed) != fields[3]:
+                      raise RuntimeError('replayed .s checksum mismatch ' + fields[2])
+                  witnessed[idx] = observed
+          if sorted(witnessed) != list(range(len(rows))):
+              raise RuntimeError('CURRENT_STAGE2=FAIL incomplete or partially skipped cohort')
+          # The full-native Stage3/4 gate consumes this canonical Stage2 tree.
+          # Preserve every independently replayed .s, not just the linked ELF.
+          (stage2dir / 's').mkdir(parents=True, exist_ok=True)
+          for i in range(len(rows)):
+              target = stage2dir / 's' / (rows[i][0] + '.s')
+              shutil.copy2(witnessed[i], target)
+              if sha(target) != rows[i][2]:
+                  raise RuntimeError('CURRENT_STAGE2=FAIL copied replay assembly drift')
+          asm = [witnessed[i] for i in range(len(rows))]
+          stage2 = stage2dir / 'minic-stage2-rv64'
+          check(['riscv64-linux-gnu-gcc', '-static', *asm, '-o', stage2], timeout=450)
+          bin1 = stage2dir / 'minic-stage1.load.bin'
+          bin2 = stage2dir / 'minic-stage2.load.bin'
+          check(['riscv64-linux-gnu-objcopy', '-O', 'binary', stage1, bin1], timeout=120)
+          check(['riscv64-linux-gnu-objcopy', '-O', 'binary', stage2, bin2], timeout=120)
+          if sha(bin1) != sha(bin2):
+              raise RuntimeError('CURRENT_STAGE2=FAIL Stage1/Stage2 loadable image differs')
+          env = dict(os.environ, MINIC_LINUX_FULL_CROSSBLOCK='1',
+                     MINIC_OPT_PURE_DISCARDED_ADDRESS_EQ='1')
+          smokes = stage2dir / 'return_42.stage2.s'
+          p = subprocess.run(['qemu-riscv64', str(stage2), '-S',
+                              str(seed / 'return_42.i'), '-o', str(smokes)],
+                             env=env, timeout=240, check=False)
+          if p.returncode != 0 or sha(smokes) != sha(seed / 'return_42.stage1.s'):
+              raise RuntimeError('CURRENT_STAGE2=FAIL Stage2 return42 assembly differs')
+          elf = stage2dir / 'return_42.stage2.elf'
+          check(['riscv64-linux-gnu-gcc', '-static', smokes, '-o', elf], timeout=120)
+          check(['qemu-riscv64', elf], timeout=60, expected=42)
+          # Exact four-key provenance contract required by full-native.verify_seed.
+          report = (f'stage1_elf_sha256={sha(stage1)}\n'
+                    f'stage2_elf_sha256={sha(stage2)}\n'
+                    f'loadable_image_sha256={sha(bin2)}\n'
+                    f'source_count={len(rows)}\n')
+          (stage2dir / 'stage2-fixed-point.txt').write_text(report)
+          (stage2dir / 'stage2-binary.sha256').write_text(
+              sha(stage2) + '  ' + str(stage2) + '\n')
+          print(f'CURRENT_STAGE2_FIXED_POINT=PASS source_count={len(rows)} '
+                f'replayed={len(witnessed)}/{len(rows)} shards=16/16 '
+                'asm_sha_exact=true loadable_sha_exact=true QEMU_return42=42',
+                flush=True)
+          PY
+
+      - name: Preserve exact source and Stage2 selfhost receipt
+        if: success()
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work=build/bootstrap-current-b1
+          test -s "$work/stage2/stage2-fixed-point.txt"
+          {
+            echo "CURRENT_STAGE2_COMMIT=$GITHUB_SHA"
+            echo "CURRENT_STAGE2_RUN=$GITHUB_RUN_ID"
+            sha256sum Makefile tests/compiler/bootstrap/b0-sources.txt \
+              tools/ci/minic-bootstrap-current-b1-seed-v1.py \
+              tools/ci/minic-bootstrap-current-b1-stage2-v1.py \
+              "$work/seed/stage0-manifest.tsv" \
+              "$work/seed/input-sha256.tsv" \
+              "$work/seed/source-commit.txt" \
+              "$work/seed/source-sha256.tsv" \
+              "$work/seed/minic-stage1-rv64" \
+              "$work/stage2/minic-stage2-rv64"
+            cat "$work/stage2/stage2-fixed-point.txt"
+            echo 'CURRENT_STAGE2_SELFHOST=PASS scope=current_C_compiler_stage0_to_stage2 GNU_E_AS_LD_CRT_used=true stage3_stage4=NOT_RUN'
+          } | tee "$work/current-stage2-receipt.txt"
+
+      - name: Upload certified Stage2 result and receiver diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: minic-current-stage2-final-${{ github.run_id }}
+          path: |
+            build/bootstrap-current-b1/stage2/
+            build/bootstrap-current-b1/current-stage2-receipt.txt
+          if-no-files-found: warn
+          retention-days: 30
+          compression-level: 6

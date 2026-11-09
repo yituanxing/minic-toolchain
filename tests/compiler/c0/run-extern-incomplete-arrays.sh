@@ -18,8 +18,11 @@ grep -F '.globl message' "$work/extern_incomplete_array.s" >/dev/null
 grep -F '.size message, 5' "$work/extern_incomplete_array.s" >/dev/null
 grep -F '  .byte 97' "$work/extern_incomplete_array.s" >/dev/null
 grep -F '  .byte 100' "$work/extern_incomplete_array.s" >/dev/null
-grep -F '  la a0, message' "$work/extern_incomplete_array.s" >/dev/null
-grep -F '  la a0, remote_message' "$work/extern_incomplete_array_only.s" >/dev/null
+# Address lowering may use a temporary then spill it rather than materialize
+# directly into a0.  Either form still proves that the extern symbol survives
+# the source/IR boundary and is referenced by its actual linker name.
+grep -Eq '^[[:space:]]+(la|lla) [at][0-9]+, message$' "$work/extern_incomplete_array.s"
+grep -Eq '^[[:space:]]+(la|lla) [at][0-9]+, remote_message$' "$work/extern_incomplete_array_only.s"
 if grep -F '.globl remote_message' "$work/extern_incomplete_array_only.s" >/dev/null; then
     printf '%s\n' 'FAIL compiler/c0/extern_incomplete_array_only: extern declaration emitted a definition' >&2
     exit 1

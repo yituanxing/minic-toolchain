@@ -17,7 +17,7 @@ preprocess function_typed_declarator
 grep -F "  call __SCT__perf_snapshot_branch_stack" "$work/function_typed_declarator.s" >/dev/null
 grep -F "  call typed_direct" "$work/function_typed_declarator.s" >/dev/null
 grep -F "  call parenthesized_direct" "$work/function_typed_declarator.s" >/dev/null
-grep -E '^[[:space:]]+la[[:space:]]+[^,]+,[[:space:]]*callback_slot$'     "$work/function_typed_declarator.s" >/dev/null
+grep -E '^[[:space:]]+lla[[:space:]]+[^,]+,[[:space:]]*callback_slot$'     "$work/function_typed_declarator.s" >/dev/null
 # Keep the indirect-call opcode/link-register/zero-offset contract exact while
 # leaving the Core value carrier register to the RV64 backend.
 grep -E '^[[:space:]]+jalr[[:space:]]+ra,[[:space:]]*[a-z][a-z0-9]*,[[:space:]]*0$'     "$work/function_typed_declarator.s" >/dev/null

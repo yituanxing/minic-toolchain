@@ -17,6 +17,10 @@ typedef struct MinicCoreFunctionFacts {
     const MinicCoreCallIndex *call_index;
     /* Successful canonical verifier proof for this immutable definition. */
     const MinicCoreFunction *verified_function;
+    /* Borrowed from the prepared function owner, for this exact verified
+     * Core definition. Standalone facts have no precomputed machine view. */
+    const bool *reachable_blocks;
+    const size_t *value_use_counts;
     size_t variadic_address_count;
     /* Visitor-owned checked va_start result slots; NULL for standalone facts. */
     const MinicCoreValueId *variadic_address_results;

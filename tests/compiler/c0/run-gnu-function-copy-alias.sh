@@ -42,6 +42,30 @@ fi
 require_text "$work/forward.s" '.weak alias_fn' forward-weak
 require_text "$work/forward.s" '.set alias_fn, target' forward-set
 
+# Linux syscalls forward-declare their aliased entry by symbol name only:
+# their actual prototype/definition can appear later in the translation unit.
+cat > "$work/forward-no-prototype.c" <<'SRC'
+extern int __attribute__((weak, alias("target"))) alias_fn(int value);
+int target(int value) { return value + 1; }
+SRC
+if ! "$minic" -S "$work/forward-no-prototype.c" -o "$work/forward-no-prototype.s" >"$work/forward-no-prototype.stdout" 2>"$work/forward-no-prototype.err"; then
+    printf '%s\n' 'FAIL compiler/c0/gnu-function-copy-alias step=forward-no-prototype' >&2
+    cat "$work/forward-no-prototype.err" >&2
+    exit 1
+fi
+require_text "$work/forward-no-prototype.s" '.weak alias_fn' forward-no-prototype-weak
+require_text "$work/forward-no-prototype.s" '.set alias_fn, target' forward-no-prototype-set
+
+cat > "$work/forward-unknown.c" <<'SRC'
+extern int __attribute__((alias("missing_target"))) alias_fn(int value);
+SRC
+if "$minic" -S "$work/forward-unknown.c" -o "$work/forward-unknown.s" >"$work/forward-unknown.stdout" 2>"$work/forward-unknown.err"; then
+    printf '%s\n' 'FAIL compiler/c0/gnu-function-copy-alias step=unknown-accepted' >&2
+    exit 1
+fi
+require_text "$work/forward-unknown.err" 'GNU alias target must be declared in this translation unit' forward-unknown
+
+
 cat > "$work/mismatch.c" <<'SRC'
 static int target(int value) { return value; }
 static inline __attribute__((alias("target"))) int alias_fn(void);

@@ -16,11 +16,14 @@ mkdir -p "$work"
     "$work/pointer_aggregate_arithmetic.i" \
     -o "$work/pointer_aggregate_arithmetic.s"
 
-grep -E '^[[:space:]]+li[[:space:]]+[^,]+,[[:space:]]*12$' \
-    "$work/pointer_aggregate_arithmetic.s" >/dev/null
-test "$(grep -E -c '^[[:space:]]+mul[[:space:]]+[^,]+,[[:space:]]*[^,]+,[[:space:]]*[^,]+$' \
+# RV64I does not admit MUL.  Record stride 12 is selected as 4*x+8*x
+# (SLLI 2 / SLLI 3 / ADD) at both source pointer computations.
+test "$(grep -Ec '^[[:space:]]+slli[[:space:]]+[^,]+,[[:space:]]*[^,]+,[[:space:]]*2$' \
     "$work/pointer_aggregate_arithmetic.s")" -ge 2
-printf '%s\n' "PASS compiler/c0/pointer_aggregate_arithmetic stride=12 multiply>=2"
+test "$(grep -Ec '^[[:space:]]+slli[[:space:]]+[^,]+,[[:space:]]*[^,]+,[[:space:]]*3$' \
+    "$work/pointer_aggregate_arithmetic.s")" -ge 2
+test "$(grep -Ec '^[[:space:]]+add[[:space:]]+' "$work/pointer_aggregate_arithmetic.s")" -ge 2
+printf '%s\n' "PASS compiler/c0/pointer_aggregate_arithmetic stride=12 shift-add>=2"
 
 MINIC="$minic" \
 HOST_CC="$host_cc" \

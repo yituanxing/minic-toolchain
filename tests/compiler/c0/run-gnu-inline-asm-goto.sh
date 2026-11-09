@@ -15,10 +15,13 @@ mkdir -p "$work"
 "$minic" -S "$work/gnu_inline_asm_goto.i" -o "$assembly"
 
 test -s "$assembly"
-grep -E '^  j \.Luser_[0-9]+$' "$assembly" >/dev/null
+# Core CFG now resolves GNU goto labels to verified per-function blocks.
+# The historical .Luser label is still present as an alias, but native
+# code branches to the actual .L*_core_bbN machine destination.
+grep -E '^j \.Lliteral_alternative_core_bb[0-9]+$' "$assembly" >/dev/null
 grep -E '^\.Luser_[0-9]+:$' "$assembly" >/dev/null
 grep -F '.word 33' "$assembly" >/dev/null
-grep -E '\.long \.Luser_[0-9]+ - \.' "$assembly" >/dev/null
+grep -E '\.long \.Ldynamic_jump_label_core_bb[0-9]+ - \.' "$assembly" >/dev/null
 grep -E '__minic_deferred_asm_immediate_[0-9]+_[0-9]+' "$assembly" >/dev/null
 grep -F 'MINIC_DEFERRED_ASM_IMMEDIATE requires inline specialization' "$assembly" >/dev/null
 if grep -F '%l[' "$assembly" >/dev/null; then

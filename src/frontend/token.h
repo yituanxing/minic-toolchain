@@ -1,18 +1,7 @@
 #ifndef MINIC_FRONTEND_TOKEN_H
 #define MINIC_FRONTEND_TOKEN_H
 
-#include <stddef.h>
-
-typedef struct MinicSourcePosition {
-    size_t offset;
-    size_t line;
-    size_t column;
-} MinicSourcePosition;
-
-typedef struct MinicSourceSpan {
-    MinicSourcePosition begin;
-    MinicSourcePosition end;
-} MinicSourceSpan;
+#include "common/source_location.h"
 
 typedef enum MinicTokenKind {
     MINIC_TOKEN_INVALID = 0,

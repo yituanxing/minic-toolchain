@@ -1,0 +1,73 @@
+name: MiniC RV32 Virtio Feature Differential
+
+on:
+  pull_request:
+    paths:
+      - 'src/core/**'
+      - 'src/frontend/**'
+      - 'src/compiler/**'
+      - 'src/target/common/**'
+      - 'src/target/riscv32/**'
+      - 'src/target/target_info*'
+      - 'src/target/data_layout*'
+      - 'include/minic/**'
+      - 'tools/minic-cc/**'
+      - 'tests/compiler/c0/rv32_u64_compound_or_store.c'
+      - 'tests/compiler/c0/run-rv32-u64-compound-or-store.sh'
+      - '.github/workflows/minic-rv32-virtio-feature-differential.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'src/core/**'
+      - 'src/frontend/**'
+      - 'src/compiler/**'
+      - 'src/target/common/**'
+      - 'src/target/riscv32/**'
+      - 'src/target/target_info*'
+      - 'src/target/data_layout*'
+      - 'include/minic/**'
+      - 'tools/minic-cc/**'
+      - 'tests/compiler/c0/rv32_u64_compound_or_store.c'
+      - 'tests/compiler/c0/run-rv32-u64-compound-or-store.sh'
+      - '.github/workflows/minic-rv32-virtio-feature-differential.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rv32-virtio-feature-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rv32-virtio-u64-feature:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install real GNU RV32 cross assembler, linker and QEMU user emulator
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu qemu-user
+          command -v riscv64-linux-gnu-gcc
+          command -v riscv64-linux-gnu-ld
+          command -v qemu-riscv32
+
+      - name: Build real MiniC C compiler
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release BUILD_DIR=build/rv32-virtio-feature \
+            build/rv32-virtio-feature/bin/minic-cc
+          test -x build/rv32-virtio-feature/bin/minic-cc
+
+      - name: Strict GNU-preprocessed MiniC vs GNU RV32 ELF32 real QEMU differential
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          MINIC_CC="$GITHUB_WORKSPACE/build/rv32-virtio-feature/bin/minic-cc" \
+            bash tests/compiler/c0/run-rv32-u64-compound-or-store.sh

@@ -77,6 +77,13 @@ def main():
     selfhash = (seed / "stage1-binary.sha256").read_text().split()[0]
     if hashfile(stage1) != selfhash:
         raise RuntimeError("Stage1 ELF hash drift")
+    # The fixed point is meaningful only for the identical complete source
+    # checkout: headers and scripts may change without changing C owner paths.
+    head = subprocess.run(
+        ["git", "rev-parse", "--verify", "HEAD"], cwd=ROOT,
+        capture_output=True, text=True, check=True).stdout.strip()
+    if (seed / "source-commit.txt").read_text().strip() != head:
+        raise RuntimeError("current B1 source commit changed since Stage1 seed")
     rows = []
     for line in (seed / "stage0-manifest.tsv").read_text().splitlines():
         fields = line.split("\t")
@@ -94,8 +101,12 @@ def main():
        or len(set(r[0] for r in rows)) != len(rows):
         raise RuntimeError("source manifest diverges from seeded compiler C inputs")
     if expected_sources[-1] != "tools/minic-cc/main.c" \
-       or "src/core/core_lower_bool.c" not in expected_sources:
+       or "src/compiler/c_lower/core_lower_bool.c" not in expected_sources:
         raise RuntimeError("compiler entry / LowerBool not certified")
+    expected_raw_hashes = [source + "\t" + hashfile(ROOT / source)
+                           for source in expected_sources]
+    if (seed / "source-sha256.tsv").read_text().splitlines() != expected_raw_hashes:
+        raise RuntimeError("current B1 raw C sources changed since Stage1 seed")
     for key, source, before in rows:
         pre = seed / "i" / (key + ".i")
         asm = seed / "s" / (key + ".s")

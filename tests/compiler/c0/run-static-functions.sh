@@ -14,12 +14,16 @@ mkdir -p "$work"
 "$minic" -S "$work/static_functions.i" -o "$work/static_functions.s"
 
 grep -F ".type helper, @function" "$work/static_functions.s" >/dev/null
-grep -F ".type touch, @function" "$work/static_functions.s" >/dev/null
 grep -F "helper:" "$work/static_functions.s" >/dev/null
-grep -F "touch:" "$work/static_functions.s" >/dev/null
 grep -F "  call helper" "$work/static_functions.s" >/dev/null
-grep -F ".Ltouch_core_return:" "$work/static_functions.s" >/dev/null
 grep -F ".globl main" "$work/static_functions.s" >/dev/null
+# A completely unreferenced internal function may be pruned by the common
+# reachability pass. Requiring an emitted touch symbol would regress DCE.
+if grep -F ".type touch, @function" "$work/static_functions.s" >/dev/null ||
+   grep -F "touch:" "$work/static_functions.s" >/dev/null; then
+    printf '%s\n' "FAIL compiler/c0/static_functions: dead internal function emitted" >&2
+    exit 1
+fi
 if grep -F ".globl helper" "$work/static_functions.s" >/dev/null ||
    grep -F ".globl touch" "$work/static_functions.s" >/dev/null; then
     printf '%s\n' \
@@ -33,7 +37,9 @@ printf '%s\n' "PASS compiler/c0/static_functions"
     -o "$work/pointer_return.i"
 "$minic" -S "$work/pointer_return.i" -o "$work/pointer_return.s"
 grep -F ".type identity, @function" "$work/pointer_return.s" >/dev/null
-grep -F ".Lidentity_core_return:" "$work/pointer_return.s" >/dev/null
+# The MachineIR backend assigns block-local labels; the old hand-emitter's
+# .Lidentity_core_return spelling is not part of the ABI or the test contract.
+grep -Eq '^\.Lminic_mir_identity_[0-9]+:$' "$work/pointer_return.s"
 grep -F "  call identity" "$work/pointer_return.s" >/dev/null
 printf '%s\n' "PASS compiler/c0/pointer_return"
 

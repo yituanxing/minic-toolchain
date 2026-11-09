@@ -2,6 +2,7 @@
 set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
+. "$root/tests/compiler/c0/machine-cfg-contract.sh"
 minic=${MINIC:-"$root/build/debug/bin/minic"}
 host_cc=${HOST_CC:-${CC:-cc}}
 work=${BUILD_DIR:-"$root/build/debug"}/tests/compiler-c0
@@ -19,9 +20,7 @@ compile_source() {
     # Core owns the production function route. Keep this contract on route
     # identity and CFG shape, not on frame/register allocation policy.
     grep -F ".globl main" "$work/$name.s" >/dev/null
-    grep -F ".Lmain_core_bb" "$work/$name.s" >/dev/null
-    grep -F ".Lmain_core_return:" "$work/$name.s" >/dev/null
-    grep -E '^[[:space:]]+ret$' "$work/$name.s" >/dev/null
+    require_machine_function_cfg "$work/$name.s" main 2
 }
 
 expect_instructions() {
@@ -36,26 +35,12 @@ expect_instructions() {
                 # still prove that the source operation is emitted.
                 ;;
             "j .Lmain_return")
-                # Core return edges use a far PC-relative transfer so bootstrap
-                # functions are not limited by JAL's signed 21-bit displacement.
-                if ! grep -F "  j .Lmain_core_return" "$work/$name.s" >/dev/null; then
-                    grep -F "  lla t6, .Lmain_core_return" "$work/$name.s" >/dev/null
-                    grep -F "  jalr zero, t6, 0" "$work/$name.s" >/dev/null
-                fi
-                ;;
-            "j .Lif_"*)
-                if ! grep -E '^[[:space:]]+j[[:space:]]+\.Lmain_core_bb[0-9]+$' "$work/$name.s" >/dev/null; then
-                    grep -E '^[[:space:]]+lla[[:space:]]+t6,[[:space:]]*\.Lmain_core_bb[0-9]+$' "$work/$name.s" >/dev/null
-                    grep -F "  jalr zero, t6, 0" "$work/$name.s" >/dev/null
-                fi
-                ;;
-            "beqz a0, .Lif_"*)
-                # Current Core conditional terminators keep only a local beqz
-                # and transfer both successors through the far-jump sequence.
-                if ! grep -E '^[[:space:]]+bnez[[:space:]]+[^,]+,[[:space:]]*\.Lmain_core_bb[0-9]+$' "$work/$name.s" >/dev/null; then
-                    grep -E '^[[:space:]]+beqz[[:space:]]+t0,[[:space:]]*1f$' "$work/$name.s" >/dev/null
-                    test "$(grep -E -c '^[[:space:]]+lla[[:space:]]+t6,[[:space:]]*\.Lmain_core_bb[0-9]+$' "$work/$name.s")" -ge 2
-                fi
+                # An adjacent MachineIR return block is a fallthrough edge;
+                # emitted J versus fallthrough is a code-size decision.
+                # compile_source already checked >=2 real block definitions
+                # and the final RV64 ret. True if-CFG semantics are tested
+                # with the GNU/MiniC executable differential below.
+                require_machine_function_cfg "$work/$name.s" main 2
                 ;;
             "li a0, "*)
                 immediate=${instruction#"li a0, "}
@@ -64,7 +49,8 @@ expect_instructions() {
                 ;;
             "la a0, "*)
                 symbol=${instruction#"la a0, "}
-                grep -E "^[[:space:]]+la[[:space:]]+[^,]+,[[:space:]]*$symbol$" \
+                # Internal symbols use the explicit NOPIC PC-relative lla.
+                grep -E "^[[:space:]]+lla[[:space:]]+[^,]+,[[:space:]]*$symbol$" \
                     "$work/$name.s" >/dev/null
                 ;;
             "xori a0, a0, 1")
@@ -78,10 +64,25 @@ expect_instructions() {
                 grep -E "^[[:space:]]+xori[[:space:]]+[^,]+,[[:space:]]*[^,]+,[[:space:]]*$immediate$" \
                     "$work/$name.s" >/dev/null
                 ;;
-            addw\ *|subw\ *|mulw\ *|divw\ *|remw\ *|negw\ *)
+            addw\ *|subw\ *|negw\ *)
                 opcode=${instruction%% *}
                 opcode=${opcode%w}
                 grep -E "^[[:space:]]+$opcode[[:space:]]+" "$work/$name.s" >/dev/null
+                ;;
+            mulw\ *|divw\ *|remw\ *)
+                # The RV64I selector deliberately does not emit M-extension
+                # MUL/DIV/REM.  Verify either the target opcode on an M-capable
+                # profile or the exact signed psABI helper on RV64I.
+                opcode=${instruction%% *}
+                opcode=${opcode%w}
+                case "$opcode" in
+                    mul) helper=__muldi3 ;;
+                    div) helper=__divdi3 ;;
+                    rem) helper=__moddi3 ;;
+                esac
+                if ! grep -E "^[[:space:]]+$opcode[[:space:]]+" "$work/$name.s" >/dev/null; then
+                    grep -E "^[[:space:]]+call[[:space:]]+$helper$" "$work/$name.s" >/dev/null
+                fi
                 ;;
             snez\ *)
                 # Core has SCALAR_EQUAL + SCALAR_IS_ZERO rather than a target-
@@ -104,6 +105,36 @@ expect_instructions() {
         esac
     done
     printf '%s\n' "PASS compiler/c0/$name normalized=core-contract"
+}
+
+# The shared Core CFG now folds constant conditions and known local integer
+# facts before target-specific branch emission. Historical assertions for a
+# syntactic `if (1)` to produce a particular RV64 beqz were inverted: they
+# rejected correct code. Execute each original case through both GNU and the
+# actual MiniC x86-64 backend, while compile_source above still enforces the
+# RV64 Core path. This checks behavior, not dead CFG/register placement.
+expect_if_gnu_differential() {
+    name=$1
+    minic_cc=$(dirname "$minic")/minic-cc
+
+    "$minic_cc" --target=x86_64-linux -S "$work/$name.i" -o "$work/$name.x86.s"
+    "$host_cc" -x assembler -no-pie "$work/$name.x86.s" -o "$work/$name.minic.elf"
+    "$host_cc" -x c -no-pie "$work/$name.i" -o "$work/$name.gnu.elf"
+    if "$work/$name.minic.elf"; then
+        minic_exit=0
+    else
+        minic_exit=$?
+    fi
+    if "$work/$name.gnu.elf"; then
+        gnu_exit=0
+    else
+        gnu_exit=$?
+    fi
+    if test "$minic_exit" -ne "$gnu_exit"; then
+        printf '%s\n' "FAIL compiler/c0/$name: MiniC exit=$minic_exit GNU exit=$gnu_exit" >&2
+        exit 1
+    fi
+    printf '%s\n' "PASS compiler/c0/$name Core-CFG GNU/MiniC exit=$minic_exit"
 }
 
 expect_compile_failure() {
@@ -222,38 +253,25 @@ expect_instructions logical_not_local \
     "lw a0, 0(s0)" "seqz a0, a0"
 
 compile_source if_true_assignment if_else -DCASE=1
-expect_instructions if_true_assignment \
-    "beqz a0, .Lif_else_0" "sw t0, 0(a0)" \
-    "j .Lif_end_0"
+expect_if_gnu_differential if_true_assignment
 
 compile_source if_false_else if_else -DCASE=2
-expect_instructions if_false_else \
-    "beqz a0, .Lif_else_0" "j .Lif_end_0"
+expect_if_gnu_differential if_false_else
 
 compile_source if_comparison_block if_else -DCASE=3
-expect_instructions if_comparison_block \
-    "slt a0, t0, a0" "beqz a0, .Lif_else_0" \
-    "addw a0, t0, a0"
+expect_if_gnu_differential if_comparison_block
 
 compile_source if_nested_dangling_else if_else -DCASE=4
-expect_instructions if_nested_dangling_else \
-    "beqz a0, .Lif_else_0" "beqz a0, .Lif_else_1"
-if ! test "$(grep -E -c '^[[:space:]]+bnez[[:space:]]+[^,]+,[[:space:]]*\.Lmain_core_bb[0-9]+$' "$work/if_nested_dangling_else.s")" -eq 2; then
-    test "$(grep -E -c '^[[:space:]]+beqz[[:space:]]+t0,[[:space:]]*1f$' "$work/if_nested_dangling_else.s")" -eq 2
-fi
+expect_if_gnu_differential if_nested_dangling_else
 
 compile_source if_branch_return if_else -DCASE=5
-expect_instructions if_branch_return \
-    "beqz a0, .Lif_else_0" "j .Lmain_return"
+expect_if_gnu_differential if_branch_return
 
 compile_source if_false_fallthrough if_else -DCASE=6
-expect_instructions if_false_fallthrough \
-    "beqz a0, .Lif_else_0" "lw a0, 0(s0)"
+expect_if_gnu_differential if_false_fallthrough
 
 compile_source if_multi_statement if_else -DCASE=7
-expect_instructions if_multi_statement \
-    "beqz a0, .Lif_else_0" "addw a0, t0, a0" \
-    "mulw a0, t0, a0"
+expect_if_gnu_differential if_multi_statement
 
 compile_source array_declaration array_declaration
 expect_instructions array_declaration "mv s0, sp" "li a0, 0" "j .Lmain_return"
@@ -317,7 +335,7 @@ expect_compile_failure \
     "unsupported pointer arithmetic operands"
 expect_compile_failure \
     invalid_zero_length_array \
-    "array bound must be greater than zero"
+    "array bound must not be negative"
 expect_compile_failure \
     invalid_array_initializer \
     "array initializers are not supported yet"
@@ -337,6 +355,14 @@ MINIC="$minic" \
 HOST_CC="$host_cc" \
 BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
 sh "$root/tests/compiler/c0/run-gnu-empty-records.sh"
+MINIC="$minic" \
+HOST_CC="$host_cc" \
+BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
+sh "$root/tests/compiler/c0/run-x86-sysv-12byte-record.sh"
+MINIC_CC="$(dirname "$minic")/minic-cc" \
+HOST_CC="$host_cc" \
+sh "$root/tests/compiler/c0/probe-lp64-empty-record-call-abi.sh"
+sh "$root/tests/compiler/c0/probe-lp64-overaligned-stack-frame.sh"
 expect_compile_failure \
     invalid_conflicting_const_parameter \
     "conflicting function declaration"
@@ -476,6 +502,9 @@ HOST_CC="$host_cc" \
 BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
 sh "$root/tests/compiler/c0/run-gnu-zero-length-array.sh"
 
+MINIC="$minic" HOST_CC="$host_cc" BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
+  sh "$root/tests/compiler/c0/run-linux-gnu-frontend-semantics.sh"
+
 MINIC="$minic" BUILD_DIR="$work/gnu-extern-void-symbol" HOST_CC="$host_cc" sh "$root/tests/compiler/c0/run-gnu-extern-void-symbol.sh"
 
 MINIC="$minic" BUILD_DIR="$work/extern-typedef-array-object" HOST_CC="$host_cc" sh "$root/tests/compiler/c0/run-extern-typedef-array-object.sh"
@@ -486,7 +515,11 @@ MINIC="$minic" BUILD_DIR="$work/function-typed-declarator" HOST_CC="$host_cc" sh
 
 MINIC="$minic" BUILD_DIR="$work/gnu-weak-function-symbol" HOST_CC="$host_cc" sh "$root/tests/compiler/c0/run-gnu-weak-function-symbol.sh"
 
+MINIC="$minic" BUILD_DIR="$work/gnu-weak-undefined-live" HOST_CC="$host_cc" sh "$root/tests/compiler/c0/run-gnu-weak-undefined-live.sh"
+
 MINIC="$minic" BUILD_DIR="$work/pragma-pack-record-layout" HOST_CC="$host_cc" sh "$root/tests/compiler/c0/run-pragma-pack-record-layout.sh"
+
+MINIC="$minic" BUILD_DIR="$work/gnu-target-pragma" sh "$root/tests/compiler/c0/run-gnu-target-pragma.sh"
 
 MINIC="$minic" BUILD_DIR="$work/conditional-null-pointer-constant" HOST_CC="$host_cc" sh "$root/tests/compiler/c0/run-conditional-null-pointer-constant.sh"
 

@@ -1,13 +1,67 @@
 #include "frontend/expression_semantics.h"
+#include "frontend/const_eval.h"
+#include "target/source_policy/source_info.h"
+
+bool minic_c0_inline_asm_input_value_supported(
+    const MinicTargetInvocation *target, const MinicExpression *expression,
+    const char *constraint, size_t length) {
+    if (target == NULL || expression == NULL || constraint == NULL || length == 0U)
+        return false;
+    /* Preserve all previously admitted scalar source operands, independent
+     * of actual ISA register allocation. */
+    if (minic_type_is_integer(expression->type) ||
+        minic_type_is_pointer(expression->type))
+        return true;
+    if (minic_target_info_inline_asm_vector_register_input_constraint_supported(
+            target, constraint, length, expression->type))
+        return true;
+    /* GNU memory constraints denote addressable C storage, not an aggregate
+     * coerced into a GPR. AArch64 Q (base + zero offset) admits Linux's
+     * smp_load_acquire(&union), while x86 Q denotes a register class and
+     * must not gain aggregate permission. Backend still qualifies the
+     * exact instruction, address, side effects and clobber set. */
+    return minic_target_info_inline_asm_memory_input_constraint_supported(
+               target, constraint, length) &&
+           expression->value_category == MINIC_VALUE_LVALUE &&
+           (minic_type_is_record(expression->type) ||
+            minic_type_is_array(expression->type) ||
+            (length == 1U && constraint[0] == 'm' &&
+             minic_type_is_gnu_fixed_vector(expression->type) &&
+             minic_target_info_language_type_supported(
+                 target, MINIC_TYPE_BASE_GNU_FIXED_VECTOR)) ||
+            minic_type_is_float(expression->type) ||
+            minic_type_is_double(expression->type) ||
+            minic_type_is_long_double(expression->type));
+}
+
+bool minic_c0_inline_asm_output_value_supported(
+    const MinicC0Program *program, const MinicTargetInvocation *target,
+    const MinicExpression *expression, const char *constraint, size_t length) {
+    const MinicFixedRegisterBinding *binding;
+    if (expression == NULL || constraint == NULL || length == 0U)
+        return false;
+    if (expression->value_category == MINIC_VALUE_LVALUE)
+        return true;
+    if (program == NULL || target == NULL ||
+        expression->value_category != MINIC_VALUE_RVALUE ||
+        expression->kind != MINIC_EXPRESSION_FIXED_REGISTER)
+        return false;
+    binding = minic_c0_program_fixed_register_binding(
+        program, expression->value.fixed_register_binding_id);
+    return binding != NULL &&
+           minic_target_info_inline_asm_readwrite_hardreg_supported(
+               target, binding->register_name, binding->register_name_length,
+               constraint, length, expression->type);
+}
 
 bool minic_c0_pointer_arithmetic_element_size(const MinicC0Program *program,
-                                              const MinicDataLayout *layout,
+                                              const MinicTargetInvocation *invocation,
                                               MinicType pointer_type,
                                               size_t *element_size) {
     MinicType pointee;
     size_t alignment;
 
-    if (program == NULL || layout == NULL || element_size == NULL ||
+    if (program == NULL || invocation == NULL || element_size == NULL ||
         !minic_type_pointee(pointer_type, &pointee)) {
         return false;
     }
@@ -22,7 +76,7 @@ bool minic_c0_pointer_arithmetic_element_size(const MinicC0Program *program,
        is owned by the caller/frontend; DataLayout returning a valid size of zero
        must not be reinterpreted here as an unsupported type. Incomplete types
        still fail because DataLayout cannot size them. */
-    return minic_data_layout_type(layout, program, pointee, element_size, &alignment);
+    return minic_data_layout_type(invocation, program, pointee, element_size, &alignment);
 }
 
 static bool integer_type_is_signed(const MinicC0Program *program, MinicType type) {
@@ -51,7 +105,7 @@ bool minic_c0_integer_assignment_value_type(const MinicC0Program *program,
 }
 
 static bool conditional_type_only(const MinicC0Program *program,
-                                  const MinicTargetInfo *target,
+                                  const MinicTargetInvocation *target,
                                   MinicType when_true,
                                   MinicType when_false,
                                   MinicType *result) {
@@ -63,6 +117,15 @@ static bool conditional_type_only(const MinicC0Program *program,
     }
     if (minic_type_equal(when_true, when_false)) {
         *result = when_true;
+        return true;
+    }
+    /* GNU C accepts `condition ? void_side_effect() : 0` (and the
+     * reversed ordering), giving the entire conditional void type. The
+     * nonvoid arm is evaluated solely for side effects; its value is
+     * discarded. Linux x86's pgd_clear() uses precisely this extension
+     * when the five-level page-table branch invokes native_pgd_clear(). */
+    if (minic_type_is_void(when_true) || minic_type_is_void(when_false)) {
+        *result = minic_type_void();
         return true;
     }
     if (minic_type_conditional_pointer_common(when_true, when_false, result)) {
@@ -82,8 +145,45 @@ static bool conditional_type_only(const MinicC0Program *program,
     return false;
 }
 
+bool minic_c0_expression_is_null_pointer_constant(
+    const MinicC0Program *program, const MinicTargetInvocation *target,
+    MinicExpressionId expression_id) {
+    const MinicExpression *expression;
+    MinicType pointee;
+    MinicConstValue constant;
+    bool is_zero;
+
+    if (program == NULL || target == NULL) return false;
+    if (minic_c0_expression_is_null_pointer_constant_v0(program, expression_id))
+        return true;
+    expression = minic_c0_program_expression(program, expression_id);
+    if (expression == NULL) return false;
+
+    /* A void* cast is a null pointer constant only if its operand is an
+     * integer constant expression of value zero. This is the GNU Linux
+     * __is_constexpr(x) trick: (void*)((long)(constant) * 0L) must be
+     * convertible to the other conditional arm's int* before sizeof(*p).
+     * For a runtime x the multiplication is not an ICE, despite always
+     * producing zero at runtime, and the conditional keeps void*. */
+    if (minic_type_is_pointer(expression->type)) {
+        if ((expression->kind != MINIC_EXPRESSION_CAST &&
+             expression->kind != MINIC_EXPRESSION_BITCAST) ||
+            expression->type.pointer_depth != 1U ||
+            !minic_type_pointee(expression->type, &pointee) ||
+            !minic_type_is_void(pointee))
+            return false;
+        expression_id = expression->value.unary.operand;
+        expression = minic_c0_program_expression(program, expression_id);
+        if (expression == NULL) return false;
+    }
+    return minic_type_is_integer(expression->type) &&
+           minic_const_eval_integer(program, target, expression_id, &constant) &&
+           minic_const_value_is_zero(program, target, &constant, &is_zero) &&
+           is_zero;
+}
+
 bool minic_c0_integer_range_representable_in_type(const MinicC0Program *program,
-                                                  const MinicTargetInfo *target,
+                                                  const MinicTargetInvocation *target,
                                                   MinicType source_type,
                                                   MinicType destination_type) {
     unsigned int source_bits;
@@ -113,7 +213,7 @@ bool minic_c0_integer_range_representable_in_type(const MinicC0Program *program,
 }
 
 bool minic_c0_conditional_result_type(const MinicC0Program *program,
-                                      const MinicTargetInfo *target,
+                                      const MinicTargetInvocation *target,
                                       MinicExpressionId when_true_expression_id,
                                       MinicExpressionId when_false_expression_id,
                                       MinicType *result) {
@@ -129,11 +229,13 @@ bool minic_c0_conditional_result_type(const MinicC0Program *program,
         return false;
     }
     if (minic_type_is_pointer(when_true->type) &&
-        minic_c0_expression_is_null_pointer_constant_v0(program, when_false_expression_id)) {
+        minic_c0_expression_is_null_pointer_constant(
+            program, target, when_false_expression_id)) {
         *result = when_true->type;
         return true;
     }
-    if (minic_c0_expression_is_null_pointer_constant_v0(program, when_true_expression_id) &&
+    if (minic_c0_expression_is_null_pointer_constant(
+            program, target, when_true_expression_id) &&
         minic_type_is_pointer(when_false->type)) {
         *result = when_false->type;
         return true;

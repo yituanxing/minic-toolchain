@@ -1,0 +1,5 @@
+target=rv64-current-selfhost
+scope=214-current-compiler-c-owners
+gate=stage0-stage1-stage2-16-shards
+nonce=20261109-07
+reason=stage4-native-certified-minipp-seven-option-profile-soft-abi-overlay

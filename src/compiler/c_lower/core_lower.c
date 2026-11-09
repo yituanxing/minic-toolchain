@@ -1,0 +1,1689 @@
+#include "compiler/c_lower/core_lower_internal.h"
+#include "compiler/c_lower/core_ir_source_internal.h"
+#include "compiler/c_lower/source_loop_shapes.h"
+#include "compiler/c_lower/local_facts.h"
+#include "compiler/c_lower/cfg_constant_calls.h"
+#include "core/symbol_identity.h"
+
+#include "frontend/const_eval.h"
+#include "frontend/expression_semantics.h"
+#include <inttypes.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+/* Core lowering consumes the selected target's read-only DataLayout.
+ * Never bypass TargetInfo through the process-wide default target: that would
+ * make the AST -> Core seam implicitly RV64-specific. */
+
+MinicCoreLowerStatus minic_core_lower_internal_lower_expression_statement(
+    MinicCoreLowerContext *context, const MinicStatement *statement);
+MinicCoreLowerStatus
+minic_core_lower_internal_lower_block(MinicCoreLowerContext *context, const MinicBlock *source_block, bool *terminated);
+MinicCoreLowerStatus minic_core_lower_internal_set_branch(MinicCoreLowerContext *context,
+                                       MinicCoreBlockId block_id,
+                                       MinicSourceSpan span,
+                                       MinicCoreBlockId target);
+void core_local_constant_set(MinicCoreLowerContext *context,
+                                    MinicLocalId local_id,
+                                    const MinicConstValue *value);
+bool core_const_eval_integer_with_locals(const MinicCoreLowerContext *context,
+                                                MinicExpressionId expression_id,
+                                                MinicConstValue *value);
+
+
+
+MinicCoreLowerStatus minic_core_lower_internal_lower_condition_branch(MinicCoreLowerContext *context,
+                                                   MinicExpressionId expression_id,
+                                                   MinicSourceSpan span,
+                                                   MinicCoreBlockId when_true,
+                                                   MinicCoreBlockId when_false);
+
+MinicCoreLowerStatus minic_core_lower_internal_spill_scalar_value(MinicCoreLowerContext *context,
+                                               MinicSourceSpan span,
+                                               MinicType type,
+                                               MinicCoreValueId value_id,
+                                               MinicCoreObjectId *object_id);
+MinicCoreLowerStatus minic_core_lower_internal_reload_scalar_value(MinicCoreLowerContext *context,
+                                                MinicSourceSpan span,
+                                                MinicType type,
+                                                MinicCoreObjectId object_id,
+                                                MinicCoreValueId *value_id);
+MinicCoreLowerStatus minic_core_lower_internal_append_integer_conversion(MinicCoreLowerContext *context,
+                                                      MinicSourceSpan span,
+                                                      MinicType target_type,
+                                                      MinicCoreValueId source_value,
+                                                      MinicCoreValueId *value_id);
+MinicCoreLowerStatus minic_core_lower_internal_lower_scalar_assignment_value(MinicCoreLowerContext *context,
+                                                          MinicType target_type,
+                                                          MinicExpressionId expression_id,
+                                                          MinicCoreValueId *value_id);
+
+
+MinicCoreLowerStatus ensure_statement_block(MinicCoreLowerContext *context, MinicStatementId statement_id, MinicCoreBlockId *block_id) {
+    const MinicStatement *source_statement;
+    MinicCoreBlockId mapped;
+
+    if (context == NULL || context->body == NULL || context->body->program == NULL ||
+        context->function == NULL || block_id == NULL || context->statement_blocks == NULL ||
+        statement_id >= context->statement_block_count) {
+        return MINIC_CORE_LOWER_ERROR;
+    }
+    mapped = context->statement_blocks[statement_id];
+    if (mapped == MINIC_CORE_BLOCK_INVALID) {
+        if (!minic_core_function_add_block(context->function, &mapped)) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+        context->statement_blocks[statement_id] = mapped;
+    }
+    if (mapped >= context->function->block_count) {
+        return MINIC_CORE_LOWER_ERROR;
+    }
+    source_statement = minic_c0_program_statement(context->body->program, statement_id);
+    if (source_statement == NULL) {
+        return MINIC_CORE_LOWER_ERROR;
+    }
+    if (source_statement->kind == MINIC_STATEMENT_LABEL) {
+        MinicCoreBlock *block = &context->function->blocks[mapped];
+        /* Even a clone's unexported target can be reached by computed goto
+         * or an opaque branch. Only the original function exports the
+         * assembler-local identity used by its static label relocations. */
+        block->indirect_entry = true;
+        if (!context->source_function->is_integer_specialization) {
+            char *name;
+            if (!minic_core_format_label_symbol((size_t)statement_id, &name))
+                return MINIC_CORE_LOWER_ERROR;
+            if (block->local_label_symbol != NULL &&
+                strcmp(block->local_label_symbol, name) != 0) {
+                free(name);
+                return MINIC_CORE_LOWER_ERROR;
+            }
+            if (block->local_label_symbol == NULL)
+                block->local_label_symbol = name;
+            else free(name);
+        }
+    }
+    *block_id = mapped;
+    return MINIC_CORE_LOWER_OK;
+}
+
+MinicCoreLowerStatus minic_core_lower_internal_local_object(MinicCoreLowerContext *context,
+                                               MinicLocalId local_id,
+                                               MinicCoreObjectId *object_id) {
+    const MinicLocal *local;
+    MinicArrayObjectInfo array_info;
+    bool has_array_object;
+    size_t local_index;
+
+    if (context == NULL || context->body == NULL || context->body->program == NULL ||
+        context->source_function == NULL || context->function == NULL || object_id == NULL ||
+        local_id < context->source_function->local_begin) {
+        return MINIC_CORE_LOWER_ERROR;
+    }
+    local_index = local_id - context->source_function->local_begin;
+    if (local_index >= context->source_function->local_count || context->local_objects == NULL) {
+        return MINIC_CORE_LOWER_ERROR;
+    }
+    if (context->local_objects[local_index] != MINIC_CORE_OBJECT_INVALID) {
+        *object_id = context->local_objects[local_index];
+        return MINIC_CORE_LOWER_OK;
+    }
+    local = minic_c0_program_local(context->body->program, local_id);
+    if (local == NULL) {
+        return MINIC_CORE_LOWER_ERROR;
+    }
+    has_array_object = minic_c0_local_array_object_info(
+        context->body->program, local_id, &array_info);
+    /* M105_FIXED_REGISTER_STRUCTURED_ASM: a GNU local register binding does
+       not change the C object's scalar value semantics. Keep ordinary Core
+       storage for reads/writes; only inline-asm operand materialization consumes
+       the target register binding. */
+    /* All statically sized local arrays have first-class ArrayType storage.
+       A typedef-bearing inner dimension is part of that type, not an extra
+       repetition imposed on the Core object. */
+    if (minic_type_is_array(local->type)) {
+        const MinicArrayType *array_type;
+
+        array_type = minic_c0_program_array_type(
+            context->body->program, local->type.array_type_id);
+        if (array_type == NULL || !has_array_object ||
+            !array_info.has_materialized_type ||
+            (array_type->element_count == 0U && !array_type->is_zero_length)) {
+            return MINIC_CORE_LOWER_UNSUPPORTED;
+        }
+        if (array_type->is_zero_length) {
+            /* A complete GNU T local[0] has sizeof == 0, but its address
+             * remains materializable.  Keep the former one-element backing
+             * sentinel after the declarator becomes a real ArrayType.  The
+             * address owner bitcasts element* to array[0]*, so the published
+             * Core object and its OBJECT_ADDRESS remain type-consistent. */
+            if (!minic_core_function_add_object(context->source, local->name_span,
+                                                array_type->element_type, object_id)) {
+                return MINIC_CORE_LOWER_ERROR;
+            }
+        } else if (!minic_core_function_add_object(
+                       context->source, local->name_span, local->type, object_id)) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+        context->function->objects[*object_id].explicit_alignment = local->explicit_alignment;
+        context->local_objects[local_index] = *object_id;
+        return MINIC_CORE_LOWER_OK;
+    }
+    if (!core_memory_scalar_type(local->type) &&
+        !minic_type_is_record(local->type) &&
+        !minic_type_is_fixed_vector_register_storage(local->type)) {
+        return MINIC_CORE_LOWER_UNSUPPORTED;
+    }
+    /* A runtime VLA has no static object extent. Its single-evaluated bound
+       and allocated address are separate hidden locals, and local-address
+       lowering must select that address rather than materialize this owner. */
+    if (has_array_object) return MINIC_CORE_LOWER_UNSUPPORTED;
+    if (!minic_core_function_add_object(
+                   context->source, local->name_span, local->type, object_id)) {
+        return MINIC_CORE_LOWER_ERROR;
+    }
+    context->function->objects[*object_id].explicit_alignment = local->explicit_alignment;
+    context->local_objects[local_index] = *object_id;
+    return MINIC_CORE_LOWER_OK;
+}
+
+static MinicCoreLowerStatus lower_parameter_ingress(MinicCoreLowerContext *context) {
+    size_t parameter_index;
+
+    if (context == NULL || context->body == NULL || context->body->program == NULL ||
+        context->source_function == NULL || context->function == NULL ||
+        context->source_function->parameter_count > context->source_function->local_count) {
+        return MINIC_CORE_LOWER_ERROR;
+    }
+    for (parameter_index = 0U; parameter_index < context->source_function->parameter_count;
+         ++parameter_index) {
+        const MinicLocal *parameter;
+        MinicCoreInstruction instruction;
+        MinicCoreObjectId object_id;
+        MinicCoreLowerStatus status;
+        MinicLocalId local_id;
+        MinicType parameter_value_type;
+        MinicType instruction_source_type;
+
+        local_id = context->source_function->local_begin + parameter_index;
+        parameter = minic_c0_program_local(context->body->program, local_id);
+        if (parameter == NULL) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+        if (minic_c0_local_array_object_info(
+                context->body->program, local_id, NULL) ||
+            parameter->is_register_storage ||
+            !minic_type_unqualified(parameter->type, &parameter_value_type) ||
+            !minic_c0_types_compatible(
+                context->body->program, parameter_value_type,
+                context->source_function->parameter_types[parameter_index])) {
+            (void)fprintf(stderr,
+                          "CORE_M158_INGRESS_DETAIL function=%s parameter=%zu "
+                          "volatile=%d array=%d register=%d\n",
+                          context->source_function->name,
+                          parameter_index,
+                          minic_type_is_volatile(parameter->type) ? 1 : 0,
+                          minic_c0_local_array_object_info(
+                              context->body->program, local_id, NULL) ? 1 : 0,
+                          parameter->is_register_storage ? 1 : 0);
+            return MINIC_CORE_LOWER_UNSUPPORTED;
+        }
+        status = minic_core_lower_internal_local_object(context, local_id, &object_id);
+        if (status != MINIC_CORE_LOWER_OK) {
+            (void)fprintf(stderr,
+                          "CORE_M158_INGRESS_DETAIL function=%s parameter=%zu local_object_status=%d\n",
+                          context->source_function->name,
+                          parameter_index,
+                          (int)status);
+            return status;
+        }
+
+        if (minic_type_is_record(parameter_value_type)) {
+            (void)memset(&instruction, 0, sizeof(instruction));
+            instruction.kind = MINIC_CORE_INSTRUCTION_PARAMETER_OBJECT;
+            instruction.span = parameter->name_span;
+            instruction_source_type = minic_type_void();
+            instruction.result = MINIC_CORE_VALUE_INVALID;
+            instruction.value.parameter_object.parameter_index = parameter_index;
+            instruction.value.parameter_object.object_id = object_id;
+            if (!minic_core_function_append_source_effect_instruction(
+                    context->source, context->block_id, &instruction,
+                    instruction_source_type)) {
+                return MINIC_CORE_LOWER_ERROR;
+            }
+            continue;
+        }
+        if (!core_memory_scalar_type(parameter_value_type) &&
+            !minic_type_is_fixed_vector_register_storage(parameter_value_type)) {
+            (void)fprintf(stderr,
+                          "CORE_M158_INGRESS_DETAIL function=%s parameter=%zu nonscalar=1\n",
+                          context->source_function->name,
+                          parameter_index);
+            return MINIC_CORE_LOWER_UNSUPPORTED;
+        }
+        {
+            MinicCoreValueId address_id;
+            MinicCoreValueId parameter_value;
+            MinicType pointer_type;
+
+            (void)memset(&instruction, 0, sizeof(instruction));
+            if (context->source_function->is_integer_specialization &&
+                context->source_function->specialization_integer_known[parameter_index] &&
+                minic_type_is_integer(parameter_value_type)) {
+                uint64_t specialized_bits =
+                    context->source_function->specialization_integer_bits[parameter_index];
+                instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
+                (void)memcpy(&instruction.value.integer_value,
+                             &specialized_bits,
+                             sizeof(specialized_bits));
+            } else {
+                instruction.kind = MINIC_CORE_INSTRUCTION_PARAMETER;
+                instruction.value.parameter_index = parameter_index;
+            }
+            instruction.span = parameter->name_span;
+            instruction_source_type = parameter_value_type;
+            instruction.result = MINIC_CORE_VALUE_INVALID;
+            if (!minic_core_function_append_source_value_instruction(
+                    context->source, context->block_id, &instruction,
+                    instruction_source_type, &parameter_value)) {
+                return MINIC_CORE_LOWER_ERROR;
+            }
+            if (minic_type_is_fixed_vector_register_storage(parameter_value_type)) {
+                status = minic_core_lower_internal_store_vector_value(
+                    context, parameter->name_span, parameter_value_type,
+                    object_id, parameter_value);
+                if (status != MINIC_CORE_LOWER_OK) return status;
+                continue;
+            }
+            if (context->source_function->is_integer_specialization &&
+                context->source_function->specialization_integer_known[parameter_index] &&
+                minic_type_is_integer(parameter_value_type)) {
+                MinicConstValue specialized_value;
+                specialized_value.type = parameter_value_type;
+                specialized_value.bits =
+                    context->source_function->specialization_integer_bits[parameter_index];
+                core_local_constant_set(context, local_id, &specialized_value);
+                {
+                    size_t specialized_index;
+                    if (minic_core_local_fact_index(context, local_id, &specialized_index) &&
+                        context->local_integer_constants[specialized_index].known) {
+                        MinicCoreLocalIntegerConstant *fact =
+                            &context->local_integer_constants[specialized_index];
+                        fact->specialization_value = fact->value;
+                        fact->specialization_known = true;
+                        fact->specialization_modified = false;
+                        if (minic_core_inline_spec_fact_trace_enabled(context)) {
+                            (void)fprintf(stderr,
+                                          "INLINE_SPEC_FACT event=seed function=%s source=%zu local=%zu bits=%" PRIu64 "\n",
+                                          context->source_function->name != NULL
+                                              ? context->source_function->name
+                                              : "?",
+                                          (size_t)context->source_function->specialization_source,
+                                          (size_t)local_id,
+                                          fact->specialization_value.bits);
+                        }
+                    }
+                }
+                if (getenv("MINIC_LOCAL_FACT_TRACE") != NULL) {
+                    (void)fprintf(stderr,
+                                  "INLINE_SPEC_PARAMETER_FACT function=%s parameter=%zu local=%zu bits=%" PRIu64 "\\n",
+                                  context->source_function->name != NULL
+                                      ? context->source_function->name
+                                      : "?",
+                                  parameter_index,
+                                  (size_t)local_id,
+                                  specialized_value.bits);
+                }
+            }
+
+            if (!minic_type_pointer_to(parameter->type, &pointer_type)) {
+                return MINIC_CORE_LOWER_ERROR;
+            }
+            (void)memset(&instruction, 0, sizeof(instruction));
+            instruction.kind = MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS;
+            instruction.span = parameter->name_span;
+            instruction_source_type = pointer_type;
+            instruction.result = MINIC_CORE_VALUE_INVALID;
+            instruction.value.object_id = object_id;
+            if (!minic_core_function_append_source_value_instruction(
+                    context->source, context->block_id, &instruction,
+                    instruction_source_type, &address_id)) {
+                return MINIC_CORE_LOWER_ERROR;
+            }
+
+            (void)memset(&instruction, 0, sizeof(instruction));
+            instruction.kind = MINIC_CORE_INSTRUCTION_STORE;
+            instruction.span = parameter->name_span;
+            instruction_source_type = minic_type_void();
+            instruction.result = MINIC_CORE_VALUE_INVALID;
+            instruction.value.store.address = address_id;
+            instruction.value.store.stored_value = parameter_value;
+            instruction.value.store.is_volatile = minic_type_is_volatile(parameter->type);
+            if (!minic_core_function_append_source_effect_instruction(
+                    context->source, context->block_id, &instruction,
+                    instruction_source_type)) {
+                return MINIC_CORE_LOWER_ERROR;
+            }
+        }
+    }
+    return MINIC_CORE_LOWER_OK;
+}
+
+MinicCoreLowerStatus minic_core_lower_internal_append_field_address(MinicCoreLowerContext *context,
+                                                 MinicSourceSpan span,
+                                                 MinicCoreValueId base_id,
+                                                 MinicRecordId record_id,
+                                                 size_t field_index,
+                                                 MinicType field_type,
+                                                 MinicCoreValueId *address_id) {
+    MinicCoreInstruction instruction;
+    MinicType instruction_source_type;
+    MinicType base_pointee;
+    MinicType actual_field_type, declared_field_type;
+    const MinicRecord *record;
+    const MinicRecordField *field;
+    size_t byte_offset, bit_offset;
+
+    if (context == NULL || context->body == NULL || context->body->program == NULL ||
+        context->function == NULL || address_id == NULL ||
+        base_id >= context->function->value_count ||
+        !minic_type_pointee(minic_core_function_source_value_type(context->source, base_id), &base_pointee) ||
+        !minic_type_is_record(base_pointee) || base_pointee.record_id != record_id ||
+        record_id == MINIC_RECORD_INVALID) {
+        return MINIC_CORE_LOWER_ERROR;
+    }
+    record = minic_c0_program_record(context->body->program, record_id);
+    field = minic_c0_record_field(record, field_index);
+    if (record == NULL || field == NULL ||
+        !minic_type_unqualified(field_type, &actual_field_type) ||
+        !minic_type_unqualified(field->type, &declared_field_type) ||
+        (field->is_bit_field
+            ? !minic_type_is_integer(actual_field_type)
+            : !minic_type_equal(actual_field_type, declared_field_type)) ||
+        !minic_data_layout_record_field_layout(context->target,
+                                               context->body->program,
+                                               record, field_index,
+                                               &byte_offset, &bit_offset)) {
+        return MINIC_CORE_LOWER_UNSUPPORTED;
+    }
+    /* C-only admission: Machine/Core FIELD_ADDRESS records only the proven
+     * byte displacement. In particular, the bit-field lvalue's temporary
+     * unsigned storage carrier must satisfy the old Core-verifier contract
+     * before the source member identity and access form are discarded. */
+    if (field->is_bit_field) {
+        size_t carrier_size, carrier_alignment, record_size, record_alignment;
+        MinicType record_type = minic_type_record(record_id);
+        if (field->bit_width == 0U || field->bit_width > 64U ||
+            bit_offset >= 8U || !minic_type_is_unsigned_integer(actual_field_type) ||
+            minic_type_is_bool_integer(actual_field_type) ||
+            !minic_data_layout_type(context->target, context->body->program,
+                                    actual_field_type, &carrier_size, &carrier_alignment) ||
+            !minic_data_layout_type(context->target, context->body->program,
+                                    record_type, &record_size, &record_alignment) ||
+            (carrier_size != 1U && carrier_size != 2U &&
+             carrier_size != 4U && carrier_size != 8U) ||
+            byte_offset >= record_size) return MINIC_CORE_LOWER_UNSUPPORTED;
+        (void)carrier_alignment;
+        (void)record_alignment;
+    }
+    (void)memset(&instruction, 0, sizeof(instruction));
+    instruction.kind = MINIC_CORE_INSTRUCTION_FIELD_ADDRESS;
+    instruction.span = span;
+    instruction.result = MINIC_CORE_VALUE_INVALID;
+    instruction.value.field_address.base = base_id;
+    instruction.value.field_address.byte_offset = byte_offset;
+    if (!minic_type_pointer_to(field_type, &instruction_source_type)) {
+        return MINIC_CORE_LOWER_ERROR;
+    }
+    return minic_core_function_append_source_value_instruction(
+               context->source, context->block_id, &instruction,
+               instruction_source_type, address_id)
+               ? MINIC_CORE_LOWER_OK
+               : MINIC_CORE_LOWER_ERROR;
+}
+
+static bool core_is_materialized_cleanup_statement(
+    const MinicCoreLowerContext *context, const MinicStatement *statement) {
+    size_t cleanup_index;
+
+    if (context == NULL || context->body == NULL || context->body->program == NULL ||
+        statement == NULL || statement->kind != MINIC_STATEMENT_EXPRESSION ||
+        statement->expression == MINIC_EXPRESSION_INVALID) {
+        return false;
+    }
+    for (cleanup_index = 0U; cleanup_index < context->body->program->cleanup_context_count;
+         ++cleanup_index) {
+        if (context->body->program->cleanup_contexts[cleanup_index].cleanup_expression ==
+            statement->expression) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static MinicCoreLowerStatus lower_cleanup_contexts(
+    MinicCoreLowerContext *context, MinicCleanupContextId current, MinicCleanupContextId stop) {
+    if (context == NULL || context->body == NULL || context->body->program == NULL ||
+        !minic_c0_cleanup_context_reaches(context->body->program, current, stop)) {
+        return MINIC_CORE_LOWER_ERROR;
+    }
+    while (current != stop) {
+        const MinicCleanupContext *cleanup;
+        MinicCoreValueId discarded_value;
+        MinicCoreLowerStatus status;
+
+        cleanup = minic_c0_program_cleanup_context(context->body->program, current);
+        if (cleanup == NULL || cleanup->parent == current ||
+            cleanup->cleanup_expression == MINIC_EXPRESSION_INVALID) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+        status = lower_expression(context, cleanup->cleanup_expression, &discarded_value);
+        if (status != MINIC_CORE_LOWER_OK) {
+            return status;
+        }
+        current = cleanup->parent;
+    }
+    return MINIC_CORE_LOWER_OK;
+}
+
+static MinicCoreLowerStatus lower_return(MinicCoreLowerContext *context,
+                                         const MinicStatement *statement) {
+    MinicCoreTerminator terminator;
+    MinicCoreLowerStatus status;
+    MinicCoreObjectId cleanup_return_object;
+    bool has_cleanup;
+
+    if (context == NULL || context->source_function == NULL || statement == NULL) {
+        return MINIC_CORE_LOWER_ERROR;
+    }
+    has_cleanup = statement->cleanup_context != statement->cleanup_stop_context;
+    cleanup_return_object = MINIC_CORE_OBJECT_INVALID;
+    if (has_cleanup && !minic_c0_cleanup_context_reaches(
+            context->body->program, statement->cleanup_context, statement->cleanup_stop_context)) {
+        return MINIC_CORE_LOWER_ERROR;
+    }
+    (void)memset(&terminator, 0, sizeof(terminator));
+    terminator.kind = MINIC_CORE_TERMINATOR_RETURN;
+    terminator.span = statement->span;
+    terminator.return_value = MINIC_CORE_VALUE_INVALID;
+    terminator.return_object = MINIC_CORE_OBJECT_INVALID;
+    if (minic_type_is_void(context->source_function->return_type)) {
+        if (statement->expression != MINIC_EXPRESSION_INVALID) {
+            const MinicExpression *return_expression;
+            MinicCoreValueId discarded_value;
+
+            return_expression = minic_c0_program_expression(
+                context->body->program, statement->expression);
+            if (return_expression == NULL) {
+                return MINIC_CORE_LOWER_ERROR;
+            }
+            /* GNU permits a void function to return any expression whose
+               semantic type is void. The expression layer already owns the
+               individual effect forms (calls, discard casts, statement
+               expressions, conditionals, inline-asm wrappers). RETURN should
+               sequence that semantic owner rather than re-whitelist source
+               spellings. */
+            if (!minic_type_is_void(return_expression->type)) {
+                return MINIC_CORE_LOWER_UNSUPPORTED;
+            }
+            status = lower_expression(context, statement->expression, &discarded_value);
+            if (status != MINIC_CORE_LOWER_OK) {
+                return status;
+            }
+            if (discarded_value != MINIC_CORE_VALUE_INVALID) {
+                return MINIC_CORE_LOWER_ERROR;
+            }
+            if (context->block_id >= context->function->block_count ||
+                context->function->blocks[context->block_id].has_terminator) {
+                return MINIC_CORE_LOWER_UNSUPPORTED;
+            }
+        }
+    } else {
+        if (statement->expression == MINIC_EXPRESSION_INVALID) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+        if (core_memory_scalar_type(context->source_function->return_type)) {
+            /* M175B_SCALAR_RETURN_OWNER: all Core memory scalars use the same
+               C assignment/value transport at the return boundary. */
+            status = minic_core_lower_internal_lower_scalar_assignment_value(context,
+                                                   context->source_function->return_type,
+                                                   statement->expression,
+                                                   &terminator.return_value);
+        } else if (minic_type_is_fixed_vector_register_storage(
+                       context->source_function->return_type)) {
+            const MinicExpression *return_expr = minic_c0_program_expression(
+                context->body->program, statement->expression);
+            MinicType unqualified;
+            if (return_expr == NULL ||
+                !minic_type_unqualified(return_expr->type, &unqualified) ||
+                !minic_type_equal(unqualified, context->source_function->return_type))
+                return MINIC_CORE_LOWER_UNSUPPORTED;
+            status = lower_expression(context, statement->expression,
+                                      &terminator.return_value);
+        } else if (minic_type_is_record(context->source_function->return_type)) {
+            const MinicExpression *expression;
+
+            /* Aggregate return cleanup needs an address-backed return owner.
+               Keep that capability fail-closed until Core models it explicitly. */
+            if (has_cleanup) {
+                return MINIC_CORE_LOWER_UNSUPPORTED;
+            }
+            MinicType value_type;
+
+            expression = minic_c0_program_expression(context->body->program, statement->expression);
+            if (expression == NULL || !minic_type_is_record(expression->type) ||
+                !minic_type_unqualified(expression->type, &value_type) ||
+                !minic_type_equal(value_type, context->source_function->return_type)) {
+                return MINIC_CORE_LOWER_UNSUPPORTED;
+            }
+            if (expression->kind == MINIC_EXPRESSION_LOCAL &&
+                expression->value_category == MINIC_VALUE_LVALUE) {
+                const MinicLocal *local;
+
+                local = minic_c0_program_local(context->body->program, expression->value.local_id);
+                if (local == NULL || !minic_type_is_record(local->type)) {
+                    return MINIC_CORE_LOWER_ERROR;
+                }
+                status = minic_core_lower_internal_local_object(
+                    context, expression->value.local_id, &terminator.return_object);
+            } else if (expression->kind == MINIC_EXPRESSION_COMPOUND_LITERAL &&
+                       minic_c0_record_value_is_address_backed(
+                           context->body->program, statement->expression)) {
+                status = minic_core_lower_record_compound_literal_object(
+                    context, expression, &terminator.return_object);
+            } else if (expression->kind == MINIC_EXPRESSION_CALL &&
+                       expression->value.call.function_id != MINIC_FUNCTION_INVALID) {
+                status = minic_core_lower_direct_record_call_object(
+                    context, expression, &terminator.return_object);
+            } else if (expression->kind == MINIC_EXPRESSION_CALL) {
+                status = minic_core_lower_indirect_record_call_object(
+                    context, expression, &terminator.return_object);
+            } else if (expression->kind == MINIC_EXPRESSION_CONDITIONAL &&
+                       minic_type_is_record(expression->type)) {
+                status = minic_core_lower_record_conditional_object(
+                    context, expression, &terminator.return_object);
+            } else if (expression->kind == MINIC_EXPRESSION_STATEMENT ||
+                       expression->kind == MINIC_EXPRESSION_ASSIGNMENT ||
+                       (expression->kind == MINIC_EXPRESSION_MEMBER &&
+                        expression->value_category == MINIC_VALUE_RVALUE &&
+                        minic_c0_record_value_is_copy_source(
+                            context->body->program, statement->expression)) ||
+                       minic_c0_record_value_is_address_backed(
+                           context->body->program, statement->expression)) {
+                status = minic_core_lower_record_load_object(
+                    context, statement->expression, &terminator.return_object);
+            } else {
+                return MINIC_CORE_LOWER_UNSUPPORTED;
+            }
+        } else {
+            return MINIC_CORE_LOWER_UNSUPPORTED;
+        }
+        if (status != MINIC_CORE_LOWER_OK) {
+            return status;
+        }
+    }
+    /* A return expression is sequenced before GNU cleanup functions, while the
+       computed scalar return value must survive those calls. Spill the value,
+       execute exactly the cleanup contexts crossed by the return edge, then
+       reload it before installing the RETURN terminator. */
+    if (has_cleanup) {
+        if (core_memory_scalar_type(context->source_function->return_type)) {
+            status = minic_core_lower_internal_spill_scalar_value(context, statement->span,
+                                        context->source_function->return_type,
+                                        terminator.return_value, &cleanup_return_object);
+            if (status != MINIC_CORE_LOWER_OK) {
+                return status;
+            }
+        } else if (minic_type_is_fixed_vector_register_storage(
+                       context->source_function->return_type)) {
+            status = minic_core_lower_internal_spill_vector_value(
+                context, statement->span, context->source_function->return_type,
+                terminator.return_value, &cleanup_return_object);
+            if (status != MINIC_CORE_LOWER_OK) return status;
+        }
+        status = lower_cleanup_contexts(context, statement->cleanup_context,
+                                        statement->cleanup_stop_context);
+        if (status != MINIC_CORE_LOWER_OK) {
+            return status;
+        }
+        if (core_memory_scalar_type(context->source_function->return_type)) {
+            status = minic_core_lower_internal_reload_scalar_value(context, statement->span,
+                                         context->source_function->return_type,
+                                         cleanup_return_object, &terminator.return_value);
+            if (status != MINIC_CORE_LOWER_OK) {
+                return status;
+            }
+        } else if (minic_type_is_fixed_vector_register_storage(
+                       context->source_function->return_type)) {
+            status = minic_core_lower_internal_reload_vector_value(
+                context, statement->span, context->source_function->return_type,
+                cleanup_return_object, &terminator.return_value);
+            if (status != MINIC_CORE_LOWER_OK) return status;
+        }
+    }
+    return minic_core_function_set_terminator(context->function, context->block_id, &terminator)
+               ? MINIC_CORE_LOWER_OK
+               : MINIC_CORE_LOWER_ERROR;
+}
+
+MinicCoreLowerStatus minic_core_lower_internal_set_branch(MinicCoreLowerContext *context,
+                                       MinicCoreBlockId block_id,
+                                       MinicSourceSpan span,
+                                       MinicCoreBlockId target) {
+    MinicCoreTerminator terminator;
+
+    if (context == NULL || context->function == NULL) {
+        return MINIC_CORE_LOWER_ERROR;
+    }
+    (void)memset(&terminator, 0, sizeof(terminator));
+    terminator.kind = MINIC_CORE_TERMINATOR_BRANCH;
+    terminator.span = span;
+    terminator.return_value = MINIC_CORE_VALUE_INVALID;
+    terminator.branch_target = target;
+    return minic_core_function_set_terminator(context->function, block_id, &terminator)
+               ? MINIC_CORE_LOWER_OK
+               : MINIC_CORE_LOWER_ERROR;
+}
+
+MinicCoreLowerStatus minic_core_lower_internal_lower_condition_branch(MinicCoreLowerContext *context,
+                                                   MinicExpressionId expression_id,
+                                                   MinicSourceSpan span,
+                                                   MinicCoreBlockId when_true,
+                                                   MinicCoreBlockId when_false) {
+    const MinicExpression *expression;
+    MinicCoreBlockId condition_block;
+    MinicCoreTerminator terminator;
+    MinicCoreValueId condition;
+    MinicCoreLowerStatus status;
+
+    if (context == NULL || context->body == NULL || context->body->program == NULL ||
+        context->function == NULL || expression_id == MINIC_EXPRESSION_INVALID ||
+        when_true == MINIC_CORE_BLOCK_INVALID || when_false == MINIC_CORE_BLOCK_INVALID) {
+        return MINIC_CORE_LOWER_ERROR;
+    }
+    expression = minic_c0_program_expression(context->body->program, expression_id);
+    if (expression == NULL ||
+        (!minic_type_is_integer(expression->type) && !minic_type_is_pointer(expression->type))) {
+        return MINIC_CORE_LOWER_UNSUPPORTED;
+    }
+    if (expression->kind == MINIC_EXPRESSION_BINARY &&
+        expression->value.binary.operator_kind == MINIC_BINARY_BITWISE_AND) {
+        MinicConstValue operand_constant;
+        bool operand_is_zero;
+        bool fold_false = false;
+
+        if (minic_const_eval_integer(context->body->program,
+                                     context->target,
+                                     expression->value.binary.left,
+                                     &operand_constant) &&
+            minic_const_value_is_zero(context->body->program,
+                                      context->target,
+                                      &operand_constant,
+                                      &operand_is_zero) &&
+            operand_is_zero &&
+            minic_core_cfg_pure_call_argument(
+                context, expression->value.binary.right, 0U)) {
+            fold_false = true;
+        } else if (minic_const_eval_integer(context->body->program,
+                                            context->target,
+                                            expression->value.binary.right,
+                                            &operand_constant) &&
+                   minic_const_value_is_zero(context->body->program,
+                                             context->target,
+                                             &operand_constant,
+                                             &operand_is_zero) &&
+                   operand_is_zero &&
+                   minic_core_cfg_pure_call_argument(
+                       context, expression->value.binary.left, 0U)) {
+            fold_false = true;
+        }
+        if (fold_false) {
+            return minic_core_lower_internal_set_branch(context, context->block_id, span, when_false);
+        }
+    }
+    if (minic_type_is_integer(expression->type)) {
+        MinicConstValue condition_constant;
+        bool condition_is_zero;
+        /* CFG-local facts describe the state BEFORE the condition executes.
+         * Do not bypass lowering an assignment, call or GNU statement
+         * expression just because its final integer value looks constant. */
+        if (minic_core_cfg_pure_call_argument(context, expression_id, 0U) &&
+            core_const_eval_integer_with_locals(context, expression_id, &condition_constant) &&
+            minic_const_value_is_zero(context->body->program,
+                                      context->target,
+                                      &condition_constant,
+                                      &condition_is_zero)) {
+            return minic_core_lower_internal_set_branch(context,
+                              context->block_id,
+                              span,
+                              condition_is_zero ? when_false : when_true);
+        }
+    }
+    if (expression->kind == MINIC_EXPRESSION_UNARY &&
+        expression->value.unary.operator_kind == MINIC_UNARY_LOGICAL_NOT) {
+        const MinicExpression *operand;
+
+        operand =
+            minic_c0_program_expression(context->body->program, expression->value.unary.operand);
+        if (operand != NULL &&
+            (minic_type_is_integer(operand->type) || minic_type_is_pointer(operand->type))) {
+            return minic_core_lower_internal_lower_condition_branch(
+                context, expression->value.unary.operand, span, when_false, when_true);
+        }
+    }
+    if (expression->kind == MINIC_EXPRESSION_CONVERSION && context->target != NULL) {
+        const MinicExpression *operand;
+        unsigned int source_width;
+        unsigned int destination_width;
+
+        operand =
+            minic_c0_program_expression(context->body->program, expression->value.unary.operand);
+        if (operand != NULL && minic_type_is_integer(operand->type) &&
+            minic_type_is_integer(expression->type) &&
+            minic_target_info_integer_width(
+                context->target, context->body->program, operand->type, &source_width) &&
+            minic_target_info_integer_width(
+                context->target, context->body->program, expression->type, &destination_width) &&
+            (minic_type_equal(operand->type, expression->type) ||
+             destination_width > source_width)) {
+            return minic_core_lower_internal_lower_condition_branch(
+                context, expression->value.unary.operand, span, when_true, when_false);
+        }
+    }
+    if (expression->kind == MINIC_EXPRESSION_BINARY &&
+        (expression->value.binary.operator_kind == MINIC_BINARY_LOGICAL_AND ||
+         expression->value.binary.operator_kind == MINIC_BINARY_LOGICAL_OR)) {
+        const MinicExpression *left_expression;
+        MinicCoreLocalIntegerConstant *skipped_rhs_facts;
+        MinicCoreLocalIntegerConstant *evaluated_rhs_facts;
+        MinicConstValue left_constant;
+        bool is_and = expression->value.binary.operator_kind == MINIC_BINARY_LOGICAL_AND;
+        bool left_is_zero;
+        MinicCoreBlockId right_block;
+
+        left_expression = minic_c0_program_expression(
+            context->body->program, expression->value.binary.left);
+        if (left_expression != NULL && minic_type_is_integer(left_expression->type) &&
+            minic_const_eval_integer(context->body->program,
+                                     context->target,
+                                     expression->value.binary.left,
+                                     &left_constant) &&
+            minic_const_value_is_zero(context->body->program,
+                                      context->target,
+                                      &left_constant,
+                                      &left_is_zero)) {
+            if (is_and && left_is_zero)
+                return minic_core_lower_internal_set_branch(
+                    context, context->block_id, span, when_false);
+            if (!is_and && !left_is_zero)
+                return minic_core_lower_internal_set_branch(
+                    context, context->block_id, span, when_true);
+            return minic_core_lower_internal_lower_condition_branch(context,
+                expression->value.binary.right, span, when_true, when_false);
+        }
+        if (!minic_core_function_add_block(context->function, &right_block)) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+        status = minic_core_lower_internal_lower_condition_branch(
+            context, expression->value.binary.left, span,
+            is_and ? right_block : when_true,
+            is_and ? when_false : right_block);
+        if (status != MINIC_CORE_LOWER_OK) {
+            return status;
+        }
+        /* An RHS assignment executes on only one edge. Its local constant
+         * facts cannot be used after the logical expression unless the
+         * skipped edge proves the same value. Source side effects while
+         * evaluating the LHS have already occurred before this snapshot. */
+        skipped_rhs_facts = minic_core_local_facts_snapshot(context);
+        if (context->source_function != NULL &&
+            context->source_function->local_count != 0U &&
+            skipped_rhs_facts == NULL) return MINIC_CORE_LOWER_ERROR;
+        context->block_id = right_block;
+        status = minic_core_lower_internal_lower_condition_branch(
+            context, expression->value.binary.right, span, when_true, when_false);
+        if (status != MINIC_CORE_LOWER_OK) {
+            free(skipped_rhs_facts);
+            return status;
+        }
+        evaluated_rhs_facts = minic_core_local_facts_snapshot(context);
+        if (context->source_function != NULL &&
+            context->source_function->local_count != 0U &&
+            evaluated_rhs_facts == NULL) {
+            free(skipped_rhs_facts);
+            return MINIC_CORE_LOWER_ERROR;
+        }
+        if (!minic_core_local_facts_meet(context, skipped_rhs_facts,
+                                          evaluated_rhs_facts)) {
+            free(evaluated_rhs_facts);
+            free(skipped_rhs_facts);
+            return MINIC_CORE_LOWER_ERROR;
+        }
+        free(evaluated_rhs_facts);
+        free(skipped_rhs_facts);
+        return MINIC_CORE_LOWER_OK;
+    }
+
+    status = lower_expression(context, expression_id, &condition);
+    if (status != MINIC_CORE_LOWER_OK) {
+        if (getenv("MINIC_CORE_EXPR_FAILURE_TRACE") != NULL)
+            (void)fprintf(stderr,
+                "CORE_EXPR_FAIL owner=condition function=%s status=%d "
+                "expression=%zu kind=%d op=%d block=%u span=%zu:%zu\n",
+                context->source_function != NULL ? context->source_function->name : "?",
+                (int)status, (size_t)expression_id, (int)expression->kind,
+                expression->kind == MINIC_EXPRESSION_BINARY
+                    ? (int)expression->value.binary.operator_kind : -1,
+                (unsigned)context->block_id,
+                expression->span.begin.line, expression->span.begin.column);
+        return status;
+    }
+    if (condition >= context->function->value_count) {
+        return MINIC_CORE_LOWER_ERROR;
+    }
+    if (minic_type_is_pointer(expression->type)) {
+        MinicCoreInstruction zero_test;
+        MinicCoreBlockId original_true;
+
+        if (!minic_type_is_pointer(minic_core_function_source_value_type(context->source, condition))) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+        (void)memset(&zero_test, 0, sizeof(zero_test));
+        zero_test.kind = MINIC_CORE_INSTRUCTION_SCALAR_IS_ZERO;
+        zero_test.span = span;
+        /* The exact C result type is owned by the unsealed SourceDraft. */
+        zero_test.result = MINIC_CORE_VALUE_INVALID;
+        zero_test.value.operand = condition;
+        if (!minic_core_function_append_source_value_instruction(
+                context->source, context->block_id, &zero_test,
+                minic_type_int(), &condition)) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+        original_true = when_true;
+        when_true = when_false;
+        when_false = original_true;
+    } else if (!minic_type_is_integer(minic_core_function_source_value_type(context->source, condition))) {
+        return MINIC_CORE_LOWER_ERROR;
+    }
+    condition_block = context->block_id;
+    (void)memset(&terminator, 0, sizeof(terminator));
+    terminator.kind = MINIC_CORE_TERMINATOR_CONDITIONAL_BRANCH;
+    terminator.span = span;
+    terminator.return_value = MINIC_CORE_VALUE_INVALID;
+    terminator.conditional.condition = condition;
+    terminator.conditional.when_true = when_true;
+    terminator.conditional.when_false = when_false;
+    return minic_core_function_set_terminator(context->function, condition_block, &terminator)
+               ? MINIC_CORE_LOWER_OK
+               : MINIC_CORE_LOWER_ERROR;
+}
+
+/* M134_UNREACHABLE_TAIL_OWNER: once a structured path has a Core
+   terminator, ordinary following statements have no runtime semantics and must
+   not make strict lowering fail merely because their expression/control-flow
+   owner is unsupported. A structured subtree may be pruned only when no jump
+   originates outside that subtree and targets a label inside it. This matters
+   because parser-normalized loops contain their own internal goto/label edges;
+   those edges disappear together with the unreachable subtree and are not
+   function-scope re-entry. Direct goto and asm-goto from outside remain
+   fail-closed. Normalized blocks may form a graph, so membership discovery is
+   cycle-safe. */
+/* Shared AST ownership set. The statement-kind gate matters: on non-CFG
+ * statements, then_block/else_block are not semantic child edges and must not
+ * pull an unrelated block into the query (notably labels/returns/inline asm). */
+static bool core_source_subtree_collect_block(
+    const MinicC0Program *program, const MinicBlock *block,
+    bool *visited_blocks, CoreSourceSubtreeMembership *membership);
+
+static bool core_source_subtree_collect_children(
+    const MinicC0Program *program, const MinicStatement *statement,
+    bool *visited_blocks, CoreSourceSubtreeMembership *membership) {
+    MinicBlockId children[2];
+    size_t index;
+    if (program == NULL || statement == NULL || visited_blocks == NULL ||
+        membership == NULL) return false;
+    if (statement->kind != MINIC_STATEMENT_IF &&
+        statement->kind != MINIC_STATEMENT_WHILE &&
+        statement->kind != MINIC_STATEMENT_SWITCH) return true;
+    children[0] = statement->then_block;
+    children[1] = statement->else_block;
+    for (index = 0U; index < 2U; ++index) {
+        MinicBlockId id = children[index];
+        const MinicBlock *child;
+        if (id == MINIC_BLOCK_INVALID) continue;
+        if (id >= program->block_count) return false;
+        if (visited_blocks[id]) continue;
+        visited_blocks[id] = true;
+        child = minic_c0_program_block(program, id);
+        if (!core_source_subtree_collect_block(
+                program, child, visited_blocks, membership)) return false;
+    }
+    return true;
+}
+
+static bool core_source_subtree_collect_block(
+    const MinicC0Program *program, const MinicBlock *block,
+    bool *visited_blocks, CoreSourceSubtreeMembership *membership) {
+    size_t i;
+    if (program == NULL || block == NULL || visited_blocks == NULL ||
+        membership == NULL ||
+        (block->statement_count != 0U && block->statements == NULL)) return false;
+    for (i = 0U; i < block->statement_count; ++i) {
+        MinicStatementId id = block->statements[i];
+        const MinicStatement *statement = minic_c0_program_statement(program, id);
+        if (id >= membership->statement_count || statement == NULL) return false;
+        membership->statements[id] = true;
+        if (!core_source_subtree_collect_children(
+                program, statement, visited_blocks, membership)) return false;
+    }
+    return true;
+}
+
+void core_source_subtree_membership_destroy(CoreSourceSubtreeMembership *membership) {
+    if (membership == NULL) return;
+    free(membership->statements);
+    membership->statements = NULL;
+    membership->statement_count = 0U;
+}
+
+static bool core_source_subtree_membership_begin(
+    const MinicCoreLowerContext *context,
+    CoreSourceSubtreeMembership *membership, bool **visited_out) {
+    const MinicC0Program *program;
+    if (context == NULL || context->body == NULL ||
+        (program = context->body->program) == NULL ||
+        membership == NULL || visited_out == NULL ||
+        program->statement_count == 0U ||
+        program->block_count > SIZE_MAX / sizeof(bool) ||
+        program->statement_count > SIZE_MAX / sizeof(bool)) return false;
+    membership->statements = NULL;
+    membership->statement_count = 0U;
+    *visited_out = (bool *)calloc(
+        program->block_count == 0U ? 1U : program->block_count, sizeof(bool));
+    membership->statements =
+        (bool *)calloc(program->statement_count, sizeof(bool));
+    if (*visited_out == NULL || membership->statements == NULL) {
+        free(*visited_out);
+        *visited_out = NULL;
+        core_source_subtree_membership_destroy(membership);
+        return false;
+    }
+    membership->statement_count = program->statement_count;
+    return true;
+}
+
+bool core_source_subtree_membership_from_block(
+    const MinicCoreLowerContext *context, const MinicBlock *block,
+    CoreSourceSubtreeMembership *membership) {
+    bool *visited = NULL;
+    bool valid;
+    if (!core_source_subtree_membership_begin(context, membership, &visited))
+        return false;
+    valid = core_source_subtree_collect_block(
+        context->body->program, block, visited, membership);
+    free(visited);
+    if (!valid) core_source_subtree_membership_destroy(membership);
+    return valid;
+}
+
+bool core_source_subtree_membership_from_statement(
+    const MinicCoreLowerContext *context, const MinicStatement *root,
+    MinicStatementId extra_statement_id,
+    CoreSourceSubtreeMembership *membership) {
+    const MinicC0Program *program;
+    bool *visited = NULL;
+    bool found = false;
+    bool valid = false;
+    size_t index;
+    if (!core_source_subtree_membership_begin(context, membership, &visited))
+        return false;
+    program = context->body->program;
+    if (root != NULL && (extra_statement_id == MINIC_STATEMENT_INVALID ||
+                         extra_statement_id < program->statement_count)) {
+        for (index = 0U; index < program->statement_count; ++index) {
+            const MinicStatement *candidate =
+                minic_c0_program_statement(program, index);
+            if (candidate == NULL) break;
+            if (candidate == root) {
+                membership->statements[index] = true;
+                found = true;
+                break;
+            }
+        }
+        if (found && core_source_subtree_collect_children(
+                         program, root, visited, membership)) {
+            if (extra_statement_id != MINIC_STATEMENT_INVALID)
+                membership->statements[extra_statement_id] = true;
+            valid = true;
+        }
+    }
+    free(visited);
+    if (!valid) core_source_subtree_membership_destroy(membership);
+    return valid;
+}
+
+/* A static source edge and an already materialized Core label block are
+ * different entry authorities, but they must query the SAME ownership set.
+ * The weak static policy is intentionally not IF's stronger CASE/&&label gate. */
+static bool core_unreachable_statement_may_reenter(
+    const MinicCoreLowerContext *context, const MinicStatement *root,
+    MinicStatementId extra_statement_id, bool inspect_bound_core_blocks) {
+    CoreSourceSubtreeMembership membership = {0};
+    const MinicC0Program *program;
+    bool unsafe;
+    size_t index;
+    if (!core_source_subtree_membership_from_statement(
+            context, root, extra_statement_id, &membership)) return true;
+    program = context->body->program;
+    {
+        const MinicCoreReentryQuery query = {
+            .membership = membership.statements,
+            .label_id = MINIC_STATEMENT_INVALID,
+            .checks = MINIC_CORE_REENTRY_CHECK_EXTERNAL_JUMP,
+            .purpose = MINIC_CORE_REENTRY_PURPOSE_UNREACHABLE_TAIL
+        };
+        unsafe = minic_core_reentry_query(
+            context->reentry_index, program, &query) != 0U;
+    }
+    if (!unsafe && inspect_bound_core_blocks) {
+        /* Missing/incomplete dynamic ownership is UNKNOWN, never evidence
+         * that no previously created label block can reenter this subtree. */
+        if (context->statement_blocks == NULL ||
+            context->statement_block_count < membership.statement_count) {
+            unsafe = true;
+        } else {
+            for (index = 0U; index < membership.statement_count; ++index) {
+                if (index != extra_statement_id && membership.statements[index] &&
+                    context->statement_blocks[index] != MINIC_CORE_BLOCK_INVALID) {
+                    unsafe = true;
+                    break;
+                }
+            }
+        }
+    }
+    core_source_subtree_membership_destroy(&membership);
+    return unsafe;
+}
+
+bool minic_core_lower_unreachable_external_reentry(
+    const MinicCoreLowerContext *context, const MinicStatement *root,
+    MinicStatementId extra_statement_id) {
+    return core_unreachable_statement_may_reenter(
+        context, root, extra_statement_id, false);
+}
+
+/* M144_UNREFERENCED_LOOP_LABEL_METADATA_OWNER: parser loop normalization can
+   leave an otherwise-empty label at the condition tail even when no source
+   continue/goto refers to it.  minic_core_loop_internal_while_label_pair() gives this label a
+   strong identity: its source position is exactly that of one normalized WHILE.
+   Treat it as non-executable parser metadata only when that owner is unique and
+   the label has no direct goto, asm-goto, or &&label reference anywhere in the
+   function program. Any real control-flow use remains owned by ordinary LABEL /
+   GOTO lowering and therefore stays fail-closed here. */
+static bool core_unreferenced_internal_loop_label(
+    const MinicCoreLowerContext *context,
+    const MinicStatement *label,
+    MinicStatementId label_id) {
+    const MinicC0Program *program;
+    size_t loop_matches;
+    size_t index;
+
+    if (context == NULL || context->body == NULL || context->body->program == NULL ||
+        label == NULL || label->kind != MINIC_STATEMENT_LABEL) {
+        return false;
+    }
+    program = context->body->program;
+    if (label_id >= program->statement_count) {
+        return false;
+    }
+
+    {
+        MinicCoreReentryQuery query = {
+            .membership = NULL,
+            .label_id = label_id,
+            .checks = MINIC_CORE_REENTRY_CHECK_EXTERNAL_JUMP |
+                      MINIC_CORE_REENTRY_CHECK_LABEL_ADDRESS,
+            .purpose = MINIC_CORE_REENTRY_PURPOSE_LOOP_LABEL
+        };
+        if (minic_core_reentry_query(
+                context->reentry_index, program, &query) != 0U)
+            return false;
+    }
+
+    /* Reentry and parser ownership are distinct proofs. A label with no
+     * incoming edge is metadata only if exactly one normalized while owns
+     * its source position; the incoming-edge index cannot prove uniqueness. */
+    loop_matches = 0U;
+    for (index = 0U; index < program->statement_count; ++index) {
+        const MinicStatement *candidate =
+            minic_c0_program_statement(program, index);
+        if (candidate == NULL) return false;
+        if (candidate->kind == MINIC_STATEMENT_WHILE &&
+            minic_core_loop_internal_while_label_pair(label, candidate)) {
+            ++loop_matches;
+            if (loop_matches > 1U) return false;
+        }
+    }
+    return loop_matches == 1U;
+}
+
+
+MinicCoreLowerStatus
+minic_core_lower_internal_lower_block(MinicCoreLowerContext *context, const MinicBlock *source_block, bool *terminated) {
+    size_t statement_index;
+    bool block_terminated;
+
+    if (context == NULL || source_block == NULL || terminated == NULL) {
+        return MINIC_CORE_LOWER_ERROR;
+    }
+    block_terminated = false;
+    for (statement_index = 0U; statement_index < source_block->statement_count; ++statement_index) {
+        const MinicStatement *statement;
+        MinicCoreLowerStatus status;
+        bool statement_terminated;
+
+        statement = minic_c0_program_statement(context->body->program,
+                                               source_block->statements[statement_index]);
+        if (statement == NULL) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+        if (statement->kind == MINIC_STATEMENT_LABEL &&
+            core_unreferenced_internal_loop_label(
+                context, statement, source_block->statements[statement_index])) {
+            continue;
+        }
+        if (block_terminated) {
+            /* Parser scope exit may materialize cleanup/return tails after an
+               already-terminating edge. More generally, statements on this
+               path are unreachable and need no Core instructions. A parser
+               internal while label is paired with the following loop; prune
+               the pair as one subtree so the loop's own backedge does not look
+               like external re-entry. Preserve fail-closed behavior only for
+               a goto/asm-goto originating outside the pruned subtree. */
+            if (statement->kind == MINIC_STATEMENT_RETURN ||
+                core_is_materialized_cleanup_statement(context, statement)) {
+                continue;
+            }
+            if (statement->kind == MINIC_STATEMENT_LABEL &&
+                statement_index + 1U < source_block->statement_count) {
+                const MinicStatement *unreachable_loop;
+                MinicStatementId unreachable_loop_id;
+
+                unreachable_loop_id = source_block->statements[statement_index + 1U];
+                unreachable_loop =
+                    minic_c0_program_statement(context->body->program, unreachable_loop_id);
+                if (minic_core_loop_internal_while_label_pair(statement, unreachable_loop)) {
+                    if (core_unreachable_statement_may_reenter(
+                            context, unreachable_loop,
+                            source_block->statements[statement_index], true)) {
+                        MinicCoreBlockId detached_preheader;
+
+                        /* A source goto may legally target a user label inside
+                           an otherwise unreachable loop body. Build the loop
+                           CFG from an orphan preheader so its condition/backedge
+                           structure exists without replacing the already-
+                           terminated outer path. The externally referenced user
+                           label has already been pre-bound by ordinary goto
+                           lowering and becomes the real entry edge. */
+                        if (!minic_core_function_add_block(
+                                context->function, &detached_preheader)) {
+                            return MINIC_CORE_LOWER_ERROR;
+                        }
+                        context->block_id = detached_preheader;
+                        status = minic_core_lower_loop_cfg(
+                            context,
+                            unreachable_loop,
+                            source_block->statements[statement_index],
+                            &statement_terminated);
+                        if (status != MINIC_CORE_LOWER_OK) {
+                            return status;
+                        }
+                        block_terminated = statement_terminated;
+                        statement_index += 1U;
+                        continue;
+                    }
+                    statement_index += 1U;
+                    continue;
+                }
+            }
+            if (statement->kind == MINIC_STATEMENT_WHILE &&
+                core_unreachable_statement_may_reenter(
+                    context, statement, MINIC_STATEMENT_INVALID, true)) {
+                MinicCoreBlockId detached_preheader;
+
+                if (!minic_core_function_add_block(
+                        context->function, &detached_preheader)) {
+                    return MINIC_CORE_LOWER_ERROR;
+                }
+                context->block_id = detached_preheader;
+                status = minic_core_lower_loop_cfg(
+                    context, statement, MINIC_STATEMENT_INVALID, &statement_terminated);
+                if (status != MINIC_CORE_LOWER_OK) {
+                    return status;
+                }
+                block_terminated = statement_terminated;
+                continue;
+            }
+            if (statement->kind != MINIC_STATEMENT_LABEL &&
+                statement->kind != MINIC_STATEMENT_CASE &&
+                statement->kind != MINIC_STATEMENT_DEFAULT) {
+                if (minic_core_lower_unreachable_external_reentry(
+                        context, statement, MINIC_STATEMENT_INVALID)) {
+                    MinicCoreBlockId detached_preheader;
+                    if (!minic_core_function_add_block(
+                            context->function, &detached_preheader)) {
+                        return MINIC_CORE_LOWER_ERROR;
+                    }
+                    context->block_id = detached_preheader;
+                    block_terminated = false;
+                } else {
+                    continue;
+                }
+            }
+        }
+        /* BATCH_C_ZERO_DISTANCE_CLEANUP_EDGE: cleanup ids are semantic edge
+           metadata. Equal ids mean the edge crosses no cleanup lifetime, even
+           when both ids are non-root. Only an actual context transition needs
+           cleanup-expression lowering, which remains fail-closed here. */
+        /* M142_NONEDGE_CLEANUP_METADATA_OWNER: cleanup ids describe the
+           current lifetime context as well as executable cleanup transitions.
+           ASSIGN, LABEL and INLINE_ASM do not themselves exit that lifetime:
+           a regular asm falls through, and the parser already proves every
+           `asm goto` target stays in the SAME GNU cleanup lifetime. The
+           eventual RETURN/BREAK/GOTO/scope-exit owns destructor execution.
+           Reject unclaimed nonzero-distance control effects, not an ordinary
+           asm merely because a cleanup local is active around it. */
+        if (statement->cleanup_context != statement->cleanup_stop_context &&
+            statement->kind != MINIC_STATEMENT_RETURN &&
+            statement->kind != MINIC_STATEMENT_ASSIGN &&
+            statement->kind != MINIC_STATEMENT_INLINE_ASM &&
+            statement->kind != MINIC_STATEMENT_BREAK &&
+            statement->kind != MINIC_STATEMENT_LABEL &&
+            !(statement->kind == MINIC_STATEMENT_GOTO &&
+              statement->expression == MINIC_EXPRESSION_INVALID &&
+              statement->target_statement != MINIC_STATEMENT_INVALID)) {
+            (void)fprintf(stderr,
+                          "CORE_FAST_TRACE stage=statement reason=cleanup-context "
+                          "function=%s kind=%d span=%zu:%zu cleanup=%llu stop=%llu\n",
+                          context->source_function->name,
+                          (int)statement->kind,
+                          statement->span.begin.line,
+                          statement->span.begin.column,
+                          (unsigned long long)statement->cleanup_context,
+                          (unsigned long long)statement->cleanup_stop_context);
+            return MINIC_CORE_LOWER_UNSUPPORTED;
+        }
+        statement_terminated = false;
+        if (statement->kind == MINIC_STATEMENT_CASE ||
+            statement->kind == MINIC_STATEMENT_DEFAULT) {
+            MinicCoreBlockId label_block;
+            MinicStatementId label_statement_id =
+                source_block->statements[statement_index];
+
+            /* Only lower case/default as generic re-entry labels when the
+               enclosing nested-switch fallback pre-bound this exact statement.
+               The established top-level switch segment path remains unchanged. */
+            if (context->statement_blocks == NULL ||
+                label_statement_id >= context->statement_block_count ||
+                context->statement_blocks[label_statement_id] ==
+                    MINIC_CORE_BLOCK_INVALID) {
+                return MINIC_CORE_LOWER_UNSUPPORTED;
+            }
+            status = ensure_statement_block(
+                context, label_statement_id, &label_block);
+            if (status != MINIC_CORE_LOWER_OK) {
+                return status;
+            }
+            if (!block_terminated && context->block_id != label_block) {
+                status = minic_core_lower_internal_set_branch(
+                    context, context->block_id, statement->span, label_block);
+                if (status != MINIC_CORE_LOWER_OK) {
+                    return status;
+                }
+            }
+            context->block_id = label_block;
+            /* Nested switch fallback emits CASE/DEFAULT as ordinary reentry
+             * labels in the shared source-block walker. A dispatch edge may
+             * enter this label without executing its lexical predecessor;
+             * facts learned in the previous case are therefore not valid.
+             * The top-level switch segment owner performs its own precise
+             * dispatch/fallthrough meet and never visits these label nodes. */
+            minic_core_local_facts_clear_known(context);
+        } else if (statement->kind == MINIC_STATEMENT_LABEL) {
+            const MinicStatement *loop = NULL;
+            bool internal_loop_label = false;
+            /* C labels are control-flow join points. A backward goto can
+               invalidate all local facts learned on the first arrival.
+               Keep the IR branches; only drop speculative local facts. */
+            minic_core_local_facts_clear_known(context);
+            if (statement_index + 1U < source_block->statement_count) {
+                MinicStatementId next_statement_id = source_block->statements[statement_index + 1U];
+                loop = minic_c0_program_statement(context->body->program, next_statement_id);
+                internal_loop_label = minic_core_loop_internal_while_label_pair(statement, loop);
+            }
+            if (internal_loop_label) {
+                status = minic_core_lower_loop_cfg(context,
+                                     loop,
+                                     source_block->statements[statement_index],
+                                     &statement_terminated);
+                if (status != MINIC_CORE_LOWER_OK) return status;
+                statement_index += 1U;
+            } else {
+                MinicCoreBlockId label_block;
+                MinicStatementId label_statement_id = source_block->statements[statement_index];
+                if (statement->target_expression != MINIC_EXPRESSION_INVALID || statement->expression != MINIC_EXPRESSION_INVALID || statement->target_statement != MINIC_STATEMENT_INVALID) return MINIC_CORE_LOWER_UNSUPPORTED;
+                status = ensure_statement_block(context, label_statement_id, &label_block);
+                if (status != MINIC_CORE_LOWER_OK) return status;
+                if (!block_terminated && context->block_id != label_block) {
+                    status = minic_core_lower_internal_set_branch(context, context->block_id, statement->span, label_block);
+                    if (status != MINIC_CORE_LOWER_OK) return status;
+                }
+                context->block_id = label_block;
+                /* M190_USER_LABEL_FACT_BARRIER: a goto target is a CFG join,
+                   not a straight-line transfer from its lexical predecessor. */
+                minic_core_local_facts_clear_known(context);
+            }
+        } else {
+            switch (statement->kind) {
+            case MINIC_STATEMENT_ASSIGN:
+                status = minic_core_lower_assignment(context, statement);
+                break;
+            case MINIC_STATEMENT_RECORD_COPY:
+            case MINIC_STATEMENT_RECORD_INITIALIZE:
+                status = minic_core_lower_record_copy_statement(context, statement);
+                break;
+            case MINIC_STATEMENT_EXPRESSION:
+                status = minic_core_lower_internal_lower_expression_statement(context, statement);
+                if (status == MINIC_CORE_LOWER_OK &&
+                    context->block_id < context->function->block_count &&
+                    context->function->blocks[context->block_id].has_terminator) {
+                    statement_terminated = true;
+                }
+                break;
+            case MINIC_STATEMENT_INLINE_ASM:
+                status = minic_core_lower_inline_asm(context, statement);
+                minic_core_local_facts_clear_known(context);
+                break;
+            case MINIC_STATEMENT_RETURN:
+                status = lower_return(context, statement);
+                statement_terminated = status == MINIC_CORE_LOWER_OK;
+                break;
+            case MINIC_STATEMENT_BREAK:
+                if (context->break_target == MINIC_CORE_BLOCK_INVALID) {
+                    status = MINIC_CORE_LOWER_UNSUPPORTED;
+                    break;
+                }
+                if (statement->cleanup_context != statement->cleanup_stop_context) {
+                    status = lower_cleanup_contexts(
+                        context, statement->cleanup_context, statement->cleanup_stop_context);
+                    if (status != MINIC_CORE_LOWER_OK) {
+                        break;
+                    }
+                }
+                status = minic_core_lower_internal_set_branch(
+                    context, context->block_id, statement->span, context->break_target);
+                statement_terminated = status == MINIC_CORE_LOWER_OK;
+                break;
+            case MINIC_STATEMENT_GOTO: {
+                const MinicStatement *target_statement;
+                MinicCoreBlockId target_block;
+
+                /* M158_FINAL_STRICT_TAIL_COMPUTED_GOTO: &&label already lowers
+                   to BLOCK_ADDRESS.  Preserve GNU `goto *expr` as a first-class
+                   Core CFG edge instead of pretending it is an ordinary branch. */
+                if (statement->expression != MINIC_EXPRESSION_INVALID &&
+                    statement->target_statement == MINIC_STATEMENT_INVALID) {
+                    MinicCoreTerminator terminator;
+                    MinicCoreValueId target_value;
+
+                    if (statement->target_expression != MINIC_EXPRESSION_INVALID) {
+                        status = MINIC_CORE_LOWER_UNSUPPORTED;
+                        break;
+                    }
+                    status = lower_expression(
+                        context, statement->expression, &target_value);
+                    if (status != MINIC_CORE_LOWER_OK) {
+                        break;
+                    }
+                    if (target_value >= context->function->value_count ||
+                        !minic_type_is_pointer(minic_core_function_source_value_type(context->source, target_value))) {
+                        status = MINIC_CORE_LOWER_UNSUPPORTED;
+                        break;
+                    }
+                    (void)memset(&terminator, 0, sizeof(terminator));
+                    terminator.kind = MINIC_CORE_TERMINATOR_INDIRECT_BRANCH;
+                    terminator.span = statement->span;
+                    terminator.return_value = MINIC_CORE_VALUE_INVALID;
+                    terminator.return_object = MINIC_CORE_OBJECT_INVALID;
+                    terminator.indirect_target = target_value;
+                    status = minic_core_function_set_terminator(
+                                 context->function, context->block_id, &terminator)
+                                 ? MINIC_CORE_LOWER_OK
+                                 : MINIC_CORE_LOWER_ERROR;
+                    statement_terminated = status == MINIC_CORE_LOWER_OK;
+                    break;
+                }
+                if (statement->expression != MINIC_EXPRESSION_INVALID ||
+                    statement->target_statement == MINIC_STATEMENT_INVALID) {
+                    status = MINIC_CORE_LOWER_UNSUPPORTED;
+                    break;
+                }
+                target_statement = minic_c0_program_statement(
+                    context->body->program, statement->target_statement);
+                if (target_statement == NULL ||
+                    target_statement->kind != MINIC_STATEMENT_LABEL) {
+                    status = MINIC_CORE_LOWER_ERROR;
+                    break;
+                }
+                if (statement->cleanup_context != statement->cleanup_stop_context) {
+                    status = lower_cleanup_contexts(
+                        context, statement->cleanup_context, statement->cleanup_stop_context);
+                    if (status != MINIC_CORE_LOWER_OK) {
+                        break;
+                    }
+                }
+                status = ensure_statement_block(
+                    context, statement->target_statement, &target_block);
+                if (status == MINIC_CORE_LOWER_OK) {
+                    status = minic_core_lower_internal_set_branch(
+                        context, context->block_id, statement->span, target_block);
+                }
+                statement_terminated = status == MINIC_CORE_LOWER_OK;
+                break;
+            }
+            case MINIC_STATEMENT_IF:
+                status = minic_core_lower_if(context, statement, &statement_terminated);
+                break;
+            case MINIC_STATEMENT_WHILE:
+                status = minic_core_lower_loop_statement(context, statement, &statement_terminated);
+                break;
+            case MINIC_STATEMENT_SWITCH:
+                minic_core_local_facts_clear_known(context);
+                status = minic_core_lower_switch(context, statement, &statement_terminated);
+                minic_core_local_facts_clear_known(context);
+                break;
+            default:
+                (void)fprintf(stderr,
+                              "CORE_FAST_TRACE stage=statement reason=unsupported-kind "
+                              "function=%s kind=%d span=%zu:%zu break_target=%llu\n",
+                              context->source_function->name,
+                              (int)statement->kind,
+                              statement->span.begin.line,
+                              statement->span.begin.column,
+                              (unsigned long long)context->break_target);
+                return MINIC_CORE_LOWER_UNSUPPORTED;
+            }
+            if (status != MINIC_CORE_LOWER_OK) {
+                (void)fprintf(stderr,
+                              "CORE_FAST_TRACE stage=statement reason=lower-status "
+                              "function=%s kind=%d status=%d span=%zu:%zu break_target=%llu\n",
+                              context->source_function->name,
+                              (int)statement->kind,
+                              (int)status,
+                              statement->span.begin.line,
+                              statement->span.begin.column,
+                              (unsigned long long)context->break_target);
+                return status;
+            }
+        }
+        block_terminated = statement_terminated;
+    }
+    *terminated = block_terminated;
+    return MINIC_CORE_LOWER_OK;
+}
+
+MinicCoreLowerStatus minic_core_lower_function_with_index(const MinicFunctionBodyView *body,
+                                               const MinicTargetInvocation *target,
+                                               MinicCoreSourceBuilder *output,
+                                               MinicCoreReentryIndex *reentry_index) {
+    const MinicFunction *source_function;
+    const MinicBlock *source_block;
+    MinicCoreSourceBuilder lowered;
+    MinicCoreLowerContext context;
+    MinicCoreBlockId block_id;
+    MinicCoreObjectId *local_objects;
+    MinicCoreLocalIntegerConstant *local_integer_constants;
+    MinicCoreBlockId *statement_blocks;
+    MinicCoreLowerStatus status;
+    size_t local_index;
+    size_t statement_index;
+    bool terminated;
+
+    if (body == NULL || body->program == NULL || target == NULL || output == NULL) {
+        return MINIC_CORE_LOWER_ERROR;
+    }
+    source_function = minic_c0_function_body_function(body);
+    source_block = minic_c0_program_block(body->program, minic_c0_function_body_root_block(body));
+    if (source_function == NULL || source_block == NULL || source_function->name == NULL ||
+        source_function->name_length == 0U) {
+        return MINIC_CORE_LOWER_ERROR;
+    }
+    if (source_block->statement_count == 0U && !minic_type_is_void(source_function->return_type)) {
+        return MINIC_CORE_LOWER_UNSUPPORTED;
+    }
+    if (source_function->local_count > SIZE_MAX / sizeof(*local_objects)) {
+        return MINIC_CORE_LOWER_ERROR;
+    }
+    local_objects =
+        source_function->local_count == 0U
+            ? NULL
+            : (MinicCoreObjectId *)malloc(source_function->local_count * sizeof(*local_objects));
+    if (source_function->local_count != 0U && local_objects == NULL) {
+        return MINIC_CORE_LOWER_ERROR;
+    }
+    local_integer_constants =
+        source_function->local_count == 0U
+            ? NULL
+            : (MinicCoreLocalIntegerConstant *)calloc(
+                  source_function->local_count, sizeof(*local_integer_constants));
+    if (source_function->local_count != 0U && local_integer_constants == NULL) {
+        free(local_objects);
+        return MINIC_CORE_LOWER_ERROR;
+    }
+    for (local_index = 0U; local_index < source_function->local_count; ++local_index) local_objects[local_index] = MINIC_CORE_OBJECT_INVALID;
+    if (body->program->statement_count > SIZE_MAX / sizeof(*statement_blocks)) { free(local_integer_constants); free(local_objects); return MINIC_CORE_LOWER_ERROR; }
+    statement_blocks = body->program->statement_count == 0U ? NULL : (MinicCoreBlockId *)malloc(body->program->statement_count * sizeof(*statement_blocks));
+    if (body->program->statement_count != 0U && statement_blocks == NULL) { free(local_integer_constants); free(local_objects); return MINIC_CORE_LOWER_ERROR; }
+    for (statement_index = 0U; statement_index < body->program->statement_count; ++statement_index) statement_blocks[statement_index] = MINIC_CORE_BLOCK_INVALID;
+
+    minic_core_source_builder_initialize(&lowered);
+    if (!minic_core_function_set_signature(&lowered,
+                                           source_function->name,
+                                           source_function->name_length,
+                                           source_function->return_type,
+                                           source_function->parameter_types,
+                                           source_function->parameter_count) ||
+        !minic_core_function_set_calling_convention(
+            &lowered, source_function->calling_convention) ||
+        !minic_core_function_set_variadic(
+            &lowered, source_function->is_variadic) ||
+        !minic_core_function_add_block(&lowered.core, &block_id)) {
+        free(statement_blocks); free(local_integer_constants); free(local_objects); minic_core_source_builder_destroy(&lowered); return MINIC_CORE_LOWER_ERROR;
+    }
+    /* C allows a function prototype and its definition to materialize
+     * distinct but compatible pointer-to-array descriptor identities.
+     * Canonicalize ONLY at the AST -> Core ingress boundary: the Core IR
+     * signature must use the actual definition parameter-local type so its
+     * PARAMETER instruction and STORE remain exactly identical. Preserve
+     * Core verification's strict type identity and discard only the formal
+     * parameter's top-level C qualifiers, as required by function types. */
+    {
+        size_t parameter_index;
+        for (parameter_index = 0U; parameter_index < source_function->parameter_count;
+             ++parameter_index) {
+            const MinicLocal *parameter;
+            MinicType normalized;
+            if (source_function->local_begin >= body->program->local_count ||
+                parameter_index >= body->program->local_count - source_function->local_begin) {
+                free(statement_blocks); free(local_integer_constants); free(local_objects);
+                minic_core_source_builder_destroy(&lowered);
+                return MINIC_CORE_LOWER_ERROR;
+            }
+            parameter = minic_c0_program_local(
+                body->program, source_function->local_begin + parameter_index);
+            if (parameter == NULL ||
+                !minic_type_unqualified(parameter->type, &normalized) ||
+                !minic_c0_types_compatible(
+                    body->program, source_function->parameter_types[parameter_index],
+                    normalized)) {
+                free(statement_blocks); free(local_integer_constants); free(local_objects);
+                minic_core_source_builder_destroy(&lowered);
+                return MINIC_CORE_LOWER_ERROR;
+            }
+            lowered.source_draft->parameter_types[parameter_index] = normalized;
+        }
+    }
+    (void)memset(&context, 0, sizeof(context));
+    context.body = body;
+    context.source_function = source_function;
+    context.target = target;
+    context.reentry_index = reentry_index;
+    context.source = &lowered;
+    context.function = &lowered.core;
+    context.block_id = block_id;
+    context.break_target = MINIC_CORE_BLOCK_INVALID;
+    context.local_objects = local_objects;
+    context.local_integer_constants = local_integer_constants;
+    context.statement_blocks = statement_blocks;
+    context.statement_block_count = body->program->statement_count;
+    status = lower_parameter_ingress(&context);
+    terminated = false;
+    if (status == MINIC_CORE_LOWER_OK) status = minic_core_lower_internal_lower_block(&context, source_block, &terminated);
+    free(statement_blocks); free(local_integer_constants); free(local_objects);
+    context.local_integer_constants = NULL;
+    if (status != MINIC_CORE_LOWER_OK) {
+        minic_core_source_builder_destroy(&lowered);
+        return status;
+    }
+    if (!terminated && minic_type_is_void(source_function->return_type)) {
+        MinicCoreTerminator terminator;
+
+        (void)memset(&terminator, 0, sizeof(terminator));
+        terminator.kind = MINIC_CORE_TERMINATOR_RETURN;
+        terminator.return_value = MINIC_CORE_VALUE_INVALID;
+        if (!minic_core_function_set_terminator(&lowered.core, context.block_id, &terminator)) {
+            minic_core_source_builder_destroy(&lowered);
+            return MINIC_CORE_LOWER_ERROR;
+        }
+        terminated = true;
+    }
+    if (!terminated) {
+        minic_core_source_builder_destroy(&lowered);
+        return MINIC_CORE_LOWER_UNSUPPORTED;
+    }
+    if (!core_capture_enum_metadata(&context) ||
+        !minic_core_function_verify_source_ingress(&lowered)) {
+        minic_core_source_builder_destroy(&lowered);
+        return MINIC_CORE_LOWER_ERROR;
+    }
+    minic_core_source_builder_destroy(output);
+    *output = lowered;
+    return MINIC_CORE_LOWER_OK;
+}
+
+/* Standalone Core IR clients retain conservative no-index lowering. */
+MinicCoreLowerStatus minic_core_lower_function(const MinicFunctionBodyView *body,
+                                               const MinicTargetInvocation *target,
+                                               MinicCoreSourceBuilder *output) {
+    return minic_core_lower_function_with_index(body, target, output, NULL);
+}

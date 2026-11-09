@@ -1,0 +1,239 @@
+#ifndef MINIC_TARGET_X86_64_MACHINE_OPCODE_H
+#define MINIC_TARGET_X86_64_MACHINE_OPCODE_H
+
+#include "target/common/machine_gnu_asm.h"
+
+/* Selected physical x86-64 GPR, SSE2, and x87 machine opcodes. These
+ * describe actual ISA instructions, not Core operations or pre-rendered GNU
+ * assembly strings. Remaining privileged and Linux source-ASM contracts
+ * fail closed until their full target-specific binding is implemented. */
+typedef enum MinicX86MachineOpcode {
+    MINIC_X86_MI_INVALID = 0,
+    MINIC_X86_MI_NOP, MINIC_X86_MI_PAUSE, MINIC_X86_MI_LFENCE,
+    MINIC_X86_MI_ENDBR64, MINIC_X86_MI_UD2,
+    MINIC_X86_MI_PUSH64_R, MINIC_X86_MI_POP64_R,
+    MINIC_X86_MI_LEAVE, MINIC_X86_MI_RET,
+
+    MINIC_X86_MI_MOV8_RR, MINIC_X86_MI_MOV16_RR,
+    MINIC_X86_MI_MOV32_RR, MINIC_X86_MI_MOV64_RR,
+    MINIC_X86_MI_MOV8_IR, MINIC_X86_MI_MOV16_IR,
+    MINIC_X86_MI_MOV32_IR, MINIC_X86_MI_MOV64_IR,
+    MINIC_X86_MI_MOVABS64_IR,
+    MINIC_X86_MI_MOV8_AR, MINIC_X86_MI_MOV16_AR,
+    MINIC_X86_MI_MOV32_AR, MINIC_X86_MI_MOV64_AR,
+    MINIC_X86_MI_MOV8_RA, MINIC_X86_MI_MOV16_RA,
+    MINIC_X86_MI_MOV32_RA, MINIC_X86_MI_MOV64_RA,
+    MINIC_X86_MI_MOV8_FRBP_R, MINIC_X86_MI_MOV16_FRBP_R,
+    MINIC_X86_MI_MOV32_FRBP_R, MINIC_X86_MI_MOV64_FRBP_R,
+    MINIC_X86_MI_MOV8_FRSP_R, MINIC_X86_MI_MOV16_FRSP_R,
+    MINIC_X86_MI_MOV32_FRSP_R, MINIC_X86_MI_MOV64_FRSP_R,
+    MINIC_X86_MI_MOV8_R_FRBP, MINIC_X86_MI_MOV16_R_FRBP,
+    MINIC_X86_MI_MOV32_R_FRBP, MINIC_X86_MI_MOV64_R_FRBP,
+    MINIC_X86_MI_MOV8_R_FRSP, MINIC_X86_MI_MOV16_R_FRSP,
+    MINIC_X86_MI_MOV32_R_FRSP, MINIC_X86_MI_MOV64_R_FRSP,
+    MINIC_X86_MI_MOVSBQ_RR, MINIC_X86_MI_MOVZBQ_RR,
+    MINIC_X86_MI_MOVSWQ_RR, MINIC_X86_MI_MOVZWQ_RR,
+    MINIC_X86_MI_MOVSLQ_RR,
+    MINIC_X86_MI_MOVZBL_RR,
+    MINIC_X86_MI_MOVSBQ_AR, MINIC_X86_MI_MOVZBQ_AR,
+    MINIC_X86_MI_MOVSWQ_AR, MINIC_X86_MI_MOVZWQ_AR,
+    MINIC_X86_MI_MOVSLQ_AR,
+    MINIC_X86_MI_LEA64_AR, MINIC_X86_MI_LEA64_FRBP_R,
+    MINIC_X86_MI_LEA64_FRSP_R, MINIC_X86_MI_LEA64_RIP_SYMBOL_R,
+    MINIC_X86_MI_MOV64_GOTPCREL_R, MINIC_X86_MI_MOVABS64_SYMBOL_R,
+    MINIC_X86_MI_MOV64_IMM32S_SYMBOL_R,
+
+    MINIC_X86_MI_ADD64_RR, MINIC_X86_MI_ADC64_RR,
+    MINIC_X86_MI_SUB64_RR, MINIC_X86_MI_SBB64_RR,
+    MINIC_X86_MI_IMUL64_RR, MINIC_X86_MI_AND64_RR,
+    MINIC_X86_MI_OR64_RR, MINIC_X86_MI_XOR64_RR,
+    MINIC_X86_MI_CMP64_RR, MINIC_X86_MI_TEST64_RR,
+    MINIC_X86_MI_ADD32_RR, MINIC_X86_MI_ADC32_RR,
+    MINIC_X86_MI_SUB32_RR, MINIC_X86_MI_SBB32_RR,
+    MINIC_X86_MI_IMUL32_RR, MINIC_X86_MI_AND32_RR,
+    MINIC_X86_MI_OR32_RR, MINIC_X86_MI_XOR32_RR,
+    MINIC_X86_MI_CMP32_RR, MINIC_X86_MI_TEST32_RR,
+    MINIC_X86_MI_ADD64_IR, MINIC_X86_MI_ADC64_IR,
+    MINIC_X86_MI_SUB64_IR, MINIC_X86_MI_SBB64_IR,
+    MINIC_X86_MI_AND64_IR, MINIC_X86_MI_OR64_IR,
+    MINIC_X86_MI_XOR64_IR, MINIC_X86_MI_CMP64_IR,
+    MINIC_X86_MI_TEST64_IR,
+    MINIC_X86_MI_ADD32_IR, MINIC_X86_MI_ADC32_IR,
+    MINIC_X86_MI_SUB32_IR, MINIC_X86_MI_SBB32_IR,
+    MINIC_X86_MI_AND32_IR, MINIC_X86_MI_OR32_IR,
+    MINIC_X86_MI_XOR32_IR, MINIC_X86_MI_CMP32_IR,
+    MINIC_X86_MI_TEST32_IR, MINIC_X86_MI_SAR64_IR,
+    MINIC_X86_MI_NEG64_R, MINIC_X86_MI_NOT64_R,
+    MINIC_X86_MI_NEG32_R, MINIC_X86_MI_NOT32_R,
+    MINIC_X86_MI_SHL64_CL_R, MINIC_X86_MI_SHR64_CL_R,
+    MINIC_X86_MI_SAR64_CL_R, MINIC_X86_MI_SHL32_CL_R,
+    MINIC_X86_MI_SHR32_CL_R, MINIC_X86_MI_SAR32_CL_R,
+    MINIC_X86_MI_SHLD64_CL_RR, MINIC_X86_MI_SHRD64_CL_RR,
+    MINIC_X86_MI_BSF64_RR, MINIC_X86_MI_BSR64_RR,
+    MINIC_X86_MI_BSF32_RR, MINIC_X86_MI_BSR32_RR,
+    MINIC_X86_MI_CQTO, MINIC_X86_MI_MUL32_R, MINIC_X86_MI_MUL64_R,
+    MINIC_X86_MI_IMUL64_R, MINIC_X86_MI_DIV64_R,
+    MINIC_X86_MI_IDIV64_R,
+    MINIC_X86_MI_REP_MOVSB,
+
+    /* Physical SSE/SSE2 scalar transport and arithmetic.  Operands still
+     * identify the full 128-bit XMM registers (not Core float values). */
+    MINIC_X86_MI_MOVD_GPR_XMM, MINIC_X86_MI_MOVD_XMM_GPR,
+    MINIC_X86_MI_MOVQ_GPR_XMM, MINIC_X86_MI_MOVQ_XMM_GPR,
+    MINIC_X86_MI_ADDSS_XMM, MINIC_X86_MI_SUBSS_XMM,
+    MINIC_X86_MI_MULSS_XMM, MINIC_X86_MI_DIVSS_XMM,
+    MINIC_X86_MI_ADDSD_XMM, MINIC_X86_MI_SUBSD_XMM,
+    MINIC_X86_MI_MULSD_XMM, MINIC_X86_MI_DIVSD_XMM,
+    MINIC_X86_MI_UCOMISS_XMM, MINIC_X86_MI_UCOMISD_XMM,
+    MINIC_X86_MI_CVTSI2SDQ_GPR_XMM,
+    MINIC_X86_MI_CVTTSD2SIQ_XMM_GPR,
+    MINIC_X86_MI_CVTSS2SD_XMM, MINIC_X86_MI_CVTSD2SS_XMM,
+    MINIC_X86_MI_MOVDQU_ADDRESS_XMM, MINIC_X86_MI_MOVDQU_XMM_ADDRESS,
+    MINIC_X86_MI_MOVDQU_FRAME_RBP_XMM,
+    MINIC_X86_MI_MOVDQU_XMM_FRAME_RBP,
+    MINIC_X86_MI_MOVDQU_FRAME_RSP_XMM,
+    MINIC_X86_MI_MOVDQU_XMM_FRAME_RSP,
+    /* Two x87 stack forms used for the SysV extended80 ABI. */
+    MINIC_X86_MI_FLDT_ADDRESS, MINIC_X86_MI_FSTPT_ADDRESS,
+    MINIC_X86_MI_FLDT_FRAME_RBP, MINIC_X86_MI_FSTPT_FRAME_RBP,
+    MINIC_X86_MI_FLDS_FRAME_RBP, MINIC_X86_MI_FLDL_FRAME_RBP,
+    MINIC_X86_MI_FSTPS_FRAME_RBP, MINIC_X86_MI_FSTPL_FRAME_RBP,
+    MINIC_X86_MI_FILDL_FRAME_RBP, MINIC_X86_MI_FILDQ_FRAME_RBP,
+    MINIC_X86_MI_FISTTPQ_FRAME_RSP,
+    MINIC_X86_MI_FLDL_ADDRESS, MINIC_X86_MI_FILDQ_ADDRESS,
+    MINIC_X86_MI_FISTTPQ_ADDRESS, MINIC_X86_MI_FADDL_ADDRESS,
+    MINIC_X86_MI_FCHS, MINIC_X86_MI_FXCH_ST1,
+    MINIC_X86_MI_FUCOMIP_ST1, MINIC_X86_MI_FSTP_ST0,
+    MINIC_X86_MI_FADDP_ST1, MINIC_X86_MI_FSUBRP_ST1,
+    MINIC_X86_MI_FMULP_ST1, MINIC_X86_MI_FDIVRP_ST1,
+    MINIC_X86_MI_CLD, MINIC_X86_MI_BTS64_IR,
+    MINIC_X86_MI_AND8_RR,
+    MINIC_X86_MI_OR8_RR, MINIC_X86_MI_TEST8_RR,
+
+    MINIC_X86_MI_SETZ8_R, MINIC_X86_MI_SETNZ8_R,
+    MINIC_X86_MI_SETB8_R, MINIC_X86_MI_SETBE8_R,
+    MINIC_X86_MI_SETL8_R, MINIC_X86_MI_SETLE8_R,
+    MINIC_X86_MI_SETO8_R, MINIC_X86_MI_SETC8_R,
+    MINIC_X86_MI_SETP8_R, MINIC_X86_MI_SETNP8_R,
+    MINIC_X86_MI_SETS8_R, MINIC_X86_MI_SETNS8_R,
+
+    MINIC_X86_MI_JMP_B, MINIC_X86_MI_JMP_R,
+    MINIC_X86_MI_JMP_SYMBOL, MINIC_X86_MI_JMP_RETURN_THUNK,
+    MINIC_X86_MI_JMP_INDIRECT_THUNK_RAX,
+    MINIC_X86_MI_JMP_INLINE_THUNK_RAX,
+    MINIC_X86_MI_JZ_B, MINIC_X86_MI_JNZ_B,
+    MINIC_X86_MI_JB_B, MINIC_X86_MI_JBE_B,
+    MINIC_X86_MI_JA_B, MINIC_X86_MI_JAE_B,
+    MINIC_X86_MI_JL_B, MINIC_X86_MI_JLE_B,
+    MINIC_X86_MI_JG_B, MINIC_X86_MI_JGE_B,
+    MINIC_X86_MI_JO_B, MINIC_X86_MI_JNO_B,
+    MINIC_X86_MI_JC_B, MINIC_X86_MI_JNC_B,
+    MINIC_X86_MI_JP_B, MINIC_X86_MI_JNP_B,
+    MINIC_X86_MI_JS_B, MINIC_X86_MI_JNS_B,
+    MINIC_X86_MI_CALL_SYSV_SYMBOL, MINIC_X86_MI_CALL_MS_SYMBOL,
+    MINIC_X86_MI_CALL_SYSV_LOCAL_SYMBOL,
+    MINIC_X86_MI_CALL_MS_LOCAL_SYMBOL,
+    /* Linux __get_user/__put_user: RAX/RCX/RDX private kernel ABI, not SysV. */
+    MINIC_X86_MI_CALL_UACCESS_LOCAL_SYMBOL,
+    MINIC_X86_MI_CALL_INDIRECT_THUNK_R11,
+    MINIC_X86_MI_CALL_INLINE_THUNK_R11,
+    MINIC_X86_MI_CALL_SYSV_R, MINIC_X86_MI_CALL_MS_R,
+    MINIC_X86_MI_LAST
+} MinicX86MachineOpcode;
+
+enum MinicX86MachineRegisterNumber {
+    MINIC_X86_REG_RAX = 0, MINIC_X86_REG_RCX = 1,
+    MINIC_X86_REG_RDX = 2, MINIC_X86_REG_RBX = 3,
+    MINIC_X86_REG_RSP = 4, MINIC_X86_REG_RBP = 5,
+    MINIC_X86_REG_RSI = 6, MINIC_X86_REG_RDI = 7,
+    MINIC_X86_REG_R8 = 8, MINIC_X86_REG_R9 = 9,
+    MINIC_X86_REG_R10 = 10, MINIC_X86_REG_R11 = 11,
+    MINIC_X86_REG_R12 = 12, MINIC_X86_REG_R13 = 13,
+    MINIC_X86_REG_R14 = 14, MINIC_X86_REG_R15 = 15,
+    MINIC_X86_REG_RIP = 16
+};
+
+enum MinicX86MachineSegmentNumber {
+    MINIC_X86_SEG_CS = 0, MINIC_X86_SEG_DS,
+    MINIC_X86_SEG_ES, MINIC_X86_SEG_FS,
+    MINIC_X86_SEG_GS, MINIC_X86_SEG_SS
+};
+
+enum MinicX86MachineRelocation {
+    MINIC_X86_MACHINE_RELOC_ABSOLUTE = 1,
+    MINIC_X86_MACHINE_RELOC_ABS32S,
+    MINIC_X86_MACHINE_RELOC_PC32,
+    MINIC_X86_MACHINE_RELOC_PC64,
+    MINIC_X86_MACHINE_RELOC_GOTPCREL,
+    MINIC_X86_MACHINE_RELOC_PLT32
+};
+
+enum MinicX86MachineGeneratedFeature {
+    MINIC_X86_MACHINE_GENERATED_BASE = 1U << 0,
+    MINIC_X86_MACHINE_GENERATED_SSE2 = 1U << 1,
+    MINIC_X86_MACHINE_GENERATED_IBT = 1U << 2
+};
+
+typedef enum MinicX86MachineFormat {
+    MINIC_X86_MACHINE_FORMAT_NONE = 0,
+    MINIC_X86_MACHINE_FORMAT_RR,
+    MINIC_X86_MACHINE_FORMAT_IR,
+    MINIC_X86_MACHINE_FORMAT_AR,
+    MINIC_X86_MACHINE_FORMAT_RA,
+    MINIC_X86_MACHINE_FORMAT_FR,
+    MINIC_X86_MACHINE_FORMAT_RF,
+    MINIC_X86_MACHINE_FORMAT_SR,
+    MINIC_X86_MACHINE_FORMAT_R,
+    MINIC_X86_MACHINE_FORMAT_B,
+    MINIC_X86_MACHINE_FORMAT_S,
+    MINIC_X86_MACHINE_FORMAT_A,
+    MINIC_X86_MACHINE_FORMAT_F
+} MinicX86MachineFormat;
+
+/* Read-only instruction descriptor consumed by the target GNU printer.
+ * The validator independently enforces its operand shape and encodability. */
+typedef struct MinicX86MachineOpcodeInfo {
+    const char *mnemonic;
+    MinicX86MachineFormat format;
+    unsigned short first_width_bits;
+    unsigned short second_width_bits;
+    unsigned short memory_width_bits; /* for sole x87 memory operand */
+    MinicMachineRegisterBank first_bank; /* zero means GP for older opcodes */
+    MinicMachineRegisterBank second_bank;
+    unsigned int first_access;
+    unsigned int second_access;
+    unsigned int effects;
+    uint64_t required_features;
+    unsigned int implicit_kind;
+    unsigned int relocation;
+    unsigned int frame_base;
+    bool terminates_block;
+    bool permits_fallthrough;
+    bool indirect_successors;
+} MinicX86MachineOpcodeInfo;
+
+const MinicX86MachineOpcodeInfo *minic_x86_64_machine_opcode_info(uint32_t);
+
+uint64_t minic_x86_64_machine_generated_features(const MinicTargetInfo *);
+bool minic_x86_64_machine_opcode_lookup(const MinicTargetInfo *, uint32_t,
+    MinicMachineOpcodeContract *, void *);
+bool minic_x86_64_machine_validate_selected(const MinicMachineFunction *,
+    const MinicMachineInstruction *, void *);
+bool minic_x86_64_machine_validate_features(const MinicTargetInfo *,
+    uint64_t, void *);
+bool minic_x86_64_machine_validate_abi(const MinicTargetInfo *,
+    MinicFunctionCallingConvention, void *);
+bool minic_x86_64_machine_validate_frame_object(const MinicTargetInfo *,
+    const MinicMachineFunction *, const MinicMachineFrameObject *, void *);
+bool minic_x86_64_machine_validate_register(const MinicTargetInfo *,
+    const MinicMachineRegister *, void *);
+bool minic_x86_64_machine_validate_address(const MinicTargetInfo *,
+    const MinicMachineAddress *, void *);
+bool minic_x86_64_machine_validate_relocation(const MinicTargetInfo *,
+    const char *, uint32_t, int64_t, void *);
+bool minic_x86_64_machine_validate_source_asm(const MinicTargetInfo *,
+    const MinicMachineInstruction *, void *);
+bool minic_x86_64_machine_gnu_asm_policy(const MinicTargetInfo *,
+    MinicMachineGNUAsmPolicy *);
+
+#endif

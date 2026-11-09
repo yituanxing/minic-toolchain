@@ -2,6 +2,79 @@
 # One GitHub runner: one MiniC build + batched Kbuild objects, multiple
 # authenticated GCC/MiniC object overlays + GNU incremental link + QEMU.
 set -Eeuo pipefail
+# Replaying cached GNU Kbuild objects with a separately restored original
+# Linux source cache can make the source mtimes newer than the outputs. Kbuild
+# then needlessly recompiles all 2064 GNU C owners even though bytes/commands
+# are frozen. Rebase ONLY the disposable, SHA-attested seven-way fixture.
+rebase_seven_kbuild_fixture_mtimes() {
+  local source_tree=$1 golden_tree=$2
+  [[ -d "$source_tree" && -d "$golden_tree" &&
+     -f "$source_tree/Makefile" && -f "$golden_tree/.config" ]] || return 1
+  find "$source_tree" -type f -exec touch -d '2000-01-01 00:00:00 UTC' -- {} +
+  find "$golden_tree" -type f -exec touch -d '2020-01-01 00:00:00 UTC' -- {} +
+}
+if [[ "${1:-}" == --self-test-kbuild-mtime ]]; then
+  scratch=$(mktemp -d)
+  trap 'rm -rf -- "$scratch"' EXIT
+  mkdir -p "$scratch/source" "$scratch/out"
+  printf 'source bytes are pinned\n' >"$scratch/source/Makefile"
+  printf 'CONFIG_TEST=y\n' >"$scratch/out/.config"
+  printf 'object bytes are pinned\n' >"$scratch/out/owner.o"
+  printf 'image bytes are pinned\n' >"$scratch/out/Image"
+  touch -d '2026-01-01 UTC' "$scratch/source/Makefile"
+  touch -d '2020-01-01 UTC' "$scratch/out/owner.o"
+  [[ "$scratch/source/Makefile" -nt "$scratch/out/owner.o" ]]
+  printf '%s: %s\n\t@true\n%s: %s\n\t@true\n' \
+    "$scratch/out/owner.o" "$scratch/source/Makefile" \
+    "$scratch/out/Image" "$scratch/out/owner.o" >"$scratch/dependency.mk"
+  if make --no-print-directory -q -f "$scratch/dependency.mk" "$scratch/out/owner.o"; then
+    echo 'COHORT_GNU_MTIME_REBASE_SELFTEST=FAIL stale_source_not_rebuilt' >&2; exit 1
+  fi
+  bytes_before=$(sha256sum "$scratch/source/Makefile" "$scratch/out/.config" \
+      "$scratch/out/owner.o" "$scratch/out/Image" | sha256sum)
+  rebase_seven_kbuild_fixture_mtimes "$scratch/source" "$scratch/out"
+  bytes_after=$(sha256sum "$scratch/source/Makefile" "$scratch/out/.config" \
+      "$scratch/out/owner.o" "$scratch/out/Image" | sha256sum)
+  [[ "$bytes_before" == "$bytes_after" &&
+     "$scratch/out/owner.o" -nt "$scratch/source/Makefile" ]]
+  make --no-print-directory -q -f "$scratch/dependency.mk" "$scratch/out/owner.o"
+  touch "$scratch/out/owner.o"
+  [[ "$scratch/out/owner.o" -nt "$scratch/out/Image" ]]
+  if make --no-print-directory -q -f "$scratch/dependency.mk" "$scratch/out/Image"; then
+    echo 'COHORT_GNU_MTIME_REBASE_SELFTEST=FAIL new_candidate_not_relinked' >&2; exit 1
+  fi
+  echo 'COHORT_GNU_MTIME_REBASE_SELFTEST=PASS immutable_bytes=true source_older=true candidate_relink=true'
+  exit 0
+fi
+if [[ "${1:-}" == --self-test-kbuild-source-alias ]]; then
+  # GNU make -C resolves a symlinked source path to the same CURDIR used
+  # when the original golden .o.cmd was generated. Copying the source into
+  # another directory produces a different Kbuild C compilation command,
+  # even when the source bytes and output directory are unchanged.
+  scratch=$(mktemp -d)
+  trap 'rm -rf -- "$scratch"' EXIT
+  canonical="$scratch/linux-expanded-kbuild-v0/linux-6.6.143"
+  alias_dir="$scratch/linux-runtime-gcc/linux-6.6.143"
+  copied="$scratch/linux-runtime-gcc/copied-linux-6.6.143"
+  out_test="$scratch/linux-runtime-gcc/out"
+  mkdir -p "$canonical" "$out_test"
+  printf '%s\n' \
+    'KBUILD_CFLAGS := -I$(CURDIR)/include' \
+    'cmd_owner = riscv64-linux-gnu-gcc $(KBUILD_CFLAGS) -c $(CURDIR)/lib/idr.c -o $(O)/lib/idr.o' \
+    'show-kbuild-command:' >"$canonical/Makefile"
+  printf '\t%s\n' '@printf "%s\n" "$(cmd_owner)"' >>"$canonical/Makefile"
+  ln -s "$canonical" "$alias_dir"
+  cp -a "$canonical" "$copied"
+  [[ -L "$alias_dir" && "$(realpath "$alias_dir")" == "$canonical" ]]
+  reference_cmd=$(make -s -C "$canonical" O="$out_test" show-kbuild-command)
+  alias_cmd=$(make -s -C "$alias_dir" O="$out_test" show-kbuild-command)
+  copied_cmd=$(make -s -C "$copied" O="$out_test" show-kbuild-command)
+  [[ "$reference_cmd" == "$alias_cmd" && "$reference_cmd" != "$copied_cmd" ]] || {
+    echo 'COHORT_GNU_SOURCE_ALIAS_SELFTEST=FAIL Kbuild_command_path_drift' >&2; exit 1;
+  }
+  echo 'COHORT_GNU_SOURCE_ALIAS_SELFTEST=PASS golden_and_alias_command_equal=true copy_command_differs=true'
+  exit 0
+fi
 if (( $# != 6 )); then
   echo "usage: $0 <src> <out> <minic> <gold-provenance> <objects-file> <evidence-dir>" >&2
   exit 64
@@ -126,6 +199,36 @@ restore_gcc() {
 }
 trap restore_gcc EXIT
 echo "COHORT_GOLDEN=PASS objects=$n"
+# The former exact-head GNU preflight itself recompiled 2069 unchanged GNU C
+# objects, then restored the SAME dirty cached tree. Every later trial,
+# including a zero-MiniC trial, consequently exceeded the existing 64-CC
+# fail-fast bound. Repair only cache mtimes before taking the golden snapshot;
+# all original C SHA identities have already been proven above.
+if [[ "${COHORT_GNU_PREFLIGHT_ALLOW_SEVEN_SHARD_VOLATILE:-0}" == 1 ||
+      "${COHORT_GNU_PREFLIGHT_ALLOW_SEVEN_RECEIVER_VOLATILE:-0}" == 1 ]]; then
+  mtime_qualified=0
+  if [[ "${COHORT_ACTION:-all}" == compile && "$cohort_scope" == SHARD_COMPILE_ONLY &&
+        "${COHORT_ALLOW_SHARD:-0}" == 1 ]] && ((n>=280 && n<=310)); then
+    mtime_qualified=1
+  elif [[ "${COHORT_ACTION:-all}" == verify &&
+          "$cohort_scope" == FULL_C_UNIVERSE ]] && ((n==2064)); then
+    mtime_qualified=1
+  fi
+  [[ "$mtime_qualified" == 1 &&
+     "$actual_cfg" == eeb04f304ebfb97a1079c187dc0c2ea3cc61fc50a55aa3cc776237c16ab19bbe &&
+     "$src" == "$repo/build/linux-expanded-kbuild-v0/linux-6.6.143" &&
+     "$out" == "$repo/build/linux-runtime-gcc/out" ]] || {
+    echo 'COHORT_GNU_MTIME_REBASE=FAIL unqualified_Kbuild_fixture' >&2; exit 6;
+  }
+  config_before=$(sha256sum "$out/.config" | cut -d' ' -f1)
+  image_before=$(sha256sum "$out/arch/riscv/boot/Image" | cut -d' ' -f1)
+  rebase_seven_kbuild_fixture_mtimes "$src" "$out"
+  [[ "$(sha256sum "$out/.config" | cut -d' ' -f1)" == "$config_before" &&
+     "$(sha256sum "$out/arch/riscv/boot/Image" | cut -d' ' -f1)" == "$image_before" ]] || {
+    echo 'COHORT_GNU_MTIME_REBASE=FAIL immutable_bytes_changed' >&2; exit 6;
+  }
+  echo "COHORT_GNU_MTIME_REBASE=PASS source_older=true output_newer=true C_owners=$n original_GNU_SHA_unchanged=true"
+fi
 # Preserve a COMPLETE immutable GCC output tree, not only the selected .o
 # files. Linux Kbuild mutates generated headers, vDSO offsets, .cmd metadata,
 # built-in archives and kallsyms during intermediate target builds. Restoring
@@ -154,12 +257,86 @@ echo "COHORT_GOLDEN_SNAPSHOT=PASS bytes=$(du -sb "$gold_snapshot" | cut -f1)"
 # the fixture into the current runner can make its own GCC Image without
 # recompiling any certified reference object.
 echo "COHORT_GNU_PREFLIGHT=START"
-make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
-  -j4 Image >"$ev/gcc-preflight.log" 2>&1 || {
-    echo "COHORT_GNU_PREFLIGHT=FAIL stage=kbuild"
-    tail -n 80 "$ev/gcc-preflight.log"
-    exit 5
-  }
+if [[ "${COHORT_GNU_PREFLIGHT_ALLOW_SEVEN_SHARD_VOLATILE:-0}" == 1 ||
+      "${COHORT_GNU_PREFLIGHT_ALLOW_SEVEN_RECEIVER_VOLATILE:-0}" == 1 ]]; then
+  # SHA-identical GNU C objects may still hide a whole-kernel rebuild.
+  # Enforce the SAME <=64 CC invariant at preflight as at candidate link,
+  # aborting a dirty Kbuild graph before wasting another full compile.
+  setsid make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
+    -j4 Image >"$ev/gcc-preflight.log" 2>&1 &
+  preflight_pid=$!
+  preflight_full_cc=0
+  while kill -0 "$preflight_pid" 2>/dev/null; do
+    preflight_cc_lines=$(grep -Ec '^  CC[[:space:]]+' "$ev/gcc-preflight.log" || true)
+    if ((preflight_cc_lines>64)); then
+      echo "COHORT_GNU_PREFLIGHT_FAST_FAIL=UNEXPECTED_CC count=$preflight_cc_lines bound=64" >&2
+      kill -TERM -- "-$preflight_pid" 2>/dev/null || true
+      wait "$preflight_pid" 2>/dev/null || true
+      preflight_full_cc=1
+      break
+    fi
+    sleep 2
+  done
+  preflight_rc=0
+  if ((preflight_full_cc)); then
+    preflight_rc=96
+  else
+    wait "$preflight_pid" || preflight_rc=$?
+  fi
+  # A fast or already exited make may finish before the first 2s poll.
+  # Recount the COMPLETE log after wait so this fail-closed bound cannot
+  # incorrectly accept a deterministic but whole-kernel GCC recompile.
+  preflight_cc_final=$(grep -Ec '^  CC[[:space:]]+' "$ev/gcc-preflight.log" || true)
+  if ((preflight_cc_final>64)); then
+    if (( ! preflight_full_cc )); then
+      echo "COHORT_GNU_PREFLIGHT_FAST_FAIL=UNEXPECTED_CC_FINAL count=$preflight_cc_final bound=64" >&2
+    fi
+    preflight_rc=96
+  fi
+else
+  preflight_rc=0
+  make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
+    -j4 Image >"$ev/gcc-preflight.log" 2>&1 || preflight_rc=$?
+fi
+if ((preflight_rc!=0)); then
+  echo "COHORT_GNU_PREFLIGHT=FAIL stage=kbuild rc=$preflight_rc"
+  tail -n 80 "$ev/gcc-preflight.log"
+  exit 5
+fi
+# Kernel Kbuild regenerates usr/initramfs_data.o from its generated .S
+# incbin/cpio payload when a cached golden build is replayed on another
+# runner.  This is NOT an original C owner and does not participate in the
+# 2064-C MiniC compilation.  When (and ONLY when) the pinned seven-shard
+# producer/receiver sees a different payload-object SHA, prove that fact from
+# the original `.cmd` and C-owner manifest before allowing this one volatile
+# *non-C* reference. The complete SHA-certified GNU object tree, including
+# this object, is restored immediately after the preflight below.
+generated_initramfs_volatile=0
+if [[ "${COHORT_GNU_PREFLIGHT_ALLOW_SEVEN_SHARD_VOLATILE:-0}" == 1 ||
+      "${COHORT_GNU_PREFLIGHT_ALLOW_SEVEN_RECEIVER_VOLATILE:-0}" == 1 ]]; then
+  initramfs_object=usr/initramfs_data.o
+  initramfs_golden=$(awk '$2=="usr/initramfs_data.o" {print $1;exit}' "$prov/gcc-objects.sha256")
+  test -n "$initramfs_golden" && test -s "$out/$initramfs_object"
+  initramfs_current=$(sha256sum "$out/$initramfs_object" | cut -d' ' -f1)
+  if [[ "$initramfs_golden" != "$initramfs_current" ]]; then
+    test -s "$prov/original-c-owners.txt" &&
+      test "$(grep -Ec '^[^#[:space:]]+\.o$' "$prov/original-c-owners.txt")" = 2064 || {
+        echo 'COHORT_GNU_PREFLIGHT=FAIL original_2064_C_owner_manifest_unavailable' >&2; exit 6;
+      }
+    test -s "$out/usr/.initramfs_data.o.cmd" || {
+      echo 'COHORT_GNU_PREFLIGHT=FAIL missing_generated_initramfs_cmd' >&2; exit 6;
+    }
+    grep -Fq 'usr/initramfs_data.S' "$out/usr/.initramfs_data.o.cmd" || {
+      echo 'COHORT_GNU_PREFLIGHT=FAIL generated_initramfs_not_assembly' >&2; exit 6;
+    }
+    if grep -Fxq "$initramfs_object" "$prov/original-c-owners.txt"; then
+      echo 'COHORT_GNU_PREFLIGHT=FAIL generated_initramfs_is_C_owner' >&2; exit 6;
+    fi
+    generated_initramfs_volatile=1
+    printf 'COHORT_GNU_GENERATED_INITRAMFS=VERIFIED_NON_C original=%s replay=%s restored_from_golden=true\n' \
+      "$initramfs_golden" "$initramfs_current"
+  fi
+fi
 # During exact MiniPP cache replay Kbuild may regenerate init/version.o and
 # the dependent vmlinux.o from build timestamps. The pristine GNU tree was
 # SHA-attested and snapshotted above; every other reference object must remain
@@ -204,9 +381,9 @@ elif [[ "${COHORT_GNU_PREFLIGHT_ALLOW_SEVEN_SHARD_VOLATILE:-0}" == 1 ]]; then
     echo 'COHORT_GNU_PREFLIGHT=FAIL invalid_seven_shard_volatile_scope' >&2
     exit 6
   }
-  awk '$2 != "init/version-timestamp.o" && $2 != "init/version.o" && $2 != "vmlinux.o" {print}' \
+  awk -v allow="$generated_initramfs_volatile" '$2 != "init/version-timestamp.o" && $2 != "init/version.o" && $2 != "vmlinux.o" && !(allow == 1 && $2 == "usr/initramfs_data.o") {print}' \
     "$prov/gcc-objects.sha256" >"$ev/gcc-objects-stable.sha256"
-  echo 'COHORT_GNU_PREFLIGHT_VOLATILE=EXACT_SEVEN_SHARD only_init_version_and_vmlinux_excluded=true full_snapshot_restored=true'
+  echo "COHORT_GNU_PREFLIGHT_VOLATILE=EXACT_SEVEN_SHARD version_and_vmlinux_excluded=true verified_generated_initramfs_exception=$generated_initramfs_volatile full_snapshot_restored=true"
 elif [[ "${COHORT_GNU_PREFLIGHT_ALLOW_SEVEN_RECEIVER_VOLATILE:-0}" == 1 ]]; then
   # The seven per-shard producer objects and complete GNU pool are each
   # SHA-attested BEFORE this existing Kbuild sanity re-run. Kbuild modifies
@@ -224,9 +401,9 @@ elif [[ "${COHORT_GNU_PREFLIGHT_ALLOW_SEVEN_RECEIVER_VOLATILE:-0}" == 1 ]]; then
     echo 'COHORT_GNU_PREFLIGHT=FAIL invalid_seven_receiver_volatile_scope' >&2
     exit 6
   }
-  awk '$2 != "init/version-timestamp.o" && $2 != "init/version.o" && $2 != "vmlinux.o" {print}' \
+  awk -v allow="$generated_initramfs_volatile" '$2 != "init/version-timestamp.o" && $2 != "init/version.o" && $2 != "vmlinux.o" && !(allow == 1 && $2 == "usr/initramfs_data.o") {print}' \
     "$prov/gcc-objects.sha256" >"$ev/gcc-objects-stable.sha256"
-  echo 'COHORT_GNU_PREFLIGHT_VOLATILE=EXACT_SEVEN_RECEIVER only_version_and_vmlinux=true full_GNU_snapshot_restored=true'
+  echo "COHORT_GNU_PREFLIGHT_VOLATILE=EXACT_SEVEN_RECEIVER version_and_vmlinux_excluded=true verified_generated_initramfs_exception=$generated_initramfs_volatile full_GNU_snapshot_restored=true"
 elif [[ "${COHORT_GNU_PREFLIGHT_ALLOW_PINNED_VOLATILE:-0}" == 1 ]]; then
   [[ "${COHORT_ACTION:-all}" == verify && "${COHORT_NATIVE_UNION:-0}" == 1 && "$n" == 2064 ]] || {
     echo 'COHORT_GNU_PREFLIGHT=FAIL invalid_volatile_replay_scope' >&2
@@ -1735,6 +1912,70 @@ if [[ "${COHORT_MINIPP_DYNAMIC_HEADERS:-0}" == 1 ]]; then
   test -x "$COHORT_MINIPP_HEADER_CPP" && test -x "$COHORT_MINIAS_HEADER_AS"
   echo 'MINIPP_DYNAMIC_HEADER=ENABLED affected_only=4 stable_native_C=2060 GNU_predefines_reference_only=true'
 fi
+# A strict RV64I C compiler is permitted to call the documented LP64 GNU
+# software-arithmetic ABI. The original Linux freestanding Kbuild link has
+# no implicit libgcc, so reuse the project's already pinned I-only runtime
+# archive (the same accepted pattern as RV32I's full original Linux link).
+# The external providers do NOT replace any of the 2064 Linux MiniC C owners.
+# Purgatory links independently: adding only to vmlinux's library group does
+# not satisfy purgatory.ro's separate -r/-z nodefaultlib symbol closure.
+rv64_softarith_kbuild_args=()
+if [[ "${COHORT_ACTION:-all}" == verify && "$cohort_scope" == FULL_C_UNIVERSE &&
+      "$n" == 2064 &&
+      ( "${MINIC_CURRENT_MAIN_SEVEN_RECHECK:-0}" == 1 ||
+        "${MINIC_KBUILD_RV64I_ORIGIN_AUDIT:-0}" == 1 ) ]]; then
+  softarith="$ev/rv64i-softarith"
+  bash "$repo/tests/compiler/c0/build-rv64-gcc-runtime.sh" "$softarith" \
+      >"$ev/rv64i-softarith-build.log" 2>&1 || {
+    echo 'RV64I_SOFTARITH=FAIL upstream_archive_build' >&2
+    tail -n 80 "$ev/rv64i-softarith-build.log" >&2
+    exit 8
+  }
+  rv64_runtime="$softarith/build/runtime/riscv64/rv64i-lp64"
+  rv64_archive="$rv64_runtime/libminic-rt.a"
+  rv64_efi_archive="$softarith/rv64i-efistub-runtime.a"
+  rv64_pi_archive="$softarith/rv64i-pi-runtime.a"
+  test -s "$rv64_archive"
+  test -s "$rv64_efi_archive"
+  test -s "$rv64_pi_archive"
+  rv64_defined_symbols=$(riscv64-linux-gnu-nm -g --defined-only "$rv64_archive" | awk '{print $NF}')
+  for provider in __muldi3 __udivdi3 __umoddi3 __divdi3 __moddi3 __multi3; do
+    grep -Fxq "$provider" <<<"$rv64_defined_symbols" || {
+      echo "RV64I_SOFTARITH=FAIL missing=$provider" >&2
+      exit 8
+    }
+  done
+  # Two pinned GNU libgcc .S primitives plus compiler-rt __multi3 provide
+  # purgatory's transitive arithmetic dependency without touching any of its
+  # original source/object files. GNU Make appends actual file prerequisites
+  # to the existing Kbuild real-prereqs, not a new linker command.
+  rv64_softarith_kbuild_args=(
+    "--eval=arch/riscv/purgatory/purgatory.ro: $rv64_runtime/muldi3.o $rv64_runtime/div.o $rv64_runtime/softfp/multi3.o"
+    # Original Linux's EFI stub and arch/riscv/kernel/pi objcopy their
+    # objects into distinct early-code symbol/section namespaces. Pull their
+    # identical RV64I-only providers via the same native GNU linker group.
+    "--eval=vmlinux: KBUILD_VMLINUX_LIBS += $rv64_archive $rv64_efi_archive $rv64_pi_archive"
+    # GNU Make parses --eval rules before Kbuild's own Makefile. Without
+    # resetting the default goal, recursive Kbuild makes with no explicit
+    # target silently select purgatory.ro instead of their original `all`,
+    # reusing the golden Image despite the 2064 overlaid MiniC .o files.
+    "--eval=.DEFAULT_GOAL :="
+  )
+  {
+    printf '%s\n' 'profile=RV64I/LP64' 'linux_original_C_owners=2064' \
+      'libgcc_source=GNU_14.2.0' 'compiler_rt_source=LLVM_19.1.7' \
+      'purgatory_prerequisites=muldi3.o,div.o,multi3.o' \
+      'kbuild_archive_seam=vmlinux:KBUILD_VMLINUX_LIBS' \
+      'early_namespaces=efi_stub:init,pi:init.pi'
+    sha256sum "$rv64_archive" "$rv64_efi_archive" "$rv64_pi_archive" \
+      "$rv64_runtime/muldi3.o" \
+      "$rv64_runtime/div.o" "$rv64_runtime/softfp/multi3.o" \
+      "$repo/third_party/gcc-riscv-14.2.0/muldi3.S" \
+      "$repo/third_party/gcc-riscv-14.2.0/div.S" \
+      "$repo/third_party/llvm-compiler-rt-19.1.7/multi3.c"
+  } >"$softarith/abi-isa-provenance.txt"
+  echo "RV64I_SOFTARITH=PASS upstream=GNU_libgcc_14.2.0,LLVM_compiler_rt_19.1.7 isa=rv64i abi=lp64 providers=6 archive_sha256=$(sha256sum "$rv64_archive" | cut -d' ' -f1) purgatory_owners=3 original_MiniC_C=$n"
+fi
 trial() {
   name="$1"; count="$2"; profile="$3"; mode="${4:-prefix}"
   # Experimental overlays never modify the authenticated 2064-object pool.
@@ -1845,7 +2086,7 @@ trial() {
     # Kbuild unexpectedly recompiles >64 C TUs, NOT after a whole kernel.
     # setsid groups all make children so cancellation terminates compilation.
     setsid make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
-      "${native_kbuild_args[@]}" \
+      "${native_kbuild_args[@]}" "${rv64_softarith_kbuild_args[@]}" \
       -j4 Image >"$d/link.log" 2>&1 &
     link_pid=$!
     link_full_recompile=0
@@ -1872,6 +2113,36 @@ trial() {
       printf '%s\t%s\t%s\t%s\n' "$name" "$count" LINK_FAIL - >>"$ev/results.tsv"
       TRIAL_VERDICT=LINK_FAIL
       return 0
+    fi
+    if [[ -n "${rv64_archive:-}" ]]; then
+      for linked in arch/riscv/purgatory/purgatory.ro \
+                    arch/riscv/purgatory/purgatory.chk \
+                    vmlinux arch/riscv/boot/Image; do
+        if [[ ! -s "$out/$linked" ]]; then
+          echo "RV64I_SOFTARITH_KBUILD=FAIL absent_link_output=$linked" | tee -a "$d/link.log"
+          TRIAL_VERDICT=LINK_FAIL
+          return 0
+        fi
+      done
+      # Existing files alone do NOT certify a native link: the golden output
+      # snapshot already contains all four. Require the real GNU Kbuild
+      # archiver, linker and Image objcopy in this trial's fresh command log.
+      for native_step in 'AR[[:space:]]+vmlinux\.a' \
+                         'LD[[:space:]]+.*vmlinux' \
+                         'OBJCOPY[[:space:]]+arch/riscv/boot/Image'; do
+        if ! grep -Eq "^[[:space:]]+$native_step([[:space:]]|$)" "$d/link.log"; then
+          echo "RV64I_SOFTARITH_KBUILD=FAIL no_native_step=$native_step" | tee -a "$d/link.log"
+          TRIAL_VERDICT=LINK_FAIL
+          return 0
+        fi
+      done
+      trial_image_sha=$(sha256sum "$out/arch/riscv/boot/Image" | cut -d' ' -f1)
+      if [[ "$trial_image_sha" == "$gnu_image_sha" ]]; then
+        echo "RV64I_SOFTARITH_KBUILD=FAIL image_unchanged_from_gnu_golden sha=$trial_image_sha" | tee -a "$d/link.log"
+        TRIAL_VERDICT=LINK_FAIL
+        return 0
+      fi
+      echo "RV64I_SOFTARITH_KBUILD=PASS trial=$name native_ar=observed native_ld=observed native_objcopy=observed image_sha=$trial_image_sha purgatory_ro=present purgatory_chk=present original_MiniC_C=$n" | tee -a "$d/link.log"
     fi
     link_finished=$(date +%s%N)
     echo "COHORT_TIMING trial=$name stage=gnu_first_link elapsed_ms=$(((link_finished-link_started)/1000000))" 
@@ -2002,7 +2273,7 @@ PY_RISCV_DYNAMIC
       printf 'timing_%s_header_reconcile_ms=%s\n' "$name" "$(((regen_finished-regen_started)/1000000))" >>"$ev/identity.txt"
       second_started=$(date +%s%N)
       if ! make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
-      "${native_kbuild_args[@]}" \
+      "${native_kbuild_args[@]}" "${rv64_softarith_kbuild_args[@]}" \
           -j4 Image >"$d/link-reconciled.log" 2>&1; then
         echo "COHORT_LINK=FAIL name=$name stage=gnu_link_after_header_reconcile"
         tail -n 65 "$d/link-reconciled.log"
@@ -2035,7 +2306,7 @@ PY_RISCV_DYNAMIC
       if [[ "$repair_result" == *"COHORT_KBUILD_REPAIR=APPLIED"* ]]; then
         second_started=$(date +%s%N)
         if ! make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
-      "${native_kbuild_args[@]}" \
+      "${native_kbuild_args[@]}" "${rv64_softarith_kbuild_args[@]}" \
           -j4 Image >"$d/link-repaired.log" 2>&1; then
           echo "COHORT_LINK=FAIL name=$name stage=guarded_second_link"
           tail -n 70 "$d/link-repaired.log"
@@ -2055,7 +2326,8 @@ PY_RISCV_DYNAMIC
           >>"$d/guard.log"
         second_started=$(date +%s%N)
         if ! make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
-          "${native_kbuild_args[@]}" -j4 Image >"$d/link-native-S-reconcile.log" 2>&1; then
+          "${native_kbuild_args[@]}" "${rv64_softarith_kbuild_args[@]}" \
+          -j4 Image >"$d/link-native-S-reconcile.log" 2>&1; then
           echo "COHORT_LINK=FAIL name=$name stage=native_s_second_link"
           tail -n 65 "$d/link-native-S-reconcile.log"
           TRIAL_VERDICT=LINK_FAIL
@@ -2180,11 +2452,14 @@ PY_NATIVE_S_VERIFY
   # transform record, and a verified selected C owner as its input. Nothing
   # else in the GCC object universe is allowed to drift.
   python3 - "$out" "$prov/gcc-objects.sha256" "$objects_file" \
-    "$d/selected-objects.txt" "$last_link_source_dir" "$gold_snapshot" <<'PY_GNU_NONSELECTED'
+    "$d/selected-objects.txt" "$last_link_source_dir" "$gold_snapshot" \
+    "${rv64_archive:-}" "${softarith:-}/abi-isa-provenance.txt" <<'PY_GNU_NONSELECTED'
 from pathlib import Path
 import hashlib, os, re, struct, sys
 
-out,manifest,universe,selected,link_dir,golden=map(Path,sys.argv[1:])
+out,manifest,universe,selected,link_dir,golden=map(Path,sys.argv[1:7])
+rv64_archive_name=sys.argv[7]
+rv64_softarith_provenance=Path(sys.argv[8])
 native_union=os.environ.get("COHORT_NATIVE_UNION")=="1"
 native_trace_dir=Path(os.environ.get("NATIVE_TRACE_DIR","/nonexistent-native-traces"))
 native_objcopy_trace=(native_trace_dir/"miniobjcopy.trace").read_text() if (native_union and (native_trace_dir/"miniobjcopy.trace").is_file()) else ""
@@ -2254,11 +2529,34 @@ def derivation(name):
                 "arch/riscv/purgatory/ctype.o",
                 "arch/riscv/purgatory/sha256.o",
                 "arch/riscv/purgatory/string.o"}
-        if (owners <= chosen and
+        if (owners <= all_c and
             emitted("LD","arch/riscv/purgatory/purgatory.ro") and
             emitted("LD","arch/riscv/purgatory/purgatory.chk") and
             emitted("AS",name)):
-            return "purgatory:" + ",".join(sorted(owners))
+            if owners <= chosen:
+                return "purgatory:" + ",".join(sorted(owners))
+            # The pinned RV64I/LP64 library supplies three extra standalone
+            # assembly/runtime objects to purgatory.ro. They legitimately
+            # change the resulting .chk/.incbin/.o even when a prefix trial
+            # retains all four ORIGINAL GNU purgatory C owners. Never treat
+            # that ELF transform as a new C owner or permit other drift.
+            if rv64_archive_name and rv64_softarith_provenance.is_file():
+                archive=Path(rv64_archive_name)
+                required=[archive, archive.parent/'muldi3.o',
+                          archive.parent/'div.o',
+                          archive.parent/'softfp/multi3.o']
+                certified={}
+                for line in rv64_softarith_provenance.read_text().splitlines():
+                    pieces=line.split(maxsplit=1)
+                    if len(pieces)==2 and re.fullmatch(r'[0-9a-f]{64}',pieces[0]):
+                        certified[pieces[1]]=pieces[0]
+                auth=all(p.is_file() and
+                         certified.get(str(p))==hashlib.sha256(p.read_bytes()).hexdigest()
+                         for p in required)
+                marker=re.search(r'(?m)^RV64I_SOFTARITH_KBUILD=PASS trial='
+                                 +re.escape(link_dir.name)+r'\s', linked)
+                if auth and marker:
+                    return 'purgatory:rv64i-lp64-pinned-softarith-3-objects'
     if name=="arch/riscv/kernel/compat_vdso/compat_vdso.o" and native_union:
         # Unlike the regular vDSO's MiniC-selected C owners, compat-vDSO is
         # assembled from a 32-bit DSO after a native MiniObjcopy rewrite.
@@ -2483,76 +2781,9 @@ PY_LARGEST_TUS
       # SAME-TRIAL vmlinux symbols (not guessed GCC offsets). The 2064
       # object cache remains byte-identical throughout this diagnostic.
       if [[ -s "$d/qemu-registers.jsonl" && -s "$out/vmlinux" ]]; then
-        python3 - "$d/qemu-registers.jsonl" "$out/vmlinux" <<'PY_EARLY_SYMBOLS' | tee "$d/qmp-symbols.log"
-import bisect,json,subprocess,sys
-from pathlib import Path
-samples=Path(sys.argv[1])
-vmlinux=Path(sys.argv[2])
-nm=subprocess.run(["/usr/bin/riscv64-linux-gnu-nm","-n","--defined-only",str(vmlinux)],
-                  text=True,capture_output=True,check=False)
-if nm.returncode:
-    print(f"COHORT_QMP_SYMBOL=INCONCLUSIVE nm_rc={nm.returncode}")
-    raise SystemExit(0)
-pairs=[]
-for line in nm.stdout.splitlines():
-    fields=line.split(None,2)
-    if len(fields)==3 and fields[1] in {"t","T","w","W"}:
-        try:
-            pairs.append((int(fields[0],16),fields[2]))
-        except ValueError:
-            continue
-pairs.sort()
-addresses=[x[0] for x in pairs]
-layout={}
-for line in nm.stdout.splitlines():
-    cols=line.split(None,2)
-    if len(cols)==3 and cols[2] in ("__earlycon_table","__earlycon_table_end"):
-        try:
-            layout[cols[2]]=int(cols[0],16)
-        except ValueError:
-            pass
-if len(layout)==2:
-    span=layout["__earlycon_table_end"]-layout["__earlycon_table"]
-    print("COHORT_EARLYCON_TABLE_LAYOUT begin=0x%x end=0x%x span_bytes=%d "
-          "struct_earlycon_id_size_expected=152 remainder=%d" %
-          (layout["__earlycon_table"],layout["__earlycon_table_end"],
-           span,span%152))
-else:
-    print("COHORT_EARLYCON_TABLE_LAYOUT=INCOMPLETE names="+",".join(sorted(layout)))
-last_pcs=[]
-pc_symbols=[]
-for line in samples.read_text().splitlines():
-    sample=json.loads(line)
-    at=sample["at_seconds"]
-    regs=sample.get("registers",{})
-    for register in ("pc","mepc","sepc"):
-        raw=regs.get(register)
-        if not raw or not addresses:
-            continue
-        try:
-            addr=int(raw,16)
-        except ValueError:
-            continue
-        if register=="pc":
-            last_pcs.append(addr)
-        pos=bisect.bisect_right(addresses,addr)-1
-        if pos<0:
-            print(f"COHORT_QMP_SYMBOL at_s={at} reg={register} addr=0x{addr:x} symbol=BELOW_LINKED_TEXT")
-        else:
-            base,symbol=pairs[pos]
-            if register == "pc":
-                pc_symbols.append((at, symbol))
-            print(f"COHORT_QMP_SYMBOL at_s={at} reg={register} addr=0x{addr:x} "
-                  f"symbol={symbol} offset=0x{addr-base:x}")
-if len(last_pcs)>=2 and last_pcs[-1]==last_pcs[-2]:
-    print(f"COHORT_QMP_STABLE_PC=OBSERVED samples={len(last_pcs)} addr=0x{last_pcs[-1]:x}")
-from collections import Counter
-frequency = Counter(s for _,s in pc_symbols)
-print(f"COHORT_QMP_PC_DIVERSITY samples={len(last_pcs)} unique_pcs={len(set(last_pcs))} "
-      f"unique_functions={len(frequency)} last_symbol={pc_symbols[-1][1] if pc_symbols else 'UNAVAILABLE'}")
-for symbol,count in frequency.most_common(12):
-    print(f"COHORT_QMP_HOTSPOT samples={count} symbol={symbol}")
-PY_EARLY_SYMBOLS
+        python3 "$repo/tools/ci/linux-runtime-qmp-symbolize-v1.py" \
+          --samples "$d/qemu-registers.jsonl" --vmlinux "$out/vmlinux" \
+          | tee "$d/qmp-symbols.log"
         cat "$d/qmp-symbols.log" >>"$d/runtime.log"
       fi
       early_finished=$(date +%s%N)
@@ -2561,7 +2792,7 @@ PY_EARLY_SYMBOLS
       if grep -Eq 'Linux version 6\.6\.143|Kernel panic|Oops:|Unable to handle|BUG:' "$d/qemu-early-noinitrd.log"; then
         echo "COHORT_KERNEL_EARLY_FRONTIER=LINUX_SERIAL_BANNER trial=$name"
       elif [[ -s "$d/qmp-symbols.log" ]] && \
-           grep -Eq 'COHORT_QMP_SYMBOL at_s=[0-9]+ reg=pc .* symbol=' "$d/qmp-symbols.log"; then
+           grep -Eq 'COHORT_QMP_SYMBOL at_s=[0-9]+ reg=pc .* symbol=.+ offset=0x' "$d/qmp-symbols.log"; then
         # OpenSBI may be the only SERIAL output, while QMP proves the guest
         # PC has already reached a concrete linked Linux kernel function.
         echo "COHORT_KERNEL_EARLY_FRONTIER=LINUX_EXECUTING_PRE_BANNER trial=$name"
@@ -2610,6 +2841,125 @@ PY_EARLY_SYMBOLS
       cat "$d/qemu-early-noinitrd.log" >>"$d/runtime.log"
       verdict=INCONCLUSIVE
     fi
+    # FULL_2064_MAPPED_QMP_FRONTIER: a correctly linked oversized Image may
+    # pass the non-overlapping 2G/DTB/initrd loader yet emit only OpenSBI for
+    # the whole 45s fast-P0 window. Probe the *unchanged* Image again with
+    # precisely the same memory, custom DTB, initrd loader and kernel cmdline
+    # as runtime_boot.sh. A QMP register snapshot is evidence, never a P0/P1
+    # oracle: retain INCONCLUSIVE whatever the diagnostic reports.
+    if [[ "$name" == full_all && "$profile" == fast &&
+          "$verdict" == INCONCLUSIVE && "$large_full_image" == true &&
+          -s "$d/qemu/rdinit-init.log" &&
+          -n "${LINUX_RUNTIME_CUSTOM_DTB:-}" &&
+          -n "${LINUX_RUNTIME_INITRD_LOAD_ADDR:-}" &&
+          "${LINUX_RUNTIME_QEMU_MEMORY:-}" == 2G ]] &&
+       grep -Fq 'OpenSBI' "$d/qemu/rdinit-init.log" &&
+       ! grep -Eq 'Linux version 6\.6\.143|Kernel panic|Oops:|Unable to handle|BUG:' \
+         "$d/qemu/rdinit-init.log"; then
+      mapped_started=$(date +%s%N)
+      mapped_rc=0
+      if python3 "$repo/tools/ci/linux-runtime-qmp-pc-sampler-v1.py" --self-test &&
+         python3 "$repo/tools/ci/linux-runtime-qmp-symbolize-v1.py" --self-test; then
+        python3 "$repo/tools/ci/linux-runtime-qmp-pc-sampler-v1.py" \
+          --image "$d/Image" --expected-image-sha256 "$image_sha" \
+          --output-dir "$d" --memory 2G \
+          --dtb "$LINUX_RUNTIME_CUSTOM_DTB" \
+          --initramfs "$ev/runtime-initramfs.cpio.gz" \
+          --initrd-load-addr "$LINUX_RUNTIME_INITRD_LOAD_ADDR" \
+          --kernel-cmdline 'console=ttyS0 earlycon=sbi loglevel=8 panic=-1 rdinit=/init' \
+          --timeout-seconds 40 --sample-seconds 1,4,8,12,20,30 \
+          --stop-during-snapshot \
+          >"$d/qmp-probe.log" 2>&1 || mapped_rc=$?
+        cat "$d/qmp-probe.log" >>"$d/runtime.log"
+        grep -E 'COHORT_QMP_(LOADER|IMAGE_IDENTITY|EARLY|PAUSED_SNAPSHOT)' \
+          "$d/qmp-probe.log" || true
+        if [[ -s "$d/qemu-registers.jsonl" && -s "$out/vmlinux" ]]; then
+          python3 "$repo/tools/ci/linux-runtime-qmp-symbolize-v1.py" \
+            --samples "$d/qemu-registers.jsonl" --vmlinux "$out/vmlinux" \
+            | tee "$d/qmp-symbols.log"
+          cat "$d/qmp-symbols.log" >>"$d/runtime.log"
+          # The sampler observes physical PCs before satp is enabled, while
+          # vmlinux/nm names linked virtual addresses. Save one bounded,
+          # immutable same-trial GNU symbol map and disassembly around sepc
+          # and ra. A failed mapping is diagnostic-only, never P0/P1 evidence.
+          if python3 "$repo/tools/ci/linux-runtime-qmp-physical-symbols-v1.py" \
+               --self-test; then
+            python3 "$repo/tools/ci/linux-runtime-qmp-physical-symbols-v1.py" \
+              --samples "$d/qemu-registers.jsonl" \
+              --vmlinux "$out/vmlinux" --image "$d/Image" \
+              --output-dir "$d" \
+              >"$d/qmp-physical-symbols.log" 2>&1 || true
+            cat "$d/qmp-physical-symbols.log" >>"$d/runtime.log"
+            grep -E 'COHORT_QMP_(LOAD_BIAS|PHYSICAL_SYMBOL|SIGN_EXTENDED_ADDR_CANDIDATE|DISASM|NM_ARCHIVE)' \
+              "$d/qmp-physical-symbols.log" || true
+          else
+            echo 'COHORT_QMP_PHYSICAL_SYMBOLS=UNAVAILABLE reason=selftest_failed' \
+              | tee "$d/qmp-physical-symbols.log" | tee -a "$d/runtime.log"
+          fi
+        fi
+      else
+        mapped_rc=99
+        echo "COHORT_QMP_MAPPED=UNAVAILABLE reason=selftest_failed" | tee -a "$d/runtime.log"
+      fi
+      mapped_finished=$(date +%s%N)
+      image_sha_after=$(sha256sum "$d/Image" | cut -d' ' -f1)
+      if [[ "$image_sha_after" == "$image_sha" ]]; then
+        echo "COHORT_QMP_MAPPED_IMAGE=UNCHANGED image_sha=$image_sha_after"
+      else
+        echo "COHORT_QMP_MAPPED_IMAGE=ERROR image_sha_before=$image_sha image_sha_after=$image_sha_after"
+      fi
+      echo "COHORT_TIMING trial=$name stage=qemu_mapped_qmp elapsed_ms=$(((mapped_finished-mapped_started)/1000000)) rc=$mapped_rc"
+      echo "COHORT_QMP_MAPPED=DIAGNOSTIC_ONLY trial=$name original_p0=INCONCLUSIVE p1=NOT_RUN"
+    fi
+    # The normal (<128 MiB) Image uses the historical 512M/-initrd loader,
+    # NOT the mapped 2G/DTB path.  On an OpenSBI-only P0 timeout, capture
+    # registers using that exact original argv (plus the read-only QMP socket)
+    # so prefix-bisection trials can distinguish a kernel PC stall from a
+    # silent console.  Never reinterpret the original runtime verdict.
+    if [[ "$profile" == fast && "$verdict" == INCONCLUSIVE &&
+          "$large_full_image" == false &&
+          "${LINUX_RUNTIME_QEMU_MEMORY:-512M}" == 512M &&
+          -z "${LINUX_RUNTIME_CUSTOM_DTB:-}" &&
+          -z "${LINUX_RUNTIME_INITRD_LOAD_ADDR:-}" &&
+          -s "$d/qemu/rdinit-init.log" ]] &&
+       grep -Fq 'OpenSBI' "$d/qemu/rdinit-init.log" &&
+       ! grep -Eq 'Linux version 6\.6\.143|Kernel panic|Oops:|Unable to handle|BUG:' \
+         "$d/qemu/rdinit-init.log"; then
+      default_started=$(date +%s%N)
+      default_rc=0
+      if python3 "$repo/tools/ci/linux-runtime-qmp-pc-sampler-v1.py" --self-test &&
+         python3 "$repo/tools/ci/linux-runtime-qmp-symbolize-v1.py" --self-test; then
+        python3 "$repo/tools/ci/linux-runtime-qmp-pc-sampler-v1.py" \
+          --image "$d/Image" --expected-image-sha256 "$image_sha" \
+          --output-dir "$d" --memory 512M \
+          --default-initrd "$ev/runtime-initramfs.cpio.gz" \
+          --kernel-cmdline 'console=ttyS0 earlycon=sbi loglevel=8 panic=-1 rdinit=/init' \
+          --timeout-seconds 20 --sample-seconds 1,4,8,12 \
+          --stop-during-snapshot \
+          >"$d/qmp-probe.log" 2>&1 || default_rc=$?
+        cat "$d/qmp-probe.log" >>"$d/runtime.log"
+        grep -E 'COHORT_QMP_(LOADER|IMAGE_IDENTITY|EARLY|PAUSED_SNAPSHOT)' \
+          "$d/qmp-probe.log" || true
+        if [[ -s "$d/qemu-registers.jsonl" && -s "$out/vmlinux" ]]; then
+          python3 "$repo/tools/ci/linux-runtime-qmp-symbolize-v1.py" \
+            --samples "$d/qemu-registers.jsonl" --vmlinux "$out/vmlinux" \
+            | tee "$d/qmp-symbols.log"
+          cat "$d/qmp-symbols.log" >>"$d/runtime.log"
+        fi
+      else
+        default_rc=99
+        echo "COHORT_QMP_DEFAULT=UNAVAILABLE reason=selftest_failed" | tee -a "$d/runtime.log"
+      fi
+      default_finished=$(date +%s%N)
+      image_sha_after=$(sha256sum "$d/Image" | cut -d' ' -f1)
+      if [[ "$image_sha_after" == "$image_sha" ]]; then
+        echo "COHORT_QMP_DEFAULT_IMAGE=UNCHANGED image_sha=$image_sha_after"
+      else
+        echo "COHORT_QMP_DEFAULT_IMAGE=ERROR image_sha_before=$image_sha image_sha_after=$image_sha_after"
+      fi
+      echo "COHORT_TIMING trial=$name stage=qemu_default_qmp elapsed_ms=$(((default_finished-default_started)/1000000)) rc=$default_rc"
+      echo "COHORT_QMP_DEFAULT=DIAGNOSTIC_ONLY trial=$name original_p0=INCONCLUSIVE p1=NOT_RUN"
+    fi
     # Reuse the existing Python-era 12-syscall P1 oracle after FULL PASS.
     # It boots the identical Image and initramfs, without a third link.
     if [[ "$profile" == full && "$verdict" == PASS ]]; then
@@ -2653,6 +3003,48 @@ PY_EARLY_SYMBOLS
       elif grep -REqi 'Linux version 6\.6\.143|Kernel panic|Oops:|Unable to handle|BUG:' "$d/qemu-p1" 2>/dev/null; then
         echo "COHORT_P1=FAIL name=$name rc=$p1_rc"
         verdict=FAIL
+        if [[ "${COHORT_P1_EXACT_FAILED_GDB:-0}" == 1 && "$name" == full_all_verified &&
+              "$cohort_scope" == FULL_C_UNIVERSE && "$n" == 2064 ]]; then
+          # The old PR run's artifact contains Image but no vmlinux. Capture
+          # both only while this SAME Kbuild output directory still exists;
+          # restoring an unrelated GNU golden vmlinux is never acceptable.
+          gdb_dir="$ev/p1-gdb-stack"
+          mkdir -p "$gdb_dir"
+          if [[ -s "$out/vmlinux" && -s "$out/arch/riscv/boot/Image" &&
+                -s "${LINUX_RUNTIME_CUSTOM_DTB:-}" &&
+                -s "$ev/runtime-initramfs.cpio.gz" ]] &&
+             cmp -s "$d/Image" "$out/arch/riscv/boot/Image" &&
+             [[ "$(sha256sum "$d/Image" | cut -d' ' -f1)" == "$image_sha" ]]; then
+            {
+              printf 'trial=%s\nimage_sha256=%s\n' "$name" "$image_sha"
+              printf 'image_and_kbuild_output=byte_identical\n'
+              printf 'vmlinux=matching_current_trial_kbuild_output\n'
+              printf 'P1_verdict=FAIL\nGDB_verdict=diagnostic_only\n'
+              sha256sum "$d/Image" "$out/vmlinux" "${LINUX_RUNTIME_CUSTOM_DTB}"
+            } >"$gdb_dir/exact-input-identity.txt"
+            echo "COHORT_P1_EXACT_GDB=START trial=$name image_sha=$image_sha no_new_link=true no_C_compilation=true"
+            P1_GDB_MINIMAL_FAULT_ONLY=1 \
+              bash "$repo/tools/ci/linux-runtime-p1-gdb-stack-v1.sh" \
+                "$d/Image" "$out/vmlinux" "$ev/runtime-initramfs.cpio.gz" \
+                "$LINUX_RUNTIME_CUSTOM_DTB" "$gdb_dir" 65 \
+                >"$gdb_dir/receiver.log" 2>&1 || {
+              echo "COHORT_P1_EXACT_GDB=INCONCLUSIVE diagnostic_probe_failed=true original_P1=FAIL"
+            }
+            # Archive the matching GNU linked ELF for later offline symbol
+            # analysis. The Image itself is already kept by this workflow;
+            # compression preserves ELF bytes and costs no new build step.
+            if gzip -1 -c "$out/vmlinux" >"$gdb_dir/vmlinux.gz"; then
+              echo "COHORT_P1_EXACT_GDB_ELF=ARCHIVED sha256=$(sha256sum "$out/vmlinux" | cut -d' ' -f1) gzip=true"
+            else
+              rm -f -- "$gdb_dir/vmlinux.gz"
+              echo "COHORT_P1_EXACT_GDB_ELF=INCONCLUSIVE reason=compression_failed original_P1=FAIL"
+            fi
+            echo "COHORT_P1_EXACT_GDB=COMPLETE trial=$name image_sha=$image_sha original_P1=FAIL read_only=true"
+          else
+            echo "COHORT_P1_EXACT_GDB=INCONCLUSIVE trial=$name reason=unpaired_inputs_or_image_identity_mismatch original_P1=FAIL" \
+              | tee "$gdb_dir/receiver.log"
+          fi
+        fi
       else
         echo "COHORT_P1=INCONCLUSIVE name=$name rc=$p1_rc"
         verdict=INCONCLUSIVE
@@ -3021,6 +3413,14 @@ fi
 # and pinned GCC reference (no C compilation), overlay one *GCC* .o per
 # trial, allow Kbuild to regenerate only derived link artifacts, then run the
 # original P1 syscall oracle. This is a causal diagnostic, NOT a MiniC PASS.
+if [[ "${COHORT_P1_EIGHT_OWNER:-0}" == 1 ]]; then
+  [[ "$cohort_scope" == FULL_C_UNIVERSE && "$n" == 2064 &&
+     "${COHORT_ACTION:-all}" == verify ]] || {
+    echo "P1_EIGHT_OWNER=ERROR require_exact_2064_verify" >&2; exit 8;
+  }
+  export COHORT_P1_STACK_OWNER_SWAPS=1 COHORT_P1_DEFINED_CROSSBLOCK=1
+  echo "P1_EIGHT_OWNER=OPT_IN frozen=2064 selected=8 original_neighbors=2056 default_backend_unchanged=true"
+fi
 if [[ "${COHORT_P1_STACK_OWNER_SWAPS:-0}" == 1 ]]; then
   [[ "$cohort_scope" == FULL_C_UNIVERSE && "$n" == 2064 && "${COHORT_ACTION:-all}" == verify ]] || {
     echo "COHORT_P1_OWNER=ERROR require_frozen_full_2064_verify" >&2
@@ -3080,6 +3480,41 @@ PY_FRAME_PROLOGUE
   trial p1_full_minic "$n" p1
   baseline_verdict="$TRIAL_VERDICT"
   baseline_image_sha="$image_sha"
+  if [[ "${COHORT_P1_EIGHT_OWNER:-0}" == 1 && "$baseline_verdict" == PASS ]] &&
+     ! grep -Fq 'LINUX_RUNTIME_BOOT lane=rdinit-init qemu_status=0 ' \
+       "$ev/trials/p1_full_minic/runtime.log"; then
+    echo 'P1_STRICT_SAME_IMAGE=FAIL trial=p1_full_minic reason=qemu_not_clean_exit' >&2
+    exit 8
+  fi
+  if [[ "${COHORT_P1_EIGHT_OWNER:-0}" == 1 && "$baseline_verdict" == PASS ]]; then
+    # The frozen all-MiniC Image is timing-sensitive: an initial PASS does
+    # not refute the recorded IRQ underflow. Demand twelve independent P1
+    # boots of *identical bytes*: if all pass, the repaired all-MiniC Image
+    # itself is certified and no diagnostic eight-owner overlay is needed.
+    # On the first failure, preserve the original eight-owner rescue route.
+    for attempt in 2 3 4 5 6 7 8 9 10 11 12; do
+      trial "p1_eight_control_$attempt" "$n" p1
+      [[ "$image_sha" == "$baseline_image_sha" ]] || {
+        echo "P1_EIGHT_OWNER=ERROR control_image_sha_changed" >&2; exit 8;
+      }
+      if [[ "$TRIAL_VERDICT" == PASS ]] &&
+         ! grep -Fq 'LINUX_RUNTIME_BOOT lane=rdinit-init qemu_status=0 ' \
+           "$ev/trials/p1_eight_control_$attempt/runtime.log"; then
+        echo "P1_STRICT_SAME_IMAGE=FAIL trial=p1_eight_control_$attempt reason=qemu_not_clean_exit" >&2
+        exit 8
+      fi
+      echo "P1_EIGHT_OWNER=CONTROL attempt=$attempt verdict=$TRIAL_VERDICT image_sha=$image_sha"
+      if [[ "$TRIAL_VERDICT" != PASS ]]; then
+        baseline_verdict="$TRIAL_VERDICT"
+        break
+      fi
+    done
+    if [[ "$baseline_verdict" == PASS ]]; then
+      echo "P1_EIGHT_OWNER=NOT_REQUIRED all_minic_baseline_stable=true"
+      echo "P1_STRICT_SAME_IMAGE=PASS minic_c=2064 boots=12/12 image_sha=$baseline_image_sha original_16KiB=true no_GCC_C_fallback=true"
+      exit 0
+    fi
+  fi
   if [[ "${COHORT_P1_PAIR_DEBUG:-0}" == 1 ]]; then
     # GDB observes the exact already-linked all-MiniC FAILED control.
     # No new compiler invocation, no new Image link, no object changes.
@@ -3360,6 +3795,33 @@ case "$TRIAL_VERDICT" in
       *) echo "COHORT_RESULT=INCONCLUSIVE stage=full_or_p1"; exit 8 ;;
     esac ;;
   FAIL|LINK_FAIL)
+    # A real GNU vmlinux link may expose multiple unrelated Linux owner
+    # constant-guard failures at once. Prefix-bisecting 2064 cached objects
+    # cannot explain a nested READ_ONCE/BUILD_BUG_ON macro's original form.
+    # Re-run ONLY the seven failing real Kbuild owners using their original
+    # GNU -E command and this exact MiniC, preserve .i/.s, and attest that
+    # every replayed .o is byte-identical to the certified candidate pool.
+    # Failure evidence is uploaded by the workflow; this never counts as
+    # a new producer, a GCC C fallback, or a successful GNU link.
+    if [[ "$cohort_scope" == FULL_C_UNIVERSE && "$n" == 2064 &&
+          "$TRIAL_VERDICT" == LINK_FAIL ]] &&
+       grep -Eq '__compiletime_assert_[[:digit:]]+' \
+         "$ev/trials/full_all/link.log"; then
+      echo 'ASSERT_SOURCE_REPLAY=START owners=7 reason=original_link_assert_relocations'
+      assert_capture=INCONCLUSIVE
+      if bash "$repo/tests/compiler/c0/capture-rv64-linux-assert-owners.sh" \
+          "$src" "$out" "$minic" "$ev/minic" \
+          "$ev/assert-source-replay" \
+          >"$ev/assert-source-replay.log" 2>&1; then
+        assert_capture=PASS
+        echo 'ASSERT_SOURCE_REPLAY=PASS seven_original_inputs_preserved'
+      else
+        echo 'ASSERT_SOURCE_REPLAY=INCONCLUSIVE diagnostics_incomplete'
+        tail -n 50 "$ev/assert-source-replay.log"
+      fi
+      echo "COHORT_RESULT=FAIL stage=original_asm_assert_link captured_seven_owners=$assert_capture QEMU=NOT_RUN"
+      exit 9
+    fi
     # On the cached native-tool union path, a linker/archiver/objcopy
     # command is shared by ALL subsets. A failing Kbuild tool boundary is
     # not evidence that any specific MiniC owner is incorrect. Never waste

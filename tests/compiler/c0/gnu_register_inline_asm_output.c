@@ -7,5 +7,7 @@ static unsigned long read_cycle_like(void) {
 }
 
 int main(void) {
-    return 0;
+    /* Keep the register-output producer reachable: dead static functions are
+     * intentionally pruned by Core module reachability. */
+    return (int)read_cycle_like();
 }

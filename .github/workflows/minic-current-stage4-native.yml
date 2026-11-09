@@ -1,0 +1,293 @@
+name: MiniC Current Source Stage4 Native Toolchain
+
+# Explicitly hand off one successful B1 source commit and its run ID.
+# GNU remains a disclosed Stage2/musl producer, not a native-stage fallback.
+on:
+  push:
+    branches:
+      - refactor/minic-target-language-boundary
+    paths:
+      - .github/workflows/minic-current-stage4-native.yml
+      - tools/ci/minic-current-stage4-trigger.txt
+  workflow_dispatch:
+    inputs:
+      source_commit:
+        description: SHA of the successful current Stage2 source commit
+        type: string
+        required: true
+      stage2_run_id:
+        description: Successful current Stage2 GitHub Actions run ID
+        type: string
+        required: true
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: current-stage4-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  resolve:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[minic-current-stage4]')
+    runs-on: ubuntu-24.04
+    outputs:
+      source_sha: ${{ steps.bind.outputs.source_sha }}
+      run_id: ${{ steps.bind.outputs.run_id }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Bind source SHA to a genuinely successful Stage2 fixed point
+        id: bind
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_SHA: ${{ inputs.source_commit }}
+          INPUT_RUN: ${{ inputs.stage2_run_id }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
+            sha="$INPUT_SHA"
+            run_id="$INPUT_RUN"
+          else
+            sha=$(sed -n 's/^source_commit=//p' tools/ci/minic-current-stage4-trigger.txt)
+            run_id=$(sed -n 's/^stage2_run_id=//p' tools/ci/minic-current-stage4-trigger.txt)
+          fi
+          [[ "$sha" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$run_id" =~ ^[1-9][0-9]*$ ]]
+          info=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run_id")
+          test "$(jq -r '.head_sha' <<<"$info")" = "$sha"
+          test "$(jq -r '.conclusion' <<<"$info")" = success
+          test "$(jq -r '.name' <<<"$info")" = 'MiniC Current Source Stage2 Selfhost'
+          jobs=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run_id/jobs?per_page=100")
+          jq -e '.jobs | any(.name == "stage2-fixed-point" and .conclusion == "success")' <<<"$jobs" >/dev/null
+          echo "source_sha=$sha" >>"$GITHUB_OUTPUT"
+          echo "run_id=$run_id" >>"$GITHUB_OUTPUT"
+          echo "CURRENT_STAGE4_RESOLVE=PASS source_sha=$sha stage2_run=$run_id"
+
+  stage2-tools:
+    needs: resolve
+    runs-on: ubuntu-24.04
+    timeout-minutes: 110
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve.outputs.source_sha }}
+          persist-credentials: false
+      - name: Install GNU cross-toolchain and QEMU bootstrap oracle
+        run: |
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            build-essential gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
+            libc6-dev-riscv64-cross qemu-user
+      - uses: actions/download-artifact@v4
+        with:
+          name: minic-current-stage1-seed
+          path: build/bootstrap-current-b1
+          repository: ${{ github.repository }}
+          run-id: ${{ needs.resolve.outputs.run_id }}
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: minic-current-stage2-final-${{ needs.resolve.outputs.run_id }}
+          path: build/bootstrap-current-b1
+          repository: ${{ github.repository }}
+          run-id: ${{ needs.resolve.outputs.run_id }}
+          github-token: ${{ github.token }}
+      - name: Build all eight Stage2-produced ELF tools from current 35 C owners
+        shell: bash
+        timeout-minutes: 95
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse HEAD)" = '${{ needs.resolve.outputs.source_sha }}'
+          test "$(cat build/bootstrap-current-b1/seed/source-commit.txt)" = '${{ needs.resolve.outputs.source_sha }}'
+          chmod +x build/bootstrap-current-b1/stage0/bin/minic-cc \
+                   build/bootstrap-current-b1/stage2/minic-stage2-rv64
+          python3 -u tools/ci/minic-bootstrap-stage2-toolchain-v1.py \
+            --stage0 build/bootstrap-current-b1/stage0/bin/minic-cc \
+            --stage2 build/bootstrap-current-b1/stage2/minic-stage2-rv64 \
+            --out build/bootstrap-stage2-tools --workers 4
+      - name: Preserve eight-tool source parity and ELF evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: current-stage2-eight-tools
+          path: build/bootstrap-stage2-tools/
+          if-no-files-found: warn
+          retention-days: 30
+          compression-level: 3
+
+  musl:
+    needs: resolve
+    runs-on: ubuntu-24.04
+    timeout-minutes: 70
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve.outputs.source_sha }}
+          persist-credentials: false
+      - name: Install declared GNU producer for external musl seed
+        run: |
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            build-essential gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
+            libc6-dev-riscv64-cross curl ca-certificates
+      - name: Build SHA-pinned musl 1.2.5 matching headers CRT and libc
+        shell: bash
+        timeout-minutes: 50
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/current-musl"
+          mkdir -p "$work"
+          curl -fsSL --retry 3 https://musl.libc.org/releases/musl-1.2.5.tar.gz -o "$work/musl-1.2.5.tar.gz"
+          printf '%s  %s\n' a9a118bbe84d8764da0ea0d28b3ab3fae8477fc7e4085d90102b8596fc7c75e4 \
+            "$work/musl-1.2.5.tar.gz" | sha256sum -c -
+          tar -xzf "$work/musl-1.2.5.tar.gz" -C "$work"
+          mkdir -p "$work/musl-build" "$work/musl-sysroot"
+          (
+            cd "$work/musl-build"
+            # Native MiniC explicitly emits soft-float lp64; an ambient GCC
+            # cross default (often lp64d) must not silently create an ABI-
+            # incompatible CRT/libc seed for the full native stages.
+            CFLAGS="-O2 -fno-pic -fno-pie" \
+              CC='riscv64-linux-gnu-gcc -mabi=lp64 -march=rv64imac_zicsr_zifencei_zihintpause' \
+              AR=riscv64-linux-gnu-ar RANLIB=riscv64-linux-gnu-ranlib \
+              "$work/musl-1.2.5/configure" --target=riscv64-linux-gnu --disable-shared --prefix=/usr
+            make -j4
+            make DESTDIR="$work/musl-sysroot" install-headers
+          )
+          for f in "$work/musl-build/lib/libc.a" "$work/musl-build/obj/crt/crt1.o" \
+                   "$work/musl-build/obj/crt/crti.o" "$work/musl-build/obj/crt/crtn.o" \
+                   "$work/musl-sysroot/usr/include/stdio.h"; do test -s "$f"; done
+          : >"$work/musl-abi-flags.txt"
+          for f in "$work/musl-build/obj/crt/crt1.o" \
+                   "$work/musl-build/obj/crt/crti.o" \
+                   "$work/musl-build/obj/crt/crtn.o" \
+                   "$work/musl-build/lib/libc.a"; do
+            printf '%s\n' "file=$f" >>"$work/musl-abi-flags.txt"
+            if ! riscv64-linux-gnu-readelf -h "$f" | awk '
+                /Flags:/ { count++; print; if (index($0,"soft-float ABI") == 0) bad=1 }
+                END { if (count == 0 || bad) exit 1 }
+              ' >>"$work/musl-abi-flags.txt"; then
+              echo "CURRENT_STAGE4_MUSL_ABI=FAIL not-all-soft-float file=$f" >&2
+              exit 1
+            fi
+          done
+          echo 'CURRENT_STAGE4_MUSL_ABI=PASS CRT_and_libc_archive=soft-float'
+          sha256sum build/current-musl/musl-build/lib/libc.a \
+            build/current-musl/musl-build/obj/crt/*.o \
+            >build/current-musl/musl-checksums.txt
+          echo "musl_source_sha256=a9a118bbe84d8764da0ea0d28b3ab3fae8477fc7e4085d90102b8596fc7c75e4" \
+            >build/current-musl/musl-source.txt
+          echo 'CURRENT_STAGE4_MUSL=PASS external_GNU_producer=true matching_headers_CRT_libc=true'
+      - name: Preserve ABI-matched external musl binary and header seed
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: current-stage4-musl-seed
+          path: |
+            build/current-musl/musl-build/
+            build/current-musl/musl-sysroot/
+            build/current-musl/musl-checksums.txt
+            build/current-musl/musl-source.txt
+            build/current-musl/musl-abi-flags.txt
+          if-no-files-found: warn
+          retention-days: 30
+          compression-level: 3
+
+  native:
+    needs: [resolve, stage2-tools, musl]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 345
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve.outputs.source_sha }}
+          persist-credentials: false
+      - name: Install QEMU declared runtime headers and process auditor
+        run: |
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu libc6-dev-riscv64-cross \
+            qemu-user strace
+      - uses: actions/download-artifact@v4
+        with:
+          name: minic-current-stage1-seed
+          path: build/bootstrap-current-b1
+          repository: ${{ github.repository }}
+          run-id: ${{ needs.resolve.outputs.run_id }}
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: minic-current-stage2-final-${{ needs.resolve.outputs.run_id }}
+          path: build/bootstrap-current-b1
+          repository: ${{ github.repository }}
+          run-id: ${{ needs.resolve.outputs.run_id }}
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: current-stage2-eight-tools
+          path: build/bootstrap-stage2-tools
+      - uses: actions/download-artifact@v4
+        with:
+          name: current-stage4-musl-seed
+          path: build/current-musl
+      - name: Execute 248 C native Stage3/Stage4 toolchain fixed point
+        shell: bash
+        timeout-minutes: 325
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse HEAD)" = '${{ needs.resolve.outputs.source_sha }}'
+          test "$(cat build/bootstrap-current-b1/seed/source-commit.txt)" = '${{ needs.resolve.outputs.source_sha }}'
+          test "$(cat build/current-musl/musl-source.txt)" = \
+            'musl_source_sha256=a9a118bbe84d8764da0ea0d28b3ab3fae8477fc7e4085d90102b8596fc7c75e4'
+          sha256sum -c build/current-musl/musl-checksums.txt
+          chmod +x build/bootstrap-current-b1/stage0/bin/minic-cc \
+                   build/bootstrap-current-b1/stage2/minic-stage2-rv64 \
+                   build/bootstrap-stage2-tools/bin/*
+          mkdir -p build/full-native
+          # Fail early on actual MiniPP -> MiniC -> MiniAS without spending
+          # hours on 248 sources. Both samples are real production owners.
+          strace -f -e execve -o build/full-native/preflight-execve.log \
+            python3 -u tools/ci/minic-bootstrap-full-native-v1.py \
+              --stage2 build/bootstrap-current-b1/stage2/minic-stage2-rv64 \
+              --toolchain build/bootstrap-stage2-tools \
+              --bootstrap-work build/bootstrap-current-b1 \
+              --out build/full-native-preflight --workers 2 \
+              --musl-build build/current-musl/musl-build \
+              --musl-headers build/current-musl/musl-sysroot/usr/include \
+              --probe-only src/compiler/core_function_set.c,elf/src/reader.c \
+            | tee build/full-native/preflight-verdict.log
+          grep -F 'FULL_NATIVE_PROBE=PASS source_tus=2' build/full-native/preflight-verdict.log
+          strace -f -e execve -o build/full-native/execve.log \
+            python3 -u tools/ci/minic-bootstrap-full-native-v1.py \
+              --stage2 build/bootstrap-current-b1/stage2/minic-stage2-rv64 \
+              --toolchain build/bootstrap-stage2-tools \
+              --bootstrap-work build/bootstrap-current-b1 \
+              --out build/full-native --workers 4 \
+              --musl-build build/current-musl/musl-build \
+              --musl-headers build/current-musl/musl-sysroot/usr/include \
+            | tee build/full-native/verdict.log
+          grep -F 'FULL_NATIVE_TOOLCHAIN=PASS' build/full-native/verdict.log
+          grep -F 'FULL_NATIVE_FIXEDPOINT_TUS=PASS count=248' build/full-native/verdict.log
+          grep -F 'FULL_NATIVE_STAGE4_RUNTIME=PASS' build/full-native/verdict.log
+          grep -F 'FULL_NATIVE_STAGE4_DRIVER=PASS' build/full-native/verdict.log
+          if grep -E 'execve\("([^"]*/)?(gcc|clang|cc1|as|ld|objcopy|riscv64-linux-gnu-(gcc|as|ld|objcopy))"' \
+               build/full-native/execve.log build/full-native/preflight-execve.log; then
+            echo 'CURRENT_STAGE4_GNU_EXEC=FAIL' >&2
+            exit 1
+          fi
+          echo 'CURRENT_STAGE4_GNU_EXEC=PASS calls_to_GNU_PP_CC_AS_LD=0'
+          echo 'CURRENT_STAGE4_NATIVE=PASS tools=9 C_TUs=248' | tee -a build/full-native/verdict.log
+      - name: Preserve full native evidence and resumable Stage3 SHA checkpoints
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: current-stage4-native-${{ github.run_id }}
+          path: build/full-native/
+          if-no-files-found: warn
+          retention-days: 30
+          compression-level: 1

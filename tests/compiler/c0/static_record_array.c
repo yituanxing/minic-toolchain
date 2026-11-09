@@ -23,7 +23,7 @@ struct MiniCtlTable {
     int (*proc_handler)(void);
 };
 
-static struct MiniCtlTable sched_core_sysctls_like[] = {
+static struct MiniCtlTable sched_core_sysctls_like[] __attribute__((used)) = {
     {}
 };
 

@@ -1,6 +1,6 @@
 #ifndef MINIC_COMPILER_INLINE_SPECIALIZE_INTERNAL_H
 #define MINIC_COMPILER_INLINE_SPECIALIZE_INTERNAL_H
-#include "frontend/ast.h"
+#include "compiler/inline_specialize_common.h"
 #include <stdbool.h>
 #include <stdint.h>
 #include <stddef.h>
@@ -10,6 +10,7 @@
 bool minic_add_inline_integer_specialization(
     MinicC0Program *program,
     MinicFunctionId source_id,
+    const MinicFunction *caller,
     const bool *known,
     const uint64_t *bits,
     size_t ordinal,
@@ -17,6 +18,7 @@ bool minic_add_inline_integer_specialization(
 bool minic_add_inline_symbolic_specialization(
     MinicC0Program *program,
     MinicFunctionId source_id,
+    const MinicFunction *caller,
     const bool *integer_known,
     const uint64_t *integer_bits,
     const bool *symbolic_known,

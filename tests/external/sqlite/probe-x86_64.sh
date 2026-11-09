@@ -37,10 +37,23 @@ printf 'SQLITE_X86_64_INPUT=PASS version=%s preprocessed_bytes=%s preprocessed_l
 # correctly reporting a blocked frontier; only PASS counts as coverage.
 discovery=${SQLITE_X86_64_DISCOVERY:-0}
 case "$discovery" in 0|1) ;; *) echo "Invalid SQLITE_X86_64_DISCOVERY" >&2; exit 2;; esac
-if /usr/bin/time -f 'SQLITE_X86_64_COMPILE_ELAPSED=%e maxrss_kb=%M' \
-     timeout 180s "$MINIC_CC" --target=x86_64-linux -S \
-     "$work/sqlite3.i" -o "$work/sqlite3.s" \
+run_minic_sqlite() {
+  if test -x /usr/bin/time; then
+    /usr/bin/time -f 'SQLITE_X86_64_COMPILE_ELAPSED=%e maxrss_kb=%M' \
+      timeout 180s "$MINIC_CC" --target=x86_64-linux -S \
+      "$work/sqlite3.i" -o "$work/sqlite3.s"
+  else
+    # Timing is diagnostic only; do not skip the real compiler on a host
+    # without GNU time (for example, a minimal container image).
+    timeout 180s "$MINIC_CC" --target=x86_64-linux -S \
+      "$work/sqlite3.i" -o "$work/sqlite3.s"
+  fi
+}
+if run_minic_sqlite \
      >"$work/minic.stdout" 2>"$work/minic.stderr"; then
+  if ! test -x /usr/bin/time; then
+    echo "SQLITE_X86_64_COMPILE_METRICS=UNAVAILABLE reason=gnu_time_absent"
+  fi
   echo "SQLITE_X86_64_COMPILER=PASS source=sqlite3.c"
 else
   status=$?

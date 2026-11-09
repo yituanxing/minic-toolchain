@@ -8,6 +8,19 @@ qemu=${QEMU_RISCV64:-qemu-riscv64}
 work=${BUILD_DIR:-"$root/build/debug"}/tests/compiler-c0-byte-field-or-assign-rv64
 source="$root/tests/compiler/c0/byte_field_or_assign_rv64.c"
 
+# check-fast is also a host-only developer gate. The real RV64 GNU/QEMU
+# differential remains mandatory when REQUIRE_RISCV_RUNTIME=1, and is not
+# mislabeled PASS when the optional cross tools are absent.
+if ! command -v "$riscv_cc" >/dev/null 2>&1 ||
+   ! command -v "$qemu" >/dev/null 2>&1; then
+    if test "${REQUIRE_RISCV_RUNTIME:-0}" = 1; then
+        echo 'FAIL compiler/c0/byte_field_or_assign_rv64: required GNU/QEMU tools absent' >&2
+        exit 1
+    fi
+    echo 'SKIP compiler/c0/byte_field_or_assign_rv64: GNU/QEMU not installed'
+    exit 0
+fi
+
 rm -rf "$work"
 mkdir -p "$work"
 "$riscv_cc" -E -P -std=gnu11 -x c "$source" -o "$work/probe.i"

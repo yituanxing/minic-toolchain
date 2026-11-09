@@ -15,6 +15,6 @@ typedef union {
     long wide;
 } MiniNode;
 
-static const MiniNode dummy = {
+static const MiniNode dummy __attribute__((used)) = {
     {{(void *)0}, (1 << 4), 7, {(void *)0}}
 };

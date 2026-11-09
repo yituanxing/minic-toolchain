@@ -1,0 +1,75 @@
+name: RV32 VirtIO frozen/current finalizer machine-code audit
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/minic-rv32-finalizer-disasm.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  historic-finalizer-diff:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 6
+    steps:
+      - name: Retrieve immutable 32nd P2 18-of-18 evidence only
+        uses: actions/download-artifact@v4
+        with:
+          repository: yituanxing/minic-toolchain
+          run-id: '42090175196'
+          name: rv32i-p2-strict-0db0ccc47f005a74e3e7878da48309a3834ee981
+          github-token: ${{ github.token }}
+          path: finalizer-evidence
+      - name: Compare original 2-owner frozen finalizer with proven 3-owner MiniC
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mapfile -t old < <(find finalizer-evidence -type f -name frozen-finalizer.dis)
+          mapfile -t new < <(find finalizer-evidence -type f -name current-finalizer.dis)
+          test "${#old[@]}" -eq 1 && test "${#new[@]}" -eq 1
+          test -s "${old[0]}" && test -s "${new[0]}"
+          # The original 2026-10-31 run #41212514498 no longer exposes
+          # artifact bytes. The immutable 18/18 P2 receipt archives the two
+          # function disassemblies, but NOT the frozen ELF32 .o or the body of
+          # its out-of-line helper. Never invent a current-owner substitution.
+          grep -Fxq 'canonical=18/18_REQUIRED' finalizer-evidence/full18-verdict.txt
+          grep -Fxq 'MiniC_C_owners=1738_frozen_plus_3_current' finalizer-evidence/refresh-virtio/provenance.txt
+          grep -Fq 'R_RISCV_CALL_PLT' "${old[0]}"
+          grep -Fq '__minic_inline_spec_7861_8' "${old[0]}"
+          mkdir -p finalizer-diff
+          cp "${old[0]}" finalizer-diff/frozen-finalizer.dis
+          cp "${new[0]}" finalizer-diff/current-finalizer.dis
+          echo 'RV32_FINALIZER_ARCHIVE=PASS exact_p2_18_of_18_run=42090175196'
+          echo '==== OLD OCT31 vp_finalize_features ====='
+          tail -n 220 "${old[0]}"
+          echo '==== CURRENT vp_finalize_features ====='
+          tail -n 220 "${new[0]}"
+          echo '==== CURRENT bit32 middle rows 220..365 ====='
+          sed -n '220,365p' "${new[0]}"
+          if diff -u "${old[0]}" "${new[0]}" > finalizer-diff/old-vs-new.diff; then
+            echo 'RV32_FINALIZER_DIFF=IDENTICAL'
+          else
+            rc=$?
+            test "$rc" -eq 1
+            echo 'RV32_FINALIZER_DIFF=CHANGED'
+            tail -n 220 finalizer-diff/old-vs-new.diff
+          fi
+      - name: Attest archive scope and unresolved historical helper-body provenance
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          {
+            echo 'RV32_FINALIZER_ARCHIVE=PASS original_P2_run=42090175196 frozen_function=true current_function=true'
+            echo 'RV32_FINALIZER_HELPER=NOT_ATTESTED exact_original_ELF_missing=1'
+            echo 'RV32_FINALIZER_CURRENT_HEAD=NOT_RUN archived_compiler_epoch_only=1'
+          } | tee finalizer-diff/receipt.txt
+      - name: Preserve machine-code comparison
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rv32i-virtio-finalizer-frozen-v-current
+          path: finalizer-diff
+          if-no-files-found: error

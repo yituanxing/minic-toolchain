@@ -166,7 +166,8 @@ static bool assignment_chain_expression_is_stable(const MinicParser *parser,
         const MinicLocal *local;
 
         local = minic_c0_program_local(parser->program, expression->value.local_id);
-        return local != NULL && !local->is_array;
+        return local != NULL && !minic_c0_local_array_object_info(
+            parser->program, expression->value.local_id, NULL);
     }
     if (expression->kind == MINIC_EXPRESSION_GLOBAL_OBJECT) {
         return true;
@@ -190,7 +191,8 @@ static bool assignment_chain_target_is_stable(const MinicParser *parser,
         const MinicLocal *local;
 
         local = minic_c0_program_local(parser->program, target->value.local_id);
-        return local != NULL && !local->is_array;
+        return local != NULL && !minic_c0_local_array_object_info(
+            parser->program, target->value.local_id, NULL);
     }
     if (target->kind == MINIC_EXPRESSION_GLOBAL_OBJECT) {
         return true;
@@ -344,7 +346,7 @@ static bool parse_expression_or_assignment_statement(MinicParser *parser,
         right_expression = minic_c0_program_expression(parser->program, right_id);
         if (right_expression == NULL || !minic_type_is_integer(first_type) ||
             !minic_type_is_integer(right_expression->type) ||
-            !minic_target_info_integer_common_for_program(parser->target_info,
+            !minic_target_info_integer_common_for_program(parser->invocation,
                                                           parser->program,
                                                           first_type,
                                                           right_expression->type,
@@ -403,7 +405,7 @@ static bool parse_expression_or_assignment_statement(MinicParser *parser,
             }
             common_type = first_type;
         } else if (!minic_type_is_integer(first_type) ||
-                   !minic_target_info_integer_common_for_program(parser->target_info,
+                   !minic_target_info_integer_common_for_program(parser->invocation,
                                                                  parser->program,
                                                                  first_type,
                                                                  right_expression->type,
@@ -452,7 +454,7 @@ static bool parse_expression_or_assignment_statement(MinicParser *parser,
             }
             common_type = first_type;
         } else if (!minic_type_is_integer(first_type) ||
-                   !minic_target_info_integer_common_for_program(parser->target_info,
+                   !minic_target_info_integer_common_for_program(parser->invocation,
                                                                  parser->program,
                                                                  first_type,
                                                                  right_expression->type,
@@ -499,7 +501,7 @@ static bool parse_expression_or_assignment_statement(MinicParser *parser,
         shift.value.binary.left = statement.target_expression;
         shift.value.binary.right = right_id;
         if (!minic_target_info_integer_common_for_program(
-                parser->target_info, parser->program, first_type, first_type, &shift.type) ||
+                parser->invocation, parser->program, first_type, first_type, &shift.type) ||
             !minic_parser_add_expression(parser, &shift, &statement.expression)) {
             return false;
         }
@@ -517,7 +519,7 @@ static bool parse_expression_or_assignment_statement(MinicParser *parser,
 
             if (assigned_expression == NULL || !minic_type_is_integer(first_type) ||
                 !minic_type_is_integer(assigned_expression->type) ||
-                !minic_target_info_integer_common_for_program(parser->target_info,
+                !minic_target_info_integer_common_for_program(parser->invocation,
                                                               parser->program,
                                                               first_type,
                                                               assigned_expression->type,
@@ -702,43 +704,6 @@ static bool parse_return(MinicParser *parser) {
         if (!minic_parser_parse_full_expression(parser, &statement.expression)) {
             return false;
         }
-        if (parser->current.kind == MINIC_TOKEN_EQUAL) {
-            MinicStatement assignment;
-            const MinicExpression *assigned_expression;
-            const MinicExpression *target;
-            MinicExpressionId target_id;
-
-            target_id = statement.expression;
-            target = minic_c0_program_expression(parser->program, target_id);
-            if (!minic_parser_statement_modifiable_lvalue(target)) {
-                minic_parser_error(parser, "assignment target must be a modifiable lvalue");
-                return false;
-            }
-            (void)memset(&assignment, 0, sizeof(assignment));
-            assignment.kind = MINIC_STATEMENT_ASSIGN;
-            assignment.span.begin = target->span.begin;
-            assignment.target_expression = target_id;
-            assignment.then_block = MINIC_BLOCK_INVALID;
-            assignment.else_block = MINIC_BLOCK_INVALID;
-            if (!minic_parser_advance(parser) ||
-                !minic_parser_parse_expression(parser, &assignment.expression, 0U) ||
-                !minic_parser_statement_assignment_conversion(parser, target->type, &assignment.expression)) {
-                return false;
-            }
-            assigned_expression =
-                minic_c0_program_expression(parser->program, assignment.expression);
-            if (assigned_expression == NULL ||
-                !minic_c0_assignment_compatible(
-                    parser->program, target->type, assignment.expression)) {
-                minic_parser_error(parser, "assignment type does not match target type");
-                return false;
-            }
-            assignment.span.end = assigned_expression->span.end;
-            if (!minic_parser_add_statement(parser, &assignment)) {
-                return false;
-            }
-            statement.expression = target_id;
-        }
         if (!minic_parser_statement_assignment_conversion(parser, return_type, &statement.expression)) {
             return false;
         }
@@ -897,6 +862,7 @@ static bool parse_gnu_statement_attribute(MinicParser *parser) {
 
 static bool block_record_starts_standalone_declaration(MinicParser *parser, bool *is_standalone) {
     MinicParser probe;
+    MinicParsedAttributeList tag_attributes;
     size_t brace_depth;
 
     if (parser == NULL || is_standalone == NULL ||
@@ -908,7 +874,14 @@ static bool block_record_starts_standalone_declaration(MinicParser *parser, bool
     if (!minic_parser_advance(&probe)) {
         return false;
     }
+    (void)memset(&tag_attributes, 0, sizeof(tag_attributes));
+    if (!minic_parser_collect_gnu_attribute_lists(&probe, &tag_attributes)) {
+        return false;
+    }
     if (probe.current.kind == MINIC_TOKEN_IDENTIFIER && !minic_parser_advance(&probe)) {
+        return false;
+    }
+    if (!minic_parser_collect_gnu_attribute_lists(&probe, &tag_attributes)) {
         return false;
     }
     if (probe.current.kind == MINIC_TOKEN_SEMICOLON) {
@@ -1011,14 +984,34 @@ bool minic_parser_parse_statement(MinicParser *parser, bool allow_declaration) {
     if (gnu_attribute_list_has_statement_shape(parser)) {
         return parse_gnu_statement_attribute(parser);
     }
-    if (parser->current.kind == MINIC_TOKEN_KW_EXTERN ||
-        (parser->current.kind == MINIC_TOKEN_IDENTIFIER &&
-         minic_parser_current_identifier_lexeme_equals_cstr(parser, "__attribute__"))) {
+    if (parser->current.kind == MINIC_TOKEN_KW_EXTERN) {
         if (!allow_declaration) {
             minic_parser_error(parser, "a declaration requires a compound statement scope");
             return false;
         }
         return minic_parser_local_decl_extern(parser);
+    }
+    if (parser->current.kind == MINIC_TOKEN_IDENTIFIER &&
+        minic_parser_current_identifier_lexeme_equals_cstr(parser, "__attribute__")) {
+        MinicParser probe;
+        MinicParsedAttributeList prefix_attributes;
+
+        if (!allow_declaration) {
+            minic_parser_error(parser, "a declaration requires a compound statement scope");
+            return false;
+        }
+        probe = *parser;
+        (void)memset(&prefix_attributes, 0, sizeof(prefix_attributes));
+        if (!minic_parser_collect_gnu_attribute_lists(&probe, &prefix_attributes)) {
+            return false;
+        }
+        /* GNU prefixes qualify ordinary locals as well as externs. The
+         * prefix is parsed by the selected declaration owner below, which
+         * retains all semantic/ABI attribute validation. */
+        if (probe.current.kind == MINIC_TOKEN_KW_EXTERN) {
+            return minic_parser_local_decl_extern(parser);
+        }
+        return minic_parser_local_decl_ordinary(parser);
     }
     if (parser->current.kind == MINIC_TOKEN_KW_STATIC) {
         if (!allow_declaration) {

@@ -2,21 +2,15 @@
 
 #include <string.h>
 
-/* Registration does not assert equal backend, assembler and linker maturity.
- * -S delegates preprocessed C to minic-cc for all five registered targets.
- * Only the historical RV64 pipeline has the matching staged PP/AS/LD chain. */
+/* One registration inventory powers the separately linked product driver,
+ * C ABI descriptors and backend table. Only the RV64 entry declares
+ * MINIC_TARGET_STAGE_STAGED_ASSEMBLER_AND_LINKER. No driver may infer a
+ * staged toolchain merely from a target with equivalent integer widths. */
 static const MinicTargetCatalogEntry minic_targets[] = {
-    {MINIC_TARGET_ARCH_RISCV32, "riscv32-linux",
-     MINIC_TARGET_STAGE_ASSEMBLY_FROM_PREPROCESSED_C},
-    {MINIC_TARGET_ARCH_RISCV64, "riscv64-linux",
-     MINIC_TARGET_STAGE_ASSEMBLY_FROM_PREPROCESSED_C |
-     MINIC_TARGET_STAGE_STAGED_ASSEMBLER_AND_LINKER},
-    {MINIC_TARGET_ARCH_X86_64, "x86_64-linux",
-     MINIC_TARGET_STAGE_ASSEMBLY_FROM_PREPROCESSED_C},
-    {MINIC_TARGET_ARCH_AARCH64, "aarch64-linux",
-     MINIC_TARGET_STAGE_ASSEMBLY_FROM_PREPROCESSED_C},
-    {MINIC_TARGET_ARCH_LOONGARCH64, "loongarch64-linux",
-     MINIC_TARGET_STAGE_ASSEMBLY_FROM_PREPROCESSED_C}
+#define MINIC_TARGET_REGISTRATION(arch, id, spelling, stages, isa) \
+    {arch, spelling, stages, isa},
+#include "target/target_registration.def"
+#undef MINIC_TARGET_REGISTRATION
 };
 
 const MinicTargetCatalogEntry *minic_target_catalog_all(size_t *count) {
@@ -34,6 +28,22 @@ const MinicTargetCatalogEntry *minic_target_catalog_find(const char *name) {
         if (strcmp(name, targets[i].name) == 0) return &targets[i];
     }
     return NULL;
+}
+
+const MinicTargetCatalogEntry *minic_target_catalog_for_architecture(
+    MinicTargetArchitecture architecture) {
+    size_t i, count;
+    const MinicTargetCatalogEntry *targets = minic_target_catalog_all(&count);
+    for (i = 0U; i < count; ++i) {
+        if (targets[i].architecture == architecture) return &targets[i];
+    }
+    return NULL;
+}
+
+/* The product defaults to the historical RV64 pipeline, not whichever
+ * entry happens to be first in the registration inventory. */
+const MinicTargetCatalogEntry *minic_target_catalog_default(void) {
+    return minic_target_catalog_for_architecture(MINIC_TARGET_ARCH_RISCV64);
 }
 
 /* Exact qualified ISA spellings only. Extended -S source-asm profiles do

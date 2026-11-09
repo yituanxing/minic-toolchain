@@ -22,9 +22,9 @@ bool minic_parser_parse_static_assert_declaration(MinicParser *parser) {
     condition = minic_c0_program_expression(parser->program, condition_id);
     if (condition == NULL || !minic_type_is_integer(condition->type) ||
         !minic_const_eval_integer(
-            parser->program, parser->target_info, condition_id, &condition_value) ||
+            parser->program, parser->invocation, condition_id, &condition_value) ||
         !minic_const_value_is_zero(
-            parser->program, parser->target_info, &condition_value, &condition_is_zero)) {
+            parser->program, parser->invocation, &condition_value, &condition_is_zero)) {
         minic_parser_error(parser,
                            "_Static_assert condition must be an integer constant expression");
         return false;

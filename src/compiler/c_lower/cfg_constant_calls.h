@@ -1,0 +1,22 @@
+#ifndef MINIC_CORE_CFG_CONSTANT_CALLS_H
+#define MINIC_CORE_CFG_CONSTANT_CALLS_H
+#include "compiler/c_lower/core_lower_internal.h"
+#include <stdbool.h>
+/* Pure-call operand admission: an unsupported shape is NOT a proof. */
+bool minic_core_cfg_pure_call_argument(const MinicCoreLowerContext *,
+                                       MinicExpressionId, unsigned int);
+/* A record compound literal is pure only when its bounded initializer writes
+ * fields of its own fresh backing object using pure scalar values. */
+bool minic_core_cfg_pure_record_compound_initializer(
+    const MinicCoreLowerContext *, const MinicExpression *, unsigned int);
+/* A GNU statement expression may write its own nonescaping, block-owned
+ * scratch locals without producing an observable effect. */
+bool minic_core_cfg_pure_statement_local_assignments(
+    const MinicCoreLowerContext *, MinicExpressionId, unsigned int);
+/* Shared callback for the AST no-effect GNU statement-guard proof. */
+bool minic_core_cfg_pure_guard_truth(void *, MinicExpressionId, bool *);
+/* Bounded small loops / constant inline call oracle, no target opcode logic. */
+bool minic_core_cfg_constant_inline_call(const MinicCoreLowerContext *,
+                                         const MinicExpression *,
+                                         MinicConstValue *);
+#endif

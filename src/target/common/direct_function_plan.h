@@ -2,7 +2,9 @@
 #define MINIC_TARGET_COMMON_DIRECT_FUNCTION_PLAN_H
 
 #include "target/common/direct_function_profile.h"
+#include "target/common/direct_preflight.h"
 #include "target/common/lp64_frame.h"
+#include "target/common/machine_lp64_frame.h"
 
 /* The downstream physical ABI preparation dataflow for AAPCS64 and LP64D.
  * Common CoreFunctionPlan has already verified and indexed the Core once;
@@ -14,14 +16,7 @@ typedef struct MinicDirectLP64FunctionPlan {
     MinicLP64ArgumentPlan incoming_plan;
     MinicLP64FramePlan frame_plan;
     MinicLP64CallPlanCache outgoing_calls;
-    size_t frame_size;
-    size_t save_offset;
-    size_t variadic_save_base;
-    size_t variadic_count;
-    size_t variadic_gp_count;
-    size_t variadic_fp_count;
-    bool has_calls;
-    bool has_dynamic_stack;
+    MinicMachineLP64FrameContract machine_frame;
     /* Fail-closed diagnostic context, owned by the planning pass. */
     const char *failed_stage;
     size_t failed_block;
@@ -29,11 +24,12 @@ typedef struct MinicDirectLP64FunctionPlan {
 } MinicDirectLP64FunctionPlan;
 
 bool minic_multi_direct_lp64_function_plan_prepare(
-    const MinicC0Program *, const MinicTargetInfo *,
-    const MinicFunction *, const MinicCoreFunction *,
+    const MinicCoreModuleFunctionSymbol *,
+    const MinicCoreFunction *,
     const MinicCoreFunctionFacts *,
-    const MinicCoreObjectStoragePlan *, const char *architecture_name, MinicLP64DirectABI,
-    MinicDirectLP64IndirectRecord,
+    const MinicCoreObjectStoragePlan *, const char *architecture_name,
+    const MinicDirectLP64AbiPolicy *,
+    MinicDirectLP64OpaqueAsmQualifier,
     MinicDirectLP64FunctionPlan *);
 void minic_multi_direct_lp64_function_plan_destroy(
     MinicDirectLP64FunctionPlan *);

@@ -3,16 +3,11 @@
 #include <stdlib.h>
 #include <string.h>
 
-bool minic_core_object_storage(const MinicC0Program *program,
-                               const MinicDataLayout *layout,
-                               const MinicCoreObject *object,
-                               MinicCoreObjectStorage *result) {
-    size_t size, alignment;
-    if (program == NULL || layout == NULL || object == NULL || result == NULL ||
-        object->element_count == 0U ||
-        !minic_data_layout_type(layout, program, object->type, &size, &alignment) ||
-        alignment == 0U || (alignment & (alignment - 1U)) != 0U ||
-        size > SIZE_MAX / object->element_count)
+static bool core_object_storage_checked_shape(
+    const MinicCoreObject *object, size_t size, size_t alignment,
+    MinicCoreObjectStorage *result) {
+    if (object == NULL || result == NULL ||
+        alignment == 0U || (alignment & (alignment - 1U)) != 0U)
         return false;
     if (object->explicit_alignment != 0U) {
         if ((object->explicit_alignment & (object->explicit_alignment - 1U)) != 0U)
@@ -20,17 +15,30 @@ bool minic_core_object_storage(const MinicC0Program *program,
         if (object->explicit_alignment > alignment)
             alignment = object->explicit_alignment;
     }
-    result->extent = size * object->element_count;
+    /* The complete CoreType owns the entire object extent, including arrays.
+     * CoreObject must not re-apply a second declarator repetition factor. */
+    result->extent = size;
     result->alignment = alignment;
     return true;
 }
 
+bool minic_core_object_storage_resolved(const MinicCoreTypeContext *types,
+                                        const MinicCoreObject *object,
+                                        MinicCoreObjectStorage *result) {
+    const MinicCoreType *type;
+    if (object == NULL || result == NULL ||
+        (type = minic_core_type_get(types, object->core_type_id)) == NULL ||
+        !type->has_layout)
+        return false;
+    return core_object_storage_checked_shape(
+        object, type->size, type->alignment, result);
+}
+
 bool minic_core_object_storage_plan_build(
-    const MinicC0Program *program, const MinicDataLayout *layout,
     const MinicCoreFunction *function, MinicCoreObjectStoragePlan *plan) {
     size_t i;
-    if (program == NULL || layout == NULL || function == NULL || plan == NULL ||
-        plan->objects != NULL ||
+    if (function == NULL || function->type_context == NULL || plan == NULL ||
+        plan->objects != NULL || plan->count != 0U ||
         (function->object_count != 0U && function->objects == NULL) ||
         function->object_count > SIZE_MAX / sizeof(*plan->objects))
         return false;
@@ -40,8 +48,8 @@ bool minic_core_object_storage_plan_build(
         function->object_count, sizeof(*plan->objects));
     if (plan->objects == NULL) return false;
     for (i = 0U; i < function->object_count; ++i)
-        if (!minic_core_object_storage(
-                program, layout, &function->objects[i], &plan->objects[i])) {
+        if (!minic_core_object_storage_resolved(
+                function->type_context, &function->objects[i], &plan->objects[i])) {
             minic_core_object_storage_plan_destroy(plan);
             return false;
         }
@@ -58,10 +66,9 @@ void minic_core_object_storage_plan_destroy(MinicCoreObjectStoragePlan *plan) {
 /* Shared resource ownership for five machine backends. No target-specific
  * memory addresses, register assignment, spill policy or stack direction. */
 bool minic_core_object_storage_plan_acquire(
-    const MinicC0Program *program, const MinicDataLayout *layout,
     const MinicCoreFunction *fn, const MinicCoreObjectStoragePlan *shared,
     MinicCoreObjectStoragePlan *result, bool *borrowed) {
-    if (fn == NULL || result == NULL || borrowed == NULL ||
+    if (fn == NULL || fn->type_context == NULL || result == NULL || borrowed == NULL ||
         result->objects != NULL || result->count != 0U) return false;
     *borrowed = false;
     if (shared != NULL) {
@@ -71,7 +78,7 @@ bool minic_core_object_storage_plan_acquire(
         *borrowed = true;
         return true;
     }
-    return minic_core_object_storage_plan_build(program, layout, fn, result);
+    return minic_core_object_storage_plan_build(fn, result);
 }
 
 void minic_core_object_storage_plan_release(

@@ -1,5 +1,5 @@
-static const char local_name[] = "lo" "cal";
-static const char upvalue_name[] = "upvalue";
+static const char local_name[] __attribute__((used)) = "lo" "cal";
+static const char upvalue_name[] __attribute__((used)) = "upvalue";
 
 int main(void) {
     return sizeof(local_name) == 6 && sizeof(upvalue_name) == 8 && local_name[0] == 'l' &&

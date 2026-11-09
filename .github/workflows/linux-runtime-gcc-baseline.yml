@@ -14,6 +14,8 @@ on:
   push:
     branches:
       - "main"
+      # Exact-head push opt-in for current RV32 and RV64 Linux certification.
+      - "refactor/minic-target-language-boundary"
     paths:
       - '.github/workflows/linux-runtime-gcc-baseline.yml'
       # One explicitly audited four-ISA + seven-shard current-source recertification.
@@ -47,6 +49,16 @@ on:
       - 'tools/minic-cpp/**'
       - 'tests/preprocessor/**'
   workflow_dispatch:
+    inputs:
+      mode:
+        description: 'GNU reference, RV64 full, or RV32 single-owner cached manual replay'
+        required: true
+        type: choice
+        default: gcc-baseline
+        options:
+          - gcc-baseline
+          - rv64-full
+          - rv32-owner-replay
 
 permissions:
   contents: read
@@ -64,8 +76,326 @@ env:
 # SHA-certified Stage2 Linux 2064 opt-in after Stage2 500/500 identity pass.
 
 jobs:
+  # The historical 1.27GB GNU Kbuild cache was produced/restored in PR #674's
+  # scope; GitHub deliberately does not expose that cache to branch-push jobs.
+  # A cheap exact-HEAD gate admits only the marker-changing PR commit, avoiding
+  # an expensive or failing replay on every ordinary PR update.
+  x86-pv-producer-gate:
+    if: github.event_name == 'pull_request' && github.head_ref == 'refactor/minic-target-language-boundary'
+    runs-on: ubuntu-24.04
+    outputs:
+      active: ${{ steps.check.outputs.active }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 2
+          persist-credentials: false
+      - name: Exact HEAD and changed PV replay marker
+        id: check
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          echo 'active=false' >> "$GITHUB_OUTPUT"
+          test "$(git rev-parse HEAD)" = '${{ github.event.pull_request.head.sha }}'
+          if git rev-parse --verify HEAD^ >/dev/null && \
+             git diff --quiet HEAD^ HEAD -- tools/ci/linux-x86-pv-producer-replay-trigger.txt; then
+            exit 0
+          fi
+          if git log -1 --format=%s | grep -Fq '[x86-pv-producer-replay]'; then
+            echo 'active=true' >> "$GITHUB_OUTPUT"
+          fi
+
+  # Reuse OLD 2758 MiniC ELF objects and regenerate ONLY the authenticated
+  # 12 actual 3-byte PV .parainstructions producers. Never strict Linux PASS.
+  x86-pv-producer-replay:
+    needs: x86-pv-producer-gate
+    if: needs.x86-pv-producer-gate.outputs.active == 'true'
+    uses: ./.github/workflows/linux-x86-pv-producer-replay.yml
+    permissions:
+      contents: read
+      actions: read
+
+  # Exact one-shot push subject or explicit manual dispatch: immutable
+  # ace5bd140 producer objects (1737 untouched) + exact current-HEAD
+  # block/blk-mq.o and three live vdso-offsets.h dependent C owners, all via
+  # GNU-E/MiniC-S/GNU-AS + GNU LD and P1. Reuses original seven producer shards.
+  rv32-one-owner-replay:
+    if: github.ref == 'refs/heads/refactor/minic-target-language-boundary' && ((github.event_name == 'workflow_dispatch' && inputs.mode == 'rv32-owner-replay') || (github.event_name == 'push' && contains(github.event.head_commit.message, '[rv32-one-owner-replay]')))
+    uses: ./.github/workflows/linux-rv32i-single-owner-replay.yml
+    permissions:
+      contents: read
+      actions: read
+
+  # A marker AND the existing [linux-rv32i-kbuild] commit tag are required.
+  # This preserves the proven seven-shard GNU/ELF32 pipeline without changing
+  # PR titles, opening generic RV64 campaigns, or replaying stale markers.
+  rv32-current-campaign-gate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      run: ${{ steps.admit.outputs.run }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 2
+          persist-credentials: false
+      - name: Authenticate current-HEAD original RV32I Linux campaign
+        id: admit
+        shell: bash
+        run: |
+          bash tools/ci/linux-rv32-current-marker-gate-v1.sh
+
+  # One-shot PR entry for a newly added rv64-full workflow_dispatch mode.
+  # The explicit current-HEAD trigger is checked against the LAST commit;
+  # an old trigger elsewhere in a long-lived PR never launches new 7-shard
+  # campaigns on ordinary source edits.
+  rv64-campaign-gate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      run: ${{ steps.decide.outputs.run }}
+      p1_gdb: ${{ steps.decide.outputs.p1_gdb }}
+      p1_eight: ${{ steps.decide.outputs.p1_eight }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 2
+      - name: Prove last-commit RV64 push and PR consent gates
+        shell: bash
+        run: python3 tools/ci/test_linux_rv64_push_campaign_gate_v1.py
+      - name: Authenticate exact-head opt-in for full RV64 Linux runtime
+        id: decide
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          active=false
+          if [[ "${{ github.event_name }}" == pull_request || \
+                ( "${{ github.event_name }}" == push && \
+                  "${{ github.ref }}" == refs/heads/refactor/minic-target-language-boundary ) ]] && \
+             git rev-parse --verify HEAD^ >/dev/null 2>&1 && \
+             ! git diff --quiet HEAD^ HEAD -- tools/ci/linux-rv64-runtime-trigger.txt; then
+            # A branch push has no PR-title consent context.  Require the
+            # strict twelve-boot marker in the SAME final commit so that a
+            # runtime-only historical request cannot start the large C lane.
+            if [[ "${{ github.event_name }}" == pull_request ]] || \
+               ! git diff --quiet HEAD^ HEAD -- tools/ci/linux-rv64-p1-eight-trigger.txt; then
+              active=true
+            fi
+          fi
+          # The RV32 [minic-full] branch deliberately skips the RV64 cohort
+          # producer. Do not start its repeat-only consumer in that same job.
+          if [[ "${{ github.event_name }}" == pull_request ]] && \
+             [[ "${{ contains(github.event.pull_request.title, '[minic-full]') }}" == true ]]; then
+            active=false
+          fi
+          # This exact branch now has a strictly authenticated push path.
+          # If GitHub also delivers a synchronize/PR event for the same SHA,
+          # leave its duplicate seven-runner campaign inactive.
+          if [[ "${{ github.event_name }}" == pull_request && \
+                "${{ github.head_ref }}" == refactor/minic-target-language-boundary ]]; then
+            active=false
+          fi
+          # An independent, last-commit consent marker only for the exact-head
+          # PR receiver. Do not repurpose historical [linux-*] experiment tags:
+          # the canonical full-2064 receiver explicitly rejects those tags.
+          p1_gdb=false
+          if [[ "$active" == true ]] && \
+             [[ "${{ github.event_name }}" == pull_request ]] && \
+             ! git diff --quiet HEAD^ HEAD -- tools/ci/linux-rv64-p1-gdb-trigger.txt; then
+            p1_gdb=true
+          fi
+          p1_eight=false
+          if [[ "$active" == true ]] && \
+             ! git diff --quiet HEAD^ HEAD -- tools/ci/linux-rv64-p1-eight-trigger.txt; then
+            # The historical marker always opted into the optional eight-owner
+            # diagnostic. A new, exact-last-line explicit mode keeps the same
+            # two-file push consent but requests the canonical 2064-owner
+            # Image + twelve independent strict P1 boots instead. Never
+            # infer the mode from a stale comment or an earlier PR commit.
+            if [[ $(tail -n 1 tools/ci/linux-rv64-p1-eight-trigger.txt) == 'mode=rv64-full' ]]; then
+              echo 'RV64_FULL_MARKER_MODE=strict_full_same_image_12_boots'
+            else
+              p1_eight=true
+            fi
+          fi
+          printf 'run=%s\n' "$active" >>"$GITHUB_OUTPUT"
+          printf 'p1_gdb=%s\n' "$p1_gdb" >>"$GITHUB_OUTPUT"
+          printf 'p1_eight=%s\n' "$p1_eight" >>"$GITHUB_OUTPUT"
+          echo "RV64_FULL_PR_GATE=$active p1_gdb=$p1_gdb p1_eight=$p1_eight head=$(git rev-parse HEAD)"
+
+  # A cached original GNU Kbuild Image is an optimization, not a prerequisite
+  # for running the user's exact-head MiniC campaign. Historical branch-scoped
+  # caches (and keys tied to an older Ubuntu package hash) can disappear.
+  # Generate the *same pinned source/config* once, not independently in seven
+  # MiniC workers, and release those workers only after a real GNU P0/P1 proof.
+  rv64-current-gnu-golden:
+    needs: rv64-campaign-gate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 95
+    env:
+      RV64_FULL_ACTIVE: ${{ ((github.event_name == 'workflow_dispatch' && inputs.mode == 'rv64-full') || (needs.rv64-campaign-gate.outputs.run == 'true')) && '1' || '0' }}
+      EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        if: env.RV64_FULL_ACTIVE == '1'
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Verify original GNU Linux golden producer identity
+        if: env.RV64_FULL_ACTIVE == '1'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          bash -n tools/ci/linux-rv64-current-golden-v1.sh
+          echo "RV64_GOLDEN_EXACT_HEAD=PASS sha=$EXPECTED_HEAD"
+
+      - name: Install pinned original GNU/QEMU Linux tools
+        if: env.RV64_FULL_ACTIVE == '1'
+        timeout-minutes: 15
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          # Preserve Ubuntu's signed package versions, but avoid the Azure
+          # mirror stalls already diagnosed in the seven-shard/receiver lanes.
+          # Ubuntu 24.04 may resolve mirror+file from apt-mirrors.txt, so
+          # rewriting ubuntu.sources alone does not redirect the downloads.
+          for sources in /etc/apt/apt-mirrors.txt \
+                         /etc/apt/sources.list.d/ubuntu.sources; do
+            if [[ -f "$sources" ]] && grep -q 'azure.archive.ubuntu.com' "$sources"; then
+              sudo sed -i 's#azure.archive.ubuntu.com#archive.ubuntu.com#g' "$sources"
+            fi
+          done
+          if grep -q 'azure.archive.ubuntu.com' /etc/apt/apt-mirrors.txt 2>/dev/null; then
+            echo 'RV64_GNU_GOLDEN_APT=FAIL still_azure_mirrorlist' >&2
+            exit 14
+          fi
+          packages=(gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu
+                    libc6-dev-riscv64-cross bc bison flex libelf-dev libssl-dev
+                    make curl xz-utils cpio gzip file python3 qemu-system-misc opensbi)
+          timeout 120s sudo apt-get -o Acquire::Retries=2 \
+            -o Acquire::http::Timeout=30 update -qq
+          if ! timeout 300s sudo apt-get -o Acquire::Retries=2 \
+               -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 \
+               -o DPkg::Lock::Timeout=60 install -y --no-install-recommends \
+               "${packages[@]}"; then
+            echo 'RV64_GNU_GOLDEN_APT=RETRY fresh_package_indexes=1'
+            timeout 120s sudo apt-get -o Acquire::Retries=2 \
+              -o Acquire::http::Timeout=30 update -qq
+            timeout 300s sudo apt-get -o Acquire::Retries=2 \
+              -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 \
+              -o DPkg::Lock::Timeout=60 install -y --no-install-recommends \
+              "${packages[@]}"
+          fi
+          command -v riscv64-linux-gnu-gcc
+          command -v qemu-system-riscv64
+          echo 'RV64_GNU_GOLDEN_APT=PASS gnu_and_qemu=true'
+
+      - name: Identify exact GNU toolchain/Kconfig object-cache identity
+        if: env.RV64_FULL_ACTIVE == '1'
+        id: gnu_identity
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          cfg=eeb04f304ebfb97a1079c187dc0c2ea3cc61fc50a55aa3cc776237c16ab19bbe
+          gcc_sig=$(sha256sum "$(command -v riscv64-linux-gnu-gcc)" | cut -c1-16)
+          ld_sig=$(sha256sum "$(command -v riscv64-linux-gnu-ld)" | cut -c1-16)
+          echo "key=linux-gnu-golden-v1-6.6.143-$cfg-$gcc_sig-$ld_sig" >> "$GITHUB_OUTPUT"
+
+      - name: Restore pinned original Linux source if it still exists
+        if: env.RV64_FULL_ACTIVE == '1'
+        uses: actions/cache/restore@v4
+        id: pristine_source_cache
+        with:
+          path: build/linux-expanded-kbuild-v0/linux-6.6.143
+          key: linux-source-6.6.143-dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932-v1
+
+      - name: Reconstitute SHA-pinned original Linux source after cache expiry
+        if: env.RV64_FULL_ACTIVE == '1' && steps.pristine_source_cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          root="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0"
+          mkdir -p "$root"
+          archive="$RUNNER_TEMP/minic-6.6.143-original-linux.tar.xz"
+          curl --proto '=https' --tlsv1.2 -fLSs --retry 4 \
+            https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.6.143.tar.xz \
+            -o "$archive"
+          printf '%s  %s\n' dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932 "$archive" | sha256sum -c -
+          tar -xJf "$archive" -C "$root"
+          test -s "$root/linux-6.6.143/Makefile"
+          echo 'RV64_GNU_ORIGINAL_SOURCE=PASS sha256=dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932'
+
+      - name: Save reconstructed pinned Linux source for the seven workers
+        if: env.RV64_FULL_ACTIVE == '1' && steps.pristine_source_cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: build/linux-expanded-kbuild-v0/linux-6.6.143
+          key: linux-source-6.6.143-dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932-v1
+
+      - name: Restore GNU/QEMU-certified object cache if still available
+        if: env.RV64_FULL_ACTIVE == '1'
+        id: original_gnu_cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            build/linux-runtime-gcc/out
+            build/linux-runtime-gcc/provenance
+          key: ${{ steps.gnu_identity.outputs.key }}
+
+      - name: Build original GNU Linux and certify P0/P1 on a missing cache
+        if: env.RV64_FULL_ACTIVE == '1' && steps.original_gnu_cache.outputs.cache-hit != 'true'
+        timeout-minutes: 75
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          bash tools/ci/linux-rv64-current-golden-v1.sh \
+            "$GITHUB_WORKSPACE/build/linux-runtime-gcc" \
+            "$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0/linux-6.6.143"
+
+      - name: Attest original GNU cache source, Kconfig, owner count, QEMU contract
+        if: env.RV64_FULL_ACTIVE == '1'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-runtime-gcc"
+          cfg=eeb04f304ebfb97a1079c187dc0c2ea3cc61fc50a55aa3cc776237c16ab19bbe
+          test -s "$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0/linux-6.6.143/Makefile"
+          test "$(sha256sum "$work/out/.config" | cut -d' ' -f1)" = "$cfg"
+          test -s "$work/out/arch/riscv/boot/Image"
+          test -s "$work/out/vmlinux"
+          grep -Fxq 'linux_release=6.6.143' "$work/provenance/gcc-baseline.txt"
+          grep -Fxq "config_sha256=$cfg" "$work/provenance/gcc-baseline.txt"
+          grep -Fxq 'qemu_contract=full_and_p1_passed' "$work/provenance/gcc-baseline.txt"
+          grep -Fxq 'linux_archive_sha256=dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932' "$work/provenance/gcc-baseline.txt"
+          test -s "$work/provenance/gcc-objects.sha256"
+          echo "RV64_CURRENT_GNU_GOLDEN=PASS config=$cfg cache_hit=${{ steps.original_gnu_cache.outputs.cache-hit }} original_Linux=true"
+
+      - name: Cache freshly rebuilt GNU/QEMU-qualified object pool once
+        if: env.RV64_FULL_ACTIVE == '1' && steps.original_gnu_cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            build/linux-runtime-gcc/out
+            build/linux-runtime-gcc/provenance
+          key: ${{ steps.gnu_identity.outputs.key }}
+
+      - name: Preserve GNU Kbuild/QEMU failure if golden regeneration is blocked
+        if: failure() && env.RV64_FULL_ACTIVE == '1'
+        uses: actions/upload-artifact@v4
+        with:
+          name: rv64-current-gnu-golden-blocker-${{ github.event.pull_request.head.sha || github.sha }}
+          path: |
+            build/linux-runtime-gcc/out/.config
+            build/linux-runtime-gcc/provenance/
+          if-no-files-found: warn
+          retention-days: 7
+
   gcc-runtime:
-    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[linux-runtime-gcc]')
+    if: (github.event_name == 'workflow_dispatch' && inputs.mode == 'gcc-baseline') || contains(github.event.head_commit.message, '[linux-runtime-gcc]')
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
@@ -1134,6 +1464,11 @@ jobs:
             build/linux-runtime-gcc-cohort-v1/trials/*/qemu-registers.jsonl
             build/linux-runtime-gcc-cohort-v1/trials/*/qmp-probe.log
             build/linux-runtime-gcc-cohort-v1/trials/*/qmp-symbols.log
+            build/linux-runtime-gcc-cohort-v1/trials/*/qmp-physical-symbols.log
+            build/linux-runtime-gcc-cohort-v1/trials/*/qmp-physical-disasm.log
+            build/linux-runtime-gcc-cohort-v1/trials/*/qmp-physical-vmlinux-nm.txt.gz
+            build/linux-runtime-gcc-cohort-v1/trials/*/qemu-mapped-initrd.log
+            build/linux-runtime-gcc-cohort-v1/trials/*/qemu-default-initrd.log
             build/linux-runtime-gcc-cohort-v1/trials/*/runtime-p1.log
             build/linux-runtime-gcc-cohort-v1/trials/*/runtime-p1-python.log
             build/linux-runtime-gcc-cohort-v1/trials/*/qemu-p1/*.log
@@ -1145,17 +1480,67 @@ jobs:
   # Explicit, optional 7-runner producer for the same pure-GCC C universe.
   # Do not use this lane for everyday single-TU debugging.
   gcc-shards:
-    if: github.event_name == 'push' && !contains(github.event.head_commit.message, '[linux-runtime-gcc-receiver-reuse]') && ((contains(github.event.head_commit.message, '[linux-rv32i-kbuild]') || (github.event_name == 'pull_request' && contains(github.event.pull_request.title, '[minic-full]'))) || contains(github.event.head_commit.message, '[linux-perf-2064-ab]') || contains(github.event.head_commit.message, '[linux-runtime-gcc-sharded]') || contains(github.event.head_commit.message, '[linux-minias-seven-shards]') || (contains(github.event.head_commit.message, '[linux-minipp-seven-integration]') && !contains(github.event.head_commit.message, '[linux-minipp-seven-replay]')) || contains(github.event.head_commit.message, '[linux-minipp-native-rules-C]') || contains(github.event.head_commit.message, '[minic-bootstrap-stage2-linux2064]') || contains(github.event.head_commit.message, '[minic-bootstrap-stage4-linux2064]')) || (github.event_name == 'pull_request' && contains(github.event.pull_request.title, '[minic-full]'))
+    needs: [rv32-current-campaign-gate, rv64-campaign-gate, rv64-current-gnu-golden, rv32i-kbuild-entry]
+    if: >-
+      always() &&
+      (github.event_name != 'push' || github.ref != 'refs/heads/refactor/minic-target-language-boundary' || !contains(github.event.head_commit.message, '[linux-rv32i-kbuild]') || (needs.rv32-current-campaign-gate.outputs.run == 'true' && needs.rv32i-kbuild-entry.result == 'success')) &&
+      needs.rv64-campaign-gate.result == 'success' &&
+      needs.rv64-current-gnu-golden.result == 'success' &&
+      (github.event_name != 'pull_request' || !contains(github.event.pull_request.title, '[minic-full]') || needs.rv32i-kbuild-entry.result == 'success') &&
+      (
+        (github.event_name == 'workflow_dispatch' && inputs.mode == 'rv64-full') ||
+        (needs.rv64-campaign-gate.outputs.run == 'true') ||
+        (github.event_name == 'push' && !contains(github.event.head_commit.message, '[linux-runtime-gcc-receiver-reuse]') && ((contains(github.event.head_commit.message, '[linux-rv32i-kbuild]') || (github.event_name == 'pull_request' && contains(github.event.pull_request.title, '[minic-full]'))) || contains(github.event.head_commit.message, '[linux-perf-2064-ab]') || contains(github.event.head_commit.message, '[linux-runtime-gcc-sharded]') || contains(github.event.head_commit.message, '[linux-minias-seven-shards]') || (contains(github.event.head_commit.message, '[linux-minipp-seven-integration]') && !contains(github.event.head_commit.message, '[linux-minipp-seven-replay]')) || contains(github.event.head_commit.message, '[linux-minipp-native-rules-C]') || contains(github.event.head_commit.message, '[minic-bootstrap-stage2-linux2064]') || contains(github.event.head_commit.message, '[minic-bootstrap-stage4-linux2064]'))) ||
+        (github.event_name == 'pull_request' && contains(github.event.pull_request.title, '[minic-full]'))
+      )
     runs-on: ubuntu-24.04
     timeout-minutes: 75
     strategy:
       fail-fast: false
       matrix:
         shard: [0, 1, 2, 3, 4, 5, 6]
+    env:
+      MINIC_EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      MINIC_CURRENT_MAIN_SEVEN_RECHECK: ${{ ((github.event_name == 'workflow_dispatch' && inputs.mode == 'rv64-full') || (needs.rv64-campaign-gate.outputs.run == 'true')) && '1' || '0' }}
+      # Existing fail-closed, three-object timestamp exception for seven-way
+      # GNU Kbuild replay. It rejects any non-seven-shard/config scope.
+      COHORT_GNU_PREFLIGHT_ALLOW_SEVEN_SHARD_VOLATILE: ${{ ((github.event_name == 'workflow_dispatch' && inputs.mode == 'rv64-full') || (needs.rv64-campaign-gate.outputs.run == 'true')) && '1' || '0' }}
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Bind every current RV32 MiniC shard to the same exact compiler HEAD
+        if: needs.rv32-current-campaign-gate.outputs.run == 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse HEAD)" = "$MINIC_EXPECTED_HEAD_SHA"
+          test "$GITHUB_REF" = refs/heads/refactor/minic-target-language-boundary
+          echo "RV32I_CURRENT_SHA_SHARD=PASS shard=${{ matrix.shard }} head=$MINIC_EXPECTED_HEAD_SHA"
+
+      - name: Fail closed on non-native RV64 full campaign profiles
+        if: (github.event_name == 'workflow_dispatch' && inputs.mode == 'rv64-full') || (needs.rv64-campaign-gate.outputs.run == 'true')
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse HEAD)" = "$MINIC_EXPECTED_HEAD_SHA"
+          git diff --quiet -- src include Makefile
+          if git log -1 --format=%B | grep -Eq '\[(linux-|minic-bootstrap-)'; then
+            echo 'RV64_FULL_EXACT_HEAD=FAIL conflicting historical/experimental commit tag' >&2
+            exit 1
+          fi
+          # The fresh GNU reference uses these exact Kbuild identity fields.
+          # Without them a copied source tree may rebuild the generated
+          # usr/initramfs_data.o (embedded cpio timestamp) in preflight with
+          # different bytes although no genuine C owner has changed.
+          {
+            echo 'KBUILD_BUILD_USER=minic'
+            echo 'KBUILD_BUILD_HOST=minic-ci'
+            echo 'KBUILD_BUILD_TIMESTAMP=Thu Jan  1 00:00:00 UTC 1970'
+          } >> "$GITHUB_ENV"
+          echo 'RV64_GNU_GENERATED_IDENTITIES=PINNED user=minic host=minic-ci timestamp=1970-01-01'
+          echo "RV64_FULL_EXACT_HEAD=PASS sha=$MINIC_EXPECTED_HEAD_SHA shard=${{ matrix.shard }} native_source=true"
 
       - name: Install pinned GNU RISC-V build tools
         timeout-minutes: 12
@@ -1259,7 +1644,13 @@ jobs:
           subset=$(sha256sum "$work/shard-${{ matrix.shard }}/full-objects.txt" | cut -d' ' -f1)
           gcc=$(sha256sum "$(command -v riscv64-linux-gnu-gcc)" | cut -d' ' -f1)
           as=$(sha256sum "$(command -v riscv64-linux-gnu-as)" | cut -d' ' -f1)
-          echo "key=gnu-minic-shard-rv32i-v1-${{ steps.rv32_gold_key.outputs.key }}-$profile-$subset-$gcc-$as" >>"$GITHUB_OUTPUT"
+          # The one-shot campaign must compile CURRENT HEAD's compiler C owners;
+          # an older cached compiler build may not be reused across commits.
+          current_head_key=
+          if [[ "${{ needs.rv32-current-campaign-gate.outputs.run }}" == true ]]; then
+            current_head_key="-head-$MINIC_EXPECTED_HEAD_SHA"
+          fi
+          echo "key=gnu-minic-shard-rv32i-v1-${{ steps.rv32_gold_key.outputs.key }}-$profile-$subset-$gcc-$as$current_head_key" >>"$GITHUB_OUTPUT"
 
       - name: Restore the exact RV32 MiniC shard candidate
         if: (contains(github.event.head_commit.message, '[linux-rv32i-kbuild]') || (github.event_name == 'pull_request' && contains(github.event.pull_request.title, '[minic-full]')))
@@ -1273,19 +1664,75 @@ jobs:
             build/rv32i-linux-entry/shard-${{ matrix.shard }}/cohort.log
           key: ${{ steps.rv32_candidate.outputs.key }}
 
+      # Optional recovery from a PREVIOUS, completed red current-compiler
+      # campaign. A new one-shot marker may append resume_run=<run-id>; no
+      # old-success object is trusted without checking frozen source/GNU .cmd,
+      # real GNU -E bytes, MiniC source/profile SHA, binary SHA, GAS and ELF32.
+      - name: Authenticate optional preceding RV32 partial-owner run
+        id: rv32_partial_request
+        if: needs.rv32-current-campaign-gate.outputs.run == 'true' && steps.rv32_candidate_cache.outputs.cache-hit != 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -Eeuo pipefail
+          marker=tools/ci/linux-rv32-current-runtime-trigger.txt
+          resume=$(sed -n 's/^resume_run=//p' "$marker")
+          if [[ -n "$resume" ]]; then
+            [[ "$resume" =~ ^[1-9][0-9]{7,14}$ ]]
+            test "$resume" != "$GITHUB_RUN_ID"
+            gh api "repos/$GITHUB_REPOSITORY/actions/runs/$resume" | \
+              python3 -c '
+          import json,sys
+          run=json.load(sys.stdin)
+          assert run["path"] == ".github/workflows/linux-runtime-gcc-baseline.yml", "foreign partial producer workflow"
+          assert run["head_branch"] == "refactor/minic-target-language-boundary", "foreign partial producer branch"
+          assert run["status"] == "completed" and run["conclusion"] in ("failure","cancelled","timed_out"), "previous run not red/completed"
+          print("RV32I_PREVIOUS_PARTIAL_RUN=AUTHENTICATED run="+str(run["id"]))
+          '
+            echo "run_id=$resume" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Restore the prior RV32 shard's per-owner SHA checkpoint
+        if: needs.rv32-current-campaign-gate.outputs.run == 'true' && steps.rv32_partial_request.outputs.run_id != ''
+        uses: actions/download-artifact@v4
+        with:
+          repository: ${{ github.repository }}
+          github-token: ${{ github.token }}
+          run-id: ${{ steps.rv32_partial_request.outputs.run_id }}
+          name: rv32i-shard-checkpoint-${{ matrix.shard }}
+          path: build/rv32i-linux-entry/partial-resume-${{ matrix.shard }}
+
       - name: Sweep ALL authentic RV32 C owners assigned to this shard
         if: (contains(github.event.head_commit.message, '[linux-rv32i-kbuild]') || (github.event_name == 'pull_request' && contains(github.event.pull_request.title, '[minic-full]')))
         shell: bash
         timeout-minutes: 60
         run: |
           set -Eeuo pipefail
+          resume_path=
+          if [[ -n '${{ steps.rv32_partial_request.outputs.run_id }}' ]]; then
+            resume_path="$GITHUB_WORKSPACE/build/rv32i-linux-entry/partial-resume-${{ matrix.shard }}"
+            test -s "$resume_path/checkpoint/identity.json"
+          fi
           make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/rv32i-linux-tools \
             build/rv32i-linux-tools/bin/minic-cc
           MINIC_CC="$GITHUB_WORKSPACE/build/rv32i-linux-tools/bin/minic-cc" \
+          RV32I_SHARD_RESUME="$resume_path" \
           RV32I_LINUX_MODE=shard RV32I_SHARD=${{ matrix.shard }} \
           RV32I_LINUX_SOURCE="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0/linux-6.6.143" \
           RV32I_LINUX_WORK="$GITHUB_WORKSPACE/build/rv32i-linux-entry" \
             bash tests/external/linux/rv32i_kbuild_entry.sh
+
+      - name: Preserve every exact-source current MiniC success before shard failure
+        if: always() && needs.rv32-current-campaign-gate.outputs.run == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: rv32i-shard-checkpoint-${{ matrix.shard }}
+          path: build/rv32i-linux-entry/shard-${{ matrix.shard }}/partial/
+          include-hidden-files: true
+          if-no-files-found: ignore
+          compression-level: 2
+          retention-days: 14
 
       - name: Retain certified RV32 objects even if later link or QEMU fails
         if: (contains(github.event.head_commit.message, '[linux-rv32i-kbuild]') || (github.event_name == 'pull_request' && contains(github.event.pull_request.title, '[minic-full]'))) && steps.rv32_candidate_cache.outputs.cache-hit != 'true'
@@ -1318,6 +1765,7 @@ jobs:
         with:
           name: debug-shard-${{ matrix.shard }}
           path: |
+            build/rv32i-linux-entry/shard-${{ matrix.shard }}/gnu-prepare.log
             build/rv32i-linux-entry/shard-${{ matrix.shard }}/compile.log
             build/rv32i-linux-entry/shard-${{ matrix.shard }}/compile-blockers.txt
             build/rv32i-linux-entry/shard-${{ matrix.shard }}/make-diagnostics.txt
@@ -1598,7 +2046,13 @@ jobs:
           src="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0/linux-6.6.143"
           test -d "$src"
           test ! -e "$work/linux-6.6.143"
-          cp -a --reflink=auto "$src" "$work/linux-6.6.143"
+          # The GNU golden .o.cmd records the original Kbuild source path.
+          # Preserve it for this exact seven-shard producer; copied sources
+          # change the command signature and force thousands of GNU C rebuilds.
+          ln -s "$src" "$work/linux-6.6.143"
+          test -L "$work/linux-6.6.143"
+          test "$(realpath "$work/linux-6.6.143")" = "$src"
+          echo 'RV64_GNU_KBUILD_SOURCE_ALIAS=PASS lane=seven_shard original_source_path=true'
           ev="$GITHUB_WORKSPACE/build/linux-runtime-gcc-shards-v1/shard-${{ matrix.shard }}"
           if [[ "${{ contains(github.event.head_commit.message, '[linux-runtime-full-crossblock]') && '1' || '0' }}" == 1 ]]; then
             export MINIC_LINUX_FULL_CROSSBLOCK=1 MINIC_OPT_PURE_DISCARDED_ADDRESS_EQ=1
@@ -1779,17 +2233,54 @@ jobs:
           retention-days: 3
 
   gcc-shard-verify:
-    needs: [gcc-shards]
+    needs: [gcc-shards, rv32-current-campaign-gate, rv64-campaign-gate, rv64-current-gnu-golden]
     # Use the SAME receiver job for exact immutable Image reboots. When the
     # seven producer jobs are skipped, always() prevents needs' implicit skip;
     # the ordinary full-shard path still requires a successful producer.
-    if: always() && github.event_name == 'push' && (((contains(github.event.head_commit.message, '[linux-rv32i-kbuild]') || (github.event_name == 'pull_request' && contains(github.event.pull_request.title, '[minic-full]'))) && needs.gcc-shards.result == 'success') || (contains(github.event.head_commit.message, '[linux-runtime-gcc-sharded]') && (needs.gcc-shards.result == 'success' || (contains(github.event.head_commit.message, '[linux-runtime-gcc-receiver-reuse]') && needs.gcc-shards.result == 'skipped'))) || (contains(github.event.head_commit.message, '[linux-minipp-seven-integration]') && needs.gcc-shards.result == 'success') || (contains(github.event.head_commit.message, '[linux-minipp-seven-replay]') && needs.gcc-shards.result == 'skipped') || contains(github.event.head_commit.message, '[linux-runtime-large-image-qemu]') || contains(github.event.head_commit.message, '[linux-runtime-p1-frame-audit]') || contains(github.event.head_commit.message, '[linux-runtime-stack-owners]') || contains(github.event.head_commit.message, '[linux-native-union-cached]') || contains(github.event.head_commit.message, '[linux-minild-cached-replay]') || contains(github.event.head_commit.message, '[linux-minild-reloc-cached-replay]') || contains(github.event.head_commit.message, '[linux-minild-purgatory-cached-replay]') || contains(github.event.head_commit.message, '[linux-minild-vdso64-cached-replay]') || contains(github.event.head_commit.message, '[linux-minild-vdso32-cached-replay]') || contains(github.event.head_commit.message, '[linux-minias-earlycon-frozen]') || (contains(github.event.head_commit.message, '[minic-bootstrap-stage2-linux2064]') || (contains(github.event.head_commit.message, '[minic-bootstrap-stage4-linux2064]') && needs.gcc-shards.result == 'success') && needs.gcc-shards.result == 'success')) || (always() && (github.event_name == 'pull_request' && contains(github.event.pull_request.title, '[minic-full]')) && needs.gcc-shards.result == 'success')
+    if: >-
+      (always() && github.event_name == 'workflow_dispatch' && inputs.mode == 'rv64-full' && needs.gcc-shards.result == 'success') ||
+      (always() && needs.rv64-campaign-gate.outputs.run == 'true' && needs.gcc-shards.result == 'success') ||
+      (always() && github.event_name == 'push' && (((contains(github.event.head_commit.message, '[linux-rv32i-kbuild]') || (github.event_name == 'pull_request' && contains(github.event.pull_request.title, '[minic-full]'))) && needs.gcc-shards.result == 'success') || (contains(github.event.head_commit.message, '[linux-runtime-gcc-sharded]') && (needs.gcc-shards.result == 'success' || (contains(github.event.head_commit.message, '[linux-runtime-gcc-receiver-reuse]') && needs.gcc-shards.result == 'skipped'))) || (contains(github.event.head_commit.message, '[linux-minipp-seven-integration]') && needs.gcc-shards.result == 'success') || (contains(github.event.head_commit.message, '[linux-minipp-seven-replay]') && needs.gcc-shards.result == 'skipped') || contains(github.event.head_commit.message, '[linux-runtime-large-image-qemu]') || contains(github.event.head_commit.message, '[linux-runtime-p1-frame-audit]') || contains(github.event.head_commit.message, '[linux-runtime-stack-owners]') || contains(github.event.head_commit.message, '[linux-native-union-cached]') || contains(github.event.head_commit.message, '[linux-minild-cached-replay]') || contains(github.event.head_commit.message, '[linux-minild-reloc-cached-replay]') || contains(github.event.head_commit.message, '[linux-minild-purgatory-cached-replay]') || contains(github.event.head_commit.message, '[linux-minild-vdso64-cached-replay]') || contains(github.event.head_commit.message, '[linux-minild-vdso32-cached-replay]') || contains(github.event.head_commit.message, '[linux-minias-earlycon-frozen]') || (contains(github.event.head_commit.message, '[minic-bootstrap-stage2-linux2064]') || (contains(github.event.head_commit.message, '[minic-bootstrap-stage4-linux2064]') && needs.gcc-shards.result == 'success') && needs.gcc-shards.result == 'success'))) ||
+      (always() && (github.event_name == 'pull_request' && contains(github.event.pull_request.title, '[minic-full]')) && needs.gcc-shards.result == 'success')
     runs-on: ubuntu-24.04
     timeout-minutes: 95
+    env:
+      MINIC_EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      MINIC_CURRENT_MAIN_SEVEN_RECHECK: ${{ ((github.event_name == 'workflow_dispatch' && inputs.mode == 'rv64-full') || (needs.rv64-campaign-gate.outputs.run == 'true')) && '1' || '0' }}
+      COHORT_GNU_PREFLIGHT_ALLOW_SEVEN_RECEIVER_VOLATILE: ${{ ((github.event_name == 'workflow_dispatch' && inputs.mode == 'rv64-full') || (needs.rv64-campaign-gate.outputs.run == 'true')) && '1' || '0' }}
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Bind current RV32 GNU LD and twelve P1 boots to producer HEAD
+        if: needs.rv32-current-campaign-gate.outputs.run == 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse HEAD)" = "$MINIC_EXPECTED_HEAD_SHA"
+          test "$GITHUB_REF" = refs/heads/refactor/minic-target-language-boundary
+          test "${{ needs.gcc-shards.result }}" = success
+          echo "RV32I_CURRENT_RECEIVER_SHA=PASS head=$MINIC_EXPECTED_HEAD_SHA seven_shards=success"
+
+      - name: Authenticate RV64 receiver exact-head source before restoring objects
+        if: (github.event_name == 'workflow_dispatch' && inputs.mode == 'rv64-full') || (needs.rv64-campaign-gate.outputs.run == 'true')
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse HEAD)" = "$MINIC_EXPECTED_HEAD_SHA"
+          git diff --quiet -- src include Makefile
+          if git log -1 --format=%B | grep -Eq '\[(linux-|minic-bootstrap-)'; then
+            echo 'RV64_FULL_RECEIVER=FAIL conflicting historical/experimental commit tag' >&2
+            exit 1
+          fi
+          {
+            echo 'KBUILD_BUILD_USER=minic'
+            echo 'KBUILD_BUILD_HOST=minic-ci'
+            echo 'KBUILD_BUILD_TIMESTAMP=Thu Jan  1 00:00:00 UTC 1970'
+          } >> "$GITHUB_ENV"
+          echo 'RV64_GNU_GENERATED_IDENTITIES=PINNED user=minic host=minic-ci timestamp=1970-01-01'
+          echo "RV64_FULL_RECEIVER=SOURCE_PASS sha=$MINIC_EXPECTED_HEAD_SHA full_original_2064_required=true"
 
       - name: Install minimal pinned GNU binutils and GCC for P1 object-only audit
         if: contains(github.event.head_commit.message, '[linux-runtime-p1-frame-audit]')
@@ -1904,7 +2395,7 @@ jobs:
           retention-days: 7
 
       - name: Install P1 RISC-V GDB debugger
-        if: contains(github.event.head_commit.message, '[linux-runtime-gdb-stack]') || contains(github.event.head_commit.message, '[linux-runtime-p1-pair-debug]') || contains(github.event.head_commit.message, '[linux-runtime-p1-sched-chain]')
+        if: contains(github.event.head_commit.message, '[linux-runtime-gdb-stack]') || contains(github.event.head_commit.message, '[linux-runtime-p1-pair-debug]') || contains(github.event.head_commit.message, '[linux-runtime-p1-sched-chain]') || (needs.rv64-campaign-gate.outputs.p1_gdb == 'true')
         timeout-minutes: 5
         run: |
           sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 install -y --no-install-recommends gdb-multiarch
@@ -2409,7 +2900,7 @@ jobs:
           mkdir -p "$dir/trials"
           printf 'attempt\timage_sha256\tverdict\n' > "$dir/p1-repeats.tsv"
           printf 'commit=%s\nimage_sha256=%s\nproducer_run=%s\n' \
-            "$GITHUB_SHA" "$sha" "$GITHUB_RUN_ID" > "$dir/source-identity.txt"
+            "$MINIC_EXPECTED_HEAD_SHA" "$sha" "$GITHUB_RUN_ID" > "$dir/source-identity.txt"
           # Verify a real ELF32 shell in this exact newly linked kernel.
           RV32I_QEMU_P1=1 RV32I_QEMU_SHELL=1 \
           RV32I_QEMU_IMAGE="$image" \
@@ -2504,7 +2995,13 @@ jobs:
           work="$GITHUB_WORKSPACE/build/linux-runtime-gcc"
           src="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0/linux-6.6.143"
           test -d "$src"
-          cp -a --reflink=auto "$src" "$work/linux-6.6.143"
+          # Keep receiver GNU Kbuild commands byte-identical to the golden.
+          # A copied source tree changes .o.cmd dependency/command paths.
+          test ! -e "$work/linux-6.6.143"
+          ln -s "$src" "$work/linux-6.6.143"
+          test -L "$work/linux-6.6.143"
+          test "$(realpath "$work/linux-6.6.143")" = "$src"
+          echo 'RV64_GNU_KBUILD_SOURCE_ALIAS=PASS lane=seven_receiver original_source_path=true'
           ev="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-v1"
           if [[ "${{ contains(github.event.head_commit.message, '[linux-runtime-full-crossblock]') && '1' || '0' }}" == 1 ]]; then
             export MINIC_LINUX_FULL_CROSSBLOCK=1 MINIC_OPT_PURE_DISCARDED_ADDRESS_EQ=1
@@ -3026,9 +3523,13 @@ jobs:
         if: "!contains(github.event.head_commit.message, '[linux-runtime-large-image-qemu]') && !contains(github.event.head_commit.message, '[linux-runtime-p1-frame-audit]') && !contains(github.event.head_commit.message, '[linux-runtime-p1-cfg-semantic-only]') && !contains(github.event.head_commit.message, '[linux-minild-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minild-reloc-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minild-purgatory-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minild-vdso64-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minild-vdso32-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minias-earlycon-frozen]') && (!contains(github.event.head_commit.message, '[linux-minias-corpus-scan]') || contains(github.event.head_commit.message, '[linux-minias-corpus-runtime]')) && !(contains(github.event.head_commit.message, '[linux-rv32i-kbuild]') || (github.event_name == 'pull_request' && contains(github.event.pull_request.title, '[minic-full]')))"
         shell: bash
         env:
+          COHORT_P1_EIGHT_OWNER: ${{ (needs.rv64-campaign-gate.outputs.p1_eight == 'true') && '1' || '0' }}
           COHORT_MINIPP_DYNAMIC_HEADERS: ${{ contains(github.event.head_commit.message, '[linux-minipp-dynamic-headers]') && '1' || '0' }}
           COHORT_MINIPP_PROFILE_SNAPSHOT: ${{ contains(github.event.head_commit.message, '[linux-minipp-pinned-predefines]') && 'tests/preprocessor/profiles/rv64-linux-6.6.143-gcc13.json.gz.b64' || '' }}
           COHORT_MINIPP_NATIVE_MACRO_RULES: ${{ contains(github.event.head_commit.message, '[linux-minipp-native-rules-p1]') && '1' || '0' }}
+          # Step environment is inherited by the cohort subprocess, just as
+          # the previous shell export was; keep the long run block immutable.
+          COHORT_P1_EXACT_FAILED_GDB: ${{ (needs.rv64-campaign-gate.outputs.p1_gdb == 'true') && '1' || '0' }}
         run: |
           set -Eeuo pipefail
           work="$GITHUB_WORKSPACE/build/linux-runtime-gcc"
@@ -3310,6 +3811,150 @@ jobs:
             echo "NATIVE_UNION_RESULT=PASS pp=$pp_tag minic=2064 native_C_from_seven_shards=${COHORT_P1_EXPERIMENTAL_POOL:-none} ar=MiniAR_full_actual_Kbuild ar_native_calls=$minic_ar_calls ar_mpit_calls=$minic_mpit_calls ar_gnu_calls=0 ld=MiniLD_certified_boundaries vdso64_native=${MINILD_ENABLE_VDSO64:-0} objcopy=MiniObjcopy runtime=P1"
           fi
 
+      # COHORT_P1 syscalls=12 is one boot with twelve syscall probes; it is
+      # not twelve independent boots. The explicit current-HEAD campaign
+      # must also pass twelve NEW QEMU processes on one immutable Image.
+      - name: Reboot the exact RV64 all-MiniC Image twelve times with strict P1
+        if: ((github.event_name == 'workflow_dispatch' && inputs.mode == 'rv64-full') || (needs.rv64-campaign-gate.outputs.run == 'true')) && !(needs.rv64-campaign-gate.outputs.p1_eight == 'true')
+        timeout-minutes: 20
+        shell: bash
+        env:
+          COHORT_P1_EXACT_FAILED_GDB: ${{ (needs.rv64-campaign-gate.outputs.p1_gdb == 'true') && '1' || '0' }}
+        run: |
+          set -Eeuo pipefail
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-v1"
+          # Do not use the loop's $work, which is rebound to each QEMU trial.
+          kbuild_out="$GITHUB_WORKSPACE/build/linux-runtime-gcc/out"
+          image="$ev/trials/full_all_verified/Image"
+          initramfs="$ev/runtime-initramfs.cpio.gz"
+          test -s "$image" && test -s "$initramfs"
+          grep -Fq 'COHORT_RESULT=PASS candidate_objects=2064 scope=FULL_C_UNIVERSE' "$ev/cohort.log"
+          grep -Fq 'COHORT_P1=PASS name=full_all_verified syscalls=12 python_era_oracle=PASS' "$ev/cohort.log"
+          # Replay the loader mapping already certified for this exact Image.
+          # QEMU's default RISC-V -initrd placement (0x88200000) collides
+          # with a >128 MiB all-MiniC kernel before any guest instruction runs.
+          image_bytes=$(stat -c '%s' "$image")
+          custom_dtb=''
+          initrd_load=''
+          qemu_memory=512M
+          if ((image_bytes > 128 * 1024 * 1024)); then
+            custom_dtb="$ev/trials/full_all_verified/full-crossblock-virt.dtb"
+            initrd_load=$((0xa0000000))
+            initrd_end=$((initrd_load + $(stat -c '%s' "$initramfs")))
+            image_end=$((0x80200000 + image_bytes))
+            test -s "$custom_dtb"
+            ((image_end <= initrd_load && initrd_end < 0x100000000))
+            printf -v initrd_end_hex '%x' "$initrd_end"
+            test "$(fdtget -t x "$custom_dtb" /chosen linux,initrd-start)" = '0 a0000000'
+            test "$(fdtget -t x "$custom_dtb" /chosen linux,initrd-end)" = "0 $initrd_end_hex"
+            qemu_memory=2G
+          fi
+          echo "RV64_FULL_REPEAT_LOADER=PASS image_bytes=$image_bytes qemu_memory=$qemu_memory initrd_load=${initrd_load:-default}"
+          root="$ev/p1-identical-image-12"
+          mkdir -p "$root/trials"
+          image_sha=$(sha256sum "$image" | cut -d' ' -f1)
+          # The preceding full_all_verified trial already proved this exact
+          # Image under its non-overlapping large-Image DTB when >128MiB.
+          # A fresh Actions shell loses those three loader env variables;
+          # restore that SAME approved map for all twelve new QEMU processes.
+          # Smaller Images keep the original 512MiB/-initrd GNU baseline.
+          source tools/ci/linux-runtime-rv64-repeat-loader-v1.sh
+          minic_rv64_repeat_loader_selftest
+          minic_rv64_repeat_loader_select "$ev" "$image" "$initramfs" "$image_sha"
+          printf 'attempt\timage_sha256\tqemu_exit\tsyscalls\tverdict\n' > "$root/repeats.tsv"
+          printf 'head=%s\nimage_sha256=%s\ncompiler_profile=native-current-head\nloader_memory=%s\nloader_initrd=%s\n' \
+            "$MINIC_EXPECTED_HEAD_SHA" "$image_sha" \
+            "${LINUX_RUNTIME_QEMU_MEMORY:-512M}" "${LINUX_RUNTIME_INITRD_LOAD_ADDR:-default}" \
+            > "$root/identity.txt"
+          capture_failed_repeat_gdb() {
+            local reason="$1" failing_attempt="$2"
+            local diag="$ev/p1-gdb-stack" linked="$kbuild_out/vmlinux"
+            local kbuild_image="$kbuild_out/arch/riscv/boot/Image"
+            [[ "${COHORT_P1_EXACT_FAILED_GDB:-0}" == 1 ]] || return 0
+            mkdir -p "$diag" || return 0
+            # Only the genuine current GNU Kbuild pair is valid for symbols.
+            # A golden or separately rebuilt vmlinux would misdiagnose frames.
+            if [[ ! -s "$linked" || ! -s "$kbuild_image" ||
+                  ! -s "$custom_dtb" || ! -s "$initramfs" ]] ||
+               ! cmp -s "$image" "$kbuild_image" ||
+               [[ "$(sha256sum "$kbuild_image" | cut -d' ' -f1)" != "$image_sha" ]]; then
+              echo "RV64_REPEAT_GDB=INCONCLUSIVE attempt=$failing_attempt reason=unpaired_inputs_or_image_sha_mismatch original_repeat=FAIL" \
+                | tee "$diag/repeat-receiver.log"
+              return 0
+            fi
+            {
+              printf 'trial=repeat_%s\noriginal_repeat=FAIL\nfailure_reason=%s\n' "$failing_attempt" "$reason"
+              printf 'image_sha256=%s\nimage_and_current_Kbuild_image=byte_identical\n' "$image_sha"
+              printf 'vmlinux=current_Kbuild_output\nGDB_verdict=diagnostic_only\n'
+              sha256sum "$image" "$linked" "$custom_dtb" "$initramfs"
+            } >"$diag/repeat-exact-input-identity.txt" || return 0
+            echo "RV64_REPEAT_GDB=START attempt=$failing_attempt image_sha=$image_sha no_C_compile=true no_Kbuild_link=true original_repeat=FAIL"
+            if P1_GDB_MINIMAL_FAULT_ONLY=1 bash tools/ci/linux-runtime-p1-gdb-stack-v1.sh \
+                 "$image" "$linked" "$initramfs" "$custom_dtb" "$diag" 65 \
+                 >"$diag/repeat-receiver.log" 2>&1; then
+              echo "RV64_REPEAT_GDB=CAPTURED attempt=$failing_attempt diagnostic_only=true"
+            else
+              echo "RV64_REPEAT_GDB=INCONCLUSIVE attempt=$failing_attempt gdb_timing_perturbed=true original_repeat=FAIL"
+            fi
+            if gzip -1 -c "$linked" >"$diag/vmlinux.gz"; then
+              echo "RV64_REPEAT_GDB_ELF=ARCHIVED sha256=$(sha256sum "$linked" | cut -d' ' -f1)"
+            else
+              rm -f -- "$diag/vmlinux.gz"
+              echo "RV64_REPEAT_GDB_ELF=INCONCLUSIVE compression_failed=true original_repeat=FAIL"
+            fi
+            return 0
+          }
+          for attempt in $(seq 1 12); do
+            work="$root/trials/$attempt"
+            mkdir -p "$work"
+            test "$(sha256sum "$image" | cut -d' ' -f1)" = "$image_sha"
+            boot_rc=0
+            if LINUX_RUNTIME_CUSTOM_DTB="$custom_dtb" \
+                 LINUX_RUNTIME_INITRD_LOAD_ADDR="$initrd_load" \
+                 LINUX_RUNTIME_QEMU_MEMORY="$qemu_memory" \
+                 LINUX_IMAGE="$image" INITRAMFS="$initramfs" \
+                 BUILD_DIR="$work/qemu" LINUX_RELEASE=6.6.143 \
+                 LINUX_RUNTIME_PROFILE=p1 QEMU_TIMEOUT_SECONDS=45 \
+                 bash tests/external/linux/runtime_boot.sh \
+                   >"$work/runtime_boot.log" 2>&1; then
+              :
+            else
+              boot_rc=$?
+              echo "RV64_FULL_REPEAT=FAIL attempt=$attempt stage=runtime_boot rc=$boot_rc" >&2
+              tail -n 80 "$work/runtime_boot.log" >&2
+              capture_failed_repeat_gdb runtime_boot "$attempt" || :
+              exit 1
+            fi
+            # The old runtime_boot.sh accepts status 124/143 if guest markers
+            # exist. This stricter campaign explicitly rejects timeout/TERM.
+            grep -Fq 'LINUX_RUNTIME_BOOT lane=rdinit-init qemu_status=0 ' "$work/runtime_boot.log" || {
+              echo "RV64_FULL_REPEAT=FAIL attempt=$attempt qemu_did_not_exit_cleanly" >&2
+              capture_failed_repeat_gdb qemu_nonzero_exit "$attempt" || :
+              exit 1
+            }
+            grep -Fq 'LINUX_RUNTIME_EXACT=PASS release=6.6.143 profile=p1 lanes=1/1' "$work/runtime_boot.log"
+            python3 tests/external/linux/runtime_v2_log_check.py \
+              --profile p1 --log "$work/qemu/rdinit-init.log" \
+              >"$work/p1-check.log" 2>&1
+            test "$(sha256sum "$image" | cut -d' ' -f1)" = "$image_sha"
+            printf '%s\t%s\t0\t12\tPASS\n' "$attempt" "$image_sha" >> "$root/repeats.tsv"
+            echo "RV64_FULL_REPEAT=PASS attempt=$attempt/12 image_sha256=$image_sha syscalls=12 qemu_exit=0"
+          done
+          test "$(grep -c $'\tPASS$' "$root/repeats.tsv")" -eq 12
+          echo "RV64_FULL_IDENTICAL_IMAGE=PASS repeats=12/12 syscalls_each=12/12 image_sha256=$image_sha head=$MINIC_EXPECTED_HEAD_SHA"
+
+      # The eight-owner diagnostic route already performs twelve distinct
+      # QEMU P1 boots in the preceding cohort step. Re-authenticate all
+      # twelve actual Images, clean exits and Python oracles without repeating
+      # a second twelve-boot campaign against the obsolete full_all path.
+      - name: Authenticate RV64 strict 12-boot P1 evidence from eight-owner cohort
+        if: needs.rv64-campaign-gate.outputs.run == 'true' && needs.rv64-campaign-gate.outputs.p1_eight == 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          bash tools/ci/linux-runtime-p1-strict12-evidence-v1.sh \
+            "$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-v1"
+
       - name: Authenticate Stage4 2064-object Linux QEMU P1 runtime
         if: contains(github.event.head_commit.message, '[minic-bootstrap-stage4-linux2064]')
         shell: bash
@@ -3334,6 +3979,14 @@ jobs:
             build/minipp-seven-merge/native-summary.json
             build/minipp-seven-merge/native-performance.json
             build/linux-runtime-gcc-cohort-v1/identity.txt
+            build/linux-runtime-gcc-cohort-v1/rv64i-softarith-build.log
+            build/linux-runtime-gcc-cohort-v1/rv64i-softarith/abi-isa-provenance.txt
+            build/linux-runtime-gcc-cohort-v1/rv64i-softarith/rv64-runtime-objects.rsp
+            build/linux-runtime-gcc-cohort-v1/rv64i-softarith/rv64-runtime.dis
+            build/linux-runtime-gcc-cohort-v1/rv64i-softarith/rv64i-efistub-runtime.dis
+            build/linux-runtime-gcc-cohort-v1/rv64i-softarith/rv64i-pi-runtime.dis
+            build/linux-runtime-gcc-cohort-v1/assert-source-replay.log
+            build/linux-runtime-gcc-cohort-v1/assert-source-replay/
             build/linux-runtime-gcc-cohort-v1/minic-identity.txt
             build/linux-runtime-gcc-cohort-v1/minic-manifest.sha256
             build/linux-runtime-gcc-cohort-v1/gcc-preflight.log
@@ -3372,12 +4025,18 @@ jobs:
             build/linux-runtime-gcc-cohort-v1/p1-pair-calltrace/*/*.sha256
             build/linux-runtime-gcc-cohort-v1/p1_gcc_rescue_set.txt
             build/linux-runtime-gcc-cohort-v1/p1-identical-image-repeats.tsv
+            build/linux-runtime-gcc-cohort-v1/p1-identical-image-12/identity.txt
+            build/linux-runtime-gcc-cohort-v1/p1-identical-image-12/repeats.tsv
+            build/linux-runtime-gcc-cohort-v1/p1-identical-image-12/trials/*/runtime_boot.log
+            build/linux-runtime-gcc-cohort-v1/p1-identical-image-12/trials/*/p1-check.log
+            build/linux-runtime-gcc-cohort-v1/p1-identical-image-12/trials/*/qemu/rdinit-init.log
             build/linux-runtime-gcc-cohort-v1/p1-gdb-stack/*.log
             build/linux-runtime-gcc-cohort-v1/p1-gdb-stack/*.txt
             build/linux-runtime-gcc-cohort-v1/p1-gdb-stack/*.gdb
             build/linux-runtime-gcc-cohort-v1/p1-gdb-stack/*.nm
             build/linux-runtime-gcc-cohort-v1/p1-gdb-stack/*.bin
             build/linux-runtime-gcc-cohort-v1/p1-gdb-stack/*.tsv
+            build/linux-runtime-gcc-cohort-v1/p1-gdb-stack/vmlinux.gz
             build/linux-runtime-gcc-cohort-v1/p1-gdb-stack-experiment/*.log
             build/linux-runtime-gcc-cohort-v1/p1-gdb-stack-experiment/*.txt
             build/linux-runtime-gcc-cohort-v1/p1-gdb-stack-experiment/*.gdb
@@ -3385,6 +4044,10 @@ jobs:
             build/linux-runtime-gcc-cohort-v1/p1-gdb-stack-experiment/*.bin
             build/linux-runtime-gcc-cohort-v1/p1-gdb-stack-experiment/*.tsv
             build/linux-runtime-gcc-cohort-v1/trials/*/qemu/rdinit-init.log
+            build/linux-runtime-gcc-cohort-v1/trials/p1_full_minic/runtime.log
+            build/linux-runtime-gcc-cohort-v1/trials/p1_full_minic/p1-strict-oracle.log
+            build/linux-runtime-gcc-cohort-v1/trials/p1_eight_control_*/runtime.log
+            build/linux-runtime-gcc-cohort-v1/trials/p1_eight_control_*/p1-strict-oracle.log
             build/linux-runtime-gcc-cohort-v1/p1-frame-components/*.tsv
             build/linux-runtime-gcc-cohort-v1/p1-frame-components/*.log
             build/linux-runtime-gcc-cohort-v1/p1-frame-components/*.sha256
@@ -3397,6 +4060,8 @@ jobs:
             build/linux-runtime-gcc-cohort-v1/p1-defined-crossblock/*.log
             build/linux-runtime-gcc-cohort-v1/p1-defined-crossblock/*.txt
             build/linux-runtime-gcc-cohort-v1/p1-defined-crossblock/*.sha256
+            build/linux-runtime-gcc-cohort-v1/p1-defined-crossblock/source-snapshots/*.i.gz
+            build/linux-runtime-gcc-cohort-v1/p1-defined-crossblock/source-snapshots/*.frame.log
             build/linux-runtime-gcc-cohort-v1/p1-defined-ip6-only/*.tsv
             build/linux-runtime-gcc-cohort-v1/p1-defined-ip6-only/*.log
             build/linux-runtime-gcc-cohort-v1/p1-defined-ip6-only/*.txt
@@ -3413,6 +4078,11 @@ jobs:
             build/linux-runtime-gcc-cohort-v1/trials/*/qemu-registers.jsonl
             build/linux-runtime-gcc-cohort-v1/trials/*/qmp-probe.log
             build/linux-runtime-gcc-cohort-v1/trials/*/qmp-symbols.log
+            build/linux-runtime-gcc-cohort-v1/trials/*/qmp-physical-symbols.log
+            build/linux-runtime-gcc-cohort-v1/trials/*/qmp-physical-disasm.log
+            build/linux-runtime-gcc-cohort-v1/trials/*/qmp-physical-vmlinux-nm.txt.gz
+            build/linux-runtime-gcc-cohort-v1/trials/*/qemu-mapped-initrd.log
+            build/linux-runtime-gcc-cohort-v1/trials/*/qemu-default-initrd.log
             build/linux-runtime-gcc-cohort-v1/trials/*/earlycon-source/*
             build/linux-runtime-gcc-cohort-v1/trials/*/runtime-p1.log
           if-no-files-found: warn
@@ -3632,7 +4302,11 @@ jobs:
   # as RV64. Seed ELF32 GNU golden once, cache it by original config and
   # GNU tool identity, then let the existing gcc-shards matrix consume it.
   rv32i-kbuild-entry:
-    if: github.event_name == 'push' && contains(github.event.head_commit.message, '[linux-rv32i-golden]')
+    needs: rv32-current-campaign-gate
+    if: >-
+      (github.event_name == 'push' && contains(github.event.head_commit.message, '[linux-rv32i-golden]')) ||
+      (github.event_name == 'pull_request' && contains(github.event.pull_request.title, '[minic-full]')) ||
+      (github.event_name == 'push' && needs.rv32-current-campaign-gate.outputs.run == 'true')
     runs-on: ubuntu-24.04
     timeout-minutes: 75
     outputs:
@@ -3641,6 +4315,14 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Authenticate exact-current RV32 GNU original source campaign
+        if: needs.rv32-current-campaign-gate.outputs.run == 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$GITHUB_REF" = refs/heads/refactor/minic-target-language-boundary
+          echo "RV32I_GNU_GOLDEN_EXACT_HEAD=PASS sha=$GITHUB_SHA original_config=$RV32I_GNU_GOLDEN_CONFIG_SHA256"
       - name: Install original kernel build tools and RV32-capable GNU cross assembler
         shell: bash
         run: |
@@ -3649,9 +4331,58 @@ jobs:
           sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 install -y --no-install-recommends \
             gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
             bc bison flex libssl-dev libelf-dev make python3 file xz-utils
+      # The shared composite intentionally fails on a branch-scoped cache miss.
+      # Current-HEAD RV32 is an independent opt-in: seed the SAME SHA-pinned
+      # source key on this branch before releasing its seven workers.
       - uses: ./.github/actions/linux-runtime-restore-fixture
+        if: needs.rv32-current-campaign-gate.outputs.run != 'true'
         with:
           fixture: source
+      - name: Restore pinned RV32 source when already available on this branch
+        if: needs.rv32-current-campaign-gate.outputs.run == 'true'
+        id: rv32_current_source_cache
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-expanded-kbuild-v0/linux-6.6.143
+          key: linux-source-6.6.143-dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932-v1
+      - name: Reconstitute SHA-pinned original RV32 source after branch cache miss
+        if: needs.rv32-current-campaign-gate.outputs.run == 'true' && steps.rv32_current_source_cache.outputs.cache-hit != 'true'
+        timeout-minutes: 12
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          root="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0"
+          mkdir -p "$root"
+          test ! -e "$root/linux-6.6.143" || {
+            echo 'RV32I_ORIGINAL_SOURCE=FAIL unexpected_partial_source_tree' >&2
+            exit 1
+          }
+          archive="$RUNNER_TEMP/minic-rv32-6.6.143-original-linux.tar.xz"
+          curl --proto '=https' --tlsv1.2 -fLSs --retry 3 --retry-delay 3 \
+            --connect-timeout 20 --max-time 300 \
+            https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.6.143.tar.xz \
+            -o "$archive"
+          printf '%s  %s\n' dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932 "$archive" | sha256sum -c -
+          tar -xJf "$archive" -C "$root"
+          test -s "$root/linux-6.6.143/Makefile"
+          echo 'RV32I_ORIGINAL_SOURCE=PASS sha256=dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932 archive=upstream_verified'
+      - name: Verify source identity before any RV32 GNU configuration
+        if: needs.rv32-current-campaign-gate.outputs.run == 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          source=build/linux-expanded-kbuild-v0/linux-6.6.143
+          test -s "$source/Makefile"
+          grep -Eq '^VERSION[[:space:]]*=[[:space:]]*6$' "$source/Makefile"
+          grep -Eq '^PATCHLEVEL[[:space:]]*=[[:space:]]*6$' "$source/Makefile"
+          grep -Eq '^SUBLEVEL[[:space:]]*=[[:space:]]*143$' "$source/Makefile"
+          echo "RV32I_ORIGINAL_SOURCE=VERIFIED cache_hit=${{ steps.rv32_current_source_cache.outputs.cache-hit }} version=6.6.143"
+      - name: Save verified RV32 original source for seven dependent workers
+        if: needs.rv32-current-campaign-gate.outputs.run == 'true' && steps.rv32_current_source_cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: build/linux-expanded-kbuild-v0/linux-6.6.143
+          key: linux-source-6.6.143-dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932-v1
       - name: Derive original RV32 Kconfig without compiling any kernel objects
         shell: bash
         run: |
@@ -3666,6 +4397,10 @@ jobs:
         run: |
           set -Eeuo pipefail
           cfg=$(sha256sum build/rv32i-linux-entry/out/.config | cut -d' ' -f1)
+          test "$cfg" = "$RV32I_GNU_GOLDEN_CONFIG_SHA256" || {
+            echo "RV32I_GNU_GOLDEN_CONFIG=FAIL expected=$RV32I_GNU_GOLDEN_CONFIG_SHA256 actual=$cfg" >&2
+            exit 1
+          }
           gcc=$(sha256sum "$(command -v riscv64-linux-gnu-gcc)" | cut -c1-16)
           ld=$(sha256sum "$(command -v riscv64-linux-gnu-ld)" | cut -c1-16)
           as=$(sha256sum "$(command -v riscv64-linux-gnu-as)" | cut -c1-16)
@@ -3698,6 +4433,7 @@ jobs:
           grep -Fxq 'isa=rv32i' "$ev/provenance/gcc-baseline.txt"
           grep -Fxq 'abi=ilp32' "$ev/provenance/gcc-baseline.txt"
           test -s "$ev/provenance/full-c-objects.txt"
+          test "$(sed '/^#/d;/^$/d' "$ev/provenance/full-c-objects.txt" | wc -l)" -eq 1741
           test -s "$ev/out/arch/riscv/boot/Image"
           (cd "$ev/out" && sha256sum --quiet -c "../provenance/gcc-objects.sha256")
           echo "RV32I_GNU_GOLDEN_CACHE=VERIFIED hit=${{ steps.rv32_gold_cache.outputs.cache-hit }}"

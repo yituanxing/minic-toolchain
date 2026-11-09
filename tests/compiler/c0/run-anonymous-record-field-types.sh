@@ -14,7 +14,13 @@ mkdir -p "$work"
 "$minic" -S "$work/anonymous_record_field_type.i" \
     -o "$work/anonymous_record_field_type.s"
 
-grep -F '  addi a0, a0, 2' "$work/anonymous_record_field_type.s" >/dev/null
-grep -F '  lhu a0, 0(a0)' "$work/anonymous_record_field_type.s" >/dev/null
-grep -F '  sh t0, 0(t1)' "$work/anonymous_record_field_type.s" >/dev/null
+# Core register assignment is not part of the layout contract. Require the
+# actual member offset and unsigned-halfword load/store, regardless of whether
+# the lowered address/value currently lives in a0, t0, or t1.
+awk '$1 == "addi" && $2 == $3 && $4 == "2" { found = 1 }
+     END { exit !found }' "$work/anonymous_record_field_type.s"
+grep -E '^[[:space:]]+lhu[[:space:]]+[[:alnum:]]+,[[:space:]]*0\([[:alnum:]]+\)$' \
+    "$work/anonymous_record_field_type.s" >/dev/null
+grep -E '^[[:space:]]+sh[[:space:]]+[[:alnum:]]+,[[:space:]]*0\([[:alnum:]]+\)$' \
+    "$work/anonymous_record_field_type.s" >/dev/null
 printf '%s\n' 'PASS compiler/c0/anonymous_record_field_type nested-struct-in-union=1 layout=4 delta-offset=2'

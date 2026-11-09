@@ -55,13 +55,77 @@ static bool minic_parser_gnu_int128_name(const MinicParser *parser,
 static bool minic_parser_target_header_builtin(const MinicParser *parser,
                                                MinicToken token,
                                                MinicType *out_type) {
-    if (parser == NULL || parser->target_info == NULL ||
+    if (parser == NULL || parser->invocation == NULL ||
         token.kind != MINIC_TOKEN_IDENTIFIER) return false;
     return minic_target_info_named_builtin_type(
-        parser->target_info,
+        parser->invocation,
         parser->source + token.span.begin.offset,
         token.span.end.offset - token.span.begin.offset,
         out_type);
+}
+
+/* Build a C source type, not Core's ABI-state pointer. The selected target
+ * supplies only the byte shape and C category; anonymous Program records
+ * supply the ordinary C layout/array/assignment rules without ISA switches.
+ * Parser probes read the already materialized canonical Program identity. */
+bool minic_parser_materialize_builtin_va_list_source_type(
+    MinicParser *parser, MinicType *type) {
+    MinicVaCursorSourceShape shape;
+    MinicRecordId tag_id;
+    MinicRecord *tag;
+    MinicType record_type, result, cursor_storage_type;
+    size_t actual_size, actual_alignment;
+    if (parser == NULL || parser->program == NULL || parser->invocation == NULL ||
+        type == NULL ||
+        !minic_target_info_va_cursor_source_shape(parser->invocation, &shape))
+        return false;
+    if (parser->program->has_builtin_va_list_source_type) {
+        *type = parser->program->builtin_va_list_source_type;
+        return true;
+    }
+    /* A speculative parser copy must never mutate Program's semantic ID
+     * tables; the original parser prewarms this before its first token. */
+    if (parser->cache_owner != parser)
+        return false;
+    if (shape.kind == MINIC_VA_CURSOR_SOURCE_LINEAR_POINTER) {
+        if (!minic_type_pointer_to(minic_type_void(), &result))
+            return false;
+        record_type = result;
+    } else {
+        /* A hidden char[N] field has the exact storage extent; the record's
+         * explicit alignment supplies the target's layout independently of
+         * how its real ABI state is accessed by the machine emitter. */
+        if (!minic_c0_program_add_anonymous_record(parser->program, &tag_id) ||
+            !minic_c0_program_add_array_type(
+                parser->program, minic_type_unsigned_char(),
+                shape.object_size, &cursor_storage_type) ||
+            !minic_c0_record_add_field(parser->program, tag_id, "", 0U,
+                                       cursor_storage_type, 1U))
+            return false;
+        tag = &parser->program->records[tag_id];
+        tag->explicit_alignment = shape.object_alignment;
+        if (!minic_c0_program_finish_record(parser->program, tag_id))
+            return false;
+        record_type = minic_type_record(tag_id);
+        if (shape.kind == MINIC_VA_CURSOR_SOURCE_OPAQUE_RECORD_ARRAY_ONE) {
+            if (!minic_c0_program_add_array_type(
+                    parser->program, record_type, 1U, &result))
+                return false;
+        } else {
+            result = record_type;
+        }
+        if (!minic_data_layout_type(parser->invocation,
+                                    parser->program, result,
+                                    &actual_size, &actual_alignment) ||
+            actual_size != shape.object_size ||
+            actual_alignment != shape.object_alignment)
+            return false;
+    }
+    parser->program->builtin_va_list_source_type = result;
+    parser->program->builtin_va_list_state_type = record_type;
+    parser->program->has_builtin_va_list_source_type = true;
+    *type = result;
+    return true;
 }
 
 bool minic_parser_token_starts_type_name(const MinicParser *parser, MinicToken token) {
@@ -90,11 +154,12 @@ bool minic_parser_token_starts_type_name(const MinicParser *parser, MinicToken t
             return false;
         }
         if (minic_parser_token_is_gnu_typeof(parser, token) ||
+            minic_parser_token_text_equals(parser, token, "__builtin_va_list") ||
             minic_parser_target_header_builtin(parser, token, NULL)) {
             return true;
         }
         if (minic_target_info_language_type_supported(
-                parser->target_info, MINIC_TYPE_BASE_FLOAT128) &&
+                parser->invocation, MINIC_TYPE_BASE_FLOAT128) &&
             (minic_parser_token_text_equals(parser, token, "_Float128") ||
              minic_parser_token_text_equals(parser, token, "_Float32") ||
              minic_parser_token_text_equals(parser, token, "_Float64") ||
@@ -452,7 +517,7 @@ bool minic_parser_parse_type_specifiers(MinicParser *parser, MinicType *type) {
                     parsed_type = minic_type_signed_char();
                 } else if (saw_unsigned) {
                     parsed_type = minic_type_unsigned_char();
-                } else if (!minic_target_info_plain_char_type(parser->target_info, &parsed_type)) {
+                } else if (!minic_target_info_plain_char_type(parser->invocation, &parsed_type)) {
                     minic_parser_error(parser, "cannot resolve target plain char type");
                     return false;
                 }
@@ -497,6 +562,7 @@ bool minic_parser_parse_type_specifiers(MinicParser *parser, MinicType *type) {
         MinicLexer saved_lexer;
         MinicToken saved_token;
         MinicParsedAttributeList probe_attributes;
+        const MinicParserTagBinding *tag;
         MinicRecordId record_id;
         MinicTokenKind record_keyword;
         bool is_definition;
@@ -539,27 +605,31 @@ bool minic_parser_parse_type_specifiers(MinicParser *parser, MinicType *type) {
                                    "expected record tag or definition after record keyword");
                 return false;
             }
-            record_id = minic_parser_find_record(parser, parser->current.span);
-            if (record_id == MINIC_RECORD_INVALID) {
+            {
                 const MinicSourceSpan name_span = parser->current.span;
 
-                if (!minic_c0_program_add_record(parser->program,
-                                                 parser->source + name_span.begin.offset,
-                                                 minic_parser_span_length(name_span),
-                                                 &record_id) ||
-                    !minic_parser_bind_record_tag(parser, name_span, record_id)) {
-                    minic_parser_error(parser, "out of memory while declaring record tag");
+                if (!minic_parser_advance(parser) ||
+                    !minic_parser_resolve_tag(parser, name_span,
+                                              is_union ? MINIC_PARSER_TAG_UNION
+                                                       : MINIC_PARSER_TAG_STRUCT,
+                                              parser->current.kind == MINIC_TOKEN_SEMICOLON,
+                                              &tag)) {
                     return false;
                 }
-                parser->program->records[record_id].is_union = is_union;
-            } else if (parser->program->records[record_id].is_union != is_union) {
-                minic_parser_error(parser, "record tag kind does not match prior declaration");
-                return false;
+                record_id = tag == NULL ? MINIC_RECORD_INVALID : tag->entity.record_id;
+                if (record_id == MINIC_RECORD_INVALID) {
+                    if (!minic_c0_program_add_record(parser->program,
+                                                     parser->source + name_span.begin.offset,
+                                                     minic_parser_span_length(name_span),
+                                                     &record_id) ||
+                        !minic_parser_bind_record_tag(parser, name_span, record_id, is_union)) {
+                        minic_parser_error(parser, "out of memory while declaring record tag");
+                        return false;
+                    }
+                    parser->program->records[record_id].is_union = is_union;
+                }
             }
             parsed_type = minic_type_record(record_id);
-            if (!minic_parser_advance(parser)) {
-                return false;
-            }
         }
     } else if (minic_parser_identifier_is(parser, "_Float128") ||
                minic_parser_identifier_is(parser, "_Float32") ||
@@ -572,7 +642,7 @@ bool minic_parser_parse_type_specifiers(MinicParser *parser, MinicType *type) {
          * and sizeof does NOT enable FP operations or calling conventions.
          * Those must remain subject to target-specific legalization. */
         if (!minic_target_info_language_type_supported(
-                parser->target_info, MINIC_TYPE_BASE_FLOAT128)) {
+                parser->invocation, MINIC_TYPE_BASE_FLOAT128)) {
             minic_parser_error(parser, "extended float type is unsupported on this target");
             return false;
         }
@@ -591,11 +661,10 @@ bool minic_parser_parse_type_specifiers(MinicParser *parser, MinicType *type) {
                    parser, parser->current, &parsed_type)) {
         if (!minic_parser_advance(parser)) return false;
     } else if (minic_parser_identifier_is(parser, "__builtin_va_list")) {
-        /* RV64 keeps the validated sequential pointer model. On x86-64
-         * the pointer-based internal cursor is not the actual SysV array
-         * type: retain a distinguishable identity for fail-closed queries. */
-        if (!minic_target_info_builtin_va_list_type(
-                parser->target_info, &parsed_type)) {
+        /* Real C source identity, independently materialized from Core's
+         * pointer-valued ABI state transport. */
+        if (!minic_parser_materialize_builtin_va_list_source_type(
+                parser, &parsed_type)) {
             minic_parser_error(parser, "cannot build __builtin_va_list type");
             return false;
         }
@@ -671,39 +740,111 @@ bool minic_parser_parse_pointer_declarator(MinicParser *parser,
     return true;
 }
 
+/* Both abstract function pointers and pointers to arrays share exactly the
+ * same `(* const ... *)` lexical prefix. Probe it once per classifier shape,
+ * leaving the distinct suffix decisions to the callers. */
+static bool type_name_probe_parenthesized_pointer_prefix(const MinicParser *parser,
+                                                         MinicLexer *lookahead,
+                                                         MinicToken *token,
+                                                         MinicDiagnostic *diagnostic) {
+    if (parser == NULL || parser->current.kind != MINIC_TOKEN_LPAREN) {
+        return false;
+    }
+    *lookahead = parser->lexer;
+    (void)memset(diagnostic, 0, sizeof(*diagnostic));
+    if (!minic_lexer_next(lookahead, token, diagnostic) || token->kind != MINIC_TOKEN_STAR) {
+        return false;
+    }
+    for (;;) {
+        if (!minic_lexer_next(lookahead, token, diagnostic)) {
+            return false;
+        }
+        while (token->kind == MINIC_TOKEN_KW_CONST || token->kind == MINIC_TOKEN_KW_VOLATILE ||
+               minic_parser_token_text_equals(parser, *token, "restrict") ||
+               minic_parser_token_text_equals(parser, *token, "__restrict")) {
+            if (!minic_lexer_next(lookahead, token, diagnostic)) {
+                return false;
+            }
+        }
+        if (token->kind != MINIC_TOKEN_STAR) {
+            break;
+        }
+    }
+    return true;
+}
+
 static bool type_name_starts_parenthesized_function_pointer(const MinicParser *parser) {
     MinicDiagnostic diagnostic;
     MinicLexer lookahead;
     MinicToken token;
 
-    if (parser == NULL || parser->current.kind != MINIC_TOKEN_LPAREN) {
+    /* Nested `R (*(*)(P))(Q)` is classified here, then validated by Parser. */
+    return type_name_probe_parenthesized_pointer_prefix(
+               parser, &lookahead, &token, &diagnostic) &&
+           (token.kind == MINIC_TOKEN_RPAREN || token.kind == MINIC_TOKEN_LPAREN);
+}
+
+/* `(const char (*)[32])address` is a pointer TO an array, not an array
+ * OF pointers; it shares the prefix but requires the following `[` token. */
+static bool type_name_starts_parenthesized_pointer_to_array(const MinicParser *parser) {
+    MinicDiagnostic diagnostic;
+    MinicLexer lookahead;
+    MinicToken token;
+
+    return type_name_probe_parenthesized_pointer_prefix(
+               parser, &lookahead, &token, &diagnostic) &&
+           token.kind == MINIC_TOKEN_RPAREN &&
+           minic_lexer_next(&lookahead, &token, &diagnostic) &&
+           token.kind == MINIC_TOKEN_LBRACKET;
+}
+
+static bool parse_abstract_pointer_to_array_type_name(MinicParser *parser,
+                                                      MinicType element_type,
+                                                      MinicType *type) {
+    unsigned int depth;
+    unsigned int const_qualifiers;
+    unsigned int volatile_qualifiers;
+    bool is_array;
+    size_t level;
+
+    if (!minic_parser_expect(parser, MINIC_TOKEN_LPAREN,
+                             "expected '(' before abstract array pointer")) {
         return false;
     }
-    lookahead = parser->lexer;
-    (void)memset(&diagnostic, 0, sizeof(diagnostic));
-    if (!minic_lexer_next(&lookahead, &token, &diagnostic) || token.kind != MINIC_TOKEN_STAR) {
-        return false;
-    }
-    for (;;) {
-        if (!minic_lexer_next(&lookahead, &token, &diagnostic)) {
+    depth = 0U;
+    const_qualifiers = 0U;
+    volatile_qualifiers = 0U;
+    while (parser->current.kind == MINIC_TOKEN_STAR) {
+        depth += 1U;
+        if (depth > 31U || !minic_parser_advance(parser) ||
+            !minic_parser_parse_pointer_qualifier_sequence(
+                parser, depth, &const_qualifiers, &volatile_qualifiers)) {
+            minic_parser_error(parser, "abstract array pointer depth is unsupported");
             return false;
         }
-        while (token.kind == MINIC_TOKEN_KW_CONST || token.kind == MINIC_TOKEN_KW_VOLATILE ||
-               minic_parser_token_text_equals(parser, token, "restrict") ||
-               minic_parser_token_text_equals(parser, token, "__restrict")) {
-            if (!minic_lexer_next(&lookahead, &token, &diagnostic)) {
-                return false;
-            }
+    }
+    if (depth == 0U ||
+        !minic_parser_expect(parser, MINIC_TOKEN_RPAREN,
+                             "expected ')' after abstract array pointer") ||
+        !minic_parser_parse_array_declarator_suffix(
+            parser, element_type, false, type, &is_array) || !is_array) {
+        return false;
+    }
+    for (level = 0U; level < depth; ++level) {
+        unsigned int bit;
+
+        if (!minic_type_pointer_to(*type, type)) {
+            minic_parser_error(parser, "cannot form pointer to array type");
+            return false;
         }
-        if (token.kind != MINIC_TOKEN_STAR) {
-            break;
+        bit = 1U << level;
+        if (((const_qualifiers & bit) != 0U && !minic_type_add_const(*type, type)) ||
+            ((volatile_qualifiers & bit) != 0U && !minic_type_add_volatile(*type, type))) {
+            minic_parser_error(parser, "cannot qualify abstract array pointer");
+            return false;
         }
     }
-    /* An abstract function-pointer type may itself contain another
-       parenthesized function-pointer declarator, for example
-       R (*(*)(P))(Q).  This is only a lookahead classifier: admit the nested
-       '(' here and let the shared declarator parser validate the full shape. */
-    return token.kind == MINIC_TOKEN_RPAREN || token.kind == MINIC_TOKEN_LPAREN;
+    return true;
 }
 
 bool minic_parser_parse_type_name_preserving_incomplete(MinicParser *parser, MinicType *type) {
@@ -714,11 +855,14 @@ bool minic_parser_parse_type_name_preserving_incomplete(MinicParser *parser, Min
         !minic_parser_parse_pointer_declarator(parser, base_type, &declarator_base)) {
         return false;
     }
+    if (type_name_starts_parenthesized_pointer_to_array(parser)) {
+        return parse_abstract_pointer_to_array_type_name(parser, declarator_base, type);
+    }
     if (type_name_starts_parenthesized_function_pointer(parser)) {
         MinicParsedFunctionDeclarator declarator;
 
         if (!minic_parser_parse_parenthesized_function_declarator(
-                parser, false, true, &declarator)) {
+                parser, false, true, &declarator, false)) {
             return false;
         }
         if (!minic_parser_build_function_declarator_type(

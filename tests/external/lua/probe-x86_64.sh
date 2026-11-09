@@ -12,8 +12,36 @@ work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT HUP INT TERM
 release=5.5.0
 sha256=57ccc32bbbd005cab75bcc52444052535af691789dba2b9016d5c50640d68b3d
-curl -fsSL "https://www.lua.org/ftp/lua-$release.tar.gz" -o "$work/lua.tar.gz"
-printf '%s  %s\n' "$sha256" "$work/lua.tar.gz" | sha256sum -c -
+# The public lua.org origin occasionally times out in CI. A local immutable
+# archive may be supplied by the caller; otherwise try the release and its
+# exact-byte official release-candidate archive. Never accept a mismatched
+# tarball, irrespective of which location supplied it.
+archive=${LUA_X86_64_ARCHIVE:-}
+if test -n "$archive"; then
+  cp -- "$archive" "$work/lua.tar.gz"
+  printf '%s  %s\n' "$sha256" "$work/lua.tar.gz" | sha256sum -c -
+  echo "LUA_X86_64_ARCHIVE=VERIFIED source=local sha256=$sha256"
+else
+  downloaded=0
+  for url in \
+    "https://www.lua.org/ftp/lua-$release.tar.gz" \
+    "https://lua.org/ftp/lua-$release.tar.gz" \
+    "https://www.lua.org/work/old/lua-$release-rc4.tar.gz"; do
+    if curl --http1.1 -fsSL --retry 1 --retry-all-errors --retry-delay 2 \
+        --connect-timeout 8 --max-time 45 --retry-max-time 50 \
+        "$url" -o "$work/lua.tar.gz" && \
+       printf '%s  %s\n' "$sha256" "$work/lua.tar.gz" | sha256sum -c -; then
+      downloaded=1
+      echo "LUA_X86_64_ARCHIVE=VERIFIED source=$url sha256=$sha256"
+      break
+    fi
+    rm -f -- "$work/lua.tar.gz"
+  done
+  if test "$downloaded" -ne 1; then
+    echo "LUA_X86_64_ARCHIVE=FAIL source=official-lua release=$release sha256=$sha256" >&2
+    exit 1
+  fi
+fi
 tar -xzf "$work/lua.tar.gz" -C "$work"
 vendor="$work/lua-$release"
 if test -d "$vendor/src"; then src="$vendor/src"; else src="$vendor"; fi

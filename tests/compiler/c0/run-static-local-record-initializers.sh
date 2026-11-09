@@ -19,6 +19,9 @@ grep -F '  .word 7' "$work/static_local_record_initializer.s" >/dev/null
 awk '
     $1 == ".word" && $2 == "7" { seen_kind = 1; next }
     seen_kind && !seen_first && $1 == ".zero" { zero_bytes += $2; next }
+    seen_kind && !seen_first && $1 == ".word" && $2 == "0" {
+        zero_bytes += 4; next
+    }
     seen_kind && $1 == ".word" && $2 == "-1" { seen_first = 1; next }
     END { exit !(seen_kind && seen_first && zero_bytes == 12) }
 ' "$work/static_local_record_initializer.s"

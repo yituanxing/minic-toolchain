@@ -1,0 +1,251 @@
+name: MiniC Current Stage1 SIGSEGV Evidence
+
+# Diagnostic only.  Reuse an existing 214/214-linked Stage1 ELF and .i;
+# never rebuild the compiler or count a diagnostic run as selfhost PASS.
+on:
+  push:
+    branches:
+      - refactor/minic-target-language-boundary
+    paths:
+      - .github/workflows/minic-current-stage1-sigsegv-debug.yml
+  workflow_dispatch:
+    inputs:
+      source_run_id:
+        description: Failed Stage1 seed run containing the ELF and return_42.i
+        required: true
+        default: '42597837545'
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: minic-current-stage1-sigsegv-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  stage1-sigsegv-evidence:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Resolve and bind original failed run
+        id: source
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_RUN: ${{ inputs.source_run_id || '42597837545' }}
+        run: |
+          set -Eeuo pipefail
+          [[ "$SOURCE_RUN" =~ ^[0-9]+$ ]] || { echo 'Invalid source run ID'; exit 1; }
+          metadata=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN")
+          source_branch=$(jq -r '.head_branch' <<<"$metadata")
+          source_commit=$(jq -r '.head_sha' <<<"$metadata")
+          source_status=$(jq -r '.status' <<<"$metadata")
+          source_conclusion=$(jq -r '.conclusion' <<<"$metadata")
+          [[ "$source_branch" == 'refactor/minic-target-language-boundary' ]]
+          [[ "$source_status" == 'completed' ]]
+          [[ "$source_conclusion" == 'failure' ]]
+          [[ "$source_commit" == '968de479bc4aca3acdca582d15d88f86a8a2874c' ]]
+          echo "run_id=$SOURCE_RUN" >> "$GITHUB_OUTPUT"
+          echo "source_commit=$source_commit" >> "$GITHUB_OUTPUT"
+          echo "STAGE1_DIAG_SOURCE_RUN=$SOURCE_RUN source_commit=$source_commit"
+
+      - name: Checkout original compiler sources for symbol mapping
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.source.outputs.source_commit }}
+          persist-credentials: false
+
+      - name: Install QEMU and native/RV64 debuggers
+        shell: bash
+        timeout-minutes: 12
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            qemu-user gdb-multiarch binutils-riscv64-linux-gnu file
+          command -v qemu-riscv64
+          command -v gdb-multiarch
+          command -v riscv64-linux-gnu-addr2line
+
+      - name: Download exact Stage1 artifact without recompiling
+        uses: actions/download-artifact@v4
+        with:
+          name: minic-current-stage1-seed
+          repository: ${{ github.repository }}
+          run-id: ${{ steps.source.outputs.run_id }}
+          github-token: ${{ github.token }}
+          path: build/bootstrap-current-b1
+
+      - name: Verify actual ELF, source, input and artifact identity
+        shell: bash
+        env:
+          SOURCE_COMMIT: ${{ steps.source.outputs.source_commit }}
+          SOURCE_RUN: ${{ steps.source.outputs.run_id }}
+        run: |
+          set -Eeuo pipefail
+          mkdir -p build/stage1-sigsegv-diagnostic
+          diagnostics=build/stage1-sigsegv-diagnostic
+          seed=build/bootstrap-current-b1/seed
+          stage1="$seed/minic-stage1-rv64"
+          pre="$seed/return_42.i"
+          # The source workflow uploads both seed/ and stage0/bin/ from the
+          # build/bootstrap-current-b1 prefix.  Fail with an inventory if
+          # upload-artifact layout changes, never guess an alternate ELF.
+          if [[ ! -s "$stage1" || ! -s "$pre" ]]; then
+            find build/bootstrap-current-b1 -maxdepth 5 -type f | sort | head -100
+            echo 'STAGE1_DIAG_INPUT=FAIL missing original Stage1 ELF or return_42.i' >&2
+            exit 1
+          fi
+          [[ "$(< "$seed/source-commit.txt")" == "$SOURCE_COMMIT" ]]
+          (cd "$seed" && sha256sum -c stage1-binary.sha256) > "$diagnostics/seed-sha-check.log" 2>&1 || {
+            # The seed manifest uses an absolute or workspace-relative path;
+            # validate its declared hash independently of the original path.
+            expected=$(awk 'NR==1 {print $1}' "$seed/stage1-binary.sha256")
+            actual=$(sha256sum "$stage1" | awk '{print $1}')
+            [[ "$expected" == "$actual" ]] || exit 1
+            printf 'STAGE1_SHA=PASS expected=%s actual=%s\n' "$expected" "$actual" > "$diagnostics/seed-sha-check.log"
+          }
+          file "$stage1" | tee "$diagnostics/stage1-file.txt"
+          riscv64-linux-gnu-readelf -h "$stage1" > "$diagnostics/stage1-elf-header.txt"
+          riscv64-linux-gnu-readelf -Ws "$stage1" > "$diagnostics/stage1-symbols.txt"
+          printf 'source_run=%s\nsource_commit=%s\nstage1_sha256=%s\nreturn42_i_sha256=%s\n' \
+            "$SOURCE_RUN" "$SOURCE_COMMIT" "$(sha256sum "$stage1" | awk '{print $1}')" \
+            "$(sha256sum "$pre" | awk '{print $1}')" > "$diagnostics/provenance.txt"
+          chmod +x "$stage1"
+          echo 'STAGE1_DIAG_INPUT=PASS original_214_owner_ELF=true source_commit_bound=true'
+
+      - name: Capture bounded QEMU syscall and CPU traces
+        shell: bash
+        timeout-minutes: 5
+        run: |
+          set -Eeuo pipefail
+          diagnostics=build/stage1-sigsegv-diagnostic
+          seed=build/bootstrap-current-b1/seed
+          stage1="$seed/minic-stage1-rv64"
+          pre="$seed/return_42.i"
+          set +e
+          timeout -k 5s 20s qemu-riscv64 "$stage1" --help \
+            > "$diagnostics/stage1-help.log" 2>&1
+          help_rc=$?
+          timeout -k 5s 20s qemu-riscv64 -strace "$stage1" -S /nonexistent.i \
+            -o "$diagnostics/nonexistent-return42.s" \
+            > "$diagnostics/nonexistent-input.log" 2>&1
+          nonexistent_rc=$?
+          timeout -k 5s 65s qemu-riscv64 -strace "$stage1" -S "$pre" \
+            -o "$diagnostics/strace-return42.s" > "$diagnostics/strace.log" 2>&1
+          strace_rc=$?
+          # Bound raw trace to 64 MiB; if exceeded, retain the explicit
+          # SIGXFSZ/timeout outcome and use the independent GDB capture.
+          (ulimit -f 65536
+           timeout -k 5s 65s qemu-riscv64 -d cpu,in_asm \
+             -D "$diagnostics/cpu-asm.raw.log" "$stage1" -S "$pre" \
+             -o "$diagnostics/cpu-return42.s") > "$diagnostics/cpu-asm.stderr" 2>&1
+          trace_rc=$?
+          set -e
+          printf 'stage1_help_exit=%s\nnonexistent_input_exit=%s\nreturn42_strace_exit=%s\ncpu_trace_exit=%s\n' \
+            "$help_rc" "$nonexistent_rc" "$strace_rc" "$trace_rc" \
+            > "$diagnostics/exit-status.txt"
+          if [[ -f "$diagnostics/cpu-asm.raw.log" ]]; then
+            head -n 160 "$diagnostics/cpu-asm.raw.log" > "$diagnostics/cpu-asm.head.log"
+            tail -n 1000 "$diagnostics/cpu-asm.raw.log" > "$diagnostics/cpu-asm.tail.log"
+            python3 - <<'PY'
+          from pathlib import Path
+          import re
+          root = Path('build/stage1-sigsegv-diagnostic')
+          last = None
+          with (root / 'cpu-asm.raw.log').open(errors='replace') as stream:
+              for line in stream:
+                  match = re.match(r'^\s*pc\s+(?:0x)?([0-9a-fA-F]{4,16})\b', line)
+                  if match:
+                      last = int(match.group(1), 16)
+          (root / 'last-pc.txt').write_text(('0x%x\n' % last) if last is not None else 'not-observed\n')
+          PY
+            gzip -1 "$diagnostics/cpu-asm.raw.log"
+          else
+            echo 'not-observed' > "$diagnostics/last-pc.txt"
+          fi
+          echo "STAGE1_DIAG_TRACES=CAPTURED help_exit=$help_rc return42_strace_exit=$strace_rc cpu_trace_exit=$trace_rc"
+
+      - name: Capture guest GDB and host-emulator SIGSEGV backtraces
+        shell: bash
+        timeout-minutes: 5
+        run: |
+          set -Eeuo pipefail
+          diagnostics=build/stage1-sigsegv-diagnostic
+          seed=build/bootstrap-current-b1/seed
+          stage1="$seed/minic-stage1-rv64"
+          pre="$seed/return_42.i"
+          # Guest remote GDB gives RV64 PC/registers if the fault is guest-side.
+          set +e
+          timeout -k 5s 75s qemu-riscv64 -g 24083 "$stage1" \
+            -S "$pre" -o "$diagnostics/gdb-return42.s" \
+            > "$diagnostics/guest-gdb-server.log" 2>&1 &
+          server=$!
+          sleep 2
+          timeout -k 5s 65s gdb-multiarch -q -nx -batch "$stage1" \
+            -ex 'set pagination off' -ex 'set confirm off' \
+            -ex 'set remotetimeout 10' -ex 'handle SIGSEGV stop print nopass' \
+            -ex 'target remote 127.0.0.1:24083' \
+            -ex 'continue' -ex 'info registers' -ex 'bt 24' \
+            -ex 'x/24i $pc' -ex 'x/12gx $sp' \
+            > "$diagnostics/guest-gdb.log" 2>&1
+          guest_gdb_rc=$?
+          kill "$server" 2>/dev/null || true
+          wait "$server" 2>/dev/null || true
+          # If QEMU itself segfaulted, native GDB captures its host-side stack.
+          timeout -k 5s 65s gdb-multiarch -q -nx -batch \
+            -ex 'set pagination off' -ex 'set confirm off' \
+            -ex 'handle SIGSEGV stop print nopass' \
+            -ex run -ex 'info registers' -ex 'bt 24' -ex 'x/24i $pc' \
+            --args "$(command -v qemu-riscv64)" "$stage1" -S "$pre" \
+            -o "$diagnostics/native-gdb-return42.s" \
+            > "$diagnostics/native-gdb.log" 2>&1
+          native_gdb_rc=$?
+          set -e
+          printf 'guest_gdb_exit=%s\nnative_gdb_exit=%s\n' \
+            "$guest_gdb_rc" "$native_gdb_rc" > "$diagnostics/gdb-exit-status.txt"
+          echo "STAGE1_DIAG_GDB=CAPTURED guest_rc=$guest_gdb_rc native_rc=$native_gdb_rc"
+
+      - name: Resolve last guest PC to symbols and disassembly
+        shell: bash
+        if: always()
+        run: |
+          set -Eeuo pipefail
+          diagnostics=build/stage1-sigsegv-diagnostic
+          seed=build/bootstrap-current-b1/seed
+          stage1="$seed/minic-stage1-rv64"
+          [[ -s "$stage1" ]] || exit 0
+          pc=$(cat "$diagnostics/last-pc.txt" 2>/dev/null || true)
+          if [[ "$pc" =~ ^0x[0-9a-fA-F]+$ ]]; then
+            riscv64-linux-gnu-addr2line -a -f -C -e "$stage1" "$pc" \
+              > "$diagnostics/addr2line.txt" 2>&1 || true
+            address=$((pc))
+            start=$(( address > 192 ? address - 192 : 0 ))
+            stop=$(( address + 192 ))
+            riscv64-linux-gnu-objdump -drC \
+              --start-address="$start" --stop-address="$stop" "$stage1" \
+              > "$diagnostics/around-pc.objdump.txt" 2>&1 || true
+          else
+            echo 'No guest PC in bounded trace; inspect guest-gdb.log and native-gdb.log.' \
+              > "$diagnostics/addr2line.txt"
+          fi
+          printf 'STAGE1_DIAG_RESULT=EVIDENCE_ONLY original_stage1_selfhost=NOT_PASS\n' \
+            | tee "$diagnostics/result.txt"
+
+      - name: Upload original-error evidence (not a passing gate)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: minic-current-stage1-sigsegv-evidence-${{ github.run_id }}
+          path: build/stage1-sigsegv-diagnostic/
+          if-no-files-found: warn
+          retention-days: 30
+          compression-level: 6
+
+      - name: Keep selfhost correctness gate explicitly red
+        if: always()
+        shell: bash
+        run: |
+          echo 'STAGE1_RUNTIME_CORRECTNESS=FAIL diagnostic_artifact_only=true stage2_stage4=NOT_RUN' >&2
+          exit 1

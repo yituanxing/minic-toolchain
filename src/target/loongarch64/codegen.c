@@ -1,82 +1,168 @@
 #include "target/loongarch64/codegen.h"
-#include "target/loongarch64/block_emit.h"
-#include "target/loongarch64/frame_emit.h"
+#include "target/loongarch64/machine_select.h"
+#include "target/loongarch64/machine_opcode.h"
+#include "target/loongarch64/machine_source_asm.h"
+#include "target/loongarch64/machine_target_state.h"
 #include "target/common/direct_function_emit.h"
 #include "target/common/lp64_aggregate.h"
 #include "target/common/direct_program_emit.h"
 #include <stdint.h>
 #include <stdio.h>
+#include <string.h>
 
-/* LoongArch64 owns every LP64D frame/ABI register action. Common code owns
- * the function envelope, checked planning, cleanup and ELF serialization. */
-static bool loongarch64_emit_prologue(
-    FILE *out, const MinicDirectLP64BlockContext *ctx) {
-    static const char *const registers[8] = {
-        "$a0", "$a1", "$a2", "$a3", "$a4", "$a5", "$a6", "$a7"
-    };
-    const MinicCoreFunction *fn = ctx->fn;
-    const char *name = ctx->name;
-    const size_t frame = ctx->frame;
-    const size_t save_offset = ctx->save_offset;
-    const bool has_calls = ctx->has_direct_calls;
-    const bool dynamic_frame = ctx->dynamic_frame;
+/* LoongArch LP64D is not AAPCS64 with renamed registers: notably the first
+ * GAR holds an indirect result, aggregate pairs may split, and va_list is
+ * a contiguous linear cursor. Keep those choices alongside machine emission. */
+static const MinicDirectLP64AbiPolicy loongarch64_abi_policy = {
+    .name = "loongarch64-lp64d",
+    .gp_argument_registers = 8U,
+    .fp_argument_registers = 8U,
+    .stack_slot_bytes = 8U,
+    .stack_alignment = 16U,
+    .indirect_result_argument_registers = 1U,
+    .core_indirect_record = minic_multi_indirect_record_core,
+    .core_indirect_return = minic_multi_indirect_record_core,
+    .record_registers = MINIC_DIRECT_LP64_RECORD_SPLIT_WITH_STACK,
+    .wide_registers = MINIC_DIRECT_LP64_WIDE_SPLIT_WITH_STACK,
+    .long_double_in_fp_register = false,
+    .variadic_floating_in_fp_register = false,
+    .variadic_named_double_supported = false,
+    .variadic_align_wide_gp_pair = true,
+    .variadic_cursor = MINIC_DIRECT_LP64_VARIADIC_LINEAR_GP,
+    .variadic_save_bytes = 64U,
+    .variadic_save_alignment = 8U,
+    .extra_variadic_cursor_bytes = 0U,
+    .variadic_requires_public_stack_alignment = true
+};
+
+static bool loongarch64_core_executed_fp_type(
+    const MinicCoreTypeContext *types, MinicCoreTypeId id) {
+    const MinicCoreType *type = minic_core_type_get(
+        types, minic_core_type_unqualified(types, id));
+    /* Any floating scalar ABI in LP64S is unsupported, regardless of
+     * source spelling or integer rank. Invalid IDs fail the Core verifier. */
+    return type == NULL || type->kind == MINIC_CORE_TYPE_FLOAT;
+}
+
+/* LP64S passes floating arguments in GPRs and forbids compiler-generated FPU
+ * instructions in the kernel. The integer ABI remains compatible with LP64D,
+ * but we must not miscompile a future float operation or FP-valued call while
+ * soft-float arithmetic/return lowering is still unavailable. Declarations
+ * alone (including external FP prototypes and float-pointer types) are fine. */
+static bool loongarch64_lp64s_executable_supported(
+    const MinicTargetInfo *target,
+    const MinicCoreFunction *fn) {
     size_t i;
-    if (!minic_loongarch64_emit_sp_adjust(out, frame, false) ||
-        (dynamic_frame &&
-         (!minic_loongarch64_emit_frame_mem(
-              out, "st.d", "$s0",
-              save_offset + (has_calls ? 8U : 0U), false) ||
-          fputs("  move $s0, $sp\n", out) == EOF)))
-        goto fail;
-    if (has_calls &&
-        !minic_loongarch64_emit_frame_mem(
-            out, "st.d", "$ra", save_offset, dynamic_frame))
-        goto fail;
-    if (ctx->va_count != 0U) {
-        for (i = 0U; i < 8U; ++i)
-            if (!minic_loongarch64_emit_frame_mem(
-                    out, "st.d", registers[i],
-                    frame - 64U + i * 8U, dynamic_frame))
-                return minic_multi_direct_machine_reject(
-                    fn, "loongarch64", name, "variadic_save",
-                    SIZE_MAX, SIZE_MAX, __LINE__);
+    size_t count, width, j;
+    if (fn == NULL || target == NULL ||
+        fn->type_context == NULL ||
+        loongarch64_core_executed_fp_type(fn->type_context,
+                                         minic_core_function_return_type(fn))) return false;
+    if (minic_multi_fp_return_record_core(fn->type_context,
+            minic_core_function_return_type(fn), &count, &width)) return false;
+    for (i = 0U; i < minic_core_function_parameter_count(fn); ++i)
+        if (loongarch64_core_executed_fp_type(fn->type_context,
+                minic_core_function_parameter_types(fn)[i])) return false;
+    /* Validate actual Core call signatures, not every source declaration.
+     * An FP formal type can exist even when argument conversion was folded
+     * or no FP-typed SSA operand survives in the call lowering. */
+    for (i = 0U; i < fn->callee_count; ++i) {
+        const MinicCoreCallee *call = &fn->callees[i];
+        const MinicCoreType *signature = minic_core_type_get(
+            fn->type_context,
+            minic_core_type_unqualified(fn->type_context,
+                call->core_function_type_id));
+        if (signature == NULL || signature->kind != MINIC_CORE_TYPE_FUNCTION ||
+            (signature->value.function.parameter_count != 0U &&
+             signature->value.function.parameters == NULL)) return false;
+        if (loongarch64_core_executed_fp_type(fn->type_context,
+                signature->value.function.return_type)) return false;
+        for (j = 0U; j < signature->value.function.parameter_count; ++j)
+            if (loongarch64_core_executed_fp_type(fn->type_context,
+                    signature->value.function.parameters[j]))
+                return false;
+    }
+    for (i = 0U; i < fn->call_signature_count; ++i) {
+        const MinicCoreCallSignature *call = &fn->call_signatures[i];
+        const MinicCoreType *signature = minic_core_type_get(
+            fn->type_context,
+            minic_core_type_unqualified(fn->type_context,
+                call->core_function_type_id));
+        if (signature == NULL || signature->kind != MINIC_CORE_TYPE_FUNCTION ||
+            (signature->value.function.parameter_count != 0U &&
+             signature->value.function.parameters == NULL)) return false;
+        if (loongarch64_core_executed_fp_type(fn->type_context,
+                signature->value.function.return_type)) return false;
+        for (j = 0U; j < signature->value.function.parameter_count; ++j)
+            if (loongarch64_core_executed_fp_type(fn->type_context,
+                    signature->value.function.parameters[j]))
+                return false;
+    }
+    for (i = 0U; i < fn->value_count; ++i)
+        if (loongarch64_core_executed_fp_type(fn->type_context,
+                fn->values[i].core_type_id)) return false;
+    for (i = 0U; i < fn->instruction_count; ++i) {
+        const MinicCoreInstruction *ins = &fn->instructions[i];
+        if (loongarch64_core_executed_fp_type(fn->type_context,
+                ins->core_type_id)) return false;
+        if ((ins->kind == MINIC_CORE_INSTRUCTION_CALL ||
+             ins->kind == MINIC_CORE_INSTRUCTION_INDIRECT_CALL) &&
+            minic_multi_fp_return_record_core(fn->type_context,
+                ins->core_type_id, &count, &width)) return false;
     }
     return true;
-fail:
-    return minic_multi_direct_machine_reject(
-        fn, "loongarch64", name, "frame_finalization",
-        SIZE_MAX, SIZE_MAX, __LINE__);
 }
 
 static bool loongarch64_emit_function(
-    FILE *out, const MinicC0Program *program,
-    const MinicTargetInfo *target, const MinicFunction *decl,
+    FILE *out, const MinicTargetInfo *target, const MinicCoreModule *module,
+    const MinicCoreModuleFunctionSymbol *module_decl,
     const MinicCoreFunction *fn, const MinicCoreFunctionFacts *facts,
     const MinicCoreObjectStoragePlan *storage, size_t id,
     bool function_sections) {
-    static const MinicDirectLP64FunctionEmitter emitter = {
-        "loongarch64", MINIC_LP64_ABI_LOONGARCH64_LP64D,
-        minic_multi_indirect_record,
-        "@progbits", "@function", "@init_array", "quad",
-        loongarch64_emit_prologue, minic_loongarch64_emit_core_blocks,
-        NULL
+    MinicDirectLP64AbiPolicy abi = loongarch64_abi_policy;
+    const MinicDirectLP64FunctionEmitter emitter = {
+        .architecture = "loongarch64",
+        .abi = &abi,
+        .text_section_type = "@progbits",
+        .elf_function_type = "@function",
+        .init_array_type = "@init_array",
+        .init_word_directive = "quad",
+        .qualify_opaque_asm = minic_loongarch64_qualified_opaque_asm,
+        .select_machine = minic_loongarch64_select_machine,
+        .initialize_machine_asm_policy =
+            minic_loongarch64_machine_gnu_asm_policy_initialize,
+        .prove_selected_source_asm =
+            minic_loongarch64_machine_prove_selected_source_asm
     };
+    if (target == NULL || fn == NULL) return false;
+    if (minic_loongarch64_target_soft_float_abi(target)) {
+        if (!loongarch64_lp64s_executable_supported(target, fn))
+            return minic_multi_direct_machine_reject(
+                fn, "loongarch64", fn->name,
+                "lp64s-float-codegen-not-supported", SIZE_MAX, SIZE_MAX,
+                __LINE__);
+        abi.name = "loongarch64-lp64s";
+        abi.fp_argument_registers = 0U;
+    }
+    /* Entire function is selected and verified before any ELF text is
+     * written. No instruction-level FILE* fallback survives this entry. */
     return minic_multi_direct_lp64_emit_function(
-        out, program, target, decl, fn, facts, storage,
+        out, target, module, module_decl, fn, facts, storage,
         id, function_sections, &emitter);
 }
 
-bool minic_loongarch64_write_c0_program_with_core_functions(
-    const char *path, const MinicC0Program *program,
+bool minic_loongarch64_write_core_module(
+    const char *path,
     const MinicTargetInfo *target, const MinicCoreFunction *core_functions,
     size_t core_function_count, bool function_sections,
-    MinicDiagnostic *diagnostic) {
-    static const MinicMultiDirectProgramConfig config = {
+    const MinicCoreModule *module, MinicDiagnostic *diagnostic) {
+    static const MinicMultiDirectModuleConfig config = {
         MINIC_TARGET_ARCH_LOONGARCH64, "loongarch64", "LoongArch64",
         ".section .note.GNU-stack,\"\",@progbits\n",
-        loongarch64_emit_function, NULL
+        "@function", "@object",
+        loongarch64_emit_function
     };
-    return minic_multi_direct_write_program(
-        path, program, target, core_functions, core_function_count,
-        function_sections, &config, diagnostic);
+    return minic_multi_direct_write_module(
+        path, target, core_functions, core_function_count,
+        function_sections, module, &config, diagnostic);
 }

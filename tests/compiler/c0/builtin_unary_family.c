@@ -11,23 +11,26 @@ _Static_assert(__builtin_ffsll(-1LL) == 1, "ffsll negative one");
 _Static_assert(__builtin_isdigit('7') == 1, "isdigit digit");
 _Static_assert(__builtin_isdigit('x') == 0, "isdigit nondigit");
 
-static int runtime_clz(unsigned int value) {
+/* Keep each dynamic builtin implementation observable even when the
+ * caller's arguments become compile-time facts after Core specialization.
+ * The separate KVM guard probe verifies that specialization itself. */
+static __attribute__((noinline, used)) int runtime_clz(unsigned int value) {
     return __builtin_clz(value);
 }
 
-static int runtime_ctzl(unsigned long value) {
+static __attribute__((noinline, used)) int runtime_ctzl(unsigned long value) {
     return __builtin_ctzl(value);
 }
 
-static int runtime_ctzll(unsigned long long value) {
+static __attribute__((noinline, used)) int runtime_ctzll(unsigned long long value) {
     return __builtin_ctzll(value);
 }
 
-static int runtime_ffsll(long long value) {
+static __attribute__((noinline, used)) int runtime_ffsll(long long value) {
     return __builtin_ffsll(value);
 }
 
-static int runtime_isdigit(int value) {
+static __attribute__((noinline, used)) int runtime_isdigit(int value) {
     return __builtin_isdigit(value);
 }
 

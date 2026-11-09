@@ -1,161 +1,98 @@
 #ifndef MINIC_TARGET_TARGET_INFO_H
 #define MINIC_TARGET_TARGET_INFO_H
 
+#include "common/call_frame_address.h"
+#include "common/calling_convention.h"
+#include "common/machine_builtin_effect.h"
 #include "target/data_layout.h"
-#include "target/riscv/isa_features.h"
+#include "target/machine_register.h"
 #include "target/target_catalog.h"
 
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
-/* Zero is invalid: a newly registered target must specify its cursor. */
+/* Machine ABI transport and source C va_list identity are separate.
+ * A new target must explicitly describe its machine cursor transport. */
 typedef enum MinicVariadicScalarReadKind {
     MINIC_VARIADIC_SCALAR_READ_UNSUPPORTED = 0,
     MINIC_VARIADIC_SCALAR_READ_LINEAR_SLOT,
     MINIC_VARIADIC_SCALAR_READ_ABI_CURSOR
 } MinicVariadicScalarReadKind;
 
-/* ABI policy, not a Core architecture switch. Copying a structured cursor
- * differs from assigning a scalar cursor; unsupported is always explicit. */
 typedef enum MinicVariadicCopyKind {
     MINIC_VARIADIC_COPY_UNSUPPORTED = 0,
     MINIC_VARIADIC_COPY_SCALAR_ASSIGNMENT,
     MINIC_VARIADIC_COPY_ABI_STATE
 } MinicVariadicCopyKind;
 
-typedef enum MinicIntegerLiteralBase {
-    MINIC_INTEGER_LITERAL_BASE_BINARY = 2,
-    MINIC_INTEGER_LITERAL_BASE_OCTAL = 8,
-    MINIC_INTEGER_LITERAL_BASE_DECIMAL = 10,
-    MINIC_INTEGER_LITERAL_BASE_HEXADECIMAL = 16
-} MinicIntegerLiteralBase;
+/* Machine lowering capabilities do not follow from C declaration admission. */
+typedef enum MinicTargetCallCapability {
+    MINIC_TARGET_CALL_MS_X64_FIXED_SCALAR = 1U << 0
+} MinicTargetCallCapability;
 
-typedef struct MinicTargetIntegerModel {
-    MinicIntegerSign plain_char_sign;
-    /* Target semantic width used for integer ranges and conversions. Signed
-       widths include the sign bit; this is intentionally independent of object
-       storage size/alignment and therefore _Bool is one semantic bit on RV64. */
-    unsigned int semantic_width_bits[MINIC_INTEGER_RANK_INT128 + 1];
-} MinicTargetIntegerModel;
+struct MinicTargetInfo;
 
-/* These admit C declaration identities only. They do not promise machine
- * arithmetic, storage, varargs marshaling or call/return ABI support. */
-typedef enum MinicTargetLanguageCapability {
-    MINIC_TARGET_LANG_EXTENDED_FLOAT_DECLARATIONS = 1U << 0,
-    MINIC_TARGET_LANG_OPAQUE_VECTOR_HEADER_DECLARATIONS = 1U << 1,
-    MINIC_TARGET_LANG_ABI_STATE_VA_LIST_CURSOR = 1U << 2
-} MinicTargetLanguageCapability;
+/* Query a sealed machine-internal builtin name, never a C signature. */
+typedef bool (*MinicTargetMachineBuiltinFormLookup)(
+    const struct MinicTargetInfo *, const char *, size_t,
+    size_t *, const char **, size_t *);
+typedef MinicMachineBuiltinEffect (*MinicTargetMachineBuiltinEffectLookup)(
+    const struct MinicTargetInfo *, const char *, size_t);
 
 typedef struct MinicTargetInfo {
     MinicTargetArchitecture architecture;
+    /* Exact machine-recognized fixed-register forms, shared with SourcePolicy
+     * through the ISA-owned recognizer, never a pointer to C source state. */
+    MinicMachineRegisterRecognizer fixed_register_read;
+    MinicMachineRegisterRecognizer fixed_register_write;
+    MinicMachineRegisterRecognizer local_fixed_register;
+    MinicTargetMachineBuiltinFormLookup machine_builtin_form_lookup;
+    MinicTargetMachineBuiltinEffectLookup machine_builtin_effect_lookup;
     const MinicDataLayout *data_layout;
-    const MinicTargetIntegerModel *integer_model;
-    MinicType wide_character_type;
-    /* C identity of libc size_t in canonical runtime builtin prototypes. */
-    MinicType libc_size_type;
-    MinicIntegerRank word_integer_rank;
-    unsigned int language_type_capabilities;
-    bool gnu_sizeof_void_is_one;
-    bool gnu_sizeof_function_is_one;
+    unsigned int call_lowering_capabilities;
     bool call_frame_return_address_level0;
     bool call_frame_frame_address_level0;
+    bool call_frame_frame_address_level1;
     MinicVariadicScalarReadKind variadic_scalar_read_kind;
     size_t variadic_linear_slot_bytes;
     MinicVariadicCopyKind variadic_copy_kind;
-    /* Per-translation-unit RV64 GNU PIC/PIE lowering selection.
-     * The canonical target descriptors default to static PC-relative.
-     * A CLI invocation copies the descriptor before setting this bit. */
+    /* Machine ELF/CALL lowering, not C integer model or declaration policy. */
+    bool pic_lowering_supported;
     bool position_independent;
-    /* RISC-V-specific, per-invocation subtarget. Legacy default preserved. */
-    MinicRiscvIsa riscv_isa;
+    /* Copy-by-value invocation-local target state. Only target-owned typed
+     * accessors may interpret this storage; generic TargetInfo, Core and the
+     * driver must never carry an ISA-specific struct or cast its bytes. Each
+     * target statically checks that its private state fits this snapshot. */
+    unsigned char machine_state[32];
 } MinicTargetInfo;
 
-/* Invocation-scoped language ABI overrides. Never mutate a canonical target
- * descriptor or its shared integer_model: two compilations may use different
- * -fsigned-char/-funsigned-char policies in the same process. */
-typedef struct MinicTargetInvocation {
-    MinicTargetInfo target;
-    MinicTargetIntegerModel integer_model;
-    MinicType default_wide_character_type;
-} MinicTargetInvocation;
-
-bool minic_target_invocation_begin(MinicTargetInvocation *invocation,
-                                   const MinicTargetInfo *canonical);
-bool minic_target_invocation_plain_char(MinicTargetInvocation *invocation,
-                                        MinicIntegerSign sign);
-bool minic_target_invocation_short_wchar(MinicTargetInvocation *invocation,
-                                         bool enabled);
-
 const MinicTargetInfo *minic_default_target_info(void);
-const MinicTargetInfo *minic_target_info_for_architecture(MinicTargetArchitecture architecture);
+const MinicTargetInfo *minic_target_info_for_architecture(
+    MinicTargetArchitecture architecture);
 const MinicTargetInfo *minic_target_info_from_name(const char *name);
 const MinicDataLayout *minic_target_info_data_layout(const MinicTargetInfo *target);
-const MinicTargetIntegerModel *minic_target_info_integer_model(const MinicTargetInfo *target);
-/* One admission policy shared by the parser and AST verifier. */
-bool minic_target_info_language_type_supported(const MinicTargetInfo *target,
-                                               MinicTypeBaseKind kind);
-bool minic_target_info_named_builtin_type(const MinicTargetInfo *target,
-                                          const char *spelling, size_t length,
-                                          MinicType *type);
-bool minic_target_info_header_attribute_supported(const MinicTargetInfo *target,
-                                                  const char *spelling,
-                                                  size_t length);
-bool minic_target_info_builtin_va_list_type(const MinicTargetInfo *target,
-                                            MinicType *type);
-bool minic_target_info_variadic_state_copy_type_supported(
-    const MinicTargetInfo *, MinicType);
-bool minic_target_info_plain_char_sign(const MinicTargetInfo *target, MinicIntegerSign *sign);
-bool minic_target_info_plain_char_type(const MinicTargetInfo *target, MinicType *type);
-bool minic_target_info_wide_character_type(const MinicTargetInfo *target, MinicType *type);
-bool minic_target_info_word_integer_type(const MinicTargetInfo *target,
-                                         MinicIntegerSign sign,
-                                         MinicType *type);
-bool minic_target_info_sizeof_type(const MinicTargetInfo *target,
-                                   const MinicC0Program *program,
-                                   MinicType type,
-                                   size_t *size);
-bool minic_target_info_integer_width(const MinicTargetInfo *target,
-                                     const MinicC0Program *program,
-                                     MinicType type,
-                                     unsigned int *bits);
-bool minic_target_info_integer_promotion(const MinicTargetInfo *target,
-                                         MinicType type,
-                                         MinicType *result);
-bool minic_target_info_integer_promotion_for_program(const MinicTargetInfo *target,
-                                                     const MinicC0Program *program,
-                                                     MinicType type,
-                                                     MinicType *result);
-bool minic_target_info_integer_common(const MinicTargetInfo *target,
-                                      MinicType left,
-                                      MinicType right,
-                                      MinicType *result);
-bool minic_target_info_integer_common_for_program(const MinicTargetInfo *target,
-                                                  const MinicC0Program *program,
-                                                  MinicType left,
-                                                  MinicType right,
-                                                  MinicType *result);
-bool minic_target_info_integer_literal_type(const MinicTargetInfo *target,
-                                            MinicIntegerLiteralBase base,
-                                            bool has_unsigned_suffix,
-                                            unsigned int long_count,
-                                            uint64_t value,
-                                            MinicType *result);
-bool minic_target_info_fixed_register_supported(const MinicTargetInfo *target,
-                                                const char *name,
-                                                size_t name_length);
-bool minic_target_info_local_fixed_register_supported(const MinicTargetInfo *target,
-                                                      const char *name,
-                                                      size_t name_length);
-bool minic_target_info_inline_asm_register_clobber_supported(const MinicTargetInfo *target,
-                                                             const char *name,
-                                                             size_t name_length);
-bool minic_target_info_inline_asm_immediate_constraint_supported(const MinicTargetInfo *target,
-                                                                 const char *constraint,
-                                                                 size_t constraint_length,
-                                                                 int64_t value);
-bool minic_target_info_call_frame_address_supported(const MinicTargetInfo *target,
-                                                    MinicCallFrameAddressKind kind,
-                                                    unsigned int level);
+
+/* Core-only machine builtin form, after source qualification was sealed. */
+bool minic_target_info_machine_builtin_form(
+    const MinicTargetInfo *target, const char *internal_callee, size_t length,
+    size_t *argument_count,
+    const char **mnemonic, size_t *immediate_index);
+MinicMachineBuiltinEffect minic_target_info_machine_builtin_effect(
+    const MinicTargetInfo *target, const char *internal_callee, size_t length);
+
+bool minic_target_info_function_calling_convention_scalar_call_supported(
+    const MinicTargetInfo *target, MinicFunctionCallingConvention convention);
+/* Sealed Core machine hard-register identity checks. These take only an
+ * ISA register spelling; C declaration/lvalue qualification is separate. */
+bool minic_target_info_fixed_register_write_supported(
+    const MinicTargetInfo *target, const char *name, size_t name_length);
+bool minic_target_info_fixed_register_supported(
+    const MinicTargetInfo *target, const char *name, size_t name_length);
+bool minic_target_info_local_fixed_register_supported(
+    const MinicTargetInfo *target, const char *name, size_t name_length);
+bool minic_target_info_call_frame_address_supported(
+    const MinicTargetInfo *target,
+    MinicCallFrameAddressKind kind, unsigned int level);
 
 #endif

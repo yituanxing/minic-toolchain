@@ -6,7 +6,7 @@
 #include <stdint.h>
 #include <string.h>
 
-bool minic_declaration_array_suffix_valid(const MinicDeclarationArraySuffix *suffix) {
+static bool minic_declaration_array_suffix_valid(const MinicDeclarationArraySuffix *suffix) {
     unsigned int valid_zero_length_bits;
 
     if (suffix == NULL || suffix->dimension_count > MINIC_DECLARATION_MAX_ARRAY_DIMENSIONS) {
@@ -64,6 +64,62 @@ minic_declaration_materialize_array_suffix(MinicC0Program *program,
     }
     *type = result;
     return MINIC_DECLARATION_ARRAY_MATERIALIZE_OK;
+}
+
+/* An incomplete array typedef is a reusable type spelling, not the mutable
+ * descriptor of any one initialized object. Completing one object must not
+ * impose its inferred bound on subsequent declarations using that typedef. */
+bool minic_declaration_instantiate_incomplete_array_object_type(MinicC0Program *program,
+                                                                MinicType declared_type,
+                                                                MinicType *object_type) {
+    const MinicArrayType *array;
+    MinicType element_type;
+    size_t index;
+    bool shared_descriptor;
+
+    if (program == NULL || object_type == NULL) {
+        return false;
+    }
+    if (!minic_type_is_array(declared_type)) {
+        *object_type = declared_type;
+        return true;
+    }
+    array = minic_c0_program_array_type(program, declared_type.array_type_id);
+    if (array == NULL) {
+        return false;
+    }
+    if (array->is_zero_length || array->element_count != 0U) {
+        *object_type = declared_type;
+        return true;
+    }
+    /* A fresh `extern T callbacks[]` declarator already owns a new incomplete
+     * descriptor. Cloning it would strand the first descriptor with no AST
+     * semantic owner. Only reusable types (notably `typedef T callbacks[]`)
+     * or descriptors owned by an earlier declaration need an independent
+     * instance before the new object's eventual bound can be completed. */
+    shared_descriptor = false;
+    for (index = 0U; index < program->type_alias_count; ++index) {
+        if (minic_type_is_array(program->type_aliases[index].type) &&
+            program->type_aliases[index].type.array_type_id == declared_type.array_type_id) {
+            shared_descriptor = true;
+            break;
+        }
+    }
+    if (!shared_descriptor) {
+        for (index = 0U; index < program->global_object_count; ++index) {
+            if (minic_type_is_array(program->global_objects[index].type) &&
+                program->global_objects[index].type.array_type_id == declared_type.array_type_id) {
+                shared_descriptor = true;
+                break;
+            }
+        }
+    }
+    if (!shared_descriptor) {
+        *object_type = declared_type;
+        return true;
+    }
+    element_type = array->element_type;
+    return minic_c0_program_add_incomplete_array_type(program, element_type, object_type);
 }
 
 /* Declaration Sema owns external object type compatibility and composite-array
@@ -148,7 +204,7 @@ bool minic_declaration_merge_external_array_composite_type(MinicC0Program *progr
            existing_array->element_count == declared_count;
 }
 
-bool minic_declaration_external_object_attributes_valid(
+static bool minic_declaration_external_object_attributes_valid(
     const MinicDeclarationExternalObjectAttributes *attributes) {
     size_t alignment;
 
@@ -220,7 +276,8 @@ minic_declaration_apply_transparent_union(MinicC0Program *program, MinicType typ
         const MinicRecordField *field;
 
         field = minic_c0_record_field(record, field_index);
-        if (field == NULL || field->is_array || field->is_bit_field ||
+        if (field == NULL || minic_c0_record_field_array_info(program, field, NULL) ||
+            field->is_bit_field ||
             !minic_type_is_pointer(field->type)) {
             return MINIC_DECLARATION_TRANSPARENT_UNION_UNSUPPORTED_MEMBER;
         }
@@ -300,10 +357,10 @@ MinicDeclarationExternalObjectMergeStatus minic_declaration_merge_external_objec
      * commit step that may allocate, so perform it before composite-type mutation.
      * Array completion and the remaining metadata setters are allocation-free after
      * this preflight and therefore cannot introduce a semantic half-commit. */
-    if ((minic_type_is_array(object->type) &&
+    if (!minic_declaration_apply_object_attributes(program, object_id, attributes) ||
+        (minic_type_is_array(object->type) &&
          !minic_declaration_merge_external_array_composite_type(
-             program, object->type, declared_type)) ||
-        !minic_declaration_apply_object_attributes(program, object_id, attributes)) {
+             program, object->type, declared_type))) {
         return MINIC_DECLARATION_EXTERNAL_OBJECT_MERGE_COMMIT_FAILED;
     }
     return MINIC_DECLARATION_EXTERNAL_OBJECT_MERGE_OK;

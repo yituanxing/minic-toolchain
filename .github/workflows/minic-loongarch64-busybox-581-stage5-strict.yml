@@ -1,0 +1,309 @@
+name: MiniC LoongArch64 Original BusyBox 581 Stage5 Strict
+
+# Exact original BusyBox 1.36.1 allyesconfig Kbuild owners: every C object
+# compiled by MiniC, GNU-only AS/LD, SHA-verified 581 owners and 38 real
+# GNU/QEMU byte-exact applets. No inference from historical green CI.
+# One-shot PR recertification: changing this workflow schedules the gate;
+# [loong-stage5-581] in the exact HEAD activates the real 581-owner job.
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/minic-loongarch64-busybox-581-stage5-strict.yml'
+      - 'tests/external/busybox/**'
+      - 'src/frontend/**'
+      - 'src/core/**'
+      - 'src/compiler/c_lower/**'
+      - 'src/target/loongarch64/**'
+      - 'src/target/common/**'
+      - 'src/target/source_policy/**'
+      - 'tests/compiler/c0/probe-loongarch64-linux-jump-label.sh'
+      - 'tests/compiler/c0/probe-loongarch64-linux-vdso-syscall.sh'
+      - 'tests/compiler/c0/probe-loongarch64-linux-simd-machineir.sh'
+      - 'tests/compiler/c0/loongarch64_linux_simd_machineir.i'
+      - 'Makefile'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: minic-loongarch64-stage5-581-${{ github.ref }}
+  # A later unrelated PR head must not cancel this long one-shot acceptance.
+  cancel-in-progress: false
+
+jobs:
+  # Independent short source/assembler gate. This must not inherit the
+  # deliberate one-shot 581-owner marker used by the large Stage5 job.
+  loongarch64-gnu-as-smoke:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - name: Install LoongArch64 GNU assembler without original software
+        shell: bash
+        timeout-minutes: 10
+        run: |
+          set -Eeuo pipefail
+          for sources in /etc/apt/apt-mirrors.txt /etc/apt/sources.list.d/ubuntu.sources; do
+            if [[ -f "$sources" ]] && grep -q 'azure.archive.ubuntu.com' "$sources"; then
+              sudo sed -i 's#azure.archive.ubuntu.com#archive.ubuntu.com#g' "$sources"
+            fi
+          done
+          timeout 120s sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 update -qq
+          timeout 240s sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 \
+            -o Acquire::https::Timeout=30 -o DPkg::Lock::Timeout=60 \
+            install -y --no-install-recommends \
+            gcc-13-loongarch64-linux-gnu binutils-loongarch64-linux-gnu make
+          command -v loongarch64-linux-gnu-gcc-13
+          command -v loongarch64-linux-gnu-as
+      - name: Restore exact-head MiniC native objects
+        id: compiler_cache
+        uses: actions/cache/restore@v4
+        with:
+          path: build/loong-as-smoke-ci/obj
+          key: minic-loong-as-smoke-v1-${{ runner.os }}-${{ runner.arch }}-${{ github.event.pull_request.head.sha }}
+      - name: Build exact-head MiniC once
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse HEAD)" = '${{ github.event.pull_request.head.sha }}'
+          make -j2 MODE=release CFLAGS=-Werror BUILD_DIR=build/loong-as-smoke-ci \
+            build/loong-as-smoke-ci/bin/minic-cc
+          test -x build/loong-as-smoke-ci/bin/minic-cc
+      - name: Save exact-head MiniC native objects before asm gates
+        if: steps.compiler_cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: build/loong-as-smoke-ci/obj
+          key: minic-loong-as-smoke-v1-${{ runner.os }}-${{ runner.arch }}-${{ github.event.pull_request.head.sha }}
+      - name: Linux jump-label, vDSO and LSX/LASX exact-head GNU assembler smoke
+        shell: bash
+        env:
+          MINIC_CC: ${{ github.workspace }}/build/loong-as-smoke-ci/bin/minic-cc
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse HEAD)" = '${{ github.event.pull_request.head.sha }}'
+          command -v loongarch64-linux-gnu-as
+          command -v loongarch64-linux-gnu-gcc-13
+          mkdir -p build/loong-as-smoke-ci/evidence
+          sh tests/compiler/c0/probe-loongarch64-linux-jump-label.sh |
+            tee build/loong-as-smoke-ci/evidence/linux-jump-label.receipt
+          grep -Fxq 'MINIC_LOONGARCH64_JUMP_LABEL_GNU_AS=PASS __jump_table=5' \
+            build/loong-as-smoke-ci/evidence/linux-jump-label.receipt
+          sh tests/compiler/c0/probe-loongarch64-linux-vdso-syscall.sh |
+            tee build/loong-as-smoke-ci/evidence/linux-vdso-syscall.receipt
+          grep -Fxq 'MINIC_LOONG_VDSO_SYSCALL_GNU_AS=PASS' \
+            build/loong-as-smoke-ci/evidence/linux-vdso-syscall.receipt
+          sh tests/compiler/c0/probe-loongarch64-linux-simd-machineir.sh |
+            tee build/loong-as-smoke-ci/evidence/linux-simd-machineir.receipt
+          grep -Fxq 'MINIC_LOONG_SIMD_MACHINEIR_NEGATIVE=PASS invalid-offset=reject' \
+            build/loong-as-smoke-ci/evidence/linux-simd-machineir.receipt
+          "$MINIC_CC" --target=loongarch64-linux -S \
+            tests/compiler/c0/loongarch64_linux_simd_machineir.i \
+            -o build/loong-as-smoke-ci/evidence/linux-simd-machineir.s
+          loongarch64-linux-gnu-as \
+            -o build/loong-as-smoke-ci/evidence/linux-simd-machineir.o \
+            build/loong-as-smoke-ci/evidence/linux-simd-machineir.s
+          loongarch64-linux-gnu-readelf -h \
+            build/loong-as-smoke-ci/evidence/linux-simd-machineir.o |
+            grep -Eq 'Machine:[[:space:]]+LoongArch'
+          echo 'MINIC_LOONG_SIMD_GNU_AS=PASS LSX=1 LASX=1 original_target=1'
+          printf 'LOONGARCH64_GNU_AS_SMOKE=PASS sha=%s jump_label=1 vdso=1 simd=1 full581=NOT_RUN\n' \
+            "$(git rev-parse HEAD)"
+
+  stage5-eligibility-only:
+    runs-on: ubuntu-24.04
+    outputs:
+      run_581: ${{ steps.scope.outputs.run_581 }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Authenticate explicit one-shot LoongArch64 PR head
+        id: scope
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -Eeuo pipefail
+          printf 'LOONGARCH64_STAGE5_PR_HEAD_SHA=%s\n' "$(git rev-parse HEAD)"
+          if [[ "$EVENT_NAME" == workflow_dispatch ]] ||
+              git log -1 --pretty=%B | grep -Fq '[loong-stage5-581]'; then
+            printf 'run_581=true\n' >> "$GITHUB_OUTPUT"
+            echo 'LOONGARCH64_STAGE5_581=ELIGIBLE verification=NOT_YET_RUN'
+          else
+            printf 'run_581=false\n' >> "$GITHUB_OUTPUT"
+            echo 'LOONGARCH64_STAGE5_581=SKIP reason=head_commit_without_marker verified_581=NO'
+          fi
+
+  loongarch64-original-581-mini-c-gnu-qemu:
+    needs: stage5-eligibility-only
+    if: needs.stage5-eligibility-only.outputs.run_581 == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Preflight the historically proven LoongArch64 GCC13 and QEMU
+        shell: bash
+        timeout-minutes: 10
+        run: |
+          set -Eeuo pipefail
+          for sources in /etc/apt/apt-mirrors.txt /etc/apt/sources.list.d/ubuntu.sources; do
+            if [[ -f "$sources" ]] && grep -q 'azure.archive.ubuntu.com' "$sources"; then
+              sudo sed -i 's#azure.archive.ubuntu.com#archive.ubuntu.com#g' "$sources"
+            fi
+          done
+          packages=(gcc-13-loongarch64-linux-gnu libc6-dev-loong64-cross
+                    qemu-user make curl)
+          timeout 120s sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 update -qq
+          if ! timeout 240s sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o DPkg::Lock::Timeout=60 install -y --no-install-recommends "${packages[@]}"; then
+            timeout 120s sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 update -qq
+            timeout 240s sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o DPkg::Lock::Timeout=60 install -y --no-install-recommends "${packages[@]}"
+          fi
+          command -v loongarch64-linux-gnu-gcc-13
+          command -v loongarch64-linux-gnu-as
+          command -v qemu-loongarch64
+          test -d /usr/loongarch64-linux-gnu
+          command -v python3
+      - name: Restore SHA-checked original BusyBox source tarball
+        id: source_cache
+        uses: actions/cache/restore@v4
+        with:
+          path: build/loong-stage5-ci/download/busybox-1a64f6a20aaf6ea4dbba68bbfa8cc1ab7e5c57c4.tar.gz
+          key: minic-loong-stage5-original-busybox-1361-1a64f6a20aaf6ea4dbba68bbfa8cc1ab7e5c57c4-v1
+      - name: Pin and verify every original source input
+        shell: bash
+        timeout-minutes: 5
+        run: |
+          set -Eeuo pipefail
+          commit=1a64f6a20aaf6ea4dbba68bbfa8cc1ab7e5c57c4
+          tarball="build/loong-stage5-ci/download/busybox-${commit}.tar.gz"
+          mkdir -p build/loong-stage5-ci/download build/loong-stage5-ci/source/upstream build/loong-stage5-ci/evidence
+          if [[ ! -s "$tarball" ]]; then
+            timeout 120s curl -fsSL --retry 2 \
+              "https://github.com/mirror/busybox/archive/${commit}.tar.gz" -o "$tarball"
+          fi
+          tar -xzf "$tarball" -C build/loong-stage5-ci/source/upstream --strip-components=1
+          sh tests/external/busybox/check-pinned-1361-source.sh \
+            build/loong-stage5-ci/source/upstream |
+            tee build/loong-stage5-ci/evidence/pinned-source.receipt
+          grep -Fxq "BUSYBOX_PINNED_SOURCE=PASS release=1.36.1 commit=$commit" \
+            build/loong-stage5-ci/evidence/pinned-source.receipt
+          sha256sum "$tarball" | tee build/loong-stage5-ci/evidence/pinned-tarball.sha256
+      - name: Preserve original source download for subsequent exact checks
+        if: steps.source_cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: build/loong-stage5-ci/download/busybox-1a64f6a20aaf6ea4dbba68bbfa8cc1ab7e5c57c4.tar.gz
+          key: minic-loong-stage5-original-busybox-1361-1a64f6a20aaf6ea4dbba68bbfa8cc1ab7e5c57c4-v1
+      - name: Build one exact-HEAD MiniC -Werror and record toolchain SHA
+        shell: bash
+        timeout-minutes: 9
+        run: |
+          set -Eeuo pipefail
+          make -j2 MODE=release CFLAGS=-Werror BUILD_DIR=build/loong-stage5-ci \
+            build/loong-stage5-ci/bin/minic-cc
+          test -x build/loong-stage5-ci/bin/minic-cc
+          {
+            printf 'SOURCE_SHA=%s\n' "$(git rev-parse HEAD)"
+            printf 'MINIC_COMPILER_SHA256=%s\n' "$(sha256sum build/loong-stage5-ci/bin/minic-cc | cut -d' ' -f1)"
+            printf 'BUSYBOX_UPSTREAM_COMMIT=1a64f6a20aaf6ea4dbba68bbfa8cc1ab7e5c57c4\n'
+            printf 'LOONGARCH64_ORIGINAL_DEFAULT_MINIC_PIC=0\n'
+            loongarch64-linux-gnu-gcc-13 --version | head -n 1
+            qemu-loongarch64 --version | head -n 1
+          } | tee build/loong-stage5-ci/evidence/origins.txt
+      - name: Execute one authentic 581 C owner and GNU/QEMU 38-fixture acceptance
+        shell: bash
+        timeout-minutes: 19
+        env:
+          MINIC_CC: ${{ github.workspace }}/build/loong-stage5-ci/bin/minic-cc
+          FOUR_BACKEND_BUSYBOX_ALL_WORK_DIR: ${{ github.workspace }}/build/loong-stage5-ci/evidence/full581
+        run: |
+          set -Eeuo pipefail
+          python3 tests/external/busybox/check-full-c-binary-contract.py |
+            tee build/loong-stage5-ci/evidence/full-c-contract.receipt
+          grep -Fxq 'CROSS_FULL_C_BUSYBOX_CONTRACT=PASS tests=5 negative_cases=26 targets=aarch64,loongarch64 static_wiring=YES not_runtime=YES' \
+            build/loong-stage5-ci/evidence/full-c-contract.receipt
+          sh tests/external/busybox/probe-loongarch64-full-c-busybox.sh \
+            "$GITHUB_WORKSPACE/build/loong-stage5-ci/source/upstream" \
+            loongarch64-linux-gnu-gcc-13 loongarch64-linux-gnu- \
+            qemu-loongarch64 /usr/loongarch64-linux-gnu |
+            tee build/loong-stage5-ci/evidence/full581.receipt
+          receipt=build/loong-stage5-ci/evidence/full581.receipt
+          grep -Fxq 'FOUR_BACKEND_BUSYBOX_ALL_MINIC_PIE=MODE target=loongarch64 enabled=0 original_Kbuild=1' "$receipt"
+          grep -Fxq 'BUSYBOX_MIXED_BULK_CROSS_RUNTIME=PASS cases=38 GNU_QEMU_byte_exact=1' "$receipt"
+          grep -Fxq 'FOUR_BACKEND_BUSYBOX_ALL_ACCEPT=PASS target=loongarch64 original_Kbuild_owners=581 MiniC_owners=581 GNU_fallbacks=0 SHA256_verified=581 GNU_QEMU_fixtures=38 strict=1 all_C_owners_MiniC=YES assembler_linker=GNU full_all_MiniC=NO' "$receipt"
+          grep -Fxq 'BUSYBOX_FULL_C_BINARY=PASS target=loongarch64 original_Kbuild_owners=581 MiniC_C_owners=581 GNU_C_fallbacks=0 SHA256_verified=581 GNU_AS_LD=YES original_and_MiniC_ELF_differ=YES QEMU_byte_exact=38/38 full_C_MiniC=YES full_toolchain_MiniC=NO' "$receipt"
+          grep -Fxq 'FOUR_BACKEND_BUSYBOX_FULL_C_BINARY=PASS target=loongarch64 owners=581/581 GNU_AS_LD=YES QEMU_byte_exact=38/38 full_C_MiniC=YES full_toolchain_MiniC=NO' "$receipt"
+          grep -Fxq 'FOUR_BACKEND_BUSYBOX_ALL_KBUILD_END target=loongarch64 authenticated_mixed_build=1 full_MiniC=NO' "$receipt"
+          echo 'LOONGARCH64_STAGE5_581=PASS original_Kbuild_owners=581 MiniC_owners=581 GNU_C_fallbacks=0 GNU_QEMU_fixtures=38 GNU_AS_LD=YES'
+          echo 'LOONGARCH64_FULL_C_BUSYBOX=PASS MiniC_C_owners=581/581 GNU_AS_LD=YES whole_BusyBox_QEMU=38/38 full_toolchain_MiniC=NO'
+      - name: Preserve bounded exact source SHA, first three failing input.i and diagnostics
+        if: always()
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib, json, shutil
+          evidence = Path("build/loong-stage5-ci/evidence")
+          report = evidence / "full581" / "report"
+          evidence.mkdir(parents=True, exist_ok=True)
+          failed = []
+          digest = []
+          for path in sorted((report / "per-tu").glob("*/result.json")):
+              try:
+                  row = json.loads(path.read_text(encoding="utf-8"))
+              except (ValueError, OSError):
+                  failed.append((path.parent, {"error": "unreadable_result"}))
+                  continue
+              preprocessed = path.parent / "input.i"
+              if preprocessed.is_file():
+                  digest.append((str(row.get("source", "")), hashlib.sha256(preprocessed.read_bytes()).hexdigest()))
+              if any(row.get(stage) != 0 for stage in ("gcc", "cpp", "minic", "assembler")):
+                  failed.append((path.parent, row))
+          (evidence / "preprocessed-owners.sha256").write_text(
+              "".join(f"{sha}  {src}\n" for src, sha in sorted(digest)), encoding="utf-8")
+          if failed:
+              first = evidence / "first-failing-tu"
+              first.mkdir(exist_ok=True)
+              for index, (directory, row) in enumerate(failed[:3], 1):
+                  dest = first / f"failure-{index}"
+                  dest.mkdir()
+                  (dest / "metadata.json").write_text(json.dumps(row, indent=2), encoding="utf-8")
+                  for name in ("input.i", "cpp.err", "minic.err", "as.err", "trace.err", "result.json"):
+                      src = directory / name
+                      if src.is_file():
+                          shutil.copyfile(src, dest / name)
+          print(f"LOONGARCH64_STAGE5_EVIDENCE owners_sha256={len(digest)} failed_owners={len(failed)} first_saved={min(3, len(failed))}")
+          PY
+      - name: Upload bounded original GNU/MiniC/Kbuild/QEMU evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: minic-loongarch64-stage5-581-${{ github.run_id }}-${{ github.run_attempt }}
+          if-no-files-found: warn
+          retention-days: 30
+          path: |
+            build/loong-stage5-ci/evidence/*.txt
+            build/loong-stage5-ci/evidence/*.receipt
+            build/loong-stage5-ci/evidence/*.sha256
+            build/loong-stage5-ci/evidence/full581/probe.out
+            build/loong-stage5-ci/evidence/full581/probe.err
+            build/loong-stage5-ci/evidence/full581/report/summary.json
+            build/loong-stage5-ci/evidence/full581/report/bulk-kbuild-owner-manifest.json
+            build/loong-stage5-ci/evidence/full581/report/bulk.make.out
+            build/loong-stage5-ci/evidence/full581/report/bulk.make.err
+            build/loong-stage5-ci/evidence/full581/report/build.err
+            build/loong-stage5-ci/evidence/full581/report/gnu-sequential.err
+            build/loong-stage5-ci/evidence/full581/report/gnu-link-attempts.log
+            build/loong-stage5-ci/evidence/full581/src/busybox_unstripped.out
+            build/loong-stage5-ci/evidence/first-failing-tu/**

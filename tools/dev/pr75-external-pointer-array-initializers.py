@@ -111,11 +111,17 @@ pointer_branch = r'''    if (!minic_parser_expect(parser, MINIC_TOKEN_EQUAL, "ex
                     return false;
                 }
             }
-            if (has_relocation &&
-                !minic_c0_global_object_add_object_relocation(
-                    parser->program, object_id, initializer_count, target_id)) {
-                minic_parser_error(parser, "cannot record external pointer array relocation");
-                return false;
+            if (has_relocation) {
+                MinicGlobalRelocation relocation = {0};
+                relocation.location_kind = MINIC_GLOBAL_RELOCATION_LOCATION_ARRAY_ELEMENT;
+                relocation.location_index = initializer_count;
+                relocation.target_kind = MINIC_GLOBAL_RELOCATION_OBJECT;
+                relocation.target_id = target_id;
+                if (!minic_c0_global_object_add_relocation(
+                        parser->program, object_id, &relocation)) {
+                    minic_parser_error(parser, "cannot record external pointer array relocation");
+                    return false;
+                }
             }
             initializer_count += 1U;
 

@@ -2,6 +2,7 @@
 set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
+. "$root/tests/compiler/c0/machine-cfg-contract.sh"
 minic=${MINIC:-"$root/build/debug/bin/minic"}
 host_cc=${HOST_CC:-${CC:-cc}}
 build_dir=${BUILD_DIR:-"$root/build/debug"}
@@ -37,13 +38,11 @@ expect_failure() {
 }
 
 compile_success cast_expressions
-grep -F '.Lmain_core_bb' "$work/cast_expressions.s" >/dev/null
-grep -F '.Lmain_core_return:' "$work/cast_expressions.s" >/dev/null
+require_machine_function_cfg "$work/cast_expressions.s" main 2
 printf '%s\n' "PASS compiler/c0/cast_integer_lowering normalized=core-conversion"
 
 compile_success cast_integer_conversion
-grep -F '.Lmain_core_bb' "$work/cast_integer_conversion.s" >/dev/null
-grep -F '.Lmain_core_return:' "$work/cast_integer_conversion.s" >/dev/null
+require_machine_function_cfg "$work/cast_integer_conversion.s" main 2
 printf '%s\n' "PASS compiler/c0/cast_integer_conversion normalized=core-conversion"
 
 compile_success cast_typedef_shadow
@@ -65,7 +64,7 @@ printf '%s\n' "PASS compiler/c0/implicit_arithmetic_assignment initializer=doubl
     -o "$work/null_pointer_constant.i"
 "$minic" -S "$work/null_pointer_constant.i" -o "$work/null_pointer_constant.s"
 grep -E '^[[:space:]]+li[[:space:]]+[^,]+,[[:space:]]*0$' "$work/null_pointer_constant.s" >/dev/null
-grep -F ".Lmake_null_core_return:" "$work/null_pointer_constant.s" >/dev/null
+require_machine_function_cfg "$work/null_pointer_constant.s" make_null 2
 printf '%s\n' "PASS compiler/c0/null_pointer_constant"
 
 MINIC="$minic" \
@@ -76,8 +75,12 @@ sh "$root/tests/compiler/c0/run-pointer-integer-casts.sh"
 compile_success cast_integer_to_float
 grep -F '  fcvt.d.w ' "$work/cast_integer_to_float.s" >/dev/null
 grep -F '  fcvt.s.d ' "$work/cast_integer_to_float.s" >/dev/null
-grep -F '  li t0, 0x7f800000' "$work/cast_integer_to_float.s" >/dev/null
-grep -F '  li t0, 0x3e800000' "$work/cast_integer_to_float.s" >/dev/null
+# The MachineIR writer is free to use ABI-register or x-register spelling,
+# and GNU accepts these binary32 bits as signed/unsigned decimal immediates.
+grep -E '^[[:space:]]+li[[:space:]]+[^,]+,[[:space:]]*(2139095040|0x7f800000)$' \
+    "$work/cast_integer_to_float.s" >/dev/null
+grep -E '^[[:space:]]+li[[:space:]]+[^,]+,[[:space:]]*(1048576000|0x3e800000)$' \
+    "$work/cast_integer_to_float.s" >/dev/null
 printf '%s\n' 'PASS compiler/c0/cast_integer_to_float lowering=int->double->float literals=binary32 overflow=inf'
 expect_failure \
     invalid_cast_assignment_target \

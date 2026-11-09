@@ -1,0 +1,193 @@
+name: x86 Linux historical PV-producer P0 diagnosis (mixed compiler, NOT strict)
+
+# Called ONLY by the already-registered Linux Runtime GCC Baseline workflow's
+# exact PR-HEAD marker gate. This preserves access to the historical PR cache.
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  GNU_WORK: ${{ github.workspace }}/build/minic-linux-gnu-x86_64
+  RESULT: ${{ github.workspace }}/build/minic-x86-pv-producer-diagnostic
+  OLD_RUN: '42384023426'
+  RELAY_HEAD: ${{ github.event.pull_request.head.sha }}
+
+jobs:
+  x86-pv-producer-only:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 70
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 2
+          persist-credentials: false
+
+      - name: Exact one-shot PR-head marker, no old-seven current-HEAD rerun
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$GITHUB_EVENT_NAME" = pull_request
+          test "$GITHUB_HEAD_REF" = refactor/minic-target-language-boundary
+          test "$(git rev-parse HEAD)" = "$RELAY_HEAD"
+          git rev-parse --verify HEAD^ >/dev/null
+          marker=tools/ci/linux-x86-pv-producer-replay-trigger.txt
+          test -s "$marker"
+          ! git diff --quiet HEAD^ HEAD -- "$marker"
+          grep -Fq '[x86-pv-producer-replay]' <<< "$(git log -1 --format=%s)"
+          mapfile -t rows < "$marker"
+          test "${#rows[@]}" -eq 4
+          test "${rows[0]}" = 'producer_run=42384023426'
+          test "${rows[1]}" = 'producer_commit=8972cd6'
+          test "${rows[2]}" = 'mode=old-seven-plus-current-pv-producers'
+          [[ "${rows[3]}" =~ ^nonce=20261107-[0-9]{1,5}$ ]]
+          test -s tools/ci/linux-x86-pv-producer-owners.json
+          python3 -m py_compile tools/ci/linux-x86-pv-producer-replay-v1.py
+          echo "X86_PV_REPLAY_GATE=PASS head=$RELAY_HEAD old_run=$OLD_RUN strict=false"
+
+      - name: Check official historical 7-shard source-run and artifact identities
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPOSITORY: ${{ github.repository }}
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          import json, os, urllib.request
+          root = 'https://api.github.com/repos/' + os.environ['GH_REPOSITORY']
+          headers = {'Authorization': 'Bearer ' + os.environ['GH_TOKEN'],
+                     'Accept': 'application/vnd.github+json'}
+          def get(path):
+              with urllib.request.urlopen(urllib.request.Request(root + path, headers=headers), timeout=30) as stream:
+                  return json.load(stream)
+          run = get('/actions/runs/42384023426')
+          assert run['head_sha'].startswith('8972cd6'), run['head_sha']
+          assert run['event'] in ('push', 'pull_request', 'workflow_dispatch'), run['event']
+          expected = {'minic-linux-seven-compiler': 13578407478}
+          expected.update({f'minic-linux-seven-objects-x86_64-{index}': id_
+                           for index, id_ in enumerate((13578298280, 13578143769,
+                               13578668618, 13578414153, 13578753107,
+                               13578133798, 13578384347))})
+          objects = get('/actions/runs/42384023426/artifacts?per_page=100')
+          found = {a['name']: a for a in objects['artifacts']}
+          for name, id_ in expected.items():
+              a = found.get(name)
+              assert a and a['id'] == id_ and not a['expired'] and a['size_in_bytes'] > 0, name
+          print('X86_PV_OLD_OFFICIAL_ARTIFACTS=PASS count=8 run=42384023426 head=' + run['head_sha'])
+          PY
+
+      - name: Download old seven objects and exact historical compiler pair
+        uses: actions/download-artifact@v4
+        with:
+          repository: ${{ github.repository }}
+          github-token: ${{ github.token }}
+          run-id: 42384023426
+          pattern: minic-linux-seven-objects-x86_64-*
+          path: build/minic-x86-old-seven/
+          merge-multiple: false
+
+      - uses: actions/download-artifact@v4
+        with:
+          repository: ${{ github.repository }}
+          github-token: ${{ github.token }}
+          run-id: 42384023426
+          name: minic-linux-seven-compiler
+          path: build/minic-x86-old-bin/bin/
+
+      - name: Verify complete old 2758 SHA-pinned C/ELF objects before GNU cache work
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          chmod +x build/minic-x86-old-bin/bin/minic build/minic-x86-old-bin/bin/minic-cc
+          python3 tools/ci/linux-three-isa-seven-runtime-v1.py preflight \
+            --target x86_64 \
+            --minic "$GITHUB_WORKSPACE/build/minic-x86-old-bin/bin/minic" \
+            --incoming "$GITHUB_WORKSPACE/build/minic-x86-old-seven"
+
+      - name: Install exact GNU Kbuild tools and QEMU
+        shell: bash
+        timeout-minutes: 12
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get -o Acquire::Retries=3 update -qq
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            build-essential bc bison flex libelf-dev libssl-dev cpio gzip curl \
+            xz-utils make python3 qemu-system-x86
+
+      - name: Build only current MiniC compiler binaries (not 2758 kernel C objects)
+        shell: bash
+        timeout-minutes: 12
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/minic-x86-pv-current \
+            build/minic-x86-pv-current/bin/minic build/minic-x86-pv-current/bin/minic-cc
+          test -x build/minic-x86-pv-current/bin/minic-cc
+          echo "X86_PV_CURRENT_COMPILER=PASS sha=$RELAY_HEAD"
+
+      - name: Restore the original full GNU 6.6.143 x86 Kbuild cache; no expensive fallback
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ env.GNU_WORK }}
+          key: linux-three-isa-gnu-golden-6.6.143-x86_64-151bb5818787fbd5aac80d5bfe9c6961
+          restore-keys: |
+            linux-three-isa-gnu-golden-6.6.143-x86_64-
+          fail-on-cache-miss: true
+
+      - name: Authenticate original GNU Kbuild cache (fail on unavailable cache)
+        shell: bash
+        timeout-minutes: 8
+        run: |
+          set -Eeuo pipefail
+          python3 tools/ci/linux-three-isa-gnu-cache-verify-v1.py \
+            --target x86_64 --gnu-work "$GNU_WORK" --gcc gcc
+
+      - name: Rebuild deterministic runtime initramfs and verify original GNU P0/P1
+        shell: bash
+        timeout-minutes: 12
+        run: |
+          set -Eeuo pipefail
+          mkdir -p "$RESULT"
+          RISCV_CC=gcc BUILD_DIR="$RESULT/initramfs" \
+            OUTPUT_INITRAMFS="$RESULT/runtime-initramfs.cpio.gz" \
+            bash tests/external/linux/build_runtime_initramfs.sh
+          python3 tools/ci/linux-three-isa-gnu-qemu-v1.py \
+            --target x86_64 --gnu-work "$GNU_WORK" \
+            --initramfs "$RESULT/runtime-initramfs.cpio.gz" \
+            --initramfs-root "$RESULT/initramfs/root" \
+            --output "$RESULT/gnu-boot" --timeout 240
+
+      - name: Recompile only old-ELF PV 3B producers using current-head MiniC and GNU AS, GNU LD and QEMU P0
+        shell: bash
+        timeout-minutes: 30
+        run: |
+          set -Eeuo pipefail
+          python3 tools/ci/linux-x86-pv-producer-replay-v1.py \
+            --gnu-work "$GNU_WORK" \
+            --gnu-receipt "$RESULT/gnu-boot/gnu-qemu-receipt.json" \
+            --gnu-boot-logs "$RESULT/gnu-boot" \
+            --initramfs "$RESULT/runtime-initramfs.cpio.gz" \
+            --incoming "$GITHUB_WORKSPACE/build/minic-x86-old-seven" \
+            --old-minic "$GITHUB_WORKSPACE/build/minic-x86-old-bin/bin/minic" \
+            --new-minic "$GITHUB_WORKSPACE/build/minic-x86-pv-current/bin/minic" \
+            --new-source-sha "$RELAY_HEAD" \
+            --producer-owner-file "$GITHUB_WORKSPACE/tools/ci/linux-x86-pv-producer-owners.json" \
+            --output "$RESULT/replay"
+
+      - name: Save diagnostic-only mixed compiler P0 evidence (never current HEAD strict PASS)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: minic-x86-pv-producer-mixed-epoch-p0-diagnostic
+          path: |
+            ${{ env.RESULT }}/gnu-boot/gnu-qemu-receipt.json
+            ${{ env.RESULT }}/replay/x86-pv-producer-replay-receipt.json
+            ${{ env.RESULT }}/replay/mixed-compiler-C-object-results.json
+            ${{ env.RESULT }}/replay/gnu-ld-*.log
+            ${{ env.RESULT }}/replay/postlink-*.json
+            ${{ env.RESULT }}/replay/boot/p0.log
+            ${{ env.RESULT }}/replay/new-producers/**/*.minic.s
+          if-no-files-found: warn
+          retention-days: 14

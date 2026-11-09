@@ -1,5 +1,6 @@
 #include "frontend/ast_verifier.h"
 #include "frontend/expression_semantics.h"
+#include "target/source_policy/source_info.h"
 
 #include <limits.h>
 #include <stdio.h>
@@ -24,18 +25,45 @@ static bool pointer_qualifiers_are_valid(MinicType type) {
            (type.pointer_volatile_qualifiers >> type.pointer_depth) == 0U;
 }
 
+static bool builtin_declaration_type_is_valid(const MinicTargetInvocation *target,
+                                              MinicType type) {
+    MinicBuiltinDeclarationRole role;
+
+    role = minic_type_builtin_declaration_role(type);
+    if (role == MINIC_BUILTIN_DECLARATION_INVALID ||
+        (role != MINIC_BUILTIN_DECLARATION_STANDARD_FLOAT &&
+         !minic_target_info_language_type_supported_for_type(target, type)) ||
+        (type.base_kind != MINIC_TYPE_BASE_TARGET_BUILTIN &&
+         (type.target_builtin_id != 0U ||
+          type.target_builtin_role != MINIC_BUILTIN_DECLARATION_INVALID))) {
+        return false;
+    }
+    /* All target header-only identities share the same C type storage shape.
+     * Recognition is not permission to compute sizeof, use vector registers
+     * or transport an ABI cursor as a scalar argument. */
+    return type.record_id == MINIC_RECORD_INVALID &&
+           type.array_type_id == MINIC_ARRAY_TYPE_INVALID &&
+           type.function_type_id == MINIC_FUNCTION_TYPE_INVALID &&
+           type.integer_sign == MINIC_INTEGER_SIGN_NONE &&
+           type.integer_rank == MINIC_INTEGER_RANK_NONE && !type.is_plain_char;
+}
+
 static bool
-type_is_valid(const MinicC0Program *program, const MinicTargetInfo *target, MinicType type) {
+type_is_valid(const MinicC0Program *program, const MinicTargetInvocation *target, MinicType type) {
     if (program == NULL ||
         (type.base_qualifiers & ~((unsigned int)MINIC_TYPE_QUALIFIER_CONST |
                                   (unsigned int)MINIC_TYPE_QUALIFIER_VOLATILE)) != 0U ||
-        !pointer_qualifiers_are_valid(type)) {
+        !pointer_qualifiers_are_valid(type) ||
+        (type.base_kind != MINIC_TYPE_BASE_TARGET_BUILTIN &&
+         (type.target_builtin_id != 0U ||
+          type.target_builtin_role != MINIC_BUILTIN_DECLARATION_INVALID))) {
         return false;
     }
     if (type.base_kind != MINIC_TYPE_BASE_ENUM && type.enum_id != MINIC_ENUM_INVALID) {
         return false;
     }
-    if (type.is_plain_char && type.base_kind != MINIC_TYPE_BASE_INT) {
+    if (type.is_plain_char && type.base_kind != MINIC_TYPE_BASE_INT &&
+        type.base_kind != MINIC_TYPE_BASE_GNU_FIXED_VECTOR) {
         return false;
     }
     if (type.is_plain_char) {
@@ -49,6 +77,32 @@ type_is_valid(const MinicC0Program *program, const MinicTargetInfo *target, Mini
     }
 
     switch (type.base_kind) {
+    case MINIC_TYPE_BASE_GNU_FIXED_VECTOR: {
+        MinicType scalar = minic_type_void();
+        MinicType canonical;
+        MinicType stored_type = type;
+        size_t width;
+        size_t alignment;
+        scalar.base_kind = type.gnu_vector_element_kind;
+        scalar.integer_sign = type.integer_sign;
+        scalar.integer_rank = type.integer_rank;
+        scalar.is_plain_char = type.is_plain_char;
+        /* Validate the vector *pointee* object separately from a pointer's
+         * 8-byte representation. A `sse128_t *` must remain legal even on
+         * targets whose pointer size differs from the vector width. */
+        stored_type.pointer_depth = 0U;
+        stored_type.pointer_qualifiers = 0U;
+        stored_type.pointer_volatile_qualifiers = 0U;
+        return type.record_id == MINIC_RECORD_INVALID &&
+               type.array_type_id == MINIC_ARRAY_TYPE_INVALID &&
+               type.function_type_id == MINIC_FUNCTION_TYPE_INVALID &&
+               minic_target_info_language_type_supported(
+                   target, MINIC_TYPE_BASE_GNU_FIXED_VECTOR) &&
+               minic_type_gnu_fixed_vector(scalar, type.gnu_vector_bytes, &canonical) &&
+               minic_data_layout_type(target,
+                                      program, stored_type, &width, &alignment) &&
+               width == type.gnu_vector_bytes && alignment != 0U;
+    }
     case MINIC_TYPE_BASE_VOID:
         return type.record_id == MINIC_RECORD_INVALID &&
                type.array_type_id == MINIC_ARRAY_TYPE_INVALID &&
@@ -78,56 +132,6 @@ type_is_valid(const MinicC0Program *program, const MinicTargetInfo *target, Mini
                type.integer_sign == MINIC_INTEGER_SIGN_NONE &&
                type.integer_rank == MINIC_INTEGER_RANK_NONE;
     }
-    case MINIC_TYPE_BASE_FLOAT:
-    case MINIC_TYPE_BASE_DOUBLE:
-    case MINIC_TYPE_BASE_LONG_DOUBLE:
-    case MINIC_TYPE_BASE_FLOAT128:
-    case MINIC_TYPE_BASE_FLOAT32:
-    case MINIC_TYPE_BASE_FLOAT64:
-    case MINIC_TYPE_BASE_FLOAT32X:
-    case MINIC_TYPE_BASE_FLOAT64X:
-        if ((type.base_kind == MINIC_TYPE_BASE_FLOAT128 ||
-             type.base_kind == MINIC_TYPE_BASE_FLOAT32 ||
-             type.base_kind == MINIC_TYPE_BASE_FLOAT64 ||
-             type.base_kind == MINIC_TYPE_BASE_FLOAT32X ||
-             type.base_kind == MINIC_TYPE_BASE_FLOAT64X) &&
-            !minic_target_info_language_type_supported(target, type.base_kind)) {
-            /* Preserves distinct glibc extended-FP declaration types on all
-             * four Linux targets. Acceptance is NOT support for executing extended-FP
-             * arithmetic or crossing its ABI boundary. */
-            return false;
-        }
-        return type.record_id == MINIC_RECORD_INVALID &&
-               type.array_type_id == MINIC_ARRAY_TYPE_INVALID &&
-               type.function_type_id == MINIC_FUNCTION_TYPE_INVALID &&
-               type.integer_sign == MINIC_INTEGER_SIGN_NONE &&
-               type.integer_rank == MINIC_INTEGER_RANK_NONE && !type.is_plain_char;
-    case MINIC_TYPE_BASE_AARCH64_FLOAT32X4:
-    case MINIC_TYPE_BASE_AARCH64_FLOAT64X2:
-    case MINIC_TYPE_BASE_AARCH64_SVE_FLOAT32:
-    case MINIC_TYPE_BASE_AARCH64_SVE_FLOAT64:
-    case MINIC_TYPE_BASE_AARCH64_SVE_BOOL:
-        /* Header-level GCC vector builtin identity, not a scalar alias.
-         * Accept C typedef declarations, but do not claim vector ABI,
-         * alignment, sizeof, passing or machine operation support. */
-        return minic_target_info_language_type_supported(target, type.base_kind) &&
-               type.record_id == MINIC_RECORD_INVALID &&
-               type.array_type_id == MINIC_ARRAY_TYPE_INVALID &&
-               type.function_type_id == MINIC_FUNCTION_TYPE_INVALID &&
-               type.integer_sign == MINIC_INTEGER_SIGN_NONE &&
-               type.integer_rank == MINIC_INTEGER_RANK_NONE &&
-               !type.is_plain_char;
-    case MINIC_TYPE_BASE_X86_VA_LIST_CURSOR:
-        /* Builtin va_list is represented internally by a pointer-sized
-         * cursor proxy. Its address can also appear as T** in Core STORE,
-         * so validate each pointer depth, but reject a bare pseudo-scalar. */
-        return minic_target_info_language_type_supported(target, type.base_kind) &&
-               type.pointer_depth >= 1U &&
-               type.record_id == MINIC_RECORD_INVALID &&
-               type.array_type_id == MINIC_ARRAY_TYPE_INVALID &&
-               type.function_type_id == MINIC_FUNCTION_TYPE_INVALID &&
-               type.integer_sign == MINIC_INTEGER_SIGN_NONE &&
-               type.integer_rank == MINIC_INTEGER_RANK_NONE && !type.is_plain_char;
     case MINIC_TYPE_BASE_FUNCTION:
         return type.record_id == MINIC_RECORD_INVALID &&
                type.array_type_id == MINIC_ARRAY_TYPE_INVALID &&
@@ -147,8 +151,9 @@ type_is_valid(const MinicC0Program *program, const MinicTargetInfo *target, Mini
                type.function_type_id == MINIC_FUNCTION_TYPE_INVALID &&
                type.integer_sign == MINIC_INTEGER_SIGN_NONE &&
                type.integer_rank == MINIC_INTEGER_RANK_NONE;
+    default:
+        return builtin_declaration_type_is_valid(target, type);
     }
-    return false;
 }
 
 static bool type_is_top_level_unqualified(MinicType type) {
@@ -214,7 +219,7 @@ static bool type_is_condition_scalar(MinicType type) {
 }
 
 static bool verify_binary_type(const MinicC0Program *program,
-                               const MinicTargetInfo *target,
+                               const MinicTargetInvocation *target,
                                const MinicExpression *expression,
                                const MinicExpression *left,
                                const MinicExpression *right) {
@@ -224,6 +229,15 @@ static bool verify_binary_type(const MinicC0Program *program,
 
     if (!binary_operator_is_valid(expression->value.binary.operator_kind)) {
         return false;
+    }
+    if ((expression->value.binary.operator_kind == MINIC_BINARY_BITWISE_XOR ||
+         expression->value.binary.operator_kind == MINIC_BINARY_ADD) &&
+        minic_type_is_fixed_vector_register_storage(left->type)) {
+        MinicType result_type;
+        return minic_target_info_language_type_supported_for_type(target, left->type) &&
+               minic_type_fixed_vector_binary_result(left->type, right->type,
+                                                         &result_type) &&
+               minic_type_equal(expression->type, result_type);
     }
 
     if (expression->value.binary.operator_kind == MINIC_BINARY_COMMA) {
@@ -323,12 +337,28 @@ static bool array_object_type_matches(const MinicC0Program *program,
                                       const MinicArrayObjectInfo *info,
                                       MinicType array_type) {
     const MinicArrayType *materialized;
+    MinicType effective_element;
 
     if (program == NULL || info == NULL || !minic_type_is_array(array_type)) {
         return false;
     }
     materialized = minic_c0_program_array_type(program, array_type.array_type_id);
-    if (materialized == NULL || !minic_type_equal(materialized->element_type, info->element_type)) {
+    if (materialized == NULL) {
+        return false;
+    }
+    /* A const/volatile record lvalue qualifies its array member and every
+     * element of that array. The interned array descriptor records the
+     * declaration's element type, while expression_array_qualified_shape()
+     * reports the effective element type after the enclosing lvalue's cv
+     * qualifiers. Compare those same effective types for `&obj->array`,
+     * including flexible/incomplete and GNU zero-length members; do not
+     * weaken the actual element identity or array extent checks below. */
+    effective_element = materialized->element_type;
+    if ((minic_type_is_const(array_type) &&
+         !minic_type_add_const(effective_element, &effective_element)) ||
+        (minic_type_is_volatile(array_type) &&
+         !minic_type_add_volatile(effective_element, &effective_element)) ||
+        !minic_type_equal(effective_element, info->element_type)) {
         return false;
     }
     if (info->is_zero_length) {
@@ -401,7 +431,7 @@ static bool verify_call_arguments(const MinicC0Program *program,
 static bool verify_expression(const MinicC0Program *program,
                               size_t expression_index,
                               MinicC0AstForm form,
-                              const MinicTargetInfo *target) {
+                              const MinicTargetInvocation *target) {
     const MinicExpression *expression;
     const MinicExpression *left;
     const MinicExpression *right;
@@ -443,12 +473,15 @@ static bool verify_expression(const MinicC0Program *program,
         binding = minic_c0_program_fixed_register_binding(
             program, expression->value.fixed_register_binding_id);
         return target != NULL && binding != NULL &&
-               expression->value_category == MINIC_VALUE_RVALUE &&
+               expression->value_category ==
+                   (minic_target_info_fixed_register_write_supported(
+                        &target->machine, binding->register_name, binding->register_name_length)
+                        ? MINIC_VALUE_LVALUE : MINIC_VALUE_RVALUE) &&
                minic_type_equal(expression->type, binding->type) &&
                (minic_type_is_integer(expression->type) ||
                 minic_type_is_pointer(expression->type)) &&
                minic_target_info_fixed_register_supported(
-                   target, binding->register_name, binding->register_name_length);
+                   &target->machine, binding->register_name, binding->register_name_length);
     }
     case MINIC_EXPRESSION_FUNCTION: {
         const MinicFunction *function;
@@ -464,12 +497,18 @@ static bool verify_expression(const MinicC0Program *program,
         function_type = minic_c0_program_function_type(program, pointee.function_type_id);
         if (function_type == NULL || function_type->parameter_count != function->parameter_count ||
             function_type->is_variadic != function->is_variadic ||
+            function_type->calling_convention != function->calling_convention ||
             !minic_type_equal(function_type->return_type, function->return_type)) {
             return false;
         }
         for (parameter_index = 0U; parameter_index < function->parameter_count; ++parameter_index) {
-            if (!minic_type_equal(function_type->parameter_types[parameter_index],
-                                  function->parameter_types[parameter_index])) {
+            /* Function signatures are interned using C-compatible nested
+             * array shapes, rather than whichever array descriptor was
+             * allocated first.  Preserve the same structural contract at
+             * the function-designator verifier boundary. */
+            if (!minic_c0_types_compatible(program,
+                                          function_type->parameter_types[parameter_index],
+                                          function->parameter_types[parameter_index])) {
                 return false;
             }
         }
@@ -491,7 +530,7 @@ static bool verify_expression(const MinicC0Program *program,
         return expression->value_category == MINIC_VALUE_RVALUE &&
                minic_type_pointee(expression->type, &pointee) && minic_type_is_void(pointee) &&
                minic_target_info_call_frame_address_supported(
-                   target,
+                   &target->machine,
                    expression->value.call_frame_address.kind,
                    expression->value.call_frame_address.level);
     }
@@ -620,7 +659,6 @@ static bool verify_expression(const MinicC0Program *program,
         if (record_rvalue_base) {
             record_type = operand->type;
             if (!minic_c0_record_value_is_copy_source(program, expression->value.member.base) ||
-                field->is_array || minic_type_is_record(field->type) ||
                 expression->value_category != MINIC_VALUE_RVALUE) {
                 return false;
             }
@@ -630,9 +668,7 @@ static bool verify_expression(const MinicC0Program *program,
                    expression->value_category != MINIC_VALUE_LVALUE) {
             return false;
         }
-        expected_type = field->type;
-        if (minic_type_is_const(record_type) &&
-            !minic_type_add_const(expected_type, &expected_type)) {
+        if (!minic_type_record_member(record_type, field->type, &expected_type)) {
             return false;
         }
         return minic_type_equal(expression->type, expected_type);
@@ -644,7 +680,10 @@ static bool verify_expression(const MinicC0Program *program,
                minic_type_equal(expression->type, operand->type) &&
                (minic_type_is_integer(expression->type) ||
                 minic_type_is_pointer(expression->type) || minic_type_is_double(expression->type) ||
-                minic_type_is_record(expression->type));
+                minic_type_is_record(expression->type) ||
+                (minic_type_is_fixed_vector_register_storage(expression->type) &&
+                 minic_target_info_language_type_supported_for_type(
+                     target, expression->type)));
     case MINIC_EXPRESSION_ASSIGNMENT:
         left = expression_before(program, expression->value.binary.left, expression_index);
         right = expression_before(program, expression->value.binary.right, expression_index);
@@ -785,14 +824,18 @@ static bool verify_expression(const MinicC0Program *program,
     case MINIC_EXPRESSION_BUILTIN_VA_START:
     case MINIC_EXPRESSION_BUILTIN_VA_END:
         operand = expression_before(program, expression->value.unary.operand, expression_index);
-        return operand != NULL && operand->value_category == MINIC_VALUE_LVALUE &&
-               minic_type_is_pointer(operand->type) && !minic_type_is_const(operand->type) &&
+        return operand != NULL &&
+               minic_target_info_va_cursor_source_operand_supported(
+                   target, program, operand->type,
+                   operand->value_category == MINIC_VALUE_LVALUE) &&
                expression->value_category == MINIC_VALUE_RVALUE &&
                minic_type_is_void(expression->type);
     case MINIC_EXPRESSION_BUILTIN_VA_ARG:
         operand = expression_before(program, expression->value.unary.operand, expression_index);
-        return operand != NULL && operand->value_category == MINIC_VALUE_LVALUE &&
-               minic_type_is_pointer(operand->type) && !minic_type_is_const(operand->type) &&
+        return operand != NULL &&
+               minic_target_info_va_cursor_source_operand_supported(
+                   target, program, operand->type,
+                   operand->value_category == MINIC_VALUE_LVALUE) &&
                expression->value_category == MINIC_VALUE_RVALUE &&
                (minic_type_is_integer(expression->type) ||
                 minic_type_is_pointer(expression->type) ||
@@ -802,10 +845,15 @@ static bool verify_expression(const MinicC0Program *program,
     case MINIC_EXPRESSION_BUILTIN_VA_COPY:
         left = expression_before(program, expression->value.binary.left, expression_index);
         right = expression_before(program, expression->value.binary.right, expression_index);
-        return left != NULL && right != NULL && left->value_category == MINIC_VALUE_LVALUE &&
-               right->value_category == MINIC_VALUE_LVALUE && minic_type_is_pointer(left->type) &&
-               minic_type_is_pointer(right->type) && !minic_type_is_const(left->type) &&
-               minic_c0_types_compatible(program, left->type, right->type) &&
+        return left != NULL && right != NULL &&
+               minic_target_info_va_cursor_source_operand_supported(
+                   target, program, left->type,
+                   left->value_category == MINIC_VALUE_LVALUE) &&
+               minic_target_info_va_cursor_source_operand_supported(
+                   target, program, right->type,
+                   right->value_category == MINIC_VALUE_LVALUE) &&
+               minic_target_info_va_cursor_source_copy_types_compatible(
+                   target, program, left->type, right->type) &&
                expression->value_category == MINIC_VALUE_RVALUE &&
                minic_type_is_void(expression->type);
     case MINIC_EXPRESSION_BUILTIN_UNARY: {
@@ -817,14 +865,17 @@ static bool verify_expression(const MinicC0Program *program,
         switch (expression->value.builtin_unary.operator_kind) {
         case MINIC_BUILTIN_UNARY_CLZ:
         case MINIC_BUILTIN_UNARY_CTZ:
+        case MINIC_BUILTIN_UNARY_POPCOUNT:
             expected_operand_type = minic_type_unsigned_int();
             break;
         case MINIC_BUILTIN_UNARY_CLZL:
         case MINIC_BUILTIN_UNARY_CTZL:
+        case MINIC_BUILTIN_UNARY_POPCOUNTL:
             expected_operand_type = minic_type_unsigned_long();
             break;
         case MINIC_BUILTIN_UNARY_CLZLL:
         case MINIC_BUILTIN_UNARY_CTZLL:
+        case MINIC_BUILTIN_UNARY_POPCOUNTLL:
             expected_operand_type = minic_type_unsigned_long_long();
             break;
         case MINIC_BUILTIN_UNARY_FFSLL:
@@ -901,7 +952,8 @@ static bool verify_expression(const MinicC0Program *program,
                minic_c0_assignment_compatible(program, pointee,
                                                expression->value.atomic_store.source);
     }
-    case MINIC_EXPRESSION_BUILTIN_OVERFLOW: {
+    case MINIC_EXPRESSION_BUILTIN_OVERFLOW:
+    case MINIC_EXPRESSION_BUILTIN_OVERFLOW_P: {
         const MinicExpression *overflow_left;
         const MinicExpression *overflow_right;
         const MinicExpression *result_pointer;
@@ -918,8 +970,11 @@ static bool verify_expression(const MinicC0Program *program,
                minic_type_equal(expression->type, minic_type_bool()) &&
                expression->value.overflow.operator_kind >= MINIC_OVERFLOW_ADD &&
                expression->value.overflow.operator_kind <= MINIC_OVERFLOW_MULTIPLY &&
-               minic_type_pointee(result_pointer->type, &result_type) &&
+               (expression->kind == MINIC_EXPRESSION_BUILTIN_OVERFLOW_P
+                    ? minic_type_unqualified(result_pointer->type, &result_type)
+                    : minic_type_pointee(result_pointer->type, &result_type)) &&
                minic_type_is_integer(result_type) && !minic_type_is_bool_integer(result_type) &&
+               !minic_type_is_enum(result_type) &&
                minic_type_is_integer(overflow_left->type) &&
                minic_type_is_integer(overflow_right->type);
     }
@@ -938,18 +993,34 @@ static bool verify_expression(const MinicC0Program *program,
             return false;
         }
         (void)memset(&array_info, 0, sizeof(array_info));
-        if (local->is_array) {
-            return local->element_count != 0U &&
-                   minic_c0_expression_array_object_info(program, expression, &array_info) &&
-                   !array_info.has_materialized_type &&
-                   array_info.element_count == local->element_count &&
-                   minic_type_equal(array_info.element_type, local->type) &&
-                   minic_c0_type_is_complete_object(program, local->type);
+        if (minic_c0_local_array_object_info(
+                program, expression->value.compound_literal.local_id, &array_info)) {
+            MinicArrayObjectInfo expression_array_info;
+
+            if (!minic_c0_expression_array_object_info(
+                    program, expression, &expression_array_info) ||
+                expression_array_info.is_incomplete ||
+                expression_array_info.is_zero_length ||
+                expression_array_info.element_count == 0U ||
+                expression_array_info.has_materialized_type !=
+                    array_info.has_materialized_type) {
+                return false;
+            }
+            if (array_info.has_materialized_type) {
+                return minic_type_is_array(local->type) &&
+                       local->dynamic_count_local_id == MINIC_LOCAL_INVALID &&
+                       local->dynamic_address_local_id == MINIC_LOCAL_INVALID &&
+                       minic_c0_type_is_complete_object(program, local->type);
+            }
+            /* Runtime-sized locals are not valid compound-literal storage.
+             * A compound literal must have an actual, complete ArrayType. */
+            return false;
         }
         complete_object = minic_c0_type_is_complete_object(program, expression->type);
         return complete_object && !minic_type_is_array(expression->type) &&
                !minic_type_is_function(expression->type) && !minic_type_is_void(expression->type) &&
-               local->element_count == 1U;
+               local->dynamic_count_local_id == MINIC_LOCAL_INVALID &&
+               local->dynamic_address_local_id == MINIC_LOCAL_INVALID;
     }
     case MINIC_EXPRESSION_STATEMENT: {
         const MinicBlock *block;
@@ -1011,12 +1082,17 @@ static bool verify_expression(const MinicC0Program *program,
 }
 
 static bool verify_statement(const MinicC0Program *program,
-                             const MinicTargetInfo *target_info,
+                             const MinicTargetInvocation *invocation,
                              const MinicStatement *statement) {
     const MinicExpression *target;
     const MinicExpression *expression;
 
     if (statement == NULL) {
+        return false;
+    }
+    /* Initialization provenance is attached solely to synthesized scalar
+     * writes, never to an arbitrary source assignment or control statement. */
+    if (statement->is_initializer_write && statement->kind != MINIC_STATEMENT_ASSIGN) {
         return false;
     }
     target = program_expression(program, statement->target_expression);
@@ -1043,7 +1119,7 @@ static bool verify_statement(const MinicC0Program *program,
                target->value_category == MINIC_VALUE_LVALUE &&
                minic_type_is_integer(target->type) && minic_type_is_integer(expression->type) &&
                minic_target_info_integer_common_for_program(
-                   target_info, program, target->type, expression->type, &common_type);
+                   invocation, program, target->type, expression->type, &common_type);
     }
     case MINIC_STATEMENT_EXPRESSION:
         return expression != NULL;
@@ -1062,7 +1138,10 @@ static bool verify_statement(const MinicC0Program *program,
             (inline_asm->input_count != 0U && inline_asm->inputs == NULL) ||
             (inline_asm->label_count != 0U && inline_asm->labels == NULL) ||
             (inline_asm->register_clobber_count != 0U && inline_asm->register_clobbers == NULL) ||
-            (inline_asm->is_goto ? (inline_asm->label_count == 0U || inline_asm->output_count != 0U)
+            /* GNU asm goto with outputs is a valid SOURCE contract. Core
+             * remains separately responsible for declining unsupported
+             * fault-path output+label semantics before machine emission. */
+            (inline_asm->is_goto ? inline_asm->label_count == 0U
                                  : inline_asm->label_count != 0U) ||
             (inline_asm->has_memory_clobber && inline_asm->register_clobber_count == SIZE_MAX) ||
             inline_asm->clobber_count !=
@@ -1070,6 +1149,7 @@ static bool verify_statement(const MinicC0Program *program,
             statement->target_expression != MINIC_EXPRESSION_INVALID ||
             statement->expression != MINIC_EXPRESSION_INVALID ||
             statement->target_statement != MINIC_STATEMENT_INVALID ||
+            statement->cleanup_context > program->cleanup_context_count ||
             statement->then_block != MINIC_BLOCK_INVALID ||
             statement->else_block != MINIC_BLOCK_INVALID) {
             return false;
@@ -1089,8 +1169,9 @@ static bool verify_statement(const MinicC0Program *program,
             operand_expression = minic_c0_program_expression(program, operand->expression);
             if (operand->constraint_text == NULL || operand->constraint_length == 0U ||
                 ((operand->name == NULL) != (operand->name_length == 0U)) ||
-                operand_expression == NULL ||
-                operand_expression->value_category != MINIC_VALUE_LVALUE ||
+                !minic_c0_inline_asm_output_value_supported(
+                    program, invocation, operand_expression,
+                    operand->constraint_text, operand->constraint_length) ||
                 (operand->access != MINIC_INLINE_ASM_OPERAND_WRITE_ONLY &&
                  operand->access != MINIC_INLINE_ASM_OPERAND_READ_WRITE)) {
                 return false;
@@ -1104,7 +1185,9 @@ static bool verify_statement(const MinicC0Program *program,
             operand_expression = minic_c0_program_expression(program, operand->expression);
             if (operand->constraint_text == NULL || operand->constraint_length == 0U ||
                 ((operand->name == NULL) != (operand->name_length == 0U)) ||
-                operand_expression == NULL ||
+                !minic_c0_inline_asm_input_value_supported(
+                    invocation, operand_expression, operand->constraint_text,
+                    operand->constraint_length) ||
                 operand->access != MINIC_INLINE_ASM_OPERAND_READ_ONLY) {
                 return false;
             }
@@ -1116,7 +1199,10 @@ static bool verify_statement(const MinicC0Program *program,
             label = &inline_asm->labels[operand_index];
             target_statement = minic_c0_program_statement(program, label->target_statement);
             if (label->name == NULL || label->name_length == 0U || target_statement == NULL ||
-                target_statement->kind != MINIC_STATEMENT_LABEL) {
+                target_statement->kind != MINIC_STATEMENT_LABEL ||
+                /* Core asm-goto taken edges cannot currently materialize
+                 * GNU cleanup callbacks; fail sealed ASTs closed as well. */
+                target_statement->cleanup_context != statement->cleanup_context) {
                 return false;
             }
         }
@@ -1216,6 +1302,25 @@ type_owns_array_descriptor(MinicType type, MinicArrayTypeId array_type_id, bool 
            (!require_pointer || type.pointer_depth != 0U);
 }
 
+/* A flexible record tail is the one legal by-value owner of an incomplete
+ * ArrayType. Ordinary incomplete arrays still require an expression, typedef,
+ * extern object or pointer owner; an arbitrary incomplete record member must
+ * not become valid just because the parser materializes flexible tails. */
+static bool record_field_owns_flexible_array_type(const MinicC0Program *program,
+                                                  const MinicRecordField *field,
+                                                  MinicArrayTypeId array_type_id) {
+    const MinicArrayType *array;
+
+    if (program == NULL || field == NULL || !field->is_flexible_array ||
+        !type_owns_array_descriptor(field->type, array_type_id, false) ||
+        field->type.pointer_depth != 0U) {
+        return false;
+    }
+    array = minic_c0_program_array_type(program, array_type_id);
+    return array != NULL && array->element_count == 0U && !array->is_zero_length &&
+           !array->is_query_materialized;
+}
+
 static bool incomplete_array_has_semantic_owner(const MinicC0Program *program,
                                                 MinicArrayTypeId array_type_id) {
     size_t index;
@@ -1254,7 +1359,10 @@ static bool incomplete_array_has_semantic_owner(const MinicC0Program *program,
 
         record = &program->records[index];
         for (field_index = 0U; field_index < record->field_count; ++field_index) {
-            if (type_owns_array_descriptor(record->fields[field_index].type, array_type_id, true)) {
+            const MinicRecordField *field = &record->fields[field_index];
+
+            if (type_owns_array_descriptor(field->type, array_type_id, true) ||
+                record_field_owns_flexible_array_type(program, field, array_type_id)) {
                 return true;
             }
         }
@@ -1306,9 +1414,11 @@ static void minic_verify_mark_array_owner(
     }
 }
 
-/* Allocation/index creation is an optional accelerator; malformed Programs
- * still use the existing verifier's validation/error policy, with guards for
- * invalid nested field buffers not validated until later verification stages. */
+/* Optional accelerator for incomplete-array ownership. The outer Program
+ * storage shapes are preflighted, but this index walks nested Record fields
+ * and function parameter arrays before their detailed shape validation.
+ * Parser-built Programs are expected to satisfy them; arbitrary malformed Program
+ * objects are not yet guaranteed a graceful false return here (MC-032). */
 static unsigned char *minic_verify_build_array_owners(const MinicC0Program *program) {
     unsigned char *owned;
     size_t i;
@@ -1358,8 +1468,16 @@ static unsigned char *minic_verify_build_array_owners(const MinicC0Program *prog
             continue;
         }
         for (j = 0U; j < record->field_count; ++j) {
+            const MinicRecordField *field = &record->fields[j];
+
             minic_verify_mark_array_owner(
-                owned, program->array_type_count, record->fields[j].type, true);
+                owned, program->array_type_count, field->type, true);
+            if (field->type.base_kind == MINIC_TYPE_BASE_ARRAY &&
+                field->type.array_type_id < program->array_type_count &&
+                record_field_owns_flexible_array_type(
+                    program, field, field->type.array_type_id)) {
+                owned[field->type.array_type_id] = 1U;
+            }
         }
     }
     for (i = 0U; i < program->function_count; ++i) {
@@ -1385,27 +1503,6 @@ static unsigned char *minic_verify_build_array_owners(const MinicC0Program *prog
         }
     }
     return owned;
-}
-
-static bool function_alias_signature_matches(const MinicC0Program *program,
-                                             const MinicFunction *alias,
-                                             const MinicFunction *target) {
-    size_t parameter_index;
-
-    if (program == NULL || alias == NULL || target == NULL ||
-        alias->parameter_count != target->parameter_count ||
-        alias->is_variadic != target->is_variadic ||
-        !minic_c0_types_compatible(program, alias->return_type, target->return_type)) {
-        return false;
-    }
-    for (parameter_index = 0U; parameter_index < alias->parameter_count; ++parameter_index) {
-        if (!minic_c0_types_compatible(program,
-                                       alias->parameter_types[parameter_index],
-                                       target->parameter_types[parameter_index])) {
-            return false;
-        }
-    }
-    return true;
 }
 
 static bool function_alias_section_matches(const MinicFunction *alias,
@@ -1479,9 +1576,66 @@ static const char *minic_c0_ast_verify_stage_default_reason(MinicC0AstVerifyStag
     }
 }
 
+/* Program owns one canonical C source cursor type; Target owns only its
+ * required storage shape. Check both before consuming any source type IDs.
+ * Neither Core's runtime pointer proxy nor an unrelated user record may
+ * impersonate the canonical va_list state. */
+static bool verify_builtin_va_list_source_type(
+    const MinicC0Program *program, const MinicTargetInvocation *target) {
+    MinicVaCursorSourceShape shape;
+    MinicType source, state;
+    const MinicRecord *record;
+    MinicArrayObjectInfo field_array;
+    size_t size, alignment;
+    if (program == NULL || target == NULL ||
+        !minic_target_info_va_cursor_source_shape(target, &shape))
+        return false;
+    if (!program->has_builtin_va_list_source_type)
+        return true; /* Manually constructed standalone AST fixtures. */
+    source = program->builtin_va_list_source_type;
+    state = program->builtin_va_list_state_type;
+    if (!type_is_valid(program, target, source) ||
+        !type_is_valid(program, target, state))
+        return false;
+    if (shape.kind == MINIC_VA_CURSOR_SOURCE_LINEAR_POINTER) {
+        MinicType pointer;
+        return minic_type_pointer_to(minic_type_void(), &pointer) &&
+               minic_type_equal(source, pointer) &&
+               minic_type_equal(state, pointer);
+    }
+    if (!minic_type_is_record(state) || state.record_id >= program->record_count)
+        return false;
+    record = &program->records[state.record_id];
+    if (record->name == NULL || record->name_length != 0U ||
+        !record->is_complete || record->field_count != 1U ||
+        record->fields == NULL || record->fields[0].name == NULL ||
+        record->fields[0].name_length != 0U ||
+        !minic_c0_record_field_array_info(program, &record->fields[0], &field_array) ||
+        field_array.is_incomplete || field_array.is_zero_length ||
+        !minic_type_equal(field_array.element_type, minic_type_unsigned_char()) ||
+        field_array.element_count != shape.object_size ||
+        record->explicit_alignment != shape.object_alignment ||
+        !minic_data_layout_type(target, program,
+                                state, &size, &alignment) ||
+        size != shape.object_size || alignment != shape.object_alignment)
+        return false;
+    if (shape.kind == MINIC_VA_CURSOR_SOURCE_OPAQUE_RECORD)
+        return minic_type_equal(source, state);
+    if (shape.kind == MINIC_VA_CURSOR_SOURCE_OPAQUE_RECORD_ARRAY_ONE) {
+        const MinicArrayType *array;
+        if (!minic_type_is_array(source))
+            return false;
+        array = minic_c0_program_array_type(program, source.array_type_id);
+        return array != NULL && array->element_count == 1U &&
+               !array->is_zero_length && !array->is_query_materialized &&
+               minic_type_equal(array->element_type, state);
+    }
+    return false;
+}
+
 bool minic_c0_program_verify_target_detailed(const MinicC0Program *program,
                                              MinicC0AstForm form,
-                                             const MinicTargetInfo *target,
+                                             const MinicTargetInvocation *target,
                                              MinicC0AstVerifyFailure *failure) {
     MinicC0AstVerifyStage stage;
     unsigned char *array_owners = NULL;
@@ -1511,7 +1665,8 @@ bool minic_c0_program_verify_target_detailed(const MinicC0Program *program,
     } while (0)
 
     if (target == NULL || (form != MINIC_C0_AST_PARSED && form != MINIC_C0_AST_NORMALIZED) ||
-        !verify_program_storage(program)) {
+        !verify_program_storage(program) ||
+        !verify_builtin_va_list_source_type(program, target)) {
         MINIC_AST_VERIFY_FAIL(minic_c0_ast_verify_stage_default_reason(stage));
     }
 
@@ -1555,6 +1710,15 @@ bool minic_c0_program_verify_target_detailed(const MinicC0Program *program,
             !array_type->is_query_materialized &&
             !(array_owners != NULL ? array_owners[index] != 0U
                                     : incomplete_array_has_semantic_owner(program, index))) {
+            if (getenv("MINIC_AST_VERIFY_TRACE") != NULL)
+                (void)fprintf(stderr,
+                    "AST_ORPHAN_ARRAY id=%zu element_base=%d element_array=%zu "
+                    "element_pointer_depth=%u program_arrays=%zu expressions=%zu aliases=%zu\n",
+                    index, (int)array_type->element_type.base_kind,
+                    array_type->element_type.array_type_id,
+                    array_type->element_type.pointer_depth,
+                    program->array_type_count, program->expression_count,
+                    program->type_alias_count);
             MINIC_AST_VERIFY_FAIL("incomplete array type has no semantic owner");
         }
         if (array_type->is_query_materialized &&
@@ -1614,9 +1778,15 @@ bool minic_c0_program_verify_target_detailed(const MinicC0Program *program,
             subindex = field_index;
 
             field = &record->fields[field_index];
-            if (field->name == NULL || field->element_count == 0U ||
+            if (field->name == NULL ||
                 !type_is_valid(program, target, field->type) ||
-                minic_type_is_function(field->type)) {
+                minic_type_is_function(field->type) ||
+                (field->is_flexible_array &&
+                 (!record->is_complete || record->is_union || field_index == 0U ||
+                  field_index + 1U != record->field_count ||
+                  !minic_type_is_array(field->type) ||
+                  !record_field_owns_flexible_array_type(
+                      program, field, field->type.array_type_id)))) {
                 MINIC_AST_VERIFY_FAIL(minic_c0_ast_verify_stage_default_reason(stage));
             }
         }
@@ -1628,11 +1798,17 @@ bool minic_c0_program_verify_target_detailed(const MinicC0Program *program,
         const MinicLocal *local;
         size_t explicit_alignment;
         bool dynamic_vla;
+        bool has_dynamic_count;
+        bool has_dynamic_address;
+        MinicArrayObjectInfo array_info;
 
         local = &program->locals[index];
         explicit_alignment = local->explicit_alignment;
         dynamic_vla = false;
-        if (local->is_array && local->element_count == 0U &&
+        has_dynamic_count = local->dynamic_count_local_id != MINIC_LOCAL_INVALID;
+        has_dynamic_address = local->dynamic_address_local_id != MINIC_LOCAL_INVALID;
+        if (has_dynamic_count && has_dynamic_address &&
+            !minic_type_is_array(local->type) &&
             local->dynamic_count_local_id < program->local_count &&
             local->dynamic_address_local_id < program->local_count &&
             local->dynamic_count_local_id != index &&
@@ -1645,13 +1821,24 @@ bool minic_c0_program_verify_target_detailed(const MinicC0Program *program,
             MinicType pointee;
 
             dynamic_vla =
-                !count_local->is_array && count_local->element_count == 1U &&
+                count_local->dynamic_count_local_id == MINIC_LOCAL_INVALID &&
+                count_local->dynamic_address_local_id == MINIC_LOCAL_INVALID &&
                 minic_type_equal(count_local->type, minic_type_unsigned_long()) &&
-                !address_local->is_array && address_local->element_count == 1U &&
+                address_local->dynamic_count_local_id == MINIC_LOCAL_INVALID &&
+                address_local->dynamic_address_local_id == MINIC_LOCAL_INVALID &&
                 minic_type_pointee(address_local->type, &pointee) &&
                 minic_type_equal(pointee, local->type);
         }
-        if ((local->element_count == 0U && !dynamic_vla) ||
+        (void)memset(&array_info, 0, sizeof(array_info));
+        /* Fixed and GNU zero-sized arrays are complete ArrayTypes. VLAs
+         * alone have the paired runtime bound/address locals and an element
+         * type; reject any partial or forged runtime pair. */
+        if ((has_dynamic_count != has_dynamic_address) ||
+            (has_dynamic_count && !dynamic_vla) ||
+            (minic_c0_local_array_object_info(program, index, &array_info) &&
+             array_info.is_incomplete && !array_info.is_runtime_sized) ||
+            (local->has_declaration_block &&
+             local->declaration_block >= program->block_count) ||
             !type_is_valid(program, target, local->type) ||
             minic_type_is_function(local->type) ||
             (explicit_alignment != 0U &&
@@ -1680,10 +1867,12 @@ bool minic_c0_program_verify_target_detailed(const MinicC0Program *program,
             const MinicLocal *local;
 
             local = minic_c0_program_local(program, binding->local_id);
-            if (local == NULL || local->is_array || !local->is_register_storage ||
+            if (local == NULL ||
+                minic_c0_local_array_object_info(program, binding->local_id, NULL) ||
+                !local->is_register_storage ||
                 !minic_type_equal(local->type, binding->type) ||
                 !minic_target_info_local_fixed_register_supported(
-                    target, binding->register_name, binding->register_name_length)) {
+                    &target->machine, binding->register_name, binding->register_name_length)) {
                 MINIC_AST_VERIFY_FAIL(minic_c0_ast_verify_stage_default_reason(stage));
             }
         }
@@ -1703,7 +1892,8 @@ bool minic_c0_program_verify_target_detailed(const MinicC0Program *program,
             if (alias_target_function == NULL || !alias_target_function->is_defined ||
                 function->is_defined ||
                 !function_alias_section_matches(function, alias_target_function) ||
-                !function_alias_signature_matches(program, function, alias_target_function)) {
+                !minic_target_info_function_alias_abi_compatible(
+                    target, program, function, alias_target_function)) {
                 MINIC_AST_VERIFY_FAIL(minic_c0_ast_verify_stage_default_reason(stage));
             }
         }
@@ -1715,7 +1905,12 @@ bool minic_c0_program_verify_target_detailed(const MinicC0Program *program,
             function->local_count > program->local_count - function->local_begin ||
             (function->is_internal && function->is_weak) ||
             (function->is_defined && function->body_block >= program->block_count) ||
-            (!function->is_defined && function->body_block != MINIC_BLOCK_INVALID)) {
+            (!function->is_defined && function->body_block != MINIC_BLOCK_INVALID &&
+             !function->is_gnu_inline_only) ||
+            (function->is_gnu_inline_only &&
+             (function->is_defined || !function->is_always_inline ||
+              !function->is_inline || function->body_block >= program->block_count ||
+              function->parameter_count > function->local_count))) {
             MINIC_AST_VERIFY_FAIL(minic_c0_ast_verify_stage_default_reason(stage));
         }
         for (parameter_index = 0U; parameter_index < function->parameter_count; ++parameter_index) {
@@ -1724,6 +1919,22 @@ bool minic_c0_program_verify_target_detailed(const MinicC0Program *program,
                 !type_is_top_level_unqualified(function->parameter_types[parameter_index]) ||
                 minic_type_is_void(function->parameter_types[parameter_index]) ||
                 minic_type_is_function(function->parameter_types[parameter_index])) {
+                if (getenv("MINIC_AST_VERIFY_TRACE") != NULL) {
+                    const MinicType t = function->parameter_types[parameter_index];
+                    (void)fprintf(stderr,
+                        "MINIC_AST_PARAMETER_FRONTIER function=%s index=%zu "
+                        "base=%u rank=%u sign=%u plain_char=%d ptr=%u qualifiers=%u "
+                        "ptrqual=%u top_unqualified=%d type_valid=%d\n",
+                        function->name != NULL ? function->name : "<unnamed>",
+                        parameter_index, (unsigned int)t.base_kind,
+                        (unsigned int)t.integer_rank,
+                        (unsigned int)t.integer_sign, t.is_plain_char ? 1 : 0,
+                        (unsigned int)t.pointer_depth,
+                        (unsigned int)t.base_qualifiers,
+                        (unsigned int)t.pointer_qualifiers,
+                        type_is_top_level_unqualified(t) ? 1 : 0,
+                        type_is_valid(program, target, t) ? 1 : 0);
+                }
                 MINIC_AST_VERIFY_FAIL(minic_c0_ast_verify_stage_default_reason(stage));
             }
         }
@@ -1751,11 +1962,15 @@ bool minic_c0_program_verify_target_detailed(const MinicC0Program *program,
             if (alias_target_object == NULL || alias_target_object == object ||
                 !object->is_extern || object->is_internal || object->is_block_scope_extern_only ||
                 alias_target_object->is_extern || alias_target_object->is_tentative ||
-                !minic_c0_types_compatible(program, object->type, alias_target_object->type)) {
+                !minic_c0_object_alias_types_compatible(
+                    program, object->type, alias_target_object->type)) {
                 MINIC_AST_VERIFY_FAIL(minic_c0_ast_verify_stage_default_reason(stage));
             }
         }
         if (object->name == NULL || !type_is_valid(program, target, object->type) ||
+            (object->owner_function != MINIC_FUNCTION_INVALID &&
+             (object->owner_function >= program->function_count ||
+              !object->is_internal || object->is_extern || object->is_tentative)) ||
             minic_type_is_function(object->type) || (object->is_internal && object->is_weak) ||
             (minic_type_is_void(object->type) && !object->is_extern) ||
             (object->is_extern &&
@@ -1826,13 +2041,12 @@ bool minic_c0_program_verify_target_detailed(const MinicC0Program *program,
                     size_t selected_slots;
 
                     field = minic_c0_record_field(record, selection->field_index);
-                    if (field == NULL || field->element_count == 0U ||
+                    if (field == NULL ||
                         !minic_c0_global_initializer_slot_count(
-                            program, field->type, &element_slots) ||
-                        (element_slots != 0U && field->element_count > SIZE_MAX / element_slots)) {
+                            program, field->type, &element_slots)) {
                         MINIC_AST_VERIFY_FAIL(minic_c0_ast_verify_stage_default_reason(stage));
                     }
-                    selected_slots = field->element_count * element_slots;
+                    selected_slots = element_slots;
                     if (selected_slots > selection->initializer_span ||
                         selection->initializer_span >
                             object->initializer_count - selection->initializer_slot) {
@@ -1891,7 +2105,7 @@ bool minic_c0_program_verify_target_detailed(const MinicC0Program *program,
                 bool slot_is_pointer;
 
                 relocation = &object->relocations[relocation_index];
-                layout = minic_target_info_data_layout(target);
+                layout = minic_target_info_data_layout(&target->machine);
                 if (layout == NULL ||
                     !minic_c0_global_relocation_slot_type(program,
                                                           object,
@@ -1905,7 +2119,7 @@ bool minic_c0_program_verify_target_detailed(const MinicC0Program *program,
                 if ((!slot_is_pointer && !slot_is_integer) ||
                     (slot_is_integer &&
                      (!minic_data_layout_type(
-                          layout, program, slot_type, &slot_size, &slot_alignment) ||
+                          target, program, slot_type, &slot_size, &slot_alignment) ||
                       slot_size != layout->pointer_size)) ||
                     (slot_is_pointer && !minic_type_pointee(slot_type, &slot_pointee)) ||
                     (relocation_index != 0U &&
@@ -1944,7 +2158,7 @@ bool minic_c0_program_verify_target_detailed(const MinicC0Program *program,
                     int64_t target_addend;
 
                     if (!minic_data_layout_global_relocation_target_addend(
-                            minic_target_info_data_layout(target),
+                            target,
                             program,
                             relocation,
                             &target_addend)) {
@@ -2063,17 +2277,21 @@ bool minic_c0_program_verify_target_detailed(const MinicC0Program *program,
 
 bool minic_c0_program_verify_target(const MinicC0Program *program,
                                     MinicC0AstForm form,
-                                    const MinicTargetInfo *target) {
+                                    const MinicTargetInvocation *target) {
     return minic_c0_program_verify_target_detailed(program, form, target, NULL);
 }
 
 bool minic_c0_program_verify_detailed(const MinicC0Program *program,
                                       MinicC0AstForm form,
                                       MinicC0AstVerifyFailure *failure) {
+    MinicTargetInvocation invocation;
+
+    if (!minic_target_invocation_begin(&invocation, minic_default_target_info()))
+        return false;
     return minic_c0_program_verify_target_detailed(
-        program, form, minic_default_target_info(), failure);
+        program, form, &invocation, failure);
 }
 
 bool minic_c0_program_verify(const MinicC0Program *program, MinicC0AstForm form) {
-    return minic_c0_program_verify_target(program, form, minic_default_target_info());
+    return minic_c0_program_verify_detailed(program, form, NULL);
 }

@@ -10,8 +10,8 @@ mkdir -p "$work"
 cat >"$work/record-array.c" <<'SRC'
 struct row { int value; };
 
-static struct row inferred[];
-static struct row fixed[2];
+static struct row inferred[] __attribute__((used));
+static struct row fixed[2] __attribute__((used));
 
 static struct row inferred[] = {
     { 1 },
@@ -31,7 +31,7 @@ cat >"$work/pointer-array.c" <<'SRC'
 struct clock { int id; };
 static const struct clock realtime = { 1 };
 static const struct clock monotonic = { 2 };
-static const struct clock * const clocks[];
+static const struct clock * const clocks[] __attribute__((used));
 static const struct clock * const clocks[] = {
     [0] = &realtime,
     [1] = &monotonic,

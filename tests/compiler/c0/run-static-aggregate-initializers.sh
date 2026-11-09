@@ -7,7 +7,9 @@ mkdir -p "$build_dir"
 
 "$minic" -S "$root/tests/programs/c0/static_record_compound_literal.c" \
     -o "$build_dir/static_record_compound_literal.s"
-grep -F '.word 3735899821' "$build_dir/static_record_compound_literal.s" >/dev/null
+# 0xdead4ead remains bit-exact; RV64's GNU assembler dialect prints the
+# signed 32-bit interpretation regardless of the C member's signedness.
+grep -F '.word -559067475' "$build_dir/static_record_compound_literal.s" >/dev/null
 grep -F '.dword -1' "$build_dir/static_record_compound_literal.s" >/dev/null
 test "$(grep -c '  .dword value+' "$build_dir/static_record_compound_literal.s")" -eq 2
 
@@ -48,7 +50,7 @@ struct CallbackNode {
     int tail;
 };
 static void callback_node(struct CallbackNode *node) { (void)node; }
-static struct CallbackNode callback_holder = {
+static struct CallbackNode callback_holder __attribute__((used)) = {
     .count = 1,
     .callback = callback_node,
     .tail = 2,
@@ -60,7 +62,7 @@ struct AnonymousStructUnion {
         struct { unsigned long s0; unsigned long s1; };
     };
 };
-static struct AnonymousStructUnion anonymous_struct_union = { .s1 = 8UL };
+static struct AnonymousStructUnion anonymous_struct_union __attribute__((used)) = { .s1 = 8UL };
 
 static long backward_target;
 struct BackwardUnion {
@@ -71,7 +73,7 @@ struct BackwardUnion {
     };
     int tail;
 };
-static struct BackwardUnion backward_union = {
+static struct BackwardUnion backward_union __attribute__((used)) = {
     .tail = 3,
     .as_long = &backward_target,
 };

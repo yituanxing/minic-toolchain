@@ -103,6 +103,25 @@ def log(msg):
     print(msg, flush=True)
 
 
+def full_c_binary_accepted(*, target, owners, minic_owners, fallbacks,
+                           verified, link_rc, original_sha, mixed_sha,
+                           qemu, oracle, mixed):
+    """AArch64/LoongArch64 all-C-owner GNU-link/QEMU, not all-MiniC tools.
+
+    This is deliberately independent of the ordinary mixed-bulk receipt:
+    a compilation census, an ELF-only link, or an absent QEMU runner must
+    never be promoted to a working full-C MiniC BusyBox binary.
+    """
+    return (target in ("aarch64", "loongarch64")
+            and owners == 581 and minic_owners == 581
+            and fallbacks == 0 and verified == 581 and link_rc == 0
+            and bool(original_sha) and bool(mixed_sha)
+            and original_sha != mixed_sha and bool(qemu)
+            and len(oracle) == 38 and set(oracle) == set(mixed)
+            and all(result[0] == 0 and mixed[name] == result
+                    for name, result in oracle.items()))
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--source", required=True)
@@ -110,6 +129,10 @@ def main():
     parser.add_argument("--proxy", required=True)
     parser.add_argument("--host-cc", default="cc")
     args = parser.parse_args()
+    full_c_opt_in = os.environ.get("BUSYBOX_ALLYES_FULL_C_BUSYBOX", "0")
+    if full_c_opt_in not in ("0", "1"):
+        log("BUSYBOX_FULL_C_BINARY=FAIL stage=invalid-opt-in")
+        return 1
     root = Path(args.source).resolve()
     report = Path(args.report).resolve()
     original = report / "bulk-gcc-reference" / "busybox"
@@ -306,6 +329,20 @@ def main():
     if failures:
         log("BUSYBOX_MIXED_BULK=BLOCKED stage=runtime-differential")
         return 1
+    if full_c_opt_in == "1":
+        target = os.environ.get("BUSYBOX_ALLYES_MINIC_TARGET", "").split("-")[0]
+        if not full_c_binary_accepted(
+                target=target, owners=len(mini_names) + len(skipped),
+                minic_owners=len(mini_names), fallbacks=len(skipped),
+                verified=verified, link_rc=rc, original_sha=original_sha,
+                mixed_sha=new_sha, qemu=os.environ.get("BUSYBOX_ALLYES_QEMU"),
+                oracle=oracle, mixed=mixed):
+            log("BUSYBOX_FULL_C_BINARY=FAIL stage=581-owner-GNU-link-QEMU-proof")
+            return 1
+        log(f"BUSYBOX_FULL_C_BINARY=PASS target={target} original_Kbuild_owners=581 "
+            "MiniC_C_owners=581 GNU_C_fallbacks=0 SHA256_verified=581 "
+            "GNU_AS_LD=YES original_and_MiniC_ELF_differ=YES "
+            "QEMU_byte_exact=38/38 full_C_MiniC=YES full_toolchain_MiniC=NO")
     if cross_target or musl_matrix:
         log("BUSYBOX_MIXED_BULK_CROSS_RUNTIME=PASS cases=38 GNU_QEMU_byte_exact=1")
     # Native 957-option original-source milestone: both the entire unique

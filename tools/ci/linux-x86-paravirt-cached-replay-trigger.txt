@@ -1,0 +1,6 @@
+source_run=42366441631
+source_sha=1558d0943b12115b3e3fb89121ce564108c1eca9
+original_candidate_run=42384023426
+original_candidate_sha=8972cd6a7273a34abd2fb7643d198f69cecf8c13
+replay_mode=2746_old_plus_12_current_native_MiniC_S_GNU_AS_original_GNU_LD_QEMU_P0_P1
+nonce=2026-11-07-original-8972-paravirt12-unified-live-receipt

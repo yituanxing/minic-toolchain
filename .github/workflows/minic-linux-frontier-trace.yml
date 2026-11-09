@@ -1,0 +1,81 @@
+name: MiniC frozen Linux three-ISA focused frontier trace (one-off)
+
+# A one-off diagnostic lane. Editing the trace workflow or its extraction
+# script is the only automatic trigger; compiler changes and the regular broad
+# 3x7 campaign never start it.
+on:
+  push:
+    branches: [refactor/minic-target-language-boundary]
+    paths:
+      - .github/workflows/minic-linux-frontier-trace.yml
+      - tools/ci/minic-linux-frontier-trace-v1.py
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: minic-linux-frontier-trace-${{ github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  trace:
+    name: Capture frozen ${{ matrix.target }} MiniC frontier
+    runs-on: ubuntu-24.04
+    timeout-minutes: 100
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        target: [x86_64, aarch64, loongarch64]
+    env:
+      # One immutable, already completed 3x7 campaign. Do not rebuild Linux.
+      SOURCE_RUN: '40835123288'
+      SOURCE_HEAD: 'e255c781fd12795b265b3b71afe8f625525a5e0a'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Download only existing SHA-bound GNU preprocessed corpus
+        uses: actions/download-artifact@v4
+        with:
+          run-id: 40835123288
+          github-token: ${{ github.token }}
+          name: three-linux-gnu-i-${{ matrix.target }}-e255c781fd12795b265b3b71afe8f625525a5e0a
+          path: ${{ runner.temp }}/minic-frontier-old
+      - name: Download the exact original MiniC binary
+        uses: actions/download-artifact@v4
+        with:
+          run-id: 40835123288
+          github-token: ${{ github.token }}
+          name: three-linux-minic-e255c781fd12795b265b3b71afe8f625525a5e0a
+          path: ${{ runner.temp }}/minic-frontier-bin
+      - name: Download seven small error reports for this ISA only
+        uses: actions/download-artifact@v4
+        with:
+          run-id: 40835123288
+          github-token: ${{ github.token }}
+          pattern: three-linux-errors-${{ matrix.target }}-*-e255c781fd12795b265b3b71afe8f625525a5e0a
+          path: ${{ runner.temp }}/minic-frontier-reports
+      - name: Exact manifest/compiler SHA proof and focused owner-only diagnostics
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          chmod +x "$RUNNER_TEMP/minic-frontier-bin/minic-cc"
+          python3 tools/ci/minic-linux-frontier-trace-v1.py \
+            --target '${{ matrix.target }}' \
+            --frozen "$RUNNER_TEMP/minic-frontier-old/frozen" \
+            --reports "$RUNNER_TEMP/minic-frontier-reports" \
+            --minic "$RUNNER_TEMP/minic-frontier-bin/minic-cc" \
+            --expected-head "$SOURCE_HEAD" \
+            --output "$RUNNER_TEMP/minic-frontier-trace-${{ matrix.target }}" \
+            --workers 2 --timeout 180
+      - name: Upload compressed full stderr, ABI flags, trace and source context
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: minic-linux-frontier-trace-${{ matrix.target }}-${{ github.sha }}
+          path: ${{ runner.temp }}/minic-frontier-trace-${{ matrix.target }}/
+          if-no-files-found: warn
+          retention-days: 14
+          compression-level: 0

@@ -2,9 +2,100 @@
 #define MINIC_TARGET_RISCV_INSTRUCTION_SELECT_H
 
 #include "core/core_ir.h"
+#include "target/common/core_numeric_shape.h"
 #include "target/riscv/isa_features.h"
 #include <stdbool.h>
 #include <stddef.h>
+
+/* RV64I checked multiply always lowers through __muldi3, and a 64-bit
+ * result additionally calls __divdi3 / __udivdi3. Check the full supported
+ * result shape before deciding whether the frame needs a saved RA. Keep
+ * this predicate shared with emission: a malformed Core instruction may
+ * fail closed, but may not accidentally turn a planned leaf into a caller. */
+static inline bool minic_riscv_machine_checked_mul_runtime_call(
+    const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
+    unsigned xlen) {
+    const MinicCoreTypeContext *types;
+    const MinicCoreType *pointer, *flag, *result;
+    MinicCoreTypeId pointee;
+    MinicCoreValueId left, right, address;
+    bool signed_left, signed_right, signed_result;
+    if (fn == NULL || ins == NULL || xlen != 64U ||
+        ins->kind != MINIC_CORE_INSTRUCTION_INTEGER_OVERFLOW ||
+        ins->value.integer_overflow.operator_kind !=
+            MINIC_CORE_INTEGER_OVERFLOW_MULTIPLY ||
+        fn->values == NULL || (types = fn->type_context) == NULL)
+        return false;
+    left = ins->value.integer_overflow.left;
+    right = ins->value.integer_overflow.right;
+    address = ins->value.integer_overflow.result_address;
+    if (left >= fn->value_count || right >= fn->value_count ||
+        address >= fn->value_count || ins->result >= fn->value_count)
+        return false;
+    pointer = minic_core_type_get(types, minic_core_type_unqualified(types,
+        fn->values[address].core_type_id));
+    flag = minic_core_type_get(types, minic_core_type_unqualified(types,
+        ins->core_type_id));
+    if (pointer == NULL || pointer->kind != MINIC_CORE_TYPE_POINTER ||
+        !pointer->has_layout || pointer->size != 8U ||
+        flag == NULL || flag->kind != MINIC_CORE_TYPE_INTEGER ||
+        !flag->value.integer.is_bool ||
+        minic_core_type_unqualified(types,
+            fn->values[ins->result].core_type_id) !=
+            minic_core_type_unqualified(types, ins->core_type_id))
+        return false;
+    pointee = minic_core_type_unqualified(types,
+        pointer->value.pointer.pointee);
+    result = minic_core_type_get(types, pointee);
+    return result != NULL && result->kind == MINIC_CORE_TYPE_INTEGER &&
+        result->has_layout && !result->value.integer.is_bool &&
+        (result->size == 1U || result->size == 2U ||
+         result->size == 4U || result->size == 8U) &&
+        result->value.integer.bit_width == result->size * 8U &&
+        ((minic_core_type_unqualified(types,
+            fn->values[left].core_type_id) == pointee &&
+          minic_core_type_unqualified(types,
+            fn->values[right].core_type_id) == pointee) ||
+         minic_core_integer_overflow_mixed_multiply_i32_shape(fn, ins,
+             &signed_left, &signed_right, &signed_result));
+}
+
+/* The single Core→RISC-V typed Machine implicit-CALL inventory. The
+ * physical selector and the pre-frame RA planner MUST consume the same
+ * classification: MachineIR intentionally emits only base-I and therefore
+ * uses compiler-runtime helpers even when -march exposes M/F/D. Explicit
+ * Core CALLs are already accounted for by Common FunctionFacts. */
+static inline bool minic_riscv_machine_implicit_runtime_call(
+    const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
+    unsigned xlen) {
+    if (fn == NULL || ins == NULL || (xlen != 32U && xlen != 64U))
+        return false;
+    switch (ins->kind) {
+    case MINIC_CORE_INSTRUCTION_INTEGER_OVERFLOW:
+        return minic_riscv_machine_checked_mul_runtime_call(fn, ins, xlen);
+    case MINIC_CORE_INSTRUCTION_INTEGER_MULTIPLY:
+    case MINIC_CORE_INSTRUCTION_INTEGER_DIVIDE:
+    case MINIC_CORE_INSTRUCTION_INTEGER_REMAINDER:
+    case MINIC_CORE_INSTRUCTION_FLOAT_ADD:
+    case MINIC_CORE_INSTRUCTION_FLOAT_SUBTRACT:
+    case MINIC_CORE_INSTRUCTION_FLOAT_MULTIPLY:
+    case MINIC_CORE_INSTRUCTION_FLOAT_DIVIDE:
+    case MINIC_CORE_INSTRUCTION_DOUBLE_ADD:
+    case MINIC_CORE_INSTRUCTION_DOUBLE_SUBTRACT:
+    case MINIC_CORE_INSTRUCTION_DOUBLE_MULTIPLY:
+    case MINIC_CORE_INSTRUCTION_DOUBLE_DIVIDE:
+    case MINIC_CORE_INSTRUCTION_DOUBLE_EQUAL:
+    case MINIC_CORE_INSTRUCTION_DOUBLE_LESS:
+    case MINIC_CORE_INSTRUCTION_DOUBLE_LESS_EQUAL:
+    case MINIC_CORE_INSTRUCTION_FLOAT_TO_DOUBLE:
+    case MINIC_CORE_INSTRUCTION_DOUBLE_TO_FLOAT:
+    case MINIC_CORE_INSTRUCTION_INTEGER_TO_DOUBLE:
+    case MINIC_CORE_INSTRUCTION_DOUBLE_TO_INTEGER:
+        return true;
+    default:
+        return false;
+    }
+}
 
 /* Machine operation selection shared by RV32I and RV64.
  * Core/type legalization and XLEN-specific canonicalization belong to the

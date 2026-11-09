@@ -14,6 +14,8 @@ import subprocess
 import tempfile
 import time
 
+from linux_kbuild_language_flags import RV64_LINUX_KBUILD_LANGUAGE_FLAGS
+
 
 def digest(path):
     h = hashlib.sha256()
@@ -52,13 +54,16 @@ def selected_inputs(corpus):
 def compile_one(exe, source, target):
     start = time.perf_counter_ns()
     try:
-        proc = subprocess.run([str(exe), "-S", str(source), "-o", str(target)],
+        proc = subprocess.run([str(exe), *RV64_LINUX_KBUILD_LANGUAGE_FLAGS,
+                               "-S", str(source), "-o", str(target)],
                               capture_output=True, text=True, errors="replace",
                               timeout=150, check=False)
     except subprocess.TimeoutExpired:
         return {"status": "TIMEOUT", "stderr": "compiler exceeded 150 s"}
     elapsed = round((time.perf_counter_ns() - start) / 1e6, 3)
-    if proc.returncode or not target.is_file() or target.stat().st_size == 0:
+    # A zero-byte .s is valid GNU assembler input for a TU with no emitted
+    # definitions; only a missing output path or nonzero compiler exit fails.
+    if proc.returncode or not target.is_file():
         return {"status": "FAIL", "stderr": proc.stderr[-1200:], "rc": proc.returncode}
     return {"status": "PASS", "sha256": digest(target),
             "bytes": target.stat().st_size, "wall_ms": elapsed}
@@ -116,6 +121,7 @@ def main():
     results = {"schema": "minic-frozen-corpus-assembly-diff-v1",
                "input_count": len(all_rows), "baseline_cc_sha256": old_sha,
                "candidate_cc_sha256": new_sha,
+               "kbuild_language_flags": list(RV64_LINUX_KBUILD_LANGUAGE_FLAGS),
                "identical": len(all_rows) - len(mismatches),
                "mismatch_count": len(mismatches),
                "balanced_order": args.balanced_order,

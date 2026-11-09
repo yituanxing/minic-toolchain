@@ -4,7 +4,7 @@
 #include "compiler/core_reachability.h"
 
 #include "core/core_ir.h"
-#include "core/core_lower.h"
+#include "compiler/c_lower/core_lower.h"
 #include "frontend/ast.h"
 #include "frontend/ast_verifier.h"
 #include "frontend/cast_normalization.h"
@@ -13,9 +13,12 @@
 #include "frontend/parser.h"
 #include "target/backend.h"
 #include "target/data_layout.h"
+#include "target/data_layout_source.h"
+#include "target/source_policy/source_info.h"
 #include "target/target_info.h"
 
 #include <errno.h>
+#include <limits.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdarg.h>
@@ -71,26 +74,39 @@ static void minic_set_diagnostic(MinicDiagnostic *diagnostic,
 }
 
 static bool minic_validate_core_functions(const char *input_path,
-                                          const MinicC0Program *program,
                                           const MinicCoreFunctionSet *set,
+                                          const MinicC0Program *program,
                                           MinicDiagnostic *diagnostic) {
     size_t function_index;
+    const bool report_all = getenv("MINIC_CORE_FAILURE_CENSUS") != NULL;
+    bool found_failure = false;
 
-    if (program == NULL || set == NULL) {
+    if (set == NULL || program == NULL) {
         return false;
     }
-    if (set->function_count != program->function_count ||
+    if (set->function_count != set->module.function_count ||
+        set->function_count != program->function_count ||
         (set->function_count != 0U &&
-         (set->functions == NULL || set->statuses == NULL))) {
+         (set->functions == NULL || set->statuses == NULL ||
+          set->module.function_symbols == NULL))) {
         minic_set_diagnostic(
             diagnostic, input_path, 1U, 1U, "Core IR functions do not match source program");
         return false;
     }
-    for (function_index = 0U; function_index < program->function_count; ++function_index) {
-        const MinicFunction *function;
+    for (function_index = 0U; function_index < set->function_count; ++function_index) {
+        const MinicCoreModuleFunctionSymbol *function;
+        const MinicFunction *source_function;
+        const char *source_name;
+        int source_name_length;
         MinicCoreLowerStatus status;
 
-        function = minic_c0_program_function(program, function_index);
+        function = &set->module.function_symbols[function_index];
+        source_function = minic_c0_program_function(program, function_index);
+        source_name = source_function != NULL && source_function->name != NULL
+            ? source_function->name : "?";
+        source_name_length = source_function != NULL && source_function->name != NULL
+            ? (source_function->name_length > (size_t)INT_MAX
+                ? INT_MAX : (int)source_function->name_length) : 1;
         if (function == NULL) {
             minic_set_diagnostic(
                 diagnostic, input_path, 1U, 1U, "Core lowering cannot access function");
@@ -109,24 +125,33 @@ static bool minic_validate_core_functions(const char *input_path,
         if (status == MINIC_CORE_LOWER_OK) {
             continue;
         }
-        if (status == MINIC_CORE_LOWER_UNSUPPORTED) {
-            minic_set_diagnostic(diagnostic,
-                                 input_path,
-                                 1U,
-                                 1U,
-                                 "Core IR does not yet support function '%s'",
-                                 function->name);
-            return false;
+        /* The lowering pass has ALREADY evaluated every reachable C function.
+         * Normal compilation remains fail-fast. On an explicit Linux corpus
+         * diagnostic pass, enumerate EVERY failed Core function in this TU,
+         * not merely the first diagnostic. This changes no IR or machine
+         * semantics, nor does it mask any previously rejected function. */
+        if (report_all) {
+            (void)fprintf(stderr,
+                "MINIC_CORE_FUNCTION_FAILURE kind=%s index=%zu function=%.*s\n",
+                status == MINIC_CORE_LOWER_UNSUPPORTED ? "UNSUPPORTED" : "ERROR",
+                function_index, source_name_length, source_name);
         }
-        minic_set_diagnostic(diagnostic,
-                             input_path,
-                             1U,
-                             1U,
-                             "Core IR lowering failed for function '%s'",
-                             function->name);
-        return false;
+        if (!found_failure) {
+            if (status == MINIC_CORE_LOWER_UNSUPPORTED) {
+                minic_set_diagnostic(diagnostic, input_path, 1U, 1U,
+                    "Core IR does not yet support function '%.*s'",
+                    source_name_length, source_name);
+            } else {
+                minic_set_diagnostic(diagnostic, input_path, 1U, 1U,
+                    "Core IR lowering failed for function '%.*s'",
+                    source_name_length, source_name);
+            }
+            found_failure = true;
+        }
+        if (!report_all)
+            return false;
     }
-    return true;
+    return !found_failure;
 }
 
 static bool
@@ -224,7 +249,7 @@ static void minic_set_ast_verify_diagnostic(const char *input_path,
 
 int minic_compile_preprocessed_file_for_target(const char *input_path,
                                                const char *output_path,
-                                               const MinicTargetInfo *target_info,
+                                               const MinicTargetInvocation *invocation,
                                                bool function_sections,
                                                MinicDiagnostic *diagnostic) {
     MinicSourceBuffer buffer;
@@ -233,6 +258,7 @@ int minic_compile_preprocessed_file_for_target(const char *input_path,
     MinicC0AstVerifyFailure verify_failure;
     const MinicBackend *backend;
     MinicInlineBooleanDomainStats boolean_stats = {0};
+    MinicInlineCallPlan inline_call_plan = {0};
     bool success;
 
     if (input_path == NULL || output_path == NULL) {
@@ -245,9 +271,11 @@ int minic_compile_preprocessed_file_for_target(const char *input_path,
         diagnostic->column = 1U;
         diagnostic->message[0] = '\0';
     }
-    backend = minic_backend_for_target(target_info);
-    if (target_info == NULL || backend == NULL ||
-        target_info->data_layout == NULL || target_info->integer_model == NULL) {
+    backend = invocation == NULL ? NULL :
+        minic_backend_for_target(&invocation->machine);
+    if (invocation == NULL || backend == NULL ||
+        invocation->machine.data_layout == NULL ||
+        invocation->source_info.integer_model == NULL) {
         minic_set_diagnostic(diagnostic, input_path, 1U, 1U, "invalid target configuration");
         return 1;
     }
@@ -262,11 +290,11 @@ int minic_compile_preprocessed_file_for_target(const char *input_path,
     minic_core_function_set_initialize(&core_set);
     minic_bootstrap_trace_stage(input_path, "parse", "begin", 0U);
     success = minic_parse_c0_program_for_target(
-        input_path, buffer.data, buffer.size, target_info, &program, diagnostic);
+        input_path, buffer.data, buffer.size, invocation, &program, diagnostic);
     minic_bootstrap_trace_stage(input_path, "parse", success ? "end-ok" : "end-fail",
                                 program.function_count);
     if (success && !minic_c0_program_verify_target_detailed(
-                       &program, MINIC_C0_AST_PARSED, target_info, &verify_failure)) {
+                       &program, MINIC_C0_AST_PARSED, invocation, &verify_failure)) {
         minic_set_ast_verify_diagnostic(input_path, "parsed", &verify_failure, diagnostic);
         success = false;
     }
@@ -289,7 +317,7 @@ int minic_compile_preprocessed_file_for_target(const char *input_path,
                                     program.function_count);
     }
     if (success && !minic_c0_program_verify_target_detailed(
-                       &program, MINIC_C0_AST_NORMALIZED, target_info, &verify_failure)) {
+                       &program, MINIC_C0_AST_NORMALIZED, invocation, &verify_failure)) {
         minic_set_ast_verify_diagnostic(input_path, "normalized", &verify_failure, diagnostic);
         success = false;
     }
@@ -306,30 +334,36 @@ int minic_compile_preprocessed_file_for_target(const char *input_path,
                              "cannot compute inline emission reachability");
         success = false;
     }
-    if (success && !minic_specialize_inline_integer_calls(&program, target_info)) {
+    if (success && !minic_inline_call_plan_initialize(&inline_call_plan, &program)) {
+        minic_set_diagnostic(diagnostic, input_path, 1U, 1U,
+                             "cannot initialize inline specialization plan");
+        success = false;
+    }
+    if (success && !minic_specialize_inline_integer_calls(
+            &program, invocation, &inline_call_plan)) {
         minic_set_diagnostic(diagnostic, input_path, 1U, 1U,
                              "cannot specialize inline integer call sites");
         success = false;
     }
-    if (success && !minic_specialize_inline_symbolic_calls(&program, target_info)) {
+    if (success && !minic_specialize_inline_symbolic_calls(
+            &program, invocation, &inline_call_plan)) {
         minic_set_diagnostic(diagnostic, input_path, 1U, 1U,
                              "cannot specialize inline symbolic address call sites");
         success = false;
     }
-    if (success && !minic_specialize_inline_boolean_range_calls(&program, target_info, &boolean_stats)) {
+    if (success && !minic_specialize_inline_boolean_range_calls(
+            &program, invocation, &inline_call_plan, &boolean_stats)) {
         minic_set_diagnostic(diagnostic, input_path, 1U, 1U,
                              "cannot specialize inline boolean range call sites");
         success = false;
     }
-    if (success && !minic_finalize_inline_integer_specialization_references(&program)) {
-        minic_set_diagnostic(diagnostic, input_path, 1U, 1U,
-                             "cannot finalize inline specialization reachability");
-        success = false;
-    }
+    /* The source AST is never retargeted; the plan belongs exclusively to
+     * variant discovery and is intentionally invisible to Core lowering. */
+    minic_inline_call_plan_destroy(&inline_call_plan);
     if (success) {
         minic_bootstrap_trace_stage(input_path, "core-set", "begin", program.function_count);
     }
-    if (success && !minic_prepare_core_function_set(&program, target_info, &core_set)) {
+    if (success && !minic_prepare_core_function_set(&program, invocation, &core_set)) {
         minic_set_diagnostic(
             diagnostic, input_path, 1U, 1U, "cannot retain Core IR lowering results");
         success = false;
@@ -340,19 +374,21 @@ int minic_compile_preprocessed_file_for_target(const char *input_path,
                                     success ? "end-ok" : "end-fail",
                                     program.function_count);
     }
-    if (success && !minic_prune_inline_specializations_from_core(
-                       &program, &core_set, backend->emit_reachable_core_blocks_only)) {
-        minic_set_diagnostic(diagnostic,
-                             input_path,
-                             1U,
-                             1U,
-                             "cannot prune inline specialization Core reachability");
+    /* Core/ModuleIR owns symbol reachability. If the closure reaches a C
+     * function deferred by the source-only emission hint, the compiler
+     * completes its normal sealed Core ingress and closes again until the
+     * executable graph is stable. Core closure itself never reads C AST. */
+    if (success && !minic_complete_core_function_set_reachability(
+                       &program, invocation, &core_set,
+                       backend->emit_reachable_core_blocks_only)) {
+        minic_set_diagnostic(diagnostic, input_path, 1U, 1U,
+                             "cannot compute Core/Module symbol reachability");
         success = false;
     }
     if (success) {
         minic_bootstrap_trace_stage(input_path, "core-validate", "begin", program.function_count);
         success =
-            minic_validate_core_functions(input_path, &program, &core_set, diagnostic);
+            minic_validate_core_functions(input_path, &core_set, &program, diagnostic);
         minic_bootstrap_trace_stage(input_path,
                                     "core-validate",
                                     success ? "end-ok" : "end-fail",
@@ -361,7 +397,7 @@ int minic_compile_preprocessed_file_for_target(const char *input_path,
     if (success) {
         MinicDataLayoutProgramCheck layout_status;
         minic_bootstrap_trace_stage(input_path, "layout", "begin", program.function_count);
-        layout_status = minic_data_layout_validate_program(target_info->data_layout, &program);
+        layout_status = minic_data_layout_validate_program(invocation, &program);
         if (layout_status != MINIC_DATA_LAYOUT_PROGRAM_OK) {
             const char *reason = layout_status == MINIC_DATA_LAYOUT_PROGRAM_INVALID_RECORD
                 ? "record size is invalid for the selected target"
@@ -376,22 +412,37 @@ int minic_compile_preprocessed_file_for_target(const char *input_path,
                                     program.function_count);
     }
     if (success) {
-        minic_bootstrap_trace_stage(input_path, "codegen", "begin", program.function_count);
-        success = minic_backend_emit_assembly(
-            backend, output_path, &program, target_info, core_set.functions,
-            core_set.function_count, function_sections, diagnostic);
+        /* C ingress materializes only closure-live payloads. Core/Module
+         * reachability has already published its source-independent verdict. */
+        if (!minic_finalize_core_function_set_module(
+                &program, invocation, &core_set)) {
+            minic_set_diagnostic(diagnostic, input_path, 1U, 1U,
+                                 "cannot snapshot Core module globals");
+            success = false;
+        }
+    }
+    /* Source ownership ends at the Core/Module publication boundary.  No
+     * backend may rely on the C AST or its input buffer staying alive: its
+     * entire machine-facing input is the sealed Core FunctionSet + ModuleIR.
+     * This also releases the C graph on every earlier diagnostic failure. */
+    minic_c0_program_destroy(&program);
+    free(buffer.data);
+    if (success) {
+        minic_bootstrap_trace_stage(input_path, "codegen", "begin", core_set.function_count);
+        success = minic_backend_emit_assembly_with_module(
+            backend, output_path, &invocation->machine, core_set.functions,
+            core_set.function_count, function_sections, &core_set.module,
+            diagnostic);
         minic_bootstrap_trace_stage(input_path,
                                     "codegen",
                                     success ? "end-ok" : "end-fail",
-                                    program.function_count);
+                                    core_set.function_count);
     }
 
     minic_core_function_set_destroy(&core_set);
-    minic_c0_program_destroy(&program);
     if (getenv("MINIC_BOOLEAN_DOMAIN_PERF") != NULL) {
         minic_inline_boolean_domain_perf_dump(stderr, &boolean_stats);
     }
-    free(buffer.data);
     return success ? 0 : 1;
 }
 
@@ -400,8 +451,14 @@ int minic_compile_preprocessed_file_with_options(const char *input_path,
                                                  const char *output_path,
                                                  bool function_sections,
                                                  MinicDiagnostic *diagnostic) {
+    MinicTargetInvocation invocation;
+    if (!minic_target_invocation_begin(&invocation, minic_default_target_info())) {
+        minic_set_diagnostic(diagnostic, input_path, 1U, 1U,
+                             "cannot initialize default target configuration");
+        return 1;
+    }
     return minic_compile_preprocessed_file_for_target(
-        input_path, output_path, minic_default_target_info(), function_sections, diagnostic);
+        input_path, output_path, &invocation, function_sections, diagnostic);
 }
 
 int minic_compile_preprocessed_file(const char *input_path,

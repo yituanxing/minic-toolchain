@@ -10,9 +10,9 @@ Run: python3 tools/ci/minic-bootstrap-current-b1-seed-v1.py --work build/bootstr
 """
 import argparse
 import hashlib
+import importlib.util
 import os
 from pathlib import Path
-import re
 import shutil
 import subprocess
 import sys
@@ -47,13 +47,11 @@ def command(args, *, output=None, env=None, timeout=240, stdout=None, stderr=Non
 
 def sources():
     mfile = (ROOT / "Makefile").read_text()
-    m = re.search(
-        r"(?ms)^MINIC_SOURCES\s*:=\s*\\\s*\n(.*?)(?=^MINIC_OBJECTS\s*:)",
-        mfile)
-    if m is None:
-        raise RuntimeError("MINIC_SOURCES missing from Makefile")
-    wanted = [x.strip().rstrip("\\").strip()
-              for x in m.group(1).splitlines() if x.strip()]
+    path = ROOT / "tools/ci/minic-bootstrap-stage2-toolchain-v1.py"
+    spec = importlib.util.spec_from_file_location("minic_bootstrap_sources", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    wanted = module.source_group(mfile, "MINIC_SOURCES")
     actual = [x.strip() for x in
               (ROOT / "tests/compiler/bootstrap/b0-sources.txt").read_text().splitlines()
               if x.strip() and not x.lstrip().startswith("#")]
@@ -64,8 +62,8 @@ def sources():
             " missing=" + str(sorted(set(wanted)-set(actual))) +
             " extra=" + str(sorted(set(actual)-set(wanted))))
     if (not actual or actual[-1] != "tools/minic-cc/main.c" or
-            "src/core/core_lower_bool.c" not in actual or
-            "tools/minic/main.c" in actual):
+            "src/compiler/c_lower/core_lower_bool.c" not in actual or
+            any(src.startswith("tools/minic/") for src in actual)):
         raise RuntimeError("compiler stage source list/entry is not canonical")
     for src in actual:
         if not (ROOT / src).is_file():
@@ -91,6 +89,19 @@ def main():
     for x in (seed / "i", seed / "s", seed / "logs"):
         x.mkdir(parents=True, exist_ok=True)
     (seed / "sources.normalized").write_text("\n".join(selected) + "\n")
+    # A later Stage4 run must use this exact Git commit, including headers,
+    # Makefile, bootstrap scripts and other inputs not listed as C owners.
+    commit = subprocess.run(
+        ["git", "rev-parse", "--verify", "HEAD"], cwd=ROOT,
+        check=True, capture_output=True, text=True).stdout.strip()
+    if len(commit) != 40 or any(c not in "0123456789abcdef" for c in commit):
+        raise RuntimeError("invalid source commit identity")
+    (seed / "source-commit.txt").write_text(commit + "\n")
+    # Bind any later bootstrap handoff to the exact current raw C inputs;
+    # source names and preprocessed input hashes alone are not sufficient.
+    source_hashes = {src: sha(ROOT / src) for src in selected}
+    (seed / "source-sha256.tsv").write_text(
+        "".join(src + "\t" + source_hashes[src] + "\n" for src in selected))
     logs = seed / "logs"
     env = dict(os.environ,
                MINIC_LINUX_FULL_CROSSBLOCK="1",
@@ -112,10 +123,43 @@ def main():
     print("BOOTSTRAP_B1_STAGE0=PASS build_seconds=" + str(round(secs, 3)) +
           " sha256=" + sha(stage0), flush=True)
 
+    # This used to fail while compiling compiler TU #207: a record-returning
+    # call followed by a conditional LHS subscript changed the Core CFG.
+    # Exercise the strict verifier on all five targets and execute the x86
+    # output before spending minutes on the full bootstrap cohort.
+    with (logs / "core-record-call-conditional-subscript.log").open("wb") as log:
+        command(
+            ["sh", "tests/compiler/c0/run-core-record-call-conditional-subscript.sh"],
+            env=dict(env, MINIC_CC=str(stage0), BUILD_DIR=str(work / "stage0")),
+            timeout=120, stdout=log, stderr=subprocess.STDOUT)
+    print("BOOTSTRAP_B1_CORE_RECORD_CFG=PASS targets=5 runtime=x86_64",
+          flush=True)
+    # MachineOperand's ADDRESS/SYMBOL alternatives are wider than the first
+    # union member. Constructors must explicitly initialize the full object
+    # instead of relying on unspecified inactive union representation bytes.
+    with (logs / "machine-operand-full-union-init.log").open("wb") as log:
+        command(
+            ["sh", "tests/compiler/c0/run-machine-operand-full-union-init.sh"],
+            env=dict(env, MINIC_CC=str(stage0), BUILD_DIR=str(work / "stage0")),
+            timeout=120, stdout=log, stderr=subprocess.STDOUT)
+    print("BOOTSTRAP_B1_MACHINE_OPERAND_INIT=PASS targets=5 runtime=x86_64",
+          flush=True)
+    # CoreType's RECORD union alternative is wider than its INTEGER first
+    # member. A provisional recursive record must publish an entirely zeroed
+    # member graph before registration; exercise both struct and union.
+    with (logs / "core-provisional-record-union-init.log").open("wb") as log:
+        command(
+            ["sh", "tests/compiler/c0/run-core-provisional-record-union-init.sh"],
+            env=dict(env, MINIC_CC=str(stage0), BUILD_DIR=str(work / "stage0")),
+            timeout=120, stdout=log, stderr=subprocess.STDOUT)
+    print("BOOTSTRAP_B1_CORE_RECORD_UNION_INIT=PASS targets=5 runtime=x86_64",
+          flush=True)
+
     manifest_rows = []
     input_rows = []
     assemblies = []
     used_keys = set()
+    failed_sources = []
     for index, source in enumerate(selected):
         key = source.replace("/", "__").replace(".", "_")
         if key in used_keys:
@@ -137,10 +181,15 @@ def main():
                 command([stage0, "-S", pre, "-o", asm], env=env,
                         timeout=180, stdout=subprocess.DEVNULL, stderr=e)
             except RuntimeError as exc:
+                # A single real C failure must not hide later compiler
+                # regressions in this same source-bound cohort. Preserve the
+                # exact .i and stderr for each blocker, but never link an
+                # incomplete Stage1 or mark the seed successful.
+                failed_sources.append(source)
                 sys.stderr.write("BOOTSTRAP_B1_STAGE0_TU=FAIL source=" + source +
                                  " details=" + str(exc) + "\n" +
-                                 err.read_text(errors="replace")[-7000:])
-                raise
+                                 err.read_text(errors="replace")[-2200:])
+                continue
             secs = time.monotonic() - start
         if not asm.is_file() or asm.stat().st_size == 0:
             raise RuntimeError("empty assembly for " + source)
@@ -154,6 +203,12 @@ def main():
 
     (seed / "stage0-manifest.tsv").write_text("\n".join(manifest_rows) + "\n")
     (seed / "input-sha256.tsv").write_text("\n".join(input_rows) + "\n")
+    if failed_sources:
+        (seed / "stage0-blockers.txt").write_text("\n".join(failed_sources) + "\n")
+        raise RuntimeError("BOOTSTRAP_B1_STAGE0_COHORT=FAIL passed=" +
+                           str(len(manifest_rows)) + "/" + str(len(selected)) +
+                           " blockers=" + str(len(failed_sources)) +
+                           " sources=" + ",".join(failed_sources))
     stage1 = seed / "minic-stage1-rv64"
     with (logs / "stage1-link.stderr").open("wb") as e:
         command(["riscv64-linux-gnu-gcc", "-static", *assemblies, "-o", stage1],
@@ -181,6 +236,8 @@ def main():
         raise RuntimeError("return_42 runtime timed out") from None
     if ret != 42:
         raise RuntimeError("Stage1 return_42 smoke got " + str(ret))
+    if any(sha(ROOT / src) != digest for src, digest in source_hashes.items()):
+        raise RuntimeError("source changed during B1 seed compile")
     (seed / "return_42.stage1.sha256").write_text(sha(asm) + "  " + str(asm) + "\n")
     print("BOOTSTRAP_B1_STAGE1_EXEC=PASS return_42=42", flush=True)
     print("BOOTSTRAP_B1_SEED=PASS selected=" + str(len(selected)) +

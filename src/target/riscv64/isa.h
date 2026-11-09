@@ -13,7 +13,6 @@
  * bytes. Unknown auxiliary opcodes are still audited in the final assembler
  * stream. This selection has no cost in the historical default path. */
 #include "core/core_ir.h"
-#include "frontend/ast.h"
 bool minic_riscv_isa_admit_core_instruction(
     const MinicRiscvIsa *isa, const MinicCoreFunction *function,
     const MinicCoreInstruction *instruction, char *reason, size_t capacity);

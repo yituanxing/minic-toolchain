@@ -1,0 +1,269 @@
+name: MiniC x86 cached 12-owner paravirt GNU LD and QEMU P0/P1
+
+# This is a two-compiler-epoch diagnostic, not an all-current 2758-owner
+# certification: 2746 immutable 8972 C objects + 12 current C owners.
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - '.github/workflows/minic-linux-x86-paravirt-cached-replay-v1.yml'
+      - 'tools/ci/linux-x86-paravirt-cached-replay-trigger.txt'
+  push:
+    branches: [refactor/minic-target-language-boundary]
+    paths:
+      - 'tools/ci/linux-x86-paravirt-cached-replay-trigger.txt'
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: minic-x86-pv-original-8972-overlay-${{ github.event.pull_request.head.sha || github.sha }}
+  cancel-in-progress: true
+
+jobs:
+  admission:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      run: ${{ steps.proof.outputs.run }}
+      commit: ${{ steps.proof.outputs.commit }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 2
+          persist-credentials: false
+      - name: Gate exact original source, current trigger nonce and changed PR HEAD
+        id: proof
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          marker=tools/ci/linux-x86-paravirt-cached-replay-trigger.txt
+          run=false
+          if [[ -f "$marker" ]] &&
+             grep -Fxq 'source_run=42366441631' "$marker" &&
+             grep -Fxq 'source_sha=1558d0943b12115b3e3fb89121ce564108c1eca9' "$marker" &&
+             grep -Fxq 'original_candidate_run=42384023426' "$marker" &&
+             grep -Fxq 'original_candidate_sha=8972cd6a7273a34abd2fb7643d198f69cecf8c13' "$marker" &&
+             grep -Fxq 'nonce=2026-11-07-original-8972-paravirt12-unified-live-receipt' "$marker" &&
+             { [[ '${{ github.event_name }}' == workflow_dispatch ]] ||
+               { git rev-parse --verify HEAD^ >/dev/null 2>&1 &&
+                 ! git diff --quiet HEAD^ HEAD -- "$marker"; }; }; then
+            run=true
+          fi
+          echo "run=$run" >> "$GITHUB_OUTPUT"
+          echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "PV_REPLAY_ADMISSION=$run exact_head=$(git rev-parse HEAD)"
+  x86-pv-12-owner-runtime:
+    needs: admission
+    if: needs.admission.outputs.run == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    env:
+      GNU_WORK: ${{ github.workspace }}/build/minic-linux-gnu-x86_64
+      RUNTIME_OUTPUT: ${{ github.workspace }}/build/minic-x86-pv-receiver
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.admission.outputs.commit }}
+          persist-credentials: false
+      - name: Install exactly the original GNU x86 Linux LD and QEMU requirements
+        timeout-minutes: 15
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get -o Acquire::Retries=3 update -qq
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            build-essential bc bison flex libelf-dev libssl-dev cpio gzip curl \
+            xz-utils make python3 unzip qemu-system-x86
+      - name: Key the original SHA-certified GNU broad-config Kbuild cache identically
+        id: gnu-key
+        run: |
+          set -Eeuo pipefail
+          signature=$(
+            {
+              printf '%s\n' \
+                'cache_contract=three-isa-gnu-golden-precandidate-v1' \
+                'linux=6.6.143' \
+                'linux_tar_sha256=dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932' \
+                'config_profile=broad' \
+                'gnu_qemu_p0_p1_must_rerun=true' \
+                'target=x86_64' \
+                "gnu_work=$GNU_WORK" \
+                "workspace=$GITHUB_WORKSPACE"
+              for tool in gcc ld as gcc ld as make bison flex bc; do
+                exe=$(command -v "$tool")
+                test -s "$exe"
+                printf '%s:%s:%s\n' "$tool" "$exe" "$(sha256sum "$exe" | cut -d' ' -f1)"
+              done
+              sha256sum \
+                tools/ci/linux-three-isa-golden-v1.sh \
+                tools/ci/linux-three-isa-golden-v1.py \
+                tools/ci/linux-three-isa-freeze-i-v1.py \
+                tools/ci/linux-runtime-gcc-full-c-objects-v1.py \
+                tools/ci/linux-three-isa-common.config
+            } | sha256sum | cut -c1-32
+          )
+          echo "key=linux-three-isa-gnu-golden-6.6.143-x86_64-$signature" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache/restore@v4
+        id: gnu-cache
+        continue-on-error: true
+        with:
+          path: ${{ env.GNU_WORK }}
+          key: ${{ steps.gnu-key.outputs.key }}
+          restore-keys: |
+            linux-three-isa-gnu-golden-6.6.143-x86_64-
+      - name: Authenticate restored original GNU Kbuild with complete ELF SHA checks
+        id: verified-gnu
+        if: steps.gnu-cache.outcome == 'success' && steps.gnu-cache.outputs.cache-matched-key != ''
+        continue-on-error: true
+        run: |
+          python3 tools/ci/linux-three-isa-gnu-cache-verify-v1.py \
+            --target x86_64 --gnu-work "$GNU_WORK" --gcc gcc
+          echo 'verified=true' >> "$GITHUB_OUTPUT"
+      - name: Fail closed when no SHA-certified original GNU Kbuild cache survived
+        if: steps.verified-gnu.outputs.verified != 'true'
+        run: |
+          echo '::error::Missing or rejected authenticated original x86 GNU Kbuild cache; no expensive fallback build or 12-owner replay started'
+          exit 1
+      - name: Verify official immutable original C object and GNU input artifact metadata
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          import json, os, urllib.request
+          base = 'https://api.github.com/repos/' + os.environ['GITHUB_REPOSITORY']
+          runs = {
+              42366441631: ('1558d0943b12115b3e3fb89121ce564108c1eca9', {
+                  'minic-linux-seven-input-x86_64-0': (13571458981, 'c705b5f25a384f8d5d9dfedec1926a71619afa6336759a8bfebf1eb7faf73e76'),
+                  'minic-linux-seven-input-x86_64-1': (13572515501, 'c061ec9ca219f64cad91bda509de2bf48e2f8d7f0fadb3c4fbe9baeef2a29c6d'),
+                  'minic-linux-seven-input-x86_64-2': (13571997431, 'f7855ec96b9aeb43fd6921c7b5e5ca2da530046599bd31d60a7ad0cd808dd279'),
+                  'minic-linux-seven-input-x86_64-3': (13571857931, 'cd69c5b083f679249c8891addf77a8f71494c51475e4eac8b2957bf7d3e17f9e'),
+                  'minic-linux-seven-input-x86_64-4': (13571857963, 'c5a148c14128ab22ebbd79dd090a32de3bd5a41ca95306f9b3b9c48ee8e1df80'),
+                  'minic-linux-seven-input-x86_64-5': (13571893026, '3ea43edbf23d24f5ca980701a0d69eeedcd3c7f66a2bad4565449352c95df9bb'),
+              }),
+              42384023426: ('8972cd6a7273a34abd2fb7643d198f69cecf8c13', {
+                  'minic-linux-seven-compiler': (13578407478, 'd1b6475a527515e6024274a1409d87fdbae664374aa84300d206f9560db73a3a'),
+                  'minic-linux-seven-objects-x86_64-0': (13578298280, '28c14a6913ee4a6c1048db5807e9176872f7ac9f73cb04bcabeda6fb96c1a8af'),
+                  'minic-linux-seven-objects-x86_64-1': (13578143769, 'c6f83ef88875bf3ae2b46883ee018da27ae7ca4b94474ec2dd1ca8ca6a07673a'),
+                  'minic-linux-seven-objects-x86_64-2': (13578668618, '543269f18a29e7f00856d27592285ee6734755ce6edd4ca5b10bbf83aba6bd76'),
+                  'minic-linux-seven-objects-x86_64-3': (13578414153, '39d4a5bf6a59c23bcc4d66534bef501c8491a829c3a8e538a345703a2693dda7'),
+                  'minic-linux-seven-objects-x86_64-4': (13578753107, 'a89f0bad20f754c1b186f4e168ca28385d39dfdf8eaae0f19403adc39a020f81'),
+                  'minic-linux-seven-objects-x86_64-5': (13578133798, '53bd19692b99f684c6c589dbb7e4334471b34a7a145fae1e4510281dc8c75679'),
+                  'minic-linux-seven-objects-x86_64-6': (13578384347, '5c94275047b9d590fda15575748eb7c1ab643b5d2f7d4dbc0507c87828cf198c'),
+              })
+          }
+          for run, (head_sha, expected) in runs.items():
+              uri = f'{base}/actions/runs/{run}/artifacts?per_page=100'
+              req = urllib.request.Request(uri, headers={
+                  'Authorization': 'Bearer ' + os.environ['GH_TOKEN'],
+                  'Accept': 'application/vnd.github+json'})
+              with urllib.request.urlopen(req, timeout=30) as response:
+                  actual = {x['name']: x for x in json.load(response)['artifacts']}
+              for name, (artifact_id, digest) in expected.items():
+                  item = actual.get(name)
+                  assert item and item['id'] == artifact_id, name
+                  assert item.get('digest') == 'sha256:' + digest, name
+                  assert not item['expired'], name
+                  assert item['workflow_run']['head_sha'] == head_sha, name
+          print('PV_OFFICIAL_SOURCE_AND_CANDIDATE_METADATA=PASS signed_zips=14 old_owners=2758')
+          PY
+      - name: Download precisely pinned original ZIPs without changing original digest bytes
+        timeout-minutes: 25
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -Eeuo pipefail
+          mkdir -p build/pv-official-inputs build/pv-official-objects build/pv-old-bin
+          base="https://api.github.com/repos/$GITHUB_REPOSITORY/actions/artifacts"
+          fetch() {
+            local id="$1" dst="$2"
+            curl --retry 3 --retry-all-errors --proto '=https' --tlsv1.2 \
+              -fLsS -H "Authorization: Bearer $GH_TOKEN" \
+              "$base/$id/zip" -o "$dst"
+          }
+          fetch 13571458981 build/pv-official-inputs/input-shard0.zip &
+          fetch 13572515501 build/pv-official-inputs/input-shard1.zip &
+          fetch 13571997431 build/pv-official-inputs/input-shard2.zip &
+          fetch 13571857931 build/pv-official-inputs/input-shard3.zip &
+          fetch 13571857963 build/pv-official-inputs/input-shard4.zip &
+          fetch 13571893026 build/pv-official-inputs/input-shard5.zip &
+          fetch 13578298280 build/pv-official-objects/shard0.zip &
+          fetch 13578143769 build/pv-official-objects/shard1.zip &
+          fetch 13578668618 build/pv-official-objects/shard2.zip &
+          fetch 13578414153 build/pv-official-objects/shard3.zip &
+          fetch 13578753107 build/pv-official-objects/shard4.zip &
+          fetch 13578133798 build/pv-official-objects/shard5.zip &
+          fetch 13578384347 build/pv-official-objects/shard6.zip &
+          fetch 13578407478 build/pv-official-objects/old-compiler.zip &
+          wait
+          printf '%s  %s\n' \
+            d1b6475a527515e6024274a1409d87fdbae664374aa84300d206f9560db73a3a \
+            build/pv-official-objects/old-compiler.zip | sha256sum -c -
+          unzip -oq build/pv-official-objects/old-compiler.zip -d build/pv-old-bin
+          chmod +x build/pv-old-bin/minic build/pv-old-bin/minic-cc
+      - name: Build current native MiniC exactly once
+        timeout-minutes: 15
+        run: |
+          set -Eeuo pipefail
+          make MODE=release -j4 build/release/bin/minic-cc build/release/bin/minic
+      - name: Verify 2758 original and rebuild only 12 current original GNU .i owners
+        timeout-minutes: 12
+        run: |
+          set -Eeuo pipefail
+          python3 tools/ci/linux-x86-paravirt-cached-overlay-v1.py \
+            --input-zip-dir "$GITHUB_WORKSPACE/build/pv-official-inputs" \
+            --object-zip-dir "$GITHUB_WORKSPACE/build/pv-official-objects" \
+            --minic-cc "$GITHUB_WORKSPACE/build/release/bin/minic-cc" \
+            --output "$GITHUB_WORKSPACE/build/pv-overlay" --workers 4
+      - name: Verify original GNU Kbuild SHA regardless of cache hit
+        run: |
+          python3 tools/ci/linux-three-isa-gnu-cache-verify-v1.py \
+            --target x86_64 --gnu-work "$GNU_WORK" --gcc gcc
+      - name: Build exact original GNU Linux runtime initramfs
+        timeout-minutes: 10
+        run: |
+          set -Eeuo pipefail
+          mkdir -p "$RUNTIME_OUTPUT"
+          RISCV_CC=gcc BUILD_DIR="$RUNTIME_OUTPUT/initramfs" \
+            OUTPUT_INITRAMFS="$RUNTIME_OUTPUT/runtime-initramfs.cpio.gz" \
+            bash tests/external/linux/build_runtime_initramfs.sh
+      - name: Run fresh original GNU QEMU P0/P1 golden before any C-object overlay
+        timeout-minutes: 15
+        run: |
+          python3 tools/ci/linux-three-isa-gnu-qemu-v1.py \
+            --target x86_64 --gnu-work "$GNU_WORK" \
+            --initramfs "$RUNTIME_OUTPUT/runtime-initramfs.cpio.gz" \
+            --initramfs-root "$RUNTIME_OUTPUT/initramfs/root" \
+            --output "$RUNTIME_OUTPUT/boot" --timeout 240
+      - name: GNU original Kbuild LD and strict 2758 x86 owner/QEMU P0/P1 receiver
+        timeout-minutes: 50
+        run: |
+          python3 tools/ci/linux-x86-paravirt-cached-receiver-v1.py \
+            --old-object-zip-dir "$GITHUB_WORKSPACE/build/pv-official-objects" \
+            --old-minic "$GITHUB_WORKSPACE/build/pv-old-bin/minic" \
+            --minic "$GITHUB_WORKSPACE/build/release/bin/minic" \
+            --overlay "$GITHUB_WORKSPACE/build/pv-overlay" \
+            --gnu-work "$GNU_WORK" \
+            --gnu-receipt "$RUNTIME_OUTPUT/boot/gnu-qemu-receipt.json" \
+            --gnu-boot-logs "$RUNTIME_OUTPUT/boot" \
+            --initramfs "$RUNTIME_OUTPUT/runtime-initramfs.cpio.gz" \
+            --output "$RUNTIME_OUTPUT/candidate"
+      - name: Retain SHA proofs, full GNU linker logs and authentic QEMU P0/P1
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: minic-x86-paravirt-12-owner-original-gnu-ld-qemu
+          if-no-files-found: warn
+          retention-days: 14
+          path: |
+            build/pv-overlay/overlay-receipt.json
+            build/minic-x86-pv-receiver/boot/**
+            build/minic-x86-pv-receiver/candidate/candidate-receipt.json
+            build/minic-x86-pv-receiver/candidate/gnu-ld-*.log
+            build/minic-x86-pv-receiver/candidate/postlink-*.json
+            build/minic-x86-pv-receiver/candidate/boot/**
+            build/minic-x86-pv-receiver/candidate/all-c-owners-result.json

@@ -53,6 +53,58 @@ static bool record_field_starts_parenthesized_pointer_array(const MinicParser *p
     }
 }
 
+static bool record_field_starts_parenthesized_pointer_object(const MinicParser *parser) {
+    MinicParser probe;
+    size_t pointer_depth;
+    unsigned int pointer_const_qualifiers;
+    unsigned int pointer_volatile_qualifiers;
+
+    if (parser == NULL || parser->current.kind != MINIC_TOKEN_LPAREN)
+        return false;
+    probe = *parser;
+    if (!minic_parser_advance(&probe) || probe.current.kind != MINIC_TOKEN_STAR)
+        return false;
+    pointer_depth = 0U;
+    pointer_const_qualifiers = 0U;
+    pointer_volatile_qualifiers = 0U;
+    while (probe.current.kind == MINIC_TOKEN_STAR) {
+        pointer_depth += 1U;
+        if (!minic_parser_advance(&probe) ||
+            !minic_parser_parse_pointer_qualifier_sequence(
+                &probe, pointer_depth, &pointer_const_qualifiers,
+                &pointer_volatile_qualifiers))
+            return false;
+    }
+    if (probe.current.kind != MINIC_TOKEN_IDENTIFIER ||
+        !minic_parser_advance(&probe) || probe.current.kind != MINIC_TOKEN_RPAREN ||
+        !minic_parser_advance(&probe))
+        return false;
+    /* `(*name)(...)` is a function pointer; `(*name)[N]` is handled by
+     * pointer-to-array. Only the unsuffixed parenthesized pointer is an object. */
+    return probe.current.kind != MINIC_TOKEN_LPAREN &&
+           probe.current.kind != MINIC_TOKEN_LBRACKET;
+}
+
+static bool record_field_starts_attributed_function_pointer(const MinicParser *parser) {
+    MinicParser probe;
+    MinicParsedAttributeList attributes;
+
+    if (parser == NULL || parser->current.kind != MINIC_TOKEN_LPAREN)
+        return false;
+    probe = *parser;
+    (void)memset(&attributes, 0, sizeof(attributes));
+    if (!minic_parser_advance(&probe) ||
+        !minic_parser_collect_gnu_attribute_lists(&probe, &attributes))
+        return false;
+    /* EFI x86 uses `R *(__attribute__((ms_abi)) *callback)(Args)` inside
+     * anonymous records. The earlier record dispatcher only checked for an
+     * immediate `*` after `(` and routed this spelling to the ordinary
+     * declarator-name parser, mistaking __attribute__ for the field name.
+     * Let the shared function declarator parse and validate the attribute;
+     * the probe does not change any target admission or calling convention. */
+    return attributes.count != 0U && probe.current.kind == MINIC_TOKEN_STAR;
+}
+
 static bool parse_pointer_to_array_field_declarator(MinicParser *parser,
                                                     MinicType base_type,
                                                     MinicSourceSpan *name_span,
@@ -115,12 +167,17 @@ static bool parse_function_pointer_field_declarator(MinicParser *parser,
     MinicParsedFunctionDeclarator declarator;
 
     if (parser == NULL || name_span == NULL || field_type == NULL ||
-        !minic_parser_parse_parenthesized_function_declarator(parser, true, true, &declarator)) {
+        !minic_parser_parse_parenthesized_function_declarator(parser, true, true, &declarator, false)) {
         return false;
     }
     if (!minic_parser_build_function_declarator_type(
             parser, return_type, &declarator, field_type)) {
         minic_parser_error(parser, "cannot build function pointer field type");
+        return false;
+    }
+    if (!minic_parser_apply_function_pointer_declarator_attributes(
+            parser, &declarator.attributes, field_type,
+            "unsupported GNU attribute in function-pointer record declarator")) {
         return false;
     }
     *name_span = declarator.name_span;
@@ -150,19 +207,17 @@ static bool consume_record_field_attribute(MinicParser *parser,
         return false;
     }
     if (!minic_attribute_allowed_on(descriptor, MINIC_ATTRIBUTE_TARGET_FIELD)) {
-        bool function_parse_only;
-
-        function_parse_only =
-            context->has_field_type &&
+        if (context->has_field_type &&
             minic_type_is_pointer(context->field_type) &&
-            context->field_type.base_kind == MINIC_TYPE_BASE_FUNCTION &&
-            minic_attribute_allowed_on(descriptor, MINIC_ATTRIBUTE_TARGET_FUNCTION) &&
-            (descriptor->semantic_class == MINIC_ATTRIBUTE_CLASS_INFORMATIONAL ||
-             descriptor->semantic_class == MINIC_ATTRIBUTE_CLASS_DIAGNOSTIC ||
-             descriptor->semantic_class == MINIC_ATTRIBUTE_CLASS_OPTIMIZATION ||
-             descriptor->semantic_class == MINIC_ATTRIBUTE_CLASS_CONTROL_FLOW);
-        if (function_parse_only) {
-            return true;
+            context->field_type.base_kind == MINIC_TYPE_BASE_FUNCTION) {
+            bool consumed;
+            if (!minic_parser_consume_function_pointer_attribute(
+                    parser, attribute, &context->field_type, &consumed)) {
+                return false;
+            }
+            if (consumed) {
+                return true;
+            }
         }
         minic_parser_error(parser, "unsupported GNU record field attribute");
         return false;
@@ -191,16 +246,17 @@ static bool consume_record_field_attribute(MinicParser *parser,
 }
 
 static bool parse_typed_record_field_attributes(MinicParser *parser,
-                                                MinicType field_type,
+                                                MinicType *field_type,
                                                 size_t *explicit_alignment,
                                                 bool *is_packed) {
     MinicRecordFieldAttributeContext context;
 
-    if (parser == NULL || explicit_alignment == NULL || is_packed == NULL) {
+    if (parser == NULL || field_type == NULL ||
+        explicit_alignment == NULL || is_packed == NULL) {
         return false;
     }
     (void)memset(&context, 0, sizeof(context));
-    context.field_type = field_type;
+    context.field_type = *field_type;
     context.explicit_alignment = *explicit_alignment;
     context.is_packed = *is_packed;
     context.has_field_type = true;
@@ -209,40 +265,46 @@ static bool parse_typed_record_field_attributes(MinicParser *parser,
     }
     *explicit_alignment = context.explicit_alignment;
     *is_packed = context.is_packed;
+    *field_type = context.field_type;
     return true;
-}
-
-static bool
-record_field_function_attribute_is_parse_only(const MinicAttributeDescriptor *descriptor) {
-    return descriptor != NULL &&
-           (descriptor->semantic_class == MINIC_ATTRIBUTE_CLASS_INFORMATIONAL ||
-            descriptor->semantic_class == MINIC_ATTRIBUTE_CLASS_DIAGNOSTIC ||
-            descriptor->semantic_class == MINIC_ATTRIBUTE_CLASS_OPTIMIZATION ||
-            descriptor->semantic_class == MINIC_ATTRIBUTE_CLASS_CONTROL_FLOW);
 }
 
 static bool apply_record_field_declaration_attributes(MinicParser *parser,
                                                       const MinicParsedAttributeList *attributes,
-                                                      MinicType field_type,
+                                                      MinicType *field_type,
                                                       size_t *explicit_alignment,
                                                       bool *is_packed) {
     MinicRecordFieldAttributeContext context;
     bool is_function_pointer;
     size_t index;
 
-    if (parser == NULL || attributes == NULL || explicit_alignment == NULL || is_packed == NULL) {
+    if (parser == NULL || attributes == NULL || field_type == NULL ||
+        explicit_alignment == NULL || is_packed == NULL) {
         return false;
     }
+    (void)memset(&context, 0, sizeof(context));
+    context.field_type = *field_type;
+    context.has_field_type = true;
     context.explicit_alignment = *explicit_alignment;
     context.is_packed = *is_packed;
     is_function_pointer =
-        minic_type_is_pointer(field_type) && field_type.base_kind == MINIC_TYPE_BASE_FUNCTION;
+        minic_type_is_pointer(*field_type) && field_type->base_kind == MINIC_TYPE_BASE_FUNCTION;
     for (index = 0U; index < attributes->count; ++index) {
         const MinicParsedAttribute *attribute;
         const MinicAttributeDescriptor *descriptor;
 
         attribute = &attributes->values[index];
         descriptor = attribute->descriptor;
+        if (is_function_pointer) {
+            bool consumed;
+            if (!minic_parser_consume_function_pointer_attribute(
+                    parser, attribute, &context.field_type, &consumed)) {
+                return false;
+            }
+            if (consumed) {
+                continue;
+            }
+        }
         if (descriptor != NULL &&
             minic_attribute_allowed_on(descriptor, MINIC_ATTRIBUTE_TARGET_FIELD)) {
             if (!consume_record_field_attribute(parser, attribute, &context)) {
@@ -250,14 +312,16 @@ static bool apply_record_field_declaration_attributes(MinicParser *parser,
             }
             continue;
         }
-        if (is_function_pointer && descriptor != NULL &&
-            minic_attribute_allowed_on(descriptor, MINIC_ATTRIBUTE_TARGET_FUNCTION) &&
-            record_field_function_attribute_is_parse_only(descriptor)) {
-            continue;
-        }
-        minic_parser_error(parser, "unsupported GNU declaration-head attribute on record field");
+        minic_parser_error(parser,
+            "unsupported GNU declaration-head attribute on record field: %.*s",
+            (int)minic_parser_span_length(attribute->name_span),
+            parser->source + attribute->name_span.begin.offset);
+        /* The source attribute stays unsupported: this is a diagnostic
+         * enhancement for the full original Linux 3-ISA owner census,
+         * not a parse-only bypass of layout or ABI contracts. */
         return false;
     }
+    *field_type = context.field_type;
     *explicit_alignment = context.explicit_alignment;
     *is_packed = context.is_packed;
     return true;
@@ -281,15 +345,15 @@ static bool parse_record_bit_field_width(MinicParser *parser,
     if (!minic_parser_expect(parser, MINIC_TOKEN_COLON, "expected ':' before bit-field width") ||
         !minic_parser_parse_expression(parser, &width_expression, 0U) ||
         !minic_const_eval_integer(
-            parser->program, parser->target_info, width_expression, &width_value) ||
-        !minic_const_value_as_int64(parser->program, parser->target_info, &width_value, &width)) {
+            parser->program, parser->invocation, width_expression, &width_value) ||
+        !minic_const_value_as_int64(parser->program, parser->invocation, &width_value, &width)) {
         if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
             minic_parser_error(parser, "bit-field width must be an integer constant expression");
         }
         return false;
     }
     if (!minic_target_info_integer_width(
-            parser->target_info, parser->program, field_type, &type_bits)) {
+            parser->invocation, parser->program, field_type, &type_bits)) {
         minic_parser_error(parser, "cannot determine target width of bit-field type");
         return false;
     }
@@ -319,10 +383,10 @@ static bool parse_record_field_declarator(MinicParser *parser,
     size_t explicit_alignment;
     MinicRecord *mutable_record;
     const MinicRecord *record;
-    bool is_array;
     bool is_packed;
     bool is_flexible_array;
     bool is_zero_length_array;
+    bool materialize_outer_array;
 
     record = minic_c0_program_record(parser->program, record_id);
     if (record == NULL) {
@@ -337,6 +401,17 @@ static bool parse_record_field_declarator(MinicParser *parser,
         if (!parse_pointer_to_array_field_declarator(parser, field_type, &name_span, &field_type)) {
             return false;
         }
+    } else if (parser->current.kind == MINIC_TOKEN_LPAREN &&
+               record_field_starts_parenthesized_pointer_object(parser)) {
+        bool name_is_array;
+        bool name_array_inferred;
+        size_t name_array_count;
+
+        if (!minic_parser_parse_parenthesized_pointer_to_array_declarator(
+                parser, field_type, &name_span, &field_type, &name_is_array,
+                &name_array_inferred, &name_array_count) || name_is_array) {
+            return false;
+        }
     } else if (parser->current.kind == MINIC_TOKEN_LPAREN) {
         MinicParser probe;
 
@@ -344,7 +419,8 @@ static bool parse_record_field_declarator(MinicParser *parser,
         if (!minic_parser_advance(&probe)) {
             return false;
         }
-        if (probe.current.kind == MINIC_TOKEN_STAR) {
+        if (probe.current.kind == MINIC_TOKEN_STAR ||
+            record_field_starts_attributed_function_pointer(parser)) {
             if (!parse_function_pointer_field_declarator(
                     parser, field_type, &name_span, &field_type)) {
                 return false;
@@ -364,6 +440,14 @@ static bool parse_record_field_declarator(MinicParser *parser,
             parser, field_type, "record field cannot use incomplete type by value")) {
         return false;
     }
+    /* A nested pointer-to-array/function declarator or its sizeof bound may
+     * append a Record and realloc Program.records. The stable record_id, not
+     * the earlier borrowed Record*, identifies the enclosing declaration. */
+    record = minic_c0_program_record(parser->program, record_id);
+    if (record == NULL) {
+        minic_parser_error(parser, "invalid record after field declarator parsing");
+        return false;
+    }
     if (record_has_field(parser, record, name_span)) {
         minic_parser_error(parser, "duplicate record field");
         return false;
@@ -371,8 +455,20 @@ static bool parse_record_field_declarator(MinicParser *parser,
     if (parser->current.kind == MINIC_TOKEN_COLON) {
         size_t bit_width;
 
+        explicit_alignment = declaration_alignment;
+        is_packed = declaration_packed;
+        /* A bit-field is a field declaration too. In particular GNU permits
+         * packed/aligned on the declaration head or after the width; both
+         * must reach DataLayout instead of being discarded by this fast path. */
         if (!parse_record_bit_field_width(parser, field_type, false, &bit_width) ||
-            !minic_c0_record_add_bit_field(parser->program,
+            !parse_typed_record_field_attributes(
+                parser, &field_type, &explicit_alignment, &is_packed) ||
+            !apply_record_field_declaration_attributes(
+                parser, declaration_attributes, &field_type,
+                &explicit_alignment, &is_packed)) {
+            return false;
+        }
+        if (!minic_c0_record_add_bit_field(parser->program,
                                            record_id,
                                            parser->source + name_span.begin.offset,
                                            minic_parser_span_length(name_span),
@@ -383,15 +479,19 @@ static bool parse_record_field_declarator(MinicParser *parser,
             }
             return false;
         }
+        mutable_record = &parser->program->records[record_id];
+        mutable_record->fields[mutable_record->field_count - 1U].explicit_alignment =
+            explicit_alignment;
+        mutable_record->fields[mutable_record->field_count - 1U].is_packed = is_packed;
         return true;
     }
 
     element_count = 1U;
     explicit_alignment = declaration_alignment;
     is_packed = declaration_packed;
-    is_array = false;
     is_flexible_array = false;
     is_zero_length_array = false;
+    materialize_outer_array = false;
     if (parser->current.kind != MINIC_TOKEN_LBRACKET && minic_type_is_array(field_type)) {
         const MinicArrayType *typedef_array;
 
@@ -401,20 +501,13 @@ static bool parse_record_field_declarator(MinicParser *parser,
             minic_parser_error(parser, "record field requires a complete typedef array type");
             return false;
         }
-        field_type = typedef_array->element_type;
-        if (typedef_array->is_zero_length) {
-            /* Direct GNU T field[0] uses one semantic element plus an explicit
-               zero-length layout bit. Preserve the same representation when
-               the zero-length array arrives through a typedef. */
-            element_count = 1U;
-            is_zero_length_array = true;
-        } else {
-            element_count = typedef_array->element_count;
-        }
-        is_array = true;
+        /* Keep typedef arrays as complete object types. The old parser
+         * flattened their outer dimension into field.element_count, so
+         * record fields had two incompatible array representations. */
+        is_zero_length_array = typedef_array->is_zero_length;
     }
     if (parser->current.kind == MINIC_TOKEN_LBRACKET) {
-        is_array = true;
+        materialize_outer_array = true;
         size_t bounds[8];
         size_t bound_count;
 
@@ -497,10 +590,37 @@ static bool parse_record_field_declarator(MinicParser *parser,
     }
 
     if (!parse_typed_record_field_attributes(
-            parser, field_type, &explicit_alignment, &is_packed) ||
+            parser, &field_type, &explicit_alignment, &is_packed) ||
         !apply_record_field_declaration_attributes(
-            parser, declaration_attributes, field_type, &explicit_alignment, &is_packed)) {
+            parser, declaration_attributes, &field_type, &explicit_alignment, &is_packed)) {
         return false;
+    }
+
+    if (materialize_outer_array) {
+        MinicType materialized_type;
+
+        /* Preserve the historical attribute attachment point: attributes
+         * on a function-pointer field can update its element type before
+         * the outer array dimension is committed. The fixed inner dimensions
+         * were already constructed by the declarator parser above. */
+        if (is_flexible_array) {
+            if (!minic_c0_program_add_incomplete_array_type(
+                    parser->program, field_type, &materialized_type)) {
+                minic_parser_error(parser, "cannot materialize flexible record array type");
+                return false;
+            }
+        } else if (is_zero_length_array) {
+            if (!minic_c0_program_add_zero_length_array_type(
+                    parser->program, field_type, &materialized_type)) {
+                minic_parser_error(parser, "cannot materialize GNU zero-length record array type");
+                return false;
+            }
+        } else if (!minic_c0_program_add_array_type(
+                       parser->program, field_type, element_count, &materialized_type)) {
+            minic_parser_error(parser, "cannot materialize record array type");
+            return false;
+        }
+        field_type = materialized_type;
     }
 
     if (!minic_c0_record_add_field(parser->program,
@@ -508,7 +628,7 @@ static bool parse_record_field_declarator(MinicParser *parser,
                                    parser->source + name_span.begin.offset,
                                    minic_parser_span_length(name_span),
                                    field_type,
-                                   element_count)) {
+                                   1U)) {
         minic_parser_error(parser, "out of memory while adding record field");
         return false;
     }
@@ -516,10 +636,9 @@ static bool parse_record_field_declarator(MinicParser *parser,
     mutable_record->fields[mutable_record->field_count - 1U].explicit_alignment =
         explicit_alignment;
     mutable_record->fields[mutable_record->field_count - 1U].is_packed = is_packed;
-    mutable_record->fields[mutable_record->field_count - 1U].is_array = is_array;
+    /* The field's ArrayType owns its element and extent; only the explicit
+     * flexible-member declaration marker remains semantic source metadata. */
     mutable_record->fields[mutable_record->field_count - 1U].is_flexible_array = is_flexible_array;
-    mutable_record->fields[mutable_record->field_count - 1U].is_zero_length_array =
-        is_zero_length_array;
     return true;
 }
 
@@ -591,10 +710,46 @@ static bool parse_record_type_attributes(MinicParser *parser,
     return true;
 }
 
+/* A directly written anonymous `const struct { ... };` is still an anonymous
+ * record field: its qualifiers apply to the promoted members, rather than
+ * turning it into a memberless declaration.  Use only the lexer to look past
+ * the declaration's leading qualifiers/GNU extension marker.  In particular,
+ * `const TypedefName;` must NOT be promoted even when the alias designates a
+ * tagless record, and `volatile struct Named;` must stay memberless.  The
+ * canonical field type/layout and its qualifiers remain owned by the normal
+ * type-specifier parser below. */
+static bool record_field_has_direct_record_specifier(const MinicParser *parser) {
+    MinicLexer lexer;
+    MinicToken current;
+
+    if (parser == NULL) {
+        return false;
+    }
+    lexer = parser->lexer;
+    current = parser->current;
+    for (;;) {
+        bool extension_marker =
+            current.kind == MINIC_TOKEN_IDENTIFIER &&
+            minic_parser_span_length(current.span) == sizeof("__extension__") - 1U &&
+            memcmp(parser->source + current.span.begin.offset,
+                   "__extension__", sizeof("__extension__") - 1U) == 0;
+        if (current.kind != MINIC_TOKEN_KW_CONST &&
+            current.kind != MINIC_TOKEN_KW_VOLATILE && !extension_marker) {
+            return current.kind == MINIC_TOKEN_KW_STRUCT ||
+                   current.kind == MINIC_TOKEN_KW_UNION;
+        }
+        if (!minic_lexer_next(&lexer, &current, NULL)) {
+            /* Let the real parser diagnose malformed source. */
+            return false;
+        }
+    }
+}
+
 static bool parse_record_field(MinicParser *parser, MinicRecordId record_id) {
     MinicParsedAttributeList declaration_attributes;
     MinicType base_type;
     const MinicRecord *record;
+    bool direct_record_specifier;
     size_t declaration_alignment;
     bool declaration_packed;
 
@@ -611,8 +766,11 @@ static bool parse_record_field(MinicParser *parser, MinicRecordId record_id) {
         return false;
     }
     (void)memset(&declaration_attributes, 0, sizeof(declaration_attributes));
-    if (!minic_parser_collect_gnu_attribute_lists(parser, &declaration_attributes) ||
-        !minic_parser_parse_type_specifiers(parser, &base_type)) {
+    if (!minic_parser_collect_gnu_attribute_lists(parser, &declaration_attributes)) {
+        return false;
+    }
+    direct_record_specifier = record_field_has_direct_record_specifier(parser);
+    if (!minic_parser_parse_type_specifiers(parser, &base_type)) {
         return false;
     }
     /* Attributes between the declaration specifiers and the declarator cannot
@@ -644,6 +802,19 @@ static bool parse_record_field(MinicParser *parser, MinicRecordId record_id) {
     declaration_alignment = 0U;
     declaration_packed = false;
     if (minic_type_is_record(base_type) && parser->current.kind == MINIC_TOKEN_SEMICOLON) {
+        const MinicRecord *field_record =
+            minic_c0_program_record(parser->program, base_type.record_id);
+
+        if (field_record == NULL) {
+            minic_parser_error(parser, "invalid bare record field declaration");
+            return false;
+        }
+        /* GNU anonymous members require a directly written tagless record
+         * definition. A tagged `struct Named;` or typedef-name-only `T;`
+         * declares no member and must not change the outer record layout. */
+        if (!direct_record_specifier || field_record->name_length != 0U) {
+            return minic_parser_advance(parser);
+        }
         if (declaration_attributes.count != 0U) {
             minic_parser_error(
                 parser,
@@ -673,26 +844,28 @@ static bool parse_record_field(MinicParser *parser, MinicRecordId record_id) {
     for (;;) {
         if (parser->current.kind == MINIC_TOKEN_COLON) {
             size_t bit_width;
+            MinicType field_type = base_type;
+            MinicRecord *mutable_record;
+            size_t explicit_alignment = declaration_alignment;
+            bool is_packed = declaration_packed;
 
-            if (declaration_attributes.count != 0U) {
-                minic_parser_error(
-                    parser,
-                    "GNU declaration-head attributes on unnamed bit-fields are unsupported");
-                return false;
-            }
-            if (declaration_alignment != 0U || declaration_packed) {
-                minic_parser_error(
-                    parser, "GNU layout attributes on unnamed bit-fields are unsupported");
-                return false;
-            }
-            if (!parse_record_bit_field_width(parser, base_type, true, &bit_width) ||
+            if (!parse_record_bit_field_width(parser, field_type, true, &bit_width) ||
+                !parse_typed_record_field_attributes(
+                    parser, &field_type, &explicit_alignment, &is_packed) ||
+                !apply_record_field_declaration_attributes(
+                    parser, &declaration_attributes, &field_type,
+                    &explicit_alignment, &is_packed) ||
                 !minic_c0_record_add_unnamed_bit_field(
-                    parser->program, record_id, base_type, bit_width)) {
+                    parser->program, record_id, field_type, bit_width)) {
                 if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
                     minic_parser_error(parser, "cannot add unnamed bit-field");
                 }
                 return false;
             }
+            mutable_record = &parser->program->records[record_id];
+            mutable_record->fields[mutable_record->field_count - 1U].explicit_alignment =
+                explicit_alignment;
+            mutable_record->fields[mutable_record->field_count - 1U].is_packed = is_packed;
         } else {
             if (!parse_record_field_declarator(parser,
                                                record_id,
@@ -750,16 +923,23 @@ bool minic_parser_parse_record_definition_specifier(MinicParser *parser, MinicTy
 
     if (parser->current.kind == MINIC_TOKEN_IDENTIFIER) {
         MinicSourceSpan name_span;
+        const MinicParserTagBinding *tag;
         const MinicRecord *record;
 
         name_span = parser->current.span;
-        record_id = minic_parser_find_record_in_current_scope(parser, name_span);
+        if (!minic_parser_resolve_tag(parser, name_span,
+                                      is_union ? MINIC_PARSER_TAG_UNION
+                                               : MINIC_PARSER_TAG_STRUCT,
+                                      true, &tag)) {
+            return false;
+        }
+        record_id = tag == NULL ? MINIC_RECORD_INVALID : tag->entity.record_id;
         if (record_id == MINIC_RECORD_INVALID) {
             if (!minic_c0_program_add_record(parser->program,
                                              parser->source + name_span.begin.offset,
                                              minic_parser_span_length(name_span),
                                              &record_id) ||
-                !minic_parser_bind_record_tag(parser, name_span, record_id)) {
+                !minic_parser_bind_record_tag(parser, name_span, record_id, is_union)) {
                 minic_parser_error(parser, "out of memory while adding record");
                 return false;
             }
@@ -827,25 +1007,37 @@ bool minic_parser_parse_record_definition_specifier(MinicParser *parser, MinicTy
 
 static bool parse_record_forward_declaration(MinicParser *parser) {
     MinicSourceSpan name_span;
+    const MinicParserTagBinding *tag;
     MinicRecordId record_id;
     MinicTokenKind keyword;
+    size_t explicit_alignment = 0U;
+    bool is_packed;
     bool is_union;
 
     keyword = parser->current.kind;
     is_union = keyword == MINIC_TOKEN_KW_UNION;
+    is_packed = parser->record_pack_alignment == 1U;
     if ((keyword != MINIC_TOKEN_KW_STRUCT && keyword != MINIC_TOKEN_KW_UNION) ||
-        !minic_parser_advance(parser) || parser->current.kind != MINIC_TOKEN_IDENTIFIER) {
+        !minic_parser_advance(parser) ||
+        !parse_record_type_attributes(parser, is_union, &explicit_alignment, &is_packed) ||
+        parser->current.kind != MINIC_TOKEN_IDENTIFIER) {
         minic_parser_error(parser, "expected record tag in forward declaration");
         return false;
     }
     name_span = parser->current.span;
-    record_id = minic_parser_find_record_in_current_scope(parser, name_span);
+    if (!minic_parser_resolve_tag(parser, name_span,
+                                  is_union ? MINIC_PARSER_TAG_UNION
+                                           : MINIC_PARSER_TAG_STRUCT,
+                                  true, &tag)) {
+        return false;
+    }
+    record_id = tag == NULL ? MINIC_RECORD_INVALID : tag->entity.record_id;
     if (record_id == MINIC_RECORD_INVALID) {
         if (!minic_c0_program_add_record(parser->program,
                                          parser->source + name_span.begin.offset,
                                          minic_parser_span_length(name_span),
                                          &record_id) ||
-            !minic_parser_bind_record_tag(parser, name_span, record_id)) {
+            !minic_parser_bind_record_tag(parser, name_span, record_id, is_union)) {
             minic_parser_error(parser, "cannot create forward record tag");
             return false;
         }
@@ -855,21 +1047,44 @@ static bool parse_record_forward_declaration(MinicParser *parser) {
         return false;
     }
     return minic_parser_advance(parser) &&
+           parse_record_type_attributes(parser, is_union, &explicit_alignment, &is_packed) &&
            minic_parser_expect(
                parser, MINIC_TOKEN_SEMICOLON, "expected ';' after record declaration");
 }
 
 bool minic_parser_parse_record_definition(MinicParser *parser) {
-    MinicParser probe;
+    MinicLexer saved_lexer;
+    MinicToken saved_token;
+    MinicParsedAttributeList probe_attributes;
     MinicType record_type;
+    bool lookahead_ok;
+    bool is_forward;
 
     if (parser == NULL) {
         return false;
     }
 
-    probe = *parser;
-    if (minic_parser_advance(&probe) && probe.current.kind == MINIC_TOKEN_IDENTIFIER &&
-        minic_parser_advance(&probe) && probe.current.kind == MINIC_TOKEN_SEMICOLON) {
+    /* Probe only the token/lexer cursor. Attribute parsing never mutates
+     * the AST, and this route must not copy the entire Parser arena state. */
+    saved_lexer = parser->lexer;
+    saved_token = parser->current;
+    (void)memset(&probe_attributes, 0, sizeof(probe_attributes));
+    lookahead_ok = minic_parser_advance(parser) &&
+                   minic_parser_collect_gnu_attribute_lists(parser, &probe_attributes);
+    is_forward = false;
+    if (lookahead_ok && parser->current.kind == MINIC_TOKEN_IDENTIFIER) {
+        lookahead_ok = minic_parser_advance(parser) &&
+                       minic_parser_collect_gnu_attribute_lists(parser, &probe_attributes);
+        if (lookahead_ok) {
+            is_forward = parser->current.kind == MINIC_TOKEN_SEMICOLON;
+        }
+    }
+    parser->lexer = saved_lexer;
+    parser->current = saved_token;
+    if (!lookahead_ok) {
+        return false;
+    }
+    if (is_forward) {
         return parse_record_forward_declaration(parser);
     }
 

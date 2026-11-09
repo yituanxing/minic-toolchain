@@ -20,12 +20,12 @@ static bool core_scalar_object_intervals_overlap(
 }
 
 bool minic_core_object_reuse_plan_build(
-    const MinicC0Program *program, const MinicCoreFunction *function,
-    const MinicDataLayout *layout, size_t unit_bytes,
+    const MinicCoreFunction *function, size_t unit_bytes,
     bool crossblock_enabled, MinicCoreObjectReusePlan *plan) {
     size_t object_index;
     size_t peak = 0U;
-    if (program == NULL || function == NULL || layout == NULL ||
+    if (function == NULL || function->type_context == NULL ||
+        (function->object_count != 0U && function->objects == NULL) ||
         (unit_bytes != 4U && unit_bytes != 8U) || plan == NULL ||
         plan->prepared || plan->intervals != NULL || plan->slots != NULL)
         return false;
@@ -67,10 +67,8 @@ bool minic_core_object_reuse_plan_build(
                 plan->slots[object_index] = SIZE_MAX;
                 if (object_index > UINT32_MAX ||
                     !minic_core_object_interval(
-                        program,
-                        function,
-                        (MinicCoreObjectId)object_index,
-                        layout, unit_bytes,
+                        function, (MinicCoreObjectId)object_index,
+                        unit_bytes,
                         &plan->analysis, &plan->intervals[object_index])) {
                     minic_core_object_reuse_plan_destroy(plan);
                     return false;

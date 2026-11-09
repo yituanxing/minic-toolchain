@@ -2,6 +2,7 @@
 #include "frontend/declaration_sema.h"
 #include "frontend/parser.h"
 #include "frontend/parser_internal.h"
+#include "frontend/gnu_neon_inline_filter.h"
 #include "frontend/parser_external_object.h"
 
 #include <limits.h>
@@ -26,6 +27,7 @@ typedef struct MinicFunctionAttributeContext {
     bool is_internal;
     bool is_inline;
     bool is_extern;
+    MinicFunctionCallingConvention *calling_convention;
     char *section_name;
     size_t section_capacity;
     size_t *section_name_length;
@@ -34,29 +36,19 @@ typedef struct MinicFunctionAttributeContext {
     MinicSymbolVisibility *visibility;
     bool *has_visibility;
     bool *is_noreturn;
+    MinicParsedFunctionDiagnostic *diagnostic;
+    size_t *explicit_alignment;
     bool *force_emit;
     bool *is_constructor;
-    MinicFunctionId *alias_target;
+    MinicSourceSpan *alias_symbol_literal;
     const char *unsupported_message;
 } MinicFunctionAttributeContext;
-
-/* AArch64 glibc's math-vector.h has vector PCS declarations with opaque
- * NEON/SVE return types. Permit only those foreign declarations. Core
- * lowering still rejects calls or definitions involving opaque vectors. */
-static bool aarch64_header_vector_return(MinicType type) {
-    return type.pointer_depth == 0U &&
-           (type.base_kind == MINIC_TYPE_BASE_AARCH64_FLOAT32X4 ||
-            type.base_kind == MINIC_TYPE_BASE_AARCH64_FLOAT64X2 ||
-            type.base_kind == MINIC_TYPE_BASE_AARCH64_SVE_FLOAT32 ||
-            type.base_kind == MINIC_TYPE_BASE_AARCH64_SVE_FLOAT64 ||
-            type.base_kind == MINIC_TYPE_BASE_AARCH64_SVE_BOOL);
-}
 
 static bool glibc_header_vector_pcs_attribute(const MinicParser *parser,
                                                const MinicParsedAttribute *attr) {
     return parser != NULL && attr != NULL && !attr->has_arguments &&
            minic_target_info_header_attribute_supported(
-               parser->target_info,
+               parser->invocation,
                parser->source + attr->name_span.begin.offset,
                minic_parser_span_length(attr->name_span));
 }
@@ -87,6 +79,12 @@ static bool function_attribute_list_has_used(const MinicParsedAttributeList *att
     return function_attribute_list_has_kind(attributes, MINIC_ATTRIBUTE_USED);
 }
 
+static bool function_attribute_list_is_glibc_vector_pcs(
+    const MinicParser *parser, const MinicParsedAttributeList *attributes) {
+    return attributes != NULL && attributes->count == 1U &&
+           glibc_header_vector_pcs_attribute(parser, &attributes->values[0]);
+}
+
 static bool function_attribute_argument_token(MinicParser *parser,
                                               const MinicParsedAttribute *attribute,
                                               MinicTokenKind expected_kind,
@@ -113,6 +111,61 @@ static bool function_attribute_argument_token(MinicParser *parser,
     return true;
 }
 
+/* Reuse the language's owned string decoder for GNU diagnostic literals.
+ * A GNU attribute may contain adjacent literals (including escaped pieces)
+ * after preprocessing, e.g. error("max" "(" "delta" ")").  The pending
+ * attribute retains only this source span; Program ownership comes later. */
+static bool function_attribute_string_literal_span(
+    MinicParser *parser, const MinicParsedAttribute *attribute,
+    MinicSourceSpan *literal_span) {
+    MinicParser probe;
+    char *decoded = NULL;
+    size_t length;
+    bool success;
+
+    if (parser == NULL || attribute == NULL || literal_span == NULL ||
+        !attribute->has_arguments ||
+        attribute->arguments_span.end.offset <=
+            attribute->arguments_span.begin.offset + 1U) return false;
+    probe = *parser;
+    minic_lexer_initialize(&probe.lexer, parser->path, parser->source, parser->lexer.length);
+    probe.lexer.cursor = attribute->arguments_span.begin.offset + 1U;
+    probe.lexer.line = attribute->arguments_span.begin.line;
+    probe.lexer.column = attribute->arguments_span.begin.column + 1U;
+    success = minic_parser_advance(&probe) &&
+              minic_parser_parse_string_text(&probe, &decoded, &length, literal_span) &&
+              probe.current.kind == MINIC_TOKEN_RPAREN &&
+              probe.current.span.end.offset == attribute->arguments_span.end.offset;
+    free(decoded);
+    return success;
+}
+
+static bool function_decode_string_literal_span(
+    MinicParser *parser, MinicSourceSpan source_span,
+    char **message, size_t *length) {
+    MinicParser probe;
+    MinicSourceSpan decoded_span;
+
+    if (parser == NULL || message == NULL || length == NULL ||
+        source_span.end.offset <= source_span.begin.offset) return false;
+    probe = *parser;
+    minic_lexer_initialize(&probe.lexer, parser->path, parser->source, parser->lexer.length);
+    probe.lexer.cursor = source_span.begin.offset;
+    probe.lexer.line = source_span.begin.line;
+    probe.lexer.column = source_span.begin.column;
+    if (!minic_parser_advance(&probe) ||
+        !minic_parser_parse_string_text(&probe, message, length, &decoded_span)) {
+        return false;
+    }
+    if (decoded_span.begin.offset != source_span.begin.offset ||
+        decoded_span.end.offset != source_span.end.offset) {
+        free(*message);
+        *message = NULL;
+        return false;
+    }
+    return true;
+}
+
 static bool resolve_function_copy_attribute(MinicParser *parser,
                                             const MinicParsedAttribute *attribute) {
     MinicSourceSpan target_span;
@@ -129,48 +182,132 @@ static bool resolve_function_copy_attribute(MinicParser *parser,
         minic_parser_error(parser, "GNU copy requires a previously declared function");
         return false;
     }
-    /* MiniC currently persists symbol/layout function attributes separately from
-     * the optimization/diagnostic attributes that GCC copy propagates. GCC copy
-     * explicitly excludes alias/visibility/weak, so validating source identity is
-     * the complete semantic effect for the currently persisted copy-eligible set. */
+    /* TODO: GNU copy also propagates diagnostic function attributes.  Until
+     * copying the entire eligible metadata set is supported, this validates
+     * the source only; callers must not rely on copy for that diagnostic. */
     return true;
 }
 
-static bool resolve_function_alias_attribute(MinicParser *parser,
-                                             const MinicParsedAttribute *attribute,
-                                             MinicFunctionId *target_id) {
-    MinicSourceSpan literal_span;
-    const char *target_name;
-    size_t target_length;
-    size_t function_index;
-
-    if (target_id == NULL ||
+/* Parse the symbol spelling now; resolve only after the entire TU exists.
+ * Linux syscall wrappers declare GNU aliases before __se_sys_* definitions.
+ * A literal is just a symbol lookup key, never an implicit declaration. */
+static bool resolve_function_alias_attribute(
+    MinicParser *parser, const MinicParsedAttribute *attribute,
+    MinicSourceSpan *symbol_literal) {
+    MinicSourceSpan literal;
+    const char *name;
+    size_t length;
+    if (symbol_literal == NULL ||
         !function_attribute_argument_token(
-            parser, attribute, MINIC_TOKEN_STRING_LITERAL, &literal_span) ||
-        literal_span.end.offset <= literal_span.begin.offset + 1U) {
+            parser, attribute, MINIC_TOKEN_STRING_LITERAL, &literal) ||
+        literal.end.offset <= literal.begin.offset + 2U) {
         minic_parser_error(parser, "GNU alias requires one string literal target");
         return false;
     }
-    target_name = parser->source + literal_span.begin.offset + 1U;
-    target_length = literal_span.end.offset - literal_span.begin.offset - 2U;
-    if (target_length == 0U || memchr(target_name, '\\', target_length) != NULL) {
+    name = parser->source + literal.begin.offset + 1U;
+    length = literal.end.offset - literal.begin.offset - 2U;
+    if (length == 0U || memchr(name, '\\', length) != NULL) {
         minic_parser_error(parser, "escaped or empty GNU alias targets are not supported");
         return false;
     }
-    for (function_index = 0U; function_index < parser->program->function_count; ++function_index) {
-        const MinicFunction *candidate;
-        const char *symbol_name;
+    *symbol_literal = literal;
+    return true;
+}
 
-        candidate = minic_c0_program_function(parser->program, function_index);
-        symbol_name = minic_c0_function_symbol_name(candidate);
-        if (candidate != NULL && symbol_name != NULL && strlen(symbol_name) == target_length &&
-            memcmp(symbol_name, target_name, target_length) == 0) {
-            *target_id = function_index;
-            return true;
+static bool parser_alias_literal_equal(
+    const MinicParser *parser, MinicSourceSpan left, MinicSourceSpan right) {
+    size_t a, b;
+    if (parser == NULL ||
+        left.end.offset < left.begin.offset + 2U ||
+        right.end.offset < right.begin.offset + 2U)
+        return false;
+    a = left.end.offset - left.begin.offset - 2U;
+    b = right.end.offset - right.begin.offset - 2U;
+    return a == b &&
+           memcmp(parser->source + left.begin.offset + 1U,
+                  parser->source + right.begin.offset + 1U, a) == 0;
+}
+
+static bool parser_append_pending_function_alias(
+    MinicParser *parser, MinicFunctionId id, MinicSourceSpan literal) {
+    size_t i;
+    MinicParserPendingFunctionAlias *next;
+    size_t capacity;
+    if (parser == NULL || id == MINIC_FUNCTION_INVALID ||
+        literal.end.offset <= literal.begin.offset + 2U)
+        return false;
+    for (i = 0U; i < parser->pending_function_alias_count; ++i) {
+        const MinicParserPendingFunctionAlias *old =
+            &parser->pending_function_aliases[i];
+        if (old->alias_id == id)
+            return parser_alias_literal_equal(parser, old->symbol_literal, literal);
+    }
+    if (parser->pending_function_alias_count == parser->pending_function_alias_capacity) {
+        capacity = parser->pending_function_alias_capacity == 0U
+            ? 8U : parser->pending_function_alias_capacity * 2U;
+        if (capacity < parser->pending_function_alias_capacity ||
+            capacity > SIZE_MAX / sizeof(*next))
+            return false;
+        next = realloc(parser->pending_function_aliases, capacity * sizeof(*next));
+        if (next == NULL)
+            return false;
+        parser->pending_function_aliases = next;
+        parser->pending_function_alias_capacity = capacity;
+    }
+    parser->pending_function_aliases[parser->pending_function_alias_count].alias_id = id;
+    parser->pending_function_aliases[parser->pending_function_alias_count].symbol_literal = literal;
+    ++parser->pending_function_alias_count;
+    return true;
+}
+
+static bool parser_resolve_pending_function_aliases(MinicParser *parser) {
+    size_t i;
+    if (parser == NULL || parser->invocation == NULL || parser->program == NULL)
+        return false;
+    for (i = 0U; i < parser->pending_function_alias_count; ++i) {
+        const MinicParserPendingFunctionAlias *pending =
+            &parser->pending_function_aliases[i];
+        const MinicFunction *alias =
+            minic_c0_program_function(parser->program, pending->alias_id);
+        MinicFunctionId target_id = MINIC_FUNCTION_INVALID;
+        const MinicFunction *target;
+        size_t k, length;
+        const char *name;
+        length = pending->symbol_literal.end.offset -
+                 pending->symbol_literal.begin.offset - 2U;
+        name = parser->source + pending->symbol_literal.begin.offset + 1U;
+        for (k = 0U; k < parser->program->function_count; ++k) {
+            const MinicFunction *candidate =
+                minic_c0_program_function(parser->program, k);
+            const char *symbol = minic_c0_function_symbol_name(candidate);
+            if (symbol != NULL && strlen(symbol) == length &&
+                memcmp(symbol, name, length) == 0) {
+                /* Ambiguous machine symbol names must not resolve
+                 * according to source declaration order. */
+                if (target_id != MINIC_FUNCTION_INVALID && target_id != k) {
+                    minic_parser_error(parser, "ambiguous GNU alias symbol target");
+                    return false;
+                }
+                target_id = k;
+            }
+        }
+        if (target_id == MINIC_FUNCTION_INVALID) {
+            minic_parser_error(
+                parser, "GNU alias target must be declared in this translation unit");
+            return false;
+        }
+        target = minic_c0_program_function(parser->program, target_id);
+        if (alias == NULL || target == NULL ||
+            !minic_target_info_function_alias_abi_compatible(
+                parser->invocation, parser->program, alias, target) ||
+            !minic_c0_program_set_function_alias(
+                parser->program, pending->alias_id, target_id)) {
+            minic_parser_error(parser,
+                "GNU function alias requires a defined same-TU target with matching signature");
+            return false;
         }
     }
-    minic_parser_error(parser, "GNU alias target must be declared in this translation unit");
-    return false;
+    return true;
 }
 
 static bool consume_function_attribute(MinicParser *parser,
@@ -194,6 +331,95 @@ static bool consume_function_attribute(MinicParser *parser,
                            (int)minic_parser_span_length(attribute->name_span),
                            parser->source + attribute->name_span.begin.offset);
         return false;
+    }
+
+    if (descriptor->kind == MINIC_ATTRIBUTE_MS_ABI) {
+        if (context->calling_convention == NULL || attribute->has_arguments ||
+            !minic_target_info_function_calling_convention_scalar_call_supported(
+                &parser->invocation->machine, MINIC_CALLING_CONVENTION_MS_X64)) {
+            minic_parser_error(parser,
+                "GNU ms_abi function attribute requires x86-64 scalar ABI support");
+            return false;
+        }
+        *context->calling_convention = MINIC_CALLING_CONVENTION_MS_X64;
+        return true;
+    }
+
+    if (descriptor->kind == MINIC_ATTRIBUTE_NOCF_CHECK ||
+        descriptor->kind == MINIC_ATTRIBUTE_INDIRECT_BRANCH ||
+        descriptor->kind == MINIC_ATTRIBUTE_TARGET_CPU) {
+        MinicSourceSpan literal;
+        const char *value;
+        size_t length;
+        MinicTargetGnuFunctionAttributeKind target_kind =
+            descriptor->kind == MINIC_ATTRIBUTE_NOCF_CHECK
+                ? MINIC_TARGET_GNU_FUNCTION_NOCF_CHECK
+                : descriptor->kind == MINIC_ATTRIBUTE_INDIRECT_BRANCH
+                    ? MINIC_TARGET_GNU_FUNCTION_INDIRECT_BRANCH
+                    : MINIC_TARGET_GNU_FUNCTION_TARGET_CPU;
+
+        if (!minic_target_info_gnu_function_security_attribute_supported(
+                parser->invocation,
+                parser->source + attribute->name_span.begin.offset,
+                minic_parser_span_length(attribute->name_span))) {
+            minic_parser_error(parser,
+                "GNU x86 function-security attribute requires x86_64 target support");
+            return false;
+        }
+        if (descriptor->kind == MINIC_ATTRIBUTE_NOCF_CHECK) {
+            /* Native GCC's nocf_check disables IBT ENDBR insertion. MiniC's
+             * current x86 backend does not insert ENDBR, so no emission change
+             * is needed here. Full-kernel IBT eligibility is separate. */
+            if (attribute->has_arguments) {
+                minic_parser_error(parser, "GNU nocf_check takes no arguments");
+                return false;
+            }
+            return minic_target_info_gnu_function_security_attribute_value_supported(
+                parser->invocation, target_kind, NULL, 0U);
+        }
+        if (!function_attribute_argument_token(
+                parser, attribute, MINIC_TOKEN_STRING_LITERAL, &literal) ||
+            minic_parser_span_length(literal) < 2U) {
+            minic_parser_error(parser,
+                "GNU x86 function-security policy requires one string literal");
+            return false;
+        }
+        value = parser->source + literal.begin.offset + 1U;
+        length = minic_parser_span_length(literal) - 2U;
+        if (descriptor->kind == MINIC_ATTRIBUTE_INDIRECT_BRANCH) {
+            /* GCC's `keep` preserves ordinary indirect branches for marked
+             * functions. MiniC presently emits those ordinary branches and
+             * has no thunk/retpoline generator to select per declaration. */
+            if (minic_target_info_gnu_function_security_attribute_value_supported(
+                    parser->invocation, target_kind, value, length))
+                return true;
+            minic_parser_error(parser,
+                "GNU indirect_branch policy requires supported value 'keep'");
+            return false;
+        }
+        /* ISA/feature vocabulary is target owned. Frontend only confirms
+         * one string-literal attribute argument and diagnoses rejection. */
+        if (minic_target_info_gnu_function_security_attribute_value_supported(
+                parser->invocation, target_kind, value, length))
+            return true;
+        minic_parser_error(parser,
+            "GNU x86 target attribute requests an unsupported machine policy");
+        return false;
+    }
+
+    if (descriptor->kind == MINIC_ATTRIBUTE_ALIGNED) {
+        if (context->explicit_alignment == NULL ||
+            !minic_parser_apply_alignment_attribute(
+                parser, attribute, "function", context->explicit_alignment)) {
+            if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0')
+                minic_parser_error(parser, "GNU function alignment requires a power-of-two constant");
+            return false;
+        }
+        if (*context->explicit_alignment > 1048576U) {
+            minic_parser_error(parser, "GNU function alignment exceeds supported ELF symbol bound");
+            return false;
+        }
+        return true;
     }
 
     if (descriptor->kind == MINIC_ATTRIBUTE_NO_SANITIZE) {
@@ -271,21 +497,20 @@ static bool consume_function_attribute(MinicParser *parser,
     }
 
     if (descriptor->kind == MINIC_ATTRIBUTE_ALIAS) {
-        MinicFunctionId target_id;
-
-        if (context->alias_target == NULL ||
-            !resolve_function_alias_attribute(parser, attribute, &target_id)) {
-            if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
+        MinicSourceSpan symbol_literal;
+        if (context->alias_symbol_literal == NULL ||
+            !resolve_function_alias_attribute(parser, attribute, &symbol_literal)) {
+            if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0')
                 minic_parser_error(parser, "GNU alias requires a function declaration entity");
-            }
             return false;
         }
-        if (*context->alias_target != MINIC_FUNCTION_INVALID &&
-            *context->alias_target != target_id) {
+        if (context->alias_symbol_literal->end.offset != 0U &&
+            !parser_alias_literal_equal(
+                parser, *context->alias_symbol_literal, symbol_literal)) {
             minic_parser_error(parser, "conflicting GNU function alias attributes");
             return false;
         }
-        *context->alias_target = target_id;
+        *context->alias_symbol_literal = symbol_literal;
         return true;
     }
 
@@ -319,6 +544,25 @@ static bool consume_function_attribute(MinicParser *parser,
         if (context->is_noreturn != NULL) {
             *context->is_noreturn = true;
         }
+        return true;
+    }
+
+    if (descriptor->kind == MINIC_ATTRIBUTE_ERROR ||
+        descriptor->kind == MINIC_ATTRIBUTE_WARNING) {
+        MinicSourceSpan literal;
+        MinicParsedFunctionDiagnostic *pending = context->diagnostic;
+        if (pending == NULL ||
+            !function_attribute_string_literal_span(parser, attribute, &literal)) {
+            minic_parser_error(parser,
+                "GNU error/warning function attribute requires one string literal");
+            return false;
+        }
+        /* GNU attributes accumulate independently: another error overrides
+         * the prior error text, while a warning coexists with the error. */
+        if (descriptor->kind == MINIC_ATTRIBUTE_ERROR)
+            pending->error_literal = literal;
+        else
+            pending->warning_literal = literal;
         return true;
     }
 
@@ -373,6 +617,7 @@ static bool parse_function_attribute_lists(MinicParser *parser,
                                            bool is_internal,
                                            bool is_inline,
                                            bool *is_weak,
+                                           MinicParsedFunctionDiagnostic *diagnostic,
                                            const char *unsupported_message) {
     MinicFunctionAttributeContext context;
 
@@ -381,6 +626,7 @@ static bool parse_function_attribute_lists(MinicParser *parser,
     context.is_internal = is_internal;
     context.is_inline = is_inline;
     context.is_extern = false;
+    context.calling_convention = NULL;
     context.section_name = NULL;
     context.section_capacity = 0U;
     context.section_name_length = NULL;
@@ -389,9 +635,11 @@ static bool parse_function_attribute_lists(MinicParser *parser,
     context.visibility = NULL;
     context.has_visibility = NULL;
     context.is_noreturn = NULL;
+    context.diagnostic = diagnostic;
+    context.explicit_alignment = NULL;
     context.force_emit = NULL;
     context.is_constructor = NULL;
-    context.alias_target = NULL;
+    context.alias_symbol_literal = NULL;
     context.unsupported_message = unsupported_message;
     return minic_parser_parse_gnu_attribute_lists(parser, consume_function_attribute, &context);
 }
@@ -403,6 +651,7 @@ static bool apply_function_attribute_list(MinicParser *parser,
                                           bool is_inline,
                                           bool is_extern,
                                           bool allow_header_vector_pcs,
+                                          MinicFunctionCallingConvention *calling_convention,
                                           char *section_name,
                                           size_t section_capacity,
                                           size_t *section_name_length,
@@ -411,8 +660,10 @@ static bool apply_function_attribute_list(MinicParser *parser,
                                           MinicSymbolVisibility *visibility,
                                           bool *has_visibility,
                                           bool *is_noreturn,
+                                          MinicParsedFunctionDiagnostic *diagnostic,
+                                          size_t *explicit_alignment,
                                           bool *is_constructor,
-                                          MinicFunctionId *alias_target,
+                                          MinicSourceSpan *alias_symbol_literal,
                                           const char *unsupported_message) {
     MinicFunctionAttributeContext context;
     size_t index;
@@ -425,6 +676,7 @@ static bool apply_function_attribute_list(MinicParser *parser,
     context.is_internal = is_internal;
     context.is_inline = is_inline;
     context.is_extern = is_extern;
+    context.calling_convention = calling_convention;
     context.section_name = section_name;
     context.section_capacity = section_capacity;
     context.section_name_length = section_name_length;
@@ -433,9 +685,11 @@ static bool apply_function_attribute_list(MinicParser *parser,
     context.visibility = visibility;
     context.has_visibility = has_visibility;
     context.is_noreturn = is_noreturn;
+    context.diagnostic = diagnostic;
+    context.explicit_alignment = explicit_alignment;
     context.force_emit = NULL;
     context.is_constructor = is_constructor;
-    context.alias_target = alias_target;
+    context.alias_symbol_literal = alias_symbol_literal;
     context.unsupported_message = unsupported_message;
     for (index = 0U; index < attributes->count; ++index) {
         if (!consume_function_attribute(parser, &attributes->values[index], &context)) {
@@ -445,125 +699,30 @@ static bool apply_function_attribute_list(MinicParser *parser,
     return true;
 }
 
-static bool section_attribute_token_is(const MinicParser *parser, const char *name) {
-    size_t name_length;
-
-    if (parser == NULL || name == NULL || parser->current.kind == MINIC_TOKEN_EOF) {
-        return false;
-    }
-    name_length = strlen(name);
-    return minic_parser_span_length(parser->current.span) == name_length &&
-           memcmp(parser->source + parser->current.span.begin.offset, name, name_length) == 0;
-}
-
-bool minic_parser_parse_gnu_section_attribute(
-    MinicParser *parser, char *buffer, size_t capacity, size_t *length, bool *has_section) {
-    for (;;) {
-        MinicParser probe;
-        char parsed[256];
-        size_t parsed_length;
-
-        if (parser == NULL || buffer == NULL || length == NULL || has_section == NULL ||
-            capacity == 0U) {
-            return false;
-        }
-        if (!section_attribute_token_is(parser, "__attribute__")) {
-            return true;
-        }
-
-        probe = *parser;
-        if (!minic_parser_advance(&probe) || probe.current.kind != MINIC_TOKEN_LPAREN ||
-            !minic_parser_advance(&probe) || probe.current.kind != MINIC_TOKEN_LPAREN ||
-            !minic_parser_advance(&probe)) {
-            return false;
-        }
-        if (!section_attribute_token_is(&probe, "section") &&
-            !section_attribute_token_is(&probe, "__section__")) {
-            return true;
-        }
-
-        if (!minic_parser_advance(parser) ||
-            !minic_parser_expect(parser, MINIC_TOKEN_LPAREN, "expected '(' after __attribute__") ||
-            !minic_parser_expect(parser, MINIC_TOKEN_LPAREN, "expected '((' after __attribute__") ||
-            (!section_attribute_token_is(parser, "section") &&
-             !section_attribute_token_is(parser, "__section__")) ||
-            !minic_parser_advance(parser) ||
-            !minic_parser_expect(parser, MINIC_TOKEN_LPAREN, "expected '(' after section")) {
-            return false;
-        }
-
-        parsed_length = 0U;
-        if (parser->current.kind != MINIC_TOKEN_STRING_LITERAL) {
-            minic_parser_error(parser, "GNU section attribute requires a string literal");
-            return false;
-        }
-        while (parser->current.kind == MINIC_TOKEN_STRING_LITERAL) {
-            size_t cursor;
-            size_t end;
-
-            if (parser->current.span.end.offset <= parser->current.span.begin.offset + 1U) {
-                minic_parser_error(parser, "invalid GNU section string");
-                return false;
-            }
-            cursor = parser->current.span.begin.offset + 1U;
-            end = parser->current.span.end.offset - 1U;
-            while (cursor < end) {
-                if (parser->source[cursor] == '\\') {
-                    minic_parser_error(parser, "escaped GNU section names are not supported yet");
-                    return false;
-                }
-                if (parsed_length + 1U >= sizeof(parsed)) {
-                    minic_parser_error(parser, "GNU section name is too long");
-                    return false;
-                }
-                parsed[parsed_length++] = parser->source[cursor++];
-            }
-            if (!minic_parser_advance(parser)) {
-                return false;
-            }
-        }
-        if (parsed_length == 0U || parsed_length + 1U > capacity ||
-            !minic_parser_expect(parser, MINIC_TOKEN_RPAREN, "expected ')' after section name") ||
-            !minic_parser_expect(
-                parser, MINIC_TOKEN_RPAREN, "expected ')' in GNU section attribute") ||
-            !minic_parser_expect(
-                parser, MINIC_TOKEN_RPAREN, "expected second ')' in GNU section attribute")) {
-            return false;
-        }
-        parsed[parsed_length] = '\0';
-        if (*has_section) {
-            if (*length != parsed_length || memcmp(buffer, parsed, parsed_length) != 0) {
-                minic_parser_error(parser, "conflicting GNU section attributes");
-                return false;
-            }
-        } else {
-            (void)memcpy(buffer, parsed, parsed_length + 1U);
-            *length = parsed_length;
-            *has_section = true;
-        }
-    }
-}
-
-bool minic_parser_parse_gnu_function_attributes(MinicParser *parser) {
+bool minic_parser_parse_gnu_function_attributes(
+    MinicParser *parser, MinicParsedFunctionDiagnostic *diagnostic) {
     return parse_function_attribute_lists(
         parser,
         false,
         false,
         false,
         NULL,
+        diagnostic,
         "unsupported GNU function attribute; ABI/layout-affecting and unknown attributes must be "
         "implemented explicitly");
 }
 
 bool minic_parser_parse_gnu_prefix_function_attributes(MinicParser *parser,
                                                        bool is_internal,
-                                                       bool is_inline) {
+                                                       bool is_inline,
+                                                       MinicParsedFunctionDiagnostic *diagnostic) {
     return parse_function_attribute_lists(
         parser,
         true,
         is_internal,
         is_inline,
         NULL,
+        diagnostic,
         "unsupported GNU prefix function attribute; semantic and ABI-affecting attributes must be "
         "implemented explicitly");
 }
@@ -576,15 +735,20 @@ static bool parse_persistent_function_attributes(MinicParser *parser,
                                                  bool *has_section,
                                                  bool *is_weak,
                                                  bool *is_noreturn,
+                                                 MinicParsedFunctionDiagnostic *diagnostic,
+                                                 size_t *explicit_alignment,
                                                  bool *force_emit,
                                                  bool *is_constructor,
-                                                 MinicFunctionId *alias_target) {
+                                                 MinicSourceSpan *alias_symbol_literal,
+                                                 MinicFunctionCallingConvention *calling_convention) {
     MinicFunctionAttributeContext context;
 
     context.allow_gnu_inline = false;
+    context.allow_header_vector_pcs = false;
     context.is_internal = is_internal;
     context.is_inline = false;
     context.is_extern = false;
+    context.calling_convention = calling_convention;
     context.section_name = section_name;
     context.section_capacity = section_capacity;
     context.section_name_length = section_name_length;
@@ -593,13 +757,47 @@ static bool parse_persistent_function_attributes(MinicParser *parser,
     context.visibility = NULL;
     context.has_visibility = NULL;
     context.is_noreturn = is_noreturn;
+    context.diagnostic = diagnostic;
+    context.explicit_alignment = explicit_alignment;
     context.force_emit = force_emit;
     context.is_constructor = is_constructor;
-    context.alias_target = alias_target;
+    context.alias_symbol_literal = alias_symbol_literal;
     context.unsupported_message =
         "unsupported GNU function attribute; ABI/layout-affecting and unknown attributes must be "
         "implemented explicitly";
     return minic_parser_parse_gnu_attribute_lists(parser, consume_function_attribute, &context);
+}
+
+bool minic_parser_persist_function_diagnostic(
+    MinicParser *parser, MinicFunctionId function_id,
+    const MinicParsedFunctionDiagnostic *diagnostic) {
+    MinicSourceSpan literals[2];
+    MinicFunctionDiagnosticKind kinds[2];
+    size_t i;
+
+    if (parser == NULL || diagnostic == NULL) return false;
+    literals[0] = diagnostic->error_literal;
+    literals[1] = diagnostic->warning_literal;
+    kinds[0] = MINIC_FUNCTION_DIAGNOSTIC_ERROR;
+    kinds[1] = MINIC_FUNCTION_DIAGNOSTIC_WARNING;
+    for (i = 0U; i < 2U; ++i) {
+        size_t length;
+        char *message = NULL;
+        if (literals[i].end.offset == 0U) continue;
+        if (!function_decode_string_literal_span(
+                parser, literals[i], &message, &length)) {
+            minic_parser_error(parser, "invalid GNU function diagnostic literal");
+            return false;
+        }
+        if (!minic_c0_program_set_function_diagnostic(
+                parser->program, function_id, kinds[i], message, length)) {
+            free(message);
+            minic_parser_error(parser, "cannot persist GNU function diagnostic attribute");
+            return false;
+        }
+        free(message);
+    }
+    return true;
 }
 
 static bool parse_gnu_function_asm_label(
@@ -609,49 +807,20 @@ static bool parse_gnu_function_asm_label(
     }
     *length = 0U;
     *has_label = false;
-    if (!function_identifier_is(parser, "__asm__") && !function_identifier_is(parser, "__asm")) {
+    /* GNU accepts asm, __asm and __asm__ in declarations. Linux x86
+     * current_stack_pointer uses asm("rsp"). Source grammar belongs here;
+     * register admission is still a separate TargetInfo/backend decision. */
+    if (!function_identifier_is(parser, "__asm__") &&
+        !function_identifier_is(parser, "__asm") &&
+        !function_identifier_is(parser, "asm")) {
         return true;
     }
     if (!minic_parser_advance(parser) ||
         !minic_parser_expect(parser, MINIC_TOKEN_LPAREN, "expected '(' after __asm__")) {
         return false;
     }
-    if (parser->current.kind != MINIC_TOKEN_STRING_LITERAL) {
-        minic_parser_error(parser, "GNU function asm label requires a string literal");
+    if (!minic_parser_parse_gnu_asm_name(parser, buffer, capacity, length))
         return false;
-    }
-    while (parser->current.kind == MINIC_TOKEN_STRING_LITERAL) {
-        size_t cursor;
-        size_t end;
-
-        if (parser->current.span.end.offset <= parser->current.span.begin.offset + 1U) {
-            minic_parser_error(parser, "invalid GNU function asm label string");
-            return false;
-        }
-        cursor = parser->current.span.begin.offset + 1U;
-        end = parser->current.span.end.offset - 1U;
-        while (cursor < end) {
-            if (parser->source[cursor] == '\\') {
-                minic_parser_error(parser, "escaped GNU function asm labels are not supported yet");
-                return false;
-            }
-            if (*length + 1U >= capacity) {
-                minic_parser_error(parser, "GNU function asm label is too long");
-                return false;
-            }
-            buffer[*length] = parser->source[cursor];
-            *length += 1U;
-            cursor += 1U;
-        }
-        if (!minic_parser_advance(parser)) {
-            return false;
-        }
-    }
-    if (*length == 0U) {
-        minic_parser_error(parser, "GNU function asm label cannot be empty");
-        return false;
-    }
-    buffer[*length] = '\0';
     *has_label = true;
     return minic_parser_expect(parser, MINIC_TOKEN_RPAREN, "expected ')' after GNU asm label");
 }
@@ -741,6 +910,10 @@ typedef struct MinicParsedDeclarationPrefix {
     bool is_thread_local;
     bool is_inline;
     bool is_noreturn;
+    /* GNU Linux interleaves const/volatile and declaration-head attributes.
+     * Preserve both qualifiers and route each attribute to its real entity. */
+    bool has_const_qualifier;
+    bool has_volatile_qualifier;
 } MinicParsedDeclarationPrefix;
 
 static bool parse_declaration_prefix(MinicParser *parser,
@@ -755,6 +928,15 @@ static bool parse_declaration_prefix(MinicParser *parser,
     saw_storage_class = false;
 
     for (;;) {
+        if (parser->current.kind == MINIC_TOKEN_KW_CONST ||
+            parser->current.kind == MINIC_TOKEN_KW_VOLATILE) {
+            if (parser->current.kind == MINIC_TOKEN_KW_CONST)
+                prefix->has_const_qualifier = true;
+            else
+                prefix->has_volatile_qualifier = true;
+            if (!minic_parser_advance(parser)) return false;
+            continue;
+        }
         if (function_identifier_is(parser, "register")) {
             if (saw_storage_class) {
                 minic_parser_error(parser, "conflicting or duplicate declaration storage class");
@@ -934,6 +1116,7 @@ static bool record_function_declaration_entity(MinicParser *parser,
                                                const MinicType *parameter_types,
                                                size_t parameter_count,
                                                bool is_variadic,
+                                               MinicFunctionCallingConvention calling_convention,
                                                bool is_internal,
                                                bool is_noreturn,
                                                bool is_weak,
@@ -944,7 +1127,9 @@ static bool record_function_declaration_entity(MinicParser *parser,
                                                bool has_visibility,
                                                const char *section_name,
                                                size_t section_name_length,
-                                               bool has_section) {
+                                               bool has_section,
+                                               size_t explicit_alignment,
+                                               const MinicParsedFunctionDiagnostic *diagnostic) {
     MinicFunctionId function_id;
     const MinicFunction *existing_function;
 
@@ -956,17 +1141,33 @@ static bool record_function_declaration_entity(MinicParser *parser,
         minic_parser_error(parser, "GNU weak requires external function linkage");
         return false;
     }
+    if (calling_convention == MINIC_CALLING_CONVENTION_MS_X64 &&
+        !minic_parser_calling_convention_fixed_scalar_supported(
+            parser, calling_convention, return_type, parameter_types,
+            parameter_count, is_variadic)) {
+        minic_parser_error(parser,
+            "ms_abi function declaration requires supported fixed scalar signature");
+        return false;
+    }
     function_id = minic_parser_find_function(parser, name_span);
     if (function_id != MINIC_FUNCTION_INVALID) {
         existing_function = minic_c0_program_function(parser->program, function_id);
         if (!minic_parser_function_signature_matches(
-                existing_function, return_type, parameter_types, parameter_count, is_variadic) ||
+                parser->program, existing_function, return_type,
+                parameter_types, parameter_count, is_variadic) ||
             (!existing_function->is_internal && is_internal)) {
             minic_parser_error(parser, "conflicting function declaration");
             return false;
         }
         if (existing_function->is_internal) {
             is_internal = true;
+        }
+        if (calling_convention == MINIC_CALLING_CONVENTION_DEFAULT)
+            calling_convention = existing_function->calling_convention;
+        else if (existing_function->calling_convention != MINIC_CALLING_CONVENTION_DEFAULT &&
+                 existing_function->calling_convention != calling_convention) {
+            minic_parser_error(parser, "conflicting function calling convention");
+            return false;
         }
     } else {
         if (minic_parser_find_global_object_entity(parser, name_span) !=
@@ -987,6 +1188,11 @@ static bool record_function_declaration_entity(MinicParser *parser,
             }
             return false;
         }
+    }
+    if (!minic_c0_program_set_function_calling_convention(
+            parser->program, function_id, calling_convention)) {
+        minic_parser_error(parser, "conflicting function calling convention");
+        return false;
     }
     if (is_noreturn &&
         !minic_c0_program_set_function_noreturn(parser->program, function_id, true)) {
@@ -1013,7 +1219,13 @@ static bool record_function_declaration_entity(MinicParser *parser,
         minic_parser_error(parser, "conflicting or invalid GNU function section");
         return false;
     }
-    return true;
+    if (explicit_alignment != 0U &&
+        !minic_c0_program_set_function_alignment(parser->program, function_id,
+                                                 explicit_alignment)) {
+        minic_parser_error(parser, "invalid GNU function entry alignment");
+        return false;
+    }
+    return minic_parser_persist_function_diagnostic(parser, function_id, diagnostic);
 }
 
 static bool finish_function_declaration_entity(MinicParser *parser,
@@ -1022,6 +1234,7 @@ static bool finish_function_declaration_entity(MinicParser *parser,
                                                const MinicType *parameter_types,
                                                size_t parameter_count,
                                                bool is_variadic,
+                                               MinicFunctionCallingConvention calling_convention,
                                                bool is_internal,
                                                bool is_noreturn,
                                                bool is_weak,
@@ -1033,10 +1246,11 @@ static bool finish_function_declaration_entity(MinicParser *parser,
                                                const char *section_name,
                                                size_t section_name_length,
                                                bool has_section,
+                                               size_t explicit_alignment,
                                                bool force_emit,
-                                               MinicFunctionId alias_target) {
+                                               MinicSourceSpan alias_symbol_literal,
+                                               const MinicParsedFunctionDiagnostic *diagnostic) {
     MinicFunctionId function_id;
-    const MinicFunction *alias_function;
 
     if (parser == NULL || parser->current.kind != MINIC_TOKEN_SEMICOLON ||
         !record_function_declaration_entity(parser,
@@ -1045,6 +1259,7 @@ static bool finish_function_declaration_entity(MinicParser *parser,
                                             parameter_types,
                                             parameter_count,
                                             is_variadic,
+                                            calling_convention,
                                             is_internal,
                                             is_noreturn,
                                             is_weak,
@@ -1055,7 +1270,9 @@ static bool finish_function_declaration_entity(MinicParser *parser,
                                             has_visibility,
                                             section_name,
                                             section_name_length,
-                                            has_section)) {
+                                            has_section,
+                                            explicit_alignment,
+                                            diagnostic)) {
         return false;
     }
     function_id = minic_parser_find_function(parser, name_span);
@@ -1067,22 +1284,19 @@ static bool finish_function_declaration_entity(MinicParser *parser,
         minic_parser_error(parser, "cannot persist GNU used function metadata");
         return false;
     }
-    if (alias_target != MINIC_FUNCTION_INVALID) {
-        alias_function = minic_c0_program_function(parser->program, alias_target);
-        if (alias_function == NULL || has_section ||
-            !minic_parser_function_signature_matches(
-                alias_function, return_type, parameter_types, parameter_count, is_variadic) ||
-            !minic_c0_program_set_function_alias(parser->program, function_id, alias_target)) {
+    if (alias_symbol_literal.end.offset != 0U) {
+        if (has_section ||
+            !parser_append_pending_function_alias(
+                parser, function_id, alias_symbol_literal)) {
             minic_parser_error(
-                parser,
-                "GNU function alias requires a defined same-TU target with matching signature");
+                parser, "conflicting or invalid GNU function alias declaration");
             return false;
         }
     }
     return minic_parser_advance(parser);
 }
 
-static bool parse_function(MinicParser *parser, bool is_internal) {
+static bool parse_function_inner(MinicParser *parser, bool is_internal) {
     MinicSourceSpan name_span;
     MinicSourceSpan parameter_name_spans[MINIC_MAX_FUNCTION_PARAMETERS];
     MinicType parameter_types[MINIC_MAX_FUNCTION_PARAMETERS];
@@ -1102,6 +1316,8 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
     bool is_extern_declaration;
     bool is_function_pointer_object;
     bool has_preparsed_function_parameters;
+    bool has_parameter_scope;
+    bool unreferenced_vector_pcs_header_decl;
     bool is_inline;
     bool is_gnu_extern_inline;
     bool is_noreturn;
@@ -1111,6 +1327,7 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
     bool is_static_declaration;
     bool is_main;
     bool is_variadic;
+    MinicFunctionCallingConvention calling_convention;
     bool is_weak;
     char assembler_name[256];
     size_t assembler_name_length;
@@ -1122,13 +1339,16 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
     MinicSymbolVisibility visibility;
     bool has_visibility;
     bool object_is_weak;
-    MinicFunctionId alias_target;
+    MinicSourceSpan alias_symbol_literal;
+    MinicParsedFunctionDiagnostic function_diagnostic;
 
     body_block = MINIC_BLOCK_INVALID;
     parameter_count = 0U;
     is_extern_declaration = false;
     is_function_pointer_object = false;
     has_preparsed_function_parameters = false;
+    has_parameter_scope = false;
+    unreferenced_vector_pcs_header_decl = false;
     is_inline = false;
     is_gnu_extern_inline = false;
     is_noreturn = false;
@@ -1140,6 +1360,7 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
     (void)memset(&declarator_attributes, 0, sizeof(declarator_attributes));
     (void)memset(&declaration_prefix, 0, sizeof(declaration_prefix));
     is_variadic = false;
+    calling_convention = MINIC_CALLING_CONVENTION_DEFAULT;
     is_weak = false;
     assembler_name_length = 0U;
     has_assembler_name = false;
@@ -1149,7 +1370,8 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
     visibility = MINIC_SYMBOL_VISIBILITY_DEFAULT;
     has_visibility = false;
     object_is_weak = false;
-    alias_target = MINIC_FUNCTION_INVALID;
+    (void)memset(&function_diagnostic, 0, sizeof(function_diagnostic));
+    (void)memset(&alias_symbol_literal, 0, sizeof(alias_symbol_literal));
     (void)memset(assembler_name, 0, sizeof(assembler_name));
     (void)memset(section_name, 0, sizeof(section_name));
     (void)memset(parameter_name_spans, 0, sizeof(parameter_name_spans));
@@ -1162,6 +1384,10 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
     }
     deferred_attributes = declaration_prefix.attributes;
     if (!minic_parser_parse_type_specifiers(parser, &base_type) ||
+        (declaration_prefix.has_const_qualifier &&
+         !minic_type_add_const(base_type, &base_type)) ||
+        (declaration_prefix.has_volatile_qualifier &&
+         !minic_type_add_volatile(base_type, &base_type)) ||
         !parse_post_type_declaration_specifiers(parser, &declaration_prefix) ||
         !minic_parser_collect_gnu_attribute_lists(parser, &deferred_attributes)) {
         return false;
@@ -1212,8 +1438,14 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
         if (name_probe.current.kind == MINIC_TOKEN_STAR) {
             MinicParsedFunctionDeclarator declarator;
 
+            /* A function returning a pointer to a function can carry its
+             * own parameter list inside this parenthesized declarator. */
+            if (!minic_parser_begin_scope(parser)) {
+                return false;
+            }
+            has_parameter_scope = true;
             if (!minic_parser_parse_parenthesized_function_declarator(
-                    parser, true, true, &declarator)) {
+                    parser, true, true, &declarator, true)) {
                 return false;
             }
             if (!minic_parser_build_function_declarator_type(
@@ -1314,7 +1546,7 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
             return false;
         }
         if (!minic_target_info_fixed_register_supported(
-                parser->target_info, assembler_name, assembler_name_length)) {
+                &parser->invocation->machine, assembler_name, assembler_name_length)) {
             minic_parser_error(parser, "fixed register binding is not supported by this target");
             return false;
         }
@@ -1339,6 +1571,7 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
         size_t typed_parameter_count;
         size_t parameter_index;
         bool typed_is_variadic;
+        MinicFunctionCallingConvention typed_calling_convention;
         bool declaration_is_weak;
 
         if (parser->current.kind == MINIC_TOKEN_LPAREN) {
@@ -1358,7 +1591,7 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
         typed_return_type = function_type->return_type;
         typed_parameter_count = function_type->parameter_count;
         typed_is_variadic = function_type->is_variadic;
-        typed_is_variadic = function_type->is_variadic;
+        typed_calling_convention = function_type->calling_convention;
         for (parameter_index = 0U; parameter_index < typed_parameter_count; ++parameter_index) {
             typed_parameter_types[parameter_index] =
                 function_type->parameter_types[parameter_index];
@@ -1370,7 +1603,9 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
                 is_internal,
                 is_inline,
                 is_extern_declaration,
-                !is_internal && aarch64_header_vector_return(typed_return_type),
+                !is_internal && minic_target_info_header_opaque_vector_return(
+                                    parser->invocation, typed_return_type),
+                &typed_calling_convention,
                 section_name,
                 sizeof(section_name),
                 &section_name_length,
@@ -1379,6 +1614,8 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
                 &visibility,
                 &has_visibility,
                 &is_noreturn,
+                &function_diagnostic,
+                &object_explicit_alignment,
                 NULL, /* function typed declarator is not startup hook */
                 NULL,
                 "unsupported GNU prefix function attribute; semantic and ABI-affecting attributes "
@@ -1391,6 +1628,8 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
             bool entity_is_weak;
             bool entity_is_noreturn;
             bool entity_force_emit;
+            MinicParsedFunctionDiagnostic entity_diagnostic = function_diagnostic;
+            size_t entity_explicit_alignment = object_explicit_alignment;
 
             if (parser->current.kind == MINIC_TOKEN_LPAREN) {
                 minic_parser_error(parser,
@@ -1417,9 +1656,12 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
                     NULL,
                     &entity_is_weak,
                     &entity_is_noreturn,
+                    &entity_diagnostic,
+                    &entity_explicit_alignment,
                     &entity_force_emit,
                     NULL,
-                    NULL)) {
+                    NULL,
+                    &typed_calling_convention)) {
                 return false;
             }
             if (parser->current.kind != MINIC_TOKEN_COMMA &&
@@ -1434,6 +1676,7 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
                                                     typed_parameter_types,
                                                     typed_parameter_count,
                                                     typed_is_variadic,
+                                                    typed_calling_convention,
                                                     is_internal,
                                                     entity_is_noreturn,
                                                     entity_is_weak,
@@ -1444,7 +1687,9 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
                                                     has_visibility,
                                                     section_name,
                                                     section_name_length,
-                                                    has_section)) {
+                                                    has_section,
+                                                    entity_explicit_alignment,
+                                                    &entity_diagnostic)) {
                 return false;
             }
             function_id = minic_parser_find_function(parser, name_span);
@@ -1476,20 +1721,22 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
             minic_parser_error(parser, "_Noreturn specifier requires a function declarator");
             return false;
         }
-        if (!minic_parser_apply_object_attribute_list(parser,
+        if (!minic_parser_apply_object_attribute_list_with_used(parser,
                                                       &deferred_attributes,
                                                       section_name,
                                                       sizeof(section_name),
                                                       &section_name_length,
                                                       &has_section,
-                                                      &object_explicit_alignment) ||
-            !minic_parser_apply_object_attribute_list(parser,
+                                                      &object_explicit_alignment,
+                                                      &force_emit) ||
+            !minic_parser_apply_object_attribute_list_with_used(parser,
                                                       &declarator_attributes,
                                                       section_name,
                                                       sizeof(section_name),
                                                       &section_name_length,
                                                       &has_section,
-                                                      &object_explicit_alignment)) {
+                                                      &object_explicit_alignment,
+                                                      &force_emit)) {
             return false;
         }
         if (has_visibility) {
@@ -1506,16 +1753,19 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
                 section_name,
                 section_name_length,
                 has_section,
-                object_explicit_alignment);
+                object_explicit_alignment,
+                force_emit);
         }
         if (!minic_parser_parse_static_global_after_head(parser,
+                                                         base_type,
                                                          return_type,
                                                          name_span,
                                                          section_name,
                                                          sizeof(section_name),
                                                          &section_name_length,
                                                          &has_section,
-                                                         &object_explicit_alignment)) {
+                                                         &object_explicit_alignment,
+                                                         &force_emit)) {
             return false;
         }
         object_id = minic_parser_find_global_object_entity(parser, name_span);
@@ -1527,7 +1777,9 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
                                             has_section,
                                             object_explicit_alignment,
                                             MINIC_SYMBOL_VISIBILITY_DEFAULT,
-                                            false)) {
+                                            false) ||
+            (force_emit && !minic_c0_program_set_global_object_force_emit(
+                               parser->program, object_id))) {
             minic_parser_error(parser, "cannot persist static object metadata");
             return false;
         }
@@ -1672,6 +1924,19 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
         }
         return minic_parser_external_object_weak(parser, name_span, object_is_weak);
     }
+    /* GNU13 glibc mathvec headers declare vector PCS `_ZGVnN{2,4}v...`
+     * symbols that MiniC cannot call or define with their alternate ABI.
+     * Admit *only* the exact standalone external prototype so we can discard
+     * the symbol entirely. Real references then fail to resolve in the C
+     * parser rather than silently using the default ABI. */
+    unreferenced_vector_pcs_header_decl =
+        !is_internal && !is_inline && !is_register_declaration &&
+        declarator_attributes.count == 0U &&
+        function_attribute_list_is_glibc_vector_pcs(parser, &deferred_attributes) &&
+        minic_target_info_header_unreferenced_vector_declaration(
+            parser->invocation,
+            parser->source + name_span.begin.offset,
+            minic_parser_span_length(name_span), return_type);
     if (!apply_function_attribute_list(
             parser,
             &deferred_attributes,
@@ -1679,7 +1944,10 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
             is_internal,
             is_inline,
             is_extern_declaration,
-            !is_internal && aarch64_header_vector_return(return_type),
+            unreferenced_vector_pcs_header_decl ||
+                (!is_internal && minic_target_info_header_opaque_vector_return(
+                                    parser->invocation, return_type)),
+            &calling_convention,
             section_name,
             sizeof(section_name),
             &section_name_length,
@@ -1688,8 +1956,10 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
             &visibility,
             &has_visibility,
             &is_noreturn,
+            &function_diagnostic,
+            &object_explicit_alignment,
             &is_constructor,
-            &alias_target,
+            &alias_symbol_literal,
             "unsupported GNU prefix function attribute; semantic and ABI-affecting attributes must "
             "be implemented explicitly")) {
         return false;
@@ -1712,12 +1982,20 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
         return false;
     }
 
-    if (!has_preparsed_function_parameters &&
-        (!minic_parser_expect(parser, MINIC_TOKEN_LPAREN, "expected '('") ||
-         !minic_parser_parse_parameter_list(
-             parser, parameter_name_spans, parameter_types, &parameter_count, false, &is_variadic) ||
-         !minic_parser_expect(parser, MINIC_TOKEN_RPAREN, "expected ')'"))) {
-        return false;
+    if (!has_preparsed_function_parameters) {
+        /* A definition's parameter scope extends through its body. For a
+         * prototype the wrapper pops this scope on return, before the next
+         * file declaration can see any parameter-only Record/Enum tags. */
+        if (!minic_parser_begin_scope(parser)) {
+            return false;
+        }
+        has_parameter_scope = true;
+        if (!minic_parser_expect(parser, MINIC_TOKEN_LPAREN, "expected '('") ||
+            !minic_parser_parse_parameter_list(
+                parser, parameter_name_spans, parameter_types, &parameter_count, false, &is_variadic) ||
+            !minic_parser_expect(parser, MINIC_TOKEN_RPAREN, "expected ')'")) {
+            return false;
+        }
     }
     if (!parse_gnu_function_asm_label(parser,
                                       assembler_name,
@@ -1732,21 +2010,46 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
                                               &has_section,
                                               &is_weak,
                                               &is_noreturn,
+                                              &function_diagnostic,
+                                              &object_explicit_alignment,
                                               &force_emit,
                                               &is_constructor,
-                                              &alias_target)) {
+                                              &alias_symbol_literal,
+                                              &calling_convention)) {
         return false;
+    }
+    if (unreferenced_vector_pcs_header_decl) {
+        if (parser->current.kind != MINIC_TOKEN_SEMICOLON || has_assembler_name ||
+            is_weak || is_noreturn || force_emit || has_section ||
+            is_constructor || alias_symbol_literal.end.offset != 0U) {
+            minic_parser_error(parser,
+                "AArch64 vector PCS is unsupported outside unused glibc mathvec prototypes");
+            return false;
+        }
+        /* No symbol is installed in Program. A later use cannot be emitted
+         * as an ordinary AAPCS64 call. Parameter scope closes in wrapper. */
+        return minic_parser_advance(parser);
     }
     if (function_id != MINIC_FUNCTION_INVALID) {
         existing_function = minic_c0_program_function(parser->program, function_id);
         if (!minic_parser_function_signature_matches(
-                existing_function, return_type, parameter_types, parameter_count, is_variadic) ||
+                parser->program, existing_function, return_type,
+                parameter_types, parameter_count, is_variadic) ||
             (!existing_function->is_internal && is_internal)) {
             minic_parser_error(parser, "conflicting function declaration");
             return false;
         }
         if (existing_function->is_internal) {
             is_internal = true;
+        }
+        /* An unannotated redeclaration inherits a previously selected
+         * ABI. An explicit incompatible ABI must never silently replace it. */
+        if (calling_convention == MINIC_CALLING_CONVENTION_DEFAULT)
+            calling_convention = existing_function->calling_convention;
+        else if (existing_function->calling_convention != MINIC_CALLING_CONVENTION_DEFAULT &&
+                 existing_function->calling_convention != calling_convention) {
+            minic_parser_error(parser, "conflicting function calling convention");
+            return false;
         }
     }
 
@@ -1763,6 +2066,7 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
                                                   parameter_types,
                                                   parameter_count,
                                                   is_variadic,
+                                                  calling_convention,
                                                   is_internal,
                                                   is_noreturn,
                                                   is_weak,
@@ -1774,10 +2078,30 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
                                                   section_name,
                                                   section_name_length,
                                                   has_section,
+                                                  object_explicit_alignment,
                                                   force_emit,
-                                                  alias_target);
+                                                  alias_symbol_literal,
+                                                  &function_diagnostic);
     }
-    if (alias_target != MINIC_FUNCTION_INVALID) {
+    /* An MS x64 definition is a distinct incoming ABI, not a SysV body
+     * with merely an attribute attached. The x86 target implements fixed
+     * scalar ingress and all MS nonvolatile preservation, while variable
+     * arguments, aggregates, TI and x87 remain explicitly unsupported. */
+    if (calling_convention == MINIC_CALLING_CONVENTION_MS_X64 &&
+        !minic_parser_calling_convention_fixed_scalar_supported(
+            parser, calling_convention, return_type, parameter_types,
+            parameter_count, is_variadic)) {
+        minic_parser_error(parser,
+            "ms_abi function definition requires supported fixed scalar signature");
+        return false;
+    }
+    if (calling_convention != MINIC_CALLING_CONVENTION_DEFAULT &&
+        calling_convention != MINIC_CALLING_CONVENTION_MS_X64) {
+        minic_parser_error(parser,
+            "unsupported nondefault function definition calling convention");
+        return false;
+    }
+    if (alias_symbol_literal.end.offset != 0U) {
         minic_parser_error(parser, "GNU alias applies to declarations, not function definitions");
         return false;
     }
@@ -1785,7 +2109,10 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
         !minic_type_is_pointer(return_type) && !minic_type_is_float(return_type) &&
         !minic_type_is_double(return_type) &&
         !minic_type_is_long_double(return_type) &&
-        !minic_type_is_record(return_type)) {
+        !minic_type_is_record(return_type) &&
+        !(minic_type_is_fixed_vector_register_storage(return_type) &&
+          minic_target_info_language_type_supported_for_type(
+              parser->invocation, return_type))) {
         minic_parser_error(parser, "unsupported function return type");
         return false;
     }
@@ -1841,19 +2168,17 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
 
     local_begin = parser->program->local_count;
     parser->local_begin = local_begin;
-    if (!minic_parser_begin_scope(parser)) {
+    if (!has_parameter_scope && !minic_parser_begin_scope(parser)) {
         return false;
     }
     {
         size_t parameter_index;
 
         for (parameter_index = 0U; parameter_index < parameter_count; ++parameter_index) {
-            (void)memset(&parameter_local, 0, sizeof(parameter_local));
+            minic_c0_local_initialize(&parameter_local);
             parameter_local.name_span = parameter_name_spans[parameter_index];
             parameter_local.type = parameter_types[parameter_index];
-            parameter_local.element_count = 1U;
             parameter_local.explicit_alignment = 0U;
-            parameter_local.is_array = false;
             parameter_local.is_register_storage = false;
             if (minic_parser_find_local_in_current_scope(parser, parameter_local.name_span) !=
                 MINIC_LOCAL_INVALID) {
@@ -1889,6 +2214,14 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
     } else if (!minic_c0_program_define_function(
                    parser->program, function_id, local_begin, body_block)) {
         minic_parser_error(parser, "cannot define previously declared function");
+        return false;
+    }
+    /* The definition path must persist the same ABI identity as a preceding
+     * prototype: otherwise Core silently defaults the body to SysV even
+     * though callers correctly use Microsoft's RCX/RDX/R8/R9 convention. */
+    if (!minic_c0_program_set_function_calling_convention(
+            parser->program, function_id, calling_convention)) {
+        minic_parser_error(parser, "conflicting function definition calling convention");
         return false;
     }
     if (!minic_c0_program_set_function_inline(parser->program, function_id, is_inline)) {
@@ -1930,6 +2263,25 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
         minic_parser_error(parser, "conflicting or invalid GNU function section");
         return false;
     }
+    if (object_explicit_alignment != 0U &&
+        !minic_c0_program_set_function_alignment(parser->program, function_id,
+                                                 object_explicit_alignment)) {
+        minic_parser_error(parser, "invalid GNU function entry alignment");
+        return false;
+    }
+    if (!minic_parser_persist_function_diagnostic(
+            parser, function_id, &function_diagnostic)) {
+        return false;
+    }
+    {
+        MinicFunction *fn = &parser->program->functions[function_id];
+        fn->is_always_inline =
+            function_attribute_list_has_kind(&deferred_attributes,
+                                             MINIC_ATTRIBUTE_ALWAYS_INLINE) ||
+            function_attribute_list_has_kind(&declarator_attributes,
+                                             MINIC_ATTRIBUTE_ALWAYS_INLINE);
+        fn->is_gnu_inline_only = is_gnu_extern_inline && fn->is_always_inline;
+    }
     parser->current_function = function_id;
     parser->current_function_name_object = MINIC_GLOBAL_OBJECT_INVALID;
     if (is_main) {
@@ -1965,7 +2317,9 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
     }
     if (!minic_parser_materialize_cleanup_contexts(parser, MINIC_CLEANUP_CONTEXT_ROOT) ||
         ((!minic_type_is_pointer(return_type) && !minic_type_is_double(return_type) &&
-          !minic_type_is_record(return_type) && !minic_parser_add_default_return(parser)) ||
+          !minic_type_is_record(return_type) &&
+          !minic_type_is_fixed_vector_register_storage(return_type) &&
+          !minic_parser_add_default_return(parser)) ||
          !minic_parser_expect(parser, MINIC_TOKEN_RBRACE, "expected '}'"))) {
         return false;
     }
@@ -1981,13 +2335,32 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
          * remains the sole concrete implementation. */
         MinicFunction *fn = &parser->program->functions[function_id];
         fn->is_defined = false;
-        fn->body_block = MINIC_BLOCK_INVALID;
-        fn->local_count = 0U;
+        if (!fn->is_gnu_inline_only) {
+            fn->body_block = MINIC_BLOCK_INVALID;
+            fn->local_count = 0U;
+        }
     }
     minic_parser_end_scope(parser);
     parser->current_function = MINIC_FUNCTION_INVALID;
     parser->current_function_name_object = MINIC_GLOBAL_OBJECT_INVALID;
     return true;
+}
+
+static bool parse_function(MinicParser *parser, bool is_internal) {
+    size_t enclosing_scope_count;
+    bool success;
+
+    if (parser == NULL) {
+        return false;
+    }
+    enclosing_scope_count = parser->scope_count;
+    success = parse_function_inner(parser, is_internal);
+    /* Prototypes and pointer declarators have no function body to close
+     * their parameter scope; unsuccessful parses also leave no live scope. */
+    while (parser->scope_count > enclosing_scope_count) {
+        minic_parser_end_scope(parser);
+    }
+    return success;
 }
 
 static bool top_level_is_gnu_asm(const MinicParser *parser) {
@@ -2114,6 +2487,17 @@ static bool record_keyword_starts_standalone_declaration(MinicParser *parser, bo
         if (!minic_parser_advance(&probe)) {
             return false;
         }
+        /* A forward tag may carry GNU attributes after its spelling:
+         *     struct Forward __attribute__((aligned(16)));
+         * Consume only for classification; the record owner validates them. */
+        {
+            MinicParsedAttributeList tag_attributes;
+
+            (void)memset(&tag_attributes, 0, sizeof(tag_attributes));
+            if (!minic_parser_collect_gnu_attribute_lists(&probe, &tag_attributes)) {
+                return false;
+            }
+        }
     }
     if (probe.current.kind == MINIC_TOKEN_SEMICOLON) {
         *is_standalone = true;
@@ -2192,21 +2576,29 @@ static bool finalize_tentative_incomplete_arrays(MinicC0Program *program) {
 bool minic_parse_c0_program_for_target(const char *path,
                                        const char *source,
                                        size_t length,
-                                       const MinicTargetInfo *target_info,
+                                       const MinicTargetInvocation *invocation,
                                        MinicC0Program *program,
                                        MinicDiagnostic *diagnostic) {
     MinicParser parser;
+    char *filtered_source = NULL;
     bool success;
 
     (void)memset(&parser, 0, sizeof(parser));
+    parser.cache_owner = &parser;
     parser.path = path;
     parser.source = source;
     parser.diagnostic = diagnostic;
     parser.program = program;
-    parser.target_info = target_info;
-    if (target_info == NULL) {
+    parser.invocation = invocation;
+    if (invocation == NULL) {
         return false;
     }
+    if (!minic_gnu_neon_inline_filter(path, source, length,
+                                      invocation, &filtered_source)) {
+        return false;
+    }
+    if (filtered_source != NULL) source = filtered_source;
+    parser.source = source;
     parser.default_visibility = MINIC_SYMBOL_VISIBILITY_DEFAULT;
     parser.visibility_depth = 0U;
     parser.current_block = MINIC_BLOCK_INVALID;
@@ -2214,6 +2606,19 @@ bool minic_parse_c0_program_for_target(const char *path,
     parser.current_function_name_object = MINIC_GLOBAL_OBJECT_INVALID;
     parser.continue_target_statement = MINIC_STATEMENT_INVALID;
     minic_lexer_initialize(&parser.lexer, path, source, length);
+
+    /* Canonical per-TU source cursor identity must predate speculative
+     * Parser snapshots: a probe may read this Program-owned type, but must
+     * never introduce an untracked RecordId/ArrayTypeId of its own. */
+    {
+        MinicType cursor_source_type;
+        if (!minic_parser_materialize_builtin_va_list_source_type(
+                &parser, &cursor_source_type)) {
+            minic_parser_error(&parser, "cannot materialize target va_list source type");
+            free(filtered_source);
+            return false;
+        }
+    }
 
     success = minic_parser_advance(&parser);
     while (success && parser.current.kind != MINIC_TOKEN_EOF) {
@@ -2262,6 +2667,8 @@ bool minic_parse_c0_program_for_target(const char *path,
             success = parse_function(&parser, false);
         }
     }
+    if (success && !parser_resolve_pending_function_aliases(&parser))
+        success = false;
     if (success && !finalize_tentative_incomplete_arrays(program)) {
         minic_parser_error(&parser, "cannot complete tentative incomplete array definition");
         success = false;
@@ -2301,16 +2708,23 @@ bool minic_parse_c0_program_for_target(const char *path,
     minic_parser_destroy_enum_constants(&parser);
     free(parser.switch_contexts);
     parser.switch_contexts = NULL;
+    free(parser.pending_function_aliases);
+    parser.pending_function_aliases = NULL;
+    free(filtered_source);
     return success;
 }
 
-/* Retain the historical parser API for RV64-focused tests and tools. */
+/* Retain the historical parser API for RV64-focused tests and tools.
+ * Standalone C parsing still starts with an invocation-owned source policy. */
 bool minic_parse_c0_program(const char *path,
                             const char *source,
                             size_t length,
                             MinicC0Program *program,
                             MinicDiagnostic *diagnostic) {
+    MinicTargetInvocation invocation;
+
+    if (!minic_target_invocation_begin(&invocation, minic_default_target_info()))
+        return false;
     return minic_parse_c0_program_for_target(path, source, length,
-                                              minic_default_target_info(),
-                                              program, diagnostic);
+                                             &invocation, program, diagnostic);
 }

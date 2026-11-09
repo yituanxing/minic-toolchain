@@ -1,0 +1,17 @@
+# Explicit, bounded one-shot paired A/B run. A push changing this marker
+# launches both c638 early-refactor (four ISA) and 5e4 recent five-ISA
+# comparisons against the current candidate, with original tinyAES/cJSON .i.
+# Re-arm only after meaningful compiler source/perf-harness changes.
+2026-11-08 performance-candidate-review-pending
+2026-11-08 rerun-once-after-push-pr-concurrency-isolation candidate=1f217fc
+2026-11-08 batch-p0-zerorecord-opcode-next-candidate baseline=6647b76
+2026-11-08 post-MachineIR-double-to-single-verify and proven-aligned-RV-I-payload candidate; exact-source cJSON/tinyAES five-ISA paired ABBA against pinned early/recent history
+2026-11-09 measured-post-CoreType-hashcons-inline-owner-snapshot-indexed-asm candidate=bca199925ede frozen AES/cJSON five-ISA ABBA; compiler-throughput-only
+layout-import-batch-paired-linux-fsync-2026-11-09
+layout-import-batch-first500-paired-2026-11-09
+first500-classify-preexisting-indirect-call-rejections-2026-11-09
+first500-replay-original-kbuild-c-abi-and-validator-singlewalk-2026-11-09
+first500-admit-zero-byte-kbuild-assembly-but-reject-missing-artifact-2026-11-09
+2026-11-09 exact post-refactor sealed-RISCV-preflight compiler-throughput A-B after original Linux five-ISA native GNU-QEMU recert; preserve Codegen-SHA, CPU RSS, freeze 500 Linux source, compare historical best
+2026-11-09 MachineIR function-owned array slab candidate; frozen GNU Linux and same-runner ABBA source semantics check
+2026-11-09 MachineIR slab Loong mutable-operand detach; one-factor performance and strict runtime replay

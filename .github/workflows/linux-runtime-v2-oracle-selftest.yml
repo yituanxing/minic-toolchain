@@ -1,0 +1,39 @@
+name: Linux Runtime V2 Oracle Selftests (not a guest P2/P3 certification)
+
+on:
+  push:
+    paths:
+      - .github/workflows/linux-runtime-v2-oracle-selftest.yml
+      - tests/external/linux/runtime_v2_log_check.py
+      - tests/external/linux/runtime_v2_checks.tsv
+      - tests/external/linux/legacy_145_runtime_bridge.py
+      - tests/external/linux/test_runtime_v2_log_check.py
+      - tools/ci/linux-runtime-p2-diff-v1.py
+      - tools/ci/test_linux_runtime_p2_diff_v1.py
+  pull_request:
+    paths:
+      - .github/workflows/linux-runtime-v2-oracle-selftest.yml
+      - tests/external/linux/runtime_v2_log_check.py
+      - tests/external/linux/runtime_v2_checks.tsv
+      - tests/external/linux/legacy_145_runtime_bridge.py
+      - tests/external/linux/test_runtime_v2_log_check.py
+      - tools/ci/linux-runtime-p2-diff-v1.py
+      - tools/ci/test_linux_runtime_p2_diff_v1.py
+
+permissions:
+  contents: read
+
+jobs:
+  oracle-only-not-qemu:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Assert strict P2/P3 log checker rejects skipped, fake and incomplete evidence
+        run: python3 -m unittest -v tests/external/linux/test_runtime_v2_log_check.py
+      - name: Assert GNU/MiniC P2 paired differential fails closed on environment gaps
+        run: python3 -m unittest -v tools/ci/test_linux_runtime_p2_diff_v1.py
+      - name: State certification boundary
+        run: |
+          echo 'ORACLE_SELFTEST=PASS scope=synthetic-log-classifier-only'
+          echo 'P2_18_OF_18=NOT_CERTIFIED P3_5_ISA=NOT_CERTIFIED'

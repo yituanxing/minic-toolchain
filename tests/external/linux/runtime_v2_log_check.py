@@ -8,6 +8,8 @@ from pathlib import Path
 import re
 import sys
 
+from legacy_145_runtime_bridge import classify_log as classify_legacy_145
+
 PROFILE_ORDER = {"p0": 0, "p1": 1, "p2": 2, "p3": 3}
 FATAL_PATTERNS = (
     r"Unknown symbol",
@@ -18,11 +20,35 @@ FATAL_PATTERNS = (
     r"soft lockup",
     r"workqueue lockup",
 )
+P2_CHECK_IDS = frozenset({
+    "rootfs-rw", "overlay-copy-up", "iptables4", "iptables6",
+    "conntrack", "bridge", "br-netfilter", "veth", "ipv6-tcp",
+    "sha256", "sha512", "sha3", "blake2b", "btrfs", "kvm",
+    "dm", "virtio-gpu", "nvme",
+})
+# A partial P2 probe has its own RUNTIME_V2_P2_END summary. Only the
+# separate 18-check endpoint can certify the entire P2 contract.
+P2_FULL_ENDPOINT = "RUNTIME_V2_P2_FULL_END pass=18 fail=0 skip=0"
+STRICT_BAD_MARKER = re.compile(
+    r"^(?:FUNCTION|MODULE)_(?:FAIL|SKIP|UNAVAILABLE)\b|"
+    r"^(?:INIT_(?:P2|RUNTIME)_PROBE|RUNTIME_V2_[A-Z0-9_]+)=(?:FAIL|SKIP|UNAVAILABLE)\b|"
+    r"^RUNTIME_V2_P2_(?:FULL_)?END\s+pass=\d+\s+fail=[1-9]\d*|"
+    r"^RUNTIME_V2_P2_(?:FULL_)?END\s+pass=\d+\s+fail=\d+\s+skip=[1-9]\d*",
+    re.M,
+)
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--profile", choices=PROFILE_ORDER, required=True)
     parser.add_argument("--log", type=Path, required=True)
+    parser.add_argument(
+        "--qemu-rc", type=int,
+        help="actual QEMU process return code; mandatory for full P2/P3",
+    )
+    parser.add_argument(
+        "--qemu-timeout", action="store_true",
+        help="report an expired QEMU timeout (never a pass)",
+    )
     parser.add_argument(
         "--manifest",
         type=Path,
@@ -46,6 +72,51 @@ def load_checks(path: Path, profile: str) -> list[tuple[str, str, str, str]]:
             selected.append((row_profile, check_id, pattern, fault_class))
     return selected
 
+def check_strict_runtime(text: str, profile: str, qemu_rc: int | None,
+                         timed_out: bool, checks: list[tuple[str, str, str, str]]) -> list[str]:
+    """Fail closed for P2/P3. The P0/P1 legacy marker check stays unchanged."""
+    failures: list[str] = []
+    if qemu_rc is None:
+        failures.append("missing-qemu-rc")
+    elif qemu_rc != 0:
+        failures.append(f"qemu-rc={qemu_rc}")
+    if timed_out:
+        failures.append("qemu-timeout")
+    if len(re.findall(
+        r"^(?:\[[ \d.]+\][ \t]+)?reboot: Power down[ \t]*$", text, re.M
+    )) != 1:
+        failures.append("powerdown-not-exactly-once")
+
+    for match in STRICT_BAD_MARKER.finditer(text):
+        failures.append("bad-marker=" + match.group(0))
+
+    p2_rows = [(check_id, pattern) for row, check_id, pattern, _ in checks
+               if row == "p2"]
+    if len(p2_rows) != 18 or {check_id for check_id, _ in p2_rows} != P2_CHECK_IDS:
+        failures.append("p2-manifest-is-not-canonical-18")
+    for check_id, pattern in p2_rows:
+        if pattern.startswith("FUNCTION_PASS "):
+            token = pattern.removeprefix("FUNCTION_PASS ")
+            # Avoid prefix spoofing (e.g. id-extra) and repeated PASS markers.
+            exact = r"^FUNCTION_PASS[ \t]+" + re.escape(token) + r"(?:[ \t].*)?$"
+        else:
+            exact = r"^" + re.escape(pattern) + r"[ \t]*$"
+        # The two RUNTIME_V2_* manifest patterns are plain literal strings.
+        count = len(re.findall(exact, text, re.M))
+        if count != 1:
+            failures.append(f"p2-{check_id}-occurrences={count}")
+
+    if len(re.findall(r"^" + re.escape(P2_FULL_ENDPOINT) + r"\s*$", text, re.M)) != 1:
+        failures.append("missing-or-duplicate-p2-full-endpoint")
+
+    if profile == "p3":
+        # The historic 145/203 oracle is RV64-only. A different ISA requires
+        # its own audited fixture and exact expected ID manifest.
+        result = classify_legacy_145(text, qemu_rc, timed_out)
+        if result["verdict"] != "PASS":
+            failures.append("p3-historical-id-or-runtime-mismatch=" + result["verdict"])
+    return failures
+
 def main() -> int:
     args = parse_args()
     if not args.log.is_file():
@@ -64,8 +135,16 @@ def main() -> int:
         )
         return 1
 
-    missing: list[tuple[str, str, str]] = []
     checks = load_checks(args.manifest, args.profile)
+    if args.profile in ("p2", "p3"):
+        failures = check_strict_runtime(
+            text, args.profile, args.qemu_rc, args.qemu_timeout, checks)
+        if failures:
+            for reason in failures:
+                print(f"LINUX_RUNTIME_V2_STRICT_FAIL reason={reason}", file=sys.stderr)
+            return 1
+
+    missing: list[tuple[str, str, str]] = []
     for _, check_id, pattern, fault_class in checks:
         if re.search(pattern, text, re.M) is None:
             missing.append((check_id, fault_class, pattern))

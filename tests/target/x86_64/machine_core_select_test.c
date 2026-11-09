@@ -1,0 +1,2799 @@
+#define _POSIX_C_SOURCE 200809L
+/* Physical x86-64 Core selection: actual Core CFG and physical opcode
+ * contracts, no printer-only machine strings or legacy FILE* instruction
+ * fallback.  Unsupported instructions must fail the whole function. */
+#include "target/x86_64/machine_core_select.h"
+#include "target/x86_64/machine_target_state.h"
+#include "target/x86_64/machine_opcode.h"
+#include "target/x86_64/asm_contract.h"
+#include "target/common/machine_builder.h"
+#include "target/common/machine_core_coverage.h"
+#include "target/common/machine_gnu_asm.h"
+#include "target/data_layout.h"
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+
+/* Use a seekable workspace stream; glibc tmpfile() hardcodes /tmp. */
+static FILE *probe_stream(void) {
+    const char *directory = getenv("TMPDIR");
+    char path[4096];
+    int length;
+    int fd;
+    FILE *stream;
+    if (directory == NULL || directory[0] == '\0') directory = ".";
+    length = snprintf(path, sizeof(path), "%s/minic-x86-core-XXXXXX",
+                      directory);
+    if (length <= 0 || (size_t)length >= sizeof(path)) return NULL;
+    fd = mkstemp(path);
+    if (fd < 0) return NULL;
+    if (unlink(path) != 0) {
+        close(fd);
+        return NULL;
+    }
+    stream = fdopen(fd, "w+");
+    if (stream == NULL) close(fd);
+    return stream;
+}
+
+static bool make_core(MinicCoreFunction *core,
+    MinicCoreTypeContext *types, bool unsupported, bool scalar) {
+    MinicCoreType type = {0};
+    MinicCoreTypeId result_type;
+    MinicCoreBlockId first, second;
+    MinicCoreTerminator term = {0};
+    minic_core_function_initialize(core);
+    core->name = malloc(sizeof("x86_core"));
+    if (core->name == NULL) return false;
+    memcpy(core->name, "x86_core", sizeof("x86_core"));
+    core->name_length = sizeof("x86_core") - 1U;
+    type.kind = scalar ? MINIC_CORE_TYPE_INTEGER : MINIC_CORE_TYPE_VOID;
+    type.has_layout = scalar;
+    type.size = scalar ? 8U : 0U;
+    type.alignment = scalar ? 8U : 0U;
+    type.value.integer.bit_width = scalar ? 64U : 0U;
+    type.value.integer.is_signed = true;
+    if (!minic_core_type_register(types, &type, &result_type) ||
+        !minic_core_function_define_signature(core, types,
+            result_type, NULL, 0U, MINIC_CALLING_CONVENTION_DEFAULT,
+            false) ||
+        !minic_core_function_add_block(core, &first) ||
+        !minic_core_function_add_block(core, &second)) return false;
+    if (unsupported) {
+        MinicCoreInstruction instruction = {0};
+        instruction.kind = MINIC_CORE_INSTRUCTION_COMPILER_BARRIER;
+        instruction.core_type_id = result_type;
+        instruction.result = MINIC_CORE_VALUE_INVALID;
+        if (!minic_core_function_append_effect_instruction(core,
+                first, &instruction)) return false;
+    }
+    if (scalar) {
+        MinicCoreInstruction instruction = {0};
+        MinicCoreValueId one, two, sum;
+        instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
+        instruction.core_type_id = result_type;
+        instruction.value.integer_value = 41;
+        if (!minic_core_function_append_value_instruction(core,
+                second, &instruction, &one)) return false;
+        instruction.value.integer_value = 1;
+        if (!minic_core_function_append_value_instruction(core,
+                second, &instruction, &two)) return false;
+        instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_ADD;
+        instruction.value.binary.left = one;
+        instruction.value.binary.right = two;
+        if (!minic_core_function_append_value_instruction(core,
+                second, &instruction, &sum)) return false;
+        term.kind = MINIC_CORE_TERMINATOR_BRANCH;
+        term.branch_target = second;
+        if (!minic_core_function_set_terminator(core, first, &term))
+            return false;
+        term.kind = MINIC_CORE_TERMINATOR_RETURN;
+        term.return_value = sum;
+    } else {
+        term.kind = MINIC_CORE_TERMINATOR_BRANCH;
+        term.branch_target = second;
+        if (!minic_core_function_set_terminator(core, first, &term))
+            return false;
+        term.kind = MINIC_CORE_TERMINATOR_BRANCH;
+        term.branch_target = first;
+    }
+    return minic_core_function_set_terminator(core, second, &term) &&
+        minic_core_function_attach_type_context(core, types) &&
+        minic_core_function_verify(core);
+}
+
+static bool scenario(bool unsupported, bool scalar) {
+    MinicCoreTypeContext types;
+    MinicCoreFunction core = {0};
+    MinicX86Frame frame = {0};
+    MinicTargetInfo target = {0};
+    MinicMachineFunction machine = {0};
+    MinicMachineGNUAsmPolicy policy = {0};
+    FILE *out = NULL;
+    char body[16000];
+    size_t value_offsets[3] = {8U, 16U, 24U};
+    size_t i, n, origins = 0U;
+    bool reachable[2] = {false, false};
+    bool okay = false;
+    const char *stage = "make-core";
+    minic_core_type_context_initialize(&types);
+    if (!make_core(&core, &types, unsupported, scalar)) goto done;
+    target.architecture = MINIC_TARGET_ARCH_X86_64;
+    target.data_layout = minic_x86_64_linux_data_layout();
+    frame.value_count = core.value_count;
+    frame.value_offsets = value_offsets;
+    frame.frame_size = 64U;
+    stage = "select";
+    if (!minic_x86_64_machine_select_core_subset(
+            &machine, &target, &core, &frame)) goto done;
+    stage = "cfg-and-origin";
+    if (!minic_core_function_mark_reachable_blocks(&core,
+            reachable, 2U)) goto done;
+    stage = "coverage";
+    if (!minic_machine_core_coverage_verify(&core,
+            reachable, &machine)) goto done;
+    stage = "cfg-and-origin";
+    if (
+        machine.block_count != 3U ||
+        !machine.blocks[0].machine_auxiliary ||
+        machine.blocks[1].machine_auxiliary ||
+        machine.blocks[2].machine_auxiliary ||
+        machine.blocks[0].has_core_block_origin ||
+        !machine.blocks[1].has_core_block_origin ||
+        machine.blocks[1].core_block_id != 0U ||
+        !machine.blocks[2].has_core_block_origin ||
+        machine.blocks[2].core_block_id != 1U ||
+        !minic_x86_64_machine_gnu_asm_policy(&target, &policy)) goto done;
+    stage = "preflight";
+    if (!minic_machine_gnu_asm_preflight(&machine, &policy)) goto done;
+    for (i = 0U; i < machine.block_count; ++i) {
+        size_t j;
+        for (j = 0U; j < machine.blocks[i].instruction_count; ++j) {
+            const MinicMachineInstruction *ins =
+                &machine.blocks[i].instructions[j];
+            if (ins->has_core_origin) {
+                if (i == 0U || ins->core_block_id != (scalar ? 1U : 0U) ||
+                    ins->core_instruction_id >= core.instruction_count)
+                    goto done;
+                ++origins;
+            }
+        }
+    }
+    if (scalar && origins < 6U) goto done;
+    if (unsupported) {
+        bool found_barrier = false;
+        for (i = 0U; i < machine.blocks[1].instruction_count; ++i) {
+            const MinicMachineInstruction *op =
+                &machine.blocks[1].instructions[i];
+            if (op->kind == MINIC_MACHINE_INSTRUCTION_COMPILER_BARRIER &&
+                op->effects == MINIC_MACHINE_EFFECT_COMPILER_BARRIER &&
+                op->has_core_origin)
+                found_barrier = true;
+        }
+        if (!found_barrier) goto done;
+    }
+    stage = "gnu-asm";
+    out = probe_stream();
+    if (out == NULL || !minic_machine_gnu_asm_emit_body(
+            out, &machine, &policy) || fflush(out) != 0 ||
+        fseek(out, 0L, SEEK_SET) != 0) goto done;
+    n = fread(body, 1U, sizeof(body) - 1U, out);
+    body[n] = '\0';
+    stage = "body-invariant";
+    okay = strstr(body, "x86_core:\n") == NULL &&
+        strstr(body, ".Lminic_mir_x86_core_1:") != NULL &&
+        strstr(body, ".Lminic_mir_x86_core_2:") != NULL &&
+        strstr(body, "jmp x86_core") == NULL &&
+        (!scalar || strstr(body, "addq") != NULL);
+done:
+    if (!okay) fprintf(stderr,
+        "X86_CORE_MIR=FAIL at %s (unsupported=%d scalar=%d)\n",
+        stage, unsupported ? 1 : 0, scalar ? 1 : 0);
+    if (out != NULL) fclose(out);
+    minic_machine_function_destroy(&machine);
+    minic_core_function_destroy(&core);
+    minic_core_type_context_destroy(&types);
+    return okay;
+}
+
+static bool scenario_parameter(void) {
+    MinicCoreTypeContext types;
+    MinicCoreFunction core = {0};
+    MinicTargetInfo target = {0};
+    MinicX86Frame frame = {0};
+    MinicMachineFunction machine = {0};
+    MinicCoreType type = {0};
+    MinicCoreTypeId integer_type;
+    MinicCoreBlockId block;
+    MinicCoreInstruction ins = {0};
+    MinicCoreTerminator term = {0};
+    MinicCoreValueId value;
+    MinicX86ArgLocation location = {0};
+    size_t offset = 8U;
+    bool okay = false;
+    bool reachable[1] = {false};
+    minic_core_type_context_initialize(&types);
+    minic_core_function_initialize(&core);
+    core.name = malloc(sizeof("x86_parameter"));
+    if (core.name == NULL) goto done;
+    memcpy(core.name, "x86_parameter", sizeof("x86_parameter"));
+    core.name_length = sizeof("x86_parameter") - 1U;
+    type.kind = MINIC_CORE_TYPE_INTEGER;
+    type.has_layout = true;
+    type.size = 8U;
+    type.alignment = 8U;
+    type.value.integer.is_signed = true;
+    type.value.integer.bit_width = 64U;
+    if (!minic_core_type_register(&types, &type, &integer_type) ||
+        !minic_core_function_define_signature(&core, &types,
+            integer_type, &integer_type, 1U,
+            MINIC_CALLING_CONVENTION_DEFAULT, false) ||
+        !minic_core_function_add_block(&core, &block)) goto done;
+    ins.kind = MINIC_CORE_INSTRUCTION_PARAMETER;
+    ins.core_type_id = integer_type;
+    ins.value.parameter_index = 0U;
+    if (!minic_core_function_append_value_instruction(&core, block,
+            &ins, &value)) goto done;
+    term.kind = MINIC_CORE_TERMINATOR_RETURN;
+    term.return_value = value;
+    if (!minic_core_function_set_terminator(&core, block, &term) ||
+        !minic_core_function_attach_type_context(&core, &types)) goto done;
+    location.kind = MINIC_X86_ARG_INTEGER;
+    location.gp_index = 0U;
+    frame.incoming_arguments.locations = &location;
+    frame.incoming_arguments.argument_count = 1U;
+    frame.incoming_arguments.calling_convention =
+        MINIC_CALLING_CONVENTION_DEFAULT;
+    frame.value_count = 1U;
+    frame.value_offsets = &offset;
+    frame.frame_size = 32U;
+    target.architecture = MINIC_TARGET_ARCH_X86_64;
+    target.data_layout = minic_x86_64_linux_data_layout();
+    if (!minic_x86_64_machine_select_core_subset(&machine,
+            &target, &core, &frame)) goto done;
+    okay = minic_core_function_mark_reachable_blocks(&core,
+        reachable, 1U) &&
+        minic_machine_core_coverage_verify(&core, reachable, &machine) &&
+        machine.block_count == 2U &&
+        machine.blocks[1].has_core_block_origin &&
+        machine.blocks[1].instruction_count >= 4U;
+done:
+    if (!okay) fprintf(stderr, "X86_CORE_MIR=FAIL parameter\n");
+    minic_machine_function_destroy(&machine);
+    minic_core_function_destroy(&core);
+    minic_core_type_context_destroy(&types);
+    return okay;
+}
+
+static bool scenario_float(void) {
+    MinicCoreTypeContext types;
+    MinicCoreFunction core = {0};
+    MinicTargetInfo target = {0};
+    MinicX86Frame frame = {0};
+    MinicMachineFunction machine = {0};
+    MinicMachineGNUAsmPolicy policy = {0};
+    MinicCoreType type = {0};
+    MinicCoreTypeId float_id;
+    MinicCoreBlockId block;
+    MinicCoreInstruction ins = {0};
+    MinicCoreTerminator term = {0};
+    MinicCoreValueId one, two, sum;
+    size_t offsets[3] = {8U, 16U, 24U};
+    FILE *output = NULL;
+    char text[8192];
+    size_t length;
+    bool okay = false;
+    bool reachable[1] = {false};
+    const char *stage = "core-setup";
+    minic_core_type_context_initialize(&types);
+    minic_core_function_initialize(&core);
+    core.name = malloc(sizeof("x86_float"));
+    if (core.name == NULL) goto done;
+    memcpy(core.name, "x86_float", sizeof("x86_float"));
+    core.name_length = sizeof("x86_float") - 1U;
+    type.kind = MINIC_CORE_TYPE_FLOAT;
+    type.has_layout = true;
+    type.size = 8U;
+    type.alignment = 8U;
+    type.value.floating.format = MINIC_CORE_FLOAT_BINARY64;
+    if (!minic_core_type_register(&types, &type, &float_id) ||
+        !minic_core_function_define_signature(&core, &types,
+            float_id, NULL, 0U, MINIC_CALLING_CONVENTION_DEFAULT, false) ||
+        !minic_core_function_add_block(&core, &block)) goto done;
+    ins.kind = MINIC_CORE_INSTRUCTION_FLOATING_CONSTANT;
+    ins.core_type_id = float_id;
+    ins.value.floating_bits = UINT64_C(0x3ff0000000000000);
+    if (!minic_core_function_append_value_instruction(&core,
+            block, &ins, &one)) goto done;
+    ins.value.floating_bits = UINT64_C(0x4000000000000000);
+    if (!minic_core_function_append_value_instruction(&core,
+            block, &ins, &two)) goto done;
+    ins.kind = MINIC_CORE_INSTRUCTION_DOUBLE_ADD;
+    ins.value.binary.left = one;
+    ins.value.binary.right = two;
+    if (!minic_core_function_append_value_instruction(&core,
+            block, &ins, &sum)) goto done;
+    term.kind = MINIC_CORE_TERMINATOR_RETURN;
+    term.return_value = sum;
+    if (!minic_core_function_set_terminator(&core, block, &term) ||
+        !minic_core_function_attach_type_context(&core, &types)) goto done;
+    target.architecture = MINIC_TARGET_ARCH_X86_64;
+    target.data_layout = minic_x86_64_linux_data_layout();
+    frame.value_offsets = offsets;
+    frame.value_count = core.value_count;
+    frame.frame_size = 64U;
+    stage = "machine-selection";
+    if (!minic_x86_64_machine_select_core_subset(&machine,
+            &target, &core, &frame) ||
+        !minic_x86_64_machine_gnu_asm_policy(&target, &policy) ||
+        !minic_core_function_mark_reachable_blocks(&core,
+            reachable, 1U) ||
+        !minic_machine_core_coverage_verify(&core,
+            reachable, &machine)) goto done;
+    stage = "machine-serialization";
+    output = probe_stream();
+    if (output == NULL ||
+        !minic_machine_gnu_asm_emit_body(output, &machine, &policy) ||
+        fflush(output) != 0 || fseek(output, 0L, SEEK_SET) != 0)
+        goto done;
+    length = fread(text, 1U, sizeof(text) - 1U, output);
+    text[length] = '\0';
+    stage = "machine-contents";
+    okay = strstr(text, "addsd") != NULL &&
+        strstr(text, "movq %xmm0") != NULL;
+done:
+    if (!okay) fprintf(stderr, "X86_CORE_MIR=FAIL float stage=%s\n", stage);
+    if (output != NULL) fclose(output);
+    minic_machine_function_destroy(&machine);
+    minic_core_function_destroy(&core);
+    minic_core_type_context_destroy(&types);
+    return okay;
+}
+
+static bool scenario_direct_call(void) {
+    MinicCoreTypeContext types;
+    MinicCoreFunction core = {0};
+    MinicTargetInfo target = {0};
+    MinicX86Frame frame = {0};
+    MinicMachineFunction machine = {0};
+    MinicCoreType type = {0};
+    MinicCoreTypeId integer_type;
+    MinicCoreBlockId block;
+    MinicCoreInstruction ins = {0};
+    MinicCoreTerminator term = {0};
+    MinicCoreValueId value;
+    size_t offset = 8U, i, calls = 0U;
+    bool okay = false;
+    bool reachable[1] = {false};
+    minic_core_type_context_initialize(&types);
+    minic_core_function_initialize(&core);
+    core.name = malloc(sizeof("x86_call"));
+    if (core.name == NULL) goto done;
+    memcpy(core.name, "x86_call", sizeof("x86_call"));
+    core.name_length = sizeof("x86_call") - 1U;
+    type.kind = MINIC_CORE_TYPE_INTEGER;
+    type.has_layout = true;
+    type.size = 8U;
+    type.alignment = 8U;
+    type.value.integer.is_signed = true;
+    type.value.integer.bit_width = 64U;
+    if (!minic_core_type_register(&types, &type, &integer_type) ||
+        !minic_core_function_define_signature(&core, &types,
+            integer_type, NULL, 0U,
+            MINIC_CALLING_CONVENTION_DEFAULT, false) ||
+        !minic_core_function_add_block(&core, &block)) goto done;
+    core.callees = calloc(1U, sizeof(*core.callees));
+    if (core.callees == NULL) goto done;
+    core.callee_count = 1U;
+    core.callee_capacity = 1U;
+    core.callees[0].name = malloc(sizeof("external_callee"));
+    if (core.callees[0].name == NULL) goto done;
+    memcpy(core.callees[0].name, "external_callee",
+        sizeof("external_callee"));
+    core.callees[0].name_length = sizeof("external_callee") - 1U;
+    core.callees[0].core_function_type_id = core.core_function_type_id;
+    ins.kind = MINIC_CORE_INSTRUCTION_CALL;
+    ins.core_type_id = integer_type;
+    ins.value.call.callee_id = 0U;
+    ins.value.call.result_object = MINIC_CORE_OBJECT_INVALID;
+    if (!minic_core_function_append_value_instruction(&core,
+            block, &ins, &value)) goto done;
+    term.kind = MINIC_CORE_TERMINATOR_RETURN;
+    term.return_value = value;
+    if (!minic_core_function_set_terminator(&core, block, &term) ||
+        !minic_core_function_attach_type_context(&core, &types)) goto done;
+    frame.value_count = 1U;
+    frame.value_offsets = &offset;
+    frame.frame_size = 32U;
+    target.architecture = MINIC_TARGET_ARCH_X86_64;
+    target.data_layout = minic_x86_64_linux_data_layout();
+    if (!minic_x86_64_machine_select_core_subset(&machine,
+            &target, &core, &frame) ||
+        !minic_core_function_mark_reachable_blocks(&core,
+            reachable, 1U) ||
+        !minic_machine_core_coverage_verify(&core,
+            reachable, &machine)) goto done;
+    for (i = 0U; i < machine.blocks[1].instruction_count; ++i) {
+        const MinicMachineInstruction *candidate =
+            &machine.blocks[1].instructions[i];
+        if (candidate->opcode == MINIC_X86_MI_CALL_SYSV_SYMBOL &&
+            candidate->has_core_origin) ++calls;
+    }
+    okay = calls == 1U;
+done:
+    if (!okay) fprintf(stderr, "X86_CORE_MIR=FAIL call\n");
+    minic_machine_function_destroy(&machine);
+    minic_core_function_destroy(&core);
+    minic_core_type_context_destroy(&types);
+    return okay;
+}
+
+/* Exercise the real call planner's sealed layout rather than admitting a
+ * second hand-rolled ABI classifier in the selector: 8 INTEGER + 9 SSE
+ * values exhaust both register banks and overflow onto three stack slots.
+ * A variadic signature additionally requires the final %al SSE count. */
+static bool scenario_planned_scalar_call(bool indirect, bool ms) {
+    MinicCoreTypeContext types;
+    MinicCoreFunction core = {0};
+    MinicTargetInfo target = {0};
+    MinicX86Frame frame = {0};
+    MinicMachineFunction machine = {0};
+    MinicMachineGNUAsmPolicy policy = {0};
+    MinicCoreType type = {0};
+    MinicCoreTypeId integer_id, float_id, signature_id, pointer_id;
+    MinicCoreTypeId parameter_types[17] = {0};
+    MinicCoreTypeId incoming_id;
+    MinicCoreBlockId block;
+    MinicCoreInstruction ins = {0};
+    MinicCoreTerminator term = {0};
+    MinicCoreValueId values[20] = {0};
+    MinicX86ArgLocation outgoing_locations[17] = {{0}};
+    MinicX86OutgoingCallSite outgoing = {0};
+    MinicX86ArgLocation incoming = {0};
+    size_t offsets[20] = {0};
+    size_t i, argc = indirect ? 2U : ms ? 5U : 17U;
+    size_t ins_id = SIZE_MAX;
+    size_t call_count = 0U, stack_writes = 0U;
+    size_t sse_moves = 0U, variadic_al = 0U, target_r11 = 0U;
+    FILE *output = NULL;
+    char assembly[18000];
+    size_t assembly_length;
+    bool reachable[1] = {false};
+    bool okay = false;
+    const char *stage = "initialize";
+    minic_core_type_context_initialize(&types);
+    minic_core_function_initialize(&core);
+    core.name = malloc(sizeof("x86_planned_call"));
+    if (core.name == NULL) goto done;
+    memcpy(core.name, "x86_planned_call", sizeof("x86_planned_call"));
+    core.name_length = sizeof("x86_planned_call") - 1U;
+    type.kind = MINIC_CORE_TYPE_INTEGER;
+    type.has_layout = true;
+    type.size = 8U;
+    type.alignment = 8U;
+    type.value.integer.is_signed = true;
+    type.value.integer.bit_width = 64U;
+    if (!minic_core_type_register(&types, &type, &integer_id)) goto done;
+    type = (MinicCoreType){0};
+    type.kind = MINIC_CORE_TYPE_FLOAT;
+    type.has_layout = true;
+    type.size = 8U;
+    type.alignment = 8U;
+    type.value.floating.format = MINIC_CORE_FLOAT_BINARY64;
+    if (!minic_core_type_register(&types, &type, &float_id)) goto done;
+    for (i = 0U; i < 17U; ++i)
+        parameter_types[i] = i < 8U ? integer_id : float_id;
+    if (indirect) parameter_types[1] = float_id;
+    if (ms) {
+        parameter_types[1] = float_id;
+        parameter_types[3] = float_id;
+    }
+    type = (MinicCoreType){0};
+    type.kind = MINIC_CORE_TYPE_FUNCTION;
+    type.value.function.return_type = integer_id;
+    type.value.function.parameters = parameter_types;
+    type.value.function.parameter_count = ms ? 5U : 2U;
+    type.value.function.is_variadic = !indirect && !ms;
+    type.value.function.calling_convention =
+        ms ? MINIC_CALLING_CONVENTION_MS_X64 :
+            MINIC_CALLING_CONVENTION_DEFAULT;
+    if (!minic_core_type_register(&types, &type, &signature_id)) goto done;
+    type = (MinicCoreType){0};
+    type.kind = MINIC_CORE_TYPE_POINTER;
+    type.has_layout = true;
+    type.size = 8U;
+    type.alignment = 8U;
+    type.value.pointer.pointee = signature_id;
+    if (!minic_core_type_register(&types, &type, &pointer_id)) goto done;
+    incoming_id = pointer_id;
+    if (!minic_core_function_define_signature(&core, &types,
+            integer_id, indirect ? &incoming_id : NULL,
+            indirect ? 1U : 0U, MINIC_CALLING_CONVENTION_DEFAULT,
+            false) || !minic_core_function_add_block(&core, &block))
+        goto done;
+    core.call_arguments = calloc(argc, sizeof(*core.call_arguments));
+    if (core.call_arguments == NULL) goto done;
+    core.call_argument_count = argc;
+    core.call_argument_capacity = argc;
+    if (indirect) {
+        core.call_signatures = calloc(1U, sizeof(*core.call_signatures));
+        if (core.call_signatures == NULL) goto done;
+        core.call_signature_count = 1U;
+        core.call_signature_capacity = 1U;
+        core.call_signatures[0].core_function_type_id = signature_id;
+        ins.kind = MINIC_CORE_INSTRUCTION_PARAMETER;
+        ins.core_type_id = pointer_id;
+        ins.value.parameter_index = 0U;
+        if (!minic_core_function_append_value_instruction(&core,
+                block, &ins, &values[0])) goto done;
+    } else {
+        core.callees = calloc(1U, sizeof(*core.callees));
+        if (core.callees == NULL) goto done;
+        core.callee_count = 1U;
+        core.callee_capacity = 1U;
+        core.callees[0].name = malloc(sizeof("planned_callee"));
+        if (core.callees[0].name == NULL) goto done;
+        memcpy(core.callees[0].name, "planned_callee",
+            sizeof("planned_callee"));
+        core.callees[0].name_length = sizeof("planned_callee") - 1U;
+        core.callees[0].core_function_type_id = signature_id;
+    }
+    for (i = 0U; i < argc; ++i) {
+        const size_t index = i + (indirect ? 1U : 0U);
+        ins = (MinicCoreInstruction){0};
+        ins.core_type_id = ms ?
+            (i == 1U || i == 3U ? float_id : integer_id) :
+            i < 8U ? integer_id : float_id;
+        if (indirect && i == 1U) ins.core_type_id = float_id;
+        ins.kind = ins.core_type_id == integer_id ?
+            MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT :
+            MINIC_CORE_INSTRUCTION_FLOATING_CONSTANT;
+        if (ins.kind == MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT)
+            ins.value.integer_value = (int64_t)(i + 10U);
+        else ins.value.floating_bits = UINT64_C(0x3ff0000000000000);
+        if (!minic_core_function_append_value_instruction(&core,
+                block, &ins, &values[index])) goto done;
+        core.call_arguments[i].kind = MINIC_CORE_CALL_ARGUMENT_VALUE;
+        core.call_arguments[i].value.value_id = values[index];
+    }
+    ins = (MinicCoreInstruction){0};
+    ins.core_type_id = integer_id;
+    if (indirect) {
+        ins.kind = MINIC_CORE_INSTRUCTION_INDIRECT_CALL;
+        ins.value.indirect_call.callee = values[0];
+        ins.value.indirect_call.signature_id = 0U;
+        ins.value.indirect_call.argument_begin = 0U;
+        ins.value.indirect_call.argument_count = argc;
+        ins.value.indirect_call.result_object = MINIC_CORE_OBJECT_INVALID;
+    } else {
+        ins.kind = MINIC_CORE_INSTRUCTION_CALL;
+        ins.value.call.callee_id = 0U;
+        ins.value.call.argument_begin = 0U;
+        ins.value.call.argument_count = argc;
+        ins.value.call.result_object = MINIC_CORE_OBJECT_INVALID;
+    }
+    ins_id = core.instruction_count;
+    if (!minic_core_function_append_value_instruction(&core,
+            block, &ins, &values[argc + (indirect ? 1U : 0U)])) goto done;
+    term.kind = MINIC_CORE_TERMINATOR_RETURN;
+    term.return_value = values[argc + (indirect ? 1U : 0U)];
+    if (!minic_core_function_set_terminator(&core, block, &term) ||
+        !minic_core_function_attach_type_context(&core, &types) ||
+        !minic_core_function_verify(&core)) goto done;
+    stage = "frame";
+    for (i = 0U; i < 20U; ++i) offsets[i] = (i + 1U) * 8U;
+    frame.value_offsets = offsets;
+    frame.value_count = core.value_count;
+    frame.frame_size = 256U;
+    if (indirect) {
+        incoming.kind = MINIC_X86_ARG_INTEGER;
+        incoming.gp_index = 0U;
+        frame.incoming_arguments.locations = &incoming;
+        frame.incoming_arguments.argument_count = 1U;
+        frame.incoming_arguments.calling_convention =
+            MINIC_CALLING_CONVENTION_DEFAULT;
+    }
+    for (i = 0U; i < argc; ++i) {
+        MinicX86ArgLocation *loc = &outgoing_locations[i];
+        if (indirect) {
+            loc->kind = i == 0U ? MINIC_X86_ARG_INTEGER : MINIC_X86_ARG_SSE;
+            loc->gp_index = 0U;
+            loc->fp_index = 0U;
+        } else if (ms) {
+            loc->kind = i == 1U || i == 3U ?
+                MINIC_X86_ARG_SSE : MINIC_X86_ARG_INTEGER;
+            loc->gp_index = i;
+            loc->fp_index = i;
+            if (i >= 4U) {
+                loc->on_stack = true;
+                loc->stack_index = i;
+            }
+        } else if (i < 8U) {
+            loc->kind = MINIC_X86_ARG_INTEGER;
+            loc->gp_index = i;
+            if (i >= 6U) {
+                loc->on_stack = true;
+                loc->stack_index = i - 6U;
+            }
+        } else {
+            loc->kind = MINIC_X86_ARG_SSE;
+            loc->fp_index = i - 8U;
+            if (i == 16U) {
+                loc->on_stack = true;
+                loc->stack_index = 2U;
+            }
+        }
+    }
+    outgoing.instruction_id = ins_id;
+    outgoing.plan.locations = outgoing_locations;
+    outgoing.plan.argument_count = argc;
+    outgoing.plan.stack_bytes = indirect ? 0U : ms ? 48U : 32U;
+    outgoing.plan.end.fp_used = indirect ? 1U : ms ? 2U : 8U;
+    outgoing.plan.calling_convention = ms ?
+        MINIC_CALLING_CONVENTION_MS_X64 :
+        MINIC_CALLING_CONVENTION_DEFAULT;
+    outgoing.plan.is_variadic = !indirect && !ms;
+    frame.outgoing_call_plans.sites = &outgoing;
+    frame.outgoing_call_plans.count = 1U;
+    target.architecture = MINIC_TARGET_ARCH_X86_64;
+    target.data_layout = minic_x86_64_linux_data_layout();
+    if (ms) target.call_lowering_capabilities =
+        MINIC_TARGET_CALL_MS_X64_FIXED_SCALAR;
+    stage = "select";
+    if (!minic_x86_64_machine_select_core_subset(&machine,
+            &target, &core, &frame) ||
+        !minic_core_function_mark_reachable_blocks(&core,
+            reachable, 1U) ||
+        !minic_machine_core_coverage_verify(&core,
+            reachable, &machine)) goto done;
+    for (i = 0U; i < machine.blocks[1].instruction_count; ++i) {
+        const MinicMachineInstruction *op =
+            &machine.blocks[1].instructions[i];
+        if (op->opcode == (indirect ? MINIC_X86_MI_CALL_SYSV_R :
+                ms ? MINIC_X86_MI_CALL_MS_SYMBOL :
+                    MINIC_X86_MI_CALL_SYSV_SYMBOL)) ++call_count;
+        if (op->opcode == MINIC_X86_MI_MOV64_RA) ++stack_writes;
+        if (op->opcode == MINIC_X86_MI_MOVQ_GPR_XMM) ++sse_moves;
+        if (op->opcode == MINIC_X86_MI_MOV8_IR) ++variadic_al;
+        if (indirect && op->opcode == MINIC_X86_MI_MOV64_FRBP_R &&
+            op->operand_count == 2U &&
+            op->operands[1].kind == MINIC_MACHINE_OPERAND_REGISTER &&
+            op->operands[1].value.physical.reg.number == MINIC_X86_REG_R11)
+            ++target_r11;
+    }
+    stage = "machine-ops";
+    okay = call_count == 1U &&
+        (indirect ? (stack_writes == 0U && sse_moves >= 1U &&
+            target_r11 == 1U && variadic_al == 0U) :
+        ms ? (stack_writes == 1U && sse_moves >= 2U &&
+            variadic_al == 0U) :
+            (stack_writes == 3U && sse_moves >= 8U && variadic_al == 1U));
+    if (!okay) goto done;
+    stage = "gnu-assembly";
+    output = probe_stream();
+    if (output == NULL ||
+        !minic_x86_64_machine_gnu_asm_policy(&target, &policy) ||
+        !minic_machine_gnu_asm_emit_body(output, &machine, &policy) ||
+        fflush(output) != 0 || fseek(output, 0L, SEEK_SET) != 0) {
+        okay = false;
+        goto done;
+    }
+    assembly_length = fread(assembly, 1U, sizeof(assembly) - 1U, output);
+    assembly[assembly_length] = '\0';
+    okay = indirect ? strstr(assembly, "call *%r11") != NULL :
+        strstr(assembly, "call planned_callee@PLT") != NULL;
+    if (okay && ms)
+        okay = strstr(assembly, "subq $48, %rsp") != NULL &&
+            strstr(assembly, "32(%rsp)") != NULL &&
+            strstr(assembly, "addq $48, %rsp") != NULL;
+    if (okay && !indirect && !ms)
+        okay = strstr(assembly, "subq $32, %rsp") != NULL &&
+            strstr(assembly, "movb $8, %al") != NULL &&
+            strstr(assembly, "16(%rsp)") != NULL &&
+            strstr(assembly, "addq $32, %rsp") != NULL;
+    if (okay) {
+        MinicMachineFunction rejected = {0};
+        const size_t saved_bytes = outgoing.plan.stack_bytes;
+        const size_t saved_count = frame.outgoing_call_plans.count;
+        stage = "reject-forged-abi-plan";
+        outgoing.plan.stack_bytes = 24U;
+        okay = !minic_x86_64_machine_select_core_subset(&rejected,
+            &target, &core, &frame);
+        minic_machine_function_destroy(&rejected);
+        outgoing.plan.stack_bytes = saved_bytes;
+        frame.outgoing_call_plans.count = 0U;
+        if (okay) {
+            rejected = (MinicMachineFunction){0};
+            okay = !minic_x86_64_machine_select_core_subset(&rejected,
+                &target, &core, &frame);
+            minic_machine_function_destroy(&rejected);
+        }
+        frame.outgoing_call_plans.count = saved_count;
+    }
+done:
+    if (!okay) fprintf(stderr,
+        "X86_CORE_MIR=FAIL planned-call indirect=%d ms=%d stage=%s\n",
+        indirect ? 1 : 0, ms ? 1 : 0, stage);
+    if (output != NULL) fclose(output);
+    minic_machine_function_destroy(&machine);
+    minic_core_function_destroy(&core);
+    minic_core_type_context_destroy(&types);
+    return okay;
+}
+
+/* Record transfer comes from the old x86 emitter's exact byte transport.
+ * Its generic Core shape and the ABI object sizes are not reclassified by
+ * MachineIR. Check both volatile sides, empty record, REP MOVSB, and x86's
+ * special overlapping vector copy separately. */
+static bool scenario_record_transfer(size_t bytes, unsigned int mode,
+    bool volatile_source, bool volatile_destination) {
+    MinicCoreTypeContext types;
+    MinicCoreFunction core = {0};
+    MinicCoreType t = {0};
+    MinicCoreTypeId void_type, byte_type, record_type, pointer_type;
+    MinicCoreTypeId parameters[2];
+    MinicCoreBlockId block;
+    MinicCoreInstruction ins = {0};
+    MinicCoreTerminator term = {0};
+    MinicCoreValueId first, second;
+    MinicX86Frame frame = {0};
+    MinicX86ArgLocation locations[2] = {{0}};
+    MinicTargetInfo target = {0};
+    MinicMachineFunction machine = {0};
+    MinicMachineGNUAsmPolicy policy = {0};
+    MinicCoreObjectStorage storage = {0};
+    size_t offsets[2] = {8U, 16U};
+    size_t object_offset = 320U;
+    bool reachable[1] = {false};
+    FILE *output = NULL;
+    char assembly[32768];
+    size_t output_bytes;
+    size_t reads = 0U, writes = 0U, volatile_reads = 0U;
+    size_t volatile_writes = 0U, rep = 0U, i;
+    bool okay = false;
+    const char *stage = "setup";
+    minic_core_type_context_initialize(&types);
+    minic_core_function_initialize(&core);
+    core.name = malloc(sizeof("x86_record_transfer"));
+    if (core.name == NULL) goto done;
+    memcpy(core.name, "x86_record_transfer", sizeof("x86_record_transfer"));
+    core.name_length = sizeof("x86_record_transfer") - 1U;
+    t.kind = MINIC_CORE_TYPE_VOID;
+    if (!minic_core_type_register(&types, &t, &void_type)) goto done;
+    t = (MinicCoreType){0};
+    t.kind = MINIC_CORE_TYPE_INTEGER;
+    t.has_layout = true;
+    t.size = 1U;
+    t.alignment = 1U;
+    t.value.integer.bit_width = 8U;
+    if (!minic_core_type_register(&types, &t, &byte_type)) goto done;
+    t = (MinicCoreType){0};
+    t.kind = mode == 2U ? MINIC_CORE_TYPE_VECTOR : MINIC_CORE_TYPE_RECORD;
+    t.has_layout = true;
+    t.size = bytes;
+    t.alignment = mode == 2U ? 16U : 1U;
+    if (mode == 2U) {
+        t.value.vector.element = byte_type;
+        t.value.vector.element_count = 16U;
+        t.value.vector.representation = MINIC_CORE_VECTOR_STORAGE_ONLY;
+    } else t.value.record.is_complete = true;
+    if (!minic_core_type_register(&types, &t, &record_type)) goto done;
+    t = (MinicCoreType){0};
+    t.kind = MINIC_CORE_TYPE_POINTER;
+    t.has_layout = true;
+    t.size = 8U;
+    t.alignment = 8U;
+    t.value.pointer.pointee = record_type;
+    if (!minic_core_type_register(&types, &t, &pointer_type)) goto done;
+    parameters[0] = pointer_type;
+    parameters[1] = pointer_type;
+    if (!minic_core_function_define_signature(&core, &types, void_type,
+            parameters, 2U, MINIC_CALLING_CONVENTION_DEFAULT, false) ||
+        !minic_core_function_add_block(&core, &block)) goto done;
+    ins.kind = MINIC_CORE_INSTRUCTION_PARAMETER;
+    ins.core_type_id = pointer_type;
+    ins.value.parameter_index = 0U;
+    if (!minic_core_function_append_value_instruction(&core,
+            block, &ins, &first)) goto done;
+    ins.value.parameter_index = 1U;
+    if (!minic_core_function_append_value_instruction(&core,
+            block, &ins, &second)) goto done;
+    ins = (MinicCoreInstruction){0};
+    ins.core_type_id = record_type;
+    if (mode == 0U) {
+        ins.kind = MINIC_CORE_INSTRUCTION_RECORD_COPY;
+        ins.value.record_copy.source_address = first;
+        ins.value.record_copy.destination_address = second;
+        ins.value.record_copy.source_volatile = volatile_source;
+        ins.value.record_copy.destination_volatile = volatile_destination;
+    } else if (mode == 1U) {
+        ins.kind = MINIC_CORE_INSTRUCTION_RECORD_LOAD;
+        ins.value.record_load.source_address = first;
+        ins.value.record_load.destination_object = 0U;
+        ins.value.record_load.is_volatile = volatile_source;
+        core.objects = calloc(1U, sizeof(*core.objects));
+        if (core.objects == NULL) goto done;
+        core.objects[0].core_type_id = record_type;
+        core.object_count = core.object_capacity = 1U;
+    } else {
+        ins.kind = MINIC_CORE_INSTRUCTION_VECTOR_STORAGE_COPY;
+        ins.value.vector_storage_copy.source_address = first;
+        ins.value.vector_storage_copy.destination_address = second;
+        ins.value.vector_storage_copy.source_volatile = volatile_source;
+        ins.value.vector_storage_copy.destination_volatile =
+            volatile_destination;
+    }
+    if (!minic_core_function_append_effect_instruction(&core,
+            block, &ins)) {
+        /* Existing Core admission already rejects volatile storage-only
+         * vector snapshots: it must never reach x86 machine selection. */
+        if (mode == 2U && (volatile_source || volatile_destination))
+            okay = true;
+        goto done;
+    }
+    term.kind = MINIC_CORE_TERMINATOR_RETURN;
+    term.return_value = MINIC_CORE_VALUE_INVALID;
+    if (!minic_core_function_set_terminator(&core, block, &term) ||
+        !minic_core_function_attach_type_context(&core, &types)) goto done;
+    target.architecture = MINIC_TARGET_ARCH_X86_64;
+    target.data_layout = minic_x86_64_linux_data_layout();
+    frame.value_offsets = offsets;
+    frame.value_count = core.value_count;
+    frame.object_count = core.object_count;
+    frame.object_offsets = core.object_count != 0U ? &object_offset : NULL;
+    frame.frame_size = 512U;
+    if (core.object_count != 0U) {
+        storage.extent = bytes;
+        storage.alignment = 1U;
+        frame.object_storage.objects = &storage;
+        frame.object_storage.count = 1U;
+    }
+    for (i = 0U; i < 2U; ++i) {
+        locations[i].kind = MINIC_X86_ARG_INTEGER;
+        locations[i].gp_index = i;
+    }
+    frame.incoming_arguments.locations = locations;
+    frame.incoming_arguments.argument_count = 2U;
+    frame.incoming_arguments.calling_convention =
+        MINIC_CALLING_CONVENTION_DEFAULT;
+    stage = "select";
+    if (mode == 2U && (volatile_source || volatile_destination)) {
+        okay = !minic_x86_64_machine_select_core_subset(
+            &machine, &target, &core, &frame);
+        goto done;
+    }
+    /* Empty GNU records are genuine Core values; only their memory transfer
+     * is empty. Still verify all argument values, origins and machine effects
+     * instead of expecting the selector to reject a legal C operation. */
+    if (!minic_x86_64_machine_select_core_subset(
+            &machine, &target, &core, &frame) ||
+        !minic_core_function_mark_reachable_blocks(&core,
+            reachable, 1U) ||
+        !minic_machine_core_coverage_verify(&core,
+            reachable, &machine) ||
+        !minic_x86_64_machine_gnu_asm_policy(&target, &policy)) goto done;
+    stage = "machine-effects";
+    for (i = 0U; i < machine.blocks[1].instruction_count; ++i) {
+        const MinicMachineInstruction *op =
+            &machine.blocks[1].instructions[i];
+        /* Parameter materialization may legitimately access its own frame.
+         * The *empty record instruction* itself must not perform any R/W. */
+        if (bytes == 0U && op->has_core_origin &&
+            op->core_instruction_id == core.instruction_count - 1U &&
+            (op->effects & (MINIC_MACHINE_EFFECT_MEMORY_READ |
+                            MINIC_MACHINE_EFFECT_MEMORY_WRITE)) != 0U)
+            goto done;
+        if (op->opcode == MINIC_X86_MI_REP_MOVSB) ++rep;
+        if (op->effects & MINIC_MACHINE_EFFECT_MEMORY_READ) {
+            ++reads;
+            if (op->effects & MINIC_MACHINE_EFFECT_VOLATILE)
+                ++volatile_reads;
+        }
+        if (op->effects & MINIC_MACHINE_EFFECT_MEMORY_WRITE) {
+            ++writes;
+            if (op->effects & MINIC_MACHINE_EFFECT_VOLATILE)
+                ++volatile_writes;
+        }
+    }
+    if (bytes == 0U && rep != 0U) goto done;
+    if (bytes != 0U && (reads == 0U || writes == 0U ||
+         (bytes > 128U) != (rep == 1U) ||
+         (volatile_source && volatile_reads == 0U) ||
+         (volatile_destination && volatile_writes == 0U))) goto done;
+    stage = "gnu-assembly";
+    output = probe_stream();
+    if (output == NULL ||
+        !minic_machine_gnu_asm_emit_body(output, &machine, &policy) ||
+        fflush(output) != 0 || fseek(output, 0L, SEEK_SET) != 0)
+        goto done;
+    output_bytes = fread(assembly, 1U, sizeof(assembly) - 1U, output);
+    assembly[output_bytes] = '\0';
+    okay = bytes == 0U ? rep == 0U : mode == 2U ?
+        strstr(assembly, "movq 8(%r11), %rdx") != NULL :
+        bytes > 128U ? strstr(assembly, "rep movsb") != NULL :
+        strstr(assembly, "movzbq") != NULL;
+done:
+    if (!okay) fprintf(stderr,
+        "X86_CORE_MIR=FAIL record bytes=%zu mode=%u vs=%d vd=%d stage=%s\n",
+        bytes, mode, volatile_source ? 1 : 0,
+        volatile_destination ? 1 : 0, stage);
+    if (output != NULL) fclose(output);
+    minic_machine_function_destroy(&machine);
+    minic_core_function_destroy(&core);
+    minic_core_type_context_destroy(&types);
+    return okay;
+}
+
+/* Four existing SysV record-parameter classes from call_plan.c. Typed
+ * selection must read their sealed incoming positions and preserve odd
+ * payload tails and stack-memory structs. GNU zero-sized records have a
+ * genuine empty transport (no physical parameter copy), not a failure. */
+static bool scenario_parameter_object(size_t bytes,
+    MinicX86ArgClass kind, bool stack, bool forge) {
+    MinicCoreTypeContext types;
+    MinicCoreFunction core = {0};
+    MinicCoreType type = {0};
+    MinicCoreTypeId void_id, record_id;
+    MinicCoreBlockId block;
+    MinicCoreInstruction ins = {0};
+    MinicCoreTerminator term = {0};
+    MinicCoreObjectStorage storage = {0};
+    MinicX86ArgLocation location = {0};
+    MinicX86Frame frame = {0};
+    MinicTargetInfo target = {0};
+    MinicMachineFunction machine = {0};
+    MinicMachineGNUAsmPolicy policy = {0};
+    size_t unused_offset = 8U, object_offset = 320U;
+    bool reachable[1] = {false};
+    FILE *output = NULL;
+    char assembly[22000];
+    size_t length, writes = 0U, rep = 0U, rcx_preserved = 0U, i;
+    bool okay = false;
+    const char *stage = "setup";
+    minic_core_type_context_initialize(&types);
+    minic_core_function_initialize(&core);
+    core.name = malloc(sizeof("x86_parameter_record"));
+    if (core.name == NULL) goto done;
+    memcpy(core.name, "x86_parameter_record",
+        sizeof("x86_parameter_record"));
+    core.name_length = sizeof("x86_parameter_record") - 1U;
+    type.kind = MINIC_CORE_TYPE_VOID;
+    if (!minic_core_type_register(&types, &type, &void_id)) goto done;
+    type = (MinicCoreType){0};
+    type.kind = MINIC_CORE_TYPE_RECORD;
+    type.has_layout = true;
+    type.size = bytes;
+    type.alignment = 1U;
+    type.value.record.is_complete = true;
+    if (!minic_core_type_register(&types, &type, &record_id) ||
+        !minic_core_function_define_signature(&core, &types,
+            void_id, &record_id, 1U,
+            MINIC_CALLING_CONVENTION_DEFAULT, false) ||
+        !minic_core_function_add_block(&core, &block)) goto done;
+    core.objects = calloc(1U, sizeof(*core.objects));
+    if (core.objects == NULL) goto done;
+    core.objects[0].core_type_id = record_id;
+    core.object_count = core.object_capacity = 1U;
+    ins.kind = MINIC_CORE_INSTRUCTION_PARAMETER_OBJECT;
+    ins.core_type_id = void_id;
+    ins.value.parameter_object.parameter_index = 0U;
+    ins.value.parameter_object.object_id = 0U;
+    if (!minic_core_function_append_effect_instruction(&core,
+            block, &ins)) goto done;
+    term.kind = MINIC_CORE_TERMINATOR_RETURN;
+    term.return_value = MINIC_CORE_VALUE_INVALID;
+    if (!minic_core_function_set_terminator(&core, block, &term) ||
+        !minic_core_function_attach_type_context(&core, &types)) goto done;
+    target.architecture = MINIC_TARGET_ARCH_X86_64;
+    target.data_layout = minic_x86_64_linux_data_layout();
+    frame.value_offsets = &unused_offset;
+    frame.value_count = core.value_count;
+    frame.object_count = 1U;
+    frame.object_offsets = &object_offset;
+    frame.frame_size = 512U;
+    storage.extent = bytes;
+    storage.alignment = 1U;
+    frame.object_storage.objects = &storage;
+    frame.object_storage.count = 1U;
+    location.kind = kind;
+    location.record_bytes = forge ? bytes + 1U : bytes;
+    location.on_stack = stack;
+    location.gp_index = 0U;
+    location.stack_index = 0U;
+    frame.incoming_arguments.locations = &location;
+    frame.incoming_arguments.argument_count = 1U;
+    frame.incoming_arguments.calling_convention =
+        MINIC_CALLING_CONVENTION_DEFAULT;
+    stage = "select";
+    if (forge) {
+        okay = !minic_x86_64_machine_select_core_subset(
+            &machine, &target, &core, &frame);
+        goto done;
+    }
+    if (kind == MINIC_X86_ARG_RECORD_EMPTY) {
+        okay = bytes == 0U &&
+            minic_x86_64_machine_select_core_subset(
+                &machine, &target, &core, &frame) &&
+            minic_core_function_mark_reachable_blocks(&core,
+                reachable, 1U) &&
+            minic_machine_core_coverage_verify(&core,reachable,&machine);
+        goto done;
+    }
+    if (!minic_x86_64_machine_select_core_subset(
+            &machine, &target, &core, &frame) ||
+        !minic_core_function_mark_reachable_blocks(&core,
+            reachable, 1U) ||
+        !minic_machine_core_coverage_verify(&core,
+            reachable, &machine) ||
+        !minic_x86_64_machine_gnu_asm_policy(&target, &policy)) goto done;
+    stage = "machine-effects";
+    for (i = 0U; i < machine.blocks[1].instruction_count; ++i) {
+        const MinicMachineInstruction *op =
+            &machine.blocks[1].instructions[i];
+        if (op->effects & MINIC_MACHINE_EFFECT_MEMORY_WRITE) ++writes;
+        if (op->opcode == MINIC_X86_MI_REP_MOVSB) ++rep;
+        if (op->opcode == MINIC_X86_MI_POP64_R &&
+            op->operands[0].value.physical.reg.number ==
+                MINIC_X86_REG_RCX) ++rcx_preserved;
+    }
+    if (writes == 0U || (kind == MINIC_X86_ARG_RECORD_MEMORY &&
+        bytes > 128U && rep != 1U) ||
+        ((bytes == 7U || bytes == 15U) && rcx_preserved == 0U))
+        goto done;
+    stage = "gnu-asm";
+    output = probe_stream();
+    if (output == NULL ||
+        !minic_machine_gnu_asm_emit_body(output, &machine, &policy) ||
+        fflush(output) != 0 || fseek(output, 0L, SEEK_SET) != 0)
+        goto done;
+    length = fread(assembly, 1U, sizeof(assembly) - 1U, output);
+    assembly[length] = '\0';
+    okay = kind == MINIC_X86_ARG_RECORD_MEMORY ?
+        strstr(assembly, "rep movsb") != NULL :
+        strstr(assembly, "movb %al, 6(%r10)") != NULL ||
+        strstr(assembly, "movb %al, 14(%r10)") != NULL;
+done:
+    if (!okay) fprintf(stderr,
+        "X86_CORE_MIR=FAIL parameter-object bytes=%zu class=%d stack=%d "
+        "forge=%d stage=%s\n", bytes, (int)kind, stack ? 1 : 0,
+        forge ? 1 : 0, stage);
+    if (output != NULL) fclose(output);
+    minic_machine_function_destroy(&machine);
+    minic_core_function_destroy(&core);
+    minic_core_type_context_destroy(&types);
+    return okay;
+}
+
+/* The symbol facts come from a finalized, borrowed ModuleIR view exactly as
+ * the old x86 ELF emitter uses them. No source declaration or late x86 PIC
+ * reclassifier is involved. In particular, hidden undefined weak retains a
+ * GOT relocation and non-PIC external objects remain PC-relative. */
+static bool scenario_symbol_address(bool function_symbol, bool pic,
+    bool hidden, bool weak, bool head_rejected) {
+    static const char global_name[] = "module_data_symbol";
+    static const char function_name[] = "module_function_symbol";
+    MinicCoreTypeContext types;
+    MinicCoreFunction core = {0};
+    MinicCoreModule module = {0};
+    MinicCoreModuleGlobal module_global = {0};
+    MinicCoreModuleFunctionSymbol module_function = {0};
+    MinicCoreType type = {0};
+    MinicCoreTypeId integer_id, signature_id = MINIC_CORE_TYPE_INVALID;
+    MinicCoreTypeId pointer_id, pointee_id;
+    MinicCoreBlockId block;
+    MinicCoreInstruction ins = {0};
+    MinicCoreTerminator term = {0};
+    MinicCoreValueId value;
+    MinicX86Frame frame = {0};
+    MinicTargetInfo target = {0};
+    MinicMachineFunction machine = {0};
+    MinicMachineGNUAsmPolicy policy = {0};
+    size_t value_offset = 8U, i, selected = 0U;
+    bool reachable[1] = {false};
+    bool direct_head[1] = {false};
+    FILE *output = NULL;
+    char assembly[8192];
+    size_t length;
+    bool okay = false;
+    const char *stage = "types";
+    minic_core_type_context_initialize(&types);
+    minic_core_function_initialize(&core);
+    core.name = malloc(sizeof("x86_module_symbol"));
+    if (core.name == NULL) goto done;
+    memcpy(core.name, "x86_module_symbol", sizeof("x86_module_symbol"));
+    core.name_length = sizeof("x86_module_symbol") - 1U;
+    type.kind = MINIC_CORE_TYPE_INTEGER;
+    type.has_layout = true;
+    type.size = 8U;
+    type.alignment = 8U;
+    type.value.integer.bit_width = 64U;
+    if (!minic_core_type_register(&types, &type, &integer_id)) goto done;
+    pointee_id = integer_id;
+    if (function_symbol) {
+        type = (MinicCoreType){0};
+        type.kind = MINIC_CORE_TYPE_FUNCTION;
+        type.value.function.return_type = integer_id;
+        type.value.function.calling_convention =
+            MINIC_CALLING_CONVENTION_DEFAULT;
+        if (!minic_core_type_register(&types, &type,
+                &signature_id)) goto done;
+        pointee_id = signature_id;
+    }
+    type = (MinicCoreType){0};
+    type.kind = MINIC_CORE_TYPE_POINTER;
+    type.has_layout = true;
+    type.size = 8U;
+    type.alignment = 8U;
+    type.value.pointer.pointee = pointee_id;
+    if (!minic_core_type_register(&types, &type, &pointer_id) ||
+        !minic_core_function_define_signature(&core, &types, pointer_id,
+            NULL, 0U, MINIC_CALLING_CONVENTION_DEFAULT, false) ||
+        !minic_core_function_add_block(&core, &block)) goto done;
+    if (function_symbol) {
+        core.function_symbols = calloc(1U,
+            sizeof(*core.function_symbols));
+        if (core.function_symbols == NULL) goto done;
+        core.function_symbols[0].name = malloc(sizeof(function_name));
+        if (core.function_symbols[0].name == NULL) goto done;
+        memcpy(core.function_symbols[0].name,
+            function_name, sizeof(function_name));
+        core.function_symbols[0].name_length = sizeof(function_name) - 1U;
+        core.function_symbol_count = core.function_symbol_capacity = 1U;
+        module_function.name = core.function_symbols[0].name;
+        module_function.is_defined = !weak;
+        module_function.is_referenced = true;
+        module_function.is_weak = weak;
+        module_function.visibility = hidden ?
+            MINIC_CORE_MODULE_VISIBILITY_HIDDEN :
+            MINIC_CORE_MODULE_VISIBILITY_DEFAULT;
+        module_function.alias_target_index = SIZE_MAX;
+        module.function_symbols = &module_function;
+        module.function_count = 1U;
+        ins.kind = MINIC_CORE_INSTRUCTION_FUNCTION_ADDRESS;
+        ins.value.function_symbol_id = 0U;
+    } else {
+        core.globals = calloc(1U, sizeof(*core.globals));
+        if (core.globals == NULL) goto done;
+        core.globals[0].name = malloc(sizeof(global_name));
+        if (core.globals[0].name == NULL) goto done;
+        memcpy(core.globals[0].name, global_name, sizeof(global_name));
+        core.globals[0].name_length = sizeof(global_name) - 1U;
+        core.globals[0].core_type_id = integer_id;
+        core.global_count = core.global_capacity = 1U;
+        module_global.name = core.globals[0].name;
+        module_global.definition_kind = weak ?
+            MINIC_CORE_MODULE_DEFINITION_DECLARATION :
+            MINIC_CORE_MODULE_DEFINITION_REGULAR;
+        module_global.emittable = !weak;
+        module_global.is_weak = weak;
+        module_global.visibility = hidden ?
+            MINIC_CORE_MODULE_VISIBILITY_HIDDEN :
+            MINIC_CORE_MODULE_VISIBILITY_DEFAULT;
+        module_global.alias_target_index = SIZE_MAX;
+        module.globals = &module_global;
+        module.global_count = 1U;
+        ins.kind = MINIC_CORE_INSTRUCTION_GLOBAL_ADDRESS;
+        ins.value.global_id = 0U;
+    }
+    ins.core_type_id = pointer_id;
+    if (!minic_core_function_append_value_instruction(&core,
+            block, &ins, &value)) goto done;
+    term.kind = MINIC_CORE_TERMINATOR_RETURN;
+    term.return_value = value;
+    if (!minic_core_function_set_terminator(&core, block, &term) ||
+        !minic_core_function_attach_type_context(&core, &types)) goto done;
+    module.type_context = &types;
+    module.finalized = true;
+    frame.value_offsets = &value_offset;
+    frame.value_count = core.value_count;
+    frame.frame_size = 32U;
+    frame.module = &module;
+    frame.kernel_head_link_addresses = head_rejected;
+    frame.kernel_head_direct_data_globals = direct_head;
+    target.architecture = MINIC_TARGET_ARCH_X86_64;
+    target.data_layout = minic_x86_64_linux_data_layout();
+    target.position_independent = pic;
+    stage = "select";
+    if (!minic_x86_64_machine_select_core_subset(
+            &machine, &target, &core, &frame) ||
+        !minic_core_function_mark_reachable_blocks(&core,
+            reachable, 1U) ||
+        !minic_machine_core_coverage_verify(&core,
+            reachable, &machine) ||
+        !minic_x86_64_machine_gnu_asm_policy(&target, &policy)) goto done;
+    stage = "opcode-relocation";
+    for (i = 0U; i < machine.blocks[1].instruction_count; ++i) {
+        const MinicMachineInstruction *op =
+            &machine.blocks[1].instructions[i];
+        if (head_rejected) {
+            if (op->opcode != MINIC_X86_MI_MOV64_IMM32S_SYMBOL_R)
+                continue;
+            if (!op->has_core_origin || op->operand_count != 2U ||
+                op->operands[0].kind != MINIC_MACHINE_OPERAND_SYMBOL ||
+                op->operands[0].value.symbol.relocation !=
+                    MINIC_X86_MACHINE_RELOC_ABS32S)
+                goto done;
+            ++selected;
+            continue;
+        }
+        if (op->opcode != MINIC_X86_MI_LEA64_RIP_SYMBOL_R &&
+            op->opcode != MINIC_X86_MI_MOV64_GOTPCREL_R) continue;
+        if ((op->opcode == MINIC_X86_MI_MOV64_GOTPCREL_R) !=
+                (pic && (!hidden || weak)) ||
+            !op->has_core_origin ||
+            op->operand_count != 2U ||
+            op->operands[0].value.symbol.relocation !=
+                (pic && (!hidden || weak) ?
+                    MINIC_X86_MACHINE_RELOC_GOTPCREL :
+                    MINIC_X86_MACHINE_RELOC_PC32)) goto done;
+        ++selected;
+    }
+    if (selected != 1U) goto done;
+    stage = "gnu-asm";
+    output = probe_stream();
+    if (output == NULL ||
+        !minic_machine_gnu_asm_emit_body(output, &machine, &policy) ||
+        fflush(output) != 0 || fseek(output, 0L, SEEK_SET) != 0)
+        goto done;
+    length = fread(assembly, 1U, sizeof(assembly) - 1U, output);
+    assembly[length] = '\0';
+    okay = head_rejected ?
+        strstr(assembly, "movq $module_data_symbol") != NULL &&
+            strstr(assembly, "@GOTPCREL") == NULL :
+        pic && (!hidden || weak) ?
+            strstr(assembly, "@GOTPCREL(%rip)") != NULL :
+            strstr(assembly, "(%rip)") != NULL &&
+                strstr(assembly, "@GOTPCREL") == NULL;
+done:
+    if (!okay) fprintf(stderr,
+        "X86_CORE_MIR=FAIL symbol func=%d pic=%d hidden=%d weak=%d "
+        "head=%d stage=%s\n", function_symbol ? 1 : 0, pic ? 1 : 0,
+        hidden ? 1 : 0, weak ? 1 : 0,
+        head_rejected ? 1 : 0, stage);
+    if (output != NULL) fclose(output);
+    minic_machine_function_destroy(&machine);
+    minic_core_function_destroy(&core);
+    minic_core_type_context_destroy(&types);
+    return okay;
+}
+
+/* Old relaxed atomic scalar accesses are ordinary aligned MOV loads/stores
+ * with atomic Core provenance. Non-relaxed orders remain explicitly rejected
+ * by this target; no fabricated lock/fence instruction is introduced. */
+static bool scenario_relaxed_atomic(void) {
+    MinicCoreTypeContext types;
+    MinicCoreFunction core = {0};
+    MinicCoreType type = {0};
+    MinicCoreTypeId void_id, int_id, pointer_id;
+    MinicCoreTypeId parameters[2];
+    MinicCoreBlockId block;
+    MinicCoreInstruction ins = {0};
+    MinicCoreTerminator term = {0};
+    MinicCoreValueId address, stored, loaded;
+    MinicX86Frame frame = {0};
+    MinicX86ArgLocation locations[2] = {{0}};
+    MinicTargetInfo target = {0};
+    MinicMachineFunction machine = {0};
+    MinicMachineGNUAsmPolicy policy = {0};
+    bool reachable[1] = {false};
+    size_t offsets[3] = {8U, 16U, 24U};
+    size_t read_count = 0U, write_count = 0U, i;
+    size_t atomic_store_id = SIZE_MAX;
+    FILE *output = NULL;
+    char assembly[10000];
+    size_t output_bytes;
+    bool okay = false;
+    const char *stage = "setup";
+    minic_core_type_context_initialize(&types);
+    minic_core_function_initialize(&core);
+    core.name = malloc(sizeof("x86_relaxed_atomic"));
+    if (core.name == NULL) goto done;
+    memcpy(core.name, "x86_relaxed_atomic", sizeof("x86_relaxed_atomic"));
+    core.name_length = sizeof("x86_relaxed_atomic") - 1U;
+    type.kind = MINIC_CORE_TYPE_VOID;
+    if (!minic_core_type_register(&types, &type, &void_id)) goto done;
+    type = (MinicCoreType){0};
+    type.kind = MINIC_CORE_TYPE_INTEGER;
+    type.has_layout = true;
+    type.size = 4U;
+    type.alignment = 4U;
+    type.value.integer.bit_width = 32U;
+    type.value.integer.is_signed = true;
+    if (!minic_core_type_register(&types, &type, &int_id)) goto done;
+    type = (MinicCoreType){0};
+    type.kind = MINIC_CORE_TYPE_POINTER;
+    type.has_layout = true;
+    type.size = 8U;
+    type.alignment = 8U;
+    type.value.pointer.pointee = int_id;
+    if (!minic_core_type_register(&types, &type, &pointer_id)) goto done;
+    parameters[0] = pointer_id;
+    parameters[1] = int_id;
+    if (!minic_core_function_define_signature(&core, &types,
+            void_id, parameters, 2U,
+            MINIC_CALLING_CONVENTION_DEFAULT, false) ||
+        !minic_core_function_add_block(&core, &block)) goto done;
+    ins.kind = MINIC_CORE_INSTRUCTION_PARAMETER;
+    ins.core_type_id = pointer_id;
+    ins.value.parameter_index = 0U;
+    if (!minic_core_function_append_value_instruction(&core,
+            block, &ins, &address)) goto done;
+    ins.core_type_id = int_id;
+    ins.value.parameter_index = 1U;
+    if (!minic_core_function_append_value_instruction(&core,
+            block, &ins, &stored)) goto done;
+    ins = (MinicCoreInstruction){0};
+    ins.kind = MINIC_CORE_INSTRUCTION_ATOMIC_LOAD;
+    ins.core_type_id = int_id;
+    ins.value.atomic_load.address = address;
+    ins.value.atomic_load.memory_order = 0U;
+    if (!minic_core_function_append_value_instruction(&core,
+            block, &ins, &loaded)) goto done;
+    ins = (MinicCoreInstruction){0};
+    ins.kind = MINIC_CORE_INSTRUCTION_ATOMIC_STORE;
+    ins.core_type_id = void_id;
+    ins.value.atomic_store.address = address;
+    ins.value.atomic_store.stored_value = stored;
+    ins.value.atomic_store.memory_order = 0U;
+    atomic_store_id = core.instruction_count;
+    if (!minic_core_function_append_effect_instruction(&core,
+            block, &ins)) goto done;
+    term.kind = MINIC_CORE_TERMINATOR_RETURN;
+    term.return_value = MINIC_CORE_VALUE_INVALID;
+    if (!minic_core_function_set_terminator(&core, block, &term) ||
+        !minic_core_function_attach_type_context(&core, &types)) goto done;
+    target.architecture = MINIC_TARGET_ARCH_X86_64;
+    target.data_layout = minic_x86_64_linux_data_layout();
+    frame.value_count = core.value_count;
+    frame.value_offsets = offsets;
+    frame.frame_size = 64U;
+    locations[0].kind = MINIC_X86_ARG_INTEGER;
+    locations[0].gp_index = 0U;
+    locations[1].kind = MINIC_X86_ARG_INTEGER;
+    locations[1].gp_index = 1U;
+    frame.incoming_arguments.locations = locations;
+    frame.incoming_arguments.argument_count = 2U;
+    frame.incoming_arguments.calling_convention =
+        MINIC_CALLING_CONVENTION_DEFAULT;
+    stage = "select";
+    if (!minic_x86_64_machine_select_core_subset(&machine,
+            &target, &core, &frame) ||
+        !minic_core_function_mark_reachable_blocks(&core,
+            reachable, 1U) ||
+        !minic_machine_core_coverage_verify(&core,
+            reachable, &machine) ||
+        !minic_x86_64_machine_gnu_asm_policy(&target, &policy)) goto done;
+    stage = "atomic-ops";
+    for (i = 0U; i < machine.blocks[1].instruction_count; ++i) {
+        const MinicMachineInstruction *op =
+            &machine.blocks[1].instructions[i];
+        if (!op->has_core_origin) continue;
+        if (op->core_instruction_id == core.values[loaded].definition &&
+            op->opcode == MINIC_X86_MI_MOVSLQ_AR &&
+            (op->effects & MINIC_MACHINE_EFFECT_MEMORY_READ) != 0U)
+            ++read_count;
+        if (op->core_instruction_id == atomic_store_id &&
+            op->opcode == MINIC_X86_MI_MOV32_RA &&
+            (op->effects & MINIC_MACHINE_EFFECT_MEMORY_WRITE) != 0U)
+            ++write_count;
+    }
+    if (read_count != 1U || write_count != 1U) goto done;
+    stage = "gnu-asm";
+    output = probe_stream();
+    if (output == NULL ||
+        !minic_machine_gnu_asm_emit_body(output, &machine, &policy) ||
+        fflush(output) != 0 || fseek(output, 0L, SEEK_SET) != 0)
+        goto done;
+    output_bytes = fread(assembly, 1U, sizeof(assembly) - 1U, output);
+    assembly[output_bytes] = '\0';
+    if (strstr(assembly, "movslq (%r11), %rax") == NULL ||
+        strstr(assembly, "movl %eax, (%r11)") == NULL ||
+        strstr(assembly, "lock") != NULL ||
+        strstr(assembly, "lfence") != NULL) goto done;
+    stage = "reject-strong-order";
+    core.instructions[atomic_store_id].value.atomic_store.memory_order = 5U;
+    {
+        MinicMachineFunction rejected = {0};
+        okay = !minic_x86_64_machine_select_core_subset(&rejected,
+            &target, &core, &frame);
+        minic_machine_function_destroy(&rejected);
+    }
+done:
+    if (!okay) fprintf(stderr,
+        "X86_CORE_MIR=FAIL relaxed-atomic stage=%s\n", stage);
+    if (output != NULL) fclose(output);
+    minic_machine_function_destroy(&machine);
+    minic_core_function_destroy(&core);
+    minic_core_type_context_destroy(&types);
+    return okay;
+}
+
+/* Exercise newly admitted Core instructions through the real x86 selector,
+ * Core-origin coverage and the GNU body writer. In particular va_arg/alloca
+ * split one Core block into multiple genuinely linked MachineIR blocks. */
+typedef enum X86NewCoreCase {
+    X86_NEW_CLZ_ZERO,
+    X86_NEW_CTZ_ZERO,
+    X86_NEW_CLZ_NONZERO,
+    X86_NEW_CTZ_NONZERO,
+    X86_NEW_OVERFLOW_32,
+    X86_NEW_OVERFLOW_64,
+    X86_NEW_VARIADIC,
+    X86_NEW_ALLOCA,
+    X86_NEW_BLOCK_ADDRESS
+} X86NewCoreCase;
+
+static bool scenario_new_core_case(X86NewCoreCase mode) {
+    MinicCoreTypeContext types;
+    MinicCoreFunction core = {0};
+    MinicCoreType t = {0};
+    MinicCoreTypeId void_id, signed32, unsigned32, signed64, unsigned64, bool_id;
+    MinicCoreTypeId pointer32, pointer64, pointervoid;
+    MinicCoreTypeId formals[1];
+    MinicCoreBlockId entry, destination = MINIC_CORE_BLOCK_INVALID;
+    MinicCoreInstruction ins = {0};
+    MinicCoreTerminator term = {0};
+    MinicCoreValueId a = MINIC_CORE_VALUE_INVALID;
+    MinicCoreValueId b = MINIC_CORE_VALUE_INVALID;
+    MinicCoreValueId cursor = MINIC_CORE_VALUE_INVALID;
+    MinicCoreValueId value = MINIC_CORE_VALUE_INVALID;
+    MinicCoreInstructionId tested = MINIC_CORE_INSTRUCTION_INVALID;
+    MinicX86Frame frame = {0};
+    MinicX86ArgLocation location = {0};
+    MinicTargetInfo target = {0};
+    MinicMachineFunction machine = {0};
+    MinicMachineGNUAsmPolicy policy = {0};
+    MinicCoreValueId variadic_result[1];
+    size_t offsets[12];
+    bool reachable[2] = {false, false};
+    bool found_expected = false, found_origin = false, okay = false;
+    size_t i, j, len;
+    MinicX86MachineOpcode expected = MINIC_X86_MI_BSR64_RR;
+    const char *assembly_witness = NULL;
+    const char *stage = "types";
+    FILE *output = NULL;
+    char body[24000];
+    const bool overflow = mode == X86_NEW_OVERFLOW_32 ||
+        mode == X86_NEW_OVERFLOW_64;
+    const bool variadic = mode == X86_NEW_VARIADIC;
+    const bool alloc = mode == X86_NEW_ALLOCA;
+    const bool block_address = mode == X86_NEW_BLOCK_ADDRESS;
+
+    minic_core_type_context_initialize(&types);
+    minic_core_function_initialize(&core);
+    core.name = malloc(sizeof("x86_new_core"));
+    if (core.name == NULL) goto done;
+    memcpy(core.name, "x86_new_core", sizeof("x86_new_core"));
+    core.name_length = sizeof("x86_new_core") - 1U;
+    t.kind = MINIC_CORE_TYPE_VOID;
+    if (!minic_core_type_register(&types, &t, &void_id)) goto done;
+    t = (MinicCoreType){0};
+    t.kind = MINIC_CORE_TYPE_INTEGER;
+    t.has_layout = true;
+    t.size = t.alignment = 4U;
+    t.value.integer.bit_width = 32U;
+    t.value.integer.is_signed = true;
+    if (!minic_core_type_register(&types, &t, &signed32)) goto done;
+    t.value.integer.is_signed = false;
+    if (!minic_core_type_register(&types, &t, &unsigned32)) goto done;
+    t.size = t.alignment = 8U;
+    t.value.integer.bit_width = 64U;
+    t.value.integer.is_signed = true;
+    if (!minic_core_type_register(&types, &t, &signed64)) goto done;
+    t.value.integer.is_signed = false;
+    if (!minic_core_type_register(&types, &t, &unsigned64)) goto done;
+    t.size = t.alignment = 1U;
+    t.value.integer.bit_width = 1U;
+    t.value.integer.is_bool = true;
+    if (!minic_core_type_register(&types, &t, &bool_id)) goto done;
+    stage = "pointer-types";
+    t = (MinicCoreType){0};
+    t.kind = MINIC_CORE_TYPE_POINTER;
+    t.has_layout = true;
+    t.size = t.alignment = 8U;
+    t.value.pointer.pointee = signed32;
+    if (!minic_core_type_register(&types, &t, &pointer32)) goto done;
+    t.value.pointer.pointee = unsigned64;
+    if (!minic_core_type_register(&types, &t, &pointer64)) goto done;
+    t.value.pointer.pointee = void_id;
+    if (!minic_core_type_register(&types, &t, &pointervoid)) goto done;
+    formals[0] = mode == X86_NEW_OVERFLOW_32 ? pointer32 : pointer64;
+    stage = "signature";
+    if (!minic_core_function_define_signature(&core, &types,
+            void_id, overflow ? formals : NULL, overflow ? 1U : 0U,
+            MINIC_CALLING_CONVENTION_DEFAULT, variadic) ||
+        !minic_core_function_add_block(&core, &entry)) goto done;
+    if (block_address) {
+        if (!minic_core_function_add_block(&core, &destination)) goto done;
+        core.blocks[destination].indirect_entry = true;
+        core.blocks[destination].local_label_symbol =
+            malloc(sizeof(".Luser_123"));
+        if (core.blocks[destination].local_label_symbol == NULL) goto done;
+        memcpy(core.blocks[destination].local_label_symbol,
+            ".Luser_123", sizeof(".Luser_123"));
+    }
+    stage = "core-instructions";
+    if (overflow) {
+        ins.kind = MINIC_CORE_INSTRUCTION_PARAMETER;
+        ins.core_type_id = formals[0];
+        ins.value.parameter_index = 0U;
+        if (!minic_core_function_append_value_instruction(&core,
+                entry, &ins, &cursor)) goto done;
+    }
+    if (variadic) {
+        ins = (MinicCoreInstruction){0};
+        ins.kind = MINIC_CORE_INSTRUCTION_VARIADIC_ARGUMENT_ADDRESS;
+        ins.core_type_id = pointervoid;
+        if (!minic_core_function_append_value_instruction(&core,
+                entry, &ins, &cursor)) goto done;
+        ins.kind = MINIC_CORE_INSTRUCTION_VARIADIC_NEXT_SCALAR;
+        ins.core_type_id = signed64;
+        ins.value.operand = cursor;
+        tested = (MinicCoreInstructionId)core.instruction_count;
+        if (!minic_core_function_append_value_instruction(&core,
+                entry, &ins, &value)) goto done;
+        expected = MINIC_X86_MI_JAE_B;
+        assembly_witness = "jae ";
+    } else if (block_address) {
+        ins.kind = MINIC_CORE_INSTRUCTION_BLOCK_ADDRESS;
+        ins.core_type_id = pointervoid;
+        ins.value.block_id = destination;
+        tested = (MinicCoreInstructionId)core.instruction_count;
+        if (!minic_core_function_append_value_instruction(&core,
+                entry, &ins, &value)) goto done;
+        expected = MINIC_X86_MI_LEA64_RIP_SYMBOL_R;
+        assembly_witness = ".Luser_123";
+    } else {
+        const bool scan = !overflow && !alloc;
+        ins.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
+        ins.core_type_id = mode == X86_NEW_OVERFLOW_32 ? signed32 :
+            mode == X86_NEW_CLZ_ZERO || mode == X86_NEW_CLZ_NONZERO ?
+            unsigned32 : unsigned64;
+        ins.value.integer_value = mode == X86_NEW_CLZ_ZERO ||
+            mode == X86_NEW_CTZ_ZERO ? 0 :
+            mode == X86_NEW_CLZ_NONZERO ||
+            mode == X86_NEW_CTZ_NONZERO ? 256 : 32;
+        if (!minic_core_function_append_value_instruction(&core,
+                entry, &ins, &a)) goto done;
+        if (overflow) {
+            ins.value.integer_value = 3;
+            if (!minic_core_function_append_value_instruction(&core,
+                    entry, &ins, &b)) goto done;
+        }
+        ins = (MinicCoreInstruction){0};
+        tested = (MinicCoreInstructionId)core.instruction_count;
+        if (scan) {
+            ins.kind = mode == X86_NEW_CLZ_ZERO ||
+                mode == X86_NEW_CLZ_NONZERO ?
+                MINIC_CORE_INSTRUCTION_INTEGER_CLZ :
+                MINIC_CORE_INSTRUCTION_INTEGER_CTZ;
+            ins.core_type_id = signed32;
+            ins.value.operand = a;
+            expected = ins.kind == MINIC_CORE_INSTRUCTION_INTEGER_CLZ ?
+                MINIC_X86_MI_BSR64_RR : MINIC_X86_MI_BSF64_RR;
+            assembly_witness = ins.kind == MINIC_CORE_INSTRUCTION_INTEGER_CLZ ?
+                "bsrq" : "bsfq";
+        } else if (overflow) {
+            ins.kind = MINIC_CORE_INSTRUCTION_INTEGER_OVERFLOW;
+            ins.core_type_id = bool_id;
+            ins.value.integer_overflow.operator_kind =
+                MINIC_CORE_INTEGER_OVERFLOW_MULTIPLY;
+            ins.value.integer_overflow.left = a;
+            ins.value.integer_overflow.right = b;
+            ins.value.integer_overflow.result_address = cursor;
+            expected = mode == X86_NEW_OVERFLOW_32 ?
+                MINIC_X86_MI_IMUL32_RR : MINIC_X86_MI_MUL64_R;
+            assembly_witness = mode == X86_NEW_OVERFLOW_32 ?
+                "imull" : "mulq";
+        } else {
+            ins.kind = MINIC_CORE_INSTRUCTION_DYNAMIC_STACK_ALLOC;
+            ins.core_type_id = pointervoid;
+            ins.value.operand = a;
+            expected = MINIC_X86_MI_UD2;
+            assembly_witness = "ud2";
+        }
+        if (!minic_core_function_append_value_instruction(&core,
+                entry, &ins, &value)) goto done;
+    }
+    term.kind = block_address ? MINIC_CORE_TERMINATOR_INDIRECT_BRANCH :
+        MINIC_CORE_TERMINATOR_RETURN;
+    term.return_value = MINIC_CORE_VALUE_INVALID;
+    if (block_address) term.indirect_target = value;
+    if (!minic_core_function_set_terminator(&core, entry, &term)) goto done;
+    if (block_address) {
+        term.kind = MINIC_CORE_TERMINATOR_RETURN;
+        term.return_value = MINIC_CORE_VALUE_INVALID;
+        if (!minic_core_function_set_terminator(
+                &core, destination, &term)) goto done;
+    }
+    stage = "core-verify";
+    if (!minic_core_function_attach_type_context(&core, &types) ||
+        !minic_core_function_verify(&core)) goto done;
+    for (i = 0U; i < core.value_count; ++i) offsets[i] = (i + 1U) * 8U;
+    target.architecture = MINIC_TARGET_ARCH_X86_64;
+    target.data_layout = minic_x86_64_linux_data_layout();
+    frame.frame_size = 512U;
+    frame.value_count = core.value_count;
+    frame.value_offsets = offsets;
+    location.kind = MINIC_X86_ARG_INTEGER;
+    location.gp_index = 0U;
+    frame.incoming_arguments.calling_convention =
+        MINIC_CALLING_CONVENTION_DEFAULT;
+    if (overflow) {
+        frame.incoming_arguments.locations = &location;
+        frame.incoming_arguments.argument_count = 1U;
+    }
+    if (variadic) {
+        variadic_result[0] = cursor;
+        frame.varargs_results = variadic_result;
+        frame.varargs_count = 1U;
+        frame.varargs_regsave_offset = 256U;
+        frame.varargs_tag_base_offset = 400U;
+        frame.varargs_gp_offset = 0U;
+        frame.varargs_fp_offset = 48U;
+    }
+    stage = "physical-selection";
+    if (!minic_x86_64_machine_select_core_subset(&machine, &target,
+            &core, &frame) ||
+        !minic_core_function_mark_reachable_blocks(&core,
+            reachable, core.block_count) ||
+        !minic_machine_core_coverage_verify(&core, reachable, &machine) ||
+        !minic_x86_64_machine_gnu_asm_policy(&target, &policy) ||
+        !minic_machine_gnu_asm_preflight(&machine, &policy)) goto done;
+    for (i = 0U; i < machine.block_count; ++i) {
+        for (j = 0U; j < machine.blocks[i].instruction_count; ++j) {
+            const MinicMachineInstruction *op =
+                &machine.blocks[i].instructions[j];
+            if (op->opcode == expected) found_expected = true;
+            if (op->has_core_origin && op->core_instruction_id == tested)
+                found_origin = true;
+        }
+    }
+    stage = "selected-opcode-and-origin";
+    if (!found_expected || !found_origin ||
+        ((variadic || alloc) && machine.block_count < 4U) ||
+        (alloc && !machine.has_dynamic_stack)) goto done;
+    stage = "gnu-assembly";
+    output = probe_stream();
+    if (output == NULL || !minic_machine_gnu_asm_emit_body(
+            output, &machine, &policy) || fflush(output) != 0 ||
+        fseek(output, 0L, SEEK_SET) != 0) goto done;
+    len = fread(body, 1U, sizeof(body) - 1U, output);
+    body[len] = '\0';
+    if (assembly_witness == NULL ||
+        strstr(body, assembly_witness) == NULL) goto done;
+    /* A malformed frame or semantic operand must reject the entire function
+     * instead of recovering through native FILE* emission. */
+    stage = "strict-reject";
+    if (variadic) frame.varargs_count = 0U;
+    else if (alloc) frame.objects_from_aligned_rsp = true;
+    else if (block_address) {
+        free(core.blocks[destination].local_label_symbol);
+        core.blocks[destination].local_label_symbol = NULL;
+    } else if (overflow)
+        core.instructions[tested].value.integer_overflow.result_address = a;
+    else core.instructions[tested].value.operand = MINIC_CORE_VALUE_INVALID;
+    {
+        MinicMachineFunction rejected = {0};
+        okay = !minic_x86_64_machine_select_core_subset(&rejected,
+            &target, &core, &frame);
+        minic_machine_function_destroy(&rejected);
+    }
+done:
+    if (!okay) fprintf(stderr,
+        "X86_CORE_MIR=FAIL new-core mode=%u stage=%s\n",
+        (unsigned int)mode, stage);
+    if (output != NULL) fclose(output);
+    minic_machine_function_destroy(&machine);
+    minic_core_function_destroy(&core);
+    minic_core_type_context_destroy(&types);
+    return okay;
+}
+
+/* Signed/unsigned integer <-> binary64, binary32 transport, sign-bit negate
+ * and ordered comparisons form one physical SSE2 selection family. The
+ * optional assembler stream is linked against a host-GCC reference by the
+ * separate differential test, so these are runtime witnesses as well as
+ * preflight/coverage/fail-closed tests. */
+static bool scenario_fp_boundary(unsigned int mode, FILE *assembly_out) {
+    MinicCoreTypeContext types;
+    MinicCoreFunction core = {0};
+    MinicCoreType t = {0};
+    MinicCoreTypeId unsigned8, signed32, signed64, unsigned64, float32, float64;
+    MinicCoreTypeId formals[2], result_type;
+    MinicCoreBlockId block;
+    MinicCoreValueId first, second = MINIC_CORE_VALUE_INVALID, result;
+    MinicCoreInstruction ins = {0};
+    MinicCoreTerminator term = {0};
+    MinicCoreInstructionId origin;
+    MinicX86Frame frame = {0};
+    MinicX86ArgLocation locations[2] = {{0}};
+    MinicTargetInfo target = {0};
+    MinicMachineFunction machine = {0};
+    MinicMachineGNUAsmPolicy policy = {0};
+    size_t offsets[3] = {8U, 16U, 24U};
+    bool reachable[1] = {false};
+    bool origin_seen = false, opcode_seen = false, okay = false;
+    MinicX86MachineOpcode expected;
+    size_t i, j;
+    char name[32];
+    const char *stage = "types";
+    if (mode >= 12U) return false;
+    minic_core_type_context_initialize(&types);
+    minic_core_function_initialize(&core);
+    if (snprintf(name, sizeof(name), "mir_fp_%u", mode) < 0) goto done;
+    core.name = malloc(strlen(name) + 1U);
+    if (core.name == NULL) goto done;
+    memcpy(core.name, name, strlen(name) + 1U);
+    core.name_length = strlen(name);
+    t.kind = MINIC_CORE_TYPE_INTEGER;
+    t.has_layout = true;
+    t.size = t.alignment = 1U;
+    t.value.integer.bit_width = 8U;
+    t.value.integer.is_signed = false;
+    if (!minic_core_type_register(&types, &t, &unsigned8)) goto done;
+    t.size = t.alignment = 4U;
+    t.value.integer.bit_width = 32U;
+    t.value.integer.is_signed = true;
+    if (!minic_core_type_register(&types, &t, &signed32)) goto done;
+    t.size = t.alignment = 8U;
+    t.value.integer.bit_width = 64U;
+    if (!minic_core_type_register(&types, &t, &signed64)) goto done;
+    t.value.integer.is_signed = false;
+    if (!minic_core_type_register(&types, &t, &unsigned64)) goto done;
+    t = (MinicCoreType){0};
+    t.kind = MINIC_CORE_TYPE_FLOAT;
+    t.has_layout = true;
+    t.size = t.alignment = 4U;
+    t.value.floating.format = MINIC_CORE_FLOAT_BINARY32;
+    if (!minic_core_type_register(&types, &t, &float32)) goto done;
+    t.size = t.alignment = 8U;
+    t.value.floating.format = MINIC_CORE_FLOAT_BINARY64;
+    if (!minic_core_type_register(&types, &t, &float64)) goto done;
+    formals[0] = mode == 0U ? signed64 : mode == 1U ? unsigned64 :
+        mode == 4U ? float32 : mode == 10U ? unsigned8 : float64;
+    formals[1] = float64;
+    result_type = mode == 2U ? signed64 : mode == 3U ? unsigned64 :
+        mode == 11U ? unsigned8 :
+        mode == 5U ? float32 :
+        (mode >= 7U && mode <= 9U) ? signed32 : float64;
+    stage = "core-build";
+    if (!minic_core_function_define_signature(&core, &types,
+            result_type, formals, (mode >= 7U && mode <= 9U) ? 2U : 1U,
+            MINIC_CALLING_CONVENTION_DEFAULT, false) ||
+        !minic_core_function_add_block(&core, &block)) goto done;
+    ins.kind = MINIC_CORE_INSTRUCTION_PARAMETER;
+    ins.core_type_id = formals[0];
+    ins.value.parameter_index = 0U;
+    if (!minic_core_function_append_value_instruction(&core,
+            block, &ins, &first)) goto done;
+    if (mode >= 7U && mode <= 9U) {
+        ins.core_type_id = formals[1];
+        ins.value.parameter_index = 1U;
+        if (!minic_core_function_append_value_instruction(&core,
+                block, &ins, &second)) goto done;
+    }
+    ins = (MinicCoreInstruction){0};
+    ins.core_type_id = result_type;
+    ins.value.operand = first;
+    switch (mode) {
+    case 0U: case 1U: case 10U:
+        ins.kind = MINIC_CORE_INSTRUCTION_INTEGER_TO_DOUBLE;
+        expected = MINIC_X86_MI_CVTSI2SDQ_GPR_XMM; break;
+    case 2U: case 3U: case 11U:
+        ins.kind = MINIC_CORE_INSTRUCTION_DOUBLE_TO_INTEGER;
+        expected = MINIC_X86_MI_CVTTSD2SIQ_XMM_GPR; break;
+    case 4U:
+        ins.kind = MINIC_CORE_INSTRUCTION_FLOAT_TO_DOUBLE;
+        expected = MINIC_X86_MI_CVTSS2SD_XMM; break;
+    case 5U:
+        ins.kind = MINIC_CORE_INSTRUCTION_DOUBLE_TO_FLOAT;
+        expected = MINIC_X86_MI_CVTSD2SS_XMM; break;
+    case 6U:
+        ins.kind = MINIC_CORE_INSTRUCTION_DOUBLE_NEGATE;
+        expected = MINIC_X86_MI_XOR64_RR; break;
+    case 7U: case 8U: case 9U:
+        ins.kind = mode == 7U ? MINIC_CORE_INSTRUCTION_DOUBLE_EQUAL :
+            mode == 8U ? MINIC_CORE_INSTRUCTION_DOUBLE_LESS :
+            MINIC_CORE_INSTRUCTION_DOUBLE_LESS_EQUAL;
+        ins.value.binary.left = first;
+        ins.value.binary.right = second;
+        expected = MINIC_X86_MI_SETNP8_R; break;
+    default: goto done;
+    }
+    origin = (MinicCoreInstructionId)core.instruction_count;
+    if (!minic_core_function_append_value_instruction(&core,
+            block, &ins, &result)) goto done;
+    term.kind = MINIC_CORE_TERMINATOR_RETURN;
+    term.return_value = result;
+    if (!minic_core_function_set_terminator(&core, block, &term) ||
+        !minic_core_function_attach_type_context(&core, &types) ||
+        !minic_core_function_verify(&core)) goto done;
+    target.architecture = MINIC_TARGET_ARCH_X86_64;
+    target.data_layout = minic_x86_64_linux_data_layout();
+    frame.frame_size = 64U;
+    frame.value_count = core.value_count;
+    frame.value_offsets = offsets;
+    frame.incoming_arguments.calling_convention =
+        MINIC_CALLING_CONVENTION_DEFAULT;
+    frame.incoming_arguments.locations = locations;
+    frame.incoming_arguments.argument_count =
+        (mode >= 7U && mode <= 9U) ? 2U : 1U;
+    for (i = 0U; i < frame.incoming_arguments.argument_count; ++i) {
+        const bool floating = formals[i] == float32 || formals[i] == float64;
+        locations[i].kind = floating ? MINIC_X86_ARG_SSE : MINIC_X86_ARG_INTEGER;
+        if (floating) locations[i].fp_index = i;
+        else locations[i].gp_index = i;
+    }
+    stage = "select-coverage-preflight";
+    if (!minic_x86_64_machine_select_core_subset(&machine, &target,
+            &core, &frame)) goto done;
+    stage = "coverage";
+    if (!minic_core_function_mark_reachable_blocks(&core, reachable, 1U) ||
+        !minic_machine_core_coverage_verify(&core, reachable, &machine))
+        goto done;
+    stage = "gnu-preflight";
+    if (!minic_x86_64_machine_gnu_asm_policy(&target, &policy) ||
+        !minic_machine_gnu_asm_preflight(&machine, &policy)) goto done;
+    for (i = 0U; i < machine.block_count; ++i)
+        for (j = 0U; j < machine.blocks[i].instruction_count; ++j) {
+            const MinicMachineInstruction *mi =
+                &machine.blocks[i].instructions[j];
+            if (mi->opcode == expected) opcode_seen = true;
+            if (mi->has_core_origin && mi->core_instruction_id == origin)
+                origin_seen = true;
+        }
+    if (!opcode_seen || !origin_seen ||
+        ((mode == 1U || mode == 3U) && machine.block_count < 4U)) goto done;
+    if (assembly_out != NULL) {
+        stage = "emit-assembly";
+        if (fprintf(assembly_out,
+                ".text\n.globl %s\n.type %s,@function\n%s:\n",
+                name, name, name) < 0 ||
+            !minic_machine_gnu_asm_emit_body(
+                assembly_out, &machine, &policy) ||
+            fprintf(assembly_out, ".size %s,.-%s\n", name, name) < 0)
+            goto done;
+    }
+    stage = "strict-reject";
+    if (mode >= 7U && mode <= 9U)
+        core.instructions[origin].value.binary.right =
+            MINIC_CORE_VALUE_INVALID;
+    else core.instructions[origin].value.operand =
+        MINIC_CORE_VALUE_INVALID;
+    {
+        MinicMachineFunction rejected = {0};
+        okay = !minic_x86_64_machine_select_core_subset(&rejected,
+            &target, &core, &frame);
+        minic_machine_function_destroy(&rejected);
+    }
+done:
+    if (!okay) fprintf(stderr,
+        "X86_FP_MIR=FAIL mode=%u stage=%s\n", mode, stage);
+    minic_machine_function_destroy(&machine);
+    minic_core_function_destroy(&core);
+    minic_core_type_context_destroy(&types);
+    return okay;
+}
+
+/* Seven original Linux zero-binding hardware ordering forms plus the empty
+ * volatile compiler effect, with real Core origin/physical clobber coverage.
+ * No printable source line is imported into a selected machine opcode. */
+static bool scenario_source_zero_barrier(unsigned int form) {
+    static const char *const sources[] = {
+        "", "lock; addl $0, -4(%%rsp)", "mfence", "lfence",
+        "sfence", "pause", "rep; nop", "fninit"
+    };
+    static const char *const emitted[] = {
+        "", "lock; addl $0, -4(%rsp)", "mfence", "lfence",
+        "sfence", "pause", "rep; nop", "fninit"
+    };
+    MinicCoreFunction core = {0};
+    MinicCoreTypeContext types;
+    MinicCoreType void_shape = {0};
+    MinicCoreTypeId void_id;
+    MinicCoreBlockId entry;
+    MinicCoreTerminator ret = {0};
+    MinicCoreInstruction ins = {0};
+    MinicCoreInlineAsmId source_id;
+    MinicX86Frame frame = {0};
+    MinicTargetInfo target = {0};
+    MinicMachineFunction machine = {0};
+    MinicMachineGNUAsmPolicy policy = {0};
+    size_t offsets[1] = {8U};
+    bool reachable[2] = {false, false};
+    FILE *out = NULL;
+    char text[4096] = {0};
+    size_t n, block, index, source_events = 0U;
+    bool okay = false;
+    const char *stage = "core";
+    if (form > 7U) return false;
+    minic_core_type_context_initialize(&types);
+    minic_core_function_initialize(&core);
+    core.name = malloc(sizeof("x86_source_barrier"));
+    if (core.name == NULL) goto done;
+    memcpy(core.name, "x86_source_barrier", sizeof("x86_source_barrier"));
+    core.name_length = sizeof("x86_source_barrier") - 1U;
+    void_shape.kind = MINIC_CORE_TYPE_VOID;
+    if (!minic_core_type_register(&types, &void_shape, &void_id) ||
+        !minic_core_function_define_signature(&core, &types,
+            void_id, NULL, 0U, MINIC_CALLING_CONVENTION_DEFAULT, false) ||
+        !minic_core_function_add_block(&core, &entry)) goto done;
+    stage = "add-source";
+    if (!minic_core_function_add_opaque_inline_asm(&core,
+            sources[form], strlen(sources[form]), true,
+            form >= 1U && form <= 4U, &source_id)) goto done;
+    core.inline_asms[source_id].source_asm_unique_id = 700U + form;
+    core.inline_asms[source_id].target_machine_form_id = form == 0U
+        ? 0U : MINIC_X86_MACHINE_ASM_ZERO_BARRIER;
+    core.inline_asms[source_id].target_machine_form_variant = form;
+    if (form != 0U)
+        core.inline_asms[source_id].operand_plan_owner =
+            MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED;
+    if (form == 1U &&
+        !minic_core_function_add_inline_asm_register_clobber(
+            &core, source_id, "cc", 2U)) goto done;
+    ins.kind = MINIC_CORE_INSTRUCTION_OPAQUE_INLINE_ASM;
+    ins.core_type_id = void_id;
+    ins.result = MINIC_CORE_VALUE_INVALID;
+    ins.value.inline_asm_id = source_id;
+    stage = "append-source";
+    if (!minic_core_function_append_effect_instruction(&core, 0U, &ins))
+        goto done;
+    stage = "verify-core";
+    ret.kind = MINIC_CORE_TERMINATOR_RETURN;
+    ret.return_value = MINIC_CORE_VALUE_INVALID;
+    ret.return_object = MINIC_CORE_OBJECT_INVALID;
+    if (!minic_core_function_set_terminator(&core, entry, &ret) ||
+        !minic_core_function_attach_type_context(&core, &types) ||
+        !minic_core_function_verify(&core)) goto done;
+    target.architecture = MINIC_TARGET_ARCH_X86_64;
+    target.data_layout = minic_x86_64_linux_data_layout();
+    frame.value_count = core.value_count;
+    frame.value_offsets = offsets;
+    frame.frame_size = 64U;
+    stage = "machine";
+    if (!minic_x86_64_machine_select_core_subset(
+            &machine, &target, &core, &frame) ||
+        !minic_core_function_mark_reachable_blocks(&core,
+            reachable, 1U) ||
+        !minic_machine_core_coverage_verify(&core, reachable, &machine) ||
+        !minic_x86_64_machine_gnu_asm_policy(&target, &policy) ||
+        !minic_machine_gnu_asm_preflight(&machine, &policy)) goto done;
+    for (block = 0U; block < machine.block_count; ++block)
+        for (index = 0U;
+             index < machine.blocks[block].instruction_count; ++index) {
+            const MinicMachineInstruction *selected =
+                &machine.blocks[block].instructions[index];
+            if (selected->kind == MINIC_MACHINE_INSTRUCTION_SOURCE_ASM &&
+                selected->has_core_origin &&
+                selected->has_source_asm_unique_id &&
+                selected->source_asm_unique_id == 700U + form)
+                ++source_events;
+        }
+    if (source_events != 1U || (out = probe_stream()) == NULL ||
+        !minic_machine_gnu_asm_emit_body(out, &machine, &policy) ||
+        fflush(out) != 0 || fseek(out, 0L, SEEK_SET) != 0) goto done;
+    n = fread(text, 1U, sizeof(text) - 1U, out);
+    text[n] = '\0';
+    if (form != 0U && strstr(text, emitted[form]) == NULL) goto done;
+    stage = "negative";
+    minic_machine_function_destroy(&machine);
+    core.inline_asms[source_id].target_machine_form_variant = form == 0U
+        ? 1U : (form % 7U) + 1U;
+    if (minic_x86_64_machine_select_core_subset(
+            &machine, &target, &core, &frame)) goto done;
+    okay = true;
+done:
+    if (!okay) fprintf(stderr, "X86_SOURCE_ASM=FAIL form=%u stage=%s\n",
+        form, stage);
+    if (out != NULL) fclose(out);
+    minic_machine_function_destroy(&machine);
+    minic_core_function_destroy(&core);
+    minic_core_type_context_destroy(&types);
+    return okay;
+}
+
+/* Linux uaccess helpers are a private CALL ABI, not SysV. Check that their
+ * selected opcode remains a physical relocation with exact implicit register
+ * effects, and can reach the GNU serializer without source-ASM text escape. */
+static bool scenario_uaccess_call_opcode(void) {
+    static const char *const symbols[4] = {
+        "__put_user_4", "__put_user_nocheck_8",
+        "__get_user_2", "__get_user_nocheck_1"
+    };
+    static const char *const templates[4] = {
+        "call __put_user_%c4", "call __put_user_nocheck_%c4",
+        "call __get_user_%c4", "call __get_user_nocheck_%c4"
+    };
+    static const unsigned int forms[4] = {0x200U, 0x800U, 3U, 4U};
+    MinicTargetInfo target = {0};
+    MinicMachineGNUAsmPolicy policy = {0};
+    MinicMachineOpcodeContract contract = {0}, ret = {0};
+    unsigned int seen = 0U;
+    size_t kind;
+    bool okay = false;
+    const char *stage = "opcode-contract";
+    target.architecture = MINIC_TARGET_ARCH_X86_64;
+    target.data_layout = minic_x86_64_linux_data_layout();
+    if (!minic_x86_64_machine_opcode_lookup(&target,
+            MINIC_X86_MI_CALL_UACCESS_LOCAL_SYMBOL, &contract, NULL) ||
+        !minic_x86_64_machine_opcode_lookup(&target,
+            MINIC_X86_MI_RET, &ret, NULL) ||
+        !minic_x86_64_machine_gnu_asm_policy(&target, &policy) ||
+        contract.operand_count != 1U ||
+        contract.operand_kinds[0] != MINIC_MACHINE_OPERAND_SYMBOL ||
+        contract.required_effects !=
+            (MINIC_MACHINE_EFFECT_CALL | MINIC_MACHINE_EFFECT_MEMORY_READ |
+             MINIC_MACHINE_EFFECT_MEMORY_WRITE) ||
+        contract.implicit_count < 6U) goto done;
+    for (kind = 0U; kind < contract.implicit_count; ++kind) {
+        const MinicMachineRegisterEffect *effect = &contract.implicit[kind];
+        if (effect->reg.bank == MINIC_MACHINE_REGISTER_GENERAL &&
+            effect->reg.number == MINIC_X86_REG_RBX &&
+            (effect->access & MINIC_MACHINE_REGISTER_CLOBBER) != 0U)
+            seen |= 1U;
+        if (effect->reg.bank == MINIC_MACHINE_REGISTER_GENERAL &&
+            effect->reg.number == MINIC_X86_REG_RSP &&
+            (effect->access & (MINIC_MACHINE_REGISTER_READ |
+                               MINIC_MACHINE_REGISTER_WRITE)) ==
+                (MINIC_MACHINE_REGISTER_READ | MINIC_MACHINE_REGISTER_WRITE))
+            seen |= 2U;
+        if (effect->reg.bank == MINIC_MACHINE_REGISTER_GENERAL &&
+            effect->reg.number == MINIC_X86_REG_RAX)
+            seen |= 4U;
+        if (effect->reg.bank == MINIC_MACHINE_REGISTER_GENERAL &&
+            effect->reg.number == MINIC_X86_REG_RCX)
+            seen |= 8U;
+        if (effect->reg.bank == MINIC_MACHINE_REGISTER_GENERAL &&
+            effect->reg.number == MINIC_X86_REG_RDX)
+            seen |= 16U;
+        if (effect->reg.bank == MINIC_MACHINE_REGISTER_FLAGS)
+            seen |= 32U;
+    }
+    if (seen != 63U) goto done;
+    stage = "positive-machine";
+    for (kind = 0U; kind < 4U; ++kind) {
+        MinicMachineFunction machine = {0};
+        MinicMachineBuilder builder = {0};
+        MinicMachineOperand operand = {0};
+        FILE *output = NULL;
+        char expected[96], text[2048] = {0};
+        size_t id, n;
+        bool valid = false;
+        if (minic_x86_64_linux_uaccess_core_form_exact(
+                templates[kind], strlen(templates[kind]), kind < 2U) !=
+                forms[kind]) goto loop_done;
+        if (!minic_machine_function_initialize(&machine, &target,
+                "uaccess_machine_contract",
+                minic_x86_64_machine_generated_features(&target)) ||
+            !minic_machine_builder_initialize(&builder, &machine) ||
+            !minic_machine_builder_create_block(&builder, NULL, false,
+                true, &id)) goto loop_done;
+        operand.kind = MINIC_MACHINE_OPERAND_SYMBOL;
+        operand.value.symbol.name = (char *)symbols[kind];
+        operand.value.symbol.relocation = MINIC_X86_MACHINE_RELOC_PC32;
+        stage = "emit-physical-call";
+        if (!minic_machine_builder_emit_selected(&builder,
+                MINIC_X86_MI_CALL_UACCESS_LOCAL_SYMBOL,
+                contract.required_effects, &operand, 1U,
+                contract.implicit, contract.implicit_count)) goto loop_done;
+        stage = "emit-return";
+        if (!minic_machine_builder_emit_selected(&builder,
+                MINIC_X86_MI_RET, ret.required_effects, NULL, 0U,
+                ret.implicit, ret.implicit_count)) goto loop_done;
+        stage = "preflight";
+        if (!minic_machine_gnu_asm_preflight(&machine, &policy)) goto loop_done;
+        stage = "serialize";
+        if ((output = probe_stream()) == NULL ||
+            !minic_machine_gnu_asm_emit_body(output, &machine, &policy) ||
+            fflush(output) != 0 || fseek(output, 0L, SEEK_SET) != 0)
+            goto loop_done;
+        n = fread(text, 1U, sizeof(text) - 1U, output);
+        text[n] = '\0';
+        if (snprintf(expected, sizeof(expected), "call %s", symbols[kind]) < 0 ||
+            strstr(text, expected) == NULL || strstr(text, "%c4") != NULL)
+            goto loop_done;
+        /* Wrong relocation cannot pass target preflight. */
+        stage = "negative-relocation";
+        machine.blocks[0].instructions[0].operands[0].value.symbol.relocation =
+            MINIC_X86_MACHINE_RELOC_ABSOLUTE;
+        valid = !minic_machine_gnu_asm_preflight(&machine, &policy);
+loop_done:
+        if (output != NULL) fclose(output);
+        minic_machine_function_destroy(&machine);
+        if (!valid) goto done;
+        stage = "positive-machine";
+    }
+    stage = "negative-template";
+    if (minic_x86_64_linux_uaccess_core_form_exact(
+            "call __put_user_%c5", strlen("call __put_user_%c5"), true) ||
+        minic_x86_64_linux_uaccess_core_form_exact(
+            "call __get_user_%c4; nop",
+            strlen("call __get_user_%c4; nop"), false)) goto done;
+    okay = true;
+done:
+    if (!okay) fprintf(stderr, "X86_UACCESS_MIR=FAIL stage=%s case=%zu\n",
+        stage, kind);
+    return okay;
+}
+
+/* The native SysV record result contract has three mutually exclusive
+ * transports: RAX, RAX+RDX and hidden RDI (sret). This fixture exercises
+ * the real whole-function selector, origin/effect verification and GNU
+ * formatter, including odd-width last eightbytes without overreads. */
+static bool scenario_record_return(size_t bytes, bool bad_sret,
+    bool bad_object, bool bad_layout) {
+    MinicCoreTypeContext types;
+    MinicCoreFunction core = {0};
+    MinicCoreType type = {0};
+    MinicCoreTypeId record_id, other_id;
+    MinicCoreBlockId block;
+    MinicCoreTerminator term = {0};
+    MinicCoreObjectStorage storage = {0};
+    MinicX86Frame frame = {0};
+    MinicTargetInfo target = {0};
+    MinicMachineFunction machine = {0};
+    MinicMachineGNUAsmPolicy policy = {0};
+    size_t value_offset = 8U, object_offset = 320U;
+    size_t i, j, gp_high = 0U, shl = 0U, rep = 0U, reads = 0U;
+    size_t writes = 0U;
+    bool reachable[1] = {false};
+    bool okay = false, reject = bad_sret || bad_object || bad_layout;
+    const char *stage = "setup";
+    FILE *out = NULL;
+    char *assembly = NULL;
+    size_t length = 0U;
+    minic_core_type_context_initialize(&types);
+    minic_core_function_initialize(&core);
+    core.name = malloc(sizeof("x86_record_return"));
+    if (core.name == NULL) goto done;
+    memcpy(core.name, "x86_record_return", sizeof("x86_record_return"));
+    core.name_length = sizeof("x86_record_return") - 1U;
+    type.kind = MINIC_CORE_TYPE_RECORD;
+    type.has_layout = true;
+    type.size = bytes;
+    type.alignment = bad_layout ? 32U : 1U;
+    type.value.record.is_complete = true;
+    if (!minic_core_type_register(&types, &type, &record_id)) goto done;
+    /* Distinct record identity with identical storage: a forged object
+     * type must never acquire the return ABI of the declared record. */
+    type.size = bytes + 1U;
+    if (!minic_core_type_register(&types, &type, &other_id) ||
+        !minic_core_function_define_signature(&core, &types,
+            record_id, NULL, 0U, MINIC_CALLING_CONVENTION_DEFAULT,
+            false) || !minic_core_function_add_block(&core, &block))
+        goto done;
+    core.objects = calloc(1U, sizeof(*core.objects));
+    if (core.objects == NULL) goto done;
+    core.objects[0].core_type_id = record_id;
+    core.object_count = core.object_capacity = 1U;
+    term.kind = MINIC_CORE_TERMINATOR_RETURN;
+    term.return_value = MINIC_CORE_VALUE_INVALID;
+    term.return_object = 0U;
+    if (!minic_core_function_set_terminator(&core, block, &term) ||
+        !minic_core_function_attach_type_context(&core, &types)) goto done;
+    if (bad_object) core.objects[0].core_type_id = other_id;
+    target.architecture = MINIC_TARGET_ARCH_X86_64;
+    target.data_layout = minic_x86_64_linux_data_layout();
+    frame.value_offsets = &value_offset;
+    frame.value_count = core.value_count;
+    frame.object_count = core.object_count;
+    frame.object_offsets = &object_offset;
+    frame.frame_size = 512U;
+    frame.has_sret = (bytes > 16U) != bad_sret;
+    frame.sret_save_offset = frame.has_sret ? 8U : 0U;
+    storage.extent = bytes;
+    storage.alignment = type.alignment;
+    frame.object_storage.objects = &storage;
+    frame.object_storage.count = 1U;
+    stage = "select";
+    if (reject) {
+        okay = !minic_x86_64_machine_select_core_subset(
+            &machine, &target, &core, &frame);
+        goto done;
+    }
+    if (!minic_x86_64_machine_select_core_subset(
+            &machine, &target, &core, &frame) ||
+        !minic_core_function_mark_reachable_blocks(&core,
+            reachable, 1U) ||
+        !minic_machine_core_coverage_verify(&core,
+            reachable, &machine) ||
+        !minic_x86_64_machine_gnu_asm_policy(&target, &policy) ||
+        !minic_machine_gnu_asm_preflight(&machine, &policy)) goto done;
+    stage = "native-opcodes";
+    for (i = 0U; i < machine.block_count; ++i)
+        for (j = 0U; j < machine.blocks[i].instruction_count; ++j) {
+            const MinicMachineInstruction *op =
+                &machine.blocks[i].instructions[j];
+            if (op->opcode == MINIC_X86_MI_REP_MOVSB) ++rep;
+            if (op->opcode == MINIC_X86_MI_SHL64_CL_R) ++shl;
+            if (op->effects & MINIC_MACHINE_EFFECT_MEMORY_READ) ++reads;
+            if (op->effects & MINIC_MACHINE_EFFECT_MEMORY_WRITE) ++writes;
+            if (op->opcode == MINIC_X86_MI_MOV64_RR &&
+                op->operand_count == 2U &&
+                op->operands[0].kind == MINIC_MACHINE_OPERAND_REGISTER &&
+                op->operands[1].kind == MINIC_MACHINE_OPERAND_REGISTER &&
+                op->operands[0].value.physical.reg.number ==
+                    MINIC_X86_REG_RAX &&
+                op->operands[1].value.physical.reg.number ==
+                    MINIC_X86_REG_RDX) ++gp_high;
+        }
+    if (reads == 0U || (bytes > 16U ?
+            (rep != (bytes > 128U ? 1U : 0U) || writes == 0U || gp_high != 0U) :
+            (rep != 0U || gp_high != (bytes > 8U ? 1U : 0U))) ||
+        (bytes == 3U || bytes == 7U || bytes == 15U ?
+            shl == 0U : shl != 0U)) goto done;
+    stage = "gnu-asm";
+    out = open_memstream(&assembly, &length);
+    if (out == NULL ||
+        !minic_machine_gnu_asm_emit_body(out, &machine, &policy) ||
+        fflush(out) != 0 || assembly == NULL || length == 0U)
+        goto done;
+    okay = strstr(assembly, "rep movsb") != NULL ? bytes > 128U :
+        bytes <= 128U;
+done:
+    if (!okay) fprintf(stderr,
+        "X86_CORE_MIR=FAIL record-return bytes=%zu bad_sret=%d "
+        "bad_object=%d bad_layout=%d stage=%s\n",
+        bytes, bad_sret ? 1 : 0, bad_object ? 1 : 0,
+        bad_layout ? 1 : 0, stage);
+    if (out != NULL) fclose(out);
+    free(assembly);
+    minic_machine_function_destroy(&machine);
+    minic_core_function_destroy(&core);
+    minic_core_type_context_destroy(&types);
+    return okay;
+}
+
+/* Native --emit-x87 functions are built from actual Core CALL numeric IDs.
+ * GCC links and invokes their real typed-MachineIR bodies in both directions
+ * of the SysV stack/x87 ABI.  The apparent helper name must not be emitted. */
+static bool scenario_x87_operation(unsigned int ordinal, FILE *out,
+    bool malformed) {
+    MinicCoreTypeContext types;
+    MinicCoreFunction core = {0};
+    MinicTargetInfo target = {0};
+    MinicX86Frame frame = {0};
+    MinicMachineFunction machine = {0};
+    MinicMachineGNUAsmPolicy policy = {0};
+    MinicCoreType type = {0};
+    MinicCoreTypeId ids[7], argument_types[2];
+    MinicCoreTypeId result_id;
+    MinicCoreBlockId block;
+    MinicCoreInstruction ins = {0};
+    MinicCoreTerminator term = {0};
+    MinicCoreValueId arguments[2], result;
+    MinicX86ArgLocation locations[2] = {{0}};
+    size_t offsets[3] = {16U, 32U, 48U};
+    size_t arg_count = ordinal < 5U || (ordinal >= 6U && ordinal < 9U) ?
+        2U : 1U;
+    size_t i;
+    bool okay = false;
+    char symbol[64];
+    const char *stage = "initialize";
+    if (ordinal < 1U || ordinal > 20U) return false;
+    minic_core_type_context_initialize(&types);
+    minic_core_function_initialize(&core);
+    if (snprintf(symbol, sizeof(symbol), "mini_x87_%u", ordinal) <= 0)
+        goto done;
+    core.name = malloc(strlen(symbol) + 1U);
+    if (core.name == NULL) goto done;
+    memcpy(core.name, symbol, strlen(symbol) + 1U);
+    core.name_length = strlen(symbol);
+    type.kind = MINIC_CORE_TYPE_FLOAT;
+    type.has_layout = true;
+    type.size = 16U;
+    type.alignment = 16U;
+    type.value.floating.format = MINIC_CORE_FLOAT_X87_EXTENDED80;
+    if (!minic_core_type_register(&types, &type, &ids[0])) goto done;
+    type.size = 4U;
+    type.alignment = 4U;
+    type.value.floating.format = MINIC_CORE_FLOAT_BINARY32;
+    if (!minic_core_type_register(&types, &type, &ids[1])) goto done;
+    type.size = 8U;
+    type.alignment = 8U;
+    type.value.floating.format = MINIC_CORE_FLOAT_BINARY64;
+    if (!minic_core_type_register(&types, &type, &ids[2])) goto done;
+    type = (MinicCoreType){0};
+    type.kind = MINIC_CORE_TYPE_INTEGER;
+    type.has_layout = true;
+    type.size = 4U;
+    type.alignment = 4U;
+    type.value.integer.bit_width = 32U;
+    type.value.integer.is_signed = true;
+    if (!minic_core_type_register(&types, &type, &ids[3])) goto done;
+    type.value.integer.is_signed = false;
+    if (!minic_core_type_register(&types, &type, &ids[4])) goto done;
+    type.size = 8U;
+    type.alignment = 8U;
+    type.value.integer.bit_width = 64U;
+    type.value.integer.is_signed = true;
+    if (!minic_core_type_register(&types, &type, &ids[5])) goto done;
+    type.value.integer.is_signed = false;
+    if (!minic_core_type_register(&types, &type, &ids[6])) goto done;
+    argument_types[0] = ids[0];
+    argument_types[1] = ids[0];
+    result_id = ids[0];
+    switch (ordinal) {
+    case 6U: case 7U: case 8U:
+        result_id = ids[3]; break;
+    case 9U: argument_types[0] = ids[1]; break;
+    case 10U: argument_types[0] = ids[2]; break;
+    case 11U: result_id = ids[1]; break;
+    case 12U: result_id = ids[2]; break;
+    case 13U: argument_types[0] = ids[3]; break;
+    case 14U: argument_types[0] = ids[4]; break;
+    case 15U: argument_types[0] = ids[5]; break;
+    case 16U: argument_types[0] = ids[6]; break;
+    case 17U: result_id = ids[3]; break;
+    case 18U: result_id = ids[4]; break;
+    case 19U: result_id = ids[5]; break;
+    case 20U: result_id = ids[6]; break;
+    default: break;
+    }
+    if (!minic_core_function_define_signature(&core, &types,
+            result_id, argument_types, arg_count,
+            MINIC_CALLING_CONVENTION_DEFAULT, false) ||
+        !minic_core_function_add_block(&core, &block)) goto done;
+    core.call_arguments = calloc(arg_count, sizeof(*core.call_arguments));
+    core.callees = calloc(1U, sizeof(*core.callees));
+    if (core.call_arguments == NULL || core.callees == NULL) goto done;
+    core.call_argument_count = core.call_argument_capacity = arg_count;
+    core.callee_count = core.callee_capacity = 1U;
+    core.callees[0].name = malloc(sizeof("__mini_x87_numeric_only"));
+    if (core.callees[0].name == NULL) goto done;
+    memcpy(core.callees[0].name, "__mini_x87_numeric_only",
+        sizeof("__mini_x87_numeric_only"));
+    core.callees[0].name_length = sizeof("__mini_x87_numeric_only") - 1U;
+    core.callees[0].core_function_type_id = core.core_function_type_id;
+    for (i = 0U; i < arg_count; ++i) {
+        ins = (MinicCoreInstruction){0};
+        ins.kind = MINIC_CORE_INSTRUCTION_PARAMETER;
+        ins.core_type_id = argument_types[i];
+        ins.value.parameter_index = i;
+        if (!minic_core_function_append_value_instruction(&core,
+                block, &ins, &arguments[i])) goto done;
+        core.call_arguments[i].kind = MINIC_CORE_CALL_ARGUMENT_VALUE;
+        core.call_arguments[i].value.value_id = arguments[i];
+        if (argument_types[i] == ids[0]) {
+            locations[i].kind = MINIC_X86_ARG_X87_MEMORY;
+            locations[i].on_stack = true;
+            locations[i].stack_index = i * 2U;
+        } else if (argument_types[i] == ids[1] ||
+                   argument_types[i] == ids[2]) {
+            locations[i].kind = MINIC_X86_ARG_SSE;
+            locations[i].fp_index = i;
+        } else {
+            locations[i].kind = MINIC_X86_ARG_INTEGER;
+            locations[i].gp_index = i;
+        }
+    }
+    ins = (MinicCoreInstruction){0};
+    ins.kind = MINIC_CORE_INSTRUCTION_CALL;
+    ins.core_type_id = result_id;
+    ins.value.call.callee_id = 0U;
+    ins.value.call.argument_begin = 0U;
+    ins.value.call.argument_count = arg_count;
+    ins.value.call.result_object = MINIC_CORE_OBJECT_INVALID;
+    ins.value.call.extended_float_operation =
+        (MinicCoreExtendedFloatOperation)ordinal;
+    if (!minic_core_function_append_value_instruction(&core,
+            block, &ins, &result)) goto done;
+    term.kind = MINIC_CORE_TERMINATOR_RETURN;
+    term.return_value = result;
+    if (!minic_core_function_set_terminator(&core, block, &term) ||
+        !minic_core_function_attach_type_context(&core, &types) ||
+        !minic_core_function_verify(&core)) goto done;
+    target.architecture = MINIC_TARGET_ARCH_X86_64;
+    target.data_layout = minic_x86_64_linux_data_layout();
+    frame.value_offsets = offsets;
+    frame.value_count = core.value_count;
+    frame.frame_size = 128U;
+    frame.incoming_arguments.locations = locations;
+    frame.incoming_arguments.argument_count = arg_count;
+    frame.incoming_arguments.calling_convention =
+        MINIC_CALLING_CONVENTION_DEFAULT;
+    if (malformed) locations[0].kind =
+        locations[0].kind == MINIC_X86_ARG_INTEGER ?
+            MINIC_X86_ARG_X87_MEMORY : MINIC_X86_ARG_INTEGER;
+    stage = "select";
+    if (malformed) {
+        okay = !minic_x86_64_machine_select_core_subset(
+            &machine, &target, &core, &frame);
+        goto done;
+    }
+    if (!minic_x86_64_machine_select_core_subset(
+            &machine, &target, &core, &frame) ||
+        !minic_x86_64_machine_gnu_asm_policy(&target, &policy) ||
+        !minic_machine_gnu_asm_preflight(&machine, &policy)) goto done;
+    stage = "native-emission";
+    if (fprintf(out, ".globl %s\n%s:\n", symbol, symbol) < 0 ||
+        !minic_machine_gnu_asm_emit_body(out, &machine, &policy)) goto done;
+    okay = true;
+done:
+    if (!okay) fprintf(stderr,
+        "X86_X87_FAMILY=FAIL op=%u stage=%s malformed=%d\n",
+        ordinal, stage, malformed ? 1 : 0);
+    minic_machine_function_destroy(&machine);
+    minic_core_function_destroy(&core);
+    minic_core_type_context_destroy(&types);
+    return okay;
+}
+
+static bool scenario_x87_outgoing_call(bool variadic, FILE *out,
+    bool malformed) {
+    MinicCoreTypeContext types;
+    MinicCoreFunction core = {0};
+    MinicTargetInfo target = {0};
+    MinicX86Frame frame = {0};
+    MinicMachineFunction machine = {0};
+    MinicMachineGNUAsmPolicy policy = {0};
+    MinicCoreType type = {0};
+    MinicCoreTypeId ld_id, int_id, parameter_types[2], callee_id;
+    MinicCoreBlockId block;
+    MinicCoreInstruction ins = {0};
+    MinicCoreTerminator term = {0};
+    MinicCoreValueId argument, fixed = MINIC_CORE_VALUE_INVALID, result;
+    MinicX86ArgLocation incoming = {0}, outgoing_locations[2] = {{0}};
+    MinicX86OutgoingCallSite site = {0};
+    size_t offsets[3] = {16U, 32U, 48U};
+    size_t call_id;
+    bool okay = false;
+    const char *stage = "initialize";
+    const char *symbol = variadic ? "mini_x87_varcall" :
+        "mini_x87_abi_forward";
+    const char *callee = variadic ? "gnu_x87_vararg" :
+        "gnu_x87_identity";
+    minic_core_type_context_initialize(&types);
+    minic_core_function_initialize(&core);
+    core.name = malloc(strlen(symbol) + 1U);
+    if (core.name == NULL) goto done;
+    memcpy(core.name, symbol, strlen(symbol) + 1U);
+    core.name_length = strlen(symbol);
+    type.kind = MINIC_CORE_TYPE_FLOAT;
+    type.has_layout = true;
+    type.size = 16U;
+    type.alignment = 16U;
+    type.value.floating.format = MINIC_CORE_FLOAT_X87_EXTENDED80;
+    if (!minic_core_type_register(&types, &type, &ld_id)) goto done;
+    type = (MinicCoreType){0};
+    type.kind = MINIC_CORE_TYPE_INTEGER;
+    type.has_layout = true;
+    type.size = 4U;
+    type.alignment = 4U;
+    type.value.integer.bit_width = 32U;
+    type.value.integer.is_signed = true;
+    if (!minic_core_type_register(&types, &type, &int_id)) goto done;
+    parameter_types[0] = variadic ? int_id : ld_id;
+    type = (MinicCoreType){0};
+    type.kind = MINIC_CORE_TYPE_FUNCTION;
+    type.value.function.return_type = ld_id;
+    type.value.function.parameters = parameter_types;
+    type.value.function.parameter_count = 1U;
+    type.value.function.is_variadic = variadic;
+    type.value.function.calling_convention =
+        MINIC_CALLING_CONVENTION_DEFAULT;
+    if (!minic_core_type_register(&types, &type, &callee_id) ||
+        !minic_core_function_define_signature(&core, &types,
+            ld_id, &ld_id, 1U, MINIC_CALLING_CONVENTION_DEFAULT, false) ||
+        !minic_core_function_add_block(&core, &block)) goto done;
+    core.callees = calloc(1U, sizeof(*core.callees));
+    core.call_arguments = calloc(variadic ? 2U : 1U,
+        sizeof(*core.call_arguments));
+    if (core.callees == NULL || core.call_arguments == NULL) goto done;
+    core.callee_count = core.callee_capacity = 1U;
+    core.call_argument_count = core.call_argument_capacity =
+        variadic ? 2U : 1U;
+    core.callees[0].name = malloc(strlen(callee) + 1U);
+    if (core.callees[0].name == NULL) goto done;
+    memcpy(core.callees[0].name, callee, strlen(callee) + 1U);
+    core.callees[0].name_length = strlen(callee);
+    core.callees[0].core_function_type_id = callee_id;
+    ins.kind = MINIC_CORE_INSTRUCTION_PARAMETER;
+    ins.core_type_id = ld_id;
+    ins.value.parameter_index = 0U;
+    if (!minic_core_function_append_value_instruction(&core,
+            block, &ins, &argument)) goto done;
+    incoming.kind = MINIC_X86_ARG_X87_MEMORY;
+    incoming.on_stack = true;
+    if (variadic) {
+        ins = (MinicCoreInstruction){0};
+        ins.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
+        ins.core_type_id = int_id;
+        ins.value.integer_value = 42;
+        if (!minic_core_function_append_value_instruction(&core,
+                block, &ins, &fixed)) goto done;
+        core.call_arguments[0].kind = MINIC_CORE_CALL_ARGUMENT_VALUE;
+        core.call_arguments[0].value.value_id = fixed;
+        core.call_arguments[1].kind = MINIC_CORE_CALL_ARGUMENT_VALUE;
+        core.call_arguments[1].value.value_id = argument;
+        outgoing_locations[0].kind = MINIC_X86_ARG_INTEGER;
+        outgoing_locations[0].gp_index = 0U;
+        outgoing_locations[1].kind = MINIC_X86_ARG_X87_MEMORY;
+        outgoing_locations[1].on_stack = true;
+    } else {
+        core.call_arguments[0].kind = MINIC_CORE_CALL_ARGUMENT_VALUE;
+        core.call_arguments[0].value.value_id = argument;
+        outgoing_locations[0].kind = MINIC_X86_ARG_X87_MEMORY;
+        outgoing_locations[0].on_stack = true;
+    }
+    ins = (MinicCoreInstruction){0};
+    ins.kind = MINIC_CORE_INSTRUCTION_CALL;
+    ins.core_type_id = ld_id;
+    ins.value.call.callee_id = 0U;
+    ins.value.call.argument_count = core.call_argument_count;
+    ins.value.call.result_object = MINIC_CORE_OBJECT_INVALID;
+    call_id = core.instruction_count;
+    if (!minic_core_function_append_value_instruction(&core,
+            block, &ins, &result)) goto done;
+    term.kind = MINIC_CORE_TERMINATOR_RETURN;
+    term.return_value = result;
+    if (!minic_core_function_set_terminator(&core, block, &term) ||
+        !minic_core_function_attach_type_context(&core, &types) ||
+        !minic_core_function_verify(&core)) goto done;
+    target.architecture = MINIC_TARGET_ARCH_X86_64;
+    target.data_layout = minic_x86_64_linux_data_layout();
+    frame.value_offsets = offsets;
+    frame.value_count = core.value_count;
+    frame.frame_size = 128U;
+    frame.incoming_arguments.locations = &incoming;
+    frame.incoming_arguments.argument_count = 1U;
+    frame.incoming_arguments.calling_convention =
+        MINIC_CALLING_CONVENTION_DEFAULT;
+    site.instruction_id = call_id;
+    site.plan.locations = outgoing_locations;
+    site.plan.argument_count = core.call_argument_count;
+    site.plan.stack_bytes = 16U;
+    site.plan.is_variadic = variadic;
+    site.plan.calling_convention = MINIC_CALLING_CONVENTION_DEFAULT;
+    frame.outgoing_call_plans.sites = &site;
+    frame.outgoing_call_plans.count = 1U;
+    if (malformed) outgoing_locations[variadic ? 1U : 0U].on_stack = false;
+    stage = "select";
+    if (malformed) {
+        okay = !minic_x86_64_machine_select_core_subset(
+            &machine, &target, &core, &frame);
+        goto done;
+    }
+    if (!minic_x86_64_machine_select_core_subset(
+            &machine, &target, &core, &frame) ||
+        !minic_x86_64_machine_gnu_asm_policy(&target, &policy) ||
+        !minic_machine_gnu_asm_preflight(&machine, &policy)) goto done;
+    stage = "emit";
+    okay = fprintf(out, ".globl %s\n%s:\n", symbol, symbol) >= 0 &&
+        minic_machine_gnu_asm_emit_body(out, &machine, &policy);
+done:
+    if (!okay) fprintf(stderr,
+        "X86_X87_ABI=FAIL variadic=%d malformed=%d stage=%s\n",
+        variadic ? 1 : 0, malformed ? 1 : 0, stage);
+    minic_machine_function_destroy(&machine);
+    minic_core_function_destroy(&core);
+    minic_core_type_context_destroy(&types);
+    return okay;
+}
+
+static bool scenario_x87_literal_memory(bool memory, FILE *out,
+    bool malformed) {
+    MinicCoreTypeContext types;
+    MinicCoreFunction core = {0};
+    MinicTargetInfo target = {0};
+    MinicX86Frame frame = {0};
+    MinicMachineFunction machine = {0};
+    MinicMachineGNUAsmPolicy policy = {0};
+    MinicCoreType type = {0};
+    MinicCoreTypeId ld_id, pointer_id, void_id;
+    MinicCoreBlockId block;
+    MinicCoreInstruction ins = {0};
+    MinicCoreTerminator term = {0};
+    MinicCoreValueId pointer = MINIC_CORE_VALUE_INVALID, value;
+    MinicX86ArgLocation incoming = {0};
+    size_t offsets[2] = {16U, 32U};
+    bool okay = false;
+    const char *stage = "initialize";
+    const char *symbol = memory ? "mini_x87_memory" : "mini_x87_literal";
+    minic_core_type_context_initialize(&types);
+    minic_core_function_initialize(&core);
+    core.name = malloc(strlen(symbol) + 1U);
+    if (core.name == NULL) goto done;
+    memcpy(core.name, symbol, strlen(symbol) + 1U);
+    core.name_length = strlen(symbol);
+    type.kind = MINIC_CORE_TYPE_FLOAT;
+    type.has_layout = true;
+    type.size = 16U;
+    type.alignment = 16U;
+    type.value.floating.format = MINIC_CORE_FLOAT_X87_EXTENDED80;
+    if (!minic_core_type_register(&types, &type, &ld_id)) goto done;
+    type = (MinicCoreType){0};
+    type.kind = MINIC_CORE_TYPE_POINTER;
+    type.has_layout = true;
+    type.size = 8U;
+    type.alignment = 8U;
+    type.value.pointer.pointee = ld_id;
+    if (!minic_core_type_register(&types, &type, &pointer_id)) goto done;
+    type = (MinicCoreType){0};
+    type.kind = MINIC_CORE_TYPE_VOID;
+    if (!minic_core_type_register(&types, &type, &void_id) ||
+        !minic_core_function_define_signature(&core, &types,
+            ld_id, memory ? &pointer_id : NULL, memory ? 1U : 0U,
+            MINIC_CALLING_CONVENTION_DEFAULT, false) ||
+        !minic_core_function_add_block(&core, &block)) goto done;
+    if (memory) {
+        ins.kind = MINIC_CORE_INSTRUCTION_PARAMETER;
+        ins.core_type_id = pointer_id;
+        ins.value.parameter_index = 0U;
+        if (!minic_core_function_append_value_instruction(&core,
+                block, &ins, &pointer)) goto done;
+        ins = (MinicCoreInstruction){0};
+        ins.kind = MINIC_CORE_INSTRUCTION_LOAD;
+        ins.core_type_id = ld_id;
+        ins.value.load.address = pointer;
+        ins.value.load.is_volatile = true;
+        incoming.kind = MINIC_X86_ARG_INTEGER;
+    } else {
+        ins.kind = MINIC_CORE_INSTRUCTION_FLOATING_CONSTANT;
+        ins.core_type_id = ld_id;
+        ins.value.floating128_bits.high = UINT64_C(0x3fff000000000000);
+        ins.value.floating128_bits.low = malformed ? 1U :
+            UINT64_C(0x0002000000000000);
+    }
+    if (!minic_core_function_append_value_instruction(&core,
+            block, &ins, &value)) goto done;
+    if (memory) {
+        ins = (MinicCoreInstruction){0};
+        ins.kind = MINIC_CORE_INSTRUCTION_STORE;
+        ins.core_type_id = void_id;
+        ins.value.store.address = pointer;
+        ins.value.store.stored_value = value;
+        ins.value.store.is_volatile = true;
+        if (!minic_core_function_append_effect_instruction(&core,
+                block, &ins)) goto done;
+    }
+    term.kind = MINIC_CORE_TERMINATOR_RETURN;
+    term.return_value = value;
+    if (!minic_core_function_set_terminator(&core, block, &term) ||
+        !minic_core_function_attach_type_context(&core, &types)) goto done;
+    target.architecture = MINIC_TARGET_ARCH_X86_64;
+    target.data_layout = minic_x86_64_linux_data_layout();
+    frame.value_offsets = offsets;
+    frame.value_count = core.value_count;
+    frame.frame_size = 64U;
+    if (memory) {
+        frame.incoming_arguments.locations = &incoming;
+        frame.incoming_arguments.argument_count = 1U;
+        frame.incoming_arguments.calling_convention =
+            MINIC_CALLING_CONVENTION_DEFAULT;
+    }
+    if (malformed && memory) incoming.kind = MINIC_X86_ARG_SSE;
+    stage = "select";
+    if (malformed) {
+        okay = !minic_x86_64_machine_select_core_subset(
+            &machine, &target, &core, &frame);
+        goto done;
+    }
+    if (!minic_core_function_verify(&core) ||
+        !minic_x86_64_machine_select_core_subset(
+            &machine, &target, &core, &frame) ||
+        !minic_x86_64_machine_gnu_asm_policy(&target, &policy) ||
+        !minic_machine_gnu_asm_preflight(&machine, &policy)) goto done;
+    stage = "emit";
+    okay = fprintf(out, ".globl %s\n%s:\n", symbol, symbol) >= 0 &&
+        minic_machine_gnu_asm_emit_body(out, &machine, &policy);
+done:
+    if (!okay) fprintf(stderr,
+        "X86_X87_LITERAL_MEMORY=FAIL memory=%d malformed=%d stage=%s\n",
+        memory ? 1 : 0, malformed ? 1 : 0, stage);
+    minic_machine_function_destroy(&machine);
+    minic_core_function_destroy(&core);
+    minic_core_type_context_destroy(&types);
+    return okay;
+}
+
+int main(int argc, char **argv) {
+    unsigned int fp_mode, source_form;
+    if (argc == 2 && strcmp(argv[1], "--emit-x87") == 0) {
+        if (fputs(".text\n", stdout) == EOF) return 1;
+        for (fp_mode = 1U; fp_mode <= 20U; ++fp_mode)
+            if (!scenario_x87_operation(fp_mode, stdout, false)) return 1;
+        if (!scenario_x87_outgoing_call(false, stdout, false) ||
+            !scenario_x87_outgoing_call(true, stdout, false) ||
+            !scenario_x87_literal_memory(false, stdout, false) ||
+            !scenario_x87_literal_memory(true, stdout, false)) return 1;
+        return fputs(".section .note.GNU-stack,\"\",@progbits\n",
+            stdout) == EOF ? 1 : 0;
+    }
+    if (argc == 2 && strcmp(argv[1], "--reject-x87") == 0) {
+        for (fp_mode = 1U; fp_mode <= 20U; ++fp_mode)
+            if (!scenario_x87_operation(fp_mode, stdout, true)) return 1;
+        return scenario_x87_outgoing_call(false, stdout, true) &&
+            scenario_x87_outgoing_call(true, stdout, true) &&
+            scenario_x87_literal_memory(false, stdout, true) &&
+            scenario_x87_literal_memory(true, stdout, true) ? 0 : 1;
+    }
+    if (argc == 2 && strcmp(argv[1], "--emit-fp") == 0) {
+        for (fp_mode = 0U; fp_mode < 12U; ++fp_mode)
+            if (!scenario_fp_boundary(fp_mode, stdout)) return 1;
+        return fputs(".section .note.GNU-stack,\"\",@progbits\n",
+            stdout) == EOF ? 1 : 0;
+    }
+    if (argc == 2 && strcmp(argv[1], "--record-return-only") == 0) {
+        return scenario_record_return(1U, false, false, false) &&
+            scenario_record_return(3U, false, false, false) &&
+            scenario_record_return(7U, false, false, false) &&
+            scenario_record_return(8U, false, false, false) &&
+            scenario_record_return(9U, false, false, false) &&
+            scenario_record_return(15U, false, false, false) &&
+            scenario_record_return(16U, false, false, false) &&
+            scenario_record_return(17U, false, false, false) &&
+            scenario_record_return(256U, false, false, false) &&
+            scenario_record_return(7U, true, false, false) &&
+            scenario_record_return(256U, true, false, false) &&
+            scenario_record_return(7U, false, true, false) &&
+            scenario_record_return(9U, false, false, true) ? 0 : 1;
+    }
+    if (argc != 1) return 2;
+    if (!scenario(false, false) || !scenario(false, true) ||
+        !scenario(true, false) || !scenario_parameter() ||
+        !scenario_float() || !scenario_direct_call() ||
+        !scenario_planned_scalar_call(false, false) ||
+        !scenario_planned_scalar_call(true, false) ||
+        !scenario_planned_scalar_call(false, true) ||
+        !scenario_record_transfer(0U, 0U, false, false) ||
+        !scenario_record_transfer(0U, 0U, true, true) ||
+        !scenario_record_transfer(0U, 1U, false, false) ||
+        !scenario_record_transfer(0U, 1U, true, false) ||
+        !scenario_record_transfer(7U, 0U, true, true) ||
+        !scenario_record_transfer(129U, 0U, false, false) ||
+        !scenario_record_transfer(32U, 1U, true, false) ||
+        !scenario_record_transfer(16U, 2U, false, false) ||
+        !scenario_record_return(1U, false, false, false) ||
+        !scenario_record_return(3U, false, false, false) ||
+        !scenario_record_return(7U, false, false, false) ||
+        !scenario_record_return(8U, false, false, false) ||
+        !scenario_record_return(9U, false, false, false) ||
+        !scenario_record_return(15U, false, false, false) ||
+        !scenario_record_return(16U, false, false, false) ||
+        !scenario_record_return(17U, false, false, false) ||
+        !scenario_record_return(256U, false, false, false) ||
+        !scenario_record_return(7U, true, false, false) ||
+        !scenario_record_return(256U, true, false, false) ||
+        !scenario_record_return(7U, false, true, false) ||
+        !scenario_record_return(9U, false, false, true) ||
+        !scenario_parameter_object(7U,
+            MINIC_X86_ARG_RECORD_ONE_GP, false, false) ||
+        !scenario_parameter_object(15U,
+            MINIC_X86_ARG_RECORD_TWO_GP, false, false) ||
+        !scenario_parameter_object(256U,
+            MINIC_X86_ARG_RECORD_MEMORY, true, false) ||
+        !scenario_parameter_object(0U,
+            MINIC_X86_ARG_RECORD_EMPTY, false, false) ||
+        !scenario_parameter_object(7U,
+            MINIC_X86_ARG_RECORD_ONE_GP, false, true) ||
+        !scenario_symbol_address(false, false, false, false, false) ||
+        !scenario_symbol_address(false, true, false, false, false) ||
+        !scenario_symbol_address(false, true, true, false, false) ||
+        !scenario_symbol_address(false, true, true, true, false) ||
+        !scenario_symbol_address(true, false, false, false, false) ||
+        !scenario_symbol_address(true, true, false, false, false) ||
+        !scenario_symbol_address(true, true, true, false, false) ||
+        !scenario_symbol_address(false, false, false, false, true) ||
+        !scenario_relaxed_atomic() ||
+        !scenario_new_core_case(X86_NEW_CLZ_ZERO) ||
+        !scenario_new_core_case(X86_NEW_CTZ_ZERO) ||
+        !scenario_new_core_case(X86_NEW_CLZ_NONZERO) ||
+        !scenario_new_core_case(X86_NEW_CTZ_NONZERO) ||
+        !scenario_new_core_case(X86_NEW_OVERFLOW_32) ||
+        !scenario_new_core_case(X86_NEW_OVERFLOW_64) ||
+        !scenario_new_core_case(X86_NEW_VARIADIC) ||
+        !scenario_new_core_case(X86_NEW_ALLOCA) ||
+        !scenario_new_core_case(X86_NEW_BLOCK_ADDRESS)) return 1;
+    for (fp_mode = 0U; fp_mode < 12U; ++fp_mode)
+        if (!scenario_fp_boundary(fp_mode, NULL)) return 1;
+    for (source_form = 0U; source_form <= 7U; ++source_form)
+        if (!scenario_source_zero_barrier(source_form)) return 1;
+    if (!scenario_uaccess_call_opcode()) return 1;
+    puts("X86_CORE_MIR=PASS cycle=1 physical_alu=1 parameter=1 sse2=1 direct_call=1 mixed_vararg_stack=1 indirect_call=1 ms_shadow_stack=1 record_copy=1 record_load=1 vector_storage=1 record_abi=1 record_return=13/13 volatile=1 empty_record_noop=1 rep_movsb=1 pic_symbol=1 got_weak=1 head_32s_typed=1 relaxed_atomic=1 compiler_barrier=1 origin=1 fail_closed=1 bitscan_zero_nonzero=1 overflow_32_64=1 va_arg=1 alloca=1 block_address=1 fp_boundary=1 zero_asm=8/8 uaccess_physical=4/4");
+    return 0;
+}

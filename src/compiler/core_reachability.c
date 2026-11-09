@@ -1,456 +1,483 @@
 #include "compiler/core_reachability.h"
 #include "core/core_ir.h"
-#include "frontend/ast.h"
+#include "core/symbol_identity.h"
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-/* Preserve original CFG-root and specialization pruning behavior,
- * including non-Core relocation roots and allocation-failure fallback. */
-static MinicFunctionId minic_core_named_function_id(
-    const MinicC0Program *program, const char *name, size_t name_length) {
-    size_t function_index;
+/* Core and ModuleIR are the entire source-independent ownership graph.
+ * Function/global ordinals are stable across lowering and module ingress. */
+typedef struct ModuleObjectSymbol {
+    const char *name;
+    size_t length, id;
+} ModuleObjectSymbol;
 
-    if (program == NULL || name == NULL || name_length == 0U) {
-        return MINIC_FUNCTION_INVALID;
-    }
-    for (function_index = 0U; function_index < program->function_count; ++function_index) {
-        const MinicFunction *function = &program->functions[function_index];
-        const char *symbol_name = minic_c0_function_symbol_name(function);
-        size_t symbol_name_length;
+typedef struct ModuleClosure {
+    MinicCoreFunctionSet *set;
+    bool reachable_blocks_only;
+    bool *functions_live, *functions_seen, *objects_live;
+    size_t *function_queue, *object_queue, *owned_heads, *owned_next;
+    size_t function_head, function_count, object_head, object_count;
+    ModuleObjectSymbol *symbols;
+    MinicCoreModuleFunctionNameIndex function_names;
+    bool asm_names_token_safe;
+} ModuleClosure;
 
-        if (symbol_name == NULL) {
-            continue;
-        }
-        symbol_name_length = function->assembler_name != NULL
-                                 ? function->assembler_name_length
-                                 : function->name_length;
-        if (symbol_name_length == name_length &&
-            memcmp(symbol_name, name, name_length) == 0) {
-            return function_index;
-        }
-    }
-    return MINIC_FUNCTION_INVALID;
+static int compare_object_symbol(const void *a, const void *b) {
+    const ModuleObjectSymbol *left = a, *right = b;
+    if (left->length < right->length) return -1;
+    if (left->length > right->length) return 1;
+    return memcmp(left->name, right->name, left->length);
 }
 
-static bool minic_enqueue_core_named_function(
-    const MinicC0Program *program,
-    const char *name,
-    size_t name_length,
-    bool *reachable,
-    MinicFunctionId *queue,
-    size_t *queue_count) {
-    MinicFunctionId target;
-
-    if (program == NULL || reachable == NULL || queue == NULL || queue_count == NULL) {
-        return false;
-    }
-    target = minic_core_named_function_id(program, name, name_length);
-    if (target == MINIC_FUNCTION_INVALID || target >= program->function_count ||
-        !program->functions[target].is_defined || reachable[target]) {
-        return true;
-    }
-    if (*queue_count >= program->function_count) {
-        return false;
-    }
-    reachable[target] = true;
-    queue[(*queue_count)++] = target;
+static bool enqueue_object(ModuleClosure *c, size_t id) {
+    const MinicCoreModule *m = &c->set->module;
+    if (id >= m->global_count) return false;
+    if (c->objects_live[id]) return true;
+    if (c->object_count >= m->global_count) return false;
+    c->objects_live[id] = true;
+    c->object_queue[c->object_count++] = id;
     return true;
 }
 
-static bool minic_enqueue_core_block(MinicCoreBlockId block_id,
-                                     size_t block_count,
-                                     bool *reachable,
-                                     MinicCoreBlockId *queue,
-                                     size_t *queue_count) {
-    if (reachable == NULL || queue == NULL || queue_count == NULL ||
-        block_id >= block_count) {
-        return false;
-    }
-    if (reachable[block_id]) {
-        return true;
-    }
-    if (*queue_count >= block_count) {
-        return false;
-    }
-    reachable[block_id] = true;
-    queue[(*queue_count)++] = block_id;
+static bool enqueue_owned(ModuleClosure *c, size_t owner) {
+    const MinicCoreModule *m = &c->set->module;
+    size_t id;
+    if (owner >= m->function_count) return false;
+    for (id = c->owned_heads[owner]; id != SIZE_MAX; id = c->owned_next[id])
+        if (!enqueue_object(c, id)) return false;
     return true;
 }
 
-static bool minic_walk_reachable_core_edges(const MinicC0Program *program,
-                                            const MinicCoreFunction *core,
-                                            bool *function_reachable,
-                                            MinicFunctionId *function_queue,
-                                            size_t *function_queue_count,
-                                            bool emit_reachable_core_blocks_only) {
-    bool *block_reachable = NULL;
-    MinicCoreBlockId *block_queue = NULL;
-    size_t block_queue_count = 0U;
-    size_t block_queue_cursor = 0U;
-    bool success = false;
+static bool enqueue_function(ModuleClosure *c, size_t id) {
+    const MinicCoreModule *m = &c->set->module;
+    const MinicCoreModuleFunctionSymbol *f;
+    if (id >= m->function_count) return false;
+    f = &m->function_symbols[id];
+    if (!f->is_defined || c->functions_live[id]) return true;
+    if (c->function_count >= m->function_count) return false;
+    c->functions_live[id] = true;
+    c->function_queue[c->function_count++] = id;
+    if (!enqueue_owned(c, id)) return false;
+    /* Borrowers retain local statics owned by the canonical Module function.
+     * The source implementation may use this generic edge for cloned bodies. */
+    return f->storage_owner_function_index == SIZE_MAX ||
+        enqueue_owned(c, f->storage_owner_function_index);
+}
 
-    if (program == NULL || core == NULL || function_reachable == NULL ||
-        function_queue == NULL || function_queue_count == NULL) {
+static bool enqueue_named_function(ModuleClosure *c, const char *name, size_t n) {
+    size_t first, last, i;
+    if (name == NULL || n == 0U) return false;
+    if (!minic_core_module_function_name_index_find(
+            &c->function_names, name, n, &first, &last)) return false;
+    for (i = first; i < last; ++i)
+        if (!enqueue_function(c, c->function_names.entries[i].function_index))
+            return false;
+    return true; /* External/target-synthesized function. */
+}
+
+static bool enqueue_named_object(ModuleClosure *c, const char *name, size_t n) {
+    const size_t count = c->set->module.global_count;
+    size_t lo = 0U, hi = count, i;
+    if (name == NULL || n == 0U) return false;
+    /* Name lookup is a range: multiple C declarations may have one assembler
+     * identity. Keep exactly those owners, not every unrelated static object
+     * in the translation unit whenever any duplicate spelling exists. */
+    while (lo < hi) {
+        size_t mid = lo + (hi - lo) / 2U;
+        const ModuleObjectSymbol *s = &c->symbols[mid];
+        int cmp = n < s->length ? -1 : n > s->length ? 1 :
+            memcmp(name, s->name, n);
+        if (cmp <= 0) hi = mid;
+        else lo = mid + 1U;
+    }
+    for (i = lo; i < count; ++i) {
+        const ModuleObjectSymbol *s = &c->symbols[i];
+        if (s->length != n || memcmp(s->name, name, n) != 0) break;
+        if (!enqueue_object(c, s->id)) return false;
+    }
+    return true; /* External/target-synthesized object. */
+}
+
+static bool core_asm_id_for_instruction(const MinicCoreInstruction *ins,
+                                        MinicCoreInlineAsmId *id) {
+    switch (ins->kind) {
+    case MINIC_CORE_INSTRUCTION_OPAQUE_INLINE_ASM:
+        *id = ins->value.inline_asm_id; return true;
+    case MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM:
+        *id = ins->value.structured_inline_asm.inline_asm_id; return true;
+    default: return false;
+    }
+}
+
+/* An operand-bearing, target-qualified inline assembly form is a sealed
+ * machine instruction, not a source-level reference to a C function sharing
+ * its opcode name. Leave opaque/pure-mnemonic assembly on the existing
+ * conservative symbol-retention path.
+ * Linux's static `invtlb()` wrapper is one such case: the real function
+ * callsites were specialized to constant GNU `i` operands, but mistaking
+ * the literal `invtlb` mnemonic for a relocation resurrects its otherwise
+ * dead unspecialized body. Continue scanning every operand token and every
+ * explicit symbol reference; exempt only the first instruction mnemonic. */
+static bool asm_target_mnemonic_collision(const MinicCoreInlineAsm *assembly,
+                                          bool operands_present,
+                                          const char *symbol) {
+    size_t begin = 0U;
+    size_t length;
+    if (assembly == NULL || symbol == NULL || !operands_present ||
+        assembly->operand_plan_owner != MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED ||
+        assembly->target_machine_form_id == 0U ||
+        assembly->template_text == NULL)
         return false;
-    }
-    if (core->block_count == 0U) {
-        return true;
-    }
-    if (core->blocks == NULL ||
-        (core->instruction_count != 0U && core->instructions == NULL) ||
-        core->entry_block >= core->block_count) {
-        return false;
-    }
-    block_reachable = (bool *)calloc(core->block_count, sizeof(*block_reachable));
-    block_queue = (MinicCoreBlockId *)malloc(core->block_count * sizeof(*block_queue));
-    if (block_reachable == NULL || block_queue == NULL) {
-        goto done;
-    }
-    /* Match the selected target's actual ELF reference universe. The two
-     * RISC-V emitters filter Core blocks with the shared CFG root algorithm,
-     * including source labels. Other backends still write every block; keep
-     * their conservative all-block reference traversal unchanged. */
-    if (emit_reachable_core_blocks_only) {
-        size_t block_index;
-        if (!minic_core_function_mark_reachable_blocks(
-                core, block_reachable, core->block_count)) {
-            goto done;
-        }
-        for (block_index = 0U; block_index < core->block_count; ++block_index) {
-            if (block_reachable[block_index]) {
-                block_queue[block_queue_count++] = (MinicCoreBlockId)block_index;
-            }
-        }
-    } else {
-        size_t root_block;
-        for (root_block = 0U; root_block < core->block_count; ++root_block) {
-            if (!minic_enqueue_core_block((MinicCoreBlockId)root_block,
-                                          core->block_count,
-                                          block_reachable,
-                                          block_queue,
-                                          &block_queue_count)) {
-                goto done;
-            }
-        }
-    }
+    while (begin < assembly->template_length &&
+           (assembly->template_text[begin] == ' ' ||
+            assembly->template_text[begin] == '\t' ||
+            assembly->template_text[begin] == '\r' ||
+            assembly->template_text[begin] == '\n')) ++begin;
+    length = strlen(symbol);
+    return length != 0U && length <= assembly->template_length - begin &&
+        memcmp(assembly->template_text + begin, symbol, length) == 0 &&
+        (begin + length == assembly->template_length ||
+         assembly->template_text[begin + length] == ' ' ||
+         assembly->template_text[begin + length] == '\t' ||
+         assembly->template_text[begin + length] == '\r' ||
+         assembly->template_text[begin + length] == '\n') &&
+        !minic_core_asm_names_symbol(
+            assembly->template_text + begin + length,
+            assembly->template_length - begin - length, symbol);
+}
 
-    while (block_queue_cursor < block_queue_count) {
-        MinicCoreBlockId block_id = block_queue[block_queue_cursor++];
-        const MinicCoreBlock *block = &core->blocks[block_id];
-        size_t block_instruction_index;
+static bool asm_name_byte(unsigned char c) {
+    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+           (c >= '0' && c <= '9') || c == '_' || c == '.' || c == '$';
+}
 
-        /* A valid block may contain only a terminator and therefore own no
-         * instruction-id array.  Require storage only when the block actually
-         * contains instructions. */
-        if (block->instruction_count != 0U && block->instructions == NULL) {
-            goto done;
-        }
-
-        for (block_instruction_index = 0U;
-             block_instruction_index < block->instruction_count;
-             ++block_instruction_index) {
-            MinicCoreInstructionId instruction_id =
-                block->instructions[block_instruction_index];
-            const MinicCoreInstruction *instruction;
-
-            if (instruction_id >= core->instruction_count) {
-                goto done;
-            }
-            instruction = &core->instructions[instruction_id];
-            if (instruction->kind == MINIC_CORE_INSTRUCTION_CALL) {
-                MinicCoreCalleeId callee_id = instruction->value.call.callee_id;
-                const MinicCoreCallee *callee;
-                if (callee_id >= core->callee_count) {
-                    goto done;
-                }
-                callee = &core->callees[callee_id];
-                if (!minic_enqueue_core_named_function(program,
-                                                       callee->name,
-                                                       callee->name_length,
-                                                       function_reachable,
-                                                       function_queue,
-                                                       function_queue_count)) {
-                    goto done;
-                }
-            } else if (instruction->kind == MINIC_CORE_INSTRUCTION_FUNCTION_ADDRESS) {
-                MinicCoreFunctionSymbolId symbol_id = instruction->value.function_symbol_id;
-                const MinicCoreFunctionSymbol *symbol;
-                if (symbol_id >= core->function_symbol_count) {
-                    goto done;
-                }
-                symbol = &core->function_symbols[symbol_id];
-                if (!minic_enqueue_core_named_function(program,
-                                                       symbol->name,
-                                                       symbol->name_length,
-                                                       function_reachable,
-                                                       function_queue,
-                                                       function_queue_count)) {
-                    goto done;
-                }
-            }
-        }
-
-        if (!block->has_terminator) {
+/* The public Core ASM matcher searches whole assembler tokens. Usually all
+ * Module symbol spellings are in its portable alphabet, so scan the template
+ * once and resolve each token in the already-built Module name indexes.
+ * Preserve the original matcher for forged/out-of-subset Module spellings:
+ * tokenizing such a spelling could otherwise split a valid exact match. */
+static bool scan_core_inline_asm_token_names(ModuleClosure *c,
+                                             const MinicCoreInlineAsm *assembly,
+                                             bool operands_present) {
+    const char *text = assembly->template_text;
+    size_t cursor = 0U;
+    while (cursor < assembly->template_length) {
+        size_t begin, first, last, j;
+        if (!asm_name_byte((unsigned char)text[cursor])) {
+            ++cursor;
             continue;
         }
-        switch (block->terminator.kind) {
-            case MINIC_CORE_TERMINATOR_RETURN:
-            case MINIC_CORE_TERMINATOR_UNREACHABLE:
-                break;
-            case MINIC_CORE_TERMINATOR_BRANCH:
-                if (!minic_enqueue_core_block(block->terminator.branch_target,
-                                             core->block_count,
-                                             block_reachable,
-                                             block_queue,
-                                             &block_queue_count)) {
-                    goto done;
-                }
-                break;
-            case MINIC_CORE_TERMINATOR_CONDITIONAL_BRANCH:
-                if (!minic_enqueue_core_block(block->terminator.conditional.when_true,
-                                             core->block_count,
-                                             block_reachable,
-                                             block_queue,
-                                             &block_queue_count) ||
-                    !minic_enqueue_core_block(block->terminator.conditional.when_false,
-                                             core->block_count,
-                                             block_reachable,
-                                             block_queue,
-                                             &block_queue_count)) {
-                    goto done;
-                }
-                break;
-            case MINIC_CORE_TERMINATOR_INDIRECT_BRANCH: {
-                size_t target_block;
-                /* The Core value feeding a computed goto can select any
-                 * address-taken label. Conservatively retaining all blocks is
-                 * correct; ordinary direct/conditional CFG stays precise. */
-                for (target_block = 0U; target_block < core->block_count; ++target_block) {
-                    if (!minic_enqueue_core_block((MinicCoreBlockId)target_block,
-                                                 core->block_count,
-                                                 block_reachable,
-                                                 block_queue,
-                                                 &block_queue_count)) {
-                        goto done;
-                    }
-                }
-                break;
-            }
-            default:
-                goto done;
+        begin = cursor++;
+        while (cursor < assembly->template_length &&
+               asm_name_byte((unsigned char)text[cursor])) ++cursor;
+        if (!minic_core_module_function_name_index_find(
+                &c->function_names, text + begin, cursor - begin,
+                &first, &last)) return false;
+        for (j = first; j < last; ++j) {
+            const size_t id = c->function_names.entries[j].function_index;
+            const char *name = c->set->module.function_symbols[id].name;
+            if (!asm_target_mnemonic_collision(assembly, operands_present, name) &&
+                !enqueue_function(c, id)) return false;
+        }
+        if (!enqueue_named_object(c, text + begin, cursor - begin)) return false;
+    }
+    return true;
+}
+
+static bool scan_core_inline_asm_unusual_names(ModuleClosure *c,
+                                                const MinicCoreInlineAsm *assembly,
+                                                bool operands_present) {
+    const MinicCoreModule *m = &c->set->module;
+    size_t i;
+    for (i = 0U; i < m->function_count; ++i) {
+        const MinicCoreModuleFunctionSymbol *f = &m->function_symbols[i];
+        if (f->name != NULL &&
+            minic_core_asm_names_symbol(assembly->template_text,
+                assembly->template_length, f->name) &&
+            !asm_target_mnemonic_collision(assembly, operands_present, f->name)) {
+            if (!enqueue_named_function(c, f->name, strlen(f->name))) return false;
         }
     }
-    success = true;
+    for (i = 0U; i < m->global_count; ++i) {
+        const MinicCoreModuleGlobal *g = &m->globals[i];
+        if (g->name != NULL &&
+            minic_core_asm_names_symbol(assembly->template_text,
+                assembly->template_length, g->name) &&
+            !enqueue_named_object(c, g->name, strlen(g->name))) return false;
+    }
+    return true;
+}
 
+/* Only a live Core instruction can contribute these edges. Literal GNU ASM
+ * text has no C operand identity: conservatively resolve whole assembler
+ * tokens, while typed operand references remain exact and source-independent. */
+static bool scan_core_inline_asm(ModuleClosure *c,
+                                  const MinicCoreInlineAsm *assembly,
+                                  bool operands_present) {
+    const MinicCoreModule *m = &c->set->module;
+    size_t i;
+    for (i = 0U; i < assembly->symbol_reference_count; ++i) {
+        const MinicCoreInlineAsmSymbolReference *ref =
+            &assembly->symbol_references[i];
+        if (ref->kind == MINIC_CORE_INLINE_ASM_SYMBOL_FUNCTION) {
+            if (!enqueue_named_function(c, ref->name, ref->name_length)) return false;
+        } else if (ref->kind == MINIC_CORE_INLINE_ASM_SYMBOL_OBJECT) {
+            if (!enqueue_named_object(c, ref->name, ref->name_length)) return false;
+        } else return false;
+    }
+    if (assembly->preserve_all_static_objects)
+        for (i = 0U; i < m->global_count; ++i)
+            if (!enqueue_object(c, i)) return false;
+    if (assembly->template_text == NULL) return false;
+    return c->asm_names_token_safe ?
+        scan_core_inline_asm_token_names(c, assembly, operands_present) :
+        scan_core_inline_asm_unusual_names(c, assembly, operands_present);
+}
+
+static bool scan_core_function(ModuleClosure *c, size_t id) {
+    const MinicCoreFunction *fn = &c->set->functions[id];
+    bool *reach = NULL;
+    MinicCoreBlockId *queue = NULL;
+    size_t count = 0U, cursor = 0U, i;
+    bool ok = false;
+    /* A reached lowering failure is reported by the post-closure verifier.
+     * It is not license to retain an unrelated dead static body. */
+    if (c->set->statuses[id] != MINIC_CORE_LOWER_OK) return true;
+    if (fn->block_count == 0U) return true;
+    if (fn->blocks == NULL || fn->entry_block >= fn->block_count ||
+        (fn->instruction_count != 0U && fn->instructions == NULL) ||
+        fn->block_count > SIZE_MAX / sizeof(*queue)) return false;
+    reach = calloc(fn->block_count, sizeof(*reach));
+    queue = malloc(fn->block_count * sizeof(*queue));
+    if (reach == NULL || queue == NULL) goto done;
+    if (c->reachable_blocks_only) {
+        if (!minic_core_function_mark_reachable_blocks(fn, reach, fn->block_count))
+            goto done;
+    } else memset(reach, 1, fn->block_count * sizeof(*reach));
+    for (i = 0U; i < fn->block_count; ++i)
+        if (reach[i]) queue[count++] = (MinicCoreBlockId)i;
+    while (cursor < count) {
+        const MinicCoreBlock *block = &fn->blocks[queue[cursor++]];
+        size_t j;
+        if (block->instruction_count != 0U && block->instructions == NULL)
+            goto done;
+        for (j = 0U; j < block->instruction_count; ++j) {
+            MinicCoreInstructionId ins_id = block->instructions[j];
+            const MinicCoreInstruction *ins;
+            if (ins_id >= fn->instruction_count) goto done;
+            ins = &fn->instructions[ins_id];
+            if (ins->kind == MINIC_CORE_INSTRUCTION_CALL) {
+                MinicCoreCalleeId callee = ins->value.call.callee_id;
+                if (callee >= fn->callee_count ||
+                    !enqueue_named_function(c, fn->callees[callee].name,
+                                            fn->callees[callee].name_length)) goto done;
+            } else if (ins->kind == MINIC_CORE_INSTRUCTION_FUNCTION_ADDRESS) {
+                MinicCoreFunctionSymbolId symbol = ins->value.function_symbol_id;
+                if (symbol >= fn->function_symbol_count ||
+                    !enqueue_named_function(c, fn->function_symbols[symbol].name,
+                                            fn->function_symbols[symbol].name_length)) goto done;
+            } else if (ins->kind == MINIC_CORE_INSTRUCTION_GLOBAL_ADDRESS) {
+                MinicCoreGlobalId global = ins->value.global_id;
+                if (global >= fn->global_count ||
+                    !enqueue_named_object(c, fn->globals[global].name,
+                                          fn->globals[global].name_length)) goto done;
+            } else {
+                MinicCoreInlineAsmId asm_id;
+                if (core_asm_id_for_instruction(ins, &asm_id) &&
+                    (asm_id >= fn->inline_asm_count ||
+                     !scan_core_inline_asm(c, &fn->inline_asms[asm_id],
+                        ins->kind == MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM &&
+                        ins->value.structured_inline_asm.operand_count != 0U))) goto done;
+            }
+            /* BLOCK_ADDRESS denotes a Core-local block, not a TU symbol. */
+        }
+        if (block->has_terminator &&
+            block->terminator.kind == MINIC_CORE_TERMINATOR_INDIRECT_BRANCH) {
+            /* Preserve the historical all-block conservative computed-goto
+             * closure, even when the backend's CFG filter is narrower. */
+            for (i = 0U; i < fn->block_count; ++i)
+                if (!reach[i]) {
+                    reach[i] = true;
+                    queue[count++] = (MinicCoreBlockId)i;
+                }
+        }
+    }
+    ok = true;
 done:
-    free(block_queue);
-    free(block_reachable);
-    return success;
+    free(queue);
+    free(reach);
+    return ok;
 }
 
-
-static bool minic_inline_source_has_noncore_root(
-    const MinicC0Program *program, MinicFunctionId source_id) {
-    size_t function_index;
-    size_t object_index;
-
-    if (program == NULL || source_id >= program->function_count) {
-        return true;
-    }
-    if (program->entry_function == source_id || program->functions[source_id].force_emit) {
-        return true;
-    }
-    for (function_index = 0U; function_index < program->function_count; ++function_index) {
-        if (program->functions[function_index].alias_target == source_id) {
-            return true;
-        }
-    }
-    for (object_index = 0U; object_index < program->global_object_count; ++object_index) {
-        const MinicGlobalObject *object = &program->global_objects[object_index];
-        size_t relocation_index;
-        for (relocation_index = 0U; relocation_index < object->relocation_count;
-             ++relocation_index) {
-            const MinicGlobalRelocation *relocation = &object->relocations[relocation_index];
-            if (relocation->target_kind == MINIC_GLOBAL_RELOCATION_FUNCTION &&
-                (MinicFunctionId)relocation->target_id == source_id) {
-                return true;
-            }
-        }
-    }
-    return false;
+static void destroy_closure(ModuleClosure *c) {
+    minic_core_module_function_name_index_destroy(&c->function_names);
+    free(c->symbols);
+    free(c->owned_next);
+    free(c->owned_heads);
+    free(c->object_queue);
+    free(c->function_queue);
+    free(c->objects_live);
+    free(c->functions_seen);
+    free(c->functions_live);
 }
 
-/* Core pruning asks the same non-Core-root question for many functions.
- * Collect the immutable entry/force-emit/alias/relocation facts once for this
- * pass. Core pruning only changes is_referenced, not these root inputs.
- * Allocation failure retains the previous per-function scan. */
-static bool *minic_build_noncore_root_index(const MinicC0Program *program) {
-    bool *roots;
-    size_t function_index;
-    size_t object_index;
-
-    if (program == NULL) {
-        return NULL;
-    }
-    roots = (bool *)calloc(program->function_count == 0U ? 1U : program->function_count,
-                           sizeof(*roots));
-    if (roots == NULL) {
-        return NULL;
-    }
-    for (function_index = 0U; function_index < program->function_count; ++function_index) {
-        MinicFunctionId alias_target = program->functions[function_index].alias_target;
-        if ((MinicFunctionId)function_index == program->entry_function ||
-            program->functions[function_index].force_emit) {
-            roots[function_index] = true;
+static bool initialize_closure(ModuleClosure *c) {
+    const MinicCoreModule *m = &c->set->module;
+    const size_t nf = m->function_count == 0U ? 1U : m->function_count;
+    const size_t no = m->global_count == 0U ? 1U : m->global_count;
+    size_t i;
+    if (nf > SIZE_MAX / sizeof(size_t) || no > SIZE_MAX / sizeof(size_t) ||
+        no > SIZE_MAX / sizeof(*c->symbols)) return false;
+    c->functions_live = calloc(nf, sizeof(bool));
+    c->functions_seen = calloc(nf, sizeof(bool));
+    c->objects_live = calloc(no, sizeof(bool));
+    c->function_queue = malloc(nf * sizeof(size_t));
+    c->object_queue = malloc(no * sizeof(size_t));
+    c->owned_heads = malloc(nf * sizeof(size_t));
+    c->owned_next = malloc(no * sizeof(size_t));
+    c->symbols = calloc(no, sizeof(*c->symbols));
+    if (c->functions_live == NULL || c->functions_seen == NULL ||
+        c->objects_live == NULL || c->function_queue == NULL ||
+        c->object_queue == NULL || c->owned_heads == NULL ||
+        c->owned_next == NULL || c->symbols == NULL) return false;
+    if (!minic_core_module_function_name_index_build(
+            m, &c->function_names)) return false;
+    c->asm_names_token_safe = true;
+    for (i = 0U; i < m->function_count; ++i)
+        if (!minic_core_assembler_symbol_lexically_safe(
+                m->function_symbols[i].name)) c->asm_names_token_safe = false;
+    for (i = 0U; i < m->function_count; ++i) c->owned_heads[i] = SIZE_MAX;
+    for (i = 0U; i < m->global_count; ++i) {
+        const MinicCoreModuleGlobal *g = &m->globals[i];
+        const size_t owner = g->owner_function_index;
+        if (g->name == NULL || g->name[0] == '\0') return false;
+        if (!minic_core_assembler_symbol_lexically_safe(g->name))
+            c->asm_names_token_safe = false;
+        c->symbols[i].name = g->name;
+        c->symbols[i].length = strlen(g->name);
+        c->symbols[i].id = i;
+        c->owned_next[i] = SIZE_MAX;
+        if (owner != SIZE_MAX) {
+            if (owner >= m->function_count) return false;
+            c->owned_next[i] = c->owned_heads[owner];
+            c->owned_heads[owner] = i;
         }
-        if (alias_target < program->function_count) {
-            roots[alias_target] = true;
-        }
     }
-    for (object_index = 0U; object_index < program->global_object_count; ++object_index) {
-        const MinicGlobalObject *object = &program->global_objects[object_index];
-        size_t relocation_index;
-        for (relocation_index = 0U; relocation_index < object->relocation_count;
-             ++relocation_index) {
-            const MinicGlobalRelocation *relocation = &object->relocations[relocation_index];
-            MinicFunctionId target = (MinicFunctionId)relocation->target_id;
-            if (relocation->target_kind == MINIC_GLOBAL_RELOCATION_FUNCTION &&
-                target < program->function_count) {
-                roots[target] = true;
-            }
-        }
-    }
-    return roots;
+    qsort(c->symbols, m->global_count, sizeof(*c->symbols), compare_object_symbol);
+    return true;
 }
 
-static bool minic_inline_source_is_core_reachable_only(
-    const MinicC0Program *program, MinicFunctionId source_id,
-    const bool *noncore_roots) {
-    const MinicFunction *source;
-
-    if (program == NULL || source_id >= program->function_count) {
-        return false;
-    }
-    source = &program->functions[source_id];
-    /* Internal function bodies are implementation details, not emission roots.
-     * Parser-level is_referenced can stay set after every executable call was
-     * rewritten, specialized, or folded away.  Let the lowered Core graph pull
-     * the body back in when a reachable CALL or FUNCTION_ADDRESS still needs
-     * it; preserve only entry/force-emit/alias/global-relocation roots that live
-     * outside that graph.  This applies to ordinary static functions as well as
-     * static inline helpers so dead CONFIG-disabled helper subgraphs disappear. */
-    return source->is_defined && source->is_internal &&
-           !(noncore_roots != NULL
-                 ? noncore_roots[source_id]
-                 : minic_inline_source_has_noncore_root(program, source_id));
-}
-
-bool minic_prune_inline_specializations_from_core(
-    MinicC0Program *program, const MinicCoreFunctionSet *set,
-    bool emit_reachable_core_blocks_only) {
-    bool *reachable = NULL;
-    bool *processed = NULL;
-    bool *noncore_roots = NULL;
-    MinicFunctionId *queue = NULL;
-    size_t queue_count = 0U;
-    size_t queue_cursor = 0U;
-    size_t function_index;
-    size_t kept = 0U;
-    size_t pruned = 0U;
+bool minic_core_function_set_close_reachability(
+    MinicCoreFunctionSet *set, bool emit_reachable_core_blocks_only) {
+    ModuleClosure c;
+    MinicCoreModule *m;
+    bool *canonical_owner_live = NULL;
+    size_t i, kept = 0U, pruned = 0U;
     bool success = false;
-
-    if (program == NULL || set == NULL || set->function_count != program->function_count ||
+    if (set == NULL || set->module.finalized ||
+        set->module.function_count != set->function_count ||
         (set->function_count != 0U &&
-         (set->functions == NULL || set->statuses == NULL))) {
+         (set->functions == NULL || set->statuses == NULL ||
+          set->module.function_symbols == NULL)) ||
+        (set->module.global_count != 0U && set->module.globals == NULL))
         return false;
-    }
-    reachable = (bool *)calloc(program->function_count == 0U ? 1U : program->function_count,
-                               sizeof(*reachable));
-    processed = (bool *)calloc(program->function_count == 0U ? 1U : program->function_count,
-                               sizeof(*processed));
-    queue = (MinicFunctionId *)malloc(
-        (program->function_count == 0U ? 1U : program->function_count) * sizeof(*queue));
-    if (reachable == NULL || processed == NULL || queue == NULL) {
-        goto done;
-    }
+    memset(&c, 0, sizeof(c));
+    c.set = set;
+    c.reachable_blocks_only = emit_reachable_core_blocks_only;
+    m = &set->module;
+    if (!initialize_closure(&c)) goto done;
 
-    /* All inputs to non-Core-root classification are stable throughout this
-     * pass: only is_referenced changes below. If this small index cannot be
-     * allocated, preserve the previous conservative per-query scan. */
-    noncore_roots = minic_build_noncore_root_index(program);
-
-    /* Preserve the established root policy for ordinary functions. Synthetic
-     * specialization clones are never roots: they survive only through an
-     * actual instruction in a CFG-reachable lowered Core block. */
-    for (function_index = 0U; function_index < program->function_count; ++function_index) {
-        const MinicFunction *function = &program->functions[function_index];
-        if (function->is_integer_specialization || !function->is_defined ||
-            (function->is_internal && !function->is_referenced)) {
-            continue;
-        }
-        /* Parser-level references are only a discovery hint for internal
-         * functions.  The final lowered Core graph is the authoritative
-         * executable reachability source; non-Core roots stay conservative. */
-        if (minic_inline_source_is_core_reachable_only(
-                program, (MinicFunctionId)function_index, noncore_roots)) {
-            continue;
-        }
-        reachable[function_index] = true;
-        queue[queue_count++] = function_index;
+    for (i = 0U; i < m->function_count; ++i) {
+        const MinicCoreModuleFunctionSymbol *f = &m->function_symbols[i];
+        if (f->is_reachability_root && !enqueue_function(&c, i)) goto done;
+        /* Always-emitted file-scope ASM is a true Module root. Function-body
+         * ASM operand references instead close through live Core effects. */
+        if (f->is_file_asm_root &&
+            !enqueue_named_function(&c, f->name, strlen(f->name))) goto done;
+        /* Alias definitions can remain linker-visible without a C callsite. */
+        if (f->alias_target_index != SIZE_MAX &&
+            !enqueue_function(&c, f->alias_target_index)) goto done;
+    }
+    for (i = 0U; i < m->global_count; ++i) {
+        const MinicCoreModuleGlobal *g = &m->globals[i];
+        if ((g->is_file_asm_root ||
+             (g->owner_function_index == SIZE_MAX &&
+              g->is_file_scope_reachability_root)) &&
+            !enqueue_object(&c, i)) goto done;
     }
 
-    while (queue_cursor < queue_count) {
-        MinicFunctionId caller_id = queue[queue_cursor++];
-
-        if (caller_id >= set->function_count || processed[caller_id]) {
-            continue;
-        }
-        processed[caller_id] = true;
-        if (set->statuses[caller_id] != MINIC_CORE_LOWER_OK) {
-            continue;
-        }
-        if (!minic_walk_reachable_core_edges(program,
-                                             &set->functions[caller_id],
-                                             reachable,
-                                             queue,
-                                             &queue_count,
-                                             emit_reachable_core_blocks_only)) {
-            goto done;
-        }
-    }
-
-    for (function_index = 0U; function_index < program->function_count; ++function_index) {
-        MinicFunction *function = &program->functions[function_index];
-        if (!function->is_integer_specialization) {
-            if (minic_inline_source_is_core_reachable_only(
-                    program, (MinicFunctionId)function_index, noncore_roots)) {
-                function->is_referenced = reachable[function_index];
+    while (c.function_head < c.function_count || c.object_head < c.object_count) {
+        while (c.object_head < c.object_count) {
+            const size_t id = c.object_queue[c.object_head++];
+            const MinicCoreModuleGlobal *g = &m->globals[id];
+            size_t j;
+            if (g->alias_target_index != SIZE_MAX &&
+                !enqueue_object(&c, g->alias_target_index)) goto done;
+            for (j = 0U; j < g->reference_count; ++j) {
+                const MinicCoreModuleReference *ref = &g->references[j];
+                if (ref->kind == MINIC_CORE_MODULE_REFERENCE_OBJECT) {
+                    if (!enqueue_object(&c, ref->target_index)) goto done;
+                } else if (ref->kind == MINIC_CORE_MODULE_REFERENCE_FUNCTION) {
+                    const char *name;
+                    if (ref->target_index >= m->function_count) goto done;
+                    name = m->function_symbols[ref->target_index].name;
+                    /* A function pointer relocates by assembler spelling.
+                     * Its original Module FunctionId may be only an extern
+                     * declaration while an internal definition has the name. */
+                    if (name == NULL ||
+                        !enqueue_named_function(&c, name, strlen(name))) goto done;
+                } else if (ref->kind == MINIC_CORE_MODULE_REFERENCE_OWNER_LABEL) {
+                    /* A label relocation specifically retains the canonical
+                     * owner's FunctionBody, never a source-sharing clone. */
+                    if (!enqueue_function(&c, ref->target_index)) goto done;
+                } else goto done;
             }
-            continue;
         }
-        function->is_referenced = reachable[function_index];
-        if (function->is_referenced) {
-            kept += 1U;
-        } else {
-            pruned += 1U;
+        if (c.function_head < c.function_count) {
+            const size_t id = c.function_queue[c.function_head++];
+            if (c.functions_seen[id]) continue;
+            c.functions_seen[id] = true;
+            if (!scan_core_function(&c, id)) goto done;
         }
     }
-    if (kept != 0U || pruned != 0U) {
+
+    canonical_owner_live = calloc(m->function_count == 0U ? 1U :
+                                   m->function_count, sizeof(bool));
+    if (canonical_owner_live == NULL) goto done;
+    for (i = 0U; i < m->function_count; ++i) {
+        const MinicCoreModuleFunctionSymbol *f = &m->function_symbols[i];
+        if (!c.functions_live[i]) continue;
+        canonical_owner_live[i] = true;
+        if (f->storage_owner_function_index != SIZE_MAX)
+            canonical_owner_live[f->storage_owner_function_index] = true;
+    }
+    /* Transactional publication: no C program writes, no partial pruning. */
+    for (i = 0U; i < m->function_count; ++i) {
+        MinicCoreModuleFunctionSymbol *f = &m->function_symbols[i];
+        if (f->is_defined && f->is_internal) f->is_referenced = c.functions_live[i];
+        if (f->storage_owner_function_index != SIZE_MAX) {
+            if (f->is_referenced) ++kept;
+            else ++pruned;
+        }
+    }
+    for (i = 0U; i < m->global_count; ++i) {
+        MinicCoreModuleGlobal *g = &m->globals[i];
+        if (g->owner_function_index != SIZE_MAX)
+            g->emittable = canonical_owner_live[g->owner_function_index] ||
+                c.objects_live[i];
+        else
+            g->emittable = !g->is_internal || c.objects_live[i];
+    }
+    if (kept != 0U || pruned != 0U)
         (void)fprintf(stderr,
                       "MINIC_INLINE_SPECIALIZATION_CORE_REACHABILITY_V0 kept=%zu pruned=%zu\n",
-                      kept,
-                      pruned);
-    }
+                      kept, pruned);
     success = true;
-
 done:
-    free(noncore_roots);
-    free(queue);
-    free(processed);
-    free(reachable);
+    free(canonical_owner_live);
+    destroy_closure(&c);
     return success;
 }
-

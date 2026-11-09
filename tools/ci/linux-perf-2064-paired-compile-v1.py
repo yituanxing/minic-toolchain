@@ -20,12 +20,13 @@ def sha256(path):
             h.update(b)
     return h.hexdigest()
 
-def run(driver, source, output, stdout, stderr, owner, arm):
+def run(driver, source, output, stdout, stderr, owner, arm, minic_args):
     env = os.environ.copy()
     env.setdefault("CORE_FAST_TRACE", "1")
     start = time.perf_counter_ns()
     try:
-        p = subprocess.run([str(driver), "-S", str(source), "-o", str(output)],
+        p = subprocess.run([str(driver), *minic_args,
+                            "-S", str(source), "-o", str(output)],
                            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                            timeout=3600, check=False, env=env)
     except subprocess.TimeoutExpired as e:
@@ -34,7 +35,9 @@ def run(driver, source, output, stdout, stderr, owner, arm):
     if arm == "candidate":
         stdout.write_bytes(p.stdout)
         stderr.write_bytes(p.stderr)
-    if p.returncode or not output.is_file() or output.stat().st_size == 0:
+    # Empty Kbuild-owned TUs must still create a .s, but GNU as accepts an
+    # existing zero-byte file. Keep missing output and nonzero exits fatal.
+    if p.returncode or not output.is_file():
         raise RuntimeError(f"MiniC A/B failure owner={owner} arm={arm} rc={p.returncode} stderr={p.stderr[-1200:].decode(errors='replace')}")
     return ms, sha256(output)
 
@@ -51,7 +54,8 @@ def pair(a):
     for arm in order:
         driver = a.baseline if arm=="baseline" else a.candidate
         output = a.baseline_assembly if arm=="baseline" else a.assembly
-        measured[arm]=run(driver,a.input,output,a.stdout,a.stderr,a.owner,arm)
+        measured[arm]=run(driver,a.input,output,a.stdout,a.stderr,
+                          a.owner,arm,a.minic_arg)
     if measured["baseline"][1]!=measured["candidate"][1]:
         raise RuntimeError("MiniC full A/B assembly mismatch owner="+a.owner)
     fields=[a.owner, "%.3f"%measured["baseline"][0], "%.3f"%measured["candidate"][0],
@@ -124,6 +128,8 @@ def main():
     for n in ("baseline","candidate","input","assembly","baseline-assembly","stdout","stderr","log"):
         one.add_argument("--"+n,type=Path,required=True)
     one.add_argument("--owner",required=True)
+    one.add_argument("--minic-arg",action="append",default=[],
+                     help="Repeat original Kbuild target and language options")
     summ=subs.add_parser("summarize")
     for n in ("log","objects-file","out"):
         summ.add_argument("--"+n,type=Path,required=True)

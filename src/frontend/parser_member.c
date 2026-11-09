@@ -24,6 +24,9 @@ static void search_record_field_path(const MinicParser *parser,
         if (field == NULL) {
             continue;
         }
+        /* FIXME(MC-034): this reverse mapping is valid only for a Record
+           physically inside Program.records. Static designated initializers
+           also pass a stack Record snapshot: pointer subtraction is UB. */
         record_stack[depth] = (MinicRecordId)(record - parser->program->records);
         field_stack[depth] = index;
         if (!field->is_anonymous_member && field->name_length == name_length &&
@@ -92,9 +95,8 @@ static bool add_pointer_record_field(MinicParser *parser,
         record_type.record_id != record_id) {
         return false;
     }
-    member_type = field->type;
-    if (minic_type_is_const(record_type) && !minic_type_add_const(member_type, &member_type)) {
-        minic_parser_error(parser, "cannot propagate const to record member");
+    if (!minic_type_record_member(record_type, field->type, &member_type)) {
+        minic_parser_error(parser, "cannot propagate record member qualifiers");
         return false;
     }
 
@@ -255,13 +257,17 @@ static bool parse_record_rvalue_member(MinicParser *parser,
         return false;
     }
     field = minic_c0_record_field(record, path.field_indices[0]);
-    if (field == NULL || field->is_array || minic_type_is_record(field->type)) {
-        minic_parser_error(parser, "record rvalue member currently requires a scalar field");
+    /* A member selected from a record rvalue is never an lvalue. In
+     * particular, an array member can decay to a pointer into the containing
+     * record's full-expression temporary, but cannot become an assignable
+     * array lvalue. Core must materialize the record before taking its
+     * array field's address. */
+    if (field == NULL) {
+        minic_parser_error(parser, "record rvalue member field is invalid");
         return false;
     }
-    member_type = field->type;
-    if (minic_type_is_const(base_type) && !minic_type_add_const(member_type, &member_type)) {
-        minic_parser_error(parser, "cannot propagate const to record rvalue member");
+    if (!minic_type_record_member(base_type, field->type, &member_type)) {
+        minic_parser_error(parser, "cannot propagate record rvalue member qualifiers");
         return false;
     }
     if (!minic_parser_advance(parser)) {

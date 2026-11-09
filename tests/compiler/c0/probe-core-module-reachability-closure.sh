@@ -1,0 +1,193 @@
+#!/bin/sh
+# P32: one Core CFG + Module symbol reachability acceptance entry. The legacy
+# focused probes remain independent fixtures; this gate joins their proof
+# surfaces without constructing a second compiler-side reachability path.
+set -eu
+
+root=$(CDPATH= cd -- "$(dirname "$0")/../../.." && pwd)
+minic=${MINIC_CC:-"$root/build/release/bin/minic-cc"}
+host_cc=${CC:-cc}
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT HUP INT TERM
+
+if [ ! -x "$minic" ]; then
+    echo "CORE_MODULE_REACHABILITY=FAIL compiler_not_executable=$minic" >&2
+    exit 1
+fi
+
+# One canonical closure must preserve the older graph edge classes too:
+# used/section/file-asm object roots, local static owner, function/object
+# alias roots and dead callback pruning. Never infer an ASM symbol by text
+# matching; check the compiler's resulting ELF symbol edges downstream.
+MINIC_CC="$minic" sh "$root/tests/compiler/c0/probe-gnu-dead-file-static-object-graph.sh"
+MINIC="$minic" BUILD_DIR="$work" bash "$root/tests/compiler/c0/run-static-local-owner-reachability.sh"
+MINIC="$minic" BUILD_DIR="$work" sh "$root/tests/compiler/c0/run-gnu-object-unused-alias.sh"
+MINIC="$minic" BUILD_DIR="$work" sh "$root/tests/compiler/c0/run-gnu-function-copy-alias.sh"
+echo 'CORE_MODULE_ALIAS_OWNER=PASS used_section_file_asm static_local dead_callback function_alias object_alias'
+
+# A source-level "referenced" mark in an if(0) branch is not a live Core
+# reference. Section and GNU asm-name metadata on static functions may name
+# a real ELF symbol only after Core reachability has kept its owner. Assert
+# that neither metadata variant revives an undefined external call. A static
+# GNU visibility attribute is intentionally absent: GCC ignores it and MiniC
+# rejects it because visibility requires external linkage.
+dead_source="$root/tests/compiler/c0/core_module_dead_root_after_prune.c"
+"$host_cc" -std=gnu11 -O2 -Wall -Wextra -Werror -no-pie \
+    "$dead_source" -o "$work/dead-root.gnu"
+"$work/dead-root.gnu"
+"$host_cc" -std=gnu11 -E -P -x c "$dead_source" -o "$work/dead-root.i"
+for target in x86_64 riscv32 riscv64 aarch64 loongarch64; do
+    "$minic" --target="$target-linux" -S "$work/dead-root.i" \
+        -o "$work/dead-root.$target.s"
+    if grep -Eq 'mc_dead_(section|asmname)_unresolved|mc_dead_(section_helper|asmname_symbol)|\.text\.mc_dead_section' \
+            "$work/dead-root.$target.s"; then
+        echo "CORE_MODULE_REACHABILITY=FAIL target=$target dead_static_metadata_resurrected" >&2
+        exit 1
+    fi
+done
+"$host_cc" -c -x assembler "$work/dead-root.x86_64.s" \
+    -o "$work/dead-root.minic.o"
+if nm -u "$work/dead-root.minic.o" |
+    grep -Eq 'mc_dead_(section|asmname)_unresolved'; then
+    echo 'CORE_MODULE_REACHABILITY=FAIL native_ELF_dead_static_undefined' >&2
+    exit 1
+fi
+"$host_cc" -no-pie "$work/dead-root.minic.o" -o "$work/dead-root.minic"
+"$work/dead-root.minic"
+echo 'CORE_MODULE_DEAD_SOURCE_METADATA=PASS five_ISA=5 GNU_native=0 MiniC_native=0 dead_section_and_asmname=pruned'
+
+# Distinct C entities can intentionally share a GNU assembler name. Source
+# lookup order must not discard the matching static definition merely because
+# an undefined external declaration was encountered first. The definition is
+# selected by executable Core symbol reachability, not stale lexical uses.
+duplicate_source="$root/tests/compiler/c0/core_duplicate_assembler_name_reachability.c"
+"$host_cc" -std=gnu11 -O0 -Wall -Wextra -Werror -fno-pie -no-pie \
+    "$duplicate_source" -o "$work/duplicate-name.gnu"
+"$work/duplicate-name.gnu"
+"$host_cc" -std=gnu11 -E -P -x c \
+    "$duplicate_source" -o "$work/duplicate-name.i"
+for target in x86_64 riscv32 riscv64 aarch64 loongarch64; do
+    "$minic" --target="$target-linux" -S "$work/duplicate-name.i" \
+        -o "$work/duplicate-name.$target.s"
+    if ! grep -Fxq 'mc_duplicate_asm:' "$work/duplicate-name.$target.s" ||
+       ! grep -Fxq 'mc_duplicate_address_asm:' "$work/duplicate-name.$target.s" ||
+       grep -Fxq 'mc_duplicate_asm_root:' "$work/duplicate-name.$target.s"; then
+        echo "CORE_MODULE_REACHABILITY=FAIL target=$target duplicate_asm_call_initializer_or_dead_root" >&2
+        exit 1
+    fi
+done
+# The GNU `i` form for a function's assembler alias is currently admitted
+# on RISC-V; its owner must now be an actually live Core CALL in `main`, not
+# a dead source function rescued by a global source-ASM operand scan. Other
+# ISA machine ASM forms stay fail-closed, while their CALL/initializer tests
+# above remain mandatory on all five targets.
+"$host_cc" -std=gnu11 -E -P -x c -DMINIC_TEST_ASM_ROOT \
+    "$duplicate_source" -o "$work/duplicate-live-asm.i"
+for target in riscv32 riscv64; do
+    "$minic" --target="$target-linux" -S "$work/duplicate-live-asm.i" \
+        -o "$work/duplicate-live-asm.$target.s"
+    if ! grep -Fxq 'mc_duplicate_asm_root:' \
+            "$work/duplicate-live-asm.$target.s"; then
+        echo "CORE_MODULE_REACHABILITY=FAIL target=$target live_duplicate_asm_root_pruned" >&2
+        exit 1
+    fi
+done
+"$host_cc" -c -x assembler "$work/duplicate-name.x86_64.s" \
+    -o "$work/duplicate-name.minic.o"
+"$host_cc" -no-pie "$work/duplicate-name.minic.o" -o "$work/duplicate-name.minic"
+"$work/duplicate-name.minic"
+echo 'CORE_MODULE_DUPLICATE_FUNCTION_SYMBOL=PASS call_initializer_five_ISA=5 live_source_asm_RV=2 dead_source_asm_pruned=5 GNU_native=0 MiniC_native=0'
+
+# Distinct C object declarators with one GNU assembler spelling are not yet
+# a frontend feature. Forge the valid source-independent Module/Core producer
+# directly so this reachability contract cannot silently degrade into a C
+# parser special-case or a whole-module static-root fallback.
+"$host_cc" -std=c11 -Wall -Wextra -Werror -ffunction-sections -fdata-sections \
+    -Wl,--gc-sections -I"$root/src" \
+    "$root/tests/compiler/c0/probe-core-duplicate-object-closure.c" \
+    "$root/src/compiler/core_reachability.c" \
+    "$root/src/core/core_ir.c" "$root/src/core/module_ir.c" \
+    "$root/src/core/core_type.c" -o "$work/core-duplicate-object"
+"$work/core-duplicate-object"
+
+# Indexed raw-ASM token closure must be identical to the original per-name
+# matcher, including malformed/nonportable names on independent Core input.
+"$host_cc" -std=c11 -Wall -Wextra -Werror -ffunction-sections -fdata-sections \
+    -Wl,--gc-sections -I"$root/src" \
+    "$root/tests/compiler/c0/probe-core-inline-asm-token-closure.c" \
+    "$root/src/compiler/core_reachability.c" \
+    "$root/src/core/core_ir.c" "$root/src/core/module_ir.c" \
+    "$root/src/core/core_type.c" -o "$work/core-inline-asm-token"
+"$work/core-inline-asm-token"
+
+# MC-064: x86-specific %c0 would require a different backend ASM grammar;
+# use the original RV64 GNU-valid %0 symbolic immediate in all variants.
+# With only -S available, insist the referenced local definition is present;
+# if RV64 GNU/QEMU tools are available, the existing ELF proof below is also
+# mandatory (real relocation, static GNU LD and runtime, not just GNU AS).
+source="$root/tests/compiler/audit/mc064_rv64_asm_static_symbol.c"
+for variant in asm_only direct_call static_object; do
+    case "$variant" in
+        asm_only) define='' ; symbol=asm_only_target ;;
+        direct_call) define='-DMC064_DIRECT_CALL' ; symbol=asm_only_target ;;
+        static_object) define='-DMC064_STATIC_OBJECT' ; symbol=asm_only_object ;;
+    esac
+    "$host_cc" -std=gnu11 -E -P -x c $define "$source" \
+        -o "$work/mc064-$variant.i"
+    "$minic" --target=riscv64-linux -march=rv64i -mabi=lp64 \
+        -S "$work/mc064-$variant.i" -o "$work/mc064-$variant.s"
+    if ! grep -Eq "^[[:space:]]*\.dword[[:space:]]+$symbol\$" \
+            "$work/mc064-$variant.s" ||
+       ! grep -Fxq "$symbol:" "$work/mc064-$variant.s"; then
+        echo "CORE_MODULE_REACHABILITY=FAIL mc064=$variant symbol=$symbol asm_relocation_or_definition" >&2
+        exit 1
+    fi
+done
+echo 'MC064_ISA=PASS asm_only_function=retained direct_call=retained static_object=retained relocations=3'
+
+rv64_tools='riscv64-linux-gnu-gcc riscv64-linux-gnu-as riscv64-linux-gnu-ld riscv64-linux-gnu-readelf riscv64-linux-gnu-nm qemu-riscv64'
+have_rv64=1
+for executable in $rv64_tools; do
+    command -v "$executable" >/dev/null 2>&1 || have_rv64=0
+done
+if [ "$have_rv64" -eq 1 ]; then
+    MINIC_CC="$minic" sh "$root/tests/compiler/audit/probe-mc064-rv64-elf-link.sh"
+elif [ "${MINIC_REACHABILITY_REQUIRE_CROSS:-0}" = 1 ]; then
+    echo 'CORE_MODULE_REACHABILITY=FAIL MC064 RV64 GNU/QEMU toolchain unavailable' >&2
+    exit 1
+else
+    echo 'MC064_ELF_REACHABILITY=SKIP cross_RV64_GNU_QEMU_unavailable (ISA symbol pairing PASS)'
+fi
+
+# MC-072: references in a static &&label table must pair with definitions,
+# even after integer specialization clones its inline owner. The same fixture
+# includes a dead inline owner: its table must be pruned, not made a root.
+MINIC_CC="$minic" MINIC_REACHABILITY_REQUIRE_CROSS="${MINIC_REACHABILITY_REQUIRE_CROSS:-0}" \
+    sh "$root/tests/compiler/audit/probe-mc072-inline-computed-label-owner.sh"
+
+# MC-073: an address-taken Core block without a C local_label_symbol is still
+# reachable, but an address producer in an unreachable block is not a root.
+bash "$root/tests/core/run-core-ir-shapes.sh" "$host_cc"
+
+# The pre-existing computed-goto runtime probes cover direct, dynamic and
+# static tables. Their GNU/QEMU differential is mandatory when installed.
+computed_targets=''
+if command -v aarch64-linux-gnu-gcc >/dev/null 2>&1 &&
+   command -v qemu-aarch64 >/dev/null 2>&1; then
+    computed_targets=aarch64
+fi
+if command -v loongarch64-linux-gnu-gcc-13 >/dev/null 2>&1 &&
+   command -v qemu-loongarch64 >/dev/null 2>&1; then
+    computed_targets="$computed_targets loongarch64"
+fi
+if [ -n "$computed_targets" ]; then
+    MINIC_CC="$minic" MINIC_COMPUTED_GOTO_TARGET="$computed_targets" \
+        sh "$root/tests/compiler/c0/probe-four-backend-computed-goto.sh"
+elif [ "${MINIC_REACHABILITY_REQUIRE_CROSS:-0}" = 1 ]; then
+    echo 'CORE_MODULE_REACHABILITY=FAIL computed-goto GNU/QEMU unavailable' >&2
+    exit 1
+else
+    echo 'CORE_COMPUTED_GOTO_RUNTIME=SKIP GNU_QEMU_unavailable (MC072 four-ISA symbol pairing PASS)'
+fi
+
+echo 'CORE_MODULE_REACHABILITY=PASS Core_CFG=MC073 Module_alias_and_dead_roots=PASS MC064_RV64_symbol_pair=PASS MC072_four_ISA_label_pairs=PASS cross_GNU_QEMU=conditional'
