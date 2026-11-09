@@ -1729,9 +1729,24 @@ bool minic_parser_try_builtin_primary_early(
     MinicParser *parser, MinicExpressionId *expression_id,
     bool decay_array, bool *handled) {
     MinicExpressionId primary_id;
+    const char *spelling;
+    size_t spelling_length;
     if (parser == NULL || expression_id == NULL || handled == NULL)
         return false;
     *handled = false;
+
+    /* Ordinary identifiers never reach an early builtin parser.  This is a
+     * hot path for every primary expression, so avoid probing the long list
+     * of reserved names unless the token can belong to one of its families.
+     * Keep the individual builtin checks below as the semantic authority. */
+    if (parser->current.kind != MINIC_TOKEN_IDENTIFIER)
+        return true;
+    spelling_length = minic_parser_span_length(parser->current.span);
+    spelling = parser->source + parser->current.span.begin.offset;
+    if (!((spelling_length >= 10U && memcmp(spelling, "__builtin_", 10U) == 0) ||
+          (spelling_length >= 9U && memcmp(spelling, "__atomic_", 9U) == 0) ||
+          (spelling_length == 8U && memcmp(spelling, "_Generic", 8U) == 0)))
+        return true;
 
     if (minic_parser_current_identifier_lexeme_equals_cstr(parser, "__builtin_va_start")) {
         if (!parse_builtin_va_start(parser, &primary_id)) {
