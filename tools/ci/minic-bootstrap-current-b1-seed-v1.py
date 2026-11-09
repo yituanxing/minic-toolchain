@@ -123,10 +123,23 @@ def main():
     print("BOOTSTRAP_B1_STAGE0=PASS build_seconds=" + str(round(secs, 3)) +
           " sha256=" + sha(stage0), flush=True)
 
+    # This used to fail while compiling compiler TU #207: a record-returning
+    # call followed by a conditional LHS subscript changed the Core CFG.
+    # Exercise the strict verifier on all five targets and execute the x86
+    # output before spending minutes on the full bootstrap cohort.
+    with (logs / "core-record-call-conditional-subscript.log").open("wb") as log:
+        command(
+            ["sh", "tests/compiler/c0/run-core-record-call-conditional-subscript.sh"],
+            env=dict(env, MINIC_CC=str(stage0), BUILD_DIR=str(work / "stage0")),
+            timeout=120, stdout=log, stderr=subprocess.STDOUT)
+    print("BOOTSTRAP_B1_CORE_RECORD_CFG=PASS targets=5 runtime=x86_64",
+          flush=True)
+
     manifest_rows = []
     input_rows = []
     assemblies = []
     used_keys = set()
+    failed_sources = []
     for index, source in enumerate(selected):
         key = source.replace("/", "__").replace(".", "_")
         if key in used_keys:
@@ -148,10 +161,15 @@ def main():
                 command([stage0, "-S", pre, "-o", asm], env=env,
                         timeout=180, stdout=subprocess.DEVNULL, stderr=e)
             except RuntimeError as exc:
+                # A single real C failure must not hide later compiler
+                # regressions in this same source-bound cohort. Preserve the
+                # exact .i and stderr for each blocker, but never link an
+                # incomplete Stage1 or mark the seed successful.
+                failed_sources.append(source)
                 sys.stderr.write("BOOTSTRAP_B1_STAGE0_TU=FAIL source=" + source +
                                  " details=" + str(exc) + "\n" +
-                                 err.read_text(errors="replace")[-7000:])
-                raise
+                                 err.read_text(errors="replace")[-2200:])
+                continue
             secs = time.monotonic() - start
         if not asm.is_file() or asm.stat().st_size == 0:
             raise RuntimeError("empty assembly for " + source)
@@ -165,6 +183,12 @@ def main():
 
     (seed / "stage0-manifest.tsv").write_text("\n".join(manifest_rows) + "\n")
     (seed / "input-sha256.tsv").write_text("\n".join(input_rows) + "\n")
+    if failed_sources:
+        (seed / "stage0-blockers.txt").write_text("\n".join(failed_sources) + "\n")
+        raise RuntimeError("BOOTSTRAP_B1_STAGE0_COHORT=FAIL passed=" +
+                           str(len(manifest_rows)) + "/" + str(len(selected)) +
+                           " blockers=" + str(len(failed_sources)) +
+                           " sources=" + ",".join(failed_sources))
     stage1 = seed / "minic-stage1-rv64"
     with (logs / "stage1-link.stderr").open("wb") as e:
         command(["riscv64-linux-gnu-gcc", "-static", *assemblies, "-o", stage1],

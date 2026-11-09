@@ -806,6 +806,8 @@ MinicCoreLowerStatus minic_core_lower_record_copy_statement(MinicCoreLowerContex
     MinicCoreLowerStatus status;
     MinicCoreValueId destination_address;
     MinicCoreValueId source_address;
+    MinicCoreObjectId call_source_object = MINIC_CORE_OBJECT_INVALID;
+    MinicType call_source_pointer_type = minic_type_void();
     MinicType source_type;
     MinicType target_type;
     bool record_call;
@@ -855,28 +857,15 @@ MinicCoreLowerStatus minic_core_lower_record_copy_statement(MinicCoreLowerContex
         return MINIC_CORE_LOWER_ERROR;
     }
     if (record_call) {
-        MinicCoreObjectId source_object;
-        MinicType pointer_type;
-
         status = source->value.call.function_id != MINIC_FUNCTION_INVALID
-            ? minic_core_lower_direct_record_call_object(context, source, &source_object)
-            : minic_core_lower_indirect_record_call_object(context, source, &source_object);
+            ? minic_core_lower_direct_record_call_object(context, source, &call_source_object)
+            : minic_core_lower_indirect_record_call_object(context, source, &call_source_object);
         if (status != MINIC_CORE_LOWER_OK) {
             return status;
         }
-        if (source_object >= context->function->object_count ||
-            !minic_type_equal(context->source->source_draft->object_types[source_object], source_type) ||
-            !minic_type_pointer_to(source_type, &pointer_type)) {
-            return MINIC_CORE_LOWER_ERROR;
-        }
-        (void)memset(&instruction, 0, sizeof(instruction));
-        instruction.kind = MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS;
-        instruction.span = source->span;
-        instruction_source_type = pointer_type;
-        instruction.result = MINIC_CORE_VALUE_INVALID;
-        instruction.value.object_id = source_object;
-        if (!minic_core_function_append_source_value_instruction(
-                context->source, context->block_id, &instruction, instruction_source_type, &source_address)) {
+        if (call_source_object >= context->function->object_count ||
+            !minic_type_equal(context->source->source_draft->object_types[call_source_object], source_type) ||
+            !minic_type_pointer_to(source_type, &call_source_pointer_type)) {
             return MINIC_CORE_LOWER_ERROR;
         }
     } else if (record_conditional_value || record_va_arg_value ||
@@ -897,6 +886,24 @@ MinicCoreLowerStatus minic_core_lower_record_copy_statement(MinicCoreLowerContex
     status = lower_address(context, statement->target_expression, &destination_address);
     if (status != MINIC_CORE_LOWER_OK) {
         return status;
+    }
+    if (record_call) {
+        /* The record-returning CALL has already materialized its RHS before
+         * the destination is evaluated. A conditional array subscript in
+         * the destination can switch Core CFG blocks, so the old RHS
+         * OBJECT_ADDRESS SSA would not be available at the final COPY.
+         * Materialize this pure address in the destination's final block;
+         * never evaluate the source CALL a second time. */
+        (void)memset(&instruction, 0, sizeof(instruction));
+        instruction.kind = MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS;
+        instruction.span = source->span;
+        instruction_source_type = call_source_pointer_type;
+        instruction.result = MINIC_CORE_VALUE_INVALID;
+        instruction.value.object_id = call_source_object;
+        if (!minic_core_function_append_source_value_instruction(
+                context->source, context->block_id, &instruction,
+                instruction_source_type, &source_address))
+            return MINIC_CORE_LOWER_ERROR;
     }
     (void)memset(&instruction, 0, sizeof(instruction));
     instruction.kind = MINIC_CORE_INSTRUCTION_RECORD_COPY;
