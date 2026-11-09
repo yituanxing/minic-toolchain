@@ -178,11 +178,71 @@ jobs:
           done
       # Only reuse authentic, SHA-frozen GNU Linux Kbuild inputs.
       - name: Restore SHA-frozen Linux first500 corpus for host profile
+        id: linux-corpus-restore
         uses: actions/cache/restore@v4
         with:
           path: build/linux-perf-corpus
           key: linux-6.6.143-first500-rv64-v1-${{ hashFiles('tests/external/linux/batch_probe.sh', 'tests/external/linux/probe.sh', 'tests/external/linux/replay-indices.txt') }}
-          fail-on-cache-miss: true
+          fail-on-cache-miss: false
+      - name: Materialize exact SHA-frozen Linux first500 only if cache expired
+        if: steps.linux-corpus-restore.outputs.cache-hit != 'true'
+        shell: bash
+        timeout-minutes: 27
+        run: |
+          set -Eeuo pipefail
+          echo 'MINIC_LINUX_CORPUS=RESEED_REQUIRED old_cache_missing=true'
+          sudo apt-get -o Acquire::Retries=3 update -qq
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            build-essential gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
+            libc6-dev-riscv64-cross bc bison flex libssl-dev libelf-dev \
+            make curl xz-utils python3 >/dev/null
+          mkdir -p "$GITHUB_WORKSPACE/build/linux-cache"
+          archive="$GITHUB_WORKSPACE/build/linux-cache/linux-6.6.143.tar.xz"
+          curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors \
+            https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.6.143.tar.xz \
+            -o "$archive"
+          printf '%s  %s\n' dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932 "$archive" | sha256sum -c -
+          selection=$(grep -Ev '^[[:space:]]*(#|$)' tests/external/linux/replay-indices.txt | paste -sd, -)
+          test -n "$selection"
+          MINIC="$GITHUB_WORKSPACE/build/perf-ab/bin/minic" \
+            BUILD_DIR="$GITHUB_WORKSPACE/build/linux-perf-materialize" \
+            LINUX_ARCHIVE_CACHE="$archive" CROSS_COMPILE=riscv64-linux-gnu- \
+            LINUX_BATCH_OFFSET=0 LINUX_BATCH_LIMIT=500 LINUX_BATCH_JOBS=4 \
+            LINUX_BATCH_SELECTION="$selection" LINUX_BATCH_MATERIALIZE_ONLY=1 \
+            sh tests/external/linux/batch_probe.sh
+          test "$(wc -l < build/linux-perf-materialize/selected-tus.txt)" -eq 500
+          python3 - <<'PY'
+          from pathlib import Path
+          import shutil
+          source=Path("build/linux-perf-materialize")
+          corpus=Path("build/linux-perf-corpus")
+          (corpus/"kbuild").mkdir(parents=True,exist_ok=True)
+          shutil.copy2(source/"selected-tus.txt",corpus/"selected-tus.txt")
+          manifest=source/"tu-manifest.txt"
+          if manifest.is_file(): shutil.copy2(manifest,corpus/"tu-manifest.txt")
+          for row in (source/"selected-tus.txt").read_text().splitlines():
+              columns=row.split("\t",3)
+              if len(columns)!=4: raise SystemExit("invalid historical Kbuild row")
+              rel_i=Path(columns[2])
+              if rel_i.is_absolute() or ".." in rel_i.parts:
+                  raise SystemExit("unsafe Kbuild input path")
+              src=source/"kbuild"/rel_i
+              dst=corpus/"kbuild"/rel_i
+              if not src.is_file() or src.stat().st_size==0:
+                  raise SystemExit("missing frozen input "+str(src))
+              dst.parent.mkdir(parents=True,exist_ok=True)
+              shutil.copy2(src,dst)
+          print("MINIC_LINUX_CORPUS=RESEEDED owners=500")
+          PY
+          find build/linux-perf-corpus/kbuild -type f -name '*.i' -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > build/linux-perf-corpus/inputs.sha256
+          test "$(wc -l < build/linux-perf-corpus/inputs.sha256)" -eq 500
+          sha256sum --status --check build/linux-perf-corpus/inputs.sha256
+      - name: Save SHA-verified Linux first500 for later A/B experiments
+        if: steps.linux-corpus-restore.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: build/linux-perf-corpus
+          key: linux-6.6.143-first500-rv64-v1-${{ hashFiles('tests/external/linux/batch_probe.sh', 'tests/external/linux/probe.sh', 'tests/external/linux/replay-indices.txt') }}
       - name: Verify frozen GNU Linux fsync input and profile host compiler
         shell: bash
         run: |
@@ -253,4 +313,8 @@ jobs:
             ${{ runner.temp }}/minic-refactor-perf/result/hotspot-*/callgrind-inclusive.txt
             ${{ runner.temp }}/minic-refactor-perf/result/hotspot-*/perf-top.txt
             ${{ runner.temp }}/minic-refactor-perf/result/hotspot-*.log
+            build/linux-perf-corpus/selected-tus.txt
+            build/linux-perf-corpus/inputs.sha256
+            build/linux-perf-corpus/kbuild/fs/ext4/fsync.i
+            build/linux-perf-corpus/kbuild/kernel/bpf/btf.i
           if-no-files-found: warn
