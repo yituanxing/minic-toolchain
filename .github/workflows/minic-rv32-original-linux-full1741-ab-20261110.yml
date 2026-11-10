@@ -1,0 +1,432 @@
+name: MiniC original Linux RV32I FULL1741 same-runner 7-shard paired performance
+
+on:
+  push:
+    branches: [verify/minic-rv32-full-linux-ab-20261110]
+    paths: [.github/workflows/minic-rv32-original-linux-full1741-ab-20261110.yml]
+  pull_request:
+    paths: [.github/workflows/minic-rv32-original-linux-full1741-ab-20261110.yml]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: minic-rv32-original-linux-full1741-ab-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  prepare-original-gnu-e:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 85
+    env:
+      BASE_SHA: e13fc7c77e60cf80f6ad699035998b5aada3a236
+      CAND_SHA: aa186412c4165eaa7a4ccd1a406b8fc7918e3326
+      RV32I_GNU_GOLDEN_CONFIG_SHA256: 4c6c19f79741a8a31ec52ad57b1a6bc56b81dd6996cbf5e1bdc63f587d85244c
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install original GNU RV32 kernel tools
+        shell: bash
+        timeout-minutes: 12
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 update -qq
+          sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 install -y --no-install-recommends \
+            gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu bc bison flex \
+            libssl-dev libelf-dev make python3 file xz-utils
+          riscv64-linux-gnu-gcc --version | head -1
+
+      - name: Restore exact upstream Linux 6.6.143 source
+        id: source_cache
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-expanded-kbuild-v0/linux-6.6.143
+          key: linux-source-6.6.143-dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932-v1
+      - name: Reconstitute original SHA-pinned source if source cache expired
+        if: steps.source_cache.outputs.cache-hit != 'true'
+        shell: bash
+        timeout-minutes: 10
+        run: |
+          set -Eeuo pipefail
+          root="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0"
+          mkdir -p "$root"
+          test ! -e "$root/linux-6.6.143"
+          archive="$RUNNER_TEMP/linux-6.6.143.tar.xz"
+          curl --proto '=https' --tlsv1.2 -fLSs --retry 3 --connect-timeout 20 --max-time 300 \
+            https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.6.143.tar.xz -o "$archive"
+          printf '%s  %s\n' dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932 "$archive" | sha256sum -c -
+          tar -xJf "$archive" -C "$root"
+          test -s "$root/linux-6.6.143/Makefile"
+      - name: Verify GNU source identity before Kconfig
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          root=build/linux-expanded-kbuild-v0/linux-6.6.143
+          grep -Eq '^VERSION[[:space:]]*=[[:space:]]*6$' "$root/Makefile"
+          grep -Eq '^PATCHLEVEL[[:space:]]*=[[:space:]]*6$' "$root/Makefile"
+          grep -Eq '^SUBLEVEL[[:space:]]*=[[:space:]]*143$' "$root/Makefile"
+          echo 'RV32_AB_ORIGINAL_LINUX_SOURCE=VERIFIED 6.6.143'
+      - uses: actions/cache/save@v4
+        if: steps.source_cache.outputs.cache-hit != 'true'
+        with:
+          path: build/linux-expanded-kbuild-v0/linux-6.6.143
+          key: linux-source-6.6.143-dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932-v1
+
+      - name: Derive historical original RV32 GNU Kconfig and cache identity
+        id: golden
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          RV32I_LINUX_MODE=config \
+          RV32I_LINUX_SOURCE="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0/linux-6.6.143" \
+          RV32I_LINUX_WORK="$GITHUB_WORKSPACE/build/rv32i-linux-entry" \
+            bash tests/external/linux/rv32i_kbuild_entry.sh
+          cfg=$(sha256sum build/rv32i-linux-entry/out/.config | cut -d' ' -f1)
+          test "$cfg" = "$RV32I_GNU_GOLDEN_CONFIG_SHA256"
+          gcc=$(sha256sum "$(command -v riscv64-linux-gnu-gcc)" | cut -c1-16)
+          ld=$(sha256sum "$(command -v riscv64-linux-gnu-ld)" | cut -c1-16)
+          as=$(sha256sum "$(command -v riscv64-linux-gnu-as)" | cut -c1-16)
+          echo "key=linux-gnu-golden-rv32i-v1-6.6.143-$cfg-$gcc-$ld-$as" >> "$GITHUB_OUTPUT"
+      - name: Restore historically accepted original RV32 ELF32 golden
+        id: golden_cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            build/rv32i-linux-entry/out
+            build/rv32i-linux-entry/provenance
+          key: ${{ steps.golden.outputs.key }}
+          fail-on-cache-miss: false
+      - name: Rebuild exact unmodified original GNU Kbuild golden on isolated cache miss
+        if: steps.golden_cache.outputs.cache-hit != 'true'
+        shell: bash
+        timeout-minutes: 35
+        run: |
+          set -Eeuo pipefail
+          RV32I_LINUX_MODE=golden \
+          RV32I_LINUX_SOURCE="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0/linux-6.6.143" \
+          RV32I_LINUX_WORK="$GITHUB_WORKSPACE/build/rv32i-linux-entry" \
+            bash tests/external/linux/rv32i_kbuild_entry.sh
+          echo 'RV32_AB_GNU_GOLDEN_REBUILT=PASS only_original_GNU_C=true no_MiniC_objects=true'
+      - name: Authenticate all original golden C objects and generated headers
+        shell: bash
+        timeout-minutes: 6
+        run: |
+          set -Eeuo pipefail
+          work=build/rv32i-linux-entry
+          test "$(sed '/^#/d;/^$/d' "$work/provenance/full-c-objects.txt" | wc -l)" -eq 1741
+          grep -Fxq 'elf_class=ELF32' "$work/provenance/gcc-baseline.txt"
+          grep -Fxq 'isa=rv32i' "$work/provenance/gcc-baseline.txt"
+          grep -Fxq 'abi=ilp32' "$work/provenance/gcc-baseline.txt"
+          (cd "$work/out" && sha256sum --status -c ../provenance/gcc-objects.sha256)
+          echo 'RV32_AB_GNU_GOLDEN=VERIFIED original_C=1741 elf32=true'
+      - uses: actions/cache/save@v4
+        if: steps.golden_cache.outputs.cache-hit != 'true'
+        with:
+          path: |
+            build/rv32i-linux-entry/out
+            build/rv32i-linux-entry/provenance
+          key: ${{ steps.golden.outputs.key }}
+
+      - name: Freeze all 1741 original GNU Kbuild C owners and distribute exact GNU -E inputs
+        shell: bash
+        timeout-minutes: 45
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          import hashlib, importlib.util, json, os, subprocess, sys
+          from pathlib import Path
+
+          root = Path(os.environ['GITHUB_WORKSPACE']).resolve()
+          source = (root / 'build/linux-expanded-kbuild-v0/linux-6.6.143').resolve()
+          golden = (root / 'build/rv32i-linux-entry/out').resolve()
+          prov = root / 'build/rv32i-linux-entry/provenance'
+          dest = Path(os.environ['RUNNER_TEMP']) / 'minic-rv32-linux-full1741'
+          for n in range(7):
+              (dest / 'shards' / str(n) / 'inputs').mkdir(parents=True, exist_ok=True)
+          spec = importlib.util.spec_from_file_location('regen', root / 'tools/ci/linux-runtime-kbuild-regeneration-guard-v1.py')
+          regen = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(regen)
+          all_owners = [x.strip() for x in (prov / 'full-c-objects.txt').read_text().splitlines()
+                        if x.strip() and not x.startswith('#')]
+          assert len(all_owners) == 1741 and len(set(all_owners)) == 1741
+          language = {'-fshort-wchar', '-fno-short-wchar', '-fsigned-char', '-funsigned-char',
+                      '-fno-signed-char', '-fno-unsigned-char', '-ffunction-sections',
+                      '-fno-function-sections', '-fPIE', '-fpie', '-fPIC', '-fpic',
+                      '-fno-pie', '-fno-PIE', '-fno-pic', '-fno-PIC'}
+          def sha(path):
+              h = hashlib.sha256()
+              with path.open('rb') as f:
+                  for b in iter(lambda: f.read(1024 * 1024), b''):
+                      h.update(b)
+              return h.hexdigest()
+          shards = [[] for _ in range(7)]
+          for index, owner in enumerate(all_owners):
+              shard = index % 7
+              ordinal = index
+              args = regen.pinned_kbuild_cc_args(golden, owner)
+              sources = [a for i, a in enumerate(args) if a.endswith('.c') and
+                         (i == 0 or args[i-1] not in ('-include', '-imacros'))]
+              assert len(sources) == 1
+              original = (golden / sources[0]).resolve(strict=True)
+              assert original.is_relative_to(source) or original.is_relative_to(golden)
+              pp = []
+              i = 0
+              while i < len(args):
+                  v = args[i]
+                  if v in ('-c', '-E', '-S', sources[0]):
+                      i += 1
+                  elif v == '-o':
+                      i += 2
+                  else:
+                      pp.append(v)
+                      i += 1
+              path = dest / 'shards' / str(shard) / 'inputs' / f'owner-{ordinal:04d}.i'
+              subprocess.run(['riscv64-linux-gnu-gcc', *pp, '-E', '-P', '-MT', owner,
+                              sources[0], '-o', str(path)], cwd=golden,
+                             check=True, capture_output=True, text=True, timeout=180)
+              assert path.is_file() and path.stat().st_size > 0
+              cmdpath = golden / Path(owner).parent / ('.' + Path(owner).name + '.cmd')
+              flags = (['--target=riscv32-linux', '-march=rv32i', '-mabi=ilp32'] +
+                       [a for a in args if a in language])
+              shards[shard].append({'ordinal': ordinal, 'index': index, 'owner': owner,
+                           'source_sha256': sha(original), 'cmd_sha256': sha(cmdpath),
+                           'input': str(path.relative_to(dest / 'shards' / str(shard))),
+                           'input_sha256': sha(path),
+                           'input_bytes': path.stat().st_size, 'minic_flags': flags})
+              if (index + 1) % 100 == 0:
+                  print(f'RV32_AB_GNU_E_PROCESSED={index + 1}/1741', flush=True)
+          assert sum(map(len, shards)) == 1741
+          for n, rows in enumerate(shards):
+              (dest / 'shards' / str(n) / 'manifest.json').write_text(json.dumps(rows, indent=2) + '\n')
+              print(f'RV32_AB_PREP_SHARD={n} owners={len(rows)}', flush=True)
+          print('RV32_AB_ORIGINAL_GNU_E=PASS source=Linux6.6.143 owners=1741 input_shas=1741')
+          PY
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rv32-full1741-gnu-e-shard-0
+          path: ${{ runner.temp }}/minic-rv32-linux-full1741/shards/0/
+          if-no-files-found: error
+          retention-days: 7
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rv32-full1741-gnu-e-shard-1
+          path: ${{ runner.temp }}/minic-rv32-linux-full1741/shards/1/
+          if-no-files-found: error
+          retention-days: 7
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rv32-full1741-gnu-e-shard-2
+          path: ${{ runner.temp }}/minic-rv32-linux-full1741/shards/2/
+          if-no-files-found: error
+          retention-days: 7
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rv32-full1741-gnu-e-shard-3
+          path: ${{ runner.temp }}/minic-rv32-linux-full1741/shards/3/
+          if-no-files-found: error
+          retention-days: 7
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rv32-full1741-gnu-e-shard-4
+          path: ${{ runner.temp }}/minic-rv32-linux-full1741/shards/4/
+          if-no-files-found: error
+          retention-days: 7
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rv32-full1741-gnu-e-shard-5
+          path: ${{ runner.temp }}/minic-rv32-linux-full1741/shards/5/
+          if-no-files-found: error
+          retention-days: 7
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rv32-full1741-gnu-e-shard-6
+          path: ${{ runner.temp }}/minic-rv32-linux-full1741/shards/6/
+          if-no-files-found: error
+          retention-days: 7
+
+  seven-shard-same-runner-paired-ab:
+    needs: prepare-original-gnu-e
+    runs-on: ubuntu-24.04
+    timeout-minutes: 100
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5, 6]
+    env:
+      BASE_SHA: e13fc7c77e60cf80f6ad699035998b5aada3a236
+      CAND_SHA: aa186412c4165eaa7a4ccd1a406b8fc7918e3326
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: rv32-full1741-gnu-e-shard-${{ matrix.shard }}
+          path: ${{ runner.temp }}/minic-rv32-linux-full1741/shard
+      - name: Build both immutable host MiniC compilers at O3 on this same runner
+        shell: bash
+        timeout-minutes: 12
+        run: |
+          set -Eeuo pipefail
+          work="$RUNNER_TEMP/minic-rv32-linux-full1741"
+          mkdir -p "$work/evidence"
+          git fetch --quiet --no-tags --depth=1 origin "$BASE_SHA" "$CAND_SHA"
+          git -c advice.detachedHead=false worktree add --detach "$work/src-old" "$BASE_SHA"
+          git -c advice.detachedHead=false worktree add --detach "$work/src-new" "$CAND_SHA"
+          for arm in old new; do
+            make -s -C "$work/src-$arm" -j4 MODE=release CFLAGS='-O3 -Werror' \
+              BUILD_DIR="$work/build-$arm" "$work/build-$arm/bin/minic" "$work/build-$arm/bin/minic-cc" \
+              >"$work/evidence/build-$arm.log" 2>&1
+            test -x "$work/build-$arm/bin/minic"
+            sha256sum "$work/build-$arm/bin/minic-cc" | tee "$work/evidence/compiler-$arm.sha256"
+          done
+          ! cmp -s "$work/build-old/bin/minic-cc" "$work/build-new/bin/minic-cc"
+          git diff --exit-code "$CAND_SHA" HEAD -- src include Makefile tools tests
+          echo 'RV32_FULL1741_AB_COMPILERS=PASS original_vs_optimized_same_runner=true'
+      - name: Measure EVERY original GNU owner with pinned CPU and ABBA pairs; require byte-identical assembly
+        shell: bash
+        timeout-minutes: 80
+        env:
+          SHARD_ID: ${{ matrix.shard }}
+        run: |
+          set -Eeuo pipefail
+          CORE_FAST_TRACE=0 python3 - <<'PY'
+          import json, os, statistics, subprocess, time
+          from pathlib import Path
+          root = Path(os.environ['RUNNER_TEMP']) / 'minic-rv32-linux-full1741'
+          src = root / 'shard'
+          entries = json.loads((src / 'manifest.json').read_text())
+          shard = int(os.environ['SHARD_ID'])
+          assert entries and len(entries) in (248, 249)
+          assert all(row['ordinal'] % 7 == shard for row in entries)
+          assert len({r['ordinal'] for r in entries}) == len(entries)
+          affinity = sorted(os.sched_getaffinity(0))
+          os.sched_setaffinity(0, {affinity[0]})
+          results = []
+          t0 = time.perf_counter()
+          try:
+              for i, row in enumerate(entries):
+                  inp = src / row['input']
+                  assert inp.is_file() and inp.stat().st_size == row['input_bytes']
+                  out = root / 'measure' / f"owner-{row['ordinal']:04d}"
+                  cmd = (['python3', 'tools/ci/linux-perf-pinned-single-paired-ab-v1.py',
+                          '--input', str(inp), '--baseline-driver', str(root / 'build-old/bin/minic'),
+                          '--candidate-driver', str(root / 'build-new/bin/minic'),
+                          '--repeats', '2', '--out', str(out)] +
+                         ['--minic-arg=' + x for x in row['minic_flags']])
+                  p = subprocess.run(cmd, capture_output=True, text=True, timeout=420)
+                  if p.returncode:
+                      raise RuntimeError(f"OWNER_FAIL owner={row['owner']} index={row['ordinal']} rc={p.returncode} " + (p.stdout+p.stderr)[-1600:])
+                  proof = json.loads((out / 'paired-result.json').read_text())
+                  if (proof['input_sha256'] != row['input_sha256'] or
+                      proof['minic_args'] != row['minic_flags'] or
+                      proof['repeat_per_arm'] != 2 or not proof['assembly_identical']):
+                      raise RuntimeError(f"OWNER_MISMATCH {row['owner']}")
+                  metrics = {}
+                  for arm in ('before', 'after'):
+                      samples = [z for z in proof['records'] if z['mode'] == arm]
+                      assert len(samples) == 2
+                      metrics[arm] = {
+                          'wall_ms': statistics.median(z['wall_ms'] for z in samples),
+                          'cpu_ms': statistics.median(z['user_ms']+z['sys_ms'] for z in samples)}
+                  results.append({'ordinal':row['ordinal'], 'owner':row['owner'],
+                                  'input_sha256':row['input_sha256'], 'input_bytes':row['input_bytes'],
+                                  'source_sha256':row['source_sha256'], 'cmd_sha256':row['cmd_sha256'],
+                                  'minic_flags':row['minic_flags'],
+                                  'assembly_sha256':proof['assembly_sha256'],
+                                  'before':metrics['before'], 'after':metrics['after']})
+                  if (i+1)%25 == 0 or (i+1)==len(entries):
+                      print(f'RV32_FULL1741_SHARD={shard} processed={i+1}/{len(entries)}', flush=True)
+          except Exception as exc:
+              (root/'evidence'/'failure.txt').write_text(str(exc)+'\n')
+              raise
+          elapsed_ms = (time.perf_counter() - t0)*1000.0
+          totals = {arm:{kind:sum(x[arm][kind] for x in results) for kind in ('wall_ms','cpu_ms')}
+                    for arm in ('before','after')}
+          report = {'shard':shard,'owner_count':len(results),'measurement_elapsed_ms':elapsed_ms,
+                    'repeat_per_arm':2,'warmup_per_arm':1,'assembly_equal_count':len(results),
+                    'baseline_sha':os.environ['BASE_SHA'],'candidate_sha':os.environ['CAND_SHA'],
+                    'sum_of_per_owner_medians_ms':totals,'owners':results}
+          (root/'evidence'/'shard-summary.json').write_text(json.dumps(report,indent=2)+'\n')
+          print(f"RV32_FULL1741_SHARD=PASS shard={shard} owners={len(results)} cpu_old_ms={totals['before']['cpu_ms']:.3f} cpu_new_ms={totals['after']['cpu_ms']:.3f} measured_batch_wall_ms={elapsed_ms:.3f} identical={len(results)}/{len(results)}")
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: rv32-full1741-ab-results-shard-${{ matrix.shard }}
+          path: ${{ runner.temp }}/minic-rv32-linux-full1741/evidence/
+          if-no-files-found: warn
+          retention-days: 30
+
+  aggregate-all-1741-and-seven-shard-max:
+    needs: seven-shard-same-runner-paired-ab
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: rv32-full1741-ab-results-shard-*
+          merge-multiple: false
+          path: ${{ runner.temp }}/rv32-full1741-seven-shards
+      - name: Audit all seven complete owner manifests and total paired CPU/wall
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          root=Path(os.environ['RUNNER_TEMP'])/'rv32-full1741-seven-shards'
+          reports=[]
+          owners=[]
+          for n in range(7):
+              p=root/f'rv32-full1741-ab-results-shard-{n}'/'shard-summary.json'
+              assert p.is_file(), f'missing full shard {n}: {p}'
+              r=json.loads(p.read_text())
+              assert r['shard']==n and r['repeat_per_arm']==2 and r['warmup_per_arm']==1
+              assert r['owner_count'] == len(r['owners']) in (248,249)
+              assert r['assembly_equal_count']==len(r['owners'])
+              assert all(x['ordinal']%7==n for x in r['owners'])
+              assert all(len(x['assembly_sha256'])==64 for x in r['owners'])
+              reports.append(r)
+              owners.extend(r['owners'])
+          assert len(owners)==1741 and set(x['ordinal'] for x in owners)==set(range(1741))
+          assert len(set(x['owner'] for x in owners))==1741
+          assert len(set(x['baseline_sha'] for x in reports))==1
+          assert len(set(x['candidate_sha'] for x in reports))==1
+          sums={arm:{kind:sum(x[arm][kind] for x in owners) for kind in ('cpu_ms','wall_ms')}
+                for arm in ('before','after')}
+          shard_max={arm:max(r['sum_of_per_owner_medians_ms'][arm]['wall_ms'] for r in reports)
+                     for arm in ('before','after')}
+          actual_batch_max=max(r['measurement_elapsed_ms'] for r in reports)
+          result={'scope':'RV32I original GNU Linux 6.6.143 FULL 1741 C owners, 7 paired runner shards',
+                  'basis':'GNU original .o.cmd exact GNU -E; identical original RV32I/ILP32 flags per pair',
+                  'owners_count':1741,'shards_count':7,'assembly_identical':'1741/1741',
+                  'baseline_sha':reports[0]['baseline_sha'],'candidate_sha':reports[0]['candidate_sha'],
+                  'repeats':2,'warmup_per_arm':1,'cpu_sum_of_owner_medians_ms':{
+                      'old':sums['before']['cpu_ms'],'new':sums['after']['cpu_ms']},
+                  'cpu_speedup':sums['before']['cpu_ms']/sums['after']['cpu_ms'],
+                  'wall_sum_of_owner_medians_ms':{
+                      'old':sums['before']['wall_ms'],'new':sums['after']['wall_ms']},
+                  'wall_speedup':sums['before']['wall_ms']/sums['after']['wall_ms'],
+                  'seven_shard_max_per_arm_estimate_wall_ms':{'old':shard_max['before'],'new':shard_max['after']},
+                  'seven_shard_max_estimate_speedup':shard_max['before']/shard_max['after'],
+                  'actual_seven_shard_max_ABBA_measurement_elapsed_ms':actual_batch_max,
+                  'shards':[{k:v for k,v in r.items() if k!='owners'} for r in reports],
+                  'owners':sorted(owners,key=lambda x:x['ordinal'])}
+          dest=Path(os.environ['RUNNER_TEMP'])/'rv32-full1741-overall'
+          dest.mkdir(parents=True,exist_ok=True)
+          (dest/'full1741-summary.json').write_text(json.dumps(result,indent=2)+'\n')
+          line=(f"RV32_FULL1741_FINAL=PASS owners=1741/1741 shards=7/7 "
+                f"cpu_old_ms={sums['before']['cpu_ms']:.3f} cpu_new_ms={sums['after']['cpu_ms']:.3f} "
+                f"cpu_speedup={result['cpu_speedup']:.5f} "
+                f"wall_sum_old_ms={sums['before']['wall_ms']:.3f} wall_sum_new_ms={sums['after']['wall_ms']:.3f} "
+                f"shard_max_estimate_old_ms={shard_max['before']:.3f} "
+                f"shard_max_estimate_new_ms={shard_max['after']:.3f} "
+                f"actual_seven_shard_batch_ABBA_max_ms={actual_batch_max:.3f} assembly_equal=1741/1741")
+          print(line)
+          with open(os.environ['GITHUB_STEP_SUMMARY'],'a') as f: f.write(line+'\n')
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rv32-full1741-seven-shard-final-summary
+          path: ${{ runner.temp }}/rv32-full1741-overall/full1741-summary.json
+          if-no-files-found: error
+          retention-days: 30
