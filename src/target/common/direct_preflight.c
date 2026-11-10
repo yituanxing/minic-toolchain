@@ -1,6 +1,5 @@
 #include "target/common/direct_preflight.h"
 
-#include "target/common/global_emit.h"
 #include "target/common/elf_alias_emit.h"
 #include "target/common/lp64_scalar.h"
 #include "target/common/lp64_aggregate.h"

@@ -14,8 +14,6 @@ bool minic_loongarch64_descriptor_template_requires_typed_id(
     const char *text, size_t length);
 bool minic_loongarch64_typed_scalar_form_matches_template(
     uint32_t id, uint32_t variant, const char *text, size_t length);
-bool minic_loongarch64_scalar_template_requires_typed_id(
-    const char *text, size_t length);
 
 /* Linux __jump_table's key operand can address an array/object member.
  * Core has already proved the symbol and signed byte displacement; preserve

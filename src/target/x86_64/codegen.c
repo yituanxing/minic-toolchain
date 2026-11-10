@@ -5,7 +5,6 @@
 #include "target/common/program_visit.h"
 #include "target/common/program_emit.h"
 #include "target/common/elf_alias_emit.h"
-#include "target/common/global_emit.h"
 #include "target/common/module_global_emit.h"
 #include "target/common/machine_production_preflight.h"
 

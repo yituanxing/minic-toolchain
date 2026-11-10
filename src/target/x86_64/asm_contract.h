@@ -383,9 +383,6 @@ bool minic_x86_64_linux_percpu_form(const char *,size_t,unsigned int *,size_t *)
 unsigned int minic_x86_64_gs_tied_alu_form(const char *,size_t,size_t *);
 bool minic_x86_64_linux_prefetchw_alt_form(const char *,size_t);
 
-/* Post-Core immediate-specialized GNU Linux BUG/WARN metadata format.
- * Accept directive-only side-table source, never arbitrary opaque machine ASM. */
-bool minic_x86_64_linux_bug_table_opaque(const char *, size_t);
 unsigned int minic_x86_64_linux_bug_table_c_form(const char *, size_t);
 /* Register allocation and native instruction templates are x86 machine
  * contracts. C operand admission is declared in asm_contract_source.h. */
@@ -393,7 +390,6 @@ bool minic_x86_64_linux_cpu_has_goto_form(const char *, size_t);
 /* Original Linux barrier.h CMP/SBB mask, strictly qualified. */
 bool minic_x86_64_asm_nospec_template(const char *, size_t);
 /* Qualified x86 per-cpu stable GS segment read, exact GNU p input. */
-bool minic_x86_64_asm_percpu_stable_template(const char *, size_t);
 size_t minic_x86_64_asm_percpu_stable_width(const char *, size_t);
 bool minic_x86_64_asm_mulacc_template(const char *, size_t);
 bool minic_x86_64_asm_muldiv_template(const char *, size_t);
@@ -547,9 +543,5 @@ MinicX86BitScanForm minic_x86_64_asm_bit_scan_form(const char *, size_t);
 /* Linux locked CMPXCHG16B with ZF output, and the per-CPU emulator/GS
  * alternative. Exact original GNU templates and numbered Core forms only. */
 unsigned int minic_x86_64_linux_cmpxchg128_form(const char *, size_t);
-/* The Linux __ffs / __fls 64-bit GNU bit-scan family is ISA-owned.
- * No raw arbitrary-template passthrough or global ASM Core opcode. */
-bool minic_x86_64_asm_bit_scan_template(
-    const char *text, size_t length, bool *is_reverse);
 bool minic_x86_64_asm_matched_template(const char *, size_t, size_t);
 #endif

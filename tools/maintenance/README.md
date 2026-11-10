@@ -10,20 +10,25 @@ This directory contains repository-structure checks that protect explicit projec
 
 `check-production-source-inventory.sh` 比较两份信息：
 
-1. the explicit `MINIC_SOURCES` list in the root `Makefile`;
-2. every `.c` translation unit below the active production directories `src/` and `tools/minic/`.
+1. the explicit `MINIC_SOURCES` and `MINIC_DRIVER_SOURCES` lists in the root `Makefile`;
+2. every `.c` translation unit below `src/`, `tools/minic-cc/` and `tools/minic/`.
 
-1. 根目录 `Makefile` 中显式维护的 `MINIC_SOURCES`；
-2. 当前生产目录 `src/` 和 `tools/minic/` 下的全部 `.c` 翻译单元。
+1. 根目录 `Makefile` 中显式维护的 `MINIC_SOURCES` 与 `MINIC_DRIVER_SOURCES`；
+2. 生产目录 `src/`、`tools/minic-cc/` 和 `tools/minic/` 下的全部 `.c` 翻译单元。
 
 The gate rejects:
 
 门禁会拒绝：
 
-- duplicate `MINIC_SOURCES` entries / 重复条目；
+- duplicate entries within either source list / 任一源码清单内部重复；
 - listed files that no longer exist / 已登记但不存在的文件；
 - production `.c` files omitted from `MINIC_SOURCES` / 存在但未登记的生产源码；
-- list entries outside `src/` or `tools/minic/` / 越出当前生产目录边界的条目。
+- list entries outside the three production directories / 越出三个生产目录边界的条目。
+
+The two executables may legitimately share a source file; the inventory
+deduplicates the combined set only **after** checking each list separately.
+
+两个可执行程序允许共用源码；先分别检查清单内部是否重复，再对合并清单去重。
 
 The list remains explicit so adding a production translation unit is a deliberate architecture and build-system decision. Automatic wildcard compilation would make accidental files silently become part of the compiler.
 

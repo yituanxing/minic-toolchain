@@ -1,6 +1,5 @@
 #include "target/riscv64/global_emit.h"
 #include "target/riscv64/isa.h"
-#include "target/common/global_emit.h"
 #include "target/common/module_global_emit.h"
 #include "core/symbol_identity.h"
 

@@ -1485,6 +1485,41 @@ MC-072（computed-goto 标签）、MC-076（唯一 OPEN P0，部分路径仍有
 逐路径登记 `FULL_READ / CALL_CHAIN_ONLY / INVENTORY_ONLY`、owner、
 已跑 fixture 和未覆盖依赖，完成后才可更新覆盖率分子。
 
+## 批次 C39：现行五目标源码的末端死接口与一次性开发脚本退役（2026-11-10）
+
+**精确父源码：** `perf/minic-linux-hotpath-recovery-20261110` / `aa186412`。
+这批仅做源码/维护工具的瘦身和入口文档纠偏；不改 C/Core IR、Target ABI、
+Machine IR opcode、指令选择、优化算法或 GNU 汇编发射合同。当前源码审读
+覆盖率仍按上节 414 文件的历史指纹漂移处理，不把局部调用链审计冒充全部深读。
+
+| 范围 | 生产者/消费者证据及实际清理 | 明确保留 |
+| --- | --- | --- |
+| Common ELF 旧 wrapper | `minic_multi_elf_safe_section_name` 全仓无消费者，现行 `module_global_emit.c` 已直接调用 `minic_elf_section_name_valid`；删除 `global_emit.c/.h`、四个无效 include、Makefile/Bootstrap source 条目与旧测试链接，将 BusyBox CI 路径触发器切到现役 `module_global_emit.c/.h` | `module_global_emit` 的真正 ELF 名称校验、GNU AS/ELF 负例 |
+| x86 末端 API | 删除无消费者的 `linux_bug_table_opaque` 旧解析器、`asm_percpu_stable_template` 布尔转发、`asm_bit_scan_template` 布尔转发及声明 | `linux_bug_table_c_form`、`asm_percpu_stable_width`、`asm_bit_scan_form`、源资格与机器验证 |
+| LoongArch64 末端 API | 删除无消费者的 scalar/SIMD `*_template_requires_typed_id` 两个查询及声明 | 真正的 descriptor 模板匹配、SIMD parser/资格、机器发射 |
+| 一次性 `tools/dev` 源码改写器 | 在全部仓内现役/禁用 workflow、测试、文档、工具和脚本彼此之间按文件名交叉检索后，退役**97 个无跨文件引用**的历史 `patch-*`、`materialize-*`、`pr7*-*` 脚本，净删 **12,515 行**；其旧源码文本锚点已不匹配现行目录 | 其余 170 份含引用或诊断价值的开发脚本、所有 `tools/ci`、现役 quick-replay |
+| 文档/维护入口 | `compiler/README.md` 与中英文项目首页改为五目标 `Core/ModuleIR → typed Machine IR → GNU .s` 现行路线；修正源码清单工具同时核验 `MINIC_SOURCES`/`MINIC_DRIVER_SOURCES`，允许两可执行共享源文件但拒绝单清单重复 | 旧 native toolchain/Stage4 里程碑作为**历史**证据保留，不将当前 GNU AS/LD 验收冒充 native 或自举 |
+
+**净删证明：** `src/` 生产 C/H 本批 **-150 行**，并退役两个完整孤儿文件；
+`tools/dev` **97 文件/-12,515 行**。非源码文档、测试断言、清单工具的
+增删另计，不混进生产减重数字。源码 `*.c/*.h/*.def` 路径从 414 降到 412。
+删除通过 Git 版本历史可恢复，不作无法找回的物理归档清空。
+
+**本地验收：** Release `-Werror` 五目标编译器构建 PASS；同一个优化前
+`aa186412` 编译器与本批在 `static_scalar_global`、原版 tinyAES 两份
+同预处理 `.i` 上逐目标比较，RV32I/RV64I/x86-64/AArch64/LoongArch64
+共 **10/10 `.s` 字节相同**。Bootstrap source manifest 4/4 PASS、
+源清单 `sources=218` PASS、Target machine options registry 五目标 PASS、
+Target sealed symbol 22 项 PASS、GNU ELF owner/TLS PASS、x86 GNU native
+BSF/BSR 33 例 PASS、现役 Linux quick-replay PASS、完整
+`check-minic-target-boundaries.sh` PASS。后端审阅 manifest 删去恰好
+2 个已退役文件，`--check` PASS (`inventory=260`, `drift=107`)；其余已漂移 blob
+保持 `stale`，不以本次轻量检查冒充已深读。
+
+**尚未验收：** 本批没有在新源码 SHA 上重跑完整五目标 Linux 13,394
+编译单元或 Stage4 自举；历史目录与审阅文档中的已退役路径仅作为当时的
+源码快照记录，不再代表现行入口。
+
 ## 后续批次进度规则
 
 每批发布：当前 HEAD、源文件逐目录覆盖（明确深读与只扫的区别）、

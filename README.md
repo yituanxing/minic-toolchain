@@ -8,9 +8,11 @@ Chinese introduction: [`README.zh-CN.md`](README.zh-CN.md)
 
 ## Current compiler boundary and accepted native integration
 
-The standalone compiler interface remains `minic-cc: preprocessed C (.i) → RV64 assembly (.s)`. Fixed-GNU-preprocessor/assembler/linker runs remain available as isolated differential and fault-localization oracles; they are **not** the only accepted end-to-end Linux path as of 2026-10-16.
+The standalone compiler interface is `minic-cc: preprocessed C (.i) → GNU assembly (.s)` for RV32I, RV64I, x86-64, AArch64 and LoongArch64. All five use a sealed Core/ModuleIR handoff followed by target-owned typed Machine IR and machine verification. See the [current compiler component map](compiler/README.md). Fixed-GNU-preprocessor/assembler/linker runs remain isolated differential and fault-localization oracles; they are not the only accepted end-to-end toolchain path.
 
-The complete native Linux 6.6.143 path passed at commit `24b02474` ([CI #38870185276](https://github.com/yituanxing/minic-toolchain/actions/runs/38870185276)):
+The current performance-source candidate `aa186412` passed **13,394/13,394 original Linux 6.6.143 C compilation units** across these five targets, with GNU AS/LD and actual QEMU P0/P1 runtime checks ([verification PR #680](https://github.com/yituanxing/minic-toolchain/pull/680)). This is five-target compiler acceptance on a **draft, unmerged branch**, not a recertification of Stage4 self-hosting or of native MiniAS/MiniLD integration.
+
+Separately, the historical complete native Linux 6.6.143 path passed at commit `24b02474` ([CI #38870185276](https://github.com/yituanxing/minic-toolchain/actions/runs/38870185276)):
 
 ```text
 C (.c) -> MiniPP (.i) -> MiniC (.s) -> MiniAS (.o)
