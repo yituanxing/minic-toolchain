@@ -1,7 +1,7 @@
-name: MiniC authenticated Linux heavy-TU phase profile (opt-in)
+name: MiniC original GNU Linux frozen20 phase profile (opt-in)
 
-# Branch-only opt-in: this file can be tested on an isolated branch without
-# being merged into the production refactor branch. Never materialize Linux.
+# Branch-only opt-in: recover certified original GNU 2064-C-universe .i from
+# the completed immutable frozen20 artifact. Never restore/rematerialize Linux.
 on:
   workflow_dispatch:
   push:
@@ -12,6 +12,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: minic-heavy-tu-phase-${{ github.ref }}
@@ -25,66 +26,93 @@ jobs:
       - name: Checkout the exact candidate commit
         uses: actions/checkout@v4
 
-      - name: Restore the historical SHA-certified first500 without rematerializing
-        uses: actions/cache/restore@v4
+      - name: Download the completed original GNU 2064-universe frozen20 artifact
+        uses: actions/download-artifact@v4
         with:
-          path: build/linux-perf-corpus
-          key: linux-6.6.143-first500-rv64-v1-${{ hashFiles('tests/external/linux/batch_probe.sh', 'tests/external/linux/probe.sh', 'tests/external/linux/replay-indices.txt') }}
-          fail-on-cache-miss: true
+          repository: yituanxing/minic-toolchain
+          run-id: 42646936416
+          name: minic-original-gnu-linux-6.6.143-rv64-frozen20-21f07bcb8daa6829a5afcff07cc98cdbb34467a8
+          github-token: ${{ github.token }}
+          path: build/hot-tu-phase/frozen20
 
-      - name: Validate the 500 source SHA values and select three heavy owners
+      - name: Validate original GNU provenance and select three actual owners
         shell: bash
         run: |
           set -Eeuo pipefail
-          corpus=build/linux-perf-corpus
+          corpus=build/hot-tu-phase/frozen20
           output=build/hot-tu-phase
           mkdir -p "$output"
-          test -s "$corpus/selected-tus.txt"
-          test "$(wc -l < "$corpus/selected-tus.txt")" -eq 500
-          test -s "$corpus/inputs.sha256"
-          test "$(wc -l < "$corpus/inputs.sha256")" -eq 500
-          sha256sum -c --status "$corpus/inputs.sha256"
+          test -s "$corpus/provenance.txt"
+          test -s "$corpus/index.tsv"
+          test -s "$corpus/SHA256SUMS"
+          test "$(wc -l < "$corpus/index.tsv")" -eq 21
+          test "$(wc -l < "$corpus/SHA256SUMS")" -eq 20
+          (
+            cd "$corpus"
+            sha256sum --status --check SHA256SUMS
+          )
           python3 - "$corpus" "$output" <<'PY'
           from pathlib import Path
+          import csv
           import hashlib
           import json
           import sys
 
           corpus, output = map(Path, sys.argv[1:])
-          expected = {
-              "kernel/time/timekeeping.o": 158,
-              "kernel/bpf/verifier.o": 195,
-              "kernel/events/core.o": 232,
+          expected = ["kernel/bpf/verifier.o", "kernel/events/core.o",
+                      "kernel/time/timekeeping_debug.o"]
+          provenance = dict(line.split("=", 1) for line in
+                            (corpus / "provenance.txt").read_text().splitlines()
+                            if "=" in line)
+          must_equal = {
+              "schema": "minic-rv64-gnu-frozen20-export-v1",
+              "export_head": "21f07bcb8daa6829a5afcff07cc98cdbb34467a8",
+              "original_gnu_linux_release": "6.6.143",
+              "original_gnu_qemu_contract": "full_and_p1_passed",
+              "original_gnu_config_sha256":
+                  "eeb04f304ebfb97a1079c187dc0c2ea3cc61fc50a55aa3cc776237c16ab19bbe",
+              "frozen20_owner_index_sha256":
+                  "8dd5c3aedea0bd5a00bb5549c799d8b5f4b791e4e9d4a76fa9f5dbeb15bac7f1",
+              "frozen20_input_manifest_sha256":
+                  "99ce34bf79eec6129e45e7f98b0702ffb3f299df7dc64a8942e38911122bb185",
           }
-          seen = {}
-          root = (corpus / "kbuild").resolve(strict=True)
-          for row in (corpus / "selected-tus.txt").read_text().splitlines():
-              columns = row.split("\t", 3)
-              if len(columns) != 4:
-                  raise SystemExit("invalid certified selected-tus row")
-              index, owner, frozen, source = columns
-              if owner in seen:
-                  raise SystemExit("duplicate certified owner " + owner)
-              seen[owner] = (int(index), frozen, source)
-          if len(seen) != 500:
-              raise SystemExit("certified manifest must contain 500 unique owners")
+          if any(provenance.get(k) != v for k, v in must_equal.items()):
+              raise SystemExit("original GNU provenance differs from certified export")
+          def digest(path):
+              return hashlib.sha256(path.read_bytes()).hexdigest()
+          if digest(corpus / "index.tsv") != provenance["frozen20_owner_index_sha256"]:
+              raise SystemExit("original GNU owner index SHA changed")
+          if digest(corpus / "SHA256SUMS") != provenance["frozen20_input_manifest_sha256"]:
+              raise SystemExit("original GNU input manifest SHA changed")
+          with (corpus / "index.tsv").open(newline="") as stream:
+              rows = list(csv.DictReader(stream, delimiter="\t"))
+          if len(rows) != 20 or len({row["owner"] for row in rows}) != 20:
+              raise SystemExit("original GNU export must contain 20 unique C owners")
+          seen = {row["owner"]: row for row in rows}
+          root = corpus.resolve(strict=True)
           records = []
-          for owner, expected_index in expected.items():
+          for owner in expected:
               if owner not in seen:
-                  raise SystemExit("required heavy owner absent from cache " + owner)
-              index, frozen, source = seen[owner]
-              if index != expected_index:
-                  raise SystemExit(f"frozen owner index changed {owner}: {index} != {expected_index}")
-              path = (root / frozen).resolve(strict=True)
-              if not path.is_relative_to(root) or not path.is_file() or path.stat().st_size == 0:
-                  raise SystemExit("invalid frozen input " + str(path))
-              digest = hashlib.sha256(path.read_bytes()).hexdigest()
-              records.append({"owner": owner, "index": index,
-                              "input": str(path), "input_sha256": digest,
-                              "original_source": source})
-              print(f"HEAVY_TU_INPUT=PASS owner={owner} index={index} input_sha256={digest}")
+                  raise SystemExit("required original GNU owner absent " + owner)
+              row = seen[owner]
+              relative = Path(row["artifact_path"])
+              if relative.is_absolute() or ".." in relative.parts or relative.suffix != ".i":
+                  raise SystemExit("invalid original GNU artifact path " + str(relative))
+              path = (root / relative).resolve(strict=True)
+              if not path.is_relative_to(root) or not path.is_file() or path.is_symlink():
+                  raise SystemExit("invalid original GNU frozen input " + str(path))
+              sha = digest(path)
+              if sha != row["sha256"] or path.stat().st_size != int(row["bytes"]):
+                  raise SystemExit("original GNU frozen input SHA/size differs " + owner)
+              key = owner[:-2].replace("/", "_")
+              records.append({"owner": owner, "key": key,
+                              "input": str(path), "input_sha256": sha,
+                              "source_class": row["selection_source"],
+                              "historical_ms": row["historical_ms"]})
+              print(f"HEAVY_TU_INPUT=PASS owner={owner} input_sha256={sha}")
           (output / "selection.json").write_text(json.dumps(records, indent=2) + "\n")
-          print("HEAVY_TU_CORPUS=PASS verified=500 selected=3 cached_only=true")
+          print("HEAVY_TU_GNU_EXPORT=PASS original_c_universe=2064 verified=20 selected=3 "
+                "downloaded_artifact_only=true")
           PY
 
       - name: Build original MiniC host compiler and traced source-only diagnostic
@@ -126,7 +154,7 @@ jobs:
           samples = json.loads((root / "selection.json").read_text())
           flags = ["-march=rv64i", "-mabi=lp64", "-fshort-wchar", "-funsigned-char"]
           for sample in samples:
-              out = root / ("owner-" + str(sample["index"]))
+              out = root / ("owner-" + sample["key"])
               cmd = ["python3", "tools/ci/linux-perf-phase-trace-v1.py",
                      "--input", sample["input"],
                      "--baseline", str(root / "original/bin/minic-cc"),
@@ -134,7 +162,7 @@ jobs:
                      "--expect-specialization", "--out", str(out)]
               cmd.extend("--compiler-flag=" + flag for flag in flags)
               done = subprocess.run(cmd, text=True, capture_output=True, timeout=360)
-              (root / ("owner-" + str(sample["index"]) + "-phase.log")).write_text(
+              (root / ("owner-" + sample["key"] + "-phase.log")).write_text(
                   done.stdout + "\n" + done.stderr)
               if done.returncode:
                   raise SystemExit(f"phase failed {sample['owner']}: {(done.stderr + done.stdout)[-1800:]}")
@@ -143,7 +171,7 @@ jobs:
                   raise SystemExit("different generated GNU assembly " + sample["owner"])
               if result.get("compiler_flags") != flags:
                   raise SystemExit("Kbuild ABI flags missing in phase evidence")
-              print(f"HEAVY_TU_PHASE=PASS owner={sample['owner']} index={sample['index']} assembly_equal=true")
+              print(f"HEAVY_TU_PHASE=PASS owner={sample['owner']} assembly_equal=true")
           print("HEAVY_TU_PHASE_GROUP=PASS owners=3 kbuild_abi_preserved=true")
           PY
 
@@ -174,7 +202,7 @@ jobs:
           flags = ["-march=rv64i", "-mabi=lp64", "-fshort-wchar", "-funsigned-char"]
           states = []
           for sample in samples:
-              folder = root / ("owner-" + str(sample["index"]))
+              folder = root / ("owner-" + sample["key"])
               callgrind = folder / "callgrind.out"
               assembly = folder / "callgrind.s"
               command = ["valgrind", "--tool=callgrind", "--collect-jumps=yes",
@@ -197,7 +225,7 @@ jobs:
                                               "--sort=Ir", str(callgrind)], text=True,
                                              capture_output=True, timeout=45, check=True)
                   (folder / "callgrind-self-ir.txt").write_text(annotated.stdout)
-              state = {"owner": sample["owner"], "index": sample["index"],
+              state = {"owner": sample["owner"], "key": sample["key"],
                        "callgrind": status, "kbuild_flags": flags}
               states.append(state)
               print("HEAVY_TU_CALLGRIND=" + status + " owner=" + sample["owner"])
