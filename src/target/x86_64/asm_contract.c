@@ -2101,14 +2101,14 @@ bool minic_x86_64_asm_muldiv_template(const char *text, size_t length) {
 /* Exact original GNU Linux __raw_try_cmpxchg 8-case source.
  * Linux CC_SET(z) must remain a real hardware flag output, not C logic. */
 static const MinicX86TryCasDesc x86_trycas_forms[] = {
-    {"cmpxchgb","%r10b","movzbl (%r11), %eax","movb %al, (%r11)",1U,true},
-    {"cmpxchgw","%r10w","movzwl (%r11), %eax","movw %ax, (%r11)",2U,true},
-    {"cmpxchgl","%r10d","movl (%r11), %eax","movl %eax, (%r11)",4U,true},
-    {"cmpxchgq","%r10","movq (%r11), %rax","movq %rax, (%r11)",8U,true},
-    {"cmpxchgb","%r10b","movzbl (%r11), %eax","movb %al, (%r11)",1U,false},
-    {"cmpxchgw","%r10w","movzwl (%r11), %eax","movw %ax, (%r11)",2U,false},
-    {"cmpxchgl","%r10d","movl (%r11), %eax","movl %eax, (%r11)",4U,false},
-    {"cmpxchgq","%r10","movq (%r11), %rax","movq %rax, (%r11)",8U,false}
+    {"cmpxchgb", "%r10b", 1U, true},
+    {"cmpxchgw", "%r10w", 2U, true},
+    {"cmpxchgl", "%r10d", 4U, true},
+    {"cmpxchgq", "%r10", 8U, true},
+    {"cmpxchgb", "%r10b", 1U, false},
+    {"cmpxchgw", "%r10w", 2U, false},
+    {"cmpxchgl", "%r10d", 4U, false},
+    {"cmpxchgq", "%r10", 8U, false}
 };
 const MinicX86TryCasDesc *minic_x86_64_trycas_desc(MinicX86TryCas form) {
     return form>=MINIC_X86_TRYCAS_B_LOCK&&form<=MINIC_X86_TRYCAS_Q_LOCAL ?

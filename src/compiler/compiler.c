@@ -305,12 +305,9 @@ int minic_compile_preprocessed_file_for_target(const char *input_path,
         minic_set_diagnostic(diagnostic, input_path, 1U, 1U, "cannot normalize cast expressions");
         success = false;
     }
-    if (minic_bootstrap_trace_enabled()) {
-        minic_bootstrap_trace_stage(input_path,
-                                    "normalize",
-                                    success ? "end-ok" : "end-fail",
-                                    program.function_count);
-    }
+    minic_bootstrap_trace_stage(input_path, "normalize",
+                                success ? "end-ok" : "end-fail",
+                                program.function_count);
     if (success && !minic_c0_program_verify_target_detailed(
                        &program, MINIC_C0_AST_NORMALIZED, invocation, &verify_failure)) {
         minic_set_ast_verify_diagnostic(input_path, "normalized", &verify_failure, diagnostic);
@@ -363,12 +360,9 @@ int minic_compile_preprocessed_file_for_target(const char *input_path,
             diagnostic, input_path, 1U, 1U, "cannot retain Core IR lowering results");
         success = false;
     }
-    if (minic_bootstrap_trace_enabled()) {
-        minic_bootstrap_trace_stage(input_path,
-                                    "core-set",
-                                    success ? "end-ok" : "end-fail",
-                                    program.function_count);
-    }
+    minic_bootstrap_trace_stage(input_path, "core-set",
+                                success ? "end-ok" : "end-fail",
+                                program.function_count);
     /* Core/ModuleIR owns symbol reachability. If the closure reaches a C
      * function deferred by the source-only emission hint, the compiler
      * completes its normal sealed Core ingress and closes again until the

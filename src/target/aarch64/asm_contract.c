@@ -285,14 +285,10 @@ bool aarch64_linux_brk_value(int64_t value) {
  * Exact source admission and machine emission share this target catalog.
  * 91 is ARM64_WORKAROUND_DEVICE_LOAD_ACQUIRE from v6.6.143 cpucaps. */
 static const Aarch64RawIoRead aarch64_raw_io_reads[] = {
-    {"ldrb%w0,[%1]", "ldarb%w0,[%1]", "ldrb w9, [x10]",
-     "ldarb w9, [x10]", "strb w9, [x11]", 1U},
-    {"ldrh%w0,[%1]", "ldarh%w0,[%1]", "ldrh w9, [x10]",
-     "ldarh w9, [x10]", "strh w9, [x11]", 2U},
-    {"ldr%w0,[%1]", "ldar%w0,[%1]", "ldr w9, [x10]",
-     "ldar w9, [x10]", "str w9, [x11]", 4U},
-    {"ldr%0,[%1]", "ldar%0,[%1]", "ldr x9, [x10]",
-     "ldar x9, [x10]", "str x9, [x11]", 8U}
+    {"ldrb%w0,[%1]", "ldarb%w0,[%1]", 1U},
+    {"ldrh%w0,[%1]", "ldarh%w0,[%1]", 2U},
+    {"ldr%w0,[%1]", "ldar%w0,[%1]", 4U},
+    {"ldr%0,[%1]", "ldar%0,[%1]", 8U}
 };
 const Aarch64RawIoRead *aarch64_raw_io_read(
     const char *text, size_t length) {
@@ -939,14 +935,12 @@ bool aarch64_linux_percpu_write_alternative_template(
  * replacement instructions, PREL32 records and two .org guards must survive
  * intact; these are privileged runtime patches, not compiler barriers. */
 static const Aarch64LinuxBarrierAlternative aarch64_linux_barrier_alternatives[] = {
-    {71U, "nop", "dmbsy", "nop", "dmb sy"},
-    {95U, "nop", "isb", "nop", "isb"},
-    {95U, "isb", "nop", "isb", "nop"},
-    {86U, "nop;nop;nop", "iciallu;dsbnsh;isb",
-     "nop\n  nop\n  nop", "ic iallu\n  dsb nsh\n  isb"},
+    {71U, "nop", "dmbsy"},
+    {95U, "nop", "isb"},
+    {95U, "isb", "nop"},
+    {86U, "nop;nop;nop", "iciallu;dsbnsh;isb"},
     {42U, "dsbnshisb",
-     ".inst(0xd5000000|(((0)<<19)|((3)<<16)|((3)<<12)|(((0))<<8)|(((7))<<5))|((31)&0x1f))nop",
-     "dsb nsh\n  isb", ".inst 0xd50330ff\n  nop"}
+     ".inst(0xd5000000|(((0)<<19)|((3)<<16)|((3)<<12)|(((0))<<8)|(((7))<<5))|((31)&0x1f))nop"}
 };
 const Aarch64LinuxBarrierAlternative *aarch64_linux_barrier_alternative(
     const char *text, size_t length) {

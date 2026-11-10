@@ -11,9 +11,10 @@
 #include <stdbool.h>
 #include <stddef.h>
 
-/* x86-64 ABI frame *plan* (SysV or Microsoft x64), not emitted instructions. The backend
- * retains independent register moves, object-address and prologue code.
- * A future Machine IR may consume or replace this target-specific plan. */
+/* x86-64 ABI frame *plan* (SysV or Microsoft x64), not emitted instructions.
+ * The typed machine selector borrows its offsets and calling-convention
+ * placements; machine register moves and prologue instructions stay owned
+ * by x86-64 Machine IR lowering. */
 /* Per-Core-value 8-byte frame slots, or 16 bytes for int128/x87 long double.
  * The extra limb is x86 backend-owned; Core IR identities are unchanged. */
 typedef struct MinicX86Frame {
@@ -28,22 +29,6 @@ typedef struct MinicX86Frame {
      * conservative always-spill behavior. This is not a register allocator:
      * live Core values still use their original ABI-safe frame slots. */
     const size_t *function_value_use_counts;
-    /* One-instruction, target-owned transport for Common's proven adjacent
-     * single-use scalar GP pair. x86's producer leaves its value in %rax;
-     * the immediately following consumer can read that same %rax directly.
-     * Boolean guards keep standalone/zero-initialized frame clients inert. */
-    bool gp_forward_source_valid;
-    MinicCoreValueId gp_forward_source_id;
-    bool gp_elide_result_store_valid;
-    MinicCoreValueId gp_elide_result_store_id;
-    /* An adjacent single-use local OBJECT_ADDRESS can be computed at its
-     * LOAD/STORE consumer directly into %r10. The producer emits no LEA or
-     * SSA spill, while the consumer still performs the genuine memory IO.
-     * Object geometry remains exclusively owned by this x86 frame plan. */
-    bool direct_object_address_producer;
-    bool direct_object_address_consumer;
-    MinicCoreValueId direct_object_address_value_id;
-    MinicCoreObjectId direct_object_address_object_id;
     size_t *object_offsets;
     MinicCoreObjectStoragePlan object_storage;
     bool borrows_object_storage;

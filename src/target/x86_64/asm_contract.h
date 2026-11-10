@@ -434,7 +434,7 @@ typedef enum MinicX86TryCas {
     MINIC_X86_TRYCAS_L_LOCAL,MINIC_X86_TRYCAS_Q_LOCAL
 } MinicX86TryCas;
 typedef struct MinicX86TryCasDesc {
-    const char *op,*new_reg,*load_old,*store_old;
+    const char *op, *new_reg;
     size_t width;
     bool locked;
 } MinicX86TryCasDesc;
