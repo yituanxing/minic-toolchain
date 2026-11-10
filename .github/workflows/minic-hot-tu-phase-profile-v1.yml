@@ -23,7 +23,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
-      - name: Checkout the exact candidate commit
+      - name: Checkout the exact diagnostic commit
         uses: actions/checkout@v4
 
       - name: Download the completed original GNU 2064-universe frozen20 artifact
@@ -115,7 +115,7 @@ jobs:
                 "downloaded_artifact_only=true")
           PY
 
-      - name: Build original MiniC host compiler and traced source-only diagnostic
+      - name: Build one production-source MiniC host compiler with debug symbols
         shell: bash
         timeout-minutes: 12
         run: |
@@ -130,17 +130,12 @@ jobs:
             >build/hot-tu-phase/build-original.log 2>&1
           python3 tools/ci/linux-perf-phase-trace-v1.py --self-test \
             | tee build/hot-tu-phase/tracer-selftest.txt
-          # Only the CI checkout is patched. No production C or IR is changed.
-          python3 tools/ci/apply-perf-specialization-phase-trace-v0.py \
-            | tee build/hot-tu-phase/traced-instrumentation.txt
-          make -j4 MODE=release CFLAGS=-g \
-            BUILD_DIR=build/hot-tu-phase/traced \
-            build/hot-tu-phase/traced/bin/minic-cc \
-            >build/hot-tu-phase/build-traced.log 2>&1
-          sha256sum build/hot-tu-phase/{original,traced}/bin/minic-cc \
+          # No stale source-patching. Repeat the SAME compiled MiniC in phase
+          # tracing: this is diagnostic timing, never an A/B speedup claim.
+          sha256sum build/hot-tu-phase/original/bin/minic-cc \
             | tee build/hot-tu-phase/compiler-sha256.txt
 
-      - name: Same Kbuild ABI phase attribution for timekeeping events and verifier
+      - name: Repeat same-compiler six-phase timing under original GNU Kbuild ABI
         shell: bash
         timeout-minutes: 10
         run: |
@@ -158,8 +153,8 @@ jobs:
               cmd = ["python3", "tools/ci/linux-perf-phase-trace-v1.py",
                      "--input", sample["input"],
                      "--baseline", str(root / "original/bin/minic-cc"),
-                     "--candidate", str(root / "traced/bin/minic-cc"),
-                     "--expect-specialization", "--out", str(out)]
+                     "--candidate", str(root / "original/bin/minic-cc"),
+                     "--out", str(out)]
               cmd.extend("--compiler-flag=" + flag for flag in flags)
               done = subprocess.run(cmd, text=True, capture_output=True, timeout=360)
               (root / ("owner-" + sample["key"] + "-phase.log")).write_text(
@@ -171,8 +166,13 @@ jobs:
                   raise SystemExit("different generated GNU assembly " + sample["owner"])
               if result.get("compiler_flags") != flags:
                   raise SystemExit("Kbuild ABI flags missing in phase evidence")
-              print(f"HEAVY_TU_PHASE=PASS owner={sample['owner']} assembly_equal=true")
-          print("HEAVY_TU_PHASE_GROUP=PASS owners=3 kbuild_abi_preserved=true")
+              for name in ("parse", "normalize", "core-set", "core-validate", "layout", "codegen"):
+                  if name not in result["results"]["before"]["stage_ms"]:
+                      raise SystemExit("missing original six-stage timing " + sample["owner"])
+              print(f"HEAVY_TU_PHASE=PASS owner={sample['owner']} assembly_equal=true "
+                    "same_compiler_repeated=true six_stages=true")
+          print("HEAVY_TU_PHASE_GROUP=PASS owners=3 kbuild_abi_preserved=true "
+                "specialization_timers_not_claimed=true not_a_speedup_ab=true")
           PY
 
       - name: Install bounded CPU-instruction profiler
@@ -246,13 +246,12 @@ jobs:
             build/hot-tu-phase/identity.txt
             build/hot-tu-phase/compiler-sha256.txt
             build/hot-tu-phase/tracer-selftest.txt
-            build/hot-tu-phase/traced-instrumentation.txt
             build/hot-tu-phase/owner-*/phases.json
             build/hot-tu-phase/owner-*/callgrind-self-ir.txt
             build/hot-tu-phase/owner-*/callgrind.log
             build/hot-tu-phase/owner-*/callgrind.out
             build/hot-tu-phase/owner-*-phase.log
             build/hot-tu-phase/callgrind-status.json
-            build/hot-tu-phase/build-*.log
+            build/hot-tu-phase/build-original.log
           if-no-files-found: warn
           retention-days: 14
