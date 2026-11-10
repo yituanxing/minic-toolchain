@@ -107,11 +107,6 @@ static bool minic_validate_core_functions(const char *input_path,
         source_name_length = source_function != NULL && source_function->name != NULL
             ? (source_function->name_length > (size_t)INT_MAX
                 ? INT_MAX : (int)source_function->name_length) : 1;
-        if (function == NULL) {
-            minic_set_diagnostic(
-                diagnostic, input_path, 1U, 1U, "Core lowering cannot access function");
-            return false;
-        }
         if (!function->is_defined) {
             continue;
         }

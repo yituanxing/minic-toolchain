@@ -27,7 +27,6 @@
 typedef struct Rv64ProgramContext {
     const char *path;
     MinicDiagnostic *diagnostic;
-    const MinicCoreModule *module;
 } Rv64ProgramContext;
 
 static void rv64_set_diagnostic(MinicDiagnostic *diagnostic,
@@ -272,7 +271,7 @@ static bool rv64_write_core_program_impl(const char *path,
         rv64_visit_function, NULL, rv64_between,
         NULL, rv64_finalize, MINIC_PROGRAM_FUNCTION_ALL, false
     };
-    Rv64ProgramContext context = { path, diagnostic, module };
+    Rv64ProgramContext context = { path, diagnostic };
     bool success;
     if (module == NULL || target == NULL || path == NULL) {
         rv64_set_diagnostic(diagnostic, path, "module/target/path is required");

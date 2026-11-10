@@ -184,7 +184,6 @@ bool minic_type_is_integer(MinicType type);
 bool minic_type_is_bool_integer(MinicType type);
 bool minic_type_is_char_integer(MinicType type);
 bool minic_type_is_plain_char(MinicType type);
-bool minic_type_is_short_integer(MinicType type);
 bool minic_type_is_long_integer(MinicType type);
 bool minic_type_is_int128_integer(MinicType type);
 bool minic_type_is_signed_integer(MinicType type);

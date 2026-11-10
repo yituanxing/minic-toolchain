@@ -47,7 +47,6 @@ bool minic_multi_direct_machine_reject(const MinicCoreFunction *fn, const char *
  * program-wide walk is shared with x86/RV32/RV64. */
 typedef struct MinicDirectVisitContext {
     const MinicMultiDirectModuleConfig *config;
-    const MinicCoreModule *module;
     size_t scanned_functions, rejected_functions;
     bool census;
 } MinicDirectVisitContext;
@@ -153,7 +152,7 @@ bool minic_multi_direct_write_module(
     MinicDiagnostic *diagnostic) {
     bool success;
     const bool census = getenv("MINIC_BACKEND_CENSUS") != NULL;
-    MinicDirectVisitContext visits = { config, module, 0U, 0U, census };
+    MinicDirectVisitContext visits = { config, 0U, 0U, census };
 
     if (config == NULL || config->architecture_name == NULL ||
         config->display_name == NULL || config->gnu_stack_note == NULL ||

@@ -1520,6 +1520,37 @@ BSF/BSR 33 例 PASS、现役 Linux quick-replay PASS、完整
 编译单元或 Stage4 自举；历史目录与审阅文档中的已退役路径仅作为当时的
 源码快照记录，不再代表现行入口。
 
+## 批次 C40：五架构调用链复读后的叶子死代码与历史改写器退役（2026-11-10）
+
+**父提交：** C39 本地 `908987a2`／已发布树相同的 GitHub
+`d94bbe17`（[PR #689](https://github.com/yituanxing/minic-toolchain/pull/689)）。
+由四组独立只读审计分别追踪 Frontend→Compiler→Core/ModuleIR、
+Target/Common 访问器、五目标 ISA/ABI 和 CI 工具消费者；主执行者再验证
+引用与修改源码。这是**调用链审读**，不声明重新完成 412 个生产源文件全文深读。
+
+| 分类 | 清理与保留边界 |
+| --- | --- |
+| Frontend/Compiler | 删除无现役调用的外部 ExpressionId 访问包装、旧 global `set_extern` API、`is_short_integer` 类型查询及声明；现役原子 remap、带 metadata 的 extern 创建仍保留。移除 `compiler.c` 中已由非空数组前置条件排除的 `&symbols[index] == NULL` 死分支。 |
+| 五目标 ABI/访问器 | 删除 RV64 `abi.c/.h` 两组无人读取的参数寄存器名称数组，真实 ABI 游标和机器寄存器选择仍存在；删除 Common direct、RV32、RV64、x86 四处只写不读的访问器 context `module` 副本（回调本已借入 ModuleIR），不改 visitor 签名、ISA、ABI 或 MIR。 |
+| CI 一次性源码改写器 | 逐 basename 扫 `.github`、测试、文档、Makefile、tools 与 src，确认 **28 个**无跨文件引用的 `tools/ci/apply-*` 脚本均含已不存在的 `src/core/core_lower.c` 或 `src/target/riscv64/core_codegen.c` 目标锚点，退役 **5,294 行**；另有 20 个虽无完整路径引用但有 basename 引用的工具明确**保留**。 |
+| 架构导航 | `docs/architecture/README.md` 开头单独标现行五目标 Core/typed-MIR 管线、C39 的 412 文件库存，将历史 C38 的 342 全文审读数量改为历史口径；函数契约台账顶部标明旧 `global_emit.c` 条目属于历史快照。历史结论原文不删除。 |
+
+**生产代码净减：** `src/` 本批 13 文件 `+4/-74` 行，净 `-70`；
+工具退役 28 文件 `-5,294` 行，均可由 Git 历史恢复。不删任何仍由
+专测调用的 MachineBuilder API、Core dump/间接入口接口或同一 TU 内仍活跃
+的 ISA 语法处理函数。
+
+**本地验收：** Release `-Werror` 五目标编译器构建 PASS；对 C39
+编译器保存的原版 `static_scalar_global` 和 tinyAES 预处理输入，五目标
+**10/10 `.s` 字节完全一致**；`make check-type check-ast-contract
+check-cast-expressions check-global-objects` PASS；Linux quick-replay PASS；
+完整后端边界测试 PASS；Bootstrap manifest 4/4 PASS、生产 C 清单
+`sources=218` PASS、目标审阅 `inventory=260 drift=110` PASS、
+`git diff --check` PASS。
+
+**明确未做：** 不跑编译器性能优化或 Stage4 自举；没有在本批 SHA 重跑
+完整 13,394 Linux 编译单元／QEMU 矩阵，不把父版本的验收写成本批结果。
+
 ## 后续批次进度规则
 
 每批发布：当前 HEAD、源文件逐目录覆盖（明确深读与只扫的区别）、

@@ -1362,22 +1362,6 @@ bool minic_c0_global_object_add_function_relocation(MinicC0Program *program,
                                         false);
 }
 
-bool minic_c0_global_object_set_extern(MinicC0Program *program,
-                                       MinicGlobalObjectId global_object_id) {
-    MinicGlobalObject *object;
-
-    if (program == NULL || global_object_id >= program->global_object_count) {
-        return false;
-    }
-    object = &program->global_objects[global_object_id];
-    if (object->is_tentative || object->initializer_count != 0U || object->relocation_count != 0U ||
-        object->is_zero_initialized || object->is_internal) {
-        return false;
-    }
-    object->is_extern = true;
-    return true;
-}
-
 bool minic_c0_global_object_add_integer_object_relocation_path_addend(
     MinicC0Program *program,
     MinicGlobalObjectId global_object_id,
