@@ -46,7 +46,7 @@ COMMON_WARNINGS := \
 ifeq ($(MODE),debug)
 MODE_CFLAGS := -O0 -g3
 else ifeq ($(MODE),release)
-MODE_CFLAGS := -O2 -DNDEBUG
+MODE_CFLAGS := -O3 -DNDEBUG
 else ifeq ($(MODE),sanitize)
 MODE_CFLAGS := -O1 -g3 -fsanitize=address,undefined -fno-omit-frame-pointer
 MODE_LDFLAGS := -fsanitize=address,undefined
