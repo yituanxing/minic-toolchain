@@ -1,0 +1,221 @@
+name: MiniC full Linux RV64 2064-owner paired A/B (seven shards)
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/minic-rv64-fullseven-paired-ab-20261110.yml
+      - tools/ci/linux-perf-2064-paired-compile-v1.py
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  full-rv64-ab:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.title, '[minic-rv64-full-ab]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5, 6]
+    env:
+      GNU_WORK: build/linux-runtime-gcc
+      LINUX_SOURCE: build/linux-expanded-kbuild-v0/linux-6.6.143
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Verify exact compiler fixture and benchmark scripts
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -f tools/ci/linux-runtime-gcc-cohort-bisect-v1.sh
+          test -f tests/external/linux/stage2_kbuild_cc.sh
+          test -f tools/ci/linux-perf-2064-paired-compile-v1.py
+          python3 -m py_compile tools/ci/linux-perf-2064-paired-compile-v1.py
+          test "$(git rev-parse HEAD)" = '${{ github.event.pull_request.head.sha || github.sha }}'
+          echo 'RV64_FULL_AB_INPUT=PASS target=rv64i owners=2064 partitions=7 pre=e13fc7c after=aa186412 same_runner=true'
+
+      - name: Install pinned original GNU RISC-V Kbuild tools
+        shell: bash
+        timeout-minutes: 12
+        run: |
+          set -Eeuo pipefail
+          for sources in /etc/apt/apt-mirrors.txt /etc/apt/sources.list.d/ubuntu.sources; do
+            if [[ -f "$sources" ]] && grep -q azure.archive.ubuntu.com "$sources"; then
+              sudo sed -i 's#azure.archive.ubuntu.com#archive.ubuntu.com#g' "$sources"
+            fi
+          done
+          timeout 150s sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 update -qq
+          timeout 400s sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 install -y --no-install-recommends \
+            gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu libc6-dev-riscv64-cross \
+            make cpio gzip time python3
+          command -v riscv64-linux-gnu-gcc
+          gcc=$(sha256sum "$(command -v riscv64-linux-gnu-gcc)" | cut -c1-16)
+          ld=$(sha256sum "$(command -v riscv64-linux-gnu-ld)" | cut -c1-16)
+          test "$gcc" = 0c2a199ea3ae14d3
+          test "$ld" = 0703113036a30806
+          echo "RV64_FULL_AB_GNU=PASS gcc=$gcc ld=$ld"
+
+      - name: Restore SHA-certified original GNU golden Kbuild metadata
+        id: golden
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            build/linux-runtime-gcc/out
+            build/linux-runtime-gcc/provenance
+          key: linux-gnu-golden-v1-6.6.143-eeb04f304ebfb97a1079c187dc0c2ea3cc61fc50a55aa3cc776237c16ab19bbe-0c2a199ea3ae14d3-0703113036a30806
+          fail-on-cache-miss: true
+
+      - uses: ./.github/actions/linux-runtime-restore-fixture
+        with:
+          fixture: source
+
+      - name: Verify 2064 original GNU owners, split immutable seven partitions
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test '${{ steps.golden.outputs.cache-hit }}' = true
+          test "$(sha256sum "$GNU_WORK/out/.config" | cut -d' ' -f1)" = eeb04f304ebfb97a1079c187dc0c2ea3cc61fc50a55aa3cc776237c16ab19bbe
+          test "$(grep -Ec '^[^#[:space:]]+\.o$' "$GNU_WORK/provenance/original-c-owners.txt")" = 2064
+          ev="$GITHUB_WORKSPACE/build/rv64-full-ab/shard-${{ matrix.shard }}"
+          mkdir -p "$ev"
+          python3 tools/ci/linux-runtime-gcc-full-c-objects-v1.py \
+            --out "$GNU_WORK/out" --manifest "$GNU_WORK/provenance/gcc-objects.sha256" \
+            --prefix tools/ci/linux-runtime-gcc-cohort-objects-v1.txt \
+            --output "$ev/full-universe.txt" --excluded "$ev/non-c-objects.tsv" --min-c-objects 2064
+          test "$(grep -Ec '^[^#[:space:]]+\.o$' "$ev/full-universe.txt")" -eq 2064
+          python3 tools/ci/linux-runtime-gcc-shards-v1.py split \
+            --full "$ev/full-universe.txt" --shard ${{ matrix.shard }} --output "$ev/owners.txt"
+          n=$(grep -Ec '^[^#[:space:]]+\.o$' "$ev/owners.txt")
+          test "$n" -ge 280 && test "$n" -le 310
+          echo "RV64_FULL_AB_SHARD=PASS shard=${{ matrix.shard }} owners=$n"
+
+      - name: Build original and optimized MiniC on the SAME runner
+        shell: bash
+        timeout-minutes: 16
+        run: |
+          set -Eeuo pipefail
+          before=e13fc7c77e60cf80f6ad699035998b5aada3a236
+          after=aa186412c4165eaa7a4ccd1a406b8fc7918e3326
+          git fetch --quiet --no-tags --depth=1 origin "$before"
+          git -c advice.detachedHead=false worktree add --quiet --detach "$RUNNER_TEMP/minic-before" "$before"
+          make -s -C "$RUNNER_TEMP/minic-before" -j4 MODE=release CFLAGS=-Werror \
+            BUILD_DIR="$RUNNER_TEMP/minic-before-build" \
+            "$RUNNER_TEMP/minic-before-build/bin/minic" "$RUNNER_TEMP/minic-before-build/bin/minic-cc"
+          make -s -j4 MODE=release CFLAGS=-Werror \
+            BUILD_DIR="$RUNNER_TEMP/minic-after-build" \
+            "$RUNNER_TEMP/minic-after-build/bin/minic" "$RUNNER_TEMP/minic-after-build/bin/minic-cc"
+          test -x "$RUNNER_TEMP/minic-before-build/bin/minic"
+          test -x "$RUNNER_TEMP/minic-after-build/bin/minic"
+          ! cmp -s "$RUNNER_TEMP/minic-before-build/bin/minic" "$RUNNER_TEMP/minic-after-build/bin/minic"
+          test "$after" = aa186412c4165eaa7a4ccd1a406b8fc7918e3326
+          printf 'baseline=%s\ncandidate=%s\nbaseline_cc=%s\ncandidate_cc=%s\n' \
+            "$before" "$after" \
+            "$(sha256sum "$RUNNER_TEMP/minic-before-build/bin/minic" | cut -d' ' -f1)" \
+            "$(sha256sum "$RUNNER_TEMP/minic-after-build/bin/minic" | cut -d' ' -f1)" \
+            >"build/rv64-full-ab/shard-${{ matrix.shard }}/compiler-identity.txt"
+          echo 'RV64_FULL_AB_BUILD=PASS old_new_distinct=true same_runner=true'
+
+      - name: Compile and SHA-compare every authentic RV64I owner (all seven)
+        shell: bash
+        timeout-minutes: 50
+        run: |
+          set -Eeuo pipefail
+          src="$GITHUB_WORKSPACE/$LINUX_SOURCE"
+          out="$GITHUB_WORKSPACE/$GNU_WORK/out"
+          prov="$GITHUB_WORKSPACE/$GNU_WORK/provenance"
+          ev="$GITHUB_WORKSPACE/build/rv64-full-ab/shard-${{ matrix.shard }}"
+          test ! -e "$GITHUB_WORKSPACE/$GNU_WORK/linux-6.6.143"
+          ln -s "$src" "$GITHUB_WORKSPACE/$GNU_WORK/linux-6.6.143"
+          export KBUILD_BUILD_USER=minic KBUILD_BUILD_HOST=minic-ci
+          export KBUILD_BUILD_TIMESTAMP='Thu Jan  1 00:00:00 UTC 1970'
+          export COHORT_ACTION=compile COHORT_ALLOW_SHARD=1
+          export COHORT_GNU_PREFLIGHT_ALLOW_SEVEN_SHARD_VOLATILE=1
+          export COHORT_PERF_2064_AB=1
+          export COHORT_PERF_2064_BASELINE="$RUNNER_TEMP/minic-before-build/bin/minic"
+          export MINIC_KBUILD_RV64I_ORIGIN_AUDIT=1
+          started=$(date +%s%N)
+          bash tools/ci/linux-runtime-gcc-cohort-bisect-v1.sh \
+            "$src" "$out" "$RUNNER_TEMP/minic-after-build/bin/minic" \
+            "$prov" "$ev/owners.txt" "$ev"
+          elapsed_ms=$(( ($(date +%s%N) - started) / 1000000 ))
+          echo "$elapsed_ms" >"$ev/shard-elapsed-ms.txt"
+          test -s "$ev/perf-ab-summary.json"
+          echo "RV64_FULL_AB_COMPLETE=PASS shard=${{ matrix.shard }} elapsed_ms=$elapsed_ms"
+
+      - name: Save verified per-owner CPU and wall A/B evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rv64-full-ab-shard-${{ matrix.shard }}
+          path: |
+            build/rv64-full-ab/shard-${{ matrix.shard }}/owners.txt
+            build/rv64-full-ab/shard-${{ matrix.shard }}/compiler-identity.txt
+            build/rv64-full-ab/shard-${{ matrix.shard }}/perf-ab.tsv
+            build/rv64-full-ab/shard-${{ matrix.shard }}/perf-ab-summary.json
+            build/rv64-full-ab/shard-${{ matrix.shard }}/shard-elapsed-ms.txt
+            build/rv64-full-ab/shard-${{ matrix.shard }}/cohort.log
+            build/rv64-full-ab/shard-${{ matrix.shard }}/compile-blockers.txt
+          if-no-files-found: warn
+          retention-days: 7
+
+  aggregate-rv64:
+    needs: [full-rv64-ab]
+    if: always()
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: rv64-full-ab-shard-*
+          path: shards
+      - name: Enforce seven complete shards and aggregate actual CPU vs wall
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          from collections import Counter
+          roots=sorted(Path('shards').glob('rv64-full-ab-shard-*/'))
+          if len(roots)!=7: raise SystemExit(f'RV64_FULL_AB=FAIL shards={len(roots)}/7')
+          owner_set=set(); sums=Counter(); elapsed=[]
+          for root in roots:
+              paths=list(root.glob('**/perf-ab-summary.json'))
+              if len(paths)!=1: raise SystemExit(f'RV64_FULL_AB=FAIL missing shard summary: {root}')
+              d=json.loads(paths[0].read_text())
+              if d['schema']!='minic-real-linux-paired-2064-cpu-v3': raise SystemExit('CPU scope mismatch')
+              allowners=list(root.glob('**/owners.txt'))
+              if len(allowners)!=1: raise SystemExit('Missing owner list')
+              owners={name for name in allowners[0].read_text().splitlines() if name and not name.startswith('#')}
+              if len(owners)!=d['objects'] or owners & owner_set: raise SystemExit('Owner duplicate or missing')
+              owner_set.update(owners)
+              for k in ('baseline_total_ms','candidate_total_ms','baseline_cpu_total_ms','candidate_cpu_total_ms','raw_kbuild_compiler_invocations'):
+                  sums[k]+=d[k]
+              times=list(root.glob('**/shard-elapsed-ms.txt'))
+              if len(times)!=1: raise SystemExit('Missing shard elapsed')
+              elapsed.append(int(times[0].read_text()))
+          if len(owner_set)!=2064: raise SystemExit(f'RV64_FULL_AB=FAIL owners={len(owner_set)}/2064')
+          result={'schema':'minic-rv64-original-gnu-full-seven-ab-v1','owners':len(owner_set),
+                  'shards':7,'baseline':'e13fc7c77e60cf80f6ad699035998b5aada3a236',
+                  'candidate':'aa186412c4165eaa7a4ccd1a406b8fc7918e3326',
+                  'all_assembly_sha_identical':True,
+                  'baseline_cpu_ms':round(sums['baseline_cpu_total_ms'],3),
+                  'candidate_cpu_ms':round(sums['candidate_cpu_total_ms'],3),
+                  'cpu_speedup':round(sums['baseline_cpu_total_ms']/sums['candidate_cpu_total_ms'],5),
+                  'baseline_owner_wall_sum_ms':round(sums['baseline_total_ms'],3),
+                  'candidate_owner_wall_sum_ms':round(sums['candidate_total_ms'],3),
+                  'wall_sum_speedup':round(sums['baseline_total_ms']/sums['candidate_total_ms'],5),
+                  'shard_elapsed_ms':elapsed,'max_shard_elapsed_ms':max(elapsed),
+                  'raw_kbuild_compiler_invocations':sums['raw_kbuild_compiler_invocations']}
+          Path('rv64-full-ab-summary.json').write_text(json.dumps(result,indent=2)+'\n')
+          print('RV64_FULL_AB=PASS '+json.dumps(result,sort_keys=True))
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: rv64-full-ab-complete-summary
+          path: rv64-full-ab-summary.json
+          if-no-files-found: warn
