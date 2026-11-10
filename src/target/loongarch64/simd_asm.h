@@ -16,7 +16,5 @@ enum {
  * qualification and normalized seal live in simd_source_policy.h. Neither
  * machine API accepts a mutable frontend Program or C type descriptor. */
 bool minic_loongarch64_simd_qualify_opaque(const MinicCoreInlineAsm *);
-bool minic_loongarch64_simd_structured_template_requires_typed_id(
-    const char *, size_t);
 
 #endif

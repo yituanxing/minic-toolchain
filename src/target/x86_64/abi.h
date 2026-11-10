@@ -19,7 +19,6 @@ typedef struct MinicX86AbiRegisters {
      * so the function prologue must preserve XMM6..15 and RDI/RSI. */
     const char *const *extra_nonvolatile_gp;
     size_t extra_nonvolatile_gp_count;
-    size_t extra_nonvolatile_xmm_first;
     size_t extra_nonvolatile_xmm_count;
 } MinicX86AbiRegisters;
 

@@ -5,7 +5,6 @@
 #include "target/common/program_visit.h"
 #include "target/common/program_emit.h"
 #include "target/common/elf_alias_emit.h"
-#include "target/common/global_emit.h"
 #include "target/common/module_global_emit.h"
 #include "target/common/machine_production_preflight.h"
 
@@ -1260,7 +1259,6 @@ typedef struct MinicX86VisitContext {
     MinicDiagnostic *diagnostic;
     const char *path;
     const bool *head_address_context;
-    const MinicCoreModule *module;
     const MinicCoreFunction *functions;
     size_t function_count;
 } MinicX86VisitContext;
@@ -1460,7 +1458,7 @@ static bool x86_write_core_module_impl(
         MINIC_PROGRAM_FUNCTION_LIVE_DEFINITIONS, false
     };
     bool success;
-    MinicX86VisitContext visits = { diagnostic, path, NULL, module,
+    MinicX86VisitContext visits = { diagnostic, path, NULL,
                                    core_functions, core_function_count };
     if (path == NULL || module == NULL || target == NULL ||
         target->architecture != MINIC_TARGET_ARCH_X86_64 ||

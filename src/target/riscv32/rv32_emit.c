@@ -132,7 +132,6 @@ done:
  * aliases, source asm and the physical ILP32 function ABI remain RV32-owned. */
 typedef struct Rv32ProgramContext {
     MinicDiagnostic *diagnostic;
-    const MinicCoreModule *module;
 } Rv32ProgramContext;
 
 
@@ -235,7 +234,7 @@ static bool rv32_write_core_program_impl(const char *path,
         NULL, NULL, MINIC_PROGRAM_FUNCTION_LIVE_DEFINITIONS, false
     };
     bool ok;
-    Rv32ProgramContext context = { diagnostic, module };
+    Rv32ProgramContext context = { diagnostic };
     if (path == NULL || module == NULL || target == NULL ||
         minic_riscv_target_isa(target).xlen != 32U ||
         minic_riscv_target_isa(target).abi != MINIC_RISCV_ABI_ILP32 ||

@@ -248,10 +248,3 @@ bool minic_loongarch64_simd_qualify_opaque(const MinicCoreInlineAsm *source) {
                           &parsed) || parsed.operand_count != 0U) return false;
     return true;
 }
-
-bool minic_loongarch64_simd_structured_template_requires_typed_id(
-    const char *text, size_t length) {
-    LoongSimdProgram parsed;
-    return minic_loongarch64_simd_parse(text, length, &parsed) &&
-           parsed.operand_count != 0U;
-}

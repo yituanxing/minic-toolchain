@@ -1,8 +1,17 @@
 # MiniC 编译器架构总入口：事实、问题、清理与文档导航
 
+> **2026-11-10 现行源码入口：** 五架构 `.i → Core/ModuleIR →
+> 共享函数准备 → 各目标 ABI/带类型 Machine IR → 机器验证 → GNU .s`
+> 的职责图请先读 [compiler/README](../../compiler/README.md)；
+> C39 清理分支 `cleanup/minic-readable-source-20261110` 已使
+> `src/` 的 C/H/def 路径降至 **412**。
+> 以下 A8～F8、C38 的数量和逐函数审读结论是当时提交的**历史快照**，
+> 不代表本分支已对 412 个文件完成全量深读；本轮增量证据继续记入
+> [清理流水账](minic-cleanup-ledger.md)。
+
 > **持续维护的入口，不是第五份问题台账。** 第八轮复扫冻结基线：
 > `refactor/minic-target-language-boundary` / `3d504e7ee4a7`，2026-10-31。
-> 现行 C38 纯清理覆盖口径见[清理流水账](minic-cleanup-ledger.md)（基线 `400c1e7`）：
+> 历史 C38 纯清理覆盖口径见[清理流水账](minic-cleanup-ledger.md)（基线 `400c1e7`）：
 > `src/` 内 C/H/def 共 342/342 个文件已登记全文审读；两个 CLI 入口另计，
 > 且全文审读不等于全部 MC 缺陷已修或五架构 Linux 运行认证。
 > 本页 A8-01～A8-20 的初次源码取证基线是 `f6e9eb870d80`；
@@ -18,7 +27,7 @@
 | 项目的设计边界是什么 | [架构原则](principles.md) | 列出偏离与验收条件，不另立原则 |
 | `.i` 如何流过 AST、Core、全局对象与后端 | [生产数据流及所有权图谱](minic-global-contract-map.md) | 更新当前源码核验的变化，不复制完整图谱 |
 | 一个函数谁调用、借用、修改、释放 | [函数契约台账](minic-function-contract-register.md) | 指向原条目及仍未深读之处 |
-| 完整扫描了哪些文件，还剩哪些盲区 | [第八轮 341 输入文件冻结覆盖清单](minic-source-coverage-f8-2026-10-31.md) · [现行 C38 纯清理流水账](minic-cleanup-ledger.md) | 前者是 `3d504e7` 的历史输入集合；后者按现行 `src/` 342 个 C/H/def 文件另计全文审读、测试和待证明项 |
+| 完整扫描了哪些文件，还剩哪些盲区 | [第八轮 341 输入文件冻结覆盖清单](minic-source-coverage-f8-2026-10-31.md) · [C38→C39 纯清理流水账](minic-cleanup-ledger.md) | 前者为 `3d504e7` 历史输入集合；后者明确区分 C38 342 个文件的历史深读与 C39 412 个文件的当前库存、待补审读项 |
 | 有哪些 Bug、调查项、架构债、已排除误判 | [MC 问题台账](minic-issue-register.md) | 只组织主题和工作依赖，**不复制状态** |
 | 先纯清理再重构：本批删了什么、没删什么、证据缺口 | [MiniC 纯清理流水账](minic-cleanup-ledger.md) | 按 commit 记录真实删改、KEEP、测试与未验证，不另建 Bug 状态 |
 | C38 之后每批架构重构：迁了哪个 owner、删了哪条旧路径 | [架构收敛批次账本](minic-refactor-ledger.md) | 从 R1 开始按真实 producer/consumer、代码行数和同源差分记账，独立于 C1～C38 纯清理 |
@@ -45,7 +54,7 @@ MC-076 虽通过已知 mixed-use 定向修复仍因间接地址传播不完整�
 `src/` 第十轮**历史快照**有 **336 个 C/H 文件**：Frontend 69、Compiler 11、Core 48、Target 208；
 另外单独审查两个编译器入口。第八轮 `3d504e7` 基线为 337 个
 （Frontend 70），随后退役的 `parser_type_query.c` **不从冻结的 F8 覆盖清单中抹掉**。
-现行 C38 `src/` 实有 **342 个 C/H/def**：Frontend 71、Compiler 11、Core 48、Target 212
+历史 C38 `src/` 实有 **342 个 C/H/def**：Frontend 71、Compiler 11、Core 48、Target 212
 （其中 Target 的 `target_registration.def` 单独占 1）；若只算 C/H 则为 341。
 两个编译器 CLI 入口、测试、脚本和其他工具链不计入 342 分母。
 旧图谱中的 332 个是更早历史口径，不能作为本 HEAD 的覆盖率。

@@ -1,5 +1,4 @@
 #include "target/riscv32/rv32_global_emit.h"
-#include "target/common/global_emit.h"
 #include "target/common/module_global_emit.h"
 #include "target/riscv/machine_target_state.h"
 

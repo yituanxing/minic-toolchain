@@ -880,21 +880,3 @@ bool minic_loongarch64_typed_scalar_form_matches_template(
         return false;
     }
 }
-
-bool minic_loongarch64_scalar_template_requires_typed_id(
-    const char *text, size_t length) {
-    return loong_linux_clock_form(text, length) != LOONG_CLOCK_NONE ||
-        loong_linux_irq_switch_template(text, length, true) ||
-        loong_linux_invtlb_form(text, length) != 0U ||
-        loong_linux_add_unless_form(text, length) != 0U ||
-        loong_linux_futex_rmw_form(text, length) != LOONG_FUTEX_NONE ||
-        loongarch64_literal_dbar(text, length) != NULL ||
-        loongarch64_dbar_template(text, length) ||
-        loong_linux_sub_positive_form(text, length,
-                                     &(LoongLinuxSubPositive){0}) ||
-        loong_linux_uaccess_form(text, length, &(LoongLinuxUaccess){0}) ||
-        loong_percpu_amo_form(text, length) != SIZE_MAX ||
-        loong_csr_template(text, length) != 0U ||
-        loong_atomic_template(text, length, false) != NULL ||
-        loong_atomic_template(text, length, true) != NULL;
-}

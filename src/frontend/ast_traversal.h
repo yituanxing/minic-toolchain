@@ -20,11 +20,6 @@ bool minic_c0_expression_remap_child_ids(MinicExpression *expression,
                                          MinicExpressionIdRefVisitor visitor,
                                          void *context);
 
-/* Visit ExpressionId roots/graph references that are not expression-node child edges. */
-bool minic_c0_program_visit_external_expression_id_refs(MinicC0Program *program,
-                                                        MinicExpressionIdRefVisitor visitor,
-                                                        void *context);
-
 /* Validate then atomically remap every external ExpressionId through one old-to-new map. */
 bool minic_c0_program_remap_external_expression_ids(MinicC0Program *program,
                                                     const MinicExpressionId *mapping,

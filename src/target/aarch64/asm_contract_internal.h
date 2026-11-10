@@ -291,7 +291,6 @@ static inline const char *aarch64_linux_prefetch_template(
 
 typedef struct {
     const char *old_source, *new_source;
-    const char *old_asm, *new_asm, *store_asm;
     size_t width;
 } Aarch64RawIoRead;
 typedef struct Aarch64RawIoStore {
@@ -340,8 +339,6 @@ typedef struct Aarch64LinuxBarrierAlternative {
     unsigned int cap;
     const char *old_compact;
     const char *new_compact;
-    const char *old_asm;
-    const char *new_asm;
 } Aarch64LinuxBarrierAlternative;
 typedef struct Aarch64LinuxWriteSysreg {
     unsigned int op0, op1, crn, crm, op2;

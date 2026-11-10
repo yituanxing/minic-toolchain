@@ -8,9 +8,11 @@ MiniC 是一套由真实软件驱动、使用 ISO C11 重写的编译器工具�
 
 ## 当前编译边界与已验收集成
 
-编译器的独立接口仍是 `minic-cc: 预处理 C（.i）→ RV64 汇编（.s）`；固定 GNU 预处理/汇编/链接的隔离验证保留为差分与故障定位手段，并非 2026-10-16 全量 Linux 验收的唯一生产路径。
+编译器独立接口现为 `minic-cc: 预处理 C（.i）→ GNU 汇编（.s）`，支持 RV32I、RV64I、x86-64、AArch64、LoongArch64 五目标。五目标共用封存的 Core/ModuleIR 交接，再分别完成带类型的 Machine IR 选择与整函数机器验证；入口见[现行编译器职责图](compiler/README.md)。固定 GNU 预处理/汇编/链接仍作为差分和故障定位 oracle，但并非唯一的完整工具链路径。
 
-当前已经通过的完整 Linux 6.6.143 原生链路（提交 `24b02474`，[CI #38870185276](https://github.com/yituanxing/minic-toolchain/actions/runs/38870185276)）包括：
+现行性能源码候选 `aa186412` 已用五目标完成原版 Linux 6.6.143 **13,394/13,394 个 C 编译单元**，并通过 GNU AS/LD 和真实 QEMU P0/P1 验收（[验证 PR #680](https://github.com/yituanxing/minic-toolchain/pull/680)）。这是**尚未合并的 Draft 分支**上的五目标编译器验收，不能当作现行 Stage4 自举或 MiniAS/MiniLD 原生链路的重新认证。
+
+另有历史上已通过的完整 Linux 6.6.143 原生链路（提交 `24b02474`，[CI #38870185276](https://github.com/yituanxing/minic-toolchain/actions/runs/38870185276)）：
 
 ```text
 C (.c) -> MiniPP (.i) -> MiniC (.s) -> MiniAS (.o)

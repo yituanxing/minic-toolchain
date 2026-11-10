@@ -546,84 +546,6 @@ unsigned int minic_x86_64_linux_bug_table_c_form(
     return 0U;
 }
 
-/* All GNU %c inputs have already been resolved into owned symbols/numbers
- * by the shared Core operand normalizer. Preserve the Linux BUG/WARN metadata
- * in its original section, including the actual x86 UD2 instruction, numeric
- * local labels, and PC32 relocations. This is a deliberately narrow grammar:
- * arbitrary opaque inline ASM and additional instructions remain rejected. */
-bool minic_x86_64_linux_bug_table_opaque(const char *text, size_t length) {
-    size_t cursor = 0U;
-    bool ud2 = false, bug_section = false, address = false;
-    bool padding = false, section_end = false;
-    if (text == NULL || length < 70U || length > 2048U ||
-        strlen(text) != length)
-        return false;
-    while (cursor < length) {
-        char line[256];
-        size_t begin = cursor, n, i;
-        char *p, *comment, *end;
-        while (cursor < length && text[cursor] != '\n') ++cursor;
-        n = cursor - begin;
-        if (cursor < length) ++cursor;
-        if (n >= sizeof(line)) return false;
-        (void)memcpy(line, text + begin, n);
-        line[n] = '\0';
-        p = line;
-        while (*p == ' ' || *p == '\t' || *p == '\r') ++p;
-        comment = strchr(p, '#');
-        if (comment != NULL) *comment = '\0';
-        end = p + strlen(p);
-        while (end > p && (end[-1] == ' ' || end[-1] == '\t' ||
-                           end[-1] == '\r')) --end;
-        *end = '\0';
-        if (*p == '\0') continue;
-        if (p[0] == '1' && p[1] == ':') {
-            p += 2;
-            while (*p == ' ' || *p == '\t') ++p;
-        } else if (p[0] == '2' && p[1] == ':') {
-            p += 2;
-            while (*p == ' ' || *p == '\t') ++p;
-        } else if (strcmp(p, "998:") == 0) {
-            continue;
-        }
-        if (strncmp(p, ".byte", 5U) == 0) {
-            char compact[64]; size_t m = 0U;
-            for (i = 5U; p[i] != '\0'; ++i) {
-                if (p[i] == ' ' || p[i] == '\t') continue;
-                if (m + 1U >= sizeof(compact)) return false;
-                compact[m++] = p[i];
-            }
-            compact[m] = '\0';
-            if (strcmp(compact, "0x0f,0x0b") != 0 || ud2) return false;
-            ud2 = true;
-        } else if (strcmp(p, ".pushsection __bug_table,\"aw\"") == 0) {
-            if (bug_section) return false;
-            bug_section = true;
-        } else if (strcmp(p, ".pushsection .discard.reachable") == 0) {
-            if (!section_end) return false;
-        } else if (strncmp(p, ".long ", 6U) == 0) {
-            if (!bug_section || strchr(p, '%') != NULL ||
-                strchr(p, ';') != NULL) return false;
-            if (strstr(p, "1b") != NULL) address = true;
-        } else if (strncmp(p, ".word ", 6U) == 0) {
-            if (!bug_section || strchr(p, '%') != NULL ||
-                strchr(p, ';') != NULL) return false;
-        } else if (strncmp(p, ".org 2b+", 8U) == 0) {
-            if (!bug_section || padding) return false;
-            for (i = 8U; p[i] != '\0'; ++i)
-                if (p[i] < '0' || p[i] > '9') return false;
-            if (i == 8U) return false;
-            padding = true;
-        } else if (strcmp(p, ".popsection") == 0) {
-            section_end = true;
-        } else {
-            return false;
-        }
-    }
-    return ud2 && bug_section && address && padding && section_end;
-}
-
-
 /* Machine-side verification recognizes exact x86 GNU instruction forms;
  * C operand qualification lives exclusively in asm_contract_source.c. */
 unsigned int minic_x86_64_linux_testcc_form(const char *text, size_t length) {
@@ -1676,11 +1598,6 @@ size_t minic_x86_64_asm_percpu_stable_width(const char *s, size_t length) {
         if (strcmp(forms[i].name, compact) == 0) return forms[i].width;
     return 0U;
 }
-bool minic_x86_64_asm_percpu_stable_template(const char *s, size_t length) {
-    return minic_x86_64_asm_percpu_stable_width(s, length) != 0U;
-}
-
-
 /* Whitespace is irrelevant for these four specific instructions, whose
  * operand constraints and exact instruction sequence are checked together. */
 /* Only integer operands of the same real x86 width; never silently
@@ -2184,14 +2101,14 @@ bool minic_x86_64_asm_muldiv_template(const char *text, size_t length) {
 /* Exact original GNU Linux __raw_try_cmpxchg 8-case source.
  * Linux CC_SET(z) must remain a real hardware flag output, not C logic. */
 static const MinicX86TryCasDesc x86_trycas_forms[] = {
-    {"cmpxchgb","%r10b","movzbl (%r11), %eax","movb %al, (%r11)",1U,true},
-    {"cmpxchgw","%r10w","movzwl (%r11), %eax","movw %ax, (%r11)",2U,true},
-    {"cmpxchgl","%r10d","movl (%r11), %eax","movl %eax, (%r11)",4U,true},
-    {"cmpxchgq","%r10","movq (%r11), %rax","movq %rax, (%r11)",8U,true},
-    {"cmpxchgb","%r10b","movzbl (%r11), %eax","movb %al, (%r11)",1U,false},
-    {"cmpxchgw","%r10w","movzwl (%r11), %eax","movw %ax, (%r11)",2U,false},
-    {"cmpxchgl","%r10d","movl (%r11), %eax","movl %eax, (%r11)",4U,false},
-    {"cmpxchgq","%r10","movq (%r11), %rax","movq %rax, (%r11)",8U,false}
+    {"cmpxchgb", "%r10b", 1U, true},
+    {"cmpxchgw", "%r10w", 2U, true},
+    {"cmpxchgl", "%r10d", 4U, true},
+    {"cmpxchgq", "%r10", 8U, true},
+    {"cmpxchgb", "%r10b", 1U, false},
+    {"cmpxchgw", "%r10w", 2U, false},
+    {"cmpxchgl", "%r10d", 4U, false},
+    {"cmpxchgq", "%r10", 8U, false}
 };
 const MinicX86TryCasDesc *minic_x86_64_trycas_desc(MinicX86TryCas form) {
     return form>=MINIC_X86_TRYCAS_B_LOCK&&form<=MINIC_X86_TRYCAS_Q_LOCAL ?
@@ -2878,16 +2795,6 @@ MinicX86BitScanForm minic_x86_64_asm_bit_scan_form(
             return forms[i].form;
     return MINIC_X86_BIT_SCAN_NONE;
 }
-bool minic_x86_64_asm_bit_scan_template(
-    const char *text, size_t length, bool *is_reverse) {
-    const MinicX86BitScanForm form = minic_x86_64_asm_bit_scan_form(text, length);
-    if (!is_reverse ||
-        (form != MINIC_X86_BIT_SCAN_BSF64 && form != MINIC_X86_BIT_SCAN_BSR64))
-        return false;
-    *is_reverse = form == MINIC_X86_BIT_SCAN_BSR64;
-    return true;
-}
-
 /* The GNU =r + matched-digit family owns only explicit register operands.
  * No hidden target machine registers, jumps, labels, function calls or
  * directives. Every template instruction is made of a conservative x86

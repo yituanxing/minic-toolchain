@@ -1058,8 +1058,6 @@ bool minic_c0_global_relocation_function_target_compatible(const MinicC0Program 
                                                            bool has_explicit_pointer_cast);
 bool minic_c0_global_object_set_zero_initialized(MinicC0Program *program,
                                                  MinicGlobalObjectId global_object_id);
-bool minic_c0_global_object_set_extern(MinicC0Program *program,
-                                       MinicGlobalObjectId global_object_id);
 bool minic_c0_object_alias_types_compatible(const MinicC0Program *program,
                                             MinicType alias_type,
                                             MinicType target_type);

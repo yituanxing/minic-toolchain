@@ -405,16 +405,12 @@ has src/target/common/direct_program_emit.c 'minic_multi_module_elf_global_plan_
 lacks src/target/common/module_global_emit.c 'minic_multi_module_emit_elf_section('
 lacks src/target/common/module_global_emit.c 'minic_multi_module_emit_elf_binding('
 has src/target/common/module_global_emit.c 'minic_multi_module_emit_elf_symbol_visibility('
-has src/target/common/global_emit.c 'minic_multi_elf_safe_section_name('
+has src/target/common/module_global_emit.c 'minic_elf_section_name_valid('
 # The only C/DataLayout global byte walk belongs to Compiler ingress.
 # Target/Common retains output serialization adapters, not a second walker.
 exists src/compiler/global_payload.c
 exists src/compiler/global_payload.h
 has src/compiler/global_payload.c 'minic_multi_global_payload_visit('
-lacks src/target/common/global_emit.c 'minic_multi_global_payload_visit('
-lacks src/target/common/global_emit.c 'minic_multi_emit_global_payload('
-lacks src/compiler/module_ir_build.c 'target/common/global_emit.h'
-lacks src/target/common/global_emit.c 'static bool minic_multi_visit_record_bit_field_run('
 
 # GNU Linux local_add(long) + atomic64_t.counter(long long) is a
 # cross-C-rank 8-byte machine operand, not a fake ABI identity.
@@ -1193,9 +1189,6 @@ lacks src/target/riscv64/frame_layout.h 'standalone_calls'
 lacks src/target/riscv64/frame_layout.c 'minic_core_call_index_build('
 lacks src/target/common/direct_instruction_semantics.h 'minic_multi_direct_compiler_barrier_shape('
 lacks src/target/common/lp64_scalar.h 'minic_lp64_small_integer_width('
-lacks src/target/common/global_emit.h 'minic_multi_emit_record_bit_field_run('
-lacks src/target/common/global_emit.h 'minic_multi_recursive_shape_supported('
-lacks src/target/common/global_emit.h 'minic_multi_emit_flexible_record_global('
 
 exists src/target/common/core_numeric_shape.h
 # All five frame implementations use one Common last-use SSA spill planner.
@@ -1606,7 +1599,6 @@ for owner in \
   src/target/riscv64/codegen_function.c \
   src/target/riscv64/global_emit.c src/target/riscv64/global_emit.h \
   src/target/riscv32/rv32_global_emit.c src/target/riscv32/rv32_global_emit.h \
-  src/target/common/global_emit.c src/target/common/global_emit.h \
   src/target/common/elf_alias_emit.h src/target/riscv/function_symbol.h; do
   lacks "$owner" 'MinicC0Program'
   lacks "$owner" 'MinicType'
@@ -1780,7 +1772,6 @@ cc -std=c11 -O2 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror \
   src/target/common/module_global_emit.c \
   src/core/module_ir.c \
   src/compiler/global_payload.c \
-  src/target/common/global_emit.c \
   -o "$work/module-global-fragments-probe"
 "$work/module-global-fragments-probe"
 
@@ -1934,7 +1925,6 @@ cc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror \
   src/target/common/program_emit.c \
   src/target/common/elf_module_symbol_info.c \
   src/compiler/global_payload.c \
-  src/target/common/global_emit.c \
   -o "$work/program-emit-probe"
 "$work/program-emit-probe" "$work/test-output.s"
 

@@ -23,7 +23,7 @@ host_cc=${HOST_CC:-cc}
   src/target/common/elf_module_symbol_info.c \
   src/target/common/module_global_emit.c \
   src/target/backend_core_usage.c \
-  src/compiler/global_payload.c src/target/common/global_emit.c \
+  src/compiler/global_payload.c \
   -o "$probe_dir/owner-tls"
 
 "$probe_dir/owner-tls" "$probe_dir/owner.s" "$probe_dir/tls.s"

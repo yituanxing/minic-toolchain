@@ -783,20 +783,6 @@
       "review_depth": "inventory",
       "ci_touched_in": []
     },
-    "src/target/common/global_emit.c": {
-      "blob": "c1f83aea7f9293a71774c292877e4a00348e9a92",
-      "review_depth": "inventory",
-      "ci_touched_in": [
-        665
-      ]
-    },
-    "src/target/common/global_emit.h": {
-      "blob": "792fdc27a82ccf4b385e50c3117b8eb6d01b06c5",
-      "review_depth": "inventory",
-      "ci_touched_in": [
-        665
-      ]
-    },
     "src/target/common/linux_jump_label_asm.h": {
       "blob": "9f0646ca9d240abf6900f823189772515da5b99c",
       "review_depth": "inventory",

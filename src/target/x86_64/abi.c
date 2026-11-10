@@ -33,7 +33,6 @@ const MinicX86AbiRegisters *minic_x86_64_abi_registers(
         .gp_result_count = 1U,
         .extra_nonvolatile_gp = x86_win64_extra_nonvolatile_gp,
         .extra_nonvolatile_gp_count = 2U,
-        .extra_nonvolatile_xmm_first = 6U,
         .extra_nonvolatile_xmm_count = 10U,
     };
     switch (convention) {

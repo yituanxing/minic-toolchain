@@ -1485,6 +1485,111 @@ MC-072（computed-goto 标签）、MC-076（唯一 OPEN P0，部分路径仍有
 逐路径登记 `FULL_READ / CALL_CHAIN_ONLY / INVENTORY_ONLY`、owner、
 已跑 fixture 和未覆盖依赖，完成后才可更新覆盖率分子。
 
+## 批次 C39：现行五目标源码的末端死接口与一次性开发脚本退役（2026-11-10）
+
+**精确父源码：** `perf/minic-linux-hotpath-recovery-20261110` / `aa186412`。
+这批仅做源码/维护工具的瘦身和入口文档纠偏；不改 C/Core IR、Target ABI、
+Machine IR opcode、指令选择、优化算法或 GNU 汇编发射合同。当前源码审读
+覆盖率仍按上节 414 文件的历史指纹漂移处理，不把局部调用链审计冒充全部深读。
+
+| 范围 | 生产者/消费者证据及实际清理 | 明确保留 |
+| --- | --- | --- |
+| Common ELF 旧 wrapper | `minic_multi_elf_safe_section_name` 全仓无消费者，现行 `module_global_emit.c` 已直接调用 `minic_elf_section_name_valid`；删除 `global_emit.c/.h`、四个无效 include、Makefile/Bootstrap source 条目与旧测试链接，将 BusyBox CI 路径触发器切到现役 `module_global_emit.c/.h` | `module_global_emit` 的真正 ELF 名称校验、GNU AS/ELF 负例 |
+| x86 末端 API | 删除无消费者的 `linux_bug_table_opaque` 旧解析器、`asm_percpu_stable_template` 布尔转发、`asm_bit_scan_template` 布尔转发及声明 | `linux_bug_table_c_form`、`asm_percpu_stable_width`、`asm_bit_scan_form`、源资格与机器验证 |
+| LoongArch64 末端 API | 删除无消费者的 scalar/SIMD `*_template_requires_typed_id` 两个查询及声明 | 真正的 descriptor 模板匹配、SIMD parser/资格、机器发射 |
+| 一次性 `tools/dev` 源码改写器 | 在全部仓内现役/禁用 workflow、测试、文档、工具和脚本彼此之间按文件名交叉检索后，退役**97 个无跨文件引用**的历史 `patch-*`、`materialize-*`、`pr7*-*` 脚本，净删 **12,515 行**；其旧源码文本锚点已不匹配现行目录 | 其余 170 份含引用或诊断价值的开发脚本、所有 `tools/ci`、现役 quick-replay |
+| 文档/维护入口 | `compiler/README.md` 与中英文项目首页改为五目标 `Core/ModuleIR → typed Machine IR → GNU .s` 现行路线；修正源码清单工具同时核验 `MINIC_SOURCES`/`MINIC_DRIVER_SOURCES`，允许两可执行共享源文件但拒绝单清单重复 | 旧 native toolchain/Stage4 里程碑作为**历史**证据保留，不将当前 GNU AS/LD 验收冒充 native 或自举 |
+
+**净删证明：** `src/` 生产 C/H 本批 **-150 行**，并退役两个完整孤儿文件；
+`tools/dev` **97 文件/-12,515 行**。非源码文档、测试断言、清单工具的
+增删另计，不混进生产减重数字。源码 `*.c/*.h/*.def` 路径从 414 降到 412。
+删除通过 Git 版本历史可恢复，不作无法找回的物理归档清空。
+
+**本地验收：** Release `-Werror` 五目标编译器构建 PASS；同一个优化前
+`aa186412` 编译器与本批在 `static_scalar_global`、原版 tinyAES 两份
+同预处理 `.i` 上逐目标比较，RV32I/RV64I/x86-64/AArch64/LoongArch64
+共 **10/10 `.s` 字节相同**。Bootstrap source manifest 4/4 PASS、
+源清单 `sources=218` PASS、Target machine options registry 五目标 PASS、
+Target sealed symbol 22 项 PASS、GNU ELF owner/TLS PASS、x86 GNU native
+BSF/BSR 33 例 PASS、现役 Linux quick-replay PASS、完整
+`check-minic-target-boundaries.sh` PASS。后端审阅 manifest 删去恰好
+2 个已退役文件，`--check` PASS (`inventory=260`, `drift=107`)；其余已漂移 blob
+保持 `stale`，不以本次轻量检查冒充已深读。
+
+**尚未验收：** 本批没有在新源码 SHA 上重跑完整五目标 Linux 13,394
+编译单元或 Stage4 自举；历史目录与审阅文档中的已退役路径仅作为当时的
+源码快照记录，不再代表现行入口。
+
+## 批次 C40：五架构调用链复读后的叶子死代码与历史改写器退役（2026-11-10）
+
+**父提交：** C39 本地 `908987a2`／已发布树相同的 GitHub
+`d94bbe17`（[PR #689](https://github.com/yituanxing/minic-toolchain/pull/689)）。
+由四组独立只读审计分别追踪 Frontend→Compiler→Core/ModuleIR、
+Target/Common 访问器、五目标 ISA/ABI 和 CI 工具消费者；主执行者再验证
+引用与修改源码。这是**调用链审读**，不声明重新完成 412 个生产源文件全文深读。
+
+| 分类 | 清理与保留边界 |
+| --- | --- |
+| Frontend/Compiler | 删除无现役调用的外部 ExpressionId 访问包装、旧 global `set_extern` API、`is_short_integer` 类型查询及声明；现役原子 remap、带 metadata 的 extern 创建仍保留。移除 `compiler.c` 中已由非空数组前置条件排除的 `&symbols[index] == NULL` 死分支。 |
+| 五目标 ABI/访问器 | 删除 RV64 `abi.c/.h` 两组无人读取的参数寄存器名称数组，真实 ABI 游标和机器寄存器选择仍存在；删除 Common direct、RV32、RV64、x86 四处只写不读的访问器 context `module` 副本（回调本已借入 ModuleIR），不改 visitor 签名、ISA、ABI 或 MIR。 |
+| CI 一次性源码改写器 | 逐 basename 扫 `.github`、测试、文档、Makefile、tools 与 src，确认 **28 个**无跨文件引用的 `tools/ci/apply-*` 脚本均含已不存在的 `src/core/core_lower.c` 或 `src/target/riscv64/core_codegen.c` 目标锚点，退役 **5,294 行**；另有 20 个虽无完整路径引用但有 basename 引用的工具明确**保留**。 |
+| 架构导航 | `docs/architecture/README.md` 开头单独标现行五目标 Core/typed-MIR 管线、C39 的 412 文件库存，将历史 C38 的 342 全文审读数量改为历史口径；函数契约台账顶部标明旧 `global_emit.c` 条目属于历史快照。历史结论原文不删除。 |
+
+**生产代码净减：** `src/` 本批 13 文件 `+4/-74` 行，净 `-70`；
+工具退役 28 文件 `-5,294` 行，均可由 Git 历史恢复。不删任何仍由
+专测调用的 MachineBuilder API、Core dump/间接入口接口或同一 TU 内仍活跃
+的 ISA 语法处理函数。
+
+**本地验收：** Release `-Werror` 五目标编译器构建 PASS；对 C39
+编译器保存的原版 `static_scalar_global` 和 tinyAES 预处理输入，五目标
+**10/10 `.s` 字节完全一致**；`make check-type check-ast-contract
+check-cast-expressions check-global-objects` PASS；Linux quick-replay PASS；
+完整后端边界测试 PASS；Bootstrap manifest 4/4 PASS、生产 C 清单
+`sources=218` PASS、目标审阅 `inventory=260 drift=110` PASS、
+`git diff --check` PASS。
+
+**明确未做：** 不跑编译器性能优化或 Stage4 自举；没有在本批 SHA 重跑
+完整 13,394 Linux 编译单元／QEMU 矩阵，不把父版本的验收写成本批结果。
+
+## 批次 C41：目标描述符死状态与可读性收敛（2026-11-10）
+
+**父提交：** C40 本地 `5c6bcec96`／已发布 GitHub `445af479`，
+继续追加到 [PR #689](https://github.com/yituanxing/minic-toolchain/pull/689)。
+本轮四组审计分别复读 Frontend/Core 拥有权、Target/Common 公共调用链、
+五目标 29 个机器结构体头（391 字段）及开发工具的文件名消费者。
+只删有可证明零读取/零现役引用的状态，不为减少文件数重画数据流。
+
+| 范围 | 删除证据与明确保留 |
+| --- | --- |
+| x86 frame | `MinicX86Frame` 中 8 个迁移后无人读写的 GP-forward / direct-object-address 字段及过时解释；实际 GP 转发状态由现役 `machine_core_select.c` 私有持有。纠正 Frame 头文件“未来 Machine IR”的过时说法。 |
+| AArch64 descriptor | `Aarch64RawIoRead` 3 个无消费者机器汇编字符串字段以及四行对应表数据；保留原始 GNU 输入模板与宽度。`Aarch64LinuxBarrierAlternative` 2 个无读取者的 `*_asm` 字段及五组显示字符串；保留能力编号与严格源文本匹配规则。 |
+| x86 descriptor/ABI | 8 个 TryCAS 表项的 `load_old/store_old` 无消费者字符串及字段退役，保留真实 `op/new_reg/width/locked`；Win64 ABI 的 `extra_nonvolatile_xmm_first` 只有初始化、无读取，删除后继续由真实 XMM count 计算保存区。 |
+| Compiler | `bootstrap_trace_stage` 内已完成环境变量门禁，移除 `normalize`/`core-set` 两处重复外层门禁；保留阶段输出、诊断与出错行为。 |
+| 无调用历史脚本 | 9 个 `tools/dev` 脚本零 basename 引用，且各自依赖早已不存在的 `src/core/core_lower.c`、`src/target/riscv64/core_codegen.c` 或 `codegen_expression.c`；删去 Git 差分 **1,214 行**，保留其余现役与可手动诊断工具。 |
+
+**源代码差分：** `src/` 8 文件 `+28/-60` 行，净 `-32`；
+`tools/dev` 9 文件 `-1,214` 行。阶段间类型 arena 的所有权 vs
+ModuleIR 借用、`statuses` vs `attempted`、两次不同错误边界的 preflight、
+Core/MachineBuilder 测试专用 API 均经调用链核对标记 `KEEP`，不强删。
+
+**验收：** Release `-Werror` 编译 PASS；五目标 static global/tinyAES
+**10/10 `.s` 字节一致**；真实 A64 原版 raw-IO、atomic alt、CPU errata
+三份输入分别与 C40 完全同汇编（**3/3**）；x86 原版 TryCAS **8 变体
+与 1800 GNU 对照 PASS**，MS x64 函数定义/Record ABI 本机 GNU 链接及
+运行 PASS；Bootstrap Trace 打开/关闭 × 成功/失败 **4/4 日志与退出码
+一致**；Linux quick-replay、Bootstrap manifest 4/4、生产源清单 218、
+Target 审阅 manifest 260（113 条保留的 stale blob）、完整后端边界
+`MINIC_BACKEND_BOUNDARY_CHECK=PASS`、`git diff --check` 均 PASS。
+
+**环境和历史测试缺口：** `probe-aarch64-linux-raw-mmio.sh` 需要本机尚无的
+`aarch64-linux-gnu-gcc`/`qemu-aarch64`，本轮仅做原始样本 `.s` 差分。
+`probe-aarch64-linux-atomic-alt-matrix.sh` 与
+`probe-aarch64-linux-cpu-erratum-alternatives.sh` 的固定汇编文本 grep
+在 **C40 基线和 C41 都失败**（分别断言 `swpal`、`.byte` 拼写），
+两份输入的实际 `.s` 已确认字节相同；不把这两份完整脚本伪记 PASS，
+也不在清理批次中悄悄放宽原有测试。没有重跑完整 13,394 Linux/QEMU
+或 Stage4 自举。
+
 ## 后续批次进度规则
 
 每批发布：当前 HEAD、源文件逐目录覆盖（明确深读与只扫的区别）、

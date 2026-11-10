@@ -227,13 +227,6 @@ static bool visit_external_expression_id_refs_unchecked(MinicC0Program *program,
     return true;
 }
 
-bool minic_c0_program_visit_external_expression_id_refs(MinicC0Program *program,
-                                                        MinicExpressionIdRefVisitor visitor,
-                                                        void *context) {
-    return visitor != NULL && external_expression_ref_storage_is_valid(program) &&
-           visit_external_expression_id_refs_unchecked(program, visitor, context);
-}
-
 static bool validate_expression_id_remap(MinicExpressionId *expression_id, void *opaque_context) {
     MinicExpressionIdRemapContext *context;
 

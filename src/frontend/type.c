@@ -670,10 +670,6 @@ bool minic_type_is_plain_char(MinicType type) {
     return minic_type_is_char_integer(type) && type.is_plain_char;
 }
 
-bool minic_type_is_short_integer(MinicType type) {
-    return minic_type_is_integer(type) && type.integer_rank == MINIC_INTEGER_RANK_SHORT;
-}
-
 bool minic_type_is_long_integer(MinicType type) {
     return minic_type_is_integer(type) && (type.integer_rank == MINIC_INTEGER_RANK_LONG ||
                                            type.integer_rank == MINIC_INTEGER_RANK_LONG_LONG);
