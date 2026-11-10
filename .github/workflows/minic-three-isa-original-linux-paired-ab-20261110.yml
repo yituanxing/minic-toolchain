@@ -1,0 +1,106 @@
+name: MiniC three-ISA original GNU Linux paired A/B performance
+
+# Isolated measurement branch; no modifications to certified compiler aa186412.
+on:
+  push:
+    branches:
+      - verify/minic-three-isa-linux-paired-ab-20261110
+    paths:
+      - .github/workflows/minic-three-isa-original-linux-paired-ab-20261110.yml
+      - tools/ci/minic-three-isa-original-linux-paired-ab.py
+  pull_request:
+    paths:
+      - .github/workflows/minic-three-isa-original-linux-paired-ab-20261110.yml
+      - tools/ci/minic-three-isa-original-linux-paired-ab.py
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: minic-three-isa-linux-ab-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  original-gnu-linux-paired:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 65
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [x86_64, aarch64, loongarch64]
+    env:
+      BASE_SHA: e13fc7c77e60cf80f6ad699035998b5aada3a236
+      CAND_SHA: aa186412c4165eaa7a4ccd1a406b8fc7918e3326
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Restore official immutable GNU Linux 6.6.143 shard zero for this target
+        uses: actions/download-artifact@v4
+        with:
+          repository: yituanxing/minic-toolchain
+          run-id: 42366441631
+          name: minic-linux-seven-input-${{ matrix.target }}-0
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/minic-three-isa-original-linux/input
+
+      - name: Verify immutable source commits and official GNU artifact identity
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          root="$RUNNER_TEMP/minic-three-isa-original-linux"
+          mkdir -p "$root/results"
+          git fetch --quiet --no-tags --depth=1 origin "$BASE_SHA" "$CAND_SHA"
+          git -c advice.detachedHead=false worktree add --quiet --detach "$root/src-before" "$BASE_SHA"
+          git -c advice.detachedHead=false worktree add --quiet --detach "$root/src-after" "$CAND_SHA"
+          test "$(git -C "$root/src-before" rev-parse HEAD)" = "$BASE_SHA"
+          test "$(git -C "$root/src-after" rev-parse HEAD)" = "$CAND_SHA"
+          git diff --exit-code "$CAND_SHA" HEAD -- src include Makefile tests
+          python3 -m py_compile tools/ci/minic-three-isa-original-linux-paired-ab.py
+          printf 'benchmark_target=%s\nsource_run=%s\nbaseline=%s\ncandidate=%s\nrunner=%s\n' \
+            '${{ matrix.target }}' 42366441631 "$BASE_SHA" "$CAND_SHA" "$RUNNER_NAME" \
+            | tee "$root/results/identity.txt"
+          test -s "$root/input/identity.json"
+
+      - name: Build exact O3 production host compilers with separate binary identities
+        shell: bash
+        timeout-minutes: 12
+        run: |
+          set -Eeuo pipefail
+          root="$RUNNER_TEMP/minic-three-isa-original-linux"
+          for arm in before after; do
+            make -s -C "$root/src-$arm" -j4 MODE=release CFLAGS='-O3 -Werror' \
+              BUILD_DIR="$root/build-$arm" "$root/build-$arm/bin/minic" "$root/build-$arm/bin/minic-cc" \
+              >"$root/results/build-$arm.log" 2>&1
+            test -x "$root/build-$arm/bin/minic"
+            sha256sum "$root/build-$arm/bin/minic" "$root/build-$arm/bin/minic-cc" \
+              | tee "$root/results/sha-$arm.txt"
+          done
+          ! cmp -s "$root/build-before/bin/minic-cc" "$root/build-after/bin/minic-cc"
+
+      - name: Run 20 original GNU Linux C owners with pinned CPU 4x ABBA and exact assembly
+        shell: bash
+        timeout-minutes: 43
+        run: |
+          set -Eeuo pipefail
+          root="$RUNNER_TEMP/minic-three-isa-original-linux"
+          python3 tools/ci/minic-three-isa-original-linux-paired-ab.py \
+            --input-root "$root/input" \
+            --target '${{ matrix.target }}' \
+            --baseline-driver "$root/build-before/bin/minic" \
+            --candidate-driver "$root/build-after/bin/minic" \
+            --output "$root/results/owners" | tee "$root/results/paired.log"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: minic-three-isa-gnu-linux-shard0-ab-${{ matrix.target }}
+          path: |
+            ${{ runner.temp }}/minic-three-isa-original-linux/results/identity.txt
+            ${{ runner.temp }}/minic-three-isa-original-linux/results/sha-before.txt
+            ${{ runner.temp }}/minic-three-isa-original-linux/results/sha-after.txt
+            ${{ runner.temp }}/minic-three-isa-original-linux/results/build-*.log
+            ${{ runner.temp }}/minic-three-isa-original-linux/results/paired.log
+            ${{ runner.temp }}/minic-three-isa-original-linux/results/owners/summary.json
+            ${{ runner.temp }}/minic-three-isa-original-linux/results/owners/owner-*/paired-result.json
+          if-no-files-found: warn
