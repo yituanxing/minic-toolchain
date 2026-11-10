@@ -2007,7 +2007,7 @@ jobs:
           echo "key=gnu-minic-shard-v1-eeb04f304ebfb97a1079c187dc0c2ea3cc61fc50a55aa3cc776237c16ab19bbe-$profile-$subset-$gcc-$assembler" >>"$GITHUB_OUTPUT"
 
       - name: Restore this shard's immutable candidate objects
-        if: "!contains(github.event.head_commit.message, '[linux-minias-seven-shards]') && !contains(github.event.head_commit.message, '[linux-minipp-seven-integration]') && !contains(github.event.head_commit.message, '[linux-minipp-native-rules-C]') && !contains(github.event.head_commit.message, '[linux-perf-2064-ab]') && !contains(github.event.head_commit.message, '[minic-fresh-full2064-metrics]') && !contains(github.event.head_commit.message, '[minic-bootstrap-stage2-linux2064]') && !contains(github.event.head_commit.message, '[minic-bootstrap-stage4-linux2064]') && !(contains(github.event.head_commit.message, '[linux-rv32i-kbuild]') || (github.event_name == 'pull_request' && contains(github.event.pull_request.title, '[minic-full]')))"
+        if: "env.MINIC_CURRENT_MAIN_SEVEN_RECHECK != '1' && !contains(github.event.head_commit.message, '[linux-minias-seven-shards]') && !contains(github.event.head_commit.message, '[linux-minipp-seven-integration]') && !contains(github.event.head_commit.message, '[linux-minipp-native-rules-C]') && !contains(github.event.head_commit.message, '[linux-perf-2064-ab]') && !contains(github.event.head_commit.message, '[minic-fresh-full2064-metrics]') && !contains(github.event.head_commit.message, '[minic-bootstrap-stage2-linux2064]') && !contains(github.event.head_commit.message, '[minic-bootstrap-stage4-linux2064]') && !(contains(github.event.head_commit.message, '[linux-rv32i-kbuild]') || (github.event_name == 'pull_request' && contains(github.event.pull_request.title, '[minic-full]')))"
         id: shard_cache
         uses: actions/cache/restore@v4
         with:
@@ -2089,11 +2089,13 @@ jobs:
               "$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain" "$ev/compiler"
             echo "LINUX_PERF_3_SHARD=READY shard=${{ matrix.shard }}/7"
           fi
-          # Explicit full-throughput measurement: do not replay old object cache.
-          # All seven independently partitioned shards recompile fresh on this
-          # commit; the existing stage-probe counts every real gcc-E / MiniC /
-          # GNU-as invocation and additionally measures wait4 child maxRSS.
-          if [[ "${{ contains(github.event.head_commit.message, '[minic-fresh-full2064-metrics]') }}" == true ]]; then
+          # The strict full-RV64 receiver can be admitted by a PR last-commit
+          # marker; PR events have no github.event.head_commit.message. Use
+          # the already authenticated seven-shard gate for CPU/RSS telemetry,
+          # while retaining the historic push-message opt-in as well.
+          # Never mistake absent PR telemetry for a true compiler speedup.
+          if [[ "${MINIC_CURRENT_MAIN_SEVEN_RECHECK:-0}" == 1 || \
+                "${{ contains(github.event.head_commit.message, '[minic-fresh-full2064-metrics]') }}" == true ]]; then
             export COHORT_FULL_SPEED_RSS=1 COHORT_PROFILE_STAGES=1
             echo "MINIC_FRESH_FULL2064=ENABLED seven_runner_compilers=true candidate_cache=DISABLED cpu_rss=ENABLED"
           fi
@@ -2174,7 +2176,7 @@ jobs:
           echo "BOOTSTRAP_STAGE4_SHARD=PASS index=${{ matrix.shard }} ownership=qemu_stage4_C_only"
 
       - name: Cache completed shard independently of later link failures
-        if: "!contains(github.event.head_commit.message, '[linux-minias-seven-shards]') && !contains(github.event.head_commit.message, '[linux-minipp-seven-integration]') && !contains(github.event.head_commit.message, '[linux-minipp-native-rules-C]') && !contains(github.event.head_commit.message, '[linux-perf-2064-ab]') && !contains(github.event.head_commit.message, '[minic-fresh-full2064-metrics]') && steps.shard_cache.outputs['cache-hit'] != 'true' && !contains(github.event.head_commit.message, '[minic-bootstrap-stage2-linux2064]') && !contains(github.event.head_commit.message, '[minic-bootstrap-stage4-linux2064]') && !(contains(github.event.head_commit.message, '[linux-rv32i-kbuild]') || (github.event_name == 'pull_request' && contains(github.event.pull_request.title, '[minic-full]')))"
+        if: "env.MINIC_CURRENT_MAIN_SEVEN_RECHECK != '1' && !contains(github.event.head_commit.message, '[linux-minias-seven-shards]') && !contains(github.event.head_commit.message, '[linux-minipp-seven-integration]') && !contains(github.event.head_commit.message, '[linux-minipp-native-rules-C]') && !contains(github.event.head_commit.message, '[linux-perf-2064-ab]') && !contains(github.event.head_commit.message, '[minic-fresh-full2064-metrics]') && steps.shard_cache.outputs['cache-hit'] != 'true' && !contains(github.event.head_commit.message, '[minic-bootstrap-stage2-linux2064]') && !contains(github.event.head_commit.message, '[minic-bootstrap-stage4-linux2064]') && !(contains(github.event.head_commit.message, '[linux-rv32i-kbuild]') || (github.event_name == 'pull_request' && contains(github.event.pull_request.title, '[minic-full]')))"
         uses: actions/cache/save@v4
         with:
           path: |
