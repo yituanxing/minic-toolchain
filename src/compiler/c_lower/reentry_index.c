@@ -22,6 +22,11 @@ struct MinicCoreReentryIndex {
     MinicCoreReentryIncoming *incoming;
     unsigned char *addressed;
     size_t incoming_count;
+    /* The only source statements that can establish any reentry reason.
+     * Built once from the complete source index; an IF-subtree membership
+     * query must not rescan every unrelated statement in a large Linux TU. */
+    MinicStatementId *candidate_targets;
+    size_t candidate_count;
     unsigned long long indexed_if_queries;
     unsigned long long indexed_loop_queries;
 };
@@ -32,16 +37,19 @@ void minic_core_reentry_index_destroy(MinicCoreReentryIndex *index) {
         index->program != NULL) {
         (void)fprintf(stderr,
                       "MINIC_CORE_REENTRY_INDEX ready=1 incoming=%zu "
-                      "indexed_if=%llu indexed_loop=%llu statements=%zu expressions=%zu\n",
+                      "indexed_if=%llu indexed_loop=%llu statements=%zu expressions=%zu "
+                      "candidate_targets=%zu\n",
                       index->incoming_count,
                       index->indexed_if_queries,
                       index->indexed_loop_queries,
                       index->program->statement_count,
-                      index->program->expression_count);
+                      index->program->expression_count,
+                      index->candidate_count);
     }
     free(index->heads);
     free(index->incoming);
     free(index->addressed);
+    free(index->candidate_targets);
     free(index);
 }
 
@@ -50,6 +58,8 @@ MinicCoreReentryIndex *minic_core_reentry_index_create(const MinicC0Program *pro
     size_t incoming_count;
     size_t i;
     size_t next_incoming;
+    size_t candidate_count;
+    size_t next_candidate;
     MinicCoreReentryIndex *index = (MinicCoreReentryIndex *)calloc(1U, sizeof(*index));
     if (index == NULL) return NULL;
     if (program == NULL || program->statement_count == 0U ||
@@ -133,7 +143,38 @@ MinicCoreReentryIndex *minic_core_reentry_index_create(const MinicC0Program *pro
         }
     }
     if (next_incoming != incoming_count) goto fallback;
+    /* A membership query can only observe a direct/ASM goto target, a label
+     * whose address escapes, or case/default dispatch. Keep one sorted,
+     * deduplicated target per statement even if several incoming edges point
+     * to it. The incoming linked lists still prove whether an external edge
+     * exists, so this changes no pruning or fail-closed policy. */
+    candidate_count = 0U;
+    for (i = 0U; i < statement_count; ++i) {
+        const MinicStatement *source = minic_c0_program_statement(program, i);
+        if (source == NULL) goto fallback;
+        if (index->heads[i] != SIZE_MAX || index->addressed[i] != 0U ||
+            source->kind == MINIC_STATEMENT_CASE ||
+            source->kind == MINIC_STATEMENT_DEFAULT)
+            ++candidate_count;
+    }
+    if (candidate_count > SIZE_MAX / sizeof(*index->candidate_targets))
+        goto fallback;
+    if (candidate_count != 0U) {
+        index->candidate_targets = malloc(
+            candidate_count * sizeof(*index->candidate_targets));
+        if (index->candidate_targets == NULL) goto fallback;
+    }
+    next_candidate = 0U;
+    for (i = 0U; i < statement_count; ++i) {
+        const MinicStatement *source = minic_c0_program_statement(program, i);
+        if (index->heads[i] != SIZE_MAX || index->addressed[i] != 0U ||
+            source->kind == MINIC_STATEMENT_CASE ||
+            source->kind == MINIC_STATEMENT_DEFAULT)
+            index->candidate_targets[next_candidate++] = i;
+    }
+    if (next_candidate != candidate_count) goto fallback;
     index->incoming_count = incoming_count;
+    index->candidate_count = candidate_count;
     index->program = program; /* Publish only after the entire graph is valid. */
     return index;
 
@@ -289,7 +330,9 @@ unsigned int minic_core_reentry_query(
         reasons = core_reentry_indexed_target(
             index, program, query, query->label_id);
     } else {
-        for (target = 0U; target < program->statement_count; ++target) {
+        size_t candidate;
+        for (candidate = 0U; candidate < index->candidate_count; ++candidate) {
+            target = index->candidate_targets[candidate];
             if (!query->membership[target]) continue;
             reasons |= core_reentry_indexed_target(
                 index, program, query, target);
