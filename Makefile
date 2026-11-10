@@ -46,7 +46,7 @@ COMMON_WARNINGS := \
 ifeq ($(MODE),debug)
 MODE_CFLAGS := -O0 -g3
 else ifeq ($(MODE),release)
-MODE_CFLAGS := -O3 -DNDEBUG
+MODE_CFLAGS := -O2 -DNDEBUG
 else ifeq ($(MODE),sanitize)
 MODE_CFLAGS := -O1 -g3 -fsanitize=address,undefined -fno-omit-frame-pointer
 MODE_LDFLAGS := -fsanitize=address,undefined
@@ -573,7 +573,7 @@ prepare:
 
 $(BUILD_DIR)/obj/%.o: %.c
 	@mkdir -p "$(dir $@)"
-	$(CC) $(CPPFLAGS) $(MINIC_INCLUDES) $(MINIC_CFLAGS) -MMD -MP -c "$<" -o "$@"
+	$(CC) $(CPPFLAGS) $(MINIC_INCLUDES) $(MINIC_CFLAGS) $(if $(filter release,$(MODE)),-O3,) -MMD -MP -c "$<" -o "$@"
 
 $(MINIC_CC_BINARY): $(MINIC_OBJECTS)
 	@mkdir -p "$(dir $@)"
