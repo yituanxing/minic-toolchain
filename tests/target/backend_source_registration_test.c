@@ -27,10 +27,12 @@ int main(void) {
             source->qualify_inline_asm_goto != NULL;
         if (target.architecture == MINIC_TARGET_ARCH_RISCV32 ||
             target.architecture == MINIC_TARGET_ARCH_RISCV64) {
+            /* RISC-V keeps generic input ASM but admits the narrow,
+             * source-checked named asm-goto contract. */
             if (qualified_source || source->seal_normalized_inline_asm != NULL ||
                 source->clone_safe_opaque_asm != NULL ||
                 source->qualify_inline_asm != NULL ||
-                source->qualify_inline_asm_goto != NULL ||
+                source->qualify_inline_asm_goto == NULL ||
                 source->requires_qualified_input_asm != NULL) return 3;
             ++generic_source_targets;
         } else {
