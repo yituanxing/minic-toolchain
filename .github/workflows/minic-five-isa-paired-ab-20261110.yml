@@ -1,0 +1,147 @@
+name: MiniC five-ISA same-runner paired source performance
+
+# Verification-only branch. The certified compiler at aa186412 stays frozen.
+on:
+  push:
+    branches:
+      - verify/minic-five-isa-perf-ab-20261110
+    paths:
+      - .github/workflows/minic-five-isa-paired-ab-20261110.yml
+  pull_request:
+    paths:
+      - .github/workflows/minic-five-isa-paired-ab-20261110.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: minic-five-isa-paired-ab-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  five-isa-same-runner-ab:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    env:
+      BASE_SHA: e13fc7c77e60cf80f6ad699035998b5aada3a236
+      CAND_SHA: aa186412c4165eaa7a4ccd1a406b8fc7918e3326
+    steps:
+      - uses: actions/checkout@v4
+      - name: Pin identical compiler sources and establish benchmark identity
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$RUNNER_TEMP/minic-five-isa-perf"
+          mkdir -p "$work/results"
+          git fetch --quiet --no-tags --depth=1 origin "$BASE_SHA" "$CAND_SHA"
+          git -c advice.detachedHead=false worktree add --detach "$work/baseline" "$BASE_SHA"
+          git -c advice.detachedHead=false worktree add --detach "$work/candidate" "$CAND_SHA"
+          test "$(git -C "$work/baseline" rev-parse HEAD)" = "$BASE_SHA"
+          test "$(git -C "$work/candidate" rev-parse HEAD)" = "$CAND_SHA"
+          git diff --exit-code "$CAND_SHA" HEAD -- src include Makefile tools tests
+          printf 'BASE_SHA=%s\nCAND_SHA=%s\nRUNNER=%s\n' "$BASE_SHA" "$CAND_SHA" "$RUNNER_NAME" | tee "$work/results/identity.txt"
+          cc --version | head -1 | tee -a "$work/results/identity.txt"
+
+      - name: Build independent baseline and candidate -O3 host compilers
+        shell: bash
+        timeout-minutes: 12
+        run: |
+          set -Eeuo pipefail
+          work="$RUNNER_TEMP/minic-five-isa-perf"
+          for arm in baseline candidate; do
+            make -s -C "$work/$arm" -j4 MODE=release CFLAGS='-O3 -Werror' \
+              BUILD_DIR="$work/build-$arm" "$work/build-$arm/bin/minic" "$work/build-$arm/bin/minic-cc" \
+              >"$work/results/build-$arm.log" 2>&1
+            test -x "$work/build-$arm/bin/minic-cc"
+            sha256sum "$work/build-$arm/bin/minic-cc" | tee "$work/results/compiler-$arm.sha256"
+          done
+          ! cmp -s "$work/build-baseline/bin/minic-cc" "$work/build-candidate/bin/minic-cc"
+
+      - name: Freeze identical original tinyAES and cJSON source inputs
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$RUNNER_TEMP/minic-five-isa-perf"
+          mkdir -p "$work/inputs"
+          cc -E -P -nostdinc -x c \
+            -I"$GITHUB_WORKSPACE/tests/external/tiny-aes-c/include" \
+            -I"$GITHUB_WORKSPACE/tests/vendor/tiny-aes-c/upstream" \
+            -DECB=1 -DCBC=0 -DCTR=0 -DMULTIPLY_AS_A_FUNCTION=1 \
+            "$GITHUB_WORKSPACE/tests/external/tiny-aes-c/aes128_ecb_vectors.c" \
+            -o "$work/inputs/tinyaes.i"
+          MINIC_CJSON_PREPROCESS_ONLY=1 RISCV_CC=cc QEMU_RISCV64=env \
+            BUILD_DIR="$work" sh tests/external/cjson/probe.sh
+          cp "$work/tests/external/cjson/cJSON.i" "$work/inputs/cjson.i"
+          sha256sum "$work/inputs/tinyaes.i" "$work/inputs/cjson.i" | tee "$work/results/input.sha256"
+
+      - name: Run serial five-ISA warmups and four alternating A/B samples
+        shell: bash
+        timeout-minutes: 18
+        run: |
+          set -Eeuo pipefail
+          work="$RUNNER_TEMP/minic-five-isa-perf"
+          core=$(python3 -c 'import os; print(min(os.sched_getaffinity(0)))')
+          printf 'pin_cpu=%s\n' "$core" | tee -a "$work/results/identity.txt"
+          for fixture in tinyaes cjson; do
+            args=()
+            if [ "$fixture" = cjson ]; then args+=(--compile-only); fi
+            taskset -c "$core" python3 tests/compiler/perf/minic-four-backend-refactor-ab.py \
+              --baseline "$work/build-baseline/bin/minic-cc" \
+              --candidate "$work/build-candidate/bin/minic-cc" \
+              --source "$work/inputs/$fixture.i" \
+              --output "$work/results/$fixture" \
+              --repeats 4 --five-isa --label "$fixture" "${args[@]}"
+          done
+
+      - name: Aggregate paired CPU and wall medians with exact assembly oracle
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          import json, os, statistics
+          from pathlib import Path
+          root = Path(os.environ['RUNNER_TEMP']) / 'minic-five-isa-perf/results'
+          targets = ['riscv32-linux', 'riscv64-linux', 'x86_64-linux', 'aarch64-linux', 'loongarch64-linux']
+          report = []
+          lines = ['| Original C fixture | ISA | Base CPU ms | Candidate CPU ms | CPU throughput | Wall throughput | Assembly |',
+                   '| :-- | :-- | --: | --: | --: | --: | :-- |']
+          for fixture in ('tinyaes', 'cjson'):
+              data = json.loads((root / fixture / 'results.json').read_text())
+              if data['targets'] != targets or data['repeats_per_compiler_per_isa'] != 4:
+                  raise SystemExit('MINIC_FIVE_ISA_AB=FAIL missing five-ISA four-repeat evidence')
+              for row in data['results']:
+                  if not row['assembly_identical'] or len(row['samples']) != 8:
+                      raise SystemExit(f"MINIC_FIVE_ISA_AB=FAIL assembly mismatch {fixture}/{row['target']}")
+                  per = {}
+                  for phase in ('before', 'after'):
+                      sample = [r for r in row['samples'] if r['phase'] == phase]
+                      if len(sample) != 4:
+                          raise SystemExit('MINIC_FIVE_ISA_AB=FAIL incomplete ABBA')
+                      per[phase] = {
+                          'cpu_ms': statistics.median(r['user_ms'] + r['sys_ms'] for r in sample),
+                          'wall_ms': statistics.median(r['wall_ms'] for r in sample),
+                      }
+                  speed_cpu = per['before']['cpu_ms'] / per['after']['cpu_ms']
+                  speed_wall = per['before']['wall_ms'] / per['after']['wall_ms']
+                  report.append({'fixture': fixture, 'target': row['target'], 'baseline': per['before'],
+                                 'candidate': per['after'], 'speedup_cpu': speed_cpu,
+                                 'speedup_wall': speed_wall, 'assembly_identical': True,
+                                 'source_sha256': data['source_sha256']})
+                  lines.append(f"| {fixture} | {row['target']} | {per['before']['cpu_ms']:.3f} | "
+                               f"{per['after']['cpu_ms']:.3f} | {speed_cpu:.4f}x | {speed_wall:.4f}x | equal |")
+                  print(f"FIVE_ISA_AB=PASS fixture={fixture} target={row['target']} "
+                        f"cpu_speedup={speed_cpu:.5f} wall_speedup={speed_wall:.5f} asm_sha_equal=1")
+          (root / 'summary.json').write_text(json.dumps(report, indent=2) + '\n')
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as f:
+              f.write('\n'.join(lines) + '\n\nSame GitHub runner, pinned one CPU, baseline e13fc7c vs candidate aa186412, '
+                      '4 ABBA per ISA/fixture and one warmup per compiler. These are original tinyAES/cJSON '
+                      'C source compilation timings, not five-ISA original Linux Kbuild throughput.\n')
+          print('MINIC_FIVE_ISA_AB=PASS targets=5 fixtures=2 cpu_and_wall=true original_assembly_equal=10/10')
+          PY
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: minic-five-isa-paired-ab-20261110
+          path: ${{ runner.temp }}/minic-five-isa-perf/results/
+          if-no-files-found: warn
