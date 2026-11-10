@@ -1,0 +1,230 @@
+name: MiniC authenticated Linux heavy-TU phase profile (opt-in)
+
+# Branch-only opt-in: this file can be tested on an isolated branch without
+# being merged into the production refactor branch. Never materialize Linux.
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - perf/minic-hot-tu-phase-profile-20261110
+    paths:
+      - .github/workflows/minic-hot-tu-phase-profile-v1.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: minic-heavy-tu-phase-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  authenticated-heavy-tu-profile:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Checkout the exact candidate commit
+        uses: actions/checkout@v4
+
+      - name: Restore the historical SHA-certified first500 without rematerializing
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-perf-corpus
+          key: linux-6.6.143-first500-rv64-v1-${{ hashFiles('tests/external/linux/batch_probe.sh', 'tests/external/linux/probe.sh', 'tests/external/linux/replay-indices.txt') }}
+          fail-on-cache-miss: true
+
+      - name: Validate the 500 source SHA values and select three heavy owners
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          corpus=build/linux-perf-corpus
+          output=build/hot-tu-phase
+          mkdir -p "$output"
+          test -s "$corpus/selected-tus.txt"
+          test "$(wc -l < "$corpus/selected-tus.txt")" -eq 500
+          test -s "$corpus/inputs.sha256"
+          test "$(wc -l < "$corpus/inputs.sha256")" -eq 500
+          sha256sum -c --status "$corpus/inputs.sha256"
+          python3 - "$corpus" "$output" <<'PY'
+          from pathlib import Path
+          import hashlib
+          import json
+          import sys
+
+          corpus, output = map(Path, sys.argv[1:])
+          expected = {
+              "kernel/time/timekeeping.o": 158,
+              "kernel/bpf/verifier.o": 195,
+              "kernel/events/core.o": 232,
+          }
+          seen = {}
+          root = (corpus / "kbuild").resolve(strict=True)
+          for row in (corpus / "selected-tus.txt").read_text().splitlines():
+              columns = row.split("\t", 3)
+              if len(columns) != 4:
+                  raise SystemExit("invalid certified selected-tus row")
+              index, owner, frozen, source = columns
+              if owner in seen:
+                  raise SystemExit("duplicate certified owner " + owner)
+              seen[owner] = (int(index), frozen, source)
+          if len(seen) != 500:
+              raise SystemExit("certified manifest must contain 500 unique owners")
+          records = []
+          for owner, expected_index in expected.items():
+              if owner not in seen:
+                  raise SystemExit("required heavy owner absent from cache " + owner)
+              index, frozen, source = seen[owner]
+              if index != expected_index:
+                  raise SystemExit(f"frozen owner index changed {owner}: {index} != {expected_index}")
+              path = (root / frozen).resolve(strict=True)
+              if not path.is_relative_to(root) or not path.is_file() or path.stat().st_size == 0:
+                  raise SystemExit("invalid frozen input " + str(path))
+              digest = hashlib.sha256(path.read_bytes()).hexdigest()
+              records.append({"owner": owner, "index": index,
+                              "input": str(path), "input_sha256": digest,
+                              "original_source": source})
+              print(f"HEAVY_TU_INPUT=PASS owner={owner} index={index} input_sha256={digest}")
+          (output / "selection.json").write_text(json.dumps(records, indent=2) + "\n")
+          print("HEAVY_TU_CORPUS=PASS verified=500 selected=3 cached_only=true")
+          PY
+
+      - name: Build original MiniC host compiler and traced source-only diagnostic
+        shell: bash
+        timeout-minutes: 12
+        run: |
+          set -Eeuo pipefail
+          mkdir -p build/hot-tu-phase
+          printf 'HEAD=%s\n' "$GITHUB_SHA" | tee build/hot-tu-phase/identity.txt
+          sha256sum Makefile src/compiler/compiler.c tools/ci/linux-perf-phase-trace-v1.py \
+            >> build/hot-tu-phase/identity.txt
+          make -j4 MODE=release CFLAGS=-g \
+            BUILD_DIR=build/hot-tu-phase/original \
+            build/hot-tu-phase/original/bin/minic-cc \
+            >build/hot-tu-phase/build-original.log 2>&1
+          python3 tools/ci/linux-perf-phase-trace-v1.py --self-test \
+            | tee build/hot-tu-phase/tracer-selftest.txt
+          # Only the CI checkout is patched. No production C or IR is changed.
+          python3 tools/ci/apply-perf-specialization-phase-trace-v0.py \
+            | tee build/hot-tu-phase/traced-instrumentation.txt
+          make -j4 MODE=release CFLAGS=-g \
+            BUILD_DIR=build/hot-tu-phase/traced \
+            build/hot-tu-phase/traced/bin/minic-cc \
+            >build/hot-tu-phase/build-traced.log 2>&1
+          sha256sum build/hot-tu-phase/{original,traced}/bin/minic-cc \
+            | tee build/hot-tu-phase/compiler-sha256.txt
+
+      - name: Same Kbuild ABI phase attribution for timekeeping events and verifier
+        shell: bash
+        timeout-minutes: 10
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          import subprocess
+
+          root = Path("build/hot-tu-phase")
+          samples = json.loads((root / "selection.json").read_text())
+          flags = ["-march=rv64i", "-mabi=lp64", "-fshort-wchar", "-funsigned-char"]
+          for sample in samples:
+              out = root / ("owner-" + str(sample["index"]))
+              cmd = ["python3", "tools/ci/linux-perf-phase-trace-v1.py",
+                     "--input", sample["input"],
+                     "--baseline", str(root / "original/bin/minic-cc"),
+                     "--candidate", str(root / "traced/bin/minic-cc"),
+                     "--expect-specialization", "--out", str(out)]
+              cmd.extend("--compiler-flag=" + flag for flag in flags)
+              done = subprocess.run(cmd, text=True, capture_output=True, timeout=360)
+              (root / ("owner-" + str(sample["index"]) + "-phase.log")).write_text(
+                  done.stdout + "\n" + done.stderr)
+              if done.returncode:
+                  raise SystemExit(f"phase failed {sample['owner']}: {(done.stderr + done.stdout)[-1800:]}")
+              result = json.loads((out / "phases.json").read_text())
+              if result["results"]["before"]["assembly_sha"] != result["results"]["after"]["assembly_sha"]:
+                  raise SystemExit("different generated GNU assembly " + sample["owner"])
+              if result.get("compiler_flags") != flags:
+                  raise SystemExit("Kbuild ABI flags missing in phase evidence")
+              print(f"HEAVY_TU_PHASE=PASS owner={sample['owner']} index={sample['index']} assembly_equal=true")
+          print("HEAVY_TU_PHASE_GROUP=PASS owners=3 kbuild_abi_preserved=true")
+          PY
+
+      - name: Install bounded CPU-instruction profiler
+        shell: bash
+        timeout-minutes: 6
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get -o Acquire::Retries=2 update -qq
+          sudo apt-get -o Acquire::Retries=2 install -y --no-install-recommends valgrind >/dev/null
+          command -v valgrind
+          command -v callgrind_annotate
+
+      - name: Callgrind self Ir for three real Linux heavy objects
+        shell: bash
+        timeout-minutes: 21
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          import hashlib
+          import json
+          from pathlib import Path
+          import subprocess
+
+          root = Path("build/hot-tu-phase")
+          compiler = root / "original/bin/minic-cc"
+          samples = json.loads((root / "selection.json").read_text())
+          flags = ["-march=rv64i", "-mabi=lp64", "-fshort-wchar", "-funsigned-char"]
+          states = []
+          for sample in samples:
+              folder = root / ("owner-" + str(sample["index"]))
+              callgrind = folder / "callgrind.out"
+              assembly = folder / "callgrind.s"
+              command = ["valgrind", "--tool=callgrind", "--collect-jumps=yes",
+                         "--callgrind-out-file=" + str(callgrind), str(compiler),
+                         "-S", sample["input"], *flags, "-o", str(assembly)]
+              with (folder / "callgrind.log").open("w") as log:
+                  try:
+                      process = subprocess.run(command, stdout=log, stderr=subprocess.STDOUT,
+                                               timeout=360, check=False)
+                      status = "PASS" if process.returncode == 0 else f"FAILED_RC_{process.returncode}"
+                  except subprocess.TimeoutExpired:
+                      status = "TIMEOUT_360S"
+              if status == "PASS":
+                  measured = hashlib.sha256(assembly.read_bytes()).hexdigest()
+                  phase = json.loads((folder / "phases.json").read_text())
+                  expected = phase["results"]["before"]["assembly_sha"]
+                  if measured != expected:
+                      raise SystemExit("Callgrind GNU assembly changed for " + sample["owner"])
+                  annotated = subprocess.run(["callgrind_annotate", "--inclusive=no", "--threshold=0",
+                                              "--sort=Ir", str(callgrind)], text=True,
+                                             capture_output=True, timeout=45, check=True)
+                  (folder / "callgrind-self-ir.txt").write_text(annotated.stdout)
+              state = {"owner": sample["owner"], "index": sample["index"],
+                       "callgrind": status, "kbuild_flags": flags}
+              states.append(state)
+              print("HEAVY_TU_CALLGRIND=" + status + " owner=" + sample["owner"])
+          (root / "callgrind-status.json").write_text(json.dumps(states, indent=2) + "\n")
+          passed = sum(s["callgrind"] == "PASS" for s in states)
+          print(f"HEAVY_TU_PROFILE=COMPLETE callgrind_qualified={passed}/3")
+          if passed != len(states):
+              raise SystemExit("HEAVY_TU_PROFILE=INCOMPLETE inspect callgrind-status.json")
+          PY
+
+      - name: Upload diagnostics even on a bounded profiler failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: minic-hot-tu-phase-profile-${{ github.run_id }}
+          path: |
+            build/hot-tu-phase/selection.json
+            build/hot-tu-phase/identity.txt
+            build/hot-tu-phase/compiler-sha256.txt
+            build/hot-tu-phase/tracer-selftest.txt
+            build/hot-tu-phase/traced-instrumentation.txt
+            build/hot-tu-phase/owner-*/phases.json
+            build/hot-tu-phase/owner-*/callgrind-self-ir.txt
+            build/hot-tu-phase/owner-*/callgrind.log
+            build/hot-tu-phase/owner-*/callgrind.out
+            build/hot-tu-phase/owner-*-phase.log
+            build/hot-tu-phase/callgrind-status.json
+            build/hot-tu-phase/build-*.log
+          if-no-files-found: warn
+          retention-days: 14
