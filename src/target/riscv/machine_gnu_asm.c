@@ -67,6 +67,94 @@ static bool riscv_machine_symbol(const MinicMachineFunction *fn,
     return true;
 }
 
+/* A selected physical instruction is already fully verified before this
+ * callback.  Keep its presentation in a bounded, local byte builder: unlike
+ * fprintf, appending a mnemonic, physical register or integer does not parse
+ * an instruction-specific printf format on every selected instruction.  The
+ * builder flushes on long symbols, so no assembler identifier is truncated. */
+typedef struct RiscvSelectedText {
+    FILE *output;
+    char bytes[256];
+    size_t count;
+} RiscvSelectedText;
+
+static bool riscv_text_flush(RiscvSelectedText *text) {
+    if (text->count != 0U &&
+        fwrite(text->bytes, 1U, text->count, text->output) != text->count)
+        return false;
+    text->count = 0U;
+    return true;
+}
+
+static bool riscv_text_bytes(RiscvSelectedText *text,
+                             const char *bytes, size_t length) {
+    /* Almost every selected opcode fits in the remaining local buffer.
+     * Keep that path to a bounds comparison plus one memcpy; only uncommon
+     * long symbols need the streaming loop. */
+    if (length <= sizeof(text->bytes) - text->count) {
+        memcpy(text->bytes + text->count, bytes, length);
+        text->count += length;
+        return true;
+    }
+    while (length != 0U) {
+        size_t available = sizeof(text->bytes) - text->count;
+        size_t size;
+        if (available == 0U) {
+            if (!riscv_text_flush(text)) return false;
+            available = sizeof(text->bytes);
+        }
+        size = length < available ? length : available;
+        memcpy(text->bytes + text->count, bytes, size);
+        text->count += size;
+        bytes += size;
+        length -= size;
+    }
+    return true;
+}
+
+static bool riscv_text_string(RiscvSelectedText *text, const char *value) {
+    return value != NULL && riscv_text_bytes(text, value, strlen(value));
+}
+
+static bool riscv_text_unsigned(RiscvSelectedText *text, uint64_t value) {
+    char digits[20];
+    char *begin = digits + sizeof(digits);
+    do {
+        *--begin = (char)('0' + (value % 10U));
+        value /= 10U;
+    } while (value != 0U);
+    return riscv_text_bytes(text, begin,
+        (size_t)(digits + sizeof(digits) - begin));
+}
+
+static bool riscv_text_signed(RiscvSelectedText *text, int64_t value) {
+    if (value >= 0) return riscv_text_unsigned(text, (uint64_t)value);
+    return riscv_text_string(text, "-") &&
+        riscv_text_unsigned(text, UINT64_C(0) - (uint64_t)value);
+}
+
+static bool riscv_text_register(RiscvSelectedText *text, unsigned reg) {
+    char name[3];
+    if (reg >= 32U) return false;
+    name[0] = 'x';
+    if (reg < 10U) {
+        name[1] = (char)('0' + reg);
+        return riscv_text_bytes(text, name, 2U);
+    }
+    name[1] = (char)('0' + reg / 10U);
+    name[2] = (char)('0' + reg % 10U);
+    return riscv_text_bytes(text, name, 3U);
+}
+
+static bool riscv_text_mnemonic(RiscvSelectedText *text, const char *mnemonic) {
+    return riscv_text_string(text, "  ") &&
+        riscv_text_string(text, mnemonic);
+}
+
+static bool riscv_text_end(RiscvSelectedText *text) {
+    return riscv_text_string(text, "\n") && riscv_text_flush(text);
+}
+
 /* Operand values are verified before output; this emitter uses only the
  * target's fixed mnemonic table and numeric physical register identities.
  * It cannot consume a pre-rendered assembly statement. */
@@ -74,6 +162,7 @@ static bool riscv_machine_emit_selected(FILE *output,
     const MinicMachineFunction *fn, const MinicMachineInstruction *ins,
     const MinicMachineGNUAsmLabels *labels, void *context) {
     MinicRiscvMachineOpcodeInfo desc;
+    RiscvSelectedText text = { .output = output, .count = 0U };
     const MinicMachineOperand *operand;
     const char *branch_label = NULL;
     const char *symbol = NULL;
@@ -115,58 +204,91 @@ static bool riscv_machine_emit_selected(FILE *output,
                 &operand[i].value.physical.reg);
             if (rnames[i] == NULL) return false;
         }
+        if (!riscv_text_mnemonic(&text, desc.mnemonic) ||
+            !riscv_text_string(&text, " ") ||
+            !riscv_text_string(&text, rnames[0]) ||
+            !riscv_text_string(&text, ", ") ||
+            !riscv_text_string(&text, rnames[1])) return false;
         if (ins->operand_count == 3U)
-            return fprintf(output, "  %s %s, %s, %s\n",
-                desc.mnemonic, rnames[0], rnames[1], rnames[2]) >= 0;
+            return riscv_text_string(&text, ", ") &&
+                riscv_text_string(&text, rnames[2]) && riscv_text_end(&text);
         if (ins->opcode >= MINIC_RISCV_MACHINE_FCVT_W_D_RTZ &&
             ins->opcode <= MINIC_RISCV_MACHINE_FCVT_LU_D_RTZ)
-            return fprintf(output, "  %s %s, %s, rtz\n",
-                desc.mnemonic, rnames[0], rnames[1]) >= 0;
-        return fprintf(output, "  %s %s, %s\n",
-            desc.mnemonic, rnames[0], rnames[1]) >= 0;
+            return riscv_text_string(&text, ", rtz") && riscv_text_end(&text);
+        return riscv_text_end(&text);
     }
     switch (desc.form) {
     case MINIC_RISCV_MACHINE_FORM_NONE:
         if (ins->opcode == MINIC_RISCV_MACHINE_BARRIER ||
             ins->opcode == MINIC_RISCV_MACHINE_UNREACHABLE) return true;
         return desc.mnemonic != NULL &&
-               fprintf(output, "  %s\n", desc.mnemonic) >= 0;
+            riscv_text_mnemonic(&text, desc.mnemonic) && riscv_text_end(&text);
     case MINIC_RISCV_MACHINE_FORM_REGISTER:
         if (ins->opcode == MINIC_RISCV_MACHINE_CALL_INDIRECT)
-            return fprintf(output, "  jalr ra, 0(x%u)\n", r0) >= 0;
+            return riscv_text_string(&text, "  jalr ra, 0(") &&
+                riscv_text_register(&text, r0) &&
+                riscv_text_string(&text, ")") && riscv_text_end(&text);
         return false;
     case MINIC_RISCV_MACHINE_FORM_REGISTER_REGISTER:
         return desc.mnemonic != NULL &&
-               fprintf(output, "  %s x%u, x%u\n", desc.mnemonic, r0, r1) >= 0;
+            riscv_text_mnemonic(&text, desc.mnemonic) &&
+            riscv_text_string(&text, " ") &&
+            riscv_text_register(&text, r0) &&
+            riscv_text_string(&text, ", ") &&
+            riscv_text_register(&text, r1) && riscv_text_end(&text);
     case MINIC_RISCV_MACHINE_FORM_REGISTER_IMMEDIATE:
         if (ins->opcode == MINIC_RISCV_MACHINE_JALR_BRANCH ||
             ins->opcode == MINIC_RISCV_MACHINE_JALR_CALL) {
-            return fprintf(output, "  jalr %s, %" PRId64 "(x%u)\n",
-                           ins->opcode == MINIC_RISCV_MACHINE_JALR_CALL
-                               ? "ra" : "zero",
-                           operand[1].value.integer, r0) >= 0;
+            return riscv_text_string(&text, "  jalr ") &&
+                riscv_text_string(&text,
+                    ins->opcode == MINIC_RISCV_MACHINE_JALR_CALL
+                        ? "ra" : "zero") &&
+                riscv_text_string(&text, ", ") &&
+                riscv_text_signed(&text, operand[1].value.integer) &&
+                riscv_text_string(&text, "(") &&
+                riscv_text_register(&text, r0) &&
+                riscv_text_string(&text, ")") && riscv_text_end(&text);
         }
         return desc.mnemonic != NULL &&
-               fprintf(output, "  %s x%u, %" PRId64 "\n",
-                       desc.mnemonic, r0, operand[1].value.integer) >= 0;
+            riscv_text_mnemonic(&text, desc.mnemonic) &&
+            riscv_text_string(&text, " ") &&
+            riscv_text_register(&text, r0) &&
+            riscv_text_string(&text, ", ") &&
+            riscv_text_signed(&text, operand[1].value.integer) &&
+            riscv_text_end(&text);
     case MINIC_RISCV_MACHINE_FORM_REGISTER_REGISTER_IMMEDIATE:
         return desc.mnemonic != NULL &&
-               fprintf(output, "  %s x%u, x%u, %" PRId64 "\n",
-                       desc.mnemonic, r0, r1,
-                       operand[2].value.integer) >= 0;
+            riscv_text_mnemonic(&text, desc.mnemonic) &&
+            riscv_text_string(&text, " ") &&
+            riscv_text_register(&text, r0) &&
+            riscv_text_string(&text, ", ") &&
+            riscv_text_register(&text, r1) &&
+            riscv_text_string(&text, ", ") &&
+            riscv_text_signed(&text, operand[2].value.integer) &&
+            riscv_text_end(&text);
     case MINIC_RISCV_MACHINE_FORM_REGISTER_REGISTER_REGISTER:
         return desc.mnemonic != NULL &&
-               fprintf(output, "  %s x%u, x%u, x%u\n",
-                       desc.mnemonic, r0, r1, r2) >= 0;
+            riscv_text_mnemonic(&text, desc.mnemonic) &&
+            riscv_text_string(&text, " ") &&
+            riscv_text_register(&text, r0) &&
+            riscv_text_string(&text, ", ") &&
+            riscv_text_register(&text, r1) &&
+            riscv_text_string(&text, ", ") &&
+            riscv_text_register(&text, r2) && riscv_text_end(&text);
     case MINIC_RISCV_MACHINE_FORM_LOAD:
     case MINIC_RISCV_MACHINE_FORM_STORE: {
         const MinicMachineAddress *address = &operand[1].value.address;
         if (operand[1].kind != MINIC_MACHINE_OPERAND_ADDRESS ||
             !minic_riscv_machine_validate_address(fn->target, address, NULL))
             return false;
-        return fprintf(output, "  %s x%u, %" PRId64 "(x%u)\n",
-                       desc.mnemonic, r0, address->displacement,
-                       address->base.number) >= 0;
+        return riscv_text_mnemonic(&text, desc.mnemonic) &&
+            riscv_text_string(&text, " ") &&
+            riscv_text_register(&text, r0) &&
+            riscv_text_string(&text, ", ") &&
+            riscv_text_signed(&text, address->displacement) &&
+            riscv_text_string(&text, "(") &&
+            riscv_text_register(&text, address->base.number) &&
+            riscv_text_string(&text, ")") && riscv_text_end(&text);
     }
     case MINIC_RISCV_MACHINE_FORM_LOAD_FRAME:
     case MINIC_RISCV_MACHINE_FORM_STORE_FRAME: {
@@ -175,40 +297,65 @@ static bool riscv_machine_emit_selected(FILE *output,
         if (!minic_riscv_machine_resolve_frame_access(
                 fn, ins->opcode, &operand[1],
                 &frame_base, &frame_displacement)) return false;
-        return fprintf(output, "  %s x%u, %" PRId64 "(x%u)\n",
-                       desc.mnemonic, r0, frame_displacement,
-                       frame_base) >= 0;
+        return riscv_text_mnemonic(&text, desc.mnemonic) &&
+            riscv_text_string(&text, " ") &&
+            riscv_text_register(&text, r0) &&
+            riscv_text_string(&text, ", ") &&
+            riscv_text_signed(&text, frame_displacement) &&
+            riscv_text_string(&text, "(") &&
+            riscv_text_register(&text, frame_base) &&
+            riscv_text_string(&text, ")") && riscv_text_end(&text);
     }
     case MINIC_RISCV_MACHINE_FORM_REGISTER_REGISTER_BLOCK:
         return riscv_machine_block_label(fn, labels, &operand[2], &branch_label) &&
-               fprintf(output, "  %s x%u, x%u, %s\n",
-                       desc.mnemonic, r0, r1, branch_label) >= 0;
+            riscv_text_mnemonic(&text, desc.mnemonic) &&
+            riscv_text_string(&text, " ") &&
+            riscv_text_register(&text, r0) &&
+            riscv_text_string(&text, ", ") &&
+            riscv_text_register(&text, r1) &&
+            riscv_text_string(&text, ", ") &&
+            riscv_text_string(&text, branch_label) && riscv_text_end(&text);
     case MINIC_RISCV_MACHINE_FORM_REGISTER_BLOCK:
         if (ins->opcode == MINIC_RISCV_MACHINE_JALR_BLOCK)
             return riscv_machine_block_label(fn, labels, &operand[1],
                                               &branch_label) &&
-                   fprintf(output, "  jalr zero, 0(x%u)\n", r0) >= 0;
+                riscv_text_string(&text, "  jalr zero, 0(") &&
+                riscv_text_register(&text, r0) &&
+                riscv_text_string(&text, ")") && riscv_text_end(&text);
         return riscv_machine_block_label(fn, labels, &operand[1], &branch_label) &&
-               fprintf(output, "  %s x%u, %s\n", desc.mnemonic,
-                       r0, branch_label) >= 0;
+            riscv_text_mnemonic(&text, desc.mnemonic) &&
+            riscv_text_string(&text, " ") &&
+            riscv_text_register(&text, r0) &&
+            riscv_text_string(&text, ", ") &&
+            riscv_text_string(&text, branch_label) && riscv_text_end(&text);
     case MINIC_RISCV_MACHINE_FORM_BLOCK:
         if (!riscv_machine_block_label(fn, labels, &operand[0], &branch_label))
             return false;
         if (ins->opcode == MINIC_RISCV_MACHINE_JAL_BLOCK)
-            return fprintf(output, "  jal zero, %s\n", branch_label) >= 0;
-        return fprintf(output, "  %s %s\n", desc.mnemonic, branch_label) >= 0;
+            return riscv_text_string(&text, "  jal zero, ") &&
+                riscv_text_string(&text, branch_label) && riscv_text_end(&text);
+        return riscv_text_mnemonic(&text, desc.mnemonic) &&
+            riscv_text_string(&text, " ") &&
+            riscv_text_string(&text, branch_label) && riscv_text_end(&text);
     case MINIC_RISCV_MACHINE_FORM_REGISTER_SYMBOL:
         if (!riscv_machine_symbol(fn, &operand[1], &symbol)) return false;
         if (ins->opcode == MINIC_RISCV_MACHINE_LA_GOT)
-            return fprintf(output,
-                           "  .option push\n"
-                           "  .option pic\n"
-                           "  la x%u, %s\n"
-                           "  .option pop\n", r0, symbol) >= 0;
-        return fprintf(output, "  lla x%u, %s\n", r0, symbol) >= 0;
+            return riscv_text_string(&text,
+                       "  .option push\n  .option pic\n  la ") &&
+                riscv_text_register(&text, r0) &&
+                riscv_text_string(&text, ", ") &&
+                riscv_text_string(&text, symbol) &&
+                riscv_text_string(&text, "\n  .option pop") &&
+                riscv_text_end(&text);
+        return riscv_text_string(&text, "  lla ") &&
+            riscv_text_register(&text, r0) &&
+            riscv_text_string(&text, ", ") &&
+            riscv_text_string(&text, symbol) && riscv_text_end(&text);
     case MINIC_RISCV_MACHINE_FORM_SYMBOL:
         return riscv_machine_symbol(fn, &operand[0], &symbol) &&
-               fprintf(output, "  %s %s\n", desc.mnemonic, symbol) >= 0;
+            riscv_text_mnemonic(&text, desc.mnemonic) &&
+            riscv_text_string(&text, " ") &&
+            riscv_text_string(&text, symbol) && riscv_text_end(&text);
     case MINIC_RISCV_MACHINE_FORM_FENCE_MASK: {
         char predecessor[5], successor[5];
         static const unsigned masks[] = {8U, 4U, 2U, 1U};
@@ -226,8 +373,10 @@ static bool riscv_machine_emit_selected(FILE *output,
                 successor[count++] = chars[i];
         if (count == 0U) successor[count++] = '0';
         successor[count] = '\0';
-        return fprintf(output, "  fence %s, %s\n",
-                       predecessor, successor) >= 0;
+        return riscv_text_string(&text, "  fence ") &&
+            riscv_text_string(&text, predecessor) &&
+            riscv_text_string(&text, ", ") &&
+            riscv_text_string(&text, successor) && riscv_text_end(&text);
     }
     default:
         return false;
