@@ -1,4 +1,4 @@
-target=loongarch64
+target=x86_64
 input_run=42366441631
-nonce=20261109-32
+nonce=20261110-101
 mode=candidate-only
