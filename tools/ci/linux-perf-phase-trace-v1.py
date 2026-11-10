@@ -222,7 +222,18 @@ def summarize_specialization_trace(events):
             for k in sorted(total)}
 
 
-def sample(executable,source,output,limit,collect_current_lookup_metrics=False):
+def compiler_argv(executable, source, output, compiler_flags=()):
+    """Replay the same Kbuild target/ABI flags on both traced compilers.
+
+    A frozen preprocessed .i does not encode all C ABI options; in particular
+    -fshort-wchar and -funsigned-char must survive this diagnostic runner.
+    """
+    # minic-cc's CLI expects the -S input path immediately after -S.
+    return [str(executable), "-S", str(source), *compiler_flags, "-o", str(output)]
+
+
+def sample(executable,source,output,limit,collect_current_lookup_metrics=False,
+           compiler_flags=()):
     # Generic stage A/B retains its historical environment: older baseline
     # compilers may not support the newer production-only telemetry.
     env=dict(os.environ, MINIC_BOOTSTRAP_TRACE="1", MINIC_BOOLEAN_SCAN_PROFILE="1",
@@ -231,7 +242,7 @@ def sample(executable,source,output,limit,collect_current_lookup_metrics=False):
         env.update(MINIC_INTEGER_OWNER_PERF="1", MINIC_PARSER_PERF_TRACE="1",
                    MINIC_CORE_REENTRY_INDEX_PERF="1")
     begun=time.perf_counter_ns()
-    with subprocess.Popen([str(executable),"-S",str(source),"-o",str(output)],
+    with subprocess.Popen(compiler_argv(executable,source,output,compiler_flags),
                           env=env,stdout=subprocess.DEVNULL,
                           stderr=subprocess.PIPE,text=True,errors="replace",bufsize=1) as p:
         timer=threading.Timer(limit,p.kill)
@@ -273,6 +284,8 @@ def main():
     cli.add_argument("--baseline",type=Path)
     cli.add_argument("--candidate",type=Path)
     cli.add_argument("--out",type=Path)
+    cli.add_argument("--compiler-flag",action="append",default=[],metavar="FLAG",
+                     help="repeat for exact Kbuild flags; use --compiler-flag=-march=rv64i")
     ns=cli.parse_args()
     if ns.self_test:
         events=[]
@@ -306,6 +319,10 @@ def main():
         assert read_boolean_counts(example)["expression_visits"]==1000
         symbolic_example=[(0,"MINIC_SYMBOLIC_SCAN_PROFILE direct_expression_visits=10 direct_call_visits=3 direct_variant_lookups=1 direct_variant_probes=5 transitive_callers=2 transitive_expression_visits=100 transitive_owner_skips=88 transitive_call_visits=7 transitive_pointer_argument_evals=4 transitive_variant_lookups=1 transitive_variant_probes=2 owner_index_ready=1 direct_clones=1 transitive_clones=1")]
         assert read_symbolic_counts(symbolic_example)["transitive_owner_skips"]==88
+        assert compiler_argv("cc", "source.i", "out.s",
+                             ["-march=rv64i", "-funsigned-char"]) == [
+            "cc", "-S", "source.i", "-march=rv64i",
+            "-funsigned-char", "-o", "out.s"]
         print("MINIC_PHASE_TRACE_SELFTEST=PASS six_stages=1 five_interstage_gaps=1 spec_timer=1 boolean_count_parser=1 symbolic_count_parser=1")
         return
     if not all((ns.input,ns.baseline,ns.candidate,ns.out)):
@@ -316,7 +333,7 @@ def main():
     results={}
     for mode,executable in (("before",ns.baseline),("after",ns.candidate)):
         results[mode]=sample(executable.resolve(),ns.input.resolve(),ns.out/(mode+".s"),
-                             180,ns.expect_current_lookup_telemetry)
+                             180,ns.expect_current_lookup_telemetry,ns.compiler_flag)
     if results["before"]["assembly_sha"]!=results["after"]["assembly_sha"]:
         raise RuntimeError("different assembly bytes; cannot attribute performance")
     if ns.expect_symbolic_census and not ns.expect_symbolic_loops:
@@ -331,6 +348,7 @@ def main():
         raise RuntimeError("diagnostic compiler did not emit all four specialization markers")
     data={"schema":"minic-existing-stage-trace-v1",
           "input_sha256":digest(ns.input),
+          "compiler_flags":ns.compiler_flag,
           "results":results,
           "meaning":"approximate diagnosis, not paired speedup"}
     (ns.out/"phases.json").write_text(json.dumps(data,indent=2)+"\n")
