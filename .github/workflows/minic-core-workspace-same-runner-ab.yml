@@ -1,0 +1,286 @@
+name: MiniC Core statement workspace original GNU frozen20 O3 A/B
+
+# Run only on a dedicated diagnostic branch. The certified PR #679 head is
+# untouched. No Linux rebuild, no sudo/apt and no external test substitution.
+on:
+  push:
+    branches:
+      - perf/minic-core-statement-workspace-20261110
+    paths:
+      - .github/workflows/minic-core-workspace-same-runner-ab.yml
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: minic-frozen20-ab-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  same-runner-original-gnu-frozen20:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      BASE_SHA: aa186412c4165eaa7a4ccd1a406b8fc7918e3326
+      CAND_SHA: 24d46a5d3a48c234eb5a26cb990cac1f4dd65231
+      FROZEN20_INDEX_SHA: 8dd5c3aedea0bd5a00bb5549c799d8b5f4b791e4e9d4a76fa9f5dbeb15bac7f1
+      FROZEN20_MANIFEST_SHA: 99ce34bf79eec6129e45e7f98b0702ffb3f299df7dc64a8942e38911122bb185
+    steps:
+      - name: Checkout diagnostic branch (no production source mutation)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Download immutable original GNU Linux 6.6.143 frozen20
+        uses: actions/download-artifact@v4
+        with:
+          repository: yituanxing/minic-toolchain
+          run-id: 42646936416
+          name: minic-original-gnu-linux-6.6.143-rv64-frozen20-21f07bcb8daa6829a5afcff07cc98cdbb34467a8
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/minic-frozen20-ab/corpus
+
+      - name: Validate exact source revisions and frozen input provenance
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          root="$RUNNER_TEMP/minic-frozen20-ab"
+          corpus="$root/corpus"
+          evidence="$root/evidence"
+          mkdir -p "$evidence"
+          git fetch --quiet --no-tags --depth=1 origin "$BASE_SHA" "$CAND_SHA"
+          git -c advice.detachedHead=false worktree add --quiet --detach "$root/src-baseline" "$BASE_SHA"
+          git -c advice.detachedHead=false worktree add --quiet --detach "$root/src-candidate" "$CAND_SHA"
+          test "$(git -C "$root/src-baseline" rev-parse HEAD)" = "$BASE_SHA"
+          test "$(git -C "$root/src-candidate" rev-parse HEAD)" = "$CAND_SHA"
+          # The diagnostic branch may add only this workflow, never altered
+          # compiler sources compared with the exact certified candidate.
+          git diff --exit-code "$CAND_SHA" HEAD -- src include Makefile
+          test -s "$corpus/provenance.txt"
+          test -s "$corpus/index.tsv"
+          test -s "$corpus/SHA256SUMS"
+          test "$(wc -l < "$corpus/index.tsv")" -eq 21
+          test "$(wc -l < "$corpus/SHA256SUMS")" -eq 20
+          test "$(sha256sum "$corpus/index.tsv" | cut -d ' ' -f1)" = "$FROZEN20_INDEX_SHA"
+          test "$(sha256sum "$corpus/SHA256SUMS" | cut -d ' ' -f1)" = "$FROZEN20_MANIFEST_SHA"
+          (cd "$corpus" && sha256sum --status -c SHA256SUMS)
+          python3 - "$corpus" "$evidence" <<'PY'
+          import csv
+          import hashlib
+          import json
+          from pathlib import Path
+          import sys
+
+          corpus, evidence = [Path(p).resolve() for p in sys.argv[1:]]
+          def digest(p):
+              h = hashlib.sha256()
+              with p.open('rb') as f:
+                  for b in iter(lambda: f.read(1024 * 1024), b''):
+                      h.update(b)
+              return h.hexdigest()
+
+          provenance = dict(line.split('=', 1) for line in
+                            (corpus / 'provenance.txt').read_text().splitlines()
+                            if '=' in line)
+          expected = {
+              'schema': 'minic-rv64-gnu-frozen20-export-v1',
+              'export_head': '21f07bcb8daa6829a5afcff07cc98cdbb34467a8',
+              'original_gnu_linux_release': '6.6.143',
+              'original_gnu_qemu_contract': 'full_and_p1_passed',
+              'original_gnu_config_sha256':
+                  'eeb04f304ebfb97a1079c187dc0c2ea3cc61fc50a55aa3cc776237c16ab19bbe',
+              'frozen20_owner_index_sha256':
+                  '8dd5c3aedea0bd5a00bb5549c799d8b5f4b791e4e9d4a76fa9f5dbeb15bac7f1',
+              'frozen20_input_manifest_sha256':
+                  '99ce34bf79eec6129e45e7f98b0702ffb3f299df7dc64a8942e38911122bb185',
+          }
+          if any(provenance.get(k) != v for k, v in expected.items()):
+              raise SystemExit('FROZEN20_PROVENANCE=FAIL')
+          with (corpus / 'index.tsv').open(newline='') as f:
+              rows = list(csv.DictReader(f, delimiter='\t'))
+          if len(rows) != 20 or len({x['owner'] for x in rows}) != 20:
+              raise SystemExit('FROZEN20_OWNER_INDEX=FAIL')
+          selected = []
+          for i, row in enumerate(rows):
+              rel = Path(row['artifact_path'])
+              if rel.is_absolute() or '..' in rel.parts or rel.suffix != '.i':
+                  raise SystemExit('FROZEN20_INPUT_PATH=FAIL')
+              p = (corpus / rel).resolve(strict=True)
+              if not p.is_relative_to(corpus) or not p.is_file() or p.is_symlink():
+                  raise SystemExit('FROZEN20_INPUT_OUTSIDE=FAIL')
+              if digest(p) != row['sha256'] or p.stat().st_size != int(row['bytes']):
+                  raise SystemExit('FROZEN20_INPUT_SHA=FAIL owner=' + row['owner'])
+              selected.append({'n': i, 'owner': row['owner'], 'input': str(p),
+                               'sha256': row['sha256'], 'bytes': int(row['bytes']),
+                               'source_class': row['selection_source']})
+          (evidence / 'selected-owners.json').write_text(json.dumps(selected, indent=2) + '\n')
+          (evidence / 'frozen20-provenance.txt').write_bytes((corpus / 'provenance.txt').read_bytes())
+          (evidence / 'index.tsv').write_bytes((corpus / 'index.tsv').read_bytes())
+          (evidence / 'SHA256SUMS').write_bytes((corpus / 'SHA256SUMS').read_bytes())
+          print('FROZEN20_PROVENANCE=PASS original_gnu_6.6.143=true owners=20')
+          PY
+          {
+            printf 'baseline_sha=%s\ncandidate_sha=%s\n' "$BASE_SHA" "$CAND_SHA"
+            printf 'runner_os=%s\nrunner_arch=%s\n' "$RUNNER_OS" "$RUNNER_ARCH"
+            printf 'build=MODE=release CFLAGS=-O3,-Werror\n'
+            printf 'cpu_affinity=%s\n' "$(python3 -c 'import os; print(sorted(os.sched_getaffinity(0)))')"
+            cc --version | head -n 1
+            git --version
+          } | tee "$evidence/identity.txt"
+
+      - name: Build ONLY the two production MiniC host compiler targets at O3
+        shell: bash
+        timeout-minutes: 12
+        run: |
+          set -Eeuo pipefail
+          root="$RUNNER_TEMP/minic-frozen20-ab"
+          for arm in baseline candidate; do
+            source="$root/src-$arm"
+            build="$root/build-$arm"
+            make -s -C "$source" -j4 MODE=release CFLAGS='-O3 -Werror' \
+              BUILD_DIR="$build" "$build/bin/minic" "$build/bin/minic-cc" \
+              >"$root/evidence/build-$arm.log" 2>&1
+            test -x "$build/bin/minic"
+            test -x "$build/bin/minic-cc"
+            sha256sum "$build/bin/minic" "$build/bin/minic-cc" \
+              | tee "$root/evidence/$arm-binaries.sha256"
+          done
+          if cmp -s "$root/build-baseline/bin/minic-cc" "$root/build-candidate/bin/minic-cc"; then
+            echo 'MINIC_AB=FAIL identical compiler binary' >&2
+            exit 4
+          fi
+          echo 'MINIC_AB_BUILD=PASS exact_sha=true same_runner=true opt_level=O3'
+
+      - name: Run 20 serial original GNU TUs, 4x ABBA and exact assembly SHA
+        shell: bash
+        timeout-minutes: 24
+        env:
+          CORE_FAST_TRACE: '0'
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          import subprocess
+
+          root = Path(os.environ['RUNNER_TEMP']) / 'minic-frozen20-ab'
+          items = json.loads((root / 'evidence/selected-owners.json').read_text())
+          base = root / 'build-baseline/bin/minic'
+          cand = root / 'build-candidate/bin/minic'
+          script = Path('tools/ci/linux-perf-pinned-single-paired-ab-v1.py')
+          affinity = sorted(os.sched_getaffinity(0))
+          # Keep every subprocess on one CPU, same within-runner cohort.
+          os.sched_setaffinity(0, {affinity[0]})
+          for item in items:
+              output = root / 'measure' / f"owner-{item['n']:02d}"
+              cmd = ['python3', str(script), '--input', item['input'],
+                     '--baseline-driver', str(base),
+                     '--candidate-driver', str(cand),
+                     '--repeats', '4', '--out', str(output),
+                     '--minic-arg=-march=rv64i', '--minic-arg=-mabi=lp64',
+                     '--minic-arg=-fshort-wchar',
+                     '--minic-arg=-funsigned-char']
+              result = subprocess.run(cmd, text=True, capture_output=True,
+                                      timeout=420, check=False)
+              (root / 'evidence' / f"owner-{item['n']:02d}.log").write_text(
+                  f"owner={item['owner']}\n" + result.stdout + result.stderr)
+              if result.returncode:
+                  raise SystemExit(f"MINIC_ONE_OWNER_AB=FAIL {item['owner']} rc={result.returncode} "
+                                   + (result.stdout + result.stderr)[-1700:])
+              proof = json.loads((output / 'paired-result.json').read_text())
+              if proof['input_sha256'] != item['sha256'] or not proof['assembly_identical']:
+                  raise SystemExit(f"MINIC_ONE_OWNER_AB=FAIL invalid proof {item['owner']}")
+              (root / 'evidence' / f"owner-{item['n']:02d}.json").write_text(
+                  json.dumps({'owner': item['owner'], 'proof': proof}, indent=2) + '\n')
+              print(f"MINIC_ONE_OWNER_AB=PASS owner={item['owner']} "
+                    f"p50_before_ms={proof['baseline_median_ms']:.3f} "
+                    f"p50_after_ms={proof['candidate_median_ms']:.3f} "
+                    'assembly_identical=true', flush=True)
+          print('MINIC_FROZEN20_AB=MEASURED owners=20 per_arm=4 warmup_per_arm=1')
+          PY
+
+      - name: Aggregate original GNU 20 owner CPU and wall medians
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          from statistics import median
+
+          ev = Path(os.environ['RUNNER_TEMP']) / 'minic-frozen20-ab/evidence'
+          samples = json.loads((ev / 'selected-owners.json').read_text())
+          flags = ['-march=rv64i', '-mabi=lp64', '-fshort-wchar', '-funsigned-char']
+          summary = []
+          expected_binaries = None
+          for item in samples:
+              path = ev / f"owner-{item['n']:02d}.json"
+              data = json.loads(path.read_text())
+              proof = data['proof']
+              if data['owner'] != item['owner'] or proof['input_sha256'] != item['sha256']:
+                  raise SystemExit('MINIC_FROZEN20_AB=FAIL owner identity mismatch')
+              if proof['repeat_per_arm'] != 4 or proof['warmup_per_arm'] != 1:
+                  raise SystemExit('MINIC_FROZEN20_AB=FAIL missing ABBA repeats')
+              if proof['minic_args'] != flags or not proof['assembly_identical']:
+                  raise SystemExit('MINIC_FROZEN20_AB=FAIL ABI/assembly mismatch')
+              binaries = proof['compiler_sha256']
+              if expected_binaries is None:
+                  expected_binaries = binaries
+              elif binaries != expected_binaries:
+                  raise SystemExit('MINIC_FROZEN20_AB=FAIL compiler identity drift')
+              vals = {}
+              for mode in ('before', 'after'):
+                  records = [r for r in proof['records'] if r['mode'] == mode]
+                  if len(records) != 4:
+                      raise SystemExit('MINIC_FROZEN20_AB=FAIL missing CPU samples')
+                  vals[mode] = {
+                      'wall_ms': median(r['wall_ms'] for r in records),
+                      'user_ms': median(r['user_ms'] for r in records),
+                      'sys_ms': median(r['sys_ms'] for r in records),
+                      'cpu_ms': median(r['user_ms'] + r['sys_ms'] for r in records),
+                  }
+              summary.append({'owner': item['owner'], 'group': item['source_class'],
+                              'input_sha256': item['sha256'], 'before': vals['before'],
+                              'after': vals['after'],
+                              'cpu_saved_ms': vals['before']['cpu_ms'] - vals['after']['cpu_ms']})
+          total = {arm: {field: round(sum(r[arm][field] for r in summary), 3)
+                         for field in ('wall_ms', 'user_ms', 'sys_ms', 'cpu_ms')}
+                   for arm in ('before', 'after')}
+          result = {'schema': 'minic-frozen20-original-gnu-same-runner-o3-ab-v1',
+                    'baseline_commit': os.environ['BASE_SHA'],
+                    'candidate_commit': os.environ['CAND_SHA'],
+                    'linux_release': '6.6.143', 'frozen20_owners': len(summary),
+                    'repeats_per_arm': 4, 'warmups_per_arm': 1,
+                    'abi_flags': flags,
+                    'cpu_scope': 'RUSAGE_CHILDREN user+sys for minic driver and minic-cc',
+                    'statistics': 'sum of per-owner medians; single pinned runner core',
+                    'assembly_identical_all': True,
+                    'compiler_sha256': expected_binaries,
+                    'totals': total,
+                    'cpu_speedup': round(total['before']['cpu_ms'] / total['after']['cpu_ms'], 5),
+                    'wall_speedup': round(total['before']['wall_ms'] / total['after']['wall_ms'], 5),
+                    'hot_owner_before_cpu': sorted(summary, key=lambda x: x['before']['cpu_ms'], reverse=True)[:10],
+                    'largest_cpu_savings': sorted(summary, key=lambda x: x['cpu_saved_ms'], reverse=True)[:10],
+                    'largest_cpu_regressions': sorted(summary, key=lambda x: x['cpu_saved_ms'])[:10],
+                    'all_owners': summary}
+          (ev / 'aggregate.json').write_text(json.dumps(result, indent=2) + '\n')
+          print('MINIC_FROZEN20_AB=PASS owners=20 assembly_exact=20/20 repeats=4 '
+                f"base_cpu_ms={total['before']['cpu_ms']:.3f} "
+                f"cand_cpu_ms={total['after']['cpu_ms']:.3f} "
+                f"cpu_speedup={result['cpu_speedup']:.5f} "
+                f"wall_speedup={result['wall_speedup']:.5f}")
+          for x in result['largest_cpu_savings'][:5]:
+              print(f"MINIC_FROZEN20_GAIN owner={x['owner']} cpu_saved_ms={x['cpu_saved_ms']:.3f}")
+          PY
+
+      - name: Upload immutable A/B evidence even if an owner fails
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: minic-core-workspace-frozen20-o3-same-runner-ab-${{ github.run_id }}
+          path: ${{ runner.temp }}/minic-frozen20-ab/evidence/
+          retention-days: 30
+          if-no-files-found: warn
