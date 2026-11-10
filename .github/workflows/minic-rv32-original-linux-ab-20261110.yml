@@ -94,7 +94,18 @@ jobs:
             build/rv32i-linux-entry/out
             build/rv32i-linux-entry/provenance
           key: ${{ steps.golden.outputs.key }}
-          fail-on-cache-miss: true
+          fail-on-cache-miss: false
+      - name: Rebuild exact unmodified original GNU Kbuild golden on isolated cache miss
+        if: steps.golden_cache.outputs.cache-hit != 'true'
+        shell: bash
+        timeout-minutes: 35
+        run: |
+          set -Eeuo pipefail
+          RV32I_LINUX_MODE=golden \
+          RV32I_LINUX_SOURCE="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0/linux-6.6.143" \
+          RV32I_LINUX_WORK="$GITHUB_WORKSPACE/build/rv32i-linux-entry" \
+            bash tests/external/linux/rv32i_kbuild_entry.sh
+          echo 'RV32_AB_GNU_GOLDEN_REBUILT=PASS only_original_GNU_C=true no_MiniC_objects=true'
       - name: Authenticate all original golden C objects and generated headers
         shell: bash
         timeout-minutes: 6
@@ -107,6 +118,13 @@ jobs:
           grep -Fxq 'abi=ilp32' "$work/provenance/gcc-baseline.txt"
           (cd "$work/out" && sha256sum --status -c ../provenance/gcc-objects.sha256)
           echo 'RV32_AB_GNU_GOLDEN=VERIFIED original_C=1741 elf32=true'
+      - uses: actions/cache/save@v4
+        if: steps.golden_cache.outputs.cache-hit != 'true'
+        with:
+          path: |
+            build/rv32i-linux-entry/out
+            build/rv32i-linux-entry/provenance
+          key: ${{ steps.golden.outputs.key }}
 
       - name: Freeze twenty genuine GNU Kbuild C owners and exact GNU -E inputs
         shell: bash
