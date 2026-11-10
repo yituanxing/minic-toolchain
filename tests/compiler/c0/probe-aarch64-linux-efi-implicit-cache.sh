@@ -9,11 +9,13 @@ src="$root/tests/compiler/c0/aarch64_linux_efi_implicit_cache.c"
 
 "$host" -E -P -std=gnu11 "$src" -o "$work/efi.i"
 "$mini" --target=aarch64-linux -S "$work/efi.i" -o "$work/efi.s"
-test "$(grep -c '^  dc civac, x9$' "$work/efi.s")" -eq 2
-test "$(grep -c '^  dc cvau, x9$' "$work/efi.s")" -eq 1
-grep -Fq '  ic ialluis' "$work/efi.s"
-grep -Fq '  dsb ish' "$work/efi.s"
-grep -Fq '  isb' "$work/efi.s"
+# Source ASM templates retain assembler-valid text, but target emitters may
+# normalize their indentation. Verify opcode and operands, not whitespace.
+test "$(grep -Ec '^[[:space:]]*dc civac, x9$' "$work/efi.s")" -eq 2
+test "$(grep -Ec '^[[:space:]]*dc cvau, x9$' "$work/efi.s")" -eq 1
+grep -Eq '^[[:space:]]*ic ialluis$' "$work/efi.s"
+grep -Eq '^[[:space:]]*dsb ish$' "$work/efi.s"
+grep -Eq '^[[:space:]]*isb$' "$work/efi.s"
 
 # Alternate DC/IC cache opcodes retain their original stricter contract;
 # only EFI DCTYPE civac/cvau is admitted without an explicit memory clobber.
