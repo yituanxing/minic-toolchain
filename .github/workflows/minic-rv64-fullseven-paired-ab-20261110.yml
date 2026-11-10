@@ -9,6 +9,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
   prepare-gnu-golden:
@@ -18,7 +19,35 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Reuse already QEMU-certified 2064 GNU golden from exact prior run
+        id: archive-restore
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          repository: yituanxing/minic-toolchain
+          run-id: 42832477752
+          name: rv64-original-gnu-frozen-full-fixtures
+          github-token: ${{ github.token }}
+          path: build/rv64-full-ab/fixtures
+
+      - name: SHA-verify and restore immutable full GNU source and golden
+        if: steps.archive-restore.outcome == 'success'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          fixture=build/rv64-full-ab/fixtures
+          (
+            cd "$fixture"
+            sha256sum --status --check SHA256SUMS
+          )
+          tar -xzf "$fixture/gnu-golden.tar.gz" -C "$GITHUB_WORKSPACE"
+          tar -xzf "$fixture/linux-source.tar.gz" -C "$GITHUB_WORKSPACE"
+          grep -Fxq 'qemu_contract=full_and_p1_passed' build/linux-runtime-gcc/provenance/gcc-baseline.txt
+          echo 'RV64_FULL_AB_GNU_REUSE=PASS signed_prior_run=42832477752 owner_universe=2064 sha256=true'
+
       - name: Install exact historical GNU, Linux and QEMU requirements
+        if: steps.archive-restore.outcome != 'success'
         shell: bash
         timeout-minutes: 15
         run: |
@@ -39,6 +68,7 @@ jobs:
           test "$ld" = 0703113036a30806
 
       - name: Restore exact original 6.6.143 source if visible in this PR scope
+        if: steps.archive-restore.outcome != 'success'
         id: linux-source-cache
         uses: actions/cache/restore@v4
         with:
@@ -46,7 +76,7 @@ jobs:
           key: linux-source-6.6.143-dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932-v1
 
       - name: Restore source only by SHA-pinned kernel.org archive on cache miss
-        if: steps.linux-source-cache.outputs.cache-hit != 'true'
+        if: steps.archive-restore.outcome != 'success' && steps.linux-source-cache.outputs.cache-hit != 'true'
         shell: bash
         timeout-minutes: 15
         run: |
@@ -61,6 +91,7 @@ jobs:
           test -s "$root/linux-6.6.143/Makefile"
 
       - name: Restore exact original GNU/QEMU golden if visible in this PR scope
+        if: steps.archive-restore.outcome != 'success'
         id: gnu-golden-cache
         uses: actions/cache/restore@v4
         with:
@@ -70,7 +101,7 @@ jobs:
           key: linux-gnu-golden-v1-6.6.143-eeb04f304ebfb97a1079c187dc0c2ea3cc61fc50a55aa3cc776237c16ab19bbe-0c2a199ea3ae14d3-0703113036a30806
 
       - name: Rebuild original GNU golden and certify QEMU P0/P1 once on cache miss
-        if: steps.gnu-golden-cache.outputs.cache-hit != 'true'
+        if: steps.archive-restore.outcome != 'success' && steps.gnu-golden-cache.outputs.cache-hit != 'true'
         shell: bash
         timeout-minutes: 75
         run: |
@@ -94,11 +125,13 @@ jobs:
             sha256sum --status --check "$(realpath ../provenance/gcc-objects.sha256)"
           )
           mkdir -p build/rv64-full-ab/fixtures
-          tar -czf build/rv64-full-ab/fixtures/gnu-golden.tar.gz \
-            -C "$GITHUB_WORKSPACE" \
-            build/linux-runtime-gcc/out build/linux-runtime-gcc/provenance
-          tar -czf build/rv64-full-ab/fixtures/linux-source.tar.gz \
-            -C "$GITHUB_WORKSPACE" build/linux-expanded-kbuild-v0/linux-6.6.143
+          if [[ '${{ steps.archive-restore.outcome }}' != success ]]; then
+            tar -czf build/rv64-full-ab/fixtures/gnu-golden.tar.gz \
+              -C "$GITHUB_WORKSPACE" \
+              build/linux-runtime-gcc/out build/linux-runtime-gcc/provenance
+            tar -czf build/rv64-full-ab/fixtures/linux-source.tar.gz \
+              -C "$GITHUB_WORKSPACE" build/linux-expanded-kbuild-v0/linux-6.6.143
+          fi
           (
             cd build/rv64-full-ab/fixtures
             sha256sum gnu-golden.tar.gz linux-source.tar.gz > SHA256SUMS
@@ -240,6 +273,7 @@ jobs:
           export KBUILD_BUILD_USER=minic KBUILD_BUILD_HOST=minic-ci
           export KBUILD_BUILD_TIMESTAMP='Thu Jan  1 00:00:00 UTC 1970'
           export COHORT_ACTION=compile COHORT_ALLOW_SHARD=1
+          export COHORT_PROFILE_STAGES=0
           export COHORT_GNU_PREFLIGHT_ALLOW_SEVEN_SHARD_VOLATILE=1
           export COHORT_PERF_2064_AB=1
           export COHORT_PERF_2064_BASELINE="$RUNNER_TEMP/minic-before-build/bin/minic"
