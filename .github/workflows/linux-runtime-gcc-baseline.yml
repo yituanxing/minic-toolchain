@@ -1647,13 +1647,18 @@ jobs:
           # The one-shot campaign must compile CURRENT HEAD's compiler C owners;
           # an older cached compiler build may not be reused across commits.
           current_head_key=
-          if [[ "${{ needs.rv32-current-campaign-gate.outputs.run }}" == true ]]; then
+          if [[ "${{ needs.rv32-current-campaign-gate.outputs.run }}" == true || \
+                "${{ github.event_name == 'pull_request' && contains(github.event.pull_request.title, '[minic-full]') }}" == true ]]; then
             current_head_key="-head-$MINIC_EXPECTED_HEAD_SHA"
           fi
           echo "key=gnu-minic-shard-rv32i-v1-${{ steps.rv32_gold_key.outputs.key }}-$profile-$subset-$gcc-$as$current_head_key" >>"$GITHUB_OUTPUT"
 
       - name: Restore the exact RV32 MiniC shard candidate
-        if: (contains(github.event.head_commit.message, '[linux-rv32i-kbuild]') || (github.event_name == 'pull_request' && contains(github.event.pull_request.title, '[minic-full]')))
+        # Full PR recertification must freshly recompile all current-source C
+        # owners even if a prior candidate cache has an identical profile key.
+        if: >-
+          contains(github.event.head_commit.message, '[linux-rv32i-kbuild]') &&
+          !(github.event_name == 'pull_request' && contains(github.event.pull_request.title, '[minic-full]'))
         id: rv32_candidate_cache
         uses: actions/cache/restore@v4
         with:
@@ -4337,18 +4342,25 @@ jobs:
       # Current-HEAD RV32 is an independent opt-in: seed the SAME SHA-pinned
       # source key on this branch before releasing its seven workers.
       - uses: ./.github/actions/linux-runtime-restore-fixture
-        if: needs.rv32-current-campaign-gate.outputs.run != 'true'
+        if: >-
+          needs.rv32-current-campaign-gate.outputs.run != 'true' &&
+          !(github.event_name == 'pull_request' && contains(github.event.pull_request.title, '[minic-full]'))
         with:
           fixture: source
       - name: Restore pinned RV32 source when already available on this branch
-        if: needs.rv32-current-campaign-gate.outputs.run == 'true'
+        if: >-
+          needs.rv32-current-campaign-gate.outputs.run == 'true' ||
+          (github.event_name == 'pull_request' && contains(github.event.pull_request.title, '[minic-full]'))
         id: rv32_current_source_cache
         uses: actions/cache/restore@v4
         with:
           path: build/linux-expanded-kbuild-v0/linux-6.6.143
           key: linux-source-6.6.143-dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932-v1
       - name: Reconstitute SHA-pinned original RV32 source after branch cache miss
-        if: needs.rv32-current-campaign-gate.outputs.run == 'true' && steps.rv32_current_source_cache.outputs.cache-hit != 'true'
+        if: >-
+          (needs.rv32-current-campaign-gate.outputs.run == 'true' ||
+           (github.event_name == 'pull_request' && contains(github.event.pull_request.title, '[minic-full]'))) &&
+          steps.rv32_current_source_cache.outputs.cache-hit != 'true'
         timeout-minutes: 12
         shell: bash
         run: |
@@ -4369,7 +4381,9 @@ jobs:
           test -s "$root/linux-6.6.143/Makefile"
           echo 'RV32I_ORIGINAL_SOURCE=PASS sha256=dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932 archive=upstream_verified'
       - name: Verify source identity before any RV32 GNU configuration
-        if: needs.rv32-current-campaign-gate.outputs.run == 'true'
+        if: >-
+          needs.rv32-current-campaign-gate.outputs.run == 'true' ||
+          (github.event_name == 'pull_request' && contains(github.event.pull_request.title, '[minic-full]'))
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -4380,7 +4394,10 @@ jobs:
           grep -Eq '^SUBLEVEL[[:space:]]*=[[:space:]]*143$' "$source/Makefile"
           echo "RV32I_ORIGINAL_SOURCE=VERIFIED cache_hit=${{ steps.rv32_current_source_cache.outputs.cache-hit }} version=6.6.143"
       - name: Save verified RV32 original source for seven dependent workers
-        if: needs.rv32-current-campaign-gate.outputs.run == 'true' && steps.rv32_current_source_cache.outputs.cache-hit != 'true'
+        if: >-
+          (needs.rv32-current-campaign-gate.outputs.run == 'true' ||
+           (github.event_name == 'pull_request' && contains(github.event.pull_request.title, '[minic-full]'))) &&
+          steps.rv32_current_source_cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: build/linux-expanded-kbuild-v0/linux-6.6.143
