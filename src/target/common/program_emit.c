@@ -61,6 +61,11 @@ typedef struct MinicProgramAsmUse {
     size_t length;
 } MinicProgramAsmUse;
 
+typedef struct MinicProgramAsmToken {
+    const char *text; /* Borrowed immutable Core ASM storage, not NUL-terminated. */
+    size_t length;
+} MinicProgramAsmToken;
+
 typedef struct MinicProgramSymbolUses {
     const char **names; /* borrowed immutable Core/source symbol names */
     size_t count;
@@ -68,7 +73,73 @@ typedef struct MinicProgramSymbolUses {
     MinicProgramAsmUse *asm_uses;
     size_t asm_count;
     size_t asm_capacity;
+    MinicProgramAsmToken *asm_tokens;
+    size_t asm_token_count;
 } MinicProgramSymbolUses;
+
+static bool minic_program_asm_token_byte(unsigned char c) {
+    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+           (c >= '0' && c <= '9') || c == '_' || c == '.' || c == '$';
+}
+
+static int minic_program_asm_token_compare(const void *left, const void *right) {
+    const MinicProgramAsmToken *a = left, *b = right;
+    if (a->length < b->length) return -1;
+    if (a->length > b->length) return 1;
+    return memcmp(a->text, b->text, a->length);
+}
+
+/* Raw Core ASM has no typed operand references, so conservatively retain
+ * every whole assembler token.  Tokenize once per Module instead of rescanning
+ * every live ASM template for every undefined function/object declaration.
+ * A rare symbol outside the portable token alphabet still takes the original
+ * exact-boundary slow path, preserving externally synthesized Module names. */
+static bool minic_program_asm_token_index_build(MinicProgramSymbolUses *uses) {
+    size_t count = 0U, asm_index;
+    MinicProgramAsmToken *tokens;
+    if (uses == NULL || uses->asm_tokens != NULL) return false;
+    for (asm_index = 0U; asm_index < uses->asm_count; ++asm_index) {
+        const MinicProgramAsmUse *source = &uses->asm_uses[asm_index];
+        size_t cursor = 0U;
+        while (cursor < source->length) {
+            if (!minic_program_asm_token_byte((unsigned char)source->text[cursor])) {
+                ++cursor;
+                continue;
+            }
+            if (count == SIZE_MAX / sizeof(*tokens)) return false;
+            ++count;
+            do {
+                ++cursor;
+            } while (cursor < source->length &&
+                     minic_program_asm_token_byte((unsigned char)source->text[cursor]));
+        }
+    }
+    if (count == 0U) return true;
+    tokens = malloc(count * sizeof(*tokens));
+    if (tokens == NULL) return false;
+    count = 0U;
+    for (asm_index = 0U; asm_index < uses->asm_count; ++asm_index) {
+        const MinicProgramAsmUse *source = &uses->asm_uses[asm_index];
+        size_t cursor = 0U;
+        while (cursor < source->length) {
+            size_t begin;
+            if (!minic_program_asm_token_byte((unsigned char)source->text[cursor])) {
+                ++cursor;
+                continue;
+            }
+            begin = cursor++;
+            while (cursor < source->length &&
+                   minic_program_asm_token_byte((unsigned char)source->text[cursor]))
+                ++cursor;
+            tokens[count].text = source->text + begin;
+            tokens[count++].length = cursor - begin;
+        }
+    }
+    qsort(tokens, count, sizeof(*tokens), minic_program_asm_token_compare);
+    uses->asm_tokens = tokens;
+    uses->asm_token_count = count;
+    return true;
+}
 
 static bool minic_program_symbol_use_add(MinicProgramSymbolUses *uses,
                                                  const char *name) {
@@ -124,7 +195,14 @@ static bool minic_program_symbol_use_add_asm(MinicProgramSymbolUses *uses,
 static bool minic_program_symbol_used_in_live_raw_core_asm(
     const MinicProgramSymbolUses *uses, const char *name) {
     size_t index;
-    if (uses == NULL) return false;
+    if (uses == NULL || name == NULL) return false;
+    if (minic_core_assembler_symbol_lexically_safe(name)) {
+        const MinicProgramAsmToken needle = { name, strlen(name) };
+        return uses->asm_token_count != 0U &&
+            bsearch(&needle, uses->asm_tokens, uses->asm_token_count,
+                    sizeof(*uses->asm_tokens),
+                    minic_program_asm_token_compare) != NULL;
+    }
     /* Only Core ASM instructions in blocks the target actually emits count.
      * A dead static inline body with a hidden declaration is not a use.
      * Raw text has no typed operand identity; all provable operand references
@@ -273,7 +351,7 @@ static bool minic_program_emit_collect_symbol_uses_module(
     if (uses->count != 0U)
         qsort(uses->names, uses->count, sizeof(*uses->names),
               minic_program_symbol_name_compare);
-    return true;
+    return minic_program_asm_token_index_build(uses);
 }
 
 /* Undefined ELF bindings belong to real references, not mere C declarations.
@@ -292,6 +370,7 @@ static bool minic_program_emit_undefined_symbol_visibility_module(
             &uses, functions, function_count, config, module)) {
         free(uses.names);
         free(uses.asm_uses);
+        free(uses.asm_tokens);
         return false;
     }
     {
@@ -352,6 +431,7 @@ static bool minic_program_emit_undefined_symbol_visibility_module(
     }
     free(uses.names);
     free(uses.asm_uses);
+    free(uses.asm_tokens);
     return ok;
 }
 
