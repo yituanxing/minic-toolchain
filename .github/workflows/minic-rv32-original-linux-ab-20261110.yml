@@ -1,0 +1,299 @@
+name: MiniC original Linux RV32I same-runner paired performance
+
+on:
+  push:
+    branches: [verify/minic-rv32-linux-perf-ab-20261110]
+    paths: [.github/workflows/minic-rv32-original-linux-ab-20261110.yml]
+  pull_request:
+    paths: [.github/workflows/minic-rv32-original-linux-ab-20261110.yml]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: minic-rv32-original-linux-ab-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  original-rv32-linux-ab:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 65
+    env:
+      BASE_SHA: e13fc7c77e60cf80f6ad699035998b5aada3a236
+      CAND_SHA: aa186412c4165eaa7a4ccd1a406b8fc7918e3326
+      RV32I_GNU_GOLDEN_CONFIG_SHA256: 4c6c19f79741a8a31ec52ad57b1a6bc56b81dd6996cbf5e1bdc63f587d85244c
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install original GNU RV32 kernel tools
+        shell: bash
+        timeout-minutes: 12
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 update -qq
+          sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 install -y --no-install-recommends \
+            gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu bc bison flex \
+            libssl-dev libelf-dev make python3 file xz-utils
+          riscv64-linux-gnu-gcc --version | head -1
+
+      - name: Restore exact upstream Linux 6.6.143 source
+        id: source_cache
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-expanded-kbuild-v0/linux-6.6.143
+          key: linux-source-6.6.143-dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932-v1
+      - name: Reconstitute original SHA-pinned source if source cache expired
+        if: steps.source_cache.outputs.cache-hit != 'true'
+        shell: bash
+        timeout-minutes: 10
+        run: |
+          set -Eeuo pipefail
+          root="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0"
+          mkdir -p "$root"
+          test ! -e "$root/linux-6.6.143"
+          archive="$RUNNER_TEMP/linux-6.6.143.tar.xz"
+          curl --proto '=https' --tlsv1.2 -fLSs --retry 3 --connect-timeout 20 --max-time 300 \
+            https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.6.143.tar.xz -o "$archive"
+          printf '%s  %s\n' dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932 "$archive" | sha256sum -c -
+          tar -xJf "$archive" -C "$root"
+          test -s "$root/linux-6.6.143/Makefile"
+      - name: Verify GNU source identity before Kconfig
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          root=build/linux-expanded-kbuild-v0/linux-6.6.143
+          grep -Eq '^VERSION[[:space:]]*=[[:space:]]*6$' "$root/Makefile"
+          grep -Eq '^PATCHLEVEL[[:space:]]*=[[:space:]]*6$' "$root/Makefile"
+          grep -Eq '^SUBLEVEL[[:space:]]*=[[:space:]]*143$' "$root/Makefile"
+          echo 'RV32_AB_ORIGINAL_LINUX_SOURCE=VERIFIED 6.6.143'
+      - uses: actions/cache/save@v4
+        if: steps.source_cache.outputs.cache-hit != 'true'
+        with:
+          path: build/linux-expanded-kbuild-v0/linux-6.6.143
+          key: linux-source-6.6.143-dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932-v1
+
+      - name: Derive historical original RV32 GNU Kconfig and cache identity
+        id: golden
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          RV32I_LINUX_MODE=config \
+          RV32I_LINUX_SOURCE="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0/linux-6.6.143" \
+          RV32I_LINUX_WORK="$GITHUB_WORKSPACE/build/rv32i-linux-entry" \
+            bash tests/external/linux/rv32i_kbuild_entry.sh
+          cfg=$(sha256sum build/rv32i-linux-entry/out/.config | cut -d' ' -f1)
+          test "$cfg" = "$RV32I_GNU_GOLDEN_CONFIG_SHA256"
+          gcc=$(sha256sum "$(command -v riscv64-linux-gnu-gcc)" | cut -c1-16)
+          ld=$(sha256sum "$(command -v riscv64-linux-gnu-ld)" | cut -c1-16)
+          as=$(sha256sum "$(command -v riscv64-linux-gnu-as)" | cut -c1-16)
+          echo "key=linux-gnu-golden-rv32i-v1-6.6.143-$cfg-$gcc-$ld-$as" >> "$GITHUB_OUTPUT"
+      - name: Restore historically accepted original RV32 ELF32 golden
+        id: golden_cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            build/rv32i-linux-entry/out
+            build/rv32i-linux-entry/provenance
+          key: ${{ steps.golden.outputs.key }}
+          fail-on-cache-miss: false
+      - name: Rebuild exact unmodified original GNU Kbuild golden on isolated cache miss
+        if: steps.golden_cache.outputs.cache-hit != 'true'
+        shell: bash
+        timeout-minutes: 35
+        run: |
+          set -Eeuo pipefail
+          RV32I_LINUX_MODE=golden \
+          RV32I_LINUX_SOURCE="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0/linux-6.6.143" \
+          RV32I_LINUX_WORK="$GITHUB_WORKSPACE/build/rv32i-linux-entry" \
+            bash tests/external/linux/rv32i_kbuild_entry.sh
+          echo 'RV32_AB_GNU_GOLDEN_REBUILT=PASS only_original_GNU_C=true no_MiniC_objects=true'
+      - name: Authenticate all original golden C objects and generated headers
+        shell: bash
+        timeout-minutes: 6
+        run: |
+          set -Eeuo pipefail
+          work=build/rv32i-linux-entry
+          test "$(sed '/^#/d;/^$/d' "$work/provenance/full-c-objects.txt" | wc -l)" -eq 1741
+          grep -Fxq 'elf_class=ELF32' "$work/provenance/gcc-baseline.txt"
+          grep -Fxq 'isa=rv32i' "$work/provenance/gcc-baseline.txt"
+          grep -Fxq 'abi=ilp32' "$work/provenance/gcc-baseline.txt"
+          (cd "$work/out" && sha256sum --status -c ../provenance/gcc-objects.sha256)
+          echo 'RV32_AB_GNU_GOLDEN=VERIFIED original_C=1741 elf32=true'
+      - uses: actions/cache/save@v4
+        if: steps.golden_cache.outputs.cache-hit != 'true'
+        with:
+          path: |
+            build/rv32i-linux-entry/out
+            build/rv32i-linux-entry/provenance
+          key: ${{ steps.golden.outputs.key }}
+
+      - name: Freeze twenty genuine GNU Kbuild C owners and exact GNU -E inputs
+        shell: bash
+        timeout-minutes: 10
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          import hashlib, importlib.util, json, os, subprocess, sys
+          from pathlib import Path
+
+          root = Path(os.environ['GITHUB_WORKSPACE']).resolve()
+          source = (root / 'build/linux-expanded-kbuild-v0/linux-6.6.143').resolve()
+          golden = (root / 'build/rv32i-linux-entry/out').resolve()
+          prov = root / 'build/rv32i-linux-entry/provenance'
+          dest = Path(os.environ['RUNNER_TEMP']) / 'minic-rv32-linux-ab'
+          (dest / 'inputs').mkdir(parents=True, exist_ok=True)
+          (dest / 'evidence').mkdir(exist_ok=True)
+          spec = importlib.util.spec_from_file_location('regen', root / 'tools/ci/linux-runtime-kbuild-regeneration-guard-v1.py')
+          regen = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(regen)
+          all_owners = [x.strip() for x in (prov / 'full-c-objects.txt').read_text().splitlines()
+                        if x.strip() and not x.startswith('#')]
+          assert len(all_owners) == 1741 and len(set(all_owners)) == 1741
+          # Predeclared, deterministic stratified sampling across the original Kbuild owner order.
+          indexes = [(i * (len(all_owners) - 1)) // 19 for i in range(20)]
+          assert len(set(indexes)) == 20
+          language = {'-fshort-wchar', '-fno-short-wchar', '-fsigned-char', '-funsigned-char',
+                      '-fno-signed-char', '-fno-unsigned-char', '-ffunction-sections',
+                      '-fno-function-sections', '-fPIE', '-fpie', '-fPIC', '-fpic',
+                      '-fno-pie', '-fno-PIE', '-fno-pic', '-fno-PIC'}
+          def sha(path):
+              h = hashlib.sha256()
+              with path.open('rb') as f:
+                  for b in iter(lambda: f.read(1024 * 1024), b''):
+                      h.update(b)
+              return h.hexdigest()
+          rows = []
+          for ordinal, index in enumerate(indexes):
+              owner = all_owners[index]
+              args = regen.pinned_kbuild_cc_args(golden, owner)
+              sources = [a for i, a in enumerate(args) if a.endswith('.c') and
+                         (i == 0 or args[i-1] not in ('-include', '-imacros'))]
+              assert len(sources) == 1
+              original = (golden / sources[0]).resolve(strict=True)
+              assert original.is_relative_to(source) or original.is_relative_to(golden)
+              pp = []
+              i = 0
+              while i < len(args):
+                  v = args[i]
+                  if v in ('-c', '-E', '-S', sources[0]):
+                      i += 1
+                  elif v == '-o':
+                      i += 2
+                  else:
+                      pp.append(v)
+                      i += 1
+              path = dest / 'inputs' / f'owner-{ordinal:02d}.i'
+              subprocess.run(['riscv64-linux-gnu-gcc', *pp, '-E', '-P', '-MT', owner,
+                              sources[0], '-o', str(path)], cwd=golden,
+                             check=True, capture_output=True, text=True, timeout=180)
+              assert path.is_file() and path.stat().st_size > 0
+              cmdpath = golden / Path(owner).parent / ('.' + Path(owner).name + '.cmd')
+              flags = (['--target=riscv32-linux', '-march=rv32i', '-mabi=ilp32'] +
+                       [a for a in args if a in language])
+              rows.append({'ordinal': ordinal, 'index': index, 'owner': owner,
+                           'source_sha256': sha(original), 'cmd_sha256': sha(cmdpath),
+                           'input': str(path), 'input_sha256': sha(path),
+                           'input_bytes': path.stat().st_size, 'minic_flags': flags})
+          (dest / 'evidence/selected-original-linux.json').write_text(json.dumps(rows, indent=2) + '\n')
+          print('RV32_AB_ORIGINAL_GNU_E=PASS source=Linux6.6.143 owners=20 input_shas=20')
+          PY
+
+      - name: Build immutable baseline and candidate host compilers at O3
+        shell: bash
+        timeout-minutes: 12
+        run: |
+          set -Eeuo pipefail
+          work="$RUNNER_TEMP/minic-rv32-linux-ab"
+          git fetch --quiet --no-tags --depth=1 origin "$BASE_SHA" "$CAND_SHA"
+          git -c advice.detachedHead=false worktree add --detach "$work/src-old" "$BASE_SHA"
+          git -c advice.detachedHead=false worktree add --detach "$work/src-new" "$CAND_SHA"
+          for arm in old new; do
+            make -s -C "$work/src-$arm" -j4 MODE=release CFLAGS='-O3 -Werror' \
+              BUILD_DIR="$work/build-$arm" "$work/build-$arm/bin/minic" "$work/build-$arm/bin/minic-cc" \
+              >"$work/evidence/build-$arm.log" 2>&1
+            test -x "$work/build-$arm/bin/minic"
+            sha256sum "$work/build-$arm/bin/minic-cc" | tee "$work/evidence/compiler-$arm.sha256"
+          done
+          ! cmp -s "$work/build-old/bin/minic-cc" "$work/build-new/bin/minic-cc"
+          git diff --exit-code "$CAND_SHA" HEAD -- src include Makefile tools tests
+          echo 'RV32_AB_COMPILERS=VERIFIED baseline_and_current=distinct'
+
+      - name: Measure 20 original GNU owners on one pinned CPU with four ABBA rounds
+        shell: bash
+        timeout-minutes: 24
+        run: |
+          set -Eeuo pipefail
+          CORE_FAST_TRACE=0 python3 - <<'PY'
+          import json, os, subprocess
+          from pathlib import Path
+          root = Path(os.environ['RUNNER_TEMP']) / 'minic-rv32-linux-ab'
+          entries = json.loads((root / 'evidence/selected-original-linux.json').read_text())
+          affinity = sorted(os.sched_getaffinity(0))
+          os.sched_setaffinity(0, {affinity[0]})
+          for row in entries:
+              out = root / 'measure' / f"owner-{row['ordinal']:02d}"
+              cmd = (['python3', 'tools/ci/linux-perf-pinned-single-paired-ab-v1.py',
+                     '--input', row['input'], '--baseline-driver', str(root / 'build-old/bin/minic'),
+                     '--candidate-driver', str(root / 'build-new/bin/minic'),
+                     '--repeats', '4', '--out', str(out)] +
+                     ['--minic-arg=' + x for x in row['minic_flags']])
+              p = subprocess.run(cmd, text=True, capture_output=True, timeout=420)
+              (root / 'evidence' / f"owner-{row['ordinal']:02d}.log").write_text(p.stdout + p.stderr)
+              if p.returncode:
+                  raise SystemExit(f"RV32_AB=FAIL owner={row['owner']} rc={p.returncode} " + (p.stdout+p.stderr)[-1200:])
+              proof = json.loads((out / 'paired-result.json').read_text())
+              if proof['input_sha256'] != row['input_sha256'] or not proof['assembly_identical']:
+                  raise SystemExit(f"RV32_AB=FAIL wrong_input_or_assembly owner={row['owner']}")
+              print(f"RV32_AB_OWNER=PASS owner={row['owner']} wall_speedup={proof['candidate_speedup']}", flush=True)
+          print('RV32_AB_SAMPLES=PASS owners=20 warmup=1 repeats=4')
+          PY
+
+      - name: Aggregate same-runner CPU, wall and exact-assembly evidence
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          import json, os, statistics
+          from pathlib import Path
+          root = Path(os.environ['RUNNER_TEMP']) / 'minic-rv32-linux-ab'
+          rows = json.loads((root / 'evidence/selected-original-linux.json').read_text())
+          results = []
+          for row in rows:
+              proof = json.loads((root / 'measure' / f"owner-{row['ordinal']:02d}" / 'paired-result.json').read_text())
+              if proof['input_sha256'] != row['input_sha256'] or proof['minic_args'] != row['minic_flags'] or not proof['assembly_identical'] or proof['repeat_per_arm'] != 4:
+                  raise SystemExit('RV32_AB_AGGREGATE=FAIL source_or_ABI_drift')
+              metrics = {}
+              for arm in ('before', 'after'):
+                  samples = [x for x in proof['records'] if x['mode'] == arm]
+                  assert len(samples) == 4
+                  metrics[arm] = {key: statistics.median([x[key] for x in samples])
+                                  for key in ('wall_ms', 'user_ms', 'sys_ms')}
+                  metrics[arm]['cpu_ms'] = statistics.median([x['user_ms'] + x['sys_ms'] for x in samples])
+              results.append({'owner': row['owner'], 'input_sha256': row['input_sha256'],
+                              'minic_args': row['minic_flags'], 'before': metrics['before'],
+                              'after': metrics['after'], 'assembly_sha256': proof['assembly_sha256']})
+          sums = {arm: {name: sum(x[arm][name] for x in results) for name in ('wall_ms', 'cpu_ms')}
+                  for arm in ('before', 'after')}
+          cpu_speedup = sums['before']['cpu_ms'] / sums['after']['cpu_ms']
+          wall_speedup = sums['before']['wall_ms'] / sums['after']['wall_ms']
+          report = {'scope': 'RV32I original GNU Linux 6.6.143, 20 deterministic original C owners',
+                    'baseline_sha': os.environ['BASE_SHA'], 'candidate_sha': os.environ['CAND_SHA'],
+                    'repeats': 4, 'warmup_per_arm': 1, 'assembly_equal': '20/20',
+                    'sum_of_per_owner_medians': sums, 'cpu_speedup': cpu_speedup,
+                    'wall_speedup': wall_speedup, 'owners': results}
+          (root / 'evidence/summary.json').write_text(json.dumps(report, indent=2) + '\n')
+          line = (f"RV32_AB_FINAL=PASS owners=20 cpu_old_ms={sums['before']['cpu_ms']:.3f} "
+                  f"cpu_new_ms={sums['after']['cpu_ms']:.3f} cpu_speedup={cpu_speedup:.5f} "
+                  f"wall_speedup={wall_speedup:.5f} assembly_equal=20/20")
+          print(line)
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as f:
+              f.write(line + '\n')
+          PY
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: minic-rv32-original-linux20-ab-20261110
+          path: |
+            ${{ runner.temp }}/minic-rv32-linux-ab/evidence/
+            ${{ runner.temp }}/minic-rv32-linux-ab/measure/owner-*/paired-result.json
+          if-no-files-found: warn
