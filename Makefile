@@ -573,7 +573,7 @@ prepare:
 
 $(BUILD_DIR)/obj/%.o: %.c
 	@mkdir -p "$(dir $@)"
-	$(CC) $(CPPFLAGS) $(MINIC_INCLUDES) $(MINIC_CFLAGS) -MMD -MP -c "$<" -o "$@"
+	$(CC) $(CPPFLAGS) $(MINIC_INCLUDES) $(MINIC_CFLAGS) $(if $(filter release,$(MODE)),-O3,) -MMD -MP -c "$<" -o "$@"
 
 $(MINIC_CC_BINARY): $(MINIC_OBJECTS)
 	@mkdir -p "$(dir $@)"
