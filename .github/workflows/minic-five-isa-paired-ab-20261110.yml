@@ -101,7 +101,7 @@ jobs:
           import json, os, statistics
           from pathlib import Path
           root = Path(os.environ['RUNNER_TEMP']) / 'minic-five-isa-perf/results'
-          targets = ['riscv32-linux', 'riscv64-linux', 'x86_64-linux', 'aarch64-linux', 'loongarch64-linux']
+          targets = ['riscv32-linux', 'x86_64-linux', 'riscv64-linux', 'aarch64-linux', 'loongarch64-linux']
           report = []
           lines = ['| Original C fixture | ISA | Base CPU ms | Candidate CPU ms | CPU throughput | Wall throughput | Assembly |',
                    '| :-- | :-- | --: | --: | --: | --: | :-- |']
