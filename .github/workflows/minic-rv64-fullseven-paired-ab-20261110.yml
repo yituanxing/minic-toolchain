@@ -102,10 +102,10 @@ jobs:
           after=aa186412c4165eaa7a4ccd1a406b8fc7918e3326
           git fetch --quiet --no-tags --depth=1 origin "$before"
           git -c advice.detachedHead=false worktree add --quiet --detach "$RUNNER_TEMP/minic-before" "$before"
-          make -s -C "$RUNNER_TEMP/minic-before" -j4 MODE=release CFLAGS=-Werror \
+          make -s -C "$RUNNER_TEMP/minic-before" -j4 MODE=release CFLAGS='-O3 -Werror' \
             BUILD_DIR="$RUNNER_TEMP/minic-before-build" \
             "$RUNNER_TEMP/minic-before-build/bin/minic" "$RUNNER_TEMP/minic-before-build/bin/minic-cc"
-          make -s -j4 MODE=release CFLAGS=-Werror \
+          make -s -j4 MODE=release CFLAGS='-O3 -Werror' \
             BUILD_DIR="$RUNNER_TEMP/minic-after-build" \
             "$RUNNER_TEMP/minic-after-build/bin/minic" "$RUNNER_TEMP/minic-after-build/bin/minic-cc"
           test -x "$RUNNER_TEMP/minic-before-build/bin/minic"
