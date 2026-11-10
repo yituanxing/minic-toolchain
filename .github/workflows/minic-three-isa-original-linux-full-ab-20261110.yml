@@ -1,0 +1,135 @@
+name: MiniC 3 ISA FULL original GNU Linux paired CPU A/B
+
+# CI-only draft PR: no compiler src/include/Makefile changes, no sample selection.
+on:
+  push:
+    branches:
+      - verify/minic-three-isa-full-ab-20261110
+    paths:
+      - .github/workflows/minic-three-isa-original-linux-full-ab-20261110.yml
+      - tools/ci/minic-three-isa-original-linux-full-ab.py
+  pull_request:
+    paths:
+      - .github/workflows/minic-three-isa-original-linux-full-ab-20261110.yml
+      - tools/ci/minic-three-isa-original-linux-full-ab.py
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: minic-three-isa-full-original-linux-ab-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  full-original-gnu-paired:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      max-parallel: 21
+      matrix:
+        target: [x86_64, aarch64, loongarch64]
+        shard: [0, 1, 2, 3, 4, 5, 6]
+    env:
+      BASE_SHA: e13fc7c77e60cf80f6ad699035998b5aada3a236
+      CAND_SHA: aa186412c4165eaa7a4ccd1a406b8fc7918e3326
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Restore authentic original GNU Linux 6.6.143 full shard
+        uses: actions/download-artifact@v4
+        with:
+          repository: yituanxing/minic-toolchain
+          run-id: 42366441631
+          name: minic-linux-seven-input-${{ matrix.target }}-${{ matrix.shard }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/minic-full-three-isa/input
+
+      - name: Bind baseline/candidate source SHAs and full GNU shard identity
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          root="$RUNNER_TEMP/minic-full-three-isa"
+          mkdir -p "$root/results"
+          git fetch --quiet --no-tags --depth=1 origin "$BASE_SHA" "$CAND_SHA"
+          git -c advice.detachedHead=false worktree add --quiet --detach "$root/src-before" "$BASE_SHA"
+          git -c advice.detachedHead=false worktree add --quiet --detach "$root/src-after" "$CAND_SHA"
+          test "$(git -C "$root/src-before" rev-parse HEAD)" = "$BASE_SHA"
+          test "$(git -C "$root/src-after" rev-parse HEAD)" = "$CAND_SHA"
+          git diff --exit-code "$CAND_SHA" HEAD -- src include Makefile tests
+          python3 -m py_compile tools/ci/minic-three-isa-original-linux-full-ab.py
+          printf 'target=%s\nshard=%s\nsource_run=%s\nbaseline=%s\ncandidate=%s\nrunner=%s\n' \
+            '${{ matrix.target }}' '${{ matrix.shard }}' 42366441631 "$BASE_SHA" "$CAND_SHA" "$RUNNER_NAME" \
+            | tee "$root/results/identity.txt"
+          test -s "$root/input/identity.json"
+
+      - name: Build unchanged exact-O3 compiler arms on same runner
+        shell: bash
+        timeout-minutes: 14
+        run: |
+          set -Eeuo pipefail
+          root="$RUNNER_TEMP/minic-full-three-isa"
+          for arm in before after; do
+            make -s -C "$root/src-$arm" -j4 MODE=release CFLAGS='-O3 -Werror' \
+              BUILD_DIR="$root/build-$arm" "$root/build-$arm/bin/minic" "$root/build-$arm/bin/minic-cc" \
+              >"$root/results/build-$arm.log" 2>&1
+            test -x "$root/build-$arm/bin/minic"
+            sha256sum "$root/build-$arm/bin/minic" "$root/build-$arm/bin/minic-cc" \
+              | tee "$root/results/sha-$arm.txt"
+          done
+          ! cmp -s "$root/build-before/bin/minic-cc" "$root/build-after/bin/minic-cc"
+
+      - name: Measure every original GNU C owner, true CPU and wall, exact ASM SHA
+        shell: bash
+        timeout-minutes: 96
+        run: |
+          set -Eeuo pipefail
+          root="$RUNNER_TEMP/minic-full-three-isa"
+          python3 tools/ci/minic-three-isa-original-linux-full-ab.py measure \
+            --input-root "$root/input" \
+            --target '${{ matrix.target }}' \
+            --shard '${{ matrix.shard }}' \
+            --baseline-driver "$root/build-before/bin/minic" \
+            --candidate-driver "$root/build-after/bin/minic" \
+            --output "$root/results/owners" | tee "$root/results/paired.log"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: minic-three-isa-full-gnu-ab-${{ matrix.target }}-${{ matrix.shard }}
+          path: |
+            ${{ runner.temp }}/minic-full-three-isa/results/identity.txt
+            ${{ runner.temp }}/minic-full-three-isa/results/sha-before.txt
+            ${{ runner.temp }}/minic-full-three-isa/results/sha-after.txt
+            ${{ runner.temp }}/minic-full-three-isa/results/build-*.log
+            ${{ runner.temp }}/minic-full-three-isa/results/paired.log
+            ${{ runner.temp }}/minic-full-three-isa/results/owners/summary.json
+          if-no-files-found: warn
+
+  verify-all-3-isa-all-7-shards:
+    needs: [full-original-gnu-paired]
+    if: ${{ always() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download all 21 original owner proof artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: minic-three-isa-full-gnu-ab-*
+          path: ${{ runner.temp }}/minic-three-isa-full-proofs
+      - name: Fail closed unless 21/21 complete validated A/B and exact assembly
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test '${{ needs.full-original-gnu-paired.result }}' = 'success'
+          python3 tools/ci/minic-three-isa-original-linux-full-ab.py aggregate \
+            --input "$RUNNER_TEMP/minic-three-isa-full-proofs" \
+            --output "$RUNNER_TEMP/minic-three-isa-full-aggregate.json"
+      - uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: minic-three-isa-full-original-gnu-ab-aggregate
+          path: ${{ runner.temp }}/minic-three-isa-full-aggregate.json
+          if-no-files-found: error
