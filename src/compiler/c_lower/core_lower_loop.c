@@ -137,7 +137,9 @@ minic_core_lower_loop_cfg(MinicCoreLowerContext *context,
                 !minic_core_function_add_block(context->function, &single_iteration_exit)) {
                 return MINIC_CORE_LOWER_ERROR;
             }
-            context->statement_blocks[normalized_do_while_continue] = single_iteration_exit;
+            if (!minic_core_lower_store_statement_block(
+                    context, normalized_do_while_continue, single_iteration_exit))
+                return MINIC_CORE_LOWER_ERROR;
             saved_break_target = context->break_target;
             context->break_target = single_iteration_exit;
             status = minic_core_lower_internal_lower_block(context, &normalized_do_while_body, &body_terminated);
@@ -263,8 +265,10 @@ minic_core_lower_loop_cfg(MinicCoreLowerContext *context,
            condition block directly, while an update-bearing for with a proven
            continue gets a dedicated update block.  Loops without a recovered
            continue keep the historical inline-update lowering unchanged. */
-        context->statement_blocks[continue_label_statement] =
-            for_update != NULL ? update_block : condition_block;
+        if (!minic_core_lower_store_statement_block(
+                context, continue_label_statement,
+                for_update != NULL ? update_block : condition_block))
+            return MINIC_CORE_LOWER_ERROR;
     }
     status = minic_core_lower_internal_set_branch(context, preheader_block, statement->span, condition_block);
     if (status != MINIC_CORE_LOWER_OK) {

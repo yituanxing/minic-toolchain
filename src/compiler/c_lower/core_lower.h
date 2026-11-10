@@ -12,6 +12,25 @@ typedef enum MinicCoreLowerStatus {
     MINIC_CORE_LOWER_ERROR
 } MinicCoreLowerStatus;
 
+/* The source->Core pass may lower hundreds of functions from one immutable
+ * translation unit. Reuse the statement-id lookup across functions, clearing
+ * only entries the previous lowering wrote. This is compiler-only state and
+ * never becomes part of Core or Machine IR. */
+typedef struct MinicCoreLowerWorkspace {
+    MinicCoreBlockId *statement_blocks;
+    MinicStatementId *touched_statements;
+    size_t statement_count;
+    size_t touched_count;
+} MinicCoreLowerWorkspace;
+
+bool minic_core_lower_workspace_initialize(MinicCoreLowerWorkspace *workspace,
+                                          size_t statement_count);
+void minic_core_lower_workspace_destroy(MinicCoreLowerWorkspace *workspace);
+MinicCoreLowerStatus minic_core_lower_function_with_workspace(
+    const MinicFunctionBodyView *body, const MinicTargetInvocation *target,
+    MinicCoreSourceBuilder *output, MinicCoreReentryIndex *index,
+    MinicCoreLowerWorkspace *workspace);
+
 MinicCoreLowerStatus minic_core_lower_function(const MinicFunctionBodyView *body,
                                                const MinicTargetInvocation *target,
                                                MinicCoreSourceBuilder *output);

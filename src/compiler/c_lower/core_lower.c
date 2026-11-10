@@ -60,6 +60,64 @@ MinicCoreLowerStatus minic_core_lower_internal_lower_scalar_assignment_value(Min
                                                           MinicCoreValueId *value_id);
 
 
+bool minic_core_lower_workspace_initialize(MinicCoreLowerWorkspace *workspace,
+                                          size_t statement_count) {
+    size_t i;
+    if (workspace == NULL) return false;
+    (void)memset(workspace, 0, sizeof(*workspace));
+    if (statement_count > SIZE_MAX / sizeof(*workspace->statement_blocks) ||
+        statement_count > SIZE_MAX / sizeof(*workspace->touched_statements))
+        return false;
+    workspace->statement_count = statement_count;
+    if (statement_count == 0U) return true;
+    workspace->statement_blocks =
+        (MinicCoreBlockId *)malloc(statement_count * sizeof(*workspace->statement_blocks));
+    workspace->touched_statements =
+        (MinicStatementId *)malloc(statement_count * sizeof(*workspace->touched_statements));
+    if (workspace->statement_blocks == NULL ||
+        workspace->touched_statements == NULL) {
+        minic_core_lower_workspace_destroy(workspace);
+        return false;
+    }
+    for (i = 0U; i < statement_count; ++i)
+        workspace->statement_blocks[i] = MINIC_CORE_BLOCK_INVALID;
+    return true;
+}
+
+void minic_core_lower_workspace_destroy(MinicCoreLowerWorkspace *workspace) {
+    if (workspace == NULL) return;
+    free(workspace->statement_blocks);
+    free(workspace->touched_statements);
+    (void)memset(workspace, 0, sizeof(*workspace));
+}
+
+static void minic_core_lower_workspace_reset(MinicCoreLowerWorkspace *workspace) {
+    size_t i;
+    if (workspace == NULL) return;
+    for (i = 0U; i < workspace->touched_count; ++i)
+        workspace->statement_blocks[workspace->touched_statements[i]] =
+            MINIC_CORE_BLOCK_INVALID;
+    workspace->touched_count = 0U;
+}
+
+bool minic_core_lower_store_statement_block(MinicCoreLowerContext *context,
+    MinicStatementId statement_id, MinicCoreBlockId block_id) {
+    MinicCoreLowerWorkspace *workspace;
+    if (context == NULL || context->statement_blocks == NULL ||
+        statement_id >= context->statement_block_count ||
+        block_id == MINIC_CORE_BLOCK_INVALID ||
+        context->statement_blocks[statement_id] != MINIC_CORE_BLOCK_INVALID)
+        return false;
+    workspace = context->workspace;
+    if (workspace != NULL) {
+        if (workspace->touched_count >= workspace->statement_count)
+            return false;
+        workspace->touched_statements[workspace->touched_count++] = statement_id;
+    }
+    context->statement_blocks[statement_id] = block_id;
+    return true;
+}
+
 MinicCoreLowerStatus ensure_statement_block(MinicCoreLowerContext *context, MinicStatementId statement_id, MinicCoreBlockId *block_id) {
     const MinicStatement *source_statement;
     MinicCoreBlockId mapped;
@@ -74,7 +132,8 @@ MinicCoreLowerStatus ensure_statement_block(MinicCoreLowerContext *context, Mini
         if (!minic_core_function_add_block(context->function, &mapped)) {
             return MINIC_CORE_LOWER_ERROR;
         }
-        context->statement_blocks[statement_id] = mapped;
+        if (!minic_core_lower_store_statement_block(context, statement_id, mapped))
+            return MINIC_CORE_LOWER_ERROR;
     }
     if (mapped >= context->function->block_count) {
         return MINIC_CORE_LOWER_ERROR;
@@ -1532,10 +1591,12 @@ minic_core_lower_internal_lower_block(MinicCoreLowerContext *context, const Mini
     return MINIC_CORE_LOWER_OK;
 }
 
-MinicCoreLowerStatus minic_core_lower_function_with_index(const MinicFunctionBodyView *body,
-                                               const MinicTargetInvocation *target,
-                                               MinicCoreSourceBuilder *output,
-                                               MinicCoreReentryIndex *reentry_index) {
+MinicCoreLowerStatus minic_core_lower_function_with_workspace(
+    const MinicFunctionBodyView *body,
+    const MinicTargetInvocation *target,
+    MinicCoreSourceBuilder *output,
+    MinicCoreReentryIndex *reentry_index,
+    MinicCoreLowerWorkspace *workspace) {
     const MinicFunction *source_function;
     const MinicBlock *source_block;
     MinicCoreSourceBuilder lowered;
@@ -1581,10 +1642,35 @@ MinicCoreLowerStatus minic_core_lower_function_with_index(const MinicFunctionBod
         return MINIC_CORE_LOWER_ERROR;
     }
     for (local_index = 0U; local_index < source_function->local_count; ++local_index) local_objects[local_index] = MINIC_CORE_OBJECT_INVALID;
-    if (body->program->statement_count > SIZE_MAX / sizeof(*statement_blocks)) { free(local_integer_constants); free(local_objects); return MINIC_CORE_LOWER_ERROR; }
-    statement_blocks = body->program->statement_count == 0U ? NULL : (MinicCoreBlockId *)malloc(body->program->statement_count * sizeof(*statement_blocks));
-    if (body->program->statement_count != 0U && statement_blocks == NULL) { free(local_integer_constants); free(local_objects); return MINIC_CORE_LOWER_ERROR; }
-    for (statement_index = 0U; statement_index < body->program->statement_count; ++statement_index) statement_blocks[statement_index] = MINIC_CORE_BLOCK_INVALID;
+    if (workspace != NULL) {
+        if (workspace->statement_count != body->program->statement_count ||
+            workspace->touched_count != 0U ||
+            (workspace->statement_count != 0U &&
+             (workspace->statement_blocks == NULL ||
+              workspace->touched_statements == NULL))) {
+            free(local_integer_constants);
+            free(local_objects);
+            return MINIC_CORE_LOWER_ERROR;
+        }
+        statement_blocks = workspace->statement_blocks;
+    } else {
+        if (body->program->statement_count > SIZE_MAX / sizeof(*statement_blocks)) {
+            free(local_integer_constants); free(local_objects);
+            return MINIC_CORE_LOWER_ERROR;
+        }
+        statement_blocks = body->program->statement_count == 0U
+                               ? NULL
+                               : (MinicCoreBlockId *)malloc(
+                                     body->program->statement_count *
+                                     sizeof(*statement_blocks));
+        if (body->program->statement_count != 0U && statement_blocks == NULL) {
+            free(local_integer_constants); free(local_objects);
+            return MINIC_CORE_LOWER_ERROR;
+        }
+        for (statement_index = 0U; statement_index < body->program->statement_count;
+             ++statement_index)
+            statement_blocks[statement_index] = MINIC_CORE_BLOCK_INVALID;
+    }
 
     minic_core_source_builder_initialize(&lowered);
     if (!minic_core_function_set_signature(&lowered,
@@ -1598,7 +1684,8 @@ MinicCoreLowerStatus minic_core_lower_function_with_index(const MinicFunctionBod
         !minic_core_function_set_variadic(
             &lowered, source_function->is_variadic) ||
         !minic_core_function_add_block(&lowered.core, &block_id)) {
-        free(statement_blocks); free(local_integer_constants); free(local_objects); minic_core_source_builder_destroy(&lowered); return MINIC_CORE_LOWER_ERROR;
+        if (workspace == NULL) free(statement_blocks);
+        free(local_integer_constants); free(local_objects); minic_core_source_builder_destroy(&lowered); return MINIC_CORE_LOWER_ERROR;
     }
     /* C allows a function prototype and its definition to materialize
      * distinct but compatible pointer-to-array descriptor identities.
@@ -1615,7 +1702,8 @@ MinicCoreLowerStatus minic_core_lower_function_with_index(const MinicFunctionBod
             MinicType normalized;
             if (source_function->local_begin >= body->program->local_count ||
                 parameter_index >= body->program->local_count - source_function->local_begin) {
-                free(statement_blocks); free(local_integer_constants); free(local_objects);
+                if (workspace == NULL) free(statement_blocks);
+                free(local_integer_constants); free(local_objects);
                 minic_core_source_builder_destroy(&lowered);
                 return MINIC_CORE_LOWER_ERROR;
             }
@@ -1626,7 +1714,8 @@ MinicCoreLowerStatus minic_core_lower_function_with_index(const MinicFunctionBod
                 !minic_c0_types_compatible(
                     body->program, source_function->parameter_types[parameter_index],
                     normalized)) {
-                free(statement_blocks); free(local_integer_constants); free(local_objects);
+                if (workspace == NULL) free(statement_blocks);
+                free(local_integer_constants); free(local_objects);
                 minic_core_source_builder_destroy(&lowered);
                 return MINIC_CORE_LOWER_ERROR;
             }
@@ -1646,10 +1735,15 @@ MinicCoreLowerStatus minic_core_lower_function_with_index(const MinicFunctionBod
     context.local_integer_constants = local_integer_constants;
     context.statement_blocks = statement_blocks;
     context.statement_block_count = body->program->statement_count;
+    context.workspace = workspace;
     status = lower_parameter_ingress(&context);
     terminated = false;
     if (status == MINIC_CORE_LOWER_OK) status = minic_core_lower_internal_lower_block(&context, source_block, &terminated);
-    free(statement_blocks); free(local_integer_constants); free(local_objects);
+    if (workspace != NULL)
+        minic_core_lower_workspace_reset(workspace);
+    else
+        free(statement_blocks);
+    free(local_integer_constants); free(local_objects);
     context.local_integer_constants = NULL;
     if (status != MINIC_CORE_LOWER_OK) {
         minic_core_source_builder_destroy(&lowered);
@@ -1679,6 +1773,15 @@ MinicCoreLowerStatus minic_core_lower_function_with_index(const MinicFunctionBod
     minic_core_source_builder_destroy(output);
     *output = lowered;
     return MINIC_CORE_LOWER_OK;
+}
+
+MinicCoreLowerStatus minic_core_lower_function_with_index(
+    const MinicFunctionBodyView *body,
+    const MinicTargetInvocation *target,
+    MinicCoreSourceBuilder *output,
+    MinicCoreReentryIndex *reentry_index) {
+    return minic_core_lower_function_with_workspace(
+        body, target, output, reentry_index, NULL);
 }
 
 /* Standalone Core IR clients retain conservative no-index lowering. */

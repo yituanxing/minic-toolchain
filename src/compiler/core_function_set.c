@@ -73,7 +73,8 @@ static void minic_core_set_lower_one(const MinicC0Program *program,
                                      const MinicTargetInvocation *target,
                                      MinicCoreFunctionSet *set,
                                      size_t function_index,
-                                     MinicCoreReentryIndex *index) {
+                                     MinicCoreReentryIndex *index,
+                                     MinicCoreLowerWorkspace *workspace) {
     const MinicFunction *function;
     MinicFunctionBodyView body;
     MinicCoreSourceBuilder source_builder;
@@ -97,7 +98,8 @@ static void minic_core_set_lower_one(const MinicC0Program *program,
     }
     minic_core_source_builder_initialize(&source_builder);
     set->statuses[function_index] =
-        minic_core_lower_function_with_index(&body, target, &source_builder, index);
+        minic_core_lower_function_with_workspace(
+            &body, target, &source_builder, index, workspace);
     if (set->statuses[function_index] == MINIC_CORE_LOWER_OK &&
         (!minic_core_function_snapshot_types(
             &source_builder, set->type_context,
@@ -133,6 +135,8 @@ bool minic_prepare_core_function_set(const MinicC0Program *program,
     MinicCoreFunctionSet set;
     MinicCoreTypeImporter *importer;
     MinicCoreReentryIndex *index;
+    MinicCoreLowerWorkspace lowering_workspace;
+    bool lowering_workspace_available;
     MinicCoreModuleFunctionNameIndex names = {0};
     size_t function_index;
 
@@ -187,6 +191,8 @@ bool minic_prepare_core_function_set(const MinicC0Program *program,
     /* The AST statement/expression graph is immutable during Core Lowering.
      * Reuse one validated incoming-edge map for all ordinary and clone bodies. */
     index = minic_core_reentry_index_create(program);
+    lowering_workspace_available = minic_core_lower_workspace_initialize(
+        &lowering_workspace, program->statement_count);
     for (function_index = 0U; function_index < set.function_count; ++function_index) {
         const MinicFunction *function;
 
@@ -216,8 +222,12 @@ bool minic_prepare_core_function_set(const MinicC0Program *program,
                 last - first <= 1U)
                 continue;
         }
-        minic_core_set_lower_one(program, target, &set, function_index, index);
+        minic_core_set_lower_one(
+            program, target, &set, function_index, index,
+            lowering_workspace_available ? &lowering_workspace : NULL);
     }
+    if (lowering_workspace_available)
+        minic_core_lower_workspace_destroy(&lowering_workspace);
     minic_core_reentry_index_destroy(index);
     minic_core_module_function_name_index_destroy(&names);
     minic_core_function_set_destroy(output);
@@ -229,6 +239,9 @@ bool minic_complete_core_function_set_reachability(
     const MinicC0Program *program, const MinicTargetInvocation *target,
     MinicCoreFunctionSet *set, bool emit_reachable_core_blocks_only) {
     MinicCoreReentryIndex *index = NULL;
+    MinicCoreLowerWorkspace lowering_workspace;
+    bool lowering_workspace_available = false;
+    bool lowering_workspace_initialized = false;
     size_t round, total_late_lowered = 0U;
 
     if (program == NULL || target == NULL || set == NULL ||
@@ -266,12 +279,21 @@ bool minic_complete_core_function_set_reachability(
                 continue;
             if (index == NULL)
                 index = minic_core_reentry_index_create(program);
+            if (!lowering_workspace_initialized) {
+                lowering_workspace_available =
+                    minic_core_lower_workspace_initialize(
+                        &lowering_workspace, program->statement_count);
+                lowering_workspace_initialized = true;
+            }
             minic_core_set_lower_one(
-                program, target, set, function_index, index);
+                program, target, set, function_index, index,
+                lowering_workspace_available ? &lowering_workspace : NULL);
             added = true;
             ++total_late_lowered;
         }
         if (!added) {
+            if (lowering_workspace_available)
+                minic_core_lower_workspace_destroy(&lowering_workspace);
             minic_core_reentry_index_destroy(index);
             if (total_late_lowered != 0U)
                 (void)fprintf(stderr,
@@ -281,6 +303,8 @@ bool minic_complete_core_function_set_reachability(
         }
     }
 failed:
+    if (lowering_workspace_available)
+        minic_core_lower_workspace_destroy(&lowering_workspace);
     minic_core_reentry_index_destroy(index);
     return false;
 }

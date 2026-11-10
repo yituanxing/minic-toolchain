@@ -44,7 +44,12 @@ typedef struct MinicCoreLowerContext {
     unsigned int gnu_inline_call_depth;
     MinicCoreBlockId *statement_blocks;
     size_t statement_block_count;
+    MinicCoreLowerWorkspace *workspace;
 } MinicCoreLowerContext;
+
+/* One write ledger for every source CFG statement->Core block mapping. */
+bool minic_core_lower_store_statement_block(MinicCoreLowerContext *context,
+    MinicStatementId statement_id, MinicCoreBlockId block_id);
 
 /* Private source-to-Core expression families, deliberately not public ABI.
  * Their effectful CFG and scalar building primitives stay Core-owned. */
