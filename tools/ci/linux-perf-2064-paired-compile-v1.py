@@ -10,6 +10,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import resource
 import subprocess
 import time
 
@@ -24,6 +25,7 @@ def run(driver, source, output, stdout, stderr, owner, arm, minic_args):
     env = os.environ.copy()
     env.setdefault("CORE_FAST_TRACE", "1")
     start = time.perf_counter_ns()
+    before = resource.getrusage(resource.RUSAGE_CHILDREN)
     try:
         p = subprocess.run([str(driver), *minic_args,
                             "-S", str(source), "-o", str(output)],
@@ -32,6 +34,9 @@ def run(driver, source, output, stdout, stderr, owner, arm, minic_args):
     except subprocess.TimeoutExpired as e:
         raise RuntimeError(f"MiniC A/B timeout owner={owner} arm={arm}") from e
     ms = (time.perf_counter_ns()-start)/1000000
+    after = resource.getrusage(resource.RUSAGE_CHILDREN)
+    cpu_ms = 1000.0 * ((after.ru_utime + after.ru_stime) -
+                       (before.ru_utime + before.ru_stime))
     if arm == "candidate":
         stdout.write_bytes(p.stdout)
         stderr.write_bytes(p.stderr)
@@ -39,7 +44,7 @@ def run(driver, source, output, stdout, stderr, owner, arm, minic_args):
     # existing zero-byte file. Keep missing output and nonzero exits fatal.
     if p.returncode or not output.is_file():
         raise RuntimeError(f"MiniC A/B failure owner={owner} arm={arm} rc={p.returncode} stderr={p.stderr[-1200:].decode(errors='replace')}")
-    return ms, sha256(output)
+    return ms, cpu_ms, sha256(output)
 
 def pair(a):
     for f in (a.input, a.baseline, a.candidate,
@@ -56,10 +61,11 @@ def pair(a):
         output = a.baseline_assembly if arm=="baseline" else a.assembly
         measured[arm]=run(driver,a.input,output,a.stdout,a.stderr,
                           a.owner,arm,a.minic_arg)
-    if measured["baseline"][1]!=measured["candidate"][1]:
+    if measured["baseline"][2]!=measured["candidate"][2]:
         raise RuntimeError("MiniC full A/B assembly mismatch owner="+a.owner)
     fields=[a.owner, "%.3f"%measured["baseline"][0], "%.3f"%measured["candidate"][0],
-            str(a.input.stat().st_size), measured["candidate"][1],order[0]]
+            str(a.input.stat().st_size), measured["candidate"][2],order[0],
+            "%.3f"%measured["baseline"][1], "%.3f"%measured["candidate"][1]]
     a.log.parent.mkdir(parents=True,exist_ok=True)
     with a.log.open("a") as out:
         fcntl.flock(out.fileno(),fcntl.LOCK_EX)
@@ -81,19 +87,20 @@ def summarize(a):
     raw_lines=0
     for line in a.log.read_text().splitlines():
         f=line.split("\t")
-        if len(f)!=6:
-            raise RuntimeError("Bad full A/B row")
-        owner,old,new,bytes_,digest,first=f
+        if len(f)!=8:
+            raise RuntimeError("Bad full A/B row (CPU and wall required)")
+        owner,old,new,bytes_,digest,first,old_cpu,new_cpu=f
         if first not in ("baseline","candidate") or len(digest)!=64:
             raise RuntimeError("Invalid full A/B provenance")
-        old,new=float(old),float(new)
-        if min(old,new)<=0:
+        old,new,old_cpu,new_cpu=map(float,(old,new,old_cpu,new_cpu))
+        if min(old,new,old_cpu,new_cpu)<=0:
             raise RuntimeError("Invalid full A/B duration")
         if not all(c in "0123456789abcdef" for c in digest):
             raise RuntimeError("Invalid assembly SHA")
         raw_lines+=1
         if owner in expected:
             last[owner]={"owner":owner,"baseline_ms":old,"candidate_ms":new,
+                         "baseline_cpu_ms":old_cpu,"candidate_cpu_ms":new_cpu,
                          "input_bytes":int(bytes_),"asm_sha256":digest,"first":first}
     rows=[last[owner] for owner in expected if owner in last]
     if len(rows)!=len(expected):
@@ -101,10 +108,16 @@ def summarize(a):
         raise RuntimeError(f"Full A/B incomplete expected={len(expected)} actual={len(rows)} missing={sorted(missing)[:6]}")
     old=sum(x["baseline_ms"] for x in rows)
     new=sum(x["candidate_ms"] for x in rows)
-    result={"schema":"minic-real-linux-paired-2064-v2","objects":len(rows),
+    old_cpu=sum(x["baseline_cpu_ms"] for x in rows)
+    new_cpu=sum(x["candidate_cpu_ms"] for x in rows)
+    result={"schema":"minic-real-linux-paired-2064-cpu-v3","objects":len(rows),
             "raw_kbuild_compiler_invocations":raw_lines,
             "extra_kbuild_compiler_invocations":raw_lines-len(rows),
             "baseline_total_ms":round(old,3),"candidate_total_ms":round(new,3),
+            "baseline_cpu_total_ms":round(old_cpu,3),
+            "candidate_cpu_total_ms":round(new_cpu,3),
+            "cpu_speedup":round(old_cpu/new_cpu,5),
+            "cpu_reduction_pct":round(100*(1-new_cpu/old_cpu),3),
             "speedup":round(old/new,5),"reduction_pct":round(100*(1-new/old),3),
             "baseline_first":sum(x["first"]=="baseline" for x in rows),
             "regressions":sum(x["candidate_ms"]>x["baseline_ms"] for x in rows),
@@ -113,7 +126,9 @@ def summarize(a):
             "largest_regressions":sorted(rows,key=lambda r:r["candidate_ms"]-r["baseline_ms"],reverse=True)[:15]}
     a.out.write_text(json.dumps(result,indent=2)+"\n")
     print(f"MINIC_FULL_PERF_AB=PASS objects={len(rows)} raw_invocations={raw_lines} "
-          f"baseline_ms={old:.3f} candidate_ms={new:.3f} speedup={old/new:.5f} "
+          f"baseline_wall_sum_ms={old:.3f} candidate_wall_sum_ms={new:.3f} "
+          f"baseline_cpu_ms={old_cpu:.3f} candidate_cpu_ms={new_cpu:.3f} "
+          f"cpu_speedup={old_cpu/new_cpu:.5f} wall_sum_speedup={old/new:.5f} "
           f"reduction_pct={100*(1-new/old):.3f} baseline_first={result['baseline_first']} "
           f"regressions={result['regressions']}",flush=True)
     for row in result["slowest_candidate"][:5]:
