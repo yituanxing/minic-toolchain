@@ -21,7 +21,8 @@ def sha256(path):
             h.update(b)
     return h.hexdigest()
 
-def run(driver, source, output, stdout, stderr, owner, arm, minic_args):
+def run(driver, source, output, stdout, stderr, owner, arm, minic_args,
+        include_cpu=False):
     env = os.environ.copy()
     env.setdefault("CORE_FAST_TRACE", "1")
     start = time.perf_counter_ns()
@@ -44,7 +45,8 @@ def run(driver, source, output, stdout, stderr, owner, arm, minic_args):
     # existing zero-byte file. Keep missing output and nonzero exits fatal.
     if p.returncode or not output.is_file():
         raise RuntimeError(f"MiniC A/B failure owner={owner} arm={arm} rc={p.returncode} stderr={p.stderr[-1200:].decode(errors='replace')}")
-    return ms, cpu_ms, sha256(output)
+    result = (ms, cpu_ms, sha256(output))
+    return result if include_cpu else (result[0], result[2])
 
 def pair(a):
     for f in (a.input, a.baseline, a.candidate,
@@ -60,7 +62,7 @@ def pair(a):
         driver = a.baseline if arm=="baseline" else a.candidate
         output = a.baseline_assembly if arm=="baseline" else a.assembly
         measured[arm]=run(driver,a.input,output,a.stdout,a.stderr,
-                          a.owner,arm,a.minic_arg)
+                          a.owner,arm,a.minic_arg, include_cpu=True)
     if measured["baseline"][2]!=measured["candidate"][2]:
         raise RuntimeError("MiniC full A/B assembly mismatch owner="+a.owner)
     fields=[a.owner, "%.3f"%measured["baseline"][0], "%.3f"%measured["candidate"][0],
