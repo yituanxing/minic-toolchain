@@ -60,6 +60,9 @@ on:
       - 'tests/compiler/c0/probe-program-emit-transaction.c'
       - 'tests/compiler/c0/probe-p46-*.sh'
       - 'tests/compiler/c0/p46_*'
+      - 'tests/compiler/c0/probe-p49-head-crosscall-provenance.sh'
+      - 'tests/compiler/c0/p49_*'
+      - 'tests/compiler/c0/p50_x86_head_return_local_alias.c'
       - 'tests/compiler/c0/run-x86-global-plan-abi.sh'
       - 'tests/compiler/c0/x86_global_plan_abi.c'
       - 'tests/compiler/c0/invalid_x86_bss_nonzero_initializer.c'
@@ -312,6 +315,13 @@ jobs:
           done
           make MODE=release CFLAGS=-Werror BUILD_DIR=build/minic-native-backend \
             HOST_CC=gcc CC=gcc check-p48-x86-head-local-provenance
+      - name: P49/P50 x86 early-head cross-function returned-pointer GNU displaced oracle
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(uname -m)" = x86_64
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/minic-native-backend \
+            HOST_CC=gcc CC=gcc check-p49-x86-head-crosscall-provenance
       - name: Full-source review architecture and correctness batch native oracles
         shell: bash
         run: |
