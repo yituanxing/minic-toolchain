@@ -107,6 +107,39 @@ grep -Eiq 'early head unproven cross-function numeric pointer provenance' \
 test ! -s "$work/local.minic.s" \
     || fail 'partial local-return assembly escaped refusal'
 
+# P51: the first helper returns another helper's CALL result.  The same
+# source must succeed under the GNU link-VMA/physical-store displaced oracle,
+# but MiniC must conservatively refuse an unproven two-hop return alias.
+nested_source="$root/tests/compiler/c0/p51_x86_head_nested_return_alias.c"
+"$cc" -E -P -std=gnu11 "$nested_source" -o "$work/nested.i" \
+    || fail nested-CPP
+"$cc" -O2 -fno-PIE -mcmodel=kernel -S "$work/nested.i" \
+    -o "$work/nested.gnu.s" || fail nested-GCC-O2
+"$cc" -c -x assembler "$work/nested.gnu.s" -o "$work/nested.gnu.o" \
+    || fail nested-GNU-AS
+readelf -rW "$work/nested.gnu.o" > "$work/nested.gnu.reloc" \
+    || fail nested-readelf
+grep -Eq 'R_X86_64_PC32.*p49_head_global' "$work/nested.gnu.reloc" \
+    || fail 'GNU nested store lost physical PC32'
+grep -Eq 'R_X86_64_32S.*p49_head_global' "$work/nested.gnu.reloc" \
+    || fail 'GNU nested helper argument lost absolute link VMA'
+"$cc" -O2 -DP49_POINTER_RETURN -DP51_NESTED_RETURN -fno-PIE -no-pie \
+    "$driver" "$work/nested.gnu.o" -o "$work/nested.gnu.elf" \
+    || fail nested-GNU-LD
+"$work/nested.gnu.elf" > "$work/nested.gnu.out" || fail nested-GNU-runtime
+grep -q '^P49_HEAD_CROSSCALL=PASS ' "$work/nested.gnu.out" \
+    || fail nested-GNU-displaced-oracle
+if "$minic" --target=x86_64-linux -fno-PIE -S "$work/nested.i" \
+    -o "$work/nested.minic.s" > "$work/nested.minic.stdout" \
+    2> "$work/nested.minic.stderr"; then
+    fail 'MiniC silently accepted two-hop numeric physical pointer alias'
+fi
+grep -Eiq 'early head unproven cross-function numeric pointer provenance' \
+    "$work/nested.minic.stderr" \
+    || fail 'missing two-hop pointer provenance diagnostic'
+test ! -s "$work/nested.minic.s" \
+    || fail 'partial two-hop assembly escaped rejection'
+
 "$cc" -E -P -std=gnu11 \
     "$root/tests/compiler/c0/p49_x86_head_physical_helper.c" \
     -o "$work/physical.i" || fail physical-CPP
@@ -118,4 +151,4 @@ readelf -rW "$work/physical.o" > "$work/physical.reloc" || fail physical-readelf
 grep -Eq 'R_X86_64_PC32.*p49_physical_global' "$work/physical.reloc" \
     || fail 'physical helper lost PC32 direct global'
 
-printf '%s\n' 'P49_X86_HEAD_CROSSCALL=PASS GNU_O2_same_source_displaced=3 MiniC_numeric_alias_fail_closed=3 MiniC_physical_helper_admitted=1 GNU_AS_LD=1 ELF_PC32_and_32S=1 RTL_PREMMU=NOT_RUN'
+printf '%s\n' 'P49_X86_HEAD_CROSSCALL=PASS GNU_O2_same_source_displaced=4 MiniC_numeric_alias_fail_closed=4 MiniC_physical_helper_admitted=1 GNU_AS_LD=1 ELF_PC32_and_32S=1 RTL_PREMMU=NOT_RUN'
