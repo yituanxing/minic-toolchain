@@ -64,6 +64,7 @@ on:
       - 'tests/compiler/c0/p49_*'
       - 'tests/compiler/c0/p50_x86_head_return_local_alias.c'
       - 'tests/compiler/c0/p51_x86_head_nested_return_alias.c'
+      - 'tests/compiler/c0/p5[234]_x86_head_*.c'
       - 'tests/compiler/c0/run-x86-global-plan-abi.sh'
       - 'tests/compiler/c0/x86_global_plan_abi.c'
       - 'tests/compiler/c0/invalid_x86_bss_nonzero_initializer.c'
@@ -316,7 +317,7 @@ jobs:
           done
           make MODE=release CFLAGS=-Werror BUILD_DIR=build/minic-native-backend \
             HOST_CC=gcc CC=gcc check-p48-x86-head-local-provenance
-      - name: P49/P50 x86 early-head cross-function returned-pointer GNU displaced oracle
+      - name: P49-P54 x86 early-head nested and opaque pointer GNU provenance oracles
         shell: bash
         run: |
           set -Eeuo pipefail
