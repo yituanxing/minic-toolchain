@@ -73,6 +73,40 @@ grep -Eiq 'early head unproven cross-function numeric pointer provenance' \
     "$work/return.minic.stderr" || fail 'missing return-alias diagnostic'
 test ! -s "$work/return.minic.s" || fail 'partial return-alias assembly escaped refusal'
 
+# P50: a returned pointer passes through a volatile local pointer slot
+# before the caller interprets it numerically.  Same GNU source, real
+# physical-displacement execution and the same fail-closed contract as P49.
+local_source="$root/tests/compiler/c0/p50_x86_head_return_local_alias.c"
+"$cc" -E -P -std=gnu11 "$local_source" -o "$work/local.i" \
+    || fail local-CPP
+"$cc" -O2 -fno-PIE -mcmodel=kernel -S "$work/local.i" \
+    -o "$work/local.gnu.s" || fail local-GCC-O2
+"$cc" -c -x assembler "$work/local.gnu.s" -o "$work/local.gnu.o" \
+    || fail local-GNU-AS
+readelf -rW "$work/local.gnu.o" > "$work/local.gnu.reloc" \
+    || fail local-readelf
+grep -Eq 'R_X86_64_PC32.*p49_head_global' "$work/local.gnu.reloc" \
+    || fail 'GNU local-return store lost physical PC32'
+grep -Eq 'R_X86_64_32S.*p49_head_global' "$work/local.gnu.reloc" \
+    || fail 'GNU local-return helper argument lost link VMA'
+"$cc" -O2 -DP49_POINTER_RETURN -fno-PIE -no-pie "$driver" \
+    "$work/local.gnu.o" -o "$work/local.gnu.elf" \
+    || fail local-GNU-LD
+"$work/local.gnu.elf" > "$work/local.gnu.out" \
+    || fail local-GNU-runtime
+grep -q '^P49_HEAD_CROSSCALL=PASS ' "$work/local.gnu.out" \
+    || fail local-GNU-displaced-oracle
+if "$minic" --target=x86_64-linux -fno-PIE -S "$work/local.i" \
+    -o "$work/local.minic.s" > "$work/local.minic.stdout" \
+    2> "$work/local.minic.stderr"; then
+    fail 'MiniC silently accepted locally reloaded numeric physical pointer'
+fi
+grep -Eiq 'early head unproven cross-function numeric pointer provenance' \
+    "$work/local.minic.stderr" \
+    || fail 'missing local-return provenance diagnostic'
+test ! -s "$work/local.minic.s" \
+    || fail 'partial local-return assembly escaped refusal'
+
 "$cc" -E -P -std=gnu11 \
     "$root/tests/compiler/c0/p49_x86_head_physical_helper.c" \
     -o "$work/physical.i" || fail physical-CPP
@@ -84,4 +118,4 @@ readelf -rW "$work/physical.o" > "$work/physical.reloc" || fail physical-readelf
 grep -Eq 'R_X86_64_PC32.*p49_physical_global' "$work/physical.reloc" \
     || fail 'physical helper lost PC32 direct global'
 
-printf '%s\n' 'P49_X86_HEAD_CROSSCALL=PASS GNU_O2_same_source_displaced=2 MiniC_numeric_alias_fail_closed=2 MiniC_physical_helper_admitted=1 GNU_AS_LD=1 ELF_PC32_and_32S=1 RTL_PREMMU=NOT_RUN'
+printf '%s\n' 'P49_X86_HEAD_CROSSCALL=PASS GNU_O2_same_source_displaced=3 MiniC_numeric_alias_fail_closed=3 MiniC_physical_helper_admitted=1 GNU_AS_LD=1 ELF_PC32_and_32S=1 RTL_PREMMU=NOT_RUN'
