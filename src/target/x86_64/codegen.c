@@ -632,6 +632,14 @@ done:
     return numeric;
 }
 
+/* At an early-head call boundary, a selected physical pointer may be
+ * returned and interpreted as a link-VMA integer.  A same-module direct
+ * callee has an inspectable Core parameter-return path.  For an indirect
+ * callee or a direct callee with no visible definition, no return-alias
+ * proof exists; reject only if a pointer result is actually consumed
+ * numerically in reachable caller Core.  A physical-only helper, void
+ * result and unobserved pointer return retain their previous admission.
+ * This is a MAY-alias safety gate, not an ABI-wide ban on opaque calls. */
 static bool x86_head_call_numeric_alias(
     const MinicCoreFunction *caller,
     const MinicCoreInstruction *call,
@@ -640,48 +648,80 @@ static bool x86_head_call_numeric_alias(
     size_t module_function_count,
     const X86HeadAddressOrigin *origins,
     const bool *direct) {
-    const MinicCoreCallee *callee;
+    const MinicCoreCallee *callee = NULL;
+    bool indirect, pointer_return;
     size_t i, j, begin, count;
     if (caller == NULL || call == NULL || module_functions == NULL ||
-        call->kind != MINIC_CORE_INSTRUCTION_CALL ||
-        call->value.call.callee_id >= caller->callee_count)
+        (call->kind != MINIC_CORE_INSTRUCTION_CALL &&
+         call->kind != MINIC_CORE_INSTRUCTION_INDIRECT_CALL))
         return false;
-    callee = &caller->callees[call->value.call.callee_id];
-    begin = call->value.call.argument_begin;
-    count = call->value.call.argument_count;
+    indirect = call->kind == MINIC_CORE_INSTRUCTION_INDIRECT_CALL;
+    if (indirect) {
+        begin = call->value.indirect_call.argument_begin;
+        count = call->value.indirect_call.argument_count;
+    } else {
+        if (call->value.call.callee_id >= caller->callee_count)
+            return false;
+        callee = &caller->callees[call->value.call.callee_id];
+        begin = call->value.call.argument_begin;
+        count = call->value.call.argument_count;
+    }
     if (begin > caller->call_argument_count ||
-        count > caller->call_argument_count - begin) return false;
+        count > caller->call_argument_count - begin)
+        return false;
+    pointer_return = call->result < caller->value_count &&
+        x86_function_kind(caller, caller->values[call->result].core_type_id,
+                          MINIC_CORE_TYPE_POINTER);
     for (i = 0U; i < count; ++i) {
         const MinicCoreCallArgument *arg = &caller->call_arguments[begin + i];
         X86HeadAddressOrigin origin;
+        bool visible_direct_callee = false;
         if (arg->kind != MINIC_CORE_CALL_ARGUMENT_VALUE ||
             arg->value.value_id >= caller->value_count ||
             !x86_function_kind(caller,
                 caller->values[arg->value.value_id].core_type_id,
-                MINIC_CORE_TYPE_POINTER)) continue;
+                MINIC_CORE_TYPE_POINTER))
+            continue;
         origin = origins[arg->value.value_id];
         if (origin.global >= caller->global_count ||
-            !direct[origin.global] || origin.crossed_vma_cast) continue;
-        for (j = 0U; j < module_function_count; ++j) {
-            const MinicCoreFunction *target = &module_functions[j];
-            bool unproven = false, returns_pointer = false;
-            if (target->name == NULL || callee->name == NULL ||
-                target->name_length != callee->name_length ||
-                memcmp(target->name, callee->name,
-                       callee->name_length) != 0) continue;
-            if (x86_head_pointer_numeric_transit(
-                    target, i, MINIC_CORE_VALUE_INVALID, NULL,
-                    &unproven, &returns_pointer) || unproven) return true;
-            if (!returns_pointer || call->result >= caller->value_count ||
-                reachable == NULL) continue;
-            /* A returned pointer may cross a caller-owned local slot, a
-             * field address, or a pointer cast before its numeric use.
-             * Checking only an immediately adjacent bitcast missed those
-             * observed Core paths; use the same checked seed walk. */
-            unproven = false;
+            !direct[origin.global] || origin.crossed_vma_cast)
+            continue;
+        if (!indirect) {
+            for (j = 0U; j < module_function_count; ++j) {
+                const MinicCoreFunction *target = &module_functions[j];
+                bool unproven = false, returns_pointer = false;
+                if (target->name == NULL || callee->name == NULL ||
+                    target->name_length != callee->name_length ||
+                    memcmp(target->name, callee->name,
+                           callee->name_length) != 0)
+                    continue;
+                visible_direct_callee = true;
+                if (x86_head_pointer_numeric_transit(
+                        target, i, MINIC_CORE_VALUE_INVALID, NULL,
+                        &unproven, &returns_pointer) || unproven)
+                    return true;
+                if (!returns_pointer || !pointer_return ||
+                    reachable == NULL)
+                    continue;
+                /* A visible helper can return the pointer directly, or
+                 * through multiple CALL/local-slot aliases. */
+                unproven = false;
+                if (x86_head_pointer_numeric_transit(
+                        caller, SIZE_MAX, call->result, reachable,
+                        &unproven, NULL) || unproven)
+                    return true;
+            }
+        }
+        if ((indirect || !visible_direct_callee) && pointer_return &&
+            reachable != NULL) {
+            bool unproven = false;
+            /* Opaque or external pointer-returning helper: no safe
+             * alias conclusion is possible.  Refuse only if the caller
+             * actually uses that pointer as a numeric link VMA. */
             if (x86_head_pointer_numeric_transit(
                     caller, SIZE_MAX, call->result, reachable,
-                    &unproven, NULL) || unproven) return true;
+                    &unproven, NULL) || unproven)
+                return true;
         }
     }
     return false;
