@@ -56,3 +56,9 @@
 # 2026-11-09 current-head post-RISC-V sealed-preflight validation repair: fresh RV64I original 2064 C owners, GNU AS/LD, genuine QEMU P0/P1 and twelve clean independent boots of one SHA-verifiable Image; no stale compiled objects, no skipped strict oracle.
 # 2026-11-10 exact PR #677 f8523fc O3-only MiniC host: certified Linux first500 500/500 exact .s 1.05276x in run 42748412058; fresh RV64I GNU Linux 2064 C owners, GNU AS/LD, QEMU P0/P1 and twelve independent same-Image boots required. Do not reuse prior objects.
 # 2026-11-10 live ASM token index + sparse sealed Core reentry exact-HEAD: rebuild original GNU Linux 6.6.143 2064 RV64I C owners with MiniC/GNU-AS, never restore stale candidate objects; record seven shard wall + process CPU/RSS, GNU LD/QEMU P0/P1 and twelve independent same-Image P1; compare historic 74.640s max. PR #679 throughput restoration candidate, not a pre-certified PASS.
+# 2026-11-23 latest C41 plus MC-076 P50-P54 correctness source d28c43c5:
+# explicitly rerun ALL 2064 pinned original RV64 Linux C owners, GNU AS/LD,
+# actual QEMU P0/P1 and twelve independent same-Image P1 boots. The exact
+# current HEAD is this verification-only trigger commit, with unchanged
+# compiler production bytes; never credit historical aa186412 artifacts as
+# candidate output and never restore stale MiniC-compiled objects.
