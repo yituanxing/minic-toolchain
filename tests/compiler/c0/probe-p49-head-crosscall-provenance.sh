@@ -140,6 +140,85 @@ grep -Eiq 'early head unproven cross-function numeric pointer provenance' \
 test ! -s "$work/nested.minic.s" \
     || fail 'partial two-hop assembly escaped rejection'
 
+# P52: function-pointer INDIRECT_CALL.  GNU emits separate physical
+# PC32 STORE and absolute 32S link-VMA address; execute its *cloned* code
+# and data through the existing displaced GNU native oracle.  MiniC must
+# decline the unproven pointer-return/numeric-use path without any output.
+indirect_source="$root/tests/compiler/c0/p52_x86_head_indirect_return_alias.c"
+"$cc" -E -P -std=gnu11 "$indirect_source" -o "$work/indirect.i" \
+    || fail indirect-CPP
+"$cc" -O2 -fno-PIE -mcmodel=kernel -S "$work/indirect.i" \
+    -o "$work/indirect.gnu.s" || fail indirect-GCC-O2
+"$cc" -c -x assembler "$work/indirect.gnu.s" -o "$work/indirect.gnu.o" \
+    || fail indirect-GNU-AS
+readelf -rW "$work/indirect.gnu.o" > "$work/indirect.gnu.reloc" \
+    || fail indirect-readelf
+grep -Eq 'R_X86_64_PC32.*p49_head_global' "$work/indirect.gnu.reloc" \
+    || fail 'GNU indirect store lost physical PC32'
+grep -Eq 'R_X86_64_32S.*p49_head_global' "$work/indirect.gnu.reloc" \
+    || fail 'GNU indirect argument lost absolute link VMA'
+"$cc" -O2 -DP49_POINTER_RETURN -fno-PIE -no-pie "$driver" \
+    "$work/indirect.gnu.o" -o "$work/indirect.gnu.elf" \
+    || fail indirect-GNU-LD
+"$work/indirect.gnu.elf" > "$work/indirect.gnu.out" \
+    || fail indirect-GNU-displaced-runtime
+grep -q '^P49_HEAD_CROSSCALL=PASS ' "$work/indirect.gnu.out" \
+    || fail indirect-GNU-displaced-oracle
+if "$minic" --target=x86_64-linux -fno-PIE -S "$work/indirect.i" \
+    -o "$work/indirect.minic.s" > "$work/indirect.minic.stdout" \
+    2> "$work/indirect.minic.stderr"; then
+    fail 'MiniC silently accepted indirect physical-to-numeric pointer'
+fi
+grep -Eiq 'early head unproven cross-function numeric pointer provenance' \
+    "$work/indirect.minic.stderr" \
+    || fail 'missing indirect-call provenance diagnostic'
+test ! -s "$work/indirect.minic.s" \
+    || fail 'partial indirect-call assembly escaped rejection'
+
+# P53: external direct callee has no Core body to inspect.  This source
+# has a real GNU ELF relocation oracle, but cannot use the displaced
+# runtime driver without introducing a different external linkage model.
+external_source="$root/tests/compiler/c0/p53_x86_head_external_return_alias.c"
+"$cc" -E -P -std=gnu11 "$external_source" -o "$work/external.i" \
+    || fail external-CPP
+"$cc" -O2 -fno-PIE -mcmodel=kernel -S "$work/external.i" \
+    -o "$work/external.gnu.s" || fail external-GCC-O2
+"$cc" -c -x assembler "$work/external.gnu.s" -o "$work/external.gnu.o" \
+    || fail external-GNU-AS
+readelf -rW "$work/external.gnu.o" > "$work/external.gnu.reloc" \
+    || fail external-readelf
+grep -Eq 'R_X86_64_PC32.*p49_head_global' "$work/external.gnu.reloc" \
+    || fail 'GNU external store lost physical PC32'
+grep -Eq 'R_X86_64_32S.*p49_head_global' "$work/external.gnu.reloc" \
+    || fail 'GNU external argument lost absolute link VMA'
+if "$minic" --target=x86_64-linux -fno-PIE -S "$work/external.i" \
+    -o "$work/external.minic.s" > "$work/external.minic.stdout" \
+    2> "$work/external.minic.stderr"; then
+    fail 'MiniC silently accepted external physical-to-numeric pointer'
+fi
+grep -Eiq 'early head unproven cross-function numeric pointer provenance' \
+    "$work/external.minic.stderr" \
+    || fail 'missing external-call provenance diagnostic'
+test ! -s "$work/external.minic.s" \
+    || fail 'partial external-call assembly escaped rejection'
+
+# P54 positive: external helper with no numeric pointer result must
+# remain admitted.  Assembling with unresolved external relocations is
+# valid here; no runtime semantic proof of that external body is claimed.
+physical_source="$root/tests/compiler/c0/p54_x86_head_external_physical_only.c"
+"$cc" -E -P -std=gnu11 "$physical_source" \
+    -o "$work/external-physical.i" || fail physical-external-CPP
+"$minic" --target=x86_64-linux -fno-PIE -S \
+    "$work/external-physical.i" -o "$work/external-physical.s" \
+    || fail 'physical-only external helper incorrectly rejected'
+"$cc" -c -x assembler "$work/external-physical.s" \
+    -o "$work/external-physical.o" || fail physical-external-GNU-AS
+readelf -rW "$work/external-physical.o" \
+    > "$work/external-physical.reloc" || fail physical-external-readelf
+grep -Eq 'R_X86_64_PC32.*p54_physical_global' \
+    "$work/external-physical.reloc" \
+    || fail 'physical-only external helper lost PC32 data store'
+
 "$cc" -E -P -std=gnu11 \
     "$root/tests/compiler/c0/p49_x86_head_physical_helper.c" \
     -o "$work/physical.i" || fail physical-CPP
@@ -151,4 +230,4 @@ readelf -rW "$work/physical.o" > "$work/physical.reloc" || fail physical-readelf
 grep -Eq 'R_X86_64_PC32.*p49_physical_global' "$work/physical.reloc" \
     || fail 'physical helper lost PC32 direct global'
 
-printf '%s\n' 'P49_X86_HEAD_CROSSCALL=PASS GNU_O2_same_source_displaced=4 MiniC_numeric_alias_fail_closed=4 MiniC_physical_helper_admitted=1 GNU_AS_LD=1 ELF_PC32_and_32S=1 RTL_PREMMU=NOT_RUN'
+printf '%s\n' 'P49_X86_HEAD_CROSSCALL=PASS GNU_O2_same_source_displaced=5 MiniC_numeric_alias_fail_closed=6 MiniC_physical_helper_admitted=2 GNU_external_ELF_only=1 GNU_AS_LD=1 ELF_PC32_and_32S=1 RTL_PREMMU=NOT_RUN'
