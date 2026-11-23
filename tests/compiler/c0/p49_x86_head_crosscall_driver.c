@@ -6,6 +6,9 @@
 
 extern volatile unsigned long p49_head_global;
 extern unsigned long p49_head_entry(unsigned long);
+#ifdef P51_NESTED_RETURN
+extern volatile unsigned long *p51_head_wrapper(volatile unsigned long *);
+#endif
 #ifdef P49_POINTER_RETURN
 extern volatile unsigned long *p49_head_helper(volatile unsigned long *);
 #else
@@ -18,6 +21,9 @@ int main(void) {
     enum { copied_code = 256 };
     const uintptr_t entry = (uintptr_t)(void *)p49_head_entry;
     const uintptr_t helper = (uintptr_t)(void *)p49_head_helper;
+#ifdef P51_NESTED_RETURN
+    const uintptr_t wrapper = (uintptr_t)(void *)p51_head_wrapper;
+#endif
     const uintptr_t data = (uintptr_t)(const void *)&p49_head_global;
     uintptr_t begin = entry < helper ? entry : helper;
     uintptr_t end = entry > helper ? entry : helper;
@@ -27,6 +33,10 @@ int main(void) {
     uintptr_t destination;
     P49Entry cloned_entry;
     int ok;
+#ifdef P51_NESTED_RETURN
+    if (wrapper < begin) begin = wrapper;
+    if (wrapper > end) end = wrapper;
+#endif
     if (data < begin) begin = data;
     end += copied_code;
     if (data + sizeof(initial) > end) end = data + sizeof(initial);
@@ -36,6 +46,9 @@ int main(void) {
     if (image == MAP_FAILED) return 4;
     memcpy(image + (entry - begin), (void *)entry, copied_code);
     memcpy(image + (helper - begin), (void *)helper, copied_code);
+#ifdef P51_NESTED_RETURN
+    memcpy(image + (wrapper - begin), (void *)wrapper, copied_code);
+#endif
     memcpy(image + (data - begin), &initial, sizeof(initial));
     p49_head_global = initial;
     destination = (uintptr_t)(image + (entry - begin));
