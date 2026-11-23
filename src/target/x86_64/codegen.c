@@ -447,11 +447,18 @@ static size_t x86_head_memory_addresses(
  * the narrow, same-module parameter-to-numeric path for a fail-closed gate;
  * a helper that only dereferences the incoming physical pointer remains
  * legal.  Do not infer a positive interprocedural alias contract here. */
-static bool x86_head_callee_parameter_numeric(
+/* Track one pointer's provenance across both SSA edges and local object
+ * STORE/LOAD edges.  The seed is either a callee parameter or an explicit
+ * call-result SSA value; reuse this one conservative proof for both sides of
+ * an early-head ABI round-trip.  Do not claim a positive interprocedural
+ * alias proof from this intra-function walk. */
+static bool x86_head_pointer_numeric_transit(
     const MinicCoreFunction *callee, size_t parameter_index,
+    MinicCoreValueId seed_value, const bool *reachable,
     bool *unproven, bool *returns_pointer) {
     const MinicCoreInstruction **defs = NULL;
     bool *derived = NULL, *derived_objects = NULL;
+    bool *active = NULL;
     bool changed, numeric = false;
     size_t i;
     if (unproven != NULL) *unproven = false;
@@ -459,7 +466,8 @@ static bool x86_head_callee_parameter_numeric(
     if (callee == NULL ||
         callee->value_count > SIZE_MAX / sizeof(*derived) ||
         callee->value_count > SIZE_MAX / sizeof(*defs) ||
-        callee->object_count > SIZE_MAX / sizeof(*derived_objects)) {
+        callee->object_count > SIZE_MAX / sizeof(*derived_objects) ||
+        callee->instruction_count > SIZE_MAX / sizeof(*active)) {
         if (unproven != NULL) *unproven = true;
         return false;
     }
@@ -473,10 +481,42 @@ static bool x86_head_callee_parameter_numeric(
         if (unproven != NULL) *unproven = true;
         goto done;
     }
+    if (reachable != NULL) {
+        size_t block_index;
+        active = calloc(callee->instruction_count == 0U ? 1U :
+                        callee->instruction_count, sizeof(*active));
+        if (active == NULL) {
+            if (unproven != NULL) *unproven = true;
+            goto done;
+        }
+        for (block_index = 0U; block_index < callee->block_count;
+             ++block_index) {
+            const MinicCoreBlock *block = &callee->blocks[block_index];
+            size_t index;
+            if (!reachable[block_index]) continue;
+            for (index = 0U; index < block->instruction_count; ++index) {
+                const MinicCoreInstructionId id = block->instructions[index];
+                if (id >= callee->instruction_count) {
+                    if (unproven != NULL) *unproven = true;
+                    goto done;
+                }
+                active[id] = true;
+            }
+        }
+    }
+    if (seed_value != MINIC_CORE_VALUE_INVALID) {
+        if (seed_value >= callee->value_count) {
+            if (unproven != NULL) *unproven = true;
+            goto done;
+        }
+        derived[seed_value] = true;
+    }
     for (i = 0U; i < callee->instruction_count; ++i) {
         const MinicCoreInstruction *ins = &callee->instructions[i];
+        if (active != NULL && !active[i]) continue;
         if (ins->result < callee->value_count) defs[ins->result] = ins;
         if (ins->kind == MINIC_CORE_INSTRUCTION_PARAMETER &&
+            parameter_index != SIZE_MAX &&
             ins->value.parameter_index == parameter_index &&
             ins->result < callee->value_count &&
             x86_function_kind(callee, ins->core_type_id,
@@ -489,6 +529,7 @@ static bool x86_head_callee_parameter_numeric(
             const MinicCoreInstruction *ins = &callee->instructions[i];
             MinicCoreValueId source = MINIC_CORE_VALUE_INVALID;
             X86HeadLocalAddress address;
+            if (active != NULL && !active[i]) continue;
             if (ins->kind == MINIC_CORE_INSTRUCTION_STORE &&
                 ins->value.store.stored_value < callee->value_count &&
                 derived[ins->value.store.stored_value] &&
@@ -537,6 +578,7 @@ static bool x86_head_callee_parameter_numeric(
         for (i = 0U; i < callee->block_count; ++i) {
             const MinicCoreBlock *block = &callee->blocks[i];
             const MinicCoreValueId value = block->terminator.return_value;
+            if (reachable != NULL && !reachable[i]) continue;
             if (block->has_terminator &&
                 block->terminator.kind == MINIC_CORE_TERMINATOR_RETURN &&
                 value < callee->value_count && derived[value]) {
@@ -546,6 +588,7 @@ static bool x86_head_callee_parameter_numeric(
         }
     }
 done:
+    free(active);
     free(defs);
     free(derived);
     free(derived_objects);
@@ -585,39 +628,23 @@ static bool x86_head_call_numeric_alias(
         for (j = 0U; j < module_function_count; ++j) {
             const MinicCoreFunction *target = &module_functions[j];
             bool unproven = false, returns_pointer = false;
-            bool caller_observes_numeric = false;
-            size_t block_index, ins_index;
             if (target->name == NULL || callee->name == NULL ||
                 target->name_length != callee->name_length ||
                 memcmp(target->name, callee->name,
                        callee->name_length) != 0) continue;
-            if (x86_head_callee_parameter_numeric(target, i, &unproven,
-                                                  &returns_pointer) ||
-                unproven) return true;
+            if (x86_head_pointer_numeric_transit(
+                    target, i, MINIC_CORE_VALUE_INVALID, NULL,
+                    &unproven, &returns_pointer) || unproven) return true;
             if (!returns_pointer || call->result >= caller->value_count ||
                 reachable == NULL) continue;
-            for (block_index = 0U; block_index < caller->block_count;
-                 ++block_index) {
-                const MinicCoreBlock *block = &caller->blocks[block_index];
-                if (!reachable[block_index]) continue;
-                for (ins_index = 0U; ins_index < block->instruction_count;
-                     ++ins_index) {
-                    const MinicCoreInstructionId id =
-                        block->instructions[ins_index];
-                    const MinicCoreInstruction *ins;
-                    if (id >= caller->instruction_count) return true;
-                    ins = &caller->instructions[id];
-                    if (ins->kind == MINIC_CORE_INSTRUCTION_SCALAR_BITCAST &&
-                        ins->value.operand == call->result &&
-                        x86_function_kind(caller, ins->core_type_id,
-                                          MINIC_CORE_TYPE_INTEGER)) {
-                        caller_observes_numeric = true;
-                        break;
-                    }
-                }
-                if (caller_observes_numeric) break;
-            }
-            if (caller_observes_numeric) return true;
+            /* A returned pointer may cross a caller-owned local slot, a
+             * field address, or a pointer cast before its numeric use.
+             * Checking only an immediately adjacent bitcast missed those
+             * observed Core paths; use the same checked seed walk. */
+            unproven = false;
+            if (x86_head_pointer_numeric_transit(
+                    caller, SIZE_MAX, call->result, reachable,
+                    &unproven, NULL) || unproven) return true;
         }
     }
     return false;
