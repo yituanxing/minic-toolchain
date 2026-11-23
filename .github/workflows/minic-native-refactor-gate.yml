@@ -63,6 +63,7 @@ on:
       - 'tests/compiler/c0/probe-p49-head-crosscall-provenance.sh'
       - 'tests/compiler/c0/p49_*'
       - 'tests/compiler/c0/p50_x86_head_return_local_alias.c'
+      - 'tests/compiler/c0/p51_x86_head_nested_return_alias.c'
       - 'tests/compiler/c0/run-x86-global-plan-abi.sh'
       - 'tests/compiler/c0/x86_global_plan_abi.c'
       - 'tests/compiler/c0/invalid_x86_bss_nonzero_initializer.c'
