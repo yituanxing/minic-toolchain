@@ -548,6 +548,43 @@ static bool x86_head_pointer_numeric_transit(
                 derived[ins->result] = true;
                 changed = true;
             }
+            /* A pointer-returning nested call may return any pointer
+             * argument unmodified.  Without interprocedural return-alias
+             * proof, forwarding a derived physical pointer is a MAY-alias,
+             * not an independent pointer source.  Propagate it only to
+             * pointer results so the caller's eventual numeric observation
+             * can fail closed instead of becoming a displaced physical VMA.
+             * The same conservative rule applies to an indirect callee. */
+            if (ins->result < callee->value_count &&
+                !derived[ins->result] &&
+                x86_function_kind(callee, ins->core_type_id,
+                                  MINIC_CORE_TYPE_POINTER) &&
+                (ins->kind == MINIC_CORE_INSTRUCTION_CALL ||
+                 ins->kind == MINIC_CORE_INSTRUCTION_INDIRECT_CALL)) {
+                const size_t begin = ins->kind == MINIC_CORE_INSTRUCTION_CALL
+                    ? ins->value.call.argument_begin
+                    : ins->value.indirect_call.argument_begin;
+                const size_t count = ins->kind == MINIC_CORE_INSTRUCTION_CALL
+                    ? ins->value.call.argument_count
+                    : ins->value.indirect_call.argument_count;
+                size_t arg;
+                if (begin > callee->call_argument_count ||
+                    count > callee->call_argument_count - begin) {
+                    if (unproven != NULL) *unproven = true;
+                    goto done;
+                }
+                for (arg = 0U; arg < count; ++arg) {
+                    const MinicCoreCallArgument *input =
+                        &callee->call_arguments[begin + arg];
+                    if (input->kind != MINIC_CORE_CALL_ARGUMENT_VALUE ||
+                        input->value.value_id >= callee->value_count ||
+                        !derived[input->value.value_id])
+                        continue;
+                    derived[ins->result] = true;
+                    changed = true;
+                    break;
+                }
+            }
             if (ins->kind == MINIC_CORE_INSTRUCTION_FIELD_ADDRESS)
                 source = ins->value.field_address.base;
             else if (ins->kind == MINIC_CORE_INSTRUCTION_POINTER_OFFSET)
