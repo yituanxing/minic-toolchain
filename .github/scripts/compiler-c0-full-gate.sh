@@ -378,15 +378,15 @@ core_postfix_update_m24_focused() {
     BUILD_DIR="$root/build/ci-core-postfix-update-m24" \
     RISCV_CC=riscv64-linux-gnu-gcc \
     QEMU_RISCV64=qemu-riscv64 \
-        sh tests/compiler/c0/run-core-postfix-update-m24.sh
+        sh tests/compiler/c0/run-core-strict-runtime-case.sh core-postfix-update-m24
 }
 
 core_discard_expression_m25_focused() {
-    MINIC="$root/build/ci-debug/bin/minic" BUILD_DIR="$root/build/ci-core-discard-expression-m25" RISCV_CC=riscv64-linux-gnu-gcc QEMU_RISCV64=qemu-riscv64 sh tests/compiler/c0/run-core-discard-expression-m25.sh
+    MINIC="$root/build/ci-debug/bin/minic" BUILD_DIR="$root/build/ci-core-discard-expression-m25" RISCV_CC=riscv64-linux-gnu-gcc QEMU_RISCV64=qemu-riscv64 sh tests/compiler/c0/run-core-strict-runtime-case.sh core-discard-expression-m25
 }
 
 core_integer_binary_preservation_m25b_focused() {
-    MINIC="$root/build/ci-debug/bin/minic" BUILD_DIR="$root/build/ci-core-integer-binary-preservation-m25b" RISCV_CC=riscv64-linux-gnu-gcc QEMU_RISCV64=qemu-riscv64 sh tests/compiler/c0/run-core-integer-binary-preservation-m25b.sh
+    MINIC="$root/build/ci-debug/bin/minic" BUILD_DIR="$root/build/ci-core-integer-binary-preservation-m25b" RISCV_CC=riscv64-linux-gnu-gcc QEMU_RISCV64=qemu-riscv64 sh tests/compiler/c0/run-core-strict-runtime-case.sh core-integer-binary-preservation-m25b
 }
 
 core_integer_less_m26_focused() {
@@ -394,7 +394,7 @@ core_integer_less_m26_focused() {
     BUILD_DIR="$root/build/ci-core-integer-less-m26" \
     RISCV_CC=riscv64-linux-gnu-gcc \
     QEMU_RISCV64=qemu-riscv64 \
-        sh tests/compiler/c0/run-core-integer-less-m26.sh
+        sh tests/compiler/c0/run-core-strict-runtime-case.sh core-integer-less-m26
 }
 
 core_integer_foundation_m26b_focused() {
@@ -402,7 +402,7 @@ core_integer_foundation_m26b_focused() {
     BUILD_DIR="$root/build/ci-core-integer-foundation-m26b" \
     RISCV_CC=riscv64-linux-gnu-gcc \
     QEMU_RISCV64=qemu-riscv64 \
-        sh tests/compiler/c0/run-core-integer-foundation-m26b.sh
+        sh tests/compiler/c0/run-core-strict-runtime-case.sh core-integer-foundation-m26b
 }
 
 
@@ -411,7 +411,7 @@ core_switch_m27_focused() {
     BUILD_DIR="$root/build/ci-core-switch-m27" \
     RISCV_CC=riscv64-linux-gnu-gcc \
     QEMU_RISCV64=qemu-riscv64 \
-        sh tests/compiler/c0/run-core-switch-m27.sh
+        sh tests/compiler/c0/run-core-strict-runtime-case.sh core-switch-m27
 }
 
 core_inline_asm_identity_m28_focused() {
@@ -435,7 +435,7 @@ core_aggregate_boundary_m30_focused() {
     BUILD_DIR="$root/build/ci-core-aggregate-boundary-m30" \
     RISCV_CC=riscv64-linux-gnu-gcc \
     QEMU_RISCV64=qemu-riscv64 \
-        sh tests/compiler/c0/run-core-aggregate-boundary-m30.sh
+        sh tests/compiler/c0/run-core-strict-runtime-case.sh core-aggregate-boundary-m30
 }
 
 runtime_record_fam_prefix_focused() {

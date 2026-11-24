@@ -37,8 +37,8 @@ jobs:
               return subprocess.check_output(["git", *args])
           pattern = re.compile(r"^tools/dev/(?:pr(?:71|75|76|77)-|patch-core-frontier-|run-core-frontier-|materialize-)")
           expected = {p for p in git("ls-tree", "-r", "--name-only", base).decode().splitlines() if pattern.match(p)}
-          deleted = set(git("diff", "--name-only", "--diff-filter=D", base, "HEAD").decode().splitlines())
-          changed = set(git("diff", "--name-only", base, "HEAD").decode().splitlines())
+          deleted = set(git("diff", "--no-renames", "--name-only", "--diff-filter=D", base, "HEAD").decode().splitlines())
+          changed = set(git("diff", "--no-renames", "--name-only", base, "HEAD").decode().splitlines())
           archive_expected = {
               ".github/workflows-disabled/branch-consolidate-v0.yml",
               ".github/workflows-disabled/branch-consolidation-one-shot-v1.yml",
@@ -466,7 +466,19 @@ jobs:
               "tests/compiler/c0/run-builtin-memset-call.sh",
           }
           metadata |= {".github/scripts/compiler-c0-full-gate.sh", "tests/compiler/c0/run-foundation-focused.sh"}
-          if len(expected) != 539 or deleted != expected or changed != expected | metadata:
+          expected |= {
+              "tests/compiler/c0/run-core-const-parameter-m23b.sh",
+              "tests/compiler/c0/run-core-integer-conditional-m23.sh",
+              "tests/compiler/c0/run-core-postfix-update-m24.sh",
+              "tests/compiler/c0/run-core-discard-expression-m25.sh",
+              "tests/compiler/c0/run-core-integer-binary-preservation-m25b.sh",
+              "tests/compiler/c0/run-core-integer-less-m26.sh",
+              "tests/compiler/c0/run-core-integer-foundation-m26b.sh",
+              "tests/compiler/c0/run-core-switch-m27.sh",
+              "tests/compiler/c0/run-core-aggregate-boundary-m30.sh",
+          }
+          metadata.add("tests/compiler/c0/run-core-strict-runtime-case.sh")
+          if len(expected) != 548 or deleted != expected or changed != expected | metadata:
               raise SystemExit("RETIREMENT_SCOPE=FAIL: unexpected tree changes")
           files = [p.decode() for p in git("ls-files", "-z").split(b"\0") if p]
           candidates = {
@@ -783,4 +795,41 @@ jobs:
             fi
           done
           echo "SINGLE_SOURCE_COMPARISON passed=$passed unchanged_baseline_fail=$baseline_failures"
+          git diff --exit-code
+
+      - name: Compare nine original strict Core runtime drivers with the shared runner
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get -o Acquire::Retries=2 update -qq
+          sudo apt-get -o Acquire::Retries=2 install -y --no-install-recommends gcc-riscv64-linux-gnu libc6-dev-riscv64-cross qemu-user
+          export MINIC="$PWD/build/retirement-oracle/bin/minic" RISCV_CC=riscv64-linux-gnu-gcc QEMU_RISCV64=qemu-riscv64
+          work="$PWD/build/retirement-core-runtime"
+          mkdir -p "$work"
+          passed=0
+          baseline_failures=0
+          for name in core-const-parameter-m23b core-integer-conditional-m23 core-postfix-update-m24 core-discard-expression-m25 core-integer-binary-preservation-m25b core-integer-less-m26 core-integer-foundation-m26b core-switch-m27 core-aggregate-boundary-m30; do
+            script="tests/compiler/c0/run-$name.sh"
+            test ! -e "$script"
+            git show 63ab1f0da93074883e5cd06d24b0be8e3d1ffc42:"$script" > "$script"
+            export BUILD_DIR="$work/$name"
+            old_rc=0
+            sh "$script" > "$work/$name.old.stdout" 2> "$work/$name.old.stderr" || old_rc=$?
+            rm "$script"
+            mv "$BUILD_DIR" "$work/$name.old"
+            new_rc=0
+            sh tests/compiler/c0/run-core-strict-runtime-case.sh "$name" > "$work/$name.new.stdout" 2> "$work/$name.new.stderr" || new_rc=$?
+            test "$old_rc" -eq "$new_rc"
+            diff -r "$work/$name.old" "$BUILD_DIR"
+            cmp "$work/$name.old.stdout" "$work/$name.new.stdout"
+            cmp "$work/$name.old.stderr" "$work/$name.new.stderr"
+            if test "$old_rc" -eq 0; then
+              passed=$((passed+1))
+              echo "CORE_RUNTIME_EQUIVALENCE=PASS case=$name"
+            else
+              baseline_failures=$((baseline_failures+1))
+              echo "CORE_RUNTIME_BASELINE_FAIL_UNCHANGED case=$name exit=$old_rc"
+            fi
+          done
+          echo "CORE_RUNTIME_COMPARISON passed=$passed unchanged_baseline_fail=$baseline_failures"
           git diff --exit-code
