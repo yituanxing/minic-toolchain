@@ -365,7 +365,16 @@ jobs:
           }
           metadata |= {"docs/architecture/README.md", "docs/architecture/minic-function-contract-register.md"}
           metadata |= {"docs/ci/current-workflow-map.md"}
-          if len(expected) != 457 or deleted != expected or changed != expected | metadata:
+          expected |= {
+              "tools/ci/dump-local-integer-main-diff-v1.sh",
+              "tools/ci/exp-core-reachability-label-roots-v0.py",
+              "tools/ci/run-constant-cfg-fix-v0.sh",
+              "tools/ci/run-linux-memcontrol-assert-v0.sh",
+              "tools/dev/linux-core-function-set-consistency-v0.py",
+              "tools/dev/linux-inline-emission-reachability-v0.py",
+              "tools/dev/linux-static-function-reachability-v0.py",
+          }
+          if len(expected) != 464 or deleted != expected or changed != expected | metadata:
               raise SystemExit("RETIREMENT_SCOPE=FAIL: unexpected tree changes")
           files = [p.decode() for p in git("ls-files", "-z").split(b"\0") if p]
           candidates = {
