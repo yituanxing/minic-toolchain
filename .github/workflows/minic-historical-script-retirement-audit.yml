@@ -5,6 +5,7 @@ on:
       - cleanup/minic-c50-registry-20261124
     paths:
       - 'tools/dev/**'
+      - '.github/workflows-disabled/**'
       - '.github/workflows/minic-historical-script-retirement-audit.yml'
 permissions:
   contents: read
@@ -33,7 +34,168 @@ jobs:
           expected = {p for p in git("ls-tree", "-r", "--name-only", base).decode().splitlines() if pattern.match(p)}
           deleted = set(git("diff", "--name-only", "--diff-filter=D", base, "HEAD").decode().splitlines())
           changed = set(git("diff", "--name-only", base, "HEAD").decode().splitlines())
-          if len(expected) != 145 or deleted != expected or changed != expected | {audit}:
+          archive_expected = {
+              ".github/workflows-disabled/branch-consolidate-v0.yml",
+              ".github/workflows-disabled/branch-consolidation-one-shot-v1.yml",
+              ".github/workflows-disabled/busybox-kbuild-routing-v0.yml",
+              ".github/workflows-disabled/busybox-miniar-ownership-v0.yml",
+              ".github/workflows-disabled/cjson-final-validation.yml",
+              ".github/workflows-disabled/compiler-bootstrap-b3-linux-sample112.yml",
+              ".github/workflows-disabled/compiler-bootstrap-core-lower-trace.yml",
+              ".github/workflows-disabled/compiler-c0.yml",
+              ".github/workflows-disabled/constant-if-link-v0.yml",
+              ".github/workflows-disabled/core-frontier-m33-ffs-diagnostic.yml",
+              ".github/workflows-disabled/core-frontier-m34-bitop-diagnostic.yml",
+              ".github/workflows-disabled/core-frontier-m35-fast-probe.yml",
+              ".github/workflows-disabled/core-frontier-m36-fast-probe.yml",
+              ".github/workflows-disabled/core-frontier-m37-fast-probe.yml",
+              ".github/workflows-disabled/core-frontier-m38-error-diagnostic.yml",
+              ".github/workflows-disabled/core-frontier-m39-const-local-diagnostic.yml",
+              ".github/workflows-disabled/core-frontier-m40-error-recovery.yml",
+              ".github/workflows-disabled/core-frontier-m40b-error-recovery.yml",
+              ".github/workflows-disabled/core-frontier-m40c-full-error-scan.yml",
+              ".github/workflows-disabled/core-frontier-m41-qualified-record-param.yml",
+              ".github/workflows-disabled/core-frontier-m42-pointer-return.yml",
+              ".github/workflows-disabled/core-frontier-m43-volatile-prefix.yml",
+              ".github/workflows-disabled/core-frontier-m44-local-bh-diagnose.yml",
+              ".github/workflows-disabled/core-ir-shadow.yml",
+              ".github/workflows-disabled/driver-section-gc-v0.yml",
+              ".github/workflows-disabled/foundation-refactor-audit.yml",
+              ".github/workflows-disabled/frontend-ownership-contracts.yml",
+              ".github/workflows-disabled/linenoise-pr-validation.yml",
+              ".github/workflows-disabled/linux-batch-pressure.yml",
+              ".github/workflows-disabled/linux-core-assemble-blocker278.yml",
+              ".github/workflows-disabled/linux-core-assemble-sample112.yml",
+              ".github/workflows-disabled/linux-cputime-parser-v0.yml",
+              ".github/workflows-disabled/linux-dev-inline-specialization-v0.yml",
+              ".github/workflows-disabled/linux-early-runtime-link-shadow-v1.yml",
+              ".github/workflows-disabled/linux-expanded-got-fault-v0.yml",
+              ".github/workflows-disabled/linux-expanded-setup-vm-symbolize-v0.yml",
+              ".github/workflows-disabled/linux-filter-local-integer-v2.yml",
+              ".github/workflows-disabled/linux-inline-emission-fix-v0.yml",
+              ".github/workflows-disabled/linux-memcontrol-assert-v0.yml",
+              ".github/workflows-disabled/linux-perf-serio-two-tu-rootcause-v1.yml",
+              ".github/workflows-disabled/linux-pi-minic-early-v0.yml",
+              ".github/workflows-disabled/linux-runtime-ab-python-v1.yml",
+              ".github/workflows-disabled/linux-runtime-build-policy-v0.yml",
+              ".github/workflows-disabled/linux-runtime-fast-v1.yml",
+              ".github/workflows-disabled/linux-runtime-frontier-fast-v2.yml",
+              ".github/workflows-disabled/linux-runtime-frontier-fast-v3.yml",
+              ".github/workflows-disabled/linux-runtime-frontier-fast-v4.yml",
+              ".github/workflows-disabled/linux-runtime-inline-fault-owner-v0.yml",
+              ".github/workflows-disabled/linux-runtime-notifier-v0.yml",
+              ".github/workflows-disabled/linux-runtime-qemu-watch-cert-v1.yml",
+              ".github/workflows-disabled/linux-runtime-timekeeping-v0.yml",
+              ".github/workflows-disabled/linux-runtime-v2-p1-reuse.yml",
+              ".github/workflows-disabled/linux-runtime-vsyscall-v0.yml",
+              ".github/workflows-disabled/lua-pr-validation.yml",
+              ".github/workflows-disabled/lua-stack-abi-validation.yml",
+              ".github/workflows-disabled/miniar-a0.yml",
+              ".github/workflows-disabled/miniar-a1.yml",
+              ".github/workflows-disabled/miniar-shared-reader-gate.yml",
+              ".github/workflows-disabled/minias-a0-fast.yml",
+              ".github/workflows-disabled/minias-a0-frontier.yml",
+              ".github/workflows-disabled/minias-a0-real16.yml",
+              ".github/workflows-disabled/minias-a0-vector33.yml",
+              ".github/workflows-disabled/minic-core-constant-cfg-fix-v0.yml",
+              ".github/workflows-disabled/minic-inline-integer-specialization-v0.yml",
+              ".github/workflows-disabled/minic-local-constant-trace-v0.yml",
+              ".github/workflows-disabled/minic-local-constant-trace-v1.yml",
+              ".github/workflows-disabled/minic-local-integer-assignment-v2.yml",
+              ".github/workflows-disabled/minic-local-integer-conditions-v1.yml",
+              ".github/workflows-disabled/minic-local-integer-constants-fix-v0.yml",
+              ".github/workflows-disabled/minic-local-integer-diff-v1.yml",
+              ".github/workflows-disabled/minic-local-integer-isolate-v1.yml",
+              ".github/workflows-disabled/minic-local-null-pointer-fact-v0.yml",
+              ".github/workflows-disabled/minic-return-equality-regression-v0.yml",
+              ".github/workflows-disabled/minic-strip-m0.yml",
+              ".github/workflows-disabled/minielf-reader-gate.yml",
+              ".github/workflows-disabled/minielf-rel-writer-gate.yml",
+              ".github/workflows-disabled/minild-a0.yml",
+              ".github/workflows-disabled/minild-a2.yml",
+              ".github/workflows-disabled/minild-a3.yml",
+              ".github/workflows-disabled/minild-a4-rebase.yml",
+              ".github/workflows-disabled/minild-a5-rebase.yml",
+              ".github/workflows-disabled/minild-a6-rebase.yml",
+              ".github/workflows-disabled/minild-busybox-profile.yml",
+              ".github/workflows-disabled/minild-dso-input-v0.yml",
+              ".github/workflows-disabled/minild-dynamic-exec-v0.yml",
+              ".github/workflows-disabled/minild-gc-v0.yml",
+              ".github/workflows-disabled/minild-linux-purgatory.yml",
+              ".github/workflows-disabled/minild-linux-vmlinuxo.yml",
+              ".github/workflows-disabled/minild-lua-static.yml",
+              ".github/workflows-disabled/minild-musl-static.yml",
+              ".github/workflows-disabled/minild-script-dev.yml",
+              ".github/workflows-disabled/mininm-m0-gate.yml",
+              ".github/workflows-disabled/miniobjcopy-elf-a1-gate.yml",
+              ".github/workflows-disabled/miniobjcopy-linux-m0-gate.yml",
+              ".github/workflows-disabled/minipp-linux-exact-1000-1499.yml",
+              ".github/workflows-disabled/minipp-linux-exact-1500-1999.yml",
+              ".github/workflows-disabled/minipp-linux-exact-2000-2999.yml",
+              ".github/workflows-disabled/minipp-linux-exact-3000-3351.yml",
+              ".github/workflows-disabled/minipp-linux-exact-500-999.yml",
+              ".github/workflows-disabled/minipp-linux-exact-500.yml",
+              ".github/workflows-disabled/minipp-linux-freeze-500.yml",
+              ".github/workflows-disabled/oneshot-core-frontier-batch-m31-v2.yml",
+              ".github/workflows-disabled/oneshot-core-frontier-batch-m31b.yml",
+              ".github/workflows-disabled/oneshot-core-frontier-batch-m32.yml",
+              ".github/workflows-disabled/oneshot-core-frontier-m31-ktime-shapes.yml",
+              ".github/workflows-disabled/oneshot-core-frontier-m31-next-probe.yml",
+              ".github/workflows-disabled/oneshot-core-frontier-m31-shapes.yml",
+              ".github/workflows-disabled/oneshot-core-frontier-m31b-array-diagnostic.yml",
+              ".github/workflows-disabled/oneshot-core-frontier-m32-diagnostic.yml",
+              ".github/workflows-disabled/oneshot-core-frontier-m33-shapes.yml",
+              ".github/workflows-disabled/oneshot-core-frontier-m33-source-diagnostic.yml",
+              ".github/workflows-disabled/parson-pr-validation.yml",
+              ".github/workflows-disabled/productize-promoted-static-record-designator-v1.yml",
+              ".github/workflows-disabled/retired-20260826/core-do-while-zero-cfg-productizer.yml",
+              ".github/workflows-disabled/retired-20260826/core-expression-trace-productizer.yml",
+              ".github/workflows-disabled/retired-20260826/core-futex-batch-productizer.yml",
+              ".github/workflows-disabled/retired-20260826/core-m125-asm-census.yml",
+              ".github/workflows-disabled/retired-20260826/core-m127-chained-record-call-productizer.yml",
+              ".github/workflows-disabled/retired-20260826/core-m127-chained-record-call-staging.yml",
+              ".github/workflows-disabled/retired-20260826/core-m127-expression-statement-census.yml",
+              ".github/workflows-disabled/retired-20260826/core-m128-record-call-argument-materialization-productizer.yml",
+              ".github/workflows-disabled/retired-20260826/core-m129-leaf-expression-owners-productizer.yml",
+              ".github/workflows-disabled/retired-20260826/core-m130-discard-operand-census.yml",
+              ".github/workflows-disabled/retired-20260826/core-m130-discarded-lvalue-productizer.yml",
+              ".github/workflows-disabled/retired-20260826/core-m131-static-local-subscript-census.yml",
+              ".github/workflows-disabled/retired-20260826/core-m131-zero-size-pointer-stride-productizer.yml",
+              ".github/workflows-disabled/retired-20260826/core-m132-function-phase-census.yml",
+              ".github/workflows-disabled/retired-20260826/core-m132-unbounded-for-termination-productizer.yml",
+              ".github/workflows-disabled/retired-20260826/core-m133-constant-true-loop-reachability-productizer.yml",
+              ".github/workflows-disabled/retired-20260826/core-m134-unreachable-tail-census.yml",
+              ".github/workflows-disabled/retired-20260826/core-m134-unreachable-tail-productizer.yml",
+              ".github/workflows-disabled/retired-20260826/core-m135-cleanup-edge-classification-productizer.yml",
+              ".github/workflows-disabled/retired-20260826/core-m136-silent-statement-census.yml",
+              ".github/workflows-disabled/retired-20260826/core-m137-detached-loop-continue-productizer.yml",
+              ".github/workflows-disabled/retired-20260826/core-m138-error-owner-census.yml",
+              ".github/workflows-disabled/retired-20260826/core-m140-normalized-for-continue-productizer.yml",
+              ".github/workflows-disabled/retired-20260826/core-m141-scoped-loop-continue-productizer.yml",
+              ".github/workflows-disabled/retired-20260826/core-m142-nonedge-cleanup-productizer.yml",
+              ".github/workflows-disabled/retired-20260826/core-m143-cleanup-label-owner-census.yml",
+              ".github/workflows-disabled/retired-20260826/core-m144-unreferenced-loop-label-productizer.yml",
+              ".github/workflows-disabled/retired-20260826/core-m145-loop-owner-differential-census.yml",
+              ".github/workflows-disabled/retired-20260826/core-m146-opportunistic-detached-continue-productizer.yml",
+              ".github/workflows-disabled/retired-20260826/core-m148-normalized-for-update-continue-productizer.yml",
+              ".github/workflows-disabled/retired-20260826/core-m158-final-four-productizer.yml",
+              ".github/workflows-disabled/retired-20260826/core-m160-rv64-full500-census.yml",
+              ".github/workflows-disabled/retired-20260826/core-m161-rv64-int128-pair-staging.yml",
+              ".github/workflows-disabled/retired-20260826/core-m161b-rv64-int128-pair-staging.yml",
+              ".github/workflows-disabled/retired-20260826/core-m175a-repeated-array-object-productizer.yml",
+              ".github/workflows-disabled/retired-20260826/core-m175c-local-complete-object-productizer.yml",
+              ".github/workflows-disabled/retired-20260826/core-pareto-top35-productizer.yml",
+              ".github/workflows-disabled/retired-20260826/core-record-conditional-productizer.yml",
+              ".github/workflows-disabled/retired-20260827/core-error-cohort.yml",
+              ".github/workflows-disabled/retired-20260827/core-fast-batch-j.yml",
+              ".github/workflows-disabled/retired-20260827/core-m175b-scalar-double-productizer.yml",
+              ".github/workflows-disabled/retired-20260827/core-neigh-verifier-diagnostic.yml",
+              ".github/workflows-disabled/retired-20260827/core-pareto-cohorts.yml",
+              ".github/workflows-disabled/sds-pr-validation.yml",
+              ".github/workflows-disabled/stage2-kbuild-wrapper-contract.yml",
+          }
+          expected |= archive_expected
+          if len(expected) != 303 or deleted != expected or changed != expected | {audit}:
               raise SystemExit("RETIREMENT_SCOPE=FAIL: unexpected tree changes")
           files = [p.decode() for p in git("ls-files", "-z").split(b"\0") if p]
           candidates = {
@@ -102,4 +264,47 @@ jobs:
           if active:
               raise SystemExit("RETIREMENT_REFERENCES=FAIL retained non-document references require review")
           print("RETIREMENT_REFERENCES=PASS")
+          # Verify the remaining historical guard scripts have identical
+          # outcomes before and after archive pruning. Baseline failures
+          # are reported separately, not counted as successful checks.
+          import tempfile
+          import os
+          baseline = "2b2cbd82b92460d5cde928e1e71e8662d976dbef"
+          guards = []
+          for p in files:
+              if not (p.startswith("tools/ci/") and p.endswith(".py")):
+                  continue
+              if "workflows-disabled" in pathlib.Path(p).read_text():
+                  if pathlib.PurePosixPath(p).name.startswith(("check_", "audit_")):
+                      guards.append(p)
+          with tempfile.TemporaryDirectory() as tmp:
+              worktree = pathlib.Path(tmp) / "before"
+              subprocess.run(["git", "worktree", "add", "--detach", str(worktree), baseline], check=True)
+              try:
+                  root = pathlib.Path.cwd()
+                  def execute(where, path):
+                      env = dict(os.environ)
+                      env["GITHUB_REF_NAME"] = "agent/linux-expanded-kbuild-v0"
+                      result = subprocess.run(["python3", path], cwd=where, env=env,
+                                              stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                              text=True, timeout=45)
+                      return result.returncode, result.stdout.replace(str(where), "<checkout>")
+                  regressions = []
+                  passed = 0
+                  for guard in guards:
+                      before = execute(worktree, guard)
+                      after = execute(root, guard)
+                      if before != after:
+                          regressions.append(guard)
+                          print(f"GUARD_CHANGED {guard} before={before!r} after={after!r}")
+                      elif before[0] == 0:
+                          passed += 1
+                          print(f"GUARD_PASS {guard}")
+                      else:
+                          print(f"GUARD_BASELINE_FAIL {guard} rc={before[0]} {before[1][-350:]}")
+                  print(f"GUARD_COMPARISON total={len(guards)} pass={passed} unchanged_baseline_fail={len(guards)-passed-len(regressions)} changed={len(regressions)}")
+                  if regressions:
+                      raise SystemExit("GUARD_COMPARISON=FAIL")
+              finally:
+                  subprocess.run(["git", "worktree", "remove", "--force", str(worktree)], check=True)
           PY
