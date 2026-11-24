@@ -306,16 +306,21 @@ jobs:
               ".github/workflows-disabled/toolchain-regression-ledger-v0.yml",
           }
           metadata = {audit, ".github/workflows-disabled/README.txt", "docs/ci/README.md"}
-          if len(expected) != 407 or deleted != expected or changed != expected | metadata:
+          expected |= {
+              "tools/ci/apply-m158-final-four.py",
+              "tools/ci/apply-riscv64-core-object-slot-reuse-legacy-v0.py",
+          }
+          if len(expected) != 409 or deleted != expected or changed != expected | metadata:
               raise SystemExit("RETIREMENT_SCOPE=FAIL: unexpected tree changes")
           files = [p.decode() for p in git("ls-files", "-z").split(b"\0") if p]
           candidates = {
               p: ("disabled-ci" if p.startswith(".github/workflows-disabled/") else
-                  "ci-rewriter" if p.startswith("tools/ci/") else
+                  "ci-rewriter" if p.startswith("tools/ci/") and pathlib.PurePosixPath(p).name.startswith(("apply-", "patch-")) else
+                  "ci-helper" if p.startswith(("tools/ci/", "tools/dev/")) else
                   "historical-doc")
               for p in files
               if (p.startswith(".github/workflows-disabled/") and p.endswith((".yml", ".yaml"))) or
-                 (p.startswith("tools/ci/") and pathlib.PurePosixPath(p).name.startswith(("apply-", "patch-"))) or
+                 (p.startswith(("tools/ci/", "tools/dev/")) and p.endswith((".py", ".sh", ".patch"))) or
                  p.startswith(("docs/architecture/review-", "docs/milestones/"))
           }
           targets = defaultdict(set)
@@ -369,6 +374,25 @@ jobs:
                   print("  ACTIVE_CONSUMERS " + "; ".join(runtime))
           for (group, category), n in sorted(counts.items()):
               print(f"INVENTORY_TOTAL {group} {category} {n}")
+          # Trace the entire helper graph, not just direct references to rewrite tools.
+          # A disconnected component is a review candidate, not proof of dead code:
+          # manual commands, dynamically constructed paths and external callers can exist.
+          helpers = {p for p, group in candidates.items() if group in ("ci-helper", "ci-rewriter")}
+          roots = {p for p in helpers if any(
+              c not in helpers and not c.startswith((".github/workflows-disabled/", "docs/"))
+              and pathlib.PurePosixPath(c).suffix.lower() not in (".md", ".rst")
+              for c in consumers[p])}
+          reached = set(roots)
+          while True:
+              more = {p for p in helpers - reached if consumers[p] & reached}
+              if not more:
+                  break
+              reached |= more
+          print(f"HELPER_GRAPH total={len(helpers)} direct_roots={len(roots)} reached={len(reached)} disconnected={len(helpers-reached)}")
+          for p in sorted(helpers - reached):
+              live = sorted(c for c in consumers[p] if c in helpers)
+              hist = sorted(c for c in consumers[p] if c not in helpers)
+              print(f"DISCONNECTED_HELPER {p} helper_consumers={'; '.join(live) or '-'} other_consumers={'; '.join(hist) or '-'}")
           for line in dynamic_lines:
               print("DIRECTORY_REFERENCE " + line)
           print("Inventory is a conservative literal-name scan; dynamic selection and historical integrity checks require manual review.")
