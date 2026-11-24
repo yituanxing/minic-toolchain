@@ -4,6 +4,7 @@ on:
     branches:
       - cleanup/minic-c50-registry-20261124
     paths:
+      - 'tests/compiler/c0/**'
       - 'tools/dev/**'
       - 'tools/ci/**'
       - 'docs/milestones/**'
@@ -15,7 +16,7 @@ permissions:
 jobs:
   retired-script-references:
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
         with:
@@ -415,7 +416,19 @@ jobs:
               "docs/ci/workflow-cross-branch-convergence-2026-10-08.md",
           }
           metadata |= {"docs/ci/ci-active-overlap-cost-audit-2026-10-09.md", "docs/ci/ci-trigger-coverage-contracts-2026-10-09.md", "docs/ci/pre-runtime-ci-readiness-2026-10-08.md"}
-          if len(expected) != 502 or deleted != expected or changed != expected | metadata:
+          expected |= {
+              "tests/compiler/c0/run-external-array-redeclaration-owner.sh",
+              "tests/compiler/c0/run-external-tentative-declarator-list.sh",
+              "tests/compiler/c0/run-gnu-object-unused-alias.sh",
+              "tests/compiler/c0/run-runtime-record-zero-shorthand.sh",
+              "tests/compiler/c0/run-small-record-copy-return.sh",
+              "tests/compiler/c0/run-static-local-prefix-attributes.sh",
+              "tests/compiler/c0/run-static-record-single-char-array.sh",
+              "tests/compiler/c0/run-backward-static-aggregate-overlay.sh",
+              "tests/compiler/c0/run-fixed-call-character-pointer.sh",
+          }
+          metadata |= {"tests/compiler/c0/run-compile-only-case.sh", "tests/compiler/c0/run.sh", "tests/compiler/c0/probe-core-module-reachability-closure.sh"}
+          if len(expected) != 511 or deleted != expected or changed != expected | metadata:
               raise SystemExit("RETIREMENT_SCOPE=FAIL: unexpected tree changes")
           files = [p.decode() for p in git("ls-files", "-z").split(b"\0") if p]
           candidates = {
@@ -605,3 +618,23 @@ jobs:
               finally:
                   subprocess.run(["git", "worktree", "remove", "--force", str(worktree)], check=True)
           PY
+      - name: Compare nine original and shared compile-only test drivers
+        run: |
+          set -eu
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/retirement-oracle build/retirement-oracle/bin/minic
+          export MINIC="$PWD/build/retirement-oracle/bin/minic" HOST_CC=cc
+          old="$PWD/build/retirement-before"
+          new="$PWD/build/retirement-after"
+          for name in external-array-redeclaration-owner external-tentative-declarator-list gnu-object-unused-alias runtime-record-zero-shorthand small-record-copy-return static-local-prefix-attributes static-record-single-char-array backward-static-aggregate-overlay fixed-call-character-pointer; do
+            script="tests/compiler/c0/run-$name.sh"
+            test ! -e "$script"
+            git show e9cdc34fb6c45f89e0e961fcf2e3bfd29f96624b:"$script" > "$script"
+            BUILD_DIR="$old" sh "$script"
+            rm "$script"
+            BUILD_DIR="$new" sh tests/compiler/c0/run-compile-only-case.sh "$name"
+            cmp "$old/tests/$name/input.i" "$new/tests/$name/input.i"
+            cmp "$old/tests/$name/output.s" "$new/tests/$name/output.s"
+            echo "COMPILE_ONLY_EQUIVALENCE=PASS case=$name"
+          done
+          if sh tests/compiler/c0/run-compile-only-case.sh unknown-case; then exit 1; fi
+          git diff --exit-code

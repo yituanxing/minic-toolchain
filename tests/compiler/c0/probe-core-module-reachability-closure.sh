@@ -21,7 +21,7 @@ fi
 # matching; check the compiler's resulting ELF symbol edges downstream.
 MINIC_CC="$minic" sh "$root/tests/compiler/c0/probe-gnu-dead-file-static-object-graph.sh"
 MINIC="$minic" BUILD_DIR="$work" bash "$root/tests/compiler/c0/run-static-local-owner-reachability.sh"
-MINIC="$minic" BUILD_DIR="$work" sh "$root/tests/compiler/c0/run-gnu-object-unused-alias.sh"
+MINIC="$minic" BUILD_DIR="$work" sh "$root/tests/compiler/c0/run-compile-only-case.sh" gnu-object-unused-alias
 MINIC="$minic" BUILD_DIR="$work" sh "$root/tests/compiler/c0/run-gnu-function-copy-alias.sh"
 echo 'CORE_MODULE_ALIAS_OWNER=PASS used_section_file_asm static_local dead_callback function_alias object_alias'
 

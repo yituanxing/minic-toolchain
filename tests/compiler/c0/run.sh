@@ -569,16 +569,16 @@ BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
 sh "$root/tests/compiler/c0/run-static-pointer-constant-conditional.sh"
 
 MINIC="$minic" HOST_CC="$host_cc" BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
-  sh "$root/tests/compiler/c0/run-runtime-record-zero-shorthand.sh"
+  sh "$root/tests/compiler/c0/run-compile-only-case.sh" runtime-record-zero-shorthand
 
 MINIC="$minic" HOST_CC="$host_cc" BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
-  sh "$root/tests/compiler/c0/run-external-array-redeclaration-owner.sh"
+  sh "$root/tests/compiler/c0/run-compile-only-case.sh" external-array-redeclaration-owner
 
 MINIC="$minic" HOST_CC="$host_cc" BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
-  sh "$root/tests/compiler/c0/run-static-local-prefix-attributes.sh"
+  sh "$root/tests/compiler/c0/run-compile-only-case.sh" static-local-prefix-attributes
 
 MINIC="$minic" HOST_CC="$host_cc" BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
-  sh "$root/tests/compiler/c0/run-gnu-object-unused-alias.sh"
+  sh "$root/tests/compiler/c0/run-compile-only-case.sh" gnu-object-unused-alias
 
 MINIC="$minic" HOST_CC="$host_cc" BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
   sh "$root/tests/compiler/c0/run-alignof-expression.sh"
@@ -587,22 +587,22 @@ MINIC="$minic" HOST_CC="$host_cc" BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" 
   sh "$root/tests/compiler/c0/run-static-record-array-suffix-attributes.sh"
 
 MINIC="$minic" HOST_CC="$host_cc" BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
-  sh "$root/tests/compiler/c0/run-static-record-single-char-array.sh"
+  sh "$root/tests/compiler/c0/run-compile-only-case.sh" static-record-single-char-array
 
 MINIC="$minic" HOST_CC="$host_cc" BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
   sh "$root/tests/compiler/c0/run-preformed-static-array.sh"
 
 MINIC="$minic" HOST_CC="$host_cc" BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
-  sh "$root/tests/compiler/c0/run-external-tentative-declarator-list.sh"
+  sh "$root/tests/compiler/c0/run-compile-only-case.sh" external-tentative-declarator-list
 
 MINIC="$minic" BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
-  sh "$root/tests/compiler/c0/run-fixed-call-character-pointer.sh"
+  sh "$root/tests/compiler/c0/run-compile-only-case.sh" fixed-call-character-pointer
 
 MINIC="$minic" HOST_CC="$host_cc" BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
-  sh "$root/tests/compiler/c0/run-small-record-copy-return.sh"
+  sh "$root/tests/compiler/c0/run-compile-only-case.sh" small-record-copy-return
 
 MINIC="$minic" HOST_CC="$host_cc" BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
-  sh "$root/tests/compiler/c0/run-backward-static-aggregate-overlay.sh"
+  sh "$root/tests/compiler/c0/run-compile-only-case.sh" backward-static-aggregate-overlay
 
 MINIC="$minic" HOST_CC="$host_cc" BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
   sh "$root/tests/compiler/c0/run-gnu-weak-external-objects.sh"
