@@ -98,31 +98,26 @@ const MinicTargetInfo *minic_target_info_for_architecture(
     static MinicTargetInfo canonical_targets[
         sizeof(minic_target_machine_descriptors) /
         sizeof(minic_target_machine_descriptors[0])];
-    const MinicTargetCatalogEntry *catalog;
-    size_t count;
     size_t index;
+    const MinicTargetMachineDescriptor *descriptor;
+    MinicTargetInfo *target;
 
-    catalog = minic_target_catalog_all(&count);
-    if (count != sizeof(minic_target_machine_descriptors) /
-                 sizeof(minic_target_machine_descriptors[0])) return NULL;
-    for (index = 0U; index < count; ++index) {
-        const MinicTargetMachineDescriptor *descriptor =
-            minic_target_machine_descriptors[index];
-        MinicTargetInfo *target = &canonical_targets[index];
-        if (catalog[index].architecture != architecture) continue;
-        if (target->data_layout == NULL) {
-            MinicTargetInfo initialized = descriptor->target;
-            initialized.architecture = catalog[index].architecture;
-            initialized.data_layout = descriptor->layout();
-            if (initialized.data_layout == NULL ||
-                (descriptor->initialize_machine_state != NULL &&
-                 !descriptor->initialize_machine_state(&initialized)))
-                return NULL;
-            *target = initialized;
-        }
-        return target;
+    if (!minic_target_catalog_index(architecture,
+            sizeof(minic_target_machine_descriptors) / sizeof(minic_target_machine_descriptors[0]), &index))
+        return NULL;
+    descriptor = minic_target_machine_descriptors[index];
+    target = &canonical_targets[index];
+    if (target->data_layout == NULL) {
+        MinicTargetInfo initialized = descriptor->target;
+        initialized.architecture = architecture;
+        initialized.data_layout = descriptor->layout();
+        if (initialized.data_layout == NULL ||
+            (descriptor->initialize_machine_state != NULL &&
+             !descriptor->initialize_machine_state(&initialized)))
+            return NULL;
+        *target = initialized;
     }
-    return NULL;
+    return target;
 }
 
 const MinicTargetInfo *minic_default_target_info(void) {

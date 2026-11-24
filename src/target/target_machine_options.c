@@ -8,7 +8,6 @@
  * codegen-option admission points. This module cannot interpret ISA-family
  * identifiers or know an architecture-specific option spelling. */
 typedef struct MinicRegisteredMachineOptions {
-    MinicTargetArchitecture architecture;
     bool (*resolve)(MinicTargetInfo *, const char *, const char *,
                     char *, size_t);
     bool (*codegen)(MinicTargetInfo *, const char *, char *, size_t);
@@ -16,7 +15,7 @@ typedef struct MinicRegisteredMachineOptions {
 
 static const MinicRegisteredMachineOptions registered_policies[] = {
 #define MINIC_TARGET_REGISTRATION(arch, id, spelling, stages, isa) \
-    {arch, minic_machine_options_##id##_resolve, \
+    {minic_machine_options_##id##_resolve, \
      minic_machine_options_##id##_codegen},
 #include "target/target_registration.def"
 #undef MINIC_TARGET_REGISTRATION
@@ -25,13 +24,9 @@ static const MinicRegisteredMachineOptions registered_policies[] = {
 static const MinicRegisteredMachineOptions *machine_options_policy(
     MinicTargetArchitecture architecture) {
     size_t index;
-    for (index = 0U;
-         index < sizeof(registered_policies) / sizeof(registered_policies[0]);
-         ++index) {
-        if (registered_policies[index].architecture == architecture)
-            return &registered_policies[index];
-    }
-    return NULL;
+    return minic_target_catalog_index(architecture,
+        sizeof(registered_policies) / sizeof(registered_policies[0]), &index)
+        ? &registered_policies[index] : NULL;
 }
 
 bool minic_target_machine_options_resolve(MinicTargetInfo *invocation_target,

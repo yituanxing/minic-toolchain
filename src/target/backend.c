@@ -50,16 +50,11 @@ static const MinicBackend *const minic_registered_backends[] = {
 };
 
 const MinicBackend *minic_backend_for_target(const MinicTargetInfo *target) {
-    const MinicTargetCatalogEntry *catalog;
-    size_t count, index;
-    if (target == NULL) return NULL;
-    catalog = minic_target_catalog_all(&count);
-    if (count != sizeof(minic_registered_backends) /
-                 sizeof(minic_registered_backends[0])) return NULL;
-    for (index = 0U; index < count; ++index)
-        if (catalog[index].architecture == target->architecture)
-            return minic_registered_backends[index];
-    return NULL;
+    size_t index;
+    return target != NULL &&
+           minic_target_catalog_index(target->architecture,
+               sizeof(minic_registered_backends) / sizeof(minic_registered_backends[0]), &index)
+        ? minic_registered_backends[index] : NULL;
 }
 
 bool minic_backend_emit_assembly_with_module(

@@ -45,16 +45,11 @@ static const MinicSourceBackend *const registered_source_backends[] = {
 
 const MinicSourceBackend *minic_source_backend_for_target(
     const MinicTargetInfo *target) {
-    const MinicTargetCatalogEntry *catalog;
-    size_t count, index;
-    if (target == NULL) return NULL;
-    catalog = minic_target_catalog_all(&count);
-    if (count != sizeof(registered_source_backends) /
-                 sizeof(registered_source_backends[0])) return NULL;
-    for (index = 0U; index < count; ++index)
-        if (catalog[index].architecture == target->architecture)
-            return registered_source_backends[index];
-    return NULL;
+    size_t index;
+    return target != NULL &&
+           minic_target_catalog_index(target->architecture,
+               sizeof(registered_source_backends) / sizeof(registered_source_backends[0]), &index)
+        ? registered_source_backends[index] : NULL;
 }
 
 static uint64_t source_asm_hash_bytes(uint64_t hash,

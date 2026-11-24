@@ -21,9 +21,23 @@ static void test_target_registry(void) {
     char reason[256];
     entries = minic_target_catalog_all(&count);
     REQUIRE(count == 5U);
+    {
+        size_t found = count;
+        REQUIRE(!minic_target_catalog_index((MinicTargetArchitecture)9999,
+                                            count, &found));
+        REQUIRE(found == count);
+    }
     for (index = 0U; index < count; ++index) {
         MinicTargetInfo target = {0};
+        size_t found = count;
         target.architecture = entries[index].architecture;
+        REQUIRE(minic_target_catalog_index(target.architecture, count, &found));
+        REQUIRE(found == index);
+        REQUIRE(minic_target_catalog_for_architecture(target.architecture) ==
+                &entries[index]);
+        REQUIRE(!minic_target_catalog_index(target.architecture, count - 1U, &found));
+        REQUIRE(found == index);
+        REQUIRE(!minic_target_catalog_index(target.architecture, count, NULL));
         REQUIRE(minic_target_machine_options_resolve(
             &target, NULL, NULL, reason, sizeof(reason)));
         REQUIRE(reason[0] == '\0');

@@ -171,40 +171,35 @@ const struct MinicTargetSourceInfo *minic_target_source_info_for_architecture(
     static MinicTargetSourceInfo canonical_source_profiles[
         sizeof(minic_target_source_descriptors) /
         sizeof(minic_target_source_descriptors[0])];
-    const MinicTargetCatalogEntry *catalog;
-    size_t count;
     size_t index;
+    const MinicTargetSourceDescriptor *descriptor;
+    MinicTargetSourceInfo *profile;
 
-    catalog = minic_target_catalog_all(&count);
-    if (count != sizeof(minic_target_source_descriptors) /
-                 sizeof(minic_target_source_descriptors[0])) return NULL;
-    for (index = 0U; index < count; ++index) {
-        const MinicTargetSourceDescriptor *descriptor =
-            minic_target_source_descriptors[index];
-        MinicTargetSourceInfo *profile = &canonical_source_profiles[index];
-        if (catalog[index].architecture != architecture) continue;
-        if (profile->integer_model == NULL) {
-            MinicTargetSourceInfo initialized = descriptor->source;
-            if (initialized.integer_model == NULL ||
-                descriptor->integer_storage == NULL ||
-                !minic_target_source_integer_type_with_rank(
-                    descriptor->wide_character_sign,
-                    descriptor->wide_character_rank,
-                    &initialized.wide_character_type) ||
-                !minic_target_source_integer_type_with_rank(
-                    MINIC_INTEGER_SIGN_UNSIGNED,
-                    descriptor->libc_size_rank,
-                    &initialized.libc_size_type))
-                return NULL;
-            (void)memcpy(initialized.integer_size,
-                         descriptor->integer_storage->size,
-                         sizeof(initialized.integer_size));
-            (void)memcpy(initialized.integer_alignment,
-                         descriptor->integer_storage->alignment,
-                         sizeof(initialized.integer_alignment));
-            *profile = initialized;
-        }
-        return profile;
+    if (!minic_target_catalog_index(architecture,
+            sizeof(minic_target_source_descriptors) / sizeof(minic_target_source_descriptors[0]), &index))
+        return NULL;
+    descriptor = minic_target_source_descriptors[index];
+    profile = &canonical_source_profiles[index];
+    if (profile->integer_model == NULL) {
+        MinicTargetSourceInfo initialized = descriptor->source;
+        if (initialized.integer_model == NULL ||
+            descriptor->integer_storage == NULL ||
+            !minic_target_source_integer_type_with_rank(
+                descriptor->wide_character_sign,
+                descriptor->wide_character_rank,
+                &initialized.wide_character_type) ||
+            !minic_target_source_integer_type_with_rank(
+                MINIC_INTEGER_SIGN_UNSIGNED,
+                descriptor->libc_size_rank,
+                &initialized.libc_size_type))
+            return NULL;
+        (void)memcpy(initialized.integer_size,
+                     descriptor->integer_storage->size,
+                     sizeof(initialized.integer_size));
+        (void)memcpy(initialized.integer_alignment,
+                     descriptor->integer_storage->alignment,
+                     sizeof(initialized.integer_alignment));
+        *profile = initialized;
     }
-    return NULL;
+    return profile;
 }

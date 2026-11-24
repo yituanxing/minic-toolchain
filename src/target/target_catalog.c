@@ -30,14 +30,26 @@ const MinicTargetCatalogEntry *minic_target_catalog_find(const char *name) {
     return NULL;
 }
 
-const MinicTargetCatalogEntry *minic_target_catalog_for_architecture(
-    MinicTargetArchitecture architecture) {
+bool minic_target_catalog_index(MinicTargetArchitecture architecture,
+                                size_t expected_count, size_t *index) {
     size_t i, count;
     const MinicTargetCatalogEntry *targets = minic_target_catalog_all(&count);
+    if (index == NULL || count != expected_count) return false;
     for (i = 0U; i < count; ++i) {
-        if (targets[i].architecture == architecture) return &targets[i];
+        if (targets[i].architecture == architecture) {
+            *index = i;
+            return true;
+        }
     }
-    return NULL;
+    return false;
+}
+
+const MinicTargetCatalogEntry *minic_target_catalog_for_architecture(
+    MinicTargetArchitecture architecture) {
+    size_t index;
+    return minic_target_catalog_index(architecture,
+        sizeof(minic_targets) / sizeof(minic_targets[0]), &index)
+        ? &minic_targets[index] : NULL;
 }
 
 /* The product defaults to the historical RV64 pipeline, not whichever

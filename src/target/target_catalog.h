@@ -43,6 +43,10 @@ const MinicTargetCatalogEntry *minic_target_catalog_for_architecture(
     MinicTargetArchitecture architecture);
 const MinicTargetCatalogEntry *minic_target_catalog_default(void);
 const MinicTargetCatalogEntry *minic_target_catalog_all(size_t *count);
+/* Resolve registration-order index only for a matching table length.
+ * On failure the caller's index is unchanged. */
+bool minic_target_catalog_index(MinicTargetArchitecture architecture,
+                                size_t expected_count, size_t *index);
 
 /* One source of accepted RISC-V ISA/ABI pairs for the standalone driver,
  * full compiler and tests. ISA feature bits remain owned by RISC-V machine
