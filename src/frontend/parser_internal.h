@@ -325,6 +325,35 @@ bool minic_parser_inspect_array_initializer_extent(MinicParser *parser, size_t *
 bool minic_parser_parse_record_array_bound(MinicParser *parser,
                                            size_t *element_count,
                                            bool *is_zero_length);
+/* Shared lexical digit decoding and function/global name-index hashing.
+ * Keep the historical hash seed: typedef indexing has its own policy. */
+static inline int minic_parser_hex_digit_value(char character) {
+    if (character >= '0' && character <= '9') {
+        return character - '0';
+    }
+    if (character >= 'a' && character <= 'f') {
+        return character - 'a' + 10;
+    }
+    if (character >= 'A' && character <= 'F') {
+        return character - 'A' + 10;
+    }
+    return -1;
+}
+
+static inline size_t minic_parser_symbol_name_hash(const char *name, size_t length) {
+    uint64_t hash = UINT64_C(1469598103934665603);
+    size_t index;
+
+    if (name == NULL) {
+        return 0U;
+    }
+    for (index = 0U; index < length; ++index) {
+        hash ^= (unsigned char)name[index];
+        hash *= UINT64_C(1099511628211);
+    }
+    return (size_t)hash;
+}
+
 size_t minic_parser_span_length(MinicSourceSpan span);
 bool minic_parser_span_equals(const MinicParser *parser,
                               MinicSourceSpan left,

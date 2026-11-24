@@ -1,4 +1,5 @@
 #include "frontend/ast.h"
+#include "frontend/ast_storage.h"
 
 #include <stdint.h>
 #include <stdlib.h>
@@ -32,41 +33,6 @@ static bool global_record_field_shape(const MinicC0Program *program,
     *is_zero_length = is_array && info.is_zero_length;
     *is_flexible = is_array && info.is_incomplete && field->is_flexible_array;
     return true;
-}
-
-static bool grow_array(void **data, size_t *capacity, size_t count, size_t element_size) {
-    void *resized;
-    size_t new_capacity;
-
-    if (count < *capacity) {
-        return true;
-    }
-    new_capacity = *capacity == 0U ? 16U : *capacity * 2U;
-    if (new_capacity < *capacity || new_capacity > SIZE_MAX / element_size) {
-        return false;
-    }
-    resized = realloc(*data, new_capacity * element_size);
-    if (resized == NULL) {
-        return false;
-    }
-    *data = resized;
-    *capacity = new_capacity;
-    return true;
-}
-
-static char *copy_name(const char *name, size_t name_length) {
-    char *copy;
-
-    if (name == NULL || name_length == SIZE_MAX) {
-        return NULL;
-    }
-    copy = (char *)malloc(name_length + 1U);
-    if (copy == NULL) {
-        return NULL;
-    }
-    (void)memcpy(copy, name, name_length);
-    copy[name_length] = '\0';
-    return copy;
 }
 
 static bool name_conflicts(const MinicC0Program *program, const char *name, size_t name_length) {
@@ -116,15 +82,15 @@ static bool add_fixed_register_binding(MinicC0Program *program,
         register_name_length == 0U ||
         (!minic_type_is_integer(type) && !minic_type_is_pointer(type)) ||
         (!is_local && name_conflicts(program, name, name_length)) ||
-        !grow_array((void **)&program->fixed_register_bindings,
+        !minic_ast_grow_array((void **)&program->fixed_register_bindings,
                     &program->fixed_register_binding_capacity,
                     program->fixed_register_binding_count,
                     sizeof(*program->fixed_register_bindings))) {
         return false;
     }
     (void)memset(&binding, 0, sizeof(binding));
-    binding.name = copy_name(name, name_length);
-    binding.register_name = copy_name(register_name, register_name_length);
+    binding.name = minic_ast_copy_name(name, name_length);
+    binding.register_name = minic_ast_copy_name(register_name, register_name_length);
     if (binding.name == NULL || binding.register_name == NULL) {
         free(binding.name);
         free(binding.register_name);
@@ -287,18 +253,18 @@ static bool add_global_object_entity_with_state(MinicC0Program *program,
     }
 
     global_object_initialize_defaults(&object);
-    object.name = copy_name(name, name_length);
+    object.name = minic_ast_copy_name(name, name_length);
     if (object.name == NULL) {
         return false;
     }
     if (state->section_name != NULL) {
-        object.section_name = copy_name(state->section_name, state->section_name_length);
+        object.section_name = minic_ast_copy_name(state->section_name, state->section_name_length);
         if (object.section_name == NULL) {
             free(object.name);
             return false;
         }
     }
-    if (!grow_array((void **)&program->global_objects,
+    if (!minic_ast_grow_array((void **)&program->global_objects,
                     &program->global_object_capacity,
                     program->global_object_count,
                     sizeof(*program->global_objects))) {
@@ -479,7 +445,7 @@ bool minic_c0_global_object_add_initializer_bits(MinicC0Program *program,
             }
         }
     }
-    if (!grow_array((void **)&object->initializer_values,
+    if (!minic_ast_grow_array((void **)&object->initializer_values,
                     &object->initializer_capacity,
                     object->initializer_count,
                     sizeof(*object->initializer_values))) {
@@ -668,7 +634,7 @@ bool minic_c0_global_object_select_union_member_with_span(MinicC0Program *progra
             return true;
         }
     }
-    if (!grow_array((void **)&object->union_selections,
+    if (!minic_ast_grow_array((void **)&object->union_selections,
                     &object->union_selection_capacity,
                     object->union_selection_count,
                     sizeof(*object->union_selections))) {
@@ -1303,7 +1269,7 @@ static bool add_global_symbol_relocation(MinicC0Program *program,
     if (insertion_index < object->relocation_count &&
         object->relocations[insertion_index].location_index == location_index)
         return false;
-    if (!grow_array((void **)&object->relocations,
+    if (!minic_ast_grow_array((void **)&object->relocations,
                     &object->relocation_capacity,
                     object->relocation_count,
                     sizeof(*object->relocations))) {

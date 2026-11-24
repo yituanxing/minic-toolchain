@@ -376,17 +376,6 @@ static bool parenthesis_starts_cast(const MinicParser *parser) {
     return token_starts_cast_type(parser, token);
 }
 
-static bool expression_is_integer_zero(const MinicExpression *expression) {
-    return expression != NULL && expression->kind == MINIC_EXPRESSION_INTEGER &&
-           minic_type_is_integer(expression->type) && expression->value.integer_value == 0;
-}
-
-static bool type_is_condition_scalar(MinicType type) {
-    return minic_type_is_integer(type) || minic_type_is_pointer(type) ||
-           minic_type_is_float(type) || minic_type_is_double(type) ||
-           minic_type_is_long_double(type);
-}
-
 static bool same_floating_type(MinicType left, MinicType right) {
     return minic_type_equal(left, right) &&
            ((minic_type_is_double(left) && minic_type_is_double(right)) ||
@@ -946,7 +935,7 @@ static bool parse_cast(MinicParser *parser, MinicExpressionId *expression_id) {
          !minic_type_cast_compatible(target_type, operand->type) &&
          !(minic_type_is_record(target_type) && minic_type_is_record(operand->type) &&
            minic_c0_types_compatible(parser->program, target_type, operand->type)) &&
-         !(minic_type_is_pointer(target_type) && expression_is_integer_zero(operand)))) {
+         !(minic_type_is_pointer(target_type) && minic_c0_expression_is_integer_zero(operand)))) {
         minic_parser_error(parser, "unsupported cast between these types");
         return false;
     }
@@ -2039,7 +2028,7 @@ static bool parse_unary(MinicParser *parser, MinicExpressionId *expression_id, b
     expression.kind = MINIC_EXPRESSION_UNARY;
     expression.value_category = MINIC_VALUE_RVALUE;
     if (operator_token.kind == MINIC_TOKEN_BANG) {
-        if (!type_is_condition_scalar(operand_expression->type)) {
+        if (!minic_c0_type_is_condition_scalar(operand_expression->type)) {
             minic_parser_error(parser, "logical not requires an integer or pointer operand");
             return false;
         }
@@ -2423,7 +2412,7 @@ static bool binary_result_type(const MinicTargetInvocation *target,
             return true;
     }
     if (binary_is_logical(kind)) {
-        if (!type_is_condition_scalar(left) || !type_is_condition_scalar(right)) {
+        if (!minic_c0_type_is_condition_scalar(left) || !minic_c0_type_is_condition_scalar(right)) {
             return false;
         }
         *result = minic_type_int();
@@ -2591,7 +2580,7 @@ bool minic_parser_expression_parse_internal(MinicParser *parser,
             return false;
         }
         condition_expression = minic_c0_program_expression(parser->program, left);
-        if (condition_expression == NULL || !type_is_condition_scalar(condition_expression->type)) {
+        if (condition_expression == NULL || !minic_c0_type_is_condition_scalar(condition_expression->type)) {
             minic_parser_error(parser,
                                "conditional expression requires an integer or pointer condition");
             return false;

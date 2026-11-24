@@ -1673,3 +1673,13 @@ Target 审阅 manifest 260（113 条保留的 stale blob）、完整后端边界
 - `tools/dev/patch-core-frontier-m77-empty-tied-asm-copy.py`
 
 本批为静态清理；未在本机编译。全树普查成功并不等于修改后的编译器动态验证通过，现有 PR 的 native strict gate 和五架构验证结果仍待核实。没有以删减历史工具行数冒充生产源码瘦身。
+
+## 批次 C45：共享词法、AST 存储与符号边界（2026-11-24）
+
+父基线 `23d9b91e`：Native Strict Gate 成功，four-arch 的 x86-64/RV64/AArch64/LoongArch64 四个运行 job 均成功。两个 AArch64 原始 Linux 汇编 workflow 与父基线同样因缺失固定输入 artifact/目录失败，尚无可用 GNU AS 结果。其余待运行项目不冒充已通过。
+
+- 将 AST arena 扩容与 name copy 的两份逐字相同实现移到仅供 AST/global arena 的私有 header；保留容量增长、失败和所有权语义，不修改对象模型。
+- 数字/字符串十六进制字符转换、函数/全局对象名称哈希各合并到 Parser 内部已有公共接口位置；保留原哈希 seed，故意不合并不同 seed 的 typedef hash。
+- Parser 与 AST verifier 使用相同的 syntactic integer-zero、condition scalar 判定和既有只读 expression accessor；不将语法字面零改成常量表达式求值，不合并独立的内存 transport admission。
+- Core reachability、program emission、sealed symbol 验证使用同一 ASCII 字符分类，保留完整符号非空验证与 token 边界。RV frame 的 GPR callee-save 判定直接复用 register_identity owner。
+- 只做相同语义的去重；新增私有头文件以避免外部 ABI/API 或跨 TU 调用变化。完整 Git 差分需复核；修改后原生 gate、运行及差分验证待执行。不删除测试。

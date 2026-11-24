@@ -172,14 +172,6 @@ static const MinicExpression *expression_before(const MinicC0Program *program,
     return &program->expressions[expression_id];
 }
 
-static const MinicExpression *program_expression(const MinicC0Program *program,
-                                                 MinicExpressionId expression_id) {
-    if (program == NULL || expression_id >= program->expression_count) {
-        return NULL;
-    }
-    return &program->expressions[expression_id];
-}
-
 static bool binary_is_comparison(MinicBinaryOperator operator_kind) {
     return operator_kind == MINIC_BINARY_EQUAL || operator_kind == MINIC_BINARY_NOT_EQUAL ||
            operator_kind == MINIC_BINARY_LESS || operator_kind == MINIC_BINARY_LESS_EQUAL ||
@@ -205,17 +197,6 @@ static bool binary_operator_is_valid(MinicBinaryOperator operator_kind) {
 
 static bool unary_operator_is_valid(MinicUnaryOperator operator_kind) {
     return operator_kind >= MINIC_UNARY_PLUS && operator_kind <= MINIC_UNARY_PRE_DECREMENT;
-}
-
-static bool expression_is_integer_zero(const MinicExpression *expression) {
-    return expression != NULL && expression->kind == MINIC_EXPRESSION_INTEGER &&
-           minic_type_is_integer(expression->type) && expression->value.integer_value == 0;
-}
-
-static bool type_is_condition_scalar(MinicType type) {
-    return minic_type_is_integer(type) || minic_type_is_pointer(type) ||
-           minic_type_is_float(type) || minic_type_is_double(type) ||
-           minic_type_is_long_double(type);
 }
 
 static bool verify_binary_type(const MinicC0Program *program,
@@ -245,7 +226,7 @@ static bool verify_binary_type(const MinicC0Program *program,
     }
 
     if (binary_is_logical(expression->value.binary.operator_kind)) {
-        return type_is_condition_scalar(left->type) && type_is_condition_scalar(right->type) &&
+        return minic_c0_type_is_condition_scalar(left->type) && minic_c0_type_is_condition_scalar(right->type) &&
                minic_type_equal(expression->type, minic_type_int());
     }
 
@@ -607,7 +588,7 @@ static bool verify_expression(const MinicC0Program *program,
                 minic_type_cast_compatible(expression->type, operand->type) ||
                 (minic_type_is_record(expression->type) && minic_type_is_record(operand->type) &&
                  minic_c0_types_compatible(program, expression->type, operand->type)) ||
-                (minic_type_is_pointer(expression->type) && expression_is_integer_zero(operand)));
+                (minic_type_is_pointer(expression->type) && minic_c0_expression_is_integer_zero(operand)));
     case MINIC_EXPRESSION_BITCAST:
         operand = expression_before(program, expression->value.unary.operand, expression_index);
         return form == MINIC_C0_AST_NORMALIZED && operand != NULL &&
@@ -772,7 +753,7 @@ static bool verify_expression(const MinicC0Program *program,
                    minic_c0_pointer_arithmetic_pointee_allowed(program, pointee_type);
         }
         if (expression->value.unary.operator_kind == MINIC_UNARY_LOGICAL_NOT) {
-            return type_is_condition_scalar(operand->type) &&
+            return minic_c0_type_is_condition_scalar(operand->type) &&
                    minic_type_equal(expression->type, minic_type_int());
         }
         if ((expression->value.unary.operator_kind == MINIC_UNARY_PLUS ||
@@ -810,7 +791,7 @@ static bool verify_expression(const MinicC0Program *program,
             expression_before(program, expression->value.conditional.when_false, expression_index);
         return condition != NULL && when_true != NULL && when_false != NULL &&
                expression->value_category == MINIC_VALUE_RVALUE &&
-               type_is_condition_scalar(condition->type) &&
+               minic_c0_type_is_condition_scalar(condition->type) &&
                (!expression->value.conditional.uses_condition_value ||
                 expression->value.conditional.when_true ==
                     expression->value.conditional.condition) &&
@@ -1095,8 +1076,8 @@ static bool verify_statement(const MinicC0Program *program,
     if (statement->is_initializer_write && statement->kind != MINIC_STATEMENT_ASSIGN) {
         return false;
     }
-    target = program_expression(program, statement->target_expression);
-    expression = program_expression(program, statement->expression);
+    target = minic_c0_program_expression(program, statement->target_expression);
+    expression = minic_c0_program_expression(program, statement->expression);
 
     switch (statement->kind) {
     case MINIC_STATEMENT_ASSIGN:
@@ -1237,13 +1218,13 @@ static bool verify_statement(const MinicC0Program *program,
                statement->then_block == MINIC_BLOCK_INVALID &&
                statement->else_block == MINIC_BLOCK_INVALID;
     case MINIC_STATEMENT_IF:
-        return expression != NULL && type_is_condition_scalar(expression->type) &&
+        return expression != NULL && minic_c0_type_is_condition_scalar(expression->type) &&
                statement->then_block < program->block_count &&
                (statement->else_block == MINIC_BLOCK_INVALID ||
                 statement->else_block < program->block_count);
     case MINIC_STATEMENT_WHILE:
         return (statement->expression == MINIC_EXPRESSION_INVALID ||
-                (expression != NULL && type_is_condition_scalar(expression->type))) &&
+                (expression != NULL && minic_c0_type_is_condition_scalar(expression->type))) &&
                statement->then_block < program->block_count;
     case MINIC_STATEMENT_SWITCH:
         return statement->target_expression == MINIC_EXPRESSION_INVALID && expression != NULL &&
@@ -2198,7 +2179,7 @@ bool minic_c0_program_verify_target_detailed(const MinicC0Program *program,
                 MinicArrayObjectInfo array_info;
                 bool has_array_info;
 
-                bad_operand = program_expression(program, bad->value.unary.operand);
+                bad_operand = minic_c0_program_expression(program, bad->value.unary.operand);
                 (void)memset(&array_info, 0, sizeof(array_info));
                 has_array_info =
                     bad_operand != NULL &&

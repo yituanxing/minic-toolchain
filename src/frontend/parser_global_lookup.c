@@ -5,20 +5,6 @@
 
 /* Name resolution: global object indexing and fixed register bindings. */
 
-static size_t minic_parser_global_name_hash(const char *name, size_t length) {
-    uint64_t hash = UINT64_C(1469598103934665603);
-    size_t index;
-
-    if (name == NULL) {
-        return 0U;
-    }
-    for (index = 0U; index < length; ++index) {
-        hash ^= (unsigned char)name[index];
-        hash *= UINT64_C(1099511628211);
-    }
-    return (size_t)hash;
-}
-
 static bool minic_parser_global_name_slot_insert(
     MinicParser *parser,
     MinicGlobalObjectId *slots,
@@ -38,7 +24,7 @@ static bool minic_parser_global_name_slot_insert(
         return true;
     }
     mask = capacity - 1U;
-    slot_index = minic_parser_global_name_hash(object->name, object->name_length) & mask;
+    slot_index = minic_parser_symbol_name_hash(object->name, object->name_length) & mask;
     for (probes = 0U; probes < capacity; ++probes) {
         MinicGlobalObjectId existing_id = slots[slot_index];
 
@@ -182,7 +168,7 @@ MinicGlobalObjectId minic_parser_find_global_object_entity(
     name_length = minic_parser_span_length(name_span);
     mask = parser->perf_global_name_slot_capacity - 1U;
     slot_index =
-        minic_parser_global_name_hash(
+        minic_parser_symbol_name_hash(
             parser->source + name_span.begin.offset, name_length) & mask;
     for (probes = 0U;
          probes < parser->perf_global_name_slot_capacity;

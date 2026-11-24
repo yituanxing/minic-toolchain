@@ -4,6 +4,18 @@
 #include "frontend/ast.h"
 #include "target/source_policy/source_info.h"
 
+/* Syntactic literal-zero and condition admission, not constant folding. */
+static inline bool minic_c0_expression_is_integer_zero(const MinicExpression *expression) {
+    return expression != NULL && expression->kind == MINIC_EXPRESSION_INTEGER &&
+           minic_type_is_integer(expression->type) && expression->value.integer_value == 0;
+}
+
+static inline bool minic_c0_type_is_condition_scalar(MinicType type) {
+    return minic_type_is_integer(type) || minic_type_is_pointer(type) ||
+           minic_type_is_float(type) || minic_type_is_double(type) ||
+           minic_type_is_long_double(type);
+}
+
 /* Exactly one Frontend semantic owner for GNU output lvalues.
  * C assignment and source ASM tied hard-register outputs have distinct
  * permissions. Parser and AST verifier MUST both consume this same rule.

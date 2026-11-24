@@ -77,11 +77,6 @@ typedef struct MinicProgramSymbolUses {
     size_t asm_token_count;
 } MinicProgramSymbolUses;
 
-static bool minic_program_asm_token_byte(unsigned char c) {
-    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
-           (c >= '0' && c <= '9') || c == '_' || c == '.' || c == '$';
-}
-
 static int minic_program_asm_token_compare(const void *left, const void *right) {
     const MinicProgramAsmToken *a = left, *b = right;
     if (a->length < b->length) return -1;
@@ -102,7 +97,7 @@ static bool minic_program_asm_token_index_build(MinicProgramSymbolUses *uses) {
         const MinicProgramAsmUse *source = &uses->asm_uses[asm_index];
         size_t cursor = 0U;
         while (cursor < source->length) {
-            if (!minic_program_asm_token_byte((unsigned char)source->text[cursor])) {
+            if (!minic_core_assembler_symbol_byte((unsigned char)source->text[cursor])) {
                 ++cursor;
                 continue;
             }
@@ -111,7 +106,7 @@ static bool minic_program_asm_token_index_build(MinicProgramSymbolUses *uses) {
             do {
                 ++cursor;
             } while (cursor < source->length &&
-                     minic_program_asm_token_byte((unsigned char)source->text[cursor]));
+                     minic_core_assembler_symbol_byte((unsigned char)source->text[cursor]));
         }
     }
     if (count == 0U) return true;
@@ -123,13 +118,13 @@ static bool minic_program_asm_token_index_build(MinicProgramSymbolUses *uses) {
         size_t cursor = 0U;
         while (cursor < source->length) {
             size_t begin;
-            if (!minic_program_asm_token_byte((unsigned char)source->text[cursor])) {
+            if (!minic_core_assembler_symbol_byte((unsigned char)source->text[cursor])) {
                 ++cursor;
                 continue;
             }
             begin = cursor++;
             while (cursor < source->length &&
-                   minic_program_asm_token_byte((unsigned char)source->text[cursor]))
+                   minic_core_assembler_symbol_byte((unsigned char)source->text[cursor]))
                 ++cursor;
             tokens[count].text = source->text + begin;
             tokens[count++].length = cursor - begin;

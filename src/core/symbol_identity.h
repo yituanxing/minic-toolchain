@@ -18,14 +18,17 @@
  * any target dialect formats them. It does NOT claim that all legal ELF,
  * COFF or Mach-O symbols belong to this subset, nor does it replace the
  * target's relocation/binding/section admission policy. */
+static inline bool minic_core_assembler_symbol_byte(unsigned char c) {
+    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+           (c >= '0' && c <= '9') || c == '_' || c == '.' || c == '$';
+}
+
 static inline bool minic_core_assembler_symbol_lexically_safe(const char *symbol) {
     const unsigned char *cursor = (const unsigned char *)symbol;
     if (cursor == NULL || *cursor == '\0') return false;
     for (; *cursor != '\0'; ++cursor) {
         const unsigned char c = *cursor;
-        if (!((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
-              (c >= '0' && c <= '9') || c == '_' || c == '.' || c == '$'))
-            return false;
+        if (!minic_core_assembler_symbol_byte(c)) return false;
     }
     return true;
 }

@@ -149,11 +149,6 @@ static bool asm_target_mnemonic_collision(const MinicCoreInlineAsm *assembly,
             assembly->template_length - begin - length, symbol);
 }
 
-static bool asm_name_byte(unsigned char c) {
-    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
-           (c >= '0' && c <= '9') || c == '_' || c == '.' || c == '$';
-}
-
 /* The public Core ASM matcher searches whole assembler tokens. Usually all
  * Module symbol spellings are in its portable alphabet, so scan the template
  * once and resolve each token in the already-built Module name indexes.
@@ -166,13 +161,13 @@ static bool scan_core_inline_asm_token_names(ModuleClosure *c,
     size_t cursor = 0U;
     while (cursor < assembly->template_length) {
         size_t begin, first, last, j;
-        if (!asm_name_byte((unsigned char)text[cursor])) {
+        if (!minic_core_assembler_symbol_byte((unsigned char)text[cursor])) {
             ++cursor;
             continue;
         }
         begin = cursor++;
         while (cursor < assembly->template_length &&
-               asm_name_byte((unsigned char)text[cursor])) ++cursor;
+               minic_core_assembler_symbol_byte((unsigned char)text[cursor])) ++cursor;
         if (!minic_core_module_function_name_index_find(
                 &c->function_names, text + begin, cursor - begin,
                 &first, &last)) return false;

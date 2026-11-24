@@ -2,19 +2,6 @@
 
 #include <limits.h>
 
-static int hexadecimal_digit_value(char character) {
-    if (character >= '0' && character <= '9') {
-        return character - '0';
-    }
-    if (character >= 'a' && character <= 'f') {
-        return character - 'a' + 10;
-    }
-    if (character >= 'A' && character <= 'F') {
-        return character - 'A' + 10;
-    }
-    return -1;
-}
-
 static bool parse_character_value(MinicParser *parser, int *value) {
     MinicSourceSpan span;
     size_t length;
@@ -57,7 +44,7 @@ static bool parse_character_value(MinicParser *parser, int *value) {
         for (digit_offset = offset + 2U; digit_offset + 1U < span.end.offset; ++digit_offset) {
             int digit_value;
 
-            digit_value = hexadecimal_digit_value(parser->source[digit_offset]);
+            digit_value = minic_parser_hex_digit_value(parser->source[digit_offset]);
             if (digit_value < 0 ||
                 parsed > ((unsigned int)UCHAR_MAX - (unsigned int)digit_value) / 16U) {
                 minic_parser_error(parser, "hexadecimal character escape is out of range");
@@ -250,7 +237,7 @@ bool minic_parser_parse_unsigned_integer_value64(MinicParser *parser, uint64_t *
         int digit_value;
         uint64_t digit;
 
-        digit_value = hexadecimal_digit_value(parser->source[offset]);
+        digit_value = minic_parser_hex_digit_value(parser->source[offset]);
         if (digit_value < 0 || (uint64_t)digit_value >= base) {
             minic_parser_error(parser, "invalid integer constant digit");
             return false;
@@ -305,7 +292,7 @@ bool minic_parser_parse_integer_value(MinicParser *parser, int *value) {
         int digit_value;
         unsigned long digit;
 
-        digit_value = hexadecimal_digit_value(parser->source[offset]);
+        digit_value = minic_parser_hex_digit_value(parser->source[offset]);
         if (digit_value < 0 || (unsigned long)digit_value >= base) {
             minic_parser_error(parser, "invalid integer constant digit");
             return false;

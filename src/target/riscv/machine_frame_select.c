@@ -1,6 +1,7 @@
 #include "target/riscv/machine_frame_select.h"
 #include "target/riscv/machine_opcode.h"
 #include "target/riscv/machine_target_state.h"
+#include "target/riscv/register_identity.h"
 
 #include <limits.h>
 #include <stdint.h>
@@ -216,10 +217,6 @@ static bool rv_slot_ok(const MinicRiscvPhysicalFrame *frame,
            frame->frame_size - offset >= word;
 }
 
-static bool rv_saved_gpr(unsigned id) {
-    return id == 8U || id == 9U || (id >= 18U && id <= 27U);
-}
-
 static bool rv_slot_outside_regions(const MinicRiscvPhysicalFrame *frame,
                                     size_t slot, size_t word) {
     if (!rv_slot_ok(frame, slot, word) || slot < frame->outgoing_size ||
@@ -265,7 +262,7 @@ static bool rv_check_frame(MinicMachineBuilder *builder,
         return false;
     for (i = 0U; i < frame->callee_saved_count; ++i) {
         size_t j;
-        if (!rv_saved_gpr(frame->callee_saved[i].register_number) ||
+        if (!minic_riscv_gpr_callee_saved(frame->callee_saved[i].register_number) ||
             !rv_slot_outside_regions(frame,
                 frame->callee_saved[i].offset, word))
             return false;

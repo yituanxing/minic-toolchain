@@ -1,45 +1,9 @@
 #include "frontend/ast.h"
+#include "frontend/ast_storage.h"
 
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
-
-static bool minic_grow_array(void **data, size_t *capacity, size_t count, size_t element_size) {
-    void *resized;
-    size_t new_capacity;
-
-    if (count < *capacity) {
-        return true;
-    }
-
-    new_capacity = *capacity == 0U ? 16U : *capacity * 2U;
-    if (new_capacity < *capacity || new_capacity > SIZE_MAX / element_size) {
-        return false;
-    }
-
-    resized = realloc(*data, new_capacity * element_size);
-    if (resized == NULL) {
-        return false;
-    }
-    *data = resized;
-    *capacity = new_capacity;
-    return true;
-}
-
-static char *minic_copy_name(const char *name, size_t name_length) {
-    char *copy;
-
-    if (name == NULL || name_length == SIZE_MAX) {
-        return NULL;
-    }
-    copy = (char *)malloc(name_length + 1U);
-    if (copy == NULL) {
-        return NULL;
-    }
-    (void)memcpy(copy, name, name_length);
-    copy[name_length] = '\0';
-    return copy;
-}
 
 void minic_c0_local_initialize(MinicLocal *local) {
     if (local == NULL) {
@@ -190,7 +154,7 @@ bool minic_c0_program_add_enum(MinicC0Program *program,
     MinicEnum entity;
 
     if (program == NULL || enum_id == NULL || ((name == NULL) != (name_length == 0U)) ||
-        !minic_grow_array((void **)&program->enums,
+        !minic_ast_grow_array((void **)&program->enums,
                           &program->enum_capacity,
                           program->enum_count,
                           sizeof(*program->enums))) {
@@ -198,7 +162,7 @@ bool minic_c0_program_add_enum(MinicC0Program *program,
     }
     (void)memset(&entity, 0, sizeof(entity));
     if (name_length != 0U) {
-        entity.name = minic_copy_name(name, name_length);
+        entity.name = minic_ast_copy_name(name, name_length);
         if (entity.name == NULL) {
             return false;
         }
@@ -241,14 +205,14 @@ bool minic_c0_program_add_enumerator(MinicC0Program *program,
 
     if (program == NULL || enum_id >= program->enum_count || name == NULL || name_length == 0U ||
         enumerator_id == NULL || !minic_type_is_integer(type) || minic_type_is_enum(type) ||
-        !minic_grow_array((void **)&program->enumerators,
+        !minic_ast_grow_array((void **)&program->enumerators,
                           &program->enumerator_capacity,
                           program->enumerator_count,
                           sizeof(*program->enumerators))) {
         return false;
     }
     (void)memset(&enumerator, 0, sizeof(enumerator));
-    enumerator.name = minic_copy_name(name, name_length);
+    enumerator.name = minic_ast_copy_name(name, name_length);
     if (enumerator.name == NULL) {
         return false;
     }
@@ -535,7 +499,7 @@ bool minic_c0_program_add_expression(MinicC0Program *program,
                          extra_count * sizeof(*owned_overflow));
         }
     }
-    if (!minic_grow_array((void **)&program->expressions,
+    if (!minic_ast_grow_array((void **)&program->expressions,
                           &program->expression_capacity,
                           program->expression_count,
                           sizeof(*program->expressions))) {
@@ -556,7 +520,7 @@ bool minic_c0_program_add_expression(MinicC0Program *program,
 bool minic_c0_program_add_local(MinicC0Program *program,
                                 const MinicLocal *local,
                                 MinicLocalId *local_id) {
-    if (!minic_grow_array((void **)&program->locals,
+    if (!minic_ast_grow_array((void **)&program->locals,
                           &program->local_capacity,
                           program->local_count,
                           sizeof(*program->locals))) {
@@ -577,7 +541,7 @@ bool minic_c0_program_add_cleanup_context(MinicC0Program *program,
 
     if (program == NULL || cleanup_context_id == NULL || parent > program->cleanup_context_count ||
         cleanup_expression >= program->expression_count ||
-        !minic_grow_array((void **)&program->cleanup_contexts,
+        !minic_ast_grow_array((void **)&program->cleanup_contexts,
                           &program->cleanup_context_capacity,
                           program->cleanup_context_count,
                           sizeof(*program->cleanup_contexts))) {
@@ -623,7 +587,7 @@ bool minic_c0_cleanup_context_reaches(const MinicC0Program *program,
 bool minic_c0_program_add_statement(MinicC0Program *program,
                                     const MinicStatement *statement,
                                     MinicStatementId *statement_id) {
-    if (!minic_grow_array((void **)&program->statements,
+    if (!minic_ast_grow_array((void **)&program->statements,
                           &program->statement_capacity,
                           program->statement_count,
                           sizeof(*program->statements))) {
@@ -641,14 +605,14 @@ bool minic_c0_program_add_file_asm(MinicC0Program *program, const char *text, si
 
     if (program == NULL || text == NULL || length == SIZE_MAX ||
         memchr(text, '\0', length) != NULL ||
-        !minic_grow_array((void **)&program->file_asms,
+        !minic_ast_grow_array((void **)&program->file_asms,
                           &program->file_asm_capacity,
                           program->file_asm_count,
                           sizeof(*program->file_asms))) {
         return false;
     }
     (void)memset(&file_asm, 0, sizeof(file_asm));
-    file_asm.text = minic_copy_name(text, length);
+    file_asm.text = minic_ast_copy_name(text, length);
     if (file_asm.text == NULL) {
         return false;
     }
@@ -669,14 +633,14 @@ bool minic_c0_program_add_inline_asm(MinicC0Program *program,
     if (program == NULL || template_text == NULL || inline_asm_id == NULL) {
         return false;
     }
-    if (!minic_grow_array((void **)&program->inline_asms,
+    if (!minic_ast_grow_array((void **)&program->inline_asms,
                           &program->inline_asm_capacity,
                           program->inline_asm_count,
                           sizeof(*program->inline_asms))) {
         return false;
     }
     (void)memset(&inline_asm, 0, sizeof(inline_asm));
-    inline_asm.template_text = minic_copy_name(template_text, template_length);
+    inline_asm.template_text = minic_ast_copy_name(template_text, template_length);
     if (inline_asm.template_text == NULL) {
         return false;
     }
@@ -734,13 +698,13 @@ static bool initialize_inline_asm_operand(MinicInlineAsmOperand *operand,
     }
     (void)memset(operand, 0, sizeof(*operand));
     if (name_length != 0U) {
-        operand->name = minic_copy_name(name, name_length);
+        operand->name = minic_ast_copy_name(name, name_length);
         if (operand->name == NULL) {
             return false;
         }
         operand->name_length = name_length;
     }
-    operand->constraint_text = minic_copy_name(constraint_text, constraint_length);
+    operand->constraint_text = minic_ast_copy_name(constraint_text, constraint_length);
     if (operand->constraint_text == NULL) {
         free(operand->name);
         operand->name = NULL;
@@ -772,7 +736,7 @@ bool minic_c0_program_add_inline_asm_output(MinicC0Program *program,
     }
     inline_asm = &program->inline_asms[inline_asm_id];
     if (!inline_asm_operand_name_is_available(inline_asm, name, name_length) ||
-        !minic_grow_array((void **)&inline_asm->outputs,
+        !minic_ast_grow_array((void **)&inline_asm->outputs,
                           &inline_asm->output_capacity,
                           inline_asm->output_count,
                           sizeof(*inline_asm->outputs)) ||
@@ -801,7 +765,7 @@ bool minic_c0_program_add_inline_asm_input(MinicC0Program *program,
     }
     inline_asm = &program->inline_asms[inline_asm_id];
     if (!inline_asm_operand_name_is_available(inline_asm, name, name_length) ||
-        !minic_grow_array((void **)&inline_asm->inputs,
+        !minic_ast_grow_array((void **)&inline_asm->inputs,
                           &inline_asm->input_capacity,
                           inline_asm->input_count,
                           sizeof(*inline_asm->inputs)) ||
@@ -839,14 +803,14 @@ bool minic_c0_program_add_inline_asm_register_clobber(MinicC0Program *program,
         }
     }
     if (inline_asm->register_clobber_count == SIZE_MAX ||
-        !minic_grow_array((void **)&inline_asm->register_clobbers,
+        !minic_ast_grow_array((void **)&inline_asm->register_clobbers,
                           &inline_asm->register_clobber_capacity,
                           inline_asm->register_clobber_count,
                           sizeof(*inline_asm->register_clobbers))) {
         return false;
     }
     (void)memset(&clobber, 0, sizeof(clobber));
-    clobber.name = minic_copy_name(name, name_length);
+    clobber.name = minic_ast_copy_name(name, name_length);
     if (clobber.name == NULL) {
         return false;
     }
@@ -916,14 +880,14 @@ bool minic_c0_program_add_inline_asm_label(MinicC0Program *program,
             return false;
         }
     }
-    if (!minic_grow_array((void **)&inline_asm->labels,
+    if (!minic_ast_grow_array((void **)&inline_asm->labels,
                           &inline_asm->label_capacity,
                           inline_asm->label_count,
                           sizeof(*inline_asm->labels))) {
         return false;
     }
     (void)memset(&label, 0, sizeof(label));
-    label.name = minic_copy_name(name, name_length);
+    label.name = minic_ast_copy_name(name, name_length);
     if (label.name == NULL) {
         return false;
     }
@@ -937,7 +901,7 @@ bool minic_c0_program_add_inline_asm_label(MinicC0Program *program,
 bool minic_c0_program_add_block(MinicC0Program *program, MinicBlockId *block_id) {
     MinicBlock block;
 
-    if (!minic_grow_array((void **)&program->blocks,
+    if (!minic_ast_grow_array((void **)&program->blocks,
                           &program->block_capacity,
                           program->block_count,
                           sizeof(*program->blocks))) {
@@ -961,7 +925,7 @@ bool minic_c0_block_add_statement(MinicC0Program *program,
     }
 
     block = &program->blocks[block_id];
-    if (!minic_grow_array((void **)&block->statements,
+    if (!minic_ast_grow_array((void **)&block->statements,
                           &block->statement_capacity,
                           block->statement_count,
                           sizeof(*block->statements))) {
@@ -1009,7 +973,7 @@ bool minic_c0_program_add_function(MinicC0Program *program,
         local_begin > program->local_count || local_count > program->local_count - local_begin) {
         return false;
     }
-    if (!minic_grow_array((void **)&program->functions,
+    if (!minic_ast_grow_array((void **)&program->functions,
                           &program->function_capacity,
                           program->function_count,
                           sizeof(*program->functions))) {
@@ -1017,7 +981,7 @@ bool minic_c0_program_add_function(MinicC0Program *program,
     }
 
     minic_c0_function_initialize_defaults(&function);
-    function.name = minic_copy_name(name, name_length);
+    function.name = minic_ast_copy_name(name, name_length);
     if (function.name == NULL) {
         return false;
     }
@@ -1164,7 +1128,7 @@ bool minic_c0_program_add_record(MinicC0Program *program,
     /* RecordId is semantic entity identity. Tag-name uniqueness belongs to the
      * parser's scoped tag namespace, so distinct block scopes may own records
      * with the same diagnostic/display name. */
-    if (!minic_grow_array((void **)&program->records,
+    if (!minic_ast_grow_array((void **)&program->records,
                           &program->record_capacity,
                           program->record_count,
                           sizeof(*program->records))) {
@@ -1172,7 +1136,7 @@ bool minic_c0_program_add_record(MinicC0Program *program,
     }
 
     minic_c0_record_initialize_defaults(&record);
-    record.name = minic_copy_name(name, name_length);
+    record.name = minic_ast_copy_name(name, name_length);
     if (record.name == NULL) {
         return false;
     }
@@ -1189,7 +1153,7 @@ bool minic_c0_program_add_anonymous_record(MinicC0Program *program, MinicRecordI
     if (program == NULL || record_id == NULL) {
         return false;
     }
-    if (!minic_grow_array((void **)&program->records,
+    if (!minic_ast_grow_array((void **)&program->records,
                           &program->record_capacity,
                           program->record_count,
                           sizeof(*program->records))) {
@@ -1197,7 +1161,7 @@ bool minic_c0_program_add_anonymous_record(MinicC0Program *program, MinicRecordI
     }
 
     (void)memset(&record, 0, sizeof(record));
-    record.name = minic_copy_name("", 0U);
+    record.name = minic_ast_copy_name("", 0U);
     if (record.name == NULL) {
         return false;
     }
@@ -1234,7 +1198,7 @@ bool minic_c0_record_add_field(MinicC0Program *program,
             return false;
         }
     }
-    if (!minic_grow_array((void **)&record->fields,
+    if (!minic_ast_grow_array((void **)&record->fields,
                           &record->field_capacity,
                           record->field_count,
                           sizeof(*record->fields))) {
@@ -1242,7 +1206,7 @@ bool minic_c0_record_add_field(MinicC0Program *program,
     }
 
     minic_c0_record_field_initialize_defaults(&field);
-    field.name = minic_copy_name(name, name_length);
+    field.name = minic_ast_copy_name(name, name_length);
     if (field.name == NULL) {
         return false;
     }
@@ -1314,7 +1278,7 @@ static bool minic_c0_program_add_array_descriptor(MinicC0Program *program,
         minic_type_is_function(element_type)) {
         return false;
     }
-    if (!minic_grow_array((void **)&program->array_types,
+    if (!minic_ast_grow_array((void **)&program->array_types,
                           &program->array_type_capacity,
                           program->array_type_count,
                           sizeof(*program->array_types))) {
@@ -1500,7 +1464,7 @@ static bool minic_c0_program_add_variadic_function_type_with_convention(MinicC0P
             return true;
         }
     }
-    if (!minic_grow_array((void **)&program->function_types,
+    if (!minic_ast_grow_array((void **)&program->function_types,
                           &program->function_type_capacity,
                           program->function_type_count,
                           sizeof(*program->function_types))) {
@@ -1594,7 +1558,7 @@ static bool minic_c0_program_add_type_alias_with_scope(MinicC0Program *program,
             }
         }
     }
-    if (!minic_grow_array((void **)&program->type_aliases,
+    if (!minic_ast_grow_array((void **)&program->type_aliases,
                           &program->type_alias_capacity,
                           program->type_alias_count,
                           sizeof(*program->type_aliases))) {
@@ -1602,7 +1566,7 @@ static bool minic_c0_program_add_type_alias_with_scope(MinicC0Program *program,
     }
 
     (void)memset(&alias, 0, sizeof(alias));
-    alias.name = minic_copy_name(name, name_length);
+    alias.name = minic_ast_copy_name(name, name_length);
     if (alias.name == NULL) {
         return false;
     }

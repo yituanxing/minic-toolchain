@@ -57,19 +57,6 @@ static int octal_digit_value(char character) {
     return -1;
 }
 
-static int hex_digit_value(char character) {
-    if (character >= '0' && character <= '9') {
-        return character - '0';
-    }
-    if (character >= 'a' && character <= 'f') {
-        return character - 'a' + 10;
-    }
-    if (character >= 'A' && character <= 'F') {
-        return character - 'A' + 10;
-    }
-    return -1;
-}
-
 static bool string_literal_kind(MinicTokenKind kind) {
     return kind == MINIC_TOKEN_STRING_LITERAL || kind == MINIC_TOKEN_WIDE_STRING_LITERAL;
 }
@@ -146,11 +133,11 @@ static bool decode_string_escape(const char *source, size_t *cursor, size_t end,
     }
 
     *cursor += 1U;
-    if (*cursor >= end || hex_digit_value(source[*cursor]) < 0) {
+    if (*cursor >= end || minic_parser_hex_digit_value(source[*cursor]) < 0) {
         return false;
     }
     decoded = 0U;
-    while (*cursor < end && (digit = hex_digit_value(source[*cursor])) >= 0) {
+    while (*cursor < end && (digit = minic_parser_hex_digit_value(source[*cursor])) >= 0) {
         if (decoded > (255U - (unsigned int)digit) / 16U) {
             return false;
         }
