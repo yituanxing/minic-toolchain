@@ -274,7 +274,7 @@ Frontend 多数 `probe=*parser` 只是词法前瞻、Core 不同强度的常量�
 - **RFC / 候选路线**：标 `PROPOSED` 或 `STAGED`；只有经源码与测试核验，才能改为已实施。
 - **历史审查 / CI 快照**：标原始提交、配置及当时结论；不得拿 10 月 16/26/29 日的目标数代替现在。
 - **目录重排候选**：未来可把文档物理划为 `contracts/`、`proposals/`、`history/reviews/`、`history/campaigns/`。
-  本轮**不移动或删除任何历史文件**，待全文链接及 CI/README 消费者盘点后再一次性迁移。
+  2026-11-24 已将 10/29 的 31 份历史审查移出工作树，保留固定提交中的原文和索引；其他专题契约暂不移动。
 
 ## 6. 历史资料与专题索引
 
@@ -353,43 +353,9 @@ Frontend 多数 `probe=*parser` 只是词法前瞻、Core 不同强度的常量�
   [真实项目选择](real-project-selection.md)、
   [x86 真实项目 checkpoint](multitarget-x86_64-real-project-checkpoint-2026-10-18.md)。
 
-### 2026-10-29 分项审查（31 份，均为当时的证据快照）
+### 2026-10-29 分项审查（31 份，历史证据）
 
-- Frontend/Compiler：
-  [frontend-compiler](review-2026-10-29-frontend-compiler.md)、
-  [frontend-boundary-batch](review-2026-10-29-frontend-boundary-batch.md)、
-  [frontend-followup](review-2026-10-29-frontend-followup.md)、
-  [frontend-type-traits-inline](review-2026-10-29-frontend-type-traits-inline.md)、
-  [enum-tag-scope-fix](review-2026-10-29-enum-tag-scope-fix.md)。
-- Core/ASM：
-  [core-cfg-effects](review-2026-10-29-core-cfg-effects.md)、
-  [core-cfg-facts-coupling](review-2026-10-29-core-cfg-facts-coupling.md)、
-  [core-expr-path-facts](review-2026-10-29-core-expr-path-facts.md)、
-  [core-target-root](review-2026-10-29-core-target-root.md)、
-  [core-asm-fix](review-2026-10-29-core-asm-fix.md)、
-  [asm-source-policy](review-2026-10-29-asm-source-policy-owner.md)、
-  [asm-operand-followup](review-2026-10-29-asm-operand-plan-followup.md)、
-  [typed-asm-plan](review-2026-10-29-typed-asm-operand-plan-batch.md)、
-  [gnu-asm-earlyclobber](review-2026-10-29-gnu-asm-earlyclobber-preservation.md)。
-- 后端与 Common：
-  [aarch64](review-2026-10-29-aarch64.md)、
-  [loong-inline-asm](review-2026-10-29-loong-inline-asm-dispatch.md)、
-  [riscv-loong](review-2026-10-29-riscv-loong.md)、
-  [riscv-loong-abi](review-2026-10-29-riscv-loong-abi-followup.md)、
-  [riscv-loong-next](review-2026-10-29-riscv-loong-refactor-next.md)、
-  [common-x86](review-2026-10-29-common-x86.md)、
-  [common-x86-third](review-2026-10-29-common-x86-third-pass.md)、
-  [common-x86-frame](review-2026-10-29-common-x86-frame-call-hardreg.md)、
-  [x86-global](review-2026-10-29-x86-global-fix.md)、
-  [global-emission-plan](review-2026-10-29-global-emission-plan-abi.md)、
-  [target-boundary](review-2026-10-29-target-boundary-third-pass.md)、
-  [target-registry](review-2026-10-29-target-registry-followup.md)。
-- 集成批次：
-  [integration](review-2026-10-29-integration.md)、
-  [second-integration](review-2026-10-29-second-integration.md)、
-  [batch20](review-2026-10-29-batch20-integration.md)、
-  [batch21](review-2026-10-29-batch21-integration.md)、
-  [batch22](review-2026-10-29-batch22-integration.md)。
+完整原始审查、分项链接与当时的集成记录均保留在[固定提交的历史索引](https://github.com/yituanxing/minic-toolchain/blob/83544a94c94d5856cc7cfd10d5e28fe7a2272cbb/docs/architecture/README.md#2026-10-29-分项审查31-份均为当时的证据快照)。如需逐文件核对，请直接浏览[该提交的架构文档目录](https://github.com/yituanxing/minic-toolchain/tree/83544a94c94d5856cc7cfd10d5e28fe7a2272cbb/docs/architecture)。当前工作树不再重复保存这 31 份历史快照；现行事实、未修问题与验收结论仍由第 0 节的持续维护台账负责。
 
 ### 目录外的补充资料
 
@@ -403,4 +369,4 @@ Frontend 多数 `probe=*parser` 只是词法前瞻、Core 不同强度的常量�
 2. **第一批确实删代码的候选**：依 MC-031 caller 表迁走旧 GNU section parser、`parser_type_query.c` 及级联 helper；另迁 Core 两个 test-only effect wrapper 的白盒测试。每批同步删 Makefile/头声明，运行该模块最小正反例，报告 `+/-` 与剩余入口。
 3. **再做有生产语义的机制迁移**：A8-05 循环 fact 屏障、A8-04 CALL 实例、A8-07/A9-09 RV Common Global Plan、A9-10 x86/Loong typed ASM，先完成 consumer 验证再删原分派。既有 P0 与全部 MC 条目持续在账。
 4. 继续保持 **文件级覆盖 ≠ 函数级深证 ≠ 运行正确性** 的分开统计；增补剩余 GNU ASM 变体、Record/varargs ABI 与异常路径的 R2/U2/E，不把旧问题改名成新问题。
-5. 文档及源码目录的物理移动仍须先验证 include/相对链接、构建脚本和测试路径消费者；没有迁移证明就不移动历史文件。
+5. 后续文档及源码目录移动仍须先验证 include/相对链接、构建脚本和测试路径消费者；历史证据使用固定提交定位。

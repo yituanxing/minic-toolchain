@@ -170,7 +170,7 @@
 | `FN-R28` `minic_core_lower_direct_call` / `_direct_record_call_object` / `core_lower_indirect_call_impl` — 同上 | W Core CALL/object/return，OWN 暂时参数内存 | 实参和 callee 准入不同，失败释放完整；三个 selector 有各自特化证明条件，不可仅按相似循环删除。 | R2/U2/E1 · CONFIRMED-DESIGN |
 | `FN-R29` `core_collect_nested_switch_labels` / `lower_nested_case_switch` / `minic_core_lower_switch` — `src/core/core_lower_switch.c` | R AST switch case graph，W Core CFG | nested reentry 需要单独路径；同一 switch 对 nested labels 检查与随后构造之间两次扫描真实存在，属于小额性能债，非错码。 | R2/U2/E1 · DEBT |
 
-**排除旧报告漂移：** 2026-10-29 早期 Core CFG/副作用相关 P0 已有后续修复与五目标 source + native GNU differential 记录（`docs/architecture/review-2026-10-29-core-cfg-effects.md`）。不能引用更早的 root-review 快照就把旧问题重新标成未修复。
+**排除旧报告漂移：** 2026-10-29 早期 Core CFG/副作用相关 P0 已有后续修复与五目标 source + native GNU differential 记录（[历史 Core CFG 审查证据](https://github.com/yituanxing/minic-toolchain/blob/83544a94c94d5856cc7cfd10d5e28fe7a2272cbb/docs/architecture/review-2026-10-29-core-cfg-effects.md)）。不能引用更早的 root-review 快照就把旧问题重新标成未修复。
 
 ## 4. Target catalog 与 Common：公共层到底负责什么
 

@@ -7,6 +7,7 @@ on:
       - 'tools/dev/**'
       - 'tools/ci/**'
       - 'docs/milestones/**'
+      - 'docs/architecture/**'
       - '.github/workflows-disabled/**'
       - '.github/workflows/minic-historical-script-retirement-audit.yml'
 permissions:
@@ -329,7 +330,41 @@ jobs:
               "tools/ci/run-return-equality-regression-v0.sh",
               "tools/dev/patch-linux-replay-live-progress.py",
           }
-          if len(expected) != 426 or deleted != expected or changed != expected | metadata:
+          expected |= {
+              "docs/architecture/review-2026-10-29-aarch64.md",
+              "docs/architecture/review-2026-10-29-asm-operand-plan-followup.md",
+              "docs/architecture/review-2026-10-29-asm-source-policy-owner.md",
+              "docs/architecture/review-2026-10-29-batch20-integration.md",
+              "docs/architecture/review-2026-10-29-batch21-integration.md",
+              "docs/architecture/review-2026-10-29-batch22-integration.md",
+              "docs/architecture/review-2026-10-29-common-x86-frame-call-hardreg.md",
+              "docs/architecture/review-2026-10-29-common-x86-third-pass.md",
+              "docs/architecture/review-2026-10-29-common-x86.md",
+              "docs/architecture/review-2026-10-29-core-asm-fix.md",
+              "docs/architecture/review-2026-10-29-core-cfg-effects.md",
+              "docs/architecture/review-2026-10-29-core-cfg-facts-coupling.md",
+              "docs/architecture/review-2026-10-29-core-expr-path-facts.md",
+              "docs/architecture/review-2026-10-29-core-target-root.md",
+              "docs/architecture/review-2026-10-29-enum-tag-scope-fix.md",
+              "docs/architecture/review-2026-10-29-frontend-boundary-batch.md",
+              "docs/architecture/review-2026-10-29-frontend-compiler.md",
+              "docs/architecture/review-2026-10-29-frontend-followup.md",
+              "docs/architecture/review-2026-10-29-frontend-type-traits-inline.md",
+              "docs/architecture/review-2026-10-29-global-emission-plan-abi.md",
+              "docs/architecture/review-2026-10-29-gnu-asm-earlyclobber-preservation.md",
+              "docs/architecture/review-2026-10-29-integration.md",
+              "docs/architecture/review-2026-10-29-loong-inline-asm-dispatch.md",
+              "docs/architecture/review-2026-10-29-riscv-loong-abi-followup.md",
+              "docs/architecture/review-2026-10-29-riscv-loong-refactor-next.md",
+              "docs/architecture/review-2026-10-29-riscv-loong.md",
+              "docs/architecture/review-2026-10-29-second-integration.md",
+              "docs/architecture/review-2026-10-29-target-boundary-third-pass.md",
+              "docs/architecture/review-2026-10-29-target-registry-followup.md",
+              "docs/architecture/review-2026-10-29-typed-asm-operand-plan-batch.md",
+              "docs/architecture/review-2026-10-29-x86-global-fix.md",
+          }
+          metadata |= {"docs/architecture/README.md", "docs/architecture/minic-function-contract-register.md"}
+          if len(expected) != 457 or deleted != expected or changed != expected | metadata:
               raise SystemExit("RETIREMENT_SCOPE=FAIL: unexpected tree changes")
           files = [p.decode() for p in git("ls-files", "-z").split(b"\0") if p]
           candidates = {
