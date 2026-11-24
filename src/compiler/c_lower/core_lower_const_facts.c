@@ -115,32 +115,8 @@ static bool core_program_expr_is_local(
 
 static bool core_program_bool_has_entry_zero_initializer(
     const MinicCoreLowerContext *context, MinicLocalId local_id) {
-    const MinicC0Program *program = context->body->program;
-    const MinicBlock *entry = minic_c0_program_block(
-        program, context->source_function->body_block);
-    size_t i;
-    if (entry == NULL) {
-        return false;
-    }
-    /* A leading sequence of direct assignments is the only entry region
-       accepted. C source declarations initialized later or conditionally
-       are NOT credited with dominating every defined use. */
-    for (i = 0U; i < entry->statement_count && i < 64U; ++i) {
-        const MinicStatement *stmt =
-            minic_c0_program_statement(program, entry->statements[i]);
-        const MinicExpression *target;
-        if (stmt == NULL || stmt->kind != MINIC_STATEMENT_ASSIGN) {
-            break;
-        }
-        target = minic_c0_program_expression(program, stmt->target_expression);
-        if (target == NULL || target->kind != MINIC_EXPRESSION_LOCAL) {
-            break;
-        }
-        if (target->value.local_id == local_id) {
-            return core_program_expr_is_literal_zero(context, stmt->expression);
-        }
-    }
-    return false;
+    return core_bool_has_entry_zero_initializer(
+        context, local_id, core_program_expr_is_literal_zero);
 }
 
 /* Core lower_block owns the canonical external goto/asm-goto reentry

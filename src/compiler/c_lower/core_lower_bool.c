@@ -33,18 +33,11 @@ static bool core_zero_bool_literal(const MinicCoreLowerContext *context,
            is_zero;
 }
 
-static bool core_zero_bool_is_local(const MinicC0Program *program,
-                                    MinicExpressionId id,
-                                    MinicLocalId local_id) {
-    const MinicExpression *expression =
-        minic_c0_program_expression(program, id);
-    return expression != NULL &&
-           expression->kind == MINIC_EXPRESSION_LOCAL &&
-           expression->value.local_id == local_id;
-}
-
-static bool core_zero_bool_has_entry_initializer(
-    const MinicCoreLowerContext *context, MinicLocalId local_id) {
+/* Both proofs require the same dominating leading assignment region.
+ * Each caller retains its exact constant evaluation predicate. */
+bool core_bool_has_entry_zero_initializer(
+    const MinicCoreLowerContext *context, MinicLocalId local_id,
+    bool (*is_zero)(const MinicCoreLowerContext *, MinicExpressionId)) {
     const MinicC0Program *program = context->body->program;
     const MinicBlock *entry = minic_c0_program_block(
         program, context->source_function->body_block);
@@ -65,17 +58,31 @@ static bool core_zero_bool_has_entry_initializer(
             break;
         }
         if (target->value.local_id == local_id) {
-            return core_zero_bool_literal(context, statement->expression);
+            return is_zero(context, statement->expression);
         }
     }
     return false;
+}
+
+typedef struct CoreZeroBoolProof {
+    const MinicCoreLowerContext *context;
+    MinicLocalId local_id;
+} CoreZeroBoolProof;
+
+static bool core_zero_bool_check_effect(
+    void *opaque, MinicLocalId id, MinicDirectLocalEffect effect,
+    MinicExpressionId rhs) {
+    const CoreZeroBoolProof *proof = opaque;
+    return id != proof->local_id ||
+           (effect == MINIC_DIRECT_LOCAL_ASSIGN &&
+            core_zero_bool_literal(proof->context, rhs));
 }
 
 static bool core_zero_bool_is_immutable(
     const MinicCoreLowerContext *context, MinicLocalId local_id) {
     const MinicC0Program *program;
     const MinicLocal *local;
-    size_t i;
+    CoreZeroBoolProof proof = {context, local_id};
     if (context == NULL || context->source_function == NULL ||
         context->body == NULL || context->body->program == NULL ||
         context->target == NULL ||
@@ -90,71 +97,11 @@ static bool core_zero_bool_is_immutable(
             program, local_id, NULL) || local->is_register_storage ||
         !minic_type_is_bool_integer(local->type) ||
         minic_type_is_volatile(local->type) ||
-        !core_zero_bool_has_entry_initializer(context, local_id)) {
+        !core_bool_has_entry_zero_initializer(context, local_id, core_zero_bool_literal)) {
         return false;
     }
-    for (i = 0U; i < program->statement_count; ++i) {
-        const MinicStatement *statement = &program->statements[i];
-        if (!core_zero_bool_is_local(
-                program, statement->target_expression, local_id)) {
-            continue;
-        }
-        if (statement->kind != MINIC_STATEMENT_ASSIGN ||
-            !core_zero_bool_literal(context, statement->expression)) {
-            return false;
-        }
-    }
-    for (i = 0U; i < program->expression_count; ++i) {
-        const MinicExpression *expression = &program->expressions[i];
-        const MinicExpression *target;
-        switch (expression->kind) {
-        case MINIC_EXPRESSION_ADDRESS_OF:
-            if (core_zero_bool_is_local(
-                    program, expression->value.unary.operand, local_id)) {
-                return false;
-            }
-            break;
-        case MINIC_EXPRESSION_UNARY:
-            if ((expression->value.unary.operator_kind ==
-                     MINIC_UNARY_PRE_INCREMENT ||
-                 expression->value.unary.operator_kind ==
-                     MINIC_UNARY_POST_INCREMENT ||
-                 expression->value.unary.operator_kind ==
-                     MINIC_UNARY_PRE_DECREMENT ||
-                 expression->value.unary.operator_kind ==
-                     MINIC_UNARY_POST_DECREMENT) &&
-                core_zero_bool_is_local(
-                    program, expression->value.unary.operand, local_id)) {
-                return false;
-            }
-            break;
-        case MINIC_EXPRESSION_ASSIGNMENT:
-        case MINIC_EXPRESSION_COMPOUND_ASSIGNMENT:
-            target = minic_c0_program_expression(
-                program, expression->value.binary.left);
-            if (target != NULL && target->kind == MINIC_EXPRESSION_LOCAL &&
-                target->value.local_id == local_id &&
-                (expression->kind == MINIC_EXPRESSION_COMPOUND_ASSIGNMENT ||
-                 !core_zero_bool_literal(
-                     context, expression->value.binary.right))) {
-                return false;
-            }
-            break;
-        default:
-            break;
-        }
-    }
-    for (i = 0U; i < program->inline_asm_count; ++i) {
-        const MinicInlineAsm *asm_statement = &program->inline_asms[i];
-        size_t j;
-        for (j = 0U; j < asm_statement->output_count; ++j) {
-            if (core_zero_bool_is_local(
-                    program, asm_statement->outputs[j].expression, local_id)) {
-                return false;
-            }
-        }
-    }
-    return true;
+    return minic_c0_program_visit_direct_local_effects(
+        program, core_zero_bool_check_effect, &proof);
 }
 
 bool core_zero_bool_cfg_condition(

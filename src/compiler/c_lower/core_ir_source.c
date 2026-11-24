@@ -363,8 +363,7 @@ static bool minic_core_ir_direct_call_return_type(MinicType type) {
     return minic_type_is_void(type) || minic_core_ir_call_scalar_type(type) || minic_type_is_record(type);
 }
 
-static bool callee_signature_equal(const MinicCoreCallee *callee,
-                                   const MinicCoreSourceCallType *source,
+static bool source_call_types_equal(const MinicCoreSourceCallType *source,
                                    MinicType return_type,
                                    const MinicType *parameter_types,
                                    size_t parameter_count,
@@ -372,8 +371,7 @@ static bool callee_signature_equal(const MinicCoreCallee *callee,
                                    MinicFunctionCallingConvention calling_convention) {
     size_t index;
 
-    /* The only caller already found this callee by exact name and length. */
-    if (callee == NULL || source == NULL ||
+    if (source == NULL ||
         !minic_type_equal(source->return_type, return_type) ||
         source->parameter_count != parameter_count ||
         source->is_variadic != is_variadic ||
@@ -429,7 +427,7 @@ bool minic_core_function_add_callee(MinicCoreSourceBuilder *builder,
         existing = &function->callees[index];
         if (existing->name_length == name_length &&
             memcmp(existing->name, name, name_length) == 0) {
-            if (!callee_signature_equal(existing, &draft->callees[index],
+            if (!source_call_types_equal(&draft->callees[index],
                                         return_type,
                                         parameter_types,
                                         parameter_count,
@@ -492,22 +490,9 @@ static bool call_signature_equal(const MinicCoreSourceCallType *source,
                                  size_t parameter_count,
                                  bool is_variadic,
                                  MinicFunctionCallingConvention calling_convention) {
-    size_t index;
-
-    if (source == NULL ||
-        source->function_type_id != function_type_id ||
-        !minic_type_equal(source->return_type, return_type) ||
-        source->parameter_count != parameter_count ||
-        source->is_variadic != is_variadic ||
-        source->calling_convention != calling_convention) {
-        return false;
-    }
-    for (index = 0U; index < parameter_count; ++index) {
-        if (!minic_type_equal(source->parameter_types[index], parameter_types[index])) {
-            return false;
-        }
-    }
-    return true;
+    return source != NULL && source->function_type_id == function_type_id &&
+           source_call_types_equal(source, return_type, parameter_types,
+                                   parameter_count, is_variadic, calling_convention);
 }
 
 bool minic_core_function_add_call_signature(MinicCoreSourceBuilder *builder,
@@ -531,8 +516,7 @@ bool minic_core_function_add_call_signature(MinicCoreSourceBuilder *builder,
         function_type_id == MINIC_FUNCTION_TYPE_INVALID ||
         !minic_function_calling_convention_valid(calling_convention) ||
         function->call_signature_count >= (size_t)UINT32_MAX ||
-        (!minic_type_is_void(return_type) && !minic_type_is_record(return_type) &&
-         !minic_core_ir_call_scalar_type(return_type)) ||
+        !minic_core_ir_direct_call_return_type(return_type) ||
         (parameter_count != 0U && parameter_types == NULL) ||
         parameter_count > SIZE_MAX / sizeof(*source_stored.parameter_types)) {
         return false;

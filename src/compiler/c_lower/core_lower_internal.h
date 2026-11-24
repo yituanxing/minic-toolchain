@@ -206,6 +206,9 @@ void core_source_subtree_membership_destroy(CoreSourceSubtreeMembership *);
 
 bool core_capture_enum_metadata(MinicCoreLowerContext *context);
 /* Source-wide fail-closed _Bool==0 fact used only by Core CFG lowering. */
+bool core_bool_has_entry_zero_initializer(
+    const MinicCoreLowerContext *, MinicLocalId,
+    bool (*is_zero)(const MinicCoreLowerContext *, MinicExpressionId));
 bool core_zero_bool_cfg_condition(const MinicCoreLowerContext *context,
                                   MinicExpressionId id,
                                   unsigned int depth,
