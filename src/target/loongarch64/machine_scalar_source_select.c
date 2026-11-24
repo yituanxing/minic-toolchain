@@ -23,48 +23,9 @@ typedef struct LoongScalarSourceContext {
     void *opaque;
 } LoongScalarSourceContext;
 
-static MinicMachineRegister scalar_register(unsigned int number,
-    MinicMachineRegisterBank bank) {
-    MinicMachineRegister result = {0};
-    result.number = number;
-    result.width_bits = 64U;
-    result.bank = bank;
-    return result;
-}
-
-static MinicMachineOperand scalar_gp(unsigned int number,
-    unsigned int access, const char *constraint, const char *name) {
-    MinicMachineOperand result = {0};
-    result.kind = MINIC_MACHINE_OPERAND_REGISTER;
-    result.value.physical.reg = scalar_register(number,
-        MINIC_MACHINE_REGISTER_GENERAL);
-    result.value.physical.access = access;
-    result.asm_constraint = (char *)constraint;
-    result.asm_name = (char *)name;
-    return result;
-}
-
-static MinicMachineOperand scalar_immediate(int64_t value,
-    const char *constraint) {
-    MinicMachineOperand result = {0};
-    result.kind = MINIC_MACHINE_OPERAND_INTEGER;
-    result.value.integer = value;
-    result.asm_constraint = (char *)constraint;
-    return result;
-}
-
-static MinicMachineOperand scalar_address(unsigned int base,
-    const char *constraint) {
-    MinicMachineOperand result;
-    (void)memset(&result, 0, sizeof(result));
-    result.kind = MINIC_MACHINE_OPERAND_ADDRESS;
-    result.value.address.target_mode = MINIC_LOONG_ADDRESS_IMM12;
-    result.value.address.has_base = true;
-    result.value.address.base = scalar_register(base,
-        MINIC_MACHINE_REGISTER_GENERAL);
-    result.value.address.scale = 1U;
-    result.asm_constraint = (char *)constraint;
-    return result;
+static MinicMachineOperand scalar_address(unsigned base, const char *constraint) {
+    return minic_loong_machine_address(base, 0, MINIC_LOONG_ADDRESS_IMM12,
+                                      constraint, NULL);
 }
 
 /* Width/sign and output-lvalue checks are Core-typed, not recovered C AST
@@ -166,7 +127,7 @@ static bool scalar_cacop(LoongScalarSourceContext *s) {
         !scalar_integer(fn, s->roles[1].value, true, 1U, 0) ||
         !s->load(s->opaque, s->roles[1].value, SCALAR_T0, true))
         return false;
-    operands[0] = scalar_immediate(opcode, "i");
+    operands[0] = minic_loong_machine_imm(opcode, "i");
     operands[1] = scalar_address(SCALAR_T0, "ZC");
     return scalar_emit(s, MINIC_MACHINE_EFFECT_MEMORY_READ,
         operands, 2U, NULL, 0U);
@@ -187,7 +148,7 @@ static bool scalar_frametrace_csr(LoongScalarSourceContext *s) {
         !(scalar_integer(fn, s->roles[0].value, true, 4U, 0) ||
           scalar_integer(fn, s->roles[0].value, true, 8U, 0)))
         return false;
-    operand = scalar_gp(SCALAR_T0, MINIC_MACHINE_REGISTER_WRITE,
+    operand = minic_loong_machine_gp(SCALAR_T0, MINIC_MACHINE_REGISTER_WRITE,
         "=r", NULL);
     return scalar_emit(s, 0U, &operand, 1U, NULL, 0U) &&
         s->store(s->opaque, s->roles[0].value, SCALAR_T0,
@@ -210,9 +171,9 @@ static bool scalar_cpucfg(LoongScalarSourceContext *s) {
         !scalar_integer_any(fn, s->roles[1].value) ||
         !s->load(s->opaque, s->roles[1].value, SCALAR_T1, true))
         return false;
-    operands[0] = scalar_gp(SCALAR_T0, MINIC_MACHINE_REGISTER_WRITE,
+    operands[0] = minic_loong_machine_gp(SCALAR_T0, MINIC_MACHINE_REGISTER_WRITE,
         "=&r", NULL);
-    operands[1] = scalar_gp(SCALAR_T1, MINIC_MACHINE_REGISTER_READ,
+    operands[1] = minic_loong_machine_gp(SCALAR_T1, MINIC_MACHINE_REGISTER_READ,
         "r", NULL);
     return scalar_emit(s, 0U, operands, 2U, NULL, 0U) &&
         s->store(s->opaque, s->roles[0].value, SCALAR_T0, 4U);
@@ -235,13 +196,12 @@ static bool scalar_fpr_transfer(LoongScalarSourceContext *s) {
             false, false) ||
         !scalar_integer(s->ctx->fn, s->roles[0].value, read, 8U, 0))
         return false;
-    fpr.reg = scalar_register((form - 1U) % 32U,
-        MINIC_MACHINE_REGISTER_FLOAT);
+    fpr.reg = minic_loong_machine_reg((form - 1U) % 32U, 64U, MINIC_MACHINE_REGISTER_FLOAT);
     fpr.access = read ? MINIC_MACHINE_REGISTER_READ :
         MINIC_MACHINE_REGISTER_WRITE;
     if (!read && !s->load(s->opaque,
             s->roles[0].value, SCALAR_T0, true)) return false;
-    operand = scalar_gp(SCALAR_T0,
+    operand = minic_loong_machine_gp(SCALAR_T0,
         read ? MINIC_MACHINE_REGISTER_WRITE :
             MINIC_MACHINE_REGISTER_READ,
         read ? "=r" : "r", NULL);
@@ -278,7 +238,7 @@ static bool scalar_clock(LoongScalarSourceContext *s) {
                 early, false) ||
             !scalar_integer(s->ctx->fn, s->roles[i].value,
                 true, widths[i], word32 ? 1 : 0)) return false;
-        operands[i] = scalar_gp(i == 0U ? SCALAR_T0 : SCALAR_T1,
+        operands[i] = minic_loong_machine_gp(i == 0U ? SCALAR_T0 : SCALAR_T1,
             MINIC_MACHINE_REGISTER_WRITE, early ? "=&r" : "=r",
             form == LOONG_CLOCK_RDTIME_NAMED ?
                 (i == 0U ? "val" : "tid") : NULL);
@@ -318,18 +278,18 @@ static bool scalar_invtlb(LoongScalarSourceContext *s) {
                 false, (form == 1U && i == 1U) || form == 3U
                     ? 4U : 8U, -1)) return false;
     }
-    operands[0] = scalar_immediate(opcode, "i");
+    operands[0] = minic_loong_machine_imm(opcode, "i");
     if (form == 1U || form == 3U) {
         if (!s->load(s->opaque, s->roles[1].value, SCALAR_T0, true))
             return false;
-        operands[1] = scalar_gp(SCALAR_T0,
+        operands[1] = minic_loong_machine_gp(SCALAR_T0,
             MINIC_MACHINE_REGISTER_READ, "r", NULL);
     }
     if (form == 1U || form == 2U) {
         const size_t index = form == 1U ? 2U : 1U;
         if (!s->load(s->opaque, s->roles[index].value,
                 SCALAR_T1, true)) return false;
-        operands[index] = scalar_gp(SCALAR_T1,
+        operands[index] = minic_loong_machine_gp(SCALAR_T1,
             MINIC_MACHINE_REGISTER_READ, "r", NULL);
     }
     return scalar_emit(s, 0U, operands, count, NULL, 0U);

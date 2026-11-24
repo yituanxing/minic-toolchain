@@ -8,22 +8,12 @@
 
 enum { LOONG_BUILTIN_A0 = 4U, LOONG_BUILTIN_A1 = 5U };
 
-static MinicMachineOperand builtin_reg(unsigned int number,
-    unsigned int access) {
-    MinicMachineOperand operand = {0};
-    operand.kind = MINIC_MACHINE_OPERAND_REGISTER;
-    operand.value.physical.reg.number = number;
-    operand.value.physical.reg.width_bits = 64U;
-    operand.value.physical.reg.bank = MINIC_MACHINE_REGISTER_GENERAL;
-    operand.value.physical.access = access;
-    return operand;
+static MinicMachineOperand builtin_reg(unsigned number, unsigned access) {
+    return minic_loong_machine_gp(number, access, NULL, NULL);
 }
 
 static MinicMachineOperand builtin_imm(uint64_t value) {
-    MinicMachineOperand operand = {0};
-    operand.kind = MINIC_MACHINE_OPERAND_INTEGER;
-    operand.value.integer = (int64_t)value;
-    return operand;
+    return minic_loong_machine_imm((int64_t)value, NULL);
 }
 
 /* A real Core SSA definition is mandatory for privileged CSR selector

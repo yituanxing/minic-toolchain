@@ -1709,3 +1709,13 @@ C48 验收补记：`7721629e` 将旧 RV32 私有查询锚点更新为公共 Core
 基线 `7721629e`。Boolean 缓存、allocation-free 单 local 回退、稳定参数分析三份 source arena write/escape walk 收敛为一个无分配 visitor；保持 TARGET_ONLY 与真实 write 的不同 kill 政策、非 CFG 保守性、volatile 参数及计数。缓存一次遍历同时填充稳定性与 Boolean write set。保留 OOM 线性语义回退。
 
 Enum 全局哈希表复用 C46 已有 name index engine。Enum 最新索引优先、scope suffix 逆序查找、global_count 缩减回退、cache_owner 以及 EnumeratorId 映射保持独立；函数/全局/typedef 原 hash seed 与选择政策不变。历史 enum patch 的 canonical detection 支持旧快照与新公共 owner，不修改原历史补丁。新增 direct-local-effects 单测，现有 Boolean guard/副作用回归接入 native gate，名称索引回归覆盖 80 个枚举与 scope shadow。生产源码净 -201 行。未删除现役测试；新提交动态结果仍需核实。
+
+## C50–C59 十轮集中清理收尾（2026-11-24）
+
+基线 `6be2f337`，候选 PR #702，未合入 convergence。以 src/ 下 415 个 C/H/def 文件为统计范围；按 target 基础/公共层、frontend、compiler/core、RISC-V、x86-64、AArch64/LoongArch64 进行十轮结构初筛。覆盖全部 415 个文件的结构筛查不等于逐行深审，也不包括对工具、测试、构建和历史脚本的全面清理。实际修改的文件才计入源码差分。每轮仅在确认相同语义时收敛，保留不同 ABI、失败策略和诊断，不以行数作为正确性证明。
+
+C50–C58 的候选提交依次为 bf1894af、91a9fb85、c7ba04db、b4d2bf56、b914e7c1、d24a6d70、dd1d133d、8faf25a2、124acb4d。C57 的 RV64 独立 ABI 链接依赖回归已在 C58 修复；C58 Native Strict、RV64 Origin Audit、four-arch runtime 已通过。C59 收敛 LoongArch64 各专项选择器的物理 GPR、立即数和地址操作数构造，以及 AArch64 物理寄存器和立即数构造。保留源 ASM constraint/name、寄存器 access、地址模式、位宽和架构专用语义。C59 动态验收未完成。
+
+历史 AArch64 shard2/56-owner 的 run 42345808682 归档已不存在，原有 SHA 验证不能复现，绝不改写历史 pin 或把跳过视为通过。C56 触发当前编译器消费仍存在的完整七分片 GNU 输入 run 42366441631；run 45368572686 的七个编译分片通过，最终链接/QEMU 结果需独立核实。该复验不是历史 56-owner 输入归档的恢复，也不是 C59 exact-HEAD 的证明。
+
+剩余验收债务：C59 exact-HEAD Native Strict、五架构运行、相关专项、AArch64 完整 Linux 复验结果及历史归档问题；未完成全树逐行深审，不声称全部死代码或重复实现已消除。未删除现役测试、未弱化门禁。十轮结束，不以额外编号掩盖未完成工作。

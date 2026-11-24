@@ -727,24 +727,12 @@ static bool loong_local_frame_address(LoongSelector *,
 static bool loong_branch(LoongSelector *, uint32_t, size_t, bool, bool);
 static bool loong_bstrpick_d(MinicMachineBuilder *, unsigned int, unsigned int);
 
-static MinicMachineRegister loong_reg(unsigned int number) {
-    return (MinicMachineRegister){number, 64U,
-        MINIC_MACHINE_REGISTER_GENERAL};
+static MinicMachineRegister loong_freg(unsigned number, unsigned width) {
+    return minic_loong_machine_reg(number, width, MINIC_MACHINE_REGISTER_FLOAT);
 }
 
-static MinicMachineRegister loong_freg(unsigned int number,
-    unsigned int width) {
-    return (MinicMachineRegister){number, (uint16_t)width,
-        MINIC_MACHINE_REGISTER_FLOAT};
-}
-
-static MinicMachineOperand loong_gp(unsigned int number,
-    unsigned int access) {
-    MinicMachineOperand o = {0};
-    o.kind = MINIC_MACHINE_OPERAND_REGISTER;
-    o.value.physical.reg = loong_reg(number);
-    o.value.physical.access = access;
-    return o;
+static MinicMachineOperand loong_gp(unsigned number, unsigned access) {
+    return minic_loong_machine_gp(number, access, NULL, NULL);
 }
 
 static MinicMachineOperand loong_fp(unsigned int number, unsigned int width,
@@ -757,23 +745,12 @@ static MinicMachineOperand loong_fp(unsigned int number, unsigned int width,
 }
 
 static MinicMachineOperand loong_imm(int64_t value) {
-    MinicMachineOperand o = {0};
-    o.kind = MINIC_MACHINE_OPERAND_INTEGER;
-    o.value.integer = value;
-    return o;
+    return minic_loong_machine_imm(value, NULL);
 }
 
-static MinicMachineOperand loong_address(unsigned int base, int64_t offset,
+static MinicMachineOperand loong_address(unsigned base, int64_t offset,
     uint32_t mode) {
-    MinicMachineOperand o;
-    (void)memset(&o, 0, sizeof(o));
-    o.kind = MINIC_MACHINE_OPERAND_ADDRESS;
-    o.value.address.target_mode = mode;
-    o.value.address.has_base = true;
-    o.value.address.base = loong_reg(base);
-    o.value.address.scale = 1U;
-    o.value.address.displacement = offset;
-    return o;
+    return minic_loong_machine_address(base, offset, mode, NULL, NULL);
 }
 
 static bool loong_selected(MinicMachineBuilder *builder,
@@ -3793,7 +3770,7 @@ static bool loong_structured_memory_asm(LoongSelector *sel,
             MINIC_MACHINE_EFFECT_MEMORY_WRITE;
         /* Original Linux uses hard-wired architectural r21 as its per-CPU
          * base, an actual physical read not spelled as a Core operand. */
-        percpu_base.reg = loong_reg(21U);
+        percpu_base.reg = minic_loong_machine_gpr(21U);
         percpu_base.access = MINIC_MACHINE_REGISTER_READ;
         return minic_machine_builder_emit_core_source_asm(&sel->builder,
                    source, effects, operands, 2U,
@@ -3954,7 +3931,7 @@ static bool loong_select_vdso_syscall(LoongSelector *sel,
         if (clobber->name == NULL || clobber->name_length != 3U ||
             clobber->name[0] != '$' || clobber->name[1] != 't' ||
             clobber->name[2] != (char)('0' + i)) return false;
-        clobbers[i].reg = loong_reg(LOONG_T0 + (unsigned int)i);
+        clobbers[i].reg = minic_loong_machine_gpr(LOONG_T0 + (unsigned int)i);
         clobbers[i].access = MINIC_MACHINE_REGISTER_CLOBBER;
     }
     /* The output '+r' describes $a0, already loaded from tv.  As in the
@@ -4058,13 +4035,13 @@ static bool loong_select_irq_switch(LoongSelector *sel,
             &source->register_clobbers[i];
         if (!loong_linux_irq_switch_clobber(
                 clobber->name, clobber->name_length, i)) return false;
-        implicit[i].reg = loong_reg(i < 8U ? LOONG_A0 + (unsigned int)i :
+        implicit[i].reg = minic_loong_machine_gpr(i < 8U ? LOONG_A0 + (unsigned int)i :
             i == 8U ? LOONG_S0 : LOONG_T0 + (unsigned int)i - 9U);
         implicit[i].access = MINIC_MACHINE_REGISTER_CLOBBER;
     }
-    implicit[18].reg = loong_reg(LOONG_RA);
+    implicit[18].reg = minic_loong_machine_gpr(LOONG_RA);
     implicit[18].access = MINIC_MACHINE_REGISTER_CLOBBER;
-    implicit[19].reg = loong_reg(LOONG_SP);
+    implicit[19].reg = minic_loong_machine_gpr(LOONG_SP);
     implicit[19].access = MINIC_MACHINE_REGISTER_READ |
         MINIC_MACHINE_REGISTER_WRITE;
     if (!loong_load_value(sel, roles[0].value, LOONG_T0, true) ||
@@ -4768,7 +4745,7 @@ static bool loong_select_linux_fixed_register_asm(LoongSelector *sel,
             !source->has_memory_clobber) return false;
         read = form >= LOONG_PERCPU_READ_B && form <= LOONG_PERCPU_READ_D;
         count = 2U;
-        implicit.reg = loong_reg(21U);
+        implicit.reg = minic_loong_machine_gpr(21U);
         implicit.access = MINIC_MACHINE_REGISTER_READ;
         phys[0] = loong_gp(LOONG_T0, read ?
             MINIC_MACHINE_REGISTER_WRITE : MINIC_MACHINE_REGISTER_READ);

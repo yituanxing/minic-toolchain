@@ -12,35 +12,14 @@
 enum { UACCESS_T0 = 12U, UACCESS_T1 = 13U,
        UACCESS_T2 = 14U, UACCESS_T4 = 16U };
 
-static MinicMachineRegister uaccess_register(unsigned int number) {
-    MinicMachineRegister reg = {0};
-    reg.bank = MINIC_MACHINE_REGISTER_GENERAL;
-    reg.width_bits = 64U;
-    reg.number = number;
-    return reg;
+static MinicMachineOperand uaccess_gp(unsigned number,
+    unsigned access, const char *constraint) {
+    return minic_loong_machine_gp(number, access, constraint, NULL);
 }
 
-static MinicMachineOperand uaccess_gp(unsigned int number,
-    unsigned int access, const char *constraint) {
-    MinicMachineOperand operand = {0};
-    operand.kind = MINIC_MACHINE_OPERAND_REGISTER;
-    operand.value.physical.reg = uaccess_register(number);
-    operand.value.physical.access = access;
-    operand.asm_constraint = (char *)constraint;
-    return operand;
-}
-
-static MinicMachineOperand uaccess_memory(unsigned int number,
-    const char *constraint) {
-    MinicMachineOperand operand;
-    (void)memset(&operand, 0, sizeof(operand));
-    operand.kind = MINIC_MACHINE_OPERAND_ADDRESS;
-    operand.value.address.has_base = true;
-    operand.value.address.base = uaccess_register(number);
-    operand.value.address.scale = 1U;
-    operand.value.address.target_mode = MINIC_LOONG_ADDRESS_IMM12;
-    operand.asm_constraint = (char *)constraint;
-    return operand;
+static MinicMachineOperand uaccess_memory(unsigned number, const char *constraint) {
+    return minic_loong_machine_address(number, 0, MINIC_LOONG_ADDRESS_IMM12,
+                                      constraint, NULL);
 }
 
 static const MinicCoreType *uaccess_type(const MinicCoreFunction *fn,

@@ -9,22 +9,12 @@
  * the AArch64 opcode contract. The frame selector supplies only identities,
  * legal displacements and physical instruction order. */
 static MinicMachineOperand a64_register(MinicMachineRegisterBank bank,
-    unsigned int reg, unsigned int width) {
-    MinicMachineOperand result = {0};
-    result.kind = MINIC_MACHINE_OPERAND_REGISTER;
-    result.value.physical.reg = (MinicMachineRegister){reg, (uint16_t)width, bank};
-    return result;
+    unsigned reg, unsigned width) {
+    return minic_a64_machine_reg(bank, reg, width, 0U);
 }
 
 static MinicMachineOperand a64_gp(unsigned int reg) {
     return a64_register(MINIC_MACHINE_REGISTER_GENERAL, reg, 64U);
-}
-
-static MinicMachineOperand a64_immediate(int64_t value) {
-    MinicMachineOperand result = {0};
-    result.kind = MINIC_MACHINE_OPERAND_INTEGER;
-    result.value.integer = value;
-    return result;
 }
 
 static MinicMachineOperand a64_memory(unsigned int base, size_t offset,
@@ -76,7 +66,7 @@ static bool a64_rrr(MinicMachineBuilder *b, MinicA64MachineOpcode opcode,
 
 static bool a64_rri(MinicMachineBuilder *b, MinicA64MachineOpcode opcode,
     unsigned int dst, unsigned int src, int64_t imm) {
-    MinicMachineOperand ops[] = {a64_gp(dst), a64_gp(src), a64_immediate(imm)};
+    MinicMachineOperand ops[] = {a64_gp(dst), a64_gp(src), minic_a64_machine_imm(imm)};
     return a64_selected(b, opcode, ops, 3U);
 }
 
@@ -84,7 +74,7 @@ static bool a64_movwide(MinicMachineBuilder *b,
     MinicA64MachineOpcode opcode, unsigned int dst,
     uint16_t chunk, unsigned int shift) {
     MinicMachineOperand ops[] = {
-        a64_gp(dst), a64_immediate(chunk), a64_immediate(shift)};
+        a64_gp(dst), minic_a64_machine_imm(chunk), minic_a64_machine_imm(shift)};
     return a64_selected(b, opcode, ops, 3U);
 }
 

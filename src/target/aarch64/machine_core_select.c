@@ -89,41 +89,16 @@ static bool a64_neon_builtin_memory_shape(const MinicCoreFunction *fn,
         pointee->size == element_bytes && lane->size == element_bytes;
 }
 
-static MinicMachineOperand a64_gp(unsigned int reg, unsigned int bits,
-    unsigned int access) {
-    MinicMachineOperand op = {0};
-    op.kind = MINIC_MACHINE_OPERAND_REGISTER;
-    op.value.physical.reg = (MinicMachineRegister){reg, (uint16_t)bits,
-        MINIC_MACHINE_REGISTER_GENERAL};
-    op.value.physical.access = access;
-    return op;
+static MinicMachineOperand a64_gp(unsigned reg, unsigned bits, unsigned access) {
+    return minic_a64_machine_reg(MINIC_MACHINE_REGISTER_GENERAL, reg, bits, access);
 }
 
-static MinicMachineOperand a64_fp(unsigned int reg, unsigned int bits,
-    unsigned int access) {
-    MinicMachineOperand op = {0};
-    op.kind = MINIC_MACHINE_OPERAND_REGISTER;
-    op.value.physical.reg = (MinicMachineRegister){reg, (uint16_t)bits,
-        MINIC_MACHINE_REGISTER_FLOAT};
-    op.value.physical.access = access;
-    return op;
+static MinicMachineOperand a64_fp(unsigned reg, unsigned bits, unsigned access) {
+    return minic_a64_machine_reg(MINIC_MACHINE_REGISTER_FLOAT, reg, bits, access);
 }
 
-static MinicMachineOperand a64_vector(unsigned int reg,
-    unsigned int access) {
-    MinicMachineOperand op = {0};
-    op.kind = MINIC_MACHINE_OPERAND_REGISTER;
-    op.value.physical.reg = (MinicMachineRegister){reg, 128U,
-        MINIC_MACHINE_REGISTER_VECTOR};
-    op.value.physical.access = access;
-    return op;
-}
-
-static MinicMachineOperand a64_immediate(int64_t value) {
-    MinicMachineOperand op = {0};
-    op.kind = MINIC_MACHINE_OPERAND_INTEGER;
-    op.value.integer = value;
-    return op;
+static MinicMachineOperand a64_vector(unsigned reg, unsigned access) {
+    return minic_a64_machine_reg(MINIC_MACHINE_REGISTER_VECTOR, reg, 128U, access);
 }
 
 static MinicMachineOperand a64_symbol(const char *name, uint32_t reloc) {
@@ -223,7 +198,7 @@ static bool a64_rri(A64CoreSelection *sel, uint32_t opcode,
     const MinicMachineOperand ops[] = {
         a64_gp(dst, bits, MINIC_MACHINE_REGISTER_WRITE),
         a64_gp(src, bits, MINIC_MACHINE_REGISTER_READ),
-        a64_immediate(imm)
+        minic_a64_machine_imm(imm)
     };
     return a64_emit(sel, opcode, ops, 3U);
 }
@@ -240,14 +215,14 @@ static bool a64_compare(A64CoreSelection *sel, unsigned int bits,
 static bool a64_cmp_zero(A64CoreSelection *sel, unsigned int bits,
     unsigned int reg) {
     const MinicMachineOperand ops[] = {
-        a64_gp(reg, bits, MINIC_MACHINE_REGISTER_READ), a64_immediate(0)
+        a64_gp(reg, bits, MINIC_MACHINE_REGISTER_READ), minic_a64_machine_imm(0)
     };
     return a64_emit(sel, MINIC_A64_MACHINE_CMP_IMM, ops, 2U);
 }
 
 static bool a64_cset(A64CoreSelection *sel, unsigned int dst, int64_t cc) {
     const MinicMachineOperand ops[] = {
-        a64_gp(dst, 32U, MINIC_MACHINE_REGISTER_WRITE), a64_immediate(cc)
+        a64_gp(dst, 32U, MINIC_MACHINE_REGISTER_WRITE), minic_a64_machine_imm(cc)
     };
     return a64_emit(sel, MINIC_A64_MACHINE_CSET, ops, 2U);
 }
@@ -273,8 +248,8 @@ static bool a64_load_constant_width(A64CoreSelection *sel, unsigned int reg,
         const MinicMachineOperand ops[] = {
             a64_gp(reg, bits, limb == 0U ? MINIC_MACHINE_REGISTER_WRITE :
                 (MINIC_MACHINE_REGISTER_READ | MINIC_MACHINE_REGISTER_WRITE)),
-            a64_immediate((int64_t)((value >> shift) & UINT64_C(65535))),
-            a64_immediate((int64_t)shift)
+            minic_a64_machine_imm((int64_t)((value >> shift) & UINT64_C(65535))),
+            minic_a64_machine_imm((int64_t)shift)
         };
         if ((limb == 0U || ((value >> shift) & UINT64_C(65535)) != 0U) &&
             !a64_emit(sel, limb == 0U ? MINIC_A64_MACHINE_MOVZ :
@@ -1422,7 +1397,7 @@ static bool a64_dynamic_stack_alloc(A64CoreSelection *sel,
     size_t continuation, overflow;
     const size_t source_block = sel->builder.current_block;
     const MinicMachineOperand high[] = {
-        a64_immediate(2), a64_block(0U)
+        minic_a64_machine_imm(2), a64_block(0U)
     };
     MinicMachineOperand branch[2] = {high[0], high[1]};
     if (ins_id >= sel->ctx->fn->instruction_count) return false;
@@ -1613,7 +1588,7 @@ static bool a64_linux_source_asm_goto(A64CoreSelection *sel,
             immediate->asm_name == NULL ||
             strcmp(immediate->asm_name, "cpucap") != 0)
             return false;
-        bindings[0] = a64_immediate(immediate->integer);
+        bindings[0] = minic_a64_machine_imm(immediate->integer);
         bindings[0].asm_name = immediate->asm_name;
     } else {
         if (!minic_core_inline_asm_relocation_valid(immediate) ||
@@ -2380,7 +2355,7 @@ static bool a64_linux_kvm_at_fixup_source(A64CoreSelection *sel,
             !aarch64_asm_core_integer(fn, op->value, i < 3U,
                 i == 0U || i == 4U ? 4U : 8U, -1))
             return false;
-        bindings[i] = i == 4U ? a64_immediate(-14) :
+        bindings[i] = i == 4U ? minic_a64_machine_imm(-14) :
             a64_gp(9U + (unsigned int)i, i == 0U ? 32U : 64U,
                 i == 0U ? MINIC_MACHINE_REGISTER_READ |
                     MINIC_MACHINE_REGISTER_WRITE :
@@ -2454,7 +2429,7 @@ static bool a64_linux_brk_source(A64CoreSelection *sel,
         literal->result != op->value ||
         !aarch64_linux_brk_value(literal->value.integer_value))
         return false;
-    binding = a64_immediate(literal->value.integer_value);
+    binding = minic_a64_machine_imm(literal->value.integer_value);
     binding.asm_constraint = "I";
     return minic_machine_builder_emit_core_source_asm(&sel->builder,
         source, 0U, &binding, 1U, NULL, 0U, false, false);
@@ -2938,7 +2913,7 @@ static bool a64_linux_uaccess_bic_source(A64CoreSelection *sel,
         return false;
     bindings[0] = a64_gp(9U, 64U, MINIC_MACHINE_REGISTER_WRITE);
     bindings[1] = a64_gp(10U, 64U, MINIC_MACHINE_REGISTER_READ);
-    bindings[2] = a64_immediate(literal->value.integer_value);
+    bindings[2] = minic_a64_machine_imm(literal->value.integer_value);
     bindings[0].asm_constraint = "=r";
     bindings[1].asm_constraint = "r";
     bindings[2].asm_constraint = "i";
@@ -4566,7 +4541,7 @@ static bool a64_copy_post_byte(A64CoreSelection *sel, uint32_t opcode,
             MINIC_MACHINE_REGISTER_WRITE),
         a64_gp(base, 64U, MINIC_MACHINE_REGISTER_READ |
             MINIC_MACHINE_REGISTER_WRITE),
-        a64_immediate(1)
+        minic_a64_machine_imm(1)
     };
     if (!a64_emit(sel, opcode, operands, 3U)) return false;
     if (vol) {
@@ -4612,7 +4587,7 @@ static bool a64_copy_bytes(A64CoreSelection *sel,
                 destination_volatile) ||
             !a64_rri(sel, MINIC_A64_MACHINE_SUBS_IMM, 64U,
                 A64_T3, A64_T3, 1)) return false;
-        branch[0] = a64_immediate(1); /* NE: nonzero counted-loop remainder. */
+        branch[0] = minic_a64_machine_imm(1); /* NE: nonzero counted-loop remainder. */
         branch[1] = a64_block(loop);
         return a64_emit(sel, MINIC_A64_MACHINE_B_COND, branch, 2U) &&
             minic_machine_builder_add_successor(&sel->builder, loop) &&
@@ -5209,7 +5184,7 @@ static bool a64_variadic(A64CoreSelection *sel,
             !a64_memory_register(sel, MINIC_A64_MACHINE_LDRSW, false,
                 A64_T1, 64U, A64_T0, fp ? 28U : 24U, false, false) ||
             !a64_cmp_zero(sel, 32U, A64_T1)) return false;
-        branch[0] = a64_immediate(10); /* GE (gr_offs >= 0). */
+        branch[0] = minic_a64_machine_imm(10); /* GE (gr_offs >= 0). */
         branch[1] = a64_block(aux->stack_path);
         if (!a64_emit(sel, MINIC_A64_MACHINE_B_COND, branch, 2U) ||
             !minic_machine_builder_add_successor(&sel->builder,
@@ -5295,7 +5270,7 @@ static bool a64_wide_shift(A64CoreSelection *sel,
             aux->nonzero_path) ||
         !a64_load_constant_width(sel, 14U, 64U, 64U) ||
         !a64_compare(sel, 64U, A64_T1, 14U)) return false;
-    branch[0] = a64_immediate(2); /* unsigned >= 64 */
+    branch[0] = minic_a64_machine_imm(2); /* unsigned >= 64 */
     branch[1] = a64_block(aux->stack_path);
     if (!a64_emit(sel, MINIC_A64_MACHINE_B_COND, branch, 2U) ||
         !minic_machine_builder_add_successor(&sel->builder,

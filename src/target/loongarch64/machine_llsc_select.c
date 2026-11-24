@@ -13,37 +13,10 @@ enum {
     LL_T4 = 16U, LL_T5 = 17U, LL_T6 = 18U, LL_T7 = 19U
 };
 
-static MinicMachineRegister ll_register(unsigned int n) {
-    MinicMachineRegister reg = {0};
-    reg.number = n;
-    reg.width_bits = 64U;
-    reg.bank = MINIC_MACHINE_REGISTER_GENERAL;
-    return reg;
-}
-
-static MinicMachineOperand ll_gp(unsigned int n, unsigned int access,
+static MinicMachineOperand ll_memory(unsigned base,
     const char *constraint, const char *name) {
-    MinicMachineOperand result = {0};
-    result.kind = MINIC_MACHINE_OPERAND_REGISTER;
-    result.value.physical.reg = ll_register(n);
-    result.value.physical.access = access;
-    result.asm_constraint = (char *)constraint;
-    result.asm_name = (char *)name;
-    return result;
-}
-
-static MinicMachineOperand ll_memory(unsigned int base,
-    const char *constraint, const char *name) {
-    MinicMachineOperand result;
-    (void)memset(&result, 0, sizeof(result));
-    result.kind = MINIC_MACHINE_OPERAND_ADDRESS;
-    result.value.address.target_mode = MINIC_LOONG_ADDRESS_IMM12;
-    result.value.address.has_base = true;
-    result.value.address.base = ll_register(base);
-    result.value.address.scale = 1U;
-    result.asm_constraint = (char *)constraint;
-    result.asm_name = (char *)name;
-    return result;
+    return minic_loong_machine_address(base, 0, MINIC_LOONG_ADDRESS_IMM12,
+                                      constraint, name);
 }
 
 static bool ll_integer(const MinicCoreFunction *fn,
@@ -149,13 +122,13 @@ static bool ll_cmpxchg(MinicMachineBuilder *builder,
             !load(opaque,b[4].value,LL_T0,false) ||
             !load(opaque,b[5].value,LL_T1,false) ||
             !load(opaque,b[6].value,LL_T2,false)) return false;
-        bindings[0] = ll_gp(LL_T5,MINIC_MACHINE_REGISTER_WRITE,"=&r",NULL);
-        bindings[1] = ll_gp(LL_T6,MINIC_MACHINE_REGISTER_WRITE,"=&r",NULL);
+        bindings[0] = minic_loong_machine_gp(LL_T5,MINIC_MACHINE_REGISTER_WRITE,"=&r",NULL);
+        bindings[1] = minic_loong_machine_gp(LL_T6,MINIC_MACHINE_REGISTER_WRITE,"=&r",NULL);
         bindings[2] = ll_memory(LL_T7,"=ZC",NULL);
         bindings[3] = ll_memory(LL_T4,"ZC",NULL);
-        bindings[4] = ll_gp(LL_T0,MINIC_MACHINE_REGISTER_READ,"Jr",NULL);
-        bindings[5] = ll_gp(LL_T1,MINIC_MACHINE_REGISTER_READ,"Jr",NULL);
-        bindings[6] = ll_gp(LL_T2,MINIC_MACHINE_REGISTER_READ,"Jr",NULL);
+        bindings[4] = minic_loong_machine_gp(LL_T0,MINIC_MACHINE_REGISTER_READ,"Jr",NULL);
+        bindings[5] = minic_loong_machine_gp(LL_T1,MINIC_MACHINE_REGISTER_READ,"Jr",NULL);
+        bindings[6] = minic_loong_machine_gp(LL_T2,MINIC_MACHINE_REGISTER_READ,"Jr",NULL);
         return minic_machine_builder_emit_core_source_asm(builder,source,
                 MINIC_MACHINE_EFFECT_MEMORY_READ |
                     MINIC_MACHINE_EFFECT_MEMORY_WRITE,
@@ -186,12 +159,12 @@ static bool ll_cmpxchg(MinicMachineBuilder *builder,
             !load(opaque,b[3].value,LL_T1,false) ||
             !load(opaque,b[4].value,LL_T2,false)) return false;
     }
-    bindings[0] = ll_gp(LL_T5,MINIC_MACHINE_REGISTER_WRITE,"=&r",NULL);
+    bindings[0] = minic_loong_machine_gp(LL_T5,MINIC_MACHINE_REGISTER_WRITE,"=&r",NULL);
     bindings[1] = ll_memory(LL_T7,"=ZB",NULL);
     bindings[2] = ll_memory(LL_T4,"ZB",NULL);
-    bindings[3] = ll_gp(LL_T1,MINIC_MACHINE_REGISTER_READ,"Jr",NULL);
-    bindings[4] = ll_gp(LL_T2,MINIC_MACHINE_REGISTER_READ,"Jr",NULL);
-    clobber.reg = ll_register(LL_T0);
+    bindings[3] = minic_loong_machine_gp(LL_T1,MINIC_MACHINE_REGISTER_READ,"Jr",NULL);
+    bindings[4] = minic_loong_machine_gp(LL_T2,MINIC_MACHINE_REGISTER_READ,"Jr",NULL);
+    clobber.reg = minic_loong_machine_gpr(LL_T0);
     clobber.access = MINIC_MACHINE_REGISTER_WRITE |
                      MINIC_MACHINE_REGISTER_CLOBBER;
     return minic_machine_builder_emit_core_source_asm(builder,source,
@@ -227,9 +200,9 @@ static bool ll_xchg(MinicMachineBuilder *builder,
         !load(opaque,b[0].value,LL_T1,true) ||
         !load(opaque,b[2].value,LL_T0,false)) return false;
     bindings[0] = ll_memory(LL_T1,"+ZB",named ? "mem" : NULL);
-    bindings[1] = ll_gp(LL_T2,MINIC_MACHINE_REGISTER_WRITE,"=&r",
+    bindings[1] = minic_loong_machine_gp(LL_T2,MINIC_MACHINE_REGISTER_WRITE,"=&r",
                         named ? "tmp" : NULL);
-    bindings[2] = ll_gp(LL_T0,MINIC_MACHINE_REGISTER_READ,
+    bindings[2] = minic_loong_machine_gp(LL_T0,MINIC_MACHINE_REGISTER_READ,
                         named || form >= 9U ? "r" : "Jr",
                         named ? "val" : NULL);
     return minic_machine_builder_emit_core_source_asm(builder,source,
@@ -266,12 +239,12 @@ static bool ll_xchg_small(MinicMachineBuilder *builder,
         !load(opaque,b[2].value,LL_T7,true) ||
         !load(opaque,b[4].value,LL_T0,false) ||
         !load(opaque,b[5].value,LL_T1,false)) return false;
-    bindings[0] = ll_gp(LL_T5,MINIC_MACHINE_REGISTER_WRITE,"=&r",NULL);
-    bindings[1] = ll_gp(LL_T6,MINIC_MACHINE_REGISTER_WRITE,"=&r",NULL);
+    bindings[0] = minic_loong_machine_gp(LL_T5,MINIC_MACHINE_REGISTER_WRITE,"=&r",NULL);
+    bindings[1] = minic_loong_machine_gp(LL_T6,MINIC_MACHINE_REGISTER_WRITE,"=&r",NULL);
     bindings[2] = ll_memory(LL_T7,"=ZC",NULL);
     bindings[3] = ll_memory(LL_T4,"ZC",NULL);
-    bindings[4] = ll_gp(LL_T0,MINIC_MACHINE_REGISTER_READ,"Jr",NULL);
-    bindings[5] = ll_gp(LL_T1,MINIC_MACHINE_REGISTER_READ,"Jr",NULL);
+    bindings[4] = minic_loong_machine_gp(LL_T0,MINIC_MACHINE_REGISTER_READ,"Jr",NULL);
+    bindings[5] = minic_loong_machine_gp(LL_T1,MINIC_MACHINE_REGISTER_READ,"Jr",NULL);
     return minic_machine_builder_emit_core_source_asm(builder,source,
             MINIC_MACHINE_EFFECT_MEMORY_READ |
                 MINIC_MACHINE_EFFECT_MEMORY_WRITE,

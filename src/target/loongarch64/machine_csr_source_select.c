@@ -4,23 +4,11 @@
 #include "target/loongarch64/asm_contract.h"
 #include "target/loongarch64/asm_contract_internal.h"
 #include "target/loongarch64/machine_asm_form.h"
+#include "target/loongarch64/machine_opcode.h"
 
 #include <string.h>
 
 enum { CSR_T0 = 12U, CSR_T1 = 13U };
-
-static MinicMachineOperand csr_reg(unsigned int number,
-    unsigned int access, const char *constraint, const char *name) {
-    MinicMachineOperand result = {0};
-    result.kind = MINIC_MACHINE_OPERAND_REGISTER;
-    result.value.physical.reg = (MinicMachineRegister){
-        number, 64U, MINIC_MACHINE_REGISTER_GENERAL
-    };
-    result.value.physical.access = access;
-    result.asm_constraint = (char *)constraint;
-    result.asm_name = (char *)name;
-    return result;
-}
 
 static MinicMachineOperand csr_zero_immediate(void) {
     MinicMachineOperand result = {0};
@@ -176,12 +164,12 @@ bool minic_loongarch64_machine_select_csr_source(
          !load_value(opaque, roles[1].value, CSR_T0, false)))
         return false;
 
-    bindings[0] = csr_reg(CSR_T1,
+    bindings[0] = minic_loong_machine_gp(CSR_T1,
         form == 1U ? MINIC_MACHINE_REGISTER_WRITE :
             (MINIC_MACHINE_REGISTER_READ | MINIC_MACHINE_REGISTER_WRITE),
         form == 1U ? "=r" : "+r", "val");
     if (form == 2U)
-        bindings[1] = csr_reg(CSR_T0, MINIC_MACHINE_REGISTER_READ,
+        bindings[1] = minic_loong_machine_gp(CSR_T0, MINIC_MACHINE_REGISTER_READ,
             "r", "mask");
     bindings[form == 1U ? 1U : 2U] = csr_zero_immediate();
 

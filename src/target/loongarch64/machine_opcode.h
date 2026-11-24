@@ -2,6 +2,7 @@
 #define MINIC_TARGET_LOONGARCH64_MACHINE_OPCODE_H
 
 #include "target/common/machine_gnu_asm.h"
+#include <string.h>
 
 /* LoongArch base integer and GNU assembler pseudoinstructions are deliberate
  * target-owned selections, separate from LP64S/LP64D and source-inline ASM. */
@@ -14,6 +15,49 @@ typedef enum MinicLoongMachineAddressMode {
     MINIC_LOONG_ADDRESS_IMM12 = 1,
     MINIC_LOONG_ADDRESS_PTR14 = 2
 } MinicLoongMachineAddressMode;
+
+/* Canonical physical operand construction for native and source-ASM selectors.
+ * Constraint and name are borrowed until the MachineBuilder copies them. */
+static inline MinicMachineRegister minic_loong_machine_reg(
+    unsigned number, unsigned width, MinicMachineRegisterBank bank) {
+    return (MinicMachineRegister){number, (uint16_t)width, bank};
+}
+static inline MinicMachineRegister minic_loong_machine_gpr(unsigned number) {
+    return minic_loong_machine_reg(number, 64U, MINIC_MACHINE_REGISTER_GENERAL);
+}
+static inline MinicMachineOperand minic_loong_machine_gp(
+    unsigned number, unsigned access, const char *constraint, const char *name) {
+    MinicMachineOperand op = {0};
+    op.kind = MINIC_MACHINE_OPERAND_REGISTER;
+    op.value.physical.reg = minic_loong_machine_gpr(number);
+    op.value.physical.access = access;
+    op.asm_constraint = (char *)constraint;
+    op.asm_name = (char *)name;
+    return op;
+}
+static inline MinicMachineOperand minic_loong_machine_imm(
+    int64_t value, const char *constraint) {
+    MinicMachineOperand op = {0};
+    op.kind = MINIC_MACHINE_OPERAND_INTEGER;
+    op.value.integer = value;
+    op.asm_constraint = (char *)constraint;
+    return op;
+}
+static inline MinicMachineOperand minic_loong_machine_address(
+    unsigned base, int64_t offset, uint32_t mode,
+    const char *constraint, const char *name) {
+    MinicMachineOperand op;
+    (void)memset(&op, 0, sizeof(op));
+    op.kind = MINIC_MACHINE_OPERAND_ADDRESS;
+    op.value.address.target_mode = mode;
+    op.value.address.has_base = true;
+    op.value.address.base = minic_loong_machine_gpr(base);
+    op.value.address.scale = 1U;
+    op.value.address.displacement = offset;
+    op.asm_constraint = (char *)constraint;
+    op.asm_name = (char *)name;
+    return op;
+}
 
 typedef enum MinicLoongMachineRelocation {
     MINIC_LOONG_RELOC_DIRECT = 1,

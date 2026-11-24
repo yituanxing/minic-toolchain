@@ -27,46 +27,10 @@ typedef struct ExtendedSelection {
     void *opaque;
 } ExtendedSelection;
 
-static MinicMachineRegister ext_reg(unsigned int number) {
-    MinicMachineRegister result = {0};
-    result.number = number;
-    result.width_bits = 64U;
-    result.bank = MINIC_MACHINE_REGISTER_GENERAL;
-    return result;
-}
-
-static MinicMachineOperand ext_gp(unsigned int number,
-    unsigned int access, const char *constraint, const char *name) {
-    MinicMachineOperand operand = {0};
-    operand.kind = MINIC_MACHINE_OPERAND_REGISTER;
-    operand.value.physical.reg = ext_reg(number);
-    operand.value.physical.access = access;
-    operand.asm_constraint = (char *)constraint;
-    operand.asm_name = (char *)name;
-    return operand;
-}
-
-static MinicMachineOperand ext_mem(unsigned int base,
+static MinicMachineOperand ext_mem(unsigned base,
     const char *constraint, const char *name) {
-    MinicMachineOperand operand;
-    (void)memset(&operand, 0, sizeof(operand));
-    operand.kind = MINIC_MACHINE_OPERAND_ADDRESS;
-    operand.value.address.target_mode = MINIC_LOONG_ADDRESS_IMM12;
-    operand.value.address.has_base = true;
-    operand.value.address.base = ext_reg(base);
-    operand.value.address.scale = 1U;
-    operand.asm_constraint = (char *)constraint;
-    operand.asm_name = (char *)name;
-    return operand;
-}
-
-static MinicMachineOperand ext_immediate(int64_t value,
-    const char *constraint) {
-    MinicMachineOperand operand = {0};
-    operand.kind = MINIC_MACHINE_OPERAND_INTEGER;
-    operand.value.integer = value;
-    operand.asm_constraint = (char *)constraint;
-    return operand;
+    return minic_loong_machine_address(base, 0, MINIC_LOONG_ADDRESS_IMM12,
+                                      constraint, name);
 }
 
 static const MinicCoreType *ext_value_type(const MinicCoreFunction *fn,
@@ -158,7 +122,7 @@ static bool ext_emit(const ExtendedSelection *s,
     const MinicMachineOperand *bindings, size_t count, bool clobbers_t0) {
     MinicMachineRegisterEffect scratch = {0};
     if (clobbers_t0) {
-        scratch.reg = ext_reg(EXT_T0);
+        scratch.reg = minic_loong_machine_gpr(EXT_T0);
         scratch.access = MINIC_MACHINE_REGISTER_WRITE |
                          MINIC_MACHINE_REGISTER_CLOBBER;
     }
@@ -192,13 +156,13 @@ static bool ext_futex_cmpxchg(const ExtendedSelection *s) {
         !s->load(s->opaque,b[2].value,EXT_T5,true) ||
         !s->load(s->opaque,b[4].value,EXT_T2,false) ||
         !s->load(s->opaque,b[5].value,EXT_T8,false)) return false;
-    ops[0] = ext_gp(EXT_T6,MINIC_MACHINE_REGISTER_READ |
+    ops[0] = minic_loong_machine_gp(EXT_T6,MINIC_MACHINE_REGISTER_READ |
         MINIC_MACHINE_REGISTER_WRITE,"+r",NULL);
-    ops[1] = ext_gp(EXT_T1,MINIC_MACHINE_REGISTER_WRITE,"=&r",NULL);
+    ops[1] = minic_loong_machine_gp(EXT_T1,MINIC_MACHINE_REGISTER_WRITE,"=&r",NULL);
     ops[2] = ext_mem(EXT_T5,"=ZC",NULL);
     ops[3] = ext_mem(EXT_T4,"ZC",NULL);
-    ops[4] = ext_gp(EXT_T2,MINIC_MACHINE_REGISTER_READ,"Jr",NULL);
-    ops[5] = ext_gp(EXT_T8,MINIC_MACHINE_REGISTER_READ,"Jr",NULL);
+    ops[4] = minic_loong_machine_gp(EXT_T2,MINIC_MACHINE_REGISTER_READ,"Jr",NULL);
+    ops[5] = minic_loong_machine_gp(EXT_T8,MINIC_MACHINE_REGISTER_READ,"Jr",NULL);
     return ext_emit(s,ops,6U,true) &&
         s->store(s->opaque,b[0].value,EXT_T6,4U) &&
         s->store(s->opaque,b[1].value,EXT_T1,4U);
@@ -227,11 +191,11 @@ static bool ext_add_unless(const ExtendedSelection *s) {
         !s->load(s->opaque,b[2].value,EXT_T2,true) ||
         !s->load(s->opaque,b[3].value,EXT_T4,false) ||
         !s->load(s->opaque,b[4].value,EXT_T5,false)) return false;
-    ops[0] = ext_gp(EXT_T0,MINIC_MACHINE_REGISTER_WRITE,"=&r","p");
-    ops[1] = ext_gp(EXT_T1,MINIC_MACHINE_REGISTER_WRITE,"=&r","rc");
+    ops[0] = minic_loong_machine_gp(EXT_T0,MINIC_MACHINE_REGISTER_WRITE,"=&r","p");
+    ops[1] = minic_loong_machine_gp(EXT_T1,MINIC_MACHINE_REGISTER_WRITE,"=&r","rc");
     ops[2] = ext_mem(EXT_T2,"=ZB","c");
-    ops[3] = ext_gp(EXT_T4,MINIC_MACHINE_REGISTER_READ,"r","a");
-    ops[4] = ext_gp(EXT_T5,MINIC_MACHINE_REGISTER_READ,"r","u");
+    ops[3] = minic_loong_machine_gp(EXT_T4,MINIC_MACHINE_REGISTER_READ,"r","a");
+    ops[4] = minic_loong_machine_gp(EXT_T5,MINIC_MACHINE_REGISTER_READ,"r","u");
     return ext_emit(s,ops,5U,false) &&
         s->store(s->opaque,b[0].value,EXT_T0,width) &&
         s->store(s->opaque,b[1].value,EXT_T1,width);
@@ -273,16 +237,16 @@ static bool ext_futex_rmw(const ExtendedSelection *s) {
         !s->load(s->opaque,b[2].value,EXT_T5,true) ||
         !s->load(s->opaque,b[5].value,EXT_T2,false) ||
         !s->load(s->opaque,b[3].value,EXT_T6,false)) return false;
-    ops[0] = ext_gp(EXT_T6,MINIC_MACHINE_REGISTER_WRITE,"=r",NULL);
-    ops[1] = ext_gp(EXT_T1,MINIC_MACHINE_REGISTER_WRITE,"=&r",NULL);
+    ops[0] = minic_loong_machine_gp(EXT_T6,MINIC_MACHINE_REGISTER_WRITE,"=r",NULL);
+    ops[1] = minic_loong_machine_gp(EXT_T1,MINIC_MACHINE_REGISTER_WRITE,"=&r",NULL);
     ops[2] = ext_mem(EXT_T5,"=ZC",NULL);
     /* GNU matching input "0": Core ties this exact role to output0 and
      * physical selection binds both views to the same T6 register. The
      * machine validator's register constraint syntax is `r`, never the
      * source-language output ordinal `0`. */
-    ops[3] = ext_gp(EXT_T6,MINIC_MACHINE_REGISTER_READ,"r",NULL);
+    ops[3] = minic_loong_machine_gp(EXT_T6,MINIC_MACHINE_REGISTER_READ,"r",NULL);
     ops[4] = ext_mem(EXT_T4,"ZC",NULL);
-    ops[5] = ext_gp(EXT_T2,MINIC_MACHINE_REGISTER_READ,"Jr",NULL);
+    ops[5] = minic_loong_machine_gp(EXT_T2,MINIC_MACHINE_REGISTER_READ,"Jr",NULL);
     return ext_emit(s,ops,6U,true) &&
         s->store(s->opaque,b[0].value,EXT_T6,4U) &&
         s->store(s->opaque,b[1].value,EXT_T1,4U);
@@ -315,8 +279,8 @@ static bool ext_sub_positive(const ExtendedSelection *s) {
             !ext_roles(s,4U,kinds,widths,signs,early,rw,SIZE_MAX,0U) ||
             !s->load(s->opaque,b[2].value,EXT_T4,true)) return false;
     }
-    ops[0] = ext_gp(EXT_T1,MINIC_MACHINE_REGISTER_WRITE,"=&r",NULL);
-    ops[1] = ext_gp(EXT_T2,MINIC_MACHINE_REGISTER_WRITE,"=&r",NULL);
+    ops[0] = minic_loong_machine_gp(EXT_T1,MINIC_MACHINE_REGISTER_WRITE,"=&r",NULL);
+    ops[1] = minic_loong_machine_gp(EXT_T2,MINIC_MACHINE_REGISTER_WRITE,"=&r",NULL);
     ops[2] = ext_mem(EXT_T4,"+ZC",NULL);
     if (form.add_negated) {
         MinicCoreInstructionId def_id;
@@ -335,10 +299,10 @@ static bool ext_sub_positive(const ExtendedSelection *s) {
         if (form.width == 4U)
             value = (int64_t)(int32_t)(uint32_t)value;
         if (value < -2048 || value > 2047) return false;
-        ops[3] = ext_immediate(value,"I");
+        ops[3] = minic_loong_machine_imm(value,"I");
     } else {
         if (!s->load(s->opaque,b[3].value,EXT_T5,false)) return false;
-        ops[3] = ext_gp(EXT_T5,MINIC_MACHINE_REGISTER_READ,"r",NULL);
+        ops[3] = minic_loong_machine_gp(EXT_T5,MINIC_MACHINE_REGISTER_READ,"r",NULL);
     }
     return ext_emit(s,ops,4U,false) &&
         s->store(s->opaque,b[0].value,EXT_T1,form.width) &&

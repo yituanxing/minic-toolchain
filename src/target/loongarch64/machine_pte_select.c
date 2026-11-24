@@ -9,36 +9,9 @@
 
 enum { PTE_T0 = 12U, PTE_T1 = 13U, PTE_T4 = 16U };
 
-static MinicMachineRegister pte_register(unsigned int number) {
-    MinicMachineRegister reg = {0};
-    reg.number = number;
-    reg.width_bits = 64U;
-    reg.bank = MINIC_MACHINE_REGISTER_GENERAL;
-    return reg;
-}
-
-static MinicMachineOperand pte_gp(unsigned int number,
-    unsigned int access, const char *constraint, const char *name) {
-    MinicMachineOperand operand = {0};
-    operand.kind = MINIC_MACHINE_OPERAND_REGISTER;
-    operand.value.physical.reg = pte_register(number);
-    operand.value.physical.access = access;
-    operand.asm_constraint = (char *)constraint;
-    operand.asm_name = (char *)name;
-    return operand;
-}
-
-static MinicMachineOperand pte_memory(unsigned int base) {
-    MinicMachineOperand operand;
-    (void)memset(&operand, 0, sizeof(operand));
-    operand.kind = MINIC_MACHINE_OPERAND_ADDRESS;
-    operand.value.address.has_base = true;
-    operand.value.address.base = pte_register(base);
-    operand.value.address.scale = 1U;
-    operand.value.address.target_mode = MINIC_LOONG_ADDRESS_IMM12;
-    operand.asm_constraint = "+m";
-    operand.asm_name = "buddy";
-    return operand;
+static MinicMachineOperand pte_memory(unsigned base) {
+    return minic_loong_machine_address(base, 0, MINIC_LOONG_ADDRESS_IMM12,
+                                      "+m", "buddy");
 }
 
 static bool pte_unsigned_word(const MinicCoreFunction *fn,
@@ -129,9 +102,9 @@ bool minic_loongarch64_machine_select_pte(
         !load(opaque, roles[0].value, PTE_T1, true))
         return false;
     bindings[0] = pte_memory(PTE_T1);
-    bindings[1] = pte_gp(PTE_T4, MINIC_MACHINE_REGISTER_WRITE,
+    bindings[1] = minic_loong_machine_gp(PTE_T4, MINIC_MACHINE_REGISTER_WRITE,
         "=&r", "tmp");
-    bindings[2] = pte_gp(PTE_T0, MINIC_MACHINE_REGISTER_READ,
+    bindings[2] = minic_loong_machine_gp(PTE_T0, MINIC_MACHINE_REGISTER_READ,
         "r", "global");
     return minic_machine_builder_emit_core_source_asm(builder, source,
             MINIC_MACHINE_EFFECT_MEMORY_READ |
