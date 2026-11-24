@@ -21,6 +21,15 @@ for section in .discard.addressable .data..percpu .data.weak; do
   grep -Fq ".section $section" "$work/minic.s"
 done
 grep -Fq '.weak weak_data' "$work/minic.s"
+if [[ "${MINIC_SECTION_ONLY:-0}" == 1 ]]; then
+  evidence_mode=source_only
+  elf_reloc=NOT_RUN
+  sparse_runtime=NOT_RUN
+else
+  evidence_mode=elf_runtime
+  elf_reloc=PASS
+  sparse_runtime=PASS
+fi
 if [[ "${MINIC_SECTION_ONLY:-0}" != 1 ]]; then
   case "$target" in
     x86_64) gnu=gcc; elftool=readelf ;;
@@ -80,7 +89,7 @@ if [[ "${MINIC_SECTION_ONLY:-0}" != 1 ]]; then
   cmp "$work/sparse.gnu.out" "$work/sparse.minic.out"
   cmp "$work/sparse.gnu.err" "$work/sparse.minic.err"
 fi
-echo "MINIC_SPARSE_POINTER_ARRAY=PASS target=$target trailing_zero=5 interleaved_reloc=2"
+echo "MINIC_SPARSE_POINTER_ARRAY=PASS target=$target mode=$evidence_mode runtime=$sparse_runtime trailing_zero=5 interleaved_reloc=2"
 # Flat aggregate arrays with pointers need the same implicit-zero-tail
 # handling as scalar pointer arrays.  GNU remains the independent ABI oracle.
 cat > "$work/sparse_records.i" <<'SRC'
@@ -105,7 +114,7 @@ if [[ "${MINIC_SECTION_ONLY:-0}" != 1 ]]; then
   cmp "$work/sparse_records.gnu.out" "$work/sparse_records.minic.out"
   cmp "$work/sparse_records.gnu.err" "$work/sparse_records.minic.err"
 fi
-echo "MINIC_SPARSE_RECORD_ARRAY=PASS target=$target initial_records=2 zero_tail=3 relocations=2"
+echo "MINIC_SPARSE_RECORD_ARRAY=PASS target=$target mode=$evidence_mode runtime=$sparse_runtime initial_records=2 zero_tail=3 relocations=2"
 cat > "$work/inject.i" <<'SRC'
 int __attribute__((section(".evil; nop"))) injected=1;
 SRC
@@ -159,5 +168,5 @@ for bss_kind in nonzero reloc; do
     test ! -e "$assembly"
   fi
 done
-echo "MINIC_P67_ELF_BSS=PASS target=$target physical_zero=2 bssish_progbits=1 nonzero_and_reloc_dialect=2"
-echo "MINIC_LINUX_GLOBAL_SECTION=PASS target=$target sections=3 weak=1 reloc=1 injected_directive=rejected"
+echo "MINIC_P67_ELF_BSS=PASS target=$target evidence=assembly_only physical_zero=2 bssish_progbits=1 nonzero_and_reloc_dialect=2"
+echo "MINIC_LINUX_GLOBAL_SECTION=PASS target=$target mode=$evidence_mode sections=3 weak=1 elf_reloc=$elf_reloc injected_directive=rejected"
