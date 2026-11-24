@@ -60,6 +60,7 @@ bool minic_core_call_view_build(const MinicCoreFunction *function,
                                 MinicCoreCallView *result) {
     MinicCoreCallView view;
     size_t begin, count;
+    const MinicCoreType *function_type;
     /* Executable call semantics belong to the sealed Core type graph.
      * An unbound source descriptor is never an alternative admission path. */
     if (function == NULL || function->type_context == NULL ||
@@ -71,27 +72,15 @@ bool minic_core_call_view_build(const MinicCoreFunction *function,
     view.core_function_type_id = MINIC_CORE_TYPE_INVALID;
     if (instruction->kind == MINIC_CORE_INSTRUCTION_CALL) {
         const size_t id = instruction->value.call.callee_id;
-        const MinicCoreType *function_type;
         if (id >= function->callee_count || function->callees == NULL)
             return false;
         view.callee = &function->callees[id];
         view.core_function_type_id = view.callee->core_function_type_id;
-        function_type = minic_core_call_type(function,
-            minic_core_type_unqualified(function->type_context,
-                                        view.core_function_type_id));
-        if (function_type == NULL || function_type->kind != MINIC_CORE_TYPE_FUNCTION)
-            return false;
-        view.core_return_type_id = function_type->value.function.return_type;
-        view.core_parameter_type_ids = function_type->value.function.parameters;
-        view.parameter_count = function_type->value.function.parameter_count;
-        view.is_variadic = function_type->value.function.is_variadic;
-        view.calling_convention = function_type->value.function.calling_convention;
         begin = instruction->value.call.argument_begin;
         count = instruction->value.call.argument_count;
     } else if (instruction->kind == MINIC_CORE_INSTRUCTION_INDIRECT_CALL) {
         const size_t id = instruction->value.indirect_call.signature_id;
         const MinicCoreValueId pointer = instruction->value.indirect_call.callee;
-        const MinicCoreType *function_type;
         if (id >= function->call_signature_count ||
             function->call_signatures == NULL ||
             pointer >= function->value_count || function->values == NULL)
@@ -104,28 +93,27 @@ bool minic_core_call_view_build(const MinicCoreFunction *function,
             minic_core_type_unqualified(function->type_context,
                 pointer_type->value.pointer.pointee) !=
                 minic_core_type_unqualified(function->type_context,
-                view.signature->core_function_type_id) ||
-            !minic_core_call_is_kind(function,
-                                     view.signature->core_function_type_id,
-                                     MINIC_CORE_TYPE_FUNCTION))
-            return false;
-        function_type = minic_core_call_type(function,
-            minic_core_type_unqualified(function->type_context,
-                view.signature->core_function_type_id));
-        if (function_type == NULL || function_type->kind != MINIC_CORE_TYPE_FUNCTION)
+                view.signature->core_function_type_id))
             return false;
         view.function_pointer = pointer;
         view.core_function_type_id = view.signature->core_function_type_id;
-        view.core_return_type_id = function_type->value.function.return_type;
-        view.core_parameter_type_ids = function_type->value.function.parameters;
-        view.parameter_count = function_type->value.function.parameter_count;
-        view.is_variadic = function_type->value.function.is_variadic;
-        view.calling_convention = function_type->value.function.calling_convention;
         begin = instruction->value.indirect_call.argument_begin;
         count = instruction->value.indirect_call.argument_count;
     } else {
         return false;
     }
+    /* Direct and indirect CALL differ in callee provenance, not the sealed
+     * signature snapshot or the argument/return transport checks below. */
+    function_type = minic_core_call_type(function,
+        minic_core_type_unqualified(function->type_context,
+                                    view.core_function_type_id));
+    if (function_type == NULL || function_type->kind != MINIC_CORE_TYPE_FUNCTION)
+        return false;
+    view.core_return_type_id = function_type->value.function.return_type;
+    view.core_parameter_type_ids = function_type->value.function.parameters;
+    view.parameter_count = function_type->value.function.parameter_count;
+    view.is_variadic = function_type->value.function.is_variadic;
+    view.calling_convention = function_type->value.function.calling_convention;
     if (!minic_function_calling_convention_valid(view.calling_convention) ||
         begin > function->call_argument_count ||
         count > function->call_argument_count - begin ||

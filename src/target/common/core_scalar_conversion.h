@@ -3,6 +3,24 @@
 
 #include "core/core_ir.h"
 
+/* Exact storage gates shared by Core scalar conversions and ABI value views.
+ * These do not impose a machine register class or an ABI word width. */
+static inline bool minic_core_scalar_integer_storage_valid(
+    const MinicCoreType *type) {
+    return type != NULL && type->kind == MINIC_CORE_TYPE_INTEGER &&
+           type->has_layout &&
+           (type->size == 1U || type->size == 2U || type->size == 4U ||
+            type->size == 8U || type->size == 16U) &&
+           type->value.integer.bit_width == type->size * 8U &&
+           (!type->value.integer.is_bool || type->size == 1U);
+}
+
+static inline bool minic_core_scalar_pointer_storage_valid(
+    const MinicCoreType *type) {
+    return type != NULL && type->kind == MINIC_CORE_TYPE_POINTER &&
+           type->has_layout && (type->size == 4U || type->size == 8U);
+}
+
 /* Shared language-independent integer conversion shape. The Core verifier
  * owns SSA legality; target ABI/frame code owns one-vs-two-register storage,
  * normalization instructions and physical register selection. Neither side
@@ -37,18 +55,8 @@ static inline bool minic_core_integer_conversion_shape(
     target = minic_core_type_get(function->type_context,
         minic_core_type_unqualified(function->type_context,
                                     instruction->core_type_id));
-    if (source == NULL || target == NULL ||
-        source->kind != MINIC_CORE_TYPE_INTEGER ||
-        target->kind != MINIC_CORE_TYPE_INTEGER ||
-        !source->has_layout || !target->has_layout ||
-        (source->size != 1U && source->size != 2U &&
-         source->size != 4U && source->size != 8U && source->size != 16U) ||
-        (target->size != 1U && target->size != 2U &&
-         target->size != 4U && target->size != 8U && target->size != 16U) ||
-        source->value.integer.bit_width != source->size * 8U ||
-        target->value.integer.bit_width != target->size * 8U ||
-        (source->value.integer.is_bool && source->size != 1U) ||
-        (target->value.integer.is_bool && target->size != 1U))
+    if (!minic_core_scalar_integer_storage_valid(source) ||
+        !minic_core_scalar_integer_storage_valid(target))
         return false;
     *shape = (MinicCoreIntegerConversionShape){
         .source_id = source_id,
@@ -98,31 +106,11 @@ static inline bool minic_core_scalar_bitcast_shape(
     target = minic_core_type_get(function->type_context,
         minic_core_type_unqualified(function->type_context,
                                     instruction->core_type_id));
-    if (source == NULL || target == NULL ||
-        !source->has_layout || !target->has_layout ||
-        !((source->kind == MINIC_CORE_TYPE_POINTER &&
-           (target->kind == MINIC_CORE_TYPE_POINTER ||
-            target->kind == MINIC_CORE_TYPE_INTEGER)) ||
-          (source->kind == MINIC_CORE_TYPE_INTEGER &&
-           target->kind == MINIC_CORE_TYPE_POINTER)) ||
-        (source->kind == MINIC_CORE_TYPE_POINTER &&
-         source->size != 4U && source->size != 8U) ||
-        (target->kind == MINIC_CORE_TYPE_POINTER &&
-         target->size != 4U && target->size != 8U) ||
-        (source->kind == MINIC_CORE_TYPE_INTEGER &&
-         (source->size != 1U && source->size != 2U &&
-          source->size != 4U && source->size != 8U &&
-          source->size != 16U)) ||
-        (target->kind == MINIC_CORE_TYPE_INTEGER &&
-         (target->size != 1U && target->size != 2U &&
-          target->size != 4U && target->size != 8U &&
-          target->size != 16U)) ||
-        (source->kind == MINIC_CORE_TYPE_INTEGER &&
-         (source->value.integer.bit_width != source->size * 8U ||
-          (source->value.integer.is_bool && source->size != 1U))) ||
-        (target->kind == MINIC_CORE_TYPE_INTEGER &&
-         (target->value.integer.bit_width != target->size * 8U ||
-          (target->value.integer.is_bool && target->size != 1U))))
+    if (!((minic_core_scalar_pointer_storage_valid(source) &&
+           (minic_core_scalar_pointer_storage_valid(target) ||
+            minic_core_scalar_integer_storage_valid(target))) ||
+          (minic_core_scalar_integer_storage_valid(source) &&
+           minic_core_scalar_pointer_storage_valid(target))))
         return false;
     *shape = (MinicCoreScalarBitcastShape){
         .source_id = source_id,

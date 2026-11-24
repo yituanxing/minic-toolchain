@@ -1,7 +1,7 @@
 #ifndef MINIC_TARGET_COMMON_CORE_ABI_VALUE_SHAPE_H
 #define MINIC_TARGET_COMMON_CORE_ABI_VALUE_SHAPE_H
 
-#include "core/core_ir.h"
+#include "target/common/core_floating_shape.h"
 
 /* The ABI planner owns placement; machine call/parameter/return emitters
  * consume only sealed Core value shape. Source MinicType descriptors are not
@@ -34,28 +34,16 @@ static inline bool minic_core_abi_value_shape(
     case MINIC_CORE_TYPE_RECORD:
         return type->has_layout && type->value.record.is_complete;
     case MINIC_CORE_TYPE_POINTER:
-        return type->has_layout &&
-               (type->size == 4U || type->size == 8U);
+        return minic_core_scalar_pointer_storage_valid(type);
     case MINIC_CORE_TYPE_INTEGER:
-        if (!type->has_layout ||
-            (type->size != 1U && type->size != 2U &&
-             type->size != 4U && type->size != 8U &&
-             type->size != 16U) ||
-            type->value.integer.bit_width != type->size * 8U ||
-            (type->value.integer.is_bool && type->size != 1U))
+        if (!minic_core_scalar_integer_storage_valid(type))
             return false;
         shape->integer_width = type->size;
         shape->integer_signed = type->value.integer.is_signed;
         shape->integer_bool = type->value.integer.is_bool;
         return true;
     case MINIC_CORE_TYPE_FLOAT:
-        if (!type->has_layout ||
-            (type->value.floating.format == MINIC_CORE_FLOAT_BINARY32
-                ? type->size != 4U
-                : type->value.floating.format == MINIC_CORE_FLOAT_BINARY64
-                    ? type->size != 8U
-                    : minic_core_float_format_is_wide(type->value.floating.format)
-                        ? type->size != 16U : true))
+        if (!minic_core_floating_format(type, type->value.floating.format))
             return false;
         shape->float_format = type->value.floating.format;
         return true;

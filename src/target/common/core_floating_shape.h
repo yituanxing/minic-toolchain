@@ -1,7 +1,7 @@
 #ifndef MINIC_TARGET_COMMON_CORE_FLOATING_SHAPE_H
 #define MINIC_TARGET_COMMON_CORE_FLOATING_SHAPE_H
 
-#include "core/core_ir.h"
+#include "target/common/core_scalar_conversion.h"
 
 /* The entire floating-scalar Core family has one sealed semantic shape.
  * IEEE payload transport, native F/D instructions, softfloat calls and
@@ -32,12 +32,8 @@ static inline bool minic_core_floating_format(
 
 static inline bool minic_core_floating_integer(
     const MinicCoreType *type, size_t *bytes, bool *is_signed) {
-    if (type == NULL || bytes == NULL || is_signed == NULL ||
-        type->kind != MINIC_CORE_TYPE_INTEGER || !type->has_layout ||
-        (type->size != 1U && type->size != 2U && type->size != 4U &&
-         type->size != 8U && type->size != 16U) ||
-        type->value.integer.bit_width != type->size * 8U ||
-        (type->value.integer.is_bool && type->size != 1U))
+    if (bytes == NULL || is_signed == NULL ||
+        !minic_core_scalar_integer_storage_valid(type))
         return false;
     *bytes = type->size;
     *is_signed = type->value.integer.is_signed;

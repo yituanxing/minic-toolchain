@@ -1,6 +1,6 @@
 /* Core conversions and scalar bitcasts use sealed CoreType IDs, without a
  * source-language descriptor in the public instruction/value schema. */
-#include "target/common/core_scalar_conversion.h"
+#include "target/common/core_abi_value_shape.h"
 #include <stdio.h>
 
 #define CHECK(expr) do { if (!(expr)) return __LINE__; } while (0)
@@ -39,6 +39,9 @@ static int run(void) {
     MinicCoreInstruction instruction = {0};
     MinicCoreIntegerConversionShape shape;
     MinicCoreScalarBitcastShape bitcast;
+    MinicCoreAbiValueShape abi;
+    size_t bytes;
+    bool sign;
     minic_core_type_context_initialize(&types);
     CHECK(add_integer(&types, 1U, true, false, &signed_byte));
     CHECK(add_integer(&types, 8U, false, false, &unsigned_long));
@@ -56,6 +59,15 @@ static int run(void) {
     function.type_context = &types;
     function.values = values;
     function.value_count = 2U;
+    CHECK(minic_core_abi_value_shape(&function, wide, &abi));
+    CHECK(abi.bytes == 16U && abi.integer_width == 16U && abi.integer_signed);
+    CHECK(minic_core_abi_value_shape(&function, boolean, &abi) && abi.integer_bool);
+    CHECK(!minic_core_abi_value_shape(&function, invalid, &abi));
+    CHECK(!minic_core_abi_value_shape(&function, malformed_pointer, &abi));
+    CHECK(minic_core_abi_value_shape(&function, pointer32, &abi) && abi.bytes == 4U);
+    CHECK(minic_core_floating_integer(minic_core_type_get(&types, wide), &bytes, &sign));
+    CHECK(bytes == 16U && sign);
+    CHECK(!minic_core_floating_integer(minic_core_type_get(&types, invalid), &bytes, &sign));
     instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONVERSION;
     instruction.value.operand = 0U;
     instruction.result = 1U;
