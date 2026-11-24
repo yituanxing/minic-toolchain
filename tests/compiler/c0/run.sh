@@ -408,7 +408,7 @@ sh "$root/tests/compiler/c0/run-gnu-static-local-interleaved-attribute.sh"
 MINIC="$minic" \
 HOST_CC="$host_cc" \
 BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
-sh "$root/tests/compiler/c0/run-runtime-local-array-initializer.sh"
+sh "$root/tests/compiler/c0/run-compile-only-case.sh" runtime-local-array-initializer
 
 MINIC="$minic" \
 HOST_CC="$host_cc" \
@@ -614,7 +614,7 @@ MINIC="$minic" HOST_CC="$host_cc" BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" 
   sh "$root/tests/compiler/c0/run-compile-only-case.sh" static-integer-address-relocation
 
 MINIC="$minic" HOST_CC="$host_cc" BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
-  sh "$root/tests/compiler/c0/run-static-union-zero-overlay.sh"
+  sh "$root/tests/compiler/c0/run-compile-only-case.sh" static-union-zero-overlay
 
 
 MINIC="$minic" HOST_CC="$host_cc" BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \

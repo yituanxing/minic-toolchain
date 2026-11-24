@@ -42,12 +42,12 @@ printf '%s\n' \
 MINIC="$minic" \
 HOST_CC="$host_cc" \
 BUILD_DIR="$build_dir" \
-sh "$root/tests/compiler/c0/run-static-local-scalars.sh"
+sh "$root/tests/compiler/c0/run-compile-only-case.sh" static-local-scalars
 
 MINIC="$minic" \
 HOST_CC="$host_cc" \
 BUILD_DIR="$build_dir" \
-sh "$root/tests/compiler/c0/run-static-local-fixed-arrays.sh"
+sh "$root/tests/compiler/c0/run-compile-only-case.sh" static-local-fixed-arrays
 
 expect_failure() {
     name=$1

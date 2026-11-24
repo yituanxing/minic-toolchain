@@ -203,7 +203,7 @@ runtime_record_array_initializer_focused() {
     MINIC="$root/build/ci-debug/bin/minic" \
     HOST_CC=cc \
     BUILD_DIR="$root/build/ci-runtime-record-array-initializer" \
-        sh tests/compiler/c0/run-runtime-record-array-initializers.sh
+        sh tests/compiler/c0/run-compile-only-case.sh runtime-record-array-initializers
 }
 
 core_required_no_fallback_focused() {
@@ -458,18 +458,18 @@ run_c0_gate_case() {
 linenoise_driven_focused() {
     local script
     for script in \
-        run-short-integers.sh \
+        compile:short-integers \
         compile:function-pointer-parameters \
         compile:extern-objects \
         compile:function-type-typedefs \
-        run-unnamed-prototype-parameters.sh \
-        run-static-pointer-arrays.sh \
+        compile:unnamed-prototype-parameters \
+        compile:static-pointer-arrays \
         run-pointer-array-typed-null.sh \
-        run-static-zero-definitions.sh \
+        compile:static-zero-definitions \
         run-static-zero-declaration-list.sh \
-        run-record-copy-array-members.sh \
+        compile:record-copy-array-members \
         compile:zero-aggregate-null \
-        run-record-local-initializers.sh \
+        compile:record-local-initializers \
         compile:multiply-assignment \
         compile:static-local-string-arrays \
         run-external-pointer-definitions.sh \
@@ -487,14 +487,14 @@ sds_driven_focused() {
     for script in \
         run-packed-record-layout.sh \
         run-flexible-array-members.sh \
-        run-inline-functions.sh \
+        compile:inline-functions \
         compile:postfix-const \
         compile:long-long-types \
-        run-wide-integer-literals.sh \
-        run-array-bound-constant-expressions.sh \
-        run-for-declaration-initializers.sh \
-        run-void-pointer-locals.sh \
-        run-compound-assignment-expressions.sh \
+        compile:wide-integer-literals \
+        compile:array-bound-constant-expressions \
+        compile:for-declaration-initializers \
+        compile:void-pointer-locals \
+        compile:compound-assignment-expressions \
         compile:void-casts \
         run-external-scalar-definitions.sh; do
         MINIC="$root/build/ci-debug/bin/minic" \

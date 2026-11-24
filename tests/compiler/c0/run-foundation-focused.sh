@@ -13,7 +13,7 @@ run_focused() {
 for test_script in \
     compile:signed-char-semantics \
     run-extern-incomplete-arrays.sh \
-    run-extern-fixed-integer-arrays.sh \
+    compile:extern-fixed-integer-arrays \
     compile:external-pointer-arrays \
     run-external-array-declarator-routing.sh \
     compile:extern-parenthesized-functions \
@@ -31,9 +31,9 @@ for test_script in \
     compile:builtin-memcpy-call \
     run-builtin-prefetch.sh \
     run-gnu-function-attributes.sh \
-    run-gnu-function-asm-labels.sh \
+    compile:gnu-function-asm-labels \
     compile:gnu-function-visibility \
-    run-gnu-visible-extern-arrays.sh \
+    compile:gnu-visible-extern-arrays \
     run-gnu-aligned-record-fields.sh \
     run-gnu-zero-length-record-arrays.sh \
     compile:record-forward-declarations \
@@ -48,10 +48,10 @@ for test_script in \
     compile:pointer-compound-subtraction \
     run-builtin-offsetof.sh \
     compile:pointer-integer-casts \
-    run-record-assignment-expressions.sh \
+    compile:record-assignment-expressions \
     compile:bitwise-and-assignment-expressions \
     run-compound-assignment-full.sh \
-    run-for-expression-initializers.sh \
+    compile:for-expression-initializers \
     compile:mixed-double-arithmetic \
     compile:conditional-pointer-qualifiers \
     compile:comma-operator \
@@ -63,11 +63,11 @@ for test_script in \
     run-static-nested-record-initializers.sh \
     run-static-mixed-symbol-relocations.sh \
     run-external-record-compound-literal.sh \
-    run-static-local-scalars.sh \
-    run-static-local-inferred-arrays.sh \
-    run-static-local-pointer-arrays.sh \
-    run-static-local-fixed-arrays.sh \
-    run-static-inferred-char-arrays.sh \
+    compile:static-local-scalars \
+    compile:static-local-inferred-arrays \
+    compile:static-local-pointer-arrays \
+    compile:static-local-fixed-arrays \
+    compile:static-inferred-char-arrays \
     compile:static-inferred-integer-array \
     run-static-mutable-arrays.sh \
     compile:static-preformed-array-zero \
@@ -76,8 +76,8 @@ for test_script in \
     run-static-integer-floating-const-initializer.sh \
     run-incomplete-function-pointer-array-lifetime.sh \
     run-static-integer-pointer-cast-comparison.sh \
-    run-static-aggregate-array-designators.sh \
-    run-prefix-update-expressions.sh \
+    compile:static-aggregate-array-designators \
+    compile:prefix-update-expressions \
     run-function-designator-calls.sh \
     compile:function-address-expressions \
     run-preprocessed-line-markers.sh \
@@ -121,7 +121,7 @@ for test_script in \
     run-gnu-inline-asm-named-operands.sh \
     run-gnu-inline-asm-goto.sh \
     run-gnu-fixed-register-bindings.sh \
-    run-gnu-compiletime-selection-builtins.sh \
+    compile:gnu-compiletime-selection-builtins \
     compile:gnu-builtin-constant-p \
     run-gnu-builtin-object-size.sh \
     run-gnu-call-frame-address.sh \
@@ -136,7 +136,7 @@ for test_script in \
     compile:gnu-overflow-builtins \
     run-gnu-register-inline-asm-output.sh \
     compile:function-linkage-inheritance \
-    run-static-prefix-object-attributes.sh \
+    compile:static-prefix-object-attributes \
     compile:extern-incomplete-record-object \
     compile:extern-function-pointer-object \
     run-extern-interleaved-function-attributes.sh \
@@ -147,7 +147,7 @@ for test_script in \
     compile:extern-multi-declarators \
     compile:extern-multidimensional-array \
     run-gnu-extern-object-redeclaration.sh \
-    run-gnu-section-symbol-attribute.sh \
+    compile:gnu-section-symbol-attribute \
     compile:gnu-const-function-attribute \
     run-driver-gnu-predefines.sh \
     run-driver-include-precedence.sh \

@@ -35,16 +35,15 @@ jobs:
           audit = ".github/workflows/minic-historical-script-retirement-audit.yml"
           def git(*args):
               return subprocess.check_output(["git", *args])
-          # The pinned tree passed the explicit 766-path retirement contract and
-          # every differential gate. Derive the same immutable manifest from Git
-          # instead of carrying hundreds of historical filenames in this YAML.
-          accepted = "863d91b65d6121b58ba9304b6c6818c1b7e53a3f"
+          # Derive the exact historical retirement set from the previously
+          # accepted immutable tree; never derive the allowlist from HEAD.
+          accepted = "d24fdb4086fd9cf45d534942989a085ca422c6ef"
           def changed_paths(before, after, *options):
               return set(git("diff", "--no-renames", "--name-only", *options,
                              before, after).decode().splitlines())
           expected = changed_paths(base, accepted, "--diff-filter=D")
           metadata = changed_paths(base, accepted) - expected
-          assert len(expected) == 766
+          assert len(expected) == 792
           shared_fixtures = {
               "tests/programs/c0/cast_expressions.c",
               "tests/programs/c0/hexadecimal_expression.c",
@@ -61,40 +60,43 @@ jobs:
           assert len(historical_archives) == 68
           assert shared_fixtures <= expected and historical_archives <= expected
           expected |= {
-              "tests/compiler/c0/run-bool-semantics.sh",
-              "tests/compiler/c0/run-conditional-pointer-qualifiers.sh",
-              "tests/compiler/c0/run-core-required-no-fallback.sh",
-              "tests/compiler/c0/run-extern-incomplete-record-object.sh",
-              "tests/compiler/c0/run-extern-parenthesized-functions.sh",
-              "tests/compiler/c0/run-function-arena-borrow-lifetime.sh",
-              "tests/compiler/c0/run-gnu-builtin-constant-p.sh",
-              "tests/compiler/c0/run-gnu-int128-type.sh",
-              "tests/compiler/c0/run-gnu-octal-character-case-range.sh",
-              "tests/compiler/c0/run-gnu-overflow-builtins.sh",
-              "tests/compiler/c0/run-long-long-types.sh",
-              "tests/compiler/c0/run-mixed-double-arithmetic.sh",
-              "tests/compiler/c0/run-nested-function-pointer-field.sh",
-              "tests/compiler/c0/run-nested-function-pointer-type-name.sh",
-              "tests/compiler/c0/run-pointer-compound-subtraction.sh",
-              "tests/compiler/c0/run-pointer-integer-casts.sh",
-              "tests/compiler/c0/run-postfix-const.sh",
-              "tests/compiler/c0/run-rv64-integer-aggregate-return.sh",
-              "tests/compiler/c0/run-shared-function-declarator.sh",
-              "tests/compiler/c0/run-signed-char-semantics.sh",
-              "tests/compiler/c0/run-stack-fixed-arguments.sh",
-              "tests/compiler/c0/run-static-assert-declaration.sh",
-              "tests/compiler/c0/run-static-fixed-record-array-zero.sh",
-              "tests/compiler/c0/run-static-inferred-integer-array.sh",
-              "tests/compiler/c0/run-static-preformed-array-zero.sh",
-              "tests/compiler/c0/run-zero-aggregate-null.sh",
+              "tests/compiler/c0/run-array-bound-constant-expressions.sh",
+              "tests/compiler/c0/run-compound-assignment-expressions.sh",
+              "tests/compiler/c0/run-extern-fixed-integer-arrays.sh",
+              "tests/compiler/c0/run-for-declaration-initializers.sh",
+              "tests/compiler/c0/run-for-expression-initializers.sh",
+              "tests/compiler/c0/run-gnu-compiletime-selection-builtins.sh",
+              "tests/compiler/c0/run-gnu-function-asm-labels.sh",
+              "tests/compiler/c0/run-gnu-section-symbol-attribute.sh",
+              "tests/compiler/c0/run-gnu-va-builtins.sh",
+              "tests/compiler/c0/run-gnu-visible-extern-arrays.sh",
+              "tests/compiler/c0/run-incomplete-array-typedef.sh",
+              "tests/compiler/c0/run-inline-functions.sh",
+              "tests/compiler/c0/run-prefix-update-expressions.sh",
+              "tests/compiler/c0/run-record-assignment-expressions.sh",
+              "tests/compiler/c0/run-record-copy-array-members.sh",
+              "tests/compiler/c0/run-record-local-initializers.sh",
+              "tests/compiler/c0/run-runtime-local-array-initializer.sh",
+              "tests/compiler/c0/run-runtime-record-array-initializers.sh",
+              "tests/compiler/c0/run-short-integers.sh",
+              "tests/compiler/c0/run-static-aggregate-array-designators.sh",
+              "tests/compiler/c0/run-static-inferred-char-arrays.sh",
+              "tests/compiler/c0/run-static-local-fixed-arrays.sh",
+              "tests/compiler/c0/run-static-local-inferred-arrays.sh",
+              "tests/compiler/c0/run-static-local-pointer-arrays.sh",
+              "tests/compiler/c0/run-static-local-scalars.sh",
+              "tests/compiler/c0/run-static-pointer-arrays.sh",
+              "tests/compiler/c0/run-static-prefix-object-attributes.sh",
+              "tests/compiler/c0/run-static-union-zero-overlay.sh",
+              "tests/compiler/c0/run-static-zero-definitions.sh",
+              "tests/compiler/c0/run-unnamed-prototype-parameters.sh",
+              "tests/compiler/c0/run-void-pointer-locals.sh",
+              "tests/compiler/c0/run-wide-integer-literals.sh",
           }
-          metadata |= {
-              "tests/compiler/c0/run-cast-expressions.sh",
-              "tests/compiler/c0/run-unsigned-char-layout.sh",
-          }
+          metadata.add("tests/compiler/c0/run-static-local-arrays.sh")
           deleted = changed_paths(base, "HEAD", "--diff-filter=D")
           changed = changed_paths(base, "HEAD")
-          if len(expected) != 792 or deleted != expected or changed != expected | metadata:
+          if len(expected) != 824 or deleted != expected or changed != expected | metadata:
               raise SystemExit("RETIREMENT_SCOPE=FAIL: unexpected tree changes")
           files = [p.decode() for p in git("ls-files", "-z").split(b"\0") if p]
           candidates = {
@@ -818,127 +820,3 @@ jobs:
           done
           echo "BULK_COMPILE_COMPARISON passed=$passed unchanged_baseline_fail=$baseline_failures"
           git diff --exit-code
-
-  full-tree-hygiene-candidates:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: d24fdb4086fd9cf45d534942989a085ca422c6ef
-      - name: Scan all wrapper consumers and duplicate CI functions
-        run: |
-          python3 - <<'PY'
-          import ast, base64, hashlib, json, pathlib, re, subprocess
-          from collections import defaultdict, Counter
-          base = "d24fdb4086fd9cf45d534942989a085ca422c6ef"
-          audit = ".github/workflows/minic-historical-script-retirement-audit.yml"
-          prefix = "tests/compiler/c0/"
-          driver = prefix+"run-compile-only-case.sh"
-          files = {}
-          for b in subprocess.check_output(["git","ls-files","-z"]).split(b"\0"):
-              if not b: continue
-              p=b.decode()
-              data=pathlib.Path(p).read_bytes()
-              if b"\0" in data: continue
-              try: files[p]=data.decode()
-              except UnicodeDecodeError: pass
-          wrapper_rx=re.compile(r'\A#!/bin/sh\n(?:#[^\n]*\n)*exec sh "\$\(dirname -- "\$0"\)/run-compile-only-case\.sh" ([a-z0-9-]+)\n?\Z')
-          wrappers={p:m[1] for p,s in files.items() if p.startswith(prefix) and (m:=wrapper_rx.fullmatch(s))}
-          assert all(pathlib.PurePosixPath(p).name=="run-"+n+".sh" for p,n in wrappers.items())
-          print("WRAPPER_TOTAL",len(wrappers))
-          changes={}
-          deleted=[]
-          consumers={}
-          kept={}
-          for p,n in sorted(wrappers.items()):
-              basename=pathlib.PurePosixPath(p).name
-              uses={q: [l for l in s.splitlines() if basename in l] for q,s in files.items() if q not in (p,audit) and basename in s}
-              consumers[p]=uses
-              blocked=[]
-              updates={}
-              for q,ls in uses.items():
-                  if q.startswith("docs/") or q.endswith((".md",".rst")):
-                      # Historical prose remains unchanged, and the migration map in the
-                      # CI README points to the exact old tree and live shared invocation.
-                      continue
-                  s=changes.get(q,files[q])
-                  lines=s.splitlines(keepends=True)
-                  count=0
-                  for i,l in enumerate(lines):
-                      if basename not in l: continue
-                      # Existing list dispatchers already accept compile:CASE.
-                      m=re.fullmatch(r'([ \t]*)'+re.escape(basename)+r'([ \t]*(?:\\)?\n?)',l)
-                      if m and q in (prefix+"run-foundation-focused.sh",".github/scripts/compiler-c0-full-gate.sh"):
-                          lines[i]=m[1]+"compile:"+n+m[2]
-                          count+=1
-                          continue
-                      # Only exact shell invocations with no trailing argument or operator.
-                      m=re.fullmatch(r'([ \t]*(?:(?:[A-Z_]+=(?:"[^"\n]*"|[^ \t\n]+))[ \t]+)*sh[ \t]+)(["]?[^"\s]*?/)'+re.escape(basename)+r'(["]?)([ \t]*\n?)',l)
-                      if m and q.endswith(".sh"):
-                          lines[i]=m[1]+m[2]+"run-compile-only-case.sh"+m[3]+" "+n+m[4]
-                          count+=1
-                          continue
-                      blocked.append(q+":"+l.strip()[:180])
-                  if count==s.count(basename) and count:
-                      updates[q]="".join(lines)
-                  elif not blocked:
-                      blocked.append(q+":unrecognized reference")
-              # No dependency on basename-only references in dynamic or wildcard selectors.
-              # Keep paths mentioned in any workflow, Makefile, Python code, or other unknown contexts.
-              if blocked:
-                  kept[p]=blocked
-                  continue
-              # A pure compatibility wrapper has no additional coverage. Preserve explicit
-              # discoverability even when the old path had no literal callers.
-              deleted.append(p)
-              changes.update(updates)
-          print("WRAPPER_REMOVABLE",len(deleted))
-          print("WRAPPER_KEEP",json.dumps(kept,ensure_ascii=True))
-          print("WRAPPER_CONSUMERS",json.dumps({p:list(v) for p,v in consumers.items()}))
-          # Find exact Python function duplicates across all local CI helpers, ignoring only
-          # source location and docstrings; report distinct modules and line ownership.
-          groups=defaultdict(list)
-          for p,s in files.items():
-              if not p.startswith(("tools/ci/","tools/dev/")) or not p.endswith(".py"): continue
-              try: tree=ast.parse(s)
-              except SyntaxError: continue
-              for f in tree.body:
-                  if not isinstance(f,(ast.FunctionDef,ast.AsyncFunctionDef)): continue
-                  if f.decorator_list: continue
-                  start=f.lineno; end=f.end_lineno or start
-                  if end-start<4: continue
-                  f.name="<function>"
-                  if f.body and isinstance(f.body[0],ast.Expr) and isinstance(f.body[0].value,ast.Constant) and isinstance(f.body[0].value.value,str):
-                      f.body=f.body[1:]
-                  fingerprint=ast.dump(f,include_attributes=False)
-                  groups[fingerprint].append((p,start,end))
-          dupes=sorted((v for v in groups.values() if len({x[0] for x in v})>1),key=lambda v:-(len(v)-1)*(v[0][2]-v[0][1]+1))
-          print("PY_EXACT_CLONES groups="+str(len(dupes))+" duplicated_lines="+str(sum((len(v)-1)*(v[0][2]-v[0][1]+1) for v in dupes)))
-          for v in dupes[:60]:
-              print("PY_CLONE "+json.dumps(v))
-          # Compare every independent historical rewrite against the exact live source in
-          # isolated worktrees. A successful no-op is ONLY a retirement candidate; scripts
-          # that depend on previous rewrites or have unique output remain separate.
-          patches=sorted(p for p in files if p.startswith("tools/ci/") and pathlib.PurePosixPath(p).name.startswith(("apply-","patch-")) and p.endswith(".py"))
-          print("PATCH_CENSUS count="+str(len(patches)))
-          for p in patches:
-              s=files[p]
-              # Structural inventory, not execution: do not execute arbitrary patch code
-              # during this read-only candidate job.
-              print("PATCH_SHAPE "+json.dumps([p,len(s.splitlines()),bool(re.search(r'ALREADY_(?:NATIVE|CANONICAL|APPLIED|PRESENT)',s)),len(re.findall(r'\b(?:exec|subprocess\.run)\s*\(',s)),len(re.findall(r'\.write_text\s*\(',s))]))
-          # Broad scan of repetitive shell setup patterns; preserve noncanonical semantics.
-          patterns=Counter()
-          for p,s in files.items():
-              if p.startswith(("tests/","tools/ci/")) and p.endswith(".sh"):
-                  key=tuple(l.strip() for l in s.splitlines()[:15] if re.match(r'\s*(?:root|minic|host_cc|build_dir|work|riscv_cc|qemu)=',l))
-                  if len(key)>=3: patterns[key]+=1
-          for k,n in patterns.most_common(12):
-              print("SHELL_SETUP "+json.dumps([n,k]))
-          for p,s in changes.items():
-              subprocess.run(["bash" if s.startswith("#!/usr/bin/env bash") else "sh","-n"],input=s.encode(),check=True)
-          payload=json.dumps({"base":base,"deleted":deleted,"changes":changes,"wrappers":wrappers,"kept":kept},ensure_ascii=True,separators=(",",":")).encode()
-          encoded=base64.b64encode(payload).decode()
-          for i in range(0,len(encoded),2400):
-              print("BULK_PAYLOAD "+encoded[i:i+2400])
-          PY
