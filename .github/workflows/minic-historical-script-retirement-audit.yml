@@ -364,6 +364,7 @@ jobs:
               "docs/architecture/review-2026-10-29-x86-global-fix.md",
           }
           metadata |= {"docs/architecture/README.md", "docs/architecture/minic-function-contract-register.md"}
+          metadata |= {"docs/ci/current-workflow-map.md"}
           if len(expected) != 457 or deleted != expected or changed != expected | metadata:
               raise SystemExit("RETIREMENT_SCOPE=FAIL: unexpected tree changes")
           files = [p.decode() for p in git("ls-files", "-z").split(b"\0") if p]
@@ -375,7 +376,8 @@ jobs:
               for p in files
               if (p.startswith(".github/workflows-disabled/") and p.endswith((".yml", ".yaml"))) or
                  (p.startswith(("tools/ci/", "tools/dev/")) and p.endswith((".py", ".sh", ".patch"))) or
-                 p.startswith(("docs/architecture/review-", "docs/milestones/"))
+                 p.startswith(("docs/architecture/review-", "docs/milestones/")) or
+                 (p.startswith("docs/ci/") and p.endswith(".md"))
           }
           targets = defaultdict(set)
           for p in deleted | set(candidates):

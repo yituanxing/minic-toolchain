@@ -1,4 +1,6 @@
-# CI topology — authoritative active map (2026-10-09)
+# CI topology — historical map (2026-10-09)
+
+> Historical snapshot only. The current development branch no longer follows this four-ref inventory. Use the checked-out workflow files and exact-commit run results for current CI ownership and verdicts. Do not use the counts, branch names or historical route mapping below as current policy.
 
 > This file supersedes the historical **count snapshots** that used to be prepended repeatedly to this page. Historical text is preserved in Git blob `7cb2cc9aef43238487e4b5074b871255a428d07c` and in the individual owner convergence ledgers. Always distinguish an **active YAML**, a **declared job**, a **real allocated runner**, and **certified test execution**.
 
