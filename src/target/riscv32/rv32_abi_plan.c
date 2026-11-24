@@ -24,12 +24,6 @@ static bool rv32_abi_reject(const char *stage, size_t index,
 
 /* Only sealed CoreTypeIds are executable type proofs. Source descriptors do
  * not participate in the ILP32 ABI classification or diagnostics. */
-static bool rv32_abi_core_is(const MinicCoreFunction *function,
-                             MinicCoreTypeId id, MinicCoreTypeKind kind) {
-    const MinicCoreType *type = minic_core_function_base_type(function, id);
-    return type != NULL && type->kind == kind;
-}
-
 /* One psABI planner per Core function, used unchanged by physical frame
  * allocation, direct/indirect calls and callee parameter reception.
  * No target-unaware Core or frontend code knows about a0..a7 or ILP32. */
@@ -90,13 +84,13 @@ static bool rv32_plan_incoming(const MinicCoreFunction *function,
      * not walk the signature again. */
     if (function == NULL || function->type_context == NULL ||
         plan == NULL) return false;
-    if (!rv32_abi_core_is(function, minic_core_function_return_type(function),
+    if (!minic_core_function_type_is_kind(function, minic_core_function_return_type(function),
                          MINIC_CORE_TYPE_VOID)) {
         if (!rv32_plan_shape(function, minic_core_function_return_type(function),
                              &result_shape))
             return rv32_abi_reject("incoming_return", 0U, function,
                                    minic_core_function_return_type(function));
-        if (rv32_abi_core_is(function, minic_core_function_return_type(function),
+        if (minic_core_function_type_is_kind(function, minic_core_function_return_type(function),
                             MINIC_CORE_TYPE_RECORD)) {
             plan->record_return_size = result_shape.record_size;
             plan->indirect_return = result_shape.indirect_record;

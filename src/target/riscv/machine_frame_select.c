@@ -27,40 +27,6 @@ static unsigned rv_xlen(const MinicMachineBuilder *builder) {
     return isa.xlen;
 }
 
-static MinicMachineOperand rv_register(unsigned xlen, unsigned number,
-                                      unsigned access) {
-    MinicMachineOperand result = {0};
-    result.kind = MINIC_MACHINE_OPERAND_REGISTER;
-    result.value.physical.reg = (MinicMachineRegister){
-        number, (uint16_t)xlen, MINIC_MACHINE_REGISTER_GENERAL};
-    result.value.physical.access = access;
-    return result;
-}
-
-static MinicMachineOperand rv_integer(int64_t number) {
-    MinicMachineOperand result = {0};
-    result.kind = MINIC_MACHINE_OPERAND_INTEGER;
-    result.value.integer = number;
-    return result;
-}
-
-static MinicMachineOperand rv_address(unsigned xlen, unsigned base,
-                                     int64_t displacement) {
-    MinicMachineOperand result;
-    /* Initializing a union's first member does not initialize its larger
-     * address alternative. Zero the entire relocation-bearing operand. */
-    (void)memset(&result, 0, sizeof(result));
-    result.kind = MINIC_MACHINE_OPERAND_ADDRESS;
-    result.value.address.target_mode =
-        MINIC_RISCV_MACHINE_ADDRESS_BASE_DISPLACEMENT;
-    result.value.address.has_base = true;
-    result.value.address.base = (MinicMachineRegister){
-        base, (uint16_t)xlen, MINIC_MACHINE_REGISTER_GENERAL};
-    result.value.address.scale = 1U;
-    result.value.address.displacement = displacement;
-    return result;
-}
-
 bool minic_riscv_machine_emit_selected_effects(MinicMachineBuilder *builder,
     uint32_t opcode, unsigned int extra_effects,
     const MinicMachineOperand *operands, size_t count) {
@@ -97,8 +63,8 @@ static bool rv_li(MinicMachineBuilder *builder, unsigned dst, int64_t number) {
     const unsigned xlen = rv_xlen(builder);
     MinicMachineOperand args[2];
     if (xlen == 0U || dst >= 32U) return false;
-    args[0] = rv_register(xlen, dst, MINIC_MACHINE_REGISTER_WRITE);
-    args[1] = rv_integer(number);
+    args[0] = minic_riscv_machine_gpr(xlen, dst, MINIC_MACHINE_REGISTER_WRITE);
+    args[1] = minic_riscv_machine_integer(number);
     return rv_emit(builder, MINIC_RISCV_MACHINE_LI, args, 2U);
 }
 
@@ -107,8 +73,8 @@ static bool rv_rr(MinicMachineBuilder *builder, uint32_t opcode,
     const unsigned xlen = rv_xlen(builder);
     MinicMachineOperand args[2];
     if (xlen == 0U || dst >= 32U || src >= 32U) return false;
-    args[0] = rv_register(xlen, dst, MINIC_MACHINE_REGISTER_WRITE);
-    args[1] = rv_register(xlen, src, MINIC_MACHINE_REGISTER_READ);
+    args[0] = minic_riscv_machine_gpr(xlen, dst, MINIC_MACHINE_REGISTER_WRITE);
+    args[1] = minic_riscv_machine_gpr(xlen, src, MINIC_MACHINE_REGISTER_READ);
     return rv_emit(builder, opcode, args, 2U);
 }
 
@@ -117,9 +83,9 @@ static bool rv_rrr(MinicMachineBuilder *builder, uint32_t opcode,
     const unsigned xlen = rv_xlen(builder);
     MinicMachineOperand args[3];
     if (xlen == 0U || dst >= 32U || src1 >= 32U || src2 >= 32U) return false;
-    args[0] = rv_register(xlen, dst, MINIC_MACHINE_REGISTER_WRITE);
-    args[1] = rv_register(xlen, src1, MINIC_MACHINE_REGISTER_READ);
-    args[2] = rv_register(xlen, src2, MINIC_MACHINE_REGISTER_READ);
+    args[0] = minic_riscv_machine_gpr(xlen, dst, MINIC_MACHINE_REGISTER_WRITE);
+    args[1] = minic_riscv_machine_gpr(xlen, src1, MINIC_MACHINE_REGISTER_READ);
+    args[2] = minic_riscv_machine_gpr(xlen, src2, MINIC_MACHINE_REGISTER_READ);
     return rv_emit(builder, opcode, args, 3U);
 }
 
@@ -129,22 +95,25 @@ static bool rv_addi(MinicMachineBuilder *builder, unsigned dst, unsigned src,
     MinicMachineOperand args[3];
     if (xlen == 0U || dst >= 32U || src >= 32U ||
         number < -2048 || number > 2047) return false;
-    args[0] = rv_register(xlen, dst, MINIC_MACHINE_REGISTER_WRITE);
-    args[1] = rv_register(xlen, src, MINIC_MACHINE_REGISTER_READ);
-    args[2] = rv_integer(number);
+    args[0] = minic_riscv_machine_gpr(xlen, dst, MINIC_MACHINE_REGISTER_WRITE);
+    args[1] = minic_riscv_machine_gpr(xlen, src, MINIC_MACHINE_REGISTER_READ);
+    args[2] = minic_riscv_machine_integer(number);
     return rv_emit(builder, MINIC_RISCV_MACHINE_ADDI, args, 3U);
 }
 
-static uint32_t rv_memory_opcode(unsigned xlen, bool load, unsigned bytes,
-                                 bool frame) {
-    if (bytes == 1U) return load ? (frame ?
-        MINIC_RISCV_MACHINE_LB_FRAME : MINIC_RISCV_MACHINE_LB) :
+uint32_t minic_riscv_machine_memory_opcode(
+    unsigned xlen, bool load, unsigned bytes, bool sign, bool frame) {
+    if (bytes == 1U) return load ? (sign ?
+        (frame ? MINIC_RISCV_MACHINE_LB_FRAME : MINIC_RISCV_MACHINE_LB) :
+        (frame ? MINIC_RISCV_MACHINE_LBU_FRAME : MINIC_RISCV_MACHINE_LBU)) :
         (frame ? MINIC_RISCV_MACHINE_SB_FRAME : MINIC_RISCV_MACHINE_SB);
-    if (bytes == 2U) return load ? (frame ?
-        MINIC_RISCV_MACHINE_LH_FRAME : MINIC_RISCV_MACHINE_LH) :
+    if (bytes == 2U) return load ? (sign ?
+        (frame ? MINIC_RISCV_MACHINE_LH_FRAME : MINIC_RISCV_MACHINE_LH) :
+        (frame ? MINIC_RISCV_MACHINE_LHU_FRAME : MINIC_RISCV_MACHINE_LHU)) :
         (frame ? MINIC_RISCV_MACHINE_SH_FRAME : MINIC_RISCV_MACHINE_SH);
-    if (bytes == 4U) return load ? (frame ?
-        MINIC_RISCV_MACHINE_LW_FRAME : MINIC_RISCV_MACHINE_LW) :
+    if (bytes == 4U) return load ? (xlen == 64U && !sign ?
+        (frame ? MINIC_RISCV_MACHINE_LWU_FRAME : MINIC_RISCV_MACHINE_LWU) :
+        (frame ? MINIC_RISCV_MACHINE_LW_FRAME : MINIC_RISCV_MACHINE_LW)) :
         (frame ? MINIC_RISCV_MACHINE_SW_FRAME : MINIC_RISCV_MACHINE_SW);
     if (bytes == 8U && xlen == 64U) return load ? (frame ?
         MINIC_RISCV_MACHINE_LD_FRAME : MINIC_RISCV_MACHINE_LD) :
@@ -161,7 +130,7 @@ bool minic_riscv_machine_select_frame_transfer(MinicMachineBuilder *builder,
     if (xlen == 0U || register_number >= 32U || base_register >= 32U ||
         offset > (size_t)INT64_MAX ||
         (xlen == 32U && offset > (size_t)INT32_MAX) ||
-        (opcode = rv_memory_opcode(xlen, load, bytes, false)) == 0U ||
+        (opcode = minic_riscv_machine_memory_opcode(xlen, load, bytes, true, false)) == 0U ||
         offset % bytes != 0U) return false;
     if (offset > 2047U) {
         /* t6 is a temporary ADDRESS, not a special string-based offset.
@@ -175,9 +144,9 @@ bool minic_riscv_machine_select_frame_transfer(MinicMachineBuilder *builder,
         base_register = RV_T6;
         offset = 0U;
     }
-    args[0] = rv_register(xlen, register_number,
+    args[0] = minic_riscv_machine_gpr(xlen, register_number,
         load ? MINIC_MACHINE_REGISTER_WRITE : MINIC_MACHINE_REGISTER_READ);
-    args[1] = rv_address(xlen, base_register, (int64_t)offset);
+    args[1] = minic_riscv_machine_address(xlen, base_register, (int64_t)offset);
     return rv_emit(builder, opcode, args, 2U);
 }
 
@@ -189,9 +158,9 @@ bool minic_riscv_machine_select_frame_object(MinicMachineBuilder *builder,
     MinicMachineOperand args[2] = {{0}};
     if (xlen == 0U || register_number >= 32U ||
         byte_displacement > (size_t)INT64_MAX ||
-        (opcode = rv_memory_opcode(xlen, load, bytes, true)) == 0U)
+        (opcode = minic_riscv_machine_memory_opcode(xlen, load, bytes, true, true)) == 0U)
         return false;
-    args[0] = rv_register(xlen, register_number,
+    args[0] = minic_riscv_machine_gpr(xlen, register_number,
         load ? MINIC_MACHINE_REGISTER_WRITE : MINIC_MACHINE_REGISTER_READ);
     args[1].kind = MINIC_MACHINE_OPERAND_FRAME;
     args[1].value.frame.index = frame_index;
@@ -380,8 +349,8 @@ bool minic_riscv_machine_select_prologue(MinicMachineBuilder *builder,
                  * encode only a provably bounded 64-byte vararg save. */
                 const int64_t negative = -(int64_t)(frame->varargs_size - offset);
                 MinicMachineOperand args[2];
-                args[0] = rv_register(xlen, arg, MINIC_MACHINE_REGISTER_READ);
-                args[1] = rv_address(xlen, RV_T0, negative);
+                args[0] = minic_riscv_machine_gpr(xlen, arg, MINIC_MACHINE_REGISTER_READ);
+                args[1] = minic_riscv_machine_address(xlen, RV_T0, negative);
                 if (!rv_emit(builder, xlen == 32U ?
                     MINIC_RISCV_MACHINE_SW : MINIC_RISCV_MACHINE_SD,
                     args, 2U)) return false;

@@ -23,11 +23,6 @@ bool minic_riscv64_function_abi_view_from_prepared(
     return true;
 }
 
-static bool rv64_fn_is_record(const MinicCoreFunction *fn,
-                             MinicCoreTypeId id) {
-    return minic_riscv64_core_is_record(fn, id);
-}
-
 static bool rv64_fn_is_fp_scalar(const MinicCoreFunction *fn,
                                 MinicCoreTypeId id) {
     const MinicCoreType *type = minic_riscv64_core_base_type(fn, id);
@@ -70,7 +65,7 @@ static bool minic_riscv64_function_abi_plan_qualified(
                 return false;
             }
         } else if (return_value.kind == MINIC_RISCV64_ABI_VALUE_INDIRECT) {
-            if (!rv64_fn_is_record(function, minic_core_function_return_type(function)) ||
+            if (!minic_riscv64_core_is_record(function, minic_core_function_return_type(function)) ||
                 return_value.storage_size <= 16U || return_value.slot_count != 1U) {
                 return false;
             }
@@ -89,7 +84,7 @@ static bool minic_riscv64_function_abi_plan_qualified(
             const MinicRiscv64AbiArgumentLocation location =
                 abi_plan->parameter_locations[index];
             if (location.value.kind == MINIC_RISCV64_ABI_VALUE_INDIRECT) {
-                if (!rv64_fn_is_record(function,
+                if (!minic_riscv64_core_is_record(function,
                         minic_core_function_parameter_types(function)[index]) ||
                     location.value.storage_size == 0U || location.value.slot_count != 1U ||
                     location.floating_register_count != 0U ||

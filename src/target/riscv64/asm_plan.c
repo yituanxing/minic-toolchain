@@ -73,10 +73,6 @@ static const MinicCoreRiscv64AsmRegisterCandidate core_asm_caller_saved_register
     {"a0"}, {"a1"}, {"a2"}, {"a3"}, {"a4"}, {"a5"}, {"a6"}, {"a7"},
 };
 
-static bool core_asm_register_name_equal(const char *left, const char *right) {
-    return minic_riscv_gpr_name_equal(left, right);
-}
-
 static bool core_asm_register_is_caller_saved(const char *name) {
     unsigned id;
     return minic_riscv_gpr_name_id(name, &id) &&
@@ -109,7 +105,7 @@ static bool core_asm_register_in_use(const char *const *operand_registers,
         return true;
     }
     for (index = 0U; index < operand_count; ++index) {
-        if (core_asm_register_name_equal(operand_registers[index], name)) {
+        if (minic_riscv_gpr_name_equal(operand_registers[index], name)) {
             return true;
         }
     }
@@ -166,7 +162,7 @@ static bool core_structured_fixed_phase_alias_safe(
 
         if (!prior->has_fixed_register_binding ||
             prior->operand_index >= MINIC_RISCV64_ASM_MAX_OPERANDS ||
-            !core_asm_register_name_equal(
+            !minic_riscv_gpr_name_equal(
                 operand_registers[prior->operand_index], register_name)) {
             continue;
         }

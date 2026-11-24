@@ -56,15 +56,6 @@ static bool rv_position_at(RvCoreSelection *sel, size_t block) {
     return minic_machine_builder_position_at(&sel->builder, block);
 }
 
-static MinicMachineOperand rv_reg(unsigned xlen, unsigned id,
-                                  unsigned access) {
-    MinicMachineOperand op = {0};
-    op.kind = MINIC_MACHINE_OPERAND_REGISTER;
-    op.value.physical.reg = (MinicMachineRegister){id,
-        (uint16_t)xlen, MINIC_MACHINE_REGISTER_GENERAL};
-    op.value.physical.access = access;
-    return op;
-}
 static MinicMachineOperand rv_freg(unsigned id, unsigned access) {
     MinicMachineOperand op = {0};
     op.kind = MINIC_MACHINE_OPERAND_REGISTER;
@@ -73,29 +64,11 @@ static MinicMachineOperand rv_freg(unsigned id, unsigned access) {
     op.value.physical.access = access;
     return op;
 }
-static MinicMachineOperand rv_imm(int64_t value) {
-    MinicMachineOperand op = {0};
-    op.kind = MINIC_MACHINE_OPERAND_INTEGER;
-    op.value.integer = value;
-    return op;
-}
 static MinicMachineOperand rv_target(size_t block, bool address) {
     MinicMachineOperand op = {0};
     op.kind = address ? MINIC_MACHINE_OPERAND_BLOCK_ADDRESS :
         MINIC_MACHINE_OPERAND_BLOCK;
     op.value.block_id = block;
-    return op;
-}
-static MinicMachineOperand rv_addr(unsigned xlen, unsigned base) {
-    MinicMachineOperand op;
-    (void)memset(&op, 0, sizeof(op));
-    op.kind = MINIC_MACHINE_OPERAND_ADDRESS;
-    op.value.address.target_mode =
-        MINIC_RISCV_MACHINE_ADDRESS_BASE_DISPLACEMENT;
-    op.value.address.has_base = true;
-    op.value.address.base = (MinicMachineRegister){base,
-        (uint16_t)xlen, MINIC_MACHINE_REGISTER_GENERAL};
-    op.value.address.scale = 1U;
     return op;
 }
 static bool rv_emit(RvCoreSelection *sel, uint32_t opcode,
@@ -110,24 +83,24 @@ static bool rv_emit_volatile(RvCoreSelection *sel, uint32_t opcode,
 }
 static bool rv_li(RvCoreSelection *sel, unsigned dst, int64_t value) {
     const MinicMachineOperand ops[] = {
-        rv_reg(sel->xlen, dst, MINIC_MACHINE_REGISTER_WRITE), rv_imm(value)
+        minic_riscv_machine_gpr(sel->xlen, dst, MINIC_MACHINE_REGISTER_WRITE), minic_riscv_machine_integer(value)
     };
     return rv_emit(sel, MINIC_RISCV_MACHINE_LI, ops, 2U);
 }
 static bool rv_rr(RvCoreSelection *sel, uint32_t opcode,
                   unsigned dst, unsigned src) {
     const MinicMachineOperand ops[] = {
-        rv_reg(sel->xlen, dst, MINIC_MACHINE_REGISTER_WRITE),
-        rv_reg(sel->xlen, src, MINIC_MACHINE_REGISTER_READ)
+        minic_riscv_machine_gpr(sel->xlen, dst, MINIC_MACHINE_REGISTER_WRITE),
+        minic_riscv_machine_gpr(sel->xlen, src, MINIC_MACHINE_REGISTER_READ)
     };
     return rv_emit(sel, opcode, ops, 2U);
 }
 static bool rv_rrr(RvCoreSelection *sel, uint32_t opcode,
     unsigned dst, unsigned left, unsigned right) {
     const MinicMachineOperand ops[] = {
-        rv_reg(sel->xlen, dst, MINIC_MACHINE_REGISTER_WRITE),
-        rv_reg(sel->xlen, left, MINIC_MACHINE_REGISTER_READ),
-        rv_reg(sel->xlen, right, MINIC_MACHINE_REGISTER_READ)
+        minic_riscv_machine_gpr(sel->xlen, dst, MINIC_MACHINE_REGISTER_WRITE),
+        minic_riscv_machine_gpr(sel->xlen, left, MINIC_MACHINE_REGISTER_READ),
+        minic_riscv_machine_gpr(sel->xlen, right, MINIC_MACHINE_REGISTER_READ)
     };
     return rv_emit(sel, opcode, ops, 3U);
 }
@@ -137,9 +110,9 @@ static bool rv_fp_rr(RvCoreSelection *sel, uint32_t opcode,
     unsigned dst, bool dst_fp, unsigned src, bool src_fp) {
     const MinicMachineOperand ops[] = {
         dst_fp ? rv_freg(dst, MINIC_MACHINE_REGISTER_WRITE) :
-                 rv_reg(sel->xlen, dst, MINIC_MACHINE_REGISTER_WRITE),
+                 minic_riscv_machine_gpr(sel->xlen, dst, MINIC_MACHINE_REGISTER_WRITE),
         src_fp ? rv_freg(src, MINIC_MACHINE_REGISTER_READ) :
-                 rv_reg(sel->xlen, src, MINIC_MACHINE_REGISTER_READ)
+                 minic_riscv_machine_gpr(sel->xlen, src, MINIC_MACHINE_REGISTER_READ)
     };
     return sel->xlen == 64U && rv_emit(sel, opcode, ops, 2U);
 }
@@ -147,7 +120,7 @@ static bool rv_fp_rrr(RvCoreSelection *sel, uint32_t opcode,
     unsigned dst, bool dst_fp, unsigned left, unsigned right) {
     const MinicMachineOperand ops[] = {
         dst_fp ? rv_freg(dst, MINIC_MACHINE_REGISTER_WRITE) :
-                 rv_reg(sel->xlen, dst, MINIC_MACHINE_REGISTER_WRITE),
+                 minic_riscv_machine_gpr(sel->xlen, dst, MINIC_MACHINE_REGISTER_WRITE),
         rv_freg(left, MINIC_MACHINE_REGISTER_READ),
         rv_freg(right, MINIC_MACHINE_REGISTER_READ)
     };
@@ -169,8 +142,8 @@ static bool rv_fp_to_bits(RvCoreSelection *sel, unsigned gpr,
 static bool rv_rri(RvCoreSelection *sel, uint32_t opcode,
     unsigned dst, unsigned src, int64_t imm) {
     const MinicMachineOperand ops[] = {
-        rv_reg(sel->xlen, dst, MINIC_MACHINE_REGISTER_WRITE),
-        rv_reg(sel->xlen, src, MINIC_MACHINE_REGISTER_READ), rv_imm(imm)
+        minic_riscv_machine_gpr(sel->xlen, dst, MINIC_MACHINE_REGISTER_WRITE),
+        minic_riscv_machine_gpr(sel->xlen, src, MINIC_MACHINE_REGISTER_READ), minic_riscv_machine_integer(imm)
     };
     return rv_emit(sel, opcode, ops, 3U);
 }
@@ -195,11 +168,11 @@ static bool rv_j(RvCoreSelection *sel, size_t to) {
                 break;
             }
         const MinicMachineOperand la[] = {
-            rv_reg(sel->xlen, RV_T6, MINIC_MACHINE_REGISTER_WRITE),
+            minic_riscv_machine_gpr(sel->xlen, RV_T6, MINIC_MACHINE_REGISTER_WRITE),
             rv_target(far, true)
         };
         const MinicMachineOperand jump[] = {
-            rv_reg(sel->xlen, RV_T6, MINIC_MACHINE_REGISTER_READ),
+            minic_riscv_machine_gpr(sel->xlen, RV_T6, MINIC_MACHINE_REGISTER_READ),
             rv_target(far, false)
         };
         return rv_emit(sel, MINIC_RISCV_MACHINE_LA_BLOCK, la, 2U) &&
@@ -210,7 +183,7 @@ static bool rv_j(RvCoreSelection *sel, size_t to) {
 static bool rv_branch_zero(RvCoreSelection *sel, bool nonzero,
     unsigned reg, size_t to) {
     const MinicMachineOperand ops[] = {
-        rv_reg(sel->xlen, reg, MINIC_MACHINE_REGISTER_READ),
+        minic_riscv_machine_gpr(sel->xlen, reg, MINIC_MACHINE_REGISTER_READ),
         rv_target(to, false)
     };
     return rv_emit(sel, nonzero ? MINIC_RISCV_MACHINE_BNEZ :
@@ -346,9 +319,9 @@ static bool rv_byte_transfer(RvCoreSelection *sel, bool load,
     unsigned reg, unsigned base, size_t displacement, bool is_volatile) {
     MinicMachineOperand ops[2];
     if (displacement > 2047U) return false;
-    ops[0] = rv_reg(sel->xlen, reg, load ?
+    ops[0] = minic_riscv_machine_gpr(sel->xlen, reg, load ?
         MINIC_MACHINE_REGISTER_WRITE : MINIC_MACHINE_REGISTER_READ);
-    ops[1] = rv_addr(sel->xlen, base);
+    ops[1] = minic_riscv_machine_address(sel->xlen, base, 0);
     ops[1].value.address.displacement = (int64_t)displacement;
     return rv_emit_volatile(sel, load ? MINIC_RISCV_MACHINE_LBU :
         MINIC_RISCV_MACHINE_SB, is_volatile, ops, 2U);
@@ -978,8 +951,8 @@ static bool rv_core_dynamic_stack(RvCoreSelection *sel,
         !rv_rr(sel, MINIC_RISCV_MACHINE_MV, RV_T1, RV_T0) ||
         !rv_rri(sel, MINIC_RISCV_MACHINE_ADDI, RV_T0, RV_T0, 15))
         return false;
-    branch[0] = rv_reg(sel->xlen, RV_T0, MINIC_MACHINE_REGISTER_READ);
-    branch[1] = rv_reg(sel->xlen, RV_T1, MINIC_MACHINE_REGISTER_READ);
+    branch[0] = minic_riscv_machine_gpr(sel->xlen, RV_T0, MINIC_MACHINE_REGISTER_READ);
+    branch[1] = minic_riscv_machine_gpr(sel->xlen, RV_T1, MINIC_MACHINE_REGISTER_READ);
     branch[2] = rv_target(sel->dynamic_overflow[id], false);
     if (!rv_emit(sel, MINIC_RISCV_MACHINE_BLTU, branch, 3U) ||
         !minic_machine_builder_add_successor(&sel->builder,
@@ -996,8 +969,8 @@ static bool rv_core_dynamic_stack(RvCoreSelection *sel,
         !rv_li(sel, RV_T1, (int64_t)outgoing) ||
         !rv_rrr(sel, MINIC_RISCV_MACHINE_ADD,
             RV_T2, RV_T0, RV_T1)) return false;
-    branch[0] = rv_reg(sel->xlen, RV_T2, MINIC_MACHINE_REGISTER_READ);
-    branch[1] = rv_reg(sel->xlen, RV_T0, MINIC_MACHINE_REGISTER_READ);
+    branch[0] = minic_riscv_machine_gpr(sel->xlen, RV_T2, MINIC_MACHINE_REGISTER_READ);
+    branch[1] = minic_riscv_machine_gpr(sel->xlen, RV_T0, MINIC_MACHINE_REGISTER_READ);
     branch[2] = rv_target(sel->dynamic_commit[id], false);
     if (!rv_emit(sel, MINIC_RISCV_MACHINE_BGEU, branch, 3U) ||
         !minic_machine_builder_add_successor(&sel->builder,
@@ -1715,23 +1688,7 @@ static bool rv_core_parameter_object(RvCoreSelection *sel,
 }
 static uint32_t rv_memory_opcode(const RvCoreSelection *sel,
     bool load, unsigned bytes, bool sign) {
-    if (load) {
-        if (bytes == 1U) return sign ? MINIC_RISCV_MACHINE_LB :
-            MINIC_RISCV_MACHINE_LBU;
-        if (bytes == 2U) return sign ? MINIC_RISCV_MACHINE_LH :
-            MINIC_RISCV_MACHINE_LHU;
-        if (bytes == 4U) return sel->xlen == 64U && !sign ?
-            MINIC_RISCV_MACHINE_LWU : MINIC_RISCV_MACHINE_LW;
-        if (bytes == 8U && sel->xlen == 64U)
-            return MINIC_RISCV_MACHINE_LD;
-    } else {
-        if (bytes == 1U) return MINIC_RISCV_MACHINE_SB;
-        if (bytes == 2U) return MINIC_RISCV_MACHINE_SH;
-        if (bytes == 4U) return MINIC_RISCV_MACHINE_SW;
-        if (bytes == 8U && sel->xlen == 64U)
-            return MINIC_RISCV_MACHINE_SD;
-    }
-    return MINIC_RISCV_MACHINE_INVALID;
+    return minic_riscv_machine_memory_opcode(sel->xlen, load, bytes, sign, false);
 }
 /* Raw IEEE payloads and two-word integers can share one byte-exact store
  * transport. This remains valid for dynamically unaligned/packed pointers;
@@ -1785,9 +1742,9 @@ static bool rv_core_payload_memory(RvCoreSelection *sel,
             if (opcode == MINIC_RISCV_MACHINE_INVALID ||
                 (!load && !rv_value_chunk(sel, source, i, RV_T1, true)))
                 return false;
-            ops[0] = rv_reg(sel->xlen, RV_T1, load ?
+            ops[0] = minic_riscv_machine_gpr(sel->xlen, RV_T1, load ?
                 MINIC_MACHINE_REGISTER_WRITE : MINIC_MACHINE_REGISTER_READ);
-            ops[1] = rv_addr(sel->xlen, RV_T0);
+            ops[1] = minic_riscv_machine_address(sel->xlen, RV_T0, 0);
             ops[1].value.address.displacement = (int64_t)(i * word);
             if (!rv_emit(sel, opcode, ops, 2U) ||
                 (load && !rv_value_chunk(sel, ins->result, i, RV_T1, false)))
@@ -1879,9 +1836,9 @@ static bool rv_core_memory(RvCoreSelection *sel,
         (opcode = rv_memory_opcode(sel, load, bytes, sign)) == 0U ||
         !rv_load(sel, address, RV_T0) ||
         (!load && !rv_load(sel, source, RV_T1))) return false;
-    ops[0] = rv_reg(sel->xlen, RV_T1, load ?
+    ops[0] = minic_riscv_machine_gpr(sel->xlen, RV_T1, load ?
         MINIC_MACHINE_REGISTER_WRITE : MINIC_MACHINE_REGISTER_READ);
-    ops[1] = rv_addr(sel->xlen, RV_T0);
+    ops[1] = minic_riscv_machine_address(sel->xlen, RV_T0, 0);
     if (!rv_emit_volatile(sel, opcode, is_volatile, ops, 2U)) return false;
     return !load || rv_store(sel, ins->result, RV_T1);
 }
@@ -2770,7 +2727,7 @@ static bool rv_core_symbol(RvCoreSelection *sel,
             sel->plan->module, symbol, kind).nonpreemptible ?
         MINIC_RISCV_MACHINE_RELOC_GOT :
         MINIC_RISCV_MACHINE_RELOC_PCREL_LOCAL;
-    ops[0] = rv_reg(sel->xlen, RV_T0, MINIC_MACHINE_REGISTER_WRITE);
+    ops[0] = minic_riscv_machine_gpr(sel->xlen, RV_T0, MINIC_MACHINE_REGISTER_WRITE);
     ops[1].kind = MINIC_MACHINE_OPERAND_SYMBOL;
     ops[1].value.symbol.name = (char *)symbol;
     ops[1].value.symbol.relocation = reloc;
@@ -2782,7 +2739,7 @@ static bool rv_core_block_address(RvCoreSelection *sel,
     const MinicCoreInstruction *ins) {
     MinicMachineOperand ops[2];
     if (ins->value.block_id >= sel->plan->core->block_count) return false;
-    ops[0] = rv_reg(sel->xlen, RV_T0, MINIC_MACHINE_REGISTER_WRITE);
+    ops[0] = minic_riscv_machine_gpr(sel->xlen, RV_T0, MINIC_MACHINE_REGISTER_WRITE);
     ops[1] = rv_target(sel->far_entries[ins->value.block_id], true);
     return rv_emit(sel, MINIC_RISCV_MACHINE_LA_BLOCK, ops, 2U) &&
         rv_store(sel, ins->result, RV_T0);
@@ -3151,7 +3108,7 @@ static bool rv_core_indirect_call(RvCoreSelection *sel,
             ins->value.indirect_call.argument_count,
             ins->result, ins->value.indirect_call.result_object) ||
         !rv_load(sel, ins->value.indirect_call.callee, RV_T0)) return false;
-    callee = rv_reg(sel->xlen, RV_T0, MINIC_MACHINE_REGISTER_READ);
+    callee = minic_riscv_machine_gpr(sel->xlen, RV_T0, MINIC_MACHINE_REGISTER_READ);
     if (!rv_emit(sel, MINIC_RISCV_MACHINE_CALL_INDIRECT, &callee, 1U))
         return false;
     return rv_core_call_result(sel, instruction_id, ins,
@@ -3266,7 +3223,7 @@ static bool rv_core_scalar_input_source_asm(RvCoreSelection *sel,
         if (!rv_load(sel, binding->value, RV_A0 + (unsigned)i) ||
             !rv_abi_scalar_normalize(sel, RV_A0 + (unsigned)i,
                 widths[i], signs[i])) return false;
-        bindings[i] = rv_reg(sel->xlen, RV_A0 + (unsigned)i,
+        bindings[i] = minic_riscv_machine_gpr(sel->xlen, RV_A0 + (unsigned)i,
             MINIC_MACHINE_REGISTER_READ);
         bindings[i].asm_constraint = "r";
     }
@@ -3447,13 +3404,13 @@ static bool rv_core_scalar_output_source_asm(RvCoreSelection *sel,
          (!rv_load(sel, roles[1].value, RV_T1) ||
           !rv_abi_scalar_normalize(sel, RV_T1, input_bytes,
               input_sign)))) return false;
-    bindings[0] = rv_reg(sel->xlen, RV_T0,
+    bindings[0] = minic_riscv_machine_gpr(sel->xlen, RV_T0,
         MINIC_MACHINE_REGISTER_WRITE |
             (readwrite ? MINIC_MACHINE_REGISTER_READ : 0U));
     bindings[0].asm_constraint = readwrite ? "+r" :
         (roles[0].physical_early_clobber ? "=&r" : "=r");
     if (count == 2U) {
-        bindings[1] = rv_reg(sel->xlen, RV_T1,
+        bindings[1] = minic_riscv_machine_gpr(sel->xlen, RV_T1,
             MINIC_MACHINE_REGISTER_READ);
         bindings[1].asm_constraint = "r";
     }
@@ -3725,7 +3682,7 @@ static bool rv_core_mixed_source_asm(RvCoreSelection *sel,
         case MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_OUTPUT:
         case MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT:
             if (!rv_load(sel, role->value, physical)) return false;
-            bindings[i] = rv_addr(sel->xlen, physical);
+            bindings[i] = minic_riscv_machine_address(sel->xlen, physical, 0);
             bindings[i].asm_constraint = role->kind ==
                 MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE ? "+A" :
                 role->kind == MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_OUTPUT ?
@@ -3733,7 +3690,7 @@ static bool rv_core_mixed_source_asm(RvCoreSelection *sel,
             break;
         case MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_RESULT:
         case MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT:
-            bindings[i] = rv_reg(sel->xlen, physical,
+            bindings[i] = minic_riscv_machine_gpr(sel->xlen, physical,
                 MINIC_MACHINE_REGISTER_WRITE);
             bindings[i].asm_constraint = role->physical_early_clobber ?
                 "=&r" : "=r";
@@ -3743,14 +3700,14 @@ static bool rv_core_mixed_source_asm(RvCoreSelection *sel,
                     widths[i], signs[i], true) ||
                 !rv_rr(sel, MINIC_RISCV_MACHINE_MV, physical, RV_T0))
                 return false;
-            bindings[i] = rv_reg(sel->xlen, physical,
+            bindings[i] = minic_riscv_machine_gpr(sel->xlen, physical,
                 MINIC_MACHINE_REGISTER_READ | MINIC_MACHINE_REGISTER_WRITE);
             bindings[i].asm_constraint = role->physical_early_clobber ?
                 "+&r" : "+r";
             break;
         case MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT:
             if (rv_core_asm_zero_rj(fn, source, role->value, i)) {
-                bindings[i] = rv_imm(0);
+                bindings[i] = minic_riscv_machine_integer(0);
                 bindings[i].asm_constraint = "rJ";
             } else {
                 if (!(widths[i] > sel->xlen / 8U
@@ -3759,7 +3716,7 @@ static bool rv_core_mixed_source_asm(RvCoreSelection *sel,
                         : (rv_load(sel, role->value, physical) &&
                            rv_abi_scalar_normalize(sel, physical,
                                widths[i], signs[i])))) return false;
-                bindings[i] = rv_reg(sel->xlen, physical,
+                bindings[i] = minic_riscv_machine_gpr(sel->xlen, physical,
                     MINIC_MACHINE_REGISTER_READ);
                 bindings[i].asm_constraint = "r";
             }
@@ -3828,7 +3785,7 @@ static bool rv_core_source_asm_goto(RvCoreSelection *sel,
         if (input->kind == MINIC_CORE_INLINE_ASM_IMMEDIATE_INTEGER) {
             if (input->symbol != NULL || input->byte_addend != 0)
                 return false;
-            bindings[i] = rv_imm(input->integer);
+            bindings[i] = minic_riscv_machine_integer(input->integer);
         } else if (input->kind == MINIC_CORE_INLINE_ASM_IMMEDIATE_SYMBOL) {
             if (!minic_core_inline_asm_relocation_valid(input)) return false;
             memset(&bindings[i], 0, sizeof(bindings[i]));
@@ -4177,8 +4134,8 @@ static bool rv_core_terminator(RvCoreSelection *sel, size_t core_id) {
     }
     case MINIC_CORE_TERMINATOR_INDIRECT_BRANCH: {
         const MinicMachineOperand ops[] = {
-            rv_reg(sel->xlen, RV_T0, MINIC_MACHINE_REGISTER_READ),
-            rv_imm(0)
+            minic_riscv_machine_gpr(sel->xlen, RV_T0, MINIC_MACHINE_REGISTER_READ),
+            minic_riscv_machine_integer(0)
         };
         if (!rv_load(sel, term->indirect_target, RV_T0) ||
             !rv_emit(sel, MINIC_RISCV_MACHINE_JALR_BRANCH, ops, 2U))

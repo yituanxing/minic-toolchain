@@ -2,6 +2,41 @@
 #define MINIC_TARGET_RISCV_MACHINE_FRAME_SELECT_H
 
 #include "target/common/machine_builder.h"
+#include "target/riscv/machine_opcode.h"
+#include <string.h>
+
+/* Canonical GPR, immediate and base/displacement operand construction.
+ * Both physical selectors use identical register bank and relocation fields. */
+static inline MinicMachineOperand minic_riscv_machine_gpr(
+    unsigned xlen, unsigned number, unsigned access) {
+    MinicMachineOperand op = {0};
+    op.kind = MINIC_MACHINE_OPERAND_REGISTER;
+    op.value.physical.reg = (MinicMachineRegister){
+        number, (uint16_t)xlen, MINIC_MACHINE_REGISTER_GENERAL};
+    op.value.physical.access = access;
+    return op;
+}
+static inline MinicMachineOperand minic_riscv_machine_integer(int64_t number) {
+    MinicMachineOperand op = {0};
+    op.kind = MINIC_MACHINE_OPERAND_INTEGER;
+    op.value.integer = number;
+    return op;
+}
+static inline MinicMachineOperand minic_riscv_machine_address(
+    unsigned xlen, unsigned base, int64_t displacement) {
+    MinicMachineOperand op;
+    (void)memset(&op, 0, sizeof(op));
+    op.kind = MINIC_MACHINE_OPERAND_ADDRESS;
+    op.value.address.target_mode = MINIC_RISCV_MACHINE_ADDRESS_BASE_DISPLACEMENT;
+    op.value.address.has_base = true;
+    op.value.address.base = (MinicMachineRegister){
+        base, (uint16_t)xlen, MINIC_MACHINE_REGISTER_GENERAL};
+    op.value.address.scale = 1U;
+    op.value.address.displacement = displacement;
+    return op;
+}
+uint32_t minic_riscv_machine_memory_opcode(
+    unsigned xlen, bool load, unsigned bytes, bool sign, bool frame);
 
 /* Canonical target-owned opcode admission shared by the physical frame and
  * Core selectors. The verifier contract supplies implicit register effects;

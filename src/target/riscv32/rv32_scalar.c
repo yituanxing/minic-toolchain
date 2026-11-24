@@ -1,16 +1,8 @@
 #include "target/riscv32/rv32_internal.h"
 
-static const MinicCoreType *rv32_core_scalar_type(
-    const MinicCoreFunction *function, MinicCoreTypeId id) {
-    MinicCoreTypeId base;
-    if (function == NULL || function->type_context == NULL) return NULL;
-    base = minic_core_type_unqualified(function->type_context, id);
-    return minic_core_type_get(function->type_context, base);
-}
-
 bool rv32_core_scalar_storage_words(const MinicCoreFunction *function,
                                     MinicCoreTypeId id, unsigned *words) {
-    const MinicCoreType *type = rv32_core_scalar_type(function, id);
+    const MinicCoreType *type = minic_core_function_base_type(function, id);
     if (type == NULL || words == NULL || !type->has_layout) return false;
     switch (type->kind) {
     case MINIC_CORE_TYPE_INTEGER:
@@ -49,7 +41,7 @@ bool rv32_core_scalar_storage_words(const MinicCoreFunction *function,
 
 bool rv32_core_scalar(const MinicCoreFunction *function, MinicCoreTypeId id,
                       unsigned *bits, bool *sign) {
-    const MinicCoreType *type = rv32_core_scalar_type(function, id);
+    const MinicCoreType *type = minic_core_function_base_type(function, id);
     if (type == NULL || bits == NULL || sign == NULL || !type->has_layout)
         return false;
     if (type->kind == MINIC_CORE_TYPE_POINTER && type->size == 4U) {
@@ -76,7 +68,7 @@ bool rv32_core_scalar(const MinicCoreFunction *function, MinicCoreTypeId id,
  * These queries classify shape only; no GNU text emitter remains here. */
 bool rv32_core_is_wide_integer(const MinicCoreFunction *function,
                                MinicCoreTypeId id) {
-    const MinicCoreType *type = rv32_core_scalar_type(function, id);
+    const MinicCoreType *type = minic_core_function_base_type(function, id);
     return type != NULL && type->has_layout &&
            type->kind == MINIC_CORE_TYPE_INTEGER && type->size == 8U &&
            type->value.integer.bit_width == 64U &&
@@ -85,27 +77,26 @@ bool rv32_core_is_wide_integer(const MinicCoreFunction *function,
 
 bool rv32_core_unsigned_integer(const MinicCoreFunction *function,
                                 MinicCoreTypeId id) {
-    const MinicCoreType *type = rv32_core_scalar_type(function, id);
+    const MinicCoreType *type = minic_core_function_base_type(function, id);
     return type != NULL && type->kind == MINIC_CORE_TYPE_INTEGER &&
            !type->value.integer.is_signed && !type->value.integer.is_bool;
 }
 
 bool rv32_core_integer_type(const MinicCoreFunction *function,
                             MinicCoreTypeId id) {
-    const MinicCoreType *type = rv32_core_scalar_type(function, id);
-    return type != NULL && type->kind == MINIC_CORE_TYPE_INTEGER;
+    return minic_core_function_type_is_kind(function, id, MINIC_CORE_TYPE_INTEGER);
 }
 
 bool rv32_core_pointer_type(const MinicCoreFunction *function,
                             MinicCoreTypeId id) {
-    const MinicCoreType *type = rv32_core_scalar_type(function, id);
+    const MinicCoreType *type = minic_core_function_base_type(function, id);
     return type != NULL && type->kind == MINIC_CORE_TYPE_POINTER &&
            type->has_layout && type->size == 4U;
 }
 
 MinicCoreTypeId rv32_core_pointee_type(const MinicCoreFunction *function,
                                       MinicCoreTypeId id) {
-    const MinicCoreType *type = rv32_core_scalar_type(function, id);
+    const MinicCoreType *type = minic_core_function_base_type(function, id);
     return type != NULL && type->kind == MINIC_CORE_TYPE_POINTER &&
         type->has_layout && type->size == 4U
         ? type->value.pointer.pointee : MINIC_CORE_TYPE_INVALID;

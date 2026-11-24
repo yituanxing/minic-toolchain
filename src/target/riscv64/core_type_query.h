@@ -20,8 +20,7 @@ static inline bool minic_riscv64_core_is_i128(
 
 static inline bool minic_riscv64_core_is_record(
     const MinicCoreFunction *function, MinicCoreTypeId id) {
-    const MinicCoreType *type = minic_riscv64_core_base_type(function, id);
-    return type != NULL && type->kind == MINIC_CORE_TYPE_RECORD;
+    return minic_core_function_type_is_kind(function, id, MINIC_CORE_TYPE_RECORD);
 }
 
 static inline bool minic_riscv64_core_scalar_kind(const MinicCoreType *type) {
