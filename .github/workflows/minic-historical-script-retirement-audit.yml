@@ -5,6 +5,8 @@ on:
       - cleanup/minic-c50-registry-20261124
     paths:
       - 'tools/dev/**'
+      - 'tools/ci/**'
+      - 'docs/milestones/**'
       - '.github/workflows-disabled/**'
       - '.github/workflows/minic-historical-script-retirement-audit.yml'
 permissions:
@@ -195,7 +197,19 @@ jobs:
               ".github/workflows-disabled/stage2-kbuild-wrapper-contract.yml",
           }
           expected |= archive_expected
-          if len(expected) != 303 or deleted != expected or changed != expected | {audit}:
+          expected |= {
+              "tools/ci/apply-core-fast-contracts.py",
+              "tools/ci/apply-inline-specialization-symbolic-preexisting-clones-v0.py",
+              "tools/ci/apply-m151b-indirect-verifier-cleanup.py",
+              "tools/ci/apply-m158-final-four-v2.py",
+              "tools/ci/apply-riscv64-core-object-slot-reuse-wrapper-v0.py",
+              "docs/milestones/compiler-c1-pr-scope.md",
+              "docs/milestones/compiler-c1-real-programs.md",
+              "docs/milestones/compiler-c1-validation-recovery.md",
+              "docs/milestones/compiler-c2-block-scopes.md",
+              "docs/milestones/native-toolchain-module-roadmap.md",
+          }
+          if len(expected) != 313 or deleted != expected or changed != expected | {audit}:
               raise SystemExit("RETIREMENT_SCOPE=FAIL: unexpected tree changes")
           files = [p.decode() for p in git("ls-files", "-z").split(b"\0") if p]
           candidates = {
@@ -285,6 +299,7 @@ jobs:
                   def execute(where, path):
                       env = dict(os.environ)
                       env["GITHUB_REF_NAME"] = "agent/linux-expanded-kbuild-v0"
+                      env["PYTHONHASHSEED"] = "0"
                       result = subprocess.run(["python3", path], cwd=where, env=env,
                                               stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                               text=True, timeout=45)
