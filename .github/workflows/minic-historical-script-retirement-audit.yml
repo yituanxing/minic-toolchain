@@ -627,7 +627,14 @@ jobs:
               "tests/compiler/c0/run-gnu-inline-asm-readwrite-output.sh",
               "tests/compiler/c0/run-gnu-void-function-pointer-assignment.sh",
           }
-          if len(expected) != 739 or deleted != expected or changed != expected | metadata:
+          # Retired experiment-only harnesses and superseded offline report.
+          expected |= {
+              "tools/ci/linux-perf-packed-call-edge-cases-v1.py",
+              "tools/ci/linux-perf-parser-cold-switch-safety-v1.py",
+              "tools/ci/linux-perf-symbolic-source-bucket-safety-v1.py",
+              "docs/ci/minic-full2064-shard-lpt-cross-validation-2026-10-17.md",
+          }
+          if len(expected) != 743 or deleted != expected or changed != expected | metadata:
               raise SystemExit("RETIREMENT_SCOPE=FAIL: unexpected tree changes")
           files = [p.decode() for p in git("ls-files", "-z").split(b"\0") if p]
           candidates = {
