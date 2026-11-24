@@ -2,6 +2,54 @@
 #define MINIC_TARGET_X86_64_MACHINE_FRAME_SELECT_H
 
 #include "target/common/machine_builder.h"
+#include "target/x86_64/machine_opcode.h"
+#include <string.h>
+
+/* Physical operand constructors shared by the frame and Core selectors.
+ * Register access is assigned by the opcode contract, not by the caller. */
+static inline MinicMachineOperand minic_x86_machine_reg(
+    MinicMachineRegisterBank bank, unsigned number, unsigned width) {
+    MinicMachineOperand op = {0};
+    op.kind = MINIC_MACHINE_OPERAND_REGISTER;
+    op.value.physical.reg = (MinicMachineRegister){number, (uint16_t)width, bank};
+    return op;
+}
+static inline MinicMachineOperand minic_x86_machine_gp(unsigned number, unsigned width) {
+    return minic_x86_machine_reg(MINIC_MACHINE_REGISTER_GENERAL, number, width);
+}
+static inline MinicMachineOperand minic_x86_machine_imm(int64_t value) {
+    MinicMachineOperand op = {0};
+    op.kind = MINIC_MACHINE_OPERAND_INTEGER;
+    op.value.integer = value;
+    return op;
+}
+static inline MinicMachineOperand minic_x86_machine_block(size_t id) {
+    MinicMachineOperand op = {0};
+    op.kind = MINIC_MACHINE_OPERAND_BLOCK;
+    op.value.block_id = id;
+    return op;
+}
+static inline MinicMachineOperand minic_x86_machine_symbol(const char *name, uint32_t relocation) {
+    MinicMachineOperand op;
+    (void)memset(&op, 0, sizeof(op));
+    op.kind = MINIC_MACHINE_OPERAND_SYMBOL;
+    op.value.symbol.name = (char *)name;
+    op.value.symbol.relocation = relocation;
+    return op;
+}
+static inline MinicMachineOperand minic_x86_machine_address(unsigned base, int64_t offset) {
+    MinicMachineOperand op;
+    (void)memset(&op, 0, sizeof(op));
+    op.kind = MINIC_MACHINE_OPERAND_ADDRESS;
+    op.value.address.has_base = true;
+    op.value.address.base = (MinicMachineRegister){base, 64U, MINIC_MACHINE_REGISTER_GENERAL};
+    op.value.address.scale = 1U;
+    op.value.address.displacement = offset;
+    return op;
+}
+
+bool minic_x86_machine_emit_selected(MinicMachineBuilder *, const MinicTargetInfo *,
+    MinicX86MachineOpcode, MinicMachineOperand *, size_t, unsigned int extra_effects);
 
 struct MinicX86Frame;
 

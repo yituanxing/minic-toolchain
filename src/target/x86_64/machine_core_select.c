@@ -65,54 +65,14 @@ typedef struct X86CoreSelector {
     MinicCoreObjectId direct_object_id;
 } X86CoreSelector;
 
-static MinicMachineOperand x86_reg(unsigned int number, unsigned int bits) {
-    MinicMachineOperand op = {0};
-    op.kind = MINIC_MACHINE_OPERAND_REGISTER;
-    op.value.physical.reg = (MinicMachineRegister){
-        number, (uint16_t)bits, MINIC_MACHINE_REGISTER_GENERAL};
-    return op;
-}
+#define x86_reg minic_x86_machine_gp
+#define x86_imm minic_x86_machine_imm
+#define x86_block minic_x86_machine_block
+#define x86_symbol minic_x86_machine_symbol
+#define x86_addr minic_x86_machine_address
 
 static MinicMachineOperand x86_xmm(unsigned int number) {
-    MinicMachineOperand op = x86_reg(number, 128U);
-    op.value.physical.reg.bank = MINIC_MACHINE_REGISTER_VECTOR;
-    return op;
-}
-
-static MinicMachineOperand x86_imm(int64_t value) {
-    MinicMachineOperand op = {0};
-    op.kind = MINIC_MACHINE_OPERAND_INTEGER;
-    op.value.integer = value;
-    return op;
-}
-
-static MinicMachineOperand x86_symbol(const char *name,
-    uint32_t relocation) {
-    MinicMachineOperand op;
-    (void)memset(&op, 0, sizeof(op));
-    op.kind = MINIC_MACHINE_OPERAND_SYMBOL;
-    op.value.symbol.name = (char *)name;
-    op.value.symbol.relocation = relocation;
-    return op;
-}
-
-static MinicMachineOperand x86_block(size_t id) {
-    MinicMachineOperand op = {0};
-    op.kind = MINIC_MACHINE_OPERAND_BLOCK;
-    op.value.block_id = id;
-    return op;
-}
-
-static MinicMachineOperand x86_addr(unsigned int base, int64_t offset) {
-    MinicMachineOperand op;
-    (void)memset(&op, 0, sizeof(op));
-    op.kind = MINIC_MACHINE_OPERAND_ADDRESS;
-    op.value.address.has_base = true;
-    op.value.address.base = (MinicMachineRegister){
-        base, 64U, MINIC_MACHINE_REGISTER_GENERAL};
-    op.value.address.displacement = offset;
-    op.value.address.scale = 1U;
-    return op;
+    return minic_x86_machine_reg(MINIC_MACHINE_REGISTER_VECTOR, number, 128U);
 }
 
 static MinicMachineOperand x86_indexed_addr(unsigned int base,
@@ -127,23 +87,8 @@ static MinicMachineOperand x86_indexed_addr(unsigned int base,
 
 static bool x86_emit(X86CoreSelector *sel, MinicX86MachineOpcode opcode,
     MinicMachineOperand *ops, size_t count, unsigned int extra_effects) {
-    MinicMachineOpcodeContract contract = {0};
-    size_t i;
-    if (sel == NULL || !minic_x86_64_machine_opcode_lookup(
-            sel->target, opcode, &contract, NULL) ||
-        contract.operand_count != count ||
-        (extra_effects & ~contract.permitted_effects) != 0U)
-        return false;
-    for (i = 0U; i < count; ++i) {
-        if (ops[i].kind != contract.operand_kinds[i]) return false;
-        if (ops[i].kind == MINIC_MACHINE_OPERAND_REGISTER)
-            ops[i].value.physical.access = contract.register_access[i];
-    }
-    return minic_machine_builder_emit_selected(&sel->builder, opcode,
-        contract.required_effects | extra_effects,
-        count != 0U ? ops : NULL, count,
-        contract.implicit_count != 0U ? contract.implicit : NULL,
-        contract.implicit_count);
+    return sel != NULL && minic_x86_machine_emit_selected(
+        &sel->builder, sel->target, opcode, ops, count, extra_effects);
 }
 
 static bool x86_0(X86CoreSelector *sel, MinicX86MachineOpcode opcode) {

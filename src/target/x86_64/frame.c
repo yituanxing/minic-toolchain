@@ -29,10 +29,7 @@ static bool x86_frame_preflight_reject(
 
 static bool x86_frame_wide_type(const MinicCoreFunction *fn,
                                 MinicCoreTypeId id) {
-    const MinicCoreType *type;
-    if (fn->type_context == NULL) return false;
-    id = minic_core_type_unqualified(fn->type_context, id);
-    type = minic_core_type_get(fn->type_context, id);
+    const MinicCoreType *type = minic_core_function_base_type(fn, id);
     return type != NULL &&
         ((type->kind == MINIC_CORE_TYPE_INTEGER &&
           type->value.integer.bit_width == 128U) ||
@@ -42,10 +39,7 @@ static bool x86_frame_wide_type(const MinicCoreFunction *fn,
 
 static bool x86_frame_int128_type(const MinicCoreFunction *fn,
                                   MinicCoreTypeId id) {
-    const MinicCoreType *type;
-    if (fn->type_context == NULL) return false;
-    type = minic_core_type_get(fn->type_context,
-                               minic_core_type_unqualified(fn->type_context, id));
+    const MinicCoreType *type = minic_core_function_base_type(fn, id);
     return type != NULL && type->kind == MINIC_CORE_TYPE_INTEGER &&
            type->value.integer.bit_width == 128U;
 }

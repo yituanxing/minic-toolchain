@@ -739,12 +739,6 @@ const MinicCoreType *minic_core_function_type_get(const MinicCoreFunction *funct
     return minic_core_type_get(function->type_context, id);
 }
 
-bool minic_core_function_type_is_kind(const MinicCoreFunction *function,
-                                     MinicCoreTypeId id, MinicCoreTypeKind kind) {
-    const MinicCoreType *type = minic_core_function_base_type(function, id);
-    return type != NULL && type->kind == kind;
-}
-
 bool minic_core_function_value_is_kind(const MinicCoreFunction *function,
                                       MinicCoreValueId id, MinicCoreTypeKind kind) {
     return function != NULL && id < function->value_count &&

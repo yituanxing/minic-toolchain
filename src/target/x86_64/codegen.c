@@ -34,19 +34,6 @@ static void x86_error(MinicDiagnostic *diag, const char *path, const char *messa
 /* Function codegen consumes the frozen Core type graph.  In particular an
  * enum's arithmetic shape and the pointee of a qualified pointer must not
  * be reconstructed from the source-language type arena. */
-static const MinicCoreType *x86_function_type(const MinicCoreFunction *fn,
-                                              MinicCoreTypeId id) {
-    if (fn == NULL || fn->type_context == NULL) return NULL;
-    return minic_core_type_get(fn->type_context,
-                               minic_core_type_unqualified(fn->type_context, id));
-}
-
-static bool x86_function_kind(const MinicCoreFunction *fn,
-                              MinicCoreTypeId id, MinicCoreTypeKind kind) {
-    const MinicCoreType *type = x86_function_type(fn, id);
-    return type != NULL && type->kind == kind;
-}
-
 /* A .head.text address is a symbol identity PLUS a use representation, not
  * a property of an individual GLOBAL_ADDRESS instruction. The same Core
  * value may be used as a displaced physical memory address and as a kernel
@@ -80,7 +67,7 @@ static bool x86_head_same_origin(X86HeadAddressOrigin lhs,
 
 static bool x86_head_scalar_eight_bytes(const MinicCoreFunction *fn,
                                         MinicCoreTypeId type_id) {
-    const MinicCoreType *type = x86_function_type(fn, type_id);
+    const MinicCoreType *type = minic_core_function_base_type(fn, type_id);
     return type != NULL && type->has_layout && type->size == 8U &&
            (type->kind == MINIC_CORE_TYPE_POINTER ||
             type->kind == MINIC_CORE_TYPE_INTEGER);
@@ -133,9 +120,9 @@ static bool x86_head_local_address(
         }
         case MINIC_CORE_INSTRUCTION_SCALAR_BITCAST:
             if (ins->value.operand >= fn->value_count ||
-                !x86_function_kind(fn, ins->core_type_id,
+                !minic_core_function_type_is_kind(fn, ins->core_type_id,
                                    MINIC_CORE_TYPE_POINTER) ||
-                !x86_function_kind(fn,
+                !minic_core_function_type_is_kind(fn,
                     fn->values[ins->value.operand].core_type_id,
                     MINIC_CORE_TYPE_POINTER))
                 return false;
@@ -192,7 +179,7 @@ static bool x86_head_check_local_address_use(MinicCoreValueId value,
             break;
         case MINIC_CORE_INSTRUCTION_SCALAR_BITCAST:
             allowed = ins->value.operand == value &&
-                x86_function_kind(check->fn, ins->core_type_id,
+                minic_core_function_type_is_kind(check->fn, ins->core_type_id,
                                   MINIC_CORE_TYPE_POINTER) &&
                 x86_head_local_address(check->fn, check->defs,
                                        ins->result, &address);
@@ -334,10 +321,10 @@ static X86HeadAddressOrigin x86_head_origin_from_instruction(
         origin = x86_head_origin_from_value(fn, origins, ins->value.operand);
         if (origin.global != MINIC_CORE_GLOBAL_INVALID &&
             ins->value.operand < fn->value_count &&
-            x86_function_kind(fn,
+            minic_core_function_type_is_kind(fn,
                               fn->values[ins->value.operand].core_type_id,
                               MINIC_CORE_TYPE_POINTER) &&
-            x86_function_kind(fn, ins->core_type_id,
+            minic_core_function_type_is_kind(fn, ins->core_type_id,
                               MINIC_CORE_TYPE_INTEGER))
             origin.crossed_vma_cast = true;
         break;
@@ -358,7 +345,7 @@ static size_t x86_head_stored_bytes(const MinicCoreFunction *fn,
     const MinicCoreValueId source = ins->value.store.stored_value;
     const MinicCoreType *type;
     if (source >= fn->value_count) return 0U;
-    type = x86_function_type(fn, fn->values[source].core_type_id);
+    type = minic_core_function_base_type(fn, fn->values[source].core_type_id);
     return type != NULL && type->has_layout ? type->size : 0U;
 }
 
@@ -519,7 +506,7 @@ static bool x86_head_pointer_numeric_transit(
             parameter_index != SIZE_MAX &&
             ins->value.parameter_index == parameter_index &&
             ins->result < callee->value_count &&
-            x86_function_kind(callee, ins->core_type_id,
+            minic_core_function_type_is_kind(callee, ins->core_type_id,
                               MINIC_CORE_TYPE_POINTER))
             derived[ins->result] = true;
     }
@@ -541,7 +528,7 @@ static bool x86_head_pointer_numeric_transit(
             }
             if (ins->kind == MINIC_CORE_INSTRUCTION_LOAD &&
                 ins->result < callee->value_count && !derived[ins->result] &&
-                x86_function_kind(callee, ins->core_type_id,
+                minic_core_function_type_is_kind(callee, ins->core_type_id,
                                   MINIC_CORE_TYPE_POINTER) &&
                 x86_head_local_address(callee, defs, ins->value.load.address,
                                        &address) && derived_objects[address.object]) {
@@ -557,7 +544,7 @@ static bool x86_head_pointer_numeric_transit(
              * The same conservative rule applies to an indirect callee. */
             if (ins->result < callee->value_count &&
                 !derived[ins->result] &&
-                x86_function_kind(callee, ins->core_type_id,
+                minic_core_function_type_is_kind(callee, ins->core_type_id,
                                   MINIC_CORE_TYPE_POINTER) &&
                 (ins->kind == MINIC_CORE_INSTRUCTION_CALL ||
                  ins->kind == MINIC_CORE_INSTRUCTION_INDIRECT_CALL)) {
@@ -593,14 +580,14 @@ static bool x86_head_pointer_numeric_transit(
                 source = ins->value.operand;
             if (source >= callee->value_count || !derived[source]) continue;
             if (ins->kind == MINIC_CORE_INSTRUCTION_SCALAR_BITCAST &&
-                x86_function_kind(callee, ins->core_type_id,
+                minic_core_function_type_is_kind(callee, ins->core_type_id,
                                   MINIC_CORE_TYPE_INTEGER)) {
                 numeric = true;
                 goto done;
             }
             if (ins->result < callee->value_count &&
                 !derived[ins->result] &&
-                x86_function_kind(callee, ins->core_type_id,
+                minic_core_function_type_is_kind(callee, ins->core_type_id,
                                   MINIC_CORE_TYPE_POINTER)) {
                 derived[ins->result] = true;
                 changed = true;
@@ -670,7 +657,7 @@ static bool x86_head_call_numeric_alias(
         count > caller->call_argument_count - begin)
         return false;
     pointer_return = call->result < caller->value_count &&
-        x86_function_kind(caller, caller->values[call->result].core_type_id,
+        minic_core_function_type_is_kind(caller, caller->values[call->result].core_type_id,
                           MINIC_CORE_TYPE_POINTER);
     for (i = 0U; i < count; ++i) {
         const MinicCoreCallArgument *arg = &caller->call_arguments[begin + i];
@@ -678,7 +665,7 @@ static bool x86_head_call_numeric_alias(
         bool visible_direct_callee = false;
         if (arg->kind != MINIC_CORE_CALL_ARGUMENT_VALUE ||
             arg->value.value_id >= caller->value_count ||
-            !x86_function_kind(caller,
+            !minic_core_function_type_is_kind(caller,
                 caller->values[arg->value.value_id].core_type_id,
                 MINIC_CORE_TYPE_POINTER))
             continue;
@@ -806,7 +793,7 @@ static bool x86_head_plan_address_roles(
                                         &address) ||
                 !private_objects[address.object])
                 continue;
-            object_type = x86_function_type(
+            object_type = minic_core_function_base_type(
                 fn, fn->objects[address.object].core_type_id);
             if (object_type == NULL || !object_type->has_layout ||
                 address.byte_offset > object_type->size ||
@@ -1045,10 +1032,10 @@ static bool x86_head_plan_address_roles(
             case MINIC_CORE_INSTRUCTION_SCALAR_BITCAST:
                 if (ins->result < fn->value_count &&
                     ins->value.operand < fn->value_count &&
-                    x86_function_kind(fn,
+                    minic_core_function_type_is_kind(fn,
                                       fn->values[ins->value.operand].core_type_id,
                                       MINIC_CORE_TYPE_POINTER) &&
-                    x86_function_kind(fn, ins->core_type_id,
+                    minic_core_function_type_is_kind(fn, ins->core_type_id,
                                       MINIC_CORE_TYPE_INTEGER)) {
                     origin = x86_head_origin_from_value(
                         fn, origins, ins->value.operand);
@@ -1085,7 +1072,7 @@ done:
 
 static bool x86_no_sse_fp_type(const MinicCoreFunction *fn,
                               MinicCoreTypeId id) {
-    return x86_function_kind(fn, id, MINIC_CORE_TYPE_FLOAT);
+    return minic_core_function_type_is_kind(fn, id, MINIC_CORE_TYPE_FLOAT);
 }
 
 /* -mno-sse is a code-generation contract, not permission to emit an

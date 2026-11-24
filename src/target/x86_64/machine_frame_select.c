@@ -8,72 +8,32 @@
 #include <limits.h>
 #include <string.h>
 
-static MinicMachineOperand x86_reg(MinicMachineRegisterBank bank,
-    unsigned int number, unsigned int width) {
-    MinicMachineOperand operand = {0};
-    operand.kind = MINIC_MACHINE_OPERAND_REGISTER;
-    operand.value.physical.reg = (MinicMachineRegister){
-        number, (uint16_t)width, bank};
-    return operand;
-}
-
-static MinicMachineOperand x86_gp(unsigned int number, unsigned int width) {
-    return x86_reg(MINIC_MACHINE_REGISTER_GENERAL, number, width);
-}
-
-static MinicMachineOperand x86_imm(int64_t value) {
-    MinicMachineOperand operand = {0};
-    operand.kind = MINIC_MACHINE_OPERAND_INTEGER;
-    operand.value.integer = value;
-    return operand;
-}
-
-static MinicMachineOperand x86_block(size_t id) {
-    MinicMachineOperand operand = {0};
-    operand.kind = MINIC_MACHINE_OPERAND_BLOCK;
-    operand.value.block_id = id;
-    return operand;
-}
-
-static MinicMachineOperand x86_symbol(const char *name, uint32_t relocation) {
-    MinicMachineOperand operand;
-    (void)memset(&operand, 0, sizeof(operand));
-    operand.kind = MINIC_MACHINE_OPERAND_SYMBOL;
-    operand.value.symbol.name = (char *)name;
-    operand.value.symbol.relocation = relocation;
-    return operand;
-}
-
-static MinicMachineOperand x86_address(unsigned int base, int64_t offset) {
-    MinicMachineOperand operand;
-    (void)memset(&operand, 0, sizeof(operand));
-    operand.kind = MINIC_MACHINE_OPERAND_ADDRESS;
-    operand.value.address.has_base = true;
-    operand.value.address.base = (MinicMachineRegister){
-        base, 64U, MINIC_MACHINE_REGISTER_GENERAL};
-    operand.value.address.scale = 1U;
-    operand.value.address.displacement = offset;
-    return operand;
-}
-
-static bool x86_emit(MinicMachineBuilder *builder,
-    MinicX86MachineOpcode opcode, MinicMachineOperand *operands,
-    size_t count) {
+bool minic_x86_machine_emit_selected(MinicMachineBuilder *builder,
+    const MinicTargetInfo *target, MinicX86MachineOpcode opcode,
+    MinicMachineOperand *operands, size_t count, unsigned int extra_effects) {
     MinicMachineOpcodeContract contract = {0};
     size_t i;
     if (builder == NULL || builder->function == NULL ||
-        !minic_x86_64_machine_opcode_lookup(builder->function->target,
-            opcode, &contract, NULL) || count != contract.operand_count)
-        return false;
+        !minic_x86_64_machine_opcode_lookup(target, opcode, &contract, NULL) ||
+        count != contract.operand_count ||
+        (extra_effects & ~contract.permitted_effects) != 0U ||
+        (count != 0U && operands == NULL)) return false;
     for (i = 0U; i < count; ++i) {
         if (operands[i].kind != contract.operand_kinds[i]) return false;
         if (operands[i].kind == MINIC_MACHINE_OPERAND_REGISTER)
             operands[i].value.physical.access = contract.register_access[i];
     }
     return minic_machine_builder_emit_selected(builder, opcode,
-        contract.required_effects, count != 0U ? operands : NULL, count,
+        contract.required_effects | extra_effects, count != 0U ? operands : NULL, count,
         contract.implicit_count ? contract.implicit : NULL,
         contract.implicit_count);
+}
+
+static bool x86_emit(MinicMachineBuilder *builder,
+    MinicX86MachineOpcode opcode, MinicMachineOperand *operands, size_t count) {
+    return builder != NULL && builder->function != NULL &&
+        minic_x86_machine_emit_selected(builder, builder->function->target,
+                                        opcode, operands, count, 0U);
 }
 
 static bool x86_emit0(MinicMachineBuilder *builder,
@@ -153,7 +113,7 @@ static bool x86_save_gp(MinicMachineBuilder *builder,
     MinicMachineOperand frame;
     return x86_local(builder, 8U, rbp_distance, &frame) &&
         x86_emit2(builder, MINIC_X86_MI_MOV64_R_FRBP,
-            x86_gp(reg, 64U), frame);
+            minic_x86_machine_gp(reg, 64U), frame);
 }
 
 static bool x86_restore_gp(MinicMachineBuilder *builder,
@@ -161,7 +121,7 @@ static bool x86_restore_gp(MinicMachineBuilder *builder,
     MinicMachineOperand frame;
     return x86_local(builder, 8U, rbp_distance, &frame) &&
         x86_emit2(builder, MINIC_X86_MI_MOV64_FRBP_R,
-            frame, x86_gp(reg, 64U));
+            frame, minic_x86_machine_gp(reg, 64U));
 }
 
 static bool x86_save_xmm(MinicMachineBuilder *builder,
@@ -169,7 +129,7 @@ static bool x86_save_xmm(MinicMachineBuilder *builder,
     MinicMachineOperand frame;
     return x86_local(builder, 16U, rbp_distance, &frame) &&
         x86_emit2(builder, MINIC_X86_MI_MOVDQU_XMM_FRAME_RBP,
-            x86_reg(MINIC_MACHINE_REGISTER_VECTOR, reg, 128U), frame);
+            minic_x86_machine_reg(MINIC_MACHINE_REGISTER_VECTOR, reg, 128U), frame);
 }
 
 static bool x86_restore_xmm(MinicMachineBuilder *builder,
@@ -177,7 +137,7 @@ static bool x86_restore_xmm(MinicMachineBuilder *builder,
     MinicMachineOperand frame;
     return x86_local(builder, 16U, rbp_distance, &frame) &&
         x86_emit2(builder, MINIC_X86_MI_MOVDQU_FRAME_RBP_XMM,
-            frame, x86_reg(MINIC_MACHINE_REGISTER_VECTOR, reg, 128U));
+            frame, minic_x86_machine_reg(MINIC_MACHINE_REGISTER_VECTOR, reg, 128U));
 }
 
 /* SysV and MS x64 physical register IDs, not textual ABI register names. */
@@ -266,14 +226,14 @@ bool minic_x86_64_machine_select_prologue(MinicMachineBuilder *builder,
          MINIC_X86_CODEGEN_IBT_ENDBR) != 0U &&
         !x86_emit0(builder, MINIC_X86_MI_ENDBR64)) return false;
     if (!x86_emit1(builder, MINIC_X86_MI_PUSH64_R,
-            x86_gp(MINIC_X86_REG_RBP, 64U)) ||
+            minic_x86_machine_gp(MINIC_X86_REG_RBP, 64U)) ||
         !x86_emit2(builder, MINIC_X86_MI_MOV64_RR,
-            x86_gp(MINIC_X86_REG_RSP, 64U),
-            x86_gp(MINIC_X86_REG_RBP, 64U))) return false;
+            minic_x86_machine_gp(MINIC_X86_REG_RSP, 64U),
+            minic_x86_machine_gp(MINIC_X86_REG_RBP, 64U))) return false;
     if (frame->frame_size != 0U &&
         !x86_emit2(builder, MINIC_X86_MI_SUB64_IR,
-            x86_imm((int64_t)frame->frame_size),
-            x86_gp(MINIC_X86_REG_RSP, 64U))) return false;
+            minic_x86_machine_imm((int64_t)frame->frame_size),
+            minic_x86_machine_gp(MINIC_X86_REG_RSP, 64U))) return false;
     if (frame->ms_gp_save_offset != 0U) {
         /* RDI/RSI are always nonvolatile. Under -mno-sse the physical
          * selector cannot generate an XMM clobber (and preflight rejects
@@ -293,8 +253,8 @@ bool minic_x86_64_machine_select_prologue(MinicMachineBuilder *builder,
             frame->sret_save_offset)) return false;
     if (frame->objects_from_aligned_rsp &&
         !x86_emit2(builder, MINIC_X86_MI_AND64_IR,
-            x86_imm(-(int64_t)frame->object_base_alignment),
-            x86_gp(MINIC_X86_REG_RSP, 64U))) return false;
+            minic_x86_machine_imm(-(int64_t)frame->object_base_alignment),
+            minic_x86_machine_gp(MINIC_X86_REG_RSP, 64U))) return false;
     if (frame->saves_incoming_gp)
         for (i = 0U; i < 6U; ++i)
             if (!x86_save_gp(builder, x86_sysv_incoming_gp[i],
@@ -305,30 +265,30 @@ bool minic_x86_64_machine_select_prologue(MinicMachineBuilder *builder,
             !x86_local(builder, 176U,
                 frame->varargs_regsave_offset, &fp_save) ||
             !x86_emit2(builder, MINIC_X86_MI_LEA64_FRBP_R,
-                fp_save, x86_gp(MINIC_X86_REG_R10, 64U))) return false;
+                fp_save, minic_x86_machine_gp(MINIC_X86_REG_R10, 64U))) return false;
         for (i = 0U; i < 6U; ++i)
             if (!x86_emit2(builder, MINIC_X86_MI_MOV64_RA,
-                    x86_gp(x86_sysv_incoming_gp[i], 64U),
-                    x86_address(MINIC_X86_REG_R10, (int64_t)(i * 8U))))
+                    minic_x86_machine_gp(x86_sysv_incoming_gp[i], 64U),
+                    minic_x86_machine_address(MINIC_X86_REG_R10, (int64_t)(i * 8U))))
                 return false;
         if (use_fp_spill) {
             if (!x86_emit2(builder, MINIC_X86_MI_TEST8_RR,
-                    x86_gp(MINIC_X86_REG_RAX, 8U),
-                    x86_gp(MINIC_X86_REG_RAX, 8U)) ||
+                    minic_x86_machine_gp(MINIC_X86_REG_RAX, 8U),
+                    minic_x86_machine_gp(MINIC_X86_REG_RAX, 8U)) ||
                 !x86_emit1(builder, MINIC_X86_MI_JZ_B,
-                    x86_block(ready)) ||
+                    minic_x86_machine_block(ready)) ||
                 !minic_machine_builder_add_successor(builder, ready) ||
                 !minic_machine_builder_add_successor(builder, spill) ||
                 !minic_machine_builder_set_fallthrough(builder, spill) ||
                 !minic_machine_builder_position_at(builder, spill)) return false;
             for (i = 0U; i < 8U; ++i)
                 if (!x86_emit2(builder, MINIC_X86_MI_MOVDQU_XMM_ADDRESS,
-                        x86_reg(MINIC_MACHINE_REGISTER_VECTOR,
+                        minic_x86_machine_reg(MINIC_MACHINE_REGISTER_VECTOR,
                             (unsigned int)i, 128U),
-                        x86_address(MINIC_X86_REG_R10,
+                        minic_x86_machine_address(MINIC_X86_REG_R10,
                             (int64_t)(48U + i * 16U)))) return false;
             if (!x86_emit1(builder, MINIC_X86_MI_JMP_B,
-                    x86_block(ready)) ||
+                    minic_x86_machine_block(ready)) ||
                 !minic_machine_builder_add_successor(builder, ready) ||
                 !minic_machine_builder_position_at(builder, ready))
                 return false;
@@ -366,6 +326,6 @@ bool minic_x86_64_machine_select_epilogue(MinicMachineBuilder *builder,
     if ((minic_x86_64_target_codegen_options(target) &
          MINIC_X86_CODEGEN_RETURN_EXTERNAL_THUNK) != 0U)
         return x86_emit1(builder, MINIC_X86_MI_JMP_RETURN_THUNK,
-            x86_symbol("__x86_return_thunk", MINIC_X86_MACHINE_RELOC_PC32));
+            minic_x86_machine_symbol("__x86_return_thunk", MINIC_X86_MACHINE_RELOC_PC32));
     return x86_emit0(builder, MINIC_X86_MI_RET);
 }
