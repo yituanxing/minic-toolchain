@@ -7,7 +7,7 @@ static unsigned int minic_type_pointer_qualifier_capacity(void) {
     return (unsigned int)(sizeof(unsigned int) * CHAR_BIT);
 }
 
-static bool minic_type_pointer_qualifiers_are_valid(MinicType type) {
+bool minic_type_pointer_qualifiers_are_valid(MinicType type) {
     unsigned int capacity;
 
     capacity = minic_type_pointer_qualifier_capacity();

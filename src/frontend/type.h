@@ -168,6 +168,7 @@ bool minic_type_record_member(MinicType record_type, MinicType field_type,
 bool minic_type_unqualified(MinicType type, MinicType *result);
 bool minic_type_pointer_to(MinicType pointee, MinicType *result);
 bool minic_type_pointee(MinicType pointer, MinicType *result);
+bool minic_type_pointer_qualifiers_are_valid(MinicType type);
 bool minic_type_equal(MinicType left, MinicType right);
 bool minic_type_assignment_compatible(MinicType target, MinicType source);
 bool minic_type_gnu_pointer_sign_compatible(MinicType target, MinicType source);

@@ -823,15 +823,7 @@ static bool parse_gnu_visibility_name(MinicParser *parser, MinicSymbolVisibility
     }
     value = parser->source + span.begin.offset + 1U;
     length = span.end.offset - span.begin.offset - 2U;
-    if (length == 8U && memcmp(value, "internal", 8U) == 0) {
-        *visibility = MINIC_SYMBOL_VISIBILITY_INTERNAL;
-    } else if (length == 6U && memcmp(value, "hidden", 6U) == 0) {
-        *visibility = MINIC_SYMBOL_VISIBILITY_HIDDEN;
-    } else if (length == 9U && memcmp(value, "protected", 9U) == 0) {
-        *visibility = MINIC_SYMBOL_VISIBILITY_PROTECTED;
-    } else if (length == 7U && memcmp(value, "default", 7U) == 0) {
-        *visibility = MINIC_SYMBOL_VISIBILITY_DEFAULT;
-    } else {
+    if (!minic_parser_visibility_from_name(value, length, visibility)) {
         minic_parser_error(parser, "unsupported GNU visibility value");
         return false;
     }

@@ -323,6 +323,31 @@ typedef struct MinicObjectAttributeContext {
     MinicGlobalObjectId *alias_target;
 } MinicObjectAttributeContext;
 
+/* The source spelling is shared by function and object attributes;
+ * each caller still owns token admission and diagnostic context. */
+bool minic_parser_visibility_from_name(const char *name, size_t length,
+                                       MinicSymbolVisibility *visibility) {
+    static const struct {
+        const char *name;
+        size_t length;
+        MinicSymbolVisibility value;
+    } names[] = {
+        {"internal", 8U, MINIC_SYMBOL_VISIBILITY_INTERNAL},
+        {"hidden", 6U, MINIC_SYMBOL_VISIBILITY_HIDDEN},
+        {"protected", 9U, MINIC_SYMBOL_VISIBILITY_PROTECTED},
+        {"default", 7U, MINIC_SYMBOL_VISIBILITY_DEFAULT},
+    };
+    size_t i;
+    if (name == NULL || visibility == NULL) return false;
+    for (i = 0U; i < sizeof(names) / sizeof(names[0]); ++i) {
+        if (length == names[i].length && memcmp(name, names[i].name, length) == 0) {
+            *visibility = names[i].value;
+            return true;
+        }
+    }
+    return false;
+}
+
 static bool parse_object_visibility_argument(MinicParser *parser,
                                              const MinicParsedAttribute *attribute,
                                              MinicSymbolVisibility *visibility) {
@@ -372,15 +397,7 @@ static bool parse_object_visibility_argument(MinicParser *parser,
         minic_parser_error(parser, "GNU visibility attribute requires exactly one string literal");
         return false;
     }
-    if (value_length == 8U && memcmp(value, "internal", 8U) == 0) {
-        *visibility = MINIC_SYMBOL_VISIBILITY_INTERNAL;
-    } else if (value_length == 6U && memcmp(value, "hidden", 6U) == 0) {
-        *visibility = MINIC_SYMBOL_VISIBILITY_HIDDEN;
-    } else if (value_length == 9U && memcmp(value, "protected", 9U) == 0) {
-        *visibility = MINIC_SYMBOL_VISIBILITY_PROTECTED;
-    } else if (value_length == 7U && memcmp(value, "default", 7U) == 0) {
-        *visibility = MINIC_SYMBOL_VISIBILITY_DEFAULT;
-    } else {
+    if (!minic_parser_visibility_from_name(value, value_length, visibility)) {
         minic_parser_error(parser, "unsupported GNU visibility value");
         return false;
     }

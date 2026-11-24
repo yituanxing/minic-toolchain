@@ -109,6 +109,28 @@ static bool add_pointer_record_field(MinicParser *parser,
     return minic_parser_add_expression(parser, &member_expression, expression_id);
 }
 
+/* Common named member admission, preserving caller-owned advance order. */
+static bool parse_member_name(MinicParser *parser, const MinicRecord *record,
+                              MinicRecordId record_id, MinicSourceSpan *span,
+                              MinicRecordFieldPath *path) {
+    if (record == NULL || !record->is_complete) {
+        minic_parser_error(parser, "member access requires a complete record");
+        return false;
+    }
+    if (parser->current.kind != MINIC_TOKEN_IDENTIFIER) {
+        minic_parser_error(parser, "expected record member name");
+        return false;
+    }
+    *span = parser->current.span;
+    if (!minic_parser_find_record_field_path(parser, record_id, *span, path)) {
+        minic_parser_error(parser,
+                           path->ambiguous ? "record member is ambiguous through anonymous members"
+                                           : "record has no such member");
+        return false;
+    }
+    return true;
+}
+
 static bool parse_pointer_record_member(MinicParser *parser,
                                         MinicExpressionId pointer_base_id,
                                         MinicSourcePosition member_begin,
@@ -128,22 +150,8 @@ static bool parse_pointer_record_member(MinicParser *parser,
         return false;
     }
     record = minic_c0_program_record(parser->program, record_type.record_id);
-    if (record == NULL || !record->is_complete) {
-        minic_parser_error(parser, "member access requires a complete record");
+    if (!parse_member_name(parser, record, record_type.record_id, &field_span, &path))
         return false;
-    }
-    if (parser->current.kind != MINIC_TOKEN_IDENTIFIER) {
-        minic_parser_error(parser, "expected record member name");
-        return false;
-    }
-
-    field_span = parser->current.span;
-    if (!minic_parser_find_record_field_path(parser, record_type.record_id, field_span, &path)) {
-        minic_parser_error(parser,
-                           path.ambiguous ? "record member is ambiguous through anonymous members"
-                                          : "record has no such member");
-        return false;
-    }
     if (!minic_parser_advance(parser)) {
         return false;
     }
@@ -233,21 +241,8 @@ static bool parse_record_rvalue_member(MinicParser *parser,
     }
     base_type = base->type;
     record = minic_c0_program_record(parser->program, base_type.record_id);
-    if (record == NULL || !record->is_complete) {
-        minic_parser_error(parser, "member access requires a complete record");
+    if (!parse_member_name(parser, record, base_type.record_id, &field_span, &path))
         return false;
-    }
-    if (parser->current.kind != MINIC_TOKEN_IDENTIFIER) {
-        minic_parser_error(parser, "expected record member name");
-        return false;
-    }
-    field_span = parser->current.span;
-    if (!minic_parser_find_record_field_path(parser, base_type.record_id, field_span, &path)) {
-        minic_parser_error(parser,
-                           path.ambiguous ? "record member is ambiguous through anonymous members"
-                                          : "record has no such member");
-        return false;
-    }
     if (path.depth != 1U || path.record_ids[0] != base_type.record_id) {
         minic_parser_error(parser,
                            "promoted member access on a record rvalue is not supported yet");

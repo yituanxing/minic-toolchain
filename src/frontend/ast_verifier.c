@@ -8,20 +8,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-static bool pointer_qualifiers_are_valid(MinicType type) {
-    unsigned int capacity;
-
-    capacity = (unsigned int)(sizeof(type.pointer_qualifiers) * CHAR_BIT);
-    if (type.pointer_depth > capacity) {
-        return false;
-    }
-    if (type.pointer_depth == capacity) {
-        return true;
-    }
-    return (type.pointer_qualifiers >> type.pointer_depth) == 0U &&
-           (type.pointer_volatile_qualifiers >> type.pointer_depth) == 0U;
-}
-
 static bool builtin_declaration_type_is_valid(const MinicTargetInvocation *target,
                                               MinicType type) {
     MinicBuiltinDeclarationRole role;
@@ -50,7 +36,7 @@ type_is_valid(const MinicC0Program *program, const MinicTargetInvocation *target
     if (program == NULL ||
         (type.base_qualifiers & ~((unsigned int)MINIC_TYPE_QUALIFIER_CONST |
                                   (unsigned int)MINIC_TYPE_QUALIFIER_VOLATILE)) != 0U ||
-        !pointer_qualifiers_are_valid(type) ||
+        !minic_type_pointer_qualifiers_are_valid(type) ||
         (type.base_kind != MINIC_TYPE_BASE_TARGET_BUILTIN &&
          (type.target_builtin_id != 0U ||
           type.target_builtin_role != MINIC_BUILTIN_DECLARATION_INVALID))) {

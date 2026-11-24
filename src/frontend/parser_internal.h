@@ -355,6 +355,8 @@ static inline size_t minic_parser_symbol_name_hash(const char *name, size_t leng
 }
 
 size_t minic_parser_span_length(MinicSourceSpan span);
+bool minic_parser_visibility_from_name(const char *name, size_t length,
+                                       MinicSymbolVisibility *visibility);
 bool minic_parser_span_equals(const MinicParser *parser,
                               MinicSourceSpan left,
                               MinicSourceSpan right);
