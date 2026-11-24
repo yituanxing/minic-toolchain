@@ -218,7 +218,7 @@ core_scalar_lvalue_bitcast_focused() {
     BUILD_DIR="$root/build/ci-core-scalar-lvalue-bitcast" \
     RISCV_CC=riscv64-linux-gnu-gcc \
     QEMU_RISCV64=qemu-riscv64 \
-        sh tests/compiler/c0/run-core-scalar-lvalue-bitcast.sh
+        sh tests/compiler/c0/run-core-basic-runtime-case.sh core-scalar-lvalue-bitcast
 }
 
 core_fixed_call_scalar_conversions_focused() {
@@ -226,7 +226,7 @@ core_fixed_call_scalar_conversions_focused() {
     BUILD_DIR="$root/build/ci-core-fixed-call-scalar-conversions" \
     RISCV_CC=riscv64-linux-gnu-gcc \
     QEMU_RISCV64=qemu-riscv64 \
-        sh tests/compiler/c0/run-core-fixed-call-scalar-conversions.sh
+        sh tests/compiler/c0/run-core-basic-runtime-case.sh core-fixed-call-scalar-conversions
 }
 
 core_scalar_assignment_implicit_void_focused() {
@@ -234,7 +234,7 @@ core_scalar_assignment_implicit_void_focused() {
     BUILD_DIR="$root/build/ci-core-scalar-assignment-implicit-void" \
     RISCV_CC=riscv64-linux-gnu-gcc \
     QEMU_RISCV64=qemu-riscv64 \
-        sh tests/compiler/c0/run-core-scalar-assignment-implicit-void.sh
+        sh tests/compiler/c0/run-core-basic-runtime-case.sh core-scalar-assignment-implicit-void
 }
 
 core_global_scalar_memory_focused() {
@@ -242,7 +242,7 @@ core_global_scalar_memory_focused() {
     BUILD_DIR="$root/build/ci-core-global-scalar-memory" \
     RISCV_CC=riscv64-linux-gnu-gcc \
     QEMU_RISCV64=qemu-riscv64 \
-        sh tests/compiler/c0/run-core-global-scalar-memory.sh
+        sh tests/compiler/c0/run-core-basic-runtime-case.sh core-global-scalar-memory
 }
 
 core_integer_equality_focused() {
@@ -250,7 +250,7 @@ core_integer_equality_focused() {
     BUILD_DIR="$root/build/ci-core-integer-equality" \
     RISCV_CC=riscv64-linux-gnu-gcc \
     QEMU_RISCV64=qemu-riscv64 \
-        sh tests/compiler/c0/run-core-integer-equality.sh
+        sh tests/compiler/c0/run-core-basic-runtime-case.sh core-integer-equality
 }
 
 core_integer_multiply_overflow_focused() {
@@ -258,7 +258,7 @@ core_integer_multiply_overflow_focused() {
     BUILD_DIR="$root/build/ci-core-integer-multiply-overflow" \
     RISCV_CC=riscv64-linux-gnu-gcc \
     QEMU_RISCV64=qemu-riscv64 \
-        sh tests/compiler/c0/run-core-integer-multiply-overflow.sh
+        sh tests/compiler/c0/run-core-basic-runtime-case.sh core-integer-multiply-overflow
 }
 
 core_integer_add_overflow_focused() {
@@ -266,7 +266,7 @@ core_integer_add_overflow_focused() {
     BUILD_DIR="$root/build/ci-core-integer-add-overflow" \
     RISCV_CC=riscv64-linux-gnu-gcc \
     QEMU_RISCV64=qemu-riscv64 \
-        sh tests/compiler/c0/run-core-integer-add-overflow.sh
+        sh tests/compiler/c0/run-core-basic-runtime-case.sh core-integer-add-overflow
 }
 
 core_short_circuit_or_focused() {
@@ -274,7 +274,7 @@ core_short_circuit_or_focused() {
     BUILD_DIR="$root/build/ci-core-short-circuit-or" \
     RISCV_CC=riscv64-linux-gnu-gcc \
     QEMU_RISCV64=qemu-riscv64 \
-        sh tests/compiler/c0/run-core-short-circuit-or.sh
+        sh tests/compiler/c0/run-core-basic-runtime-case.sh core-short-circuit-or
 }
 
 core_nested_if_continuation_focused() {
@@ -282,7 +282,7 @@ core_nested_if_continuation_focused() {
     BUILD_DIR="$root/build/ci-core-nested-if-continuation" \
     RISCV_CC=riscv64-linux-gnu-gcc \
     QEMU_RISCV64=qemu-riscv64 \
-        sh tests/compiler/c0/run-core-nested-if-continuation.sh
+        sh tests/compiler/c0/run-core-basic-runtime-case.sh core-nested-if-continuation
 }
 
 core_condition_and_focused() {
@@ -290,7 +290,7 @@ core_condition_and_focused() {
     BUILD_DIR="$root/build/ci-core-condition-and" \
     RISCV_CC=riscv64-linux-gnu-gcc \
     QEMU_RISCV64=qemu-riscv64 \
-        sh tests/compiler/c0/run-core-condition-and.sh
+        sh tests/compiler/c0/run-core-basic-runtime-case.sh core-condition-and
 }
 
 core_logical_and_value_focused() {
@@ -298,7 +298,7 @@ core_logical_and_value_focused() {
     BUILD_DIR="$root/build/ci-core-logical-and-value" \
     RISCV_CC=riscv64-linux-gnu-gcc \
     QEMU_RISCV64=qemu-riscv64 \
-        sh tests/compiler/c0/run-core-logical-and-value.sh
+        sh tests/compiler/c0/run-core-basic-runtime-case.sh core-logical-and-value
 }
 
 core_integer_bitwise_and_assignment_focused() {
@@ -306,7 +306,7 @@ core_integer_bitwise_and_assignment_focused() {
     BUILD_DIR="$root/build/ci-core-integer-bitwise-and-assignment" \
     RISCV_CC=riscv64-linux-gnu-gcc \
     QEMU_RISCV64=qemu-riscv64 \
-        sh tests/compiler/c0/run-core-integer-bitwise-and-assignment.sh
+        sh tests/compiler/c0/run-core-basic-runtime-case.sh core-integer-bitwise-and-assignment
 }
 
 core_pointer_offset_focused() {
@@ -314,7 +314,7 @@ core_pointer_offset_focused() {
     BUILD_DIR="$root/build/ci-core-pointer-offset" \
     RISCV_CC=riscv64-linux-gnu-gcc \
     QEMU_RISCV64=qemu-riscv64 \
-        sh tests/compiler/c0/run-core-pointer-offset.sh
+        sh tests/compiler/c0/run-core-basic-runtime-case.sh core-pointer-offset
 }
 
 core_pointer_equality_qualifiers_focused() {
@@ -322,7 +322,7 @@ core_pointer_equality_qualifiers_focused() {
     BUILD_DIR="$root/build/ci-core-pointer-equality-qualifiers" \
     RISCV_CC=riscv64-linux-gnu-gcc \
     QEMU_RISCV64=qemu-riscv64 \
-        sh tests/compiler/c0/run-core-pointer-equality-qualifiers.sh
+        sh tests/compiler/c0/run-core-basic-runtime-case.sh core-pointer-equality-qualifiers
 }
 
 core_statement_expression_focused() {
@@ -330,7 +330,7 @@ core_statement_expression_focused() {
     BUILD_DIR="$root/build/ci-core-statement-expression" \
     RISCV_CC=riscv64-linux-gnu-gcc \
     QEMU_RISCV64=qemu-riscv64 \
-        sh tests/compiler/c0/run-core-statement-expression.sh
+        sh tests/compiler/c0/run-core-basic-runtime-case.sh core-statement-expression
 }
 
 core_opaque_inline_asm_focused() {
@@ -338,7 +338,7 @@ core_opaque_inline_asm_focused() {
     BUILD_DIR="$root/build/ci-core-opaque-inline-asm" \
     RISCV_CC=riscv64-linux-gnu-gcc \
     QEMU_RISCV64=qemu-riscv64 \
-        sh tests/compiler/c0/run-core-opaque-inline-asm.sh
+        sh tests/compiler/c0/run-core-basic-runtime-case.sh core-opaque-inline-asm
 }
 
 core_scalar_not_equal_focused() {
@@ -346,7 +346,7 @@ core_scalar_not_equal_focused() {
     BUILD_DIR="$root/build/ci-core-scalar-not-equal" \
     RISCV_CC=riscv64-linux-gnu-gcc \
     QEMU_RISCV64=qemu-riscv64 \
-        sh tests/compiler/c0/run-core-scalar-not-equal.sh
+        sh tests/compiler/c0/run-core-basic-runtime-case.sh core-scalar-not-equal
 }
 
 core_integer_subtract_overflow_focused() {
@@ -354,7 +354,7 @@ core_integer_subtract_overflow_focused() {
     BUILD_DIR="$root/build/ci-core-integer-subtract-overflow" \
     RISCV_CC=riscv64-linux-gnu-gcc \
     QEMU_RISCV64=qemu-riscv64 \
-        sh tests/compiler/c0/run-core-integer-subtract-overflow.sh
+        sh tests/compiler/c0/run-core-basic-runtime-case.sh core-integer-subtract-overflow
 }
 
 core_target_constant_fallback_focused() {
@@ -362,7 +362,7 @@ core_target_constant_fallback_focused() {
     BUILD_DIR="$root/build/ci-core-target-constant-fallback" \
     RISCV_CC=riscv64-linux-gnu-gcc \
     QEMU_RISCV64=qemu-riscv64 \
-        sh tests/compiler/c0/run-core-target-constant-fallback.sh
+        sh tests/compiler/c0/run-core-basic-runtime-case.sh core-target-constant-fallback
 }
 
 core_integer_bitwise_not_focused() {
@@ -370,7 +370,7 @@ core_integer_bitwise_not_focused() {
     BUILD_DIR="$root/build/ci-core-integer-bitwise-not" \
     RISCV_CC=riscv64-linux-gnu-gcc \
     QEMU_RISCV64=qemu-riscv64 \
-        sh tests/compiler/c0/run-core-integer-bitwise-not.sh
+        sh tests/compiler/c0/run-core-basic-runtime-case.sh core-integer-bitwise-not
 }
 
 core_postfix_update_m24_focused() {

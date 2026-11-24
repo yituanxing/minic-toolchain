@@ -550,7 +550,33 @@ jobs:
               "docs/ci/workflow-deadrefs-and-verdict-2026-10-08.md",
               "docs/ci/workflow-liveness-artifact-audit-2026-10-09.md",
           }
-          if len(expected) != 670 or deleted != expected or changed != expected | metadata:
+          expected |= {
+              "tests/compiler/c0/run-core-condition-and.sh",
+              "tests/compiler/c0/run-core-fixed-call-scalar-conversions.sh",
+              "tests/compiler/c0/run-core-for-postincrement-m20.sh",
+              "tests/compiler/c0/run-core-global-scalar-memory.sh",
+              "tests/compiler/c0/run-core-integer-bitwise-and-assignment.sh",
+              "tests/compiler/c0/run-core-integer-bitwise-not.sh",
+              "tests/compiler/c0/run-core-integer-equality.sh",
+              "tests/compiler/c0/run-core-integer-or-shifts-m22.sh",
+              "tests/compiler/c0/run-core-logical-and-value.sh",
+              "tests/compiler/c0/run-core-nested-if-continuation.sh",
+              "tests/compiler/c0/run-core-integer-add-overflow.sh",
+              "tests/compiler/c0/run-core-integer-multiply-overflow.sh",
+              "tests/compiler/c0/run-core-integer-subtract-overflow.sh",
+              "tests/compiler/c0/run-core-pointer-condition-m21.sh",
+              "tests/compiler/c0/run-core-pointer-equality-qualifiers.sh",
+              "tests/compiler/c0/run-core-pointer-offset.sh",
+              "tests/compiler/c0/run-core-scalar-not-equal.sh",
+              "tests/compiler/c0/run-core-short-circuit-or.sh",
+              "tests/compiler/c0/run-core-scalar-assignment-implicit-void.sh",
+              "tests/compiler/c0/run-core-scalar-lvalue-bitcast.sh",
+              "tests/compiler/c0/run-core-opaque-inline-asm.sh",
+              "tests/compiler/c0/run-core-statement-expression.sh",
+              "tests/compiler/c0/run-core-target-constant-fallback.sh",
+          }
+          metadata.add("tests/compiler/c0/run-core-basic-runtime-case.sh")
+          if len(expected) != 693 or deleted != expected or changed != expected | metadata:
               raise SystemExit("RETIREMENT_SCOPE=FAIL: unexpected tree changes")
           files = [p.decode() for p in git("ls-files", "-z").split(b"\0") if p]
           candidates = {
@@ -1053,4 +1079,66 @@ jobs:
             fi
           done
           echo "CORE_RUNTIME_COMPARISON passed=$passed unchanged_baseline_fail=$baseline_failures"
+          git diff --exit-code
+
+      - name: Compare 23 original basic Core RV64 runtime drivers with the shared runner
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          export MINIC="$PWD/build/retirement-oracle/bin/minic" RISCV_CC=riscv64-linux-gnu-gcc QEMU_RISCV64=qemu-riscv64
+          work="$PWD/build/retirement-core-basic-runtime"
+          mkdir -p "$work"
+          passed=0
+          baseline_failures=0
+          for name in core-condition-and core-fixed-call-scalar-conversions core-for-postincrement-m20 core-global-scalar-memory core-integer-bitwise-and-assignment core-integer-bitwise-not core-integer-equality core-integer-or-shifts-m22 core-logical-and-value core-nested-if-continuation core-integer-add-overflow core-integer-multiply-overflow core-integer-subtract-overflow core-pointer-condition-m21 core-pointer-equality-qualifiers core-pointer-offset core-scalar-not-equal core-short-circuit-or core-scalar-assignment-implicit-void core-scalar-lvalue-bitcast core-opaque-inline-asm core-statement-expression core-target-constant-fallback; do
+            script="tests/compiler/c0/run-$name.sh"
+            test ! -e "$script"
+            git show 5469f94affcee826e39103582fb73d936f0aee76:"$script" > "$script"
+            export BUILD_DIR="$work/$name"
+            old_rc=0
+            sh "$script" > "$work/$name.old.stdout" 2> "$work/$name.old.stderr" || old_rc=$?
+            rm "$script"
+            mv "$BUILD_DIR" "$work/$name.old"
+            new_rc=0
+            sh tests/compiler/c0/run-core-basic-runtime-case.sh "$name" > "$work/$name.new.stdout" 2> "$work/$name.new.stderr" || new_rc=$?
+            test "$old_rc" -eq "$new_rc"
+            before="$work/$name.old"
+            # GCC/AS may leave a random temporary FILE symbol in otherwise
+            # identical linked ELFs. Require exact non-ELF bytes and file set;
+            # compare stripped ELF bytes and every symbol except the spelling
+            # of GCC's temporary cc*.o/cc*.s FILE entries on raw mismatch.
+            (cd "$before"; find . -type f | LC_ALL=C sort) > "$work/$name.old.files"
+            (cd "$BUILD_DIR"; find . -type f | LC_ALL=C sort) > "$work/$name.new.files"
+            cmp "$work/$name.old.files" "$work/$name.new.files"
+            while IFS= read -r file; do
+              if cmp -s "$before/$file" "$BUILD_DIR/$file"; then
+                continue
+              fi
+              case "$file" in
+                *.elf|*-rv64)
+                  echo "CORE_BASIC_RUNTIME_ELF_RAW_DIFF case=$name file=$file"
+                  riscv64-linux-gnu-objcopy --strip-all "$before/$file" "$work/old.stripped"
+                  riscv64-linux-gnu-objcopy --strip-all "$BUILD_DIR/$file" "$work/new.stripped"
+                  cmp "$work/old.stripped" "$work/new.stripped"
+                  riscv64-linux-gnu-readelf -Ws "$before/$file" > "$work/old.symbols.raw"
+                  riscv64-linux-gnu-readelf -Ws "$BUILD_DIR/$file" > "$work/new.symbols.raw"
+                  sed -E '/[[:space:]]FILE[[:space:]]/s@cc[[:alnum:]]+\.(o|s)$@<gcc-temporary>@' "$work/old.symbols.raw" > "$work/old.symbols"
+                  sed -E '/[[:space:]]FILE[[:space:]]/s@cc[[:alnum:]]+\.(o|s)$@<gcc-temporary>@' "$work/new.symbols.raw" > "$work/new.symbols"
+                  diff -u "$work/old.symbols" "$work/new.symbols"
+                  echo "CORE_BASIC_RUNTIME_ELF_NORMALIZED_EQUIVALENCE=PASS case=$name file=$file"
+                  ;;
+                *) cmp "$before/$file" "$BUILD_DIR/$file" ;;
+              esac
+            done < "$work/$name.old.files"
+            cmp "$work/$name.old.stdout" "$work/$name.new.stdout"
+            cmp "$work/$name.old.stderr" "$work/$name.new.stderr"
+            if test "$old_rc" -eq 0; then
+              passed=$((passed+1))
+              echo "CORE_BASIC_RUNTIME_EQUIVALENCE=PASS case=$name"
+            else
+              baseline_failures=$((baseline_failures+1))
+              echo "CORE_BASIC_RUNTIME_BASELINE_FAIL_UNCHANGED case=$name exit=$old_rc"
+            fi
+          done
+          echo "CORE_BASIC_RUNTIME_COMPARISON passed=$passed unchanged_baseline_fail=$baseline_failures"
           git diff --exit-code
