@@ -1,16 +1,13 @@
-Historical CI evidence, not active GitHub Actions entrypoints.
+Historical CI evidence is stored in Git, not in the current worktree.
 
-The complete pre-cleanup archive (321 YAML files) is preserved at immutable commit
-de72e2982e9576ec36a8110a371287300ed29937:
+The complete C59 archive (321 YAML files) is preserved at:
 https://github.com/yituanxing/minic-toolchain/tree/de72e2982e9576ec36a8110a371287300ed29937/.github/workflows-disabled
 
-Historical reports may cite a retired filename. Resolve it at that commit, not
-against the current checkout. The remaining local YAMLs are conservatively
-retained for literal references from active code/checks or the MiniPP wildcard.
-Do not remove those files without preserving the exact historical validation
-contract. An archived job is not current execution evidence.
+The final 68 definitions required by the legacy integrity guards are pinned at:
+https://github.com/yituanxing/minic-toolchain/tree/cd8786f4341c9de1049fe839fe37392b01faaa4a/.github/workflows-disabled
 
-The completed 20/120-object Kbuild transfer experiment bundles are preserved at
-https://github.com/yituanxing/minic-toolchain/tree/4b6048d5de48540c9e977d58e1e2c76fd757f341
-The local 120-object definition is retained only for the existing blob guard;
-its historical inputs are recoverable from that immutable tree.
+The M0 gate restores their exact Git blobs only while running historical
+integrity checks; it removes them afterwards. For a local legacy guard use
+  python3 tools/ci/historical_workflows.py run -- python3 tools/ci/check_minipp_frozen_convergence_v1.py
+The pinned commit must be available in the local Git history. No archived
+workflow is executable by GitHub Actions. Historical PASS is not current PASS.

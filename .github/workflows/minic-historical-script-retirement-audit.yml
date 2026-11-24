@@ -490,7 +490,16 @@ jobs:
               "tools/ci/linux-distributed-kbuild-objects20-v1.sh",
               "tools/ci/linux-three-isa-first-error-migration.py",
           }
-          if len(expected) != 558 or deleted != expected or changed != expected | metadata:
+          historical_snapshot = "cd8786f4341c9de1049fe839fe37392b01faaa4a"
+          historical_archives = {
+              p for p in git("ls-tree", "-r", "--name-only", historical_snapshot,
+                             "--", ".github/workflows-disabled/").decode().splitlines()
+              if p.endswith(".yml")
+          }
+          assert len(historical_archives) == 68
+          expected |= historical_archives
+          metadata |= {"tools/ci/historical_workflows.py", ".github/workflows/toolchain-m0-structure.yml"}
+          if len(expected) != 626 or deleted != expected or changed != expected | metadata:
               raise SystemExit("RETIREMENT_SCOPE=FAIL: unexpected tree changes")
           files = [p.decode() for p in git("ls-files", "-z").split(b"\0") if p]
           candidates = {
@@ -513,6 +522,46 @@ jobs:
           active, archived, docs = [], [], []
           consumers = defaultdict(set)
           dynamic_lines = []
+          # Only audited, pre-existing guard/trigger/comment lines may name a
+          # Git-only historical YAML. Current active YAMLs with the same basename
+          # remain untouched. New consumers or modified reference lines still fail.
+          archive_consumers = {
+              ".github/workflows/linux-core-all3352.yml",
+              ".github/workflows/linux-legacy-tag-router-v1.yml",
+              ".github/workflows/linux-runtime-fdt-isolation-v1.yml",
+              ".github/workflows/linux-runtime-spinlock-context-v0.yml",
+              ".github/workflows/minipp-linux-frozen-v1.yml",
+              ".github/workflows/toolchain-focused-regressions-v1.yml",
+              ".github/workflows/toolchain-m0-structure.yml",
+              "tools/ci/audit_active_workflow_routing_v1.py",
+              "tools/ci/check_ci_miniobjcopy_elf_route_v1.py",
+              "tools/ci/check_ci_regression_path_isolation_v1.py",
+              "tools/ci/check_ci_trigger_coverage_v1.py",
+              "tools/ci/check_early_runtime_dispatch_v1.py",
+              "tools/ci/check_linux_core_3352_first500_union_v1.py",
+              "tools/ci/check_linux_early_runtime_union_v1.py",
+              "tools/ci/check_linux_efi_vdso_convergence_v1.py",
+              "tools/ci/check_linux_expanded_pi_p1_convergence_v1.py",
+              "tools/ci/check_linux_legacy_tag_router_v1.py",
+              "tools/ci/check_linux_perf_optin_convergence_v1.py",
+              "tools/ci/check_linux_runtime_contract_oracles_convergence_v1.py",
+              "tools/ci/check_linux_runtime_diagnostic_union_v1.py",
+              "tools/ci/check_linux_runtime_fdt_kallsyms_union_v1.py",
+              "tools/ci/check_linux_runtime_fixture_producers_convergence_v1.py",
+              "tools/ci/check_linux_runtime_fixture_restore_v1.py",
+              "tools/ci/check_linux_runtime_focused_faults_convergence_v1.py",
+              "tools/ci/check_linux_runtime_frontier_diagnostics_convergence_v1.py",
+              "tools/ci/check_minias_semantic_convergence_v1.py",
+              "tools/ci/check_minild_integration_convergence_v1.py",
+              "tools/ci/check_minipp_frozen_convergence_v1.py",
+              "tools/ci/check_minipp_live_frozen_merge_v1.py",
+              "tools/ci/check_runtime_focused_owner_convergence_v1.py",
+          }
+          archive_reference_lines = {
+              p: set(git("show", historical_snapshot + ":" + p).decode().splitlines())
+              for p in archive_consumers
+          }
+          pinned_refs = []
           scanned = 0
           for path in files:
               if path == audit:
@@ -530,6 +579,11 @@ jobs:
                   found = set(rx.findall(line))
                   hits = {p for n in found for p in targets[n] if p != path}
                   removed = (hits & deleted) | {p for p in shared_fixtures if p in line}
+                  if path in archive_reference_lines and line in archive_reference_lines[path]:
+                      pinned = removed & historical_archives
+                      if pinned:
+                          pinned_refs.append(f"{path}:{num}: " + ", ".join(sorted(pinned)))
+                          removed -= pinned
                   if removed or broad.search(line):
                       record = f"{path}:{num}: " + (", ".join(sorted(removed)) if removed else "possible dynamic path")
                       (archived if historical else docs if document else active).append(record)
@@ -541,6 +595,7 @@ jobs:
               print(f"{label}_REFERENCES={len(items)}")
               for item in items:
                   print(item)
+          print(f"PINNED_ARCHIVE_REFERENCES={len(pinned_refs)}")
           print(f"RETIREMENT_SCOPE=PASS deleted={len(deleted)} retained_text_scanned={scanned}")
           counts = Counter()
           for p, group in sorted(candidates.items()):
@@ -653,6 +708,7 @@ jobs:
               subprocess.run(["git", "worktree", "add", "--detach", str(worktree), baseline], check=True)
               try:
                   root = pathlib.Path.cwd()
+                  subprocess.run(["python3", "tools/ci/historical_workflows.py", "restore"], check=True)
                   def execute(where, path):
                       env = dict(os.environ)
                       env["GITHUB_REF_NAME"] = "agent/linux-expanded-kbuild-v0"
@@ -678,6 +734,7 @@ jobs:
                   if regressions:
                       raise SystemExit("GUARD_COMPARISON=FAIL")
               finally:
+                  subprocess.run(["python3", "tools/ci/historical_workflows.py", "clean"], check=True)
                   subprocess.run(["git", "worktree", "remove", "--force", str(worktree)], check=True)
           PY
       - name: Compare nine original and shared compile-only test drivers

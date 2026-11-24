@@ -7,6 +7,7 @@ on:
     branches:
       - "agent/linux-expanded-kbuild-v0"
     paths:
+      - 'tools/ci/historical_workflows.py'
       - 'tools/ci/test_linux_runtime_object_set_v1.py'
       - 'tools/ci/check_linux_runtime_fixture_restore_v1.py'
       - 'tools/ci/check_linux_expanded_pi_p1_convergence_v1.py'
@@ -110,6 +111,11 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Materialize pinned historical integrity inputs
+        run: python3 tools/ci/historical_workflows.py restore
 
       - name: Verify four approved remote branch refs
         run: |
@@ -546,3 +552,7 @@ jobs:
           build/debug/bin/minic -S "$work/input.i" -o "$work/minic-compat.s"
           cmp "$work/minic-cc.s" "$work/minic-compat.s"
           echo "M0_COMPILER_CLI_IDENTITY=PASS boundary=.i-to-.s driver_compat=PASS"
+
+      - name: Remove materialized historical integrity inputs
+        if: always()
+        run: python3 tools/ci/historical_workflows.py clean
