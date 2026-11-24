@@ -234,6 +234,12 @@ jobs:
         run: |
           MINIC_CC="$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc" \
             HOST_CC=cc bash tests/compiler/c0/run-parser-probe-hash-ownership.sh
+      - name: Flat and recursive global payload regression
+        run: |
+          MINIC_CC="$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc" \
+            HOST_CC=cc bash tests/compiler/c0/probe-flat-global-payload.sh
+          MINIC_CC="$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc" \
+            HOST_CC=cc bash tests/compiler/c0/probe-gnu-nested-union-compound-record-array.sh
       - name: Source-free record layout and five-target GNU empty record differential
         run: |
           make MODE=release CFLAGS=-Werror BUILD_DIR=build/minic-native-backend \

@@ -1689,3 +1689,9 @@ Target 审阅 manifest 260（113 条保留的 stale blob）、完整后端边界
 父基线 `8c176568`，保留原 AST 实体所有权、Parser cache_owner 和各缓存字段。函数、全局对象、typedef 三套 open-addressing 插入、扩容/重建、增量同步、查找、线性回退收敛至一个私有 header；各语义入口仍独立。保留历史哈希 seed、首次声明优先、typedef block-scope 排除、typedef 不一致回退、探针计数与 speculative parser 禁止修改借用缓存规则。enum newest-first 不强行合并。对函数极端计数乘法增加与 global 同样的溢出防护。
 
 生产源码移除三套独立算法，新增一个私有算法实现，净 -279 行。原有 parser probe ownership 测试不删；扩大到 80 组函数/全局对象/typedef、重复声明与局部遮蔽，在已有 Native Strict Gate 上运行五目标源码验收和 GNU/MiniC x86 runtime。不是五目标 runtime 证明。验收需读取此提交 CI，不以父提交结果替代。
+
+## 批次 C47：全局扁平记录序列化归一（2026-11-24）
+
+基线 `b9b8e9b2`。审查 global_payload 全部路径及静态/运行时初始化、Core ModuleIR 入库边界。flat record array 的唯一调用者已将所有 record/array member 排除，因此其私有 nested-union 分支不可达；nested union 仍由 recursive aggregate walker 负责。合并 standalone record 和 record-array 的字段序列化，保留 DataLayout、scalar width gate、bitfield packer、独立 relocation kind、尾部整记录 zero-fill 和 zero callback boundary；不删除 recursive shape validation（其对 union 所有候选成员的验证不同于 selected-member traversal）。净 -70 行生产代码。
+
+新增 flat/global payload 五目标汇编生成与 GNU/MiniC x86 runtime 回归，并将既有 nested union regression 接入现有 native gate。C46 新增 name-cache probe/native gate/four-arch runtime 已通过；本批动态验证待执行。不把静态审查称为正确性证明。

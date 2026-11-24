@@ -141,15 +141,80 @@ static bool minic_multi_visit_relocatable_scalar_array(
 }
 
 
+/* Flat records contain scalar fields only (plus bitfields in record arrays).
+ * Nested aggregates and union selection belong exclusively to the recursive
+ * walker. Preserve the historical relocation kinds and padding boundaries:
+ * a standalone record permits RECORD_FIELD; array fields use AGGREGATE_SCALAR. */
+static bool minic_multi_visit_flat_record_fields(
+    const MinicMultiGlobalPayloadSink *sink, const MinicC0Program *program,
+    const MinicTargetInvocation *target, const MinicGlobalObject *object,
+    const MinicRecord *record, size_t storage_size, bool array_element,
+    size_t *initializer_index, size_t *relocation_index) {
+    size_t field_index, cursor = 0U;
+    for (field_index = 0U; field_index < record->field_count; ++field_index) {
+        const MinicRecordField *field = minic_c0_record_field(record, field_index);
+        MinicPayloadRecordFieldShape shape;
+        const MinicGlobalRelocation *reloc =
+            *relocation_index < object->relocation_count
+                ? &object->relocations[*relocation_index] : NULL;
+        size_t offset, width, alignment;
+        if (array_element && field != NULL && field->is_bit_field) {
+            if (!minic_multi_visit_record_bit_field_run(
+                    sink, program, target, object, record, record->field_count,
+                    storage_size, &field_index, initializer_index,
+                    relocation_index, &cursor))
+                return false;
+            continue;
+        }
+        if (field == NULL || field->is_bit_field ||
+            !minic_payload_record_field_shape(program, field, &shape) ||
+            shape.is_flexible || shape.is_zero_length || shape.traversal_count != 1U ||
+            (!minic_type_is_integer(field->type) &&
+             !minic_type_is_pointer(field->type) &&
+             !minic_type_is_float(field->type) &&
+             !minic_type_is_double(field->type)) ||
+            !minic_data_layout_type(target, program, field->type, &width, &alignment) ||
+            !minic_data_layout_record_field_offset(
+                target, program, record, field_index, &offset) ||
+            !minic_payload_scalar_width_supported(width) ||
+            offset < cursor || offset > storage_size ||
+            width > storage_size - offset ||
+            *initializer_index >= object->initializer_count ||
+            !minic_payload_zero(sink, offset - cursor))
+            return false;
+        (void)alignment;
+        if (reloc != NULL &&
+            (reloc->location_kind == MINIC_GLOBAL_RELOCATION_LOCATION_AGGREGATE_SCALAR ||
+             (!array_element &&
+              reloc->location_kind == MINIC_GLOBAL_RELOCATION_LOCATION_RECORD_FIELD)) &&
+            reloc->location_index == *initializer_index) {
+            if ((!minic_type_is_pointer(field->type) &&
+                 !minic_type_is_integer(field->type)) ||
+                object->initializer_values[*initializer_index] != 0U ||
+                !minic_payload_relocation(sink, reloc, width))
+                return false;
+            ++*relocation_index;
+        } else if (!minic_payload_bits(sink, field->type, width,
+                                       object->initializer_values[*initializer_index]))
+            return false;
+        /* The old flat-array path also emitted zero trailing field padding.
+         * Preserve even that callback boundary for non-ModuleIR sinks. */
+        if (array_element && !minic_payload_zero(sink, 0U)) return false;
+        ++*initializer_index;
+        cursor = offset + width;
+    }
+    return (array_element || *relocation_index == object->relocation_count) &&
+           cursor <= storage_size && minic_payload_zero(sink, storage_size - cursor);
+}
+
 static bool minic_multi_visit_flat_record_array(
     const MinicMultiGlobalPayloadSink *sink, const MinicC0Program *program,
     const MinicTargetInvocation *target, const MinicGlobalObject *object,
     size_t storage_size) {
     const MinicArrayType *array;
     const MinicRecord *record;
-    size_t record_bytes, record_align, element, field_index;
+    size_t record_bytes, record_align, element;
     size_t initializer_index = 0U, relocation_index = 0U;
-    size_t matched_union_selections = 0U;
     if (!minic_payload_sink_valid(sink) || program == NULL || target == NULL ||
         target->machine.data_layout == NULL || object == NULL) return false;
     if (!minic_type_is_array(object->type)) return false;
@@ -171,114 +236,18 @@ static bool minic_multi_visit_flat_record_array(
         return false;
     (void)record_align;
     for (element = 0U; element < array->element_count; ++element) {
-        size_t cursor = 0U;
-        /* All absent trailing records are C-zero-initialized, including
-         * internal pointer fields and padding.  Do not index an absent
-         * flattened slot; the complete extent still comes from DataLayout.
-         * Any relocation accidentally targeting this tail is rejected by
-         * the final relocation-consumption check below. */
+        /* Missing whole records are zero-filled, not fabricated scalar slots. */
         if (element >= object->initializer_count / record->field_count) {
-            if (!minic_payload_zero(sink, record_bytes))
-                return false;
-            continue;
-        }
-        for (field_index = 0U; field_index < record->field_count; ++field_index) {
-            const MinicRecordField *field = minic_c0_record_field(record, field_index);
-            MinicPayloadRecordFieldShape field_shape;
-            const MinicGlobalRelocation *reloc =
-                relocation_index < object->relocation_count
-                    ? &object->relocations[relocation_index] : NULL;
-            size_t offset, field_bytes, field_align;
-            MinicType emitted_type;
-            size_t emitted_bytes, emitted_alignment, emitted_offset = 0U;
-            /* The flattened record-array fast path uses the same checked
-             * DataLayout bitfield packer as recursive records and RV64.
-             * This removes its independent <=64-bit/byte-aligned algorithm. */
-            if (field != NULL && field->is_bit_field) {
-                if (!minic_multi_visit_record_bit_field_run(
-                        sink, program, target, object, record, record->field_count,
-                        record_bytes, &field_index, &initializer_index,
-                        &relocation_index, &cursor))
-                    return false;
-                continue;
-            }
-            if (field == NULL || field->is_bit_field ||
-                !minic_payload_record_field_shape(program, field, &field_shape) ||
-                field_shape.is_flexible || field_shape.is_zero_length ||
-                field_shape.traversal_count != 1U ||
-                minic_type_is_array(field->type) ||
-                !minic_data_layout_type(target, program, field->type,
-                                        &field_bytes, &field_align) ||
-                !minic_data_layout_record_field_offset(target, program,
-                                                       record, field_index, &offset) ||
-                offset < cursor || offset > record_bytes ||
-                field_bytes > record_bytes - offset ||
-                !minic_payload_zero(sink, offset - cursor))
-                return false;
-            (void)field_align;
-            emitted_type = field->type;
-            if (minic_type_is_record(field->type)) {
-                const MinicRecord *nested = minic_c0_program_record(
-                    program, field->type.record_id);
-                const MinicRecordField *member;
-                MinicPayloadRecordFieldShape member_shape;
-                size_t selected = 0U, selection_span = 0U;
-                if (nested == NULL || !nested->is_complete || !nested->is_union ||
-                    nested->field_count == 0U) return false;
-                if (minic_c0_global_object_union_member_selection(
-                        program, object, initializer_index, field->type.record_id,
-                        &selected)) {
-                    if (!minic_c0_global_object_union_member_initializer_span(
-                            program, object, initializer_index, field->type.record_id,
-                            &selection_span) ||
-                        (selection_span != 0U && selection_span != 1U)) return false;
-                    ++matched_union_selections;
-                }
-                if (selected >= nested->field_count) return false;
-                member = minic_c0_record_field(nested, selected);
-                if (member == NULL || member->is_bit_field ||
-                    !minic_payload_record_field_shape(program, member, &member_shape) ||
-                    member_shape.is_flexible || member_shape.is_zero_length ||
-                    member_shape.traversal_count != 1U ||
-                    minic_type_is_array(member->type) ||
-                    !minic_data_layout_record_field_offset(
-                        target, program, nested, selected, &emitted_offset) ||
-                    emitted_offset != 0U) return false;
-                emitted_type = member->type;
-            }
-            if ((!minic_type_is_integer(emitted_type) &&
-                 !minic_type_is_pointer(emitted_type) &&
-                 !minic_type_is_float(emitted_type) &&
-                 !minic_type_is_double(emitted_type)) ||
-                !minic_data_layout_type(target, program, emitted_type,
-                                        &emitted_bytes, &emitted_alignment) ||
-                !minic_payload_scalar_width_supported(emitted_bytes) ||
-                emitted_bytes > field_bytes) return false;
-            (void)emitted_alignment;
-            if (reloc != NULL &&
-                reloc->location_kind == MINIC_GLOBAL_RELOCATION_LOCATION_AGGREGATE_SCALAR &&
-                reloc->location_index == initializer_index) {
-                if (object->initializer_values[initializer_index] != 0U ||
-                    (!minic_type_is_pointer(emitted_type) &&
-                     !minic_type_is_integer(emitted_type)) ||
-                    !minic_payload_relocation(sink, reloc, emitted_bytes))
-                    return false;
-                ++relocation_index;
-            } else if (!minic_payload_bits(sink, emitted_type, emitted_bytes,
-                                           object->initializer_values[initializer_index])) {
-                return false;
-            }
-            if (!minic_payload_zero(sink, field_bytes - emitted_bytes))
-                return false;
-            ++initializer_index;
-            cursor = offset + field_bytes;
-        }
-        if (!minic_payload_zero(sink, record_bytes - cursor))
+            if (!minic_payload_zero(sink, record_bytes)) return false;
+        } else if (!minic_multi_visit_flat_record_fields(
+                       sink, program, target, object, record, record_bytes, true,
+                       &initializer_index, &relocation_index)) {
             return false;
+        }
     }
     return initializer_index == object->initializer_count &&
            relocation_index == object->relocation_count &&
-           matched_union_selections == object->union_selection_count;
+           object->union_selection_count == 0U;
 }
 
 
@@ -894,7 +863,7 @@ static bool minic_multi_visit_flat_record_global(
     const MinicC0Program *program, const MinicTargetInvocation *target,
     const MinicGlobalObject *obj, size_t storage_size) {
     const MinicRecord *record;
-    size_t i, cursor = 0U, reloc_index = 0U;
+    size_t initializer_index = 0U, relocation_index = 0U;
     if (!minic_payload_sink_valid(sink) || program == NULL || target == NULL ||
         target->machine.data_layout == NULL || obj == NULL) return false;
     record = minic_c0_program_record(program, obj->type.record_id);
@@ -902,49 +871,10 @@ static bool minic_multi_visit_flat_record_global(
         record->field_count == 0U ||
         record->field_count != obj->initializer_count ||
         obj->initializer_values == NULL) return false;
-    for (i = 0U; i < record->field_count; ++i) {
-        const MinicRecordField *field = minic_c0_record_field(record, i);
-        MinicPayloadRecordFieldShape field_shape;
-        const MinicGlobalRelocation *reloc =
-            reloc_index < obj->relocation_count
-                ? &obj->relocations[reloc_index] : NULL;
-        size_t offset, width, alignment;
-        if (field == NULL || field->is_bit_field ||
-            !minic_payload_record_field_shape(program, field, &field_shape) ||
-            field_shape.is_flexible || field_shape.is_zero_length ||
-            field_shape.traversal_count != 1U ||
-            (!minic_type_is_integer(field->type) &&
-             !minic_type_is_pointer(field->type) &&
-             !minic_type_is_float(field->type) &&
-             !minic_type_is_double(field->type)) ||
-            !minic_data_layout_type(target, program,
-                                    field->type, &width, &alignment) ||
-            !minic_data_layout_record_field_offset(
-                target, program, record, i, &offset) ||
-            (width != 1U && width != 2U && width != 4U && width != 8U) ||
-            offset < cursor || offset > storage_size ||
-            width > storage_size - offset ||
-            !minic_payload_zero(sink, offset - cursor))
-            return false;
-        (void)alignment;
-        if (reloc != NULL &&
-            (reloc->location_kind == MINIC_GLOBAL_RELOCATION_LOCATION_RECORD_FIELD ||
-             reloc->location_kind == MINIC_GLOBAL_RELOCATION_LOCATION_AGGREGATE_SCALAR) &&
-            reloc->location_index == i) {
-            if ((!minic_type_is_pointer(field->type) &&
-                 !minic_type_is_integer(field->type)) ||
-                obj->initializer_values[i] != 0U ||
-                !minic_payload_relocation(sink, reloc, width))
-                return false;
-            ++reloc_index;
-        } else if (!minic_payload_bits(sink, field->type, width,
-                                       obj->initializer_values[i]))
-            return false;
-        cursor = offset + width;
-    }
-    return reloc_index == obj->relocation_count &&
-           cursor <= storage_size &&
-           minic_payload_zero(sink, storage_size - cursor);
+    return minic_multi_visit_flat_record_fields(
+               sink, program, target, obj, record, storage_size, false,
+               &initializer_index, &relocation_index) &&
+           relocation_index == obj->relocation_count;
 }
 
 
