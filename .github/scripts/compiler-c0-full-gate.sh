@@ -471,9 +471,9 @@ linenoise_driven_focused() {
         run-zero-aggregate-null.sh \
         run-record-local-initializers.sh \
         compile:multiply-assignment \
-        run-static-local-string-arrays.sh \
+        compile:static-local-string-arrays \
         run-external-pointer-definitions.sh \
-        run-adjacent-string-literals.sh \
+        compile:adjacent-string-literals \
         compile:global-pointer-subscripts; do
         MINIC="$root/build/ci-debug/bin/minic" \
         HOST_CC=cc \

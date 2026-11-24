@@ -18,14 +18,14 @@ for test_script in \
     run-external-array-declarator-routing.sh \
     run-extern-parenthesized-functions.sh \
     run-anonymous-record-field-types.sh \
-    run-typedef-enum-definitions.sh \
+    compile:typedef-enum-definitions \
     run-enum-constant-expressions.sh \
     run-enum-constant-scopes.sh \
     run-integer-constant-bitwise.sh \
-    run-unsigned-64-literals.sh \
+    compile:unsigned-64-literals \
     run-builtin-va-list.sh \
     run-aarch64-builtin-va-list-declaration.sh \
-    run-restrict-qualifiers.sh \
+    compile:restrict-qualifiers \
     compile:gnu-extension-declaration \
     compile:builtin-expect \
     compile:builtin-memcpy-call \
@@ -36,14 +36,14 @@ for test_script in \
     run-gnu-visible-extern-arrays.sh \
     run-gnu-aligned-record-fields.sh \
     run-gnu-zero-length-record-arrays.sh \
-    run-record-forward-declarations.sh \
+    compile:record-forward-declarations \
     compile:record-multi-declarators \
     run-xgene-parenthesized-pointer-record-field.sh \
-    run-record-typedef-array-fields.sh \
+    compile:record-typedef-array-fields \
     compile:volatile-qualifiers \
     compile:array-bound-sizeof \
     compile:array-bound-integer-casts \
-    run-record-multidimensional-arrays.sh \
+    compile:record-multidimensional-arrays \
     compile:record-length-one-arrays \
     run-pointer-compound-subtraction.sh \
     run-builtin-offsetof.sh \
@@ -55,7 +55,7 @@ for test_script in \
     run-mixed-double-arithmetic.sh \
     run-conditional-pointer-qualifiers.sh \
     compile:comma-operator \
-    run-top-level-comma-conditions.sh \
+    compile:top-level-comma-conditions \
     compile:cast-type-classification \
     run-stack-fixed-arguments.sh \
     run-static-local-record-initializers.sh \
@@ -98,8 +98,8 @@ for test_script in \
     run-block-scope-record-tags.sh \
     compile:block-scope-extern-function-attributes \
     run-gnu-void-pointer-arithmetic.sh \
-    run-gnu-statement-expression.sh \
-    run-gnu-void-function-pointer-assignment.sh \
+    compile:gnu-statement-expression \
+    compile:gnu-void-function-pointer-assignment \
     compile:gnu-no-profile-function-attribute \
     compile:gnu-typeof-array-type-name \
     compile:gnu-typeof-array-bound-cast \
@@ -108,7 +108,7 @@ for test_script in \
     run-gnu-array-range-initializer.sh \
     run-gnu-record-compound-literal.sh \
     run-gnu-static-local-implicit-zero.sh \
-    run-gnu-top-level-empty-declaration.sh \
+    compile:gnu-top-level-empty-declaration \
     run-gnu-object-alignment-attribute.sh \
     run-gnu-auto-type-local.sh \
     compile:gnu-local-interleaved-informational-attribute \
@@ -116,7 +116,7 @@ for test_script in \
     run-gnu-local-label-address.sh \
     run-gnu-inline-asm-fence.sh \
     compile:gnu-typeof-local-declaration \
-    run-gnu-inline-asm-readwrite-output.sh \
+    compile:gnu-inline-asm-readwrite-output \
     run-gnu-inline-asm-operands.sh \
     run-gnu-inline-asm-named-operands.sh \
     run-gnu-inline-asm-goto.sh \
@@ -130,7 +130,7 @@ for test_script in \
     run-static-assert-declaration.sh \
     compile:gnu-choose-expr-bitfield \
     run-builtin-clzll.sh \
-    run-alignof-type-query.sh \
+    compile:alignof-type-query \
     run-rv64-integer-aggregate-return.sh \
     run-unnamed-bit-fields.sh \
     run-gnu-overflow-builtins.sh \
@@ -138,7 +138,7 @@ for test_script in \
     compile:function-linkage-inheritance \
     run-static-prefix-object-attributes.sh \
     run-extern-incomplete-record-object.sh \
-    run-extern-function-pointer-object.sh \
+    compile:extern-function-pointer-object \
     run-extern-interleaved-function-attributes.sh \
     run-shared-function-declarator.sh \
     run-gnu-incomplete-record-function-signature.sh \

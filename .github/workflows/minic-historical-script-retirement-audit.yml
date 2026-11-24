@@ -601,7 +601,33 @@ jobs:
               "tests/compiler/c0/run-gnu-typeof-local-declaration.sh",
           }
           metadata |= {"tests/compiler/c0/run-compile-only-case.sh", "tests/compiler/c0/run.sh"}
-          if len(expected) != 715 or deleted != expected or changed != expected | metadata:
+          expected |= {
+              "tests/compiler/c0/run-record-forward-declarations.sh",
+              "tests/compiler/c0/run-record-multidimensional-arrays.sh",
+              "tests/compiler/c0/run-record-typedef-array-fields.sh",
+              "tests/compiler/c0/run-restrict-qualifiers.sh",
+              "tests/compiler/c0/run-static-local-string-arrays.sh",
+              "tests/compiler/c0/run-static-record-array-member-designator.sh",
+              "tests/compiler/c0/run-static-storage-scalar-array-owner.sh",
+              "tests/compiler/c0/run-parenthesized-array-declarator.sh",
+              "tests/compiler/c0/run-parenthesized-comma-expressions.sh",
+              "tests/compiler/c0/run-pointer-subtract-assignments.sh",
+              "tests/compiler/c0/run-top-level-comma-conditions.sh",
+              "tests/compiler/c0/run-typedef-enum-definitions.sh",
+              "tests/compiler/c0/run-unsigned-64-literals.sh",
+              "tests/compiler/c0/run-variadic-function-pointer-cast.sh",
+              "tests/compiler/c0/run-volatile-parameter.sh",
+              "tests/compiler/c0/run-gnu-statement-expression.sh",
+              "tests/compiler/c0/run-gnu-top-level-empty-declaration.sh",
+              "tests/compiler/c0/run-adjacent-string-literals.sh",
+              "tests/compiler/c0/run-alignof-type-query.sh",
+              "tests/compiler/c0/run-block-scope-typedef.sh",
+              "tests/compiler/c0/run-extern-function-pointer-object.sh",
+              "tests/compiler/c0/run-gnu-inline-asm-eight-operands.sh",
+              "tests/compiler/c0/run-gnu-inline-asm-readwrite-output.sh",
+              "tests/compiler/c0/run-gnu-void-function-pointer-assignment.sh",
+          }
+          if len(expected) != 739 or deleted != expected or changed != expected | metadata:
               raise SystemExit("RETIREMENT_SCOPE=FAIL: unexpected tree changes")
           files = [p.decode() for p in git("ls-files", "-z").split(b"\0") if p]
           candidates = {
@@ -1202,7 +1228,7 @@ jobs:
           echo "CORE_BASIC_RUNTIME_COMPARISON passed=$passed unchanged_baseline_fail=$baseline_failures"
           git diff --exit-code
 
-      - name: Compare 22 additional original positive compile-only drivers
+      - name: Compare 46 additional original positive compile-only drivers
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -1211,10 +1237,14 @@ jobs:
           mkdir -p "$work"
           passed=0
           baseline_failures=0
-          for name in array-bound-integer-casts bitwise-and-assignment-expressions block-scope-extern-function-attributes builtin-expect cast-type-classification comma-operator extern-multi-declarators extern-multidimensional-array extern-objects external-pointer-arrays function-linkage-inheritance function-pointer-parameters function-type-typedefs global-pointer-subscripts gnu-extension-declaration gnu-extension-prefix-declarations gnu-format-cold-attributes gnu-function-visibility gnu-local-object-alignment gnu-signed-keyword gnu-typeof-array-bound-cast gnu-typeof-local-declaration; do
+          for name in array-bound-integer-casts bitwise-and-assignment-expressions block-scope-extern-function-attributes builtin-expect cast-type-classification comma-operator extern-multi-declarators extern-multidimensional-array extern-objects external-pointer-arrays function-linkage-inheritance function-pointer-parameters function-type-typedefs global-pointer-subscripts gnu-extension-declaration gnu-extension-prefix-declarations gnu-format-cold-attributes gnu-function-visibility gnu-local-object-alignment gnu-signed-keyword gnu-typeof-array-bound-cast gnu-typeof-local-declaration record-forward-declarations record-multidimensional-arrays record-typedef-array-fields restrict-qualifiers static-local-string-arrays static-record-array-member-designator static-storage-scalar-array-owner parenthesized-array-declarator parenthesized-comma-expressions pointer-subtract-assignments top-level-comma-conditions typedef-enum-definitions unsigned-64-literals variadic-function-pointer-cast volatile-parameter gnu-statement-expression gnu-top-level-empty-declaration adjacent-string-literals alignof-type-query block-scope-typedef extern-function-pointer-object gnu-inline-asm-eight-operands gnu-inline-asm-readwrite-output gnu-void-function-pointer-assignment; do
             script="tests/compiler/c0/run-$name.sh"
             test ! -e "$script"
-            git show c80bb1cc7c6abaecc1e42665bfef60774fc18e1c:"$script" > "$script"
+            case "$name" in
+              record-forward-declarations|record-multidimensional-arrays|record-typedef-array-fields|restrict-qualifiers|static-local-string-arrays|static-record-array-member-designator|static-storage-scalar-array-owner|parenthesized-array-declarator|parenthesized-comma-expressions|pointer-subtract-assignments|top-level-comma-conditions|typedef-enum-definitions|unsigned-64-literals|variadic-function-pointer-cast|volatile-parameter|gnu-statement-expression|gnu-top-level-empty-declaration|adjacent-string-literals|alignof-type-query|block-scope-typedef|extern-function-pointer-object|gnu-inline-asm-eight-operands|gnu-inline-asm-readwrite-output|gnu-void-function-pointer-assignment) snapshot=8f3c6696bfb2a957891a25883acde49ef2edfa21 ;;
+              *) snapshot=c80bb1cc7c6abaecc1e42665bfef60774fc18e1c ;;
+            esac
+            git show "$snapshot:$script" > "$script"
             export BUILD_DIR="$work/$name"
             old_rc=0
             sh "$script" > "$work/$name.old.stdout" 2> "$work/$name.old.stderr" || old_rc=$?
@@ -1228,11 +1258,11 @@ jobs:
             cmp "$work/$name.old.stderr" "$work/$name.new.stderr"
             if test "$old_rc" -eq 0; then
               passed=$((passed+1))
-              echo "BATCH22_COMPILE_EQUIVALENCE=PASS case=$name"
+              echo "BATCH46_COMPILE_EQUIVALENCE=PASS case=$name"
             else
               baseline_failures=$((baseline_failures+1))
-              echo "BATCH22_COMPILE_BASELINE_FAIL_UNCHANGED case=$name exit=$old_rc"
+              echo "BATCH46_COMPILE_BASELINE_FAIL_UNCHANGED case=$name exit=$old_rc"
             fi
           done
-          echo "BATCH22_COMPILE_COMPARISON passed=$passed unchanged_baseline_fail=$baseline_failures"
+          echo "BATCH46_COMPILE_COMPARISON passed=$passed unchanged_baseline_fail=$baseline_failures"
           git diff --exit-code

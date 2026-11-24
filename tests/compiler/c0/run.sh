@@ -641,13 +641,13 @@ BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
 sh "$root/tests/compiler/c0/run-builtin-va-copy.sh"
 
 MINIC="$minic" HOST_CC="$host_cc" BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
-  sh "$root/tests/compiler/c0/run-static-storage-scalar-array-owner.sh"
+  sh "$root/tests/compiler/c0/run-compile-only-case.sh" static-storage-scalar-array-owner
 
 
 MINIC="$minic" \
 HOST_CC="$host_cc" \
 BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
-sh "$root/tests/compiler/c0/run-static-record-array-member-designator.sh"
+sh "$root/tests/compiler/c0/run-compile-only-case.sh" static-record-array-member-designator
 
 MINIC="$minic" \
 BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
@@ -716,7 +716,7 @@ sh "$root/tests/compiler/c0/run-static-floating-aggregate.sh"
 MINIC="$minic" \
 HOST_CC="$host_cc" \
 BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
-sh "$root/tests/compiler/c0/run-variadic-function-pointer-cast.sh"
+sh "$root/tests/compiler/c0/run-compile-only-case.sh" variadic-function-pointer-cast
 MINIC="$minic" \
 HOST_CC="$host_cc" \
 BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
@@ -725,12 +725,12 @@ sh "$root/tests/compiler/c0/run-nested-function-pointer-type-name.sh"
 MINIC="$minic" \
 HOST_CC="$host_cc" \
 BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
-sh "$root/tests/compiler/c0/run-block-scope-typedef.sh"
+sh "$root/tests/compiler/c0/run-compile-only-case.sh" block-scope-typedef
 
 MINIC="$minic" \
 HOST_CC="$host_cc" \
 BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
-sh "$root/tests/compiler/c0/run-volatile-parameter.sh"
+sh "$root/tests/compiler/c0/run-compile-only-case.sh" volatile-parameter
 
 MINIC="$minic" \
 HOST_CC="$host_cc" \
@@ -740,4 +740,4 @@ sh "$root/tests/compiler/c0/run-float-binary-arithmetic.sh"
 MINIC="$minic" \
 HOST_CC="$host_cc" \
 BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
-sh "$root/tests/compiler/c0/run-parenthesized-array-declarator.sh"
+sh "$root/tests/compiler/c0/run-compile-only-case.sh" parenthesized-array-declarator
