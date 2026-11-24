@@ -465,6 +465,7 @@ jobs:
               "tests/compiler/c0/run-builtin-memcpy-call.sh",
               "tests/compiler/c0/run-builtin-memset-call.sh",
           }
+          metadata |= {".github/scripts/compiler-c0-full-gate.sh", "tests/compiler/c0/run-foundation-focused.sh"}
           if len(expected) != 539 or deleted != expected or changed != expected | metadata:
               raise SystemExit("RETIREMENT_SCOPE=FAIL: unexpected tree changes")
           files = [p.decode() for p in git("ls-files", "-z").split(b"\0") if p]

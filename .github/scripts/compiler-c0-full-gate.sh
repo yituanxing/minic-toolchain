@@ -448,6 +448,13 @@ runtime_record_fam_prefix_focused() {
         sh tests/compiler/c0/run-gnu-record-compound-literal.sh
 }
 
+run_c0_gate_case() {
+    case "$1" in
+        compile:*) sh "$root/tests/compiler/c0/run-compile-only-case.sh" "${1#compile:}" ;;
+        *) sh "$root/tests/compiler/c0/$1" ;;
+    esac
+}
+
 linenoise_driven_focused() {
     local script
     for script in \
@@ -463,7 +470,7 @@ linenoise_driven_focused() {
         run-record-copy-array-members.sh \
         run-zero-aggregate-null.sh \
         run-record-local-initializers.sh \
-        run-multiply-assignment.sh \
+        compile:multiply-assignment \
         run-static-local-string-arrays.sh \
         run-external-pointer-definitions.sh \
         run-adjacent-string-literals.sh \
@@ -471,7 +478,7 @@ linenoise_driven_focused() {
         MINIC="$root/build/ci-debug/bin/minic" \
         HOST_CC=cc \
         BUILD_DIR="$root/build/ci-linenoise-driven" \
-            sh "$root/tests/compiler/c0/$script"
+            run_c0_gate_case "$script"
     done
 }
 
@@ -488,12 +495,12 @@ sds_driven_focused() {
         run-for-declaration-initializers.sh \
         run-void-pointer-locals.sh \
         run-compound-assignment-expressions.sh \
-        run-void-casts.sh \
+        compile:void-casts \
         run-external-scalar-definitions.sh; do
         MINIC="$root/build/ci-debug/bin/minic" \
         HOST_CC=cc \
         BUILD_DIR="$root/build/ci-sds-driven" \
-            sh "$root/tests/compiler/c0/$script"
+            run_c0_gate_case "$script"
     done
 }
 

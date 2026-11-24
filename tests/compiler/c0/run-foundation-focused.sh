@@ -2,7 +2,10 @@
 set -eu
 
 run_focused() {
-    sh "tests/compiler/c0/$1"
+    case "$1" in
+        compile:*) sh tests/compiler/c0/run-compile-only-case.sh "${1#compile:}" ;;
+        *) sh "tests/compiler/c0/$1" ;;
+    esac
 }
 
 # Permanent focused semantic coverage accumulated during the Foundation line.
@@ -25,7 +28,7 @@ for test_script in \
     run-restrict-qualifiers.sh \
     run-gnu-extension-declaration.sh \
     run-builtin-expect.sh \
-    run-builtin-memcpy-call.sh \
+    compile:builtin-memcpy-call \
     run-builtin-prefetch.sh \
     run-gnu-function-attributes.sh \
     run-gnu-function-asm-labels.sh \
@@ -34,14 +37,14 @@ for test_script in \
     run-gnu-aligned-record-fields.sh \
     run-gnu-zero-length-record-arrays.sh \
     run-record-forward-declarations.sh \
-    run-record-multi-declarators.sh \
+    compile:record-multi-declarators \
     run-xgene-parenthesized-pointer-record-field.sh \
     run-record-typedef-array-fields.sh \
-    run-volatile-qualifiers.sh \
-    run-array-bound-sizeof.sh \
+    compile:volatile-qualifiers \
+    compile:array-bound-sizeof \
     run-array-bound-integer-casts.sh \
     run-record-multidimensional-arrays.sh \
-    run-record-length-one-arrays.sh \
+    compile:record-length-one-arrays \
     run-pointer-compound-subtraction.sh \
     run-builtin-offsetof.sh \
     run-pointer-integer-casts.sh \
@@ -76,7 +79,7 @@ for test_script in \
     run-static-aggregate-array-designators.sh \
     run-prefix-update-expressions.sh \
     run-function-designator-calls.sh \
-    run-function-address-expressions.sh \
+    compile:function-address-expressions \
     run-preprocessed-line-markers.sh \
     run-gnu-signed-keyword.sh \
     run-gnu-int128-type.sh \
@@ -97,8 +100,8 @@ for test_script in \
     run-gnu-void-pointer-arithmetic.sh \
     run-gnu-statement-expression.sh \
     run-gnu-void-function-pointer-assignment.sh \
-    run-gnu-no-profile-function-attribute.sh \
-    run-gnu-typeof-array-type-name.sh \
+    compile:gnu-no-profile-function-attribute \
+    compile:gnu-typeof-array-type-name \
     run-gnu-typeof-array-bound-cast.sh \
     run-function-arena-borrow-lifetime.sh \
     run-gnu-statement-record-value.sh \
@@ -108,7 +111,7 @@ for test_script in \
     run-gnu-top-level-empty-declaration.sh \
     run-gnu-object-alignment-attribute.sh \
     run-gnu-auto-type-local.sh \
-    run-gnu-local-interleaved-informational-attribute.sh \
+    compile:gnu-local-interleaved-informational-attribute \
     run-gnu-array-object-identity.sh \
     run-gnu-local-label-address.sh \
     run-gnu-inline-asm-fence.sh \
@@ -125,7 +128,7 @@ for test_script in \
     run-gnu-builtin-unreachable.sh \
     run-gnu-pointer-sign-call-conversion.sh \
     run-static-assert-declaration.sh \
-    run-gnu-choose-expr-bitfield.sh \
+    compile:gnu-choose-expr-bitfield \
     run-builtin-clzll.sh \
     run-alignof-type-query.sh \
     run-rv64-integer-aggregate-return.sh \
@@ -145,10 +148,10 @@ for test_script in \
     run-extern-multidimensional-array.sh \
     run-gnu-extern-object-redeclaration.sh \
     run-gnu-section-symbol-attribute.sh \
-    run-gnu-const-function-attribute.sh \
+    compile:gnu-const-function-attribute \
     run-driver-gnu-predefines.sh \
     run-driver-include-precedence.sh \
-    run-gnu-inline-keyword-spellings.sh \
+    compile:gnu-inline-keyword-spellings \
     run-gnu-octal-character-case-range.sh
 do
     run_focused "$test_script"
