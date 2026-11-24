@@ -1,4 +1,4 @@
 target=loongarch64
 input_run=42366441631
-nonce=20261123-5203
+nonce=20261124-2
 mode=candidate-only
