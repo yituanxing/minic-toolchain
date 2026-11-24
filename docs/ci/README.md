@@ -1,4 +1,6 @@
-# CI operations — quick start (authoritative as of 2026-10-09)
+# CI operations — historical quick start (2026-10-09)
+
+> **Historical snapshot, not the current branch/workflow inventory.** The current development tree has diverged from the four-ref October map. Use the checked-out `.github/workflows/` and exact-head Actions results for current routing and acceptance; do not infer a passing gate from the historical topology. The original disabled YAML definitions, including ones removed from the worktree during repository hygiene, remain available in the [immutable C59 archive](https://github.com/yituanxing/minic-toolchain/tree/de72e2982e9576ec36a8110a371287300ed29937/.github/workflows-disabled). Performance decision evidence below remains historical input, not a new certification.
 
 **Canonical reference:** [Active ownership and trigger topology](current-workflow-map.md). [Exact 38-row two-development-ref ledger](active-workflow-inventory-2026-10-09.tsv). [Archived original execution/body and trigger audit](ci-push-skip-audit-2026-10-09.md).
 
