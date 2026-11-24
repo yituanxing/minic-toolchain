@@ -91,6 +91,18 @@ case "$name" in
     gnu-inline-asm-readwrite-output) set -- 'gnu_inline_asm_readwrite_output' 'compiler-c0-gnu-inline-asm-readwrite-output' 'gnu_inline_asm_readwrite_output' 'gnu_inline_asm_readwrite_output' 'gnu11' 'yes' ;;
     gnu-void-function-pointer-assignment) set -- 'gnu_void_function_pointer_assignment' 'compiler-c0-gnu-void-function-pointer-assignment' 'input' 'output' 'gnu11' 'yes' ;;
     record-typedef-array-fields) set -- 'record_typedef_array_field' 'compiler-c0-record-typedef-array-fields' 'record_typedef_array_field' 'record_typedef_array_field' 'c11' 'yes' ;;
+    postfix-const) set -- 'postfix_const' 'compiler-c0-postfix-const' 'postfix_const' 'postfix_const' '' 'yes' ;;
+    zero-aggregate-null) set -- 'zero_aggregate_null' 'compiler-c0-zero-aggregate-null' 'zero_aggregate_null' 'zero_aggregate_null' '' 'yes' ;;
+    stack-fixed-arguments) set -- 'stack_fixed_arguments' 'compiler-c0-stack-fixed-arguments' 'stack_fixed_arguments' 'stack_fixed_arguments' '' 'yes' ;;
+    gnu-octal-character-case-range) set -- 'gnu_octal_character_case_range' 'compiler-c0-gnu-octal-character-case-range' 'gnu_octal_character_case_range' 'gnu_octal_character_case_range' 'gnu11' 'yes' ;;
+    nested-function-pointer-field) set -- 'nested_function_pointer_field' 'compiler-c0-nested-function-pointer-field' 'input' 'output' '' 'yes' ;;
+    nested-function-pointer-type-name) set -- 'nested_function_pointer_type_name' 'compiler-c0-nested-function-pointer-type-name' 'input' 'output' '' 'yes' ;;
+    prefix-update-expressions) set -- 'prefix_update_expression' 'compiler-c0-prefix-update-expression' 'prefix_update_expression' 'prefix_update_expression' '' 'yes' ;;
+    signed-char-semantics) set -- 'signed_char_semantics' 'compiler-c0-signed-char' 'signed_char_semantics' 'signed_char_semantics' '' 'yes' ;;
+    extern-parenthesized-functions) set -- 'extern_parenthesized_functions' 'compiler-c0-extern-parenthesized-functions' 'extern_parenthesized_functions' 'extern_parenthesized_functions' '' 'yes' ;;
+    wide-integer-literals) set -- 'wide_integer_literal' 'compiler-c0-wide-integer-literals' 'wide_integer_literal' 'wide_integer_literal' '' 'yes' ;;
+    extern-fixed-integer-arrays) set -- 'extern_fixed_integer_array' 'compiler-c0-extern-fixed-integer-array' 'extern_fixed_integer_array' 'extern_fixed_integer_array' '' 'yes' ;;
+    compound-assignment-expressions) set -- 'compound_assignment_expression' 'compiler-c0-compound-assignment-expressions' 'compound_assignment_expression' 'compound_assignment_expression' '' 'yes' ;;
     *) echo "unknown compile-only case: $name" >&2; exit 2 ;;
 esac
 source=$1
@@ -114,6 +126,99 @@ require_literals() {
     for literal do grep -F "$literal" "$work/$output.s" >/dev/null || return $?; done
 }
 case "$name" in
+    postfix-const)
+        grep -F '.type same_first, @function' "$work/$output.s" >/dev/null
+        grep -F '.type use_typedef_const, @function' "$work/$output.s" >/dev/null
+        printf '%s\n' 'PASS compiler/c0/postfix_const forms=char-const,const-char,typedef-const'
+        ;;
+    zero-aggregate-null)
+        grep -F '.globl main' "$work/$output.s" >/dev/null
+        grep -F '  sw ' "$work/$output.s" >/dev/null
+        grep -F '  sd ' "$work/$output.s" >/dev/null
+        printf '%s\n' 'PASS compiler/c0/zero_aggregate_null scalar-zero=yes pointer-null=yes'
+        ;;
+    stack-fixed-arguments)
+        grep -F '.type minic_abi_sum9, @function' "$work/$output.s" >/dev/null
+        grep -F '  call gcc_abi_sum9' "$work/$output.s" >/dev/null
+        printf '%s\n' 'PASS compiler/c0/stack_fixed_arguments fixed=9 integer-class register=8 stack=1'
+        ;;
+    gnu-octal-character-case-range)
+        test -s "$work/$output.s"
+        grep -F 'linux_printk_level_like:' "$work/$output.s" >/dev/null
+        grep -F 'octal_character_values:' "$work/$output.s" >/dev/null
+
+        printf '%s\n' 'PASS compiler/c0/gnu_octal_character_case_range octal=1-3-digits case-range=0...7 expanded=8 duplicate-check=preserved'
+        ;;
+    nested-function-pointer-field)
+        test -s "$work/$output.s"
+        grep -F 'install_resolver:' "$work/$output.s" >/dev/null
+        grep -F 'resolve_symbol' "$work/$output.s" >/dev/null
+
+        if command -v riscv64-linux-gnu-gcc >/dev/null 2>&1; then
+            riscv64-linux-gnu-gcc -c "$work/$output.s" -o "$work/$output.o"
+        fi
+
+        printf '%s\n' 'PASS compiler/c0/nested-function-pointer-field shape=R(*(*field)(P))(Q) assignment=compatible'
+        ;;
+    nested-function-pointer-type-name)
+        test -s "$work/$output.s"
+        grep -F 'resolve_nested_function_pointer:' "$work/$output.s" >/dev/null
+        grep -F 'jalr ra, t0, 0' "$work/$output.s" >/dev/null
+
+        if command -v riscv64-linux-gnu-gcc >/dev/null 2>&1; then
+            riscv64-linux-gnu-gcc -c "$work/$output.s" -o "$work/$output.o"
+        fi
+
+        printf '%s\n' 'PASS compiler/c0/nested-function-pointer-type-name anonymous=1 nested=1 indirect-call=1'
+        ;;
+    prefix-update-expressions)
+        grep -F '  addi t0, t0, 1' "$work/$output.s" >/dev/null
+        grep -F '  addi t0, t0, -1' "$work/$output.s" >/dev/null
+        grep -F '  addi t0, t0, 4' "$work/$output.s" >/dev/null
+        grep -F '  addi t0, t0, -4' "$work/$output.s" >/dev/null
+        test "$(grep -c -F '  mv a0, t0' "$work/$output.s")" -ge 4
+        printf '%s\n' 'PASS compiler/c0/prefix_update_expression integer=++/-- pointer=++/-- result=new lvalue-address=once'
+        ;;
+    signed-char-semantics)
+        grep -E '^[[:space:]]+lb[[:space:]]+[^,]+,[[:space:]]*0\([^)]*\)$' "$work/$output.s" >/dev/null
+        grep -E '^[[:space:]]+lbu[[:space:]]+[^,]+,[[:space:]]*0\([^)]*\)$' "$work/$output.s" >/dev/null
+        grep -E '^[[:space:]]+sb[[:space:]]+[^,]+,[[:space:]]*0\([^)]*\)$' "$work/$output.s" >/dev/null
+        printf '%s\n' 'PASS compiler/c0/signed_char_semantics signed-load=lb unsigned-and-plain-load=lbu store=sb'
+        ;;
+    extern-parenthesized-functions)
+        grep -F '  call external_add' "$work/$output.s" >/dev/null
+        grep -F '  call external_alloc' "$work/$output.s" >/dev/null
+        if grep -F '.type external_add, @function' "$work/$output.s" >/dev/null; then
+            printf '%s\n' 'FAIL compiler/c0/extern_parenthesized_functions: declaration emitted a definition' >&2
+            exit 1
+        fi
+        printf '%s\n' 'PASS compiler/c0/extern_parenthesized_functions linkage=external parenthesized-name=1'
+        ;;
+    wide-integer-literals)
+        grep -F '  li a0, 9223372036854775807' "$work/$output.s" >/dev/null
+        grep -F '  li a0, 9223372036854775806' "$work/$output.s" >/dev/null
+        grep -F 'binary_literal_value:' "$work/$output.s" >/dev/null
+        grep -F 'binary_enum_value:' "$work/$output.s" >/dev/null
+        grep -F '  li a0, 170' "$work/$output.s" >/dev/null
+        grep -F '  li a0, 5' "$work/$output.s" >/dev/null
+        printf '%s\n' 'PASS compiler/c0/wide_integer_literal payload=int64+gnu-binary max=9223372036854775807 binary=170 enum=5'
+        ;;
+    extern-fixed-integer-arrays)
+        grep -F '.globl table' "$work/$output.s" >/dev/null
+        grep -F '  .byte 1' "$work/$output.s" >/dev/null
+        grep -F '  .byte 2' "$work/$output.s" >/dev/null
+        grep -F '  .byte 3' "$work/$output.s" >/dev/null
+        test "$(grep -Fc '  .byte 0' "$work/$output.s")" -eq 2
+        grep -F '.size table, 5' "$work/$output.s" >/dev/null
+        printf '%s\n' 'PASS compiler/c0/extern_fixed_integer_array extern-merge=1 bound=5 brace=3 zero-fill=2'
+        ;;
+    compound-assignment-expressions)
+        test "$(grep -c -F '  call next_slot' "$work/$output.s")" -eq 1
+        grep -F '  slli a0, a0, 2' "$work/$output.s" >/dev/null
+        grep -F '  divu a0, t0, a0' "$work/$output.s" >/dev/null
+        grep -F '  div a0, t0, a0' "$work/$output.s" >/dev/null
+        printf '%s\n' 'PASS compiler/c0/compound_assignment_expression operators=+=,/= result=value lvalue-evaluation=once pointer-scale=4 GNU-void-stride=1 divide=signed,unsigned'
+        ;;
     record-forward-declarations)
         require_literals 'pass:' 'call pass' 'lw a0, 0(a0)'
         printf '%s\n' 'PASS compiler/c0/record_forward_declarations struct=1 union=1 completion=same-tag pointer-before-complete=1'

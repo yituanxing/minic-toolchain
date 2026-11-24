@@ -649,6 +649,20 @@ jobs:
               "docs/ci/minic-x86-current-real-software-2026-11-09.md",
               "docs/ci/linux-distributed-image-receiver-reuse-v1.md",
           }
+          metadata |= {
+              "tests/compiler/c0/run-postfix-const.sh",
+              "tests/compiler/c0/run-zero-aggregate-null.sh",
+              "tests/compiler/c0/run-stack-fixed-arguments.sh",
+              "tests/compiler/c0/run-gnu-octal-character-case-range.sh",
+              "tests/compiler/c0/run-nested-function-pointer-field.sh",
+              "tests/compiler/c0/run-nested-function-pointer-type-name.sh",
+              "tests/compiler/c0/run-prefix-update-expressions.sh",
+              "tests/compiler/c0/run-signed-char-semantics.sh",
+              "tests/compiler/c0/run-extern-parenthesized-functions.sh",
+              "tests/compiler/c0/run-wide-integer-literals.sh",
+              "tests/compiler/c0/run-extern-fixed-integer-arrays.sh",
+              "tests/compiler/c0/run-compound-assignment-expressions.sh",
+          }
           if len(expected) != 755 or deleted != expected or changed != expected | metadata:
               raise SystemExit("RETIREMENT_SCOPE=FAIL: unexpected tree changes")
           files = [p.decode() for p in git("ls-files", "-z").split(b"\0") if p]
@@ -1293,4 +1307,34 @@ jobs:
             fi
           done
           echo "BATCH46_COMPILE_COMPARISON passed=$passed unchanged_baseline_fail=$baseline_failures"
+          git diff --exit-code
+
+      - name: Compare twelve additional compile-only compatibility entry points
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          export MINIC="$PWD/build/retirement-oracle/bin/minic" HOST_CC=cc
+          work="$PWD/build/retirement-twelve-compat"
+          mkdir -p "$work"
+          oldscript=$(mktemp tests/compiler/c0/.retirement-original.XXXXXX)
+          trap 'rm -f "$oldscript"' EXIT
+          for name in postfix-const zero-aggregate-null stack-fixed-arguments gnu-octal-character-case-range nested-function-pointer-field nested-function-pointer-type-name prefix-update-expressions signed-char-semantics extern-parenthesized-functions wide-integer-literals extern-fixed-integer-arrays compound-assignment-expressions; do
+            script="tests/compiler/c0/run-$name.sh"
+            git show 51ed1e3b56f2b38e7b5ed70371411fe6494f4dff:"$script" > "$oldscript"
+            sh -n "$script"
+            export BUILD_DIR="$work/$name"
+            mkdir -p "$BUILD_DIR"
+            old_rc=0
+            sh "$oldscript" > "$work/$name.old.stdout" 2> "$work/$name.old.stderr" || old_rc=$?
+            mv "$BUILD_DIR" "$work/$name.old"
+            mkdir -p "$BUILD_DIR"
+            new_rc=0
+            sh "$script" > "$work/$name.new.stdout" 2> "$work/$name.new.stderr" || new_rc=$?
+            test "$old_rc" -eq "$new_rc"
+            diff -r "$work/$name.old" "$BUILD_DIR"
+            cmp "$work/$name.old.stdout" "$work/$name.new.stdout"
+            cmp "$work/$name.old.stderr" "$work/$name.new.stderr"
+            echo "COMPAT_COMPILE_EQUIVALENCE=PASS case=$name original_exit=$old_rc"
+          done
+          rm -f "$oldscript"
           git diff --exit-code
