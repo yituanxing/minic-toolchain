@@ -618,7 +618,7 @@ MINIC="$minic" HOST_CC="$host_cc" BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" 
 
 
 MINIC="$minic" HOST_CC="$host_cc" BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
-  sh "$root/tests/compiler/c0/run-enum-forward-completion.sh"
+  sh "$root/tests/compiler/c0/run-compile-only-case.sh" enum-forward-completion
 
 MINIC="$minic" HOST_CC="$host_cc" BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
   sh "$root/tests/compiler/c0/run-first500-pareto-v1.sh"
@@ -675,7 +675,7 @@ MINIC="$minic" HOST_CC="$host_cc" BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" 
   sh "$root/tests/compiler/c0/run-gnu-local-object-alignment.sh"
 
 MINIC="$minic" HOST_CC="$host_cc" BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
-  sh "$root/tests/compiler/c0/run-builtin-memset-call.sh"
+  sh "$root/tests/compiler/c0/run-compile-only-case.sh" builtin-memset-call
 
 MINIC="$minic" \
 BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \

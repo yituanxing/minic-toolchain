@@ -446,7 +446,26 @@ jobs:
           }
           expected |= shared_fixtures
           metadata |= {"tests/programs/c0/run.sh", "tests/programs/c0/manifest.txt", "tools/ci/minic-bootstrap-stage2-program-parity-v1.py", "tests/programs/c0/README.md"}
-          if len(expected) != 522 or deleted != expected or changed != expected | metadata:
+          expected |= {
+              "tests/compiler/c0/run-void-casts.sh",
+              "tests/compiler/c0/run-multiply-assignment.sh",
+              "tests/compiler/c0/run-gnu-inline-keyword-spellings.sh",
+              "tests/compiler/c0/run-gnu-no-profile-function-attribute.sh",
+              "tests/compiler/c0/run-array-bound-sizeof.sh",
+              "tests/compiler/c0/run-volatile-qualifiers.sh",
+              "tests/compiler/c0/run-function-address-expressions.sh",
+              "tests/compiler/c0/run-gnu-typeof-array-type-name.sh",
+              "tests/compiler/c0/run-record-multi-declarators.sh",
+              "tests/compiler/c0/run-gnu-const-function-attribute.sh",
+              "tests/compiler/c0/run-cast-record-type-names.sh",
+              "tests/compiler/c0/run-enum-forward-completion.sh",
+              "tests/compiler/c0/run-gnu-choose-expr-bitfield.sh",
+              "tests/compiler/c0/run-record-length-one-arrays.sh",
+              "tests/compiler/c0/run-gnu-local-interleaved-informational-attribute.sh",
+              "tests/compiler/c0/run-builtin-memcpy-call.sh",
+              "tests/compiler/c0/run-builtin-memset-call.sh",
+          }
+          if len(expected) != 539 or deleted != expected or changed != expected | metadata:
               raise SystemExit("RETIREMENT_SCOPE=FAIL: unexpected tree changes")
           files = [p.decode() for p in git("ls-files", "-z").split(b"\0") if p]
           candidates = {
@@ -713,3 +732,54 @@ jobs:
             cmp "$old.s" "$old.new.s"
             echo "SHARED_FIXTURE_EQUIVALENCE=PASS case=$name"
           done
+      - name: Compare seventeen single-source compile test drivers
+        run: |
+          set -eu
+          export MINIC="$PWD/build/retirement-oracle/bin/minic" HOST_CC=cc
+          old="$PWD/build/retirement-seventeen-before"
+          new="$PWD/build/retirement-seventeen-after"
+          mkdir -p "$old" "$new"
+          passed=0
+          baseline_failures=0
+          for name in void-casts multiply-assignment gnu-inline-keyword-spellings gnu-no-profile-function-attribute array-bound-sizeof volatile-qualifiers function-address-expressions gnu-typeof-array-type-name record-multi-declarators gnu-const-function-attribute cast-record-type-names enum-forward-completion gnu-choose-expr-bitfield record-length-one-arrays gnu-local-interleaved-informational-attribute builtin-memcpy-call builtin-memset-call; do
+            script="tests/compiler/c0/run-$name.sh"
+            test ! -e "$script"
+            git show d880b62b9865d1a6ed88a2f400530c571e408c0c:"$script" > "$script"
+            old_rc=0
+            BUILD_DIR="$old" sh "$script" > "$old/$name.stdout" 2> "$old/$name.stderr" || old_rc=$?
+            rm "$script"
+            new_rc=0
+            BUILD_DIR="$new" sh tests/compiler/c0/run-compile-only-case.sh "$name" > "$new/$name.stdout" 2> "$new/$name.stderr" || new_rc=$?
+            test "$old_rc" -eq "$new_rc"
+            case "$name" in
+              void-casts) work=compiler-c0-void-casts ;;
+              multiply-assignment) work=compiler-c0-multiply-assignment ;;
+              gnu-inline-keyword-spellings) work=compiler-c0-gnu-inline-keyword-spellings ;;
+              gnu-no-profile-function-attribute) work=compiler-c0-gnu-no-profile-function-attribute ;;
+              array-bound-sizeof) work=compiler-c0-array-bound-sizeof ;;
+              volatile-qualifiers) work=compiler-c0-volatile-qualifiers ;;
+              function-address-expressions) work=compiler-c0-function-address-expression ;;
+              gnu-typeof-array-type-name) work=compiler-c0-gnu-typeof-array-type-name ;;
+              record-multi-declarators) work=compiler-c0-record-multi-declarators ;;
+              gnu-const-function-attribute) work=compiler-c0-gnu-const-function-attribute ;;
+              cast-record-type-names) work=compiler-c0-cast-record-type-names ;;
+              enum-forward-completion) work=enum-forward-completion ;;
+              gnu-choose-expr-bitfield) work=compiler-c0-gnu-choose-expr-bitfield ;;
+              record-length-one-arrays) work=compiler-c0-record-length-one-arrays ;;
+              gnu-local-interleaved-informational-attribute) work=compiler-c0-gnu-local-interleaved-informational-attribute ;;
+              builtin-memcpy-call) work=compiler-c0-builtin-memcpy-call ;;
+              builtin-memset-call) work=compiler-c0-builtin-memset-call ;;
+            esac
+            diff -r "$old/tests/$work" "$new/tests/$work"
+            cmp "$old/$name.stdout" "$new/$name.stdout"
+            cmp "$old/$name.stderr" "$new/$name.stderr"
+            if test "$old_rc" -eq 0; then
+              passed=$((passed+1))
+              echo "SINGLE_SOURCE_EQUIVALENCE=PASS case=$name"
+            else
+              baseline_failures=$((baseline_failures+1))
+              echo "SINGLE_SOURCE_BASELINE_FAIL_UNCHANGED case=$name exit=$old_rc"
+            fi
+          done
+          echo "SINGLE_SOURCE_COMPARISON passed=$passed unchanged_baseline_fail=$baseline_failures"
+          git diff --exit-code
