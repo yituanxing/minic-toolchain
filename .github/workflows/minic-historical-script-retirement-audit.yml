@@ -374,7 +374,48 @@ jobs:
               "tools/dev/linux-inline-emission-reachability-v0.py",
               "tools/dev/linux-static-function-reachability-v0.py",
           }
-          if len(expected) != 464 or deleted != expected or changed != expected | metadata:
+          expected |= {
+              "docs/ci/active-workflow-audit-2026-10-09.md",
+              "docs/ci/branch-consolidation-2026-10-08.md",
+              "docs/ci/ci-focused-regressions-consolidation-2026-10-09.md",
+              "docs/ci/ci-performance-experiment-consolidation-2026-10-09.md",
+              "docs/ci/ci-regression-path-isolation-2026-10-09.md",
+              "docs/ci/ci-routing-repairs-2026-10-09.md",
+              "docs/ci/ci-runtime-focused-owners-consolidation-2026-10-09.md",
+              "docs/ci/ci-shared-elf-trigger-audit-2026-10-09.md",
+              "docs/ci/ci-toolchain-focused-single-build-2026-10-09.md",
+              "docs/ci/core-first500-full3352-convergence-2026-10-09.md",
+              "docs/ci/core-strict500-focused-five-convergence-2026-10-09.md",
+              "docs/ci/distributed-workflow-retirement-2026-10-08.md",
+              "docs/ci/dormant-minias-minild-retirement-2026-10-08.md",
+              "docs/ci/early-runtime-diagnostic-union-2026-10-09.md",
+              "docs/ci/external-workflow-retirement-and-3352-pass-2026-10-08.md",
+              "docs/ci/linux-core-full3352-workflow-convergence-2026-10-09.md",
+              "docs/ci/linux-expanded-pi-p1-convergence-2026-10-09.md",
+              "docs/ci/linux-expanded-trace-convergence-2026-10-09.md",
+              "docs/ci/linux-low-level-oracle-convergence-2026-10-09.md",
+              "docs/ci/linux-performance-optin-workflow-convergence-2026-10-09.md",
+              "docs/ci/linux-runtime-fixture-producer-convergence-2026-10-09.md",
+              "docs/ci/linux-runtime-focused-faults-convergence-2026-10-09.md",
+              "docs/ci/linux-runtime-frontier-diagnostics-convergence-2026-10-09.md",
+              "docs/ci/m0-ownership-2026-10-08.md",
+              "docs/ci/minias-focused-window-convergence-2026-10-09.md",
+              "docs/ci/minias-semantic-convergence-2026-10-09.md",
+              "docs/ci/minild-integration-convergence-2026-10-09.md",
+              "docs/ci/miniobjcopy-workflow-convergence-2026-10-08.md",
+              "docs/ci/minipp-frozen-live-convergence-2026-10-09.md",
+              "docs/ci/minipp-frozen-workflow-convergence-2026-10-09.md",
+              "docs/ci/minipp-live-exact-convergence-2026-10-08.md",
+              "docs/ci/obsolete-bootstrap-workflow-archive-2026-10-08.md",
+              "docs/ci/regression-push-trigger-scope-2026-10-08.md",
+              "docs/ci/runtime-diagnostic-union-2026-10-09.md",
+              "docs/ci/runtime-fdt-kallsyms-convergence-2026-10-09.md",
+              "docs/ci/runtime-fixture-restore-reuse-2026-10-09.md",
+              "docs/ci/runtime-focused-workflow-convergence-2026-10-09.md",
+              "docs/ci/workflow-cross-branch-convergence-2026-10-08.md",
+          }
+          metadata |= {"docs/ci/ci-active-overlap-cost-audit-2026-10-09.md", "docs/ci/ci-trigger-coverage-contracts-2026-10-09.md", "docs/ci/pre-runtime-ci-readiness-2026-10-08.md"}
+          if len(expected) != 502 or deleted != expected or changed != expected | metadata:
               raise SystemExit("RETIREMENT_SCOPE=FAIL: unexpected tree changes")
           files = [p.decode() for p in git("ls-files", "-z").split(b"\0") if p]
           candidates = {
