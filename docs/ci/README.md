@@ -49,3 +49,20 @@ The exact prior entire MiniAS source Git Blob `10a4fed7bd5cb1e111d773efc9edba953
 **Additional shared compile-only cases:** 22 former single-source shell drivers now use the existing `run-compile-only-case.sh` with original preprocessing flags, artifact paths, positive and negative assembly checks and diagnostics. Originals: [snapshot c80bb1c](https://github.com/yituanxing/minic-toolchain/tree/c80bb1cc7c6abaecc1e42665bfef60774fc18e1c/tests/compiler/c0). The CI comparison also diagnoses the previous basic Core runtime ELF mismatch; only a validated GNU build-id descriptor may vary, with every other stripped byte and normalized symbol checked.
 
 **Further shared single-source compile cases:** 24 more drivers use the existing compile-only runner. Retained original C dialect flags (including C11), optional and mandatory GNU assembly, syntax checks, output paths, cleanup policy, and per-case assertions. Original drivers are available at [8f3c669](https://github.com/yituanxing/minic-toolchain/tree/8f3c6696bfb2a957891a25883acde49ef2edfa21/tests/compiler/c0). CI compares the 46 combined cases against their respective pinned originals.
+
+## Archived dated CI evidence (2026-11-24)
+
+The following historical receipts, diagnostic probes and timing records are kept byte-for-byte in [the pre-retirement snapshot](https://github.com/yituanxing/minic-toolchain/tree/9a77f97f625b1729b57b85d9ae47396ac706bc36/docs/ci), not duplicated in the live checkout. They establish only their original source/run scope; consult the current workflow and exact-head receipts for current acceptance. The five-ISA Linux acceptance summary, current qualification runbook, trigger instructions and performance decision index remain live.
+
+- [2026-10-23-four-isa-recertification.md](https://github.com/yituanxing/minic-toolchain/blob/9a77f97f625b1729b57b85d9ae47396ac706bc36/docs/ci/2026-10-23-four-isa-recertification.md)
+- [full-native-toolchain-bootstrap-2026-10-17.md](https://github.com/yituanxing/minic-toolchain/blob/9a77f97f625b1729b57b85d9ae47396ac706bc36/docs/ci/full-native-toolchain-bootstrap-2026-10-17.md)
+- [linux-runtime-perf-ledger-2026-10-10.md](https://github.com/yituanxing/minic-toolchain/blob/9a77f97f625b1729b57b85d9ae47396ac706bc36/docs/ci/linux-runtime-perf-ledger-2026-10-10.md)
+- [loongarch64-vdso-single-page-codegen-2026-11-07.md](https://github.com/yituanxing/minic-toolchain/blob/9a77f97f625b1729b57b85d9ae47396ac706bc36/docs/ci/loongarch64-vdso-single-page-codegen-2026-11-07.md)
+- [minic-current-bootstrap-b1-selfhost-2026-10-17.md](https://github.com/yituanxing/minic-toolchain/blob/9a77f97f625b1729b57b85d9ae47396ac706bc36/docs/ci/minic-current-bootstrap-b1-selfhost-2026-10-17.md)
+- [minic-linux-runtime-link-ledger-2026-10-30.md](https://github.com/yituanxing/minic-toolchain/blob/9a77f97f625b1729b57b85d9ae47396ac706bc36/docs/ci/minic-linux-runtime-link-ledger-2026-10-30.md)
+- [minipp-rv64-native-macro-rule-verification-2026-10-16.md](https://github.com/yituanxing/minic-toolchain/blob/9a77f97f625b1729b57b85d9ae47396ac706bc36/docs/ci/minipp-rv64-native-macro-rule-verification-2026-10-16.md)
+- [stage4-linux-promotion-2026-10-17.md](https://github.com/yituanxing/minic-toolchain/blob/9a77f97f625b1729b57b85d9ae47396ac706bc36/docs/ci/stage4-linux-promotion-2026-10-17.md)
+- [x86-gnu-dead-static-root-census-2026-10-30.md](https://github.com/yituanxing/minic-toolchain/blob/9a77f97f625b1729b57b85d9ae47396ac706bc36/docs/ci/x86-gnu-dead-static-root-census-2026-10-30.md)
+- [minic-two-lp64-busybox-recertify-2026-11-09.md](https://github.com/yituanxing/minic-toolchain/blob/9a77f97f625b1729b57b85d9ae47396ac706bc36/docs/ci/minic-two-lp64-busybox-recertify-2026-11-09.md)
+- [minic-x86-current-real-software-2026-11-09.md](https://github.com/yituanxing/minic-toolchain/blob/9a77f97f625b1729b57b85d9ae47396ac706bc36/docs/ci/minic-x86-current-real-software-2026-11-09.md)
+- [linux-distributed-image-receiver-reuse-v1.md](https://github.com/yituanxing/minic-toolchain/blob/9a77f97f625b1729b57b85d9ae47396ac706bc36/docs/ci/linux-distributed-image-receiver-reuse-v1.md)
