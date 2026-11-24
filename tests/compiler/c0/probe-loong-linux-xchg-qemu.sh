@@ -56,4 +56,8 @@ for bad in unsafe-op unsafe-constraint;do
   fi
   test ! -e "$d/$bad.s"
 done
-echo 'LOONG_LINUX_AMSWAP_DB_GNU=PASS widths=32/64 GNU_QEMU_42=2 original_volatile_memory=1 negatives=2'
+if [[ "${MINIC_SOURCE_ONLY:-0}" == 1 ]]; then
+  echo 'LOONG_LINUX_AMSWAP_DB_GNU=PASS mode=source_only widths=32/64 GNU_QEMU_42=NOT_RUN original_volatile_memory=1 negatives=2'
+else
+  echo 'LOONG_LINUX_AMSWAP_DB_GNU=PASS mode=runtime widths=32/64 GNU_QEMU_42=2 original_volatile_memory=1 negatives=2'
+fi
