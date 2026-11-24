@@ -2,9 +2,9 @@ name: MiniC historical script retirement audit
 on:
   pull_request:
     branches:
-      - cleanup/minic-c50-registry-20261124
+      - cleanup/minic-repository-hygiene-20261124
     paths:
-      - 'tools/dev/**'
+      - '.github/workflows-disabled/**'
       - '.github/workflows/minic-historical-script-retirement-audit.yml'
 permissions:
   contents: read
@@ -17,61 +17,54 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
-      - name: Verify retirement scope and scan retained tracked files
+      - name: Check exact retirement scope and all retained text references
         run: |
           python3 - <<'PY'
           import pathlib
           import re
           import subprocess
-          import sys
-          
-          base = "de72e2982e9576ec36a8110a371287300ed29937"
-          def git(*args):
-              return subprocess.check_output(["git", *args])
-          
-          pattern = re.compile(r"^tools/dev/pr(?:71|75|76|77)-")
-          expected = {p for p in git("ls-tree", "-r", "--name-only", base).decode().splitlines()
-                      if pattern.match(p)}
-          deleted = set(git("diff", "--name-only", "--diff-filter=D", base, "HEAD").decode().splitlines())
-          changed = set(git("diff", "--name-only", base, "HEAD").decode().splitlines())
+
+          base = "cb1d0cd4e283100b42120708a2b472bb6860b4b4"
           audit = ".github/workflows/minic-historical-script-retirement-audit.yml"
-          if len(expected) != 115 or deleted != expected or changed != expected | {audit}:
-              raise SystemExit("RETIREMENT_SCOPE=FAIL: unexpected tree changes")
-          names = {pathlib.PurePosixPath(p).name for p in deleted}
-          rx = re.compile("|".join(re.escape(n) for n in sorted(names, key=len, reverse=True)))
-          broad = re.compile(r"tools/dev/(?:pr(?:71|75|76|77)[^a-zA-Z0-9]|[*?])")
-          active, archived, docs = [], [], []
+          prefix = ".github/workflows-disabled/"
+          def git(*args):
+              return subprocess.check_output(["git", *args]).decode()
+
+          expected = {p for p in git("ls-tree", "-r", "--name-only", base).splitlines()
+                      if p.startswith(prefix)}
+          deleted = set(git("diff", "--name-only", "--diff-filter=D", base, "HEAD").splitlines())
+          changed = set(git("diff", "--name-only", base, "HEAD").splitlines())
+          if len(expected) != 322 or deleted != expected or changed != expected | {audit}:
+              raise SystemExit("RETIREMENT_SCOPE=FAIL")
+          retained = git("ls-files", "-z").split("\0")
+          live_names = {pathlib.PurePosixPath(p).name for p in retained
+                        if p.startswith(".github/workflows/")}
+          old_names = {pathlib.PurePosixPath(p).name for p in expected if p.endswith(".yml")} - live_names
+          names = re.compile(r"(?<![\w.-])(?:" + "|".join(re.escape(n) for n in sorted(old_names, key=len, reverse=True)) + r")(?![\w.-])")
+          old_dir = re.compile(r"workflows-disabled|retired-20260826")
+          active, docs = [], []
           scanned = 0
-          for raw in git("ls-files", "-z").split(b"\0"):
-              if not raw:
+          for p in retained:
+              if not p or p == audit:
                   continue
-              path = raw.decode()
-              if path == audit:
-                  continue
-              f = pathlib.Path(path)
-              if not f.is_file():
-                  raise SystemExit("Missing retained file: " + path)
-              data = f.read_bytes()
+              data = pathlib.Path(p).read_bytes()
               if b"\0" in data:
                   continue
               scanned += 1
-              for num, line in enumerate(data.decode("utf-8", errors="replace").splitlines(), 1):
-                  found = set(rx.findall(line))
-                  if not found and not broad.search(line):
+              for n, line in enumerate(data.decode("utf-8", errors="replace").splitlines(), 1):
+                  if not old_dir.search(line) and not names.search(line):
                       continue
-                  record = f"{path}:{num}: " + (", ".join(sorted(found)) if found else "possible dynamic path")
-                  if path.startswith(".github/workflows-disabled/"):
-                      archived.append(record)
-                  elif path.startswith("docs/") or f.suffix.lower() in (".md", ".rst"):
+                  record = f"{p}:{n}: {line.strip()[:250]}"
+                  if p.startswith("docs/") or pathlib.Path(p).suffix.lower() in (".md", ".rst"):
                       docs.append(record)
                   else:
                       active.append(record)
-          for label, items in (("ACTIVE", active), ("ARCHIVE", archived), ("DOC", docs)):
+          print(f"RETIREMENT_SCOPE=PASS deleted={len(deleted)} retained_text_scanned={scanned}")
+          for label, items in (("ACTIVE", active), ("DOC", docs)):
               print(f"{label}_REFERENCES={len(items)}")
               for item in items:
                   print(item)
-          print(f"RETIREMENT_SCOPE=PASS deleted={len(deleted)} retained_text_scanned={scanned}")
-          if active:
-              raise SystemExit("RETIREMENT_REFERENCES=FAIL retained non-document references require review")
-          print("RETIREMENT_REFERENCES=PASS no literal or selected glob references in retained non-document/non-archive files")
+          if active or docs:
+              raise SystemExit("RETIREMENT_REFERENCES=REVIEW retained references require classification or migration")
+          print("RETIREMENT_REFERENCES=PASS")
           PY
