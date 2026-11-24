@@ -768,7 +768,7 @@ jobs:
               gnu-choose-expr-bitfield) work=compiler-c0-gnu-choose-expr-bitfield ;;
               record-length-one-arrays) work=compiler-c0-record-length-one-arrays ;;
               gnu-local-interleaved-informational-attribute) work=compiler-c0-gnu-local-interleaved-informational-attribute ;;
-              builtin-memcpy-call) work=compiler-c0-builtin-memcpy-call ;;
+              builtin-memcpy-call) work=compiler-c0/builtin-memcpy-call ;;
               builtin-memset-call) work=compiler-c0-builtin-memset-call ;;
             esac
             diff -r "$old/tests/$work" "$new/tests/$work"

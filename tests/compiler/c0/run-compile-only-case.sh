@@ -140,7 +140,7 @@ case "$name" in
         ;;
     builtin-memcpy-call)
         source=builtin_memcpy_call
-        work=${BUILD_DIR:-"$root/build/debug"}/tests/compiler-c0-builtin-memcpy-call
+        work=${BUILD_DIR:-"$root/build/debug"}/tests/compiler-c0/builtin-memcpy-call
         input=input
         output=output
         ;;
