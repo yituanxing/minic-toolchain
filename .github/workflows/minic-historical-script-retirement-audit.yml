@@ -478,7 +478,19 @@ jobs:
               "tests/compiler/c0/run-core-aggregate-boundary-m30.sh",
           }
           metadata.add("tests/compiler/c0/run-core-strict-runtime-case.sh")
-          if len(expected) != 548 or deleted != expected or changed != expected | metadata:
+          expected |= {
+              ".github/workflows-disabled/linux-distributed-kbuild-objects20-v1.yml",
+              "docs/ci/linux-distributed-kbuild-objects120-experiment-v1.md",
+              "docs/ci/linux-distributed-kbuild-objects20-experiment-v1.md",
+              "tools/ci/busybox-kbuild-ar-wrapper-v0.sh",
+              "tools/ci/busybox-kbuild-ld-wrapper-v0.sh",
+              "tools/ci/linux-distributed-kbuild-objects120-targets.tsv",
+              "tools/ci/linux-distributed-kbuild-objects120-v1.sh",
+              "tools/ci/linux-distributed-kbuild-objects20-targets.tsv",
+              "tools/ci/linux-distributed-kbuild-objects20-v1.sh",
+              "tools/ci/linux-three-isa-first-error-migration.py",
+          }
+          if len(expected) != 558 or deleted != expected or changed != expected | metadata:
               raise SystemExit("RETIREMENT_SCOPE=FAIL: unexpected tree changes")
           files = [p.decode() for p in git("ls-files", "-z").split(b"\0") if p]
           candidates = {
@@ -820,7 +832,34 @@ jobs:
             new_rc=0
             sh tests/compiler/c0/run-core-strict-runtime-case.sh "$name" > "$work/$name.new.stdout" 2> "$work/$name.new.stderr" || new_rc=$?
             test "$old_rc" -eq "$new_rc"
-            diff -r "$work/$name.old" "$BUILD_DIR"
+            before="$work/$name.old"
+            # GCC/AS may leave a random temporary FILE symbol in otherwise
+            # identical linked ELFs. Require exact non-ELF bytes and file set;
+            # compare stripped ELF bytes and every symbol except the spelling
+            # of GCC's temporary cc*.o/cc*.s FILE entries on raw mismatch.
+            (cd "$before"; find . -type f | LC_ALL=C sort) > "$work/$name.old.files"
+            (cd "$BUILD_DIR"; find . -type f | LC_ALL=C sort) > "$work/$name.new.files"
+            cmp "$work/$name.old.files" "$work/$name.new.files"
+            while IFS= read -r file; do
+              if cmp -s "$before/$file" "$BUILD_DIR/$file"; then
+                continue
+              fi
+              case "$file" in
+                *.elf)
+                  echo "CORE_RUNTIME_ELF_RAW_DIFF case=$name file=$file"
+                  riscv64-linux-gnu-objcopy --strip-all "$before/$file" "$work/old.stripped"
+                  riscv64-linux-gnu-objcopy --strip-all "$BUILD_DIR/$file" "$work/new.stripped"
+                  cmp "$work/old.stripped" "$work/new.stripped"
+                  riscv64-linux-gnu-readelf -Ws "$before/$file" > "$work/old.symbols.raw"
+                  riscv64-linux-gnu-readelf -Ws "$BUILD_DIR/$file" > "$work/new.symbols.raw"
+                  sed -E '/[[:space:]]FILE[[:space:]]/s@cc[[:alnum:]]+\.(o|s)$@<gcc-temporary>@' "$work/old.symbols.raw" > "$work/old.symbols"
+                  sed -E '/[[:space:]]FILE[[:space:]]/s@cc[[:alnum:]]+\.(o|s)$@<gcc-temporary>@' "$work/new.symbols.raw" > "$work/new.symbols"
+                  diff -u "$work/old.symbols" "$work/new.symbols"
+                  echo "CORE_RUNTIME_ELF_NORMALIZED_EQUIVALENCE=PASS case=$name file=$file"
+                  ;;
+                *) cmp "$before/$file" "$BUILD_DIR/$file" ;;
+              esac
+            done < "$work/$name.old.files"
             cmp "$work/$name.old.stdout" "$work/$name.new.stdout"
             cmp "$work/$name.old.stderr" "$work/$name.new.stderr"
             if test "$old_rc" -eq 0; then
