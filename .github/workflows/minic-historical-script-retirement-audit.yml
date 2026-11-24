@@ -1453,7 +1453,7 @@ jobs:
                       safe=False
                       break
                   current=changes.get(q,content)
-                  pattern=r'(sh\s+"[^"\n]*?/)' + re.escape(basename) + r'")(?=[ \t]*(?:\n|$))'
+                  pattern=r'(sh\s+"[^"\n]*?/)' + re.escape(basename) + r'"(?=[ \t]*(?:\n|$))'
                   matches=list(re.finditer(pattern,current))
                   if len(matches)!=current.count(basename) or not matches:
                       safe=False
