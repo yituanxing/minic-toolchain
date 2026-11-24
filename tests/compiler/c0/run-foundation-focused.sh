@@ -11,12 +11,12 @@ run_focused() {
 # Permanent focused semantic coverage accumulated during the Foundation line.
 # Keep this runner named by its long-term ownership rather than by historical PRs.
 for test_script in \
-    run-signed-char-semantics.sh \
+    compile:signed-char-semantics \
     run-extern-incomplete-arrays.sh \
     run-extern-fixed-integer-arrays.sh \
     compile:external-pointer-arrays \
     run-external-array-declarator-routing.sh \
-    run-extern-parenthesized-functions.sh \
+    compile:extern-parenthesized-functions \
     run-anonymous-record-field-types.sh \
     compile:typedef-enum-definitions \
     run-enum-constant-expressions.sh \
@@ -45,19 +45,19 @@ for test_script in \
     compile:array-bound-integer-casts \
     compile:record-multidimensional-arrays \
     compile:record-length-one-arrays \
-    run-pointer-compound-subtraction.sh \
+    compile:pointer-compound-subtraction \
     run-builtin-offsetof.sh \
-    run-pointer-integer-casts.sh \
+    compile:pointer-integer-casts \
     run-record-assignment-expressions.sh \
     compile:bitwise-and-assignment-expressions \
     run-compound-assignment-full.sh \
     run-for-expression-initializers.sh \
-    run-mixed-double-arithmetic.sh \
-    run-conditional-pointer-qualifiers.sh \
+    compile:mixed-double-arithmetic \
+    compile:conditional-pointer-qualifiers \
     compile:comma-operator \
     compile:top-level-comma-conditions \
     compile:cast-type-classification \
-    run-stack-fixed-arguments.sh \
+    compile:stack-fixed-arguments \
     run-static-local-record-initializers.sh \
     run-static-record-arrays.sh \
     run-static-nested-record-initializers.sh \
@@ -68,10 +68,10 @@ for test_script in \
     run-static-local-pointer-arrays.sh \
     run-static-local-fixed-arrays.sh \
     run-static-inferred-char-arrays.sh \
-    run-static-inferred-integer-array.sh \
+    compile:static-inferred-integer-array \
     run-static-mutable-arrays.sh \
-    run-static-preformed-array-zero.sh \
-    run-static-fixed-record-array-zero.sh \
+    compile:static-preformed-array-zero \
+    compile:static-fixed-record-array-zero \
     run-static-multidimensional-array-relocation.sh \
     run-static-integer-floating-const-initializer.sh \
     run-incomplete-function-pointer-array-lifetime.sh \
@@ -82,8 +82,8 @@ for test_script in \
     compile:function-address-expressions \
     run-preprocessed-line-markers.sh \
     compile:gnu-signed-keyword \
-    run-gnu-int128-type.sh \
-    run-bool-semantics.sh \
+    compile:gnu-int128-type \
+    compile:bool-semantics \
     run-typeof-generic.sh \
     run-gnu-typedef-redundant-aligned.sh \
     run-gnu-record-alignment.sh \
@@ -103,7 +103,7 @@ for test_script in \
     compile:gnu-no-profile-function-attribute \
     compile:gnu-typeof-array-type-name \
     compile:gnu-typeof-array-bound-cast \
-    run-function-arena-borrow-lifetime.sh \
+    compile:function-arena-borrow-lifetime \
     run-gnu-statement-record-value.sh \
     run-gnu-array-range-initializer.sh \
     run-gnu-record-compound-literal.sh \
@@ -122,25 +122,25 @@ for test_script in \
     run-gnu-inline-asm-goto.sh \
     run-gnu-fixed-register-bindings.sh \
     run-gnu-compiletime-selection-builtins.sh \
-    run-gnu-builtin-constant-p.sh \
+    compile:gnu-builtin-constant-p \
     run-gnu-builtin-object-size.sh \
     run-gnu-call-frame-address.sh \
     run-gnu-builtin-unreachable.sh \
     run-gnu-pointer-sign-call-conversion.sh \
-    run-static-assert-declaration.sh \
+    compile:static-assert-declaration \
     compile:gnu-choose-expr-bitfield \
     run-builtin-clzll.sh \
     compile:alignof-type-query \
-    run-rv64-integer-aggregate-return.sh \
+    compile:rv64-integer-aggregate-return \
     run-unnamed-bit-fields.sh \
-    run-gnu-overflow-builtins.sh \
+    compile:gnu-overflow-builtins \
     run-gnu-register-inline-asm-output.sh \
     compile:function-linkage-inheritance \
     run-static-prefix-object-attributes.sh \
-    run-extern-incomplete-record-object.sh \
+    compile:extern-incomplete-record-object \
     compile:extern-function-pointer-object \
     run-extern-interleaved-function-attributes.sh \
-    run-shared-function-declarator.sh \
+    compile:shared-function-declarator \
     run-gnu-incomplete-record-function-signature.sh \
     run-enum-tag-type-references.sh \
     run-gnu-enum-entity.sh \
@@ -152,7 +152,7 @@ for test_script in \
     run-driver-gnu-predefines.sh \
     run-driver-include-precedence.sh \
     compile:gnu-inline-keyword-spellings \
-    run-gnu-octal-character-case-range.sh
+    compile:gnu-octal-character-case-range
 do
     run_focused "$test_script"
 done

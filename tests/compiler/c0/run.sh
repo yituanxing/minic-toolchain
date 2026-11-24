@@ -708,7 +708,7 @@ sh "$root/tests/compiler/c0/run-core-block-spill-reuse.sh"
 MINIC="$minic" \
 HOST_CC="$host_cc" \
 BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
-sh "$root/tests/compiler/c0/run-nested-function-pointer-field.sh"
+sh "$root/tests/compiler/c0/run-compile-only-case.sh" nested-function-pointer-field
 MINIC="$minic" \
 HOST_CC="$host_cc" \
 BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
@@ -720,7 +720,7 @@ sh "$root/tests/compiler/c0/run-compile-only-case.sh" variadic-function-pointer-
 MINIC="$minic" \
 HOST_CC="$host_cc" \
 BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
-sh "$root/tests/compiler/c0/run-nested-function-pointer-type-name.sh"
+sh "$root/tests/compiler/c0/run-compile-only-case.sh" nested-function-pointer-type-name
 
 MINIC="$minic" \
 HOST_CC="$host_cc" \

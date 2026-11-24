@@ -183,14 +183,17 @@ fi
 "$host_cc" -E -P "$@" -x c "$root/tests/compiler/c0/$source.c" -o "$work/$input.i"
 "$minic" -S "$work/$input.i" -o "$work/$output.s"
 # Fixed literal checks use one helper without changing grep's match mode.
+require_file_literals() {
+    file=$1
+    shift
+    for literal do grep -F "$literal" "$file" >/dev/null || return $?; done
+}
 require_literals() {
-    for literal do grep -F "$literal" "$work/$output.s" >/dev/null || return $?; done
+    require_file_literals "$work/$output.s" "$@"
 }
 case "$name" in
     array-bound-constant-expressions)
-        grep -F 'li a0, 1048576' "$work/array_bound_constant_expression.s" >/dev/null
-        grep -F 'li a0, 35' "$work/array_bound_constant_expression.s" >/dev/null
-        grep -F 'li a0, 44' "$work/array_bound_constant_expression.s" >/dev/null
+        require_file_literals "$work/array_bound_constant_expression.s" 'li a0, 1048576' 'li a0, 35' 'li a0, 44'
         linux8=$(grep -c -F '  li a0, 8' "$work/array_bound_constant_expression.s" || true)
         test "$linux8" -ge 2
         printf '%s\n' 'PASS compiler/c0/array_bound_constant_expression scope=local+record typed-ast-consteval=1 operators=+,-,*,/,% relational=1 conditional=linux-alignof-shape alignof=1 sizeof=1 parentheses=1'
@@ -215,8 +218,7 @@ case "$name" in
         printf '%s\n' 'PASS compiler/c0/invalid_runtime_array_bound'
         ;;
     block-scope-extern-object)
-        grep -F 'zero_pfn' "$work/extern.s" >/dev/null
-        grep -F 'promoted' "$work/extern.s" >/dev/null
+        require_file_literals "$work/extern.s" 'zero_pfn' 'promoted'
         grep -E '^[[:space:]]*\.weak[[:space:]]+except_vec_cex$' "$work/extern.s" >/dev/null
         printf '%s\n' 'PASS compiler/c0/block_scope_extern_object scoped-global=1 repeated-compatible=1 cross-function-same-entity=1 file-scope-promotion=1 block-scope-weak-object=1'
 
@@ -257,17 +259,12 @@ case "$name" in
         boolize=$(grep -c '  snez ' "$assembly" || true)
         test "$boolize" -ge 2
         # _Bool objects use one-byte storage and unsigned byte loads.
-        grep -F '  sb ' "$assembly" >/dev/null
-        grep -F '  lbu ' "$assembly" >/dev/null
+        require_file_literals "$assembly" '  sb ' '  lbu '
 
         printf '%s\n' 'PASS compiler/c0/bool_semantics size=1 rank=below-char promotion=int conversion=nonzero-to-one storage=byte'
         ;;
     conditional-pointer-qualifiers)
-        grep -F 'choose_const:' "$work/conditional_pointer_qualifiers.s" >/dev/null
-        grep -F 'choose_volatile:' "$work/conditional_pointer_qualifiers.s" >/dev/null
-        grep -F 'choose_const_volatile:' "$work/conditional_pointer_qualifiers.s" >/dev/null
-        grep -F 'choose_const_void:' "$work/conditional_pointer_qualifiers.s" >/dev/null
-        grep -F 'add_intermediate_const:' "$work/conditional_pointer_qualifiers.s" >/dev/null
+        require_file_literals "$work/conditional_pointer_qualifiers.s" 'choose_const:' 'choose_volatile:' 'choose_const_volatile:' 'choose_const_void:' 'add_intermediate_const:'
 
         "$host_cc" -E -P -x c "$root/tests/compiler/c0/invalid_deep_pointer_qualification.c" \
             -o "$work/invalid_deep_pointer_qualification.i"
@@ -293,8 +290,7 @@ case "$name" in
         ;;
     declaration-head-variadic)
         test -s "$work/good.s"
-        grep -F 'call pick_first' "$work/good.s" >/dev/null
-        grep -F '.globl main' "$work/good.s" >/dev/null
+        require_file_literals "$work/good.s" 'call pick_first' '.globl main'
 
         "$host_cc" -E -P -std=gnu11 -x c \
           "$root/tests/compiler/c0/declaration_head_variadic_layout_bad.c" -o "$work/bad.i"
@@ -324,8 +320,7 @@ case "$name" in
         test -s "$assembly"
         # Undefined extern symbols need no explicit `.extern` directive in GNU as;
         # prove the declaration remains addressable while emitting no storage definition.
-        grep -F '  la a0, opaque_object' "$assembly" >/dev/null
-        grep -F 'opaque_address:' "$assembly" >/dev/null
+        require_file_literals "$assembly" '  la a0, opaque_object' 'opaque_address:'
         if grep -F '.globl opaque_object' "$assembly" >/dev/null ||
            grep -F 'opaque_object:' "$assembly" >/dev/null; then
             printf '%s\n' 'FAIL compiler/c0/extern_incomplete_record_object: extern declaration emitted storage' >&2
@@ -335,14 +330,7 @@ case "$name" in
         ;;
     external-inferred-record-array)
         asm="$work/external_inferred_record_array.s"
-        grep -F 'riscv_isa_ext:' "$asm" >/dev/null
-        grep -F '.size riscv_isa_ext, 48' "$asm" >/dev/null
-        grep -F 'kvm_stats:' "$asm" >/dev/null
-        grep -F '.size kvm_stats, 72' "$asm" >/dev/null
-        grep -F 'fixed_record_array:' "$asm" >/dev/null
-        grep -F '.size fixed_record_array, 24' "$asm" >/dev/null
-        grep -F 'designated_ext:' "$asm" >/dev/null
-        grep -F '.size designated_ext, 96' "$asm" >/dev/null
+        require_file_literals "$asm" 'riscv_isa_ext:' '.size riscv_isa_ext, 48' 'kvm_stats:' '.size kvm_stats, 72' 'fixed_record_array:' '.size fixed_record_array, 24' 'designated_ext:' '.size designated_ext, 96'
 
         test "$(grep -c '^  \.dword \.Lminic_string_' "$asm")" -ge 4
 
@@ -379,10 +367,7 @@ case "$name" in
         printf '%s\n' 'PASS compiler/c0/invalid_for_declaration_scope'
         ;;
     for-expression-initializers)
-        grep -F 'for_compound_initializer:' "$work/for_expression_initializer.s" >/dev/null
-        grep -F 'for_comma_initializer:' "$work/for_expression_initializer.s" >/dev/null
-        grep -F 'for_parenthesized_post_update:' "$work/for_expression_initializer.s" >/dev/null
-        grep -F 'for_comma_update:' "$work/for_expression_initializer.s" >/dev/null
+        require_file_literals "$work/for_expression_initializer.s" 'for_compound_initializer:' 'for_comma_initializer:' 'for_parenthesized_post_update:' 'for_comma_update:'
         grep -E '^[[:space:]]+subw[[:space:]]+a0,' "$work/for_expression_initializer.s" >/dev/null
         grep -F '  beqz a0, .Lwhile_end_' "$work/for_expression_initializer.s" >/dev/null
         printf '%s\n' 'PASS compiler/c0/for_expression_initializer compound=-= expression-init=general comma-init=2 update=full-expression,parenthesized-post++,comma-expression'
@@ -393,14 +378,7 @@ case "$name" in
         ;;
     gnu-aligned-record-fields)
         test -s "$work/gnu_aligned_record_field.s"
-        grep -F 'aligned_values_offset:' "$work/gnu_aligned_record_field.s" >/dev/null
-        grep -F 'aligned_tail_offset:' "$work/gnu_aligned_record_field.s" >/dev/null
-        grep -F 'aligned_record_size:' "$work/gnu_aligned_record_field.s" >/dev/null
-        grep -F 'prefix_aligned_flags_offset:' "$work/gnu_aligned_record_field.s" >/dev/null
-        grep -F 'prefix_aligned_tail_offset:' "$work/gnu_aligned_record_field.s" >/dev/null
-        grep -F 'mixed_aligned_value_offset:' "$work/gnu_aligned_record_field.s" >/dev/null
-        grep -F 'mixed_aligned_tail_offset:' "$work/gnu_aligned_record_field.s" >/dev/null
-        grep -F 'mixed_aligned_record_size:' "$work/gnu_aligned_record_field.s" >/dev/null
+        require_file_literals "$work/gnu_aligned_record_field.s" 'aligned_values_offset:' 'aligned_tail_offset:' 'aligned_record_size:' 'prefix_aligned_flags_offset:' 'prefix_aligned_tail_offset:' 'mixed_aligned_value_offset:' 'mixed_aligned_tail_offset:' 'mixed_aligned_record_size:'
         # Existing suffix alignment contract: 16,32,48.
         grep -E '^[[:space:]]*li[[:space:]]+([[:alnum:]]+),[[:space:]]*48$' "$work/gnu_aligned_record_field.s" >/dev/null
         # Linux prefix shape naturally places u64 at 8 and its tail at 16.
@@ -427,8 +405,7 @@ case "$name" in
     gnu-compiletime-selection-builtins)
         assembly="$work/gnu_compiletime_selection_builtins.s"
         test -s "$assembly"
-        grep -F 'absolute_long:' "$assembly" >/dev/null
-        grep -F 'absolute_int:' "$assembly" >/dev/null
+        require_file_literals "$assembly" 'absolute_long:' 'absolute_int:'
         if grep -F '__builtin_choose_expr' "$assembly" >/dev/null ||
            grep -F '__builtin_types_compatible_p' "$assembly" >/dev/null; then
             printf '%s\n' 'compile-time builtin leaked into emitted assembly' >&2
@@ -450,8 +427,7 @@ case "$name" in
         size0=$(grep -E -c '^[[:space:]]+li[[:space:]]+[^,]+,[[:space:]]*0$' "$assembly" || true)
         test "$size0" -ge 2
         grep -E '^[[:space:]]+li[[:space:]]+[^,]+,[[:space:]]*8$' "$assembly" >/dev/null
-        grep -F '  call empty_source' "$assembly" >/dev/null
-        grep -F '  call empty_target' "$assembly" >/dev/null
+        require_file_literals "$assembly" '  call empty_source' '  call empty_target'
         source_line=$(grep -n -m1 '  call empty_source' "$assembly" | cut -d: -f1)
         target_line=$(grep -n -m1 '  call empty_target' "$assembly" | cut -d: -f1)
         test "$source_line" -lt "$target_line"
@@ -460,8 +436,7 @@ case "$name" in
         ;;
     gnu-function-asm-labels)
         test -s "$work/gnu_function_asm_label.s"
-        grep -F '  call __real_renamed_api' "$work/gnu_function_asm_label.s" >/dev/null
-        grep -F '  la a0, __real_renamed_api' "$work/gnu_function_asm_label.s" >/dev/null
+        require_file_literals "$work/gnu_function_asm_label.s" '  call __real_renamed_api' '  la a0, __real_renamed_api'
         if grep -F '  call renamed_api' "$work/gnu_function_asm_label.s" >/dev/null; then
             printf '%s\n' 'FAIL compiler/c0/gnu_function_asm_labels emitted C identifier as linker symbol' >&2
             exit 1
@@ -518,24 +493,14 @@ case "$name" in
         # Two-half values must touch the high 64-bit lane and compare both halves.
         grep -Eq 'ld a1, 8\(t0\)' "$assembly"
         grep -Eq 'sd a1, 8\(t0\)' "$assembly"
-        grep -F 'or a0, t0, t1' "$assembly" >/dev/null
-        grep -F 'mulhu t2, t0, a0' "$assembly" >/dev/null
-        grep -F '.Lminic_i128_shift_ge64_' "$assembly" >/dev/null
+        require_file_literals "$assembly" 'or a0, t0, t1' 'mulhu t2, t0, a0' '.Lminic_i128_shift_ge64_'
 
         printf '%s\n' 'PASS compiler/c0/gnu_int128_type signed=1 unsigned=2 pair-load-store-equality-mul-shift=1'
         ;;
     gnu-overflow-builtins)
         assembly="$work/gnu_overflow_builtins.s"
         test -s "$assembly"
-        grep -F 'checked_add_int:' "$assembly" >/dev/null
-        grep -F 'checked_mul_long:' "$assembly" >/dev/null
-        grep -F 'checked_mul_ulong:' "$assembly" >/dev/null
-        grep -F 'checked_sub_ulong:' "$assembly" >/dev/null
-        grep -F 'mulh t4, t0, t1' "$assembly" >/dev/null
-        grep -F 'mulhu t4, t0, t1' "$assembly" >/dev/null
-        grep -F 'sltu a0, t0, t1' "$assembly" >/dev/null
-        grep -F 'sw t2, 0(t3)' "$assembly" >/dev/null
-        grep -F 'sd t2, 0(t3)' "$assembly" >/dev/null
+        require_file_literals "$assembly" 'checked_add_int:' 'checked_mul_long:' 'checked_mul_ulong:' 'checked_sub_ulong:' 'mulh t4, t0, t1' 'mulhu t4, t0, t1' 'sltu a0, t0, t1' 'sw t2, 0(t3)' 'sd t2, 0(t3)'
 
         printf '%s\n' 'PASS compiler/c0/gnu_overflow_builtins attribute=warn-unused-result ops=add,sub,mul result-store=1 return=bool widths=32,64 signed+unsigned=1'
         ;;
@@ -570,20 +535,7 @@ case "$name" in
     gnu-section-symbol-attribute)
         assembly="$work/gnu_section_symbol_attribute.s"
         test -s "$assembly"
-        grep -F '.section .probe.data' "$assembly" >/dev/null
-        grep -F 'placed_data:' "$assembly" >/dev/null
-        grep -F '.section .probe.suffix.first' "$assembly" >/dev/null
-        grep -F 'suffix_first:' "$assembly" >/dev/null
-        grep -F '.section .probe.suffix.second' "$assembly" >/dev/null
-        grep -F 'suffix_second:' "$assembly" >/dev/null
-        grep -F '.section .probe.suffix.array' "$assembly" >/dev/null
-        grep -F 'suffix_array:' "$assembly" >/dev/null
-        grep -F '.section .probe.prefix.concat' "$assembly" >/dev/null
-        grep -F 'prefix_section_scalar:' "$assembly" >/dev/null
-        grep -F '.section .probe.text' "$assembly" >/dev/null
-        grep -F 'placed_function:' "$assembly" >/dev/null
-        grep -F '.section .probe.prefix.text' "$assembly" >/dev/null
-        grep -F 'prefix_placed_function:' "$assembly" >/dev/null
+        require_file_literals "$assembly" '.section .probe.data' 'placed_data:' '.section .probe.suffix.first' 'suffix_first:' '.section .probe.suffix.second' 'suffix_second:' '.section .probe.suffix.array' 'suffix_array:' '.section .probe.prefix.concat' 'prefix_section_scalar:' '.section .probe.text' 'placed_function:' '.section .probe.prefix.text' 'prefix_placed_function:'
         printf '%s\n' 'PASS compiler/c0/gnu_section_symbol_attribute extern-object=prefix+suffix deferred-prefix=section function-prefix-section=1 function-mixed-attributes=section+cold+alloc-size+malloc concatenated-string=1 typeof-record-declaration=1 per-declarator=isolated array-suffix=1 function-declaration=preserved definition-inherits=1 rv64-section-emission=1'
         ;;
     gnu-va-builtins)
@@ -603,12 +555,7 @@ case "$name" in
         ;;
     gnu-visible-extern-arrays)
         test -s "$work/gnu_visible_extern_array.s"
-        grep -F '.globl names' "$work/gnu_visible_extern_array.s" >/dev/null
-        grep -F '.internal names' "$work/gnu_visible_extern_array.s" >/dev/null
-        grep -F '.size names, 24' "$work/gnu_visible_extern_array.s" >/dev/null
-        grep -F '.globl hidden_items' "$work/gnu_visible_extern_array.s" >/dev/null
-        grep -F '.hidden hidden_items' "$work/gnu_visible_extern_array.s" >/dev/null
-        grep -F '.size hidden_items, 8' "$work/gnu_visible_extern_array.s" >/dev/null
+        require_file_literals "$work/gnu_visible_extern_array.s" '.globl names' '.internal names' '.size names, 24' '.globl hidden_items' '.hidden hidden_items' '.size hidden_items, 8'
 
         test "$(grep -c '^  .dword .Lminic_string_' "$work/gnu_visible_extern_array.s")" -ge 3
         printf '%s\n' 'PASS compiler/c0/gnu_visible_extern_array prefix=internal suffix=hidden extern-array=merge size=24,8'
@@ -625,9 +572,7 @@ case "$name" in
         ;;
     gnu-zero-length-record-arrays)
         test -s "$work/gnu_zero_length_record_array.s"
-        grep -F 'zero_array_offset:' "$work/gnu_zero_length_record_array.s" >/dev/null
-        grep -F 'zero_tail_offset:' "$work/gnu_zero_length_record_array.s" >/dev/null
-        grep -F 'zero_record_size:' "$work/gnu_zero_length_record_array.s" >/dev/null
+        require_file_literals "$work/gnu_zero_length_record_array.s" 'zero_array_offset:' 'zero_tail_offset:' 'zero_record_size:'
         test "$(grep -Ec '^[[:space:]]*li[[:space:]]+([[:alnum:]]+),[[:space:]]*8$' "$work/gnu_zero_length_record_array.s")" -ge 2
         grep -E '^[[:space:]]*li[[:space:]]+([[:alnum:]]+),[[:space:]]*16$' "$work/gnu_zero_length_record_array.s" >/dev/null
 
@@ -655,10 +600,7 @@ case "$name" in
         printf '%s\n' 'PASS compiler/c0/incomplete-array-typedef owner=typedef nested-incomplete=fail-closed'
         ;;
     inline-functions)
-        grep -F '.type add_one, @function' "$work/inline_function.s" >/dev/null
-        grep -F '.type add_two, @function' "$work/inline_function.s" >/dev/null
-        grep -F '  call add_one' "$work/inline_function.s" >/dev/null
-        grep -F '  call add_two' "$work/inline_function.s" >/dev/null
+        require_file_literals "$work/inline_function.s" '.type add_one, @function' '.type add_two, @function' '  call add_one' '  call add_two'
         printf '%s\n' 'PASS compiler/c0/inline_function orders=static-inline,inline-static optimization=optional'
 
         "$host_cc" -E -P -x c "$root/tests/compiler/c0/invalid_inline_object.c" -o "$work/invalid_inline_object.i"
@@ -671,10 +613,7 @@ case "$name" in
         printf '%s\n' 'PASS compiler/c0/invalid_inline_object'
         ;;
     long-long-types)
-        grep -F '  .dword 3' "$work/long_long_types.s" >/dev/null
-        grep -F '  .dword 4' "$work/long_long_types.s" >/dev/null
-        grep -F '.type add_long_long, @function' "$work/long_long_types.s" >/dev/null
-        grep -F '.type add_unsigned_long_long, @function' "$work/long_long_types.s" >/dev/null
+        require_file_literals "$work/long_long_types.s" '  .dword 3' '  .dword 4' '.type add_long_long, @function' '.type add_unsigned_long_long, @function'
         printf '%s\n' 'PASS compiler/c0/long_long_types width=8 suffixes=LL,ULL rank=distinct'
 
         "$host_cc" -E -P -x c "$root/tests/compiler/c0/invalid_too_many_long_specifiers.c" \
@@ -690,11 +629,7 @@ case "$name" in
         printf '%s\n' 'PASS compiler/c0/invalid_too_many_long_specifiers'
         ;;
     mixed-double-arithmetic)
-        grep -F '  fcvt.d.w ft0, t0' "$work/mixed_double_arithmetic.s" >/dev/null
-        grep -F '  fadd.d ft0, ft0, ft1' "$work/mixed_double_arithmetic.s" >/dev/null
-        grep -F '  fmul.d ft0, ft0, ft1' "$work/mixed_double_arithmetic.s" >/dev/null
-        grep -F '  fdiv.d ft0, ft0, ft1' "$work/mixed_double_arithmetic.s" >/dev/null
-        grep -F '  fsub.d ft0, ft0, ft1' "$work/mixed_double_arithmetic.s" >/dev/null
+        require_file_literals "$work/mixed_double_arithmetic.s" '  fcvt.d.w ft0, t0' '  fadd.d ft0, ft0, ft1' '  fmul.d ft0, ft0, ft1' '  fdiv.d ft0, ft0, ft1' '  fsub.d ft0, ft0, ft1'
         printf '%s\n' 'PASS compiler/c0/mixed_double_arithmetic int-to-double=1 operators=+,-,*,/'
         ;;
     pointer-compound-subtraction)
@@ -757,19 +692,14 @@ case "$name" in
         printf '%s\n' 'PASS compiler/c0/record_assignment_expression whole-object-copy=1 comma-discard=1 alias-safe-temp=1 chained-record-call-strict=1'
         ;;
     record-copy-array-members)
-        grep -F '.type copy_packet, @function' "$work/record_copy_array_member.s" >/dev/null
-        grep -F '  lbu t0, 0(t2)' "$work/record_copy_array_member.s" >/dev/null
-        grep -F '  sb t0, 0(t3)' "$work/record_copy_array_member.s" >/dev/null
+        require_file_literals "$work/record_copy_array_member.s" '.type copy_packet, @function' '  lbu t0, 0(t2)' '  sb t0, 0(t3)'
         # Packet is 12 bytes on RV64 here; the snapshot is rounded to a 16-byte temporary stack slot.
         test "$(grep -c -F '  lbu t0, 0(t2)' "$work/record_copy_array_member.s")" -ge 24
         grep -F '  addi sp, sp, -16' "$work/record_copy_array_member.s" >/dev/null
         printf '%s\n' 'PASS compiler/c0/record_copy_array_member storage=12 snapshot=stack array-member=yes'
         ;;
     record-local-initializers)
-        grep -F '.type copy_packet, @function' "$work/record_local_initializer.s" >/dev/null
-        grep -F '.type initialize_guard, @function' "$work/record_local_initializer.s" >/dev/null
-        grep -F '  lbu t0, 0(t2)' "$work/record_local_initializer.s" >/dev/null
-        grep -F '  sb t0, 0(t3)' "$work/record_local_initializer.s" >/dev/null
+        require_file_literals "$work/record_local_initializer.s" '.type copy_packet, @function' '.type initialize_guard, @function' '  lbu t0, 0(t2)' '  sb t0, 0(t3)'
 
         "$host_cc" -E -P -x c \
             "$root/tests/compiler/c0/record_local_chained_designator.c" \
@@ -846,11 +776,7 @@ case "$name" in
         printf '%s\n' 'PASS compiler/c0/runtime_local_array_initializer negative=inferred-without-init+incompatible-element'
         ;;
     runtime-record-array-initializers)
-        grep -F 'linux_guid_compound_literal:' "$work/runtime_record_array_initializer.s" >/dev/null
-        grep -F 'runtime_record_array_local:' "$work/runtime_record_array_initializer.s" >/dev/null
-        grep -F 'runtime_record_array_designated:' "$work/runtime_record_array_initializer.s" >/dev/null
-        grep -F 'runtime_inferred_record_array:' "$work/runtime_record_array_initializer.s" >/dev/null
-        grep -F '  sb ' "$work/runtime_record_array_initializer.s" >/dev/null
+        require_file_literals "$work/runtime_record_array_initializer.s" 'linux_guid_compound_literal:' 'runtime_record_array_local:' 'runtime_record_array_designated:' 'runtime_inferred_record_array:' '  sb '
         printf '%s\n' 'PASS compiler/c0/runtime_record_array_initializer compound-literal=1 fixed-array-field=16 scalar-elements=1 designated=1 holes=1 inferred-record=1'
 
         "$host_cc" -E -P -std=gnu11 -x c \
@@ -893,21 +819,7 @@ case "$name" in
     rv64-integer-aggregate-return)
         assembly="$work/rv64_integer_aggregate_return.s"
         test -s "$assembly"
-        grep -F 'add_pair:' "$assembly" >/dev/null
-        grep -F 'forward_pair:' "$assembly" >/dev/null
-        grep -F 'call add_pair' "$assembly" >/dev/null
-        grep -F 'sd a0,' "$assembly" >/dev/null
-        grep -F 'sd a1,' "$assembly" >/dev/null
-        grep -F 'sd a2,' "$assembly" >/dev/null
-        grep -F 'sd a3,' "$assembly" >/dev/null
-        grep -F 'ld a0, 0(t0)' "$assembly" >/dev/null
-        grep -F 'ld a1, 8(t0)' "$assembly" >/dev/null
-        grep -F 'make_triple:' "$assembly" >/dev/null
-        grep -F 'forward_triple:' "$assembly" >/dev/null
-        grep -F 'cleanup_triple_call:' "$assembly" >/dev/null
-        grep -F 'call make_triple' "$assembly" >/dev/null
-        grep -F 'lbu t0, 0(t2)' "$assembly" >/dev/null
-        grep -F 'sb t0, 0(t3)' "$assembly" >/dev/null
+        require_file_literals "$assembly" 'add_pair:' 'forward_pair:' 'call add_pair' 'sd a0,' 'sd a1,' 'sd a2,' 'sd a3,' 'ld a0, 0(t0)' 'ld a1, 8(t0)' 'make_triple:' 'forward_triple:' 'cleanup_triple_call:' 'call make_triple' 'lbu t0, 0(t2)' 'sb t0, 0(t3)'
 
         printf '%s\n' 'PASS compiler/c0/rv64_integer_aggregate_return direct=8,16 indirect=24 hidden-result=a0 explicit-args=a1+ record-local=1 record-call=1 cleanup=1'
         ;;
@@ -920,8 +832,7 @@ case "$name" in
             "PASS compiler/c0/shared_function_declarator contexts=parenthesized-function-typedef,direct-function-typedef,function-pointer-field,extern-function-pointer-object,function-pointer-parameter,local-function-pointer,function-pointer-type-name local=void+int ordinary-parenthesized-local=preserved explicit-cast=1 direct-pointer-call=1"
         ;;
     short-integers)
-        grep -F '.size layout, 8' "$work/short_integer_layout.s" >/dev/null
-        grep -F '  .half 65535' "$work/short_integer_layout.s" >/dev/null
+        require_file_literals "$work/short_integer_layout.s" '.size layout, 8' '  .half 65535'
         grep -Eq '^[[:space:]]+lhu[[:space:]]+[a-z][a-z0-9]*, 0\([a-z][a-z0-9]*\)$' "$work/short_integer_layout.s"
         grep -Eq '^[[:space:]]+sh[[:space:]]+[a-z][a-z0-9]*, 0\([a-z][a-z0-9]*\)$' "$work/short_integer_layout.s"
         grep -Eq '^[[:space:]]+slli[[:space:]]+[a-z][a-z0-9]*, [a-z][a-z0-9]*, 48$' "$work/short_integer_layout.s"
@@ -929,17 +840,7 @@ case "$name" in
         printf '%s\n' 'PASS compiler/c0/short_integer size=2 align=2 unsigned-load=lhu store=sh signed-extension=16'
         ;;
     static-aggregate-array-designators)
-        grep -F '.size sparse_records, 32' "$work/static_aggregate_array_designators.s" >/dev/null
-        grep -F '.size nested_records, 32' "$work/static_aggregate_array_designators.s" >/dev/null
-        grep -F '.size fixed_records, 32' "$work/static_aggregate_array_designators.s" >/dev/null
-        grep -F '  .word 11' "$work/static_aggregate_array_designators.s" >/dev/null
-        grep -F '  .word 32' "$work/static_aggregate_array_designators.s" >/dev/null
-        grep -F '  .word 52' "$work/static_aggregate_array_designators.s" >/dev/null
-        grep -F '.size relocation_records, 16' "$work/static_aggregate_array_designators.s" >/dev/null
-        grep -F '  .dword relocation_target' "$work/static_aggregate_array_designators.s" >/dev/null
-        grep -F '  .dword .Lminic_string_' "$work/static_aggregate_array_designators.s" >/dev/null
-        grep -F '.size atomic_lock_slots, 1024' "$work/static_aggregate_array_designators.s" >/dev/null
-        grep -F '.size task_mask, 32' "$work/static_aggregate_array_designators.s" >/dev/null
+        require_file_literals "$work/static_aggregate_array_designators.s" '.size sparse_records, 32' '.size nested_records, 32' '.size fixed_records, 32' '  .word 11' '  .word 32' '  .word 52' '.size relocation_records, 16' '  .dword relocation_target' '  .dword .Lminic_string_' '.size atomic_lock_slots, 1024' '.size task_mask, 32'
 
         minic_cc=$(dirname "$minic")/minic-cc
         "$minic_cc" --target=x86_64-linux -S "$work/static_aggregate_array_designators.i" \
@@ -954,19 +855,14 @@ case "$name" in
             >"$work/backward.stdout" 2>"$work/backward.stderr"
         # GNU designated initializers allow moving backward to a previously untouched
         # slot; the emitted object must keep the original slot indices intact.
-        grep -F '.size bad, 24' "$work/backward.s" >/dev/null
-        grep -F '  .word 3' "$work/backward.s" >/dev/null
-        grep -F '  .word 4' "$work/backward.s" >/dev/null
-        grep -F '  .word 1' "$work/backward.s" >/dev/null
-        grep -F '  .word 2' "$work/backward.s" >/dev/null
+        require_file_literals "$work/backward.s" '.size bad, 24' '  .word 3' '  .word 4' '  .word 1' '  .word 2'
 
         printf '%s\n' \
             'PASS compiler/c0/static_aggregate_array_designators inferred-bound=designator-extent nested-field=1 compound-literal=1 relocation-owner=aggregate-scalar union-array=1024 backward=GNU-slot-order range=shared-owner backward-scalar-range=native-x86'
         ;;
     static-assert-declaration)
         test -s "$work/static_assert_declaration.s"
-        grep -F 'generic_probe:' "$work/static_assert_declaration.s" >/dev/null
-        grep -F 'main:' "$work/static_assert_declaration.s" >/dev/null
+        require_file_literals "$work/static_assert_declaration.s" 'generic_probe:' 'main:'
 
         "$host_cc" -E -P -std=gnu11 -x c "$root/tests/compiler/c0/invalid_static_assert_false.c" \
             -o "$work/invalid_static_assert_false.i"
@@ -980,35 +876,16 @@ case "$name" in
         printf '%s\n' 'PASS compiler/c0/static_assert_declaration scope=file+block condition=shared-ast-consteval builtin=types-compatible+typeof message=concatenated false=reject runtime=none'
         ;;
     static-fixed-record-array-zero)
-        grep -F '.type zero_records, @object' "$work/static_fixed_record_array_zero.s" >/dev/null
-        grep -F '.size zero_records, 48' "$work/static_fixed_record_array_zero.s" >/dev/null
-        grep -F '.type page_records, @object' "$work/static_fixed_record_array_zero.s" >/dev/null
+        require_file_literals "$work/static_fixed_record_array_zero.s" '.type zero_records, @object' '.size zero_records, 48' '.type page_records, @object'
         # ELF section flags may be emitted explicitly; the section identity is the
         # data-layout invariant here.
-        grep -F '.section .bss..page_aligned' "$work/static_fixed_record_array_zero.s" >/dev/null
-        grep -F '.size page_records, 32' "$work/static_fixed_record_array_zero.s" >/dev/null
-        grep -F '.type initialized_records, @object' "$work/static_fixed_record_array_zero.s" >/dev/null
-        grep -F '.size initialized_records, 32' "$work/static_fixed_record_array_zero.s" >/dev/null
-        grep -F '.section .rodata' "$work/static_fixed_record_array_zero.s" >/dev/null
-        grep -F 'read_fixed_record_arrays:' "$work/static_fixed_record_array_zero.s" >/dev/null
+        require_file_literals "$work/static_fixed_record_array_zero.s" '.section .bss..page_aligned' '.size page_records, 32' '.type initialized_records, @object' '.size initialized_records, 32' '.section .rodata' 'read_fixed_record_arrays:'
 
         printf '%s\n' 'PASS compiler/c0/static_fixed_record_array_zero fixed-record=generic zero-init=1 suffix-section=1 suffix-align=1 initialized=shared'
         ;;
     static-floating-aggregate)
         test -s "$work/output.s"
-        grep -F 'aXformType:' "$work/output.s" >/dev/null
-        grep -F '.word 1473454116' "$work/output.s" >/dev/null
-        grep -F '.word 1065353216' "$work/output.s" >/dev/null
-        grep -F '.word 1424045017' "$work/output.s" >/dev/null
-        grep -F '.word 1114636288' "$work/output.s" >/dev/null
-        grep -F 'floatingZero:' "$work/output.s" >/dev/null
-        grep -F 'integerToDouble:' "$work/output.s" >/dev/null
-        grep -F '.dword 4619567317775286272' "$work/output.s" >/dev/null
-        grep -F 'unsignedToFloat:' "$work/output.s" >/dev/null
-        grep -F '.word 1091567616' "$work/output.s" >/dev/null
-        grep -F 'fcvt.d.s' "$work/output.s" >/dev/null
-        grep -F 'fsgnjn.d' "$work/output.s" >/dev/null
-        grep -F 'fcvt.s.d' "$work/output.s" >/dev/null
+        require_file_literals "$work/output.s" 'aXformType:' '.word 1473454116' '.word 1065353216' '.word 1424045017' '.word 1114636288' 'floatingZero:' 'integerToDouble:' '.dword 4619567317775286272' 'unsignedToFloat:' '.word 1091567616' 'fcvt.d.s' 'fsgnjn.d' 'fcvt.s.d'
 
         if command -v riscv64-linux-gnu-gcc >/dev/null 2>&1; then
             riscv64-linux-gnu-gcc -c "$work/output.s" -o "$work/output.o"
@@ -1017,10 +894,7 @@ case "$name" in
         printf '%s\n' 'PASS compiler/c0/static-floating-aggregate sqlite-shape=1 binary32-rounding=checked'
         ;;
     static-inferred-char-arrays)
-        grep -F 'local_name:' "$work/static_inferred_char_array.s" >/dev/null
-        grep -F 'upvalue_name:' "$work/static_inferred_char_array.s" >/dev/null
-        grep -F '.size local_name, 6' "$work/static_inferred_char_array.s" >/dev/null
-        grep -F '.size upvalue_name, 8' "$work/static_inferred_char_array.s" >/dev/null
+        require_file_literals "$work/static_inferred_char_array.s" 'local_name:' 'upvalue_name:' '.size local_name, 6' '.size upvalue_name, 8'
         if grep -F '.globl local_name' "$work/static_inferred_char_array.s" >/dev/null; then
             echo 'static inferred character array leaked external linkage' >&2
             exit 1
@@ -1031,8 +905,7 @@ case "$name" in
         grep -F 'runnable_avg_yN_inv:' "$work/static_inferred_integer_array.s" >/dev/null
         # RV64 GNU scalar directives use signed decimal *spelling* for the physical
         # 0xffffffff payload, independently of the unsigned C initializer type.
-        grep -F '  .word -1' "$work/static_inferred_integer_array.s" >/dev/null
-        grep -F '.size runnable_avg_yN_inv, 12' "$work/static_inferred_integer_array.s" >/dev/null
+        require_file_literals "$work/static_inferred_integer_array.s" '  .word -1' '.size runnable_avg_yN_inv, 12'
         if grep -F '.globl runnable_avg_yN_inv' "$work/static_inferred_integer_array.s" >/dev/null; then
             echo 'inferred static integer array leaked external linkage' >&2
             exit 1
@@ -1040,11 +913,7 @@ case "$name" in
         printf '%s\n' 'PASS compiler/c0/static_inferred_integer_array bound=inferred-from-brace count=3 typed-bits=u32-max suffix-attribute=unused internal-linkage=1'
         ;;
     static-local-fixed-arrays)
-        grep -F '.section .rodata' "$work/static_local_fixed_array.s" >/dev/null
-        grep -F '.type __minic_static_local_' "$work/static_local_fixed_array.s" >/dev/null
-        grep -F '  .byte 1' "$work/static_local_fixed_array.s" >/dev/null
-        grep -F '  .byte 2' "$work/static_local_fixed_array.s" >/dev/null
-        grep -F '  .byte 3' "$work/static_local_fixed_array.s" >/dev/null
+        require_file_literals "$work/static_local_fixed_array.s" '.section .rodata' '.type __minic_static_local_' '  .byte 1' '  .byte 2' '  .byte 3'
         # The shared static-storage initializer owner may materialize implicit tail zeroes
         # as explicit typed slots instead of relying on the emitter's .zero compression.
         # Keep this gate semantic: both spellings represent the same two-byte zero tail.
@@ -1064,16 +933,9 @@ case "$name" in
         ;;
     static-local-inferred-arrays)
         grep -Fx '.section .rodata' "$work/static_local_inferred_array.s" >/dev/null
-        grep -F '.type __minic_static_local_' "$work/static_local_inferred_array.s" >/dev/null
-        grep -F '  .byte 1' "$work/static_local_inferred_array.s" >/dev/null
-        grep -F '  .byte 6' "$work/static_local_inferred_array.s" >/dev/null
+        require_file_literals "$work/static_local_inferred_array.s" '.type __minic_static_local_' '  .byte 1' '  .byte 6'
         grep -E '\.size __minic_static_local_[^,]+, 7$' "$work/static_local_inferred_array.s" >/dev/null
-        grep -F '  .word 8' "$work/static_local_inferred_array.s" >/dev/null
-        grep -F '  .word 12' "$work/static_local_inferred_array.s" >/dev/null
-        grep -F '  .word 16' "$work/static_local_inferred_array.s" >/dev/null
-        grep -F '  .word 3' "$work/static_local_inferred_array.s" >/dev/null
-        grep -F '  .dword 101' "$work/static_local_inferred_array.s" >/dev/null
-        grep -F '  .dword 202' "$work/static_local_inferred_array.s" >/dev/null
+        require_file_literals "$work/static_local_inferred_array.s" '  .word 8' '  .word 12' '  .word 16' '  .word 3' '  .dword 101' '  .dword 202'
         grep -E '\.size __minic_static_local_[^,]+, 32$' "$work/static_local_inferred_array.s" >/dev/null
         if grep -F '.globl __minic_static_local_' "$work/static_local_inferred_array.s" >/dev/null; then
             echo 'inferred static local array leaked external linkage' >&2
@@ -1088,8 +950,7 @@ case "$name" in
             echo 'static local pointer array leaked external linkage' >&2
             exit 1
         fi
-        grep -F '  .dword shared_event' "$asm" >/dev/null
-        grep -F '  .dword .Lminic_string_' "$asm" >/dev/null
+        require_file_literals "$asm" '  .dword shared_event' '  .dword .Lminic_string_'
         # Both eight zero bytes and one zero 64-bit pointer slot are valid
         # representations; verify this is the internal 32-byte table's null slot.
         sed -n '/^__minic_static_local_[^:]*:/,/^\.size __minic_static_local_/p' "$asm" |
@@ -1115,30 +976,18 @@ case "$name" in
         printf '%s\n' 'PASS compiler/c0/static_local_scalar integer=writable-null pointer=const-null suffix-section=scalar,fixed,inferred initialized=1 per-declarator-isolation=1 storage=internal-global lifetime=static'
         ;;
     static-pointer-arrays)
-        grep -F '.section .init.data' "$work/static_pointer_array.s" >/dev/null
-        grep -F 'levels:' "$work/static_pointer_array.s" >/dev/null
-        grep -F '  .dword start_a' "$work/static_pointer_array.s" >/dev/null
-        grep -F '  .dword start_b' "$work/static_pointer_array.s" >/dev/null
-        grep -F '.size levels, 16' "$work/static_pointer_array.s" >/dev/null
-        grep -F 'names:' "$work/static_pointer_array.s" >/dev/null
+        require_file_literals "$work/static_pointer_array.s" '.section .init.data' 'levels:' '  .dword start_a' '  .dword start_b' '.size levels, 16' 'names:'
         string_relocations=$(grep -c '^  \.dword \.Lminic_string_' "$work/static_pointer_array.s")
         if test "$string_relocations" -ne 2; then
             echo "FAIL static_pointer_array string-relocations=$string_relocations expected=2" >&2
             cat "$work/static_pointer_array.s" >&2
             exit 1
         fi
-        grep -F '  .dword 0' "$work/static_pointer_array.s" >/dev/null
-        grep -F '.size names, 24' "$work/static_pointer_array.s" >/dev/null
+        require_file_literals "$work/static_pointer_array.s" '  .dword 0' '.size names, 24'
         printf '%s\n' 'PASS compiler/c0/static_pointer_array inferred-bound=3 object-relocations=2 null-tail=typed-pointer-zero suffix-section=1 extern-array-decay=2'
         ;;
     static-pointer-constant-conditional)
-        grep -F 'selected:' "$work/output.s" >/dev/null
-        grep -F 'null_selected:' "$work/output.s" >/dev/null
-        grep -F '  .dword value' "$work/output.s" >/dev/null
-        grep -F '  .dword 0' "$work/output.s" >/dev/null
-        grep -F 'absolute_pointer_poison:' "$work/output.s" >/dev/null
-        grep -F 'absolute_pointer_bits:' "$work/output.s" >/dev/null
-        grep -F 'same_function_conditional:' "$work/output.s" >/dev/null
+        require_file_literals "$work/output.s" 'selected:' 'null_selected:' '  .dword value' '  .dword 0' 'absolute_pointer_poison:' 'absolute_pointer_bits:' 'same_function_conditional:'
         same_function_count=$(grep -F -c '  .dword static_pointer_function' "$work/output.s")
         test "$same_function_count" -eq 1
 
@@ -1156,10 +1005,7 @@ case "$name" in
     static-prefix-object-attributes)
         assembly="$work/static_prefix_object_attributes.s"
         test -s "$assembly"
-        grep -F 'class_irq_is_conditional:' "$assembly" >/dev/null
-        grep -F '  .byte 0' "$assembly" >/dev/null
-        grep -F '.size class_irq_is_conditional, 1' "$assembly" >/dev/null
-        grep -F 'class_irq_add:' "$assembly" >/dev/null
+        require_file_literals "$assembly" 'class_irq_is_conditional:' '  .byte 0' '.size class_irq_is_conditional, 1' 'class_irq_add:'
         if grep -q 'static_declaration_is_function' src/frontend/parser_function.c; then
             printf '%s\n' 'static semantic declaration probe still present' >&2
             exit 1
@@ -1167,16 +1013,9 @@ case "$name" in
         printf '%s\n' 'PASS compiler/c0/static_prefix_object_attributes prefix=unused object=static-const-bool initializer=shared-ice-enum-false width=1-byte function=static-inline single-pass-head=1 semantic-probe=none'
         ;;
     static-preformed-array-zero)
-        grep -F '.type plain_mask, @object' "$work/static_preformed_array_zero.s" >/dev/null
-        grep -F '.size plain_mask, 16' "$work/static_preformed_array_zero.s" >/dev/null
-        grep -F '.type percpu_mask, @object' "$work/static_preformed_array_zero.s" >/dev/null
+        require_file_literals "$work/static_preformed_array_zero.s" '.type plain_mask, @object' '.size plain_mask, 16' '.type percpu_mask, @object'
         grep -Fx '.section .data..percpu' "$work/static_preformed_array_zero.s" >/dev/null
-        grep -F '.size percpu_mask, 16' "$work/static_preformed_array_zero.s" >/dev/null
-        grep -F '.type integer_mask, @object' "$work/static_preformed_array_zero.s" >/dev/null
-        grep -F '.size integer_mask, 16' "$work/static_preformed_array_zero.s" >/dev/null
-        grep -F '.section .rodata' "$work/static_preformed_array_zero.s" >/dev/null
-        grep -F '.type readonly_mask, @object' "$work/static_preformed_array_zero.s" >/dev/null
-        grep -F '.size readonly_mask, 8' "$work/static_preformed_array_zero.s" >/dev/null
+        require_file_literals "$work/static_preformed_array_zero.s" '.size percpu_mask, 16' '.type integer_mask, @object' '.size integer_mask, 16' '.section .rodata' '.type readonly_mask, @object' '.size readonly_mask, 8'
         if grep -E '^\.globl (plain_mask|percpu_mask|integer_mask|readonly_mask)$' \
             "$work/static_preformed_array_zero.s" >/dev/null; then
             echo 'pre-formed static array leaked external linkage' >&2
@@ -1204,17 +1043,11 @@ case "$name" in
         echo 'PASS compiler/c0/static-union-shape-overlay span-preserved relocation-after-union=correct'
         ;;
     static-zero-definitions)
-        grep -F 'state:' "$work/static_zero_definition.s" >/dev/null
-        grep -F '.size state, 16' "$work/static_zero_definition.s" >/dev/null
-        grep -F 'counter:' "$work/static_zero_definition.s" >/dev/null
-        grep -F '.size counter, 4' "$work/static_zero_definition.s" >/dev/null
-        grep -F 'pointer:' "$work/static_zero_definition.s" >/dev/null
-        grep -F '.size pointer, 8' "$work/static_zero_definition.s" >/dev/null
+        require_file_literals "$work/static_zero_definition.s" 'state:' '.size state, 16' 'counter:' '.size counter, 4' 'pointer:' '.size pointer, 8'
         printf '%s\n' 'PASS compiler/c0/static_zero_definition record=16 int=4 pointer=8 implicit-zero=all'
         ;;
     transparent-union)
-        grep -F '  call release_pages' "$work/transparent.s" >/dev/null
-        grep -F '  jalr ra, t0, 0' "$work/transparent.s" >/dev/null
+        require_file_literals "$work/transparent.s" '  call release_pages' '  jalr ra, t0, 0'
         printf '%s\n' 'PASS compiler/c0/transparent_union type-owner=record members=3 direct=3 indirect=1 null=1 abi=first-member-pointer callee=one-integer-chunk'
 
         "$host_cc" -E -P -x c "$root/tests/compiler/c0/invalid_transparent_union_nonmember.c" -o "$work/nonmember.i"
@@ -1240,8 +1073,7 @@ case "$name" in
         printf '%s\n' 'PASS compiler/c0/transparent_union negative=nonmember+nonunion+nonpointer-v0'
         ;;
     unnamed-prototype-parameters)
-        grep -F '  call install' "$work/unnamed_prototype_parameter.s" >/dev/null
-        grep -F '  call consume' "$work/unnamed_prototype_parameter.s" >/dev/null
+        require_file_literals "$work/unnamed_prototype_parameter.s" '  call install' '  call consume'
         printf '%s\n' 'PASS compiler/c0/unnamed_prototype_parameter declaration=unnamed definition=named'
 
         "$host_cc" -E -P -x c \
@@ -1272,32 +1104,26 @@ case "$name" in
         printf '%s\n' 'PASS compiler/c0/invalid_void_local_object'
         ;;
     postfix-const)
-        grep -F '.type same_first, @function' "$work/$output.s" >/dev/null
-        grep -F '.type use_typedef_const, @function' "$work/$output.s" >/dev/null
+        require_literals '.type same_first, @function' '.type use_typedef_const, @function'
         printf '%s\n' 'PASS compiler/c0/postfix_const forms=char-const,const-char,typedef-const'
         ;;
     zero-aggregate-null)
-        grep -F '.globl main' "$work/$output.s" >/dev/null
-        grep -F '  sw ' "$work/$output.s" >/dev/null
-        grep -F '  sd ' "$work/$output.s" >/dev/null
+        require_literals '.globl main' '  sw ' '  sd '
         printf '%s\n' 'PASS compiler/c0/zero_aggregate_null scalar-zero=yes pointer-null=yes'
         ;;
     stack-fixed-arguments)
-        grep -F '.type minic_abi_sum9, @function' "$work/$output.s" >/dev/null
-        grep -F '  call gcc_abi_sum9' "$work/$output.s" >/dev/null
+        require_literals '.type minic_abi_sum9, @function' '  call gcc_abi_sum9'
         printf '%s\n' 'PASS compiler/c0/stack_fixed_arguments fixed=9 integer-class register=8 stack=1'
         ;;
     gnu-octal-character-case-range)
         test -s "$work/$output.s"
-        grep -F 'linux_printk_level_like:' "$work/$output.s" >/dev/null
-        grep -F 'octal_character_values:' "$work/$output.s" >/dev/null
+        require_literals 'linux_printk_level_like:' 'octal_character_values:'
 
         printf '%s\n' 'PASS compiler/c0/gnu_octal_character_case_range octal=1-3-digits case-range=0...7 expanded=8 duplicate-check=preserved'
         ;;
     nested-function-pointer-field)
         test -s "$work/$output.s"
-        grep -F 'install_resolver:' "$work/$output.s" >/dev/null
-        grep -F 'resolve_symbol' "$work/$output.s" >/dev/null
+        require_literals 'install_resolver:' 'resolve_symbol'
 
         if command -v riscv64-linux-gnu-gcc >/dev/null 2>&1; then
             riscv64-linux-gnu-gcc -c "$work/$output.s" -o "$work/$output.o"
@@ -1307,8 +1133,7 @@ case "$name" in
         ;;
     nested-function-pointer-type-name)
         test -s "$work/$output.s"
-        grep -F 'resolve_nested_function_pointer:' "$work/$output.s" >/dev/null
-        grep -F 'jalr ra, t0, 0' "$work/$output.s" >/dev/null
+        require_literals 'resolve_nested_function_pointer:' 'jalr ra, t0, 0'
 
         if command -v riscv64-linux-gnu-gcc >/dev/null 2>&1; then
             riscv64-linux-gnu-gcc -c "$work/$output.s" -o "$work/$output.o"
@@ -1317,10 +1142,7 @@ case "$name" in
         printf '%s\n' 'PASS compiler/c0/nested-function-pointer-type-name anonymous=1 nested=1 indirect-call=1'
         ;;
     prefix-update-expressions)
-        grep -F '  addi t0, t0, 1' "$work/$output.s" >/dev/null
-        grep -F '  addi t0, t0, -1' "$work/$output.s" >/dev/null
-        grep -F '  addi t0, t0, 4' "$work/$output.s" >/dev/null
-        grep -F '  addi t0, t0, -4' "$work/$output.s" >/dev/null
+        require_literals '  addi t0, t0, 1' '  addi t0, t0, -1' '  addi t0, t0, 4' '  addi t0, t0, -4'
         test "$(grep -c -F '  mv a0, t0' "$work/$output.s")" -ge 4
         printf '%s\n' 'PASS compiler/c0/prefix_update_expression integer=++/-- pointer=++/-- result=new lvalue-address=once'
         ;;
@@ -1331,8 +1153,7 @@ case "$name" in
         printf '%s\n' 'PASS compiler/c0/signed_char_semantics signed-load=lb unsigned-and-plain-load=lbu store=sb'
         ;;
     extern-parenthesized-functions)
-        grep -F '  call external_add' "$work/$output.s" >/dev/null
-        grep -F '  call external_alloc' "$work/$output.s" >/dev/null
+        require_literals '  call external_add' '  call external_alloc'
         if grep -F '.type external_add, @function' "$work/$output.s" >/dev/null; then
             printf '%s\n' 'FAIL compiler/c0/extern_parenthesized_functions: declaration emitted a definition' >&2
             exit 1
@@ -1340,28 +1161,18 @@ case "$name" in
         printf '%s\n' 'PASS compiler/c0/extern_parenthesized_functions linkage=external parenthesized-name=1'
         ;;
     wide-integer-literals)
-        grep -F '  li a0, 9223372036854775807' "$work/$output.s" >/dev/null
-        grep -F '  li a0, 9223372036854775806' "$work/$output.s" >/dev/null
-        grep -F 'binary_literal_value:' "$work/$output.s" >/dev/null
-        grep -F 'binary_enum_value:' "$work/$output.s" >/dev/null
-        grep -F '  li a0, 170' "$work/$output.s" >/dev/null
-        grep -F '  li a0, 5' "$work/$output.s" >/dev/null
+        require_literals '  li a0, 9223372036854775807' '  li a0, 9223372036854775806' 'binary_literal_value:' 'binary_enum_value:' '  li a0, 170' '  li a0, 5'
         printf '%s\n' 'PASS compiler/c0/wide_integer_literal payload=int64+gnu-binary max=9223372036854775807 binary=170 enum=5'
         ;;
     extern-fixed-integer-arrays)
-        grep -F '.globl table' "$work/$output.s" >/dev/null
-        grep -F '  .byte 1' "$work/$output.s" >/dev/null
-        grep -F '  .byte 2' "$work/$output.s" >/dev/null
-        grep -F '  .byte 3' "$work/$output.s" >/dev/null
+        require_literals '.globl table' '  .byte 1' '  .byte 2' '  .byte 3'
         test "$(grep -Fc '  .byte 0' "$work/$output.s")" -eq 2
         grep -F '.size table, 5' "$work/$output.s" >/dev/null
         printf '%s\n' 'PASS compiler/c0/extern_fixed_integer_array extern-merge=1 bound=5 brace=3 zero-fill=2'
         ;;
     compound-assignment-expressions)
         test "$(grep -c -F '  call next_slot' "$work/$output.s")" -eq 1
-        grep -F '  slli a0, a0, 2' "$work/$output.s" >/dev/null
-        grep -F '  divu a0, t0, a0' "$work/$output.s" >/dev/null
-        grep -F '  div a0, t0, a0' "$work/$output.s" >/dev/null
+        require_literals '  slli a0, a0, 2' '  divu a0, t0, a0' '  div a0, t0, a0'
         printf '%s\n' 'PASS compiler/c0/compound_assignment_expression operators=+=,/= result=value lvalue-evaluation=once pointer-scale=4 GNU-void-stride=1 divide=signed,unsigned'
         ;;
     record-forward-declarations)
@@ -1723,8 +1534,7 @@ case "$name" in
         grep -q 'init_stack' "$work/output.s"
         ;;
     block-scope-extern-multi-declarator)
-        grep -F '__init_begin' "$work/output.s" >/dev/null
-        grep -F '__init_end' "$work/output.s" >/dev/null
+        require_file_literals "$work/output.s" '__init_begin' '__init_end'
         printf '%s\n' 'PASS compiler/c0/block_scope_extern_multi_declarator declarators=2 incomplete-arrays=2 scoped-bindings=2 entity-merge=transactional-array-descriptors'
         ;;
     gnu-packed-record-field)

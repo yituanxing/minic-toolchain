@@ -210,7 +210,7 @@ core_required_no_fallback_focused() {
     MINIC="$root/build/ci-debug/bin/minic" \
     HOST_CC=cc \
     BUILD_DIR="$root/build/ci-core-required-no-fallback" \
-        sh tests/compiler/c0/run-core-required-no-fallback.sh
+        sh tests/compiler/c0/run-compile-only-case.sh core-required-no-fallback
 }
 
 core_scalar_lvalue_bitcast_focused() {
@@ -468,7 +468,7 @@ linenoise_driven_focused() {
         run-static-zero-definitions.sh \
         run-static-zero-declaration-list.sh \
         run-record-copy-array-members.sh \
-        run-zero-aggregate-null.sh \
+        compile:zero-aggregate-null \
         run-record-local-initializers.sh \
         compile:multiply-assignment \
         compile:static-local-string-arrays \
@@ -488,8 +488,8 @@ sds_driven_focused() {
         run-packed-record-layout.sh \
         run-flexible-array-members.sh \
         run-inline-functions.sh \
-        run-postfix-const.sh \
-        run-long-long-types.sh \
+        compile:postfix-const \
+        compile:long-long-types \
         run-wide-integer-literals.sh \
         run-array-bound-constant-expressions.sh \
         run-for-declaration-initializers.sh \

@@ -70,7 +70,7 @@ printf '%s\n' "PASS compiler/c0/null_pointer_constant"
 MINIC="$minic" \
 HOST_CC="$host_cc" \
 BUILD_DIR="$build_dir" \
-sh "$root/tests/compiler/c0/run-pointer-integer-casts.sh"
+sh "$root/tests/compiler/c0/run-compile-only-case.sh" pointer-integer-casts
 
 compile_success cast_integer_to_float
 grep -F '  fcvt.d.w ' "$work/cast_integer_to_float.s" >/dev/null

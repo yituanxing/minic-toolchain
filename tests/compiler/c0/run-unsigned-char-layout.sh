@@ -61,7 +61,7 @@ printf '%s\n' "PASS compiler/c0/hexadecimal_expression"
 MINIC="$minic" \
 HOST_CC="$host_cc" \
 BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
-sh "$root/tests/compiler/c0/run-signed-char-semantics.sh"
+sh "$root/tests/compiler/c0/run-compile-only-case.sh" signed-char-semantics
 
 "$host_cc" -E -P -std=gnu11 -x c \
     "$root/tests/compiler/c0/gnu_plain_unsigned_char_pointer_assignment.c" \
