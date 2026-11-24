@@ -12,23 +12,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-static const MinicCoreType *rv64_admit_core_base(
-    const MinicCoreFunction *function, MinicCoreTypeId id) {
-    if (function == NULL || function->type_context == NULL) return NULL;
-    return minic_core_type_get(function->type_context,
-        minic_core_type_unqualified(function->type_context, id));
-}
-
-static bool rv64_admit_core_scalar(const MinicCoreType *type) {
-    return type != NULL &&
-        (type->kind == MINIC_CORE_TYPE_INTEGER ||
-         type->kind == MINIC_CORE_TYPE_POINTER ||
-         (type->kind == MINIC_CORE_TYPE_FLOAT &&
-          (type->value.floating.format == MINIC_CORE_FLOAT_BINARY32 ||
-           type->value.floating.format == MINIC_CORE_FLOAT_BINARY64 ||
-           type->value.floating.format == MINIC_CORE_FLOAT_BINARY128)));
-}
-
 /* Canonical Core verification belongs to Common FunctionPlan. RV64 owns
  * target capability, psABI placements and strict machine ISA admission. */
 static bool core_instruction_supported(bool require_prepared_abi,
@@ -101,7 +84,7 @@ static bool core_instruction_supported(bool require_prepared_abi,
                 instruction->value.fixed_register_binding_id] : NULL;
         if (binding == NULL || binding->register_name == NULL ||
             binding->register_name_length == 0U) return false;
-        return rv64_admit_core_scalar(rv64_admit_core_base(
+        return minic_riscv64_core_scalar_kind(minic_core_function_base_type(
                    function, binding->core_type_id)) &&
                binding->core_type_id == instruction->core_type_id;
     }
@@ -175,15 +158,15 @@ static bool core_function_can_emit_with_index(
     if (function == NULL || function->type_context == NULL)
         return core_rv64_capability_reject(function, "sealed-types", 0U, -1);
     if (!require_prepared_abi) {
-        const MinicCoreType *ret = rv64_admit_core_base(
+        const MinicCoreType *ret = minic_core_function_base_type(
             function, minic_core_function_return_type(function));
         if (ret == NULL ||
             (minic_core_function_parameter_count(function) != 0U &&
              minic_core_function_parameter_types(function) == NULL) ||
-            (ret->kind != MINIC_CORE_TYPE_VOID && !rv64_admit_core_scalar(ret)))
+            (ret->kind != MINIC_CORE_TYPE_VOID && !minic_riscv64_core_scalar_kind(ret)))
             return core_rv64_capability_reject(function, "core-return", 0U, -1);
         for (index = 0U; index < minic_core_function_parameter_count(function); ++index) {
-            if (!rv64_admit_core_scalar(rv64_admit_core_base(
+            if (!minic_riscv64_core_scalar_kind(minic_core_function_base_type(
                     function, minic_core_function_parameter_types(function)[index])))
                 return core_rv64_capability_reject(function, "core-parameter", index, -1);
         }
@@ -206,13 +189,13 @@ static bool core_function_can_emit_with_index(
          (storage->count != 0U && storage->objects == NULL)))
         return core_rv64_capability_reject(function, "object-plan", 0U, -1);
     for (index = 0U; index < function->object_count; ++index) {
-        const MinicCoreType *core_type = rv64_admit_core_base(
+        const MinicCoreType *core_type = minic_core_function_base_type(
             function, function->objects[index].core_type_id);
         const bool is_record = minic_riscv64_core_is_record(
             function, function->objects[index].core_type_id);
         MinicCoreObjectStorage calculated = {0};
         const MinicCoreObjectStorage *shape = NULL;
-        if (!(rv64_admit_core_scalar(core_type) || is_record ||
+        if (!(minic_riscv64_core_scalar_kind(core_type) || is_record ||
               (core_type != NULL && core_type->kind == MINIC_CORE_TYPE_ARRAY)))
             return core_rv64_capability_reject(function, "object-type", index, -1);
         if (storage != NULL) {
@@ -233,7 +216,7 @@ static bool core_function_can_emit_with_index(
     /* Core verifier already checks global name, type and symbol shape.
      * Relocations and actual address emission remain machine-owned. */
     for (index = 0U; index < function->value_count; ++index) {
-        if (!rv64_admit_core_scalar(rv64_admit_core_base(
+        if (!minic_riscv64_core_scalar_kind(minic_core_function_base_type(
                 function, function->values[index].core_type_id))) {
             return core_rv64_capability_reject(function, "value", index, -1);
         }

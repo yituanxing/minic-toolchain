@@ -9,11 +9,6 @@
 #include <string.h>
 
 /* Locations are ABI-owned; no architecture-specific instructions here. */
-static const MinicCoreType *lp64_call_core_base(
-    const MinicCoreTypeContext *types, MinicCoreTypeId id) {
-    return minic_core_type_get(types, minic_core_type_unqualified(types, id));
-}
-
 static bool lp64_call_core_integer_128(const MinicCoreType *type) {
     return type != NULL && type->kind == MINIC_CORE_TYPE_INTEGER &&
            !type->value.integer.is_bool && type->size == 16U;
@@ -43,7 +38,7 @@ static bool minic_lp64_plan_types(
     for (j = 0U; j < count; ++j) {
         MinicLP64ArgumentLocation *loc = &plan->arguments[j];
         size_t chunks = 1U, size = 0U;
-        const MinicCoreType *core = lp64_call_core_base(core_types, core_ids[j]);
+        const MinicCoreType *core = minic_core_type_base(core_types, core_ids[j]);
         const bool record = core != NULL && core->kind == MINIC_CORE_TYPE_RECORD;
         bool by_reference = false;
         if (core == NULL) return false;
@@ -316,7 +311,7 @@ static bool minic_lp64_admit_call(
             !minic_lp64_core_valid_return_with_policy(
                 core_types, ins->core_type_id, abi))) {
             const MinicCoreType *diagnostic_type =
-                lp64_call_core_base(core_types, ins->core_type_id);
+                minic_core_type_base(core_types, ins->core_type_id);
             if (getenv("MINIC_BACKEND_CENSUS") != NULL)
                 (void)fprintf(stderr,
                     "MINIC_CALL_RESULT_REJECT arch=%s function=%s "
@@ -382,7 +377,7 @@ static bool minic_lp64_admit_call(
             bool actual_signed;
             if (!minic_core_call_view_argument_core_type(
                     fn, &call, j, &core_actual) ||
-                (base = lp64_call_core_base(core_types, core_actual)) == NULL)
+                (base = minic_core_type_base(core_types, core_actual)) == NULL)
                 return false;
             core_ids[j] = core_actual;
             if (arg->kind == MINIC_CORE_CALL_ARGUMENT_OBJECT) {

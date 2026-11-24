@@ -45,15 +45,10 @@ const MinicX86AbiRegisters *minic_x86_64_abi_registers(
 /* SysV AMD64 Core classifiers use only verified CoreType layout, preserving
  * the existing one-/two-eightbyte decisions, hidden-result rules and ABI
  * identity checks. C rank/qualifier rules belong to source qualification. */
-static const MinicCoreType *x86_core_type(const MinicCoreTypeContext *context,
-                                         MinicCoreTypeId id) {
-    return minic_core_type_get(context, minic_core_type_unqualified(context, id));
-}
-
 bool minic_x86_64_core_scalar_width(const MinicCoreTypeContext *context,
                                     MinicCoreTypeId id, size_t *bytes,
                                     bool *is_signed) {
-    const MinicCoreType *type = x86_core_type(context, id);
+    const MinicCoreType *type = minic_core_type_base(context, id);
     if (bytes == NULL || is_signed == NULL || type == NULL ||
         !type->has_layout) return false;
     if (type->kind == MINIC_CORE_TYPE_POINTER) {
@@ -68,7 +63,7 @@ bool minic_x86_64_core_scalar_width(const MinicCoreTypeContext *context,
 bool minic_x86_64_core_storage_width(const MinicCoreTypeContext *context,
                                      MinicCoreTypeId id, size_t *bytes,
                                      bool *is_signed) {
-    const MinicCoreType *type = x86_core_type(context, id);
+    const MinicCoreType *type = minic_core_type_base(context, id);
     if (type != NULL && type->kind == MINIC_CORE_TYPE_FLOAT && type->has_layout &&
         (type->value.floating.format == MINIC_CORE_FLOAT_BINARY32 ||
          type->value.floating.format == MINIC_CORE_FLOAT_BINARY64)) {
@@ -85,7 +80,7 @@ bool minic_x86_64_core_storage_width(const MinicCoreTypeContext *context,
 static bool x86_core_integer_record_tree(const MinicCoreTypeContext *context,
                                          MinicCoreTypeId id, size_t absolute,
                                          size_t max_bytes, unsigned int depth) {
-    const MinicCoreType *type = x86_core_type(context, id);
+    const MinicCoreType *type = minic_core_type_base(context, id);
     size_t index;
     if (depth > 12U || type == NULL || !type->has_layout ||
         type->alignment == 0U || type->size > max_bytes ||
@@ -96,7 +91,7 @@ static bool x86_core_integer_record_tree(const MinicCoreTypeContext *context,
             (type->size != 0U && type->alignment <= 8U &&
              absolute % type->alignment == 0U);
     if (type->kind == MINIC_CORE_TYPE_ARRAY) {
-        const MinicCoreType *element = x86_core_type(context, type->value.array.element);
+        const MinicCoreType *element = minic_core_type_base(context, type->value.array.element);
         if (!type->value.array.is_complete ||
             type->value.array.count == 0U || element == NULL ||
             !element->has_layout || element->size == 0U ||
@@ -116,7 +111,7 @@ static bool x86_core_integer_record_tree(const MinicCoreTypeContext *context,
         type->value.record.fields == NULL) return false;
     for (index = 0U; index < type->value.record.field_count; ++index) {
         const MinicCoreRecordField *field = &type->value.record.fields[index];
-        const MinicCoreType *member = x86_core_type(context, field->type_id);
+        const MinicCoreType *member = minic_core_type_base(context, field->type_id);
         const size_t offset = field->byte_offset;
         if (member == NULL || !member->has_layout ||
             member->alignment == 0U || offset > type->size ||
@@ -152,7 +147,7 @@ static bool x86_core_integer_record_tree(const MinicCoreTypeContext *context,
 bool minic_x86_64_core_one_gp_record(const MinicCoreTypeContext *context,
                                      MinicCoreTypeId id, size_t *record_bytes) {
     MinicAggregateStorageShape shape;
-    const MinicCoreType *type = x86_core_type(context, id);
+    const MinicCoreType *type = minic_core_type_base(context, id);
     if (type == NULL || type->kind != MINIC_CORE_TYPE_RECORD ||
         record_bytes == NULL ||
         !minic_common_aggregate_storage_shape_core(context, id, 8U, &shape) ||
@@ -165,7 +160,7 @@ bool minic_x86_64_core_one_gp_record(const MinicCoreTypeContext *context,
 bool minic_x86_64_core_two_gp_record(const MinicCoreTypeContext *context,
                                      MinicCoreTypeId id) {
     MinicAggregateStorageShape shape;
-    const MinicCoreType *type = x86_core_type(context, id);
+    const MinicCoreType *type = minic_core_type_base(context, id);
     return type != NULL && type->kind == MINIC_CORE_TYPE_RECORD &&
         minic_common_aggregate_storage_shape_core(context, id, 8U, &shape) &&
         shape.bytes > 8U && shape.bytes <= 16U && shape.alignment <= 8U &&
@@ -174,7 +169,7 @@ bool minic_x86_64_core_two_gp_record(const MinicCoreTypeContext *context,
 
 bool minic_x86_64_core_memory_result_record(const MinicCoreTypeContext *context,
                                              MinicCoreTypeId id, size_t *bytes) {
-    const MinicCoreType *record = x86_core_type(context, id);
+    const MinicCoreType *record = minic_core_type_base(context, id);
     const MinicCoreType *layout = minic_core_type_get(context, id);
     if (bytes == NULL || record == NULL || layout == NULL ||
         record->kind != MINIC_CORE_TYPE_RECORD ||
@@ -189,7 +184,7 @@ bool minic_x86_64_core_record_abi_compatible(const MinicCoreTypeContext *context
                                              MinicCoreTypeId declared) {
     const MinicCoreType *a = minic_core_type_get(context, actual);
     const MinicCoreType *b = minic_core_type_get(context, declared);
-    const MinicCoreType *record = x86_core_type(context, actual);
+    const MinicCoreType *record = minic_core_type_base(context, actual);
     /* Top-level CV is irrelevant to by-value parameter compatibility,
      * but an explicit ABI alignment alias is not. C unqualified() also
      * retains explicit_alignment, so preserve that stricter old gate. */

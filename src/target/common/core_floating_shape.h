@@ -17,9 +17,7 @@ typedef struct MinicCoreFloatingShape {
 
 static inline const MinicCoreType *minic_core_floating_base(
     const MinicCoreFunction *function, MinicCoreTypeId id) {
-    return function != NULL && function->type_context != NULL
-        ? minic_core_type_get(function->type_context,
-            minic_core_type_unqualified(function->type_context, id)) : NULL;
+    return minic_core_function_base_type(function, id);
 }
 
 static inline bool minic_core_floating_format(

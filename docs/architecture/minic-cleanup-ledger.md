@@ -1695,3 +1695,7 @@ Target 审阅 manifest 260（113 条保留的 stale blob）、完整后端边界
 基线 `b9b8e9b2`。审查 global_payload 全部路径及静态/运行时初始化、Core ModuleIR 入库边界。flat record array 的唯一调用者已将所有 record/array member 排除，因此其私有 nested-union 分支不可达；nested union 仍由 recursive aggregate walker 负责。合并 standalone record 和 record-array 的字段序列化，保留 DataLayout、scalar width gate、bitfield packer、独立 relocation kind、尾部整记录 zero-fill 和 zero callback boundary；不删除 recursive shape validation（其对 union 所有候选成员的验证不同于 selected-member traversal）。净 -70 行生产代码。
 
 新增 flat/global payload 五目标汇编生成与 GNU/MiniC x86 runtime 回归，并将既有 nested union regression 接入现有 native gate。C46 新增 name-cache probe/native gate/four-arch runtime 已通过；本批动态验证待执行。不把静态审查称为正确性证明。
+
+## 批次 C48：Core 类型查询与记录传输公共所有者（2026-11-24）
+
+父基线 `68721700` 的 flat payload 专项、native strict、four-arch runtime、RV32I runtime 均通过。将重复 unqualified CoreType 查询归一，保留 exact type lookup 和目标 ABI admission 的区别。RV64 两处纯 scalar kind admission 收敛。Direct LP64 与 RV64 record load/copy 的 identity/layout/address checks 共享一个实现，保留 Direct 16 MiB 上限、RV64 load 非零要求、empty copy、frame placement 等不同政策。新增 malformed array pointer 拒绝，不降低原有效输入的验收标准。13 个生产 C/H 文件净 -85 行。源码与差分检查不代替本提交 native/target 动态验收；不删测试、不改 CI。

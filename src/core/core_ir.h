@@ -736,6 +736,11 @@ bool minic_core_function_attach_type_context(MinicCoreFunction *function,
 bool minic_core_function_verify_core_type_snapshot(const MinicCoreFunction *function);
 const MinicCoreType *minic_core_function_type_get(const MinicCoreFunction *function,
                                                   MinicCoreTypeId id);
+static inline const MinicCoreType *minic_core_function_base_type(
+    const MinicCoreFunction *function, MinicCoreTypeId id) {
+    return function != NULL && function->type_context != NULL
+        ? minic_core_type_base(function->type_context, id) : NULL;
+}
 /* Execution-kind queries for sealed Core types; never infer C rank or ABI. */
 bool minic_core_function_type_is_kind(const MinicCoreFunction *function,
                                      MinicCoreTypeId id, MinicCoreTypeKind kind);

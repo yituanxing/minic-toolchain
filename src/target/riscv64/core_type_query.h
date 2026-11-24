@@ -8,9 +8,7 @@
  * Peeling physical alignment views is shared by ISA, frame and ABI gates. */
 static inline const MinicCoreType *minic_riscv64_core_base_type(
     const MinicCoreFunction *function, MinicCoreTypeId id) {
-    if (function == NULL || function->type_context == NULL) return NULL;
-    return minic_core_type_get(function->type_context,
-        minic_core_type_unqualified(function->type_context, id));
+    return minic_core_function_base_type(function, id);
 }
 
 static inline bool minic_riscv64_core_is_i128(
@@ -24,6 +22,16 @@ static inline bool minic_riscv64_core_is_record(
     const MinicCoreFunction *function, MinicCoreTypeId id) {
     const MinicCoreType *type = minic_riscv64_core_base_type(function, id);
     return type != NULL && type->kind == MINIC_CORE_TYPE_RECORD;
+}
+
+static inline bool minic_riscv64_core_scalar_kind(const MinicCoreType *type) {
+    return type != NULL &&
+        (type->kind == MINIC_CORE_TYPE_INTEGER ||
+         type->kind == MINIC_CORE_TYPE_POINTER ||
+         (type->kind == MINIC_CORE_TYPE_FLOAT &&
+          (type->value.floating.format == MINIC_CORE_FLOAT_BINARY32 ||
+           type->value.floating.format == MINIC_CORE_FLOAT_BINARY64 ||
+           type->value.floating.format == MINIC_CORE_FLOAT_BINARY128)));
 }
 
 #endif

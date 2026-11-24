@@ -24,16 +24,9 @@ static bool rv32_abi_reject(const char *stage, size_t index,
 
 /* Only sealed CoreTypeIds are executable type proofs. Source descriptors do
  * not participate in the ILP32 ABI classification or diagnostics. */
-static const MinicCoreType *rv32_abi_core_type(
-    const MinicCoreFunction *function, MinicCoreTypeId id) {
-    if (function == NULL || function->type_context == NULL) return NULL;
-    return minic_core_type_get(function->type_context,
-        minic_core_type_unqualified(function->type_context, id));
-}
-
 static bool rv32_abi_core_is(const MinicCoreFunction *function,
                              MinicCoreTypeId id, MinicCoreTypeKind kind) {
-    const MinicCoreType *type = rv32_abi_core_type(function, id);
+    const MinicCoreType *type = minic_core_function_base_type(function, id);
     return type != NULL && type->kind == kind;
 }
 
@@ -59,7 +52,7 @@ static bool rv32_plan_shape(const MinicCoreFunction *function,
                              MinicCoreTypeId core_id,
                              Rv32AbiWordLocation *entry) {
     size_t size, align;
-    const MinicCoreType *core_type = rv32_abi_core_type(function, core_id);
+    const MinicCoreType *core_type = minic_core_function_base_type(function, core_id);
     const MinicCoreType *exact = function != NULL &&
             function->type_context != NULL
         ? minic_core_type_get(function->type_context, core_id) : NULL;

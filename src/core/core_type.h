@@ -135,6 +135,11 @@ const MinicCoreType *minic_core_type_get(const MinicCoreTypeContext *context,
 /* Peel zero or more physical alignment views. INVALID signals a bad ID. */
 MinicCoreTypeId minic_core_type_unqualified(const MinicCoreTypeContext *context,
                                             MinicCoreTypeId id);
+/* Unqualified execution identity, not an ABI or layout admission test. */
+static inline const MinicCoreType *minic_core_type_base(
+    const MinicCoreTypeContext *context, MinicCoreTypeId id) {
+    return minic_core_type_get(context, minic_core_type_unqualified(context, id));
+}
 /* Copies owned parameter/member arrays; never retains caller memory. Records
  * may be provisionally registered and then completed by the C ingress. */
 bool minic_core_type_register(MinicCoreTypeContext *context,

@@ -4,13 +4,6 @@
 /* Every bound Core function has already passed source-to-Core type admission.
  * These checks consume ONLY its immutable execution types. No target layout
  * or frontend enum/rank table is reopened on the production path. */
-static const MinicCoreType *core_numeric_base(const MinicCoreFunction *fn,
-                                              MinicCoreTypeId id) {
-    if (fn == NULL || fn->type_context == NULL) return NULL;
-    id = minic_core_type_unqualified(fn->type_context, id);
-    return minic_core_type_get(fn->type_context, id);
-}
-
 static bool core_numeric_integer(const MinicCoreFunction *fn,
                                  MinicCoreTypeId id, size_t *width,
                                  bool *sign) {
@@ -37,7 +30,7 @@ static bool core_numeric_overflow_result(const MinicCoreFunction *fn,
     if (!minic_lp64_core_pointer_pointee(fn->type_context,
                                           fn->values[address].core_type_id,
                                           pointee)) return false;
-    base = core_numeric_base(fn, *pointee);
+    base = minic_core_function_base_type(fn, *pointee);
     return base != NULL && base->kind == MINIC_CORE_TYPE_INTEGER &&
            !base->value.integer.is_bool;
 }
@@ -115,9 +108,9 @@ bool minic_core_integer_overflow_i32_u32_to_i32_shape(
         return false;
     left = ins->value.integer_overflow.left;
     right = ins->value.integer_overflow.right;
-    result_type = core_numeric_base(fn, result_id);
-    left_type = core_numeric_base(fn, fn->values[left].core_type_id);
-    right_type = core_numeric_base(fn, fn->values[right].core_type_id);
+    result_type = minic_core_function_base_type(fn, result_id);
+    left_type = minic_core_function_base_type(fn, fn->values[left].core_type_id);
+    right_type = minic_core_function_base_type(fn, fn->values[right].core_type_id);
     if (result_type == NULL || left_type == NULL || right_type == NULL ||
         result_type->kind != MINIC_CORE_TYPE_INTEGER ||
         left_type->kind != MINIC_CORE_TYPE_INTEGER ||
@@ -242,7 +235,7 @@ bool minic_core_integer_bitscan_shape(
         fn->values == NULL ||
         !minic_lp64_core_kind(fn->type_context, ins->core_type_id,
                               MINIC_CORE_TYPE_INTEGER)) return false;
-    operand_type = core_numeric_base(fn, fn->values[operand].core_type_id);
+    operand_type = minic_core_function_base_type(fn, fn->values[operand].core_type_id);
     if (operand_type == NULL || operand_type->kind != MINIC_CORE_TYPE_INTEGER ||
         operand_type->value.integer.is_signed ||
         (operand_type->value.integer.bit_width != 8U &&

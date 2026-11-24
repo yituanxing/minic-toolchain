@@ -4,17 +4,11 @@
 #include "target/common/core_scalar_conversion.h"
 #include "target/common/core_floating_shape.h"
 #include "target/common/lp64_scalar.h"
+#include "target/common/core_record_transfer.h"
 #include <stdint.h>
 
 /* Every Direct LP64 machine consumer sees sealed Core execution types.
  * Missing Core provenance is a rejection, not permission to reopen C types. */
-static const MinicCoreType *direct_core_type(const MinicCoreFunction *fn,
-                                             MinicCoreTypeId id) {
-    if (fn == NULL || fn->type_context == NULL) return NULL;
-    return minic_core_type_get(fn->type_context,
-                               minic_core_type_unqualified(fn->type_context, id));
-}
-
 static bool direct_core_kind(const MinicCoreFunction *fn,
                              MinicCoreTypeId id, MinicCoreTypeKind kind) {
     return fn != NULL && fn->type_context != NULL &&
@@ -23,11 +17,11 @@ static bool direct_core_kind(const MinicCoreFunction *fn,
 
 static bool direct_core_float(const MinicCoreFunction *fn,
                               MinicCoreTypeId id, MinicCoreFloatFormat format) {
-    return minic_lp64_core_float_format(direct_core_type(fn, id), format);
+    return minic_lp64_core_float_format(minic_core_function_base_type(fn, id), format);
 }
 
 static bool direct_core_bool(const MinicCoreFunction *fn, MinicCoreTypeId id) {
-    const MinicCoreType *type = direct_core_type(fn, id);
+    const MinicCoreType *type = minic_core_function_base_type(fn, id);
     return type != NULL && type->kind == MINIC_CORE_TYPE_INTEGER &&
            type->value.integer.is_bool;
 }
@@ -54,7 +48,7 @@ static bool direct_core_equal_unqualified(const MinicCoreFunction *fn,
 }
 
 static bool direct_core_wide(const MinicCoreFunction *fn, MinicCoreTypeId id) {
-    const MinicCoreType *type = direct_core_type(fn, id);
+    const MinicCoreType *type = minic_core_function_base_type(fn, id);
     return type != NULL && type->has_layout && type->size == 16U &&
            ((type->kind == MINIC_CORE_TYPE_INTEGER &&
              type->value.integer.bit_width == 128U) ||
@@ -72,7 +66,7 @@ static bool direct_core_register64(const MinicCoreFunction *fn,
 
 static bool direct_core_i32(const MinicCoreFunction *fn,
                             MinicCoreTypeId id) {
-    const MinicCoreType *type = direct_core_type(fn, id);
+    const MinicCoreType *type = minic_core_function_base_type(fn, id);
     return type != NULL && type->kind == MINIC_CORE_TYPE_INTEGER &&
            type->has_layout && type->size == 4U &&
            type->value.integer.bit_width == 32U &&
@@ -81,7 +75,7 @@ static bool direct_core_i32(const MinicCoreFunction *fn,
 
 static bool direct_core_int128(const MinicCoreFunction *fn,
                                MinicCoreTypeId id) {
-    const MinicCoreType *type = direct_core_type(fn, id);
+    const MinicCoreType *type = minic_core_function_base_type(fn, id);
     return type != NULL && type->kind == MINIC_CORE_TYPE_INTEGER &&
            type->value.integer.bit_width == 128U && type->has_layout;
 }
@@ -178,34 +172,12 @@ bool minic_multi_direct_fixed_register_read_shape(
 bool minic_multi_direct_record_copy_extent(
     const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
     size_t *bytes) {
-    MinicCoreValueId dst, src;
-    MinicCoreTypeId dst_pointee, src_pointee;
     const MinicCoreType *record;
-    if (fn == NULL ||
-        fn->type_context == NULL || ins == NULL ||
-        bytes == NULL)
-        return false;
-    dst = ins->value.record_copy.destination_address;
-    src = ins->value.record_copy.source_address;
-    record = direct_core_type(fn, ins->core_type_id);
-    if (ins->kind != MINIC_CORE_INSTRUCTION_RECORD_COPY ||
-        ins->result != MINIC_CORE_VALUE_INVALID ||
-        record == NULL || record->kind != MINIC_CORE_TYPE_RECORD ||
-        !record->has_layout || record->alignment == 0U ||
-        dst >= fn->value_count || src >= fn->value_count ||
-        fn->values == NULL ||
-        !direct_core_pointer_pointee(fn, fn->values[dst].core_type_id,
-                                     &dst_pointee) ||
-        !direct_core_pointer_pointee(fn, fn->values[src].core_type_id,
-                                     &src_pointee) ||
-        !direct_core_equal_unqualified(fn, dst_pointee, ins->core_type_id) ||
-        !direct_core_equal_unqualified(fn, src_pointee, ins->core_type_id) ||
-        /* Kernel task_struct and other compound records are often many
-         * KiB. Native emitters use counted byte loops for large transfers;
-         * this cap bounds the requested runtime copy without imposing the
-         * former 2-KiB single-instruction-source expansion limit. */
-        record->size > (16U * 1024U * 1024U))
-        return false;
+    if (bytes == NULL || ins == NULL ||
+        ins->kind != MINIC_CORE_INSTRUCTION_RECORD_COPY) return false;
+    record = minic_core_record_transfer_type(fn, ins);
+    /* Bound native counted copies without the former 2-KiB expansion cap. */
+    if (record == NULL || record->size > (16U * 1024U * 1024U)) return false;
     *bytes = record->size;
     return true;
 }
@@ -217,39 +189,23 @@ bool minic_multi_direct_record_load_extent(
     const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
     const MinicLP64FramePlan *frame_plan,
     MinicCoreValueId *source, size_t *object_offset, size_t *bytes) {
-    MinicCoreObjectId dst;
-    MinicCoreTypeId pointee_id;
     const MinicCoreType *record;
-    if (!fn || fn->type_context == NULL ||
-        !ins || !frame_plan ||
+    if (!fn || !fn->type_context || !ins || !frame_plan ||
         !source || !object_offset || !bytes ||
         ins->kind != MINIC_CORE_INSTRUCTION_RECORD_LOAD ||
         ins->result != MINIC_CORE_VALUE_INVALID ||
         !direct_core_kind(fn, ins->core_type_id, MINIC_CORE_TYPE_RECORD)) return false;
-    dst = ins->value.record_load.destination_object;
     *source = ins->value.record_load.source_address;
-    if (dst >= fn->object_count || *source >= fn->value_count ||
-        fn->objects == NULL || fn->values == NULL ||
-        !direct_core_equal_unqualified(fn, fn->objects[dst].core_type_id,
-                                       ins->core_type_id) ||
-        !direct_core_pointer_pointee(fn, fn->values[*source].core_type_id,
-                                     &pointee_id) ||
-        !direct_core_equal_unqualified(fn, pointee_id, ins->core_type_id) ||
-        (record = direct_core_type(fn, ins->core_type_id)) == NULL ||
-        record->kind != MINIC_CORE_TYPE_RECORD || !record->has_layout ||
-        record->alignment == 0U ||
-        record->size > (16U * 1024U * 1024U))
-        return false;
-    /* A GNU zero-size record has a real Core identity but no snapshot bytes.
-     * Requiring an allocated frame slot here would fabricate physical storage
-     * for an otherwise effect-free C value copy. */
+    record = minic_core_record_transfer_type(fn, ins);
+    if (record == NULL || record->size > (16U * 1024U * 1024U)) return false;
+    /* Empty records have identity but no snapshot storage. */
     if (record->size == 0U) {
         *object_offset = 0U;
         *bytes = 0U;
         return true;
     }
-    if (!minic_lp64_frame_plan_object(frame_plan, dst, object_offset))
-        return false;
+    if (!minic_lp64_frame_plan_object(frame_plan,
+            ins->value.record_load.destination_object, object_offset)) return false;
     *bytes = record->size;
     return true;
 }
@@ -557,7 +513,7 @@ static bool core_direct_relaxed_atomic_pointee_width(
         order != 0U || address >= fn->value_count) return false;
     if (!direct_core_pointer_pointee(fn, fn->values[address].core_type_id,
                                      &pointee_id)) return false;
-    type = direct_core_type(fn, pointee_id);
+    type = minic_core_function_base_type(fn, pointee_id);
     if (type == NULL || !type->has_layout || type->alignment == 0U ||
         (type->kind != MINIC_CORE_TYPE_INTEGER &&
          type->kind != MINIC_CORE_TYPE_POINTER)) return false;
@@ -649,7 +605,7 @@ bool minic_multi_direct_pointer_offset_shape(
     /* The pointer-width low limb alone determines a scaled LP64 address
      * modulo 2^64, including signed negative 128-bit indices. Do not
      * relax scalar-width admission for unrelated Core instructions. */
-    wide = direct_core_type(fn, fn->values[index].core_type_id);
+    wide = minic_core_function_base_type(fn, fn->values[index].core_type_id);
     if (wide == NULL || !wide->has_layout ||
         wide->kind != MINIC_CORE_TYPE_INTEGER || wide->size != 16U ||
         wide->value.integer.bit_width != 128U ||
@@ -904,7 +860,7 @@ bool minic_multi_direct_machine_instruction_shape(
      * Never run this through the scalar-result gate, which cannot admit a
      * register vector, or classify the register operation as a LOAD/STORE. */
     if (minic_core_instruction_is_vector_arithmetic(ins->kind)) {
-        const MinicCoreType *vector = direct_core_type(fn, ins->core_type_id);
+        const MinicCoreType *vector = minic_core_function_base_type(fn, ins->core_type_id);
         if (vector == NULL || vector->kind != MINIC_CORE_TYPE_VECTOR ||
             vector->value.vector.representation != MINIC_CORE_VECTOR_REGISTER_VALUE ||
             !vector->has_layout ||
