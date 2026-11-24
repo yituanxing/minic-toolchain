@@ -1699,3 +1699,5 @@ Target 审阅 manifest 260（113 条保留的 stale blob）、完整后端边界
 ## 批次 C48：Core 类型查询与记录传输公共所有者（2026-11-24）
 
 父基线 `68721700` 的 flat payload 专项、native strict、four-arch runtime、RV32I runtime 均通过。将重复 unqualified CoreType 查询归一，保留 exact type lookup 和目标 ABI admission 的区别。RV64 两处纯 scalar kind admission 收敛。Direct LP64 与 RV64 record load/copy 的 identity/layout/address checks 共享一个实现，保留 Direct 16 MiB 上限、RV64 load 非零要求、empty copy、frame placement 等不同政策。新增 malformed array pointer 拒绝，不降低原有效输入的验收标准。13 个生产 C/H 文件净 -85 行。源码与差分检查不代替本提交 native/target 动态验收；不删测试、不改 CI。
+
+C48 验收补记：four-arch runtime 已通过；Native Strict Gate 在 ownership inventory 阶段因为新增 `core_record_transfer.h` 缺登记而失败（不是编译或运行结果）。修复仅补真实 blob 与 inventory 深度，不改变 gate、旧指纹或认证状态。

@@ -579,6 +579,12 @@
         665
       ]
     },
+    "src/target/common/core_record_transfer.h": {
+      "blob": "b7dddf642922e1a405c7b89ce22a53cbd2960be0",
+      "review_depth": "inventory",
+      "ci_touched_in": [],
+      "note": "C48: common record transfer identity/layout owner; target limits and frame policy remain separate. Registered for strict inventory, not a full review or a dynamic proof."
+    },
     "src/target/common/core_numeric_shape.c": {
       "blob": "c0f9e8b786ceb01fdf235ab66eecf5f4193500a6",
       "review_depth": "inventory",
