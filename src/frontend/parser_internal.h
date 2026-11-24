@@ -475,8 +475,9 @@ bool minic_parser_bind_enum_constant(MinicParser *parser,
 MinicEnumeratorId minic_parser_find_enum_constant(const MinicParser *parser,
                                                   MinicSourceSpan name_span);
 bool minic_parser_parse_enum_specifier(MinicParser *parser, MinicType *enum_type);
+/* Member paths are keyed by stable arena identities, not borrowed Record addresses. */
 bool minic_parser_find_record_field_path(const MinicParser *parser,
-                                         const MinicRecord *record,
+                                         MinicRecordId record_id,
                                          MinicSourceSpan name_span,
                                          MinicRecordFieldPath *result);
 void minic_parser_destroy_enum_constants(MinicParser *parser);

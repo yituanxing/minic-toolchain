@@ -360,7 +360,7 @@ static bool parse_offsetof_member_segment(MinicParser *parser,
         return false;
     }
     field_span = parser->current.span;
-    if (!minic_parser_find_record_field_path(parser, record, field_span, &path)) {
+    if (!minic_parser_find_record_field_path(parser, record_type.record_id, field_span, &path)) {
         minic_parser_error(parser,
                            path.ambiguous ? "record field is ambiguous in __builtin_offsetof"
                                           : "record has no such field in __builtin_offsetof");

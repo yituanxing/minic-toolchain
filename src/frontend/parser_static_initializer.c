@@ -1519,7 +1519,6 @@ static bool parse_static_record_designator_path(MinicParser *parser,
         MinicSourceSpan field_span;
         const MinicRecordField *field;
         MinicStaticFieldShape field_shape;
-        const MinicRecord *owned_record;
         size_t path_index;
 
         if (!minic_parser_advance(parser) || parser->current.kind != MINIC_TOKEN_IDENTIFIER) {
@@ -1527,12 +1526,8 @@ static bool parse_static_record_designator_path(MinicParser *parser,
             return false;
         }
         field_span = parser->current.span;
-        /* current_record can be a stack snapshot that survives arena growth.
-         * Member lookup also produces RecordIds, so give it the canonical
-         * Program-owned descriptor by stable ID, not the snapshot address. */
-        owned_record = minic_c0_program_record(parser->program, current_record_id);
-        if (owned_record == NULL || !owned_record->is_complete ||
-            !minic_parser_find_record_field_path(parser, owned_record, field_span, &field_path) ||
+        /* The initializer may hold a stack snapshot; lookup takes its stable ID. */
+        if (!minic_parser_find_record_field_path(parser, current_record_id, field_span, &field_path) ||
             !field_path.found || field_path.ambiguous || field_path.depth == 0U) {
             minic_parser_error(parser,
                                "static record designator requires an unambiguous member path");
