@@ -459,9 +459,9 @@ linenoise_driven_focused() {
     local script
     for script in \
         run-short-integers.sh \
-        run-function-pointer-parameters.sh \
-        run-extern-objects.sh \
-        run-function-type-typedefs.sh \
+        compile:function-pointer-parameters \
+        compile:extern-objects \
+        compile:function-type-typedefs \
         run-unnamed-prototype-parameters.sh \
         run-static-pointer-arrays.sh \
         run-pointer-array-typed-null.sh \
@@ -474,7 +474,7 @@ linenoise_driven_focused() {
         run-static-local-string-arrays.sh \
         run-external-pointer-definitions.sh \
         run-adjacent-string-literals.sh \
-        run-global-pointer-subscripts.sh; do
+        compile:global-pointer-subscripts; do
         MINIC="$root/build/ci-debug/bin/minic" \
         HOST_CC=cc \
         BUILD_DIR="$root/build/ci-linenoise-driven" \
