@@ -1338,3 +1338,150 @@ jobs:
           done
           rm -f "$oldscript"
           git diff --exit-code
+
+  bulk-test-driver-candidate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 5ae545c3215727bf3b5ada2309f128e78cc499fe
+      - name: Generate full-tree candidate without modifying the repository
+        run: |
+          python3 - <<'PY'
+          import base64, json, pathlib, re, subprocess
+          from collections import Counter
+          ROOT = pathlib.Path(".")
+          base = "5ae545c3215727bf3b5ada2309f128e78cc499fe"
+          audit = ".github/workflows/minic-historical-script-retirement-audit.yml"
+          driver = "tests/compiler/c0/run-compile-only-case.sh"
+          prefix = "tests/compiler/c0/"
+          tracked = subprocess.check_output(["git","ls-files","-z"]).decode().split("\0")
+          files = {}
+          for p in tracked:
+              if not p: continue
+              raw = pathlib.Path(p).read_bytes()
+              if b"\0" in raw: continue
+              try: files[p] = raw.decode("utf-8")
+              except UnicodeDecodeError: pass
+          original = files[driver]
+          rows = []
+          blocks = []
+          chosen = []
+          reject = Counter()
+          changes = {}
+          deleted = []
+          wrappers = []
+          references = {}
+          for p,s in sorted(files.items()):
+              m = re.fullmatch(re.escape(prefix)+r"run-([a-z0-9-]+)\.sh",p)
+              if not m or p == driver: continue
+              name=m[1]
+              if re.search(r"(?m)^\s+"+re.escape(name)+r"\)",original): continue
+              if "exec sh " in s or "<< " in s or "<<" in s or "\r" in s: continue
+              # Parse complete common prologue, retaining the original physical assertion lines.
+              physical=s.splitlines(keepends=True)
+              logical=[]
+              buf=""
+              for i,line in enumerate(physical):
+                  buf+=line
+                  if buf.endswith("\\\n"): continue
+                  logical.append((re.sub(r"[ \t]*\\\n[ \t]*"," ",buf).strip(),i+1))
+                  buf=""
+              if buf: continue
+              ls=[(line,i) for line,i in logical if line and not line.startswith("#")]
+              standard=[
+                  'set -eu',
+                  'root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)',
+                  'minic=${MINIC:-"$root/build/debug/bin/minic"}',
+                  'host_cc=${HOST_CC:-${CC:-cc}}',
+              ]
+              if [x[0] for x in ls[:4]] != standard:
+                  reject["noncanonical prologue"]+=1
+                  continue
+              w=re.fullmatch(r'work=\$\{BUILD_DIR:-"\$root/build/debug"\}/tests/([a-zA-Z0-9_/-]+)',ls[4][0]) if len(ls)>4 else None
+              if not w: continue
+              pos=5
+              aliases={}
+              reset=False
+              made=False
+              while pos<len(ls):
+                  line=ls[pos][0]
+                  alias=re.fullmatch(r'(source|assembly|asm)="([^"]+)"',line)
+                  if alias:
+                      key,value=alias.groups()
+                      if key in aliases or (key=="source" and not re.fullmatch(r'\$root/tests/compiler/c0/[a-zA-Z0-9_]+\.c',value)) or (key!="source" and not re.fullmatch(r'\$work/[a-zA-Z0-9_]+\.s',value)):
+                          break
+                      aliases[key]=value
+                  elif line=='rm -rf "$work"' and not reset and not made: reset=True
+                  elif line=='mkdir -p "$work"' and not made: made=True
+                  else: break
+                  pos+=1
+              if not made or pos+1>=len(ls): continue
+              pre=re.fullmatch(r'"\$host_cc" -E -P (?:-std=(gnu11|c11|gnu99|c99) )?-x c "([^"]+)" -o "\$work/([a-zA-Z0-9_]+)\.i"',ls[pos][0])
+              if not pre: continue
+              dialect,src,inp=pre.groups()
+              src=aliases.get(src[1:],src) if src.startswith("$") else src
+              src=re.fullmatch(r'\$root/tests/compiler/c0/([a-zA-Z0-9_]+)\.c',src)
+              if not src or prefix+src[1]+".c" not in files: continue
+              comp=re.fullmatch(r'"\$minic" -S "\$work/([a-zA-Z0-9_]+)\.i" -o "([^"]+)"',ls[pos+1][0])
+              if not comp or comp[1]!=inp: continue
+              out=aliases.get(comp[2][1:],comp[2])
+              out=re.fullmatch(r'\$work/([a-zA-Z0-9_]+)\.s',out)
+              if not out: continue
+              tail="".join(physical[ls[pos+1][1]:]).strip("\n")
+              if not tail.strip() or re.search(r'\$(?:0|[1-9]|[@*#])|\$\{(?:0|[1-9]|[@*#])\}|(^|\s)(?:shift|set --)(\s|$)',tail): continue
+              if any(re.search(r'\$'+key+r'\b',tail) and key=="source" for key in aliases): continue
+              # No unparsed setup or shell bodies have been moved; aliases used by original assertions are restored.
+              extra=[f'{key}="{value}"' for key,value in aliases.items() if key!="source"]
+              body="\n".join("        "+line if line else "" for line in extra+tail.splitlines())
+              rows.append(f"    {name}) set -- '{src[1]}' '{w[1]}' '{inp}' '{out[1]}' '{dialect or ''}' '{'yes' if reset else 'no'}' ;;")
+              blocks.append(f"    {name})\n{body}\n        ;;")
+              chosen.append(name)
+              # Delete only when all literal references are exact shell calls in the
+              # current C0 dispatcher or full gate. Preserve public compatibility for
+              # any other consumer, docs, or unknown manual-only entrypoint.
+              basename=pathlib.PurePosixPath(p).name
+              hits=[]
+              safe=True
+              edits={}
+              for q,content in files.items():
+                  if q in (p,audit): continue
+                  if basename not in content: continue
+                  hits.append(q)
+                  if q not in ("tests/compiler/c0/run.sh",".github/scripts/compiler-c0-full-gate.sh","tests/compiler/c0/run-foundation-focused.sh"):
+                      safe=False
+                      break
+                  current=changes.get(q,content)
+                  pattern=r'(sh\s+"[^"\n]*?/)' + re.escape(basename) + r'")(?=[ \t]*(?:\n|$))'
+                  matches=list(re.finditer(pattern,current))
+                  if len(matches)!=current.count(basename) or not matches:
+                      safe=False
+                      break
+                  edits[q]=re.sub(pattern,lambda m:m[1]+"run-compile-only-case.sh\" "+name,current)
+              if safe and hits:
+                  deleted.append(p)
+                  changes.update(edits)
+                  references[p]=hits
+              else:
+                  wrappers.append(p)
+                  changes[p] = '#!/bin/sh\n# Compatibility entry point; original assertions live in the shared driver.\nexec sh "$(dirname -- "$0")/run-compile-only-case.sh" '+name+'\n'
+          config='    *) echo "unknown compile-only case: $name" >&2; exit 2 ;;'
+          marker='case "$name" in\n    postfix-const)'
+          assert original.count(config)==1 and original.count(marker)==1
+          new=original.replace(config,"\n".join(rows)+"\n"+config).replace(marker,'case "$name" in\n'+"\n".join(blocks)+"\n    postfix-const)")
+          changes[driver]=new
+          # Validate actual shell syntax before exposing the patch. No writes to GitHub.
+          for p,s in changes.items():
+              if p.endswith(".sh"):
+                  subprocess.run(["sh","-n"],input=s.encode(),check=True)
+          print("BULK_CANDIDATE cases="+str(len(chosen))+" deletions="+str(len(deleted))+" wrappers="+str(len(wrappers)))
+          print("BULK_NAMES "+json.dumps(chosen))
+          print("BULK_DELETE "+json.dumps(deleted))
+          print("BULK_REFS "+json.dumps(references))
+          print("BULK_REJECT "+str(reject))
+          payload=json.dumps({"base":base,"cases":chosen,"deleted":deleted,"wrappers":wrappers,"changes":changes,"references":references},ensure_ascii=True,separators=(",",":")).encode()
+          encoded=base64.b64encode(payload).decode()
+          for i in range(0,len(encoded),2400):
+              print("BULK_PAYLOAD "+encoded[i:i+2400])
+          PY
