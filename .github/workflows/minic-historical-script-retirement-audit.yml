@@ -663,7 +663,72 @@ jobs:
               "tests/compiler/c0/run-extern-fixed-integer-arrays.sh",
               "tests/compiler/c0/run-compound-assignment-expressions.sh",
           }
-          if len(expected) != 755 or deleted != expected or changed != expected | metadata:
+          expected |= {
+              "tests/compiler/c0/run-block-scope-extern-object.sh",
+              "tests/compiler/c0/run-declaration-head-variadic.sh",
+              "tests/compiler/c0/run-enum-mode-byte.sh",
+              "tests/compiler/c0/run-external-inferred-record-array.sh",
+              "tests/compiler/c0/run-gnu-function-pointer-bridge-call.sh",
+              "tests/compiler/c0/run-gnu-weak-external-objects.sh",
+              "tests/compiler/c0/run-pointer-to-bool-conversion.sh",
+              "tests/compiler/c0/run-record-rvalue-member.sh",
+              "tests/compiler/c0/run-static-floating-aggregate.sh",
+              "tests/compiler/c0/run-static-pointer-constant-conditional.sh",
+              "tests/compiler/c0/run-transparent-union.sh",
+          }
+          metadata |= {
+              "tests/compiler/c0/run-array-bound-constant-expressions.sh",
+              "tests/compiler/c0/run-bool-semantics.sh",
+              "tests/compiler/c0/run-conditional-pointer-qualifiers.sh",
+              "tests/compiler/c0/run-core-required-no-fallback.sh",
+              "tests/compiler/c0/run-extern-incomplete-record-object.sh",
+              "tests/compiler/c0/run-for-declaration-initializers.sh",
+              "tests/compiler/c0/run-for-expression-initializers.sh",
+              "tests/compiler/c0/run-function-arena-borrow-lifetime.sh",
+              "tests/compiler/c0/run-gnu-aligned-record-fields.sh",
+              "tests/compiler/c0/run-gnu-builtin-constant-p.sh",
+              "tests/compiler/c0/run-gnu-compiletime-selection-builtins.sh",
+              "tests/compiler/c0/run-gnu-empty-records.sh",
+              "tests/compiler/c0/run-gnu-function-asm-labels.sh",
+              "tests/compiler/c0/run-gnu-int128-type.sh",
+              "tests/compiler/c0/run-gnu-overflow-builtins.sh",
+              "tests/compiler/c0/run-gnu-record-alignment.sh",
+              "tests/compiler/c0/run-gnu-section-symbol-attribute.sh",
+              "tests/compiler/c0/run-gnu-va-builtins.sh",
+              "tests/compiler/c0/run-gnu-visible-extern-arrays.sh",
+              "tests/compiler/c0/run-gnu-zero-length-record-arrays.sh",
+              "tests/compiler/c0/run-incomplete-array-typedef.sh",
+              "tests/compiler/c0/run-inline-functions.sh",
+              "tests/compiler/c0/run-long-long-types.sh",
+              "tests/compiler/c0/run-mixed-double-arithmetic.sh",
+              "tests/compiler/c0/run-pointer-compound-subtraction.sh",
+              "tests/compiler/c0/run-pointer-integer-casts.sh",
+              "tests/compiler/c0/run-record-assignment-expressions.sh",
+              "tests/compiler/c0/run-record-copy-array-members.sh",
+              "tests/compiler/c0/run-record-local-initializers.sh",
+              "tests/compiler/c0/run-runtime-local-array-initializer.sh",
+              "tests/compiler/c0/run-runtime-record-array-initializers.sh",
+              "tests/compiler/c0/run-rv64-integer-aggregate-return.sh",
+              "tests/compiler/c0/run-shared-function-declarator.sh",
+              "tests/compiler/c0/run-short-integers.sh",
+              "tests/compiler/c0/run-static-aggregate-array-designators.sh",
+              "tests/compiler/c0/run-static-assert-declaration.sh",
+              "tests/compiler/c0/run-static-fixed-record-array-zero.sh",
+              "tests/compiler/c0/run-static-inferred-char-arrays.sh",
+              "tests/compiler/c0/run-static-inferred-integer-array.sh",
+              "tests/compiler/c0/run-static-local-fixed-arrays.sh",
+              "tests/compiler/c0/run-static-local-inferred-arrays.sh",
+              "tests/compiler/c0/run-static-local-pointer-arrays.sh",
+              "tests/compiler/c0/run-static-local-scalars.sh",
+              "tests/compiler/c0/run-static-pointer-arrays.sh",
+              "tests/compiler/c0/run-static-prefix-object-attributes.sh",
+              "tests/compiler/c0/run-static-preformed-array-zero.sh",
+              "tests/compiler/c0/run-static-union-zero-overlay.sh",
+              "tests/compiler/c0/run-static-zero-definitions.sh",
+              "tests/compiler/c0/run-unnamed-prototype-parameters.sh",
+              "tests/compiler/c0/run-void-pointer-locals.sh",
+          }
+          if len(expected) != 766 or deleted != expected or changed != expected | metadata:
               raise SystemExit("RETIREMENT_SCOPE=FAIL: unexpected tree changes")
           files = [p.decode() for p in git("ls-files", "-z").split(b"\0") if p]
           candidates = {
@@ -1339,149 +1404,47 @@ jobs:
           rm -f "$oldscript"
           git diff --exit-code
 
-  bulk-test-driver-candidate:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: 5ae545c3215727bf3b5ada2309f128e78cc499fe
-      - name: Generate full-tree candidate without modifying the repository
+      - name: Compare 61 original and consolidated compiler test drivers
+        shell: bash
         run: |
-          python3 - <<'PY'
-          import base64, json, pathlib, re, subprocess
-          from collections import Counter
-          ROOT = pathlib.Path(".")
-          base = "5ae545c3215727bf3b5ada2309f128e78cc499fe"
-          audit = ".github/workflows/minic-historical-script-retirement-audit.yml"
-          driver = "tests/compiler/c0/run-compile-only-case.sh"
-          prefix = "tests/compiler/c0/"
-          tracked = subprocess.check_output(["git","ls-files","-z"]).decode().split("\0")
-          files = {}
-          for p in tracked:
-              if not p: continue
-              raw = pathlib.Path(p).read_bytes()
-              if b"\0" in raw: continue
-              try: files[p] = raw.decode("utf-8")
-              except UnicodeDecodeError: pass
-          original = files[driver]
-          rows = []
-          blocks = []
-          chosen = []
-          reject = Counter()
-          changes = {}
-          deleted = []
-          wrappers = []
-          references = {}
-          for p,s in sorted(files.items()):
-              m = re.fullmatch(re.escape(prefix)+r"run-([a-z0-9-]+)\.sh",p)
-              if not m or p == driver: continue
-              name=m[1]
-              if re.search(r"(?m)^\s+"+re.escape(name)+r"\)",original): continue
-              if "exec sh " in s or "<< " in s or "<<" in s or "\r" in s: continue
-              # Parse complete common prologue, retaining the original physical assertion lines.
-              physical=s.splitlines(keepends=True)
-              logical=[]
-              buf=""
-              for i,line in enumerate(physical):
-                  buf+=line
-                  if buf.endswith("\\\n"): continue
-                  logical.append((re.sub(r"[ \t]*\\\n[ \t]*"," ",buf).strip(),i+1))
-                  buf=""
-              if buf: continue
-              ls=[(line,i) for line,i in logical if line and not line.startswith("#")]
-              standard=[
-                  'set -eu',
-                  'root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)',
-                  'minic=${MINIC:-"$root/build/debug/bin/minic"}',
-                  'host_cc=${HOST_CC:-${CC:-cc}}',
-              ]
-              if [x[0] for x in ls[:4]] != standard:
-                  reject["noncanonical prologue"]+=1
-                  continue
-              w=re.fullmatch(r'work=\$\{BUILD_DIR:-"\$root/build/debug"\}/tests/([a-zA-Z0-9_/-]+)',ls[4][0]) if len(ls)>4 else None
-              if not w: continue
-              pos=5
-              aliases={}
-              reset=False
-              made=False
-              while pos<len(ls):
-                  line=ls[pos][0]
-                  alias=re.fullmatch(r'(source|assembly|asm)="([^"]+)"',line)
-                  if alias:
-                      key,value=alias.groups()
-                      if key in aliases or (key=="source" and not re.fullmatch(r'\$root/tests/compiler/c0/[a-zA-Z0-9_]+\.c',value)) or (key!="source" and not re.fullmatch(r'\$work/[a-zA-Z0-9_]+\.s',value)):
-                          break
-                      aliases[key]=value
-                  elif line=='rm -rf "$work"' and not reset and not made: reset=True
-                  elif line=='mkdir -p "$work"' and not made: made=True
-                  else: break
-                  pos+=1
-              if not made or pos+1>=len(ls): continue
-              pre=re.fullmatch(r'"\$host_cc" -E -P (?:-std=(gnu11|c11|gnu99|c99) )?-x c "([^"]+)" -o "\$work/([a-zA-Z0-9_]+)\.i"',ls[pos][0])
-              if not pre: continue
-              dialect,src,inp=pre.groups()
-              src=aliases.get(src[1:],src) if src.startswith("$") else src
-              src=re.fullmatch(r'\$root/tests/compiler/c0/([a-zA-Z0-9_]+)\.c',src)
-              if not src or prefix+src[1]+".c" not in files: continue
-              comp=re.fullmatch(r'"\$minic" -S "\$work/([a-zA-Z0-9_]+)\.i" -o "([^"]+)"',ls[pos+1][0])
-              if not comp or comp[1]!=inp: continue
-              out=aliases.get(comp[2][1:],comp[2])
-              out=re.fullmatch(r'\$work/([a-zA-Z0-9_]+)\.s',out)
-              if not out: continue
-              tail="".join(physical[ls[pos+1][1]:]).strip("\n")
-              if not tail.strip() or re.search(r'\$(?:0|[1-9]|[@*#])|\$\{(?:0|[1-9]|[@*#])\}|(^|\s)(?:shift|set --)(\s|$)',tail): continue
-              if any(re.search(r'\$'+key+r'\b',tail) and key=="source" for key in aliases): continue
-              # No unparsed setup or shell bodies have been moved; aliases used by original assertions are restored.
-              extra=[f'{key}="{value}"' for key,value in aliases.items() if key!="source"]
-              body="\n".join("        "+line if line else "" for line in extra+tail.splitlines())
-              rows.append(f"    {name}) set -- '{src[1]}' '{w[1]}' '{inp}' '{out[1]}' '{dialect or ''}' '{'yes' if reset else 'no'}' ;;")
-              blocks.append(f"    {name})\n{body}\n        ;;")
-              chosen.append(name)
-              # Delete only when all literal references are exact shell calls in the
-              # current C0 dispatcher or full gate. Preserve public compatibility for
-              # any other consumer, docs, or unknown manual-only entrypoint.
-              basename=pathlib.PurePosixPath(p).name
-              hits=[]
-              safe=True
-              edits={}
-              for q,content in files.items():
-                  if q in (p,audit): continue
-                  if basename not in content: continue
-                  hits.append(q)
-                  if q not in ("tests/compiler/c0/run.sh",".github/scripts/compiler-c0-full-gate.sh","tests/compiler/c0/run-foundation-focused.sh"):
-                      safe=False
-                      break
-                  current=changes.get(q,content)
-                  pattern=r'(sh\s+"[^"\n]*?/)' + re.escape(basename) + r'"(?=[ \t]*(?:\n|$))'
-                  matches=list(re.finditer(pattern,current))
-                  if len(matches)!=current.count(basename) or not matches:
-                      safe=False
-                      break
-                  edits[q]=re.sub(pattern,lambda m:m[1]+"run-compile-only-case.sh\" "+name,current)
-              if safe and hits:
-                  deleted.append(p)
-                  changes.update(edits)
-                  references[p]=hits
-              else:
-                  wrappers.append(p)
-                  changes[p] = '#!/bin/sh\n# Compatibility entry point; original assertions live in the shared driver.\nexec sh "$(dirname -- "$0")/run-compile-only-case.sh" '+name+'\n'
-          config='    *) echo "unknown compile-only case: $name" >&2; exit 2 ;;'
-          marker='case "$name" in\n    postfix-const)'
-          assert original.count(config)==1 and original.count(marker)==1
-          new=original.replace(config,"\n".join(rows)+"\n"+config).replace(marker,'case "$name" in\n'+"\n".join(blocks)+"\n    postfix-const)")
-          changes[driver]=new
-          # Validate actual shell syntax before exposing the patch. No writes to GitHub.
-          for p,s in changes.items():
-              if p.endswith(".sh"):
-                  subprocess.run(["sh","-n"],input=s.encode(),check=True)
-          print("BULK_CANDIDATE cases="+str(len(chosen))+" deletions="+str(len(deleted))+" wrappers="+str(len(wrappers)))
-          print("BULK_NAMES "+json.dumps(chosen))
-          print("BULK_DELETE "+json.dumps(deleted))
-          print("BULK_REFS "+json.dumps(references))
-          print("BULK_REJECT "+str(reject))
-          payload=json.dumps({"base":base,"cases":chosen,"deleted":deleted,"wrappers":wrappers,"changes":changes,"references":references},ensure_ascii=True,separators=(",",":")).encode()
-          encoded=base64.b64encode(payload).decode()
-          for i in range(0,len(encoded),2400):
-              print("BULK_PAYLOAD "+encoded[i:i+2400])
-          PY
+          set -Eeuo pipefail
+          export MINIC="$PWD/build/retirement-oracle/bin/minic" HOST_CC=cc
+          work="$PWD/build/retirement-bulk-compat"
+          mkdir -p "$work"
+          passed=0
+          baseline_failures=0
+          for name in array-bound-constant-expressions block-scope-extern-object bool-semantics conditional-pointer-qualifiers core-required-no-fallback declaration-head-variadic enum-mode-byte extern-incomplete-record-object external-inferred-record-array for-declaration-initializers for-expression-initializers function-arena-borrow-lifetime gnu-aligned-record-fields gnu-builtin-constant-p gnu-compiletime-selection-builtins gnu-empty-records gnu-function-asm-labels gnu-function-pointer-bridge-call gnu-int128-type gnu-overflow-builtins gnu-record-alignment gnu-section-symbol-attribute gnu-va-builtins gnu-visible-extern-arrays gnu-weak-external-objects gnu-zero-length-record-arrays incomplete-array-typedef inline-functions long-long-types mixed-double-arithmetic pointer-compound-subtraction pointer-integer-casts pointer-to-bool-conversion record-assignment-expressions record-copy-array-members record-local-initializers record-rvalue-member runtime-local-array-initializer runtime-record-array-initializers rv64-integer-aggregate-return shared-function-declarator short-integers static-aggregate-array-designators static-assert-declaration static-fixed-record-array-zero static-floating-aggregate static-inferred-char-arrays static-inferred-integer-array static-local-fixed-arrays static-local-inferred-arrays static-local-pointer-arrays static-local-scalars static-pointer-arrays static-pointer-constant-conditional static-prefix-object-attributes static-preformed-array-zero static-union-zero-overlay static-zero-definitions transparent-union unnamed-prototype-parameters void-pointer-locals; do
+            script="tests/compiler/c0/run-$name.sh"
+            if test -f "$script"; then
+              cp -p "$script" "$work/new-wrapper"
+            fi
+            git show 5ae545c3215727bf3b5ada2309f128e78cc499fe:"$script" > "$script"
+            export BUILD_DIR="$work/$name"
+            mkdir -p "$BUILD_DIR"
+            old_rc=0
+            sh "$script" > "$work/$name.old.stdout" 2> "$work/$name.old.stderr" || old_rc=$?
+            mv "$BUILD_DIR" "$work/$name.old"
+            mkdir -p "$BUILD_DIR"
+            rm "$script"
+            if test -f "$work/new-wrapper"; then
+              mv "$work/new-wrapper" "$script"
+            fi
+            new_rc=0
+            if test -f "$script"; then
+              sh "$script" > "$work/$name.new.stdout" 2> "$work/$name.new.stderr" || new_rc=$?
+            else
+              sh tests/compiler/c0/run-compile-only-case.sh "$name" > "$work/$name.new.stdout" 2> "$work/$name.new.stderr" || new_rc=$?
+            fi
+            test "$old_rc" -eq "$new_rc"
+            diff -r "$work/$name.old" "$BUILD_DIR"
+            cmp "$work/$name.old.stdout" "$work/$name.new.stdout"
+            cmp "$work/$name.old.stderr" "$work/$name.new.stderr"
+            if test "$old_rc" -eq 0; then
+              passed=$((passed+1))
+            else
+              baseline_failures=$((baseline_failures+1))
+            fi
+            echo "BULK_COMPILE_EQUIVALENCE=PASS case=$name original_exit=$old_rc"
+          done
+          echo "BULK_COMPILE_COMPARISON passed=$passed unchanged_baseline_fail=$baseline_failures"
+          git diff --exit-code

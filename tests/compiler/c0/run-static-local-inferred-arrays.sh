@@ -1,33 +1,3 @@
 #!/bin/sh
-set -eu
-
-root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
-minic=${MINIC:-"$root/build/debug/bin/minic"}
-host_cc=${HOST_CC:-${CC:-cc}}
-work=${BUILD_DIR:-"$root/build/debug"}/tests/compiler-c0-static-local-inferred-array
-
-rm -rf "$work"
-mkdir -p "$work"
-
-"$host_cc" -E -P -x c "$root/tests/compiler/c0/static_local_inferred_array.c" \
-    -o "$work/static_local_inferred_array.i"
-"$minic" -S "$work/static_local_inferred_array.i" \
-    -o "$work/static_local_inferred_array.s"
-
-grep -Fx '.section .rodata' "$work/static_local_inferred_array.s" >/dev/null
-grep -F '.type __minic_static_local_' "$work/static_local_inferred_array.s" >/dev/null
-grep -F '  .byte 1' "$work/static_local_inferred_array.s" >/dev/null
-grep -F '  .byte 6' "$work/static_local_inferred_array.s" >/dev/null
-grep -E '\.size __minic_static_local_[^,]+, 7$' "$work/static_local_inferred_array.s" >/dev/null
-grep -F '  .word 8' "$work/static_local_inferred_array.s" >/dev/null
-grep -F '  .word 12' "$work/static_local_inferred_array.s" >/dev/null
-grep -F '  .word 16' "$work/static_local_inferred_array.s" >/dev/null
-grep -F '  .word 3' "$work/static_local_inferred_array.s" >/dev/null
-grep -F '  .dword 101' "$work/static_local_inferred_array.s" >/dev/null
-grep -F '  .dword 202' "$work/static_local_inferred_array.s" >/dev/null
-grep -E '\.size __minic_static_local_[^,]+, 32$' "$work/static_local_inferred_array.s" >/dev/null
-if grep -F '.globl __minic_static_local_' "$work/static_local_inferred_array.s" >/dev/null; then
-    echo 'inferred static local array leaked external linkage' >&2
-    exit 1
-fi
-printf '%s\n' 'PASS compiler/c0/static_local_inferred_array element=uchar count=7 multidim-inferred=2x2 shared-ice=offsetof,array,scalar,record arithmetic=1 internal-rodata=1'
+# Compatibility entry point; original assertions live in the shared driver.
+exec sh "$(dirname -- "$0")/run-compile-only-case.sh" static-local-inferred-arrays

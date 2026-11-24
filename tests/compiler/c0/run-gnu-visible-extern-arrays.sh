@@ -1,26 +1,3 @@
 #!/bin/sh
-set -eu
-
-root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
-minic=${MINIC:-"$root/build/debug/bin/minic"}
-host_cc=${HOST_CC:-${CC:-cc}}
-work=${BUILD_DIR:-"$root/build/debug"}/tests/compiler-c0-gnu-visible-extern-arrays
-
-rm -rf "$work"
-mkdir -p "$work"
-
-"$host_cc" -E -P -x c "$root/tests/compiler/c0/gnu_visible_extern_array.c" \
-    -o "$work/gnu_visible_extern_array.i"
-"$minic" -S "$work/gnu_visible_extern_array.i" \
-    -o "$work/gnu_visible_extern_array.s"
-
-test -s "$work/gnu_visible_extern_array.s"
-grep -F '.globl names' "$work/gnu_visible_extern_array.s" >/dev/null
-grep -F '.internal names' "$work/gnu_visible_extern_array.s" >/dev/null
-grep -F '.size names, 24' "$work/gnu_visible_extern_array.s" >/dev/null
-grep -F '.globl hidden_items' "$work/gnu_visible_extern_array.s" >/dev/null
-grep -F '.hidden hidden_items' "$work/gnu_visible_extern_array.s" >/dev/null
-grep -F '.size hidden_items, 8' "$work/gnu_visible_extern_array.s" >/dev/null
-
-test "$(grep -c '^  .dword .Lminic_string_' "$work/gnu_visible_extern_array.s")" -ge 3
-printf '%s\n' 'PASS compiler/c0/gnu_visible_extern_array prefix=internal suffix=hidden extern-array=merge size=24,8'
+# Compatibility entry point; original assertions live in the shared driver.
+exec sh "$(dirname -- "$0")/run-compile-only-case.sh" gnu-visible-extern-arrays

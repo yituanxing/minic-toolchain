@@ -438,7 +438,7 @@ sh "$root/tests/compiler/c0/run-function-pointer-field-array.sh"
 MINIC="$minic" \
 HOST_CC="$host_cc" \
 BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
-sh "$root/tests/compiler/c0/run-gnu-function-pointer-bridge-call.sh"
+sh "$root/tests/compiler/c0/run-compile-only-case.sh" gnu-function-pointer-bridge-call
 
 MINIC="$minic" \
 BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
@@ -455,7 +455,7 @@ sh "$root/tests/compiler/c0/run-linux-tail-batch4.sh"
 MINIC="$minic" \
 HOST_CC="$host_cc" \
 BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
-sh "$root/tests/compiler/c0/run-pointer-to-bool-conversion.sh"
+sh "$root/tests/compiler/c0/run-compile-only-case.sh" pointer-to-bool-conversion
 
 MINIC="$minic" \
 HOST_CC="$host_cc" \
@@ -465,7 +465,7 @@ sh "$root/tests/compiler/c0/run-compile-only-case.sh" block-scope-extern-multi-d
 MINIC="$minic" \
 HOST_CC="$host_cc" \
 BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
-sh "$root/tests/compiler/c0/run-record-rvalue-member.sh"
+sh "$root/tests/compiler/c0/run-compile-only-case.sh" record-rvalue-member
 
 MINIC="$minic" \
 HOST_CC="$host_cc" \
@@ -490,12 +490,12 @@ sh "$root/tests/compiler/c0/run-compile-only-case.sh" comma-operator
 MINIC="$minic" \
 HOST_CC="$host_cc" \
 BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
-sh "$root/tests/compiler/c0/run-block-scope-extern-object.sh"
+sh "$root/tests/compiler/c0/run-compile-only-case.sh" block-scope-extern-object
 
 MINIC="$minic" \
 HOST_CC="$host_cc" \
 BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
-sh "$root/tests/compiler/c0/run-transparent-union.sh"
+sh "$root/tests/compiler/c0/run-compile-only-case.sh" transparent-union
 
 MINIC="$minic" \
 HOST_CC="$host_cc" \
@@ -533,7 +533,7 @@ sh "$root/tests/compiler/c0/run-static-array-designators.sh"
 MINIC="$minic" \
 HOST_CC="$host_cc" \
 BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
-sh "$root/tests/compiler/c0/run-external-inferred-record-array.sh"
+sh "$root/tests/compiler/c0/run-compile-only-case.sh" external-inferred-record-array
 
 MINIC="$minic" \
 HOST_CC="$host_cc" \
@@ -566,7 +566,7 @@ sh "$root/tests/compiler/c0/run-braced-static-scalar.sh"
 
 MINIC="$minic" HOST_CC="$host_cc" \
 BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
-sh "$root/tests/compiler/c0/run-static-pointer-constant-conditional.sh"
+sh "$root/tests/compiler/c0/run-compile-only-case.sh" static-pointer-constant-conditional
 
 MINIC="$minic" HOST_CC="$host_cc" BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
   sh "$root/tests/compiler/c0/run-compile-only-case.sh" runtime-record-zero-shorthand
@@ -605,7 +605,7 @@ MINIC="$minic" HOST_CC="$host_cc" BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" 
   sh "$root/tests/compiler/c0/run-compile-only-case.sh" backward-static-aggregate-overlay
 
 MINIC="$minic" HOST_CC="$host_cc" BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
-  sh "$root/tests/compiler/c0/run-gnu-weak-external-objects.sh"
+  sh "$root/tests/compiler/c0/run-compile-only-case.sh" gnu-weak-external-objects
 
 MINIC="$minic" HOST_CC="$host_cc" BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
   sh "$root/tests/compiler/c0/run-compile-only-case.sh" static-record-nested-designator-string-overlay
@@ -627,12 +627,12 @@ MINIC="$minic" HOST_CC="$host_cc" BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" 
   sh "$root/tests/compiler/c0/run-first500-static-array-pointer-v1.sh"
 
 MINIC="$minic" HOST_CC="$host_cc" BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
-  sh "$root/tests/compiler/c0/run-enum-mode-byte.sh"
+  sh "$root/tests/compiler/c0/run-compile-only-case.sh" enum-mode-byte
 
 MINIC="$minic" \
 HOST_CC="$host_cc" \
 BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
-sh "$root/tests/compiler/c0/run-declaration-head-variadic.sh"
+sh "$root/tests/compiler/c0/run-compile-only-case.sh" declaration-head-variadic
 
 MINIC="$minic" \
 RISCV_CC="${RISCV_CC:-riscv64-linux-gnu-gcc}" \
@@ -712,7 +712,7 @@ sh "$root/tests/compiler/c0/run-nested-function-pointer-field.sh"
 MINIC="$minic" \
 HOST_CC="$host_cc" \
 BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
-sh "$root/tests/compiler/c0/run-static-floating-aggregate.sh"
+sh "$root/tests/compiler/c0/run-compile-only-case.sh" static-floating-aggregate
 MINIC="$minic" \
 HOST_CC="$host_cc" \
 BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
