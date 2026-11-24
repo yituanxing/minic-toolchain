@@ -7,10 +7,6 @@
 
 /* The source/DataLayout owner for C aggregate initialization.  Its typed
  * payload plan is captured once into sealed ModuleIR before machine emission. */
-static bool minic_payload_scalar_width_supported(size_t width) {
-    return width == 1U || width == 2U || width == 4U || width == 8U;
-}
-
 static bool minic_payload_visibility_valid(MinicSymbolVisibility visibility) {
     return visibility == MINIC_SYMBOL_VISIBILITY_DEFAULT ||
            visibility == MINIC_SYMBOL_VISIBILITY_HIDDEN ||

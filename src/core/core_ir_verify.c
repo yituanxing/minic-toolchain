@@ -126,14 +126,6 @@ static bool core_asm_named_bindings_valid(
 /* Only sealed CoreType snapshots reach this verifier; any mutable C source
  * descriptor is confined to compiler-owned ingress and has been released.
  * Invalid, foreign-arena and incomplete Core TypeIds fail closed. */
-static const MinicCoreType *core_snapshot_base_type(const MinicCoreFunction *function,
-                                                    MinicCoreTypeId type_id) {
-    MinicCoreTypeId base;
-    if (function == NULL || function->type_context == NULL) return NULL;
-    base = minic_core_type_unqualified(function->type_context, type_id);
-    return minic_core_type_get(function->type_context, base);
-}
-
 static bool core_snapshot_exists(const MinicCoreFunction *function,
                                  MinicCoreTypeId type_id) {
     return minic_core_function_type_get(function, type_id) != NULL;
@@ -155,7 +147,7 @@ static bool core_snapshot_parameter_list_valid(
 static const MinicCoreType *core_snapshot_signature_type(
     const MinicCoreFunction *function, MinicCoreTypeId id) {
     const MinicCoreType *type;
-    type = core_snapshot_base_type(function, id);
+    type = minic_core_function_base_type(function, id);
     if (type == NULL || type->kind != MINIC_CORE_TYPE_FUNCTION ||
         !minic_function_calling_convention_valid(
             type->value.function.calling_convention) ||
@@ -188,7 +180,7 @@ static bool core_snapshot_indirect_callee_valid(
     signature = &function->call_signatures[instruction->value.indirect_call.signature_id];
     signature_type = core_snapshot_indirect_signature_type(function, signature);
     if (signature_type == NULL) return false;
-    callee_pointer = core_snapshot_base_type(
+    callee_pointer = minic_core_function_base_type(
         function, function->values[callee_value].core_type_id);
     if (callee_pointer == NULL || callee_pointer->kind != MINIC_CORE_TYPE_POINTER)
         return false;
@@ -209,7 +201,7 @@ static bool core_snapshot_fixed_record_arguments_valid(
         argument_count > function->call_argument_count - argument_begin)
         return false;
     for (i = 0U; i < parameter_count; ++i) {
-        const MinicCoreType *param = core_snapshot_base_type(function, parameters[i]);
+        const MinicCoreType *param = minic_core_function_base_type(function, parameters[i]);
         const MinicCoreCallArgument *argument =
             &function->call_arguments[argument_begin + i];
         if (param == NULL) return false;
@@ -265,7 +257,7 @@ bool minic_core_function_verify_core_type_snapshot(const MinicCoreFunction *func
         if (!minic_core_function_object_layout(function, (MinicCoreObjectId)i,
                                                &size, &alignment) || alignment == 0U)
             return false;
-        type = core_snapshot_base_type(function, function->objects[i].core_type_id);
+        type = minic_core_function_base_type(function, function->objects[i].core_type_id);
         if (type == NULL || type->kind == MINIC_CORE_TYPE_VOID ||
             type->kind == MINIC_CORE_TYPE_FUNCTION ||
             type->kind == MINIC_CORE_TYPE_OPAQUE) return false;
@@ -299,11 +291,11 @@ bool minic_core_function_verify_core_type_snapshot(const MinicCoreFunction *func
             const MinicCoreType *pointer, *record;
             size_t base_id = instruction->value.field_address.base;
             if (base_id >= function->value_count) return false;
-            pointer = core_snapshot_base_type(function,
+            pointer = minic_core_function_base_type(function,
                                               function->values[base_id].core_type_id);
             if (pointer == NULL || pointer->kind != MINIC_CORE_TYPE_POINTER)
                 return false;
-            record = core_snapshot_base_type(function, pointer->value.pointer.pointee);
+            record = minic_core_function_base_type(function, pointer->value.pointer.pointee);
             if (record == NULL || record->kind != MINIC_CORE_TYPE_RECORD ||
                 !record->value.record.is_complete || !record->has_layout ||
                 instruction->value.field_address.byte_offset > record->size)
@@ -347,34 +339,23 @@ static MinicCoreTypeId core_unqualified(const MinicCoreFunction *function,
     return minic_core_type_unqualified(function->type_context, id);
 }
 
-static const MinicCoreType *core_type(const MinicCoreFunction *function,
-                                      MinicCoreTypeId id) {
-    return core_snapshot_base_type(function, id);
-}
-
-static bool core_is(const MinicCoreFunction *function, MinicCoreTypeId id,
-                    MinicCoreTypeKind kind) {
-    const MinicCoreType *type = core_type(function, id);
-    return type != NULL && type->kind == kind;
-}
-
 static bool core_is_float_format(const MinicCoreFunction *function,
                                  MinicCoreTypeId id, MinicCoreFloatFormat format) {
-    const MinicCoreType *type = core_type(function, id);
+    const MinicCoreType *type = minic_core_function_base_type(function, id);
     return type != NULL && type->kind == MINIC_CORE_TYPE_FLOAT &&
            type->value.floating.format == format;
 }
 
 static bool core_is_integer(const MinicCoreFunction *function, MinicCoreTypeId id) {
-    return core_is(function, id, MINIC_CORE_TYPE_INTEGER);
+    return minic_core_function_type_is_kind(function, id, MINIC_CORE_TYPE_INTEGER);
 }
 
 static bool core_is_pointer(const MinicCoreFunction *function, MinicCoreTypeId id) {
-    return core_is(function, id, MINIC_CORE_TYPE_POINTER);
+    return minic_core_function_type_is_kind(function, id, MINIC_CORE_TYPE_POINTER);
 }
 
 static bool core_is_record(const MinicCoreFunction *function, MinicCoreTypeId id) {
-    return core_is(function, id, MINIC_CORE_TYPE_RECORD);
+    return minic_core_function_type_is_kind(function, id, MINIC_CORE_TYPE_RECORD);
 }
 
 /* An aggregate's nominal record identity determines its copied bytes, while
@@ -395,22 +376,22 @@ static bool core_record_storage_matches(const MinicCoreFunction *function,
 }
 
 static bool core_is_void(const MinicCoreFunction *function, MinicCoreTypeId id) {
-    return core_is(function, id, MINIC_CORE_TYPE_VOID);
+    return minic_core_function_type_is_kind(function, id, MINIC_CORE_TYPE_VOID);
 }
 
 static bool core_is_function(const MinicCoreFunction *function, MinicCoreTypeId id) {
-    return core_is(function, id, MINIC_CORE_TYPE_FUNCTION);
+    return minic_core_function_type_is_kind(function, id, MINIC_CORE_TYPE_FUNCTION);
 }
 
 static bool core_is_vector(const MinicCoreFunction *function, MinicCoreTypeId id) {
-    const MinicCoreType *type = core_type(function, id);
+    const MinicCoreType *type = minic_core_function_base_type(function, id);
     return type != NULL && type->kind == MINIC_CORE_TYPE_VECTOR && type->has_layout &&
            (type->size == 8U || type->size == 16U);
 }
 
 static bool core_is_unsigned_integer(const MinicCoreFunction *function,
                                      MinicCoreTypeId id) {
-    const MinicCoreType *type = core_type(function, id);
+    const MinicCoreType *type = minic_core_function_base_type(function, id);
     return type != NULL && type->kind == MINIC_CORE_TYPE_INTEGER &&
            !type->value.integer.is_signed;
 }
@@ -424,14 +405,14 @@ static bool core_equal_unqualified(const MinicCoreFunction *function,
 
 static bool core_pointee(const MinicCoreFunction *function, MinicCoreTypeId id,
                          MinicCoreTypeId *out) {
-    const MinicCoreType *type = core_type(function, id);
+    const MinicCoreType *type = minic_core_function_base_type(function, id);
     if (type == NULL || type->kind != MINIC_CORE_TYPE_POINTER || out == NULL) return false;
     *out = type->value.pointer.pointee;
     return core_snapshot_exists(function, *out);
 }
 
 static bool core_is_scalar(const MinicCoreFunction *function, MinicCoreTypeId id) {
-    const MinicCoreType *type = core_type(function, id);
+    const MinicCoreType *type = minic_core_function_base_type(function, id);
     return type != NULL && (type->kind == MINIC_CORE_TYPE_INTEGER ||
                             type->kind == MINIC_CORE_TYPE_POINTER ||
                             (core_is_vector(function, id) &&
@@ -474,13 +455,13 @@ static bool available_pointer_pointee(const MinicCoreFunction *function,
  * before this source-independent verifier runs. */
 static bool vector_register_memory_pointee(const MinicCoreFunction *function,
                                      MinicCoreTypeId vector, MinicCoreTypeId pointee) {
-    const MinicCoreType *vec = core_type(function, vector);
+    const MinicCoreType *vec = minic_core_function_base_type(function, vector);
     const MinicCoreType *element;
     const MinicCoreType *mem;
     if (!core_is_vector(function, vector)) return false;
     if (core_equal_unqualified(function, vector, pointee)) return true;
-    element = core_type(function, vec->value.vector.element);
-    mem = core_type(function, pointee);
+    element = minic_core_function_base_type(function, vec->value.vector.element);
+    mem = minic_core_function_base_type(function, pointee);
     if (element == NULL || mem == NULL || mem->kind != MINIC_CORE_TYPE_INTEGER) return false;
     if (element->kind == MINIC_CORE_TYPE_INTEGER &&
         element->value.integer.bit_width == 64U &&
@@ -497,27 +478,27 @@ static bool core_unqualified_out(const MinicCoreFunction *function, MinicCoreTyp
 }
 
 static bool core_is_bool(const MinicCoreFunction *function, MinicCoreTypeId id) {
-    const MinicCoreType *type = core_type(function, id);
+    const MinicCoreType *type = minic_core_function_base_type(function, id);
     return type != NULL && type->kind == MINIC_CORE_TYPE_INTEGER &&
            type->value.integer.is_bool;
 }
 
 static bool core_is_register_value_vector(const MinicCoreFunction *function,
                                           MinicCoreTypeId id) {
-    const MinicCoreType *type = core_type(function, id);
+    const MinicCoreType *type = minic_core_function_base_type(function, id);
     return core_is_vector(function, id) &&
            type->value.vector.representation == MINIC_CORE_VECTOR_REGISTER_VALUE;
 }
 
 static bool core_is_storage_only_vector(const MinicCoreFunction *function,
                                         MinicCoreTypeId id) {
-    const MinicCoreType *type = core_type(function, id);
+    const MinicCoreType *type = minic_core_function_base_type(function, id);
     return core_is_vector(function, id) &&
            type->value.vector.representation == MINIC_CORE_VECTOR_STORAGE_ONLY;
 }
 
 static bool core_is_int(const MinicCoreFunction *function, MinicCoreTypeId id) {
-    const MinicCoreType *type = core_type(function, id);
+    const MinicCoreType *type = minic_core_function_base_type(function, id);
     return type != NULL && type->kind == MINIC_CORE_TYPE_INTEGER &&
            type->value.integer.is_signed && type->value.integer.bit_width == 32U &&
            !type->value.integer.is_bool;
@@ -526,8 +507,8 @@ static bool core_is_int(const MinicCoreFunction *function, MinicCoreTypeId id) {
 static bool core_is_unsigned_long_for_pointer(const MinicCoreFunction *function,
                                               MinicCoreTypeId integer,
                                               MinicCoreTypeId pointer) {
-    const MinicCoreType *int_type = core_type(function, integer);
-    const MinicCoreType *pointer_type = core_type(function, pointer);
+    const MinicCoreType *int_type = minic_core_function_base_type(function, integer);
+    const MinicCoreType *pointer_type = minic_core_function_base_type(function, pointer);
     return int_type != NULL && pointer_type != NULL &&
            int_type->kind == MINIC_CORE_TYPE_INTEGER &&
            pointer_type->kind == MINIC_CORE_TYPE_POINTER &&
@@ -587,11 +568,11 @@ static bool core_extended_float_call_contract(
     count = signature->value.function.parameter_count;
     result_id = signature->value.function.return_type;
     left_id = signature->value.function.parameters[0];
-    result = core_type(function, result_id);
-    left = core_type(function, left_id);
+    result = minic_core_function_base_type(function, result_id);
+    left = minic_core_function_base_type(function, left_id);
     if (result == NULL || left == NULL) return false;
     if (count == 2U) {
-        right = core_type(function, signature->value.function.parameters[1]);
+        right = minic_core_function_base_type(function, signature->value.function.parameters[1]);
         if (right == NULL) return false;
     }
     result_wide = result->kind == MINIC_CORE_TYPE_FLOAT &&
@@ -1023,7 +1004,7 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
             ct_is_void(field_type) || ct_is_function(field_type)) {
             return false;
         }
-        record = core_type(function, base_pointee);
+        record = minic_core_function_base_type(function, base_pointee);
         /* FIELD_ADDRESS is a physical byte displacement, not an AST member
          * selector. Source ingress already established member and bit-field
          * legality; independent Core producers may address any in-bounds
@@ -1520,11 +1501,11 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
                 !ct_is_pointer(parameters[0]) ||
                 (effect == MINIC_MACHINE_BUILTIN_EFFECT_READ &&
                  (!ct_is_vector_register_value(return_type) ||
-                  core_type(function, return_type)->size != 16U)) ||
+                  minic_core_function_base_type(function, return_type)->size != 16U)) ||
                 (effect == MINIC_MACHINE_BUILTIN_EFFECT_WRITE &&
                  (!ct_is_void(return_type) ||
                   !ct_is_vector_register_value(parameters[1]) ||
-                  core_type(function, parameters[1])->size != 16U)))
+                  minic_core_function_base_type(function, parameters[1])->size != 16U)))
                 return false;
         }
         if ((!is_variadic &&
@@ -1921,7 +1902,7 @@ bool minic_core_function_verify(const MinicCoreFunction *function) {
         const MinicCoreObject *object = &function->objects[index];
         if (ct_is_void(object->core_type_id) ||
             ct_is_function(object->core_type_id) ||
-            core_is(function, object->core_type_id, MINIC_CORE_TYPE_OPAQUE)) {
+            minic_core_function_type_is_kind(function, object->core_type_id, MINIC_CORE_TYPE_OPAQUE)) {
             return false;
         }
     }
@@ -1931,7 +1912,7 @@ bool minic_core_function_verify(const MinicCoreFunction *function) {
         global = &function->globals[index];
         if (global->name == NULL || global->name_length == 0U ||
             ct_is_function(global->core_type_id) ||
-            core_is(function, global->core_type_id, MINIC_CORE_TYPE_OPAQUE)) {
+            minic_core_function_type_is_kind(function, global->core_type_id, MINIC_CORE_TYPE_OPAQUE)) {
             return false;
         }
     }

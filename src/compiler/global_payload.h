@@ -37,6 +37,11 @@ typedef struct MinicMultiGlobalEmissionPlan {
     MinicType scalar_type;
 } MinicMultiGlobalEmissionPlan;
 
+/* Shared scalar fragment width contract between the source walker and sink. */
+static inline bool minic_payload_scalar_width_supported(size_t width) {
+    return width == 1U || width == 2U || width == 4U || width == 8U;
+}
+
 typedef struct MinicMultiGlobalPayloadSink {
     void *context;
     bool (*emit_zero)(void *context, size_t bytes);

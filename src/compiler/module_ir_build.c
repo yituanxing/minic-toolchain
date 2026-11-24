@@ -107,17 +107,13 @@ static bool module_sink_zero(void *context, size_t bytes) {
                  MINIC_CORE_MODULE_FRAGMENT_ZERO) != NULL;
 }
 
-static bool module_scalar_width_valid(size_t width) {
-    return width == 1U || width == 2U || width == 4U || width == 8U;
-}
-
 static bool module_sink_bits(void *context, MinicType source_type,
                              size_t width, uint64_t bits) {
     MinicCoreModuleFragment *fragment;
     /* Core owns physical bytes, never the C signedness used to spell them.
      * GNU decimal directive formatting is a target-serializer decision. */
     (void)source_type;
-    if (!module_scalar_width_valid(width)) return false;
+    if (!minic_payload_scalar_width_supported(width)) return false;
     fragment = module_push_fragment(context, width, MINIC_CORE_MODULE_FRAGMENT_BITS);
     if (fragment == NULL) return false;
     fragment->bits = bits;
@@ -133,7 +129,7 @@ static bool module_sink_relocation(void *context,
     char *owned_symbol = NULL;
     const char *source_symbol;
     int64_t addend = 0;
-    if (sink == NULL || source == NULL || !module_scalar_width_valid(width))
+    if (sink == NULL || source == NULL || !minic_payload_scalar_width_supported(width))
         return false;
     /* Resolve and own the entire symbol/relocation proof before committing
      * a fragment. A rejected source relocation must never advance the byte
