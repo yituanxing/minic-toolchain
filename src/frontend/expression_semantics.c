@@ -79,7 +79,7 @@ bool minic_c0_pointer_arithmetic_element_size(const MinicC0Program *program,
     return minic_data_layout_type(invocation, program, pointee, element_size, &alignment);
 }
 
-static bool integer_type_is_signed(const MinicC0Program *program, MinicType type) {
+bool minic_c0_integer_type_is_signed(const MinicC0Program *program, MinicType type) {
     MinicType effective_type;
 
     return minic_c0_type_effective_integer_type(program, type, &effective_type) &&
@@ -201,8 +201,8 @@ bool minic_c0_integer_range_representable_in_type(const MinicC0Program *program,
     if (minic_type_is_bool_integer(source_type)) {
         return destination_bits >= 1U;
     }
-    source_signed = integer_type_is_signed(program, source_type);
-    destination_signed = integer_type_is_signed(program, destination_type);
+    source_signed = minic_c0_integer_type_is_signed(program, source_type);
+    destination_signed = minic_c0_integer_type_is_signed(program, destination_type);
     if (source_signed) {
         return destination_signed && destination_bits >= source_bits;
     }

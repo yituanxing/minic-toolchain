@@ -1606,3 +1606,12 @@ Target 审阅 manifest 260（113 条保留的 stale blob）、完整后端边界
 - LP64 scalar、call plan、function profile、instruction semantics 的纯浮点格式身份判定统一到已有 `lp64_scalar.h`。保留格式身份与 layout/ABI 合法性检查的区别；不替换更严格的 `minic_core_floating_format`。已获得类型指针的参数分类直接使用该指针；返回分类去掉已被参数分类覆盖的 binary64/binary128 判断。
 - AAPCS64 与 LoongArch LP64D 的 variadic-address 指令计数使用共同扫描。两种 ABI 的寄存器布局与各自 starts/cursors 验收条件仍保持原样；非 ABI-state 且无 cursor 时仍不扫描。
 - 5 个生产文件净变化 -23 行。仅做精确文本替换与局部语义核对，未本地构建（环境无 GitHub 网络）；未运行动态验证。现有原生 strict gate 和目标 ABI 回归仍是验收要求。
+
+## 批次 C43：Frontend 声明语法与常量语义收敛（2026-11-24）
+
+基线 `63cae4d4`；同一 `cleanup/minic-convergence` 分支。静态筛查覆盖 48 个生产 C/H 文件，含 Frontend、C lowering 和多目标 Machine selector/frame/register，未认证为全文语义审读。候选按跨模块语义一致性选择，不按删行目标选择。
+
+- 前后置声明说明符的六类 storage/function specifier 处理块原为逐字相同；复用一个循环，保留前置限定符/attribute 处理、初始 static 检查及后置停止条件。保留公共标识符 matcher 并移除两个重复私有实现。
+- 类型解析的前后 const/volatile 扫描共用一个循环，原来的混合整数说明符扫描独立保留。
+- 常量求值与表达式语义使用同一个有效整数符号查询（保留 enum 兼容类型处理）；整数与绝对地址的无符号比较共用一个 switch，保留独立的转换和有符号比较。
+- 6 个生产文件净变化 -111 行；精确原文本检查与静态语义核对。未本地构建、未执行目标回归，CI 不视为通过。未合并不同 ABI 的规则，未删测试。

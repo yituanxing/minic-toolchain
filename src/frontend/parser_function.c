@@ -10,17 +10,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-static bool function_identifier_is(const MinicParser *parser, const char *name) {
-    size_t name_length;
-
-    if (parser == NULL || name == NULL || parser->current.kind != MINIC_TOKEN_IDENTIFIER) {
-        return false;
-    }
-    name_length = strlen(name);
-    return minic_parser_span_length(parser->current.span) == name_length &&
-           memcmp(parser->source + parser->current.span.begin.offset, name, name_length) == 0;
-}
-
 typedef struct MinicFunctionAttributeContext {
     bool allow_gnu_inline;
     bool allow_header_vector_pcs;
@@ -810,9 +799,9 @@ static bool parse_gnu_function_asm_label(
     /* GNU accepts asm, __asm and __asm__ in declarations. Linux x86
      * current_stack_pointer uses asm("rsp"). Source grammar belongs here;
      * register admission is still a separate TargetInfo/backend decision. */
-    if (!function_identifier_is(parser, "__asm__") &&
-        !function_identifier_is(parser, "__asm") &&
-        !function_identifier_is(parser, "asm")) {
+    if (!minic_parser_current_identifier_lexeme_equals_cstr(parser, "__asm__") &&
+        !minic_parser_current_identifier_lexeme_equals_cstr(parser, "__asm") &&
+        !minic_parser_current_identifier_lexeme_equals_cstr(parser, "asm")) {
         return true;
     }
     if (!minic_parser_advance(parser) ||
@@ -869,7 +858,7 @@ static bool parse_gnu_prefix_function_visibility(MinicParser *parser,
        accidentally assigned symbol visibility. */
     *visibility = MINIC_SYMBOL_VISIBILITY_DEFAULT;
     *has_visibility = false;
-    while (function_identifier_is(parser, "__attribute__")) {
+    while (minic_parser_current_identifier_lexeme_equals_cstr(parser, "__attribute__")) {
         MinicParser probe = *parser;
 
         if (!minic_parser_advance(&probe) || probe.current.kind != MINIC_TOKEN_LPAREN ||
@@ -877,7 +866,7 @@ static bool parse_gnu_prefix_function_visibility(MinicParser *parser,
             !minic_parser_advance(&probe)) {
             return false;
         }
-        if (!function_identifier_is(&probe, "visibility")) {
+        if (!minic_parser_current_identifier_lexeme_equals_cstr(&probe, "visibility")) {
             break;
         }
         if (!minic_parser_advance(parser) ||
@@ -885,7 +874,7 @@ static bool parse_gnu_prefix_function_visibility(MinicParser *parser,
             !minic_parser_expect(parser, MINIC_TOKEN_LPAREN, "expected '((' after __attribute__")) {
             return false;
         }
-        if (!function_identifier_is(parser, "visibility")) {
+        if (!minic_parser_current_identifier_lexeme_equals_cstr(parser, "visibility")) {
             return false;
         }
         if (!minic_parser_advance(parser) ||
@@ -916,20 +905,17 @@ typedef struct MinicParsedDeclarationPrefix {
     bool has_volatile_qualifier;
 } MinicParsedDeclarationPrefix;
 
-static bool parse_declaration_prefix(MinicParser *parser,
-                                     bool require_initial_static,
-                                     MinicParsedDeclarationPrefix *prefix) {
-    bool saw_storage_class;
-
-    if (parser == NULL || prefix == NULL) {
-        return false;
-    }
-    (void)memset(prefix, 0, sizeof(*prefix));
-    saw_storage_class = false;
+/* Storage and function specifiers have identical rules on either side of
+ * the type; only the pre-type phase consumes qualifiers and attributes. */
+static bool parse_declaration_specifiers(MinicParser *parser,
+                                         MinicParsedDeclarationPrefix *prefix,
+                                         bool before_type) {
+    bool saw_storage_class = prefix->is_extern || prefix->is_static || prefix->is_register;
 
     for (;;) {
-        if (parser->current.kind == MINIC_TOKEN_KW_CONST ||
-            parser->current.kind == MINIC_TOKEN_KW_VOLATILE) {
+        if (before_type &&
+            (parser->current.kind == MINIC_TOKEN_KW_CONST ||
+             parser->current.kind == MINIC_TOKEN_KW_VOLATILE)) {
             if (parser->current.kind == MINIC_TOKEN_KW_CONST)
                 prefix->has_const_qualifier = true;
             else
@@ -937,7 +923,7 @@ static bool parse_declaration_prefix(MinicParser *parser,
             if (!minic_parser_advance(parser)) return false;
             continue;
         }
-        if (function_identifier_is(parser, "register")) {
+        if (minic_parser_current_identifier_lexeme_equals_cstr(parser, "register")) {
             if (saw_storage_class) {
                 minic_parser_error(parser, "conflicting or duplicate declaration storage class");
                 return false;
@@ -949,8 +935,8 @@ static bool parse_declaration_prefix(MinicParser *parser,
             }
             continue;
         }
-        if (function_identifier_is(parser, "__thread") ||
-            function_identifier_is(parser, "_Thread_local")) {
+        if (minic_parser_current_identifier_lexeme_equals_cstr(parser, "__thread") ||
+            minic_parser_current_identifier_lexeme_equals_cstr(parser, "_Thread_local")) {
             if (prefix->is_thread_local) {
                 minic_parser_error(parser, "duplicate thread-local storage-class specifier");
                 return false;
@@ -994,7 +980,7 @@ static bool parse_declaration_prefix(MinicParser *parser,
             }
             continue;
         }
-        if (function_identifier_is(parser, "_Noreturn")) {
+        if (minic_parser_current_identifier_lexeme_equals_cstr(parser, "_Noreturn")) {
             if (prefix->is_noreturn) {
                 minic_parser_error(parser, "duplicate _Noreturn declaration specifier");
                 return false;
@@ -1005,7 +991,8 @@ static bool parse_declaration_prefix(MinicParser *parser,
             }
             continue;
         }
-        if (function_identifier_is(parser, "__attribute__")) {
+        if (before_type &&
+            minic_parser_current_identifier_lexeme_equals_cstr(parser, "__attribute__")) {
             size_t old_offset = parser->current.span.begin.offset;
 
             if (!minic_parser_collect_gnu_attribute_lists(parser, &prefix->attributes)) {
@@ -1020,6 +1007,15 @@ static bool parse_declaration_prefix(MinicParser *parser,
         break;
     }
 
+    return true;
+}
+
+static bool parse_declaration_prefix(MinicParser *parser,
+                                     bool require_initial_static,
+                                     MinicParsedDeclarationPrefix *prefix) {
+    if (parser == NULL || prefix == NULL) return false;
+    (void)memset(prefix, 0, sizeof(*prefix));
+    if (!parse_declaration_specifiers(parser, prefix, true)) return false;
     if (require_initial_static && !prefix->is_static) {
         minic_parser_error(parser, "expected keyword 'static'");
         return false;
@@ -1029,85 +1025,8 @@ static bool parse_declaration_prefix(MinicParser *parser,
 
 static bool parse_post_type_declaration_specifiers(
     MinicParser *parser, MinicParsedDeclarationPrefix *prefix) {
-    bool saw_storage_class;
-
-    if (parser == NULL || prefix == NULL) {
-        return false;
-    }
-    saw_storage_class = prefix->is_extern || prefix->is_static || prefix->is_register;
-
-    for (;;) {
-        if (function_identifier_is(parser, "register")) {
-            if (saw_storage_class) {
-                minic_parser_error(parser, "conflicting or duplicate declaration storage class");
-                return false;
-            }
-            prefix->is_register = true;
-            saw_storage_class = true;
-            if (!minic_parser_advance(parser)) {
-                return false;
-            }
-            continue;
-        }
-        if (function_identifier_is(parser, "__thread") ||
-            function_identifier_is(parser, "_Thread_local")) {
-            if (prefix->is_thread_local) {
-                minic_parser_error(parser, "duplicate thread-local storage-class specifier");
-                return false;
-            }
-            prefix->is_thread_local = true;
-            if (!minic_parser_advance(parser)) return false;
-            continue;
-        }
-        if (parser->current.kind == MINIC_TOKEN_KW_STATIC) {
-            if (saw_storage_class) {
-                minic_parser_error(parser, "conflicting or duplicate declaration storage class");
-                return false;
-            }
-            prefix->is_static = true;
-            saw_storage_class = true;
-            if (!minic_parser_advance(parser)) {
-                return false;
-            }
-            continue;
-        }
-        if (parser->current.kind == MINIC_TOKEN_KW_EXTERN) {
-            if (saw_storage_class) {
-                minic_parser_error(parser, "conflicting or duplicate declaration storage class");
-                return false;
-            }
-            prefix->is_extern = true;
-            saw_storage_class = true;
-            if (!minic_parser_advance(parser)) {
-                return false;
-            }
-            continue;
-        }
-        if (parser->current.kind == MINIC_TOKEN_KW_INLINE) {
-            if (prefix->is_inline) {
-                minic_parser_error(parser, "duplicate inline declaration specifier");
-                return false;
-            }
-            prefix->is_inline = true;
-            if (!minic_parser_advance(parser)) {
-                return false;
-            }
-            continue;
-        }
-        if (function_identifier_is(parser, "_Noreturn")) {
-            if (prefix->is_noreturn) {
-                minic_parser_error(parser, "duplicate _Noreturn declaration specifier");
-                return false;
-            }
-            prefix->is_noreturn = true;
-            if (!minic_parser_advance(parser)) {
-                return false;
-            }
-            continue;
-        }
-        break;
-    }
-    return true;
+    return parser != NULL && prefix != NULL &&
+           parse_declaration_specifiers(parser, prefix, false);
 }
 
 static bool record_function_declaration_entity(MinicParser *parser,
@@ -2364,8 +2283,8 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
 }
 
 static bool top_level_is_gnu_asm(const MinicParser *parser) {
-    return function_identifier_is(parser, "asm") || function_identifier_is(parser, "__asm") ||
-           function_identifier_is(parser, "__asm__");
+    return minic_parser_current_identifier_lexeme_equals_cstr(parser, "asm") || minic_parser_current_identifier_lexeme_equals_cstr(parser, "__asm") ||
+           minic_parser_current_identifier_lexeme_equals_cstr(parser, "__asm__");
 }
 
 static bool parse_top_level_gnu_basic_asm(MinicParser *parser) {

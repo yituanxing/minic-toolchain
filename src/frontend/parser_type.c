@@ -332,6 +332,22 @@ bool minic_parser_require_complete_object_type(MinicParser *parser,
     return true;
 }
 
+static bool parse_outer_type_qualifiers(MinicParser *parser,
+                                        bool *is_const, bool *is_volatile) {
+    while (parser->current.kind == MINIC_TOKEN_KW_CONST ||
+           parser->current.kind == MINIC_TOKEN_KW_VOLATILE) {
+        if (parser->current.kind == MINIC_TOKEN_KW_CONST) {
+            *is_const = true;
+        } else {
+            *is_volatile = true;
+        }
+        if (!minic_parser_advance(parser)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 bool minic_parser_parse_type_specifiers(MinicParser *parser, MinicType *type) {
     MinicType parsed_type;
     bool is_const;
@@ -347,17 +363,7 @@ bool minic_parser_parse_type_specifiers(MinicParser *parser, MinicType *type) {
 
     is_const = false;
     is_volatile = false;
-    while (parser->current.kind == MINIC_TOKEN_KW_CONST ||
-           parser->current.kind == MINIC_TOKEN_KW_VOLATILE) {
-        if (parser->current.kind == MINIC_TOKEN_KW_CONST) {
-            is_const = true;
-        } else {
-            is_volatile = true;
-        }
-        if (!minic_parser_advance(parser)) {
-            return false;
-        }
-    }
+    if (!parse_outer_type_qualifiers(parser, &is_const, &is_volatile)) return false;
 
     {
         bool parsed_gnu_int128 = false;
@@ -689,17 +695,7 @@ bool minic_parser_parse_type_specifiers(MinicParser *parser, MinicType *type) {
     }
 
 parsed_type_specifiers_done:
-    while (parser->current.kind == MINIC_TOKEN_KW_CONST ||
-           parser->current.kind == MINIC_TOKEN_KW_VOLATILE) {
-        if (parser->current.kind == MINIC_TOKEN_KW_CONST) {
-            is_const = true;
-        } else {
-            is_volatile = true;
-        }
-        if (!minic_parser_advance(parser)) {
-            return false;
-        }
-    }
+    if (!parse_outer_type_qualifiers(parser, &is_const, &is_volatile)) return false;
     if (is_const && !minic_type_add_const(parsed_type, &parsed_type)) {
         minic_parser_error(parser, "cannot apply const qualifier");
         return false;

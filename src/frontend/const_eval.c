@@ -14,13 +14,6 @@ static bool integer_width(const MinicC0Program *program,
     return minic_target_info_integer_width(target, program, type, width) && *width <= 64U;
 }
 
-static bool integer_type_is_signed(const MinicC0Program *program, MinicType type) {
-    MinicType effective_type;
-
-    return minic_c0_type_effective_integer_type(program, type, &effective_type) &&
-           minic_type_is_signed_integer(effective_type);
-}
-
 static uint64_t width_mask(unsigned int width) {
     return width == 64U ? UINT64_MAX : (UINT64_C(1) << width) - UINT64_C(1);
 }
@@ -50,7 +43,7 @@ static bool value_signed(const MinicC0Program *program,
     unsigned int width;
     uint64_t bits;
 
-    if (value == NULL || result == NULL || !integer_type_is_signed(program, value->type) ||
+    if (value == NULL || result == NULL || !minic_c0_integer_type_is_signed(program, value->type) ||
         !integer_width(program, target, value->type, &width) ||
         !normalize_bits(program, target, value->type, value->bits, &bits)) {
         return false;
@@ -84,7 +77,7 @@ static bool convert_value(const MinicC0Program *program,
         result->bits = source->bits == 0U ? 0U : 1U;
         return true;
     }
-    if (integer_type_is_signed(program, source->type)) {
+    if (minic_c0_integer_type_is_signed(program, source->type)) {
         int64_t signed_value;
 
         if (!value_signed(program, target, source, &signed_value)) {
@@ -120,7 +113,7 @@ bool minic_const_value_integer_representable_in_type(const MinicC0Program *progr
         return false;
     }
 
-    if (integer_type_is_signed(program, value->type)) {
+    if (minic_c0_integer_type_is_signed(program, value->type)) {
         int64_t signed_value;
 
         if (!value_signed(program, target, value, &signed_value)) {
@@ -129,7 +122,7 @@ bool minic_const_value_integer_representable_in_type(const MinicC0Program *progr
         if (minic_type_is_bool_integer(destination_type)) {
             return signed_value == 0 || signed_value == 1;
         }
-        if (integer_type_is_signed(program, destination_type)) {
+        if (minic_c0_integer_type_is_signed(program, destination_type)) {
             int64_t minimum;
             int64_t maximum;
 
@@ -147,7 +140,7 @@ bool minic_const_value_integer_representable_in_type(const MinicC0Program *progr
     if (minic_type_is_bool_integer(destination_type)) {
         return unsigned_value <= UINT64_C(1);
     }
-    if (integer_type_is_signed(program, destination_type)) {
+    if (minic_c0_integer_type_is_signed(program, destination_type)) {
         uint64_t maximum = destination_width == 64U
                                ? (uint64_t)INT64_MAX
                                : (UINT64_C(1) << (destination_width - 1U)) - UINT64_C(1);
@@ -180,7 +173,7 @@ static bool signed_range(const MinicC0Program *program,
                          int64_t *maximum) {
     unsigned int width;
 
-    if (minimum == NULL || maximum == NULL || !integer_type_is_signed(program, type) ||
+    if (minimum == NULL || maximum == NULL || !minic_c0_integer_type_is_signed(program, type) ||
         !integer_width(program, target, type, &width)) {
         return false;
     }
@@ -434,7 +427,7 @@ static bool integer_cast_operand_is_pointer_roundtrip_constant(const MinicC0Prog
             program, target, pointer_cast->value.unary.operand, depth + 2U, &operand)) {
         return false;
     }
-    if (integer_type_is_signed(program, operand.type)) {
+    if (minic_c0_integer_type_is_signed(program, operand.type)) {
         int64_t signed_value;
 
         if (!value_signed(program, target, &operand, &signed_value) || signed_value < 0) {
@@ -555,7 +548,7 @@ static bool const_wide_from_integer(const MinicC0Program *program,
                                     MinicConstValue source,
                                     MinicConstWideInteger *wide) {
     if (wide == NULL) return false;
-    if (integer_type_is_signed(program, source.type)) {
+    if (minic_c0_integer_type_is_signed(program, source.type)) {
         int64_t signed_value;
         if (!value_signed(program, target, &source, &signed_value)) return false;
         wide->high = signed_value < 0 ? UINT64_MAX : UINT64_C(0);
@@ -636,7 +629,7 @@ static bool eval_builtin_overflow_predicate(const MinicC0Program *program,
     default: return false;
     }
     truncated = result.low & width_mask(result_width);
-    if (integer_type_is_signed(program, third->type)) {
+    if (minic_c0_integer_type_is_signed(program, third->type)) {
         if ((truncated & (UINT64_C(1) << (result_width - 1U))) != 0U)
             extended = truncated | ~width_mask(result_width);
         else
@@ -704,7 +697,7 @@ static bool eval_integer_address_pointer_bits(const MinicC0Program *program,
                          &integer)) {
         return false;
     }
-    if (integer_type_is_signed(program, integer.type)) {
+    if (minic_c0_integer_type_is_signed(program, integer.type)) {
         int64_t signed_integer;
 
         if (!value_signed(program, target, &integer, &signed_integer)) {
@@ -759,6 +752,36 @@ static bool eval_known_global_array_pointer_truth(
     return object != NULL && minic_type_is_array(object->type);
 }
 
+/* Both callers have already normalized the operands to their effective
+ * unsigned representation. Keep signed comparison on its separate path. */
+static bool compare_unsigned_bits(MinicBinaryOperator kind,
+                                  uint64_t left_bits, uint64_t right_bits,
+                                  bool *comparison) {
+    switch (kind) {
+    case MINIC_BINARY_EQUAL:
+        *comparison = left_bits == right_bits;
+        break;
+    case MINIC_BINARY_NOT_EQUAL:
+        *comparison = left_bits != right_bits;
+        break;
+    case MINIC_BINARY_LESS:
+        *comparison = left_bits < right_bits;
+        break;
+    case MINIC_BINARY_LESS_EQUAL:
+        *comparison = left_bits <= right_bits;
+        break;
+    case MINIC_BINARY_GREATER:
+        *comparison = left_bits > right_bits;
+        break;
+    case MINIC_BINARY_GREATER_EQUAL:
+        *comparison = left_bits >= right_bits;
+        break;
+    default:
+        return false;
+    }
+    return true;
+}
+
 static bool eval_integer_address_pointer_compare(const MinicC0Program *program,
                                                  const MinicTargetInvocation *target,
                                                  const MinicExpression *expression,
@@ -783,28 +806,8 @@ static bool eval_integer_address_pointer_compare(const MinicC0Program *program,
             program, target, expression->value.binary.right, depth + 1U, &right_bits)) {
         return false;
     }
-    switch (expression->value.binary.operator_kind) {
-    case MINIC_BINARY_EQUAL:
-        comparison = left_bits == right_bits;
-        break;
-    case MINIC_BINARY_NOT_EQUAL:
-        comparison = left_bits != right_bits;
-        break;
-    case MINIC_BINARY_LESS:
-        comparison = left_bits < right_bits;
-        break;
-    case MINIC_BINARY_LESS_EQUAL:
-        comparison = left_bits <= right_bits;
-        break;
-    case MINIC_BINARY_GREATER:
-        comparison = left_bits > right_bits;
-        break;
-    case MINIC_BINARY_GREATER_EQUAL:
-        comparison = left_bits >= right_bits;
-        break;
-    default:
-        return false;
-    }
+    if (!compare_unsigned_bits(expression->value.binary.operator_kind,
+                               left_bits, right_bits, &comparison)) return false;
     value->type = minic_type_int();
     value->bits = comparison ? 1U : 0U;
     return true;
@@ -877,7 +880,7 @@ static bool eval_binary(const MinicC0Program *program,
             !convert_value(program, target, &right, operation_type, &converted_right)) {
             return false;
         }
-        if (integer_type_is_signed(program, operation_type)) {
+        if (minic_c0_integer_type_is_signed(program, operation_type)) {
             int64_t signed_left;
             int64_t signed_right;
 
@@ -910,28 +913,8 @@ static bool eval_binary(const MinicC0Program *program,
         } else {
             left_bits = converted_left.bits;
             right_bits = converted_right.bits;
-            switch (expression->value.binary.operator_kind) {
-            case MINIC_BINARY_EQUAL:
-                comparison = left_bits == right_bits;
-                break;
-            case MINIC_BINARY_NOT_EQUAL:
-                comparison = left_bits != right_bits;
-                break;
-            case MINIC_BINARY_LESS:
-                comparison = left_bits < right_bits;
-                break;
-            case MINIC_BINARY_LESS_EQUAL:
-                comparison = left_bits <= right_bits;
-                break;
-            case MINIC_BINARY_GREATER:
-                comparison = left_bits > right_bits;
-                break;
-            case MINIC_BINARY_GREATER_EQUAL:
-                comparison = left_bits >= right_bits;
-                break;
-            default:
-                return false;
-            }
+            if (!compare_unsigned_bits(expression->value.binary.operator_kind,
+                                       left_bits, right_bits, &comparison)) return false;
         }
         value->type = minic_type_int();
         value->bits = comparison ? 1U : 0U;
@@ -957,7 +940,7 @@ static bool eval_binary(const MinicC0Program *program,
         int64_t signed_count;
         uint64_t count;
 
-        if (integer_type_is_signed(program, right.type)) {
+        if (minic_c0_integer_type_is_signed(program, right.type)) {
             if (!value_signed(program, target, &right, &signed_count) || signed_count < 0) {
                 return false;
             }
@@ -971,7 +954,7 @@ static bool eval_binary(const MinicC0Program *program,
         left_bits = converted_left.bits;
         value->type = operation_type;
         if (expression->value.binary.operator_kind == MINIC_BINARY_SHIFT_LEFT) {
-            if (integer_type_is_signed(program, operation_type)) {
+            if (minic_c0_integer_type_is_signed(program, operation_type)) {
                 int64_t signed_left;
 
                 /* GNU C folds nonnegative signed left shifts in integer constant
@@ -988,7 +971,7 @@ static bool eval_binary(const MinicC0Program *program,
             return normalize_bits(
                 program, target, operation_type, left_bits << count, &value->bits);
         }
-        if (integer_type_is_signed(program, operation_type) && count != 0U &&
+        if (minic_c0_integer_type_is_signed(program, operation_type) && count != 0U &&
             (left_bits & (UINT64_C(1) << (width - 1U))) != 0U) {
             uint64_t fill =
                 width_mask(width) ^ ((UINT64_C(1) << (width - (unsigned int)count)) - UINT64_C(1));
@@ -1147,7 +1130,7 @@ static bool eval_expression(const MinicC0Program *program,
             !eval_expression(program, target, expression->value.subscript.index,
                              depth + 1U, &subscript))
             return false;
-        if (integer_type_is_signed(program, subscript.type)) {
+        if (minic_c0_integer_type_is_signed(program, subscript.type)) {
             if (!value_signed(program, target, &subscript, &signed_index) ||
                 signed_index < 0)
                 return false;
@@ -1327,7 +1310,7 @@ static bool arithmetic_integer_to_double(const MinicC0Program *program,
         !minic_type_is_integer(value->type)) {
         return false;
     }
-    if (integer_type_is_signed(program, value->type)) {
+    if (minic_c0_integer_type_is_signed(program, value->type)) {
         int64_t signed_value;
 
         if (!value_signed(program, target, value, &signed_value)) {
@@ -1374,7 +1357,7 @@ static bool arithmetic_double_to_integer(const MinicC0Program *program,
         result->bits = input == 0.0 ? 0U : 1U;
         return true;
     }
-    if (integer_type_is_signed(program, type)) {
+    if (minic_c0_integer_type_is_signed(program, type)) {
         int64_t signed_value;
 
         if (width == 64U) {
@@ -1650,7 +1633,7 @@ bool minic_const_value_as_int64(const MinicC0Program *program,
     if (value == NULL || result == NULL) {
         return false;
     }
-    if (integer_type_is_signed(program, value->type)) {
+    if (minic_c0_integer_type_is_signed(program, value->type)) {
         return value_signed(program, target, value, result);
     }
     if (!normalize_bits(program, target, value->type, value->bits, &bits) ||

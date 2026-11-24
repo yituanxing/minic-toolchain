@@ -219,17 +219,6 @@ static bool finalize_local_cleanup(MinicParser *parser,
     return true;
 }
 
-static bool local_identifier_is(const MinicParser *parser, const char *name) {
-    size_t name_length;
-
-    if (parser == NULL || name == NULL || parser->current.kind != MINIC_TOKEN_IDENTIFIER) {
-        return false;
-    }
-    name_length = strlen(name);
-    return minic_parser_span_length(parser->current.span) == name_length &&
-           memcmp(parser->source + parser->current.span.begin.offset, name, name_length) == 0;
-}
-
 static bool parse_local_fixed_register_name(
     MinicParser *parser, char *buffer, size_t capacity, size_t *length, bool *has_binding) {
     if (parser == NULL || buffer == NULL || capacity == 0U || length == NULL ||
@@ -238,8 +227,8 @@ static bool parse_local_fixed_register_name(
     }
     *length = 0U;
     *has_binding = false;
-    if (!local_identifier_is(parser, "asm") && !local_identifier_is(parser, "__asm") &&
-        !local_identifier_is(parser, "__asm__")) {
+    if (!minic_parser_current_identifier_lexeme_equals_cstr(parser, "asm") && !minic_parser_current_identifier_lexeme_equals_cstr(parser, "__asm") &&
+        !minic_parser_current_identifier_lexeme_equals_cstr(parser, "__asm__")) {
         return true;
     }
     if (!minic_parser_advance(parser) ||
