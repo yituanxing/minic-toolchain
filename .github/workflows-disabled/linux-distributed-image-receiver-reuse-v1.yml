@@ -1,0 +1,398 @@
+name: Linux Distributed Image Receiver Reuse V1
+# Reuse the seven independently certified 3352 real Kbuild object shards from
+# run 37767282927; do NOT spend another 7x full compile while debugging receiver.
+on:
+  push:
+    branches: [agent/linux-expanded-kbuild-v0]
+    paths:
+      - '.github/workflows/linux-distributed-image-receiver-reuse-v1.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: linux-distributed-image-receiver-reuse-v1
+  cancel-in-progress: false
+
+jobs:
+  receiver:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 160
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Validate receiver shell syntax before installing tools
+        run: |
+          set -Eeuo pipefail
+          bash -n tools/ci/linux-distributed-full-image-v1.sh
+          python3 -m py_compile tools/ci/apply-correctness-constant-p-core-local-facts-v1.py tools/ci/apply-correctness-constant-p-nested-core-v2.py
+          echo 'DIST_IMAGE_SCRIPT_SYNTAX=PASS'
+      - name: Restore pinned manifest and exact config identity from successful graph
+        uses: actions/download-artifact@v4
+        with:
+          name: distributed-full-image-plan-v1
+          run-id: 37767282927
+          github-token: ${{ github.token }}
+          path: build/linux-distributed-full-image-v1/plan
+
+      - name: Restore seven true MiniC Kbuild object+cmd producer artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: distributed-full-image-shard-*
+          run-id: 37767282927
+          github-token: ${{ github.token }}
+          path: build/linux-distributed-full-image-v1/incoming
+          merge-multiple: false
+
+      - name: Install *exact producer* RISC-V build prerequisites, no QEMU additions
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get -o Acquire::Retries=3 update -qq
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu build-essential \
+            bc bison flex libssl-dev libelf-dev make curl xz-utils python3
+
+      - name: Prepare independent identically configured RISC-V Linux and MiniC
+        run: |
+          set -Eeuo pipefail
+          printf 'DIST_IMAGE_REUSED_RUN=37767282927\n'
+          bash tools/ci/linux-distributed-full-image-v1.sh prepare
+          grep -qx 'e538a6ad42ec49c5a667cab5de9bb943f82ca702ff2b7749a020e38ff7ddaea7' build/linux-distributed-full-image-v1/config.sha256
+          grep -qx 'c1333f97fb2139de7d5272525a384b9c59f87b1dc981c42c4ac18e1a9778c71a' build/linux-distributed-full-image-v1/compiler.sha256
+
+      # The first receiver run already reached vmlinux and failed on five
+      # residual __compiletime_assert_* relocations.  On a self-path push, run
+      # this bounded differential instead of repeating the known 50-minute link.
+      # Manual dispatch keeps the full strict receiver Image/QEMU path available.
+      - name: Differential diagnosis of five residual compiletime assertions
+        if: github.event_name == 'workflow_dispatch'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-distributed-full-image-v1"
+          src="$work/linux-6.6.143"
+          out="$work/out"
+          diag="$work/assert-five"
+          mkdir -p "$diag"
+          targets=(
+            kernel/bpf/bpf_lru_list.o
+            fs/nfs/dir.o
+            drivers/scsi/sr_ioctl.o
+            net/core/page_pool.o
+            net/ipv4/tcp_output.o
+          )
+          symbols=(
+            __compiletime_assert_76
+            __compiletime_assert_638
+            __compiletime_assert_363
+            __compiletime_assert_489
+            __compiletime_assert_879
+          )
+          for i in "${!targets[@]}"; do
+            obj="${targets[$i]}"
+            sym="${symbols[$i]}"
+            tag="${obj//\//_}"
+            printf 'ASSERT_FIVE_TARGET=%s expected=%s\n' "$obj" "$sym" | tee -a "$diag/results.txt"
+            mapfile -t matches < <(find "$work/incoming" -type f -path "*/out/$obj")
+            test "${#matches[@]}" -eq 1
+            riscv64-linux-gnu-nm -u "${matches[0]}" > "$diag/$tag.producer.undefined"
+            grep -F "$sym" "$diag/$tag.producer.undefined" > "$diag/$tag.producer.assert" || {
+              echo "ASSERT_FIVE_PRODUCER_MISSING_EXPECTED=$obj" >&2; exit 1;
+            }
+            # Build the same target with the reference GCC, preserving its ELF.
+            make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
+              CC=riscv64-linux-gnu-gcc -j1 V=1 "$obj" \
+              > "$diag/$tag.gcc.log" 2>&1 || {
+                tail -n 65 "$diag/$tag.gcc.log"; exit 1;
+              }
+            test -s "$out/$obj"
+            riscv64-linux-gnu-nm -u "$out/$obj" > "$diag/$tag.gcc.undefined"
+            if grep -F '__compiletime_assert_' "$diag/$tag.gcc.undefined"; then
+              echo "ASSERT_FIVE_GCC_UNEXPECTED_UNDEF=$obj" >&2
+              exit 1
+            fi
+            # Remove only this GCC object and its cmd metadata; rebuild as MiniC
+            # using the *exact same* 39+ICE compiler identity as seven producers.
+            rm -f "$out/$obj" "$out/$(dirname "$obj")/.$(basename "$obj").cmd"
+            MINIC="$work/toolchain/bin/minic" REAL_CC=/usr/bin/riscv64-linux-gnu-gcc \
+              MINIC_KEEP_INTERMEDIATES=1 CORE_FAST_TRACE=0 \
+              make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
+                CC="$GITHUB_WORKSPACE/tests/external/linux/stage2_kbuild_cc.sh" \
+                -j1 V=1 "$obj" >"$diag/$tag.minic.log" 2>&1 || {
+                  tail -n 65 "$diag/$tag.minic.log"; exit 1;
+                }
+            test -s "$out/$obj"
+            riscv64-linux-gnu-nm -u "$out/$obj" > "$diag/$tag.minic.undefined"
+            if grep -F "$sym" "$diag/$tag.minic.undefined" > "$diag/$tag.minic.assert"; then
+              echo "ASSERT_FIVE_CONFIRMED=$obj symbol=$sym gcc=absent minic=present" | tee -a "$diag/results.txt"
+            else
+              echo "ASSERT_FIVE_REPLAY_DIVERGED=$obj expected=$sym" >&2
+              exit 1
+            fi
+            input="$out/${obj%.o}.minic-stage2.i"
+            asm="$out/${obj%.o}.minic-stage2.s"
+            if test -s "$input"; then
+              grep -n -C 5 -F "$sym" "$input" | head -n 160 > "$diag/$tag.input-context" || true
+            fi
+            if test -s "$asm"; then
+              grep -n -C 5 -F "$sym" "$asm" | head -n 160 > "$diag/$tag.asm-context" || true
+            fi
+            riscv64-linux-gnu-objdump -dr "$out/$obj" \
+              | grep -B 16 -A 4 -F "$sym" | head -n 160 \
+              > "$diag/$tag.relocation-context" || true
+          done
+          test "$(grep -c '^ASSERT_FIVE_CONFIRMED=' "$diag/results.txt")" -eq 5
+          echo 'ASSERT_FIVE_DIFFERENTIAL=PASS matched=5 gcc_undefined=0 minic_undefined=5'
+      - name: Check whether restored object timestamps cause Kbuild rebuilds
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-distributed-full-image-v1"
+          src="$work/linux-6.6.143"
+          out="$work/out"
+          diag="$work/assert-five"
+          mkdir -p "$diag" "$out/init"
+          obj=init/main.o
+          mapfile -t src_objects < <(find "$work/incoming" -type f -path "*/out/$obj")
+          mapfile -t src_cmds < <(find "$work/incoming" -type f -path "*/out/init/.main.o.cmd")
+          test "${#src_objects[@]}" -eq 1
+          test "${#src_cmds[@]}" -eq 1
+          src_obj="${src_objects[0]}"
+          src_cmd="${src_cmds[0]}"
+          for mode in original touched; do
+            cp -p "$src_obj" "$out/$obj"
+            cp -p "$src_cmd" "$out/init/.main.o.cmd"
+            (cd "$out"; sha256sum "$obj") > "$diag/$mode-before.sha256"
+            if [[ "$mode" == touched ]]; then
+              # Content is unchanged. Only make the restored object newer than
+              # local generated headers to test Kbuild's mtime behavior.
+              touch "$out/$obj"
+            fi
+            : >"$diag/$mode.trace"
+            MINIC="$work/toolchain/bin/minic" REAL_CC=/usr/bin/riscv64-linux-gnu-gcc \
+              MINIC_KBUILD_TRACE="$diag/$mode.trace" CORE_FAST_TRACE=0 \
+              make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
+              CC="$GITHUB_WORKSPACE/tests/external/linux/stage2_kbuild_cc.sh" \
+              -j1 V=1 "$obj" > "$diag/$mode.kbuild.log" 2>&1 || {
+                tail -n 80 "$diag/$mode.kbuild.log"; exit 1;
+              }
+            calls=$(grep -c '^minic input=' "$diag/$mode.trace" || true)
+            echo "DIST_IMAGE_MTIME_PROBE=$mode object=$obj minic_calls=$calls" | tee -a "$diag/results.txt"
+          done
+          echo 'DIST_IMAGE_MTIME_DIAG=COMPLETE no_Image_certification'
+      - name: Check the 55-patch performance compiler on the same five objects
+        if: github.event_name == 'push'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          root="$GITHUB_WORKSPACE"
+          work="$root/build/linux-distributed-full-image-v1"
+          src="$work/linux-6.6.143"
+          out="$work/out"
+          diag="$work/assert-five"
+          perfsource="$work/perf-clean-worktree"
+          mkdir -p "$diag"
+          git worktree add --detach "$perfsource" "$GITHUB_SHA"
+          (
+            cd "$perfsource"
+            bash tools/ci/linux-perf-build-minic-profile-v1.sh "$work/perf-toolchain" "$diag/perf-profile"
+          )
+          perf="$work/perf-toolchain/bin/minic"
+          test -s "$perf"
+          sha256sum "$perf" | tee "$diag/perf-compiler.sha256"
+          targets=(
+            kernel/bpf/bpf_lru_list.o
+            fs/nfs/dir.o
+            drivers/scsi/sr_ioctl.o
+            net/core/page_pool.o
+            net/ipv4/tcp_output.o
+          )
+          unresolved=0
+          for obj in "${targets[@]}"; do
+            rm -f "$out/$obj" "$out/$(dirname "$obj")/.$(basename "$obj").cmd"
+            MINIC="$perf" REAL_CC=/usr/bin/riscv64-linux-gnu-gcc CORE_FAST_TRACE=0 \
+              MINIC_KEEP_INTERMEDIATES=0 \
+              make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
+                CC="$root/tests/external/linux/stage2_kbuild_cc.sh" \
+                -j1 V=1 "$obj" > "$diag/${obj//\//_}.perf.log" 2>&1 || {
+                  echo "PERF_FIVE_COMPILE=FAIL target=$obj"
+                  tail -n 65 "$diag/${obj//\//_}.perf.log"
+                  exit 1
+                }
+            riscv64-linux-gnu-nm -u "$out/$obj" > "$diag/${obj//\//_}.perf.undefined"
+            if grep -F '__compiletime_assert_' "$diag/${obj//\//_}.perf.undefined"; then
+              unresolved=$((unresolved+1))
+              echo "PERF_FIVE_ASSERT=REMAINS target=$obj" | tee -a "$diag/results.txt"
+            else
+              echo "PERF_FIVE_ASSERT=ELIMINATED target=$obj" | tee -a "$diag/results.txt"
+            fi
+          done
+          echo "PERF_FIVE_SUMMARY objects=5 unresolved=$unresolved compiler=55-patch" | tee -a "$diag/results.txt"
+      - name: Trace Core constant facts at a failing signedness assertion
+        if: github.event_name == 'push'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-distributed-full-image-v1"
+          src="$work/linux-6.6.143"
+          out="$work/out"
+          diag="$work/assert-five"
+          mkdir -p "$diag"
+          rm -f "$out/net/core/page_pool.o" "$out/net/core/.page_pool.o.cmd"
+          MINIC="$work/toolchain/bin/minic" REAL_CC=/usr/bin/riscv64-linux-gnu-gcc \
+            MINIC_KEEP_INTERMEDIATES=1 MINIC_LOCAL_FACT_TRACE=1 CORE_FAST_TRACE=0 \
+            make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
+              CC="$GITHUB_WORKSPACE/tests/external/linux/stage2_kbuild_cc.sh" \
+              -j1 V=1 net/core/page_pool.o > "$diag/page_pool.local-facts.log" 2>&1 || {
+                tail -n 65 "$diag/page_pool.local-facts.log"; exit 1;
+              }
+          cp "$out/net/core/page_pool.minic-stage2.minic.stderr" "$diag/page_pool.minic.stderr"
+          grep '^LOCAL_FACT_' "$diag/page_pool.minic.stderr" | grep 'function=page_pool_init' \
+            | tail -n 140 > "$diag/page_pool_init.facts" || true
+          grep -c '^LOCAL_FACT_' "$diag/page_pool.minic.stderr" || true
+          wc -l "$diag/page_pool_init.facts"
+          riscv64-linux-gnu-nm -u "$out/net/core/page_pool.o" \
+            | grep __compiletime_assert_489
+          echo 'ASSERT_FIVE_CORE_FACT_TRACE=CAPTURED'
+      - name: Test Core constant-p local-fact priority candidate on five real Kbuild objects
+        if: github.event_name == 'push'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-distributed-full-image-v1"
+          src="$work/linux-6.6.143"
+          out="$work/out"
+          diag="$work/assert-five"
+          perfsource="$work/perf-clean-worktree"
+          candidate="$work/perf-toolchain/bin/minic"
+          before=$(sha256sum "$work/perf-toolchain/bin/minic-cc" | cut -d' ' -f1)
+          (
+            cd "$perfsource"
+            python3 tools/ci/apply-correctness-constant-p-core-local-facts-v1.py
+            python3 tools/ci/apply-correctness-constant-p-nested-core-v2.py
+            grep -q 'V2_NESTED_CONSTANT_P' src/core/core_lower.c
+            git diff --check
+            make -B -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$work/perf-toolchain" \
+              "$candidate" "$work/perf-toolchain/bin/minic-cc" >/dev/null
+          )
+          after=$(sha256sum "$work/perf-toolchain/bin/minic-cc" | cut -d' ' -f1)
+          echo "CORE_CONSTANT_P_CC_SHA_BEFORE=$before AFTER=$after"
+          test "$before" != "$after" || { echo "CORE_CONSTANT_P_CC_UNCHANGED=FAIL"; exit 1; }
+          echo "CORE_CONSTANT_P_CANDIDATE_SHA=$after" | tee -a "$diag/results.txt"
+          targets=(
+            kernel/bpf/bpf_lru_list.o
+            fs/nfs/dir.o
+            drivers/scsi/sr_ioctl.o
+            net/core/page_pool.o
+            net/ipv4/tcp_output.o
+          )
+          for obj in "${targets[@]}"; do
+            rm -f "$out/$obj" "$out/$(dirname "$obj")/.$(basename "$obj").cmd"
+            MINIC="$candidate" REAL_CC=/usr/bin/riscv64-linux-gnu-gcc \
+              MINIC_KEEP_INTERMEDIATES=0 CORE_FAST_TRACE=0 \
+              make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
+                CC="$GITHUB_WORKSPACE/tests/external/linux/stage2_kbuild_cc.sh" \
+                -j1 V=1 "$obj" > "$diag/${obj//\//_}.candidate.log" 2>&1 || {
+                  tail -n 80 "$diag/${obj//\//_}.candidate.log"; exit 1;
+                }
+            riscv64-linux-gnu-nm -u "$out/$obj" > "$diag/${obj//\//_}.candidate.undefined"
+            if grep -F '__compiletime_assert_' "$diag/${obj//\//_}.candidate.undefined"; then
+              echo "CORE_CONSTANT_P_CANDIDATE=FAIL target=$obj" >&2
+              exit 1
+            fi
+            echo "CORE_CONSTANT_P_CANDIDATE=PASS target=$obj" | tee -a "$diag/results.txt"
+          done
+          echo 'CORE_CONSTANT_P_FIVE=PASS no_residual_asserts=5'
+      - name: Verify nested constant-p fix on exact Runtime 39+ICE five blockers
+        if: github.event_name == 'push'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-distributed-full-image-v1"
+          src="$work/linux-6.6.143"
+          out="$work/out"
+          diag="$work/assert-five"
+          runtime="$work/toolchain/bin/minic"
+          old_sha=$(sha256sum "$work/toolchain/bin/minic-cc" | cut -d " " -f1)
+          python3 tools/ci/apply-correctness-constant-p-core-local-facts-v1.py
+          python3 tools/ci/apply-correctness-constant-p-nested-core-v2.py
+          git diff --check
+          make -B -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$work/toolchain" \
+            "$runtime" "$work/toolchain/bin/minic-cc" >/dev/null
+          new_sha=$(sha256sum "$work/toolchain/bin/minic-cc" | cut -d " " -f1)
+          test "$new_sha" != "$old_sha"
+          echo "RUNTIME39_NESTED_CONSTANT_P_CC_SHA old=$old_sha new=$new_sha"
+          targets=(
+            kernel/bpf/bpf_lru_list.o
+            fs/nfs/dir.o
+            drivers/scsi/sr_ioctl.o
+            net/core/page_pool.o
+            net/ipv4/tcp_output.o
+          )
+          for obj in "${targets[@]}"; do
+            tag=$(echo "$obj" | tr / _)
+            rm -f "$out/$obj" "$out/$(dirname "$obj")/.$(basename "$obj").cmd"
+            MINIC="$runtime" REAL_CC=/usr/bin/riscv64-linux-gnu-gcc \
+              MINIC_KEEP_INTERMEDIATES=0 CORE_FAST_TRACE=0 \
+              make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
+                CC="$GITHUB_WORKSPACE/tests/external/linux/stage2_kbuild_cc.sh" \
+                -j1 V=1 "$obj" > "$diag/$tag.runtime-fixed.log" 2>&1 || {
+                  tail -n 90 "$diag/$tag.runtime-fixed.log"; exit 1;
+                }
+            riscv64-linux-gnu-nm -u "$out/$obj" > "$diag/$tag.runtime-fixed.undefined"
+            if grep -F "__compiletime_assert_" "$diag/$tag.runtime-fixed.undefined"; then
+              echo "RUNTIME39_NESTED_ASSERT=FAIL object=$obj" >&2
+              exit 1
+            fi
+            echo "RUNTIME39_NESTED_ASSERT=PASS object=$obj" | tee -a "$diag/results.txt"
+          done
+          echo 'RUNTIME39_NESTED_ASSERT_FIVE=PASS objects=5 unresolved_asserts=0'
+      - name: Verify 3352-object transfer SHA and Kbuild reuse without full Image
+        if: github.event_name == 'push'
+        run: |
+          set -Eeuo pipefail
+          bash -n tools/ci/linux-distributed-full-image-v1.sh
+          bash tools/ci/linux-distributed-full-image-v1.sh preflight
+      - name: Mark self-path push as focused diagnosis, not Image certification
+        if: github.event_name == 'push'
+        run: echo 'ASSERT_FIVE_DIAGNOSTIC_ONLY=PASS Image_and_QEMU_not_executed'
+      - name: Verify and restore all 3352 real Kbuild objects, then build Image
+        if: github.event_name == 'workflow_dispatch'
+        run: bash tools/ci/linux-distributed-full-image-v1.sh image
+
+      - name: Install QEMU after config and Image are finalized
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            qemu-system-misc opensbi cpio gzip libc6-dev-riscv64-cross device-tree-compiler
+          qemu-system-riscv64 --version | head -n 1
+
+      - name: Validate real Image in RISC-V QEMU
+        if: github.event_name == 'workflow_dispatch'
+        run: bash tools/ci/linux-distributed-full-image-v1.sh qemu
+
+      - name: Preserve exact receiver evidence, including any failure stage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: distributed-full-image-receiver-reuse-v1
+          path: |
+            build/linux-distributed-full-image-v1/config.sha256
+            build/linux-distributed-full-image-v1/compiler.sha256
+            build/linux-distributed-full-image-v1/assert-five/
+            build/linux-distributed-full-image-v1/image.log
+            build/linux-distributed-full-image-v1/image.trace
+            build/linux-distributed-full-image-v1/image-summary.txt
+            build/linux-distributed-full-image-v1/reuse.sha256
+            build/linux-distributed-full-image-v1/preflight.log
+            build/linux-distributed-full-image-v1/preflight.trace
+            build/linux-distributed-full-image-v1/final-compiled.txt
+            build/linux-distributed-full-image-v1/qemu.log
+            build/linux-distributed-full-image-v1/qemu-summary.txt
+          if-no-files-found: warn
+          retention-days: 7

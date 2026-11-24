@@ -1,0 +1,118 @@
+name: Linux Expanded Runtime P1 Explicit Initrd V0
+
+on:
+  push:
+    branches: ["agent/linux-expanded-kbuild-v0"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linux-expanded-runtime-p1-explicit-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  p1-explicit-initrd:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[linux-expanded-runtime-p1]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Restore latest successful Expanded Linux out cache
+        id: expanded-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-expanded-kbuild-v0/out
+          key: linux-expanded-mixed-v1-6.6.143-${{ runner.os }}-${{ hashFiles('src/**', 'include/**', 'tools/ci/apply-*.py', 'tests/external/linux/stage2_kbuild_cc.sh') }}
+          restore-keys: |
+            linux-expanded-mixed-v1-6.6.143-${{ runner.os }}-
+
+      - name: Verify restored MiniC Image
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-expanded-runtime-p1-explicit"
+          image="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0/out/arch/riscv/boot/Image"
+          config="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0/out/.config"
+          mkdir -p "$work/evidence"
+          test -s "$image"
+          test -s "$config"
+          sha256sum "$image" | tee "$work/evidence/Image.sha256"
+          stat -c 'LINUX_EXPANDED_RUNTIME_IMAGE=FOUND bytes=%s' "$image" | tee "$work/evidence/summary.txt"
+          printf 'CACHE_HIT=%s\nCACHE_MATCHED_KEY=%s\n' \
+            "${{ steps.expanded-cache.outputs.cache-hit }}" \
+            "${{ steps.expanded-cache.outputs.cache-matched-key }}" \
+            | tee "$work/evidence/cache.txt"
+
+      - name: Install P1 runtime prerequisites
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            gcc-riscv64-linux-gnu libc6-dev-riscv64-cross cpio gzip \
+            qemu-system-misc opensbi python3 device-tree-compiler
+          chmod +x tests/external/linux/qemu_explicit_initrd_wrapper.py
+
+      - name: Build deterministic P1 initramfs
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-expanded-runtime-p1-explicit"
+          BUILD_DIR="$work/initramfs" \
+          OUTPUT_INITRAMFS="$work/runtime-initramfs.cpio.gz" \
+          RISCV_CC=riscv64-linux-gnu-gcc \
+            bash tests/external/linux/build_runtime_initramfs.sh
+          stat -c 'P1_INITRAMFS_BYTES=%s' "$work/runtime-initramfs.cpio.gz" \
+            | tee "$work/evidence/initramfs.txt"
+
+      - name: Boot exact Expanded Image and run P1 12 syscall contract
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-expanded-runtime-p1-explicit"
+          image="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0/out/arch/riscv/boot/Image"
+          start=$(date +%s)
+          set +e
+          LINUX_IMAGE="$image" \
+          INITRAMFS="$work/runtime-initramfs.cpio.gz" \
+          BUILD_DIR="$work/qemu" \
+          LINUX_RELEASE=6.6.143 \
+          LINUX_RUNTIME_PROFILE=p1 \
+          QEMU_SYSTEM_RISCV64="$GITHUB_WORKSPACE/tests/external/linux/qemu_explicit_initrd_wrapper.py" \
+          QEMU_REAL_SYSTEM_RISCV64=qemu-system-riscv64 \
+          QEMU_EXPLICIT_DTB_DIR="$work/dtb" \
+          QEMU_TIMEOUT_SECONDS=90 \
+            bash tests/external/linux/runtime_boot.sh \
+            >"$work/evidence/runtime-driver.log" 2>&1
+          rc=$?
+          set -e
+          elapsed=$(( $(date +%s) - start ))
+          printf 'RUNTIME_DRIVER_RC=%s\nRUNTIME_ELAPSED_S=%s\n' "$rc" "$elapsed" \
+            | tee -a "$work/evidence/summary.txt"
+          if test -s "$work/qemu/rdinit-init.log"; then
+            cp "$work/qemu/rdinit-init.log" "$work/evidence/rdinit-init.log"
+            tail -n 220 "$work/qemu/rdinit-init.log" | tee "$work/evidence/qemu-tail.log"
+          fi
+          cat "$work/evidence/runtime-driver.log"
+          test "$rc" -eq 0
+          python3 tests/external/linux/runtime_v2_log_check.py \
+            --profile p1 \
+            --log "$work/qemu/rdinit-init.log"
+          grep -a -F 'RUNTIME_V2_SYSCALL_END pass=12 fail=0' "$work/qemu/rdinit-init.log"
+          grep -a -F 'INIT_RUNTIME_PROBE=PASS' "$work/qemu/rdinit-init.log"
+          printf 'LINUX_EXPANDED_RUNTIME_P1=PASS syscalls=12 elapsed_s=%s head=%s\n' \
+            "$elapsed" "$GITHUB_SHA" | tee -a "$work/evidence/summary.txt"
+
+      - name: Preserve P1 explicit-initrd evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-expanded-runtime-p1-explicit-initrd-v0
+          path: build/linux-expanded-runtime-p1-explicit/evidence/
+          if-no-files-found: ignore
+          retention-days: 7

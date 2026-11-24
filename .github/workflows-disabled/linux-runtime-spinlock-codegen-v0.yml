@@ -1,0 +1,145 @@
+name: Linux Runtime Spinlock Codegen V0
+
+on:
+  push:
+    branches: ["agent/linux-expanded-kbuild-v0"]
+    paths:
+      - ".github/workflows/linux-runtime-spinlock-codegen-v0.yml"
+      - "tools/ci/runtime-spinlock-trigger.txt"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linux-runtime-spinlock-codegen-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  spinlock-codegen:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Restore certified full linked fixture
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-expanded-kbuild-v0/out
+          key: linux-expanded-mixed-v1-6.6.143-Linux-d30569a4c675f6ac72d9f63c28f0b8745317f7a15c0799d10768f916d74b3a88
+          fail-on-cache-miss: true
+
+      - name: Restore pinned Linux source
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-expanded-kbuild-v0/linux-6.6.143
+          key: linux-source-6.6.143-dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932-v1
+          fail-on-cache-miss: true
+
+      - name: Install RISC-V build tools
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get -o Acquire::Retries=2 install -y --no-install-recommends gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu python3 make \
+            || { sudo apt-get -o Acquire::Retries=3 update; sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu python3 make; }
+
+      - name: Build exact Linux runtime MiniC profile
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-spinlock-codegen-v0"
+          build="$GITHUB_WORKSPACE/build/toolchain-runtime-spinlock-codegen-v0"
+          mkdir -p "$ev"
+          bash tools/ci/linux-runtime-build-minic-profile-v1.sh "$build" "$ev/profile"
+          grep -F 'MINIC_INLINE_ASM_LOCAL_INTEGER_FACTS_V0=APPLIED' "$ev/profile/patch.log"
+          grep -F 'MINIC_INLINE_ASM_RK_CAST_TAIL_V0=APPLIED' "$ev/profile/patch.log"
+          grep -F 'MINIC_RISCV64_PI_LOCAL_SYMBOL_ADDRESS_V0=APPLIED' "$ev/profile/patch.log"
+
+      - name: Compile spinlock_debug with current MiniC
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0"
+          src="$work/linux-6.6.143"
+          out="$work/out"
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-spinlock-codegen-v0"
+          build="$GITHUB_WORKSPACE/build/toolchain-runtime-spinlock-codegen-v0"
+          wrapper="$GITHUB_WORKSPACE/tests/external/linux/stage2_kbuild_cc.sh"
+          target=kernel/locking/spinlock_debug.o
+          base=kernel/locking/spinlock_debug
+          rm -f "$out/$target" "$out/kernel/locking/.spinlock_debug.o.cmd" "$out/$base.minic-stage2.i" "$out/$base.minic-stage2.s"
+          MINIC="$build/bin/minic" REAL_CC=/usr/bin/riscv64-linux-gnu-gcc MINIC_KEEP_INTERMEDIATES=1 \
+            make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- CC="$wrapper" -j2 V=1 "$target" >"$ev/minic-build.log" 2>&1
+          test -s "$out/$target"
+          test -s "$out/$base.minic-stage2.s"
+          cp "$out/$target" "$ev/spinlock_debug.minic.o"
+          cp "$out/$base.minic-stage2.s" "$ev/spinlock_debug.minic-stage2.s"
+          cp "$out/$base.minic-stage2.i" "$ev/spinlock_debug.minic-stage2.i"
+          riscv64-linux-gnu-nm -an "$out/$target" >"$ev/spinlock_debug.minic.nm.txt"
+          riscv64-linux-gnu-objdump -dr "$out/$target" >"$ev/spinlock_debug.minic.objdump.txt"
+          riscv64-linux-gnu-objdump -dr --disassemble=arch_spin_lock "$out/$target" >"$ev/arch_spin_lock.minic.objdump.txt"
+          riscv64-linux-gnu-objdump -dr --disassemble=do_raw_spin_lock "$out/$target" >"$ev/do_raw_spin_lock.minic.objdump.txt"
+          echo 'MINIC_SPINLOCK_DEBUG=PASS'
+          cat "$ev/arch_spin_lock.minic.objdump.txt"
+          cat "$ev/do_raw_spin_lock.minic.objdump.txt"
+
+      - name: Compile spinlock_debug with GCC reference
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0"
+          src="$work/linux-6.6.143"
+          out="$work/out"
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-spinlock-codegen-v0"
+          target=kernel/locking/spinlock_debug.o
+          rm -f "$out/$target" "$out/kernel/locking/.spinlock_debug.o.cmd"
+          make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- CC=/usr/bin/riscv64-linux-gnu-gcc -j2 V=1 "$target" >"$ev/gcc-build.log" 2>&1
+          test -s "$out/$target"
+          cp "$out/$target" "$ev/spinlock_debug.gcc.o"
+          riscv64-linux-gnu-nm -an "$out/$target" >"$ev/spinlock_debug.gcc.nm.txt"
+          riscv64-linux-gnu-objdump -dr "$out/$target" >"$ev/spinlock_debug.gcc.objdump.txt"
+          riscv64-linux-gnu-objdump -dr --disassemble=arch_spin_lock "$out/$target" >"$ev/arch_spin_lock.gcc.objdump.txt"
+          riscv64-linux-gnu-objdump -dr --disassemble=do_raw_spin_lock "$out/$target" >"$ev/do_raw_spin_lock.gcc.objdump.txt"
+          echo 'GCC_SPINLOCK_DEBUG=PASS'
+          cat "$ev/arch_spin_lock.gcc.objdump.txt"
+          cat "$ev/do_raw_spin_lock.gcc.objdump.txt"
+
+      - name: Compare focused disassembly
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-spinlock-codegen-v0"
+          diff -u "$ev/arch_spin_lock.gcc.objdump.txt" "$ev/arch_spin_lock.minic.objdump.txt" >"$ev/arch_spin_lock.diff.txt" || true
+          diff -u "$ev/do_raw_spin_lock.gcc.objdump.txt" "$ev/do_raw_spin_lock.minic.objdump.txt" >"$ev/do_raw_spin_lock.diff.txt" || true
+          echo '=== arch_spin_lock diff ==='
+          cat "$ev/arch_spin_lock.diff.txt" || true
+          echo '=== do_raw_spin_lock diff ==='
+          cat "$ev/do_raw_spin_lock.diff.txt" || true
+
+      - name: Preserve spinlock codegen evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-runtime-spinlock-codegen-v0-${{ github.sha }}
+          path: |
+            build/linux-runtime-spinlock-codegen-v0/profile/patch.log
+            build/linux-runtime-spinlock-codegen-v0/minic-build.log
+            build/linux-runtime-spinlock-codegen-v0/gcc-build.log
+            build/linux-runtime-spinlock-codegen-v0/spinlock_debug.minic.o
+            build/linux-runtime-spinlock-codegen-v0/spinlock_debug.minic-stage2.s
+            build/linux-runtime-spinlock-codegen-v0/spinlock_debug.minic-stage2.i
+            build/linux-runtime-spinlock-codegen-v0/spinlock_debug.minic.nm.txt
+            build/linux-runtime-spinlock-codegen-v0/spinlock_debug.minic.objdump.txt
+            build/linux-runtime-spinlock-codegen-v0/arch_spin_lock.minic.objdump.txt
+            build/linux-runtime-spinlock-codegen-v0/do_raw_spin_lock.minic.objdump.txt
+            build/linux-runtime-spinlock-codegen-v0/spinlock_debug.gcc.o
+            build/linux-runtime-spinlock-codegen-v0/spinlock_debug.gcc.nm.txt
+            build/linux-runtime-spinlock-codegen-v0/spinlock_debug.gcc.objdump.txt
+            build/linux-runtime-spinlock-codegen-v0/arch_spin_lock.gcc.objdump.txt
+            build/linux-runtime-spinlock-codegen-v0/do_raw_spin_lock.gcc.objdump.txt
+            build/linux-runtime-spinlock-codegen-v0/arch_spin_lock.diff.txt
+            build/linux-runtime-spinlock-codegen-v0/do_raw_spin_lock.diff.txt
+          if-no-files-found: warn
+          retention-days: 7

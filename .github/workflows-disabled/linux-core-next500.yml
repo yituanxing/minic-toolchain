@@ -1,0 +1,381 @@
+name: Linux Core Next500 Frontier
+
+on:
+  push:
+    branches:
+      - refactor/declaration-sema-v1
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  prepare-sample16-corpus:
+    needs: prepare-next500-corpus
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Restore active blocker sample16
+        id: sample-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-next500-sample16-corpus
+          key: linux-next500-sample16-corpus-v2-blockers-1021-1050-1060-1082-1115-1118-1137-1147-1149-1193-1208-1219-1402-1430-1438-1439
+
+      - name: Validate cached active sample16
+        if: steps.sample-cache.outputs.cache-hit == 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          manifest=build/linux-next500-sample16-corpus/selected-tus.txt
+          test -s "$manifest"
+          test "$(grep -cve '^[[:space:]]*$' "$manifest")" -eq 16
+          echo 'LINUX_NEXT500_SAMPLE16_CORPUS cache=hit selected=16 policy=active-blockers-v2-after-479'
+
+      - name: Restore frozen next500 corpus for sample refresh
+        if: steps.sample-cache.outputs.cache-hit != 'true'
+        id: next500-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-next500-corpus
+          key: linux-next500-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-indices-1000-1499
+
+      - name: Extract active blocker sample16 from frozen corpus
+        if: steps.sample-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "${{ steps.next500-cache.outputs.cache-hit }}" = true
+          python3 - <<'PY'
+          from pathlib import Path
+          import shutil
+
+          expected = [1021, 1050, 1060, 1082, 1115, 1118, 1137, 1147,
+                      1149, 1193, 1208, 1219, 1402, 1430, 1438, 1439]
+          full = Path("build/linux-next500-corpus")
+          sample = Path("build/linux-next500-sample16-corpus")
+          rows = [line for line in (full / "selected-tus.txt").read_text().splitlines()
+                  if line.strip()]
+          by_index = {int(line.split("\t", 1)[0]): line for line in rows}
+          missing = [index for index in expected if index not in by_index]
+          if missing:
+              raise SystemExit(f"active sample indices absent from frozen corpus: {missing}")
+
+          shutil.rmtree(sample, ignore_errors=True)
+          (sample / "kbuild").mkdir(parents=True)
+          selected_rows = [by_index[index] for index in expected]
+          (sample / "selected-tus.txt").write_text("\n".join(selected_rows) + "\n")
+          total_bytes = 0
+          for row in selected_rows:
+              _, _, rel_i, _ = row.split("\t", 3)
+              source = full / "kbuild" / rel_i
+              if not source.is_file() or source.stat().st_size == 0:
+                  raise SystemExit(f"missing frozen input: {source}")
+              target = sample / "kbuild" / rel_i
+              target.parent.mkdir(parents=True, exist_ok=True)
+              shutil.copy2(source, target)
+              total_bytes += target.stat().st_size
+
+          (sample / "sample-info.txt").write_text(
+              "policy=active-blockers-v2-after-479\n"
+              f"indices={','.join(map(str, expected))}\n"
+              f"selected={len(expected)}\nbytes={total_bytes}\n"
+          )
+          print(
+              "LINUX_NEXT500_SAMPLE16_CORPUS "
+              f"cache=fill selected={len(expected)} bytes={total_bytes} "
+              f"indices={','.join(map(str, expected))}"
+          )
+          PY
+
+      - name: Save active blocker sample16
+        if: steps.sample-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: build/linux-next500-sample16-corpus
+          key: linux-next500-sample16-corpus-v2-blockers-1021-1050-1060-1082-1115-1118-1137-1147-1149-1193-1208-1219-1402-1430-1438-1439
+
+
+  sample16:
+    needs: prepare-sample16-corpus
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    concurrency:
+      group: linux-next500-sample16-${{ github.ref }}
+      cancel-in-progress: true
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Restore frozen sample16 corpus
+        id: sample-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-next500-sample16-corpus
+          key: linux-next500-sample16-corpus-v2-blockers-1021-1050-1060-1082-1115-1118-1137-1147-1149-1193-1208-1219-1402-1430-1438-1439
+
+      - name: Require frozen sample16 corpus
+        run: |
+          test "${{ steps.sample-cache.outputs.cache-hit }}" = true
+          test "$(grep -cve '^[[:space:]]*$' build/linux-next500-sample16-corpus/selected-tus.txt)" -eq 16
+
+      - name: Build exact compiler
+        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/next500-sample-compiler
+
+      - name: Replay sample16
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          compiler="$GITHUB_WORKSPACE/build/next500-sample-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/next500-sample"
+          set +e
+          CORE_FAST_TRACE=1 python3 tests/external/linux/corpus_replay.py             --minic "$compiler"             --corpus "$GITHUB_WORKSPACE/build/linux-next500-sample16-corpus"             --work "$work"             --jobs 4             --offset 0             --limit 16             --sample-count 0
+          replay_status=$?
+          set -e
+          echo "LINUX_NEXT500_SAMPLE16_REPLAY_STATUS=$replay_status"
+
+          python3 tools/ci/classify-core-strict-frontier.py             "$work/batch-results.json"             --stderr-root "$work/minic-stderr"             --ast-header "$GITHUB_WORKSPACE/src/frontend/ast.h"             --examples 16             --json-out "$work/frontier-summary.json"             --reason-text-out "$work/reason-summary.txt"
+
+          python3 tools/ci/summarize-core-frontier-progress.py             "$work/batch-results.json"             --expect-selected 16             --json-out "$work/progress-summary.json"             --text-out "$work/progress-summary.txt"
+
+          echo "LINUX_NEXT500_SAMPLE16_FAILURE_CONTEXTS"
+          cat "$work/failure-contexts.txt" || true
+
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          work = Path("build/next500-sample")
+          summary = json.loads((work / "frontier-summary.json").read_text())
+          if summary["selected"] != 16 or summary["preprocess_missing"] != 0:
+              raise SystemExit(f"sample16 infrastructure failure: {summary}")
+          headline = (
+              f"LINUX_NEXT500_SAMPLE16_EXACT selected={summary['selected']} "
+              f"pass={summary['pass']} unsupported={summary['unsupported']} "
+              f"error={summary['error']} preprocess_missing={summary['preprocess_missing']}"
+          )
+          print(headline)
+          (work / "headline.txt").write_text(headline + "\n")
+          with Path(os.environ["GITHUB_STEP_SUMMARY"]).open("a") as output:
+              output.write("## Linux next500 sample16\n\n")
+              output.write(f"`{headline}`\n\n")
+              output.write((work / "reason-summary.txt").read_text())
+          PY
+
+      - name: Persist sample16 evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-next500-sample16-${{ github.sha }}
+          path: |
+            build/next500-sample/headline.txt
+            build/next500-sample/batch-results.json
+            build/next500-sample/frontier-summary.json
+            build/next500-sample/reason-summary.txt
+            build/next500-sample/progress-summary.json
+            build/next500-sample/progress-summary.txt
+            build/next500-sample/failure-contexts.txt
+            build/next500-sample/minic-stderr/**
+          if-no-files-found: warn
+
+  prepare-next500-corpus:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    outputs:
+      cache_hit: ${{ steps.next500-cache.outputs.cache-hit }}
+    env:
+      DEBIAN_FRONTEND: noninteractive
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Restore frozen next500 corpus
+        id: next500-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-next500-corpus
+          key: linux-next500-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-indices-1000-1499
+
+      - name: Validate cached next500 corpus
+        if: steps.next500-cache.outputs.cache-hit == 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          manifest=build/linux-next500-corpus/selected-tus.txt
+          test -s "$manifest"
+          test "$(grep -cve '^[[:space:]]*$' "$manifest")" -eq 500
+          test "$(head -1 "$manifest" | cut -f1)" -eq 1000
+          test "$(tail -1 "$manifest" | cut -f1)" -eq 1499
+          echo 'LINUX_NEXT500_CORPUS cache=hit selected=500 indices=1000-1499'
+
+      - name: Fetch exact Linux 6.6.143 stable source
+        if: steps.next500-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          echo 'PIPELINE_PROGRESS phase=linux-source [....................] 0%'
+          rm -rf build/linux-source
+          git init -q build/linux-source
+          git -C build/linux-source remote add origin https://github.com/gregkh/linux.git
+          git -C build/linux-source fetch --depth=1 --no-tags --progress origin d1cfde2d5d15be14123bdd1689162bd27f995a90
+          git -C build/linux-source checkout -q --detach FETCH_HEAD
+          test "$(git -C build/linux-source rev-parse HEAD)" = d1cfde2d5d15be14123bdd1689162bd27f995a90
+          echo 'PIPELINE_PROGRESS phase=linux-source [####################] 100%'
+
+      - name: Install corpus materialization dependencies
+        if: steps.next500-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 update
+          sudo apt-get             -o Acquire::Retries=3             -o Acquire::http::Timeout=30             install -y --no-install-recommends               gcc-riscv64-linux-gnu libc6-dev-riscv64-cross               flex bison bc libelf-dev libssl-dev
+          command -v riscv64-linux-gnu-gcc
+
+      - name: Materialize indices 1000 through 1499 once
+        if: steps.next500-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          builder="$GITHUB_WORKSPACE/build/linux-next500-builder"
+          corpus="$GITHUB_WORKSPACE/build/linux-next500-corpus"
+          LINUX_BATCH_MATERIALIZE_ONLY=1           BUILD_DIR="$builder"           LINUX_SOURCE_TREE="$GITHUB_WORKSPACE/build/linux-source"           CROSS_COMPILE=riscv64-linux-gnu-           LINUX_BATCH_OFFSET=1000           LINUX_BATCH_LIMIT=500           LINUX_BATCH_JOBS=4             sh tests/external/linux/batch_probe.sh
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import shutil
+
+          builder = Path("build/linux-next500-builder")
+          corpus = Path("build/linux-next500-corpus")
+          selected = builder / "selected-tus.txt"
+          rows = [line for line in selected.read_text().splitlines() if line.strip()]
+          indices = [int(line.split("\t", 1)[0]) for line in rows]
+          if len(rows) != 500 or indices[0] != 1000 or indices[-1] != 1499:
+              raise SystemExit(
+                  f"unexpected next500 selection: count={len(rows)} "
+                  f"first={indices[0] if indices else None} "
+                  f"last={indices[-1] if indices else None}"
+              )
+          shutil.rmtree(corpus, ignore_errors=True)
+          inputs = corpus / "kbuild"
+          inputs.mkdir(parents=True)
+          shutil.copy2(selected, corpus / "selected-tus.txt")
+          manifest = builder / "tu-manifest.txt"
+          if manifest.is_file():
+              shutil.copy2(manifest, corpus / "tu-manifest.txt")
+          total_bytes = 0
+          for row in rows:
+              _, _, rel_i, _ = row.split("\t", 3)
+              source = builder / "kbuild" / rel_i
+              if not source.is_file() or source.stat().st_size == 0:
+                  raise SystemExit(f"missing materialized input: {source}")
+              target = inputs / rel_i
+              target.parent.mkdir(parents=True, exist_ok=True)
+              shutil.copy2(source, target)
+              total_bytes += target.stat().st_size
+          (corpus / "corpus-info.txt").write_text(
+              f"linux=6.6.143\nindices=1000-1499\nselected=500\nbytes={total_bytes}\n"
+          )
+          print(f"LINUX_NEXT500_CORPUS cache=fill selected=500 bytes={total_bytes}")
+          PY
+
+      - name: Save frozen next500 corpus
+        if: steps.next500-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: build/linux-next500-corpus
+          key: linux-next500-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-indices-1000-1499
+
+
+  full500:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[next500]')
+    needs: prepare-next500-corpus
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    concurrency:
+      group: linux-next500-full500-${{ github.ref }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Restore frozen next500 corpus
+        id: next500-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-next500-corpus
+          key: linux-next500-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-indices-1000-1499
+
+      - name: Require frozen next500 corpus
+        run: |
+          test "${{ steps.next500-cache.outputs.cache-hit }}" = true
+          test "$(grep -cve '^[[:space:]]*$' build/linux-next500-corpus/selected-tus.txt)" -eq 500
+
+      - name: Build exact compiler
+        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/next500-full-compiler
+
+      - name: Replay all next500
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          compiler="$GITHUB_WORKSPACE/build/next500-full-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/next500-full"
+          set +e
+          CORE_FAST_TRACE=1 python3 tests/external/linux/corpus_replay.py             --minic "$compiler"             --corpus "$GITHUB_WORKSPACE/build/linux-next500-corpus"             --work "$work"             --jobs 4             --offset 0             --limit 500             --sample-count 0
+          replay_status=$?
+          set -e
+          echo "LINUX_NEXT500_FULL_REPLAY_STATUS=$replay_status"
+
+          python3 tools/ci/classify-core-strict-frontier.py             "$work/batch-results.json"             --stderr-root "$work/minic-stderr"             --ast-header "$GITHUB_WORKSPACE/src/frontend/ast.h"             --examples 50             --json-out "$work/frontier-summary.json"             --reason-text-out "$work/reason-summary.txt"
+
+          python3 tools/ci/summarize-core-frontier-progress.py             "$work/batch-results.json"             --expect-selected 500             --json-out "$work/progress-summary.json"             --text-out "$work/progress-summary.txt"
+
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          work = Path("build/next500-full")
+          summary = json.loads((work / "frontier-summary.json").read_text())
+          if summary["selected"] != 500 or summary["preprocess_missing"] != 0:
+              raise SystemExit(f"full500 infrastructure failure: {summary}")
+          headline = (
+              f"LINUX_NEXT500_FULL_EXACT selected={summary['selected']} "
+              f"pass={summary['pass']} unsupported={summary['unsupported']} "
+              f"error={summary['error']} preprocess_missing={summary['preprocess_missing']}"
+          )
+          print(headline)
+          (work / "headline.txt").write_text(headline + "\n")
+          with Path(os.environ["GITHUB_STEP_SUMMARY"]).open("a") as output:
+              output.write("## Linux next500 full census\n\n")
+              output.write(f"`{headline}`\n\n")
+              output.write((work / "reason-summary.txt").read_text())
+          PY
+
+      - name: Persist full500 evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-next500-full500-${{ github.sha }}
+          path: |
+            build/next500-full/headline.txt
+            build/next500-full/batch-results.json
+            build/next500-full/batch-results.tsv
+            build/next500-full/frontier-summary.json
+            build/next500-full/reason-summary.txt
+            build/next500-full/progress-summary.json
+            build/next500-full/progress-summary.txt
+            build/next500-full/failure-contexts.txt
+            build/next500-full/minic-stderr/**
+          if-no-files-found: warn

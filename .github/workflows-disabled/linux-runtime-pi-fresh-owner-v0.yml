@@ -1,0 +1,129 @@
+name: Linux Runtime PI Fresh Owner V0
+
+on:
+  push:
+    branches: ["agent/linux-expanded-kbuild-v0"]
+    paths:
+      - ".github/workflows/linux-runtime-pi-fresh-owner-v0.yml"
+      - "tools/ci/linux-runtime-build-minic-profile-v1.sh"
+      - "tools/ci/apply-riscv64-pi-local-symbol-address-v0.py"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linux-runtime-pi-fresh-owner-v0-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  fresh-pi-owner:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Restore certified Linux fixture
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-expanded-kbuild-v0/out
+          key: linux-expanded-mixed-v1-6.6.143-Linux-d30569a4c675f6ac72d9f63c28f0b8745317f7a15c0799d10768f916d74b3a88
+          fail-on-cache-miss: true
+
+      - name: Restore pinned Linux source
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-expanded-kbuild-v0/linux-6.6.143
+          key: linux-source-6.6.143-dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932-v1
+          fail-on-cache-miss: true
+
+      - name: Install cross tools
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get -o Acquire::Retries=2 install -y --no-install-recommends gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu make \
+            || { sudo apt-get -o Acquire::Retries=3 update; sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu make; }
+
+      - name: Build current MiniC runtime profile
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-pi-fresh-owner-v0"
+          build="$GITHUB_WORKSPACE/build/toolchain-runtime-pi-fresh-owner-v0"
+          mkdir -p "$ev"
+          bash tools/ci/linux-runtime-build-minic-profile-v1.sh "$build" "$ev/profile"
+          grep -F 'MINIC_RISCV64_PI_LOCAL_SYMBOL_ADDRESS_V0=APPLIED' "$ev/profile/patch.log"
+
+      - name: Force fresh cmdline_early owner through MiniC
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0"
+          src="$work/linux-6.6.143"
+          out="$work/out"
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-pi-fresh-owner-v0"
+          build="$GITHUB_WORKSPACE/build/toolchain-runtime-pi-fresh-owner-v0"
+          wrapper="$GITHUB_WORKSPACE/tests/external/linux/stage2_kbuild_cc.sh"
+          base=arch/riscv/kernel/pi/cmdline_early
+          obj="$base.o"
+          pi="$base.pi.o"
+
+          rm -f \
+            "$out/$obj" "$out/$pi" \
+            "$out/arch/riscv/kernel/pi/.cmdline_early.o.cmd" \
+            "$out/arch/riscv/kernel/pi/.cmdline_early.pi.o.cmd" \
+            "$out/$base.minic-stage2.i" \
+            "$out/$base.minic-stage2.s"
+
+          MINIC="$build/bin/minic" \
+          REAL_CC=/usr/bin/riscv64-linux-gnu-gcc \
+          MINIC_KEEP_INTERMEDIATES=1 \
+            make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
+              CC="$wrapper" -j2 V=1 "$pi" >"$ev/build.log" 2>&1
+
+          test -s "$out/$obj"
+          test -s "$out/$pi"
+          test -s "$out/$base.minic-stage2.i"
+          test -s "$out/$base.minic-stage2.s"
+
+          cp "$out/$base.minic-stage2.i" "$ev/cmdline_early.minic-stage2.i"
+          cp "$out/$base.minic-stage2.s" "$ev/cmdline_early.minic-stage2.s"
+          riscv64-linux-gnu-objdump -dr "$out/$obj" >"$ev/cmdline_early.objdump.txt"
+          riscv64-linux-gnu-objdump -dr "$out/$pi" >"$ev/cmdline_early.pi.objdump.txt"
+          riscv64-linux-gnu-readelf -rW "$out/$obj" >"$ev/cmdline_early.relocs.txt"
+          riscv64-linux-gnu-nm -an "$out/$obj" >"$ev/cmdline_early.nm.txt"
+          riscv64-linux-gnu-nm -an "$out/$pi" >"$ev/cmdline_early.pi.nm.txt"
+          sha256sum "$out/$obj" "$out/$pi" | tee "$ev/sha256.txt"
+
+          grep -nE '\.Lminic_string_|\blla\b|\bla\b' "$ev/cmdline_early.minic-stage2.s" \
+            >"$ev/local-string-address-lines.txt" || true
+          grep -nE 'Lminic_string|PCREL|GOT_HI20|HI20' "$ev/cmdline_early.relocs.txt" \
+            >"$ev/local-string-relocs.txt" || true
+
+          echo '--- local string address assembly ---'
+          cat "$ev/local-string-address-lines.txt"
+          echo '--- local string relocations ---'
+          cat "$ev/local-string-relocs.txt"
+
+          # Prove this was a real compiler refresh rather than the old cached
+          # cmdline_early.o merely being objcopied into the PI object.
+          grep -Fq 'cmdline_early.minic-stage2.s' "$ev/build.log" || \
+            grep -Fq 'stage2_kbuild_cc.sh' "$ev/build.log"
+          echo 'PI_FRESH_OWNER=PASS'
+
+      - name: Preserve fresh PI owner evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-runtime-pi-fresh-owner-v0-${{ github.sha }}
+          path: |
+            build/linux-runtime-pi-fresh-owner-v0/profile/patch.log
+            build/linux-runtime-pi-fresh-owner-v0/build.log
+            build/linux-runtime-pi-fresh-owner-v0/cmdline_early.minic-stage2.i
+            build/linux-runtime-pi-fresh-owner-v0/cmdline_early.minic-stage2.s
+            build/linux-runtime-pi-fresh-owner-v0/*.txt
+            build/linux-runtime-pi-fresh-owner-v0/sha256.txt
+          if-no-files-found: warn
+          retention-days: 7

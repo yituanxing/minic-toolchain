@@ -1,0 +1,223 @@
+name: Linux Runtime Frozen Frontier Cert V1
+
+on:
+  push:
+    branches: ["agent/linux-expanded-kbuild-v0"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linux-runtime-frozen-cert-v1-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  frozen-cert:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[linux-runtime-frozen-cert-v1]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Restore certified linked Linux fixture
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-expanded-kbuild-v0/out
+          key: linux-expanded-mixed-v1-6.6.143-Linux-d30569a4c675f6ac72d9f63c28f0b8745317f7a15c0799d10768f916d74b3a88
+          fail-on-cache-miss: true
+
+      - name: Restore pinned Linux source tree for certification only
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-expanded-kbuild-v0/linux-6.6.143
+          key: linux-source-6.6.143-dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932-v1
+          fail-on-cache-miss: true
+
+      - name: Install focused prerequisites without update
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-frozen-cert-v1"
+          mkdir -p "$ev"
+          start=$(date +%s%N)
+          mode=no-update
+          if ! sudo apt-get -o Acquire::Retries=2 install -y --no-install-recommends \
+              gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu qemu-system-misc opensbi python3 \
+              >"$ev/apt.stdout.txt" 2>"$ev/apt.stderr.txt"; then
+            mode=fallback-update
+            sudo apt-get -o Acquire::Retries=3 update >>"$ev/apt.stdout.txt" 2>>"$ev/apt.stderr.txt"
+            sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+              gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu qemu-system-misc opensbi python3 \
+              >>"$ev/apt.stdout.txt" 2>>"$ev/apt.stderr.txt"
+          fi
+          end=$(date +%s%N)
+          echo "TIMING install_ms=$(((end-start)/1000000)) mode=$mode" | tee "$ev/timing.txt"
+
+      - name: Build centralized MiniC runtime profile
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0"
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-frozen-cert-v1"
+          bash tools/ci/linux-runtime-build-minic-profile-v1.sh \
+            "$work/toolchain-frozen-cert-v1" "$ev/profile"
+          cat "$ev/profile/toolchain-timing.txt" >>"$ev/timing.txt"
+
+      - name: Generate authoritative Kbuild objects and frozen inputs
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0"
+          src="$work/linux-6.6.143"
+          out="$work/out"
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-frozen-cert-v1"
+          frozen="$GITHUB_WORKSPACE/build/linux-runtime-frozen-v1"
+          wrapper="$GITHUB_WORKSPACE/tests/external/linux/stage2_kbuild_cc.sh"
+          rm -rf "$frozen" "$ev/kbuild" "$ev/replay"
+          mkdir -p "$frozen/src/scripts" "$frozen/src/arch/riscv/tools" "$ev/kbuild" "$ev/replay"
+          targets=(lib/idr.o lib/xarray.o)
+          for obj in "${targets[@]}"; do
+            rm -f "$out/$obj" "$out/$(dirname "$obj")/.$(basename "$obj" .o).o.cmd"
+          done
+          start=$(date +%s%N)
+          MINIC="$work/toolchain-frozen-cert-v1/bin/minic" \
+          REAL_CC=/usr/bin/riscv64-linux-gnu-gcc \
+          MINIC_KEEP_INTERMEDIATES=1 \
+          MINIC_KBUILD_TRACE="$ev/kbuild.trace" \
+          MINIC_CORE_FRAME_TRACE=1 CORE_FAST_TRACE=1 MINIC_LOCAL_FACT_TRACE=1 \
+            make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
+              CC="$wrapper" -j4 V=1 "${targets[@]}" >"$ev/kbuild.log" 2>&1
+          end=$(date +%s%N)
+          echo "TIMING kbuild_refresh_ms=$(((end-start)/1000000)) objects=2" | tee -a "$ev/timing.txt"
+          cp "$out/lib/idr.o" "$ev/kbuild/idr.o"
+          cp "$out/lib/xarray.o" "$ev/kbuild/xarray.o"
+          cp "$out/lib/idr.minic-stage2.i" "$frozen/lib__idr.i"
+          cp "$out/lib/xarray.minic-stage2.i" "$frozen/lib__xarray.i"
+          cp "$src/scripts/head-object-list.txt" "$frozen/src/scripts/head-object-list.txt"
+          cp "$src/arch/riscv/tools/relocs_check.sh" "$frozen/src/arch/riscv/tools/relocs_check.sh"
+          chmod +x "$frozen/src/arch/riscv/tools/relocs_check.sh"
+          cp "$ev/kbuild.trace" "$frozen/kbuild.trace"
+          printf '%s\n' \
+            '-mabi=lp64' \
+            '-march=rv64imac_zicsr_zifencei_zihintpause' \
+            '-mno-save-restore' \
+            '-mcmodel=medany' \
+            '-Wa,-mno-arch-attr' \
+            '-mstrict-align' >"$frozen/asm-args.txt"
+          printf '%s\n' \
+            'linux_version=6.6.143' \
+            'linux_archive_sha256=dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932' \
+            'config_sha256=e538a6ad42ec49c5a667cab5de9bb943f82ca702ff2b7749a020e38ff7ddaea7' \
+            'linked_fixture=linux-expanded-mixed-v1-6.6.143-Linux-d30569a4c675f6ac72d9f63c28f0b8745317f7a15c0799d10768f916d74b3a88' \
+            'targets=lib/idr.o lib/xarray.o' >"$frozen/fixture.txt"
+          find "$frozen" -type f -print0 | sort -z | xargs -0 sha256sum >"$frozen/manifest.sha256"
+          du -sb "$frozen" | tee "$ev/frozen-size.txt"
+
+      - name: Replay frozen inputs through the exact MiniC assembler path
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0"
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-frozen-cert-v1"
+          frozen="$GITHUB_WORKSPACE/build/linux-runtime-frozen-v1"
+          wrapper="$GITHUB_WORKSPACE/tests/external/linux/stage2_kbuild_cc.sh"
+          mapfile -t asm_args <"$frozen/asm-args.txt"
+          start=$(date +%s%N)
+          MINIC="$work/toolchain-frozen-cert-v1/bin/minic" \
+          REAL_CC=/usr/bin/riscv64-linux-gnu-gcc MINIC_KEEP_INTERMEDIATES=1 \
+          MINIC_KBUILD_TRACE="$ev/replay.trace" CORE_FAST_TRACE=1 \
+            "$wrapper" "${asm_args[@]}" -c -o "$ev/replay/idr.o" "$frozen/lib__idr.i"
+          MINIC="$work/toolchain-frozen-cert-v1/bin/minic" \
+          REAL_CC=/usr/bin/riscv64-linux-gnu-gcc MINIC_KEEP_INTERMEDIATES=1 \
+          MINIC_KBUILD_TRACE="$ev/replay.trace" CORE_FAST_TRACE=1 \
+            "$wrapper" "${asm_args[@]}" -c -o "$ev/replay/xarray.o" "$frozen/lib__xarray.i"
+          end=$(date +%s%N)
+          echo "TIMING frozen_replay_ms=$(((end-start)/1000000)) objects=2" | tee -a "$ev/timing.txt"
+          cmp -s "$ev/kbuild/idr.o" "$ev/replay/idr.o"
+          cmp -s "$ev/kbuild/xarray.o" "$ev/replay/xarray.o"
+          sha256sum "$ev/kbuild/idr.o" "$ev/replay/idr.o" \
+                    "$ev/kbuild/xarray.o" "$ev/replay/xarray.o" | tee "$ev/object.sha256"
+          echo 'FROZEN_OBJECT_BINARY_EQUIVALENCE=PASS' | tee -a "$ev/timing.txt"
+
+      - name: Prove full source tree is unnecessary for frontier execution
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0"
+          out="$work/out"
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-frozen-cert-v1"
+          frozen="$GITHUB_WORKSPACE/build/linux-runtime-frozen-v1"
+          cp "$ev/replay/idr.o" "$out/lib/idr.o"
+          cp "$ev/replay/xarray.o" "$out/lib/xarray.o"
+          rm -rf "$work/linux-6.6.143"
+          test ! -e "$work/linux-6.6.143"
+          bash tools/ci/linux-early-runtime-link-v2.sh "$frozen/src" "$out" "$ev/early"
+          cat "$ev/early/timing.txt" >>"$ev/timing.txt"
+          start=$(date +%s%N)
+          set +e
+          timeout --signal=TERM 8s qemu-system-riscv64 \
+            -M virt -cpu max -m 512M -smp 1 -nographic -no-reboot \
+            -bios default -kernel "$ev/early/Image.early" \
+            -append 'console=ttyS0 earlycon=sbi loglevel=8 panic=-1' \
+            -d int,in_asm -D "$ev/qemu.trace.log" \
+            >"$ev/qemu.console.log" 2>&1
+          qemu_rc=$?
+          set -e
+          end=$(date +%s%N)
+          echo "TIMING qemu_ms=$(((end-start)/1000000)) rc=$qemu_rc" | tee -a "$ev/timing.txt"
+          grep -a 'riscv_cpu_do_interrupt' "$ev/qemu.trace.log" >"$ev/qemu.interrupts.txt" || true
+          set +e
+          python3 tools/ci/linux-runtime-frontier-v1.py \
+            --config tools/ci/linux-runtime-frontier-v1.json \
+            --interrupts "$ev/qemu.interrupts.txt" --nm "$ev/early/nm.txt" \
+            --trace "$ev/qemu.trace.log" --console "$ev/qemu.console.log" \
+            --qemu-rc "$qemu_rc" --json-out "$ev/frontier-result.json" \
+            --text-out "$ev/frontier-summary.txt"
+          classifier_rc=$?
+          set -e
+          verdict=$(python3 -c 'import json; print(json.load(open("build/linux-runtime-frozen-cert-v1/frontier-result.json"))["verdict"])')
+          test "$verdict" = SAME_FAULT
+          echo "FROZEN_SOURCELESS_RUNTIME_ORACLE=PASS verdict=$verdict classifier_rc=$classifier_rc" | tee -a "$ev/timing.txt"
+
+      - name: Save certified frozen frontier fixture
+        uses: actions/cache/save@v4
+        with:
+          path: build/linux-runtime-frozen-v1
+          key: linux-runtime-frozen-v1-6.6.143-e538a6ad42ec49c5a667cab5de9bb943f82ca702ff2b7749a020e38ff7ddaea7
+
+      - name: Write certification summary
+        if: always()
+        shell: bash
+        run: |
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-frozen-cert-v1"
+          {
+            echo '## Linux Runtime Frozen Frontier Cert V1'
+            echo
+            echo '```text'
+            cat "$ev/frontier-summary.txt" 2>/dev/null || true
+            cat "$ev/timing.txt" 2>/dev/null || true
+            cat "$ev/frozen-size.txt" 2>/dev/null || true
+            echo '```'
+          } >>"$GITHUB_STEP_SUMMARY"
+
+      - name: Preserve certification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-runtime-frozen-cert-v1-${{ github.sha }}
+          path: |
+            build/linux-runtime-frozen-cert-v1/frontier-result.json
+            build/linux-runtime-frozen-cert-v1/frontier-summary.txt
+            build/linux-runtime-frozen-cert-v1/timing.txt
+            build/linux-runtime-frozen-cert-v1/frozen-size.txt
+            build/linux-runtime-frozen-cert-v1/object.sha256
+            build/linux-runtime-frozen-cert-v1/kbuild.trace
+            build/linux-runtime-frozen-cert-v1/replay.trace
+            build/linux-runtime-frozen-v1/fixture.txt
+            build/linux-runtime-frozen-v1/manifest.sha256
+            build/linux-runtime-frozen-v1/asm-args.txt
+          if-no-files-found: warn
+          retention-days: 7

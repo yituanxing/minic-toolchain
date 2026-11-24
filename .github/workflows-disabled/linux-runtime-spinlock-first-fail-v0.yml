@@ -1,0 +1,229 @@
+name: Linux Runtime Spinlock First Fail V0
+
+on:
+  push:
+    branches: ["agent/linux-expanded-kbuild-v0"]
+    paths:
+      - ".github/workflows/linux-runtime-spinlock-first-fail-v0.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linux-runtime-spinlock-first-fail-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  spinlock-first-fail:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 14
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Restore certified full linked fixture
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-expanded-kbuild-v0/out
+          key: linux-expanded-mixed-v1-6.6.143-Linux-d30569a4c675f6ac72d9f63c28f0b8745317f7a15c0799d10768f916d74b3a88
+          fail-on-cache-miss: true
+
+      - name: Restore pinned Linux source
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-expanded-kbuild-v0/linux-6.6.143
+          key: linux-source-6.6.143-dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932-v1
+          fail-on-cache-miss: true
+
+      - name: Restore certified frozen linker source subset
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-runtime-frozen-v1
+          key: linux-runtime-frozen-v1-6.6.143-e538a6ad42ec49c5a667cab5de9bb943f82ca702ff2b7749a020e38ff7ddaea7
+          fail-on-cache-miss: true
+
+      - name: Install prerequisites
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get -o Acquire::Retries=2 install -y --no-install-recommends gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu qemu-system-misc opensbi python3 make \
+            || { sudo apt-get -o Acquire::Retries=3 update; sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu qemu-system-misc opensbi python3 make; }
+
+      - name: Build exact Linux runtime MiniC profile
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-spinlock-first-fail-v0"
+          build="$GITHUB_WORKSPACE/build/toolchain-runtime-spinlock-first-fail-v0"
+          mkdir -p "$ev"
+          bash tools/ci/linux-runtime-build-minic-profile-v1.sh "$build" "$ev/profile"
+          grep -F 'MINIC_INLINE_ASM_LOCAL_INTEGER_FACTS_V0=APPLIED' "$ev/profile/patch.log"
+          grep -F 'MINIC_INLINE_ASM_RK_CAST_TAIL_V0=APPLIED' "$ev/profile/patch.log"
+          grep -F 'MINIC_RISCV64_PI_LOCAL_SYMBOL_ADDRESS_V0=APPLIED' "$ev/profile/patch.log"
+
+      - name: Instrument first spinlock validation without printk
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0"
+          src="$work/linux-6.6.143"
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-spinlock-first-fail-v0"
+          python3 - "$src/kernel/locking/spinlock_debug.c" "$ev/spinlock_debug.diag.c" <<'PY'
+          from pathlib import Path
+          import sys
+
+          path = Path(sys.argv[1])
+          evidence = Path(sys.argv[2])
+          text = path.read_text()
+          old = '''static inline void
+          debug_spin_lock_before(raw_spinlock_t *lock)
+          {
+          \tSPIN_BUG_ON(READ_ONCE(lock->magic) != SPINLOCK_MAGIC, lock, "bad magic");
+          \tSPIN_BUG_ON(READ_ONCE(lock->owner) == current, lock, "recursion");
+          \tSPIN_BUG_ON(READ_ONCE(lock->owner_cpu) == raw_smp_processor_id(),
+          \t\t\t\t\t\t\tlock, "cpu recursion");
+          }
+          '''
+          new = '''static noinline void minic_spin_diag_bad_magic(void)
+          {
+          \tfor (;;)
+          \t\tcpu_relax();
+          }
+
+          static noinline void minic_spin_diag_recursion(void)
+          {
+          \tfor (;;) {
+          \t\tcpu_relax();
+          \t\tcpu_relax();
+          \t}
+          }
+
+          static noinline void minic_spin_diag_cpu_recursion(void)
+          {
+          \tfor (;;) {
+          \t\tcpu_relax();
+          \t\tcpu_relax();
+          \t\tcpu_relax();
+          \t}
+          }
+
+          static inline void
+          debug_spin_lock_before(raw_spinlock_t *lock)
+          {
+          \tif (unlikely(READ_ONCE(lock->magic) != SPINLOCK_MAGIC))
+          \t\tminic_spin_diag_bad_magic();
+          \tif (unlikely(READ_ONCE(lock->owner) == current))
+          \t\tminic_spin_diag_recursion();
+          \tif (unlikely(READ_ONCE(lock->owner_cpu) == raw_smp_processor_id()))
+          \t\tminic_spin_diag_cpu_recursion();
+          }
+          '''
+          if text.count(old) != 1:
+              raise SystemExit(f"expected one debug_spin_lock_before block, found {text.count(old)}")
+          text = text.replace(old, new)
+          path.write_text(text)
+          evidence.write_text(text)
+          print("SPINLOCK_FIRST_FAIL_INSTRUMENT=APPLIED")
+          PY
+          grep -F 'minic_spin_diag_bad_magic' "$src/kernel/locking/spinlock_debug.c"
+          grep -F 'minic_spin_diag_recursion' "$src/kernel/locking/spinlock_debug.c"
+          grep -F 'minic_spin_diag_cpu_recursion' "$src/kernel/locking/spinlock_debug.c"
+
+      - name: Refresh runtime owners with current MiniC
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0"
+          src="$work/linux-6.6.143"
+          out="$work/out"
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-spinlock-first-fail-v0"
+          build="$GITHUB_WORKSPACE/build/toolchain-runtime-spinlock-first-fail-v0"
+          wrapper="$GITHUB_WORKSPACE/tests/external/linux/stage2_kbuild_cc.sh"
+
+          refresh_obj() {
+            target="$1"; log="$2"
+            base="${target%.o}"; dir="${target%/*}"; stem="${target##*/}"; stem="${stem%.o}"
+            rm -f "$out/$target" "$out/$dir/.${stem}.o.cmd" "$out/$base.minic-stage2.i" "$out/$base.minic-stage2.s"
+            MINIC="$build/bin/minic" REAL_CC=/usr/bin/riscv64-linux-gnu-gcc MINIC_KEEP_INTERMEDIATES=1 \
+              make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- CC="$wrapper" -j2 V=1 "$target" >"$ev/$log" 2>&1
+            test -s "$out/$target"
+            echo "OWNER_REFRESH=PASS target=$target"
+          }
+
+          pi_target=arch/riscv/kernel/pi/cmdline_early.pi.o
+          pi_base=arch/riscv/kernel/pi/cmdline_early
+          rm -f "$out/$pi_base.o" "$out/$pi_target" "$out/arch/riscv/kernel/pi/.cmdline_early.o.cmd" "$out/arch/riscv/kernel/pi/.cmdline_early.pi.o.cmd" "$out/$pi_base.minic-stage2.i" "$out/$pi_base.minic-stage2.s"
+          MINIC="$build/bin/minic" REAL_CC=/usr/bin/riscv64-linux-gnu-gcc MINIC_KEEP_INTERMEDIATES=1 \
+            make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- CC="$wrapper" -j2 V=1 "$pi_target" >"$ev/pi-owner-refresh.log" 2>&1
+          test -s "$out/$pi_target"
+
+          refresh_obj arch/riscv/mm/init.o init-refresh.log
+          refresh_obj arch/riscv/kernel/setup.o setup-refresh.log
+          refresh_obj kernel/sched/core.o sched-core-refresh.log
+          refresh_obj arch/riscv/kernel/irq.o irq-refresh.log
+          refresh_obj kernel/locking/spinlock.o spinlock-refresh.log
+          refresh_obj kernel/locking/spinlock_debug.o spinlock_debug-refresh.log
+          refresh_obj kernel/sched/build_utility.o build_utility-refresh.log
+          refresh_obj kernel/time/timekeeping.o timekeeping-refresh.log
+          refresh_obj kernel/time/vsyscall.o vsyscall-refresh.log
+          refresh_obj kernel/notifier.o notifier-refresh.log
+          refresh_obj kernel/sched/build_policy.o build_policy-refresh.log
+          refresh_obj kernel/time/timer.o timer-refresh.log
+          refresh_obj kernel/time/hrtimer.o hrtimer-refresh.log
+          refresh_obj kernel/time/tick-sched.o tick-sched-refresh.log
+          refresh_obj kernel/rcu/tree.o rcu-tree-refresh.log
+          refresh_obj kernel/rcu/rcu_segcblist.o rcu-segcblist-refresh.log
+          refresh_obj init/main.o init-main-refresh.log
+          refresh_obj kernel/softirq.o softirq-refresh.log
+
+          riscv64-linux-gnu-nm -an "$out/kernel/locking/spinlock_debug.o" >"$ev/spinlock_debug.nm.txt"
+          riscv64-linux-gnu-objdump -dr "$out/kernel/locking/spinlock_debug.o" >"$ev/spinlock_debug.objdump.txt"
+          cp "$out/kernel/locking/spinlock_debug.minic-stage2.s" "$ev/spinlock_debug.minic-stage2.s"
+          grep -n -E 'minic_spin_diag_(bad_magic|recursion|cpu_recursion)|debug_spin_lock_before|do_raw_spin_lock' "$ev/spinlock_debug.nm.txt" "$ev/spinlock_debug.objdump.txt" >"$ev/spinlock_diag.symbols.txt" || true
+          cat "$ev/spinlock_diag.symbols.txt" || true
+
+      - name: Relink early image
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0"
+          frozen="$GITHUB_WORKSPACE/build/linux-runtime-frozen-v1"
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-spinlock-first-fail-v0"
+          bash tools/ci/linux-early-runtime-link-v2.sh "$frozen/src" "$work/out" "$ev/early"
+
+      - name: Execute QEMU spinlock first-fail probe
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-spinlock-first-fail-v0"
+          set +e
+          python3 tools/ci/linux-runtime-qemu-watch-v1.py --config tools/ci/linux-runtime-init-irq-frontier-v0.json --nm "$ev/early/nm.txt" --image "$ev/early/Image.early" --evidence-dir "$ev/watch" --timeout-ms 8000 --poll-ms 100 | tee "$ev/watch.stdout.txt"
+          rc=${PIPESTATUS[0]}
+          set -e
+          cat "$ev/watch/frontier-summary.txt" || true
+          exit "$rc"
+
+      - name: Preserve spinlock first-fail evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-runtime-spinlock-first-fail-v0-${{ github.sha }}
+          path: |
+            build/linux-runtime-spinlock-first-fail-v0/profile/patch.log
+            build/linux-runtime-spinlock-first-fail-v0/spinlock_debug.diag.c
+            build/linux-runtime-spinlock-first-fail-v0/*-refresh.log
+            build/linux-runtime-spinlock-first-fail-v0/spinlock_debug.nm.txt
+            build/linux-runtime-spinlock-first-fail-v0/spinlock_debug.objdump.txt
+            build/linux-runtime-spinlock-first-fail-v0/spinlock_debug.minic-stage2.s
+            build/linux-runtime-spinlock-first-fail-v0/spinlock_diag.symbols.txt
+            build/linux-runtime-spinlock-first-fail-v0/early/nm.txt
+            build/linux-runtime-spinlock-first-fail-v0/watch.stdout.txt
+            build/linux-runtime-spinlock-first-fail-v0/watch/frontier-result.json
+            build/linux-runtime-spinlock-first-fail-v0/watch/frontier-summary.txt
+            build/linux-runtime-spinlock-first-fail-v0/watch/watch-result.json
+            build/linux-runtime-spinlock-first-fail-v0/watch/qemu.console.log
+            build/linux-runtime-spinlock-first-fail-v0/watch/qemu.interrupts.txt
+          if-no-files-found: warn
+          retention-days: 7

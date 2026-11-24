@@ -1,0 +1,30 @@
+name: Linux Shmem Fixture Export V0
+
+on:
+  push:
+    branches: ["agent/linux-undef-diagnose-v0"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Restore shmem replay fixture
+        id: fixture
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-shmem-replay-v0/shmem.i
+          key: linux-shmem-replay-v0-6.6.143-riscv-defconfig-${{ runner.os }}
+          fail-on-cache-miss: true
+      - name: Export fixture
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-shmem-replay-fixture-v0
+          path: build/linux-shmem-replay-v0/shmem.i
+          if-no-files-found: error
+          retention-days: 7

@@ -1,0 +1,177 @@
+name: Linux Fast Relink Shadow V1
+
+on:
+  push:
+    branches: ["agent/linux-expanded-kbuild-v0"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linux-fast-relink-shadow-v1-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  shadow:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[linux-fast-relink-shadow-v1]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Restore certified linked Linux fixture
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-expanded-kbuild-v0/out
+          key: linux-expanded-mixed-v1-6.6.143-Linux-d30569a4c675f6ac72d9f63c28f0b8745317f7a15c0799d10768f916d74b3a88
+          fail-on-cache-miss: true
+
+      - name: Restore pinned Linux source tree
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-expanded-kbuild-v0/linux-6.6.143
+          key: linux-source-6.6.143-dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932-v1
+          fail-on-cache-miss: true
+
+      - name: Install relink/runtime prerequisites
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get -o Acquire::Retries=3 update >/dev/null
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
+            qemu-system-misc opensbi python3 file >/dev/null
+
+      - name: Snapshot and classify certified reference
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0"
+          out="$work/out"
+          ev="$GITHUB_WORKSPACE/build/linux-fast-relink-shadow-v1/reference"
+          mkdir -p "$ev"
+          test -s "$work/linux-6.6.143/Makefile"
+          test -s "$out/vmlinux"
+          test -s "$out/arch/riscv/boot/Image"
+          cp -f "$out/vmlinux" "$ev/vmlinux"
+          cp -f "$out/arch/riscv/boot/Image" "$ev/Image"
+          sha256sum "$ev/vmlinux" "$ev/Image" >"$ev/sha256.txt"
+          riscv64-linux-gnu-nm -n "$ev/vmlinux" >"$ev/nm.txt"
+
+          set +e
+          timeout --signal=TERM 8s qemu-system-riscv64 \
+            -M virt -cpu max -m 512M -smp 1 -nographic -no-reboot \
+            -bios default -kernel "$ev/Image" \
+            -append 'console=ttyS0 earlycon=sbi loglevel=8 panic=-1' \
+            -d int,in_asm -D "$ev/qemu.trace.log" \
+            >"$ev/qemu.console.log" 2>&1
+          qemu_rc=$?
+          set -e
+          grep -a 'riscv_cpu_do_interrupt' "$ev/qemu.trace.log" >"$ev/qemu.interrupts.txt" || true
+          set +e
+          python3 tools/ci/linux-runtime-frontier-v1.py \
+            --config tools/ci/linux-runtime-frontier-v1.json \
+            --interrupts "$ev/qemu.interrupts.txt" \
+            --nm "$ev/nm.txt" \
+            --trace "$ev/qemu.trace.log" \
+            --console "$ev/qemu.console.log" \
+            --qemu-rc "$qemu_rc" \
+            --json-out "$ev/frontier-result.json" \
+            --text-out "$ev/frontier-summary.txt"
+          rc=$?
+          set -e
+          echo "$rc" >"$ev/classifier.rc"
+          test "$(python3 -c 'import json; print(json.load(open("build/linux-fast-relink-shadow-v1/reference/frontier-result.json"))["verdict"])')" = SAME_FAULT
+
+      - name: Run terminal-stage fast relink shadow
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0"
+          ev="$GITHUB_WORKSPACE/build/linux-fast-relink-shadow-v1/fast"
+          mkdir -p "$ev"
+          start=$(date +%s%N)
+          bash tools/ci/linux-fast-relink-shadow-v1.sh \
+            "$work/linux-6.6.143" "$work/out" "$ev"
+          end=$(date +%s%N)
+          echo "TIMING fast_relink_ms=$(((end-start)/1000000))" | tee "$ev/timing.txt"
+          cp -f "$work/out/vmlinux" "$ev/vmlinux"
+          cp -f "$work/out/arch/riscv/boot/Image" "$ev/Image"
+
+      - name: Classify fast-relinked runtime
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ev="$GITHUB_WORKSPACE/build/linux-fast-relink-shadow-v1/fast"
+          riscv64-linux-gnu-nm -n "$ev/vmlinux" >"$ev/nm-runtime.txt"
+          set +e
+          timeout --signal=TERM 8s qemu-system-riscv64 \
+            -M virt -cpu max -m 512M -smp 1 -nographic -no-reboot \
+            -bios default -kernel "$ev/Image" \
+            -append 'console=ttyS0 earlycon=sbi loglevel=8 panic=-1' \
+            -d int,in_asm -D "$ev/qemu.trace.log" \
+            >"$ev/qemu.console.log" 2>&1
+          qemu_rc=$?
+          set -e
+          grep -a 'riscv_cpu_do_interrupt' "$ev/qemu.trace.log" >"$ev/qemu.interrupts.txt" || true
+          set +e
+          python3 tools/ci/linux-runtime-frontier-v1.py \
+            --config tools/ci/linux-runtime-frontier-v1.json \
+            --interrupts "$ev/qemu.interrupts.txt" \
+            --nm "$ev/nm-runtime.txt" \
+            --trace "$ev/qemu.trace.log" \
+            --console "$ev/qemu.console.log" \
+            --qemu-rc "$qemu_rc" \
+            --json-out "$ev/frontier-result.json" \
+            --text-out "$ev/frontier-summary.txt"
+          rc=$?
+          set -e
+          echo "$rc" >"$ev/classifier.rc"
+
+      - name: Prove shadow equivalence
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          root="$GITHUB_WORKSPACE/build/linux-fast-relink-shadow-v1"
+          ref="$root/reference"
+          fast="$root/fast"
+
+          cmp -s "$ref/vmlinux" "$fast/vmlinux" || { echo 'FAST_RELINK_ORACLE=vmlinux_binary_mismatch'; exit 1; }
+          cmp -s "$ref/Image" "$fast/Image" || { echo 'FAST_RELINK_ORACLE=image_binary_mismatch'; exit 1; }
+          cmp -s "$ref/nm.txt" "$fast/nm-runtime.txt" || { echo 'FAST_RELINK_ORACLE=nm_mismatch'; exit 1; }
+
+          python3 - "$ref/frontier-result.json" "$fast/frontier-result.json" <<'PY'
+          import json, sys
+          ref=json.load(open(sys.argv[1]))
+          fast=json.load(open(sys.argv[2]))
+          keys=("verdict","fault","highest_progress","progress_reached","pass_markers")
+          diff={k:(ref.get(k),fast.get(k)) for k in keys if ref.get(k)!=fast.get(k)}
+          if diff:
+              raise SystemExit(f"FAST_RELINK_ORACLE=runtime_mismatch diff={diff}")
+          if ref.get("verdict") != "SAME_FAULT":
+              raise SystemExit(f"FAST_RELINK_ORACLE=unexpected_reference verdict={ref.get('verdict')}")
+          print("FAST_RELINK_ORACLE=PASS binary=exact runtime=exact verdict=SAME_FAULT")
+          PY
+
+          {
+            echo '## Linux Fast Relink Shadow V1'
+            echo
+            echo '```text'
+            echo 'FAST_RELINK_ORACLE=PASS binary=exact runtime=exact verdict=SAME_FAULT'
+            cat "$fast/timing.txt"
+            cat "$fast/frontier-summary.txt"
+            echo '```'
+          } >>"$GITHUB_STEP_SUMMARY"
+
+      - name: Preserve shadow evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-fast-relink-shadow-v1-${{ github.sha }}
+          path: build/linux-fast-relink-shadow-v1/
+          if-no-files-found: warn
+          retention-days: 7

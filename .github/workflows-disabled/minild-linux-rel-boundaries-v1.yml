@@ -1,0 +1,125 @@
+name: MiniLD Linux Relocatable Boundaries V1
+
+on:
+  push:
+    branches:
+      - "agent/linux-expanded-kbuild-v0"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: minild-linux-rel-boundaries-v1-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux-rel-boundaries:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[minild-linux-rel-boundaries]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Install Linux build prerequisites
+        run: |
+          timeout 240s sudo apt-get -o Acquire::Retries=3 update
+          timeout 240s sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
+            bc bison flex libssl-dev libelf-dev make curl xz-utils file
+
+      - name: Build current MiniLD once
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/minild-linux-rel-v1-toolchain all
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/minild-linux-rel-v1-toolchain check-minild-a0
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/minild-linux-rel-v1-toolchain check-minild-a1
+          test -x build/minild-linux-rel-v1-toolchain/bin/minic-ld
+
+      - name: Prepare Linux 6.6.143 once
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/minild-linux-rel-v1"
+          archive="$work/linux-6.6.143.tar.xz"
+          src="$work/linux-6.6.143"
+          out="$work/out"
+          mkdir -p "$work"
+          curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors \
+            https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.6.143.tar.xz \
+            -o "$archive"
+          printf '%s  %s\n' \
+            dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932 \
+            "$archive" | sha256sum -c -
+          tar -xJf "$archive" -C "$work"
+          make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- defconfig
+
+      - name: Install two-boundary MiniLD wrapper
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/minild-linux-rel-v1"
+          wrapper="$work/riscv64-linux-gnu-ld-minild-rel-boundaries"
+          cat >"$wrapper" <<'SH'
+          #!/usr/bin/env bash
+          set -Eeuo pipefail
+          : "${MINILD:?MINILD is not set}"
+          : "${MINILD_TRACE:?MINILD_TRACE is not set}"
+
+          args=("$@")
+          output=
+          for ((i=0; i<${#args[@]}; ++i)); do
+            if [[ "${args[i]}" == "-o" && $((i+1)) -lt ${#args[@]} ]]; then
+              output="${args[i+1]}"
+              break
+            fi
+          done
+
+          case "$output" in
+            */purgatory.ro|*/vmlinux.o)
+              printf '%s\n' "$output" >>"$MINILD_TRACE"
+              exec "$MINILD" "${args[@]}"
+              ;;
+            *)
+              exec riscv64-linux-gnu-ld "${args[@]}"
+              ;;
+          esac
+          SH
+          chmod +x "$wrapper"
+
+      - name: Build one Linux Image through both MiniLD boundaries
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/minild-linux-rel-v1"
+          src="$work/linux-6.6.143"
+          out="$work/out"
+          wrapper="$work/riscv64-linux-gnu-ld-minild-rel-boundaries"
+          trace="$work/minild-boundaries.log"
+          : >"$trace"
+
+          MINILD="$GITHUB_WORKSPACE/build/minild-linux-rel-v1-toolchain/bin/minic-ld" \
+          MINILD_TRACE="$trace" \
+          make -C "$src" O="$out" -j2 ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
+            LD="$wrapper" Image
+
+          test -s "$out/arch/riscv/boot/Image"
+          grep -q '/purgatory.ro$' "$trace"
+          grep -q '/vmlinux.o$' "$trace"
+          test "$(wc -l <"$trace")" -eq 2
+          file "$out/arch/riscv/boot/Image"
+          printf 'MINILD_LINUX_REL_BOUNDARIES_V1=PASS\n'
+
+      - name: Preserve Linux boundary evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: minild-linux-rel-boundaries-v1
+          path: |
+            build/minild-linux-rel-v1/minild-boundaries.log
+            build/minild-linux-rel-v1/out/arch/riscv/boot/Image
+          if-no-files-found: ignore
+          retention-days: 3

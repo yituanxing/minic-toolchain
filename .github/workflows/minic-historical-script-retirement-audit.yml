@@ -5,6 +5,7 @@ on:
       - cleanup/minic-repository-hygiene-20261124
     paths:
       - '.github/workflows-disabled/**'
+      - 'tools/ci/**'
       - '.github/workflows/minic-historical-script-retirement-audit.yml'
 permissions:
   contents: read
@@ -17,34 +18,30 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
-      - name: Check exact retirement scope and all retained text references
+      - name: Check retirement scope and references across all retained files
         run: |
           python3 - <<'PY'
           import pathlib
           import re
           import subprocess
+          from collections import Counter
 
-          base = "cb1d0cd4e283100b42120708a2b472bb6860b4b4"
+          base = "2b2cbd82b92460d5cde928e1e71e8662d976dbef"
           audit = ".github/workflows/minic-historical-script-retirement-audit.yml"
-          prefix = ".github/workflows-disabled/"
           def git(*args):
               return subprocess.check_output(["git", *args]).decode()
-
-          expected = {p for p in git("ls-tree", "-r", "--name-only", base).splitlines()
-                      if p.startswith(prefix)}
           deleted = set(git("diff", "--name-only", "--diff-filter=D", base, "HEAD").splitlines())
           changed = set(git("diff", "--name-only", base, "HEAD").splitlines())
-          if len(expected) != 322 or deleted != expected or changed != expected | {audit}:
-              raise SystemExit("RETIREMENT_SCOPE=FAIL")
-          retained = git("ls-files", "-z").split("\0")
-          live_names = {pathlib.PurePosixPath(p).name for p in retained
-                        if p.startswith(".github/workflows/")}
-          old_names = {pathlib.PurePosixPath(p).name for p in expected if p.endswith(".yml")} - live_names
-          names = re.compile(r"(?<![\w.-])(?:" + "|".join(re.escape(n) for n in sorted(old_names, key=len, reverse=True)) + r")(?![\w.-])")
-          old_dir = re.compile(r"workflows-disabled|retired-20260826")
-          active, docs = [], []
+          counts = Counter("archive" if p.startswith(".github/workflows-disabled/") and p.endswith(".yml")
+                           else "rewrite" if p.startswith("tools/ci/apply-") and p.endswith(".py")
+                           else "unexpected" for p in deleted)
+          if counts != {"archive": 158, "rewrite": 4} or changed != deleted | {audit}:
+              raise SystemExit(f"RETIREMENT_SCOPE=FAIL {counts}")
+          names = {pathlib.PurePosixPath(p).name for p in deleted}
+          rx = re.compile("|".join(re.escape(n) for n in sorted(names, key=len, reverse=True)))
+          refs = []
           scanned = 0
-          for p in retained:
+          for p in git("ls-files", "-z").split("\0"):
               if not p or p == audit:
                   continue
               data = pathlib.Path(p).read_bytes()
@@ -52,19 +49,13 @@ jobs:
                   continue
               scanned += 1
               for n, line in enumerate(data.decode("utf-8", errors="replace").splitlines(), 1):
-                  if not old_dir.search(line) and not names.search(line):
-                      continue
-                  record = f"{p}:{n}: {line.strip()[:250]}"
-                  if p.startswith("docs/") or pathlib.Path(p).suffix.lower() in (".md", ".rst"):
-                      docs.append(record)
-                  else:
-                      active.append(record)
+                  hits = set(rx.findall(line))
+                  if hits:
+                      refs.append(f"{p}:{n}: {', '.join(sorted(hits))}")
           print(f"RETIREMENT_SCOPE=PASS deleted={len(deleted)} retained_text_scanned={scanned}")
-          for label, items in (("ACTIVE", active), ("DOC", docs)):
-              print(f"{label}_REFERENCES={len(items)}")
-              for item in items:
-                  print(item)
-          if active or docs:
-              raise SystemExit("RETIREMENT_REFERENCES=REVIEW retained references require classification or migration")
-          print("RETIREMENT_REFERENCES=PASS")
+          for ref in refs:
+              print(ref)
+          if refs:
+              raise SystemExit("RETIREMENT_REFERENCES=FAIL")
+          print("RETIREMENT_REFERENCES=PASS no retained literal basename references")
           PY

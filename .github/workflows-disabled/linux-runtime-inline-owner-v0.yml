@@ -1,0 +1,91 @@
+name: Linux Runtime Inline Owner V0
+
+on:
+  push:
+    branches: ["agent/linux-expanded-kbuild-v0"]
+    paths:
+      - ".github/workflows/linux-runtime-inline-owner-v0.yml"
+      - "tools/ci/runtime-inline-owner-trigger.txt"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linux-runtime-inline-owner-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  locate-owner:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Restore certified full linked fixture
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-expanded-kbuild-v0/out
+          key: linux-expanded-mixed-v1-6.6.143-Linux-d30569a4c675f6ac72d9f63c28f0b8745317f7a15c0799d10768f916d74b3a88
+          fail-on-cache-miss: true
+
+      - name: Install RISC-V binutils
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get -o Acquire::Retries=2 install -y --no-install-recommends binutils-riscv64-linux-gnu
+
+      - name: Locate failing inline specialization owner
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          out="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0/out"
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-inline-owner-v0"
+          sym='__minic_inline_spec_720_39'
+          mkdir -p "$ev"
+          : > "$ev/candidates.txt"
+          : > "$ev/nm-matches.txt"
+
+          while IFS= read -r -d '' f; do
+            if grep -a -q -F "$sym" "$f" 2>/dev/null; then
+              rel="${f#$out/}"
+              echo "$rel" | tee -a "$ev/candidates.txt"
+              if riscv64-linux-gnu-nm -an "$f" 2>/dev/null | grep -F "$sym" > "$ev/.nm.tmp"; then
+                echo "OWNER=$rel" | tee -a "$ev/nm-matches.txt"
+                cat "$ev/.nm.tmp" | tee -a "$ev/nm-matches.txt"
+                riscv64-linux-gnu-objdump -dr "$f" > "$ev/${rel//\//__}.objdump.txt" || true
+                riscv64-linux-gnu-nm -an "$f" > "$ev/${rel//\//__}.nm.txt" || true
+              fi
+            fi
+          done < <(find "$out" -type f -name '*.o' -print0)
+
+          rm -f "$ev/.nm.tmp"
+          echo "CANDIDATE_COUNT=$(wc -l < "$ev/candidates.txt")"
+          echo "OWNER_COUNT=$(grep -c '^OWNER=' "$ev/nm-matches.txt" || true)"
+          cat "$ev/nm-matches.txt"
+          test -s "$ev/nm-matches.txt"
+
+          python3 - <<'PY'
+          from pathlib import Path
+          ev=Path('build/linux-runtime-inline-owner-v0')
+          sym='__minic_inline_spec_720_39'
+          for p in ev.glob('*.objdump.txt'):
+              lines=p.read_text(errors='replace').splitlines()
+              idx=next((i for i,l in enumerate(lines) if f'<{sym}>:' in l),None)
+              if idx is None:
+                  continue
+              print(f'OBJDUMP_FILE={p.name}')
+              for l in lines[max(0,idx-4):idx+20]:
+                  print(l)
+          PY
+
+      - name: Preserve owner evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-runtime-inline-owner-v0-${{ github.sha }}
+          path: build/linux-runtime-inline-owner-v0
+          if-no-files-found: warn
+          retention-days: 7

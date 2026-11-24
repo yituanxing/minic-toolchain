@@ -1,0 +1,154 @@
+name: Linux Early Runtime Link Shadow V2
+
+on:
+  push:
+    branches: ["agent/linux-expanded-kbuild-v0"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linux-early-runtime-link-shadow-v2-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  early-v2-shadow:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[linux-early-link-v2-shadow]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Restore certified linked Linux fixture
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-expanded-kbuild-v0/out
+          key: linux-expanded-mixed-v1-6.6.143-Linux-d30569a4c675f6ac72d9f63c28f0b8745317f7a15c0799d10768f916d74b3a88
+          fail-on-cache-miss: true
+
+      - name: Restore pinned Linux source tree
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-expanded-kbuild-v0/linux-6.6.143
+          key: linux-source-6.6.143-dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932-v1
+          fail-on-cache-miss: true
+
+      - name: Prove classifier invariants
+        run: python3 tools/ci/linux-runtime-frontier-v1.py --self-test
+
+      - name: Install minimal runtime prerequisites
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ev="$GITHUB_WORKSPACE/build/linux-early-runtime-link-shadow-v2"
+          mkdir -p "$ev"
+          start=$(date +%s%N)
+          mode=no-update
+          if ! sudo apt-get -o Acquire::Retries=2 install -y --no-install-recommends \
+              binutils-riscv64-linux-gnu qemu-system-misc opensbi python3 \
+              >"$ev/apt.stdout.txt" 2>"$ev/apt.stderr.txt"; then
+            mode=fallback-update
+            sudo apt-get -o Acquire::Retries=3 update >>"$ev/apt.stdout.txt" 2>>"$ev/apt.stderr.txt"
+            sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+              binutils-riscv64-linux-gnu qemu-system-misc opensbi python3 \
+              >>"$ev/apt.stdout.txt" 2>>"$ev/apt.stderr.txt"
+          fi
+          end=$(date +%s%N)
+          echo "TIMING install_ms=$(((end-start)/1000000)) mode=$mode" | tee "$ev/timing.txt"
+
+      - name: Build immutable-archive early Image V2 first
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0"
+          root="$GITHUB_WORKSPACE/build/linux-early-runtime-link-shadow-v2"
+          before=$(sha256sum "$work/out/lib/lib.a" | awk '{print $1}')
+          bash tools/ci/linux-early-runtime-link-v2.sh \
+            "$work/linux-6.6.143" "$work/out" "$root/v2"
+          after=$(sha256sum "$work/out/lib/lib.a" | awk '{print $1}')
+          test "$before" = "$after"
+          echo "LIB_ARCHIVE_IMMUTABLE=PASS sha256=$after" | tee -a "$root/timing.txt"
+          cat "$root/v2/timing.txt" >>"$root/timing.txt"
+
+      - name: Build certified V1 reference after V2
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0"
+          root="$GITHUB_WORKSPACE/build/linux-early-runtime-link-shadow-v2"
+          bash tools/ci/linux-early-runtime-link-v1.sh \
+            "$work/linux-6.6.143" "$work/out" "$root/v1"
+          cat "$root/v1/timing.txt" >>"$root/timing.txt"
+
+      - name: Prove exact link equivalence
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          root="$GITHUB_WORKSPACE/build/linux-early-runtime-link-shadow-v2"
+          cmp -s "$root/v1/vmlinux.early" "$root/v2/vmlinux.early"
+          cmp -s "$root/v1/Image.early" "$root/v2/Image.early"
+          diff -u "$root/v1/nm.txt" "$root/v2/nm.txt" >"$root/nm.diff" || {
+            cat "$root/nm.diff"
+            exit 1
+          }
+          echo 'EARLY_LINK_V2_BINARY_EQUIVALENCE=PASS' | tee -a "$root/timing.txt"
+
+      - name: Execute V2 and classify frontier
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          root="$GITHUB_WORKSPACE/build/linux-early-runtime-link-shadow-v2"
+          start=$(date +%s%N)
+          set +e
+          timeout --signal=TERM 8s qemu-system-riscv64 \
+            -M virt -cpu max -m 512M -smp 1 -nographic -no-reboot \
+            -bios default -kernel "$root/v2/Image.early" \
+            -append 'console=ttyS0 earlycon=sbi loglevel=8 panic=-1' \
+            -d int,in_asm -D "$root/qemu.trace.log" \
+            >"$root/qemu.console.log" 2>&1
+          qemu_rc=$?
+          set -e
+          end=$(date +%s%N)
+          echo "TIMING qemu_ms=$(((end-start)/1000000)) rc=$qemu_rc" | tee -a "$root/timing.txt"
+          grep -a 'riscv_cpu_do_interrupt' "$root/qemu.trace.log" >"$root/qemu.interrupts.txt" || true
+          set +e
+          python3 tools/ci/linux-runtime-frontier-v1.py \
+            --config tools/ci/linux-runtime-frontier-v1.json \
+            --interrupts "$root/qemu.interrupts.txt" --nm "$root/v2/nm.txt" \
+            --trace "$root/qemu.trace.log" --console "$root/qemu.console.log" \
+            --qemu-rc "$qemu_rc" --json-out "$root/frontier-result.json" \
+            --text-out "$root/frontier-summary.txt"
+          rc=$?
+          set -e
+          verdict=$(python3 -c 'import json; print(json.load(open("build/linux-early-runtime-link-shadow-v2/frontier-result.json"))["verdict"])')
+          test "$verdict" = SAME_FAULT
+          echo "EARLY_LINK_V2_RUNTIME_ORACLE=PASS verdict=$verdict classifier_rc=$rc" | tee -a "$root/timing.txt"
+          {
+            echo '## Linux Early Runtime Link Shadow V2'
+            echo
+            echo '```text'
+            cat "$root/frontier-summary.txt"
+            cat "$root/timing.txt"
+            echo '```'
+          } >>"$GITHUB_STEP_SUMMARY"
+
+      - name: Preserve compact evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-early-runtime-link-shadow-v2-${{ github.sha }}
+          path: |
+            build/linux-early-runtime-link-shadow-v2/frontier-result.json
+            build/linux-early-runtime-link-shadow-v2/frontier-summary.txt
+            build/linux-early-runtime-link-shadow-v2/timing.txt
+            build/linux-early-runtime-link-shadow-v2/apt.stderr.txt
+            build/linux-early-runtime-link-shadow-v2/nm.diff
+            build/linux-early-runtime-link-shadow-v2/v1/timing.txt
+            build/linux-early-runtime-link-shadow-v2/v2/timing.txt
+            build/linux-early-runtime-link-shadow-v2/v1/sha256.txt
+            build/linux-early-runtime-link-shadow-v2/v2/sha256.txt
+          if-no-files-found: warn
+          retention-days: 7
