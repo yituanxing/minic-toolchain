@@ -1,0 +1,106 @@
+name: MiniC whole-tree cleanup census (one-shot)
+on:
+  push:
+    branches: [cleanup/minic-convergence]
+    paths: [.github/workflows/minic-cleanup-census-oneshot.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  census:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 44aa270d1763aa7937a617d7883c60d258755c91
+          persist-credentials: false
+      - name: Cross-reference entire tracked source, test, tooling and CI tree
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import collections as C, hashlib, itertools, json, pathlib, re, subprocess
+          files = subprocess.check_output(['git','ls-files','-z']).decode().strip('\0').split('\0')
+          data = {}
+          for p in files:
+              b = pathlib.Path(p).read_bytes()
+              if b'\0' not in b:
+                  data[p] = b.decode('utf-8', errors='replace')
+          src = {p:s for p,s in data.items() if p.startswith(('src/','include/','tools/minic/','tools/minic-cc/')) and p.endswith(('.c','.h','.def','.inc'))}
+          live = {p:s for p,s in data.items() if not p.startswith(('docs/','.github/workflows-disabled/'))}
+          hist = {p:s for p,s in data.items() if p not in live}
+          print('BASE', subprocess.check_output(['git','rev-parse','HEAD']).decode().strip(), 'tracked',len(files),'text',len(data),'production',len(src),'bytes',sum(len(s.encode()) for s in src.values()))
+          lex = re.compile(r'/\*[\s\S]*?\*/|//[^\n]*|"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'|[A-Za-z_]\w*|\d+[A-Za-z0-9_.]*|[^\s]')
+          ident = re.compile(r'\b[A-Za-z_]\w*\b')
+          refs=C.defaultdict(set)
+          for p,s in live.items():
+              for w in set(ident.findall(s)): refs[w].add(p)
+          dup=C.defaultdict(list); funcs=[]; stats=C.Counter()
+          candidate=[]
+          for p,s in src.items():
+              stats[p.split('/')[1] if p.startswith('src/') else p.split('/')[0]]+=1
+              toks=[(m.group(),m.start()) for m in lex.finditer(s) if not m.group().startswith(('/*','//'))]
+              depth=0; header=[]; body=[]; current=None
+              for t,pos in toks:
+                  if depth==0:
+                      if t=='{':
+                          current=None
+                          if header and header[-1][0]==')':
+                              k=len(header)-1; n=1; k-=1
+                              while k>=0 and n:
+                                  n+=(header[k][0]==')')-(header[k][0]=='('); k-=1
+                              if k>=0 and re.fullmatch(r'[A-Za-z_]\w*',header[k][0]):
+                                  name=header[k][0]
+                                  if name not in ('if','for','while','switch','sizeof','_Static_assert'):
+                                      current=(p,name,s.count('\n',0,header[k][1])+1, any(x[0]=='static' for x in header))
+                          depth=1; body=['{']; header=[]
+                      elif t in (';','}'): header=[]
+                      else: header.append((t,pos))
+                  else:
+                      body.append(t)
+                      if t=='{': depth+=1
+                      elif t=='}': depth-=1
+                      if depth==0 and current:
+                          p0,n,line,static=current
+                          funcs.append((p0,n,line,static,len(body)))
+                          if len(body)>=24:
+                              key=hashlib.sha256(' '.join(body).encode()).hexdigest()
+                              dup[key].append((p0,n,line,len(body)))
+                          if static and len(re.findall(r'\b'+re.escape(n)+r'\b',s))==1:
+                              candidate.append((p0,n,line, sorted(refs[n]-{p0})))
+          print('SOURCE_BY_AREA',json.dumps(stats,sort_keys=True))
+          print('PARSED_FUNCTION_CANDIDATES',len(funcs))
+          duplicates=sorted([v for v in dup.values() if len(v)>1],key=lambda v:(len(v)-1)*v[0][3],reverse=True)
+          print('DUPLICATE_GROUPS',len(duplicates))
+          for v in duplicates[:80]: print('DUP',json.dumps(v,ensure_ascii=False))
+          print('STATIC_SINGLE_TEXT_REFERENCE',len(candidate))
+          for v in candidate[:100]: print('STATIC',json.dumps(v,ensure_ascii=False))
+          extern=[]
+          for p,n,l,static,t in funcs:
+              if not static and n.startswith('minic_') and len(refs[n])<=2:
+                  extern.append((p,n,l,sorted(refs[n]),t))
+          print('EXTERNAL_LOW_FILE_REFERENCE',len(extern))
+          for v in sorted(extern,key=lambda x:x[4],reverse=True)[:70]: print('EXTERN',json.dumps(v,ensure_ascii=False))
+          script_re=re.compile(r'(?<![\w/])(?:src|include)/[A-Za-z0-9_./-]+\.(?:c|h|def|inc)\b')
+          scripts=[]
+          for p,s in live.items():
+              if not p.startswith(('tools/ci/','tools/dev/')) or not p.endswith(('.py','.sh')): continue
+              missing=sorted(set(script_re.findall(s))-set(files))
+              if not missing: continue
+              basename=pathlib.Path(p).name
+              uses=sorted(q for q,v in live.items() if q!=p and basename in v)
+              if not uses: scripts.append((p,missing))
+          print('SCRIPT_MISSING_PATH_NO_LIVE_BASENAME_REF',len(scripts))
+          for v in scripts[:100]: print('SCRIPT',json.dumps(v,ensure_ascii=False))
+          workflows=[p for p in files if p.startswith('.github/workflows/') and p.endswith(('.yml','.yaml'))]
+          disabled=[p for p in files if p.startswith('.github/workflows-disabled/')]
+          print('WORKFLOWS',len(workflows),'DISABLED',len(disabled))
+          for p in workflows: print('CI',p,'jobs',len(re.findall(r'^  [\w-]+:\s*$',data[p],re.M)),'checkout',data[p].count('actions/checkout@'))
+          out={'base':'44aa270d1763aa7937a617d7883c60d258755c91','production_files':len(src),'functions':len(funcs),'duplicates':duplicates,'static_candidates':candidate,'external_candidates':extern,'script_candidates':scripts}
+          pathlib.Path('minic-cleanup-census.json').write_text(json.dumps(out,ensure_ascii=False,indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: minic-cleanup-census-44aa270d
+          path: minic-cleanup-census.json
+          retention-days: 7
