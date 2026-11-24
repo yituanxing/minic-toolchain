@@ -1,4 +1,5 @@
 #include "frontend/ast_traversal.h"
+#include "frontend/ast_storage.h"
 
 typedef struct MinicExpressionIdRemapContext {
     const MinicExpressionId *mapping;
@@ -151,12 +152,13 @@ bool minic_c0_expression_remap_child_ids(MinicExpression *expression,
 static bool external_expression_ref_storage_is_valid(const MinicC0Program *program) {
     size_t index;
 
-    if (program == NULL || program->statement_count > program->statement_capacity ||
-        program->inline_asm_count > program->inline_asm_capacity ||
-        program->cleanup_context_count > program->cleanup_context_capacity ||
-        (program->statement_count != 0U && program->statements == NULL) ||
-        (program->inline_asm_count != 0U && program->inline_asms == NULL) ||
-        (program->cleanup_context_count != 0U && program->cleanup_contexts == NULL)) {
+    if (program == NULL ||
+        !minic_ast_storage_is_valid(program->statements, program->statement_count,
+                                   program->statement_capacity) ||
+        !minic_ast_storage_is_valid(program->inline_asms, program->inline_asm_count,
+                                   program->inline_asm_capacity) ||
+        !minic_ast_storage_is_valid(program->cleanup_contexts, program->cleanup_context_count,
+                                   program->cleanup_context_capacity)) {
         return false;
     }
 
@@ -164,10 +166,10 @@ static bool external_expression_ref_storage_is_valid(const MinicC0Program *progr
         const MinicInlineAsm *inline_asm;
 
         inline_asm = &program->inline_asms[index];
-        if (inline_asm->output_count > inline_asm->output_capacity ||
-            inline_asm->input_count > inline_asm->input_capacity ||
-            (inline_asm->output_count != 0U && inline_asm->outputs == NULL) ||
-            (inline_asm->input_count != 0U && inline_asm->inputs == NULL)) {
+        if (!minic_ast_storage_is_valid(inline_asm->outputs, inline_asm->output_count,
+                                       inline_asm->output_capacity) ||
+            !minic_ast_storage_is_valid(inline_asm->inputs, inline_asm->input_count,
+                                       inline_asm->input_capacity)) {
             return false;
         }
     }

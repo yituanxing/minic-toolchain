@@ -58,49 +58,20 @@ static bool remap_non_cast_expression(MinicExpression *expression,
     return minic_c0_expression_remap_child_ids(expression, remap_child_expression_id, &context);
 }
 
-static bool append_normalized_bitcast(MinicC0Program *rewritten,
-                                      const MinicExpression *cast_expression,
-                                      MinicExpressionId mapped_operand,
-                                      MinicExpressionId *normalized_id) {
-    MinicExpression normalized_expression;
-
-    (void)memset(&normalized_expression, 0, sizeof(normalized_expression));
-    normalized_expression.kind = MINIC_EXPRESSION_BITCAST;
-    normalized_expression.span = cast_expression->span;
-    normalized_expression.type = cast_expression->type;
-    normalized_expression.value_category = MINIC_VALUE_RVALUE;
-    normalized_expression.value.unary.operand = mapped_operand;
-    return minic_c0_program_add_expression(rewritten, &normalized_expression, normalized_id);
-}
-
-static bool append_normalized_discard(MinicC0Program *rewritten,
-                                      const MinicExpression *cast_expression,
-                                      MinicExpressionId mapped_operand,
-                                      MinicExpressionId *normalized_id) {
-    MinicExpression discard;
-
-    (void)memset(&discard, 0, sizeof(discard));
-    discard.kind = MINIC_EXPRESSION_DISCARD;
-    discard.span = cast_expression->span;
-    discard.type = minic_type_void();
-    discard.value_category = MINIC_VALUE_RVALUE;
-    discard.value.unary.operand = mapped_operand;
-    return minic_c0_program_add_expression(rewritten, &discard, normalized_id);
-}
-
-static bool append_normalized_conversion(MinicC0Program *rewritten,
-                                         const MinicExpression *cast_expression,
-                                         MinicExpressionId mapped_operand,
-                                         MinicExpressionId *normalized_id) {
-    MinicExpression conversion;
-
-    (void)memset(&conversion, 0, sizeof(conversion));
-    conversion.kind = MINIC_EXPRESSION_CONVERSION;
-    conversion.span = cast_expression->span;
-    conversion.type = cast_expression->type;
-    conversion.value_category = MINIC_VALUE_RVALUE;
-    conversion.value.unary.operand = mapped_operand;
-    return minic_c0_program_add_expression(rewritten, &conversion, normalized_id);
+static bool append_normalized_unary(MinicC0Program *rewritten,
+                                    const MinicExpression *cast_expression,
+                                    MinicExpressionKind kind,
+                                    MinicExpressionId mapped_operand,
+                                    MinicExpressionId *normalized_id) {
+    MinicExpression expression;
+    (void)memset(&expression, 0, sizeof(expression));
+    expression.kind = kind;
+    expression.span = cast_expression->span;
+    expression.type = kind == MINIC_EXPRESSION_DISCARD
+        ? minic_type_void() : cast_expression->type;
+    expression.value_category = MINIC_VALUE_RVALUE;
+    expression.value.unary.operand = mapped_operand;
+    return minic_c0_program_add_expression(rewritten, &expression, normalized_id);
 }
 
 static bool append_normalized_cast(MinicC0Program *rewritten,
@@ -131,21 +102,15 @@ static bool append_normalized_cast(MinicC0Program *rewritten,
             return true;
         }
         if (operand_expression->value_category == MINIC_VALUE_LVALUE) {
-            MinicExpression read;
-
-            (void)memset(&read, 0, sizeof(read));
-            read.kind = MINIC_EXPRESSION_LVALUE_READ;
-            read.span = cast_expression->span;
-            read.type = cast_expression->type;
-            read.value_category = MINIC_VALUE_RVALUE;
-            read.value.unary.operand = mapped_operand;
-            return minic_c0_program_add_expression(rewritten, &read, normalized_id);
+            return append_normalized_unary(rewritten, cast_expression,
+                MINIC_EXPRESSION_LVALUE_READ, mapped_operand, normalized_id);
         }
         return false;
     }
 
     if (minic_type_is_void(cast_expression->type)) {
-        return append_normalized_discard(rewritten, cast_expression, mapped_operand, normalized_id);
+        return append_normalized_unary(rewritten, cast_expression,
+            MINIC_EXPRESSION_DISCARD, mapped_operand, normalized_id);
     }
 
     if ((minic_type_is_integer(cast_expression->type) ||
@@ -157,15 +122,16 @@ static bool append_normalized_cast(MinicC0Program *rewritten,
          minic_type_is_double(operand_expression->type) ||
          minic_type_is_long_double(operand_expression->type)) &&
         minic_type_cast_compatible(cast_expression->type, operand_expression->type)) {
-        return append_normalized_conversion(
-            rewritten, cast_expression, mapped_operand, normalized_id);
+        return append_normalized_unary(rewritten, cast_expression,
+            MINIC_EXPRESSION_CONVERSION, mapped_operand, normalized_id);
     }
 
     if (minic_type_is_pointer(cast_expression->type) &&
         operand_expression->kind == MINIC_EXPRESSION_INTEGER &&
         minic_type_is_integer(operand_expression->type) &&
         operand_expression->value.integer_value == 0) {
-        return append_normalized_bitcast(rewritten, cast_expression, mapped_operand, normalized_id);
+        return append_normalized_unary(rewritten, cast_expression,
+            MINIC_EXPRESSION_BITCAST, mapped_operand, normalized_id);
     }
 
     if ((minic_type_is_pointer(cast_expression->type) &&
@@ -173,13 +139,14 @@ static bool append_normalized_cast(MinicC0Program *rewritten,
           minic_type_is_integer(operand_expression->type))) ||
         (minic_type_is_integer(cast_expression->type) &&
          minic_type_is_pointer(operand_expression->type))) {
-        return append_normalized_bitcast(rewritten, cast_expression, mapped_operand, normalized_id);
+        return append_normalized_unary(rewritten, cast_expression,
+            MINIC_EXPRESSION_BITCAST, mapped_operand, normalized_id);
     }
 
     if (minic_type_is_integer(cast_expression->type) &&
         minic_type_is_integer(operand_expression->type)) {
-        return append_normalized_conversion(
-            rewritten, cast_expression, mapped_operand, normalized_id);
+        return append_normalized_unary(rewritten, cast_expression,
+            MINIC_EXPRESSION_CONVERSION, mapped_operand, normalized_id);
     }
 
     return false;

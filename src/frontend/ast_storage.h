@@ -45,4 +45,25 @@ static inline char *minic_ast_copy_name(const char *name, size_t name_length) {
     return copy;
 }
 
+/* Checked backing-store shape; empty arenas may have no allocation. */
+static inline bool minic_ast_storage_is_valid(const void *data, size_t count,
+                                               size_t capacity) {
+    return count <= capacity && (count == 0U || data != NULL);
+}
+
+/* Immutable nonempty spellings agree across object and function redeclarations. */
+static inline bool minic_ast_set_owned_name(char **storage, size_t *length,
+                                            const char *name, size_t name_length) {
+    char *copy;
+    if (name == NULL || name_length == 0U || name_length == SIZE_MAX)
+        return false;
+    if (*storage != NULL)
+        return *length == name_length && memcmp(*storage, name, name_length) == 0;
+    copy = minic_ast_copy_name(name, name_length);
+    if (copy == NULL) return false;
+    *storage = copy;
+    *length = name_length;
+    return true;
+}
+
 #endif

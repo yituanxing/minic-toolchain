@@ -1,4 +1,5 @@
 #include "frontend/function_body.h"
+#include "frontend/ast_storage.h"
 
 #include "frontend/ast_traversal.h"
 
@@ -25,10 +26,6 @@ typedef struct MinicFunctionBodyValidation {
     size_t expression_generation;
     MinicFunctionId function_id;
 } MinicFunctionBodyValidation;
-
-static bool storage_shape_is_valid(const void *data, size_t count, size_t capacity) {
-    return count <= capacity && (count == 0U || data != NULL);
-}
 
 bool minic_c0_function_body_view(const MinicC0Program *program,
                                  MinicFunctionId function_id,
@@ -194,18 +191,18 @@ bool minic_c0_program_stable_parameter_locals(
 
 static bool validation_storage_is_valid(const MinicC0Program *program) {
     return program != NULL &&
-           storage_shape_is_valid(
+           minic_ast_storage_is_valid(
                program->expressions, program->expression_count, program->expression_capacity) &&
-           storage_shape_is_valid(program->locals, program->local_count, program->local_capacity) &&
-           storage_shape_is_valid(program->cleanup_contexts,
+           minic_ast_storage_is_valid(program->locals, program->local_count, program->local_capacity) &&
+           minic_ast_storage_is_valid(program->cleanup_contexts,
                                   program->cleanup_context_count,
                                   program->cleanup_context_capacity) &&
-           storage_shape_is_valid(
+           minic_ast_storage_is_valid(
                program->statements, program->statement_count, program->statement_capacity) &&
-           storage_shape_is_valid(
+           minic_ast_storage_is_valid(
                program->inline_asms, program->inline_asm_count, program->inline_asm_capacity) &&
-           storage_shape_is_valid(program->blocks, program->block_count, program->block_capacity) &&
-           storage_shape_is_valid(
+           minic_ast_storage_is_valid(program->blocks, program->block_count, program->block_capacity) &&
+           minic_ast_storage_is_valid(
                program->functions, program->function_count, program->function_capacity);
 }
 
@@ -478,11 +475,11 @@ static bool enqueue_inline_asm_expressions(MinicFunctionBodyValidation *validati
         return false;
     }
     inline_asm = &program->inline_asms[statement->inline_asm_id];
-    if (!storage_shape_is_valid(
+    if (!minic_ast_storage_is_valid(
             inline_asm->outputs, inline_asm->output_count, inline_asm->output_capacity) ||
-        !storage_shape_is_valid(
+        !minic_ast_storage_is_valid(
             inline_asm->inputs, inline_asm->input_count, inline_asm->input_capacity) ||
-        !storage_shape_is_valid(
+        !minic_ast_storage_is_valid(
             inline_asm->labels, inline_asm->label_count, inline_asm->label_capacity)) {
         return false;
     }
@@ -545,7 +542,7 @@ static bool process_block(MinicFunctionBodyValidation *validation, MinicBlockId 
         return false;
     }
     block = minic_c0_program_block(validation->program, block_id);
-    if (block == NULL || !storage_shape_is_valid(block->statements,
+    if (block == NULL || !minic_ast_storage_is_valid(block->statements,
                                                  block->statement_count,
                                                  block->statement_capacity)) {
         return false;

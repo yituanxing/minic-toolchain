@@ -1,4 +1,5 @@
 #include "frontend/ast.h"
+#include "frontend/ast_storage.h"
 
 #include <stdint.h>
 #include <stdlib.h>
@@ -125,38 +126,12 @@ bool minic_c0_program_set_function_variadic(MinicC0Program *program,
     return true;
 }
 
-/* Both asm symbol spelling and section spelling are owned, immutable
- * strings. Keep one checked copy/compare path; diagnostics have different
- * replacement semantics and deliberately do not use this helper. */
-static bool set_function_owned_name(char **storage,
-                                    size_t *storage_length,
-                                    const char *name,
-                                    size_t name_length) {
-    char *copy;
-    if (name == NULL || name_length == 0U || name_length == SIZE_MAX) {
-        return false;
-    }
-    if (*storage != NULL) {
-        return *storage_length == name_length &&
-               memcmp(*storage, name, name_length) == 0;
-    }
-    copy = (char *)malloc(name_length + 1U);
-    if (copy == NULL) {
-        return false;
-    }
-    (void)memcpy(copy, name, name_length);
-    copy[name_length] = '\0';
-    *storage = copy;
-    *storage_length = name_length;
-    return true;
-}
-
 bool minic_c0_program_set_function_assembler_name(MinicC0Program *program,
                                                   MinicFunctionId function_id,
                                                   const char *name,
                                                   size_t name_length) {
     return program != NULL && function_id < program->function_count &&
-           set_function_owned_name(&program->functions[function_id].assembler_name,
+           minic_ast_set_owned_name(&program->functions[function_id].assembler_name,
                                    &program->functions[function_id].assembler_name_length,
                                    name, name_length);
 }
@@ -192,7 +167,7 @@ bool minic_c0_program_set_function_section(MinicC0Program *program,
                                            const char *name,
                                            size_t name_length) {
     return program != NULL && function_id < program->function_count &&
-           set_function_owned_name(&program->functions[function_id].section_name,
+           minic_ast_set_owned_name(&program->functions[function_id].section_name,
                                    &program->functions[function_id].section_name_length,
                                    name, name_length);
 }
@@ -220,10 +195,8 @@ bool minic_c0_program_set_function_diagnostic(MinicC0Program *program,
         ? &function->error_message_length : &function->warning_message_length;
     if (*owned_message != NULL && *owned_length == message_length &&
         memcmp(*owned_message, message, message_length) == 0) return true;
-    copy = (char *)malloc(message_length + 1U);
+    copy = minic_ast_copy_name(message, message_length);
     if (copy == NULL) return false;
-    (void)memcpy(copy, message, message_length);
-    copy[message_length] = '\0';
     /* GNU later same-kind redeclarations replace the text.  An error and a
      * warning are independent; both can fire on one surviving call. */
     free(*owned_message);

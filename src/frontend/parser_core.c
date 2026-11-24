@@ -139,24 +139,27 @@ bool minic_parser_parse_integer_initializer_bits(MinicParser *parser,
     return true;
 }
 
+/* Record zero-length arrays retain their special storage count and diagnostic. */
+static bool parse_array_bound(MinicParser *parser, bool record, int64_t *value) {
+    if (!minic_parser_parse_typed_integer_constant_expression(parser, value))
+        return false;
+    if (*value < 0 || (!record && *value == 0)) {
+        minic_parser_error(parser, record ? "record array bound must not be negative"
+                                          : "array bound must be greater than zero");
+        return false;
+    }
+    if ((uint64_t)*value > (uint64_t)SIZE_MAX) {
+        minic_parser_error(parser, record ? "record array bound exceeds target object range"
+                                          : "array bound exceeds target object range");
+        return false;
+    }
+    return minic_parser_expect(parser, MINIC_TOKEN_RBRACKET, "expected ']'");
+}
+
 bool minic_parser_parse_fixed_array_bound(MinicParser *parser, size_t *element_count) {
     int64_t value;
-
-    if (element_count == NULL ||
-        !minic_parser_parse_typed_integer_constant_expression(parser, &value)) {
+    if (element_count == NULL || !parse_array_bound(parser, false, &value))
         return false;
-    }
-    if (value <= 0) {
-        minic_parser_error(parser, "array bound must be greater than zero");
-        return false;
-    }
-    if ((uint64_t)value > (uint64_t)SIZE_MAX) {
-        minic_parser_error(parser, "array bound exceeds target object range");
-        return false;
-    }
-    if (!minic_parser_expect(parser, MINIC_TOKEN_RBRACKET, "expected ']'")) {
-        return false;
-    }
     *element_count = (size_t)value;
     return true;
 }
@@ -165,22 +168,9 @@ bool minic_parser_parse_record_array_bound(MinicParser *parser,
                                            size_t *element_count,
                                            bool *is_zero_length) {
     int64_t value;
-
     if (element_count == NULL || is_zero_length == NULL ||
-        !minic_parser_parse_typed_integer_constant_expression(parser, &value)) {
+        !parse_array_bound(parser, true, &value))
         return false;
-    }
-    if (value < 0) {
-        minic_parser_error(parser, "record array bound must not be negative");
-        return false;
-    }
-    if ((uint64_t)value > (uint64_t)SIZE_MAX) {
-        minic_parser_error(parser, "record array bound exceeds target object range");
-        return false;
-    }
-    if (!minic_parser_expect(parser, MINIC_TOKEN_RBRACKET, "expected ']'")) {
-        return false;
-    }
     *is_zero_length = value == 0;
     *element_count = value == 0 ? 1U : (size_t)value;
     return true;

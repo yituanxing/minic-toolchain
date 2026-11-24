@@ -1,4 +1,5 @@
 #include "frontend/ast_verifier.h"
+#include "frontend/ast_storage.h"
 #include "frontend/expression_semantics.h"
 #include "target/source_policy/source_info.h"
 
@@ -6,10 +7,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-
-static bool storage_is_valid(const void *data, size_t count, size_t capacity) {
-    return count <= capacity && (count == 0U || data != NULL);
-}
 
 static bool pointer_qualifiers_are_valid(MinicType type) {
     unsigned int capacity;
@@ -1251,28 +1248,28 @@ static bool verify_statement(const MinicC0Program *program,
 
 static bool verify_program_storage(const MinicC0Program *program) {
     return program != NULL &&
-           storage_is_valid(
+           minic_ast_storage_is_valid(
                program->expressions, program->expression_count, program->expression_capacity) &&
-           storage_is_valid(program->locals, program->local_count, program->local_capacity) &&
-           storage_is_valid(
+           minic_ast_storage_is_valid(program->locals, program->local_count, program->local_capacity) &&
+           minic_ast_storage_is_valid(
                program->statements, program->statement_count, program->statement_capacity) &&
-           storage_is_valid(
+           minic_ast_storage_is_valid(
                program->inline_asms, program->inline_asm_count, program->inline_asm_capacity) &&
-           storage_is_valid(program->blocks, program->block_count, program->block_capacity) &&
-           storage_is_valid(
+           minic_ast_storage_is_valid(program->blocks, program->block_count, program->block_capacity) &&
+           minic_ast_storage_is_valid(
                program->functions, program->function_count, program->function_capacity) &&
-           storage_is_valid(program->records, program->record_count, program->record_capacity) &&
-           storage_is_valid(
+           minic_ast_storage_is_valid(program->records, program->record_count, program->record_capacity) &&
+           minic_ast_storage_is_valid(
                program->array_types, program->array_type_count, program->array_type_capacity) &&
-           storage_is_valid(program->function_types,
+           minic_ast_storage_is_valid(program->function_types,
                             program->function_type_count,
                             program->function_type_capacity) &&
-           storage_is_valid(
+           minic_ast_storage_is_valid(
                program->type_aliases, program->type_alias_count, program->type_alias_capacity) &&
-           storage_is_valid(program->enums, program->enum_count, program->enum_capacity) &&
-           storage_is_valid(
+           minic_ast_storage_is_valid(program->enums, program->enum_count, program->enum_capacity) &&
+           minic_ast_storage_is_valid(
                program->enumerators, program->enumerator_count, program->enumerator_capacity) &&
-           storage_is_valid(program->global_objects,
+           minic_ast_storage_is_valid(program->global_objects,
                             program->global_object_count,
                             program->global_object_capacity);
 }
@@ -1750,7 +1747,7 @@ bool minic_c0_program_verify_target_detailed(const MinicC0Program *program,
             (record->pack_alignment != 0U &&
              (record->pack_alignment > 16U ||
               (record->pack_alignment & (record->pack_alignment - 1U)) != 0U)) ||
-            !storage_is_valid(record->fields, record->field_count, record->field_capacity)) {
+            !minic_ast_storage_is_valid(record->fields, record->field_count, record->field_capacity)) {
             MINIC_AST_VERIFY_FAIL(minic_c0_ast_verify_stage_default_reason(stage));
         }
         for (field_index = 0U; field_index < record->field_count; ++field_index) {
@@ -1964,12 +1961,12 @@ bool minic_c0_program_verify_target_detailed(const MinicC0Program *program,
             (object->relocation_count != 0U && !object->is_zero_initialized &&
              ((!minic_type_is_record(object->type) && !minic_type_is_array(object->type)) ||
               object->initializer_count == 0U)) ||
-            !storage_is_valid(object->initializer_values,
+            !minic_ast_storage_is_valid(object->initializer_values,
                               object->initializer_count,
                               object->initializer_capacity) ||
-            !storage_is_valid(
+            !minic_ast_storage_is_valid(
                 object->relocations, object->relocation_count, object->relocation_capacity) ||
-            !storage_is_valid(object->union_selections,
+            !minic_ast_storage_is_valid(object->union_selections,
                               object->union_selection_count,
                               object->union_selection_capacity) ||
             ((object->is_extern || object->is_tentative || object->is_zero_initialized) &&
@@ -2153,7 +2150,7 @@ bool minic_c0_program_verify_target_detailed(const MinicC0Program *program,
     stage = MINIC_C0_AST_VERIFY_FILE_ASM;
     index = MINIC_C0_AST_VERIFY_INDEX_NONE;
     subindex = MINIC_C0_AST_VERIFY_INDEX_NONE;
-    if (!storage_is_valid(
+    if (!minic_ast_storage_is_valid(
             program->file_asms, program->file_asm_count, program->file_asm_capacity)) {
         MINIC_AST_VERIFY_FAIL(minic_c0_ast_verify_stage_default_reason(stage));
     }
@@ -2228,7 +2225,7 @@ bool minic_c0_program_verify_target_detailed(const MinicC0Program *program,
         size_t statement_index;
 
         block = &program->blocks[index];
-        if (!storage_is_valid(
+        if (!minic_ast_storage_is_valid(
                 block->statements, block->statement_count, block->statement_capacity)) {
             MINIC_AST_VERIFY_FAIL(minic_c0_ast_verify_stage_default_reason(stage));
         }
