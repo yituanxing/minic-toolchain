@@ -499,7 +499,25 @@ jobs:
           assert len(historical_archives) == 68
           expected |= historical_archives
           metadata |= {"tools/ci/historical_workflows.py", ".github/workflows/toolchain-m0-structure.yml"}
-          if len(expected) != 626 or deleted != expected or changed != expected | metadata:
+          expected |= {
+              "tools/ci/apply-perf-core-discarded-if-sparse-v1.py",
+              "tools/ci/linux-perf-core-discarded-if-sparse-ab-v1.sh",
+              "tools/ci/apply-perf-core-specialization-no-facts-fastpath-v1.py",
+              "tools/ci/linux-perf-core-no-facts-ab-v1.sh",
+              "tools/ci/linux-perf-core-no-facts-ab500-v1.sh",
+              "tools/ci/apply-perf-core-variant-source-buckets-v1.py",
+              "tools/ci/linux-perf-core-variant-source-ab-v1.sh",
+              "tools/ci/linux-perf-core-variant-source-ab500-v1.sh",
+              "tools/ci/apply-perf-lexer-identifier-bulk-advance-v1.py",
+              "tools/ci/linux-perf-lexer-identifier-bulk-ab-v1.sh",
+              "tools/ci/apply-perf-rv64-record-layout-single-walk-v1.py",
+              "tools/ci/linux-perf-rv64-record-layout-single-walk-ab-v1.sh",
+              "tools/ci/apply-perf-functiontype-exact-allocation-v1.py",
+              "tools/ci/apply-perf-parser-enum-binding-global-index-v1.py",
+              "tools/ci/apply-perf-parser-top-level-lexer-lookahead-v1.py",
+          }
+          metadata.add(".github/workflows/linux-runtime-optin-perf-suite-v1.yml")
+          if len(expected) != 641 or deleted != expected or changed != expected | metadata:
               raise SystemExit("RETIREMENT_SCOPE=FAIL: unexpected tree changes")
           files = [p.decode() for p in git("ls-files", "-z").split(b"\0") if p]
           candidates = {
@@ -597,6 +615,44 @@ jobs:
                   print(item)
           print(f"PINNED_ARCHIVE_REFERENCES={len(pinned_refs)}")
           print(f"RETIREMENT_SCOPE=PASS deleted={len(deleted)} retained_text_scanned={scanned}")
+          # Every nonretired performance step must keep its original executable
+          # content. Ignore only blank/comment separators; the new guard is
+          # deliberately fail-closed, not a PASS substitute for old experiments.
+          perf_path = ".github/workflows/linux-runtime-optin-perf-suite-v1.yml"
+          old_perf = git("show", "abae0fe2ab1c3d6c92058f33c299c57340d61432:" + perf_path).decode()
+          new_perf = pathlib.Path(perf_path).read_text()
+          retired_steps = {
+              "Build unmodified and lexer-only lookahead Parser MiniC",
+              "Four-owner RV64 record validation single-walk A/B",
+              "Frozen first500 Core source-bucket variant index isolated A/B",
+              "Four-owner Core source-bucket variant index paired A/B",
+              "Four-owner Core direct-call no-relevant-facts fastpath A/B",
+              "Core no-facts fastpath immutable 500-owner A/B",
+              "Screen sparse discarded-IF Core Reentry on seven real Linux files",
+              "Four-owner ASCII Lexer identifier bulk advance paired A/B",
+              "Benchmark exact-length FunctionType signature storage with pinned Linux TUs",
+          }
+          def split_perf(text):
+              start = text.index("\n  perf500:\n")
+              header, body = text[:start], text[start:]
+              marks = list(re.finditer(r"(?m)^      - (name:|uses:) (.+)$", body))
+              steps = [(m.group(1), m.group(2), "\n".join(
+                  s for s in body[m.start():marks[i+1].start() if i+1<len(marks) else len(body)].splitlines()
+                  if s.strip() and not s.startswith("      #")))
+                  for i,m in enumerate(marks)]
+              return header, body[:marks[0].start()], steps
+          oh, op, os_ = split_perf(old_perf)
+          nh, np, ns = split_perf(new_perf)
+          assert oh == nh and op == np, "unrelated jobs/dispatch changed"
+          removed = [s[1] for s in os_ if s[1] in retired_steps]
+          assert len(removed) == len(retired_steps) and set(removed) == retired_steps
+          guard_name = "Reject retired one-factor experiment tags with historical replay instructions"
+          guards_now = [s for s in ns if s[1] == guard_name]
+          assert len(guards_now) == 1 and "exit 1" in guards_now[0][2]
+          for tag in ("[minic-parser-lexer-lookahead-ab]", "[minic-parser-enum-bind-ab]", "[minic-record-layout-ab]", "[minic-core-variant-source-ab500]", "[minic-core-variant-source-ab]", "[minic-core-no-facts-ab]", "[minic-core-no-facts-ab500]", "[minic-core-discarded-sparse-ab]", "[minic-lexer-identifier-bulk-ab]", "[minic-functiontype-exact-ab]",):
+              assert tag in guards_now[0][2]
+          assert [s for s in os_ if s[1] not in retired_steps] == [s for s in ns if s[1] != guard_name], "nonretired performance step drift"
+          print("RETIRED_PERF_STEP_EQUIVALENCE=PASS removed=9 retained_steps_unchanged=1")
           counts = Counter()
           for p, group in sorted(candidates.items()):
               c = consumers[p]
