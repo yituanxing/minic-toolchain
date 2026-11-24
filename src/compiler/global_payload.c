@@ -868,7 +868,7 @@ const char *minic_multi_global_relocation_target_name(
 }
 
 
-bool minic_multi_record_initializer_needs_recursive(
+static bool minic_multi_record_initializer_needs_recursive(
     const MinicC0Program *program, const MinicRecord *record,
     const MinicGlobalObject *object) {
     size_t index;

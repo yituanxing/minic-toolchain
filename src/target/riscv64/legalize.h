@@ -27,13 +27,7 @@ bool minic_riscv64_core_call_frame_address_supported(
 bool minic_riscv64_core_scalar_bitcast_supported(const MinicCoreFunction *function,
                                           const MinicCoreInstruction *instruction);
 
-bool minic_riscv64_core_integer_type_range_fits(
-    const MinicCoreFunction *function, MinicCoreTypeId source_type,
-    MinicCoreTypeId result_type);
 
-bool minic_riscv64_core_integer_overflow_xlen_scratch_exact(
-    const MinicCoreFunction *function, MinicCoreTypeId left_type,
-    MinicCoreTypeId right_type, size_t result_size);
 
 bool minic_riscv64_core_integer_overflow_supported(
     const MinicCoreFunction *function, const MinicCoreInstruction *instruction,

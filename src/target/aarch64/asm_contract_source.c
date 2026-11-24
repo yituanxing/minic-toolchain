@@ -67,7 +67,7 @@ bool minic_aarch64_qualify_inline_asm_goto(
         program, source, aarch64_linux_jump_label_form);
 }
 
-bool minic_aarch64_linux_cap_asm_goto_source(const MinicInlineAsm *s) {
+static bool minic_aarch64_linux_cap_asm_goto_source(const MinicInlineAsm *s) {
     const bool callback_form = s != NULL &&
         aarch64_linux_cap_goto_text(s->template_text, s->template_length,
                                     true, true);

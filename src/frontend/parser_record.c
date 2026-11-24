@@ -21,38 +21,6 @@ record_has_field(const MinicParser *parser, const MinicRecord *record, MinicSour
     return false;
 }
 
-static bool record_field_starts_parenthesized_pointer_array(const MinicParser *parser) {
-    MinicParser probe;
-    size_t depth;
-
-    if (parser == NULL || parser->current.kind != MINIC_TOKEN_LPAREN) {
-        return false;
-    }
-    probe = *parser;
-    if (!minic_parser_advance(&probe) || probe.current.kind != MINIC_TOKEN_STAR) {
-        return false;
-    }
-    /* The initial '(' was consumed by the probe advance above, but it still
-       owns one nesting level until the matching ')' after the field name. */
-    depth = 1U;
-    for (;;) {
-        if (probe.current.kind == MINIC_TOKEN_LPAREN) {
-            depth += 1U;
-        } else if (probe.current.kind == MINIC_TOKEN_RPAREN) {
-            if (depth == 0U) {
-                return false;
-            }
-            depth -= 1U;
-            if (depth == 0U) {
-                return minic_parser_advance(&probe) && probe.current.kind == MINIC_TOKEN_LBRACKET;
-            }
-        }
-        if (!minic_parser_advance(&probe)) {
-            return false;
-        }
-    }
-}
-
 static bool record_field_starts_parenthesized_pointer_object(const MinicParser *parser) {
     MinicParser probe;
     size_t pointer_depth;
@@ -397,7 +365,7 @@ static bool parse_record_field_declarator(MinicParser *parser,
         return false;
     }
     if (parser->current.kind == MINIC_TOKEN_LPAREN &&
-        record_field_starts_parenthesized_pointer_array(parser)) {
+        minic_parser_starts_named_parenthesized_pointer_array(parser)) {
         if (!parse_pointer_to_array_field_declarator(parser, field_type, &name_span, &field_type)) {
             return false;
         }

@@ -159,7 +159,7 @@ bool minic_core_function_add_enum_type(MinicCoreSourceBuilder *builder,
     return true;
 }
 
-bool minic_core_function_effective_integer_type(const MinicCoreSourceBuilder *builder,
+static bool minic_core_function_effective_integer_type(const MinicCoreSourceBuilder *builder,
                                                 MinicType type,
                                                 MinicType *effective_type) {
     const MinicCoreFunction *function = builder == NULL ? NULL : &builder->core;
@@ -279,7 +279,7 @@ bool minic_core_function_add_object(MinicCoreSourceBuilder *builder,
     return true;
 }
 
-bool minic_core_ir_global_addressable_type(MinicType type) {
+static bool minic_core_ir_global_addressable_type(MinicType type) {
     return minic_type_is_integer(type) || minic_type_is_pointer(type) ||
            /* Floating globals remain addressable even when their arithmetic
             * is target-constrained. Linux's x87 probes consume float64
@@ -345,7 +345,7 @@ bool minic_core_function_add_global(MinicCoreSourceBuilder *builder,
     return true;
 }
 
-bool minic_core_ir_call_scalar_type(MinicType type) {
+static bool minic_core_ir_call_scalar_type(MinicType type) {
     /* Scalar call transport is an IR contract, not an arithmetic capability.
        Keep binary32 and binary64 on the same call seam; target ABI placement
        still decides the physical floating registers. */
@@ -355,11 +355,11 @@ bool minic_core_ir_call_scalar_type(MinicType type) {
            minic_type_is_fixed_vector_register_storage(type);
 }
 
-bool minic_core_ir_call_parameter_type(MinicType type) {
+static bool minic_core_ir_call_parameter_type(MinicType type) {
     return minic_core_ir_call_scalar_type(type) || minic_type_is_record(type);
 }
 
-bool minic_core_ir_direct_call_return_type(MinicType type) {
+static bool minic_core_ir_direct_call_return_type(MinicType type) {
     return minic_type_is_void(type) || minic_core_ir_call_scalar_type(type) || minic_type_is_record(type);
 }
 

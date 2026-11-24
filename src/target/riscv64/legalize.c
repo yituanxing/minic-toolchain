@@ -110,7 +110,7 @@ bool minic_riscv64_core_scalar_bitcast_supported(const MinicCoreFunction *functi
            cast.source_bytes <= 8U && cast.target_bytes <= 8U;
 }
 
-bool minic_riscv64_core_integer_type_range_fits(
+static bool minic_riscv64_core_integer_type_range_fits(
     const MinicCoreFunction *function, MinicCoreTypeId source_type,
     MinicCoreTypeId result_type) {
     const MinicCoreType *source = minic_riscv64_core_base_type(function, source_type);
@@ -136,7 +136,7 @@ bool minic_riscv64_core_integer_type_range_fits(
     return !source_signed && result_signed && source->size < result->size;
 }
 
-bool minic_riscv64_core_integer_overflow_xlen_scratch_exact(
+static bool minic_riscv64_core_integer_overflow_xlen_scratch_exact(
     const MinicCoreFunction *function, MinicCoreTypeId left_type,
     MinicCoreTypeId right_type, size_t result_size) {
     const MinicCoreType *left = minic_riscv64_core_base_type(function, left_type);

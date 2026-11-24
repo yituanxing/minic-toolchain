@@ -4,17 +4,6 @@
 #include <limits.h>
 #include <string.h>
 
-static bool declarator_identifier_is(const MinicParser *parser, const char *text) {
-    size_t length;
-
-    if (parser == NULL || text == NULL || parser->current.kind != MINIC_TOKEN_IDENTIFIER) {
-        return false;
-    }
-    length = minic_parser_span_length(parser->current.span);
-    return strlen(text) == length &&
-           memcmp(parser->source + parser->current.span.begin.offset, text, length) == 0;
-}
-
 bool minic_parser_parse_pointer_qualifier_sequence(MinicParser *parser,
                                                    size_t pointer_depth,
                                                    unsigned int *const_qualifiers,
@@ -28,9 +17,9 @@ bool minic_parser_parse_pointer_qualifier_sequence(MinicParser *parser,
     bit = 1U << (pointer_depth - 1U);
     while (parser->current.kind == MINIC_TOKEN_KW_CONST ||
            parser->current.kind == MINIC_TOKEN_KW_VOLATILE ||
-           declarator_identifier_is(parser, "restrict") ||
-           declarator_identifier_is(parser, "__restrict") ||
-           declarator_identifier_is(parser, "__restrict__")) {
+           minic_parser_current_identifier_lexeme_equals_cstr(parser, "restrict") ||
+           minic_parser_current_identifier_lexeme_equals_cstr(parser, "__restrict") ||
+           minic_parser_current_identifier_lexeme_equals_cstr(parser, "__restrict__")) {
         if (parser->current.kind == MINIC_TOKEN_KW_CONST) {
             *const_qualifiers |= bit;
         } else if (parser->current.kind == MINIC_TOKEN_KW_VOLATILE) {
@@ -117,6 +106,38 @@ bool minic_parser_parse_function_parameter_suffix(MinicParser *parser,
                                                     &declarator->parameter_count,
                                                     false,
                                                     &declarator->is_variadic);
+}
+
+bool minic_parser_starts_named_parenthesized_pointer_array(const MinicParser *parser) {
+    MinicParser probe;
+    size_t depth;
+
+    if (parser == NULL || parser->current.kind != MINIC_TOKEN_LPAREN) {
+        return false;
+    }
+    probe = *parser;
+    if (!minic_parser_advance(&probe) || probe.current.kind != MINIC_TOKEN_STAR) {
+        return false;
+    }
+    /* The initial '(' was consumed by the probe advance above, but it still
+       owns one nesting level until the matching ')' after the declarator name. */
+    depth = 1U;
+    for (;;) {
+        if (probe.current.kind == MINIC_TOKEN_LPAREN) {
+            depth += 1U;
+        } else if (probe.current.kind == MINIC_TOKEN_RPAREN) {
+            if (depth == 0U) {
+                return false;
+            }
+            depth -= 1U;
+            if (depth == 0U) {
+                return minic_parser_advance(&probe) && probe.current.kind == MINIC_TOKEN_LBRACKET;
+            }
+        }
+        if (!minic_parser_advance(&probe)) {
+            return false;
+        }
+    }
 }
 
 bool minic_parser_parse_parenthesized_pointer_to_array_declarator(

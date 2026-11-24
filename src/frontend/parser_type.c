@@ -224,30 +224,8 @@ static bool minic_parser_try_gnu_int128(MinicParser *parser, MinicType *type, bo
     return minic_parser_advance(parser);
 }
 
-static bool minic_parser_identifier_is(const MinicParser *parser, const char *name) {
-    size_t name_length;
-
-    if (parser == NULL || name == NULL || parser->current.kind != MINIC_TOKEN_IDENTIFIER) {
-        return false;
-    }
-    name_length = strlen(name);
-    return minic_parser_span_length(parser->current.span) == name_length &&
-           memcmp(parser->source + parser->current.span.begin.offset, name, name_length) == 0;
-}
-
-static bool minic_parser_current_identifier_is(const MinicParser *parser, const char *text) {
-    size_t length;
-
-    if (parser == NULL || text == NULL || parser->current.kind != MINIC_TOKEN_IDENTIFIER) {
-        return false;
-    }
-    length = minic_parser_span_length(parser->current.span);
-    return strlen(text) == length &&
-           memcmp(parser->source + parser->current.span.begin.offset, text, length) == 0;
-}
-
 static bool minic_parser_skip_gnu_extension_markers(MinicParser *parser) {
-    while (minic_parser_current_identifier_is(parser, "__extension__")) {
+    while (minic_parser_current_identifier_lexeme_equals_cstr(parser, "__extension__")) {
         if (!minic_parser_advance(parser)) {
             return false;
         }
@@ -637,11 +615,11 @@ bool minic_parser_parse_type_specifiers(MinicParser *parser, MinicType *type) {
             }
             parsed_type = minic_type_record(record_id);
         }
-    } else if (minic_parser_identifier_is(parser, "_Float128") ||
-               minic_parser_identifier_is(parser, "_Float32") ||
-               minic_parser_identifier_is(parser, "_Float64") ||
-               minic_parser_identifier_is(parser, "_Float32x") ||
-               minic_parser_identifier_is(parser, "_Float64x")) {
+    } else if (minic_parser_current_identifier_lexeme_equals_cstr(parser, "_Float128") ||
+               minic_parser_current_identifier_lexeme_equals_cstr(parser, "_Float32") ||
+               minic_parser_current_identifier_lexeme_equals_cstr(parser, "_Float64") ||
+               minic_parser_current_identifier_lexeme_equals_cstr(parser, "_Float32x") ||
+               minic_parser_current_identifier_lexeme_equals_cstr(parser, "_Float64x")) {
         /* All four Linux targets encounter GNU/TS-18661 extended FP type
          * declarations in genuine glibc headers (including RV64 stdlib.h).
          * Retain DISTINCT C type identities: recognizing source declarations
@@ -652,13 +630,13 @@ bool minic_parser_parse_type_specifiers(MinicParser *parser, MinicType *type) {
             minic_parser_error(parser, "extended float type is unsupported on this target");
             return false;
         }
-        if (minic_parser_identifier_is(parser, "_Float32"))
+        if (minic_parser_current_identifier_lexeme_equals_cstr(parser, "_Float32"))
             parsed_type = minic_type_float32();
-        else if (minic_parser_identifier_is(parser, "_Float64"))
+        else if (minic_parser_current_identifier_lexeme_equals_cstr(parser, "_Float64"))
             parsed_type = minic_type_float64();
-        else if (minic_parser_identifier_is(parser, "_Float32x"))
+        else if (minic_parser_current_identifier_lexeme_equals_cstr(parser, "_Float32x"))
             parsed_type = minic_type_float32x();
-        else if (minic_parser_identifier_is(parser, "_Float64x"))
+        else if (minic_parser_current_identifier_lexeme_equals_cstr(parser, "_Float64x"))
             parsed_type = minic_type_float64x();
         else
             parsed_type = minic_type_float128();
@@ -666,7 +644,7 @@ bool minic_parser_parse_type_specifiers(MinicParser *parser, MinicType *type) {
     } else if (minic_parser_target_header_builtin(
                    parser, parser->current, &parsed_type)) {
         if (!minic_parser_advance(parser)) return false;
-    } else if (minic_parser_identifier_is(parser, "__builtin_va_list")) {
+    } else if (minic_parser_current_identifier_lexeme_equals_cstr(parser, "__builtin_va_list")) {
         /* Real C source identity, independently materialized from Core's
          * pointer-valued ABI state transport. */
         if (!minic_parser_materialize_builtin_va_list_source_type(

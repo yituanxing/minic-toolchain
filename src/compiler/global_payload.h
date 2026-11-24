@@ -53,9 +53,6 @@ bool minic_multi_global_payload_visit(
     const MinicC0Program *program, const MinicTargetInvocation *target,
     const MinicGlobalObject *object, const MinicMultiGlobalEmissionPlan *plan,
     const MinicMultiGlobalPayloadSink *sink);
-bool minic_multi_record_initializer_needs_recursive(
-    const MinicC0Program *program, const MinicRecord *record,
-    const MinicGlobalObject *object);
 const char *minic_multi_global_relocation_target_name(
     const MinicC0Program *program, const MinicGlobalRelocation *relocation);
 

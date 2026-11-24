@@ -73,6 +73,13 @@ typedef enum MinicAttributeClass {
     MINIC_ATTRIBUTE_CLASS_LAYOUT
 } MinicAttributeClass;
 
+static inline bool minic_attribute_class_is_parse_only(MinicAttributeClass semantic_class) {
+    return semantic_class == MINIC_ATTRIBUTE_CLASS_INFORMATIONAL ||
+           semantic_class == MINIC_ATTRIBUTE_CLASS_DIAGNOSTIC ||
+           semantic_class == MINIC_ATTRIBUTE_CLASS_OPTIMIZATION ||
+           semantic_class == MINIC_ATTRIBUTE_CLASS_CONTROL_FLOW;
+}
+
 typedef enum MinicAttributeTarget {
     MINIC_ATTRIBUTE_TARGET_NONE = 0,
     MINIC_ATTRIBUTE_TARGET_FUNCTION = 1U << 0,

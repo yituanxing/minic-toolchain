@@ -9,7 +9,6 @@
  * asm_contract.h and must not include C AST or source policy. */
 bool minic_aarch64_requires_qualified_input_asm(const MinicInlineAsm *);
 bool minic_aarch64_clone_safe_opaque_asm(const MinicInlineAsm *);
-bool minic_aarch64_linux_cap_asm_goto_source(const MinicInlineAsm *);
 bool minic_aarch64_qualify_inline_asm_goto(
     const MinicTargetInvocation *, const MinicC0Program *, const MinicInlineAsm *);
 bool minic_aarch64_qualify_inline_asm(

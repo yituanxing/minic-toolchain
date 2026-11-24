@@ -212,37 +212,6 @@ static bool parse_parenthesized_function_typedef(MinicParser *parser,
     return true;
 }
 
-static bool typedef_starts_parenthesized_pointer_array(const MinicParser *parser) {
-    MinicParser probe;
-    size_t depth;
-
-    if (parser == NULL || parser->current.kind != MINIC_TOKEN_LPAREN) {
-        return false;
-    }
-    probe = *parser;
-    if (!minic_parser_advance(&probe) || probe.current.kind != MINIC_TOKEN_STAR) {
-        return false;
-    }
-    depth = 1U;
-    for (;;) {
-        if (probe.current.kind == MINIC_TOKEN_LPAREN) {
-            depth += 1U;
-        } else if (probe.current.kind == MINIC_TOKEN_RPAREN) {
-            if (depth == 0U) {
-                return false;
-            }
-            depth -= 1U;
-            if (depth == 0U) {
-                return minic_parser_advance(&probe) &&
-                       probe.current.kind == MINIC_TOKEN_LBRACKET;
-            }
-        }
-        if (!minic_parser_advance(&probe)) {
-            return false;
-        }
-    }
-}
-
 typedef struct MinicTypedefAttributeContext {
     MinicType *aliased_type;
 } MinicTypedefAttributeContext;
@@ -474,13 +443,6 @@ static bool consume_typedef_attribute(MinicParser *parser,
     return false;
 }
 
-static bool typedef_declaration_attribute_class_is_parse_only(MinicAttributeClass semantic_class) {
-    return semantic_class == MINIC_ATTRIBUTE_CLASS_INFORMATIONAL ||
-           semantic_class == MINIC_ATTRIBUTE_CLASS_DIAGNOSTIC ||
-           semantic_class == MINIC_ATTRIBUTE_CLASS_OPTIMIZATION ||
-           semantic_class == MINIC_ATTRIBUTE_CLASS_CONTROL_FLOW;
-}
-
 static bool typedef_type_targets_function(MinicType type) {
     MinicType pointee;
 
@@ -513,7 +475,7 @@ static bool apply_typedef_declaration_head_attributes(MinicParser *parser,
             return false;
         }
         if (minic_attribute_allowed_on(descriptor, MINIC_ATTRIBUTE_TARGET_TYPE)) {
-            if (typedef_declaration_attribute_class_is_parse_only(descriptor->semantic_class)) {
+            if (minic_attribute_class_is_parse_only(descriptor->semantic_class)) {
                 continue;
             }
             if (!consume_typedef_attribute(parser, attribute, &context)) {
@@ -523,7 +485,7 @@ static bool apply_typedef_declaration_head_attributes(MinicParser *parser,
         }
         if (function_target &&
             minic_attribute_allowed_on(descriptor, MINIC_ATTRIBUTE_TARGET_FUNCTION) &&
-            typedef_declaration_attribute_class_is_parse_only(descriptor->semantic_class)) {
+            minic_attribute_class_is_parse_only(descriptor->semantic_class)) {
             continue;
         }
         minic_parser_error(parser, "unsupported GNU declaration-head typedef attribute");
@@ -623,7 +585,7 @@ static bool parse_one_typedef_declarator(
         return false;
     }
     if (parser->current.kind == MINIC_TOKEN_LPAREN) {
-        if (typedef_starts_parenthesized_pointer_array(parser)) {
+        if (minic_parser_starts_named_parenthesized_pointer_array(parser)) {
             bool name_array_inferred;
             bool name_is_array;
             size_t name_array_count;

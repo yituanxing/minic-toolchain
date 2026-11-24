@@ -300,13 +300,6 @@ static bool adjust_function_parameter_type(MinicParser *parser, MinicType *param
     return true;
 }
 
-static bool parameter_attribute_class_is_parse_only(MinicAttributeClass semantic_class) {
-    return semantic_class == MINIC_ATTRIBUTE_CLASS_INFORMATIONAL ||
-           semantic_class == MINIC_ATTRIBUTE_CLASS_DIAGNOSTIC ||
-           semantic_class == MINIC_ATTRIBUTE_CLASS_OPTIMIZATION ||
-           semantic_class == MINIC_ATTRIBUTE_CLASS_CONTROL_FLOW;
-}
-
 static bool consume_parameter_declarator_attribute(MinicParser *parser,
                                                    const MinicParsedAttribute *attribute,
                                                    void *opaque_context) {
@@ -328,7 +321,7 @@ static bool consume_parameter_declarator_attribute(MinicParser *parser,
         minic_parser_error(parser, "unsupported GNU parameter declarator attribute");
         return false;
     }
-    if (parameter_attribute_class_is_parse_only(descriptor->semantic_class)) {
+    if (minic_attribute_class_is_parse_only(descriptor->semantic_class)) {
         return true;
     }
     minic_parser_error(

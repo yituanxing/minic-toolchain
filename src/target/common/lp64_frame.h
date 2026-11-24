@@ -42,16 +42,6 @@ bool minic_lp64_frame_plan_object(
     const MinicLP64FramePlan *, size_t object_id, size_t *offset);
 bool minic_lp64_frame_plan_value_slot(
     const MinicLP64FramePlan *, MinicCoreValueId value_id, size_t *offset);
-/* Machine emitters already traffic in byte-offset expressions. Invalid or
- * unallocated SSA values become a strictly out-of-frame sentinel, NEVER the
- * previous id*8 layout. Target frame transports must reject values above
- * MINIC_LARGE_FRAME_MAX; this also safely absorbs small limb additions. */
-static inline size_t minic_lp64_frame_value_offset(
-    const MinicLP64FramePlan *plan, MinicCoreValueId value_id) {
-    size_t offset;
-    return minic_lp64_frame_plan_value_slot(plan, value_id, &offset)
-        ? offset : (size_t)MINIC_LARGE_FRAME_MAX + 1U;
-}
 bool minic_lp64_frame_plan_wide_slot(
     const MinicLP64FramePlan *, MinicCoreValueId value_id, size_t *offset);
 void minic_lp64_frame_plan_destroy(MinicLP64FramePlan *);

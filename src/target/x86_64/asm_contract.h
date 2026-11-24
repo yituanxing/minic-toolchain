@@ -234,7 +234,6 @@ unsigned int minic_x86_64_linux_crash_gpr_snapshot_form(const char *, size_t);
 unsigned int minic_x86_64_linux_crash_misc_snapshot_form(const char *, size_t);
 bool minic_x86_64_linux_alt_reloc_selftest_form(const char *, size_t);
 bool minic_x86_64_linux_real_mode_far_jump_form(const char *, size_t);
-bool minic_x86_64_linux_unreachable_opaque(const char *, size_t);
 unsigned int minic_x86_64_linux_unreachable_label(const char *, size_t);
 /* Shared exact GNU whitespace compaction for source/physical MMIO contracts. */
 bool minic_x86_64_compact_asm_equals(const char *, size_t, const char *);
@@ -340,7 +339,6 @@ bool minic_x86_64_linux_muldiv_u64_form(const char *, size_t);
 /* VIA PadLock XSTORE four-output (memory, eax, edx, edi) contract. */
 bool minic_x86_64_linux_via_xstore_form(const char *, size_t);
 /* ZSTD basic GNU ASM alignment directive, with no operand side effects. */
-bool minic_x86_64_linux_zstd_p2align_form(const char *, size_t);
 unsigned int minic_x86_64_linux_zstd_padding_form(const char *, size_t);
 unsigned int minic_x86_64_linux_crash_segment_snapshot_form(const char *, size_t);
 unsigned int minic_x86_64_linux_xstate_fault_form(const char *, size_t);

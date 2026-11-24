@@ -302,7 +302,7 @@ failed:
     return false;
 }
 
-bool minic_x86_64_plan_outgoing_arguments(
+static bool minic_x86_64_plan_outgoing_arguments(
     const MinicCoreFunction *fn, const MinicCoreCallView *view,
     MinicX86ArgumentPlan *plan) {
     MinicX86ArgCursor cursor = {0};

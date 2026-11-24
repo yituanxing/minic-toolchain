@@ -105,9 +105,6 @@ bool minic_core_function_set_variadic(MinicCoreSourceBuilder *builder, bool is_v
 bool minic_core_function_add_enum_type(MinicCoreSourceBuilder *builder,
                                        MinicEnumId enum_id,
                                        MinicType effective_integer_type);
-bool minic_core_function_effective_integer_type(const MinicCoreSourceBuilder *builder,
-                                                MinicType type,
-                                                MinicType *effective_type);
 bool minic_core_function_add_fixed_register_binding(MinicCoreSourceBuilder *builder,
                                                      const char *register_name,
                                                      size_t register_name_length,

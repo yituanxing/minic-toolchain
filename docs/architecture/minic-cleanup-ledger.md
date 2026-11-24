@@ -1615,3 +1615,61 @@ Target 审阅 manifest 260（113 条保留的 stale blob）、完整后端边界
 - 类型解析的前后 const/volatile 扫描共用一个循环，原来的混合整数说明符扫描独立保留。
 - 常量求值与表达式语义使用同一个有效整数符号查询（保留 enum 兼容类型处理）；整数与绝对地址的无符号比较共用一个 switch，保留独立的转换和有符号比较。
 - 6 个生产文件净变化 -111 行；精确原文本检查与静态语义核对。未本地构建、未执行目标回归，CI 不视为通过。未合并不同 ABI 的规则，未删测试。
+
+## 批次 C44：全仓库候选普查及批量收敛（2026-11-24）
+
+固定基线 `44aa270d`，GitHub Actions [只读全树普查](https://github.com/yituanxing/minic-toolchain/actions/runs/45360649618) 成功。扫描 4610 个跟踪文本文件、418 个生产 C/H/def/inc（含编译入口），8,701,253 字节；词法识别 3970 个函数定义候选、26 组相同函数体、33 个低文件引用外部函数、90 个单文件单次 static 引用、55 个不存在路径且无现行文件名引用的脚本。不是编译器 AST/链接器级证明；大多数 static 单次引用实际位于头文件且有跨文件消费者，不据此删除。审查工作流及完整 JSON artifact 仅用于本次证据收集，工作流在本批退役。
+
+- Frontend：record/typedef 具名 parenthesized pointer-to-array lookahead 使用同一 declarator owner；抽象 type-name lookahead 保留。四份重复当前标识符 matcher 改用 parser_core 的现有词法实现。四处 parse-only GNU attribute class 判定统一到 attribute.h，保留属性目标和具体语义规则。
+- Compiler/Target：13 个仅同一 TU 消费的外部函数改为 static，移除内部头文件冗余接口；保留实体逻辑，未删除 ABI 语义。一个全树无现行引用的 LP64 frame offset sentinel wrapper 退役，保留 checked slot API。生产源码 26 个文件，净 -134 行。
+- 历史工具：删除 46 个已逐文件核对的旧补丁脚本，均在全树无现行 basename 消费者候选中，并且直接读取/修改已不存在的旧 `src/core/core_lower.c` 或 `src/target/riscv64/core_codegen.c`。历史重放须使用当时 Git 快照；不删除现役测试、不修改禁用历史 YAML、不改变 CI 验收合同。保留另外 9 个尚未充分核实的脚本候选（含生成的 Linux include 路径和间接脚本）。
+
+退役脚本清单（可从基线 Git 历史取回）：
+- `tools/ci/apply-core-unsupported-trace-v0.py`
+- `tools/ci/apply-m116-pointer-arith-rvalue.py`
+- `tools/ci/apply-m118-six-operand-atomic-asm.py`
+- `tools/ci/apply-m125-asm-census-trace.py`
+- `tools/ci/apply-m127-chained-record-call.py`
+- `tools/ci/apply-m127-expression-statement-census.py`
+- `tools/ci/apply-m128-record-call-argument-materialization.py`
+- `tools/ci/apply-m129-leaf-expression-owners.py`
+- `tools/ci/apply-m130-discard-operand-trace.py`
+- `tools/ci/apply-m130-discarded-lvalue-owner.py`
+- `tools/ci/apply-m131-array-guard-trace.py`
+- `tools/ci/apply-m131-static-local-subscript-trace.py`
+- `tools/ci/apply-m131-zero-size-pointer-stride.py`
+- `tools/ci/apply-m132-function-phase-census.py`
+- `tools/ci/apply-m132-unbounded-for-termination.py`
+- `tools/ci/apply-m133-constant-true-loop-reachability.py`
+- `tools/ci/apply-m134-unreachable-tail-census.py`
+- `tools/ci/apply-m134-unreachable-tail-owner.py`
+- `tools/ci/apply-m135-cleanup-edge-classification.py`
+- `tools/ci/apply-m136-silent-statement-census.py`
+- `tools/ci/apply-m137-cfg-block-census.py`
+- `tools/ci/apply-m137-detached-loop-continue-owner.py`
+- `tools/ci/apply-m138-error-owner-trace.py`
+- `tools/ci/apply-m139-local-loop-passthrough-trace.py`
+- `tools/ci/apply-m140-normalized-for-continue-tail.py`
+- `tools/ci/apply-m141-scoped-loop-continue-tail.py`
+- `tools/ci/apply-m142-nonedge-cleanup-metadata.py`
+- `tools/ci/apply-m143-cleanup-label-owner-trace.py`
+- `tools/ci/apply-m144-unreferenced-loop-label-metadata.py`
+- `tools/ci/apply-m146-opportunistic-detached-continue.py`
+- `tools/ci/apply-m147-normalized-for-continue-binding.py`
+- `tools/ci/apply-m152-nested-member-address.py`
+- `tools/ci/apply-m159-constant-true-do-while.py`
+- `tools/ci/apply-m161-rv64-int128-pair.py`
+- `tools/ci/exp-internal-function-reachability-v0.py`
+- `tools/dev/patch-core-frontier-batch-m32.py`
+- `tools/dev/patch-core-frontier-batch-m33.py`
+- `tools/dev/patch-core-frontier-batch-m34.py`
+- `tools/dev/patch-core-frontier-batch-m35.py`
+- `tools/dev/patch-core-frontier-batch-m36.py`
+- `tools/dev/patch-core-frontier-batch-m38.py`
+- `tools/dev/patch-core-frontier-batch-m42.py`
+- `tools/dev/patch-core-frontier-batch-m43.py`
+- `tools/dev/patch-core-frontier-batch-m45.py`
+- `tools/dev/patch-core-frontier-batch-m46.py`
+- `tools/dev/patch-core-frontier-m77-empty-tied-asm-copy.py`
+
+本批为静态清理；未在本机编译。全树普查成功并不等于修改后的编译器动态验证通过，现有 PR 的 native strict gate 和五架构验证结果仍待核实。没有以删减历史工具行数冒充生产源码瘦身。

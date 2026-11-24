@@ -834,7 +834,7 @@ bool minic_x86_64_linux_real_mode_far_jump_form(const char *text,
 /* Linux annotate_unreachable() emits a single reference to the current
  * numeric label in .discard.unreachable. Verify the complete section and
  * label relation; do not allow arbitrary multi-instruction opaque text. */
-bool minic_x86_64_linux_unreachable_opaque(const char *text, size_t length) {
+static bool minic_x86_64_linux_unreachable_opaque(const char *text, size_t length) {
     char compact[256], expected[256];
     size_t i, n = 0U, digits = 0U;
     unsigned int label = 0U;
@@ -1340,7 +1340,7 @@ bool minic_x86_64_linux_via_xstore_form(const char *text, size_t length) {
         text, length, ".byte0x0F,0xA7,0xC0/*xstore%%edi(addr=%0)*/");
 }
 
-bool minic_x86_64_linux_zstd_p2align_form(const char *text, size_t length) {
+static bool minic_x86_64_linux_zstd_p2align_form(const char *text, size_t length) {
     /* Linux lib/zstd/decompress/zstd_decompress_block.c demands a 64-byte
      * instruction alignment at an inner loop entry. Whitelist this exact
      * assembler directive; never transport arbitrary basic-asm text. */

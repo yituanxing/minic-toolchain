@@ -421,6 +421,7 @@ bool minic_parser_parse_parenthesized_function_declarator(
     bool require_pointer,
     MinicParsedFunctionDeclarator *declarator,
     bool retain_inner_parameter_scope);
+bool minic_parser_starts_named_parenthesized_pointer_array(const MinicParser *parser);
 bool minic_parser_parse_parenthesized_pointer_to_array_declarator(
     MinicParser *parser,
     MinicType element_type,

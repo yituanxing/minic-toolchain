@@ -42,13 +42,6 @@ static bool glibc_header_vector_pcs_attribute(const MinicParser *parser,
                minic_parser_span_length(attr->name_span));
 }
 
-static bool function_attribute_class_is_parse_only(MinicAttributeClass semantic_class) {
-    return semantic_class == MINIC_ATTRIBUTE_CLASS_INFORMATIONAL ||
-           semantic_class == MINIC_ATTRIBUTE_CLASS_DIAGNOSTIC ||
-           semantic_class == MINIC_ATTRIBUTE_CLASS_OPTIMIZATION ||
-           semantic_class == MINIC_ATTRIBUTE_CLASS_CONTROL_FLOW;
-}
-
 static bool function_attribute_list_has_kind(const MinicParsedAttributeList *attributes, MinicAttributeKind kind) {
     size_t index;
 
@@ -591,7 +584,7 @@ static bool consume_function_attribute(MinicParser *parser,
      * through the known control-flow descriptor. O0 callers retain a
      * concrete ABI frame across both normal and longjmp returns; a
      * GNU/QEMU setjmp/longjmp differential guards this contract. */
-    if (!function_attribute_class_is_parse_only(descriptor->semantic_class)) {
+    if (!minic_attribute_class_is_parse_only(descriptor->semantic_class)) {
         minic_parser_error(parser, "%s (attribute=%.*s)",
                            context->unsupported_message,
                            (int)minic_parser_span_length(attribute->name_span),

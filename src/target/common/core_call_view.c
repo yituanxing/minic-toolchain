@@ -183,7 +183,8 @@ bool minic_core_call_view_build(const MinicCoreFunction *function,
     return true;
 }
 
-bool minic_core_call_argument_actual_core_type(
+/* Actual value/object type is a CoreType identity, never a source descriptor. */
+static bool minic_core_call_argument_actual_core_type(
     const MinicCoreFunction *function, const MinicCoreCallArgument *argument,
     MinicCoreTypeId *result) {
     MinicCoreTypeId id;

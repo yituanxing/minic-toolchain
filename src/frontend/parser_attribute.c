@@ -408,13 +408,6 @@ static bool apply_object_visibility_attribute(MinicParser *parser,
     return true;
 }
 
-static bool object_attribute_class_is_parse_only(MinicAttributeClass semantic_class) {
-    return semantic_class == MINIC_ATTRIBUTE_CLASS_INFORMATIONAL ||
-           semantic_class == MINIC_ATTRIBUTE_CLASS_DIAGNOSTIC ||
-           semantic_class == MINIC_ATTRIBUTE_CLASS_OPTIMIZATION ||
-           semantic_class == MINIC_ATTRIBUTE_CLASS_CONTROL_FLOW;
-}
-
 static bool resolve_object_alias_attribute(MinicParser *parser,
                                            const MinicParsedAttribute *attribute,
                                            MinicGlobalObjectId *target_id) {
@@ -516,7 +509,7 @@ static bool consume_object_attribute(MinicParser *parser,
         *context->force_emit = true;
         return true;
     }
-    if (object_attribute_class_is_parse_only(descriptor->semantic_class)) {
+    if (minic_attribute_class_is_parse_only(descriptor->semantic_class)) {
         return true;
     }
     if (descriptor->kind == MINIC_ATTRIBUTE_WEAK && context->is_weak != NULL) {

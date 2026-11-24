@@ -7,30 +7,19 @@
 /* The entire GNU inline asm operand/parser family is source-preserved.
  * Machine constraints remain Core/Target owned. */
 
-static bool inline_asm_identifier_is(const MinicParser *parser, const char *name) {
-    size_t length;
-
-    if (parser == NULL || name == NULL || parser->current.kind != MINIC_TOKEN_IDENTIFIER) {
-        return false;
-    }
-    length = minic_parser_span_length(parser->current.span);
-    return strlen(name) == length &&
-           memcmp(parser->source + parser->current.span.begin.offset, name, length) == 0;
-}
-
 bool minic_parser_gnu_inline_asm_starts(const MinicParser *parser) {
-    return inline_asm_identifier_is(parser, "asm") || inline_asm_identifier_is(parser, "__asm") ||
-           inline_asm_identifier_is(parser, "__asm__");
+    return minic_parser_current_identifier_lexeme_equals_cstr(parser, "asm") || minic_parser_current_identifier_lexeme_equals_cstr(parser, "__asm") ||
+           minic_parser_current_identifier_lexeme_equals_cstr(parser, "__asm__");
 }
 
 static bool current_is_gnu_goto(const MinicParser *parser) {
-    return inline_asm_identifier_is(parser, "goto");
+    return minic_parser_current_identifier_lexeme_equals_cstr(parser, "goto");
 }
 
 static bool current_is_gnu_volatile(const MinicParser *parser) {
     return parser->current.kind == MINIC_TOKEN_KW_VOLATILE ||
-           inline_asm_identifier_is(parser, "__volatile") ||
-           inline_asm_identifier_is(parser, "__volatile__");
+           minic_parser_current_identifier_lexeme_equals_cstr(parser, "__volatile") ||
+           minic_parser_current_identifier_lexeme_equals_cstr(parser, "__volatile__");
 }
 
 static bool

@@ -41,11 +41,6 @@ bool minic_core_call_view_build(const MinicCoreFunction *,
                                 const MinicCoreInstruction *,
                                 MinicCoreCallView *);
 
-/* The actual value/object type is a CoreType identity, never a parallel
- * source descriptor. Requires an attached CoreTypeContext. */
-bool minic_core_call_argument_actual_core_type(const MinicCoreFunction *,
-                                               const MinicCoreCallArgument *,
-                                               MinicCoreTypeId *);
 /* Common checked argument/record identity, all five backend call planners. */
 bool minic_core_call_view_argument_core_type(const MinicCoreFunction *,
                                              const MinicCoreCallView *, size_t,
