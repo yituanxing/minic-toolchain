@@ -1683,3 +1683,9 @@ Target 审阅 manifest 260（113 条保留的 stale blob）、完整后端边界
 - Parser 与 AST verifier 使用相同的 syntactic integer-zero、condition scalar 判定和既有只读 expression accessor；不将语法字面零改成常量表达式求值，不合并独立的内存 transport admission。
 - Core reachability、program emission、sealed symbol 验证使用同一 ASCII 字符分类，保留完整符号非空验证与 token 边界。RV frame 的 GPR callee-save 判定直接复用 register_identity owner。
 - 只做相同语义的去重；新增私有头文件以避免外部 ABI/API 或跨 TU 调用变化。完整 Git 差分需复核；修改后原生 gate、运行及差分验证待执行。不删除测试。
+
+## 批次 C46：前端三套全局名称缓存算法归一（2026-11-24）
+
+父基线 `8c176568`，保留原 AST 实体所有权、Parser cache_owner 和各缓存字段。函数、全局对象、typedef 三套 open-addressing 插入、扩容/重建、增量同步、查找、线性回退收敛至一个私有 header；各语义入口仍独立。保留历史哈希 seed、首次声明优先、typedef block-scope 排除、typedef 不一致回退、探针计数与 speculative parser 禁止修改借用缓存规则。enum newest-first 不强行合并。对函数极端计数乘法增加与 global 同样的溢出防护。
+
+生产源码移除三套独立算法，新增一个私有算法实现，净 -279 行。原有 parser probe ownership 测试不删；扩大到 80 组函数/全局对象/typedef、重复声明与局部遮蔽，在已有 Native Strict Gate 上运行五目标源码验收和 GNU/MiniC x86 runtime。不是五目标 runtime 证明。验收需读取此提交 CI，不以父提交结果替代。

@@ -1,4 +1,5 @@
 #include "frontend/parser_internal.h"
+#include "frontend/parser_name_index.h"
 
 #include <limits.h>
 #include <stdint.h>
@@ -673,188 +674,32 @@ MinicGlobalObjectId minic_parser_find_scoped_global_object(const MinicParser *pa
     return MINIC_GLOBAL_OBJECT_INVALID;
 }
 
-static bool minic_parser_function_name_slot_insert(
-    MinicParser *parser,
-    MinicFunctionId *slots,
-    size_t capacity,
-    MinicFunctionId function_id) {
-    const MinicFunction *function;
-    size_t mask;
-    size_t slot_index;
-    size_t probes;
-
-    if (parser == NULL || parser->program == NULL || slots == NULL ||
-        capacity == 0U || (capacity & (capacity - 1U)) != 0U) {
-        return false;
-    }
-    function = minic_c0_program_function(parser->program, function_id);
-    if (function == NULL || function->name == NULL || function->name_length == 0U) {
-        return true;
-    }
-    mask = capacity - 1U;
-    slot_index = minic_parser_symbol_name_hash(function->name, function->name_length) & mask;
-    for (probes = 0U; probes < capacity; ++probes) {
-        MinicFunctionId existing_id = slots[slot_index];
-
-        if (existing_id == MINIC_FUNCTION_INVALID) {
-            slots[slot_index] = function_id;
-            return true;
-        }
-        {
-            const MinicFunction *existing =
-                minic_c0_program_function(parser->program, existing_id);
-            if (existing != NULL &&
-                existing->name_length == function->name_length &&
-                memcmp(existing->name, function->name, function->name_length) == 0) {
-                /* Preserve first-declaration wins. Unlike a reverse scan,
-                   later redeclarations must NOT displace earlier ids. */
-                if (function_id < existing_id) {
-                    slots[slot_index] = function_id;
-                }
-                return true;
-            }
-        }
-        slot_index = (slot_index + 1U) & mask;
-    }
-    return false;
-}
-
-static bool minic_parser_function_name_index_rebuild(
-    MinicParser *parser,
-    size_t required_count) {
-    MinicFunctionId *slots;
-    size_t capacity = 16U;
-    size_t index;
-
-    if (parser == NULL || parser->program == NULL) {
-        return false;
-    }
-    while (capacity < required_count * 2U) {
-        if (capacity > SIZE_MAX / 2U) {
-            return false;
-        }
-        capacity *= 2U;
-    }
-    if (capacity > SIZE_MAX / sizeof(*slots)) {
-        return false;
-    }
-    slots = (MinicFunctionId *)malloc(capacity * sizeof(*slots));
-    if (slots == NULL) {
-        return false;
-    }
-    for (index = 0U; index < capacity; ++index) {
-        slots[index] = MINIC_FUNCTION_INVALID;
-    }
-    for (index = 0U; index < required_count; ++index) {
-        if (!minic_parser_function_name_slot_insert(
-                parser, slots, capacity, (MinicFunctionId)index)) {
-            free(slots);
-            return false;
-        }
-    }
-    free(parser->perf_function_name_slots);
-    parser->perf_function_name_slots = slots;
-    parser->perf_function_name_slot_capacity = capacity;
-    parser->perf_function_name_indexed_count = required_count;
-    return true;
-}
-
-static bool minic_parser_function_name_index_sync(MinicParser *parser) {
-    size_t required_count;
-    size_t index;
-
-    if (parser == NULL || parser->program == NULL) {
-        return false;
-    }
-    required_count = parser->program->function_count;
-    if (required_count < parser->perf_function_name_indexed_count) {
-        return minic_parser_function_name_index_rebuild(parser, required_count);
-    }
-    if (parser->perf_function_name_slots == NULL ||
-        parser->perf_function_name_slot_capacity == 0U ||
-        required_count > parser->perf_function_name_slot_capacity / 2U) {
-        return minic_parser_function_name_index_rebuild(parser, required_count);
-    }
-    for (index = parser->perf_function_name_indexed_count;
-         index < required_count;
-         ++index) {
-        if (!minic_parser_function_name_slot_insert(
-                parser,
-                parser->perf_function_name_slots,
-                parser->perf_function_name_slot_capacity,
-                (MinicFunctionId)index)) {
-            return false;
-        }
-    }
-    parser->perf_function_name_indexed_count = required_count;
-    return true;
-}
-
-/* The original lookup is first-declaration-wins.  Keep that exact
- * ordering on allocator failure and in forced-fallback regression tests. */
-static MinicFunctionId minic_parser_function_name_linear_fallback(
-    MinicParser *parser, MinicSourceSpan name_span) {
-    size_t index;
-    const size_t length = minic_parser_span_length(name_span);
-    for (index = 0U; index < parser->program->function_count; ++index) {
-        const MinicFunction *fn = minic_c0_program_function(parser->program, index);
-        parser->perf_find_function_steps += 1U;
-        if (fn != NULL && fn->name_length == length &&
-            memcmp(fn->name, parser->source + name_span.begin.offset, length) == 0) {
-            return (MinicFunctionId)index;
-        }
-    }
-    return MINIC_FUNCTION_INVALID;
-}
-
 MinicFunctionId minic_parser_find_function(const MinicParser *parser_const,
-                                                 MinicSourceSpan name_span) {
+                                                  MinicSourceSpan name_span) {
     MinicParser *parser = (MinicParser *)parser_const;
-    size_t name_length;
-    size_t mask;
-    size_t slot_index;
-    size_t probes;
-
-    if (parser == NULL || parser->program == NULL) {
-        return MINIC_FUNCTION_INVALID;
-    }
+    const char *name;
+    size_t length;
+    bool consistent;
+    if (parser == NULL || parser->program == NULL) return SIZE_MAX;
     parser->perf_find_function_calls += 1U;
+    name = parser->source + name_span.begin.offset;
+    length = minic_parser_span_length(name_span);
 #if defined(MINIC_TEST_FORCE_PARSER_HASH_FALLBACK)
-    return minic_parser_function_name_linear_fallback(parser, name_span);
+    return minic_parser_name_linear_lookup(parser->program, MINIC_PARSER_NAME_FUNCTION,
+        parser->program->function_count, name, length, &parser->perf_find_function_steps);
 #endif
     if (parser->cache_owner != parser ||
-        !minic_parser_function_name_index_sync(parser) ||
-        parser->perf_function_name_slot_capacity == 0U) {
-        return minic_parser_function_name_linear_fallback(parser, name_span);
-    }
-    name_length = minic_parser_span_length(name_span);
-    mask = parser->perf_function_name_slot_capacity - 1U;
-    slot_index =
-        minic_parser_symbol_name_hash(
-            parser->source + name_span.begin.offset, name_length) & mask;
-    for (probes = 0U;
-         probes < parser->perf_function_name_slot_capacity;
-         ++probes) {
-        MinicFunctionId function_id =
-            parser->perf_function_name_slots[slot_index];
-        const MinicFunction *function;
-
-        parser->perf_find_function_steps += 1U;
-        if (function_id == MINIC_FUNCTION_INVALID) {
-            return MINIC_FUNCTION_INVALID;
-        }
-        function = minic_c0_program_function(parser->program, function_id);
-        if (function != NULL && function->name_length == name_length &&
-            memcmp(function->name,
-                   parser->source + name_span.begin.offset,
-                   name_length) == 0) {
-            return function_id;
-        }
-        slot_index = (slot_index + 1U) & mask;
-    }
-    return MINIC_FUNCTION_INVALID;
+        !minic_parser_name_index_sync(parser->program, MINIC_PARSER_NAME_FUNCTION,
+            parser->program->function_count, &parser->perf_function_name_slots,
+            &parser->perf_function_name_slot_capacity,
+            &parser->perf_function_name_indexed_count, NULL) ||
+        parser->perf_function_name_slot_capacity == 0U)
+        return minic_parser_name_linear_lookup(parser->program, MINIC_PARSER_NAME_FUNCTION,
+            parser->program->function_count, name, length, &parser->perf_find_function_steps);
+    return minic_parser_name_index_lookup(parser->program, MINIC_PARSER_NAME_FUNCTION,
+        parser->perf_function_name_slots, parser->perf_function_name_slot_capacity,
+        name, length, &parser->perf_find_function_steps, &consistent);
 }
-
 
 const MinicParserTagBinding *minic_parser_find_tag(const MinicParser *parser,
                                                    MinicSourceSpan name_span) {

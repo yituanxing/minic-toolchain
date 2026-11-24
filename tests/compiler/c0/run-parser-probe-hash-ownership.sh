@@ -34,5 +34,30 @@ for target in x86_64-linux riscv64-linux riscv32-linux aarch64-linux loongarch64
     fi
 done
 
+# Exercise incremental inserts and several resize boundaries in all three
+# file-scope caches, first-declaration lookup, local shadowing, and GNU oracles.
+python3 - "$work/name-index.c" <<'PY'
+import sys
+with open(sys.argv[1], "w") as out:
+    for i in range(80):
+        print(f"typedef int alias_{i};", file=out)
+        print(f"extern int global_{i};", file=out)
+        print(f"int function_{i}(alias_{i} x);", file=out)
+        print(f"int global_{i} = {i};", file=out)
+        print(f"int function_{i}(alias_{i} x) {{ return global_{i} + x; }}", file=out)
+        print(f"int use_{i}(void) {{ return function_{i}(({ 'alias_'+str(i) })1); }}", file=out)
+    print("int shadow(void) { typedef int alias_0; alias_0 global_0 = 7; return global_0; }", file=out)
+    print("int main(void) { return (use_0() + use_79() + shadow() == 88) ? 0 : 1; }", file=out)
+PY
+"$host_cc" -std=gnu11 "$work/name-index.c" -o "$work/name-index-gnu"
+"$work/name-index-gnu"
+"$host_cc" -E -P -std=gnu11 -x c "$work/name-index.c" -o "$work/name-index.i"
+for target in x86_64-linux riscv64-linux riscv32-linux aarch64-linux loongarch64-linux; do
+    "$minic_cc" --target="$target" -S "$work/name-index.i" -o "$work/name-index-$target.s"
+done
+"$host_cc" -no-pie "$work/name-index-x86_64-linux.s" -o "$work/name-index-minic"
+"$work/name-index-minic"
+printf '%s\n' 'PASS parser name-index resize/redeclaration/shadowing: five ISA source output, GNU and MiniC x86 runtime'
+
 printf '%s\n' \
     'PASS parser probe hash ownership: GNU positive, five ISA positive/negative, no double-free'

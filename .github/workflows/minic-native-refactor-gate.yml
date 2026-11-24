@@ -230,6 +230,10 @@ jobs:
           make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/minic-native-backend all
           test -x build/minic-native-backend/bin/minic
           test -x build/minic-native-backend/bin/minic-cc
+      - name: Parser name-cache ownership, rehash and five-target declarations
+        run: |
+          MINIC_CC="$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc" \
+            HOST_CC=cc bash tests/compiler/c0/run-parser-probe-hash-ownership.sh
       - name: Source-free record layout and five-target GNU empty record differential
         run: |
           make MODE=release CFLAGS=-Werror BUILD_DIR=build/minic-native-backend \

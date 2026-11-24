@@ -1,4 +1,5 @@
 #include "frontend/parser_internal.h"
+#include "frontend/parser_name_index.h"
 #include "frontend/declaration_sema.h"
 
 #include <limits.h>
@@ -6,143 +7,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-
-static size_t minic_parser_typedef_name_hash(const char *name, size_t length) {
-    uint64_t hash = UINT64_C(14695981039346656037);
-    size_t i;
-    for (i = 0U; i < length; ++i) {
-        hash ^= (unsigned char)name[i];
-        hash *= UINT64_C(1099511628211);
-    }
-    return (size_t)hash;
-}
-
-static bool minic_parser_typedef_slot_insert(
-    const MinicC0Program *program, MinicTypeAliasId *slots,
-    size_t capacity, MinicTypeAliasId alias_id) {
-    const MinicTypeAlias *alias = minic_c0_program_type_alias(program, alias_id);
-    size_t slot, n;
-    if (alias == NULL || slots == NULL || capacity == 0U) {
-        return false;
-    }
-    if (alias->is_block_scope) {
-        return true;
-    }
-    slot = minic_parser_typedef_name_hash(alias->name, alias->name_length) &
-           (capacity - 1U);
-    for (n = 0U; n < capacity; ++n) {
-        MinicTypeAliasId prior_id = slots[slot];
-        if (prior_id == MINIC_TYPE_ALIAS_INVALID) {
-            slots[slot] = alias_id;
-            return true;
-        }
-        if (prior_id >= program->type_alias_count) {
-            return false;
-        }
-        {
-            const MinicTypeAlias *prior = &program->type_aliases[prior_id];
-            /* Retain earliest declared global alias on equal names. */
-            if (prior->name_length == alias->name_length &&
-                memcmp(prior->name, alias->name, alias->name_length) == 0) {
-                return true;
-            }
-        }
-        slot = (slot + 1U) & (capacity - 1U);
-    }
-    return false;
-}
-
-static bool minic_parser_typedef_index_rebuild(MinicParser *parser) {
-    const MinicC0Program *program = parser->program;
-    MinicTypeAliasId *slots;
-    size_t capacity = 16U, index;
-    if (program == NULL || program->type_alias_count > SIZE_MAX / 2U) {
-        return false;
-    }
-    while (capacity < program->type_alias_count * 2U) {
-        if (capacity > SIZE_MAX / 2U) {
-            return false;
-        }
-        capacity *= 2U;
-    }
-    if (capacity > SIZE_MAX / sizeof(*slots)) {
-        return false;
-    }
-    slots = (MinicTypeAliasId *)malloc(capacity * sizeof(*slots));
-    if (slots == NULL) {
-        return false;
-    }
-    for (index = 0U; index < capacity; ++index) {
-        slots[index] = MINIC_TYPE_ALIAS_INVALID;
-    }
-    for (index = 0U; index < program->type_alias_count; ++index) {
-        if (!minic_parser_typedef_slot_insert(program, slots, capacity, index)) {
-            free(slots);
-            return false;
-        }
-    }
-    free(parser->perf_typedef_name_slots);
-    parser->perf_typedef_name_slots = slots;
-    parser->perf_typedef_name_capacity = capacity;
-    parser->perf_typedef_name_indexed_count = program->type_alias_count;
-    parser->perf_typedef_rebuilds += 1U;
-    return true;
-}
-
-static bool minic_parser_typedef_index_sync(MinicParser *parser) {
-    size_t index, count;
-    if (parser == NULL || parser->program == NULL) {
-        return false;
-    }
-    count = parser->program->type_alias_count;
-    if (parser->perf_typedef_name_indexed_count > count ||
-        parser->perf_typedef_name_slots == NULL ||
-        count > parser->perf_typedef_name_capacity / 2U) {
-        return minic_parser_typedef_index_rebuild(parser);
-    }
-    for (index = parser->perf_typedef_name_indexed_count;
-         index < count; ++index) {
-        if (!minic_parser_typedef_slot_insert(
-                parser->program, parser->perf_typedef_name_slots,
-                parser->perf_typedef_name_capacity, index)) {
-            return false;
-        }
-    }
-    parser->perf_typedef_name_indexed_count = count;
-    return true;
-}
-
-static MinicTypeAliasId minic_parser_typedef_index_lookup(
-    MinicParser *parser, MinicSourceSpan span, bool *consistent) {
-    const char *name = parser->source + span.begin.offset;
-    size_t length = minic_parser_span_length(span);
-    size_t capacity = parser->perf_typedef_name_capacity;
-    size_t slot = minic_parser_typedef_name_hash(name, length) & (capacity - 1U);
-    size_t n;
-    *consistent = false;
-    for (n = 0U; n < capacity; ++n) {
-        MinicTypeAliasId id = parser->perf_typedef_name_slots[slot];
-        parser->perf_typedef_probes += 1U;
-        if (id == MINIC_TYPE_ALIAS_INVALID) {
-            *consistent = true;
-            return MINIC_TYPE_ALIAS_INVALID;
-        }
-        if (id >= parser->program->type_alias_count) {
-            break;
-        }
-        {
-            const MinicTypeAlias *alias = &parser->program->type_aliases[id];
-            if (!alias->is_block_scope && alias->name_length == length &&
-                memcmp(alias->name, name, length) == 0) {
-                *consistent = true;
-                return id;
-            }
-        }
-        slot = (slot + 1U) & (capacity - 1U);
-    }
-    /* Inconsistent table: let the caller do the original linear scan. */
-    return MINIC_TYPE_ALIAS_INVALID;
-}
 
 MinicTypeAliasId minic_parser_find_type_alias(const MinicParser *parser,
                                               MinicSourceSpan name_span) {
@@ -165,27 +29,26 @@ MinicTypeAliasId minic_parser_find_type_alias(const MinicParser *parser,
 
     ((MinicParser *)parser)->perf_typedef_queries += 1U;
     if (parser->cache_owner == parser &&
-        minic_parser_typedef_index_sync((MinicParser *)parser)) {
-        bool consistent = false;
-        MinicTypeAliasId id = minic_parser_typedef_index_lookup(
-            (MinicParser *)parser, name_span, &consistent);
-        if (consistent) {
-            return id;
-        }
+        minic_parser_name_index_sync(parser->program, MINIC_PARSER_NAME_TYPEDEF,
+            parser->program->type_alias_count,
+            &((MinicParser *)parser)->perf_typedef_name_slots,
+            &((MinicParser *)parser)->perf_typedef_name_capacity,
+            &((MinicParser *)parser)->perf_typedef_name_indexed_count,
+            &((MinicParser *)parser)->perf_typedef_rebuilds)) {
+        bool consistent;
+        MinicTypeAliasId id = minic_parser_name_index_lookup(
+            parser->program, MINIC_PARSER_NAME_TYPEDEF,
+            parser->perf_typedef_name_slots, parser->perf_typedef_name_capacity,
+            parser->source + name_span.begin.offset,
+            minic_parser_span_length(name_span),
+            &((MinicParser *)parser)->perf_typedef_probes, &consistent);
+        if (consistent) return id;
     }
     ((MinicParser *)parser)->perf_typedef_fallbacks += 1U;
     name_length = minic_parser_span_length(name_span);
-    for (index = 0U; index < parser->program->type_alias_count; ++index) {
-        const MinicTypeAlias *alias;
-        ((MinicParser *)parser)->perf_find_type_alias_steps += 1U;
-
-        alias = minic_c0_program_type_alias(parser->program, index);
-        if (alias != NULL && !alias->is_block_scope && alias->name_length == name_length &&
-            memcmp(alias->name, parser->source + name_span.begin.offset, name_length) == 0) {
-            return index;
-        }
-    }
-    return MINIC_TYPE_ALIAS_INVALID;
+    return minic_parser_name_linear_lookup(parser->program, MINIC_PARSER_NAME_TYPEDEF,
+        parser->program->type_alias_count, parser->source + name_span.begin.offset,
+        name_length, &((MinicParser *)parser)->perf_find_type_alias_steps);
 }
 
 static bool parse_parenthesized_function_typedef(MinicParser *parser,
