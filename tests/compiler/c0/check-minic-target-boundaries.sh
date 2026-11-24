@@ -1884,7 +1884,10 @@ lacks src/target/riscv/machine_core_select.c 'minic_data_layout_type('
 # RV32's typed machine selector consumes the already classified ILP32 ABI
 # plan, while its sole CoreType ID/shape classifier lives in rv32_abi_plan.
 # It cannot bypass that plan by reviving a private FILE* call dispatcher.
-has src/target/riscv32/rv32_abi_plan.c 'rv32_abi_core_type('
+has src/target/riscv32/rv32_abi_plan.c 'minic_core_function_base_type('
+has src/core/core_ir.h 'minic_core_type_base(function->type_context, id)'
+has src/core/core_type.h 'minic_core_type_get(context, minic_core_type_unqualified(context, id))'
+lacks src/target/riscv32/rv32_abi_plan.c 'minic_core_type_unqualified('
 has src/target/riscv32/rv32_abi_plan.c 'minic_core_call_view_argument_core_type('
 has src/target/riscv/machine_core_select.c 'rv32_function_abi_call('
 lacks src/target/riscv/machine_core_select.c 'minic_type_is_'
