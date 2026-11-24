@@ -22,6 +22,12 @@ case $1 in
     gnu-inline-keyword-spellings|gnu-no-profile-function-attribute|gnu-typeof-array-type-name|gnu-const-function-attribute|enum-forward-completion|gnu-choose-expr-bitfield|gnu-local-interleaved-informational-attribute)
         set -- "$1" -std=gnu11
         ;;
+    array-bound-integer-casts|bitwise-and-assignment-expressions|cast-type-classification|comma-operator|extern-multidimensional-array|extern-objects|external-pointer-arrays|function-pointer-parameters|function-type-typedefs|global-pointer-subscripts|gnu-local-object-alignment)
+        set -- "$1"
+        ;;
+    block-scope-extern-function-attributes|builtin-expect|extern-multi-declarators|function-linkage-inheritance|gnu-extension-declaration|gnu-extension-prefix-declarations|gnu-format-cold-attributes|gnu-function-visibility|gnu-signed-keyword|gnu-typeof-array-bound-cast|gnu-typeof-local-declaration)
+        set -- "$1" -std=gnu11
+        ;;
     *)
         echo "unknown compile-only case: $1" >&2
         exit 2
@@ -34,6 +40,27 @@ work=${BUILD_DIR:-"$root/build/debug"}/tests/$name
 input=input
 output=output
 case "$name" in
+    array-bound-integer-casts|bitwise-and-assignment-expressions|block-scope-extern-function-attributes|builtin-expect|cast-type-classification|comma-operator|extern-multi-declarators|extern-multidimensional-array|extern-objects|external-pointer-arrays|function-linkage-inheritance|function-pointer-parameters|function-type-typedefs|global-pointer-subscripts|gnu-extension-declaration|gnu-extension-prefix-declarations|gnu-format-cold-attributes|gnu-function-visibility|gnu-local-object-alignment|gnu-signed-keyword|gnu-typeof-array-bound-cast|gnu-typeof-local-declaration)
+        work=${BUILD_DIR:-"$root/build/debug"}/tests/compiler-c0-$name
+        input=$source
+        output=$source
+        case "$name" in
+            array-bound-integer-casts) source=array_bound_integer_cast; work=${BUILD_DIR:-"$root/build/debug"}/tests/compiler-c0-array-bound-integer-casts; input=array_bound_integer_cast; output=array_bound_integer_cast ;;
+            bitwise-and-assignment-expressions) source=bitwise_and_assignment_expression; work=${BUILD_DIR:-"$root/build/debug"}/tests/compiler-c0-bitwise-and-assignment-expressions; input=bitwise_and_assignment_expression; output=bitwise_and_assignment_expression ;;
+            extern-multi-declarators) source=extern_multi_declarators; work=${BUILD_DIR:-"$root/build/debug"}/tests/compiler-c0-extern-multi-declarators; input=input; output=extern_multi_declarators ;;
+            extern-objects) source=extern_object; work=${BUILD_DIR:-"$root/build/debug"}/tests/compiler-c0-extern-objects; input=extern_object; output=extern_object ;;
+            external-pointer-arrays) source=external_pointer_array; work=${BUILD_DIR:-"$root/build/debug"}/tests/compiler-c0-external-pointer-array; input=external_pointer_array; output=external_pointer_array ;;
+            function-linkage-inheritance) source=function_linkage_inheritance; work=${BUILD_DIR:-"$root/build/debug"}/tests/compiler-c0-function-linkage-inheritance; input=input; output=function_linkage_inheritance ;;
+            function-pointer-parameters) source=function_pointer_parameter; work=${BUILD_DIR:-"$root/build/debug"}/tests/compiler-c0-function-pointer-parameters; input=function_pointer_parameter; output=function_pointer_parameter ;;
+            function-type-typedefs) source=function_type_typedef; work=${BUILD_DIR:-"$root/build/debug"}/tests/compiler-c0-function-type-typedefs; input=function_type_typedef; output=function_type_typedef ;;
+            global-pointer-subscripts) source=global_pointer_subscript; work=${BUILD_DIR:-"$root/build/debug"}/tests/compiler-c0-global-pointer-subscripts; input=global_pointer_subscript; output=global_pointer_subscript ;;
+            gnu-extension-prefix-declarations) source=gnu_extension_prefix_declaration; work=${BUILD_DIR:-"$root/build/debug"}/tests/compiler-c0-gnu-extension-prefix; input=gnu_extension_prefix_declaration; output=gnu_extension_prefix_declaration ;;
+            gnu-format-cold-attributes) source=gnu_format_cold_attributes; work=${BUILD_DIR:-"$root/build/debug"}/tests/compiler-c0-gnu-format-cold-attributes; input=input; output=gnu_format_cold_attributes ;;
+            gnu-local-object-alignment) source=gnu_local_object_alignment; work=${BUILD_DIR:-"$root/build/debug"}/tests/compiler-c0-gnu-local-object-alignment; input=input; output=output ;;
+            gnu-typeof-array-bound-cast) source=gnu_typeof_array_bound_cast; work=${BUILD_DIR:-"$root/build/debug"}/tests/compiler-c0-gnu-typeof-array-bound-cast; input=input; output=output ;;
+        esac
+        rm -rf "$work"
+        ;;
     void-casts)
         source=void_cast_discard
         work=${BUILD_DIR:-"$root/build/debug"}/tests/compiler-c0-void-casts
@@ -161,9 +188,163 @@ case "$name" in
         ;;
 esac
 mkdir -p "$work"
+if [ "$name" = gnu-typeof-array-bound-cast ]; then
+    "$host_cc" -fsyntax-only -std=gnu11 -x c "$root/tests/compiler/c0/$source.c"
+fi
 "$host_cc" -E -P "$@" -x c "$root/tests/compiler/c0/$source.c" -o "$work/$input.i"
 "$minic" -S "$work/$input.i" -o "$work/$output.s"
 case "$name" in
+    array-bound-integer-casts)
+        grep -F '  li a0, 32' "$work/$output.s" >/dev/null
+        grep -F '  li a0, 4' "$work/$output.s" >/dev/null
+        printf '%s\n' 'PASS compiler/c0/array_bound_integer_cast enum-cast=1 truncation=uint8 typed-ast-consteval=1'
+        ;;
+    bitwise-and-assignment-expressions)
+        test "$(grep -c -F '  call next_flags' "$work/$output.s")" -eq 1
+        grep -F '  and a0, t0, a0' "$work/$output.s" >/dev/null
+        printf '%s\n' 'PASS compiler/c0/bitwise_and_assignment_expression integer=1 lvalue-evaluated-once=1'
+        ;;
+    block-scope-extern-function-attributes)
+        test -s "$work/$output.s"
+        grep -F '__compiletime_assert_0' "$work/$output.s" >/dev/null
+        printf '%s\n' 'PASS compiler/c0/block_scope_extern_function_attributes scope=block linkage=extern prefix=noreturn suffix=error direct-call-resolved=1'
+        ;;
+    builtin-expect)
+        test -s "$work/$output.s"
+        grep -F 'expect_value:' "$work/$output.s" >/dev/null
+        grep -F 'expect_zero:' "$work/$output.s" >/dev/null
+        if grep -F '__builtin_expect' "$work/$output.s" >/dev/null; then
+            printf '%s\n' 'FAIL compiler/c0/builtin_expect emitted runtime builtin symbol' >&2
+            exit 1
+        fi
+        printf '%s\n' 'PASS compiler/c0/builtin_expect value=first-argument return-type=long hint=integer-constant runtime-call=none'
+        ;;
+    cast-type-classification)
+        test -s "$work/$output.s"
+        grep -F 'read_union_cast:' "$work/$output.s" >/dev/null
+        grep -F 'read_volatile_cast:' "$work/$output.s" >/dev/null
+        grep -F 'narrow_short:' "$work/$output.s" >/dev/null
+        printf '%s\n' 'PASS compiler/c0/cast_type_classification short=1 union=1 volatile=1'
+        ;;
+    comma-operator)
+        test -s "$work/$output.s"
+        grep -F 'comma_growth:' "$work/$output.s" >/dev/null
+        grep -F 'comma_value:' "$work/$output.s" >/dev/null
+        grep -F 'comma_conditions:' "$work/$output.s" >/dev/null
+        grep -F 'comma_expression_statement:' "$work/$output.s" >/dev/null
+        printf '%s\n' 'PASS compiler/c0/comma_operator parenthesized=1 pool-growth=1 top-level-condition=while,if expression-statement=1 void-left=1 assignment-side-effect=1 result=right'
+        ;;
+    extern-multi-declarators)
+        test -s "$work/$output.s"
+        grep -F '  la a0, start_like' "$work/$output.s" >/dev/null
+        grep -F '  la a0, end_like' "$work/$output.s" >/dev/null
+        if grep -F 'start_like:' "$work/$output.s" >/dev/null || grep -F 'end_like:' "$work/$output.s" >/dev/null; then
+            printf '%s\n' 'FAIL compiler/c0/extern_multi_declarators: declaration emitted storage' >&2
+            exit 1
+        fi
+        printf '%s\n' 'PASS compiler/c0/extern_multi_declarators shared-base=function-pointer arrays=2 incomplete=2 storage=none'
+        ;;
+    extern-multidimensional-array)
+        test -s "$work/$output.s"
+        grep -F 'read_cpu_bit:' "$work/$output.s" >/dev/null
+        grep -F 'cpu_bit_row:' "$work/$output.s" >/dev/null
+        printf '%s\n' 'PASS compiler/c0/extern_multidimensional_array dimensions=2 bounds=constant-expression nested-type=Array(Array(ulong)) subscript=2 row-decay=pointer'
+        ;;
+    extern-objects)
+        grep -F '  la a0, external_counter' "$work/$output.s" >/dev/null
+        grep -F '  lw a0, 0(a0)' "$work/$output.s" >/dev/null
+        if grep -F '.type external_counter, @object' "$work/$output.s" >/dev/null ||
+           grep -F 'external_counter:' "$work/$output.s" >/dev/null; then
+            printf '%s\n' 'FAIL compiler/c0/extern_object: declaration emitted a definition' >&2
+            exit 1
+        fi
+        printf '%s\n' 'PASS compiler/c0/extern_object declaration-only=external-symbol-reference'
+        ;;
+    external-pointer-arrays)
+        grep -F '.type names, @object' "$work/$output.s" >/dev/null
+        grep -F '.globl names' "$work/$output.s" >/dev/null
+        grep -F '  .dword shared_name' "$work/$output.s" >/dev/null
+        grep -F '  .dword .Lminic_string_' "$work/$output.s" >/dev/null
+        grep -F '  .dword 0' "$work/$output.s" >/dev/null
+        grep -F '.size names, 32' "$work/$output.s" >/dev/null
+        printf '%s\n' 'PASS compiler/c0/external_pointer_array bound=4 string-reloc=2 object-reloc=1 null=1 storage=32'
+        ;;
+    function-linkage-inheritance)
+        test -s "$work/$output.s"
+        grep -F 'read_timer_like:' "$work/$output.s" >/dev/null
+        if grep -F '.globl read_timer_like' "$work/$output.s" >/dev/null; then
+            printf '%s\n' 'FAIL compiler/c0/function_linkage_inheritance internal function was exported' >&2
+            exit 1
+        fi
+        printf '%s\n' 'PASS compiler/c0/function_linkage_inheritance prior=static-inline later=non-static-declaration effective-linkage=internal export=none'
+        ;;
+    function-pointer-parameters)
+        grep -F '.type callback, @function' "$work/$output.s" >/dev/null
+        grep -F '  la a0, callback' "$work/$output.s" >/dev/null
+        grep -F '  call accept_callback' "$work/$output.s" >/dev/null
+        printf '%s\n' 'PASS compiler/c0/function_pointer_parameter direct-declarator=void-callback'
+        ;;
+    function-type-typedefs)
+        grep -F '.type callback, @function' "$work/$output.s" >/dev/null
+        grep -F '  la a0, callback' "$work/$output.s" >/dev/null
+        grep -F '  call install_callback' "$work/$output.s" >/dev/null
+        printf '%s\n' 'PASS compiler/c0/function_type_typedef alias=function pointer-use=direct'
+        ;;
+    global-pointer-subscripts)
+        grep -F '  la a0, items' "$work/$output.s" >/dev/null
+        grep -F '  ld a0, 0(a0)' "$work/$output.s" >/dev/null
+        grep -F '  slli a0, a0, 3' "$work/$output.s" >/dev/null
+        printf '%s\n' 'PASS compiler/c0/global_pointer_subscript base=global-pointer element=pointer stride=8'
+        ;;
+    gnu-extension-declaration)
+        test -s "$work/$output.s"
+        grep -F 'read_wide:' "$work/$output.s" >/dev/null
+        grep -F 'wide_size:' "$work/$output.s" >/dev/null
+        grep -F '  li a0, 8' "$work/$output.s" >/dev/null
+        printf '%s\n' 'PASS compiler/c0/gnu_extension_declaration marker=diagnostic-only union-field=1 layout=unchanged size=8'
+        ;;
+    gnu-extension-prefix-declarations)
+        test -s "$work/$output.s"
+        grep -F 'extension_sum:' "$work/$output.s" >/dev/null
+        printf '%s\n' 'PASS compiler/c0/gnu_extension_prefix_declaration marker=diagnostic-only placement=before-typedef signed-alias=1'
+        ;;
+    gnu-format-cold-attributes)
+        test -s "$work/$output.s"
+        grep -F 'main:' "$work/$output.s" >/dev/null
+        grep -F 'ftrace_vprintk_like:' "$work/$output.s" >/dev/null
+        grep -F 'reordered_static_inline:' "$work/$output.s" >/dev/null
+        printf '%s\n' 'PASS compiler/c0/gnu_format_cold_attributes prefix=format suffix=noreturn,cold interleaved=static-attr-inline-attr+inline-static classification=diagnostic+optimization ABI=unchanged'
+        ;;
+    gnu-function-visibility)
+        test -s "$work/$output.s"
+        grep -F '.globl visible_api' "$work/$output.s" >/dev/null
+        grep -F '.internal visible_api' "$work/$output.s" >/dev/null
+        grep -F '  call visible_api' "$work/$output.s" >/dev/null
+        printf '%s\n' 'PASS compiler/c0/gnu_function_visibility prefix=1 internal=ELF-directive redeclaration=consistent'
+        ;;
+    gnu-local-object-alignment)
+        grep -F 'local_explicit_alignment:' "$work/$output.s" >/dev/null
+        grep -F 'local_alignof_alignment:' "$work/$output.s" >/dev/null
+        grep -F '  li t1, -32' "$work/$output.s" >/dev/null
+        grep -F '  and sp, sp, t1' "$work/$output.s" >/dev/null
+        printf '%s\n' 'PASS compiler/c0/gnu_local_object_alignment frontend=explicit-alignment core=owned rv64=max-natural-explicit dynamic-stack=32 alignof=accepted'
+        ;;
+    gnu-signed-keyword)
+        test -s "$work/$output.s"
+        grep -F 'widen_signed_aliases:' "$work/$output.s" >/dev/null
+        grep -F '  lb a0,' "$work/$output.s" >/dev/null
+        printf '%s\n' 'PASS compiler/c0/gnu_signed_keyword aliases=__signed,__signed__ types=char,short,int,long'
+        ;;
+    gnu-typeof-array-bound-cast)
+        test -s "$work/$output.s"
+        grep -F 'typeof_array_bound_cast_size:' "$work/$output.s" >/dev/null
+        printf '%s\n' 'PASS compiler/c0/gnu_typeof_array_bound_cast semantic-ast=1 typed-consteval=1'
+        ;;
+    gnu-typeof-local-declaration)
+        test -s "$work/$output.s"
+        grep -F 'copy_next:' "$work/$output.s" >/dev/null
+        printf '%s\n' 'PASS compiler/c0/gnu_typeof_local_declaration dispatch=shared-type-lookahead statement-expression=1 pointer-type=preserved'
+        ;;
     void-casts)
         grep -F '  call bump' "$work/$output.s" >/dev/null
         printf '%s\n' 'PASS compiler/c0/void_cast_discard literal=discard call=side-effect-preserved'
