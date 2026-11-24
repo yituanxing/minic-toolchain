@@ -29,12 +29,10 @@ MinicElfModuleSymbolFacts minic_multi_elf_module_symbol_facts(
         bool local, owner;
         if (object->name == NULL || strcmp(object->name, symbol) != 0)
             continue;
-        local = object->emittable && object->is_internal &&
-                (object->definition_kind != MINIC_CORE_MODULE_DEFINITION_DECLARATION ||
-                 object->alias_target_index != SIZE_MAX);
         owner = object->emittable &&
                 (object->definition_kind != MINIC_CORE_MODULE_DEFINITION_DECLARATION ||
                  object->alias_target_index != SIZE_MAX);
+        local = owner && object->is_internal;
         facts.tu_local |= local;
         facts.nonpreemptible |= local ||
             ((object->emittable ||

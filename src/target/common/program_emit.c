@@ -349,6 +349,24 @@ static bool minic_program_emit_collect_symbol_uses_module(
     return minic_program_asm_token_index_build(uses);
 }
 
+/* Shared ELF reference emission; object/function eligibility remains with
+ * the respective ModuleIR declaration owner. */
+static bool minic_program_emit_undefined_binding(
+    FILE *out, const MinicProgramSymbolUses *uses,
+    const MinicCoreModule *module, const char *name,
+    bool file_asm_root, bool weak, MinicCoreModuleVisibility visibility,
+    MinicElfModuleSymbolKind kind) {
+    const char *directive = minic_multi_elf_module_visibility_directive(visibility);
+    const bool used = minic_program_symbol_use_has(uses, name) ||
+        file_asm_root || minic_program_symbol_used_in_live_raw_core_asm(uses, name);
+    const bool undefined_weak = weak &&
+        minic_multi_elf_module_symbol_facts(module, name, kind).undefined_weak;
+    return !used || (name != NULL &&
+        (!undefined_weak || fprintf(out, ".weak %s\n", name) >= 0) &&
+        (visibility == MINIC_CORE_MODULE_VISIBILITY_DEFAULT ||
+         (directive != NULL && fprintf(out, "%s %s\n", directive, name) >= 0)));
+}
+
 /* Undefined ELF bindings belong to real references, not mere C declarations.
  * In particular, a referenced GNU extern weak symbol must retain `.weak`:
  * the ELF linker may legally resolve it to zero without a definition.  A
@@ -374,23 +392,9 @@ static bool minic_program_emit_undefined_symbol_visibility_module(
             if (object->definition_kind == MINIC_CORE_MODULE_DEFINITION_DECLARATION &&
                 !object->is_internal &&
                 object->alias_target_index == SIZE_MAX) {
-                const char *directive =
-                    minic_multi_elf_module_visibility_directive(object->visibility);
-                const bool used =
-                    minic_program_symbol_use_has(&uses, object->name) ||
-                    object->is_file_asm_root ||
-                    minic_program_symbol_used_in_live_raw_core_asm(
-                        &uses, object->name);
-                const bool undefined_weak = object->is_weak &&
-                    minic_multi_elf_module_symbol_facts(
-                        module, object->name,
-                        MINIC_ELF_MODULE_SYMBOL_OBJECT).undefined_weak;
-                if (used && (object->name == NULL ||
-                    (undefined_weak &&
-                     fprintf(out, ".weak %s\n", object->name) < 0) ||
-                    (object->visibility != MINIC_CORE_MODULE_VISIBILITY_DEFAULT &&
-                     (directive == NULL ||
-                      fprintf(out, "%s %s\n", directive, object->name) < 0)))) {
+                if (!minic_program_emit_undefined_binding(
+                        out, &uses, module, object->name, object->is_file_asm_root,
+                        object->is_weak, object->visibility, MINIC_ELF_MODULE_SYMBOL_OBJECT)) {
                     ok = false;
                     break;
                 }
@@ -401,23 +405,9 @@ static bool minic_program_emit_undefined_symbol_visibility_module(
                 &module->function_symbols[index];
             if (!function->is_defined && !function->is_internal &&
                 function->alias_target_index == SIZE_MAX) {
-                const char *directive =
-                    minic_multi_elf_module_visibility_directive(function->visibility);
-                const bool used =
-                    minic_program_symbol_use_has(&uses, function->name) ||
-                    function->is_file_asm_root ||
-                    minic_program_symbol_used_in_live_raw_core_asm(
-                        &uses, function->name);
-                const bool undefined_weak = function->is_weak &&
-                    minic_multi_elf_module_symbol_facts(
-                        module, function->name,
-                        MINIC_ELF_MODULE_SYMBOL_FUNCTION).undefined_weak;
-                if (used && (function->name == NULL ||
-                    (undefined_weak &&
-                     fprintf(out, ".weak %s\n", function->name) < 0) ||
-                    (function->visibility != MINIC_CORE_MODULE_VISIBILITY_DEFAULT &&
-                     (directive == NULL ||
-                      fprintf(out, "%s %s\n", directive, function->name) < 0)))) {
+                if (!minic_program_emit_undefined_binding(
+                        out, &uses, module, function->name, function->is_file_asm_root,
+                        function->is_weak, function->visibility, MINIC_ELF_MODULE_SYMBOL_FUNCTION)) {
                     ok = false;
                     break;
                 }

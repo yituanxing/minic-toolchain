@@ -4,16 +4,9 @@
 #include <stdint.h>
 #include <string.h>
 
-static const MinicCoreType *residual_type(const MinicCoreFunction *fn,
-                                           MinicCoreTypeId id) {
-    return fn != NULL && fn->type_context != NULL
-        ? minic_core_type_get(fn->type_context,
-            minic_core_type_unqualified(fn->type_context, id)) : NULL;
-}
-
 static bool residual_kind(const MinicCoreFunction *fn, MinicCoreTypeId id,
                           MinicCoreTypeKind kind) {
-    const MinicCoreType *type = residual_type(fn, id);
+    const MinicCoreType *type = minic_core_function_base_type(fn, id);
     return type != NULL && type->kind == kind;
 }
 
@@ -69,7 +62,7 @@ bool minic_multi_direct_constant_integer_shape(
     *is_signed = false;
     (void)minic_lp64_core_integer_width(fn->type_context,
                                          ins->core_type_id, width, is_signed);
-    return *width == 8U || *width != 0U ||
+    return *width != 0U ||
            (ins->value.integer_value >= INT32_MIN &&
             ins->value.integer_value <= INT32_MAX);
 }

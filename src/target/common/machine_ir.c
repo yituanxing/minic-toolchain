@@ -3,17 +3,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-static char *machine_copy_string(const char *text) {
-    size_t length;
-    char *copy;
-    if (text == NULL) return NULL;
-    length = strlen(text);
-    if (length == SIZE_MAX) return NULL;
-    copy = malloc(length + 1U);
-    if (copy != NULL) memcpy(copy, text, length + 1U);
-    return copy;
-}
-
 static char *machine_copy_bytes(const char *bytes, size_t length) {
     char *copy;
     if (bytes == NULL || length == SIZE_MAX) return NULL;
@@ -23,6 +12,10 @@ static char *machine_copy_bytes(const char *bytes, size_t length) {
         copy[length] = '\0';
     }
     return copy;
+}
+
+static char *machine_copy_string(const char *text) {
+    return text == NULL ? NULL : machine_copy_bytes(text, strlen(text));
 }
 
 static bool machine_reserve(void **data, size_t *capacity,

@@ -1,5 +1,6 @@
 #include "target/common/module_global_emit.h"
 #include "target/common/elf_section_name.h"
+#include "target/common/elf_alias_emit.h"
 #include "core/symbol_identity.h"
 
 #include <inttypes.h>
@@ -153,13 +154,8 @@ static const char *minic_module_elf_default_section(
 static bool minic_module_elf_visibility_directive(
     MinicCoreModuleVisibility visibility, const char **directive) {
     if (directive == NULL) return false;
-    switch (visibility) {
-    case MINIC_CORE_MODULE_VISIBILITY_DEFAULT: *directive = NULL; return true;
-    case MINIC_CORE_MODULE_VISIBILITY_HIDDEN: *directive = ".hidden"; return true;
-    case MINIC_CORE_MODULE_VISIBILITY_INTERNAL: *directive = ".internal"; return true;
-    case MINIC_CORE_MODULE_VISIBILITY_PROTECTED: *directive = ".protected"; return true;
-    default: return false;
-    }
+    *directive = minic_multi_elf_module_visibility_directive(visibility);
+    return visibility == MINIC_CORE_MODULE_VISIBILITY_DEFAULT || *directive != NULL;
 }
 
 bool minic_multi_module_elf_global_plan_build(
