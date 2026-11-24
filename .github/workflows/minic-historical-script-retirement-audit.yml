@@ -532,7 +532,25 @@ jobs:
               "tools/ci/apply-perf-type-field-layout-v1.py",
               "tools/ci/apply-perf-ast-packed-call-ids-v1.py",
           }
-          if len(expected) != 654 or deleted != expected or changed != expected | metadata:
+          expected |= {
+              "tools/ci/linux-perf-current-boolean-domain-paired20-v1.py",
+              "docs/ci/ci-ownership-regression-taxonomy-2026-10-09.md",
+              "docs/ci/ci-trigger-coverage-contracts-2026-10-09.md",
+              "docs/ci/current-native-tool-validation-2026-10-11.md",
+              "docs/ci/distributed-image-assert-and-reuse-investigation-2026-10-08.md",
+              "docs/ci/linux-native-vdso64-p1-certified-2026-10-14.md",
+              "docs/ci/linux-network-fault-isolation-2026-10-11.md",
+              "docs/ci/linux-spinlock-post8250-isolation-2026-10-11.md",
+              "docs/ci/mini-native-chain-progressive-gates-2026-10-13.md",
+              "docs/ci/minild-linux-native-union-remaining-vdso-2026-10-14.md",
+              "docs/ci/p1-cfg-correctness-qualification-2026-10-13.md",
+              "docs/ci/perf-serio-gcc-preprocessing-integrity-2026-10-08.md",
+              "docs/ci/performance-profile-staged-integration-2026-10-08.md",
+              "docs/ci/pre-runtime-ci-readiness-2026-10-08.md",
+              "docs/ci/workflow-deadrefs-and-verdict-2026-10-08.md",
+              "docs/ci/workflow-liveness-artifact-audit-2026-10-09.md",
+          }
+          if len(expected) != 670 or deleted != expected or changed != expected | metadata:
               raise SystemExit("RETIREMENT_SCOPE=FAIL: unexpected tree changes")
           files = [p.decode() for p in git("ls-files", "-z").split(b"\0") if p]
           candidates = {
@@ -664,6 +682,20 @@ jobs:
               "Recheck AST verifier one-pass regressions with CPU clocks",
               "Same-runner Core reentry eager versus lazy one-factor A/B",
               "Certify Core reentry lazy-vs-eager over frozen 500 Linux TUs",
+              "Build exact current and indexed Boolean Domain MiniC pair",
+              "Build old and current native MiniC from certified source revisions",
+              "Build parent/current MiniC from one source change under identical profile",
+              "Frozen Core reentry one-factor old/new A/B",
+              "Certify Core reentry index over all 500 immutable Linux TUs",
+              "Recheck per-TU Core reentry regressions with CPU clocks and index census",
+              "Prove Boolean transitive CALL-owner filtering on real Linux",
+              "Confirm Boolean CALL owner filter across full frozen first500",
+              "Repeat 12 Boolean regression sentinel A-B with user CPU clock",
+              "Same-runner frozen Linux single-factor MiniC paired A/B",
+              "Verify Integer owner index over all 500 frozen Linux C files",
+              "Paired current MiniC versus original scoped Boolean Domain cache",
+              "Frozen Linux first500 current versus indexed Boolean Domain A/B",
+              "Real frozen Linux first500 same-runner old versus current A/B",
           }
           def split_perf(text):
               start = text.index("\n  perf500:\n")
@@ -686,8 +718,10 @@ jobs:
               assert tag in guards_now[0][2]
           for tag in ("[minic-core-name-index-ab]", "[minic-core-name-index-ab500]", "[minic-parser-string-lexer-ab]", "[minic-ast-array-owner-ab]", "[minic-ast-array-owner-ab500]", "[minic-ast-array-regression-triage]", "[minic-symbolic-source-call-ab]", "[minic-symbolic-source-call-triage]", "[minic-symbolic-source-call-ab500]", "[minic-symbolic-source-call-safety]", "[minic-parser-cold-switch-safety]", "[minic-parser-cold-switch-ab]", "[minic-parser-cold-switch-ab500]", "[minic-function-param-exact-triage]", "[minic-function-param-exact-ab]", "[minic-function-param-exact-ab500]", "[minic-ast-call-inline8-ab]", "[minic-ast-call-inline8-ab500]", "[minic-ast-call-inline8-safety]", "[minic-type-layout-regression]", "[minic-parser-cold-switch-triage]", "[minic-type-layout-ab]", "[minic-type-layout-ab500]", "[minic-ast-packed-call-regression]", "[minic-ast-packed-call-ab]", "[minic-ast-packed-call-ab500]", "[minic-ast-packed-call-edge]", "[minic-core-lazy-ab]", "[minic-core-lazy-ab500]",):
               assert tag in guards_now[0][2]
+          for tag in ("[minic-boolean-domain-ab20]", "[minic-boolean-domain-ab500]", "[minic-source-broad-ab]", "[minic-parser-copy-ab]", "[minic-integer-owner-ab]", "[minic-integer-owner-ab500]", "[minic-core-reentry-ab]", "[minic-core-reentry-ab500]", "[minic-core-regression-triage]", "[minic-boolean-owner-ab]", "[minic-boolean-owner-ab500]", "[minic-boolean-regression-triage]",):
+              assert tag in guards_now[0][2]
           assert [s for s in os_ if s[1] not in retired_steps] == [s for s in ns if s[1] != guard_name], "nonretired performance step drift"
-          print("RETIRED_PERF_STEP_EQUIVALENCE=PASS removed=27 retained_steps_unchanged=1")
+          print("RETIRED_PERF_STEP_EQUIVALENCE=PASS removed=41 retained_steps_unchanged=1")
           counts = Counter()
           for p, group in sorted(candidates.items()):
               c = consumers[p]
