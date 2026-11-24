@@ -939,6 +939,12 @@ jobs:
                   subprocess.run(["python3", "tools/ci/historical_workflows.py", "clean"], check=True)
                   subprocess.run(["git", "worktree", "remove", "--force", str(worktree)], check=True)
           PY
+      - name: Validate shared driver shell syntax
+        run: |
+          sh -n tests/compiler/c0/run-compile-only-case.sh
+          sh -n tests/compiler/c0/run-core-basic-runtime-case.sh
+          sh -n tests/compiler/c0/run-core-strict-runtime-case.sh
+
       - name: Compare nine original and shared compile-only test drivers
         run: |
           set -eu
