@@ -460,7 +460,7 @@ sh "$root/tests/compiler/c0/run-pointer-to-bool-conversion.sh"
 MINIC="$minic" \
 HOST_CC="$host_cc" \
 BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
-sh "$root/tests/compiler/c0/run-block-scope-extern-multi-declarator.sh"
+sh "$root/tests/compiler/c0/run-compile-only-case.sh" block-scope-extern-multi-declarator
 
 MINIC="$minic" \
 HOST_CC="$host_cc" \
@@ -475,7 +475,7 @@ sh "$root/tests/compiler/c0/run-record-conditional-materialization.sh"
 MINIC="$minic" \
 HOST_CC="$host_cc" \
 BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
-sh "$root/tests/compiler/c0/run-gnu-packed-record-field.sh"
+sh "$root/tests/compiler/c0/run-compile-only-case.sh" gnu-packed-record-field
 
 MINIC="$minic" \
 HOST_CC="$host_cc" \
@@ -584,13 +584,13 @@ MINIC="$minic" HOST_CC="$host_cc" BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" 
   sh "$root/tests/compiler/c0/run-alignof-expression.sh"
 
 MINIC="$minic" HOST_CC="$host_cc" BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
-  sh "$root/tests/compiler/c0/run-static-record-array-suffix-attributes.sh"
+  sh "$root/tests/compiler/c0/run-compile-only-case.sh" static-record-array-suffix-attributes
 
 MINIC="$minic" HOST_CC="$host_cc" BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
   sh "$root/tests/compiler/c0/run-compile-only-case.sh" static-record-single-char-array
 
 MINIC="$minic" HOST_CC="$host_cc" BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
-  sh "$root/tests/compiler/c0/run-preformed-static-array.sh"
+  sh "$root/tests/compiler/c0/run-compile-only-case.sh" preformed-static-array
 
 MINIC="$minic" HOST_CC="$host_cc" BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
   sh "$root/tests/compiler/c0/run-compile-only-case.sh" external-tentative-declarator-list
@@ -608,10 +608,10 @@ MINIC="$minic" HOST_CC="$host_cc" BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" 
   sh "$root/tests/compiler/c0/run-gnu-weak-external-objects.sh"
 
 MINIC="$minic" HOST_CC="$host_cc" BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
-  sh "$root/tests/compiler/c0/run-static-record-nested-designator-string-overlay.sh"
+  sh "$root/tests/compiler/c0/run-compile-only-case.sh" static-record-nested-designator-string-overlay
 
 MINIC="$minic" HOST_CC="$host_cc" BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
-  sh "$root/tests/compiler/c0/run-static-integer-address-relocation.sh"
+  sh "$root/tests/compiler/c0/run-compile-only-case.sh" static-integer-address-relocation
 
 MINIC="$minic" HOST_CC="$host_cc" BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
   sh "$root/tests/compiler/c0/run-static-union-zero-overlay.sh"
