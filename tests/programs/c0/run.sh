@@ -9,10 +9,18 @@ riscv_objdump=${RISCV_OBJDUMP:-}
 work=${BUILD_DIR:-"$root/build/debug"}/tests/programs-c0
 manifest="$root/tests/programs/c0/manifest.txt"
 programs=
+shared_programs=
 
 inventory_error() {
     printf '%s\n' "FAIL programs/c0 inventory: $1" >&2
     exit 1
+}
+
+program_source() {
+    case " $shared_programs " in
+        *" $1 "*) printf '%s\n' "$root/tests/compiler/c0/$1.c" ;;
+        *) printf '%s\n' "$root/tests/programs/c0/$1.c" ;;
+    esac
 }
 
 load_manifest() {
@@ -20,7 +28,7 @@ load_manifest() {
         inventory_error "missing manifest $manifest"
     fi
 
-    while IFS= read -r name || test -n "$name"; do
+    while read -r name owner extra || test -n "$name"; do
         case "$name" in
         ''|'#'*)
             continue
@@ -35,7 +43,15 @@ load_manifest() {
             inventory_error "duplicate program '$name'"
             ;;
         esac
-        if test ! -f "$root/tests/programs/c0/$name.c"; then
+        case "$owner:$extra" in
+            :) ;;
+            shared:)
+                test ! -e "$root/tests/programs/c0/$name.c" ||
+                    inventory_error "shared entry '$name' also has a local copy"
+                shared_programs="$shared_programs $name" ;;
+            *) inventory_error "invalid source owner for '$name'" ;;
+        esac
+        if test ! -f "$(program_source "$name")"; then
             inventory_error "manifest entry '$name' has no source file"
         fi
         programs="$programs $name"
@@ -60,6 +76,13 @@ load_manifest() {
 }
 
 load_manifest
+
+if test "${1:-}" = --list; then
+    for name in $programs; do
+        printf '%s %s\n' "$name" "$(program_source "$name")"
+    done
+    exit 0
+fi
 
 if ! command -v "$riscv_cc" >/dev/null 2>&1 ||
    ! command -v "$qemu" >/dev/null 2>&1; then
@@ -125,7 +148,7 @@ report_difference() {
 
 run_program() {
     name=$1
-    source="$root/tests/programs/c0/$name.c"
+    source=$(program_source "$name")
 
     "$riscv_cc" -std=c11 -O0 -static "$source" -o "$work/$name.gcc.elf"
     "$riscv_cc" -std=c11 -E -P -x c "$source" -o "$work/$name.i"

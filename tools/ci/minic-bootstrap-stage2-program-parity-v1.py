@@ -46,16 +46,24 @@ def require(args, *, env, timeout=150, label):
 
 def names():
     manifest = ROOT / "tests/programs/c0/manifest.txt"
-    all_names = []
+    all_names = {}
     for line in manifest.read_text().splitlines():
-        name = line.strip()
-        if not name or name.startswith("#"):
+        fields = line.split()
+        if not fields or fields[0].startswith("#"):
             continue
-        if not name.replace("_", "").isalnum() or not name.islower() or name in all_names:
-            raise RuntimeError("invalid/duplicate program manifest entry " + name)
-        all_names.append(name)
+        name = fields[0]
+        if (any(c not in "abcdefghijklmnopqrstuvwxyz0123456789_" for c in name)
+                or name in all_names or fields[1:] not in ([], ["shared"])):
+            raise RuntimeError("invalid/duplicate program manifest entry " + line)
+        local = ROOT / "tests/programs/c0" / (name + ".c")
+        source = ROOT / "tests/compiler/c0" / (name + ".c") if len(fields) == 2 else local
+        if not source.is_file() or (source != local and local.exists()):
+            raise RuntimeError("missing or duplicate source for " + name)
+        all_names[name] = source
     actual = {p.stem for p in (ROOT / "tests/programs/c0").glob("*.c")}
-    if set(all_names) != actual or not all_names:
+    expected_local = {name for name, source in all_names.items()
+                      if source.parent == ROOT / "tests/programs/c0"}
+    if expected_local != actual or not all_names:
         raise RuntimeError("C0 program manifest does not cover all sources")
     return all_names
 
@@ -89,7 +97,7 @@ def main():
             }, indent=2) + "\n")
 
     for number, name in enumerate(program_names, 1):
-        source = ROOT / "tests/programs/c0" / (name + ".c")
+        source = program_names[name]
         pre = outdir / (name + ".i")
         oldasm = outdir / (name + ".stage0.s")
         newasm = outdir / (name + ".stage2.s")

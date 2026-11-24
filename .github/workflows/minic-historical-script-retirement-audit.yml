@@ -5,6 +5,7 @@ on:
       - cleanup/minic-c50-registry-20261124
     paths:
       - 'tests/compiler/c0/**'
+      - 'tests/programs/c0/**'
       - 'tools/dev/**'
       - 'tools/ci/**'
       - 'docs/milestones/**'
@@ -436,7 +437,16 @@ jobs:
               "tests/compiler/c0/run-block-scope-extern-multi-declarator.sh",
               "tests/compiler/c0/run-gnu-packed-record-field.sh",
           }
-          if len(expected) != 517 or deleted != expected or changed != expected | metadata:
+          shared_fixtures = {
+              "tests/programs/c0/cast_expressions.c",
+              "tests/programs/c0/hexadecimal_expression.c",
+              "tests/programs/c0/integer_bit_operations.c",
+              "tests/programs/c0/prefix_decrement_update.c",
+              "tests/programs/c0/unbounded_for_break.c",
+          }
+          expected |= shared_fixtures
+          metadata |= {"tests/programs/c0/run.sh", "tests/programs/c0/manifest.txt", "tools/ci/minic-bootstrap-stage2-program-parity-v1.py", "tests/programs/c0/README.md"}
+          if len(expected) != 522 or deleted != expected or changed != expected | metadata:
               raise SystemExit("RETIREMENT_SCOPE=FAIL: unexpected tree changes")
           files = [p.decode() for p in git("ls-files", "-z").split(b"\0") if p]
           candidates = {
@@ -451,7 +461,7 @@ jobs:
                  (p.startswith("docs/ci/") and p.endswith(".md"))
           }
           targets = defaultdict(set)
-          for p in deleted | set(candidates):
+          for p in (deleted - shared_fixtures) | set(candidates):
               targets[pathlib.PurePosixPath(p).name].add(p)
           rx = re.compile("|".join(re.escape(n) for n in sorted(targets, key=len, reverse=True)))
           broad = re.compile(r"tools/dev/(?:pr(?:71|75|76|77)[^a-zA-Z0-9]|(?:patch-core-frontier|run-core-frontier|materialize)[-*?]|[*?])")
@@ -475,7 +485,7 @@ jobs:
               for num, line in enumerate(data.decode("utf-8", errors="replace").splitlines(), 1):
                   found = set(rx.findall(line))
                   hits = {p for n in found for p in targets[n] if p != path}
-                  removed = hits & deleted
+                  removed = (hits & deleted) | {p for p in shared_fixtures if p in line}
                   if removed or broad.search(line):
                       record = f"{path}:{num}: " + (", ".join(sorted(removed)) if removed else "possible dynamic path")
                       (archived if historical else docs if document else active).append(record)
@@ -671,3 +681,35 @@ jobs:
             echo "COMPILE_ONLY_ASSERTION_EQUIVALENCE=PASS case=$name"
           done
           git diff --exit-code
+      - name: Verify shared fixture inventory and compiler equivalence
+        run: |
+          set -eu
+          python3 - <<'PY'
+          import importlib.util
+          import subprocess
+          spec = importlib.util.spec_from_file_location("parity", "tools/ci/minic-bootstrap-stage2-program-parity-v1.py")
+          parity = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(parity)
+          programs = parity.names()
+          shell = subprocess.check_output(["sh", "tests/programs/c0/run.sh", "--list"], text=True)
+          assert shell.splitlines() == [f"{name} {source}" for name, source in programs.items()]
+          old = "ba172721c3aa52b86621cd5e11fdfb8ae474cb57"
+          old_manifest = subprocess.check_output(["git", "show", old + ":tests/programs/c0/manifest.txt"], text=True)
+          assert list(programs) == [x for x in old_manifest.splitlines() if x and not x.startswith("#")]
+          for name, source in programs.items():
+              assert subprocess.check_output(["git", "show", old + ":tests/programs/c0/" + name + ".c"]) == source.read_bytes(), name
+          print(f"PROGRAM_INVENTORY_EQUIVALENCE=PASS cases={len(programs)}")
+          PY
+          export MINIC="$PWD/build/retirement-oracle/bin/minic"
+          mkdir -p build/shared-fixture-oracle
+          for name in cast_expressions hexadecimal_expression integer_bit_operations prefix_decrement_update unbounded_for_break; do
+            old="build/shared-fixture-oracle/$name.old.c"
+            git show ba172721c3aa52b86621cd5e11fdfb8ae474cb57:"tests/programs/c0/$name.c" > "$old"
+            cc -std=c11 -E -P -x c "$old" -o "$old.i"
+            cc -std=c11 -E -P -x c "tests/compiler/c0/$name.c" -o "$old.new.i"
+            cmp "$old.i" "$old.new.i"
+            "$MINIC" -S "$old.i" -o "$old.s"
+            "$MINIC" -S "$old.new.i" -o "$old.new.s"
+            cmp "$old.s" "$old.new.s"
+            echo "SHARED_FIXTURE_EQUIVALENCE=PASS case=$name"
+          done

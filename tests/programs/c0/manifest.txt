@@ -1,4 +1,4 @@
-# One source basename per line, in permanent execution order.
+# One source basename per line, in permanent execution order; optional 'shared' selects compiler/c0.
 # 每行一个源码基名，顺序即永久执行顺序。
 gcd
 fibonacci
@@ -40,12 +40,12 @@ static_local_array
 expression_statement
 postfix_subscript
 compound_xor_assignment
-integer_bit_operations
-unbounded_for_break
-prefix_decrement_update
-cast_expressions
+integer_bit_operations shared
+unbounded_for_break shared
+prefix_decrement_update shared
+cast_expressions shared
 unsigned_char_layout
-hexadecimal_expression
+hexadecimal_expression shared
 long_integer_semantics
 self_referential_record
 plain_char_semantics

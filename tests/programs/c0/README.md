@@ -16,11 +16,11 @@ The gate compares exit status, standard output, and standard error. A program be
 
 ## Manifest rules / Manifest 规则
 
-- one lowercase `a-z`, digit, or underscore basename per line / 每行一个只含小写字母、数字或下划线的源码基名；
+- one lowercase `a-z`, digit, or underscore basename per line, optionally followed by `shared` / 每行一个只含小写字母、数字或下划线的源码基名，可附 `shared`；
 - blank lines and lines beginning with `#` are ignored / 空行和以 `#` 开头的行会被忽略；
 - order is execution order and should remain intentional / 清单顺序就是执行顺序，必须有意维护；
 - duplicate entries are errors / 重复条目属于错误；
-- every entry must have a matching `<name>.c` file / 每个条目必须有对应 `<name>.c`；
+- every entry must have a matching `<name>.c` file; optional `shared` selects the canonical fixture in `tests/compiler/c0/` and forbids a local duplicate / 每个条目必须有对应源码；可选 `shared` 标记复用编译器测试目录中的唯一源码，禁止本地重复副本；
 - every top-level `.c` file in this directory must be listed / 本目录每个顶层 `.c` 文件都必须登记。
 
 Adding a program therefore requires adding the source and its manifest entry in the same review. Renaming or removing a program must update both together.
