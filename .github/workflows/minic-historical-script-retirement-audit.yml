@@ -517,7 +517,22 @@ jobs:
               "tools/ci/apply-perf-parser-top-level-lexer-lookahead-v1.py",
           }
           metadata.add(".github/workflows/linux-runtime-optin-perf-suite-v1.yml")
-          if len(expected) != 641 or deleted != expected or changed != expected | metadata:
+          expected |= {
+              "tools/ci/apply-perf-ast-array-owner-pass-v1.py",
+              "tools/ci/revert-perf-ast-array-owner-pass-for-ab-v1.py",
+              "tools/ci/apply-perf-parser-string-lexer-lookahead-v1.py",
+              "tools/ci/apply-perf-core-reachability-name-index-v1.py",
+              "tools/ci/apply-perf-symbolic-source-bucket-calls-v1.py",
+              "tools/ci/linux-perf-symbolic-source-bucket-screen-v1.sh",
+              "tools/ci/linux-perf-symbolic-source-bucket-safety-v1.sh",
+              "tools/ci/linux-perf-symbolic-source-bucket-triage-v1.py",
+              "tools/ci/apply-perf-parser-cold-switch-context-v1.py",
+              "tools/ci/apply-perf-function-parameter-exact-allocation-v1.py",
+              "tools/ci/apply-perf-ast-call-inline8-overflow-v1.py",
+              "tools/ci/apply-perf-type-field-layout-v1.py",
+              "tools/ci/apply-perf-ast-packed-call-ids-v1.py",
+          }
+          if len(expected) != 654 or deleted != expected or changed != expected | metadata:
               raise SystemExit("RETIREMENT_SCOPE=FAIL: unexpected tree changes")
           files = [p.decode() for p in git("ls-files", "-z").split(b"\0") if p]
           candidates = {
@@ -631,6 +646,24 @@ jobs:
               "Screen sparse discarded-IF Core Reentry on seven real Linux files",
               "Four-owner ASCII Lexer identifier bulk advance paired A/B",
               "Benchmark exact-length FunctionType signature storage with pinned Linux TUs",
+              "Build existing versus Core reachability name-index MiniC",
+              "Five-owner source-scoped Symbolic CALL buckets A/B",
+              "Source-scoped Symbolic first500 frozen assembly and total-time A/B",
+              "Recheck source-bucket 500 outliers with serial paired CPU and wall",
+              "ASan UBSan and fault-fallback Symbolic source bucket safety",
+              "ASan and UBSan Parser cold switch nested and failure contracts",
+              "Whitebox A/B cold switch contexts, 5 frozen owners and switch edge",
+              "Triage Function parameter exact-allocation 500 wall outliers",
+              "Benchmark Function exact-length parameter storage with clone and AST contracts",
+              "Benchmark CALL-inline8 sparse overflow payload with owned AST normalization",
+              "Recheck MinicType ABI reorder outliers with CPU + MAD",
+              "Recheck Parser cold-switch first500 outliers with repeated CPU and wall",
+              "A/B safe MinicType field ordering on immutable Linux inputs",
+              "Verify packed CALL 500 outliers with repeated CPU and wall clocks",
+              "Prototype packed CALL AST IDs, run AST contracts, then pinned TU A/B with RSS",
+              "Recheck AST verifier one-pass regressions with CPU clocks",
+              "Same-runner Core reentry eager versus lazy one-factor A/B",
+              "Certify Core reentry lazy-vs-eager over frozen 500 Linux TUs",
           }
           def split_perf(text):
               start = text.index("\n  perf500:\n")
@@ -651,8 +684,10 @@ jobs:
           assert len(guards_now) == 1 and "exit 1" in guards_now[0][2]
           for tag in ("[minic-parser-lexer-lookahead-ab]", "[minic-parser-enum-bind-ab]", "[minic-record-layout-ab]", "[minic-core-variant-source-ab500]", "[minic-core-variant-source-ab]", "[minic-core-no-facts-ab]", "[minic-core-no-facts-ab500]", "[minic-core-discarded-sparse-ab]", "[minic-lexer-identifier-bulk-ab]", "[minic-functiontype-exact-ab]",):
               assert tag in guards_now[0][2]
+          for tag in ("[minic-core-name-index-ab]", "[minic-core-name-index-ab500]", "[minic-parser-string-lexer-ab]", "[minic-ast-array-owner-ab]", "[minic-ast-array-owner-ab500]", "[minic-ast-array-regression-triage]", "[minic-symbolic-source-call-ab]", "[minic-symbolic-source-call-triage]", "[minic-symbolic-source-call-ab500]", "[minic-symbolic-source-call-safety]", "[minic-parser-cold-switch-safety]", "[minic-parser-cold-switch-ab]", "[minic-parser-cold-switch-ab500]", "[minic-function-param-exact-triage]", "[minic-function-param-exact-ab]", "[minic-function-param-exact-ab500]", "[minic-ast-call-inline8-ab]", "[minic-ast-call-inline8-ab500]", "[minic-ast-call-inline8-safety]", "[minic-type-layout-regression]", "[minic-parser-cold-switch-triage]", "[minic-type-layout-ab]", "[minic-type-layout-ab500]", "[minic-ast-packed-call-regression]", "[minic-ast-packed-call-ab]", "[minic-ast-packed-call-ab500]", "[minic-ast-packed-call-edge]", "[minic-core-lazy-ab]", "[minic-core-lazy-ab500]",):
+              assert tag in guards_now[0][2]
           assert [s for s in os_ if s[1] not in retired_steps] == [s for s in ns if s[1] != guard_name], "nonretired performance step drift"
-          print("RETIRED_PERF_STEP_EQUIVALENCE=PASS removed=9 retained_steps_unchanged=1")
+          print("RETIRED_PERF_STEP_EQUIVALENCE=PASS removed=27 retained_steps_unchanged=1")
           counts = Counter()
           for p, group in sorted(candidates.items()):
               c = consumers[p]
