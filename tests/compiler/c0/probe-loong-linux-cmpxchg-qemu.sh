@@ -133,4 +133,8 @@ for bad in bad-op bad-barrier;do
  fi
  test ! -e "$d/$bad.s"
 done
-echo 'ORIGINAL_LOONG_LLSC_CMPXCHG=PASS forms=3 GNU_QEMU=2 failure_and_success_paths=1 negatives=2'
+if [[ "${MINIC_SOURCE_ONLY:-0}" == 1 ]]; then
+  echo 'ORIGINAL_LOONG_LLSC_CMPXCHG=PASS mode=source_only forms=3 GNU_QEMU=NOT_RUN failure_and_success_paths=NOT_RUN negatives=2'
+else
+  echo 'ORIGINAL_LOONG_LLSC_CMPXCHG=PASS mode=runtime forms=3 GNU_QEMU=2 failure_and_success_paths=1 negatives=2'
+fi
