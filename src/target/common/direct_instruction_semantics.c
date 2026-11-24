@@ -23,9 +23,7 @@ static bool direct_core_kind(const MinicCoreFunction *fn,
 
 static bool direct_core_float(const MinicCoreFunction *fn,
                               MinicCoreTypeId id, MinicCoreFloatFormat format) {
-    const MinicCoreType *type = direct_core_type(fn, id);
-    return type != NULL && type->kind == MINIC_CORE_TYPE_FLOAT &&
-           type->value.floating.format == format;
+    return minic_lp64_core_float_format(direct_core_type(fn, id), format);
 }
 
 static bool direct_core_bool(const MinicCoreFunction *fn, MinicCoreTypeId id) {

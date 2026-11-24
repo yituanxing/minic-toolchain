@@ -51,16 +51,6 @@ bool minic_lp64_core_integer_width(const MinicCoreTypeContext *context,
            type->has_layout && type->size == *width;
 }
 
-static bool core_scalar_float_format(const MinicCoreTypeContext *context,
-                                     MinicCoreTypeId id,
-                                     MinicCoreFloatFormat format) {
-    const MinicCoreType *type;
-    id = minic_core_type_unqualified(context, id);
-    type = minic_core_type_get(context, id);
-    return type != NULL && type->kind == MINIC_CORE_TYPE_FLOAT &&
-           type->value.floating.format == format;
-}
-
 bool minic_lp64_core_valid_parameter_type(const MinicCoreTypeContext *context,
                                            MinicCoreTypeId id) {
     const MinicCoreType *type;
@@ -70,9 +60,9 @@ bool minic_lp64_core_valid_parameter_type(const MinicCoreTypeContext *context,
     type = minic_core_type_get(context, id);
     return type != NULL &&
            (type->kind == MINIC_CORE_TYPE_POINTER ||
-            core_scalar_float_format(context, id, MINIC_CORE_FLOAT_BINARY32) ||
-            core_scalar_float_format(context, id, MINIC_CORE_FLOAT_BINARY64) ||
-            core_scalar_float_format(context, id, MINIC_CORE_FLOAT_BINARY128) ||
+            minic_lp64_core_float_format(type, MINIC_CORE_FLOAT_BINARY32) ||
+            minic_lp64_core_float_format(type, MINIC_CORE_FLOAT_BINARY64) ||
+            minic_lp64_core_float_format(type, MINIC_CORE_FLOAT_BINARY128) ||
             (type->kind == MINIC_CORE_TYPE_INTEGER &&
              type->value.integer.bit_width == 128U && type->has_layout) ||
             minic_lp64_core_integer_width(context, id, &width, &sign));
@@ -82,8 +72,6 @@ bool minic_lp64_core_valid_return_type(const MinicCoreTypeContext *context,
                                        MinicCoreTypeId id) {
     size_t bytes, slots, fp_elements, fp_width;
     return minic_lp64_core_kind(context, id, MINIC_CORE_TYPE_VOID) ||
-           core_scalar_float_format(context, id, MINIC_CORE_FLOAT_BINARY64) ||
-           core_scalar_float_format(context, id, MINIC_CORE_FLOAT_BINARY128) ||
            minic_lp64_core_valid_parameter_type(context, id) ||
            (minic_lp64_core_kind(context, id, MINIC_CORE_TYPE_RECORD) &&
             (minic_multi_empty_record_core(context, id) ||

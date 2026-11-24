@@ -13,6 +13,19 @@ bool minic_lp64_core_pointer_pointee(const MinicCoreTypeContext *, MinicCoreType
                                      MinicCoreTypeId *);
 bool minic_lp64_core_equal_unqualified(const MinicCoreTypeContext *,
                                        MinicCoreTypeId, MinicCoreTypeId);
+/* Format identity only: layout/ABI admission is a separate predicate. */
+static inline bool minic_lp64_core_float_format(const MinicCoreType *type,
+                                                MinicCoreFloatFormat format) {
+    return type != NULL && type->kind == MINIC_CORE_TYPE_FLOAT &&
+           type->value.floating.format == format;
+}
+static inline bool minic_lp64_core_type_float_format(
+    const MinicCoreTypeContext *context, MinicCoreTypeId id,
+    MinicCoreFloatFormat format) {
+    return minic_lp64_core_float_format(
+        minic_core_type_get(context, minic_core_type_unqualified(context, id)),
+        format);
+}
 bool minic_lp64_core_valid_parameter_type(const MinicCoreTypeContext *, MinicCoreTypeId);
 bool minic_lp64_core_valid_return_type(const MinicCoreTypeContext *, MinicCoreTypeId);
 /* A target must opt in to an actual record indirect-return convention. */

@@ -8,22 +8,12 @@
 /* Shared sealed-Core admission, with the original ISA-owned ABI selection.
  * AAPCS64 uses independent GP/FP fixed-parameter banks; LP64D's current
  * linear variadic cursor rejects fixed double and counts the rest as GP. */
-static bool direct_profile_core_float_format(
-    const MinicCoreTypeContext *types, MinicCoreTypeId id,
-    MinicCoreFloatFormat format) {
-    const MinicCoreType *type;
-    if (types == NULL) return false;
-    type = minic_core_type_get(types, minic_core_type_unqualified(types, id));
-    return type != NULL && type->kind == MINIC_CORE_TYPE_FLOAT &&
-           type->value.floating.format == format;
-}
-
 MinicDirectLP64ProfileResult minic_multi_direct_lp64_profile_function(
     const MinicCoreFunction *fn,
     const MinicCoreFunctionFacts *facts,
     const MinicDirectLP64AbiPolicy *abi,
     MinicLP64ArgumentPlan *incoming, MinicDirectLP64FunctionProfile *profile) {
-    size_t i;
+    size_t i, starts = 0U, cursors = 0U;
 
     if (fn == NULL || fn->type_context == NULL || facts == NULL ||
         incoming == NULL || profile == NULL ||
@@ -39,7 +29,7 @@ MinicDirectLP64ProfileResult minic_multi_direct_lp64_profile_function(
     if (minic_core_function_is_variadic(fn)) {
         for (i = 0U; i < minic_core_function_parameter_count(fn); ++i)
             if (!abi->variadic_named_double_supported &&
-                direct_profile_core_float_format(fn->type_context,
+                minic_lp64_core_type_float_format(fn->type_context,
                     minic_core_function_parameter_types(fn)[i], MINIC_CORE_FLOAT_BINARY64))
                 return MINIC_DIRECT_LP64_PROFILE_VARIADIC_FIXED_FLOAT;
     }
@@ -60,8 +50,17 @@ MinicDirectLP64ProfileResult minic_multi_direct_lp64_profile_function(
     }
     if (!minic_lp64_plan_incoming_parameters(fn, abi, incoming))
         return MINIC_DIRECT_LP64_PROFILE_PARAMETER_SHAPE;
+    if (abi->variadic_cursor == MINIC_DIRECT_LP64_VARIADIC_ABI_STATE ||
+        profile->variadic_address_count != 0U) {
+        for (i = 0U; i < fn->instruction_count; ++i) {
+            const MinicCoreInstruction *ins = &fn->instructions[i];
+            if (ins->kind != MINIC_CORE_INSTRUCTION_VARIADIC_ARGUMENT_ADDRESS)
+                continue;
+            ++cursors;
+            if (!ins->value.variadic_address.copy_destination) ++starts;
+        }
+    }
     if (abi->variadic_cursor == MINIC_DIRECT_LP64_VARIADIC_ABI_STATE) {
-        size_t starts = 0U, cursors = 0U;
         /* AAPCS64's mutable va_list stores the NEXT available GR/VR
          * register offset, not the number of named C parameters. A fixed
          * 16-byte record consumes two GPRs; a zero-sized record consumes
@@ -86,21 +85,13 @@ MinicDirectLP64ProfileResult minic_multi_direct_lp64_profile_function(
                     loc->kind == MINIC_LP64_ARGUMENT_VECTOR ||
                     (loc->kind == MINIC_LP64_ARGUMENT_WIDE &&
                      abi->long_double_in_fp_register &&
-                     direct_profile_core_float_format(fn->type_context,
+                     minic_lp64_core_type_float_format(fn->type_context,
                          minic_core_function_parameter_types(fn)[i], MINIC_CORE_FLOAT_BINARY128))) {
                     profile->fixed_fp_count = abi->fp_argument_registers;
                 } else {
                     profile->fixed_gp_count = abi->gp_argument_registers;
                 }
             }
-        }
-        for (i = 0U; i < fn->instruction_count; ++i) {
-            const MinicCoreInstruction *ins = &fn->instructions[i];
-            if (ins->kind != MINIC_CORE_INSTRUCTION_VARIADIC_ARGUMENT_ADDRESS)
-                continue;
-            ++cursors;
-            if (!ins->value.variadic_address.copy_destination)
-                ++starts;
         }
         /* A function may legitimately restart the same va_list after
          * va_end (configfs config_item_set_name does two independent
@@ -117,7 +108,7 @@ MinicDirectLP64ProfileResult minic_multi_direct_lp64_profile_function(
             (starts != 0U && !minic_core_function_is_variadic(fn)))
             return MINIC_DIRECT_LP64_PROFILE_VARIADIC_SHAPE;
     } else if (profile->variadic_address_count != 0U) {
-        size_t starts = 0U, cursors = 0U, consumed_gp = 0U;
+        size_t consumed_gp = 0U;
         size_t indirect_bytes = 0U;
         const bool hidden_indirect_result =
             minic_lp64_core_kind(fn->type_context,
@@ -137,13 +128,6 @@ MinicDirectLP64ProfileResult minic_multi_direct_lp64_profile_function(
          * stack slots. The pointer may legitimately be past all eight GARs. */
         profile->fixed_gp_count = incoming->stack_slots != 0U
             ? abi->gp_argument_registers + incoming->stack_slots : consumed_gp;
-        for (i = 0U; i < fn->instruction_count; ++i) {
-            const MinicCoreInstruction *ins = &fn->instructions[i];
-            if (ins->kind != MINIC_CORE_INSTRUCTION_VARIADIC_ARGUMENT_ADDRESS)
-                continue;
-            ++cursors;
-            if (!ins->value.variadic_address.copy_destination) ++starts;
-        }
         /* LP64D uses independent scalar pointer cursors, not AAPCS64's
          * mutable 32-byte va_list state. Multiple GNU va_start executions
          * are valid and each receives the same ABI starting address.

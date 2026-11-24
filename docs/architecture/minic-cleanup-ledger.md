@@ -1598,3 +1598,11 @@ Target 审阅 manifest 260（113 条保留的 stale blob）、完整后端边界
 
 遇到真实错编、合法程序拒编或跨 ISA 约束冲突，进入唯一 MC 台账，
 由独立 Bug 修复批次处理；清理账只记录依赖，不把 Bug 修复计入 C1 净减行数。
+
+## 批次 C42：Direct LP64 公共查询去重（2026-11-24）
+
+基线 `c1eb0bea`。统一瘦身分支 `cleanup/minic-convergence`。不增加功能、不改 ABI 或 IR 合同，不降低测试要求；后续批次沿该分支推进。
+
+- LP64 scalar、call plan、function profile、instruction semantics 的纯浮点格式身份判定统一到已有 `lp64_scalar.h`。保留格式身份与 layout/ABI 合法性检查的区别；不替换更严格的 `minic_core_floating_format`。已获得类型指针的参数分类直接使用该指针；返回分类去掉已被参数分类覆盖的 binary64/binary128 判断。
+- AAPCS64 与 LoongArch LP64D 的 variadic-address 指令计数使用共同扫描。两种 ABI 的寄存器布局与各自 starts/cursors 验收条件仍保持原样；非 ABI-state 且无 cursor 时仍不扫描。
+- 5 个生产文件净变化 -23 行。仅做精确文本替换与局部语义核对，未本地构建（环境无 GitHub 网络）；未运行动态验证。现有原生 strict gate 和目标 ABI 回归仍是验收要求。

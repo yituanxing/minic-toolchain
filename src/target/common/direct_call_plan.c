@@ -19,12 +19,6 @@ static bool lp64_call_core_integer_128(const MinicCoreType *type) {
            !type->value.integer.is_bool && type->size == 16U;
 }
 
-static bool lp64_call_core_float_format(const MinicCoreType *type,
-                                        MinicCoreFloatFormat format) {
-    return type != NULL && type->kind == MINIC_CORE_TYPE_FLOAT &&
-           type->value.floating.format == format;
-}
-
 static bool minic_lp64_plan_types(
     const MinicCoreTypeContext *core_types, const MinicCoreTypeId *core_ids,
     size_t count, size_t fixed, bool variadic,
@@ -161,7 +155,7 @@ static bool minic_lp64_plan_types(
                 }
                 gp += used;
             }
-        } else if (lp64_call_core_float_format(core, MINIC_CORE_FLOAT_BINARY128)) {
+        } else if (minic_lp64_core_float_format(core, MINIC_CORE_FLOAT_BINARY128)) {
             loc->kind = MINIC_LP64_ARGUMENT_WIDE;
             if (abi->long_double_in_fp_register) {
                 if (fp < abi->fp_argument_registers) {
@@ -192,8 +186,8 @@ static bool minic_lp64_plan_types(
                 }
                 gp += used;
             }
-        } else if (lp64_call_core_float_format(core, MINIC_CORE_FLOAT_BINARY64) ||
-                   lp64_call_core_float_format(core, MINIC_CORE_FLOAT_BINARY32)) {
+        } else if (minic_lp64_core_float_format(core, MINIC_CORE_FLOAT_BINARY64) ||
+                   minic_lp64_core_float_format(core, MINIC_CORE_FLOAT_BINARY32)) {
             const bool use_fp = abi->variadic_floating_in_fp_register ||
                 ((!variadic || j < fixed) && fp < abi->fp_argument_registers);
             if (use_fp) {
@@ -330,7 +324,7 @@ static bool minic_lp64_admit_call(
                     "return_valid=%d value_match=%d\n",
                     arch, name, i,
                     diagnostic_type != NULL ? (int)diagnostic_type->kind : -1,
-                    lp64_call_core_float_format(diagnostic_type,
+                    minic_lp64_core_float_format(diagnostic_type,
                         MINIC_CORE_FLOAT_BINARY128) ? 1 : 0,
                     minic_lp64_core_valid_return_with_policy(
                         core_types, ins->core_type_id, abi) ? 1 : 0,
@@ -444,8 +438,8 @@ static bool minic_lp64_admit_call(
                 if (!is_variadic ||
                     (abi->core_register_vector != NULL &&
                      abi->core_register_vector(core_types, core_actual, &vector_bytes)) ||
-                    (!lp64_call_core_float_format(base, MINIC_CORE_FLOAT_BINARY128) &&
-                     !lp64_call_core_float_format(base, MINIC_CORE_FLOAT_BINARY64) &&
+                    (!minic_lp64_core_float_format(base, MINIC_CORE_FLOAT_BINARY128) &&
+                     !minic_lp64_core_float_format(base, MINIC_CORE_FLOAT_BINARY64) &&
                      base->kind != MINIC_CORE_TYPE_POINTER &&
                      !(abi->variadic_align_wide_gp_pair &&
                        lp64_call_core_integer_128(base)) &&
