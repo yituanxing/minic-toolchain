@@ -17,35 +17,45 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
-      - name: Verify retirement scope and scan retained tracked files
+      - name: Verify retirement and inventory remaining historical dependencies
         run: |
           python3 - <<'PY'
           import pathlib
           import re
           import subprocess
-          import sys
+          from collections import defaultdict, Counter
           
           base = "de72e2982e9576ec36a8110a371287300ed29937"
+          audit = ".github/workflows/minic-historical-script-retirement-audit.yml"
           def git(*args):
               return subprocess.check_output(["git", *args])
-          
-          pattern = re.compile(r"^tools/dev/pr(?:71|75|76|77)-")
-          expected = {p for p in git("ls-tree", "-r", "--name-only", base).decode().splitlines()
-                      if pattern.match(p)}
+          pattern = re.compile(r"^tools/dev/(?:pr(?:71|75|76|77)-|patch-core-frontier-|run-core-frontier-|materialize-)")
+          expected = {p for p in git("ls-tree", "-r", "--name-only", base).decode().splitlines() if pattern.match(p)}
           deleted = set(git("diff", "--name-only", "--diff-filter=D", base, "HEAD").decode().splitlines())
           changed = set(git("diff", "--name-only", base, "HEAD").decode().splitlines())
-          audit = ".github/workflows/minic-historical-script-retirement-audit.yml"
-          if len(expected) != 115 or deleted != expected or changed != expected | {audit}:
+          if len(expected) != 145 or deleted != expected or changed != expected | {audit}:
               raise SystemExit("RETIREMENT_SCOPE=FAIL: unexpected tree changes")
-          names = {pathlib.PurePosixPath(p).name for p in deleted}
-          rx = re.compile("|".join(re.escape(n) for n in sorted(names, key=len, reverse=True)))
-          broad = re.compile(r"tools/dev/(?:pr(?:71|75|76|77)[^a-zA-Z0-9]|[*?])")
+          files = [p.decode() for p in git("ls-files", "-z").split(b"\0") if p]
+          candidates = {
+              p: ("disabled-ci" if p.startswith(".github/workflows-disabled/") else
+                  "ci-rewriter" if p.startswith("tools/ci/") else
+                  "historical-doc")
+              for p in files
+              if (p.startswith(".github/workflows-disabled/") and p.endswith((".yml", ".yaml"))) or
+                 (p.startswith("tools/ci/") and pathlib.PurePosixPath(p).name.startswith(("apply-", "patch-"))) or
+                 p.startswith(("docs/architecture/review-", "docs/milestones/"))
+          }
+          targets = defaultdict(set)
+          for p in deleted | set(candidates):
+              targets[pathlib.PurePosixPath(p).name].add(p)
+          rx = re.compile("|".join(re.escape(n) for n in sorted(targets, key=len, reverse=True)))
+          broad = re.compile(r"tools/dev/(?:pr(?:71|75|76|77)[^a-zA-Z0-9]|(?:patch-core-frontier|run-core-frontier|materialize)[-*?]|[*?])")
+          dynamic = re.compile(r"workflows-disabled|tools/ci/(?:apply-|patch-)[*?]|tools/dev/[*?]")
           active, archived, docs = [], [], []
+          consumers = defaultdict(set)
+          dynamic_lines = []
           scanned = 0
-          for raw in git("ls-files", "-z").split(b"\0"):
-              if not raw:
-                  continue
-              path = raw.decode()
+          for path in files:
               if path == audit:
                   continue
               f = pathlib.Path(path)
@@ -55,23 +65,41 @@ jobs:
               if b"\0" in data:
                   continue
               scanned += 1
+              historical = path.startswith(".github/workflows-disabled/")
+              document = path.startswith("docs/") or f.suffix.lower() in (".md", ".rst")
               for num, line in enumerate(data.decode("utf-8", errors="replace").splitlines(), 1):
                   found = set(rx.findall(line))
-                  if not found and not broad.search(line):
-                      continue
-                  record = f"{path}:{num}: " + (", ".join(sorted(found)) if found else "possible dynamic path")
-                  if path.startswith(".github/workflows-disabled/"):
-                      archived.append(record)
-                  elif path.startswith("docs/") or f.suffix.lower() in (".md", ".rst"):
-                      docs.append(record)
-                  else:
-                      active.append(record)
+                  hits = {p for n in found for p in targets[n] if p != path}
+                  removed = hits & deleted
+                  if removed or broad.search(line):
+                      record = f"{path}:{num}: " + (", ".join(sorted(removed)) if removed else "possible dynamic path")
+                      (archived if historical else docs if document else active).append(record)
+                  for candidate in hits & set(candidates):
+                      consumers[candidate].add(path)
+                  if not historical and not document and dynamic.search(line):
+                      dynamic_lines.append(f"{path}:{num}: {line.strip()[:220]}")
           for label, items in (("ACTIVE", active), ("ARCHIVE", archived), ("DOC", docs)):
               print(f"{label}_REFERENCES={len(items)}")
               for item in items:
                   print(item)
           print(f"RETIREMENT_SCOPE=PASS deleted={len(deleted)} retained_text_scanned={scanned}")
+          counts = Counter()
+          for p, group in sorted(candidates.items()):
+              c = consumers[p]
+              runtime = sorted(x for x in c if not x.startswith((".github/workflows-disabled/", "docs/")) and pathlib.PurePosixPath(x).suffix.lower() not in (".md", ".rst"))
+              archived_c = sorted(x for x in c if x.startswith(".github/workflows-disabled/"))
+              docs_c = sorted(c - set(runtime) - set(archived_c))
+              category = "ACTIVE" if runtime else "HISTORY_ONLY" if c else "NO_LITERAL_REF"
+              counts[(group, category)] += 1
+              print(f"INVENTORY {group} {category} {p} active={len(runtime)} archived={len(archived_c)} docs={len(docs_c)}")
+              if runtime:
+                  print("  ACTIVE_CONSUMERS " + "; ".join(runtime))
+          for (group, category), n in sorted(counts.items()):
+              print(f"INVENTORY_TOTAL {group} {category} {n}")
+          for line in dynamic_lines:
+              print("DIRECTORY_REFERENCE " + line)
+          print("Inventory is a conservative literal-name scan; dynamic selection and historical integrity checks require manual review.")
           if active:
               raise SystemExit("RETIREMENT_REFERENCES=FAIL retained non-document references require review")
-          print("RETIREMENT_REFERENCES=PASS no literal or selected glob references in retained non-document/non-archive files")
+          print("RETIREMENT_REFERENCES=PASS")
           PY
