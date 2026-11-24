@@ -1701,3 +1701,11 @@ Target 审阅 manifest 260（113 条保留的 stale blob）、完整后端边界
 父基线 `68721700` 的 flat payload 专项、native strict、four-arch runtime、RV32I runtime 均通过。将重复 unqualified CoreType 查询归一，保留 exact type lookup 和目标 ABI admission 的区别。RV64 两处纯 scalar kind admission 收敛。Direct LP64 与 RV64 record load/copy 的 identity/layout/address checks 共享一个实现，保留 Direct 16 MiB 上限、RV64 load 非零要求、empty copy、frame placement 等不同政策。新增 malformed array pointer 拒绝，不降低原有效输入的验收标准。13 个生产 C/H 文件净 -85 行。源码与差分检查不代替本提交 native/target 动态验收；不删测试、不改 CI。
 
 C48 验收补记：four-arch runtime 已通过；Native Strict Gate 在 ownership inventory 阶段因为新增 `core_record_transfer.h` 缺登记而失败（不是编译或运行结果）。修复仅补真实 blob 与 inventory 深度，不改变 gate、旧指纹或认证状态。
+
+C48 验收补记：`7721629e` 将旧 RV32 私有查询锚点更新为公共 Core 查询及其 owner 断言，增加禁止重新实现 unqualified query 的检查。原生严格 gate、four-arch runtime、RV32I runtime 及 AArch64 Stage4 通过；两个已知 AArch64 原始输入缺失 workflow 仍失败。
+
+## 批次 C49：AST 本地事实扫描与第四套 Parser 索引归一（2026-11-24）
+
+基线 `7721629e`。Boolean 缓存、allocation-free 单 local 回退、稳定参数分析三份 source arena write/escape walk 收敛为一个无分配 visitor；保持 TARGET_ONLY 与真实 write 的不同 kill 政策、非 CFG 保守性、volatile 参数及计数。缓存一次遍历同时填充稳定性与 Boolean write set。保留 OOM 线性语义回退。
+
+Enum 全局哈希表复用 C46 已有 name index engine。Enum 最新索引优先、scope suffix 逆序查找、global_count 缩减回退、cache_owner 以及 EnumeratorId 映射保持独立；函数/全局/typedef 原 hash seed 与选择政策不变。历史 enum patch 的 canonical detection 支持旧快照与新公共 owner，不修改原历史补丁。新增 direct-local-effects 单测，现有 Boolean guard/副作用回归接入 native gate，名称索引回归覆盖 80 个枚举与 scope shadow。生产源码净 -201 行。未删除现役测试；新提交动态结果仍需核实。

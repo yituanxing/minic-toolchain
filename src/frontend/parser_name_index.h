@@ -7,13 +7,15 @@
 
 /* Optional file-scope name caches; the AST still owns declarations.
  * Function/global lookup keeps the earliest ID. Typedef lookup also skips
- * block aliases and falls back on inconsistent slots. Enum shadowing is
- * newest-first, so it deliberately remains a separate semantic owner.
+ * block aliases and falls back on inconsistent slots. Enum globals keep the
+ * newest index; local-scope shadowing and EnumeratorId conversion stay in
+ * parser_enum.c, outside the hash table mechanism.
  * All IDs here are size_t with SIZE_MAX as the empty sentinel. */
 typedef enum MinicParserNameKind {
     MINIC_PARSER_NAME_FUNCTION,
     MINIC_PARSER_NAME_GLOBAL,
-    MINIC_PARSER_NAME_TYPEDEF
+    MINIC_PARSER_NAME_TYPEDEF,
+    MINIC_PARSER_NAME_ENUM
 } MinicParserNameKind;
 
 typedef struct MinicParserName {
@@ -24,8 +26,9 @@ typedef struct MinicParserName {
 } MinicParserName;
 
 static inline MinicParserName minic_parser_index_name(
-    const MinicC0Program *program, MinicParserNameKind kind, size_t id) {
+    const MinicParser *parser, MinicParserNameKind kind, size_t id) {
     MinicParserName name = {0};
+    const MinicC0Program *program = parser->program;
     if (kind == MINIC_PARSER_NAME_FUNCTION) {
         const MinicFunction *fn = minic_c0_program_function(program, id);
         if (fn != NULL) {
@@ -35,6 +38,12 @@ static inline MinicParserName minic_parser_index_name(
         const MinicGlobalObject *obj = minic_c0_program_global_object(program, id);
         if (obj != NULL) {
             name = (MinicParserName){obj->name, obj->name_length, true, true};
+        }
+    } else if (kind == MINIC_PARSER_NAME_ENUM) {
+        if (id < parser->enum_constant_count && parser->source != NULL) {
+            MinicSourceSpan span = parser->enum_constants[id].name_span;
+            name = (MinicParserName){parser->source + span.begin.offset,
+                                    minic_parser_span_length(span), true, true};
         }
     } else {
         const MinicTypeAlias *alias = minic_c0_program_type_alias(program, id);
@@ -61,13 +70,16 @@ static inline size_t minic_parser_index_hash(
 }
 
 static inline bool minic_parser_name_index_insert(
-    const MinicC0Program *program, MinicParserNameKind kind,
+    const MinicParser *parser, MinicParserNameKind kind,
     size_t *slots, size_t capacity, size_t id) {
-    MinicParserName name = minic_parser_index_name(program, kind, id);
+    MinicParserName name = minic_parser_index_name(parser, kind, id);
     size_t slot, probes, mask = capacity - 1U;
-    if (!name.valid) return kind != MINIC_PARSER_NAME_TYPEDEF;
+    if (slots == NULL || capacity == 0U || (capacity & (capacity - 1U)) != 0U)
+        return false;
+    if (!name.valid)
+        return kind != MINIC_PARSER_NAME_TYPEDEF && kind != MINIC_PARSER_NAME_ENUM;
     if (!name.visible) return true;
-    if (kind != MINIC_PARSER_NAME_TYPEDEF &&
+    if (kind != MINIC_PARSER_NAME_TYPEDEF && kind != MINIC_PARSER_NAME_ENUM &&
         (name.text == NULL || name.length == 0U)) return true;
     slot = minic_parser_index_hash(kind, name.text, name.length) & mask;
     for (probes = 0U; probes < capacity; ++probes) {
@@ -77,11 +89,12 @@ static inline bool minic_parser_name_index_insert(
             slots[slot] = id;
             return true;
         }
-        prior = minic_parser_index_name(program, kind, prior_id);
+        prior = minic_parser_index_name(parser, kind, prior_id);
         if (!prior.valid && kind == MINIC_PARSER_NAME_TYPEDEF) return false;
         if (prior.valid && prior.length == name.length &&
             memcmp(prior.text, name.text, name.length) == 0) {
-            if (kind != MINIC_PARSER_NAME_TYPEDEF && id < prior_id)
+            if (kind == MINIC_PARSER_NAME_ENUM ||
+                (kind != MINIC_PARSER_NAME_TYPEDEF && id < prior_id))
                 slots[slot] = id;
             return true;
         }
@@ -93,10 +106,13 @@ static inline bool minic_parser_name_index_insert(
 /* Commit a replacement table only after every insertion has succeeded.
  * On speculative Parser copies callers must use the canonical scan instead. */
 static inline bool minic_parser_name_index_sync(
-    const MinicC0Program *program, MinicParserNameKind kind,
+    const MinicParser *parser, MinicParserNameKind kind,
     size_t count, size_t **slots, size_t *capacity, size_t *indexed,
     size_t *rebuilds) {
     size_t i;
+    /* Enum indices must never be rebuilt from a truncated scope prefix. */
+    if (kind == MINIC_PARSER_NAME_ENUM &&
+        (count > parser->enum_constant_count || count < *indexed)) return false;
     if (*indexed > count || *slots == NULL || *capacity == 0U ||
         count > *capacity / 2U) {
         size_t cap = 16U;
@@ -111,7 +127,7 @@ static inline bool minic_parser_name_index_sync(
         if (fresh == NULL) return false;
         for (i = 0U; i < cap; ++i) fresh[i] = SIZE_MAX;
         for (i = 0U; i < count; ++i) {
-            if (!minic_parser_name_index_insert(program, kind, fresh, cap, i)) {
+            if (!minic_parser_name_index_insert(parser, kind, fresh, cap, i)) {
                 free(fresh);
                 return false;
             }
@@ -122,7 +138,7 @@ static inline bool minic_parser_name_index_sync(
         if (rebuilds != NULL) *rebuilds += 1U;
     } else {
         for (i = *indexed; i < count; ++i) {
-            if (!minic_parser_name_index_insert(program, kind, *slots, *capacity, i))
+            if (!minic_parser_name_index_insert(parser, kind, *slots, *capacity, i))
                 return false;
         }
     }
@@ -131,7 +147,7 @@ static inline bool minic_parser_name_index_sync(
 }
 
 static inline size_t minic_parser_name_index_lookup(
-    const MinicC0Program *program, MinicParserNameKind kind,
+    const MinicParser *parser, MinicParserNameKind kind,
     const size_t *slots, size_t capacity, const char *name, size_t length,
     size_t *steps, bool *consistent) {
     size_t mask = capacity - 1U;
@@ -146,8 +162,13 @@ static inline size_t minic_parser_name_index_lookup(
             *consistent = true;
             return SIZE_MAX;
         }
-        prior = minic_parser_index_name(program, kind, id);
+        prior = minic_parser_index_name(parser, kind, id);
         if (!prior.valid && kind == MINIC_PARSER_NAME_TYPEDEF) break;
+        if (kind == MINIC_PARSER_NAME_ENUM &&
+            id >= parser->perf_enum_name_indexed_count) {
+            slot = (slot + 1U) & mask;
+            continue;
+        }
         if (prior.valid && prior.visible && prior.length == length &&
             memcmp(prior.text, name, length) == 0) {
             *consistent = true;
@@ -159,11 +180,11 @@ static inline size_t minic_parser_name_index_lookup(
 }
 
 static inline size_t minic_parser_name_linear_lookup(
-    const MinicC0Program *program, MinicParserNameKind kind,
+    const MinicParser *parser, MinicParserNameKind kind,
     size_t count, const char *name, size_t length, size_t *steps) {
     size_t i;
     for (i = 0U; i < count; ++i) {
-        MinicParserName prior = minic_parser_index_name(program, kind, i);
+        MinicParserName prior = minic_parser_index_name(parser, kind, i);
         *steps += 1U;
         if (prior.valid && prior.visible && prior.length == length &&
             memcmp(prior.text, name, length) == 0) return i;

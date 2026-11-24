@@ -19,6 +19,24 @@ bool minic_c0_function_body_view(const MinicC0Program *program,
 const MinicFunction *minic_c0_function_body_function(const MinicFunctionBodyView *view);
 MinicBlockId minic_c0_function_body_root_block(const MinicFunctionBodyView *view);
 
+/* Direct source-LocalId effects shared by entry stability and Boolean
+ * write-set analysis. TARGET_ONLY preserves the historical distinction:
+ * the Boolean proof rejects any other targeted statement, while parameter
+ * stability only kills actual writes/escapes. No allocation is required. */
+typedef enum MinicDirectLocalEffect {
+    MINIC_DIRECT_LOCAL_ASSIGN,
+    MINIC_DIRECT_LOCAL_CLOBBER,
+    MINIC_DIRECT_LOCAL_TARGET_ONLY
+} MinicDirectLocalEffect;
+
+typedef bool (*MinicDirectLocalEffectVisitor)(
+    void *context, MinicLocalId id, MinicDirectLocalEffect effect, MinicExpressionId rhs);
+
+bool minic_c0_program_seed_parameter_locals(
+    const MinicC0Program *program, bool *parameter, bool *stable, size_t count);
+bool minic_c0_program_visit_direct_local_effects(
+    const MinicC0Program *program, MinicDirectLocalEffectVisitor visitor, void *context);
+
 /* Whole-Program, source-LocalId parameter immutability oracle. The caller
  * supplies a local_count-sized bitmap and may cache it for an AST/Core pass.
  * Exactly the named source parameters with NO syntactic write, increment,

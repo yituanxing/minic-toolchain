@@ -75,23 +75,6 @@ static bool minic_inline_boolean_domain_value(
     }
 }
 
-static bool minic_inline_direct_local_target(
-    const MinicC0Program *program,
-    MinicExpressionId expression_id,
-    MinicLocalId *local_id) {
-    const MinicExpression *expression;
-
-    if (program == NULL || local_id == NULL) {
-        return false;
-    }
-    expression = minic_c0_program_expression(program, expression_id);
-    if (expression == NULL || expression->kind != MINIC_EXPRESSION_LOCAL) {
-        return false;
-    }
-    *local_id = expression->value.local_id;
-    return true;
-}
-
 static bool minic_inline_local_is_parameter(
     const MinicC0Program *program,
     MinicLocalId local_id) {
@@ -114,101 +97,52 @@ static bool minic_inline_local_is_parameter(
     return false;
 }
 
-/*
- * Conservatively recognize ordinary integer locals whose complete direct-write
- * set is confined to {0,1}.  This covers Linux patterns such as an unsigned
- * int flag initialized to 0 and conditionally assigned 1 before being passed
- * through always-inline helpers.  Reject address escapes, compound updates,
- * increments/decrements and asm outputs so the fact is never inferred across
- * an unknown write.
- */
-static bool minic_inline_local_boolean_domain_legacy(
-    const MinicC0Program *program,
-    MinicLocalId local_id) {
-    bool saw_assignment = false;
-    size_t statement_index;
-    size_t expression_index;
-    size_t asm_index;
+/* Shared collector for cached and allocation-free Boolean write proofs.
+ * Only simple assignments of 0/1-domain values are admissible. */
+typedef struct MinicInlineBooleanWrites {
+    const MinicC0Program *program;
+    MinicLocalId only_local;
+    bool *stable;
+    bool *saw_assignment;
+    bool *invalid;
+} MinicInlineBooleanWrites;
 
-    if (program == NULL || local_id >= program->local_count ||
-        !minic_type_is_integer(program->locals[local_id].type) ||
-        minic_inline_local_is_parameter(program, local_id)) {
-        return false;
+static bool minic_inline_boolean_write(void *opaque, MinicLocalId id,
+                                       MinicDirectLocalEffect effect,
+                                       MinicExpressionId rhs) {
+    MinicInlineBooleanWrites *writes = opaque;
+    size_t index = id;
+    if (writes->only_local != MINIC_LOCAL_INVALID) {
+        if (id != writes->only_local) return true;
+        index = 0U;
     }
-
-    for (statement_index = 0U; statement_index < program->statement_count;
-         ++statement_index) {
-        const MinicStatement *statement = &program->statements[statement_index];
-        MinicLocalId target_local = MINIC_LOCAL_INVALID;
-        if (!minic_inline_direct_local_target(
-                program, statement->target_expression, &target_local) ||
-            target_local != local_id) {
-            continue;
-        }
-        if (statement->kind != MINIC_STATEMENT_ASSIGN ||
-            statement->expression == MINIC_EXPRESSION_INVALID ||
-            !minic_inline_boolean_domain_value(
-                program, statement->expression, 0U)) {
-            return false;
-        }
-        saw_assignment = true;
+    if (writes->stable != NULL && effect != MINIC_DIRECT_LOCAL_TARGET_ONLY)
+        writes->stable[index] = false;
+    if (effect == MINIC_DIRECT_LOCAL_ASSIGN && rhs != MINIC_EXPRESSION_INVALID &&
+        minic_inline_boolean_domain_value(writes->program, rhs, 0U)) {
+        writes->saw_assignment[index] = true;
+    } else {
+        writes->invalid[index] = true;
+        /* A single-local fallback needs no more evidence after a bad write. */
+        if (writes->only_local != MINIC_LOCAL_INVALID) return false;
     }
-
-    for (expression_index = 0U; expression_index < program->expression_count;
-         ++expression_index) {
-        const MinicExpression *expression = &program->expressions[expression_index];
-        MinicLocalId target_local = MINIC_LOCAL_INVALID;
-
-        if (expression->kind == MINIC_EXPRESSION_ADDRESS_OF &&
-            minic_inline_direct_local_target(
-                program, expression->value.unary.operand, &target_local) &&
-            target_local == local_id) {
-            return false;
-        }
-        if (expression->kind == MINIC_EXPRESSION_UNARY &&
-            (expression->value.unary.operator_kind == MINIC_UNARY_POST_INCREMENT ||
-             expression->value.unary.operator_kind == MINIC_UNARY_POST_DECREMENT ||
-             expression->value.unary.operator_kind == MINIC_UNARY_PRE_INCREMENT ||
-             expression->value.unary.operator_kind == MINIC_UNARY_PRE_DECREMENT) &&
-            minic_inline_direct_local_target(
-                program, expression->value.unary.operand, &target_local) &&
-            target_local == local_id) {
-            return false;
-        }
-        if ((expression->kind == MINIC_EXPRESSION_ASSIGNMENT ||
-             expression->kind == MINIC_EXPRESSION_COMPOUND_ASSIGNMENT) &&
-            minic_inline_direct_local_target(
-                program, expression->value.binary.left, &target_local) &&
-            target_local == local_id) {
-            if (expression->kind != MINIC_EXPRESSION_ASSIGNMENT ||
-                !minic_inline_boolean_domain_value(
-                    program, expression->value.binary.right, 0U)) {
-                return false;
-            }
-            saw_assignment = true;
-        }
-    }
-
-    for (asm_index = 0U; asm_index < program->inline_asm_count; ++asm_index) {
-        const MinicInlineAsm *inline_asm = &program->inline_asms[asm_index];
-        size_t output_index;
-        for (output_index = 0U; output_index < inline_asm->output_count;
-             ++output_index) {
-            MinicLocalId output_local = MINIC_LOCAL_INVALID;
-            if (minic_inline_direct_local_target(
-                    program,
-                    inline_asm->outputs[output_index].expression,
-                    &output_local) &&
-                output_local == local_id) {
-                return false;
-            }
-        }
-    }
-
-    return saw_assignment;
+    return true;
 }
 
-
+/* Keep an allocation-free proof on cache allocation/synchronization failure. */
+static bool minic_inline_local_boolean_domain_legacy(
+    const MinicC0Program *program, MinicLocalId local_id) {
+    bool saw_assignment = false, invalid = false;
+    MinicInlineBooleanWrites writes = {
+        program, local_id, NULL, &saw_assignment, &invalid
+    };
+    return program != NULL && local_id < program->local_count &&
+           minic_type_is_integer(program->locals[local_id].type) &&
+           !minic_inline_local_is_parameter(program, local_id) &&
+           minic_c0_program_visit_direct_local_effects(
+               program, minic_inline_boolean_write, &writes) &&
+           saw_assignment && !invalid;
+}
 
 typedef struct MinicInlineLocalBooleanDomainCache {
     const MinicC0Program *program;
@@ -243,11 +177,8 @@ static bool minic_inline_build_local_boolean_domain_cache(
     bool *parameter = NULL;
     bool *saw_assignment = NULL;
     bool *invalid = NULL;
-    size_t function_index;
-    size_t statement_index;
-    size_t expression_index;
-    size_t asm_index;
     size_t local_index;
+    MinicInlineBooleanWrites writes;
 
     if (program == NULL ||
         program->local_count > SIZE_MAX / sizeof(bool)) {
@@ -265,104 +196,21 @@ static bool minic_inline_build_local_boolean_domain_cache(
                        sizeof(*saw_assignment));
     invalid = (bool *)calloc(program->local_count == 0U ? 1U : program->local_count,
                              sizeof(*invalid));
+    writes = (MinicInlineBooleanWrites){
+        program, MINIC_LOCAL_INVALID, stable_parameters, saw_assignment, invalid
+    };
     if (values == NULL || stable_parameters == NULL ||
-        !minic_c0_program_stable_parameter_locals(
-            program, stable_parameters, program->local_count) ||
-        parameter == NULL || saw_assignment == NULL ||
-        invalid == NULL) {
+        parameter == NULL || saw_assignment == NULL || invalid == NULL ||
+        !minic_c0_program_seed_parameter_locals(
+            program, parameter, stable_parameters, program->local_count) ||
+        !minic_c0_program_visit_direct_local_effects(
+            program, minic_inline_boolean_write, &writes)) {
         free(values);
         free(stable_parameters);
         free(parameter);
         free(saw_assignment);
         free(invalid);
         return false;
-    }
-
-    for (function_index = 0U; function_index < program->function_count;
-         ++function_index) {
-        const MinicFunction *function = &program->functions[function_index];
-        size_t parameter_index;
-        if (!function->is_defined || function->local_begin > program->local_count ||
-            function->parameter_count > program->local_count - function->local_begin) {
-            continue;
-        }
-        for (parameter_index = 0U; parameter_index < function->parameter_count;
-             ++parameter_index) {
-            parameter[function->local_begin + parameter_index] = true;
-        }
-    }
-
-    for (statement_index = 0U; statement_index < program->statement_count;
-         ++statement_index) {
-        const MinicStatement *statement = &program->statements[statement_index];
-        MinicLocalId target_local = MINIC_LOCAL_INVALID;
-        if (!minic_inline_direct_local_target(
-                program, statement->target_expression, &target_local) ||
-            target_local >= program->local_count) {
-            continue;
-        }
-        if (statement->kind != MINIC_STATEMENT_ASSIGN ||
-            statement->expression == MINIC_EXPRESSION_INVALID ||
-            !minic_inline_boolean_domain_value(
-                program, statement->expression, 0U)) {
-            invalid[target_local] = true;
-        } else {
-            saw_assignment[target_local] = true;
-        }
-    }
-
-    for (expression_index = 0U; expression_index < program->expression_count;
-         ++expression_index) {
-        const MinicExpression *expression = &program->expressions[expression_index];
-        MinicLocalId target_local = MINIC_LOCAL_INVALID;
-
-        if (expression->kind == MINIC_EXPRESSION_ADDRESS_OF &&
-            minic_inline_direct_local_target(
-                program, expression->value.unary.operand, &target_local) &&
-            target_local < program->local_count) {
-            invalid[target_local] = true;
-            continue;
-        }
-        if (expression->kind == MINIC_EXPRESSION_UNARY &&
-            (expression->value.unary.operator_kind == MINIC_UNARY_POST_INCREMENT ||
-             expression->value.unary.operator_kind == MINIC_UNARY_POST_DECREMENT ||
-             expression->value.unary.operator_kind == MINIC_UNARY_PRE_INCREMENT ||
-             expression->value.unary.operator_kind == MINIC_UNARY_PRE_DECREMENT) &&
-            minic_inline_direct_local_target(
-                program, expression->value.unary.operand, &target_local) &&
-            target_local < program->local_count) {
-            invalid[target_local] = true;
-            continue;
-        }
-        if ((expression->kind == MINIC_EXPRESSION_ASSIGNMENT ||
-             expression->kind == MINIC_EXPRESSION_COMPOUND_ASSIGNMENT) &&
-            minic_inline_direct_local_target(
-                program, expression->value.binary.left, &target_local) &&
-            target_local < program->local_count) {
-            if (expression->kind != MINIC_EXPRESSION_ASSIGNMENT ||
-                !minic_inline_boolean_domain_value(
-                    program, expression->value.binary.right, 0U)) {
-                invalid[target_local] = true;
-            } else {
-                saw_assignment[target_local] = true;
-            }
-        }
-    }
-
-    for (asm_index = 0U; asm_index < program->inline_asm_count; ++asm_index) {
-        const MinicInlineAsm *inline_asm = &program->inline_asms[asm_index];
-        size_t output_index;
-        for (output_index = 0U; output_index < inline_asm->output_count;
-             ++output_index) {
-            MinicLocalId output_local = MINIC_LOCAL_INVALID;
-            if (minic_inline_direct_local_target(
-                    program,
-                    inline_asm->outputs[output_index].expression,
-                    &output_local) &&
-                output_local < program->local_count) {
-                invalid[output_local] = true;
-            }
-        }
     }
 
     for (local_index = 0U; local_index < program->local_count; ++local_index) {

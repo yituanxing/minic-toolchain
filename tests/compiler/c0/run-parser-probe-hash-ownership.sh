@@ -41,13 +41,15 @@ import sys
 with open(sys.argv[1], "w") as out:
     for i in range(80):
         print(f"typedef int alias_{i};", file=out)
+        print(f"enum {{ enum_{i} = {i} }};", file=out)
         print(f"extern int global_{i};", file=out)
         print(f"int function_{i}(alias_{i} x);", file=out)
         print(f"int global_{i} = {i};", file=out)
         print(f"int function_{i}(alias_{i} x) {{ return global_{i} + x; }}", file=out)
-        print(f"int use_{i}(void) {{ return function_{i}(({ 'alias_'+str(i) })1); }}", file=out)
+        print(f"int use_{i}(void) {{ return function_{i}((alias_{i})(enum_{i} - {i} + 1)); }}", file=out)
     print("int shadow(void) { typedef int alias_0; alias_0 global_0 = 7; return global_0; }", file=out)
-    print("int main(void) { return (use_0() + use_79() + shadow() == 88) ? 0 : 1; }", file=out)
+    print("int enum_shadow(void) { int n = enum_0; { enum { enum_0 = 7 }; n += enum_0; } return n + enum_0; }", file=out)
+    print("int main(void) { return (use_0() + use_79() + shadow() == 88 && enum_79 == 79 && enum_shadow() == 7) ? 0 : 1; }", file=out)
 PY
 "$host_cc" -std=gnu11 "$work/name-index.c" -o "$work/name-index-gnu"
 "$work/name-index-gnu"

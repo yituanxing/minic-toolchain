@@ -69,6 +69,9 @@ MinicBlockId minic_c0_function_body_root_block(const MinicFunctionBodyView *view
  * write/escape only once and key the result by canonical source LocalId.
  * This deliberately treats even an unreachable write as a kill: no CFG proof
  * is needed for an AST-time speculative specialization. */
+/* All syntactic direct-local effects come from one source-arena walk.
+ * An orphan/unreachable expression is deliberately not a CFG exemption:
+ * speculative entry facts must conservatively account for every write. */
 static MinicLocalId stable_parameter_direct_local(
     const MinicC0Program *program, MinicExpressionId expression_id) {
     const MinicExpression *expression =
@@ -77,73 +80,116 @@ static MinicLocalId stable_parameter_direct_local(
         ? expression->value.local_id : MINIC_LOCAL_INVALID;
 }
 
-bool minic_c0_program_stable_parameter_locals(
-    const MinicC0Program *program, bool *stable, size_t stable_count) {
+bool minic_c0_program_seed_parameter_locals(
+    const MinicC0Program *program, bool *parameter, bool *stable, size_t count) {
     size_t index;
-    if (program == NULL || stable_count != program->local_count ||
-        (stable_count != 0U && (stable == NULL || program->locals == NULL)) ||
-        (program->function_count != 0U && program->functions == NULL) ||
+    if (program == NULL || count != program->local_count ||
+        (count != 0U && (program->locals == NULL ||
+                         (parameter == NULL && stable == NULL))) ||
+        (program->function_count != 0U && program->functions == NULL))
+        return false;
+    if (count != 0U) {
+        if (parameter != NULL) memset(parameter, 0, count * sizeof(*parameter));
+        if (stable != NULL) memset(stable, 0, count * sizeof(*stable));
+    }
+    for (index = 0U; index < program->function_count; ++index) {
+        const MinicFunction *function = &program->functions[index];
+        size_t i;
+        if (!function->is_defined) continue;
+        if (function->local_begin > count ||
+            function->parameter_count > count - function->local_begin ||
+            function->parameter_count > function->local_count) return false;
+        for (i = 0U; i < function->parameter_count; ++i) {
+            MinicLocalId id = function->local_begin + i;
+            if (parameter != NULL) parameter[id] = true;
+            if (stable != NULL)
+                stable[id] = !minic_type_is_volatile(program->locals[id].type);
+        }
+    }
+    return true;
+}
+
+static bool visit_direct_local_effect(
+    const MinicC0Program *program, MinicExpressionId target,
+    MinicDirectLocalEffect effect, MinicExpressionId rhs,
+    MinicDirectLocalEffectVisitor visitor, void *context) {
+    const MinicLocalId id = stable_parameter_direct_local(program, target);
+    return id >= program->local_count || visitor(context, id, effect, rhs);
+}
+
+bool minic_c0_program_visit_direct_local_effects(
+    const MinicC0Program *program, MinicDirectLocalEffectVisitor visitor,
+    void *context) {
+    size_t i;
+    if (program == NULL || visitor == NULL ||
         (program->statement_count != 0U && program->statements == NULL) ||
         (program->expression_count != 0U && program->expressions == NULL) ||
         (program->inline_asm_count != 0U && program->inline_asms == NULL))
         return false;
-    if (stable_count != 0U) (void)memset(stable, 0, stable_count * sizeof(*stable));
-
-    for (index = 0U; index < program->function_count; ++index) {
-        const MinicFunction *function = &program->functions[index];
-        size_t parameter;
-        if (!function->is_defined) continue;
-        if (function->local_begin > stable_count ||
-            function->parameter_count > stable_count - function->local_begin ||
-            function->parameter_count > function->local_count) return false;
-        for (parameter = 0U; parameter < function->parameter_count; ++parameter) {
-            MinicLocalId local_id = function->local_begin + parameter;
-            /* A volatile parameter is an observable memory read, not an
-             * immutable substituted entry value (even without source writes). */
-            stable[local_id] =
-                !minic_type_is_volatile(program->locals[local_id].type);
-        }
+    for (i = 0U; i < program->statement_count; ++i) {
+        const MinicStatement *statement = &program->statements[i];
+        const MinicDirectLocalEffect effect =
+            statement->kind == MINIC_STATEMENT_ASSIGN
+                ? MINIC_DIRECT_LOCAL_ASSIGN
+                : (statement->kind == MINIC_STATEMENT_RECORD_COPY ||
+                   statement->kind == MINIC_STATEMENT_RECORD_INITIALIZE ||
+                   statement->kind == MINIC_STATEMENT_XOR_ASSIGN)
+                    ? MINIC_DIRECT_LOCAL_CLOBBER : MINIC_DIRECT_LOCAL_TARGET_ONLY;
+        if (!visit_direct_local_effect(program, statement->target_expression,
+                effect, statement->expression, visitor, context)) return false;
     }
-
-    for (index = 0U; index < program->statement_count; ++index) {
-        const MinicStatement *statement = &program->statements[index];
-        MinicLocalId local;
-        if (statement->kind != MINIC_STATEMENT_ASSIGN &&
-            statement->kind != MINIC_STATEMENT_RECORD_COPY &&
-            statement->kind != MINIC_STATEMENT_RECORD_INITIALIZE &&
-            statement->kind != MINIC_STATEMENT_XOR_ASSIGN) continue;
-        local = stable_parameter_direct_local(program, statement->target_expression);
-        if (local < stable_count) stable[local] = false;
-    }
-    for (index = 0U; index < program->expression_count; ++index) {
-        const MinicExpression *expression = &program->expressions[index];
-        MinicLocalId local = MINIC_LOCAL_INVALID;
+    for (i = 0U; i < program->expression_count; ++i) {
+        const MinicExpression *expression = &program->expressions[i];
+        MinicExpressionId target = MINIC_EXPRESSION_INVALID;
+        MinicExpressionId rhs = MINIC_EXPRESSION_INVALID;
+        MinicDirectLocalEffect effect = MINIC_DIRECT_LOCAL_CLOBBER;
         if (expression->kind == MINIC_EXPRESSION_ADDRESS_OF) {
-            local = stable_parameter_direct_local(program, expression->value.unary.operand);
+            target = expression->value.unary.operand;
         } else if (expression->kind == MINIC_EXPRESSION_ASSIGNMENT ||
                    expression->kind == MINIC_EXPRESSION_COMPOUND_ASSIGNMENT) {
-            local = stable_parameter_direct_local(program, expression->value.binary.left);
+            target = expression->value.binary.left;
+            if (expression->kind == MINIC_EXPRESSION_ASSIGNMENT) {
+                effect = MINIC_DIRECT_LOCAL_ASSIGN;
+                rhs = expression->value.binary.right;
+            }
         } else if (expression->kind == MINIC_EXPRESSION_UNARY &&
                    (expression->value.unary.operator_kind == MINIC_UNARY_PRE_INCREMENT ||
                     expression->value.unary.operator_kind == MINIC_UNARY_PRE_DECREMENT ||
                     expression->value.unary.operator_kind == MINIC_UNARY_POST_INCREMENT ||
                     expression->value.unary.operator_kind == MINIC_UNARY_POST_DECREMENT)) {
-            local = stable_parameter_direct_local(program, expression->value.unary.operand);
+            target = expression->value.unary.operand;
         }
-        if (local < stable_count) stable[local] = false;
+        if (target != MINIC_EXPRESSION_INVALID &&
+            !visit_direct_local_effect(program, target, effect, rhs,
+                                       visitor, context)) return false;
     }
-    for (index = 0U; index < program->inline_asm_count; ++index) {
-        const MinicInlineAsm *inline_asm = &program->inline_asms[index];
+    for (i = 0U; i < program->inline_asm_count; ++i) {
+        const MinicInlineAsm *assembly = &program->inline_asms[i];
         size_t output;
-        if (inline_asm->output_count != 0U && inline_asm->outputs == NULL)
-            return false;
-        for (output = 0U; output < inline_asm->output_count; ++output) {
-            MinicLocalId local = stable_parameter_direct_local(
-                program, inline_asm->outputs[output].expression);
-            if (local < stable_count) stable[local] = false;
+        if (assembly->output_count != 0U && assembly->outputs == NULL) return false;
+        for (output = 0U; output < assembly->output_count; ++output) {
+            if (!visit_direct_local_effect(program, assembly->outputs[output].expression,
+                    MINIC_DIRECT_LOCAL_CLOBBER, MINIC_EXPRESSION_INVALID,
+                    visitor, context)) return false;
         }
     }
     return true;
+}
+
+static bool stable_parameter_kill(void *context, MinicLocalId id,
+                                  MinicDirectLocalEffect effect,
+                                  MinicExpressionId rhs) {
+    bool *stable = context;
+    (void)rhs;
+    if (effect != MINIC_DIRECT_LOCAL_TARGET_ONLY) stable[id] = false;
+    return true;
+}
+
+bool minic_c0_program_stable_parameter_locals(
+    const MinicC0Program *program, bool *stable, size_t stable_count) {
+    return (stable_count == 0U || stable != NULL) &&
+           minic_c0_program_seed_parameter_locals(program, NULL, stable, stable_count) &&
+           minic_c0_program_visit_direct_local_effects(program, stable_parameter_kill, stable);
 }
 
 static bool validation_storage_is_valid(const MinicC0Program *program) {

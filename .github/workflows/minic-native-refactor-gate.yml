@@ -234,6 +234,11 @@ jobs:
         run: |
           MINIC_CC="$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc" \
             HOST_CC=cc bash tests/compiler/c0/run-parser-probe-hash-ownership.sh
+      - name: Direct local effect and inline Boolean-range regression
+        run: |
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/minic-native-backend \
+            check-direct-local-effects check-gnu-linux-memory-encode-page-boolean-range \
+            check-core-cfg-effectful-boolean-fact-barrier
       - name: Flat and recursive global payload regression
         run: |
           MINIC_CC="$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc" \

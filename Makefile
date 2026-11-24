@@ -3321,3 +3321,15 @@ check-static-field-typedef-array: $(MINIC_CC_BINARY)
 	  sh tests/compiler/c0/run-static-field-typedef-array.sh
 
 check-fast: check-static-field-typedef-array
+
+# One AST arena walk owns direct-local write/escape evidence.
+.PHONY: check-direct-local-effects
+check-direct-local-effects: $(MINIC_CC_BINARY)
+	@mkdir -p "$(BUILD_DIR)/tests/frontend"
+	$(CC) $(CPPFLAGS) $(MINIC_INCLUDES) $(MINIC_CFLAGS) \
+	  tests/frontend/direct_local_effects_test.c \
+	  $(filter-out $(BUILD_DIR)/obj/tools/minic-cc/main.o,$(MINIC_OBJECTS)) \
+	  $(MINIC_LDFLAGS) -o "$(BUILD_DIR)/tests/frontend/direct-local-effects"
+	"$(abspath $(BUILD_DIR))/tests/frontend/direct-local-effects"
+
+check-fast: check-direct-local-effects

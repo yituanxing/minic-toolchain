@@ -685,18 +685,18 @@ MinicFunctionId minic_parser_find_function(const MinicParser *parser_const,
     name = parser->source + name_span.begin.offset;
     length = minic_parser_span_length(name_span);
 #if defined(MINIC_TEST_FORCE_PARSER_HASH_FALLBACK)
-    return minic_parser_name_linear_lookup(parser->program, MINIC_PARSER_NAME_FUNCTION,
+    return minic_parser_name_linear_lookup(parser, MINIC_PARSER_NAME_FUNCTION,
         parser->program->function_count, name, length, &parser->perf_find_function_steps);
 #endif
     if (parser->cache_owner != parser ||
-        !minic_parser_name_index_sync(parser->program, MINIC_PARSER_NAME_FUNCTION,
+        !minic_parser_name_index_sync(parser, MINIC_PARSER_NAME_FUNCTION,
             parser->program->function_count, &parser->perf_function_name_slots,
             &parser->perf_function_name_slot_capacity,
             &parser->perf_function_name_indexed_count, NULL) ||
         parser->perf_function_name_slot_capacity == 0U)
-        return minic_parser_name_linear_lookup(parser->program, MINIC_PARSER_NAME_FUNCTION,
+        return minic_parser_name_linear_lookup(parser, MINIC_PARSER_NAME_FUNCTION,
             parser->program->function_count, name, length, &parser->perf_find_function_steps);
-    return minic_parser_name_index_lookup(parser->program, MINIC_PARSER_NAME_FUNCTION,
+    return minic_parser_name_index_lookup(parser, MINIC_PARSER_NAME_FUNCTION,
         parser->perf_function_name_slots, parser->perf_function_name_slot_capacity,
         name, length, &parser->perf_find_function_steps, &consistent);
 }

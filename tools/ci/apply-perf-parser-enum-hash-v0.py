@@ -7,9 +7,16 @@ _enum_header = Path("src/frontend/parser_internal.h").read_text()
 if "    size_t *perf_enum_name_slots;" in _enum_header:
     _enum_body = Path("src/frontend/parser_enum.c").read_text()
     _enum_owner = Path("src/frontend/parser_function.c").read_text()
-    if (_enum_body.count("static bool minic_parser_enum_global_index_sync(") != 1 or
+    _shared = Path("src/frontend/parser_name_index.h")
+    _shared_body = _shared.read_text() if _shared.exists() else ""
+    _native_index = (
+        (_enum_body.count("static bool minic_parser_enum_global_index_sync(") == 1 and
+         _enum_body.count("static size_t minic_parser_enum_name_hash(") == 1) or
+        ("minic_parser_name_index_sync(parser, MINIC_PARSER_NAME_ENUM," in _enum_body and
+         "MINIC_PARSER_NAME_ENUM" in _shared_body and
+         "minic_parser_name_index_insert(" in _shared_body))
+    if (not _native_index or
             _enum_body.count("static MinicEnumeratorId minic_parser_enum_global_linear_fallback(") != 1 or
-            _enum_body.count("static size_t minic_parser_enum_name_hash(") != 1 or
             _enum_body.count("MINIC_TEST_FORCE_PARSER_HASH_FALLBACK") != 1 or
             _enum_owner.count("free(parser.perf_enum_name_slots);") != 1):
         raise SystemExit("PARSER_ENUM_HASH=ERROR partial canonical source")

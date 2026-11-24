@@ -29,7 +29,7 @@ MinicTypeAliasId minic_parser_find_type_alias(const MinicParser *parser,
 
     ((MinicParser *)parser)->perf_typedef_queries += 1U;
     if (parser->cache_owner == parser &&
-        minic_parser_name_index_sync(parser->program, MINIC_PARSER_NAME_TYPEDEF,
+        minic_parser_name_index_sync(parser, MINIC_PARSER_NAME_TYPEDEF,
             parser->program->type_alias_count,
             &((MinicParser *)parser)->perf_typedef_name_slots,
             &((MinicParser *)parser)->perf_typedef_name_capacity,
@@ -37,7 +37,7 @@ MinicTypeAliasId minic_parser_find_type_alias(const MinicParser *parser,
             &((MinicParser *)parser)->perf_typedef_rebuilds)) {
         bool consistent;
         MinicTypeAliasId id = minic_parser_name_index_lookup(
-            parser->program, MINIC_PARSER_NAME_TYPEDEF,
+            parser, MINIC_PARSER_NAME_TYPEDEF,
             parser->perf_typedef_name_slots, parser->perf_typedef_name_capacity,
             parser->source + name_span.begin.offset,
             minic_parser_span_length(name_span),
@@ -46,7 +46,7 @@ MinicTypeAliasId minic_parser_find_type_alias(const MinicParser *parser,
     }
     ((MinicParser *)parser)->perf_typedef_fallbacks += 1U;
     name_length = minic_parser_span_length(name_span);
-    return minic_parser_name_linear_lookup(parser->program, MINIC_PARSER_NAME_TYPEDEF,
+    return minic_parser_name_linear_lookup(parser, MINIC_PARSER_NAME_TYPEDEF,
         parser->program->type_alias_count, parser->source + name_span.begin.offset,
         name_length, &((MinicParser *)parser)->perf_find_type_alias_steps);
 }
