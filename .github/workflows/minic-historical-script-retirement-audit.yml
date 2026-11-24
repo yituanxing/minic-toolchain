@@ -310,7 +310,26 @@ jobs:
               "tools/ci/apply-m158-final-four.py",
               "tools/ci/apply-riscv64-core-object-slot-reuse-legacy-v0.py",
           }
-          if len(expected) != 409 or deleted != expected or changed != expected | metadata:
+          expected |= {
+              "tools/ci/apply-inline-specialization-symbolic-trace-v0.py",
+              "tools/ci/apply-m151-indirect-call-batch.py",
+              "tools/ci/fix-m151-staging-marker.py",
+              "tools/ci/patch-local-assignment-source-constant-v0.py",
+              "tools/ci/patch-local-constant-trace-v0.py",
+              "tools/ci/patch-local-read-lvalue-v0.py",
+              "tools/ci/patch-return-equality-trace-v0.py",
+              "tools/ci/run-linux-filter-local-integer-v2.sh",
+              "tools/ci/run-local-constant-trace-v0.sh",
+              "tools/ci/run-local-constant-trace-v1.sh",
+              "tools/ci/run-local-integer-assignment-v2.sh",
+              "tools/ci/run-local-integer-conditions-v1.sh",
+              "tools/ci/run-local-integer-constants-fix-v0.sh",
+              "tools/ci/run-local-integer-isolate-v1.sh",
+              "tools/ci/run-local-null-pointer-fact-v0.sh",
+              "tools/ci/run-return-equality-regression-v0.sh",
+              "tools/dev/patch-linux-replay-live-progress.py",
+          }
+          if len(expected) != 426 or deleted != expected or changed != expected | metadata:
               raise SystemExit("RETIREMENT_SCOPE=FAIL: unexpected tree changes")
           files = [p.decode() for p in git("ls-files", "-z").split(b"\0") if p]
           candidates = {
@@ -372,6 +391,8 @@ jobs:
               print(f"INVENTORY {group} {category} {p} active={len(runtime)} archived={len(archived_c)} docs={len(docs_c)}")
               if runtime:
                   print("  ACTIVE_CONSUMERS " + "; ".join(runtime))
+              if group == "historical-doc" and docs_c:
+                  print(f"DOC_CONSUMERS {p} " + "; ".join(docs_c))
           for (group, category), n in sorted(counts.items()):
               print(f"INVENTORY_TOTAL {group} {category} {n}")
           # Trace the entire helper graph, not just direct references to rewrite tools.
