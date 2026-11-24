@@ -507,6 +507,59 @@ jobs:
           if active:
               raise SystemExit("RETIREMENT_REFERENCES=FAIL retained non-document references require review")
           print("RETIREMENT_REFERENCES=PASS")
+          # Test-driver census: exact text templates, not approximate semantics.
+          test_paths = [p for p in files if p.startswith("tests/")]
+          shell = [p for p in test_paths if p.endswith(".sh")]
+          signatures = defaultdict(list)
+          for p in shell:
+              f = pathlib.Path(p)
+              if not p.startswith("tests/compiler/c0/run-"):
+                  continue
+              name = f.stem[4:]
+              source = name.replace("-", "_")
+              if not (f.parent / (source + ".c")).is_file():
+                  continue
+              body = f.read_text()
+              # Only normalize the case name and matching fixture basename.
+              norm = body.replace(source + ".c", "<FIXTURE>.c").replace(name, "<CASE>")
+              signatures[norm].append(p)
+          groups = sorted((v for v in signatures.values() if len(v) > 1),
+                          key=lambda v: (-len(v), v[0]))
+          print(f"TEST_SCRIPT_TEMPLATES total_shell={len(shell)} duplicate_groups={len(groups)} duplicate_wrappers={sum(map(len,groups))}")
+          # Record literal references for candidate runners and exact duplicate C fixtures.
+          import hashlib
+          blobs = defaultdict(list)
+          for p in test_paths:
+              if p.endswith(".c"):
+                  blobs[hashlib.sha256(pathlib.Path(p).read_bytes()).hexdigest()].append(p)
+          duplicates = [v for v in blobs.values() if len(v) > 1]
+          for group in duplicates:
+              print("TEST_IDENTICAL_C " + "; ".join(group))
+          targets = {pathlib.PurePosixPath(p).name for group in groups + duplicates for p in group}
+          refs = defaultdict(set)
+          # Search exact basenames in retained text, separately flag dynamic selectors.
+          token = re.compile(r"[A-Za-z0-9_.-]+\.(?:sh|c)\b")
+          for p in files:
+              if p == audit:
+                  continue
+              data = pathlib.Path(p).read_bytes()
+              if b"\0" in data:
+                  continue
+              for no, line in enumerate(data.decode("utf-8", errors="replace").splitlines(), 1):
+                  for name in set(token.findall(line)) & targets:
+                      if name != pathlib.PurePosixPath(p).name:
+                          refs[name].add(p)
+                  if ("tests/compiler/c0" in line or "tests/programs/c0" in line) and any(
+                      mark in line for mark in ("*", "$name", "${name}", "$case", "${case}", "find ", "glob(")):
+                      print(f"TEST_DYNAMIC_REFERENCE {p}:{no}: {line.strip()[:200]}")
+          for idx, group in enumerate(groups):
+              print(f"TEST_TEMPLATE_GROUP {idx} count={len(group)} " + "; ".join(group))
+              for p in group:
+                  print(f"TEST_TEMPLATE_CONSUMERS {p} " + "; ".join(sorted(refs[pathlib.PurePosixPath(p).name])))
+          for group in duplicates:
+              for p in group:
+                  print(f"TEST_FIXTURE_CONSUMERS {p} " + "; ".join(sorted(refs[pathlib.PurePosixPath(p).name])))
+          print("TEST_INVENTORY=PASS; templates are review candidates, not deletion authorization")
           # Verify the remaining historical guard scripts have identical
           # outcomes before and after archive pruning. Baseline failures
           # are reported separately, not counted as successful checks.
