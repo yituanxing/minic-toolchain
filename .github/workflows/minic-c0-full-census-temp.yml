@@ -131,3 +131,50 @@ jobs:
               if not x['refs']:
                   print('UTILITY_ORPHAN',json.dumps({k:x[k] for k in ('name','bytes','role','docs','header','uses_write','imports')},ensure_ascii=False))
           PY
+
+      - name: Conservative full C0 fixture dependency and dynamic-pattern census
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import pathlib,subprocess,re,collections,fnmatch,json
+          root=pathlib.Path.cwd()
+          paths=[p for p in subprocess.check_output(['git','ls-files','-z']).decode().split('\x00') if p]
+          cfiles=[p for p in paths if p.startswith('tests/compiler/c0/') and p.endswith(('.c','.i'))]
+          other=[]
+          for p in paths:
+              if p.startswith('tests/compiler/c0/') and p.endswith(('.c','.i')):continue
+              if not p.endswith(('.sh','.py','.json','.yml','.yaml','.mk','.txt','.md','.c','.h','.ini')) and p not in ('Makefile','GNUmakefile'):continue
+              try:
+                  s=(root/p).read_text(errors='replace')
+                  other.append((p,s))
+              except:pass
+          # Source stems occurring in a maintained runner or config count as
+          # live, including constructed script source path patterns.
+          included=set()
+          for p in cfiles:
+              try:
+                  s=(root/p).read_text(errors='replace')
+                  for dep in re.findall(r'#\s*include\s*["\x27]([^"\x27]+\.(?:c|i))["\x27]',s):
+                      included.add(dep.split('/')[-1])
+              except:pass
+          body='\n'.join(s for p,s in other if not p.endswith('.md'))
+          docs='\n'.join(s for p,s in other if p.endswith('.md'))
+          tokens=set(re.findall(r'[A-Za-z_][A-Za-z0-9_]{4,}',body))
+          globCandidates=set()
+          for _,s in other:
+              for gl in re.findall(r'tests/compiler/c0/[A-Za-z0-9_.*?\[\]-]+\.(?:c|i)',s):
+                  if any(x in gl for x in '*?['): globCandidates.add(gl)
+          result=[]
+          for p in cfiles:
+              b=p.rsplit('/',1)[-1];stem=b.rsplit('.',1)[0]
+              # Whole names including hyphens are treated literally, even if
+              # generated fixture names are constructed from shell variables.
+              owner=(stem in tokens or b in body or p in body or b in included or stem in body)
+              patterns=[g for g in globCandidates if fnmatch.fnmatch(p,g)]
+              d=(b in docs or stem in docs)
+              if not owner:
+                  result.append(dict(path=p,size=(root/p).stat().st_size,docs=d,glob=patterns[:8]))
+          print('SOURCE_AUDIT_SUMMARY',json.dumps(dict(total=len(cfiles),has_nominal_owner=len(cfiles)-len(result),missing_exact_owner=len(result),missing_owner_without_globs=sum(not x['glob'] for x in result),source_glob_patterns=len(globCandidates),patterns=sorted(globCandidates)[:30])))
+          for x in sorted(result,key=lambda x:(bool(x['glob']),x['docs'],x['size'])):
+              print('C0_SOURCE_CANDIDATE',json.dumps(x))
+          PY
