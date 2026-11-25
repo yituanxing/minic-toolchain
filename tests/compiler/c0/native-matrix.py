@@ -128,8 +128,10 @@ def preprocess(config, cc, src, out, env):
 def minic_compile(config, mini, input_path, output_path, target, env, reject=False):
     output_path.unlink(missing_ok=True)
     env = dict(env, **config.get("mini_env", {}))
-    p = execute([mini, "--target=" + target + "-linux",
-                 *flags(config.get("mini_flags")),
+    cmd = [mini]
+    if not config.get("omit_target_option"):
+        cmd.append("--target=" + target + "-linux")
+    p = execute([*cmd, *flags(config.get("mini_flags")),
                  *flags(config.get("target_flags", {}).get(target)),
                  "-S", input_path, "-o", output_path], env,
                 expect="reject" if reject else 0, label="MiniC " + target)
@@ -172,8 +174,9 @@ def positive(config, cc, mini, work):
             if config.get("relay_gnu_build_stderr"):
                 sys.stderr.buffer.write(gnu_build.stderr)
         g = execute([gnu], env, expect=config.get("exit", 0), label="GNU runtime")
-        sys.stdout.buffer.write(g.stdout)
-        sys.stderr.buffer.write(g.stderr)
+        if config.get("relay_runtime_output", True):
+            sys.stdout.buffer.write(g.stdout)
+            sys.stderr.buffer.write(g.stderr)
     for target in targets:
         out = work / (target + "-linux.s")
         p = minic_compile(config, mini, input_path, out, target, env)
@@ -195,8 +198,9 @@ def positive(config, cc, mini, work):
             execute([cc, *link, mini_s, *support, "-o", mini_exe], env)
         p = execute([mini_exe], env, expect=config.get("exit", 0), label="MiniC native runtime")
         artifacts["stdout"] = p.stdout
-        sys.stdout.buffer.write(p.stdout)
-        sys.stderr.buffer.write(p.stderr)
+        if config.get("relay_runtime_output", True):
+            sys.stdout.buffer.write(p.stdout)
+            sys.stderr.buffer.write(p.stderr)
         if config.get("compare"):
             require(config.get("gnu", True) and p.stdout == g.stdout and p.stderr == g.stderr,
                     "GNU and MiniC native outputs diverge")
