@@ -83,11 +83,18 @@ def check_all(checks, artifacts, targets, counts=(), cfg=(), order=(),
             if matching(data, mode, pattern) != (sense == "present"):
                 # On failure, preserve inspectable machine evidence instead of
                 # assuming historic literal opcode spellings remain canonical.
-                samples = [line.decode(errors="replace") for line in data.splitlines()
-                           if b".inst" in line or b"msr_s" in line or b"msr " in line]
+                text_lines = data.decode(errors="replace").splitlines()
+                samples = [line for line in text_lines
+                           if any(op in line for op in (" cset ", " ldp ",
+                               " stp ", " la ", " lla ", " adrp ",
+                               ".inst", "msr_s", "msr "))]
+                labels = [line for line in text_lines
+                          if line.endswith(":") and not line.startswith(".L")]
                 raise RuntimeError(
                     f"{t}: {sense} {pattern!r} failed; "
-                    f"asm_samples={samples[:22]!r}")
+                    f"labels={labels[:22]!r} "
+                    f"machine_samples={samples[:35]!r} "
+                    f"asm_start={text_lines[:12]!r}")
 
     for target, mode, pattern, minimum, maximum, *section in counts:
         data = artifacts[target]
