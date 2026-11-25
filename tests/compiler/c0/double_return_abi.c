@@ -10,24 +10,26 @@ double literal(void)
     return (double)123.5;
 }
 
-double add_values(void)
+/* The independent GNU caller supplies run-time operands from another TU:
+ * no source-level constant folding may replace the actual binary64 ops. */
+double add_values(double left, double right)
 {
-    return 1.5 + 2.25;
+    return left + right;
 }
 
-double subtract_values(void)
+double subtract_values(double left, double right)
 {
-    return 9.0 - 2.5;
+    return left - right;
 }
 
-double multiply_values(void)
+double multiply_values(double left, double right)
 {
-    return 1.5 * 4.0;
+    return left * right;
 }
 
-double divide_values(void)
+double divide_values(double left, double right)
 {
-    return 9.0 / 4.0;
+    return left / right;
 }
 
 double nan_value(void)

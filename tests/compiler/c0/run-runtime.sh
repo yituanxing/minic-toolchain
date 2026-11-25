@@ -52,13 +52,17 @@ run_double_return_abi() {
     "$riscv_cc" -E -P -x c \
         "$root/tests/compiler/c0/$name.c" -o "$work/$name.i"
     "$minic" -S "$work/$name.i" -o "$work/$name.s"
-    grep -F "  fmv.x.d a0, fa0" "$work/$name.s" >/dev/null
-    grep -F "  fmv.d.x fa0, a0" "$work/$name.s" >/dev/null
-    grep -F "0x405ee00000000000" "$work/$name.s" >/dev/null
-    grep -F "  fadd.d ft0, ft0, ft1" "$work/$name.s" >/dev/null
-    grep -F "  fsub.d ft0, ft0, ft1" "$work/$name.s" >/dev/null
-    grep -F "  fmul.d ft0, ft0, ft1" "$work/$name.s" >/dev/null
-    grep -F "  fdiv.d ft0, ft0, ft1" "$work/$name.s" >/dev/null
+    # The GNU caller provides non-constant FP inputs from a separate TU.
+    # Demand the actual target binary64 instructions, not historical
+    # scratch register spellings or one particular constant materialization.
+    for opcode in fadd.d fsub.d fmul.d fdiv.d; do
+        if ! grep -Fq "$opcode " "$work/$name.s"; then
+            printf '%s\n' "FAIL compiler/c0/runtime/$name missing=$opcode" >&2
+            grep -E '(^|[[:space:]])f(add|sub|mul|div)\.d[[:space:]]' \
+                "$work/$name.s" >&2 || true
+            exit 1
+        fi
+    done
     "$riscv_cc" -static \
         "$work/$name.s" \
         "$root/tests/compiler/c0/${name}_helper.c" \
