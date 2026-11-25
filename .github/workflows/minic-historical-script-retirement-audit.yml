@@ -821,110 +821,66 @@ jobs:
           echo "BULK_COMPILE_COMPARISON passed=$passed unchanged_baseline_fail=$baseline_failures"
           git diff --exit-code
 
-  historical-rewrite-execution-census:
+  full-source-symbol-census:
     runs-on: ubuntu-24.04
-    timeout-minutes: 12
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
         with:
           ref: 0475a7442e86d4942b85f58e4a20f59045e592bb
           persist-credentials: false
-      - name: Execute each historical rewrite on isolated source and inspect canonical guards
+      - name: Build all MiniC target implementations
+        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/source-census build/source-census/bin/minic
+      - name: Cross-check object symbols with every tracked source and configuration file
         run: |
           python3 - <<'PY'
-          import ast, base64, json, os, pathlib, re, shutil, subprocess, tempfile
-          from collections import Counter
-          root = pathlib.Path.cwd()
-          base = "0475a7442e86d4942b85f58e4a20f59045e592bb"
-          def git(*args,cwd=root):
-              return subprocess.check_output(["git",*args],cwd=cwd)
-          tracked=git("ls-files","-z").decode().split("\0")
+          import collections, hashlib, json, pathlib, re, subprocess
+          root=pathlib.Path.cwd()
+          paths=subprocess.check_output(["git","ls-files","-z"]).decode().split("\0")
           texts={}
-          for p in tracked:
+          for p in paths:
               if not p: continue
-              data=(root/p).read_bytes()
-              if b"\0" in data: continue
-              try: texts[p]=data.decode("utf-8")
+              b=pathlib.Path(p).read_bytes()
+              if b"\0" in b: continue
+              try: texts[p]=b.decode()
               except UnicodeDecodeError: pass
-          patches=sorted(p for p in texts if p.startswith("tools/ci/") and pathlib.PurePosixPath(p).name.startswith(("apply-","patch-")) and p.endswith(".py"))
-          assert len(patches)==118
-          results=[]
-          candidates={}
-          env={k:v for k,v in os.environ.items() if not any(s in k.upper() for s in ("TOKEN","SECRET","PASSWORD","CREDENTIAL","PRIVATE_KEY","AUTH"))}
-          env["PYTHONDONTWRITEBYTECODE"]="1"
-          env["PYTHONHASHSEED"]="0"
-          def run(path,work):
-              try:
-                  p=subprocess.run(["python3",path],cwd=work,env=env,capture_output=True,text=True,timeout=15,errors="replace")
-                  return p.returncode,p.stdout,p.stderr
-              except subprocess.TimeoutExpired:
-                  return 124,"","TIMEOUT"
-          def clean(work):
-              git("reset","--hard","HEAD",cwd=work)
-              git("clean","-fdx",cwd=work)
-          def status(work):
-              return git("status","--porcelain=v1","--untracked-files=all",cwd=work).decode().splitlines()
-          with tempfile.TemporaryDirectory(prefix="minic-rewrite-census-") as tmp:
-              work=pathlib.Path(tmp)/"tree"
-              subprocess.run(["git","worktree","add","--detach",str(work),base],check=True)
-              try:
-                  for p in patches:
-                      original=texts[p]
-                      tree=ast.parse(original)
-                      refs=sorted(q for q,s in texts.items() if q!=p and pathlib.PurePosixPath(p).name in s and not q.startswith("docs/") and not q.endswith(".md") and q!=".github/workflows/minic-historical-script-retirement-audit.yml")
-                      old=run(p,work)
-                      dirty=status(work)
-                      kind="NOOP" if old[0]==0 and not dirty else "MUTATES" if old[0]==0 else "FAILS"
-                      row={"path":p,"lines":len(original.splitlines()),"status":kind,"rc":old[0],"changes":dirty[:15],"stdout":old[1][-500:],"stderr":old[2][-500:],"refs":refs}
-                      clean(work)
-                      # A strict top-level native guard which exits successfully on the
-                      # current source can be separated from the old source materializer.
-                      # Do not infer that it is safe to remove the old branch.
-                      if kind=="NOOP" and re.search(r"ALREADY_(?:CANONICAL|NATIVE|APPLIED|PRESENT)",old[1]):
-                          for node in tree.body:
-                              if not isinstance(node,ast.If): continue
-                              if not any(isinstance(n,ast.Raise) and isinstance(n.exc,ast.Call) and isinstance(n.exc.func,ast.Name) and n.exc.func.id=="SystemExit" and len(n.exc.args)==1 and isinstance(n.exc.args[0],ast.Constant) and n.exc.args[0].value==0 for n in ast.walk(node)):
-                                  continue
-                              if node.end_lineno is None or node.end_lineno >= len(original.splitlines())-10: continue
-                              prefix="".join(original.splitlines(keepends=True)[:node.end_lineno])
-                              # The unmodified guard must itself produce the identical
-                              # exit code and stdout/stderr without changing source.
-                              candidate=prefix.rstrip()+"\n\nraise SystemExit('historical rewrite requires pre-integration source; replay at pinned historical commit')\n"
-                              (work/p).write_text(candidate)
-                              new=run(p,work)
-                              changed=status(work)
-                              if new==old and changed==[" M "+p]:
-                                  row["guard_lines"]=len(candidate.splitlines())
-                                  row["legacy_lines"]=row["lines"]-row["guard_lines"]
-                                  candidates[p]=candidate
-                              clean(work)
-                              break
-                      results.append(row)
-                      print("PATCH_RESULT "+json.dumps(row,ensure_ascii=True,separators=(",",":")),flush=True)
-                  # Observe real ordered top-level profile chains, stopping at their first
-                  # failure. No make, QEMU, downloads or remote operations are needed.
-                  for profile in ("linux-runtime-build-minic-profile-v1.sh","linux-perf-build-minic-profile-v1.sh"):
-                      src=texts["tools/ci/"+profile]
-                      seq=re.findall(r"(?m)^  (apply-[A-Za-z0-9_.-]+\.py)$",src)
-                      if "perf-build" in profile: seq.insert(0,"apply-perf-parser-source-deltas-v1.py")
-                      clean(work)
-                      states=[]
-                      for name in seq:
-                          path="tools/ci/"+name
-                          override="tools/ci/perf-v1-overrides/"+name
-                          if "perf-build" in profile and override in texts: path=override
-                          before=git("diff","--binary",cwd=work)
-                          rc,so,se=run(path,work)
-                          after=git("diff","--binary",cwd=work)
-                          states.append([path,rc,before==after,so[-150:],se[-150:]])
-                          if rc: break
-                      print("PROFILE_EXEC "+json.dumps({"profile":profile,"steps":len(seq),"executed":len(states),"states":states},ensure_ascii=True),flush=True)
-                      clean(work)
-              finally:
-                  subprocess.run(["git","worktree","remove","--force",str(work)],cwd=root,check=True)
-          print("PATCH_SUMMARY "+json.dumps({"total":len(results),"status":dict(Counter(r["status"] for r in results)),"guard_candidates":len(candidates),"legacy_lines":sum(r.get("legacy_lines",0) for r in results)}),flush=True)
-          payload=json.dumps({"base":base,"candidates":candidates,"results":results},ensure_ascii=True,separators=(",",":")).encode()
-          encoded=base64.b64encode(payload).decode()
-          for i in range(0,len(encoded),2400):
-              print("PATCH_PAYLOAD "+encoded[i:i+2400])
+          # Read all tracked source and configuration text, not just the translation units.
+          definitions=collections.defaultdict(list)
+          references=collections.defaultdict(list)
+          objects=sorted(pathlib.Path("build/source-census").rglob("*.o"))
+          for obj in objects:
+              out=subprocess.check_output(["nm","-g","--format=posix",str(obj)],text=True)
+              for line in out.splitlines():
+                  fields=line.split()
+                  if len(fields)<2: continue
+                  name,kind=fields[:2]
+                  if kind=="T" and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*",name):
+                      definitions[name].append(str(obj))
+                  elif kind=="U": references[name].append(str(obj))
+          owners=collections.defaultdict(list)
+          all_refs=collections.defaultdict(list)
+          names=set(definitions)-set(references)
+          rx=re.compile(r"\b(?:"+"|".join(re.escape(s) for s in sorted(names,key=len,reverse=True))+r")\b") if names else re.compile(r"(?!)")
+          for p,s in texts.items():
+              if p==".github/workflows/minic-historical-script-retirement-audit.yml": continue
+              for no,line in enumerate(s.splitlines(),1):
+                  for name in set(rx.findall(line)):
+                      all_refs[name].append([p,no,line.strip()[:240]])
+                      if p.endswith((".c",".h")) and not p.startswith(("third_party/","tests/vendor/")):
+                          owners[name].append([p,no,line.strip()[:240]])
+          print("SOURCE_SYMBOL_CENSUS "+json.dumps({"objects":len(objects),"defined":len(definitions),"unreferenced_by_nm":len(names),"source_files":sum(p.startswith(("src/","include/")) and p.endswith((".c",".h")) for p in texts),"tracked_text":len(texts)}))
+          for name in sorted(names):
+              refs=owners[name]
+              if name.startswith("minic_") and len(refs)<=3 and any(p.startswith("src/") for p,_,_ in refs):
+                  print("SOURCE_CANDIDATE "+json.dumps({"name":name,"objects":definitions[name],"source":refs,"all":all_refs[name][:30],"total_refs":len(all_refs[name])},ensure_ascii=True))
+          # Large stored historical patches and dated evidence: exact reference inventory.
+          for p,s in texts.items():
+              if not p.startswith("docs/") or not (p.endswith(".patch") or len(s)>60000): continue
+              name=pathlib.PurePosixPath(p).name
+              refs=[]
+              for q,other in texts.items():
+                  if q==p or q==".github/workflows/minic-historical-script-retirement-audit.yml": continue
+                  for no,line in enumerate(other.splitlines(),1):
+                      if name in line: refs.append([q,no,line.strip()[:220]])
+              print("LARGE_HISTORY "+json.dumps({"path":p,"lines":len(s.splitlines()),"bytes":len(s.encode()),"refs":refs},ensure_ascii=True))
           PY
