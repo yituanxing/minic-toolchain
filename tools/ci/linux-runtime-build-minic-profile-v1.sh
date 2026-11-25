@@ -18,7 +18,6 @@ mkdir -p "$ev"
 # A refreshed exact source hash is a CANDIDATE for current full-Linux/P1,
 # not a runtime PASS until the seven live shards and QEMU gate complete.
 native_manifest="docs/ci/native-runtime44-perf4-validated-sha1.txt"
-native_profile=0
 if [[ "${MINIC_CURRENT_MAIN_SEVEN_RECHECK:-0}" == 1 ]] ||
    { [[ "${GITHUB_REF:-}" == refs/heads/main ]] &&
      git log -1 --format=%B | grep -Fq '[linux-runtime-gcc-sharded]'; }; then
@@ -34,10 +33,8 @@ if [[ "${MINIC_CURRENT_MAIN_SEVEN_RECHECK:-0}" == 1 ]] ||
   expected_checkout_sha=${MINIC_EXPECTED_HEAD_SHA:-${GITHUB_SHA:-}}
   test -n "$expected_checkout_sha" && test "$(git rev-parse HEAD)" = "$expected_checkout_sha"
   git diff --quiet -- src include Makefile
-  native_profile=1
   echo "MINIC_CURRENT_MAIN_PROFILE=CHECKED_OUT_SOURCE_VALIDATED sha=$expected_checkout_sha old_runtime44_sha_manifest=HISTORICAL_ONLY"
 elif [[ -f "$native_manifest" ]]; then
-  native_profile=1
   while read -r expected file; do
     [[ "$expected" =~ ^[0-9a-f]{40}$ ]] || continue
     actual=$(git hash-object "$file")
@@ -47,6 +44,9 @@ elif [[ -f "$native_manifest" ]]; then
     fi
   done <"$native_manifest"
   echo "MINIC_NATIVE_PROFILE=PASS runtime44=checked_in integrated_perf4=checked_in"
+else
+  echo "MINIC_NATIVE_PROFILE=FAIL historical source requires its own checkout 59ad3648637eba4991c0fb8ce27f121cc852b4fa" >&2
+  exit 78
 fi
 patches=(
   apply-local-integer-assignment-v2.py
@@ -91,23 +91,20 @@ patches=(
   apply-riscv64-structured-asm-used-callee-save-v0.py
   # The validated .L*-only PC-relative global-address selection lives in
   # src/target/riscv64/core_codegen.c; do not re-run its old Python rewrite.
-  apply-loop-mutated-specialization-fact-barrier-v0.py
-  apply-local-asm-if-fact-barrier-v0.py
-  apply-core-if-condition-dominance-barrier-v0.py
-  apply-netlink-if-control-trace-v0.py
-  apply-core-goto-label-fact-barrier-v0.py
-  apply-runtime-if-fallthrough-facts-v1.py
-  apply-runtime-stable-zero-bools-v0.py
+  apply-loop-mutated-specialization-fact-barrier-v0.py # historical-only
+  apply-local-asm-if-fact-barrier-v0.py # historical-only
+  apply-core-if-condition-dominance-barrier-v0.py # historical-only
+  apply-netlink-if-control-trace-v0.py # historical-only
+  apply-core-goto-label-fact-barrier-v0.py # historical-only
+  apply-runtime-if-fallthrough-facts-v1.py # historical-only
+  apply-runtime-stable-zero-bools-v0.py # historical-only
 )
 
 start=$(date +%s%N)
 : >"$ev/patch.log"
+# Historical patch identities are evidence labels, never executable inputs.
 for p in "${patches[@]}"; do
-  if [[ "$native_profile" == 1 ]]; then
-    echo "$p: ALREADY_NATIVE_VALIDATED" >>"$ev/patch.log"
-  else
-    python3 "tools/ci/$p" >>"$ev/patch.log"
-  fi
+  echo "$p: ALREADY_NATIVE_VALIDATED" >>"$ev/patch.log"
 done
 # Whole-Linux producer opt-in: run the exact two mechanisms proven on the
 # eight-owner 24/24 P1 image across ALL actual Linux C translation units.

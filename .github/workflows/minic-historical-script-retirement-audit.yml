@@ -35,14 +35,14 @@ jobs:
           audit = ".github/workflows/minic-historical-script-retirement-audit.yml"
           def git(*args):
               return subprocess.check_output(["git", *args])
-          # Previously accepted exact tree plus the historical overlay closure.
-          accepted = "9f7df7a6fb928049706a26bbb7a0a6cee378a8d5"
+          # Accepted exact tree plus native Runtime-only retirement.
+          accepted = "9471bb1d1800dfbef52d7e86824ac81042d24ae5"
           def changed_paths(before, after, *options):
               return set(git("diff", "--no-renames", "--name-only", *options,
                              before, after).decode().splitlines())
           expected = changed_paths(base, accepted, "--diff-filter=D")
           metadata = changed_paths(base, accepted) - expected
-          assert len(expected) == 827
+          assert len(expected) == 858
           shared_fixtures = {
               "tests/programs/c0/cast_expressions.c",
               "tests/programs/c0/hexadecimal_expression.c",
@@ -91,14 +91,20 @@ jobs:
               "tools/ci/apply-static-const-global-cfg-v0.py",
               "tools/ci/apply-tail-cfg-closure-v0.py",
           }
-          expected |= retired_overlay
-          metadata |= {
-              "tools/ci/apply-inline-asm-symbolic-specialization-v0.py",
-              "tools/ci/linux-runtime-earlycon-profile-probe-v1.sh",
+          retired_runtime = {
+              "tools/ci/apply-core-goto-label-fact-barrier-v0.py",
+              "tools/ci/apply-core-if-condition-dominance-barrier-v0.py",
+              "tools/ci/apply-local-asm-if-fact-barrier-v0.py",
+              "tools/ci/apply-loop-mutated-specialization-fact-barrier-v0.py",
+              "tools/ci/apply-netlink-if-control-trace-v0.py",
+              "tools/ci/apply-runtime-if-fallthrough-facts-v1.py",
+              "tools/ci/apply-runtime-stable-zero-bools-v0.py",
           }
+          expected |= retired_runtime
+          metadata |= {"tools/ci/linux-runtime-build-minic-profile-v1.sh", "tools/ci/linux-runtime-profile-cache-id-v1.py"}
           deleted = changed_paths(base, "HEAD", "--diff-filter=D")
           changed = changed_paths(base, "HEAD")
-          if len(expected) != 858 or deleted != expected or changed != expected | metadata:
+          if len(expected) != 865 or deleted != expected or changed != expected | metadata:
               raise SystemExit("RETIREMENT_SCOPE=FAIL: unexpected tree changes")
           # Preserve the full closure in a historical checkout, not a successful
           # no-op overlay on a different source architecture.
@@ -109,6 +115,20 @@ jobs:
               result = subprocess.run(command, capture_output=True, text=True)
               assert result.returncode == 78 and replay in result.stderr and "HISTORICAL_PROFILE_RETIRED" in result.stderr
           print("HISTORICAL_OVERLAY_RETIREMENT=PASS historical_files=31 fail_closed=2")
+          runtime_path = "tools/ci/linux-runtime-build-minic-profile-v1.sh"
+          runtime_text = pathlib.Path(runtime_path).read_text()
+          old_runtime_text = git("show", accepted + ":" + runtime_path).decode()
+          def patch_labels(content):
+              block = content.split("patches=(\n", 1)[1].split("\n)", 1)[0]
+              return [line.strip().split(" #", 1)[0] for line in block.splitlines()
+                      if line.strip().startswith("apply-")]
+          assert len(patch_labels(runtime_text)) == 44
+          assert patch_labels(runtime_text) == patch_labels(old_runtime_text)
+          historical_labels = {"  " + pathlib.PurePosixPath(p).name + " # historical-only" for p in retired_runtime}
+          assert set(line for line in runtime_text.splitlines() if line.endswith(" # historical-only")) == historical_labels
+          assert 'python3 "tools/ci/$p"' not in runtime_text and 'native_profile=' not in runtime_text
+          assert retired_runtime <= set(git("ls-tree", "-r", "--name-only", "59ad3648637eba4991c0fb8ce27f121cc852b4fa").decode().splitlines())
+          print("NATIVE_RUNTIME_RETIREMENT=PASS labels=44 archived_inputs=7 historical_fallback=retired")
           files = [p.decode() for p in git("ls-files", "-z").split(b"\0") if p]
           candidates = {
               p: ("disabled-ci" if p.startswith(".github/workflows-disabled/") else
@@ -192,6 +212,9 @@ jobs:
                       if pinned:
                           pinned_refs.append(f"{path}:{num}: " + ", ".join(sorted(pinned)))
                           removed -= pinned
+                  # Exact inert metadata labels are not executable callers.
+                  if path == runtime_path and line in historical_labels:
+                      removed -= retired_runtime
                   if removed or broad.search(line):
                       record = f"{path}:{num}: " + (", ".join(sorted(removed)) if removed else "possible dynamic path")
                       (archived if historical else docs if document else active).append(record)

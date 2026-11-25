@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 """Compute a stable cache identity for the current Linux runtime MiniC profile.
 
-The digest is intentionally computed from the clean checked-in source plus only
-the scripts that participate in the current runtime profile.  It must be
-computed before profile patches mutate src/, then reused verbatim for restore
-and save operations.
+The digest covers checked-in source and retained build inputs. Historical-only
+patch labels are evidence, not executable inputs. Reuse the key verbatim for
+restore and save operations; old profile keys must not authenticate new source.
 """
 from __future__ import annotations
 
@@ -104,6 +103,8 @@ if __name__ == "__main__":
 PROFILE = ROOT / "tools/ci/linux-runtime-build-minic-profile-v1.sh"
 
 profile_text = PROFILE.read_text(encoding="utf-8")
+# Archived metadata labels deliberately carry an inline historical-only comment.
+# They remain in patch.log and minic-profile.txt but are not required files.
 patch_names = re.findall(r"^\s{2}(apply-[A-Za-z0-9_.-]+\.py)$", profile_text, flags=re.MULTILINE)
 if not patch_names or len(patch_names) != len(set(patch_names)):
     raise SystemExit("runtime profile patch list is missing or contains duplicates")
