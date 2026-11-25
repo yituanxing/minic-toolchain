@@ -362,9 +362,9 @@ run_c0_host run-compile-only-case.sh gnu-function-pointer-bridge-call
 
 run_c0_default run-gnu-function-copy-alias.sh
 
-run_c0_default run-linux-tail-batch3.sh
+run_c0_default run-native-matrix.sh run-linux-tail-batch3
 
-run_c0_default run-linux-tail-batch4.sh
+run_c0_default run-native-matrix.sh run-linux-tail-batch4
 
 run_c0_host run-compile-only-case.sh pointer-to-bool-conversion
 
@@ -480,9 +480,9 @@ run_c0_host run-compile-only-case.sh static-storage-scalar-array-owner
 
 run_c0_host run-compile-only-case.sh static-record-array-member-designator
 
-run_c0_default run-linux-tail-batch5.sh
+run_c0_default run-native-matrix.sh run-linux-tail-batch5
 
-run_c0_default run-linux-tail-batch6.sh
+run_c0_default run-native-matrix.sh run-linux-tail-batch6
 
 run_c0_default run-native-matrix.sh run-linux-tail-batch7
 
