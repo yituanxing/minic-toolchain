@@ -8557,13 +8557,85 @@
             "aarch64",
             "present",
             "F",
-            "ldp x11, x12, [x10]"
+            "  ldrb w11, [x9], #1"
           ],
           [
             "aarch64",
             "present",
             "F",
-            "stp x13, x14, [x9, #16]"
+            "  strb w11, [x10], #1"
+          ]
+        ],
+        "counts": [
+          [
+            "aarch64",
+            "F",
+            "  ldrb w11, [x9], #1",
+            32,
+            null
+          ],
+          [
+            "aarch64",
+            "F",
+            "  strb w11, [x10], #1",
+            32,
+            null
+          ],
+          [
+            "aarch64",
+            "F",
+            "  ldr x11, [x10, #0]",
+            2,
+            null
+          ],
+          [
+            "aarch64",
+            "F",
+            "  ldr x12, [x10, #8]",
+            2,
+            null
+          ],
+          [
+            "aarch64",
+            "F",
+            "  ldr x13, [x10, #16]",
+            2,
+            null
+          ],
+          [
+            "aarch64",
+            "F",
+            "  ldr x14, [x10, #24]",
+            2,
+            null
+          ],
+          [
+            "aarch64",
+            "F",
+            "  str x11, [x9, #0]",
+            2,
+            null
+          ],
+          [
+            "aarch64",
+            "F",
+            "  str x12, [x9, #8]",
+            2,
+            null
+          ],
+          [
+            "aarch64",
+            "F",
+            "  str x13, [x9, #16]",
+            2,
+            null
+          ],
+          [
+            "aarch64",
+            "F",
+            "  str x14, [x9, #24]",
+            2,
+            null
           ]
         ]
       }
