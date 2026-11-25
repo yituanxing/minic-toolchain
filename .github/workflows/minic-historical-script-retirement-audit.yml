@@ -100,11 +100,24 @@ jobs:
               "tools/ci/apply-runtime-if-fallthrough-facts-v1.py",
               "tools/ci/apply-runtime-stable-zero-bools-v0.py",
           }
-          expected |= retired_runtime
+          retired_runtime |= {
+              "tools/ci/apply-inline-asm-immediate-batch-trace-v0.py",
+              "tools/ci/apply-inline-asm-write-output-trace-v0.py",
+              "tools/ci/apply-riscv64-record-call-result-snapshot-reuse-v0.py",
+          }
+          retired_perf = {
+              "tools/ci/apply-perf-parser-enum-hash-v0.py",
+              "tools/ci/apply-perf-parser-hash-fallback-v1.py",
+              "tools/ci/apply-perf-parser-local-shadow-fix-v1.py",
+              "tools/ci/apply-perf-parser-source-deltas-v1.py",
+              "tools/ci/apply-perf-ast-capacity-growth-v1.py",
+          }
+          expected |= retired_runtime | retired_perf
+          metadata |= {"tools/ci/linux-perf-build-minic-profile-v1.sh", "tools/ci/linux-perf-ast-growth-ab-v1.sh"}
           metadata |= {"tools/ci/linux-runtime-build-minic-profile-v1.sh", "tools/ci/linux-runtime-profile-cache-id-v1.py"}
           deleted = changed_paths(base, "HEAD", "--diff-filter=D")
           changed = changed_paths(base, "HEAD")
-          if len(expected) != 865 or deleted != expected or changed != expected | metadata:
+          if len(expected) != 873 or deleted != expected or changed != expected | metadata:
               raise SystemExit("RETIREMENT_SCOPE=FAIL: unexpected tree changes")
           # Preserve the full closure in a historical checkout, not a successful
           # no-op overlay on a different source architecture.
@@ -128,7 +141,14 @@ jobs:
           assert set(line for line in runtime_text.splitlines() if line.endswith(" # historical-only")) == historical_labels
           assert 'python3 "tools/ci/$p"' not in runtime_text and 'native_profile=' not in runtime_text
           assert retired_runtime <= set(git("ls-tree", "-r", "--name-only", "59ad3648637eba4991c0fb8ce27f121cc852b4fa").decode().splitlines())
-          print("NATIVE_RUNTIME_RETIREMENT=PASS labels=44 archived_inputs=7 historical_fallback=retired")
+          print("NATIVE_RUNTIME_RETIREMENT=PASS labels=44 archived_inputs=10 historical_fallback=retired")
+          perf_replay = "59ad3648637eba4991c0fb8ce27f121cc852b4fa"
+          historical_tree = set(git("ls-tree", "-r", "--name-only", perf_replay).decode().splitlines())
+          assert retired_perf <= historical_tree
+          for entry in ("tools/ci/linux-perf-build-minic-profile-v1.sh", "tools/ci/linux-perf-ast-growth-ab-v1.sh"):
+              result = subprocess.run(["bash", entry, "unused-build", "unused-evidence"], capture_output=True, text=True)
+              assert result.returncode == 78 and "HISTORICAL_PERF_RETIRED" in result.stderr and perf_replay in result.stderr
+          print("HISTORICAL_PERF_RETIREMENT=PASS private_inputs=5 shared_labels=3 fail_closed=2")
           files = [p.decode() for p in git("ls-files", "-z").split(b"\0") if p]
           candidates = {
               p: ("disabled-ci" if p.startswith(".github/workflows-disabled/") else

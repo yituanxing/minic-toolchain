@@ -74,8 +74,8 @@ patches=(
   apply-inline-asm-rk-early-hotfix-v0.py
   apply-inline-asm-rk-tail-rollback-v0.py
   apply-inline-asm-rk-cast-tail-v0.py
-  apply-inline-asm-immediate-batch-trace-v0.py
-  apply-inline-asm-write-output-trace-v0.py
+  apply-inline-asm-immediate-batch-trace-v0.py # historical-only
+  apply-inline-asm-write-output-trace-v0.py # historical-only
   apply-inline-specialization-core-empty-function-v0.py
   apply-inline-specialization-label-alias-v0.py
   # Explicit section flags now live in canonical RV64 C source.  The separate
@@ -85,7 +85,7 @@ patches=(
   apply-inline-asm-symbolic-specialization-v0.py
   apply-riscv64-core-value-slot-pack-v0.py
   apply-riscv64-core-value-slot-reuse-v0.py
-  apply-riscv64-record-call-result-snapshot-reuse-v0.py
+  apply-riscv64-record-call-result-snapshot-reuse-v0.py # historical-only
   apply-riscv64-core-object-slot-reuse-v0.py
   apply-riscv64-core-object-slot-reuse-cfg-hotfix-v0.py
   apply-riscv64-structured-asm-used-callee-save-v0.py
