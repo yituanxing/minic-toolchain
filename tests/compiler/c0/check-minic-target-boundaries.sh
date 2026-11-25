@@ -218,7 +218,14 @@ for source in src/target/target_info.h src/target/data_layout.h; do
 done
 # Every ISA supplies its fixed machine register recognizers independently
 # of C declaration/lvalue admission and the SourceBackend callbacks.
-for arch in riscv32 riscv64 x86_64 aarch64 loongarch64; do
+# RV32 and RV64 share the identical read policy but not local bindings.
+for arch in riscv32 riscv64; do
+  has src/target/target_info.c "minic_${arch}_machine_local_fixed_register"
+  lacks src/target/target_info.c "minic_${arch}_machine_fixed_register_read"
+done
+has src/target/riscv/machine_register.c 'minic_riscv_machine_fixed_register_read('
+[[ $(grep -Fc '.fixed_register_read = minic_riscv_machine_fixed_register_read,' src/target/target_info.c) -eq 2 ]] || fail 'both RISC-V targets must use the shared fixed-register read policy'
+for arch in x86_64 aarch64 loongarch64; do
   has src/target/target_info.c "minic_${arch}_machine_fixed_register_read"
   has src/target/target_info.c "minic_${arch}_machine_local_fixed_register"
 done

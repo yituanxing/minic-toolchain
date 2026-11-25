@@ -127,3 +127,9 @@ The four AArch64/LoongArch64 original GNU AS replay workflows and their three pr
 - [linux-x86-kvm25-vector-replay-v1.py](https://github.com/yituanxing/minic-toolchain/blob/7a8cdf0e1835db81eeeed822f602a1a722cdcbd7/tools/ci/linux-x86-kvm25-vector-replay-v1.py)
 - [linux-rv64-p2-moduled-v1.sh](https://github.com/yituanxing/minic-toolchain/blob/7a8cdf0e1835db81eeeed822f602a1a722cdcbd7/tools/ci/linux-rv64-p2-moduled-v1.sh)
 - [linux-perf-packed-call-regression-review-v1.py](https://github.com/yituanxing/minic-toolchain/blob/7a8cdf0e1835db81eeeed822f602a1a722cdcbd7/tools/ci/linux-perf-packed-call-regression-review-v1.py)
+
+**Additional historical acceptance receipts (2026-11-25):** These four immutable reports remain available at [the exact previous checkout](https://github.com/yituanxing/minic-toolchain/tree/53291c22d3c966b909a82fc0fc1fd4d93a18851a/docs/ci); they describe historical source identities, not current acceptance. Current qualification, marker instructions, performance decision index and runtime isolation runbooks remain live.
+- [minic-five-arch-current-linux-2026-11-09.md](https://github.com/yituanxing/minic-toolchain/blob/53291c22d3c966b909a82fc0fc1fd4d93a18851a/docs/ci/minic-five-arch-current-linux-2026-11-09.md)
+- [minic-rv32-current-linux-2026-11-09.md](https://github.com/yituanxing/minic-toolchain/blob/53291c22d3c966b909a82fc0fc1fd4d93a18851a/docs/ci/minic-rv32-current-linux-2026-11-09.md)
+- [minic-linux-runtime-acceleration-2026-10-31.md](https://github.com/yituanxing/minic-toolchain/blob/53291c22d3c966b909a82fc0fc1fd4d93a18851a/docs/ci/minic-linux-runtime-acceleration-2026-10-31.md)
+- [native-linux-p1-and-perf-source-of-truth-2026-10-16.md](https://github.com/yituanxing/minic-toolchain/blob/53291c22d3c966b909a82fc0fc1fd4d93a18851a/docs/ci/native-linux-p1-and-perf-source-of-truth-2026-10-16.md)

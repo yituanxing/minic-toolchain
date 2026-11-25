@@ -561,7 +561,17 @@ jobs:
               "tests/core/run-core-types.sh",
               "src/target/riscv/machine_register.c",
           }
-          if len(expected) != 1068 or deleted != expected or changed != expected | metadata:
+          later_archived_reports = {
+              "docs/ci/minic-five-arch-current-linux-2026-11-09.md",
+              "docs/ci/minic-rv32-current-linux-2026-11-09.md",
+              "docs/ci/minic-linux-runtime-acceleration-2026-10-31.md",
+              "docs/ci/native-linux-p1-and-perf-source-of-truth-2026-10-16.md",
+          }
+          assert later_archived_reports <= set(git("ls-tree", "-r", "--name-only", "53291c22d3c966b909a82fc0fc1fd4d93a18851a").decode().splitlines())
+          assert not (expected & later_archived_reports)
+          expected |= later_archived_reports
+          metadata.add("tests/compiler/c0/check-minic-target-boundaries.sh")
+          if len(expected) != 1072 or deleted != expected or changed != expected | metadata:
               raise SystemExit("RETIREMENT_SCOPE=FAIL: unexpected tree changes")
           # Preserve the full closure in a historical checkout, not a successful
           # no-op overlay on a different source architecture.
