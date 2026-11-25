@@ -324,7 +324,8 @@ sh "$root/tests/compiler/c0/run-native-matrix.sh" probe-lp64-empty-record-call-a
 sh "$root/tests/compiler/c0/run-native-matrix.sh" probe-lp64-overaligned-stack-frame
 run_c0_host run-parser-rejections.sh invalid_conflicting_const_parameter
 run_c0_host run-parser-rejections.sh invalid_named_void_parameter
-run_c0_host run-parser-rejections.sh invalid_duplicate_typedef
+run_c0_host run-parser-rejections.sh compatible_typedef_redeclaration
+run_c0_host run-parser-rejections.sh invalid_conflicting_typedef
 compile_source void_typedef void_typedef
 printf '%s\n' "PASS compiler/c0/void_typedef"
 

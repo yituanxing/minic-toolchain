@@ -21,7 +21,7 @@ STRICT12 = "tools/ci/linux-rv64-p1-eight-trigger.txt"
 
 def actual_gate() -> str:
     text = WORKFLOW.read_text()
-    anchor = "        id: decide\n        shell: bash\n        run: |\n"
+    anchor = "        id: decide\n        shell: bash\n        env:\n          PR_HEAD_REF: ${{ github.head_ref }}\n        run: |\n"
     assert text.count(anchor) == 1, "RV64 exact-head gate location changed"
     block = text.split(anchor, 1)[1].split("\n  # A cached original GNU", 1)[0]
     return textwrap.dedent(block).strip() + "\n"
@@ -40,7 +40,6 @@ def verdict(event: str, ref: str, head_ref: str, changed: tuple[str, ...],
     replacements = {
         "${{ github.event_name }}": event,
         "${{ github.ref }}": ref,
-        "${{ github.head_ref }}": head_ref,
         "${{ contains(github.event.pull_request.title, '[minic-full]') }}":
             "true" if title_full else "false",
     }
@@ -75,7 +74,7 @@ def verdict(event: str, ref: str, head_ref: str, changed: tuple[str, ...],
             git(work, "add", ".")
             git(work, "commit", "-qm", "latest head without consent")
         receipt = work / "gate.out"
-        env = dict(os.environ, GITHUB_OUTPUT=str(receipt))
+        env = dict(os.environ, GITHUB_OUTPUT=str(receipt), PR_HEAD_REF=head_ref)
         p = subprocess.run(["bash", "-c", script], cwd=work, env=env,
                            text=True, capture_output=True)
         if p.returncode != 0:
@@ -119,6 +118,10 @@ class RV64PushGate(unittest.TestCase):
     def test_pr_same_branch_cannot_duplicate_push_campaign(self):
         self.assertEqual(verdict("pull_request", "refs/pull/674/merge", BRANCH,
                                  (RUNTIME, STRICT12))["run"], "false")
+
+    def test_untrusted_head_ref_is_data_not_shell(self):
+        self.assertEqual(verdict("pull_request", "refs/pull/999/merge",
+                                 '"; exit 77; #', (RUNTIME,))["run"], "true")
 
     def test_legacy_pr_other_branch_kept_and_minic_full_excluded(self):
         other = "another-review-branch"

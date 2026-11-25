@@ -111,9 +111,13 @@ generate() {
             expected='parameter type cannot be bare void'
             emit_main 'void reset(void value);' 'return 0;'
             ;;
-        invalid_duplicate_typedef)
-            expected='duplicate typedef name'
-            emit_main 'typedef int value_t; typedef int value_t;' 'return 0;'
+        compatible_typedef_redeclaration)
+            expected=accept
+            emit_main 'typedef int value_t; typedef int value_t;' 'value_t value = 0; return value;'
+            ;;
+        invalid_conflicting_typedef)
+            expected='duplicate typedef name with incompatible type'
+            emit_main 'typedef int value_t; typedef long value_t;' 'return 0;'
             ;;
         invalid_void_typedef)
             expected='local object cannot have void type'
@@ -182,6 +186,13 @@ run_case() (
     if ! generate "$name" >"$work/$name.c"; then exit 2; fi
     if [ -z "$expected" ]; then echo "missing diagnostic: $name" >&2; exit 2; fi
     if ! "$host_cc" -E -P -x c "$work/$name.c" -o "$work/$name.i"; then exit 1; fi
+    if [ "$expected" = accept ]; then
+        "$host_cc" -std=c11 -pedantic-errors -fsyntax-only "$work/$name.c" || exit 1
+        "$minic" -S "$work/$name.i" -o "$work/$name.s" || exit 1
+        test -s "$work/$name.s" || exit 1
+        printf '%s\n' "PASS compiler/c0/$name GNU_C11_accept=1 MiniC_accept=1"
+        exit 0
+    fi
     if "$minic" -S "$work/$name.i" -o "$work/$name.s" >"$work/$name.stdout" 2>"$work/$name.stderr"; then
         echo "FAIL compiler/c0/$name: compilation unexpectedly succeeded" >&2
         exit 1
@@ -216,7 +227,8 @@ case "${1:-}" in
             invalid_duplicate_record_definition \
             invalid_conflicting_const_parameter \
             invalid_named_void_parameter \
-            invalid_duplicate_typedef \
+            compatible_typedef_redeclaration \
+            invalid_conflicting_typedef \
             invalid_void_typedef \
             invalid_too_many_global_initializers \
             invalid_flexible_array_not_last \
@@ -242,7 +254,7 @@ case "${1:-}" in
             run_case "$name" || failed=1
         done
         test "$failed" -eq 0
-        printf '%s\n' 'PARSER_REJECTION_MATRIX=PASS cases=40'
+        printf '%s\n' 'PARSER_SEMANTIC_MATRIX=PASS cases=41'
         ;;
     --emit)
         test "$#" -eq 2
