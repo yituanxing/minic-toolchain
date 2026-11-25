@@ -1719,3 +1719,12 @@ C50–C58 的候选提交依次为 bf1894af、91a9fb85、c7ba04db、b4d2bf56、b
 历史 AArch64 shard2/56-owner 的 run 42345808682 归档已不存在，原有 SHA 验证不能复现，绝不改写历史 pin 或把跳过视为通过。C56 触发当前编译器消费仍存在的完整七分片 GNU 输入 run 42366441631；run 45368572686 的七个编译分片通过，最终链接/QEMU 结果需独立核实。该复验不是历史 56-owner 输入归档的恢复，也不是 C59 exact-HEAD 的证明。
 
 剩余验收债务：C59 exact-HEAD Native Strict、五架构运行、相关专项、AArch64 完整 Linux 复验结果及历史归档问题；未完成全树逐行深审，不声称全部死代码或重复实现已消除。未删除现役测试、未弱化门禁。十轮结束，不以额外编号掩盖未完成工作。
+
+## 批次 C60：退休不可复现或退出主线的诊断入口（2026-11-25）
+
+基线 `4b65ed0eb5ee`。逐项读现有 YAML/脚本，并在当前默认分支检索直接使用者；**不删除生产 C/H、测试用例、GNU/QEMU 回归入口或仍在使用的 CI helper**。
+- 退役 6 个不再承担主线验收的 workflow：旧 Stage1 混合/崩溃/Stage2 Core 历史诊断（三个只监听早期 refactor 分支或手动触发）；仅监听已不存在 `agent/linux-expanded-kbuild-v0` 的历史 tag router；三架构冻结 frontier trace 与 Hot TU 旧性能诊断。后两项依赖的固定 GitHub run（40835123288、42646936416）已无可取得 artifact，不能继续声称可复现。
+- 删除被上述过期 workflow 唯一引用的 `tools/ci/minic-linux-frontier-trace-v1.py`，原有历史提交可用于重放。
+- 删除 3 份无当前 filename 使用者的资料/离线工具：2026-10-12 runtime 文本快照（正式结果应查原始 run/commit）、未被现役入口调用且所需固定成本 JSON 不存在的 LPT 预测脚本、历史 Linux unresolved-symbol 列表。它们不是运行测试的夹具；其他现役 balanced-plan producer/consumer 保留。
+- 不修改任何仍在运行的 `minic-native-refactor-gate`、四架构 runtime、RV32I/RV64I、Toolchain Focused、当前 Stage2/Stage4、MiniPP/MiniAS/MiniLD workflow。旧证据保留在 Git 历史中。此次只删除外围文件，并非生产源代码净减、也非新编译器功能认证。
+
