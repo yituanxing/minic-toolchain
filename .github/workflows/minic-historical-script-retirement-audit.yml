@@ -302,6 +302,13 @@ jobs:
                       if pinned:
                           pinned_refs.append(f"{path}:{num}: " + ", ".join(sorted(pinned)))
                           removed -= pinned
+                  # These exact active-workflow keys refer to the live file,
+                  # not its same-basename historical disabled YAML. The full
+                  # live transformation was checked by historical_job_view.
+                  if path == "tools/ci/historical_workflows.py":
+                      for live_path in RETIRED_JOBS:
+                          if line.strip() == f'"{live_path}": ' + ( '{"pi-runtime"},' if live_path.endswith("linux-expanded-pi-p1-runtime-v1.yml") else '{"cpu-stall", "fork-stack", "candidate"},'):
+                              removed.discard(".github/workflows-disabled/" + pathlib.PurePosixPath(live_path).name)
                   # Exact inert metadata labels are not executable callers.
                   if path == runtime_path and line in historical_labels:
                       removed -= retired_runtime | retired_stack
