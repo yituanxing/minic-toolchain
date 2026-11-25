@@ -1,0 +1,68 @@
+name: MiniC second 12-case old/new parity (temporary)
+on:
+  push:
+    branches:
+      - cleanup/minic-native-matrix-batch-20261125
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  parity:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build exact-head MiniC for both oracles
+        run: make -j4 MODE=release CFLAGS=-Werror build/release/bin/minic-cc build/release/bin/minic
+      - name: Execute every old and new C0 oracle and report full mismatches
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import os,pathlib,subprocess,tempfile,json
+          root=pathlib.Path.cwd()
+          mini=str(root/'build/release/bin/minic')
+          cc=str(root/'build/release/bin/minic-cc')
+          cases=json.loads((root/'tests/compiler/c0/native-matrix.json').read_text())
+          names=[
+           'run-static-nested-record-initializers',
+           'run-static-multidimensional-array-relocation',
+           'run-static-integer-floating-const-initializer',
+           'probe-core-overflow-enum-origin',
+           'run-gnu-is-constexpr-bitfield',
+           'probe-anonymous-qualified-record-members',
+           'probe-external-char-array-redeclaration',
+           'run-xgene-parenthesized-pointer-record-field',
+           'run-array-shape-convergence',
+           'probe-qualified-array-address-verifier',
+           'probe-rv64-hardfloat-fp-record-reject',
+           'probe-tagged-bare-record-members',
+          ]
+          assert all(name in cases for name in names)
+          problems=[]
+          for name in names:
+              with tempfile.TemporaryDirectory(prefix='minic-parity2-') as tmp:
+                  env=dict(os.environ,MINIC_CC=cc,MINIC=mini,HOST_CC='cc',CC='cc')
+                  outputs=[]
+                  for kind in ('old','new'):
+                      env['BUILD_DIR']=str(pathlib.Path(tmp)/kind)
+                      cmd=(
+                       ['sh','tests/compiler/c0/run-native-matrix.sh',name]
+                       if kind=='new' else
+                       [(['bash'] if name in ('probe-anonymous-qualified-record-members','probe-external-char-array-redeclaration','probe-qualified-array-address-verifier','probe-tagged-bare-record-members') else ['sh'])[0],
+                        'tests/compiler/c0/'+name+'.sh'])
+                      try:
+                          p=subprocess.run(cmd,cwd=root,env=env,stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=180)
+                          outputs.append((p.returncode,p.stdout,p.stderr))
+                      except Exception as e:
+                          outputs.append((999,b'',repr(e).encode()))
+                  a,b=outputs
+                  ok=(a==b and a[0]==0)
+                  print('PARITY2',name,'old_rc',a[0],'new_rc',b[0],
+                        'stdout',a[1]==b[1],'stderr',a[2]==b[2],'pass',ok,flush=True)
+                  if not ok:
+                      problems.append(name)
+                      print('OLD_OUTPUT',name,repr(a[1][-1200:]),repr(a[2][-1500:]),flush=True)
+                      print('NEW_OUTPUT',name,repr(b[1][-1200:]),repr(b[2][-1500:]),flush=True)
+          print('MINIC_12_BATCH_PARITY',len(names)-len(problems),'/',len(names),'fails',problems,flush=True)
+          if problems: raise SystemExit(1)
+          PY
