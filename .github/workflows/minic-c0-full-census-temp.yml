@@ -1,180 +1,52 @@
-name: MiniC full C0 driver census temporary
+name: MiniC targeted fixture owner adjudication temporary
 on:
   push:
-    branches:
-      - cleanup/minic-native-matrix-batch-20261125
+    branches: [cleanup/minic-native-matrix-batch-20261125]
   workflow_dispatch:
 permissions:
   contents: read
 jobs:
-  inventory:
+  check:
     runs-on: ubuntu-24.04
-    timeout-minutes: 12
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
-      - name: Full source and dynamic consumer cross index
+      - name: Inspect every broad dynamic fixture expansion site and classify unmatched C0 inputs
         shell: bash
         run: |
           python3 - <<'PY'
-          import subprocess,pathlib,json,re,collections,fnmatch
-          root=pathlib.Path.cwd()
-          paths=subprocess.check_output(['git','ls-files','-z']).decode().split('\x00')
-          files=[p for p in paths if p and (root/p).is_file()]
-          scripts=[p for p in files if p.startswith('tests/compiler/c0/') and p.endswith('.sh')]
-          texts={}
-          for p in files:
-              if p.endswith(('.sh','.yml','.yaml','.py','.json','.c','.h','.mk','.md','.txt','.toml','.ini')) or p in ('Makefile','GNUmakefile'):
-                  try: texts[p]=(root/p).read_text(errors='replace')
-                  except: pass
-          mat=json.loads(texts['tests/compiler/c0/native-matrix.json'])
-          sources=collections.defaultdict(set)
-          for name,config in mat.items():
-              for kind in ('positive','negative'):
-                  for row in config.get(kind,[]):
-                      src=row.get('source','')
-                      if not src: continue
-                      p=src if src.startswith('tests/') else 'tests/compiler/'+('audit/' if src.startswith('audit/') else 'c0/')+src+('' if src.endswith(('.c','.i')) else '.c')
-                      sources[p].add(name)
-          groups=collections.Counter()
-          indexed=[]
-          for p in scripts:
-              s=texts.get(p,'');name=p.split('/')[-1];stem=name[:-3];cands=[]
-              # Both full literal path and standalone shell basename appear in maintained owners.
-              for other,txt in texts.items():
-                  if other==p: continue
-                  if name in txt or p in txt: cands.append(other)
-              real=[x for x in cands if not x.endswith('.md')]
-              fixture=sorted(set(x for x in re.findall(r'(?:tests/(?:compiler|programs)/(?:c0|audit)/)?[\w-]+\.c',s) if '.c' in x))
-              norm=[x if x.startswith('tests/') else ('tests/compiler/audit/'+x[6:] if x.startswith('audit/') else 'tests/compiler/c0/'+x) for x in fixture]
-              matrix_overlaps=sorted(set(m for f in norm for m in sources.get(f,())))
-              native='native-matrix' in s
-              iscross=bool(re.search('qemu|riscv64-linux-gnu-gcc|aarch64-linux-gnu-gcc|loongarch64-linux-gnu-gcc',s))
-              hard=bool(re.search('awk |objdump|readelf|nm |minias|MINIAS| -march=|fPIC|--sysroot',s))
-              generated=bool(re.search('cat [^\n]*<<',s))
-              neg=bool(re.search(r'if\s+.*(?:\$minic|\$MINIC|\$mini)',s))
-              category=('REFERENCED' if real else 'NO_EXPLICIT_REF')+('/MATRIX_OVERLAP' if matrix_overlaps else '/UNIQUE')+('/CROSS' if iscross else '/HOST')+('/CUSTOM' if hard else '/SIMPLE')+('/INLINE' if generated else '/FILE')
-              groups[category]+=1
-              indexed.append(dict(name=name,path=p,bytes=len(s),lines=s.count('\n')+1,refs=real,docs=len(cands)-len(real),overlap=matrix_overlaps,fixtures=norm,cross=iscross,hard=hard,generated=generated,negative=neg,category=category))
-          print('AUDIT_SUMMARY',json.dumps(dict(total=len(indexed),tracked=len(files),source_files=len(sources),exactly_orphan=sum(not x['refs'] for x in indexed),orphan_with_matrix=sum(not x['refs'] and bool(x['overlap']) for x in indexed),orphan_no_matrix=sum(not x['refs'] and not bool(x['overlap']) for x in indexed),matrix_cases=len(mat)),ensure_ascii=False))
-          print('AUDIT_GROUPS',json.dumps(groups.most_common(),ensure_ascii=False))
-          for x in sorted((x for x in indexed if not x['refs']),key=lambda x:(len(x['overlap'])==0,x['cross'] or x['hard'] or x['generated'],x['bytes'])):
-              print('ORPHAN',json.dumps({k:x[k] for k in ('name','bytes','docs','overlap','fixtures','cross','hard','generated','negative')},ensure_ascii=False))
-          for x in sorted((x for x in indexed if x['refs'] and x['overlap']),key=lambda x:(x['cross'] or x['hard'],x['bytes'])):
-              print('OVERLAP_REFERENCED',json.dumps({k:x[k] for k in ('name','bytes','refs','overlap','fixtures','cross','hard')},ensure_ascii=False))
-          PY
-
-      - name: Entire test fixture and shell semantic clone candidates
-        shell: bash
-        run: |
-          python3 - <<'PY'
-          import pathlib,subprocess,collections,hashlib,re,json
-          root=pathlib.Path.cwd()
-          ps=[p for p in subprocess.check_output(['git','ls-files','-z']).decode().split('\x00') if p and p.startswith('tests/') and p.endswith(('.c','.i','.sh'))]
-          exact=collections.defaultdict(list)
-          norm=collections.defaultdict(list)
-          shell=collections.defaultdict(list)
-          for p in ps:
-              try: s=(root/p).read_text(errors='replace')
-              except: continue
-              if p.endswith(('.c','.i')):
-                  stripped=re.sub(r'/\*.*?\*/|//[^\n]*','',s,flags=re.S)
-                  normalized=re.sub(r'\s+','',stripped)
-                  exact[hashlib.sha256(s.replace('\r\n','\n').encode()).hexdigest()].append(p)
-                  norm[hashlib.sha256(normalized.encode()).hexdigest()].append(p)
-              else:
-                  # Detect whole-structure shell similarity by removing only
-                  # fixture filenames and case identifiers. This is a lead,
-                  # not permission to delete anything.
-                  c=re.sub(r'(?:tests/(?:compiler|programs)/)?[\w./-]+\.(?:c|i)', 'SRC.c',s)
-                  c=re.sub(r'\b[A-Z][A-Z0-9_]{6,}=PASS[^\n]*','RESULT=PASS',c)
-                  c=re.sub(r'\b(?:run|probe)-[\w-]+','SCRIPT',c)
-                  c=re.sub(r'\s+',' ',c)
-                  shell[hashlib.sha256(c.encode()).hexdigest()].append(p)
-          for kind,d in [('C_EXACT',exact),('C_NORMALIZED',norm),('SH_TEMPLATE',shell)]:
-              clusters=sorted([v for v in d.values() if len(v)>1],key=lambda v:-len(v))
-              print('CLONE_SUMMARY',kind,json.dumps(dict(groups=len(clusters),members=sum(len(v) for v in clusters),reducible=sum(len(v)-1 for v in clusters),largest=len(clusters[0]) if clusters else 0)))
-              for group in clusters[:160]:
-                  if kind=='C_NORMALIZED' and len(group)<2: continue
-                  print('CLONE_GROUP',kind,json.dumps(group))
-          PY
-
-      - name: Audit all 270 CI utility owners and dependency reachability
-        shell: bash
-        run: |
-          python3 - <<'PY'
-          import pathlib,subprocess,re,json,collections
+          import subprocess,pathlib,re,fnmatch,json,collections
           root=pathlib.Path.cwd()
           paths=[p for p in subprocess.check_output(['git','ls-files','-z']).decode().split('\x00') if p]
-          utils=[p for p in paths if p.startswith('tools/ci/') and (root/p).is_file()]
-          sources={}
-          for p in paths:
-              if p!='':
-                  try:
-                      if (root/p).stat().st_size < 250000 and (root/p).is_file():
-                          sources[p]=(root/p).read_text(errors='replace')
-                  except: pass
-          groups=collections.Counter()
-          rows=[]
-          for p in utils:
-              name=p.split('/')[-1];stem=name.rsplit('.',1)[0];content=sources.get(p,'')
-              refs=[];docs=[]
-              for other,body in sources.items():
-                  if other==p:continue
-                  if p in body or name in body or (len(stem)>=12 and re.search(r'(?<![\w-])'+re.escape(stem)+r'(?![\w-])',body)):
-                      (docs if other.endswith('.md') else refs).append(other)
-              role=(name.split('-')[0].split('_')[0])
-              groups[(role,'LIVE' if refs else 'NO_EXPLICIT_REF')]+=1
-              header=[x.strip() for x in content.splitlines()[:12] if x.strip() and not x.startswith('#!')]
-              rows.append(dict(name=name,path=p,bytes=len(content),refs=refs,docs=docs[:3],role=role,header=header[:3],uses_write=bool(re.search(r'\.write_text|open\(.{0,40}[\x22\x27]w[\x22\x27]|git\s+commit|sed\s+-i|os\.remove|unlink\(',content)),imports=sorted(set(re.findall(r'(?:from|import)\s+([\w.]+)',content)))[:8]))
-          print('UTILITY_SUMMARY',json.dumps(dict(total=len(rows),live=sum(bool(x['refs']) for x in rows),no_refs=sum(not x['refs'] for x in rows),groups=groups.most_common()),ensure_ascii=False))
-          for x in rows:
-              if not x['refs']:
-                  print('UTILITY_ORPHAN',json.dumps({k:x[k] for k in ('name','bytes','role','docs','header','uses_write','imports')},ensure_ascii=False))
-          PY
-
-      - name: Conservative full C0 fixture dependency and dynamic-pattern census
-        shell: bash
-        run: |
-          python3 - <<'PY'
-          import pathlib,subprocess,re,collections,fnmatch,json
-          root=pathlib.Path.cwd()
-          paths=[p for p in subprocess.check_output(['git','ls-files','-z']).decode().split('\x00') if p]
-          cfiles=[p for p in paths if p.startswith('tests/compiler/c0/') and p.endswith(('.c','.i'))]
+          src=[p for p in paths if p.startswith('tests/compiler/c0/') and p.endswith(('.c','.i'))]
+          contexts=[]
           other=[]
           for p in paths:
-              if p.startswith('tests/compiler/c0/') and p.endswith(('.c','.i')):continue
-              if not p.endswith(('.sh','.py','.json','.yml','.yaml','.mk','.txt','.md','.c','.h','.ini')) and p not in ('Makefile','GNUmakefile'):continue
+              if p in src or p.endswith('.md'):continue
               try:
-                  s=(root/p).read_text(errors='replace')
-                  other.append((p,s))
-              except:pass
-          # Source stems occurring in a maintained runner or config count as
-          # live, including constructed script source path patterns.
+                  if not (root/p).is_file() or (root/p).stat().st_size>250000:continue
+                  body=(root/p).read_text(errors='replace')
+              except:continue
+              if p.startswith('.github/workflows/minic-c0-full-census-temp.yml'):continue
+              other.append((p,body))
+              for ix,line in enumerate(body.splitlines(),1):
+                  if 'tests/compiler/c0/' in line and any(w in line for w in ('*.c','*.i','glob(','rglob(','fnmatch','find ')):
+                      contexts.append((p,ix,line[:260]))
+          print('DYNAMIC_PATTERNS',json.dumps(contexts,ensure_ascii=False))
+          text='\n'.join(b for _,b in other)
+          all_tokens=set(re.findall(r'[A-Za-z_][A-Za-z0-9_]{3,}',text))
           included=set()
-          for p in cfiles:
-              try:
-                  s=(root/p).read_text(errors='replace')
-                  for dep in re.findall(r'#\s*include\s*["\x27]([^"\x27]+\.(?:c|i))["\x27]',s):
-                      included.add(dep.split('/')[-1])
+          for p in src:
+              try:included.update(x.split('/')[-1] for x in re.findall(r'#\s*include\s*["\x27]([^"\x27]+\.(?:c|i))["\x27]',(root/p).read_text(errors='replace')))
               except:pass
-          body='\n'.join(s for p,s in other if not p.endswith('.md'))
-          docs='\n'.join(s for p,s in other if p.endswith('.md'))
-          tokens=set(re.findall(r'[A-Za-z_][A-Za-z0-9_]{4,}',body))
-          globCandidates=set()
-          for _,s in other:
-              for gl in re.findall(r'tests/compiler/c0/[A-Za-z0-9_.*?\[\]-]+\.(?:c|i)',s):
-                  if any(x in gl for x in '*?['): globCandidates.add(gl)
-          result=[]
-          for p in cfiles:
-              b=p.rsplit('/',1)[-1];stem=b.rsplit('.',1)[0]
-              # Whole names including hyphens are treated literally, even if
-              # generated fixture names are constructed from shell variables.
-              owner=(stem in tokens or b in body or p in body or b in included or stem in body)
-              patterns=[g for g in globCandidates if fnmatch.fnmatch(p,g)]
-              d=(b in docs or stem in docs)
-              if not owner:
-                  result.append(dict(path=p,size=(root/p).stat().st_size,docs=d,glob=patterns[:8]))
-          print('SOURCE_AUDIT_SUMMARY',json.dumps(dict(total=len(cfiles),has_nominal_owner=len(cfiles)-len(result),missing_exact_owner=len(result),missing_owner_without_globs=sum(not x['glob'] for x in result),source_glob_patterns=len(globCandidates),patterns=sorted(globCandidates)[:30])))
-          for x in sorted(result,key=lambda x:(bool(x['glob']),x['docs'],x['size'])):
-              print('C0_SOURCE_CANDIDATE',json.dumps(x))
+          noowner=[]
+          for p in src:
+              b=p.split('/')[-1];stem=b.rsplit('.',1)[0]
+              if stem in all_tokens or b in text or p in text or b in included:continue
+              noowner.append(p)
+          print('NO_OWNER_SUMMARY',json.dumps(dict(total=len(src),missing=len(noowner),largest=max(((root/p).stat().st_size for p in noowner),default=0)),ensure_ascii=False))
+          for p in noowner:
+              code=(root/p).read_text(errors='replace')
+              cleaned=[x.strip() for x in code.splitlines() if x.strip() and not x.strip().startswith(('#','//','/*','*','*/'))]
+              print('NO_OWNER_CASE',json.dumps(dict(path=p,size=len(code),head=cleaned[:5],tail=cleaned[-2:]),ensure_ascii=False))
           PY
