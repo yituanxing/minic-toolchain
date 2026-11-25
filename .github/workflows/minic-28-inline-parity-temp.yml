@@ -1,0 +1,66 @@
+name: MiniC 28 inline and static driver exact A-B parity (temporary)
+on:
+  push:
+    branches: [cleanup/minic-native-matrix-batch-20261125]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  compare:
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build exact-head production MiniC
+        run: make -j4 MODE=release CFLAGS=-Werror build/release/bin/minic-cc build/release/bin/minic
+      - name: Run real old Shell and proposed matrix independently
+        shell: bash
+        env:
+          SHARD: ${{ matrix.shard }}
+        run: |
+          python3 - <<'PY'
+          import os, pathlib, subprocess, tempfile, json
+          root=pathlib.Path.cwd()
+          cc=str(root/'build/release/bin/minic-cc')
+          mini=str(root/'build/release/bin/minic')
+          configs=json.loads((root/'tests/compiler/c0/native-matrix.json').read_text())
+          names=["run-extern-incomplete-arrays","run-gnu-weak-function-symbol","run-function-typed-declarator","run-gnu-extern-void-symbol","run-wide-string-literal","run-pointer-equality","run-variadic-declarations","run-static-local-self-reference","run-record-value-initialize","run-function-pointer-field-array","run-zero-slot-aggregate-relocation","run-gnu-signed-left-shift-ice","run-string-octal-escape","run-gnu-void-return-expression","run-block-scope-record-tags","run-enum-tag-type-references","run-gnu-builtin-unreachable","run-gnu-static-local-interleaved-attribute","run-array-parameter-adjustment","run-gnu-inline-asm-fence","run-gnu-extern-object-redeclaration","run-gnu-pointer-sign-call-conversion","run-gnu-enum-entity","run-gnu-typedef-redundant-aligned","run-enum-constant-scopes","run-gnu-switch-case-range","probe-flat-global-payload","probe-x86-linux-callee-clobber"]
+          shard=int(os.environ['SHARD'])
+          chosen=[x for i,x in enumerate(names) if i%4==shard]
+          assert len(names)==28 and all(x in configs for x in names)
+          failed=[]
+          for name in chosen:
+              with tempfile.TemporaryDirectory(prefix='c0-inline-ab-') as tmp:
+                  loc=pathlib.Path(tmp)
+                  outputs=[]
+                  for phase in ('old','new'):
+                      env=dict(os.environ,MINIC_CC=cc,MINIC=mini,HOST_CC='cc',CC='cc',
+                               BUILD_DIR=str(loc/phase))
+                      if phase=='old':
+                          cmd=['bash' if name=='probe-x86-linux-callee-clobber' else 'sh',
+                               'tests/compiler/c0/'+name+'.sh']
+                          if name=='probe-x86-linux-callee-clobber':cmd.append(cc)
+                      else:
+                          cmd=['sh','tests/compiler/c0/run-native-matrix.sh',name]
+                          if name=='probe-x86-linux-callee-clobber':cmd.append(cc)
+                      try:
+                          p=subprocess.run(cmd,cwd=root,env=env,stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=160)
+                          outputs.append((p.returncode,p.stdout,p.stderr))
+                      except Exception as exc:
+                          outputs.append((998,b'',repr(exc).encode()))
+                  a,b=outputs
+                  ok=(a==b and a[0]==0)
+                  print('AB28',name,'old_rc',a[0],'new_rc',b[0],
+                        'stdout_eq',a[1]==b[1],'stderr_eq',a[2]==b[2],
+                        'PASS',ok,flush=True)
+                  if not ok:
+                      failed.append(name)
+                      print('OLD',name,repr(a[1][-1800:]),repr(a[2][-2400:]),flush=True)
+                      print('NEW',name,repr(b[1][-1800:]),repr(b[2][-2400:]),flush=True)
+          print('AB28_SUMMARY',shard,len(chosen)-len(failed),'/',len(chosen),'failed',failed,flush=True)
+          if failed: raise SystemExit(1)
+          PY
