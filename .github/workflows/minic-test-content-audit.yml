@@ -219,3 +219,47 @@ jobs:
                           print("CALLSITE",json.dumps([name,other,i,line]))
           print("SHELL_FAMILY_SUMMARY",json.dumps({"scripts":len(scripts),"grouped":sum(len(v) for v in groups.values() if len(v)>1),"families":sum(len(v)>1 for v in groups.values())}))
           PY
+
+  validate-native-matrix:
+    if: "startsWith(github.event.head_commit.message, 'native matrix')"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Build production MiniC
+        run: make -j4 MODE=release CFLAGS=-Werror build/release/bin/minic-cc
+      - name: Run original and shared native oracle for every selected driver
+        run: |
+          python3 - <<'PY'
+          import concurrent.futures,json,os,pathlib,subprocess,tempfile
+          root=pathlib.Path.cwd()
+          cases=json.loads((root/"tests/compiler/c0/native-matrix.json").read_text())
+          compiler=str(root/"build/release/bin/minic-cc")
+          def one(item):
+              name,config=item
+              with tempfile.TemporaryDirectory(prefix="matrix-verify-") as d:
+                  work=pathlib.Path(d)
+                  oldenv=dict(os.environ,MINIC_CC=compiler,MINIC=compiler,BUILD_DIR=str(work/"old"))
+                  newenv=dict(oldenv,BUILD_DIR=str(work/"new"))
+                  old=root/"tests/compiler/c0"/(name+".sh")
+                  if not old.exists():
+                      # Archived source is run from the same relative test
+                      # directory only inside this disposable CI checkout.
+                      old.write_bytes(subprocess.check_output(["git","show","bad27ded8f6fe38f1c510d706558f9b7d0171666:tests/compiler/c0/"+name+".sh"]))
+                  args=[compiler] if config.get("mini") in ("arg","optional-arg") else []
+                  try:
+                      a=subprocess.run(["bash",str(old),*args],env=oldenv,stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=100)
+                      b=subprocess.run(["sh","tests/compiler/c0/run-native-matrix.sh",name,*args],env=newenv,stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=100)
+                      return dict(name=name,old=a.returncode,new=b.returncode,oldout=a.stdout.decode(errors="replace")[-500:],newout=b.stdout.decode(errors="replace")[-500:],olderr=a.stderr.decode(errors="replace")[-700:] if a.returncode else "",newerr=b.stderr.decode(errors="replace")[-1000:] if b.returncode else "")
+                  except subprocess.TimeoutExpired as exc:
+                      return dict(name=name,old=-99,new=-99,error=str(exc))
+          with concurrent.futures.ThreadPoolExecutor(max_workers=4) as ex:
+              results=list(ex.map(one,cases.items()))
+          for row in results: print("NATIVE_MATRIX_CASE",json.dumps(row),flush=True)
+          passed=[r["name"] for r in results if r["old"]==r["new"]==0]
+          print("NATIVE_MATRIX_PASS",json.dumps(passed),flush=True)
+          print("NATIVE_MATRIX_TOTAL",len(passed),len(results),flush=True)
+          if len(passed)!=len(results): raise SystemExit(1)
+          PY
