@@ -571,7 +571,17 @@ jobs:
           assert not (expected & later_archived_reports)
           expected |= later_archived_reports
           metadata.add("tests/compiler/c0/check-minic-target-boundaries.sh")
-          if len(expected) != 1072 or deleted != expected or changed != expected | metadata:
+          later_archived_routes = {
+              "tools/ci/linux-early-runtime-link-v3.sh",
+              "tools/ci/linux-three-isa-p2-compile-census-v1.py",
+              "tools/ci/linux-three-isa-p2-kconfig-v1.sh",
+              "tools/ci/linux-three-isa-p2-minic-seven-v1.py",
+              "tools/ci/linux-three-isa-p2-gnu-boot-v1.sh",
+          }
+          assert later_archived_routes <= set(git("ls-tree", "-r", "--name-only", "0c642380f85c25aeadb1268f770ba95852f3b100").decode().splitlines())
+          assert not (expected & later_archived_routes)
+          expected |= later_archived_routes
+          if len(expected) != 1077 or deleted != expected or changed != expected | metadata:
               raise SystemExit("RETIREMENT_SCOPE=FAIL: unexpected tree changes")
           # Preserve the full closure in a historical checkout, not a successful
           # no-op overlay on a different source architecture.
@@ -1682,4 +1692,51 @@ jobs:
               if b"\0" in data:continue
               for n,l in enumerate(data.decode("utf-8",errors="replace").splitlines(),1):
                   if rx.search(l):print("SOURCE_PATH_REF "+json.dumps([p,n,l.strip()],ensure_ascii=True))
+          PY
+
+  peripheral-census:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - name: Cross-reference every test driver and historical document
+        run: |
+          python3 - <<'PY'
+          import collections, json, pathlib, re, subprocess
+          files = subprocess.check_output(["git", "ls-files", "-z"]).decode().strip("\0").split("\0")
+          audit = ".github/workflows/minic-historical-script-retirement-audit.yml"
+          candidates = [p for p in files if (p.startswith("tests/") and p.endswith((".sh", ".py", ".c", ".i", ".S", ".s"))) or (p.startswith("docs/") and p.endswith(".md")) or p.startswith("tools/ci/")]
+          names = collections.defaultdict(set)
+          for p in candidates:
+              n = pathlib.PurePosixPath(p).name
+              names[n].add(p)
+              if p.endswith((".c", ".sh", ".py", ".i")) and len(pathlib.PurePosixPath(p).stem) >= 8:
+                  names[pathlib.PurePosixPath(p).stem].add(p)
+              if p.endswith(".py"):
+                  names[pathlib.PurePosixPath(p).stem.replace("-", "_")].add(p)
+          matcher = re.compile("|".join(re.escape(n) for n in sorted(names, key=lambda n: (-len(n), n))))
+          incoming = collections.defaultdict(set)
+          for path in files:
+              if path == audit:
+                  continue
+              data = pathlib.Path(path).read_bytes()
+              if b"\0" in data:
+                  continue
+              for m in set(matcher.findall(data.decode("utf-8", errors="replace"))):
+                  for p in names[m]:
+                      if p != path:
+                          incoming[p].add(path)
+          groups = collections.Counter()
+          for p in candidates:
+              refs = incoming[p]
+              active = sorted(x for x in refs if not x.startswith("docs/") and not x.endswith(".md"))
+              group = "unreferenced" if not refs else "doc-only" if not active else "referenced"
+              category = "script" if p.startswith("tests/") and p.endswith((".sh",".py")) else "fixture" if p.startswith("tests/") else "doc" if p.startswith("docs/") else "ci"
+              groups[category,group] += 1
+              if group != "referenced" or (category == "script" and all(x.startswith("tests/") for x in active)):
+                  print("PERIPHERAL_CANDIDATE", json.dumps({"path": p, "group": group, "refs": sorted(refs)[:12]}))
+          print("PERIPHERAL_COUNTS", json.dumps({"/".join(k): v for k,v in sorted(groups.items())}))
+          print("PERIPHERAL_NOTE: lexical candidates only; dynamic callers, manual tests, and unique regression fixtures require review")
           PY
