@@ -1018,8 +1018,7 @@ static bool loong_scalar_type(const MinicCoreFunction *fn,
     const MinicCoreType *type;
     if (fn == NULL || fn->type_context == NULL || bytes == NULL ||
         sign == NULL || pointer == NULL) return false;
-    type = minic_core_type_get(fn->type_context,
-        minic_core_type_unqualified(fn->type_context, id));
+    type = minic_core_type_base(fn->type_context, id);
     if (type == NULL || !type->has_layout) return false;
     *pointer = type->kind == MINIC_CORE_TYPE_POINTER;
     if (*pointer) {
@@ -1038,8 +1037,7 @@ static bool loong_integer_pair(const MinicCoreFunction *fn,
     MinicCoreTypeId id, bool *is_signed) {
     const MinicCoreType *type;
     if (fn == NULL || fn->type_context == NULL) return false;
-    type = minic_core_type_get(fn->type_context,
-        minic_core_type_unqualified(fn->type_context, id));
+    type = minic_core_type_base(fn->type_context, id);
     if (type == NULL || type->kind != MINIC_CORE_TYPE_INTEGER ||
         !type->has_layout || type->size != 16U ||
         type->value.integer.bit_width != 128U) return false;
@@ -1998,8 +1996,7 @@ static bool loong_select_float(LoongSelector *sel,
     const MinicCoreValueId rhs = ins->value.binary.right;
     switch (ins->kind) {
     case MINIC_CORE_INSTRUCTION_FLOATING_CONSTANT: {
-        const MinicCoreType *type = minic_core_type_get(fn->type_context,
-            minic_core_type_unqualified(fn->type_context, ins->core_type_id));
+        const MinicCoreType *type = minic_core_type_base(fn->type_context, ins->core_type_id);
         size_t offset;
         if (type == NULL || type->kind != MINIC_CORE_TYPE_FLOAT ||
             !loong_value_offset(sel, ins->result, &offset)) return false;
@@ -2226,9 +2223,7 @@ static size_t loong_memory_route_shape(
         ins->kind != MINIC_CORE_INSTRUCTION_STORE) return 0U;
     *address = load ? ins->value.load.address : ins->value.store.address;
     *store = !load;
-    type = value < fn->value_count ? minic_core_type_get(
-        fn->type_context, minic_core_type_unqualified(
-            fn->type_context, fn->values[value].core_type_id)) : NULL;
+    type = value < fn->value_count ? minic_core_type_base(fn->type_context, fn->values[value].core_type_id) : NULL;
     if (type != NULL && type->has_layout && type->size == 16U &&
         ((type->kind == MINIC_CORE_TYPE_INTEGER &&
           type->value.integer.bit_width == 128U) ||
@@ -2375,9 +2370,7 @@ static bool loong_select_memory(LoongSelector *sel,
         const MinicCoreValueId wide_value = is_load ? ins->result :
             ins->value.store.stored_value;
         const MinicCoreType *wide_type = wide_value < fn->value_count ?
-            minic_core_type_get(fn->type_context,
-                minic_core_type_unqualified(fn->type_context,
-                    fn->values[wide_value].core_type_id)) : NULL;
+            minic_core_type_base(fn->type_context, fn->values[wide_value].core_type_id) : NULL;
         if (wide_type != NULL && wide_type->has_layout &&
             wide_type->size == 16U &&
             ((wide_type->kind == MINIC_CORE_TYPE_INTEGER &&
@@ -2437,9 +2430,7 @@ static bool loong_select_memory(LoongSelector *sel,
             (atomic ? ins->value.atomic_store.stored_value :
                 ins->value.store.stored_value);
         const MinicCoreType *type = value < fn->value_count ?
-            minic_core_type_get(fn->type_context,
-                minic_core_type_unqualified(fn->type_context,
-                    fn->values[value].core_type_id)) : NULL;
+            minic_core_type_base(fn->type_context, fn->values[value].core_type_id) : NULL;
         if (type == NULL) return false;
         floating_transport = type->kind == MINIC_CORE_TYPE_FLOAT &&
             (type->value.floating.format == MINIC_CORE_FLOAT_BINARY32 ||
@@ -2541,9 +2532,7 @@ static bool loong_select_record_transfer(LoongSelector *sel,
                 ins->value.record_copy.destination_volatile;
         } else if (ins->kind ==
                        MINIC_CORE_INSTRUCTION_VECTOR_STORAGE_COPY) {
-            const MinicCoreType *type = minic_core_type_get(
-                fn->type_context, minic_core_type_unqualified(
-                    fn->type_context, ins->core_type_id));
+            const MinicCoreType *type = minic_core_type_base(fn->type_context, ins->core_type_id);
             if (type == NULL || type->kind != MINIC_CORE_TYPE_VECTOR ||
                 !type->has_layout || type->size != 16U ||
                 type->alignment == 0U) return false;
@@ -2676,8 +2665,7 @@ static bool loong_select_parameter(LoongSelector *sel,
     if (!minic_multi_direct_scalar_parameter_location(fn, ins,
             sel->ctx->incoming_plan, &location) || location == NULL ||
         !loong_value_offset(sel, ins->result, &offset)) return false;
-    type = minic_core_type_get(fn->type_context,
-        minic_core_type_unqualified(fn->type_context, ins->core_type_id));
+    type = minic_core_type_base(fn->type_context, ins->core_type_id);
     if (type == NULL) return false;
     if (type->has_layout && type->size == 16U &&
         ((type->kind == MINIC_CORE_TYPE_INTEGER &&
@@ -2885,9 +2873,7 @@ static bool loong_call_wide_argument(LoongSelector *sel,
     if (value >= fn->value_count ||
         !minic_core_abi_wide_scalar(fn,
             fn->values[value].core_type_id)) return false;
-    type = minic_core_type_get(fn->type_context,
-        minic_core_type_unqualified(fn->type_context,
-            fn->values[value].core_type_id));
+    type = minic_core_type_base(fn->type_context, fn->values[value].core_type_id);
     /* The shared ABI planner's float128 WIDE location records one semantic
      * value (chunks=1), while integer128 records two integer eightbytes.
      * Both physically move two 64-bit carriers on LoongArch LP64D. */
@@ -3022,9 +3008,7 @@ static bool loong_select_call(LoongSelector *sel,
             !minic_core_abi_value_shape(fn,
                 fn->values[arg->value.value_id].core_type_id, &shape))
             return false;
-        type = minic_core_type_get(fn->type_context,
-            minic_core_type_unqualified(fn->type_context,
-                fn->values[arg->value.value_id].core_type_id));
+        type = minic_core_type_base(fn->type_context, fn->values[arg->value.value_id].core_type_id);
         if (type == NULL || shape.bytes == 0U) return false;
         if (minic_core_abi_wide_scalar(fn,
                 fn->values[arg->value.value_id].core_type_id)) {
@@ -3129,8 +3113,7 @@ static bool loong_select_call(LoongSelector *sel,
             break;
         }
     }
-    result = minic_core_type_get(fn->type_context,
-        minic_core_type_unqualified(fn->type_context, ins->core_type_id));
+    result = minic_core_type_base(fn->type_context, ins->core_type_id);
     if (result == NULL) return false;
     if (result->kind == MINIC_CORE_TYPE_VOID) return true;
     if (result->kind == MINIC_CORE_TYPE_RECORD)
@@ -3333,8 +3316,7 @@ static bool loong_select_variadic_address(LoongSelector *sel,
     const MinicCoreInstruction *ins) {
     const MinicMachineLP64FrameContract *frame = sel->ctx->machine_frame;
     const MinicCoreFunction *fn = sel->ctx->fn;
-    const MinicCoreType *type = minic_core_type_get(fn->type_context,
-        minic_core_type_unqualified(fn->type_context, ins->core_type_id));
+    const MinicCoreType *type = minic_core_type_base(fn->type_context, ins->core_type_id);
     size_t offset;
     if (frame->variadic_count == 0U ||
         ins->value.variadic_address.copy_destination ||
@@ -3612,18 +3594,11 @@ static bool loong_structured_store_xchg_callback(void *opaque,
         value, reg, width);
 }
 
-static bool loong_structured_store_csr_callback(void *opaque,
+static bool loong_structured_store_t2_callback(void *opaque,
     MinicCoreValueId value, unsigned int reg, size_t width) {
     /* The CSR result lives in t1; materializing its lvalue must not
      * overwrite that value. t2 holds the target address throughout both
      * native and bytewise writeback paths. */
-    return loong_structured_store_at((LoongSelector *)opaque,
-        value, reg, width, LOONG_T2);
-}
-
-static bool loong_structured_store_pte_callback(void *opaque,
-    MinicCoreValueId value, unsigned int reg, size_t width) {
-    /* The old PTE result transport uses t2 for its C result lvalue. */
     return loong_structured_store_at((LoongSelector *)opaque,
         value, reg, width, LOONG_T2);
 }
@@ -4388,7 +4363,7 @@ static bool loong_select_structured_asm(LoongSelector *sel,
     if (source->target_machine_form_id == LOONG_DESC_PTE)
         return minic_loongarch64_machine_select_pte(&sel->builder,
             sel->ctx, ins, loong_structured_load_callback,
-            loong_structured_store_pte_callback, sel);
+            loong_structured_store_t2_callback, sel);
     if (source->target_machine_form_id ==
         MINIC_LOONG_MACHINE_ASM_UACCESS)
         return minic_loongarch64_machine_select_uaccess(&sel->builder,
@@ -4411,7 +4386,7 @@ static bool loong_select_structured_asm(LoongSelector *sel,
         return minic_loongarch64_machine_select_csr_source(&sel->builder,
             sel->ctx, ins, loong_structured_load_callback,
             loong_structured_read_lvalue_callback,
-            loong_structured_store_csr_callback, sel);
+            loong_structured_store_t2_callback, sel);
     if (source->target_machine_form_id == LOONG_DESC_PERCPU_INDEXED ||
         source->target_machine_form_id ==
             MINIC_LOONG_MACHINE_ASM_PERCPU_AMO ||
@@ -4466,8 +4441,7 @@ static bool loong_asm_integer_value(const MinicCoreFunction *fn,
     type_id = fn->values[value].core_type_id;
     if (pointee && !minic_lp64_core_pointer_pointee(
             fn->type_context, type_id, &type_id)) return false;
-    type = minic_core_type_get(fn->type_context,
-        minic_core_type_unqualified(fn->type_context, type_id));
+    type = minic_core_type_base(fn->type_context, type_id);
     return type != NULL && type->has_layout &&
         type->kind == MINIC_CORE_TYPE_INTEGER &&
         !type->value.integer.is_bool &&
@@ -5004,8 +4978,7 @@ static bool loong_select_terminator(LoongSelector *sel,
         const MinicCoreTypeId type = minic_core_function_return_type(fn);
         if (!minic_lp64_core_kind(fn->type_context, type,
                 MINIC_CORE_TYPE_VOID)) {
-            const MinicCoreType *core = minic_core_type_get(fn->type_context,
-                minic_core_type_unqualified(fn->type_context, type));
+            const MinicCoreType *core = minic_core_type_base(fn->type_context, type);
             if (core == NULL) return false;
             if (core->kind == MINIC_CORE_TYPE_RECORD) {
                 size_t offset, bytes, chunks, fp_elements, fp_width, chunk;
@@ -5210,9 +5183,7 @@ static bool loong_preplan_copy_blocks(
         ins->kind != MINIC_CORE_INSTRUCTION_RECORD_LOAD &&
         ins->kind != MINIC_CORE_INSTRUCTION_VECTOR_STORAGE_COPY)
         return false;
-    type = minic_core_type_get(ctx->fn->type_context,
-        minic_core_type_unqualified(ctx->fn->type_context,
-            ins->core_type_id));
+    type = minic_core_type_base(ctx->fn->type_context, ins->core_type_id);
     return type != NULL && type->has_layout && type->size >= 8U;
 }
 

@@ -12,7 +12,7 @@
 static bool rv32_module_array_of_records(
     const MinicCoreTypeContext *types, const MinicCoreType *type) {
     while (type != NULL && type->kind == MINIC_CORE_TYPE_ARRAY) {
-        type = minic_multi_module_global_core_base(
+        type = minic_core_type_base(
             types, type->value.array.element);
         if (type != NULL && type->kind == MINIC_CORE_TYPE_RECORD) return true;
     }
@@ -63,7 +63,7 @@ bool minic_riscv32_emit_module_global(FILE *out, const MinicTargetInfo *target,
     if (global->definition_kind == MINIC_CORE_MODULE_DEFINITION_DECLARATION)
         return global->alias_target_index == SIZE_MAX;
     if (!global->emittable) return false;
-    base = minic_multi_module_global_core_base(
+    base = minic_core_type_base(
         module->type_context, global->core_type_id);
     if (base == NULL || global->alias_target_index != SIZE_MAX || global->is_thread_local ||
         (global->fragment_count != 0U && global->fragments == NULL) ||

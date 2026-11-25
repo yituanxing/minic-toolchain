@@ -5,16 +5,10 @@
 /* LP64 record ABI admission consumes the immutable Core shape captured at
  * source ingress. Reinterpreting the C record tree inside Target would form
  * a second, potentially divergent owner of field layout and HFA classes. */
-static const MinicCoreType *core_aggregate_base(
-    const MinicCoreTypeContext *types, MinicCoreTypeId type_id) {
-    if (types == NULL) return NULL;
-    return minic_core_type_get(types, minic_core_type_unqualified(types, type_id));
-}
-
 static bool core_integer_record_members(const MinicCoreTypeContext *types,
                                         MinicCoreTypeId type_id, unsigned depth) {
     const MinicCoreType *storage = minic_core_type_get(types, type_id);
-    const MinicCoreType *type = core_aggregate_base(types, type_id);
+    const MinicCoreType *type = minic_core_type_base(types, type_id);
     size_t i;
     if (storage == NULL || type == NULL || !storage->has_layout ||
         depth > 16U || storage->alignment == 0U || storage->alignment > 8U)
@@ -37,7 +31,7 @@ static bool core_integer_record_members(const MinicCoreTypeContext *types,
         const MinicCoreType *field_storage =
             minic_core_type_get(types, field->type_id);
         const MinicCoreType *field_type =
-            core_aggregate_base(types, field->type_id);
+            minic_core_type_base(types, field->type_id);
         MinicCoreTypeId element_id = field->type_id;
         const MinicCoreType *element;
         bool is_array;
@@ -61,7 +55,7 @@ static bool core_integer_record_members(const MinicCoreTypeContext *types,
         field_align = element->alignment;
         if ((field->is_bit_field &&
              (is_array || field->bit_width == 0U ||
-              core_aggregate_base(types, element_id)->kind !=
+              minic_core_type_base(types, element_id)->kind !=
                   MINIC_CORE_TYPE_INTEGER)) ||
             !core_integer_record_members(types, element_id, depth + 1U) ||
             (field->is_bit_field &&
@@ -79,7 +73,7 @@ static bool core_integer_record_members(const MinicCoreTypeContext *types,
 bool minic_multi_gp_record_core(const MinicCoreTypeContext *types,
                                 MinicCoreTypeId type_id,
                                 size_t *bytes, size_t *eightbytes) {
-    const MinicCoreType *type = core_aggregate_base(types, type_id);
+    const MinicCoreType *type = minic_core_type_base(types, type_id);
     MinicAggregateStorageShape shape;
     if (bytes == NULL || eightbytes == NULL || type == NULL ||
         type->kind != MINIC_CORE_TYPE_RECORD ||
@@ -113,7 +107,7 @@ bool minic_multi_indirect_record_core(const MinicCoreTypeContext *types,
 bool minic_multi_fp_return_record_core(
     const MinicCoreTypeContext *types, MinicCoreTypeId type_id,
     size_t *element_count, size_t *element_width) {
-    const MinicCoreType *record = core_aggregate_base(types, type_id);
+    const MinicCoreType *record = minic_core_type_base(types, type_id);
     const MinicCoreRecordField *first;
     const MinicCoreType *first_type;
     MinicAggregateStorageShape shape;
@@ -127,7 +121,7 @@ bool minic_multi_fp_return_record_core(
         record->value.record.fields == NULL)
         return false;
     first = &record->value.record.fields[0];
-    first_type = core_aggregate_base(types, first->type_id);
+    first_type = minic_core_type_base(types, first->type_id);
     if (first_type == NULL || first_type->kind != MINIC_CORE_TYPE_FLOAT ||
         first->is_bit_field || first->has_nondefault_layout_policy ||
         (first_type->value.floating.format != MINIC_CORE_FLOAT_BINARY32 &&
@@ -140,7 +134,7 @@ bool minic_multi_fp_return_record_core(
         return false;
     for (i = 0U; i < record->value.record.field_count; ++i) {
         const MinicCoreRecordField *field = &record->value.record.fields[i];
-        const MinicCoreType *field_type = core_aggregate_base(types, field->type_id);
+        const MinicCoreType *field_type = minic_core_type_base(types, field->type_id);
         if (field_type == NULL || field_type->kind != MINIC_CORE_TYPE_FLOAT ||
             field->is_bit_field || field->has_nondefault_layout_policy ||
             field->type_id != first->type_id ||

@@ -13,8 +13,6 @@ const char *minic_multi_module_gnu_data_directive(size_t width);
 
 /* Shared GNU RV32/RV64 scalar-object shape query. This walks only imported
  * Core types; target-specific record/zero-extent acceptance stays private. */
-const MinicCoreType *minic_multi_module_global_core_base(
-    const MinicCoreTypeContext *types, MinicCoreTypeId id);
 bool minic_multi_module_global_scalar_width(
     const MinicCoreTypeContext *types, const MinicCoreType *type,
     size_t *width);

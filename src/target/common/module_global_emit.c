@@ -12,17 +12,12 @@ const char *minic_multi_module_gnu_data_directive(size_t width) {
            width == 4U ? ".4byte" : width == 8U ? ".8byte" : NULL;
 }
 
-const MinicCoreType *minic_multi_module_global_core_base(
-    const MinicCoreTypeContext *types, MinicCoreTypeId id) {
-    return minic_core_type_get(types, minic_core_type_unqualified(types, id));
-}
-
 bool minic_multi_module_global_scalar_width(
     const MinicCoreTypeContext *types, const MinicCoreType *type,
     size_t *width) {
     if (types == NULL || width == NULL) return false;
     while (type != NULL && type->kind == MINIC_CORE_TYPE_ARRAY)
-        type = minic_multi_module_global_core_base(
+        type = minic_core_type_base(
             types, type->value.array.element);
     if (type == NULL || !type->has_layout ||
         (type->kind != MINIC_CORE_TYPE_INTEGER &&

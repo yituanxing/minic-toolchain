@@ -15,11 +15,6 @@ typedef struct MinicCoreFloatingShape {
     MinicCoreFloatFormat source_format;
 } MinicCoreFloatingShape;
 
-static inline const MinicCoreType *minic_core_floating_base(
-    const MinicCoreFunction *function, MinicCoreTypeId id) {
-    return minic_core_function_base_type(function, id);
-}
-
 static inline bool minic_core_floating_format(
     const MinicCoreType *type, MinicCoreFloatFormat format) {
     const size_t bytes = format == MINIC_CORE_FLOAT_BINARY32 ? 4U
@@ -95,7 +90,7 @@ static inline bool minic_core_floating_shape(
     default:
         return false;
     }
-    result = minic_core_floating_base(function, instruction->core_type_id);
+    result = minic_core_function_base_type(function, instruction->core_type_id);
     if (result == NULL) return false;
     if (constant) {
         if (!minic_core_floating_format(result, MINIC_CORE_FLOAT_BINARY32) &&
@@ -118,13 +113,13 @@ static inline bool minic_core_floating_shape(
         operand = binary ? instruction->value.binary.left
                          : instruction->value.operand;
         if (operand >= function->value_count) return false;
-        source = minic_core_floating_base(function,
+        source = minic_core_function_base_type(function,
             function->values[operand].core_type_id);
         if (source == NULL) return false;
         if (binary) {
             const MinicCoreValueId rhs = instruction->value.binary.right;
             if (rhs >= function->value_count) return false;
-            right = minic_core_floating_base(function,
+            right = minic_core_function_base_type(function,
                 function->values[rhs].core_type_id);
             if (!minic_core_floating_format(source, expected) ||
                 !minic_core_floating_format(right, expected))

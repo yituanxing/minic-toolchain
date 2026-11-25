@@ -51,7 +51,7 @@ static bool rv64_module_array_recursive(
     const MinicCoreTypeContext *types, const MinicCoreType *type) {
     const MinicCoreType *element;
     if (type == NULL || type->kind != MINIC_CORE_TYPE_ARRAY) return false;
-    element = minic_multi_module_global_core_base(
+    element = minic_core_type_base(
         types, type->value.array.element);
     return element != NULL && (element->kind == MINIC_CORE_TYPE_RECORD ||
                                element->kind == MINIC_CORE_TYPE_ARRAY);
@@ -77,7 +77,7 @@ static bool rv64_module_admit_global(const MinicCoreModule *module,
         global->alias_target_index != SIZE_MAX || global->is_thread_local ||
         (global->is_internal && global->is_weak) ||
         global->storage_alignment == 0U ||
-        (type = minic_multi_module_global_core_base(
+        (type = minic_core_type_base(
              module->type_context, global->core_type_id)) == NULL)
         return false;
     zero_extent = global->storage_size == 0U && rv64_module_zero_extent_legal(type);

@@ -91,9 +91,7 @@ size_t minic_core_function_fold_literal_branches(MinicCoreFunction *function) {
             function->values[condition].definition >= function->instruction_count)
             continue;
         definition = &function->instructions[function->values[condition].definition];
-        type = minic_core_type_get(function->type_context,
-            minic_core_type_unqualified(function->type_context,
-                function->values[condition].core_type_id));
+        type = minic_core_type_base(function->type_context, function->values[condition].core_type_id);
         if (definition->kind != MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT ||
             definition->result != condition ||
             type == NULL || type->kind != MINIC_CORE_TYPE_INTEGER ||

@@ -21,8 +21,7 @@ static inline bool minic_core_abi_value_shape(
     const MinicCoreType *type;
     if (fn == NULL || fn->type_context == NULL || shape == NULL)
         return false;
-    type = minic_core_type_get(fn->type_context,
-        minic_core_type_unqualified(fn->type_context, id));
+    type = minic_core_type_base(fn->type_context, id);
     if (type == NULL) return false;
     *shape = (MinicCoreAbiValueShape){
         .kind = type->kind,

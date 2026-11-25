@@ -29,7 +29,7 @@ static inline bool minic_lp64_core_type_float_format(
     const MinicCoreTypeContext *context, MinicCoreTypeId id,
     MinicCoreFloatFormat format) {
     return minic_lp64_core_float_format(
-        minic_core_type_get(context, minic_core_type_unqualified(context, id)),
+        minic_core_type_base(context, id),
         format);
 }
 bool minic_lp64_core_valid_parameter_type(const MinicCoreTypeContext *, MinicCoreTypeId);

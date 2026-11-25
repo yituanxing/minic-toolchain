@@ -330,8 +330,7 @@ static bool module_live_global_layout_valid(
         return false;
     /* Qualified CoreType views cannot silently weaken base storage
      * alignment, even when an explicit extension is present. */
-    base = minic_core_type_get(types, minic_core_type_unqualified(
-        types, global->core_type_id));
+    base = minic_core_type_base(types, global->core_type_id);
     if (base == NULL || !base->has_layout ||
         global->storage_alignment < base->alignment)
         return false;

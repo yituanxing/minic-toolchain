@@ -50,11 +50,8 @@ static inline bool minic_core_integer_conversion_shape(
             function->values[instruction->result].core_type_id)
         return false;
     source_id = function->values[instruction->value.operand].core_type_id;
-    source = minic_core_type_get(function->type_context,
-        minic_core_type_unqualified(function->type_context, source_id));
-    target = minic_core_type_get(function->type_context,
-        minic_core_type_unqualified(function->type_context,
-                                    instruction->core_type_id));
+    source = minic_core_type_base(function->type_context, source_id);
+    target = minic_core_type_base(function->type_context, instruction->core_type_id);
     if (!minic_core_scalar_integer_storage_valid(source) ||
         !minic_core_scalar_integer_storage_valid(target))
         return false;
@@ -101,11 +98,8 @@ static inline bool minic_core_scalar_bitcast_shape(
             function->values[instruction->result].core_type_id)
         return false;
     source_id = function->values[instruction->value.operand].core_type_id;
-    source = minic_core_type_get(function->type_context,
-        minic_core_type_unqualified(function->type_context, source_id));
-    target = minic_core_type_get(function->type_context,
-        minic_core_type_unqualified(function->type_context,
-                                    instruction->core_type_id));
+    source = minic_core_type_base(function->type_context, source_id);
+    target = minic_core_type_base(function->type_context, instruction->core_type_id);
     if (!((minic_core_scalar_pointer_storage_valid(source) &&
            (minic_core_scalar_pointer_storage_valid(target) ||
             minic_core_scalar_integer_storage_valid(target))) ||

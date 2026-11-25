@@ -9,7 +9,7 @@ bool minic_common_aggregate_storage_shape_core(
         (word_bytes & (word_bytes - 1U)) != 0U)
         return false;
     storage = minic_core_type_get(types, type_id);
-    record = minic_core_type_get(types, minic_core_type_unqualified(types, type_id));
+    record = minic_core_type_base(types, type_id);
     if (record == NULL || record->kind != MINIC_CORE_TYPE_RECORD ||
         !record->value.record.is_complete || storage == NULL ||
         !storage->has_layout || storage->alignment == 0U ||

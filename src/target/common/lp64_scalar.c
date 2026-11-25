@@ -6,8 +6,7 @@
 bool minic_lp64_core_kind(const MinicCoreTypeContext *context,
                           MinicCoreTypeId id, MinicCoreTypeKind kind) {
     const MinicCoreType *type;
-    id = minic_core_type_unqualified(context, id);
-    type = minic_core_type_get(context, id);
+    type = minic_core_type_base(context, id);
     return type != NULL && type->kind == kind;
 }
 
@@ -16,8 +15,7 @@ bool minic_lp64_core_pointer_pointee(const MinicCoreTypeContext *context,
                                      MinicCoreTypeId *pointee) {
     const MinicCoreType *type;
     if (pointee == NULL) return false;
-    id = minic_core_type_unqualified(context, id);
-    type = minic_core_type_get(context, id);
+    type = minic_core_type_base(context, id);
     if (type == NULL || type->kind != MINIC_CORE_TYPE_POINTER ||
         minic_core_type_get(context, type->value.pointer.pointee) == NULL)
         return false;
@@ -39,8 +37,7 @@ bool minic_lp64_core_integer_width(const MinicCoreTypeContext *context,
     const MinicCoreType *type;
     unsigned int bits;
     if (width == NULL || sign == NULL) return false;
-    id = minic_core_type_unqualified(context, id);
-    type = minic_core_type_get(context, id);
+    type = minic_core_type_base(context, id);
     if (type == NULL || type->kind != MINIC_CORE_TYPE_INTEGER)
         return false;
     bits = type->value.integer.bit_width;
