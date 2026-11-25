@@ -4617,7 +4617,7 @@ static bool a64_parameter_object(A64CoreSelection *sel,
             location->fp_registers == 0U &&
             location->stack_slots == 0U;
     if (location->kind == MINIC_LP64_ARGUMENT_INDIRECT_RECORD) {
-        if (size == 0U || size > 2048U ||
+        if (size == 0U ||
             ((location->gp_registers == 1U) ==
              (location->stack_slots == 1U)) ||
             (location->gp_registers == 1U && location->stack_slots != 0U) ||

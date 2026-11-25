@@ -93,12 +93,15 @@ bool minic_multi_empty_record_core(const MinicCoreTypeContext *types,
            shape.bytes == 0U;
 }
 
+/* Classification is about Core type shape, not a fixed 2 KiB quota.
+ * Actual object-frame storage is checked by the shared bounded LP64 frame
+ * planner, and target byte-copy loops guard their own representable range. */
 bool minic_multi_indirect_record_core(const MinicCoreTypeContext *types,
                                       MinicCoreTypeId type_id, size_t *bytes) {
     MinicAggregateStorageShape shape;
     if (bytes == NULL ||
         !minic_common_aggregate_storage_shape_core(types, type_id, 8U, &shape) ||
-        shape.bytes <= 16U || shape.bytes > 2048U || shape.alignment > 16U)
+        shape.bytes <= 16U || shape.alignment > 16U)
         return false;
     *bytes = shape.bytes;
     return true;
