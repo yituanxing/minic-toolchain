@@ -1,0 +1,242 @@
+@@@ {"id": "d89675d7c89d43f6", "kind": "shared", "newline": true}
+set -eu
+root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
+mini=${MINIC_CC:-"$root/build/release/bin/minic-cc"}
+host=${HOST_CC:-gcc}
+work=$(mktemp -d)
+@@@ end
+@@@ {"head_lines": 4, "kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/probe-aarch64-fixmap-cross-static-const-bug-asm.sh", "shared": "d89675d7c89d43f6"}
+#!/bin/sh
+# Diagnostic RED until TU-local static specialization safely clones Linux's
+# BUG_ON zero-operand ASM with its per-instance __bug_table numeric labels.
+# Not a check-fast gate; no GCC C object fallback or alternate assembler.
+trap 'rm -rf "$work"' EXIT HUP INT TERM
+source_file="$root/tests/compiler/c0/aarch64_fixmap_cross_static_const_bug_asm.c"
+
+"$host" -E -P -std=gnu11 "$source_file" -o "$work/original.gnu.i"
+"$host" -O2 -S -std=gnu11 "$source_file" -o "$work/gnu.s"
+if grep -Fq '__compiletime_assert_fixmap' "$work/gnu.s"; then
+    echo 'AARCH64_FIXMAP_BUG_ASM=FAIL GNU_O2 retained compiletime assert' >&2
+    exit 1
+fi
+if ! "$mini" --target=aarch64-linux -S "$work/original.gnu.i" -o "$work/minic.s"; then
+    echo 'AARCH64_FIXMAP_BUG_ASM=FAIL MiniC source/ASM lowering' >&2
+    exit 1
+fi
+for phrase in '.pushsection __bug_table' '.pushsection .rodata.str' \
+              '14470: .long 14471f - .' '14472: .string' \
+              '.long 14472b - .' '14471: brk 0x800'; do
+    if ! grep -Fq "$phrase" "$work/minic.s"; then
+        echo "AARCH64_FIXMAP_BUG_ASM=FAIL lost original GNU ASM metadata: $phrase" >&2
+        exit 1
+    fi
+done
+asm_entry_count=$(grep -Fc '14471: brk 0x800' "$work/minic.s")
+asm_table_count=$(grep -Fc '.pushsection __bug_table' "$work/minic.s")
+if [ "$asm_entry_count" -lt 1 ] ||
+   [ "$asm_entry_count" -ne "$asm_table_count" ]; then
+    echo 'AARCH64_FIXMAP_BUG_ASM=FAIL missing/extra trap-to-bug-table owner' >&2
+    exit 1
+fi
+gnu_as_status=SKIP
+cross_as=${AARCH64_GNU_AS:-aarch64-linux-gnu-as}
+cross_readelf=${AARCH64_GNU_READELF:-aarch64-linux-gnu-readelf}
+cross_objcopy=${AARCH64_GNU_OBJCOPY:-aarch64-linux-gnu-objcopy}
+if command -v "$cross_as" >/dev/null 2>&1 &&
+   command -v "$cross_readelf" >/dev/null 2>&1 &&
+   command -v "$cross_objcopy" >/dev/null 2>&1; then
+    "$cross_as" "$work/minic.s" -o "$work/minic.o"
+    "$cross_readelf" -rW "$work/minic.o" >"$work/relocations.txt"
+    "$cross_objcopy" --dump-section "__bug_table=$work/bug_table.bin" \
+        "$work/minic.o"
+    entry_bytes=$(wc -c <"$work/bug_table.bin")
+    relocation_count=$(awk '/^Relocation section .*\.rela__bug_table/ { active=1; next }
+        /^Relocation section / { active=0 }
+        active && /R_AARCH64_PREL32/ { count++ }
+        END { print count+0 }' "$work/relocations.txt")
+    if [ "$entry_bytes" -ne "$((12 * asm_entry_count))" ] ||
+       [ "$relocation_count" -ne "$((2 * asm_entry_count))" ]; then
+        echo "AARCH64_FIXMAP_BUG_ASM=FAIL __bug_table GNU ELF entries/relocs: bytes=$entry_bytes relocs=$relocation_count asm_entries=$asm_entry_count" >&2
+        exit 1
+    fi
+    gnu_as_status=PASS
+fi
+if grep -Fq '__compiletime_assert_fixmap' "$work/minic.s"; then
+    echo "AARCH64_FIXMAP_BUG_ASM=RED GNU_O2=PASS MiniC_ASM=PASS GNU_AS=$gnu_as_status static_const_specialization=FAIL" >&2
+    exit 1
+fi
+grep -Fq '  bl original_set_fixmap' "$work/minic.s"
+# Unproven ASM must never inherit the narrow self-contained metadata permit.
+# Two malformed bug-table forms fail closed at target qualification, while a
+# valid but unrelated NOP still leaves the non-inline static wrapper un-cloned.
+sed 's/__bug_table/__bad_bug_table/g' "$work/original.gnu.i" >"$work/bad-section.i"
+if "$mini" --target=aarch64-linux -S "$work/bad-section.i" \
+        -o "$work/bad-section.s" >/dev/null 2>&1; then
+    echo 'AARCH64_FIXMAP_BUG_ASM=FAIL accepted a foreign bug table section' >&2
+    exit 1
+fi
+sed 's/14471f/14473f/g' "$work/original.gnu.i" >"$work/bad-numeric.i"
+if "$mini" --target=aarch64-linux -S "$work/bad-numeric.i" \
+        -o "$work/bad-numeric.s" >/dev/null 2>&1; then
+    echo 'AARCH64_FIXMAP_BUG_ASM=FAIL accepted unresolved numeric label' >&2
+    exit 1
+fi
+sed -E 's/asm volatile\(.*\); __builtin_unreachable/asm volatile("nop"); __builtin_unreachable/' \
+    "$work/original.gnu.i" >"$work/unproven-nop.i"
+"$mini" --target=aarch64-linux -S "$work/unproven-nop.i" -o "$work/unproven-nop.s"
+if ! grep -Fq '__compiletime_assert_fixmap' "$work/unproven-nop.s"; then
+    echo 'AARCH64_FIXMAP_BUG_ASM=FAIL generic ASM escaped static clone safety gate' >&2
+    exit 1
+fi
+echo "AARCH64_FIXMAP_BUG_ASM=PASS GNU_O2=1 MiniC_ASM=1 GNU_AS=$gnu_as_status static_const_specialization=1 strict_negative=3 no_GNU_C_fallback=1"
+@@@ end
+@@@ {"head_lines": 4, "kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/probe-aarch64-fixmap-cross-static-const.sh", "shared": "d89675d7c89d43f6"}
+#!/bin/sh
+# Original Linux fixed-index BUILD_BUG_ON semantics, without GNU C fallback.
+# This deliberately exercises a plain static wrapper around always_inline:
+# GCC -O2 can prove the caller's enum constant; MiniC must do the same.
+trap 'rm -rf "$work"' EXIT HUP INT TERM
+source_file="$root/tests/compiler/c0/aarch64_fixmap_cross_static_const.c"
+
+"$host" -E -P -std=gnu11 "$source_file" -o "$work/original.gnu.i"
+"$host" -O2 -S -std=gnu11 "$source_file" -o "$work/gnu.s"
+if grep -Fq '__compiletime_assert_fixmap' "$work/gnu.s"; then
+    echo 'AARCH64_FIXMAP_STATIC_CONST=FAIL GNU -O2 oracle retained BUILD_BUG_ON' >&2
+    exit 1
+fi
+"$mini" --target=aarch64-linux -S "$work/original.gnu.i" -o "$work/minic.s"
+grep -Fq '  bl original_set_fixmap' "$work/minic.s"
+if grep -Fq '__compiletime_assert_fixmap' "$work/minic.s"; then
+    echo 'AARCH64_FIXMAP_STATIC_CONST=FAIL MiniC lost cross-static constant' >&2
+    exit 1
+fi
+echo 'AARCH64_FIXMAP_STATIC_CONST=PASS GNU_O2=1 MiniC_AArch64=1 static_wrapper=1 enum=1 always_inline=1 no_GNU_C_fallback=1'
+@@@ end
+@@@ {"head_lines": 3, "kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/probe-aarch64-typed-extended-float-abi.sh", "shared": "d89675d7c89d43f6"}
+#!/bin/sh
+# AArch64-only, whole-family Core TF -> MachineIR -> AAPCS64 source assembly.
+# No runtime helper name is inferred from a user-defined C function spelling.
+trap 'rm -r -- "$work"' EXIT HUP INT TERM
+
+"$host" -std=gnu11 -E -P \
+    "$root/tests/compiler/c0/aarch64_typed_extended_float_abi.c" \
+    -o "$work/typed.i"
+"$mini" --target=aarch64-linux -S "$work/typed.i" -o "$work/a64.s"
+
+for symbol in __addtf3 __subtf3 __multf3 __divtf3 __negtf2 \
+    __eqtf2 __lttf2 __letf2 __extendsftf2 __extenddftf2 \
+    __trunctfsf2 __trunctfdf2 __floatsitf __floatunsitf \
+    __floatditf __floatunditf __fixtfsi __fixunstfsi \
+    __fixtfdi __fixunstfdi; do
+    if ! grep -Fq "  bl $symbol" "$work/a64.s"; then
+        echo "A64_TF_ABI=FAIL lost typed runtime helper $symbol" >&2
+        exit 1
+    fi
+done
+for physical in '  str q0,' '  str q1,' '  ldr q0,' '  ldr q1,'; do
+    if ! grep -Fq "$physical" "$work/a64.s"; then
+        echo "A64_TF_ABI=FAIL lost Q-register ABI transport: $physical" >&2
+        exit 1
+    fi
+done
+for condition in eq lt le; do
+    if ! grep -Fq "  cset w0, $condition" "$work/a64.s"; then
+        echo "A64_TF_ABI=FAIL lost ordered predicate $condition" >&2
+        exit 1
+    fi
+done
+if grep -Fq '@core.float.' "$work/a64.s"; then
+    echo 'A64_TF_ABI=FAIL leaked Core intrinsic symbol into GNU assembly' >&2
+    exit 1
+fi
+
+# The ordinary user function has the very same public spelling as the
+# runtime helper. Core's separate identity must select it as a normal call.
+"$host" -std=gnu11 -E -P \
+    "$root/tests/compiler/c0/probe-typed-extended-float-runtime.c" \
+    -o "$work/named.i"
+"$mini" --target=aarch64-linux -S "$work/named.i" -o "$work/named.s"
+grep -Fq '.globl __addtf3' "$work/named.s"
+grep -Fq '  bl __addtf3' "$work/named.s"
+for condition in eq lt le; do
+    grep -Fq "  cset w0, $condition" "$work/named.s"
+done
+
+gnu_as_status=SKIP
+cross_as=${AARCH64_GNU_AS:-aarch64-linux-gnu-as}
+if command -v "$cross_as" >/dev/null 2>&1; then
+    "$cross_as" "$work/a64.s" -o "$work/a64.o"
+    "$cross_as" "$work/named.s" -o "$work/named.o"
+    gnu_as_status=PASS
+fi
+echo "A64_TF_ABI=PASS Core_TF=20 AAPCS64_Q=1 ordered_comparisons=3 distinct_user_symbol=1 GNU_AS=$gnu_as_status"
+@@@ end
+@@@ {"head_lines": 2, "kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/probe-static-const-source-boundaries.sh", "shared": "d89675d7c89d43f6"}
+#!/bin/sh
+# Strict GNU preprocess -> MiniC C -> GNU assembler/linker/native runtime.
+trap 'rm -rf "$work"' EXIT HUP INT TERM
+source_file="$root/tests/compiler/c0/static_const_source_boundaries.c"
+
+printf 'int external_guard_owner(int value) { return value * 2; }\n' > "$work/owner.c"
+"$host" -E -P -std=gnu11 "$source_file" -o "$work/original.gnu.i"
+"$mini" --target=x86_64-linux -S "$work/original.gnu.i" -o "$work/minic.s"
+"$host" -c -x assembler "$work/minic.s" -o "$work/minic.o"
+"$host" -c "$work/owner.c" -o "$work/owner.o"
+"$host" -no-pie "$work/minic.o" "$work/owner.o" -o "$work/minic"
+"$host" -O2 -no-pie "$source_file" "$work/owner.o" -o "$work/gnu"
+
+# A clone is genuinely used, but the source still has address/dynamic/recursive
+# references. Source ASM and GNU computed-goto labels must not be cloned.
+grep -Fq '  call __minic_inline_spec_' "$work/minic.s"
+for symbol in address_guard mixed_guard recursive_guard asm_guard label_guard; do
+    grep -Fq "$symbol:" "$work/minic.s"
+done
+grep -Fq '  call asm_guard' "$work/minic.s"
+grep -Fq '  call label_guard' "$work/minic.s"
+if grep -Eq '^__minic_inline_spec_[0-9]+_[0-9]+:.*label' "$work/minic.s"; then
+    echo 'STATIC_CONST_SOURCE=FAIL label cloned' >&2
+    exit 1
+fi
+for image in gnu minic; do
+    set +e
+    "$work/$image"
+    status=$?
+    set -e
+    if [ "$status" -ne 42 ]; then
+        echo "STATIC_CONST_SOURCE=FAIL image=$image exit=$status" >&2
+        exit 1
+    fi
+done
+
+# The extra non-inline budget must fall back to the original static function
+# without failing TU compilation or expanding into unbounded clones.
+printf 'extern int external_guard_owner(int);\n' > "$work/budget.c"
+printf 'static inline __attribute__((always_inline)) int helper(int x) { if(x > 5) return external_guard_owner(x); return x + 1; }\n' >> "$work/budget.c"
+i=0
+while [ "$i" -lt 66 ]; do
+    printf 'static int guard_%s(int x) { return helper(x); }\n' "$i" >> "$work/budget.c"
+    i=$((i + 1))
+done
+printf 'int main(void) { int result=0;\n' >> "$work/budget.c"
+i=0
+while [ "$i" -lt 66 ]; do
+    printf 'result += guard_%s(2);\n' "$i" >> "$work/budget.c"
+    i=$((i + 1))
+done
+printf 'return result == 198 ? 42 : 1; }\n' >> "$work/budget.c"
+"$host" -E -P -std=gnu11 "$work/budget.c" -o "$work/budget.i"
+"$mini" --target=x86_64-linux -S "$work/budget.i" -o "$work/budget.s"
+grep -Fq '  call guard_64' "$work/budget.s"
+grep -Fq '  call guard_65' "$work/budget.s"
+"$host" -c -x assembler "$work/budget.s" -o "$work/budget.o"
+"$host" -no-pie "$work/budget.o" "$work/owner.o" -o "$work/budget"
+set +e
+"$work/budget"
+status=$?
+set -e
+if [ "$status" -ne 42 ]; then
+    echo "STATIC_CONST_SOURCE=FAIL budget_exit=$status" >&2
+    exit 1
+fi
+printf 'STATIC_CONST_SOURCE=PASS GNU_preprocessed=1 GNU_AS_LD=1 GNU_MiniC_exit=42 address_dynamic_recursive=retained asm_labels=retained budget64=fallback\n'
+@@@ end

@@ -1,0 +1,330 @@
+@@@ {"id": "03b407c46bf31ef2", "kind": "shared", "newline": true}
+set -Eeuo pipefail
+mini=${1:?MiniC compiler}
+test -x "$mini"
+here=$(cd "$(dirname "$0")" && pwd)
+@@@ end
+@@@ {"head_lines": 1, "kind": "case", "mode": "100755", "newline": true, "path": "tests/compiler/c0/probe-loongarch64-packed-asm-output.sh", "shared": "03b407c46bf31ef2"}
+#!/usr/bin/env bash
+src="$here/loongarch64_packed_asm_output.c"
+dir=$(mktemp -d)
+trap 'rm -rf "$dir"' EXIT
+
+# A host GCC syntax oracle checks the source is genuine GNU C; native target
+# GNU GAS/QEMU execution is separate and must not be claimed here.
+cc -std=gnu11 -Wall -Wextra -Werror -fsyntax-only "$src"
+cc -E -P -x c "$src" -o "$dir/source.i"
+"$mini" --target=loongarch64-linux -S "$dir/source.i" -o "$dir/mini.s"
+# Original LoongArch Linux uses LP64S.  Source-declared FPR transfers are
+# still hardware instructions even though the compiler must never select
+# FP arithmetic or assign FP argument registers under that C ABI.
+"$mini" --target=loongarch64-linux -mabi=lp64s \
+  -fshort-wchar -funsigned-char -fno-PIE \
+  -S "$dir/source.i" -o "$dir/loong-lp64s.s"
+grep -Fq 'movfr2gr.d $t0, $f0' "$dir/loong-lp64s.s"
+! grep -Eq '^  (fadd|fsub|fmul|fdiv)\.' "$dir/loong-lp64s.s"
+
+for fn in loong_fpr_packed loong_percpu_packed; do
+  sed -n "/^${fn}:/,/^\.size ${fn},/p" "$dir/mini.s" > "$dir/$fn.s"
+  test -s "$dir/$fn.s"
+  # Physical M1 uses a different scratch address register for a scalar FPR
+  # output than for an indexed perCPU output. Both still require a native
+  # alignment gate and byte-exact fallback for an unknown packed lvalue.
+  if [[ "$fn" == loong_fpr_packed ]]; then addr=t7; else addr=t1; fi
+  grep -Fq "andi \$t3, \$$addr, 7" "$dir/$fn.s"
+  grep -Fq "st.d \$t0, \$$addr, 0" "$dir/$fn.s"
+  # In addition to its late byte scatter, the fallback writes the first
+  # byte from the live scalar value; this guards against shifted value/ptr.
+  grep -Fq "st.b \$t0, \$$addr, 0" "$dir/$fn.s"
+  if [[ "$fn" == loong_fpr_packed ]]; then
+    # Scalar FPR output is eight selected byte stores, with a real CFG
+    # branch around them when the address is naturally aligned.
+    grep -Eq '^  beqz \$t3, \.Lminic_mir_' "$dir/$fn.s"
+    test "$(grep -Ec '^  st\.b \$t[0-9]+, \$t7, [0-7]$' "$dir/$fn.s")" -eq 8
+    grep -Fq 'st.b $t3, $t7, 7' "$dir/$fn.s"
+  else
+    # Indexed perCPU has the same safety property via an eight-trip
+    # outlined loop. PC+8 must land after exactly one branch instruction.
+    grep -Eq '^  bnez \$t3, \.Lminic_mir_' "$dir/$fn.s"
+    grep -Fq '  li.d $t3, 8' "$dir/$fn.s"
+    grep -Fq '  srli.d $t0, $t0, 8' "$dir/$fn.s"
+    grep -Fq '  addi.d $t3, $t3, -1' "$dir/$fn.s"
+    grep -Eq '^  bnez \$t3, \.Lminic_mir_' "$dir/$fn.s"
+    grep -Fq 'jirl $zero, $t6, 0' "$dir/$fn.s"
+    awk '
+      /^  pcaddi \$t6, 2$/ {
+        seen++
+        if (getline branch != 1 ||
+            branch !~ /^  b \.Lminic_mir_[a-z_0-9]+_[0-9]+$/ ||
+            getline continuation != 1 ||
+            continuation !~ /^\.Lminic_mir_[a-z_0-9]+_[0-9]+:$/) bad++
+      }
+      END { if (seen != 1 || bad) exit 1 }
+    ' "$dir/$fn.s"
+  fi
+done
+grep -Fq 'movfr2gr.d $t0, $f0' "$dir/loong_fpr_packed.s"
+grep -Fq 'ldx.d $t0, $r21, $t1' "$dir/loong_percpu_packed.s"
+
+# The native-width path and byte fallback must both be reached through
+# physical MachineIR CFG, not source-local labels or an old private helper.
+grep -Eq '^  beqz \$t3, \.Lminic_mir_' "$dir/loong_fpr_packed.s"
+grep -Fq '.Lminic_mir_loong_fpr_packed_' "$dir/loong_fpr_packed.s"
+for bad in bad-fpr-register bad-percpu-base; do
+  case "$bad" in
+    bad-fpr-register)
+      sed 's/movfr2gr.d %0, \$f0/movfr2gr.d %0, $f32/' "$dir/source.i" > "$dir/bad.i" ;;
+    bad-percpu-base)
+      sed 's/ldx.d %\[ret\], \$r21, %\[ptr\]/ldx.d %[ret], $r20, %[ptr]/' "$dir/source.i" > "$dir/bad.i" ;;
+  esac
+  if "$mini" --target=loongarch64-linux -S "$dir/bad.i" -o "$dir/bad.s" >/dev/null 2>&1; then
+    echo "LOONG_PACKED_ASM_OUTPUT_UNQUALIFIED=$bad" >&2
+    exit 1
+  fi
+  test ! -e "$dir/bad.s"
+  if "$mini" --target=loongarch64-linux -mabi=lp64s -S \
+      "$dir/bad.i" -o "$dir/bad-lp64s.s" >/dev/null 2>&1; then
+    echo "LOONG_PACKED_ASM_OUTPUT_UNQUALIFIED=lp64s-$bad" >&2
+    exit 1
+  fi
+  test ! -e "$dir/bad-lp64s.s"
+done
+echo 'LOONG_PACKED_ASM_OUTPUT=PASS GNU_C_SOURCE=PASS guarded_native_and_byte_scatter=2 lp64s_source_FPR=1 negatives=4 Loong_QEMU=NOT_RUN'
+@@@ end
+@@@ {"head_lines": 1, "kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/probe-loongarch64-packed-asm-result-family.sh", "shared": "03b407c46bf31ef2"}
+#!/usr/bin/env bash
+source_file="$here/loongarch64_packed_asm_result_family.c"
+d=$(mktemp -d)
+trap 'rm -rf "$d"' EXIT
+
+# Host GCC verifies that packed register-output lvalues are legal GNU C.
+cc -std=gnu11 -Wall -Wextra -Werror -fsyntax-only "$source_file"
+cc -E -P -x c "$source_file" -o "$d/source.i"
+"$mini" --target=loongarch64-linux -S "$d/source.i" -o "$d/source.s"
+
+for name in packed_clock packed_cpucfg packed_nospec \
+            packed_percpu_amo packed_frametrace_csr; do
+  sed -n "/^${name}:/,/^\.size ${name},/p" "$d/source.s" > "$d/$name.s"
+  test -s "$d/$name.s"
+  # Unknown-alignment writes need a real MIR guard, byte scatter and
+  # physical CFG continuation, never a private source-label helper.
+  grep -Fq '.Lminic_mir_' "$d/$name.s"
+  case "$name" in
+    packed_clock|packed_cpucfg|packed_frametrace_csr)
+      addr=t7
+      # These target families select an inline eight/four-byte scatter.
+      # The zero-misalignment branch bypasses every single-byte store.
+      grep -Eq '^  beqz \$t3, \.Lminic_mir_' "$d/$name.s"
+      if [[ "$name" == packed_cpucfg ]]; then last=3; else last=7; fi
+      grep -Fq "st.b \$t3, \$$addr, $last" "$d/$name.s"
+      ;;
+    packed_nospec|packed_percpu_amo)
+      addr=t1
+      # A nonzero alignment value enters the outlined eight-trip helper.
+      grep -Eq '^  bnez \$t3, \.Lminic_mir_' "$d/$name.s"
+      grep -Fq '  pcaddi $t6, 2' "$d/$name.s"
+      grep -Fq '  li.d $t3, 8' "$d/$name.s"
+      grep -Fq '  jirl $zero, $t6, 0' "$d/$name.s"
+      ;;
+  esac
+  grep -Eq "^  andi \\\$t3, \\\$$addr, (3|7)$" "$d/$name.s"
+  grep -Eq "^  st\\.b \\\$(t0|t2|t3), \\\$$addr, [0-9]+$" "$d/$name.s"
+done
+grep -Fq 'rdtime.d $t0, $t1' "$d/packed_clock.s"
+grep -Fq 'andi $t3, $t7, 7' "$d/packed_clock.s"
+grep -Fq 'andi $t3, $t7, 3' "$d/packed_clock.s"
+grep -Fq 'cpucfg $t0, $t1' "$d/packed_cpucfg.s"
+grep -Fq 'andi $t3, $t7, 3' "$d/packed_cpucfg.s"
+grep -Eq '^  sltu[[:space:]]+\$t2,[[:space:]]*\$t0,[[:space:]]*\$t1$' "$d/packed_nospec.s"
+grep -Fq 'andi $t3, $t1, 7' "$d/packed_nospec.s"
+grep -Fq 'amadd.d $t2, $t0, $t1' "$d/packed_percpu_amo.s"
+grep -Fq 'andi $t3, $t1, 7' "$d/packed_percpu_amo.s"
+grep -Eq '^  csrrd \$t0, (0x7|7)$' "$d/packed_frametrace_csr.s"
+grep -Fq 'andi $t3, $t7, 7' "$d/packed_frametrace_csr.s"
+
+sed -n '/^aligned_global_frametrace_csr:/,/^\.size aligned_global_frametrace_csr,/p' \
+  "$d/source.s" > "$d/aligned.s"
+grep -Eq '^  csrrd \$t0, (0x7|7)$' "$d/aligned.s"
+grep -Eq '^  st\.d \$t0, \$(t7|t1), 0$' "$d/aligned.s"
+if grep -Eq '^  andi \$t3, \$(t7|t1), 7$' "$d/aligned.s" ||
+   grep -Fq '  pcaddi $t6, 2' "$d/aligned.s"; then
+  echo 'LOONG_PACKED_RESULT=FAIL static aligned global gained guard' >&2
+  exit 1
+fi
+
+# For source forms that emit an outlined helper, a selected CFG branch must
+# follow pcaddi immediately and its return land at the zero-width MIR label.
+# Clock/CPUCFG/CSR deliberately use inlined byte stores and need no pcaddi.
+awk '
+  /^packed_(clock|nospec|percpu_amo|frametrace_csr):$/ {
+    name=$0; sub(/:$/, "", name)
+  }
+  /^  pcaddi \$t6, 2$/ {
+    if (name !~ /^packed_(nospec|percpu_amo)$/) bad++
+    seen[name]++
+    if (getline branch != 1 ||
+        branch !~ /^  b \.Lminic_mir_[a-z_0-9]+_[0-9]+$/ ||
+        getline continuation != 1 ||
+        continuation !~ /^\.Lminic_mir_[a-z_0-9]+_[0-9]+:$/) bad++
+  }
+  END {
+    if (bad || seen["packed_clock"] != 0 ||
+        seen["packed_nospec"] != 1 ||
+        seen["packed_percpu_amo"] != 1 ||
+        seen["packed_frametrace_csr"] != 0) exit 1
+  }
+' "$d/source.s" || {
+  echo 'LOONG_PACKED_RESULT=FAIL pcaddi/branch/continuation layout' >&2
+  exit 1
+}
+
+for bad in clock cpucfg nospec percpu_amo frametrace; do
+  case "$bad" in
+    clock) sed 's/rdtime.d %0, %1/rdtime.d %0, %1; nop/' "$d/source.i" > "$d/bad.i" ;;
+    cpucfg) sed 's/cpucfg %0, %1/cpucfg %0, %1; nop/' "$d/source.i" > "$d/bad.i" ;;
+    nospec) sed 's/sltu\\t%0/slt\\t%0/' "$d/source.i" > "$d/bad.i" ;;
+    percpu_amo) sed 's/amadd.d %\[ret\]/amadd.d %[ret]; nop/' "$d/source.i" > "$d/bad.i" ;;
+    frametrace) sed 's/csrrd %0, 0x7/csrrd %0, 0x8/' "$d/source.i" > "$d/bad.i" ;;
+  esac
+  if "$mini" --target=loongarch64-linux -S "$d/bad.i" \
+      -o "$d/bad.s" >/dev/null 2>&1; then
+    echo "LOONG_PACKED_RESULT=FAIL unqualified $bad" >&2
+    exit 1
+  fi
+  test ! -e "$d/bad.s"
+done
+echo 'LOONG_PACKED_ASM_RESULT_FAMILY=PASS GNU_C=PASS positive=5 typed_cfg_guarded_writeback=5 native_global_fastpath=1 negatives=5 QEMU=NOT_RUN'
+@@@ end
+@@@ {"head_lines": 1, "kind": "case", "mode": "100755", "newline": true, "path": "tests/compiler/c0/probe-loongarch64-packed-hardware-asm-results.sh", "shared": "03b407c46bf31ef2"}
+#!/usr/bin/env bash
+src="$here/loongarch64_packed_hardware_asm_results.c"
+d=$(mktemp -d)
+trap 'rm -rf "$d"' EXIT
+
+cc -std=gnu11 -Wall -Wextra -Werror -fsyntax-only "$src"
+cc -E -P -x c "$src" -o "$d/source.i"
+"$mini" --target=loongarch64-linux -S "$d/source.i" -o "$d/source.s"
+for entry in packed_pte_result:t2:t4 packed_amo_fetch:t1:t2 \
+             packed_xchg:t1:t2 packed_csr_xchg:t2:t1; do
+  IFS=: read -r name base payload <<<"$entry"
+  sed -n "/^${name}:/,/^\.size ${name},/p" "$d/source.s" > "$d/$name.s"
+  test -s "$d/$name.s"
+  # Real MachineIR control flow must choose one native width-8 store for an
+  # aligned address and eight byte writes for the packed/unaligned path.
+  # Both branches are proven by a physical T3 test and target-owned block.
+  grep -Fq "andi \$t3, \$$base, 7" "$d/$name.s"
+  grep -Eq "^[[:space:]]*beqz[[:space:]]+\\\$t3,[[:space:]]*\\.Lminic_mir_${name}_[0-9]+[[:space:]]*\$" "$d/$name.s"
+  grep -Fq "st.b \$t3, \$$base, 7" "$d/$name.s"
+  grep -Fq "st.d \$$payload, \$$base, 0" "$d/$name.s"
+done
+grep -Fq 'll.d $t4, $t1, 0' "$d/packed_pte_result.s"
+grep -Fq 'sc.d $t4, $t1, 0' "$d/packed_pte_result.s"
+grep -Fq 'dbar 0x700' "$d/packed_pte_result.s"
+grep -Fq 'amadd_db.d $t2, $t0, $t1' "$d/packed_amo_fetch.s"
+grep -Fq 'amswap_db.d $t2, $t0, $t1' "$d/packed_xchg.s"
+grep -Fq 'csrxchg $t1, $t0, 0' "$d/packed_csr_xchg.s"
+test "$(grep -Fc 'andi $t3, $t2, 7' "$d/packed_csr_xchg.s")" = 2
+grep -Fq 'ld.bu $t0, $t2, 0' "$d/packed_csr_xchg.s"
+grep -Fq 'ld.d $t1, $t2, 0' "$d/packed_csr_xchg.s"
+
+# Source-owned ISA forms stay exact: modified instruction text cannot quietly
+# turn into a target assembler escape, including privileged CSR operations.
+for bad in pte amo xchg csr; do
+  case "$bad" in
+    pte) sed 's/ll.d %1, %0/ll.d %1, %0; nop/' "$d/source.i" > "$d/bad.i" ;;
+    amo) sed 's/amadd_db.d %1/amadd_db.d %1; nop/' "$d/source.i" > "$d/bad.i" ;;
+    xchg) sed 's/amswap_db.d %1/amswap_db.d %1; nop/' "$d/source.i" > "$d/bad.i" ;;
+    csr) sed 's/csrxchg %0, %1, %2/csrxchg %0, %1, 1/' "$d/source.i" > "$d/bad.i" ;;
+  esac
+  if "$mini" --target=loongarch64-linux -S "$d/bad.i" -o "$d/bad.s" >/dev/null 2>&1; then
+    echo "LOONG_PACKED_HARDWARE=FAIL accepted $bad" >&2
+    exit 1
+  fi
+  test ! -e "$d/bad.s"
+done
+echo 'LOONG_PACKED_HARDWARE_RESULT=PASS GNU_C=PASS PTE_AMO_XCHG_CSR=4 guarded_native_and_byte_scatter=4 CSR_guarded_ingress=1 negatives=4 QEMU=NOT_RUN'
+@@@ end
+@@@ {"head_lines": 1, "kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/probe-loongarch64-packed-uaccess-output.sh", "shared": "03b407c46bf31ef2"}
+#!/usr/bin/env bash
+src="$here/loongarch64_packed_uaccess_output.c"
+d=$(mktemp -d)
+trap 'rm -rf "$d"' EXIT
+
+cc -std=gnu11 -Wall -Wextra -Werror -fsyntax-only "$src"
+cc -E -P -x c "$src" -o "$d/source.i"
+"$mini" --target=loongarch64-linux -S "$d/source.i" -o "$d/source.s"
+
+for entry in byte:1:b half:2:h word:4:w wide_carrier:8:d; do
+  IFS=: read -r name width suffix <<<"$entry"
+  name="packed_uaccess_$name"
+  sed -n "/^${name}:/,/^\.size ${name},/p" "$d/source.s" > "$d/$name.s"
+  test -s "$d/$name.s"
+  grep -Fq '.pushsection __ex_table, "a"' "$d/$name.s"
+  grep -Fq '.long ((1b) - .)' "$d/$name.s"
+  grep -Fq '.long ((2b) - .)' "$d/$name.s"
+  grep -Fq '.short (2)' "$d/$name.s"
+  # MachineIR preserves GNU's original symbolic GPR numbering and
+  # fault-table expression. They resolve to t0=12, t1=13 via .irp.
+  grep -Fq '.equ .L__gpr_num_$t\num, 12+\num' "$d/$name.s"
+  grep -Fq '.short ((((.L__gpr_num_$t0) << 0) | ((.L__gpr_num_$t1) << 5)))' "$d/$name.s"
+  grep -Fq 'andi $t3, $t2, 3' "$d/$name.s"  # packed +r ingress
+  grep -Fq 'ld.bu $t0, $t2, 0' "$d/$name.s"
+  grep -Fq 'andi $t3, $t7, 3' "$d/$name.s"  # packed +r egress
+  grep -Fq 'st.w $t0, $t7, 0' "$d/$name.s"
+  grep -Fq "  st.$suffix \$t1, \$t7, 0" "$d/$name.s"
+  grep -Fq 'st.b $t3, $t7,' "$d/$name.s"
+  if [[ "$width" != 8 ]]; then
+    # The result writeback must no longer overwrite 8 bytes of neighboring
+    # packed fields; only the typed-sized native fallback is permitted.
+    if grep -Fq 'st.d $t1, $t7, 0' "$d/$name.s"; then
+      echo "LOONG_PACKED_UACCESS=FAIL wide result store for $name" >&2
+      exit 1
+    fi
+  fi
+done
+grep -Fq '1: ld.b $t1, $t4, 0' "$d/packed_uaccess_byte.s"
+grep -Fq '1: ld.h $t1, $t4, 0' "$d/packed_uaccess_half.s"
+grep -Fq '1: ld.w $t1, $t4, 0' "$d/packed_uaccess_word.s"
+
+# Original GNU Linux __get_user/__put_user routes their memory address
+# through struct __large_struct, whose 800-byte size is unrelated to the
+# faulting 1/2/4/8-byte load/store. Require all eight native target forms.
+for entry in get:byte:ld.b get:half:ld.h get:word:ld.w get:double:ld.d \
+             put:byte:st.b put:half:st.h put:word:st.w put:double:st.d; do
+  IFS=: read -r action width opcode <<<"$entry"
+  name="linux_large_${action}_${width}"
+  sed -n "/^${name}:/,/^\.size ${name},/p" "$d/source.s" > "$d/$name.s"
+  test -s "$d/$name.s"
+  grep -Fq "1: $opcode " "$d/$name.s"
+  grep -Fq '.pushsection __ex_table, "a"' "$d/$name.s"
+  grep -Fq '.equ .L__gpr_num_$t\num, 12+\num' "$d/$name.s"
+  grep -Fq '.short (2)' "$d/$name.s"
+  if [[ "$action" == get ]]; then
+    grep -Fq '.short ((((.L__gpr_num_$t0) << 0) | ((.L__gpr_num_$t1) << 5)))' "$d/$name.s"
+  else
+    grep -Fq '.equ .L__gpr_num_zero, 0' "$d/$name.s"
+    grep -Fq '.short ((((.L__gpr_num_$t0) << 0) | ((.L__gpr_num_zero) << 5)))' "$d/$name.s"
+  fi
+done
+
+for bad in wrong-memory-width narrow-register-output injected-asm fake-sentinel-record; do
+  case "$bad" in
+    wrong-memory-width)
+      sed 's/"ld.b"/"ld.w"/' "$d/source.i" > "$d/bad.i" ;;
+    narrow-register-output)
+      sed 's/"=r"(r->word)/"=r"(r->byte)/' "$d/source.i" > "$d/bad.i" ;;
+    injected-asm)
+      sed 's/"ld.b"/"ld.b; nop"/' "$d/source.i" > "$d/bad.i" ;;
+    fake-sentinel-record)
+      sed 's/__large_struct/__wrong_large_struct/g' "$d/source.i" > "$d/bad.i" ;;
+  esac
+  if "$mini" --target=loongarch64-linux -S "$d/bad.i" \
+      -o "$d/bad.s" >/dev/null 2>&1; then
+    echo "LOONG_PACKED_UACCESS=FAIL unqualified $bad" >&2
+    exit 1
+  fi
+  test ! -e "$d/bad.s"
+done
+
+echo 'LOONG_PACKED_UACCESS=PASS GNU_C=PASS typed_carriers=1,2,4,8 original_large_struct_get_put=8 guarded_error_ingress_egress=1 exception_table=preserved negatives=4 QEMU=NOT_RUN'
+@@@ end

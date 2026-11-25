@@ -1,0 +1,1026 @@
+@@@ {"id": "9871b045dfc77292", "kind": "shared", "newline": true}
+set -eu
+: "${MINIC_CC:?MINIC_CC path required}"
+root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT HUP INT TERM
+@@@ end
+@@@ {"head_lines": 1, "kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/probe-inline-symbolic-shared-body.sh", "shared": "9871b045dfc77292"}
+#!/bin/sh
+${CC:-cc} -E -P -x c "$root/tests/compiler/c0/inline_symbolic_shared_body.c" \
+    -o "$work/source.i"
+"$MINIC_CC" --target=x86_64-linux -S "$work/source.i" \
+    -o "$work/source.s" 2> "$work/minic.log"
+grep -Eq 'MINIC_INLINE_SYMBOLIC_SPECIALIZATION_V0.*transitive=[1-9]' \
+    "$work/minic.log"
+${CC:-cc} -no-pie "$work/source.s" -o "$work/minic"
+"$work/minic"
+${CC:-cc} -O0 "$root/tests/compiler/c0/inline_symbolic_shared_body.c" \
+    -o "$work/gnu"
+"$work/gnu"
+echo 'INLINE_SYMBOLIC_SHARED_BODY=PASS transitive_clones_distinct=1 native_oracle=1'
+@@@ end
+@@@ {"head_lines": 3, "kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/probe-loongarch64-linux-cpucfg-intrinsic.sh", "shared": "9871b045dfc77292"}
+#!/bin/sh
+# Linux's original read_cpucfg expands to GCC's __cpucfg intrinsic. On
+# LoongArch this must be physical CPUCFG, never an unresolved ELF call.
+source="$root/tests/compiler/c0/loongarch64_linux_cpucfg_intrinsic.c"
+
+"${CC:-cc}" -E -P -x c "$source" -o "$work/original.i"
+"$MINIC_CC" --target=loongarch64-linux -S "$work/original.i" \
+    -o "$work/minic.s"
+test "$(grep -Fc '  cpucfg $a0, $a0' "$work/minic.s")" -eq 3
+if grep -Eq '(^|[^a-zA-Z0-9_])(__cpucfg|__minic_target_builtin_loongarch_cpucfg)([^a-zA-Z0-9_]|$)' \
+        "$work/minic.s"; then
+    echo 'LOONG_CPUCFG_INTRINSIC=FAIL unresolved intrinsic in assembly' >&2
+    exit 1
+fi
+# The GCC intrinsic alias is a LoongArch-only target capability.
+printf '%s\n' 'unsigned int bad(unsigned int x) { return __cpucfg(x); }' \
+    >"$work/foreign.i"
+if "$MINIC_CC" --target=x86_64-linux -S "$work/foreign.i" \
+        -o "$work/foreign.s" >"$work/foreign.log" 2>&1; then
+    echo 'LOONG_CPUCFG_INTRINSIC=FAIL leaked into x86 frontend' >&2
+    exit 1
+fi
+
+cross=${LOONGARCH_GCC:-loongarch64-linux-gnu-gcc-13}
+nm=${LOONGARCH_NM:-loongarch64-linux-gnu-nm}
+if command -v "$cross" >/dev/null 2>&1; then
+    command -v "$nm" >/dev/null 2>&1 || {
+        echo "LOONG_CPUCFG_INTRINSIC=FAIL GNU nm unavailable: $nm" >&2
+        exit 1
+    }
+    "$cross" -O2 -c -x c "$work/original.i" -o "$work/gnu.o"
+    "$cross" -c -x assembler "$work/minic.s" -o "$work/minic.o"
+    for side in gnu minic; do
+        "$nm" -u "$work/$side.o" >"$work/$side.undefined"
+        if grep -F '__cpucfg' "$work/$side.undefined"; then
+            echo "LOONG_CPUCFG_INTRINSIC=FAIL $side undefined __cpucfg" >&2
+            exit 1
+        fi
+    done
+    echo 'LOONG_CPUCFG_INTRINSIC=PASS GNU/MiniC same-i GNU_AS=PASS nm_u_cpucfg=ABSENT'
+else
+    echo 'LOONG_CPUCFG_INTRINSIC=PASS MiniC native_cpucfg=3 GNU_AS=NOT_RUN cross_toolchain_missing'
+fi
+
+# Optional full original GNU-preprocessed Linux owner, preserved by the
+# immutable frozen GNU Kbuild producer (e.g. arch/loongarch/kernel/traps.i).
+# This must be the same bytes on both compiler sides, never a synthetic
+# replacement or altered Linux source. It does not change the base gate.
+if [ -n "${MINIC_CPUCFG_FROZEN_I:-}" ]; then
+    test -f "$MINIC_CPUCFG_FROZEN_I"
+    "$MINIC_CC" --target=loongarch64-linux -S \
+        "$MINIC_CPUCFG_FROZEN_I" -o "$work/frozen.minic.s"
+    grep -Fq '  cpucfg $a0, $a0' "$work/frozen.minic.s"
+    if grep -F '__cpucfg' "$work/frozen.minic.s"; then
+        echo 'LOONG_CPUCFG_FROZEN=FAIL external __cpucfg in original GNU owner' >&2
+        exit 1
+    fi
+    if command -v "$cross" >/dev/null 2>&1; then
+        "$cross" -O2 -c -x c "$MINIC_CPUCFG_FROZEN_I" \
+            -o "$work/frozen.gnu.o"
+        "$cross" -c -x assembler "$work/frozen.minic.s" \
+            -o "$work/frozen.minic.o"
+        for side in gnu minic; do
+            "$nm" -u "$work/frozen.$side.o" >"$work/frozen.$side.undefined"
+            if grep -F '__cpucfg' "$work/frozen.$side.undefined"; then
+                echo "LOONG_CPUCFG_FROZEN=FAIL $side undefined __cpucfg" >&2
+                exit 1
+            fi
+        done
+        echo 'LOONG_CPUCFG_FROZEN=PASS original_gnu_i GNU_AS=PASS nm_u_cpucfg=ABSENT'
+    else
+        echo 'LOONG_CPUCFG_FROZEN=PASS original_gnu_i native_cpucfg=1 GNU_AS=NOT_RUN'
+    fi
+fi
+@@@ end
+@@@ {"head_lines": 6, "kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/probe-loongarch64-packed-scalar-alignment.sh", "shared": "9871b045dfc77292"}
+#!/bin/sh
+# Core memory pointer provenance is not an alignment proof. This source-only
+# instruction-shape smoke observes byte gather/scatter in the physical MIR;
+# it is not a substitute for GNU AS/QEMU runtime value oracles.
+# the old direct emitter's guarded native fast path and pcaddi helper were
+# performance mechanisms, not conditions for safe C packed memory semantics.
+
+${CC:-cc} -E -P -x c \
+    "$root/tests/compiler/c0/loongarch64_packed_bitfield_alignment.c" \
+    -o "$work/source.i"
+"$MINIC_CC" --target=loongarch64-linux -S "$work/source.i" \
+    -o "$work/source.s"
+
+for name in read_packed_high write_packed_high read_packed_tail \
+            read_packed_scalar write_packed_scalar read_packed_pointer \
+            read_natural_scalar read_natural_pointer \
+            read_packed_wide write_packed_wide read_static_wide; do
+    grep -Eq "^${name}:$" "$work/source.s" || {
+        echo "LOONGARCH_PACKED_ALIGNMENT=FAIL missing $name" >&2; exit 1;
+    }
+done
+
+# MachineIR may select either an unrolled byte-only transport or a fast
+# native-width load/store with a physical address-alignment branch and a
+# bounded byte-loop fallback. Count loop trips, not textual byte opcodes.
+# Frame spill/reload accesses are unrelated to the packed C lvalue.
+awk '
+  /^[a-z_][a-z_0-9]*:$/ {
+    name=substr($0,1,length($0)-1)
+  }
+  /^  andi \$t3, \$(t1|t7), (3|7)$/ {
+    mask=($0 ~ /, 3$/ ? 3 : 7)
+    if (getline branch != 1 ||
+        branch !~ /^  bnez \$t3, \.Lminic_mir_/ ||
+        getline fast_label != 1 ||
+        fast_label !~ /^\.Lminic_mir_[a-z_0-9]+_[0-9]+:$/ ||
+        getline native != 1 ||
+        native !~ /^  (ld\.(w|wu|d)|st\.(w|d)) \$t[0-9]+, \$(t1|t7), 0$/ ||
+        (mask == 3 && native !~ /^  (ld\.(w|wu)|st\.w) /) ||
+        (mask == 7 && native !~ /^  (ld\.d|st\.d) /)) {
+      printf "LOONGARCH_PACKED_ALIGNMENT=FAIL unguarded native function=%s line=%d\n", name, NR > "/dev/stderr"
+      bad++
+    }
+    gate[name]++
+    if (mask==3) gate4[name]++
+    else gate8[name]++
+  }
+  /^  ld\.bu \$t[0-9]+, \$(t1|t7), [0-9]+$/ { byte_read[name]++ }
+  /^  st\.b \$t[0-9]+, \$(t1|t7), [0-9]+$/ { byte_write[name]++ }
+  /^  li\.d \$t[34], (4|8)$/ {
+    if ($0 ~ /, 4$/) trip4[name]++
+    else trip8[name]++
+  }
+  /^  addi\.d \$t[34], \$t[34], -1$/ { loop_count[name]++ }
+  /^  bnez \$t[34], \.Lminic_mir_/ { loop_branch[name]++ }
+  /^  jirl \$zero, \$t6, 0$/ { helper_return[name]++ }
+  /^  pcaddi \$t6, 2$/ {
+    pc[name]++
+    if (getline branch != 1 ||
+        branch !~ /^  b \.Lminic_mir_[a-z_0-9]+_[0-9]+$/ ||
+        getline continuation != 1 ||
+        continuation !~ /^\.Lminic_mir_[a-z_0-9]+_[0-9]+:$/) {
+      printf "LOONGARCH_PACKED_ALIGNMENT=FAIL pcaddi PC+8 function=%s line=%d\n", name, NR > "/dev/stderr"
+      bad++
+    }
+  }
+  END {
+    if (ENVIRON["MINIC_PACKED_ALIGNMENT_TRACE"] != "") {
+      for (n in gate)
+        printf "PACKED_TRACE %s gate=%d gate4=%d gate8=%d byte_r=%d byte_w=%d trip4=%d trip8=%d pc=%d loop=%d loopbranch=%d return=%d\n", n, gate[n], gate4[n], gate8[n], byte_read[n], byte_write[n], trip4[n], trip8[n], pc[n], loop_count[n], loop_branch[n], helper_return[n] > "/dev/stderr"
+    }
+    # Packed bitfields operate on 3/2 source bytes; they may not replace
+    # an unaligned field by an unchecked native word/dword load/store.
+    if (byte_read["read_packed_high"] < 3 ||
+        byte_read["write_packed_high"] < 3 ||
+        byte_write["write_packed_high"] < 3 ||
+        byte_read["read_packed_tail"] < 2 ||
+        gate["read_packed_high"] || gate["write_packed_high"] ||
+        gate["read_packed_tail"] ||
+        pc["read_packed_high"] || pc["write_packed_high"] ||
+        pc["read_packed_tail"]) bad++
+    # A 4/8-byte packed scalar uses either all-byte lowering or exactly
+    # one guarded native instruction with a width-matched byte-loop escape.
+    if (!((gate4["read_packed_scalar"]==1 &&
+           byte_read["read_packed_scalar"]>=1 &&
+           trip4["read_packed_scalar"]>=1 && pc["read_packed_scalar"]==1 &&
+           helper_return["read_packed_scalar"]>=1) ||
+          (gate["read_packed_scalar"]==0 &&
+           byte_read["read_packed_scalar"]>=4))) bad++
+    if (!((gate4["write_packed_scalar"]==1 &&
+           ((byte_write["write_packed_scalar"]>=4 &&
+             pc["write_packed_scalar"]==0) ||
+            (byte_write["write_packed_scalar"]>=1 &&
+             trip4["write_packed_scalar"]>=1 &&
+             pc["write_packed_scalar"]==1 &&
+             helper_return["write_packed_scalar"]>=1))) ||
+          (gate["write_packed_scalar"]==0 &&
+           byte_write["write_packed_scalar"]>=4))) bad++
+    if (!((gate8["read_packed_pointer"]==1 &&
+           byte_read["read_packed_pointer"]>=1 &&
+           trip8["read_packed_pointer"]>=1 && pc["read_packed_pointer"]==1 &&
+           helper_return["read_packed_pointer"]>=1) ||
+          (gate["read_packed_pointer"]==0 &&
+           byte_read["read_packed_pointer"]>=8))) bad++
+    # Both halves of a packed 128-bit value must pass independent aligned
+    # native gates, but may share one eight-trip byte fallback helper.
+    if (!((gate8["read_packed_wide"]==2 &&
+           byte_read["read_packed_wide"]>=1 &&
+           trip8["read_packed_wide"]>=1 && pc["read_packed_wide"]==2 &&
+           helper_return["read_packed_wide"]>=1) ||
+          (gate["read_packed_wide"]==0 &&
+           byte_read["read_packed_wide"]>=16))) bad++
+    if (!((gate8["write_packed_wide"]==2 &&
+           byte_write["write_packed_wide"]>=1 &&
+           trip8["write_packed_wide"]>=1 && pc["write_packed_wide"]==2 &&
+           helper_return["write_packed_wide"]>=1) ||
+          (gate["write_packed_wide"]==0 &&
+           byte_write["write_packed_wide"]>=16))) bad++
+    for (n in gate)
+      if (n ~ /^(read|write)_packed_(scalar|pointer|wide)$/ &&
+          gate[n] != 0 && pc[n] != 0 &&
+          (loop_count[n]<1 || loop_branch[n]<1)) bad++
+    # A statically aligned 128-bit global requires no slow path.
+    if (gate["read_static_wide"] || pc["read_static_wide"] ||
+        byte_read["read_static_wide"] || byte_write["read_static_wide"]) bad++
+    if (bad) exit 1
+  }
+' "$work/source.s" || {
+    echo 'LOONGARCH_PACKED_ALIGNMENT=FAIL packed byte transport or native alignment proof' >&2
+    exit 1
+}
+echo 'LOONGARCH_PACKED_ALIGNMENT=PASS -S bitfield_byte_transport=3x3+2 scalar_pointer_guarded_or_bytes=3 wide_two_halves=2 fallback_bounded=1 pcaddi_when_emitted=verified static_global_fastpath=1 GNU_QEMU=NOT_RUN'
+@@@ end
+@@@ {"head_lines": 3, "kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/probe-loongarch64-pointer-stride-power-of-two.sh", "shared": "9871b045dfc77292"}
+#!/bin/sh
+# Preserve the full-width pointer-index arithmetic while replacing exact
+# power-of-two scale multiplication with a LoongArch64 left shift.
+source="$root/tests/compiler/c0/loongarch64_pointer_stride_power_of_two.c"
+
+"${CC:-cc}" -E -P -x c "$source" -o "$work/fixture.i"
+"$MINIC_CC" --target=loongarch64-linux -S "$work/fixture.i" \
+    -o "$work/fixture.loong.s"
+
+awk '
+    /^stride[a-z0-9_]*:$/ { name = substr($0, 1, length($0)-1); seen[name]++; next }
+    /^\.size stride[a-z0-9_]*,/ { name = ""; next }
+    name != "" {
+        if ($0 ~ /^  li\.d \$t2, /) li[name]++
+        if ($0 == "  mul.d $t1, $t1, $t2") mul[name]++
+        if ($0 ~ /^  slli\.d \$t1, \$t1, /) shift[name]++
+        if ($0 == "  sub.d $t0, $t0, $t1") subtract[name]++
+    }
+    END {
+        expected["stride1"] = 0; expected["stride2"] = 1
+        expected["stride4"] = 1; expected["stride8"] = 1
+        expected["stride16"] = 1; expected["stride_sub8"] = 1
+        expected["stride_neg8"] = 1; expected["stride_unsigned8"] = 1
+        for (fn in expected) {
+            if (seen[fn] != 1 || shift[fn] != expected[fn] ||
+                li[fn] != 0 || mul[fn] != 0) {
+                printf "LOONG_POINTER_STRIDE=FAIL fn=%s seen=%d shift=%d li=%d mul=%d\n", fn, seen[fn], shift[fn], li[fn], mul[fn] > "/dev/stderr"
+                exit 1
+            }
+        }
+        if (subtract["stride_sub8"] != 1 || seen["stride3"] != 1 ||
+            seen["stride24"] != 1 || li["stride3"] != 1 ||
+            li["stride24"] != 1 || mul["stride3"] != 1 ||
+            mul["stride24"] != 1 || shift["stride3"] != 0 ||
+            shift["stride24"] != 0) {
+            print "LOONG_POINTER_STRIDE=FAIL fallback/subtract" > "/dev/stderr"
+            exit 1
+        }
+    }
+' "$work/fixture.loong.s"
+
+"${CC:-cc}" -O2 "$source" -o "$work/gnu-runtime"
+"$MINIC_CC" --target=x86_64-linux -S "$work/fixture.i" \
+    -o "$work/minic-x86.s"
+"${CC:-cc}" -no-pie "$work/minic-x86.s" -o "$work/minic-runtime"
+"$work/gnu-runtime"
+"$work/minic-runtime"
+echo 'LOONG_POINTER_STRIDE=PASS pow2=1,2,4,8,16 signed/unsigned/subtract=PASS nonpow2=3,24 retain_mul=PASS GNU/MiniC runtime=PASS'
+@@@ end
+@@@ {"head_lines": 1, "kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/probe-riscv-packed-overflow-alignment.sh", "shared": "9871b045dfc77292"}
+#!/bin/sh
+source_file="$root/tests/compiler/c0/riscv_packed_overflow_alignment.c"
+${CC:-cc} -E -P -x c "$source_file" -o "$work/overflow.i"
+
+# GNU native oracle: taking a packed member address is intentional here.
+${CC:-cc} -std=gnu11 -O0 -Wall -Wextra -Werror \
+    -Wno-address-of-packed-member "$source_file" -o "$work/reference"
+"$work/reference"
+"$MINIC_CC" --target=x86_64-linux -S "$work/overflow.i" -o "$work/x86_64-linux.s"
+${CC:-cc} -no-pie "$work/x86_64-linux.s" -o "$work/minic-native"
+"$work/minic-native"
+for target in riscv32-linux riscv64-linux aarch64-linux; do
+    case "$target" in
+        riscv32-linux) set -- -march=rv32i -mabi=ilp32 ;;
+        riscv64-linux) set -- -march=rv64i -mabi=lp64 ;;
+        *) set -- ;;
+    esac
+    if ! "$MINIC_CC" --target="$target" "$@" -S "$work/overflow.i" \
+            -o "$work/$target.s" 2>"$work/$target.err"; then
+        echo "RISCV_PACKED_OVERFLOW_STAGE=compile_failed target=$target" >&2
+        tail -n 40 "$work/$target.err" >&2 || true
+        if [ "$target" = riscv32-linux ]; then
+            # Diagnosis only: compile each original checked-overflow function
+            # independently with the same packed type and target options.
+            # This keeps the complete original translation-unit gate intact.
+            for name in packed_overflow_narrow packed_overflow_add \
+                        packed_overflow_sub packed_overflow_mul packed_overflow_wide; do
+                awk -v want="$name" '
+                    index($0, "int packed_overflow_narrow(") == 1 { functions=1 }
+                    !functions { print; next }
+                    index($0, "int " want "(") == 1 { body=1 }
+                    body { print; if (/^}/) exit }
+                ' "$work/overflow.i" > "$work/$name.i"
+                if "$MINIC_CC" --target="$target" "$@" \
+                        -S "$work/$name.i" -o "$work/$name.s" \
+                        2>"$work/$name.err"; then
+                    echo "RISCV_PACKED_OVERFLOW_STAGE=function_pass name=$name" >&2
+                else
+                    echo "RISCV_PACKED_OVERFLOW_STAGE=function_failed name=$name" >&2
+                    tail -n 20 "$work/$name.err" >&2 || true
+                fi
+            done
+        fi
+        exit 1
+    fi
+done
+# LoongArch64 still rejects this checked-overflow Core opcode before
+# target-specific memory transport.  Keep the capability gap observable as
+# an exact negative, not a false claim of five-ISA checked-overflow support.
+if "$MINIC_CC" --target=loongarch64-linux -S "$work/overflow.i" \
+    -o "$work/loongarch64-linux.s" 2>"$work/loong.err"; then
+    echo 'RISCV_PACKED_OVERFLOW=FAIL expected LoongArch checked-overflow rejection' >&2
+    exit 1
+fi
+if ! grep -q 'LoongArch64: Core instruction/ABI not yet supported by M1 emitter' \
+    "$work/loong.err"; then
+    echo 'RISCV_PACKED_OVERFLOW=FAIL unexpected LoongArch compiler rejection' >&2
+    exit 1
+fi
+
+# The RV32/RV64 MachineIR selector emits typed SB for every individual
+# byte of the checked-overflow result, including a packed field at odd
+# offset.  The removed pre-MachineIR direct emitter used textual
+# .Lminic_typed_*_native labels; they are NOT a MachineIR correctness
+# obligation. Check the actual byte-count contract instead (2/4/8 bytes)
+# and keep the GNU native + MiniC x86 differential above unchanged.
+for target in riscv32-linux riscv64-linux; do
+    for spec in packed_overflow_narrow:2 packed_overflow_add:4 \
+                packed_overflow_sub:4 packed_overflow_mul:4 \
+                packed_overflow_wide:8; do
+        name=${spec%:*}
+        required=${spec#*:}
+        awk -v name="$name" -v required="$required" '
+            $0 == name ":" { inside=1; found=1; next }
+            inside && index($0, ".size " name ",") == 1 {
+                done=1
+                inside=0
+            }
+            inside && $0 ~ /^  sb / { bytewise++ }
+            END {
+                if (!found || !done || bytewise < required) {
+                    printf "RISCV_PACKED_OVERFLOW=FAIL %s bytes=%d required=%d\\n",
+                           name, bytewise, required > "/dev/stderr"
+                    exit 1
+                }
+            }
+        ' "$work/$target.s"
+    done
+done
+
+echo 'RISCV_PACKED_OVERFLOW_ALIGNMENT=PASS GNU-native MiniC-x86 RV32/RV64/AArch -S guarded-bytewise Loong-expected-reject'
+@@@ end
+@@@ {"head_lines": 1, "kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/probe-riscv-packed-structured-asm-alignment.sh", "shared": "9871b045dfc77292"}
+#!/bin/sh
+source_file="$root/tests/compiler/c0/riscv_packed_structured_asm_alignment.c"
+
+# GNU's native packed lvalue oracle exercises both read/write and write-only
+# register constraints. The source-owned ISA text is selected independently.
+${CC:-cc} -std=gnu11 -O0 -Wall -Wextra -Werror \
+    "$source_file" -o "$work/gnu-native"
+"$work/gnu-native"
+${CC:-cc} -E -P -x c -DRISCV_ASM_PROBE_TARGET "$source_file" \
+    -o "$work/riscv.i"
+
+for target in riscv32-linux riscv64-linux; do
+    case "$target" in
+        riscv32-linux) set -- -march=rv32i -mabi=ilp32 ;;
+        riscv64-linux) set -- -march=rv64i -mabi=lp64 ;;
+    esac
+    "$MINIC_CC" --target="$target" "$@" -S "$work/riscv.i" \
+        -o "$work/$target.s"
+    for name in packed_asm_readwrite packed_asm_output packed_asm_wide; do
+        awk -v name="$name" '
+            $0 == name ":" { inside=1; found=1; next }
+            inside && index($0, ".size " name ",") == 1 { done=1; inside=0 }
+            inside && /^  lbu / { loads++ }
+            inside && /^  sb / { stores++ }
+            END {
+                required_loads = name == "packed_asm_output" ? 0 : 4
+                required_stores = 4
+                if (!found || !done || loads < required_loads ||
+                    stores < required_stores) {
+                    printf "PACKED_ASM_TRANSFER=FAIL %s loads=%d stores=%d\n", name, loads, stores > "/dev/stderr"
+                    exit 1
+                }
+            }
+        ' "$work/$target.s"
+    done
+    awk -v target="$target" '
+        $0 == "packed_asm_large_frame:" { inside=1; next }
+        inside && index($0, ".size packed_asm_large_frame,") == 1 { inside=0 }
+        inside && $1 == "li" && $2 ~ /^x[0-9]+,$/ && $3 + 0 >= 8192 { large_offset=1 }
+        inside && /MINIC_PACKED_ASM_INPUTS/ {
+            marker++
+            if ($0 ~ /(^|[[:space:]])x(7|30|31)([[:space:]]|$)/)
+                bad=1
+        }
+        END {
+            if (marker != 1 || bad ||
+                (target == "riscv64-linux" && !large_offset)) {
+                printf "PACKED_ASM_LARGE_FRAME=FAIL %s marker=%d reserved=%d large=%d\n", target, marker, bad, large_offset > "/dev/stderr"
+                exit 1
+            }
+        }
+    ' "$work/$target.s"
+    awk '
+        /^\.Lminic_mir_.*_[0-9]+:$/ {
+            label=$0
+            sub(/:$/, "", label)
+            if (seen[label]++) {
+                print "PACKED_ASM_LABEL=FAIL duplicate " label > "/dev/stderr"
+                exit 1
+            }
+            count++
+        }
+        END { if (!count) {
+            print "PACKED_ASM_LABEL=FAIL no MachineIR block labels" > "/dev/stderr"
+            exit 1
+        }}
+    ' "$work/$target.s"
+done
+echo 'RISCV_PACKED_STRUCTURED_ASM_ALIGNMENT=PASS GNU-native RV32I/RV64I -S bytewise-ingress-egress large-frame-live-regs'
+@@@ end
+@@@ {"head_lines": 1, "kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/probe-rv32-ffsll-high-word.sh", "shared": "9871b045dfc77292"}
+#!/bin/sh
+
+${CC:-cc} -E -P -x c "$root/tests/compiler/c0/rv32_ffsll_high_word.c" \
+    -o "$work/ffsll.i"
+"$MINIC_CC" --target=riscv32-linux -march=rv32i -mabi=ilp32 \
+    -S "$work/ffsll.i" -o "$work/rv32.s"
+# The physical MachineIR selector no longer uses the legacy _rv32_ctz64_*
+# loop labels or fixed t0/t3/t4 registers. Verify the relevant RV32I
+# semantics within the actual ffsll body, independent of register assignment:
+# consume ABI a1 (upper 32 bits), add 32 iff the low half is zero, select
+# the scan word with complementary masks, then perform the trailing-zero scan.
+awk '
+    /^ffsll_high_word:$/ { body = 1 }
+    body { print }
+    body && /^\.size ffsll_high_word,/ { exit }
+' "$work/rv32.s" > "$work/rv32-ffsll-body.s"
+check_rv32() {
+    if ! grep -Eq "$1" "$work/rv32-ffsll-body.s"; then
+        echo "RV32_FFSLL=FAIL missing typed RV32I $2" >&2
+        exit 1
+    fi
+}
+check_rv32 '^[[:space:]]*mv x[0-9]+, x11$' 'upper-half ABI input'
+check_rv32 '^[[:space:]]*slli x[0-9]+, x[0-9]+, 5$' 'upper-half 32-bit offset'
+check_rv32 '^[[:space:]]*snez x[0-9]+, x[0-9]+$' 'lower-half nonzero selector'
+check_rv32 '^[[:space:]]*sub x[0-9]+, x0, x[0-9]+$' 'complementary select mask'
+check_rv32 '^[[:space:]]*not x[0-9]+, x[0-9]+$' 'inverse select mask'
+check_rv32 '^[[:space:]]*and x[0-9]+, x[0-9]+, x[0-9]+$' 'masked half selection'
+check_rv32 '^[[:space:]]*srl x[0-9]+, x[0-9]+, x[0-9]+$' 'trailing-zero scan'
+
+"$MINIC_CC" --target=x86_64-linux -S "$work/ffsll.i" -o "$work/x86.s"
+${CC:-cc} -no-pie "$work/x86.s" -o "$work/x86"
+"$work/x86"
+echo 'RV32_FFSLL=PASS high_32_bit_preserved=1 typed_rv32i_scan=1 x86_native_oracle=1'
+@@@ end
+@@@ {"head_lines": 1, "kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/probe-rv32-packed-scalar-alignment.sh", "shared": "9871b045dfc77292"}
+#!/bin/sh
+source_file="$root/tests/compiler/c0/rv32_packed_scalar_alignment.c"
+${CC:-cc} -E -P -x c "$source_file" -o "$work/packed.i"
+${CC:-cc} -E -P -x c -DMINIC_PROBE_NO_MAIN "$source_file" \
+    -o "$work/packed-cross.i"
+
+# Independent GNU native and MiniC x86 semantics (including binary64).
+${CC:-cc} -std=gnu11 -O0 -Wall -Wextra -Werror "$source_file" -o "$work/gcc"
+"$work/gcc"
+"$MINIC_CC" --target=x86_64-linux -S "$work/packed.i" -o "$work/native.s"
+${CC:-cc} -no-pie "$work/native.s" -o "$work/minic"
+"$work/minic"
+
+# Every target must accept the same preprocessed C source.  RV32I/ILP32
+# emits only Base-I instructions; the GNU assembler still owns libcalls.
+for target in riscv32-linux riscv64-linux aarch64-linux loongarch64-linux; do
+    case "$target" in
+        riscv32-linux) set -- -march=rv32i -mabi=ilp32 ;;
+        riscv64-linux) set -- -march=rv64i -mabi=lp64 ;;
+        *) set -- ;;
+    esac
+    "$MINIC_CC" --target="$target" "$@" -S "$work/packed-cross.i" \
+        -o "$work/$target.s"
+done
+
+# Every unproven typed pointer must have byte-exact transport, including the
+# high/low halves of long long and double, and signed/unsigned narrow values.
+# The MachineIR selector now proves Core address alignment before native
+# accesses and emits direct LBU/SB on unknown packed addresses; the retired
+# FILE* runtime native-guard label is not a required instruction sequence.
+for item in 'packed_read_short:lbu:2' 'packed_read_word:lbu:4' \
+            'packed_read_wide:lbu:8' 'packed_read_double:lbu:8' \
+            'packed_write_short:sb:2' 'packed_write_word:sb:4' \
+            'packed_write_wide:sb:8' 'packed_write_double:sb:8'; do
+    symbol=${item%%:*}
+    remainder=${item#*:}
+    opcode=${remainder%%:*}
+    bytes=${remainder##*:}
+    awk -v name="$symbol" -v op="$opcode" -v expected="$bytes" '
+        $0 == name ":" { inside=1; found=1; next }
+        inside && index($0, ".size " name ",") == 1 { done=1; inside=0 }
+        inside && $0 ~ ("^  " op " ") { bytewise++ }
+        END { if (!found || !done || bytewise < expected) {
+            printf "RV32_PACKED_SCALAR=FAIL %s bytewise=%d required=%d\n", name, bytewise, expected > "/dev/stderr"
+            exit 1
+        }}
+    ' "$work/riscv32-linux.s"
+done
+
+# A Core-owned local with natural alignment must retain direct scalar memory
+# instructions, avoiding a needless runtime guard on its field access.
+awk '
+    $0 == "natural_local_fast_path:" { inside=1; found=1; next }
+    inside && index($0, ".size natural_local_fast_path,") == 1 { done=1; inside=0 }
+    inside && $0 ~ /^  (lw|sw) / { native++ }
+    END { if (!found || !done || !native) {
+        printf "RV32_NATURAL_ALIGN_FAST=FAIL native=%d\n", native > "/dev/stderr"
+        exit 1
+    }}
+' "$work/riscv32-linux.s"
+
+echo 'RV32_PACKED_SCALAR_ALIGNMENT=PASS gcc-native minic-x86 five-ISA RV32I-proven-native-unknown-bytewise'
+@@@ end
+@@@ {"head_lines": 3, "kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/probe-rv32-variadic-record-abi-alignment.sh", "shared": "9871b045dfc77292"}
+#!/bin/sh
+# Inspect strict RV32I/ILP32 assembler ABI placements. Runtime execution
+# requires a separately provisioned RV32 cross toolchain and QEMU runner.
+
+${CC:-cc} -E -P -x c "$root/tests/compiler/c0/rv32_variadic_record_abi_alignment.c" \
+    -o "$work/abi.i"
+"$MINIC_CC" --target=riscv32-linux -march=rv32i -mabi=ilp32 \
+    -S "$work/abi.i" -o "$work/abi.s"
+
+for item in natural:1 packed:1 aligned:2 wide_scalar:2; do
+    suffix=${item%%:*}
+    begin=${item#*:}
+    awk -v name="call_$suffix" -v begin="$begin" '
+        $0 == name ":" { within = 1; found = 1; next }
+        within && index($0, ".size " name ",") == 1 { within = 0; done = 1 }
+        # Physical MachineIR prints architectural x-register numbers, while
+        # the psABI still assigns a1..a4 to x11..x14.
+        within && $0 ~ /^  mv x(11|12|13|14), x[0-9]+$/ {
+            split($2, parts, ",")
+            reg = parts[1]
+            if (reg == "x11") a1++
+            if (reg == "x12") a2++
+            if (reg == "x13") a3++
+            if (reg == "x14") a4++
+        }
+        within && $0 == "  call accept_pair" { call++ }
+        END {
+            # Valid pair always consumes a2 and a3 for 8-byte alignment;
+            # for size-8 align-1/4, the pair uses a1 and a2, tail a3.
+            if (!found || !done || call != 1 || a2 == 0 || a3 == 0 ||
+                (begin == 1 && (a1 == 0 || a4 != 0)) ||
+                (begin == 2 && (a1 != 0 || a4 == 0))) {
+                printf "RV32_VARIADIC_PAIR=FAIL %s expected_begin=a%d a1=%d a2=%d a3=%d a4=%d\n", \
+                    name, begin, a1, a2, a3, a4 > "/dev/stderr"
+                exit 1
+            }
+        }
+    ' "$work/abi.s"
+done
+
+# A definition's own variadic bit must reach Core and RV32 frame construction.
+# Inspect only the prologue before the first Core block: ordinary incoming
+# parameter stores inside take_fixed's block are not a varargs save area.
+awk '
+    $0 == "take_variadic:" { variadic = 1; saw_variadic = 1; next }
+    $0 == "take_fixed:" { fixed = 1; saw_fixed = 1; next }
+    variadic && /^\.Lminic_mir_take_variadic_[0-9]+:$/ {
+        variadic = 0; ended_variadic = 1; next
+    }
+    fixed && /^\.Lminic_mir_take_fixed_[0-9]+:$/ {
+        fixed = 0; ended_fixed = 1; next
+    }
+    variadic && /^  sw x(11|12|13|14|15|16|17), [0-9]+\(x2\)$/ {
+        reg = $2; sub(/,$/, "", reg)
+        split($3, parts, "(")
+        saved[reg]++
+        offsets[reg] = parts[1] + 0
+    }
+    fixed && /^  sw x(11|12|13|14|15|16|17),/ { fixed_saves++ }
+    END {
+        if (!saw_variadic || !ended_variadic || !saw_fixed || !ended_fixed ||
+            fixed_saves != 0) {
+            print "RV32_VARIADIC_DEFINITION=FAIL missing prologue or fixed callee saved unnamed registers" > "/dev/stderr"
+            exit 1
+        }
+        for (i = 1; i <= 7; ++i) {
+            reg = "x" (i + 10)
+            if (saved[reg] != 1 || (i > 1 && offsets[reg] != offsets["x" (i + 9)] + 4)) {
+                printf "RV32_VARIADIC_DEFINITION=FAIL %s saves=%d offset=%d\n", \
+                    reg, saved[reg], offsets[reg] > "/dev/stderr"
+                exit 1
+            }
+        }
+    }
+' "$work/abi.s"
+
+echo 'RV32_VARIADIC_PAIR=PASS natural_align4=a1/a2 packed_align1=a1/a2 align8=a2/a3 scalar8=a2/a3'
+echo 'RV32_VARIADIC_DEFINITION=PASS callee_saved=a1..a7 fixed_callee_saved=none'
+@@@ end
+@@@ {"head_lines": 4, "kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/probe-rv64-hardfloat-ninth-fixed.sh", "shared": "9871b045dfc77292"}
+#!/bin/sh
+# Official RV64 LP64D FP ABI: fa0..fa7, then next available integer GAR,
+# then the stack; the FP and GP streams are independent. Both direct and
+# function-pointer calls must use the same prepared ABI plan.
+
+${CC:-cc} -E -P -x c "$root/tests/compiler/c0/rv64_hardfloat_ninth_fixed.c" \
+    -o "$work/ninth.i"
+"$MINIC_CC" --target=riscv64-linux -march=rv64imafd -mabi=lp64d -S \
+    "$work/ninth.i" -o "$work/hard.s"
+"$MINIC_CC" --target=riscv64-linux -march=rv64i -mabi=lp64 -S \
+    "$work/ninth.i" -o "$work/soft.s"
+if "$MINIC_CC" --target=riscv64-linux -march=rv64i -mabi=lp64d -S \
+    "$work/ninth.i" -o "$work/invalid-hard.s" 2>"$work/invalid-hard.err"; then
+    echo 'RV64_HARDFLOAT_NINTH=FAIL LP64D accepted ISA without F/D' >&2
+    exit 1
+fi
+if ! grep -Fq 'lp64d requires F/D' "$work/invalid-hard.err"; then
+    echo 'RV64_HARDFLOAT_NINTH=FAIL wrong LP64D ISA rejection' >&2
+    exit 1
+fi
+
+# Extract function-level properties without conflating the caller's eight
+# outgoing fa moves with the callee's eight incoming fmv.x.d transfers.
+for spec in ninth:a0:8 tenth_mixed:a2:8 spill_mixed:STACK:8 \
+            ninth_float:a0:8; do
+    name=${spec%%:*}
+    rest=${spec#*:}
+    last_gp=${rest%%:*}
+    expected_fp=${rest#*:}
+    awk -v name="$name" -v gp="$last_gp" -v expected="$expected_fp" '
+        BEGIN {
+            # Typed integer-machine serialization uses architectural xN;
+            # native FP instructions retain GNU faN/ftN ABI aliases.
+            if (gp == "a0") gp = "x10"
+            else if (gp == "a2") gp = "x12"
+        }
+        $0 == name ":" { inside = 1; found = 1; next }
+        inside && index($0, ".size " name ",") == 1 { inside = 0; done = 1 }
+        inside && $0 ~ /^  fmv\.x\.d t0, fa[0-7]$/ { fprs++ }
+        inside && $0 == "  mv x5, " gp { gp_found++ }
+        inside && $0 ~ /^  ld x5, [0-9]+\(x2\)$/ { stack_load++ }
+        END {
+            if (!found || !done || fprs != expected ||
+                (gp != "STACK" && gp_found == 0) ||
+                (gp == "STACK" && stack_load == 0)) {
+                printf "RV64_HARDFLOAT_NINTH=FAIL %s fprs=%d expected=%d gp=%d stack=%d\n", \
+                    name, fprs, expected, gp_found, stack_load > "/dev/stderr"
+                exit 1
+            }
+        }
+    ' "$work/hard.s"
+done
+
+# Match the actual outgoing ninth GPR argument, not a redundant post-call
+# reload of the return value. Same-register private-slot forwarding may
+# legitimately remove that reload without changing the LP64D call ABI.
+for spec in 'call_ninth:  mv x10, x5' \
+            'call_tenth_mixed:  mv x12, x5' \
+            'call_spill_mixed:  sd x5, 0(x2)' \
+            'call_ninth_float:  mv x10, x5' \
+            'call_indirect_ninth:  jalr ra, 0(x5)'; do
+    name=${spec%%:*}
+    expected=${spec#*:}
+    awk -v name="$name" -v expected="$expected" '
+        $0 == name ":" { inside = 1; found = 1; next }
+        inside && index($0, ".size " name ",") == 1 { inside = 0; done = 1 }
+        inside && index($0, expected) == 1 {
+            if (name == "call_ninth" || name == "call_ninth_float") {
+                # Prove x10 is the argument of this precise call, not an
+                # unrelated register move elsewhere in the function.
+                callee = substr(name, 6)
+                if (getline next_line > 0 && next_line == "  call " callee)
+                    proof++
+            } else proof++
+        }
+        END { if (!found || !done || proof == 0) exit 1 }
+    ' "$work/hard.s" || { echo "RV64_HARDFLOAT_NINTH=FAIL outgoing $name" >&2; exit 1; }
+done
+
+if grep -Eq '^  (fadd\.|fdiv\.|fmv\.|fsub\.|fmul\.)' "$work/soft.s"; then
+    echo 'RV64_HARDFLOAT_NINTH=FAIL F/D in strict soft-float LP64' >&2
+    exit 1
+fi
+
+# Both strict LP64 and LP64D require the identical integer-only typed path.
+# A previous shared switch sent the integer family into native-FPR selection
+# whenever the ABI was LP64D, even though the Core operands were integers.
+for flavor in hard soft; do
+    for name in int32_arithmetic int64_arithmetic; do
+        if test "$name" = int32_arithmetic; then
+            div_symbol=__udivdi3
+            rem_symbol=__umoddi3
+        else
+            div_symbol=__divdi3
+            rem_symbol=__moddi3
+        fi
+        awk -v name="$name" -v div_symbol="$div_symbol" \
+            -v rem_symbol="$rem_symbol" '
+            $0 == name ":" { inside = 1; found = 1; next }
+            inside && index($0, ".size " name ",") == 1 { inside = 0; done = 1 }
+            inside && /__muldi3/ { mul++ }
+            inside && index($0, div_symbol) { div++ }
+            inside && index($0, rem_symbol) { rem++ }
+            inside && /^  (fadd\.|fdiv\.|fmv\.|fsub\.|fmul\.)/ { invalid_fp++ }
+            END {
+                if (!found || !done || mul == 0 || div == 0 ||
+                    rem == 0 || invalid_fp != 0) exit 1
+            }
+        ' "$work/$flavor.s" || {
+            echo "RV64_HARDFLOAT_NINTH=FAIL typed integer call $flavor $name" >&2
+            exit 1
+        }
+    done
+done
+
+for flavor in hard soft; do
+    for spec in 'call_binary128_direct:  call gnu_binary128' \
+                'call_binary128_indirect:  jalr ra, 0(x5)' \
+                'passthrough_binary128:  ld x11, '; do
+        name=${spec%%:*}
+        expected=${spec#*:}
+        awk -v name="$name" -v expected="$expected" '
+            $0 == name ":" { inside = 1; found = 1; next }
+            inside && index($0, ".size " name ",") == 1 { inside = 0; done = 1 }
+            inside && index($0, expected) == 1 { proof++ }
+            inside && /^  (fadd\.|fdiv\.|fmv\.|fsub\.|fmul\.)/ { invalid_fp++ }
+            END { if (!found || !done || proof == 0 || invalid_fp != 0) exit 1 }
+        ' "$work/$flavor.s" || {
+            echo "RV64_HARDFLOAT_NINTH=FAIL binary128-GPR $flavor $name" >&2
+            exit 1
+        }
+    done
+done
+echo 'RV64_HARDFLOAT_NINTH=PASS -S LP64D=9th/10th/mixed/stack/float/indirect LP64=softfloat integer_MUL_DIV_REM=LP64+LP64D binary128_GPR=direct+indirect+incoming no-D=reject'
+@@@ end
+@@@ {"head_lines": 2, "kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/probe-rv64-lp64-softfloat-record-call.sh", "shared": "9871b045dfc77292"}
+#!/bin/sh
+# Test one frozen CALL ABI plan shared by admission, frame and emission.
+source="$root/tests/compiler/c0/rv64_lp64_softfloat_record_call.c"
+
+${CC:-cc} -std=gnu11 -Werror -fsyntax-only "$source"
+${CC:-cc} -E -P -std=gnu11 -x c "$source" -o "$work/record.i"
+"$MINIC_CC" --target=riscv64-linux -march=rv64i -mabi=lp64 \
+    -S "$work/record.i" -o "$work/soft.s"
+
+for symbol in echo_float echo_double direct_float direct_double \
+              indirect_float indirect_double main; do
+    grep -Fq "$symbol:" "$work/soft.s" || {
+        echo "RV64_LP64_RECORD_CALL=FAIL absent $symbol" >&2; exit 1;
+    }
+done
+if grep -Eq '^  (fadd\.|fsub\.|fmul\.|fdiv\.|flw |fld |fsw |fsd |fmv\.)' \
+    "$work/soft.s"; then
+    echo 'RV64_LP64_RECORD_CALL=FAIL forbidden F/D instructions' >&2
+    exit 1
+fi
+# The typed RV64 MachineIR GNU emitter prints `jalr ra, 0(xN)`, not the
+# legacy fixed-register three-operand spelling `jalr ra, t0, 0`. Both record
+# callees must be called through a register, not silently rewritten as a
+# direct call or dropped during whole-function selection.
+for suffix in float double; do
+    awk -v name="indirect_$suffix" '
+        $0 == name ":" { within = 1; found = 1; next }
+        within && index($0, ".size " name ",") == 1 { within = 0; done = 1 }
+        within && $0 ~ /^  jalr (ra|x1), 0\(x[0-9]+\)$/ { indirect++ }
+        within && $0 ~ /^  call / { direct++ }
+        END {
+            if (!found || !done || indirect != 1 || direct != 0) {
+                printf "RV64_LP64_RECORD_CALL=FAIL %s indirect=%d direct=%d\n", \
+                    name, indirect, direct > "/dev/stderr"
+                exit 1
+            }
+        }
+    ' "$work/soft.s"
+done
+
+if "$MINIC_CC" --target=riscv64-linux -march=rv64imafd -mabi=lp64d \
+    -S "$work/record.i" -o "$work/hard.s" >"$work/hard.out" 2>"$work/hard.err"; then
+    echo 'RV64_LP64_RECORD_CALL=FAIL LP64D FP aggregate incorrectly accepted' >&2
+    exit 1
+fi
+test ! -s "$work/hard.s"
+grep -Fq 'cannot emit RISC-V function' "$work/hard.err"
+
+if command -v riscv64-linux-gnu-gcc >/dev/null 2>&1; then
+    riscv64-linux-gnu-gcc -march=rv64i -mabi=lp64 -O0 -S \
+        "$source" -o "$work/gnu.s"
+    test -s "$work/gnu.s"
+    echo 'RV64_LP64_RECORD_GNU=PASS rv64i/lp64 GCC psABI oracle'
+else
+    echo 'RV64_LP64_RECORD_GNU=SKIP no riscv64-linux-gnu-gcc'
+fi
+echo 'RV64_LP64_RECORD_CALL=PASS -S direct=2 indirect=2 record_return=4 LP64D=fail_closed'
+@@@ end
+@@@ {"head_lines": 1, "kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/probe-rv64-packed-wide-alignment.sh", "shared": "9871b045dfc77292"}
+#!/bin/sh
+source_file="$root/tests/compiler/c0/rv64_packed_wide_alignment.c"
+${CC:-cc} -std=gnu11 -Werror -fsyntax-only "$source_file"
+${CC:-cc} -E -P -x c "$source_file" -o "$work/wide.i"
+"$MINIC_CC" --target=riscv64-linux -march=rv64i -mabi=lp64 \
+    -S "$work/wide.i" -o "$work/wide.s"
+for item in packed_wide_read:lbu packed_wide_write:sb \
+            packed_long_double_read:lbu packed_long_double_write:sb; do
+    name=${item%%:*}
+    opcode=${item#*:}
+    awk -v name="$name" -v op="$opcode" '
+        $0 == name ":" { inside=1; found=1; next }
+        inside && index($0, ".size " name ",") == 1 { done=1; inside=0 }
+        inside && $0 ~ ("^  " op " ") { bytes++ }
+        END { if (!found || !done || bytes < 16) {
+            printf "RV64_PACKED_WIDE=FAIL %s bytes=%d\n", name, bytes > "/dev/stderr"
+            exit 1
+        }}
+    ' "$work/wide.s"
+done
+echo 'RV64_PACKED_WIDE_ALIGNMENT=PASS int128 long-double two-word bytewise MachineIR'
+@@@ end
+@@@ {"head_lines": 3, "kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/probe-rv64-record-load-irregular.sh", "shared": "9871b045dfc77292"}
+#!/bin/sh
+# Validate every byte of irregular RV64 record loads; a wider frame write
+# after loading only byte zero used to silently corrupt 3/5/6/7-byte records.
+
+${CC:-cc} -E -P -x c "$root/tests/compiler/c0/rv64_record_load_irregular.c" \
+    -o "$work/record.i"
+"$MINIC_CC" --target=riscv64-linux -S "$work/record.i" -o "$work/record.s"
+
+for item in three:3 five:5 six:6 seven:7 nine:9 fifteen:15; do
+    func=${item%%:*}
+    bytes=${item#*:}
+    awk -v name="load_$func" -v expected="$bytes" '
+        $0 == name ":" { within = 1; next }
+        within && index($0, ".size " name ",") == 1 { within = 0; done = 1 }
+        # The old FILE* emitter fixed t0/t1/t2. MachineIR allocates physical
+        # registers independently; check actual byte-for-byte copy pairs,
+        # including their offsets, without depending on register spelling.
+        within && $0 ~ /^  lbu [[:alnum:]_]+, [0-9]+\([[:alnum:]_]+\)$/ {
+            load_reg = $0
+            sub(/^  lbu /, "", load_reg)
+            sub(/,.*/, "", load_reg)
+            load_offset = $0
+            sub(/^  lbu [^,]+, /, "", load_offset)
+            sub(/\(.*/, "", load_offset)
+            load_offset += 0
+            next
+        }
+        within && $0 ~ /^  sb [[:alnum:]_]+, [0-9]+\([[:alnum:]_]+\)$/ {
+            store_reg = $0
+            sub(/^  sb /, "", store_reg)
+            sub(/,.*/, "", store_reg)
+            store_offset = $0
+            sub(/^  sb [^,]+, /, "", store_offset)
+            sub(/\(.*/, "", store_offset)
+            store_offset += 0
+            stores++
+            if (load_reg != "" && load_reg == store_reg &&
+                load_offset == store_offset) {
+                loads++
+                copied[store_offset]++
+            }
+            load_reg = ""
+            next
+        }
+        within { load_reg = "" }
+        END {
+            complete = done && loads == expected && stores == expected
+            for (offset = 0; offset < expected; offset++)
+                if (copied[offset] != 1)
+                    complete = 0
+            if (!complete) {
+                printf "RV64_RECORD_LOAD=FAIL %s bytes=%d loads=%d stores=%d\n", \
+                    name, expected, loads, stores > "/dev/stderr"
+                exit 1
+            }
+        }
+    ' "$work/record.s"
+done
+echo 'RV64_RECORD_LOAD=PASS byte_exact_sizes=3,5,6,7,9,15'
+@@@ end
+@@@ {"head_lines": 3, "kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/probe-rv64-record-load-packed.sh", "shared": "9871b045dfc77292"}
+#!/bin/sh
+# Record loads must copy byte-exactly: source pointer alignment is not proven
+# at Core RECORD_LOAD even when the record type is naturally aligned.
+
+${CC:-cc} -E -P -x c "$root/tests/compiler/c0/rv64_record_load_packed.c" \
+    -o "$work/packed.i"
+"$MINIC_CC" --target=riscv64-linux -march=rv64i -mabi=lp64 -S \
+    "$work/packed.i" -o "$work/packed.s"
+
+for item in packed_two:2 packed_four:4 packed_eight:8 packed_four_with_local:4 natural_two:2 natural_four:4 natural_eight:8 natural_field_packed:4; do
+    suffix=${item%%:*}
+    bytes=${item#*:}
+    awk -v name="load_$suffix" -v expected="$bytes" '
+        $0 == name ":" { within = 1; found = 1; next }
+        within && index($0, ".size " name ",") == 1 { within = 0; done = 1 }
+        # Physical MachineIR assigns x-registers, not the old fixed t0/t1/t2.
+        # Every byte offset in the record must have a byte-read and byte-write
+        # witness. Other byte accesses (e.g. return ABI gather) may coexist.
+        within && $0 ~ /^  lbu x[0-9]+, [0-9]+\(x[0-9]+\)$/ {
+            offset = $3; sub(/\(.*/, "", offset); reads[offset]++
+        }
+        within && $0 ~ /^  sb x[0-9]+, [0-9]+\(x[0-9]+\)$/ {
+            offset = $3; sub(/\(.*/, "", offset); writes[offset]++
+        }
+        within && $0 ~ /^  addi x[0-9]+, x[0-9]+, 1$/ { member_offset++ }
+        END {
+            for (i = 0; i < expected; ++i) {
+                if (!reads[i] || !writes[i]) missing++
+            }
+            if (!found || !done || missing ||
+                (name == "load_natural_field_packed" && !member_offset)) {
+                printf "RV64_ALIGN_SAFE_RECORD_LOAD=FAIL %s bytes=%d missing_offsets=%d member_offset=%d\n", \
+                    name, expected, missing, member_offset > "/dev/stderr"
+                exit 1
+            }
+        }
+    ' "$work/packed.s"
+done
+
+# The first packed by-value parameter occupies frame byte zero; the second
+# starts at byte one. Verify a stack+1 address and a byte-scatter/gather
+# witness for every byte of the second record; a wide access through that
+# unaligned address is not a permitted replacement.
+for item in two:2 four:4 eight:8; do
+    suffix=${item%%:*}
+    bytes=${item#*:}
+    awk -v name="mix_after_one_$suffix" -v expected="$bytes" '
+        $0 == name ":" { within = 1; found = 1; next }
+        within && index($0, ".size " name ",") == 1 { within = 0; done = 1 }
+        within && $0 ~ /^  addi x[0-9]+, x2, 1$/ { odd_frame++ }
+        within && $0 ~ /^  sb x[0-9]+, [0-9]+\(x[0-9]+\)$/ {
+            offset = $3; sub(/\(.*/, "", offset); scatters[offset]++
+        }
+        within && $0 ~ /^  lbu x[0-9]+, [0-9]+\(x[0-9]+\)$/ {
+            offset = $3; sub(/\(.*/, "", offset); gathers[offset]++
+        }
+        END {
+            for (i = 0; i < expected; ++i)
+                if (!scatters[i] || !gathers[i]) missing++
+            if (!found || !done || !odd_frame || missing) {
+                printf "RV64_ODD_FRAME_AGGREGATE=FAIL %s size=%d odd_frame=%d missing_offsets=%d\n", \
+                    name, expected, odd_frame, missing > "/dev/stderr"
+                exit 1
+            }
+        }
+    ' "$work/packed.s"
+done
+
+awk '
+    $0 == "call_after_one_four:" { within = 1; found = 1; next }
+    within && index($0, ".size call_after_one_four,") == 1 { within = 0; done = 1 }
+    within && $0 ~ /^  addi x[0-9]+, x2, 5$/ { first_odd_address++ }
+    within && $0 ~ /^  addi x[0-9]+, x2, 6$/ { second_odd_address++ }
+    within && $0 == "  call mix_after_one_four" { called++ }
+    within && $0 ~ /^  sb x[0-9]+, [0-9]+\(x[0-9]+\)$/ {
+        offset = $3; sub(/\(.*/, "", offset); scatter[offset]++
+    }
+    within && $0 ~ /^  lbu x[0-9]+, [0-9]+\(x[0-9]+\)$/ {
+        offset = $3; sub(/\(.*/, "", offset); gather[offset]++
+    }
+    END {
+        for (i = 0; i < 4; ++i)
+            if (!scatter[i] || !gather[i]) missing++
+        if (!found || !done || !first_odd_address || !second_odd_address ||
+            !called || missing) {
+            printf "RV64_ODD_FRAME_CALL=FAIL odd_addresses=%d,%d call=%d missing_offsets=%d\n", \
+                first_odd_address, second_odd_address, called, missing > "/dev/stderr"
+            exit 1
+        }
+    }
+' "$work/packed.s"
+
+echo 'RV64_ALIGN_SAFE_RECORD_LOAD=PASS packed/natural=2,4,8 nested_source_offset=1 odd_frame_abi=2,4,8 odd_call=4'
+@@@ end
+@@@ {"head_lines": 2, "kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/probe-x86-sysv-integer-record-tree.sh", "shared": "9871b045dfc77292"}
+#!/bin/sh
+# One signed-off x86 target ABI classifier for one- and two-GPR nested records.
+source="$root/tests/compiler/c0/x86_sysv_integer_record_tree.c"
+driver="$root/tests/compiler/c0/x86_sysv_integer_record_tree_driver.c"
+${CC:-cc} -E -P -x c "$source" -o "$work/source.i"
+${CC:-cc} -O0 -c "$source" -o "$work/gnu.o"
+${CC:-cc} -O0 -c "$driver" -o "$work/driver.o"
+"$MINIC_CC" --target=x86_64-linux -S "$work/source.i" -o "$work/minic.s"
+${CC:-cc} -c -x assembler "$work/minic.s" -o "$work/minic.o"
+${CC:-cc} "$work/driver.o" "$work/gnu.o" -o "$work/gnu"
+${CC:-cc} "$work/driver.o" "$work/minic.o" -o "$work/minic"
+"$work/gnu"
+"$work/minic"
+for target in riscv32 riscv64 x86_64 aarch64 loongarch64; do
+    "$MINIC_CC" --target="$target-linux" -S "$work/source.i" \
+        -o "$work/$target.s"
+    for name in x86_one_roundtrip x86_two_roundtrip x86_array_roundtrip x86_bit_roundtrip; do
+        grep -Eq "^${name}:$" "$work/$target.s" || {
+            echo "X86_SYSV_INTEGER_TREE=FAIL target=$target missing=$name" >&2
+            exit 1
+        }
+    done
+done
+echo 'X86_SYSV_INTEGER_TREE=PASS GNU-caller=4 nested-register-records five-target-S=5'
+@@@ end

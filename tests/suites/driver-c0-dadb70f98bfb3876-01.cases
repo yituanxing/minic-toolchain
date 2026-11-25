@@ -1,0 +1,101 @@
+@@@ {"id": "dadb70f98bfb3876", "kind": "shared", "newline": true}
+set -eu
+root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
+minic=${MINIC_CC:-"$root/build/debug/bin/minic-cc"}
+gnu=${HOST_CC:-cc}
+@@@ end
+@@@ {"head_lines": 2, "kind": "case", "mode": "100755", "newline": true, "path": "tests/compiler/c0/probe-x86-linux-descriptor-machineir.sh", "shared": "dadb70f98bfb3876"}
+#!/bin/sh
+# Restore Linux's exact 10-byte packed LGDT/LIDT and SGDT/SIDT contract.
+work=${BUILD_DIR:-"$root/build/debug"}/tests/x86-descriptor-machineir
+mkdir -p "$work"
+cat >"$work/positive.c" <<'SOURCE'
+struct desc_ptr { unsigned short size; unsigned long address; } __attribute__((packed));
+void desc_load_idt(const struct desc_ptr *p) { asm volatile("lidt %0"::"m" (*p)); }
+void desc_load_gdt(const struct desc_ptr *p) { asm volatile("lgdt %0"::"m" (*p)); }
+void desc_store_gdt(struct desc_ptr *p) { asm volatile("sgdt %0":"=m" (*p)); }
+void desc_store_idt(struct desc_ptr *p) { asm volatile("sidt %0":"=m" (*p)); }
+SOURCE
+"$gnu" -std=gnu11 -Werror -E -P -x c "$work/positive.c" -o "$work/positive.i"
+"$gnu" -std=gnu11 -c "$work/positive.c" -o "$work/gnu.o"
+"$minic" --target=x86_64-linux -S "$work/positive.i" -o "$work/minic.s"
+"$gnu" -x assembler -c "$work/minic.s" -o "$work/minic.o"
+for op in lidt lgdt sgdt sidt; do
+    grep -Eq "^[[:space:]]+$op[[:space:]]+\\(%r10\\)" "$work/minic.s"
+done
+for bad in unpacked wrong-size inject; do
+    case "$bad" in
+        unpacked) sed 's/__attribute__((packed))//' "$work/positive.i" >"$work/bad.i" ;;
+        wrong-size) sed 's/unsigned short size/unsigned int size/' "$work/positive.i" >"$work/bad.i" ;;
+        inject) sed 's/lidt %0/lidt %0; int3/' "$work/positive.i" >"$work/bad.i" ;;
+    esac
+    rm -f "$work/bad.s"
+    if "$minic" --target=x86_64-linux -S "$work/bad.i" -o "$work/bad.s" >"$work/bad.out" 2>"$work/bad.err"; then
+        echo "X86_DESCRIPTOR_MACHINEIR=FAIL admitted=$bad" >&2; exit 1
+    fi
+    test ! -e "$work/bad.s"
+done
+printf '%s\n' 'X86_DESCRIPTOR_MACHINEIR=PASS forms=4 same_GNU_i=1 GNU_AS=1 negative=3'
+@@@ end
+@@@ {"head_lines": 3, "kind": "case", "mode": "100755", "newline": true, "path": "tests/compiler/c0/probe-x86-linux-irq-state-machineir.sh", "shared": "dadb70f98bfb3876"}
+#!/bin/sh
+# Linux CLI/STI/STI-HLT: generated assembly only, never execute privileged
+# instructions as a userspace runtime test. Strict GNU AS and bad variants.
+work=${BUILD_DIR:-"$root/build/debug"}/tests/x86-irq-machineir
+mkdir -p "$work"
+cat >"$work/positive.c" <<'SOURCE'
+void native_irq_disable(void) { asm volatile("cli" ::: "memory"); }
+void native_irq_enable(void) { asm volatile("sti" ::: "memory"); }
+void native_safe_halt(void) { asm volatile("sti; hlt" ::: "memory"); }
+SOURCE
+"$gnu" -std=gnu11 -E -P -x c "$work/positive.c" -o "$work/positive.i"
+"$gnu" -c -x c "$work/positive.c" -o "$work/gnu.o"
+"$minic" --target=x86_64-linux -S "$work/positive.i" -o "$work/minic.s"
+"$gnu" -c -x assembler "$work/minic.s" -o "$work/minic.o"
+for mnemonic in cli sti hlt; do
+    grep -Eq "^[[:space:]]*$mnemonic$" "$work/minic.s"
+done
+for variant in omit-memory extra-instruction wrong-opcode; do
+    case "$variant" in
+        omit-memory) sed 's/"cli" ::: "memory"/"cli" :::/' "$work/positive.i" >"$work/negative.i" ;;
+        extra-instruction) sed 's/"cli"/"cli; int3"/' "$work/positive.i" >"$work/negative.i" ;;
+        wrong-opcode) sed 's/"cli"/"pushf"/' "$work/positive.i" >"$work/negative.i" ;;
+    esac
+    rm -f "$work/negative.s"
+    if "$minic" --target=x86_64-linux -S "$work/negative.i" -o "$work/negative.s" >"$work/negative.out" 2>"$work/negative.err"; then
+        echo "X86_IRQ_STATE_MACHINEIR=FAIL admitted=$variant" >&2; exit 1
+    fi
+    test ! -e "$work/negative.s"
+done
+printf '%s\n' 'X86_IRQ_STATE_MACHINEIR=PASS forms=3 GNU_AS=1 fail_closed=3 privileged_execution=NOT_RUN'
+@@@ end
+@@@ {"head_lines": 2, "kind": "case", "mode": "100755", "newline": true, "path": "tests/compiler/c0/probe-x86-linux-zero-barrier-memory-clobber.sh", "shared": "dadb70f98bfb3876"}
+#!/bin/sh
+# REP NOP/PAUSE/FNINIT with/without GNU compiler memory clobber.
+work=${BUILD_DIR:-"$root/build/debug"}/tests/x86-zero-barrier-clobber
+mkdir -p "$work"
+cat >"$work/positive.c" <<'SOURCE'
+void rep_nop(void) { asm volatile("rep; nop" ::: "memory"); }
+void rep_nop_unclobbered(void) { asm volatile("rep; nop"); }
+void pause_clobbered(void) { asm volatile("pause" ::: "memory"); }
+void pause_unclobbered(void) { asm volatile("pause"); }
+void fninit_clobbered(void) { asm volatile("fninit" ::: "memory"); }
+void fninit_unclobbered(void) { asm volatile("fninit"); }
+SOURCE
+"$gnu" -std=gnu11 -E -P -x c "$work/positive.c" -o "$work/positive.i"
+"$minic" --target=x86_64-linux -S "$work/positive.i" -o "$work/positive.s"
+"$gnu" -x assembler -c "$work/positive.s" -o "$work/positive.o"
+for op in 'rep; nop' pause fninit; do
+    test "$(grep -Fc "  $op" "$work/positive.s")" -eq 2
+done
+cat >"$work/negative.c" <<'SOURCE'
+void bad(void) { asm volatile("rep; nop; int3" ::: "memory"); }
+SOURCE
+"$gnu" -E -P -x c "$work/negative.c" -o "$work/negative.i"
+rm -f "$work/negative.s"
+if "$minic" --target=x86_64-linux -S "$work/negative.i" -o "$work/negative.s" >"$work/negative.log" 2>&1; then
+    echo 'X86_ZERO_BARRIER_CLOBBER=FAIL injected asm admitted' >&2; exit 1
+fi
+test ! -e "$work/negative.s"
+echo 'X86_ZERO_BARRIER_CLOBBER=PASS forms=3 clobber_variants=6 GNU_AS=1 negative=1'
+@@@ end

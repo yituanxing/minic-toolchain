@@ -1,0 +1,328 @@
+@@@ {"id": "17d186a0d28a506f", "kind": "shared", "newline": true}
+set -eu
+root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
+minic=${MINIC:-"$root/build/debug/bin/minic"}
+host_cc=${HOST_CC:-${CC:-cc}}
+@@@ end
+@@@ {"head_lines": 1, "kind": "case", "mode": "100755", "newline": true, "path": "tests/compiler/c0/run-external-pointer-definitions.sh", "shared": "17d186a0d28a506f"}
+#!/bin/sh
+riscv_cc=${RISCV_CC:-riscv64-linux-gnu-gcc}
+qemu_riscv64=${QEMU_RISCV64:-qemu-riscv64}
+require_runtime=${REQUIRE_RISCV_RUNTIME:-0}
+work=${BUILD_DIR:-"$root/build/debug"}/tests/compiler-c0-external-pointer-definitions
+rm -rf "$work" && mkdir -p "$work"
+"$host_cc" -E -P -x c "$root/tests/compiler/c0/external_pointer_definition.c" -o "$work/input.i"
+"$minic" -S "$work/input.i" -o "$work/output.s"
+for symbol in message power_off object_pointer member_pointer callback_pointer; do
+    grep -F ".globl $symbol" "$work/output.s" >/dev/null
+    grep -F "$symbol:" "$work/output.s" >/dev/null
+done
+grep -E '^  \.dword \.Lminic_string_[0-9]+$' "$work/output.s" >/dev/null
+grep -F '  .dword object_target' "$work/output.s" >/dev/null
+grep -E '^  \.dword pair_target([+-][0-9]+)?$' "$work/output.s" >/dev/null
+grep -F '  .dword callback_target' "$work/output.s" >/dev/null
+if command -v "$riscv_cc" >/dev/null 2>&1 && command -v "$qemu_riscv64" >/dev/null 2>&1; then
+    "$riscv_cc" -static "$work/output.s" -o "$work/minic-runtime"
+    "$riscv_cc" -std=gnu11 -static "$root/tests/compiler/c0/external_pointer_definition.c" -o "$work/gcc-runtime"
+    set +e
+    "$qemu_riscv64" "$work/gcc-runtime"; gcc_status=$?
+    "$qemu_riscv64" "$work/minic-runtime"; minic_status=$?
+    set -e
+    test "$gcc_status" -eq 0
+    test "$minic_status" -eq "$gcc_status"
+elif test "$require_runtime" = 1; then
+    exit 1
+fi
+printf '%s\n' 'PASS compiler/c0/external_pointer_definition linkage=external initializer=string|null|object-address|member-address|function-address owner=shared-pointer-object'
+@@@ end
+@@@ {"head_lines": 1, "kind": "case", "mode": "100755", "newline": true, "path": "tests/compiler/c0/run-first500-pareto-v1.sh", "shared": "17d186a0d28a506f"}
+#!/bin/sh
+work=${BUILD_DIR:-"$root/build/debug"}/tests/first500-pareto-v1
+mkdir -p "$work"
+
+for name in identity_record_typedef_cast record_field_nonstring_attribute; do
+  "$host_cc" -E -P -std=gnu11 -x c "$root/tests/compiler/c0/$name.c" -o "$work/$name.i"
+  "$minic" -S "$work/$name.i" -o "$work/$name.s"
+  test -s "$work/$name.s"
+done
+
+printf '%s\n' 'PASS compiler/c0/first500-pareto-v1 identity-record-cast=1 nonstring-field=1'
+@@@ end
+@@@ {"head_lines": 1, "kind": "case", "mode": "100755", "newline": true, "path": "tests/compiler/c0/run-first500-static-array-pointer-v1.sh", "shared": "17d186a0d28a506f"}
+#!/bin/sh
+work=${BUILD_DIR:-"$root/build/debug"}/tests/first500-static-array-pointer-v1
+mkdir -p "$work"
+
+for name in static_local_pointer_array_decay inferred_static_unsigned_char_list; do
+  "$host_cc" -E -P -std=gnu11 -x c "$root/tests/compiler/c0/$name.c" -o "$work/$name.i"
+  "$minic" -S "$work/$name.i" -o "$work/$name.s"
+  test -s "$work/$name.s"
+done
+
+printf '%s\n' 'PASS compiler/c0/first500-static-array-pointer-v1 local-pointer-relocation=1 inferred-uchar-list=1'
+@@@ end
+@@@ {"head_lines": 1, "kind": "case", "mode": "100755", "newline": true, "path": "tests/compiler/c0/run-function-pointer-field-array.sh", "shared": "17d186a0d28a506f"}
+#!/bin/sh
+work=${BUILD_DIR:-"$root/build/debug"}/tests/function-pointer-field-array
+mkdir -p "$work"
+cat > "$work/input.c" <<'SRC'
+typedef int (*filter_t)(int);
+struct hook_filter {
+    filter_t filters[4];
+    unsigned int count;
+};
+static struct hook_filter state __attribute__((used));
+int main(void)
+{
+    return sizeof(struct hook_filter) == 40 && sizeof(state.filters) == 32 ? 0 : 1;
+}
+SRC
+"$host_cc" -E -P -std=gnu11 -x c "$work/input.c" -o "$work/input.i"
+"$minic" -S "$work/input.i" -o "$work/output.s"
+grep -F '.size state, 40' "$work/output.s" >/dev/null
+printf '%s\n' 'PASS compiler/c0/function-pointer-field-array element=function-pointer count=4 layout=generic'
+@@@ end
+@@@ {"head_lines": 1, "kind": "case", "mode": "100755", "newline": true, "path": "tests/compiler/c0/run-gnu-array-object-identity.sh", "shared": "17d186a0d28a506f"}
+#!/bin/sh
+work=${BUILD_DIR:-"$root/build/debug"}/tests/compiler-c0-gnu-array-object-identity
+assembly="$work/gnu_array_object_identity.s"
+rm -rf "$work"; mkdir -p "$work"
+"$host_cc" -E -P -std=gnu11 -x c "$root/tests/compiler/c0/gnu_array_object_identity.c" -o "$work/gnu_array_object_identity.i"
+"$minic" -S "$work/gnu_array_object_identity.i" -o "$assembly"
+test -s "$assembly"
+check_li() { symbol=$1; value=$2; sed -n "/^${symbol}:/,/^\\.size/p" "$assembly" | grep -F "  li a0, $value" >/dev/null; }
+check_li fixed_member_size 32
+check_li fixed_member_address_pointee_size 32
+check_li fixed_member_typeof_size 32
+check_li local_array_address_pointee_size 24
+check_li local_array_typeof_size 24
+sed -n '/linux_flexible_array_shape:/,/^\.size/p' "$assembly" | grep -F '  addi a0, a0, 8' >/dev/null
+sed -n '/fixed_member_index:/,/^\.size/p' "$assembly" | grep -F '  slli a0, a0, 3' >/dev/null
+grep -F 'typedef_array_member_address_call:' "$assembly" >/dev/null
+for invalid in invalid_record_array_assignment invalid_record_array_update invalid_flexible_array_sizeof invalid_typedef_array_member_address_call; do
+  "$host_cc" -E -P -std=gnu11 -x c "$root/tests/compiler/c0/$invalid.c" -o "$work/$invalid.i"
+  if "$minic" -S "$work/$invalid.i" -o "$work/$invalid.s" >"$work/$invalid.out" 2>"$work/$invalid.err"; then echo "expected $invalid to fail" >&2; exit 1; fi
+done
+grep -F 'assignment expression requires a modifiable object lvalue' "$work/invalid_record_array_assignment.err" >/dev/null
+grep -F 'postfix update requires a modifiable scalar lvalue' "$work/invalid_record_array_update.err" >/dev/null
+grep -F 'sizeof requires a supported complete type' "$work/invalid_flexible_array_sizeof.err" >/dev/null
+grep -F 'call argument type does not match declaration' "$work/invalid_typedef_array_member_address_call.err" >/dev/null
+printf '%s\n' 'PASS compiler/c0/gnu_array_object_identity record=fixed+flexible+typedef-array local=legacy decay=shared address-of=pointer-to-array structural-array-compatibility=1 bounds=mismatch-reject sizeof=no-decay typeof=no-decay subscript=shared mutation=reject'
+@@@ end
+@@@ {"head_lines": 1, "kind": "case", "mode": "100755", "newline": true, "path": "tests/compiler/c0/run-gnu-inline-asm-readwrite-earlyclobber-rv64.sh", "shared": "17d186a0d28a506f"}
+#!/bin/sh
+rv_cc=${RV_CC:-riscv64-linux-gnu-gcc}
+qemu=${QEMU_RISCV64:-qemu-riscv64}
+work=${BUILD_DIR:-"$root/build/debug"}/tests/compiler-c0-gnu-inline-asm-readwrite-earlyclobber
+source="$root/tests/compiler/c0/gnu_inline_asm_readwrite_earlyclobber.c"
+rm -rf "$work"
+mkdir -p "$work"
+"$host_cc" -E -P -x c "$source" -o "$work/probe.i"
+"$minic" -S "$work/probe.i" -o "$work/minic.s"
+grep -F 'add a0, a0,' "$work/minic.s" >/dev/null
+grep -F 'add a1, a1,' "$work/minic.s" >/dev/null
+cat > "$work/crt0.S" <<'START'
+.text
+.globl _start
+_start:
+    call main
+    li a7, 93
+    ecall
+START
+"$rv_cc" -ffreestanding -fno-stack-protector -fno-pie -c -std=gnu11 "$source" -o "$work/gcc.o"
+"$rv_cc" -nostdlib -static -no-pie "$work/crt0.S" "$work/minic.s" -o "$work/minic.elf"
+"$rv_cc" -nostdlib -static -no-pie "$work/crt0.S" "$work/gcc.o" -o "$work/gcc.elf"
+set +e
+"$qemu" "$work/gcc.elf"
+gcc_status=$?
+"$qemu" "$work/minic.elf"
+minic_status=$?
+set -e
+test "$gcc_status" -eq 0
+test "$minic_status" -eq "$gcc_status"
+printf '%s\n' 'PASS compiler/c0/gnu_inline_asm_readwrite_earlyclobber_rv64 constraint=+&r fixed=a0,a1 unmatched_nonoverlap=1 qemu=1'
+@@@ end
+@@@ {"head_lines": 1, "kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/run-gnu-inline-asm-satp-window-rv64.sh", "shared": "17d186a0d28a506f"}
+#!/bin/sh
+rv_cc=${RV_CC:-riscv64-linux-gnu-gcc}
+work=${BUILD_DIR:-"$root/build/debug"}/tests/compiler-c0-gnu-inline-asm-satp-window
+rm -rf "$work"
+mkdir -p "$work"
+
+compile_probe() {
+    name=$1
+    source=$2
+    "$host_cc" -E -P -x c "$source" -o "$work/$name.i"
+    "$minic" -S "$work/$name.i" -o "$work/$name.minic.s"
+    if test "${SATP_SKIP_GCC:-0}" != 1; then
+        "$rv_cc" -O2 -fno-pic -fno-pie -S "$source" -o "$work/$name.gcc.s"
+    fi
+}
+
+check_window() {
+    asm=$1
+    tag=$2
+    python3 - "$asm" "$tag" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+tag = sys.argv[2]
+lines = path.read_text(errors="replace").splitlines()
+start = None
+end = None
+for i, line in enumerate(lines):
+    if start is None and re.search(r"\bcsrw\s+satp\s*,", line):
+        start = i
+        continue
+    if start is not None and re.search(r"\bcsrrw\s+[^,]+\s*,\s*satp\s*,", line):
+        end = i
+        break
+if start is None or end is None or end <= start:
+    print(f"SATP_WINDOW_{tag}=MISSING")
+    raise SystemExit(2)
+window = lines[start:end + 1]
+unsafe = [(start + j + 1, line) for j, line in enumerate(window[1:-1], 1)
+          if re.search(r"\bsp\b", line)]
+print(f"SATP_WINDOW_{tag}_BEGIN={start + 1}")
+print(f"SATP_WINDOW_{tag}_END={end + 1}")
+print(f"SATP_WINDOW_{tag}_STACK_TOUCHES={len(unsafe)}")
+for lineno, line in unsafe[:32]:
+    print(f"SATP_WINDOW_{tag}_STACK_TOUCH line={lineno} text={line.strip()}")
+if unsafe:
+    raise SystemExit(1)
+PY
+}
+
+compile_probe direct "$root/tests/compiler/c0/gnu_inline_asm_satp_direct.c"
+compile_probe local "$root/tests/compiler/c0/gnu_inline_asm_satp_window.c"
+compile_probe decl "$root/tests/compiler/c0/gnu_inline_asm_satp_decl_init.c"
+
+failed=0
+if test "${SATP_SKIP_GCC:-0}" != 1; then
+    check_window "$work/direct.gcc.s" GCC_DIRECT || failed=1
+    check_window "$work/local.gcc.s" GCC_LOCAL || failed=1
+    check_window "$work/decl.gcc.s" GCC_DECL || failed=1
+fi
+check_window "$work/direct.minic.s" MINIC_DIRECT || failed=1
+check_window "$work/local.minic.s" MINIC_LOCAL || failed=1
+check_window "$work/decl.minic.s" MINIC_DECL || failed=1
+
+if test "$failed" -ne 0; then
+    exit 1
+fi
+printf '%s\n' 'PASS compiler/c0/gnu_inline_asm_satp_window_rv64 direct=1 assignment_local=1 decl_init=1 stack_free=1'
+@@@ end
+@@@ {"head_lines": 1, "kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/run-gnu-local-fixed-register-bindings.sh", "shared": "17d186a0d28a506f"}
+#!/bin/sh
+rv_cc=${RV_CC:-riscv64-linux-gnu-gcc}
+work=${BUILD_DIR:-"$root/build/debug"}/tests/compiler-c0-gnu-local-fixed-register-bindings
+rm -rf "$work"
+mkdir -p "$work"
+"$host_cc" -E -P -x c "$root/tests/compiler/c0/gnu_local_fixed_register_bindings.c" -o "$work/ok.i"
+"$minic" -S "$work/ok.i" -o "$work/ok.s"
+grep -F 'add a0, a0, a1 # nr=a7' "$work/ok.s" >/dev/null
+grep -F 'mv a0, a0' "$work/ok.s" >/dev/null
+"$rv_cc" -c "$work/ok.s" -o "$work/ok.o"
+"$host_cc" -E -P -x c "$root/tests/compiler/c0/gnu_local_fixed_register_binding_reject.c" -o "$work/reject.i"
+set +e
+"$minic" -S "$work/reject.i" -o "$work/reject.s" >"$work/reject.stdout" 2>"$work/reject.stderr"
+status=$?
+set -e
+test "$status" -ne 0
+grep -F 'local fixed register binding is not supported by this target' "$work/reject.stderr" >/dev/null
+printf '%s\n' 'PASS compiler/c0/gnu_local_fixed_register_bindings owner=side-table local-abi=unchanged asm-binding=a0,a1,a7'
+@@@ end
+@@@ {"head_lines": 1, "kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/run-gnu-weak-undefined-live.sh", "shared": "17d186a0d28a506f"}
+#!/bin/sh
+work=${BUILD_DIR:-"$root/build/debug"}/tests/gnu-weak-undefined-live
+mkdir -p "$work"
+
+"$host_cc" -E -P -std=gnu11 -x c \
+    "$root/tests/compiler/c0/gnu_weak_undefined_live.c" -o "$work/input.i"
+for target in x86_64 riscv32 riscv64 aarch64 loongarch64; do
+    assembly="$work/$target.s"
+    "$minic" --target="$target-linux" -S "$work/input.i" -o "$assembly"
+    for symbol in missing_object hidden_missing_object provided_object \
+                  missing_function hidden_missing_function provided_function; do
+        test "$(grep -c "^\.weak $symbol$" "$assembly")" -eq 1
+        if grep -q "^\.globl $symbol$" "$assembly"; then
+            echo "FAIL duplicate strong/weak declaration: target=$target symbol=$symbol" >&2
+            exit 1
+        fi
+    done
+    for symbol in hidden_missing_object hidden_missing_function; do
+        test "$(grep -c "^\.hidden $symbol$" "$assembly")" -eq 1
+    done
+    for symbol in unused_weak_object unused_weak_function; do
+        if grep -q "^\.weak $symbol$" "$assembly"; then
+            echo "FAIL dead weak declaration: target=$target symbol=$symbol" >&2
+            exit 1
+        fi
+    done
+done
+
+# An undefined weak *code* address is not a regular non-PIC PC-relative
+# reference on AArch64: missing providers resolve to absolute zero. GNU AS
+# must see a GOT address load, while the declaration remains ELF weak.
+"$minic" --target=aarch64-linux -fno-pie -S "$work/input.i" \
+    -o "$work/aarch64-nonpic.s"
+for symbol in missing_object hidden_missing_object provided_object \
+              missing_function hidden_missing_function provided_function; do
+    grep -Fq "adrp x9, :got:$symbol" "$work/aarch64-nonpic.s" || {
+        echo "FAIL AArch64 non-PIC undefined weak lacks GOT: $symbol" >&2
+        exit 1
+    }
+done
+
+# Kbuild can carry a strong-looking first declaration followed by the
+# actual weak external declaration. The ABI owner must use the merged symbol
+# identity regardless of declaration order; AArch64 must not reintroduce
+# R_AARCH64_ADR_PREL_PG_HI21 for a possibly absent provider.
+"$host_cc" -E -P -std=gnu11 -x c \
+    "$root/tests/compiler/c0/aarch64_weak_redeclaration_got.c" \
+    -o "$work/aarch64-weak-redeclarations.i"
+"$minic" --target=aarch64-linux -fno-pie -S \
+    "$work/aarch64-weak-redeclarations.i" \
+    -o "$work/aarch64-weak-redeclarations.s"
+for symbol in early_strong_object early_weak_object weak_function; do
+    test "$(grep -c "^\.weak $symbol$" "$work/aarch64-weak-redeclarations.s")" -eq 1
+    grep -Fq "adrp x9, :got:$symbol" "$work/aarch64-weak-redeclarations.s"
+done
+
+"$host_cc" -fno-pie -c "$work/x86_64.s" -o "$work/minic.o"
+"$host_cc" -fno-pie -c \
+    "$root/tests/compiler/c0/gnu_weak_undefined_live.c" -o "$work/gnu.o"
+"$host_cc" -fno-pie -c \
+    "$root/tests/compiler/c0/gnu_weak_undefined_provider.c" -o "$work/provider.o"
+"$host_cc" -no-pie "$work/gnu.o" "$work/provider.o" -o "$work/gnu"
+"$host_cc" -no-pie "$work/minic.o" "$work/provider.o" -o "$work/minic"
+"$work/gnu"
+"$work/minic"
+
+for symbol in missing_object hidden_missing_object missing_function hidden_missing_function; do
+    readelf -Ws "$work/minic.o" | grep "WEAK.*UND $symbol$" >/dev/null
+done
+printf '%s\n' 'PASS GNU undefined weak ELF binding: five targets unique owner, live object+function, hidden, NULL, strong provider, dead declaration, x86 GNU AS/LD runtime'
+@@@ end
+@@@ {"head_lines": 1, "kind": "case", "mode": "100755", "newline": true, "path": "tests/compiler/c0/run-gnu-zero-length-array.sh", "shared": "17d186a0d28a506f"}
+#!/bin/sh
+work=${BUILD_DIR:-"$root/build/debug"}/tests/compiler-c0-gnu-zero-length-array
+rm -rf "$work"; mkdir -p "$work"
+"$host_cc" -E -P -x c "$root/tests/compiler/c0/gnu_zero_length_array.c" -o "$work/zero.i"
+"$minic" -S "$work/zero.i" -o "$work/zero.s"
+grep -F 'vm_numa_event' "$work/zero.s" >/dev/null || true
+"$host_cc" -E -P -std=gnu11 -x c "$root/tests/compiler/c0/static_zero_length_record_field_relocation.c" -o "$work/record-field.i"
+"$minic" -S "$work/record-field.i" -o "$work/record-field.s"
+test -s "$work/record-field.s"
+grep -Fq 'target' "$work/record-field.s"
+printf '%s\n' 'PASS compiler/c0/gnu_zero_length_array extern=1 incomplete-to-zero=1 sizeof=0 decay=1 type-identity=complete-zero record-field=zero-storage+following-relocation nested-fam=zero-tail nested-fam=zero-tail'
+"$host_cc" -E -P -x c "$root/tests/compiler/c0/invalid_zero_length_array_redeclaration.c" -o "$work/conflict.i"
+if "$minic" -S "$work/conflict.i" -o "$work/conflict.s" >"$work/conflict.stdout" 2>"$work/conflict.stderr"; then
+  echo 'FAIL zero-length vs positive-bound redeclaration unexpectedly compiled' >&2
+  exit 1
+fi
+grep -F 'conflicting extern object redeclaration' "$work/conflict.stderr" >/dev/null
+printf '%s\n' 'PASS compiler/c0/invalid_zero_length_array_redeclaration zero-vs-one=conflict'
+@@@ end

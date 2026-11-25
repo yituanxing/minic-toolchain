@@ -1,0 +1,231 @@
+@@@ {"id": "7ec2f5c9bfab4130", "kind": "shared", "newline": true}
+set -Eeuo pipefail
+root=$(cd "$(dirname "$0")/../../.." && pwd)
+minic=${MINIC_CC:-"$root/build/release/bin/minic-cc"}
+cc=${HOST_CC:-gcc}
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+@@@ end
+@@@ {"head_lines": 1, "kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/probe-core-indirect-local-fact-escape.sh", "shared": "7ec2f5c9bfab4130"}
+#!/usr/bin/env bash
+fail() { echo "CORE_INDIRECT_LOCAL_FACT_ESCAPE=FAIL $*" >&2; exit 1; }
+
+test -x "$minic" || fail 'MiniC binary missing'
+src="$root/tests/compiler/c0/core_indirect_local_fact_escape.c"
+"$cc" -std=gnu11 -O0 -E -P "$src" -o "$work/input.i" \
+    || fail 'GNU preprocessing'
+"$cc" -std=gnu11 -O0 -no-pie -x c "$work/input.i" -o "$work/gnu" \
+    || fail 'GNU reference compilation'
+"$minic" --target=x86_64-linux -S "$work/input.i" -o "$work/minic.s" \
+    || fail 'MiniC compilation'
+"$cc" -no-pie -x assembler "$work/minic.s" -o "$work/minic" \
+    || fail 'GNU assembly/link'
+"$work/gnu" || fail 'GNU reference runtime'
+"$work/minic" || fail 'MiniC runtime differs from GNU reference'
+echo 'CORE_INDIRECT_LOCAL_FACT_ESCAPE=PASS GNU_C_and_MiniC_GNU_AS_LD_runtime'
+@@@ end
+@@@ {"head_lines": 1, "kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/probe-x86-head-inline-section.sh", "shared": "7ec2f5c9bfab4130"}
+#!/usr/bin/env bash
+fail() { echo "X86_HEAD_INLINE_SECTION=FAIL $*" >&2; exit 1; }
+
+test -x "$minic" || fail 'MiniC compiler missing'
+source="$root/tests/compiler/c0/x86_head_inline_section_probe.c"
+driver="$root/tests/compiler/c0/x86_head_inline_section_driver.c"
+"$cc" -E -P -std=gnu11 "$source" -o "$work/probe.i" \
+    || fail 'GNU preprocessing'
+"$minic" --target=x86_64-linux -S "$work/probe.i" -o "$work/probe.s" \
+    || fail 'MiniC section-aware clone lowering'
+"$cc" -c "$work/probe.s" -o "$work/probe.o" \
+    || fail 'GNU assembler rejected MiniC section-local clones'
+objdump -t "$work/probe.o" > "$work/symbols"
+clone_for() {
+    awk -v name="$1" '
+        $0 == name ":" { inside = 1; next }
+        inside && /^\.size / { exit }
+        inside && /call __minic_inline_spec_/ {
+            clone = $2
+            sub(/@PLT$/, "", clone)
+            print clone
+            exit
+        }
+    ' "$work/probe.s"
+}
+clone_in_section() {
+    awk -v section="$1" -v name="$2" '
+        $4 == section && $NF == name { found = 1 }
+        END { exit !found }
+    ' "$work/symbols"
+}
+head_clone=$(clone_for probe_early)
+init_clone=$(clone_for probe_later)
+head_again_clone=$(clone_for probe_early_again)
+explicit_clone=$(clone_for probe_explicit_owner)
+nested_head_clone=$(clone_for probe_nested_early)
+nested_init_clone=$(clone_for probe_nested_later)
+nested_head_leaf=$(clone_for "$nested_head_clone")
+nested_init_leaf=$(clone_for "$nested_init_clone")
+test -n "$head_clone" && test -n "$init_clone" &&
+    test -n "$head_again_clone" && test -n "$explicit_clone" &&
+    test -n "$nested_head_clone" && test -n "$nested_init_clone" &&
+    test -n "$nested_head_leaf" && test -n "$nested_init_leaf" \
+    || fail 'fixture calls were not specialized'
+test "$head_clone" = "$head_again_clone" &&
+    test "$head_clone" != "$init_clone" \
+    || fail 'same-section clone reuse / cross-section identity violated'
+clone_in_section .head.text "$head_clone" \
+    || fail 'head caller clone escaped .head.text'
+clone_in_section .init.text "$init_clone" \
+    || fail 'different caller section reused head clone'
+clone_in_section .special.text "$explicit_clone" \
+    || fail 'callee explicit section was overwritten'
+test "$nested_head_clone" != "$nested_init_clone" &&
+    test "$nested_head_leaf" != "$nested_init_leaf" \
+    || fail 'transitive source-AST call reused a wrong-section clone'
+clone_in_section .head.text "$nested_head_clone" &&
+    clone_in_section .head.text "$nested_head_leaf" \
+    || fail 'head transitive clone escaped .head.text'
+clone_in_section .init.text "$nested_init_clone" &&
+    clone_in_section .init.text "$nested_init_leaf" \
+    || fail 'init transitive clone escaped .init.text'
+"$cc" "$driver" "$work/probe.o" -o "$work/actual" \
+    || fail 'GNU link rejected cloned sections'
+"$work/actual" || fail 'MiniC clone runtime differs from C semantics'
+"$cc" -O2 "$driver" "$source" -o "$work/reference" \
+    || fail 'GNU reference link failed'
+"$work/reference" || fail 'GNU reference runtime failed'
+echo 'X86_HEAD_INLINE_SECTION=PASS head=local init=distinct explicit=preserved runtime=GNU_MATCH'
+@@@ end
+@@@ {"head_lines": 1, "kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/probe-x86-kernel-head-link-address.sh", "shared": "7ec2f5c9bfab4130"}
+#!/usr/bin/env bash
+fail() { echo "X86_KERNEL_HEAD_LINK_ADDRESS=FAIL $*" >&2; exit 1; }
+
+test -x "$minic" || fail 'MiniC compiler missing'
+src="$root/tests/compiler/c0/x86_kernel_head_link_address.c"
+driver="$root/tests/compiler/c0/x86_kernel_head_link_address_driver.c"
+"$cc" -E -P -std=gnu11 "$src" -o "$work/probe.i" \
+    || fail 'GNU preprocessing'
+"$minic" --target=x86_64-linux -fno-PIE -S "$work/probe.i" -o "$work/head.s" \
+    || fail 'MiniC non-PIE x86 assembly'
+"$cc" -no-pie -x assembler -c "$work/head.s" -o "$work/head.o" \
+    || fail 'GNU assembler rejected x86 non-PIE'
+readelf -rW "$work/head.o" > "$work/head.reloc" || fail 'readelf non-PIE'
+sed -n '/\.rela.head.text/,/Relocation section/p' "$work/head.reloc" \
+    | grep -Eq 'R_X86_64_32S.*kernel_link_address_probe_anchor' \
+    || fail '.head.text global is not GNU absolute signed32 relocation'
+sed -n '/\.rela.head.text/,/Relocation section/p' "$work/head.reloc" \
+    | grep -Eq 'R_X86_64_PC32.*kernel_head_direct_descriptor' \
+    || fail '.head.text direct data access did not get RIP-relative relocation'
+if sed -n '/\.rela.head.text/,/Relocation section/p' "$work/head.reloc" \
+    | grep -Eq 'R_X86_64_32S.*kernel_head_direct_descriptor'; then
+    fail '.head.text dereferenced global still has unmapped high-half address'
+fi
+mixed_physical=$(sed -n '/\.rela.head.text/,/Relocation section/p' "$work/head.reloc" \
+    | grep -Ec 'R_X86_64_PC32.*kernel_head_mixed_global' || true)
+mixed_link_vma=$(sed -n '/\.rela.head.text/,/Relocation section/p' "$work/head.reloc" \
+    | grep -Ec 'R_X86_64_32S.*kernel_head_mixed_global' || true)
+test "$mixed_physical" -ge 2 && test "$mixed_link_vma" -eq 2 \
+    || fail 'same head global lost its two physical-store/link-VMA address roles'
+# The .head.text call graph extends into unannotated static helpers. Their
+# fixup_pointer inputs still need link VMAs (32S); a static helper also called
+# from normal .text must remain ordinary PC-relative instead.
+sed -n '/^kernel_head_only_helper:$/,/^\.size kernel_head_only_helper,/p' "$work/head.s" \
+    | grep -Eq 'movq \$kernel_head_helper_target, %rax' \
+    || fail 'head-only static helper lost link-VMA global producer'
+sed -n '/^kernel_head_shared_helper:$/,/^\.size kernel_head_shared_helper,/p' "$work/head.s" \
+    | grep -Eq 'leaq kernel_head_helper_target\(%rip\), %rax' \
+    || fail 'shared static helper incorrectly inherited early-head role'
+sed -n '/\.rela.text/,/Relocation section/p' "$work/head.reloc" \
+    | grep -Eq 'R_X86_64_32S.*kernel_head_helper_target' \
+    || fail 'head-only static helper did not produce ELF absolute relocation'
+sed -n '/\.rela.text/,/Relocation section/p' "$work/head.reloc" \
+    | grep -Eq 'R_X86_64_PC32.*kernel_head_helper_target' \
+    || fail 'normal shared static helper lost PC-relative ELF relocation'
+sed -n '/\.rela.text/,/Relocation section/p' "$work/head.reloc" \
+    | grep -Eq 'R_X86_64_PC32.*kernel_link_address_probe_anchor' \
+    || fail 'regular .text changed its established PC-relative relocation'
+"$cc" -no-pie "$driver" "$work/head.o" -o "$work/relocated" \
+    || fail 'GNU link failed'
+"$work/relocated" > "$work/actual" \
+    || fail 'relocated early-head function lost link-time symbol address'
+
+# GNU's own compiler independently demonstrates that the same C global has
+# both direct physical memory and link-VMA address roles. Also run the same
+# displaced code+data runtime oracle with its output, not only MiniC's.
+"$cc" -std=gnu11 -O0 -fno-PIE -S "$work/probe.i" -o "$work/gnu-head.s" \
+    || fail 'GNU baseline x86 assembly'
+"$cc" -std=gnu11 -O0 -fno-PIE -mcmodel=kernel -S "$work/probe.i" \
+    -o "$work/gnu-kernel.s" || fail 'GNU kernel-code-model assembly'
+sed -n '/^kernel_head_only_helper:$/,/^\s*\.size\s*kernel_head_only_helper,/p' "$work/gnu-kernel.s" \
+    | grep -Eq 'movq[[:space:]]+\$kernel_head_helper_target,' \
+    || fail 'GNU kernel model does not confirm helper link-VMA address role'
+"$cc" -no-pie -x assembler -c "$work/gnu-head.s" -o "$work/gnu-head.o" \
+    || fail 'GNU baseline object'
+readelf -rW "$work/gnu-head.o" > "$work/gnu-head.reloc" \
+    || fail 'GNU baseline readelf'
+sed -n '/\.rela.head.text/,/Relocation section/p' "$work/gnu-head.reloc" \
+    | grep -Eq 'R_X86_64_PC32.*kernel_head_mixed_global' \
+    || fail 'GNU baseline lost head mixed physical address'
+sed -n '/\.rela.head.text/,/Relocation section/p' "$work/gnu-head.reloc" \
+    | grep -Eq 'R_X86_64_32(S)?[[:space:]].*kernel_head_mixed_global' \
+    || fail 'GNU baseline lost head mixed link VMA'
+"$cc" -no-pie "$driver" "$work/gnu-head.o" -o "$work/gnu-relocated" \
+    || fail 'GNU baseline link'
+"$work/gnu-relocated" > "$work/gnu-actual" \
+    || fail 'GNU baseline displaced runtime'
+
+"$minic" --target=x86_64-linux -fPIE -S "$work/probe.i" -o "$work/pie.s" \
+    || fail 'MiniC PIE x86 assembly'
+"$cc" -x assembler -c "$work/pie.s" -o "$work/pie.o" \
+    || fail 'GNU assembler rejected x86 PIE'
+readelf -rW "$work/pie.o" > "$work/pie.reloc" || fail 'readelf PIE'
+if sed -n '/\.rela.head.text/,/Relocation section/p' "$work/pie.reloc" \
+    | grep -Eq 'R_X86_64_32S.*kernel_link_address_probe_anchor'; then
+    fail 'PIE .head.text unexpectedly received kernel absolute relocation'
+fi
+echo 'X86_KERNEL_HEAD_LINK_ADDRESS=PASS head_link=R_X86_64_32S head_direct=R_X86_64_PC32 head_mixed=PC32+32S helper_closure=32S shared_helper=PC32 normal=R_X86_64_PC32 PIE=no_32S relocated_runtime=PASS relocated_mixed=PASS gnu_same_source=PASS'
+@@@ end
+@@@ {"head_lines": 1, "kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/probe-x86-variadic-no-sse.sh", "shared": "7ec2f5c9bfab4130"}
+#!/usr/bin/env bash
+fail() { echo "X86_VARIADIC_NO_SSE=FAIL $*" >&2; exit 1; }
+src="$root/tests/compiler/c0/x86_variadic_no_sse.c"
+
+"$cc" -E -P -std=gnu11 "$src" -o "$work/integers.i" \
+    || fail 'GNU preprocess integer fixture'
+"$minic" -S "$work/integers.i" --target=x86_64-linux -fno-PIE \
+    -mno-sse -o "$work/no-sse.s" || fail 'MiniC -mno-sse'
+"$minic" -S "$work/integers.i" --target=x86_64-linux -fno-PIE \
+    -o "$work/default.s" || fail 'MiniC default x86'
+sed -n '/^minic_x86_integer_varargs:$/,/^\.size minic_x86_integer_varargs,/p' \
+    "$work/no-sse.s" > "$work/no-sse-function.s"
+sed -n '/^minic_x86_integer_varargs:$/,/^\.size minic_x86_integer_varargs,/p' \
+    "$work/default.s" > "$work/default-function.s"
+test -s "$work/no-sse-function.s" || fail 'missing integer variadic function'
+if grep -Eq '(%xmm[0-9]+|movdqu|movaps|movups)' "$work/no-sse-function.s"; then
+    fail 'no-SSE integer variadic prologue touched an XMM register'
+fi
+grep -Eq 'testb %al, %al' "$work/default-function.s" \
+    || fail 'ordinary SysV variadic prologue did not guard optional XMM spill'
+grep -Eq 'movdqu %xmm0,' "$work/default-function.s" \
+    || fail 'ordinary SysV variadic prologue lost FP register save'
+"$cc" -no-pie -x assembler "$work/no-sse.s" -o "$work/no-sse" \
+    || fail 'GNU link no-SSE variant'
+"$work/no-sse" || fail 'no-SSE integer variadic runtime'
+"$cc" -no-pie -x assembler "$work/default.s" -o "$work/default" \
+    || fail 'GNU link default variant'
+"$work/default" || fail 'default integer variadic runtime'
+
+"$cc" -E -P -std=gnu11 -DMINIC_X86_TEST_FLOAT_VARARGS "$src" \
+    -o "$work/float.i" || fail 'GNU preprocess FP fixture'
+"$minic" -S "$work/float.i" --target=x86_64-linux -fno-PIE \
+    -o "$work/float.s" || fail 'MiniC FP variadic fixture'
+if "$minic" -S "$work/float.i" --target=x86_64-linux -fno-PIE \
+    -mno-sse -o "$work/illegal-float.s" > "$work/no-sse-float.log" 2>&1; then
+    fail 'no-SSE target silently allowed a reachable floating operation'
+fi
+grep -q 'x86-64 -mno-sse rejects reachable floating' "$work/no-sse-float.log" \
+    || fail 'no-SSE FP rejection did not explain unsupported ABI'
+"$cc" -no-pie -x assembler "$work/float.s" -o "$work/float" \
+    || fail 'GNU link FP variadic fixture'
+"$work/float" || fail 'ordinary SysV FP variadic runtime'
+echo 'X86_VARIADIC_NO_SSE=PASS no_sse_xmm=0 sysv_al_guard=PASS integers=PASS fp=PASS no_sse_fp_fail_closed=PASS'
+@@@ end

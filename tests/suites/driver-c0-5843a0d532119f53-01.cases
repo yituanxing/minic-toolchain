@@ -1,0 +1,383 @@
+@@@ {"id": "5843a0d532119f53", "kind": "shared", "newline": true}
+set -eu
+: "${MINIC_CC:?point MINIC_CC at the built compiler}"
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT HUP INT TERM
+@@@ end
+@@@ {"head_lines": 3, "kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/probe-aarch64-linux-narrow-pointer-and-mixed-mul.sh", "shared": "5843a0d532119f53"}
+#!/bin/sh
+# Two authentic Linux 6.6.143 backend gaps: pxa i2c enum casts and
+# fbcon_set_font's mixed-signedness GNU checked multiplication.
+host=${HOST_CC:-cc}
+pointer_src=tests/compiler/c0/aarch64_linux_pointer_narrow_bitcast.c
+overflow_src=tests/compiler/c0/loongarch64_linux_mixed_mul_overflow.c
+
+"$host" -E -P -nostdinc "$pointer_src" -o "$work/pointer.i"
+"$host" -E -P -nostdinc "$overflow_src" -o "$work/overflow.i"
+"$host" -E -P -nostdinc tests/compiler/c0/pointer_integer_casts.c \
+    -o "$work/pointer-roundtrip.i"
+"$MINIC_CC" --target=aarch64-linux -fPIE -S "$work/pointer.i" -o "$work/pointer.s"
+"$MINIC_CC" --target=aarch64-linux -fPIE -S "$work/overflow.i" -o "$work/overflow.s"
+
+# 32-bit pointer casts must explicitly sign/zero extend the low word.
+# 64-bit casts preserve the address; _Bool remains canonical 0/1.
+test "$(grep -Fc '  sxtw x9, w9' "$work/pointer.s")" -ge 2
+test "$(grep -Fc '  uxtw x9, w9' "$work/pointer.s")" -ge 1
+grep -Fq '  cmp x9, #0' "$work/pointer.s"
+grep -Fq '  cset x9, ne' "$work/pointer.s"
+
+# Widen before multiplying, then compare the exact 64-bit product to the
+# destination's 32-bit sign/zero extension, not C-promoted 32-bit operands.
+test "$(grep -Fc '  mul x12, x9, x10' "$work/overflow.s")" -eq 3
+test "$(grep -Fc '  sxtw x13, w9' "$work/overflow.s")" -eq 1
+test "$(grep -Fc '  uxtw x13, w9' "$work/overflow.s")" -eq 2
+test "$(grep -Fc '  cmp x12, x13' "$work/overflow.s")" -eq 3
+echo 'MINIC_AARCH64_LINUX_NARROW_PTR_MIXED_MUL=PASS ptr_enum_i32=1 ptr_i32=1 ptr_u32=1 mixed_mul=3'
+
+# GCC is the oracle for the exact GNU conversion and checked arithmetic.
+"$host" -Wno-pointer-to-int-cast -DMINI_POINTER_NARROW_NATIVE_TEST -O2 \
+    "$pointer_src" -o "$work/pointer_native"
+"$work/pointer_native"
+"$host" -DMINI_MIXED_OVERFLOW_HOST_TEST -O2 "$overflow_src" \
+    -o "$work/overflow_native"
+"$work/overflow_native"
+
+# A direct pointer-to-float cast is invalid and must remain rejected by both
+# GNU and MiniC on each target, despite expanding integer bitcast width.
+"$host" -E -P -nostdinc -DMINI_POINTER_NARROW_NEGATIVE \
+    "$pointer_src" -o "$work/invalid.i"
+if "$host" -Wno-pointer-to-int-cast -fsyntax-only -x c "$work/invalid.i" \
+    >"$work/gnu-negative.log" 2>&1; then
+    echo 'GNU unexpectedly accepted pointer-to-float' >&2
+    exit 1
+fi
+for target in aarch64-linux loongarch64-linux x86_64-linux riscv64-linux riscv32-linux; do
+    "$MINIC_CC" "--target=$target" -S "$work/pointer-roundtrip.i" \
+        -o "$work/roundtrip-$target.s"
+    if "$MINIC_CC" "--target=$target" -S "$work/invalid.i" \
+        -o "$work/invalid-$target.s" >"$work/invalid-$target.log" 2>&1; then
+        echo "MiniC unexpectedly accepted pointer-to-float target=$target" >&2
+        exit 1
+    fi
+done
+echo 'MINIC_AARCH64_LINUX_NARROW_PTR_MIXED_MUL_GNU_ORACLE=PASS pointer_samples=7 mixed_pairs=72 positive_targets=5 negative_targets=5'
+
+cross=${AARCH64_CC:-aarch64-linux-gnu-gcc}
+if command -v "$cross" >/dev/null 2>&1; then
+    "$cross" -c -x assembler "$work/pointer.s" -o "$work/pointer.o"
+    "$cross" -c -x assembler "$work/overflow.s" -o "$work/overflow.o"
+    echo 'MINIC_AARCH64_LINUX_NARROW_PTR_MIXED_MUL_GNU_AS=PASS'
+else
+    echo 'MINIC_AARCH64_LINUX_NARROW_PTR_MIXED_MUL_GNU_AS=SKIP missing AArch64 GNU assembler'
+fi
+@@@ end
+@@@ {"head_lines": 3, "kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/probe-aarch64-pie-shape.sh", "shared": "5843a0d532119f53"}
+#!/bin/sh
+# Fast GNU-independent AAPCS64 PIC/PIE address-model gate. The separate
+# probe-aarch64-pie-extern-got.sh validates GNU AS/LD and QEMU behavior.
+cat >"$work/pic.i" <<'SRC'
+extern int external_value;
+extern int external_add(int);
+static int local_value = 17;
+static int local_add(int x) { return x + 3; }
+int *get_local_object(void) { return &local_value; }
+int *get_external_object(void) { return &external_value; }
+int (*get_local_function(void))(int) { return &local_add; }
+int (*get_external_function(void))(int) { return &external_add; }
+SRC
+for flag in -fPIE -fPIC; do
+  "$MINIC_CC" --target=aarch64-linux "$flag" -S \
+    "$work/pic.i" -o "$work/minic.s"
+  grep -Fq 'adrp x9, local_value' "$work/minic.s"
+  grep -Fq 'adrp x9, local_add' "$work/minic.s"
+  grep -Fq 'adrp x9, :got:external_value' "$work/minic.s"
+  grep -Fq 'adrp x9, :got:external_add' "$work/minic.s"
+  cp "$work/minic.s" "$work/${flag#-}.s"
+done
+cmp "$work/fPIE.s" "$work/fPIC.s"
+echo 'MINIC_AARCH64_PIE_SHAPE=PASS local_pcrel=2 external_got=2 PIE=1 PIC=1'
+@@@ end
+@@@ {"head_lines": 5, "kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/probe-loongarch64-linux-jump-label.sh", "shared": "5843a0d532119f53"}
+#!/bin/sh
+# Original Linux 6.6.143 arch/loongarch/include/asm/jump_label.h uses two
+# asm-goto forms. Each owns one ELF __jump_table record: site PREL32, C-label
+# PREL32 and static-key PREL64. Both source and Core machine gates must prove
+# the symbolic `i` input and preserve the C control-flow edge.
+cat >"$work/jump.i" <<'SRC'
+static int local_key;
+static int key_array[64];
+extern int external_key;
+int loong_static_branch(void) {
+    asm goto(
+        "1:\tnop\t\t\t\n\t"
+        ".pushsection\t__jump_table, \"aw\"\t\n\t"
+        ".align\t3\t\t\t\n\t"
+        ".long\t\t1b - ., %l[l_yes] - .\t\n\t"
+        ".quad\t\t%0 - .\t\t\t\n\t"
+        ".popsection\t\t\t\t\n\t"
+        : : "i"(&local_key) : : l_yes);
+    return 0;
+l_yes:
+    return 1;
+}
+int loong_static_branch_jump(void) {
+    asm goto(
+        "1:\tb\t%l[l_yes]\t\n\t"
+        ".pushsection\t__jump_table, \"aw\"\t\n\t"
+        ".align\t3\t\t\t\n\t"
+        ".long\t\t1b - ., %l[l_yes] - .\t\n\t"
+        ".quad\t\t%0 - .\t\t\t\n\t"
+        ".popsection\t\t\t\t\n\t"
+        : : "i"(&external_key) : : l_yes);
+    return 0;
+l_yes:
+    return 1;
+}
+static inline __attribute__((always_inline)) int inline_static_branch(int *key) {
+    asm goto(
+        "1:\tnop\t\t\t\n\t"
+        ".pushsection\t__jump_table, \"aw\"\t\n\t"
+        ".align\t3\t\t\t\n\t"
+        ".long\t\t1b - ., %l[l_yes] - .\t\n\t"
+        ".quad\t\t%0 - .\t\t\t\n\t"
+        ".popsection\t\t\t\t\n\t"
+        : : "i"(key) : : l_yes);
+    return 0;
+l_yes:
+    return 1;
+}
+int inline_static_branch_call(void) { return inline_static_branch(&local_key); }
+int loong_static_branch_key_plus_one(void) {
+    asm goto(
+        "1:\tnop\t\t\t\n\t"
+        ".pushsection\t__jump_table, \"aw\"\t\n\t"
+        ".align\t3\t\t\t\n\t"
+        ".long\t\t1b - ., %l[l_yes] - .\t\n\t"
+        ".quad\t\t%0 - .\t\t\t\n\t"
+        ".popsection\t\t\t\t\n\t"
+        : : "i"(&((char *)&local_key)[1]) : : l_yes);
+    return 0;
+l_yes:
+    return 1;
+}
+int loong_static_branch_array_member(void) {
+    asm goto(
+        "1:\tnop\t\t\t\n\t"
+        ".pushsection\t__jump_table, \"aw\"\t\n\t"
+        ".align\t3\t\t\t\n\t"
+        ".long\t\t1b - ., %l[l_yes] - .\t\n\t"
+        ".quad\t\t%0 - .\t\t\t\n\t"
+        ".popsection\t\t\t\t\n\t"
+        : : "i"(&key_array[28]) : : l_yes);
+    return 0;
+l_yes:
+    return 1;
+}
+SRC
+"$MINIC_CC" --target=loongarch64-linux -fPIE -S \
+  "$work/jump.i" -o "$work/jump.s"
+if test -n "${MINIC_JUMP_BASELINE_CC:-}"; then
+    "$MINIC_JUMP_BASELINE_CC" --target=loongarch64-linux -fPIE -S \
+        "$work/jump.i" -o "$work/baseline.s"
+    if ! cmp -s "$work/baseline.s" "$work/jump.s"; then
+        echo 'MINIC_LOONGARCH64_JUMP_LABEL_DIFF=FAIL old/new .s differs' >&2
+        diff -u "$work/baseline.s" "$work/jump.s" || true
+        exit 1
+    fi
+    echo 'MINIC_LOONGARCH64_JUMP_LABEL_DIFF=PASS asm_byte_identical=1'
+fi
+grep -Eq '1:[[:space:]]+nop' "$work/jump.s"
+grep -Eq '1:[[:space:]]+b[[:space:]]+\.Luser_' "$work/jump.s"
+test "$(grep -Ec '\.pushsection[[:space:]]+__jump_table,[[:space:]]*"aw"' "$work/jump.s")" -eq 5
+test "$(grep -Ec '\.align[[:space:]]+3' "$work/jump.s")" -eq 5
+grep -Eq '\.quad[[:space:]]+local_key[[:space:]]*-[[:space:]]*\.' "$work/jump.s"
+grep -Eq '\.quad[[:space:]]+external_key[[:space:]]*-[[:space:]]*\.' "$work/jump.s"
+grep -Eq '\.quad[[:space:]]+local_key\+1[[:space:]]*-[[:space:]]*\.' "$work/jump.s"
+grep -Eq '\.quad[[:space:]]+key_array\+112[[:space:]]*-[[:space:]]*\.' "$work/jump.s"
+echo 'MINIC_LOONGARCH64_JUMP_LABEL_SHAPE=PASS nop=4 branch=1 PREL32=5 PREL64=5 symbolic_inline_clone=1 key_addends=+1,+112'
+
+cross=${LOONGARCH64_CC:-loongarch64-linux-gnu-gcc-13}
+if command -v "$cross" >/dev/null 2>&1; then
+    "$cross" -c -x assembler "$work/jump.s" -o "$work/jump.o"
+    echo 'MINIC_LOONGARCH64_JUMP_LABEL_GNU_AS=PASS __jump_table=5'
+else
+    echo 'MINIC_LOONGARCH64_JUMP_LABEL_GNU_AS=SKIP missing Loong GNU assembler'
+fi
+
+# Negative: the source template must be the exact Linux record. Unknown
+# instructions cannot pass merely because they spell asm goto + `i`.
+sed 's/__jump_table/__invalid_jump_table/g' \
+  "$work/jump.i" >"$work/invalid.i"
+if "$MINIC_CC" --target=loongarch64-linux -fPIE -S \
+    "$work/invalid.i" -o "$work/invalid.s" >/dev/null 2>"$work/invalid.err"; then
+    echo 'MINIC_LOONGARCH64_JUMP_LABEL=FAIL mutated patch table accepted' >&2
+    exit 1
+fi
+test ! -e "$work/invalid.s"
+echo 'MINIC_LOONGARCH64_JUMP_LABEL_NEGATIVE=PASS mutated_template=rejected'
+sed 's/%0 - \./%c0 - ./g' "$work/jump.i" >"$work/wrong-modifier.i"
+if "$MINIC_CC" --target=loongarch64-linux -fPIE -S \
+    "$work/wrong-modifier.i" -o "$work/wrong-modifier.s" \
+    >/dev/null 2>"$work/wrong-modifier.err"; then
+    echo 'MINIC_LOONGARCH64_JUMP_LABEL=FAIL wrong relocation modifier admitted' >&2
+    exit 1
+fi
+test ! -e "$work/wrong-modifier.s"
+echo 'MINIC_LOONGARCH64_JUMP_LABEL_MODIFIER=PASS wrong_percent_c0=rejected'
+
+# Non-jump-label GNU expressions must not inherit this exact key relocation
+# authority, even when the same legal symbol-plus-offset spelling is used.
+sed 's/"i"(\&key_array\[28\])/"r"(\&key_array[28])/' \
+  "$work/jump.i" > "$work/wrong-key-constraint.i"
+if "$MINIC_CC" --target=loongarch64-linux -fPIE -S \
+    "$work/wrong-key-constraint.i" -o "$work/wrong-key-constraint.s" \
+    >/dev/null 2>"$work/wrong-key-constraint.err"; then
+    echo 'MINIC_LOONGARCH64_JUMP_LABEL=FAIL non-immediate key admitted' >&2
+    exit 1
+fi
+test ! -e "$work/wrong-key-constraint.s"
+echo 'MINIC_LOONGARCH64_JUMP_LABEL_ADDEND=PASS plus_one=emitted array_plus_112=emitted wrong_constraint=rejected'
+
+# Authenticated full GNU-preprocessed Linux traps.i is supplied by the owner
+# artifact rather than fabricated here. Its real inline-specialized static
+# key addresses perf_swevent_enabled+112 and must survive M1 intact.
+if test -n "${LOONG_TRAPS_ORIGINAL_I:-}"; then
+    test -f "$LOONG_TRAPS_ORIGINAL_I"
+    MINIC_BACKEND_CENSUS=1 "$MINIC_CC" --target=loongarch64-linux \
+        -fshort-wchar -funsigned-char -fno-pie -mabi=lp64s -S \
+        "$LOONG_TRAPS_ORIGINAL_I" -o "$work/traps.s" \
+        2>"$work/traps.err"
+    grep -Fq 'MINIC_BACKEND_CENSUS arch=loongarch64 scanned=167 rejected=0' \
+        "$work/traps.err"
+    grep -Fq 'perf_swevent_enabled+112 - .' "$work/traps.s"
+    echo 'MINIC_LOONGARCH64_TRAPS_CENSUS=PASS original_gnu_i=167/167 key_addend=+112'
+fi
+@@@ end
+@@@ {"head_lines": 4, "kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/probe-loongarch64-linux-vdso-syscall.sh", "shared": "5843a0d532119f53"}
+#!/bin/sh
+# Linux 6.6.143 arch/loongarch/vdso/vgettimeofday.c fallback wrappers.
+# Preserve the original target-qualified a7/a0/a1 ABI, the nine t-register
+# clobbers and the compiler memory barrier; no generic syscall text escape.
+cat >"$work/vdso.i" <<'SRC'
+struct old_tv { long seconds; long micros; };
+struct zone { int west; int dst; };
+struct timespec { long seconds; long nanos; };
+
+long vdso_gettimeofday_fallback(struct old_tv *_tv, struct zone *_tz) {
+    register struct old_tv *tv asm("a0") = _tv;
+    register struct zone *tz asm("a1") = _tz;
+    register long nr asm("a7") = 169;
+    register long ret asm("a0");
+    asm volatile("       syscall 0\n"
+        : "+r"(ret) : "r"(nr), "r"(tv), "r"(tz)
+        : "$t0", "$t1", "$t2", "$t3", "$t4", "$t5", "$t6", "$t7", "$t8", "memory");
+    return ret;
+}
+
+int vdso_clock_getres_fallback(int _clockid, struct timespec *_ts) {
+    register int clockid asm("a0") = _clockid;
+    register struct timespec *ts asm("a1") = _ts;
+    register long nr asm("a7") = 114;
+    register long ret asm("a0");
+    asm volatile("       syscall 0\n"
+        : "+r"(ret) : "r"(nr), "r"(clockid), "r"(ts)
+        : "$t0", "$t1", "$t2", "$t3", "$t4", "$t5", "$t6", "$t7", "$t8", "memory");
+    return (int)ret;
+}
+SRC
+"$MINIC_CC" --target=loongarch64-linux -S \
+    "$work/vdso.i" -o "$work/vdso.s"
+test "$(grep -Ec '^[[:space:]]+syscall[[:space:]]+0' "$work/vdso.s")" -eq 2
+test "$(grep -Ec '^[[:space:]]+ld\.d[[:space:]]+\$a7,' "$work/vdso.s")" -eq 2
+grep -Eq '^[[:space:]]+ld\.d[[:space:]]+\$a0,' "$work/vdso.s"
+grep -Eq '^[[:space:]]+ld\.w[[:space:]]+\$a0,' "$work/vdso.s"
+test "$(grep -Ec '^[[:space:]]+ld\.d[[:space:]]+\$a1,' "$work/vdso.s")" -eq 2
+test "$(grep -Ec '^[[:space:]]+st\.d[[:space:]]+\$a0,' "$work/vdso.s")" -ge 2
+echo 'MINIC_LOONG_VDSO_SYSCALL_SHAPE=PASS a7_number a0_arg a1_arg a0_return count=2'
+
+cross=${LOONGARCH64_CC:-loongarch64-linux-gnu-gcc-13}
+if command -v "$cross" >/dev/null 2>&1; then
+    "$cross" -c -x assembler "$work/vdso.s" -o "$work/vdso.o"
+    echo 'MINIC_LOONG_VDSO_SYSCALL_GNU_AS=PASS'
+else
+    echo 'MINIC_LOONG_VDSO_SYSCALL_GNU_AS=SKIP missing Loong GNU assembler'
+fi
+
+# The literal syscall mnemonic alone does not grant the privilege to bind
+# arbitrary operand registers, omit hardware clobbers or change the opcode.
+sed 's/asm("a7")/asm("a6")/g' "$work/vdso.i" >"$work/wrong-register.i"
+sed 's/"\$t8", "memory"/"\$t9", "memory"/g' \
+    "$work/vdso.i" >"$work/wrong-clobber.i"
+sed 's/syscall 0/syscall 1/g' "$work/vdso.i" >"$work/wrong-opcode.i"
+for name in wrong-register wrong-clobber wrong-opcode; do
+    if "$MINIC_CC" --target=loongarch64-linux -S \
+        "$work/$name.i" -o "$work/$name.s" \
+        >/dev/null 2>"$work/$name.err"; then
+        echo "MINIC_LOONG_VDSO_SYSCALL=FAIL $name admitted" >&2
+        exit 1
+    fi
+    test ! -e "$work/$name.s"
+done
+echo 'MINIC_LOONG_VDSO_SYSCALL_NEGATIVE=PASS wrong_register wrong_clobber wrong_opcode'
+@@@ end
+@@@ {"head_lines": 4, "kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/probe-lp64-many-parameters.sh", "shared": "5843a0d532119f53"}
+#!/bin/sh
+# A preflight 16-parameter cap used to hide the real zstd 18-argument function
+# despite the common LP64 function/call ABI planner accepting up to 64.
+# Exercise both incoming stack parameters and caller stack parameter slots.
+
+generate() {
+    count=$1
+    printf 'long many%s(' "$count"
+    i=1
+    while [ "$i" -le "$count" ]; do
+        [ "$i" -eq 1 ] || printf ', '
+        printf 'long p%s' "$i"
+        i=$((i + 1))
+    done
+    printf ') { return p1 + p8 + p9 + p%s; }\n' "$count"
+    printf 'long call%s(void) { return many%s(' "$count" "$count"
+    i=1
+    while [ "$i" -le "$count" ]; do
+        [ "$i" -eq 1 ] || printf ', '
+        printf '%s' "$i"
+        i=$((i + 1))
+    done
+    printf '); }\n'
+}
+
+generate 18 >"$work/many.i"
+generate 32 >>"$work/many.i"
+generate 64 >>"$work/many.i"
+for arch in loongarch64-linux aarch64-linux; do
+    "$MINIC_CC" --target="$arch" -fPIE -S \
+        "$work/many.i" -o "$work/$arch.s"
+    for n in 18 32 64; do
+        grep -Eq "(^|[[:space:]])many${n}:" "$work/$arch.s"
+        grep -Eq "(^|[[:space:]])call${n}:" "$work/$arch.s"
+    done
+    case "$arch" in
+        loongarch64-linux)
+            grep -Fq '  bl many64' "$work/$arch.s"
+            grep -Fq '  st.d $t0,' "$work/$arch.s"
+            ;;
+        aarch64-linux)
+            grep -Fq '  bl many64' "$work/$arch.s"
+            grep -Fq '  str x9, [sp, #0]' "$work/$arch.s"
+            ;;
+    esac
+    echo "MINIC_LP64_MANY_PARAMETERS=PASS arch=$arch arities=18,32,64 caller=1 callee=1"
+done
+
+generate 65 >"$work/invalid.i"
+for arch in loongarch64-linux aarch64-linux; do
+    if "$MINIC_CC" --target="$arch" -fPIE -S \
+        "$work/invalid.i" -o "$work/invalid-$arch.s" \
+        >/dev/null 2>"$work/invalid-$arch.err"; then
+        echo "MINIC_LP64_MANY_PARAMETERS=FAIL arch=$arch arity=65 accepted" >&2
+        exit 1
+    fi
+    test ! -e "$work/invalid-$arch.s"
+done
+echo 'MINIC_LP64_MANY_PARAMETERS_NEGATIVE=PASS arity=65 rejected'
+@@@ end

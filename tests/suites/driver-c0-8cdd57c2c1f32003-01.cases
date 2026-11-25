@@ -1,0 +1,414 @@
+@@@ {"id": "8cdd57c2c1f32003", "kind": "shared", "newline": true}
+set -Eeuo pipefail
+root=$(cd "$(dirname "$0")/../../.." && pwd)
+minic=${MINIC_CC:-"$root/build/debug/bin/minic-cc"}
+cc=${HOST_CC:-gcc}
+work=$(mktemp -d)
+trap 'rm -r -- "$work"' EXIT
+@@@ end
+@@@ {"head_lines": 3, "kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/probe-p46-head-aggregate.sh", "shared": "8cdd57c2c1f32003"}
+#!/usr/bin/env bash
+# MC-076: execute identical GCC/MiniC C after relocating .head.text and data
+# by the same displacement, checking both source/destination pointer roles.
+fail() { printf 'P46_X86_HEAD_AGGREGATE=FAIL %s\n' "$*" >&2; exit 1; }
+
+test -x "$minic" || fail 'MiniC compiler missing'
+source="$root/tests/compiler/c0/p46_x86_head_aggregate.c"
+driver="$root/tests/compiler/c0/p46_x86_head_aggregate_driver.c"
+"$cc" -E -P -std=gnu11 "$source" -o "$work/common.i" || fail preprocessing
+"$minic" --target=x86_64-linux -fno-PIE -S "$work/common.i" \
+    -o "$work/minic.s" || fail 'MiniC assembly'
+"$cc" -O0 -fno-PIE -no-pie -S "$work/common.i" \
+    -o "$work/gnu.s" || fail 'GCC assembly'
+"$cc" -no-pie -c -x assembler "$work/minic.s" \
+    -o "$work/minic.o" || fail 'MiniC GNU AS'
+"$cc" -no-pie -c -x assembler "$work/gnu.s" \
+    -o "$work/gnu.o" || fail 'GCC GNU AS'
+
+readelf -rW "$work/minic.o" > "$work/minic.reloc" || fail 'MiniC readelf'
+readelf -rW "$work/gnu.o" > "$work/gnu.reloc" || fail 'GCC readelf'
+for name in x86_p46_head_src x86_p46_head_dst; do
+    grep -Eq "R_X86_64_PC32.*$name" "$work/minic.reloc" \
+        || fail "MiniC lost physical $name PC32 access"
+    grep -Eq "R_X86_64_PC32.*$name" "$work/gnu.reloc" \
+        || fail "GCC lost physical $name PC32 access"
+    grep -Eq "R_X86_64_32S.*$name" "$work/minic.reloc" \
+        || fail "MiniC cast lost numeric link VMA $name"
+done
+
+"$cc" -no-pie "$driver" "$work/minic.o" -o "$work/minic.elf" \
+    || fail 'MiniC GNU LD'
+"$cc" -no-pie "$driver" "$work/gnu.o" -o "$work/gnu.elf" \
+    || fail 'GCC GNU LD'
+"$work/minic.elf" > "$work/minic.out" || {
+    sed -n '1,2p' "$work/minic.out" >&2
+    fail 'MiniC displaced runtime'
+}
+"$work/gnu.elf" > "$work/gnu.out" || {
+    sed -n '1,2p' "$work/gnu.out" >&2
+    fail 'GCC displaced runtime'
+}
+cmp "$work/minic.out" "$work/gnu.out" \
+    || fail 'MiniC/GCC displaced outcome mismatch'
+grep -Fxq 'HEAD_AGGREGATE displace_direct=1 displace_cast=1 displace_load=1' \
+    "$work/minic.out" || fail 'incorrect physical/link VMA address roles'
+
+"$minic" --target=x86_64-linux -fPIE -S "$work/common.i" \
+    -o "$work/pie.s" || fail 'MiniC PIE'
+"$cc" -c -x assembler "$work/pie.s" -o "$work/pie.o" \
+    || fail 'PIE GNU AS'
+readelf -rW "$work/pie.o" > "$work/pie.reloc" || fail 'PIE readelf'
+if grep -Eq 'R_X86_64_32S.*x86_p46_head_(src|dst)' "$work/pie.reloc"; then
+    fail 'PIE inherited non-PIE physical/link VMA policy'
+fi
+
+printf '%s\n' 'P46_X86_HEAD_AGGREGATE=PASS GCC_same_source=1 GNU_AS=3 GNU_LD=2 displaced_direct=1 displaced_cast=1 displaced_record_load=1 ELF_RIP_and_VMA=1 PIE_no_absolute=1'
+@@@ end
+@@@ {"head_lines": 6, "kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/probe-p48-head-local-provenance.sh", "shared": "8cdd57c2c1f32003"}
+#!/usr/bin/env bash
+# MC-076 / P48: one fail-closed x86 .head.text memory-provenance family.
+# GNU AS/LD and the physically displaced native runner distinguish linked
+# numeric VMA from the cloned pre-MMU physical data object.  GCC -O2 is a
+# positive control where it produces that intended effect; GCC -O0 is NOT a
+# displaced golden for pointer values deliberately stored in local memory.
+fail() { printf 'P48_X86_HEAD_LOCAL_PROVENANCE=FAIL %s\n' "$*" >&2; exit 1; }
+
+test -x "$minic" || fail 'MiniC compiler missing'
+test "$(uname -m)" = x86_64 || fail 'requires native x86_64'
+for tool in "$cc" readelf nm; do
+    command -v "$tool" >/dev/null || fail "missing required GNU tool=$tool"
+done
+source="$root/tests/compiler/c0/p48_x86_head_local_provenance.c"
+driver="$root/tests/compiler/c0/p48_x86_head_local_provenance_driver.c"
+"$cc" -E -P -std=gnu11 "$source" -o "$work/common.i" || fail 'GNU CPP'
+
+"$minic" --target=x86_64-linux -fno-PIE -S "$work/common.i" \
+    -o "$work/minic.s" || fail 'MiniC no-PIE source'
+"$cc" -O2 -fno-PIE -no-pie -S "$work/common.i" \
+    -o "$work/gnu-O2.s" || fail 'GCC -O2 same-source'
+"$cc" -fno-PIE -no-pie -c -x assembler "$work/minic.s" \
+    -o "$work/minic.o" || fail 'MiniC GNU AS'
+"$cc" -fno-PIE -no-pie -c -x assembler "$work/gnu-O2.s" \
+    -o "$work/gnu-O2.o" || fail 'GCC GNU AS'
+
+readelf -rW "$work/minic.o" > "$work/minic.reloc" || fail 'MiniC ELF reloc'
+readelf -rW "$work/gnu-O2.o" > "$work/gnu-O2.reloc" \
+    || fail 'GCC ELF reloc'
+for source_kind in minic gnu-O2; do
+    grep -Eq 'R_X86_64_PC32.*p48_head_cells' "$work/$source_kind.reloc" \
+        || fail "$source_kind lost physical PC32 .head.data access"
+    grep -Eq 'R_X86_64_32(S)?.*p48_head_cells' "$work/$source_kind.reloc" \
+        || fail "$source_kind lost numeric link VMA .head.data value"
+done
+
+# The displacement driver clones at most 1 KiB of machine code starting at
+# the tested symbol. Fail if any function grows beyond that boundary.
+for source_kind in minic gnu-O2; do
+    while read -r address size kind symbol; do
+        case "$symbol" in
+            p48_head_*)
+                case "$kind" in T|t) ;; *) continue ;; esac
+                [[ "$size" =~ ^[[:xdigit:]]+$ ]] \
+                    || fail "$source_kind invalid nm size for $symbol"
+                test "$((16#$size))" -le 1024 \
+                    || fail "$source_kind displaced function too large: $symbol"
+                ;;
+        esac
+    done < <(nm --defined-only --print-size "$work/$source_kind.o")
+done
+
+"$cc" -std=gnu11 -O2 -Wall -Wextra -Werror -fno-PIE -no-pie \
+    "$driver" "$work/minic.o" -o "$work/minic.elf" \
+    || fail 'MiniC GNU LD + driver'
+"$cc" -std=gnu11 -O2 -Wall -Wextra -Werror -DP48_GNU_GOLDEN=1 \
+    -fno-PIE -no-pie "$driver" "$work/gnu-O2.o" \
+    -o "$work/gnu-O2.elf" || fail 'GCC GNU LD + driver'
+
+"$work/gnu-O2.elf" > "$work/gnu-O2.out" || {
+    sed -n '1,4p' "$work/gnu-O2.out" >&2
+    fail 'GCC -O2 displaced positive controls'
+}
+grep -Fxq 'P48_HEAD_LOCAL gnu_baseline=1 gnu_plain_local=1 normal=1' \
+    "$work/gnu-O2.out" || fail 'GCC -O2 same-source controls'
+
+# Verify the unrelated position-independent and ordinary .text contracts
+# before the intentionally difficult pre-MMU runtime cases below.
+"$minic" --target=x86_64-linux -fPIE -S "$work/common.i" \
+    -o "$work/pie.s" || fail 'MiniC PIE source'
+"$cc" -fPIE -c -x assembler "$work/pie.s" -o "$work/pie.o" \
+    || fail 'PIE GNU AS'
+readelf -rW "$work/pie.o" > "$work/pie.reloc" || fail 'PIE ELF reloc'
+if grep -Eq 'R_X86_64_32S?.*p48_head_(cells|other)' "$work/pie.reloc"; then
+    fail 'PIE inherited early-head absolute link-VMA relocation'
+fi
+"$cc" -std=gnu11 -O2 -Wall -Wextra -Werror -Wno-unused-function \
+    -DP48_NATIVE_ONLY=1 -fPIE -pie "$driver" "$work/pie.o" \
+    -o "$work/pie.elf" || fail 'PIE GNU LD + driver'
+"$work/pie.elf" > "$work/pie.out" || fail 'PIE native .text runtime'
+grep -Fxq 'P48_HEAD_LOCAL pic_normal=1' "$work/pie.out" \
+    || fail 'ordinary .text pointer local changed under PIE'
+
+"$work/minic.elf" > "$work/minic.out" || {
+    sed -n '1,4p' "$work/minic.out" >&2
+    fail 'MiniC pre-MMU displaced native runtime'
+}
+grep -Fxq 'P48_HEAD_LOCAL baseline=1 plain=1 local=1 roundtrip0=1 roundtrip1=1 branch0=1 branch1=1 record=1 overflow=1 normal=1' \
+    "$work/minic.out" || fail 'MiniC pointer transport / VMA oracle'
+
+# Conflicting-origin and address-escaping local pointer slots are not proven
+# physically safe; the x86 target MUST reject instead of silently assigning
+# one global's physical policy. GCC compiles both identical, valid C source
+# cases for comparison, but the pre-MMU execution semantics are deliberately
+# not claimed.  Compile separately so either bad admission is observable.
+for case in CONFLICT ALIAS; do
+    label=$(printf '%s' "$case" | tr '[:upper:]' '[:lower:]')
+    "$cc" -E -P -std=gnu11 "-DP48_CASE_$case" \
+        "$root/tests/compiler/c0/p48_x86_head_local_uncertain.c" \
+        -o "$work/$label.i" || fail "GCC CPP negative=$label"
+    "$cc" -O2 -fno-PIE -no-pie -S "$work/$label.i" \
+        -o "$work/$label.gnu.s" || fail "GCC same-source negative=$label"
+    "$cc" -c -x assembler "$work/$label.gnu.s" \
+        -o "$work/$label.gnu.o" || fail "GNU AS negative=$label"
+    if "$minic" --target=x86_64-linux -fno-PIE -S "$work/$label.i" \
+        -o "$work/$label.minic.s" > "$work/$label.stdout" \
+        2> "$work/$label.stderr"; then
+        fail "unsafe uncertain head pointer was admitted: $label"
+    fi
+    grep -Eiq 'head.*(unproven|provenance|alias|ambiguous)' \
+        "$work/$label.stderr" \
+        || fail "missing head provenance diagnostic: $label"
+    test ! -s "$work/$label.minic.s" \
+        || fail "partial ELF assembly escaped reject transaction: $label"
+done
+
+printf '%s\n' 'P48_X86_HEAD_LOCAL_PROVENANCE=PASS MiniC_displaced=9/9 GNU_O2_same_source_control=2/2 ordinary_text=1 PIE_ordinary_text=1 GNU_AS_LD=1 ELF_PC32_and_32S=1 head_uncertain_fail_closed=2/2 GCC_O0_local_displaced=NOT_GOLDEN x86_Linux_QEMU=NOT_RUN'
+@@@ end
+@@@ {"head_lines": 5, "kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/probe-p49-head-crosscall-provenance.sh", "shared": "8cdd57c2c1f32003"}
+#!/usr/bin/env bash
+# MC-076/P49: same GNU input has genuine pre-MMU physical STORE + link-VMA
+# helper argument. Until cross-function Core parameter provenance exists,
+# MiniC must fail closed on the observed numeric alias, but it must still
+# admit a helper that only dereferences the incoming physical pointer.
+fail() { printf 'P49_X86_HEAD_CROSSCALL=FAIL %s\n' "$*" >&2; exit 1; }
+
+test -x "$minic" || fail 'MiniC compiler missing'
+test "$(uname -m)" = x86_64 || fail 'requires native x86_64'
+for tool in "$cc" readelf; do
+    command -v "$tool" >/dev/null || fail "missing required GNU tool=$tool"
+done
+source="$root/tests/compiler/c0/p49_x86_head_crosscall_provenance.c"
+driver="$root/tests/compiler/c0/p49_x86_head_crosscall_driver.c"
+"$cc" -E -P -std=gnu11 "$source" -o "$work/common.i" || fail GNU-CPP
+
+"$cc" -O2 -fno-PIE -mcmodel=kernel -S "$work/common.i" \
+    -o "$work/gnu.s" || fail GCC-O2
+"$cc" -c -x assembler "$work/gnu.s" -o "$work/gnu.o" || fail GNU-AS
+readelf -rW "$work/gnu.o" > "$work/gnu.reloc" || fail readelf
+grep -Eq 'R_X86_64_PC32.*p49_head_global' "$work/gnu.reloc" \
+    || fail 'GNU direct store lost physical PC32'
+grep -Eq 'R_X86_64_32S.*p49_head_global' "$work/gnu.reloc" \
+    || fail 'GNU helper argument lost absolute link VMA'
+"$cc" -O2 -fno-PIE -no-pie "$driver" "$work/gnu.o" \
+    -o "$work/gnu.elf" || fail GNU-LD
+"$work/gnu.elf" > "$work/gnu.out" || fail GNU-displaced-runtime
+grep -q '^P49_HEAD_CROSSCALL=PASS ' "$work/gnu.out" \
+    || fail GNU-displaced-oracle
+
+if "$minic" --target=x86_64-linux -fno-PIE -S "$work/common.i" \
+    -o "$work/minic.s" > "$work/minic.stdout" \
+    2> "$work/minic.stderr"; then
+    fail 'MiniC silently accepted numeric cross-function physical pointer'
+fi
+grep -Eiq 'early head unproven cross-function numeric pointer provenance' \
+    "$work/minic.stderr" || fail 'missing precise fail-closed diagnostic'
+test ! -s "$work/minic.s" || fail 'partial assembly escaped refusal'
+
+# The direct callee may only return a pointer, with the numeric cast
+# performed after the CALL by its caller.  Verify the GNU displaced oracle
+# independently and refuse the unsafe physical pointer round-trip in MiniC.
+return_source="$root/tests/compiler/c0/p49_x86_head_return_alias.c"
+"$cc" -E -P -std=gnu11 "$return_source" -o "$work/return.i" \
+    || fail return-CPP
+"$cc" -O2 -fno-PIE -mcmodel=kernel -S "$work/return.i" \
+    -o "$work/return.gnu.s" || fail return-GCC-O2
+"$cc" -c -x assembler "$work/return.gnu.s" -o "$work/return.gnu.o" \
+    || fail return-GNU-AS
+readelf -rW "$work/return.gnu.o" > "$work/return.gnu.reloc" \
+    || fail return-readelf
+grep -Eq 'R_X86_64_PC32.*p49_head_global' "$work/return.gnu.reloc" \
+    || fail 'GNU return-alias store lost physical PC32'
+grep -Eq 'R_X86_64_32S.*p49_head_global' "$work/return.gnu.reloc" \
+    || fail 'GNU return-alias helper argument lost link VMA'
+"$cc" -O2 -DP49_POINTER_RETURN -fno-PIE -no-pie "$driver" \
+    "$work/return.gnu.o" -o "$work/return.gnu.elf" || fail return-GNU-LD
+"$work/return.gnu.elf" > "$work/return.gnu.out" || fail return-GNU-runtime
+grep -q '^P49_HEAD_CROSSCALL=PASS ' "$work/return.gnu.out" \
+    || fail return-GNU-displaced-oracle
+if "$minic" --target=x86_64-linux -fno-PIE -S "$work/return.i" \
+    -o "$work/return.minic.s" > "$work/return.minic.stdout" \
+    2> "$work/return.minic.stderr"; then
+    fail 'MiniC silently accepted returned numeric physical pointer'
+fi
+grep -Eiq 'early head unproven cross-function numeric pointer provenance' \
+    "$work/return.minic.stderr" || fail 'missing return-alias diagnostic'
+test ! -s "$work/return.minic.s" || fail 'partial return-alias assembly escaped refusal'
+
+# P50: a returned pointer passes through a volatile local pointer slot
+# before the caller interprets it numerically.  Same GNU source, real
+# physical-displacement execution and the same fail-closed contract as P49.
+local_source="$root/tests/compiler/c0/p50_x86_head_return_local_alias.c"
+"$cc" -E -P -std=gnu11 "$local_source" -o "$work/local.i" \
+    || fail local-CPP
+"$cc" -O2 -fno-PIE -mcmodel=kernel -S "$work/local.i" \
+    -o "$work/local.gnu.s" || fail local-GCC-O2
+"$cc" -c -x assembler "$work/local.gnu.s" -o "$work/local.gnu.o" \
+    || fail local-GNU-AS
+readelf -rW "$work/local.gnu.o" > "$work/local.gnu.reloc" \
+    || fail local-readelf
+grep -Eq 'R_X86_64_PC32.*p49_head_global' "$work/local.gnu.reloc" \
+    || fail 'GNU local-return store lost physical PC32'
+grep -Eq 'R_X86_64_32S.*p49_head_global' "$work/local.gnu.reloc" \
+    || fail 'GNU local-return helper argument lost link VMA'
+"$cc" -O2 -DP49_POINTER_RETURN -fno-PIE -no-pie "$driver" \
+    "$work/local.gnu.o" -o "$work/local.gnu.elf" \
+    || fail local-GNU-LD
+"$work/local.gnu.elf" > "$work/local.gnu.out" \
+    || fail local-GNU-runtime
+grep -q '^P49_HEAD_CROSSCALL=PASS ' "$work/local.gnu.out" \
+    || fail local-GNU-displaced-oracle
+if "$minic" --target=x86_64-linux -fno-PIE -S "$work/local.i" \
+    -o "$work/local.minic.s" > "$work/local.minic.stdout" \
+    2> "$work/local.minic.stderr"; then
+    fail 'MiniC silently accepted locally reloaded numeric physical pointer'
+fi
+grep -Eiq 'early head unproven cross-function numeric pointer provenance' \
+    "$work/local.minic.stderr" \
+    || fail 'missing local-return provenance diagnostic'
+test ! -s "$work/local.minic.s" \
+    || fail 'partial local-return assembly escaped refusal'
+
+# P51: the first helper returns another helper's CALL result.  The same
+# source must succeed under the GNU link-VMA/physical-store displaced oracle,
+# but MiniC must conservatively refuse an unproven two-hop return alias.
+nested_source="$root/tests/compiler/c0/p51_x86_head_nested_return_alias.c"
+"$cc" -E -P -std=gnu11 "$nested_source" -o "$work/nested.i" \
+    || fail nested-CPP
+"$cc" -O2 -fno-PIE -mcmodel=kernel -S "$work/nested.i" \
+    -o "$work/nested.gnu.s" || fail nested-GCC-O2
+"$cc" -c -x assembler "$work/nested.gnu.s" -o "$work/nested.gnu.o" \
+    || fail nested-GNU-AS
+readelf -rW "$work/nested.gnu.o" > "$work/nested.gnu.reloc" \
+    || fail nested-readelf
+grep -Eq 'R_X86_64_PC32.*p49_head_global' "$work/nested.gnu.reloc" \
+    || fail 'GNU nested store lost physical PC32'
+grep -Eq 'R_X86_64_32S.*p49_head_global' "$work/nested.gnu.reloc" \
+    || fail 'GNU nested helper argument lost absolute link VMA'
+"$cc" -O2 -DP49_POINTER_RETURN -DP51_NESTED_RETURN -fno-PIE -no-pie \
+    "$driver" "$work/nested.gnu.o" -o "$work/nested.gnu.elf" \
+    || fail nested-GNU-LD
+"$work/nested.gnu.elf" > "$work/nested.gnu.out" || fail nested-GNU-runtime
+grep -q '^P49_HEAD_CROSSCALL=PASS ' "$work/nested.gnu.out" \
+    || fail nested-GNU-displaced-oracle
+if "$minic" --target=x86_64-linux -fno-PIE -S "$work/nested.i" \
+    -o "$work/nested.minic.s" > "$work/nested.minic.stdout" \
+    2> "$work/nested.minic.stderr"; then
+    fail 'MiniC silently accepted two-hop numeric physical pointer alias'
+fi
+grep -Eiq 'early head unproven cross-function numeric pointer provenance' \
+    "$work/nested.minic.stderr" \
+    || fail 'missing two-hop pointer provenance diagnostic'
+test ! -s "$work/nested.minic.s" \
+    || fail 'partial two-hop assembly escaped rejection'
+
+# P52: function-pointer INDIRECT_CALL.  GNU emits separate physical
+# PC32 STORE and absolute 32S link-VMA address; execute its *cloned* code
+# and data through the existing displaced GNU native oracle.  MiniC must
+# decline the unproven pointer-return/numeric-use path without any output.
+indirect_source="$root/tests/compiler/c0/p52_x86_head_indirect_return_alias.c"
+"$cc" -E -P -std=gnu11 "$indirect_source" -o "$work/indirect.i" \
+    || fail indirect-CPP
+"$cc" -O2 -fno-PIE -mcmodel=kernel -S "$work/indirect.i" \
+    -o "$work/indirect.gnu.s" || fail indirect-GCC-O2
+"$cc" -c -x assembler "$work/indirect.gnu.s" -o "$work/indirect.gnu.o" \
+    || fail indirect-GNU-AS
+readelf -rW "$work/indirect.gnu.o" > "$work/indirect.gnu.reloc" \
+    || fail indirect-readelf
+grep -Eq 'R_X86_64_PC32.*p49_head_global' "$work/indirect.gnu.reloc" \
+    || fail 'GNU indirect store lost physical PC32'
+grep -Eq 'R_X86_64_32S.*p49_head_global' "$work/indirect.gnu.reloc" \
+    || fail 'GNU indirect argument lost absolute link VMA'
+"$cc" -O2 -DP49_POINTER_RETURN -fno-PIE -no-pie "$driver" \
+    "$work/indirect.gnu.o" -o "$work/indirect.gnu.elf" \
+    || fail indirect-GNU-LD
+"$work/indirect.gnu.elf" > "$work/indirect.gnu.out" \
+    || fail indirect-GNU-displaced-runtime
+grep -q '^P49_HEAD_CROSSCALL=PASS ' "$work/indirect.gnu.out" \
+    || fail indirect-GNU-displaced-oracle
+if "$minic" --target=x86_64-linux -fno-PIE -S "$work/indirect.i" \
+    -o "$work/indirect.minic.s" > "$work/indirect.minic.stdout" \
+    2> "$work/indirect.minic.stderr"; then
+    fail 'MiniC silently accepted indirect physical-to-numeric pointer'
+fi
+grep -Eiq 'early head unproven cross-function numeric pointer provenance' \
+    "$work/indirect.minic.stderr" \
+    || fail 'missing indirect-call provenance diagnostic'
+test ! -s "$work/indirect.minic.s" \
+    || fail 'partial indirect-call assembly escaped rejection'
+
+# P53: external direct callee has no Core body to inspect.  This source
+# has a real GNU ELF relocation oracle, but cannot use the displaced
+# runtime driver without introducing a different external linkage model.
+external_source="$root/tests/compiler/c0/p53_x86_head_external_return_alias.c"
+"$cc" -E -P -std=gnu11 "$external_source" -o "$work/external.i" \
+    || fail external-CPP
+"$cc" -O2 -fno-PIE -mcmodel=kernel -S "$work/external.i" \
+    -o "$work/external.gnu.s" || fail external-GCC-O2
+"$cc" -c -x assembler "$work/external.gnu.s" -o "$work/external.gnu.o" \
+    || fail external-GNU-AS
+readelf -rW "$work/external.gnu.o" > "$work/external.gnu.reloc" \
+    || fail external-readelf
+grep -Eq 'R_X86_64_PC32.*p49_head_global' "$work/external.gnu.reloc" \
+    || fail 'GNU external store lost physical PC32'
+grep -Eq 'R_X86_64_32S.*p49_head_global' "$work/external.gnu.reloc" \
+    || fail 'GNU external argument lost absolute link VMA'
+if "$minic" --target=x86_64-linux -fno-PIE -S "$work/external.i" \
+    -o "$work/external.minic.s" > "$work/external.minic.stdout" \
+    2> "$work/external.minic.stderr"; then
+    fail 'MiniC silently accepted external physical-to-numeric pointer'
+fi
+grep -Eiq 'early head unproven cross-function numeric pointer provenance' \
+    "$work/external.minic.stderr" \
+    || fail 'missing external-call provenance diagnostic'
+test ! -s "$work/external.minic.s" \
+    || fail 'partial external-call assembly escaped rejection'
+
+# P54 positive: external helper with no numeric pointer result must
+# remain admitted.  Assembling with unresolved external relocations is
+# valid here; no runtime semantic proof of that external body is claimed.
+physical_source="$root/tests/compiler/c0/p54_x86_head_external_physical_only.c"
+"$cc" -E -P -std=gnu11 "$physical_source" \
+    -o "$work/external-physical.i" || fail physical-external-CPP
+"$minic" --target=x86_64-linux -fno-PIE -S \
+    "$work/external-physical.i" -o "$work/external-physical.s" \
+    || fail 'physical-only external helper incorrectly rejected'
+"$cc" -c -x assembler "$work/external-physical.s" \
+    -o "$work/external-physical.o" || fail physical-external-GNU-AS
+readelf -rW "$work/external-physical.o" \
+    > "$work/external-physical.reloc" || fail physical-external-readelf
+grep -Eq 'R_X86_64_PC32.*p54_physical_global' \
+    "$work/external-physical.reloc" \
+    || fail 'physical-only external helper lost PC32 data store'
+
+"$cc" -E -P -std=gnu11 \
+    "$root/tests/compiler/c0/p49_x86_head_physical_helper.c" \
+    -o "$work/physical.i" || fail physical-CPP
+"$minic" --target=x86_64-linux -fno-PIE -S "$work/physical.i" \
+    -o "$work/physical.s" || fail 'physical helper incorrectly rejected'
+"$cc" -c -x assembler "$work/physical.s" -o "$work/physical.o" \
+    || fail physical-GNU-AS
+readelf -rW "$work/physical.o" > "$work/physical.reloc" || fail physical-readelf
+grep -Eq 'R_X86_64_PC32.*p49_physical_global' "$work/physical.reloc" \
+    || fail 'physical helper lost PC32 direct global'
+
+printf '%s\n' 'P49_X86_HEAD_CROSSCALL=PASS GNU_O2_same_source_displaced=5 MiniC_numeric_alias_fail_closed=6 MiniC_physical_helper_admitted=2 GNU_external_ELF_only=1 GNU_AS_LD=1 ELF_PC32_and_32S=1 RTL_PREMMU=NOT_RUN'
+@@@ end

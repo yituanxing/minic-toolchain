@@ -1,0 +1,177 @@
+@@@ {"id": "65e78d433b7fa12c", "kind": "shared", "newline": true}
+set -Eeuo pipefail
+mini=${1:?MiniC compiler}
+test -x "$mini"
+d=$(mktemp -d)
+trap 'rm -rf "$d"' EXIT
+@@@ end
+@@@ {"head_lines": 4, "kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/probe-x86-linux-boot-flags-native.sh", "shared": "65e78d433b7fa12c"}
+#!/usr/bin/env bash
+# Compare the exact GNU x86 compressed-boot CPUID/bit/flags/register grammar
+# with GCC at runtime.  CR0 read/write and task-register writes are privileged
+# and are verified only via the original frozen kernel owner and GNU AS.
+cat > "$d/mini.i" <<'SRC'
+typedef unsigned int u32;
+typedef _Bool bool;
+int mini_bit(u32 *p, u32 n) {
+    bool result = 0;
+    asm volatile("btl %2,%1\n\t/* output condition code c */"
+        : "=@ccc"(result) : "m"(*p), "Ir"(n));
+    return result;
+}
+void mini_set(u32 *p, u32 n) {
+    asm volatile("btsl %1,%0" : "+m"(*p) : "Ir"(n));
+}
+void mini_cpuid(u32 id,u32 count,u32 *a,u32 *b,u32 *c,u32 *d) {
+    asm volatile("cpuid" : "=a"(*a),"=b"(*b),"=c"(*c),"=d"(*d)
+        : "0"(id),"2"(count));
+}
+int mini_eflag(unsigned long mask) {
+    unsigned long f0,f1;
+    asm volatile("pushfq\n\tpushfq\n\tpop %0\n\tmov %0,%1\n\t"
+                 "xor %2,%1\n\tpush %1\n\tpopfq\n\tpushfq\n\tpop %1\n\tpopfq"
+        : "=&r"(f0),"=&r"(f1) : "ri"(mask));
+    return !!((f0 ^ f1) & mask);
+}
+unsigned long mini_str(void) {
+    unsigned long tr;
+    asm volatile("str %0" : "=r"(tr));
+    return tr;
+}
+SRC
+sed 's/mini_/gnu_/g' "$d/mini.i" > "$d/gnu.c"
+"$mini" --target=x86_64-linux -S "$d/mini.i" -o "$d/mini.s"
+gcc -c -x assembler "$d/mini.s" -o "$d/mini.o"
+gcc -O0 -c "$d/gnu.c" -o "$d/gnu.o"
+cat > "$d/main.c" <<'SRC'
+#include <stdint.h>
+extern int mini_bit(uint32_t*,uint32_t),gnu_bit(uint32_t*,uint32_t);
+extern void mini_set(uint32_t*,uint32_t),gnu_set(uint32_t*,uint32_t);
+extern void mini_cpuid(uint32_t,uint32_t,uint32_t*,uint32_t*,uint32_t*,uint32_t*);
+extern void gnu_cpuid(uint32_t,uint32_t,uint32_t*,uint32_t*,uint32_t*,uint32_t*);
+extern int mini_eflag(unsigned long),gnu_eflag(unsigned long);
+extern unsigned long mini_str(void),gnu_str(void);
+int main(void) {
+    for (unsigned n=0;n<32;n++) {
+        uint32_t a=0,b=0;
+        mini_set(&a,n);gnu_set(&b,n);
+        if(a!=b || mini_bit(&a,n)!=gnu_bit(&b,n)) return 1;
+        if(mini_bit(&a,(n+1U)%32)!=gnu_bit(&b,(n+1U)%32)) return 2;
+    }
+    for (unsigned leaf=0;leaf<2;leaf++) {
+        uint32_t a[4]={0},b[4]={0};
+        mini_cpuid(leaf,0,&a[0],&a[1],&a[2],&a[3]);
+        gnu_cpuid(leaf,0,&b[0],&b[1],&b[2],&b[3]);
+        for(unsigned i=0;i<4;i++) if(a[i]!=b[i]) return 3;
+    }
+    if(mini_eflag(1UL<<21)!=gnu_eflag(1UL<<21)) return 4;
+    if((mini_str()&0xffffUL)!=(gnu_str()&0xffffUL)) return 5;
+    return 0;
+}
+SRC
+gcc -O0 -no-pie "$d/main.c" "$d/mini.o" "$d/gnu.o" -o "$d/run"
+"$d/run"
+sed 's/btsl %1,%0/btcl %1,%0/' "$d/mini.i" > "$d/negative.i"
+if "$mini" --target=x86_64-linux -S "$d/negative.i" -o "$d/negative.s" \
+    >/dev/null 2>&1; then
+    echo 'X86_BOOT_FLAGS_FAIL=unadmitted bit opcode' >&2
+    exit 1
+fi
+test ! -e "$d/negative.s"
+echo 'MINIC_X86_BOOT_FLAGS_NATIVE=PASS bit=64 cpuid=2 eflags=1 str=1 negative=1'
+@@@ end
+@@@ {"head_lines": 3, "kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/probe-x86-linux-ipv6-checksum-native.sh", "shared": "65e78d433b7fa12c"}
+#!/usr/bin/env bash
+# Five dependent x86 ADD/ADC instructions from Linux IPv6 pseudo-header sum.
+# Comparison uses GCC's original inline ASM, including end-around carry.
+cat > "$d/mini.i" <<'SRC'
+typedef unsigned long long u64;
+u64 mini_ipv6(const u64 *saddr, const u64 *daddr, u64 rest) {
+    u64 sum64;
+    asm("addq (%[saddr]),%[sum]\n\t"
+        "adcq 8(%[saddr]),%[sum]\n\t"
+        "adcq (%[daddr]),%[sum]\n\t"
+        "adcq 8(%[daddr]),%[sum]\n\t"
+        "adcq $0,%[sum]\n"
+        : [sum] "=r"(sum64)
+        : "[sum]"(rest), [saddr] "r"(saddr), [daddr] "r"(daddr));
+    return sum64;
+}
+SRC
+sed 's/mini_/gnu_/g' "$d/mini.i" > "$d/gnu.c"
+"$mini" --target=x86_64-linux -S "$d/mini.i" -o "$d/mini.s"
+gcc -c -x assembler "$d/mini.s" -o "$d/mini.o"
+gcc -O0 -c "$d/gnu.c" -o "$d/gnu.o"
+cat > "$d/main.c" <<'SRC'
+#include <stdint.h>
+extern uint64_t mini_ipv6(const uint64_t*,const uint64_t*,uint64_t);
+extern uint64_t gnu_ipv6(const uint64_t*,const uint64_t*,uint64_t);
+int main(void) {
+    for (uint64_t n=0;n<512;n++) {
+        uint64_t s[2]={~0ULL-(n&31),n*0x9e3779b97f4a7c15ULL};
+        uint64_t d[2]={n*0x1001001001001ULL,~0ULL-((n*7)&255)};
+        uint64_t init=n&1 ? ~0ULL : n*0xc3e734abcdUL;
+        if(mini_ipv6(s,d,init)!=gnu_ipv6(s,d,init)) return 1;
+    }
+    return 0;
+}
+SRC
+gcc -O0 -no-pie "$d/main.c" "$d/mini.o" "$d/gnu.o" -o "$d/run"
+"$d/run"
+sed 's/adcq \$0,%\[sum\]/subq $0,%[sum]/' "$d/mini.i" > "$d/negative.i"
+if "$mini" --target=x86_64-linux -S "$d/negative.i" -o "$d/negative.s" \
+    >/dev/null 2>&1; then
+    echo 'X86_IPV6_FAIL=unadmitted carry-chain mutation' >&2
+    exit 1
+fi
+test ! -e "$d/negative.s"
+echo 'MINIC_X86_IPV6_NATIVE=PASS carry_chain=512 negative=1'
+@@@ end
+@@@ {"head_lines": 4, "kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/probe-x86-linux-softirq-stack-native.sh", "shared": "65e78d433b7fa12c"}
+#!/usr/bin/env bash
+# Exercise the exact Linux do_softirq RSP/R11 stack handoff under GNU and
+# MiniC.  The alternate stack has a 16-byte aligned top, so the CALL has the
+# same SysV entry alignment as the original kernel path.
+cat > "$d/probe.c" <<'SRC'
+register unsigned long current_stack_pointer asm("rsp");
+static unsigned long softirq_stack[8192] __attribute__((aligned(16)));
+static volatile unsigned long signal_value;
+
+__attribute__((noinline)) void __do_softirq(void)
+{
+    unsigned long local = 19;
+    signal_value += local;
+}
+
+__attribute__((noinline)) unsigned long probe_softirq(void)
+{
+    register void *tos asm("r11");
+    tos = (void *)&softirq_stack[8190];
+    asm __inline volatile(
+        "movq %%rsp, (%[tos])\n"
+        "movq %[tos], %%rsp\n"
+        "call %c[__func]\n"
+        "998:\n"
+        ".pushsection .discard.reachable\n"
+        ".long 998b\n"
+        ".popsection\n"
+        "popq %%rsp\n"
+        : "+r" (tos), "+r" (current_stack_pointer)
+        : [__func] "i" (__do_softirq), [tos] "r" (tos)
+        : "cc", "rax", "rcx", "rdx", "rsi", "rdi", "r8", "r9", "r10", "memory");
+    return signal_value;
+}
+
+int main(void)
+{
+    return probe_softirq() == 19 ? 0 : 1;
+}
+SRC
+gcc -O0 -fno-pie -no-pie "$d/probe.c" -o "$d/gnu"
+"$d/gnu"
+"$mini" --target=x86_64-linux -fno-PIE -S "$d/probe.c" -o "$d/mini.s"
+gcc -no-pie -x assembler "$d/mini.s" -o "$d/mini"
+"$d/mini"
+objdump -dr "$d/mini" | grep -q 'call.*__do_softirq'
+echo 'MINIC_X86_SOFTIRQ_STACK_NATIVE=PASS GNU=0 MiniC=0 RSP_restore=1 call=1'
+@@@ end

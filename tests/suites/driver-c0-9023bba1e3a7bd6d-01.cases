@@ -1,0 +1,91 @@
+@@@ {"id": "9023bba1e3a7bd6d", "kind": "shared", "newline": true}
+set -eu
+root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
+cc=${HOST_CC:-cc}
+minic=${MINIC_CC:-"$root/build/release/bin/minic-cc"}
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT HUP INT TERM
+@@@ end
+@@@ {"head_lines": 1, "kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/run-riscv-extended-zero-output-volatile.sh", "shared": "9023bba1e3a7bd6d"}
+#!/bin/sh
+"$cc" -E -P -std=gnu11 \
+    "$root/tests/compiler/c0/riscv_extended_zero_output_implicit_volatile.c" \
+    -o "$work/tlb.i"
+for target in riscv32 riscv64; do
+    "$minic" --target="$target-linux" -S "$work/tlb.i" -o "$work/$target.s"
+    test "$(grep -c 'sfence.vma x0,' "$work/$target.s")" -eq 2
+    echo "RISCV_EXTENDED_ZERO_OUTPUT_VOLATILE=PASS target=$target implicit=1 explicit=1 source=GNU_E"
+done
+@@@ end
+@@@ {"head_lines": 1, "kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/run-riscv-fixed-register-phase-alias.sh", "shared": "9023bba1e3a7bd6d"}
+#!/bin/sh
+fixture="$root/tests/compiler/c0/riscv_fixed_register_phase_alias.c"
+
+"$cc" -E -P -std=gnu11 "$fixture" -o "$work/positive.i"
+for target in riscv32 riscv64; do
+    "$minic" --target="$target-linux" -S "$work/positive.i" \
+        -o "$work/$target-positive.s"
+    grep -E 'add[[:space:]]+(a0|x10),[[:space:]]*(a0|x10),[[:space:]]*(a1|x11)' \
+        "$work/$target-positive.s" >/dev/null
+    grep -E '# nr=(a7|x17)' "$work/$target-positive.s" >/dev/null
+    for bad in EARLYCLOBBER TWO_INPUTS; do
+        "$cc" -E -P -std=gnu11 -DMINIC_BAD_"$bad" "$fixture" \
+            -o "$work/$target-$bad.i"
+        if "$minic" --target="$target-linux" -S "$work/$target-$bad.i" \
+                -o "$work/$target-$bad.s" \
+                >"$work/$target-$bad.stdout" 2>"$work/$target-$bad.stderr"; then
+            echo "FAIL RISC-V fixed phase alias accepted $target $bad" >&2
+            exit 1
+        fi
+        test ! -s "$work/$target-$bad.s"
+    done
+    echo "RISCV_FIXED_PHASE_ALIAS=PASS target=$target original_vdso_overlap=1 earlyclobber_rejected=1 two_inputs_rejected=1"
+done
+@@@ end
+@@@ {"head_lines": 1, "kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/run-riscv-linux-compiletime-assert-guards.sh", "shared": "9023bba1e3a7bd6d"}
+#!/bin/sh
+"$cc" -E -P -std=gnu11 \
+    "$root/tests/compiler/c0/riscv_linux_compiletime_assert_guards.c" \
+    -o "$work/original.i"
+for arch in riscv32 riscv64; do
+    "$minic" --target="$arch-linux" -S "$work/original.i" \
+        -o "$work/$arch.s"
+    # Actual Linux jump_label.c ATOMIC_INIT(0/1) compile-time assertions
+    # and the native-word READ_ONCE guard must never escape into GNU LD.
+    if grep -E 'call __compiletime_assert_(304|305|329|minmax_signedness|auto_type_qualifiers)([^A-Za-z0-9_]|$)' \
+        "$work/$arch.s"; then
+        echo "LINUX_COMPILETIME_ASSERT=FAIL target=$arch constant_guard_leaked" >&2
+        exit 1
+    fi
+    # Do not make attribute(error) functions disappear indiscriminately:
+    # conditions depending on runtime data or effectful compound literals
+    # must retain their unresolved fail-closed calls.
+    grep -Fq 'call __compiletime_assert_dynamic' "$work/$arch.s"
+    grep -Fq 'call __compiletime_assert_effectful' "$work/$arch.s"
+    grep -Fq 'call __compiletime_assert_minmax_dynamic' "$work/$arch.s"
+    echo "LINUX_COMPILETIME_ASSERT=PASS target=$arch scalar_init=2 rwonce=2 minmax_signedness=2 auto_type_cv=3 fail_closed=3"
+done
+@@@ end
+@@@ {"head_lines": 2, "kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/run-riscv-source-asm-saved-operands.sh", "shared": "9023bba1e3a7bd6d"}
+#!/bin/sh
+# Pin the irq.c fixed class: 2 generic operands, all caller-saved GPRs clobbered.
+fixture="$root/tests/compiler/c0/riscv_source_asm_saved_operands.c"
+"$cc" -E -P -std=gnu11 "$fixture" -o "$work/irq.i"
+"$minic" --target=riscv64-linux -march=rv64i -mabi=lp64 -S \
+    "$work/irq.i" -o "$work/irq.s"
+# RV64 ABI: s1=x9 and s2=x18 must be preserved in the function frame.
+for physical in x9 x18; do
+    grep -Eq "^[[:space:]]*sd[[:space:]]+$physical," "$work/irq.s"
+    grep -Eq "^[[:space:]]*ld[[:space:]]+$physical," "$work/irq.s"
+done
+grep -Eq 'xor[[:space:]]+zero,[[:space:]]*x9,[[:space:]]*x18' "$work/irq.s"
+"$cc" -E -P -std=gnu11 -DMINIC_BAD_NO_AVAILABLE_GPR \
+    "$fixture" -o "$work/bad.i"
+if "$minic" --target=riscv64-linux -march=rv64i -mabi=lp64 -S \
+    "$work/bad.i" -o "$work/bad.s" >"$work/bad.stdout" 2>"$work/bad.stderr"; then
+    echo 'FAIL all physical GPRs unavailable yet source ASM was accepted' >&2
+    exit 1
+fi
+test ! -s "$work/bad.s"
+echo 'RV64_SOURCE_ASM_SAVED_OPERANDS=PASS two_inputs=s1,s2 ABI_saved_and_restored=1 no_unsaved_fallback=1'
+@@@ end

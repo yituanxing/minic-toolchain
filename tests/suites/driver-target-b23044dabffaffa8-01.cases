@@ -1,0 +1,370 @@
+@@@ {"id": "b23044dabffaffa8", "kind": "shared", "newline": true}
+set -eu
+minic_cc=${MINIC_CC:-build/debug/bin/minic-cc}
+host_cc=${HOST_CC:-cc}
+source_root=${MINIC_SOURCE_ROOT:-.}
+workdir=$(mktemp -d)
+trap 'rm -rf -- "$workdir"' EXIT HUP INT TERM
+@@@ end
+@@@ {"head_lines": 1, "kind": "case", "mode": "100644", "newline": true, "path": "tests/target/run-linux-x86-apic-amd-alt.sh", "shared": "b23044dabffaffa8"}
+#!/bin/sh
+
+for fixture in x86_64_linux_apic_amd_alt x86_64_linux_alternative_wrmsr; do
+    input="$source_root/tests/target/$fixture.c"
+    "$host_cc" -E -P "$input" -o "$workdir/$fixture.i"
+    "$minic_cc" -S "$workdir/$fixture.i" --target=x86_64-linux \
+        -fshort-wchar -funsigned-char -fno-PIE -o "$workdir/$fixture.s"
+    "$host_cc" -c -x assembler "$workdir/$fixture.s" \
+        -o "$workdir/$fixture.o"
+    readelf -r "$workdir/$fixture.o" > "$workdir/$fixture.relocs"
+    if ! grep -q "Relocation section '.rela.altinstructions'" \
+        "$workdir/$fixture.relocs"; then
+        printf 'FAIL: missing %s GNU APIC patch relocations\n' "$fixture" >&2
+        exit 1
+    fi
+done
+
+readelf -r "$workdir/x86_64_linux_apic_amd_alt.o" | \
+    grep -c R_X86_64_PC32 > "$workdir/apic-count"
+if [ "$(sed -n '1p' "$workdir/apic-count")" -ne 4 ]; then
+    printf 'FAIL: APIC alternatives need 4 section PC32 fixups\n' >&2
+    exit 1
+fi
+objdump -d -j .altinstr_replacement \
+    "$workdir/x86_64_linux_apic_amd_alt.o" > "$workdir/replacement"
+if ! grep -Eq 'xchg.*%eax,\(%r10\)' "$workdir/replacement" ||
+   ! grep -Eq 'div.*%r10d' "$workdir/replacement"; then
+    printf 'FAIL: AMD APIC replacement machine instructions differ\n' >&2
+    exit 1
+fi
+objdump -s -j .altinstructions \
+    "$workdir/x86_64_linux_alternative_wrmsr.o" > "$workdir/wrmsr-bytes"
+if ! grep -q 'b4000000' "$workdir/wrmsr-bytes" ||
+   ! grep -q 'f500' "$workdir/wrmsr-bytes"; then
+    printf 'FAIL: WRMSR 180 and 245 feature records differ\n' >&2
+    exit 1
+fi
+
+# Negative controls must fail admission/selection; invalid ELF instruction
+# alternatives must not be printed as arbitrary GNU inline assembler.
+sed 's/(22\*32 + (5))/(22*32 + (6))/' \
+    "$source_root/tests/target/x86_64_linux_apic_amd_alt.c" | \
+    "$host_cc" -E -P -x c - -o "$workdir/apic-bad.i"
+if "$minic_cc" -S "$workdir/apic-bad.i" --target=x86_64-linux \
+    -fshort-wchar -funsigned-char -fno-PIE -o "$workdir/apic-bad.s" \
+    > "$workdir/apic-bad.log" 2>&1; then
+    printf 'FAIL: mutated AMD APIC patch feature accepted\n' >&2
+    exit 1
+fi
+sed 's/\[feature\] "i" (245)/[feature] "i" (4294967296UL)/' \
+    "$source_root/tests/target/x86_64_linux_alternative_wrmsr.c" | \
+    "$host_cc" -E -P -x c - -o "$workdir/wrmsr-bad.i"
+if "$minic_cc" -S "$workdir/wrmsr-bad.i" --target=x86_64-linux \
+    -fshort-wchar -funsigned-char -fno-PIE -o "$workdir/wrmsr-bad.s" \
+    > "$workdir/wrmsr-bad.log" 2>&1; then
+    printf 'FAIL: out-of-range WRMSR patch feature accepted\n' >&2
+    exit 1
+fi
+printf 'PASS: AMD APIC two forms, ELF PC32, WRMSR 180/245, negatives\n'
+@@@ end
+@@@ {"head_lines": 2, "kind": "case", "mode": "100644", "newline": true, "path": "tests/target/run-linux-x86-boot-flags.sh", "shared": "b23044dabffaffa8"}
+#!/bin/sh
+# All four forms are target-qualified and independently physically sealed.
+"$host_cc" -E -P "$source_root/tests/target/x86_64_linux_boot_flags.c" \
+    -o "$workdir/flags.i"
+"$minic_cc" -S "$workdir/flags.i" --target=x86_64-linux \
+    -fshort-wchar -funsigned-char -fno-PIE -o "$workdir/flags.s"
+"$host_cc" -c -x assembler "$workdir/flags.s" -o "$workdir/flags.o"
+objdump -d "$workdir/flags.o" > "$workdir/flags.dump"
+for opcode in 'bt ' 'bts ' cpuid pushf popf
+do
+    if ! grep -Fq "$opcode" "$workdir/flags.dump"; then
+        printf 'FAIL: original x86 boot flag instruction %s absent\n' "$opcode" >&2
+        exit 1
+    fi
+done
+printf 'PASS: Linux boot flag x86 four typed ASM forms + GNU AS\n'
+@@@ end
+@@@ {"head_lines": 2, "kind": "case", "mode": "100644", "newline": true, "path": "tests/target/run-linux-x86-boot-string.sh", "shared": "b23044dabffaffa8"}
+#!/bin/sh
+# Differential runtime test for Linux's three boot string ASM contracts.
+input="$source_root/tests/target/x86_64_linux_boot_string.c"
+"$host_cc" -E -P "$input" -o "$workdir/boot_string.i"
+"$minic_cc" -S "$workdir/boot_string.i" --target=x86_64-linux \
+    -fshort-wchar -funsigned-char -fno-PIE -o "$workdir/minic.s"
+"$host_cc" -c -x assembler "$workdir/minic.s" -o "$workdir/minic.o"
+"$host_cc" -no-pie "$workdir/minic.o" -o "$workdir/minic-test"
+"$host_cc" -no-pie -O0 "$input" -o "$workdir/gcc-test"
+"$workdir/gcc-test"
+"$workdir/minic-test"
+objdump -d "$workdir/minic.o" > "$workdir/instructions.dump"
+for opcode in cmpsb divl movsq movsb
+do
+    if ! grep -q "$opcode" "$workdir/instructions.dump"; then
+        printf 'FAIL: boot string hardware %s absent\n' "$opcode" >&2
+        exit 1
+    fi
+done
+printf 'PASS: Linux boot string complete triple ABI (MiniC/GNU AS vs GCC)\n'
+@@@ end
+@@@ {"head_lines": 2, "kind": "case", "mode": "100644", "newline": true, "path": "tests/target/run-linux-x86-bug-table-variants.sh", "shared": "b23044dabffaffa8"}
+#!/bin/sh
+# Three original Linux BUG/WARN forms, including numeric no-discard records.
+"$host_cc" -E -P "$source_root/tests/target/x86_64_linux_bug_table_variants.c" \
+    -o "$workdir/variants.i"
+"$minic_cc" -S "$workdir/variants.i" --target=x86_64-linux \
+    -fshort-wchar -funsigned-char -fno-PIE -o "$workdir/variants.s"
+"$host_cc" -c -x assembler "$workdir/variants.s" \
+    -o "$workdir/variants.o"
+readelf -r "$workdir/variants.o" > "$workdir/relocations"
+readelf -SW "$workdir/variants.o" > "$workdir/sections"
+if ! grep -Fq '.rela__bug_table' "$workdir/relocations" ||
+   ! grep -Fq '.rela.discard.reachable' "$workdir/relocations" ||
+   ! grep -Fq 'R_X86_64_PC32' "$workdir/relocations" ||
+   ! grep -Fq '__bug_table' "$workdir/sections"; then
+    printf 'FAIL: Linux BUG table lost section or PC32 relocation\n' >&2
+    exit 1
+fi
+records=$(awk '/Relocation section '\''\.rela__bug_table'\''/{in_bug=1;next} /Relocation section/{in_bug=0} in_bug && /R_X86_64_PC32/{n++} END{print n+0}' "$workdir/relocations")
+if [ "$records" -ne 6 ]; then
+    printf 'FAIL: BUG table expected 6 PC32 relocations, got %s\n' "$records" >&2
+    exit 1
+fi
+printf 'PASS: Linux numeric/named BUG/WARN ELF metadata (3 variants)\n'
+@@@ end
+@@@ {"head_lines": 2, "kind": "case", "mode": "100644", "newline": true, "path": "tests/target/run-linux-x86-cache-privileged.sh", "shared": "b23044dabffaffa8"}
+#!/bin/sh
+# Compile-only cacheline alternatives and all ten privileged zero-input forms.
+
+for fixture in \
+    tests/target/x86_64_linux_idle_clflush_alt.c \
+    tests/compiler/c0/x86_pat_clflushopt_alternative.c \
+    tests/target/x86_64_linux_privileged_zero.c
+do
+    name=$(basename "$fixture" .c)
+    "$host_cc" -E -P "$source_root/$fixture" -o "$workdir/$name.i"
+    "$minic_cc" -S "$workdir/$name.i" --target=x86_64-linux \
+        -fshort-wchar -funsigned-char -fno-PIE -o "$workdir/$name.s"
+    "$host_cc" -c -x assembler "$workdir/$name.s" -o "$workdir/$name.o"
+done
+
+for name in x86_64_linux_idle_clflush_alt x86_pat_clflushopt_alternative
+do
+    readelf -rW "$workdir/$name.o" > "$workdir/$name.reloc"
+    readelf -SW "$workdir/$name.o" > "$workdir/$name.sections"
+    for section in .altinstructions .altinstr_replacement
+    do
+        if ! grep -Fq "$section" "$workdir/$name.sections"; then
+            echo "FAIL: cache alternative $name lacks $section" >&2
+            exit 1
+        fi
+    done
+    if ! grep -Fq 'R_X86_64_PC32' "$workdir/$name.reloc"; then
+        echo "FAIL: cache alternative $name lacks PREL32 patch reloc" >&2
+        exit 1
+    fi
+done
+
+objdump -d "$workdir/x86_64_linux_privileged_zero.o" \
+    > "$workdir/privileged.dump"
+for mnemonic in cli sti hlt wbinvd swapgs serialize out int3
+do
+    if ! grep -Fq "$mnemonic" "$workdir/privileged.dump"; then
+        echo "FAIL: privileged hardware instruction $mnemonic absent" >&2
+        exit 1
+    fi
+done
+
+sed 's/(22\*32 + (7))/(22*32 + (8))/' \
+    "$workdir/x86_64_linux_idle_clflush_alt.i" > "$workdir/invalid-feature.i"
+if "$minic_cc" -S "$workdir/invalid-feature.i" --target=x86_64-linux \
+    -o "$workdir/invalid-feature.s" >/dev/null 2>&1; then
+    echo 'FAIL: altered Linux idle CPU feature accepted' >&2
+    exit 1
+fi
+printf 'PASS: Linux idle/PAT cache alternatives and ten privileged zero-input forms\n'
+@@@ end
+@@@ {"head_lines": 3, "kind": "case", "mode": "100644", "newline": true, "path": "tests/target/run-linux-x86-control-register.sh", "shared": "b23044dabffaffa8"}
+#!/bin/sh
+# All eight privileged CRn GNU source forms, including tied and plain CR0/4,
+# plus the optional fake-memory dependency. Compile and assemble, never run.
+"$host_cc" -E -P "$source_root/tests/target/x86_64_linux_control_register.c" \
+    -o "$workdir/control.i"
+"$minic_cc" -S "$workdir/control.i" --target=x86_64-linux \
+    -fshort-wchar -funsigned-char -fno-PIE -o "$workdir/control.s"
+"$host_cc" -c -x assembler "$workdir/control.s" -o "$workdir/control.o"
+objdump -d "$workdir/control.o" > "$workdir/control.dis"
+read_count=$(grep -Ec 'mov[[:space:]]+%cr[0-4],%rax' "$workdir/control.dis")
+write_count=$(grep -Ec 'mov[[:space:]]+%rax,%cr[0-4]' "$workdir/control.dis")
+if [ "$read_count" -ne 5 ] || [ "$write_count" -ne 6 ]; then
+    printf 'FAIL: CRn hardware instructions read=%s write=%s (expected 5/6)\n' \
+        "$read_count" "$write_count" >&2
+    exit 1
+fi
+for register in cr0 cr2 cr3 cr4
+do
+    if ! grep -Fq "%$register,%rax" "$workdir/control.dis"; then
+        printf 'FAIL: %s physical read absent\n' "$register" >&2
+        exit 1
+    fi
+done
+printf 'PASS: x86-64 CR0/2/3/4 typed MachineIR control state (11 physical ops)\n'
+@@@ end
+@@@ {"head_lines": 2, "kind": "case", "mode": "100644", "newline": true, "path": "tests/target/run-linux-x86-debug-boot.sh", "shared": "b23044dabffaffa8"}
+#!/bin/sh
+# All 12 debug-register forms, DR7 sentinel, and 3 head64 selector writes.
+"$host_cc" -E -P "$source_root/tests/target/x86_64_linux_debug_boot.c" \
+    -o "$workdir/debug-boot.i"
+"$minic_cc" -S "$workdir/debug-boot.i" --target=x86_64-linux \
+    -fshort-wchar -funsigned-char -fno-PIE -o "$workdir/debug-boot.s"
+"$host_cc" -c -x assembler "$workdir/debug-boot.s" -o "$workdir/debug-boot.o"
+objdump -d "$workdir/debug-boot.o" > "$workdir/debug-boot.dis"
+for register in db0 db1 db2 db3 db6 db7
+do
+    if ! grep -Eq "mov[[:space:]]+%$register,%rax" "$workdir/debug-boot.dis" ||
+       ! grep -Eq "mov[[:space:]]+%rax,%$register" "$workdir/debug-boot.dis"; then
+        printf 'FAIL: missing read/write of %s\n' "$register" >&2
+        exit 1
+    fi
+done
+for segment in ds ss es
+do
+    if ! grep -Eq "mov[[:space:]]+%eax,%$segment" "$workdir/debug-boot.dis"; then
+        printf 'FAIL: missing GDT reload of %s\n' "$segment" >&2
+        exit 1
+    fi
+done
+if grep -Eq '\*0x1000|0x1000\(' "$workdir/debug-boot.dis"; then
+    printf 'FAIL: DR7 sentinel was dereferenced\n' >&2
+    exit 1
+fi
+sed 's/"mov %%db" "0"/"mov %%db" "4"/' "$workdir/debug-boot.i" \
+    > "$workdir/unknown-dr.i"
+if "$minic_cc" -S "$workdir/unknown-dr.i" --target=x86_64-linux \
+    -fshort-wchar -funsigned-char -fno-PIE -o "$workdir/unknown-dr.s" \
+    > "$workdir/unknown-dr.log" 2>&1; then
+    printf 'FAIL: unrecognized DR4 source template was admitted\n' >&2
+    exit 1
+fi
+sed 's/movl %%eax, %%ss/movl %%eax, %%cs/' "$workdir/debug-boot.i" \
+    > "$workdir/unknown-segment.i"
+if "$minic_cc" -S "$workdir/unknown-segment.i" --target=x86_64-linux \
+    -fshort-wchar -funsigned-char -fno-PIE -o "$workdir/unknown-segment.s" \
+    > "$workdir/unknown-segment.log" 2>&1; then
+    printf 'FAIL: unrecognized CS segment write was admitted\n' >&2
+    exit 1
+fi
+printf 'PASS: x86 Linux 12 debug-register forms and 3 segment writes\n'
+@@@ end
+@@@ {"head_lines": 2, "kind": "case", "mode": "100644", "newline": true, "path": "tests/target/run-linux-x86-fpu-probe.sh", "shared": "b23044dabffaffa8"}
+#!/bin/sh
+# X87 discovery and privileged IRQ forms are compile-only, never executed.
+"$host_cc" -E -P "$source_root/tests/target/x86_64_linux_fpu_boot.c" \
+    -o "$workdir/fpu.i"
+"$minic_cc" -S "$workdir/fpu.i" --target=x86_64-linux \
+    -fshort-wchar -funsigned-char -fno-PIE -o "$workdir/fpu.s"
+"$host_cc" -c -x assembler "$workdir/fpu.s" -o "$workdir/fpu.o"
+objdump -d "$workdir/fpu.o" > "$workdir/fpu.dump"
+for opcode in fninit fnstsw fnstcw cli sti hlt
+do
+    if ! grep -Fq "$opcode" "$workdir/fpu.dump"; then
+        printf 'FAIL: x86 FPU/IRQ opcode %s missing\n' "$opcode" >&2
+        exit 1
+    fi
+done
+printf 'PASS: Linux x87 status/control probe + privileged IRQ forms\n'
+@@@ end
+@@@ {"head_lines": 1, "kind": "case", "mode": "100644", "newline": true, "path": "tests/target/run-linux-x86-paravirt-indirect-call.sh", "shared": "b23044dabffaffa8"}
+#!/bin/sh
+input="$source_root/tests/target/x86_64_linux_paravirt_indirect_call.c"
+"$host_cc" -E -P "$input" -o "$workdir/pv.i"
+"$minic_cc" -S "$workdir/pv.i" --target=x86_64-linux \
+    -fshort-wchar -funsigned-char -fno-PIE -o "$workdir/pv.s"
+"$host_cc" -c -x assembler "$workdir/pv.s" -o "$workdir/pv.o"
+readelf -SW "$workdir/pv.o" > "$workdir/sections"
+readelf -Wr "$workdir/pv.o" > "$workdir/relocs"
+for section in .parainstructions .discard.retpoline_safe \
+    .rela.parainstructions .rela.discard.retpoline_safe
+do
+    if ! grep -Fq "$section" "$workdir/sections"; then
+        printf 'FAIL: missing paravirt ABI section %s\n' "$section" >&2
+        exit 1
+    fi
+done
+if [ "$(grep -c 'R_X86_64_64.*\.text' "$workdir/relocs")" -ne 1 ] || \
+   [ "$(grep -c 'R_X86_64_32.*\.text' "$workdir/relocs")" -ne 1 ] || \
+   [ "$(grep -c 'R_X86_64_PC32.*pv_ops' "$workdir/relocs")" -ne 1 ]; then
+    printf 'FAIL: paravirt metadata or function-pointer relocation missing\n' >&2
+    exit 1
+fi
+if [ "$(grep -Ec '^[[:space:]]*call \*\(%r10\)$' "$workdir/pv.s")" -ne 1 ]; then
+    printf 'FAIL: paravirt call must use admitted memory-indirect encoding\n' >&2
+    exit 1
+fi
+printf 'PASS: paravirt memory-indirect CALL, section metadata and relocations\n'
+@@@ end
+@@@ {"head_lines": 1, "kind": "case", "mode": "100644", "newline": true, "path": "tests/target/run-linux-x86-task-vdso.sh", "shared": "b23044dabffaffa8"}
+#!/bin/sh
+"$host_cc" -E -P "$source_root/tests/target/x86_64_linux_task_vdso.c" \
+    -o "$workdir/task.i"
+"$minic_cc" -S "$workdir/task.i" --target=x86_64-linux \
+    -fshort-wchar -funsigned-char -fno-PIE -o "$workdir/task.s"
+"$host_cc" -c -x assembler "$workdir/task.s" -o "$workdir/task.o"
+objdump -d "$workdir/task.o" > "$workdir/task.dis"
+readelf -r "$workdir/task.o" > "$workdir/relocs"
+readelf -SW "$workdir/task.o" > "$workdir/sections"
+objdump -s -j .altinstr_replacement "$workdir/task.o" \
+    > "$workdir/replacement"
+for mnemonic in ltr str lsl
+do
+    if ! grep -Eq "\b$mnemonic\b" "$workdir/task.dis"; then
+        printf 'FAIL: missing privileged/selector instruction %s\n' "$mnemonic" >&2
+        exit 1
+    fi
+done
+if [ "$(grep -c 'R_X86_64_PC32' "$workdir/relocs")" -ne 2 ]; then
+    printf 'FAIL: vDSO alternatives did not produce two PC32 relocations\n' >&2
+    exit 1
+fi
+for section in .altinstructions .altinstr_replacement .rela.altinstructions
+do
+    if ! grep -Fq "$section" "$workdir/sections"; then
+        printf 'FAIL: missing vDSO patch section %s\n' "$section" >&2
+        exit 1
+    fi
+done
+if ! grep -Eq 'f30fc7f8' "$workdir/replacement"; then
+    printf 'FAIL: exact 4-byte RDPID alternative is missing\n' >&2
+    exit 1
+fi
+sed 's/(16\*32+22)/(16*32+23)/' "$workdir/task.i" > "$workdir/bad.i"
+if "$minic_cc" -S "$workdir/bad.i" --target=x86_64-linux \
+    -fshort-wchar -funsigned-char -fno-PIE -o "$workdir/bad.s" \
+    > "$workdir/bad.log" 2>&1; then
+    printf 'FAIL: forged vDSO CPU feature was accepted\n' >&2
+    exit 1
+fi
+printf 'PASS: x86 task LTR/STR and vDSO RDPID patch table (2 relocations)\n'
+@@@ end
+@@@ {"head_lines": 1, "kind": "case", "mode": "100644", "newline": true, "path": "tests/target/run-linux-x86-three-call-alternative.sh", "shared": "b23044dabffaffa8"}
+#!/bin/sh
+input="$source_root/tests/target/x86_64_linux_three_call_alternative.c"
+"$host_cc" -E -P "$input" -o "$workdir/alt.i"
+"$minic_cc" -S "$workdir/alt.i" --target=x86_64-linux \
+    -fshort-wchar -funsigned-char -fno-PIE -o "$workdir/alt.s"
+"$host_cc" -c -x assembler "$workdir/alt.s" -o "$workdir/alt.o"
+readelf -SW "$workdir/alt.o" > "$workdir/sections"
+readelf -r "$workdir/alt.o" > "$workdir/relocs"
+for section in .altinstructions .altinstr_replacement .rela.altinstructions
+do
+    if ! grep -Fq "$section" "$workdir/sections"; then
+        printf 'FAIL: missing three-CALL section %s\n' "$section" >&2
+        exit 1
+    fi
+done
+if [ "$(grep 'R_X86_64_PLT32' "$workdir/relocs" | grep -c 'clear_page_')" -ne 3 ]; then
+    printf 'FAIL: three-CALL target relocs missing\n' >&2
+    exit 1
+fi
+printf 'PASS: three CALL alternative sections and target relocations\n'
+@@@ end

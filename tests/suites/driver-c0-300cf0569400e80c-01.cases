@@ -1,0 +1,368 @@
+@@@ {"id": "300cf0569400e80c", "kind": "shared", "newline": true}
+set -Eeuo pipefail
+root=$(cd "$(dirname "$0")/../../.." && pwd)
+minic=${MINIC_CC:-"$root/build/release/bin/minic-cc"}
+work=$(mktemp -d)
+@@@ end
+@@@ {"head_lines": 3, "kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/probe-core-dead-ssa-writeback.sh", "shared": "300cf0569400e80c"}
+#!/usr/bin/env bash
+# The target-independent Core use census suppresses only dead SSA copies.
+# LoongArch keeps real ALU side effects and memory stores unchanged.
+trap 'rm -rf "$work"' EXIT
+fail() { echo "CORE_DEAD_SSA_WRITEBACK=FAIL $*" >&2; exit 1; }
+test -x "$minic" || fail 'MiniC compiler missing'
+"${HOST_CC:-cc}" -E -P -std=gnu11 -x c \
+    "$root/tests/compiler/c0/core_dead_ssa_writeback.c" -o "$work/dead.i"
+"$minic" --target=loongarch64-linux -S "$work/dead.i" -o "$work/loong.s"
+"$minic" --target=aarch64-linux -S "$work/dead.i" -o "$work/a64.s"
+awk '/^dead_add:$/ {inside=1} inside {print} /^\.size dead_add,/ {exit}' \
+    "$work/loong.s" > "$work/dead.s"
+awk '/^live_store:$/ {inside=1} inside {print} /^\.size live_store,/ {exit}' \
+    "$work/loong.s" > "$work/live.s"
+grep -Fq '  add.d $t0, $t0, $t1' "$work/dead.s" || fail 'dead ALU instruction missing'
+grep -Eq '^  (xor \$t0, \$t0, \$t1|xori \$t0, \$t0, 17)$' "$work/dead.s" ||
+    fail 'dead XOR instruction missing'
+awk '
+    /  add\.d \$t0, \$t0, \$t1$/ ||
+    /  xor \$t0, \$t0, \$t1$/ ||
+    /  xori \$t0, \$t0, 17$/ {
+        if (getline <= 0 || $0 ~ /^  st\.[wd] \$t0, /) exit 1
+        seen++
+    }
+    END {if (seen != 2) exit 1}
+' "$work/dead.s" || fail 'unused Core result still stored to frame'
+awk '
+    /  add\.d \$t0, \$t0, \$t1$/ {
+        if (getline <= 0 || $0 !~ /^  st\.d \$t0, /) exit 1
+        found=1
+    }
+    END {if (!found) exit 1}
+' "$work/live.s" || fail 'live Core result writeback removed'
+grep -Fq '  st.d $t0, $t1, 0' "$work/live.s" || fail 'observable store missing'
+test "$(wc -l < "$work/dead.s")" -le 37 || fail 'dead result code-size regression'
+if command -v loongarch64-linux-gnu-as >/dev/null 2>&1; then
+    loongarch64-linux-gnu-as "$work/loong.s" -o "$work/loong.o"
+fi
+if command -v aarch64-linux-gnu-as >/dev/null 2>&1; then
+    aarch64-linux-gnu-as "$work/a64.s" -o "$work/a64.o"
+fi
+echo "CORE_DEAD_SSA_WRITEBACK=PASS loong_lines=$(wc -l < "$work/dead.s") dead_gp_stores=0 live_gp_store=1 aarch64_compile=1"
+@@@ end
+@@@ {"head_lines": 1, "kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/probe-core-function-designator-nonnull.sh", "shared": "300cf0569400e80c"}
+#!/usr/bin/env bash
+trap 'rm -rf -- "$work"' EXIT
+fail() { printf 'CORE_FUNCTION_NONNULL=FAIL %s\n' "$*" >&2; exit 1; }
+source_file="$root/tests/compiler/c0/core_function_designator_nonnull.c"
+cc -std=gnu11 -O2 -fno-pie -no-pie "$source_file" -o "$work/gnu"
+"$work/gnu" || fail 'GNU C runtime failed'
+cc -E -P -std=gnu11 -x c "$source_file" -o "$work/probe.i"
+for target in x86_64-linux riscv64-linux aarch64-linux loongarch64-linux; do
+    "$minic" -S "$work/probe.i" --target="$target" -o "$work/$target.s"
+    if grep -Fq '__compiletime_assert_strong_function_null' "$work/$target.s"; then
+        fail "$target retained impossible strong-function null-guard"
+    fi
+    grep -Fq 'optional_weak_hook' "$work/$target.s" ||
+        fail "$target incorrectly folded undefined weak-function comparison"
+done
+as --64 "$work/x86_64-linux.s" -o "$work/mini.o"
+cc -no-pie -Wl,-z,noexecstack "$work/mini.o" -o "$work/mini"
+"$work/mini" || fail 'MiniC GNU AS/LD runtime differs from GNU C'
+printf 'CORE_FUNCTION_NONNULL=PASS strong_guards=2 weak_retained=4 ISAs=4 GNU_AS=1 GNU_LD=1 GNU_C_diff=1\n'
+@@@ end
+@@@ {"head_lines": 2, "kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/probe-core-gp-forward.sh", "shared": "300cf0569400e80c"}
+#!/usr/bin/env bash
+# Core adjacent-use forwarding: Common owns liveness, Loong owns $t0.
+trap 'rm -rf "$work"' EXIT
+fail() { echo "CORE_GP_FORWARD=FAIL $*" >&2; exit 1; }
+
+test -x "$minic" || fail 'MiniC compiler missing'
+"${HOST_CC:-cc}" -E -P -std=gnu11 -x c \
+    "$root/tests/compiler/c0/core_gp_forward.c" -o "$work/source.i"
+"$minic" --target=loongarch64-linux -S "$work/source.i" \
+    -o "$work/loong.s" || fail 'LoongArch MiniC compile'
+"$minic" --target=aarch64-linux -S "$work/source.i" \
+    -o "$work/aarch64.s" || fail 'AArch64 untouched target compile'
+awk '/^minic_gp_anti_chain:$/ {inside=1} inside {print}
+     /^\.size minic_gp_anti_chain,/ {exit}' "$work/loong.s" > "$work/anti.s"
+awk '/^minic_gp_chain:$/ {inside=1} inside {print}
+     /^\.size minic_gp_chain,/ {exit}' "$work/loong.s" > "$work/chain.s"
+
+# Former LOAD→STORE GP SSA stack cycles here had six exact adjacent
+# st.d/ld.d pairs. Core proves two pairs are single-use and can be elided.
+roundtrips=$(awk '
+    /^  st.d \$t0, \$sp, 16$/ {prior=1; next}
+    prior {if ($0 == "  ld.d $t0, $sp, 16") n++; prior=0}
+    END {print n+0}' "$work/anti.s")
+test "$roundtrips" -le 4 || fail "adjacent SSA cycles remain: $roundtrips"
+# Folded OBJECT_ADDRESS instructions leave no machine opcode and must not
+# prematurely interrupt a genuine GP live interval. Without cross-address
+# forwarding these two functions use 64 and 73 lines respectively.
+test "$(wc -l < "$work/chain.s")" -le 56 \
+    || fail 'transparent address split the scalar chain'
+test "$(wc -l < "$work/anti.s")" -le 61 \
+    || fail 'transparent address split the anti-chain'
+grep -Fq '  mul.d $t0, $t0, $t1' "$work/anti.s" \
+    || fail 'multiply effect missing'
+grep -Fq '  xor $t0, $t0, $t1' "$work/anti.s" \
+    || fail 'XOR effect missing'
+grep -Fq '  ld.d $t0, $sp,' "$work/anti.s" \
+    || fail 'required stack loads missing'
+if command -v loongarch64-linux-gnu-as >/dev/null 2>&1; then
+    loongarch64-linux-gnu-as "$work/loong.s" -o "$work/loong.o" \
+        || fail 'Loong GNU AS rejected forwarding'
+fi
+if command -v aarch64-linux-gnu-as >/dev/null 2>&1; then
+    aarch64-linux-gnu-as "$work/aarch64.s" -o "$work/aarch64.o" \
+        || fail 'AArch GNU AS rejected unchanged dispatch'
+fi
+"${HOST_CC:-cc}" -std=gnu11 -O2 "$root/tests/compiler/c0/core_gp_forward.c" \
+    -o "$work/gnu.exe" || fail 'GNU reference build'
+"$minic" --target=x86_64-linux -S "$work/source.i" -o "$work/x86.s" \
+    || fail 'MiniC native target build'
+MINIC_X86_DISABLE_ADJACENT_GP_FORWARD=1 \
+    "$minic" --target=x86_64-linux -S "$work/source.i" \
+    -o "$work/x86-baseline.s" || fail 'x86 conservative baseline build'
+MINIC_X86_DISABLE_DIRECT_OBJECT_ADDRESS=1 \
+    "$minic" --target=x86_64-linux -S "$work/source.i" \
+    -o "$work/x86-address-baseline.s" || fail 'x86 direct-address baseline build'
+"${HOST_CC:-cc}" -c -x assembler "$work/x86.s" -o "$work/x86.o" \
+    || fail 'GNU assembled forwarded x86'
+"${HOST_CC:-cc}" -c -x assembler "$work/x86-baseline.s" -o "$work/x86-baseline.o" \
+    || fail 'GNU assembled conservative x86'
+"${HOST_CC:-cc}" -c -x assembler "$work/x86-address-baseline.s" \
+    -o "$work/x86-address-baseline.o" || fail 'GNU assembled non-direct-address x86'
+x86_bytes=$(size -A "$work/x86.o" | awk '$1 == ".text" {print $2}')
+baseline_bytes=$(size -A "$work/x86-baseline.o" | awk '$1 == ".text" {print $2}')
+address_baseline_bytes=$(size -A "$work/x86-address-baseline.o" |
+    awk '$1 == ".text" {print $2}')
+x86_instructions=$(objdump -d --no-show-raw-insn "$work/x86.o" |
+    awk '/^[[:space:]]*[0-9a-f]+:/ {n++} END {print n+0}')
+baseline_instructions=$(objdump -d --no-show-raw-insn "$work/x86-baseline.o" |
+    awk '/^[[:space:]]*[0-9a-f]+:/ {n++} END {print n+0}')
+address_baseline_instructions=$(objdump -d --no-show-raw-insn "$work/x86-address-baseline.o" |
+    awk '/^[[:space:]]*[0-9a-f]+:/ {n++} END {print n+0}')
+test -n "$baseline_bytes" && test -n "$x86_bytes" &&
+    test "$x86_bytes" -lt "$baseline_bytes" &&
+    test "$x86_instructions" -lt "$baseline_instructions" \
+    || fail "x86 adjacent GP machine delta absent: text $baseline_bytes->$x86_bytes instructions $baseline_instructions->$x86_instructions"
+test -n "$address_baseline_bytes" &&
+    test "$x86_bytes" -lt "$address_baseline_bytes" &&
+    test "$x86_instructions" -lt "$address_baseline_instructions" \
+    || fail "x86 direct object address delta absent: text $address_baseline_bytes->$x86_bytes instructions $address_baseline_instructions->$x86_instructions"
+# Directly inspect the target-owned aligned-object address mode. RSP-relative
+# local objects cannot silently be rebased to negative RBP displacements.
+awk '/^minic_gp_aligned_local:$/ {inside=1} inside {print}
+     /^\.size minic_gp_aligned_local,/ {exit}' "$work/x86.s" > "$work/aligned.s"
+grep -Fq '  andq $-64, %rsp' "$work/aligned.s" &&
+    grep -Eq '^  movq %rax, [0-9]+\(%rsp\)$' "$work/aligned.s" &&
+    grep -Eq '^  movq [0-9]+\(%rsp\), %rax$' "$work/aligned.s" \
+    || fail '64-byte aligned local lost folded RSP-based object memory access'
+# The packed test is deliberately unaligned. Verify actual 8-bit and 32-bit
+# memory instructions remain present in addition to the GNU runtime oracle.
+awk '/^minic_gp_packed_local:$/ {inside=1} inside {print}
+     /^\.size minic_gp_packed_local,/ {exit}' "$work/x86.s" > "$work/packed.s"
+grep -Eq '^  movb %al, -[0-9]+\(%rbp\)$' "$work/packed.s" &&
+    grep -Eq '^  movl -[0-9]+\(%rbp\), %eax$' "$work/packed.s" \
+    || fail 'packed scalar memory widths were collapsed by address forwarding'
+"${HOST_CC:-cc}" -no-pie "$work/x86.s" -o "$work/minic.exe" \
+    || fail 'GNU assembler/linker of MiniC native output'
+"${HOST_CC:-cc}" -no-pie "$work/x86-baseline.s" -o "$work/x86-baseline.exe" \
+    || fail 'GNU assembler/linker of MiniC conservative x86 baseline'
+"${HOST_CC:-cc}" -no-pie "$work/x86-address-baseline.s" \
+    -o "$work/x86-address-baseline.exe" \
+    || fail 'GNU assembler/linker of MiniC non-direct-address x86 baseline'
+gnu_status=0
+"$work/gnu.exe" || gnu_status=$?
+minic_status=0
+"$work/minic.exe" || minic_status=$?
+baseline_status=0
+"$work/x86-baseline.exe" || baseline_status=$?
+address_baseline_status=0
+"$work/x86-address-baseline.exe" || address_baseline_status=$?
+test "$gnu_status" -eq 42 && test "$minic_status" -eq "$gnu_status" &&
+    test "$baseline_status" -eq "$gnu_status" &&
+    test "$address_baseline_status" -eq "$gnu_status" \
+    || fail "GNU/MiniC native runtime mismatch gnu=$gnu_status minic=$minic_status gp_baseline=$baseline_status address_baseline=$address_baseline_status"
+"${HOST_CC:-cc}" -E -P -std=gnu11 -x c -DMINIC_GP_REJECT_ALIGN_ALLOCA \
+    "$root/tests/compiler/c0/core_gp_forward.c" -o "$work/forbidden.i"
+if MINIC_X86_TYPED_REJECT_TRACE=1 \
+        "$minic" --target=x86_64-linux -S "$work/forbidden.i" \
+        -o "$work/forbidden.s" 2> "$work/forbidden.err"; then
+    fail 'x86 admitted aligned RSP locals together with moving-stack alloca'
+fi
+{ grep -Fq 'x86-64 Core instruction unsupported: function minic_gp_reject_aligned_alloca' \
+      "$work/forbidden.err" ||
+  grep -Fq 'x86 typed select reject: function=minic_gp_reject_aligned_alloca stage=core-instructions' \
+      "$work/forbidden.err"; } \
+    || fail 'x86 aligned-allocation rejection lacked the exact Core owner'
+echo "CORE_GP_FORWARD=PASS loong_cycles=$roundtrips native_strict=42 aarch64_s=1 x86_gp_text=$baseline_bytes->$x86_bytes x86_gp_instructions=$baseline_instructions->$x86_instructions x86_object_text=$address_baseline_bytes->$x86_bytes x86_object_instructions=$address_baseline_instructions->$x86_instructions x86_native_differential=42"
+@@@ end
+@@@ {"head_lines": 3, "kind": "case", "mode": "100755", "newline": true, "path": "tests/compiler/c0/probe-core-literal-branch-guard.sh", "shared": "300cf0569400e80c"}
+#!/usr/bin/env bash
+# Fold only semantically literal Core CFG successors; GNU compiletime assert
+# calls in the impossible edge must not survive object assembly/linking.
+trap 'rm -rf -- "$work"' EXIT
+fail() { printf 'CORE_LITERAL_BRANCH_GUARD=FAIL %s\n' "$*" >&2; exit 1; }
+source_file="$root/tests/compiler/c0/core_literal_branch_guard.c"
+cc -E -P -std=gnu11 -x c "$source_file" -o "$work/literal.i"
+"$minic" -S "$work/literal.i" --target=x86_64-linux -o "$work/mini.s"
+if grep -Fq '__compiletime_assert_typecheck' "$work/mini.s"; then
+    fail 'literal-dead compiletime assert survived Core CFG'
+fi
+grep -Fq 'nonliteral_branch:' "$work/mini.s" ||
+    fail 'non-constant branch function disappeared'
+as --64 "$work/mini.s" -o "$work/mini.o"
+if nm -u "$work/mini.o" | grep -Fq '__compiletime_assert_typecheck'; then
+    fail 'GNU AS object contains impossible unresolved compiletime assertion'
+fi
+for target in riscv64-linux aarch64-linux loongarch64-linux; do
+    "$minic" -S "$work/literal.i" --target="$target" -o "$work/$target.s"
+    if grep -Fq '__compiletime_assert_typecheck' "$work/$target.s"; then
+        fail "$target retained an impossible Core compiletime assertion"
+    fi
+done
+cc -std=gnu11 -O2 -fno-pie -no-pie "$source_file" -o "$work/gnu"
+cc -no-pie -Wl,-z,noexecstack "$work/mini.o" -o "$work/mini"
+"$work/gnu" || fail 'GNU C optimizer oracle failed'
+"$work/mini" || fail 'MiniC GNU AS/LD runtime diverged from GNU C'
+printf 'CORE_LITERAL_BRANCH_GUARD=PASS dead_assert=0 ISA=4 side_effects=2 runtime_cases=4 GNU_AS=1 GNU_LD=1 GNU_C_diff=1\n'
+@@@ end
+@@@ {"head_lines": 4, "kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/probe-loongarch64-frame-fold.sh", "shared": "300cf0569400e80c"}
+#!/usr/bin/env bash
+# GNU-preprocess a small LoongArch source. Verify the *production typed
+# MachineIR* frame transport and guarded memory paths in emitted assembly;
+# the obsolete isolated FILE* frame-emitter fixture has been removed.
+trap 'rm -rf "$work"' EXIT
+fail() { echo "LOONG_FRAME_FOLD=FAIL $*" >&2; exit 1; }
+
+test -x "$minic" || fail 'MiniC compiler missing'
+"${HOST_CC:-cc}" -E -P -std=gnu11 -x c \
+    "$root/tests/compiler/c0/loongarch64_frame_fold.c" \
+    -o "$work/source.i"
+"$minic" --target=loongarch64-linux -S "$work/source.i" \
+    -o "$work/source.s" || fail 'MiniC LoongArch compilation'
+
+awk '/^work:$/ {seen=1} seen {print} /^\.size work,/ {exit}' \
+    "$work/source.s" > "$work/work.s"
+awk '/^alias_escape:$/ {seen=1} seen {print} /^\.size alias_escape,/ {exit}' \
+    "$work/source.s" > "$work/escape.s"
+awk '/^packed_read:$/ {seen=1} seen {print} /^\.size packed_read,/ {exit}' \
+    "$work/source.s" > "$work/packed.s"
+awk '/^large_frame_touch:$/ {seen=1} seen {print} /^\.size large_frame_touch,/ {exit}' \
+    "$work/source.s" > "$work/large.s"
+
+# The old standalone frame FILE* helper was not on the production path.
+# Production MachineIR currently emits 205 lines for this fixture: keep
+# that actual byte-checked baseline as a hard code-size ceiling while
+# validating the real `ldptr` and guarded unaligned paths below.
+test "$(wc -l < "$work/work.s")" -le 205 || fail 'frame code-size regression'
+grep -Eq '^[[:space:]]+st\.d \$t[0-9], \$sp, [0-9]+' \
+    "$work/work.s" || fail 'direct frame scalar store missing'
+
+# The object address must still exist when C makes it escape to a call.
+grep -Fxq '  bl escape' "$work/escape.s" || fail 'pointer escape call missing'
+grep -Eq '^[[:space:]]+(add|addi)\.d [^,]+, \$sp,' \
+    "$work/escape.s" || fail 'escaped local frame address missing'
+
+# Packed external pointers have no proven alignment. Keep the byte fallback.
+grep -Fq '  andi $t3, $t1, 3' "$work/packed.s" \
+    || fail 'unaligned 32-bit guard missing'
+# Typed MachineIR constructs the byte-gather slow path as an explicit CFG
+# block: the PC-relative continuation must be immediately followed by the
+# selected branch, and the slow block must return through that continuation.
+awk '/^  pcaddi \$t6, 2$/ {getline; if ($0 ~ /^  b \.Lminic_mir_packed_read_[0-9]+$/) found=1}
+     END {exit !found}' "$work/packed.s" \
+    || fail 'packed access does not branch to typed byte-gather helper'
+grep -Fq '  ld.bu $t2, $t1, 0' "$work/source.s" \
+    || fail 'unaligned byte-gather helper missing'
+grep -Fq '  jirl $zero, $t6, 0' "$work/packed.s" \
+    || fail 'typed byte-gather continuation missing'
+
+# The large object is address-taken. The typed selector therefore preserves
+# the exact base+materialized-offset addressing instead of pretending that
+# each access is an independently foldable frame load/store. Verify the
+# checked prologue size and both positive/negative stack adjustments.
+grep -Fq '  li.d $t3, 4144' "$work/large.s" \
+    || fail 'large frame allocation immediate missing'
+grep -Fq '  sub.d $sp, $sp, $t3' "$work/large.s" \
+    || fail 'large frame allocation missing'
+grep -Fq '  add.d $sp, $sp, $t3' "$work/large.s" \
+    || fail 'large frame restoration missing'
+# The typed selector materializes the small local-base offset directly with
+# ADDI.D before storing the escaping address in its large (>12-bit) frame
+# slot. The old `add.d $t0,$sp,$t0` spelling is not the ABI requirement.
+awk '/^  addi\.d \$t0, \$sp, [0-9]+$/ {
+         if (getline > 0 && $0 ~ /^  stptr\.d \$t0, \$sp, [0-9]+$/)
+             found++
+     }
+     END { exit !(found >= 2) }' "$work/large.s" \
+    || fail 'large frame object address missing'
+
+printf 'LOONG_FRAME_FOLD=PASS work_lines=%s escape_lines=%s packed_lines=%s\n' \
+    "$(wc -l < "$work/work.s")" "$(wc -l < "$work/escape.s")" \
+    "$(wc -l < "$work/packed.s")"
+@@@ end
+@@@ {"head_lines": 1, "kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/probe-loongarch64-linux-iocsr-wrapper-alias.sh", "shared": "300cf0569400e80c"}
+#!/usr/bin/env bash
+trap 'rm -rf "$work"' EXIT
+fail() { echo "LOONG_IOCSR_WRAPPER=FAIL $*" >&2; exit 1; }
+
+test -x "$minic" || fail 'MiniC compiler missing'
+"${HOST_CC:-cc}" -E -P -std=gnu11 -x c \
+    "$root/tests/compiler/c0/loongarch64_linux_iocsr_wrapper_alias.c" \
+    -o "$work/wrappers.i"
+"$minic" --target=loongarch64-linux -fshort-wchar -funsigned-char \
+    -fno-PIE -fPIE -mabi=lp64s -S "$work/wrappers.i" \
+    -o "$work/wrappers.s" || fail 'same GNU wrapper preprocessed C compile'
+for mnemonic in iocsrrd.d iocsrrd.w iocsrwr.d iocsrwr.w; do
+    test "$(grep -Fc "  $mnemonic " "$work/wrappers.s")" -eq 1 \
+        || fail "missing or duplicated direct $mnemonic ISA operation"
+done
+if grep -Eq '^[[:space:]]+bl[[:space:]]+__iocsr(rd|wr)_[dw]' \
+    "$work/wrappers.s"; then
+    fail 'GNU extern-inline wrapper remains an unresolved ELF call'
+fi
+cross=${LOONGARCH64_CC:-loongarch64-linux-gnu-gcc-13}
+if command -v "$cross" >/dev/null 2>&1; then
+    "$cross" -c -x assembler "$work/wrappers.s" -o "$work/wrappers.o" \
+        || fail 'GNU LoongArch assembler rejected IOCSR instructions'
+    nm=${LOONGARCH64_NM:-loongarch64-linux-gnu-nm}
+    command -v "$nm" >/dev/null 2>&1 || fail 'GNU LoongArch nm missing'
+    "$nm" -u "$work/wrappers.o" > "$work/undefined.txt" \
+        || fail 'GNU LoongArch nm failed'
+    if grep -Eq '__iocsr(rd|wr)_[dw]' "$work/undefined.txt"; then
+        fail 'GNU assembled ELF has unresolved IOCSR wrapper'
+    fi
+    echo 'LOONG_IOCSR_WRAPPER_GNU_ELF=PASS'
+else
+    echo 'LOONG_IOCSR_WRAPPER_GNU_ELF=SKIP cross GNU assembler unavailable'
+fi
+echo 'LOONG_IOCSR_WRAPPER=PASS direct_isa=4 no_external_elf_call=4'
+@@@ end
+@@@ {"head_lines": 2, "kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/probe-loongarch64-record-copy-size.sh", "shared": "300cf0569400e80c"}
+#!/usr/bin/env bash
+# Verify a bounded LoongArch transport loop without a cross assembler.
+trap 'rm -rf "$work"' EXIT
+fail() { echo "LOONGARCH64_RECORD_COPY_SIZE=FAIL $*" >&2; exit 1; }
+
+test -x "$minic" || fail 'MiniC compiler missing'
+cc -E -P -std=gnu11 -x c \
+    "$root/tests/compiler/c0/loongarch64_record_copy_size.c" \
+    -o "$work/input.i"
+"$minic" --target=loongarch64-linux -S "$work/input.i" -o "$work/output.s" \
+    || fail 'MiniC LoongArch compilation'
+
+# A 32-byte copy formerly expanded to 128 scalar instructions at each site.
+# The counter and local numeric backward branch preserve byte-read/write order.
+test "$(grep -Fc '  li.d $t3, 32' "$work/output.s")" -ge 2 \
+    || fail 'record copy/load counters'
+grep -Fq '  addi.d $t3, $t3, -1' "$work/output.s" \
+    || fail 'record copy decrement'
+# MachineIR gives each counted-loop block a unique, typed label; the old
+# numeric assembler-local `1b` spelling is no longer the branch target.
+test "$(grep -Ec '^  bnez \$t3, \.Lminic_mir_[a-zA-Z0-9_]+_[0-9]+$' \
+    "$work/output.s")" -ge 2 || fail 'record copy loop branch'
+test "$(wc -l < "$work/output.s")" -lt 400 \
+    || fail 'unexpected large source assembly'
+echo 'LOONGARCH64_RECORD_COPY_SIZE=PASS record_bytes=32 bounded_byte_loop=1'
+@@@ end

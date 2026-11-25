@@ -1,0 +1,513 @@
+@@@ {"id": "033d7e3d4cc16dda", "kind": "shared", "newline": true}
+set -eu
+root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
+mini=${MINIC_CC:-"$root/build/release/bin/minic-cc"}
+host=${HOST_CC:-cc}
+@@@ end
+@@@ {"head_lines": 2, "kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/probe-aarch64-fp-pointer-record-abi.sh", "shared": "033d7e3d4cc16dda"}
+#!/bin/sh
+# MC-066: a floating pointee is not an AAPCS64 HFA value member.
+source_file="$root/tests/compiler/audit/mc066_aarch64_fp_pointer_aggregate.c"
+work=$(mktemp -d)
+trap 'rm -r -- "$work"' EXIT
+fail() { echo "MC066_A64_FP_POINTER_RECORD=FAIL $*" >&2; exit 1; }
+
+targets='x86_64-linux riscv32-linux riscv64-linux aarch64-linux loongarch64-linux'
+variants='default MC066_INTEGER_PTR MC066_POINTER_ARRAY MC066_TYPEDEF_PTR MC066_POINTER_TO_ARRAY MC066_POINTER_TO_RECORD MC066_PACKED_POINTER'
+compile_count=0
+for bytes in 16 17 32 64; do
+    for variant in $variants; do
+        # A 16B array of two pointers has exact size 16 only on LP64;
+        # on RV32 it is an 8B aggregate with no trailing padding.
+        if [ "$variant" = MC066_PACKED_POINTER ] && [ "$bytes" = 16 ]; then
+            continue
+        fi
+        set -- "-DMC066_BYTES=$bytes"
+        if [ "$variant" != default ]; then set -- "$@" "-D$variant"; fi
+        "$host" -std=gnu11 -Wall -Wextra -Werror -fsyntax-only "$@" \
+            "$source_file" || fail "GNU C size=$bytes variant=$variant"
+        "$host" -std=gnu11 -E -P "$@" "$source_file" \
+            -o "$work/source.i" || fail "GNU preprocess size=$bytes variant=$variant"
+        for target in $targets; do
+            if [ "$variant" = MC066_POINTER_ARRAY ] && [ "$bytes" = 16 ] && \
+               [ "$target" = riscv32-linux ]; then
+                continue
+            fi
+            "$mini" --target="$target" -S "$work/source.i" \
+                -o "$work/$target.s" || \
+                fail "MiniC -S target=$target size=$bytes variant=$variant"
+            compile_count=$((compile_count + 1))
+        done
+    done
+done
+
+# True FP HFAs and not-yet-supported small packed unaligned pointer records
+# must fail at the A64 ABI admission stage, not via an unrelated parse error.
+negative_count=0
+for negative in MC066_PACKED_POINTER MC066_FLOAT_VALUES MC066_PACKED_FLOAT_VALUES; do
+    case $negative in
+        MC066_PACKED_POINTER) bytes=16 ;;
+        *) bytes=32 ;;
+    esac
+    "$host" -std=gnu11 -Wall -Wextra -Werror -fsyntax-only \
+        "-DMC066_BYTES=$bytes" "-D$negative" "$source_file" || \
+        fail "GNU negative=$negative"
+    "$host" -std=gnu11 -E -P "-DMC066_BYTES=$bytes" "-D$negative" \
+        "$source_file" -o "$work/negative.i" || \
+        fail "GNU preprocess negative=$negative"
+    if "$mini" --target=aarch64-linux -S "$work/negative.i" \
+        -o "$work/negative.s" >"$work/negative.log" 2>&1; then
+        fail "A64 ABI unexpectedly admitted negative=$negative"
+    fi
+    grep -q 'AArch64: Core instruction/ABI not yet supported' \
+        "$work/negative.log" || fail "unrelated failure negative=$negative"
+    negative_count=$((negative_count + 1))
+done
+
+# Source-level GNU ELF native reference: separate caller and callee objects.
+for bytes in 16 17 32 64; do
+    "$host" -std=gnu11 -O0 -Wall -Wextra -Werror \
+        "-DMC066_BYTES=$bytes" -DMC066_RUNTIME_CALLER -c "$source_file" \
+        -o "$work/driver.gnu.o" || fail "GNU caller size=$bytes"
+    "$host" -std=gnu11 -O0 -Wall -Wextra -Werror \
+        "-DMC066_BYTES=$bytes" -c "$source_file" \
+        -o "$work/callee.gnu.o" || fail "GNU callee size=$bytes"
+    "$host" -no-pie "$work/driver.gnu.o" "$work/callee.gnu.o" \
+        -o "$work/gnu-native" || fail "GNU link size=$bytes"
+    result=0
+    "$work/gnu-native" || result=$?
+    [ "$result" -eq 42 ] || fail "GNU native size=$bytes exit=$result"
+done
+
+# Only report A64 ELF or QEMU PASS when real GNU cross tools execute them.
+a64_elf=SKIP
+a64_qemu=SKIP
+gnu_cc=${AARCH64_GNU_CC:-aarch64-linux-gnu-gcc}
+gnu_as=${AARCH64_GNU_AS:-aarch64-linux-gnu-as}
+gnu_readelf=${AARCH64_GNU_READELF:-aarch64-linux-gnu-readelf}
+cross_qemu=${AARCH64_QEMU:-qemu-aarch64}
+if command -v "$gnu_as" >/dev/null 2>&1 && \
+   command -v "$gnu_readelf" >/dev/null 2>&1; then
+    "$host" -std=gnu11 -E -P -DMC066_BYTES=32 "$source_file" \
+        -o "$work/abi-callee.i" || fail 'A64 ELF preprocess'
+    "$mini" --target=aarch64-linux -S "$work/abi-callee.i" \
+        -o "$work/abi-callee.s" || fail 'A64 ELF MiniC -S'
+    "$gnu_as" "$work/abi-callee.s" -o "$work/abi-callee.o" || \
+        fail 'A64 GNU assembler'
+    "$gnu_readelf" -h "$work/abi-callee.o" | grep -q 'Machine:.*AArch64' || \
+        fail 'A64 ELF wrong e_machine'
+    a64_elf=PASS
+fi
+if [ "$a64_elf" = PASS ] && command -v "$gnu_cc" >/dev/null 2>&1 && \
+   command -v "$cross_qemu" >/dev/null 2>&1; then
+    for bytes in 16 17 32 64; do
+        "$host" -std=gnu11 -E -P -DMC066_RUNTIME_CALLER \
+            "-DMC066_BYTES=$bytes" "$source_file" \
+            -o "$work/abi-caller.i" || fail 'A64 caller preprocess'
+        "$host" -std=gnu11 -E -P "-DMC066_BYTES=$bytes" "$source_file" \
+            -o "$work/abi-callee.i" || fail 'A64 callee preprocess'
+        for role in caller callee; do
+            "$mini" --target=aarch64-linux -S "$work/abi-$role.i" \
+                -o "$work/$role.minic.s" || fail "A64 MiniC $role"
+            "$gnu_as" "$work/$role.minic.s" \
+                -o "$work/$role.minic.o" || fail "A64 GNU AS $role"
+            if [ "$role" = caller ]; then flag=-DMC066_RUNTIME_CALLER; else flag=; fi
+            "$gnu_cc" -std=gnu11 -O0 -fno-pie "-DMC066_BYTES=$bytes" \
+                $flag -c "$source_file" -o "$work/$role.gnu.o" || \
+                fail "A64 GNU C $role"
+        done
+        for caller in gnu minic; do
+            for callee in gnu minic; do
+                "$gnu_cc" -no-pie "$work/caller.$caller.o" \
+                    "$work/callee.$callee.o" -o "$work/abi.elf" || \
+                    fail "A64 link size=$bytes caller=$caller callee=$callee"
+                result=0
+                "$cross_qemu" -L "${AARCH64_QEMU_SYSROOT:-/usr/aarch64-linux-gnu}" \
+                    "$work/abi.elf" || result=$?
+                [ "$result" -eq 42 ] || \
+                    fail "A64 QEMU size=$bytes caller=$caller callee=$callee exit=$result"
+            done
+        done
+    done
+    a64_qemu=PASS
+fi
+echo "MC066_A64_FP_POINTER_RECORD=PASS GNU_native=4 five_target_S=$compile_count A64_negative=$negative_count A64_GNU_ELF=$a64_elf A64_GNU_QEMU=$a64_qemu"
+@@@ end
+@@@ {"head_lines": 1, "kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/probe-aarch64-linux-cpu-erratum-alternatives.sh", "shared": "033d7e3d4cc16dda"}
+#!/bin/sh
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT HUP INT TERM
+src="$root/tests/compiler/c0/aarch64_linux_cpu_erratum_alternatives.c"
+
+"$host" -E -P -std=gnu11 "$src" -o "$work/errata.i"
+MINIC_BACKEND_CENSUS=1 "$mini" --target=aarch64-linux -S \
+    "$work/errata.i" -o "$work/errata.s" \
+    2>"$work/errata.log"
+grep -Fq 'MINIC_BACKEND_CENSUS arch=aarch64 scanned=2 rejected=0' \
+    "$work/errata.log"
+
+# Linux's patcher consumes two 12-byte .altinstructions records, each
+# containing a pair of PREL32 offsets, a CPU capability and two byte lengths.
+test "$(grep -cF '.pushsection .altinstructions,"a"' "$work/errata.s")" -eq 2
+test "$(grep -cF '.word 661b - .' "$work/errata.s")" -eq 2
+test "$(grep -cF '.word 663f - .' "$work/errata.s")" -eq 2
+test "$(grep -cF '.byte 662b - 661b' "$work/errata.s")" -eq 2
+test "$(grep -cF '.byte 664f - 663f' "$work/errata.s")" -eq 2
+test "$(grep -cF '.org . -' "$work/errata.s")" -eq 4
+test "$(grep -cF '.hword 86' "$work/errata.s")" -eq 1
+test "$(grep -cF '.hword 42' "$work/errata.s")" -eq 1
+test "$(grep -c '^  nop$' "$work/errata.s")" -eq 4
+test "$(grep -c '^  dsb nsh$' "$work/errata.s")" -eq 2
+test "$(grep -c '^  isb$' "$work/errata.s")" -eq 2
+grep -Fxq '  ic iallu' "$work/errata.s"
+grep -Fxq '  .inst 0xd50330ff' "$work/errata.s"
+
+# The target admits these two complete original GNU templates, but no
+# nearby feature number, changed ISA, omitted metadata, or hidden instruction.
+sed 's/"86"/"87"/' "$src" >"$work/cap86.c"
+sed 's/"42"/"43"/' "$src" >"$work/cap42.c"
+sed 's/nop; nop; nop/nop; nop; isb/' "$src" >"$work/old86.c"
+sed 's/ic iallu; dsb nsh; isb/ic iallu; dsb ish; isb/' "$src" \
+    >"$work/new86.c"
+sed 's/0xd5000000/0xd5000001/' "$src" >"$work/new42.c"
+sed 's/663f - ./663f - 1/g' "$src" >"$work/prel32.c"
+sed 's/\.org/\.Xorg/g' "$src" >"$work/org.c"
+sed 's/\.byte 664f-663f/\.byte 662b-661b/g' "$src" >"$work/length.c"
+for variant in cap86 cap42 old86 new86 new42 prel32 org length; do
+    cmp -s "$src" "$work/$variant.c" && {
+        echo "AARCH_ERRATA=FAIL mutation_absent=$variant" >&2; exit 1;
+    }
+    "$host" -E -P -std=gnu11 "$work/$variant.c" \
+        -o "$work/$variant.i"
+    if MINIC_BACKEND_CENSUS=1 "$mini" --target=aarch64-linux -S \
+        "$work/$variant.i" -o "$work/$variant.s" \
+        >/dev/null 2>&1; then
+        echo "AARCH_ERRATA=FAIL accepted=$variant" >&2; exit 1
+    fi
+    test ! -e "$work/$variant.s" || {
+        echo "AARCH_ERRATA=FAIL partial_output=$variant" >&2; exit 1;
+    }
+done
+
+for target in x86_64 loongarch64; do
+    if "$mini" --target="$target-linux" -S "$work/errata.i" \
+        -o "$work/foreign.s" >/dev/null 2>&1; then
+        echo "AARCH_ERRATA=FAIL foreign=$target" >&2; exit 1
+    fi
+done
+
+if command -v aarch64-linux-gnu-gcc >/dev/null 2>&1 &&
+   command -v aarch64-linux-gnu-objdump >/dev/null 2>&1; then
+    aarch64-linux-gnu-gcc -c -x assembler "$work/errata.s" -o "$work/mini.o"
+    aarch64-linux-gnu-gcc -c "$src" -o "$work/gnu.o"
+    for artifact in mini gnu; do
+        size=$(aarch64-linux-gnu-objdump -h "$work/$artifact.o" |
+            awk '$2 == ".altinstructions" { print $3 }')
+        test "$size" = 00000018
+    done
+    echo 'AARCH_ERRATA=PASS caps=86,42 records=2 length=12,8 negatives=8 foreign=2 GNU_GAS=PASS'
+else
+    echo 'AARCH_ERRATA=PASS caps=86,42 records=2 length=12,8 negatives=8 foreign=2 GNU_GAS=SKIP'
+fi
+@@@ end
+@@@ {"head_lines": 1, "kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/probe-aarch64-linux-kexec-crash-regs.sh", "shared": "033d7e3d4cc16dda"}
+#!/bin/sh
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT HUP INT TERM
+src="$root/tests/compiler/c0/aarch64_linux_kexec_crash_regs.c"
+
+"$host" -E -P -std=gnu11 "$src" -o "$work/crash.i"
+MINIC_M1_TRACE=1 "$mini" --target=aarch64-linux -S "$work/crash.i" -o "$work/crash.s"
+
+# The original GNU 675-byte template snapshots 31 GPRs, SP, synthetic
+# PSTATE, and local-label PC. Verify the real target instructions, not a
+# compiler-only placeholder or an abbreviated register dump.
+test "$(grep -c '^  stp x.*\[x0, #' "$work/crash.s")" -eq 16
+grep -Eq '^  ldr x0, \[x0(, #0)?\]$' "$work/crash.s"
+pair=0
+while test "$pair" -lt 15; do
+    first=$((pair * 2))
+    second=$((first + 1))
+    offset=$((pair * 16))
+    grep -Fq "  stp x$first, x$second, [x0, #$offset]" "$work/crash.s"
+    pair=$((pair + 1))
+done
+grep -Fq '  stp x0, x1, [x0, #0]' "$work/crash.s"
+grep -Fq '  stp x8, x9, [x0, #64]' "$work/crash.s"
+grep -Fq '  stp x10, x11, [x0, #80]' "$work/crash.s"
+grep -Fq '  stp x12, x13, [x0, #96]' "$work/crash.s"
+grep -Fq '  stp x28, x29, [x0, #224]' "$work/crash.s"
+grep -Fq '  mov x9, sp' "$work/crash.s"
+grep -Fq '  stp x30, x9, [x0, #240]' "$work/crash.s"
+grep -Fq '  mrs x9, CurrentEL' "$work/crash.s"
+grep -Fq '  mrs x10, SPSEL' "$work/crash.s"
+grep -Fq '  mrs x10, DAIF' "$work/crash.s"
+grep -Fq '  mrs x10, NZCV' "$work/crash.s"
+test "$(grep -c '^  orr x9, x9, x10$' "$work/crash.s")" -eq 3
+grep -Fq '  adr x10, 1f' "$work/crash.s"
+grep -Fq '1: stp x10, x9, [x0, #256]' "$work/crash.s"
+# A transient frame or early scratch mutation falsifies the captured SP/GPR
+# image even if all 34 output fields happen to be emitted.
+if sed -n '/^  stp x0, x1, \[x0, #0\]/,/^1: stp x10, x9, \[x0, #256\]/p' \
+    "$work/crash.s" | grep -Eq '^  (sub|add) sp|^  (ldr|mov|str) x11'; then
+    echo 'AARCH_KEXEC_CRASH=FAIL pre-snapshot-mutation' >&2; exit 1
+fi
+
+# Large owned-slot regression: before the x16/x17 image is saved, the
+# old whole-program [sp,#>4095] textual rewrite secretly materialized an
+# address in x17. A correctly typed input must build its address entirely
+# in x0, then dereference x0 immediately before the first STP. Common Core
+# spill reuse may put that final input into an encodable [sp,#imm12] slot;
+# this is just as safe as the older movz/add register-offset sequence. Other
+# compiler-generated temporaries earlier in the function may use x17.
+"$host" -E -P -std=gnu11 -DMINIC_CRASH_LARGE_SSA "$src" \
+    -o "$work/crash-large.i"
+MINIC_M1_TRACE=1 "$mini" --target=aarch64-linux -S "$work/crash-large.i" \
+    -o "$work/crash-large.s"
+awk '
+    /^  movz x12, #[0-9]+(, lsl #0)?$/ {split($0, fields, "#"); frame_candidate=fields[2]+0}
+    /^  sub sp, sp, x12$/ {if (frame_candidate > 4095) large_frame=frame_candidate}
+    /^  stp x0, x1, \[x0, #0\]$/ {
+        found++
+        if (before !~ /^  ldr x0, \[x0(, #0)?\]$/) bad=1
+        if (before2 ~ /^  add x0, sp, #[0-9]+$/) {
+            split(before2, fields, "#")
+            if (fields[2]+0 > 4095 || fields[2]+8 > large_frame) bad=1
+        } else if (before2 != "  add x0, sp, x0" ||
+                   before3 !~ /^  movz x0, #[0-9]+(, lsl #0)?$/) bad=1
+    }
+    {before3=before2; before2=before; before=$0}
+    END {if (found != 1 || !large_frame || bad) exit 1}
+' "$work/crash-large.s" || {
+    echo 'AARCH_KEXEC_CRASH=FAIL large-owned-input-scratch' >&2
+    # Diagnostic only: no weakening of the GPR snapshot or address gate.
+    # Core SSA reuse may legitimately shrink a formerly large frame.
+    grep -nE '^  (movz x12,|movk x12,|sub sp,|add x0, sp,|mov x0, sp|movz x0,|movk x0,|ldr x0, \\[x0\\]|stp x0, x1)' "$work/crash-large.s" |
+        tail -n 32 >&2 || true
+    grep -n -B7 -A2 -F '  stp x0, x1, [x0, #0]' "$work/crash-large.s" |
+        tail -n 12 >&2 || true
+    exit 1;
+}
+grep -Fq '  stp x16, x17, [x0, #128]' "$work/crash-large.s"
+# The original hardware template stores x0..x29 in 15 consecutive pairs.
+# Allow no machine instruction at all between them: this catches every
+# possible x16/x17 scratch mutation, including opcodes outside a hand-built
+# blacklist, before those registers have been snapshotted.
+awk '
+    /^  stp x0, x1, \[x0, #0\]$/ {snapshot=1; pair=0}
+    snapshot {
+        expected=sprintf("  stp x%d, x%d, [x0, #%d]", pair*2, pair*2+1, pair*16)
+        if ($0 != expected) bad=1
+        if (++pair == 15) {snapshot=0; complete++}
+    }
+    END {if (bad || complete != 1 || snapshot) exit 1}
+' "$work/crash-large.s" || {
+    echo 'AARCH_KEXEC_CRASH=FAIL snapshot-gpr-mutation' >&2; exit 1
+}
+
+for target in x86_64 loongarch64; do
+    if "$mini" --target="$target-linux" -S "$work/crash.i" \
+        -o "$work/foreign.s" >/dev/null 2>&1; then
+        echo "AARCH_KEXEC_CRASH=FAIL foreign=$target" >&2; exit 1
+    fi
+done
+
+# Each negative is valid C/GNU inline asm syntax but violates a distinct
+# target contract: changed hardware state, absent early-clobber, omitted
+# memory fence, or wrong register-pointer input binding.
+sed 's/CurrentEL/CNTVCT_EL0/' "$src" >"$work/wrong-pstate.c"
+sed 's/=&r/=r/g' "$src" >"$work/no-early-clobber.c"
+sed 's/: "memory"/: \/\* missing clobber \*\//' "$src" >"$work/no-memory.c"
+sed 's/"r" (newregs)/"m" (newregs)/' "$src" >"$work/no-reg-input.c"
+sed 's/u64 regs\[31\]/u64 regs[1]/' "$src" >"$work/short-record.c"
+for case_name in wrong-pstate no-early-clobber no-memory no-reg-input short-record; do
+    "$host" -E -P -std=gnu11 "$work/$case_name.c" -o "$work/$case_name.i"
+    if "$mini" --target=aarch64-linux -S "$work/$case_name.i" \
+        -o "$work/$case_name.s" >/dev/null 2>&1; then
+        echo "AARCH_KEXEC_CRASH=FAIL invalid=$case_name" >&2; exit 1
+    fi
+done
+
+if command -v aarch64-linux-gnu-gcc >/dev/null 2>&1; then
+    aarch64-linux-gnu-gcc -c "$work/crash.s" -o "$work/crash.o"
+    aarch64-linux-gnu-gcc -c "$work/crash-large.s" -o "$work/crash-large.o"
+    echo 'AARCH_KEXEC_CRASH=PASS gpr_pairs=15 sp=1 pstate_pc=1 large_frame=PASS foreign=2 negative=5 GNU_GAS=PASS'
+else
+    echo 'AARCH_KEXEC_CRASH=PASS gpr_pairs=15 sp=1 pstate_pc=1 large_frame=PASS foreign=2 negative=5 GNU_GAS=SKIP'
+fi
+@@@ end
+@@@ {"head_lines": 1, "kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/probe-aarch64-linux-qcom-pstate-ssbs.sh", "shared": "033d7e3d4cc16dda"}
+#!/bin/sh
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT HUP INT TERM
+src="$root/tests/compiler/c0/aarch64_linux_qcom_pstate_ssbs.c"
+
+"$host" -E -P -std=gnu11 "$src" -o "$work/owner.i"
+MINIC_BACKEND_CENSUS=1 "$mini" --target=aarch64-linux -S \
+    "$work/owner.i" -o "$work/minic.s" 2>"$work/owner.log"
+grep -Fq 'MINIC_BACKEND_CENSUS arch=aarch64 scanned=2 rejected=0' \
+    "$work/owner.log"
+grep -Fq 'mov x9, x30' "$work/minic.s"
+grep -Fq 'mov x30, x9' "$work/minic.s"
+grep -Fq '.rept 16' "$work/minic.s"
+grep -Fq 'bl . + 4' "$work/minic.s"
+test "$(grep -cF '.inst (0xd500401f' "$work/minic.s")" -eq 2
+
+# Every exact source-ISA entry remains closed: one altered branch target,
+# omitted BL, or unknown privileged selector fails before producing .s.
+sed 's/\.rept 16/.rept 15/' "$src" >"$work/rept.c"
+sed 's/bl \. + 4/bl . + 8/' "$src" >"$work/branch.c"
+sed 's/((3) << 16 | (1) << 5)/((3) << 16 | (7) << 5)/' \
+    "$src" >"$work/selector.c"
+for bad in rept branch selector; do
+    "$host" -E -P -std=gnu11 "$work/$bad.c" -o "$work/$bad.i"
+    if "$mini" --target=aarch64-linux -S "$work/$bad.i" \
+        -o "$work/$bad.s" >"$work/$bad.out" 2>"$work/$bad.err"; then
+        echo "AARCH_QCOM_SSBS=FAIL accepted=$bad" >&2
+        exit 1
+    fi
+    test ! -s "$work/$bad.s"
+done
+# Other architectures may deliberately forward original source inline asm
+# to their GNU assembler; only AArch64 target admission is certified here.
+if command -v aarch64-linux-gnu-as >/dev/null 2>&1; then
+    aarch64-linux-gnu-as "$work/minic.s" -o "$work/owner.o"
+    echo 'AARCH_QCOM_SSBS=PASS qcom_bl=16 pstate=2 negatives=3 GNU_AS=PASS'
+else
+    echo 'AARCH_QCOM_SSBS=PASS qcom_bl=16 pstate=2 negatives=3 GNU_AS=SKIP(toolchain-unavailable)'
+fi
+@@@ end
+@@@ {"head_lines": 3, "kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/probe-gnu-linux-kaslr-addr-range-guard.sh", "shared": "033d7e3d4cc16dda"}
+#!/bin/sh
+# GNU -O2 vs MiniC strict Linux kaslr memory-range assertion diagnostic.
+# A source model of authenticated frozen .i, not a real vmlinux link/QEMU.
+src="$root/tests/compiler/c0/gnu_linux_kaslr_addr_range_guard.c"
+work=$(mktemp -d)
+trap 'rm -r -- "$work"' EXIT HUP INT TERM
+
+"$host" -E -P -std=gnu11 "$src" -o "$work/positive.i"
+"$host" -std=gnu11 -O2 -S "$work/positive.i" -o "$work/gnu.s"
+"$mini" --target=x86_64-linux -S "$work/positive.i" -o "$work/minic.s"
+"$host" -c -x assembler "$work/gnu.s" -o "$work/gnu.o"
+"$host" -c -x assembler "$work/minic.s" -o "$work/minic.o"
+if nm -u "$work/gnu.o" | grep -Fq __compiletime_assert_287; then
+    echo 'LINUX_KASLR_RANGE=FAIL GNU_O2 retained impossible assert' >&2
+    exit 1
+fi
+if nm -u "$work/minic.o" | grep -Fq __compiletime_assert_287; then
+    echo 'LINUX_KASLR_RANGE=FAIL MiniC retained impossible assert' >&2
+    exit 1
+fi
+"$host" -no-pie "$work/gnu.o" -o "$work/gnu"
+"$host" -no-pie "$work/minic.o" -o "$work/minic"
+set +e
+"$work/gnu"
+gnu_rc=$?
+"$work/minic"
+mini_rc=$?
+set -e
+if [ "$gnu_rc" -ne 42 ] || [ "$mini_rc" -ne "$gnu_rc" ]; then
+    echo "LINUX_KASLR_RANGE=FAIL GNU_runtime=$gnu_rc MiniC_runtime=$mini_rc" >&2
+    exit 1
+fi
+
+"$host" -E -P -std=gnu11 -DMINIC_NEGATIVE_CASES "$src" -o "$work/negative.i"
+"$host" -std=gnu11 -O2 -c "$work/negative.i" -o "$work/negative.gnu.o"
+"$mini" --target=x86_64-linux -S "$work/negative.i" -o "$work/negative.minic.s"
+"$host" -c -x assembler "$work/negative.minic.s" -o "$work/negative.minic.o"
+for obj in "$work/negative.gnu.o" "$work/negative.minic.o"; do
+    if ! nm -u "$obj" | grep -Fq observed_above_end; then
+        echo "LINUX_KASLR_RANGE=FAIL lost negative runtime call $obj" >&2
+        exit 1
+    fi
+done
+echo "LINUX_KASLR_RANGE=PASS GNU_E=1 GNU_O2=1 MiniC_S=1 GNU_AS=4 GNU_LD=2 GNU_runtime=$gnu_rc MiniC_runtime=$mini_rc negative=2 source_model_only=1"
+@@@ end
+@@@ {"head_lines": 3, "kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/probe-gnu-linux-nvme-prp-guard.sh", "shared": "033d7e3d4cc16dda"}
+#!/bin/sh
+# Source-shape regression only; authentic frozen Loong pci.i + GNU LD/QEMU
+# remains a separate SHA-locked runtime certification.
+source="$root/tests/compiler/c0/gnu_linux_nvme_prp_constant_guard.c"
+work=$(mktemp -d)
+trap 'rm -r -- "$work"' EXIT HUP INT TERM
+
+"$host" -E -P -std=gnu11 -O2 "$source" -o "$work/positive.i"
+"$host" -std=gnu11 -O2 -S "$work/positive.i" -o "$work/gnu.s"
+for target in x86_64-linux aarch64-linux loongarch64-linux riscv64-linux riscv32-linux; do
+    "$mini" --target="$target" -S "$work/positive.i" -o "$work/$target.s"
+    if grep -Fq '__compiletime_assert_449' "$work/$target.s"; then
+        echo "NVME_PRP_GUARD=FAIL still_emits_impossible_assert:$target" >&2
+        exit 1
+    fi
+done
+"$host" -c -x assembler "$work/gnu.s" -o "$work/gnu.o"
+"$host" -c -x assembler "$work/x86_64-linux.s" -o "$work/minic.o"
+for object in "$work/gnu.o" "$work/minic.o"; do
+    if nm -u "$object" | grep -Fq '__compiletime_assert_449'; then
+        echo "NVME_PRP_GUARD=FAIL unexpected_ELF_assert:$object" >&2
+        exit 1
+    fi
+done
+"$host" -no-pie "$work/gnu.o" -o "$work/gnu"
+"$host" -no-pie "$work/minic.o" -o "$work/minic"
+set +e
+"$work/gnu"; gnu_rc=$?
+"$work/minic"; minic_rc=$?
+set -e
+if [ "$gnu_rc" -ne 42 ] || [ "$minic_rc" -ne 42 ]; then
+    echo "NVME_PRP_GUARD=FAIL GNU=$gnu_rc MiniC=$minic_rc" >&2
+    exit 1
+fi
+
+"$host" -E -P -std=gnu11 -O2 -DMINIC_NVME_PRP_NEGATIVES "$source" \
+    -o "$work/negative.i"
+"$host" -std=gnu11 -O2 -c "$work/negative.i" -o "$work/negative.gnu.o"
+for target in x86_64-linux aarch64-linux loongarch64-linux riscv64-linux riscv32-linux; do
+    "$mini" --target="$target" -S "$work/negative.i" -o "$work/$target-negative.s"
+    for symbol in witnessed_effect __compiletime_assert_runtime; do
+        if ! grep -Fq "$symbol" "$work/$target-negative.s"; then
+            echo "NVME_PRP_GUARD=FAIL lost_effect_or_runtime_guard:$target:$symbol" >&2
+            exit 1
+        fi
+    done
+done
+"$host" -c -x assembler "$work/x86_64-linux-negative.s" -o "$work/negative.minic.o"
+for object in "$work/negative.gnu.o" "$work/negative.minic.o"; do
+    for symbol in witnessed_effect __compiletime_assert_runtime; do
+        if ! nm -u "$object" | grep -Fq "$symbol"; then
+            echo "NVME_PRP_GUARD=FAIL lost_negative_ELF:$object:$symbol" >&2
+            exit 1
+        fi
+    done
+done
+echo 'NVME_PRP_GUARD=PASS authentic_shape=1 target_ASM=5 GNU_AS_NM=4 GNU_LD=2 GNU_runtime=42 MiniC_runtime=42 negative_effect_volatile_parameter=3'
+@@@ end
+@@@ {"head_lines": 4, "kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/probe-kvm-constant-builtin-call-guard.sh", "shared": "033d7e3d4cc16dda"}
+#!/bin/sh
+# Linux 6.6.143 AArch64 KVM __build_check_flag: a specialized mask passes
+# through __fls(), whose __builtin_clzl() reads a constant callee argument.
+# This must remove the impossible compiletime-assert branch in all backends.
+src="$root/tests/compiler/c0/a64_kvm_flag_guard.c"
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT HUP INT TERM
+
+"$host" -E -P -std=gnu11 "$src" -o "$work/kvm.i"
+"$host" -O2 -std=gnu11 -S "$src" -o "$work/gnu.s"
+if grep -Fq '__kvm_flag_error' "$work/gnu.s"; then
+    echo 'KVM_CONSTANT_GUARD=FAIL original GNU -O2 retained impossible guard' >&2
+    exit 1
+fi
+for target in aarch64-linux x86_64-linux riscv64-linux loongarch64-linux; do
+    "$mini" --target="$target" -S "$work/kvm.i" -o "$work/$target.s"
+    if grep -Fq '__kvm_flag_error' "$work/$target.s"; then
+        echo "KVM_CONSTANT_GUARD=FAIL target=$target retained false __fls(mask) guard" >&2
+        exit 1
+    fi
+    if ! grep -Fq 'runtime_only' "$work/$target.s" ||
+       ! grep -Fq 'zero_operand_guard' "$work/$target.s"; then
+        echo "KVM_CONSTANT_GUARD=FAIL target=$target removed volatile/undefined runtime guard" >&2
+        exit 1
+    fi
+done
+echo 'KVM_CONSTANT_GUARD=PASS GNU_O2=1 architectures=4 inline_clz_local_fact=1 runtime_volatile_preserved=4 zero_ub_fail_closed=4'
+@@@ end
