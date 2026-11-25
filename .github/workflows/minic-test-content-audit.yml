@@ -1,0 +1,70 @@
+name: MiniC test content and redundancy audit
+on:
+  push:
+    branches:
+      - cleanup/minic-test-pruning-20261125
+permissions:
+  contents: read
+jobs:
+  content:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compare actual test source tokens and executable consumers across the complete repository
+        run: |
+          python3 - <<'PY'
+          import pathlib, subprocess, re, collections, json, hashlib
+          files = subprocess.check_output(["git","ls-files","-z"]).decode().strip("\0").split("\0")
+          data = {}
+          for p in files:
+              b=pathlib.Path(p).read_bytes()
+              if b"\0" not in b:
+                  try:data[p]=b.decode()
+                  except UnicodeDecodeError:pass
+          tests={p:s for p,s in data.items() if p.startswith("tests/") and p.endswith((".c",".sh",".py",".i",".S",".s"))}
+          # Tokenize C correctly enough to preserve all strings, operators,
+          # identifier spelling, preprocessing line boundaries and comments policy.
+          lex=re.compile(r'(?P<comment>/\*[\s\S]*?\*/|//[^\n]*)|(?P<string>(?:u8|[LuU])?"(?:\\[\s\S]|[^"\\])*"|(?:[LuU])?\'(?:\\[\s\S]|[^\'\\])*\')|(?P<id>[a-zA-Z_][a-zA-Z_0-9]*)|(?P<num>(?:\d|\.\d)[a-zA-Z_0-9.+-]*)|(?P<op>>=|<<=|==|!=|<=|>=|->|\+\+|--|&&|\|\||<<|>>|\+=|-=|\*=|/=|%=|&=|\|=|\^=|\.\.\.|##|[^\s])')
+          groups=collections.defaultdict(list)
+          sources={p:s for p,s in tests.items() if p.endswith((".c",".i"))}
+          for p,s in sources.items():
+              # Don't compare sources whose preprocessing can depend on formatting.
+              if re.search(r'(?m)^\s*#|__LINE__|__FILE__|__COUNTER__|\\\n',s):continue
+              tokens=tuple(m.group() for m in lex.finditer(s) if m.lastgroup!="comment")
+              groups[tokens].append(p)
+          names=collections.defaultdict(set)
+          for p in tests:
+              n=pathlib.Path(p).name
+              names[n].add(p)
+              names[pathlib.Path(p).stem].add(p)
+              names[pathlib.Path(p).stem.replace("_","-")].add(p)
+          incoming=collections.defaultdict(set)
+          for p,s in data.items():
+              if p==".github/workflows/minic-test-content-audit.yml":continue
+              for token in set(re.findall(r'[A-Za-z0-9_.-]+',s)) & names.keys():
+                  for q in names[token]:
+                      if p!=q:incoming[q].add(p)
+          def refs(p):return sorted(incoming[p])
+          for tok, ps in groups.items():
+              if len(ps)>1:
+                  print("TOKEN_DUPLICATE",json.dumps({"paths":ps,"tokens":tok,"refs":{p:refs(p) for p in ps}}))
+          # A source with no literal consumer is only a review candidate.
+          # Show its full source for small inputs, and indicate all dynamic callers.
+          for p,s in sorted(sources.items()):
+              active=[q for q in refs(p) if not q.startswith("docs/") and not q.endswith(".md")]
+              if not active and len(s)<=220 and not p.startswith("tests/vendor/"):
+                  print("SMALL_ORPHAN",json.dumps({"path":p,"source":s,"refs":refs(p)}))
+          for p,s in data.items():
+              if p.startswith(("src/","tools/minic","compiler/")):
+                  for i,line in enumerate(s.splitlines(),1):
+                      if re.search(r'MINIC_CORE_(?:CODEGEN|IR)|basic-v0',line):
+                          print("LEGACY_MODE_SOURCE",json.dumps([p,i,line]))
+              if not p.startswith("docs/") and not p.endswith((".md",".c",".h",".i",".S",".s")):
+                  for i,line in enumerate(s.splitlines(),1):
+                      if re.search(r'MINIC_CORE_(?:CODEGEN|IR)|basic-v0',line):
+                          print("LEGACY_MODE_CALL",json.dumps([p,i,line[:240]]))
+                      if re.search(r'(?:glob|find |for .* in |ls-files|wildcard)',line) and re.search(r'tests/|\.c\b|\.sh\b',line):
+                          print("DYNAMIC_TEST_PATH",json.dumps([p,i,line[:240]]))
+          print("CONTENT_AUDIT",json.dumps({"files":len(data),"test_sources":len(sources),"test_code":len(tests),"token_duplicates":sum(len(v)-1 for v in groups.values() if len(v)>1)}))
+          PY
