@@ -1728,3 +1728,7 @@ C50–C58 的候选提交依次为 bf1894af、91a9fb85、c7ba04db、b4d2bf56、b
 - 删除 3 份无当前 filename 使用者的资料/离线工具：2026-10-12 runtime 文本快照（正式结果应查原始 run/commit）、未被现役入口调用且所需固定成本 JSON 不存在的 LPT 预测脚本、历史 Linux unresolved-symbol 列表。它们不是运行测试的夹具；其他现役 balanced-plan producer/consumer 保留。
 - 不修改任何仍在运行的 `minic-native-refactor-gate`、四架构 runtime、RV32I/RV64I、Toolchain Focused、当前 Stage2/Stage4、MiniPP/MiniAS/MiniLD workflow。旧证据保留在 Git 历史中。此次只删除外围文件，并非生产源代码净减、也非新编译器功能认证。
 
+
+## 批次 C61：六份无现役调用的 RV64 Shell 回归归一（2026-11-25）
+
+基线 `eaecd9a4f976`。现有六份 Shell 独立执行器没有全仓直接调用者；阅读完整内容后把其 C 源/辅助源保留，语义断言并入原有 `tests/compiler/c0/run-runtime.sh`，共用 GNU-E/MiniC/GNU-GCC/QEMU 编排。保留 GNU 原子与命名 ASM operand、Zbb clz 禁止、独立 CRT0 的 `+&r` earlyclobber、九参数双向 ABI 和不经 GNU-E 的 raw C 动态 alloca/VLA 两组运行路径以及原 PASS 文本。旧脚本实物删除，不新增脚本或目录。新的 QEMU 执行需单独动态验证；不能将静态迁移或其他 CI 通过当作新运行用例通过。

@@ -1,5 +1,6 @@
 #!/bin/sh
 set -eu
+RUNTIME_SUPPORT_SOURCE=
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
 minic=${MINIC:-"$root/build/debug/bin/minic"}
@@ -26,7 +27,12 @@ run_case() {
     "$riscv_cc" -E -P -x c "$@" \
         "$root/tests/compiler/c0/$source_name.c" -o "$work/$name.i"
     "$minic" -S "$work/$name.i" -o "$work/$name.s"
-    "$riscv_cc" -static "$work/$name.s" -o "$work/$name.elf"
+    if [ -n "$RUNTIME_SUPPORT_SOURCE" ]; then
+        "$riscv_cc" -static "$work/$name.s" \
+            "$root/tests/compiler/c0/$RUNTIME_SUPPORT_SOURCE.c" -o "$work/$name.elf"
+    else
+        "$riscv_cc" -static "$work/$name.s" -o "$work/$name.elf"
+    fi
 
     set +e
     "$qemu" "$work/$name.elf"
@@ -124,3 +130,106 @@ run_case netfilter_hook_insertion_runtime 0 netfilter_hook_insertion_runtime
 run_case builtin_huge_val_runtime 0 builtin_huge_val_runtime
 run_case gnu_extension_prefix_runtime 0 gnu_extension_prefix_runtime
 run_double_return_abi
+
+# Consolidated six formerly orphaned RV64 GNU/QEMU shell regressions.
+# Keep independent fixtures and semantic checks; share the subprocess path.
+run_rv64_gnu_diff() {
+    name=$1
+    check=$2
+    marker=$3
+    "$riscv_cc" -E -P -std=gnu11 -x c \
+        "$root/tests/compiler/c0/$name.c" -o "$work/$name.i"
+    "$minic" -S "$work/$name.i" -o "$work/$name.s"
+    test -s "$work/$name.s"
+    if [ "$check" = no_zbb_clz ] &&
+       grep -Eq '(^|[[:space:]])clz([[:space:]]|$)' "$work/$name.s"; then
+        echo 'unexpected Zbb clz dependency' >&2
+        exit 1
+    fi
+    "$riscv_cc" -static "$work/$name.s" -o "$work/$name.mini.elf"
+    "$riscv_cc" -static -std=gnu11 "$root/tests/compiler/c0/$name.c" \
+        -o "$work/$name.gnu.elf"
+    set +e
+    "$qemu" "$work/$name.gnu.elf"
+    gcc_status=$?
+    "$qemu" "$work/$name.mini.elf"
+    mini_status=$?
+    set -e
+    if [ "$gcc_status" -ne 0 ] || [ "$mini_status" -ne "$gcc_status" ]; then
+        printf '%s\n' "FAIL compiler/c0/$name gnu=$gcc_status minic=$mini_status" >&2
+        exit 1
+    fi
+    printf '%s\n' "$marker"
+}
+
+# Raw MiniC .c inputs are intentionally not replaced with GNU -E .i inputs.
+run_rv64_raw() {
+    name=$1
+    support=$2
+    "$minic" -S "$root/tests/compiler/c0/$name.c" -o "$work/$name.s"
+    test -s "$work/$name.s"
+    if [ -n "$support" ]; then
+        "$riscv_cc" -O0 -static "$work/$name.s" \
+            "$root/tests/compiler/c0/$support.c" -o "$work/$name.elf"
+    else
+        "$riscv_cc" -O0 -static "$work/$name.s" -o "$work/$name.elf"
+    fi
+    set +e
+    "$qemu" "$work/$name.elf"
+    status=$?
+    set -e
+    if [ "$status" -ne 0 ]; then
+        printf '%s\n' "FAIL compiler/c0/$name qemu=$status" >&2
+        exit 1
+    fi
+}
+
+# +&r earlyclobber stays a separate freestanding GNU ABI oracle with _start.
+run_rv64_earlyclobber() {
+    name=gnu_inline_asm_readwrite_earlyclobber
+    host_cc=cc
+    "$host_cc" -E -P -x c "$root/tests/compiler/c0/$name.c" \
+        -o "$work/$name.i"
+    "$minic" -S "$work/$name.i" -o "$work/$name.s"
+    grep -F 'add a0, a0,' "$work/$name.s" >/dev/null
+    grep -F 'add a1, a1,' "$work/$name.s" >/dev/null
+    cat >"$work/$name.crt0.S" <<'START'
+.text
+.globl _start
+_start:
+    call main
+    li a7, 93
+    ecall
+START
+    "$riscv_cc" -ffreestanding -fno-stack-protector -fno-pie \
+        -c -std=gnu11 "$root/tests/compiler/c0/$name.c" -o "$work/$name.gnu.o"
+    "$riscv_cc" -nostdlib -static -no-pie "$work/$name.crt0.S" \
+        "$work/$name.s" -o "$work/$name.mini.elf"
+    "$riscv_cc" -nostdlib -static -no-pie "$work/$name.crt0.S" \
+        "$work/$name.gnu.o" -o "$work/$name.gnu.elf"
+    set +e
+    "$qemu" "$work/$name.gnu.elf"
+    gcc_status=$?
+    "$qemu" "$work/$name.mini.elf"
+    mini_status=$?
+    set -e
+    if [ "$gcc_status" -ne 0 ] || [ "$mini_status" -ne "$gcc_status" ]; then
+        printf '%s\n' "FAIL compiler/c0/$name gnu=$gcc_status minic=$mini_status" >&2
+        exit 1
+    fi
+    printf '%s\n' 'PASS compiler/c0/gnu_inline_asm_readwrite_earlyclobber_rv64 constraint=+&r fixed=a0,a1 unmatched_nonoverlap=1 qemu=1'
+}
+
+run_rv64_gnu_diff gnu_inline_asm_operands normal \
+    'PASS compiler/c0/gnu_inline_asm_operands_rv64 gcc=minic amoadd=write+fetch constraints=+A,=r,r qemu=1'
+run_rv64_gnu_diff gnu_inline_asm_named_operands normal \
+    'PASS compiler/c0/gnu_inline_asm_named_operands_rv64 gcc=minic lrsc=fetch-add-unless names=5 early-clobber=1 qemu=1'
+run_rv64_gnu_diff builtin_clzll no_zbb_clz \
+    'PASS compiler/c0/builtin_clzll_rv64 gcc=minic ull=4 uint32=1 signed-int=1 baseline=rv64i qemu=1'
+run_rv64_earlyclobber
+RUNTIME_SUPPORT_SOURCE=stack_fixed_arguments_gcc \
+    run_case stack_fixed_arguments 0 stack_fixed_arguments
+printf '%s\n' 'PASS compiler/c0/stack_fixed_arguments_rv64 callers=minic,gcc callees=gcc,minic fixed=9 stack-slot=1'
+run_rv64_raw dynamic_stack_alloca dynamic_stack_alloca_helper
+run_rv64_raw dynamic_local_vla ''
+printf '%s\n' 'PASS compiler/c0/dynamic_stack_alloca nested=2 fixed-frame=1 outgoing-stack-args=2 vla=runtime-bound-once,int-elements runtime=qemu'
