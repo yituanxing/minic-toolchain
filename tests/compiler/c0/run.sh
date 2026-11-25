@@ -444,7 +444,7 @@ run_c0_host run-compile-only-case.sh transparent-union
 
 run_c0_host run-native-matrix.sh run-gnu-zero-length-array
 
-run_c0_host run-linux-gnu-frontend-semantics.sh
+run_c0_host run-native-matrix.sh run-linux-gnu-frontend-semantics
 
 MINIC="$minic" BUILD_DIR="$work/gnu-extern-void-symbol" HOST_CC="$host_cc" sh "$root/tests/compiler/c0/run-gnu-extern-void-symbol.sh"
 

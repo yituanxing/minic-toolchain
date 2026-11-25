@@ -91,6 +91,12 @@ jobs:
           if len(passed)!=len(results): raise SystemExit(1)
           PY
 
+      - name: Exercise maintained Make entrypoints
+        run: |
+          bash -n tests/compiler/c0/run.sh tests/compiler/c0/run-foundation-focused.sh tests/compiler/c0/probe-review-batch-2026-10-29.sh
+          python3 -m py_compile tools/ci/minic-bootstrap-current-b1-seed-v1.py
+          make -j4 MODE=release CFLAGS=-Werror check-unsigned-declarations check-integer-bit-operations check-core-type-verifier check-core-ir-shapes-source check-netlink-warn-branch check-loongarch64-record-copy-size
+
   current-native-matrix:
     if: github.ref != 'refs/heads/cleanup/minic-test-pruning-20261125'
     runs-on: ubuntu-24.04
@@ -120,3 +126,8 @@ jobs:
           if any(code for _,code,_ in results): raise SystemExit(1)
           print("NATIVE_MATRIX_TOTAL",len(results),len(cases))
           PY
+      - name: Exercise maintained Make entrypoints
+        run: |
+          bash -n tests/compiler/c0/run.sh tests/compiler/c0/run-foundation-focused.sh tests/compiler/c0/probe-review-batch-2026-10-29.sh
+          python3 -m py_compile tools/ci/minic-bootstrap-current-b1-seed-v1.py
+          make -j4 MODE=release CFLAGS=-Werror check-unsigned-declarations check-integer-bit-operations check-core-type-verifier check-core-ir-shapes-source check-netlink-warn-branch check-loongarch64-record-copy-size

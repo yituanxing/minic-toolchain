@@ -662,7 +662,7 @@ check-gnu-linux-ioremap-inline-arg-guard: $(MINIC_CC_BINARY)
 check-netlink-warn-branch: $(MINIC_CC_BINARY)
 	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
 	BUILD_DIR="$(abspath $(BUILD_DIR))" \
-		sh tests/compiler/c0/probe-netlink-warn-branch.sh
+		sh tests/compiler/c0/run-native-matrix.sh probe-netlink-warn-branch
 
 check-fast: check-gnu-linux-ioremap-inline-arg-guard check-netlink-warn-branch
 
@@ -1758,7 +1758,7 @@ check-fast: check-riscv-extended-zero-output-volatile
 .PHONY: check-loongarch64-record-copy-size
 check-loongarch64-record-copy-size: $(MINIC_CC_BINARY)
 	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" \
-	bash tests/compiler/c0/probe-loongarch64-record-copy-size.sh
+	bash tests/compiler/c0/run-native-matrix.sh probe-loongarch64-record-copy-size
 
 .PHONY: check-loongarch64-frame-fold
 check-loongarch64-frame-fold: $(MINIC_CC_BINARY)

@@ -129,7 +129,7 @@ def main():
     # output before spending minutes on the full bootstrap cohort.
     with (logs / "core-record-call-conditional-subscript.log").open("wb") as log:
         command(
-            ["sh", "tests/compiler/c0/run-core-record-call-conditional-subscript.sh"],
+            ["sh", "tests/compiler/c0/run-native-matrix.sh", "run-core-record-call-conditional-subscript"],
             env=dict(env, MINIC_CC=str(stage0), BUILD_DIR=str(work / "stage0")),
             timeout=120, stdout=log, stderr=subprocess.STDOUT)
     print("BOOTSTRAP_B1_CORE_RECORD_CFG=PASS targets=5 runtime=x86_64",

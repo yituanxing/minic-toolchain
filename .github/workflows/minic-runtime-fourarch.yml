@@ -22,7 +22,9 @@ on:
       - "tests/compiler/c0/gnu_function_aligned.c"
       - "tests/compiler/c0/probe-record-rvalue-nested-member-native.sh"
       - "tests/compiler/c0/record_rvalue_nested_member.c"
-      - "tests/compiler/c0/probe-x86-linux-put-user-pointer-gcc-native.sh"
+      - "tests/compiler/c0/native-matrix.json"
+      - "tests/compiler/c0/native-matrix.py"
+      - "tests/compiler/c0/run-native-matrix.sh"
       - "tests/compiler/c0/x86_linux_put_user_pointer.c"
       - "tests/compiler/c0/probe-x86-linux-cmpxchg16b-native.sh"
       - "tests/compiler/c0/probe-riscv-overaligned-varargs-qemu.sh"
@@ -141,7 +143,9 @@ on:
       - "tests/compiler/c0/probe-record-rvalue-nested-member-native.sh"
       - "tests/compiler/c0/record_rvalue_nested_member.c"
       - "tests/compiler/c0/gnu_function_aligned.c"
-      - "tests/compiler/c0/probe-x86-linux-put-user-pointer-gcc-native.sh"
+      - "tests/compiler/c0/native-matrix.json"
+      - "tests/compiler/c0/native-matrix.py"
+      - "tests/compiler/c0/run-native-matrix.sh"
       - "tests/compiler/c0/x86_linux_put_user_pointer.c"
       - "tests/compiler/c0/probe-x86-linux-cmpxchg16b-native.sh"
       - "tests/compiler/c0/probe-riscv-overaligned-varargs-qemu.sh"
@@ -386,7 +390,7 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          bash tests/compiler/c0/probe-x86-linux-put-user-pointer-gcc-native.sh \
+          bash tests/compiler/c0/run-native-matrix.sh probe-x86-linux-put-user-pointer-gcc-native \
             "$GITHUB_WORKSPACE/build/runtime-ci/bin/minic-cc"
       - name: GNU original Linux x86 CMPXCHG16B atomic CAS and GS ALT relocation ABI
         if: matrix.target == 'x86_64'
