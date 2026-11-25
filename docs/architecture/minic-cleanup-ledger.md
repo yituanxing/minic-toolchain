@@ -1754,3 +1754,5 @@ C62 第一次真实 Native Matrix：TESTCC 与 IOMEM 两组全部 PASS；零尺�
 C63 首次 Native Matrix：LL/SC、PMCCFILTR、MTE/SDEI、EL2/PMU 四项 PASS，第五项 KVM Debug/ICC 编译进入数量门禁，但旧脚本依赖 exactly-two-space 的物理缩进。将 MSR/.inst 正则改为匹配任意真实汇编行前导空白；仍要求精确 134 MSR、8 ICC .inst、寄存器逐项匹配及拒绝负例。须以修复提交的真实 CI 为准。
 
 C63 第二次 Native Matrix：变更为 one-or-more whitespace 后仍未匹配到 KVM debug 134 MSR。原始 AArch64 source ASM 有可能在列0直接发射助记符，因此改成 zero-or-more whitespace，同时升级现有 matrix 在计数失败时输出真实 machine_samples 前12条便于下一轮判断。134/8 的数量和所有原有 negative 仍保持严格。
+
+C63 ICC 码字调查：134 条 KVM debug MSR 数量已通过，ICC 8 条机器行也通过，但期望四个 .inst 绝对码字首次失败。先增强现有 Matrix 的 check 失败诊断，输出该汇编生成物中最多 22 条 `.inst`/`msr_s` 指令以辨别 GNU 宏展开与实际机码，不放宽任何机器码或拒绝断言。下一次按真实证据处理。

@@ -80,8 +80,14 @@ def check_all(checks, artifacts, targets, counts=(), cfg=(), order=(),
             data = artifacts[t]
             if section:
                 data = function_section(data, section[0])
-            require(matching(data, mode, pattern) == (sense == "present"),
-                    f"{t}: {sense} {pattern!r} failed")
+            if matching(data, mode, pattern) != (sense == "present"):
+                # On failure, preserve inspectable machine evidence instead of
+                # assuming historic literal opcode spellings remain canonical.
+                samples = [line.decode(errors="replace") for line in data.splitlines()
+                           if b".inst" in line or b"msr_s" in line or b"msr " in line]
+                raise RuntimeError(
+                    f"{t}: {sense} {pattern!r} failed; "
+                    f"asm_samples={samples[:22]!r}")
 
     for target, mode, pattern, minimum, maximum, *section in counts:
         data = artifacts[target]
