@@ -12,7 +12,6 @@ on:
       - 'tests/compiler/c0/probe-x86-preempt-static-call-machineir.sh'
       - 'tests/compiler/c0/probe-x86-linux-descriptor-machineir.sh'
       - 'tests/compiler/c0/probe-x86-linux-irq-state-machineir.sh'
-      - 'tests/compiler/c0/probe-x86-linux-zero-barrier-memory-clobber.sh'
       - 'tests/compiler/c0/probe-x86-linux-paravirt-patch-site.sh'
       - 'tests/compiler/c0/probe-core-gp-forward.sh'
       - 'tests/compiler/c0/probe-rv64-hardfloat-ninth-fixed.sh'
@@ -93,7 +92,6 @@ on:
       - 'tests/compiler/c0/probe-x86-preempt-static-call-machineir.sh'
       - 'tests/compiler/c0/probe-x86-linux-descriptor-machineir.sh'
       - 'tests/compiler/c0/probe-x86-linux-irq-state-machineir.sh'
-      - 'tests/compiler/c0/probe-x86-linux-zero-barrier-memory-clobber.sh'
       - 'tests/compiler/c0/probe-x86-linux-paravirt-patch-site.sh'
       - 'tests/compiler/c0/probe-core-gp-forward.sh'
       - 'tests/compiler/c0/probe-rv64-hardfloat-ninth-fixed.sh'
@@ -132,7 +130,6 @@ on:
       - 'tests/compiler/c0/probe-linux-declaration-gates.sh'
       - 'tests/compiler/c0/probe-linux-global-prefix-attributes.sh'
       - 'tests/compiler/c0/probe-x86-linux-bitops.sh'
-      - 'tests/compiler/c0/probe-x86-linux-callee-clobber.sh'
       - 'tests/compiler/c0/probe-x86-linux-percpu-gs.sh'
       - 'tests/compiler/c0/probe-x86-linux-checksum-fold.sh'
       - 'tests/compiler/c0/probe-x86-linux-msr-extable.sh'
@@ -249,7 +246,7 @@ jobs:
       - name: Flat and recursive global payload regression
         run: |
           MINIC_CC="$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc" \
-            HOST_CC=cc bash tests/compiler/c0/probe-flat-global-payload.sh
+            HOST_CC=cc bash tests/compiler/c0/run-native-matrix.sh probe-flat-global-payload
           MINIC_CC="$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc" \
             HOST_CC=cc bash tests/compiler/c0/run-native-matrix.sh probe-gnu-nested-union-compound-record-array
       - name: Source-free record layout and five-target GNU empty record differential
@@ -303,7 +300,7 @@ jobs:
           set -Eeuo pipefail
           MINIC_CC="$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc" \
           BUILD_DIR=build/minic-native-backend \
-            sh tests/compiler/c0/probe-x86-linux-zero-barrier-memory-clobber.sh
+            sh tests/compiler/c0/run-native-matrix.sh probe-x86-linux-zero-barrier-memory-clobber
       - name: Four Target-owned GNU section marker and MachineIR printer contracts
         shell: bash
         run: |
@@ -575,7 +572,7 @@ jobs:
           bash tests/compiler/c0/probe-linux-declaration-gates.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
           bash tests/compiler/c0/probe-linux-global-prefix-attributes.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
           bash tests/compiler/c0/probe-x86-linux-bitops.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
-          bash tests/compiler/c0/probe-x86-linux-callee-clobber.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
+          bash tests/compiler/c0/run-native-matrix.sh probe-x86-linux-callee-clobber "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
           bash tests/compiler/c0/probe-x86-linux-percpu-gs.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
           bash tests/compiler/c0/probe-x86-linux-checksum-fold.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
           bash tests/compiler/c0/probe-x86-linux-msr-extable.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"

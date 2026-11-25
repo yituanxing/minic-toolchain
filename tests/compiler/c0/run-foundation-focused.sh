@@ -97,7 +97,7 @@ for test_script in \
     run-x86-security-function-attributes.sh \
     compile:gnu-format-cold-attributes \
     native:run-anonymous-record-members \
-    run-block-scope-record-tags.sh \
+    native:run-block-scope-record-tags \
     compile:block-scope-extern-function-attributes \
     run-gnu-void-pointer-arithmetic.sh \
     compile:gnu-statement-expression \
@@ -109,14 +109,14 @@ for test_script in \
     run-gnu-statement-record-value.sh \
     run-gnu-array-range-initializer.sh \
     compile:gnu-record-compound-literal \
-    run-gnu-static-local-implicit-zero.sh \
+    native:run-gnu-static-local-implicit-zero \
     compile:gnu-top-level-empty-declaration \
     compile:gnu-object-alignment-attribute \
     compile:gnu-auto-type-local \
     compile:gnu-local-interleaved-informational-attribute \
     run-gnu-array-object-identity.sh \
     run-gnu-local-label-address.sh \
-    run-gnu-inline-asm-fence.sh \
+    native:run-gnu-inline-asm-fence \
     compile:gnu-typeof-local-declaration \
     compile:gnu-inline-asm-readwrite-output \
     run-gnu-inline-asm-operands.sh \
@@ -127,8 +127,8 @@ for test_script in \
     compile:gnu-builtin-constant-p \
     run-gnu-builtin-object-size.sh \
     run-gnu-call-frame-address.sh \
-    run-gnu-builtin-unreachable.sh \
-    run-gnu-pointer-sign-call-conversion.sh \
+    native:run-gnu-builtin-unreachable \
+    native:run-gnu-pointer-sign-call-conversion \
     compile:static-assert-declaration \
     compile:gnu-choose-expr-bitfield \
     compile:builtin-clzll \
@@ -144,8 +144,8 @@ for test_script in \
     run-extern-interleaved-function-attributes.sh \
     compile:shared-function-declarator \
     compile:gnu-incomplete-record-function-signature \
-    run-enum-tag-type-references.sh \
-    run-gnu-enum-entity.sh \
+    native:run-enum-tag-type-references \
+    native:run-gnu-enum-entity \
     compile:extern-multi-declarators \
     compile:extern-multidimensional-array \
     run-gnu-extern-object-redeclaration.sh \

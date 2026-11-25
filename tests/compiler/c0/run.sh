@@ -400,23 +400,23 @@ grep -F "  .word 1" "$work/braced_scalar_static_global.s" >/dev/null
 printf '%s\n' "PASS compiler/c0/braced_scalar_static_global"
 expect_compile_failure invalid_return "expected expression"
 
-run_c0_host run-gnu-void-return-expression.sh
+run_c0_host run-native-matrix.sh run-gnu-void-return-expression
 
 run_c0_host run-compile-only-case.sh gnu-omitted-conditional
 
-run_c0_host run-gnu-static-local-interleaved-attribute.sh
+run_c0_host run-native-matrix.sh run-gnu-static-local-interleaved-attribute
 
 run_c0_host run-compile-only-case.sh runtime-local-array-initializer
 
 run_c0_host run-native-matrix.sh run-character-array-string-initializer
 
-run_c0_host run-array-parameter-adjustment.sh
+run_c0_host run-native-matrix.sh run-array-parameter-adjustment
 
 run_c0_host run-compile-only-case.sh function-parameter-adjustment
 
 run_c0_host run-compile-only-case.sh function-pointer-qualifiers
 
-run_c0_host run-function-pointer-field-array.sh
+run_c0_host run-native-matrix.sh run-function-pointer-field-array
 
 run_c0_host run-compile-only-case.sh gnu-function-pointer-bridge-call
 
@@ -446,7 +446,7 @@ run_c0_host run-native-matrix.sh run-gnu-zero-length-array
 
 run_c0_host run-native-matrix.sh run-linux-gnu-frontend-semantics
 
-MINIC="$minic" BUILD_DIR="$work/gnu-extern-void-symbol" HOST_CC="$host_cc" sh "$root/tests/compiler/c0/run-gnu-extern-void-symbol.sh"
+MINIC="$minic" BUILD_DIR="$work/gnu-extern-void-symbol" HOST_CC="$host_cc" sh "$root/tests/compiler/c0/run-native-matrix.sh" run-gnu-extern-void-symbol
 
 MINIC="$minic" BUILD_DIR="$work/extern-typedef-array-object" HOST_CC="$host_cc" sh "$root/tests/compiler/c0/run-native-matrix.sh" run-extern-typedef-array-object
 
@@ -454,7 +454,7 @@ MINIC="$minic" BUILD_DIR="$work/expression-statement-entry" HOST_CC="$host_cc" s
 
 MINIC="$minic" BUILD_DIR="$work/function-typed-declarator" HOST_CC="$host_cc" sh "$root/tests/compiler/c0/run-function-typed-declarator.sh"
 
-MINIC="$minic" BUILD_DIR="$work/gnu-weak-function-symbol" HOST_CC="$host_cc" sh "$root/tests/compiler/c0/run-gnu-weak-function-symbol.sh"
+MINIC="$minic" BUILD_DIR="$work/gnu-weak-function-symbol" HOST_CC="$host_cc" sh "$root/tests/compiler/c0/run-native-matrix.sh" run-gnu-weak-function-symbol
 
 MINIC="$minic" BUILD_DIR="$work/gnu-weak-undefined-live" HOST_CC="$host_cc" sh "$root/tests/compiler/c0/run-gnu-weak-undefined-live.sh"
 
@@ -474,13 +474,13 @@ run_c0_host run-compile-only-case.sh builtin-unary-family
 
 run_c0_default run-gnu-switch-case-range.sh
 
-run_c0_default run-string-octal-escape.sh
+run_c0_default run-native-matrix.sh run-string-octal-escape
 
-run_c0_default run-gnu-signed-left-shift-ice.sh
+run_c0_default run-native-matrix.sh run-gnu-signed-left-shift-ice
 
-run_c0_default run-static-local-self-reference.sh
+run_c0_default run-native-matrix.sh run-static-local-self-reference
 
-run_c0_default run-record-value-initialize.sh
+run_c0_default run-native-matrix.sh run-record-value-initialize
 
 run_c0_host run-native-matrix.sh run-braced-static-scalar
 
@@ -555,11 +555,11 @@ run_c0_host run-compile-only-case.sh gnu-local-object-alignment
 
 run_c0_host run-compile-only-case.sh builtin-memset-call
 
-run_c0_default run-float-to-double-fixed-call.sh
-run_c0_default run-arithmetic-fixed-call-dead-long-double.sh
+run_c0_default run-native-matrix.sh run-float-to-double-fixed-call
+run_c0_default run-native-matrix.sh run-arithmetic-fixed-call-dead-long-double
 run_c0_default run-internal-inline-emission.sh
-run_c0_default run-null-member-offset-constant.sh
-run_c0_default run-relocatable-const-section.sh
+run_c0_default run-native-matrix.sh run-null-member-offset-constant
+run_c0_default run-native-matrix.sh run-relocatable-const-section
 MINIC="$minic" \
 BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
 RISCV_CC="${RISCV_CC:-riscv64-linux-gnu-gcc}" \
