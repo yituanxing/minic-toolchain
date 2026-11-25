@@ -119,6 +119,12 @@ jobs:
       - name: Exercise maintained Make entrypoints
         run: |
           bash -n tests/compiler/c0/run.sh tests/compiler/c0/run-foundation-focused.sh tests/compiler/c0/probe-review-batch-2026-10-29.sh
+          # These semantic fixtures are referenced via dynamically constructed
+          # source paths, not their complete filenames. Exercise them in both
+          # native-matrix modes so orphan-name pruning cannot remove live tests.
+          MINIC_CC="$PWD/build/release/bin/minic-cc" sh tests/compiler/c0/run-aarch64-gnu-inline-lazy-negatives.sh
+          MINIC_CC="$PWD/build/release/bin/minic-cc" sh tests/compiler/c0/run-aarch64-gnu-neon-inline-six.sh
+          MINIC_CC="$PWD/build/release/bin/minic-cc" sh tests/compiler/c0/run-incomplete-function-pointer-array-lifetime.sh
           python3 -m py_compile tools/ci/minic-bootstrap-current-b1-seed-v1.py
           make -j4 MODE=release CFLAGS=-Werror check-unsigned-declarations check-integer-bit-operations check-core-type-verifier check-core-ir-shapes-source check-netlink-warn-branch check-loongarch64-record-copy-size
 
@@ -154,5 +160,11 @@ jobs:
       - name: Exercise maintained Make entrypoints
         run: |
           bash -n tests/compiler/c0/run.sh tests/compiler/c0/run-foundation-focused.sh tests/compiler/c0/probe-review-batch-2026-10-29.sh
+          # These semantic fixtures are referenced via dynamically constructed
+          # source paths, not their complete filenames. Exercise them in both
+          # native-matrix modes so orphan-name pruning cannot remove live tests.
+          MINIC_CC="$PWD/build/release/bin/minic-cc" sh tests/compiler/c0/run-aarch64-gnu-inline-lazy-negatives.sh
+          MINIC_CC="$PWD/build/release/bin/minic-cc" sh tests/compiler/c0/run-aarch64-gnu-neon-inline-six.sh
+          MINIC_CC="$PWD/build/release/bin/minic-cc" sh tests/compiler/c0/run-incomplete-function-pointer-array-lifetime.sh
           python3 -m py_compile tools/ci/minic-bootstrap-current-b1-seed-v1.py
           make -j4 MODE=release CFLAGS=-Werror check-unsigned-declarations check-integer-bit-operations check-core-type-verifier check-core-ir-shapes-source check-netlink-warn-branch check-loongarch64-record-copy-size
