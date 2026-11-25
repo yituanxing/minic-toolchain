@@ -8,7 +8,7 @@
 >（Frontend 70 / Compiler 11 / Core 48 / Target 208）。下文“332 文件”专指旧审计基线；
 > 当前 `compiler.c:354–377` 的 Core 后裁剪实际为 **function prune → dead static object prune → function prune**。
 > 全部新增清理接缝、尚缺证据及文档导航见[架构总入口](README.md)；
-> 337 个源码文件与两个 CLI 的覆盖程度、盲区见[第八轮源码覆盖账本](minic-source-coverage-f8-2026-10-31.md)。
+> 337 个源码文件与两个 CLI 的覆盖程度、盲区见[第八轮源码覆盖账本](https://github.com/yituanxing/minic-toolchain/blob/bab9fb3e0d488d9d50da0ce95ded842bf7ef87f2/docs/architecture/minic-source-coverage-f8-2026-10-31.md)。
 >
 > 配套：[函数契约台账](minic-function-contract-register.md) · [缺陷、风险与架构债](minic-issue-register.md) · [架构原则](principles.md)。
 
@@ -223,7 +223,7 @@ flowchart TD
 
 本轮实际列举并比较 **337/337 个 `src/*.[ch]` + 两个 CLI 入口**，另外核对
 `target_registration.def` 与 `Makefile`：187 个编译器 `.c` 都在构建源清单中。
-逐文件清单及每一证据等级见[第八轮覆盖账本](minic-source-coverage-f8-2026-10-31.md)，
+逐文件清单及每一证据等级见[第八轮覆盖账本](https://github.com/yituanxing/minic-toolchain/blob/bab9fb3e0d488d9d50da0ce95ded842bf7ef87f2/docs/architecture/minic-source-coverage-f8-2026-10-31.md)，
 最新 F8 定点 producer/consumer 的函数级条目见[函数台账第八轮](minic-function-contract-register.md#第八轮最新-3d504e7ee4a7-的源码边界与清理消费者补录2026-10-31)。
 这不是所有 GNU ASM 家族或全部 helper 的动态正确性认证。
 

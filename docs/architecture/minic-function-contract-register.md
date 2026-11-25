@@ -1307,7 +1307,7 @@ Source 是 `src/target/x86_64/asm_contract.c`；Machine 是 `src/target/x86_64/m
 
 ## 第八轮：最新 `3d504e7ee4a7` 的源码边界与清理消费者补录（2026-10-31）
 
-这轮先以完整 [337 C/H + 两 CLI 的逐文件覆盖账本](minic-source-coverage-f8-2026-10-31.md) 检查文件输入，再沿跨层调用定向 R2/U2。
+这轮先以完整 [337 C/H + 两 CLI 的逐文件覆盖账本](https://github.com/yituanxing/minic-toolchain/blob/bab9fb3e0d488d9d50da0ce95ded842bf7ef87f2/docs/architecture/minic-source-coverage-f8-2026-10-31.md) 检查文件输入，再沿跨层调用定向 R2/U2。
 与先前 `f6e9eb870d80` 源码树逐文件比较，仅 x86 `codegen.c/frame.h/machine_emit.c` 三处变化；
 此表的 F8 项**是重审与新交接契约**，不是 F7=212 项之外又新增了这些独立函数。
 没有为本表执行新的 ASan、GNU ELF 或 QEMU，`SOURCE` 只说明当前源码路径。

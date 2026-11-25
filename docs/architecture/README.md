@@ -27,7 +27,7 @@
 | 项目的设计边界是什么 | [架构原则](principles.md) | 列出偏离与验收条件，不另立原则 |
 | `.i` 如何流过 AST、Core、全局对象与后端 | [生产数据流及所有权图谱](minic-global-contract-map.md) | 更新当前源码核验的变化，不复制完整图谱 |
 | 一个函数谁调用、借用、修改、释放 | [函数契约台账](minic-function-contract-register.md) | 指向原条目及仍未深读之处 |
-| 完整扫描了哪些文件，还剩哪些盲区 | [第八轮 341 输入文件冻结覆盖清单](minic-source-coverage-f8-2026-10-31.md) · [C38→C39 纯清理流水账](minic-cleanup-ledger.md) | 前者为 `3d504e7` 历史输入集合；后者明确区分 C38 342 个文件的历史深读与 C39 412 个文件的当前库存、待补审读项 |
+| 完整扫描了哪些文件，还剩哪些盲区 | [第八轮 341 输入文件冻结覆盖清单](https://github.com/yituanxing/minic-toolchain/blob/bab9fb3e0d488d9d50da0ce95ded842bf7ef87f2/docs/architecture/minic-source-coverage-f8-2026-10-31.md) · [C38→C39 纯清理流水账](minic-cleanup-ledger.md) | 前者为 `3d504e7` 历史输入集合；后者明确区分 C38 342 个文件的历史深读与 C39 412 个文件的当前库存、待补审读项 |
 | 有哪些 Bug、调查项、架构债、已排除误判 | [MC 问题台账](minic-issue-register.md) | 只组织主题和工作依赖，**不复制状态** |
 | 先纯清理再重构：本批删了什么、没删什么、证据缺口 | [MiniC 纯清理流水账](minic-cleanup-ledger.md) | 按 commit 记录真实删改、KEEP、测试与未验证，不另建 Bug 状态 |
 | C38 之后每批架构重构：迁了哪个 owner、删了哪条旧路径 | [架构收敛批次账本](minic-refactor-ledger.md) | 从 R1 开始按真实 producer/consumer、代码行数和同源差分记账，独立于 C1～C38 纯清理 |
@@ -284,9 +284,9 @@ Frontend 多数 `probe=*parser` 只是词法前瞻、Core 不同强度的常量�
 ### 活跃契约与背景设计
 
 - AST / 类型 / 声明：
-  [AST/Core 阶段快照](ast-core-v1-checkpoint.md)、
+  [AST/Core 阶段快照](https://github.com/yituanxing/minic-toolchain/blob/bab9fb3e0d488d9d50da0ce95ded842bf7ef87f2/docs/architecture/ast-core-v1-checkpoint.md)、
   [FunctionBody 所有权](function-body-ownership-v1.md)、
-  [AST 遍历](ast-traversal-expression-reference-slice.md)、
+  [AST 遍历](https://github.com/yituanxing/minic-toolchain/blob/bab9fb3e0d488d9d50da0ce95ded842bf7ef87f2/docs/architecture/ast-traversal-expression-reference-slice.md)、
   [声明与 Target 边界](declaration-sema-and-target-boundaries-v1.md)、
   [声明头迁移](declaration-head-migration.md)、
   [Record 布局查询](record-datalayout-query-v1.md)、
@@ -294,15 +294,15 @@ Frontend 多数 `probe=*parser` 只是词法前瞻、Core 不同强度的常量�
 - Core：
   [Core 类型入口与后续 Module 边界（P0，待实施）](core-type-ingress-and-module-boundary-2026-11-02.md)、
   [IR 表示边界](representation-seams-and-deferred-ir.md)、
-  [Core IR module ownership](core-ir-module-ownership-2026-10-21.md)、
-  [Core expression ownership](core-expression-module-ownership-2026-10-21.md)、
-  [reentry index](core-reentry-index-lifetime-2026-10-21.md)、
-  [source facts/bitfields](core-source-facts-bitfields-2026-10-21.md)、
-  [GNU ASM lowering](gnu-asm-lowering-ownership-2026-10-21.md)、
-  [four-backend seam](four-backend-lowering-seam-2026-10-21.md)。
+  [Core IR module ownership](https://github.com/yituanxing/minic-toolchain/blob/bab9fb3e0d488d9d50da0ce95ded842bf7ef87f2/docs/architecture/core-ir-module-ownership-2026-10-21.md)、
+  [Core expression ownership](https://github.com/yituanxing/minic-toolchain/blob/bab9fb3e0d488d9d50da0ce95ded842bf7ef87f2/docs/architecture/core-expression-module-ownership-2026-10-21.md)、
+  [reentry index](https://github.com/yituanxing/minic-toolchain/blob/bab9fb3e0d488d9d50da0ce95ded842bf7ef87f2/docs/architecture/core-reentry-index-lifetime-2026-10-21.md)、
+  [source facts/bitfields](https://github.com/yituanxing/minic-toolchain/blob/bab9fb3e0d488d9d50da0ce95ded842bf7ef87f2/docs/architecture/core-source-facts-bitfields-2026-10-21.md)、
+  [GNU ASM lowering](https://github.com/yituanxing/minic-toolchain/blob/bab9fb3e0d488d9d50da0ce95ded842bf7ef87f2/docs/architecture/gnu-asm-lowering-ownership-2026-10-21.md)、
+  [four-backend seam](https://github.com/yituanxing/minic-toolchain/blob/bab9fb3e0d488d9d50da0ce95ded842bf7ef87f2/docs/architecture/four-backend-lowering-seam-2026-10-21.md)。
 - 目标与 ABI：
   [工具链组件边界](toolchain-component-boundaries.md)、
-  [Direct LP64 preflight](minic-only-direct-lp64-preflight-2026-10-21.md)、
+  [Direct LP64 preflight](https://github.com/yituanxing/minic-toolchain/blob/bab9fb3e0d488d9d50da0ce95ded842bf7ef87f2/docs/architecture/minic-only-direct-lp64-preflight-2026-10-21.md)、
   [RV ABI GPR cursor](riscv-gpr-abi-core-call-ownership-2026-10-24.md)、
   [RV 机器操作家族](riscv-machine-operation-families-2026-10-24.md)、
   [RV 指令选择](riscv-machine-selection-ownership-2026-10-24.md)、
@@ -372,3 +372,6 @@ Frontend 多数 `probe=*parser` 只是词法前瞻、Core 不同强度的常量�
 3. **再做有生产语义的机制迁移**：A8-05 循环 fact 屏障、A8-04 CALL 实例、A8-07/A9-09 RV Common Global Plan、A9-10 x86/Loong typed ASM，先完成 consumer 验证再删原分派。既有 P0 与全部 MC 条目持续在账。
 4. 继续保持 **文件级覆盖 ≠ 函数级深证 ≠ 运行正确性** 的分开统计；增补剩余 GNU ASM 变体、Record/varargs ABI 与异常路径的 R2/U2/E，不把旧问题改名成新问题。
 5. 后续文档及源码目录移动仍须先验证 include/相对链接、构建脚本和测试路径消费者；历史证据使用固定提交定位。
+
+
+**2026-11-25 archive:** Ten earlier AST/Core/four-backend design snapshots and the frozen F8 input list are Git-only historical evidence; the links above point to the exact archived bytes. The current compiler architecture, live issue register, function contracts, cleanup/refactor ledgers and source remain unchanged.

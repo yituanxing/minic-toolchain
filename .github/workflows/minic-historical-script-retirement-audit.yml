@@ -581,7 +581,28 @@ jobs:
           assert later_archived_routes <= set(git("ls-tree", "-r", "--name-only", "0c642380f85c25aeadb1268f770ba95852f3b100").decode().splitlines())
           assert not (expected & later_archived_routes)
           expected |= later_archived_routes
-          if len(expected) != 1077 or deleted != expected or changed != expected | metadata:
+          later_archived_architecture = {
+              "docs/architecture/ast-core-v1-checkpoint.md",
+              "docs/architecture/ast-traversal-expression-reference-slice.md",
+              "docs/architecture/core-expression-module-ownership-2026-10-21.md",
+              "docs/architecture/core-ir-module-ownership-2026-10-21.md",
+              "docs/architecture/core-reentry-index-lifetime-2026-10-21.md",
+              "docs/architecture/core-source-facts-bitfields-2026-10-21.md",
+              "docs/architecture/four-backend-lowering-seam-2026-10-21.md",
+              "docs/architecture/gnu-asm-lowering-ownership-2026-10-21.md",
+              "docs/architecture/minic-only-direct-lp64-preflight-2026-10-21.md",
+              "docs/architecture/minic-source-coverage-f8-2026-10-31.md",
+          }
+          assert later_archived_architecture <= set(git("ls-tree", "-r", "--name-only", "bab9fb3e0d488d9d50da0ce95ded842bf7ef87f2").decode().splitlines())
+          assert not (expected & later_archived_architecture)
+          expected |= later_archived_architecture
+          metadata |= {
+              "docs/architecture/README.md",
+              "docs/architecture/minic-global-contract-map.md",
+              "docs/architecture/minic-function-contract-register.md",
+              "docs/architecture/minic-issue-register.md",
+          }
+          if len(expected) != 1087 or deleted != expected or changed != expected | metadata:
               raise SystemExit("RETIREMENT_SCOPE=FAIL: unexpected tree changes")
           # Preserve the full closure in a historical checkout, not a successful
           # no-op overlay on a different source architecture.
@@ -1716,7 +1737,8 @@ jobs:
                   names[pathlib.PurePosixPath(p).stem].add(p)
               if p.endswith(".py"):
                   names[pathlib.PurePosixPath(p).stem.replace("-", "_")].add(p)
-          matcher = re.compile("|".join(re.escape(n) for n in sorted(names, key=lambda n: (-len(n), n))))
+          # Token scan avoids a multi-thousand-alternative regexp over every byte.
+          matcher = re.compile(r"[A-Za-z0-9_.-]+")
           incoming = collections.defaultdict(set)
           for path in files:
               if path == audit:
@@ -1724,7 +1746,8 @@ jobs:
               data = pathlib.Path(path).read_bytes()
               if b"\0" in data:
                   continue
-              for m in set(matcher.findall(data.decode("utf-8", errors="replace"))):
+              tokens = set(matcher.findall(data.decode("utf-8", errors="replace")))
+              for m in tokens & names.keys():
                   for p in names[m]:
                       if p != path:
                           incoming[p].add(path)

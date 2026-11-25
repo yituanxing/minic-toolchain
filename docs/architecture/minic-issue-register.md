@@ -908,7 +908,7 @@
 
 ## 审计与 CI 口径
 
-- **旧审计基线** `src/` 跟踪 **332 个 C/H 文件**、Target 206 项，原账本 `Full=7 / Targeted=4 / Pending=195`、`drift=125` 仅代表当时状态。`3d504e7` 第八轮现有 **337 个 C/H**（Frontend70/Compiler11/Core48/Target208）；另两个 CLI 入口、注册定义及 Makefile 见[逐文件清单](minic-source-coverage-f8-2026-10-31.md)。新覆盖并不使旧审查 `PASS` 自动升级为所有函数全部 U2。
+- **旧审计基线** `src/` 跟踪 **332 个 C/H 文件**、Target 206 项，原账本 `Full=7 / Targeted=4 / Pending=195`、`drift=125` 仅代表当时状态。`3d504e7` 第八轮现有 **337 个 C/H**（Frontend70/Compiler11/Core48/Target208）；另两个 CLI 入口、注册定义及 Makefile 见[逐文件清单](https://github.com/yituanxing/minic-toolchain/blob/bab9fb3e0d488d9d50da0ce95ded842bf7ef87f2/docs/architecture/minic-source-coverage-f8-2026-10-31.md)。新覆盖并不使旧审查 `PASS` 自动升级为所有函数全部 U2。
 - GNU Linux 三 ISA × 七路是冻结预处理 `.i` 经 MiniC `-S` 的**发现型编译成功率**；工作流成功退出不等于 `compiled=total`，要看每 shard 的报告，且 campaign 通常需要显式触发。不等同 GNU AS、ELF、QEMU。
 - 四架构 runtime workflow **有真实交叉汇编/链接/QEMU 步骤**；不能因某个 source-only native smoke 的假 QEMU 标题就否定这些独立的真实运行证据。
 - 任一修复需要精确 HEAD 的目标回归。对运行风险至少区分 `MiniC -S`、GNU AS、ELF/重定位、QEMU/原生执行四种证据层。
