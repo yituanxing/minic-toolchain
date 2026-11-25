@@ -116,6 +116,21 @@ jobs:
                   assert "42345808682" in old and "actions/download-artifact@v4" in old
               else:
                   assert "42345808682" in old and "MINIC_S_GNU_AS_PASS" in old
+          # Mixed-epoch diagnostics cannot be replayed after their exact
+          # historical object ZIPs disappear; the original GNU .i inputs
+          # and strict current-source producer/receiver are still retained.
+          expired_mixed_replay = {
+              ".github/workflows/minic-loong-three-owner-cached-replay-v1.yml": "42378020139",
+              ".github/workflows/minic-linux-x86-paravirt-cached-replay-v1.yml": "42384023426",
+              "tools/ci/linux-loong-three-owner-replay-v1.py": "42378020139",
+              "tools/ci/linux-x86-paravirt-cached-overlay-v1.py": "42384023426",
+              "tools/ci/linux-x86-paravirt-cached-receiver-v1.py": "linux-x86-paravirt-cached-overlay-v1.py",
+              "tools/ci/linux-loong-three-owner-replay-trigger.txt": "42378020139",
+              "tools/ci/linux-x86-paravirt-cached-replay-trigger.txt": "42384023426",
+          }
+          for path, marker in expired_mixed_replay.items():
+              assert marker in git("show", "2d7e710db373b54d47c5d73fdc83d677f2fb6ef4:" + path).decode(), path
+          expired_replay_files |= set(expired_mixed_replay)
           expected |= expired_replay_files
           metadata |= set(route_blobs)
           shared_fixtures = {
@@ -372,7 +387,7 @@ jobs:
           metadata -= retired_route_files | expired_replay_files
           deleted = changed_paths(base, "HEAD", "--diff-filter=D")
           changed = changed_paths(base, "HEAD")
-          if len(expected) != 974 or deleted != expected or changed != expected | metadata:
+          if len(expected) != 981 or deleted != expected or changed != expected | metadata:
               raise SystemExit("RETIREMENT_SCOPE=FAIL: unexpected tree changes")
           # Preserve the full closure in a historical checkout, not a successful
           # no-op overlay on a different source architecture.
@@ -754,12 +769,48 @@ jobs:
                       # import is inserted. Compare all code/error text and rc.
                       output = re.sub(r'(?m)^(  File "<checkout>/[^"\n]+", line )\d+(, in .+)$', r'\g<1><line>\g<2>', output)
                       return result.returncode, output
+                  # These two legacy inventory guards already fail on extra
+                  # workflows outside their old manifest. Require exactly the
+                  # known Git-only replay workflows to disappear from their
+                  # original diagnostics; never accept any other drift.
+                  import ast
+                  def expected_inventory_delta(path, before, after):
+                      if before[0] != 1 or after[0] != 1:
+                          return False
+                      if path == "tools/ci/audit_active_workflow_routing_v1.py":
+                          prefix = "AssertionError: active owner drift from single manifest: missing=set() extra="
+                          removed = {pathlib.PurePosixPath(p).name for p in expired_replay_files if p.endswith(".yml")}
+                          suffix = ""
+                      elif path == "tools/ci/check_ci_trigger_coverage_v1.py":
+                          prefix = "AssertionError: inventory/source divergence missing="
+                          removed = {p for p in expired_replay_files if p.endswith(".yml")}
+                          suffix = " extra=[]"
+                      else:
+                          return False
+                      def unpack(result):
+                          head, sep, tail = result[1].partition(prefix)
+                          if not sep or not tail.endswith(suffix + "\n"):
+                              return None
+                          raw = tail[:-(len(suffix)+1)]
+                          values = ast.literal_eval(raw)
+                          if not isinstance(values, (list, set)) or len(values) != len(set(values)):
+                              return None
+                          return head, set(values)
+                      try:
+                          old = unpack(before)
+                          new = unpack(after)
+                      except (SyntaxError, ValueError, TypeError):
+                          return False
+                      return (old is not None and new is not None and old[0] == new[0]
+                              and removed <= old[1] and new[1] == old[1] - removed)
                   regressions = []
                   passed = 0
                   for guard in guards:
                       before = execute(worktree, guard)
                       after = execute(root, guard)
-                      if before != after:
+                      if before != after and expected_inventory_delta(guard, before, after):
+                          print(f"GUARD_BASELINE_FAIL_EXPECTED_RETIRED_WORKFLOW_DELTA {guard} rc=1")
+                      elif before != after:
                           regressions.append(guard)
                           print(f"GUARD_CHANGED {guard} before={before!r} after={after!r}")
                       elif before[0] == 0:
