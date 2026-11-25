@@ -1,0 +1,94 @@
+name: MiniC live ownership semantic census - temporary
+on:
+  push:
+    branches: [cleanup/minic-semantic-deep-20261125]
+permissions:
+  contents: read
+jobs:
+  graph:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Inspect complete test file and workflow caller graph
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          import os, pathlib, re, subprocess, json, collections, hashlib
+          root=pathlib.Path(".")
+          paths=[x.decode() for x in subprocess.check_output(["git","ls-files","-z"]).split(b"\0") if x]
+          blob={}
+          for p in paths:
+              try:blob[p]=pathlib.Path(p).read_text(encoding="utf-8")
+              except Exception:pass
+          scripts={p:s for p,s in blob.items() if p.startswith("tests/") and p.endswith(".sh")}
+          sources={p:s for p,s in blob.items() if p.startswith("tests/compiler/c0/") and p.endswith((".c",".i",".h"))}
+          drivers={p:s for p,s in blob.items() if p.endswith((".sh",".py",".json",".yml",".yaml",".mk")) or p=="Makefile"}
+          # Exclude audit itself, historical textual grep in workflows is not invocations
+          drivers={p:s for p,s in drivers.items() if not p.endswith("minic-deep-owner-census.yml")}
+          def tokens(n):
+              return [w for w in re.split(r"[_\-.]+",n) if len(w)>=3 and w not in "run check probe test native linux strict original current source runtime compiler target x86 x86_64 riscv64 riscv32 loongarch64 aarch64 gnu gcc four five machine".split()]
+          def best_siblings(p,top=3):
+              b=set(tokens(pathlib.Path(p).stem))
+              scored=[]
+              for q,s in scripts.items():
+                  if p==q:continue
+                  k=set(tokens(pathlib.Path(q).stem))
+                  sim=len(k&b)/len(k|b) if b|k else 0
+                  if sim>.22:scored.append((round(sim,2),q))
+              scored.sort(reverse=True)
+              return scored[:top]
+          def invocation_callers(p):
+              stem=pathlib.Path(p).stem
+              bn=pathlib.Path(p).name
+              owners=[]
+              for o,s in drivers.items():
+                  if o==p:continue
+                  # Full file name or stem is useful as a conservative approximate call graph.
+                  if p in s or bn in s or stem in s:owners.append(o)
+              return owners
+          orphans=[p for p in scripts if not invocation_callers(p)]
+          def prof(p):
+              s=scripts[p]
+              refs=sorted(set(re.findall(r"(?:tests/compiler/c0/|tests/target/)[\w./-]+\.(?:c|i|h|sh)",s)))
+              named=re.findall(r"\b[A-Z][A-Z0-9_]+=(?:PASS|FAIL)\b|PASS[^\n]{0,75}",s)
+              test=re.findall(r"(?m)^[ \t]*(?:if |test |grep |diff |cmp |readelf |objdump |nm |(?:\$\w+|\$\{[^}]+\}).*)",s)
+              return {"path":p,"lines":len(s.splitlines()),"bytes":len(s.encode()),"sources":refs[:18],"assertions":len(test),"negative":bool(re.search(r"negative|invalid|bad_|reject|fail.closed|FAIL",s,re.I)),"cross":bool(re.search(r"qemu|riscv.*gcc|aarch64.*gcc|loongarch.*gcc",s,re.I)),"marker":named[-2:],"siblings":best_siblings(p,3)}
+          kinds=collections.Counter()
+          for p in orphans:
+              n=pathlib.Path(p).name
+              kind="probe" if n.startswith("probe-") else "run" if n.startswith("run-") else "other"
+              kinds[kind]+=1
+          print("OWNER_AUDIT_INVENTORY",json.dumps({"tracked":len(paths),"scripts":len(scripts),"C0_sources":len(sources),"orphans":len(orphans),"orphanCats":kinds}),flush=True)
+          for item in sorted(map(prof,orphans),key=lambda x:x["path"]):
+              print("ORPHAN_SCRIPT",json.dumps(item),flush=True)
+          # Parse all shell-internal dynamic invocation string interpolation that static
+          # name check cannot detect. Show function location and surrounding case dispatch.
+          for p,s in scripts.items():
+              lines=s.splitlines()
+              for i,line in enumerate(lines):
+                  if re.search(r"(?:sh|bash|\.)\s+[^#\n]{0,150}(?:\$[A-Za-z_{]|\*)(?:[^ \n]{0,80})\.sh|(?:sh|bash)\s+\"[^\"\n]*\$\w+\"",line):
+                      print("DYNAMIC_SCRIPT_CALL",json.dumps({"p":p,"line":i+1,"cmd":line.strip()[:220]}),flush=True)
+          # Unlike exact AST equality, we care about common semantics, fixture owners,
+          # and independently asserted negative/output contracts.
+          for p,s in scripts.items():
+              group=[]
+              for q,t in scripts.items():
+                  if p>=q:continue
+                  r1=set(re.findall(r"(?<![A-Za-z0-9])(?:tests/[A-Za-z0-9_./-]+\.(?:c|i)|[A-Za-z_][\w-]*\.c)(?![A-Za-z0-9])",s))
+                  r2=set(re.findall(r"(?<![A-Za-z0-9])(?:tests/[A-Za-z0-9_./-]+\.(?:c|i)|[A-Za-z_][\w-]*\.c)(?![A-Za-z0-9])",t))
+                  overlap=len(r1 & r2)
+                  if overlap and overlap >= max(2, min(len(r1),len(r2))*.7):
+                      group.append((q,overlap,len(r1),len(r2)))
+              if group:print("SOURCE_SHARED_SCRIPTS",json.dumps({"p":p,"pairs":group[:15]}),flush=True)
+          # Test fixtures with neither literal path nor exact stem anywhere in active drivers.
+          used_stems=set()
+          c0_dark=[]
+          for p in sources:
+              stem=pathlib.Path(p).stem
+              if not any(stem in s for s in drivers.values()):
+                  c0_dark.append(p)
+          print("DARK_C0_PATHS",json.dumps({"count":len(c0_dark),"paths":c0_dark[:250]}),flush=True)
+          print("OWNER_AUDIT_COMPLETE",flush=True)
+          PY
