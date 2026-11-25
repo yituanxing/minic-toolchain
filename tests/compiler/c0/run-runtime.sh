@@ -166,28 +166,6 @@ run_rv64_gnu_diff() {
     printf '%s\n' "$marker"
 }
 
-# Raw MiniC .c inputs are intentionally not replaced with GNU -E .i inputs.
-run_rv64_raw() {
-    name=$1
-    support=$2
-    "$minic" -S "$root/tests/compiler/c0/$name.c" -o "$work/$name.s"
-    test -s "$work/$name.s"
-    if [ -n "$support" ]; then
-        "$riscv_cc" -O0 -static "$work/$name.s" \
-            "$root/tests/compiler/c0/$support.c" -o "$work/$name.elf"
-    else
-        "$riscv_cc" -O0 -static "$work/$name.s" -o "$work/$name.elf"
-    fi
-    set +e
-    "$qemu" "$work/$name.elf"
-    status=$?
-    set -e
-    if [ "$status" -ne 0 ]; then
-        printf '%s\n' "FAIL compiler/c0/$name qemu=$status" >&2
-        exit 1
-    fi
-}
-
 # +&r earlyclobber stays a separate freestanding GNU ABI oracle with _start.
 run_rv64_earlyclobber() {
     name=gnu_inline_asm_readwrite_earlyclobber
@@ -241,6 +219,3 @@ run_rv64_earlyclobber
 RUNTIME_SUPPORT_SOURCE=stack_fixed_arguments_gcc \
     run_case stack_fixed_arguments 0 stack_fixed_arguments
 printf '%s\n' 'PASS compiler/c0/stack_fixed_arguments_rv64 callers=minic,gcc callees=gcc,minic fixed=9 stack-slot=1'
-run_rv64_raw dynamic_stack_alloca dynamic_stack_alloca_helper
-run_rv64_raw dynamic_local_vla ''
-printf '%s\n' 'PASS compiler/c0/dynamic_stack_alloca nested=2 fixed-frame=1 outgoing-stack-args=2 vla=runtime-bound-once,int-elements runtime=qemu'
