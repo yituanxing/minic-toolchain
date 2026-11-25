@@ -90,8 +90,14 @@ def check_all(checks, artifacts, targets, counts=(), cfg=(), order=(),
         proc = subprocess.run(["grep", "-" + mode + "c", "--", pattern], input=data, stdout=subprocess.PIPE)
         require(proc.returncode in (0, 1), f"invalid count pattern {pattern!r}")
         count = int(proc.stdout)
-        require(count >= minimum and (maximum is None or count <= maximum),
-                f"{target}: count {count} outside {minimum}..{maximum}: {pattern}")
+        if count < minimum or (maximum is not None and count > maximum):
+            # Show generated instructions when a legacy spelling gate fails,
+            # not merely a numeric count with no actionable machine evidence.
+            snippets = [line.decode(errors="replace") for line in data.splitlines()
+                        if b"msr" in line.lower() or b".inst" in line.lower()]
+            raise RuntimeError(
+                f"{target}: count {count} outside {minimum}..{maximum}: "
+                f"{pattern}; machine_samples={snippets[:12]!r}")
     for target, first, second in order:
         data = artifacts[target]
         a = data.find(first.encode())

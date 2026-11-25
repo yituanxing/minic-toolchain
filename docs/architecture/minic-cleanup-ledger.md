@@ -1752,3 +1752,5 @@ C62 第一次真实 Native Matrix：TESTCC 与 IOMEM 两组全部 PASS；零尺�
 以 `cf1867e51c72` 为基线。审读上述五份没有任何直接调用者的旧 Shell：LL/SC 128-bit +&Q 约束，PMCCFILTR、MTE/SDEI 特权 MRS（仅编译不执行），KVM EL2/PMU 23 种寄存器写，以及 KVM debug 134 条 MSR/ICC 8 种编码。全部把真实 positive 输出数量/关键指令、四或两种跨 ISA 拒绝、源约束或寄存器错配负例迁入原有 `native-matrix.json`；原 C fixture 保留。两份有可选 GNU aarch64 工具链验收的，增加复用已存在 `optional_asm_tool` 的原始 GNU C 编译，非安装环境报告为 optional 而不伪称 GNU-AS PASS。没有新建 runner/workflow/文件。保留负例 fail-closed，不实际执行特权代码。新增矩阵自动随现役 Native CI 运行，须以本提交 exact-HEAD 结果为准。
 
 C63 首次 Native Matrix：LL/SC、PMCCFILTR、MTE/SDEI、EL2/PMU 四项 PASS，第五项 KVM Debug/ICC 编译进入数量门禁，但旧脚本依赖 exactly-two-space 的物理缩进。将 MSR/.inst 正则改为匹配任意真实汇编行前导空白；仍要求精确 134 MSR、8 ICC .inst、寄存器逐项匹配及拒绝负例。须以修复提交的真实 CI 为准。
+
+C63 第二次 Native Matrix：变更为 one-or-more whitespace 后仍未匹配到 KVM debug 134 MSR。原始 AArch64 source ASM 有可能在列0直接发射助记符，因此改成 zero-or-more whitespace，同时升级现有 matrix 在计数失败时输出真实 machine_samples 前12条便于下一轮判断。134/8 的数量和所有原有 negative 仍保持严格。
