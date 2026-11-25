@@ -85,8 +85,9 @@ def check_all(checks, artifacts, targets, counts=(), cfg=(), order=(),
                 # assuming historic literal opcode spellings remain canonical.
                 text_lines = data.decode(errors="replace").splitlines()
                 samples = [line for line in text_lines
-                           if any(op in line for op in (" cset ", " ldp ",
-                               " stp ", " la ", " lla ", " adrp ",
+                           if any(op in line for op in (" cset ", " ldp ", " ldr ", " str ",
+                               " stp ", " mov ", " add ", " sub ",
+                               " la ", " lla ", " adrp ",
                                ".inst", "msr_s", "msr "))]
                 labels = [line for line in text_lines
                           if line.endswith(":") and not line.startswith(".L")]
@@ -94,7 +95,7 @@ def check_all(checks, artifacts, targets, counts=(), cfg=(), order=(),
                     f"{t}: {sense} {pattern!r} failed; "
                     f"labels={labels[:22]!r} "
                     f"machine_samples={samples[:35]!r} "
-                    f"asm_start={text_lines[:12]!r}")
+                    f"asm_start={text_lines[:110]!r}")
 
     for target, mode, pattern, minimum, maximum, *section in counts:
         data = artifacts[target]
