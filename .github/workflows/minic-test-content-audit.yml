@@ -84,7 +84,7 @@ jobs:
           set -Eeuo pipefail
           python3 - <<'PY'
           import pathlib,re,subprocess
-          removed = ["tests/compiler/audit/mc051_rv64_entry.c","tests/compiler/c0/invalid_cast_integer_to_float.c","tests/compiler/c0/invalid_empty_record.c","tests/compiler/c0/invalid_long_long.c","tests/compiler/c0/invalid_zero_length_typedef_array.c","tests/compiler/c0/core_required_no_fallback.c","tests/core/run-core-ir-shadow.sh"]
+          removed = ["tests/compiler/audit/mc051_rv64_entry.c","tests/compiler/c0/invalid_empty_record.c","tests/compiler/c0/invalid_long_long.c","tests/compiler/c0/invalid_zero_length_typedef_array.c","tests/compiler/c0/core_required_no_fallback.c","tests/core/run-core-ir-shadow.sh"]
           for p in removed:
               assert not pathlib.Path(p).exists(), p
           live=subprocess.check_output(["git","ls-files","-z"]).decode().strip("\0").split("\0")
@@ -113,16 +113,22 @@ jobs:
           mini="$PWD/build/release/bin/minic-cc"
           work="$PWD/build/test-pruning"
           mkdir -p "$work"
-          for name in invalid_cast_integer_to_float invalid_empty_record invalid_long_long invalid_zero_length_typedef_array; do
+          failed=0
+          for name in invalid_empty_record invalid_long_long invalid_zero_length_typedef_array; do
             git show 4f3b6b1b087e4e9cb8a0d17fdac5b8a46d193bad:tests/compiler/c0/$name.c > "$work/$name.c"
-            cc -std=gnu11 "$work/$name.c" -o "$work/$name.gnu"
-            "$work/$name.gnu"
-            cc -E -P -std=gnu11 "$work/$name.c" -o "$work/$name.i"
-            "$mini" --target=x86_64-linux -S "$work/$name.i" -o "$work/$name.s"
-            cc -no-pie "$work/$name.s" -o "$work/$name.mini"
-            "$work/$name.mini"
-            echo "STALE_NEGATIVE_NOW_VALID=$name"
+            if cc -std=gnu11 "$work/$name.c" -o "$work/$name.gnu" &&
+               "$work/$name.gnu" &&
+               cc -E -P -std=gnu11 "$work/$name.c" -o "$work/$name.i" &&
+               "$mini" --target=x86_64-linux -S "$work/$name.i" -o "$work/$name.s" &&
+               cc -no-pie "$work/$name.s" -o "$work/$name.mini" &&
+               "$work/$name.mini"; then
+              echo "STALE_NEGATIVE_NOW_VALID=$name"
+            else
+              echo "RETAIN_REQUIRED=$name"
+              failed=1
+            fi
           done
+          test "$failed" -eq 0
           git show 4f3b6b1b087e4e9cb8a0d17fdac5b8a46d193bad:tests/compiler/c0/core_required_no_fallback.c > "$work/nine.c"
           cc -E -P "$work/nine.c" -o "$work/nine.i"
           "$mini" --target=riscv64-linux -S "$work/nine.i" -o "$work/nine.s"
@@ -130,11 +136,16 @@ jobs:
           echo "OLD_NINE_ARGUMENT_REJECTION=OBSOLETE"
           bash tests/compiler/c0/check-minic-target-boundaries.sh
       - name: Run the current nine-argument and comparison differential gates
+        if: success() || failure()
         run: |
           set -Eeuo pipefail
           sudo apt-get update -qq
           sudo apt-get install -y gcc-riscv64-linux-gnu qemu-user
           export MINIC="$PWD/build/release/bin/minic-cc"
+          cc -E -P tests/compiler/c0/core_comparisons.c -o build/test-pruning/compare.i
+          "$MINIC" --target=x86_64-linux -S build/test-pruning/compare.i -o build/test-pruning/compare.s
+          cc -no-pie build/test-pruning/compare.s tests/compiler/c0/core_comparisons_runtime.c -o build/test-pruning/compare
+          build/test-pruning/compare
           export MINIC_CC="$MINIC" RISCV_CC=riscv64-linux-gnu-gcc QEMU_RISCV64=qemu-riscv64
           export BUILD_DIR="$PWD/build/test-pruning/stack"
           sh tests/compiler/c0/run-compile-only-case.sh stack-fixed-arguments
