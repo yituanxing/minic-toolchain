@@ -1,0 +1,2758 @@
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/target/machine_core_coverage_test.c"}
+#include "target/common/machine_core_coverage.h"
+
+#include <stdio.h>
+
+static int check(void) {
+    MinicCoreInstruction core_instructions[6] = {0};
+    MinicCoreInstructionId core_ids[5] = {0U, 1U, 2U, 3U, 4U};
+    MinicCoreInstructionId unreachable_id = 5U;
+    MinicCoreBlock core_blocks[2] = {0};
+    MinicCoreInlineAsm source_asm = {0};
+    MinicCoreFunction core = {0};
+    MinicMachineInstruction machine_instructions[5] = {0};
+    MinicMachineBlock machine_blocks[3] = {0};
+    MinicMachineFunction machine = {0};
+    bool reachable[2] = {true, false};
+    core_instructions[0].kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
+    core_instructions[1].kind = MINIC_CORE_INSTRUCTION_STORE;
+    core_instructions[1].value.store.is_volatile = true;
+    core_instructions[2].kind = MINIC_CORE_INSTRUCTION_CALL;
+    core_instructions[3].kind = MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM;
+    core_instructions[3].value.structured_inline_asm.inline_asm_id = 0U;
+    core_instructions[4].kind = MINIC_CORE_INSTRUCTION_LOAD;
+    core_instructions[4].value.load.is_volatile = true;
+    core_instructions[5].kind = MINIC_CORE_INSTRUCTION_STORE;
+    source_asm.template_text = "nop";
+    source_asm.template_length = 3U;
+    core_blocks[0].instructions = core_ids;
+    core_blocks[0].instruction_count = 5U;
+    core_blocks[0].has_terminator = true;
+    core_blocks[0].terminator.kind = MINIC_CORE_TERMINATOR_RETURN;
+    core_blocks[1].instructions = &unreachable_id;
+    core_blocks[1].instruction_count = 1U;
+    core_blocks[1].has_terminator = true;
+    core_blocks[1].terminator.kind = MINIC_CORE_TERMINATOR_RETURN;
+    core.blocks = core_blocks;
+    core.block_count = 2U;
+    core.instructions = core_instructions;
+    core.instruction_count = 6U;
+    core.inline_asms = &source_asm;
+    core.inline_asm_count = 1U;
+    machine_instructions[0] = (MinicMachineInstruction){
+        .kind = MINIC_MACHINE_INSTRUCTION_SELECTED,
+        .has_core_origin = true, .core_block_id = 0U,
+        .core_instruction_id = 1U,
+        .effects = MINIC_MACHINE_EFFECT_MEMORY_WRITE |
+                   MINIC_MACHINE_EFFECT_VOLATILE
+    };
+    machine_instructions[1] = (MinicMachineInstruction){
+        .kind = MINIC_MACHINE_INSTRUCTION_SELECTED,
+        .has_core_origin = true, .core_block_id = 0U,
+        .core_instruction_id = 2U,
+        .effects = MINIC_MACHINE_EFFECT_CALL
+    };
+    machine_instructions[2] = (MinicMachineInstruction){
+        .kind = MINIC_MACHINE_INSTRUCTION_SOURCE_ASM,
+        .has_core_origin = true, .core_block_id = 0U,
+        .core_instruction_id = 3U,
+        .effects = MINIC_MACHINE_EFFECT_SOURCE_ASM,
+        .source_asm_template = "nop", .source_asm_length = 3U
+    };
+    machine_instructions[3] = (MinicMachineInstruction){
+        .kind = MINIC_MACHINE_INSTRUCTION_SELECTED,
+        .has_core_origin = true, .core_block_id = 0U,
+        .core_instruction_id = 4U,
+        .effects = MINIC_MACHINE_EFFECT_MEMORY_READ |
+                   MINIC_MACHINE_EFFECT_VOLATILE
+    };
+    machine_blocks[0].machine_auxiliary = true;
+    machine_blocks[0].has_fallthrough = true;
+    machine_blocks[0].fallthrough_target = 1U;
+    machine_blocks[1].has_core_block_origin = true;
+    machine_blocks[1].core_block_id = 0U;
+    machine_blocks[1].instructions = machine_instructions;
+    machine_blocks[1].instruction_count = 4U;
+    machine.blocks = machine_blocks;
+    machine.block_count = 2U;
+    if (!minic_machine_core_coverage_verify(&core, reachable, &machine)) return 1;
+    /* Pure SSA constants may be folded into an immediate. */
+    machine_blocks[1].instruction_count = 3U;
+    if (minic_machine_core_coverage_verify(&core, reachable, &machine)) return 2;
+    machine_blocks[1].instruction_count = 4U;
+    machine_instructions[0].effects = MINIC_MACHINE_EFFECT_MEMORY_READ |
+                                      MINIC_MACHINE_EFFECT_VOLATILE;
+    if (minic_machine_core_coverage_verify(&core, reachable, &machine)) return 3;
+    machine_instructions[0].effects = MINIC_MACHINE_EFFECT_MEMORY_WRITE;
+    if (minic_machine_core_coverage_verify(&core, reachable, &machine)) return 4;
+    machine_instructions[0].effects = MINIC_MACHINE_EFFECT_MEMORY_WRITE |
+                                      MINIC_MACHINE_EFFECT_VOLATILE;
+    machine_instructions[2].kind = MINIC_MACHINE_INSTRUCTION_SELECTED;
+    if (minic_machine_core_coverage_verify(&core, reachable, &machine)) return 5;
+    machine_instructions[2].kind = MINIC_MACHINE_INSTRUCTION_SOURCE_ASM;
+    machine_instructions[2].source_asm_template = "wfe";
+    if (minic_machine_core_coverage_verify(&core, reachable, &machine)) return 9;
+    machine_instructions[2].source_asm_template = "nop";
+    source_asm.source_asm_unique_id = 42U;
+    machine_instructions[2].has_source_asm_unique_id = true;
+    machine_instructions[2].source_asm_unique_id = 42U;
+    if (!minic_machine_core_coverage_verify(&core, reachable, &machine))
+        return 13;
+    machine_instructions[2].source_asm_unique_id = 41U;
+    if (minic_machine_core_coverage_verify(&core, reachable, &machine))
+        return 14;
+    source_asm.source_asm_unique_id = 0U;
+    machine_instructions[2].has_source_asm_unique_id = false;
+    machine_instructions[2].source_asm_unique_id = 0U;
+    source_asm.is_volatile = true;
+    if (minic_machine_core_coverage_verify(&core, reachable, &machine))
+        return 15;
+    machine_instructions[2].effects |= MINIC_MACHINE_EFFECT_VOLATILE;
+    if (!minic_machine_core_coverage_verify(&core, reachable, &machine))
+        return 16;
+    source_asm.has_memory_clobber = true;
+    if (minic_machine_core_coverage_verify(&core, reachable, &machine))
+        return 17;
+    machine_instructions[2].effects |= MINIC_MACHINE_EFFECT_COMPILER_BARRIER;
+    if (!minic_machine_core_coverage_verify(&core, reachable, &machine))
+        return 18;
+    source_asm.is_volatile = false;
+    source_asm.has_memory_clobber = false;
+    machine_instructions[2].effects = MINIC_MACHINE_EFFECT_SOURCE_ASM;
+    /* A verified typed extended-float numerical intrinsic reuses Core CALL's
+     * argument carrier, but may lower directly to x87/target arithmetic.
+     * It must keep its Core origin without inventing a physical CALL effect.
+     * An ordinary CALL must still have the real machine CALL effect. */
+    core_instructions[2].value.call.extended_float_operation =
+        MINIC_CORE_EXT_FLOAT_ADD;
+    machine_instructions[1].effects = 0U;
+    if (!minic_machine_core_coverage_verify(&core, reachable, &machine))
+        return 20;
+    machine_instructions[1].has_core_origin = false;
+    if (minic_machine_core_coverage_verify(&core, reachable, &machine))
+        return 21;
+    machine_instructions[1].has_core_origin = true;
+    core_instructions[2].value.call.extended_float_operation =
+        MINIC_CORE_EXT_FLOAT_NONE;
+    if (minic_machine_core_coverage_verify(&core, reachable, &machine))
+        return 22;
+    machine_instructions[1].effects = MINIC_MACHINE_EFFECT_CALL;
+    if (!minic_machine_core_coverage_verify(&core, reachable, &machine))
+        return 23;
+    machine_instructions[1].core_block_id = 1U;
+    if (minic_machine_core_coverage_verify(&core, reachable, &machine)) return 6;
+    machine_instructions[1].core_block_id = 0U;
+    machine_instructions[1].core_instruction_id = 0U;
+    if (minic_machine_core_coverage_verify(&core, reachable, &machine)) return 7;
+    machine_instructions[1].core_instruction_id = 2U;
+    /* A Core effect may select more than one physical instruction. */
+    machine_instructions[4] = machine_instructions[0];
+    machine_blocks[1].instruction_count = 5U;
+    if (!minic_machine_core_coverage_verify(&core, reachable, &machine)) return 8;
+    /* An unreachable helper must not impersonate a live Core LOAD. */
+    machine_blocks[1].instruction_count = 3U;
+    machine_blocks[2].machine_auxiliary = true;
+    machine_blocks[2].instructions = &machine_instructions[3];
+    machine_blocks[2].instruction_count = 1U;
+    machine.block_count = 3U;
+    if (minic_machine_core_coverage_verify(&core, reachable, &machine))
+        return 19;
+    machine.block_count = 2U;
+    machine_blocks[1].instruction_count = 5U;
+    /* Core entry is an ID, not necessarily block zero; prologue must reach
+     * the actual entry before entering any other Core-owned machine block. */
+    machine_blocks[1].instruction_count = 0U;
+    core_blocks[1].instruction_count = 0U;
+    core.entry_block = 1U;
+    reachable[0] = false;
+    reachable[1] = true;
+    machine_blocks[1].core_block_id = 1U;
+    if (!minic_machine_core_coverage_verify(&core, reachable, &machine))
+        return 10;
+    machine_blocks[1].core_block_id = 0U;
+    if (minic_machine_core_coverage_verify(&core, reachable, &machine))
+        return 11;
+    machine_blocks[1].core_block_id = 1U;
+    machine_blocks[1].has_core_block_origin = false;
+    if (minic_machine_core_coverage_verify(&core, reachable, &machine))
+        return 12;
+    return 0;
+}
+
+static int check_cfg_edges(void) {
+    MinicCoreInstruction ins = {0};
+    MinicCoreInstructionId instruction_id = 0U;
+    MinicCoreInlineAsm source = {0};
+    MinicCoreBlock core_blocks[2] = {0};
+    MinicCoreFunction core = {0};
+    MinicMachineInstruction machine_ins = {0};
+    MinicMachineBlock machine_blocks[4] = {0};
+    MinicMachineFunction machine = {0};
+    size_t from_entry = 1U;
+    size_t through_aux = 3U;
+    size_t from_aux[] = {2U, 3U};
+    size_t with_spurious[] = {3U, 1U};
+    bool reachable[] = {true, true};
+    core_blocks[0].has_terminator = true;
+    core_blocks[0].terminator.kind = MINIC_CORE_TERMINATOR_BRANCH;
+    core_blocks[0].terminator.branch_target = 1U;
+    core_blocks[1].has_terminator = true;
+    core_blocks[1].terminator.kind = MINIC_CORE_TERMINATOR_RETURN;
+    core.blocks = core_blocks;
+    core.block_count = 2U;
+    machine_blocks[0].machine_auxiliary = true;
+    machine_blocks[0].successors = &from_entry;
+    machine_blocks[0].successor_count = 1U;
+    machine_blocks[1].has_core_block_origin = true;
+    machine_blocks[1].core_block_id = 0U;
+    machine_blocks[1].successors = &through_aux;
+    machine_blocks[1].successor_count = 1U;
+    machine_blocks[2].has_core_block_origin = true;
+    machine_blocks[2].core_block_id = 1U;
+    machine_blocks[3].machine_auxiliary = true;
+    machine_blocks[3].successors = from_aux;
+    machine_blocks[3].successor_count = 2U;
+    machine.blocks = machine_blocks;
+    machine.block_count = 4U;
+    /* The physical branch island contains a loop, but reaches only Core 1. */
+    if (!minic_machine_core_coverage_verify(&core, reachable, &machine))
+        return 1;
+    core_blocks[0].terminator.branch_target = 0U;
+    if (minic_machine_core_coverage_verify(&core, reachable, &machine))
+        return 2;
+    core_blocks[0].terminator.branch_target = 1U;
+    machine_blocks[1].successors = with_spurious;
+    machine_blocks[1].successor_count = 2U;
+    if (minic_machine_core_coverage_verify(&core, reachable, &machine))
+        return 3;
+    machine_blocks[1].successors = &through_aux;
+    machine_blocks[1].successor_count = 1U;
+    core_blocks[0].terminator.kind = MINIC_CORE_TERMINATOR_INDIRECT_BRANCH;
+    core_blocks[1].indirect_entry = true;
+    machine_blocks[2].indirect_entry = true;
+    if (!minic_machine_core_coverage_verify(&core, reachable, &machine))
+        return 4;
+    core_blocks[1].indirect_entry = false;
+    machine_blocks[2].indirect_entry = false;
+    /* Unlike an indirect terminator, asm-goto is a mid-block Core effect:
+     * its label edge must coexist with the ordinary RETURN terminator. */
+    core_blocks[0].terminator.kind = MINIC_CORE_TERMINATOR_RETURN;
+    core_blocks[0].instructions = &instruction_id;
+    core_blocks[0].instruction_count = 1U;
+    core.instructions = &ins;
+    core.instruction_count = 1U;
+    ins.kind = MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM;
+    ins.value.structured_inline_asm.inline_asm_id = 0U;
+    source.template_text = "nop";
+    source.template_length = 3U;
+    source.is_goto = true;
+    source.goto_target = 1U;
+    source.goto_second_target = MINIC_CORE_BLOCK_INVALID;
+    core.inline_asms = &source;
+    core.inline_asm_count = 1U;
+    machine_ins.kind = MINIC_MACHINE_INSTRUCTION_SOURCE_ASM;
+    machine_ins.has_core_origin = true;
+    machine_ins.core_instruction_id = 0U;
+    machine_ins.core_block_id = 0U;
+    machine_ins.effects = MINIC_MACHINE_EFFECT_SOURCE_ASM;
+    machine_ins.source_asm_template = "nop";
+    machine_ins.source_asm_length = 3U;
+    machine_blocks[1].instructions = &machine_ins;
+    machine_blocks[1].instruction_count = 1U;
+    if (!minic_machine_core_coverage_verify(&core, reachable, &machine))
+        return 5;
+    source.goto_target = 0U;
+    if (minic_machine_core_coverage_verify(&core, reachable, &machine))
+        return 6;
+    return 0;
+}
+
+/* C local labels, computed-goto entries and escaped block addresses are
+ * independently reachable from outside the ABI entry path.  They are real
+ * Machine roots, never invented CFG branches from the function prologue.
+ * Their ordinary outgoing Core edges must nevertheless survive exactly. */
+static int check_independent_core_roots(void) {
+    MinicCoreInstruction address = {0};
+    MinicCoreInstructionId address_id = 0U;
+    MinicCoreBlock core_blocks[3] = {0};
+    MinicCoreFunction core = {0};
+    MinicMachineBlock machine_blocks[4] = {0};
+    MinicMachineFunction machine = {0};
+    size_t prologue_target = 1U;
+    size_t secondary_target = 3U;
+    bool reachable[3] = {true, true, true};
+
+    core_blocks[0].has_terminator = true;
+    core_blocks[0].terminator.kind = MINIC_CORE_TERMINATOR_RETURN;
+    core_blocks[1].has_terminator = true;
+    core_blocks[1].terminator.kind = MINIC_CORE_TERMINATOR_BRANCH;
+    core_blocks[1].terminator.branch_target = 2U;
+    core_blocks[1].indirect_entry = true;
+    core_blocks[2].has_terminator = true;
+    core_blocks[2].terminator.kind = MINIC_CORE_TERMINATOR_RETURN;
+    core.blocks = core_blocks;
+    core.block_count = 3U;
+    core.name = "independent_core_roots";
+
+    machine_blocks[0].machine_auxiliary = true;
+    machine_blocks[0].successors = &prologue_target;
+    machine_blocks[0].successor_count = 1U;
+    machine_blocks[1].has_core_block_origin = true;
+    machine_blocks[1].core_block_id = 0U;
+    machine_blocks[2].has_core_block_origin = true;
+    machine_blocks[2].core_block_id = 1U;
+    machine_blocks[2].indirect_entry = true;
+    machine_blocks[2].successors = &secondary_target;
+    machine_blocks[2].successor_count = 1U;
+    machine_blocks[3].has_core_block_origin = true;
+    machine_blocks[3].core_block_id = 2U;
+    machine.blocks = machine_blocks;
+    machine.block_count = 4U;
+
+    /* A reachable cloned-label root has no fabricated prologue edge. */
+    if (!minic_machine_core_coverage_verify(&core, reachable, &machine))
+        return 1;
+    /* Starting at that root still requires the exact outgoing branch. */
+    machine_blocks[2].successor_count = 0U;
+    if (minic_machine_core_coverage_verify(&core, reachable, &machine))
+        return 2;
+    machine_blocks[2].successor_count = 1U;
+    /* External assembler-local symbols are independent roots too, even
+     * when the Core block is not itself an indirect-branch target. */
+    core_blocks[1].indirect_entry = false;
+    core_blocks[1].local_label_symbol = ".Lexternal_entry";
+    machine_blocks[2].indirect_entry = false;
+    machine_blocks[2].exported_label = ".Lexternal_entry";
+    if (!minic_machine_core_coverage_verify(&core, reachable, &machine))
+        return 3;
+    machine_blocks[2].exported_label = ".Lwrong_external_entry";
+    if (minic_machine_core_coverage_verify(&core, reachable, &machine))
+        return 9;
+    machine_blocks[2].exported_label = NULL;
+    if (minic_machine_core_coverage_verify(&core, reachable, &machine))
+        return 10;
+    machine_blocks[2].exported_label = ".Lexternal_entry";
+    core_blocks[1].local_label_symbol = NULL;
+    /* An address-taken block can escape independently of explicit branches
+     * and of whether target code folds the address value into a constant. */
+    address.kind = MINIC_CORE_INSTRUCTION_BLOCK_ADDRESS;
+    address.value.block_id = 1U;
+    core_blocks[0].instructions = &address_id;
+    core_blocks[0].instruction_count = 1U;
+    core.instructions = &address;
+    core.instruction_count = 1U;
+    if (!minic_machine_core_coverage_verify(&core, reachable, &machine))
+        return 4;
+    /* Ordinary disconnected blocks without source-reachable roots are
+     * forbidden to claim either live effects or a missing edge. */
+    core_blocks[0].instruction_count = 0U;
+    if (minic_machine_core_coverage_verify(&core, reachable, &machine))
+        return 5;
+    return 0;
+}
+
+static int check_compiler_barrier_origin(void) {
+    MinicCoreInstruction core_instruction = {0};
+    MinicCoreInstructionId instruction_id = 0U;
+    MinicCoreBlock core_block = {0};
+    MinicCoreFunction core = {0};
+    MinicMachineInstruction machine_instruction = {0};
+    MinicMachineBlock machine_blocks[2] = {0};
+    MinicMachineFunction machine = {0};
+    bool reachable[] = {true};
+    core_instruction.kind = MINIC_CORE_INSTRUCTION_COMPILER_BARRIER;
+    core_block.instructions = &instruction_id;
+    core_block.instruction_count = 1U;
+    core_block.has_terminator = true;
+    core_block.terminator.kind = MINIC_CORE_TERMINATOR_RETURN;
+    core.blocks = &core_block;
+    core.block_count = 1U;
+    core.instructions = &core_instruction;
+    core.instruction_count = 1U;
+    machine_instruction.kind = MINIC_MACHINE_INSTRUCTION_COMPILER_BARRIER;
+    machine_instruction.has_core_origin = true;
+    machine_instruction.effects = MINIC_MACHINE_EFFECT_COMPILER_BARRIER;
+    machine_blocks[0].machine_auxiliary = true;
+    machine_blocks[0].has_fallthrough = true;
+    machine_blocks[0].fallthrough_target = 1U;
+    machine_blocks[1].has_core_block_origin = true;
+    machine_blocks[1].instructions = &machine_instruction;
+    machine_blocks[1].instruction_count = 1U;
+    machine.blocks = machine_blocks;
+    machine.block_count = 2U;
+    if (!minic_machine_core_coverage_verify(&core, reachable, &machine))
+        return 1;
+    core_instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
+    if (minic_machine_core_coverage_verify(&core, reachable, &machine))
+        return 2;
+    core_instruction.kind = MINIC_CORE_INSTRUCTION_COMPILER_BARRIER;
+    machine_instruction.effects = 0U;
+    if (minic_machine_core_coverage_verify(&core, reachable, &machine))
+        return 3;
+    return 0;
+}
+
+static int check_structured_scalar_asm_bindings(void) {
+    MinicCoreInstruction core_instruction = {0};
+    MinicCoreInstructionId core_id = 0U;
+    MinicCoreBlock core_block = {0};
+    MinicCoreInlineAsm source = {0};
+    MinicCoreFunction core = {0};
+    MinicMachineOperand bound[8] = {0};
+    MinicMachineInstruction selected = {0};
+    MinicMachineBlock blocks[2] = {0};
+    MinicMachineFunction machine = {0};
+    bool reachable[] = {true};
+    size_t i;
+    core_instruction.kind = MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM;
+    core_instruction.value.structured_inline_asm.operand_count = 8U;
+    for (i = 0U; i < 8U; ++i) {
+        MinicCoreStructuredInlineAsmOperand *operand =
+            &core_instruction.value.structured_inline_asm.operands[i];
+        operand->kind = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+        operand->operand_index = i;
+        operand->value = (MinicCoreValueId)i;
+        bound[i].kind = MINIC_MACHINE_OPERAND_REGISTER;
+        bound[i].value.physical.reg.number = (unsigned)(10U + i);
+        bound[i].value.physical.reg.width_bits = 32U;
+        bound[i].value.physical.reg.bank = MINIC_MACHINE_REGISTER_GENERAL;
+        bound[i].value.physical.access = MINIC_MACHINE_REGISTER_READ;
+        bound[i].asm_constraint = "r";
+    }
+    source.template_text = "nop";
+    source.template_length = 3U;
+    source.is_volatile = true;
+    source.has_memory_clobber = true;
+    source.operand_plan_owner = MINIC_ASM_OPERAND_PLAN_GENERIC_STRUCTURED;
+    source.source_asm_unique_id = 101U;
+    core_block.instructions = &core_id;
+    core_block.instruction_count = 1U;
+    core_block.has_terminator = true;
+    core_block.terminator.kind = MINIC_CORE_TERMINATOR_RETURN;
+    core.blocks = &core_block;
+    core.block_count = 1U;
+    core.instructions = &core_instruction;
+    core.instruction_count = 1U;
+    core.inline_asms = &source;
+    core.inline_asm_count = 1U;
+    selected.kind = MINIC_MACHINE_INSTRUCTION_SOURCE_ASM;
+    selected.has_core_origin = true;
+    selected.effects = MINIC_MACHINE_EFFECT_SOURCE_ASM |
+        MINIC_MACHINE_EFFECT_VOLATILE |
+        MINIC_MACHINE_EFFECT_COMPILER_BARRIER;
+    selected.operands = bound;
+    selected.operand_count = 8U;
+    selected.source_asm_template = "nop";
+    selected.source_asm_length = 3U;
+    selected.has_source_asm_unique_id = true;
+    selected.source_asm_unique_id = 101U;
+    blocks[0].machine_auxiliary = true;
+    blocks[0].has_fallthrough = true;
+    blocks[0].fallthrough_target = 1U;
+    blocks[1].has_core_block_origin = true;
+    blocks[1].instructions = &selected;
+    blocks[1].instruction_count = 1U;
+    machine.blocks = blocks;
+    machine.block_count = 2U;
+    if (!minic_machine_core_coverage_verify(&core, reachable, &machine)) return 1;
+    selected.operand_count = 7U;
+    if (minic_machine_core_coverage_verify(&core, reachable, &machine)) return 2;
+    selected.operand_count = 8U;
+    bound[7].value.physical.access = MINIC_MACHINE_REGISTER_WRITE;
+    if (minic_machine_core_coverage_verify(&core, reachable, &machine)) return 3;
+    bound[7].value.physical.access = MINIC_MACHINE_REGISTER_READ;
+    bound[7].kind = MINIC_MACHINE_OPERAND_INTEGER;
+    if (minic_machine_core_coverage_verify(&core, reachable, &machine)) return 7;
+    bound[7].kind = MINIC_MACHINE_OPERAND_REGISTER;
+    selected.effects &= ~(unsigned)MINIC_MACHINE_EFFECT_COMPILER_BARRIER;
+    if (minic_machine_core_coverage_verify(&core, reachable, &machine)) return 4;
+    selected.effects |= MINIC_MACHINE_EFFECT_COMPILER_BARRIER;
+    selected.source_asm_unique_id = 100U;
+    if (minic_machine_core_coverage_verify(&core, reachable, &machine)) return 5;
+    selected.source_asm_unique_id = 101U;
+    core_instruction.value.structured_inline_asm.operand_count =
+        MINIC_CORE_STRUCTURED_INLINE_ASM_OPERAND_LIMIT + 1U;
+    if (minic_machine_core_coverage_verify(&core, reachable, &machine)) return 8;
+    core_instruction.value.structured_inline_asm.operand_count = 8U;
+    return minic_machine_core_coverage_verify(&core, reachable, &machine) ? 0 : 6;
+}
+
+/* The Core->Machine boundary must not merely *permit* zero-byte record
+ * operations to fold away: it must reject a target that fabricates a memory
+ * load/store with that Core origin. Record transfer source expression effects
+ * are separate Core instructions and remain independently required. */
+static int check_empty_record_machine_effects(void) {
+    MinicCoreTypeContext types;
+    MinicCoreType record = {0};
+    MinicCoreTypeId empty_id, nonempty_id;
+    MinicCoreInstruction core_ins = {0};
+    MinicCoreInstructionId id = 0U;
+    MinicCoreBlock core_block = {0};
+    MinicCoreFunction core = {0};
+    MinicMachineInstruction physical = {0};
+    MinicMachineBlock blocks[2] = {{0}};
+    MinicMachineFunction machine = {0};
+    const bool reachable[] = {true};
+    int error = 0;
+
+    minic_core_type_context_initialize(&types);
+    record.kind = MINIC_CORE_TYPE_RECORD;
+    record.has_layout = true;
+    record.alignment = 1U;
+    record.value.record.is_complete = true;
+    if (!minic_core_type_register(&types, &record, &empty_id)) {
+        error = 1; goto done;
+    }
+    record.size = 8U;
+    if (!minic_core_type_register(&types, &record, &nonempty_id)) {
+        error = 2; goto done;
+    }
+    core_ins.kind = MINIC_CORE_INSTRUCTION_RECORD_COPY;
+    core_ins.core_type_id = empty_id;
+    core_ins.value.record_copy.source_volatile = true;
+    core_ins.value.record_copy.destination_volatile = true;
+    core_block.instructions = &id;
+    core_block.instruction_count = 1U;
+    core_block.has_terminator = true;
+    core_block.terminator.kind = MINIC_CORE_TERMINATOR_RETURN;
+    core.blocks = &core_block;
+    core.block_count = 1U;
+    core.instructions = &core_ins;
+    core.instruction_count = 1U;
+    core.type_context = &types;
+    blocks[0].machine_auxiliary = true;
+    blocks[0].has_fallthrough = true;
+    blocks[0].fallthrough_target = 1U;
+    blocks[1].has_core_block_origin = true;
+    blocks[1].core_block_id = 0U;
+    machine.blocks = blocks;
+    machine.block_count = 2U;
+    if (!minic_machine_core_coverage_verify(&core, reachable, &machine)) {
+        error = 3; goto done;
+    }
+    physical.kind = MINIC_MACHINE_INSTRUCTION_SELECTED;
+    physical.has_core_origin = true;
+    physical.core_instruction_id = 0U;
+    physical.core_block_id = 0U;
+    blocks[1].instructions = &physical;
+    blocks[1].instruction_count = 1U;
+    physical.effects = MINIC_MACHINE_EFFECT_MEMORY_READ;
+    if (minic_machine_core_coverage_verify(&core, reachable, &machine)) {
+        error = 4; goto done;
+    }
+    physical.effects = MINIC_MACHINE_EFFECT_MEMORY_WRITE;
+    if (minic_machine_core_coverage_verify(&core, reachable, &machine)) {
+        error = 5; goto done;
+    }
+    physical.effects = 0U;
+    if (!minic_machine_core_coverage_verify(&core, reachable, &machine)) {
+        error = 6; goto done;
+    }
+    core_ins.kind = MINIC_CORE_INSTRUCTION_RECORD_LOAD;
+    core_ins.value.record_load.is_volatile = true;
+    physical.effects = MINIC_MACHINE_EFFECT_MEMORY_READ |
+        MINIC_MACHINE_EFFECT_MEMORY_WRITE;
+    if (minic_machine_core_coverage_verify(&core, reachable, &machine)) {
+        error = 7; goto done;
+    }
+    physical.effects = 0U;
+    if (!minic_machine_core_coverage_verify(&core, reachable, &machine)) {
+        error = 8; goto done;
+    }
+    /* Contrast: non-empty record LOAD still requires real memory effects. */
+    core_ins.core_type_id = nonempty_id;
+    if (minic_machine_core_coverage_verify(&core, reachable, &machine)) {
+        error = 9; goto done;
+    }
+    physical.effects = MINIC_MACHINE_EFFECT_MEMORY_READ |
+        MINIC_MACHINE_EFFECT_MEMORY_WRITE |
+        MINIC_MACHINE_EFFECT_VOLATILE;
+    if (!minic_machine_core_coverage_verify(&core, reachable, &machine)) {
+        error = 10; goto done;
+    }
+    /* Empty by-value PARAMETER_OBJECT also has no physical bytes. It must
+     * not require a fake memory write, nor accept a target-generated one. */
+    {
+        MinicCoreObject parameter = {0};
+        parameter.core_type_id = empty_id;
+        core.objects = &parameter;
+        core.object_count = 1U;
+        core_ins.kind = MINIC_CORE_INSTRUCTION_PARAMETER_OBJECT;
+        core_ins.core_type_id = MINIC_CORE_TYPE_INVALID;
+        core_ins.value.parameter_object.object_id = 0U;
+        core_ins.value.parameter_object.parameter_index = 0U;
+        physical.effects = 0U;
+        if (!minic_machine_core_coverage_verify(&core, reachable, &machine)) {
+            error = 11; goto done;
+        }
+        physical.effects = MINIC_MACHINE_EFFECT_MEMORY_WRITE;
+        if (minic_machine_core_coverage_verify(&core, reachable, &machine)) {
+            error = 12; goto done;
+        }
+        physical.effects = MINIC_MACHINE_EFFECT_MEMORY_READ;
+        if (minic_machine_core_coverage_verify(&core, reachable, &machine)) {
+            error = 13; goto done;
+        }
+        parameter.core_type_id = nonempty_id;
+        physical.effects = 0U;
+        if (minic_machine_core_coverage_verify(&core, reachable, &machine)) {
+            error = 14; goto done;
+        }
+        physical.effects = MINIC_MACHINE_EFFECT_MEMORY_WRITE;
+        if (!minic_machine_core_coverage_verify(&core, reachable, &machine)) {
+            error = 15; goto done;
+        }
+        core.objects = NULL;
+        core.object_count = 0U;
+    }
+done:
+    minic_core_type_context_destroy(&types);
+    return error;
+}
+
+int main(void) {
+    int error = check();
+    if (error != 0) {
+        fprintf(stderr, "MACHINE_CORE_COVERAGE=FAIL case=%d\n", error);
+        return 1;
+    }
+    error = check_empty_record_machine_effects();
+    if (error != 0) {
+        fprintf(stderr, "MACHINE_CORE_COVERAGE=FAIL empty_record_case=%d\n", error);
+        return 1;
+    }
+    error = check_cfg_edges();
+    if (error != 0) {
+        fprintf(stderr, "MACHINE_CORE_COVERAGE=FAIL cfg_case=%d\n", error);
+        return 1;
+    }
+    error = check_independent_core_roots();
+    if (error != 0) {
+        fprintf(stderr, "MACHINE_CORE_COVERAGE=FAIL root_case=%d\n", error);
+        return 1;
+    }
+    error = check_compiler_barrier_origin();
+    if (error != 0) {
+        fprintf(stderr, "MACHINE_CORE_COVERAGE=FAIL barrier_case=%d\n", error);
+        return 1;
+    }
+    error = check_structured_scalar_asm_bindings();
+    if (error != 0) {
+        fprintf(stderr, "MACHINE_CORE_COVERAGE=FAIL scalar_asm_case=%d\n", error);
+        return 1;
+    }
+    puts("MACHINE_CORE_COVERAGE=PASS effect_origin=1 no_dropped_core=1 cfg_edges=1 asm_goto=1 unreachable_effects=1 compiler_barrier=1 scalar_asm_bindings=8 empty_record_no_physical_memory=1");
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/target/machine_gnu_asm_test.c"}
+/* Real verified GNU body emission; selected opcodes use target callbacks and
+ * source ASM cannot bypass the verifier or the source emitter gate. */
+#define _POSIX_C_SOURCE 200809L
+#include "target/common/machine_gnu_asm.h"
+#include "target/common/core_machine_asm.h"
+#include "target/common/machine_builder.h"
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+
+/* The executor's /tmp can be full; the test must honor the workspace TMPDIR.
+ * Keep genuine seekable FILE streams so every serializer assertion remains. */
+static FILE *probe_stream(void) {
+    const char *directory = getenv("TMPDIR");
+    char path[4096];
+    int fd;
+    int length;
+    FILE *stream;
+    if (directory == NULL || directory[0] == '\0') directory = ".";
+    length = snprintf(path, sizeof(path), "%s/minic-machine-gnu-XXXXXX",
+                      directory);
+    if (length <= 0 || (size_t)length >= sizeof(path)) return NULL;
+    fd = mkstemp(path);
+    if (fd < 0) return NULL;
+    if (unlink(path) != 0) {
+        close(fd);
+        return NULL;
+    }
+    stream = fdopen(fd, "w+");
+    if (stream == NULL) close(fd);
+    return stream;
+}
+
+enum ProbeOpcode { PROBE_JUMP = 1, PROBE_RET };
+static size_t probe_opcode_lookup_count;
+
+static bool probe_features(const MinicTargetInfo *target,
+    uint64_t features, void *context) {
+    (void)target;
+    (void)context;
+    return features == 0U;
+}
+
+static bool probe_abi(const MinicTargetInfo *target,
+    MinicFunctionCallingConvention convention, void *context) {
+    (void)target;
+    (void)context;
+    return convention == MINIC_CALLING_CONVENTION_DEFAULT;
+}
+
+static bool probe_frame(const MinicTargetInfo *target,
+    const MinicMachineFunction *fn, const MinicMachineFrameObject *frame,
+    void *context) {
+    (void)target;
+    (void)fn;
+    (void)frame;
+    (void)context;
+    return true;
+}
+
+static bool probe_relocation(const MinicTargetInfo *target,
+    const char *symbol, uint32_t kind, int64_t addend, void *context) {
+    (void)target;
+    (void)context;
+    return symbol != NULL && kind == 0U && addend == 0;
+}
+
+static bool probe_opcode(const MinicTargetInfo *target, uint32_t opcode,
+    MinicMachineOpcodeContract *contract, void *context) {
+    (void)target;
+    (void)context;
+    ++probe_opcode_lookup_count;
+    memset(contract, 0, sizeof(*contract));
+    if (opcode == PROBE_JUMP) {
+        contract->operand_count = 1U;
+        contract->operand_kinds[0] = MINIC_MACHINE_OPERAND_BLOCK;
+        contract->required_effects = MINIC_MACHINE_EFFECT_BRANCH;
+        contract->permitted_effects = MINIC_MACHINE_EFFECT_BRANCH;
+        contract->terminates_block = true;
+        return true;
+    }
+    if (opcode == PROBE_RET) {
+        contract->required_effects = MINIC_MACHINE_EFFECT_RETURN;
+        contract->permitted_effects = MINIC_MACHINE_EFFECT_RETURN;
+        contract->terminates_block = true;
+        return true;
+    }
+    return false;
+}
+
+static bool probe_selected(const MinicMachineFunction *function,
+    const MinicMachineInstruction *ins, void *context) {
+    (void)function;
+    (void)context;
+    return ins->opcode == PROBE_JUMP || ins->opcode == PROBE_RET;
+}
+
+static bool probe_source(const MinicTargetInfo *target,
+    const MinicMachineInstruction *ins, void *context) {
+    (void)target;
+    (void)context;
+    return ins->source_asm_length == 3U &&
+           memcmp(ins->source_asm_template, "nop", 3U) == 0;
+}
+
+static bool probe_emit(FILE *output, const MinicMachineFunction *fn,
+    const MinicMachineInstruction *ins,
+    const MinicMachineGNUAsmLabels *labels, void *context) {
+    (void)context;
+    if (labels->count != fn->block_count) return false;
+    if (ins->opcode == PROBE_JUMP && ins->operand_count == 1U) {
+        size_t to = ins->operands[0].value.block_id;
+        return to < labels->count &&
+            fprintf(output, "\tb %s\n", labels->names[to]) >= 0;
+    }
+    return ins->opcode == PROBE_RET &&
+           fprintf(output, "\tret\n") >= 0;
+}
+
+static bool verify_output(FILE *stream, const char *expected) {
+    char buf[512];
+    size_t count;
+    if (fseek(stream, 0L, SEEK_SET) != 0) return false;
+    count = fread(buf, 1U, sizeof(buf) - 1U, stream);
+    if (ferror(stream)) return false;
+    buf[count] = '\0';
+    if (strcmp(buf, expected) != 0) {
+        fprintf(stderr, "MACHINE_GNU_ASM unexpected body: [%s] expected [%s]\n",
+                buf, expected);
+        return false;
+    }
+    return true;
+}
+
+static bool build_two_block_function(MinicMachineFunction *function,
+    const MinicTargetInfo *target) {
+    MinicMachineBuilder builder = {0};
+    MinicMachineOperand to = {0};
+    MinicMachineOperand relocation[2] = {{0}, {0}};
+    size_t entry, exit_block;
+    if (!minic_machine_function_initialize(function, target, "mir_probe", 0U) ||
+        !minic_machine_builder_initialize(&builder, function) ||
+        !minic_machine_builder_create_block(&builder, NULL, false, false,
+                                            &entry) ||
+        !minic_machine_builder_create_block(&builder, NULL, false, true,
+                                            &exit_block) ||
+        !minic_machine_builder_position_at(&builder, entry) ||
+        !minic_machine_builder_add_alias_label(&builder,
+                                               ".Lmir_entry_address") ||
+        !minic_machine_builder_emit_local_label(&builder,
+                                                ".Lmir_before_jump") ||
+        !minic_machine_builder_add_successor(&builder, exit_block))
+        return false;
+    to.kind = MINIC_MACHINE_OPERAND_BLOCK;
+    to.value.block_id = exit_block;
+    if (!minic_machine_builder_emit_selected(&builder, PROBE_JUMP,
+            MINIC_MACHINE_EFFECT_BRANCH, &to, 1U, NULL, 0U) ||
+        !minic_machine_builder_position_at(&builder, exit_block) ||
+        !minic_machine_builder_add_alias_label(&builder,
+                                               ".Lmir_exit_address"))
+        return false;
+    if (!minic_machine_builder_emit_selected(&builder, PROBE_RET,
+            MINIC_MACHINE_EFFECT_RETURN, NULL, 0U, NULL, 0U) ||
+        !minic_machine_builder_emit_section_push(&builder,
+            "__jump_table", MINIC_MACHINE_SECTION_ALLOC |
+            MINIC_MACHINE_SECTION_WRITE, MINIC_MACHINE_SECTION_TYPE_PROGBITS,
+            NULL)) return false;
+    relocation[0].kind = MINIC_MACHINE_OPERAND_SYMBOL;
+    relocation[0].value.symbol.name = ".Lmir_entry_address";
+    relocation[1].kind = MINIC_MACHINE_OPERAND_CURRENT_LOCATION;
+    return minic_machine_builder_emit_data(&builder, 4U, relocation, 2U) &&
+        minic_machine_builder_emit_section_pop(&builder);
+}
+
+int main(void) {
+    MinicTargetInfo target = {0};
+    MinicDataLayout layout = {0};
+    MinicMachineGNUAsmPolicy policy = {0};
+    MinicMachineFunction function = {0};
+    MinicMachineFunction source_function = {0};
+    MinicMachineFunction empty_function = {0};
+    MinicMachineBuilder source_builder = {0};
+    MinicMachineBuilder empty_builder = {0};
+    MinicMachineSourceAsmInput typed_asm = {0};
+    MinicCoreInlineAsm sealed_empty_asm = {0};
+    FILE *output = NULL;
+    FILE *prepared_output = NULL;
+    FILE *at_output = NULL;
+    FILE *rejected = NULL;
+    FILE *accepted = NULL;
+    FILE *accepted_typed = NULL;
+    FILE *accepted_empty = NULL;
+    MinicMachineGNUAsmPrepared *prepared_plan = NULL;
+    size_t prepared_lookups;
+    size_t only_block;
+    bool success = false;
+    unsigned int stage = 0U;
+    target.architecture = MINIC_TARGET_ARCH_AARCH64;
+    layout.byte_order = MINIC_BYTE_ORDER_LITTLE;
+    layout.pointer_size = 8U;
+    layout.pointer_alignment = 8U;
+    target.data_layout = &layout;
+    /* The selector may produce millions of instructions across Linux. The
+     * owned representation must not allocate 16 operands and 64 implicit
+     * register slots inside every no-operand RET/NOP. */
+    if (sizeof(MinicMachineInstruction) > 256U) goto done;
+    policy.verify.lookup_opcode = probe_opcode;
+    policy.verify.validate_generated_features = probe_features;
+    policy.verify.validate_function_abi = probe_abi;
+    policy.verify.validate_frame_object = probe_frame;
+    policy.verify.validate_relocation = probe_relocation;
+    policy.verify.validate_selected_instruction = probe_selected;
+    policy.verify.validate_source_asm = probe_source;
+    policy.emit_selected = probe_emit;
+    policy.section_type_marker = MINIC_MACHINE_GNU_SECTION_TYPE_PERCENT;
+    if (!build_two_block_function(&function, &target)) goto done;
+    stage = 1U;
+
+    output = probe_stream();
+    if (output == NULL ||
+        !minic_machine_gnu_asm_preflight(&function, &policy) ||
+        !minic_machine_gnu_asm_emit_body(output, &function, &policy) ||
+        !verify_output(output,
+            ".Lmir_entry_address:\n"
+            ".Lmir_before_jump:\n"
+            "\tb .Lminic_mir_mir_probe_1\n"
+            ".Lminic_mir_mir_probe_1:\n"
+            ".Lmir_exit_address:\n"
+            "\tret\n"
+            "\t.pushsection __jump_table,\"aw\",%progbits\n"
+            "\t.long .Lmir_entry_address - .\n"
+            "\t.popsection\n")) goto done;
+    stage = 2U;
+    /* The one-shot writer plan must reuse the already verified opcode
+     * contracts and label spelling. It snapshots the policy instead of
+     * consulting a modified caller-owned policy during emission. */
+    probe_opcode_lookup_count = 0U;
+    prepared_output = probe_stream();
+    if (prepared_output == NULL ||
+        !minic_machine_gnu_asm_prepare_body(
+            &function, &policy, &prepared_plan) ||
+        probe_opcode_lookup_count == 0U) goto done;
+    prepared_lookups = probe_opcode_lookup_count;
+    policy.section_type_marker = MINIC_MACHINE_GNU_SECTION_TYPE_AT;
+    if (!minic_machine_gnu_asm_emit_prepared_body(
+            prepared_output, prepared_plan) ||
+        probe_opcode_lookup_count != prepared_lookups ||
+        !verify_output(prepared_output,
+            ".Lmir_entry_address:\n"
+            ".Lmir_before_jump:\n"
+            "\tb .Lminic_mir_mir_probe_1\n"
+            ".Lminic_mir_mir_probe_1:\n"
+            ".Lmir_exit_address:\n"
+            "\tret\n"
+            "\t.pushsection __jump_table,\"aw\",%progbits\n"
+            "\t.long .Lmir_entry_address - .\n"
+            "\t.popsection\n")) goto done;
+    minic_machine_gnu_asm_prepared_destroy(prepared_plan);
+    prepared_plan = NULL;
+    /* The very same synthetic AArch64 MachineFunction must use the
+     * target-supplied policy, never an architecture branch in Common. */
+    policy.section_type_marker = MINIC_MACHINE_GNU_SECTION_TYPE_AT;
+    at_output = probe_stream();
+    if (at_output == NULL ||
+        !minic_machine_gnu_asm_preflight(&function, &policy) ||
+        !minic_machine_gnu_asm_emit_body(at_output, &function, &policy) ||
+        !verify_output(at_output,
+            ".Lmir_entry_address:\n"
+            ".Lmir_before_jump:\n"
+            "\tb .Lminic_mir_mir_probe_1\n"
+            ".Lminic_mir_mir_probe_1:\n"
+            ".Lmir_exit_address:\n"
+            "\tret\n"
+            "\t.pushsection __jump_table,\"aw\",@progbits\n"
+            "\t.long .Lmir_entry_address - .\n"
+            "\t.popsection\n")) goto done;
+    policy.section_type_marker = (MinicMachineGNUSectionTypeMarker)2U;
+    if (minic_machine_gnu_asm_preflight(&function, &policy)) goto done;
+    policy.section_type_marker = MINIC_MACHINE_GNU_SECTION_TYPE_PERCENT;
+
+    rejected = probe_stream();
+    if (rejected == NULL) goto done;
+    function.blocks[0].instructions[1].opcode = UINT32_MAX;
+    if (minic_machine_gnu_asm_emit_body(rejected, &function, &policy) ||
+        !verify_output(rejected, "")) goto done;
+    function.blocks[0].instructions[1].opcode = PROBE_JUMP;
+    /* Target-independent layout is typed and fail-closed: malformed widths
+     * and unbalanced push/pop are rejected before the first output byte. */
+    function.blocks[1].instructions[2].directive->data_width_bytes = 3U;
+    if (minic_machine_gnu_asm_preflight(&function, &policy) ||
+        minic_machine_gnu_asm_emit_body(rejected, &function, &policy) ||
+        !verify_output(rejected, "")) goto done;
+    function.blocks[1].instructions[2].directive->data_width_bytes = 4U;
+    function.blocks[1].instruction_count = 3U;
+    if (minic_machine_gnu_asm_preflight(&function, &policy) ||
+        minic_machine_gnu_asm_emit_body(rejected, &function, &policy) ||
+        !verify_output(rejected, "")) goto done;
+    function.blocks[1].instruction_count = 4U;
+    /* A forged label alias must be rejected without writing any GNU text. */
+    if (!minic_machine_block_add_alias_label(&function, 1U,
+                                              ".Lmir_entry_address") ||
+        fseek(rejected, 0L, SEEK_SET) != 0 ||
+        minic_machine_gnu_asm_preflight(&function, &policy) ||
+        minic_machine_gnu_asm_emit_body(rejected, &function, &policy) ||
+        !verify_output(rejected, "")) goto done;
+    stage = 3U;
+
+    if (!minic_machine_function_initialize(&source_function, &target,
+                                           "mir_source", 0U) ||
+        !minic_machine_builder_initialize(&source_builder,
+                                          &source_function) ||
+        !minic_machine_builder_create_block(&source_builder, NULL, false,
+                                            false, &only_block)) goto done;
+    minic_machine_builder_set_origin(&source_builder, 0U, 0U);
+    if (!minic_machine_builder_emit_source_asm(&source_builder,
+            "nop", 3U, MINIC_MACHINE_EFFECT_VOLATILE |
+            MINIC_MACHINE_EFFECT_COMPILER_BARRIER,
+            NULL, 0U, NULL, 0U, false, false)) goto done;
+    stage = 4U;
+    minic_machine_builder_clear_origin(&source_builder);
+    if (!minic_machine_builder_emit_selected(&source_builder, PROBE_RET,
+            MINIC_MACHINE_EFFECT_RETURN, NULL, 0U, NULL, 0U)) goto done;
+    if (fseek(rejected, 0L, SEEK_SET) != 0 ||
+        minic_machine_gnu_asm_preflight(&source_function, &policy) ||
+        minic_machine_gnu_asm_emit_body(rejected, &source_function, &policy) ||
+        !verify_output(rejected, "")) goto done;
+    stage = 5U;
+
+    policy.emit_source_asm = minic_machine_gnu_asm_emit_unbound_source_asm;
+    accepted = probe_stream();
+    if (accepted == NULL ||
+        !minic_machine_gnu_asm_preflight(&source_function, &policy) ||
+        !minic_machine_gnu_asm_emit_body(accepted, &source_function, &policy) ||
+        !verify_output(accepted, "nop\n\tret\n")) goto done;
+    stage = 6U;
+
+    /* The target's Linux/source machine-form proof is immutable MIR data.
+     * GNU %= identity is explicit; duplicated occurrence IDs fail closed. */
+    source_function.blocks[0].instructions[0].source_asm_machine_form_id = 9U;
+    source_function.blocks[0].instructions[0].source_asm_machine_form_variant = 2U;
+    source_function.blocks[0].instructions[0].has_source_asm_unique_id = true;
+    source_function.blocks[0].instructions[0].source_asm_unique_id = 41U;
+    typed_asm.source_bytes = "nop";
+    typed_asm.source_byte_length = 3U;
+    typed_asm.effects = MINIC_MACHINE_EFFECT_VOLATILE;
+    typed_asm.target_machine_form_id = 9U;
+    typed_asm.target_machine_form_variant = 2U;
+    typed_asm.has_unique_id = true;
+    typed_asm.unique_id = 41U;
+    minic_machine_builder_set_origin(&source_builder, 0U, 1U);
+    if (!minic_machine_builder_emit_source_asm_typed(
+            &source_builder, &typed_asm)) goto done;
+    {
+        MinicMachineInstruction saved =
+            source_function.blocks[0].instructions[1];
+        source_function.blocks[0].instructions[1] =
+            source_function.blocks[0].instructions[2];
+        source_function.blocks[0].instructions[2] = saved;
+    }
+    if (minic_machine_gnu_asm_preflight(&source_function, &policy)) goto done;
+    source_function.blocks[0].instructions[1].source_asm_unique_id = 42U;
+    accepted_typed = probe_stream();
+    if (accepted_typed == NULL ||
+        !minic_machine_gnu_asm_preflight(&source_function, &policy) ||
+        !minic_machine_gnu_asm_emit_body(
+            accepted_typed, &source_function, &policy) ||
+        !verify_output(accepted_typed, "nop\nnop\n\tret\n")) goto done;
+    source_function.blocks[0].instructions[1].has_source_asm_unique_id =
+        false;
+    if (minic_machine_gnu_asm_preflight(&source_function, &policy)) goto done;
+    source_function.blocks[0].instructions[1].has_source_asm_unique_id =
+        true;
+    source_function.blocks[0].instructions[2].source_asm_machine_form_id = 1U;
+    if (minic_machine_gnu_asm_preflight(&source_function, &policy)) goto done;
+    source_function.blocks[0].instructions[2].source_asm_machine_form_id = 0U;
+    stage = 7U;
+
+    /* An effect-only GNU asm("") is an ordering barrier, not machine text.
+     * It must survive owned MIR verification even if the target has no
+     * inline-ASM printer, while malformed empty machine forms fail closed. */
+    policy.emit_source_asm = NULL;
+    policy.verify.validate_source_asm = NULL;
+    if (!minic_machine_function_initialize(&empty_function, &target,
+                                           "mir_empty_asm", 0U) ||
+        !minic_machine_builder_initialize(&empty_builder, &empty_function) ||
+        !minic_machine_builder_create_block(&empty_builder, NULL, false,
+                                            false, &only_block)) goto done;
+    minic_machine_builder_set_origin(&empty_builder, 0U, 0U);
+    sealed_empty_asm.template_text = "";
+    sealed_empty_asm.is_volatile = true;
+    sealed_empty_asm.has_memory_clobber = true;
+    if (minic_machine_builder_emit_core_source_asm(
+            &empty_builder, &sealed_empty_asm, 0U,
+            NULL, 0U, NULL, 0U, false, false)) goto done;
+    sealed_empty_asm.source_asm_unique_id = 77U;
+    if (!minic_machine_builder_emit_core_source_asm(
+            &empty_builder, &sealed_empty_asm, 0U,
+            NULL, 0U, NULL, 0U, false, false)) goto done;
+    minic_machine_builder_clear_origin(&empty_builder);
+    if (!minic_machine_builder_emit_selected(&empty_builder, PROBE_RET,
+            MINIC_MACHINE_EFFECT_RETURN, NULL, 0U, NULL, 0U)) goto done;
+    accepted_empty = probe_stream();
+    if (accepted_empty == NULL ||
+        !minic_machine_gnu_asm_preflight(&empty_function, &policy) ||
+        !minic_machine_gnu_asm_emit_body(
+            accepted_empty, &empty_function, &policy) ||
+        !verify_output(accepted_empty, "\tret\n")) goto done;
+    empty_function.blocks[0].instructions[0].effects =
+        MINIC_MACHINE_EFFECT_SOURCE_ASM;
+    if (minic_machine_gnu_asm_preflight(&empty_function, &policy)) goto done;
+    empty_function.blocks[0].instructions[0].effects |=
+        MINIC_MACHINE_EFFECT_COMPILER_BARRIER;
+    empty_function.blocks[0].instructions[0].source_asm_machine_form_id = 9U;
+    if (minic_machine_gnu_asm_preflight(&empty_function, &policy)) goto done;
+    stage = 8U;
+
+    success = true;
+done:
+    if (output != NULL) fclose(output);
+    if (prepared_output != NULL) fclose(prepared_output);
+    if (at_output != NULL) fclose(at_output);
+    if (rejected != NULL) fclose(rejected);
+    if (accepted != NULL) fclose(accepted);
+    if (accepted_typed != NULL) fclose(accepted_typed);
+    if (accepted_empty != NULL) fclose(accepted_empty);
+    minic_machine_gnu_asm_prepared_destroy(prepared_plan);
+    minic_machine_function_destroy(&empty_function);
+    minic_machine_function_destroy(&source_function);
+    minic_machine_function_destroy(&function);
+    if (!success) {
+        fprintf(stderr, "MACHINE_GNU_ASM=FAIL stage=%u\n", stage);
+        return 1;
+    }
+    printf("MACHINE_GNU_ASM=PASS instruction_struct_bytes=%zu\n",
+           sizeof(MinicMachineInstruction));
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/target/machine_header_ast_boundary.c"}
+/* A machine-only translation unit must not inherit the C expression and
+ * declaration graph when it asks for target layout, frame or Core emission. */
+#include "target/backend.h"
+#include "target/target_info.h"
+#include "target/data_layout.h"
+#include "target/common/linux_jump_label_asm.h"
+#include "target/common/lp64_frame.h"
+#include "target/riscv32/rv32_emit.h"
+#include "target/riscv32/rv32_internal.h"
+#include "target/riscv64/codegen.h"
+#include "target/x86_64/asm_contract.h"
+#include "target/x86_64/codegen.h"
+#include "target/x86_64/call_plan.h"
+#include "target/x86_64/frame.h"
+#include "target/aarch64/codegen.h"
+#include "target/aarch64/asm_contract.h"
+#include "target/aarch64/machine_core_select.h"
+#include "target/loongarch64/codegen.h"
+#include "target/loongarch64/asm_contract.h"
+#include "target/loongarch64/machine_select.h"
+
+#ifdef MINIC_FRONTEND_AST_H
+#error "machine/Core target headers leaked the full C AST"
+#endif
+#ifdef MINIC_FRONTEND_TYPE_H
+#error "machine/Core target headers leaked the C source type model"
+#endif
+
+/* A complete machine-facing callback contract is visible without the AST. */
+static MinicBackendEmitModule machine_emitter_type;
+
+int main(void) {
+    return machine_emitter_type != NULL;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/target/machine_ir_contract_test.c"}
+/* Real owned Machine IR contract: independent of the current direct-text
+ * backends. All five target identities exercise one fail-closed verifier. */
+#include "target/common/machine_ir.h"
+#include "target/common/machine_builder.h"
+#include "target/common/machine_ir_verify.h"
+
+#include <stdio.h>
+#include <string.h>
+
+enum ProbeOpcode {
+    PROBE_LOAD_FRAME = 1,
+    PROBE_CALL,
+    PROBE_JUMP,
+    PROBE_RETURN,
+    PROBE_LOAD_ADDRESS,
+    PROBE_INDIRECT_JUMP,
+    PROBE_CONDITIONAL,
+    PROBE_BLOCK_ADDRESS,
+    PROBE_MANY
+};
+
+typedef struct ProbePolicyState {
+    bool source_asm_allowed;
+} ProbePolicyState;
+
+static MinicMachineRegister gp(unsigned int number, unsigned int width) {
+    MinicMachineRegister result = {0};
+    result.bank = MINIC_MACHINE_REGISTER_GENERAL;
+    result.number = number;
+    result.width_bits = (uint16_t)width;
+    return result;
+}
+
+static void reset_input(MinicMachineInstruction *ins,
+    MinicMachineOperand *operands, MinicMachineRegisterEffect *implicit) {
+    memset(ins, 0, sizeof(*ins));
+    memset(operands, 0, MINIC_MACHINE_MAX_OPERANDS * sizeof(*operands));
+    memset(implicit, 0,
+           MINIC_MACHINE_MAX_REGISTER_EFFECTS * sizeof(*implicit));
+    ins->operands = operands;
+    ins->implicit = implicit;
+}
+
+static bool probe_generated_features(const MinicTargetInfo *target,
+    uint64_t features, void *context) {
+    (void)target;
+    (void)context;
+    return features == UINT64_C(1);
+}
+
+static bool probe_function_abi(const MinicTargetInfo *target,
+    MinicFunctionCallingConvention abi, void *context) {
+    const size_t expected_pointer_bytes =
+        target->architecture == MINIC_TARGET_ARCH_RISCV32 ? 4U : 8U;
+    (void)context;
+    return target->data_layout != NULL &&
+        target->data_layout->pointer_size == expected_pointer_bytes &&
+        (abi == MINIC_CALLING_CONVENTION_DEFAULT ||
+         (target->architecture == MINIC_TARGET_ARCH_X86_64 &&
+          abi == MINIC_CALLING_CONVENTION_MS_X64));
+}
+
+static bool probe_frame_object(const MinicTargetInfo *target,
+    const MinicMachineFunction *fn, const MinicMachineFrameObject *obj,
+    void *context) {
+    (void)target;
+    (void)fn;
+    (void)context;
+    return !(obj->base == MINIC_MACHINE_FRAME_BASE_ENTRY_STACK_POINTER &&
+             obj->area == MINIC_MACHINE_FRAME_OUTGOING);
+}
+
+static bool probe_selected(const MinicMachineFunction *fn,
+    const MinicMachineInstruction *ins, void *context) {
+    (void)context;
+    if (ins->opcode == PROBE_LOAD_FRAME) {
+        const MinicMachineFrameObject *object =
+            &fn->frame_objects[ins->operands[1].value.frame.index];
+        const int64_t base = object->fixed_offset;
+        const int64_t addend = ins->operands[1].value.frame.displacement;
+        if (addend < 0 && base < INT64_MIN - addend) return false;
+        if (addend > 0 && base > INT64_MAX - addend) return false;
+        return (base + addend) >= -16 && (base + addend) <= 16;
+    }
+    if (ins->opcode == PROBE_LOAD_ADDRESS)
+        return ins->operands[1].value.address.displacement >= -2048 &&
+               ins->operands[1].value.address.displacement <= 2048;
+    return true;
+}
+
+static bool probe_lookup(const MinicTargetInfo *target, uint32_t opcode,
+    MinicMachineOpcodeContract *result, void *context) {
+    const unsigned int width =
+        target->architecture == MINIC_TARGET_ARCH_RISCV32 ? 32U : 64U;
+    (void)context;
+    memset(result, 0, sizeof(*result));
+    switch (opcode) {
+    case PROBE_LOAD_FRAME:
+        result->operand_count = 2U;
+        result->operand_kinds[0] = MINIC_MACHINE_OPERAND_REGISTER;
+        result->register_access[0] = MINIC_MACHINE_REGISTER_WRITE;
+        result->operand_kinds[1] = MINIC_MACHINE_OPERAND_FRAME;
+        result->required_effects = MINIC_MACHINE_EFFECT_MEMORY_READ;
+        result->permitted_effects = MINIC_MACHINE_EFFECT_MEMORY_READ |
+                                    MINIC_MACHINE_EFFECT_VOLATILE;
+        return true;
+    case PROBE_CALL:
+        result->operand_count = 1U;
+        result->operand_kinds[0] = MINIC_MACHINE_OPERAND_SYMBOL;
+        result->required_generated_features = UINT64_C(1);
+        result->required_effects = MINIC_MACHINE_EFFECT_CALL;
+        result->permitted_effects = MINIC_MACHINE_EFFECT_CALL |
+                                    MINIC_MACHINE_EFFECT_MEMORY_READ |
+                                    MINIC_MACHINE_EFFECT_MEMORY_WRITE;
+        result->implicit_count = 1U;
+        result->implicit[0].reg = gp(3U, width);
+        result->implicit[0].access = MINIC_MACHINE_REGISTER_CLOBBER;
+        return true;
+    case PROBE_JUMP:
+        result->operand_count = 1U;
+        result->operand_kinds[0] = MINIC_MACHINE_OPERAND_BLOCK;
+        result->required_effects = MINIC_MACHINE_EFFECT_BRANCH;
+        result->permitted_effects = MINIC_MACHINE_EFFECT_BRANCH;
+        result->terminates_block = true;
+        return true;
+    case PROBE_RETURN:
+        result->required_effects = MINIC_MACHINE_EFFECT_RETURN;
+        result->permitted_effects = MINIC_MACHINE_EFFECT_RETURN;
+        result->terminates_block = true;
+        return true;
+    case PROBE_LOAD_ADDRESS:
+        result->operand_count = 2U;
+        result->operand_kinds[0] = MINIC_MACHINE_OPERAND_REGISTER;
+        result->register_access[0] = MINIC_MACHINE_REGISTER_WRITE;
+        result->operand_kinds[1] = MINIC_MACHINE_OPERAND_ADDRESS;
+        result->required_effects = MINIC_MACHINE_EFFECT_MEMORY_READ;
+        result->permitted_effects = MINIC_MACHINE_EFFECT_MEMORY_READ;
+        return true;
+    case PROBE_INDIRECT_JUMP:
+        result->operand_count = 1U;
+        result->operand_kinds[0] = MINIC_MACHINE_OPERAND_REGISTER;
+        result->register_access[0] = MINIC_MACHINE_REGISTER_READ;
+        result->required_effects = MINIC_MACHINE_EFFECT_BRANCH;
+        result->permitted_effects = MINIC_MACHINE_EFFECT_BRANCH;
+        result->terminates_block = true;
+        result->has_indirect_successors = true;
+        return true;
+    case PROBE_CONDITIONAL:
+        result->operand_count = 1U;
+        result->operand_kinds[0] = MINIC_MACHINE_OPERAND_BLOCK;
+        result->required_effects = MINIC_MACHINE_EFFECT_BRANCH;
+        result->permitted_effects = MINIC_MACHINE_EFFECT_BRANCH;
+        result->terminates_block = true;
+        result->permits_fallthrough = true;
+        return true;
+    case PROBE_BLOCK_ADDRESS:
+        result->operand_count = 2U;
+        result->operand_kinds[0] = MINIC_MACHINE_OPERAND_REGISTER;
+        result->register_access[0] = MINIC_MACHINE_REGISTER_WRITE;
+        result->operand_kinds[1] = MINIC_MACHINE_OPERAND_BLOCK_ADDRESS;
+        return true;
+    case PROBE_MANY: {
+        size_t i;
+        result->operand_count = MINIC_MACHINE_MAX_OPERANDS;
+        for (i = 0U; i < MINIC_MACHINE_MAX_OPERANDS; ++i)
+            result->operand_kinds[i] = MINIC_MACHINE_OPERAND_INTEGER;
+        result->implicit_count = MINIC_MACHINE_MAX_REGISTER_EFFECTS;
+        for (i = 0U; i < MINIC_MACHINE_MAX_REGISTER_EFFECTS; ++i) {
+            result->implicit[i].reg = gp((unsigned int)(i % 32U), width);
+            result->implicit[i].access = MINIC_MACHINE_REGISTER_CLOBBER;
+        }
+        return true;
+    }
+    default:
+        return false;
+    }
+}
+
+static bool probe_register(const MinicTargetInfo *target,
+    const MinicMachineRegister *reg, void *context) {
+    const unsigned int width =
+        target->architecture == MINIC_TARGET_ARCH_RISCV32 ? 32U : 64U;
+    (void)context;
+    return reg->bank == MINIC_MACHINE_REGISTER_GENERAL &&
+           reg->width_bits == width && reg->number < 32U;
+}
+
+static bool probe_address(const MinicTargetInfo *target,
+    const MinicMachineAddress *address, void *context) {
+    (void)target;
+    (void)context;
+    return address->target_mode == 1U && address->has_base &&
+           !address->has_segment &&
+           (!address->has_index || address->scale == 1U ||
+            address->scale == 2U || address->scale == 4U ||
+            address->scale == 8U);
+}
+
+static bool probe_relocation(const MinicTargetInfo *target,
+    const char *symbol, uint32_t relocation, int64_t addend, void *context) {
+    (void)target;
+    (void)context;
+    return strcmp(symbol, "blocked") != 0 &&
+           relocation <= 2U && addend >= -2048 && addend <= 2048;
+}
+
+static bool probe_asm(const MinicTargetInfo *target,
+    const MinicMachineInstruction *ins, void *context) {
+    const ProbePolicyState *state = context;
+    (void)target;
+    return state->source_asm_allowed &&
+           (ins->effects & MINIC_MACHINE_EFFECT_COMPILER_BARRIER) != 0U;
+}
+
+static bool add_generated(MinicMachineFunction *fn, size_t block,
+                          MinicMachineInstruction *ins) {
+    ins->kind = MINIC_MACHINE_INSTRUCTION_SELECTED;
+    if (ins->operand_count == 0U) ins->operands = NULL;
+    if (ins->implicit_count == 0U) ins->implicit = NULL;
+    return minic_machine_block_append_instruction(fn, block, ins);
+}
+
+#define REQUIRE(condition) do { \
+    if (!(condition)) { \
+        fprintf(stderr, "MACHINE_IR_CONTRACT=FAIL target=%d line=%d: %s\n", \
+                (int)arch, __LINE__, #condition); \
+        goto fail; \
+    } \
+} while (0)
+
+static bool exercise_target(MinicTargetArchitecture arch) {
+    MinicTargetInfo target = {0};
+    MinicDataLayout layout = {0};
+    MinicMachineFunction fn = {0};
+    MinicMachineVerifyPolicy policy = {0};
+    ProbePolicyState state = {true};
+    MinicMachineInstruction ins = {0};
+    MinicMachineBuilder builder = {0};
+    MinicMachineOperand input_operands[MINIC_MACHINE_MAX_OPERANDS];
+    MinicMachineRegisterEffect input_implicit[MINIC_MACHINE_MAX_REGISTER_EFFECTS];
+    MinicMachineFrameObject frame = {0};
+    MinicMachineInstruction *load, *call, *jump;
+    MinicMachineRegister saved_reg;
+    MinicMachineOperandKind saved_kind;
+    char *saved_string;
+    size_t entry, exit_block, auxiliary_block, frame_id;
+    size_t saved_count;
+    size_t barrier_index;
+    uint32_t saved_opcode;
+    uint64_t saved_features;
+    bool result = false;
+    const unsigned int width = arch == MINIC_TARGET_ARCH_RISCV32 ? 32U : 64U;
+    char symbol[] = "callee";
+    char got_symbol[] = "got_anchor";
+    char source_bytes[] = {'o','p','a','q','u','e','\0','r','v'};
+    char label[] = ".Lmachine_exit";
+    target.architecture = arch;
+    layout.byte_order = MINIC_BYTE_ORDER_LITTLE;
+    layout.pointer_size = arch == MINIC_TARGET_ARCH_RISCV32 ? 4U : 8U;
+    layout.pointer_alignment = layout.pointer_size;
+    target.data_layout = &layout;
+    /* The generic contract must not know the byte shape of target-private
+     * ISA state. The target callback alone owns feature validation. */
+    policy.lookup_opcode = probe_lookup;
+    policy.validate_selected_instruction = probe_selected;
+    policy.validate_generated_features = probe_generated_features;
+    policy.validate_function_abi = probe_function_abi;
+    policy.validate_frame_object = probe_frame_object;
+    policy.validate_register = probe_register;
+    policy.validate_address = probe_address;
+    policy.validate_relocation = probe_relocation;
+    policy.validate_source_asm = probe_asm;
+    policy.context = &state;
+    REQUIRE(minic_machine_function_initialize(&fn, &target,
+                                              "machine_probe", 1U));
+    fn.frame_size = 16U;
+    fn.frame_alignment = 16U;
+    frame.size_bytes = 8U;
+    frame.alignment_bytes = 8U;
+    frame.area = MINIC_MACHINE_FRAME_LOCAL;
+    frame.has_fixed_offset = true;
+    REQUIRE(minic_machine_function_add_frame_object(&fn, &frame, &frame_id));
+    REQUIRE(frame_id == 0U);
+    REQUIRE(minic_machine_function_add_block(&fn, NULL, false, &entry));
+    REQUIRE(minic_machine_function_add_block(&fn, label, false, &exit_block));
+    REQUIRE(entry == 0U && exit_block == 1U);
+    label[2] = 'X';
+    REQUIRE(strcmp(fn.blocks[exit_block].exported_label,
+                   ".Lmachine_exit") == 0);
+    REQUIRE(minic_machine_block_add_successor(&fn, entry, exit_block));
+
+    reset_input(&ins, input_operands, input_implicit);
+    REQUIRE(!minic_machine_block_append_instruction(&fn, entry, &ins));
+
+    reset_input(&ins, input_operands, input_implicit);
+    ins.opcode = PROBE_LOAD_FRAME;
+    ins.effects = MINIC_MACHINE_EFFECT_MEMORY_READ;
+    ins.operand_count = 2U;
+    ins.operands[0].kind = MINIC_MACHINE_OPERAND_REGISTER;
+    ins.operands[0].value.physical.reg = gp(1U, width);
+    ins.operands[0].value.physical.access = MINIC_MACHINE_REGISTER_WRITE;
+    ins.operands[1].kind = MINIC_MACHINE_OPERAND_FRAME;
+    ins.operands[1].value.frame.index = frame_id;
+    REQUIRE(add_generated(&fn, entry, &ins));
+
+    reset_input(&ins, input_operands, input_implicit);
+    ins.opcode = PROBE_CALL;
+    ins.effects = MINIC_MACHINE_EFFECT_CALL;
+    ins.operand_count = 1U;
+    ins.operands[0].kind = MINIC_MACHINE_OPERAND_SYMBOL;
+    ins.operands[0].value.symbol.name = symbol;
+    ins.operands[0].value.symbol.relocation = 1U;
+    ins.implicit_count = 1U;
+    ins.implicit[0].reg = gp(3U, width);
+    ins.implicit[0].access = MINIC_MACHINE_REGISTER_CLOBBER;
+    REQUIRE(add_generated(&fn, entry, &ins));
+    symbol[0] = 'X';
+    REQUIRE(strcmp(fn.blocks[entry].instructions[1].operands[0]
+                       .value.symbol.name, "callee") == 0);
+
+    reset_input(&ins, input_operands, input_implicit);
+    ins.opcode = PROBE_JUMP;
+    ins.effects = MINIC_MACHINE_EFFECT_BRANCH;
+    ins.operand_count = 1U;
+    ins.operands[0].kind = MINIC_MACHINE_OPERAND_BLOCK;
+    ins.operands[0].value.block_id = exit_block;
+    REQUIRE(add_generated(&fn, entry, &ins));
+    reset_input(&ins, input_operands, input_implicit);
+    ins.opcode = PROBE_RETURN;
+    ins.effects = MINIC_MACHINE_EFFECT_RETURN;
+    REQUIRE(add_generated(&fn, exit_block, &ins));
+    REQUIRE(minic_machine_function_verify(&fn, &policy));
+
+    /* The physical MachineFunction refers to a target-owned DataLayout,
+     * never a freshly guessed 32/64-bit data model in Core. */
+    layout.pointer_size = 0U;
+    REQUIRE(!minic_machine_function_verify(&fn, &policy));
+    layout.pointer_size = width == 32U ? 8U : 4U;
+    REQUIRE(!minic_machine_function_verify(&fn, &policy));
+    layout.pointer_size = width / 8U;
+    REQUIRE(minic_machine_function_verify(&fn, &policy));
+
+    /* Plain jumps cannot invent an additional fallthrough; conditional
+     * branches can, but only with the target's independent contract. */
+    REQUIRE(minic_machine_block_set_fallthrough(&fn, entry, exit_block));
+    REQUIRE(!minic_machine_function_verify(&fn, &policy));
+    fn.blocks[entry].instructions[2].opcode = PROBE_CONDITIONAL;
+    REQUIRE(minic_machine_function_verify(&fn, &policy));
+    fn.blocks[entry].instructions[2].opcode = PROBE_JUMP;
+    fn.blocks[entry].has_fallthrough = false;
+    REQUIRE(minic_machine_function_verify(&fn, &policy));
+
+    /* Generated features must not be self-proclaimed, including on non-RV
+     * backends where the target's codegen feature bits live elsewhere. */
+    fn.generated_features = UINT64_C(2);
+    REQUIRE(!minic_machine_function_verify(&fn, &policy));
+    fn.generated_features = UINT64_C(1);
+    policy.validate_generated_features = NULL;
+    REQUIRE(!minic_machine_function_verify(&fn, &policy));
+    policy.validate_generated_features = probe_generated_features;
+    policy.validate_selected_instruction = NULL;
+    REQUIRE(!minic_machine_function_verify(&fn, &policy));
+    policy.validate_selected_instruction = probe_selected;
+    policy.validate_function_abi = NULL;
+    REQUIRE(!minic_machine_function_verify(&fn, &policy));
+    policy.validate_function_abi = probe_function_abi;
+    policy.validate_frame_object = NULL;
+    REQUIRE(!minic_machine_function_verify(&fn, &policy));
+    policy.validate_frame_object = probe_frame_object;
+    fn.calling_convention = MINIC_CALLING_CONVENTION_MS_X64;
+    if (arch == MINIC_TARGET_ARCH_X86_64)
+        REQUIRE(minic_machine_function_verify(&fn, &policy));
+    else
+        REQUIRE(!minic_machine_function_verify(&fn, &policy));
+    fn.calling_convention = MINIC_CALLING_CONVENTION_DEFAULT;
+
+    /* Local SP offsets are unstable across dynamic allocation, unlike FP
+     * references, which are explicitly distinguished in physical MIR. */
+    fn.has_dynamic_stack = true;
+    REQUIRE(!minic_machine_function_verify(&fn, &policy));
+    fn.frame_objects[0].base = MINIC_MACHINE_FRAME_BASE_FRAME_POINTER;
+    REQUIRE(minic_machine_function_verify(&fn, &policy));
+    fn.frame_objects[0].base = MINIC_MACHINE_FRAME_BASE_STACK_POINTER;
+    fn.has_dynamic_stack = false;
+    REQUIRE(minic_machine_function_verify(&fn, &policy));
+    fn.frame_objects[0].base =
+        MINIC_MACHINE_FRAME_BASE_ENTRY_STACK_POINTER;
+    fn.frame_objects[0].area = MINIC_MACHINE_FRAME_OUTGOING;
+    REQUIRE(!minic_machine_function_verify(&fn, &policy));
+    fn.frame_objects[0].area = MINIC_MACHINE_FRAME_LOCAL;
+    fn.frame_objects[0].base = MINIC_MACHINE_FRAME_BASE_STACK_POINTER;
+
+    load = &fn.blocks[entry].instructions[0];
+    call = &fn.blocks[entry].instructions[1];
+    jump = &fn.blocks[entry].instructions[2];
+    REQUIRE(sizeof(MinicMachineInstruction) < 256U);
+    REQUIRE(fn.blocks[exit_block].instructions[0].operands == NULL);
+    REQUIRE(fn.blocks[exit_block].instructions[0].implicit == NULL);
+    /* Inactive operand and implicit storage no longer exists, so a zero-op
+     * return carries no hidden per-opcode 16/64-element memory cost. */
+    saved_opcode = load->opcode;
+    load->opcode = UINT32_C(0xdead);
+    REQUIRE(!minic_machine_function_verify(&fn, &policy));
+    load->opcode = saved_opcode;
+    saved_kind = load->operands[1].kind;
+    load->operands[1].kind = MINIC_MACHINE_OPERAND_INTEGER;
+    REQUIRE(!minic_machine_function_verify(&fn, &policy));
+    load->operands[1].kind = saved_kind;
+    load->operands[1].value.frame.index = 999U;
+    REQUIRE(!minic_machine_function_verify(&fn, &policy));
+    load->operands[1].value.frame.index = frame_id;
+    saved_reg = load->operands[0].value.physical.reg;
+    load->operands[0].value.physical.reg.number = 999U;
+    REQUIRE(!minic_machine_function_verify(&fn, &policy));
+    load->operands[0].value.physical.reg = saved_reg;
+    saved_count = call->implicit_count;
+    call->implicit_count = 0U;
+    REQUIRE(!minic_machine_function_verify(&fn, &policy));
+    call->implicit_count = saved_count;
+    call->implicit[0].access = MINIC_MACHINE_REGISTER_READ;
+    REQUIRE(!minic_machine_function_verify(&fn, &policy));
+    call->implicit[0].access = MINIC_MACHINE_REGISTER_CLOBBER;
+    load->operands[1].value.frame.displacement = 17;
+    REQUIRE(!minic_machine_function_verify(&fn, &policy));
+    load->operands[1].value.frame.displacement = 0;
+    saved_features = fn.generated_features;
+    fn.generated_features = 0U;
+    REQUIRE(!minic_machine_function_verify(&fn, &policy));
+    fn.generated_features = saved_features;
+    saved_string = call->operands[0].value.symbol.name;
+    call->operands[0].value.symbol.name = "callee; .section .evil";
+    REQUIRE(!minic_machine_function_verify(&fn, &policy));
+    call->operands[0].value.symbol.name = saved_string;
+    call->operands[0].value.symbol.relocation = 999U;
+    REQUIRE(!minic_machine_function_verify(&fn, &policy));
+    call->operands[0].value.symbol.relocation = 1U;
+    jump->operands[0].value.block_id = 12345U;
+    REQUIRE(!minic_machine_function_verify(&fn, &policy));
+    jump->operands[0].value.block_id = exit_block;
+    saved_count = fn.blocks[entry].successor_count;
+    fn.blocks[entry].successor_count = 0U;
+    REQUIRE(!minic_machine_function_verify(&fn, &policy));
+    fn.blocks[entry].successor_count = saved_count;
+    fn.frame_objects[0].alignment_bytes = 3U;
+    REQUIRE(!minic_machine_function_verify(&fn, &policy));
+    fn.frame_objects[0].alignment_bytes = 8U;
+    fn.frame_objects[0].fixed_offset = 1000;
+    REQUIRE(!minic_machine_function_verify(&fn, &policy));
+    fn.frame_objects[0].fixed_offset = 1;
+    REQUIRE(!minic_machine_function_verify(&fn, &policy));
+    fn.frame_objects[0].fixed_offset = 8;
+    fn.frame_objects[0].fixed_offset = -8;
+    fn.frame_objects[0].size_bytes = 16U;
+    REQUIRE(!minic_machine_function_verify(&fn, &policy));
+    fn.frame_objects[0].size_bytes = 8U;
+    REQUIRE(minic_machine_function_verify(&fn, &policy));
+    fn.frame_objects[0].fixed_offset = 8;
+    load->operands[1].value.frame.displacement = INT64_MAX;
+    REQUIRE(!minic_machine_function_verify(&fn, &policy));
+    load->operands[1].value.frame.displacement = 0;
+    fn.frame_objects[0].fixed_offset = 0;
+    saved_string = fn.blocks[exit_block].exported_label;
+    fn.blocks[exit_block].exported_label = fn.name;
+    REQUIRE(!minic_machine_function_verify(&fn, &policy));
+    fn.blocks[exit_block].exported_label = saved_string;
+    load->source_asm_template = "fake source escape";
+    REQUIRE(!minic_machine_function_verify(&fn, &policy));
+    load->source_asm_template = NULL;
+    REQUIRE(minic_machine_function_verify(&fn, &policy));
+    minic_machine_function_destroy(&fn);
+
+    /* A source ASM statement is separately admitted, but may not borrow a
+     * selected opcode or secretly bypass its generated-ISA requirement. */
+    REQUIRE(minic_machine_function_initialize(&fn, &target,
+                                              "machine_asm_probe", 1U));
+    REQUIRE(minic_machine_function_add_block(&fn, NULL, false, &entry));
+    reset_input(&ins, input_operands, input_implicit);
+    ins.opcode = PROBE_LOAD_ADDRESS;
+    ins.effects = MINIC_MACHINE_EFFECT_MEMORY_READ;
+    ins.operand_count = 2U;
+    ins.operands[0].kind = MINIC_MACHINE_OPERAND_REGISTER;
+    ins.operands[0].value.physical.reg = gp(1U, width);
+    ins.operands[0].value.physical.access = MINIC_MACHINE_REGISTER_WRITE;
+    ins.operands[1].kind = MINIC_MACHINE_OPERAND_ADDRESS;
+    ins.operands[1].value.address.target_mode = 1U;
+    ins.operands[1].value.address.has_base = true;
+    ins.operands[1].value.address.base = gp(4U, width);
+    ins.operands[1].value.address.has_symbol = true;
+    ins.operands[1].value.address.symbol = got_symbol;
+    ins.operands[1].value.address.relocation = 2U;
+    ins.operands[1].value.address.has_symbol = false;
+    REQUIRE(!add_generated(&fn, entry, &ins));
+    ins.operands[1].value.address.has_symbol = true;
+    REQUIRE(add_generated(&fn, entry, &ins));
+    got_symbol[0] = 'X';
+    REQUIRE(strcmp(fn.blocks[entry].instructions[0].operands[1]
+                    .value.address.symbol, "got_anchor") == 0);
+    reset_input(&ins, input_operands, input_implicit);
+    ins.kind = MINIC_MACHINE_INSTRUCTION_SOURCE_ASM;
+    ins.effects = MINIC_MACHINE_EFFECT_SOURCE_ASM |
+                  MINIC_MACHINE_EFFECT_COMPILER_BARRIER;
+    ins.source_asm_template = source_bytes;
+    ins.source_asm_length = sizeof(source_bytes);
+    ins.has_core_origin = true;
+    ins.core_instruction_id = 1U;
+    ins.operand_count = 1U;
+    ins.operands[0].kind = MINIC_MACHINE_OPERAND_REGISTER;
+    ins.operands[0].value.physical.reg = gp(1U, width);
+    ins.operands[0].value.physical.access = MINIC_MACHINE_REGISTER_READ;
+    ins.operands[0].asm_constraint = "r";
+    ins.implicit = NULL;
+    REQUIRE(minic_machine_block_append_instruction(&fn, entry, &ins));
+    source_bytes[0] = 'X';
+    REQUIRE(fn.blocks[entry].instructions[1].source_asm_length ==
+            sizeof(source_bytes));
+    REQUIRE(fn.blocks[entry].instructions[1].source_asm_template[0] == 'o');
+    REQUIRE(fn.blocks[entry].instructions[1].source_asm_template[6] == '\0');
+    REQUIRE(fn.blocks[entry].instructions[1].source_asm_template[8] == 'v');
+    reset_input(&ins, input_operands, input_implicit);
+    ins.opcode = PROBE_RETURN;
+    ins.effects = MINIC_MACHINE_EFFECT_RETURN;
+    REQUIRE(add_generated(&fn, entry, &ins));
+    REQUIRE(minic_machine_function_verify(&fn, &policy));
+    fn.blocks[entry].instructions[0].operands[1].value.address.relocation = 999U;
+    REQUIRE(!minic_machine_function_verify(&fn, &policy));
+    fn.blocks[entry].instructions[0].operands[1].value.address.relocation = 2U;
+    fn.blocks[entry].instructions[0].operands[1].value.address.has_symbol = false;
+    REQUIRE(!minic_machine_function_verify(&fn, &policy));
+    fn.blocks[entry].instructions[0].operands[1].value.address.has_symbol = true;
+    fn.blocks[entry].instructions[0].operands[1].value.address.target_mode = 999U;
+    REQUIRE(!minic_machine_function_verify(&fn, &policy));
+    fn.blocks[entry].instructions[0].operands[1].value.address.target_mode = 1U;
+    fn.blocks[entry].instructions[0].operands[1].value.address.has_index = true;
+    fn.blocks[entry].instructions[0].operands[1].value.address.index =
+        gp(5U, width);
+    fn.blocks[entry].instructions[0].operands[1].value.address.scale = 3U;
+    REQUIRE(!minic_machine_function_verify(&fn, &policy));
+    fn.blocks[entry].instructions[0].operands[1].value.address.scale = 4U;
+    REQUIRE(minic_machine_function_verify(&fn, &policy));
+    state.source_asm_allowed = false;
+    REQUIRE(!minic_machine_function_verify(&fn, &policy));
+    state.source_asm_allowed = true;
+    fn.blocks[entry].instructions[1].opcode = PROBE_CALL;
+    REQUIRE(!minic_machine_function_verify(&fn, &policy));
+    fn.blocks[entry].instructions[1].opcode = 0U;
+    REQUIRE(minic_machine_function_verify(&fn, &policy));
+    fn.blocks[entry].instructions[1].has_core_origin = false;
+    REQUIRE(!minic_machine_function_verify(&fn, &policy));
+    fn.blocks[entry].instructions[1].has_core_origin = true;
+    fn.blocks[entry].instructions[1].source_asm_terminates_block = true;
+    REQUIRE(!minic_machine_function_verify(&fn, &policy));
+    fn.blocks[entry].instructions[1].source_asm_terminates_block = false;
+    fn.blocks[entry].instructions[1].source_asm_permits_fallthrough = true;
+    REQUIRE(!minic_machine_function_verify(&fn, &policy));
+    fn.blocks[entry].instructions[1].source_asm_permits_fallthrough = false;
+    REQUIRE(minic_machine_function_verify(&fn, &policy));
+    minic_machine_function_destroy(&fn);
+
+    /* An indirect machine branch may name a set of indirect-entry blocks
+     * without embedding fake direct-branch opcode operands. */
+    REQUIRE(minic_machine_function_initialize(&fn, &target,
+                                              "machine_indirect_probe", 1U));
+    REQUIRE(minic_machine_function_add_block(&fn, NULL, false, &entry));
+    REQUIRE(minic_machine_function_add_block(&fn, NULL, true, &exit_block));
+    REQUIRE(minic_machine_function_add_block(
+        &fn, NULL, true, &auxiliary_block));
+    fn.blocks[auxiliary_block].machine_auxiliary = true;
+    REQUIRE(minic_machine_block_add_successor(&fn, entry, exit_block));
+    reset_input(&ins, input_operands, input_implicit);
+    ins.opcode = PROBE_BLOCK_ADDRESS;
+    ins.operand_count = 2U;
+    ins.operands[0].kind = MINIC_MACHINE_OPERAND_REGISTER;
+    ins.operands[0].value.physical.reg = gp(1U, width);
+    ins.operands[0].value.physical.access = MINIC_MACHINE_REGISTER_WRITE;
+    ins.operands[1].kind = MINIC_MACHINE_OPERAND_BLOCK_ADDRESS;
+    ins.operands[1].value.block_id = auxiliary_block;
+    REQUIRE(add_generated(&fn, entry, &ins));
+    reset_input(&ins, input_operands, input_implicit);
+    ins.opcode = PROBE_INDIRECT_JUMP;
+    ins.effects = MINIC_MACHINE_EFFECT_BRANCH;
+    ins.operand_count = 1U;
+    ins.operands[0].kind = MINIC_MACHINE_OPERAND_REGISTER;
+    ins.operands[0].value.physical.reg = gp(2U, width);
+    ins.operands[0].value.physical.access = MINIC_MACHINE_REGISTER_READ;
+    REQUIRE(add_generated(&fn, entry, &ins));
+    reset_input(&ins, input_operands, input_implicit);
+    ins.opcode = PROBE_RETURN;
+    ins.effects = MINIC_MACHINE_EFFECT_RETURN;
+    REQUIRE(add_generated(&fn, exit_block, &ins));
+    REQUIRE(add_generated(&fn, auxiliary_block, &ins));
+    REQUIRE(minic_machine_function_verify(&fn, &policy));
+    /* BLOCK_ADDRESS names an indirect-entry internal label, but does not
+     * require a fabricated direct-branch CFG edge to that label. */
+    fn.blocks[auxiliary_block].indirect_entry = false;
+    REQUIRE(!minic_machine_function_verify(&fn, &policy));
+    fn.blocks[auxiliary_block].indirect_entry = true;
+    REQUIRE(minic_machine_function_verify(&fn, &policy));
+    fn.blocks[exit_block].indirect_entry = false;
+    REQUIRE(!minic_machine_function_verify(&fn, &policy));
+    fn.blocks[exit_block].indirect_entry = true;
+    REQUIRE(minic_machine_function_verify(&fn, &policy));
+    minic_machine_function_destroy(&fn);
+
+    /* The exact-count owner is not merely a small fixed inline array:
+     * stress its entire public operand/register-effect capacity. */
+    REQUIRE(minic_machine_function_initialize(
+        &fn, &target, "machine_capacity_probe", UINT64_C(1)));
+    REQUIRE(minic_machine_function_add_block(&fn, NULL, false, &entry));
+    reset_input(&ins, input_operands, input_implicit);
+    ins.opcode = PROBE_MANY;
+    ins.operand_count = MINIC_MACHINE_MAX_OPERANDS;
+    ins.implicit_count = MINIC_MACHINE_MAX_REGISTER_EFFECTS;
+    {
+        size_t i;
+        for (i = 0U; i < ins.operand_count; ++i) {
+            ins.operands[i].kind = MINIC_MACHINE_OPERAND_INTEGER;
+            ins.operands[i].value.integer = (int64_t)i;
+        }
+        for (i = 0U; i < ins.implicit_count; ++i) {
+            ins.implicit[i].reg = gp((unsigned int)(i % 32U), width);
+            ins.implicit[i].access = MINIC_MACHINE_REGISTER_CLOBBER;
+        }
+    }
+    REQUIRE(add_generated(&fn, entry, &ins));
+    /* Core compiler ordering must survive MachineIR without a fake native
+     * fence, source-ASM escape or emitted bytes. The marker is not admitted
+     * without exact Core provenance. */
+    REQUIRE(minic_machine_builder_initialize(&builder, &fn));
+    REQUIRE(minic_machine_builder_position_at(&builder, entry));
+    REQUIRE(!minic_machine_builder_emit_compiler_barrier(&builder));
+    minic_machine_builder_set_origin(&builder, 0U, 17U);
+    barrier_index = fn.blocks[entry].instruction_count;
+    REQUIRE(minic_machine_builder_emit_compiler_barrier(&builder));
+    reset_input(&ins, input_operands, input_implicit);
+    ins.opcode = PROBE_RETURN;
+    ins.effects = MINIC_MACHINE_EFFECT_RETURN;
+    REQUIRE(add_generated(&fn, entry, &ins));
+    REQUIRE(minic_machine_function_verify(&fn, &policy));
+    fn.blocks[entry].instructions[barrier_index].effects |=
+        MINIC_MACHINE_EFFECT_MEMORY_WRITE;
+    REQUIRE(!minic_machine_function_verify(&fn, &policy));
+    fn.blocks[entry].instructions[barrier_index].effects =
+        MINIC_MACHINE_EFFECT_COMPILER_BARRIER;
+    fn.blocks[entry].instructions[barrier_index].has_core_origin = false;
+    REQUIRE(!minic_machine_function_verify(&fn, &policy));
+    fn.blocks[entry].instructions[barrier_index].has_core_origin = true;
+    REQUIRE(minic_machine_function_verify(&fn, &policy));
+    result = true;
+fail:
+    minic_machine_function_destroy(&fn);
+    return result;
+}
+
+int main(void) {
+    MinicTargetArchitecture architecture;
+    for (architecture = MINIC_TARGET_ARCH_RISCV64;
+         architecture <= MINIC_TARGET_ARCH_RISCV32; ++architecture) {
+        if (!exercise_target(architecture)) return 1;
+    }
+    puts("MACHINE_IR_CONTRACT=PASS five_architectures=5 typed_opcode=PASS "
+         "forged_negatives=PASS source_asm=PASS indirect_branch=PASS "
+         "compiler_barrier=PASS");
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/target/machine_options_registry_test.c"}
+#include "target/target_machine_options.h"
+#include "target/riscv/machine_target_state.h"
+#include "target/x86_64/machine_target_state.h"
+#include "target/loongarch64/machine_target_state.h"
+#include "target/x86_64/codegen_options.h"
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#define REQUIRE(expr) do { \
+    if (!(expr)) { \
+        (void)fprintf(stderr, "%s:%d: failed: %s\n", __FILE__, __LINE__, #expr); \
+        exit(1); \
+    } \
+} while (0)
+
+static void test_target_registry(void) {
+    const MinicTargetCatalogEntry *entries;
+    size_t count, index;
+    char reason[256];
+    entries = minic_target_catalog_all(&count);
+    REQUIRE(count == 5U);
+    {
+        size_t found = count;
+        REQUIRE(!minic_target_catalog_index((MinicTargetArchitecture)9999,
+                                            count, &found));
+        REQUIRE(found == count);
+    }
+    for (index = 0U; index < count; ++index) {
+        MinicTargetInfo target = {0};
+        size_t found = count;
+        target.architecture = entries[index].architecture;
+        REQUIRE(minic_target_catalog_index(target.architecture, count, &found));
+        REQUIRE(found == index);
+        REQUIRE(minic_target_catalog_for_architecture(target.architecture) ==
+                &entries[index]);
+        REQUIRE(!minic_target_catalog_index(target.architecture, count - 1U, &found));
+        REQUIRE(found == index);
+        REQUIRE(!minic_target_catalog_index(target.architecture, count, NULL));
+        REQUIRE(minic_target_machine_options_resolve(
+            &target, NULL, NULL, reason, sizeof(reason)));
+        REQUIRE(reason[0] == '\0');
+        REQUIRE(!minic_target_codegen_option_apply(
+            &target, "-definitely-unsupported", reason, sizeof(reason)));
+        REQUIRE(reason[0] != '\0');
+    }
+}
+
+static void test_riscv_isas(void) {
+    MinicTargetInfo rv32 = {0};
+    MinicTargetInfo rv64 = {0};
+    MinicRiscvIsa isa32 = {.xlen = 32U, .abi = MINIC_RISCV_ABI_ILP32};
+    MinicRiscvIsa isa64 = {.xlen = 64U, .abi = MINIC_RISCV_ABI_LP64D};
+    char reason[256];
+    rv32.architecture = MINIC_TARGET_ARCH_RISCV32;
+    REQUIRE(minic_riscv_target_isa_store(&rv32, &isa32));
+    rv64.architecture = MINIC_TARGET_ARCH_RISCV64;
+    REQUIRE(minic_riscv_target_isa_store(&rv64, &isa64));
+    REQUIRE(minic_target_machine_options_resolve(
+        &rv32, "rv32i", "ilp32", reason, sizeof(reason)));
+    REQUIRE(minic_riscv_target_isa(&rv32).strict_isa &&
+            minic_riscv_target_isa(&rv32).codegen_features == 0U);
+    REQUIRE(!minic_target_machine_options_resolve(
+        &rv32, "rv64i", "lp64", reason, sizeof(reason)));
+    REQUIRE(minic_riscv_target_isa(&rv32).xlen == 32U);
+    REQUIRE(minic_target_machine_options_resolve(
+        &rv64, "rv64i", "lp64", reason, sizeof(reason)));
+    REQUIRE(minic_riscv_target_isa(&rv64).abi == MINIC_RISCV_ABI_LP64);
+    REQUIRE(minic_riscv_target_isa(&rv64).strict_isa &&
+            minic_riscv_target_isa(&rv64).codegen_features == 0U);
+    REQUIRE(!minic_target_machine_options_resolve(
+        &rv64, "rv64imafd", "unqualified", reason, sizeof(reason)));
+    REQUIRE(minic_riscv_target_isa(&rv64).abi == MINIC_RISCV_ABI_LP64);
+    REQUIRE(minic_target_machine_options_resolve(
+        &rv64, "rv64imafd", "lp64d", reason, sizeof(reason)));
+    REQUIRE(minic_riscv_target_isa(&rv64).abi == MINIC_RISCV_ABI_LP64D);
+    REQUIRE(minic_riscv_target_isa(&rv64).codegen_features != 0U);
+    {
+        MinicTargetInfo clone = rv64;
+        REQUIRE(minic_target_machine_options_resolve(
+            &clone, "rv64i", "lp64", reason, sizeof(reason)));
+        REQUIRE(minic_riscv_target_isa(&rv64).abi == MINIC_RISCV_ABI_LP64D);
+        REQUIRE(minic_riscv_target_isa(&clone).abi == MINIC_RISCV_ABI_LP64);
+    }
+}
+
+static void test_loongarch_abi(void) {
+    MinicTargetInfo target = {0};
+    char reason[256];
+    target.architecture = MINIC_TARGET_ARCH_LOONGARCH64;
+    REQUIRE(minic_target_machine_options_resolve(
+        &target, NULL, "lp64s", reason, sizeof(reason)));
+    REQUIRE(minic_loongarch64_target_soft_float_abi(&target));
+    REQUIRE(minic_target_machine_options_resolve(
+        &target, NULL, "lp64d", reason, sizeof(reason)));
+    REQUIRE(!minic_loongarch64_target_soft_float_abi(&target));
+    {
+        MinicTargetInfo clone = target;
+        REQUIRE(minic_loongarch64_target_soft_float_abi_set(&clone, true));
+        REQUIRE(minic_loongarch64_target_soft_float_abi(&clone));
+        REQUIRE(!minic_loongarch64_target_soft_float_abi(&target));
+    }
+    REQUIRE(!minic_target_machine_options_resolve(
+        &target, "loongarch64", "lp64s", reason, sizeof(reason)));
+    REQUIRE(!minic_loongarch64_target_soft_float_abi(&target));
+    REQUIRE(strstr(reason, "LoongArch") != NULL);
+}
+
+static void test_x86_options(void) {
+    MinicTargetInfo target = {0};
+    char reason[256];
+    target.architecture = MINIC_TARGET_ARCH_X86_64;
+    REQUIRE(!minic_target_machine_options_resolve(
+        &target, "rv64i", "lp64", reason, sizeof(reason)));
+    REQUIRE(strstr(reason, "RISC-V") != NULL);
+    REQUIRE(minic_target_codegen_option_apply(
+        &target, "-fcf-protection=branch", reason, sizeof(reason)));
+    REQUIRE((minic_x86_64_target_codegen_options(&target) & MINIC_X86_CODEGEN_IBT_ENDBR) != 0U);
+    REQUIRE(minic_target_codegen_option_apply(
+        &target, "-fcf-protection=none", reason, sizeof(reason)));
+    REQUIRE((minic_x86_64_target_codegen_options(&target) & MINIC_X86_CODEGEN_IBT_ENDBR) == 0U);
+    REQUIRE(minic_target_codegen_option_apply(
+        &target, "-mindirect-branch=thunk-inline", reason, sizeof(reason)));
+    REQUIRE((minic_x86_64_target_codegen_options(&target) & MINIC_X86_CODEGEN_INDIRECT_INLINE_THUNK) != 0U);
+    REQUIRE(minic_target_codegen_option_apply(
+        &target, "-mindirect-branch=thunk-extern", reason, sizeof(reason)));
+    REQUIRE((minic_x86_64_target_codegen_options(&target) & MINIC_X86_CODEGEN_INDIRECT_INLINE_THUNK) == 0U);
+    REQUIRE((minic_x86_64_target_codegen_options(&target) & MINIC_X86_CODEGEN_INDIRECT_EXTERNAL_THUNK) != 0U);
+    REQUIRE(minic_target_codegen_option_apply(
+        &target, "-mindirect-branch=keep", reason, sizeof(reason)));
+    REQUIRE((minic_x86_64_target_codegen_options(&target) & MINIC_X86_CODEGEN_INDIRECT_EXTERNAL_THUNK) == 0U);
+    REQUIRE(minic_target_codegen_option_apply(
+        &target, "-mno-sse", reason, sizeof(reason)));
+    REQUIRE((minic_x86_64_target_codegen_options(&target) & MINIC_X86_CODEGEN_NO_SSE) != 0U);
+    {
+        MinicTargetInfo clone = target;
+        REQUIRE(minic_x86_64_target_codegen_options_set(&clone, 0U));
+        REQUIRE(minic_x86_64_target_codegen_options(&clone) == 0U);
+        REQUIRE((minic_x86_64_target_codegen_options(&target) &
+            MINIC_X86_CODEGEN_NO_SSE) != 0U);
+    }
+    REQUIRE(minic_target_codegen_option_apply(
+        &target, "-msse", reason, sizeof(reason)));
+    REQUIRE((minic_x86_64_target_codegen_options(&target) & MINIC_X86_CODEGEN_NO_SSE) == 0U);
+    REQUIRE(!minic_target_codegen_option_apply(
+        &target, "-fmade-up-switch", reason, sizeof(reason)));
+    REQUIRE(strstr(reason, "unsupported x86") != NULL);
+}
+
+static void test_unknown_target(void) {
+    MinicTargetInfo target = {0};
+    char reason[256];
+    target.architecture = (MinicTargetArchitecture)9999;
+    REQUIRE(!minic_target_machine_options_resolve(
+        &target, "rv64i", "lp64", reason, sizeof(reason)));
+    REQUIRE(strstr(reason, "unregistered") != NULL);
+    REQUIRE(!minic_target_codegen_option_apply(
+        &target, "-mno-sse", reason, sizeof(reason)));
+    REQUIRE(strstr(reason, "unregistered") != NULL);
+    {
+        MinicRiscvIsa isa = {.xlen = 64U};
+        REQUIRE(!minic_riscv_target_isa_store(&target, &isa));
+        REQUIRE(!minic_riscv_target_isa_load(&target, &isa));
+        REQUIRE(!minic_x86_64_target_codegen_options_set(&target, 1U));
+        REQUIRE(minic_x86_64_target_codegen_options(&target) == 0U);
+        REQUIRE(!minic_loongarch64_target_soft_float_abi_set(&target, true));
+        REQUIRE(!minic_loongarch64_target_soft_float_abi(&target));
+    }
+}
+
+int main(void) {
+    test_target_registry();
+    test_riscv_isas();
+    test_loongarch_abi();
+    test_x86_options();
+    test_unknown_target();
+    (void)puts("TARGET_MACHINE_OPTIONS_REGISTRY=PASS targets=5 isa_abi=PASS codegen=PASS fail_closed=PASS");
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/target/machine_production_preflight_test.c"}
+/* Production admission must bind source identity and independently enforce
+ * Core-effect coverage plus the complete physical Machine verifier. */
+#include "target/common/machine_production_preflight.h"
+#include "target/common/machine_builder.h"
+
+#include <stdio.h>
+#include <string.h>
+
+#define CHECK(expr) do { if (!(expr)) { \
+    fprintf(stderr, "machine production preflight:%d: %s\n", \
+            __LINE__, #expr); \
+    return 1; } } while (0)
+
+enum { PROBE_RETURN = 1U, PROBE_ACQUIRE = 2U };
+enum { PROBE_SOURCE_FORM_ACQUIRE = 77U };
+
+static bool probe_features(const MinicTargetInfo *target,
+    uint64_t features, void *context) {
+    (void)target;
+    (void)context;
+    return features == 0U;
+}
+
+static bool probe_abi(const MinicTargetInfo *target,
+    MinicFunctionCallingConvention convention, void *context) {
+    (void)target;
+    (void)context;
+    return convention == MINIC_CALLING_CONVENTION_DEFAULT;
+}
+
+static bool probe_frame(const MinicTargetInfo *target,
+    const MinicMachineFunction *function,
+    const MinicMachineFrameObject *frame, void *context) {
+    (void)target;
+    (void)function;
+    (void)frame;
+    (void)context;
+    return true;
+}
+
+static bool probe_opcode(const MinicTargetInfo *target, uint32_t opcode,
+    MinicMachineOpcodeContract *contract, void *context) {
+    (void)target;
+    (void)context;
+    if (opcode != PROBE_RETURN && opcode != PROBE_ACQUIRE) return false;
+    memset(contract, 0, sizeof(*contract));
+    if (opcode == PROBE_RETURN) {
+        contract->required_effects = MINIC_MACHINE_EFFECT_RETURN;
+        contract->permitted_effects = MINIC_MACHINE_EFFECT_RETURN;
+        contract->terminates_block = true;
+    } else {
+        contract->required_effects = MINIC_MACHINE_EFFECT_MEMORY_READ |
+            MINIC_MACHINE_EFFECT_VOLATILE |
+            MINIC_MACHINE_EFFECT_COMPILER_BARRIER;
+        contract->permitted_effects = contract->required_effects;
+    }
+    return true;
+}
+
+static bool probe_selected(const MinicMachineFunction *function,
+    const MinicMachineInstruction *instruction, void *context) {
+    (void)function;
+    (void)context;
+    return instruction->opcode == PROBE_RETURN ||
+        instruction->opcode == PROBE_ACQUIRE;
+}
+
+static bool probe_selected_source_asm(
+    const MinicMachineFunction *machine,
+    const MinicMachineInstruction *selected, void *context) {
+    (void)context;
+    return machine != NULL && selected != NULL &&
+        selected->opcode == PROBE_ACQUIRE &&
+        selected->source_asm_machine_form_id == PROBE_SOURCE_FORM_ACQUIRE &&
+        selected->source_asm_machine_form_variant == 4U &&
+        selected->effects == (MINIC_MACHINE_EFFECT_MEMORY_READ |
+            MINIC_MACHINE_EFFECT_VOLATILE |
+            MINIC_MACHINE_EFFECT_COMPILER_BARRIER);
+}
+
+static bool probe_core_source_asm(
+    const MinicCoreFunction *core, const MinicCoreInstruction *instruction,
+    const MinicCoreInlineAsm *source, const MinicMachineFunction *machine,
+    const MinicMachineInstruction *selected, void *context) {
+    (void)machine;
+    (void)context;
+    return core != NULL && instruction != NULL && source != NULL &&
+        selected != NULL &&
+        instruction->kind == MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM &&
+        instruction->value.structured_inline_asm.operand_count == 2U &&
+        instruction->value.structured_inline_asm.operands[0].kind ==
+            MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT &&
+        instruction->value.structured_inline_asm.operands[1].kind ==
+            MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT &&
+        instruction->value.structured_inline_asm.operands[0].operand_index == 0U &&
+        instruction->value.structured_inline_asm.operands[1].operand_index == 1U &&
+        source->template_length == 7U &&
+        memcmp(source->template_text, "ldar %0", 7U) == 0 &&
+        source->register_clobber_count == 0U &&
+        selected->has_core_origin && selected->core_instruction_id == 0U;
+}
+
+static bool probe_relocation(const MinicTargetInfo *target,
+    const char *symbol, uint32_t relocation, int64_t addend, void *context) {
+    (void)target;
+    (void)context;
+    return symbol != NULL && relocation == 0U && addend == 0;
+}
+
+static bool probe_emit(FILE *stream, const MinicMachineFunction *function,
+    const MinicMachineInstruction *instruction,
+    const MinicMachineGNUAsmLabels *labels, void *context) {
+    (void)function;
+    (void)labels;
+    (void)context;
+    if (instruction->opcode == PROBE_RETURN)
+        return fputs("\tret\n", stream) != EOF;
+    return instruction->opcode == PROBE_ACQUIRE &&
+        fputs("\tldar w0, [x1]\n", stream) != EOF;
+}
+
+static int check_selected_source_asm(void) {
+    MinicCoreType signature_type = {0};
+    MinicCoreTypeContext types = {0};
+    MinicCoreInstruction core_ins = {0};
+    MinicCoreInstructionId core_id = 0U;
+    MinicCoreInlineAsm source_asm = {0};
+    MinicCoreBlock core_block = {0};
+    MinicCoreFunction core = {0};
+    MinicTargetInfo target = {0};
+    MinicDataLayout layout = {0};
+    MinicMachineFunction machine = {0};
+    MinicMachineBuilder builder = {0};
+    MinicMachineGNUAsmPolicy machine_policy = {0};
+    MinicMachineCoreCoveragePolicy coverage_policy = {0};
+    MinicMachineProductionSource production = {0};
+    bool reachable[] = {true};
+    const unsigned int acquire_effects = MINIC_MACHINE_EFFECT_MEMORY_READ |
+        MINIC_MACHINE_EFFECT_VOLATILE |
+        MINIC_MACHINE_EFFECT_COMPILER_BARRIER;
+    size_t entry, body;
+    MinicMachineInstruction *hardware;
+    char name[] = "selected_asm_probe";
+
+    signature_type.kind = MINIC_CORE_TYPE_FUNCTION;
+    signature_type.value.function.calling_convention =
+        MINIC_CALLING_CONVENTION_DEFAULT;
+    types.types = &signature_type;
+    types.type_count = 1U;
+    core_ins.kind = MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM;
+    core_ins.value.structured_inline_asm.inline_asm_id = 0U;
+    core_ins.value.structured_inline_asm.operand_count = 2U;
+    core_ins.value.structured_inline_asm.operands[0].operand_index = 0U;
+    core_ins.value.structured_inline_asm.operands[0].kind =
+        MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
+    core_ins.value.structured_inline_asm.operands[1].operand_index = 1U;
+    core_ins.value.structured_inline_asm.operands[1].kind =
+        MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT;
+    source_asm.template_text = "ldar %0";
+    source_asm.template_length = 7U;
+    source_asm.is_volatile = true;
+    source_asm.has_memory_clobber = true;
+    source_asm.operand_plan_owner = MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED;
+    source_asm.target_machine_form_id = PROBE_SOURCE_FORM_ACQUIRE;
+    source_asm.target_machine_form_variant = 4U;
+    source_asm.source_asm_unique_id = 43U;
+    core_block.instructions = &core_id;
+    core_block.instruction_count = 1U;
+    core_block.has_terminator = true;
+    core_block.terminator.kind = MINIC_CORE_TERMINATOR_RETURN;
+    core.name = name;
+    core.name_length = strlen(name);
+    core.type_context = &types;
+    core.core_function_type_id = 0U;
+    core.blocks = &core_block;
+    core.block_count = 1U;
+    core.instructions = &core_ins;
+    core.instruction_count = 1U;
+    core.inline_asms = &source_asm;
+    core.inline_asm_count = 1U;
+    layout.byte_order = MINIC_BYTE_ORDER_LITTLE;
+    layout.pointer_size = 8U;
+    layout.pointer_alignment = 8U;
+    target.architecture = MINIC_TARGET_ARCH_AARCH64;
+    target.data_layout = &layout;
+
+    CHECK(minic_machine_function_initialize(&machine, &target, name, 0U));
+    CHECK(minic_machine_builder_initialize(&builder, &machine));
+    CHECK(minic_machine_builder_create_block(
+        &builder, NULL, false, true, &entry));
+    CHECK(minic_machine_builder_create_block(
+        &builder, NULL, false, false, &body));
+    CHECK(minic_machine_builder_position_at(&builder, entry));
+    CHECK(minic_machine_builder_add_successor(&builder, body));
+    CHECK(minic_machine_builder_set_fallthrough(&builder, body));
+    CHECK(minic_machine_builder_position_at(&builder, body));
+    CHECK(minic_machine_builder_mark_core_block(&builder, 0U));
+    minic_machine_builder_set_origin(&builder, 0U, 0U);
+    CHECK(minic_machine_builder_emit_selected(&builder, PROBE_ACQUIRE,
+        acquire_effects, NULL, 0U, NULL, 0U));
+    CHECK(minic_machine_builder_seal_selected_source_asm(
+        &builder, PROBE_SOURCE_FORM_ACQUIRE, 4U, 43U));
+    CHECK(!minic_machine_builder_seal_selected_source_asm(
+        &builder, PROBE_SOURCE_FORM_ACQUIRE, 4U, 43U));
+    hardware = &machine.blocks[body].instructions[0];
+    minic_machine_builder_clear_origin(&builder);
+    CHECK(minic_machine_builder_emit_selected(&builder, PROBE_RETURN,
+        MINIC_MACHINE_EFFECT_RETURN, NULL, 0U, NULL, 0U));
+
+    machine_policy.verify.lookup_opcode = probe_opcode;
+    machine_policy.verify.validate_selected_instruction = probe_selected;
+    machine_policy.verify.validate_generated_features = probe_features;
+    machine_policy.verify.validate_function_abi = probe_abi;
+    machine_policy.verify.validate_frame_object = probe_frame;
+    machine_policy.verify.validate_relocation = probe_relocation;
+    machine_policy.verify.validate_selected_source_asm =
+        probe_selected_source_asm;
+    machine_policy.emit_selected = probe_emit;
+    coverage_policy.prove_selected_source_asm = probe_core_source_asm;
+    production.core = &core;
+    production.reachable_blocks = reachable;
+    production.target = &target;
+    production.symbol = name;
+    production.core_asm_policy = &coverage_policy;
+
+    CHECK(minic_machine_production_preflight(
+        &production, &machine, &machine_policy));
+    CHECK(!minic_machine_core_coverage_verify(&core, reachable, &machine));
+    production.core_asm_policy = NULL;
+    CHECK(!minic_machine_production_preflight(
+        &production, &machine, &machine_policy));
+    production.core_asm_policy = &coverage_policy;
+    coverage_policy.prove_selected_source_asm = NULL;
+    CHECK(!minic_machine_production_preflight(
+        &production, &machine, &machine_policy));
+    coverage_policy.prove_selected_source_asm = probe_core_source_asm;
+    machine_policy.verify.validate_selected_source_asm = NULL;
+    CHECK(!minic_machine_production_preflight(
+        &production, &machine, &machine_policy));
+    machine_policy.verify.validate_selected_source_asm =
+        probe_selected_source_asm;
+    hardware->source_asm_machine_form_variant = 8U;
+    CHECK(!minic_machine_production_preflight(
+        &production, &machine, &machine_policy));
+    hardware->source_asm_machine_form_variant = 4U;
+    hardware->source_asm_unique_id = 42U;
+    CHECK(!minic_machine_production_preflight(
+        &production, &machine, &machine_policy));
+    hardware->source_asm_unique_id = 43U;
+    hardware->effects &= ~(unsigned int)MINIC_MACHINE_EFFECT_COMPILER_BARRIER;
+    CHECK(!minic_machine_production_preflight(
+        &production, &machine, &machine_policy));
+    hardware->effects = acquire_effects;
+    source_asm.register_clobber_count = 1U;
+    CHECK(!minic_machine_production_preflight(
+        &production, &machine, &machine_policy));
+    source_asm.register_clobber_count = 0U;
+    source_asm.is_goto = true;
+    CHECK(!minic_machine_production_preflight(
+        &production, &machine, &machine_policy));
+    source_asm.is_goto = false;
+    core_ins.value.structured_inline_asm.operands[1].kind =
+        MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+    CHECK(!minic_machine_production_preflight(
+        &production, &machine, &machine_policy));
+    core_ins.value.structured_inline_asm.operands[1].kind =
+        MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT;
+    CHECK(minic_machine_production_preflight(
+        &production, &machine, &machine_policy));
+    {
+        MinicMachineBlock *selected_block = &machine.blocks[body];
+        MinicMachineInstruction *const original = selected_block->instructions;
+        const size_t original_count = selected_block->instruction_count;
+        const size_t original_capacity = selected_block->instruction_capacity;
+        MinicMachineInstruction injected[3] = {0};
+        /* Repeating a genuine selected instruction is not two proofs for
+         * one source occurrence, even with the same exact form and ID. */
+        injected[0] = original[0];
+        injected[1] = original[0];
+        injected[2] = original[1];
+        selected_block->instructions = injected;
+        selected_block->instruction_count = 3U;
+        selected_block->instruction_capacity = 3U;
+        CHECK(!minic_machine_core_coverage_verify_with_policy(
+            &core, reachable, &machine, &coverage_policy));
+        CHECK(!minic_machine_gnu_asm_preflight(&machine, &machine_policy));
+        /* A detached Core barrier cannot falsely discharge GNU memory
+         * clobber requirements for a hardware source-ASM expansion. */
+        injected[0] = (MinicMachineInstruction){
+            .kind = MINIC_MACHINE_INSTRUCTION_COMPILER_BARRIER,
+            .effects = MINIC_MACHINE_EFFECT_COMPILER_BARRIER,
+            .has_core_origin = true,
+            .core_block_id = 0U,
+            .core_instruction_id = 0U
+        };
+        injected[1] = original[0];
+        CHECK(!minic_machine_core_coverage_verify_with_policy(
+            &core, reachable, &machine, &coverage_policy));
+        selected_block->instructions = original;
+        selected_block->instruction_count = original_count;
+        selected_block->instruction_capacity = original_capacity;
+    }
+    minic_machine_function_destroy(&machine);
+    return 0;
+}
+
+int main(void) {
+    MinicCoreType signature_type = {0};
+    MinicCoreTypeContext types = {0};
+    MinicCoreBlock core_block = {0};
+    MinicCoreFunction core = {0};
+    MinicTargetInfo target = {0};
+    MinicTargetInfo foreign_target = {0};
+    MinicDataLayout layout = {0};
+    MinicMachineFunction machine = {0};
+    MinicMachineBuilder builder = {0};
+    MinicMachineGNUAsmPolicy policy = {0};
+    MinicMachineProductionSource source = {0};
+    bool reachable[] = {true};
+    size_t entry = SIZE_MAX, body = SIZE_MAX;
+    char function_name[] = "production_probe";
+
+    signature_type.kind = MINIC_CORE_TYPE_FUNCTION;
+    signature_type.value.function.calling_convention =
+        MINIC_CALLING_CONVENTION_DEFAULT;
+    types.types = &signature_type;
+    types.type_count = 1U;
+    core.name = function_name;
+    core.name_length = strlen(function_name);
+    core.type_context = &types;
+    core.core_function_type_id = 0U;
+    core_block.has_terminator = true;
+    core_block.terminator.kind = MINIC_CORE_TERMINATOR_RETURN;
+    core.blocks = &core_block;
+    core.block_count = 1U;
+    layout.byte_order = MINIC_BYTE_ORDER_LITTLE;
+    layout.pointer_size = 8U;
+    layout.pointer_alignment = 8U;
+    target.architecture = MINIC_TARGET_ARCH_X86_64;
+    target.data_layout = &layout;
+    foreign_target.architecture = MINIC_TARGET_ARCH_X86_64;
+    foreign_target.data_layout = &layout;
+
+    CHECK(minic_machine_function_initialize(
+        &machine, &target, function_name, 0U));
+    CHECK(minic_machine_builder_initialize(&builder, &machine));
+    CHECK(minic_machine_builder_create_block(
+        &builder, NULL, false, true, &entry));
+    CHECK(minic_machine_builder_create_block(
+        &builder, NULL, false, false, &body));
+    CHECK(entry == 0U && body == 1U);
+    CHECK(minic_machine_builder_position_at(&builder, entry));
+    CHECK(minic_machine_builder_add_successor(&builder, body));
+    CHECK(minic_machine_builder_set_fallthrough(&builder, body));
+    CHECK(minic_machine_builder_position_at(&builder, body));
+    CHECK(minic_machine_builder_emit_selected(&builder, 1U,
+        MINIC_MACHINE_EFFECT_RETURN, NULL, 0U, NULL, 0U));
+    machine.blocks[1].has_core_block_origin = true;
+    machine.blocks[1].core_block_id = 0U;
+
+    policy.verify.lookup_opcode = probe_opcode;
+    policy.verify.validate_selected_instruction = probe_selected;
+    policy.verify.validate_generated_features = probe_features;
+    policy.verify.validate_function_abi = probe_abi;
+    policy.verify.validate_frame_object = probe_frame;
+    policy.verify.validate_relocation = probe_relocation;
+    policy.emit_selected = probe_emit;
+    source.core = &core;
+    source.reachable_blocks = reachable;
+    source.target = &target;
+    source.symbol = function_name;
+
+    CHECK(minic_machine_core_coverage_verify(&core, reachable, &machine));
+    CHECK(minic_machine_gnu_asm_preflight(&machine, &policy));
+    CHECK(minic_machine_production_preflight(&source, &machine, &policy));
+    source.symbol = "another_symbol";
+    /* The sealed Core identity and exported ELF symbol are independent:
+     * a legitimate Module alias must not make physical admission fail. */
+    CHECK(minic_machine_production_preflight(&source, &machine, &policy));
+    source.symbol = "";
+    CHECK(!minic_machine_production_preflight(&source, &machine, &policy));
+    source.symbol = function_name;
+    /* Conversely, a selector bound to another Core function is invalid.
+     * The Core identity is counted and cannot be read via strcmp(). */
+    core.name = "other_core_function";
+    CHECK(!minic_machine_production_preflight(&source, &machine, &policy));
+    core.name = function_name;
+    ++core.name_length;
+    CHECK(!minic_machine_production_preflight(&source, &machine, &policy));
+    --core.name_length;
+    {
+        char *const selected_name = machine.name;
+        machine.name = "other_selected_function";
+        CHECK(!minic_machine_production_preflight(&source, &machine, &policy));
+        machine.name = selected_name;
+    }
+    source.target = &foreign_target;
+    CHECK(!minic_machine_production_preflight(&source, &machine, &policy));
+    source.target = &target;
+    target.architecture = MINIC_TARGET_ARCH_AARCH64;
+    CHECK(!minic_machine_production_preflight(&source, &machine, &policy));
+    target.architecture = MINIC_TARGET_ARCH_X86_64;
+    machine.calling_convention = MINIC_CALLING_CONVENTION_MS_X64;
+    CHECK(!minic_machine_production_preflight(&source, &machine, &policy));
+    machine.calling_convention = MINIC_CALLING_CONVENTION_DEFAULT;
+    reachable[0] = false;
+    CHECK(!minic_machine_production_preflight(&source, &machine, &policy));
+    reachable[0] = true;
+    policy.verify.lookup_opcode = NULL;
+    CHECK(!minic_machine_production_preflight(&source, &machine, &policy));
+    policy.verify.lookup_opcode = probe_opcode;
+    CHECK(minic_machine_production_preflight(&source, &machine, &policy));
+    /* GNU emission must reject generated names colliding with any exported,
+     * alias or selected local marker, even when the MachineIR's source labels
+     * themselves are otherwise lexically valid and individually unique. */
+    {
+        char *const saved = machine.blocks[entry].exported_label;
+        machine.blocks[entry].exported_label =
+            ".Lminic_mir_production_probe_1";
+        CHECK(!minic_machine_gnu_asm_preflight(&machine, &policy));
+        machine.blocks[entry].exported_label = saved;
+        CHECK(minic_machine_gnu_asm_preflight(&machine, &policy));
+    }
+    {
+        const MinicMachineInstruction local = {
+            .kind = MINIC_MACHINE_INSTRUCTION_LOCAL_LABEL,
+            .local_label_name = ".Lminic_mir_production_probe_1"
+        };
+        CHECK(minic_machine_block_append_instruction(&machine, entry, &local));
+        CHECK(!minic_machine_gnu_asm_preflight(&machine, &policy));
+        CHECK(minic_machine_block_erase_instruction(&machine, entry, 0U));
+        CHECK(minic_machine_gnu_asm_preflight(&machine, &policy));
+    }
+    CHECK(minic_machine_block_add_alias_label(&machine, entry,
+        ".Ldistinct_external_alias"));
+    CHECK(minic_machine_gnu_asm_preflight(&machine, &policy));
+    CHECK(minic_machine_block_add_alias_label(&machine, entry,
+        ".Lminic_mir_production_probe_1"));
+    CHECK(!minic_machine_gnu_asm_preflight(&machine, &policy));
+    {
+        MinicMachineFunction one = {0};
+        size_t only = SIZE_MAX;
+        CHECK(minic_machine_function_initialize(&one, &target,
+            "one_block_proof", 0U));
+        CHECK(!minic_machine_gnu_asm_preflight(&one, &policy));
+        CHECK(minic_machine_function_add_block(&one, NULL, false, &only));
+        CHECK(only == 0U);
+        {
+            const MinicMachineInstruction ret = {
+                .kind = MINIC_MACHINE_INSTRUCTION_SELECTED,
+                .opcode = PROBE_RETURN,
+                .effects = MINIC_MACHINE_EFFECT_RETURN
+            };
+            CHECK(minic_machine_block_append_instruction(&one, only, &ret));
+        }
+        CHECK(minic_machine_gnu_asm_preflight(&one, &policy));
+        minic_machine_function_destroy(&one);
+    }
+    minic_machine_function_destroy(&machine);
+    return check_selected_source_asm();
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/target/machine_source_asm_template_test.c"}
+#define _POSIX_C_SOURCE 200809L
+#include "target/common/machine_source_asm_template.h"
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+
+static FILE *probe_stream(void) {
+    const char *directory = getenv("TMPDIR");
+    char path[4096];
+    int length;
+    int fd;
+    FILE *stream;
+    if (directory == NULL || directory[0] == '\0') directory = ".";
+    length = snprintf(path, sizeof(path), "%s/minic-source-template-XXXXXX",
+                      directory);
+    if (length <= 0 || (size_t)length >= sizeof(path)) return NULL;
+    fd = mkstemp(path);
+    if (fd < 0) return NULL;
+    if (unlink(path) != 0) {
+        close(fd);
+        return NULL;
+    }
+    stream = fdopen(fd, "w+");
+    if (stream == NULL) close(fd);
+    return stream;
+}
+
+static bool form(const MinicMachineFunction *fn,
+                 const MinicMachineInstruction *ins, void *ctx) {
+    (void)ctx;
+    return fn->target->architecture == MINIC_TARGET_ARCH_RISCV64 &&
+        ins->source_asm_machine_form_id == 7U &&
+        ins->source_asm_machine_form_variant == 0U;
+}
+
+static bool binding(const MinicMachineFunction *fn,
+                    const MinicMachineInstruction *ins,
+                    size_t id, void *ctx) {
+    const MinicMachineOperand *op = &ins->operands[id];
+    (void)fn;
+    (void)ctx;
+    if (id == 0U) return op->kind == MINIC_MACHINE_OPERAND_INTEGER &&
+        op->asm_constraint != NULL && strcmp(op->asm_constraint, "i") == 0;
+    if (id == 1U) return op->kind == MINIC_MACHINE_OPERAND_REGISTER &&
+        op->asm_constraint != NULL && strcmp(op->asm_constraint, "r") == 0;
+    return id == 2U && op->kind == MINIC_MACHINE_OPERAND_BLOCK &&
+        op->asm_constraint == NULL;
+}
+
+static bool operand(FILE *out, const MinicMachineFunction *fn,
+                    const MinicMachineInstruction *ins,
+                    const MinicMachineGNUAsmLabels *labels,
+                    size_t id, unsigned char modifier, void *ctx) {
+    (void)fn;
+    (void)ctx;
+    if (id == 0U) {
+        if (modifier != 0U && modifier != 'n' && modifier != 'c')
+            return false;
+        if (out == NULL) return true;
+        return fputs(modifier == 'n' ? "-5" : "5", out) >= 0;
+    }
+    if (id == 1U) {
+        if (modifier != 'w' && modifier != 0U) return false;
+        if (out == NULL) return true;
+        return fputs(modifier == 'w' ? "w10" : "x10", out) >= 0;
+    }
+    if (id != 2U || modifier != 'l' ||
+        (ins->effects & MINIC_MACHINE_EFFECT_BRANCH) == 0U)
+        return false;
+    if (out == NULL) return true;
+    return labels != NULL && labels->names != NULL &&
+        ins->operands[id].value.block_id < labels->count &&
+        fputs(labels->names[ins->operands[id].value.block_id], out) >= 0;
+}
+
+static bool reject(const MinicMachineFunction *fn,
+                   const MinicMachineInstruction *input,
+                   const MinicMachineSourceAsmTemplatePolicy *policy,
+                   const char *source, size_t size) {
+    MinicMachineInstruction ins = *input;
+    ins.source_asm_template = (char *)source;
+    ins.source_asm_length = size;
+    return !minic_machine_source_asm_template_preflight(fn, &ins, policy);
+}
+
+int main(void) {
+    static const char source[] =
+        "s %0,%[imm],%n0,%c0,%w[reg],%%,%=,%l[dest]\n";
+    static const char expected[] =
+        "s 5,5,-5,5,w10,%,123456,.Ltarget\n";
+    static const char trailing[] = "nop %";
+    static const char overflow[] = "nop %99999999999999999999999999999";
+    static const char embedded_nul[] = {'n','o','p','\0','x'};
+    static const char embedded_cr[] = {'n','o','p','\r','x'};
+    const char *const names[] = {".Lentry", ".Ltarget"};
+    MinicMachineGNUAsmLabels labels = {names, 2U};
+    MinicTargetInfo target = {0};
+    MinicMachineFunction function = {0};
+    MinicMachineInstruction ins = {0};
+    MinicMachineOperand operands[3] = {{0}};
+    const MinicMachineSourceAsmTemplatePolicy policy = {
+        form, binding, operand, NULL
+    };
+    FILE *out;
+    char text[128] = {0};
+    size_t got;
+    target.architecture = MINIC_TARGET_ARCH_RISCV64;
+    function.target = &target;
+    operands[0].kind = MINIC_MACHINE_OPERAND_INTEGER;
+    operands[0].value.integer = 5;
+    operands[0].asm_constraint = "i";
+    operands[0].asm_name = "imm";
+    operands[1].kind = MINIC_MACHINE_OPERAND_REGISTER;
+    operands[1].value.physical.reg = (MinicMachineRegister){10U,64U,
+        MINIC_MACHINE_REGISTER_GENERAL};
+    operands[1].asm_constraint = "r";
+    operands[1].asm_name = "reg";
+    operands[2].kind = MINIC_MACHINE_OPERAND_BLOCK;
+    operands[2].value.block_id = 1U;
+    operands[2].asm_name = "dest";
+    ins.kind = MINIC_MACHINE_INSTRUCTION_SOURCE_ASM;
+    ins.effects = MINIC_MACHINE_EFFECT_SOURCE_ASM |
+                  MINIC_MACHINE_EFFECT_BRANCH;
+    ins.source_asm_template = (char *)source;
+    ins.source_asm_length = sizeof(source) - 1U;
+    ins.source_asm_machine_form_id = 7U;
+    ins.source_asm_terminates_block = true;
+    ins.has_source_asm_unique_id = true;
+    ins.source_asm_unique_id = 123456U;
+    ins.operands = operands;
+    ins.operand_count = 3U;
+    if (!minic_machine_source_asm_template_preflight(&function, &ins,
+                                                     &policy)) return 1;
+    out = probe_stream();
+    if (out == NULL) return 1;
+    if (!minic_machine_source_asm_template_emit(out, &function, &ins,
+                                                &labels, &policy) ||
+        fflush(out) != 0 || fseek(out, 0L, SEEK_SET) != 0) {
+        fclose(out);
+        return 1;
+    }
+    got = fread(text, 1U, sizeof(text) - 1U, out);
+    fclose(out);
+    if (got != sizeof(expected) - 1U ||
+        memcmp(text, expected, sizeof(expected) - 1U) != 0)
+        return 1;
+    /* A bad late goto-label binding must be rejected before any source
+     * bytes reach the output stream. */
+    {
+        MinicMachineGNUAsmLabels missing = {names, 1U};
+        out = probe_stream();
+        if (out == NULL) return 1;
+        if (minic_machine_source_asm_template_emit(out, &function, &ins,
+                                                   &missing, &policy) ||
+            fflush(out) != 0 || ftell(out) != 0L) {
+            fclose(out);
+            return 1;
+        }
+        fclose(out);
+    }
+    /* asm volatile("" ::: "memory") is a valid compiler barrier: an
+     * empty template is admitted if the target has sealed its form. */
+    {
+        MinicMachineInstruction empty = ins;
+        empty.source_asm_template = "";
+        empty.source_asm_length = 0U;
+        empty.operands = NULL;
+        empty.operand_count = 0U;
+        empty.effects = MINIC_MACHINE_EFFECT_SOURCE_ASM |
+                        MINIC_MACHINE_EFFECT_COMPILER_BARRIER;
+        empty.source_asm_terminates_block = false;
+        if (!minic_machine_source_asm_template_preflight(&function, &empty,
+                                                         &policy)) return 1;
+        out = probe_stream();
+        if (out == NULL) return 1;
+        if (!minic_machine_source_asm_template_emit(out, &function, &empty,
+                                                    &labels, &policy) ||
+            fflush(out) != 0 || ftell(out) != 0L) {
+            fclose(out);
+            return 1;
+        }
+        fclose(out);
+    }
+    if (!reject(&function, &ins, &policy, "nop %q0", 7U) ||
+        !reject(&function, &ins, &policy, "nop %l0", 7U) ||
+        !reject(&function, &ins, &policy, "nop %[missing]", 14U) ||
+        !reject(&function, &ins, &policy, trailing, sizeof(trailing) - 1U) ||
+        !reject(&function, &ins, &policy, overflow, sizeof(overflow) - 1U) ||
+        !reject(&function, &ins, &policy, embedded_nul,
+                sizeof(embedded_nul)) ||
+        !reject(&function, &ins, &policy, embedded_cr,
+                sizeof(embedded_cr))) return 1;
+    ins.has_source_asm_unique_id = false;
+    ins.source_asm_unique_id = 0U;
+    if (!reject(&function, &ins, &policy, source, sizeof(source) - 1U))
+        return 1;
+    ins.has_source_asm_unique_id = true;
+    ins.source_asm_unique_id = 123456U;
+    operands[1].asm_name = "imm";
+    if (!reject(&function, &ins, &policy, source, sizeof(source) - 1U))
+        return 1;
+    operands[1].asm_name = "reg";
+    ins.source_asm_terminates_block = false;
+    if (!reject(&function, &ins, &policy, source, sizeof(source) - 1U))
+        return 1;
+    ins.source_asm_terminates_block = true;
+    ins.source_asm_machine_form_id = 8U;
+    if (!reject(&function, &ins, &policy, source, sizeof(source) - 1U))
+        return 1;
+    ins.source_asm_machine_form_id = 7U;
+    operands[0].asm_constraint = "forged";
+    if (!reject(&function, &ins, &policy, "nop", 3U))
+        return 1;
+    puts("MACHINE_SOURCE_ASM_TEMPLATE=PASS named=1 positional=1 unique=1 "
+         "modifiers=1 goto=1 empty=1 missing_label=1 invalid=12");
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/target/x86_64/machine_abi_pair_differential.c"}
+/* Native GCC differential for the typed x86 SysV pair/record ABI.
+ * Exercise odd INTEGER eightbytes, >128-byte stack copies, mixed register
+ * exhaustion, i128 stack fallback, and both signed/unsigned limb shifts. */
+typedef unsigned __int128 U128;
+typedef __int128 I128;
+
+struct Odd3 { unsigned short a; unsigned char b; } __attribute__((packed));
+struct Odd11 { unsigned long a; unsigned short b; unsigned char c; }
+    __attribute__((packed));
+struct Odd15 {
+    unsigned long a;
+    unsigned int b;
+    unsigned short c;
+    unsigned char d;
+} __attribute__((packed));
+struct Large { unsigned char bytes[233]; unsigned long tail; };
+
+volatile unsigned long abi_pair_sink;
+
+__attribute__((noinline))
+struct Odd3 odd3_make(unsigned long a) {
+    struct Odd3 result;
+    result.a = (unsigned short)(a ^ 0xabcU);
+    result.b = (unsigned char)(a >> 4U);
+    return result;
+}
+
+__attribute__((noinline))
+struct Odd11 odd11_make(unsigned long a, unsigned long b) {
+    struct Odd11 result;
+    result.a = a + 17U;
+    result.b = (unsigned short)(b ^ 0x1234U);
+    result.c = (unsigned char)(a >> 19U);
+    return result;
+}
+
+__attribute__((noinline))
+struct Odd15 odd15_make(unsigned long a, unsigned long b) {
+    struct Odd15 result;
+    result.a = a ^ 0x123456789abcdef0UL;
+    result.b = (unsigned int)b;
+    result.c = (unsigned short)(a >> 14U);
+    result.d = (unsigned char)(b >> 8U);
+    return result;
+}
+
+__attribute__((noinline))
+struct Large large_make(unsigned long seed) {
+    struct Large result;
+    unsigned int i;
+    for (i = 0U; i < sizeof(result.bytes); ++i)
+        result.bytes[i] = (unsigned char)(seed + i * 13U);
+    result.tail = seed ^ 0xaabbccddeeff0011UL;
+    return result;
+}
+
+__attribute__((noinline))
+U128 pair_mix(unsigned long p0, U128 a, unsigned long p1,
+    unsigned long p2, unsigned long p3, U128 b, unsigned long p4) {
+    U128 product = a * b;
+    product ^= (a >> 65U);
+    product += (b << 63U);
+    product -= (a & b);
+    product |= a ^ b;
+    return product + (U128)(p0 + p1 + p2 + p3 + p4);
+}
+
+__attribute__((noinline))
+unsigned long sum_records(struct Odd3 small, struct Odd11 pair,
+    struct Odd15 last, struct Large large, unsigned long a,
+    unsigned long b) {
+    unsigned long sum = small.a + small.b + pair.a + pair.b + pair.c;
+    unsigned int i;
+    sum += last.a + last.b + last.c + last.d + a + b + large.tail;
+    for (i = 0U; i < sizeof(large.bytes); ++i)
+        sum += (unsigned long)large.bytes[i] * (i + 1U);
+    return sum;
+}
+
+int main(void) {
+    struct Odd3 small = odd3_make(0x1234abcdUL);
+    struct Odd11 pair = odd11_make(0x12345678UL, 0x99887766UL);
+    struct Odd15 last = odd15_make(0xaabbccddUL, 0x44556677UL);
+    struct Large large = large_make(0x123456789abcdef0UL);
+    U128 a = ((U128)0x123456789abcdef0UL << 64U) | 0x0f1e2d3c4b5a6978UL;
+    U128 b = ((U128)0xfedcba9876543210UL << 64U) | 0x8877665544332211UL;
+    U128 result = pair_mix(7UL, a, 11UL, 13UL, 17UL, b, 19UL);
+    unsigned long checksum = sum_records(small, pair, last, large, 31UL, 37UL);
+    unsigned int i;
+    for (i = 0U; i < 127U; ++i) {
+        I128 negative = -((I128)(a ^ (b >> 17U)));
+        U128 r = (a << i) ^ (b >> i) ^ (U128)(negative >> i);
+        checksum ^= (unsigned long)(r + (r >> 64U));
+        a = a * (U128)0x9e3779b97f4a7c15UL + b + (U128)i;
+        b = (b ^ (a >> 11U)) * (U128)0xd6e8feb86659fd93UL;
+    }
+    checksum ^= (unsigned long)result ^ (unsigned long)(result >> 64U);
+    abi_pair_sink = checksum;
+    return (int)(checksum & 255UL);
+}
+@@@ end

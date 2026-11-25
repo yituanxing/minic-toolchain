@@ -1,0 +1,3058 @@
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/target/aarch64/typed_source_asm_probe.h"}
+/* AArch64 historical source-ASM regression through the real function-level
+ * Core -> typed MachineIR -> GNU serialization route. */
+#ifndef MINIC_TEST_AARCH64_TYPED_SOURCE_ASM_PROBE_H
+#define MINIC_TEST_AARCH64_TYPED_SOURCE_ASM_PROBE_H
+
+#include "target/aarch64/machine_core_select.h"
+#include "target/aarch64/machine_opcode.h"
+#include "target/common/machine_core_coverage.h"
+#include "target/common/machine_gnu_asm.h"
+#include "target/data_layout.h"
+
+#include <stdio.h>
+#include <stdlib.h>
+
+static bool minic_test_aarch64_typed_source_asm_emit(
+    FILE *out, const MinicCoreFunction *original,
+    const MinicCoreInstruction *original_instruction) {
+    MinicCoreInstruction instruction;
+    MinicCoreInstructionId instruction_id = 0U;
+    MinicCoreBlock block = {0};
+    MinicCoreFunction core;
+    MinicCoreModule module = {0};
+    MinicTargetInfo target = {0};
+    MinicMachineLP64FrameContract frame = {0};
+    MinicLP64FramePlan frame_plan = {0};
+    MinicDirectLP64BlockContext context = {0};
+    MinicMachineFunction machine = {0};
+    MinicMachineGNUAsmPolicy policy = {0};
+    MinicMachineCoreCoveragePolicy coverage_policy = {
+        .prove_selected_source_asm =
+            minic_aarch64_machine_prove_selected_source_asm
+    };
+    bool reachable[1] = {false};
+    size_t value_offsets[16] = {16U, 24U, 32U, 40U};
+    bool admitted = false;
+    const char *failed_step = "select";
+    if (out == NULL || original == NULL || original_instruction == NULL ||
+        original->value_count > 16U || original->type_context == NULL ||
+        original->inline_asms == NULL || original->inline_asm_count != 1U)
+        return false;
+    instruction = *original_instruction;
+    core = *original;
+    core.name = "a64_typed_source_asm_test";
+    core.name_length = sizeof("a64_typed_source_asm_test") - 1U;
+    core.instructions = &instruction;
+    core.instruction_count = 1U;
+    core.instruction_capacity = 1U;
+    block.instructions = &instruction_id;
+    block.instruction_count = 1U;
+    block.terminator.kind = MINIC_CORE_TERMINATOR_UNREACHABLE;
+    block.has_terminator = true;
+    core.blocks = &block;
+    core.block_count = 1U;
+    core.entry_block = 0U;
+    target.architecture = MINIC_TARGET_ARCH_AARCH64;
+    target.data_layout = minic_aarch64_linux_data_layout();
+    module.type_context = original->type_context;
+    frame.frame_alignment = 16U;
+    frame.frame_size = 64U;
+    frame.saved_entry_sp_offset = SIZE_MAX;
+    frame_plan.value_count = core.value_count;
+    frame_plan.value_offsets = value_offsets;
+    context = (MinicDirectLP64BlockContext){
+        .fn = &core, .module = &module, .target = &target,
+        .machine_frame = &frame, .frame_plan = &frame_plan,
+        .name = core.name
+    };
+    if (!minic_aarch64_machine_select_core_subset(&machine, &context))
+        goto done;
+    failed_step = "reachable";
+    if (!minic_core_function_mark_reachable_blocks(&core, reachable, 1U))
+        goto done;
+    failed_step = "coverage";
+    if (!minic_machine_core_coverage_verify_with_policy(
+            &core, reachable, &machine, &coverage_policy))
+        goto done;
+    failed_step = "policy";
+    if (!minic_aarch64_machine_gnu_asm_policy_initialize(&target, &policy))
+        goto done;
+    failed_step = "preflight";
+    if (!minic_machine_gnu_asm_preflight(&machine, &policy)) goto done;
+    failed_step = "emit";
+    if (!minic_machine_gnu_asm_emit_body(out, &machine, &policy)) goto done;
+    admitted = true;
+done:
+    if (!admitted && getenv("MINIC_TYPED_SOURCE_PROBE_DEBUG") != NULL)
+        fprintf(stderr, "A64_TYPED_SOURCE_PROBE=REJECT step=%s template=%s\n",
+                failed_step, original->inline_asms[0].template_text);
+    minic_machine_function_destroy(&machine);
+    return admitted;
+}
+
+#endif
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/target/backend_module_arena_test.c"}
+/* A finalized Module and an individually valid Core function must originate
+ * from the same type arena before any machine writer can observe their IDs.
+ * A merely matching type index is not sufficient: IDs are arena-local. */
+#define _POSIX_C_SOURCE 200809L
+
+#include "core/core_ir.h"
+#include "core/module_ir.h"
+#include "target/backend.h"
+#include "target/target_info.h"
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+
+#define REQUIRE(expr) do { \
+    if (!(expr)) { \
+        (void)fprintf(stderr, "BACKEND_MODULE_ARENA=FAIL line=%d expr=%s\n", \
+                      __LINE__, #expr); \
+        result = 1; \
+        goto cleanup; \
+    } \
+} while (0)
+
+static bool register_void_type(MinicCoreTypeContext *context,
+                               MinicCoreTypeId *id) {
+    MinicCoreType type = {0};
+    type.kind = MINIC_CORE_TYPE_VOID;
+    return minic_core_type_register(context, &type, id);
+}
+
+static bool create_void_return_function(MinicCoreFunction *function,
+                                        MinicCoreTypeContext *context,
+                                        MinicCoreTypeId void_id) {
+    MinicCoreBlockId entry;
+    MinicCoreTerminator terminator = {0};
+    minic_core_function_initialize(function);
+    function->name = strdup("arena_probe");
+    if (function->name == NULL) return false;
+    function->name_length = 11U;
+    if (!minic_core_function_define_signature(
+            function, context, void_id, NULL, 0U,
+            MINIC_CALLING_CONVENTION_DEFAULT, false)) return false;
+    if (!minic_core_function_add_block(function, &entry)) return false;
+    terminator.kind = MINIC_CORE_TERMINATOR_RETURN;
+    terminator.return_value = MINIC_CORE_VALUE_INVALID;
+    terminator.return_object = MINIC_CORE_OBJECT_INVALID;
+    return minic_core_function_set_terminator(function, entry, &terminator) &&
+           minic_core_function_attach_type_context(function, context) &&
+           minic_core_function_verify(function);
+}
+
+int main(void) {
+    MinicCoreTypeContext good_types, alien_types;
+    MinicCoreTypeId good_void = MINIC_CORE_TYPE_INVALID;
+    MinicCoreTypeId alien_integer = MINIC_CORE_TYPE_INVALID;
+    MinicCoreTypeId alien_void = MINIC_CORE_TYPE_INVALID;
+    MinicCoreType integer = {0};
+    MinicCoreFunction function;
+    MinicCoreModule module;
+    MinicCoreFunction absent_function = {0};
+    const MinicTargetInfo *target = minic_default_target_info();
+    const MinicBackend *backend = minic_backend_for_target(target);
+    char path[] = "/tmp/minic-core-arena-XXXXXX";
+    int fd = -1;
+    int result = 0;
+
+    minic_core_type_context_initialize(&good_types);
+    minic_core_type_context_initialize(&alien_types);
+    minic_core_function_initialize(&function);
+    minic_core_module_initialize(&module);
+    REQUIRE(target != NULL && backend != NULL);
+    REQUIRE(register_void_type(&good_types, &good_void));
+    integer.kind = MINIC_CORE_TYPE_INTEGER;
+    integer.has_layout = true;
+    integer.size = 4U;
+    integer.alignment = 4U;
+    integer.value.integer.bit_width = 32U;
+    integer.value.integer.is_signed = true;
+    REQUIRE(minic_core_type_register(&alien_types, &integer, &alien_integer));
+    REQUIRE(register_void_type(&alien_types, &alien_void));
+    REQUIRE(good_void == alien_integer && good_void != alien_void);
+    REQUIRE(create_void_return_function(&function, &good_types, good_void));
+
+    module.type_context = &good_types;
+    module.function_count = 1U;
+    module.function_symbols = calloc(1U, sizeof(*module.function_symbols));
+    REQUIRE(module.function_symbols != NULL);
+    module.function_symbols[0].name = strdup("arena_probe");
+    REQUIRE(module.function_symbols[0].name != NULL);
+    module.function_symbols[0].alias_target_index = SIZE_MAX;
+    module.function_symbols[0].storage_owner_function_index = SIZE_MAX;
+    module.function_symbols[0].is_defined = true;
+    module.finalized = true;
+    REQUIRE(minic_core_module_verify(&module));
+
+    fd = mkstemp(path);
+    REQUIRE(fd >= 0 && close(fd) == 0);
+    fd = -1;
+    REQUIRE(unlink(path) == 0);
+    /* Positive: an independently constructed Core function and Module share
+     * one live type arena and can be emitted without C AST or source drafts. */
+    REQUIRE(minic_backend_emit_assembly_with_module(
+        backend, path, target, &function, 1U, false, &module, NULL));
+    REQUIRE(access(path, F_OK) == 0 && unlink(path) == 0);
+
+    /* Negative: two individually valid arenas have different type ID maps.
+     * The backend must reject the mismatch before creating the output. */
+    module.type_context = &alien_types;
+    REQUIRE(minic_core_module_verify(&module));
+    REQUIRE(!minic_backend_emit_assembly_with_module(
+        backend, path, target, &function, 1U, false, &module, NULL));
+    REQUIRE(access(path, F_OK) != 0);
+    module.type_context = &good_types;
+    function.type_context = &alien_types;
+    REQUIRE(!minic_backend_emit_assembly_with_module(
+        backend, path, target, &function, 1U, false, &module, NULL));
+    REQUIRE(access(path, F_OK) != 0);
+    function.type_context = &good_types;
+    REQUIRE(!minic_backend_emit_assembly_with_module(
+        backend, path, target, NULL, 1U, false, &module, NULL));
+    REQUIRE(access(path, F_OK) != 0);
+
+    /* A machine consumer must reject an unsealed Core function even when
+     * its otherwise valid instructions and type IDs are unchanged. */
+    function.type_context = NULL;
+    REQUIRE(!minic_core_function_verify(&function));
+    REQUIRE(!minic_backend_emit_assembly_with_module(
+        backend, path, target, &function, 1U, false, &module, NULL));
+    REQUIRE(access(path, F_OK) != 0);
+    function.type_context = &good_types;
+
+    /* Unlowered declaration or unreachable static slots are legal. */
+    module.function_symbols[0].is_defined = false;
+    REQUIRE(minic_core_module_verify(&module));
+    REQUIRE(minic_backend_emit_assembly_with_module(
+        backend, path, target, &absent_function, 1U, false, &module, NULL));
+    REQUIRE(access(path, F_OK) == 0 && unlink(path) == 0);
+    module.function_symbols[0].is_defined = true;
+    module.function_symbols[0].is_internal = true;
+    module.function_symbols[0].is_referenced = false;
+    REQUIRE(minic_backend_emit_assembly_with_module(
+        backend, path, target, &absent_function, 1U, false, &module, NULL));
+    REQUIRE(access(path, F_OK) == 0 && unlink(path) == 0);
+
+cleanup:
+    if (fd >= 0) (void)close(fd);
+    (void)unlink(path);
+    minic_core_module_destroy(&module);
+    minic_core_function_destroy(&function);
+    minic_core_type_context_destroy(&alien_types);
+    minic_core_type_context_destroy(&good_types);
+    if (result != 0) return result;
+    (void)puts("BACKEND_MODULE_ARENA=PASS shared_arena mismatched_arena "
+               "null_function unpublished_draft declarations skipped_static");
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/target/backend_source_registration_test.c"}
+/* Source-C GNU ASM policy and sealed Core machine emission must be two
+ * independently indexed target contracts, from one canonical inventory. */
+#include "target/backend.h"
+#include "target/backend_source.h"
+#include "target/target_catalog.h"
+
+#include <stdio.h>
+
+int main(void) {
+    const MinicTargetCatalogEntry *catalog;
+    size_t count, index;
+    unsigned int full_source_targets = 0U, generic_source_targets = 0U;
+    catalog = minic_target_catalog_all(&count);
+    if (catalog == NULL || count != 5U) return 1;
+    for (index = 0U; index < count; ++index) {
+        MinicTargetInfo target = {0};
+        const MinicSourceBackend *source;
+        const MinicBackend *machine;
+        bool qualified_source;
+        target.architecture = catalog[index].architecture;
+        source = minic_source_backend_for_target(&target);
+        machine = minic_backend_for_target(&target);
+        if (source == NULL || machine == NULL || machine->emit_module == NULL ||
+            !machine->emit_reachable_core_blocks_only) return 2;
+        qualified_source = source->qualify_inline_asm != NULL &&
+            source->requires_qualified_input_asm != NULL &&
+            source->qualify_inline_asm_goto != NULL;
+        if (target.architecture == MINIC_TARGET_ARCH_RISCV32 ||
+            target.architecture == MINIC_TARGET_ARCH_RISCV64) {
+            if (qualified_source || source->seal_normalized_inline_asm != NULL ||
+                source->clone_safe_opaque_asm != NULL ||
+                source->qualify_inline_asm != NULL ||
+                source->qualify_inline_asm_goto != NULL ||
+                source->requires_qualified_input_asm != NULL) return 3;
+            ++generic_source_targets;
+        } else {
+            if (!qualified_source) return 4;
+            ++full_source_targets;
+        }
+    }
+    {
+        MinicTargetInfo invalid = {0};
+        invalid.architecture = (MinicTargetArchitecture)999;
+        if (minic_source_backend_for_target(NULL) != NULL ||
+            minic_backend_for_target(NULL) != NULL ||
+            minic_source_backend_for_target(&invalid) != NULL ||
+            minic_backend_for_target(&invalid) != NULL) return 5;
+    }
+    if (full_source_targets != 3U || generic_source_targets != 2U) return 6;
+    (void)puts("BACKEND_SOURCE_REGISTRATION=PASS targets=5 machine=5 source_qualified=3 generic=2 unknown=reject");
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/target/common_linux_jump_label_contract.c"}
+/* Target-neutral Linux static-key source/Core grammar, with target-owned
+ * %c0 (AArch64) versus %0 (LoongArch64) relocation syntax. */
+#include "target/common/linux_jump_label_asm.h"
+#include <stdio.h>
+#include <string.h>
+
+static char aarch64_template[] =
+    "1:nop.pushsection__jump_table,\"aw\".align3"
+    ".long1b-.,%l[l_yes]-..quad%c0-..popsection";
+static char loong_template[] =
+    "1:nop.pushsection__jump_table,\"aw\".align3"
+    ".long1b-.,%l[l_yes]-..quad%0-..popsection";
+static const char aarch64_record[] =
+    ".pushsection__jump_table,\"aw\".align3"
+    ".long1b-.,%l[l_yes]-..quad%c0-..popsection";
+static const char loong_record[] =
+    ".pushsection__jump_table,\"aw\".align3"
+    ".long1b-.,%l[l_yes]-..quad%0-..popsection";
+
+static unsigned int aarch64_form(const char *text, size_t length) {
+    return minic_multi_linux_jump_label_form(text, length, aarch64_record);
+}
+static unsigned int loong_form(const char *text, size_t length) {
+    return minic_multi_linux_jump_label_form(text, length, loong_record);
+}
+
+int main(void) {
+    static const char *const accepted_keys[] = {
+        "k", "_key", ".L123", "Symbols9.$", "a.b"
+    };
+    static const char *const rejected_keys[] = {
+        "", "9key", "$key", "key+", "key-", "key+4", "key+0x10",
+        "key++1", "key; .text", "key + 12", "key+1+2", "key\n.balign8"
+    };
+    MinicCoreInlineAsm source = {0};
+    MinicCoreInlineAsmImmediate key = {
+        .kind = MINIC_CORE_INLINE_ASM_IMMEDIATE_SYMBOL,
+        .symbol = "key", .byte_addend = 4
+    };
+    char long_key[130];
+    char key_text[129];
+    size_t i;
+
+    if (aarch64_form(aarch64_template, strlen(aarch64_template)) != 1U ||
+        loong_form(loong_template, strlen(loong_template)) != 1U ||
+        aarch64_form(loong_template, strlen(loong_template)) != 0U ||
+        loong_form(aarch64_template, strlen(aarch64_template)) != 0U ||
+        aarch64_form("1:b%l[l_yes].pushsection__jump_table,\"aw\".align3"
+                     ".long1b-.,%l[l_yes]-..quad%c0-..popsection",
+                     sizeof("1:b%l[l_yes].pushsection__jump_table,\"aw\".align3"
+                            ".long1b-.,%l[l_yes]-..quad%c0-..popsection") - 1U) != 2U ||
+        aarch64_form(NULL, 0U) != 0U ||
+        loong_form("1:nop.pushsection__alien,\"aw\".align3",
+                   sizeof("1:nop.pushsection__alien,\"aw\".align3") - 1U) != 0U)
+        return 1;
+
+    for (i = 0U; i < sizeof(accepted_keys) / sizeof(accepted_keys[0]); ++i)
+        if (!minic_core_inline_asm_symbol_valid(accepted_keys[i]))
+            return 2;
+    for (i = 0U; i < sizeof(rejected_keys) / sizeof(rejected_keys[0]); ++i)
+        if (minic_core_inline_asm_symbol_valid(rejected_keys[i]))
+            return 3;
+    (void)memset(long_key, 'a', sizeof(long_key));
+    long_key[128] = '\0';
+    if (!minic_core_inline_asm_symbol_valid(long_key)) return 4;
+    long_key[128] = 'a';
+    long_key[129] = '\0';
+    if (minic_core_inline_asm_symbol_valid(long_key)) return 5;
+    if (!minic_core_inline_asm_relocation_valid(&key) ||
+        !minic_multi_linux_jump_relocation_text(
+            &key, key_text, sizeof(key_text)) || strcmp(key_text, "key+4") != 0)
+        return 11;
+    key.byte_addend = -42;
+    if (!minic_multi_linux_jump_relocation_text(
+            &key, key_text, sizeof(key_text)) || strcmp(key_text, "key-42") != 0)
+        return 12;
+    key.byte_addend = 4;
+
+    source.template_text = aarch64_template;
+    source.template_length = strlen(aarch64_template);
+    source.is_goto = true;
+    source.is_volatile = true;
+    source.deferred_immediate_symbol = NULL;
+    source.goto_target = 0U;
+    source.goto_second_target = MINIC_CORE_BLOCK_INVALID;
+    source.resolved_immediates[0] = key;
+    source.resolved_immediate_count = 1U;
+    if (!minic_multi_linux_jump_label_asm_goto_core(&source, aarch64_form) ||
+        minic_multi_linux_jump_label_asm_goto_core(&source, loong_form))
+        return 6;
+    source.template_text = loong_template;
+    source.template_length = strlen(loong_template);
+    if (!minic_multi_linux_jump_label_asm_goto_core(&source, loong_form) ||
+        minic_multi_linux_jump_label_asm_goto_core(&source, aarch64_form))
+        return 7;
+    source.resolved_immediates[0].symbol = "key++4";
+    if (minic_multi_linux_jump_label_asm_goto_core(&source, loong_form))
+        return 8;
+    source.resolved_immediates[0] = key;
+    source.deferred_immediate_symbol = "__minic_deferred_asm_immediate_0_0";
+    if (minic_multi_linux_jump_label_asm_goto_core(&source, loong_form))
+        return 9;
+    source.deferred_immediate_symbol = NULL;
+    source.goto_second_target = 1U;
+    if (minic_multi_linux_jump_label_asm_goto_core(&source, loong_form))
+        return 10;
+
+    (void)puts("COMMON_LINUX_JUMP_LABEL_CONTRACT=PASS forms=2 typed_symbol_valid=5 typed_symbol_invalid=12 signed_addend=2 bound=128 core_positive=2 core_negative=5");
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/target/data_layout_zero_size_reloc_test.c"}
+#include "frontend/ast.h"
+#include "frontend/type.h"
+#include "target/data_layout.h"
+#include "target/data_layout_source.h"
+#include "target/source_policy/source_info.h"
+
+#include <stdio.h>
+#include <string.h>
+
+/* An explicit field extent and an existing nested ArrayType must converge to
+ * the same materialized field shape, including aggregate relocation slots. */
+static bool check_record_array_shape_equivalence(MinicC0Program *program,
+                                                 const MinicTargetInvocation *layout) {
+    MinicRecordId legacy_id, materialized_id, zero_id;
+    MinicType pointer_type, pointer_array, zero_array, inner_array, outer_array;
+    const MinicRecord *legacy, *materialized;
+    MinicGlobalObject object;
+    MinicGlobalRelocation relocation;
+    size_t legacy_size, materialized_size, legacy_align, materialized_align;
+    size_t offset;
+    if (!minic_type_pointer_to(minic_type_long(), &pointer_type) ||
+        !minic_c0_program_add_array_type(program, pointer_type, 2U, &pointer_array) ||
+        !minic_c0_program_add_array_type(program, minic_type_int(), 3U, &inner_array) ||
+        !minic_c0_program_add_array_type(program, inner_array, 2U, &outer_array) ||
+        !minic_c0_program_add_zero_length_array_type(
+            program, minic_type_int(), &zero_array) ||
+        !minic_c0_program_add_record(program, "LegacyArray", 11U, &legacy_id) ||
+        !minic_c0_record_add_field(program, legacy_id, "pair", 4U,
+                                   pointer_type, 2U) ||
+        !minic_c0_record_add_field(program, legacy_id, "rows", 4U,
+                                   inner_array, 2U) ||
+        !minic_c0_program_finish_record(program, legacy_id) ||
+        !minic_c0_program_add_record(program, "MaterializedArray", 17U,
+                                     &materialized_id) ||
+        !minic_c0_record_add_field(program, materialized_id, "pair", 4U,
+                                   pointer_array, 1U) ||
+        !minic_c0_record_add_field(program, materialized_id, "rows", 4U,
+                                   outer_array, 1U) ||
+        !minic_c0_program_finish_record(program, materialized_id) ||
+        !minic_c0_program_add_record(program, "ZeroTail", 8U, &zero_id) ||
+        !minic_c0_record_add_field(program, zero_id, "before", 6U,
+                                   minic_type_char(), 1U) ||
+        !minic_c0_record_add_field(program, zero_id, "empty", 5U,
+                                   zero_array, 1U) ||
+        !minic_c0_record_add_field(program, zero_id, "after", 5U,
+                                   pointer_type, 1U) ||
+        !minic_c0_program_finish_record(program, zero_id))
+        return false;
+    legacy = minic_c0_program_record(program, legacy_id);
+    materialized = minic_c0_program_record(program, materialized_id);
+    if (legacy == NULL || materialized == NULL ||
+        !minic_data_layout_type(layout, program, minic_type_record(legacy_id),
+                                &legacy_size, &legacy_align) ||
+        !minic_data_layout_type(layout, program, minic_type_record(materialized_id),
+                                &materialized_size, &materialized_align) ||
+        legacy_size != materialized_size || legacy_size != 40U ||
+        legacy_align != materialized_align || legacy_align != 8U ||
+        !minic_data_layout_record_field_offset(
+            layout, program, legacy, 1U, &offset) || offset != 16U ||
+        !minic_data_layout_record_field_offset(
+            layout, program, materialized, 1U, &offset) || offset != 16U ||
+        !minic_data_layout_type(layout, program, minic_type_record(zero_id),
+                                &materialized_size, &materialized_align) ||
+        materialized_size != 16U || materialized_align != 8U ||
+        !minic_data_layout_record_field_offset(
+            layout, program, minic_c0_program_record(program, zero_id),
+            2U, &offset) || offset != 8U)
+        return false;
+    (void)memset(&object, 0, sizeof(object));
+    (void)memset(&relocation, 0, sizeof(relocation));
+    relocation.location_kind = MINIC_GLOBAL_RELOCATION_LOCATION_AGGREGATE_SCALAR;
+    relocation.location_index = 1U;
+    object.type = minic_type_record(legacy_id);
+    if (!minic_data_layout_global_relocation_offset(
+            layout, program, &object, &relocation, &offset) || offset != 8U)
+        return false;
+    object.type = minic_type_record(materialized_id);
+    return minic_data_layout_global_relocation_offset(
+               layout, program, &object, &relocation, &offset) && offset == 8U;
+}
+
+/* Exercising the public DataLayout relocation API is intentional: the normal
+ * global emitter can choose a different, direct initializer walker which
+ * never visits this source-location resolver. */
+int main(void) {
+    MinicC0Program program;
+    MinicRecordId empty_id, holder_id;
+    MinicType empty_array_type, pointer_type;
+    MinicGlobalObject object;
+    MinicGlobalRelocation reloc;
+    size_t offset, bytes, alignment, empty_bytes, empty_alignment;
+    bool valid_record = false, invalid_array = false, matching_field_shapes = false;
+    MinicTargetInvocation invocation;
+    const MinicTargetInvocation *layout = &invocation;
+
+    if (!minic_target_invocation_begin(
+            &invocation, minic_target_info_for_architecture(MINIC_TARGET_ARCH_X86_64)))
+        return 2;
+    minic_c0_program_initialize(&program);
+    memset(&object, 0, sizeof(object));
+    memset(&reloc, 0, sizeof(reloc));
+    if (!minic_c0_program_add_record(&program, "Empty", 5U, &empty_id) ||
+        !minic_c0_program_finish_record(&program, empty_id) ||
+        !minic_c0_program_add_array_type(
+            &program, minic_type_record(empty_id), 2U, &empty_array_type) ||
+        !minic_type_pointer_to(minic_type_long(), &pointer_type) ||
+        !minic_c0_program_add_record(&program, "Holder", 6U, &holder_id) ||
+        !minic_c0_record_add_field(&program, holder_id, "prefix", 6U,
+                                   minic_type_int(), 1U) ||
+        !minic_c0_record_add_field(&program, holder_id, "ignored", 7U,
+                                   minic_type_record(empty_id), 2U) ||
+        !minic_c0_record_add_field(&program, holder_id, "ptr", 3U,
+                                   pointer_type, 1U) ||
+        !minic_c0_program_finish_record(&program, holder_id)) {
+        minic_c0_program_destroy(&program);
+        return 2;
+    }
+    reloc.location_kind = MINIC_GLOBAL_RELOCATION_LOCATION_AGGREGATE_SCALAR;
+    /* A pure empty-record array has no scalar slots. A fabricated
+     * relocation slot must fail normally, never divide by zero. */
+    object.type = empty_array_type;
+    reloc.location_index = 0U;
+    invalid_array = !minic_data_layout_global_relocation_offset(
+        layout, &program, &object, &reloc, &offset);
+
+    reloc.location_index = 1U; /* integer prefix is slot 0, pointer is slot 1 */
+    object.type = minic_type_record(holder_id);
+    valid_record = minic_data_layout_type(
+                       layout, &program, minic_type_record(empty_id),
+                       &empty_bytes, &empty_alignment) && empty_bytes == 0U &&
+        minic_data_layout_global_object(
+                       layout, &program, &object, &bytes, &alignment) &&
+        bytes == 16U && alignment == 8U &&
+        minic_data_layout_global_relocation_offset(
+            layout, &program, &object, &reloc, &offset) && offset == 8U;
+
+    matching_field_shapes = check_record_array_shape_equivalence(&program, layout);
+
+    minic_c0_program_destroy(&program);
+    if (!valid_record || !invalid_array || !matching_field_shapes) {
+        (void)fprintf(stderr,
+            "FAIL zero-sized aggregate relocation: record=%d array=%d field-shapes=%d\n",
+            valid_record ? 1 : 0, invalid_array ? 1 : 0,
+            matching_field_shapes ? 1 : 0);
+        return 1;
+    }
+    (void)puts("DATA_LAYOUT_ZERO_SIZE_RELOC=PASS record_offset=8 array_no_slots=1 field_shape_equivalence=1");
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/target/direct_machine_gnu_asm_test.c"}
+#define _POSIX_C_SOURCE 200809L
+/* Two LP64 target-owned native opcode/ABI contracts, with actual owned
+ * MachineFunction -> independent verifier -> GNU machine body serialization.
+ * No machine assembly string or FILE* trampoline is stored in MIR. */
+#include "target/aarch64/machine_opcode.h"
+#include "target/loongarch64/machine_opcode.h"
+#include "target/loongarch64/machine_target_state.h"
+#include "target/common/machine_ir.h"
+#include "target/common/machine_ir_verify.h"
+#include "target/common/machine_gnu_asm.h"
+#include "target/data_layout.h"
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+
+static FILE *open_test_output(void) {
+    const char *directory = getenv("TMPDIR");
+    char path[512];
+    int fd;
+    FILE *file;
+    if (directory == NULL || *directory == '\0') directory = "/tmp";
+    if (snprintf(path, sizeof(path), "%s/minic-native-asm-XXXXXX",
+            directory) >= (int)sizeof(path)) return NULL;
+    fd = mkstemp(path);
+    if (fd < 0) return NULL;
+    unlink(path);
+    file = fdopen(fd, "w+b");
+    if (file == NULL) close(fd);
+    return file;
+}
+
+#define CHECK(expr) do { if (!(expr)) { \
+    fprintf(stderr, "machine native contract:%d: %s\n", __LINE__, #expr); \
+    return false; } } while (0)
+
+static MinicMachineOperand reg(unsigned int number, unsigned int width,
+                              unsigned int access) {
+    MinicMachineOperand result = {0};
+    result.kind = MINIC_MACHINE_OPERAND_REGISTER;
+    result.value.physical.reg = (MinicMachineRegister){number,
+        (uint16_t)width, MINIC_MACHINE_REGISTER_GENERAL};
+    result.value.physical.access = access;
+    return result;
+}
+
+static MinicMachineOperand fpreg(unsigned int number, unsigned int width,
+    MinicMachineRegisterBank bank, unsigned int access) {
+    MinicMachineOperand result = reg(number, width, access);
+    result.value.physical.reg.bank = bank;
+    return result;
+}
+
+static MinicMachineOperand imm(int64_t value) {
+    MinicMachineOperand result = {0};
+    result.kind = MINIC_MACHINE_OPERAND_INTEGER;
+    result.value.integer = value;
+    return result;
+}
+
+static MinicMachineOperand block(size_t block_id) {
+    MinicMachineOperand result = {0};
+    result.kind = MINIC_MACHINE_OPERAND_BLOCK;
+    result.value.block_id = block_id;
+    return result;
+}
+
+static MinicMachineOperand frame(size_t index) {
+    MinicMachineOperand result = {0};
+    result.kind = MINIC_MACHINE_OPERAND_FRAME;
+    result.value.frame.index = index;
+    return result;
+}
+
+static MinicMachineOperand address(unsigned int base, uint32_t mode,
+                                   int64_t displacement) {
+    MinicMachineOperand result = {0};
+    result.kind = MINIC_MACHINE_OPERAND_ADDRESS;
+    result.value.address.target_mode = mode;
+    result.value.address.has_base = true;
+    result.value.address.base = (MinicMachineRegister){base, 64U,
+        MINIC_MACHINE_REGISTER_GENERAL};
+    result.value.address.scale = 1U;
+    result.value.address.displacement = displacement;
+    return result;
+}
+
+static MinicMachineOperand symbol(char *name, uint32_t relocation) {
+    MinicMachineOperand result = {0};
+    result.kind = MINIC_MACHINE_OPERAND_SYMBOL;
+    result.value.symbol.name = name;
+    result.value.symbol.relocation = relocation;
+    return result;
+}
+
+static bool append(MinicMachineFunction *function,
+    const MinicMachineGNUAsmPolicy *policy, size_t block_id,
+    uint32_t opcode, unsigned int effects,
+    MinicMachineOperand *operands, size_t count) {
+    MinicMachineInstruction instruction = {0};
+    MinicMachineOpcodeContract contract = {0};
+    CHECK(policy->verify.lookup_opcode(function->target, opcode,
+        &contract, policy->verify.context));
+    CHECK(count == contract.operand_count);
+    instruction.kind = MINIC_MACHINE_INSTRUCTION_SELECTED;
+    instruction.opcode = opcode;
+    instruction.effects = effects;
+    instruction.operands = operands;
+    instruction.operand_count = count;
+    instruction.implicit = contract.implicit_count != 0U
+        ? contract.implicit : NULL;
+    instruction.implicit_count = contract.implicit_count;
+    return minic_machine_block_append_instruction(function, block_id,
+        &instruction);
+}
+
+static bool emitted_contains(const MinicMachineFunction *function,
+    const MinicMachineGNUAsmPolicy *policy, const char *first,
+    const char *second, const char *third) {
+    FILE *output = open_test_output();
+    char buffer[8192];
+    size_t count;
+    CHECK(output != NULL);
+    if (!minic_machine_gnu_asm_emit_body(output, function, policy)) {
+        fclose(output);
+        return false;
+    }
+    CHECK(fflush(output) == 0);
+    CHECK(fseek(output, 0, SEEK_SET) == 0);
+    count = fread(buffer, 1U, sizeof(buffer) - 1U, output);
+    buffer[count] = '\0';
+    CHECK(fclose(output) == 0);
+    CHECK(strstr(buffer, first) != NULL);
+    CHECK(strstr(buffer, second) != NULL);
+    CHECK(strstr(buffer, third) != NULL);
+    return true;
+}
+
+static bool run_a64(void) {
+    MinicTargetInfo target = {0};
+    MinicMachineGNUAsmPolicy policy = {0};
+    MinicMachineFunction function = {0};
+    size_t entry, fallthrough, taken, frame_id;
+    MinicMachineOperand operands[3];
+    MinicMachineFrameObject object = {0};
+    unsigned int rw = MINIC_MACHINE_REGISTER_READ;
+    unsigned int wr = MINIC_MACHINE_REGISTER_WRITE;
+    target.architecture = MINIC_TARGET_ARCH_AARCH64;
+    target.data_layout = minic_aarch64_linux_data_layout();
+    CHECK(minic_aarch64_machine_gnu_asm_policy_initialize(&target, &policy));
+    CHECK(policy.section_type_marker == MINIC_MACHINE_GNU_SECTION_TYPE_PERCENT);
+    CHECK(minic_machine_function_initialize(&function, &target, "a64_probe",
+        MINIC_A64_MACHINE_FEATURE_BASE | MINIC_A64_MACHINE_FEATURE_FP_SIMD));
+    function.frame_alignment = 16U;
+    function.frame_size = 32U;
+    object = (MinicMachineFrameObject){.area = MINIC_MACHINE_FRAME_LOCAL,
+        .base = MINIC_MACHINE_FRAME_BASE_STACK_POINTER,
+        .size_bytes = 8U, .alignment_bytes = 8U,
+        .has_fixed_offset = true, .fixed_offset = 16};
+    CHECK(minic_machine_function_add_frame_object(&function, &object, &frame_id));
+    CHECK(minic_machine_function_add_block(&function, NULL, false, &entry));
+    CHECK(minic_machine_function_add_block(&function, NULL, false, &fallthrough));
+    CHECK(minic_machine_function_add_block(&function, NULL, false, &taken));
+    CHECK(minic_machine_block_add_successor(&function, entry, fallthrough));
+    CHECK(minic_machine_block_add_successor(&function, entry, taken));
+    CHECK(minic_machine_block_set_fallthrough(&function, entry, fallthrough));
+
+    operands[0] = reg(9U, 64U, wr);
+    operands[1] = imm(42);
+    operands[2] = imm(0);
+    CHECK(append(&function, &policy, entry, MINIC_A64_MACHINE_MOVZ, 0,
+        operands, 3U));
+    operands[0] = reg(9U, 64U, rw);
+    operands[1] = block(taken);
+    CHECK(append(&function, &policy, entry, MINIC_A64_MACHINE_CBNZ,
+        MINIC_MACHINE_EFFECT_BRANCH, operands, 2U));
+
+    operands[0] = reg(9U, 64U, wr);
+    operands[1] = frame(frame_id);
+    CHECK(append(&function, &policy, fallthrough, MINIC_A64_MACHINE_LDR_FRAME_X,
+        MINIC_MACHINE_EFFECT_MEMORY_READ, operands, 2U));
+    operands[0] = reg(9U, 64U, rw);
+    operands[1] = address(10U, MINIC_A64_ADDRESS_UNSIGNED, 0);
+    CHECK(append(&function, &policy, fallthrough, MINIC_A64_MACHINE_STR_X,
+        MINIC_MACHINE_EFFECT_MEMORY_WRITE, operands, 2U));
+    operands[0] = symbol("probe_callee", MINIC_A64_RELOC_DIRECT);
+    CHECK(append(&function, &policy, fallthrough, MINIC_A64_MACHINE_BL,
+        MINIC_MACHINE_EFFECT_CALL, operands, 1U));
+    /* Real production scalar-FP/vector instruction families are selected
+     * with physical register operands, never cached GNU asm lines. */
+    operands[0] = fpreg(9U, 64U, MINIC_MACHINE_REGISTER_FLOAT, wr);
+    operands[1] = address(10U, MINIC_A64_ADDRESS_UNSIGNED, 0);
+    CHECK(append(&function, &policy, fallthrough, MINIC_A64_MACHINE_LDR_FP_D,
+        MINIC_MACHINE_EFFECT_MEMORY_READ, operands, 2U));
+    operands[0] = fpreg(9U, 64U, MINIC_MACHINE_REGISTER_FLOAT, wr);
+    operands[1] = fpreg(9U, 64U, MINIC_MACHINE_REGISTER_FLOAT, rw);
+    operands[2] = fpreg(10U, 64U, MINIC_MACHINE_REGISTER_FLOAT, rw);
+    CHECK(append(&function, &policy, fallthrough, MINIC_A64_MACHINE_FADD,
+        0U, operands, 3U));
+    operands[0] = fpreg(9U, 64U, MINIC_MACHINE_REGISTER_FLOAT, rw);
+    CHECK(append(&function, &policy, fallthrough, MINIC_A64_MACHINE_FCMP,
+        0U, operands, 2U));
+    operands[0] = reg(9U, 32U, wr);
+    operands[1] = imm(3);
+    CHECK(append(&function, &policy, fallthrough, MINIC_A64_MACHINE_CSET,
+        0U, operands, 2U));
+    operands[0] = fpreg(10U, 64U, MINIC_MACHINE_REGISTER_FLOAT, wr);
+    operands[1] = reg(9U, 64U, rw);
+    CHECK(append(&function, &policy, fallthrough, MINIC_A64_MACHINE_UCVTF,
+        0U, operands, 2U));
+    operands[0] = reg(9U, 64U, wr);
+    operands[1] = fpreg(10U, 64U, MINIC_MACHINE_REGISTER_FLOAT, rw);
+    CHECK(append(&function, &policy, fallthrough, MINIC_A64_MACHINE_FCVTZU,
+        0U, operands, 2U));
+    operands[0] = fpreg(16U, 128U, MINIC_MACHINE_REGISTER_VECTOR, wr);
+    operands[1] = fpreg(16U, 128U, MINIC_MACHINE_REGISTER_VECTOR, rw);
+    operands[2] = fpreg(17U, 128U, MINIC_MACHINE_REGISTER_VECTOR, rw);
+    CHECK(append(&function, &policy, fallthrough, MINIC_A64_MACHINE_VECTOR_EOR_16B,
+        0U, operands, 3U));
+    CHECK(append(&function, &policy, fallthrough, MINIC_A64_MACHINE_RET,
+        MINIC_MACHINE_EFFECT_RETURN, NULL, 0U));
+
+    operands[0] = reg(9U, 64U, wr);
+    operands[1] = reg(9U, 64U, rw);
+    operands[2] = imm(32);
+    CHECK(append(&function, &policy, taken, MINIC_A64_MACHINE_ADD_IMM, 0,
+        operands, 3U));
+    CHECK(append(&function, &policy, taken, MINIC_A64_MACHINE_RET,
+        MINIC_MACHINE_EFFECT_RETURN, NULL, 0U));
+
+    for (size_t bi = 0U; bi < function.block_count; ++bi)
+        for (size_t ii = 0U; ii < function.blocks[bi].instruction_count; ++ii) {
+            const MinicMachineInstruction *machine = &function.blocks[bi].instructions[ii];
+            if (machine->kind == MINIC_MACHINE_INSTRUCTION_SELECTED &&
+                !policy.verify.validate_selected_instruction(&function, machine, NULL))
+                fprintf(stderr, "a64 illegal selected block=%zu ins=%zu op=%u\n",
+                    bi, ii, machine->opcode);
+        }
+    CHECK(minic_machine_function_verify(&function, &policy.verify));
+    CHECK(emitted_contains(&function, &policy,
+        "fadd d9, d9, d10", "fcvtzu x9, d10", "eor v16.16b, v16.16b, v17.16b"));
+
+    function.generated_features = UINT64_MAX;
+    CHECK(!minic_machine_function_verify(&function, &policy.verify));
+    function.generated_features = MINIC_A64_MACHINE_FEATURE_BASE |
+        MINIC_A64_MACHINE_FEATURE_FP_SIMD;
+    function.calling_convention = MINIC_CALLING_CONVENTION_MS_X64;
+    CHECK(!minic_machine_function_verify(&function, &policy.verify));
+    function.calling_convention = MINIC_CALLING_CONVENTION_DEFAULT;
+    function.blocks[taken].instructions[0].operands[2].value.integer = 4096;
+    CHECK(!minic_machine_function_verify(&function, &policy.verify));
+    function.blocks[taken].instructions[0].operands[2].value.integer = 32;
+    function.blocks[fallthrough].instructions[0].operands[1].value.frame.displacement = 8192;
+    CHECK(!minic_machine_function_verify(&function, &policy.verify));
+    function.blocks[fallthrough].instructions[0].operands[1].value.frame.displacement = 0;
+    function.blocks[fallthrough].instructions[4].operands[2].value.physical.reg.width_bits = 32U;
+    CHECK(!minic_machine_function_verify(&function, &policy.verify));
+    function.blocks[fallthrough].instructions[4].operands[2].value.physical.reg.width_bits = 64U;
+    CHECK(minic_machine_function_verify(&function, &policy.verify));
+    minic_machine_function_destroy(&function);
+    return true;
+}
+
+static bool run_loong(void) {
+    MinicTargetInfo target = {0};
+    MinicMachineGNUAsmPolicy policy = {0};
+    MinicMachineFunction function = {0};
+    MinicMachineFrameObject object = {0};
+    MinicMachineOperand operands[3];
+    size_t entry, fallthrough, taken, frame_id;
+    unsigned int rw = MINIC_MACHINE_REGISTER_READ;
+    unsigned int wr = MINIC_MACHINE_REGISTER_WRITE;
+    target.architecture = MINIC_TARGET_ARCH_LOONGARCH64;
+    target.data_layout = minic_loongarch64_linux_data_layout();
+    CHECK(minic_loongarch64_machine_gnu_asm_policy_initialize(&target, &policy));
+    CHECK(policy.section_type_marker == MINIC_MACHINE_GNU_SECTION_TYPE_AT);
+    CHECK(minic_machine_function_initialize(&function, &target, "loong_probe",
+        MINIC_LOONG_MACHINE_FEATURE_BASE | MINIC_LOONG_MACHINE_FEATURE_FP));
+    function.frame_alignment = 16U;
+    function.frame_size = 32U;
+    object = (MinicMachineFrameObject){.area = MINIC_MACHINE_FRAME_LOCAL,
+        .base = MINIC_MACHINE_FRAME_BASE_STACK_POINTER,
+        .size_bytes = 8U, .alignment_bytes = 8U,
+        .has_fixed_offset = true, .fixed_offset = 16};
+    CHECK(minic_machine_function_add_frame_object(&function, &object, &frame_id));
+    CHECK(minic_machine_function_add_block(&function, NULL, false, &entry));
+    CHECK(minic_machine_function_add_block(&function, NULL, false, &fallthrough));
+    CHECK(minic_machine_function_add_block(&function, NULL, false, &taken));
+    CHECK(minic_machine_block_add_successor(&function, entry, fallthrough));
+    CHECK(minic_machine_block_add_successor(&function, entry, taken));
+    CHECK(minic_machine_block_set_fallthrough(&function, entry, fallthrough));
+
+    operands[0] = reg(12U, 64U, wr);
+    operands[1] = imm(42);
+    CHECK(append(&function, &policy, entry, MINIC_LOONG_MACHINE_LI_D, 0,
+        operands, 2U));
+    operands[0] = reg(12U, 64U, rw);
+    operands[1] = block(taken);
+    CHECK(append(&function, &policy, entry, MINIC_LOONG_MACHINE_BNEZ,
+        MINIC_MACHINE_EFFECT_BRANCH, operands, 2U));
+
+    operands[0] = reg(12U, 64U, wr);
+    operands[1] = frame(frame_id);
+    CHECK(append(&function, &policy, fallthrough,
+        MINIC_LOONG_MACHINE_LD_FRAME_D,
+        MINIC_MACHINE_EFFECT_MEMORY_READ, operands, 2U));
+    operands[0] = reg(12U, 64U, rw);
+    operands[1] = address(13U, MINIC_LOONG_ADDRESS_IMM12, 0);
+    CHECK(append(&function, &policy, fallthrough, MINIC_LOONG_MACHINE_ST_D,
+        MINIC_MACHINE_EFFECT_MEMORY_WRITE, operands, 2U));
+    operands[0] = symbol("probe_callee", MINIC_LOONG_RELOC_DIRECT);
+    CHECK(append(&function, &policy, fallthrough, MINIC_LOONG_MACHINE_BL,
+        MINIC_MACHINE_EFFECT_CALL, operands, 1U));
+    operands[0] = fpreg(8U, 64U, MINIC_MACHINE_REGISTER_FLOAT, wr);
+    operands[1] = address(3U, MINIC_LOONG_ADDRESS_IMM12, 16);
+    CHECK(append(&function, &policy, fallthrough, MINIC_LOONG_MACHINE_FLD_D,
+        MINIC_MACHINE_EFFECT_MEMORY_READ, operands, 2U));
+    operands[0] = fpreg(8U, 64U, MINIC_MACHINE_REGISTER_FLOAT, wr);
+    operands[1] = fpreg(8U, 64U, MINIC_MACHINE_REGISTER_FLOAT, rw);
+    operands[2] = fpreg(9U, 64U, MINIC_MACHINE_REGISTER_FLOAT, rw);
+    CHECK(append(&function, &policy, fallthrough, MINIC_LOONG_MACHINE_FADD_D,
+        0U, operands, 3U));
+    operands[0] = fpreg(0U, 1U, MINIC_MACHINE_REGISTER_FLAGS, wr);
+    CHECK(append(&function, &policy, fallthrough, MINIC_LOONG_MACHINE_FCMP_CLT_D,
+        0U, operands, 3U));
+    operands[0] = reg(12U, 64U, wr);
+    operands[1] = fpreg(0U, 1U, MINIC_MACHINE_REGISTER_FLAGS, rw);
+    CHECK(append(&function, &policy, fallthrough, MINIC_LOONG_MACHINE_MOVCF2GR,
+        0U, operands, 2U));
+    operands[0] = fpreg(8U, 32U, MINIC_MACHINE_REGISTER_FLOAT, wr);
+    operands[1] = fpreg(8U, 64U, MINIC_MACHINE_REGISTER_FLOAT, rw);
+    CHECK(append(&function, &policy, fallthrough, MINIC_LOONG_MACHINE_FCVT_S_D,
+        0U, operands, 2U));
+    operands[0] = reg(12U, 64U, wr);
+    operands[1] = fpreg(8U, 32U, MINIC_MACHINE_REGISTER_FLOAT, rw);
+    CHECK(append(&function, &policy, fallthrough, MINIC_LOONG_MACHINE_MOVFR2GR_S,
+        0U, operands, 2U));
+    CHECK(append(&function, &policy, fallthrough, MINIC_LOONG_MACHINE_RET,
+        MINIC_MACHINE_EFFECT_RETURN, NULL, 0U));
+
+    operands[0] = reg(12U, 64U, wr);
+    operands[1] = reg(12U, 64U, rw);
+    operands[2] = imm(32);
+    CHECK(append(&function, &policy, taken, MINIC_LOONG_MACHINE_ADDI_D, 0,
+        operands, 3U));
+    CHECK(append(&function, &policy, taken, MINIC_LOONG_MACHINE_RET,
+        MINIC_MACHINE_EFFECT_RETURN, NULL, 0U));
+
+    CHECK(minic_machine_function_verify(&function, &policy.verify));
+    CHECK(emitted_contains(&function, &policy,
+        "fld.d $ft0, $sp, 16", "fcmp.clt.d $fcc0, $ft0, $ft1",
+        "movcf2gr $t0, $fcc0"));
+    function.generated_features = UINT64_MAX;
+    CHECK(!minic_machine_function_verify(&function, &policy.verify));
+    function.generated_features = MINIC_LOONG_MACHINE_FEATURE_BASE |
+        MINIC_LOONG_MACHINE_FEATURE_FP;
+    function.calling_convention = MINIC_CALLING_CONVENTION_MS_X64;
+    CHECK(!minic_machine_function_verify(&function, &policy.verify));
+    function.calling_convention = MINIC_CALLING_CONVENTION_DEFAULT;
+    function.blocks[taken].instructions[0].operands[2].value.integer = 4096;
+    CHECK(!minic_machine_function_verify(&function, &policy.verify));
+    function.blocks[taken].instructions[0].operands[2].value.integer = 32;
+    function.blocks[fallthrough].instructions[0].operands[1].value.frame.displacement = 8192;
+    CHECK(!minic_machine_function_verify(&function, &policy.verify));
+    function.blocks[fallthrough].instructions[0].operands[1].value.frame.displacement = 0;
+    function.blocks[fallthrough].instructions[5].operands[0].value.physical.reg.width_bits = 32U;
+    CHECK(!minic_machine_function_verify(&function, &policy.verify));
+    function.blocks[fallthrough].instructions[5].operands[0].value.physical.reg.width_bits = 1U;
+    CHECK(minic_loongarch64_target_soft_float_abi_set(&target, true));
+    function.generated_features = MINIC_LOONG_MACHINE_FEATURE_BASE;
+    /* An LP64D call's FP volatile clobbers are not physical LP64S state;
+     * the target model must refuse to launder them across ABIs. */
+    CHECK(!minic_machine_function_verify(&function, &policy.verify));
+    CHECK(minic_loongarch64_target_soft_float_abi_set(&target, false));
+    function.generated_features = MINIC_LOONG_MACHINE_FEATURE_BASE |
+        MINIC_LOONG_MACHINE_FEATURE_FP;
+    CHECK(minic_machine_function_verify(&function, &policy.verify));
+    minic_machine_function_destroy(&function);
+    return true;
+}
+
+static size_t count_pattern(const char *text, const char *pattern) {
+    size_t count = 0U;
+    const size_t length = strlen(pattern);
+    while ((text = strstr(text, pattern)) != NULL) {
+        ++count;
+        text += length;
+    }
+    return count;
+}
+
+/* This deliberately exercises physical FRAME owners, not arbitrary textual
+ * `st.d/ld.d` matches: an intervening core-volatility claim or a different
+ * register must preserve the load.  Only an actual next-block unconditional
+ * transfer may disappear from emitted GNU assembly. */
+static bool run_loong_adjacent_frame_peephole(bool distinct_register,
+    bool volatile_read, bool native_address, unsigned int address_variant,
+    bool branch_nonfallthrough) {
+    MinicTargetInfo target = {0};
+    MinicMachineGNUAsmPolicy policy = {0};
+    MinicMachineFunction function = {0};
+    MinicMachineFrameObject object = {0};
+    MinicMachineOperand operands[2];
+    size_t entry, next, gap = 0U, frame_id;
+    FILE *out = NULL;
+    char buffer[4096];
+    size_t length;
+    bool ok = false;
+    const char *stage = "initialize";
+    target.architecture = MINIC_TARGET_ARCH_LOONGARCH64;
+    target.data_layout = minic_loongarch64_linux_data_layout();
+    if (!minic_loongarch64_machine_gnu_asm_policy_initialize(&target, &policy) ||
+        !minic_machine_function_initialize(&function, &target,
+            "loong_size_peephole", MINIC_LOONG_MACHINE_FEATURE_BASE |
+                MINIC_LOONG_MACHINE_FEATURE_FP))
+        return false;
+    function.frame_alignment = 16U;
+    function.frame_size = 32U;
+    object = (MinicMachineFrameObject){.area = MINIC_MACHINE_FRAME_LOCAL,
+        .base = MINIC_MACHINE_FRAME_BASE_STACK_POINTER,
+        .size_bytes = 8U, .alignment_bytes = 8U,
+        .has_fixed_offset = true, .fixed_offset = 16};
+    stage = "block construction";
+    if (!minic_machine_function_add_frame_object(&function, &object, &frame_id) ||
+        !minic_machine_function_add_block(&function, NULL, false, &entry) ||
+        (branch_nonfallthrough &&
+            !minic_machine_function_add_block(&function, NULL, false, &gap)) ||
+        !minic_machine_function_add_block(&function, NULL, false, &next)) goto done;
+    stage = "store";
+    operands[0] = reg(12U, 64U, MINIC_MACHINE_REGISTER_READ);
+    operands[1] = native_address ?
+        address(3U, MINIC_LOONG_ADDRESS_IMM12, 16) : frame(frame_id);
+    if (!append(&function, &policy, entry,
+            native_address ? MINIC_LOONG_MACHINE_ST_D :
+                             MINIC_LOONG_MACHINE_ST_FRAME_D,
+            MINIC_MACHINE_EFFECT_MEMORY_WRITE, operands, 2U)) goto done;
+    stage = "load";
+    operands[0] = reg(distinct_register ? 13U : 12U, 64U,
+        MINIC_MACHINE_REGISTER_WRITE);
+    if (native_address && address_variant != 0U)
+        operands[1] = address(address_variant == 2U ? 4U : 3U,
+            MINIC_LOONG_ADDRESS_IMM12, address_variant == 1U ? 24 : 16);
+    if (!append(&function, &policy, entry,
+            native_address ? MINIC_LOONG_MACHINE_LD_D :
+                             MINIC_LOONG_MACHINE_LD_FRAME_D,
+            MINIC_MACHINE_EFFECT_MEMORY_READ |
+                (volatile_read ? MINIC_MACHINE_EFFECT_VOLATILE : 0U),
+            operands, 2U)) goto done;
+    stage = "branch/verify";
+    operands[0] = block(next);
+    if (!append(&function, &policy, entry, MINIC_LOONG_MACHINE_B,
+            MINIC_MACHINE_EFFECT_BRANCH, operands, 1U)) goto done;
+    stage = "successor";
+    if (!minic_machine_block_add_successor(&function, entry, next)) goto done;
+    stage = "next return";
+    if (branch_nonfallthrough &&
+        !append(&function, &policy, gap, MINIC_LOONG_MACHINE_RET,
+            MINIC_MACHINE_EFFECT_RETURN, NULL, 0U)) goto done;
+    if (!append(&function, &policy, next, MINIC_LOONG_MACHINE_RET,
+            MINIC_MACHINE_EFFECT_RETURN, NULL, 0U)) goto done;
+    stage = "verify";
+    if (!minic_machine_function_verify(&function, &policy.verify)) goto done;
+    stage = "emit";
+    out = open_test_output();
+    if (out == NULL || !minic_machine_gnu_asm_emit_body(out, &function, &policy) ||
+        fflush(out) != 0 || fseek(out, 0, SEEK_SET) != 0) goto done;
+    length = fread(buffer, 1U, sizeof(buffer) - 1U, out);
+    buffer[length] = '\0';
+    ok = count_pattern(buffer, "  st.d $t0, $sp, 16\n") == 1U &&
+        count_pattern(buffer, address_variant == 2U ? "  ld.d $t0, $a0, 16\n" :
+            address_variant == 1U ? "  ld.d $t0, $sp, 24\n" :
+            distinct_register ? "  ld.d $t1, $sp, 16\n" :
+                                "  ld.d $t0, $sp, 16\n") ==
+            ((distinct_register || volatile_read || address_variant != 0U)
+                ? 1U : 0U) &&
+        count_pattern(buffer, "  b .Lminic_mir_") ==
+            (branch_nonfallthrough ? 1U : 0U);
+    if (!ok) fprintf(stderr, "Loong size peephole emission:\n%s\n", buffer);
+done:
+    if (!ok) fprintf(stderr, "Loong size peephole failed at %s distinct=%d volatile=%d native=%d variant=%u nonfallthrough=%d\n",
+        stage, distinct_register ? 1 : 0, volatile_read ? 1 : 0,
+        native_address ? 1 : 0, address_variant,
+        branch_nonfallthrough ? 1 : 0);
+    if (out != NULL) fclose(out);
+    minic_machine_function_destroy(&function);
+    return ok;
+}
+
+int main(void) {
+    if (!run_a64() || !run_loong() ||
+        !run_loong_adjacent_frame_peephole(false, false, false, 0U, false) ||
+        !run_loong_adjacent_frame_peephole(true, false, false, 0U, false) ||
+        !run_loong_adjacent_frame_peephole(false, true, false, 0U, false) ||
+        !run_loong_adjacent_frame_peephole(false, false, true, 0U, false) ||
+        !run_loong_adjacent_frame_peephole(true, false, true, 0U, false) ||
+        !run_loong_adjacent_frame_peephole(false, true, true, 0U, false) ||
+        !run_loong_adjacent_frame_peephole(false, false, true, 1U, false) ||
+        !run_loong_adjacent_frame_peephole(false, false, true, 2U, false) ||
+        !run_loong_adjacent_frame_peephole(false, false, true, 0U, true))
+        return EXIT_FAILURE;
+    puts("AArch64+LoongArch64 physical MIR -> verify -> GNU: PASS");
+    return EXIT_SUCCESS;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/target/loong_machine_source_asm_test.c"}
+#include "target/loongarch64/machine_source_asm.h"
+#include "target/loongarch64/asm_contract.h"
+#include <stdio.h>
+#include <string.h>
+
+#define REQUIRE(value) do { if (!(value)) { \
+    fprintf(stderr, "loong source ASM test:%d failed: %s\n", \
+        __LINE__, #value); return 1; } } while (0)
+
+int main(void) {
+    MinicTargetInfo target = {0};
+    MinicMachineFunction function = {0};
+    MinicMachineInstruction asm_instruction = {0};
+    MinicMachineOperand binding = {0};
+    const char *label[] = {".Lloong_source_0"};
+    MinicMachineGNUAsmLabels labels = {label, 1U};
+    FILE *output;
+    char text[512];
+    size_t count;
+    target.architecture = MINIC_TARGET_ARCH_LOONGARCH64;
+    function.target = &target;
+    asm_instruction.kind = MINIC_MACHINE_INSTRUCTION_SOURCE_ASM;
+    asm_instruction.has_core_origin = true;
+    asm_instruction.effects = MINIC_MACHINE_EFFECT_SOURCE_ASM |
+        MINIC_MACHINE_EFFECT_VOLATILE;
+    asm_instruction.source_asm_template = "nop";
+    asm_instruction.source_asm_length = 3U;
+    REQUIRE(minic_loongarch64_machine_validate_source_asm(
+        &target, &asm_instruction, NULL));
+    asm_instruction.source_asm_template = "tlbrd; .globl injected";
+    asm_instruction.source_asm_length = strlen(asm_instruction.source_asm_template);
+    REQUIRE(!minic_loongarch64_machine_validate_source_asm(
+        &target, &asm_instruction, NULL));
+    asm_instruction.source_asm_template = "dbar 0";
+    asm_instruction.source_asm_length = 6U;
+    REQUIRE(minic_loongarch64_machine_validate_source_asm(
+        &target, &asm_instruction, NULL));
+    asm_instruction.source_asm_template = "dbar 0\n\t";
+    asm_instruction.source_asm_length = strlen(asm_instruction.source_asm_template);
+    asm_instruction.effects |= MINIC_MACHINE_EFFECT_COMPILER_BARRIER;
+    REQUIRE(minic_loongarch64_machine_validate_source_asm(
+        &target, &asm_instruction, NULL));
+    /* Actual Linux 6.6.143 BUG-table payload. The metadata and trap must
+     * be accepted together, without allowing an arbitrary ASM program. */
+    asm_instruction.effects &= ~MINIC_MACHINE_EFFECT_COMPILER_BARRIER;
+    asm_instruction.source_asm_template =
+        ".pushsection __bug_table, \"aw\"; .align 2; 10000: .long 10001f - .; "
+        ".pushsection .rodata.str, \"aMS\", @progbits, 1; 10002: .string "
+        "\"arch/loongarch/kernel/smp.c\"; .popsection; .long 10002b - .; "
+        ".short 413; .short 0; .popsection; 10001: break 1";
+    asm_instruction.source_asm_length = strlen(asm_instruction.source_asm_template);
+    REQUIRE(minic_loongarch64_machine_validate_source_asm(
+        &target, &asm_instruction, NULL));
+    asm_instruction.source_asm_template =
+        ".pushsection __bug_table, \"aw\"; .align 2; 10000: .long 10001f - .; "
+        ".pushsection .rodata.str, \"aMS\", @progbits, 1; 10002: .string "
+        "\"arch/loongarch/kernel/smp.c\"; .popsection; .long 10002b - .; "
+        ".short 413; .short 0; .popsection; 10001: break 2";
+    asm_instruction.source_asm_length = strlen(asm_instruction.source_asm_template);
+    REQUIRE(!minic_loongarch64_machine_validate_source_asm(
+        &target, &asm_instruction, NULL));
+    asm_instruction.source_asm_template = "dbar 0; evil";
+    asm_instruction.source_asm_length = strlen(asm_instruction.source_asm_template);
+    REQUIRE(!minic_loongarch64_machine_validate_source_asm(
+        &target, &asm_instruction, NULL));
+    /* Original Linux RAID6 has separate, operand-free volatile vector ASM
+     * that preserves the architectural $vr/$xr register file. Admission
+     * must use the exact original LSX/LASX grammar, not arbitrary source. */
+    asm_instruction.source_asm_template = "vori.b $vr4, $vr0, 0";
+    asm_instruction.source_asm_length = strlen(asm_instruction.source_asm_template);
+    REQUIRE(minic_loongarch64_machine_validate_source_asm(
+        &target, &asm_instruction, NULL));
+    asm_instruction.source_asm_template = "vxor.v $vr4, $vr4, $vr8";
+    asm_instruction.source_asm_length = strlen(asm_instruction.source_asm_template);
+    REQUIRE(minic_loongarch64_machine_validate_source_asm(
+        &target, &asm_instruction, NULL));
+    output = tmpfile();
+    REQUIRE(output != NULL);
+    REQUIRE(minic_loongarch64_machine_emit_source_asm(
+        output, &function, &asm_instruction, &labels, NULL));
+    REQUIRE(fseek(output, 0, SEEK_SET) == 0);
+    count = fread(text, 1U, sizeof(text) - 1U, output);
+    REQUIRE(fclose(output) == 0);
+    text[count] = '\0';
+    REQUIRE(strstr(text, "vxor.v $vr4, $vr4, $vr8") != NULL);
+    asm_instruction.source_asm_template = "xvxor.v $xr4, $xr4, $xr8";
+    asm_instruction.source_asm_length = strlen(asm_instruction.source_asm_template);
+    REQUIRE(minic_loongarch64_machine_validate_source_asm(
+        &target, &asm_instruction, NULL));
+    asm_instruction.effects |= MINIC_MACHINE_EFFECT_COMPILER_BARRIER;
+    REQUIRE(!minic_loongarch64_machine_validate_source_asm(
+        &target, &asm_instruction, NULL));
+    asm_instruction.effects &= ~MINIC_MACHINE_EFFECT_COMPILER_BARRIER;
+    asm_instruction.source_asm_template = "vxor.v $vr4, $vr4, $vr33";
+    asm_instruction.source_asm_length = strlen(asm_instruction.source_asm_template);
+    REQUIRE(!minic_loongarch64_machine_validate_source_asm(
+        &target, &asm_instruction, NULL));
+    asm_instruction.source_asm_template = "vxor.v $vr4, $vr4, $vr8; .globl injected";
+    asm_instruction.source_asm_length = strlen(asm_instruction.source_asm_template);
+    REQUIRE(!minic_loongarch64_machine_validate_source_asm(
+        &target, &asm_instruction, NULL));
+    asm_instruction.source_asm_template = "vunknown.v $vr4, $vr4, $vr8";
+    asm_instruction.source_asm_length = strlen(asm_instruction.source_asm_template);
+    REQUIRE(!minic_loongarch64_machine_validate_source_asm(
+        &target, &asm_instruction, NULL));
+    asm_instruction.source_asm_template = "vxor.v $vr4, %0, $vr8";
+    asm_instruction.source_asm_length = strlen(asm_instruction.source_asm_template);
+    REQUIRE(!minic_loongarch64_machine_validate_source_asm(
+        &target, &asm_instruction, NULL));
+    asm_instruction.source_asm_template = "dbar %0";
+    asm_instruction.source_asm_length = 7U;
+    asm_instruction.source_asm_machine_form_id =
+        MINIC_LOONG_MACHINE_ASM_HINT_DBAR;
+    asm_instruction.source_asm_machine_form_variant = 1U;
+    asm_instruction.operands = &binding;
+    asm_instruction.operand_count = 1U;
+    binding.kind = MINIC_MACHINE_OPERAND_INTEGER;
+    binding.value.integer = 0x700;
+    binding.asm_constraint = "I";
+    REQUIRE(minic_loongarch64_machine_validate_source_asm(
+        &target, &asm_instruction, NULL));
+    output = tmpfile();
+    REQUIRE(output != NULL);
+    REQUIRE(minic_loongarch64_machine_emit_source_asm(
+        output, &function, &asm_instruction, &labels, NULL));
+    REQUIRE(fseek(output, 0, SEEK_SET) == 0);
+    count = fread(text, 1U, sizeof(text) - 1U, output);
+    REQUIRE(fclose(output) == 0);
+    text[count] = '\0';
+    REQUIRE(strstr(text, "dbar 1792") != NULL);
+    binding.value.integer = 2048;
+    REQUIRE(!minic_loongarch64_machine_validate_source_asm(
+        &target, &asm_instruction, NULL));
+    binding.value.integer = 1792;
+    asm_instruction.source_asm_template = "dbar %0; evil";
+    asm_instruction.source_asm_length = strlen(asm_instruction.source_asm_template);
+    REQUIRE(!minic_loongarch64_machine_validate_source_asm(
+        &target, &asm_instruction, NULL));
+    asm_instruction.source_asm_template = "dbar %0";
+    asm_instruction.source_asm_length = 7U;
+    asm_instruction.source_asm_machine_form_variant = 2U;
+    REQUIRE(!minic_loongarch64_machine_validate_source_asm(
+        &target, &asm_instruction, NULL));
+    asm_instruction.source_asm_machine_form_id = 20U;
+    asm_instruction.source_asm_machine_form_variant = 1U;
+    REQUIRE(!minic_loongarch64_machine_validate_source_asm(
+        &target, &asm_instruction, NULL));
+    /* +ZB on a sealed per-CPU AMO names only a register base. A generic
+     * offset-bearing memory print would emit a fourth bogus ASM operand. */
+    {
+        MinicMachineOperand amo[3] = {{0}};
+        asm_instruction.source_asm_template =
+            "amadd.d %[ret], %[val], %[ptr]";
+        asm_instruction.source_asm_length =
+            strlen(asm_instruction.source_asm_template);
+        asm_instruction.source_asm_machine_form_id =
+            MINIC_LOONG_MACHINE_ASM_PERCPU_AMO;
+        asm_instruction.source_asm_machine_form_variant = 2U;
+        asm_instruction.effects = MINIC_MACHINE_EFFECT_SOURCE_ASM |
+            MINIC_MACHINE_EFFECT_VOLATILE |
+            MINIC_MACHINE_EFFECT_MEMORY_READ |
+            MINIC_MACHINE_EFFECT_MEMORY_WRITE;
+        asm_instruction.operands = amo;
+        asm_instruction.operand_count = 3U;
+        amo[0].kind = MINIC_MACHINE_OPERAND_REGISTER;
+        amo[0].asm_name = "ret";
+        amo[0].asm_constraint = "=&r";
+        amo[0].value.physical.reg.bank = MINIC_MACHINE_REGISTER_GENERAL;
+        amo[0].value.physical.reg.number = 14U;
+        amo[0].value.physical.reg.width_bits = 64U;
+        amo[0].value.physical.access = MINIC_MACHINE_REGISTER_WRITE;
+        amo[1].kind = MINIC_MACHINE_OPERAND_ADDRESS;
+        amo[1].asm_name = "ptr";
+        amo[1].asm_constraint = "+ZB";
+        amo[1].value.address.target_mode = 1U;
+        amo[1].value.address.has_base = true;
+        amo[1].value.address.base.bank = MINIC_MACHINE_REGISTER_GENERAL;
+        amo[1].value.address.base.number = 13U;
+        amo[1].value.address.base.width_bits = 64U;
+        amo[1].value.address.scale = 1U;
+        amo[2].kind = MINIC_MACHINE_OPERAND_REGISTER;
+        amo[2].asm_name = "val";
+        amo[2].asm_constraint = "r";
+        amo[2].value.physical.reg.bank = MINIC_MACHINE_REGISTER_GENERAL;
+        amo[2].value.physical.reg.number = 12U;
+        amo[2].value.physical.reg.width_bits = 64U;
+        amo[2].value.physical.access = MINIC_MACHINE_REGISTER_READ;
+        REQUIRE(minic_loongarch64_machine_validate_source_asm(
+            &target, &asm_instruction, NULL));
+        output = tmpfile();
+        REQUIRE(output != NULL);
+        REQUIRE(minic_loongarch64_machine_emit_source_asm(
+            output, &function, &asm_instruction, &labels, NULL));
+        REQUIRE(fseek(output, 0, SEEK_SET) == 0);
+        count = fread(text, 1U, sizeof(text) - 1U, output);
+        REQUIRE(fclose(output) == 0);
+        text[count] = '\0';
+        REQUIRE(strstr(text, "amadd.d $t2, $t0, $t1\n") != NULL);
+        amo[1].value.address.displacement = 8;
+        REQUIRE(!minic_loongarch64_machine_validate_source_asm(
+            &target, &asm_instruction, NULL));
+        amo[1].value.address.displacement = 0;
+        amo[1].asm_constraint = "+m";
+        REQUIRE(!minic_loongarch64_machine_validate_source_asm(
+            &target, &asm_instruction, NULL));
+        amo[1].asm_constraint = "+ZB";
+        asm_instruction.source_asm_template =
+            "amadd.d %[ret], %[val], %[ptr]; syscall 0";
+        asm_instruction.source_asm_length =
+            strlen(asm_instruction.source_asm_template);
+        REQUIRE(!minic_loongarch64_machine_validate_source_asm(
+            &target, &asm_instruction, NULL));
+    }
+    {
+        MinicMachineInstruction fpr = {0};
+        MinicMachineOperand gp = {0};
+        MinicMachineRegisterEffect fixed = {0};
+        fpr.kind = MINIC_MACHINE_INSTRUCTION_SOURCE_ASM;
+        fpr.effects = MINIC_MACHINE_EFFECT_SOURCE_ASM |
+                      MINIC_MACHINE_EFFECT_VOLATILE;
+        fpr.source_asm_machine_form_id = 6U;
+        fpr.source_asm_template = "movfr2gr.d %0, $f0";
+        fpr.source_asm_length = strlen(fpr.source_asm_template);
+        fpr.operands = &gp;
+        fpr.operand_count = 1U;
+        fpr.implicit = &fixed;
+        fpr.implicit_count = 1U;
+        gp.kind = MINIC_MACHINE_OPERAND_REGISTER;
+        gp.asm_constraint = "=r";
+        gp.value.physical.reg.bank = MINIC_MACHINE_REGISTER_GENERAL;
+        gp.value.physical.reg.number = 12U;
+        gp.value.physical.reg.width_bits = 64U;
+        gp.value.physical.access = MINIC_MACHINE_REGISTER_WRITE;
+        fixed.reg.bank = MINIC_MACHINE_REGISTER_FLOAT;
+        fixed.reg.number = 0U;
+        fixed.reg.width_bits = 64U;
+        fixed.access = MINIC_MACHINE_REGISTER_READ;
+        REQUIRE(minic_loongarch64_machine_validate_source_asm(
+            &target, &fpr, NULL));
+        fixed.reg.number = 1U;
+        REQUIRE(!minic_loongarch64_machine_validate_source_asm(
+            &target, &fpr, NULL));
+        fixed.reg.number = 0U;
+        fixed.access = MINIC_MACHINE_REGISTER_WRITE;
+        REQUIRE(!minic_loongarch64_machine_validate_source_asm(
+            &target, &fpr, NULL));
+        fpr.implicit_count = 0U;
+        REQUIRE(!minic_loongarch64_machine_validate_source_asm(
+            &target, &fpr, NULL));
+    }
+    puts("LOONG_MACHINE_SOURCE_ASM=PASS exact_form=1 linux_bug_table=1 typed_constraint=1 substituted_gnu=1 forge_rejection=1 amo_zb_base=1 fpr_implicit=1");
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/target/loongarch64/dbar_machine_immediate.c"}
+/* The GNU `I` operand is sealed at the source boundary and becomes a typed
+ * MachineIR immediate. It is not interpreted as an arbitrary ASM string. */
+void minic_loong_dbar_18(void) {
+    __asm__ __volatile__("dbar %0 " : : "I"(0x12) : "memory");
+}
+
+void minic_loong_dbar_1792(void) {
+    __asm__ __volatile__("dbar %0" : : "I"(0x700) : "memory");
+}
+
+#if defined(MINIC_BAD_DBAR_SUFFIX)
+int main(void) {
+    __asm__ __volatile__("dbar %0; syscall" : : "I"(18) : "memory");
+    return 0;
+}
+#elif defined(MINIC_BAD_DBAR_CONSTRAINT)
+int main(void) {
+    __asm__ __volatile__("dbar %0" : : "r"(18) : "memory");
+    return 0;
+}
+#elif defined(MINIC_BAD_DBAR_DYNAMIC)
+int main(int value) {
+    __asm__ __volatile__("dbar %0" : : "I"(value) : "memory");
+    return 0;
+}
+#endif
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/target/loongarch64/int128_pair_legacy_unsupported.c"}
+/* This old unsupported Core shape must remain a hard diagnostic. Neither
+ * the legacy emitter nor typed Loong MIR supports 128x128 multiplication. */
+unsigned __int128 loong_u128_unsupported_multiply(
+    unsigned __int128 left, unsigned __int128 right) {
+    return left * right;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/target/loongarch64/int128_pair_semantics.c"}
+/* Production .i -> .s LoongArch64 typed-MIR parity for the old TI family.
+ * Exercise wide value ingress/egress, unaligned memory, carry and borrow,
+ * signed and unsigned comparisons, zero, unary and both shift directions.
+ * The shift boundary is a runtime input: both limb paths must be present. */
+typedef unsigned __int128 LoongU128;
+typedef signed __int128 LoongI128;
+
+LoongU128 loong_u128_pair_arithmetic(LoongU128 left, LoongU128 right,
+    unsigned int amount) {
+    volatile LoongU128 original = left;
+    LoongU128 value = (original + right) - left;
+    value = (value & right) ^ (left | right);
+    value = ~value;
+    value = -value;
+    value = (value << amount) | (value >> amount);
+    return value;
+}
+
+int loong_u128_pair_compare(LoongU128 left, LoongU128 right) {
+    return (left < right) + 2 * (left == right) + 4 * (left == 0);
+}
+
+LoongI128 loong_i128_arithmetic_shift(LoongI128 value,
+    unsigned int amount) {
+    return value >> amount;
+}
+
+int loong_i128_signed_less(LoongI128 left, LoongI128 right) {
+    return left < right;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/target/loongarch64/nospec_structured_mir.c"}
+/* Exact Linux array_index_mask_nospec source-owned two-opcode template. */
+unsigned long loong_nospec_mir(unsigned long index, unsigned long size) {
+    unsigned long mask;
+    __asm__ __volatile__(
+        "sltu\t%0, %1, %2\n\t"
+        "sub.d\t%0, $zero, %0\n\t"
+        : "=r"(mask) : "r"(index), "r"(size) :);
+    return mask;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/target/loongarch64/opaque_bugtable_negative.c"}
+/* Each -D case breaks one sealed Linux __bug_table grammar property.
+ * The source is intentionally not a valid qualified opaque ASM operation. */
+void loong_opaque_bugtable_bad(void) {
+#if defined(MINIC_BAD_BUG_PATH)
+    __asm__ __volatile__(
+        ".pushsection __bug_table, \"aw\"; .align 2; 10000: .long 10001f - .; "
+        ".pushsection .rodata.str, \"aMS\", @progbits, 1; 10002: .string "
+        "\"arch/loongarch/kernel/smp.c; break 0\"; .popsection; "
+        ".long 10002b - .; .short 413; .short 0; .popsection; "
+        "10001: break 1");
+#elif defined(MINIC_BAD_BUG_LABEL)
+    __asm__ __volatile__(
+        ".pushsection __bug_table, \"aw\"; .align 2; 10003: .long 10001f - .; "
+        ".pushsection .rodata.str, \"aMS\", @progbits, 1; 10002: .string "
+        "\"arch/loongarch/kernel/smp.c\"; .popsection; "
+        ".long 10002b - .; .short 413; .short 0; .popsection; "
+        "10001: break 1");
+#else
+    __asm__ __volatile__(
+        ".pushsection __bug_table, \"aw\"; .align 2; 10000: .long 10001f - .; "
+        ".pushsection .rodata.str, \"aMS\", @progbits, 1; 10002: .string "
+        "\"arch/loongarch/kernel/smp.c\"; .popsection; "
+        ".long 10002b - .; .short 413; .short 0; .popsection; "
+        "10001: break 1; dbar 1");
+#endif
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/target/loongarch64/opaque_source_isa_family.c"}
+/* Original LoongArch Linux zero-operand source-ASM forms. In MachineIR they
+ * must retain the source-owned template, exact volatile/barrier effect and
+ * qualified native opcode; no generic multi-instruction ASM is admitted. */
+void loong_opaque_idle(void) { __asm__ __volatile__("idle 0"); }
+void loong_opaque_tlbrd(void) { __asm__ __volatile__("tlbrd"); }
+void loong_opaque_tlbclr(void) { __asm__ __volatile__("tlbclr"); }
+void loong_opaque_tlbflush(void) { __asm__ __volatile__("tlbflush"); }
+void loong_opaque_tlbsrch(void) { __asm__ __volatile__("tlbsrch"); }
+void loong_opaque_tlbwr(void) { __asm__ __volatile__("tlbwr"); }
+void loong_opaque_tlbfill(void) { __asm__ __volatile__("tlbfill"); }
+void loong_opaque_barrier(void) {
+    __asm__ __volatile__("dbar 0" ::: "memory");
+    __asm__ __volatile__("dbar 0x700" ::: "memory");
+    __asm__ __volatile__("dbar 0\n\t" ::: "memory");
+    __asm__ __volatile__("\tibar 0\n");
+    __asm__ __volatile__("ibar 0 \t\ndbar 0 \t\n" ::: "memory");
+}
+void loong_opaque_hotplug(void) {
+    __asm__ __volatile__("nop\n\t");
+    __asm__ __volatile__("idle 0\n\t");
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/target/loongarch64/opaque_source_isa_negative.c"}
+/* The legacy qualified-ASM contract rejects this unsealed two-instruction
+ * payload. Typed MachineIR must reject it and leave no partial .s. */
+void loong_opaque_unqualified_program(void) {
+    __asm__ __volatile__("idle 1; break 0");
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/target/loongarch64/percpu_structured_source.c"}
+/* Original Linux LoongArch hardware-source family through production MIR.
+ * The kernel owns r21 and its privileged context; this fixture is compiled
+ * to GNU ASM only, never executed in user mode. */
+struct __attribute__((packed)) PerCpuPackedResult {
+    unsigned char prefix;
+    unsigned long old;
+};
+
+unsigned long percpu_read_b(void *p) {
+    unsigned long old;
+    __asm__ __volatile__("ldx.b %[ret], $r21, %[ptr]"
+        : [ret] "=&r"(old) : [ptr] "r"(p) : "memory");
+    return old;
+}
+unsigned long percpu_read_h(void *p) {
+    unsigned long old;
+    __asm__ __volatile__("ldx.h %[ret], $r21, %[ptr]"
+        : [ret] "=&r"(old) : [ptr] "r"(p) : "memory");
+    return old;
+}
+unsigned long percpu_read_w(void *p) {
+    unsigned long old;
+    __asm__ __volatile__("ldx.w %[ret], $r21, %[ptr]"
+        : [ret] "=&r"(old) : [ptr] "r"(p) : "memory");
+    return old;
+}
+unsigned long percpu_read_d(void *p) {
+    unsigned long old;
+    __asm__ __volatile__("ldx.d %[ret], $r21, %[ptr]"
+        : [ret] "=&r"(old) : [ptr] "r"(p) : "memory");
+    return old;
+}
+
+void percpu_write_b(void *p, unsigned long v) {
+    __asm__ __volatile__("stx.b %[val], $r21, %[ptr]" : :
+        [val] "r"(v), [ptr] "r"(p) : "memory");
+}
+void percpu_write_h(void *p, unsigned long v) {
+    __asm__ __volatile__("stx.h %[val], $r21, %[ptr]" : :
+        [val] "r"(v), [ptr] "r"(p) : "memory");
+}
+void percpu_write_w(void *p, unsigned long v) {
+    __asm__ __volatile__("stx.w %[val], $r21, %[ptr]" : :
+        [val] "r"(v), [ptr] "r"(p) : "memory");
+}
+void percpu_write_d(void *p, unsigned long v) {
+    __asm__ __volatile__("stx.d %[val], $r21, %[ptr]" : :
+        [val] "r"(v), [ptr] "r"(p) : "memory");
+}
+
+unsigned long percpu_amo_add_w(unsigned int *p, unsigned long v) {
+    unsigned long old;
+    __asm__ __volatile__("amadd.w %[ret], %[val], %[ptr]"
+        : [ret] "=&r"(old), [ptr] "+ZB"(*p) : [val] "r"(v));
+    return old;
+}
+unsigned long percpu_amo_add_d(unsigned long *p, unsigned long v) {
+    unsigned long old;
+    __asm__ __volatile__("amadd.d %[ret], %[val], %[ptr]"
+        : [ret] "=&r"(old), [ptr] "+ZB"(*p) : [val] "r"(v));
+    return old;
+}
+unsigned long percpu_amo_and_w(unsigned int *p, unsigned long v) {
+    unsigned long old;
+    __asm__ __volatile__("amand.w %[ret], %[val], %[ptr]"
+        : [ret] "=&r"(old), [ptr] "+ZB"(*p) : [val] "r"(v));
+    return old;
+}
+unsigned long percpu_amo_and_d(unsigned long *p, unsigned long v) {
+    unsigned long old;
+    __asm__ __volatile__("amand.d %[ret], %[val], %[ptr]"
+        : [ret] "=&r"(old), [ptr] "+ZB"(*p) : [val] "r"(v));
+    return old;
+}
+unsigned long percpu_amo_or_w(unsigned int *p, unsigned long v) {
+    unsigned long old;
+    __asm__ __volatile__("amor.w %[ret], %[val], %[ptr]"
+        : [ret] "=&r"(old), [ptr] "+ZB"(*p) : [val] "r"(v));
+    return old;
+}
+unsigned long percpu_amo_or_d(unsigned long *p, unsigned long v) {
+    unsigned long old;
+    __asm__ __volatile__("amor.d %[ret], %[val], %[ptr]"
+        : [ret] "=&r"(old), [ptr] "+ZB"(*p) : [val] "r"(v));
+    return old;
+}
+
+void percpu_reset_fcsr(void) {
+    __asm__ __volatile__("movgr2fcsr $fcsr0, %0" : : "r"(0));
+}
+
+void percpu_packed_read(struct PerCpuPackedResult *result, void *p) {
+    __asm__ __volatile__("ldx.d %[ret], $r21, %[ptr]"
+        : [ret] "=&r"(result->old) : [ptr] "r"(p) : "memory");
+}
+void percpu_packed_amo(struct PerCpuPackedResult *result,
+    unsigned long *p, unsigned long v) {
+    __asm__ __volatile__("amadd.d %[ret], %[val], %[ptr]"
+        : [ret] "=&r"(result->old), [ptr] "+ZB"(*p) : [val] "r"(v));
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/target/loongarch64/record_copy_aux_layout.c"}
+/* Typed LoongArch64 MachineIR: an outlined record copy must not move the
+ * following dynamic-allocation / unsigned FP conversion machine CFG away
+ * from its physical fallthrough blocks. Both functions are production
+ * compiler fixtures, not snippets of target assembly. */
+struct LoongFortyBytes {
+    unsigned char bytes[40];
+};
+
+void loong_record_copy_before_alloc(struct LoongFortyBytes *destination,
+    const struct LoongFortyBytes *source, unsigned long size) {
+    *destination = *source;
+    volatile unsigned char *temporary =
+        (volatile unsigned char *)__builtin_alloca((size & 31UL) + 32UL);
+    temporary[0] = destination->bytes[0];
+    destination->bytes[1] = temporary[0];
+}
+
+unsigned long loong_record_copy_before_float_conversion(
+    struct LoongFortyBytes *destination,
+    const struct LoongFortyBytes *source, double value) {
+    *destination = *source;
+    return (unsigned long)value;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/target/loongarch64/test_tempfile.h"}
+#ifndef MINIC_LOONG_TEST_TEMPFILE_H
+#define MINIC_LOONG_TEST_TEMPFILE_H
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+
+/* glibc tmpfile() uses /tmp even when TMPDIR designates a task-owned
+ * workspace. Preserve seekable read/write stream tests without depending
+ * on another task's temporary filesystem capacity. */
+static inline FILE *loong_test_tempfile(void) {
+    const char *directory = getenv("TMPDIR");
+    char path[1024];
+    int fd, length;
+    FILE *stream;
+    if (directory == NULL || directory[0] == '\0') return tmpfile();
+    length = snprintf(path, sizeof(path), "%s/minic-loong-XXXXXX", directory);
+    if (length < 0 || (size_t)length >= sizeof(path)) return NULL;
+    fd = mkstemp(path);
+    if (fd < 0) return NULL;
+    (void)unlink(path);
+    stream = fdopen(fd, "w+");
+    if (stream == NULL) (void)close(fd);
+    return stream;
+}
+
+#endif
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/target/p45_machine_form_boundary_test.c"}
+#define _POSIX_C_SOURCE 200809L
+/* P45: a GNU C source form is not itself permission to emit an opcode.
+ * SourceBackend proves the GNU operand/effect contract, Core transports
+ * machine form + variant, and the ISA backend checks the form again.
+ * A manufactured Core ID, mismatched variant, wrong owner or corrupt Core
+ * type must fail without writing even a partial assembly instruction.
+ *
+ * This is a host unit test: compile with the MiniC object set, omitting the
+ * minic-cc CLI main (the existing LOONG_TYPED_DESCRIPTOR_TEST_OBJECTS set).
+ */
+#include "core/core_ir.h"
+#include "frontend/ast.h"
+#include "frontend/type.h"
+#include "target/backend_source.h"
+#include "target/aarch64/asm_contract.h"
+#include "target/aarch64/asm_contract_internal.h"
+#include "aarch64/typed_source_asm_probe.h"
+#include "target/x86_64/asm_contract.h"
+#include "x86_64/typed_source_asm_probe.h"
+
+#ifdef NDEBUG
+#undef NDEBUG
+#endif
+#include <assert.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+typedef enum ProbeArch { PROBE_X86, PROBE_A64 } ProbeArch;
+
+static bool register_integer(MinicCoreTypeContext *types, size_t bytes,
+                             MinicCoreTypeId *id) {
+    MinicCoreType type = {0};
+    type.kind = MINIC_CORE_TYPE_INTEGER;
+    type.has_layout = true;
+    type.size = bytes;
+    type.alignment = bytes;
+    type.value.integer.bit_width = (unsigned int)(bytes * 8U);
+    type.value.integer.is_signed = false;
+    return minic_core_type_register(types, &type, id);
+}
+
+static bool register_pointer(MinicCoreTypeContext *types,
+                             MinicCoreTypeId pointee, MinicCoreTypeId *id) {
+    MinicCoreType type = {0};
+    type.kind = MINIC_CORE_TYPE_POINTER;
+    type.has_layout = true;
+    type.size = 8U;
+    type.alignment = 8U;
+    type.value.pointer.pointee = pointee;
+    return minic_core_type_register(types, &type, id);
+}
+
+static void source_operand(MinicInlineAsmOperand *op, const char *constraint,
+                           MinicExpressionId expression,
+                           MinicInlineAsmOperandAccess access) {
+    memset(op, 0, sizeof(*op));
+    op->constraint_text = (char *)constraint;
+    op->constraint_length = strlen(constraint);
+    op->expression = expression;
+    op->access = access;
+}
+
+/* Exercise actual source registration, including C lvalue/rank checks,
+ * instead of manufacturing a correct machine ID inside this test. */
+static MinicTargetInlineAsmContract source_qualify(ProbeArch arch) {
+    const MinicTargetArchitecture architecture = arch == PROBE_X86
+        ? MINIC_TARGET_ARCH_X86_64 : MINIC_TARGET_ARCH_AARCH64;
+    MinicTargetInvocation invocation;
+    MinicC0Program program = {0};
+    MinicExpression expressions[2] = {{0}, {0}};
+    MinicInlineAsm asm_source = {0};
+    MinicInlineAsmOperand output = {0}, input = {0};
+    MinicTargetInlineAsmContract contract = {0};
+    const MinicSourceBackend *backend;
+    const char *template_text = arch == PROBE_X86
+        ? "lfence" : "ldar %w0, %1";
+
+    assert(minic_target_invocation_begin(
+        &invocation, minic_target_info_for_architecture(architecture)));
+    backend = minic_source_backend_for_target(&invocation.machine);
+    assert(backend != NULL);
+    asm_source.template_text = (char *)template_text;
+    asm_source.template_length = strlen(template_text);
+    asm_source.is_volatile = true;
+    asm_source.clobber_count = 1U;
+    asm_source.has_memory_clobber = true;
+    if (arch == PROBE_A64) {
+        program.expressions = expressions;
+        program.expression_count = 2U;
+        expressions[0].type = minic_type_unsigned_int();
+        expressions[0].value_category = MINIC_VALUE_LVALUE;
+        expressions[1].type = minic_type_unsigned_int();
+        expressions[1].value_category = MINIC_VALUE_LVALUE;
+        source_operand(&output, "=r", 0U,
+                       MINIC_INLINE_ASM_OPERAND_WRITE_ONLY);
+        source_operand(&input, "Q", 1U,
+                       MINIC_INLINE_ASM_OPERAND_READ_ONLY);
+        asm_source.outputs = &output;
+        asm_source.output_count = 1U;
+        asm_source.inputs = &input;
+        asm_source.input_count = 1U;
+    }
+    assert(minic_source_backend_qualify_inline_asm(
+        backend, &invocation, &program, &asm_source, &contract));
+    assert(minic_source_backend_seal_normalized_inline_asm(
+        backend, &invocation, &program, &asm_source,
+        template_text, strlen(template_text), &contract));
+    assert(contract.owner == MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED);
+    assert(contract.target_machine_form_id == (arch == PROBE_X86
+        ? MINIC_X86_MACHINE_ASM_ZERO_BARRIER : AARCH64_MACHINE_ASM_LDAR));
+    assert(contract.target_machine_form_variant ==
+           (arch == PROBE_X86 ? 3U : 4U));
+    assert(contract.operand_count == (arch == PROBE_X86 ? 0U : 2U));
+    return contract;
+}
+
+static bool emit_one(ProbeArch arch, const MinicCoreFunction *function,
+                     const MinicCoreInstruction *instruction,
+                     char *output, size_t capacity) {
+    FILE *stream;
+    char *buffer = NULL;
+    size_t length = 0U;
+    bool result;
+    assert(output != NULL && capacity > 1U);
+    stream = open_memstream(&buffer, &length);
+    assert(stream != NULL);
+    output[0] = '\0';
+    result = arch == PROBE_A64
+        ? minic_test_aarch64_typed_source_asm_emit(stream, function,
+            instruction)
+        : minic_test_x86_typed_source_asm_emit(stream, function,
+            instruction);
+    assert(fflush(stream) == 0 && length < capacity);
+    memcpy(output, buffer, length);
+    output[length] = '\0';
+    assert(fclose(stream) == 0);
+    free(buffer);
+    return result;
+}
+
+static void must_reject(ProbeArch arch, const char *reason,
+                        const MinicCoreFunction *fn,
+                        const MinicCoreInstruction *ins) {
+    char output[2048];
+    if (emit_one(arch, fn, ins, output, sizeof(output))) {
+        fprintf(stderr, "P45 BAD MACHINE ADMISSION arch=%s poison=%s asm=%s\n",
+                arch == PROBE_X86 ? "x86_64" : "aarch64", reason, output);
+        assert(0 && "manufactured Core machine form must be rejected");
+    }
+    assert(output[0] == '\0');
+}
+
+static void check_machine_boundary(ProbeArch arch) {
+    MinicTargetInlineAsmContract proof = source_qualify(arch);
+    MinicCoreTypeContext types;
+    MinicCoreType none = {0};
+    MinicCoreTypeId void_id, u32, u64, ptr_u32, ptr_u64;
+    MinicCoreValue values[2] = {{0}, {0}};
+    MinicCoreFunction function = {0};
+    MinicCoreInlineAsm form = {0};
+    MinicCoreInstruction ins = {0};
+    char positive[2048], repeated[2048];
+    const char *const text = arch == PROBE_X86
+        ? "lfence" : "ldar %w0, %1";
+
+    minic_core_type_context_initialize(&types);
+    none.kind = MINIC_CORE_TYPE_VOID;
+    assert(minic_core_type_register(&types, &none, &void_id));
+    assert(register_integer(&types, 4U, &u32));
+    assert(register_integer(&types, 8U, &u64));
+    assert(register_pointer(&types, u32, &ptr_u32));
+    assert(register_pointer(&types, u64, &ptr_u64));
+    function.core_function_type_id = MINIC_CORE_TYPE_INVALID;
+    assert(minic_core_function_define_signature(&function, &types,
+        void_id, NULL, 0U, MINIC_CALLING_CONVENTION_DEFAULT, false));
+    function.type_context = &types;
+    function.values = values;
+    function.value_count = 2U;
+    function.inline_asms = &form;
+    function.inline_asm_count = 1U;
+    values[0].core_type_id = ptr_u32;
+    values[1].core_type_id = ptr_u32;
+    form.template_text = (char *)text;
+    form.template_length = strlen(text);
+    form.is_volatile = true;
+    form.has_memory_clobber = true;
+    form.source_asm_unique_id = 45U;
+    form.goto_target = MINIC_CORE_BLOCK_INVALID;
+    form.goto_second_target = MINIC_CORE_BLOCK_INVALID;
+    form.operand_plan_owner = proof.owner;
+    form.target_machine_form_id = proof.target_machine_form_id;
+    form.target_machine_form_variant = proof.target_machine_form_variant;
+    ins.kind = MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM;
+    ins.core_type_id = void_id;
+    ins.result = MINIC_CORE_VALUE_INVALID;
+    ins.value.structured_inline_asm.inline_asm_id = 0U;
+    ins.value.structured_inline_asm.operand_count = proof.operand_count;
+    if (arch == PROBE_A64) {
+        ins.value.structured_inline_asm.operands[0].operand_index = 0U;
+        ins.value.structured_inline_asm.operands[0].kind = proof.kinds[0];
+        ins.value.structured_inline_asm.operands[0].value = 0U;
+        ins.value.structured_inline_asm.operands[1].operand_index = 1U;
+        ins.value.structured_inline_asm.operands[1].kind = proof.kinds[1];
+        ins.value.structured_inline_asm.operands[1].value = 1U;
+    }
+    if (!emit_one(arch, &function, &ins, positive, sizeof(positive))) {
+        fprintf(stderr, "P45 TYPED MACHINE REJECTED arch=%s asm=%s\n",
+                arch == PROBE_X86 ? "x86_64" : "aarch64", positive);
+        assert(0 && "source-sealed typed machine form must emit");
+    }
+    assert(strstr(positive, arch == PROBE_X86
+        ? "  lfence\n" : "  ldar w9, [x10]\n") != NULL);
+    assert(emit_one(arch, &function, &ins, repeated, sizeof(repeated)));
+    assert(strcmp(positive, repeated) == 0);
+
+    /* The machine emitter cannot trust a fabricated Core proof. */
+    ++form.target_machine_form_variant;
+    must_reject(arch, "variant", &function, &ins);
+    --form.target_machine_form_variant;
+    form.target_machine_form_id = UINT32_MAX;
+    must_reject(arch, "id", &function, &ins);
+    form.target_machine_form_id = proof.target_machine_form_id;
+    form.operand_plan_owner = MINIC_ASM_OPERAND_PLAN_GENERIC_STRUCTURED;
+    must_reject(arch, "owner", &function, &ins);
+    form.operand_plan_owner = MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED;
+    form.template_text = arch == PROBE_X86 ? "mfence" : "stlr %w1, %0";
+    form.template_length = strlen(form.template_text);
+    must_reject(arch, "template", &function, &ins);
+    form.template_text = (char *)text;
+    form.template_length = strlen(text);
+
+    if (arch == PROBE_X86) {
+        /* A valid x86 target-only memory-fence template is not generic
+         * structured ASM. Neither a source-owned claim without a machine
+         * identity nor an invented generic claim may bypass the ID seal. */
+        form.target_machine_form_id = 0U;
+        form.target_machine_form_variant = 0U;
+        must_reject(arch, "target_only_id0", &function, &ins);
+        form.operand_plan_owner = MINIC_ASM_OPERAND_PLAN_GENERIC_STRUCTURED;
+        must_reject(arch, "generic_target_only_id0", &function, &ins);
+        form.operand_plan_owner = MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED;
+        form.target_machine_form_id = proof.target_machine_form_id;
+        form.target_machine_form_variant = proof.target_machine_form_variant;
+    }
+    if (arch == PROBE_A64) {
+        values[1].core_type_id = ptr_u64;
+        must_reject(arch, "core_pointee", &function, &ins);
+        values[1].core_type_id = ptr_u32;
+        ins.value.structured_inline_asm.operands[1].value = 10U;
+        must_reject(arch, "ssa_id", &function, &ins);
+        ins.value.structured_inline_asm.operands[1].value = 1U;
+
+        /* RBIT is a valid, target-qualified GNU arm64 operation, but it
+         * is NOT a generic structured ASM permission. The pre-P45 raw
+         * template dispatcher would wrongly accept this exact machine
+         * text with either source-qualified or generic ownership AND ID0.
+         * Both forged identity cases must now fail before any output. */
+        form.template_text = "rbit %w0, %w1";
+        form.template_length = strlen(form.template_text);
+        form.has_memory_clobber = false;
+        form.target_machine_form_id = 0U;
+        form.target_machine_form_variant = 0U;
+        values[1].core_type_id = u32;
+        ins.value.structured_inline_asm.operands[1].kind =
+            MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+        form.operand_plan_owner = MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED;
+        must_reject(arch, "target_only_id0", &function, &ins);
+        form.operand_plan_owner = MINIC_ASM_OPERAND_PLAN_GENERIC_STRUCTURED;
+        must_reject(arch, "generic_target_only_id0", &function, &ins);
+
+        /* The identical ISA template is valid with a proven target ID;
+         * this also guards against a coarse workaround that rejects ALL
+         * RBIT machine effects instead of fixing the missing ID gate. */
+        form.operand_plan_owner = MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED;
+        form.target_machine_form_id = AARCH64_MACHINE_ASM_BIT_REVERSE;
+        assert(emit_one(arch, &function, &ins, positive, sizeof(positive)));
+        assert(strstr(positive, "  rbit w9, w9\n") != NULL);
+        values[1].core_type_id = ptr_u32;
+    }
+
+    /* AArch's generic zero-effect barrier remains an ID0 positive.  x86's
+     * original real Linux `movq %%rbx, %0` memory-output positive belongs to
+     * the proven CRASH_REGISTER source family, not arbitrary generic ID0. */
+    form.operand_plan_owner = MINIC_ASM_OPERAND_PLAN_GENERIC_STRUCTURED;
+    form.target_machine_form_id = 0U;
+    form.target_machine_form_variant = 0U;
+    if (arch == PROBE_X86) {
+        form.template_text = "movq %%rbx, %0";
+        form.template_length = strlen(form.template_text);
+        form.has_memory_clobber = false;
+        form.operand_plan_owner = MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED;
+        form.target_machine_form_id = MINIC_X86_MACHINE_ASM_CRASH_REGISTER;
+        form.target_machine_form_variant = 1U;
+        values[0].core_type_id = ptr_u64;
+        ins.value.structured_inline_asm.operand_count = 1U;
+        ins.value.structured_inline_asm.operands[0].operand_index = 0U;
+        ins.value.structured_inline_asm.operands[0].kind =
+            MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_OUTPUT;
+        ins.value.structured_inline_asm.operands[0].value = 0U;
+    } else {
+        form.template_text = "dmb oshst";
+        form.template_length = strlen(form.template_text);
+        ins.value.structured_inline_asm.operand_count = 0U;
+    }
+    if (arch == PROBE_X86) {
+        assert(emit_one(arch, &function, &ins, positive, sizeof(positive)));
+        assert(strstr(positive, "movq %rbx, (%r11)\n") != NULL);
+        /* Same legal source text with a forged generic ID0 is NEVER a
+         * physical register permission or a replacement for qualification. */
+        form.operand_plan_owner = MINIC_ASM_OPERAND_PLAN_GENERIC_STRUCTURED;
+        form.target_machine_form_id = 0U;
+        form.target_machine_form_variant = 0U;
+        must_reject(arch, "generic_movq_unqualified", &function, &ins);
+        form.operand_plan_owner = MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED;
+        form.target_machine_form_id = MINIC_X86_MACHINE_ASM_CRASH_REGISTER;
+        form.target_machine_form_variant = 1U;
+    } else {
+        if (!emit_one(arch, &function, &ins, positive, sizeof(positive))) {
+            fprintf(stderr, "P45 GENERIC STRUCTURED REJECTED aarch64 asm=%s\n",
+                    positive);
+            assert(0 && "pre-existing generic structured ISA form must survive");
+        }
+        /* SOURCE_ASM is serialized as exact source bytes; unlike selected
+         * target opcodes, its GNU text has no synthetic indentation. */
+        assert(strstr(positive, "dmb oshst\n") != NULL);
+    }
+
+    /* Missing ownership cannot authorize either qualified x86 hardware
+     * access or AArch's generic barrier; every noncanonical form variant
+     * also fails before output regardless of source spelling. */
+    form.operand_plan_owner = MINIC_ASM_OPERAND_PLAN_NONE;
+    must_reject(arch, "unowned_form", &function, &ins);
+    form.operand_plan_owner = arch == PROBE_X86
+        ? MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED
+        : MINIC_ASM_OPERAND_PLAN_GENERIC_STRUCTURED;
+    form.target_machine_form_variant = 99U;
+    must_reject(arch, "invalid_variant", &function, &ins);
+    minic_core_type_context_destroy(&types);
+}
+
+int main(void) {
+    check_machine_boundary(PROBE_A64);
+    check_machine_boundary(PROBE_X86);
+    puts("P45_MACHINE_FORM_BOUNDARY=PASS target_forms=2 typed_source_seals=2 "
+         "machine_positive=2 deterministic=2 poisoned_id=2 poisoned_variant=2 "
+         "poisoned_owner=2 poisoned_template=2 poisoned_core=2 "
+         "target_only_id0_reject=4 a64_rbit_typed=1 "
+         "aarch_generic_id0=1 x86_crash_register=1 "
+         "generic_movq_forged_id0_reject=1 orphan_owner_reject=2 "
+         "invalid_variant_reject=2 partial_output=0");
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/target/riscv/coretype_root_alignment_test.c"}
+#include "target/riscv/typed_memory.h"
+
+#include <assert.h>
+#include <stdio.h>
+
+/* This is a sealed Core fixture, not a source C Program or DataLayout.
+ * Root alignment must depend exclusively on the CoreType and the object's
+ * committed explicit storage alignment. */
+int main(void) {
+    MinicCoreType integer = {0};
+    MinicCoreTypeContext types = {0};
+    MinicCoreObject object = {0};
+    MinicCoreValue values[3] = {0};
+    MinicCoreInstruction instructions[3] = {0};
+    MinicCoreFunction function = {0};
+
+    integer.kind = MINIC_CORE_TYPE_INTEGER;
+    integer.has_layout = true;
+    integer.size = 8U;
+    integer.alignment = 8U;
+    integer.value.integer.bit_width = 64U;
+    types.types = &integer;
+    types.type_count = 1U;
+    types.type_capacity = 1U;
+    object.core_type_id = 0U;
+    object.explicit_alignment = 16U;
+    instructions[0].kind = MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS;
+    instructions[0].result = 0U;
+    instructions[0].value.object_id = 0U;
+    instructions[1].kind = MINIC_CORE_INSTRUCTION_POINTER_OFFSET;
+    instructions[1].result = 1U;
+    instructions[1].value.pointer_offset.base = 0U;
+    instructions[1].value.pointer_offset.element_size = 4U;
+    instructions[2].kind = MINIC_CORE_INSTRUCTION_GLOBAL_ADDRESS;
+    instructions[2].result = 2U;
+    values[0].definition = 0U;
+    values[1].definition = 1U;
+    values[2].definition = 2U;
+    function.type_context = &types;
+    function.objects = &object;
+    function.object_count = 1U;
+    function.values = values;
+    function.value_count = 3U;
+    function.instructions = instructions;
+    function.instruction_count = 3U;
+
+    assert(minic_riscv_address_alignment(&function, 0U) == 16U);
+    assert(minic_riscv_address_alignment(&function, 1U) == 4U);
+    assert(minic_riscv_address_alignment(&function, 2U) == 1U);
+
+    /* The published object has no C descriptor to override Core alignment. */
+    assert(minic_riscv_address_alignment(&function, 0U) == 16U);
+
+    /* Absent/invalid Core evidence cannot authorize an aligned fast path. */
+    function.type_context = NULL;
+    assert(minic_riscv_address_alignment(&function, 0U) == 1U);
+    function.type_context = &types;
+    object.core_type_id = MINIC_CORE_TYPE_INVALID;
+    assert(minic_riscv_address_alignment(&function, 0U) == 1U);
+    object.core_type_id = 0U;
+    integer.has_layout = false;
+    assert(minic_riscv_address_alignment(&function, 0U) == 1U);
+    integer.has_layout = true;
+    object.explicit_alignment = 0U;
+    integer.alignment = 3U;
+    assert(minic_riscv_address_alignment(&function, 0U) == 1U);
+
+    puts("RISCV_CORETYPE_ROOT_ALIGNMENT=PASS root=16 offset=4 global=1 C_free=1 missing_core=4");
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/target/riscv32/coretype_scalar_test.c"}
+#include "target/riscv32/rv32_internal.h"
+
+#include <stdio.h>
+
+#define REQUIRE(condition) do { if (!(condition)) return __LINE__; } while (0)
+
+static bool register_integer(MinicCoreTypeContext *ctx, unsigned bits,
+                             bool sign, bool is_bool, MinicCoreTypeId *id) {
+    MinicCoreType type = {0};
+    type.kind = MINIC_CORE_TYPE_INTEGER;
+    type.has_layout = true;
+    type.size = is_bool ? 1U : bits / 8U;
+    type.alignment = type.size;
+    type.value.integer.bit_width = bits;
+    type.value.integer.is_signed = sign;
+    type.value.integer.is_bool = is_bool;
+    return minic_core_type_register(ctx, &type, id);
+}
+
+static bool register_float(MinicCoreTypeContext *ctx, size_t size,
+                           MinicCoreTypeId *id) {
+    MinicCoreType type = {0};
+    type.kind = MINIC_CORE_TYPE_FLOAT;
+    type.has_layout = true;
+    type.size = size;
+    type.alignment = size;
+    type.value.floating.format = size == 4U
+        ? MINIC_CORE_FLOAT_BINARY32 : MINIC_CORE_FLOAT_BINARY64;
+    return minic_core_type_register(ctx, &type, id);
+}
+
+static bool register_pointer(MinicCoreTypeContext *ctx,
+                             MinicCoreTypeId pointee, MinicCoreTypeId *id) {
+    MinicCoreType type = {0};
+    type.kind = MINIC_CORE_TYPE_POINTER;
+    type.has_layout = true;
+    type.size = 4U;
+    type.alignment = 4U;
+    type.value.pointer.pointee = pointee;
+    return minic_core_type_register(ctx, &type, id);
+}
+
+static int run(void) {
+    MinicCoreTypeContext types;
+    MinicCoreTypeId boolean, s8, u8, s16, u16, s32, u32, s64, u64;
+    MinicCoreTypeId f32, f64, pointer, qualified_pointer, invalid_record;
+    MinicCoreTypeId invalid_pointer;
+    MinicCoreType qualifier = {0};
+    MinicCoreType record = {0};
+    MinicCoreType wrong_layout = {0};
+    MinicCoreValue scalar_value = {0};
+    MinicCoreFunction function = {0};
+    unsigned bits, words;
+    bool sign;
+
+    minic_core_type_context_initialize(&types);
+    REQUIRE(register_integer(&types, 1U, false, true, &boolean));
+    REQUIRE(register_integer(&types, 8U, true, false, &s8));
+    REQUIRE(register_integer(&types, 8U, false, false, &u8));
+    REQUIRE(register_integer(&types, 16U, true, false, &s16));
+    REQUIRE(register_integer(&types, 16U, false, false, &u16));
+    REQUIRE(register_integer(&types, 32U, true, false, &s32));
+    REQUIRE(register_integer(&types, 32U, false, false, &u32));
+    REQUIRE(register_integer(&types, 64U, true, false, &s64));
+    REQUIRE(register_integer(&types, 64U, false, false, &u64));
+    REQUIRE(register_float(&types, 4U, &f32));
+    REQUIRE(register_float(&types, 8U, &f64));
+    REQUIRE(register_pointer(&types, s32, &pointer));
+    qualifier.kind = MINIC_CORE_TYPE_ALIGNED;
+    qualifier.has_layout = true;
+    qualifier.size = 4U;
+    qualifier.alignment = 8U;
+    qualifier.has_abi_alignment_override = true;
+    qualifier.value.aligned.base = pointer;
+    REQUIRE(minic_core_type_register(&types, &qualifier, &qualified_pointer));
+    record.kind = MINIC_CORE_TYPE_RECORD;
+    record.has_layout = false;
+    REQUIRE(minic_core_type_register(&types, &record, &invalid_record));
+    wrong_layout.kind = MINIC_CORE_TYPE_POINTER;
+    wrong_layout.has_layout = true;
+    wrong_layout.size = 8U;
+    wrong_layout.alignment = 8U;
+    wrong_layout.value.pointer.pointee = s32;
+    REQUIRE(minic_core_type_register(&types, &wrong_layout, &invalid_pointer));
+
+    /* Values no longer carry a C descriptor. All scalar classifiers use
+     * the sealed Core integer ID and layout. */
+    scalar_value.core_type_id = s8;
+    function.type_context = &types;
+    function.values = &scalar_value;
+    function.value_count = 1U;
+    REQUIRE(rv32_core_scalar(&function,
+                             function.values[0].core_type_id, &bits, &sign));
+    REQUIRE(bits == 8U && sign);
+    REQUIRE(rv32_core_scalar_storage_words(&function, boolean, &words) && words == 1U);
+    REQUIRE(rv32_core_scalar(&function, boolean, &bits, &sign) && bits == 1U && !sign);
+    REQUIRE(rv32_core_scalar(&function, u8, &bits, &sign) && bits == 8U && !sign);
+    REQUIRE(rv32_core_scalar(&function, s16, &bits, &sign) && bits == 16U && sign);
+    REQUIRE(rv32_core_scalar(&function, u16, &bits, &sign) && bits == 16U && !sign);
+    REQUIRE(rv32_core_scalar(&function, s32, &bits, &sign) && bits == 32U && sign);
+    REQUIRE(rv32_core_scalar(&function, u32, &bits, &sign) && bits == 32U && !sign);
+    REQUIRE(rv32_core_scalar(&function, pointer, &bits, &sign) && bits == 32U && !sign);
+    REQUIRE(rv32_core_scalar(&function, qualified_pointer, &bits, &sign) &&
+            bits == 32U && !sign);
+    REQUIRE(rv32_core_scalar(&function, f32, &bits, &sign) && bits == 32U && !sign);
+    REQUIRE(!rv32_core_scalar(&function, f64, &bits, &sign));
+    REQUIRE(!rv32_core_scalar(&function, u64, &bits, &sign));
+    REQUIRE(rv32_core_scalar_storage_words(&function, s64, &words) && words == 2U);
+    REQUIRE(rv32_core_scalar_storage_words(&function, u64, &words) && words == 2U);
+    REQUIRE(rv32_core_scalar_storage_words(&function, f64, &words) && words == 2U);
+    REQUIRE(rv32_core_scalar_storage_words(&function, pointer, &words) && words == 1U);
+    REQUIRE(!rv32_core_scalar_storage_words(&function, invalid_record, &words));
+    REQUIRE(rv32_core_is_wide_integer(&function, s64));
+    REQUIRE(rv32_core_is_wide_integer(&function, u64));
+    REQUIRE(!rv32_core_is_wide_integer(&function, f64));
+    REQUIRE(rv32_core_unsigned_integer(&function, u64));
+    REQUIRE(!rv32_core_unsigned_integer(&function, s64));
+    REQUIRE(rv32_core_integer_type(&function, boolean));
+    REQUIRE(!rv32_core_integer_type(&function, pointer));
+    REQUIRE(rv32_core_pointer_type(&function, qualified_pointer));
+    REQUIRE(rv32_core_pointee_type(&function, pointer) == s32);
+    REQUIRE(!rv32_core_pointer_type(&function, invalid_pointer));
+    REQUIRE(rv32_core_pointee_type(&function, invalid_pointer) ==
+            MINIC_CORE_TYPE_INVALID);
+    REQUIRE(rv32_core_pointee_type(&function, s32) == MINIC_CORE_TYPE_INVALID);
+    /* Typed RISC-V opcode selection and serialization have separate
+     * real .i -> MachineIR -> GNU ASM tests; this sealed-Core type probe
+     * must never import the retired FILE* scalar emitter. */
+
+    /* Detached Core is rejected even with a plausible Core integer ID. */
+    function.type_context = NULL;
+    REQUIRE(!rv32_core_scalar(&function, s8, &bits, &sign));
+    REQUIRE(!rv32_core_scalar_storage_words(&function, u64, &words));
+    REQUIRE(!rv32_core_is_wide_integer(&function, u64));
+    REQUIRE(!rv32_core_unsigned_integer(&function, u64));
+    REQUIRE(!rv32_core_integer_type(&function, u64));
+    REQUIRE(!rv32_core_pointer_type(&function, pointer));
+    REQUIRE(rv32_core_pointee_type(&function, pointer) == MINIC_CORE_TYPE_INVALID);
+
+    minic_core_type_context_destroy(&types);
+    return 0;
+}
+
+int main(void) {
+    int failed = run();
+    if (failed != 0) {
+        (void)fprintf(stderr, "rv32_coretype_scalar_test failed at line %d\n", failed);
+        return 1;
+    }
+    (void)puts("RV32_CORETYPE_SCALAR=PASS");
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/target/riscv64/abi_test.c"}
+#include "core/core_type.h"
+#include "target/riscv64/abi.h"
+#include "target/riscv64/function_abi_plan.h"
+
+#include <string.h>
+
+#include <stdio.h>
+
+#define CHECK(condition)                                                                           \
+    do {                                                                                           \
+        if (!(condition)) {                                                                        \
+            (void)fprintf(stderr, "CHECK failed at %s:%d: %s\n", __FILE__, __LINE__, #condition);  \
+            return false;                                                                          \
+        }                                                                                          \
+    } while (0)
+
+static bool expect_value(const MinicCoreTypeContext *types,
+                         MinicCoreTypeId type,
+                         MinicRiscv64AbiValueKind kind,
+                         size_t storage_size,
+                         size_t slot_count) {
+    MinicRiscv64AbiValue value;
+
+    CHECK(minic_riscv64_abi_classify_core_value_profile(types, type, false, &value));
+    CHECK(value.kind == kind);
+    CHECK(value.storage_size == storage_size);
+    CHECK(value.slot_count == slot_count);
+    return true;
+}
+
+/* The former ABI fixtures constructed C records that the production
+ * machine never sees. Build exact Core layouts and exercise the one real
+ * classifier and transactional register cursor instead. */
+static bool add_integer(MinicCoreTypeContext *types, unsigned int bits,
+                        bool sign, MinicCoreTypeId *id) {
+    MinicCoreType type = {0};
+    type.kind = MINIC_CORE_TYPE_INTEGER;
+    type.has_layout = true;
+    type.size = bits / 8U;
+    type.alignment = bits == 128U ? 16U : type.size;
+    type.value.integer.bit_width = bits;
+    type.value.integer.is_signed = sign;
+    return minic_core_type_register(types, &type, id);
+}
+static bool add_float(MinicCoreTypeContext *types, size_t size,
+                      MinicCoreTypeId *id) {
+    MinicCoreType type = {0};
+    type.kind = MINIC_CORE_TYPE_FLOAT;
+    type.has_layout = true;
+    type.size = size;
+    type.alignment = size;
+    type.value.floating.format = size == 4U
+        ? MINIC_CORE_FLOAT_BINARY32 : MINIC_CORE_FLOAT_BINARY64;
+    return minic_core_type_register(types, &type, id);
+}
+static bool add_void(MinicCoreTypeContext *types, MinicCoreTypeId *id) {
+    MinicCoreType type = {0};
+    type.kind = MINIC_CORE_TYPE_VOID;
+    return minic_core_type_register(types, &type, id);
+}
+static bool add_pointer(MinicCoreTypeContext *types,
+                        MinicCoreTypeId pointee, MinicCoreTypeId *id) {
+    MinicCoreType type = {0};
+    type.kind = MINIC_CORE_TYPE_POINTER;
+    type.has_layout = true;
+    type.size = 8U;
+    type.alignment = 8U;
+    type.value.pointer.pointee = pointee;
+    return minic_core_type_register(types, &type, id);
+}
+static bool add_record_with_alignment(
+    MinicCoreTypeContext *types, const MinicCoreTypeId *field_types,
+    size_t count, size_t forced_alignment, MinicCoreTypeId *id) {
+    MinicCoreRecordField fields[4] = {0};
+    MinicCoreType record = {0};
+    size_t i, size = 0U, alignment = 1U;
+    CHECK(count <= sizeof(fields) / sizeof(fields[0]));
+    for (i = 0U; i < count; ++i) {
+        const MinicCoreType *field = minic_core_type_get(types, field_types[i]);
+        size_t align;
+        CHECK(field != NULL && field->has_layout && field->alignment != 0U);
+        align = field->alignment;
+        size = (size + align - 1U) & ~(align - 1U);
+        fields[i].type_id = field_types[i];
+        fields[i].byte_offset = size;
+        fields[i].alignment = align;
+        size += field->size;
+        if (alignment < align) alignment = align;
+    }
+    if (forced_alignment != 0U) alignment = forced_alignment;
+    size = (size + alignment - 1U) & ~(alignment - 1U);
+    record.kind = MINIC_CORE_TYPE_RECORD;
+    record.has_layout = true;
+    record.size = size;
+    record.alignment = alignment;
+    record.value.record.is_complete = true;
+    record.value.record.fields = fields;
+    record.value.record.field_count = count;
+    return minic_core_type_register(types, &record, id);
+}
+static bool add_record(MinicCoreTypeContext *types,
+                       const MinicCoreTypeId *field_types,
+                       size_t field_count, MinicCoreTypeId *id) {
+    return add_record_with_alignment(types, field_types, field_count, 0U, id);
+}
+
+static bool test_value_classification(void) {
+    MinicCoreTypeContext types;
+    MinicCoreTypeId i32, i64, f64, void_id, i128, u128;
+    MinicCoreTypeId record16_fields[2];
+    MinicCoreTypeId record4_field;
+    MinicCoreTypeId record_fp_field;
+    MinicCoreTypeId record16;
+    MinicCoreTypeId record4;
+    MinicCoreTypeId record_fp;
+    MinicCoreTypeId pointer_type;
+    MinicRiscv64AbiValue fp_record_value;
+
+    minic_core_type_context_initialize(&types);
+    CHECK(add_integer(&types, 32U, true, &i32));
+    CHECK(add_integer(&types, 64U, true, &i64));
+    CHECK(add_integer(&types, 128U, true, &i128));
+    CHECK(add_integer(&types, 128U, false, &u128));
+    CHECK(add_float(&types, 8U, &f64));
+    CHECK(add_void(&types, &void_id));
+    record16_fields[0] = i64;
+    record16_fields[1] = i64;
+    record4_field = i32;
+    record_fp_field = f64;
+
+    CHECK(add_record(&types, record16_fields, 2U, &record16));
+    CHECK(add_record(&types, &record4_field, 1U, &record4));
+    CHECK(add_record(&types, &record_fp_field, 1U, &record_fp));
+    CHECK(add_pointer(&types, i32, &pointer_type));
+
+    CHECK(expect_value(&types, i32, MINIC_RISCV64_ABI_VALUE_INTEGER, 4U, 1U));
+    CHECK(expect_value(&types, pointer_type, MINIC_RISCV64_ABI_VALUE_INTEGER, 8U, 1U));
+    CHECK(expect_value(&types, f64, MINIC_RISCV64_ABI_VALUE_FLOAT, 8U, 1U));
+    CHECK(expect_value(&types, void_id, MINIC_RISCV64_ABI_VALUE_VOID, 0U, 0U));
+    CHECK(expect_value(&types, i128,
+                       MINIC_RISCV64_ABI_VALUE_WIDE_SCALAR, 16U, 2U));
+    CHECK(expect_value(&types, u128,
+                       MINIC_RISCV64_ABI_VALUE_WIDE_SCALAR, 16U, 2U));
+    CHECK(expect_value(&types, record16, MINIC_RISCV64_ABI_VALUE_AGGREGATE, 16U, 2U));
+
+    CHECK(expect_value(&types, record4, MINIC_RISCV64_ABI_VALUE_AGGREGATE, 4U, 1U));
+    CHECK(!minic_riscv64_abi_classify_core_value_profile(
+        &types, record_fp, false, &fp_record_value));
+    CHECK(minic_riscv64_abi_classify_core_value_profile(
+        &types, record_fp, true, &fp_record_value));
+    CHECK(fp_record_value.kind == MINIC_RISCV64_ABI_VALUE_AGGREGATE &&
+          fp_record_value.storage_size == 8U &&
+          fp_record_value.slot_count == 1U);
+
+    minic_core_type_context_destroy(&types);
+    return true;
+}
+
+static bool test_return_argument_cursor(void) {
+    MinicCoreTypeContext types;
+    MinicCoreTypeId i64, f64, u128;
+    MinicCoreTypeId record24_fields[3];
+    MinicCoreTypeId record_fp_field;
+    MinicCoreTypeId record24;
+    MinicCoreTypeId record_fp;
+    MinicRiscv64AbiCursor cursor;
+    MinicRiscv64AbiValue return_value;
+    MinicRiscv64AbiArgumentLocation location;
+
+    minic_core_type_context_initialize(&types);
+    CHECK(add_integer(&types, 64U, true, &i64));
+    CHECK(add_integer(&types, 128U, false, &u128));
+    CHECK(add_float(&types, 8U, &f64));
+    record24_fields[0] = i64;
+    record24_fields[1] = i64;
+    record24_fields[2] = i64;
+    record_fp_field = f64;
+    CHECK(add_record(&types, record24_fields, 3U, &record24));
+    CHECK(add_record(&types, &record_fp_field, 1U, &record_fp));
+
+    CHECK(
+        minic_riscv64_abi_cursor_initialize_for_core_return_profile(&types, record24, false, &cursor, &return_value));
+    CHECK(return_value.kind == MINIC_RISCV64_ABI_VALUE_INDIRECT);
+    CHECK(return_value.storage_size == 24U);
+    CHECK(cursor.integer_register_count == 1U);
+    CHECK(cursor.floating_register_count == 0U);
+    CHECK(cursor.stack_slot_count == 0U);
+    CHECK(minic_riscv64_abi_place_core_argument(&types, i64, true, &cursor, &location));
+    CHECK(location.integer_register_begin == 1U);
+    CHECK(location.integer_register_count == 1U);
+
+    CHECK(minic_riscv64_abi_cursor_initialize_for_core_return_profile(
+        &types, u128, false, &cursor, &return_value));
+    CHECK(return_value.kind == MINIC_RISCV64_ABI_VALUE_WIDE_SCALAR);
+    CHECK(return_value.storage_size == 16U && return_value.slot_count == 2U);
+    CHECK(cursor.integer_register_count == 0U);
+    CHECK(minic_riscv64_abi_cursor_initialize_for_core_return_profile(
+        &types, u128, true, &cursor, &return_value));
+    CHECK(return_value.kind == MINIC_RISCV64_ABI_VALUE_WIDE_SCALAR);
+    CHECK(return_value.slot_count == 2U);
+
+    minic_riscv64_abi_cursor_initialize(&cursor);
+    CHECK(!minic_riscv64_abi_cursor_initialize_for_core_return_profile(
+        &types, record_fp, false, &cursor, &return_value));
+    CHECK(cursor.integer_register_count == 0U);
+    CHECK(cursor.floating_register_count == 0U);
+    CHECK(cursor.stack_slot_count == 0U);
+
+    minic_core_type_context_destroy(&types);
+    return true;
+}
+
+static bool test_argument_placement(void) {
+    MinicCoreTypeContext types;
+    MinicCoreTypeId i64, i32, f64, f32, i128, u128;
+    MinicCoreTypeId record_fields[2];
+    MinicCoreTypeId record16;
+    MinicCoreTypeId fp_fields[1];
+    MinicCoreTypeId record_fp;
+    MinicCoreTypeId aligned_record;
+    MinicRiscv64AbiCursor cursor;
+    MinicRiscv64AbiArgumentLocation location;
+    size_t index;
+
+    minic_core_type_context_initialize(&types);
+    CHECK(add_integer(&types, 32U, true, &i32));
+    CHECK(add_integer(&types, 64U, true, &i64));
+    CHECK(add_integer(&types, 128U, true, &i128));
+    CHECK(add_integer(&types, 128U, false, &u128));
+    CHECK(add_float(&types, 8U, &f64));
+    CHECK(add_float(&types, 4U, &f32));
+    record_fields[0] = i64;
+    record_fields[1] = i64;
+    CHECK(add_record(&types, record_fields, 2U, &record16));
+
+    minic_riscv64_abi_cursor_initialize(&cursor);
+    for (index = 0U; index < 7U; ++index) {
+        CHECK(minic_riscv64_abi_place_core_argument(
+            &types, i64, true, &cursor, &location));
+        CHECK(location.value.kind == MINIC_RISCV64_ABI_VALUE_INTEGER);
+        CHECK(location.integer_register_begin == index);
+        CHECK(location.integer_register_count == 1U);
+        CHECK(location.stack_slot_count == 0U);
+    }
+
+    CHECK(minic_riscv64_abi_place_core_argument(&types, record16, true, &cursor, &location));
+    CHECK(location.value.kind == MINIC_RISCV64_ABI_VALUE_AGGREGATE);
+    CHECK(location.integer_register_begin == 7U);
+    CHECK(location.integer_register_count == 1U);
+    CHECK(location.stack_slot_begin == 0U);
+    CHECK(location.stack_slot_count == 1U);
+    CHECK(cursor.integer_register_count == 8U);
+    CHECK(cursor.stack_slot_count == 1U);
+
+    CHECK(minic_riscv64_abi_place_core_argument(&types, i32, true, &cursor, &location));
+    CHECK(location.integer_register_count == 0U);
+    CHECK(location.stack_slot_begin == 1U);
+    CHECK(location.stack_slot_count == 1U);
+
+    CHECK(
+        minic_riscv64_abi_place_core_argument(&types, f64, true, &cursor, &location));
+    CHECK(location.floating_register_begin == 0U);
+    CHECK(location.floating_register_count == 1U);
+    CHECK(location.stack_slot_count == 0U);
+
+    CHECK(
+        minic_riscv64_abi_place_core_argument(&types, f64, false, &cursor, &location));
+    CHECK(location.floating_register_count == 0U);
+    CHECK(location.integer_register_count == 0U);
+    CHECK(location.stack_slot_begin == 2U);
+    CHECK(location.stack_slot_count == 1U);
+
+    /* LP64D/hard-float int128 is still a two-XLEN integer. At a7,
+     * one half must spill to stack slot zero; soft-float is identical. */
+    minic_riscv64_abi_cursor_initialize(&cursor);
+    for (index = 0U; index < 7U; ++index)
+        CHECK(minic_riscv64_abi_place_core_argument(
+            &types, i64, true, &cursor, &location));
+    CHECK(minic_riscv64_abi_place_core_argument(
+        &types, u128, true, &cursor, &location));
+    CHECK(location.value.kind == MINIC_RISCV64_ABI_VALUE_WIDE_SCALAR);
+    CHECK(location.integer_register_begin == 7U &&
+          location.integer_register_count == 1U);
+    CHECK(location.stack_slot_begin == 0U &&
+          location.stack_slot_count == 1U);
+    minic_riscv64_abi_cursor_initialize(&cursor);
+    cursor.lp64_soft_float = true;
+    CHECK(minic_riscv64_abi_place_core_argument(
+        &types, i128, true, &cursor, &location));
+    CHECK(location.value.kind == MINIC_RISCV64_ABI_VALUE_WIDE_SCALAR);
+    CHECK(location.integer_register_count == 2U &&
+          location.stack_slot_count == 0U);
+
+    minic_riscv64_abi_cursor_initialize(&cursor);
+    for (index = 0U; index < 8U; ++index) {
+        CHECK(minic_riscv64_abi_place_core_argument(
+            &types, f64, true, &cursor, &location));
+        CHECK(location.floating_register_begin == index);
+        CHECK(location.floating_register_count == 1U);
+    }
+    /* A ninth named FP scalar falls back to the first unused GAR. It does
+     * not consume a ninth FAR or fail the entire function admission. */
+    CHECK(minic_riscv64_abi_place_core_argument(
+        &types, f64, true, &cursor, &location));
+    CHECK(location.floating_register_count == 0U);
+    CHECK(location.integer_register_begin == 0U &&
+          location.integer_register_count == 1U &&
+          location.stack_slot_count == 0U);
+    CHECK(cursor.floating_register_count == 8U &&
+          cursor.integer_register_count == 1U);
+    /* Both streams are independent; GAR exhaustion falls through to stack. */
+    for (index = 1U; index < 8U; ++index)
+        CHECK(minic_riscv64_abi_place_core_argument(
+            &types, f64, true, &cursor, &location));
+    CHECK(minic_riscv64_abi_place_core_argument(
+        &types, f64, true, &cursor, &location));
+    CHECK(location.floating_register_count == 0U &&
+          location.integer_register_count == 0U &&
+          location.stack_slot_begin == 0U &&
+          location.stack_slot_count == 1U);
+
+    /* A named LP64D float-containing record needs FP aggregate flattening;
+     * an unimplemented shape must never silently become an a0 pointer.
+     * Unnamed LP64D variadics instead use the regular integer convention. */
+    fp_fields[0] = f32;
+    CHECK(add_record(&types, fp_fields, 1U, &record_fp));
+    minic_riscv64_abi_cursor_initialize(&cursor);
+    CHECK(!minic_riscv64_abi_place_core_argument(
+        &types, record_fp, true, &cursor, &location));
+    CHECK(cursor.integer_register_count == 0U &&
+          cursor.floating_register_count == 0U &&
+          cursor.stack_slot_count == 0U);
+    CHECK(minic_riscv64_abi_place_core_argument(
+        &types, record_fp, false, &cursor, &location));
+    CHECK(location.value.kind == MINIC_RISCV64_ABI_VALUE_AGGREGATE &&
+          location.integer_register_begin == 0U &&
+          location.integer_register_count == 1U &&
+          location.floating_register_count == 0U);
+    minic_riscv64_abi_cursor_initialize(&cursor);
+    cursor.lp64_soft_float = true;
+    CHECK(minic_riscv64_abi_place_core_argument(
+        &types, record_fp, true, &cursor, &location));
+    CHECK(location.value.kind == MINIC_RISCV64_ABI_VALUE_AGGREGATE &&
+          location.integer_register_count == 1U &&
+          location.floating_register_count == 0U);
+
+    /* The unnamed 16-aligned aggregate must start at an even a-register
+     * under both LP64D and LP64, even when the first named integer uses a0. */
+    CHECK(add_record_with_alignment(&types, record_fields, 2U, 16U, &aligned_record));
+    minic_riscv64_abi_cursor_initialize(&cursor);
+    CHECK(minic_riscv64_abi_place_core_argument(
+        &types, i64, true, &cursor, &location));
+    CHECK(minic_riscv64_abi_place_core_argument(
+        &types, aligned_record, false, &cursor, &location));
+    CHECK(location.value.kind == MINIC_RISCV64_ABI_VALUE_AGGREGATE &&
+          location.integer_register_begin == 2U &&
+          location.integer_register_count == 2U);
+
+    minic_core_type_context_destroy(&types);
+    return true;
+}
+
+static bool test_unsupported_argument_is_transactional(void) {
+    MinicCoreTypeContext types;
+    MinicCoreTypeId i64, void_id;
+    MinicRiscv64AbiCursor cursor;
+    MinicRiscv64AbiCursor before_failure;
+    MinicRiscv64AbiArgumentLocation location;
+
+    minic_core_type_context_initialize(&types);
+    CHECK(add_integer(&types, 64U, true, &i64));
+    CHECK(add_void(&types, &void_id));
+
+    minic_riscv64_abi_cursor_initialize(&cursor);
+    CHECK(minic_riscv64_abi_place_core_argument(&types, i64, true, &cursor, &location));
+    before_failure = cursor;
+    CHECK(!minic_riscv64_abi_place_core_argument(&types, void_id, true, &cursor, &location));
+    CHECK(cursor.integer_register_count == before_failure.integer_register_count);
+    CHECK(cursor.floating_register_count == before_failure.floating_register_count);
+    CHECK(cursor.stack_slot_count == before_failure.stack_slot_count);
+
+    minic_core_type_context_destroy(&types);
+    return true;
+}
+
+static bool register_plan_type(MinicCoreTypeContext *types,
+                               MinicCoreTypeKind kind,
+                               size_t bytes,
+                               MinicCoreTypeId *id) {
+    MinicCoreType type = {0};
+    type.kind = kind;
+    type.has_layout = kind != MINIC_CORE_TYPE_VOID;
+    type.size = bytes;
+    type.alignment = bytes;
+    if (kind == MINIC_CORE_TYPE_FLOAT)
+        type.value.floating.format = MINIC_CORE_FLOAT_BINARY64;
+    else if (kind == MINIC_CORE_TYPE_INTEGER) {
+        type.value.integer.bit_width = (unsigned int)(bytes * 8U);
+        type.value.integer.is_signed = true;
+    }
+    return minic_core_type_register(types, &type, id);
+}
+
+static bool set_plan_signature(MinicCoreFunction *fn, MinicCoreTypeContext *types,
+                               MinicCoreTypeId result, const MinicCoreTypeId *params,
+                               size_t count) {
+    MinicCoreType type = {0};
+    fn->core_function_type_id = MINIC_CORE_TYPE_INVALID;
+    type.kind = MINIC_CORE_TYPE_FUNCTION;
+    type.value.function.return_type = result;
+    type.value.function.parameters = (MinicCoreTypeId *)params;
+    type.value.function.parameter_count = count;
+    type.value.function.calling_convention = MINIC_CALLING_CONVENTION_DEFAULT;
+    return minic_core_type_register(types, &type, &fn->core_function_type_id);
+}
+
+/* Real function-plan admission: the owner must reject unsupported
+ * placements and roll back its allocation rather than relying on the
+ * downstream RV64 opcode verifier to discover them. */
+static bool test_function_abi_plan_qualification(void) {
+    MinicCoreTypeContext types;
+    MinicCoreFunction fn;
+    MinicRiscv64FunctionAbiPlan plan = {0};
+    MinicCoreTypeId params[9];
+    MinicCoreTypeId void_id, double_id, long_id, record24_id;
+    MinicCoreRecordField record_fields[3] = {0};
+    MinicCoreType record24 = {0};
+    size_t i;
+
+    minic_core_type_context_initialize(&types);
+    (void)memset(&fn, 0, sizeof(fn));
+    CHECK(register_plan_type(&types, MINIC_CORE_TYPE_VOID, 0U, &void_id));
+    CHECK(register_plan_type(&types, MINIC_CORE_TYPE_FLOAT, 8U, &double_id));
+    CHECK(register_plan_type(&types, MINIC_CORE_TYPE_INTEGER, 8U, &long_id));
+    for (i = 0U; i < 9U; ++i) params[i] = double_id;
+    CHECK(set_plan_signature(&fn, &types, void_id, params, 8U));
+    /* Standalone plans must also be sealed: legacy function types do not
+     * authorize an untyped ABI decision. */
+    CHECK(!minic_riscv64_function_abi_plan_build_profile(&fn, &plan, false));
+    CHECK(!plan.prepared && plan.parameter_locations == NULL);
+    fn.type_context = &types;
+    CHECK(minic_riscv64_function_abi_plan_build_profile(&fn, &plan, false));
+    CHECK(plan.prepared && plan.parameter_location_count == 8U);
+    CHECK(plan.parameter_locations[7].floating_register_begin == 7U);
+    CHECK(plan.parameter_locations[7].floating_register_count == 1U);
+    minic_riscv64_function_abi_plan_destroy(&plan);
+
+    /* RV64 LP64D named FP9 is legal: fa0..fa7, then a0. */
+    CHECK(set_plan_signature(&fn, &types, void_id, params, 9U));
+    CHECK(minic_riscv64_function_abi_plan_build_profile(&fn, &plan, false));
+    CHECK(plan.prepared && plan.parameter_location_count == 9U);
+    CHECK(plan.parameter_locations[8].floating_register_count == 0U &&
+          plan.parameter_locations[8].integer_register_begin == 0U &&
+          plan.parameter_locations[8].integer_register_count == 1U);
+    minic_riscv64_function_abi_plan_destroy(&plan);
+
+    /* The same value is legal under soft-float LP64 as a GPR argument. */
+    CHECK(set_plan_signature(&fn, &types, void_id, params, 1U));
+    CHECK(minic_riscv64_function_abi_plan_build_profile(&fn, &plan, true));
+    CHECK(plan.named_parameter_cursor.lp64_soft_float);
+    CHECK(plan.parameter_locations[0].floating_register_count == 0U);
+    CHECK(plan.parameter_locations[0].integer_register_count == 1U);
+    minic_riscv64_function_abi_plan_destroy(&plan);
+
+    for (i = 0U; i < 3U; ++i) {
+        record_fields[i].type_id = long_id;
+        record_fields[i].byte_offset = i * 8U;
+        record_fields[i].alignment = 8U;
+    }
+    record24.kind = MINIC_CORE_TYPE_RECORD;
+    record24.has_layout = true;
+    record24.size = 24U;
+    record24.alignment = 8U;
+    record24.value.record.fields = record_fields;
+    record24.value.record.field_count = 3U;
+    record24.value.record.is_complete = true;
+    CHECK(minic_core_type_register(&types, &record24, &record24_id));
+    params[0] = long_id;
+    CHECK(set_plan_signature(&fn, &types, record24_id, params, 1U));
+    CHECK(minic_riscv64_function_abi_plan_build_profile(&fn, &plan, false));
+    CHECK(plan.return_value.kind == MINIC_RISCV64_ABI_VALUE_INDIRECT);
+    CHECK(plan.parameter_locations[0].integer_register_begin == 1U);
+    minic_riscv64_function_abi_plan_destroy(&plan);
+
+    /* Rejected Core argument placement rolls back the plan allocation. */
+    params[0] = void_id;
+    CHECK(set_plan_signature(&fn, &types, record24_id, params, 1U));
+    CHECK(!minic_riscv64_function_abi_plan_build_profile(&fn, &plan, false));
+    CHECK(!plan.prepared && plan.parameter_locations == NULL);
+    params[0] = long_id;
+    CHECK(set_plan_signature(&fn, &types, record24_id, params, 1U));
+    CHECK(minic_riscv64_function_abi_plan_build_profile(&fn, &plan, false));
+    minic_riscv64_function_abi_plan_destroy(&plan);
+    minic_core_type_context_destroy(&types);
+    return true;
+}
+
+int main(void) {
+    if (!test_value_classification() || !test_return_argument_cursor() ||
+        !test_argument_placement() || !test_unsupported_argument_is_transactional() ||
+        !test_function_abi_plan_qualification()) {
+        return 1;
+    }
+    (void)puts("PASS rv64 abi classification+return-cursor+placement canonical owner");
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/target/riscv64/coretype_target_admission_test.c"}
+#include "core/core_ir.h"
+#include "target/riscv64/legalize.h"
+#include "target/riscv64/core_admission.h"
+#include "target/riscv64/record_snapshot.h"
+#include "target/riscv64/core_type_query.h"
+#include "target/riscv64/isa.h"
+
+#include <stdio.h>
+#include <string.h>
+
+#define REQUIRE(expr) do { if (!(expr)) return __LINE__; } while (0)
+
+static bool register_type(MinicCoreTypeContext *ctx, MinicCoreTypeKind kind,
+                          size_t size, size_t alignment, MinicCoreTypeId *id) {
+    MinicCoreType type = {0};
+    type.kind = kind;
+    type.has_layout = kind != MINIC_CORE_TYPE_VOID;
+    type.size = size;
+    type.alignment = alignment;
+    if (kind == MINIC_CORE_TYPE_INTEGER) {
+        type.value.integer.bit_width = (unsigned int)(size * 8U);
+        type.value.integer.is_signed = true;
+    }
+    if (kind == MINIC_CORE_TYPE_RECORD)
+        type.value.record.is_complete = true;
+    return minic_core_type_register(ctx, &type, id);
+}
+
+static bool register_pointer(MinicCoreTypeContext *ctx, MinicCoreTypeId pointee,
+                             MinicCoreTypeId *id) {
+    MinicCoreType type = {0};
+    type.kind = MINIC_CORE_TYPE_POINTER;
+    type.has_layout = true;
+    type.size = 8U;
+    type.alignment = 8U;
+    type.value.pointer.pointee = pointee;
+    return minic_core_type_register(ctx, &type, id);
+}
+
+static bool register_overflow_scalar(MinicCoreTypeContext *ctx, size_t size,
+                                     bool is_signed, bool is_bool,
+                                     MinicCoreTypeId *id) {
+    MinicCoreType type = {0};
+    type.kind = MINIC_CORE_TYPE_INTEGER;
+    type.has_layout = true;
+    type.size = size;
+    type.alignment = size;
+    type.value.integer.bit_width = (unsigned int)(size * 8U);
+    type.value.integer.is_signed = is_signed;
+    type.value.integer.is_bool = is_bool;
+    return minic_core_type_register(ctx, &type, id);
+}
+
+static int run(void) {
+    MinicCoreTypeContext types;
+    MinicCoreTypeId void_id, int_id, wide_id, record_id, pointer_id, record_pointer_id;
+    MinicCoreTypeId volatile_record_id, volatile_record_pointer_id;
+    MinicCoreTypeId bool_id, unsigned_id;
+    MinicCoreTypeId other_record_id, direct_signature_id;
+    MinicCoreType qualifier = {0};
+    MinicCoreValue values[4];
+    MinicCoreObject objects[1];
+    MinicCoreFunction function = {0};
+    MinicCoreInstruction ins = {0};
+    MinicCoreCallee callee = {0};
+    MinicCoreCallArgument call_argument = {0};
+    MinicCoreCallSite call_site = {0};
+    MinicCoreCallIndex call_index = {0};
+    MinicRiscv64CallPlanCache call_cache = {0};
+    MinicRiscvIsa strict_isa = {64U, MINIC_RISCV_ABI_LP64, 0U, 0U, true};
+    MinicCoreInstruction isa_ins = {0};
+    char reason[256];
+    size_t record_size;
+
+    minic_core_type_context_initialize(&types);
+    REQUIRE(register_type(&types, MINIC_CORE_TYPE_VOID, 0U, 0U, &void_id));
+    REQUIRE(register_type(&types, MINIC_CORE_TYPE_INTEGER, 4U, 4U, &int_id));
+    REQUIRE(register_type(&types, MINIC_CORE_TYPE_INTEGER, 16U, 16U, &wide_id));
+    REQUIRE(register_type(&types, MINIC_CORE_TYPE_RECORD, 4U, 4U, &record_id));
+    REQUIRE(register_pointer(&types, int_id, &pointer_id));
+    REQUIRE(register_pointer(&types, record_id, &record_pointer_id));
+    REQUIRE(register_overflow_scalar(&types, 1U, false, true, &bool_id));
+    REQUIRE(register_overflow_scalar(&types, 4U, false, false, &unsigned_id));
+    qualifier.kind = MINIC_CORE_TYPE_ALIGNED;
+    qualifier.has_layout = true;
+    qualifier.size = 4U;
+    qualifier.alignment = 8U;
+    qualifier.has_abi_alignment_override = true;
+    qualifier.value.aligned.base = record_id;
+    REQUIRE(minic_core_type_register(&types, &qualifier, &volatile_record_id));
+    REQUIRE(register_pointer(&types, volatile_record_id, &volatile_record_pointer_id));
+
+    memset(values, 0, sizeof(values));
+    memset(objects, 0, sizeof(objects));
+
+    /* All legacy C descriptors deliberately remain zero/void. If the RV64
+     * target reopens them, these valid CoreType cases must fail. */
+    function.type_context = &types;
+    function.values = values;
+    function.value_count = 4U;
+    function.objects = objects;
+    function.object_count = 1U;
+    objects[0].core_type_id = record_id;
+    values[0].core_type_id = record_pointer_id;
+    values[1].core_type_id = volatile_record_pointer_id;
+    values[2].core_type_id = pointer_id;
+    values[3].core_type_id = int_id;
+
+    /* Checked arithmetic is one CoreType-only admission+emission family:
+     * all C descriptors are deliberately void, including the bool result,
+     * operand signedness and pointer destination type. */
+    {
+        MinicCoreTypeId result_id = MINIC_CORE_TYPE_INVALID;
+        size_t result_bytes = 0U;
+        bool result_unsigned = true;
+        ins = (MinicCoreInstruction){0};
+        ins.kind = MINIC_CORE_INSTRUCTION_INTEGER_OVERFLOW;
+        ins.core_type_id = bool_id;
+        ins.value.integer_overflow.operator_kind = MINIC_CORE_INTEGER_OVERFLOW_ADD;
+        ins.value.integer_overflow.left = 3U;
+        ins.value.integer_overflow.right = 1U;
+        ins.value.integer_overflow.result_address = 2U;
+        values[1].core_type_id = int_id;
+        REQUIRE(minic_riscv64_core_integer_overflow_supported(
+            &function, &ins, &result_id, &result_bytes, &result_unsigned));
+        REQUIRE(result_id == int_id && result_bytes == 4U && !result_unsigned);
+        values[1].core_type_id = unsigned_id;
+        REQUIRE(minic_riscv64_core_integer_overflow_supported(
+            &function, &ins, &result_id, &result_bytes, &result_unsigned));
+        REQUIRE(result_id == int_id && result_bytes == 4U);
+        values[1].core_type_id = wide_id;
+        REQUIRE(!minic_riscv64_core_integer_overflow_supported(
+            &function, &ins, &result_id, &result_bytes, &result_unsigned));
+        values[1].core_type_id = int_id;
+        ins.core_type_id = int_id;
+        REQUIRE(!minic_riscv64_core_integer_overflow_supported(
+            &function, &ins, &result_id, &result_bytes, &result_unsigned));
+        ins.core_type_id = bool_id;
+        function.type_context = NULL;
+        REQUIRE(!minic_riscv64_core_integer_overflow_supported(
+            &function, &ins, &result_id, &result_bytes, &result_unsigned));
+        function.type_context = &types;
+    }
+
+    values[0].core_type_id = record_pointer_id;
+    values[1].core_type_id = volatile_record_pointer_id;
+    ins = (MinicCoreInstruction){0};
+    ins.kind = MINIC_CORE_INSTRUCTION_RECORD_LOAD;
+    ins.core_type_id = record_id;
+    ins.result = MINIC_CORE_VALUE_INVALID;
+    ins.value.record_load.source_address = 0U;
+    ins.value.record_load.destination_object = 0U;
+    REQUIRE(minic_riscv64_core_record_load_supported(&function, &ins, &record_size));
+    REQUIRE(record_size == 4U);
+    ins.value.record_load.source_address = 1U;
+    REQUIRE(minic_riscv64_core_record_load_supported(&function, &ins, NULL));
+    ins.value.record_load.is_volatile = true;
+    REQUIRE(minic_riscv64_core_record_load_supported(&function, &ins, NULL));
+    ins.value.record_load.destination_object = 1U;
+    REQUIRE(!minic_riscv64_core_record_load_supported(&function, &ins, NULL));
+
+    ins = (MinicCoreInstruction){0};
+    ins.kind = MINIC_CORE_INSTRUCTION_RECORD_COPY;
+    ins.core_type_id = record_id;
+    ins.result = MINIC_CORE_VALUE_INVALID;
+    ins.value.record_copy.destination_address = 0U;
+    ins.value.record_copy.source_address = 1U;
+    REQUIRE(minic_riscv64_core_record_copy_supported(&function, &ins));
+    ins.value.record_copy.source_address = 2U;
+    REQUIRE(!minic_riscv64_core_record_copy_supported(&function, &ins));
+
+    ins = (MinicCoreInstruction){0};
+    ins.kind = MINIC_CORE_INSTRUCTION_SCALAR_BITCAST;
+    ins.core_type_id = int_id;
+    /* Shared Core shape now checks the result SSA ID as well as operands. */
+    ins.result = 3U;
+    ins.value.operand = 2U;
+    REQUIRE(minic_riscv64_core_scalar_bitcast_supported(&function, &ins));
+    ins.value.operand = 3U;
+    REQUIRE(!minic_riscv64_core_scalar_bitcast_supported(&function, &ins));
+
+    ins = (MinicCoreInstruction){0};
+    ins.kind = MINIC_CORE_INSTRUCTION_CALL_FRAME_ADDRESS;
+    ins.core_type_id = pointer_id;
+    ins.value.call_frame_address.kind = MINIC_CORE_CALL_FRAME_ADDRESS_RETURN;
+    REQUIRE(!minic_riscv64_core_call_frame_address_supported(&function, &ins));
+    REQUIRE(register_pointer(&types, void_id, &pointer_id));
+    ins.core_type_id = pointer_id;
+    REQUIRE(minic_riscv64_core_call_frame_address_supported(&function, &ins));
+    ins.value.call_frame_address.level = 1U;
+    REQUIRE(!minic_riscv64_core_call_frame_address_supported(&function, &ins));
+
+    /* Source asm and fixed-register validation now run in typed RISC-V
+     * MachineIR; keep this test focused on pure CoreType / ABI admission. */
+
+    /* A source-C descriptor cannot license snapshot stack reuse. Different
+     * Core Record IDs (even with identical layouts) must remain distinct. */
+    {
+        MinicCoreType other_record = {0};
+        MinicCoreObject snapshot_objects[2];
+        MinicCoreInstruction snapshot_instructions[2] = {{0}, {0}};
+        MinicCoreInstructionId snapshot_order[] = {0U, 1U};
+        MinicCoreCallArgument snapshot_argument = {0};
+        MinicCoreBlock snapshot_block = {0};
+        MinicCoreFunction snapshot_function = {0};
+        MinicCoreObjectId candidate = MINIC_CORE_OBJECT_INVALID;
+        memset(snapshot_objects, 0, sizeof(snapshot_objects));
+        other_record.kind = MINIC_CORE_TYPE_RECORD;
+        other_record.has_layout = true;
+        other_record.size = 4U;
+        other_record.alignment = 4U;
+        other_record.value.record.is_complete = true;
+        other_record.value.record.is_union = true;
+        REQUIRE(minic_core_type_register(&types, &other_record, &other_record_id));
+        REQUIRE(other_record_id != record_id);
+        snapshot_objects[0].core_type_id = record_id;
+        snapshot_objects[1].core_type_id = record_id;
+        snapshot_instructions[0].kind = MINIC_CORE_INSTRUCTION_RECORD_LOAD;
+        snapshot_instructions[0].value.record_load.destination_object = 0U;
+        snapshot_instructions[1].kind = MINIC_CORE_INSTRUCTION_CALL;
+        snapshot_instructions[1].value.call.argument_count = 1U;
+        snapshot_instructions[1].value.call.result_object = 1U;
+        snapshot_argument.kind = MINIC_CORE_CALL_ARGUMENT_OBJECT;
+        snapshot_argument.value.object_id = 0U;
+        snapshot_block.instructions = snapshot_order;
+        snapshot_block.instruction_count = 2U;
+        snapshot_function.type_context = &types;
+        snapshot_function.objects = snapshot_objects;
+        snapshot_function.object_count = 2U;
+        snapshot_function.instructions = snapshot_instructions;
+        snapshot_function.instruction_count = 2U;
+        snapshot_function.blocks = &snapshot_block;
+        snapshot_function.block_count = 1U;
+        snapshot_function.call_arguments = &snapshot_argument;
+        snapshot_function.call_argument_count = 1U;
+        REQUIRE(minic_riscv64_record_call_result_snapshot_reuse_candidate(
+            &snapshot_function, 1U, &candidate) && candidate == 0U);
+        snapshot_objects[1].core_type_id = other_record_id;
+        REQUIRE(!minic_riscv64_record_call_result_snapshot_reuse_candidate(
+            &snapshot_function, 1U, &candidate));
+        snapshot_objects[1].core_type_id = volatile_record_id;
+        REQUIRE(!minic_riscv64_record_call_result_snapshot_reuse_candidate(
+            &snapshot_function, 1U, &candidate));
+        snapshot_function.type_context = NULL;
+        REQUIRE(!minic_riscv64_record_call_result_snapshot_reuse_candidate(
+            &snapshot_function, 1U, &candidate));
+    }
+
+    /* The prepared CALL ABI must not consult the C signature or the C
+     * argument type. Its authoritative fixed prefix is the CoreTypeId. */
+    {
+        MinicCoreType direct_signature = {0};
+        direct_signature.kind = MINIC_CORE_TYPE_FUNCTION;
+        direct_signature.value.function.return_type = int_id;
+        direct_signature.value.function.parameters = &int_id;
+        direct_signature.value.function.parameter_count = 1U;
+        REQUIRE(minic_core_type_register(&types, &direct_signature,
+                                         &direct_signature_id));
+    }
+    callee.name = "core_target_callee";
+    callee.name_length = strlen(callee.name);
+    callee.core_function_type_id = direct_signature_id;
+    call_argument.kind = MINIC_CORE_CALL_ARGUMENT_VALUE;
+    call_argument.value.value_id = 3U;
+    function.call_arguments = &call_argument;
+    function.call_argument_count = 1U;
+    ins = (MinicCoreInstruction){0};
+    ins.kind = MINIC_CORE_INSTRUCTION_CALL;
+    ins.core_type_id = int_id;
+    ins.value.call.argument_begin = 0U;
+    ins.value.call.argument_count = 1U;
+    function.instructions = &ins;
+    function.instruction_count = 1U;
+    call_site.instruction_id = 0U;
+    call_site.view.callee = &callee;
+    call_site.view.arguments = &call_argument;
+    call_site.view.core_function_type_id = direct_signature_id;
+    call_site.view.core_return_type_id = int_id;
+    call_site.view.core_parameter_type_ids = &int_id;
+    call_site.view.argument_count = 1U;
+    call_site.view.parameter_count = 1U;
+    call_site.view.return_form = MINIC_CORE_CALL_RETURN_VALUE;
+    call_index.sites = &call_site;
+    call_index.count = 1U;
+    REQUIRE(minic_riscv64_call_plan_cache_build(
+        &function, false, &call_index, &call_cache));
+    REQUIRE(call_cache.count == 1U && call_cache.sites != NULL &&
+            call_cache.sites[0] != NULL);
+    REQUIRE(minic_riscv64_core_direct_call_supported(
+        true, &function, &ins, &call_site.view, call_cache.sites[0]));
+    /* A wrong machine location must still fail, even with valid Core types. */
+    call_cache.sites[0]->arguments[0].integer_register_count = 2U;
+    REQUIRE(!minic_riscv64_core_direct_call_supported(
+        true, &function, &ins, &call_site.view, call_cache.sites[0]));
+    minic_riscv64_call_plan_cache_destroy(&call_cache);
+
+    /* Bytewise scalar memory lowering is now covered by typed selector
+     * memory tests rather than the retired FILE* scalar transport. */
+
+    /* Strict ISA admission and frame predicates depend exclusively on sealed
+     * CoreType identities. No source-language type field exists on Core IR. */
+    REQUIRE(minic_riscv64_core_is_record(&function, record_id));
+    REQUIRE(!minic_riscv64_core_is_record(&function, int_id));
+    REQUIRE(minic_riscv64_core_is_i128(&function, wide_id));
+    REQUIRE(!minic_riscv64_core_is_i128(&function, int_id));
+    isa_ins.kind = MINIC_CORE_INSTRUCTION_INTEGER_CLZ;
+    isa_ins.core_type_id = int_id;
+    REQUIRE(minic_riscv_isa_admit_core_instruction(
+        &strict_isa, &function, &isa_ins, reason, sizeof(reason)));
+    isa_ins.core_type_id = wide_id;
+    REQUIRE(!minic_riscv_isa_admit_core_instruction(
+        &strict_isa, &function, &isa_ins, reason, sizeof(reason)));
+    REQUIRE(strstr(reason, "__int128") != NULL);
+    isa_ins.kind = MINIC_CORE_INSTRUCTION_SCALAR_BITCAST;
+    isa_ins.core_type_id = int_id;
+    isa_ins.value.operand = 0U;
+    values[0].core_type_id = wide_id;
+    REQUIRE(!minic_riscv_isa_admit_core_instruction(
+        &strict_isa, &function, &isa_ins, reason, sizeof(reason)));
+    REQUIRE(strstr(reason, "__int128") != NULL);
+    values[0].core_type_id = int_id;
+    REQUIRE(minic_riscv_isa_admit_core_instruction(
+        &strict_isa, &function, &isa_ins, reason, sizeof(reason)));
+    function.type_context = NULL;
+    REQUIRE(!minic_riscv_isa_admit_core_instruction(
+        &strict_isa, &function, &isa_ins, reason, sizeof(reason)));
+    REQUIRE(strstr(reason, "sealed Core") != NULL);
+
+    minic_core_type_context_destroy(&types);
+    return 0;
+}
+
+int main(void) {
+    const int line = run();
+    if (line != 0) {
+        fprintf(stderr, "RV64_CORETYPE_TARGET_ADMISSION=FAIL line=%d\n", line);
+        return 1;
+    }
+    puts("RV64_CORETYPE_TARGET_ADMISSION=PASS record_load_copy volatile bitcast snapshot_nominal call_abi overflow_poison_C strict_isa_frame_type");
+    return 0;
+}
+@@@ end

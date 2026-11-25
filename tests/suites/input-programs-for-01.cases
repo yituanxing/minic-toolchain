@@ -1,0 +1,76 @@
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/programs/c0/for_clause_updates.c"}
+int main(void)
+{
+    int values[4];
+    int *pointer;
+    int index;
+
+    values[0] = 0;
+    values[1] = 0;
+    values[2] = 0;
+    values[3] = 9;
+    pointer = &values[0];
+    index = 0;
+
+    for (; index < 3; (void)pointer++, index++) {
+        *pointer = index + 1;
+    }
+
+    if (values[0] != 1) {
+        return 1;
+    }
+    if (values[1] != 2) {
+        return 2;
+    }
+    if (values[2] != 3) {
+        return 3;
+    }
+    if (values[3] != 9) {
+        return 4;
+    }
+    if (index != 3) {
+        return 5;
+    }
+    if (pointer != &values[3]) {
+        return 6;
+    }
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/programs/c0/for_counter.c"}
+int main(void)
+{
+    unsigned i;
+
+    i = 0;
+    for (i = 0; i < 8; ++i) {
+    }
+    return i;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/programs/c0/for_iterations.c"}
+int main(void)
+{
+    unsigned i, count;
+
+    i = 0;
+    count = 0;
+    for (i = 0; i < 8; ++i) {
+        count = count + 1;
+    }
+    return count;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/programs/c0/for_loop.c"}
+int main(void)
+{
+    unsigned i, total;
+
+    i = 0;
+    total = 0;
+    for (i = 0; i < 8; ++i) {
+        total = total + i;
+    }
+    return total;
+}
+@@@ end

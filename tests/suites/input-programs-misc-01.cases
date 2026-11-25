@@ -1,0 +1,1426 @@
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/programs/c0/array_decay.c"}
+static const int global_values[2] = {31, 0};
+
+int read_first(const int *pointer)
+{
+    return pointer[0];
+}
+
+int bump_first(int *pointer)
+{
+    pointer[0] = pointer[0] + 1;
+    return pointer[0];
+}
+
+int local_case(void)
+{
+    int values[2];
+
+    values[0] = 10;
+    return bump_first(values);
+}
+
+int static_case(void)
+{
+    static int values[2];
+
+    values[0] = 20;
+    return bump_first(values);
+}
+
+int global_case(void)
+{
+    return read_first(global_values);
+}
+
+int main(void)
+{
+    return local_case() + static_case() + global_case() - 63;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/programs/c0/array_subscript.c"}
+int main(void)
+{
+    int values[5];
+    int index = 0;
+    int total = 0;
+
+    while (index < 5) {
+        values[index] = index * 3 + 1;
+        index = index + 1;
+    }
+
+    index = 0;
+    while (index < 5) {
+        total = total + values[index];
+        index = index + 1;
+    }
+
+    return total;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/programs/c0/bitwise_xor.c"}
+int main(void)
+{
+    int precedence;
+    int signed_value;
+    unsigned high;
+    unsigned mixed;
+
+    precedence = 4 ^ 1 == 1;
+    signed_value = -7 ^ 3;
+    high = 0 - 1;
+    mixed = high ^ 255;
+    return precedence + (mixed % 251) + (signed_value + 10);
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/programs/c0/block_scope.c"}
+int main(void)
+{
+    int value = 2;
+    int result = 0;
+
+    if (1) {
+        int value = 7;
+        result = value * 10;
+
+        if (1) {
+            int value = 3;
+            result = result + value;
+        }
+
+        result = result + value;
+    }
+
+    return result + value;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/programs/c0/block_scope_function_declaration.c"}
+static int call_block_declared(void)
+{
+    int block_helper(int value);
+    return block_helper(41);
+}
+
+int block_helper(int value)
+{
+    return value + 1;
+}
+
+int main(void)
+{
+    return call_block_declared() == 42 ? 0 : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/programs/c0/character_array_string_initializer.c"}
+char global_padded[10] = "ratelimit";
+static char global_exact[3] = "abc";
+
+static int runtime_string_check(void) {
+    char path[16] = "//enomem";
+    char inferred[] = "x"
+                      "\n";
+
+    return path[0] == '/' && path[1] == '/' && path[2] == 'e' && path[7] == 'm' && path[8] == 0 &&
+           path[15] == 0 && sizeof(inferred) == 3 && inferred[0] == 'x' && inferred[1] == '\n' &&
+           inferred[2] == 0;
+}
+
+int main(void) {
+    return global_padded[0] == 'r' && global_padded[8] == 't' && global_padded[9] == 0 &&
+                   global_exact[0] == 'a' && global_exact[2] == 'c' && runtime_string_check()
+               ? 0
+               : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/programs/c0/character_literals.c"}
+int main(void)
+{
+    int value;
+
+    if ('\0' != 0) {
+        return 1;
+    }
+    if ('A' != 65) {
+        return 2;
+    }
+    if ('.' != 46 || '0' != 48 || '9' != 57) {
+        return 3;
+    }
+    if ('\n' != 10 || '\t' != 9) {
+        return 4;
+    }
+    if ('\\' != 92 || '\'' != 39 || '"' != 34 || '\?' != 63) {
+        return 5;
+    }
+
+    value = '1' + '2' - '0';
+    if (value != 51) {
+        return 6;
+    }
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/programs/c0/collatz.c"}
+int main(void)
+{
+    int value = 27;
+    int steps = 0;
+
+    while (value != 1) {
+        if (value % 2 == 0)
+            value = value / 2;
+        else
+            value = value * 3 + 1;
+        steps = steps + 1;
+    }
+    return steps;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/programs/c0/compound_xor_assignment.c"}
+static int pick(int *calls)
+{
+    *calls = *calls + 1;
+    return 0;
+}
+
+int main(void)
+{
+    int value;
+    int *pointer;
+    int calls;
+    unsigned mask;
+
+    value = 85;
+    pointer = &value;
+    calls = 0;
+    mask = 240;
+    pointer[pick(&calls)] ^= 15;
+    mask ^= 255;
+    return value + calls * 100 + mask;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/programs/c0/conditional_expression.c"}
+int main(void) {
+    double a = 3.0;
+    double b = 2.0;
+    double maximum = (a > b) ? a : b;
+    double minimum = (a < b) ? a : b;
+
+    if (maximum != 3.0) {
+        return 1;
+    }
+    if (minimum != 2.0) {
+        return 2;
+    }
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/programs/c0/const_local.c"}
+int preserve_value(int input)
+{
+    const int saved = input + 5;
+    return saved * 2;
+}
+
+int main(void)
+{
+    return preserve_value(11);
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/programs/c0/continue_control_flow.c"}
+int main(void) {
+    int i = 0;
+    int total = 0;
+
+    for (i = 0; i < 6; i++) {
+        if (i == 2) {
+            continue;
+        }
+        switch (i) {
+        case 4:
+            continue;
+        default:
+            break;
+        }
+        total += i;
+    }
+    if (total != 9) {
+        return 1;
+    }
+
+    i = 0;
+    while (i < 5) {
+        i = i + 1;
+        if (i == 3) {
+            continue;
+        }
+        total += 1;
+    }
+    if (total != 13) {
+        return 2;
+    }
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/programs/c0/direct_record_member.c"}
+struct Pair {
+    int left;
+    int right;
+};
+
+static struct Pair global_pair = {0, 0};
+
+int main(void)
+{
+    struct Pair local_pair;
+    struct Pair *pointer;
+
+    pointer = &local_pair;
+    local_pair.left = 14;
+    pointer->right = 23;
+
+    global_pair.left = local_pair.left;
+    global_pair.right = pointer->right;
+    return global_pair.left + global_pair.right;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/programs/c0/expression_statement.c"}
+static void set_value(int *value, int replacement)
+{
+    *value = replacement;
+}
+
+static int increment(int *value)
+{
+    *value = *value + 1;
+    return *value;
+}
+
+int main(void)
+{
+    int value;
+
+    value = 4;
+    set_value(&value, 9);
+    increment(&value);
+    value + 100;
+    return value;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/programs/c0/fibonacci.c"}
+int main(void)
+{
+    int index = 0;
+    int previous = 0;
+    int current = 1;
+    int next = 0;
+
+    while (index < 10) {
+        next = previous + current;
+        previous = current;
+        current = next;
+        index = index + 1;
+    }
+    return previous;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/programs/c0/floating_scalar_conversions.c"}
+int main(void)
+{
+    double value = 7.75;
+    int result = 0;
+
+    if (value > 7)
+    {
+        result = result + 1;
+    }
+    if (value >= 7)
+    {
+        result = result + 2;
+    }
+    if (value < 8)
+    {
+        result = result + 4;
+    }
+    if (value <= 8)
+    {
+        result = result + 8;
+    }
+    if (value != 7)
+    {
+        result = result + 16;
+    }
+    if (value == 7.75)
+    {
+        result = result + 32;
+    }
+    if ((int)value == 7)
+    {
+        result = result + 64;
+    }
+
+    if (result == 127)
+    {
+        return 0;
+    }
+    return 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/programs/c0/gcd.c"}
+int main(void)
+{
+    int a = 1071;
+    int b = 462;
+    int remainder = 0;
+
+    while (b != 0) {
+        remainder = a % b;
+        a = b;
+        b = remainder;
+    }
+    return a;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/programs/c0/global_array_read.c"}
+static const int table[4] = {3, 5, 11, 17};
+
+int read_table(int index)
+{
+    return table[index];
+}
+
+int main(void)
+{
+    int table;
+
+    table = 4;
+    return read_table(2) + table;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/programs/c0/global_record_address.c"}
+typedef struct {
+    int value;
+} Box;
+
+static Box global_box = { 0 };
+
+static int read_box(Box *box) {
+    return box->value;
+}
+
+int main(void) {
+    if (read_box(&global_box) != 0) {
+        return 1;
+    }
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/programs/c0/gup_page_count_backedge.c"}
+/*
+ * Regression from Linux mm/gup.c: sanity_check_pinned_pages().
+ * A parameter initially specialized to a constant must be re-evaluated
+ * after the loop's decrement and pointer advance.  The old MiniC profile
+ * emitted an unconditional backedge and read past the last page.
+ *
+ * Keep the source executable by ordinary GCC and the MiniC RV64 oracle.
+ */
+struct page_probe {
+    unsigned long marker;
+};
+
+static __attribute__((always_inline)) inline int
+scan_pages(struct page_probe **pages, unsigned long npages)
+{
+    int sum = 0;
+    for (; npages; npages--, pages++) {
+        struct page_probe *page = *pages;
+        if (page == 0)
+            return -99;
+        sum += (int)page->marker;
+    }
+    return sum;
+}
+
+int main(void)
+{
+    struct page_probe p0 = {7}, p1 = {13}, p2 = {19};
+    struct page_probe *pages[4] = {&p0, &p1, &p2, (void *)0};
+    if (scan_pages(pages, 0) != 0)
+        return 1;
+    if (scan_pages(pages, 1) != 7)
+        return 2;
+    if (scan_pages(pages, 2) != 20)
+        return 3;
+    if (scan_pages(pages, 3) != 39)
+        return 4;
+    if (scan_pages(pages + 2, 1) != 19)
+        return 5;
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/programs/c0/indirect_function_calls.c"}
+struct Hooks {
+    int (*binary)(int, int);
+    int (*unary)(int);
+};
+
+static int add(int left, int right)
+{
+    return left + right;
+}
+
+static int increment(int value)
+{
+    return value + 1;
+}
+
+static struct Hooks hooks = { add, increment };
+
+int main(void)
+{
+    if (hooks.binary(20, 22) != 42) {
+        return 1;
+    }
+    if (hooks.unary(hooks.binary(3, 4)) != 8) {
+        return 2;
+    }
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/programs/c0/integer_to_double_conversion.c"}
+static double return_integer_as_double(int value) {
+    return value;
+}
+
+static int matches_bytes(
+    unsigned char *bytes, int byte2, int byte3, int byte4, int byte5, int byte6, int byte7) {
+    if ((bytes[0] != 0) || (bytes[1] != 0)) {
+        return 0;
+    }
+    return (bytes[2] == byte2) && (bytes[3] == byte3) && (bytes[4] == byte4) &&
+           (bytes[5] == byte5) && (bytes[6] == byte6) && (bytes[7] == byte7);
+}
+
+int main(void) {
+    int signed_word = -3;
+    unsigned int unsigned_word = 0;
+    long signed_long = -5;
+    unsigned long unsigned_long = 0;
+    double word_value = signed_word;
+    double unsigned_word_value;
+    double long_value = (double)signed_long;
+    double unsigned_long_value;
+    double returned_value;
+    unsigned char *bytes = (unsigned char *)&word_value;
+
+    if (!matches_bytes(bytes, 0, 0, 0, 0, 8, 192)) {
+        return 1;
+    }
+
+    unsigned_word = unsigned_word - 1;
+    unsigned_word_value = unsigned_word;
+    bytes = (unsigned char *)&unsigned_word_value;
+    if (!matches_bytes(bytes, 224, 255, 255, 255, 239, 65)) {
+        return 2;
+    }
+
+    bytes = (unsigned char *)&long_value;
+    if (!matches_bytes(bytes, 0, 0, 0, 0, 20, 192)) {
+        return 3;
+    }
+
+    unsigned_long = unsigned_long - 1;
+    unsigned_long_value = unsigned_long;
+    bytes = (unsigned char *)&unsigned_long_value;
+    if (!matches_bytes(bytes, 0, 0, 0, 0, 240, 67)) {
+        return 4;
+    }
+
+    returned_value = return_integer_as_double(7);
+    bytes = (unsigned char *)&returned_value;
+    if (!matches_bytes(bytes, 0, 0, 0, 0, 28, 64)) {
+        return 5;
+    }
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/programs/c0/local_array_zero_initializer.c"}
+int main(void) {
+    unsigned char values[5] = {0};
+
+    values[2] = 7;
+    if (values[0] != 0) {
+        return 1;
+    }
+    if (values[1] != 0) {
+        return 2;
+    }
+    if (values[2] != 7) {
+        return 3;
+    }
+    if (values[3] != 0) {
+        return 4;
+    }
+    if (values[4] != 0) {
+        return 5;
+    }
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/programs/c0/local_double_objects.c"}
+static double literal_value(void) {
+    return 123.5;
+}
+
+static int matches_double_bytes(unsigned char *bytes, int byte5, int byte6, int byte7) {
+    if ((bytes[0] != 0) || (bytes[1] != 0) || (bytes[2] != 0) || (bytes[3] != 0) ||
+        (bytes[4] != 0)) {
+        return 0;
+    }
+    return (bytes[5] == byte5) && (bytes[6] == byte6) && (bytes[7] == byte7);
+}
+
+int main(void) {
+    double value = 1.5;
+    double copy = value;
+    double from_call = literal_value();
+    unsigned char *bytes = (unsigned char *)&copy;
+
+    if (!matches_double_bytes(bytes, 0, 248, 63)) {
+        return 1;
+    }
+
+    value = 1.5 + 2.25;
+    bytes = (unsigned char *)&value;
+    if (!matches_double_bytes(bytes, 0, 14, 64)) {
+        return 2;
+    }
+
+    bytes = (unsigned char *)&from_call;
+    if (!matches_double_bytes(bytes, 224, 94, 64)) {
+        return 3;
+    }
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/programs/c0/long_integer_semantics.c"}
+static const unsigned long global_words[2] = {1, 2};
+
+static unsigned long pass_unsigned(unsigned long value)
+{
+    return value;
+}
+
+static long pass_signed(long value)
+{
+    return value;
+}
+
+int main(void)
+{
+    unsigned long one = global_words[0];
+    unsigned long high = one << 63;
+    unsigned long wide = one << 40;
+    unsigned long value = pass_unsigned(high + wide + 37);
+    unsigned long product = (wide + 3) * 5;
+    long negative = -((long)one << 40);
+
+    if (value < high) {
+        return 1;
+    }
+    if ((value >> 63) != 1) {
+        return 2;
+    }
+    if ((value - high) != wide + 37) {
+        return 3;
+    }
+    if (product / 5 != wide + 3) {
+        return 4;
+    }
+    if (product % 5 != 0) {
+        return 5;
+    }
+    if ((high ^ high) != 0) {
+        return 6;
+    }
+    if (pass_signed(negative) >= 0) {
+        return 7;
+    }
+    if ((negative >> 39) != -2) {
+        return 8;
+    }
+    if ((unsigned long)negative == 0) {
+        return 9;
+    }
+    if (global_words[1] != 2) {
+        return 10;
+    }
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/programs/c0/mutual_recursion.c"}
+int is_even(int value);
+int is_odd(int value);
+
+int is_even(int value)
+{
+    if (value == 0)
+        return 1;
+    return is_odd(value - 1);
+}
+
+int is_odd(int value)
+{
+    if (value == 0)
+        return 0;
+    return is_even(value - 1);
+}
+
+int main(void)
+{
+    return is_even(8) * 100 + is_odd(7) * 20 + is_even(6);
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/programs/c0/named_goto_labels.c"}
+int main(void)
+{
+    int value = 0;
+
+    goto forward_target;
+    value = 99;
+
+forward_target:
+    value = value + 1;
+
+loop_target:
+    value = value + 1;
+    if (value < 4) {
+        goto loop_target;
+    }
+
+    if (value != 4) {
+        return 1;
+    }
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/programs/c0/null_member_address_offset.c"}
+struct OffsetProbe {
+    unsigned char lead;
+    unsigned long value;
+};
+
+static const unsigned long value_offset =
+    (unsigned long)&((struct OffsetProbe *)0)->value;
+
+int main(void)
+{
+    return value_offset == 8U ? 0 : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/programs/c0/null_pointer_constant.c"}
+static int *make_null(void)
+{
+    return (void *)0;
+}
+
+int main(void)
+{
+    int value;
+    int *pointer;
+
+    pointer = make_null();
+
+    value = 31;
+    pointer = &value;
+    return *pointer;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/programs/c0/plain_char_semantics.c"}
+/* Retain storage explicitly: this test verifies byte layout independently
+ * of dead-static-object elimination. */
+static const char table[4] __attribute__((used)) = {0, 128, 255, 1};
+
+struct Pair {
+    char byte;
+    int value;
+};
+
+char narrow_to_char(int value)
+{
+    return value;
+}
+
+char store_at(char *base, int index, int value)
+{
+    base[index] = value;
+    return base[index];
+}
+
+int main(void)
+{
+    char values[3];
+    char local;
+    char *pointer;
+    struct Pair pair;
+    struct Pair *pair_pointer;
+
+    local = 255;
+    if (local < 0) {
+        return 1;
+    }
+    if (local != 255) {
+        return 2;
+    }
+    if (table[1] != 128) {
+        return 3;
+    }
+    if (table[2] != 255) {
+        return 4;
+    }
+
+    values[0] = 0;
+    values[1] = 0;
+    values[2] = 0;
+    pointer = &values[0];
+    if (store_at(pointer, 1, 258) != 2) {
+        return 5;
+    }
+    if (*(pointer + 1) != 2) {
+        return 6;
+    }
+    pointer[2] = 255;
+    if (values[2] != 255) {
+        return 7;
+    }
+
+    pair_pointer = &pair;
+    pair_pointer->byte = 200;
+    pair_pointer->value = 7;
+    if (pair_pointer->byte != 200) {
+        return 8;
+    }
+    if (pair_pointer->value != 7) {
+        return 9;
+    }
+
+    if (narrow_to_char(511) != 255) {
+        return 10;
+    }
+    if ((char)258 != 2) {
+        return 11;
+    }
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/programs/c0/post_type_declaration_specifiers.c"}
+typedef int Word;
+
+Word static internal_value = 35;
+Word extern external_value;
+Word external_value = 7;
+
+Word inline helper(void)
+{
+    return internal_value + external_value;
+}
+
+int main(void)
+{
+    return helper() == 42 ? 0 : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/programs/c0/postfix_integer_updates.c"}
+int main(void)
+{
+    int value = 4;
+    int values[2];
+    unsigned char byte = 255;
+
+    values[0] = 7;
+    values[1] = 11;
+    value++;
+    value--;
+    values[0]--;
+    values[1]++;
+    byte++;
+
+    if (value != 4) {
+        return 1;
+    }
+    if (values[0] != 6 || values[1] != 12) {
+        return 2;
+    }
+    if (byte != 0) {
+        return 3;
+    }
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/programs/c0/postfix_subscript.c"}
+typedef int Row[3];
+typedef Row Matrix[2];
+
+static int exercise(Matrix *matrix)
+{
+    (*matrix)[0][0] = 2;
+    (*matrix)[0][1] = 4;
+    (*matrix)[1][2] = 9;
+    return (*matrix)[0][0] + (*matrix)[0][1] + (*matrix)[1][2];
+}
+
+int main(void)
+{
+    Matrix matrix;
+
+    return exercise(&matrix);
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/programs/c0/predefined_func_name.c"}
+static int check_func(void) {
+    if (sizeof(__func__) != 11U) {
+        return 1;
+    }
+    if (__func__[0] != 'c' || __func__[9] != 'c') {
+        return 2;
+    }
+    if (&__func__[0] != &__func__[0]) {
+        return 3;
+    }
+    if (sizeof(__FUNCTION__) != sizeof(__func__)) {
+        return 4;
+    }
+    if (__FUNCTION__[0] != 'c' || __FUNCTION__[9] != 'c') {
+        return 5;
+    }
+    if (&__FUNCTION__[0] != &__func__[0]) {
+        return 6;
+    }
+    return 0;
+}
+
+int main(void) {
+    return check_func();
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/programs/c0/prime_count.c"}
+int main(void)
+{
+    int value = 2;
+    int divisor = 0;
+    int is_prime = 0;
+    int count = 0;
+
+    while (value <= 50) {
+        divisor = 2;
+        is_prime = 1;
+        while (divisor * divisor <= value) {
+            if (value % divisor == 0)
+                is_prime = 0;
+            divisor = divisor + 1;
+        }
+        if (is_prime)
+            count = count + 1;
+        value = value + 1;
+    }
+    return count;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/programs/c0/recursive_factorial.c"}
+int factorial(int value)
+{
+    if (value <= 1)
+        return 1;
+    return value * factorial(value - 1);
+}
+
+int main(void)
+{
+    return factorial(5);
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/programs/c0/runtime_function_designators.c"}
+struct Hooks {
+    int (*apply)(int);
+};
+
+static int increment(int value) {
+    return value + 1;
+}
+
+static int decrement(int value) {
+    return value - 1;
+}
+
+static struct Hooks hooks = {decrement};
+
+static int shadow(void) {
+    int increment;
+    increment = 7;
+    return increment;
+}
+
+int main(void) {
+    if (hooks.apply(10) != 9) {
+        return 1;
+    }
+    hooks.apply = increment;
+    if (hooks.apply != increment) {
+        return 2;
+    }
+    if (increment != hooks.apply) {
+        return 3;
+    }
+    if (hooks.apply(41) != 42) {
+        return 4;
+    }
+    hooks.apply = decrement;
+    if (hooks.apply(10) != 9) {
+        return 5;
+    }
+    if (shadow() != 7) {
+        return 6;
+    }
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/programs/c0/runtime_record_array_initializer.c"}
+typedef unsigned char u8;
+
+typedef struct {
+    u8 b[16];
+} guid_t;
+
+typedef struct {
+    u8 one[1];
+    u8 bytes[4];
+    int tail;
+} packet_t;
+
+static int guid_score(const guid_t *guid) {
+    return guid->b[0] + guid->b[1] + guid->b[15];
+}
+
+static int packet_score(const packet_t *packet) {
+    return packet->one[0] + packet->bytes[0] + packet->bytes[1] + packet->bytes[2] +
+           packet->bytes[3] + packet->tail;
+}
+
+int main(void) {
+    int score;
+    packet_t positional;
+    packet_t designated;
+
+    score = guid_score(&(guid_t){
+        {0x61 & 0xff, (0x61 >> 1) & 0xff, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}});
+    positional = (packet_t){{7}, {2, 3}, 5};
+    designated = (packet_t){.one = {9}, .bytes = {4, 5, 6}, .tail = 8};
+    score += packet_score(&positional);
+    score += packet_score(&designated);
+    return score;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/programs/c0/scalar_conditions.c"}
+static int bump(int *counter, int result)
+{
+    *counter = *counter + 1;
+    return result;
+}
+
+int main(void)
+{
+    int count;
+    int value;
+    int *pointer;
+
+    count = 0;
+    value = 7;
+    pointer = &value;
+
+    if (!pointer) {
+        return 1;
+    }
+    if ((int *)0) {
+        return 2;
+    }
+
+    if (0 && bump(&count, 1)) {
+        return 3;
+    }
+    if (count != 0) {
+        return 4;
+    }
+
+    if (!(1 || bump(&count, 0))) {
+        return 5;
+    }
+    if (count != 0) {
+        return 6;
+    }
+
+    if (!(1 && bump(&count, 1))) {
+        return 7;
+    }
+    if (count != 1) {
+        return 8;
+    }
+
+    if (!(0 || bump(&count, 1))) {
+        return 9;
+    }
+    if (count != 2) {
+        return 10;
+    }
+
+    if (!(pointer && 1)) {
+        return 11;
+    }
+    if (!((int *)0 || pointer)) {
+        return 12;
+    }
+
+    if (!(1 || 0 && bump(&count, 1))) {
+        return 13;
+    }
+    if (count != 2) {
+        return 14;
+    }
+
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/programs/c0/self_referential_record.c"}
+typedef struct Node {
+    struct Node *next;
+    int value;
+} Node;
+
+int main(void)
+{
+    Node first;
+    Node second;
+    Node *cursor = &first;
+
+    cursor->next = &second;
+    cursor->next->value = 41;
+    return cursor->next->value;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/programs/c0/sizeof_semantics.c"}
+struct Pair {
+    int value;
+    char tag;
+};
+
+static int bump(int *value)
+{
+    *value = *value + 1;
+    return *value;
+}
+
+int main(void)
+{
+    int values[3];
+    int side_effect;
+    struct Pair pair;
+
+    side_effect = 0;
+
+    if (sizeof("") != 1) {
+        return 1;
+    }
+    if (sizeof("abc") != 4) {
+        return 2;
+    }
+    if (sizeof(char) != 1 || sizeof(int) != 4 || sizeof(long) != 8) {
+        return 3;
+    }
+    if (sizeof(int *) != 8 || sizeof(double) != 8 || sizeof(float) != 4) {
+        return 4;
+    }
+    if (sizeof(values) != 12) {
+        return 5;
+    }
+    if (sizeof(pair) != sizeof(struct Pair) || sizeof(struct Pair) != 8) {
+        return 6;
+    }
+    if (sizeof(bump(&side_effect)) != 4) {
+        return 7;
+    }
+    if (side_effect != 0) {
+        return 8;
+    }
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/programs/c0/standalone_block.c"}
+int main(void)
+{
+    int value = 5;
+    int result = 0;
+
+    {
+        int value = 9;
+        result = value;
+
+        {
+            int value = 4;
+            result = result + value;
+        }
+
+        result = result + value;
+    }
+
+    return result * 10 + value;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/programs/c0/string_literals.c"}
+int main(void)
+{
+    const char *text;
+    const char *empty;
+
+    text = "A\n\"\\";
+    empty = "";
+    return (text[0] - 65) + (text[1] - 10) + (text[2] - 34) + (text[3] - 92) + text[4] +
+           empty[0];
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/programs/c0/switch_control_flow.c"}
+static int classify(int value)
+{
+    int result = 0;
+
+    switch (value) {
+    case 1:
+    case 2:
+        result = 10;
+        break;
+    case 3:
+        result = 20;
+    case 4:
+        result = result + 1;
+        break;
+    default:
+        result = 99;
+    }
+    return result;
+}
+
+static int selector_once(int *count)
+{
+    *count = *count + 1;
+    return 2;
+}
+
+static int nested_break_targets(int value)
+{
+    int result = 0;
+    int running = 1;
+
+    while (running) {
+        switch (value) {
+        case 7:
+            result = 30;
+            break;
+        default:
+            result = 40;
+            break;
+        }
+        result = result + 1;
+        break;
+    }
+
+    switch (value) {
+    case 7:
+        while (1) {
+            result = result + 10;
+            break;
+        }
+        result = result + 2;
+        break;
+    default:
+        result = 0;
+    }
+    return result;
+}
+
+static int nested_switch(void)
+{
+    int result = 0;
+
+    switch (8) {
+    case 8:
+        switch (9) {
+        case 9:
+            result = 5;
+            break;
+        default:
+            result = 90;
+        }
+        result = result + 6;
+        break;
+    default:
+        result = 99;
+    }
+    return result;
+}
+
+int main(void)
+{
+    int count = 0;
+    int result = 0;
+
+    if (classify(1) != 10) {
+        return 1;
+    }
+    if (classify(2) != 10) {
+        return 2;
+    }
+    if (classify(3) != 21) {
+        return 3;
+    }
+    if (classify(4) != 1) {
+        return 4;
+    }
+    if (classify(99) != 99) {
+        return 5;
+    }
+
+    switch (selector_once(&count)) {
+    case 2:
+        result = 17;
+        break;
+    default:
+        result = 99;
+    }
+    if (count != 1 || result != 17) {
+        return 6;
+    }
+    if (nested_break_targets(7) != 43) {
+        return 7;
+    }
+    if (nested_switch() != 11) {
+        return 8;
+    }
+
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/programs/c0/switch_unreachable_after_break.c"}
+static int switch_tail(int value)
+{
+    int result = 7;
+
+    switch (value) {
+    case 1:
+        break;
+        result = 99;
+    case 2:
+        result = 42;
+        break;
+    default:
+        result = 3;
+        break;
+    }
+    return result;
+}
+
+int main(void)
+{
+    if (switch_tail(1) != 7) return 1;
+    if (switch_tail(2) != 42) return 2;
+    if (switch_tail(9) != 3) return 3;
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/programs/c0/unsigned_char_layout.c"}
+typedef unsigned char byte;
+
+/* This fixture inspects physical byte emission; GNU -O2 can otherwise fold
+ * its constant reads and remove the table as dead static storage. */
+static const byte table[4] __attribute__((used)) = {0, 127, 128, 255};
+
+struct Packet {
+    byte prefix;
+    int payload;
+    byte suffix;
+};
+
+byte narrow(int value)
+{
+    return (byte)value;
+}
+
+byte store_at(byte *base, int index, int value)
+{
+    base[index] = value;
+    return base[index];
+}
+
+int fill_packet(struct Packet *packet)
+{
+    packet->prefix = 257;
+    packet->suffix = 258;
+    return packet->prefix + packet->suffix;
+}
+
+int main(void)
+{
+    byte values[3];
+    byte *cursor;
+    byte left;
+    byte right;
+    struct Packet packet;
+    int score;
+
+    values[0] = 300;
+    values[1] = 0;
+    values[2] = 0;
+    cursor = &values[0];
+    left = 200;
+    right = 100;
+    score = 0;
+
+    if (values[0] == 44) {
+        score = score + 1;
+    }
+    if (store_at(cursor, 1, 258) == 2) {
+        score = score + 2;
+    }
+    cursor = cursor + 1;
+    if (*cursor == 2) {
+        score = score + 4;
+    }
+    if (narrow(511) == 255) {
+        score = score + 8;
+    }
+    if (table[2] + table[3] == 383) {
+        score = score + 16;
+    }
+    if (fill_packet(&packet) == 3) {
+        score = score + 32;
+    }
+    if (left + right == 300) {
+        score = score + 64;
+    }
+    return score;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/programs/c0/unsigned_semantics.c"}
+int main(void)
+{
+    unsigned value;
+    unsigned quotient;
+    unsigned remainder;
+
+    value = 0 - 1;
+    quotient = value / 65535;
+    remainder = value % 251;
+    if (value > 1) {
+        return (quotient + remainder) % 251;
+    }
+    return 1;
+}
+@@@ end

@@ -1,0 +1,288 @@
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/target/core_switch_detached_goto_reentry.c"}
+/* A goto into a switch can enter a C label immediately before a case label.
+ * The source segment before it may itself terminate. The Core switch owner
+ * must lower the detached reentry, including its fallthrough to the case,
+ * not leave an empty referenced block for the verifier to reject. */
+int minic_switch_detached_reentry(int choice, int condition) {
+    switch (choice) {
+    case 0:
+        if (condition) goto custom_auto;
+        return 10;
+    case 1:
+        if (condition) {
+            goto custom_auto;
+        } else {
+            return 11;
+        }
+        break;
+    custom_auto:
+    case 2:
+        return choice + 20;
+    default:
+        return 30;
+    }
+    return 40;
+}
+
+int minic_switch_sibling_reentry(int mode) {
+    switch (mode) {
+    case 0:
+        goto alpha;
+    case 1:
+        return 1;
+        break;
+    alpha:
+    case 2:
+        return 2;
+    default:
+        return 3;
+    }
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/target/riscv64/core_basic_emitter_runtime.c"}
+extern int core_basic_math(int x, int y);
+extern int core_branch(int x);
+extern int core_ninth(int a0, int a1, int a2, int a3, int a4, int a5, int a6, int a7, int a8);
+
+int main(void) {
+    if (core_basic_math(2, 3) != 0) {
+        return 1;
+    }
+    if (core_basic_math(2, -2) != 1) {
+        return 2;
+    }
+    if (core_branch(0) != -3) {
+        return 3;
+    }
+    if (core_branch(4) != 7) {
+        return 4;
+    }
+    if (core_ninth(1, 2, 3, 4, 5, 6, 7, 8, 9) != 9) {
+        return 5;
+    }
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/target/riscv64/core_frontend_differential.i"}
+struct CoreDiffLayout {
+    char prefix;
+    int value;
+};
+
+int core_diff_math(int x, int y) {
+    return -(x + y);
+}
+
+int core_diff_branch(int x) {
+    if (x) {
+        return 7;
+    }
+    return -3;
+}
+
+int core_diff_zero(int x) {
+    return !x;
+}
+
+int core_diff_ninth(int a0,
+                    int a1,
+                    int a2,
+                    int a3,
+                    int a4,
+                    int a5,
+                    int a6,
+                    int a7,
+                    int a8) {
+    return a8;
+}
+
+int core_diff_pointer_zero(int *value) {
+    return !value;
+}
+
+int core_diff_call_target(int a, int b, int c, int d, int e, int f) {
+    return a + b + c + d + e + f;
+}
+
+int core_diff_call(int value) {
+    return core_diff_call_target(value, 2, 3, 4, 5, 6);
+}
+
+int core_diff_field(struct CoreDiffLayout *item) {
+    item->value = 41;
+    return 7;
+}
+
+int core_diff_pointer_call_target(int *value) {
+    return !value;
+}
+
+int core_diff_field_call(struct CoreDiffLayout *item) {
+    int result;
+
+    result = core_diff_pointer_call_target(&item->value);
+    return result;
+}
+
+void core_diff_call_nop(void) {
+    return;
+}
+
+int core_diff_void_call(int value) {
+    core_diff_call_nop();
+    return -value;
+}
+
+static int core_diff_static(int value) {
+    return -value;
+}
+
+int __attribute__((weak)) core_diff_weak(int value) {
+    return value + 1;
+}
+
+__attribute__((visibility("hidden"))) int core_diff_hidden(int value) {
+    return !value;
+}
+
+int __attribute__((section(".core.diff.text"))) core_diff_section(int value) {
+    return value;
+}
+
+int core_diff_asm(int value) __asm__("core_diff_asm_alias");
+int core_diff_asm(int value) {
+    return value;
+}
+
+int core_diff_asm_call(int value) {
+    return core_diff_asm(value);
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/target/riscv64/core_frontend_differential_runtime.c"}
+#include <stdio.h>
+
+struct CoreDiffLayout {
+    char prefix;
+    int value;
+};
+
+int core_diff_math(int x, int y);
+int core_diff_branch(int x);
+int core_diff_zero(int x);
+int core_diff_ninth(int a0,
+                    int a1,
+                    int a2,
+                    int a3,
+                    int a4,
+                    int a5,
+                    int a6,
+                    int a7,
+                    int a8);
+int core_diff_pointer_zero(int *value);
+int core_diff_call(int value);
+int core_diff_field(struct CoreDiffLayout *item);
+int core_diff_field_call(struct CoreDiffLayout *item);
+int core_diff_void_call(int value);
+int core_diff_asm_call(int value);
+
+int main(void) {
+    static const int values[] = {-7, -1, 0, 1, 9};
+    struct CoreDiffLayout layout;
+    size_t left;
+    size_t right;
+    int pointed;
+
+    for (left = 0U; left < sizeof(values) / sizeof(values[0]); ++left) {
+        for (right = 0U; right < sizeof(values) / sizeof(values[0]); ++right) {
+            (void)printf("math %d %d %d\n",
+                         values[left],
+                         values[right],
+                         core_diff_math(values[left], values[right]));
+        }
+    }
+    for (left = 0U; left < sizeof(values) / sizeof(values[0]); ++left) {
+        (void)printf("branch %d %d\n", values[left], core_diff_branch(values[left]));
+        (void)printf("zero %d %d\n", values[left], core_diff_zero(values[left]));
+        (void)printf("call %d %d\n", values[left], core_diff_call(values[left]));
+        (void)printf("void-call %d %d\n", values[left], core_diff_void_call(values[left]));
+        (void)printf("asm-call %d %d\n", values[left], core_diff_asm_call(values[left]));
+    }
+    layout.prefix = 3;
+    layout.value = -99;
+    (void)printf("field-ret %d\n", core_diff_field(&layout));
+    (void)printf("field-value %d\n", layout.value);
+    (void)printf("field-call %d\n", core_diff_field_call(&layout));
+    (void)printf("ninth %d\n", core_diff_ninth(1, 2, 3, 4, 5, 6, 7, 8, 91));
+    pointed = -1234;
+    (void)printf("pointer-nonnull %d\n", core_diff_pointer_zero(&pointed));
+    (void)printf("pointer-null %d\n", core_diff_pointer_zero((int *)0));
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/target/riscv64/core_hybrid_differential.i"}
+struct CoreHybridLayout {
+    char prefix;
+    int value;
+};
+
+int core_hybrid_core(int value) {
+    return -value;
+}
+
+int core_hybrid_call_target(int a, int b, int c, int d, int e, int f) {
+    return a + b + c + d + e + f;
+}
+
+int core_hybrid_call(int value) {
+    return core_hybrid_call_target(value, 2, 3, 4, 5, 6);
+}
+
+int core_hybrid_field(struct CoreHybridLayout *item) {
+    item->value = 53;
+    return 9;
+}
+
+int core_hybrid_fallback_load(int *value) {
+    return *value;
+}
+
+int core_hybrid_indirect_target(int value) {
+    return value + 4;
+}
+
+int core_hybrid_fallback_indirect(int (*callee)(int), int value) {
+    return callee(value);
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/target/riscv64/core_hybrid_differential_runtime.c"}
+#include <stdio.h>
+
+struct CoreHybridLayout {
+    char prefix;
+    int value;
+};
+
+int core_hybrid_core(int value);
+int core_hybrid_call(int value);
+int core_hybrid_field(struct CoreHybridLayout *item);
+int core_hybrid_fallback_load(int *value);
+int core_hybrid_indirect_target(int value);
+int core_hybrid_fallback_indirect(int (*callee)(int), int value);
+
+int main(void) {
+    struct CoreHybridLayout layout;
+    int value;
+
+    layout.prefix = 7;
+    layout.value = -1;
+    value = 37;
+    (void)printf("%d %d %d %d %d %d\n",
+                 core_hybrid_core(5),
+                 core_hybrid_call(10),
+                 core_hybrid_field(&layout),
+                 layout.value,
+                 core_hybrid_fallback_load(&value),
+                 core_hybrid_fallback_indirect(core_hybrid_indirect_target, 20));
+    return 0;
+}
+@@@ end

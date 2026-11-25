@@ -1,0 +1,187 @@
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/programs/c0/static_function_relocations.c"}
+static const char hook_name[] = "hooks";
+
+typedef struct Hooks {
+    const char *name;
+    int (*first)(int value);
+    int (*second)(int value);
+    int early;
+} Hooks;
+
+static int add_one(int value) {
+    return value + 1;
+}
+
+static int add_two(int value) {
+    return value + 2;
+}
+
+static Hooks hooks = {hook_name, add_one, add_two, 0};
+
+int main(void) {
+    if (hooks.name == 0 || hooks.name[0] != 'h') {
+        return 1;
+    }
+    if (hooks.first == 0 || hooks.first(3) != 4) {
+        return 2;
+    }
+    if (hooks.second == 0 || hooks.second(3) != 5) {
+        return 3;
+    }
+    if (hooks.early != 0) {
+        return 4;
+    }
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/programs/c0/static_local_array.c"}
+static int counter(void)
+{
+    static int slots[1];
+
+    slots[0] = slots[0] + 1;
+    return slots[0];
+}
+
+static int other(void)
+{
+    static int slots[1];
+
+    slots[0] = slots[0] + 5;
+    return slots[0];
+}
+
+static int char_slot(void)
+{
+    static char version[15];
+
+    version[0] = 7;
+    return version[0];
+}
+
+int main(void)
+{
+    if (counter() != 1)
+    {
+        return 1;
+    }
+    if (counter() != 2)
+    {
+        return 2;
+    }
+    if (other() != 5)
+    {
+        return 3;
+    }
+    if (counter() != 3)
+    {
+        return 4;
+    }
+    if (char_slot() != 7)
+    {
+        return 5;
+    }
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/programs/c0/static_nested_record_designator.c"}
+struct Inner {
+    int a;
+    int b;
+};
+
+struct Outer {
+    int prefix;
+    struct Inner inner;
+    int suffix;
+};
+
+static struct Outer state = {3, {.b = 7}, 9};
+
+int main(void) {
+    return state.prefix == 3 && state.inner.a == 0 && state.inner.b == 7 && state.suffix == 9 ? 0
+                                                                                              : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/programs/c0/static_nested_record_nonzero.c"}
+typedef struct {
+    int counter;
+} atomic_like;
+
+struct tracking {
+    atomic_like state;
+    long nesting;
+    long nmi;
+};
+
+struct tracking value = {
+    .nesting = 1,
+    .nmi = 2,
+    .state = {3},
+};
+
+int main(void)
+{
+    return value.state.counter != 3 || value.nesting != 1 || value.nmi != 2;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/programs/c0/static_record_compound_literal.c"}
+typedef struct Link {
+    struct Link *next;
+    struct Link *prev;
+} Link;
+
+typedef struct Inner {
+    int first;
+    unsigned int magic;
+    int second;
+    void *owner;
+    Link link;
+} Inner;
+
+typedef struct Outer {
+    int tag;
+    Inner inner;
+} Outer;
+
+typedef struct NameHolder {
+    const char *name;
+} NameHolder;
+
+static const char backing_name[] = "backing";
+static NameHolder name_holder = { backing_name };
+
+static const char *const relocation_names[] = { "backing", "literal" };
+
+static Outer value __attribute__((used)) = {
+    3,
+    (Inner) {
+        .magic = 0xdead4ead,
+        .second = 7,
+        .owner = (void *)-1L,
+        .link = { &value.inner.link, &value.inner.link },
+    },
+};
+
+int main(void)
+{
+    return value.tag == 3 && value.inner.first == 0 && value.inner.magic == 0xdead4eadU &&
+                   value.inner.second == 7 && value.inner.owner == (void *)-1L &&
+                   value.inner.link.next == &value.inner.link &&
+                   value.inner.link.prev == &value.inner.link && name_holder.name[0] == 'b' &&
+                   relocation_names[0][0] == 'b' && relocation_names[1][0] == 'l'
+               ? 0
+               : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/programs/c0/static_zero_size_local_array.c"}
+struct empty {
+};
+
+int main(void)
+{
+    static struct empty items[2];
+
+    return &items[1] != &items[0];
+}
+@@@ end

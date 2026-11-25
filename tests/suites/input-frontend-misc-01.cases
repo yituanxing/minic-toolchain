@@ -1,0 +1,3930 @@
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/frontend/ast_contract_test.c"}
+#include "frontend/ast.h"
+#include "frontend/ast_traversal.h"
+#include "frontend/ast_verifier.h"
+#include "frontend/cast_normalization.h"
+#include "target/source_policy/source_info.h"
+
+#include <stdbool.h>
+#include <string.h>
+
+typedef struct MinicTestChildIds {
+    MinicExpressionId values[MINIC_MAX_FUNCTION_PARAMETERS + 1U];
+    size_t count;
+} MinicTestChildIds;
+
+static bool collect_child_id(MinicExpressionId id, void *opaque) {
+    MinicTestChildIds *ids = opaque;
+    if (ids == NULL || ids->count >= MINIC_MAX_FUNCTION_PARAMETERS + 1U)
+        return false;
+    ids->values[ids->count++] = id;
+    return true;
+}
+
+static bool increment_child_id(MinicExpressionId *id, void *opaque) {
+    (void)opaque;
+    if (id == NULL || *id == SIZE_MAX) return false;
+    *id += 1U;
+    return true;
+}
+
+/* A source CALL may have up to 56 separately allocated overflow arguments.
+ * Old nominally-const walkers would write each value back through the same
+ * heap pointer, even when given a shallow copy of the Expression. Keep the
+ * backing array in read-only storage to enforce the new physical contract. */
+static int test_const_call_child_visitor(void) {
+    static const uint32_t readonly_overflow[
+        MINIC_MAX_FUNCTION_PARAMETERS - MINIC_CALL_INLINE_ARGUMENTS] = {101U, 102U};
+    uint32_t writable_overflow[
+        MINIC_MAX_FUNCTION_PARAMETERS - MINIC_CALL_INLINE_ARGUMENTS];
+    MinicExpression call;
+    MinicTestChildIds ids = {{0}, 0U};
+    size_t i;
+
+    (void)memset(&call, 0, sizeof(call));
+    call.kind = MINIC_EXPRESSION_CALL;
+    call.value.call.function_id = 3U;
+    call.value.call.callee = MINIC_EXPRESSION_INVALID;
+    call.value.call.argument_count = MINIC_MAX_FUNCTION_PARAMETERS;
+    for (i = 0U; i < MINIC_CALL_INLINE_ARGUMENTS; ++i)
+        call.value.call.arguments[i] = (uint32_t)(i + 10U);
+    /* The cast does not grant writes: a const visitor must only load from
+     * the borrowed C representation, whose historical ABI is `uint32_t *`. */
+    call.value.call.overflow_arguments = (uint32_t *)(const void *)readonly_overflow;
+    if (!minic_c0_expression_visit_child_ids(&call, collect_child_id, &ids) ||
+        ids.count != MINIC_MAX_FUNCTION_PARAMETERS || ids.values[0] != 10U ||
+        ids.values[MINIC_CALL_INLINE_ARGUMENTS] != 101U ||
+        ids.values[MINIC_CALL_INLINE_ARGUMENTS + 1U] != 102U ||
+        ids.values[MINIC_MAX_FUNCTION_PARAMETERS - 1U] != 0U ||
+        call.value.call.overflow_arguments != (uint32_t *)(const void *)readonly_overflow)
+        return 90;
+
+    /* The indirect CALL's function-expression edge precedes all arguments. */
+    call.value.call.function_id = MINIC_FUNCTION_INVALID;
+    call.value.call.callee = 777U;
+    (void)memset(&ids, 0, sizeof(ids));
+    if (!minic_c0_expression_visit_child_ids(&call, collect_child_id, &ids) ||
+        ids.count != MINIC_MAX_FUNCTION_PARAMETERS + 1U ||
+        ids.values[0] != 777U || ids.values[1] != 10U ||
+        ids.values[1U + MINIC_CALL_INLINE_ARGUMENTS] != 101U ||
+        call.value.call.callee != 777U) return 91;
+
+    /* A real rewriting pass keeps the same edge order, and *can* mutate
+     * the independent overflow array. No writable visitor is used by a
+     * validator, ModuleIR importer, or Core constant-fact query. */
+    (void)memcpy(writable_overflow, readonly_overflow, sizeof(writable_overflow));
+    call.value.call.overflow_arguments = writable_overflow;
+    if (!minic_c0_expression_remap_child_ids(&call, increment_child_id, NULL) ||
+        call.value.call.callee != 778U ||
+        call.value.call.arguments[0] != 11U ||
+        call.value.call.arguments[MINIC_CALL_INLINE_ARGUMENTS - 1U] !=
+            10U + MINIC_CALL_INLINE_ARGUMENTS ||
+        writable_overflow[0] != 102U || writable_overflow[1] != 103U)
+        return 92;
+
+    call.value.call.argument_count = MINIC_MAX_FUNCTION_PARAMETERS + 1U;
+    if (minic_c0_expression_visit_child_ids(&call, collect_child_id, &ids) ||
+        minic_c0_expression_remap_child_ids(&call, increment_child_id, NULL))
+        return 93;
+    call.value.call.argument_count = MINIC_CALL_INLINE_ARGUMENTS + 1U;
+    call.value.call.overflow_arguments = NULL;
+    if (minic_c0_expression_visit_child_ids(&call, collect_child_id, &ids) ||
+        minic_c0_expression_remap_child_ids(&call, increment_child_id, NULL))
+        return 94;
+    return 0;
+}
+
+static MinicSourceSpan test_span(size_t offset) {
+    MinicSourceSpan span;
+
+    (void)memset(&span, 0, sizeof(span));
+    span.begin.offset = offset;
+    span.begin.line = 1U;
+    span.begin.column = offset + 1U;
+    span.end = span.begin;
+    span.end.offset += 1U;
+    span.end.column += 1U;
+    return span;
+}
+
+static bool add_integer(MinicC0Program *program, int value, MinicExpressionId *expression_id) {
+    MinicExpression expression;
+
+    (void)memset(&expression, 0, sizeof(expression));
+    expression.kind = MINIC_EXPRESSION_INTEGER;
+    expression.span = test_span(program->expression_count);
+    expression.type = minic_type_int();
+    expression.value_category = MINIC_VALUE_RVALUE;
+    expression.value.integer_value = value;
+    return minic_c0_program_add_expression(program, &expression, expression_id);
+}
+
+static bool add_cast(MinicC0Program *program,
+                     MinicExpressionId operand,
+                     MinicType target_type,
+                     MinicExpressionId *expression_id) {
+    MinicExpression expression;
+
+    (void)memset(&expression, 0, sizeof(expression));
+    expression.kind = MINIC_EXPRESSION_CAST;
+    expression.span = test_span(program->expression_count);
+    expression.type = target_type;
+    expression.value_category = MINIC_VALUE_RVALUE;
+    expression.value.unary.operand = operand;
+    return minic_c0_program_add_expression(program, &expression, expression_id);
+}
+
+static bool add_expression_statement(MinicC0Program *program,
+                                     MinicExpressionId expression_id,
+                                     MinicStatementId *statement_id) {
+    MinicStatement statement;
+
+    (void)memset(&statement, 0, sizeof(statement));
+    statement.kind = MINIC_STATEMENT_EXPRESSION;
+    statement.span = test_span(program->statement_count);
+    statement.target_expression = MINIC_EXPRESSION_INVALID;
+    statement.expression = expression_id;
+    statement.then_block = MINIC_BLOCK_INVALID;
+    statement.else_block = MINIC_BLOCK_INVALID;
+    return minic_c0_program_add_statement(program, &statement, statement_id);
+}
+
+static int test_integer_cast_topology(void) {
+    MinicC0Program program;
+    MinicExpressionId integer_id;
+    MinicExpressionId cast_id;
+    MinicStatementId statement_id;
+    const MinicStatement *statement;
+    const MinicExpression *normalized;
+
+    minic_c0_program_initialize(&program);
+    if (!add_integer(&program, 257, &integer_id) ||
+        !add_cast(&program, integer_id, minic_type_unsigned_char(), &cast_id) ||
+        !add_expression_statement(&program, cast_id, &statement_id) ||
+        !minic_c0_program_verify(&program, MINIC_C0_AST_PARSED) ||
+        minic_c0_program_verify(&program, MINIC_C0_AST_NORMALIZED) ||
+        !minic_c0_program_normalize_casts(&program) ||
+        !minic_c0_program_verify(&program, MINIC_C0_AST_NORMALIZED)) {
+        minic_c0_program_destroy(&program);
+        return 1;
+    }
+
+    statement = minic_c0_program_statement(&program, statement_id);
+    normalized =
+        statement == NULL ? NULL : minic_c0_program_expression(&program, statement->expression);
+    if (program.expression_count != 2U || statement == NULL || normalized == NULL ||
+        normalized->kind != MINIC_EXPRESSION_CONVERSION ||
+        normalized->value.unary.operand >= statement->expression ||
+        normalized->value.unary.operand != integer_id ||
+        !minic_type_equal(normalized->type, minic_type_unsigned_char())) {
+        minic_c0_program_destroy(&program);
+        return 2;
+    }
+
+    minic_c0_program_destroy(&program);
+    return 0;
+}
+
+static int test_pointer_bitcast_identity(void) {
+    MinicC0Program program;
+    MinicLocal local;
+    MinicLocalId local_id;
+    MinicExpression local_expression;
+    MinicExpressionId local_expression_id;
+    MinicExpressionId cast_id;
+    MinicStatementId statement_id;
+    MinicType int_pointer;
+    MinicType void_pointer;
+    const MinicStatement *statement;
+    const MinicExpression *bitcast;
+    const MinicExpression *operand;
+
+    minic_c0_program_initialize(&program);
+    if (!minic_type_pointer_to(minic_type_int(), &int_pointer) ||
+        !minic_type_pointer_to(minic_type_void(), &void_pointer)) {
+        return 3;
+    }
+
+    minic_c0_local_initialize(&local);
+    local.name_span = test_span(0U);
+    local.type = int_pointer;
+    if (!minic_c0_program_add_local(&program, &local, &local_id)) {
+        minic_c0_program_destroy(&program);
+        return 4;
+    }
+
+    (void)memset(&local_expression, 0, sizeof(local_expression));
+    local_expression.kind = MINIC_EXPRESSION_LOCAL;
+    local_expression.span = test_span(0U);
+    local_expression.type = int_pointer;
+    local_expression.value_category = MINIC_VALUE_LVALUE;
+    local_expression.value.local_id = local_id;
+    if (!minic_c0_program_add_expression(&program, &local_expression, &local_expression_id) ||
+        !add_cast(&program, local_expression_id, void_pointer, &cast_id) ||
+        !add_expression_statement(&program, cast_id, &statement_id) ||
+        !minic_c0_program_verify(&program, MINIC_C0_AST_PARSED) ||
+        !minic_c0_program_normalize_casts(&program) ||
+        minic_c0_program_verify(&program, MINIC_C0_AST_PARSED) ||
+        !minic_c0_program_verify(&program, MINIC_C0_AST_NORMALIZED)) {
+        minic_c0_program_destroy(&program);
+        return 5;
+    }
+
+    statement = minic_c0_program_statement(&program, statement_id);
+    bitcast =
+        statement == NULL ? NULL : minic_c0_program_expression(&program, statement->expression);
+    operand = bitcast == NULL ? NULL
+                              : minic_c0_program_expression(&program, bitcast->value.unary.operand);
+    if (statement == NULL || bitcast == NULL || operand == NULL ||
+        bitcast->kind != MINIC_EXPRESSION_BITCAST ||
+        bitcast->value.unary.operand >= statement->expression ||
+        !minic_type_equal(bitcast->type, void_pointer) || operand->kind != MINIC_EXPRESSION_LOCAL ||
+        !minic_type_equal(operand->type, int_pointer) || operand->value.local_id != local_id) {
+        minic_c0_program_destroy(&program);
+        return 6;
+    }
+
+    minic_c0_program_destroy(&program);
+    return 0;
+}
+
+static int test_malformed_contracts(void) {
+    MinicC0Program program;
+    MinicExpression expression;
+    MinicExpressionId integer_id;
+    MinicExpressionId malformed_id;
+    MinicStatementId statement_id;
+    MinicLocal local;
+    MinicLocalId local_id;
+
+    minic_c0_program_initialize(&program);
+    if (!add_integer(&program, 1, &integer_id)) {
+        return 7;
+    }
+
+    (void)memset(&expression, 0, sizeof(expression));
+    expression.kind = MINIC_EXPRESSION_BINARY;
+    expression.span = test_span(1U);
+    expression.type = minic_type_int();
+    expression.value_category = MINIC_VALUE_RVALUE;
+    expression.value.binary.operator_kind = MINIC_BINARY_ADD;
+    expression.value.binary.left = integer_id;
+    expression.value.binary.right = 1U;
+    if (!minic_c0_program_add_expression(&program, &expression, &malformed_id) ||
+        minic_c0_program_verify(&program, MINIC_C0_AST_PARSED)) {
+        minic_c0_program_destroy(&program);
+        return 8;
+    }
+    minic_c0_program_destroy(&program);
+
+    minic_c0_program_initialize(&program);
+    if (!add_integer(&program, 2, &integer_id)) {
+        return 9;
+    }
+    program.expressions[integer_id].value_category = MINIC_VALUE_LVALUE;
+    if (minic_c0_program_verify(&program, MINIC_C0_AST_PARSED)) {
+        minic_c0_program_destroy(&program);
+        return 10;
+    }
+    minic_c0_program_destroy(&program);
+
+    minic_c0_program_initialize(&program);
+    if (!add_integer(&program, 3, &integer_id) ||
+        !add_expression_statement(&program, program.expression_count + 10U, &statement_id) ||
+        minic_c0_program_verify(&program, MINIC_C0_AST_PARSED)) {
+        minic_c0_program_destroy(&program);
+        return 11;
+    }
+    minic_c0_program_destroy(&program);
+
+    minic_c0_program_initialize(&program);
+    minic_c0_local_initialize(&local);
+    local.name_span = test_span(0U);
+    local.type = minic_type_int();
+    local.type.is_plain_char = true;
+    if (!minic_c0_program_add_local(&program, &local, &local_id) ||
+        minic_c0_program_verify(&program, MINIC_C0_AST_PARSED)) {
+        minic_c0_program_destroy(&program);
+        return 12;
+    }
+    minic_c0_program_destroy(&program);
+
+    minic_c0_program_initialize(&program);
+    minic_c0_local_initialize(&local);
+    local.name_span = test_span(0U);
+    local.type = minic_type_int();
+    local.type.function_type_id = 0U;
+    if (!minic_c0_program_add_local(&program, &local, &local_id) ||
+        minic_c0_program_verify(&program, MINIC_C0_AST_PARSED)) {
+        minic_c0_program_destroy(&program);
+        return 13;
+    }
+    minic_c0_program_destroy(&program);
+
+    minic_c0_program_initialize(&program);
+    minic_c0_local_initialize(&local);
+    local.name_span = test_span(0U);
+    local.type = minic_type_int();
+    local.type.pointer_qualifiers = 1U;
+    if (!minic_c0_program_add_local(&program, &local, &local_id) ||
+        minic_c0_program_verify(&program, MINIC_C0_AST_PARSED)) {
+        minic_c0_program_destroy(&program);
+        return 14;
+    }
+    minic_c0_program_destroy(&program);
+    return 0;
+}
+
+static bool verify_builtin_local(const MinicTargetInvocation *target, MinicType type) {
+    MinicC0Program program;
+    MinicLocal local;
+    MinicLocalId local_id;
+    bool valid;
+
+    minic_c0_program_initialize(&program);
+    minic_c0_local_initialize(&local);
+    local.name_span = test_span(0U);
+    local.type = type;
+    if (!minic_c0_program_add_local(&program, &local, &local_id)) {
+        minic_c0_program_destroy(&program);
+        return false;
+    }
+    valid = minic_c0_program_verify_target(&program, MINIC_C0_AST_PARSED, target);
+    minic_c0_program_destroy(&program);
+    return valid;
+}
+
+/* The type-role adapter centralizes extended language declarations. The
+ * builtin va_list source identity is now Program-owned and shape-checked by
+ * TargetInfo, rather than a frontend-only scalar base-kind. */
+static int test_builtin_type_target_admission(void) {
+    static const MinicTargetArchitecture architectures[] = {
+        MINIC_TARGET_ARCH_RISCV32,
+        MINIC_TARGET_ARCH_RISCV64,
+        MINIC_TARGET_ARCH_X86_64,
+        MINIC_TARGET_ARCH_AARCH64,
+        MINIC_TARGET_ARCH_LOONGARCH64
+    };
+    size_t index;
+
+    for (index = 0U; index < sizeof(architectures) / sizeof(architectures[0]); ++index) {
+        MinicTargetInvocation invocation;
+        const MinicTargetInvocation *target = &invocation;
+        MinicType malformed, sve_builtin, forged_role, forged_id;
+        bool is_aarch64, has_extended_float;
+
+        is_aarch64 = architectures[index] == MINIC_TARGET_ARCH_AARCH64;
+        has_extended_float = architectures[index] != MINIC_TARGET_ARCH_RISCV32;
+        malformed = minic_type_float128();
+        malformed.integer_rank = MINIC_INTEGER_RANK_INT;
+        sve_builtin = minic_type_header_builtin(
+            5U, MINIC_BUILTIN_DECLARATION_HEADER_ONLY_OPAQUE);
+        forged_role = minic_type_header_builtin(
+            5U, MINIC_BUILTIN_DECLARATION_FIXED_VECTOR128_STORAGE);
+        forged_id = minic_type_header_builtin(
+            999U, MINIC_BUILTIN_DECLARATION_HEADER_ONLY_OPAQUE);
+        if (!minic_target_invocation_begin(
+                &invocation, minic_target_info_for_architecture(architectures[index])) ||
+            !verify_builtin_local(target, minic_type_float()) ||
+            verify_builtin_local(target, minic_type_float128()) != has_extended_float ||
+            verify_builtin_local(target, malformed) ||
+            verify_builtin_local(target, sve_builtin) != is_aarch64 ||
+            verify_builtin_local(target, forged_role) ||
+            verify_builtin_local(target, forged_id)) {
+            return 90;
+        }
+    }
+    return 0;
+}
+
+static int test_verify_failure_provenance(void) {
+    MinicC0AstVerifyFailure failure;
+    MinicC0Program program;
+    MinicLocal local;
+    MinicLocalId local_id;
+
+    minic_c0_program_initialize(&program);
+    minic_c0_local_initialize(&local);
+    local.name_span = test_span(0U);
+    local.type = minic_type_int();
+    local.explicit_alignment = 3U;
+    if (!minic_c0_program_add_local(&program, &local, &local_id) ||
+        minic_c0_program_verify_detailed(&program, MINIC_C0_AST_PARSED, &failure) ||
+        failure.stage != MINIC_C0_AST_VERIFY_LOCAL || failure.index != local_id ||
+        failure.subindex != MINIC_C0_AST_VERIFY_INDEX_NONE || failure.reason == NULL) {
+        minic_c0_program_destroy(&program);
+        return 30;
+    }
+    minic_c0_program_destroy(&program);
+    return 0;
+}
+
+/* A VLA is identified by its complete runtime count/address pair, not by a
+ * second C-array extent stored alongside the element type. The verifier must
+ * reject a half-published pair and a forged pair of hidden locals. */
+static int test_runtime_array_pair_contract(void) {
+    MinicC0Program program;
+    MinicLocal local;
+    MinicLocalId array_id, count_id, address_id;
+    MinicType pointer_type;
+    MinicC0AstVerifyFailure failure;
+    int result = 0;
+
+    minic_c0_program_initialize(&program);
+    if (!minic_type_pointer_to(minic_type_int(), &pointer_type)) {
+        result = 100;
+        goto finish;
+    }
+    minic_c0_local_initialize(&local);
+    local.name_span = test_span(0U);
+    local.type = minic_type_int();
+    if (!minic_c0_program_add_local(&program, &local, &array_id)) {
+        result = 101;
+        goto finish;
+    }
+    local.name_span = test_span(1U);
+    local.type = minic_type_unsigned_long();
+    if (!minic_c0_program_add_local(&program, &local, &count_id)) {
+        result = 102;
+        goto finish;
+    }
+    local.name_span = test_span(2U);
+    local.type = pointer_type;
+    if (!minic_c0_program_add_local(&program, &local, &address_id)) {
+        result = 103;
+        goto finish;
+    }
+    if (!minic_c0_program_verify(&program, MINIC_C0_AST_PARSED)) {
+        result = 104;
+        goto finish;
+    }
+    program.locals[array_id].dynamic_count_local_id = count_id;
+    if (minic_c0_program_verify_detailed(&program, MINIC_C0_AST_PARSED, &failure) ||
+        failure.stage != MINIC_C0_AST_VERIFY_LOCAL || failure.index != array_id) {
+        result = 105;
+        goto finish;
+    }
+    program.locals[array_id].dynamic_address_local_id = address_id;
+    if (!minic_c0_program_verify(&program, MINIC_C0_AST_PARSED)) {
+        result = 106;
+        goto finish;
+    }
+    /* A bound local is an integer, never an allocation-address local. */
+    program.locals[array_id].dynamic_count_local_id = address_id;
+    if (minic_c0_program_verify_detailed(&program, MINIC_C0_AST_PARSED, &failure) ||
+        failure.stage != MINIC_C0_AST_VERIFY_LOCAL || failure.index != array_id) {
+        result = 107;
+        goto finish;
+    }
+    program.locals[array_id].dynamic_count_local_id = count_id;
+    program.locals[count_id].type = minic_type_int();
+    if (minic_c0_program_verify_detailed(&program, MINIC_C0_AST_PARSED, &failure) ||
+        failure.stage != MINIC_C0_AST_VERIFY_LOCAL || failure.index != array_id) {
+        result = 108;
+        goto finish;
+    }
+finish:
+    minic_c0_program_destroy(&program);
+    return result;
+}
+
+static int test_flexible_record_tail_contract(void) {
+    MinicC0Program program;
+    MinicRecordId record_id;
+    MinicType incomplete_type;
+    int result = 0;
+
+    minic_c0_program_initialize(&program);
+    if (!minic_c0_program_add_record(&program, "Tail", 4U, &record_id) ||
+        !minic_c0_record_add_field(&program, record_id, "length", 6U,
+                                    minic_type_unsigned_int(), 1U) ||
+        !minic_c0_program_add_incomplete_array_type(
+            &program, minic_type_unsigned_char(), &incomplete_type) ||
+        !minic_c0_record_add_field(&program, record_id, "bytes", 5U,
+                                    incomplete_type, 1U) ||
+        !minic_c0_program_finish_record(&program, record_id)) {
+        result = 109;
+        goto finish;
+    }
+    program.records[record_id].fields[1].is_flexible_array = true;
+    if (!minic_c0_program_verify(&program, MINIC_C0_AST_PARSED)) {
+        result = 110;
+        goto finish;
+    }
+    program.records[record_id].is_union = true;
+    if (minic_c0_program_verify(&program, MINIC_C0_AST_PARSED)) {
+        result = 111;
+        goto finish;
+    }
+finish:
+    minic_c0_program_destroy(&program);
+    return result;
+}
+
+/* Even a directly synthesized AST must not smuggle a GNU asm-goto edge
+ * across cleanup scopes: Core cannot run callbacks on the taken edge. */
+static int test_asm_goto_cleanup_edge_contract(void) {
+    MinicC0Program program;
+    MinicExpressionId cleanup_expression;
+    MinicCleanupContextId cleanup_context;
+    MinicInlineAsmId inline_asm_id;
+    MinicStatement label;
+    MinicStatement inline_asm_statement;
+    MinicStatementId label_id;
+    MinicStatementId inline_asm_statement_id;
+    int failure = 0;
+
+    minic_c0_program_initialize(&program);
+    (void)memset(&label, 0, sizeof(label));
+    (void)memset(&inline_asm_statement, 0, sizeof(inline_asm_statement));
+    label.kind = MINIC_STATEMENT_LABEL;
+    label.span = test_span(0U);
+    label.target_expression = MINIC_EXPRESSION_INVALID;
+    label.expression = MINIC_EXPRESSION_INVALID;
+    label.target_statement = MINIC_STATEMENT_INVALID;
+    label.then_block = MINIC_BLOCK_INVALID;
+    label.else_block = MINIC_BLOCK_INVALID;
+    inline_asm_statement.kind = MINIC_STATEMENT_INLINE_ASM;
+    inline_asm_statement.span = test_span(1U);
+    inline_asm_statement.target_expression = MINIC_EXPRESSION_INVALID;
+    inline_asm_statement.expression = MINIC_EXPRESSION_INVALID;
+    inline_asm_statement.target_statement = MINIC_STATEMENT_INVALID;
+    inline_asm_statement.then_block = MINIC_BLOCK_INVALID;
+    inline_asm_statement.else_block = MINIC_BLOCK_INVALID;
+
+    if (!add_integer(&program, 1, &cleanup_expression) ||
+        !minic_c0_program_add_cleanup_context(&program, MINIC_CLEANUP_CONTEXT_ROOT,
+                                              cleanup_expression, &cleanup_context) ||
+        !minic_c0_program_add_statement(&program, &label, &label_id) ||
+        !minic_c0_program_add_inline_asm(&program, "nop", 3U, true, false, &inline_asm_id) ||
+        !minic_c0_program_set_inline_asm_goto(&program, inline_asm_id, true) ||
+        !minic_c0_program_add_inline_asm_label(&program, inline_asm_id, "destination", 11U,
+                                                label_id)) {
+        failure = 91;
+        goto finish;
+    }
+    inline_asm_statement.inline_asm_id = inline_asm_id;
+    if (!minic_c0_program_add_statement(&program, &inline_asm_statement,
+                                         &inline_asm_statement_id) ||
+        !minic_c0_program_verify(&program, MINIC_C0_AST_PARSED)) {
+        failure = 92;
+        goto finish;
+    }
+    program.statements[label_id].cleanup_context = cleanup_context;
+    if (minic_c0_program_verify(&program, MINIC_C0_AST_PARSED)) {
+        failure = 93;
+        goto finish;
+    }
+    program.statements[inline_asm_statement_id].cleanup_context = cleanup_context;
+    if (!minic_c0_program_verify(&program, MINIC_C0_AST_PARSED)) {
+        failure = 94;
+        goto finish;
+    }
+    program.statements[inline_asm_statement_id].cleanup_context = cleanup_context + 1U;
+    if (minic_c0_program_verify(&program, MINIC_C0_AST_PARSED))
+        failure = 95;
+finish:
+    minic_c0_program_destroy(&program);
+    return failure;
+}
+
+/* New semantic fields must acquire safe defaults in the owning constructor, not parser call sites. */
+static int test_semantic_entity_defaults(void) {
+    MinicC0Program program;
+    MinicFunctionId function_id;
+    MinicGlobalObjectId object_id;
+    MinicRecordId record_id;
+    const MinicFunction *function;
+    const MinicGlobalObject *object;
+    const MinicRecord *record;
+    const MinicRecordField *field;
+
+    minic_c0_program_initialize(&program);
+    if (!minic_c0_program_add_function(&program,
+                                       "f",
+                                       1U,
+                                       0U,
+                                       0U,
+                                       MINIC_BLOCK_INVALID,
+                                       &function_id) ||
+        !minic_c0_program_add_record(&program, "R", 1U, &record_id) ||
+        !minic_c0_record_add_field(
+            &program, record_id, "x", 1U, minic_type_int(), 1U) ||
+        !minic_c0_program_add_global_object(
+            &program, "g", 1U, minic_type_int(), false, false, &object_id)) {
+        minic_c0_program_destroy(&program);
+        return 31;
+    }
+
+    function = minic_c0_program_function(&program, function_id);
+    record = minic_c0_program_record(&program, record_id);
+    field = minic_c0_record_field(record, 0U);
+    object = minic_c0_program_global_object(&program, object_id);
+    if (function == NULL || record == NULL || field == NULL || object == NULL ||
+        function->alias_target != MINIC_FUNCTION_INVALID ||
+        function->assembler_name != NULL || function->assembler_name_length != 0U ||
+        function->section_name != NULL || function->section_name_length != 0U ||
+        function->visibility != MINIC_SYMBOL_VISIBILITY_DEFAULT ||
+        !minic_type_equal(function->return_type, minic_type_int()) ||
+        function->parameter_count != 0U || function->is_defined ||
+        field->explicit_alignment != 0U || field->is_packed ||
+        field->is_bit_field || field->is_flexible_array ||
+        field->is_anonymous_member ||
+        object->alias_target != MINIC_GLOBAL_OBJECT_INVALID ||
+        object->section_name != NULL || object->section_name_length != 0U ||
+        object->visibility != MINIC_SYMBOL_VISIBILITY_DEFAULT ||
+        object->explicit_alignment != 0U || object->is_internal || object->is_weak ||
+        object->is_zero_initialized || object->is_extern || object->is_tentative ||
+        object->is_block_scope_extern_only) {
+        minic_c0_program_destroy(&program);
+        return 32;
+    }
+    minic_c0_program_destroy(&program);
+    return 0;
+}
+
+static int test_normalization_transaction(void) {
+    MinicC0Program program;
+    MinicExpressionId integer_id;
+    MinicExpressionId cast_id;
+    MinicStatementId statement_id;
+    MinicExpression *original_expressions;
+    size_t original_expression_count;
+    MinicExpressionId original_statement_expression;
+
+    minic_c0_program_initialize(&program);
+    if (!add_integer(&program, 4, &integer_id) ||
+        !add_cast(&program, integer_id, minic_type_unsigned_char(), &cast_id) ||
+        !add_expression_statement(&program, program.expression_count + 20U, &statement_id)) {
+        minic_c0_program_destroy(&program);
+        return 15;
+    }
+
+    original_expressions = program.expressions;
+    original_expression_count = program.expression_count;
+    original_statement_expression = program.statements[statement_id].expression;
+    if (minic_c0_program_normalize_casts(&program) || program.expressions != original_expressions ||
+        program.expression_count != original_expression_count ||
+        program.statements[statement_id].expression != original_statement_expression ||
+        program.expressions[cast_id].kind != MINIC_EXPRESSION_CAST) {
+        minic_c0_program_destroy(&program);
+        return 16;
+    }
+
+    minic_c0_program_destroy(&program);
+    return 0;
+}
+
+/* Function parameter types are a private, realloc-stable allocation.
+ * Snapshots borrow the source; cloning a Function copies parameters through
+ * the public setter, and repeated signature updates cannot alias freed data.
+ */
+/* Always available on the legacy inline64 layout as well as the
+ * experimental inline8+private overflow layout. The latter must clone
+ * overflow during AST normalization instead of aliasing freed old storage. */
+static int test_call_argument_overflow_normalization(void) {
+    MinicC0Program program;
+    MinicExpression call;
+    MinicExpressionId argument, call_id;
+    const MinicExpression *stored;
+    size_t i;
+    int failure = 0;
+#ifdef MINIC_CALL_INLINE_ARGUMENTS
+    uint32_t scratch[MINIC_MAX_FUNCTION_PARAMETERS-MINIC_CALL_INLINE_ARGUMENTS];
+#endif
+
+    minic_c0_program_initialize(&program);
+    (void)memset(&call, 0, sizeof(call));
+    call.kind = MINIC_EXPRESSION_CALL;
+    call.type = minic_type_int();
+    call.value_category = MINIC_VALUE_RVALUE;
+    call.value.call.function_id = 0U; /* direct, not indirect */
+    call.value.call.callee = MINIC_EXPRESSION_INVALID;
+    call.value.call.argument_count = MINIC_MAX_FUNCTION_PARAMETERS;
+#ifdef MINIC_CALL_INLINE_ARGUMENTS
+    call.value.call.overflow_arguments = scratch; /* stack-borrowed during build */
+#endif
+    for (i=0U; i<MINIC_MAX_FUNCTION_PARAMETERS; ++i) {
+        if (!add_integer(&program, (int)i, &argument) ||
+            !minic_c0_call_set_argument(&call, i, argument)) {
+            failure = 80;
+            goto finish;
+        }
+    }
+    if (minic_c0_call_set_argument(&call, MINIC_MAX_FUNCTION_PARAMETERS, argument) ||
+        !minic_c0_program_add_expression(&program, &call, &call_id)) {
+        failure = 81;
+        goto finish;
+    }
+    stored = minic_c0_program_expression(&program, call_id);
+    if (stored == NULL || stored->value.call.argument_count != MINIC_MAX_FUNCTION_PARAMETERS) {
+        failure = 82;
+        goto finish;
+    }
+#ifdef MINIC_CALL_INLINE_ARGUMENTS
+    if (stored->value.call.overflow_arguments == scratch ||
+        stored->value.call.overflow_arguments == NULL) {
+        failure = 83;
+        goto finish;
+    }
+#endif
+    for (i=0U; i<MINIC_MAX_FUNCTION_PARAMETERS; ++i) {
+#ifdef MINIC_CALL_INLINE_ARGUMENTS
+        argument = minic_c0_call_argument(stored, i);
+#else
+        argument = stored->value.call.arguments[i];
+#endif
+        if (argument != (MinicExpressionId)i) {
+            failure = 84;
+            goto finish;
+        }
+    }
+    if (!minic_c0_program_normalize_casts(&program)) {
+        failure = 85;
+        goto finish;
+    }
+    stored = minic_c0_program_expression(&program, call_id);
+    if (stored == NULL || stored->kind != MINIC_EXPRESSION_CALL) {
+        failure = 86;
+        goto finish;
+    }
+    for (i=0U; i<MINIC_MAX_FUNCTION_PARAMETERS; ++i) {
+#ifdef MINIC_CALL_INLINE_ARGUMENTS
+        argument = minic_c0_call_argument(stored, i);
+#else
+        argument = stored->value.call.arguments[i];
+#endif
+        if (argument != (MinicExpressionId)i) {
+            failure = 87;
+            goto finish;
+        }
+    }
+#ifdef MINIC_CALL_INLINE_ARGUMENTS
+    if (stored->value.call.overflow_arguments == scratch ||
+        stored->value.call.overflow_arguments == NULL) {
+        failure = 88;
+    }
+#endif
+finish:
+    minic_c0_program_destroy(&program);
+    return failure;
+}
+
+static int test_function_signature_storage_ownership(void) {
+    MinicC0Program program;
+    MinicFunctionId source_id, clone_id, unused_id;
+    MinicFunction source_snapshot;
+    MinicType parameters[3], changed[2], max_parameters[MINIC_MAX_FUNCTION_PARAMETERS];
+    MinicType invalid = minic_type_void();
+    const MinicType *original_storage;
+    size_t i;
+    int failed = 0;
+
+    minic_c0_program_initialize(&program);
+    parameters[0] = minic_type_int();
+    parameters[1] = minic_type_long();
+    parameters[2] = minic_type_unsigned_int();
+    changed[0] = minic_type_short();
+    changed[1] = minic_type_long_long();
+
+    if (!minic_c0_program_add_function(&program, "original", 8U, 0U, 0U,
+                                       MINIC_BLOCK_INVALID, &source_id) ||
+        !minic_c0_program_set_function_signature(&program, source_id, minic_type_int(),
+                                                 parameters, 3U)) {
+        failed = 70;
+        goto finish;
+    }
+
+    original_storage = program.functions[source_id].parameter_types;
+    source_snapshot = program.functions[source_id]; /* borrowed pointer */
+    if (original_storage == NULL || original_storage == parameters) {
+        failed = 71;
+        goto finish;
+    }
+
+    /* Reallocate the Function header array repeatedly. Private heap arrays
+       must remain stable even when an old Function snapshot is retained. */
+    for (i = 0U; i < 100U; ++i) {
+        if (!minic_c0_program_add_function(&program, "padding", 7U, 0U, 0U,
+                                           MINIC_BLOCK_INVALID, &unused_id)) {
+            failed = 72;
+            goto finish;
+        }
+    }
+    if (program.functions[source_id].parameter_types != original_storage ||
+        source_snapshot.parameter_types != original_storage ||
+        !minic_type_equal(source_snapshot.parameter_types[2], parameters[2])) {
+        failed = 73;
+        goto finish;
+    }
+    if (!minic_c0_program_add_function(&program, "clone", 5U, 0U, 0U,
+                                       MINIC_BLOCK_INVALID, &clone_id) ||
+        !minic_c0_program_set_function_signature(&program, clone_id,
+                                                 source_snapshot.return_type,
+                                                 source_snapshot.parameter_types,
+                                                 source_snapshot.parameter_count)) {
+        failed = 74;
+        goto finish;
+    }
+    if (program.functions[clone_id].parameter_types == original_storage ||
+        !minic_type_equal(program.functions[clone_id].parameter_types[2], parameters[2])) {
+        failed = 75;
+        goto finish;
+    }
+    if (!minic_c0_program_set_function_signature(&program, source_id,
+                                                  minic_type_int(), changed, 2U) ||
+        !minic_type_equal(program.functions[clone_id].parameter_types[2], parameters[2]) ||
+        !minic_type_equal(program.functions[source_id].parameter_types[0], changed[0])) {
+        failed = 76;
+        goto finish;
+    }
+    /* In-place caller passes the owned storage back to the setter. */
+    if (!minic_c0_program_set_function_signature(&program, clone_id,
+                                                  program.functions[clone_id].return_type,
+                                                  program.functions[clone_id].parameter_types,
+                                                  program.functions[clone_id].parameter_count) ||
+        minic_c0_program_set_function_signature(&program, clone_id,
+                                                 minic_type_int(), &invalid, 1U) ||
+        program.functions[clone_id].parameter_count != 3U ||
+        !minic_type_equal(program.functions[clone_id].parameter_types[2], parameters[2])) {
+        failed = 77;
+        goto finish;
+    }
+
+    for (i = 0U; i < MINIC_MAX_FUNCTION_PARAMETERS; ++i) {
+        max_parameters[i] = minic_type_int();
+    }
+    if (!minic_c0_program_set_function_signature(&program, clone_id,
+                                                  minic_type_long(), max_parameters,
+                                                  MINIC_MAX_FUNCTION_PARAMETERS) ||
+        program.functions[clone_id].parameter_count != MINIC_MAX_FUNCTION_PARAMETERS ||
+        !minic_type_equal(program.functions[clone_id].parameter_types[63],
+                          minic_type_int()) ||
+        !minic_c0_program_set_function_signature(&program, clone_id,
+                                                  minic_type_int(), NULL, 0U) ||
+        program.functions[clone_id].parameter_types != NULL ||
+        program.functions[clone_id].parameter_count != 0U) {
+        failed = 78;
+    }
+finish:
+    minic_c0_program_destroy(&program);
+    return failed;
+}
+
+int main(void) {
+    int status;
+
+    status = test_integer_cast_topology();
+    if (status != 0) {
+        return status;
+    }
+    status = test_pointer_bitcast_identity();
+    if (status != 0) {
+        return status;
+    }
+    status = test_malformed_contracts();
+    if (status != 0) {
+        return status;
+    }
+    status = test_builtin_type_target_admission();
+    if (status != 0) {
+        return status;
+    }
+    status = test_verify_failure_provenance();
+    if (status != 0) {
+        return status;
+    }
+    status = test_runtime_array_pair_contract();
+    if (status != 0) {
+        return status;
+    }
+    status = test_flexible_record_tail_contract();
+    if (status != 0) {
+        return status;
+    }
+    status = test_asm_goto_cleanup_edge_contract();
+    if (status != 0) {
+        return status;
+    }
+    status = test_semantic_entity_defaults();
+    if (status != 0) {
+        return status;
+    }
+    status = test_function_signature_storage_ownership();
+    if (status != 0) {
+        return status;
+    }
+    status = test_call_argument_overflow_normalization();
+    if (status != 0) {
+        return status;
+    }
+    status = test_const_call_child_visitor();
+    if (status != 0) {
+        return status;
+    }
+    return test_normalization_transaction();
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/frontend/ast_traversal_test.c"}
+#include "frontend/ast.h"
+#include "frontend/ast_verifier.h"
+#include "frontend/cast_normalization.h"
+
+#include <string.h>
+
+static MinicSourceSpan test_span(size_t offset)
+{
+    MinicSourceSpan span;
+
+    (void)memset(&span, 0, sizeof(span));
+    span.begin.offset = offset;
+    span.begin.line = 1U;
+    span.begin.column = offset + 1U;
+    span.end = span.begin;
+    span.end.offset += 1U;
+    span.end.column += 1U;
+    return span;
+}
+
+static bool add_integer(MinicC0Program *program,
+                        int value,
+                        MinicExpressionId *expression_id)
+{
+    MinicExpression expression;
+
+    (void)memset(&expression, 0, sizeof(expression));
+    expression.kind = MINIC_EXPRESSION_INTEGER;
+    expression.span = test_span(program->expression_count);
+    expression.type = minic_type_int();
+    expression.value_category = MINIC_VALUE_RVALUE;
+    expression.value.integer_value = value;
+    return minic_c0_program_add_expression(program, &expression, expression_id);
+}
+
+static bool add_cast(MinicC0Program *program,
+                     MinicExpressionId operand,
+                     MinicType target_type,
+                     MinicExpressionId *expression_id)
+{
+    MinicExpression expression;
+
+    (void)memset(&expression, 0, sizeof(expression));
+    expression.kind = MINIC_EXPRESSION_CAST;
+    expression.span = test_span(program->expression_count);
+    expression.type = target_type;
+    expression.value_category = MINIC_VALUE_RVALUE;
+    expression.value.unary.operand = operand;
+    return minic_c0_program_add_expression(program, &expression, expression_id);
+}
+
+static int test_cleanup_expression_remap(void)
+{
+    MinicC0Program program;
+    MinicExpressionId integer_id;
+    MinicExpressionId cast_id;
+    MinicCleanupContextId cleanup_context_id;
+    const MinicCleanupContext *cleanup_context;
+    const MinicExpression *normalized;
+
+    minic_c0_program_initialize(&program);
+    if (!add_integer(&program, 257, &integer_id) ||
+        !add_cast(&program, integer_id, minic_type_unsigned_char(), &cast_id) ||
+        !minic_c0_program_add_cleanup_context(&program,
+                                              MINIC_CLEANUP_CONTEXT_ROOT,
+                                              cast_id,
+                                              &cleanup_context_id) ||
+        !minic_c0_program_verify(&program, MINIC_C0_AST_PARSED) ||
+        !minic_c0_program_normalize_casts(&program) ||
+        !minic_c0_program_verify(&program, MINIC_C0_AST_NORMALIZED)) {
+        minic_c0_program_destroy(&program);
+        return 1;
+    }
+
+    cleanup_context = minic_c0_program_cleanup_context(&program, cleanup_context_id);
+    normalized = cleanup_context == NULL
+        ? NULL
+        : minic_c0_program_expression(&program, cleanup_context->cleanup_expression);
+    if (cleanup_context == NULL || normalized == NULL ||
+        cleanup_context->cleanup_expression >= program.expression_count ||
+        normalized->kind != MINIC_EXPRESSION_CONVERSION ||
+        normalized->value.unary.operand != integer_id ||
+        !minic_type_equal(normalized->type, minic_type_unsigned_char())) {
+        minic_c0_program_destroy(&program);
+        return 2;
+    }
+
+    minic_c0_program_destroy(&program);
+    return 0;
+}
+
+static int test_failed_normalization_is_transactional(void)
+{
+    MinicC0Program program;
+    MinicExpressionId integer_id;
+    MinicExpressionId cast_id;
+    MinicCleanupContextId cleanup_context_id;
+    MinicExpression *original_expressions;
+    size_t original_expression_count;
+    MinicExpressionId original_cleanup_expression;
+
+    minic_c0_program_initialize(&program);
+    if (!add_integer(&program, 4, &integer_id) ||
+        !add_cast(&program, integer_id, minic_type_unsigned_char(), &cast_id) ||
+        !minic_c0_program_add_cleanup_context(&program,
+                                              MINIC_CLEANUP_CONTEXT_ROOT,
+                                              cast_id,
+                                              &cleanup_context_id)) {
+        minic_c0_program_destroy(&program);
+        return 3;
+    }
+
+    program.cleanup_contexts[cleanup_context_id - 1U].cleanup_expression =
+        program.expression_count + 10U;
+    original_expressions = program.expressions;
+    original_expression_count = program.expression_count;
+    original_cleanup_expression =
+        program.cleanup_contexts[cleanup_context_id - 1U].cleanup_expression;
+
+    if (minic_c0_program_normalize_casts(&program) ||
+        program.expressions != original_expressions ||
+        program.expression_count != original_expression_count ||
+        program.cleanup_contexts[cleanup_context_id - 1U].cleanup_expression !=
+            original_cleanup_expression ||
+        program.expressions[cast_id].kind != MINIC_EXPRESSION_CAST) {
+        minic_c0_program_destroy(&program);
+        return 4;
+    }
+
+    minic_c0_program_destroy(&program);
+    return 0;
+}
+
+int main(void)
+{
+    int status;
+
+    status = test_cleanup_expression_remap();
+    if (status != 0) {
+        return status;
+    }
+    return test_failed_normalization_is_transactional();
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/frontend/binary128_literal_oracle_test.c"}
+/* GNU/glibc is used only as a test oracle: MiniC's literal parser itself
+ * remains ISO C11 and has no host floating-point-library dependency. */
+#define __STDC_WANT_IEC_60559_TYPES_EXT__ 1
+#include "frontend/binary128_literal.h"
+
+#include <float.h>
+#include <inttypes.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#if defined(__GLIBC__) && defined(__SIZEOF_FLOAT128__) && \
+    defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+__extension__ typedef _Float128 MinicOracleFloat128;
+
+static bool check_one(const char *text) {
+    uint64_t low = 0U, high = 0U;
+    uint64_t oracle[2] = {0U, 0U};
+    MinicOracleFloat128 quad = strtof128(text, NULL);
+    (void)memcpy(oracle, &quad, sizeof(oracle));
+    if (!minic_binary128_parse_literal(text, strlen(text), 113U, &low, &high) ||
+        low != oracle[0] || high != oracle[1]) {
+        (void)fprintf(stderr,
+                      "binary128 literal mismatch %s: minic=%016" PRIx64
+                      ":%016" PRIx64 " glibc=%016" PRIx64 ":%016" PRIx64 "\n",
+                      text, high, low, oracle[1], oracle[0]);
+        return false;
+    }
+    if (LDBL_MANT_DIG == 64 && LDBL_MAX_EXP == 16384 &&
+        sizeof(long double) >= 10U) {
+        unsigned char bytes[sizeof(long double)];
+        uint64_t x87_mantissa = 0U;
+        uint16_t x87_sign_exp = 0U;
+        uint64_t minic_mantissa;
+        unsigned int biased;
+        long double host = strtold(text, NULL);
+        (void)memcpy(bytes, &host, sizeof(bytes));
+        (void)memcpy(&x87_mantissa, bytes, sizeof(x87_mantissa));
+        (void)memcpy(&x87_sign_exp, bytes + 8U, sizeof(x87_sign_exp));
+        if (!minic_binary128_parse_literal(text, strlen(text), 64U, &low, &high))
+            return false;
+        biased = (unsigned int)((high >> 48U) & 0x7fffU);
+        minic_mantissa = (biased == 0U ? 0U : UINT64_C(0x8000000000000000)) |
+                         ((high & UINT64_C(0x0000ffffffffffff)) << 15U) |
+                         (low >> 49U);
+        if (minic_mantissa != x87_mantissa ||
+            (uint16_t)(high >> 48U) != x87_sign_exp) {
+            (void)fprintf(stderr,
+                          "x87 literal mismatch %s: minic=%04x:%016" PRIx64
+                          " glibc=%04x:%016" PRIx64 "\n",
+                          text, (unsigned int)(uint16_t)(high >> 48U), minic_mantissa,
+                          (unsigned int)x87_sign_exp, x87_mantissa);
+            return false;
+        }
+    }
+    return true;
+}
+
+static uint32_t next_word(uint32_t *state) {
+    *state = *state * UINT32_C(1664525) + UINT32_C(1013904223);
+    return *state;
+}
+
+int main(void) {
+    static const char *const cases[] = {
+        "0", "-0", "+0.0", "1", "2", "0.1", "-0.1",
+        "1.0000000000000001", "1.000000000000000000000000000000001",
+        "0x1.0000000000000001p0", "0x1.0000000000000002p0",
+        "0x1.fffffffffffffffep0", "0x1.ffffffffffffffffffffp0",
+        "0x1p-16445", "0x1p-16494", "0x1p-16495", "0x1p16383",
+        "0x1.ffffffffffffffffffffffffffffp16383", "1e4932", "1e4933",
+        "1e5000", "1e-4950", "1e-4960", "1e-4966", "1e-4967",
+        "-2.71828182845904523536028747135266249775724709369995",
+        "3.14159265358979323846264338327950288419716939937510",
+        "0x.8p0", "0X1.8P+3", "0x1.4p-7",
+    };
+    size_t index;
+    uint32_t seed = UINT32_C(0x41524743);
+    for (index = 0U; index < sizeof(cases) / sizeof(cases[0]); ++index) {
+        if (!check_one(cases[index])) return 1;
+    }
+    for (index = 0U; index < 256U; ++index) {
+        char literal[128];
+        char *cursor = literal;
+        size_t digit;
+        int exponent;
+        bool hex = (index & 1U) != 0U;
+        if ((next_word(&seed) & 1U) != 0U) *cursor++ = '-';
+        if (hex) {
+            *cursor++ = '0';
+            *cursor++ = 'x';
+        }
+        *cursor++ = (char)('1' + next_word(&seed) % 9U);
+        *cursor++ = '.';
+        for (digit = 0U; digit < 45U; ++digit) {
+            uint32_t value = next_word(&seed) % (hex ? 16U : 10U);
+            *cursor++ = (char)(value < 10U ? '0' + value : 'a' + value - 10U);
+        }
+        exponent = (int)(next_word(&seed) % (hex ? 33601U : 10401U)) -
+                   (hex ? 16800 : 5200);
+        (void)snprintf(cursor, sizeof(literal) - (size_t)(cursor - literal),
+                       hex ? "p%d" : "e%d", exponent);
+        if (!check_one(literal)) return 1;
+    }
+    (void)puts("BINARY128_LITERAL_ORACLE=PASS x87=64 binary128=113 cases=286");
+    return 0;
+}
+#else
+int main(void) {
+    (void)puts("BINARY128_LITERAL_ORACLE=SKIP glibc/_Float128/LE host unavailable");
+    return 0;
+}
+#endif
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/frontend/declaration_sema_atomic_test.c"}
+#include "frontend/declaration_sema.h"
+
+#include <assert.h>
+#include <string.h>
+
+static void test_type_conflict_does_not_commit_section(void) {
+    MinicC0Program program;
+    MinicDeclarationExternalObjectAttributes attributes;
+    MinicDeclarationExternalObjectMergeStatus status;
+    const MinicGlobalObject *object;
+    MinicGlobalObjectId object_id;
+    MinicType existing_type;
+    MinicType declared_type;
+
+    minic_c0_program_initialize(&program);
+    assert(minic_c0_program_add_array_type(&program, minic_type_int(), 2U, &existing_type));
+    assert(minic_c0_program_add_array_type(&program, minic_type_int(), 3U, &declared_type));
+    assert(minic_c0_program_add_extern_global_object(
+        &program, "typed", strlen("typed"), existing_type, false, &object_id));
+
+    (void)memset(&attributes, 0, sizeof(attributes));
+    attributes.section_name = ".new";
+    attributes.section_name_length = strlen(".new");
+    attributes.has_section = true;
+    attributes.visibility = MINIC_SYMBOL_VISIBILITY_DEFAULT;
+
+    status = minic_declaration_merge_external_object(
+        &program, object_id, declared_type, &attributes);
+    assert(status == MINIC_DECLARATION_EXTERNAL_OBJECT_MERGE_TYPE_CONFLICT);
+
+    object = minic_c0_program_global_object(&program, object_id);
+    assert(object != NULL);
+    assert(object->section_name == NULL);
+    assert(program.array_types[existing_type.array_type_id].element_count == 2U);
+
+    minic_c0_program_destroy(&program);
+}
+
+static void test_identical_section_can_commit_array_completion(void) {
+    MinicC0Program program;
+    MinicDeclarationExternalObjectAttributes attributes;
+    MinicDeclarationExternalObjectMergeStatus status;
+    const MinicArrayType *array_type;
+    const MinicGlobalObject *object;
+    MinicGlobalObjectId object_id;
+    MinicType existing_type;
+    MinicType declared_type;
+
+    minic_c0_program_initialize(&program);
+    assert(minic_c0_program_add_incomplete_array_type(&program, minic_type_int(), &existing_type));
+    assert(minic_c0_program_add_array_type(&program, minic_type_int(), 4U, &declared_type));
+    assert(minic_c0_program_add_extern_global_object(
+        &program, "same", strlen("same"), existing_type, false, &object_id));
+    assert(minic_c0_global_object_set_section(
+        &program, object_id, ".same", strlen(".same")));
+
+    (void)memset(&attributes, 0, sizeof(attributes));
+    attributes.section_name = ".same";
+    attributes.section_name_length = strlen(".same");
+    attributes.has_section = true;
+    attributes.visibility = MINIC_SYMBOL_VISIBILITY_DEFAULT;
+
+    status = minic_declaration_merge_external_object(
+        &program, object_id, declared_type, &attributes);
+    assert(status == MINIC_DECLARATION_EXTERNAL_OBJECT_MERGE_OK);
+
+    object = minic_c0_program_global_object(&program, object_id);
+    array_type = &program.array_types[existing_type.array_type_id];
+    assert(object != NULL);
+    assert(object->section_name_length == strlen(".same"));
+    assert(memcmp(object->section_name, ".same", strlen(".same")) == 0);
+    assert(array_type->element_count == 4U);
+    assert(!array_type->is_zero_length);
+
+    minic_c0_program_destroy(&program);
+}
+
+static void test_external_object_creation_commits_complete_entity(void) {
+    MinicC0Program program;
+    MinicDeclarationExternalObjectAttributes attributes;
+    MinicDeclarationExternalObjectCreateStatus status;
+    const MinicGlobalObject *object;
+    MinicGlobalObjectId object_id;
+
+    minic_c0_program_initialize(&program);
+    (void)memset(&attributes, 0, sizeof(attributes));
+    attributes.section_name = ".sema";
+    attributes.section_name_length = strlen(".sema");
+    attributes.explicit_alignment = 16U;
+    attributes.visibility = MINIC_SYMBOL_VISIBILITY_HIDDEN;
+    attributes.has_section = true;
+    attributes.has_visibility = true;
+
+    status = minic_declaration_create_external_object(&program,
+                                                      "fresh",
+                                                      strlen("fresh"),
+                                                      minic_type_int(),
+                                                      true,
+                                                      true,
+                                                      false,
+                                                      &attributes,
+                                                      &object_id);
+    assert(status == MINIC_DECLARATION_EXTERNAL_OBJECT_CREATE_OK);
+    assert(program.global_object_count == 1U);
+    object = minic_c0_program_global_object(&program, object_id);
+    assert(object != NULL);
+    assert(object->is_extern);
+    assert(object->is_read_only);
+    assert(object->is_weak);
+    assert(!object->is_block_scope_extern_only);
+    assert(object->explicit_alignment == 16U);
+    assert(object->visibility == MINIC_SYMBOL_VISIBILITY_HIDDEN);
+    assert(object->section_name_length == strlen(".sema"));
+    assert(memcmp(object->section_name, ".sema", strlen(".sema")) == 0);
+
+    minic_c0_program_destroy(&program);
+}
+
+static void test_external_object_creation_rejects_invalid_facts_without_publish(void) {
+    MinicC0Program program;
+    MinicDeclarationExternalObjectAttributes attributes;
+    MinicDeclarationExternalObjectCreateStatus status;
+    MinicGlobalObjectId object_id;
+
+    minic_c0_program_initialize(&program);
+    (void)memset(&attributes, 0, sizeof(attributes));
+    attributes.section_name = NULL;
+    attributes.section_name_length = 4U;
+    attributes.has_section = true;
+    attributes.visibility = MINIC_SYMBOL_VISIBILITY_DEFAULT;
+
+    status = minic_declaration_create_external_object(&program,
+                                                      "invalid",
+                                                      strlen("invalid"),
+                                                      minic_type_int(),
+                                                      false,
+                                                      false,
+                                                      false,
+                                                      &attributes,
+                                                      &object_id);
+    assert(status == MINIC_DECLARATION_EXTERNAL_OBJECT_CREATE_INVALID);
+    assert(program.global_object_count == 0U);
+
+    minic_c0_program_destroy(&program);
+}
+
+static void test_external_object_creation_conflict_does_not_publish_second_entity(void) {
+    MinicC0Program program;
+    MinicDeclarationExternalObjectAttributes attributes;
+    MinicDeclarationExternalObjectCreateStatus status;
+    MinicGlobalObjectId first_id;
+    MinicGlobalObjectId second_id;
+
+    minic_c0_program_initialize(&program);
+    (void)memset(&attributes, 0, sizeof(attributes));
+    attributes.visibility = MINIC_SYMBOL_VISIBILITY_DEFAULT;
+    status = minic_declaration_create_external_object(&program,
+                                                      "duplicate",
+                                                      strlen("duplicate"),
+                                                      minic_type_int(),
+                                                      false,
+                                                      false,
+                                                      true,
+                                                      &attributes,
+                                                      &first_id);
+    assert(status == MINIC_DECLARATION_EXTERNAL_OBJECT_CREATE_OK);
+    status = minic_declaration_create_external_object(&program,
+                                                      "duplicate",
+                                                      strlen("duplicate"),
+                                                      minic_type_long(),
+                                                      false,
+                                                      false,
+                                                      false,
+                                                      &attributes,
+                                                      &second_id);
+    assert(status == MINIC_DECLARATION_EXTERNAL_OBJECT_CREATE_COMMIT_FAILED);
+    assert(program.global_object_count == 1U);
+    assert(program.global_objects[first_id].is_block_scope_extern_only);
+
+    minic_c0_program_destroy(&program);
+}
+
+int main(void) {
+    test_type_conflict_does_not_commit_section();
+    test_identical_section_can_commit_array_completion();
+    test_external_object_creation_commits_complete_entity();
+    test_external_object_creation_rejects_invalid_facts_without_publish();
+    test_external_object_creation_conflict_does_not_publish_second_entity();
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/frontend/declaration_sema_test.c"}
+#include "frontend/declaration_sema.h"
+
+#include <assert.h>
+#include <string.h>
+
+static MinicType add_fixed_array(MinicC0Program *program, MinicType element_type, size_t count) {
+    MinicType type;
+
+    assert(minic_c0_program_add_array_type(program, element_type, count, &type));
+    return type;
+}
+
+static MinicType add_incomplete_array(MinicC0Program *program, MinicType element_type) {
+    MinicType type;
+
+    assert(minic_c0_program_add_incomplete_array_type(program, element_type, &type));
+    return type;
+}
+
+static MinicType add_zero_length_array(MinicC0Program *program, MinicType element_type) {
+    MinicType type;
+
+    assert(minic_c0_program_add_zero_length_array_type(program, element_type, &type));
+    return type;
+}
+
+static MinicGlobalObjectId
+add_extern_object(MinicC0Program *program, const char *name, MinicType type) {
+    MinicGlobalObjectId object_id;
+
+    assert(minic_c0_program_add_extern_global_object(
+        program, name, strlen(name), type, false, &object_id));
+    return object_id;
+}
+
+static MinicDeclarationExternalObjectAttributes empty_external_attributes(void) {
+    MinicDeclarationExternalObjectAttributes attributes;
+
+    (void)memset(&attributes, 0, sizeof(attributes));
+    attributes.visibility = MINIC_SYMBOL_VISIBILITY_DEFAULT;
+    return attributes;
+}
+
+static void test_fixed_multidimensional_array(void) {
+    MinicC0Program program;
+    MinicDeclarationArraySuffix suffix;
+    MinicDeclarationArrayMaterializeStatus status;
+    const MinicArrayType *outer;
+    const MinicArrayType *inner;
+    MinicType type;
+
+    minic_c0_program_initialize(&program);
+    (void)memset(&suffix, 0, sizeof(suffix));
+    suffix.bounds[0] = 3U;
+    suffix.bounds[1] = 4U;
+    suffix.dimension_count = 2U;
+
+    status = minic_declaration_materialize_array_suffix(&program, minic_type_int(), &suffix, &type);
+    assert(status == MINIC_DECLARATION_ARRAY_MATERIALIZE_OK);
+    assert(minic_type_is_array(type));
+    assert(program.array_type_count == 2U);
+
+    outer = &program.array_types[type.array_type_id];
+    assert(outer->element_count == 3U);
+    assert(!outer->is_zero_length);
+    assert(minic_type_is_array(outer->element_type));
+    inner = &program.array_types[outer->element_type.array_type_id];
+    assert(inner->element_count == 4U);
+    assert(!inner->is_zero_length);
+    assert(minic_type_equal(inner->element_type, minic_type_int()));
+
+    minic_c0_program_destroy(&program);
+}
+
+static void test_incomplete_and_zero_length_arrays(void) {
+    MinicC0Program program;
+    MinicDeclarationArraySuffix suffix;
+    MinicDeclarationArrayMaterializeStatus status;
+    const MinicArrayType *array_type;
+    MinicType type;
+
+    minic_c0_program_initialize(&program);
+    (void)memset(&suffix, 0, sizeof(suffix));
+    suffix.dimension_count = 1U;
+    suffix.outermost_incomplete = true;
+    status = minic_declaration_materialize_array_suffix(
+        &program, minic_type_unsigned_char(), &suffix, &type);
+    assert(status == MINIC_DECLARATION_ARRAY_MATERIALIZE_OK);
+    array_type = &program.array_types[type.array_type_id];
+    assert(array_type->element_count == 0U);
+    assert(!array_type->is_zero_length);
+
+    (void)memset(&suffix, 0, sizeof(suffix));
+    suffix.dimension_count = 1U;
+    suffix.zero_length_mask = 1U;
+    status = minic_declaration_materialize_array_suffix(&program, minic_type_int(), &suffix, &type);
+    assert(status == MINIC_DECLARATION_ARRAY_MATERIALIZE_OK);
+    array_type = &program.array_types[type.array_type_id];
+    assert(array_type->element_count == 0U);
+    assert(array_type->is_zero_length);
+
+    minic_c0_program_destroy(&program);
+}
+
+static void test_array_of_function_pointer(void) {
+    MinicC0Program program;
+    MinicDeclarationArraySuffix suffix;
+    const MinicArrayType *array_type;
+    const MinicFunctionType *function_type;
+    MinicType parameter_types[1];
+    MinicType pointee;
+    MinicType type;
+
+    minic_c0_program_initialize(&program);
+    (void)memset(&suffix, 0, sizeof(suffix));
+    suffix.bounds[0] = 4U;
+    suffix.dimension_count = 1U;
+    parameter_types[0] = minic_type_long();
+
+    assert(minic_declaration_build_function_type(
+        &program, minic_type_int(), parameter_types, 1U, false, 1U, 1U, 0U, &suffix, &type));
+    assert(program.function_type_count == 1U);
+    assert(program.array_type_count == 1U);
+    assert(minic_type_is_array(type));
+
+    array_type = &program.array_types[type.array_type_id];
+    assert(array_type->element_count == 4U);
+    assert(minic_type_is_pointer(array_type->element_type));
+    assert(minic_type_is_const(array_type->element_type));
+    assert(minic_type_pointee(array_type->element_type, &pointee));
+    assert(minic_type_is_function(pointee));
+
+    function_type = &program.function_types[pointee.function_type_id];
+    assert(minic_type_equal(function_type->return_type, minic_type_int()));
+    assert(function_type->parameter_count == 1U);
+    assert(minic_type_equal(function_type->parameter_types[0], minic_type_long()));
+    assert(!function_type->is_variadic);
+
+    minic_c0_program_destroy(&program);
+}
+
+static void test_invalid_transient_facts_do_not_commit(void) {
+    MinicC0Program program;
+    MinicDeclarationArraySuffix suffix;
+    MinicDeclarationArrayMaterializeStatus status;
+    MinicType type;
+
+    minic_c0_program_initialize(&program);
+    (void)memset(&suffix, 0, sizeof(suffix));
+    suffix.dimension_count = MINIC_DECLARATION_MAX_ARRAY_DIMENSIONS + 1U;
+    status = minic_declaration_materialize_array_suffix(&program, minic_type_int(), &suffix, &type);
+    assert(status == MINIC_DECLARATION_ARRAY_MATERIALIZE_INVALID);
+    assert(program.array_type_count == 0U);
+    assert(program.function_type_count == 0U);
+
+    (void)memset(&suffix, 0, sizeof(suffix));
+    suffix.dimension_count = 1U;
+    suffix.bounds[0] = 2U;
+    assert(!minic_declaration_build_function_type(
+        &program, minic_type_int(), NULL, 0U, false, 1U, 2U, 0U, &suffix, &type));
+    assert(program.array_type_count == 0U);
+    assert(program.function_type_count == 0U);
+
+    minic_c0_program_destroy(&program);
+}
+
+static void test_external_scalar_compatibility(void) {
+    MinicC0Program program;
+
+    minic_c0_program_initialize(&program);
+    assert(minic_declaration_external_object_types_compatible(
+        &program, minic_type_int(), minic_type_int()));
+    assert(!minic_declaration_external_object_types_compatible(
+        &program, minic_type_int(), minic_type_long()));
+    assert(minic_declaration_merge_external_array_composite_type(
+        &program, minic_type_int(), minic_type_int()));
+    assert(!minic_declaration_merge_external_array_composite_type(
+        &program, minic_type_int(), minic_type_long()));
+    minic_c0_program_destroy(&program);
+}
+
+static void test_external_incomplete_array_completes(void) {
+    MinicC0Program program;
+    const MinicArrayType *existing_array;
+    MinicType existing_type;
+    MinicType declared_type;
+
+    minic_c0_program_initialize(&program);
+    existing_type = add_incomplete_array(&program, minic_type_int());
+    declared_type = add_fixed_array(&program, minic_type_int(), 3U);
+
+    assert(
+        minic_declaration_external_object_types_compatible(&program, existing_type, declared_type));
+    assert(minic_declaration_merge_external_array_composite_type(
+        &program, existing_type, declared_type));
+    assert(program.array_type_count == 2U);
+    existing_array = &program.array_types[existing_type.array_type_id];
+    assert(existing_array->element_count == 3U);
+    assert(!existing_array->is_zero_length);
+    assert(minic_type_equal(existing_array->element_type, minic_type_int()));
+
+    minic_c0_program_destroy(&program);
+}
+
+static void test_external_incomplete_array_accepts_zero_length(void) {
+    MinicC0Program program;
+    const MinicArrayType *existing_array;
+    MinicType existing_type;
+    MinicType declared_type;
+    MinicType fixed_type;
+
+    minic_c0_program_initialize(&program);
+    existing_type = add_incomplete_array(&program, minic_type_int());
+    declared_type = add_zero_length_array(&program, minic_type_int());
+
+    assert(
+        minic_declaration_external_object_types_compatible(&program, existing_type, declared_type));
+    assert(minic_declaration_merge_external_array_composite_type(
+        &program, existing_type, declared_type));
+    existing_array = &program.array_types[existing_type.array_type_id];
+    assert(existing_array->element_count == 0U);
+    assert(existing_array->is_zero_length);
+
+    fixed_type = add_fixed_array(&program, minic_type_int(), 1U);
+    assert(
+        !minic_declaration_external_object_types_compatible(&program, existing_type, fixed_type));
+    assert(!minic_declaration_merge_external_array_composite_type(
+        &program, existing_type, fixed_type));
+    existing_array = &program.array_types[existing_type.array_type_id];
+    assert(existing_array->element_count == 0U);
+    assert(existing_array->is_zero_length);
+
+    minic_c0_program_destroy(&program);
+}
+
+static void test_external_fixed_array_conflict_is_non_mutating(void) {
+    MinicC0Program program;
+    const MinicArrayType *existing_array;
+    MinicType existing_type;
+    MinicType declared_type;
+
+    minic_c0_program_initialize(&program);
+    existing_type = add_fixed_array(&program, minic_type_int(), 2U);
+    declared_type = add_fixed_array(&program, minic_type_int(), 3U);
+
+    assert(!minic_declaration_external_object_types_compatible(
+        &program, existing_type, declared_type));
+    assert(!minic_declaration_merge_external_array_composite_type(
+        &program, existing_type, declared_type));
+    existing_array = &program.array_types[existing_type.array_type_id];
+    assert(existing_array->element_count == 2U);
+    assert(!existing_array->is_zero_length);
+    assert(program.array_type_count == 2U);
+
+    minic_c0_program_destroy(&program);
+}
+
+static void test_external_multidimensional_array_composition(void) {
+    MinicC0Program program;
+    const MinicArrayType *existing_outer;
+    const MinicArrayType *existing_inner;
+    MinicType existing_inner_type;
+    MinicType existing_outer_type;
+    MinicType declared_inner_type;
+    MinicType declared_outer_type;
+
+    minic_c0_program_initialize(&program);
+    existing_inner_type = add_fixed_array(&program, minic_type_int(), 4U);
+    existing_outer_type = add_incomplete_array(&program, existing_inner_type);
+    declared_inner_type = add_fixed_array(&program, minic_type_int(), 4U);
+    declared_outer_type = add_fixed_array(&program, declared_inner_type, 3U);
+
+    assert(minic_declaration_external_object_types_compatible(
+        &program, existing_outer_type, declared_outer_type));
+    assert(minic_declaration_merge_external_array_composite_type(
+        &program, existing_outer_type, declared_outer_type));
+    existing_outer = &program.array_types[existing_outer_type.array_type_id];
+    assert(existing_outer->element_count == 3U);
+    assert(!existing_outer->is_zero_length);
+    assert(minic_type_equal(existing_outer->element_type, existing_inner_type));
+    existing_inner = &program.array_types[existing_inner_type.array_type_id];
+    assert(existing_inner->element_count == 4U);
+    assert(!existing_inner->is_zero_length);
+
+    minic_c0_program_destroy(&program);
+}
+
+static void test_external_nested_conflict_does_not_partially_complete(void) {
+    MinicC0Program program;
+    const MinicArrayType *existing_outer;
+    const MinicArrayType *existing_inner;
+    MinicType existing_inner_type;
+    MinicType existing_outer_type;
+    MinicType declared_inner_type;
+    MinicType declared_outer_type;
+
+    minic_c0_program_initialize(&program);
+    existing_inner_type = add_incomplete_array(&program, minic_type_int());
+    existing_outer_type = add_fixed_array(&program, existing_inner_type, 2U);
+    declared_inner_type = add_fixed_array(&program, minic_type_int(), 4U);
+    declared_outer_type = add_fixed_array(&program, declared_inner_type, 3U);
+
+    assert(!minic_declaration_external_object_types_compatible(
+        &program, existing_outer_type, declared_outer_type));
+    assert(!minic_declaration_merge_external_array_composite_type(
+        &program, existing_outer_type, declared_outer_type));
+    existing_outer = &program.array_types[existing_outer_type.array_type_id];
+    existing_inner = &program.array_types[existing_inner_type.array_type_id];
+    assert(existing_outer->element_count == 2U);
+    assert(!existing_outer->is_zero_length);
+    assert(existing_inner->element_count == 0U);
+    assert(!existing_inner->is_zero_length);
+
+    minic_c0_program_destroy(&program);
+}
+
+static void test_external_object_attribute_conflict_is_non_mutating(void) {
+    MinicC0Program program;
+    MinicDeclarationExternalObjectAttributes attributes;
+    MinicDeclarationExternalObjectMergeStatus status;
+    const MinicArrayType *existing_array;
+    const MinicGlobalObject *object;
+    MinicGlobalObjectId object_id;
+    MinicType existing_type;
+    MinicType declared_type;
+
+    minic_c0_program_initialize(&program);
+    existing_type = add_incomplete_array(&program, minic_type_int());
+    declared_type = add_fixed_array(&program, minic_type_int(), 4U);
+    object_id = add_extern_object(&program, "array", existing_type);
+    assert(minic_c0_global_object_set_section(&program, object_id, ".old", 4U));
+
+    attributes = empty_external_attributes();
+    attributes.section_name = ".new";
+    attributes.section_name_length = 4U;
+    attributes.has_section = true;
+    status =
+        minic_declaration_merge_external_object(&program, object_id, declared_type, &attributes);
+    assert(status == MINIC_DECLARATION_EXTERNAL_OBJECT_MERGE_ATTRIBUTE_CONFLICT);
+
+    existing_array = &program.array_types[existing_type.array_type_id];
+    object = minic_c0_program_global_object(&program, object_id);
+    assert(existing_array->element_count == 0U);
+    assert(!existing_array->is_zero_length);
+    assert(object != NULL);
+    assert(object->section_name_length == 4U);
+    assert(memcmp(object->section_name, ".old", 4U) == 0);
+
+    minic_c0_program_destroy(&program);
+}
+
+static void test_external_object_visibility_conflict_is_non_mutating(void) {
+    MinicC0Program program;
+    MinicDeclarationExternalObjectAttributes attributes;
+    MinicDeclarationExternalObjectMergeStatus status;
+    const MinicArrayType *existing_array;
+    const MinicGlobalObject *object;
+    MinicGlobalObjectId object_id;
+    MinicType existing_type;
+    MinicType declared_type;
+
+    minic_c0_program_initialize(&program);
+    existing_type = add_incomplete_array(&program, minic_type_int());
+    declared_type = add_fixed_array(&program, minic_type_int(), 4U);
+    object_id = add_extern_object(&program, "visible", existing_type);
+    assert(
+        minic_c0_global_object_set_visibility(&program, object_id, MINIC_SYMBOL_VISIBILITY_HIDDEN));
+
+    attributes = empty_external_attributes();
+    attributes.visibility = MINIC_SYMBOL_VISIBILITY_PROTECTED;
+    attributes.has_visibility = true;
+    status =
+        minic_declaration_merge_external_object(&program, object_id, declared_type, &attributes);
+    assert(status == MINIC_DECLARATION_EXTERNAL_OBJECT_MERGE_ATTRIBUTE_CONFLICT);
+
+    existing_array = &program.array_types[existing_type.array_type_id];
+    object = minic_c0_program_global_object(&program, object_id);
+    assert(existing_array->element_count == 0U);
+    assert(!existing_array->is_zero_length);
+    assert(object != NULL);
+    assert(object->visibility == MINIC_SYMBOL_VISIBILITY_HIDDEN);
+
+    minic_c0_program_destroy(&program);
+}
+
+static void test_external_object_commit_type_and_metadata(void) {
+    MinicC0Program program;
+    MinicDeclarationExternalObjectAttributes attributes;
+    MinicDeclarationExternalObjectMergeStatus status;
+    const MinicArrayType *existing_array;
+    const MinicGlobalObject *object;
+    MinicGlobalObjectId object_id;
+    MinicType existing_type;
+    MinicType declared_type;
+
+    minic_c0_program_initialize(&program);
+    existing_type = add_incomplete_array(&program, minic_type_int());
+    declared_type = add_fixed_array(&program, minic_type_int(), 4U);
+    object_id = add_extern_object(&program, "committed", existing_type);
+
+    attributes = empty_external_attributes();
+    attributes.section_name = ".probe";
+    attributes.section_name_length = 6U;
+    attributes.explicit_alignment = 16U;
+    attributes.visibility = MINIC_SYMBOL_VISIBILITY_HIDDEN;
+    attributes.has_section = true;
+    attributes.has_visibility = true;
+    status =
+        minic_declaration_merge_external_object(&program, object_id, declared_type, &attributes);
+    assert(status == MINIC_DECLARATION_EXTERNAL_OBJECT_MERGE_OK);
+
+    existing_array = &program.array_types[existing_type.array_type_id];
+    object = minic_c0_program_global_object(&program, object_id);
+    assert(existing_array->element_count == 4U);
+    assert(!existing_array->is_zero_length);
+    assert(object != NULL);
+    assert(object->section_name_length == 6U);
+    assert(memcmp(object->section_name, ".probe", 6U) == 0);
+    assert(object->explicit_alignment == 16U);
+    assert(object->visibility == MINIC_SYMBOL_VISIBILITY_HIDDEN);
+
+    minic_c0_program_destroy(&program);
+}
+
+static void test_external_object_invalid_attributes_do_not_commit(void) {
+    MinicC0Program program;
+    MinicDeclarationExternalObjectAttributes attributes;
+    MinicDeclarationExternalObjectMergeStatus status;
+    const MinicArrayType *existing_array;
+    MinicGlobalObjectId object_id;
+    MinicType existing_type;
+    MinicType declared_type;
+
+    minic_c0_program_initialize(&program);
+    existing_type = add_incomplete_array(&program, minic_type_int());
+    declared_type = add_fixed_array(&program, minic_type_int(), 4U);
+    object_id = add_extern_object(&program, "invalid", existing_type);
+
+    attributes = empty_external_attributes();
+    attributes.explicit_alignment = 3U;
+    status =
+        minic_declaration_merge_external_object(&program, object_id, declared_type, &attributes);
+    assert(status == MINIC_DECLARATION_EXTERNAL_OBJECT_MERGE_INVALID);
+    existing_array = &program.array_types[existing_type.array_type_id];
+    assert(existing_array->element_count == 0U);
+    assert(!existing_array->is_zero_length);
+
+    minic_c0_program_destroy(&program);
+}
+
+int main(void) {
+    test_fixed_multidimensional_array();
+    test_incomplete_and_zero_length_arrays();
+    test_array_of_function_pointer();
+    test_invalid_transient_facts_do_not_commit();
+    test_external_scalar_compatibility();
+    test_external_incomplete_array_completes();
+    test_external_incomplete_array_accepts_zero_length();
+    test_external_fixed_array_conflict_is_non_mutating();
+    test_external_multidimensional_array_composition();
+    test_external_nested_conflict_does_not_partially_complete();
+    test_external_object_attribute_conflict_is_non_mutating();
+    test_external_object_visibility_conflict_is_non_mutating();
+    test_external_object_commit_type_and_metadata();
+    test_external_object_invalid_attributes_do_not_commit();
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/frontend/direct_local_effects_test.c"}
+#include "frontend/function_body.h"
+
+#include <stdio.h>
+
+typedef struct TestEffects {
+    size_t assignments[7];
+    size_t clobbers[7];
+    size_t targets[7];
+    bool invalid_rhs;
+} TestEffects;
+
+static bool collect(void *opaque, MinicLocalId id,
+                    MinicDirectLocalEffect effect, MinicExpressionId rhs) {
+    TestEffects *facts = opaque;
+    if (id >= 7U) return false;
+    switch (effect) {
+    case MINIC_DIRECT_LOCAL_ASSIGN:
+        ++facts->assignments[id];
+        if (rhs == MINIC_EXPRESSION_INVALID) facts->invalid_rhs = true;
+        return true;
+    case MINIC_DIRECT_LOCAL_CLOBBER:
+        ++facts->clobbers[id];
+        return true;
+    case MINIC_DIRECT_LOCAL_TARGET_ONLY:
+        ++facts->targets[id];
+        return true;
+    }
+    return false;
+}
+
+int main(void) {
+    MinicLocal locals[7] = {0};
+    MinicFunction fn = {.is_defined = true, .local_begin = 0U,
+                        .local_count = 7U, .parameter_count = 7U};
+    MinicExpression expressions[12] = {0};
+    MinicStatement statements[3] = {
+        {.kind = MINIC_STATEMENT_ASSIGN, .target_expression = 0U, .expression = 7U},
+        {.kind = MINIC_STATEMENT_XOR_ASSIGN, .target_expression = 1U},
+        {.kind = MINIC_STATEMENT_EXPRESSION, .target_expression = 6U}
+    };
+    MinicInlineAsmOperand output = {.expression = 5U};
+    MinicInlineAsm assembly = {.outputs = &output, .output_count = 1U};
+    MinicC0Program program = {
+        .locals = locals, .local_count = 7U,
+        .functions = &fn, .function_count = 1U,
+        .expressions = expressions, .expression_count = 12U,
+        .statements = statements, .statement_count = 3U,
+        .inline_asms = &assembly, .inline_asm_count = 1U
+    };
+    TestEffects facts = {0};
+    bool stable[7], parameter[7];
+    size_t i;
+    for (i = 0U; i < 7U; ++i) {
+        locals[i].type = minic_type_int();
+        expressions[i].kind = MINIC_EXPRESSION_LOCAL;
+        expressions[i].value.local_id = i;
+    }
+    expressions[7].kind = MINIC_EXPRESSION_INTEGER;
+    expressions[7].value.integer_value = 1;
+    expressions[8].kind = MINIC_EXPRESSION_ASSIGNMENT;
+    expressions[8].value.binary.left = 2U;
+    expressions[8].value.binary.right = 7U;
+    expressions[9].kind = MINIC_EXPRESSION_ADDRESS_OF;
+    expressions[9].value.unary.operand = 3U;
+    expressions[10].kind = MINIC_EXPRESSION_UNARY;
+    expressions[10].value.unary.operator_kind = MINIC_UNARY_PRE_INCREMENT;
+    expressions[10].value.unary.operand = 4U;
+    expressions[11].kind = MINIC_EXPRESSION_COMPOUND_ASSIGNMENT;
+    expressions[11].value.binary.left = 2U;
+    expressions[11].value.binary.right = 7U;
+
+    if (!minic_c0_program_seed_parameter_locals(&program, parameter, stable, 7U) ||
+        !minic_c0_program_visit_direct_local_effects(&program, collect, &facts) ||
+        !minic_c0_program_stable_parameter_locals(&program, stable, 7U))
+        return 1;
+    for (i = 0U; i < 7U; ++i) {
+        if (!parameter[i] || stable[i] != (i == 6U)) return 2;
+    }
+    if (facts.assignments[0] != 1U || facts.assignments[2] != 1U ||
+        facts.clobbers[1] != 1U || facts.clobbers[2] != 1U ||
+        facts.clobbers[3] != 1U || facts.clobbers[4] != 1U ||
+        facts.clobbers[5] != 1U || facts.targets[6] != 1U || facts.invalid_rhs)
+        return 3;
+    assembly.outputs = NULL;
+    if (minic_c0_program_stable_parameter_locals(&program, stable, 7U))
+        return 4;
+    assembly.outputs = &output;
+    fn.parameter_count = 8U;
+    if (minic_c0_program_seed_parameter_locals(&program, parameter, stable, 7U))
+        return 5;
+    puts("MINIC_DIRECT_LOCAL_EFFECTS=PASS assignments clobbers target-only malformed");
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/frontend/function_body_view_test.c"}
+#include "frontend/ast.h"
+#include "frontend/ast_verifier.h"
+#include "frontend/function_body.h"
+
+#include <string.h>
+
+static MinicSourceSpan test_span(size_t offset) {
+    MinicSourceSpan span;
+
+    (void)memset(&span, 0, sizeof(span));
+    span.begin.offset = offset;
+    span.begin.line = 1U;
+    span.begin.column = offset + 1U;
+    span.end = span.begin;
+    span.end.offset += 1U;
+    span.end.column += 1U;
+    return span;
+}
+
+static void initialize_statement(MinicStatement *statement, MinicStatementKind kind) {
+    (void)memset(statement, 0, sizeof(*statement));
+    statement->kind = kind;
+    statement->target_expression = MINIC_EXPRESSION_INVALID;
+    statement->expression = MINIC_EXPRESSION_INVALID;
+    statement->target_statement = MINIC_STATEMENT_INVALID;
+    statement->inline_asm_id = MINIC_INLINE_ASM_INVALID;
+    statement->cleanup_context = MINIC_CLEANUP_CONTEXT_ROOT;
+    statement->cleanup_stop_context = MINIC_CLEANUP_CONTEXT_ROOT;
+    statement->then_block = MINIC_BLOCK_INVALID;
+    statement->else_block = MINIC_BLOCK_INVALID;
+}
+
+static bool add_local(MinicC0Program *program, MinicLocalId *local_id) {
+    MinicLocal local;
+
+    minic_c0_local_initialize(&local);
+    local.name_span = test_span(program->local_count);
+    local.type = minic_type_int();
+    return minic_c0_program_add_local(program, &local, local_id);
+}
+
+static bool add_local_expression(MinicC0Program *program,
+                                 MinicLocalId local_id,
+                                 MinicExpressionId *expression_id) {
+    MinicExpression expression;
+
+    (void)memset(&expression, 0, sizeof(expression));
+    expression.kind = MINIC_EXPRESSION_LOCAL;
+    expression.span = test_span(program->expression_count);
+    expression.type = minic_type_int();
+    expression.value_category = MINIC_VALUE_LVALUE;
+    expression.value.local_id = local_id;
+    return minic_c0_program_add_expression(program, &expression, expression_id);
+}
+
+static bool add_integer_expression(MinicC0Program *program,
+                                   int value,
+                                   MinicExpressionId *expression_id) {
+    MinicExpression expression;
+
+    (void)memset(&expression, 0, sizeof(expression));
+    expression.kind = MINIC_EXPRESSION_INTEGER;
+    expression.span = test_span(program->expression_count);
+    expression.type = minic_type_int();
+    expression.value_category = MINIC_VALUE_RVALUE;
+    expression.value.integer_value = value;
+    return minic_c0_program_add_expression(program, &expression, expression_id);
+}
+
+static bool add_expression_statement(MinicC0Program *program,
+                                     MinicBlockId block_id,
+                                     MinicExpressionId expression_id,
+                                     MinicStatementId *statement_id) {
+    MinicStatement statement;
+
+    initialize_statement(&statement, MINIC_STATEMENT_EXPRESSION);
+    statement.span = test_span(program->statement_count);
+    statement.expression = expression_id;
+    return minic_c0_program_add_statement(program, &statement, statement_id) &&
+           minic_c0_block_add_statement(program, block_id, *statement_id);
+}
+
+static bool add_void_function(MinicC0Program *program,
+                              const char *name,
+                              size_t name_length,
+                              MinicLocalId local_id,
+                              MinicBlockId body_block,
+                              MinicFunctionId *function_id) {
+    MinicType return_type;
+
+    return_type = minic_type_void();
+    return minic_c0_program_add_function(
+               program, name, name_length, local_id, 1U, body_block, function_id) &&
+           minic_c0_program_set_function_signature(program, *function_id, return_type, NULL, 0U);
+}
+
+static int test_cross_function_local_rejected(void) {
+    MinicC0Program program;
+    MinicBlockId block_a;
+    MinicBlockId block_b;
+    MinicLocalId local_a;
+    MinicLocalId local_b;
+    MinicExpressionId expression_a;
+    MinicExpressionId expression_b;
+    MinicStatementId statement_a;
+    MinicStatementId statement_b;
+    MinicFunctionId function_a;
+    MinicFunctionId function_b;
+
+    minic_c0_program_initialize(&program);
+    if (!minic_c0_program_add_block(&program, &block_a) || !add_local(&program, &local_a) ||
+        !add_local_expression(&program, local_a, &expression_a) ||
+        !add_expression_statement(&program, block_a, expression_a, &statement_a) ||
+        !add_void_function(&program, "a", 1U, local_a, block_a, &function_a) ||
+        !minic_c0_program_add_block(&program, &block_b) || !add_local(&program, &local_b) ||
+        !add_local_expression(&program, local_b, &expression_b) ||
+        !add_expression_statement(&program, block_b, expression_b, &statement_b) ||
+        !add_void_function(&program, "b", 1U, local_b, block_b, &function_b) ||
+        !minic_c0_program_verify(&program, MINIC_C0_AST_PARSED) ||
+        !minic_c0_program_validate_function_body_ownership(&program)) {
+        minic_c0_program_destroy(&program);
+        return 1;
+    }
+
+    /* An invalid overlapping local range is rejected after validation
+     * scratch arrays have been allocated. This also exercises the failure
+     * cleanup path under an address/leak sanitizer. */
+    program.functions[function_b].local_begin = local_a;
+    if (minic_c0_program_recompute_inline_emission_references(&program)) {
+        minic_c0_program_destroy(&program);
+        return 2;
+    }
+    program.functions[function_b].local_begin = local_b;
+
+    program.expressions[expression_a].value.local_id = local_b;
+    if (!minic_c0_program_verify(&program, MINIC_C0_AST_PARSED) ||
+        minic_c0_program_validate_function_body_ownership(&program)) {
+        minic_c0_program_destroy(&program);
+        return 3;
+    }
+
+    (void)statement_a;
+    (void)statement_b;
+    (void)function_a;
+    (void)function_b;
+    minic_c0_program_destroy(&program);
+    return 0;
+}
+
+static int test_cross_function_goto_rejected(void) {
+    MinicC0Program program;
+    MinicBlockId block_a;
+    MinicBlockId block_b;
+    MinicLocalId local_a;
+    MinicLocalId local_b;
+    MinicStatement label_a;
+    MinicStatement label_b;
+    MinicStatement go_to;
+    MinicStatementId label_a_id;
+    MinicStatementId label_b_id;
+    MinicStatementId goto_id;
+    MinicFunctionId function_a;
+    MinicFunctionId function_b;
+
+    minic_c0_program_initialize(&program);
+    if (!minic_c0_program_add_block(&program, &block_a) || !add_local(&program, &local_a)) {
+        return 3;
+    }
+    initialize_statement(&label_a, MINIC_STATEMENT_LABEL);
+    label_a.span = test_span(0U);
+    if (!minic_c0_program_add_statement(&program, &label_a, &label_a_id) ||
+        !minic_c0_block_add_statement(&program, block_a, label_a_id) ||
+        !add_void_function(&program, "a", 1U, local_a, block_a, &function_a) ||
+        !minic_c0_program_add_block(&program, &block_b) || !add_local(&program, &local_b)) {
+        minic_c0_program_destroy(&program);
+        return 4;
+    }
+    initialize_statement(&label_b, MINIC_STATEMENT_LABEL);
+    label_b.span = test_span(1U);
+    if (!minic_c0_program_add_statement(&program, &label_b, &label_b_id) ||
+        !minic_c0_block_add_statement(&program, block_b, label_b_id)) {
+        minic_c0_program_destroy(&program);
+        return 5;
+    }
+    initialize_statement(&go_to, MINIC_STATEMENT_GOTO);
+    go_to.span = test_span(2U);
+    go_to.target_statement = label_b_id;
+    if (!minic_c0_program_add_statement(&program, &go_to, &goto_id) ||
+        !minic_c0_block_add_statement(&program, block_a, goto_id) ||
+        !add_void_function(&program, "b", 1U, local_b, block_b, &function_b) ||
+        !minic_c0_program_verify(&program, MINIC_C0_AST_PARSED) ||
+        minic_c0_program_validate_function_body_ownership(&program)) {
+        minic_c0_program_destroy(&program);
+        return 6;
+    }
+
+    program.statements[goto_id].target_statement = label_a_id;
+    if (!minic_c0_program_verify(&program, MINIC_C0_AST_PARSED) ||
+        !minic_c0_program_validate_function_body_ownership(&program)) {
+        minic_c0_program_destroy(&program);
+        return 7;
+    }
+
+    (void)function_a;
+    (void)function_b;
+    minic_c0_program_destroy(&program);
+    return 0;
+}
+
+static int test_orphan_constant_expression_allowed(void) {
+    MinicC0Program program;
+    MinicBlockId block;
+    MinicLocalId local_id;
+    MinicExpressionId orphan_id;
+    MinicFunctionId function_id;
+
+    minic_c0_program_initialize(&program);
+    if (!add_integer_expression(&program, 7, &orphan_id) ||
+        !minic_c0_program_add_block(&program, &block) || !add_local(&program, &local_id) ||
+        !add_void_function(&program, "f", 1U, local_id, block, &function_id) ||
+        !minic_c0_program_verify(&program, MINIC_C0_AST_PARSED) ||
+        !minic_c0_program_validate_function_body_ownership(&program)) {
+        minic_c0_program_destroy(&program);
+        return 8;
+    }
+
+    (void)orphan_id;
+    (void)function_id;
+    minic_c0_program_destroy(&program);
+    return 0;
+}
+
+int main(void) {
+    int status;
+
+    status = test_cross_function_local_rejected();
+    if (status != 0) {
+        return status;
+    }
+    status = test_cross_function_goto_rejected();
+    if (status != 0) {
+        return status;
+    }
+    return test_orphan_constant_expression_allowed();
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/frontend/function_diagnostic_attribute_test.c"}
+#include "frontend/ast.h"
+#include "frontend/parser.h"
+
+#include <stdio.h>
+#include <string.h>
+
+static const MinicFunction *find_function(const MinicC0Program *program,
+                                          const char *name) {
+    size_t i;
+    for (i = 0U; i < program->function_count; ++i) {
+        const MinicFunction *function = &program->functions[i];
+        if (strlen(name) == function->name_length &&
+            memcmp(name, function->name, function->name_length) == 0)
+            return function;
+    }
+    return NULL;
+}
+
+static int expect_diagnostic_pair(const char *source, const char *name,
+                                  const char *error_message,
+                                  const char *warning_message) {
+    MinicC0Program program;
+    MinicDiagnostic diagnostic;
+    const MinicFunction *function;
+    char mutable_source[2048];
+    size_t source_length = strlen(source);
+    bool success;
+    int result = 0;
+
+    if (source_length >= sizeof(mutable_source)) return 1;
+    (void)memcpy(mutable_source, source, source_length + 1U);
+    (void)memset(&diagnostic, 0, sizeof(diagnostic));
+    minic_c0_program_initialize(&program);
+    success = minic_parse_c0_program(
+        "function_diagnostic_attribute_test.c", mutable_source,
+        source_length, &program, &diagnostic);
+    if (!success) {
+        (void)fprintf(stderr, "unexpected parse failure: %s\n", diagnostic.message);
+        result = 2;
+    } else {
+        /* Source buffer is not the owner of persistent function metadata. */
+        (void)memset(mutable_source, '?', source_length);
+        function = find_function(&program, name);
+        if (function == NULL ||
+            ((error_message == NULL) != (function->error_message == NULL)) ||
+            ((warning_message == NULL) != (function->warning_message == NULL)) ||
+            (error_message != NULL &&
+             (function->error_message_length != strlen(error_message) ||
+              memcmp(function->error_message, error_message, strlen(error_message)) != 0)) ||
+            (warning_message != NULL &&
+             (function->warning_message_length != strlen(warning_message) ||
+              memcmp(function->warning_message, warning_message,
+                     strlen(warning_message)) != 0))) {
+            (void)fprintf(stderr, "diagnostic ownership mismatch: %s\n", name);
+            result = 3;
+        }
+    }
+    minic_c0_program_destroy(&program);
+    return result;
+}
+
+static int expect_parse_failure(const char *source, const char *expected) {
+    MinicC0Program program;
+    MinicDiagnostic diagnostic;
+    bool parsed;
+    (void)memset(&diagnostic, 0, sizeof(diagnostic));
+    minic_c0_program_initialize(&program);
+    parsed = minic_parse_c0_program(
+        "function_diagnostic_attribute_test.c", source, strlen(source),
+        &program, &diagnostic);
+    minic_c0_program_destroy(&program);
+    if (parsed || strstr(diagnostic.message, expected) == NULL) {
+        (void)fprintf(stderr, "expected parse failure containing '%s', got '%s'\n",
+                      expected, diagnostic.message);
+        return 1;
+    }
+    return 0;
+}
+
+int main(void) {
+    if (expect_diagnostic_pair(
+            "extern int guard(int) __attribute__((error(\"compile failed\")));"
+            "extern int guard(int);"
+            "int consumer(void) { extern int guard(int) "
+            "__attribute__((error(\"compile failed\"))); return 0; }",
+            "guard", "compile failed", NULL) ||
+        expect_diagnostic_pair(
+            "__attribute__((warning(\"watch out\"))) extern int warn(int);"
+            "int warn(int value) { return value; }",
+            "warn", NULL, "watch out") ||
+        expect_diagnostic_pair(
+            "int consumer(void) { extern int check(int) "
+            "__attribute__((error(\"block-only\"))); return 0; }",
+            "check", "block-only", NULL) ||
+        expect_diagnostic_pair(
+            "int consume(void) { __attribute__((error(\"block-prefix\"))) "
+            "extern int guard(void); return 0; }",
+            "guard", "block-prefix", NULL) ||
+        expect_diagnostic_pair(
+            "extern int f(int) __attribute__((error(\"same\")));"
+            "extern int f(int) __attribute__((error(\"same\")));",
+            "f", "same", NULL) ||
+        expect_diagnostic_pair(
+            "extern int f(void) __attribute__((error(\"one\")));"
+            "extern int f(void) __attribute__((error(\"two\")));",
+            "f", "two", NULL) ||
+        expect_diagnostic_pair(
+            "extern int f(void) __attribute__((warning(\"one\")));"
+            "extern int f(void) __attribute__((error(\"one\")));",
+            "f", "one", "one") ||
+        expect_diagnostic_pair(
+            "extern int f(void) __attribute__((error(\"one\")));"
+            "int caller(void) { extern int f(void) "
+            "__attribute__((warning(\"warn\"))); return 0; }"
+            "extern int f(void) __attribute__((error(\"last\")));",
+            "f", "last", "warn") ||
+        expect_diagnostic_pair(
+            "extern int f(void) __attribute__((warning(\"first\"),"
+            "error(\"stop\"),warning(\"last\")));",
+            "f", "stop", "last") ||
+        expect_diagnostic_pair(
+            "extern int f(void) __attribute__((error(\"max\"\"(\"\"0L\""
+            "\", \"\"delta\"\") signedness error\")));",
+            "f", "max(0L, delta) signedness error", NULL) ||
+        expect_diagnostic_pair(
+            "extern int f(void) __attribute__((error(\"one\\n\"\"two\"),"
+            "warning(\"a\\t\"\"b\")));",
+            "f", "one\ntwo", "a\tb") ||
+        expect_diagnostic_pair(
+            "extern int f(void) __attribute__((error(\"\")));",
+            "f", "", NULL) ||
+        expect_parse_failure(
+            "int caller(void) { __attribute__((error(\"bad\"))) "
+            "extern int object; return 0; }",
+            "cannot apply to an object") ||
+        expect_parse_failure(
+            "extern int f(void) __attribute__((error));",
+            "requires one string literal") ||
+        expect_parse_failure(
+            "extern int f(void) __attribute__((error(12)));",
+            "requires one string literal") ||
+        expect_parse_failure(
+            "extern int f(void) __attribute__((error(\"one\",\"two\")));",
+            "requires one string literal") ||
+        expect_parse_failure(
+            "extern int f(void) __attribute__((error(\"one\" 123 \"two\")));",
+            "requires one string literal")) {
+        return 1;
+    }
+    (void)puts("function diagnostic attribute ownership PASS");
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/frontend/global_object_publish_test.c"}
+#include "frontend/ast.h"
+
+#include <assert.h>
+#include <string.h>
+
+static void test_publish_complete_extern_object(void) {
+    MinicC0Program program;
+    const MinicGlobalObject *object;
+    MinicGlobalObjectId object_id;
+
+    minic_c0_program_initialize(&program);
+    assert(minic_c0_program_add_extern_global_object_with_metadata(&program,
+                                                                   "published",
+                                                                   9U,
+                                                                   minic_type_int(),
+                                                                   true,
+                                                                   ".probe",
+                                                                   6U,
+                                                                   32U,
+                                                                   MINIC_SYMBOL_VISIBILITY_HIDDEN,
+                                                                   true,
+                                                                   true,
+                                                                   &object_id));
+    assert(object_id == 0U);
+    assert(program.global_object_count == 1U);
+    object = minic_c0_program_global_object(&program, object_id);
+    assert(object != NULL);
+    assert(object->name_length == 9U);
+    assert(memcmp(object->name, "published", 9U) == 0);
+    assert(object->section_name_length == 6U);
+    assert(memcmp(object->section_name, ".probe", 6U) == 0);
+    assert(minic_type_equal(object->type, minic_type_int()));
+    assert(object->explicit_alignment == 32U);
+    assert(object->visibility == MINIC_SYMBOL_VISIBILITY_HIDDEN);
+    assert(object->is_extern);
+    assert(object->is_read_only);
+    assert(object->is_weak);
+    assert(object->is_block_scope_extern_only);
+    minic_c0_program_destroy(&program);
+}
+
+static void test_invalid_metadata_does_not_publish(void) {
+    MinicC0Program program;
+    MinicGlobalObjectId object_id;
+
+    minic_c0_program_initialize(&program);
+    assert(!minic_c0_program_add_extern_global_object_with_metadata(&program,
+                                                                    "bad-section",
+                                                                    11U,
+                                                                    minic_type_int(),
+                                                                    false,
+                                                                    NULL,
+                                                                    4U,
+                                                                    0U,
+                                                                    MINIC_SYMBOL_VISIBILITY_DEFAULT,
+                                                                    false,
+                                                                    false,
+                                                                    &object_id));
+    assert(program.global_object_count == 0U);
+    assert(!minic_c0_program_add_extern_global_object_with_metadata(&program,
+                                                                    "bad-align",
+                                                                    9U,
+                                                                    minic_type_int(),
+                                                                    false,
+                                                                    NULL,
+                                                                    0U,
+                                                                    3U,
+                                                                    MINIC_SYMBOL_VISIBILITY_DEFAULT,
+                                                                    false,
+                                                                    false,
+                                                                    &object_id));
+    assert(program.global_object_count == 0U);
+    assert(!minic_c0_program_add_extern_global_object_with_metadata(
+        &program,
+        "bad-visibility",
+        14U,
+        minic_type_int(),
+        false,
+        NULL,
+        0U,
+        0U,
+        (MinicSymbolVisibility)(MINIC_SYMBOL_VISIBILITY_PROTECTED + 1),
+        false,
+        false,
+        &object_id));
+    assert(program.global_object_count == 0U);
+    minic_c0_program_destroy(&program);
+}
+
+static void test_name_conflict_does_not_publish_second_entity(void) {
+    MinicC0Program program;
+    MinicGlobalObjectId first_id;
+    MinicGlobalObjectId second_id;
+
+    minic_c0_program_initialize(&program);
+    assert(minic_c0_program_add_extern_global_object_with_metadata(&program,
+                                                                   "same",
+                                                                   4U,
+                                                                   minic_type_int(),
+                                                                   false,
+                                                                   NULL,
+                                                                   0U,
+                                                                   0U,
+                                                                   MINIC_SYMBOL_VISIBILITY_DEFAULT,
+                                                                   false,
+                                                                   false,
+                                                                   &first_id));
+    assert(first_id == 0U);
+    assert(!minic_c0_program_add_extern_global_object_with_metadata(&program,
+                                                                    "same",
+                                                                    4U,
+                                                                    minic_type_long(),
+                                                                    false,
+                                                                    ".other",
+                                                                    6U,
+                                                                    16U,
+                                                                    MINIC_SYMBOL_VISIBILITY_HIDDEN,
+                                                                    true,
+                                                                    false,
+                                                                    &second_id));
+    assert(program.global_object_count == 1U);
+    minic_c0_program_destroy(&program);
+}
+
+int main(void) {
+    test_publish_complete_extern_object();
+    test_invalid_metadata_does_not_publish();
+    test_name_conflict_does_not_publish_second_entity();
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/frontend/initializer_plan_test.c"}
+#include "frontend/initializer.h"
+#include <assert.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+
+/* Naive source-ordered reference independent of the reverse DSU algorithm. */
+static void check_reference(const MinicArrayInitializerPlan *plan,
+                            const MinicArrayInitializerResolved *r) {
+    size_t i, action;
+    const size_t extent = minic_array_initializer_plan_element_count(plan);
+    size_t *counts = NULL;
+    assert(r->element_count == extent && r->action_count == plan->action_count);
+    if (plan->action_count != 0U) {
+        counts = (size_t *)calloc(plan->action_count, sizeof(*counts));
+        assert(counts != NULL);
+    }
+    for (i = 0U; i < extent; ++i) {
+        size_t expected = MINIC_INITIALIZER_ACTION_INVALID;
+        for (action = 0U; action < plan->action_count; ++action) {
+            if (i >= plan->actions[action].first_index &&
+                i <= plan->actions[action].last_index)
+                expected = action;
+        }
+        assert(r->owners[i] == expected);
+        if (expected != MINIC_INITIALIZER_ACTION_INVALID)
+            ++counts[expected];
+    }
+    for (action = 0U; action < plan->action_count; ++action) {
+        size_t seen = 0U, previous = MINIC_INITIALIZER_ACTION_INVALID;
+        assert(r->final_counts[action] == counts[action]);
+        for (i = r->first_owned[action];
+             i != MINIC_INITIALIZER_ACTION_INVALID; i = r->next_owned[i]) {
+            assert(i < extent && seen < extent);
+            assert(r->owners[i] == action);
+            assert(previous == MINIC_INITIALIZER_ACTION_INVALID || i > previous);
+            previous = i;
+            ++seen;
+        }
+        assert(seen == counts[action]);
+    }
+    free(counts);
+}
+
+static void test_fixed_and_invalid(void) {
+    MinicArrayInitializerPlan plan;
+    MinicArrayInitializerResolved r = {0};
+    size_t id = 77U;
+    minic_array_initializer_plan_initialize(&plan, 4U, false);
+    assert(minic_array_initializer_plan_add_designated(&plan, 1U, 2U, &id) && id == 0U);
+    assert(minic_array_initializer_plan_add_positional(&plan, &id) && id == 1U);
+    assert(plan.next_index == 4U);
+    assert(!minic_array_initializer_plan_add_positional(&plan, &id));
+    assert(!minic_array_initializer_plan_add_designated(&plan, 4U, 4U, &id));
+    assert(!minic_array_initializer_plan_add_designated(&plan, 3U, 2U, &id));
+    assert(!minic_array_initializer_plan_add_designated(&plan, 0U, SIZE_MAX, &id));
+    assert(!minic_array_initializer_plan_add_positional(NULL, &id));
+    assert(!minic_array_initializer_plan_add_positional(&plan, NULL));
+    assert(!minic_array_initializer_plan_resolve(NULL, &r));
+    assert(!minic_array_initializer_plan_resolve(&plan, NULL));
+    assert(minic_array_initializer_plan_resolve(&plan, &r));
+    check_reference(&plan, &r);
+    assert(r.owners[0] == MINIC_INITIALIZER_ACTION_INVALID);
+    assert(r.owners[1] == 0U && r.owners[2] == 0U && r.owners[3] == 1U);
+    minic_array_initializer_resolved_destroy(&r);
+    minic_array_initializer_plan_destroy(&plan);
+}
+
+static void test_inferred_last_wins(void) {
+    MinicArrayInitializerPlan plan;
+    MinicArrayInitializerResolved r = {0};
+    size_t id;
+    minic_array_initializer_plan_initialize(&plan, 0U, true);
+    assert(minic_array_initializer_plan_add_positional(&plan, &id) && id == 0U);
+    assert(minic_array_initializer_plan_add_designated(&plan, 3U, 5U, &id) && id == 1U);
+    assert(minic_array_initializer_plan_add_positional(&plan, &id) && id == 2U);
+    assert(minic_array_initializer_plan_add_designated(&plan, 4U, 6U, &id) && id == 3U);
+    assert(minic_array_initializer_plan_element_count(&plan) == 7U);
+    assert(minic_array_initializer_plan_resolve(&plan, &r));
+    check_reference(&plan, &r);
+    assert(r.final_counts[0] == 1U && r.final_counts[1] == 1U);
+    assert(r.final_counts[2] == 0U && r.final_counts[3] == 3U);
+    minic_array_initializer_resolved_destroy(&r);
+    minic_array_initializer_plan_destroy(&plan);
+}
+
+static uint32_t random_step(uint32_t *seed) {
+    *seed = *seed * UINT32_C(1664525) + UINT32_C(1013904223);
+    return *seed;
+}
+
+static void test_dense_overlapping_ranges(void) {
+    uint32_t seed = UINT32_C(0x52135487);
+    size_t trial;
+    for (trial = 0U; trial < 128U; ++trial) {
+        MinicArrayInitializerPlan plan;
+        MinicArrayInitializerResolved r = {0};
+        size_t i, id;
+        const size_t extent = 1U + (size_t)(random_step(&seed) % 96U);
+        const size_t count = 1U + (size_t)(random_step(&seed) % 128U);
+        minic_array_initializer_plan_initialize(&plan, extent, false);
+        for (i = 0U; i < count; ++i) {
+            size_t first = random_step(&seed) % extent;
+            size_t last = random_step(&seed) % extent;
+            if (first > last) {
+                size_t swap = first;
+                first = last;
+                last = swap;
+            }
+            assert(minic_array_initializer_plan_add_designated(
+                &plan, first, last, &id));
+            assert(id == i);
+        }
+        assert(minic_array_initializer_plan_resolve(&plan, &r));
+        check_reference(&plan, &r);
+        minic_array_initializer_resolved_destroy(&r);
+        minic_array_initializer_plan_destroy(&plan);
+    }
+}
+
+static void test_empty(void) {
+    MinicArrayInitializerPlan plan;
+    MinicArrayInitializerResolved r = {0};
+    minic_array_initializer_plan_initialize(&plan, 0U, true);
+    assert(minic_array_initializer_plan_resolve(&plan, &r));
+    check_reference(&plan, &r);
+    minic_array_initializer_resolved_destroy(&r);
+    minic_array_initializer_plan_destroy(&plan);
+}
+
+int main(void) {
+    test_fixed_and_invalid();
+    test_inferred_last_wins();
+    test_dense_overlapping_ranges();
+    test_empty();
+    puts("PASS frontend/initializer-plan");
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/frontend/lexer_test.c"}
+#include "frontend/lexer.h"
+
+#include <stdio.h>
+#include <string.h>
+
+static int expect_token(
+    MinicLexer *lexer,
+    MinicTokenKind expected_kind,
+    size_t expected_line,
+    size_t expected_column)
+{
+    MinicDiagnostic diagnostic;
+    MinicToken token;
+
+    diagnostic.message[0] = '\0';
+    if (!minic_lexer_next(lexer, &token, &diagnostic)) {
+        (void)fprintf(
+            stderr,
+            "unexpected lexer failure at %zu:%zu: %s\n",
+            diagnostic.line,
+            diagnostic.column,
+            diagnostic.message);
+        return 1;
+    }
+    if (token.kind != expected_kind ||
+        token.span.begin.line != expected_line ||
+        token.span.begin.column != expected_column) {
+        (void)fprintf(
+            stderr,
+            "token mismatch: expected=%s@%zu:%zu actual=%s@%zu:%zu\n",
+            minic_token_kind_name(expected_kind),
+            expected_line,
+            expected_column,
+            minic_token_kind_name(token.kind),
+            token.span.begin.line,
+            token.span.begin.column);
+        return 1;
+    }
+    if (token.kind != MINIC_TOKEN_EOF &&
+        token.span.begin.offset >= token.span.end.offset) {
+        (void)fprintf(stderr, "non-EOF token has an empty source span\n");
+        return 1;
+    }
+    return 0;
+}
+
+static int test_c0_sequence(void)
+{
+    static const char source[] =
+        "int main(void) {\n"
+        "  return 42;\n"
+        "}\n";
+    static const struct {
+        MinicTokenKind kind;
+        size_t line;
+        size_t column;
+    } expected[] = {
+        {MINIC_TOKEN_KW_INT, 1U, 1U},
+        {MINIC_TOKEN_IDENTIFIER, 1U, 5U},
+        {MINIC_TOKEN_LPAREN, 1U, 9U},
+        {MINIC_TOKEN_KW_VOID, 1U, 10U},
+        {MINIC_TOKEN_RPAREN, 1U, 14U},
+        {MINIC_TOKEN_LBRACE, 1U, 16U},
+        {MINIC_TOKEN_KW_RETURN, 2U, 3U},
+        {MINIC_TOKEN_INTEGER_CONSTANT, 2U, 10U},
+        {MINIC_TOKEN_SEMICOLON, 2U, 12U},
+        {MINIC_TOKEN_RBRACE, 3U, 1U},
+        {MINIC_TOKEN_EOF, 4U, 1U}
+    };
+    MinicLexer lexer;
+    size_t index;
+
+    minic_lexer_initialize(&lexer, "sequence.c", source, sizeof(source) - 1U);
+    for (index = 0U; index < sizeof(expected) / sizeof(expected[0]); ++index) {
+        if (expect_token(
+                &lexer,
+                expected[index].kind,
+                expected[index].line,
+                expected[index].column) != 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static int test_operator_sequence(void)
+{
+    static const char source[] = "+ ++ - -- -> * & ^ ^= / % = [ ]";
+    static const struct {
+        MinicTokenKind kind;
+        size_t column;
+    } expected[] = {
+        {MINIC_TOKEN_PLUS, 1U},
+        {MINIC_TOKEN_PLUS_PLUS, 3U},
+        {MINIC_TOKEN_MINUS, 6U},
+        {MINIC_TOKEN_MINUS_MINUS, 8U},
+        {MINIC_TOKEN_ARROW, 11U},
+        {MINIC_TOKEN_STAR, 14U},
+        {MINIC_TOKEN_AMPERSAND, 16U},
+        {MINIC_TOKEN_CARET, 18U},
+        {MINIC_TOKEN_CARET_EQUAL, 20U},
+        {MINIC_TOKEN_SLASH, 23U},
+        {MINIC_TOKEN_PERCENT, 25U},
+        {MINIC_TOKEN_EQUAL, 27U},
+        {MINIC_TOKEN_LBRACKET, 29U},
+        {MINIC_TOKEN_RBRACKET, 31U},
+        {MINIC_TOKEN_EOF, 32U}
+    };
+    MinicLexer lexer;
+    size_t index;
+
+    minic_lexer_initialize(&lexer, "operators.c", source, sizeof(source) - 1U);
+    for (index = 0U; index < sizeof(expected) / sizeof(expected[0]); ++index) {
+        if (expect_token(
+                &lexer,
+                expected[index].kind,
+                1U,
+                expected[index].column) != 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static int test_comparison_operators(void)
+{
+    static const char source[] = "= == ! != < << <<= <= > >> >>= >=";
+    static const struct {
+        MinicTokenKind kind;
+        size_t column;
+    } expected[] = {
+        {MINIC_TOKEN_EQUAL, 1U},
+        {MINIC_TOKEN_EQUAL_EQUAL, 3U},
+        {MINIC_TOKEN_BANG, 6U},
+        {MINIC_TOKEN_BANG_EQUAL, 8U},
+        {MINIC_TOKEN_LESS, 11U},
+        {MINIC_TOKEN_LESS_LESS, 13U},
+        {MINIC_TOKEN_LESS_LESS_EQUAL, 16U},
+        {MINIC_TOKEN_LESS_EQUAL, 20U},
+        {MINIC_TOKEN_GREATER, 23U},
+        {MINIC_TOKEN_GREATER_GREATER, 25U},
+        {MINIC_TOKEN_GREATER_GREATER_EQUAL, 28U},
+        {MINIC_TOKEN_GREATER_EQUAL, 32U},
+        {MINIC_TOKEN_EOF, 34U}
+    };
+    MinicLexer lexer;
+    size_t index;
+
+    minic_lexer_initialize(
+        &lexer,
+        "comparisons.c",
+        source,
+        sizeof(source) - 1U);
+    for (index = 0U; index < sizeof(expected) / sizeof(expected[0]); ++index) {
+        if (expect_token(
+                &lexer,
+                expected[index].kind,
+                1U,
+                expected[index].column) != 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static int test_alignof_keyword_boundaries(void)
+{
+    static const char source[] = "_Alignof __alignof__ __alignof alignof";
+    MinicLexer lexer;
+
+    minic_lexer_initialize(&lexer, "alignof.c", source, sizeof(source) - 1U);
+    if (expect_token(&lexer, MINIC_TOKEN_KW_ALIGNOF, 1U, 1U) != 0 ||
+        expect_token(&lexer, MINIC_TOKEN_KW_ALIGNOF, 1U, 10U) != 0 ||
+        expect_token(&lexer, MINIC_TOKEN_KW_ALIGNOF, 1U, 22U) != 0 ||
+        expect_token(&lexer, MINIC_TOKEN_IDENTIFIER, 1U, 32U) != 0 ||
+        expect_token(&lexer, MINIC_TOKEN_EOF, 1U, 39U) != 0) {
+        return 1;
+    }
+    return 0;
+}
+
+static int test_static_assert_keyword_boundaries(void)
+{
+    static const char source[] = "_Static_assert _Static_assertion";
+    MinicLexer lexer;
+
+    minic_lexer_initialize(&lexer, "static-assert.c", source, sizeof(source) - 1U);
+    if (expect_token(&lexer, MINIC_TOKEN_KW_STATIC_ASSERT, 1U, 1U) != 0 ||
+        expect_token(&lexer, MINIC_TOKEN_IDENTIFIER, 1U, 16U) != 0 ||
+        expect_token(&lexer, MINIC_TOKEN_EOF, 1U, 33U) != 0) {
+        return 1;
+    }
+    return 0;
+}
+
+static int test_control_keyword_boundaries(void)
+{
+    static const char source[] = "if else if_value elsewhere";
+    MinicLexer lexer;
+
+    minic_lexer_initialize(&lexer, "control.c", source, sizeof(source) - 1U);
+    if (expect_token(&lexer, MINIC_TOKEN_KW_IF, 1U, 1U) != 0 ||
+        expect_token(&lexer, MINIC_TOKEN_KW_ELSE, 1U, 4U) != 0 ||
+        expect_token(&lexer, MINIC_TOKEN_IDENTIFIER, 1U, 9U) != 0 ||
+        expect_token(&lexer, MINIC_TOKEN_IDENTIFIER, 1U, 18U) != 0 ||
+        expect_token(&lexer, MINIC_TOKEN_EOF, 1U, 27U) != 0) {
+        return 1;
+    }
+    return 0;
+}
+
+static int test_for_keyword_boundaries(void)
+{
+    static const char source[] = "for format for_value";
+    MinicLexer lexer;
+
+    minic_lexer_initialize(&lexer, "for.c", source, sizeof(source) - 1U);
+    if (expect_token(&lexer, MINIC_TOKEN_KW_FOR, 1U, 1U) != 0 ||
+        expect_token(&lexer, MINIC_TOKEN_IDENTIFIER, 1U, 5U) != 0 ||
+        expect_token(&lexer, MINIC_TOKEN_IDENTIFIER, 1U, 12U) != 0 ||
+        expect_token(&lexer, MINIC_TOKEN_EOF, 1U, 21U) != 0) {
+        return 1;
+    }
+    return 0;
+}
+
+static int test_break_keyword_boundaries(void)
+{
+    static const char source[] = "break breakfast break_value";
+    MinicLexer lexer;
+
+    minic_lexer_initialize(&lexer, "break.c", source, sizeof(source) - 1U);
+    if (expect_token(&lexer, MINIC_TOKEN_KW_BREAK, 1U, 1U) != 0 ||
+        expect_token(&lexer, MINIC_TOKEN_IDENTIFIER, 1U, 7U) != 0 ||
+        expect_token(&lexer, MINIC_TOKEN_IDENTIFIER, 1U, 17U) != 0 ||
+        expect_token(&lexer, MINIC_TOKEN_EOF, 1U, 28U) != 0) {
+        return 1;
+    }
+    return 0;
+}
+
+static int test_struct_keyword_boundaries(void)
+{
+    static const char source[] = "struct AES_ctx structure struct_value";
+    MinicLexer lexer;
+
+    minic_lexer_initialize(&lexer, "struct.c", source, sizeof(source) - 1U);
+    if (expect_token(&lexer, MINIC_TOKEN_KW_STRUCT, 1U, 1U) != 0 ||
+        expect_token(&lexer, MINIC_TOKEN_IDENTIFIER, 1U, 8U) != 0 ||
+        expect_token(&lexer, MINIC_TOKEN_IDENTIFIER, 1U, 16U) != 0 ||
+        expect_token(&lexer, MINIC_TOKEN_IDENTIFIER, 1U, 26U) != 0 ||
+        expect_token(&lexer, MINIC_TOKEN_EOF, 1U, 38U) != 0) {
+        return 1;
+    }
+    return 0;
+}
+
+static int test_const_keyword_boundaries(void)
+{
+    static const char source[] = "const constant const_value";
+    MinicLexer lexer;
+
+    minic_lexer_initialize(&lexer, "const.c", source, sizeof(source) - 1U);
+    if (expect_token(&lexer, MINIC_TOKEN_KW_CONST, 1U, 1U) != 0 ||
+        expect_token(&lexer, MINIC_TOKEN_IDENTIFIER, 1U, 7U) != 0 ||
+        expect_token(&lexer, MINIC_TOKEN_IDENTIFIER, 1U, 16U) != 0 ||
+        expect_token(&lexer, MINIC_TOKEN_EOF, 1U, 27U) != 0) {
+        return 1;
+    }
+    return 0;
+}
+
+static int test_unsigned_keyword_boundaries(void)
+{
+    static const char source[] = "unsigned unsigned_value unsignedness";
+    MinicLexer lexer;
+
+    minic_lexer_initialize(&lexer, "unsigned.c", source, sizeof(source) - 1U);
+    if (expect_token(&lexer, MINIC_TOKEN_KW_UNSIGNED, 1U, 1U) != 0 ||
+        expect_token(&lexer, MINIC_TOKEN_IDENTIFIER, 1U, 10U) != 0 ||
+        expect_token(&lexer, MINIC_TOKEN_IDENTIFIER, 1U, 25U) != 0 ||
+        expect_token(&lexer, MINIC_TOKEN_EOF, 1U, 37U) != 0) {
+        return 1;
+    }
+    return 0;
+}
+
+static int test_signed_keyword_boundaries(void)
+{
+    static const char source[] = "signed signed_value signedness";
+    MinicLexer lexer;
+
+    minic_lexer_initialize(&lexer, "signed.c", source, sizeof(source) - 1U);
+    if (expect_token(&lexer, MINIC_TOKEN_KW_SIGNED, 1U, 1U) != 0 ||
+        expect_token(&lexer, MINIC_TOKEN_IDENTIFIER, 1U, 8U) != 0 ||
+        expect_token(&lexer, MINIC_TOKEN_IDENTIFIER, 1U, 21U) != 0 ||
+        expect_token(&lexer, MINIC_TOKEN_EOF, 1U, 31U) != 0) {
+        return 1;
+    }
+    return 0;
+}
+
+static int test_long_keyword_boundaries(void)
+{
+    static const char source[] = "long longer long_value";
+    MinicLexer lexer;
+
+    minic_lexer_initialize(&lexer, "long.c", source, sizeof(source) - 1U);
+    if (expect_token(&lexer, MINIC_TOKEN_KW_LONG, 1U, 1U) != 0 ||
+        expect_token(&lexer, MINIC_TOKEN_IDENTIFIER, 1U, 6U) != 0 ||
+        expect_token(&lexer, MINIC_TOKEN_IDENTIFIER, 1U, 13U) != 0 ||
+        expect_token(&lexer, MINIC_TOKEN_EOF, 1U, 23U) != 0) {
+        return 1;
+    }
+    return 0;
+}
+
+static int test_char_keyword_boundaries(void)
+{
+    static const char source[] = "char char_value character";
+    MinicLexer lexer;
+
+    minic_lexer_initialize(&lexer, "char.c", source, sizeof(source) - 1U);
+    if (expect_token(&lexer, MINIC_TOKEN_KW_CHAR, 1U, 1U) != 0 ||
+        expect_token(&lexer, MINIC_TOKEN_IDENTIFIER, 1U, 6U) != 0 ||
+        expect_token(&lexer, MINIC_TOKEN_IDENTIFIER, 1U, 17U) != 0 ||
+        expect_token(&lexer, MINIC_TOKEN_EOF, 1U, 26U) != 0) {
+        return 1;
+    }
+    return 0;
+}
+
+static int test_keyword_boundaries(void)
+{
+    static const char source[] = "integer return_value voided";
+    MinicLexer lexer;
+
+    minic_lexer_initialize(&lexer, "identifiers.c", source, sizeof(source) - 1U);
+    if (expect_token(&lexer, MINIC_TOKEN_IDENTIFIER, 1U, 1U) != 0 ||
+        expect_token(&lexer, MINIC_TOKEN_IDENTIFIER, 1U, 9U) != 0 ||
+        expect_token(&lexer, MINIC_TOKEN_IDENTIFIER, 1U, 22U) != 0 ||
+        expect_token(&lexer, MINIC_TOKEN_EOF, 1U, 28U) != 0) {
+        return 1;
+    }
+    return 0;
+}
+
+static int test_floating_constants(void)
+{
+    static const char source[] = "0 0.0 1. .5 1e3 2.5e-4 x.y";
+    static const struct {
+        MinicTokenKind kind;
+        size_t column;
+    } expected[] = {
+        {MINIC_TOKEN_INTEGER_CONSTANT, 1U},
+        {MINIC_TOKEN_FLOATING_CONSTANT, 3U},
+        {MINIC_TOKEN_FLOATING_CONSTANT, 7U},
+        {MINIC_TOKEN_FLOATING_CONSTANT, 10U},
+        {MINIC_TOKEN_FLOATING_CONSTANT, 13U},
+        {MINIC_TOKEN_FLOATING_CONSTANT, 17U},
+        {MINIC_TOKEN_IDENTIFIER, 24U},
+        {MINIC_TOKEN_DOT, 25U},
+        {MINIC_TOKEN_IDENTIFIER, 26U},
+        {MINIC_TOKEN_EOF, 27U}
+    };
+    MinicLexer lexer;
+    size_t index;
+
+    minic_lexer_initialize(&lexer, "floating.c", source, sizeof(source) - 1U);
+    for (index = 0U; index < sizeof(expected) / sizeof(expected[0]); ++index) {
+        if (expect_token(&lexer, expected[index].kind, 1U, expected[index].column) != 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static int test_string_literals(void)
+{
+    static const char source[] = "\"abc\" \"A\\\"B\"";
+    MinicLexer lexer;
+
+    minic_lexer_initialize(&lexer, "strings.c", source, sizeof(source) - 1U);
+    if (expect_token(&lexer, MINIC_TOKEN_STRING_LITERAL, 1U, 1U) != 0 ||
+        expect_token(&lexer, MINIC_TOKEN_STRING_LITERAL, 1U, 7U) != 0 ||
+        expect_token(&lexer, MINIC_TOKEN_EOF, 1U, 13U) != 0) {
+        return 1;
+    }
+    return 0;
+}
+
+static int test_wide_string_literals(void)
+{
+    static const char source[] = "L\"SecureBoot\" Lvalue";
+    MinicLexer lexer;
+
+    minic_lexer_initialize(&lexer, "wide-strings.c", source, sizeof(source) - 1U);
+    if (expect_token(&lexer, MINIC_TOKEN_WIDE_STRING_LITERAL, 1U, 1U) != 0 ||
+        expect_token(&lexer, MINIC_TOKEN_IDENTIFIER, 1U, 15U) != 0 ||
+        expect_token(&lexer, MINIC_TOKEN_EOF, 1U, 21U) != 0) {
+        return 1;
+    }
+    return 0;
+}
+
+static int test_invalid_string_literals(void)
+{
+    static const char unterminated[] = "\"abc";
+    static const char newline[] = "\"a\nb\"";
+    MinicDiagnostic diagnostic;
+    MinicLexer lexer;
+    MinicToken token;
+
+    minic_lexer_initialize(
+        &lexer, "string-unterminated.c", unterminated, sizeof(unterminated) - 1U);
+    diagnostic.message[0] = '\0';
+    if (minic_lexer_next(&lexer, &token, &diagnostic) ||
+        token.kind != MINIC_TOKEN_INVALID || diagnostic.line != 1U || diagnostic.column != 1U ||
+        strcmp(diagnostic.message, "unterminated string literal") != 0) {
+        (void)fprintf(stderr,
+                      "unterminated string diagnostic mismatch: %zu:%zu: %s\n",
+                      diagnostic.line,
+                      diagnostic.column,
+                      diagnostic.message);
+        return 1;
+    }
+
+    minic_lexer_initialize(&lexer, "string-newline.c", newline, sizeof(newline) - 1U);
+    diagnostic.message[0] = '\0';
+    if (minic_lexer_next(&lexer, &token, &diagnostic) ||
+        token.kind != MINIC_TOKEN_INVALID || diagnostic.line != 1U || diagnostic.column != 3U ||
+        strcmp(diagnostic.message, "newline in string literal") != 0) {
+        (void)fprintf(stderr,
+                      "newline string diagnostic mismatch: %zu:%zu: %s\n",
+                      diagnostic.line,
+                      diagnostic.column,
+                      diagnostic.message);
+        return 1;
+    }
+    return 0;
+}
+
+static int test_invalid_floating_exponent(void)
+{
+    static const char source[] = "1e+";
+    MinicDiagnostic diagnostic;
+    MinicLexer lexer;
+    MinicToken token;
+
+    minic_lexer_initialize(&lexer, "floating-invalid.c", source, sizeof(source) - 1U);
+    diagnostic.message[0] = '\0';
+    if (minic_lexer_next(&lexer, &token, &diagnostic)) {
+        (void)fprintf(stderr, "invalid floating exponent unexpectedly tokenized\n");
+        return 1;
+    }
+    if (token.kind != MINIC_TOKEN_INVALID || diagnostic.line != 1U || diagnostic.column != 1U ||
+        strcmp(diagnostic.message, "expected decimal digit in exponent") != 0) {
+        (void)fprintf(stderr,
+                      "floating diagnostic mismatch: %zu:%zu: %s\n",
+                      diagnostic.line,
+                      diagnostic.column,
+                      diagnostic.message);
+        return 1;
+    }
+    return 0;
+}
+
+static int test_invalid_character(void)
+{
+    static const char source[] = "\n  @";
+    MinicDiagnostic diagnostic;
+    MinicLexer lexer;
+    MinicToken token;
+
+    minic_lexer_initialize(&lexer, "invalid.c", source, sizeof(source) - 1U);
+    diagnostic.message[0] = '\0';
+    if (minic_lexer_next(&lexer, &token, &diagnostic)) {
+        (void)fprintf(stderr, "invalid character unexpectedly tokenized\n");
+        return 1;
+    }
+    if (token.kind != MINIC_TOKEN_INVALID ||
+        diagnostic.line != 2U || diagnostic.column != 3U ||
+        strcmp(diagnostic.message, "unexpected character '@'") != 0) {
+        (void)fprintf(
+            stderr,
+            "invalid diagnostic mismatch: %zu:%zu: %s\n",
+            diagnostic.line,
+            diagnostic.column,
+            diagnostic.message);
+        return 1;
+    }
+    return 0;
+}
+
+int main(void)
+{
+    if (test_c0_sequence() != 0 ||
+        test_operator_sequence() != 0 ||
+        test_comparison_operators() != 0 ||
+        test_alignof_keyword_boundaries() != 0 ||
+        test_static_assert_keyword_boundaries() != 0 ||
+        test_control_keyword_boundaries() != 0 ||
+        test_for_keyword_boundaries() != 0 ||
+        test_break_keyword_boundaries() != 0 ||
+        test_struct_keyword_boundaries() != 0 ||
+        test_const_keyword_boundaries() != 0 ||
+        test_unsigned_keyword_boundaries() != 0 ||
+        test_signed_keyword_boundaries() != 0 ||
+        test_long_keyword_boundaries() != 0 ||
+        test_char_keyword_boundaries() != 0 ||
+        test_keyword_boundaries() != 0 ||
+        test_floating_constants() != 0 ||
+        test_string_literals() != 0 ||
+        test_wide_string_literals() != 0 ||
+        test_invalid_string_literals() != 0 ||
+        test_invalid_floating_exponent() != 0 ||
+        test_invalid_character() != 0) {
+        return 1;
+    }
+
+    (void)printf("PASS frontend/lexer\n");
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/frontend/p24_asm_goto_cleanup_cases.c"}
+#ifndef P24_CASE
+#define P24_CASE 0
+#endif
+
+static void p24_cleanup(int *value) { (void)value; }
+
+#if P24_CASE == 0
+int p24_asm_goto_same_scope(void) {
+    asm goto("j %l[yes]\n\t.word %[ext]" : : [ext] "i"(33) : : yes);
+    return 0;
+yes:
+    return 1;
+}
+#elif P24_CASE == 1
+int p24_asm_goto_enter_cleanup(void) {
+    asm goto("nop" : : : : inside);
+    {
+        int guard __attribute__((cleanup(p24_cleanup))) = 1;
+inside:
+        return guard;
+    }
+}
+#elif P24_CASE == 2
+int p24_asm_goto_leave_cleanup(void) {
+    {
+        int guard __attribute__((cleanup(p24_cleanup))) = 1;
+        asm goto("nop" : : : : outside);
+        return guard;
+    }
+outside:
+    return 0;
+}
+#elif P24_CASE == 3
+int p24_local_asm_goto_definition_context(void) {
+    __label__ local;
+    asm goto("nop" : : : : local);
+    {
+        int guard __attribute__((cleanup(p24_cleanup))) = 1;
+local:
+        return guard;
+    }
+}
+#elif P24_CASE == 4
+int p24_local_c_goto_definition_context(void) {
+    __label__ local;
+    goto local;
+    {
+        int guard __attribute__((cleanup(p24_cleanup))) = 1;
+local:
+        return guard;
+    }
+}
+#elif P24_CASE == 5
+int p24_backward_asm_goto_cross_cleanup(void) {
+outside:
+    {
+        int guard __attribute__((cleanup(p24_cleanup))) = 1;
+        asm goto("nop" : : : : outside);
+        return guard;
+    }
+}
+#elif P24_CASE == 6
+int p24_local_asm_goto_same_scope(void) {
+    __label__ local;
+    asm goto("j %l[local]\n\t.word %[ext]" : : [ext] "i"(33) : : local);
+    return 0;
+local:
+    return 1;
+}
+#elif P24_CASE == 7
+int p24_backward_asm_goto_same_scope(void) {
+local:
+    asm goto("j %l[local]\n\t.word %[ext]" : : [ext] "i"(33) : : local);
+    return 1;
+}
+#endif
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/frontend/record_test.c"}
+#include "frontend/ast.h"
+
+#include <stdio.h>
+#include <string.h>
+
+static int fail(const char *message)
+{
+    (void)fprintf(stderr, "FAIL frontend/record: %s\n", message);
+    return 1;
+}
+
+int main(void)
+{
+    MinicC0Program program;
+    MinicRecordId record_id;
+    MinicRecordId duplicate_id;
+    MinicRecordId anonymous_record_id;
+    MinicRecordId other_anonymous_record_id;
+    MinicRecordId hooks_record_id;
+    MinicType integer_type;
+    MinicType pointer_type;
+    MinicType void_pointer_type;
+    MinicType const_void_pointer_type;
+    MinicType alloc_parameter_types[1];
+    MinicType free_parameter_types[1];
+    MinicType const_free_parameter_types[1];
+    MinicType alloc_function_type;
+    MinicType duplicate_alloc_function_type;
+    MinicType free_function_type;
+    MinicType duplicate_free_function_type;
+    MinicType qualified_function_type;
+    MinicType alloc_pointer_type;
+    MinicType free_pointer_type;
+    const MinicFunctionType *function_type;
+    const MinicRecord *record;
+    const MinicRecord *anonymous_record;
+    const MinicRecord *other_anonymous_record;
+    const MinicRecord *hooks_record;
+    const MinicRecordField *field;
+    const MinicArrayType *field_array;
+    char record_name[] = "AES_ctx";
+    char array_field_name[] = "RoundKey";
+    char pointer_field_name[] = "Next";
+
+    minic_c0_program_initialize(&program);
+    integer_type = minic_type_int();
+    if (!minic_type_pointer_to(integer_type, &pointer_type) ||
+        !minic_type_pointer_to(minic_type_void(), &void_pointer_type) ||
+        !minic_type_add_const(void_pointer_type, &const_void_pointer_type)) {
+        minic_c0_program_destroy(&program);
+        return fail("pointer type construction");
+    }
+
+    if (!minic_c0_program_add_record(
+            &program,
+            record_name,
+            strlen(record_name),
+            &record_id)) {
+        minic_c0_program_destroy(&program);
+        return fail("record insertion");
+    }
+    record_name[0] = 'X';
+
+    if (!minic_c0_record_add_field(
+            &program,
+            record_id,
+            array_field_name,
+            strlen(array_field_name),
+            integer_type,
+            176U) ||
+        !minic_c0_record_add_field(
+            &program,
+            record_id,
+            pointer_field_name,
+            strlen(pointer_field_name),
+            pointer_type,
+            1U)) {
+        minic_c0_program_destroy(&program);
+        return fail("field insertion");
+    }
+    array_field_name[0] = 'X';
+    pointer_field_name[0] = 'X';
+
+    if (minic_c0_record_add_field(
+            &program,
+            record_id,
+            "RoundKey",
+            8U,
+            integer_type,
+            1U) ||
+        minic_c0_record_add_field(
+            &program,
+            record_id,
+            "Empty",
+            5U,
+            integer_type,
+            0U)) {
+        minic_c0_program_destroy(&program);
+        return fail("invalid field accepted");
+    }
+    if (!minic_c0_program_finish_record(&program, record_id) ||
+        minic_c0_program_finish_record(&program, record_id) ||
+        minic_c0_record_add_field(
+            &program,
+            record_id,
+            "Late",
+            4U,
+            integer_type,
+            1U)) {
+        minic_c0_program_destroy(&program);
+        return fail("record completion boundary");
+    }
+    if (!minic_c0_program_add_record(
+            &program,
+            "AES_ctx",
+            7U,
+            &duplicate_id) ||
+        duplicate_id == record_id ||
+        minic_c0_program_add_record(&program, "", 0U, &duplicate_id)) {
+        minic_c0_program_destroy(&program);
+        return fail("record entity identity contract");
+    }
+    record = minic_c0_program_record(&program, duplicate_id);
+    if (record == NULL || strcmp(record->name, "AES_ctx") != 0 || record->is_complete ||
+        record->field_count != 0U) {
+        minic_c0_program_destroy(&program);
+        return fail("duplicate-name record entity metadata");
+    }
+
+    if (!minic_c0_program_add_anonymous_record(&program, &anonymous_record_id) ||
+        !minic_c0_record_add_field(
+            &program, anonymous_record_id, "json", 4U, pointer_type, 1U) ||
+        !minic_c0_record_add_field(
+            &program, anonymous_record_id, "position", 8U, integer_type, 1U) ||
+        !minic_c0_program_finish_record(&program, anonymous_record_id) ||
+        !minic_c0_program_add_anonymous_record(&program, &other_anonymous_record_id) ||
+        !minic_c0_record_add_field(
+            &program, other_anonymous_record_id, "value", 5U, integer_type, 1U) ||
+        !minic_c0_program_finish_record(&program, other_anonymous_record_id)) {
+        minic_c0_program_destroy(&program);
+        return fail("anonymous record insertion");
+    }
+    anonymous_record = minic_c0_program_record(&program, anonymous_record_id);
+    other_anonymous_record = minic_c0_program_record(&program, other_anonymous_record_id);
+    if (anonymous_record == NULL || other_anonymous_record == NULL ||
+        anonymous_record_id == other_anonymous_record_id ||
+        anonymous_record->name == NULL || other_anonymous_record->name == NULL ||
+        anonymous_record->name_length != 0U || other_anonymous_record->name_length != 0U ||
+        strcmp(anonymous_record->name, "") != 0 || strcmp(other_anonymous_record->name, "") != 0 ||
+        !anonymous_record->is_complete || !other_anonymous_record->is_complete ||
+        anonymous_record->field_count != 2U || other_anonymous_record->field_count != 1U) {
+        minic_c0_program_destroy(&program);
+        return fail("anonymous record identity and metadata");
+    }
+
+    record = minic_c0_program_record(&program, record_id);
+    if (record == NULL || strcmp(record->name, "AES_ctx") != 0 ||
+        !record->is_complete || record->field_count != 2U) {
+        minic_c0_program_destroy(&program);
+        return fail("record metadata");
+    }
+    field = minic_c0_record_field(record, 0U);
+    field_array = field == NULL || !minic_type_is_array(field->type)
+                      ? NULL : minic_c0_program_array_type(&program, field->type.array_type_id);
+    if (field == NULL || strcmp(field->name, "RoundKey") != 0 ||
+        field_array == NULL || field_array->element_count != 176U ||
+        !minic_type_equal(field_array->element_type, integer_type)) {
+        minic_c0_program_destroy(&program);
+        return fail("array field metadata");
+    }
+    field = minic_c0_record_field(record, 1U);
+    if (field == NULL || strcmp(field->name, "Next") != 0 ||
+        !minic_type_equal(field->type, pointer_type)) {
+        minic_c0_program_destroy(&program);
+        return fail("pointer field metadata");
+    }
+    if (minic_c0_program_record(&program, MINIC_RECORD_INVALID) != NULL ||
+        minic_c0_record_field(record, 2U) != NULL) {
+        minic_c0_program_destroy(&program);
+        return fail("bounds check");
+    }
+
+    alloc_parameter_types[0] = minic_type_unsigned_long();
+    free_parameter_types[0] = void_pointer_type;
+    const_free_parameter_types[0] = const_void_pointer_type;
+    if (!minic_c0_program_add_function_type(&program,
+                                            void_pointer_type,
+                                            alloc_parameter_types,
+                                            1U,
+                                            &alloc_function_type) ||
+        !minic_c0_program_add_function_type(&program,
+                                            void_pointer_type,
+                                            alloc_parameter_types,
+                                            1U,
+                                            &duplicate_alloc_function_type) ||
+        !minic_c0_program_add_function_type(&program,
+                                            minic_type_void(),
+                                            free_parameter_types,
+                                            1U,
+                                            &free_function_type) ||
+        !minic_c0_program_add_function_type(&program,
+                                            minic_type_void(),
+                                            const_free_parameter_types,
+                                            1U,
+                                            &duplicate_free_function_type)) {
+        minic_c0_program_destroy(&program);
+        return fail("function type insertion");
+    }
+    if (!minic_type_is_function(alloc_function_type) ||
+        !minic_type_equal(alloc_function_type, duplicate_alloc_function_type) ||
+        !minic_type_equal(free_function_type, duplicate_free_function_type) ||
+        minic_type_equal(alloc_function_type, free_function_type) ||
+        program.function_type_count != 2U) {
+        minic_c0_program_destroy(&program);
+        return fail("function type interning and parameter qualifier normalization");
+    }
+    if (minic_type_add_const(alloc_function_type, &qualified_function_type)) {
+        minic_c0_program_destroy(&program);
+        return fail("qualified function type accepted");
+    }
+    qualified_function_type = alloc_function_type;
+    qualified_function_type.base_qualifiers = MINIC_TYPE_QUALIFIER_CONST;
+    if (minic_type_is_function(qualified_function_type)) {
+        minic_c0_program_destroy(&program);
+        return fail("qualified function type classified as valid");
+    }
+    function_type = minic_c0_program_function_type(
+        &program, free_function_type.function_type_id);
+    if (function_type == NULL || function_type->parameter_count != 1U ||
+        !minic_type_equal(function_type->return_type, minic_type_void()) ||
+        !minic_type_equal(function_type->parameter_types[0], void_pointer_type) ||
+        minic_type_is_const(function_type->parameter_types[0])) {
+        minic_c0_program_destroy(&program);
+        return fail("normalized function signature metadata");
+    }
+    if (!minic_type_pointer_to(alloc_function_type, &alloc_pointer_type) ||
+        !minic_type_pointer_to(free_function_type, &free_pointer_type) ||
+        !minic_type_is_pointer(alloc_pointer_type) ||
+        !minic_type_is_pointer(free_pointer_type) ||
+        minic_type_is_function(alloc_pointer_type) ||
+        minic_type_equal(alloc_pointer_type, free_pointer_type)) {
+        minic_c0_program_destroy(&program);
+        return fail("function pointer identity");
+    }
+    if (!minic_c0_program_add_record(&program, "Hooks", 5U, &hooks_record_id) ||
+        !minic_c0_record_add_field(
+            &program, hooks_record_id, "alloc", 5U, alloc_pointer_type, 1U) ||
+        !minic_c0_record_add_field(
+            &program, hooks_record_id, "free_fn", 7U, free_pointer_type, 1U) ||
+        !minic_c0_program_finish_record(&program, hooks_record_id)) {
+        minic_c0_program_destroy(&program);
+        return fail("function pointer record insertion");
+    }
+    hooks_record = minic_c0_program_record(&program, hooks_record_id);
+    if (hooks_record == NULL || hooks_record->field_count != 2U ||
+        !minic_type_equal(hooks_record->fields[0].type, alloc_pointer_type) ||
+        !minic_type_equal(hooks_record->fields[1].type, free_pointer_type)) {
+        minic_c0_program_destroy(&program);
+        return fail("function pointer record metadata");
+    }
+
+    minic_c0_program_destroy(&program);
+    (void)printf("PASS frontend/record\n");
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/frontend/semantic_snapshot_test.c"}
+#include "frontend/semantic_snapshot.h"
+
+/* Keep ownership assertions active even when the suite uses MODE=release. */
+#ifdef NDEBUG
+#undef NDEBUG
+#endif
+#include <assert.h>
+#include <stddef.h>
+#include <stdint.h>
+
+static void seed_program_counts(MinicC0Program *program) {
+    program->expression_count = 3U;
+    program->local_count = 5U;
+    program->cleanup_context_count = 7U;
+    program->statement_count = 11U;
+    program->inline_asm_count = 13U;
+    program->file_asm_count = 17U;
+    program->block_count = 19U;
+    program->function_count = 23U;
+    program->record_count = 29U;
+    program->array_type_count = 31U;
+    program->function_type_count = 37U;
+    program->type_alias_count = 41U;
+    program->enum_count = 43U;
+    program->enumerator_count = 47U;
+    program->global_object_count = 53U;
+    program->fixed_register_binding_count = 59U;
+}
+
+/* Capture still covers every tracked arena; this assertion belongs to the
+ * test, not to a duplicate predicate in production semantic code. */
+static void assert_snapshot_counts(const MinicSemanticSnapshot *s,
+                                   const MinicC0Program *p) {
+    assert(s->expression_count == p->expression_count);
+    assert(s->local_count == p->local_count);
+    assert(s->cleanup_context_count == p->cleanup_context_count);
+    assert(s->statement_count == p->statement_count);
+    assert(s->inline_asm_count == p->inline_asm_count);
+    assert(s->file_asm_count == p->file_asm_count);
+    assert(s->block_count == p->block_count);
+    assert(s->function_count == p->function_count);
+    assert(s->record_count == p->record_count);
+    assert(s->array_type_count == p->array_type_count);
+    assert(s->function_type_count == p->function_type_count);
+    assert(s->type_alias_count == p->type_alias_count);
+    assert(s->enum_count == p->enum_count);
+    assert(s->enumerator_count == p->enumerator_count);
+    assert(s->global_object_count == p->global_object_count);
+    assert(s->fixed_register_binding_count == p->fixed_register_binding_count);
+}
+
+static void test_exact_match(void) {
+    MinicC0Program program = {0};
+    MinicSemanticSnapshot snapshot;
+
+    seed_program_counts(&program);
+    snapshot = minic_semantic_snapshot_capture(&program);
+    assert_snapshot_counts(&snapshot, &program);
+    assert(minic_semantic_snapshot_only_declarator_types_changed(&snapshot, &program));
+    assert(minic_semantic_snapshot_rollback_probe_expression_types(&snapshot, &program));
+    assert_snapshot_counts(&snapshot, &program);
+}
+
+static void test_declarator_type_rollback(void) {
+    MinicC0Program program = {0};
+    MinicSemanticSnapshot snapshot;
+
+    seed_program_counts(&program);
+    snapshot = minic_semantic_snapshot_capture(&program);
+    program.array_type_count += 3U;
+    program.function_type_count += 2U;
+
+    assert(minic_semantic_snapshot_only_declarator_types_changed(&snapshot, &program));
+    assert(minic_semantic_snapshot_rollback_declarator_types(&snapshot, &program));
+    assert_snapshot_counts(&snapshot, &program);
+}
+
+static void test_expression_probe_rollback(void) {
+    MinicC0Program program = {0};
+    MinicSemanticSnapshot snapshot;
+
+    snapshot = minic_semantic_snapshot_capture(&program);
+    {
+        MinicExpression expression = {0};
+        MinicExpressionId id;
+        size_t index;
+
+        expression.kind = MINIC_EXPRESSION_INTEGER;
+        for (index = 0U; index < 4U; ++index) {
+            assert(minic_c0_program_add_expression(&program, &expression, &id));
+        }
+    }
+
+    assert(!minic_semantic_snapshot_only_declarator_types_changed(&snapshot, &program));
+    assert(minic_semantic_snapshot_rollback_probe_expression_types(&snapshot, &program));
+    assert_snapshot_counts(&snapshot, &program);
+    minic_c0_program_destroy(&program);
+}
+
+static void test_combined_expression_type_probe_rollback(void) {
+    MinicC0Program program = {0};
+    MinicSemanticSnapshot snapshot = minic_semantic_snapshot_capture(&program);
+    MinicExpression expression = {0};
+    MinicExpressionId id;
+
+    expression.kind = MINIC_EXPRESSION_INTEGER;
+    assert(minic_c0_program_add_expression(&program, &expression, &id));
+    assert(id == 0U);
+    /* The actual production query rollback allows unpublished value-only
+     * type descriptors and expressions to grow in the same probe. */
+    program.array_type_count = 1U;
+    program.function_type_count = 1U;
+    assert(minic_semantic_snapshot_rollback_probe_expression_types(&snapshot, &program));
+    assert_snapshot_counts(&snapshot, &program);
+    minic_c0_program_destroy(&program);
+}
+
+static void test_owned_call_probe_rollback(void) {
+    MinicC0Program program = {0};
+    MinicSemanticSnapshot snapshot;
+    MinicExpression expression = {0};
+    MinicExpressionId keep_id;
+    MinicExpressionId id;
+    uint32_t scratch[4] = {8U, 9U, 10U, 11U};
+
+    expression.kind = MINIC_EXPRESSION_CALL;
+    expression.value.call.argument_count = 12U;
+    expression.value.call.overflow_arguments = scratch;
+
+    assert(minic_c0_program_add_expression(&program, &expression, &keep_id));
+    assert(keep_id == 0U);
+    snapshot = minic_semantic_snapshot_capture(&program);
+    assert(minic_c0_program_add_expression(&program, &expression, &id));
+    assert(id == 1U);
+    assert(program.expressions[id].value.call.overflow_arguments != scratch);
+    assert(program.expressions[id].value.call.overflow_arguments[3] == 11U);
+    /* Reject unrelated mutations without discarding the owned CALL payload. */
+    program.record_count++;
+    assert(!minic_semantic_snapshot_rollback_probe_expression_types(&snapshot, &program));
+    assert(program.expressions[id].value.call.overflow_arguments[3] == 11U);
+    program.record_count--;
+
+    assert(minic_semantic_snapshot_rollback_probe_expression_types(&snapshot, &program));
+    assert(program.expression_count == 1U);
+    /* A stale owned pointer means the rolled-back CALL leaked its allocation. */
+    assert(program.expressions[id].value.call.overflow_arguments == NULL);
+    assert(program.expressions[keep_id].value.call.overflow_arguments != NULL);
+    assert(program.expressions[keep_id].value.call.overflow_arguments[3] == 11U);
+
+    /* Reused tail slots must own a fresh private copy, not a discarded one. */
+    assert(minic_c0_program_add_expression(&program, &expression, &id));
+    assert(id == 1U);
+    assert(program.expressions[id].value.call.overflow_arguments[3] == 11U);
+    assert(minic_semantic_snapshot_rollback_probe_expression_types(&snapshot, &program));
+    assert(program.expressions[id].value.call.overflow_arguments == NULL);
+    minic_c0_program_destroy(&program);
+}
+
+static void test_zero_growth_expression_probe_rollback(void) {
+    MinicC0Program program = {0};
+    MinicSemanticSnapshot snapshot;
+
+    seed_program_counts(&program);
+    snapshot = minic_semantic_snapshot_capture(&program);
+
+    assert(minic_semantic_snapshot_rollback_probe_expression_types(&snapshot, &program));
+    assert_snapshot_counts(&snapshot, &program);
+}
+
+static void test_non_type_mutation_rejected(void) {
+    MinicC0Program program = {0};
+    MinicSemanticSnapshot snapshot;
+
+    seed_program_counts(&program);
+    snapshot = minic_semantic_snapshot_capture(&program);
+    program.array_type_count += 1U;
+    program.expression_count += 1U;
+    program.local_count += 1U;
+
+    assert(!minic_semantic_snapshot_only_declarator_types_changed(&snapshot, &program));
+    assert(!minic_semantic_snapshot_rollback_declarator_types(&snapshot, &program));
+    assert(!minic_semantic_snapshot_rollback_probe_expression_types(&snapshot, &program));
+    assert(program.array_type_count == snapshot.array_type_count + 1U);
+    assert(program.expression_count == snapshot.expression_count + 1U);
+    assert(program.local_count == snapshot.local_count + 1U);
+
+    seed_program_counts(&program);
+    snapshot = minic_semantic_snapshot_capture(&program);
+    program.function_type_count += 1U;
+    program.record_count += 1U;
+
+    assert(!minic_semantic_snapshot_only_declarator_types_changed(&snapshot, &program));
+    assert(!minic_semantic_snapshot_rollback_declarator_types(&snapshot, &program));
+    assert(!minic_semantic_snapshot_rollback_probe_expression_types(&snapshot, &program));
+    assert(program.function_type_count == snapshot.function_type_count + 1U);
+    assert(program.record_count == snapshot.record_count + 1U);
+}
+
+static void test_counts_cannot_move_backwards(void) {
+    MinicC0Program program = {0};
+    MinicSemanticSnapshot snapshot;
+
+    seed_program_counts(&program);
+    snapshot = minic_semantic_snapshot_capture(&program);
+    program.array_type_count -= 1U;
+
+    assert(!minic_semantic_snapshot_only_declarator_types_changed(&snapshot, &program));
+    assert(!minic_semantic_snapshot_rollback_declarator_types(&snapshot, &program));
+    assert(!minic_semantic_snapshot_rollback_probe_expression_types(&snapshot, &program));
+
+    seed_program_counts(&program);
+    snapshot = minic_semantic_snapshot_capture(&program);
+    program.function_type_count -= 1U;
+
+    assert(!minic_semantic_snapshot_only_declarator_types_changed(&snapshot, &program));
+    assert(!minic_semantic_snapshot_rollback_declarator_types(&snapshot, &program));
+    assert(!minic_semantic_snapshot_rollback_probe_expression_types(&snapshot, &program));
+
+    seed_program_counts(&program);
+    snapshot = minic_semantic_snapshot_capture(&program);
+    program.expression_count -= 1U;
+
+    assert(!minic_semantic_snapshot_rollback_probe_expression_types(&snapshot, &program));
+}
+
+int main(void) {
+    test_exact_match();
+    test_declarator_type_rollback();
+    test_expression_probe_rollback();
+    test_combined_expression_type_probe_rollback();
+    test_owned_call_probe_rollback();
+    test_zero_growth_expression_probe_rollback();
+    test_non_type_mutation_rejected();
+    test_counts_cannot_move_backwards();
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/frontend/token_model_test.c"}
+#include "frontend/token.h"
+
+#include <stdio.h>
+#include <string.h>
+
+static int expect_name(MinicTokenKind kind, const char *expected)
+{
+    const char *actual;
+
+    actual = minic_token_kind_name(kind);
+    if (strcmp(actual, expected) != 0) {
+        (void)fprintf(
+            stderr,
+            "token name mismatch: expected='%s' actual='%s'\n",
+            expected,
+            actual);
+        return 1;
+    }
+    return 0;
+}
+
+int main(void)
+{
+    MinicSourceSpan span;
+
+    span.begin.offset = 4U;
+    span.begin.line = 2U;
+    span.begin.column = 3U;
+    span.end.offset = 7U;
+    span.end.line = 2U;
+    span.end.column = 6U;
+
+    if (span.begin.offset >= span.end.offset) {
+        (void)fprintf(stderr, "source span must be non-empty in this fixture\n");
+        return 1;
+    }
+
+    if (expect_name(MINIC_TOKEN_EOF, "end of file") != 0 ||
+        expect_name(MINIC_TOKEN_IDENTIFIER, "identifier") != 0 ||
+        expect_name(MINIC_TOKEN_INTEGER_CONSTANT, "integer constant") != 0 ||
+        expect_name(MINIC_TOKEN_CHARACTER_CONSTANT, "character constant") != 0 ||
+        expect_name(MINIC_TOKEN_FLOATING_CONSTANT, "floating constant") != 0 ||
+        expect_name(MINIC_TOKEN_STRING_LITERAL, "string literal") != 0 ||
+        expect_name(MINIC_TOKEN_KW_STATIC_ASSERT, "_Static_assert") != 0 ||
+        expect_name(MINIC_TOKEN_KW_ALIGNOF, "alignof") != 0 ||
+        expect_name(MINIC_TOKEN_KW_CHAR, "char") != 0 ||
+        expect_name(MINIC_TOKEN_KW_DOUBLE, "double") != 0 ||
+        expect_name(MINIC_TOKEN_KW_FLOAT, "float") != 0 ||
+        expect_name(MINIC_TOKEN_KW_LONG, "long") != 0 ||
+        expect_name(MINIC_TOKEN_KW_SIGNED, "signed") != 0 ||
+        expect_name(MINIC_TOKEN_KW_STRUCT, "struct") != 0 ||
+        expect_name(MINIC_TOKEN_KW_CONST, "const") != 0 ||
+        expect_name(MINIC_TOKEN_KW_RETURN, "return") != 0 ||
+        expect_name(MINIC_TOKEN_KW_SWITCH, "switch") != 0 ||
+        expect_name(MINIC_TOKEN_KW_CASE, "case") != 0 ||
+        expect_name(MINIC_TOKEN_KW_DEFAULT, "default") != 0 ||
+        expect_name(MINIC_TOKEN_KW_BREAK, "break") != 0 ||
+        expect_name(MINIC_TOKEN_ELLIPSIS, "...") != 0 ||
+        expect_name(MINIC_TOKEN_MINUS_MINUS, "--") != 0 ||
+        expect_name(MINIC_TOKEN_ARROW, "->") != 0 ||
+        expect_name(MINIC_TOKEN_AMPERSAND, "&") != 0 ||
+        expect_name(MINIC_TOKEN_CARET, "^") != 0 ||
+        expect_name(MINIC_TOKEN_CARET_EQUAL, "^=") != 0 ||
+        expect_name(MINIC_TOKEN_LESS_LESS, "<<") != 0 ||
+        expect_name(MINIC_TOKEN_LESS_LESS_EQUAL, "<<=") != 0 ||
+        expect_name(MINIC_TOKEN_GREATER_GREATER, ">>") != 0 ||
+        expect_name(MINIC_TOKEN_GREATER_GREATER_EQUAL, ">>=") != 0 ||
+        expect_name(MINIC_TOKEN_COLON, ":") != 0 ||
+        expect_name(MINIC_TOKEN_SEMICOLON, ";") != 0 ||
+        expect_name((MinicTokenKind)MINIC_TOKEN_KIND_COUNT, "unknown token") != 0) {
+        return 1;
+    }
+
+    (void)printf("PASS frontend/token-model\n");
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/frontend/type_alias_test.c"}
+#include "frontend/ast.h"
+
+#include <stdio.h>
+#include <string.h>
+
+static int fail(const char *message)
+{
+    (void)fprintf(stderr, "FAIL frontend/type-alias: %s\n", message);
+    return 1;
+}
+
+int main(void)
+{
+    MinicC0Program program;
+    MinicType inner_array;
+    MinicType outer_array;
+    MinicType state_pointer;
+    MinicTypeAliasId alias_id;
+    MinicTypeAliasId duplicate_id;
+    MinicTypeAliasId void_alias_id;
+    const MinicArrayType *descriptor;
+    const MinicTypeAlias *alias;
+    char alias_name[] = "state_t";
+
+    minic_c0_program_initialize(&program);
+    if (!minic_c0_program_add_array_type(
+            &program,
+            minic_type_int(),
+            4U,
+            &inner_array) ||
+        !minic_c0_program_add_array_type(
+            &program,
+            inner_array,
+            4U,
+            &outer_array) ||
+        !minic_c0_program_add_type_alias(
+            &program,
+            alias_name,
+            strlen(alias_name),
+            outer_array,
+            &alias_id)) {
+        minic_c0_program_destroy(&program);
+        return fail("state_t construction");
+    }
+    alias_name[0] = 'X';
+
+    alias = minic_c0_program_type_alias(&program, alias_id);
+    if (alias == NULL || strcmp(alias->name, "state_t") != 0 ||
+        !minic_type_equal(alias->type, outer_array) ||
+        !minic_type_is_array(alias->type)) {
+        minic_c0_program_destroy(&program);
+        return fail("alias ownership and identity");
+    }
+
+    descriptor = minic_c0_program_array_type(
+        &program,
+        outer_array.array_type_id);
+    if (descriptor == NULL || descriptor->element_count != 4U ||
+        !minic_type_equal(descriptor->element_type, inner_array)) {
+        minic_c0_program_destroy(&program);
+        return fail("outer array descriptor");
+    }
+    if (!minic_c0_program_add_type_alias(
+            &program,
+            "opaque_t",
+            sizeof("opaque_t") - 1U,
+            minic_type_void(),
+            &void_alias_id)) {
+        minic_c0_program_destroy(&program);
+        return fail("void alias construction");
+    }
+    alias = minic_c0_program_type_alias(&program, void_alias_id);
+    if (alias == NULL || strcmp(alias->name, "opaque_t") != 0 ||
+        !minic_type_is_void(alias->type)) {
+        minic_c0_program_destroy(&program);
+        return fail("void alias ownership and identity");
+    }
+
+    descriptor = minic_c0_program_array_type(
+        &program,
+        inner_array.array_type_id);
+    if (descriptor == NULL || descriptor->element_count != 4U ||
+        !minic_type_is_integer(descriptor->element_type)) {
+        minic_c0_program_destroy(&program);
+        return fail("inner array descriptor");
+    }
+
+    if (!minic_type_pointer_to(alias->type, &state_pointer) ||
+        !minic_type_is_pointer(state_pointer) ||
+        !minic_type_pointee(state_pointer, &outer_array) ||
+        !minic_type_equal(outer_array, alias->type)) {
+        minic_c0_program_destroy(&program);
+        return fail("pointer to multidimensional array");
+    }
+
+    if (minic_c0_program_add_type_alias(
+            &program,
+            "state_t",
+            7U,
+            minic_type_int(),
+            &duplicate_id) ||
+        minic_c0_program_add_array_type(
+            &program,
+            minic_type_void(),
+            4U,
+            &outer_array) ||
+        minic_c0_program_add_array_type(
+            &program,
+            minic_type_int(),
+            0U,
+            &outer_array) ||
+        minic_c0_program_type_alias(
+            &program,
+            MINIC_TYPE_ALIAS_INVALID) != NULL ||
+        minic_c0_program_array_type(
+            &program,
+            MINIC_ARRAY_TYPE_INVALID) != NULL) {
+        minic_c0_program_destroy(&program);
+        return fail("invalid alias or array accepted");
+    }
+
+    minic_c0_program_destroy(&program);
+    (void)printf("PASS frontend/type-alias\n");
+    return 0;
+}
+@@@ end

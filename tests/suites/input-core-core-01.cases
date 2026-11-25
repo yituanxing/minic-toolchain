@@ -1,0 +1,3260 @@
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/core/core_block_address_reachability_test.c"}
+/* MC-073: a typed Core block address is a CFG escape edge even when its
+ * destination has no C-source local-label alias. Unexecuted producers do
+ * not make otherwise unreachable blocks live. */
+#include "core/core_ir.h"
+
+#include <stdio.h>
+#include <string.h>
+
+static bool prepare_three_blocks(MinicCoreFunction *fn) {
+    MinicCoreBlockId blocks[3];
+    size_t i;
+
+    minic_core_function_initialize(fn);
+    for (i = 0U; i < 3U; ++i) {
+        if (!minic_core_function_add_block(fn, &blocks[i]) || blocks[i] != i)
+            return false;
+    }
+    return fn->entry_block == blocks[0] &&
+           fn->blocks[2].local_label_symbol == NULL;
+}
+
+static bool finish_three_blocks(MinicCoreFunction *fn) {
+    MinicCoreTerminator terminator = {0};
+    size_t i;
+    terminator.kind = MINIC_CORE_TERMINATOR_RETURN;
+    terminator.return_value = MINIC_CORE_VALUE_INVALID;
+    terminator.return_object = MINIC_CORE_OBJECT_INVALID;
+    for (i = 0U; i < 3U; ++i) {
+        if (!minic_core_function_set_terminator(fn, (MinicCoreBlockId)i,
+                                                &terminator)) return false;
+    }
+    return true;
+}
+
+static bool add_block_address(MinicCoreFunction *fn, MinicCoreBlockId producer,
+                              MinicCoreBlockId target) {
+    MinicCoreInstruction instruction = {0};
+    MinicCoreValueId value;
+    instruction.kind = MINIC_CORE_INSTRUCTION_BLOCK_ADDRESS;
+    instruction.value.block_id = target;
+    /* Reachability is a pure Core CFG query: type attachment is irrelevant
+     * here and is separately checked by the CoreType verifier suite. */
+    instruction.core_type_id = MINIC_CORE_TYPE_INVALID;
+    return minic_core_function_append_value_instruction(fn, producer,
+                                                        &instruction, &value);
+}
+
+static bool expected(const bool actual[3], bool b0, bool b1, bool b2) {
+    return actual[0] == b0 && actual[1] == b1 && actual[2] == b2;
+}
+
+static bool add_asm_goto(MinicCoreFunction *fn,
+                         MinicCoreBlockId first, MinicCoreBlockId second) {
+    MinicCoreInlineAsmId id;
+    MinicCoreInstruction instruction = {0};
+    if (!minic_core_function_add_opaque_inline_asm(
+            fn, "nop", 3U, true, false, &id)) return false;
+    fn->inline_asms[id].is_goto = true;
+    fn->inline_asms[id].goto_target = first;
+    fn->inline_asms[id].goto_second_target = second;
+    instruction.kind = MINIC_CORE_INSTRUCTION_OPAQUE_INLINE_ASM;
+    instruction.value.inline_asm_id = id;
+    instruction.result = MINIC_CORE_VALUE_INVALID;
+    return minic_core_function_append_effect_instruction(fn, 0U, &instruction);
+}
+
+static int run(void) {
+    MinicCoreFunction fn;
+    bool reachable[3];
+    bool indirect[3];
+
+    /* Ordinary return terminators have no successor: block2 is dead. */
+    if (!prepare_three_blocks(&fn) || !finish_three_blocks(&fn)) return 1;
+    if (!minic_core_function_mark_reachable_blocks(&fn, reachable, 3U) ||
+        !expected(reachable, true, false, false)) return 2;
+    minic_core_function_destroy(&fn);
+
+    /* Even a genuine address producer cannot create roots from dead code. */
+    if (!prepare_three_blocks(&fn) || !add_block_address(&fn, 1U, 2U) ||
+        !finish_three_blocks(&fn)) return 3;
+    if (!minic_core_function_mark_reachable_blocks(&fn, reachable, 3U) ||
+        !expected(reachable, true, false, false)) return 4;
+    minic_core_function_destroy(&fn);
+
+    /* An address produced in reachable entry must retain destination 2,
+     * despite no label alias, and must not resurrect unrelated block 1. */
+    if (!prepare_three_blocks(&fn) || !add_block_address(&fn, 0U, 2U) ||
+        !finish_three_blocks(&fn)) return 5;
+    if (!minic_core_function_mark_reachable_blocks(&fn, reachable, 3U) ||
+        !expected(reachable, true, false, true)) return 6;
+    if (!minic_core_function_mark_indirect_entries(&fn, reachable, indirect, 3U) ||
+        !expected(indirect, false, false, true)) return 9;
+
+    /* A forged block target is rejected, never indexed or silently pruned. */
+    fn.instructions[0].value.block_id = 99U;
+    if (minic_core_function_mark_reachable_blocks(&fn, reachable, 3U)) return 7;
+    fn.instructions[0].value.block_id = 2U;
+    if (minic_core_function_mark_reachable_blocks(&fn, reachable, 2U)) return 8;
+    minic_core_function_destroy(&fn);
+
+    /* A non-exported block can be an indirect entry in a specialized body:
+     * this is a CFG/IBT fact, not an assembler alias. */
+    if (!prepare_three_blocks(&fn) || !finish_three_blocks(&fn)) return 10;
+    fn.blocks[2].indirect_entry = true;
+    if (!minic_core_function_mark_reachable_blocks(&fn, reachable, 3U) ||
+        !expected(reachable, true, false, true) ||
+        !minic_core_function_mark_indirect_entries(&fn, reachable, indirect, 3U) ||
+        !expected(indirect, false, false, true)) return 11;
+    minic_core_function_destroy(&fn);
+
+    /* ASM-goto is an instruction-level transfer with two real successors,
+     * even if neither target has a source-exported local label. */
+    if (!prepare_three_blocks(&fn) || !add_asm_goto(&fn, 1U, 2U) ||
+        !finish_three_blocks(&fn)) return 12;
+    if (!minic_core_function_mark_reachable_blocks(&fn, reachable, 3U) ||
+        !expected(reachable, true, true, true) ||
+        !minic_core_function_mark_indirect_entries(&fn, reachable, indirect, 3U) ||
+        !expected(indirect, false, false, false)) return 13;
+    fn.inline_asms[0].goto_second_target = 99U;
+    if (minic_core_function_mark_reachable_blocks(&fn, reachable, 3U)) return 14;
+    minic_core_function_destroy(&fn);
+    return 0;
+}
+
+int main(void) {
+    const int rc = run();
+    if (rc != 0) {
+        (void)fprintf(stderr, "MC073_CORE_BLOCK_ADDRESS=FAIL case=%d\n", rc);
+        return rc;
+    }
+    (void)puts("MC073_CORE_BLOCK_ADDRESS=PASS escaped=reachable unreferenced=pruned dead_producer=pruned malformed_target=reject capacity=reject indirect_entry=independent asm_goto_two_edges=reachable");
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/core/core_call_dump_test.c"}
+#include "compiler/c_lower/core_ir_source_internal.h"
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+typedef struct DumpTypes {
+    MinicCoreTypeId integer, record, function, pointer_function;
+} DumpTypes;
+
+static bool make_dump_types(MinicCoreTypeContext *context, DumpTypes *types) {
+    MinicCoreType type = {0};
+    MinicCoreTypeId params[2];
+    minic_core_type_context_initialize(context);
+    type.kind = MINIC_CORE_TYPE_INTEGER;
+    type.has_layout = true;
+    type.size = 4U;
+    type.alignment = 4U;
+    type.value.integer.bit_width = 32U;
+    type.value.integer.is_signed = true;
+    if (!minic_core_type_register(context, &type, &types->integer)) return false;
+    (void)memset(&type, 0, sizeof(type));
+    type.kind = MINIC_CORE_TYPE_RECORD;
+    type.has_layout = true;
+    type.size = 8U;
+    type.alignment = 8U;
+    type.value.record.is_complete = true;
+    if (!minic_core_type_register(context, &type, &types->record)) return false;
+    (void)memset(&type, 0, sizeof(type));
+    params[0] = types->integer;
+    params[1] = types->record;
+    type.kind = MINIC_CORE_TYPE_FUNCTION;
+    type.value.function.return_type = types->integer;
+    type.value.function.parameters = params;
+    type.value.function.parameter_count = 2U;
+    if (!minic_core_type_register(context, &type, &types->function)) return false;
+    (void)memset(&type, 0, sizeof(type));
+    type.kind = MINIC_CORE_TYPE_POINTER;
+    type.has_layout = true;
+    type.size = 8U;
+    type.alignment = 8U;
+    type.value.pointer.pointee = types->function;
+    return minic_core_type_register(context, &type, &types->pointer_function);
+}
+
+static bool attach_dump_types(MinicCoreFunction *function,
+                              MinicCoreTypeContext *context,
+                              const DumpTypes *types) {
+    size_t i;
+    MinicCoreCallee *callee = &function->callees[0];
+    MinicCoreCallSignature *signature = &function->call_signatures[0];
+    if (function->value_count != 4U || function->instruction_count != 4U ||
+        function->object_count != 1U || function->callee_count != 1U ||
+        function->call_signature_count != 1U) return false;
+    if (!minic_core_function_define_signature(
+            function, context, types->integer, NULL, 0U,
+            MINIC_CALLING_CONVENTION_DEFAULT, false)) return false;
+    function->objects[0].core_type_id = types->record;
+    function->values[0].core_type_id = types->pointer_function;
+    function->instructions[0].core_type_id = types->pointer_function;
+    for (i = 1U; i < 4U; ++i) {
+        function->values[i].core_type_id = types->integer;
+        function->instructions[i].core_type_id = types->integer;
+    }
+    callee->core_function_type_id = types->function;
+    signature->core_function_type_id = types->function;
+    return minic_core_function_attach_type_context(function, context);
+}
+
+static bool build_call_dump_function(MinicCoreSourceBuilder *builder) {
+    MinicCoreFunction *function = &builder->core;
+    MinicType parameters[2] = {minic_type_int(), minic_type_record(0U)};
+    MinicType function_pointer;
+    MinicCoreBlockId block;
+    MinicCoreObjectId object;
+    MinicCoreFunctionSymbolId symbol;
+    MinicCoreCalleeId callee;
+    MinicCoreCallSignatureId signature;
+    MinicCoreValueId function_address, integer, result;
+    MinicCoreCallArgument arguments[2];
+    MinicCoreInstruction instruction;
+    MinicCoreTerminator terminator;
+    size_t argument_begin;
+
+    if (!minic_type_pointer_to(minic_type_function(0U), &function_pointer) ||
+        !minic_core_function_set_signature(builder, "probe", 5U,
+                                           minic_type_int(), NULL, 0U) ||
+        !minic_core_function_add_block(function, &block) ||
+        !minic_core_function_add_object(builder, (MinicSourceSpan){0},
+                                        parameters[1], &object) ||
+        !minic_core_function_add_function_symbol(function, "target", 6U, &symbol) ||
+        !minic_core_function_add_callee(builder, "target", 6U,
+                                        minic_type_int(), parameters, 2U, false,
+                                        MINIC_CALLING_CONVENTION_DEFAULT, &callee) ||
+        !minic_core_function_add_call_signature(builder, 0U,
+                                                 minic_type_int(), parameters, 2U,
+                                                 false, MINIC_CALLING_CONVENTION_DEFAULT,
+                                                 &signature)) return false;
+
+    (void)memset(&instruction, 0, sizeof(instruction));
+    instruction.kind = MINIC_CORE_INSTRUCTION_FUNCTION_ADDRESS;
+    instruction.value.function_symbol_id = symbol;
+    if (!minic_core_function_append_source_value_instruction(
+            builder, block, &instruction, function_pointer, &function_address)) return false;
+
+    (void)memset(&instruction, 0, sizeof(instruction));
+    instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
+    instruction.value.integer_value = 7;
+    if (!minic_core_function_append_source_value_instruction(
+            builder, block, &instruction, minic_type_int(), &integer)) return false;
+
+    (void)memset(arguments, 0, sizeof(arguments));
+    arguments[0].kind = MINIC_CORE_CALL_ARGUMENT_VALUE;
+    arguments[0].value.value_id = integer;
+    arguments[1].kind = MINIC_CORE_CALL_ARGUMENT_OBJECT;
+    arguments[1].value.object_id = object;
+    if (!minic_core_function_append_call_arguments(
+            function, arguments, 2U, &argument_begin)) return false;
+
+    (void)memset(&instruction, 0, sizeof(instruction));
+    instruction.kind = MINIC_CORE_INSTRUCTION_CALL;
+    instruction.value.call.callee_id = callee;
+    instruction.value.call.argument_begin = argument_begin;
+    instruction.value.call.argument_count = 2U;
+    instruction.value.call.result_object = MINIC_CORE_OBJECT_INVALID;
+    if (!minic_core_function_append_source_value_instruction(
+            builder, block, &instruction, minic_type_int(), &result)) return false;
+
+    (void)memset(&instruction, 0, sizeof(instruction));
+    instruction.kind = MINIC_CORE_INSTRUCTION_INDIRECT_CALL;
+    instruction.value.indirect_call.callee = function_address;
+    instruction.value.indirect_call.signature_id = signature;
+    instruction.value.indirect_call.argument_begin = argument_begin;
+    instruction.value.indirect_call.argument_count = 2U;
+    instruction.value.indirect_call.result_object = MINIC_CORE_OBJECT_INVALID;
+    if (!minic_core_function_append_source_value_instruction(
+            builder, block, &instruction, minic_type_int(), &result)) return false;
+
+    (void)memset(&terminator, 0, sizeof(terminator));
+    terminator.kind = MINIC_CORE_TERMINATOR_RETURN;
+    terminator.return_value = result;
+    terminator.return_object = MINIC_CORE_OBJECT_INVALID;
+    return minic_core_function_set_terminator(function, block, &terminator);
+}
+
+int main(void) {
+    static const char expected[] =
+        "core function @probe\n"
+        "object %o0\n"
+        "bb0:\n"
+        "  %0 = function.addr @target\n"
+        "  %1 = const.int 7\n"
+        "  %2 = call @target(%1, %o0)\n"
+        "  %3 = call.indirect %0(%1, %o0) signature=0\n"
+        "  return %3\n";
+    MinicCoreSourceBuilder builder;
+    MinicCoreFunction *function = &builder.core;
+    MinicCoreTypeContext type_context;
+    DumpTypes types = {0};
+    FILE *output;
+    char buffer[sizeof(expected) + 8U];
+    size_t length;
+    int status = 0;
+    bool type_context_ready;
+    bool built, attached, verified, dumped;
+
+    minic_core_source_builder_initialize(&builder);
+    type_context_ready = make_dump_types(&type_context, &types);
+    output = tmpfile();
+    built = type_context_ready && build_call_dump_function(&builder);
+    attached = built && attach_dump_types(function, &type_context, &types);
+    verified = attached && minic_core_function_verify(function);
+    dumped = verified && output != NULL && minic_core_function_dump(output, function);
+    if (!dumped || fflush(output) != 0 || fseek(output, 0L, SEEK_SET) != 0) {
+        (void)fprintf(stderr,
+                      "CORE_CALL_DUMP=FAIL typed=%d built=%d attached=%d verified=%d dumped=%d\n",
+                      type_context_ready, built, attached, verified, dumped);
+        status = 1;
+    } else {
+        length = fread(buffer, 1U, sizeof(buffer) - 1U, output);
+        buffer[length] = '\0';
+        if (ferror(output) || strcmp(buffer, expected) != 0) status = 2;
+    }
+    if (output != NULL) (void)fclose(output);
+    minic_core_source_builder_destroy(&builder);
+    minic_core_type_context_destroy(&type_context);
+    if (status == 0) (void)puts("CORE_CALL_DUMP=PASS direct+indirect value+object exact-text");
+    return status;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/core/core_ir_enum_source.c"}
+/* Genuine GNU C producer control for the separate malformed Core API tests.
+ * Scalar enum values and function parameter/return types require registered
+ * integer-representation metadata during normal Core lowering. */
+enum Flavor { FLAVOR_A = 1, FLAVOR_B = 41 };
+
+static enum Flavor identity(enum Flavor value) { return value; }
+
+int main(void) {
+    enum Flavor value = FLAVOR_B;
+    return (int)identity(value) + 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/core/core_ir_shadow_test.c"}
+#include "compiler/c_lower/core_ir_source_internal.h"
+#include "compiler/c_lower/core_lower.h"
+#include "frontend/ast.h"
+#include "frontend/function_body.h"
+#include "target/target_info.h"
+
+#include <stdio.h>
+#include <string.h>
+
+static MinicSourceSpan test_span(size_t offset) {
+    MinicSourceSpan span;
+
+    (void)memset(&span, 0, sizeof(span));
+    span.begin.offset = offset;
+    span.begin.line = 1U;
+    span.begin.column = offset + 1U;
+    span.end = span.begin;
+    span.end.offset += 1U;
+    span.end.column += 1U;
+    return span;
+}
+
+static bool add_integer(MinicC0Program *program, int value, MinicExpressionId *expression_id) {
+    MinicExpression expression;
+
+    (void)memset(&expression, 0, sizeof(expression));
+    expression.kind = MINIC_EXPRESSION_INTEGER;
+    expression.span = test_span(program->expression_count);
+    expression.type = minic_type_int();
+    expression.value_category = MINIC_VALUE_RVALUE;
+    expression.value.integer_value = value;
+    return minic_c0_program_add_expression(program, &expression, expression_id);
+}
+
+static bool add_local_reference(MinicC0Program *program,
+                                MinicLocalId local_id,
+                                MinicExpressionId *expression_id) {
+    const MinicLocal *local;
+    MinicExpression expression;
+
+    local = minic_c0_program_local(program, local_id);
+    if (local == NULL) {
+        return false;
+    }
+    (void)memset(&expression, 0, sizeof(expression));
+    expression.kind = MINIC_EXPRESSION_LOCAL;
+    expression.span = local->name_span;
+    expression.type = local->type;
+    expression.value_category = MINIC_VALUE_LVALUE;
+    expression.value.local_id = local_id;
+    return minic_c0_program_add_expression(program, &expression, expression_id);
+}
+
+static bool add_binary(MinicC0Program *program,
+                       MinicBinaryOperator operator_kind,
+                       MinicExpressionId left,
+                       MinicExpressionId right,
+                       MinicExpressionId *expression_id) {
+    MinicExpression expression;
+
+    (void)memset(&expression, 0, sizeof(expression));
+    expression.kind = MINIC_EXPRESSION_BINARY;
+    expression.span = test_span(program->expression_count);
+    expression.type = minic_type_int();
+    expression.value_category = MINIC_VALUE_RVALUE;
+    expression.value.binary.operator_kind = operator_kind;
+    expression.value.binary.left = left;
+    expression.value.binary.right = right;
+    return minic_c0_program_add_expression(program, &expression, expression_id);
+}
+
+static bool build_return_function(MinicC0Program *program,
+                                  MinicBinaryOperator operator_kind,
+                                  MinicFunctionBodyView *view) {
+    MinicBlockId body_block;
+    MinicExpressionId one;
+    MinicExpressionId two;
+    MinicExpressionId result;
+    MinicStatement statement;
+    MinicStatementId statement_id;
+    MinicFunctionId function_id;
+
+    minic_c0_program_initialize(program);
+    if (!minic_c0_program_add_block(program, &body_block) || !add_integer(program, 1, &one) ||
+        !add_integer(program, 2, &two) || !add_binary(program, operator_kind, one, two, &result)) {
+        return false;
+    }
+    (void)memset(&statement, 0, sizeof(statement));
+    statement.kind = MINIC_STATEMENT_RETURN;
+    statement.span = test_span(program->statement_count);
+    statement.expression = result;
+    statement.cleanup_context = MINIC_CLEANUP_CONTEXT_ROOT;
+    statement.cleanup_stop_context = MINIC_CLEANUP_CONTEXT_ROOT;
+    if (!minic_c0_program_add_statement(program, &statement, &statement_id) ||
+        !minic_c0_block_add_statement(program, body_block, statement_id) ||
+        !minic_c0_program_add_function(program, "f", 1U, 0U, 0U, body_block, &function_id) ||
+        !minic_c0_program_set_function_signature(
+            program, function_id, minic_type_int(), NULL, 0U) ||
+        !minic_c0_function_body_view(program, function_id, view)) {
+        return false;
+    }
+    return true;
+}
+
+static bool build_parameter_function(MinicC0Program *program, MinicFunctionBodyView *view) {
+    MinicBlockId body_block;
+    MinicExpressionId local_expression;
+    MinicFunctionId function_id;
+    MinicLocal local;
+    MinicLocalId local_id;
+    MinicStatement statement;
+    MinicStatementId statement_id;
+    MinicType parameter_type;
+
+    minic_c0_program_initialize(program);
+    if (!minic_c0_program_add_block(program, &body_block)) {
+        return false;
+    }
+    minic_c0_local_initialize(&local);
+    local.name_span = test_span(0U);
+    local.type = minic_type_signed_char();
+    if (!minic_c0_program_add_local(program, &local, &local_id) ||
+        !add_local_reference(program, local_id, &local_expression)) {
+        return false;
+    }
+    (void)memset(&statement, 0, sizeof(statement));
+    statement.kind = MINIC_STATEMENT_RETURN;
+    statement.span = test_span(program->statement_count);
+    statement.expression = local_expression;
+    statement.cleanup_context = MINIC_CLEANUP_CONTEXT_ROOT;
+    statement.cleanup_stop_context = MINIC_CLEANUP_CONTEXT_ROOT;
+    parameter_type = minic_type_signed_char();
+    return minic_c0_program_add_statement(program, &statement, &statement_id) &&
+           minic_c0_block_add_statement(program, body_block, statement_id) &&
+           minic_c0_program_add_function(program, "f", 1U, 0U, 1U, body_block, &function_id) &&
+           minic_c0_program_set_function_signature(
+               program, function_id, minic_type_int(), &parameter_type, 1U) &&
+           minic_c0_function_body_view(program, function_id, view);
+}
+
+static int dump_matches(MinicCoreFunction *core, const char *expected, int failure_base) {
+    FILE *output;
+    char buffer[512];
+    size_t length;
+    int status;
+
+    output = tmpfile();
+    if (output == NULL || !minic_core_function_dump(output, core) || fflush(output) != 0 ||
+        fseek(output, 0L, SEEK_SET) != 0) {
+        if (output != NULL) {
+            (void)fclose(output);
+        }
+        return failure_base;
+    }
+    length = fread(buffer, 1U, sizeof(buffer) - 1U, output);
+    status = ferror(output) != 0 ? failure_base + 1 : 0;
+    buffer[length] = '\0';
+    if (status == 0 && strcmp(buffer, expected) != 0) {
+        status = failure_base + 2;
+    }
+    (void)fclose(output);
+    return status;
+}
+
+static int test_scalar_shadow_lowering(void) {
+    static const char expected[] = "core function @f\n"
+                                   "bb0:\n"
+                                   "  %0 = const.int 1\n"
+                                   "  %1 = const.int 2\n"
+                                   "  %2 = add.int %0, %1\n"
+                                   "  return %2\n";
+    MinicC0Program program;
+    MinicFunctionBodyView view;
+    MinicCoreSourceBuilder builder;
+    int status;
+
+    if (!build_return_function(&program, MINIC_BINARY_ADD, &view)) {
+        minic_c0_program_destroy(&program);
+        return 1;
+    }
+    minic_core_source_builder_initialize(&builder);
+    if (minic_core_lower_function(&view, minic_default_target_info(), &builder) !=
+            MINIC_CORE_LOWER_OK ||
+        !minic_core_function_verify_source_ingress(&builder) ||
+        builder.core.block_count != 1U ||
+        builder.core.instruction_count != 3U || builder.core.value_count != 3U) {
+        minic_core_source_builder_destroy(&builder);
+        minic_c0_program_destroy(&program);
+        return 2;
+    }
+    status = dump_matches(&builder.core, expected, 3);
+    minic_core_source_builder_destroy(&builder);
+    minic_c0_program_destroy(&program);
+    return status;
+}
+
+static int test_parameter_ingress_and_conversion_lowering(void) {
+    static const char expected[] = "core function @f\n"
+                                   "object %o0\n"
+                                   "bb0:\n"
+                                   "  %0 = parameter 0\n"
+                                   "  %1 = object.addr %o0\n"
+                                   "  store %0, %1\n"
+                                   "  %2 = object.addr %o0\n"
+                                   "  %3 = load %2\n"
+                                   "  %4 = convert.int %3\n"
+                                   "  return %4\n";
+    MinicC0Program program;
+    MinicFunctionBodyView view;
+    MinicCoreSourceBuilder builder;
+    int status;
+
+    if (!build_parameter_function(&program, &view)) {
+        minic_c0_program_destroy(&program);
+        return 6;
+    }
+    minic_core_source_builder_initialize(&builder);
+    if (minic_core_lower_function(&view, minic_default_target_info(), &builder) !=
+            MINIC_CORE_LOWER_OK ||
+        !minic_core_function_verify_source_ingress(&builder) ||
+        builder.core.object_count != 1U ||
+        builder.core.instruction_count != 6U || builder.core.value_count != 5U) {
+        minic_core_source_builder_destroy(&builder);
+        minic_c0_program_destroy(&program);
+        return 7;
+    }
+    status = dump_matches(&builder.core, expected, 8);
+    minic_core_source_builder_destroy(&builder);
+    minic_c0_program_destroy(&program);
+    return status;
+}
+
+static int test_unsupported_expression_is_distinct(void) {
+    MinicC0Program program;
+    MinicFunctionBodyView view;
+    MinicCoreSourceBuilder builder;
+
+    if (!build_return_function(&program, MINIC_BINARY_SUBTRACT, &view)) {
+        minic_c0_program_destroy(&program);
+        return 11;
+    }
+    minic_core_source_builder_initialize(&builder);
+    if (minic_core_lower_function(&view, minic_default_target_info(), &builder) !=
+            MINIC_CORE_LOWER_UNSUPPORTED ||
+        builder.core.name != NULL || builder.core.block_count != 0U ||
+        builder.core.instruction_count != 0U || builder.core.value_count != 0U) {
+        minic_core_source_builder_destroy(&builder);
+        minic_c0_program_destroy(&program);
+        return 12;
+    }
+    minic_core_source_builder_destroy(&builder);
+    minic_c0_program_destroy(&program);
+    return 0;
+}
+
+static int test_invalid_input_is_error(void) {
+    MinicCoreSourceBuilder builder;
+    int status;
+
+    minic_core_source_builder_initialize(&builder);
+    status = minic_core_lower_function(NULL, minic_default_target_info(), &builder) ==
+                     MINIC_CORE_LOWER_ERROR ? 0 : 13;
+    minic_core_source_builder_destroy(&builder);
+    return status;
+}
+
+int main(void) {
+    int status;
+
+    status = test_scalar_shadow_lowering();
+    if (status != 0) {
+        return status;
+    }
+    status = test_parameter_ingress_and_conversion_lowering();
+    if (status != 0) {
+        return status;
+    }
+    status = test_unsupported_expression_is_distinct();
+    if (status != 0) {
+        return status;
+    }
+    return test_invalid_input_is_error();
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/core/core_ir_shape_test.c"}
+/* MC-055: these are deliberately malformed public Core API objects, NOT
+ * cases claimed to be emitted by a valid C frontend producer. */
+#include "compiler/c_lower/core_ir_source_internal.h"
+
+#include <stdio.h>
+#include <string.h>
+
+static bool build_function(MinicCoreSourceBuilder *builder, const char *mode) {
+    MinicCoreFunction *function = &builder->core;
+    MinicType result_type;
+    MinicCoreBlockId block;
+    MinicCoreValueId value;
+    MinicCoreInstruction instruction;
+    MinicCoreTerminator terminator;
+    MinicType parameter_type;
+    size_t parameter_count = 0U;
+
+    /* Source builders publish a draft signature first. They may add source
+     * fixed bindings and enum identities only while that draft is alive. */
+    if (strcmp(mode, "fixed") == 0 || strcmp(mode, "variadic") == 0)
+        result_type = minic_type_int();
+    else if (strcmp(mode, "symbol") == 0) {
+        if (!minic_type_pointer_to(minic_type_function(0U), &result_type))
+            return false;
+    } else if (strcmp(mode, "enum") == 0 ||
+               strcmp(mode, "enum-missing") == 0)
+        result_type = minic_type_enum(123U);
+    else if (strcmp(mode, "enum-pointer") == 0) {
+        if (!minic_type_pointer_to(minic_type_enum(123U), &result_type))
+            return false;
+    } else return false;
+    if (strcmp(mode, "enum-pointer") == 0 || strcmp(mode, "variadic") == 0) {
+        parameter_type = result_type;
+        parameter_count = 1U;
+    }
+    if (!minic_core_function_set_signature(builder, "probe", 5U,
+                                           result_type,
+                                           parameter_count == 0U ? NULL : &parameter_type,
+                                           parameter_count)) return false;
+    if (strcmp(mode, "fixed") == 0) {
+        size_t binding;
+        if (!minic_core_function_add_fixed_register_binding(
+                builder, "rax", 3U, result_type, false, &binding)) return false;
+        (void)memset(&instruction, 0, sizeof(instruction));
+        instruction.kind = MINIC_CORE_INSTRUCTION_FIXED_REGISTER_READ;
+        instruction.value.fixed_register_binding_id = binding;
+    } else if (strcmp(mode, "symbol") == 0) {
+        MinicCoreFunctionSymbolId symbol;
+        if (!minic_core_function_add_function_symbol(
+                function, "callee", 6U, &symbol)) return false;
+        (void)memset(&instruction, 0, sizeof(instruction));
+        instruction.kind = MINIC_CORE_INSTRUCTION_FUNCTION_ADDRESS;
+        instruction.value.function_symbol_id = symbol;
+    } else if (strcmp(mode, "enum") == 0 || strcmp(mode, "enum-missing") == 0) {
+        if (strcmp(mode, "enum") == 0 &&
+            !minic_core_function_add_enum_type(builder, 123U, minic_type_int()))
+            return false;
+        (void)memset(&instruction, 0, sizeof(instruction));
+        instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
+        instruction.value.integer_value = 7;
+    } else if (strcmp(mode, "enum-pointer") == 0) {
+        (void)memset(&instruction, 0, sizeof(instruction));
+        instruction.kind = MINIC_CORE_INSTRUCTION_PARAMETER;
+        instruction.value.parameter_index = 0U;
+    } else if (strcmp(mode, "variadic") == 0) {
+        (void)memset(&instruction, 0, sizeof(instruction));
+        instruction.kind = MINIC_CORE_INSTRUCTION_PARAMETER;
+        instruction.value.parameter_index = 0U;
+    } else {
+        return false;
+    }
+    if ((strcmp(mode, "variadic") == 0 &&
+         !minic_core_function_set_variadic(builder, true)) ||
+        !minic_core_function_add_block(function, &block) ||
+        !minic_core_function_append_source_value_instruction(
+            builder, block, &instruction, result_type, &value)) return false;
+    (void)memset(&terminator, 0, sizeof(terminator));
+    terminator.kind = MINIC_CORE_TERMINATOR_RETURN;
+    terminator.return_value = value;
+    terminator.return_object = MINIC_CORE_OBJECT_INVALID;
+    return minic_core_function_set_terminator(function, block, &terminator);
+}
+
+static int run_case(const char *case_name) {
+    MinicCoreSourceBuilder builder;
+    MinicCoreFunction *function = &builder.core;
+    const char *kind = NULL;
+    bool expected;
+    bool verified;
+
+    if (strncmp(case_name, "fixed", 5U) == 0) kind = "fixed";
+    else if (strncmp(case_name, "symbol", 6U) == 0) kind = "symbol";
+    else if (strcmp(case_name, "enum-pointer") == 0) kind = "enum-pointer";
+    else if (strncmp(case_name, "enum-missing", 12U) == 0) kind = "enum-missing";
+    else if (strncmp(case_name, "enum", 4U) == 0) kind = "enum";
+    else if (strcmp(case_name, "variadic") == 0) kind = "variadic";
+    if (kind == NULL) return 90;
+
+    minic_core_source_builder_initialize(&builder);
+    if (!build_function(&builder, kind)) {
+        minic_core_source_builder_destroy(&builder);
+        return 91;
+    }
+    if (strcmp(case_name, "variadic") == 0 &&
+        (!builder.source_draft->is_variadic ||
+         !minic_core_function_set_variadic(&builder, false) ||
+         builder.source_draft->is_variadic ||
+         !minic_core_function_set_variadic(&builder, true) ||
+         !builder.source_draft->is_variadic)) {
+        minic_core_source_builder_destroy(&builder);
+        return 94;
+    }
+    if (strcmp(case_name, "fixed-null") == 0) {
+        MinicCoreFixedRegisterBinding *saved = function->fixed_register_bindings;
+        function->fixed_register_bindings = NULL;
+        verified = minic_core_function_verify_source_ingress(&builder);
+        function->fixed_register_bindings = saved;
+        expected = false;
+    } else if (strcmp(case_name, "fixed-overcapacity") == 0) {
+        size_t saved = function->fixed_register_binding_count;
+        function->fixed_register_binding_count = function->fixed_register_binding_capacity + 1U;
+        verified = minic_core_function_verify_source_ingress(&builder);
+        function->fixed_register_binding_count = saved;
+        expected = false;
+    } else if (strcmp(case_name, "symbol-null") == 0) {
+        MinicCoreFunctionSymbol *saved = function->function_symbols;
+        function->function_symbols = NULL;
+        verified = minic_core_function_verify_source_ingress(&builder);
+        function->function_symbols = saved;
+        expected = false;
+    } else if (strcmp(case_name, "symbol-overcapacity") == 0) {
+        size_t saved = function->function_symbol_count;
+        function->function_symbol_count = function->function_symbol_capacity + 1U;
+        verified = minic_core_function_verify_source_ingress(&builder);
+        function->function_symbol_count = saved;
+        expected = false;
+    } else if (strcmp(case_name, "enum-null") == 0) {
+        MinicCoreEnumType *saved = builder.source_draft->enum_types;
+        builder.source_draft->enum_types = NULL;
+        verified = minic_core_function_verify_source_ingress(&builder);
+        builder.source_draft->enum_types = saved;
+        expected = false;
+    } else if (strcmp(case_name, "enum-overcapacity") == 0) {
+        size_t saved = builder.source_draft->enum_type_count;
+        builder.source_draft->enum_type_count =
+            builder.source_draft->enum_type_capacity + 1U;
+        verified = minic_core_function_verify_source_ingress(&builder);
+        builder.source_draft->enum_type_count = saved;
+        expected = false;
+    } else {
+        verified = minic_core_function_verify_source_ingress(&builder);
+        expected = strcmp(case_name, "enum-missing") != 0;
+    }
+    minic_core_source_builder_destroy(&builder);
+    if (verified != expected) {
+        (void)fprintf(stderr, "CORE_IR_SHAPE=FAIL case=%s verified=%d expected=%d\n",
+                      case_name, verified, expected);
+        return 92;
+    }
+    (void)printf("CORE_IR_SHAPE=PASS case=%s verified=%d\n", case_name, verified);
+    return 0;
+}
+
+int main(int argc, char **argv) {
+    if (argc != 2) return 93;
+    return run_case(argv[1]);
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/core/core_language_boundary_test.c"}
+/* Core's public headers must compile as a source-language-independent API.
+ * Deliberately poison C declaration identities before including every Core
+ * header: a future accidental C descriptor import is a compile error. */
+#define MinicType MINIC_FORBIDDEN_C_SOURCE_TYPE
+#define MinicTypeBaseKind MINIC_FORBIDDEN_C_SOURCE_BASE_KIND
+#define MinicEnumId MINIC_FORBIDDEN_C_ENUM_ID
+#define MinicRecordId MINIC_FORBIDDEN_C_RECORD_ID
+#define MinicFunctionTypeId MINIC_FORBIDDEN_C_FUNCTION_TYPE_ID
+#define MinicExpression MINIC_FORBIDDEN_C_EXPRESSION
+#define MinicProgram MINIC_FORBIDDEN_C_PROGRAM
+
+#include "core/address_alignment.h"
+#include "core/core_ir.h"
+#include "core/core_ir_storage.h"
+#include "core/core_type.h"
+#include "core/module_ir.h"
+#include "core/symbol_identity.h"
+#include "core/value_uses.h"
+
+/* Check that the only type identities exposed to producers and consumers are
+ * Core-owned. This probe intentionally needs no Frontend/C lowerer object. */
+static MinicCoreTypeId core_type_identity(const MinicCoreFunction *function) {
+    return minic_core_function_return_type(function);
+}
+
+int main(void) {
+    MinicCoreFunction function;
+    minic_core_function_initialize(&function);
+    return core_type_identity(&function) == MINIC_CORE_TYPE_INVALID ? 0 : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/core/core_local_effect_summary_test.c"}
+/* White-box AST effect-summary contract. This deliberately constructs the
+ * smallest source tree needed to validate address and GNU-tail traversal. */
+#include "compiler/c_lower/core_lower_internal.h"
+
+#include <stdbool.h>
+#include <stddef.h>
+#include <string.h>
+
+const MinicExpression *minic_c0_program_expression(
+    const MinicC0Program *program, MinicExpressionId id) {
+    return program != NULL && id < program->expression_count
+               ? &program->expressions[id] : NULL;
+}
+
+const MinicStatement *minic_c0_program_statement(
+    const MinicC0Program *program, MinicStatementId id) {
+    return program != NULL && id < program->statement_count
+               ? &program->statements[id] : NULL;
+}
+
+const MinicBlock *minic_c0_program_block(
+    const MinicC0Program *program, MinicBlockId id) {
+    return program != NULL && id < program->block_count
+               ? &program->blocks[id] : NULL;
+}
+
+const MinicLocal *minic_c0_program_local(
+    const MinicC0Program *program, MinicLocalId id) {
+    return program != NULL && id < program->local_count
+               ? &program->locals[id] : NULL;
+}
+
+int main(void) {
+    MinicExpression expressions[6];
+    MinicStatement statements[2];
+    MinicStatementId statement_ids[2] = {0U, 1U};
+    MinicBlock blocks[2];
+    MinicLocal locals[4];
+    MinicC0Program program;
+    MinicFunction source_function;
+    MinicFunctionBodyView body;
+    MinicCoreLowerContext context;
+    unsigned char changed[3];
+    unsigned char condition_owned[3];
+
+    (void)memset(expressions, 0, sizeof(expressions));
+    (void)memset(statements, 0, sizeof(statements));
+    (void)memset(blocks, 0, sizeof(blocks));
+    (void)memset(locals, 0, sizeof(locals));
+    (void)memset(&program, 0, sizeof(program));
+    (void)memset(&body, 0, sizeof(body));
+    (void)memset(&context, 0, sizeof(context));
+    (void)memset(&source_function, 0, sizeof(source_function));
+
+    /* index++ inside an assignment's destination address: data[index++]. */
+    expressions[0].kind = MINIC_EXPRESSION_LOCAL;
+    expressions[0].value_category = MINIC_VALUE_LVALUE;
+    expressions[0].value.local_id = 1U;
+    expressions[1].kind = MINIC_EXPRESSION_UNARY;
+    expressions[1].value.unary.operator_kind = MINIC_UNARY_POST_INCREMENT;
+    expressions[1].value.unary.operand = 0U;
+    expressions[2].kind = MINIC_EXPRESSION_LOCAL;
+    expressions[2].value_category = MINIC_VALUE_LVALUE;
+    expressions[2].value.local_id = 2U;
+    expressions[3].kind = MINIC_EXPRESSION_SUBSCRIPT;
+    expressions[3].value_category = MINIC_VALUE_LVALUE;
+    expressions[3].value.subscript.base = 2U;
+    expressions[3].value.subscript.index = 1U;
+    expressions[4].kind = MINIC_EXPRESSION_INTEGER;
+    expressions[4].value.integer_value = 7;
+    /* GNU statement-expression tail is detached from its block. */
+    expressions[5].kind = MINIC_EXPRESSION_STATEMENT;
+    expressions[5].value.statement_expression.block = 0U;
+    expressions[5].value.statement_expression.result = 1U;
+
+    statements[0].kind = MINIC_STATEMENT_ASSIGN;
+    statements[0].target_expression = 3U;
+    statements[0].expression = 4U;
+    statements[1].kind = MINIC_STATEMENT_RECORD_COPY;
+    statements[1].target_expression = 3U;
+    statements[1].expression = 4U;
+    blocks[1].statements = statement_ids;
+    blocks[1].statement_count = 2U;
+    program.expressions = expressions;
+    program.expression_count = 6U;
+    program.statements = statements;
+    program.statement_count = 2U;
+    program.blocks = blocks;
+    program.block_count = 2U;
+    program.locals = locals;
+    program.local_count = 4U;
+    locals[1].has_declaration_block = true;
+    locals[1].declaration_block = 0U;
+    body.program = &program;
+    context.body = &body;
+    source_function.local_begin = 1U;
+    source_function.local_count = 3U;
+    context.source_function = &source_function;
+
+    /* A GNU statement expression owns its locals by declaration block,
+     * independently of the following IF's modified-local summary. */
+    (void)memset(changed, 0, sizeof(changed));
+    (void)memset(condition_owned, 0, sizeof(condition_owned));
+    core_expression_collect_modified_and_condition_locals(
+        &context, 5U, changed, condition_owned, 0U);
+    if (condition_owned[0] != 1U || condition_owned[1] != 0U ||
+        condition_owned[2] != 0U || changed[0] != 1U)
+        return 12;
+
+    /* Check each local's positive and negative result directly from the
+     * production batch mask, independently for expression and block scans. */
+    (void)memset(changed, 0, sizeof(changed));
+    core_expression_collect_modified_locals(&context, 5U, changed, 0U);
+    if (changed[0] != 1U) return 1;
+    if (changed[1] != 0U) return 2;
+    if (changed[0] != 1U || changed[1] != 0U || changed[2] != 0U) return 7;
+    (void)memset(changed, 0, sizeof(changed));
+    core_block_collect_modified_locals(&context, &blocks[1], changed, 0U);
+    if (changed[0] != 1U) return 3;
+    if (changed[2] != 0U) return 4;
+    if (changed[0] != 1U || changed[1] != 0U || changed[2] != 0U) return 8;
+
+    statements[0].kind = MINIC_STATEMENT_RETURN;
+    statements[0].expression = 4U;
+    (void)memset(changed, 0, sizeof(changed));
+    core_block_collect_modified_locals(&context, &blocks[1], changed, 0U);
+    if (changed[0] != 1U) return 5;
+    statements[1].kind = MINIC_STATEMENT_RETURN;
+    statements[1].expression = 4U;
+    (void)memset(changed, 0, sizeof(changed));
+    core_block_collect_modified_locals(&context, &blocks[1], changed, 0U);
+    if (changed[0] != 0U) return 6;
+    if (changed[0] != 0U || changed[1] != 0U || changed[2] != 0U) return 9;
+    statements[1].kind = MINIC_STATEMENT_INLINE_ASM;
+    (void)memset(changed, 0, sizeof(changed));
+    core_block_collect_modified_locals(&context, &blocks[1], changed, 0U);
+    if (changed[0] != 1U || changed[1] != 1U || changed[2] != 1U) return 10;
+    /* Exhausting the recursive AST budget is conservative for all locals. */
+    (void)memset(changed, 0, sizeof(changed));
+    core_expression_collect_modified_locals(&context, 0U, changed, 65U);
+    if (changed[0] != 1U || changed[1] != 1U || changed[2] != 1U) return 11;
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/core/core_reentry_query_test.c"}
+/* Indexed and standalone Core reentry queries must produce the same typed
+ * source-edge reasons. This is a white-box C0 graph, not a machine-code test. */
+#include "compiler/c_lower/reentry_index.h"
+
+#include <stdbool.h>
+#include <stddef.h>
+#include <string.h>
+
+const MinicStatement *minic_c0_program_statement(
+    const MinicC0Program *program, MinicStatementId id) {
+    return program != NULL && id < program->statement_count
+        ? &program->statements[id] : NULL;
+}
+
+const MinicExpression *minic_c0_program_expression(
+    const MinicC0Program *program, MinicExpressionId id) {
+    return program != NULL && id < program->expression_count
+        ? &program->expressions[id] : NULL;
+}
+
+static bool check_same(
+    MinicCoreReentryIndex *index, const MinicC0Program *program,
+    const MinicCoreReentryQuery *query, unsigned int expected) {
+    return minic_core_reentry_query(index, program, query) == expected &&
+           minic_core_reentry_query(NULL, program, query) == expected;
+}
+
+int main(void) {
+    MinicStatement statements[9];
+    MinicInlineAsmLabel label;
+    MinicInlineAsm inline_asm;
+    MinicExpression expressions[1];
+    MinicC0Program program;
+    MinicCoreReentryIndex *index;
+    MinicCoreReentryQuery query;
+    bool members[9];
+    size_t i;
+    const unsigned int full =
+        MINIC_CORE_REENTRY_CHECK_EXTERNAL_JUMP |
+        MINIC_CORE_REENTRY_CHECK_LABEL_ADDRESS |
+        MINIC_CORE_REENTRY_CHECK_CASE_DISPATCH;
+
+    (void)memset(statements, 0, sizeof(statements));
+    (void)memset(&label, 0, sizeof(label));
+    (void)memset(&inline_asm, 0, sizeof(inline_asm));
+    (void)memset(expressions, 0, sizeof(expressions));
+    (void)memset(&program, 0, sizeof(program));
+    (void)memset(&query, 0, sizeof(query));
+    (void)memset(members, 0, sizeof(members));
+    for (i = 0U; i < 9U; ++i) {
+        statements[i].kind = MINIC_STATEMENT_LABEL;
+        statements[i].target_statement = MINIC_STATEMENT_INVALID;
+        statements[i].then_block = MINIC_BLOCK_INVALID;
+        statements[i].else_block = MINIC_BLOCK_INVALID;
+    }
+    /* External direct goto targets 2; an internal goto in member 4 also
+     * targets 2 and must not count as an external source when both are kept. */
+    statements[0].kind = MINIC_STATEMENT_GOTO;
+    statements[0].target_statement = 2U;
+    statements[4].kind = MINIC_STATEMENT_GOTO;
+    statements[4].target_statement = 2U;
+    statements[1].kind = MINIC_STATEMENT_INLINE_ASM;
+    statements[1].inline_asm_id = 0U;
+    label.target_statement = 3U;
+    inline_asm.is_goto = true;
+    inline_asm.label_count = 1U;
+    inline_asm.labels = &label;
+    statements[5].kind = MINIC_STATEMENT_CASE;
+    statements[6].kind = MINIC_STATEMENT_DEFAULT;
+    expressions[0].kind = MINIC_EXPRESSION_LABEL_ADDRESS;
+    expressions[0].value.label_statement_id = 7U;
+    program.statements = statements;
+    program.statement_count = 9U;
+    program.expressions = expressions;
+    program.expression_count = 1U;
+    program.inline_asms = &inline_asm;
+    program.inline_asm_count = 1U;
+
+    index = minic_core_reentry_index_create(&program);
+    if (!minic_core_reentry_index_ready(index, &program)) return 1;
+
+    members[2] = true;
+    members[4] = true;
+    query.membership = members;
+    query.label_id = MINIC_STATEMENT_INVALID;
+    query.checks = full;
+    query.purpose = MINIC_CORE_REENTRY_PURPOSE_IF_DISCARDED;
+    if (!check_same(index, &program, &query,
+                    MINIC_CORE_REENTRY_REASON_DIRECT_GOTO)) return 2;
+    members[0] = true;
+    if (!check_same(index, &program, &query, 0U)) return 3;
+
+    (void)memset(members, 0, sizeof(members));
+    members[1] = true;
+    members[3] = true;
+    query.checks = MINIC_CORE_REENTRY_CHECK_EXTERNAL_JUMP;
+    if (!check_same(index, &program, &query, 0U)) return 4;
+
+    query.membership = NULL;
+    query.label_id = 3U;
+    query.checks = MINIC_CORE_REENTRY_CHECK_EXTERNAL_JUMP |
+                   MINIC_CORE_REENTRY_CHECK_LABEL_ADDRESS;
+    query.purpose = MINIC_CORE_REENTRY_PURPOSE_SWITCH_LABEL;
+    if (!check_same(index, &program, &query,
+                    MINIC_CORE_REENTRY_REASON_ASM_GOTO)) return 5;
+    query.label_id = 7U;
+    if (!check_same(index, &program, &query,
+                    MINIC_CORE_REENTRY_REASON_LABEL_ADDRESS)) return 6;
+
+    (void)memset(members, 0, sizeof(members));
+    members[5] = true;
+    members[6] = true;
+    query.membership = members;
+    query.label_id = MINIC_STATEMENT_INVALID;
+    query.checks = MINIC_CORE_REENTRY_CHECK_EXTERNAL_JUMP;
+    query.purpose = MINIC_CORE_REENTRY_PURPOSE_UNREACHABLE_TAIL;
+    if (!check_same(index, &program, &query, 0U)) return 7;
+    query.checks = full;
+    query.purpose = MINIC_CORE_REENTRY_PURPOSE_IF_DISCARDED;
+    if (!check_same(index, &program, &query,
+                    MINIC_CORE_REENTRY_REASON_CASE_DISPATCH)) return 8;
+
+    members[2] = true;
+    members[3] = true;
+    members[7] = true;
+    if (!check_same(index, &program, &query,
+                    MINIC_CORE_REENTRY_REASON_DIRECT_GOTO |
+                    MINIC_CORE_REENTRY_REASON_ASM_GOTO |
+                    MINIC_CORE_REENTRY_REASON_CASE_DISPATCH |
+                    MINIC_CORE_REENTRY_REASON_LABEL_ADDRESS)) return 9;
+
+    query.membership = NULL;
+    query.label_id = 8U;
+    query.checks = MINIC_CORE_REENTRY_CHECK_EXTERNAL_JUMP |
+                   MINIC_CORE_REENTRY_CHECK_LABEL_ADDRESS;
+    query.purpose = MINIC_CORE_REENTRY_PURPOSE_LOOP_LABEL;
+    if (!check_same(index, &program, &query, 0U)) return 10;
+    query.label_id = 9U;
+    if (!check_same(index, &program, &query,
+                    MINIC_CORE_REENTRY_REASON_INDETERMINATE)) return 11;
+
+    minic_core_reentry_index_destroy(index);
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/core/core_source_subtree_membership_test.c"}
+/* The source owner must not traverse non-CFG statements' unused block fields.
+ * Malformed ancestry must fail closed rather than manufacture a safe set. */
+#include "compiler/c_lower/core_lower_internal.h"
+
+#include <string.h>
+
+const MinicStatement *minic_c0_program_statement(
+    const MinicC0Program *program, MinicStatementId id) {
+    return program != NULL && id < program->statement_count
+        ? &program->statements[id] : NULL;
+}
+
+const MinicBlock *minic_c0_program_block(
+    const MinicC0Program *program, MinicBlockId id) {
+    return program != NULL && id < program->block_count
+        ? &program->blocks[id] : NULL;
+}
+
+int main(void) {
+    MinicStatement statements[6];
+    MinicBlock blocks[3];
+    MinicStatementId root_ids[] = {0U, 2U};
+    MinicStatementId unrelated_ids[] = {1U};
+    MinicStatementId child_ids[] = {3U};
+    MinicC0Program program;
+    MinicFunctionBodyView body;
+    MinicCoreLowerContext context;
+    CoreSourceSubtreeMembership membership = {0};
+    MinicStatement detached;
+    size_t i;
+
+    (void)memset(statements, 0, sizeof(statements));
+    (void)memset(blocks, 0, sizeof(blocks));
+    (void)memset(&program, 0, sizeof(program));
+    (void)memset(&body, 0, sizeof(body));
+    (void)memset(&context, 0, sizeof(context));
+    for (i = 0U; i < 6U; ++i) {
+        statements[i].then_block = MINIC_BLOCK_INVALID;
+        statements[i].else_block = MINIC_BLOCK_INVALID;
+    }
+    statements[0].kind = MINIC_STATEMENT_RETURN;
+    statements[0].then_block = 1U; /* Unused field; must NOT traverse block 1. */
+    statements[1].kind = MINIC_STATEMENT_LABEL;
+    statements[2].kind = MINIC_STATEMENT_IF;
+    statements[2].then_block = 2U;
+    statements[3].kind = MINIC_STATEMENT_GOTO;
+    statements[3].then_block = 1U; /* Also unused for a source goto. */
+    statements[4].kind = MINIC_STATEMENT_LABEL;
+    statements[5].kind = MINIC_STATEMENT_DEFAULT;
+
+    blocks[0].statements = root_ids;
+    blocks[0].statement_count = 2U;
+    blocks[1].statements = unrelated_ids;
+    blocks[1].statement_count = 1U;
+    blocks[2].statements = child_ids;
+    blocks[2].statement_count = 1U;
+    program.statements = statements;
+    program.statement_count = 6U;
+    program.blocks = blocks;
+    program.block_count = 3U;
+    body.program = &program;
+    context.body = &body;
+
+    if (!core_source_subtree_membership_from_block(
+            &context, &blocks[0], &membership)) return 1;
+    if (!membership.statements[0] || membership.statements[1] ||
+        !membership.statements[2] || !membership.statements[3] ||
+        membership.statements[4] || membership.statements[5]) return 2;
+    core_source_subtree_membership_destroy(&membership);
+
+    if (!core_source_subtree_membership_from_statement(
+            &context, &statements[2], 5U, &membership)) return 3;
+    if (membership.statements[0] || membership.statements[1] ||
+        !membership.statements[2] || !membership.statements[3] ||
+        membership.statements[4] || !membership.statements[5]) return 4;
+    core_source_subtree_membership_destroy(&membership);
+
+    statements[2].then_block = 100U;
+    if (core_source_subtree_membership_from_statement(
+            &context, &statements[2], MINIC_STATEMENT_INVALID,
+            &membership)) return 5;
+    core_source_subtree_membership_destroy(&membership);
+    statements[2].then_block = 2U;
+
+    detached = statements[2];
+    if (core_source_subtree_membership_from_statement(
+            &context, &detached, MINIC_STATEMENT_INVALID, &membership)) return 6;
+    core_source_subtree_membership_destroy(&membership);
+
+    program.statement_count = 0U;
+    if (core_source_subtree_membership_from_block(
+            &context, &blocks[0], &membership)) return 7;
+    core_source_subtree_membership_destroy(&membership);
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/core/core_symbol_identity_test.c"}
+#include "core/core_ir.h"
+#include "core/symbol_identity.h"
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#define REQUIRE(condition) do { if (!(condition)) { \
+    fprintf(stderr, "CORE_SYMBOL_IDENTITY=FAIL line=%d expression=%s\n", \
+            __LINE__, #condition); return 1; \
+} } while (0)
+
+static char *owned(const char *text) {
+    const size_t size = strlen(text) + 1U;
+    char *copy = malloc(size);
+    if (copy != NULL) memcpy(copy, text, size);
+    return copy;
+}
+
+int main(void) {
+    MinicCoreTypeContext types;
+    MinicCoreType type = {0};
+    MinicCoreFunction function;
+    MinicCoreTypeId void_type;
+    MinicCoreBlockId blocks[2];
+    MinicCoreTerminator terminator = {0};
+    MinicCoreInlineAsmId assembly;
+    MinicCoreInlineAsmId typed_assembly;
+    MinicCoreBlockId immediate_block;
+    MinicCoreInstruction immediate_effect = {0};
+    char *symbol = NULL;
+
+    REQUIRE(minic_core_format_label_symbol(0U, &symbol));
+    REQUIRE(strcmp(symbol, ".Luser_0") == 0);
+    free(symbol);
+    REQUIRE(minic_core_format_deferred_asm_symbol(17U, &symbol));
+    REQUIRE(strcmp(symbol, "__minic_deferred_asm_immediate_17_0") == 0);
+    free(symbol);
+    REQUIRE(minic_core_label_symbol_valid(".Luser_71"));
+    REQUIRE(!minic_core_label_symbol_valid(".Luser_01"));
+    REQUIRE(!minic_core_label_symbol_valid(".Luser_9999999999999999999999999999999"));
+    REQUIRE(!minic_core_label_symbol_valid(".Luser_7\n.globl takeover"));
+    REQUIRE(!minic_core_deferred_asm_symbol_valid("__minic_deferred_asm_immediate_7_01"));
+
+    minic_core_type_context_initialize(&types);
+    type.kind = MINIC_CORE_TYPE_VOID;
+    REQUIRE(minic_core_type_register(&types, &type, &void_type));
+    minic_core_function_initialize(&function);
+    function.name = owned("symbols");
+    REQUIRE(function.name != NULL);
+    function.name_length = strlen(function.name);
+    REQUIRE(minic_core_function_define_signature(
+        &function, &types, void_type, NULL, 0U,
+        MINIC_CALLING_CONVENTION_DEFAULT, false));
+    REQUIRE(minic_core_function_add_block(&function, &blocks[0]));
+    REQUIRE(minic_core_function_add_block(&function, &blocks[1]));
+    terminator.kind = MINIC_CORE_TERMINATOR_RETURN;
+    terminator.return_value = MINIC_CORE_VALUE_INVALID;
+    terminator.return_object = MINIC_CORE_OBJECT_INVALID;
+    REQUIRE(minic_core_function_set_terminator(&function, blocks[0], &terminator));
+    REQUIRE(minic_core_function_set_terminator(&function, blocks[1], &terminator));
+    function.blocks[0].local_label_symbol = owned(".Luser_0");
+    function.blocks[1].local_label_symbol = owned(".Luser_17");
+    REQUIRE(function.blocks[0].local_label_symbol != NULL &&
+            function.blocks[1].local_label_symbol != NULL);
+    REQUIRE(minic_core_function_attach_type_context(&function, &types));
+    REQUIRE(minic_core_function_verify(&function));
+
+    free(function.blocks[1].local_label_symbol);
+    function.blocks[1].local_label_symbol = owned(".Luser_0");
+    REQUIRE(function.blocks[1].local_label_symbol != NULL);
+    REQUIRE(!minic_core_function_verify(&function)); /* duplicate local symbol */
+    free(function.blocks[1].local_label_symbol);
+    function.blocks[1].local_label_symbol = owned(".Luser_17\n.globl injected");
+    REQUIRE(function.blocks[1].local_label_symbol != NULL);
+    REQUIRE(!minic_core_function_verify(&function)); /* assembler injection */
+    free(function.blocks[1].local_label_symbol);
+    function.blocks[1].local_label_symbol = owned(".Luser_17");
+    REQUIRE(function.blocks[1].local_label_symbol != NULL);
+    REQUIRE(minic_core_function_verify(&function));
+
+    REQUIRE(minic_core_function_add_opaque_inline_asm(
+        &function, "nop %0", 6U, true, false, &assembly));
+    function.inline_asms[assembly].is_goto = true;
+    function.inline_asms[assembly].goto_target = blocks[1];
+    function.inline_asms[assembly].deferred_immediate_symbol = owned(
+        "__minic_deferred_asm_immediate_17_0");
+    REQUIRE(function.inline_asms[assembly].deferred_immediate_symbol != NULL);
+    REQUIRE(minic_core_function_verify(&function));
+    /* A source-free producer cannot fabricate a dangling control-flow edge
+     * merely by claiming an otherwise well-formed opaque ASM effect. */
+    function.inline_asms[assembly].goto_target = MINIC_CORE_BLOCK_INVALID;
+    REQUIRE(!minic_core_function_verify(&function));
+    function.inline_asms[assembly].goto_target = blocks[1];
+    function.inline_asms[assembly].is_goto = false;
+    REQUIRE(!minic_core_function_verify(&function)); /* no non-goto borrowed label */
+    function.inline_asms[assembly].is_goto = true;
+    free(function.inline_asms[assembly].deferred_immediate_symbol);
+    function.inline_asms[assembly].deferred_immediate_symbol = owned(
+        "__minic_deferred_asm_immediate_17_0\n.globl injected");
+    REQUIRE(function.inline_asms[assembly].deferred_immediate_symbol != NULL);
+    REQUIRE(!minic_core_function_verify(&function));
+
+    /* A Source-free producer cannot bypass typed Core immediate admission.
+     * The instruction must be present: merely storing orphaned metadata does
+     * not exercise the instruction verifier's execution contract. */
+    free(function.inline_asms[assembly].deferred_immediate_symbol);
+    function.inline_asms[assembly].deferred_immediate_symbol = NULL;
+    REQUIRE(minic_core_function_add_block(&function, &immediate_block));
+    REQUIRE(minic_core_function_add_opaque_inline_asm(
+        &function, "nop", 3U, true, false, &typed_assembly));
+    function.inline_asms[typed_assembly].is_goto = true;
+    function.inline_asms[typed_assembly].goto_target = blocks[1];
+    function.inline_asms[typed_assembly].resolved_immediate_count = 2U;
+    function.inline_asms[typed_assembly].resolved_immediates[0].kind =
+        MINIC_CORE_INLINE_ASM_IMMEDIATE_SYMBOL;
+    function.inline_asms[typed_assembly].resolved_immediates[0].symbol = owned("key");
+    function.inline_asms[typed_assembly].resolved_immediates[0].byte_addend = 4;
+    function.inline_asms[typed_assembly].resolved_immediates[1].kind =
+        MINIC_CORE_INLINE_ASM_IMMEDIATE_INTEGER;
+    function.inline_asms[typed_assembly].resolved_immediates[1].integer = 3;
+    REQUIRE(function.inline_asms[typed_assembly].resolved_immediates[0].symbol != NULL);
+    immediate_effect.kind = MINIC_CORE_INSTRUCTION_OPAQUE_INLINE_ASM;
+    immediate_effect.core_type_id = void_type;
+    immediate_effect.value.inline_asm_id = typed_assembly;
+    REQUIRE(minic_core_function_append_effect_instruction(
+        &function, immediate_block, &immediate_effect));
+    REQUIRE(minic_core_function_set_terminator(
+        &function, immediate_block, &terminator));
+    REQUIRE(minic_core_function_verify(&function));
+    {
+        MinicCoreInlineAsmImmediate *key =
+            &function.inline_asms[typed_assembly].resolved_immediates[0];
+        MinicCoreInlineAsmImmediate *flags =
+            &function.inline_asms[typed_assembly].resolved_immediates[1];
+        char *saved_key = key->symbol;
+        key->symbol = (char *)"key+1";
+        REQUIRE(!minic_core_function_verify(&function)); /* no assembler expression */
+        key->symbol = saved_key;
+        key->kind = MINIC_CORE_INLINE_ASM_IMMEDIATE_INTEGER;
+        REQUIRE(!minic_core_function_verify(&function)); /* stale symbolic payload */
+        key->kind = MINIC_CORE_INLINE_ASM_IMMEDIATE_SYMBOL;
+        flags->byte_addend = 1;
+        REQUIRE(!minic_core_function_verify(&function)); /* integer cannot relocate */
+        flags->byte_addend = 0;
+        flags->kind = MINIC_CORE_INLINE_ASM_IMMEDIATE_INVALID;
+        REQUIRE(!minic_core_function_verify(&function)); /* missing typed slot */
+        flags->kind = MINIC_CORE_INLINE_ASM_IMMEDIATE_INTEGER;
+        function.inline_asms[typed_assembly].resolved_immediates[2].kind =
+            MINIC_CORE_INLINE_ASM_IMMEDIATE_INTEGER;
+        REQUIRE(!minic_core_function_verify(&function)); /* hidden trailing slot */
+        function.inline_asms[typed_assembly].resolved_immediates[2].kind =
+            MINIC_CORE_INLINE_ASM_IMMEDIATE_INVALID;
+        REQUIRE(minic_core_function_verify(&function));
+    }
+    {
+        MinicCoreInlineAsm *named = &function.inline_asms[typed_assembly];
+        char *saved;
+        /* The C-source GNU names must survive as owned Core facts. Neither
+         * labels nor relocation symbols may masquerade as operand names. */
+        free(named->template_text);
+        named->template_text = owned(".word %[key]\n.word %[flags]\n.long %l[enabled]");
+        REQUIRE(named->template_text != NULL);
+        named->template_length = strlen(named->template_text);
+        named->resolved_immediates[0].asm_name = owned("key");
+        named->resolved_immediates[1].asm_name = owned("flags");
+        named->goto_label_names[0] = owned("enabled");
+        REQUIRE(named->resolved_immediates[0].asm_name != NULL &&
+                named->resolved_immediates[1].asm_name != NULL &&
+                named->goto_label_names[0] != NULL);
+        REQUIRE(minic_core_function_verify(&function));
+
+        saved = named->resolved_immediates[1].asm_name;
+        named->resolved_immediates[1].asm_name = (char *)"key";
+        REQUIRE(!minic_core_function_verify(&function)); /* duplicate binding */
+        named->resolved_immediates[1].asm_name = saved;
+        saved = named->resolved_immediates[0].asm_name;
+        named->resolved_immediates[0].asm_name = (char *)"key+1";
+        REQUIRE(!minic_core_function_verify(&function)); /* source injection */
+        named->resolved_immediates[0].asm_name = saved;
+        saved = named->goto_label_names[0];
+        named->goto_label_names[0] = (char *)"key";
+        REQUIRE(!minic_core_function_verify(&function)); /* label/input collision */
+        named->goto_label_names[0] = (char *)"enabled; .globl forged";
+        REQUIRE(!minic_core_function_verify(&function)); /* forged label syntax */
+        named->goto_label_names[0] = saved;
+        saved = named->template_text;
+        named->template_text = (char *)".word %[missing]";
+        named->template_length = strlen(named->template_text);
+        REQUIRE(!minic_core_function_verify(&function)); /* unresolved name */
+        named->template_text = (char *)".long %l[key]";
+        named->template_length = strlen(named->template_text);
+        REQUIRE(!minic_core_function_verify(&function)); /* wrong operand kind */
+        named->template_text = (char *)".long %l[missing]";
+        named->template_length = strlen(named->template_text);
+        REQUIRE(!minic_core_function_verify(&function)); /* nonexistent C label */
+        named->template_text = (char *)".word %%[not_an_operand]";
+        named->template_length = strlen(named->template_text);
+        REQUIRE(minic_core_function_verify(&function)); /* escaped GNU percent */
+        named->template_text = saved;
+        named->template_length = strlen(saved);
+        named->goto_label_names[1] = (char *)"hidden";
+        REQUIRE(!minic_core_function_verify(&function)); /* unused second label */
+        named->goto_label_names[1] = NULL;
+        named->resolved_immediates[2].asm_name = (char *)"hidden";
+        REQUIRE(!minic_core_function_verify(&function)); /* hidden immediate slot */
+        named->resolved_immediates[2].asm_name = NULL;
+        named->resolved_immediates[3].kind =
+            MINIC_CORE_INLINE_ASM_IMMEDIATE_INTEGER;
+        REQUIRE(!minic_core_function_verify(&function)); /* fourth unused slot */
+        named->resolved_immediates[3].kind =
+            MINIC_CORE_INLINE_ASM_IMMEDIATE_INVALID;
+        /* Typed immediate facts belong either to real asm-goto CFG or a
+         * target-qualified STRUCTURED effect. An opaque textual ASM cannot
+         * forge machine-source admission by setting metadata alone. */
+        named->is_goto = false;
+        named->operand_plan_owner = MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED;
+        named->target_machine_form_id = 173U;
+        REQUIRE(!minic_core_function_verify(&function));
+        named->target_machine_form_id = 0U;
+        named->operand_plan_owner = MINIC_ASM_OPERAND_PLAN_NONE;
+        named->is_goto = true;
+        REQUIRE(minic_core_function_verify(&function));
+    }
+
+    minic_core_function_destroy(&function);
+    minic_core_type_context_destroy(&types);
+    puts("CORE_SYMBOL_IDENTITY=PASS local_symbols deferred_goto typed_asm_integer_symbol named_operand_label_bindings forged_payload_rejected");
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/core/core_type_context_test.c"}
+#include "core/core_type.h"
+
+#include <stdio.h>
+#include <string.h>
+
+#define CHECK(condition) do { \
+    if (!(condition)) { \
+        (void)fprintf(stderr, "CORE_TYPE_CONTEXT=FAIL line=%d expression=%s\n", \
+                      __LINE__, #condition); \
+        return 1; \
+    } \
+} while (0)
+
+/* Exercise multiple hash-index rehashes, same-shape duplicates and nominal
+ * referents after their record body has been completed. */
+static int check_large_type_index(void) {
+    MinicCoreTypeContext context;
+    MinicCoreType type;
+    MinicCoreTypeId integers[192], pointers[192];
+    MinicCoreTypeId a, b, a_pointer, b_pointer, repeated;
+    size_t i, before;
+    minic_core_type_context_initialize(&context);
+    for (i = 0U; i < 192U; ++i) {
+        (void)memset(&type, 0, sizeof(type));
+        type.kind = MINIC_CORE_TYPE_INTEGER;
+        type.has_layout = true;
+        type.size = i + 1U;
+        type.alignment = 1U;
+        type.value.integer.bit_width = (unsigned int)((i + 1U) * 8U);
+        CHECK(minic_core_type_register(&context, &type, &integers[i]));
+        CHECK(minic_core_type_register(&context, &type, &repeated));
+        CHECK(repeated == integers[i]);
+        (void)memset(&type, 0, sizeof(type));
+        type.kind = MINIC_CORE_TYPE_POINTER;
+        type.has_layout = true;
+        type.size = 8U;
+        type.alignment = 8U;
+        type.value.pointer.pointee = integers[i];
+        CHECK(minic_core_type_register(&context, &type, &pointers[i]));
+        CHECK(minic_core_type_register(&context, &type, &repeated));
+        CHECK(repeated == pointers[i]);
+    }
+    CHECK(context.type_index_capacity >= 512U);
+    for (i = 0U; i < 192U; ++i) {
+        (void)memset(&type, 0, sizeof(type));
+        type.kind = MINIC_CORE_TYPE_INTEGER;
+        type.has_layout = true;
+        type.size = i + 1U;
+        type.alignment = 1U;
+        type.value.integer.bit_width = (unsigned int)((i + 1U) * 8U);
+        CHECK(minic_core_type_register(&context, &type, &repeated));
+        CHECK(repeated == integers[i]);
+        type.kind = MINIC_CORE_TYPE_POINTER;
+        type.size = 8U;
+        type.alignment = 8U;
+        type.value.pointer.pointee = integers[i];
+        CHECK(minic_core_type_register(&context, &type, &repeated));
+        CHECK(repeated == pointers[i]);
+    }
+    (void)memset(&type, 0, sizeof(type));
+    type.kind = MINIC_CORE_TYPE_RECORD;
+    CHECK(minic_core_type_register(&context, &type, &a));
+    CHECK(minic_core_type_register(&context, &type, &b));
+    CHECK(a != b);
+    (void)memset(&type, 0, sizeof(type));
+    type.kind = MINIC_CORE_TYPE_POINTER;
+    type.has_layout = true;
+    type.size = 8U;
+    type.alignment = 8U;
+    type.value.pointer.pointee = a;
+    CHECK(minic_core_type_register(&context, &type, &a_pointer));
+    type.value.pointer.pointee = b;
+    CHECK(minic_core_type_register(&context, &type, &b_pointer));
+    CHECK(a_pointer != b_pointer);
+    (void)memset(&type, 0, sizeof(type));
+    type.kind = MINIC_CORE_TYPE_RECORD;
+    type.has_layout = true;
+    type.size = 1U;
+    type.alignment = 1U;
+    type.value.record.is_complete = true;
+    CHECK(minic_core_type_complete_record(&context, a, &type));
+    (void)memset(&type, 0, sizeof(type));
+    type.kind = MINIC_CORE_TYPE_POINTER;
+    type.has_layout = true;
+    type.size = 8U;
+    type.alignment = 8U;
+    type.value.pointer.pointee = a;
+    CHECK(minic_core_type_register(&context, &type, &repeated));
+    CHECK(repeated == a_pointer);
+    before = context.type_count;
+    type.value.pointer.pointee = MINIC_CORE_TYPE_INVALID;
+    CHECK(!minic_core_type_register(&context, &type, &repeated));
+    CHECK(context.type_count == before);
+    /* A caller-owned descriptor may be an entry in `types`; registering a
+     * second nominal instance must snapshot it before reallocating arena. */
+    (void)memset(&type, 0, sizeof(type));
+    type.kind = MINIC_CORE_TYPE_RECORD;
+    while (context.type_count < context.type_capacity)
+        CHECK(minic_core_type_register(&context, &type, &repeated));
+    before = context.type_count;
+    CHECK(minic_core_type_register(&context, &context.types[a], &repeated));
+    CHECK(repeated == before);
+    CHECK(minic_core_type_get(&context, repeated)->kind == MINIC_CORE_TYPE_RECORD);
+    CHECK(minic_core_type_get(&context, repeated)->value.record.is_complete);
+    minic_core_type_context_destroy(&context);
+    CHECK(context.type_index == NULL && context.type_index_capacity == 0U);
+    return 0;
+}
+
+int main(void) {
+    MinicCoreTypeContext context;
+    MinicCoreType type;
+    MinicCoreTypeId void_id, integer_id, duplicate_id;
+    MinicCoreTypeId record_id, pointer_id, array_id, incomplete_array_id;
+    MinicCoreTypeId fixed_array_id, aligned_array_id;
+    MinicCoreTypeId function_id, another_function_id, alternate_function_id, opaque_id;
+    MinicCoreTypeId float_id, vector_id;
+    MinicCoreRecordField field;
+    MinicCoreTypeId params[2];
+    const MinicCoreType *stored;
+    size_t before;
+
+    minic_core_type_context_initialize(&context);
+    CHECK(context.type_count == 0U && context.types == NULL);
+    CHECK(minic_core_type_get(&context, MINIC_CORE_TYPE_INVALID) == NULL);
+    CHECK(minic_core_type_get(&context, 0U) == NULL);
+    CHECK(minic_core_type_get(NULL, 0U) == NULL);
+    minic_core_type_context_initialize(NULL);
+    minic_core_type_context_destroy(NULL);
+
+    (void)memset(&type, 0, sizeof(type));
+    type.kind = MINIC_CORE_TYPE_VOID;
+    CHECK(minic_core_type_register(&context, &type, &void_id));
+    CHECK(void_id == 0U);
+    CHECK(minic_core_type_register(&context, &type, &duplicate_id));
+    CHECK(duplicate_id == void_id && context.type_count == 1U);
+
+    (void)memset(&type, 0, sizeof(type));
+    type.kind = MINIC_CORE_TYPE_INTEGER;
+    type.has_layout = true;
+    type.size = 4U;
+    type.alignment = 4U;
+    type.value.integer.bit_width = 32U;
+    type.value.integer.is_signed = true;
+    CHECK(minic_core_type_register(&context, &type, &integer_id));
+    CHECK(minic_core_type_register(&context, &type, &duplicate_id));
+    CHECK(duplicate_id == integer_id && context.type_count == 2U);
+    type.value.integer.is_signed = false;
+    CHECK(minic_core_type_register(&context, &type, &duplicate_id));
+    CHECK(duplicate_id != integer_id);
+    type.value.integer.is_signed = true;
+
+    /* A malformed type cannot publish a half-constructed TypeId. */
+    before = context.type_count;
+    type.alignment = 0U;
+    duplicate_id = MINIC_CORE_TYPE_INVALID;
+    CHECK(!minic_core_type_register(&context, &type, &duplicate_id));
+    CHECK(context.type_count == before);
+    CHECK(duplicate_id == MINIC_CORE_TYPE_INVALID);
+
+    /* A recursive record has a nominal identity before its body exists. */
+    (void)memset(&type, 0, sizeof(type));
+    type.kind = MINIC_CORE_TYPE_RECORD;
+    CHECK(minic_core_type_register(&context, &type, &record_id));
+    CHECK(minic_core_type_register(&context, &type, &duplicate_id));
+    CHECK(duplicate_id != record_id);
+
+    (void)memset(&type, 0, sizeof(type));
+    type.kind = MINIC_CORE_TYPE_POINTER;
+    type.has_layout = true;
+    type.size = 8U;
+    type.alignment = 8U;
+    type.value.pointer.pointee = record_id;
+    before = context.type_count;
+    type.value.pointer.pointee = MINIC_CORE_TYPE_INVALID;
+    CHECK(!minic_core_type_register(&context, &type, &duplicate_id));
+    CHECK(context.type_count == before);
+    type.value.pointer.pointee = record_id;
+    CHECK(minic_core_type_register(&context, &type, &pointer_id));
+    CHECK(minic_core_type_register(&context, &type, &duplicate_id));
+    CHECK(duplicate_id == pointer_id);
+
+    (void)memset(&field, 0, sizeof(field));
+    field.type_id = pointer_id;
+    field.byte_offset = 8U;
+    field.alignment = 8U;
+    (void)memset(&type, 0, sizeof(type));
+    type.kind = MINIC_CORE_TYPE_RECORD;
+    type.has_layout = true;
+    type.size = 16U;
+    type.alignment = 8U;
+    type.value.record.is_complete = true;
+    type.value.record.fields = &field;
+    type.value.record.field_count = 1U;
+    before = context.type_count;
+    type.value.record.field_count = SIZE_MAX;
+    CHECK(!minic_core_type_complete_record(&context, record_id, &type));
+    CHECK(!minic_core_type_get(&context, record_id)->value.record.is_complete);
+    type.value.record.field_count = 1U;
+    field.type_id = MINIC_CORE_TYPE_INVALID;
+    CHECK(!minic_core_type_complete_record(&context, record_id, &type));
+    CHECK(!minic_core_type_get(&context, record_id)->value.record.is_complete);
+    CHECK(context.type_count == before);
+    field.type_id = pointer_id;
+    CHECK(minic_core_type_complete_record(&context, record_id, &type));
+    field.byte_offset = 99U;
+    stored = minic_core_type_get(&context, record_id);
+    CHECK(stored != NULL && stored->value.record.is_complete);
+    CHECK(stored->value.record.field_count == 1U);
+    CHECK(stored->value.record.fields[0].type_id == pointer_id);
+    CHECK(stored->value.record.fields[0].byte_offset == 8U);
+    CHECK(!minic_core_type_complete_record(&context, record_id, &type));
+    CHECK(minic_core_type_get(&context, pointer_id)->value.pointer.pointee == record_id);
+
+    (void)memset(&type, 0, sizeof(type));
+    type.kind = MINIC_CORE_TYPE_ARRAY;
+    type.has_layout = true;
+    type.size = 0U;
+    type.alignment = 4U;
+    type.value.array.element = integer_id;
+    type.value.array.is_complete = true;
+    before = context.type_count;
+    type.value.array.element = MINIC_CORE_TYPE_INVALID;
+    CHECK(!minic_core_type_register(&context, &type, &duplicate_id));
+    CHECK(context.type_count == before);
+    type.value.array.element = integer_id;
+    CHECK(minic_core_type_register(&context, &type, &array_id));
+    type.has_layout = false;
+    type.alignment = 0U;
+    type.value.array.is_complete = false;
+    CHECK(minic_core_type_register(&context, &type, &incomplete_array_id));
+    CHECK(incomplete_array_id != array_id);
+
+    /* Array storage is one canonical CoreType: no second object-level count.
+     * Registration must reject mismatched/overflowing extents atomically. */
+    (void)memset(&type, 0, sizeof(type));
+    type.kind = MINIC_CORE_TYPE_ARRAY;
+    type.has_layout = true;
+    type.size = 8U;
+    type.alignment = 4U;
+    type.value.array.element = integer_id;
+    type.value.array.count = 2U;
+    type.value.array.is_complete = true;
+    CHECK(minic_core_type_register(&context, &type, &fixed_array_id));
+    CHECK(minic_core_type_register(&context, &type, &duplicate_id));
+    CHECK(duplicate_id == fixed_array_id);
+    before = context.type_count;
+    type.size = 4U;
+    CHECK(!minic_core_type_register(&context, &type, &duplicate_id));
+    CHECK(context.type_count == before);
+    type.size = 8U;
+    type.alignment = 8U;
+    CHECK(!minic_core_type_register(&context, &type, &duplicate_id));
+    CHECK(context.type_count == before);
+    type.has_abi_alignment_override = true;
+    CHECK(minic_core_type_register(&context, &type, &aligned_array_id));
+    CHECK(aligned_array_id != fixed_array_id);
+    before = context.type_count;
+    type.has_abi_alignment_override = false;
+    type.alignment = 4U;
+    type.value.array.count = SIZE_MAX;
+    type.size = SIZE_MAX;
+    CHECK(!minic_core_type_register(&context, &type, &duplicate_id));
+    CHECK(context.type_count == before);
+    type.value.array.count = 0U;
+    type.size = 0U;
+    CHECK(minic_core_type_register(&context, &type, &duplicate_id));
+    CHECK(duplicate_id == array_id);
+    CHECK(context.type_count == before);
+    type.has_layout = false;
+    CHECK(!minic_core_type_register(&context, &type, &duplicate_id));
+    CHECK(context.type_count == before);
+    type.value.array.is_complete = false;
+    type.alignment = 0U;
+    CHECK(minic_core_type_register(&context, &type, &duplicate_id));
+    CHECK(duplicate_id == incomplete_array_id);
+    type.has_layout = true;
+    type.alignment = 4U;
+    CHECK(!minic_core_type_register(&context, &type, &duplicate_id));
+    CHECK(context.type_count == before);
+    type.has_layout = false;
+    type.alignment = 0U;
+    type.value.array.count = 1U;
+    CHECK(!minic_core_type_register(&context, &type, &duplicate_id));
+    CHECK(context.type_count == before);
+
+    params[0] = integer_id;
+    params[1] = pointer_id;
+    (void)memset(&type, 0, sizeof(type));
+    type.kind = MINIC_CORE_TYPE_FUNCTION;
+    type.value.function.return_type = integer_id;
+    type.value.function.parameters = params;
+    type.value.function.parameter_count = 2U;
+    type.value.function.is_variadic = true;
+    type.value.function.calling_convention = MINIC_CALLING_CONVENTION_DEFAULT;
+    before = context.type_count;
+    type.value.function.parameter_count = SIZE_MAX;
+    CHECK(!minic_core_type_register(&context, &type, &duplicate_id));
+    CHECK(context.type_count == before);
+    type.value.function.parameter_count = 2U;
+    type.value.function.return_type = MINIC_CORE_TYPE_INVALID;
+    CHECK(!minic_core_type_register(&context, &type, &duplicate_id));
+    CHECK(context.type_count == before);
+    type.value.function.return_type = integer_id;
+    params[1] = MINIC_CORE_TYPE_INVALID;
+    CHECK(!minic_core_type_register(&context, &type, &duplicate_id));
+    CHECK(context.type_count == before);
+    params[1] = pointer_id;
+    CHECK(minic_core_type_register(&context, &type, &function_id));
+    params[1] = void_id;
+    stored = minic_core_type_get(&context, function_id);
+    CHECK(stored != NULL && stored->value.function.parameters[1] == pointer_id);
+    params[1] = pointer_id;
+    CHECK(minic_core_type_register(&context, &type, &another_function_id));
+    CHECK(another_function_id != function_id); /* Function ID is nominal. */
+    type.value.function.calling_convention = MINIC_CALLING_CONVENTION_MS_X64;
+    CHECK(minic_core_type_register(&context, &type, &alternate_function_id));
+    CHECK(alternate_function_id != function_id);
+
+    (void)memset(&type, 0, sizeof(type));
+    type.kind = MINIC_CORE_TYPE_FLOAT;
+    type.has_layout = true;
+    type.size = 4U;
+    type.alignment = 4U;
+    type.value.floating.format = MINIC_CORE_FLOAT_BINARY32;
+    CHECK(minic_core_type_register(&context, &type, &float_id));
+    CHECK(minic_core_type_get(&context, float_id)->value.floating.format ==
+          MINIC_CORE_FLOAT_BINARY32);
+
+    (void)memset(&type, 0, sizeof(type));
+    type.kind = MINIC_CORE_TYPE_VECTOR;
+    type.has_layout = true;
+    type.size = 16U;
+    type.alignment = 16U;
+    type.value.vector.element = integer_id;
+    type.value.vector.element_count = 4U;
+    before = context.type_count;
+    type.value.vector.element = MINIC_CORE_TYPE_INVALID;
+    CHECK(!minic_core_type_register(&context, &type, &duplicate_id));
+    CHECK(context.type_count == before);
+    type.value.vector.element = integer_id;
+    CHECK(minic_core_type_register(&context, &type, &vector_id));
+    CHECK(minic_core_type_get(&context, vector_id)->value.vector.element_count == 4U);
+
+    (void)memset(&type, 0, sizeof(type));
+    type.kind = MINIC_CORE_TYPE_OPAQUE;
+    CHECK(minic_core_type_register(&context, &type, &opaque_id));
+    CHECK(minic_core_type_register(&context, &type, &duplicate_id));
+    CHECK(duplicate_id != opaque_id);
+
+    minic_core_type_context_destroy(&context);
+    CHECK(context.types == NULL && context.type_count == 0U);
+    CHECK(check_large_type_index() == 0);
+    (void)puts("CORE_TYPE_CONTEXT=PASS scalar pointer recursive_record fixed_zero_incomplete_array function_abi ownership rollback");
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/core/core_type_import_test.c"}
+#include "compiler/c_lower/core_type_import.h"
+#include "target/data_layout_source.h"
+
+#include <stdio.h>
+#include <string.h>
+
+#define CHECK(condition) do { \
+    if (!(condition)) { \
+        (void)fprintf(stderr, "CORE_TYPE_IMPORT=FAIL line=%d expression=%s\n", \
+                      __LINE__, #condition); \
+        return 1; \
+    } \
+} while (0)
+
+/* C's four TS 18661 spellings are source identities, not Core floating
+ * encodings. Every target must import its physical representation exactly,
+ * while same-layout C aliases can share the execution type safely. */
+static bool check_physical_float_import(void) {
+    static const MinicTargetArchitecture architectures[] = {
+        MINIC_TARGET_ARCH_RISCV32, MINIC_TARGET_ARCH_RISCV64,
+        MINIC_TARGET_ARCH_X86_64, MINIC_TARGET_ARCH_AARCH64,
+        MINIC_TARGET_ARCH_LOONGARCH64,
+    };
+    size_t i;
+    for (i = 0U; i < sizeof(architectures) / sizeof(architectures[0]); ++i) {
+        MinicTargetInvocation target;
+        MinicC0Program program;
+        MinicCoreTypeContext types;
+        MinicCoreTypeImporter importer;
+        MinicCoreTypeId f32, f64, ld = MINIC_CORE_TYPE_INVALID;
+        MinicCoreTypeId f32_alias, f64_alias, f32x, f64x;
+        const MinicCoreType *wide;
+        bool ok;
+        if (!minic_target_invocation_begin(
+                &target, minic_target_info_for_architecture(architectures[i])))
+            return false;
+        minic_c0_program_initialize(&program);
+        minic_core_type_context_initialize(&types);
+        if (!minic_core_type_importer_initialize(&importer, &program, &target, &types)) {
+            minic_core_type_context_destroy(&types);
+            minic_c0_program_destroy(&program);
+            return false;
+        }
+        ok = minic_core_type_import(&importer, minic_type_float(), &f32) &&
+             minic_core_type_import(&importer, minic_type_double(), &f64) &&
+             minic_core_type_import(&importer, minic_type_long_double(), &ld);
+        if (ok && architectures[i] != MINIC_TARGET_ARCH_RISCV32) {
+            ok = minic_core_type_import(&importer, minic_type_float32(), &f32_alias) &&
+                 minic_core_type_import(&importer, minic_type_float64(), &f64_alias) &&
+                 minic_core_type_import(&importer, minic_type_float32x(), &f32x) &&
+                 minic_core_type_import(&importer, minic_type_float64x(), &f64x) &&
+                 f32 == f32_alias && f64 == f64_alias &&
+                 f64 == f32x && ld == f64x;
+        }
+        wide = minic_core_type_get(&types, ld);
+        ok = ok && wide != NULL && wide->size == 16U &&
+             wide->value.floating.format ==
+                (architectures[i] == MINIC_TARGET_ARCH_X86_64
+                     ? MINIC_CORE_FLOAT_X87_EXTENDED80
+                     : MINIC_CORE_FLOAT_BINARY128);
+        if (ok && (architectures[i] == MINIC_TARGET_ARCH_RISCV64 ||
+                   architectures[i] == MINIC_TARGET_ARCH_X86_64)) {
+            MinicCoreTypeId ieee128;
+            ok = minic_core_type_import(&importer, minic_type_float128(), &ieee128) &&
+                 (ieee128 == ld) == (architectures[i] == MINIC_TARGET_ARCH_RISCV64);
+        }
+        minic_core_type_importer_destroy(&importer);
+        minic_core_type_context_destroy(&types);
+        minic_c0_program_destroy(&program);
+        if (!ok) return false;
+    }
+    return true;
+}
+
+int main(void) {
+    MinicC0Program program;
+    MinicCoreTypeContext context;
+    MinicCoreTypeImporter importer;
+    MinicTargetInvocation invocation;
+    const MinicTargetInvocation *source = &invocation;
+    MinicRecordId node_record, twin_record, qualified_record;
+    MinicRecordId packed_record, flexible_record, zero_record;
+    MinicEnumId incomplete_enum_a, incomplete_enum_b, complete_enum;
+    MinicType node_source, twin_source, aligned_node_source;
+    MinicType pointer_source, pointer_const_source;
+    MinicType qualified_record_source, qualified_record_cv, qualified_record_pointer;
+    MinicType integer_pointer_source;
+    MinicType array_source, function_source, vector_source, const_integer;
+    MinicType volatile_integer, const_volatile_integer;
+    MinicType incomplete_enum_a_type, incomplete_enum_b_type;
+    MinicType incomplete_enum_pointer, complete_enum_type;
+    MinicType packed_source, flexible_source, zero_source;
+    MinicType flexible_array_source, zero_array_source;
+    MinicType parameters[2];
+    MinicCoreTypeId node_id, twin_id, aligned_node_id;
+    MinicCoreTypeId qualified_record_id, qualified_record_pointer_id;
+    MinicCoreTypeId pointer_id, pointer_const_id;
+    MinicCoreTypeId int_id, const_int_id, volatile_int_id, const_volatile_int_id;
+    MinicCoreTypeId integer_pointer_id;
+    MinicCoreTypeId array_id, function_id, repeated_function_id, vector_id, bad_id;
+    MinicCoreTypeId register_vector_id;
+    MinicCoreTypeId incomplete_enum_a_id, incomplete_enum_b_id;
+    MinicCoreTypeId incomplete_enum_pointer_id, repeated_incomplete_enum_a_id;
+    MinicCoreTypeId complete_enum_id;
+    MinicCoreTypeId packed_id, flexible_id, zero_id;
+    MinicCoreType register_vector;
+    const MinicCoreType *node, *pointer, *array, *function, *vector, *int_type;
+    size_t node_size, node_alignment, field_offset, bit_offset, storage_alignment;
+    size_t previous_count;
+
+    CHECK(check_physical_float_import());
+
+    CHECK(minic_target_invocation_begin(
+        &invocation, minic_target_info_for_architecture(MINIC_TARGET_ARCH_X86_64)));
+    minic_c0_program_initialize(&program);
+    minic_core_type_context_initialize(&context);
+    CHECK(minic_c0_program_add_record(&program, "Node", 4U, &node_record));
+    node_source = minic_type_record(node_record);
+    aligned_node_source = node_source;
+    aligned_node_source.explicit_alignment = 32U;
+    CHECK(minic_type_pointer_to(node_source, &pointer_source));
+    CHECK(minic_c0_record_add_field(&program, node_record, "next", 4U,
+                                    pointer_source, 1U));
+    /* The record builder now materializes an ArrayType for fixed extents. */
+    CHECK(minic_c0_record_add_field(&program, node_record, "data", 4U,
+                                    minic_type_int(), 3U));
+    CHECK(minic_c0_record_add_bit_field(&program, node_record, "flags", 5U,
+                                        minic_type_unsigned_int(), 5U));
+    CHECK(minic_c0_program_finish_record(&program, node_record));
+
+    /* Same fields, different C declaration => different nominal Core TypeIds. */
+    CHECK(minic_c0_program_add_record(&program, "Twin", 4U, &twin_record));
+    twin_source = minic_type_record(twin_record);
+    CHECK(minic_c0_record_add_field(&program, twin_record, "next", 4U,
+                                    pointer_source, 1U));
+    CHECK(minic_c0_record_add_field(&program, twin_record, "data", 4U,
+                                    minic_type_int(), 3U));
+    CHECK(minic_c0_record_add_bit_field(&program, twin_record, "flags", 5U,
+                                        minic_type_unsigned_int(), 5U));
+    CHECK(minic_c0_program_finish_record(&program, twin_record));
+    CHECK(minic_c0_program_add_record(&program, "NodeCV", 6U, &qualified_record));
+    qualified_record_source = minic_type_record(qualified_record);
+    CHECK(minic_type_add_const(qualified_record_source, &qualified_record_cv));
+    CHECK(minic_type_add_volatile(qualified_record_cv, &qualified_record_cv));
+    CHECK(minic_type_pointer_to(qualified_record_cv, &qualified_record_pointer));
+    CHECK(minic_c0_record_add_field(&program, qualified_record, "next", 4U,
+                                    qualified_record_pointer, 1U));
+    CHECK(minic_c0_program_finish_record(&program, qualified_record));
+    /* C policy stops at ingress: Core captures only neutral layout facts
+     * and canonical materialized array extents, not declarator spellings. */
+    CHECK(minic_c0_program_add_record(&program, "Packed", 6U, &packed_record));
+    packed_source = minic_type_record(packed_record);
+    CHECK(minic_c0_record_add_field(&program, packed_record, "value", 5U,
+                                    minic_type_int(), 1U));
+    program.records[packed_record].is_packed = true;
+    program.records[packed_record].fields[0].is_packed = true;
+    CHECK(minic_c0_record_add_bit_field(&program, packed_record, "flags", 5U,
+                                        minic_type_unsigned_int(), 3U));
+    CHECK(minic_c0_record_add_unnamed_bit_field(&program, packed_record,
+                                               minic_type_unsigned_int(), 0U));
+    CHECK(minic_c0_record_add_field(&program, packed_record, "tail", 4U,
+                                    minic_type_signed_char(), 1U));
+    CHECK(minic_c0_program_finish_record(&program, packed_record));
+
+    CHECK(minic_c0_program_add_incomplete_array_type(
+        &program, minic_type_int(), &flexible_array_source));
+    CHECK(minic_c0_program_add_record(&program, "Flexible", 8U, &flexible_record));
+    flexible_source = minic_type_record(flexible_record);
+    CHECK(minic_c0_record_add_field(&program, flexible_record, "head", 4U,
+                                    minic_type_int(), 1U));
+    CHECK(minic_c0_record_add_field(&program, flexible_record, "tail", 4U,
+                                    flexible_array_source, 1U));
+    program.records[flexible_record].fields[1].is_flexible_array = true;
+    CHECK(minic_c0_program_finish_record(&program, flexible_record));
+
+    CHECK(minic_c0_program_add_zero_length_array_type(
+        &program, minic_type_int(), &zero_array_source));
+    CHECK(minic_c0_program_add_record(&program, "ZeroTail", 8U, &zero_record));
+    zero_source = minic_type_record(zero_record);
+    CHECK(minic_c0_record_add_field(&program, zero_record, "head", 4U,
+                                    minic_type_int(), 1U));
+    CHECK(minic_c0_record_add_field(&program, zero_record, "tail", 4U,
+                                    zero_array_source, 1U));
+    CHECK(minic_c0_program_finish_record(&program, zero_record));
+    CHECK(minic_c0_program_add_array_type(&program, minic_type_int(), 5U,
+                                          &array_source));
+
+    /* GNU permits forward enums in declarations of callback signatures.
+     * They carry nominal identity, but no integer ABI or object storage until
+     * completed. An unrelated complete enum still imports as its integer ABI. */
+    CHECK(minic_c0_program_add_enum(&program, "OpaqueA", 7U, &incomplete_enum_a));
+    CHECK(minic_c0_program_add_enum(&program, "OpaqueB", 7U, &incomplete_enum_b));
+    CHECK(minic_c0_program_add_enum(&program, "Complete", 8U, &complete_enum));
+    CHECK(minic_c0_program_finish_enum(&program, complete_enum,
+                                       minic_type_unsigned_int()));
+    incomplete_enum_a_type = minic_type_enum(incomplete_enum_a);
+    incomplete_enum_b_type = minic_type_enum(incomplete_enum_b);
+    complete_enum_type = minic_type_enum(complete_enum);
+    CHECK(minic_type_pointer_to(incomplete_enum_a_type, &incomplete_enum_pointer));
+
+    parameters[0] = pointer_source;
+    parameters[1] = minic_type_int();
+    CHECK(minic_c0_program_add_variadic_function_type(&program,
+                minic_type_unsigned_long(), parameters, 2U, true, &function_source));
+    CHECK(minic_type_gnu_fixed_vector(minic_type_unsigned_char(), 16U,
+                                       &vector_source));
+    CHECK(minic_type_add_const(minic_type_int(), &const_integer));
+    CHECK(minic_type_add_volatile(minic_type_int(), &volatile_integer));
+    CHECK(minic_type_add_volatile(const_integer, &const_volatile_integer));
+    CHECK(minic_type_pointer_to(const_integer, &pointer_const_source));
+    CHECK(minic_type_pointer_to(minic_type_int(), &integer_pointer_source));
+
+    CHECK(minic_core_type_importer_initialize(&importer, &program, source, &context));
+    CHECK(minic_core_type_import(&importer, node_source, &node_id));
+    CHECK(minic_core_type_import(&importer, aligned_node_source, &aligned_node_id));
+    CHECK(aligned_node_id != node_id);
+    CHECK(minic_core_type_unqualified(&context, aligned_node_id) == node_id);
+    CHECK(minic_core_type_get(&context, aligned_node_id)->kind == MINIC_CORE_TYPE_ALIGNED);
+    CHECK(minic_core_type_get(&context, aligned_node_id)->has_abi_alignment_override);
+    CHECK(minic_core_type_get(&context, aligned_node_id)->alignment == 32U);
+    CHECK(minic_core_type_import(&importer, pointer_source, &pointer_id));
+    CHECK(minic_core_type_import(&importer, packed_source, &packed_id));
+    CHECK(minic_core_type_get(&context, packed_id)->value.record.has_nondefault_layout_policy);
+    CHECK(minic_core_type_get(&context, packed_id)->value.record.fields[0]
+              .has_nondefault_layout_policy);
+    {
+        const MinicCoreType *packed = minic_core_type_get(&context, packed_id);
+        const MinicRecord *source_record = minic_c0_program_record(&program, packed_record);
+        CHECK(packed != NULL && packed->value.record.field_count == 4U);
+        CHECK(packed->value.record.fields[1].is_bit_field &&
+              packed->value.record.fields[1].alignment == 1U);
+        CHECK(packed->value.record.fields[2].is_bit_field &&
+              packed->value.record.fields[2].bit_width == 0U &&
+              packed->value.record.fields[2].alignment == 4U);
+        CHECK(minic_data_layout_record_field_storage_alignment(
+                  source, &program, source_record, 2U, &storage_alignment) &&
+              storage_alignment == packed->value.record.fields[2].alignment);
+        CHECK(!minic_data_layout_record_field_alignment(
+                  source, &program, source_record, 2U, &storage_alignment));
+    }
+    CHECK(minic_core_type_import(&importer, flexible_source, &flexible_id));
+    CHECK(minic_core_type_import(&importer, zero_source, &zero_id));
+    {
+        const MinicCoreType *flexible = minic_core_type_get(&context, flexible_id);
+        const MinicCoreType *zero = minic_core_type_get(&context, zero_id);
+        const MinicCoreType *tail;
+        CHECK(flexible != NULL && zero != NULL &&
+              flexible->value.record.field_count == 2U &&
+              zero->value.record.field_count == 2U);
+        tail = minic_core_type_get(&context, flexible->value.record.fields[1].type_id);
+        CHECK(tail != NULL && tail->kind == MINIC_CORE_TYPE_ARRAY &&
+              !tail->value.array.is_complete && tail->value.array.count == 0U &&
+              !tail->has_layout);
+        tail = minic_core_type_get(&context, zero->value.record.fields[1].type_id);
+        CHECK(tail != NULL && tail->kind == MINIC_CORE_TYPE_ARRAY &&
+              tail->value.array.is_complete && tail->value.array.count == 0U &&
+              tail->has_layout && tail->size == 0U);
+    }
+    CHECK(minic_core_type_import(&importer, twin_source, &twin_id));
+    CHECK(node_id != twin_id);
+    CHECK(minic_core_type_import(&importer, qualified_record_source,
+                                  &qualified_record_id));
+    CHECK(minic_core_type_import(&importer, qualified_record_pointer,
+                                  &qualified_record_pointer_id));
+    {
+        const MinicCoreType *qualified_record_type =
+            minic_core_type_get(&context, qualified_record_id);
+        const MinicCoreType *recursive_pointer =
+            minic_core_type_get(&context, qualified_record_pointer_id);
+        const MinicCoreType *recursive_pointee;
+        CHECK(qualified_record_type != NULL && recursive_pointer != NULL);
+        CHECK(qualified_record_type->kind == MINIC_CORE_TYPE_RECORD &&
+              qualified_record_type->value.record.is_complete &&
+              qualified_record_type->has_layout);
+        CHECK(recursive_pointer->kind == MINIC_CORE_TYPE_POINTER);
+        recursive_pointee = minic_core_type_get(&context,
+                                               recursive_pointer->value.pointer.pointee);
+        CHECK(recursive_pointee == qualified_record_type);
+        CHECK(recursive_pointee->has_layout &&
+              recursive_pointee->size == qualified_record_type->size &&
+              recursive_pointee->alignment == qualified_record_type->alignment);
+        CHECK(minic_core_type_unqualified(&context,
+                recursive_pointer->value.pointer.pointee) == qualified_record_id);
+        CHECK(qualified_record_type->value.record.fields[0].type_id ==
+              qualified_record_pointer_id);
+    }
+    CHECK(minic_core_type_import(&importer, minic_type_int(), &int_id));
+    CHECK(minic_core_type_import(&importer, incomplete_enum_a_type, &incomplete_enum_a_id));
+    CHECK(minic_core_type_import(&importer, incomplete_enum_b_type, &incomplete_enum_b_id));
+    CHECK(minic_core_type_import(&importer, incomplete_enum_a_type,
+                                  &repeated_incomplete_enum_a_id));
+    CHECK(incomplete_enum_a_id == repeated_incomplete_enum_a_id &&
+          incomplete_enum_a_id != incomplete_enum_b_id);
+    CHECK(minic_core_type_get(&context, incomplete_enum_a_id)->kind ==
+          MINIC_CORE_TYPE_OPAQUE &&
+          !minic_core_type_get(&context, incomplete_enum_a_id)->has_layout);
+    CHECK(minic_core_type_get(&context, incomplete_enum_b_id)->kind ==
+          MINIC_CORE_TYPE_OPAQUE &&
+          !minic_core_type_get(&context, incomplete_enum_b_id)->has_layout);
+    CHECK(minic_core_type_import(&importer, incomplete_enum_pointer,
+                                  &incomplete_enum_pointer_id));
+    CHECK(minic_core_type_get(&context, incomplete_enum_pointer_id)->kind ==
+          MINIC_CORE_TYPE_POINTER &&
+          minic_core_type_get(&context, incomplete_enum_pointer_id)
+              ->value.pointer.pointee == incomplete_enum_a_id);
+    CHECK(minic_core_type_import(&importer, complete_enum_type, &complete_enum_id));
+    CHECK(minic_core_type_get(&context, complete_enum_id)->kind ==
+          MINIC_CORE_TYPE_INTEGER &&
+          minic_core_type_get(&context, complete_enum_id)->has_layout);
+    CHECK(minic_core_type_import(&importer, const_integer, &const_int_id));
+    CHECK(int_id == const_int_id); /* cv affects accesses, never execution type identity. */
+    CHECK(minic_core_type_unqualified(&context, const_int_id) == int_id);
+    CHECK(minic_core_type_import(&importer, volatile_integer, &volatile_int_id));
+    CHECK(volatile_int_id == int_id);
+    CHECK(minic_core_type_unqualified(&context, volatile_int_id) == int_id);
+    CHECK(minic_core_type_import(&importer, const_volatile_integer, &const_volatile_int_id));
+    CHECK(const_volatile_int_id == int_id);
+    CHECK(minic_core_type_unqualified(&context, const_volatile_int_id) == int_id);
+    CHECK(minic_core_type_import(&importer, integer_pointer_source, &integer_pointer_id));
+    CHECK(minic_core_type_import(&importer, pointer_const_source, &pointer_const_id));
+    CHECK(pointer_const_id == integer_pointer_id);
+    CHECK(minic_core_type_get(&context, pointer_const_id)->value.pointer.pointee == int_id);
+
+    CHECK(minic_data_layout_type(source, &program, node_source,
+                                  &node_size, &node_alignment));
+    node = minic_core_type_get(&context, node_id);
+    pointer = minic_core_type_get(&context, pointer_id);
+    CHECK(node != NULL && pointer != NULL);
+    CHECK(node->kind == MINIC_CORE_TYPE_RECORD && node->value.record.is_complete);
+    CHECK(node->has_layout && node->size == node_size &&
+          node->alignment == node_alignment);
+    CHECK(node->value.record.field_count == 3U);
+    CHECK(pointer->kind == MINIC_CORE_TYPE_POINTER &&
+          pointer->value.pointer.pointee == node_id && pointer->size == 8U);
+    CHECK(node->value.record.fields[0].type_id == pointer_id);
+    CHECK(minic_data_layout_record_field_layout(source, &program,
+                minic_c0_program_record(&program, node_record), 1U,
+                &field_offset, &bit_offset));
+    CHECK(node->value.record.fields[1].byte_offset == field_offset);
+    CHECK(!node->value.record.fields[1].is_bit_field);
+    array = minic_core_type_get(&context, node->value.record.fields[1].type_id);
+    CHECK(array != NULL && array->kind == MINIC_CORE_TYPE_ARRAY);
+    CHECK(array->value.array.count == 3U && array->value.array.is_complete);
+    CHECK(array->value.array.element == int_id && array->size == 12U);
+    CHECK(node->value.record.fields[2].is_bit_field &&
+          node->value.record.fields[2].bit_width == 5U);
+    CHECK(minic_data_layout_record_field_layout(source, &program,
+                minic_c0_program_record(&program, node_record), 2U,
+                &field_offset, &bit_offset));
+    CHECK(node->value.record.fields[2].byte_offset == field_offset &&
+          node->value.record.fields[2].bit_offset == bit_offset);
+
+    CHECK(minic_core_type_import(&importer, array_source, &array_id));
+    array = minic_core_type_get(&context, array_id);
+    CHECK(array != NULL && array->value.array.count == 5U && array->size == 20U);
+    CHECK(minic_core_type_import(&importer, function_source, &function_id));
+    CHECK(minic_core_type_import(&importer, function_source, &repeated_function_id));
+    CHECK(repeated_function_id == function_id);
+    function = minic_core_type_get(&context, function_id);
+    CHECK(function != NULL && function->kind == MINIC_CORE_TYPE_FUNCTION);
+    CHECK(!function->has_layout && function->value.function.is_variadic);
+    CHECK(function->value.function.parameter_count == 2U);
+    CHECK(function->value.function.parameters[0] == pointer_id &&
+          function->value.function.parameters[1] == int_id);
+    int_type = minic_core_type_get(&context, function->value.function.return_type);
+    CHECK(int_type != NULL && int_type->kind == MINIC_CORE_TYPE_INTEGER &&
+          int_type->value.integer.bit_width == 64U &&
+          !int_type->value.integer.is_signed);
+
+    CHECK(minic_core_type_import(&importer, vector_source, &vector_id));
+    vector = minic_core_type_get(&context, vector_id);
+    CHECK(vector != NULL && vector->kind == MINIC_CORE_TYPE_VECTOR);
+    CHECK(vector->value.vector.element_count == 16U && vector->size == 16U);
+    CHECK(vector->value.vector.representation == MINIC_CORE_VECTOR_STORAGE_ONLY);
+    /* The same element count and byte layout do not imply the same Core
+     * value representation. Neither representation depends on a C type name. */
+    register_vector = *vector;
+    register_vector.value.vector.representation = MINIC_CORE_VECTOR_REGISTER_VALUE;
+    CHECK(minic_core_type_register(&context, &register_vector, &register_vector_id));
+    CHECK(register_vector_id != vector_id);
+    CHECK(minic_core_type_get(&context, register_vector_id)->value.vector.representation ==
+          MINIC_CORE_VECTOR_REGISTER_VALUE);
+    CHECK(minic_core_type_register(&context, &register_vector, &bad_id));
+    CHECK(bad_id == register_vector_id);
+    register_vector.value.vector.representation = (MinicCoreVectorRepresentation)5;
+    bad_id = MINIC_CORE_TYPE_INVALID;
+    CHECK(!minic_core_type_register(&context, &register_vector, &bad_id));
+    CHECK(bad_id == MINIC_CORE_TYPE_INVALID);
+
+    /* One failed conversion poisons the transaction, never returns a valid ID. */
+    previous_count = context.type_count;
+    bad_id = 0U;
+    CHECK(!minic_core_type_import(&importer,
+                                   minic_type_record(MINIC_RECORD_INVALID), &bad_id));
+    CHECK(bad_id == MINIC_CORE_TYPE_INVALID && importer.failed);
+    CHECK(context.type_count == previous_count);
+    CHECK(!minic_core_type_import(&importer, minic_type_int(), &bad_id));
+    CHECK(bad_id == MINIC_CORE_TYPE_INVALID);
+
+    minic_core_type_importer_destroy(&importer);
+    minic_core_type_context_destroy(&context);
+    minic_c0_program_destroy(&program);
+    (void)puts("CORE_TYPE_IMPORT=PASS recursion nominal incomplete_enum_opaque complete_enum_integer layout packed flexible zero_array array_field bitfield function vector poison");
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/core/core_type_snapshot_test.c"}
+#include "compiler/c_lower/core_ir_source_internal.h"
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#define CHECK(condition) do { \
+    if (!(condition)) { \
+        (void)fprintf(stderr, "CORE_TYPE_SNAPSHOT=FAIL line=%d expression=%s\n", \
+                      __LINE__, #condition); \
+        return 1; \
+    } \
+} while (0)
+
+typedef struct TypeIds {
+    MinicCoreTypeId boolean, i8, i32, u32, array_i32_2;
+    MinicCoreTypeId f64, long_double;
+    MinicCoreTypeId record_a, record_b, incomplete_record;
+    MinicCoreTypeId ptr_record_a, ptr_record_b, ptr_i8, ptr_i32;
+    MinicCoreTypeId function_a, function_b, ptr_function_a;
+} TypeIds;
+
+static bool make_type_context(MinicCoreTypeContext *context, TypeIds *ids) {
+    MinicCoreType type = {0};
+    MinicCoreRecordField field = {0};
+    MinicCoreTypeId parameter;
+    minic_core_type_context_initialize(context);
+    type.kind = MINIC_CORE_TYPE_INTEGER;
+    type.has_layout = true;
+    type.size = 1U;
+    type.alignment = 1U;
+    type.value.integer.bit_width = 1U;
+    type.value.integer.is_bool = true;
+    if (!minic_core_type_register(context, &type, &ids->boolean)) return false;
+    type.value.integer.bit_width = 8U;
+    type.value.integer.is_bool = false;
+    type.value.integer.is_signed = true;
+    if (!minic_core_type_register(context, &type, &ids->i8)) return false;
+    type.size = 4U;
+    type.alignment = 4U;
+    type.value.integer.bit_width = 32U;
+    type.value.integer.is_signed = true;
+    if (!minic_core_type_register(context, &type, &ids->i32)) return false;
+    type.value.integer.is_signed = false;
+    if (!minic_core_type_register(context, &type, &ids->u32)) return false;
+
+    (void)memset(&type, 0, sizeof(type));
+    type.kind = MINIC_CORE_TYPE_FLOAT;
+    type.has_layout = true;
+    type.size = 8U;
+    type.alignment = 8U;
+    type.value.floating.format = MINIC_CORE_FLOAT_BINARY64;
+    if (!minic_core_type_register(context, &type, &ids->f64)) return false;
+    type.size = 16U;
+    type.alignment = 16U;
+    type.value.floating.format = MINIC_CORE_FLOAT_BINARY128;
+    if (!minic_core_type_register(context, &type, &ids->long_double)) return false;
+
+    /* Fixed object repetition lives in one Core ARRAY type; CoreObject itself
+     * has no second independent extent. */
+    (void)memset(&type, 0, sizeof(type));
+    type.kind = MINIC_CORE_TYPE_ARRAY;
+    type.has_layout = true;
+    type.size = 8U;
+    type.alignment = 4U;
+    type.value.array.element = ids->i32;
+    type.value.array.count = 2U;
+    type.value.array.is_complete = true;
+    if (!minic_core_type_register(context, &type, &ids->array_i32_2)) return false;
+
+    (void)memset(&type, 0, sizeof(type));
+    type.kind = MINIC_CORE_TYPE_RECORD;
+    if (!minic_core_type_register(context, &type, &ids->record_a) ||
+        !minic_core_type_register(context, &type, &ids->record_b) ||
+        !minic_core_type_register(context, &type, &ids->incomplete_record)) return false;
+    (void)memset(&type, 0, sizeof(type));
+    type.kind = MINIC_CORE_TYPE_POINTER;
+    type.has_layout = true;
+    type.size = 8U;
+    type.alignment = 8U;
+    type.value.pointer.pointee = ids->record_a;
+    if (!minic_core_type_register(context, &type, &ids->ptr_record_a)) return false;
+    type.value.pointer.pointee = ids->record_b;
+    if (!minic_core_type_register(context, &type, &ids->ptr_record_b)) return false;
+    type.value.pointer.pointee = ids->i32;
+    if (!minic_core_type_register(context, &type, &ids->ptr_i32)) return false;
+    type.value.pointer.pointee = ids->i8;
+    if (!minic_core_type_register(context, &type, &ids->ptr_i8)) return false;
+
+    field.type_id = ids->i32;
+    field.byte_offset = 8U;
+    field.alignment = 4U;
+    (void)memset(&type, 0, sizeof(type));
+    type.kind = MINIC_CORE_TYPE_RECORD;
+    type.has_layout = true;
+    type.size = 16U;
+    type.alignment = 8U;
+    type.value.record.is_complete = true;
+    type.value.record.fields = &field;
+    type.value.record.field_count = 1U;
+    if (!minic_core_type_complete_record(context, ids->record_a, &type) ||
+        !minic_core_type_complete_record(context, ids->record_b, &type)) return false;
+
+    parameter = ids->i32;
+    (void)memset(&type, 0, sizeof(type));
+    type.kind = MINIC_CORE_TYPE_FUNCTION;
+    type.value.function.return_type = ids->i32;
+    type.value.function.parameters = &parameter;
+    type.value.function.parameter_count = 1U;
+    type.value.function.calling_convention = MINIC_CALLING_CONVENTION_DEFAULT;
+    if (!minic_core_type_register(context, &type, &ids->function_a) ||
+        !minic_core_type_register(context, &type, &ids->function_b) ||
+        ids->function_a == ids->function_b) return false;
+    (void)memset(&type, 0, sizeof(type));
+    type.kind = MINIC_CORE_TYPE_POINTER;
+    type.has_layout = true;
+    type.size = 8U;
+    type.alignment = 8U;
+    type.value.pointer.pointee = ids->function_a;
+    return minic_core_type_register(context, &type, &ids->ptr_function_a);
+}
+
+static bool set_snapshot_signature(MinicCoreFunction *function,
+                                   MinicCoreTypeContext *context,
+                                   MinicCoreTypeId return_id,
+                                   const MinicCoreTypeId *parameters,
+                                   size_t count) {
+    return minic_core_function_define_signature(
+        function, context, return_id, parameters, count,
+        MINIC_CALLING_CONVENTION_DEFAULT, false);
+}
+
+static bool build_indirect_fixture(MinicCoreSourceBuilder *builder,
+                                   MinicCoreTypeContext *context, const TypeIds *ids) {
+    MinicCoreFunction *function = &builder->core;
+    MinicType source_parameters[2], source_function_pointer;
+    MinicCoreTypeId core_parameters[2];
+    MinicCoreBlockId block;
+    MinicCoreCallSignatureId signature;
+    MinicCoreValueId callee, argument, result;
+    MinicCoreInstruction instruction = {0};
+    MinicCoreCallArgument call_argument = {0};
+    MinicCoreTerminator terminator = {0};
+    size_t begin;
+
+    minic_core_source_builder_initialize(builder);
+    if (!minic_type_pointer_to(minic_type_function(0U), &source_function_pointer))
+        return false;
+    source_parameters[0] = source_function_pointer;
+    source_parameters[1] = minic_type_int();
+    core_parameters[0] = ids->ptr_function_a;
+    core_parameters[1] = ids->i32;
+    if (!minic_core_function_set_signature(builder, "invoke", 6U,
+                                           minic_type_int(), source_parameters, 2U) ||
+        !set_snapshot_signature(function, context, ids->i32, core_parameters, 2U) ||
+        !minic_core_function_add_call_signature(builder, 0U, minic_type_int(),
+                                                &source_parameters[1], 1U, false,
+                                                MINIC_CALLING_CONVENTION_DEFAULT,
+                                                &signature) ||
+        !minic_core_function_add_block(function, &block)) return false;
+
+    instruction.kind = MINIC_CORE_INSTRUCTION_PARAMETER;
+    instruction.value.parameter_index = 0U;
+    if (!minic_core_function_append_source_value_instruction(
+            builder, block, &instruction, source_function_pointer, &callee)) return false;
+    instruction.value.parameter_index = 1U;
+    if (!minic_core_function_append_source_value_instruction(
+            builder, block, &instruction, minic_type_int(), &argument)) return false;
+    call_argument.kind = MINIC_CORE_CALL_ARGUMENT_VALUE;
+    call_argument.value.value_id = argument;
+    if (!minic_core_function_append_call_arguments(function, &call_argument, 1U,
+                                                   &begin)) return false;
+    (void)memset(&instruction, 0, sizeof(instruction));
+    instruction.kind = MINIC_CORE_INSTRUCTION_INDIRECT_CALL;
+    instruction.value.indirect_call.callee = callee;
+    instruction.value.indirect_call.signature_id = signature;
+    instruction.value.indirect_call.argument_begin = begin;
+    instruction.value.indirect_call.argument_count = 1U;
+    instruction.value.indirect_call.result_object = MINIC_CORE_OBJECT_INVALID;
+    if (!minic_core_function_append_source_value_instruction(
+            builder, block, &instruction, minic_type_int(), &result)) return false;
+    terminator.kind = MINIC_CORE_TERMINATOR_RETURN;
+    terminator.return_value = result;
+    terminator.return_object = MINIC_CORE_OBJECT_INVALID;
+    if (!minic_core_function_set_terminator(function, block, &terminator)) return false;
+
+    function->values[callee].core_type_id = ids->ptr_function_a;
+    function->values[argument].core_type_id = ids->i32;
+    function->values[result].core_type_id = ids->i32;
+    function->instructions[0].core_type_id = ids->ptr_function_a;
+    function->instructions[1].core_type_id = ids->i32;
+    function->instructions[2].core_type_id = ids->i32;
+    function->call_signatures[signature].core_function_type_id = ids->function_a;
+    return true;
+}
+
+static bool build_field_fixture(MinicCoreSourceBuilder *builder,
+                                MinicCoreTypeContext *context, const TypeIds *ids) {
+    MinicCoreFunction *function = &builder->core;
+    MinicType source_pointer_record, source_pointer_int;
+    MinicCoreTypeId core_parameter;
+    MinicCoreBlockId block;
+    MinicCoreValueId base, result;
+    MinicCoreInstruction instruction = {0};
+    MinicCoreTerminator terminator = {0};
+
+    minic_core_source_builder_initialize(builder);
+    if (!minic_type_pointer_to(minic_type_record(0U), &source_pointer_record) ||
+        !minic_type_pointer_to(minic_type_int(), &source_pointer_int)) return false;
+    core_parameter = ids->ptr_record_a;
+    if (!minic_core_function_set_signature(builder, "member", 6U,
+                                           source_pointer_int, &source_pointer_record, 1U) ||
+        !set_snapshot_signature(function, context, ids->ptr_i32, &core_parameter, 1U) ||
+        !minic_core_function_add_block(function, &block)) return false;
+    instruction.kind = MINIC_CORE_INSTRUCTION_PARAMETER;
+    instruction.value.parameter_index = 0U;
+    if (!minic_core_function_append_source_value_instruction(
+            builder, block, &instruction, source_pointer_record, &base)) return false;
+    (void)memset(&instruction, 0, sizeof(instruction));
+    instruction.kind = MINIC_CORE_INSTRUCTION_FIELD_ADDRESS;
+    instruction.value.field_address.base = base;
+    instruction.value.field_address.byte_offset = 8U;
+    if (!minic_core_function_append_source_value_instruction(
+            builder, block, &instruction, source_pointer_int, &result)) return false;
+    terminator.kind = MINIC_CORE_TERMINATOR_RETURN;
+    terminator.return_value = result;
+    terminator.return_object = MINIC_CORE_OBJECT_INVALID;
+    if (!minic_core_function_set_terminator(function, block, &terminator)) return false;
+    function->values[base].core_type_id = ids->ptr_record_a;
+    function->values[result].core_type_id = ids->ptr_i32;
+    function->instructions[0].core_type_id = ids->ptr_record_a;
+    function->instructions[1].core_type_id = ids->ptr_i32;
+    return true;
+}
+
+static bool build_object_fixture(MinicCoreSourceBuilder *builder,
+                                 MinicCoreTypeContext *context, const TypeIds *ids) {
+    MinicCoreFunction *function = &builder->core;
+    MinicCoreObjectId object_id;
+    MinicCoreBlockId block;
+    MinicCoreValueId result;
+    MinicCoreInstruction instruction = {0};
+    MinicCoreTerminator terminator = {0};
+    MinicSourceSpan span = {0};
+    minic_core_source_builder_initialize(builder);
+    if (!minic_core_function_set_signature(builder, "storage", 7U,
+                                           minic_type_int(), NULL, 0U) ||
+        !set_snapshot_signature(function, context, ids->i32, NULL, 0U) ||
+        !minic_core_function_add_object(builder, span, minic_type_int(), &object_id) ||
+        !minic_core_function_add_block(function, &block)) return false;
+    function->objects[object_id].core_type_id = ids->array_i32_2;
+    instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
+    instruction.value.integer_value = 0;
+    if (!minic_core_function_append_source_value_instruction(
+            builder, block, &instruction, minic_type_int(), &result)) return false;
+    function->values[result].core_type_id = ids->i32;
+    function->instructions[0].core_type_id = ids->i32;
+    terminator.kind = MINIC_CORE_TERMINATOR_RETURN;
+    terminator.return_value = result;
+    terminator.return_object = MINIC_CORE_OBJECT_INVALID;
+    return minic_core_function_set_terminator(function, block, &terminator);
+}
+
+/* An independent Core producer does not import C declarations, allocate a
+ * SourceDraft, or call the C-facing builder. Publication is CoreType-only. */
+static bool build_core_only_function(MinicCoreFunction *function,
+                                     MinicCoreTypeContext *context, const TypeIds *ids) {
+    MinicCoreInstruction instruction = {0};
+    MinicCoreTerminator terminator = {0};
+    MinicCoreBlockId block;
+    MinicCoreValueId value;
+    const char name[] = "core_only";
+
+    minic_core_function_initialize(function);
+    function->name = malloc(sizeof(name));
+    if (function->name == NULL) return false;
+    (void)memcpy(function->name, name, sizeof(name));
+    function->name_length = sizeof(name) - 1U;
+    if (!minic_core_function_define_signature(
+            function, context, ids->i32, NULL, 0U,
+            MINIC_CALLING_CONVENTION_DEFAULT, false)) return false;
+    if (!minic_core_function_add_block(function, &block)) return false;
+    instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
+    instruction.core_type_id = ids->i32;
+    instruction.value.integer_value = 42;
+    if (!minic_core_function_append_value_instruction(
+            function, block, &instruction, &value)) return false;
+    if (function->values[value].core_type_id != ids->i32 ||
+        function->instructions[0].core_type_id != ids->i32)
+        return false;
+    terminator.kind = MINIC_CORE_TERMINATOR_RETURN;
+    terminator.return_value = value;
+    terminator.return_object = MINIC_CORE_OBJECT_INVALID;
+    return minic_core_function_set_terminator(function, block, &terminator);
+}
+
+/* The C ingress stamps volatile onto each COPY access, not onto CoreType.
+ * A single record execution type therefore permits independent source and
+ * destination effects without retaining source cv type identities. */
+static bool test_source_copy_access_effects(void) {
+    MinicCoreSourceBuilder builder;
+    MinicCoreBlockId block;
+    MinicCoreValueId destination, source;
+    MinicCoreInstruction operation = {0};
+    MinicType record = minic_type_record(0U);
+    MinicType volatile_record, pointer, volatile_pointer;
+    MinicType parameters[2];
+    bool ok = false;
+    if (!minic_type_add_volatile(record, &volatile_record) ||
+        !minic_type_pointer_to(record, &pointer) ||
+        !minic_type_pointer_to(volatile_record, &volatile_pointer))
+        return false;
+    parameters[0] = pointer;
+    parameters[1] = volatile_pointer;
+    minic_core_source_builder_initialize(&builder);
+    if (!minic_core_function_set_signature(
+            &builder, "copy_effects", 12U, minic_type_int(), parameters, 2U) ||
+        !minic_core_function_add_block(&builder.core, &block))
+        goto done;
+    operation.kind = MINIC_CORE_INSTRUCTION_PARAMETER;
+    operation.value.parameter_index = 0U;
+    if (!minic_core_function_append_source_value_instruction(
+            &builder, block, &operation, pointer, &destination))
+        goto done;
+    operation.value.parameter_index = 1U;
+    if (!minic_core_function_append_source_value_instruction(
+            &builder, block, &operation, volatile_pointer, &source))
+        goto done;
+    operation = (MinicCoreInstruction){0};
+    operation.kind = MINIC_CORE_INSTRUCTION_RECORD_COPY;
+    operation.value.record_copy.destination_address = destination;
+    operation.value.record_copy.source_address = source;
+    if (!minic_core_function_append_source_effect_instruction(
+            &builder, block, &operation, record) ||
+        builder.core.instruction_count != 3U ||
+        builder.core.instructions[2].value.record_copy.destination_volatile ||
+        !builder.core.instructions[2].value.record_copy.source_volatile)
+        goto done;
+    operation.value.record_copy.destination_address = source;
+    operation.value.record_copy.source_address = destination;
+    if (!minic_core_function_append_source_effect_instruction(
+            &builder, block, &operation, record) ||
+        builder.core.instruction_count != 4U ||
+        !builder.core.instructions[3].value.record_copy.destination_volatile ||
+        builder.core.instructions[3].value.record_copy.source_volatile)
+        goto done;
+    operation.value.record_copy.source_address = MINIC_CORE_VALUE_INVALID;
+    if (minic_core_function_append_source_effect_instruction(
+            &builder, block, &operation, record) ||
+        builder.core.instruction_count != 4U)
+        goto done;
+    ok = true;
+done:
+    minic_core_source_builder_destroy(&builder);
+    return ok;
+}
+
+typedef struct ResolverState {
+    MinicCoreTypeId i32;
+    MinicCoreTypeId f64, long_double;
+    MinicCoreTypeId function_i32_i32;
+    size_t call_count;
+    size_t fail_on_call;
+} ResolverState;
+
+static bool resolve_source_type(void *data, MinicType source, MinicCoreTypeId *id) {
+    ResolverState *state = data;
+    ++state->call_count;
+    if (state->call_count == state->fail_on_call) return false;
+    if (minic_type_equal(source, minic_type_int()))
+        *id = state->i32;
+    else if (minic_type_equal(source, minic_type_double()))
+        *id = state->f64;
+    else if (minic_type_equal(source, minic_type_long_double()))
+        *id = state->long_double;
+    else if (minic_type_equal(source, minic_type_function(29U)))
+        *id = state->function_i32_i32;
+    else return false;
+    return true;
+}
+
+/* Synthetic TF libcalls have no C Program FunctionId/Module declaration.
+ * The direct callee's independent linker name must still own one nominal
+ * Core FUNCTION identity, including both result and fixed argument types. */
+static bool build_tf_libcall_function(MinicCoreSourceBuilder *builder) {
+    MinicCoreFunction *function = &builder->core;
+    const MinicType tf = minic_type_long_double();
+    const MinicType f64 = minic_type_double();
+    MinicType input_types[2] = {0};
+    MinicCoreCalleeId add, trunc, repeated_add;
+    MinicCoreBlockId block;
+    MinicCoreValueId inputs[2], sum, result;
+    MinicCoreCallArgument args[2] = {{0}, {0}};
+    MinicCoreInstruction instruction = {0};
+    MinicCoreTerminator terminator = {0};
+    size_t begin;
+
+    input_types[0] = input_types[1] = tf;
+    minic_core_source_builder_initialize(builder);
+    if (!minic_core_function_set_signature(builder, "tf_roundtrip", 12U,
+                                           f64, input_types, 2U) ||
+        !minic_core_function_add_callee(builder, "@core.float.add", 15U, tf,
+                                       input_types, 2U, false,
+                                       MINIC_CALLING_CONVENTION_DEFAULT, &add) ||
+        !minic_core_function_add_callee(builder, "@core.float.add", 15U, tf,
+                                       input_types, 2U, false,
+                                       MINIC_CALLING_CONVENTION_DEFAULT,
+                                       &repeated_add) ||
+        add != repeated_add ||
+        !minic_core_function_add_callee(builder, "@core.float.to_binary64", 23U, f64,
+                                       &tf, 1U, false,
+                                       MINIC_CALLING_CONVENTION_DEFAULT, &trunc) ||
+        add == trunc || function->callee_count != 2U ||
+        !minic_core_function_add_block(function, &block)) return false;
+    instruction.kind = MINIC_CORE_INSTRUCTION_PARAMETER;
+    instruction.value.parameter_index = 0U;
+    if (!minic_core_function_append_source_value_instruction(builder, block,
+            &instruction, tf, &inputs[0])) return false;
+    instruction.value.parameter_index = 1U;
+    if (!minic_core_function_append_source_value_instruction(builder, block,
+            &instruction, tf, &inputs[1])) return false;
+
+    args[0].kind = args[1].kind = MINIC_CORE_CALL_ARGUMENT_VALUE;
+    args[0].value.value_id = inputs[0];
+    args[1].value.value_id = inputs[1];
+    if (!minic_core_function_append_call_arguments(function, args, 2U, &begin))
+        return false;
+    instruction = (MinicCoreInstruction){0};
+    instruction.kind = MINIC_CORE_INSTRUCTION_CALL;
+    instruction.value.call.callee_id = add;
+    instruction.value.call.argument_begin = begin;
+    instruction.value.call.argument_count = 2U;
+    instruction.value.call.extended_float_operation = MINIC_CORE_EXT_FLOAT_ADD;
+    instruction.value.call.result_object = MINIC_CORE_OBJECT_INVALID;
+    if (!minic_core_function_append_source_value_instruction(builder, block,
+            &instruction, tf, &sum)) return false;
+
+    args[0].value.value_id = sum;
+    if (!minic_core_function_append_call_arguments(function, args, 1U, &begin))
+        return false;
+    instruction = (MinicCoreInstruction){0};
+    instruction.kind = MINIC_CORE_INSTRUCTION_CALL;
+    instruction.value.call.callee_id = trunc;
+    instruction.value.call.argument_begin = begin;
+    instruction.value.call.argument_count = 1U;
+    instruction.value.call.extended_float_operation = MINIC_CORE_EXT_FLOAT_TO_BINARY64;
+    instruction.value.call.result_object = MINIC_CORE_OBJECT_INVALID;
+    if (!minic_core_function_append_source_value_instruction(builder, block,
+            &instruction, f64, &result)) return false;
+    terminator.kind = MINIC_CORE_TERMINATOR_RETURN;
+    terminator.return_value = result;
+    terminator.return_object = MINIC_CORE_OBJECT_INVALID;
+    return minic_core_function_set_terminator(function, block, &terminator);
+}
+
+static bool build_simple_function(MinicCoreSourceBuilder *builder) {
+    MinicCoreFunction *function = &builder->core;
+    MinicCoreObjectId object_id;
+    MinicCoreGlobalId global_id;
+    MinicCoreCalleeId callee_id;
+    MinicCoreCallSignatureId signature_id;
+    MinicType parameter = minic_type_int();
+    MinicSourceSpan span = {0};
+    size_t fixed_register_id;
+    MinicCoreBlockId block;
+    MinicCoreValueId value;
+    MinicCoreInstruction instruction = {0};
+    MinicCoreTerminator terminator = {0};
+    minic_core_source_builder_initialize(builder);
+    if (!minic_core_function_set_signature(builder, "answer", 6U,
+                                           minic_type_int(), NULL, 0U) ||
+        !minic_core_function_add_object(builder, span, minic_type_int(),
+                                        &object_id) ||
+        !minic_core_function_add_global(builder, "scratch", 7U,
+                                        minic_type_int(), &global_id) ||
+        !minic_core_function_add_fixed_register_binding(builder, "r12", 3U,
+                                                         minic_type_int(), true,
+                                                         &fixed_register_id) ||
+        !minic_core_function_add_callee(builder, "other", 5U, minic_type_int(),
+                                        &parameter, 1U, false,
+                                        MINIC_CALLING_CONVENTION_DEFAULT, &callee_id) ||
+        !minic_core_function_add_call_signature(builder, 29U, minic_type_int(),
+                                                &parameter, 1U, false,
+                                                MINIC_CALLING_CONVENTION_DEFAULT,
+                                                &signature_id) ||
+        !minic_core_function_add_block(function, &block)) return false;
+    instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
+    instruction.value.integer_value = 7;
+    if (!minic_core_function_append_source_value_instruction(
+            builder, block, &instruction, minic_type_int(), &value)) return false;
+    terminator.kind = MINIC_CORE_TERMINATOR_RETURN;
+    terminator.return_value = value;
+    terminator.return_object = MINIC_CORE_OBJECT_INVALID;
+    return minic_core_function_set_terminator(function, block, &terminator);
+}
+
+/* A source enum pointer and an ordinary char pointer may lower to the same
+ * Core i8-pointer execution shape. C admission must reject the former before
+ * publication, without adding source-origin flags to the Core instruction. */
+static bool build_overflow_function(MinicCoreSourceBuilder *builder,
+                                    bool enum_destination) {
+    MinicCoreFunction *function = &builder->core;
+    MinicType parameter_types[3];
+    MinicCoreBlockId block;
+    MinicCoreValueId values[3], result;
+    MinicCoreInstruction instruction = {0};
+    MinicCoreTerminator terminator = {0};
+    size_t i;
+    minic_core_source_builder_initialize(builder);
+    parameter_types[0] = minic_type_int();
+    parameter_types[1] = minic_type_int();
+    if (!minic_type_pointer_to(enum_destination ? minic_type_enum(17U)
+                                                : minic_type_signed_char(),
+                               &parameter_types[2]) ||
+        !minic_core_function_set_signature(builder, "enumcheck", 9U,
+                                           minic_type_bool(), parameter_types, 3U) ||
+        !minic_core_function_add_block(function, &block)) return false;
+    for (i = 0U; i < 3U; ++i) {
+        instruction.kind = MINIC_CORE_INSTRUCTION_PARAMETER;
+        instruction.value.parameter_index = i;
+        if (!minic_core_function_append_source_value_instruction(
+                builder, block, &instruction, parameter_types[i], &values[i])) return false;
+    }
+    (void)memset(&instruction, 0, sizeof(instruction));
+    instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_OVERFLOW;
+    instruction.value.integer_overflow.operator_kind = MINIC_CORE_INTEGER_OVERFLOW_ADD;
+    instruction.value.integer_overflow.left = values[0];
+    instruction.value.integer_overflow.right = values[1];
+    instruction.value.integer_overflow.result_address = values[2];
+    if (!minic_core_function_append_source_value_instruction(
+            builder, block, &instruction, minic_type_bool(), &result)) return false;
+    terminator.kind = MINIC_CORE_TERMINATOR_RETURN;
+    terminator.return_value = result;
+    terminator.return_object = MINIC_CORE_OBJECT_INVALID;
+    return minic_core_function_set_terminator(function, block, &terminator);
+}
+
+static bool resolve_enum_overflow_type(void *data, MinicType source,
+                                       MinicCoreTypeId *id) {
+    const TypeIds *ids = data;
+    MinicType pointee;
+    if (minic_type_equal(source, minic_type_bool())) *id = ids->boolean;
+    else if (minic_type_equal(source, minic_type_int())) *id = ids->i32;
+    else if (minic_type_pointee(source, &pointee) &&
+             (minic_type_is_enum(pointee) ||
+              minic_type_equal(pointee, minic_type_signed_char())))
+        *id = ids->ptr_i8;
+    else return false;
+    return true;
+}
+
+int main(void) {
+    MinicCoreTypeContext context;
+    TypeIds ids = {0};
+    MinicCoreSourceBuilder builder;
+    MinicCoreFunction *function = &builder.core;
+    MinicCoreFunction pure;
+    MinicCoreFunction published;
+    MinicCoreTypeId saved;
+    MinicCoreValueId value;
+    size_t extent, alignment;
+    ResolverState resolver;
+
+    CHECK(make_type_context(&context, &ids));
+    CHECK(test_source_copy_access_effects());
+    CHECK(build_core_only_function(&pure, &context, &ids));
+    CHECK(minic_core_function_attach_type_context(&pure, &context));
+    CHECK(minic_core_function_verify(&pure));
+    minic_core_function_destroy(&pure);
+
+    CHECK(build_indirect_fixture(&builder, &context, &ids));
+    CHECK(minic_core_function_attach_type_context(function, &context));
+    CHECK(minic_core_function_verify_core_type_snapshot(function));
+    CHECK(!minic_core_function_attach_type_context(function, &context));
+    CHECK(minic_core_function_type_get(function, ids.function_a) != NULL);
+    CHECK(minic_core_function_type_is_kind(function, ids.i32,
+                                           MINIC_CORE_TYPE_INTEGER));
+    CHECK(minic_core_function_value_is_kind(function, 0U,
+                                            MINIC_CORE_TYPE_POINTER));
+    CHECK(!minic_core_function_value_is_kind(function, 0U,
+                                             MINIC_CORE_TYPE_INTEGER));
+    CHECK(!minic_core_function_value_is_kind(function,
+                                             MINIC_CORE_VALUE_INVALID,
+                                             MINIC_CORE_TYPE_POINTER));
+    saved = function->core_function_type_id;
+    function->core_function_type_id = MINIC_CORE_TYPE_INVALID;
+    CHECK(!minic_core_function_verify_core_type_snapshot(function));
+    function->core_function_type_id = saved;
+    context.types[saved].value.function.parameters[0] = MINIC_CORE_TYPE_INVALID;
+    CHECK(!minic_core_function_verify_core_type_snapshot(function));
+    context.types[saved].value.function.parameters[0] = ids.ptr_function_a;
+
+    /* Same ABI shape is not the same nominal indirect function identity. */
+    saved = function->call_signatures[0].core_function_type_id;
+    function->call_signatures[0].core_function_type_id = ids.function_b;
+    CHECK(!minic_core_function_verify_core_type_snapshot(function));
+    function->call_signatures[0].core_function_type_id = saved;
+    context.types[ids.function_a].value.function.parameters[0] = MINIC_CORE_TYPE_INVALID;
+    CHECK(!minic_core_function_verify_core_type_snapshot(function));
+    context.types[ids.function_a].value.function.parameters[0] = ids.i32;
+    saved = function->values[0].core_type_id;
+    function->values[0].core_type_id = MINIC_CORE_TYPE_INVALID;
+    CHECK(!minic_core_function_verify_core_type_snapshot(function));
+    function->values[0].core_type_id = saved;
+    CHECK(minic_core_function_verify_core_type_snapshot(function));
+    minic_core_source_builder_destroy(&builder);
+
+    CHECK(build_field_fixture(&builder, &context, &ids));
+    CHECK(minic_core_function_attach_type_context(function, &context));
+    CHECK(minic_core_function_verify_core_type_snapshot(function));
+    CHECK(minic_core_function_verify(function));
+    /* Core no longer interprets C member identities or bit-field carriers.
+     * It accepts a typed physical address within the declared record extent;
+     * independent producers can address the same bytes with an i8 pointer. */
+    function->values[1].core_type_id = ids.ptr_i8;
+    function->instructions[1].core_type_id = ids.ptr_i8;
+    CHECK(minic_core_function_verify_core_type_snapshot(function));
+    /* The function signature still returns i32*, so changing its result to
+     * i8* must fail the independent return-contract verification. */
+    CHECK(!minic_core_function_verify(function));
+    function->values[1].core_type_id = ids.ptr_i32;
+    function->instructions[1].core_type_id = ids.ptr_i32;
+    CHECK(minic_core_function_verify(function));
+    function->instructions[1].value.field_address.byte_offset = 17U;
+    CHECK(!minic_core_function_verify_core_type_snapshot(function));
+    function->instructions[1].value.field_address.byte_offset = 16U;
+    CHECK(minic_core_function_verify_core_type_snapshot(function));
+    function->instructions[1].value.field_address.byte_offset = 8U;
+    function->values[0].core_type_id = ids.ptr_record_b;
+    CHECK(!minic_core_function_verify_core_type_snapshot(function));
+    function->values[0].core_type_id = ids.ptr_record_a;
+    CHECK(minic_core_function_verify_core_type_snapshot(function));
+    minic_core_source_builder_destroy(&builder);
+
+    CHECK(build_object_fixture(&builder, &context, &ids));
+    CHECK(minic_core_function_attach_type_context(function, &context));
+    CHECK(minic_core_function_object_layout(function, 0U, &extent, &alignment));
+    CHECK(extent == 8U && alignment == 4U);
+    /* A mismatched/overflowing array layout must be rejected by CoreType
+     * registration, not by a second object-level count multiplier. */
+    {
+        MinicCoreType overflow_array = {0};
+        MinicCoreTypeId ignored_id = MINIC_CORE_TYPE_INVALID;
+        overflow_array.kind = MINIC_CORE_TYPE_ARRAY;
+        overflow_array.has_layout = true;
+        overflow_array.size = SIZE_MAX;
+        overflow_array.alignment = 4U;
+        overflow_array.value.array.element = ids.i32;
+        overflow_array.value.array.count = SIZE_MAX;
+        overflow_array.value.array.is_complete = true;
+        CHECK(!minic_core_type_register(&context, &overflow_array, &ignored_id));
+    }
+    function->objects[0].core_type_id = ids.incomplete_record;
+    CHECK(!minic_core_function_verify_core_type_snapshot(function));
+    function->objects[0].core_type_id = ids.array_i32_2;
+    CHECK(minic_core_function_verify_core_type_snapshot(function));
+    minic_core_source_builder_destroy(&builder);
+
+    /* The bulk-ingress callback must roll back ALL snapshots on failure. */
+    CHECK(build_simple_function(&builder));
+    CHECK(minic_core_function_verify_source_ingress(&builder));
+    {
+        MinicCoreSourceDraft *saved_draft = builder.source_draft;
+        builder.source_draft = NULL;
+        CHECK(!minic_core_function_verify_source_ingress(&builder));
+        builder.source_draft = saved_draft;
+        CHECK(minic_core_function_verify_source_ingress(&builder));
+    }
+    minic_core_function_initialize(&published);
+    CHECK(!minic_core_source_builder_take_core(&builder, &published));
+    CHECK(published.name == NULL && builder.source_draft != NULL);
+    CHECK(function->object_count == 1U && function->global_count == 1U &&
+          function->fixed_register_binding_count == 1U &&
+          function->callee_count == 1U && function->call_signature_count == 1U);
+    CHECK(!minic_core_function_verify(function)); /* unattached source is not Core */
+    resolver.i32 = ids.i32;
+    resolver.function_i32_i32 = ids.function_a;
+    resolver.call_count = 0U;
+    resolver.fail_on_call = 2U;
+    CHECK(!minic_core_function_snapshot_types(&builder, &context,
+                                               resolve_source_type, &resolver));
+    CHECK(function->type_context == NULL &&
+          function->core_function_type_id == MINIC_CORE_TYPE_INVALID);
+    CHECK(function->callees[0].core_function_type_id == MINIC_CORE_TYPE_INVALID);
+    CHECK(function->values[0].core_type_id == MINIC_CORE_TYPE_INVALID);
+    /* A rejected import must leave every C draft available for a retry. */
+    CHECK(builder.source_draft != NULL &&
+          minic_type_equal(builder.source_draft->return_type, minic_type_int()) &&
+          minic_type_equal(builder.source_draft->callees[0].return_type,
+                           minic_type_int()) &&
+          minic_type_equal(builder.source_draft->object_types[0], minic_type_int()) &&
+          minic_type_equal(builder.source_draft->global_types[0], minic_type_int()) &&
+          minic_type_equal(builder.source_draft->fixed_register_binding_types[0],
+                           minic_type_int()) &&
+          builder.source_draft->call_signatures[0].function_type_id == 29U &&
+          minic_type_equal(minic_core_function_source_value_type(&builder, 0U),
+                           minic_type_int()) &&
+          builder.source_draft->callees[0].parameter_types != NULL &&
+          builder.source_draft->call_signatures[0].parameter_types != NULL);
+    /* Source reads resolve the defining instruction, not a separately copied
+     * Value descriptor. Exact C rank must survive this ingress adapter. */
+    builder.source_draft->instruction_types[0] = minic_type_long_long();
+    CHECK(minic_type_equal(minic_core_function_source_value_type(&builder, 0U),
+                           minic_type_long_long()) &&
+          !minic_type_equal(minic_core_function_source_value_type(&builder, 0U),
+                            minic_type_long()));
+    builder.source_draft->instruction_types[0] = minic_type_int();
+    resolver.call_count = 0U;
+    resolver.fail_on_call = 0U;
+    /* A declared source convention must match its imported nominal FUNCTION
+     * type. The verifier no longer has a duplicate Core ABI copy to compare;
+     * the single C -> Core boundary rejects contradictory source facts. */
+    builder.source_draft->call_signatures[0].calling_convention =
+        MINIC_CALLING_CONVENTION_MS_X64;
+    CHECK(!minic_core_function_snapshot_types(&builder, &context,
+                                              resolve_source_type, &resolver));
+    CHECK(function->type_context == NULL && builder.source_draft != NULL &&
+          function->callees[0].core_function_type_id == MINIC_CORE_TYPE_INVALID &&
+          function->call_signatures[0].core_function_type_id ==
+              MINIC_CORE_TYPE_INVALID);
+    builder.source_draft->call_signatures[0].calling_convention =
+        MINIC_CALLING_CONVENTION_DEFAULT;
+    resolver.call_count = 0U;
+    CHECK(minic_core_function_snapshot_types(&builder, &context,
+                                              resolve_source_type, &resolver));
+    CHECK(minic_core_function_verify_core_type_snapshot(function));
+    {
+        const MinicCoreType *callee_type = minic_core_type_get(
+            &context, function->callees[0].core_function_type_id);
+        CHECK(callee_type != NULL && callee_type->kind == MINIC_CORE_TYPE_FUNCTION &&
+              callee_type->value.function.return_type == ids.i32 &&
+              callee_type->value.function.parameter_count == 1U &&
+              callee_type->value.function.parameters != NULL &&
+              callee_type->value.function.parameters[0] == ids.i32 &&
+              !callee_type->value.function.is_variadic &&
+              callee_type->value.function.calling_convention ==
+                  MINIC_CALLING_CONVENTION_DEFAULT &&
+              function->callees[0].core_function_type_id !=
+                  function->call_signatures[0].core_function_type_id);
+    }
+    /* Publication physically releases the C ingress sidecar; Core has no
+     * residual C descriptors to poison or accidentally inspect. */
+    CHECK(function->type_context == &context && builder.source_draft == NULL);
+    CHECK(minic_core_function_source_value_type(&builder, 0U).base_kind ==
+          (MinicTypeBaseKind)0x7fffffff);
+    CHECK(minic_core_function_verify(function));
+    value = function->instructions[0].result;
+    CHECK(function->values[value].core_type_id == ids.i32);
+    CHECK(function->instructions[0].core_type_id == ids.i32);
+    CHECK(minic_core_source_builder_take_core(&builder, &published));
+    minic_core_source_builder_destroy(&builder);
+    CHECK(minic_core_function_verify(&published));
+    CHECK(published.type_context == &context);
+    minic_core_function_destroy(&published);
+
+    /* The first internal wide-float operation may already have registered a
+     * typed callee when another signature import fails. Retry must clear
+     * both direct IDs; neither internal operation is a linker symbol. */
+    CHECK(build_tf_libcall_function(&builder));
+    resolver.i32 = ids.i32;
+    resolver.f64 = ids.f64;
+    resolver.long_double = ids.long_double;
+    resolver.call_count = 0U;
+    resolver.fail_on_call = 7U; /* second direct callee's return type */
+    CHECK(!minic_core_function_snapshot_types(&builder, &context,
+                                              resolve_source_type, &resolver));
+    CHECK(builder.source_draft != NULL && function->type_context == NULL &&
+          function->callees[0].core_function_type_id == MINIC_CORE_TYPE_INVALID &&
+          function->callees[1].core_function_type_id == MINIC_CORE_TYPE_INVALID);
+    resolver.call_count = 0U;
+    resolver.fail_on_call = 0U;
+    CHECK(minic_core_function_snapshot_types(&builder, &context,
+                                             resolve_source_type, &resolver));
+    CHECK(minic_core_function_verify(function));
+    /* The operation, not a linker symbol spelling, owns the physical type
+     * contract. Forging an opcode against a valid callee must be rejected. */
+    function->instructions[2].value.call.extended_float_operation =
+        MINIC_CORE_EXT_FLOAT_TO_BINARY64;
+    CHECK(!minic_core_function_verify(function));
+    function->instructions[2].value.call.extended_float_operation =
+        MINIC_CORE_EXT_FLOAT_ADD;
+    function->instructions[3].value.call.extended_float_operation =
+        MINIC_CORE_EXT_FLOAT_ADD;
+    CHECK(!minic_core_function_verify(function));
+    function->instructions[3].value.call.extended_float_operation =
+        MINIC_CORE_EXT_FLOAT_TO_BINARY64;
+    CHECK(minic_core_function_verify(function));
+    {
+        const MinicCoreCallee *add = &function->callees[0];
+        const MinicCoreCallee *trunc = &function->callees[1];
+        const MinicCoreType *add_type = minic_core_type_get(
+            &context, add->core_function_type_id);
+        const MinicCoreType *trunc_type = minic_core_type_get(
+            &context, trunc->core_function_type_id);
+        CHECK(strcmp(add->name, "@core.float.add") == 0 &&
+              strcmp(trunc->name, "@core.float.to_binary64") == 0 &&
+              add->core_function_type_id != trunc->core_function_type_id &&
+              add_type != NULL && add_type->kind == MINIC_CORE_TYPE_FUNCTION &&
+              add_type->value.function.return_type == ids.long_double &&
+              add_type->value.function.parameter_count == 2U &&
+              add_type->value.function.parameters != NULL &&
+              add_type->value.function.parameters[0] == ids.long_double &&
+              add_type->value.function.parameters[1] == ids.long_double &&
+              trunc_type != NULL && trunc_type->kind == MINIC_CORE_TYPE_FUNCTION &&
+              trunc_type->value.function.return_type == ids.f64 &&
+              trunc_type->value.function.parameter_count == 1U &&
+              trunc_type->value.function.parameters != NULL &&
+              trunc_type->value.function.parameters[0] == ids.long_double);
+    }
+    minic_core_source_builder_destroy(&builder);
+
+    CHECK(build_overflow_function(&builder, true));
+    CHECK(!minic_core_function_verify_source_ingress(&builder));
+    CHECK(!minic_core_function_snapshot_types(&builder, &context,
+                                              resolve_enum_overflow_type, &ids));
+    CHECK(function->type_context == NULL && builder.source_draft != NULL);
+    minic_core_source_builder_destroy(&builder);
+    CHECK(build_overflow_function(&builder, false));
+    CHECK(minic_core_function_verify_source_ingress(&builder));
+    CHECK(minic_core_function_snapshot_types(&builder, &context,
+                                             resolve_enum_overflow_type, &ids));
+    CHECK(minic_core_function_verify_core_type_snapshot(function));
+    CHECK(builder.source_draft == NULL &&
+          minic_core_function_source_value_type(&builder, 2U).base_kind ==
+              (MinicTypeBaseKind)0x7fffffff);
+    minic_core_source_builder_destroy(&builder);
+    CHECK(build_simple_function(&builder));
+    CHECK(builder.source_draft != NULL);
+    /* A canceled, unsealed C draft and repeated destructor must be safe. */
+    minic_core_source_builder_destroy(&builder);
+    minic_core_source_builder_destroy(&builder);
+
+    /* A partially published allocation count is not proof that its array
+     * exists: an OOM/cancelled Core builder must be destructible even when
+     * several independent allocations did not complete. The C ingress
+     * sidecar follows the same rollback contract as the pure Core arrays. */
+    minic_core_source_builder_initialize(&builder);
+    CHECK(minic_core_function_set_signature(
+        &builder, "partial", 7U, minic_type_int(), NULL, 0U));
+    function->block_count = 2U;
+    function->callee_count = 2U;
+    function->call_signature_count = 2U;
+    function->global_count = 2U;
+    function->function_symbol_count = 2U;
+    function->fixed_register_binding_count = 2U;
+    function->inline_asm_count = 2U;
+    builder.source_draft->callee_count = 2U;
+    builder.source_draft->call_signature_count = 2U;
+    minic_core_source_builder_destroy(&builder);
+    CHECK(builder.source_draft == NULL && function->blocks == NULL &&
+          function->callees == NULL && function->inline_asms == NULL &&
+          function->block_count == 0U);
+    minic_core_source_builder_destroy(&builder);
+    minic_core_type_context_destroy(&context);
+    (void)puts("CORE_TYPE_SNAPSHOT=PASS valid malformed direct_core_producer indirect_nominal field_physical overflow enum_source_admission rollback partial_oom");
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/core/core_type_verifier_test.c"}
+/* Deliberately corrupted, otherwise well-formed Core function fixtures.
+ * The type verifier must inspect semantic Core types, not C descriptors. */
+#include "compiler/c_lower/core_ir_source.h"
+
+#include <stdio.h>
+#include <string.h>
+
+typedef struct Types {
+    MinicCoreTypeId i32, u32, ptr_i32, ptr_u32;
+    MinicType source_ptr_i32;
+} Types;
+
+#define REQUIRE(expr) do { \
+    if (!(expr)) { \
+        (void)fprintf(stderr, "CORE_TYPE_VERIFIER=FAIL line=%d check=%s\n", \
+                      __LINE__, #expr); \
+        return 1; \
+    } \
+} while (0)
+
+static bool register_types(MinicCoreTypeContext *context, Types *types) {
+    MinicCoreType type = {0};
+    minic_core_type_context_initialize(context);
+    type.kind = MINIC_CORE_TYPE_INTEGER;
+    type.has_layout = true;
+    type.size = 4U;
+    type.alignment = 4U;
+    type.value.integer.bit_width = 32U;
+    type.value.integer.is_signed = true;
+    if (!minic_core_type_register(context, &type, &types->i32)) return false;
+    type.value.integer.is_signed = false;
+    if (!minic_core_type_register(context, &type, &types->u32)) return false;
+    (void)memset(&type, 0, sizeof(type));
+    type.kind = MINIC_CORE_TYPE_POINTER;
+    type.has_layout = true;
+    type.size = 8U;
+    type.alignment = 8U;
+    type.value.pointer.pointee = types->i32;
+    if (!minic_core_type_register(context, &type, &types->ptr_i32)) return false;
+    type.value.pointer.pointee = types->u32;
+    return minic_core_type_register(context, &type, &types->ptr_u32) &&
+           minic_type_pointer_to(minic_type_int(), &types->source_ptr_i32);
+}
+
+static bool resolve_type(void *data, MinicType source, MinicCoreTypeId *result) {
+    const Types *types = data;
+    if (minic_type_equal(source, minic_type_int())) *result = types->i32;
+    else if (minic_type_equal(source, types->source_ptr_i32)) *result = types->ptr_i32;
+    else return false;
+    return true;
+}
+
+/* Value IDs: 0=int, 1=int, 2=int*, 3=add, 4=load, 5=bitcast, 6=add. */
+static bool build_function(MinicCoreFunction *fn, MinicCoreTypeContext *context,
+                           const Types *types) {
+    MinicCoreSourceBuilder builder;
+    MinicCoreFunction *source = &builder.core;
+    MinicType params[3];
+    MinicCoreInstruction op = {0};
+    MinicCoreTerminator term = {0};
+    MinicCoreBlockId block;
+    MinicCoreValueId id;
+    size_t index;
+
+    minic_core_source_builder_initialize(&builder);
+    minic_core_function_initialize(fn);
+    params[0] = minic_type_int();
+    params[1] = minic_type_int();
+    params[2] = types->source_ptr_i32;
+    if (!minic_core_function_set_signature(&builder, "typed", 5U,
+                                           minic_type_int(), params, 3U) ||
+        !minic_core_function_add_block(source, &block)) return false;
+    for (index = 0U; index < 3U; ++index) {
+        (void)memset(&op, 0, sizeof(op));
+        op.kind = MINIC_CORE_INSTRUCTION_PARAMETER;
+        op.value.parameter_index = index;
+        if (!minic_core_function_append_source_value_instruction(
+                &builder, block, &op, params[index], &id) ||
+            id != index) return false;
+    }
+    (void)memset(&op, 0, sizeof(op));
+    op.kind = MINIC_CORE_INSTRUCTION_INTEGER_ADD;
+    op.value.binary.left = 0U;
+    op.value.binary.right = 1U;
+    if (!minic_core_function_append_source_value_instruction(
+            &builder, block, &op, minic_type_int(), &id) ||
+        id != 3U) return false;
+    (void)memset(&op, 0, sizeof(op));
+    op.kind = MINIC_CORE_INSTRUCTION_LOAD;
+    op.value.load.address = 2U;
+    if (!minic_core_function_append_source_value_instruction(
+            &builder, block, &op, minic_type_int(), &id) ||
+        id != 4U) return false;
+    (void)memset(&op, 0, sizeof(op));
+    op.kind = MINIC_CORE_INSTRUCTION_SCALAR_BITCAST;
+    op.value.operand = 2U;
+    if (!minic_core_function_append_source_value_instruction(
+            &builder, block, &op, minic_type_int(), &id) ||
+        id != 5U) return false;
+    (void)memset(&op, 0, sizeof(op));
+    op.kind = MINIC_CORE_INSTRUCTION_INTEGER_ADD;
+    op.value.binary.left = 3U;
+    op.value.binary.right = 4U;
+    if (!minic_core_function_append_source_value_instruction(
+            &builder, block, &op, minic_type_int(), &id) ||
+        id != 6U) return false;
+    term.kind = MINIC_CORE_TERMINATOR_RETURN;
+    term.return_value = 6U;
+    term.return_object = MINIC_CORE_OBJECT_INVALID;
+    if (!minic_core_function_set_terminator(source, block, &term) ||
+        !minic_core_function_snapshot_types(&builder, context, resolve_type, (void *)types) ||
+        !minic_core_source_builder_take_core(&builder, fn)) {
+        minic_core_source_builder_destroy(&builder);
+        return false;
+    }
+    minic_core_source_builder_destroy(&builder);
+    return true;
+}
+
+static int check_invalid_mutations(MinicCoreFunction *fn, MinicCoreTypeContext *context,
+                                   const Types *types) {
+    MinicCoreTypeId saved_type;
+    MinicCoreValueId saved_value;
+    size_t saved_index;
+
+    REQUIRE(minic_core_function_verify(fn));
+    saved_type = fn->values[0].core_type_id;
+    fn->values[0].core_type_id = types->u32;
+    REQUIRE(!minic_core_function_verify(fn));
+    fn->values[0].core_type_id = saved_type;
+
+    saved_value = fn->instructions[3].value.binary.right;
+    fn->instructions[3].value.binary.right = 2U; /* pointer is not integer */
+    REQUIRE(!minic_core_function_verify(fn));
+    fn->instructions[3].value.binary.right = 6U; /* forward SSA use */
+    REQUIRE(!minic_core_function_verify(fn));
+    fn->instructions[3].value.binary.right = saved_value;
+
+    saved_value = fn->instructions[4].value.load.address;
+    fn->instructions[4].value.load.address = 1U; /* scalar address */
+    REQUIRE(!minic_core_function_verify(fn));
+    fn->instructions[4].value.load.address = saved_value;
+
+    fn->instructions[4].core_type_id = types->u32;
+    fn->values[4].core_type_id = types->u32;
+    REQUIRE(!minic_core_function_verify(fn)); /* different pointee type */
+    fn->instructions[4].core_type_id = types->i32;
+    fn->values[4].core_type_id = types->i32;
+
+    saved_value = fn->instructions[5].value.operand;
+    fn->instructions[5].value.operand = 1U; /* int-to-int is not bitcast */
+    REQUIRE(!minic_core_function_verify(fn));
+    fn->instructions[5].value.operand = saved_value;
+
+    saved_index = fn->instructions[1].value.parameter_index;
+    fn->instructions[1].value.parameter_index = 3U;
+    REQUIRE(!minic_core_function_verify(fn));
+    fn->instructions[1].value.parameter_index = saved_index;
+
+    saved_value = fn->blocks[0].terminator.return_value;
+    fn->blocks[0].terminator.return_value = 2U;
+    REQUIRE(!minic_core_function_verify(fn));
+    fn->blocks[0].terminator.return_value = saved_value;
+
+    context->types[fn->core_function_type_id].value.function.return_type = types->u32;
+    REQUIRE(!minic_core_function_verify(fn));
+    context->types[fn->core_function_type_id].value.function.return_type = types->i32;
+
+    fn->values[2].core_type_id = types->ptr_u32;
+    REQUIRE(!minic_core_function_verify(fn));
+    fn->values[2].core_type_id = types->ptr_i32;
+    REQUIRE(minic_core_function_verify(fn));
+    return 0;
+}
+
+int main(void) {
+    MinicCoreTypeContext context;
+    MinicCoreFunction fn;
+    Types types = {0};
+    int result;
+    REQUIRE(register_types(&context, &types));
+    REQUIRE(build_function(&fn, &context, &types));
+    result = check_invalid_mutations(&fn, &context, &types);
+    minic_core_function_destroy(&fn);
+    minic_core_type_context_destroy(&context);
+    if (result != 0) return result;
+    (void)puts("CORE_TYPE_VERIFIER=PASS baseline=1 malformed=10 operands_ssa_pointer_load_bitcast_parameter_return");
+    return 0;
+}
+@@@ end

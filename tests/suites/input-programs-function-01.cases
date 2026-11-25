@@ -1,0 +1,175 @@
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/programs/c0/function_calls.c"}
+int helper(void)
+{
+    return 3;
+}
+
+int middle(void)
+{
+    return helper() + 4;
+}
+
+int self(void)
+{
+    if (0) {
+        return self();
+    }
+    return 7;
+}
+
+int main(void)
+{
+    int x = 5;
+    return x + middle() + self();
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/programs/c0/function_eight_parameters.c"}
+int one(void) { return 1; }
+int two(void) { return 2; }
+int three(void) { return 3; }
+int four(void) { return 4; }
+int five(void) { return 5; }
+int six(void) { return 6; }
+int seven(void) { return 7; }
+int eight(void) { return 8; }
+
+int mix8(
+    int a, int b, int c, int d,
+    int e, int f, int g, int h)
+{
+    return a * 8 + b * 7 + c * 6 + d * 5
+         + e * 4 + f * 3 + g * 2 + h;
+}
+
+int main(void)
+{
+    int saved = 5;
+    return mix8(
+        one(), two(), three(), four(),
+        five(), six(), seven(), eight()) + saved;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/programs/c0/function_four_parameters.c"}
+int one(void)
+{
+    return 1;
+}
+
+int two(void)
+{
+    return 2;
+}
+
+int three(void)
+{
+    return 3;
+}
+
+int four(void)
+{
+    return 4;
+}
+
+int echo(int value)
+{
+    return value;
+}
+
+int mix(int value, int second, int third, int fourth)
+{
+    return value * 40 + second * 10 + third * 2 + fourth;
+}
+
+int main(void)
+{
+    int saved = 5;
+    return mix(echo(one()), two(), three(), four()) + saved;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/programs/c0/function_parameter.c"}
+int affine(int value);
+
+int main(void)
+{
+    int base = 12;
+    int result = affine(base);
+    return result + base;
+}
+
+int affine(int value)
+{
+    int doubled = value * 2;
+    return doubled + 7;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/programs/c0/function_pointer_null.c"}
+struct Hooks {
+    int (*apply)(int);
+};
+
+static int increment(int value) {
+    return value + 1;
+}
+
+static struct Hooks hooks = {increment};
+
+int main(void) {
+    if (hooks.apply == (void *)0) {
+        return 1;
+    }
+    hooks.apply = (void *)0;
+    if (hooks.apply != (void *)0) {
+        return 2;
+    }
+    if ((void *)0 != hooks.apply) {
+        return 3;
+    }
+    hooks.apply = 0;
+    if (hooks.apply != 0) {
+        return 4;
+    }
+    hooks.apply = increment;
+    if (hooks.apply(41) != 42) {
+        return 5;
+    }
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/programs/c0/function_prototype.c"}
+int later(void);
+int later(void);
+
+int main(void)
+{
+    return later();
+}
+
+int later(void)
+{
+    return 9;
+}
+
+int later(void);
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/programs/c0/function_two_parameters.c"}
+int source(void)
+{
+    return 4;
+}
+
+int adjust(void)
+{
+    return 3;
+}
+
+int combine(int left, int right)
+{
+    return left * 10 + right;
+}
+
+int main(void)
+{
+    int saved = 5;
+    return combine(source(), adjust()) + saved;
+}
+@@@ end

@@ -1,0 +1,3474 @@
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/target/x86_64_linux_alternative_wrmsr.c"}
+/* Linux ALTERNATIVE_WRMSR: native two-byte NOP baseline plus feature-gated
+ * WRMSR replacement. This fixture must assemble with GNU AS but must never
+ * execute in user mode (WRMSR is privileged). */
+void minic_linux_feature_msr_write(unsigned int msr, unsigned long val) {
+    __asm__ volatile(
+        "# ALT: oldnstr\n"
+        "661:\n\t\n"
+        "662:\n"
+        "# ALT: padding\n"
+        ".skip -(((6651f-6641f)-(662b-661b))>0) * "
+              "((6651f-6641f)-(662b-661b)),0x90\n"
+        "663:\n"
+        ".pushsection .altinstructions,\"a\"\n"
+        " .long 661b - .\n"
+        " .long 6641f - .\n"
+        " .4byte %c[feature]\n"
+        " .byte 663b-661b\n"
+        " .byte 6651f-6641f\n"
+        ".popsection\n"
+        ".pushsection .altinstr_replacement, \"ax\"\n"
+        "# ALT: replacement 1\n"
+        "6641:\n\twrmsr\n"
+        "6651:\n"
+        ".popsection\n"
+        : : "c"(msr), "a"((unsigned int)val),
+            "d"((unsigned int)(val >> 32)), [feature] "i"(180)
+        : "memory");
+}
+
+/* The feature is an admitted unsigned 32-bit ELF patch record, not the
+ * historical literal 180. Linux's PRED_CMD site uses (7*32+21) == 245. */
+void minic_linux_feature_msr_write_pred(unsigned int msr, unsigned long val) {
+    __asm__ volatile(
+        "# ALT: oldnstr\n"
+        "661:\n\t\n"
+        "662:\n"
+        "# ALT: padding\n"
+        ".skip -(((6651f-6641f)-(662b-661b))>0) * "
+              "((6651f-6641f)-(662b-661b)),0x90\n"
+        "663:\n"
+        ".pushsection .altinstructions,\"a\"\n"
+        " .long 661b - .\n"
+        " .long 6641f - .\n"
+        " .4byte %c[feature]\n"
+        " .byte 663b-661b\n"
+        " .byte 6651f-6641f\n"
+        ".popsection\n"
+        ".pushsection .altinstr_replacement, \"ax\"\n"
+        "# ALT: replacement 1\n"
+        "6641:\n\twrmsr\n"
+        "6651:\n"
+        ".popsection\n"
+        : : "c" (msr), "a" ((unsigned int)val),
+            "d" ((unsigned int)(val >> 32)), [feature] "i" (245)
+        : "memory");
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/target/x86_64_linux_apic_amd_alt.c"}
+/* The two original Linux APIC AMD alternatives are patchable ELF sites.
+ * They must be assembled, never run as userspace instructions. */
+#define APIC_AMD_ALTERNATIVE(fallback, replacement, feature) \
+    "# ALT: oldnstr\n" \
+    "661:\n\t" fallback "\n" \
+    "662:\n" \
+    "# ALT: padding\n" \
+    ".skip -(((6651f-6641f)-(662b-661b)) > 0) * " \
+           "((6651f-6641f)-(662b-661b)),0x90\n" \
+    "663:\n" \
+    ".pushsection .altinstructions,\"a\"\n" \
+    " .long 661b - .\n" \
+    " .long 6641f - .\n" \
+    " .4byte " feature "\n" \
+    " .byte 663b-661b\n" \
+    " .byte 6651f-6641f\n" \
+    ".popsection\n" \
+    ".pushsection .altinstr_replacement, \"ax\"\n" \
+    "# ALT: replacement 1\n" \
+    "6641:\n\t" replacement "\n" \
+    "6651:\n" \
+    ".popsection\n"
+
+int minic_linux_apic_mmio_amd_alt(int *address, int value) {
+    __asm__ volatile(APIC_AMD_ALTERNATIVE("movl %0, %P1",
+        "xchgl %0, %P1", "(22*32 + (5))")
+        : "=r" (value), "=m" (*address)
+        : "i" (0), "0" (value), "m" (*address));
+    return value;
+}
+
+void minic_linux_apic_divider_amd_alt(void) {
+    __asm__ volatile(APIC_AMD_ALTERNATIVE("", "div %2",
+        "(22*32 + (1*32+1))")
+        : : "a" (0), "d" (0), "r" (1));
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/target/x86_64_linux_bool_atomic_xchg.c"}
+/* Original Linux atomic_xchg family: a one-byte _Bool has real byte storage.
+ * The typed MachineIR form must preserve the atomic memory RMW, not turn the
+ * boolean into a register-only computation. */
+int minic_linux_bool_atomic_xchg(_Bool *value)
+{
+    _Bool prior = 0;
+    __asm__ __volatile__("xchgb %b0, %1\n"
+        : "+q" (prior), "+m" (*value)
+        : : "memory", "cc");
+    return (int)prior;
+}
+
+#ifdef MINIC_BOOL_XCHG_NEGATIVE
+int minic_bad_bool_atomic_xchg(_Bool *value)
+{
+    _Bool prior = 0;
+    /* This version lacks Linux's required compiler memory barrier. */
+    __asm__ __volatile__("xchgb %b0, %1\n"
+        : "+q" (prior), "+m" (*value)
+        : : "cc");
+    return (int)prior;
+}
+#endif
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/target/x86_64_linux_bool_atomic_xchg_driver.c"}
+extern int minic_linux_bool_atomic_xchg(_Bool *value);
+
+int main(void)
+{
+    _Bool value = 1;
+    if (minic_linux_bool_atomic_xchg(&value) != 1 || value != 0)
+        return 1;
+    if (minic_linux_bool_atomic_xchg(&value) != 0 || value != 0)
+        return 2;
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/target/x86_64_linux_boot_flags.c"}
+/* Compressed x86 cpuflags: constant/variable bit forms, CPUID ties, and
+ * RFLAGS ID-bit probe. Compile only: do not execute CPU feature probes. */
+_Bool linux_boot_test_bit(int number, const unsigned int *memory) {
+    _Bool flag;
+    asm("btl %2,%1" "\n\t/* output condition code " "c" "*/\n"
+        : "=@cc" "c" (flag) : "m" (*memory), "Ir" (number));
+    return flag;
+}
+
+void linux_boot_set_bit(int number, unsigned int *memory) {
+    asm("btsl %1,%0" : "+m" (*memory) : "Ir" (number));
+}
+
+void linux_boot_cpuid(unsigned int leaf, unsigned int subleaf,
+    unsigned int *a, unsigned int *b, unsigned int *c, unsigned int *d) {
+    asm volatile("cpuid" : "=a" (*a), "=b" (*b), "=c" (*c), "=d" (*d)
+        : "0" (leaf), "2" (subleaf));
+}
+
+int linux_boot_has_eflag(unsigned long mask) {
+    unsigned long before, after;
+    asm volatile("pushfq" "\t\n\t"
+        "pushfq" "\t\n\t"
+        "pop %0\t\n\t"
+        "mov %0,%1\t\n\t"
+        "xor %2,%1\t\n\t"
+        "push %1\t\n\t"
+        "popfq" "\t\n\t"
+        "pushfq" "\t\n\t"
+        "pop %1\t\n\t"
+        "popfq"
+        : "=&r" (before), "=&r" (after) : "ri" (mask));
+    return !!((before ^ after) & mask);
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/target/x86_64_linux_boot_segments.c"}
+/* x86-64 Linux head64 startup selectors: inspect -S / GAS only.
+ * The operation changes DS, SS and ES and is not safe in user mode. */
+void minic_test_linux_boot_segments(void) {
+    asm volatile("movl %%eax, %%ds\n"
+                 "movl %%eax, %%ss\n"
+                 "movl %%eax, %%es\n"
+                 : : "a"(3 * 8) : "memory");
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/target/x86_64_linux_boot_string.c"}
+/* Linux 6.6 x86 boot string family: one exact GNU ABI for each instruction.
+ * These instructions are safe in userspace and are verified at runtime. */
+static int boot_memcmp(const void *left, const void *right,
+    unsigned long count) {
+    _Bool differs;
+    asm("repe; cmpsb" "\n\t/* output condition code " "nz" "*/\n"
+        : "=@cc" "nz" (differs), "+D" (left), "+S" (right), "+c" (count));
+    return differs;
+}
+
+static unsigned int boot_divl(unsigned int lo, unsigned int hi,
+    unsigned int divisor, unsigned int *remainder) {
+    asm("divl %2" : "=a" (lo), "=d" (*remainder)
+        : "rm" (divisor), "0" (lo), "1" (hi));
+    return lo;
+}
+
+static void *boot_memcpy(void *dest, const void *source, unsigned long length) {
+    long count, out_dest, out_source;
+    asm volatile("rep ; movsq\n\t"
+        "movq %4,%%rcx\n\t"
+        "rep ; movsb\n\t"
+        : "=&c" (count), "=&D" (out_dest), "=&S" (out_source)
+        : "0" (length >> 3), "g" (length & 7), "1" (dest), "2" (source)
+        : "memory");
+    return dest;
+}
+
+int main(void) {
+    unsigned char a[24], b[24];
+    unsigned int rem = 99U;
+    unsigned int quotient;
+    unsigned int i;
+    for (i = 0U; i < 24U; ++i) {
+        a[i] = (unsigned char)(i * 7U + 3U);
+        b[i] = 0U;
+    }
+    if (boot_memcmp(a,a,24U) != 0 || boot_memcmp(a,b,24U) == 0)
+        return 1;
+    quotient = boot_divl(0x00000005U,0x00000001U,3U,&rem);
+    if (quotient != 0x55555557U || rem != 0U) return 2;
+    if (boot_memcpy(b,a,21U) != b ||
+        boot_memcmp(a,b,21U) != 0 || b[21] != 0U)
+        return 3;
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/target/x86_64_linux_bug_table_variants.c"}
+/* Original Linux 6.6 BUG/WARN local-constant and metadata encodings. These
+ * contain UD2 and must only be compiled/assembled; never execute them. */
+struct bug_entry {
+    int bug_addr;
+    int file;
+    unsigned short line;
+    unsigned short flags;
+};
+
+void linux_bug_numeric_no_discard(void) {
+    __auto_type __flags = 0;
+    asm volatile("1:\t" ".byte 0x0f, 0x0b" "\n"
+        ".pushsection __bug_table,\"aw\"\n"
+        "2:\t" ".long " "1b" " - ." "\t# bug_entry::bug_addr\n"
+        "\t" ".long " "%c0" " - ." "\t# bug_entry::file\n"
+        "\t.word %c1" "\t# bug_entry::line\n"
+        "\t.word %c2" "\t# bug_entry::flags\n"
+        "\t.org 2b+%c3\n"
+        ".popsection\n" ""
+        : : "i"("fs/ext4/fsync.c"), "i"(150), "i"(__flags),
+            "i"(sizeof(struct bug_entry)));
+}
+
+void linux_bug_numeric_reachable(void) {
+    asm volatile("1:\t.byte 0x0f, 0x0b\n"
+        ".pushsection __bug_table,\"aw\"\n"
+        "2:\t.long 1b - .\n"
+        ".long %c0 - .\n"
+        ".word %c1\n"
+        ".word %c2\n"
+        ".org 2b+%c3\n"
+        ".popsection\n"
+        "998:\n"
+        ".pushsection .discard.reachable\n"
+        ".long 998b\n"
+        ".popsection\n"
+        : : "i"("drivers/gpu/drm/drm_blend.c"), "i"(89), "i"(0),
+            "i"(sizeof(struct bug_entry)));
+}
+
+void linux_bug_named_no_discard(void) {
+    asm volatile("1:\t.byte 0x0f, 0x0b\n"
+        ".pushsection __bug_table,\"aw\"\n"
+        "2:\t.long 1b - .\n"
+        ".long %c[path] - .\n"
+        ".word %c[ln]\n"
+        ".word %c[fl]\n"
+        ".org 2b+%c[sz]\n"
+        ".popsection\n"
+        : : [path] "i"("include/linux/bug.h"),
+            [ln] "i"(111), [fl] "i"(0),
+            [sz] "i"(sizeof(struct bug_entry)));
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/target/x86_64_linux_control_register.c"}
+/* Linux control registers: machine instruction, never a dummy C load. */
+typedef unsigned long u64;
+typedef unsigned int u32;
+
+static u64 read_cr0(void) {
+    u64 value;
+    __asm__ volatile("mov %%cr0,%0\n\t" : "=r"(value) : "m"(*(u32 *)0x1000UL));
+    return value;
+}
+static u64 read_cr2(void) {
+    u64 value;
+    __asm__ volatile("mov %%cr2,%0\n\t" : "=r"(value) : "m"(*(u32 *)0x1000UL));
+    return value;
+}
+static u64 read_cr3(void) {
+    u64 value;
+    __asm__ volatile("mov %%cr3,%0\n\t" : "=r"(value) : "m"(*(u32 *)0x1000UL));
+    return value;
+}
+static u64 read_cr4(void) {
+    u64 value;
+    __asm__ volatile("mov %%cr4,%0\n\t" : "=r"(value) : "m"(*(u32 *)0x1000UL));
+    return value;
+}
+static void write_cr2(u64 value) {
+    __asm__ volatile("mov %0,%%cr2" : : "r"(value) : "memory");
+}
+static void write_cr3(u64 value) {
+    __asm__ volatile("mov %0,%%cr3" : : "r"(value) : "memory");
+}
+
+/* Kernel write_cr0/write_cr4 also use the single tied +r signature. */
+static void write_cr0_tied(u64 value) {
+    __asm__ volatile("mov %0,%%cr0" : "+r"(value) : : "memory");
+}
+static void write_cr4_tied(u64 value) {
+    __asm__ volatile("mov %0,%%cr4" : "+r"(value) : : "memory");
+}
+static void write_cr0_plain(u64 value) {
+    __asm__ volatile("mov %0,%%cr0" : : "r"(value));
+}
+static void write_cr4_plain(u64 value) {
+    __asm__ volatile("mov %0,%%cr4" : : "r"(value));
+}
+/* Some early-boot reads omit the fake memory dependency altogether. */
+static u64 read_cr0_plain(void) {
+    u64 value;
+    __asm__ volatile("mov %%cr0,%0" : "=r"(value));
+    return value;
+}
+
+u64 minic_linux_cr_read_all(void) {
+    return read_cr0() ^ read_cr2() ^ read_cr3() ^ read_cr4() ^
+        read_cr0_plain();
+}
+
+void minic_linux_cr_write_pair(u64 a, u64 b) {
+    write_cr2(a);
+    write_cr3(b);
+    write_cr0_tied(a);
+    write_cr4_tied(b);
+    write_cr0_plain(a);
+    write_cr4_plain(b);
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/target/x86_64_linux_cpu_buffer_clear.c"}
+/* Linux 6.6 MDS buffer-clear and WBINVD cache-flush hardware effects.
+ * Never execute on an unprivileged host. */
+void linux_clear_cpu_buffers(void) {
+    static const unsigned short ds = 3 * 8;
+    asm volatile("verw %[ds]" : : [ds] "m" (ds) : "cc");
+}
+
+void linux_flush_cpu_caches(void) {
+    asm volatile("wbinvd" : : : "memory");
+}
+
+void linux_swap_kernel_gs_base(void) {
+    asm volatile("swapgs" : : : "memory");
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/target/x86_64_linux_cpu_feature_goto.c"}
+/* Linux _static_cpu_has-style asm goto. The frontend must specialize a
+ * compile-time feature number, resolve the bit mask and byte offset as Core
+ * constants, preserve both GNU C labels, and emit real x86 ELF alternative
+ * patch records. The corresponding object may be inspected, not executed:
+ * boot_cpu_data and the kernel alternative patcher are external contracts. */
+extern unsigned int minic_test_boot_capability[24];
+
+#define MINIC_TEST_ALT_MAX \
+    "((6651f-6641f) ^ (((6651f-6641f) ^ (6652f-6642f)) & " \
+    "-(-((6651f-6641f) < (6652f-6642f)))))"
+#define MINIC_TEST_ALT_SKIP \
+    ".skip -( (" MINIC_TEST_ALT_MAX " - (662b-661b)) > 0) * " \
+    "(" MINIC_TEST_ALT_MAX " - (662b-661b)), 0x90\n"
+
+static inline __attribute__((always_inline)) int
+minic_test_cpu_has(unsigned short feature) {
+    __asm__ goto(
+        "# ALT: oldinstr2\n"
+        "661:\n\t"
+        "jmp 6f\n"
+        "662:\n"
+        "# ALT: padding2\n"
+        MINIC_TEST_ALT_SKIP
+        "663:\n"
+        ".pushsection .altinstructions,\"a\"\n"
+        " .long 661b - .\n"
+        " .long 6641f - .\n"
+        " .4byte (3*32+21)\n"
+        " .byte 663b-661b\n"
+        " .byte 6651f-6641f\n"
+        " .long 661b - .\n"
+        " .long 6642f - .\n"
+        " .4byte %c[feature]\n"
+        " .byte 663b-661b\n"
+        " .byte 6652f-6642f\n"
+        ".popsection\n"
+        ".pushsection .altinstr_replacement, \"ax\"\n"
+        "# ALT: replacement 1\n"
+        "6641:\n\t"
+        "jmp %l[t_no]\n"
+        "6651:\n"
+        "# ALT: replacement 2\n"
+        "6642:\n\t"
+        "\n"
+        "6652:\n"
+        ".popsection\n"
+        ".pushsection .altinstr_aux,\"ax\"\n"
+        "6:\n"
+        " testb %[bitnum],%P[cap_byte] (%% rip)\n"
+        " jnz %l[t_yes]\n"
+        " jmp %l[t_no]\n"
+        ".popsection\n"
+        : : [feature] "i" (feature),
+            [bitnum] "i" (1 << (feature & 7)),
+            [cap_byte] "i" (&((const char *)minic_test_boot_capability)[feature >> 3])
+        : : t_yes, t_no);
+t_yes:
+    return 1;
+t_no:
+    return 0;
+}
+
+int minic_test_cpu_feature_bit_187(void) {
+    return minic_test_cpu_has(187);
+}
+
+int minic_test_cpu_feature_bit_396(void) {
+    return minic_test_cpu_has(396);
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/target/x86_64_linux_debug_boot.c"}
+/* Linux debugreg.h register family plus head64 data-segment reload.
+ * Privileged instructions are compiled and assembled, never executed. */
+
+#define DR_READ(number, name)                                    \
+    unsigned long read_##name(void) {                            \
+        unsigned long result;                                    \
+        __asm__("mov %%db" #number ",%0" : "=r"(result));         \
+        return result;                                           \
+    }
+
+#define DR_WRITE(number, name)                                   \
+    void write_##name(unsigned long value) {                     \
+        __asm__("mov %0,%%db" #number : : "r"(value));            \
+    }
+
+DR_READ(0, dr0)
+DR_READ(1, dr1)
+DR_READ(2, dr2)
+DR_READ(3, dr3)
+DR_READ(6, dr6)
+DR_WRITE(0, dr0)
+DR_WRITE(1, dr1)
+DR_WRITE(2, dr2)
+DR_WRITE(3, dr3)
+DR_WRITE(6, dr6)
+
+/* DR7's fake memory input must never be physically dereferenced. */
+unsigned long read_dr7(void) {
+    unsigned long result;
+    __asm__ __volatile__("mov %%db7,%0" : "=r"(result) :
+                         "m"(*(unsigned int *)0x1000UL));
+    return result;
+}
+
+void write_dr7(unsigned long value) {
+    __asm__ __volatile__("mov %0,%%db7" : : "r"(value),
+                         "m"(*(unsigned int *)0x1000UL));
+}
+
+void linux_boot_segments(unsigned int selector) {
+    __asm__ __volatile__(
+        "movl %%eax, %%ds\n\t"
+        "movl %%eax, %%ss\n\t"
+        "movl %%eax, %%es"
+        : : "a"(selector) : "memory");
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/target/x86_64_linux_debug_register.c"}
+/* Original Linux debugreg.h MOV DR forms: keep every legal debug register,
+ * including DR7's fake memory dependency at address 0x1000. Kernel-only;
+ * this fixture must be assembled/disassembled, never executed. */
+typedef unsigned long u64;
+typedef unsigned int u32;
+typedef unsigned short u16;
+
+u64 linux_read_dr0(void) { u64 v; asm("mov %%db0, %0" : "=r" (v)); return v; }
+u64 linux_read_dr1(void) { u64 v; asm("mov %%db1, %0" : "=r" (v)); return v; }
+u64 linux_read_dr2(void) { u64 v; asm("mov %%db2, %0" : "=r" (v)); return v; }
+u64 linux_read_dr3(void) { u64 v; asm("mov %%db3, %0" : "=r" (v)); return v; }
+u64 linux_read_dr6(void) { u64 v; asm("mov %%db6, %0" : "=r" (v)); return v; }
+u64 linux_read_dr7(void) {
+    u64 v;
+    asm volatile("mov %%db7, %0" : "=r" (v) : "m" (*(u32 *)0x1000UL));
+    return v;
+}
+void linux_write_dr0(u64 v) { asm("mov %0, %%db0" :: "r" (v)); }
+void linux_write_dr1(u64 v) { asm("mov %0, %%db1" :: "r" (v)); }
+void linux_write_dr2(u64 v) { asm("mov %0, %%db2" :: "r" (v)); }
+void linux_write_dr3(u64 v) { asm("mov %0, %%db3" :: "r" (v)); }
+void linux_write_dr6(u64 v) { asm("mov %0, %%db6" :: "r" (v)); }
+void linux_write_dr7(u64 v) {
+    asm volatile("mov %0, %%db7" :: "r" (v), "m" (*(u32 *)0x1000UL));
+}
+
+/* Long-mode segment selector snapshots and GS pointer slot writes are a
+ * separate full ISA/ABI family; no CPU registers are touched at runtime. */
+u16 linux_read_ss(void) {
+    u16 v; asm("mov %%ss,%0" : "=r" (v) :: "memory"); return v;
+}
+u16 linux_read_cs(void) {
+    u16 v; asm("mov %%cs,%0" : "=r" (v) :: "memory"); return v;
+}
+void linux_load_fs_with_fixup(u16 selector) {
+    asm volatile("1: movw %0, %%fs\n"
+        "2:\n"
+        " .pushsection \"__ex_table\",\"a\"\n"
+        " .balign 4\n"
+        " .long (1b) - .\n"
+        " .long (2b) - .\n"
+        " .long 5\n"
+        " .popsection\n" : : "rm" (selector) : "memory");
+}
+void linux_load_gs_with_fixup(u16 selector) {
+    asm volatile("1: movw %0, %%gs\n"
+        "2:\n"
+        " .pushsection \"__ex_table\",\"a\"\n"
+        " .balign 4\n"
+        " .long (1b) - .\n"
+        " .long (2b) - .\n"
+        " .long 5\n"
+        " .popsection\n" : : "rm" (selector) : "memory");
+}
+struct task { unsigned long flags; };
+extern struct task *linux_current_task;
+void linux_store_percpu_pointer(struct task *t) {
+    u64 raw = (u64)t;
+    asm("movq %[val], %%gs:%[var]" : [var] "+m" (linux_current_task)
+        : [val] "re" (raw));
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/target/x86_64_linux_debug_register_smoke.c"}
+/* Original Linux debugreg.h source forms. Assemble only; privileged ISA. */
+typedef unsigned long u64;
+typedef unsigned int u32;
+
+u64 dr0_read(void) { u64 v; asm("mov %%db0, %0" : "=r"(v)); return v; }
+u64 dr1_read(void) { u64 v; asm("mov %%db1, %0" : "=r"(v)); return v; }
+u64 dr2_read(void) { u64 v; asm("mov %%db2, %0" : "=r"(v)); return v; }
+u64 dr3_read(void) { u64 v; asm("mov %%db3, %0" : "=r"(v)); return v; }
+u64 dr6_read(void) { u64 v; asm("mov %%db6, %0" : "=r"(v)); return v; }
+u64 dr7_read(void) { u64 v; asm volatile("mov %%db7, %0" : "=r"(v) : "m"(*(u32 *)0x1000UL)); return v; }
+
+void dr0_write(u64 v) { asm("mov %0, %%db0" :: "r"(v)); }
+void dr1_write(u64 v) { asm("mov %0, %%db1" :: "r"(v)); }
+void dr2_write(u64 v) { asm("mov %0, %%db2" :: "r"(v)); }
+void dr3_write(u64 v) { asm("mov %0, %%db3" :: "r"(v)); }
+void dr6_write(u64 v) { asm("mov %0, %%db6" :: "r"(v)); }
+void dr7_write(u64 v) { asm volatile("mov %0, %%db7" :: "r"(v), "m"(*(u32 *)0x1000UL)); }
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/target/x86_64_linux_descriptor_bad_layout.c"}
+/* Must reject: this record is 16 bytes with natural alignment/padding.
+ * The instruction would observe the padding as part of the base address. */
+struct desc_ptr {
+    unsigned short size;
+    unsigned long address;
+};
+
+void minic_test_linux_bad_layout(const struct desc_ptr *descriptor) {
+    asm volatile("lgdt %0" : : "m" (*descriptor));
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/target/x86_64_linux_descriptor_bad_size.c"}
+/* Must reject: the CPU operand is 10 bytes (16-bit limit + 64-bit base).
+ * A 6-byte object is not a valid x86-64 descriptor table operand. */
+struct desc_ptr {
+    unsigned short size;
+    unsigned int address;
+} __attribute__((packed));
+
+void minic_test_linux_bad_size(const struct desc_ptr *descriptor) {
+    asm volatile("lidt %0" : : "m" (*descriptor));
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/target/x86_64_linux_ds_regset.c"}
+/* SPDX-License-Identifier: GPL-2.0 */
+/* arch/x86/kernel/fpu/regset.c __convert_from_fxsr: a bare DS selector
+ * snapshot is stored in a 32-bit legacy FPU save area, not a u16 local. */
+struct linux_i387_env {
+    unsigned int fos;
+    unsigned short selector;
+};
+
+void linux_read_fpu_regset_ds(struct linux_i387_env *env) {
+    asm("mov %%ds,%0" : "=r" (env->fos) : : "memory");
+    asm("mov %%es,%0" : "=r" (env->selector) : : "memory");
+    env->fos |= 0xffff0000U;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/target/x86_64_linux_efi_kernel_transfer.c"}
+/* Real Linux EFI handoff: input #0 is a 64-bit entry address, and input #1
+ * must be live in RSI when the hardware executes the indirect jump. */
+void __attribute__((noreturn)) minic_efi_kernel_transfer(
+#if MINIC_EFI_TRANSFER_NEGATIVE == 3
+    unsigned int entry,
+#else
+    unsigned long entry,
+#endif
+    void *boot_params)
+{
+#if MINIC_EFI_TRANSFER_NEGATIVE == 1
+    __asm__("jmp %0" : : "r" (entry), "S" (boot_params));
+#elif MINIC_EFI_TRANSFER_NEGATIVE == 2
+    __asm__("jmp *%0" : : "r" (entry), "D" (boot_params));
+#else
+    __asm__("jmp *%0" : : "r" (entry), "S" (boot_params));
+#endif
+    __builtin_unreachable();
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/target/x86_64_linux_fdiv_bug.c"}
+/* SPDX-License-Identifier: GPL-2.0 */
+/* Original arch/x86/kernel/fpu/bugs.c x87 probe, compiled but not run. */
+static double x __attribute__((section(".init.data"))) = 4195835.0;
+static double y __attribute__((section(".init.data"))) = 3145727.0;
+
+int minic_linux_fpu_check_fdiv(void) {
+    int fdiv_bug;
+    __asm__("fninit\n\t"
+            "fldl %1\n\t"
+            "fdivl %2\n\t"
+            "fmull %2\n\t"
+            "fldl %1\n\t"
+            "fsubp %%st,%%st(1)\n\t"
+            "fistpl %0\n\t"
+            "fwait\n\t"
+            "fninit"
+            : "=m" (fdiv_bug)
+            : "m" (x), "m" (y));
+    return fdiv_bug;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/target/x86_64_linux_fpu_boot.c"}
+/* Linux FPU discovery and interrupt/idle machine transitions. Compile and
+ * GNU-assemble this fixture; NEVER execute the privileged CLI/STI/HLT
+ * functions in a normal user process. The x87 status probes are a genuine
+ * pair of 16-bit GNU +m output locations, not plain compiler barriers. */
+typedef unsigned short minic_u16;
+
+int minic_linux_x87_probe(minic_u16 *status, minic_u16 *control) {
+    __asm__ volatile("fninit ; fnstsw %0 ; fnstcw %1"
+                     : "+m"(*status), "+m"(*control));
+    return *status == 0 && (*control & 0x103f) == 0x003f;
+}
+
+void minic_linux_x87_reset(void) {
+    __asm__ volatile("fninit");
+}
+
+void minic_linux_native_irq_disable(void) {
+    __asm__ volatile("cli" : : : "memory");
+}
+
+void minic_linux_native_irq_enable(void) {
+    __asm__ volatile("sti" : : : "memory");
+}
+
+void minic_linux_native_safe_halt(void) {
+    __asm__ volatile("sti; hlt" : : : "memory");
+}
+
+void minic_linux_native_halt(void) {
+    __asm__ volatile("hlt");
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/target/x86_64_linux_fpu_userframe.c"}
+/* Linux signal-frame FPU save/restore has two SMAP alternatives and a
+ * type-15 uaccess fault record; this is not an unguarded FXSAVE. */
+struct linux_fregs { unsigned char bytes[108]; };
+struct linux_fxregs { unsigned char bytes[512]; };
+
+#define SMAP_PATCH(replacement) \
+    "# ALT: oldnstr\n" "661:\n\t" "" "\n662:\n" \
+    "# ALT: padding\n" \
+    ".skip -(((" "665""1""f-""664""1""f" ")-(" "662b-661b" ")) > 0) * " \
+    "((" "665""1""f-""664""1""f" ")-(" "662b-661b" ")),0x90\n" \
+    "663" ":\n" \
+    ".pushsection .altinstructions,\"a\"\n" \
+    " .long 661b - .\n" \
+    " .long " "664""1""f - .\n" \
+    " .4byte " "( 9*32+20)" "\n" \
+    " .byte " "663""b-661b" "\n" \
+    " .byte " "665""1""f-""664""1""f" "\n" \
+    ".popsection\n" \
+    ".pushsection .altinstr_replacement, \"ax\"\n" \
+    "# ALT: replacement " "1" "\n" \
+    "664""1"":\n\t" replacement "\n" "665""1" ":\n" \
+    ".popsection\n"
+
+#define FPU_USER_FRAME(opcode) \
+    SMAP_PATCH(".byte 0x0f,0x01,0xcb") \
+    "\n1: " opcode "\n2: " \
+    SMAP_PATCH(".byte 0x0f,0x01,0xca") \
+    "\n" " .pushsection \"__ex_table\",\"a\"\n" \
+    " .balign 4\n" " .long (" "1b" ") - .\n" \
+    " .long (" "2b" ") - .\n" " .long " "15" " \n" \
+    " .popsection\n"
+
+int linux_fnsave_user(struct linux_fregs *p) {
+    int err;
+    asm volatile(FPU_USER_FRAME("fnsave %[fx]; fwait")
+        : [err] "=a"(err), [fx] "=m"(*p) : "0"(0), "m"(*p));
+    return err;
+}
+int linux_fxsave_user(struct linux_fxregs *p) {
+    int err;
+    asm volatile(FPU_USER_FRAME("fxsaveq %[fx]")
+        : [err] "=a"(err), [fx] "=m"(*p) : "0"(0), "m"(*p));
+    return err;
+}
+int linux_fxrstor_user(struct linux_fxregs *p) {
+    int err;
+    asm volatile(FPU_USER_FRAME("fxrstorq %[fx]")
+        : [err] "=a"(err), [fx] "=m"(*p) : "0"(0), "m"(*p));
+    return err;
+}
+
+/* A named *input* memory operand is GNU ordinal %3, not %1 (the output
+ * memory operand). The real Linux fpu/signal.i uses this variant. */
+int linux_fxrstor_named_input(struct linux_fxregs *p) {
+    int err;
+    asm volatile(FPU_USER_FRAME("fxrstorq %[fx]")
+        : [err] "=a"(err), "=m"(*p)
+        : "0"(0), [fx] "m"(*p));
+    return err;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/target/x86_64_linux_fsgsbase_reject.c"}
+/* Target-qualified Linux FSGSBASE negative cases. Each mode must fail MiniC
+ * -S before GNU AS: mismatched constraints, Source spelling, scalar width or
+ * compiler memory ordering must never become an unchecked physical opcode. */
+typedef unsigned long u64;
+
+#if MINIC_FSGSBASE_NEGATIVE == 1
+u64 wrong_read_output(void) {
+    u64 value;
+    asm volatile("rdfsbase %0" : "=m" (value) : : "memory");
+    return value;
+}
+#elif MINIC_FSGSBASE_NEGATIVE == 2
+void wrong_write_input(u64 value) {
+    asm volatile("wrfsbase %0" : : "m" (value) : "memory");
+}
+#elif MINIC_FSGSBASE_NEGATIVE == 3
+u64 forged_extra_instruction(void) {
+    u64 value;
+    asm volatile("rdfsbase %0; nop" : "=r" (value) : : "memory");
+    return value;
+}
+#elif MINIC_FSGSBASE_NEGATIVE == 4
+unsigned int narrowed_result(void) {
+    unsigned int value;
+    asm volatile("rdfsbase %0" : "=r" (value) : : "memory");
+    return value;
+}
+#elif MINIC_FSGSBASE_NEGATIVE == 5
+u64 missing_memory_barrier(void) {
+    u64 value;
+    asm volatile("rdgsbase %0" : "=r" (value));
+    return value;
+}
+#else
+#error unsupported FSGSBASE negative mode
+#endif
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/target/x86_64_linux_fxrstor_safe.c"}
+/* Linux FXRSTORQ with type-17 register-specific -EFAULT exception table.
+ * Only object/relocation inspection: the kernel handler is not in userspace. */
+struct linux_fxregs_state { unsigned char bytes[512]; };
+
+int linux_fxrstor_safe(struct linux_fxregs_state *p) {
+    int error;
+    asm volatile(
+        "1:" "fxrstorq %[fx]" "\n\t" "2:\n"
+        " .pushsection \"__ex_table\",\"a\"\n"
+        " .balign 4\n"
+        " .long (" "1b" ") - .\n"
+        " .long (" "2b" ") - .\n"
+        ".macro extable_type_reg type:req reg:req\n"
+        ".set .Lfound, 0\n"
+        ".set .Lregnr, 0\n"
+        ".irp rs,rax,rcx,rdx,rbx,rsp,rbp,rsi,rdi,r8,r9,r10,r11,r12,r13,r14,r15\n"
+        ".ifc \\reg, %%\\rs\n"
+        ".set .Lfound, .Lfound+1\n"
+        ".long \\type + (.Lregnr << 8)\n"
+        ".endif\n"
+        ".set .Lregnr, .Lregnr+1\n"
+        ".endr\n"
+        ".set .Lregnr, 0\n"
+        ".irp rs,eax,ecx,edx,ebx,esp,ebp,esi,edi,r8d,r9d,r10d,r11d,r12d,r13d,r14d,r15d\n"
+        ".ifc \\reg, %%\\rs\n"
+        ".set .Lfound, .Lfound+1\n"
+        ".long \\type + (.Lregnr << 8)\n"
+        ".endif\n"
+        ".set .Lregnr, .Lregnr+1\n"
+        ".endr\n"
+        ".if (.Lfound != 1)\n"
+        ".error \"extable_type_reg: bad register argument\"\n"
+        ".endif\n"
+        ".endm\n"
+        "extable_type_reg reg=" "%[err]" ", type="
+            "(17 | ((-14) << 16))" " \n"
+        ".purgem extable_type_reg\n"
+        " .popsection\n"
+        : [err] "=r"(error), "=m"(*p)
+        : "0"(0), [fx] "m"(*p));
+    return error;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/target/x86_64_linux_fxsave.c"}
+/* x86 Linux FPU state save contracts: both architecturally different pointer
+ * encodings must preserve a 512-byte, 16-byte-aligned memory output. These
+ * instructions can execute on supported user CPUs but tests only assemble. */
+struct minic_test_fx_area {
+    unsigned char image[512];
+} __attribute__((aligned(16)));
+
+static struct minic_test_fx_area minic_test_static_fx_area;
+
+void minic_test_fxsave32(struct minic_test_fx_area *area) {
+    __asm__ volatile("fxsave %0" : "+m"(*area));
+}
+
+void minic_test_fxsave64(struct minic_test_fx_area *area) {
+    __asm__ volatile("fxsaveq %[fx]" : [fx] "=m"(*area));
+}
+
+void minic_test_fxsave_static(void) {
+    __asm__ volatile("fxsave %0" : "+m"(minic_test_static_fx_area));
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/target/x86_64_linux_gen_endbr.c"}
+/* Linux 6.6.143 arch/x86/include/asm/ibt.h gen_endbr GNU source grammar. */
+typedef unsigned int u32;
+static inline __attribute__((__gnu_inline__,__always_inline__))
+u32 gen_endbr(void) {
+    u32 endbr;
+    asm ("mov $~0xfa1e0ff3, %[endbr]\n\t"
+         "not %[endbr]\n\t" : [endbr] "=&r"(endbr));
+    return endbr;
+}
+
+u32 sample_endbr(void) {
+    return gen_endbr();
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/target/x86_64_linux_get_user_call.c"}
+/* Linux x86 exception-table checked and nocheck get_user helper ABI.
+ * Assembly-only: helpers require kernel privilege and kernel fixup tables. */
+register unsigned long current_stack_pointer asm("rsp");
+
+int linux_get_user_byte(const unsigned char *user, unsigned char *out) {
+    int error;
+    register unsigned char value asm("%rdx");
+    asm volatile("call __get_user_%c[size]"
+        : "=a" (error), "=r" (value), "+r" (current_stack_pointer)
+        : "0" (user), [size] "i" (sizeof(*user)));
+    *out = value;
+    return error;
+}
+
+int linux_get_user_half(const unsigned short *user, unsigned short *out) {
+    int error;
+    register unsigned short value asm("%rdx");
+    asm volatile("call __get_user_%c[size]"
+        : "=a" (error), "=r" (value), "+r" (current_stack_pointer)
+        : "0" (user), [size] "i" (sizeof(*user)));
+    *out = value;
+    return error;
+}
+
+int linux_get_user_word(const unsigned int *user, unsigned int *out) {
+    int error;
+    register unsigned int value asm("%rdx");
+    asm volatile("call __get_user_nocheck_%c[size]"
+        : "=a" (error), "=r" (value), "+r" (current_stack_pointer)
+        : "0" (user), [size] "i" (sizeof(*user)));
+    *out = value;
+    return error;
+}
+
+int linux_get_user_quad(const unsigned long *user, unsigned long *out) {
+    int error;
+    register unsigned long value asm("%rdx");
+    asm volatile("call __get_user_nocheck_%c[size]"
+        : "=a" (error), "=r" (value), "+r" (current_stack_pointer)
+        : "0" (user), [size] "i" (sizeof(*user)));
+    *out = value;
+    return error;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/target/x86_64_linux_idle_and_segments.c"}
+/* Original Linux x86 6.6 selector-snapshot and idle hardware contracts.
+ * Compile and inspect only: privileged instructions must never be run. */
+struct linux_thread_selectors {
+    unsigned short es, ds;
+};
+
+void linux_copy_thread_segments(struct linux_thread_selectors *thread) {
+    asm("mov %%es,%0" : "=r" (thread->es) : : "memory");
+    asm("mov %%ds,%0" : "=r" (thread->ds) : : "memory");
+}
+
+void linux_monitor(const void *address, unsigned long extensions,
+                   unsigned long hints) {
+    asm volatile(".byte 0x0f, 0x01, 0xc8;"
+                 : : "a" (address), "c" (extensions), "d" (hints));
+}
+
+void linux_monitorx(const void *address, unsigned long extensions,
+                    unsigned long hints) {
+    asm volatile(".byte 0x0f, 0x01, 0xfa;"
+                 : : "a" (address), "c" (extensions), "d" (hints));
+}
+
+void linux_mwait(unsigned long eax, unsigned long ecx) {
+    asm volatile(".byte 0x0f, 0x01, 0xc9;" : : "a" (eax), "c" (ecx));
+}
+
+void linux_mwaitx(unsigned long eax, unsigned long ebx,
+                 unsigned long ecx) {
+    asm volatile(".byte 0x0f, 0x01, 0xfb;"
+                 : : "a" (eax), "b" (ebx), "c" (ecx));
+}
+
+void linux_sti_mwait(unsigned long eax, unsigned long ecx) {
+    asm volatile("sti; .byte 0x0f, 0x01, 0xc9;"
+                 : : "a" (eax), "c" (ecx));
+}
+
+/* Linux also uses 32-bit hint/extension operands. MachineIR must bind the
+ * corresponding 32-bit A/B/C/D parts without losing a 64-bit address or
+ * treating RBX as caller-saved. */
+void linux_monitor_u32(const void *address, unsigned int ext,
+                       unsigned int hints) {
+    asm volatile(".byte 0x0f, 0x01, 0xc8;"
+                 : : "a" (address), "c" (ext), "d" (hints));
+}
+
+void linux_mwaitx_u32(unsigned int eax, unsigned int ebx,
+                      unsigned int ecx) {
+    asm volatile(".byte 0x0f, 0x01, 0xfb;"
+                 : : "a" (eax), "b" (ebx), "c" (ecx));
+}
+
+/* Linux's wider XSAVE/ptrace selectors use zero-extended 32-bit registers,
+ * including FS/GS forms without an explicit compiler memory fence. */
+void linux_read_segments_u32(unsigned int *dst) {
+    asm("movl %%fs,%0" : "=r" (dst[0]));
+    asm("movl %%gs,%0" : "=r" (dst[1]));
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/target/x86_64_linux_idle_clflush_alt.c"}
+/* Linux 6.6 x86 MWAIT idle CLFLUSH patch record. Compile-only. */
+void linux_idle_clflush_alternative(const void *address) {
+    asm volatile(
+        "# ALT: oldnstr\n"
+        "661:\n\t"
+        "\n662:\n"
+        "# ALT: padding\n"
+        ".skip -(((6651f-6641f)-(662b-661b)) > 0) * "
+              "((6651f-6641f)-(662b-661b)),0x90\n"
+        "663:\n"
+        ".pushsection .altinstructions,\"a\"\n"
+        " .long 661b - .\n"
+        " .long 6641f - .\n"
+        " .4byte (22*32 + (7))\n"
+        " .byte 663b-661b\n"
+        " .byte 6651f-6641f\n"
+        ".popsection\n"
+        ".pushsection .altinstr_replacement, \"ax\"\n"
+        "# ALT: replacement 1\n"
+        "6641:\n\t"
+        "clflush (%[addr])\n"
+        "6651:\n"
+        ".popsection\n"
+        : : "i" (0), [addr] "a" (address));
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/target/x86_64_linux_iomem_copy_tied.c"}
+/* Original Linux arch/x86/lib/iomem.c GNU register contracts. In particular
+ * the outputs are updated C lvalues and the inputs use numeric ties. */
+typedef unsigned long usize;
+
+__attribute__((noinline)) static int rep_movs(void *dest,
+    const void *src, usize bytes) {
+    unsigned long count, out_dest, out_src;
+    __asm__ volatile("rep ; movsl\n\t"
+        "testb $2,%b4\n\t"
+        "je 1f\n\t"
+        "movsw\n"
+        "1:\ttestb $1,%b4\n\t"
+        "je 2f\n\t"
+        "movsb\n"
+        "2:"
+        : "=&c"(count), "=&D"(out_dest), "=&S"(out_src)
+        : "0"(bytes / 4U), "q"(bytes),
+          "1"((long)dest), "2"((long)src)
+        : "memory");
+    return count == 0UL && out_dest == (unsigned long)dest + bytes &&
+        out_src == (unsigned long)src + bytes;
+}
+
+__attribute__((noinline)) static int copy_one_byte(
+    unsigned char *dest, const unsigned char *src) {
+    unsigned char *end_dest = dest;
+    const unsigned char *end_src = src;
+    __asm__ volatile("movsb" : "=&D"(end_dest), "=&S"(end_src)
+        : "0"(end_dest), "1"(end_src) : "memory");
+    return end_dest == dest + 1 && end_src == src + 1;
+}
+
+__attribute__((noinline)) static int copy_one_word(
+    unsigned char *dest, const unsigned char *src) {
+    unsigned char *end_dest = dest;
+    const unsigned char *end_src = src;
+    __asm__ volatile("movsw" : "=&D"(end_dest), "=&S"(end_src)
+        : "0"(end_dest), "1"(end_src) : "memory");
+    return end_dest == dest + 2 && end_src == src + 2;
+}
+
+int main(void) {
+    unsigned char src[32], dest[32];
+    unsigned long n, i;
+    for (i = 0UL; i < 32UL; ++i) src[i] = (unsigned char)(i * 7UL + 3UL);
+    for (n = 0UL; n <= 31UL; ++n) {
+        for (i = 0UL; i < 32UL; ++i) dest[i] = 0x5aU;
+        if (!rep_movs(dest, src, n)) return 1;
+        for (i = 0UL; i < n; ++i)
+            if (dest[i] != src[i]) return 2;
+        for (; i < 32UL; ++i)
+            if (dest[i] != 0x5aU) return 3;
+    }
+    dest[0] = dest[1] = 0;
+    if (!copy_one_byte(dest, src) || dest[0] != src[0]) return 4;
+    if (!copy_one_word(dest, src) ||
+        dest[0] != src[0] || dest[1] != src[1]) return 5;
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/target/x86_64_linux_ipv6_checksum.c"}
+/* Exact Linux csum_ipv6_magic GNU ADD/ADC form: two 128-bit addresses and
+ * a tied scalar checksum accumulator. */
+typedef unsigned long long u64;
+struct minic_ipv6_words { u64 q[2]; };
+
+#if defined(MINIC_IPV6_CSUM_NEGATIVE) && MINIC_IPV6_CSUM_NEGATIVE == 1
+#define MINIC_IPV6_CSUM_DADC "\taddq (%[daddr]),%[sum]\n"
+#else
+#define MINIC_IPV6_CSUM_DADC "\tadcq (%[daddr]),%[sum]\n"
+#endif
+
+#if defined(MINIC_IPV6_CSUM_NEGATIVE) && MINIC_IPV6_CSUM_NEGATIVE == 2
+#define MINIC_IPV6_CSUM_SADDR_CONSTRAINT "m"
+#else
+#define MINIC_IPV6_CSUM_SADDR_CONSTRAINT "r"
+#endif
+
+#if defined(MINIC_IPV6_CSUM_NEGATIVE) && MINIC_IPV6_CSUM_NEGATIVE == 3
+#define MINIC_IPV6_CSUM_QUALIFIER volatile
+#else
+#define MINIC_IPV6_CSUM_QUALIFIER
+#endif
+
+#if defined(MINIC_IPV6_CSUM_NEGATIVE) && MINIC_IPV6_CSUM_NEGATIVE == 4
+#define MINIC_IPV6_CSUM_TIE "r"
+#else
+#define MINIC_IPV6_CSUM_TIE "[sum]"
+#endif
+
+__attribute__((noinline)) u64 minic_ipv6_checksum(
+    u64 rest, const struct minic_ipv6_words *saddr,
+    const struct minic_ipv6_words *daddr) {
+    u64 sum64;
+    __asm__ MINIC_IPV6_CSUM_QUALIFIER(
+        "\taddq (%[saddr]),%[sum]\n"
+        "\tadcq 8(%[saddr]),%[sum]\n"
+        MINIC_IPV6_CSUM_DADC
+        "\tadcq 8(%[daddr]),%[sum]\n"
+        "\tadcq $0,%[sum]\n"
+        : [sum] "=r" (sum64)
+        : MINIC_IPV6_CSUM_TIE (rest),
+          [saddr] MINIC_IPV6_CSUM_SADDR_CONSTRAINT (saddr),
+          [daddr] "r" (daddr));
+    return sum64;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/target/x86_64_linux_ipv6_checksum_driver.c"}
+#include <stdint.h>
+#include <stdio.h>
+
+struct minic_ipv6_words { uint64_t q[2]; };
+uint64_t minic_ipv6_checksum(uint64_t,
+    const struct minic_ipv6_words *, const struct minic_ipv6_words *);
+
+static uint64_t reference(uint64_t rest,
+    const struct minic_ipv6_words *src,
+    const struct minic_ipv6_words *dst) {
+    uint64_t words[] = {src->q[0],src->q[1],dst->q[0],dst->q[1]};
+    uint64_t carry = 0;
+    unsigned int i;
+    for (i = 0; i < 4; ++i) {
+        const __uint128_t sum = (__uint128_t)rest + words[i] + carry;
+        rest = (uint64_t)sum;
+        carry = (uint64_t)(sum >> 64);
+    }
+    return rest + carry;
+}
+
+int main(void) {
+    static const struct {
+        uint64_t rest;
+        struct minic_ipv6_words src,dst;
+    } cases[] = {
+        {0, {{0,0}}, {{0,0}}},
+        {0x123456789abcdef0ULL,
+            {{0x3333333333333333ULL,0x8888888888888888ULL}},
+            {{0x5555555555555555ULL,0x9999999999999999ULL}}},
+        {1, {{UINT64_MAX,UINT64_MAX}}, {{1,UINT64_MAX}}},
+        {UINT64_MAX, {{UINT64_MAX,UINT64_MAX}},
+            {{UINT64_MAX,UINT64_MAX}}},
+        {0x1122334455667788ULL, {{UINT64_MAX,1}}, {{UINT64_MAX,1}}}
+    };
+    unsigned int i;
+    for (i = 0; i < sizeof(cases)/sizeof(cases[0]); ++i) {
+        const uint64_t got = minic_ipv6_checksum(
+            cases[i].rest,&cases[i].src,&cases[i].dst);
+        const uint64_t expected = reference(
+            cases[i].rest,&cases[i].src,&cases[i].dst);
+        if (got != expected) {
+            fprintf(stderr,"IPv6 checksum case %u: got %llx expected %llx\n",
+                i,(unsigned long long)got,(unsigned long long)expected);
+            return 1;
+        }
+    }
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/target/x86_64_linux_irqentry_driver.c"}
+typedef struct linux_irqentry_state {
+    union { _Bool exit_rcu; _Bool lockdep; };
+} linux_irqentry_state_t;
+
+extern linux_irqentry_state_t linux_irqstate_make(_Bool);
+extern int linux_irqstate_consume(linux_irqentry_state_t);
+extern int linux_irqstate_roundtrip(int);
+extern int linux_irqstate_from_gnu(int);
+
+linux_irqentry_state_t gnu_irqstate_make(_Bool value) {
+    linux_irqentry_state_t result;
+    result.lockdep = value;
+    return result;
+}
+
+int main(void) {
+    linux_irqentry_state_t state = linux_irqstate_make(1);
+    if (!state.exit_rcu || !state.lockdep) return 1;
+    state = linux_irqstate_make(0);
+    if (state.exit_rcu || state.lockdep) return 2;
+    state = gnu_irqstate_make(1);
+    if (linux_irqstate_consume(state) != 1) return 3;
+    state = gnu_irqstate_make(0);
+    if (linux_irqstate_consume(state) != 0) return 4;
+    if (linux_irqstate_roundtrip(1) != 1 ||
+        linux_irqstate_roundtrip(0) != 0) return 5;
+    if (linux_irqstate_from_gnu(1) != 1 ||
+        linux_irqstate_from_gnu(0) != 0) return 6;
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/target/x86_64_linux_irqentry_state.c"}
+/* Linux irqentry_state_t: one SysV INTEGER eightbyte with an anonymous
+ * Boolean union. GCC returns/passes the entire record in AL/DIL. */
+typedef struct linux_irqentry_state {
+    union {
+        _Bool exit_rcu;
+        _Bool lockdep;
+    };
+} linux_irqentry_state_t;
+
+linux_irqentry_state_t linux_irqstate_make(_Bool value) {
+    linux_irqentry_state_t result;
+    result.exit_rcu = value;
+    return result;
+}
+
+int linux_irqstate_consume(linux_irqentry_state_t state) {
+    return state.lockdep ? 1 : 0;
+}
+
+int linux_irqstate_roundtrip(int value) {
+    return linux_irqstate_consume(linux_irqstate_make(value != 0));
+}
+
+extern linux_irqentry_state_t gnu_irqstate_make(_Bool);
+int linux_irqstate_from_gnu(int value) {
+    linux_irqentry_state_t state = gnu_irqstate_make(value != 0);
+    return state.exit_rcu ? 1 : 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/target/x86_64_linux_jump_label.c"}
+/* SPDX-License-Identifier: GPL-2.0 */
+/* Linux x86 jump_label.h: GNU asm goto must retain the patch-site table,
+ * both PREL32 entries, and the key+flags offset in the 8-byte third word. */
+struct linux_static_key { unsigned long enabled; };
+static struct linux_static_key branch_key;
+
+int linux_static_branch_tagged(void) {
+    asm goto("1:"
+             "jmp %l[l_yes] # objtool NOPs this \n\t"
+             ".pushsection __jump_table,  \"aw\" \n\t"
+             " " ".balign 8" " " "\n\t"
+             ".long 1b - . \n\t"
+             ".long %l[l_yes] - . \n\t"
+             " " ".quad" " " "%c0 + %c1 - .\n\t"
+             ".popsection \n\t"
+             : : "i" (&branch_key), "i" (2) : : l_yes);
+    return 0;
+l_yes:
+    return 1;
+}
+
+int linux_static_branch_plain(void) {
+    asm goto("1:"
+             "jmp %l[l_yes]\n\t"
+             ".pushsection __jump_table,  \"aw\" \n\t"
+             " " ".balign 8" " " "\n\t"
+             ".long 1b - . \n\t"
+             ".long %l[l_yes] - . \n\t"
+             " " ".quad" " " "%c0 + %c1 - .\n\t"
+             ".popsection \n\t"
+             : : "i" (&branch_key), "i" (1) : : l_yes);
+    return 0;
+l_yes:
+    return 1;
+}
+
+/* Source-inline GNU operands are not necessarily constants until the
+ * caller's always_inline symbolic/integer specialization has occurred.
+ * This is the same producer shape used by the real Linux `arch_static_branch`
+ * after preprocessor expansion; if lowered as an SSA pointer, GNU AS cannot
+ * encode the required __jump_table third entry. */
+static inline __attribute__((always_inline)) int
+linux_inline_key_with_branch(struct linux_static_key *key, int branch) {
+    asm goto("1:"
+             "jmp %l[l_yes] # objtool NOPs this \n\t"
+             ".pushsection __jump_table,  \"aw\" \n\t"
+             " " ".balign 8" " " "\n\t"
+             ".long 1b - . \n\t"
+             ".long %l[l_yes] - . \n\t"
+             " " ".quad" " " "%c0 + %c1 - .\n\t"
+             ".popsection \n\t"
+             : : "i" (key), "i" (2 | branch) : : l_yes);
+    return 0;
+l_yes:
+    return 1;
+}
+
+int linux_static_branch_specialized(void) {
+    return linux_inline_key_with_branch(&branch_key, 1);
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/target/x86_64_linux_kernel_nofault_driver.c"}
+/* Run ONLY the valid-pointer path. Fault recovery requires a kernel
+ * __ex_table handler and is verified structurally in the ELF object. */
+typedef unsigned char u8;
+typedef unsigned short u16;
+typedef unsigned int u32;
+typedef unsigned long long u64;
+extern int linux_nofault_get_b(const void *, u8 *);
+extern int linux_nofault_get_w(const void *, u16 *);
+extern int linux_nofault_get_l(const void *, u32 *);
+extern int linux_nofault_get_q(const void *, u64 *);
+extern int linux_nofault_put_b(void *, u8);
+extern int linux_nofault_put_w(void *, u16);
+extern int linux_nofault_put_l(void *, u32);
+extern int linux_nofault_put_q(void *, u64);
+extern int linux_nofault_put_ptr(void *, void *);
+
+int main(void) {
+    u64 memory = 0x1122334455667788ULL;
+    u64 q;
+    u32 l;
+    u16 w;
+    u8 b;
+    if (linux_nofault_get_b(&memory, &b) || b != 0x88U) return 1;
+    if (linux_nofault_get_w(&memory, &w) || w != 0x7788U) return 2;
+    if (linux_nofault_get_l(&memory, &l) || l != 0x55667788U) return 3;
+    if (linux_nofault_get_q(&memory, &q) || q != memory) return 4;
+    if (linux_nofault_put_b(&memory, 0x99U) ||
+        memory != 0x1122334455667799ULL) return 5;
+    if (linux_nofault_put_w(&memory, 0xabbaU) ||
+        memory != 0x112233445566abbaULL) return 6;
+    if (linux_nofault_put_l(&memory, 0xd00dcafeU) ||
+        memory != 0x11223344d00dcafeULL) return 7;
+    if (linux_nofault_put_q(&memory, 0x123456789abcdef0ULL) ||
+        memory != 0x123456789abcdef0ULL) return 8;
+    {
+        void *pointer = 0;
+        if (linux_nofault_put_ptr(&pointer, &memory) || pointer != &memory)
+            return 9;
+    }
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/target/x86_64_linux_kernel_nofault_goto.c"}
+/* Original Linux x86 kernel nofault MOV + GNU asm-goto recovery: the
+ * second PREL32 __ex_table field must identify the C fault block, not a
+ * synthetic fallthrough. Valid-pointer calls are safe in user mode. */
+typedef unsigned char u8;
+typedef unsigned short u16;
+typedef unsigned int u32;
+typedef unsigned long long u64;
+struct __large_struct { unsigned long data[16]; };
+
+#define NOFAULT_LOAD(width) \
+    "\n1: mov" width " %[umem],%[output]\n" \
+    " .pushsection \"__ex_table\",\"a\"\n" \
+    " .balign 4\n" \
+    " .long (1b) - .\n" \
+    " .long (%l2) - .\n" \
+    " .long 3\n" \
+    " .popsection\n"
+
+#define NOFAULT_STORE(width) \
+    "\n1: mov" width " %0,%1\n" \
+    " .pushsection \"__ex_table\",\"a\"\n" \
+    " .balign 4\n" \
+    " .long (1b) - .\n" \
+    " .long (%l2) - .\n" \
+    " .long 3\n" \
+    " .popsection\n"
+
+#define DEFINE_NOFAULT_GET(suffix, ctype, regconstraint, mnemonic) \
+    int linux_nofault_get_##suffix(const void *p, ctype *out) { \
+        ctype temp; \
+        asm volatile goto(NOFAULT_LOAD(mnemonic) \
+            : [output] regconstraint (temp) \
+            : [umem] "m" (*(struct __large_struct *)p) : : bad); \
+        *out = temp; \
+        return 0; \
+    bad: return -14; \
+    }
+
+#define DEFINE_NOFAULT_PUT(suffix, ctype, regconstraint, mnemonic) \
+    int linux_nofault_put_##suffix(void *p, ctype value) { \
+        asm goto(NOFAULT_STORE(mnemonic) \
+            : : regconstraint (value), \
+                "m" (*(struct __large_struct *)p) : : bad); \
+        return 0; \
+    bad: return -14; \
+    }
+
+DEFINE_NOFAULT_GET(b, u8,  "=q", "b")
+DEFINE_NOFAULT_GET(w, u16, "=r", "w")
+DEFINE_NOFAULT_GET(l, u32, "=r", "l")
+DEFINE_NOFAULT_GET(q, u64, "=r", "q")
+DEFINE_NOFAULT_PUT(b, u8,  "iq", "b")
+DEFINE_NOFAULT_PUT(w, u16, "ir", "w")
+DEFINE_NOFAULT_PUT(l, u32, "ir", "l")
+DEFINE_NOFAULT_PUT(q, u64, "er", "q")
+
+/* Signal frames store pointer-typed uc_link with the same 8-byte nofault
+ * kernel MOV and exception-table goto branch; it is not an integer lvalue. */
+int linux_nofault_put_ptr(void *p, void *value) {
+    asm goto(NOFAULT_STORE("q")
+        : : "er"(value), "m"(*(struct __large_struct *)p) : : bad);
+    return 0;
+bad:
+    return -14;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/target/x86_64_linux_lidt_packed_descriptor.c"}
+/* Original Linux x86-64 IDT descriptor instruction, privileged execution.
+ * This file is for -S and independent GNU AS / ELF inspection only. */
+struct desc_ptr {
+    unsigned short size;
+    unsigned long address;
+} __attribute__((packed));
+
+void minic_test_linux_lidt(const struct desc_ptr *descriptor) {
+    asm volatile("lidt %0" : : "m" (*descriptor));
+}
+
+void minic_test_linux_lgdt(const struct desc_ptr *descriptor) {
+    asm volatile("lgdt %0" : : "m" (*descriptor));
+}
+
+void minic_test_linux_sgdt(struct desc_ptr *descriptor) {
+    asm volatile("sgdt %0" : "=m" (*descriptor));
+}
+
+void minic_test_linux_sidt(struct desc_ptr *descriptor) {
+    asm volatile("sidt %0" : "=m" (*descriptor));
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/target/x86_64_linux_load_unaligned_driver.c"}
+extern unsigned long linux_load_unaligned_zeropad(const void *);
+
+int main(void) {
+    const unsigned char data[] = {
+        0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x00
+    };
+    if (linux_load_unaligned_zeropad(&data[1]) !=
+        0x8877665544332211UL)
+        return 1;
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/target/x86_64_linux_load_unaligned_zeropad.c"}
+/* Linux's original type-20 unaligned word load. The exception handler is
+ * kernel-only; userspace runtime tests exercise only mapped memory. */
+unsigned long linux_load_unaligned_zeropad(const void *addr) {
+    unsigned long result;
+    asm volatile(
+        "1:\tmov %[mem], %[ret]\n"
+        "2:\n"
+        " .pushsection \"__ex_table\",\"a\"\n"
+        " .balign 4\n"
+        " .long (" "1b" ") - .\n"
+        " .long (" "2b" ") - .\n"
+        " .long " "20" " \n"
+        " .popsection\n"
+        : [ret] "=r"(result)
+        : [mem] "m"(*(unsigned long *)addr));
+    return result;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/target/x86_64_linux_lock_and_sign.c"}
+/* Original Linux arch_clear_bit_unlock_is_negative_byte: the signed result
+ * belongs to the same locked byte memory RMW that gets an SMP patch record. */
+typedef _Bool bool;
+
+#if defined(MINIC_LOCK_AND_SIGN_NEGATIVE) && MINIC_LOCK_AND_SIGN_NEGATIVE == 1
+#define MINIC_LOCK_SIGN_OPCODE "orb %2,%1"
+#else
+#define MINIC_LOCK_SIGN_OPCODE "andb %2,%1"
+#endif
+
+#if defined(MINIC_LOCK_AND_SIGN_NEGATIVE) && MINIC_LOCK_AND_SIGN_NEGATIVE == 2
+#define MINIC_LOCK_SIGN_CC "=@ccc"
+#else
+#define MINIC_LOCK_SIGN_CC "=@ccs"
+#endif
+
+#if defined(MINIC_LOCK_AND_SIGN_NEGATIVE) && MINIC_LOCK_AND_SIGN_NEGATIVE == 3
+#define MINIC_LOCK_SIGN_CLOBBER "cc"
+#else
+#define MINIC_LOCK_SIGN_CLOBBER "memory"
+#endif
+
+#if defined(MINIC_LOCK_AND_SIGN_NEGATIVE) && MINIC_LOCK_AND_SIGN_NEGATIVE == 4
+#define MINIC_LOCK_SIGN_INPUT "r"
+#else
+#define MINIC_LOCK_SIGN_INPUT "ir"
+#endif
+
+#if defined(MINIC_LOCK_AND_SIGN_NEGATIVE) && MINIC_LOCK_AND_SIGN_NEGATIVE == 5
+#define MINIC_LOCK_SIGN_COMMENT "\n\t/* output condition code z */\n"
+#else
+#define MINIC_LOCK_SIGN_COMMENT "\n\t/* output condition code s */\n"
+#endif
+
+__attribute__((noinline)) bool minic_lock_and_sign(
+    long nr, volatile unsigned long *addr) {
+    bool negative;
+    asm volatile(".pushsection .smp_locks,\"a\"\n"
+                 ".balign 4\n"
+                 ".long 671f - .\n"
+                 ".popsection\n"
+                 "671:\n\tlock; " MINIC_LOCK_SIGN_OPCODE
+                 MINIC_LOCK_SIGN_COMMENT
+        : MINIC_LOCK_SIGN_CC (negative), "+m" (*(volatile char *)addr)
+        : MINIC_LOCK_SIGN_INPUT ((char)~(1 << nr))
+        : MINIC_LOCK_SIGN_CLOBBER);
+    return negative;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/target/x86_64_linux_lock_and_sign_driver.c"}
+#include <stdint.h>
+#include <stdio.h>
+
+_Bool minic_lock_and_sign(long, volatile unsigned long *);
+
+int main(void) {
+    unsigned int bit, value;
+    for (bit = 0U; bit != 8U; ++bit) {
+        for (value = 0U; value != 256U; ++value) {
+            const unsigned char expected = (unsigned char)
+                (value & ~(1U << bit));
+            volatile unsigned long memory = 0x1234567800000000UL | value;
+            const _Bool sign = minic_lock_and_sign((long)bit,&memory);
+            if ((unsigned char)memory != expected ||
+                sign != ((_Bool)((expected & 0x80U) != 0U))) {
+                fprintf(stderr,"lock and sign: bit=%u initial=%u result=%lx sign=%u\n",
+                    bit,value,memory,(unsigned int)sign);
+                return 1;
+            }
+            if ((memory & ~0xffUL) != 0x1234567800000000UL)
+                return 2;
+        }
+    }
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/target/x86_64_linux_membuf_abi.c"}
+/* Linux ptrace struct membuf: two INTEGER SysV eightbytes (pointer+size_t).
+ * Both an incoming aggregate and an outgoing aggregate call are exercised. */
+struct linux_membuf {
+    void *p;
+    unsigned long left;
+};
+
+unsigned long minic_linux_membuf_sum(struct linux_membuf buffer) {
+    return (unsigned long)buffer.p + buffer.left;
+}
+
+unsigned long minic_linux_membuf_call(void *pointer, unsigned long length) {
+    struct linux_membuf buffer;
+    buffer.p = pointer;
+    buffer.left = length;
+    return minic_linux_membuf_sum(buffer);
+}
+
+/* Linux inode_get_ctime(): two signed INTEGER eightbytes returned in
+ * RAX/RDX and passed in the SysV GPR pair, not a hidden sret pointer. */
+struct linux_timespec64 {
+    long long tv_sec;
+    long tv_nsec;
+};
+
+struct linux_timespec64 minic_linux_timespec_return(
+    long long seconds, long nanos) {
+    struct linux_timespec64 result;
+    result.tv_sec = seconds;
+    result.tv_nsec = nanos;
+    return result;
+}
+
+long long minic_linux_timespec_sum(struct linux_timespec64 value) {
+    return value.tv_sec + value.tv_nsec;
+}
+
+long long minic_linux_timespec_roundtrip(long long seconds, long nanos) {
+    struct linux_timespec64 ts = minic_linux_timespec_return(seconds, nanos);
+    return minic_linux_timespec_sum(ts);
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/target/x86_64_linux_membuf_driver.c"}
+/* GNU caller -> MiniC aggregate parameter and MiniC -> MiniC aggregate
+ * parameter. No kernel or privileged operation is involved in this test. */
+struct linux_membuf {
+    void *p;
+    unsigned long left;
+};
+
+extern unsigned long minic_linux_membuf_sum(struct linux_membuf);
+extern unsigned long minic_linux_membuf_call(void *, unsigned long);
+
+struct linux_timespec64 {
+    long long tv_sec;
+    long tv_nsec;
+};
+extern struct linux_timespec64 minic_linux_timespec_return(long long, long);
+extern long long minic_linux_timespec_sum(struct linux_timespec64);
+extern long long minic_linux_timespec_roundtrip(long long, long);
+
+int main(void) {
+    struct linux_membuf buffer;
+    buffer.p = (void *)0x12340000UL;
+    buffer.left = 0x5678UL;
+    if (minic_linux_membuf_sum(buffer) != 0x12345678UL) return 1;
+    if (minic_linux_membuf_call(buffer.p, buffer.left) != 0x12345678UL)
+        return 2;
+    {
+        struct linux_timespec64 ts =
+            minic_linux_timespec_return(-1000, 987654321);
+        if (ts.tv_sec != -1000 || ts.tv_nsec != 987654321) return 3;
+        if (minic_linux_timespec_sum(ts) != 987653321) return 4;
+        if (minic_linux_timespec_roundtrip(-400, 890) != 490) return 5;
+    }
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/target/x86_64_linux_next_owner.c"}
+/* Linux 6.6 original failure-owner forms. Privileged instructions are
+ * compile/assemble-only: the test never executes either far jumps or fences. */
+struct real_mode_header {
+    unsigned int machine_real_restart_asm;
+};
+
+void linux_real_mode_restart(struct real_mode_header *header,
+    unsigned int restart_type) {
+    asm volatile("ljmpl *%0" : :
+        "m" (header->machine_real_restart_asm), "D" (restart_type));
+    asm volatile("375:\n\t"
+        ".pushsection .discard.unreachable\n\t"
+        ".long 375b - .\n\t"
+        ".popsection\n\t" : : "i" (375));
+}
+
+void linux_weak_wrmsr_fence(void) {
+    asm volatile(
+        "# ALT: oldnstr\n"
+        "661:\n\tmfence; lfence\n"
+        "662:\n# ALT: padding\n"
+        ".skip -(((6651f-6641f)-(662b-661b)) > 0) * "
+        "((6651f-6641f)-(662b-661b)),0x90\n"
+        "663:\n"
+        ".pushsection .altinstructions,\"a\"\n"
+        " .long 661b - .\n"
+        " .long 6641f - .\n"
+        " .4byte (((1 << 0) << 16) | ((11*32+27)))\n"
+        " .byte 663b-661b\n"
+        " .byte 6651f-6641f\n"
+        ".popsection\n"
+        ".pushsection .altinstr_replacement, \"ax\"\n"
+        "# ALT: replacement 1\n"
+        "6641:\n\t\n6651:\n"
+        ".popsection\n" : : : "memory");
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/target/x86_64_linux_next_owner_smap.c"}
+/* Linux's complete feature-gated STAC/CLAC records, compile-only. */
+#define SMAP_ALTERNATIVE(replacement) \
+    "# ALT: oldnstr\n" "661:\n\t" "" "\n662:\n" \
+    "# ALT: padding\n" \
+    ".skip -(((" "665""1""f-""664""1""f" ")-(" "662b-661b" ")) > 0) * " \
+    "((" "665""1""f-""664""1""f" ")-(" "662b-661b" ")),0x90\n" \
+    "663" ":\n" \
+    ".pushsection .altinstructions,\"a\"\n" \
+    " .long 661b - .\n" \
+    " .long " "664""1""f - .\n" \
+    " .4byte " "( 9*32+20)" "\n" \
+    " .byte " "663""b-661b" "\n" \
+    " .byte " "665""1""f-""664""1""f" "\n" \
+    ".popsection\n" \
+    ".pushsection .altinstr_replacement, \"ax\"\n" \
+    "# ALT: replacement " "1" "\n" \
+    "664""1"":\n\t" replacement "\n" "665""1" ":\n" \
+    ".popsection\n"
+
+void linux_owner_clac(void) {
+    asm volatile(SMAP_ALTERNATIVE(".byte 0x0f,0x01,0xca") : : : "memory");
+}
+
+void linux_owner_stac(void) {
+    asm volatile(SMAP_ALTERNATIVE(".byte 0x0f,0x01,0xcb") : : : "memory");
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/target/x86_64_linux_paravirt_indirect_call.c"}
+/* Linux 6.6 paravirt indirect call: compile/assemble only. The indirect
+ * target and metadata are real patching ABI, never executed in userland. */
+struct pv_ops {
+    struct {
+        void (*io_delay)(void);
+    } cpu;
+};
+extern struct pv_ops pv_ops;
+register unsigned long current_stack_pointer asm("rsp");
+
+void test_paravirt_io_delay(void) {
+    unsigned long __edi = __edi, __esi = __esi, __edx = __edx;
+    unsigned long __ecx = __ecx;
+    asm volatile("771:\n\t"
+        "999:\n\t"
+        ".pushsection .discard.retpoline_safe\n\t"
+        ".long 999b\n\t"
+        ".popsection\n\t"
+        "call *%[paravirt_opptr];\n"
+        "772:\n"
+        ".pushsection .parainstructions,\"a\"\n"
+        " .balign 8 \n"
+        " .quad 771b\n"
+        " .byte %c[paravirt_typenum]\n"
+        " .byte 772b-771b\n"
+        " .balign 8 \n"
+        ".popsection\n"
+        : "=D" (__edi), "=S" (__esi), "=d" (__edx), "=c" (__ecx),
+          "+r" (current_stack_pointer)
+        : [paravirt_typenum] "i" (0),
+          [paravirt_opptr] "m" (pv_ops.cpu.io_delay)
+        : "memory", "cc", "rax", "r8", "r9", "r10", "r11");
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/target/x86_64_linux_pkru.c"}
+/* SPDX-License-Identifier: GPL-2.0 */
+/* Real Linux x86 special_insns.h RDPKRU/WRPKRU byte and GPR contracts.
+ * Both are privileged CPU-state instructions: test object shape only, never
+ * execute these functions on the host (PKRU availability is CPU dependent). */
+typedef unsigned int u32;
+
+u32 linux_rdpkru(void) {
+    u32 ecx = 0;
+    u32 edx, pkru;
+    asm volatile(".byte 0x0f,0x01,0xee\n\t"
+                 : "=a" (pkru), "=d" (edx)
+                 : "c" (ecx));
+    return pkru;
+}
+
+void linux_wrpkru(u32 pkru) {
+    u32 ecx = 0, edx = 0;
+    asm volatile(".byte 0x0f,0x01,0xef\n\t"
+                 : : "a" (pkru), "c" (ecx), "d" (edx));
+}
+
+/* Additional live EDX output proves it is not accidentally optimized to
+ * an EAX-only result, and that the next computation can read both outputs. */
+u32 linux_rdpkru_high(void) {
+    u32 ecx = 0;
+    u32 edx, pkru;
+    asm volatile(".byte 0x0f,0x01,0xee\n\t"
+                 : "=a" (pkru), "=d" (edx)
+                 : "c" (ecx));
+    return pkru ^ edx;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/target/x86_64_linux_pm_trace.c"}
+/* Original drivers/base/power/main.c pm_trace exact source-qualified GNU asm. */
+extern void generate_pm_trace(const void *, int);
+#if defined(MINIC_PM_TRACE_NEG_TEMPLATE)
+#define MINIC_PM_TRACE_SECTION ".section .badtracedata,\"a\"\n"
+#else
+#define MINIC_PM_TRACE_SECTION ".section .tracedata,\"a\"\n"
+#endif
+#if defined(MINIC_PM_TRACE_NEG_LINE_CONSTRAINT)
+#define MINIC_PM_TRACE_LINE_CONSTRAINT "r"
+#else
+#define MINIC_PM_TRACE_LINE_CONSTRAINT "i"
+#endif
+#if defined(MINIC_PM_TRACE_NEG_LINE_RANGE)
+#define MINIC_PM_TRACE_LINE 65536
+#else
+#define MINIC_PM_TRACE_LINE 598
+#endif
+#if defined(MINIC_PM_TRACE_NEG_RUNTIME_FILENAME)
+extern const char *linux_pm_trace_runtime_filename;
+#define MINIC_PM_TRACE_FILENAME linux_pm_trace_runtime_filename
+#else
+#define MINIC_PM_TRACE_FILENAME "drivers/base/power/main.c"
+#endif
+#if defined(MINIC_PM_TRACE_NEG_MEMORY_CLOBBER)
+#define MINIC_PM_TRACE_CLOBBER : "memory"
+#else
+#define MINIC_PM_TRACE_CLOBBER
+#endif
+
+void linux_pm_trace_resume(void) {
+    const void *tracedata;
+    asm volatile("movq $1f,%0\n"
+                 MINIC_PM_TRACE_SECTION
+                 "1:\t.word %c1\n\t"
+                 ".quad %c2\n"
+                 ".previous"
+                 : "=r"(tracedata)
+                 : MINIC_PM_TRACE_LINE_CONSTRAINT(MINIC_PM_TRACE_LINE),
+                   "i"(MINIC_PM_TRACE_FILENAME)
+                 MINIC_PM_TRACE_CLOBBER);
+    generate_pm_trace(tracedata, 0);
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/target/x86_64_linux_privileged_zero.c"}
+/* Linux x86's full exact privileged zero-operand ISA inventory.
+ * Never execute these functions on the host: compile + GNU AS only. */
+void linux_priv_cli(void) {
+    asm volatile("cli" : : : "memory");
+}
+
+void linux_priv_sti(void) {
+    asm volatile("sti" : : : "memory");
+}
+
+void linux_priv_sti_hlt(void) {
+    asm volatile("sti; hlt" : : : "memory");
+}
+
+void linux_priv_hlt(void) {
+    asm volatile("hlt");
+}
+
+void linux_priv_wbinvd(void) {
+    asm volatile("wbinvd" : : : "memory");
+}
+
+void linux_priv_swapgs(void) {
+    asm volatile("swapgs" : : : "memory");
+}
+
+void linux_priv_serialize(void) {
+    asm volatile(".byte 0xf, 0x1, 0xe8" : : : "memory");
+}
+
+void linux_priv_io_delay_80(void) {
+    asm volatile("outb %al, $0x80");
+}
+
+void linux_priv_io_delay_ed(void) {
+    asm volatile("outb %al, $0xed");
+}
+
+void linux_priv_int3(void) {
+    asm volatile("int3");
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/target/x86_64_linux_put_user_call.c"}
+/* Original Linux x86 __put_user_N helper calling convention. Compile-only;
+ * it needs an in-kernel exception-fixup helper and must not run in userland. */
+register unsigned long current_stack_pointer asm("rsp");
+
+int linux_put_user_byte(unsigned char *address, unsigned char value) {
+    int err;
+    void *user = address;
+    register unsigned char payload asm("%rax");
+    payload = value;
+    asm volatile("call __put_user_%c[size]"
+        : "=c" (err), "+r" (current_stack_pointer)
+        : "0" (user), "r" (payload), [size] "i" (sizeof(*address)) : "ebx");
+    return err;
+}
+
+int linux_put_user_half(unsigned short *address, unsigned short value) {
+    int err;
+    void *user = address;
+    register unsigned short payload asm("%rax");
+    payload = value;
+    asm volatile("call __put_user_%c[size]"
+        : "=c" (err), "+r" (current_stack_pointer)
+        : "0" (user), "r" (payload), [size] "i" (sizeof(*address)) : "ebx");
+    return err;
+}
+
+int linux_put_user_word(unsigned int *address, unsigned int value) {
+    int err;
+    void *user = address;
+    register unsigned int payload asm("%rax");
+    payload = value;
+    asm volatile("call __put_user_%c[size]"
+        : "=c" (err), "+r" (current_stack_pointer)
+        : "0" (user), "r" (payload), [size] "i" (sizeof(*address)) : "ebx");
+    return err;
+}
+
+int linux_put_user_quad(unsigned long *address, unsigned long value) {
+    int err;
+    void *user = address;
+    register unsigned long payload asm("%rax");
+    payload = value;
+    asm volatile("call __put_user_%c[size]"
+        : "=c" (err), "+r" (current_stack_pointer)
+        : "0" (user), "r" (payload), [size] "i" (sizeof(*address)) : "ebx");
+    return err;
+}
+
+/* FPU signal frames and other nocheck accessors share the same kernel
+ * RCX/RAX/RSP/EBX ABI but select __put_user_nocheck_N helpers. */
+int linux_put_user_nocheck_half(unsigned short *address,
+                               unsigned short value) {
+    int err;
+    void *user = address;
+    register unsigned short payload asm("%rax");
+    payload = value;
+    asm volatile("call __put_user_nocheck_%c[size]"
+        : "=c" (err), "+r" (current_stack_pointer)
+        : "0" (user), "r" (payload), [size] "i" (sizeof(*address)) : "ebx");
+    return err;
+}
+
+int linux_put_user_nocheck_word(unsigned int *address,
+                               unsigned int value) {
+    int err;
+    void *user = address;
+    register unsigned int payload asm("%rax");
+    payload = value;
+    asm volatile("call __put_user_nocheck_%c[size]"
+        : "=c" (err), "+r" (current_stack_pointer)
+        : "0" (user), "r" (payload), [size] "i" (sizeof(*address)) : "ebx");
+    return err;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/target/x86_64_linux_qspinlock_bitcc.c"}
+/* The original Linux qspinlock queued_fetch_set_pending_acquire pattern:
+ * the SMP patch entry must relocate to LOCK BTSL, not to SETC. */
+unsigned int minic_linux_qspinlock_bitcc(unsigned int *word) {
+    _Bool carry;
+    __asm__ __volatile__(
+        ".pushsection .smp_locks,\"a\"\n"
+        ".balign 4\n"
+        ".long 671f - .\n"
+        ".popsection\n"
+        "671:\n"
+        "\n\tlock; "
+#if MINIC_QSPINLOCK_BITCC_NEGATIVE == 4
+        "btrl"
+#else
+        "btsl"
+#endif
+        " %[val], %[var]"
+        "\n\t/* output condition code c */\n"
+        : [var] "+m" (*word),
+#if MINIC_QSPINLOCK_BITCC_NEGATIVE == 1
+          "=@ccz"
+#else
+          "=@ccc"
+#endif
+          (carry)
+        : [val] "I" (
+#if MINIC_QSPINLOCK_BITCC_NEGATIVE == 2
+          (0 + 9)
+#else
+          (0 + 8)
+#endif
+          )
+#if MINIC_QSPINLOCK_BITCC_NEGATIVE != 3
+        : "memory"
+#endif
+    );
+    return (unsigned int)carry * (1U << 8);
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/target/x86_64_linux_qspinlock_bitcc_driver.c"}
+extern unsigned int minic_linux_qspinlock_bitcc(unsigned int *);
+
+int main(void) {
+    unsigned int word = 0U;
+    if (minic_linux_qspinlock_bitcc(&word) != 0U || word != 256U)
+        return 1;
+    if (minic_linux_qspinlock_bitcc(&word) != 256U || word != 256U)
+        return 2;
+    word = 0xfeed00ffU;
+    if (minic_linux_qspinlock_bitcc(&word) != 0U || word != 0xfeed01ffU)
+        return 3;
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/target/x86_64_linux_rep_string_io.c"}
+/* Original Linux lib/iomap.c port-string I/O hardware constraints.  Never
+ * execute these functions in user space: IN/OUT is privileged hardware I/O. */
+typedef unsigned short u16;
+typedef unsigned long usize;
+
+#define DEFINE_OUT(name, suffix)                                           \
+__attribute__((noinline)) usize name(u16 port, const void *src, usize n) { \
+    const void *cursor = src;                                              \
+    asm volatile("rep; outs" suffix : "+S"(cursor), "+c"(n) : "d"(port)   \
+        : "memory");                                                      \
+    return (usize)cursor + n;                                              \
+}
+
+#define DEFINE_IN(name, suffix)                                           \
+__attribute__((noinline)) usize name(u16 port, void *dst, usize n) {      \
+    void *cursor = dst;                                                     \
+    asm volatile("rep; ins" suffix : "+D"(cursor), "+c"(n) : "d"(port)    \
+        : "memory");                                                      \
+    return (usize)cursor + n;                                              \
+}
+
+DEFINE_OUT(x86_rep_outsb,"b")
+DEFINE_OUT(x86_rep_outsw,"w")
+DEFINE_OUT(x86_rep_outsl,"l")
+DEFINE_IN(x86_rep_insb,"b")
+DEFINE_IN(x86_rep_insw,"w")
+DEFINE_IN(x86_rep_insl,"l")
+
+#ifdef MINIC_NEGATIVE_TEMPLATE
+void invalid_template(u16 p, const void *a, usize n) {
+    asm volatile("rep; outsb; cli" : "+S"(a), "+c"(n) : "d"(p) : "memory");
+}
+#endif
+#ifdef MINIC_NEGATIVE_CONSTRAINT
+void invalid_constraint(u16 p, const void *a, usize n) {
+    asm volatile("rep; outsb" : "+D"(a), "+c"(n) : "d"(p) : "memory");
+}
+#endif
+#ifdef MINIC_NEGATIVE_PORT
+void invalid_port(u16 p, const void *a, usize n) {
+    asm volatile("rep; outsb" : "+S"(a), "+c"(n) : "r"(p) : "memory");
+}
+#endif
+#ifdef MINIC_NEGATIVE_MEMORY
+void invalid_memory(u16 p, const void *a, usize n) {
+    asm volatile("rep; outsb" : "+S"(a), "+c"(n) : "d"(p));
+}
+#endif
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/target/x86_64_linux_rng_flag.c"}
+/* Linux rdrand_long/rdseed_long: the CF flag output and data result are
+ * independent GNU outputs. Do not run without checking CPU capabilities. */
+int linux_rdrand_long(unsigned long *result) {
+    _Bool succeeded;
+    asm volatile("rdrand %[out]"
+        "\n\t/* output condition code " "c" "*/\n"
+        : "=@cc" "c"(succeeded), [out] "=r"(*result));
+    return succeeded;
+}
+
+int linux_rdseed_long(unsigned long *result) {
+    _Bool succeeded;
+    asm volatile("rdseed %[out]"
+        "\n\t/* output condition code " "c" "*/\n"
+        : "=@cc" "c"(succeeded), [out] "=r"(*result));
+    return succeeded;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/target/x86_64_linux_save_flags_inline.c"}
+/* Linux 6.6.143 arch/x86/include/asm/irqflags.h native_save_fl(). */
+extern inline __attribute__((__gnu_inline__, __always_inline__))
+unsigned long native_save_fl(void) {
+    unsigned long flags;
+    asm volatile("# __raw_save_flags\n\tpushf ; pop %0"
+                 : "=rm"(flags) : : "memory");
+    return flags;
+}
+
+static inline __attribute__((__always_inline__))
+unsigned long arch_local_save_flags(void) {
+    return native_save_fl();
+}
+
+unsigned long sample_flags(void) {
+    return arch_local_save_flags();
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/target/x86_64_linux_save_flags_standalone.c"}
+unsigned long native_save_fl(void) {
+    unsigned long flags;
+    asm volatile("# __raw_save_flags\n\tpushf ; pop %0"
+                 : "=rm"(flags) : : "memory");
+    return flags;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/target/x86_64_linux_segment_load_extable.c"}
+/* Linux 6.6.143 loadsegment(): exact GNU extended ASM plus exception entry.
+ * Kernel-only selector writes; assemble, never execute in userspace. */
+typedef unsigned short u16;
+
+#define LOADSEG(name, segment) \
+void name(u16 selector) { \
+    asm volatile("1: movw %0, %%" #segment "\n" \
+        "2:\n" \
+        " .pushsection \"__ex_table\",\"a\"\n" \
+        " .balign 4\n" \
+        " .long (1b) - .\n" \
+        " .long (2b) - .\n" \
+        " .long 5\n" \
+        " .popsection\n" : : "rm"(selector) : "memory"); \
+}
+
+LOADSEG(load_fs,fs)
+LOADSEG(load_gs,gs)
+LOADSEG(load_ds,ds)
+LOADSEG(load_es,es)
+LOADSEG(load_ss,ss)
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/target/x86_64_linux_selector_lar.c"}
+/* Linux force_valid_ss, including the actual ZF-dependent invalid selector
+ * result. LAR reads access-right metadata rather than selector bits. */
+typedef unsigned short u16;
+typedef unsigned int u32;
+
+u32 linux_read_ss_access_rights(u16 selector) {
+    u32 access_rights;
+    asm volatile("lar %[old_ss], %[ar]\n\t"
+                 "jz 1f\n\t"
+                 "xorl %[ar], %[ar]\n\t"
+                 "1:"
+        : [ar] "=r"(access_rights)
+        : [old_ss] "rm"(selector));
+    return access_rights;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/target/x86_64_linux_selector_lar_driver.c"}
+typedef unsigned short u16;
+typedef unsigned int u32;
+extern u32 linux_read_ss_access_rights(u16);
+
+static u32 gnu_read_ss_access_rights(u16 selector) {
+    u32 access_rights;
+    asm volatile("lar %1, %0\n\t"
+                 "jz 1f\n\t"
+                 "xorl %0, %0\n\t"
+                 "1:"
+        : "=r"(access_rights) : "rm"(selector));
+    return access_rights;
+}
+
+int main(void) {
+    u16 ss;
+    asm volatile("movw %%ss, %0" : "=r"(ss));
+    if (linux_read_ss_access_rights(0) != 0U) return 1;
+    if (linux_read_ss_access_rights(1) != gnu_read_ss_access_rights(1))
+        return 2;
+    if (linux_read_ss_access_rights(ss) != gnu_read_ss_access_rights(ss))
+        return 3;
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/target/x86_64_linux_smap_rep_alternative.c"}
+/* The actual Linux SMAP and REP MOVSB ALTERNATIVE section grammar.
+ * These kernel instructions must only be assembled/inspected, not run. */
+register unsigned long current_stack_pointer asm("rsp");
+
+#define SMAP_ALTERNATIVE(replacement) \
+    "# ALT: oldnstr\n" "661:\n\t" "" "\n662:\n" \
+    "# ALT: padding\n" \
+    ".skip -(((" "665""1""f-""664""1""f" ")-(" "662b-661b" ")) > 0) * " \
+    "((" "665""1""f-""664""1""f" ")-(" "662b-661b" ")),0x90\n" \
+    "663" ":\n" \
+    ".pushsection .altinstructions,\"a\"\n" \
+    " .long 661b - .\n" \
+    " .long " "664""1""f - .\n" \
+    " .4byte " "( 9*32+20)" "\n" \
+    " .byte " "663""b-661b" "\n" \
+    " .byte " "665""1""f-""664""1""f" "\n" \
+    ".popsection\n" \
+    ".pushsection .altinstr_replacement, \"ax\"\n" \
+    "# ALT: replacement " "1" "\n" \
+    "664""1"":\n\t" replacement "\n" "665""1" ":\n" \
+    ".popsection\n"
+
+static inline void linux_clac(void) {
+    asm volatile(SMAP_ALTERNATIVE(".byte 0x0f,0x01,0xca") : : : "memory");
+}
+static inline void linux_stac(void) {
+    asm volatile(SMAP_ALTERNATIVE(".byte 0x0f,0x01,0xcb") : : : "memory");
+}
+unsigned long linux_smap_save(void) {
+    unsigned long flags;
+    asm volatile("# smap_save\n\t" SMAP_ALTERNATIVE(
+        "pushf; pop %0; .byte 0x0f,0x01,0xca\n\t")
+        : "=rm"(flags) : : "memory", "cc");
+    return flags;
+}
+void linux_smap_restore(unsigned long flags) {
+    asm volatile("# smap_restore\n\t" SMAP_ALTERNATIVE(
+        "push %0; popf\n\t") : : "g"(flags) : "memory", "cc");
+}
+extern unsigned long rep_movs_alternative(void *, const void *, unsigned);
+unsigned long linux_copy_user_generic(void *to, const void *from,
+                                      unsigned long len) {
+    linux_stac();
+    asm volatile(
+        "1:\n\t"
+        "# ALT: oldnstr\n" "661:\n\t" "rep movsb" "\n662:\n" "# ALT: padding\n" ".skip -(((" "665""1""f-""664""1""f" ")-(" "662b-661b" ")) > 0) * " "((" "665""1""f-""664""1""f" ")-(" "662b-661b" ")),0x90\n" "663" ":\n" ".pushsection .altinstructions,\"a\"\n" " .long 661b - .\n" " .long " "664""1""f - .\n" " .4byte " "(((1 << 0) << 16) | ((18*32+ 4)))" "\n" " .byte " "663""b-661b" "\n" " .byte " "665""1""f-""664""1""f" "\n" ".popsection\n" ".pushsection .altinstr_replacement, \"ax\"\n" "# ALT: replacement " "1" "\n" "664""1"":\n\t" "call rep_movs_alternative" "\n" "665""1" ":\n" ".popsection\n"
+        "2:\n"
+        " .pushsection \"__ex_table\",\"a\"\n" " .balign 4\n" " .long (" "1b" ") - .\n" " .long (" "2b" ") - .\n" " .long " "3" " \n" " .popsection\n"
+        : "+c"(len), "+D"(to), "+S"(from), "+r"(current_stack_pointer)
+        : : "memory", "rax");
+    linux_clac();
+    return len;
+}
+
+extern unsigned long rep_stos_alternative(void *, unsigned long);
+unsigned long linux_clear_user(void *address, unsigned long size) {
+    asm volatile(
+        "1:\n\t"
+        "# ALT: oldnstr\n" "661:\n\t" "rep stosb" "\n662:\n" "# ALT: padding\n" ".skip -(((" "665""1""f-""664""1""f" ")-(" "662b-661b" ")) > 0) * " "((" "665""1""f-""664""1""f" ")-(" "662b-661b" ")),0x90\n" "663" ":\n" ".pushsection .altinstructions,\"a\"\n" " .long 661b - .\n" " .long " "664""1""f - .\n" " .4byte " "(((1 << 0) << 16) | ((12*32+11)))" "\n" " .byte " "663""b-661b" "\n" " .byte " "665""1""f-""664""1""f" "\n" ".popsection\n" ".pushsection .altinstr_replacement, \"ax\"\n" "# ALT: replacement " "1" "\n" "664""1"":\n\t" "call rep_stos_alternative" "\n" "665""1" ":\n" ".popsection\n"
+        "2:\n"
+        " .pushsection \"__ex_table\",\"a\"\n" " .balign 4\n" " .long (" "1b" ") - .\n" " .long (" "2b" ") - .\n" " .long " "3" " \n" " .popsection\n"
+        : "+c"(size), "+D"(address), "+r"(current_stack_pointer)
+        : "a"(0));
+    return size;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/target/x86_64_linux_task_vdso.c"}
+/* Privileged task selector and vDSO getcpu alternatives: never executed. */
+void load_task_selector(unsigned short selector) {
+    __asm__ __volatile__("ltr %w0" : : "q"(selector));
+}
+unsigned short store_task_selector16(void) {
+    unsigned short value;
+    __asm__ __volatile__("str %0" : "=r"(value));
+    return value;
+}
+unsigned int store_task_selector32(void) {
+    unsigned int value;
+    __asm__ __volatile__("str %0" : "=r"(value));
+    return value;
+}
+unsigned long store_task_selector64(void) {
+    unsigned long value;
+    __asm__ __volatile__("str %0" : "=r"(value));
+    return value;
+}
+unsigned int vdso_getcpu_lsl(void) {
+    unsigned int result;
+    __asm__ __volatile__(
+        "# ALT: oldnstr\n"
+        "661:\n\tlsl %[seg],%[p]\n"
+        "662:\n"
+        "# ALT: padding\n"
+        ".skip -(((6651f-6641f)-(662b-661b))>0)*"
+        "((6651f-6641f)-(662b-661b)),0x90\n"
+        "663:\n"
+        ".pushsection .altinstructions,\"a\"\n"
+        ".long 661b - .\n"
+        ".long 6641f - .\n"
+        ".4byte (16*32+22)\n"
+        ".byte 663b - 661b\n"
+        ".byte 6651f - 6641f\n"
+        ".popsection\n"
+        ".pushsection .altinstr_replacement,\"ax\"\n"
+        "# ALT: replacement1\n"
+        "6641:\n\t.byte 0xf3,0x0f,0xc7,0xf8\n"
+        "6651:\n"
+        ".popsection\n"
+        : [p] "=a"(result) : "i"(0), [seg] "r"(123));
+    return result;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/target/x86_64_linux_thread_state.c"}
+/* Linux 6.6 x86 process_64.i privileged FSGSBASE, LKGS and loadsegment
+ * exception-table contracts. Assemble only; none are safe in user mode. */
+typedef unsigned short u16;
+typedef unsigned long u64;
+
+u64 linux_rdfsbase(void) {
+    u64 v;
+    asm volatile("rdfsbase %0" : "=r" (v) : : "memory");
+    return v;
+}
+u64 linux_rdgsbase(void) {
+    u64 v;
+    asm volatile("rdgsbase %0" : "=r" (v) : : "memory");
+    return v;
+}
+void linux_wrfsbase(u64 v) {
+    asm volatile("wrfsbase %0" : : "r" (v) : "memory");
+}
+void linux_wrgsbase(u64 v) {
+    asm volatile("wrgsbase %0" : : "r" (v) : "memory");
+}
+
+/* The register-table GNU macro is intentionally included verbatim: Linux
+ * exception metadata must stay part of the exact source contract. */
+#define EXTABLE_REGISTER_TABLE \
+    ".macro extable_type_reg type:req reg:req\n" \
+    ".set .Lfound, 0\n" \
+    ".set .Lregnr, 0\n" \
+    ".irp rs,rax,rcx,rdx,rbx,rsp,rbp,rsi,rdi,r8,r9,r10,r11,r12,r13,r14,r15\n" \
+    ".ifc \\reg, %%\\rs\n" \
+    ".set .Lfound, .Lfound+1\n" \
+    ".long \\type + (.Lregnr << 8)\n" \
+    ".endif\n" \
+    ".set .Lregnr, .Lregnr+1\n" \
+    ".endr\n" \
+    ".set .Lregnr, 0\n" \
+    ".irp rs,eax,ecx,edx,ebx,esp,ebp,esi,edi,r8d,r9d,r10d,r11d,r12d,r13d,r14d,r15d\n" \
+    ".ifc \\reg, %%\\rs\n" \
+    ".set .Lfound, .Lfound+1\n" \
+    ".long \\type + (.Lregnr << 8)\n" \
+    ".endif\n" \
+    ".set .Lregnr, .Lregnr+1\n" \
+    ".endr\n" \
+    ".if (.Lfound != 1)\n" \
+    ".error \"extable_type_reg: bad register argument\"\n" \
+    ".endif\n" \
+    ".endm\n"
+
+void linux_lkgs_with_register_fixup(u16 selector) {
+    u16 sel = selector;
+    asm __inline volatile("1: " " " ".byte 0xf2,0x0f,0x00,0xf7 ;" " "
+        " .pushsection \"__ex_table\",\"a\"\n"
+        " .balign 4\n"
+        " .long (1b) - .\n"
+        " .long (1b) - .\n"
+        EXTABLE_REGISTER_TABLE
+        "extable_type_reg reg=" "%k[sel]" ", type=" "(17 | ((0) << 16))" " \n"
+        ".purgem extable_type_reg\n"
+        " .popsection\n" : [sel] "+D" (sel));
+}
+
+#define LOAD_SEGMENT_WITH_REG_FIXUP(seg, selector) \
+    asm volatile("\t\t\t\t\t\t\n" \
+        "1:\tmovl %k0,%%" seg "\t\t\n" \
+        " .pushsection \"__ex_table\",\"a\"\n" \
+        " .balign 4\n" \
+        " .long (1b) - .\n" \
+        " .long (1b) - .\n" \
+        EXTABLE_REGISTER_TABLE \
+        "extable_type_reg reg=" "%k0" ", type=" "(17 | ((0) << 16))" " \n" \
+        ".purgem extable_type_reg\n" \
+        " .popsection\n" : "+r" (selector) : : "memory")
+
+void linux_load_es_register(u16 v) { LOAD_SEGMENT_WITH_REG_FIXUP("es", v); }
+void linux_load_ds_register(u16 v) { LOAD_SEGMENT_WITH_REG_FIXUP("ds", v); }
+void linux_load_ss_register(u16 v) { LOAD_SEGMENT_WITH_REG_FIXUP("ss", v); }
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/target/x86_64_linux_three_call_alternative.c"}
+/* Linux 6.6 clear_page: two alternative CALLs and an RSP +r output.
+ * This is a privileged kernel patch-table contract: compile and assemble,
+ * then inspect genuine ELF relocation records; never execute the code. */
+register unsigned long current_stack_pointer asm("rsp");
+void clear_page_orig(void *page);
+void clear_page_rep(void *page);
+void clear_page_erms(void *page);
+
+#define TEST_ALT_MAX \
+    "((6651f-6641f)^(((6651f-6641f)^(6652f-6642f))&-(-((6651f-6641f)<(6652f-6642f)))))"
+#define TEST_ALT_SKIP \
+    ".skip -( (" TEST_ALT_MAX " - (662b-661b)) > 0) * (" \
+    TEST_ALT_MAX " - (662b-661b)), 0x90\n"
+
+void clear_page(void *page) {
+    asm volatile(
+        "# ALT: oldinstr2\n"
+        "661:\n\t"
+        "call %c[old]\n"
+        "662:\n"
+        "# ALT: padding2\n"
+        TEST_ALT_SKIP
+        "663:\n"
+        ".pushsection .altinstructions,\"a\"\n"
+        " .long 661b - .\n"
+        " .long 6641f - .\n"
+        " .4byte ( 3*32+16)\n"
+        " .byte 663b-661b\n"
+        " .byte 6651f-6641f\n"
+        " .long 661b - .\n"
+        " .long 6642f - .\n"
+        " .4byte ( 9*32+ 9)\n"
+        " .byte 663b-661b\n"
+        " .byte 6652f-6642f\n"
+        ".popsection\n"
+        ".pushsection .altinstr_replacement, \"ax\"\n"
+        "# ALT: replacement 1\n"
+        "6641:\n\t"
+        "call %c[new1]\n"
+        "6651:\n"
+        "# ALT: replacement 2\n"
+        "6642:\n\t"
+        "call %c[new2]\n"
+        "6652:\n"
+        ".popsection\n"
+        : "=D" (page), "+r" (current_stack_pointer)
+        : [old] "i" (clear_page_orig),
+          [new1] "i" (clear_page_rep),
+          [new2] "i" (clear_page_erms),
+          "0" (page)
+        : "cc", "memory", "rax", "rcx");
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/target/x86_64_linux_usercopy_lfence.c"}
+/* Linux user_access_begin's original no-op -> LFENCE mitigation patch. */
+int linux_user_access_lfence(int can_access) {
+    if (!can_access) return 0;
+    asm volatile(
+        "# ALT: oldnstr\n" "661:\n\t" "" "\n662:\n"
+        "# ALT: padding\n"
+        ".skip -(((" "665""1""f-""664""1""f" ")-(" "662b-661b" ")) > 0) * "
+        "((" "665""1""f-""664""1""f" ")-(" "662b-661b" ")),0x90\n"
+        "663" ":\n"
+        ".pushsection .altinstructions,\"a\"\n"
+        " .long 661b - .\n"
+        " .long " "664""1""f - .\n"
+        " .4byte " "(20*32+ 2)" "\n"
+        " .byte " "663""b-661b" "\n"
+        " .byte " "665""1""f-""664""1""f" "\n"
+        ".popsection\n"
+        ".pushsection .altinstr_replacement, \"ax\"\n"
+        "# ALT: replacement " "1" "\n"
+        "664""1"":\n\t" "lfence" "\n" "665""1" ":\n"
+        ".popsection\n" : : : "memory");
+    return 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/target/x86_64_linux_vdso_pvclock_syscall.c"}
+/* Linux 6.6.143 arch/x86/include/asm/pvclock.h and vDSO syscall fallback.
+ * All templates and GNU operand constraints are kept at their original
+ * spelling. The syscall paths are built, never executed by this probe. */
+typedef unsigned long long u64;
+typedef unsigned int u32;
+typedef unsigned long ulong;
+
+struct vdso_test_timespec {
+    long tv_sec;
+    long tv_nsec;
+};
+
+static u64 pvclock_scale_delta(u64 delta, u32 mul_frac, int shift) {
+    u64 product;
+    ulong tmp;
+    if (shift < 0) delta >>= -shift;
+    else delta <<= shift;
+    __asm__("mulq %[mul_frac] ; shrd $32, %[hi], %[lo]"
+        : [lo]"=a"(product), [hi]"=d"(tmp)
+        : "0"(delta), [mul_frac]"rm"((u64)mul_frac));
+    return product;
+}
+
+static u64 pvclock_scale_numeric(u64 delta, u64 mul_frac) {
+    u64 product;
+    ulong tmp;
+    __asm__("mulq %3 ; shrd $32, %1, %0"
+        : "=a"(product), "=d"(tmp) : "0"(delta), "rm"(mul_frac));
+    return product;
+}
+
+long vdso_clock_gettime_fallback(int clockid, struct vdso_test_timespec *ts) {
+    long ret;
+    __asm__("syscall" : "=a"(ret), "=m"(*ts) :
+        "0"(228), "D"(clockid), "S"(ts) : "rcx", "r11");
+    return ret;
+}
+
+long vdso_gettimeofday_fallback(struct vdso_test_timespec *tv, void *tz) {
+    long ret;
+    __asm__("syscall" : "=a"(ret) :
+        "0"(96), "D"(tv), "S"(tz) : "memory");
+    return ret;
+}
+
+int main(void) {
+    struct vdso_test_timespec ts = {0,0};
+    return pvclock_scale_delta(1ULL << 32,0x40000000U,0) != 0x40000000ULL ||
+           pvclock_scale_numeric(1ULL << 32,0x40000000ULL) != 0x40000000ULL ||
+           vdso_clock_gettime_fallback(0,&ts) != 0 || ts.tv_sec <= 0 ||
+           vdso_gettimeofday_fallback(&ts,0) != 0 || ts.tv_sec <= 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/target/x86_64_linux_xstate_alternatives.c"}
+/* SPDX-License-Identifier: GPL-2.0 */
+/* Linux 6.6.143 arch/x86/include/asm/fpu/api.h XSAVE/XRSTOR ALTERNATIVE
+ * expansions, reduced to standalone register/address operands. Both full
+ * templates must survive canonicalization into Core and GNU ELF sections. */
+struct linux_xstate_image { unsigned char bytes[1024]; };
+
+int linux_xsave_triple(struct linux_xstate_image *p,
+                       unsigned int lmask, unsigned int hmask) {
+    int err;
+    asm volatile("# ALT: oldinstr3\n" "661:\n\t" ".byte " "0x48, " "0x0f,0xae,0x27" "\n662:\n" "# ALT: padding3\n" ".skip -((" "((" "((" "665""1""f-""664""1""f" ") ^ (((" "665""1""f-""664""1""f" ") ^ (" "665""2""f-""664""2""f" ")) & -(-((" "665""1""f-""664""1""f" ") < (" "665""2""f-""664""2""f" ")))))" ") ^ (((" "((" "665""1""f-""664""1""f" ") ^ (((" "665""1""f-""664""1""f" ") ^ (" "665""2""f-""664""2""f" ")) & -(-((" "665""1""f-""664""1""f" ") < (" "665""2""f-""664""2""f" ")))))" ") ^ (" "665""3""f-""664""3""f" ")) & -(-((" "((" "665""1""f-""664""1""f" ") ^ (((" "665""1""f-""664""1""f" ") ^ (" "665""2""f-""664""2""f" ")) & -(-((" "665""1""f-""664""1""f" ") < (" "665""2""f-""664""2""f" ")))))" ") < (" "665""3""f-""664""3""f" ")))))" " - (" "662b-661b" ")) > 0) * " "(" "((" "((" "665""1""f-""664""1""f" ") ^ (((" "665""1""f-""664""1""f" ") ^ (" "665""2""f-""664""2""f" ")) & -(-((" "665""1""f-""664""1""f" ") < (" "665""2""f-""664""2""f" ")))))" ") ^ (((" "((" "665""1""f-""664""1""f" ") ^ (((" "665""1""f-""664""1""f" ") ^ (" "665""2""f-""664""2""f" ")) & -(-((" "665""1""f-""664""1""f" ") < (" "665""2""f-""664""2""f" ")))))" ") ^ (" "665""3""f-""664""3""f" ")) & -(-((" "((" "665""1""f-""664""1""f" ") ^ (((" "665""1""f-""664""1""f" ") ^ (" "665""2""f-""664""2""f" ")) & -(-((" "665""1""f-""664""1""f" ") < (" "665""2""f-""664""2""f" ")))))" ") < (" "665""3""f-""664""3""f" ")))))" " - (" "662b-661b" ")), 0x90\n" "663" ":\n" ".pushsection .altinstructions,\"a\"\n" " .long 661b - .\n" " .long " "664""1""f - .\n" " .4byte " "(10*32+ 0)" "\n" " .byte " "663""b-661b" "\n" " .byte " "665""1""f-""664""1""f" "\n" " .long 661b - .\n" " .long " "664""2""f - .\n" " .4byte " "(10*32+ 1)" "\n" " .byte " "663""b-661b" "\n" " .byte " "665""2""f-""664""2""f" "\n" " .long 661b - .\n" " .long " "664""3""f - .\n" " .4byte " "(10*32+ 3)" "\n" " .byte " "663""b-661b" "\n" " .byte " "665""3""f-""664""3""f" "\n" ".popsection\n" ".pushsection .altinstr_replacement, \"ax\"\n" "# ALT: replacement " "1" "\n" "664""1"":\n\t" ".byte " "0x48, " "0x0f,0xae,0x37" "\n" "665""1" ":\n" "# ALT: replacement " "2" "\n" "664""2"":\n\t" ".byte " "0x48, " "0x0f,0xc7,0x27" "\n" "665""2" ":\n" "# ALT: replacement " "3" "\n" "664""3"":\n\t" ".byte " "0x48, " "0x0f,0xc7,0x2f" "\n" "665""3" ":\n" ".popsection\n" "\n" "xor %[err], %[err]\n" "3:\n" " .pushsection \"__ex_table\",\"a\"\n" " .balign 4\n" " .long (" "661b" ") - .\n" " .long (" "3b" ") - .\n" ".macro extable_type_reg type:req reg:req\n" ".set .Lfound, 0\n" ".set .Lregnr, 0\n" ".irp rs,rax,rcx,rdx,rbx,rsp,rbp,rsi,rdi,r8,r9,r10,r11,r12,r13,r14,r15\n" ".ifc \\reg, %%\\rs\n" ".set .Lfound, .Lfound+1\n" ".long \\type + (.Lregnr << 8)\n" ".endif\n" ".set .Lregnr, .Lregnr+1\n" ".endr\n" ".set .Lregnr, 0\n" ".irp rs,eax,ecx,edx,ebx,esp,ebp,esi,edi,r8d,r9d,r10d,r11d,r12d,r13d,r14d,r15d\n" ".ifc \\reg, %%\\rs\n" ".set .Lfound, .Lfound+1\n" ".long \\type + (.Lregnr << 8)\n" ".endif\n" ".set .Lregnr, .Lregnr+1\n" ".endr\n" ".if (.Lfound != 1)\n" ".error \"extable_type_reg: bad register argument\"\n" ".endif\n" ".endm\n" "extable_type_reg reg=" "%[err]" ", type=" "(17 | ((-14) << 16))" " \n" ".purgem extable_type_reg\n" " .popsection\n" : [err] "=r" (err) : "D" (p), "m" (*p), "a" (lmask), "d" (hmask) : "memory");
+    return err;
+}
+
+void linux_xrstor_alternative(struct linux_xstate_image *p,
+                              unsigned int lmask, unsigned int hmask) {
+    asm volatile("# ALT: oldnstr\n" "661:\n\t" ".byte " "0x48, " "0x0f,0xae,0x2f" "\n662:\n" "# ALT: padding\n" ".skip -(((" "665""1""f-""664""1""f" ")-(" "662b-661b" ")) > 0) * " "((" "665""1""f-""664""1""f" ")-(" "662b-661b" ")),0x90\n" "663" ":\n" ".pushsection .altinstructions,\"a\"\n" " .long 661b - .\n" " .long " "664""1""f - .\n" " .4byte " "(10*32+ 3)" "\n" " .byte " "663""b-661b" "\n" " .byte " "665""1""f-""664""1""f" "\n" ".popsection\n" ".pushsection .altinstr_replacement, \"ax\"\n" "# ALT: replacement " "1" "\n" "664""1"":\n\t" ".byte " "0x48, " "0x0f,0xc7,0x1f" "\n" "665""1" ":\n" ".popsection\n" "\n" "3:\n" " .pushsection \"__ex_table\",\"a\"\n" " .balign 4\n" " .long (" "661b" ") - .\n" " .long (" "3b" ") - .\n" " .long " "6" " \n" " .popsection\n" : : "D" (p), "m" (*p), "a" (lmask), "d" (hmask) : "memory");
+}
+
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/target/x86_64_linux_xstate_control.c"}
+/* Exact Linux XCR0/XSS access contract. The two operations are privileged
+ * machine effects, so this fixture is for ELF relocation/disassembly only. */
+typedef unsigned int uint32_t;
+typedef unsigned long long uint64_t;
+
+uint64_t minic_linux_read_xstate(uint32_t selector) {
+    uint32_t low, high;
+    __asm__ volatile("xgetbv" : "=a"(low), "=d"(high) : "c"(selector));
+    return low + ((uint64_t)high << 32);
+}
+
+void minic_linux_write_xstate(uint32_t selector, uint64_t value) {
+    uint32_t low = (uint32_t)value;
+    uint32_t high = (uint32_t)(value >> 32);
+    __asm__ volatile("xsetbv" : : "a"(low), "d"(high), "c"(selector));
+}
+
+uint64_t minic_linux_xstate_roundtrip(uint32_t selector, uint64_t value) {
+    minic_linux_write_xstate(selector, value);
+    return minic_linux_read_xstate(selector);
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/target/x86_64_linux_xstate_fault.c"}
+/* Linux's 64-bit XSAVE/XRSTOR operations need exact ModRM bytes, EAX/EDX
+ * feature masks, and a type-15 exception-table repair entry. */
+struct xstate_image { unsigned char image[1024]; };
+
+#define XSTATE_FAULT(opcode) \
+    "1:" ".byte " opcode "\n\t" \
+    "xor %[err], %[err]\n" "2:\n\t" \
+    " .pushsection \"__ex_table\",\"a\"\n" \
+    " .balign 4\n" \
+    " .long (" "1b" ") - .\n" \
+    " .long (" "2b" ") - .\n" \
+    " .long " "15" " \n" \
+    " .popsection\n"
+
+int linux_xsave64(struct xstate_image *p, unsigned int low, unsigned int high) {
+    int err;
+    asm volatile(XSTATE_FAULT("0x48, 0x0f,0xae,0x27")
+                 : [err] "=a"(err)
+                 : "D"(p), "m"(*p), "a"(low), "d"(high) : "memory");
+    return err;
+}
+
+int linux_xrstor64(struct xstate_image *p, unsigned int low, unsigned int high) {
+    int err;
+    asm volatile(XSTATE_FAULT("0x48, 0x0f,0xae,0x2f")
+                 : [err] "=a"(err)
+                 : "D"(p), "m"(*p), "a"(low), "d"(high) : "memory");
+    return err;
+}
+
+int linux_xrstors64(struct xstate_image *p, unsigned int low, unsigned int high) {
+    int err;
+    asm volatile(XSTATE_FAULT("0x48, 0x0f,0xc7,0x1f")
+                 : [err] "=a"(err)
+                 : "D"(p), "m"(*p), "a"(low), "d"(high) : "memory");
+    return err;
+}
+
+int linux_xsaves64(struct xstate_image *p, unsigned int low, unsigned int high) {
+    int err;
+    asm volatile(XSTATE_FAULT("0x48, 0x0f,0xc7,0x2f")
+                 : [err] "=a"(err)
+                 : "D"(p), "m"(*p), "a"(low), "d"(high) : "memory");
+    return err;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/target/x86_64_typed_asm_form_test.c"}
+#include "target/x86_64/asm_contract.h"
+
+#include <assert.h>
+#include <stdio.h>
+#include <string.h>
+
+typedef struct FormCase {
+    MinicX86MachineAsmForm id;
+    uint32_t variant;
+    const char *text;
+} FormCase;
+
+static bool admits(const FormCase *c) {
+    return minic_x86_64_typed_machine_form_matches_template(
+        (uint32_t)c->id, c->variant, c->text, strlen(c->text));
+}
+
+int main(void) {
+    static const FormCase positive[] = {
+        {MINIC_X86_MACHINE_ASM_ZSTD_CPUID, 0U, "cpuid"},
+        {MINIC_X86_MACHINE_ASM_XSETBV, 0U, "xsetbv"},
+        {MINIC_X86_MACHINE_ASM_MMIO_READ, 4U, "movl %1, %0"},
+        {MINIC_X86_MACHINE_ASM_MMIO_WRITE, 4U, "movl %0, %1"},
+        {MINIC_X86_MACHINE_ASM_ATOMIC_XCHG, 4U, "xchgl %0, %1"},
+        {MINIC_X86_MACHINE_ASM_MONITOR_WAIT, 1U, ".byte 0x0f,0x01,0xc8;"},
+        {MINIC_X86_MACHINE_ASM_SEGMENT_READ, 1U, "mov %%es, %0"},
+        {MINIC_X86_MACHINE_ASM_FSGSBASE, 1U, "rdfsbase %0"},
+        {MINIC_X86_MACHINE_ASM_CRASH_SEGMENT_SNAPSHOT, 1U, "movl %%ss, %%eax;"},
+        {MINIC_X86_MACHINE_ASM_CRASH_SEGMENT_SNAPSHOT, 2U, "movl %%cs, %%eax;"},
+        {MINIC_X86_MACHINE_ASM_CRASH_SEGMENT_SNAPSHOT, 3U, "movl %%ds, %%eax;"},
+        {MINIC_X86_MACHINE_ASM_CRASH_SEGMENT_SNAPSHOT, 4U, "movl %%es, %%eax;"},
+        {MINIC_X86_MACHINE_ASM_CRASH_SEGMENT_SNAPSHOT, 5U, "movl %%fs, %%eax;"},
+        {MINIC_X86_MACHINE_ASM_CRASH_SEGMENT_SNAPSHOT, 6U, "movl %%gs, %%eax;"},
+        {MINIC_X86_MACHINE_ASM_X87_PROBE, 0U,
+         "fninit ; fnstsw %0 ; fnstcw %1"},
+        {MINIC_X86_MACHINE_ASM_AMX_TILERELEASE, 1U,
+         ".byte 0xc4, 0xe2, 0x78, 0x49, 0xc0"},
+        {MINIC_X86_MACHINE_ASM_X87_FWAIT_FAULT, 1U,
+         "1: fwait\n2:\n .pushsection \"__ex_table\",\"a\"\n"
+         " .balign 4\n .long (1b) - .\n .long (2b) - .\n"
+         " .long 1\n .popsection\n"},
+        {MINIC_X86_MACHINE_ASM_X87_FILD_PREPARE, 0U,
+         "fnclex\n\temms\n\tfildl %[addr]"},
+        {MINIC_X86_MACHINE_ASM_FPU_KERNEL_RESTORE, 2U,
+         "1:fxrstorq %1\n2:\n .pushsection \"__ex_table\",\"a\"\n"
+         " .balign 4\n .long (1b) - .\n .long (2b) - .\n"
+         " .long 6\n .popsection\n"}
+    };
+    size_t i;
+    for (i = 0U; i < sizeof(positive)/sizeof(positive[0]); ++i)
+        if (!admits(&positive[i])) {
+            fprintf(stderr, "FAIL valid typed form %zu\n", i);
+            return 1;
+        }
+
+    /* Standalone Core clients and future passes can forge opaque fields.
+     * FormId, variant and source spelling must all match at the target gate;
+     * even a valid source fingerprint cannot override an invalid triple. */
+    for (i = 0U; i < sizeof(positive)/sizeof(positive[0]); ++i) {
+        FormCase forged = positive[i];
+        forged.variant ^= 0x100U;
+        assert(!admits(&forged));
+    }
+    assert(!minic_x86_64_typed_machine_form_matches_template(
+        MINIC_X86_MACHINE_ASM_ZSTD_CPUID, 0U, "xsetbv", 6U));
+    assert(!minic_x86_64_typed_machine_form_matches_template(
+        MINIC_X86_MACHINE_ASM_XSETBV, 0U, "cpuid", 5U));
+    assert(!minic_x86_64_typed_machine_form_matches_template(
+        MINIC_X86_MACHINE_ASM_MMIO_READ, 4U, "movl %0, %1", 11U));
+    assert(!minic_x86_64_typed_machine_form_matches_template(
+        MINIC_X86_MACHINE_ASM_MMIO_READ, 8U, "movl %1, %0", 11U));
+    assert(!minic_x86_64_typed_machine_form_matches_template(
+        MINIC_X86_MACHINE_ASM_ATOMIC_XCHG, 4U, "xchgb %b0, %1", 13U));
+    assert(!minic_x86_64_typed_machine_form_matches_template(
+        MINIC_X86_MACHINE_ASM_CRASH_SEGMENT_SNAPSHOT, 2U,
+        "movl %%ss, %%eax;", strlen("movl %%ss, %%eax;")));
+    assert(!minic_x86_64_typed_machine_form_matches_template(
+        MINIC_X86_MACHINE_ASM_CRASH_SEGMENT_SNAPSHOT, 0U,
+        "movl %%ss, %%eax;", strlen("movl %%ss, %%eax;")));
+    assert(!minic_x86_64_typed_machine_form_matches_template(
+        MINIC_X86_MACHINE_ASM_CRASH_SEGMENT_SNAPSHOT, 1U,
+        "movq %%ss, %%rax;", strlen("movq %%ss, %%rax;")));
+    assert(!minic_x86_64_typed_machine_form_matches_template(
+        UINT32_MAX, 0U, "cpuid", 5U));
+    assert(!minic_x86_64_typed_machine_form_matches_template(
+        MINIC_X86_MACHINE_ASM_ZSTD_CPUID, 0U, NULL, 0U));
+    assert(!minic_x86_64_typed_machine_form_matches_template(
+        MINIC_X86_MACHINE_ASM_AMX_TILERELEASE, 1U,
+        ".byte 0xc4, 0xe2, 0x78, 0x49, 0xc1",
+        strlen(".byte 0xc4, 0xe2, 0x78, 0x49, 0xc1")));
+    assert(!minic_x86_64_typed_machine_form_matches_template(
+        MINIC_X86_MACHINE_ASM_AMX_TILERELEASE, 1U,
+        "tilerelease", 11U));
+    assert(!minic_x86_64_typed_machine_form_matches_template(
+        MINIC_X86_MACHINE_ASM_X87_FWAIT_FAULT, 1U,
+        "1: fwait\n2:\n", strlen("1: fwait\n2:\n")));
+    puts("PASS x86 typed machine forms including 13 FPU families and six crash selector variants, forged form/variant/template fail-closed");
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/target/x86_64_typed_machine_qualification_test.c"}
+#include "target/x86_64/asm_contract.h"
+
+#include <assert.h>
+#include <stdio.h>
+#include <string.h>
+
+static bool gate(MinicX86MachineAsmForm id, unsigned int variant,
+                 const char *template_text) {
+    return minic_x86_64_typed_machine_form_matches_template(
+        (uint32_t)id, variant, template_text, strlen(template_text));
+}
+
+int main(void) {
+    static const char unwind[] =
+        "lea (%%rip), %0\n\tmov %%rsp, %1\n\tmov %%rbp, %2";
+    const MinicX86MachineAsmForm mxcsr = MINIC_X86_MACHINE_ASM_MXCSR;
+    const MinicX86MachineAsmForm orc = MINIC_X86_MACHINE_ASM_UNWIND_CONTEXT;
+    assert(gate(mxcsr, 1U, "ldmxcsr %0"));
+    assert(gate(mxcsr, 2U, "stmxcsr %[val]"));
+    assert(gate(orc, 0U, unwind));
+    assert(!gate(mxcsr, 2U, "ldmxcsr %0"));
+    assert(!gate(mxcsr, 1U, "stmxcsr %0"));
+    assert(!gate(mxcsr, 0U, "ldmxcsr %0"));
+    assert(!gate(mxcsr, 3U, "ldmxcsr %0"));
+    assert(!gate(mxcsr, 1U, "ldmxcsr %0; cli"));
+    assert(!gate(orc, 1U, unwind));
+    assert(!gate(orc, 0U, "lea (%%rip), %0; cli"));
+    assert(!gate(orc, 0U, "ldmxcsr %0"));
+    assert(!gate(mxcsr, 2U, unwind));
+    puts("PASS x86 MXCSR/ORC typed FormId variant + immutable-template gate");
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/target/x86_64_typed_scalar_families_test.c"}
+#include "target/x86_64/asm_contract.h"
+
+#include <assert.h>
+#include <stdio.h>
+#include <string.h>
+
+static bool gate(MinicX86MachineAsmForm id, unsigned int variant,
+                 const char *literal) {
+    return minic_x86_64_typed_machine_form_matches_template(
+        (uint32_t)id, variant, literal, strlen(literal));
+}
+
+#define CHECK_FAMILY(id, parser, literal, invalid) do {                 \
+    const char *const source = literal;                                \
+    unsigned int variant = (unsigned int)parser(source, strlen(source));\
+    assert(variant != 0U);                                             \
+    assert(gate(id, variant, source));                                  \
+    assert(!gate(id, 0U, source));                                      \
+    assert(!gate(id, variant + 1U, source));                            \
+    assert(!gate(id, variant, invalid));                               \
+} while (0)
+
+int main(void) {
+    static const char vdso_cpunode[] =
+        "# ALT: oldnstr\n"
+        "661:\n\tlsl %[seg],%[p]\n"
+        "662:\n# ALT: padding\n"
+        ".skip -(((6651f-6641f)-(662b-661b)) > 0) * "
+        "((6651f-6641f)-(662b-661b)),0x90\n"
+        "663:\n"
+        ".pushsection .altinstructions,\"a\"\n"
+        " .long 661b - .\n .long 6641f - .\n"
+        " .4byte (16*32+22)\n"
+        " .byte 663b-661b\n .byte 6651f-6641f\n"
+        ".popsection\n"
+        ".pushsection .altinstr_replacement, \"ax\"\n"
+        "# ALT: replacement 1\n"
+        "6641:\n\t.byte 0xf3,0x0f,0xc7,0xf8\n"
+        "6651:\n.popsection\n";
+    static const char unlocked_cc[] =
+        "incl %0\n\t/* output condition code e */";
+    static const char locked_cc[] =
+        ".pushsection .smp_locks,\"a\"\n.balign 4\n.long 671f - .\n"
+        ".popsection\n671:\n\tlock; incl %0\n\t/* output condition code e */";
+    const unsigned int cc_form = (unsigned int)minic_x86_64_atomic_cc_form(
+        unlocked_cc, strlen(unlocked_cc));
+    CHECK_FAMILY(MINIC_X86_MACHINE_ASM_PORT_IO,
+        minic_x86_64_port_io_form, "outb %b0, %w1", "outb %b0, %w1; cli");
+    CHECK_FAMILY(MINIC_X86_MACHINE_ASM_ATOMIC_RMW,
+        minic_x86_64_atomic_rmw_form, "addl %1,%0", "addl %1,%0; cli");
+    CHECK_FAMILY(MINIC_X86_MACHINE_ASM_RAW_CMPXCHG,
+        minic_x86_64_raw_cmpxchg_form, "cmpxchgl %2,%1",
+        "cmpxchgl %2,%1; cli");
+    CHECK_FAMILY(MINIC_X86_MACHINE_ASM_TRYCAS,
+        minic_x86_64_trycas_form,
+        "cmpxchgl %[new], %[ptr]\n\t/* output condition code z */",
+        "cmpxchgl %[new], %[ptr]; cli\n\t/* output condition code z */");
+    CHECK_FAMILY(MINIC_X86_MACHINE_ASM_BITOPS,
+        minic_x86_64_linux_bitops_form,
+        "btq %2,%1\n\t/* output condition code c */",
+        "btq %2,%1; cli\n\t/* output condition code c */");
+    CHECK_FAMILY(MINIC_X86_MACHINE_ASM_ZERO_BARRIER,
+        minic_x86_64_linux_zero_barrier_form, "mfence", "mfence; int3");
+    CHECK_FAMILY(MINIC_X86_MACHINE_ASM_FXSAVE,
+        minic_x86_64_linux_fxsave_form, "fxsave %0", "fxsave %0; int3");
+    CHECK_FAMILY(MINIC_X86_MACHINE_ASM_IP_HERE,
+        minic_x86_64_linux_ip_here_template,
+        "lea 0(%%rip), %0", "lea 0(%%rip), %0; int3");
+    CHECK_FAMILY(MINIC_X86_MACHINE_ASM_LAR_SELECTOR,
+        minic_x86_64_linux_lar_selector_form,
+        "lar %1, %0\n\tjz 1f\n\txorl %0, %0\n\t1:",
+        "lsl %1, %0\n\tjz 1f\n\txorl %0, %0\n\t1:");
+    CHECK_FAMILY(MINIC_X86_MACHINE_ASM_IDENTITY_LOAD,
+        minic_x86_64_linux_identity_load_form,
+        "mov %[address], %%r9", "mov %[address], %%r8");
+    CHECK_FAMILY(MINIC_X86_MACHINE_ASM_VERW_CLEAR,
+        minic_x86_64_linux_verw_clear_form,
+        "verw %[ds]", "verw %[ds]; int3");
+    CHECK_FAMILY(MINIC_X86_MACHINE_ASM_TLB_CACHE,
+        minic_x86_64_linux_tlb_cache_form,
+        "clflush %0", "clflush %0; int3");
+    CHECK_FAMILY(MINIC_X86_MACHINE_ASM_DELAY_MUL,
+        minic_x86_64_linux_delay_mul_form,
+        "mull %%edx", "idivl %%edx");
+    CHECK_FAMILY(MINIC_X86_MACHINE_ASM_DELAY_WAIT,
+        minic_x86_64_linux_delay_wait_form,
+        "tpause %%ecx", "tpause %%eax");
+    CHECK_FAMILY(MINIC_X86_MACHINE_ASM_LOWLEVEL_SCALAR,
+        minic_x86_64_linux_lowlevel_scalar_form,
+        "movntiq %1, %0", "movnti %1, %0");
+    CHECK_FAMILY(MINIC_X86_MACHINE_ASM_BOOT_FLAGS,
+        minic_x86_64_linux_boot_flags_form,
+        "btsl %1,%0", "btcl %1,%0");
+    CHECK_FAMILY(MINIC_X86_MACHINE_ASM_PM_TRACE,
+        minic_x86_64_linux_pm_trace_form,
+        " movq $1f,%0\n.section .tracedata,\"a\"\n"
+        "1:\t.word %c1\n\t .quad %c2\n.previous",
+        "movq $1f,%0\n.section .tracedata,\"a\"\n"
+        "1:\t.word %c1\n\t .quad %c2; int3\n.previous");
+    CHECK_FAMILY(MINIC_X86_MACHINE_ASM_I915_MOVNTDQA,
+        minic_x86_64_linux_i915_movntdqa_form,
+        "movntdqa (%0), %%xmm0\nmovups %%xmm0, (%1)",
+        "movntdqa (%0), %%xmm0\nint3\nmovups %%xmm0, (%1)");
+    CHECK_FAMILY(MINIC_X86_MACHINE_ASM_PVCLOCK_SCALE,
+        minic_x86_64_linux_pvclock_scale_form,
+        "mulq %[mul_frac]; shrd $32, %[hi], %[lo]",
+        "mulq %[mul_frac]; shrd $31, %[hi], %[lo]");
+    CHECK_FAMILY(MINIC_X86_MACHINE_ASM_PREEMPT_STATIC_CALL,
+        minic_x86_64_linux_preempt_static_call_form,
+        "call __SCT__preempt_schedule",
+        "call __SCT__preempt_schedule_unknown");
+    CHECK_FAMILY(MINIC_X86_MACHINE_ASM_IPV6_CHECKSUM,
+        minic_x86_64_linux_ipv6_checksum_form,
+        "addq (%[saddr]),%[sum]\n\tadcq 8(%[saddr]),%[sum]\n\t"
+        "adcq (%[daddr]),%[sum]\n\tadcq 8(%[daddr]),%[sum]\n\t"
+        "adcq $0,%[sum]",
+        "addq (%[saddr]),%[sum]\n\tadcq 8(%[saddr]),%[sum]\n\t"
+        "adcq (%[daddr]),%[sum]\n\tadcq 8(%[daddr]),%[sum]\n\t"
+        "subq $0,%[sum]");
+    CHECK_FAMILY(MINIC_X86_MACHINE_ASM_BOOT_STRING,
+        minic_x86_64_linux_boot_string_form,
+        "divl %2", "idivl %2");
+    CHECK_FAMILY(MINIC_X86_MACHINE_ASM_VDSO_SYSCALL,
+        minic_x86_64_linux_vdso_syscall_form,
+        "syscall", "syscall; int3");
+    CHECK_FAMILY(MINIC_X86_MACHINE_ASM_VDSO_CPUNODE,
+        minic_x86_64_linux_vdso_cpunode_form,
+        vdso_cpunode, "syscall");
+    assert(!gate(MINIC_X86_MACHINE_ASM_VDSO_SYSCALL, 1U, vdso_cpunode));
+    assert(!gate(MINIC_X86_MACHINE_ASM_VDSO_CPUNODE, 1U, "syscall"));
+    assert(gate(MINIC_X86_MACHINE_ASM_TLB_CACHE, 1U, "invlpg (%0)"));
+    assert(!gate(MINIC_X86_MACHINE_ASM_TLB_CACHE, 2U, "invlpg (%0)"));
+    assert(gate(MINIC_X86_MACHINE_ASM_DELAY_WAIT, 1U,
+        "test %0,%0\n\tjz 3f\n\tjmp 1f\n\t.align 16\n1:\tjmp 2f\n"
+        "\t.align 16\n2:\tdec %0\n\tjnz 2b\n3:\tdec %0"));
+    assert(gate(MINIC_X86_MACHINE_ASM_BOOT_FLAGS, 3U, "cpuid"));
+    assert(!gate(MINIC_X86_MACHINE_ASM_BOOT_FLAGS, 4U, "cpuid"));
+    assert(!gate(MINIC_X86_MACHINE_ASM_LOWLEVEL_SCALAR, 1U, "mull %%edx"));
+    assert(gate(MINIC_X86_MACHINE_ASM_FXSAVE, 2U, "fxsaveq %[fx]"));
+    assert(!gate(MINIC_X86_MACHINE_ASM_FXSAVE, 1U, "fxsaveq %[fx]"));
+    assert(!gate(MINIC_X86_MACHINE_ASM_ZERO_BARRIER, 2U, "lfence"));
+    assert(!gate(MINIC_X86_MACHINE_ASM_IP_HERE, 1U, "mov %[address], %%r9"));
+
+    assert(cc_form != 0U);
+    assert((unsigned int)minic_x86_64_atomic_cc_form(
+        locked_cc, strlen(locked_cc)) == cc_form);
+    assert(gate(MINIC_X86_MACHINE_ASM_ATOMIC_CC, cc_form, unlocked_cc));
+    assert(gate(MINIC_X86_MACHINE_ASM_ATOMIC_CC,
+        cc_form | MINIC_X86_ATOMIC_CC_LOCK_VARIANT, locked_cc));
+    assert(!gate(MINIC_X86_MACHINE_ASM_ATOMIC_CC,
+        cc_form | MINIC_X86_ATOMIC_CC_LOCK_VARIANT, unlocked_cc));
+    assert(!gate(MINIC_X86_MACHINE_ASM_ATOMIC_CC, cc_form, locked_cc));
+    assert(!gate(MINIC_X86_MACHINE_ASM_ATOMIC_CC, 0U, unlocked_cc));
+    assert(!gate(MINIC_X86_MACHINE_ASM_ATOMIC_CC, cc_form,
+        "incl %0; cli\n\t/* output condition code e */"));
+    assert(!gate(MINIC_X86_MACHINE_ASM_TRYCAS, cc_form, unlocked_cc));
+    assert(!gate(MINIC_X86_MACHINE_ASM_ATOMIC_CC,
+        (unsigned int)minic_x86_64_port_io_form("outb %b0, %w1", 13U),
+        "outb %b0, %w1"));
+    puts("PASS twenty-five x86 typed family exact ID+variant+immutable template gates");
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/target/x86_exception_iret_int3_linux.c"}
+/* Linux v6.6.143 genuine source forms from
+ *   arch/x86/include/asm/sync_core.h: iret_to_self()
+ *   arch/x86/kernel/alternative.c: int3_selftest()
+ * with ASM_CALL_CONSTRAINT/ANNOTATE_NOENDBR preprocessor definitions
+ * expanded from arch/x86/include/asm/asm.h and objtool annotations.
+ * Assemble only: the INT3 requires a kernel notifier to emulate CALL,
+ * while IRETQ is an instruction-stream serialization primitive. */
+register unsigned long current_stack_pointer asm("rsp");
+#define ASM_CALL_CONSTRAINT "+r" (current_stack_pointer)
+#define ANNOTATE_NOENDBR "986:\n\t.pushsection .discard.noendbr\n\t.long 986b\n\t.popsection\n\t"
+
+void test_iret_to_self(void) {
+    unsigned int tmp;
+    asm volatile (
+        "mov %%ss, %0\n\t"
+        "pushq %q0\n\t"
+        "pushq %%rsp\n\t"
+        "addq $8, (%%rsp)\n\t"
+        "pushfq\n\t"
+        "mov %%cs, %0\n\t"
+        "pushq %q0\n\t"
+        "pushq $1f\n\t"
+        "iretq\n\t"
+        "1:"
+        : "=&r" (tmp), ASM_CALL_CONSTRAINT : : "cc", "memory");
+}
+
+void test_int3_selftest(unsigned int *val) {
+    asm volatile ("int3_selftest_ip:\n\t"
+                  ANNOTATE_NOENDBR
+                  "    int3; nop; nop; nop; nop\n\t"
+                  : ASM_CALL_CONSTRAINT
+                  : "D" (val)
+                  : "memory");
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/target/x86_exception_stack_linux.c"}
+/* Exact Linux 6.6 irq_stack.h / page_fault_oops source-template families.
+ * Every object remains an original GNU C inline-ASM expression; an x86
+ * native assembler must materialize .discard.reachable and direct calls. */
+extern void irq_enter_rcu(void);
+extern void irq_exit_rcu(void);
+extern void exception_target(void *, unsigned long, void *);
+extern void irq_target1(void *);
+extern void irq_target2(void *, unsigned long);
+extern void softirq_target(void);
+register unsigned long sp asm("rsp");
+
+#define STACK_CLOBBERS "cc", "rax", "rcx", "rdx", "rsi", "rdi", "r8", "r9", "r10", "memory"
+
+void test_exception_stack(void *stack_top, void *first,
+    unsigned long second, void *third) {
+    register void *tos asm("r11") = stack_top;
+    __asm__ __volatile__(
+        "movq %%rsp, (%[tos])\n\t"
+        "movq %[tos], %%rsp\n\t"
+        "movq %[arg3], %%rdx\n\t"
+        "movq %[arg2], %%rsi\n\t"
+        "movq %[arg1], %%rdi\n\t"
+        "call %c[__func]\n\t"
+        "998:\n\t"
+        ".pushsection .discard.reachable\n\t"
+        ".long 998b\n\t"
+        ".popsection\n\t"
+        "popq %%rsp\n\t"
+        : [tos] "+r"(tos), [sp] "+r"(sp)
+        : [__func] "i"(exception_target), [top] "r"(tos),
+          [arg1] "r"(first), [arg2] "r"(second), [arg3] "r"(third)
+        : STACK_CLOBBERS);
+}
+
+#ifndef MINIC_TEST_EXCEPTION_ONLY
+void test_irq1(void *stack_top, void *arg1) {
+    register void *tos asm("r11") = stack_top;
+    __asm__ __volatile__(
+        "movq %%rsp, (%[tos])\n\t"
+        "movq %[tos], %%rsp\n\t"
+        "call irq_enter_rcu\n\t"
+        "movq %[arg1], %%rdi\n\t"
+        "call %c[__func]\n\t"
+        "998:\n\t"
+        ".pushsection .discard.reachable\n\t"
+        ".long 998b\n\t"
+        ".popsection\n\t"
+        "call irq_exit_rcu\n\t"
+        "popq %%rsp\n\t"
+        : [tos] "+r"(tos), [sp] "+r"(sp)
+        : [__func] "i"(irq_target1), [top] "r"(tos), [arg1] "r"(arg1)
+        : STACK_CLOBBERS);
+}
+
+void test_irq2(void *stack_top, void *arg1, unsigned long arg2) {
+    register void *tos asm("r11") = stack_top;
+    __asm__ __volatile__(
+        "movq %%rsp, (%[tos])\n\t"
+        "movq %[tos], %%rsp\n\t"
+        "call irq_enter_rcu\n\t"
+        "movq %[arg2], %%rsi\n\t"
+        "movq %[arg1], %%rdi\n\t"
+        "call %c[__func]\n\t"
+        "998:\n\t"
+        ".pushsection .discard.reachable\n\t"
+        ".long 998b\n\t"
+        ".popsection\n\t"
+        "call irq_exit_rcu\n\t"
+        "popq %%rsp\n\t"
+        : [tos] "+r"(tos), [sp] "+r"(sp)
+        : [__func] "i"(irq_target2), [top] "r"(tos),
+          [arg1] "r"(arg1), [arg2] "r"(arg2)
+        : STACK_CLOBBERS);
+}
+
+void test_softirq(void *stack_top) {
+    register void *tos asm("r11") = stack_top;
+    __asm__ __volatile__(
+        "movq %%rsp, (%[tos])\n\t"
+        "movq %[tos], %%rsp\n\t"
+        "call %c[__func]\n\t"
+        "998:\n\t"
+        ".pushsection .discard.reachable\n\t"
+        ".long 998b\n\t"
+        ".popsection\n\t"
+        "popq %%rsp\n\t"
+        : [tos] "+r"(tos), [sp] "+r"(sp)
+        : [__func] "i"(softirq_target), [top] "r"(tos)
+        : STACK_CLOBBERS);
+}
+#endif
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/target/x86_machine_gnu_asm_test.c"}
+#define _POSIX_C_SOURCE 200809L
+#include "target/common/machine_gnu_asm.h"
+#include "target/x86_64/machine_opcode.h"
+#include "target/x86_64/codegen_options.h"
+#include "target/x86_64/machine_target_state.h"
+
+#include <assert.h>
+#include <limits.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+
+/* Keep seekable GNU output probes independent of a full system /tmp. */
+static FILE *probe_stream(void) {
+    const char *directory = getenv("TMPDIR");
+    char path[4096];
+    int length;
+    int fd;
+    FILE *stream;
+    if (directory == NULL || directory[0] == '\0') directory = ".";
+    length = snprintf(path, sizeof(path), "%s/minic-x86-gnu-XXXXXX",
+                      directory);
+    if (length <= 0 || (size_t)length >= sizeof(path)) return NULL;
+    fd = mkstemp(path);
+    if (fd < 0) return NULL;
+    if (unlink(path) != 0) {
+        close(fd);
+        return NULL;
+    }
+    stream = fdopen(fd, "w+");
+    if (stream == NULL) close(fd);
+    return stream;
+}
+
+/* This test is deliberately independent of the legacy Core-to-FILE* x86
+ * emitter. It constructs selected physical operations, verifies their full
+ * CFG/ABI and asks only the generic MachineFunction GNU serializer to print. */
+
+static MinicMachineRegister gp(unsigned int number, unsigned int width) {
+    MinicMachineRegister result = {0};
+    result.bank = MINIC_MACHINE_REGISTER_GENERAL;
+    result.number = number;
+    result.width_bits = (uint16_t)width;
+    return result;
+}
+
+static MinicMachineOperand reg(unsigned int number, unsigned int width,
+    unsigned int access) {
+    MinicMachineOperand result = {0};
+    result.kind = MINIC_MACHINE_OPERAND_REGISTER;
+    result.value.physical.reg = gp(number,width);
+    result.value.physical.access=access;
+    return result;
+}
+
+static MinicMachineOperand xmm(unsigned int number, unsigned int access) {
+    MinicMachineOperand result={0};
+    result.kind=MINIC_MACHINE_OPERAND_REGISTER;
+    result.value.physical.reg.bank=MINIC_MACHINE_REGISTER_VECTOR;
+    result.value.physical.reg.number=number;
+    result.value.physical.reg.width_bits=128U;
+    result.value.physical.access=access;
+    return result;
+}
+
+static MinicMachineOperand gp_address(unsigned int number) {
+    MinicMachineOperand result={0};
+    result.kind=MINIC_MACHINE_OPERAND_ADDRESS;
+    result.value.address.has_base=true;
+    result.value.address.base=gp(number,64U);
+    result.value.address.scale=1U;
+    return result;
+}
+
+static MinicMachineOperand imm(int64_t value) {
+    MinicMachineOperand result = {0};
+    result.kind = MINIC_MACHINE_OPERAND_INTEGER;
+    result.value.integer = value;
+    return result;
+}
+
+static MinicMachineOperand symbol(const char *name, unsigned int relocation) {
+    MinicMachineOperand result = {0};
+    result.kind = MINIC_MACHINE_OPERAND_SYMBOL;
+    result.value.symbol.name = (char *)name;
+    result.value.symbol.relocation=relocation;
+    return result;
+}
+
+static MinicMachineOperand block(size_t id) {
+    MinicMachineOperand result = {0};
+    result.kind = MINIC_MACHINE_OPERAND_BLOCK;
+    result.value.block_id=id;
+    return result;
+}
+
+static MinicMachineOperand frame(size_t id) {
+    MinicMachineOperand result = {0};
+    result.kind = MINIC_MACHINE_OPERAND_FRAME;
+    result.value.frame.index=id;
+    return result;
+}
+
+static MinicMachineOperand rip_got_address(const char *name) {
+    MinicMachineOperand result = {0};
+    result.kind = MINIC_MACHINE_OPERAND_ADDRESS;
+    result.value.address.target_mode=0U;
+    result.value.address.has_base=true;
+    result.value.address.base=gp(MINIC_X86_REG_RIP,64U);
+    result.value.address.scale=1U;
+    result.value.address.has_symbol=true;
+    result.value.address.symbol=(char *)name;
+    result.value.address.relocation=MINIC_X86_MACHINE_RELOC_GOTPCREL;
+    return result;
+}
+
+static MinicMachineOperand gs_address(void) {
+    MinicMachineOperand result = {0};
+    result.kind = MINIC_MACHINE_OPERAND_ADDRESS;
+    result.value.address.has_base=true;
+    result.value.address.base=gp(MINIC_X86_REG_R10,64U);
+    result.value.address.has_segment=true;
+    result.value.address.segment.bank=MINIC_MACHINE_REGISTER_SYSTEM;
+    result.value.address.segment.number=MINIC_X86_SEG_GS;
+    result.value.address.segment.width_bits=16U;
+    result.value.address.scale=1U;
+    return result;
+}
+
+static void append(MinicMachineFunction *function, size_t block_id,
+    unsigned int opcode, const MinicMachineOperand *operands,
+    size_t operand_count) {
+    MinicMachineInstruction instruction = {0};
+    MinicMachineOpcodeContract contract = {0};
+    assert(minic_x86_64_machine_opcode_lookup(function->target,opcode,
+        &contract,NULL));
+    assert(operand_count == contract.operand_count);
+    instruction.kind=MINIC_MACHINE_INSTRUCTION_SELECTED;
+    instruction.opcode=opcode;
+    instruction.effects=contract.required_effects;
+    instruction.operands=(MinicMachineOperand *)operands;
+    instruction.operand_count=operand_count;
+    instruction.implicit=contract.implicit_count==0U ? NULL : contract.implicit;
+    instruction.implicit_count=contract.implicit_count;
+    assert(minic_machine_block_append_instruction(function,block_id,
+        &instruction));
+}
+
+static void append0(MinicMachineFunction *function,size_t id,unsigned int opcode) {
+    append(function,id,opcode,NULL,0U);
+}
+
+static void append1(MinicMachineFunction *function,size_t id,unsigned int opcode,
+    MinicMachineOperand a) {
+    append(function,id,opcode,&a,1U);
+}
+
+static void append2(MinicMachineFunction *function,size_t id,unsigned int opcode,
+    MinicMachineOperand a,MinicMachineOperand b) {
+    MinicMachineOperand args[2]={a,b};
+    append(function,id,opcode,args,2U);
+}
+
+static bool rejected_without_output(MinicMachineFunction *function,
+    const MinicMachineGNUAsmPolicy *policy) {
+    FILE *stream=probe_stream();
+    bool rejected;
+    assert(stream != NULL);
+    rejected=!minic_machine_gnu_asm_emit_body(stream,function,policy);
+    assert(fflush(stream)==0);
+    assert(ftell(stream)==0L);
+    assert(fclose(stream)==0);
+    return rejected;
+}
+
+static void build_function(MinicMachineFunction *function,
+    const MinicTargetInfo *target) {
+    MinicMachineFrameObject fp_slot={0},sp_slot={0};
+    size_t entry=SIZE_MAX, cold=SIZE_MAX, taken=SIZE_MAX, done=SIZE_MAX;
+    size_t fp=SIZE_MAX,sp=SIZE_MAX;
+    assert(minic_machine_function_initialize(function,target,"mir_x86_probe",
+        minic_x86_64_machine_generated_features(target)));
+    function->frame_size=32U;
+    function->frame_alignment=16U;
+    fp_slot.size_bytes=8U;
+    fp_slot.alignment_bytes=8U;
+    fp_slot.area=MINIC_MACHINE_FRAME_LOCAL;
+    fp_slot.base=MINIC_MACHINE_FRAME_BASE_FRAME_POINTER;
+    fp_slot.has_fixed_offset=true;
+    fp_slot.fixed_offset=-8;
+    sp_slot=fp_slot;
+    sp_slot.base=MINIC_MACHINE_FRAME_BASE_STACK_POINTER;
+    sp_slot.fixed_offset=0;
+    assert(minic_machine_function_add_frame_object(function,&fp_slot,&fp));
+    assert(minic_machine_function_add_frame_object(function,&sp_slot,&sp));
+    assert(minic_machine_function_add_block(function,NULL,false,&entry));
+    assert(minic_machine_function_add_block(function,NULL,false,&cold));
+    assert(minic_machine_function_add_block(function,NULL,false,&taken));
+    assert(minic_machine_function_add_block(function,NULL,false,&done));
+    assert(entry==0U && cold==1U && taken==2U && done==3U);
+
+    append1(function,entry,MINIC_X86_MI_PUSH64_R,
+        reg(MINIC_X86_REG_RBP,64U,MINIC_MACHINE_REGISTER_READ));
+    append2(function,entry,MINIC_X86_MI_MOV64_RR,
+        reg(MINIC_X86_REG_RSP,64U,MINIC_MACHINE_REGISTER_READ),
+        reg(MINIC_X86_REG_RBP,64U,MINIC_MACHINE_REGISTER_WRITE));
+    append2(function,entry,MINIC_X86_MI_SUB64_IR,imm(32),
+        reg(MINIC_X86_REG_RSP,64U,
+            MINIC_MACHINE_REGISTER_READ|MINIC_MACHINE_REGISTER_WRITE));
+    append2(function,entry,MINIC_X86_MI_MOVABS64_IR,imm(INT64_MAX),
+        reg(MINIC_X86_REG_RAX,64U,MINIC_MACHINE_REGISTER_WRITE));
+    append2(function,entry,MINIC_X86_MI_MOV64_R_FRBP,
+        reg(MINIC_X86_REG_RAX,64U,MINIC_MACHINE_REGISTER_READ),frame(fp));
+    append2(function,entry,MINIC_X86_MI_MOV64_FRSP_R,frame(sp),
+        reg(MINIC_X86_REG_R11,64U,MINIC_MACHINE_REGISTER_WRITE));
+    append2(function,entry,MINIC_X86_MI_ADD64_RR,
+        reg(MINIC_X86_REG_R11,64U,MINIC_MACHINE_REGISTER_READ),
+        reg(MINIC_X86_REG_RAX,64U,
+            MINIC_MACHINE_REGISTER_READ|MINIC_MACHINE_REGISTER_WRITE));
+    append2(function,entry,MINIC_X86_MI_CMP64_IR,imm(7),
+        reg(MINIC_X86_REG_RAX,64U,MINIC_MACHINE_REGISTER_READ));
+    append1(function,entry,MINIC_X86_MI_JNZ_B,block(taken));
+    assert(minic_machine_block_add_successor(function,entry,cold));
+    assert(minic_machine_block_add_successor(function,entry,taken));
+    assert(minic_machine_block_set_fallthrough(function,entry,cold));
+
+    append2(function,cold,MINIC_X86_MI_LEA64_RIP_SYMBOL_R,
+        symbol("mir_global",MINIC_X86_MACHINE_RELOC_PC32),
+        reg(MINIC_X86_REG_R11,64U,MINIC_MACHINE_REGISTER_WRITE));
+    append2(function,cold,MINIC_X86_MI_MOV64_GOTPCREL_R,
+        symbol("mir_external",MINIC_X86_MACHINE_RELOC_GOTPCREL),
+        reg(MINIC_X86_REG_R10,64U,MINIC_MACHINE_REGISTER_WRITE));
+    append2(function,cold,MINIC_X86_MI_MOV64_AR,
+        rip_got_address("mir_external"),
+        reg(MINIC_X86_REG_RAX,64U,MINIC_MACHINE_REGISTER_WRITE));
+    append1(function,cold,MINIC_X86_MI_CALL_SYSV_SYMBOL,
+        symbol("puts",MINIC_X86_MACHINE_RELOC_PLT32));
+    append1(function,cold,MINIC_X86_MI_JMP_B,block(done));
+    assert(minic_machine_block_add_successor(function,cold,done));
+
+    append2(function,taken,MINIC_X86_MI_MOV8_AR,gs_address(),
+        reg(MINIC_X86_REG_RAX,8U,MINIC_MACHINE_REGISTER_WRITE));
+    append1(function,taken,MINIC_X86_MI_JMP_B,block(done));
+    assert(minic_machine_block_add_successor(function,taken,done));
+
+    append0(function,done,MINIC_X86_MI_LEAVE);
+    append0(function,done,MINIC_X86_MI_RET);
+}
+
+/* This is the actual physical SSE/x87 instruction family used by the
+ * compiler's scalar FP and x87 extended80 ABI paths.  The target verifier
+ * must reject malformed XMM and disabled-feature operands before printing. */
+static void test_x86_fp_machine_contract(const MinicTargetInfo *target,
+    const MinicMachineGNUAsmPolicy *policy) {
+    MinicMachineFunction fn={0};
+    MinicMachineFrameObject fp={0};
+    size_t block_id=SIZE_MAX,slot_id=SIZE_MAX;
+    FILE *stream;
+    char textbuf[8192];
+    size_t count;
+    MinicTargetInfo copy;
+    assert(minic_machine_function_initialize(&fn,target,"mir_x86_fp",
+        minic_x86_64_machine_generated_features(target)));
+    fn.frame_size=32U;
+    fn.frame_alignment=16U;
+    fp.area=MINIC_MACHINE_FRAME_LOCAL;
+    fp.base=MINIC_MACHINE_FRAME_BASE_FRAME_POINTER;
+    fp.size_bytes=16U;
+    fp.alignment_bytes=16U;
+    fp.has_fixed_offset=true;
+    fp.fixed_offset=-32;
+    assert(minic_machine_function_add_frame_object(&fn,&fp,&slot_id));
+    assert(minic_machine_function_add_block(&fn,NULL,false,&block_id));
+    append2(&fn,block_id,MINIC_X86_MI_MOVQ_GPR_XMM,
+        reg(MINIC_X86_REG_RAX,64U,MINIC_MACHINE_REGISTER_READ),
+        xmm(0U,MINIC_MACHINE_REGISTER_WRITE));
+    append2(&fn,block_id,MINIC_X86_MI_MOVD_GPR_XMM,
+        reg(MINIC_X86_REG_R10,32U,MINIC_MACHINE_REGISTER_READ),
+        xmm(1U,MINIC_MACHINE_REGISTER_WRITE));
+    append2(&fn,block_id,MINIC_X86_MI_CVTSS2SD_XMM,
+        xmm(1U,MINIC_MACHINE_REGISTER_READ),
+        xmm(0U,MINIC_MACHINE_REGISTER_READ|MINIC_MACHINE_REGISTER_WRITE));
+    append2(&fn,block_id,MINIC_X86_MI_ADDSD_XMM,
+        xmm(1U,MINIC_MACHINE_REGISTER_READ),
+        xmm(0U,MINIC_MACHINE_REGISTER_READ|MINIC_MACHINE_REGISTER_WRITE));
+    append2(&fn,block_id,MINIC_X86_MI_UCOMISD_XMM,
+        xmm(1U,MINIC_MACHINE_REGISTER_READ),
+        xmm(0U,MINIC_MACHINE_REGISTER_READ));
+    append2(&fn,block_id,MINIC_X86_MI_CVTTSD2SIQ_XMM_GPR,
+        xmm(0U,MINIC_MACHINE_REGISTER_READ),
+        reg(MINIC_X86_REG_RAX,64U,MINIC_MACHINE_REGISTER_WRITE));
+    append2(&fn,block_id,MINIC_X86_MI_BTS64_IR,imm(63),
+        reg(MINIC_X86_REG_RAX,64U,
+            MINIC_MACHINE_REGISTER_READ|MINIC_MACHINE_REGISTER_WRITE));
+    append2(&fn,block_id,MINIC_X86_MI_AND8_RR,
+        reg(MINIC_X86_REG_R10,8U,MINIC_MACHINE_REGISTER_READ),
+        reg(MINIC_X86_REG_RAX,8U,
+            MINIC_MACHINE_REGISTER_READ|MINIC_MACHINE_REGISTER_WRITE));
+    append2(&fn,block_id,MINIC_X86_MI_OR8_RR,
+        reg(MINIC_X86_REG_R10,8U,MINIC_MACHINE_REGISTER_READ),
+        reg(MINIC_X86_REG_RAX,8U,
+            MINIC_MACHINE_REGISTER_READ|MINIC_MACHINE_REGISTER_WRITE));
+    append2(&fn,block_id,MINIC_X86_MI_MOVZBL_RR,
+        reg(MINIC_X86_REG_RAX,8U,MINIC_MACHINE_REGISTER_READ),
+        reg(MINIC_X86_REG_RAX,32U,MINIC_MACHINE_REGISTER_WRITE));
+    append2(&fn,block_id,MINIC_X86_MI_MOVDQU_XMM_FRAME_RBP,
+        xmm(0U,MINIC_MACHINE_REGISTER_READ),frame(slot_id));
+    append2(&fn,block_id,MINIC_X86_MI_MOVDQU_FRAME_RBP_XMM,
+        frame(slot_id),xmm(2U,MINIC_MACHINE_REGISTER_WRITE));
+    append2(&fn,block_id,MINIC_X86_MI_MOVDQU_ADDRESS_XMM,
+        gp_address(MINIC_X86_REG_R11),
+        xmm(3U,MINIC_MACHINE_REGISTER_WRITE));
+    append2(&fn,block_id,MINIC_X86_MI_MOVDQU_XMM_ADDRESS,
+        xmm(3U,MINIC_MACHINE_REGISTER_READ),
+        gp_address(MINIC_X86_REG_R11));
+    append1(&fn,block_id,MINIC_X86_MI_FLDT_FRAME_RBP,frame(slot_id));
+    append1(&fn,block_id,MINIC_X86_MI_FSTPT_FRAME_RBP,frame(slot_id));
+    append1(&fn,block_id,MINIC_X86_MI_FLDT_ADDRESS,
+        gp_address(MINIC_X86_REG_R10));
+    append1(&fn,block_id,MINIC_X86_MI_FSTPT_ADDRESS,
+        gp_address(MINIC_X86_REG_R10));
+    append1(&fn,block_id,MINIC_X86_MI_FLDL_FRAME_RBP,frame(slot_id));
+    append0(&fn,block_id,MINIC_X86_MI_FCHS);
+    append1(&fn,block_id,MINIC_X86_MI_FLDS_FRAME_RBP,frame(slot_id));
+    append0(&fn,block_id,MINIC_X86_MI_FADDP_ST1);
+    append1(&fn,block_id,MINIC_X86_MI_FSTPL_FRAME_RBP,frame(slot_id));
+    append1(&fn,block_id,MINIC_X86_MI_FILDQ_FRAME_RBP,frame(slot_id));
+    append1(&fn,block_id,MINIC_X86_MI_FLDL_ADDRESS,
+        gp_address(MINIC_X86_REG_R10));
+    append0(&fn,block_id,MINIC_X86_MI_FXCH_ST1);
+    append0(&fn,block_id,MINIC_X86_MI_FUCOMIP_ST1);
+    append0(&fn,block_id,MINIC_X86_MI_FSTP_ST0);
+    append1(&fn,block_id,MINIC_X86_MI_FILDQ_ADDRESS,
+        gp_address(MINIC_X86_REG_R10));
+    append1(&fn,block_id,MINIC_X86_MI_FISTTPQ_ADDRESS,
+        gp_address(MINIC_X86_REG_R10));
+    append0(&fn,block_id,MINIC_X86_MI_CLD);
+    append0(&fn,block_id,MINIC_X86_MI_RET);
+    assert(minic_machine_function_verify(&fn,&policy->verify));
+
+    stream=probe_stream();
+    assert(stream != NULL);
+    assert(minic_machine_gnu_asm_emit_body(stream,&fn,policy));
+    assert(fflush(stream)==0);
+    assert(fseek(stream,0L,SEEK_SET)==0);
+    count=fread(textbuf,1U,sizeof(textbuf)-1U,stream);
+    textbuf[count]='\0';
+    assert(fclose(stream)==0);
+    assert(strstr(textbuf,"movq %rax, %xmm0")!=NULL);
+    assert(strstr(textbuf,"addsd %xmm1, %xmm0")!=NULL);
+    assert(strstr(textbuf,"movdqu %xmm0, -32(%rbp)")!=NULL);
+    assert(strstr(textbuf,"fldt -32(%rbp)")!=NULL);
+    assert(strstr(textbuf,"fstpt (%r10)")!=NULL);
+    assert(strstr(textbuf,"fucomip %st(1), %st")!=NULL);
+    assert(strstr(textbuf,"faddp %st, %st(1)")!=NULL);
+    {
+        const char *path=getenv("MINIC_X86_MACHINE_FP_DUMP_PATH");
+        if (path != NULL && path[0] != '\0') {
+            FILE *dump=fopen(path,"w");
+            assert(dump != NULL);
+            assert(fputs(".text\n.globl mir_x86_fp\nmir_x86_fp:\n",dump)!=EOF);
+            assert(fwrite(textbuf,1U,count,dump)==count);
+            assert(fclose(dump)==0);
+        }
+    }
+    /* Independent feature check: a target with -mno-sse rejects every
+     * generated XMM instruction even if its operand shape is otherwise OK. */
+    copy=*target;
+    assert(minic_x86_64_target_codegen_options_set(&copy,
+        minic_x86_64_target_codegen_options(&copy) | MINIC_X86_CODEGEN_NO_SSE));
+    fn.target=&copy;
+    fn.generated_features=minic_x86_64_machine_generated_features(&copy);
+    assert(rejected_without_output(&fn,policy));
+    fn.target=target;
+    fn.generated_features=minic_x86_64_machine_generated_features(target);
+    fn.blocks[0].instructions[0].operands[1].value.physical.reg.number=16U;
+    assert(rejected_without_output(&fn,policy));
+    fn.blocks[0].instructions[0].operands[1].value.physical.reg.number=0U;
+    assert(minic_machine_function_verify(&fn,&policy->verify));
+    minic_machine_function_destroy(&fn);
+}
+
+int main(void) {
+    MinicTargetInfo machine_target={0};
+    const MinicTargetInfo *target=&machine_target;
+    MinicMachineGNUAsmPolicy policy={0};
+    MinicMachineFunction function={0};
+    MinicTargetInfo copy;
+    FILE *stream;
+    char result[16384];
+    size_t bytes;
+    int64_t saved;
+    machine_target.architecture=MINIC_TARGET_ARCH_X86_64;
+    machine_target.data_layout=minic_x86_64_linux_data_layout();
+    machine_target.call_lowering_capabilities=
+        MINIC_TARGET_CALL_MS_X64_FIXED_SCALAR;
+    assert(target->data_layout != NULL);
+    assert(minic_x86_64_machine_gnu_asm_policy(target,&policy));
+    assert(policy.section_type_marker==MINIC_MACHINE_GNU_SECTION_TYPE_AT);
+    for (unsigned int opcode=1U; opcode<MINIC_X86_MI_LAST; ++opcode) {
+        MinicMachineOpcodeContract contract={0};
+        assert(minic_x86_64_machine_opcode_info(opcode)!=NULL);
+        assert(minic_x86_64_machine_opcode_lookup(target,opcode,
+            &contract,NULL));
+        assert(contract.operand_count<=MINIC_MACHINE_MAX_OPERANDS);
+    }
+    build_function(&function,target);
+    assert(minic_machine_function_verify(&function,&policy.verify));
+
+    stream=probe_stream();
+    assert(stream != NULL);
+    assert(minic_machine_gnu_asm_emit_body(stream,&function,&policy));
+    assert(fflush(stream)==0);
+    assert(fseek(stream,0L,SEEK_SET)==0);
+    bytes=fread(result,1U,sizeof(result)-1U,stream);
+    result[bytes]='\0';
+    assert(fclose(stream)==0);
+    assert(strstr(result,"movabsq $9223372036854775807, %rax")!=NULL);
+    assert(strstr(result,"movq %rax, -8(%rbp)")!=NULL);
+    assert(strstr(result,"leaq mir_global(%rip), %r11")!=NULL);
+    assert(strstr(result,"movq mir_external@GOTPCREL(%rip), %r10")!=NULL);
+    assert(strstr(result,"movq mir_external@GOTPCREL(%rip), %rax")!=NULL);
+    assert(strstr(result,"movb %gs:(%r10), %al")!=NULL);
+    assert(strstr(result,"call puts@PLT")!=NULL);
+    assert(strstr(result,"jnz .Lminic_mir_mir_x86_probe_2")!=NULL);
+
+    {
+        const char *dump_path=getenv("MINIC_X86_MACHINE_ASM_DUMP_PATH");
+        if (dump_path != NULL && dump_path[0] != '\0') {
+            FILE *dump=fopen(dump_path,"w");
+            assert(dump != NULL);
+            assert(fputs(".text\n.globl mir_x86_probe\n"
+                         "mir_x86_probe:\n",dump) != EOF);
+            assert(fwrite(result,1U,bytes,dump)==bytes);
+            assert(fclose(dump)==0);
+        }
+    }
+
+    /* The complete verifier rejects invalid signed imm32 encodings before
+     * the serializer writes its first byte. */
+    saved=function.blocks[0].instructions[2].operands[0].value.integer;
+    function.blocks[0].instructions[2].operands[0].value.integer=INT64_MAX;
+    assert(rejected_without_output(&function,&policy));
+    function.blocks[0].instructions[2].operands[0].value.integer=saved;
+
+    saved=function.frame_objects[0].fixed_offset;
+    function.frame_objects[0].fixed_offset=-INT64_C(0x80000000)-8;
+    assert(rejected_without_output(&function,&policy));
+    function.frame_objects[0].fixed_offset=saved;
+
+    /* A forged PIC relocation embedded inside an x86 memory address must
+     * not become a synthetic safe-looking RIP reference. */
+    function.blocks[1].instructions[2].operands[0].value.address.displacement=8;
+    assert(rejected_without_output(&function,&policy));
+    function.blocks[1].instructions[2].operands[0].value.address.displacement=0;
+
+    /* Frame-base identity is part of the machine contract, not deferred
+     * until printing an incorrectly based load or store. */
+    function.blocks[0].instructions[4].operands[1].value.frame.index=1U;
+    assert(rejected_without_output(&function,&policy));
+    function.blocks[0].instructions[4].operands[1].value.frame.index=0U;
+
+    /* Arithmetic consumers cannot suppress hardware FLAGS definitions. */
+    function.blocks[0].instructions[6].implicit[0].reg.width_bits=32U;
+    assert(rejected_without_output(&function,&policy));
+    function.blocks[0].instructions[6].implicit[0].reg.width_bits=64U;
+
+    copy=*target;
+    copy.call_lowering_capabilities=0U;
+    function.target=&copy;
+    function.calling_convention=MINIC_CALLING_CONVENTION_MS_X64;
+    assert(rejected_without_output(&function,&policy));
+    function.target=target;
+    function.calling_convention=MINIC_CALLING_CONVENTION_DEFAULT;
+
+    function.generated_features=0U;
+    assert(rejected_without_output(&function,&policy));
+    function.generated_features=minic_x86_64_machine_generated_features(target);
+    assert(minic_machine_function_verify(&function,&policy.verify));
+    minic_machine_function_destroy(&function);
+
+    {
+        MinicMachineFunction local={0};
+        size_t entry;
+        assert(minic_machine_function_initialize(&local,target,"mir_x86_ms",
+            minic_x86_64_machine_generated_features(target)));
+        local.calling_convention=MINIC_CALLING_CONVENTION_MS_X64;
+        assert(minic_machine_function_add_block(&local,NULL,false,&entry));
+        append1(&local,entry,MINIC_X86_MI_CALL_MS_LOCAL_SYMBOL,
+            symbol("ms_helper",MINIC_X86_MACHINE_RELOC_PC32));
+        append0(&local,entry,MINIC_X86_MI_RET);
+        assert(minic_machine_function_verify(&local,&policy.verify));
+        minic_machine_function_destroy(&local);
+    }
+    {
+        MinicMachineFunction thunk={0};
+        size_t entry;
+        copy=*target;
+        assert(minic_x86_64_target_codegen_options_set(&copy,
+            MINIC_X86_CODEGEN_INDIRECT_EXTERNAL_THUNK));
+        assert(minic_machine_function_initialize(&thunk,&copy,
+            "mir_x86_retpoline",minic_x86_64_machine_generated_features(&copy)));
+        assert(minic_machine_function_add_block(&thunk,NULL,false,&entry));
+        append1(&thunk,entry,MINIC_X86_MI_JMP_INDIRECT_THUNK_RAX,
+            symbol("__x86_indirect_thunk_rax",MINIC_X86_MACHINE_RELOC_PC32));
+        assert(minic_machine_function_verify(&thunk,&policy.verify));
+        /* Plain jmp *%rax must not bypass configured external retpoline. */
+        thunk.blocks[0].instructions[0].opcode=MINIC_X86_MI_JMP_R;
+        assert(rejected_without_output(&thunk,&policy));
+        minic_machine_function_destroy(&thunk);
+    }
+    test_x86_fp_machine_contract(target,&policy);
+    puts("X86_MACHINE_GNU_ASM=PASS typed_gpr_flags=PASS gotpcrel=PASS "
+         "sysv_call=PASS typed_sse_x87=PASS verifier_negative=PASS");
+    return 0;
+}
+@@@ end

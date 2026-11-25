@@ -1,0 +1,710 @@
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/mir-migration/aggregate_abi.c"}
+/* Cross-ABI aggregate passing, nested records, hidden structure returns,
+ * object copies, and pointer aliases.  No host-system headers required. */
+struct MirInner { long value; unsigned short tag; };
+struct MirRecord {
+    struct MirInner inner[3];
+    long tail[4];
+    unsigned char status;
+};
+
+volatile long mir_aggregate_sink;
+
+__attribute__((noinline))
+struct MirRecord mir_make_record(long a, long b, long c) {
+    struct MirRecord result = {0};
+    result.inner[0].value = a + 3;
+    result.inner[1].value = b * 7;
+    result.inner[2].value = c - a;
+    result.inner[1].tag = (unsigned short)(a ^ b);
+    result.tail[0] = a;
+    result.tail[1] = b;
+    result.tail[2] = c;
+    result.tail[3] = result.inner[1].value + result.inner[0].value;
+    result.status = (unsigned char)(result.tail[3] & 255L);
+    return result;
+}
+
+__attribute__((noinline))
+long mir_use_record(struct MirRecord by_value, struct MirInner small,
+                    long extra) {
+    long sum = by_value.tail[0] + by_value.tail[3] + extra;
+    sum += by_value.inner[1].value + small.value + small.tag;
+    mir_aggregate_sink = sum;
+    return sum;
+}
+
+int main(void) {
+    struct MirRecord local = mir_make_record(5, 11, 17);
+    struct MirInner tiny = local.inner[1];
+    return (int)(mir_use_record(local, tiny, 29) & 255L);
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/mir-migration/arith_call_frame.c"}
+/* Intentionally header-free: host preprocessing is architecture neutral.
+ * Exercises integer arithmetic, nested calls, outgoing stack arguments,
+ * incoming stack arguments, locals, address-taken locals and frame layout. */
+volatile long mir_sink;
+
+__attribute__((noinline))
+long mir_callee(long a, long b, long c, long d, long e,
+                long f, long g, long h, long i, long j) {
+    long mix = (a * 3L + b - c) ^ (d + e + f + g);
+    return mix + h * 5L - i + j;
+}
+
+__attribute__((noinline))
+long mir_frame(long seed) {
+    long slots[12];
+    long *volatile taken = slots;
+    int i;
+    for (i = 0; i < 12; ++i)
+        slots[i] = seed + (long)i * 7L;
+    mir_sink = slots[5];
+    return mir_callee(slots[0], slots[1], slots[2], slots[3],
+                      slots[4], slots[5], slots[6], slots[7],
+                      slots[8], taken[9]);
+}
+
+int main(void) {
+    return (int)(mir_frame(3L) & 255L);
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/mir-migration/cfg_global.c"}
+/* CFG/label identity, relocation-bearing globals and data are all visible
+ * at GNU -S without a target cross-assembler. */
+long mir_table[4] = {3, 5, 7, 11};
+long *mir_global_ptr = mir_table;
+volatile int mir_route;
+
+__attribute__((noinline))
+long mir_cfg(int selector, long x) {
+    long result;
+    if (selector < 0) goto negative;
+    switch (selector) {
+    case 0: result = mir_table[0]; break;
+    case 1: result = mir_table[1] + x; break;
+    case 3: result = mir_table[3] - x; break;
+    default: result = mir_global_ptr[2] ^ x; break;
+    }
+    goto finish;
+negative:
+    result = -x;
+finish:
+    mir_route = selector;
+    return result;
+}
+
+int main(void) {
+    return (int)(mir_cfg(1, 4) + mir_cfg(-1, 9));
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/mir-migration/entry_backedge.c"}
+/* Forces a real CFG edge back into the function's first Core block; a
+ * serializer must not mistake the symbol entry for an ordinary local label. */
+volatile int mir_backedge_sink;
+
+__attribute__((noinline))
+int mir_backedge(int count) {
+entry:
+    if (count <= 0) return mir_backedge_sink;
+    mir_backedge_sink += count;
+    --count;
+    goto entry;
+}
+
+int main(void) { return mir_backedge(4); }
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/mir-migration/fp_scalar_abi.c"}
+/* Native floating operations, scalar ABI arguments/returns, comparisons,
+ * casts, and stack-passed mixed-bank parameters (soft FP for RV32I/RV64I). */
+volatile double mir_fp_sink;
+
+__attribute__((noinline))
+double mir_fp_callee(double a, double b, double c, double d,
+                     double e, double f, double g, double h,
+                     double i, double j) {
+    double left = (a + b) * (c - d);
+    float narrow = (float)(e + g);
+    double right = (double)narrow / (f + 1.0);
+    return left + right + h - i + j;
+}
+
+__attribute__((noinline))
+long mir_fp_bridge(long seed, float scale, double bias) {
+    double a = (double)seed + (double)scale;
+    double b = mir_fp_callee(a, bias, 1.5, 2.0, 3.5,
+                             4.0, 5.5, 6.0, 7.5, 8.0);
+    mir_fp_sink = b;
+    return (long)(b >= 0.0 ? b : -b);
+}
+
+int main(void) { return (int)(mir_fp_bridge(13, 2.5f, 0.25) & 255L); }
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/mir-migration/indirect_control.c"}
+/* Computed goto, indirect calls, branch-sensitive SSA values and switch.
+ * Address-taken entry labels must not jump back through a prologue. */
+typedef long (*MirCall)(long, long);
+
+__attribute__((noinline))
+long mir_indirect_target(long a, long b) { return (a << 1) - b; }
+
+__attribute__((noinline))
+long mir_dispatch(int code, long value, MirCall call) {
+    static void *const table[] = {&&s0, &&s1, &&s2, &&s3};
+    long result = value;
+    if ((unsigned)code >= 4U) goto done;
+    goto *table[code];
+s0:
+    result += 19;
+    goto done;
+s1:
+    result = call(result, 5);
+    goto done;
+s2:
+    result ^= 0x55AAL;
+    goto done;
+s3:
+    switch ((int)(result & 3L)) {
+    case 0: result += 1; break;
+    case 1: result *= 3; break;
+    case 2: result >>= 2; break;
+    default: result -= 9; break;
+    }
+done:
+    return result;
+}
+
+int main(void) {
+    return (int)(mir_dispatch(1, 41, mir_indirect_target) & 255L);
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/mir-migration/inline_negative.c"}
+/* A source-ASM positional reference with no matching source operand is
+ * ill-formed. Admission must fail before any partial GNU .s is accepted. */
+int main(void) {
+    asm volatile("nop /* %0 */" ::: "memory");
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/mir-migration/inline_positive.c"}
+/* Source-owned ASM must pass through MIR, not be dropped as a textual
+ * backend special case. 'nop' exists on both GNU AArch64 and LoongArch64.
+ * Empty volatile memory barriers must remain effectful but text-free. */
+volatile long mir_inline_sink;
+
+__attribute__((noinline))
+long mir_inline(long value) {
+    asm volatile("nop" ::: "memory");
+    mir_inline_sink = value + 1;
+    asm volatile("" ::: "memory");
+    return mir_inline_sink;
+}
+
+int main(void) { return (int)mir_inline(41); }
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/mir-migration/loong_llsc_extended_forms.c"}
+/* Exact GNU Linux LoongArch source forms: four sealed atomic/exception
+ * families selected through typed physical MachineIR SOURCE_ASM bindings.
+ * The source is preprocessed on the host; privileged forms are not executed. */
+typedef unsigned int u32;
+typedef unsigned long u64;
+
+#define EXT_GPR_MAP \
+    ".equ .L__gpr_num_zero,0\n" \
+    ".irp num, 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31\n" \
+    ".equ .L__gpr_num_$r\\num,\\num\n" \
+    ".endr\n" \
+    ".equ .L__gpr_num_$ra,1\n" \
+    ".equ .L__gpr_num_$tp,2\n" \
+    ".equ .L__gpr_num_$sp,3\n" \
+    ".irp num, 0,1,2,3,4,5,6,7\n" \
+    ".equ .L__gpr_num_$a\\num,4+\\num\n" \
+    ".endr\n" \
+    ".irp num, 0,1,2,3,4,5,6,7,8\n" \
+    ".equ .L__gpr_num_$t\\num,12+\\num\n" \
+    ".endr\n" \
+    ".equ .L__gpr_num_$s9,22\n" \
+    ".equ .L__gpr_num_$fp,22\n" \
+    ".irp num, 0,1,2,3,4,5,6,7,8\n" \
+    ".equ .L__gpr_num_$s\\num,23+\\num\n" \
+    ".endr\n"
+
+#define EXT_FAULT(SITE) \
+    EXT_GPR_MAP \
+    ".pushsection __ex_table, \"a\"\n" \
+    ".balign 4\n" \
+    ".long ((" SITE ") - .)\n" \
+    ".long ((3b) - .)\n" \
+    ".short (2)\n" \
+    ".short ((((.L__gpr_num_%0) << 0) | ((.L__gpr_num_zero) << 5)))\n" \
+    ".popsection\n"
+
+/* ID 7: `+r` err is a real read/write register and must not be reset by
+ * the selector before the original source-owned exception fixups run. */
+int loong_futex_cmpxchg(u32 *ptr, u32 expected, u32 desired) {
+    /* `+r` must ingress this nonzero value; the old emitter lost it. */
+    int err = 7;
+    u32 prior;
+    __asm__ __volatile__(
+        "#futex_atomic_cmpxchg_inatomic\n"
+        "1: ll.w %1, %3\n"
+        "bne %1, %z4, 3f\n"
+        "move $t0, %z5\n"
+        "2: sc.w $t0, %2\n"
+        "beqz $t0, 1b\n"
+        "3: dbar 0x700\n"
+        EXT_FAULT("1b") EXT_FAULT("2b")
+        : "+r"(err), "=&r"(prior), "=ZC"(*ptr)
+        : "ZC"(*ptr), "Jr"(expected), "Jr"(desired)
+        : "t0", "memory");
+    return err + (int)prior;
+}
+
+/* ID 18: two widths, both named and numeric form recognition is sealed. */
+u32 loong_add_unless_w(volatile u32 *ptr, u32 delta, u32 unless) {
+    u32 prior, result;
+    __asm__ __volatile__(
+        "0: ll.w %[p], %[c]\n"
+        "beq %[p], %[u], 1f\n"
+        "add.w %[rc], %[p], %[a]\n"
+        "sc.w %[rc], %[c]\n"
+        "beqz %[rc], 0b\n"
+        "b 2f\n"
+        "1: dbar 0x700\n"
+        "2:"
+        : [p] "=&r"(prior), [rc] "=&r"(result), [c] "=ZB"(*ptr)
+        : [a] "r"(delta), [u] "r"(unless) : "memory");
+    return prior;
+}
+
+u64 loong_add_unless_d(volatile u64 *ptr, u64 delta, u64 unless) {
+    u64 prior, result;
+    __asm__ __volatile__(
+        "0: ll.d %0, %2\n"
+        "beq %0, %4, 1f\n"
+        "add.d %1, %0, %3\n"
+        "sc.d %1, %2\n"
+        "beqz %1, 0b\n"
+        "b 2f\n"
+        "1: dbar 0x700\n"
+        "2:"
+        : "=&r"(prior), "=&r"(result), "=ZB"(*ptr)
+        : "r"(delta), "r"(unless) : "memory");
+    return prior;
+}
+
+/* ID 19: all five exact futex RMW variants, one tied `0` input, two
+ * physically distinct LL/SC memory operands and both Linux fault sites. */
+#define FUTEX_RMW_TEMPLATE(OP) \
+    "1: ll.w %1, %4 # __futex_atomic_op\n" \
+    OP "\n" \
+    "2: sc.w $t0, %2\n" \
+    "beqz $t0, 1b\n" \
+    "3:\n" \
+    EXT_FAULT("1b") EXT_FAULT("2b")
+
+#define DEFINE_FUTEX_RMW(NAME,OP) \
+    int NAME(u32 *ptr, u32 input) { \
+        int error, prior; \
+        __asm__ __volatile__(FUTEX_RMW_TEMPLATE(OP) \
+            : "=r"(error), "=&r"(prior), "=ZC"(*ptr) \
+            : "0"(0), "ZC"(*ptr), "Jr"(input) \
+            : "t0", "memory"); \
+        return error + prior; \
+    }
+
+DEFINE_FUTEX_RMW(loong_futex_set, "move $t0, %z5")
+DEFINE_FUTEX_RMW(loong_futex_add, "add.w $t0, %1, %z5")
+DEFINE_FUTEX_RMW(loong_futex_or,  "or $t0, %1, %z5")
+DEFINE_FUTEX_RMW(loong_futex_and, "and $t0, %1, %z5")
+DEFINE_FUTEX_RMW(loong_futex_xor, "xor $t0, %1, %z5")
+
+/* ID 23: true signed-s12 immediate ADD and register SUB, both widths. */
+int loong_sub_positive_addi_w(volatile int *ptr) {
+    int result, status;
+    __asm__ __volatile__(
+        "1: ll.w %1, %2 # atomic_sub_if_positive\n"
+        "addi.w %0, %1, %3\n"
+        "move %1, %0\n"
+        "bltz %0, 2f\n"
+        "sc.w %1, %2\n"
+        "beqz %1, 1b\n"
+        "2: dbar 0x700"
+        : "=&r"(result), "=&r"(status), "+ZC"(*ptr)
+        : "I"(-1));
+    return result;
+}
+
+int loong_sub_positive_sub_w(volatile int *ptr, int decrement) {
+    int result, status;
+    __asm__ __volatile__(
+        "1: ll.w %1, %2 # atomic_sub_if_positive\n"
+        "sub.w %0, %1, %3\n"
+        "move %1, %0\n"
+        "bltz %0, 2f\n"
+        "sc.w %1, %2\n"
+        "beqz %1, 1b\n"
+        "2: dbar 0x700"
+        : "=&r"(result), "=&r"(status), "+ZC"(*ptr)
+        : "r"(decrement));
+    return result;
+}
+
+long loong_sub_positive_addi_d(volatile long *ptr) {
+    long result, status;
+    __asm__ __volatile__(
+        "1: ll.d %1, %2 # atomic64_sub_if_positive\n"
+        "addi.d %0, %1, %3\n"
+        "move %1, %0\n"
+        "bltz %0, 2f\n"
+        "sc.d %1, %2\n"
+        "beqz %1, 1b\n"
+        "2: dbar 0x700"
+        : "=&r"(result), "=&r"(status), "+ZC"(*ptr)
+        : "I"(-1L));
+    return result;
+}
+
+long loong_sub_positive_sub_d(volatile long *ptr, long decrement) {
+    long result, status;
+    __asm__ __volatile__(
+        "1: ll.d %1, %2 # atomic64_sub_if_positive\n"
+        "sub.d %0, %1, %3\n"
+        "move %1, %0\n"
+        "bltz %0, 2f\n"
+        "sc.d %1, %2\n"
+        "beqz %1, 1b\n"
+        "2: dbar 0x700"
+        : "=&r"(result), "=&r"(status), "+ZC"(*ptr)
+        : "r"(decrement));
+    return result;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/mir-migration/loong_scalar_source_forms.c"}
+/* Sealed LoongArch Linux scalar ASM: GNU C ingress through typed MachineIR.
+ * Privileged CACOP/INVTLB/CSR operations are compile-only, never run in
+ * QEMU-user. Keep these source forms identical to the original positive
+ * target-qualified contracts rather than inventing synthetic Core input. */
+
+void loong_scalar_cacop(unsigned long address) {
+    __asm__ __volatile__("\tcacop %0, %1\n" : :
+        "i"(8), "ZC"(*(unsigned char *)(address)));
+}
+
+unsigned int loong_scalar_cpucfg(unsigned int index) {
+    unsigned int result;
+    __asm__ __volatile__("cpucfg %0, %1\n\t"
+        : "=&r"(result) : "r"(index));
+    return result;
+}
+
+unsigned long loong_scalar_fpr_read(void) {
+    unsigned long payload;
+    __asm__ __volatile__("movfr2gr.d %0, $f0" : "=r"(payload));
+    return payload;
+}
+
+void loong_scalar_fpr_write(unsigned long payload) {
+    __asm__ __volatile__("movgr2fr.d $f0, %0" : : "r"(payload));
+}
+
+unsigned long loong_scalar_clock(void) {
+    unsigned long value;
+    int cpu;
+    __asm__ __volatile__("rdtime.d %0, %1"
+        : "=r"(value), "=r"(cpu));
+    return value + (unsigned long)cpu;
+}
+
+/* The remaining four sealed CLOCK variants have intentionally distinct
+ * volatility, GNU operand rank and named-early-clobber contracts. */
+unsigned long loong_scalar_clock_named(void) {
+    unsigned long named_value, named_tid;
+    __asm__ __volatile__("rdtime.d %[val], %[tid]"
+        : [val] "=&r"(named_value), [tid] "=&r"(named_tid));
+    return named_value + named_tid;
+}
+
+unsigned long loong_scalar_clock_vdso_base(void) {
+    unsigned long vdso_base;
+    __asm__("la.pcrel %0, _start" : "=r"(vdso_base));
+    return vdso_base;
+}
+
+/* Real Linux vDSO CPU-ID form: the sole explicit memory clobber is legal.
+ * Removing it must still fail the target-qualified source contract. */
+int loong_scalar_clock_cpu_id(void) {
+    int cpu_id;
+#ifdef MINIC_LOONG_CLOCK_CPU_ID_MISSING_MEMORY_NEGATIVE
+    __asm__ __volatile__("rdtime.d $zero, %0"
+        : "=r"(cpu_id));
+#else
+    __asm__ __volatile__("rdtime.d $zero, %0"
+        : "=r"(cpu_id) : : "memory");
+#endif
+    return cpu_id;
+}
+
+unsigned long loong_scalar_clock_counter_only(void) {
+    unsigned long counter_only;
+    __asm__ __volatile__("rdtime.d %0, $zero"
+        : "=r"(counter_only));
+    return counter_only;
+}
+
+/* All four original Linux INVTLB operand layouts. These are privileged. */
+void loong_scalar_invtlb(unsigned int asid, unsigned long address) {
+    __asm__ __volatile__("invtlb %0, %1, %2" : :
+        "i"(0), "r"(asid), "r"(address) : "memory");
+    __asm__ __volatile__("invtlb %0, $zero, %1" : :
+        "i"(0), "r"(address) : "memory");
+    __asm__ __volatile__("invtlb %0, %1, $zero" : :
+        "i"(0), "r"(asid) : "memory");
+    __asm__ __volatile__("invtlb %0, $zero, $zero" : :
+        "i"(0) : "memory");
+}
+
+unsigned long loong_scalar_frametrace_csr(void) {
+    unsigned long result;
+    __asm__ __volatile__("csrrd %0, 0x7" : "=r"(result));
+    return result;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/mir-migration/mir_call_witness.c"}
+/* Host ELF call-stack witness for the *real* typed MachineIR body writer.
+ *
+ * LD_PRELOAD intercepts output stdio and checks the live unwind stack for
+ * minic_machine_gnu_asm_emit_body's symbol VMA. A linked-but-dead function,
+ * stdout trace claim, fake assembly marker, or direct FILE* backend cannot
+ * produce this witness. Nothing in the compiler-under-test is modified.
+ * Does not need ptrace permissions or any cross-architecture tools.
+ */
+#define _GNU_SOURCE
+#include <dlfcn.h>
+#include <execinfo.h>
+#include <fcntl.h>
+#include <inttypes.h>
+#include <link.h>
+#include <stdarg.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <sys/stat.h>
+#include <unistd.h>
+
+static uintptr_t machine_begin;
+static uintptr_t machine_end;
+static int initialized;
+static int witnessed;
+static __thread int inspecting;
+
+static int executable_base(struct dl_phdr_info *info, size_t size, void *context) {
+    uintptr_t *base = context;
+    (void)size;
+    if (info->dlpi_name != NULL && info->dlpi_name[0] == '\0') {
+        *base = (uintptr_t)info->dlpi_addr;
+        return 1;
+    }
+    return 0;
+}
+
+/* The module writer uses mkstemp + rename for atomic publication, so the
+ * final path may not exist DURING physical instruction emission. Capture
+ * the live stream inode and let the caller compare it with the published
+ * -o file AFTER MiniC exits. A throwaway stream cannot satisfy that check. */
+static int emitted_stream_identity(FILE *stream, struct stat *identity) {
+    int fd;
+    return stream != NULL && identity != NULL &&
+        (fd = fileno(stream)) >= 0 && fstat(fd, identity) == 0 &&
+        S_ISREG(identity->st_mode);
+}
+
+static void observe_machine_body(FILE *stream) {
+    void *frames[64];
+    struct stat stream_identity;
+    int i, count;
+    if (witnessed || inspecting) return;
+    inspecting = 1;
+    if (!initialized) {
+        const char *start = getenv("MINIC_MIR_WITNESS_START");
+        const char *size = getenv("MINIC_MIR_WITNESS_SIZE");
+        uintptr_t base = 0;
+        initialized = 1;
+        if (start == NULL || size == NULL) goto done;
+        dl_iterate_phdr(executable_base, &base);
+        machine_begin = base + (uintptr_t)strtoull(start, NULL, 0);
+        machine_end = machine_begin + (uintptr_t)strtoull(size, NULL, 0);
+        if (machine_end <= machine_begin) goto done;
+    }
+    if (machine_end <= machine_begin) goto done;
+    count = backtrace(frames, (int)(sizeof(frames) / sizeof(frames[0])));
+    for (i = 1; i < count; ++i) {
+        uintptr_t ip = (uintptr_t)frames[i];
+        if (ip >= machine_begin && ip < machine_end &&
+            emitted_stream_identity(stream, &stream_identity)) {
+            const char *path = getenv("MINIC_MIR_WITNESS_PATH");
+            if (path != NULL) {
+                int fd = open(path, O_WRONLY | O_CREAT | O_EXCL, 0600);
+                if (fd >= 0) {
+                    char marker[160];
+                    int length = snprintf(marker, sizeof(marker),
+                        "typed-MIR-serializer-call %" PRIuMAX " %" PRIuMAX "\n",
+                        (uintmax_t)stream_identity.st_dev,
+                        (uintmax_t)stream_identity.st_ino);
+                    if (length > 0 && (size_t)length < sizeof(marker))
+                        (void)write(fd, marker, (size_t)length);
+                    (void)close(fd);
+                }
+            }
+            witnessed = 1;
+            break;
+        }
+    }
+done:
+    inspecting = 0;
+}
+
+int fprintf(FILE *stream, const char *format, ...) {
+    typedef int (*RealVfprintf)(FILE *, const char *, va_list);
+    static RealVfprintf original;
+    va_list args;
+    int result;
+    if (original == NULL)
+        original = (RealVfprintf)dlsym(RTLD_NEXT, "vfprintf");
+    observe_machine_body(stream);
+    va_start(args, format);
+    result = original(stream, format, args);
+    va_end(args);
+    return result;
+}
+
+int fputc(int character, FILE *stream) {
+    typedef int (*RealFputc)(int, FILE *);
+    static RealFputc original;
+    if (original == NULL)
+        original = (RealFputc)dlsym(RTLD_NEXT, "fputc");
+    observe_machine_body(stream);
+    return original(character, stream);
+}
+
+int fputs(const char *text, FILE *stream) {
+    typedef int (*RealFputs)(const char *, FILE *);
+    static RealFputs original;
+    if (original == NULL)
+        original = (RealFputs)dlsym(RTLD_NEXT, "fputs");
+    observe_machine_body(stream);
+    return original(text, stream);
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/mir-migration/packed_memory.c"}
+/* Unaligned accesses, volatile byte/word reads, bit fields and aggregate
+ * copying.  Any selected path that drops a store or changes widths fails. */
+struct __attribute__((packed)) MirPacked {
+    unsigned char lead;
+    unsigned long wide;
+    unsigned short half;
+    unsigned int flags : 5;
+    unsigned int mode : 11;
+    unsigned int high : 16;
+    unsigned char tail[9];
+};
+
+volatile unsigned long mir_packed_sink;
+volatile struct MirPacked mir_packed_global;
+
+__attribute__((noinline))
+unsigned long mir_packed_update(struct MirPacked *p,
+                                unsigned long x) {
+    unsigned long before = p->wide;
+    p->wide = before ^ (x + 0x1234567UL);
+    p->half = (unsigned short)x;
+    p->mode = (unsigned int)(x >> 3);
+    p->flags = (unsigned int)x & 31U;
+    p->tail[3] = (unsigned char)(p->mode ^ p->flags);
+    return p->wide + p->half + p->tail[3];
+}
+
+int main(void) {
+    struct MirPacked copy = mir_packed_global;
+    unsigned long result = mir_packed_update(&copy, 0xBAADF00DUL);
+    mir_packed_global = copy;
+    mir_packed_sink = result;
+    return (int)(result & 255UL);
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/mir-migration/riscv_runtime_ra_leaf.c"}
+long rv_leaf_mul(long a, long b) { return a * b; }
+long rv_leaf_div(long a, long b) { return a / b; }
+unsigned long rv_leaf_rem(unsigned long a, unsigned long b) {
+    return a % b;
+}
+double rv_leaf_double_add(double a, double b) { return a + b; }
+int rv_leaf_double_cmp(double a, double b) { return a < b; }
+double rv_leaf_itod(long a) { return (double)a; }
+long rv_leaf_dtoi(double a) { return (long)a; }
+double rv_leaf_ftod(float a) { return (double)a; }
+float rv_leaf_dtof(double a) { return (float)a; }
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/mir-migration/variadic_calls.c"}
+/* ABI cursor, mixed-size arguments, and direct/indirect variadic calls. */
+typedef __builtin_va_list MirVaList;
+
+volatile long mir_variadic_sink;
+
+__attribute__((noinline))
+long mir_variadic_sum(unsigned count, ...) {
+    MirVaList ap;
+    unsigned i;
+    long sum = 0;
+    __builtin_va_start(ap, count);
+    for (i = 0U; i < count; ++i)
+        sum += __builtin_va_arg(ap, long);
+    __builtin_va_end(ap);
+    mir_variadic_sink = sum;
+    return sum;
+}
+
+typedef long (*MirVariadicPointer)(unsigned, ...);
+
+__attribute__((noinline))
+long mir_variadic_bridge(MirVariadicPointer p, long base) {
+    return p(9U, base, base + 1, base + 2, base + 3,
+             base + 4, base + 5, base + 6, base + 7, base + 8);
+}
+
+int main(void) {
+    return (int)(mir_variadic_bridge(mir_variadic_sum, 10L) & 255L);
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/mir-migration/wide_integer.c"}
+/* Native 128-bit integer Core arithmetic, shifts, comparisons, casts and
+ * by-value ABI. RV32I must preserve the same unsigned 128-bit semantics. */
+typedef unsigned __int128 MirU128;
+typedef __int128 MirI128;
+
+volatile unsigned long mir_wide_sink;
+
+__attribute__((noinline))
+MirU128 mir_wide_mul(MirU128 a, MirU128 b, unsigned shift) {
+    MirU128 mixed = a * b + (a ^ b);
+    mixed ^= (a << (shift & 63U));
+    return (mixed >> 17U) + (mixed << 9U);
+}
+
+__attribute__((noinline))
+long mir_wide_compare(MirI128 a, MirI128 b) {
+    MirI128 q = a * 13 - b;
+    MirI128 r = (a >> 19U) ^ (b << 7U);
+    MirU128 x = mir_wide_mul((MirU128)q, (MirU128)r, 13U);
+    return (long)(x > (MirU128)a ? x : (MirU128)(a + r));
+}
+
+int main(void) {
+    MirI128 left = ((MirI128)0x12345678 << 67U) + 0x99887766;
+    MirI128 right = ((MirI128)0x44556677 << 31U) + 23;
+    long value = mir_wide_compare(left, right);
+    mir_wide_sink = (unsigned long)value;
+    return (int)(value & 255L);
+}
+@@@ end

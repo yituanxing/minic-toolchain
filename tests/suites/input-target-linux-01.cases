@@ -1,0 +1,121 @@
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/target/linux_large_record_transfer.c"}
+/* Linux task_struct-shaped aggregates exceed the old 2048-byte Core
+ * transfer limit. Both direct copy and value materialization must have
+ * bounded native loops, not a multi-megabyte per-byte assembly expansion. */
+struct linux_large_record {
+    unsigned char state[8192];
+};
+struct linux_small_record {
+    unsigned char state[32];
+};
+
+void linux_large_record_copy(struct linux_large_record *destination,
+                             const struct linux_large_record *source) {
+    *destination = *source;
+}
+
+void linux_large_record_snapshot(struct linux_large_record *destination,
+                                 const struct linux_large_record *source) {
+    struct linux_large_record copy = *source;
+    *destination = copy;
+}
+
+void linux_small_record_copy(struct linux_small_record *destination,
+                             const struct linux_small_record *source) {
+    *destination = *source;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/target/linux_symbolic_integer_and_record.c"}
+/* Real Linux patterns: link-time integer addresses and GNU aggregate return
+ * from a statement expression. Keep these forms target-neutral. */
+extern char kernel_link_base[];
+extern int kernel_link_object;
+
+unsigned long kernel_percpu_offset = (unsigned long)kernel_link_base;
+unsigned long kernel_percpu_table[64] = {
+    [0 ... 63] = (unsigned long)kernel_link_base,
+};
+unsigned long kernel_percpu_addend[2] = {
+    (unsigned long)&kernel_link_object + 8,
+    (unsigned long)kernel_link_base + 16,
+};
+
+typedef struct kernel_page_pair {
+    unsigned long first;
+    unsigned long second;
+} kernel_page_pair;
+
+kernel_page_pair kernel_make_pair(unsigned long number) {
+    kernel_page_pair pair = {number, number + 7};
+    return pair;
+}
+
+unsigned long kernel_record_statement_value(unsigned long number) {
+    kernel_page_pair result;
+    result = ({
+        unsigned long index = number + 1;
+        kernel_make_pair(index);
+    });
+    return result.first + result.second;
+}
+
+int main(void) {
+    return kernel_record_statement_value(4) == 17 ? 0 : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/target/x86_64/linux_rep_stos_tied_reject.c"}
+/* Negative: replacing GNU tied destination constraint "1" with generic
+ * "r" cannot prove that RDI points to the caller's destination. */
+typedef unsigned int u32;
+void *linux_memset32_untied(u32 *dest, u32 data, unsigned long count) {
+    long d0, d1;
+    __asm__ volatile("rep\n\tstosl" : "=&c"(d0), "=&D"(d1)
+        : "a"(data), "r"(dest), "0"(count) : "memory");
+    return dest;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/target/x86_64/linux_rep_stos_tied_runtime.c"}
+/* Exact GNU Linux memset16/32/64 `rep; stos{w,l,q}` source ABI:
+ * =&c / =&D outputs tied to initial destination/count via 1 / 0. */
+typedef unsigned short u16;
+typedef unsigned int u32;
+typedef unsigned long u64;
+
+void *linux_memset16(u16 *dest, u16 data, u64 count) {
+    long d0, d1;
+    __asm__ volatile("rep\n\tstosw" : "=&c"(d0), "=&D"(d1)
+        : "a"(data), "1"(dest), "0"(count) : "memory");
+    return dest;
+}
+
+void *linux_memset32(u32 *dest, u32 data, u64 count) {
+    long d0, d1;
+    __asm__ volatile("rep\n\tstosl" : "=&c"(d0), "=&D"(d1)
+        : "a"(data), "1"(dest), "0"(count) : "memory");
+    return dest;
+}
+
+void *linux_memset64(u64 *dest, u64 data, u64 count) {
+    long d0, d1;
+    __asm__ volatile("rep\n\tstosq" : "=&c"(d0), "=&D"(d1)
+        : "a"(data), "1"(dest), "0"(count) : "memory");
+    return dest;
+}
+
+int main(void) {
+    u16 array16[3] = {0, 0, 0};
+    u32 array32[3] = {0, 0, 0};
+    u64 array64[3] = {0, 0, 0};
+    linux_memset16(array16, 0x3355U, 3UL);
+    linux_memset32(array32, 0x89abcdefU, 3UL);
+    linux_memset64(array64, 0x0123456789abcdefUL, 3UL);
+    if (array16[0] != 0x3355U || array16[1] != 0x3355U ||
+        array16[2] != 0x3355U) return 1;
+    if (array32[0] != 0x89abcdefU || array32[1] != 0x89abcdefU ||
+        array32[2] != 0x89abcdefU) return 2;
+    if (array64[0] != 0x0123456789abcdefUL ||
+        array64[1] != 0x0123456789abcdefUL ||
+        array64[2] != 0x0123456789abcdefUL) return 3;
+    return 0;
+}
+@@@ end
