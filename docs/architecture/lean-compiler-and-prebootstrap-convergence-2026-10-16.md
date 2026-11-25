@@ -68,7 +68,7 @@ MiniC 是 **教学/研究友好、真实可用、能够自举、可逐步扩展*
 | `src/target/target_info.c`、`data_layout.*`、`riscv64/abi.*` | 默认目标与前端 AST 关联，且当前以 RV64 为主 | 保留，等 RV32/第二前端有真实消费者再消除相关耦合 |
 | `tools/ci/apply-*.py` 等 | 保留大量历史诊断、差分和回放代码；不能仅按文件名断言生产仍调用它们 | 先据入口、脚本调用图与验收结果分类；不删除未证明无用的资产 |
 
-注意：最近全量性能与结构审计已有 `docs/ci/minic-i-to-s-whole-path-complexity-audit-2026-10-15.md`、`minic-full-linux-2064-performance-evidence-2026-10-15.md` 和 `native-source-convergence-audit-2026-10-16.md`。清理前先复用它们，勿再凭经验把已经修复的热点当作新问题。
+注意：最近全量性能与结构审计已有 [minic-i-to-s-whole-path-complexity-audit-2026-10-15.md](https://github.com/yituanxing/minic-toolchain/blob/627007008330ef4c70b4119d0c0535fff560d2a6/docs/ci/minic-i-to-s-whole-path-complexity-audit-2026-10-15.md)、[minic-full-linux-2064-performance-evidence-2026-10-15.md](https://github.com/yituanxing/minic-toolchain/blob/627007008330ef4c70b4119d0c0535fff560d2a6/docs/ci/minic-full-linux-2064-performance-evidence-2026-10-15.md) 和 [native-source-convergence-audit-2026-10-16.md](https://github.com/yituanxing/minic-toolchain/blob/627007008330ef4c70b4119d0c0535fff560d2a6/docs/ci/native-source-convergence-audit-2026-10-16.md)。清理前先复用它们，勿再凭经验把已经修复的热点当作新问题。
 
 ### 一个已证实、影响下一次自举的清单漂移
 

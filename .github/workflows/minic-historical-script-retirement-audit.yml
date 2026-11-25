@@ -200,6 +200,31 @@ jobs:
               "tests/compiler/c0/run-gnu-aligned-record-fields.sh",
           }
           expected |= retired_test_wrappers
+          retired_experiment_docs = {
+              "docs/ci/current-workflow-map.md",
+              "docs/ci/linux-blake2s-cfg-slot-lookup-performance-2026-10-13.md",
+              "docs/ci/linux-performance-causal-investigation-v1.md",
+              "docs/ci/minias-linux-earlycon-differential-2026-10-14.md",
+              "docs/ci/minic-2064-phase-census-plan-2026-10-16.md",
+              "docs/ci/minic-ast-memory-shape-census-2026-10-17.md",
+              "docs/ci/minic-compilation-regression-triage-2026-10-17.md",
+              "docs/ci/minic-full-linux-2064-performance-evidence-2026-10-15.md",
+              "docs/ci/minic-i-to-s-whole-path-complexity-audit-2026-10-15.md",
+              "docs/ci/native-source-convergence-audit-2026-10-16.md",
+          }
+          assert retired_experiment_docs <= set(git("ls-tree", "-r", "--name-only", "627007008330ef4c70b4119d0c0535fff560d2a6").decode().splitlines())
+          expected |= retired_experiment_docs
+          metadata |= {
+              "docs/ci/README.md",
+              "docs/architecture/project-audit-2026-10-07.md",
+              "docs/ci/ci-architecture-audit-findings-2026-10-09.md",
+              "docs/ci/ci-push-skip-audit-2026-10-09.md",
+              "docs/ci/minic-perf-decision-index-2026-10-17.md",
+              "docs/architecture/minic-whitebox-cost-audit-2026-10-16.md",
+              "docs/minic-linux-three-isa-seven-runtime-protocol.md",
+              "docs/architecture/lean-compiler-and-prebootstrap-convergence-2026-10-16.md",
+              "docs/architecture/minic-four-backend-refactor-closeout-2026-10-22.md",
+          }
           metadata |= {
               "tests/compiler/c0/run.sh",
               "tests/compiler/c0/run-foundation-focused.sh",
@@ -228,7 +253,7 @@ jobs:
           metadata |= {"tools/ci/linux-runtime-build-minic-profile-v1.sh", "tools/ci/linux-runtime-profile-cache-id-v1.py"}
           deleted = changed_paths(base, "HEAD", "--diff-filter=D")
           changed = changed_paths(base, "HEAD")
-          if len(expected) != 926 or deleted != expected or changed != expected | metadata:
+          if len(expected) != 936 or deleted != expected or changed != expected | metadata:
               raise SystemExit("RETIREMENT_SCOPE=FAIL: unexpected tree changes")
           # Preserve the full closure in a historical checkout, not a successful
           # no-op overlay on a different source architecture.

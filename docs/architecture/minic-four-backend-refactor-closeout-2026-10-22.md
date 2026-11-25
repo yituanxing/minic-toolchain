@@ -80,7 +80,7 @@ regression. Do not claim an overall speedup or latency regression from one TU.
 - It is not a compiler-performance comparison against the beginning of the
   entire #598-era series: it brackets PR #636 onward.
 - Historical 2064-TU A/B numbers documented in
-  `docs/ci/minic-full-linux-2064-performance-evidence-2026-10-15.md`
+  [minic-full-linux-2064-performance-evidence-2026-10-15.md](https://github.com/yituanxing/minic-toolchain/blob/627007008330ef4c70b4119d0c0535fff560d2a6/docs/ci/minic-full-linux-2064-performance-evidence-2026-10-15.md)
   apply to **older, different compiler SHA pairs**; they must not be
   attributed to this structural refactor.
 

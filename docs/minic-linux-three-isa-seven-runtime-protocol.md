@@ -35,7 +35,7 @@ not permission to omit owners. Historical common/broad runs are different worklo
   assembly coverage must **not** be confused with MiniC's Linux C-owner count.
   Example: a MiniAS differential was initially invalid because its probe
   omitted original `-march`/`-mabi`; compare exact source command before
-  blaming a backend (`docs/ci/minias-linux-earlycon-differential-2026-10-14.md`).
+  blaming a backend ([minias-linux-earlycon-differential-2026-10-14.md](https://github.com/yituanxing/minic-toolchain/blob/627007008330ef4c70b4119d0c0535fff560d2a6/docs/ci/minias-linux-earlycon-differential-2026-10-14.md)).
 - RV fault isolation: start with the **full_all** MiniC image, restore a
   pristine independent GNU Kbuild snapshot before each *diagnostic* experiment,
   swap already SHA-pinned `.o` by `prefix`, `single`, `all_except`, and test

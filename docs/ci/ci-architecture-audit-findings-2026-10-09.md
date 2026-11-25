@@ -6,7 +6,7 @@ This is a **live defect register**, not a workflow-count target. A source-equiva
 - Remote refs: `main`, Runtime `agent/linux-expanded-kbuild-v0`, Performance `agent/linux-perf-boolean-domain-v1`, passive `archive/all-progress-2026-10-04`.
 - Development ref inventory: **Runtime 26, Performance 12; 38 branch-local YAMLs, 27 distinct names**. The branch-local machine-maintained TSV is `active-workflow-inventory-2026-10-09.tsv`.
 - Each active YAML must have: one responsible owner, a unique contract or explicitly justified shared ownership, event/branch/path or tag routing, an executable input/provenance path, a defined PASS/FAIL/SKIPPED/INCONCLUSIVE verdict, an appropriate concurrency policy, cost class, and evidence for its last real run.
-- The `current-workflow-map.md` is the human-readable authoritative overview. Do not append multiple conflicting 'latest snapshot' paragraphs again. Source SHA comparisons are checked by T0, not just row-count or job-ID comparisons.
+- The [current-workflow-map.md](https://github.com/yituanxing/minic-toolchain/blob/627007008330ef4c70b4119d0c0535fff560d2a6/docs/ci/current-workflow-map.md) is the historical human-readable overview for this dated review, not current CI topology. Do not append multiple conflicting 'latest snapshot' paragraphs again. Source SHA comparisons are checked by T0, not just row-count or job-ID comparisons.
 
 ## Immediate verified defects and actions
 

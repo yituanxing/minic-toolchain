@@ -101,7 +101,7 @@ P1 and minimal Image smoke must therefore restore only a successful exact `linux
 
 ## P1.3 Keep workflow ownership map canonical
 
-`docs/ci/current-workflow-map.md` is now the ownership index for active CI. Any future active workflow must have a unique invariant, and retirements must update the map/contract in the same convergence change.
+[current-workflow-map.md](https://github.com/yituanxing/minic-toolchain/blob/627007008330ef4c70b4119d0c0535fff560d2a6/docs/ci/current-workflow-map.md) was the October ownership index for active CI; the live workflow tree is now authoritative. Any future active workflow must have a unique invariant, and retirements must update the map/contract in the same convergence change.
 
 The active count should not be driven toward an arbitrary number. Independent EFI, vDSO, static codegen, runtime isolation, frozen-corpus and tool-specific gates remain valid when their invariant is unique.
 

@@ -72,10 +72,10 @@ src/compiler/compiler.c
 3. **真实 RSS 已大，但不适合自举前贸然动**：`sizeof(MinicExpression)=680`、CALL 4–6% 的大 union；另外 Function 内联最大参数定长数组。此问题单列内存设计实验；不要通过改变数组增长倍率重复已被否定的实验。
 
 重要历史实验证据：
-- `docs/ci/linux-performance-causal-investigation-v1.md` 中，整数 transitive 超过 99% 的旧版 Integer Specialization 工作时间；source-owner filter **作为 patch** 已有三文件 A/B 约 `1.5435× / 1.1579× / 1.1514×`。当前 `compiler.c` 只有 CALL index，**不能把这组补丁实验自动算成正式源码收益**。
+- [linux-performance-causal-investigation-v1.md](https://github.com/yituanxing/minic-toolchain/blob/627007008330ef4c70b4119d0c0535fff560d2a6/docs/ci/linux-performance-causal-investigation-v1.md) 中，整数 transitive 超过 99% 的旧版 Integer Specialization 工作时间；source-owner filter **作为 patch** 已有三文件 A/B 约 `1.5435× / 1.1579× / 1.1514×`。当前 `compiler.c` 只有 CALL index，**不能把这组补丁实验自动算成正式源码收益**。
 - 先前 Boolean Domain cache 的 3-TU A/B 已有 `1.79～1.94×`；当前需要按源码/补丁路径确认身份，不应重新测量同一个 Boolean Domain 实验。
-- `docs/ci/minic-i-to-s-whole-path-complexity-audit-2026-10-15.md` 已记录 Codegen object layout 重复查询与大 AST；本次保留为候选，但不把它们说成新发现。
-- `docs/ci/minic-full-linux-2064-performance-evidence-2026-10-15.md` 保留过去 full-2064 paired A/B 结果，旧测试不同优化组合、不同耗时口径不能冒充当前提交的 wall 对照。
+- [minic-i-to-s-whole-path-complexity-audit-2026-10-15.md](https://github.com/yituanxing/minic-toolchain/blob/627007008330ef4c70b4119d0c0535fff560d2a6/docs/ci/minic-i-to-s-whole-path-complexity-audit-2026-10-15.md) 已记录 Codegen object layout 重复查询与大 AST；本次保留为候选，但不把它们说成新发现。
+- [minic-full-linux-2064-performance-evidence-2026-10-15.md](https://github.com/yituanxing/minic-toolchain/blob/627007008330ef4c70b4119d0c0535fff560d2a6/docs/ci/minic-full-linux-2064-performance-evidence-2026-10-15.md) 保留过去 full-2064 paired A/B 结果，旧测试不同优化组合、不同耗时口径不能冒充当前提交的 wall 对照。
 
 ## 4. 下一次静态审计的判定表
 
