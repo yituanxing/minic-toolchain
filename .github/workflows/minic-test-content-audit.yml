@@ -97,13 +97,15 @@ jobs:
               assert b"core-required-no-fallback" not in b,(p,"obsolete gate")
               if p.startswith(("src/","tools/minic/","tools/minic-cc/")):
                   assert not re.search(rb'\bMINIC_CORE_(?:IR|CODEGEN)\b',b),p
+          dangling = []
           retired_comparison = ["core-integer-equality","core-scalar-not-equal","core-pointer-equality-qualifiers","core-integer-add-overflow","core-integer-multiply-overflow","core-integer-subtract-overflow"]
           for p in live:
               if p.startswith("docs/") or p.endswith(".md") or p in (".github/workflows/minic-test-content-audit.yml",".github/workflows/minic-historical-script-retirement-audit.yml"):continue
               b=pathlib.Path(p).read_bytes()
               if b"\0" in b:continue
               for name in retired_comparison:
-                  assert name.encode() not in b and name.replace("-","_").encode() not in b,(p,name)
+                  if name.encode() in b or name.replace("-","_").encode() in b: dangling.append((p,name))
+          assert not dangling, dangling
           print("RETIRED_LIVE_CALLERS=NONE")
           PY
       - name: Build and check actual old negative fixtures now accepted by GNU and MiniC
@@ -136,7 +138,6 @@ jobs:
           echo "OLD_NINE_ARGUMENT_REJECTION=OBSOLETE"
           bash tests/compiler/c0/check-minic-target-boundaries.sh
       - name: Run the current nine-argument and comparison differential gates
-        if: success() || failure()
         run: |
           set -Eeuo pipefail
           sudo apt-get update -qq
@@ -150,6 +151,12 @@ jobs:
           "$MINIC" --target=x86_64-linux -S build/test-pruning/checked.i -o build/test-pruning/checked.s
           cc -no-pie build/test-pruning/checked.s tests/compiler/c0/core_checked_arithmetic_runtime.c -o build/test-pruning/checked
           build/test-pruning/checked
+          for target in x86_64-linux aarch64-linux loongarch64-linux riscv64-linux riscv32-linux; do
+            "$MINIC" --target="$target" -S build/test-pruning/checked.i -o "build/test-pruning/checked-$target.s"
+            test -s "build/test-pruning/checked-$target.s"
+          done
+          echo 'CHECKED_ARITHMETIC_FIVE_ISA=PASS'
+          bash -n .github/scripts/compiler-c0-full-gate.sh
           export MINIC_CC="$MINIC" RISCV_CC=riscv64-linux-gnu-gcc QEMU_RISCV64=qemu-riscv64
           export BUILD_DIR="$PWD/build/test-pruning/stack"
           sh tests/compiler/c0/run-compile-only-case.sh stack-fixed-arguments

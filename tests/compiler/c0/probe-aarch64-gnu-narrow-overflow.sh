@@ -25,7 +25,7 @@ echo 'MINIC_AARCH64_GNU_NARROW_OVERFLOW=PASS signed_unsigned=12 native_pairs=436
 # Negative and positive target matrix: all five ISAs must preserve their
 # already-supported uniform checked i32/i64 arithmetic and reject a C-invalid
 # overflow result pointer (the AArch-specific narrow allowance is separate).
-"$host" -E -P -nostdinc tests/compiler/c0/core_integer_multiply_overflow.c \
+"$host" -E -P -nostdinc tests/compiler/c0/core_checked_arithmetic.c \
     -o "$work/uniform.i"
 "$host" -E -P -nostdinc -DMINIC_OVERFLOW_NARROW_INVALID \
     "$source_file" -o "$work/invalid.i"

@@ -213,174 +213,15 @@ stack_fixed_arguments_focused() {
         sh tests/compiler/c0/run-compile-only-case.sh stack-fixed-arguments
 }
 
-core_scalar_lvalue_bitcast_focused() {
+core_runtime_focused() {
+    local driver=$1 case_name=$2
     MINIC="$root/build/ci-debug/bin/minic" \
-    BUILD_DIR="$root/build/ci-core-scalar-lvalue-bitcast" \
+    BUILD_DIR="$root/build/ci-$case_name" \
     RISCV_CC=riscv64-linux-gnu-gcc \
     QEMU_RISCV64=qemu-riscv64 \
-        sh tests/compiler/c0/run-core-basic-runtime-case.sh core-scalar-lvalue-bitcast
+        sh "tests/compiler/c0/$driver" "$case_name"
 }
 
-core_fixed_call_scalar_conversions_focused() {
-    MINIC="$root/build/ci-debug/bin/minic" \
-    BUILD_DIR="$root/build/ci-core-fixed-call-scalar-conversions" \
-    RISCV_CC=riscv64-linux-gnu-gcc \
-    QEMU_RISCV64=qemu-riscv64 \
-        sh tests/compiler/c0/run-core-basic-runtime-case.sh core-fixed-call-scalar-conversions
-}
-
-core_scalar_assignment_implicit_void_focused() {
-    MINIC="$root/build/ci-debug/bin/minic" \
-    BUILD_DIR="$root/build/ci-core-scalar-assignment-implicit-void" \
-    RISCV_CC=riscv64-linux-gnu-gcc \
-    QEMU_RISCV64=qemu-riscv64 \
-        sh tests/compiler/c0/run-core-basic-runtime-case.sh core-scalar-assignment-implicit-void
-}
-
-core_global_scalar_memory_focused() {
-    MINIC="$root/build/ci-debug/bin/minic" \
-    BUILD_DIR="$root/build/ci-core-global-scalar-memory" \
-    RISCV_CC=riscv64-linux-gnu-gcc \
-    QEMU_RISCV64=qemu-riscv64 \
-        sh tests/compiler/c0/run-core-basic-runtime-case.sh core-global-scalar-memory
-}
-
-core_comparisons_focused() {
-    MINIC="$root/build/ci-debug/bin/minic" \
-    BUILD_DIR="$root/build/ci-core-comparisons" \
-    RISCV_CC=riscv64-linux-gnu-gcc \
-    QEMU_RISCV64=qemu-riscv64 \
-        sh tests/compiler/c0/run-core-basic-runtime-case.sh core-comparisons
-}
-
-core_checked_arithmetic_focused() {
-    MINIC="$root/build/ci-debug/bin/minic" \
-    BUILD_DIR="$root/build/ci-core-checked-arithmetic" \
-    RISCV_CC=riscv64-linux-gnu-gcc \
-    QEMU_RISCV64=qemu-riscv64 \
-        sh tests/compiler/c0/run-core-basic-runtime-case.sh core-checked-arithmetic
-}
-
-core_short_circuit_or_focused() {
-    MINIC="$root/build/ci-debug/bin/minic" \
-    BUILD_DIR="$root/build/ci-core-short-circuit-or" \
-    RISCV_CC=riscv64-linux-gnu-gcc \
-    QEMU_RISCV64=qemu-riscv64 \
-        sh tests/compiler/c0/run-core-basic-runtime-case.sh core-short-circuit-or
-}
-
-core_nested_if_continuation_focused() {
-    MINIC="$root/build/ci-debug/bin/minic" \
-    BUILD_DIR="$root/build/ci-core-nested-if-continuation" \
-    RISCV_CC=riscv64-linux-gnu-gcc \
-    QEMU_RISCV64=qemu-riscv64 \
-        sh tests/compiler/c0/run-core-basic-runtime-case.sh core-nested-if-continuation
-}
-
-core_condition_and_focused() {
-    MINIC="$root/build/ci-debug/bin/minic" \
-    BUILD_DIR="$root/build/ci-core-condition-and" \
-    RISCV_CC=riscv64-linux-gnu-gcc \
-    QEMU_RISCV64=qemu-riscv64 \
-        sh tests/compiler/c0/run-core-basic-runtime-case.sh core-condition-and
-}
-
-core_logical_and_value_focused() {
-    MINIC="$root/build/ci-debug/bin/minic" \
-    BUILD_DIR="$root/build/ci-core-logical-and-value" \
-    RISCV_CC=riscv64-linux-gnu-gcc \
-    QEMU_RISCV64=qemu-riscv64 \
-        sh tests/compiler/c0/run-core-basic-runtime-case.sh core-logical-and-value
-}
-
-core_integer_bitwise_and_assignment_focused() {
-    MINIC="$root/build/ci-debug/bin/minic" \
-    BUILD_DIR="$root/build/ci-core-integer-bitwise-and-assignment" \
-    RISCV_CC=riscv64-linux-gnu-gcc \
-    QEMU_RISCV64=qemu-riscv64 \
-        sh tests/compiler/c0/run-core-basic-runtime-case.sh core-integer-bitwise-and-assignment
-}
-
-core_pointer_offset_focused() {
-    MINIC="$root/build/ci-debug/bin/minic" \
-    BUILD_DIR="$root/build/ci-core-pointer-offset" \
-    RISCV_CC=riscv64-linux-gnu-gcc \
-    QEMU_RISCV64=qemu-riscv64 \
-        sh tests/compiler/c0/run-core-basic-runtime-case.sh core-pointer-offset
-}
-
-core_statement_expression_focused() {
-    MINIC="$root/build/ci-debug/bin/minic" \
-    BUILD_DIR="$root/build/ci-core-statement-expression" \
-    RISCV_CC=riscv64-linux-gnu-gcc \
-    QEMU_RISCV64=qemu-riscv64 \
-        sh tests/compiler/c0/run-core-basic-runtime-case.sh core-statement-expression
-}
-
-core_opaque_inline_asm_focused() {
-    MINIC="$root/build/ci-debug/bin/minic" \
-    BUILD_DIR="$root/build/ci-core-opaque-inline-asm" \
-    RISCV_CC=riscv64-linux-gnu-gcc \
-    QEMU_RISCV64=qemu-riscv64 \
-        sh tests/compiler/c0/run-core-basic-runtime-case.sh core-opaque-inline-asm
-}
-
-core_target_constant_fallback_focused() {
-    MINIC="$root/build/ci-debug/bin/minic" \
-    BUILD_DIR="$root/build/ci-core-target-constant-fallback" \
-    RISCV_CC=riscv64-linux-gnu-gcc \
-    QEMU_RISCV64=qemu-riscv64 \
-        sh tests/compiler/c0/run-core-basic-runtime-case.sh core-target-constant-fallback
-}
-
-core_integer_bitwise_not_focused() {
-    MINIC="$root/build/ci-debug/bin/minic" \
-    BUILD_DIR="$root/build/ci-core-integer-bitwise-not" \
-    RISCV_CC=riscv64-linux-gnu-gcc \
-    QEMU_RISCV64=qemu-riscv64 \
-        sh tests/compiler/c0/run-core-basic-runtime-case.sh core-integer-bitwise-not
-}
-
-core_postfix_update_m24_focused() {
-    MINIC="$root/build/ci-debug/bin/minic" \
-    BUILD_DIR="$root/build/ci-core-postfix-update-m24" \
-    RISCV_CC=riscv64-linux-gnu-gcc \
-    QEMU_RISCV64=qemu-riscv64 \
-        sh tests/compiler/c0/run-core-strict-runtime-case.sh core-postfix-update-m24
-}
-
-core_discard_expression_m25_focused() {
-    MINIC="$root/build/ci-debug/bin/minic" BUILD_DIR="$root/build/ci-core-discard-expression-m25" RISCV_CC=riscv64-linux-gnu-gcc QEMU_RISCV64=qemu-riscv64 sh tests/compiler/c0/run-core-strict-runtime-case.sh core-discard-expression-m25
-}
-
-core_integer_binary_preservation_m25b_focused() {
-    MINIC="$root/build/ci-debug/bin/minic" BUILD_DIR="$root/build/ci-core-integer-binary-preservation-m25b" RISCV_CC=riscv64-linux-gnu-gcc QEMU_RISCV64=qemu-riscv64 sh tests/compiler/c0/run-core-strict-runtime-case.sh core-integer-binary-preservation-m25b
-}
-
-core_integer_less_m26_focused() {
-    MINIC="$root/build/ci-debug/bin/minic" \
-    BUILD_DIR="$root/build/ci-core-integer-less-m26" \
-    RISCV_CC=riscv64-linux-gnu-gcc \
-    QEMU_RISCV64=qemu-riscv64 \
-        sh tests/compiler/c0/run-core-strict-runtime-case.sh core-integer-less-m26
-}
-
-core_integer_foundation_m26b_focused() {
-    MINIC="$root/build/ci-debug/bin/minic" \
-    BUILD_DIR="$root/build/ci-core-integer-foundation-m26b" \
-    RISCV_CC=riscv64-linux-gnu-gcc \
-    QEMU_RISCV64=qemu-riscv64 \
-        sh tests/compiler/c0/run-core-strict-runtime-case.sh core-integer-foundation-m26b
-}
-
-
-core_switch_m27_focused() {
-    MINIC="$root/build/ci-debug/bin/minic" \
-    BUILD_DIR="$root/build/ci-core-switch-m27" \
-    RISCV_CC=riscv64-linux-gnu-gcc \
-    QEMU_RISCV64=qemu-riscv64 \
-        sh tests/compiler/c0/run-core-strict-runtime-case.sh core-switch-m27
-}
 
 core_inline_asm_identity_m28_focused() {
     MINIC="$root/build/ci-debug/bin/minic" \
@@ -396,14 +237,6 @@ core_record_local_m29_focused() {
     RISCV_CC=riscv64-linux-gnu-gcc \
     QEMU_RISCV64=qemu-riscv64 \
         sh tests/compiler/c0/run-core-record-local-m29.sh
-}
-
-core_aggregate_boundary_m30_focused() {
-    MINIC="$root/build/ci-debug/bin/minic" \
-    BUILD_DIR="$root/build/ci-core-aggregate-boundary-m30" \
-    RISCV_CC=riscv64-linux-gnu-gcc \
-    QEMU_RISCV64=qemu-riscv64 \
-        sh tests/compiler/c0/run-core-strict-runtime-case.sh core-aggregate-boundary-m30
 }
 
 runtime_record_fam_prefix_focused() {
@@ -565,31 +398,31 @@ start_gate file-scope-basic-asm-focused file_scope_basic_asm_focused
 start_gate wide-string-focused wide_string_focused
 start_gate record-array-init-focused runtime_record_array_initializer_focused
 start_gate stack-fixed-arguments-focused stack_fixed_arguments_focused
-start_gate core-scalar-lvalue-bitcast-focused core_scalar_lvalue_bitcast_focused
-start_gate core-fixed-call-scalar-conversions-focused core_fixed_call_scalar_conversions_focused
-start_gate core-scalar-assignment-implicit-void-focused core_scalar_assignment_implicit_void_focused
-start_gate core-global-scalar-memory-focused core_global_scalar_memory_focused
-start_gate core-comparisons-focused core_comparisons_focused
-start_gate core-checked-arithmetic-focused core_checked_arithmetic_focused
-start_gate core-short-circuit-or-focused core_short_circuit_or_focused
-start_gate core-nested-if-continuation-focused core_nested_if_continuation_focused
-start_gate core-condition-and-focused core_condition_and_focused
-start_gate core-logical-and-value-focused core_logical_and_value_focused
-start_gate core-integer-bitwise-and-assignment-focused core_integer_bitwise_and_assignment_focused
-start_gate core-pointer-offset-focused core_pointer_offset_focused
-start_gate core-statement-expression-focused core_statement_expression_focused
-start_gate core-opaque-inline-asm-focused core_opaque_inline_asm_focused
-start_gate core-target-constant-fallback-focused core_target_constant_fallback_focused
-start_gate core-integer-bitwise-not-focused core_integer_bitwise_not_focused
-start_gate core-postfix-update-m24-focused core_postfix_update_m24_focused
-start_gate core-discard-expression-m25-focused core_discard_expression_m25_focused
-start_gate core-integer-binary-preservation-m25b-focused core_integer_binary_preservation_m25b_focused
-start_gate core-integer-less-m26-focused core_integer_less_m26_focused
-start_gate core-switch-m27-focused core_switch_m27_focused
+start_gate core-scalar-lvalue-bitcast-focused core_runtime_focused run-core-basic-runtime-case.sh core-scalar-lvalue-bitcast
+start_gate core-fixed-call-scalar-conversions-focused core_runtime_focused run-core-basic-runtime-case.sh core-fixed-call-scalar-conversions
+start_gate core-scalar-assignment-implicit-void-focused core_runtime_focused run-core-basic-runtime-case.sh core-scalar-assignment-implicit-void
+start_gate core-global-scalar-memory-focused core_runtime_focused run-core-basic-runtime-case.sh core-global-scalar-memory
+start_gate core-comparisons-focused core_runtime_focused run-core-basic-runtime-case.sh core-comparisons
+start_gate core-checked-arithmetic-focused core_runtime_focused run-core-basic-runtime-case.sh core-checked-arithmetic
+start_gate core-short-circuit-or-focused core_runtime_focused run-core-basic-runtime-case.sh core-short-circuit-or
+start_gate core-nested-if-continuation-focused core_runtime_focused run-core-basic-runtime-case.sh core-nested-if-continuation
+start_gate core-condition-and-focused core_runtime_focused run-core-basic-runtime-case.sh core-condition-and
+start_gate core-logical-and-value-focused core_runtime_focused run-core-basic-runtime-case.sh core-logical-and-value
+start_gate core-integer-bitwise-and-assignment-focused core_runtime_focused run-core-basic-runtime-case.sh core-integer-bitwise-and-assignment
+start_gate core-pointer-offset-focused core_runtime_focused run-core-basic-runtime-case.sh core-pointer-offset
+start_gate core-statement-expression-focused core_runtime_focused run-core-basic-runtime-case.sh core-statement-expression
+start_gate core-opaque-inline-asm-focused core_runtime_focused run-core-basic-runtime-case.sh core-opaque-inline-asm
+start_gate core-target-constant-fallback-focused core_runtime_focused run-core-basic-runtime-case.sh core-target-constant-fallback
+start_gate core-integer-bitwise-not-focused core_runtime_focused run-core-basic-runtime-case.sh core-integer-bitwise-not
+start_gate core-postfix-update-m24-focused core_runtime_focused run-core-strict-runtime-case.sh core-postfix-update-m24
+start_gate core-discard-expression-m25-focused core_runtime_focused run-core-strict-runtime-case.sh core-discard-expression-m25
+start_gate core-integer-binary-preservation-m25b-focused core_runtime_focused run-core-strict-runtime-case.sh core-integer-binary-preservation-m25b
+start_gate core-integer-less-m26-focused core_runtime_focused run-core-strict-runtime-case.sh core-integer-less-m26
+start_gate core-switch-m27-focused core_runtime_focused run-core-strict-runtime-case.sh core-switch-m27
 start_gate core-inline-asm-identity-m28-focused core_inline_asm_identity_m28_focused
 start_gate core-record-local-m29-focused core_record_local_m29_focused
-start_gate core-aggregate-boundary-m30-focused core_aggregate_boundary_m30_focused
-start_gate core-integer-foundation-m26b-focused core_integer_foundation_m26b_focused
+start_gate core-aggregate-boundary-m30-focused core_runtime_focused run-core-strict-runtime-case.sh core-aggregate-boundary-m30
+start_gate core-integer-foundation-m26b-focused core_runtime_focused run-core-strict-runtime-case.sh core-integer-foundation-m26b
 start_gate record-fam-prefix-focused runtime_record_fam_prefix_focused
 start_gate linenoise-driven-focused linenoise_driven_focused
 start_gate sds-driven-focused sds_driven_focused
