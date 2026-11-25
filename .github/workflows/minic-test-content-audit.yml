@@ -11,6 +11,8 @@ jobs:
     timeout-minutes: 8
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - name: Compare actual test source tokens and executable consumers across the complete repository
         run: |
           python3 - <<'PY'
@@ -68,3 +70,67 @@ jobs:
                           print("DYNAMIC_TEST_PATH",json.dumps([p,i,line[:240]]))
           print("CONTENT_AUDIT",json.dumps({"files":len(data),"test_sources":len(sources),"test_code":len(tests),"token_duplicates":sum(len(v)-1 for v in groups.values() if len(v)>1)}))
           PY
+
+  validate-pruning:
+    if: "startsWith(github.event.head_commit.message, 'test-prune')"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Verify old modes no longer have an implementation and check remaining callers
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          import pathlib,re,subprocess
+          removed = ["tests/compiler/audit/mc051_rv64_entry.c","tests/compiler/c0/invalid_cast_integer_to_float.c","tests/compiler/c0/invalid_empty_record.c","tests/compiler/c0/invalid_long_long.c","tests/compiler/c0/invalid_zero_length_typedef_array.c","tests/compiler/c0/core_required_no_fallback.c","tests/core/run-core-ir-shadow.sh"]
+          for p in removed:
+              assert not pathlib.Path(p).exists(), p
+          live=subprocess.check_output(["git","ls-files","-z"]).decode().strip("\0").split("\0")
+          for p in live:
+              if p.startswith("docs/") or p.endswith(".md") or p in (".github/workflows/minic-test-content-audit.yml",".github/workflows/minic-historical-script-retirement-audit.yml"):continue
+              b=pathlib.Path(p).read_bytes()
+              if b"\0" in b:continue
+              for old in removed:
+                  assert pathlib.Path(old).name.encode() not in b, (p,old)
+              assert b"core-required-no-fallback" not in b,(p,"obsolete gate")
+              if p.startswith(("src/","tools/minic/","tools/minic-cc/")):
+                  assert not re.search(rb'\bMINIC_CORE_(?:IR|CODEGEN)\b',b),p
+          print("RETIRED_LIVE_CALLERS=NONE")
+          PY
+      - name: Build and check actual old negative fixtures now accepted by GNU and MiniC
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release CFLAGS=-Werror build/release/bin/minic-cc
+          mini="$PWD/build/release/bin/minic-cc"
+          work="$PWD/build/test-pruning"
+          mkdir -p "$work"
+          for name in invalid_cast_integer_to_float invalid_empty_record invalid_long_long invalid_zero_length_typedef_array; do
+            git show 4f3b6b1b087e4e9cb8a0d17fdac5b8a46d193bad:tests/compiler/c0/$name.c > "$work/$name.c"
+            cc -std=gnu11 "$work/$name.c" -o "$work/$name.gnu"
+            "$work/$name.gnu"
+            cc -E -P -std=gnu11 "$work/$name.c" -o "$work/$name.i"
+            "$mini" --target=x86_64-linux -S "$work/$name.i" -o "$work/$name.s"
+            cc -no-pie "$work/$name.s" -o "$work/$name.mini"
+            "$work/$name.mini"
+            echo "STALE_NEGATIVE_NOW_VALID=$name"
+          done
+          git show 4f3b6b1b087e4e9cb8a0d17fdac5b8a46d193bad:tests/compiler/c0/core_required_no_fallback.c > "$work/nine.c"
+          cc -E -P "$work/nine.c" -o "$work/nine.i"
+          "$mini" --target=riscv64-linux -S "$work/nine.i" -o "$work/nine.s"
+          test -s "$work/nine.s"
+          echo "OLD_NINE_ARGUMENT_REJECTION=OBSOLETE"
+          bash tests/compiler/c0/check-minic-target-boundaries.sh
+      - name: Run the current nine-argument and comparison differential gates
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y gcc-riscv64-linux-gnu qemu-user
+          export MINIC="$PWD/build/release/bin/minic-cc"
+          export MINIC_CC="$MINIC" RISCV_CC=riscv64-linux-gnu-gcc QEMU_RISCV64=qemu-riscv64
+          export BUILD_DIR="$PWD/build/test-pruning/stack"
+          sh tests/compiler/c0/run-compile-only-case.sh stack-fixed-arguments
+          for name in core-integer-equality core-scalar-not-equal core-pointer-equality-qualifiers core-condition-and core-logical-and-value; do
+            BUILD_DIR="$PWD/build/test-pruning/$name" sh tests/compiler/c0/run-core-basic-runtime-case.sh "$name"
+          done

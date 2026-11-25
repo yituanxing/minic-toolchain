@@ -1,6 +1,5 @@
 #!/bin/sh
-# Shared RV64 Core strict/basic-v0 differential driver. Preserve case-specific
-# build artifact names, host compiler selection, assembly and output assertions.
+# RV64 Core production-code differential against GNU. One compiler path.
 set -eu
 case "${1:-}" in
     core-condition-and|core-fixed-call-scalar-conversions|core-for-postincrement-m20|core-global-scalar-memory|core-integer-bitwise-and-assignment|core-integer-bitwise-not|core-integer-equality|core-integer-or-shifts-m22|core-logical-and-value|core-nested-if-continuation|core-integer-add-overflow|core-integer-multiply-overflow|core-integer-subtract-overflow|core-pointer-condition-m21|core-pointer-equality-qualifiers|core-pointer-offset|core-scalar-not-equal|core-short-circuit-or|core-scalar-assignment-implicit-void|core-scalar-lvalue-bitcast|core-opaque-inline-asm|core-statement-expression|core-target-constant-fallback) name=$1 ;;
@@ -29,15 +28,14 @@ runtime_file="$root/tests/compiler/c0/${stem}_runtime.c"
 mkdir -p "$work"
 case "$name" in
     core-fixed-call-scalar-conversions|core-global-scalar-memory|core-integer-bitwise-not|core-integer-equality|core-integer-add-overflow|core-integer-multiply-overflow|core-scalar-assignment-implicit-void|core-scalar-lvalue-bitcast)
-        input="$work/$stem.i"; strict="$work/$stem-strict.s"; core="$work/$stem-core.s" ;;
+        input="$work/$stem.i"; core="$work/$stem-core.s" ;;
     core-short-circuit-or)
-        input="$work/$stem.i"; strict="$work/strict.s"; core="$work/core.s" ;;
+        input="$work/$stem.i"; core="$work/core.s" ;;
     *)
-        input="$work/input.i"; strict="$work/strict.s"; core="$work/core.s" ;;
+        input="$work/input.i"; core="$work/core.s" ;;
 esac
 "$host_cc" -E -P -std=gnu11 "$source_file" -o "$input"
-MINIC_CORE_IR=strict "$MINIC" -S "$input" -o "$strict"
-MINIC_CORE_CODEGEN=basic-v0 "$MINIC" -S "$input" -o "$core"
+"$MINIC" -S "$input" -o "$core"
 
 # Declarative per-case checks, in the original execution order.
 case "$name" in

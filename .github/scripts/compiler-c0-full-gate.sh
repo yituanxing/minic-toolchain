@@ -206,11 +206,11 @@ runtime_record_array_initializer_focused() {
         sh tests/compiler/c0/run-compile-only-case.sh runtime-record-array-initializers
 }
 
-core_required_no_fallback_focused() {
+stack_fixed_arguments_focused() {
     MINIC="$root/build/ci-debug/bin/minic" \
     HOST_CC=cc \
-    BUILD_DIR="$root/build/ci-core-required-no-fallback" \
-        sh tests/compiler/c0/run-compile-only-case.sh core-required-no-fallback
+    BUILD_DIR="$root/build/ci-stack-fixed-arguments" \
+        sh tests/compiler/c0/run-compile-only-case.sh stack-fixed-arguments
 }
 
 core_scalar_lvalue_bitcast_focused() {
@@ -596,7 +596,7 @@ start_gate static-object-address-focused static_object_address_focused
 start_gate file-scope-basic-asm-focused file_scope_basic_asm_focused
 start_gate wide-string-focused wide_string_focused
 start_gate record-array-init-focused runtime_record_array_initializer_focused
-start_gate core-required-no-fallback-focused core_required_no_fallback_focused
+start_gate stack-fixed-arguments-focused stack_fixed_arguments_focused
 start_gate core-scalar-lvalue-bitcast-focused core_scalar_lvalue_bitcast_focused
 start_gate core-fixed-call-scalar-conversions-focused core_fixed_call_scalar_conversions_focused
 start_gate core-scalar-assignment-implicit-void-focused core_scalar_assignment_implicit_void_focused
