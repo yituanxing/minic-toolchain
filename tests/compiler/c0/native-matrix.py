@@ -152,6 +152,10 @@ def positive(config, cc, mini, work):
         input_path = Path(src)
     if "syntax" in config:
         execute([cc, *flags(config["syntax"]), *flags(config.get("defines")), src], env)
+    if "gnu_object_flags" in config:
+        gnu_input = input_path if config.get("gnu_object_input") == "preprocessed" else src
+        execute([cc, *flags(config["gnu_object_flags"]), gnu_input,
+                 "-o", work / "gnu-source.o"], env, label="GNU source object")
     support = [source(s) for s in config.get("support", [])]
     targets = config.get("targets", TARGETS)
     artifacts = {}
