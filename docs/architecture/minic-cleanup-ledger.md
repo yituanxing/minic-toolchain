@@ -1740,3 +1740,7 @@ C61 动态验收补记：新增四架构强制 RV64 runtime 于提交 `69962285`
 C61 运行补记：提交 `a6d8e5a9` 真实 RV64 QEMU 通过旧 double-return 与新增 GNU inline asm operands、named operands、clzll 三组，后续提前终止于未被调用过的独立 `+&r` earlyclobber 旧寄存器字符串检查（grep 没有诊断）。把特定寄存器拼写更换为三个实际 ADD 指令的发射证明；独立 freestanding GNU 对照/QEMU 双 ELF 完全保留，待该提交的原生运行日志验证。
 
 C61 修正结论：提交 `a0219a75` 的真实 RV64 CI 显示 double-return、三个 GNU inline/CLZ、freestanding earlyclobber 及九形参双向 ABI 均 PASS；唯一不通过的是原来未被现役 CI 调用的动态 `alloca` 独立测试，其真实错误为 `cannot emit RISC-V function 'dynamic_stack_alloca_probe'`。此项是 RV64 后端当前能力缺口，不能通过放宽断言假冒绿灯。恢复原先的独立 `run-dynamic-stack-alloca.sh`，保留原样的双样本与 helper，撤出五项已验证的共用运行入口。仓库净删除文件因此从 16 调整为 15；该独立脚本仍可被显式调用并会在目标缺口未修复时失败，不报告为已通过。
+
+## 批次 C62：x86 GNU 核心语义回归数据化（2026-11-25）
+
+当前基线 `e6ea6709a48a`。将三份原先没有任何直接调用者的 x86 shell 脚本迁移到现役 `native-matrix.json`：TESTB CC flag-output（包括 3 条 testb、setnz/sete、3 组负例及双运行时）、Linux IOMEM tied SI/DI/CX（包含 0–31 字节 GNU/MiniC 运行及三个非法 ASM 变体）、零尺寸静态数组（包括两个 GNU/Minic ELF 对象的 nm 小写 r 以及 .size 0）。只给已有 `native-matrix.py` 增加两种通用 opt-in nm 对象取证和 sed 首次替换语义，不新建驱动/目录，不删除原 C fixture。三项自动纳入现有 177 项 Native Matrix 推送验收；以此提交的实际 CI 为准，不能视静态迁移为已经通过。

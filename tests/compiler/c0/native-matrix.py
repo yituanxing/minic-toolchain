@@ -176,7 +176,10 @@ def preprocess(config, cc, src, out, env):
     for old, new in config.get("mutations", []):
         raw = out.read_bytes()
         require(old.encode() in raw, f"mutation missing: {old!r}")
-        out.write_bytes(raw.replace(old.encode(), new.encode()))
+        # A first-match mutation models sed '0,/pattern/s//' exactly.
+        # The default remains all-occurrences replacement for existing cases.
+        out.write_bytes(raw.replace(old.encode(), new.encode(),
+                                    1 if config.get("mutations_first") else -1))
 
 def minic_compile(config, mini, input_path, output_path, target, env, reject=False):
     output_path.unlink(missing_ok=True)
@@ -213,6 +216,11 @@ def positive(config, cc, mini, work):
     support = [source(s) for s in config.get("support", [])]
     targets = config.get("targets", TARGETS)
     artifacts = {}
+    if config.get("gnu_nm_symbols"):
+        require("gnu_object_flags" in config, "GNU nm needs GNU object")
+        artifacts["gnu_nm"] = execute(
+            [os.environ.get("NM", "nm"), "-S", work / "gnu-source.o"],
+            env, label="GNU object symbol table").stdout
     if "gnu_asm_only_flags" in config:
         gnu_asm = work / "gnu-reference.s"
         execute([cc, *flags(config["gnu_asm_only_flags"]), src,
@@ -255,6 +263,10 @@ def positive(config, cc, mini, work):
             execute([cc, "-x", "assembler", "-c", out,
                      "-o", work / (target + "-host.o")], env,
                     label="GNU host assembly object")
+            if config.get("host_nm_symbols"):
+                artifacts[target + "_nm"] = execute(
+                    [os.environ.get("NM", "nm"), "-S", work / (target + "-host.o")],
+                    env, label="MiniC object symbol table").stdout
     if config.get("native", True):
         require("x86_64" in targets, "native test must compile x86_64")
         mini_s = work / "x86_64-linux.s"
