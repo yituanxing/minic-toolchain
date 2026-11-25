@@ -26,16 +26,5 @@ if [[ -f docs/ci/native-runtime44-perf4-validated-sha1.txt ]]; then
     tee "$ev/perf-integrated-profile.txt"
   exit 0
 fi
-before=$(sha256sum "$build_dir/bin/minic-cc" | cut -d' ' -f1)
-# Their order is part of the existing 500/500 real-Kbuild certification.
-python3 tools/ci/apply-perf-symbolic-function-body-owner-filter-v0.py
-python3 tools/ci/apply-perf-integer-call-expression-index-v1.py
-python3 tools/ci/apply-perf-parser-lookup-counters-v0.py
-python3 tools/ci/apply-perf-parser-function-hash-v0.py
-git diff --check
-make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$build_dir" \
-  "$build_dir/bin/minic" "$build_dir/bin/minic-cc" >/dev/null
-after=$(sha256sum "$build_dir/bin/minic-cc" | cut -d' ' -f1)
-test "$before" != "$after"
-printf 'MINIC_PERF_INTEGRATED_FULL=READY original_cc=%s new_cc=%s first500=500/500 qemu_pending=true\n' \
-  "$before" "$after" | tee "$ev/perf-integrated-profile.txt"
+echo 'HISTORICAL_PROFILE_RETIRED: pre-split experiment requires matching historical source; original route at abc0eeeff86c4b573fd1d4e338cd68e281749edb; no current-source PASS.' >&2
+exit 78

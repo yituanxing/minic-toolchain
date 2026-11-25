@@ -43,6 +43,46 @@ jobs:
           expected = changed_paths(base, accepted, "--diff-filter=D")
           metadata = changed_paths(base, accepted) - expected
           assert len(expected) == 858
+          # Retire previously fail-closed files after collapsing their callers.
+          # The immutable before-tree keeps the original retirement evidence.
+          route_snapshot = "abc0eeeff86c4b573fd1d4e338cd68e281749edb"
+          retired_route_files = {
+              "tools/ci/apply-perf-ast-footprint-trace-v1.py",
+              "tools/ci/apply-perf-ast-shape-census-v1.py",
+              "tools/ci/apply-perf-boolean-scan-census-v1.py",
+              "tools/ci/apply-perf-core-lower-statement-workspace-v1.py",
+              "tools/ci/apply-perf-integer-call-expression-index-v1.py",
+              "tools/ci/apply-perf-integer-function-body-owner-filter-v1.py",
+              "tools/ci/apply-perf-integer-loop-trace-v0.py",
+              "tools/ci/apply-perf-specialization-phase-trace-v0.py",
+              "tools/ci/apply-perf-symbolic-call-index-v1.py",
+              "tools/ci/apply-perf-symbolic-function-body-owner-filter-v0.py",
+              "tools/ci/apply-perf-symbolic-loop-trace-v0.py",
+              "tools/ci/apply-perf-symbolic-scan-census-v1.py",
+              "tools/ci/apply-perf-core-lower-hotspot-census-v1.py",
+              "tools/ci/apply-perf-core-object-address-use-index-v1.py",
+              "tools/ci/linux-perf-ast-footprint-v1.sh",
+              "tools/ci/linux-perf-combined-parser-marginal-v1.sh",
+              "tools/ci/linux-perf-diagnose-optimized-phase-v1.sh",
+              "tools/ci/linux-perf-integer-owner-marginal-v1.sh",
+              "tools/ci/linux-perf-specialization-trace-optin-v1.sh",
+              "tools/ci/linux-perf-ast-growth-ab-v1.sh",
+              "tools/ci/linux-perf-build-minic-profile-v1.sh",
+          }
+          route_blobs = {
+              ".github/workflows/linux-runtime-gcc-baseline.yml": "d03dfa13d67f176225b4258eb103696a92902a86",
+              ".github/workflows/linux-runtime-optin-perf-suite-v1.yml": "35627119968f0ef5333fba53f25b108004c8098c",
+              "tools/ci/linux-perf-integrated-full-profile-v1.sh": "7d4bad9f993e5c7a476e4837abcb29e74ef28c61",
+          }
+          for path in retired_route_files:
+              archived_stub = git("show", route_snapshot + ":" + path).decode()
+              assert ("HISTORICAL_PROFILE_RETIRED" in archived_stub or
+                      "HISTORICAL_PERF_RETIRED" in archived_stub), path
+              assert "SystemExit(78)" in archived_stub or "exit 78" in archived_stub, path
+          for path, sha in route_blobs.items():
+              assert git("hash-object", path).decode().strip() == sha, path
+          expected |= retired_route_files
+          metadata |= set(route_blobs)
           shared_fixtures = {
               "tests/programs/c0/cast_expressions.c",
               "tests/programs/c0/hexadecimal_expression.c",
@@ -189,7 +229,7 @@ jobs:
           assert (retired_rv64_labels | retired_missing_source) <= old_layout_tree
           assert not pathlib.Path("src/target/riscv64/core_codegen.c").exists()
           assert not pathlib.Path("src/core/core_lower.c").exists()
-          for path in retired_missing_source:
+          for path in retired_missing_source - retired_route_files:
               proc = subprocess.run(["python3", path], capture_output=True, text=True)
               assert proc.returncode == 78 and "HISTORICAL_PROFILE_RETIRED:" in proc.stderr
           expected |= retired_rv64_labels
@@ -273,7 +313,7 @@ jobs:
               assert anchor not in compiler_source, (path, anchor)
           assert "MINIC_BOOLEAN_DOMAIN_SCOPED_NATIVE_V1" not in compiler_source
           split_rewriters = set(retired_split_files) | set(retired_split_anchors)
-          for path in sorted(split_rewriters | retired_split_shells):
+          for path in sorted((split_rewriters | retired_split_shells) - retired_route_files):
               interpreter = "bash" if path.endswith(".sh") else "python3"
               proc = subprocess.run([interpreter, path], capture_output=True, text=True)
               assert proc.returncode == 78 and "HISTORICAL_PROFILE_RETIRED:" in proc.stderr, path
@@ -294,9 +334,10 @@ jobs:
           metadata |= {"docs/ci/linux-runtime-isolation.md"}
           metadata |= {"tools/ci/linux-perf-build-minic-profile-v1.sh", "tools/ci/linux-perf-ast-growth-ab-v1.sh"}
           metadata |= {"tools/ci/linux-runtime-build-minic-profile-v1.sh", "tools/ci/linux-runtime-profile-cache-id-v1.py"}
+          metadata -= retired_route_files
           deleted = changed_paths(base, "HEAD", "--diff-filter=D")
           changed = changed_paths(base, "HEAD")
-          if len(expected) != 936 or deleted != expected or changed != expected | metadata:
+          if len(expected) != 957 or deleted != expected or changed != expected | metadata:
               raise SystemExit("RETIREMENT_SCOPE=FAIL: unexpected tree changes")
           # Preserve the full closure in a historical checkout, not a successful
           # no-op overlay on a different source architecture.
@@ -333,9 +374,9 @@ jobs:
           historical_tree = set(git("ls-tree", "-r", "--name-only", perf_replay).decode().splitlines())
           assert retired_perf <= historical_tree
           for entry in ("tools/ci/linux-perf-build-minic-profile-v1.sh", "tools/ci/linux-perf-ast-growth-ab-v1.sh"):
-              result = subprocess.run(["bash", entry, "unused-build", "unused-evidence"], capture_output=True, text=True)
-              assert result.returncode == 78 and "HISTORICAL_PERF_RETIRED" in result.stderr and perf_replay in result.stderr
-          print("HISTORICAL_PERF_RETIREMENT=PASS private_inputs=5 shared_labels=3 fail_closed=2")
+              assert entry in retired_route_files
+              assert perf_replay in git("show", route_snapshot + ":" + entry).decode()
+          print("HISTORICAL_PERF_RETIREMENT=PASS private_inputs=5 shared_labels=3 git_only_entries=2")
           files = [p.decode() for p in git("ls-files", "-z").split(b"\0") if p]
           candidates = {
               p: ("disabled-ci" if p.startswith(".github/workflows-disabled/") else
@@ -457,7 +498,9 @@ jobs:
           # deliberately fail-closed, not a PASS substitute for old experiments.
           perf_path = ".github/workflows/linux-runtime-optin-perf-suite-v1.yml"
           old_perf = git("show", "abae0fe2ab1c3d6c92058f33c299c57340d61432:" + perf_path).decode()
-          live_perf = pathlib.Path(perf_path).read_text()
+          # The exact current route blobs were checked above. Retain the
+          # former equivalence proof against its pinned pre-collapse input.
+          live_perf = git("show", route_snapshot + ":" + perf_path).decode()
           new_perf = git("show", "6fab77605806de54c2d73dfc0e81b799674d6a29:" + perf_path).decode()
           retired_profile_steps = {
               "Build latest Canonical MiniC",

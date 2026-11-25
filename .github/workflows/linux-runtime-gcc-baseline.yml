@@ -987,71 +987,11 @@ jobs:
             cp "$ev/compiler/minic-cc-before-boolean" "$ev/boolean-hot/baseline/bin/minic-cc"
             python3 -m py_compile tools/ci/linux-perf-pinned-single-paired-ab-v1.py
             if [[ "${{ contains(github.event.head_commit.message, '[linux-perf-codegen-use-index]') }}" == true ]]; then
-              # New hotspot family: Codegen scalar OBJECT_ADDRESS use-count
-              # previously rescans whole IR per address. Existing P14 candidate
-              # indexes ValueId uses once per function. Only this algorithm
-              # differs; frozen Linux inputs, Boolean baseline and QEMU scope
-              # stay unchanged. Do NOT apply the P15 interval pass here.
-              work="$ev/boolean-hot/codegen-use"
-              mkdir -p "$work/baseline/bin" "$work/index/bin"
-              cp "$root/minic" "$work/baseline/bin/minic"
-              cp "$root/minic" "$work/index/bin/minic"
-              cp "$root/minic-cc" "$work/baseline/bin/minic-cc"
-              python3 tools/ci/apply-perf-core-object-address-use-index-v1.py
-              make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain" \
-                "$root/minic-cc" >/dev/null
-              cp "$root/minic-cc" "$work/index/bin/minic-cc"
-              test "$(sha256sum "$work/baseline/bin/minic-cc" | cut -d' ' -f1)" != "$(sha256sum "$work/index/bin/minic-cc" | cut -d' ' -f1)"
-              git diff --check
-              if [[ "${{ contains(github.event.head_commit.message, '[linux-perf-hotowners-rotation]') }}" == true ]]; then
-                targets=(net/core/dev.o net/ipv4/tcp_input.o lib/crc32.o)
-              else
-                targets=(kernel/bpf/btf.o kernel/bpf/verifier.o net/core/filter.o)
-              fi
-              for owner in "${targets[@]}"; do
-                key="${owner//\//_}"
-                frozen="$ev/boolean-hot/$key.frozen.i"
-                test -s "$frozen"
-                python3 tools/ci/linux-perf-pinned-single-paired-ab-v1.py \
-                  --input "$frozen" \
-                  --baseline-driver "$work/baseline/bin/minic" \
-                  --candidate-driver "$work/index/bin/minic" \
-                  --repeats 2 --out "$work/results/$key" \
-                  | tee "$work/$key-screen.txt"
-                grep -Fq 'MINIC_ONE_OWNER_AB=PASS' "$work/$key-screen.txt"
-                echo "CODEGEN_USE_INDEX_SCREEN=PASS owner=$owner byte_identical=true"
-              done
-              echo "CODEGEN_USE_INDEX_GROUP=PASS owners=3 rotation=${{ contains(github.event.head_commit.message, '[linux-perf-hotowners-rotation]') }} only_codegen_use_index_changed=true QEMU_pending=true"
+              echo 'HISTORICAL_PROFILE_RETIRED: pre-split experiment requires matching historical source; original route at abc0eeeff86c4b573fd1d4e338cd68e281749edb; no current-source PASS.' >&2
+              exit 78
             elif [[ "${{ contains(github.event.head_commit.message, '[linux-perf-core-workspace]') }}" == true ]]; then
-              # Different algorithmic family after marginal global-hash result:
-              # reuse per-TU statement-ID map instead of allocating and clearing
-              # the full Program statement map once PER Core function.
-              # Same Boolean Runtime in both arms; no Parser hash patch.
-              work="$ev/boolean-hot/core-workspace"
-              mkdir -p "$work/baseline/bin" "$work/workspace/bin"
-              cp "$root/minic" "$work/baseline/bin/minic"
-              cp "$root/minic" "$work/workspace/bin/minic"
-              cp "$root/minic-cc" "$work/baseline/bin/minic-cc"
-              python3 tools/ci/apply-perf-core-lower-statement-workspace-v1.py
-              make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain" \
-                "$root/minic-cc" >/dev/null
-              cp "$root/minic-cc" "$work/workspace/bin/minic-cc"
-              test "$(sha256sum "$work/baseline/bin/minic-cc" | cut -d' ' -f1)" != "$(sha256sum "$work/workspace/bin/minic-cc" | cut -d' ' -f1)"
-              git diff --check
-              for owner in kernel/bpf/btf.o kernel/bpf/verifier.o net/core/filter.o; do
-                key="${owner//\//_}"
-                frozen="$ev/boolean-hot/$key.frozen.i"
-                test -s "$frozen"
-                python3 tools/ci/linux-perf-pinned-single-paired-ab-v1.py \
-                  --input "$frozen" \
-                  --baseline-driver "$work/baseline/bin/minic" \
-                  --candidate-driver "$work/workspace/bin/minic" \
-                  --repeats 2 --out "$work/results/$key" \
-                  | tee "$work/$key-screen.txt"
-                grep -Fq 'MINIC_ONE_OWNER_AB=PASS' "$work/$key-screen.txt"
-                echo "CORE_WORKSPACE_SCREEN=PASS owner=$owner byte_identical=true"
-              done
-              echo 'CORE_WORKSPACE_GROUP=PASS owners=3 only_core_workspace_changed=true QEMU_pending=true'
+              echo 'HISTORICAL_PROFILE_RETIRED: pre-split experiment requires matching historical source; original route at abc0eeeff86c4b573fd1d4e338cd68e281749edb; no current-source PASS.' >&2
+              exit 78
             elif [[ "${{ contains(github.event.head_commit.message, '[linux-perf-parser-global]') }}" == true ]]; then
               # Isolated NEXT algorithmic question: with the same function hash
               # enabled on both arms, does the incremental global-object hash
@@ -1126,148 +1066,29 @@ jobs:
               done
               echo "PARSER_INDEX_SCREEN_GROUP=PASS owners=3 rotation=${{ contains(github.event.head_commit.message, '[linux-perf-hotowners-rotation]') }} only_function_hash_changed=true QEMU_pending=true"
             elif [[ "${{ contains(github.event.head_commit.message, '[linux-perf-symbolic-call]') }}" == true ]]; then
-              # Genuine marginal experiment: Boolean + owner index in both
-              # arms; candidate additionally scans CALL IDs once, in order.
-              work="$ev/boolean-hot/symbolic-call"
-              mkdir -p "$work/owner/bin" "$work/owner-call/bin"
-              cp "$root/minic" "$work/owner/bin/minic"
-              cp "$root/minic" "$work/owner-call/bin/minic"
-              python3 tools/ci/apply-perf-symbolic-function-body-owner-filter-v0.py
-              make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain" "$root/minic-cc" >/dev/null
-              cp "$root/minic-cc" "$work/owner/bin/minic-cc"
-              python3 tools/ci/apply-perf-symbolic-call-index-v1.py
-              make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain" "$root/minic-cc" >/dev/null
-              cp "$root/minic-cc" "$work/owner-call/bin/minic-cc"
-              test "$(sha256sum "$work/owner/bin/minic-cc" | cut -d' ' -f1)" != "$(sha256sum "$work/owner-call/bin/minic-cc" | cut -d' ' -f1)"
-              git diff --check
-              if [[ "${{ contains(github.event.head_commit.message, '[linux-perf-hotowners-rotation]') }}" == true ]]; then
-                targets=(lib/crc32.o net/core/dev.o net/ipv4/tcp_input.o)
-              else
-                targets=(kernel/bpf/btf.o kernel/bpf/verifier.o net/core/filter.o)
-              fi
-              for owner in "${targets[@]}"; do
-                key="${owner//\//_}"
-                test -s "$ev/boolean-hot/$key.frozen.i"
-                python3 tools/ci/linux-perf-pinned-single-paired-ab-v1.py \
-                  --input "$ev/boolean-hot/$key.frozen.i" \
-                  --baseline-driver "$work/owner/bin/minic" \
-                  --candidate-driver "$work/owner-call/bin/minic" \
-                  --repeats 2 --out "$work/results/$key" | tee "$work/$key-screen.txt"
-                grep -Fq 'MINIC_ONE_OWNER_AB=PASS' "$work/$key-screen.txt"
-              done
-              echo 'SYMBOLIC_CALL_INDEX_GROUP=PASS owners=3 byte_identical=true QEMU_pending=true'
+              echo 'HISTORICAL_PROFILE_RETIRED: pre-split experiment requires matching historical source; original route at abc0eeeff86c4b573fd1d4e338cd68e281749edb; no current-source PASS.' >&2
+              exit 78
             elif [[ "${{ contains(github.event.head_commit.message, '[linux-perf-symbolic-first500]') }}" == true || "${{ contains(github.event.head_commit.message, '[linux-perf-integrated-first500]') }}" == true ]]; then
-              work="$ev/boolean-hot/first500"
-              mkdir -p "$work/old/bin" "$work/new/bin"
-              cp "$root/minic" "$work/old/bin/minic"
-              cp "$root/minic" "$work/new/bin/minic"
-              cp "$root/minic-cc" "$work/old/bin/minic-cc"
-              python3 tools/ci/apply-perf-symbolic-function-body-owner-filter-v0.py
-              if [[ "${{ contains(github.event.head_commit.message, '[linux-perf-integrated-first500]') }}" == true ]]; then
-                # Tested constituents; prove their simultaneous source semantics
-                # against the SAME pinned 500 existing GNU Kbuild inputs.
-                python3 tools/ci/apply-perf-integer-call-expression-index-v1.py
-                python3 tools/ci/apply-perf-parser-lookup-counters-v0.py
-                python3 tools/ci/apply-perf-parser-function-hash-v0.py
-                if [[ "${{ contains(github.event.head_commit.message, '[linux-perf-owner-extra]') }}" == true ]]; then
-                  python3 tools/ci/apply-perf-integer-function-body-owner-filter-v1.py
-                fi
-              fi
-              make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain" "$root/minic-cc" >/dev/null
-              cp "$root/minic-cc" "$work/new/bin/minic-cc"
-              git diff --check
-              test -s build/linux-perf-corpus/selected-tus.txt
-              test "$(wc -l < build/linux-perf-corpus/inputs.sha256)" -eq 500
-              sha256sum --status --check build/linux-perf-corpus/inputs.sha256
-              python3 -m py_compile tools/ci/linux-perf-frozen-corpus-differential-v1.py
-              python3 tools/ci/linux-perf-frozen-corpus-differential-v1.py \
-                --corpus build/linux-perf-corpus \
-                --baseline-driver "$work/old/bin/minic" \
-                --candidate-driver "$work/new/bin/minic" --jobs 4 \
-                --out "$work/results" | tee "$work/first500-verdict.txt"
-              grep -Fq 'MINIC_FROZEN_DIFF=PASS selected=500 identical=500' "$work/first500-verdict.txt"
-              echo "PERF_FIRST500=PASS selected=500 combined=${{ contains(github.event.head_commit.message, '[linux-perf-integrated-first500]') }} integer_owner=${{ contains(github.event.head_commit.message, '[linux-perf-owner-extra]') }} QEMU_p1_not_executed=true"
+              echo 'HISTORICAL_PROFILE_RETIRED: pre-split experiment requires matching historical source; original route at abc0eeeff86c4b573fd1d4e338cd68e281749edb; no current-source PASS.' >&2
+              exit 78
             elif [[ "${{ contains(github.event.head_commit.message, '[linux-perf-symbolic-integer-marginal]') }}" == true ]]; then
-              # Two already independently tested algorithms: quantify incremental
-              # integer-CALL-index gain while symbolic FunctionBody owner index
-              # is ON in BOTH arms. Do not combine unrelated Parser changes.
-              work="$ev/boolean-hot/symbolic-integer"
-              mkdir -p "$work/symbolic/bin" "$work/both/bin"
-              cp "$root/minic" "$work/symbolic/bin/minic"
-              cp "$root/minic" "$work/both/bin/minic"
-              python3 tools/ci/apply-perf-symbolic-function-body-owner-filter-v0.py
-              make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain" "$root/minic-cc" >/dev/null
-              cp "$root/minic-cc" "$work/symbolic/bin/minic-cc"
-              python3 tools/ci/apply-perf-integer-call-expression-index-v1.py
-              make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain" "$root/minic-cc" >/dev/null
-              cp "$root/minic-cc" "$work/both/bin/minic-cc"
-              test "$(sha256sum "$work/symbolic/bin/minic-cc" | cut -d' ' -f1)" != "$(sha256sum "$work/both/bin/minic-cc" | cut -d' ' -f1)"
-              git diff --check
-              if [[ "${{ contains(github.event.head_commit.message, '[linux-perf-hotowners-rotation]') }}" == true ]]; then
-                targets=(lib/crc32.o net/core/dev.o net/ipv4/tcp_input.o)
-              else
-                targets=(kernel/bpf/btf.o kernel/bpf/verifier.o net/core/filter.o)
-              fi
-              for owner in "${targets[@]}"; do
-                key="${owner//\//_}"
-                frozen="$ev/boolean-hot/$key.frozen.i"
-                test -s "$frozen"
-                echo "SYMBOLIC_INTEGER_MARGINAL=START owner=$owner"
-                python3 tools/ci/linux-perf-pinned-single-paired-ab-v1.py \
-                  --input "$frozen" --baseline-driver "$work/symbolic/bin/minic" \
-                  --candidate-driver "$work/both/bin/minic" \
-                  --repeats 2 --out "$work/results/$key" | tee "$work/$key-screen.txt"
-                grep -Fq 'MINIC_ONE_OWNER_AB=PASS' "$work/$key-screen.txt"
-                echo "SYMBOLIC_INTEGER_MARGINAL=PASS owner=$owner assembly_identical=true"
-              done
-              echo 'SYMBOLIC_INTEGER_MARGINAL_GROUP=PASS owners=3 only_integer_index_changed=true QEMU_pending=true'
+              echo 'HISTORICAL_PROFILE_RETIRED: pre-split experiment requires matching historical source; original route at abc0eeeff86c4b573fd1d4e338cd68e281749edb; no current-source PASS.' >&2
+              exit 78
             elif [[ "${{ contains(github.event.head_commit.message, '[linux-perf-integer-call-index]') }}" == true ]]; then
-              work="$ev/boolean-hot/integer-call"
-              mkdir -p "$work/old/bin" "$work/new/bin"
-              cp "$root/minic" "$work/old/bin/minic"
-              cp "$root/minic" "$work/new/bin/minic"
-              cp "$root/minic-cc" "$work/old/bin/minic-cc"
-              python3 tools/ci/apply-perf-integer-call-expression-index-v1.py
-              make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain" "$root/minic-cc" >/dev/null
-              cp "$root/minic-cc" "$work/new/bin/minic-cc"
-              for owner in lib/crc32.o net/core/dev.o net/ipv4/tcp_input.o; do
-                key="${owner//\//_}"
-                python3 tools/ci/linux-perf-pinned-single-paired-ab-v1.py --input "$ev/boolean-hot/$key.frozen.i" --baseline-driver "$work/old/bin/minic" --candidate-driver "$work/new/bin/minic" --repeats 2 --out "$work/results/$key" | tee "$work/$key-screen.txt"
-              done
-              echo 'INTEGER_CALL_INDEX_GROUP=PASS owners=3'
+              echo 'HISTORICAL_PROFILE_RETIRED: pre-split experiment requires matching historical source; original route at abc0eeeff86c4b573fd1d4e338cd68e281749edb; no current-source PASS.' >&2
+              exit 78
             elif [[ "${{ contains(github.event.head_commit.message, '[linux-perf-symbolic-owner]') }}" == true ]]; then
-              work="$ev/boolean-hot/symbolic-owner"
-              mkdir -p "$work/baseline/bin" "$work/index/bin"
-              cp "$root/minic" "$work/baseline/bin/minic"
-              cp "$root/minic" "$work/index/bin/minic"
-              cp "$root/minic-cc" "$work/baseline/bin/minic-cc"
-              python3 tools/ci/apply-perf-symbolic-function-body-owner-filter-v0.py
-              make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain" "$root/minic-cc" >/dev/null
-              cp "$root/minic-cc" "$work/index/bin/minic-cc"
-              if [[ "${{ contains(github.event.head_commit.message, '[linux-perf-hotowners-rotation]') }}" == true ]]; then
-                targets=(lib/crc32.o net/core/dev.o net/ipv4/tcp_input.o)
-              else
-                targets=(kernel/bpf/btf.o kernel/bpf/verifier.o net/core/filter.o)
-              fi
-              for owner in "${targets[@]}"; do
-                key="${owner//\//_}"
-                python3 tools/ci/linux-perf-pinned-single-paired-ab-v1.py --input "$ev/boolean-hot/$key.frozen.i" --baseline-driver "$work/baseline/bin/minic" --candidate-driver "$work/index/bin/minic" --repeats 2 --out "$work/results/$key" | tee "$work/$key-screen.txt"
-              done
-              echo 'SYMBOLIC_OWNER_GROUP=PASS owners=3 QEMU_pending=true'
+              echo 'HISTORICAL_PROFILE_RETIRED: pre-split experiment requires matching historical source; original route at abc0eeeff86c4b573fd1d4e338cd68e281749edb; no current-source PASS.' >&2
+              exit 78
             elif [[ "${{ contains(github.event.head_commit.message, '[linux-perf-integer-owner]') }}" == true ]]; then
-              bash tools/ci/linux-perf-integer-owner-marginal-v1.sh \
-                "$ev" "$root" "${{ contains(github.event.head_commit.message, '[linux-perf-hotowners-rotation]') }}"
+              echo 'HISTORICAL_PROFILE_RETIRED: pre-split experiment requires matching historical source; original route at abc0eeeff86c4b573fd1d4e338cd68e281749edb; no current-source PASS.' >&2
+              exit 78
             elif [[ "${{ contains(github.event.head_commit.message, '[linux-perf-combined-parser]') }}" == true ]]; then
-              bash tools/ci/linux-perf-combined-parser-marginal-v1.sh \
-                "$ev" "$root" "${{ contains(github.event.head_commit.message, '[linux-perf-hotowners-rotation]') }}"
+              echo 'HISTORICAL_PROFILE_RETIRED: pre-split experiment requires matching historical source; original route at abc0eeeff86c4b573fd1d4e338cd68e281749edb; no current-source PASS.' >&2
+              exit 78
             elif [[ "${{ contains(github.event.head_commit.message, '[linux-perf-specialization-trace]') }}" == true || "${{ contains(github.event.head_commit.message, '[linux-perf-optimized-phase]') }}" == true ]]; then
-              bash tools/ci/linux-perf-specialization-trace-optin-v1.sh \
-                "$ev" "$root" \
-                "${{ contains(github.event.head_commit.message, '[linux-perf-hotowners-rotation]') }}" \
-                "${{ contains(github.event.head_commit.message, '[linux-perf-optimized-phase]') }}" \
-                "${{ contains(github.event.head_commit.message, '[linux-perf-symbolic-subphase]') }}" \
-                "${{ contains(github.event.head_commit.message, '[linux-perf-integer-subphase]') }}" \
-                "${{ contains(github.event.head_commit.message, '[linux-perf-profile-four-index]') }}"
+              echo 'HISTORICAL_PROFILE_RETIRED: pre-split experiment requires matching historical source; original route at abc0eeeff86c4b573fd1d4e338cd68e281749edb; no current-source PASS.' >&2
+              exit 78
             elif [[ "${{ contains(github.event.head_commit.message, '[linux-perf-stage-profile]') }}" == true ]]; then
               python3 tools/ci/linux-perf-phase-trace-v1.py --self-test
               if [[ "${{ contains(github.event.head_commit.message, '[linux-perf-hotowners-rotation]') }}" == true ]]; then
@@ -1311,22 +1132,16 @@ jobs:
         shell: bash
         timeout-minutes: 18
         run: |
-          set -Eeuo pipefail
-          ev="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-v1"
-          root="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain/bin"
-          bash tools/ci/linux-perf-ast-growth-ab-v1.sh \
-            "$ev" "$root" "${{ contains(github.event.head_commit.message, '[linux-perf-hotowners-rotation]') }}"
+          echo 'HISTORICAL_PROFILE_RETIRED: pre-split experiment requires matching historical source; original route at abc0eeeff86c4b573fd1d4e338cd68e281749edb; no current-source PASS.' >&2
+          exit 78
 
       - name: Inspect real AST memory without altering assembly
         if: contains(github.event.head_commit.message, '[linux-perf-ast-footprint]') && steps.candidate_ready.outputs.ready == 'true'
         shell: bash
         timeout-minutes: 18
         run: |
-          set -Eeuo pipefail
-          ev="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-v1"
-          root="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain/bin"
-          bash tools/ci/linux-perf-ast-footprint-v1.sh \
-            "$ev" "$root" "${{ contains(github.event.head_commit.message, '[linux-perf-hotowners-rotation]') }}"
+          echo 'HISTORICAL_PROFILE_RETIRED: pre-split experiment requires matching historical source; original route at abc0eeeff86c4b573fd1d4e338cd68e281749edb; no current-source PASS.' >&2
+          exit 78
 
       # This boundary is essential: a subsequent GNU relink/QEMU failure
       # must NEVER waste the expensive, already-verified candidate objects.
@@ -1995,8 +1810,6 @@ jobs:
           fi
           if [[ "${{ contains(github.event.head_commit.message, '[linux-perf-integrated-full]') }}" == true ]]; then
             perf_tag=$(sha256sum tools/ci/linux-perf-integrated-full-profile-v1.sh \
-              tools/ci/apply-perf-symbolic-function-body-owner-filter-v0.py \
-              tools/ci/apply-perf-integer-call-expression-index-v1.py \
               tools/ci/apply-perf-parser-lookup-counters-v0.py \
               tools/ci/apply-perf-parser-function-hash-v0.py | sha256sum | cut -c1-16)
             profile="${profile}-perf-integrated-3-v1-${perf_tag}"
@@ -2667,8 +2480,6 @@ jobs:
           fi
           if [[ "${{ contains(github.event.head_commit.message, '[linux-perf-integrated-full]') }}" == true ]]; then
             perf_tag=$(sha256sum tools/ci/linux-perf-integrated-full-profile-v1.sh \
-              tools/ci/apply-perf-symbolic-function-body-owner-filter-v0.py \
-              tools/ci/apply-perf-integer-call-expression-index-v1.py \
               tools/ci/apply-perf-parser-lookup-counters-v0.py \
               tools/ci/apply-perf-parser-function-hash-v0.py | sha256sum | cut -c1-16)
             profile="${profile}-perf-integrated-3-v1-${perf_tag}"
