@@ -3,6 +3,14 @@
 
 SHELL := /bin/sh
 
+# Test input suites generate legacy paths before dependency resolution.
+ifneq ($(filter check% test% sanitize,$(MAKECMDGOALS)),)
+MINIC_TEST_SUITE_STATUS := $(shell python3 tests/suites/materialize.py >&2; echo $$?)
+ifneq ($(MINIC_TEST_SUITE_STATUS),0)
+$(error Test suite materialization failed)
+endif
+endif
+
 PROJECT       := minic-toolchain
 MODE          ?= debug
 BUILD_DIR     ?= build/$(MODE)
@@ -3330,3 +3338,7 @@ check-direct-local-effects: $(MINIC_CC_BINARY)
 	"$(abspath $(BUILD_DIR))/tests/frontend/direct-local-effects"
 
 check-fast: check-direct-local-effects
+
+.PHONY: prepare-tests
+prepare-tests:
+	python3 tests/suites/materialize.py
