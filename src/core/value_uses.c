@@ -18,7 +18,8 @@ static bool core_visit_call_argument_uses(const MinicCoreFunction *function,
     size_t i;
 
     if (function == NULL || argument_begin > function->call_argument_count ||
-        argument_count > function->call_argument_count - argument_begin) {
+        argument_count > function->call_argument_count - argument_begin ||
+        (argument_count != 0U && function->call_arguments == NULL)) {
         return false;
     }
     for (i = 0U; i < argument_count; ++i) {

@@ -55,8 +55,7 @@ static bool core_integer_record_members(const MinicCoreTypeContext *types,
         field_align = element->alignment;
         if ((field->is_bit_field &&
              (is_array || field->bit_width == 0U ||
-              minic_core_type_base(types, element_id)->kind !=
-                  MINIC_CORE_TYPE_INTEGER)) ||
+              field_type->kind != MINIC_CORE_TYPE_INTEGER)) ||
             !core_integer_record_members(types, element_id, depth + 1U) ||
             (field->is_bit_field &&
              (field_size > SIZE_MAX / 8U ||
