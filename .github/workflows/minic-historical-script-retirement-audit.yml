@@ -35,14 +35,14 @@ jobs:
           audit = ".github/workflows/minic-historical-script-retirement-audit.yml"
           def git(*args):
               return subprocess.check_output(["git", *args])
-          # Exact previously accepted tree, plus this explicit reviewed batch.
-          accepted = "0475a7442e86d4942b85f58e4a20f59045e592bb"
+          # Previously accepted exact tree plus the historical overlay closure.
+          accepted = "9f7df7a6fb928049706a26bbb7a0a6cee378a8d5"
           def changed_paths(before, after, *options):
               return set(git("diff", "--no-renames", "--name-only", *options,
                              before, after).decode().splitlines())
           expected = changed_paths(base, accepted, "--diff-filter=D")
           metadata = changed_paths(base, accepted) - expected
-          assert len(expected) == 824
+          assert len(expected) == 827
           shared_fixtures = {
               "tests/programs/c0/cast_expressions.c",
               "tests/programs/c0/hexadecimal_expression.c",
@@ -58,38 +58,57 @@ jobs:
           }
           assert len(historical_archives) == 68
           assert shared_fixtures <= expected and historical_archives <= expected
-          expected |= {
-              "docs/ci/verified-9bee70c-runtime44-perf4-native-src.patch",
-              "docs/ci/p1-stack-overflow-evidence-2026-10-12.md",
-              "docs/architecture/multitarget-x86_64-real-project-checkpoint-2026-10-18.md",
+          retired_overlay = {
+              "tools/ci/apply-cfg-annihilator-priority-v0.py",
+              "tools/ci/apply-constant-call-leading-if-v0.py",
+              "tools/ci/apply-constant-call-parameter-facts-v0.py",
+              "tools/ci/apply-constant-cfg-product-v0.py",
+              "tools/ci/apply-constant-if-external-reentry-v0.py",
+              "tools/ci/apply-constant-inline-call-cfg-probe-v0.py",
+              "tools/ci/apply-constant-inline-call-cfg-v0.py",
+              "tools/ci/apply-constant-inline-call-cfg-v1.py",
+              "tools/ci/apply-constant-inline-multireturn-v0.py",
+              "tools/ci/apply-constant-internal-call-cfg-v0.py",
+              "tools/ci/apply-core-unreachable-reentry-v0.py",
+              "tools/ci/apply-empty-internal-void-call-elision-v0.py",
+              "tools/ci/apply-if-local-fact-meet-v0.py",
+              "tools/ci/apply-inline-specialization-boolean-range-v0.py",
+              "tools/ci/apply-inline-specialization-boolean-range-v1.py",
+              "tools/ci/apply-inline-specialization-local-boolean-domain-v0.py",
+              "tools/ci/apply-local-integer-arithmetic-closure-v0.py",
+              "tools/ci/apply-local-null-pointer-conditions-v0.py",
+              "tools/ci/apply-loop-invariant-local-facts-v0.py",
+              "tools/ci/apply-null-helper-first-return-v0.py",
+              "tools/ci/apply-pointer-bitcast-integer-cfg-v0.py",
+              "tools/ci/apply-pure-dereference-cfg-v0.py",
+              "tools/ci/apply-residual-constant-closure-v0.py",
+              "tools/ci/apply-rv64-static-pcrel-global-address-v0.py",
+              "tools/ci/apply-small-constant-array-loop-cfg-v0.py",
+              "tools/ci/apply-small-constant-loop-probe-v0.py",
+              "tools/ci/apply-small-loop-for-init-expression-v0.py",
+              "tools/ci/apply-statement-expression-constant-cfg-v0.py",
+              "tools/ci/apply-statement-expression-postlower-fact-v0.py",
+              "tools/ci/apply-static-const-global-cfg-v0.py",
+              "tools/ci/apply-tail-cfg-closure-v0.py",
           }
+          expected |= retired_overlay
           metadata |= {
-              "docs/ci/README.md",
-              "docs/ci/linux-p1-task-irq-stack-diagnosis-2026-10-12.md",
-              "docs/architecture/README.md",
-              "docs/architecture/multitarget-two-backend-audit-2026-10-19.md",
-          }
-          metadata |= {
-              "src/frontend/ast.c",
-              "src/frontend/ast.h",
-              "src/frontend/ast_global.c",
-              "src/compiler/inline_specialize_common.c",
-              "src/compiler/inline_specialize_common.h",
-              "src/frontend/parser_statement.c",
-              "src/frontend/parser_runtime_initializer.h",
-          }
-          metadata |= {
-              "src/target/aarch64/asm_contract.c",
-              "src/target/aarch64/asm_contract.h",
-              "src/target/source_policy/language_semantics.c",
-              "src/target/source_policy/source_info.h",
-              "src/target/x86_64/asm_contract_source.c",
-              "src/target/x86_64/asm_contract_source.h",
+              "tools/ci/apply-inline-asm-symbolic-specialization-v0.py",
+              "tools/ci/linux-runtime-earlycon-profile-probe-v1.sh",
           }
           deleted = changed_paths(base, "HEAD", "--diff-filter=D")
           changed = changed_paths(base, "HEAD")
-          if len(expected) != 827 or deleted != expected or changed != expected | metadata:
+          if len(expected) != 858 or deleted != expected or changed != expected | metadata:
               raise SystemExit("RETIREMENT_SCOPE=FAIL: unexpected tree changes")
+          # Preserve the full closure in a historical checkout, not a successful
+          # no-op overlay on a different source architecture.
+          replay = "eb583f9dd9bf9cb2ebf530a8579930311b8539d9"
+          assert retired_overlay <= set(git("ls-tree", "-r", "--name-only", replay).decode().splitlines())
+          for command in (["python3", "tools/ci/apply-inline-asm-symbolic-specialization-v0.py"],
+                          ["bash", "tools/ci/linux-runtime-earlycon-profile-probe-v1.sh"]):
+              result = subprocess.run(command, capture_output=True, text=True)
+              assert result.returncode == 78 and replay in result.stderr and "HISTORICAL_PROFILE_RETIRED" in result.stderr
+          print("HISTORICAL_OVERLAY_RETIREMENT=PASS historical_files=31 fail_closed=2")
           files = [p.decode() for p in git("ls-files", "-z").split(b"\0") if p]
           candidates = {
               p: ("disabled-ci" if p.startswith(".github/workflows-disabled/") else
