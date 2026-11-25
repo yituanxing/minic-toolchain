@@ -252,8 +252,20 @@ jobs:
                       for i,line in enumerate(body.splitlines(),1):
                           if name+".sh" in line: print("MATRIX_CALLER",json.dumps([name,p,i,line]),flush=True)
           if bad: raise AssertionError(bad)
+          # Check every reference to the superseded, parameterized C input set.
+          old_inputs=["invalid_tag_kind_enum_struct","invalid_tag_kind_struct_enum","invalid_tag_kind_struct_union","invalid_tag_kind_union_struct","invalid_tag_kind_shadow_enum","invalid_tag_kind_shadow_struct","invalid_tag_kind_forward_enum_record","invalid_bitwise_xor_pointer","invalid_bitwise_and_pointer","invalid_shift_pointer"]
+          for path in active:
+              if path.startswith("docs/") or path.endswith(".md") or path in (".github/workflows/minic-test-content-audit.yml", ".github/workflows/minic-historical-script-retirement-audit.yml"): continue
+              try: body=(root/path).read_text()
+              except (UnicodeDecodeError,OSError): continue
+              for name in old_inputs:
+                  if name in body and pathlib.Path(path).stem != name:
+                      for i,line in enumerate(body.splitlines(),1):
+                          if name in line: print("MATRIX_SOURCE_CALLER",json.dumps([name,path,i,line]),flush=True)
           print("NATIVE_MATRIX_LIVE_CALLERS=PASS",flush=True)
           compiler=str(root/"build/release/bin/minic-cc")
+          baseline=pathlib.Path(tempfile.mkdtemp(prefix="matrix-baseline-"))
+          subprocess.run(["git","worktree","add","--detach",str(baseline),"bad27ded8f6fe38f1c510d706558f9b7d0171666"],check=True)
           def one(item):
               name,config=item
               with tempfile.TemporaryDirectory(prefix="matrix-verify-") as d:
@@ -261,14 +273,10 @@ jobs:
                   oldenv=dict(os.environ,MINIC_CC=compiler,MINIC=compiler,BUILD_DIR=str(work/"old"))
                   newenv=dict(oldenv,BUILD_DIR=str(work/"new"))
                   old_path=config.get("old_path","tests/compiler/c0/"+name+".sh")
-                  old=root/old_path
-                  if not old.exists():
-                      # Archived source is run from the same relative test
-                      # directory only inside this disposable CI checkout.
-                      old.write_bytes(subprocess.check_output(["git","show","bad27ded8f6fe38f1c510d706558f9b7d0171666:"+old_path]))
+                  old=baseline/old_path
                   args=["cc"] if config.get("host")=="arg" else ([compiler] if config.get("mini") in ("arg","optional-arg","arg-first") else [])
                   try:
-                      a=subprocess.run(["bash",str(old),*args],env=oldenv,stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=200)
+                      a=subprocess.run(["bash",str(old),*args],cwd=baseline,env=oldenv,stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=200)
                       b=subprocess.run(["sh","tests/compiler/c0/run-native-matrix.sh",name,*args],env=newenv,stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=100)
                       return dict(name=name,old=a.returncode,new=b.returncode,oldout=a.stdout.decode(errors="replace")[-500:],newout=b.stdout.decode(errors="replace")[-500:],olderr=a.stderr.decode(errors="replace")[-700:] if a.returncode else "",newerr=b.stderr.decode(errors="replace")[-1000:] if b.returncode else "")
                   except subprocess.TimeoutExpired as exc:

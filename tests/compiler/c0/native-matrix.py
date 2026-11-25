@@ -223,6 +223,7 @@ def negative(config, cc, mini, work):
 
 UNIT_FLAGS = {
     "basic": "-std=c11 -Wall -Wextra -Werror",
+    "pedantic": "-std=c11 -Wall -Wextra -Wpedantic -Werror",
     "strict": "-std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Wstrict-prototypes -Wmissing-prototypes -Werror",
     "typed": "-std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror",
 }
