@@ -17,9 +17,8 @@ trap 'rm -rf "$tmp_dir"' EXIT
 fixtures=(
   gnu_overflow_builtins
   gnu_builtin_overflow_predicate
-  core_integer_add_overflow
-  core_integer_subtract_overflow
-  core_integer_multiply_overflow_runtime
+  core_checked_arithmetic
+  core_checked_arithmetic_runtime
   riscv_packed_overflow_alignment
   rv32_u64_compound_or_store
   rv32_wide_branch_condition
