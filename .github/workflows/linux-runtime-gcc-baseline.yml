@@ -720,14 +720,12 @@ jobs:
           # runtime-profile patches modify src/ in place.
           profile=$(python3 tools/ci/linux-runtime-profile-cache-id-v1.py)
           if [[ "${{ contains(github.event.head_commit.message, '[linux-runtime-blake2s-only]') }}" == true ]]; then
-            # An opt-in patch outside the default profile must be part of
-            # the immutable MiniC object cache identity.
-            profile="${profile}-blake2s-cfg-linear-$(sha256sum tools/ci/apply-riscv64-p1-defined-before-use-crossblock-v1.py | cut -c1-16)"
+            echo 'HISTORICAL_PROFILE_RETIRED: pre-split Runtime overlay cannot build current MiniC; replay at 84cb59023874c36793835ff60beb1f5fb468bb23 using matching historical source; no current-source PASS.' >&2
+            exit 78
           fi
           if [[ "${{ (contains(github.event.head_commit.message, '[linux-perf-boolean-single]') || contains(github.event.head_commit.message, '[linux-perf-hotowners]')) && !contains(github.event.head_commit.message, '[minic-source-paired-ab]') }}" == true ]]; then
-            [[ "${{ contains(github.event.head_commit.message, '[linux-runtime-blake2s-only]') || contains(github.event.head_commit.message, '[linux-perf-hotowners]') }}" == true ]] || { echo 'BOOLEAN_CACHE_SINGLE=FAIL missing_owner'; exit 8; }
-            profile="${profile}-bool-index-$(sha256sum tools/ci/apply-inline-specialization-local-boolean-domain-scoped-v1.py tools/ci/apply-inline-specialization-local-boolean-domain-index-v0.py | sha256sum | cut -c1-16)"
-            echo 'BOOLEAN_CACHE_SINGLE=IDENTITY patch_sha_bound=true'
+            echo 'HISTORICAL_PROFILE_RETIRED: pre-split Runtime overlay cannot build current MiniC; replay at 84cb59023874c36793835ff60beb1f5fb468bb23 using matching historical source; no current-source PASS.' >&2
+            exit 78
           fi
           objects=$(sha256sum build/linux-runtime-gcc-cohort-v1/full-objects.txt | cut -d' ' -f1)
           gcc=$(sha256sum "$(command -v riscv64-linux-gnu-gcc)" | cut -d' ' -f1)
@@ -775,22 +773,8 @@ jobs:
           bash tools/ci/linux-runtime-build-minic-profile-v1.sh \
             "$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain" "$ev/compiler"
           if [[ "${{ (contains(github.event.head_commit.message, '[linux-perf-boolean-single]') || contains(github.event.head_commit.message, '[linux-perf-hotowners]')) && !contains(github.event.head_commit.message, '[minic-source-paired-ab]') }}" == true ]]; then
-            tool="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain"
-            # minic is only the driver. minic-cc contains compiler.c and
-            # MUST change when Boolean Domain optimization is actually built.
-            cp "$tool/bin/minic-cc" "$ev/compiler/minic-cc-before-boolean"
-            chmod 755 "$ev/compiler/minic-cc-before-boolean"
-            python3 tools/ci/apply-inline-specialization-local-boolean-domain-scoped-v1.py >>"$ev/compiler/patch.log"
-            make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$tool" "$tool/bin/minic" "$tool/bin/minic-cc" >/dev/null
-            git diff --check
-            echo apply-inline-specialization-local-boolean-domain-scoped-v1.py >>"$ev/compiler/minic-profile.txt"
-            sha256sum "$tool/bin/minic" "$tool/bin/minic-cc" >"$ev/compiler/minic.sha256"
-            old_sha=$(sha256sum "$ev/compiler/minic-cc-before-boolean" | cut -d' ' -f1)
-            new_sha=$(sha256sum "$tool/bin/minic-cc" | cut -d' ' -f1)
-            [[ "$old_sha" != "$new_sha" ]] || {
-              echo 'BOOLEAN_CACHE_SINGLE=FAIL unchanged_minic_cc_compiler'; exit 8;
-            }
-            echo "BOOLEAN_CACHE_SINGLE=READY minic_cc_before=${old_sha:0:16} minic_cc_after=${new_sha:0:16}"
+            echo 'HISTORICAL_PROFILE_RETIRED: pre-split Runtime overlay cannot build current MiniC; replay at 84cb59023874c36793835ff60beb1f5fb468bb23 using matching historical source; no current-source PASS.' >&2
+            exit 78
           fi
           export COHORT_ALLOW_DIAGNOSTIC_384=${{ contains(github.event.head_commit.message, '[linux-runtime-gcc-384]') && '1' || '0' }}
           export COHORT_ALLOW_SHARD=${{ (contains(github.event.head_commit.message, '[linux-runtime-gcc-dma-only]') || contains(github.event.head_commit.message, '[linux-runtime-gcc-link-triad]') || contains(github.event.head_commit.message, '[linux-runtime-gcc-shmem-only]') || contains(github.event.head_commit.message, '[linux-runtime-blake2s-only]') || contains(github.event.head_commit.message, '[linux-perf-hotowners]')) && '1' || '0' }}
@@ -1611,7 +1595,8 @@ jobs:
             --excluded "$ev/non-c-objects.tsv" \
             --min-c-objects 1200
           profile=$(python3 tools/ci/linux-runtime-profile-cache-id-v1.py)
-          profile="${profile}-full-crossblock-pure-eq-v1-$(sha256sum tools/ci/apply-riscv64-p1-defined-before-use-crossblock-v1.py | cut -c1-16)"
+          echo 'HISTORICAL_PROFILE_RETIRED: pre-split Runtime overlay cannot build current MiniC; replay at 84cb59023874c36793835ff60beb1f5fb468bb23 using matching historical source; no current-source PASS.' >&2
+          exit 78
           objects=$(sha256sum "$ev/full-objects.txt" | cut -d' ' -f1)
           gcc=$(sha256sum "$(command -v riscv64-linux-gnu-gcc)" | cut -d' ' -f1)
           assembler=$(sha256sum "$(command -v riscv64-linux-gnu-as)" | cut -d' ' -f1)
@@ -1806,7 +1791,8 @@ jobs:
           # Profile source identity MUST be obtained before patching src/.
           profile=$(python3 tools/ci/linux-runtime-profile-cache-id-v1.py)
           if [[ "${{ contains(github.event.head_commit.message, '[linux-runtime-full-crossblock]') && '1' || '0' }}" == 1 ]]; then
-            profile="${profile}-full-crossblock-pure-eq-v1-$(sha256sum tools/ci/apply-riscv64-p1-defined-before-use-crossblock-v1.py | cut -c1-16)"
+            echo 'HISTORICAL_PROFILE_RETIRED: pre-split Runtime overlay cannot build current MiniC; replay at 84cb59023874c36793835ff60beb1f5fb468bb23 using matching historical source; no current-source PASS.' >&2
+            exit 78
           fi
           if [[ "${{ contains(github.event.head_commit.message, '[linux-perf-integrated-full]') }}" == true ]]; then
             perf_tag=$(sha256sum tools/ci/linux-perf-integrated-full-profile-v1.sh \
@@ -2476,7 +2462,8 @@ jobs:
           # Otherwise a fully valid 2064-object cache is rejected before the
           # fast MiniAS preflight or QEMU can execute.
           if [[ "${{ (contains(github.event.head_commit.message, '[linux-runtime-full-crossblock]') || contains(github.event.head_commit.message, '[linux-native-union-cached]')) && '1' || '0' }}" == 1 ]]; then
-            profile="${profile}-full-crossblock-pure-eq-v1-$(sha256sum tools/ci/apply-riscv64-p1-defined-before-use-crossblock-v1.py | cut -c1-16)"
+            echo 'HISTORICAL_PROFILE_RETIRED: pre-split Runtime overlay cannot build current MiniC; replay at 84cb59023874c36793835ff60beb1f5fb468bb23 using matching historical source; no current-source PASS.' >&2
+            exit 78
           fi
           if [[ "${{ contains(github.event.head_commit.message, '[linux-perf-integrated-full]') }}" == true ]]; then
             perf_tag=$(sha256sum tools/ci/linux-perf-integrated-full-profile-v1.sh \
@@ -2898,16 +2885,8 @@ jobs:
         if: contains(github.event.head_commit.message, '[linux-runtime-frame-components]') || contains(github.event.head_commit.message, '[linux-runtime-p1-nonreuse-reasons]')
         shell: bash
         run: |
-          set -Eeuo pipefail
-          work="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain"
-          sha256sum "$work/bin/minic" >"$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-v1/p1-pre-audit-compiler.sha256"
-          python3 tools/ci/apply-riscv64-p1-frame-diagnostic-v1.py
-          if [[ "${{ contains(github.event.head_commit.message, '[linux-runtime-p1-nonreuse-reasons]') && '1' || '0' }}" == 1 ]]; then
-            python3 tools/ci/apply-riscv64-p1-nonreuse-reasons-v1.py
-          fi
-          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$work" "$work/bin/minic" "$work/bin/minic-cc"
-          sha256sum "$work/bin/minic" >"$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-v1/p1-diagnostic-compiler.sha256"
-          echo "P1_FRAME_DIAG=COMPILER_REBUILT same_codegen_only_extra_stderr=true"
+          echo 'HISTORICAL_PROFILE_RETIRED: pre-split Runtime overlay cannot build current MiniC; replay at 84cb59023874c36793835ff60beb1f5fb468bb23 using matching historical source; no current-source PASS.' >&2
+          exit 78
 
       # The default 2064-object Runtime profile and cache remain untouched.
       # This experiment is fail-closed and never updates the canonical compiler.
@@ -2915,20 +2894,8 @@ jobs:
         if: contains(github.event.head_commit.message, '[linux-runtime-p1-defined-crossblock]') || contains(github.event.head_commit.message, '[linux-runtime-p1-ip6-single]') || (contains(github.event.head_commit.message, '[linux-runtime-p1-discard-eq]') || contains(github.event.head_commit.message, '[linux-runtime-p1-discard-eq-pair]'))
         shell: bash
         run: |
-          set -Eeuo pipefail
-          build="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain"
-          sha256sum "$build/bin/minic" >"$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-v1/p1-pre-crossblock-compiler.sha256"
-          if [[ "${{ (contains(github.event.head_commit.message, '[linux-runtime-p1-discard-eq]') || contains(github.event.head_commit.message, '[linux-runtime-p1-discard-eq-pair]')) && '1' || '0' }}" == 1 ]]; then
-            python3 tools/ci/apply-p1-pure-discarded-local-address-equality-v1.py
-          else
-            python3 tools/ci/apply-riscv64-p1-defined-before-use-crossblock-v1.py
-          fi
-          if [[ "${{ (contains(github.event.head_commit.message, '[linux-runtime-p1-ip6-single]') || (contains(github.event.head_commit.message, '[linux-runtime-p1-discard-eq]') || contains(github.event.head_commit.message, '[linux-runtime-p1-discard-eq-pair]'))) && '1' || '0' }}" == 1 ]]; then
-            python3 tools/ci/apply-riscv64-p1-frame-diagnostic-v1.py
-          fi
-          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$build" "$build/bin/minic" "$build/bin/minic-cc"
-          sha256sum "$build/bin/minic" >"$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-v1/p1-crossblock-compiler.sha256"
-          echo "P1_DEFINED_CROSSBLOCK=COMPILER_BUILT opt_in_only=true"
+          echo 'HISTORICAL_PROFILE_RETIRED: pre-split Runtime overlay cannot build current MiniC; replay at 84cb59023874c36793835ff60beb1f5fb468bb23 using matching historical source; no current-source PASS.' >&2
+          exit 78
 
       - name: Run P1 experimental Core CFG semantic-only GCC and MiniC differential
         if: contains(github.event.head_commit.message, '[linux-runtime-p1-cfg-semantic-only]')

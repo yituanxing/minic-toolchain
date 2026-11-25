@@ -27,7 +27,6 @@ jobs:
           set -Eeuo pipefail
           bash -n tools/ci/linux-distributed-full-image-v1.sh
           python3 -m py_compile tools/ci/linux-distributed-canonical-delay-v1.py tools/ci/linux-distributed-provenance-audit-v2.py
-          python3 -m py_compile tools/ci/apply-correctness-constant-p-core-local-facts-v1.py tools/ci/apply-correctness-constant-p-nested-core-v2.py
       - name: Install Linux Kbuild manifest prerequisites
         run: |
           set -Eeuo pipefail
@@ -72,29 +71,9 @@ jobs:
           tail -n 3 "$work/manifest.tsv"
       - name: Prove GNU constant-p ICE on a previously failing real Nouveau target
         run: |
-          set -Eeuo pipefail
-          work="$GITHUB_WORKSPACE/build/linux-distributed-image-graph-v1"
-          src="$work/linux-6.6.143"
-          out="$work/out"
-          bash tools/ci/linux-runtime-build-minic-profile-v1.sh "$work/toolchain" "$work/profile"
-          python3 tools/ci/apply-correctness-constant-p-ice-v1.py | tee "$work/ice-patch.txt"
-          python3 tools/ci/apply-correctness-constant-p-core-local-facts-v1.py | tee "$work/nested-v1-patch.txt"
-          python3 tools/ci/apply-correctness-constant-p-nested-core-v2.py | tee "$work/nested-v2-patch.txt"
-          git diff --check
-          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$work/toolchain" \
-            "$work/toolchain/bin/minic" "$work/toolchain/bin/minic-cc" >/dev/null
-          : >"$work/nouveau.trace"
-          MINIC="$work/toolchain/bin/minic" REAL_CC=/usr/bin/riscv64-linux-gnu-gcc \
-            MINIC_KBUILD_TRACE="$work/nouveau.trace" CORE_FAST_TRACE=0 \
-            make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
-            CC="$GITHUB_WORKSPACE/tests/external/linux/stage2_kbuild_cc.sh" \
-            -j1 V=1 drivers/gpu/drm/nouveau/nouveau_drm.o \
-              >"$work/nouveau.log" 2>&1 || { tail -n 85 "$work/nouveau.log"; exit 1; }
-          test -s "$out/drivers/gpu/drm/nouveau/nouveau_drm.o"
-          grep -Fq 'pass source=' "$work/nouveau.trace"
-          riscv64-linux-gnu-readelf -h "$out/drivers/gpu/drm/nouveau/nouveau_drm.o" \
-            | grep -q 'Machine:.*RISC-V'
-          echo 'DIST_IMAGE_NOUVEAU_ICE=PASS targeted_real_kbuild=1' | tee "$work/nouveau-result.txt"
+          echo 'HISTORICAL_PROFILE_RETIRED: pre-split Runtime overlay cannot build current MiniC; replay at 84cb59023874c36793835ff60beb1f5fb468bb23 using matching historical source; no current-source PASS.' >&2
+          exit 78
+
       - name: Preserve reproducible full Image plan and exact config
         if: always()
         uses: actions/upload-artifact@v4

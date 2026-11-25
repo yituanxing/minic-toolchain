@@ -105,9 +105,10 @@ PROFILE = ROOT / "tools/ci/linux-runtime-build-minic-profile-v1.sh"
 profile_text = PROFILE.read_text(encoding="utf-8")
 # Archived metadata labels deliberately carry an inline historical-only comment.
 # They remain in patch.log and minic-profile.txt but are not required files.
-patch_names = re.findall(r"^\s{2}(apply-[A-Za-z0-9_.-]+\.py)$", profile_text, flags=re.MULTILINE)
-if not patch_names or len(patch_names) != len(set(patch_names)):
-    raise SystemExit("runtime profile patch list is missing or contains duplicates")
+# All 44 overlay names now exist only as historical receipt labels.
+patch_labels = re.findall(r"^\s{2}(apply-[A-Za-z0-9_.-]+\.py) # historical-only$", profile_text, flags=re.MULTILINE)
+if len(patch_labels) != 44 or len(set(patch_labels)) != 44 or re.search(r"^\s{2}apply-[A-Za-z0-9_.-]+\.py$", profile_text, flags=re.MULTILINE):
+    raise SystemExit("runtime profile requires exactly 44 historical labels and no executable overlays")
 
 files: set[Path] = set()
 for directory in (ROOT / "src", ROOT / "include"):
@@ -126,12 +127,6 @@ for relative in (
     path = ROOT / relative
     if not path.is_file():
         raise SystemExit(f"required profile input is missing: {relative}")
-    files.add(path)
-
-for name in patch_names:
-    path = ROOT / "tools/ci" / name
-    if not path.is_file():
-        raise SystemExit(f"runtime profile patch is missing: {name}")
     files.add(path)
 
 digest = hashlib.sha256()

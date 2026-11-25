@@ -82,7 +82,7 @@ patches=(
   # default-text rewrite is also historical; current source is built directly.
   # Keep the original label for comparing historical Runtime receipts.
   apply-riscv64-default-text-section-v0.py # historical-only
-  apply-inline-asm-symbolic-specialization-v0.py
+  apply-inline-asm-symbolic-specialization-v0.py # historical-only
   apply-riscv64-core-value-slot-pack-v0.py # historical-only
   apply-riscv64-core-value-slot-reuse-v0.py # historical-only
   apply-riscv64-record-call-result-snapshot-reuse-v0.py # historical-only
@@ -112,13 +112,8 @@ done
 # and will be judged by 2064/2064 Kbuild + full Linux P0/shell/P1, not by
 # synthetically expanding a microtest corpus.
 if [[ "${MINIC_LINUX_FULL_CROSSBLOCK:-0}" == 1 ]]; then
-  python3 tools/ci/apply-riscv64-p1-defined-before-use-crossblock-v1.py >>"$ev/patch.log"
-  patches+=(apply-riscv64-p1-defined-before-use-crossblock-v1.py)
-  [[ "${MINIC_OPT_PURE_DISCARDED_ADDRESS_EQ:-0}" == 1 ]] || {
-    echo "MINIC_LINUX_FULL_CROSSBLOCK=FAIL requires_discarded_local_eq=1" >&2
-    exit 8
-  }
-  echo "MINIC_LINUX_FULL_CROSSBLOCK=ENABLED all_linux_C=true crossblock=experimental discarded_pure_comparison=1"
+  echo 'HISTORICAL_PROFILE_RETIRED: pre-split Runtime overlay cannot build current MiniC; replay at 84cb59023874c36793835ff60beb1f5fb468bb23 using matching historical source; no current-source PASS.' >&2
+  exit 78
 fi
 git diff --check
 make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$build_dir" \
@@ -357,10 +352,3 @@ end=$(date +%s%N)
 echo "TIMING toolchain_ms=$(((end-start)/1000000))" | tee "$ev/toolchain-timing.txt"
 printf '%s\n' "${patches[@]}" >"$ev/minic-profile.txt"
 sha256sum "$build_dir/bin/minic" "$build_dir/bin/minic-cc" >"$ev/minic.sha256"
-if [[ "${MINIC_LINUX_FULL_CROSSBLOCK:-0}" == 1 ]]; then
-  # This is only a producer attestation. Actual correctness requires the
-  # complete 2064/2064 Linux C pool plus real P0/P1 QEMU at the receiver.
-  grep -Fqx 'apply-riscv64-p1-defined-before-use-crossblock-v1.py' "$ev/minic-profile.txt"
-  test -s "$ev/minic.sha256"
-  echo "LINUX_FULL_CROSSBLOCK=COMPILER_READY mode=all_linux_C opt_in_only=true compiler_sha=$(sha256sum "$build_dir/bin/minic" | cut -d' ' -f1)"
-fi

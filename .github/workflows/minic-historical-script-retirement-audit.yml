@@ -68,9 +68,24 @@ jobs:
               "tools/ci/linux-perf-specialization-trace-optin-v1.sh",
               "tools/ci/linux-perf-ast-growth-ab-v1.sh",
               "tools/ci/linux-perf-build-minic-profile-v1.sh",
+              "tools/ci/apply-correctness-constant-p-core-local-facts-v1.py",
+              "tools/ci/apply-correctness-constant-p-nested-core-v2.py",
+              "tools/ci/apply-inline-asm-symbolic-specialization-v0.py",
+              "tools/ci/apply-inline-specialization-local-boolean-domain-index-v0.py",
+              "tools/ci/apply-inline-specialization-local-boolean-domain-scoped-v1.py",
+              "tools/ci/apply-p1-pure-discarded-local-address-equality-v1.py",
+              "tools/ci/apply-riscv64-p1-defined-before-use-crossblock-v1.py",
+              "tools/ci/apply-riscv64-p1-frame-diagnostic-v1.py",
+              "tools/ci/apply-riscv64-p1-nonreuse-reasons-v1.py",
+              "tools/ci/linux-runtime-earlycon-profile-probe-v1.sh",
           }
           route_blobs = {
-              ".github/workflows/linux-runtime-gcc-baseline.yml": "d03dfa13d67f176225b4258eb103696a92902a86",
+              ".github/workflows/linux-runtime-gcc-baseline.yml": "59ca97616c8116580b0955423f066b9bfed184de",
+              ".github/workflows/linux-distributed-full-image-signedness-v2.yml": "ef393de801234d51224196208869495db5fb36e7",
+              "tools/ci/linux-distributed-full-image-v1.sh": "d404786aa0ad1087aa3fa3c0ced10d57c7f7acdc",
+              "tools/ci/linux-runtime-build-minic-profile-v1.sh": "a846e1d738a494b0d75959f84567975755d21e3b",
+              "tools/ci/linux-runtime-profile-cache-id-v1.py": "c6a2b6d323d4e904d80033893514baa64cdaad4d",
+              ".github/workflows/toolchain-focused-regressions-v1.yml": "a01d8235136d53ede8dea79c7d74802edadd75c0",
               ".github/workflows/linux-runtime-optin-perf-suite-v1.yml": "35627119968f0ef5333fba53f25b108004c8098c",
               "tools/ci/linux-perf-integrated-full-profile-v1.sh": "7d4bad9f993e5c7a476e4837abcb29e74ef28c61",
           }
@@ -337,17 +352,17 @@ jobs:
           metadata -= retired_route_files
           deleted = changed_paths(base, "HEAD", "--diff-filter=D")
           changed = changed_paths(base, "HEAD")
-          if len(expected) != 957 or deleted != expected or changed != expected | metadata:
+          if len(expected) != 967 or deleted != expected or changed != expected | metadata:
               raise SystemExit("RETIREMENT_SCOPE=FAIL: unexpected tree changes")
           # Preserve the full closure in a historical checkout, not a successful
           # no-op overlay on a different source architecture.
           replay = "eb583f9dd9bf9cb2ebf530a8579930311b8539d9"
           assert retired_overlay <= set(git("ls-tree", "-r", "--name-only", replay).decode().splitlines())
-          for command in (["python3", "tools/ci/apply-inline-asm-symbolic-specialization-v0.py"],
-                          ["bash", "tools/ci/linux-runtime-earlycon-profile-probe-v1.sh"]):
-              result = subprocess.run(command, capture_output=True, text=True)
-              assert result.returncode == 78 and replay in result.stderr and "HISTORICAL_PROFILE_RETIRED" in result.stderr
-          print("HISTORICAL_OVERLAY_RETIREMENT=PASS historical_files=31 fail_closed=2")
+          for entry in ("tools/ci/apply-inline-asm-symbolic-specialization-v0.py",
+                        "tools/ci/linux-runtime-earlycon-profile-probe-v1.sh"):
+              assert entry in retired_route_files
+              assert replay in git("show", route_snapshot + ":" + entry).decode()
+          print("HISTORICAL_OVERLAY_RETIREMENT=PASS historical_files=31 git_only_entries=2")
           runtime_path = "tools/ci/linux-runtime-build-minic-profile-v1.sh"
           runtime_text = pathlib.Path(runtime_path).read_text()
           old_runtime_text = git("show", accepted + ":" + runtime_path).decode()
@@ -358,7 +373,7 @@ jobs:
           assert len(patch_labels(runtime_text)) == 44
           assert patch_labels(runtime_text) == patch_labels(old_runtime_text)
           historical_labels = {"  " + pathlib.PurePosixPath(p).name + " # historical-only"
-                               for p in retired_runtime | retired_stack | retired_rv64_labels
+                               for p in retired_runtime | retired_stack | retired_rv64_labels | retired_route_files
                                if pathlib.PurePosixPath(p).name in patch_labels(runtime_text)}
           assert set(line for line in runtime_text.splitlines() if line.endswith(" # historical-only")) == historical_labels
           assert 'python3 "tools/ci/$p"' not in runtime_text and 'native_profile=' not in runtime_text
@@ -479,7 +494,7 @@ jobs:
                       removed.discard("tools/ci/apply-perf-core-object-interval-onepass-v1.py")
                   # Exact inert metadata labels are not executable callers.
                   if path == runtime_path and line in historical_labels:
-                      removed -= retired_runtime | retired_stack | retired_rv64_labels
+                      removed -= retired_runtime | retired_stack | retired_rv64_labels | retired_route_files
                   if removed or broad.search(line):
                       record = f"{path}:{num}: " + (", ".join(sorted(removed)) if removed else "possible dynamic path")
                       (archived if historical else docs if document else active).append(record)

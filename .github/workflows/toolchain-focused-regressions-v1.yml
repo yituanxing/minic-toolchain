@@ -590,8 +590,8 @@ jobs:
           BASELINE_MINIC: ${{ github.workspace }}/build/toolchain-focused-t1-v2/bin/minic
           PROBE_DIR: ${{ github.workspace }}/build/rv64-focused-v1/earlycon-profile-diff
         run: |
-          set -Eeuo pipefail
-          bash tools/ci/linux-runtime-earlycon-profile-probe-v1.sh
+          echo 'HISTORICAL_PROFILE_RETIRED: pre-split Runtime overlay cannot build current MiniC; replay at 84cb59023874c36793835ff60beb1f5fb468bb23 using matching historical source; no current-source PASS.' >&2
+          exit 78
 
       - name: Validate MiniAR archive contracts
         id: ar_archive

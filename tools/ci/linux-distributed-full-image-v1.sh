@@ -20,6 +20,10 @@ total=$(wc -l <"$plan")
 
 case "$mode" in
   prepare)
+    if [[ "${MINIC_DISTRIBUTED_FIX_NESTED_CONSTANT_P:-0}" == 1 ]]; then
+      echo 'HISTORICAL_PROFILE_RETIRED: pre-split Runtime overlay cannot build current MiniC; replay at 84cb59023874c36793835ff60beb1f5fb468bb23 using matching historical source; no current-source PASS.' >&2
+      exit 78
+    fi
     archive="$work/linux-6.6.143.tar.xz"
     curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors \
       https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.6.143.tar.xz -o "$archive"
@@ -39,24 +43,11 @@ case "$mode" in
     # Isolate this tested single correctness patch to the *experiment*,
     # never silently change the canonical Linux Image profile.
     python3 "$root/tools/ci/apply-correctness-constant-p-ice-v1.py" >"$work/profile/constant-p-ice.log"
-    if [[ "${MINIC_DISTRIBUTED_FIX_NESTED_CONSTANT_P:-0}" == 1 ]]; then
-      # Opt-in V2 full Image profile: unchanged production Runtime stays pinned.
-      python3 "$root/tools/ci/apply-correctness-constant-p-core-local-facts-v1.py" >"$work/profile/constant-p-core-local.log"
-      python3 "$root/tools/ci/apply-correctness-constant-p-nested-core-v2.py" >"$work/profile/constant-p-nested.log"
-    fi
     git diff --check
     make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$work/toolchain" \
       "$work/toolchain/bin/minic" "$work/toolchain/bin/minic-cc" >/dev/null
     printf '%s\n' 'apply-correctness-constant-p-ice-v1.py' >>"$work/profile/minic-profile.txt"
-    if [[ "${MINIC_DISTRIBUTED_FIX_NESTED_CONSTANT_P:-0}" == 1 ]]; then
-      printf '%s\n' 'apply-correctness-constant-p-core-local-facts-v1.py' 'apply-correctness-constant-p-nested-core-v2.py' >>"$work/profile/minic-profile.txt"
-      # Include the *compiler* and driver: old experiments hashed only minic,
-      # which stays unchanged even when core_lower.c and minic-cc differ.
-      ( cd "$work/toolchain"; sha256sum bin/minic bin/minic-cc ) | sha256sum | awk '{print $1}' >"$work/compiler.sha256"
-      sha256sum "$work/toolchain/bin/minic-cc" >"$work/profile/minic-cc.sha256"
-    else
-      sha256sum "$compiler" | awk '{print $1}' >"$work/compiler.sha256"
-    fi
+    sha256sum "$compiler" | awk '{print $1}' >"$work/compiler.sha256"
     echo "DIST_IMAGE_PREPARE=PASS objects=$total config=$(cat "$work/config.sha256") compiler=$(cat "$work/compiler.sha256")"
     ;;
   produce)
