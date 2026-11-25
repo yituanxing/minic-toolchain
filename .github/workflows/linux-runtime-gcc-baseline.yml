@@ -169,6 +169,8 @@ jobs:
       - name: Authenticate exact-head opt-in for full RV64 Linux runtime
         id: decide
         shell: bash
+        env:
+          PR_HEAD_REF: ${{ github.head_ref }}
         run: |
           set -Eeuo pipefail
           active=false
@@ -195,7 +197,7 @@ jobs:
           # If GitHub also delivers a synchronize/PR event for the same SHA,
           # leave its duplicate seven-runner campaign inactive.
           if [[ "${{ github.event_name }}" == pull_request && \
-                "${{ github.head_ref }}" == refactor/minic-target-language-boundary ]]; then
+                "$PR_HEAD_REF" == refactor/minic-target-language-boundary ]]; then
             active=false
           fi
           # An independent, last-commit consent marker only for the exact-head
