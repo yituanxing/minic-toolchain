@@ -1545,53 +1545,22 @@ jobs:
 
   full-source-census:
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
-      - name: Build the actual standalone compiler for symbol and reference audit
-        run: make -j4 MODE=debug BUILD_DIR=build/source-census CFLAGS=-Werror build/source-census/bin/minic-cc
-      - name: Whole-source function and duplicate implementation census
+      - name: Whole-tree normalized and cross-target function clone census
         run: |
           python3 - <<'PY'
-          import collections, hashlib, json, pathlib, re, subprocess
-          root=pathlib.Path(".")
+          import collections, difflib, hashlib, json, pathlib, re, subprocess
           files=subprocess.check_output(["git","ls-files","-z"]).decode().strip("\0").split("\0")
           sources=[p for p in files if p.startswith(("src/","include/","tools/minic/","tools/minic-cc/")) and p.endswith((".c",".h",".def"))]
-          objects=sorted(pathlib.Path("build/source-census").rglob("*.o"))
-          symbols=collections.defaultdict(list)
-          for obj in objects:
-              result=subprocess.run(["nm","-P","--defined-only",str(obj)],capture_output=True,text=True,check=True)
-              for line in result.stdout.splitlines():
-                  fields=line.split()
-                  if len(fields)>=2 and fields[1] in ("T","t","W","w") and re.fullmatch(r"[A-Za-z_]\w*",fields[0]):
-                      symbols[fields[0]].append((str(obj),fields[1]))
-          names=set(symbols)
-          refs=collections.defaultdict(list)
-          token=re.compile(r"\b[A-Za-z_]\w*\b")
-          for p in files:
-              if p.startswith(("third_party/","tests/vendor/")):continue
-              data=pathlib.Path(p).read_bytes()
-              if b"\0" in data:continue
-              for n,line in enumerate(data.decode("utf-8",errors="replace").splitlines(),1):
-                  for name,count in collections.Counter(token.findall(line)).items():
-                      if name in names:refs[name].append((p,n,count,line.strip()))
-          # All actual object-defined functions, with all retained tree occurrences.
-          print("SOURCE_CENSUS "+json.dumps({"tracked":len(files),"sources":len(sources),"lines":sum(len(pathlib.Path(p).read_text().splitlines()) for p in sources),"objects":len(objects),"symbols":len(symbols)},sort_keys=True))
-          for name,defs in sorted(symbols.items()):
-              if name=="main":continue
-              hits=refs[name]
-              actual=[r for r in hits if not r[0].endswith((".md",".rst",".txt",".json",".tsv"))]
-              if sum(r[2] for r in actual)<=3 and len(defs)==1:
-                  print("SOURCE_DEAD_CANDIDATE "+json.dumps({"name":name,"objects":defs,"refs":actual,"docs":[r for r in hits if r not in actual]},ensure_ascii=True,separators=(",",":")))
-          # Detect repeated full function bodies by brace-balanced C lexical tokens.
-          # Comments and string literals are protected. Names remain unchanged:
-          # matching bodies are review inputs rather than automatic deletions.
           lex=re.compile(r'//[^\n]*|/\*[\s\S]*?\*/|"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'|[A-Za-z_]\w*|0[xX][0-9A-Fa-f]+|\d+|[^\s]')
-          bodies=collections.defaultdict(list)
+          keywords=set("if else for while do switch case default break continue goto return sizeof struct union enum typedef const volatile static inline unsigned signed int long short char float double void bool true false NULL".split())
+          functions=[]
           for p in sources:
-              if not p.endswith(".c"):continue
+              if not p.endswith((".c",".h")):continue
               s=pathlib.Path(p).read_text()
               ts=[m for m in lex.finditer(s) if not m.group().startswith(("//","/*"))]
               vals=[m.group() for m in ts]
@@ -1612,15 +1581,71 @@ jobs:
                       depth-=1
                       if depth==0 and start is not None:
                           a,j,name=start
-                          if i-a>=20:
-                              norm=" ".join(vals[a:i+1])
-                              bodies[hashlib.sha256(norm.encode()).hexdigest()].append({"path":p,"name":name,"line":s.count("\n",0,ts[j].start())+1,"body_lines":s.count("\n",ts[a].start(),ts[i].end())+1,"tokens":i-a})
+                          if i-a>=35:
+                              tokens=vals[a:i+1]
+                              line=s.count("\n",0,ts[j].start())+1
+                              end=s.count("\n",0,ts[i].end())+1
+                              functions.append({"path":p,"name":name,"line":line,"end":end,"tokens":tokens})
                           start=None
-          for group in sorted(bodies.values(),key=lambda g:-len(g)):
-              if len(group)>1:print("SOURCE_EXACT_BODY "+json.dumps(group,separators=(",",":")))
-          print("SOURCE_DUPLICATE_COUNTS "+json.dumps({"groups":sum(len(g)>1 for g in bodies.values()),"functions":sum(len(g) for g in bodies.values()),"candidate_body_lines":sum(sum(x["body_lines"] for x in g)-g[0]["body_lines"] for g in bodies.values() if len(g)>1)}))
-          # Source coverage and directory ownership, not just candidate names.
-          for prefix in ("src/frontend/","src/core/","src/compiler/","src/target/","include/","tools/minic/","tools/minic-cc/"):
-              owners=[p for p in sources if p.startswith(prefix)]
-              print("SOURCE_OWNER "+json.dumps({"path":prefix,"files":len(owners),"lines":sum(len(pathlib.Path(p).read_text().splitlines()) for p in owners)}))
+          def shape(tokens,mode):
+              identities={}
+              out=[]
+              for i,v in enumerate(tokens):
+                  if not re.fullmatch(r"[A-Za-z_]\w*",v) or v in keywords or v.isupper():
+                      out.append(v);continue
+                  if mode=="safe" and (i+1<len(tokens) and tokens[i+1]=="(" or i and tokens[i-1] in (".",">")):
+                      out.append(v);continue
+                  if mode=="arch" and (i+1<len(tokens) and tokens[i+1]=="(" or i and tokens[i-1] in (".",">")):
+                      out.append(re.sub(r'(?:minic_)?(?:rv32|rv64|riscv32|riscv64|riscv|aarch64|aarch|loongarch64|loong|x86_64|x86)_', '<target>_',v));continue
+                  if v not in identities:identities[v]=len(identities)
+                  out.append("ID"+str(identities[v]))
+              return out
+          groups=collections.defaultdict(list)
+          for f in functions:
+              for mode in ("safe","arch","shape"):
+                  key=hashlib.sha256(" ".join(shape(f["tokens"],mode)).encode()).hexdigest()
+                  groups[(mode,key)].append(f)
+          seen=set()
+          def desc(f):
+              return {k:v for k,v in f.items() if k!="tokens"}
+          def saved(g):
+              return sum(f["end"]-f["line"]+1 for f in g)-max(f["end"]-f["line"]+1 for f in g)
+          for (mode,key),g in sorted(groups.items(),key=lambda kv:-saved(kv[1])):
+              if len(g)<2 or saved(g)<8:continue
+              sig=tuple(sorted((f["path"],f["line"]) for f in g))
+              if sig in seen:continue
+              seen.add(sig)
+              print("SOURCE_CLONE "+json.dumps({"mode":mode,"saved_upper_bound":saved(g),"functions":[desc(f) for f in g]},separators=(",",":")))
+          # Cross-target similarly named long functions: compare token-shape sequences
+          # without hiding literals, operators, control flow or target-only callbacks.
+          by_name=collections.defaultdict(list)
+          for f in functions:
+              if not f["path"].startswith("src/target/") or len(f["tokens"])<70:continue
+              name=re.sub(r'^(?:minic_)?(?:rv32|rv64|riscv32|riscv64|riscv|aarch64|aarch|loongarch64|loong|x86_64|x86)_','',f["name"])
+              by_name[name].append(f)
+          near=[]
+          for name,g in by_name.items():
+              if not 2<=len(g)<=12:continue
+              for i,f in enumerate(g):
+                  for h in g[i+1:]:
+                      if f["path"]==h["path"]:continue
+                      if not .7<=len(f["tokens"])/len(h["tokens"])<=1.43:continue
+                      a,b=shape(f["tokens"],"arch"),shape(h["tokens"],"arch")
+                      if len(a)>2000 or len(b)>2000:continue
+                      ratio=difflib.SequenceMatcher(None,a,b,autojunk=False).ratio()
+                      if ratio>=.78:
+                          near.append((ratio,min(f["end"]-f["line"],h["end"]-h["line"]),f,h))
+          for ratio,lines,f,h in sorted(near,key=lambda x:-x[0]*x[1])[:80]:
+              print("SOURCE_NEAR "+json.dumps({"ratio":round(ratio,3),"lines":lines,"functions":[desc(f),desc(h)]},separators=(",",":")))
+          print("SOURCE_CLONE_COUNTS "+json.dumps({"files":len(sources),"function_bodies":len(functions),"normalized_groups":len(seen),"near_pairs":len(near)}))
+          # Full reference closure for duplicate machine-option entry points and small
+          # files that may be folded without modifying unrelated build/test consumers.
+          needles=["src/target/machine_options/aarch64.c","src/target/riscv32/machine_register.c","src/target/riscv64/machine_register.c","src/target/aarch64/machine_gnu_asm.c","src/target/loongarch64/machine_gnu_asm.c","minic_machine_options_aarch64","minic_machine_options_riscv32","minic_machine_options_riscv64","minic_riscv32_machine_fixed_register_read","minic_riscv64_machine_fixed_register_read","machine_options/target_policies.h"]
+          rx=re.compile("|".join(re.escape(x) for x in needles))
+          for p in files:
+              if p==".github/workflows/minic-historical-script-retirement-audit.yml":continue
+              data=pathlib.Path(p).read_bytes()
+              if b"\0" in data:continue
+              for n,l in enumerate(data.decode("utf-8",errors="replace").splitlines(),1):
+                  if rx.search(l):print("SOURCE_PATH_REF "+json.dumps([p,n,l.strip()],ensure_ascii=True))
           PY

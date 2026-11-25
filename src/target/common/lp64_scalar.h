@@ -1,6 +1,7 @@
 #ifndef MINIC_TARGET_COMMON_LP64_SCALAR_H
 #define MINIC_TARGET_COMMON_LP64_SCALAR_H
 #include "target/common/direct_lp64_abi.h"
+#include "core/core_ir.h"
 #include <stdbool.h>
 #include <stddef.h>
 /* Fully resolved execution-type scalar queries. All LP64 target machine
