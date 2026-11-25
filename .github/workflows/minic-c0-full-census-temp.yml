@@ -1,0 +1,64 @@
+name: MiniC full C0 driver census temporary
+on:
+  push:
+    branches:
+      - cleanup/minic-native-matrix-batch-20261125
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  inventory:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - name: Full source and dynamic consumer cross index
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import subprocess,pathlib,json,re,collections,fnmatch
+          root=pathlib.Path.cwd()
+          paths=subprocess.check_output(['git','ls-files','-z']).decode().split('\x00')
+          files=[p for p in paths if p and (root/p).is_file()]
+          scripts=[p for p in files if p.startswith('tests/compiler/c0/') and p.endswith('.sh')]
+          texts={}
+          for p in files:
+              if p.endswith(('.sh','.yml','.yaml','.py','.json','.c','.h','.mk','.md','.txt','.toml','.ini')) or p in ('Makefile','GNUmakefile'):
+                  try: texts[p]=(root/p).read_text(errors='replace')
+                  except: pass
+          mat=json.loads(texts['tests/compiler/c0/native-matrix.json'])
+          sources=collections.defaultdict(set)
+          for name,config in mat.items():
+              for kind in ('positive','negative'):
+                  for row in config.get(kind,[]):
+                      src=row.get('source','')
+                      if not src: continue
+                      p=src if src.startswith('tests/') else 'tests/compiler/'+('audit/' if src.startswith('audit/') else 'c0/')+src+('' if src.endswith(('.c','.i')) else '.c')
+                      sources[p].add(name)
+          groups=collections.Counter()
+          indexed=[]
+          for p in scripts:
+              s=texts.get(p,'');name=p.split('/')[-1];stem=name[:-3];cands=[]
+              # Both full literal path and standalone shell basename appear in maintained owners.
+              for other,txt in texts.items():
+                  if other==p: continue
+                  if name in txt or p in txt: cands.append(other)
+              real=[x for x in cands if not x.endswith('.md')]
+              fixture=sorted(set(x for x in re.findall(r'(?:tests/(?:compiler|programs)/(?:c0|audit)/)?[\w-]+\.c',s) if '.c' in x))
+              norm=[x if x.startswith('tests/') else ('tests/compiler/audit/'+x[6:] if x.startswith('audit/') else 'tests/compiler/c0/'+x) for x in fixture]
+              matrix_overlaps=sorted(set(m for f in norm for m in sources.get(f,())))
+              native='native-matrix' in s
+              iscross=bool(re.search('qemu|riscv64-linux-gnu-gcc|aarch64-linux-gnu-gcc|loongarch64-linux-gnu-gcc',s))
+              hard=bool(re.search('awk |objdump|readelf|nm |minias|MINIAS| -march=|fPIC|--sysroot',s))
+              generated=bool(re.search('cat [^\n]*<<',s))
+              neg=bool(re.search(r'if\s+.*(?:\$minic|\$MINIC|\$mini)',s))
+              category=('REFERENCED' if real else 'NO_EXPLICIT_REF')+('/MATRIX_OVERLAP' if matrix_overlaps else '/UNIQUE')+('/CROSS' if iscross else '/HOST')+('/CUSTOM' if hard else '/SIMPLE')+('/INLINE' if generated else '/FILE')
+              groups[category]+=1
+              indexed.append(dict(name=name,path=p,bytes=len(s),lines=s.count('\n')+1,refs=real,docs=len(cands)-len(real),overlap=matrix_overlaps,fixtures=norm,cross=iscross,hard=hard,generated=generated,negative=neg,category=category))
+          print('AUDIT_SUMMARY',json.dumps(dict(total=len(indexed),tracked=len(files),source_files=len(sources),exactly_orphan=sum(not x['refs'] for x in indexed),orphan_with_matrix=sum(not x['refs'] and x['overlap'] for x in indexed),orphan_no_matrix=sum(not x['refs'] and not x['overlap'] for x in indexed),matrix_cases=len(mat)),ensure_ascii=False))
+          print('AUDIT_GROUPS',json.dumps(groups.most_common(),ensure_ascii=False))
+          for x in sorted((x for x in indexed if not x['refs']),key=lambda x:(len(x['overlap'])==0,x['cross'] or x['hard'] or x['generated'],x['bytes'])):
+              print('ORPHAN',json.dumps({k:x[k] for k in ('name','bytes','docs','overlap','fixtures','cross','hard','generated','negative')},ensure_ascii=False))
+          for x in sorted((x for x in indexed if x['refs'] and x['overlap']),key=lambda x:(x['cross'] or x['hard'],x['bytes'])):
+              print('OVERLAP_REFERENCED',json.dumps({k:x[k] for k in ('name','bytes','refs','overlap','fixtures','cross','hard')},ensure_ascii=False))
+          PY
