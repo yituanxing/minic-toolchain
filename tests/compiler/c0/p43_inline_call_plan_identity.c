@@ -92,12 +92,43 @@ static int test_call_plan(void) {
     return 0;
 }
 
+/* An unrelated longer ASM symbol must not retain an inline function.
+ * The source symbol probe and the sealed Core output share this rule. */
+static int test_opaque_asm_symbol_identity(void) {
+    MinicC0Program program = {0};
+    MinicFunction function = {0};
+    MinicFileAsm file = {0};
+    MinicInlineAsm source = {0};
+    function.name = "foo";
+    function.name_length = 3U;
+    file.text = "call foobar\n.long _foo\n";
+    file.length = sizeof("call foobar\n.long _foo\n") - 1U;
+    source.template_text = "call foo.bar";
+    source.template_length = sizeof("call foo.bar") - 1U;
+    program.file_asms = &file;
+    program.file_asm_count = 1U;
+    program.inline_asms = &source;
+    program.inline_asm_count = 1U;
+    CHECK(!minic_inline_source_has_opaque_asm_reference(&program, &function), 30);
+    file.text = "call foo\n";
+    file.length = sizeof("call foo\n") - 1U;
+    CHECK(minic_inline_source_has_opaque_asm_reference(&program, &function), 31);
+    file.text = "call foobar\n";
+    file.length = sizeof("call foobar\n") - 1U;
+    source.template_text = "mov foo, %rax";
+    source.template_length = sizeof("mov foo, %rax") - 1U;
+    CHECK(minic_inline_source_has_opaque_asm_reference(&program, &function), 32);
+    CHECK(minic_inline_source_has_opaque_asm_reference(NULL, &function), 33);
+    return 0;
+}
+
 int main(void) {
     int result = test_call_plan();
+    if (result == 0) result = test_opaque_asm_symbol_identity();
     if (result != 0) {
         fprintf(stderr, "P43_INLINE_CALL_PLAN_IDENTITY=FAIL test=%d\n", result);
         return result;
     }
-    puts("P43_INLINE_CALL_PLAN_IDENTITY=PASS canonical_source=PASS clone_appends=PASS");
+    puts("P43_INLINE_CALL_PLAN_IDENTITY=PASS canonical_source=PASS clone_appends=PASS asm_token_identity=PASS");
     return 0;
 }
