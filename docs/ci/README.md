@@ -140,3 +140,13 @@ The four AArch64/LoongArch64 original GNU AS replay workflows and their three pr
 - [linux-three-isa-p2-kconfig-v1.sh](https://github.com/yituanxing/minic-toolchain/blob/0c642380f85c25aeadb1268f770ba95852f3b100/tools/ci/linux-three-isa-p2-kconfig-v1.sh)
 - [linux-three-isa-p2-minic-seven-v1.py](https://github.com/yituanxing/minic-toolchain/blob/0c642380f85c25aeadb1268f770ba95852f3b100/tools/ci/linux-three-isa-p2-minic-seven-v1.py)
 - [linux-three-isa-p2-gnu-boot-v1.sh](https://github.com/yituanxing/minic-toolchain/blob/0c642380f85c25aeadb1268f770ba95852f3b100/tools/ci/linux-three-isa-p2-gnu-boot-v1.sh)
+
+**Manual regression consolidation (2026-11-25):** 31 standalone hand-run probes now use four shared initialization drivers. No test case, source fixture, or positive/negative assertion was discarded. Run each driver with `--list`, then provide the original probe stem as the first argument and its original arguments after that. The exact pre-consolidation scripts are preserved in [the immutable checkout](https://github.com/yituanxing/minic-toolchain/tree/0f8fc0ee9250cd0474d65851483423552e2d38ae/tests/compiler/c0). Structural parity and two native differential probes are gated separately; this is not a full five-ISA certification.
+
+- `tests/compiler/c0/run-manual-aarch64-system-probes.sh`: `probe-aarch64-kvm-encoded-sysreg`, `probe-aarch64-linux-kvm-barrier`, `probe-aarch64-linux-live-sp`, `probe-aarch64-linux-topology-amu`, `probe-aarch64-linux-vhe-sysreg-alt`.
+
+- `tests/compiler/c0/run-manual-loongarch64-probes.sh`: `probe-loongarch64-linux-cpucfg`, `probe-loongarch64-linux-final-three`, `probe-loongarch64-linux-mixed-mul-overflow`, `probe-loongarch64-pie-got-local`.
+
+- `tests/compiler/c0/run-manual-x86-native-probes.sh`: `probe-x86-linux-boot-string-native`, `probe-x86-linux-delay-native`, `probe-x86-linux-gs-atomic-native`, `probe-x86-linux-lock-cc-native`, `probe-x86-linux-lowlevel-descriptor-machine`, `probe-x86-linux-lowlevel-isa-native`, `probe-x86-linux-rep-stos-gcc-native`, `probe-x86-linux-segment-extable-machine`, `probe-x86-linux-vdso-cpunode-alt`, `probe-x86-linux-vdso-syscall-native`.
+
+- `tests/compiler/c0/run-manual-x86-asm-probes.sh`: `probe-x86-linux-flags-clobber-source`, `probe-x86-linux-gen-endbr`, `probe-x86-linux-kaslr-mul`, `probe-x86-linux-kexec-segments`, `probe-x86-linux-mmio-explicit-al`, `probe-x86-linux-muldiv-u64`, `probe-x86-linux-preempt-call`, `probe-x86-linux-preempt-gs-decrement`, `probe-x86-linux-segment-u32-read`, `probe-x86-linux-static-key-goto`, `probe-x86-linux-via-xstore`, `probe-x86-linux-zstd-p2align`.

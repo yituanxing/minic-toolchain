@@ -10,7 +10,7 @@
     672,
     673
   ],
-  "audit_in_progress": "Core-to-physical-MachineIR migration: five targets now have production typed selection entrypoints, but complete function admission, ABI parity and full GNU AS/LD/QEMU/Linux runtime acceptance remain separate, unproven gates. LoongArch64 production has 22 typed-output fixtures and one intentionally unsupported legacy case; additional source-ASM UACCESS and LL/SC families have focused proofs. RV32 wide-integer virtio compilation and RV64 GNU source-ASM provenance have focused passing probes; upstream zlib full-TU admission and RV64 checked-overflow selector coverage remain open. Retired Loong emit modules are removed from the active inventory. New source owners are inventory-only; stale fingerprints reopen review and do not imply full-source certification.",
+  "audit_in_progress": "Core-to-physical-MachineIR migration: five targets now have production typed selection entrypoints, but complete function admission, ABI parity and full GNU AS/LD/QEMU/Linux runtime acceptance remain separate, unproven gates. LoongArch64 production has 22 typed-output fixtures and one intentionally unsupported legacy case; additional source-ASM UACCESS and LL/SC families have focused proofs. RV32 wide-integer virtio compilation and RV64 GNU source-ASM provenance have focused passing probes; upstream zlib full-TU admission and RV64 checked-overflow selector coverage remain open. Retired Loong emit modules are removed from the active inventory. New source owners are inventory-only; stale fingerprints reopen review and do not imply full-source certification. 2026-11-25: inventory-only registration of the shared RISC-V register owner; retired owners removed, all existing stale fingerprints and their review depths remain unchanged.",
   "next_deep_review": [
     "src/target/aarch64/frame_emit.c",
     "src/target/x86_64/machine_core_select.c",
@@ -295,11 +295,6 @@
     },
     "src/target/loongarch64/machine_target_state.h": {
       "blob": "be02d06df5eeb3e00e2b4f404afe921cfc7b383f",
-      "review_depth": "inventory",
-      "ci_touched_in": []
-    },
-    "src/target/machine_options/aarch64.c": {
-      "blob": "bd1db122aaad26a665c41bab53bcee2c8d28cf77",
       "review_depth": "inventory",
       "ci_touched_in": []
     },
@@ -1057,12 +1052,6 @@
       "ci_touched_in": [],
       "note": "2026-10-29: shared RV32/RV64 Base-I typed scalar transport reviewed for unknown address alignment and split wide words; GNU-native and five-ISA compile probes included in batch21."
     },
-    "src/target/riscv32/machine_register.c": {
-      "blob": "2c28b312a3fb9f8d268db29409d367df31d782c5",
-      "review_depth": "targeted",
-      "ci_touched_in": [],
-      "note": "P33: reviewed ILP32 a0-a7 and sp/tp grammar, separate from RV64 aliases."
-    },
     "src/target/riscv32/rv32_abi_cursor.c": {
       "blob": "a3161ae5968242180040c586844a15e051a844d0",
       "review_depth": "inventory",
@@ -1130,12 +1119,6 @@
       "blob": "6ef59b7aed7848994b273eb7dead10824bd425e3",
       "review_depth": "inventory",
       "ci_touched_in": []
-    },
-    "src/target/riscv64/machine_register.c": {
-      "blob": "b9e3355b2eab35be4b6e2974b51957aa716bc6a5",
-      "review_depth": "targeted",
-      "ci_touched_in": [],
-      "note": "P33: reviewed shared GPR identity and ABI a0-a7 range; no runtime recertification implied."
     },
     "src/target/riscv64/abi.c": {
       "blob": "872940373f4e996585fc39d2a08e086764a37dd9",
@@ -1500,8 +1483,8 @@
       "ci_touched_in": [],
       "note": "P33: reviewed rsp read, SysV scratch-clobber and optional percent locals; no runtime recertification implied."
     },
-    "src/target/common/machine_production_preflight.h": {
-      "blob": "3ae44d1936e68015c2f550837a61e8d3252fa9b2",
+    "src/target/riscv/machine_register.c": {
+      "blob": "b8420dce64d479693caf84f2b9338f6219b5af03",
       "review_depth": "inventory",
       "ci_touched_in": []
     }

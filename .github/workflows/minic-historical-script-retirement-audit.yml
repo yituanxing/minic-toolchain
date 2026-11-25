@@ -617,7 +617,50 @@ jobs:
           assert later_archived_riscv_records <= set(git("ls-tree", "-r", "--name-only", "37e5187ab87116af59edcb65ebc6d0c1b82fd2c6").decode().splitlines())
           assert not (expected & later_archived_riscv_records)
           expected |= later_archived_riscv_records
-          if len(expected) != 1097 or deleted != expected or changed != expected | metadata:
+          later_consolidated_manual = {
+              "tests/compiler/c0/probe-aarch64-kvm-encoded-sysreg.sh",
+              "tests/compiler/c0/probe-aarch64-linux-kvm-barrier.sh",
+              "tests/compiler/c0/probe-aarch64-linux-live-sp.sh",
+              "tests/compiler/c0/probe-aarch64-linux-topology-amu.sh",
+              "tests/compiler/c0/probe-aarch64-linux-vhe-sysreg-alt.sh",
+              "tests/compiler/c0/probe-loongarch64-linux-cpucfg.sh",
+              "tests/compiler/c0/probe-loongarch64-linux-final-three.sh",
+              "tests/compiler/c0/probe-loongarch64-linux-mixed-mul-overflow.sh",
+              "tests/compiler/c0/probe-loongarch64-pie-got-local.sh",
+              "tests/compiler/c0/probe-x86-linux-boot-string-native.sh",
+              "tests/compiler/c0/probe-x86-linux-delay-native.sh",
+              "tests/compiler/c0/probe-x86-linux-gs-atomic-native.sh",
+              "tests/compiler/c0/probe-x86-linux-lock-cc-native.sh",
+              "tests/compiler/c0/probe-x86-linux-lowlevel-descriptor-machine.sh",
+              "tests/compiler/c0/probe-x86-linux-lowlevel-isa-native.sh",
+              "tests/compiler/c0/probe-x86-linux-rep-stos-gcc-native.sh",
+              "tests/compiler/c0/probe-x86-linux-segment-extable-machine.sh",
+              "tests/compiler/c0/probe-x86-linux-vdso-cpunode-alt.sh",
+              "tests/compiler/c0/probe-x86-linux-vdso-syscall-native.sh",
+              "tests/compiler/c0/probe-x86-linux-flags-clobber-source.sh",
+              "tests/compiler/c0/probe-x86-linux-gen-endbr.sh",
+              "tests/compiler/c0/probe-x86-linux-kaslr-mul.sh",
+              "tests/compiler/c0/probe-x86-linux-kexec-segments.sh",
+              "tests/compiler/c0/probe-x86-linux-mmio-explicit-al.sh",
+              "tests/compiler/c0/probe-x86-linux-muldiv-u64.sh",
+              "tests/compiler/c0/probe-x86-linux-preempt-call.sh",
+              "tests/compiler/c0/probe-x86-linux-preempt-gs-decrement.sh",
+              "tests/compiler/c0/probe-x86-linux-segment-u32-read.sh",
+              "tests/compiler/c0/probe-x86-linux-static-key-goto.sh",
+              "tests/compiler/c0/probe-x86-linux-via-xstore.sh",
+              "tests/compiler/c0/probe-x86-linux-zstd-p2align.sh",
+          }
+          assert later_consolidated_manual <= set(git("ls-tree", "-r", "--name-only", "0f8fc0ee9250cd0474d65851483423552e2d38ae").decode().splitlines())
+          assert not (expected & later_consolidated_manual)
+          expected |= later_consolidated_manual
+          metadata |= {
+              "tests/compiler/c0/run-manual-aarch64-system-probes.sh",
+              "tests/compiler/c0/run-manual-loongarch64-probes.sh",
+              "tests/compiler/c0/run-manual-x86-native-probes.sh",
+              "tests/compiler/c0/run-manual-x86-asm-probes.sh",
+              "docs/architecture/minic-backend-review-ledger.json",
+          }
+          if len(expected) != 1128 or deleted != expected or changed != expected | metadata:
               raise SystemExit("RETIREMENT_SCOPE=FAIL: unexpected tree changes")
           # Preserve the full closure in a historical checkout, not a successful
           # no-op overlay on a different source architecture.
@@ -1623,6 +1666,66 @@ jobs:
           echo "TARGET_PROBE_COMPARISON passed=$passed unchanged_baseline_fail=$baseline_failures"
           git diff --exit-code
 
+      - name: Validate the 31 consolidated manual probe contracts
+        run: |
+          python3 - <<'PY'
+          import json, pathlib, subprocess
+          groups = json.loads(r'''[["tests/compiler/c0/run-manual-aarch64-system-probes.sh",5,["tests/compiler/c0/probe-aarch64-kvm-encoded-sysreg.sh","tests/compiler/c0/probe-aarch64-linux-kvm-barrier.sh","tests/compiler/c0/probe-aarch64-linux-live-sp.sh","tests/compiler/c0/probe-aarch64-linux-topology-amu.sh","tests/compiler/c0/probe-aarch64-linux-vhe-sysreg-alt.sh"]],["tests/compiler/c0/run-manual-loongarch64-probes.sh",4,["tests/compiler/c0/probe-loongarch64-linux-cpucfg.sh","tests/compiler/c0/probe-loongarch64-linux-final-three.sh","tests/compiler/c0/probe-loongarch64-linux-mixed-mul-overflow.sh","tests/compiler/c0/probe-loongarch64-pie-got-local.sh"]],["tests/compiler/c0/run-manual-x86-native-probes.sh",5,["tests/compiler/c0/probe-x86-linux-boot-string-native.sh","tests/compiler/c0/probe-x86-linux-delay-native.sh","tests/compiler/c0/probe-x86-linux-gs-atomic-native.sh","tests/compiler/c0/probe-x86-linux-lock-cc-native.sh","tests/compiler/c0/probe-x86-linux-lowlevel-descriptor-machine.sh","tests/compiler/c0/probe-x86-linux-lowlevel-isa-native.sh","tests/compiler/c0/probe-x86-linux-rep-stos-gcc-native.sh","tests/compiler/c0/probe-x86-linux-segment-extable-machine.sh","tests/compiler/c0/probe-x86-linux-vdso-cpunode-alt.sh","tests/compiler/c0/probe-x86-linux-vdso-syscall-native.sh"]],["tests/compiler/c0/run-manual-x86-asm-probes.sh",4,["tests/compiler/c0/probe-x86-linux-flags-clobber-source.sh","tests/compiler/c0/probe-x86-linux-gen-endbr.sh","tests/compiler/c0/probe-x86-linux-kaslr-mul.sh","tests/compiler/c0/probe-x86-linux-kexec-segments.sh","tests/compiler/c0/probe-x86-linux-mmio-explicit-al.sh","tests/compiler/c0/probe-x86-linux-muldiv-u64.sh","tests/compiler/c0/probe-x86-linux-preempt-call.sh","tests/compiler/c0/probe-x86-linux-preempt-gs-decrement.sh","tests/compiler/c0/probe-x86-linux-segment-u32-read.sh","tests/compiler/c0/probe-x86-linux-static-key-goto.sh","tests/compiler/c0/probe-x86-linux-via-xstore.sh","tests/compiler/c0/probe-x86-linux-zstd-p2align.sh"]]]''')
+          baseline = "0f8fc0ee9250cd0474d65851483423552e2d38ae"
+          verified = 0
+          for path, n, old_paths in groups:
+              live = pathlib.Path(path).read_text()
+              interpreter = "sh" if live.startswith("#!/bin/sh\n") else "bash"
+              subprocess.run([interpreter, "-n", path], check=True)
+              expected_cases = [pathlib.Path(p).stem for p in old_paths]
+              got = subprocess.check_output([interpreter,path,"--list"], text=True).splitlines()
+              assert got == expected_cases, (path,got)
+              assert subprocess.run([interpreter,path,"not-a-real-probe"],capture_output=True).returncode == 64
+              for p in old_paths:
+                  assert not pathlib.Path(p).exists()
+                  old = subprocess.check_output(["git","show",baseline+":"+p]).decode()
+                  lines = old.splitlines(keepends=True)
+                  k = 1
+                  while k < len(lines) and (not lines[k].strip() or lines[k].startswith("#")):
+                      k += 1
+                  shared = "".join(lines[k:k+n])
+                  case = pathlib.Path(p).stem + ")\n" + "".join(lines[1:k]+lines[k+n:]) + ";;\n"
+                  assert shared+'case "$__minic_probe_case" in\n' in live, p
+                  assert case in live, p
+                  verified += 1
+          assert verified == 31
+          print("MANUAL_PROBE_STRUCTURAL_PARITY=PASS cases=31 shared_drivers=4 (not a target-runtime certification)")
+          PY
+
+      - name: Compare two original manual native probes on the same compiler
+        run: |
+          set -Eeuo pipefail
+          mini="$PWD/build/retirement-oracle/bin/minic-cc"
+          test -x "$mini"
+          work="$PWD/build/manual-probe-parity"
+          mkdir -p "$work"
+          for name in probe-x86-linux-boot-string-native probe-x86-linux-gen-endbr; do
+            old="$work/$name.sh"
+            git show 0f8fc0ee9250cd0474d65851483423552e2d38ae:"tests/compiler/c0/$name.sh" > "$old"
+            case "$name" in
+              probe-x86-linux-boot-string-native) driver=run-manual-x86-native-probes.sh ;;
+              *) driver=run-manual-x86-asm-probes.sh ;;
+            esac
+            old_rc=0
+            new_rc=0
+            bash "$old" "$mini" >"$work/$name.old.out" 2>"$work/$name.old.err" || old_rc=$?
+            bash "tests/compiler/c0/$driver" "$name" "$mini" >"$work/$name.new.out" 2>"$work/$name.new.err" || new_rc=$?
+            test "$old_rc" -eq "$new_rc"
+            cmp "$work/$name.old.out" "$work/$name.new.out"
+            if test "$old_rc" -eq 0; then
+              echo "MANUAL_NATIVE_PROBE=PASS case=$name"
+            else
+              echo "MANUAL_NATIVE_PROBE_BASELINE_FAILURE case=$name rc=$old_rc"
+              exit "$old_rc"
+            fi
+          done
+          git diff --exit-code
+
   full-source-census:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -1728,158 +1831,4 @@ jobs:
               if b"\0" in data:continue
               for n,l in enumerate(data.decode("utf-8",errors="replace").splitlines(),1):
                   if rx.search(l):print("SOURCE_PATH_REF "+json.dumps([p,n,l.strip()],ensure_ascii=True))
-          PY
-
-  peripheral-census:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 8
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.sha }}
-      - name: Cross-reference every test driver and historical document
-        run: |
-          python3 - <<'PY'
-          import collections, json, pathlib, re, subprocess
-          files = subprocess.check_output(["git", "ls-files", "-z"]).decode().strip("\0").split("\0")
-          audit = ".github/workflows/minic-historical-script-retirement-audit.yml"
-          candidates = [p for p in files if (p.startswith("tests/") and p.endswith((".sh", ".py", ".c", ".i", ".S", ".s"))) or (p.startswith("docs/") and p.endswith(".md")) or p.startswith("tools/ci/")]
-          names = collections.defaultdict(set)
-          for p in candidates:
-              n = pathlib.PurePosixPath(p).name
-              names[n].add(p)
-              if p.endswith((".c", ".sh", ".py", ".i")) and len(pathlib.PurePosixPath(p).stem) >= 8:
-                  names[pathlib.PurePosixPath(p).stem].add(p)
-              if p.endswith(".py"):
-                  names[pathlib.PurePosixPath(p).stem.replace("-", "_")].add(p)
-          # Token scan avoids a multi-thousand-alternative regexp over every byte.
-          matcher = re.compile(r"[A-Za-z0-9_.-]+")
-          incoming = collections.defaultdict(set)
-          for path in files:
-              if path == audit:
-                  continue
-              data = pathlib.Path(path).read_bytes()
-              if b"\0" in data:
-                  continue
-              tokens = set(matcher.findall(data.decode("utf-8", errors="replace")))
-              for m in tokens & names.keys():
-                  for p in names[m]:
-                      if p != path:
-                          incoming[p].add(path)
-          groups = collections.Counter()
-          for p in candidates:
-              refs = incoming[p]
-              active = sorted(x for x in refs if not x.startswith("docs/") and not x.endswith(".md"))
-              group = "unreferenced" if not refs else "doc-only" if not active else "referenced"
-              category = "script" if p.startswith("tests/") and p.endswith((".sh",".py")) else "fixture" if p.startswith("tests/") else "doc" if p.startswith("docs/") else "ci"
-              groups[category,group] += 1
-              if group != "referenced" or (category == "script" and all(x.startswith("tests/") for x in active)):
-                  print("PERIPHERAL_CANDIDATE", json.dumps({"path": p, "group": group, "refs": sorted(refs)[:12]}))
-          print("PERIPHERAL_COUNTS", json.dumps({"/".join(k): v for k,v in sorted(groups.items())}))
-          print("PERIPHERAL_NOTE: lexical candidates only; dynamic callers, manual tests, and unique regression fixtures require review")
-          PY
-
-  manual-probe-consolidation-candidates:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 8
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.sha }}
-      - name: Derive exact shared manual probe prologues without modifying tracked files
-        run: |
-          python3 - <<'PY'
-          import base64, collections, json, pathlib, re, subprocess, tempfile
-          root = pathlib.Path("tests/compiler/c0")
-          audit = ".github/workflows/minic-historical-script-retirement-audit.yml"
-          files = subprocess.check_output(["git","ls-files","-z"]).decode().strip("\0").split("\0")
-          data = {}
-          for path in files:
-              b = pathlib.Path(path).read_bytes()
-              if b"\0" not in b:
-                  try: data[path] = b.decode()
-                  except UnicodeDecodeError: pass
-          candidates = [p for p in data if p.startswith(str(root)+"/probe-") and p.endswith(".sh")]
-          by_name = {pathlib.Path(p).name:p for p in candidates}
-          refs = collections.defaultdict(set)
-          for p,s in data.items():
-              if p == audit: continue
-              for n in set(re.findall(r'probe-[A-Za-z0-9_.-]+\.sh',s)):
-                  if n in by_name and by_name[n] != p: refs[by_name[n]].add(p)
-              for line in s.splitlines():
-                  if re.search(r'(?:probe-[^ ]*[*?]|probe-\$|glob\([^)]*probe-|probe-\{)',line) and re.search(r'(?:bash|sh |for |glob|find |exec|source |run_c0)',line):
-                      print("MANUAL_DYNAMIC",json.dumps([p,line[:240]]))
-          groups = collections.defaultdict(list)
-          for p in candidates:
-              if refs[p]: continue
-              s = data[p]
-              if not s.endswith("\n") or "\r" in s or "__minic_probe_case" in s or "BASH_SOURCE" in s or re.search(r'\$\{?0\b', re.sub(r'dirname\s+(?:--\s+)?"\$(?:0|\{0\})"',"dirname-safe",s)):
-                  continue
-              lines = s.splitlines(keepends=True)
-              shell = lines[0].strip()
-              if shell not in ("#!/bin/sh","#!/usr/bin/env bash","#!/bin/bash"):continue
-              k=1
-              while k<len(lines) and (not lines[k].strip() or lines[k].startswith("#")): k+=1
-              if k>=len(lines) or lines[k].strip() not in ("set -eu","set -Eeuo pipefail","set -euo pipefail"):continue
-              q=k
-              while q<len(lines) and q-k<10:
-                  line=lines[q].strip()
-                  if not line or line.startswith("#") or line.endswith("\\"):break
-                  if q==k or re.match(r'^[A-Za-z_][A-Za-z0-9_]*=',line) or re.match(r'^(?:test |trap |: |command -v |mkdir -p )',line):
-                      if re.search(r'(?:<<|&&|\|\||;[ \t]*(?:if|then|do|done|fi|case|esac)\b)',line):break
-                      q+=1
-                  else:break
-              if q-k<4 or q>=len(lines):continue
-              prefix=tuple(lines[k:k+4])
-              family=pathlib.Path(p).name.split("-")[1]
-              if family not in ("aarch64","loongarch64","x86","riscv","gnu","rv32","rv64"):family="common"
-              groups[(shell,family,prefix)].append((p,lines[:k],lines[k:]))
-          payload=[]
-          for (shell,family,prefix), members in sorted(groups.items(),key=lambda x:(x[0][1],x[0][0],x[0][2])):
-              if len(members)<3:continue
-              shared=list(prefix)
-              while len(shared)<10:
-                  i=len(shared)
-                  if any(len(body)<=i for _,_,body in members):break
-                  line=members[0][2][i]
-                  if any(body[i]!=line for _,_,body in members):break
-                  if not re.match(r'^(?:[A-Za-z_][A-Za-z0-9_]*=|trap |test |command -v |: |mkdir -p )',line) or line.rstrip().endswith("\\") or "<<" in line:break
-                  shared.append(line)
-              path=str(root/f"run-manual-{family}-family-{len(payload)+1}.sh")
-              assert path not in data
-              cases=[pathlib.Path(p).stem for p,_,_ in members]
-              out=[shell+"\n","# Named manual probes; shared initialization is exact, case assertions are unchanged.\n",
-                   'if [ "${1:-}" = "--list" ]; then\n', "    printf '%s\\n' "+" ".join("'"+n+"'" for n in cases)+"\n", "    exit 0\nfi\n",
-                   '__minic_probe_case=${1:?probe case required; use --list}\n','shift\n',
-                   'case "$__minic_probe_case" in\n', "  "+"|".join(cases)+") ;;\n", '  *) printf "%s\\n" "unknown probe: $__minic_probe_case" >&2; exit 64 ;;\nesac\n']
-              out.extend(shared)
-              out.append('case "$__minic_probe_case" in\n')
-              for (p,head,body),name in zip(members,cases):
-                  assert "".join(head+body)==data[p]
-                  assert body[:len(shared)]==shared
-                  out.append(name+")\n")
-                  out.extend(head[1:])
-                  out.extend(body[len(shared):])
-                  out.append(";;\n")
-              out.append("esac\n")
-              merged="".join(out)
-              interpreter="sh" if shell=="#!/bin/sh" else "bash"
-              with tempfile.TemporaryDirectory() as td:
-                  target=pathlib.Path(td)/"merged.sh"
-                  target.write_text(merged)
-                  check=subprocess.run([interpreter,"-n",str(target)],capture_output=True,text=True)
-                  if check.returncode:
-                      print("MANUAL_REJECT",json.dumps([path,check.stderr[:200]]));continue
-                  for p,head,body in members:
-                      old=pathlib.Path(td)/"old.sh";old.write_text(data[p])
-                      if subprocess.run([interpreter,"-n",str(old)],capture_output=True).returncode:break
-                  else:
-                      payload.append({"path":path,"content":merged,"removed":[p for p,_,_ in members],"shared_lines":len(shared),"cases":cases})
-          print("MANUAL_GROUP_COUNTS",json.dumps({"groups":len(payload),"removed":sum(len(x["removed"]) for x in payload),"net":sum(len(x["removed"])-1 for x in payload)}))
-          for group in payload:
-              print("MANUAL_GROUP",json.dumps({"path":group["path"],"removed":group["removed"],"shared_lines":group["shared_lines"]}))
-              blob=base64.b64encode(json.dumps(group,separators=(",",":")).encode()).decode()
-              for i in range(0,len(blob),2000):
-                  print("MANUAL_PAYLOAD",group["path"],i//2000,blob[i:i+2000])
-          print("MANUAL_CANDIDATE_END",len(payload))
           PY
