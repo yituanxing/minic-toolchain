@@ -76,11 +76,43 @@ jobs:
               families=grouped(c0,kind)
               print("C0_SIMILAR_"+kind.upper(),json.dumps({"groups":len(families),"files_in_groups":sum(len(g) for g in families),"samples":[{"count":len(g),"files":g[:12]} for g in families[:22]]},ensure_ascii=False),flush=True)
           
+          # 6-gram overlap identifies partial similarity between distinct C inputs.
+          # Avoid false positives from short snippets by filtering high-frequency shingles.
+          tcache={p:scan(s) for p,s in c0.items()}
+          grams={}
+          freq=collections.Counter()
+          for p,ts in tcache.items():
+              if len(ts)<35:continue
+              # preserve source-specific names where possible, but group systematic
+              # compiler regressions with a vocabulary of standardized syntax tokens.
+              t=canonical(ts,True).split("\x1f")
+              g=set(hashlib.blake2b("\x1e".join(t[i:i+6]).encode(),digest_size=8).digest() for i in range(len(t)-5))
+              grams[p]=g
+              freq.update(g)
+          inv=collections.defaultdict(list)
+          for p,g in grams.items():
+              for k in g:
+                  if 2<=freq[k]<=18:inv[k].append(p)
+          pairshare=collections.Counter()
+          for members in inv.values():
+              members.sort()
+              for i,a in enumerate(members):
+                  for b in members[i+1:]:pairshare[(a,b)]+=1
+          best=[]
+          for (a,b),common in pairshare.items():
+              if common<15 or min(len(grams[a]),len(grams[b]))<25:continue
+              # sample candidate matches only; the overlap score is NOT proof.
+              ov=len(grams[a]&grams[b])
+              sim=ov/(len(grams[a])+len(grams[b])-ov)
+              if sim>=0.40:
+                  best.append((round(sim,3),a,b,len(grams[a]),len(grams[b])))
+          best.sort(reverse=True)
+          print("C0_NEAR_MATCHES",json.dumps({"count":len(best),"top":[{"similarity":s,"a":a,"b":b,"sizeA":na,"sizeB":nb} for s,a,b,na,nb in best[:100]]}),flush=True)
           # Reports all tests with no literal path reference, but NOT as proven dead:
           # historical shell invocation may form filenames dynamically.
           unref_c0=[]
           for p in c0:
-              count=len(refs.get(p,()))+len(basename_refs.get(Path(p).name,())-set([p]))
+              count=len(refs.get(p,()))+len(set(basename_refs.get(Path(p).name,()))-{p})
               if not count:unref_c0.append(p)
           cats=collections.Counter()
           for p in unref_c0:
@@ -110,7 +142,7 @@ jobs:
           print("SHELL_SHARED_COMMAND_BLOCKS",json.dumps({"distinct_blocks":len(clusters),"top":[{"count":n,"paths":p[:16]} for n,p in clusters[:15]]}),flush=True)
           unref_shell=[]
           for p in shell:
-              count=len(refs.get(p,()))+len(basename_refs.get(Path(p).name,())-set([p]))
+              count=len(refs.get(p,()))+len(set(basename_refs.get(Path(p).name,()))-{p})
               if not count:unref_shell.append(p)
           print("SHELL_UNREFERENCED_CANDIDATES",json.dumps({"count":len(unref_shell),"sample":unref_shell[:100]}),flush=True)
           
