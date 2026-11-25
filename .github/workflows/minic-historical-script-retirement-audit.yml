@@ -1518,3 +1518,97 @@ jobs:
           for c in selected:print("BULK_CASE "+json.dumps(c,ensure_ascii=True,separators=(",",":")))
           print("BULK_END "+str(len(selected)))
           PY
+
+      - name: Whole-tree strict target probe template census
+        run: |
+          python3 - <<'PY'
+          import pathlib,re,subprocess,json,collections
+          root=pathlib.Path(".")
+          directory=pathlib.Path("tests/compiler/c0")
+          files=subprocess.check_output(["git","ls-files","-z"]).decode().strip("\0").split("\0")
+          scripts=sorted(directory.glob("*.sh"))
+          groups=collections.defaultdict(list)
+          stats=collections.Counter()
+          # Detect exact shell/temporary-workspace/preprocessor/compile prefixes.
+          # Keep the original assertion bodies and shell semantics, including heredocs.
+          def logical(s):
+              rows=[]
+              for m in re.finditer(r"(?m)^(?:.*\\\n)*[^\n]*(?:\n|$)",s):
+                  if not m.group():continue
+                  line=re.sub(r"\\\n[ \t]*"," ",m.group()).strip()
+                  line=re.sub(r"[ \t]+"," ",line)
+                  if line:rows.append((line,m.start(),m.end()))
+              return rows
+          for p in scripts:
+              if not p.name.startswith(("probe-","run-")) or "case.sh" in p.name:continue
+              s=p.read_text()
+              rows=logical(s)
+              if not rows:continue
+              # Keep shebang and strict mode in signature. Ignore only leading comments.
+              rows=[r for i,r in enumerate(rows) if i==0 or not r[0].startswith("#")]
+              if len(rows)<8:stats["short"]+=1;continue
+              if (rows[0][0],rows[1][0]) not in {
+                  ("#!/bin/sh","set -eu"),("#!/usr/bin/env bash","set -Eeuo pipefail"),
+                  ("#!/usr/bin/env bash","set -euo pipefail"),("#!/bin/bash","set -euo pipefail")}:
+                  stats["shell-mode"]+=1;continue
+              # Normalize fixture stems (only when an actual matching fixture exists).
+              stem=p.stem.split("-",1)[1].replace("-","_")
+              first_compile=None
+              for i,(line,_,end) in enumerate(rows[2:22],2):
+                  if re.search(r'(?:^| )--target=[A-Za-z0-9_/-]+(?: |$)',line) and " -S " in " "+line+" " and " -o " in " "+line+" ":
+                      first_compile=i;break
+              if first_compile is None:stats["no-target-compile"]+=1;continue
+              prefix=rows[:first_compile+1]
+              # Source-specific paths/stems are the only template parameters. Other
+              # command flags, target, defaults, trap, variable names stay exact.
+              setup=[]
+              params={}
+              for line,_,_ in prefix:
+                  line2=line
+                  # Match an actual C fixture, whether named like the probe or not.
+                  def fixture(m):
+                      path=m[1]
+                      if not (root/path).is_file():return m[0]
+                      if "_src" in params and params["_src"]!=path:return m[0]
+                      params["_src"]=path
+                      return m[0].replace(path,"<SRC>")
+                  line2=re.sub(r'((?:tests/compiler/c0|tests/programs/c0)/[A-Za-z0-9_.-]+\.(?:c|i))',fixture,line2)
+                  # Only normalize work-relative .i and .s outputs with stable names.
+                  def output(m):
+                      name,kind=m[1],m[2]
+                      key="_"+kind
+                      if key in params and params[key]!=name:return m[0]
+                      params[key]=name
+                      return m[0].replace(name+"."+kind,"<"+kind.upper()+">."+kind)
+                  line2=re.sub(r'\$work/([A-Za-z0-9_.-]+)\.(i|s)\b',output,line2)
+                  setup.append(line2)
+              body=s[prefix[-1][2]:].strip("\n")
+              if not body or not params.get("_src") or not params.get("_i") or not params.get("_s"):
+                  stats["missing-parameters"]+=1;continue
+              # Exclude complex initializations, preserve simple command-only prefix.
+              if not any("work=$(mktemp -d)"==x for x in setup):
+                  stats["not-temp"]+=1;continue
+              if any(x.startswith(("if ","for ","while ","case ","cat ","function ")) for x in setup[2:]):
+                  stats["complex-prefix"]+=1;continue
+              if re.search(r'\$(?:0\b|\{0\b)|BASH_SOURCE|(?m:^\s*return\b)',body):
+                  stats["body-review"]+=1;continue
+              groups[tuple(setup)].append({"path":str(p),"params":params,"body":body,"prefix":s[:prefix[-1][2]]})
+          candidates={pathlib.Path(c["path"]).name:c for g,cs in groups.items() if len(cs)>=2 for c in cs}
+          for g,cs in groups.items():
+              if len(cs)>=2:
+                  for c in cs:c["family"]=list(g)
+          rx=re.compile("|".join(re.escape(n) for n in sorted(candidates,key=len,reverse=True))) if candidates else re.compile(r"(?!)")
+          refs=collections.defaultdict(list)
+          for p in files:
+              data=pathlib.Path(p).read_bytes()
+              if b"\0" in data:continue
+              for i,line in enumerate(data.decode("utf-8",errors="replace").splitlines(),1):
+                  for name in set(rx.findall(line)):
+                      if p!=candidates[name]["path"]:
+                          refs[name].append([p,i,line])
+          print("PROBE_COUNTS "+json.dumps({"scripts":len(scripts),"candidates":len(candidates),"families":sum(len(v)>=2 for v in groups.values()),"rejected":stats},sort_keys=True))
+          for name,c in candidates.items():
+              c["refs"]=refs[name]
+              print("PROBE_CASE "+json.dumps(c,ensure_ascii=True,separators=(",",":")))
+          print("PROBE_END "+str(len(candidates)))
+          PY
