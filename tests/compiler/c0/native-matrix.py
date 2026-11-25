@@ -88,6 +88,8 @@ def check_all(checks, artifacts, targets, counts=(), cfg=()):
 def compiler(mode, supplied):
     if mode == "legacy":
         return os.environ.get("MINIC", str(ROOT / "build/debug/bin/minic"))
+    if mode == "legacy_release":
+        return os.environ.get("MINIC", str(ROOT / "build/release/bin/minic-cc"))
     if mode == "arg-first" and supplied:
         return supplied
     if mode == "arg":
