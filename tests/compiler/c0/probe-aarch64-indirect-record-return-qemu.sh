@@ -218,8 +218,8 @@ SRC
 "$host_cc" -E -P -x c "$work/mixed-fp.c" -o "$work/mixed-fp.i"
 require_rejected aarch64-linux "$work/mixed-fp.i" aarch64-mixed-fp-not-qualified
 
-# Per-target ownership also bounds the callee's result copy. No silent
-# truncation of an over-capacity aggregate, no partial ELF output.
+# A 2049-byte indirect return is valid: physical frame capacity rather than
+# arbitrary ABI type size controls the maximum admitted local object.
 cat >"$work/overlimit.c" <<'SRC'
 struct OverLimit { unsigned char bytes[2049]; };
 struct OverLimit too_large(void) {
@@ -232,11 +232,25 @@ SRC
 "$host_cc" -E -P -x c "$work/overlimit.c" -o "$work/overlimit.i"
 "$minic_cc" --target=aarch64-linux -S "$work/overlimit.i" \
     -o "$work/overlimit.s" || fail 'legal 2049-byte record refused'
-require_contains '^too_large:
+require_contains '^too_large:$' "$work/overlimit.s"
+require_contains '^  movz x12, #2049(, lsl #0)?$' "$work/overlimit.s"
 
-# The ABI admits 2049B indirect results using the same x8 buffer contract
-# as 2048B. Resource exhaustion must be enforced by the physical frame plan,
-# not by a magic 2 KiB record type limit.
+# A real local beyond the 1 MiB physical stack-frame bound must still
+# fail without leaving partial assembly.
+cat >"$work/frame-limit.c" <<'SRC'
+struct BeyondFrame { unsigned char bytes[1048577]; };
+struct BeyondFrame cannot_fit(void) {
+    struct BeyondFrame v;
+    v.bytes[0] = 7;
+    return v;
+}
+SRC
+"$host_cc" -E -P -x c "$work/frame-limit.c" -o "$work/frame-limit.i"
+require_rejected aarch64-linux "$work/frame-limit.i" aarch64-frame-limit
+
+# The indirect large-record return is now admitted only with a typed x8
+# result-object address and x16/blr call; the GNU caller and GNU callee
+# exercise the full mixed ABI when target GCC/QEMU are available below.
 printf '%s\n' 'AAPCS64_SRET_SOURCE=PASS direct_return=20 nested_call=5 independent_x8=1 LP64D_a0=1 return_blocks=2 ABI_negative=3 large_record_2049=admitted frame_capacity=checked'
 
 if ! command -v "$target_cc" >/dev/null 2>&1 ||
@@ -276,8 +290,7 @@ cmp "$work/gnu.out" "$work/mini.out" || fail 'stdout differs'
 cmp "$work/gnu.err" "$work/mini.err" || fail 'stderr differs'
 require_contains 'AAPCS64_INDIRECT_RECORD_RETURN=PASS' "$work/mini.out"
 
-# Independent original GNU caller exercises the exact 2049-byte record
-# through a MiniC callee; compare against a GNU-built callee under QEMU.
+# Independent GNU caller and two producers test the exact 2049B binary ABI.
 cat >"$work/overlimit-caller.c" <<'SRC'
 struct OverLimit { unsigned char bytes[2049]; };
 extern struct OverLimit too_large(void);
@@ -299,106 +312,4 @@ for producer in gnu minic; do
         fail "2049-byte GNU caller/producer=$producer result=$rc expected=42"
     fi
 done
-printf '%s\n' 'AAPCS64_SRET_RUNTIME=PASS GNU_GAS=1 GNU_static_link=1 GNU_QEMU=4 mixed_ABI=3 sizes=17,24,32,40,64,144,2048,2049'
- "$work/overlimit.s"
-require_contains '^  movz x12, #2049(, lsl #0)?
-
-# The ABI admits 2049B indirect results using the same x8 buffer contract
-# as 2048B. Resource exhaustion must be enforced by the physical frame plan,
-# not by a magic 2 KiB record type limit.
-printf '%s\n' 'AAPCS64_SRET_SOURCE=PASS direct_return=20 nested_call=5 independent_x8=1 LP64D_a0=1 return_blocks=2 ABI_negative=3'
-
-if ! command -v "$target_cc" >/dev/null 2>&1 ||
-   ! command -v "$target_qemu" >/dev/null 2>&1; then
-    if [[ ${MINIC_REQUIRE_AARCH64_SRET:-0} == 1 ]]; then
-        fail 'required AArch64 GNU GAS/QEMU toolchain absent'
-    fi
-    printf '%s\n' 'AAPCS64_SRET_RUNTIME=SKIP AArch64 GNU/QEMU unavailable'
-    exit 0
-fi
-
-# Re-preprocess with the exact same GNU target compiler that will assemble
-# and statically link the test, avoiding host model/long assumptions.
-"$target_cc" -E -P -std=gnu11 -x c "$mini_source" -o "$work/aarch64.i"
-"$minic_cc" --target=aarch64-linux -S "$work/aarch64.i" \
-    -o "$work/aarch64.s" || fail 'target-preprocessed MiniC compile'
-"$target_cc" -std=gnu11 -O2 -static "$mini_source" "$gnu_source" \
-    -o "$work/gnu.elf" || fail 'GNU reference link'
-"$target_cc" -std=gnu11 -O2 -c "$gnu_source" \
-    -o "$work/gnu.o" || fail 'GNU caller/callee object'
-"$target_cc" -static -x assembler "$work/aarch64.s" -x none \
-    "$work/gnu.o" -o "$work/mini.elf" || fail 'MiniC + GNU GAS/static link'
-
-set +e
-timeout 45s "$target_qemu" "$work/gnu.elf" >"$work/gnu.out" 2>"$work/gnu.err"
-gnu_status=$?
-timeout 45s "$target_qemu" "$work/mini.elf" >"$work/mini.out" 2>"$work/mini.err"
-mini_status=$?
-set -e
-if [[ $gnu_status -ne 42 || $mini_status -ne 42 ]]; then
-    printf '%s\n' "GNU return=$gnu_status MiniC return=$mini_status" >&2
-    sed -n '1,20p' "$work/gnu.err" >&2
-    sed -n '1,20p' "$work/mini.err" >&2
-    fail 'real GNU/QEMU ABI output mismatch'
-fi
-cmp "$work/gnu.out" "$work/mini.out" || fail 'stdout differs'
-cmp "$work/gnu.err" "$work/mini.err" || fail 'stderr differs'
-require_contains 'AAPCS64_INDIRECT_RECORD_RETURN=PASS' "$work/mini.out"
-printf '%s\n' 'AAPCS64_SRET_RUNTIME=PASS GNU_GAS=1 GNU_static_link=1 GNU_QEMU=2 mixed_ABI=3 sizes=17,24,32,40,64,144,2048'
- "$work/overlimit.s"
-
-# The shared LP64 machine frame remains bounded: this real 1 MiB+1
-# local cannot be materialized, and must not leave partial assembly.
-cat >"$work/frame-limit.c" <<'SRC'
-struct BeyondFrame { unsigned char bytes[1048577]; };
-struct BeyondFrame cannot_fit(void) {
-    struct BeyondFrame value;
-    value.bytes[0] = 7;
-    return value;
-}
-SRC
-"$host_cc" -E -P -x c "$work/frame-limit.c" -o "$work/frame-limit.i"
-require_rejected aarch64-linux "$work/frame-limit.i" aarch64-frame-limit
-
-# The ABI admits 2049B indirect results using the same x8 buffer contract
-# as 2048B. Resource exhaustion must be enforced by the physical frame plan,
-# not by a magic 2 KiB record type limit.
-printf '%s\n' 'AAPCS64_SRET_SOURCE=PASS direct_return=20 nested_call=5 independent_x8=1 LP64D_a0=1 return_blocks=2 ABI_negative=3'
-
-if ! command -v "$target_cc" >/dev/null 2>&1 ||
-   ! command -v "$target_qemu" >/dev/null 2>&1; then
-    if [[ ${MINIC_REQUIRE_AARCH64_SRET:-0} == 1 ]]; then
-        fail 'required AArch64 GNU GAS/QEMU toolchain absent'
-    fi
-    printf '%s\n' 'AAPCS64_SRET_RUNTIME=SKIP AArch64 GNU/QEMU unavailable'
-    exit 0
-fi
-
-# Re-preprocess with the exact same GNU target compiler that will assemble
-# and statically link the test, avoiding host model/long assumptions.
-"$target_cc" -E -P -std=gnu11 -x c "$mini_source" -o "$work/aarch64.i"
-"$minic_cc" --target=aarch64-linux -S "$work/aarch64.i" \
-    -o "$work/aarch64.s" || fail 'target-preprocessed MiniC compile'
-"$target_cc" -std=gnu11 -O2 -static "$mini_source" "$gnu_source" \
-    -o "$work/gnu.elf" || fail 'GNU reference link'
-"$target_cc" -std=gnu11 -O2 -c "$gnu_source" \
-    -o "$work/gnu.o" || fail 'GNU caller/callee object'
-"$target_cc" -static -x assembler "$work/aarch64.s" -x none \
-    "$work/gnu.o" -o "$work/mini.elf" || fail 'MiniC + GNU GAS/static link'
-
-set +e
-timeout 45s "$target_qemu" "$work/gnu.elf" >"$work/gnu.out" 2>"$work/gnu.err"
-gnu_status=$?
-timeout 45s "$target_qemu" "$work/mini.elf" >"$work/mini.out" 2>"$work/mini.err"
-mini_status=$?
-set -e
-if [[ $gnu_status -ne 42 || $mini_status -ne 42 ]]; then
-    printf '%s\n' "GNU return=$gnu_status MiniC return=$mini_status" >&2
-    sed -n '1,20p' "$work/gnu.err" >&2
-    sed -n '1,20p' "$work/mini.err" >&2
-    fail 'real GNU/QEMU ABI output mismatch'
-fi
-cmp "$work/gnu.out" "$work/mini.out" || fail 'stdout differs'
-cmp "$work/gnu.err" "$work/mini.err" || fail 'stderr differs'
-require_contains 'AAPCS64_INDIRECT_RECORD_RETURN=PASS' "$work/mini.out"
-printf '%s\n' 'AAPCS64_SRET_RUNTIME=PASS GNU_GAS=1 GNU_static_link=1 GNU_QEMU=2 mixed_ABI=3 sizes=17,24,32,40,64,144,2048'
+printf '%s\n' 'AAPCS64_SRET_RUNTIME=PASS GNU_GAS=2 GNU_static_link=3 GNU_QEMU=4 mixed_ABI=4 sizes=17,24,32,40,64,144,2048,2049'
