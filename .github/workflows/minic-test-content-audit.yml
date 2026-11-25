@@ -209,5 +209,13 @@ jobs:
           for p,s in scripts.items():
               if p.startswith("tests/compiler/c0/") and len(s)<2500 and re.search(r'(?m)^\s*for target in ',s) and re.search(r'(?m)^\s*["$].*(?:gnu|minic|mini)"\s*(?:\|\|[^\\n]*)?$',s):
                   print("NATIVE_FAMILY",json.dumps([p,s]))
+          selected=["probe-core-literal-rhs-snapshot","probe-core-rhs-no-cfg-snapshot","probe-core-inline-statement-constant-guard","probe-core-compound-record-byte-layout","probe-core-field-get-contiguous-mask-guard","probe-core-same-global-address-order","probe-linux-empty-static-stub-cfi","probe-loongarch64-immediate-core-fold","probe-gnu-global-array-static-provenance-5isa","probe-gnu-nested-union-compound-record-array","probe-gnu-static-pointer-conditional","probe-gnu-wide-local-and-record-chained","probe-mc033-statement-update-facts","probe-mc035-runtime-range-once-arena","probe-mc036-record-conditional-facts","probe-owned-call-designator-rollback","probe-return-assignment-expression","probe-runtime-nested-array-arena-growth","probe-runtime-record-tagged-arena-growth","probe-static-array-redeclaration","probe-static-typedef-array-redeclaration","probe-symbolic-inline-two-callers","probe-static-chained-array-arena","probe-static-record-backward-arena","probe-core-expr-branch-local-facts","probe-gnu-enum-underlying-pointer","probe-gnu-mixed-void-conditional","probe-builtin-lexeme-contract","probe-alignment-attribute-semantic-arena","probe-mc034-static-designator-pointer-pair","run-packed-bitfield-field-layout","run-packed-bitfield-cross-word-window","run-packed-bitfield-guard-page","probe-core-cfg-effectful-boolean-fact-barrier","probe-gnu-linux-kbuild-disjoint-bitmask-assert","probe-core-literal-branch-guard","probe-mc089-x87-ordered-comparisons","probe-attributed-record-forward-declarations","probe-x86-sysv-integer-record-tree","run-core-switch-case-fact-isolation"]
+          for name in selected:
+              p="tests/compiler/c0/"+name+".sh"
+              for other,body in texts.items():
+                  if other==p or other.startswith("docs/") or other.endswith(".md") or other==".github/workflows/minic-test-content-audit.yml":continue
+                  for i,line in enumerate(body.splitlines(),1):
+                      if name+".sh" in line:
+                          print("CALLSITE",json.dumps([name,other,i,line]))
           print("SHELL_FAMILY_SUMMARY",json.dumps({"scripts":len(scripts),"grouped":sum(len(v) for v in groups.values() if len(v)>1),"families":sum(len(v)>1 for v in groups.values())}))
           PY
