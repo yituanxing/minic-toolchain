@@ -1,227 +1,28 @@
-name: MiniC test content and redundancy audit
+name: MiniC native regression matrix
 on:
   push:
     branches:
       - cleanup/minic-test-pruning-20261125
+      - main
+    paths:
+      - 'src/**'
+      - 'tools/minic*/**'
+      - 'tests/**'
+      - 'Makefile'
+      - '.github/workflows/minic-test-content-audit.yml'
+  pull_request:
+    paths:
+      - 'src/**'
+      - 'tools/minic*/**'
+      - 'tests/**'
+      - 'Makefile'
+      - '.github/workflows/minic-test-content-audit.yml'
+  workflow_dispatch:
 permissions:
   contents: read
 jobs:
-  content:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 8
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - name: Compare actual test source tokens and executable consumers across the complete repository
-        run: |
-          python3 - <<'PY'
-          import pathlib, subprocess, re, collections, json, hashlib
-          files = subprocess.check_output(["git","ls-files","-z"]).decode().strip("\0").split("\0")
-          data = {}
-          for p in files:
-              b=pathlib.Path(p).read_bytes()
-              if b"\0" not in b:
-                  try:data[p]=b.decode()
-                  except UnicodeDecodeError:pass
-          tests={p:s for p,s in data.items() if p.startswith("tests/") and p.endswith((".c",".sh",".py",".i",".S",".s"))}
-          # Tokenize C correctly enough to preserve all strings, operators,
-          # identifier spelling, preprocessing line boundaries and comments policy.
-          lex=re.compile(r'(?P<comment>/\*[\s\S]*?\*/|//[^\n]*)|(?P<string>(?:u8|[LuU])?"(?:\\[\s\S]|[^"\\])*"|(?:[LuU])?\'(?:\\[\s\S]|[^\'\\])*\')|(?P<id>[a-zA-Z_][a-zA-Z_0-9]*)|(?P<num>(?:\d|\.\d)[a-zA-Z_0-9.+-]*)|(?P<op>>=|<<=|==|!=|<=|>=|->|\+\+|--|&&|\|\||<<|>>|\+=|-=|\*=|/=|%=|&=|\|=|\^=|\.\.\.|##|[^\s])')
-          groups=collections.defaultdict(list)
-          sources={p:s for p,s in tests.items() if p.endswith((".c",".i"))}
-          for p,s in sources.items():
-              # Don't compare sources whose preprocessing can depend on formatting.
-              if re.search(r'(?m)^\s*#|__LINE__|__FILE__|__COUNTER__|\\\n',s):continue
-              tokens=tuple(m.group() for m in lex.finditer(s) if m.lastgroup!="comment")
-              groups[tokens].append(p)
-          names=collections.defaultdict(set)
-          for p in tests:
-              n=pathlib.Path(p).name
-              names[n].add(p)
-              names[pathlib.Path(p).stem].add(p)
-              names[pathlib.Path(p).stem.replace("_","-")].add(p)
-          incoming=collections.defaultdict(set)
-          for p,s in data.items():
-              if p==".github/workflows/minic-test-content-audit.yml":continue
-              for token in set(re.findall(r'[A-Za-z0-9_.-]+',s)) & names.keys():
-                  for q in names[token]:
-                      if p!=q:incoming[q].add(p)
-          def refs(p):return sorted(incoming[p])
-          for tok, ps in groups.items():
-              if len(ps)>1:
-                  print("TOKEN_DUPLICATE",json.dumps({"paths":ps,"tokens":tok,"refs":{p:refs(p) for p in ps}}))
-          # A source with no literal consumer is only a review candidate.
-          # Show its full source for small inputs, and indicate all dynamic callers.
-          for p,s in sorted(sources.items()):
-              active=[q for q in refs(p) if not q.startswith("docs/") and not q.endswith(".md")]
-              if not active and len(s)<=220 and not p.startswith("tests/vendor/"):
-                  print("SMALL_ORPHAN",json.dumps({"path":p,"source":s,"refs":refs(p)}))
-          for p,s in data.items():
-              if p.startswith(("src/","tools/minic","compiler/")):
-                  for i,line in enumerate(s.splitlines(),1):
-                      if re.search(r'MINIC_CORE_(?:CODEGEN|IR)|basic-v0',line):
-                          print("LEGACY_MODE_SOURCE",json.dumps([p,i,line]))
-              if not p.startswith("docs/") and not p.endswith((".md",".c",".h",".i",".S",".s")):
-                  for i,line in enumerate(s.splitlines(),1):
-                      if re.search(r'MINIC_CORE_(?:CODEGEN|IR)|basic-v0',line):
-                          print("LEGACY_MODE_CALL",json.dumps([p,i,line[:240]]))
-                      if re.search(r'(?:glob|find |for .* in |ls-files|wildcard)',line) and re.search(r'tests/|\.c\b|\.sh\b',line):
-                          print("DYNAMIC_TEST_PATH",json.dumps([p,i,line[:240]]))
-          print("CONTENT_AUDIT",json.dumps({"files":len(data),"test_sources":len(sources),"test_code":len(tests),"token_duplicates":sum(len(v)-1 for v in groups.values() if len(v)>1)}))
-          PY
-
-  validate-pruning:
-    if: "startsWith(github.event.head_commit.message, 'test-prune')"
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - name: Verify old modes no longer have an implementation and check remaining callers
-        run: |
-          set -Eeuo pipefail
-          python3 - <<'PY'
-          import pathlib,re,subprocess
-          removed = ["tests/compiler/audit/mc051_rv64_entry.c","tests/compiler/c0/invalid_empty_record.c","tests/compiler/c0/invalid_long_long.c","tests/compiler/c0/invalid_zero_length_typedef_array.c","tests/compiler/c0/core_required_no_fallback.c","tests/core/run-core-ir-shadow.sh"]
-          for p in removed:
-              assert not pathlib.Path(p).exists(), p
-          live=subprocess.check_output(["git","ls-files","-z"]).decode().strip("\0").split("\0")
-          for p in live:
-              if p.startswith("docs/") or p.endswith(".md") or p in (".github/workflows/minic-test-content-audit.yml",".github/workflows/minic-historical-script-retirement-audit.yml"):continue
-              b=pathlib.Path(p).read_bytes()
-              if b"\0" in b:continue
-              for old in removed:
-                  assert pathlib.Path(old).name.encode() not in b, (p,old)
-              assert b"core-required-no-fallback" not in b,(p,"obsolete gate")
-              if p.startswith(("src/","tools/minic/","tools/minic-cc/")):
-                  assert not re.search(rb'\bMINIC_CORE_(?:IR|CODEGEN)\b',b),p
-          dangling = []
-          retired_comparison = ["core-integer-equality","core-scalar-not-equal","core-pointer-equality-qualifiers","core-integer-add-overflow","core-integer-multiply-overflow","core-integer-subtract-overflow"]
-          for p in live:
-              if p.startswith("docs/") or p.endswith(".md") or p in (".github/workflows/minic-test-content-audit.yml",".github/workflows/minic-historical-script-retirement-audit.yml"):continue
-              b=pathlib.Path(p).read_bytes()
-              if b"\0" in b:continue
-              for name in retired_comparison:
-                  if name.encode() in b or name.replace("-","_").encode() in b: dangling.append((p,name))
-          assert not dangling, dangling
-          print("RETIRED_LIVE_CALLERS=NONE")
-          PY
-      - name: Build and check actual old negative fixtures now accepted by GNU and MiniC
-        run: |
-          set -Eeuo pipefail
-          make -j4 MODE=release CFLAGS=-Werror build/release/bin/minic-cc
-          mini="$PWD/build/release/bin/minic-cc"
-          work="$PWD/build/test-pruning"
-          mkdir -p "$work"
-          failed=0
-          for name in invalid_empty_record invalid_long_long invalid_zero_length_typedef_array; do
-            git show 4f3b6b1b087e4e9cb8a0d17fdac5b8a46d193bad:tests/compiler/c0/$name.c > "$work/$name.c"
-            if cc -std=gnu11 "$work/$name.c" -o "$work/$name.gnu" &&
-               "$work/$name.gnu" &&
-               cc -E -P -std=gnu11 "$work/$name.c" -o "$work/$name.i" &&
-               "$mini" --target=x86_64-linux -S "$work/$name.i" -o "$work/$name.s" &&
-               cc -no-pie "$work/$name.s" -o "$work/$name.mini" &&
-               "$work/$name.mini"; then
-              echo "STALE_NEGATIVE_NOW_VALID=$name"
-            else
-              echo "RETAIN_REQUIRED=$name"
-              failed=1
-            fi
-          done
-          test "$failed" -eq 0
-          git show 4f3b6b1b087e4e9cb8a0d17fdac5b8a46d193bad:tests/compiler/c0/core_required_no_fallback.c > "$work/nine.c"
-          cc -E -P "$work/nine.c" -o "$work/nine.i"
-          "$mini" --target=riscv64-linux -S "$work/nine.i" -o "$work/nine.s"
-          test -s "$work/nine.s"
-          echo "OLD_NINE_ARGUMENT_REJECTION=OBSOLETE"
-          bash tests/compiler/c0/check-minic-target-boundaries.sh
-      - name: Run the current nine-argument and comparison differential gates
-        run: |
-          set -Eeuo pipefail
-          sudo apt-get update -qq
-          sudo apt-get install -y gcc-riscv64-linux-gnu qemu-user
-          export MINIC="$PWD/build/release/bin/minic-cc"
-          cc -E -P tests/compiler/c0/core_comparisons.c -o build/test-pruning/compare.i
-          "$MINIC" --target=x86_64-linux -S build/test-pruning/compare.i -o build/test-pruning/compare.s
-          cc -no-pie build/test-pruning/compare.s tests/compiler/c0/core_comparisons_runtime.c -o build/test-pruning/compare
-          build/test-pruning/compare
-          cc -E -P tests/compiler/c0/core_checked_arithmetic.c -o build/test-pruning/checked.i
-          "$MINIC" --target=x86_64-linux -S build/test-pruning/checked.i -o build/test-pruning/checked.s
-          cc -no-pie build/test-pruning/checked.s tests/compiler/c0/core_checked_arithmetic_runtime.c -o build/test-pruning/checked
-          build/test-pruning/checked
-          for target in x86_64-linux aarch64-linux loongarch64-linux riscv64-linux riscv32-linux; do
-            "$MINIC" --target="$target" -S build/test-pruning/checked.i -o "build/test-pruning/checked-$target.s"
-            test -s "build/test-pruning/checked-$target.s"
-          done
-          echo 'CHECKED_ARITHMETIC_FIVE_ISA=PASS'
-          bash -n .github/scripts/compiler-c0-full-gate.sh
-          export MINIC_CC="$MINIC" RISCV_CC=riscv64-linux-gnu-gcc QEMU_RISCV64=qemu-riscv64
-          export BUILD_DIR="$PWD/build/test-pruning/stack"
-          sh tests/compiler/c0/run-compile-only-case.sh stack-fixed-arguments
-          for name in core-checked-arithmetic core-comparisons core-condition-and core-logical-and-value; do
-            BUILD_DIR="$PWD/build/test-pruning/$name" sh tests/compiler/c0/run-core-basic-runtime-case.sh "$name"
-          done
-
-  shell-families:
-    if: "startsWith(github.event.head_commit.message, 'audit families')"
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v4
-      - name: Read all actual scripts and identify repeated executable structures
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          from collections import defaultdict,Counter
-          import subprocess,re,json
-          files=subprocess.check_output(["git","ls-files","-z"]).decode().strip("\0").split("\0")
-          texts={}
-          for p in files:
-              try: texts[p]=Path(p).read_text()
-              except (UnicodeDecodeError, OSError): pass
-          scripts={p:s for p,s in texts.items() if p.startswith("tests/") and p.endswith(".sh")}
-          # Compare command structure, not filenames. Treat messages, source names,
-          # artifact names, grep operands and flags as candidate data only.
-          def skeleton(s):
-              if re.search(r'<<|eval\b|^\s*function\b',s,re.M):return None
-              lines=[]
-              for line in s.splitlines():
-                  if not line.strip() or line.lstrip().startswith("#"):continue
-                  lines.append(line.strip())
-              s="\n".join(lines).replace("\\\n"," ")
-              s=re.sub(r'(?<=/)[A-Za-z0-9_.-]+\.(?:c|i|s|o|elf|sh|out|err|log|stdout|stderr|txt)\b','FILE',s)
-              s=re.sub(r'(?<=/tests/)[A-Za-z0-9_.-]+(?=\n|[/"\s])','WORK',s)
-              s=re.sub(r"'[^'\n]*'", "'LIT'",s)
-              s=re.sub(r'"[^"\n]*"',lambda m: '"'+re.sub(r'[A-Za-z0-9_.-]+(?=[/"\s]|$)',lambda n:n.group() if "$" in m.group() and n.group() in ("root","work","MINIC","minic","target","source","source_file","host_cc","host","CC","d","tmp","tmp_dir") else "V",m.group()[1:-1])+'"',s)
-              s=re.sub(r'(?<![\w$])[0-9]+(?!\w)','NUM',s)
-              s=re.sub(r'[ \t]+',' ',s)
-              return s
-          groups=defaultdict(list)
-          for p,s in scripts.items():
-              k=skeleton(s)
-              if k is not None:groups[k].append(p)
-          for k,ps in sorted(groups.items(),key=lambda x:-len(x[1])):
-              if len(ps)<2:continue
-              print("FAMILY",json.dumps({"count":len(ps),"paths":ps,"skeleton":k[:3500]}))
-          # For script-only single-target/simple native probes, display actual
-          # full scripts (not just names) for the next manual selection.
-          for p,s in scripts.items():
-              if p.startswith("tests/compiler/c0/") and len(s)<2500 and re.search(r'(?m)^\s*for target in ',s) and re.search(r'(?m)^\s*["$].*(?:gnu|minic|mini)"\s*(?:\|\|[^\\n]*)?$',s):
-                  print("NATIVE_FAMILY",json.dumps([p,s]))
-          selected=["probe-core-literal-rhs-snapshot","probe-core-rhs-no-cfg-snapshot","probe-core-inline-statement-constant-guard","probe-core-compound-record-byte-layout","probe-core-field-get-contiguous-mask-guard","probe-core-same-global-address-order","probe-linux-empty-static-stub-cfi","probe-loongarch64-immediate-core-fold","probe-gnu-global-array-static-provenance-5isa","probe-gnu-nested-union-compound-record-array","probe-gnu-static-pointer-conditional","probe-gnu-wide-local-and-record-chained","probe-mc033-statement-update-facts","probe-mc035-runtime-range-once-arena","probe-mc036-record-conditional-facts","probe-owned-call-designator-rollback","probe-return-assignment-expression","probe-runtime-nested-array-arena-growth","probe-runtime-record-tagged-arena-growth","probe-static-array-redeclaration","probe-static-typedef-array-redeclaration","probe-symbolic-inline-two-callers","probe-static-chained-array-arena","probe-static-record-backward-arena","probe-core-expr-branch-local-facts","probe-gnu-enum-underlying-pointer","probe-gnu-mixed-void-conditional","probe-builtin-lexeme-contract","probe-alignment-attribute-semantic-arena","probe-mc034-static-designator-pointer-pair","run-packed-bitfield-field-layout","run-packed-bitfield-cross-word-window","run-packed-bitfield-guard-page","probe-core-cfg-effectful-boolean-fact-barrier","probe-gnu-linux-kbuild-disjoint-bitmask-assert","probe-core-literal-branch-guard","probe-mc089-x87-ordered-comparisons","probe-attributed-record-forward-declarations","probe-x86-sysv-integer-record-tree","run-core-switch-case-fact-isolation"]
-          for name in selected:
-              p="tests/compiler/c0/"+name+".sh"
-              for other,body in texts.items():
-                  if other==p or other.startswith("docs/") or other.endswith(".md") or other==".github/workflows/minic-test-content-audit.yml":continue
-                  for i,line in enumerate(body.splitlines(),1):
-                      if name+".sh" in line:
-                          print("CALLSITE",json.dumps([name,other,i,line]))
-          print("SHELL_FAMILY_SUMMARY",json.dumps({"scripts":len(scripts),"grouped":sum(len(v) for v in groups.values() if len(v)>1),"families":sum(len(v)>1 for v in groups.values())}))
-          PY
-
   validate-native-matrix:
-    if: "startsWith(github.event.head_commit.message, 'native matrix')"
+    if: github.ref == 'refs/heads/cleanup/minic-test-pruning-20261125'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -290,65 +91,32 @@ jobs:
           if len(passed)!=len(results): raise SystemExit(1)
           PY
 
-  source-families:
-    if: "startsWith(github.event.head_commit.message, 'audit source families')"
+  current-native-matrix:
+    if: github.ref != 'refs/heads/cleanup/minic-test-pruning-20261125'
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
-      - name: Read every regression translation unit and compare semantic skeletons
+      - name: Build production MiniC
+        run: make -j4 MODE=release CFLAGS=-Werror build/release/bin/minic-cc build/release/bin/minic
+      - name: Execute the maintained regression matrix
         run: |
           python3 - <<'PY'
-          import collections,difflib,json,re,subprocess
-          from pathlib import Path
-          files=subprocess.check_output(["git","ls-files","-z"]).decode().strip("\0").split("\0")
-          text={}
-          for p in files:
-              try:text[p]=Path(p).read_text()
-              except (OSError,UnicodeDecodeError):pass
-          tests={p:s for p,s in text.items() if p.startswith(("tests/compiler/","tests/target/","tests/programs/")) and p.endswith(".c")}
-          lex=re.compile(r'(?P<comment>/\*[\s\S]*?\*/|//[^\n]*)|(?P<string>(?:u8|[LuU])?"(?:\\[\s\S]|[^"\\])*"|(?:[LuU])?\'(?:\\[\s\S]|[^\'\\])*\')|(?P<id>[a-zA-Z_][a-zA-Z_0-9]*)|(?P<num>(?:0[xX][0-9a-fA-F]+|[0-9]+)(?:[uUlL]*))|(?P<op>>=|<<=|==|!=|<=|>=|->|\+\+|--|&&|\|\||<<|>>|\+=|-=|\*=|/=|%=|&=|\|=|\^=|\.\.\.|##|[^\s])')
-          reserved=set("auto break case char const continue default do double else enum extern float for goto if inline int long register restrict return short signed sizeof static struct switch typedef union unsigned void volatile while _Alignas _Alignof _Atomic _Bool _Complex _Generic _Imaginary _Noreturn _Static_assert _Thread_local asm __asm__ __volatile__ __attribute__ __typeof__ typeof __extension__ __inline__ main".split())
-          def tokens(s,lit=False):
-              ids={}
-              result=[]
-              for m in lex.finditer(s):
-                  v=m.group();k=m.lastgroup
-                  if k=="comment":continue
-                  if k=="id" and v not in reserved and not v.startswith("__builtin_"):
-                      v=ids.setdefault(v,"id"+str(len(ids)))
-                  elif lit and k=="num":v="NUM"
-                  elif lit and k=="string":v="STR"
-                  result.append(v)
-              return tuple(result)
-          names=collections.defaultdict(set)
-          for p in tests:names[Path(p).name].add(p);names[Path(p).stem].add(p);names[Path(p).stem.replace("_","-")].add(p)
-          refs=collections.defaultdict(set)
-          for p,s in text.items():
-              if p.startswith("docs/") or p.endswith(".md") or p==".github/workflows/minic-test-content-audit.yml":continue
-              for word in set(re.findall(r'[A-Za-z0-9_.-]+',s)) & names.keys():
-                  for q in names[word]:
-                      if p!=q:refs[q].add(p)
-          for abstract in (False,True):
-              groups=collections.defaultdict(list)
-              for p,s in tests.items():
-                  if re.search(r'(?m)^\s*#|__LINE__|__FILE__|__COUNTER__|\\\n',s):continue
-                  t=tokens(s,abstract)
-                  if len(t)>=5:groups[t].append(p)
-              for t,ps in sorted(groups.items(),key=lambda x:-len(x[1])):
-                  if len(ps)<2:continue
-                  print("SOURCE_FAMILY",json.dumps({"abstract_literals":abstract,"paths":ps,"tokens":len(t),"source":{p:tests[p] for p in ps if len(tests[p])<1600},"refs":{p:sorted(refs[p]) for p in ps}}))
-              print("SOURCE_FAMILY_SUMMARY",json.dumps({"abstract_literals":abstract,"groups":sum(len(ps)>1 for ps in groups.values()),"members":sum(len(ps) for ps in groups.values() if len(ps)>1)}))
-          # Candidate small simple assembly drivers and host unit drivers:
-          # actual source is emitted for review and matched with active callers.
-          for p,s in text.items():
-              if not p.startswith("tests/compiler/c0/") or not p.endswith(".sh") or len(s)>2500 or "<<" in s:continue
-              if re.search(r'(?m)^\s*for (?:target|arch) in ',s):continue
-              if not re.search(r'(?m)^\s*grep |^\s*test "\$\(grep|^\s*"\$work/[^"]+"$',s):continue
-              refs2=[]
-              for q,body in text.items():
-                  if q==p or q.startswith("docs/") or q.endswith(".md") or q==".github/workflows/minic-test-content-audit.yml":continue
-                  for i,line in enumerate(body.splitlines(),1):
-                      if Path(p).name in line:refs2.append([q,i,line])
-              print("SIMPLE_DRIVER",json.dumps({"path":p,"body":s,"refs":refs2}))
-          print("SOURCE_TOTAL",len(tests))
+          import concurrent.futures,json,os,pathlib,subprocess,tempfile
+          root=pathlib.Path.cwd()
+          cases=json.loads((root/"tests/compiler/c0/native-matrix.json").read_text())
+          compiler=str(root/"build/release/bin/minic-cc")
+          def one(item):
+              name,config=item
+              with tempfile.TemporaryDirectory(prefix="matrix-") as work:
+                  env=dict(os.environ,MINIC_CC=compiler,MINIC=str(root/"build/release/bin/minic") if config.get("mini")=="legacy" else compiler,BUILD_DIR=work)
+                  args=["cc"] if config.get("host")=="arg" else ([compiler] if config.get("mini") in ("arg","optional-arg","arg-first") else [])
+                  p=subprocess.run(["sh","tests/compiler/c0/run-native-matrix.sh",name,*args],env=env,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,timeout=200)
+                  return name,p.returncode,p.stdout.decode(errors="replace")
+          with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
+              results=list(pool.map(one,cases.items()))
+          for name,code,out in results:
+              print(name,code,out,flush=True)
+          if any(code for _,code,_ in results): raise SystemExit(1)
+          print("NATIVE_MATRIX_TOTAL",len(results),len(cases))
           PY

@@ -1,37 +1,21 @@
-# C0 Compiler Gate / C0 编译器门禁
+# C0 compiler regression gates
 
-C0 is the first executable vertical slice of the C rewrite.
+The C0 directory exercises the current compiler frontend, Core IR and target backends. Keep independent semantic inputs as C sources; share execution code instead of duplicating shell drivers.
 
-C0 是 C 重写的第一条可执行垂直切片。
+## Maintained native matrix
 
-The active boundary is:
-
-当前边界为：
-
-```text
-external C preprocessor
-→ MiniC .i-to-.s compiler
-→ external RISC-V assembler and linker
-→ QEMU runtime
+```sh
+make -j4 MODE=release build/release/bin/minic-cc build/release/bin/minic
+export MINIC_CC="$PWD/build/release/bin/minic-cc"
+export MINIC="$PWD/build/release/bin/minic"
+sh tests/compiler/c0/run-native-matrix.sh --list
+sh tests/compiler/c0/run-native-matrix.sh run-tag-namespace-scopes
 ```
 
-`run.sh` is the fast host gate. It uses the external host compiler only as a preprocessor, then compares MiniC's emitted RISC-V assembly with frozen expected output.
+`native-matrix.json` defines named cases, their source files, dialect and ABI options, target sets, assembly checks, rejection diagnostics and runtime oracles. The Python executor owns the actual subprocess calls, temporary directories, exit checking, GNU comparison and host sanitizer builds. Each negative macro variant is compiled separately; a successful compile or a crash cannot count as a rejection. New cases using the same execution mechanism should add case data, not a new shell driver.
 
-`run.sh` 是快速宿主门禁。它只使用外部宿主编译器进行预处理，然后将 MiniC 生成的 RISC-V 汇编与冻结结果比较。
+Some cases accept a compiler or host CC argument, as their original caller did. Existing Make targets and review gates preserve those calling conventions.
 
-`run-runtime.sh` performs the complete external-toolchain path when `RISCV_CC` and `QEMU_RISCV64` are available. It reports `SKIP` rather than pretending the runtime gate passed when those tools are absent.
+## Runtime boundary
 
-当 `RISCV_CC` 和 `QEMU_RISCV64` 可用时，`run-runtime.sh` 执行完整外围工具链流程。缺少工具时明确报告 `SKIP`，不会假称运行门禁已经通过。
-
-C0 deliberately accepts only:
-
-C0 有意只接受：
-
-```c
-int main() {}
-int main(void) { return <decimal-int>; }
-```
-
-The next milestone extends the same vertical path with expressions and local variables; it does not start the native preprocessor or linker.
-
-下一里程碑沿同一条垂直路径增加表达式和局部变量，不启动原生预处理器或链接器。
+Native GNU comparison and cross-target assembly are distinct from execution on a non-host ISA. `run-runtime.sh` and the target-specific QEMU gates cover cross-assembly, linking and actual execution where required. Do not label a compile-only case a runtime pass.

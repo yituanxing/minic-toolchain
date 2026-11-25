@@ -54,8 +54,8 @@ sh tests/compiler/c0/probe-x86-sysv-integer-record-tree.sh
 bash tests/compiler/c0/probe-gnu-variadic-restart.sh
 bash tests/compiler/c0/probe-target-gnu-earlyclobber-transport.sh "$mini"
 sh tests/compiler/c0/run-x86-global-plan-abi.sh
-MINIC="$(dirname "$mini")/minic" sh tests/compiler/c0/run-enum-tag-scopes.sh
-MINIC="$(dirname "$mini")/minic" sh tests/compiler/c0/run-tag-namespace-scopes.sh
+MINIC="$(dirname "$mini")/minic" sh tests/compiler/c0/run-native-matrix.sh run-enum-tag-scopes
+MINIC="$(dirname "$mini")/minic" sh tests/compiler/c0/run-native-matrix.sh run-tag-namespace-scopes
 sh tests/compiler/c0/run-native-matrix.sh probe-external-pointer-array-initializers
 sh tests/compiler/c0/run-native-matrix.sh probe-gnu-cleanup-goto-lifetime
 bash tests/compiler/c0/run-native-matrix.sh probe-core-asm-goto-percent-escape
