@@ -44,6 +44,11 @@ on:
       - "tests/compiler/audit/mc066_aarch64_fp_pointer_aggregate.c"
       - "tests/compiler/c0/dynamic_stack_wide_spill.c"
       - "tests/compiler/c0/dynamic_stack_wide_spill_helper.c"
+      - "tests/compiler/c0/run-runtime.sh"
+      - "tests/compiler/c0/gnu_inline_asm_*.c"
+      - "tests/compiler/c0/dynamic_*.c"
+      - "tests/compiler/c0/stack_fixed_arguments*.c"
+      - "tests/compiler/c0/builtin_clzll.c"
       - ".github/workflows/minic-runtime-fourarch.yml"
   push:
     branches: [main]
@@ -59,6 +64,11 @@ on:
       # change to a previously unlisted Core owner must run the full runtime
       # matrix instead of silently relying on an ancestor's green verdict.
       - "src/core/**"
+      - "tests/compiler/c0/run-runtime.sh"
+      - "tests/compiler/c0/gnu_inline_asm_*.c"
+      - "tests/compiler/c0/dynamic_*.c"
+      - "tests/compiler/c0/stack_fixed_arguments*.c"
+      - "tests/compiler/c0/builtin_clzll.c"
       - ".github/workflows/minic-runtime-fourarch.yml"
       - "runtime/manifest.json"
       - "tools/runtime/**"
@@ -185,6 +195,11 @@ on:
       - "tests/external/linux/stage2_kbuild_cc.sh"
       - "tests/compiler/c0/probe-rv64i-softfloat-runtime-qemu.sh"
       - "tests/compiler/c0/probe-runtime-typed-overflow.sh"
+      - "tests/compiler/c0/run-runtime.sh"
+      - "tests/compiler/c0/gnu_inline_asm_*.c"
+      - "tests/compiler/c0/dynamic_*.c"
+      - "tests/compiler/c0/stack_fixed_arguments*.c"
+      - "tests/compiler/c0/builtin_clzll.c"
       - ".github/workflows/minic-runtime-fourarch.yml"
       - "Makefile"
   workflow_dispatch:
@@ -249,6 +264,18 @@ jobs:
           python3 -m py_compile tools/runtime/build_runtime.py
           python3 tools/runtime/build_runtime.py --print-sources
           make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/runtime-ci all
+      - name: RV64 maintained C0 runtime including six consolidated GNU QEMU oracles
+        if: matrix.target == 'riscv64'
+        shell: bash
+        env:
+          MINIC: ${{ github.workspace }}/build/runtime-ci/bin/minic
+          RISCV_CC: riscv64-linux-gnu-gcc
+          QEMU_RISCV64: qemu-riscv64
+          REQUIRE_RISCV_RUNTIME: '1'
+          BUILD_DIR: ${{ github.workspace }}/build/runtime-ci
+        run: |
+          set -Eeuo pipefail
+          sh tests/compiler/c0/run-runtime.sh
       - name: AAPCS64 exact-head GNU/QEMU dynamic wide CALL ABI
         if: matrix.target == 'aarch64'
         shell: bash

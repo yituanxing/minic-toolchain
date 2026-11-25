@@ -1732,3 +1732,5 @@ C50–C58 的候选提交依次为 bf1894af、91a9fb85、c7ba04db、b4d2bf56、b
 ## 批次 C61：六份无现役调用的 RV64 Shell 回归归一（2026-11-25）
 
 基线 `eaecd9a4f976`。现有六份 Shell 独立执行器没有全仓直接调用者；阅读完整内容后把其 C 源/辅助源保留，语义断言并入原有 `tests/compiler/c0/run-runtime.sh`，共用 GNU-E/MiniC/GNU-GCC/QEMU 编排。保留 GNU 原子与命名 ASM operand、Zbb clz 禁止、独立 CRT0 的 `+&r` earlyclobber、九参数双向 ABI 和不经 GNU-E 的 raw C 动态 alloca/VLA 两组运行路径以及原 PASS 文本。旧脚本实物删除，不新增脚本或目录。新的 QEMU 执行需单独动态验证；不能将静态迁移或其他 CI 通过当作新运行用例通过。
+
+C61 动态验证绑定：四架构已有 RV64 job 复用安装好的 GNU cross/qemu-user，`REQUIRE_RISCV_RUNTIME=1` 强制执行当前 `run-runtime.sh`，将 runner 及其原始 C fixture 加入现役推送/PR 触发路径；不新建 workflow。CI 状态应按该提交的 exact HEAD 判断。

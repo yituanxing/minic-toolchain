@@ -187,7 +187,7 @@ run_rv64_raw() {
 # +&r earlyclobber stays a separate freestanding GNU ABI oracle with _start.
 run_rv64_earlyclobber() {
     name=gnu_inline_asm_readwrite_earlyclobber
-    host_cc=cc
+    host_cc=${HOST_CC:-${CC:-cc}}
     "$host_cc" -E -P -x c "$root/tests/compiler/c0/$name.c" \
         -o "$work/$name.i"
     "$minic" -S "$work/$name.i" -o "$work/$name.s"
