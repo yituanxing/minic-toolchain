@@ -770,9 +770,6 @@ bool minic_c0_program_set_function_signature(MinicC0Program *program,
                                              MinicType return_type,
                                              const MinicType *parameter_types,
                                              size_t parameter_count);
-bool minic_c0_program_set_function_parameter_count(MinicC0Program *program,
-                                                   MinicFunctionId function_id,
-                                                   size_t parameter_count);
 bool minic_c0_program_set_function_internal(MinicC0Program *program,
                                             MinicFunctionId function_id,
                                             bool is_internal);
@@ -1046,9 +1043,6 @@ bool minic_c0_global_relocation_slot_type(const MinicC0Program *program,
                                           MinicGlobalRelocationLocationKind location_kind,
                                           size_t location_index,
                                           MinicType *slot_type);
-bool minic_c0_global_relocation_object_target_type(const MinicC0Program *program,
-                                                   const MinicGlobalRelocation *relocation,
-                                                   MinicType *target_type);
 bool minic_c0_global_relocation_object_target_compatible(const MinicC0Program *program,
                                                          const MinicGlobalRelocation *relocation,
                                                          MinicType slot_type);

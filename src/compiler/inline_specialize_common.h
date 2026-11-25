@@ -25,8 +25,6 @@ enum {
 };
 
 /* Source-only opaque GNU asm reachability/clone eligibility. */
-bool minic_program_has_opaque_asm_symbol(
-    const MinicC0Program *program, const char *name, size_t name_length);
 bool minic_inline_source_has_opaque_asm_reference(
     const MinicC0Program *program, const MinicFunction *source);
 

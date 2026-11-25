@@ -1061,22 +1061,6 @@ bool minic_c0_program_set_function_calling_convention(
     return true;
 }
 
-bool minic_c0_program_set_function_parameter_count(MinicC0Program *program,
-                                                   MinicFunctionId function_id,
-                                                   size_t parameter_count) {
-    MinicType parameter_types[MINIC_MAX_FUNCTION_PARAMETERS];
-    size_t parameter_index;
-
-    if (parameter_count > MINIC_MAX_FUNCTION_PARAMETERS) {
-        return false;
-    }
-    for (parameter_index = 0U; parameter_index < parameter_count; ++parameter_index) {
-        parameter_types[parameter_index] = minic_type_int();
-    }
-    return minic_c0_program_set_function_signature(
-        program, function_id, minic_type_int(), parameter_types, parameter_count);
-}
-
 bool minic_c0_program_define_function(MinicC0Program *program,
                                       MinicFunctionId function_id,
                                       size_t local_begin,

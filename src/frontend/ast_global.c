@@ -1007,7 +1007,7 @@ static bool global_object_member_path_type(const MinicC0Program *program,
     return true;
 }
 
-bool minic_c0_global_relocation_object_target_type(const MinicC0Program *program,
+static bool minic_c0_global_relocation_object_target_type(const MinicC0Program *program,
                                                    const MinicGlobalRelocation *relocation,
                                                    MinicType *target_type) {
     if (program == NULL || relocation == NULL || target_type == NULL ||

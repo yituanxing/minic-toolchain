@@ -135,7 +135,7 @@ static bool add_record_copy_statement(MinicParser *parser,
     return minic_parser_add_statement(parser, &statement);
 }
 
-bool minic_parser_statement_record_copy(MinicParser *parser,
+static bool minic_parser_statement_record_copy(MinicParser *parser,
                                         MinicExpressionId target_id,
                                         MinicExpressionId source_id,
                                         MinicSourceSpan span) {

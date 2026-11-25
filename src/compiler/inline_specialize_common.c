@@ -23,7 +23,7 @@ static bool minic_asm_text_mentions_symbol(const char *text,
     return false;
 }
 
-bool minic_program_has_opaque_asm_symbol(const MinicC0Program *program,
+static bool minic_program_has_opaque_asm_symbol(const MinicC0Program *program,
                                          const char *name, size_t name_length) {
     size_t index;
     if (program == NULL || name == NULL || name_length == 0U)

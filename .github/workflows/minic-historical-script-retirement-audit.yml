@@ -69,6 +69,15 @@ jobs:
               "docs/architecture/README.md",
               "docs/architecture/multitarget-two-backend-audit-2026-10-19.md",
           }
+          metadata |= {
+              "src/frontend/ast.c",
+              "src/frontend/ast.h",
+              "src/frontend/ast_global.c",
+              "src/compiler/inline_specialize_common.c",
+              "src/compiler/inline_specialize_common.h",
+              "src/frontend/parser_statement.c",
+              "src/frontend/parser_runtime_initializer.h",
+          }
           deleted = changed_paths(base, "HEAD", "--diff-filter=D")
           changed = changed_paths(base, "HEAD")
           if len(expected) != 827 or deleted != expected or changed != expected | metadata:
