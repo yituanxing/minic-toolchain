@@ -62,3 +62,38 @@ jobs:
           for x in sorted((x for x in indexed if x['refs'] and x['overlap']),key=lambda x:(x['cross'] or x['hard'],x['bytes'])):
               print('OVERLAP_REFERENCED',json.dumps({k:x[k] for k in ('name','bytes','refs','overlap','fixtures','cross','hard')},ensure_ascii=False))
           PY
+
+      - name: Entire test fixture and shell semantic clone candidates
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import pathlib,subprocess,collections,hashlib,re,json
+          root=pathlib.Path.cwd()
+          ps=[p for p in subprocess.check_output(['git','ls-files','-z']).decode().split('\x00') if p and p.startswith('tests/') and p.endswith(('.c','.i','.sh'))]
+          exact=collections.defaultdict(list)
+          norm=collections.defaultdict(list)
+          shell=collections.defaultdict(list)
+          for p in ps:
+              try: s=(root/p).read_text(errors='replace')
+              except: continue
+              if p.endswith(('.c','.i')):
+                  stripped=re.sub(r'/\*.*?\*/|//[^\n]*','',s,flags=re.S)
+                  normalized=re.sub(r'\s+','',stripped)
+                  exact[hashlib.sha256(s.replace('\r\n','\n').encode()).hexdigest()].append(p)
+                  norm[hashlib.sha256(normalized.encode()).hexdigest()].append(p)
+              else:
+                  # Detect whole-structure shell similarity by removing only
+                  # fixture filenames and case identifiers. This is a lead,
+                  # not permission to delete anything.
+                  c=re.sub(r'(?:tests/(?:compiler|programs)/)?[\w./-]+\.(?:c|i)', 'SRC.c',s)
+                  c=re.sub(r'\b[A-Z][A-Z0-9_]{6,}=PASS[^\n]*','RESULT=PASS',c)
+                  c=re.sub(r'\b(?:run|probe)-[\w-]+','SCRIPT',c)
+                  c=re.sub(r'\s+',' ',c)
+                  shell[hashlib.sha256(c.encode()).hexdigest()].append(p)
+          for kind,d in [('C_EXACT',exact),('C_NORMALIZED',norm),('SH_TEMPLATE',shell)]:
+              clusters=sorted([v for v in d.values() if len(v)>1],key=lambda v:-len(v))
+              print('CLONE_SUMMARY',kind,json.dumps(dict(groups=len(clusters),members=sum(len(v) for v in clusters),reducible=sum(len(v)-1 for v in clusters),largest=len(clusters[0]) if clusters else 0)))
+              for group in clusters[:160]:
+                  if kind=='C_NORMALIZED' and len(group)<2: continue
+                  print('CLONE_GROUP',kind,json.dumps(group))
+          PY
