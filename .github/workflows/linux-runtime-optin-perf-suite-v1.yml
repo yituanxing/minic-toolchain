@@ -173,14 +173,8 @@ jobs:
       - name: Build latest Canonical MiniC
         if: "!contains(github.event.head_commit.message, '[minic-bootstrap-stage2-linux500]') && !contains(github.event.head_commit.message, '[minic-bootstrap-stage4-linux500]')"
         run: |
-          set -Eeuo pipefail
-          root="$GITHUB_WORKSPACE/build/all3352-wall"
-          mkdir -p "$root/evidence"
-          bash tools/ci/linux-perf-build-minic-profile-v1.sh "$root/toolchain" "$root/evidence/profile"
-          grep -qx 'apply-perf-core-object-interval-onepass-v1.py' "$root/evidence/profile/minic-profile.txt"
-          grep -qx 'apply-perf-parser-nearest-ordinary-scope-v1.py' "$root/evidence/profile/minic-profile.txt"
-          grep -qx 'apply-correctness-constant-p-ice-v1.py' "$root/evidence/profile/minic-profile.txt"
-          sha256sum "$root/toolchain/bin/minic" | tee "$root/evidence/minic.sha256"
+          echo 'HISTORICAL_PERF_RETIRED: stacked source overlay no longer builds current MiniC; replay at 59ad3648637eba4991c0fb8ce27f121cc852b4fa. No current-source PASS.' >&2
+          exit 78
       - name: Materialize this Kbuild C TU range (not part of MiniC time)
         if: "!contains(github.event.head_commit.message, '[minic-bootstrap-stage2-linux500]') && !contains(github.event.head_commit.message, '[minic-bootstrap-stage4-linux500]')"
         run: |
@@ -508,20 +502,8 @@ jobs:
       - name: Build control and candidate with identical Canonical patches
         shell: bash
         run: |
-          set -Eeuo pipefail
-          work="$GITHUB_WORKSPACE/build/constant-p-regression"
-          mkdir -p "$work"
-          MINIC_CORRECTNESS_SKIP_CONSTANT_P_ICE=1 \
-            bash tools/ci/linux-perf-build-minic-profile-v1.sh \
-              "$work/baseline" "$work/baseline-profile"
-          grep -qx 'SKIPPED_CONSTANT_P_ICE=apply-correctness-constant-p-ice-v1.py' \
-            "$work/baseline-profile/patch.log"
-          git reset --hard HEAD
-          bash tools/ci/linux-perf-build-minic-profile-v1.sh \
-            "$work/candidate" "$work/candidate-profile"
-          grep -qx 'apply-correctness-constant-p-ice-v1.py' \
-            "$work/candidate-profile/minic-profile.txt"
-          git diff --check
+          echo 'HISTORICAL_PERF_RETIRED: stacked source overlay no longer builds current MiniC; replay at 59ad3648637eba4991c0fb8ce27f121cc852b4fa. No current-source PASS.' >&2
+          exit 78
       - name: Install RISC-V assembler and emulator
         run: |
           set -Eeuo pipefail
@@ -1208,34 +1190,8 @@ jobs:
         if: "!contains(github.event.head_commit.message, '[minic-source-broad-ab]') && !contains(github.event.head_commit.message, '[minic-current-phase20]') && !contains(github.event.head_commit.message, '[minic-cpu-profile-only]') && !contains(github.event.head_commit.message, '[minic-parser-cold-switch-ab]') && !contains(github.event.head_commit.message, '[minic-parser-cold-switch-ab500]') && !contains(github.event.head_commit.message, '[minic-parser-cold-switch-triage]') && !contains(github.event.head_commit.message, '[minic-parser-cold-switch-safety]') && !contains(github.event.head_commit.message, '[minic-boolean-domain-ab20]') && !contains(github.event.head_commit.message, '[minic-boolean-domain-ab500]') && !contains(github.event.head_commit.message, '[minic-parser-copy-ab]') && !contains(github.event.head_commit.message, '[minic-parser-lexer-lookahead-ab]') && !contains(github.event.head_commit.message, '[minic-parser-enum-bind-ab]') && !contains(github.event.head_commit.message, '[minic-core-name-index-ab]') && !contains(github.event.head_commit.message, '[minic-parser-string-lexer-ab]') && !contains(github.event.head_commit.message, '[minic-ast-array-owner-ab]') && !contains(github.event.head_commit.message, '[minic-ast-array-owner-ab500]') && !contains(github.event.head_commit.message, '[minic-ast-array-regression-triage]') && !contains(github.event.head_commit.message, '[minic-ast-shape-census]') && !contains(github.event.head_commit.message, '[minic-functiontype-exact-ab]') && !contains(github.event.head_commit.message, '[minic-ast-call-inline8-ab]') && !contains(github.event.head_commit.message, '[minic-ast-call-inline8-ab500]') && !contains(github.event.head_commit.message, '[minic-ast-call-inline8-safety]') && !contains(github.event.head_commit.message, '[minic-function-param-exact-ab]') && !contains(github.event.head_commit.message, '[minic-function-param-exact-ab500]') && !contains(github.event.head_commit.message, '[minic-function-param-exact-triage]') && !contains(github.event.head_commit.message, '[minic-function-param-contract]') && !contains(github.event.head_commit.message, '[minic-ast-packed-call-ab]') && !contains(github.event.head_commit.message, '[minic-ast-packed-call-ab500]') && !contains(github.event.head_commit.message, '[minic-ast-packed-call-edge]') && !contains(github.event.head_commit.message, '[minic-ast-packed-call-regression]') && !contains(github.event.head_commit.message, '[minic-type-layout-ab]') && !contains(github.event.head_commit.message, '[minic-type-layout-ab500]') && !contains(github.event.head_commit.message, '[minic-type-layout-regression]') && !contains(github.event.head_commit.message, '[minic-core-name-index-ab500]') && !contains(github.event.head_commit.message, '[minic-integer-owner-ab]') && !contains(github.event.head_commit.message, '[minic-integer-owner-ab500]') && !contains(github.event.head_commit.message, '[minic-next-stage-audit]') && !contains(github.event.head_commit.message, '[minic-core-reentry-ab]') && !contains(github.event.head_commit.message, '[minic-core-reentry-ab500]') && !contains(github.event.head_commit.message, '[minic-core-regression-triage]') && !contains(github.event.head_commit.message, '[minic-core-lazy-ab]') && !contains(github.event.head_commit.message, '[minic-core-lazy-ab500]') && !contains(github.event.head_commit.message, '[minic-boolean-owner-ab]') && !contains(github.event.head_commit.message, '[minic-boolean-owner-ab500]') && !contains(github.event.head_commit.message, '[minic-boolean-regression-triage]') && !contains(github.event.head_commit.message, '[minic-symbolic-source-call-ab]') && !contains(github.event.head_commit.message, '[minic-symbolic-source-call-triage]') && !contains(github.event.head_commit.message, '[minic-symbolic-source-call-safety]') && !contains(github.event.head_commit.message, '[minic-record-layout-ab]') && !contains(github.event.head_commit.message, '[minic-lexer-identifier-bulk-ab]') && !contains(github.event.head_commit.message, '[minic-lexer-rescan-census]') && !contains(github.event.head_commit.message, '[minic-cpu-profile-broad]') && !contains(github.event.head_commit.message, '[minic-core-no-facts-ab]') && !contains(github.event.head_commit.message, '[minic-core-no-facts-ab500]') && !contains(github.event.head_commit.message, '[minic-current-resource500]') && !contains(github.event.head_commit.message, '[minic-current-resource-repro]') && !contains(github.event.head_commit.message, '[minic-current-concurrency]') && !contains(github.event.head_commit.message, '[minic-current-concurrency-reverse]') && !contains(github.event.head_commit.message, '[minic-core-variant-source-ab]') && !contains(github.event.head_commit.message, '[minic-core-variant-source-ab500]') && !contains(github.event.head_commit.message, '[minic-core-discarded-sparse-ab]') && !contains(github.event.head_commit.message, '[minic-bootstrap-seed-preflight]') && !contains(github.event.head_commit.message, '[minic-bootstrap-fixedpoint]') && !contains(github.event.head_commit.message, '[minic-bootstrap-stage2-programs]') && !contains(github.event.head_commit.message, '[minic-bootstrap-stage2-projects]') && !contains(github.event.head_commit.message, '[minic-bootstrap-stage2-toolchain]') && !contains(github.event.head_commit.message, '[minic-bootstrap-stage2-linux20]') && !contains(github.event.head_commit.message, '[minic-bootstrap-stage2-native-runtime]')"
         shell: bash
         run: |
-          set -Eeuo pipefail
-          work="$GITHUB_WORKSPACE/build/linux-perf-audit-v1"
-          mkdir -p "$work/evidence"
-          # Both profiles are rebuilt independently: headers such as
-          # parser_internal.h change MinicParser layout (ABI).
-          MINIC_PERF_SKIP_VERIFIED_OPTIMIZATIONS=1 \
-            bash tools/ci/linux-perf-build-minic-profile-v1.sh \
-            "$work/baseline-toolchain" "$work/evidence/baseline-profile"
-          grep -qx 'apply-perf-core-lower-statement-workspace-v1.py' \
-            "$work/evidence/baseline-profile/minic-profile.txt"
-          grep -qx 'SKIPPED_VERIFIED_PERF_PATCH=apply-inline-specialization-local-boolean-domain-scoped-v1.py' \
-            "$work/evidence/baseline-profile/patch.log"
-          grep -qx 'SKIPPED_VERIFIED_PERF_PATCH=apply-perf-parser-typedef-index-v1.py' \
-            "$work/evidence/baseline-profile/patch.log"
-          # This resets only the disposable Actions checkout; cached build/linux
-          # input artifacts are untracked and not touched.
-          git reset --hard HEAD
-          bash tools/ci/linux-perf-build-minic-profile-v1.sh \
-            "$work/toolchain" "$work/evidence/integrated-profile"
-          grep -qx 'apply-inline-specialization-local-boolean-domain-scoped-v1.py' \
-            "$work/evidence/integrated-profile/minic-profile.txt"
-          grep -qx 'apply-perf-parser-typedef-index-v1.py' \
-            "$work/evidence/integrated-profile/minic-profile.txt"
-          git diff --check
-          sha256sum "$work/baseline-toolchain/bin/minic" "$work/baseline-toolchain/bin/minic-cc" \
-            "$work/toolchain/bin/minic" "$work/toolchain/bin/minic-cc" \
-            | tee "$work/evidence/paired-binary.sha256"
-          ! cmp -s "$work/baseline-toolchain/bin/minic-cc" "$work/toolchain/bin/minic-cc"
+          echo 'HISTORICAL_PERF_RETIRED: stacked source overlay no longer builds current MiniC; replay at 59ad3648637eba4991c0fb8ce27f121cc852b4fa. No current-source PASS.' >&2
+          exit 78
 
       - name: Restore certified first500 inputs
         id: corpus-restore
@@ -2131,22 +2087,8 @@ jobs:
         if: contains(github.event.head_commit.message, '[linux-perf-factorial]')
         shell: bash
         run: |
-          set -Eeuo pipefail
-          work="$GITHUB_WORKSPACE/build/linux-perf-audit-v1"
-          test -s "$work/evidence/paired-results.json"
-          git reset --hard HEAD
-          MINIC_PERF_SKIP_TYPEDEF_INDEX=1 bash tools/ci/linux-perf-build-minic-profile-v1.sh \
-            "$work/boolean-only" "$work/evidence/boolean-only-profile"
-          grep -qx 'SKIPPED_FACTOR_PATCH=apply-perf-parser-typedef-index-v1.py' \
-            "$work/evidence/boolean-only-profile/patch.log"
-          git reset --hard HEAD
-          MINIC_PERF_SKIP_BOOLEAN_SCOPED=1 bash tools/ci/linux-perf-build-minic-profile-v1.sh \
-            "$work/typedef-only" "$work/evidence/typedef-only-profile"
-          grep -qx 'SKIPPED_FACTOR_PATCH=apply-inline-specialization-local-boolean-domain-scoped-v1.py' \
-            "$work/evidence/typedef-only-profile/patch.log"
-          test -x "$work/toolchain/bin/minic"
-          test -x "$work/boolean-only/bin/minic"
-          test -x "$work/typedef-only/bin/minic"
+          echo 'HISTORICAL_PERF_RETIRED: stacked source overlay no longer builds current MiniC; replay at 59ad3648637eba4991c0fb8ce27f121cc852b4fa. No current-source PASS.' >&2
+          exit 78
 
       - name: Reuse frozen first500 paired A-B for each independent factor
         if: contains(github.event.head_commit.message, '[linux-perf-factorial]')

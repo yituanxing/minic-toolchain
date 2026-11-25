@@ -162,6 +162,12 @@ jobs:
           }
           assert retired_stack <= set(git("ls-tree", "-r", "--name-only", "fe0a83481864b2808f62098510b08df579ff42a5").decode().splitlines())
           expected |= retired_stack
+          retired_perf_labels = {
+              "tools/ci/apply-perf-parser-nearest-ordinary-scope-v1.py",
+              "tools/ci/apply-perf-parser-typedef-index-v1.py",
+          }
+          assert retired_perf_labels <= set(git("ls-tree", "-r", "--name-only", "6fab77605806de54c2d73dfc0e81b799674d6a29").decode().splitlines())
+          expected |= retired_perf_labels
           metadata |= {
               ".github/workflows/linux-expanded-pi-p1-runtime-v1.yml",
               ".github/workflows/linux-runtime-focused-faults-v1.yml",
@@ -179,7 +185,7 @@ jobs:
           metadata |= {"tools/ci/linux-runtime-build-minic-profile-v1.sh", "tools/ci/linux-runtime-profile-cache-id-v1.py"}
           deleted = changed_paths(base, "HEAD", "--diff-filter=D")
           changed = changed_paths(base, "HEAD")
-          if len(expected) != 913 or deleted != expected or changed != expected | metadata:
+          if len(expected) != 915 or deleted != expected or changed != expected | metadata:
               raise SystemExit("RETIREMENT_SCOPE=FAIL: unexpected tree changes")
           # Preserve the full closure in a historical checkout, not a successful
           # no-op overlay on a different source architecture.
@@ -330,7 +336,33 @@ jobs:
           # deliberately fail-closed, not a PASS substitute for old experiments.
           perf_path = ".github/workflows/linux-runtime-optin-perf-suite-v1.yml"
           old_perf = git("show", "abae0fe2ab1c3d6c92058f33c299c57340d61432:" + perf_path).decode()
-          new_perf = pathlib.Path(perf_path).read_text()
+          live_perf = pathlib.Path(perf_path).read_text()
+          new_perf = git("show", "6fab77605806de54c2d73dfc0e81b799674d6a29:" + perf_path).decode()
+          retired_profile_steps = {
+              "Build latest Canonical MiniC",
+              "Build control and candidate with identical Canonical patches",
+              "Build baseline and integrated optimization from clean sources",
+              "Build two one-factor-off compilers from immutable source",
+          }
+          marks = list(re.finditer(r"(?m)^      - (?:name:|uses:|if:) .+$", new_perf))
+          expected_perf = new_perf
+          seen_profile_steps = set()
+          for i in range(len(marks) - 1, -1, -1):
+              mark = marks[i]
+              name = mark.group().removeprefix("      - name: ")
+              if name not in retired_profile_steps:
+                  continue
+              end = marks[i + 1].start() if i + 1 < len(marks) else len(new_perf)
+              step = new_perf[mark.start():end]
+              prefix, sep, body = step.partition("        run: |\n")
+              assert sep and "bash tools/ci/linux-perf-build-minic-profile-v1.sh" in body
+              trailing = re.search(r"\n(?:[ \t]*\n)*$", body)
+              replacement = (prefix + sep + "          echo 'HISTORICAL_PERF_RETIRED: stacked source overlay no longer builds current MiniC; replay at 59ad3648637eba4991c0fb8ce27f121cc852b4fa. No current-source PASS.' >&2\n"
+                             + "          exit 78" + (trailing.group() if trailing else "\n"))
+              expected_perf = expected_perf[:mark.start()] + replacement + expected_perf[end:]
+              seen_profile_steps.add(name)
+          assert seen_profile_steps == retired_profile_steps and live_perf == expected_perf
+          print("HISTORICAL_PERF_BUILD_RETIREMENT=PASS four_steps_fail_closed unrelated_steps_identical")
           retired_steps = {
               "Build unmodified and lexer-only lookahead Parser MiniC",
               "Four-owner RV64 record validation single-walk A/B",
