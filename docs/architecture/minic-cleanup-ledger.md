@@ -1756,3 +1756,5 @@ C63 首次 Native Matrix：LL/SC、PMCCFILTR、MTE/SDEI、EL2/PMU 四项 PASS，
 C63 第二次 Native Matrix：变更为 one-or-more whitespace 后仍未匹配到 KVM debug 134 MSR。原始 AArch64 source ASM 有可能在列0直接发射助记符，因此改成 zero-or-more whitespace，同时升级现有 matrix 在计数失败时输出真实 machine_samples 前12条便于下一轮判断。134/8 的数量和所有原有 negative 仍保持严格。
 
 C63 ICC 码字调查：134 条 KVM debug MSR 数量已通过，ICC 8 条机器行也通过，但期望四个 .inst 绝对码字首次失败。先增强现有 Matrix 的 check 失败诊断，输出该汇编生成物中最多 22 条 `.inst`/`msr_s` 指令以辨别 GNU 宏展开与实际机码，不放宽任何机器码或拒绝断言。下一次按真实证据处理。
+
+C63 ICC 溯源结论（真实 CI 897b8353）：MiniC 在 .s 中保留八次受白名单认证的 GNU msr_s 宏调用，参数为 (op0=3, op1=0, CRn=12, CRm=8/9, op2=4|n/n, Rt=x9)；宏体固定为 .inst (0xd5000000|(\\sreg)|(.L__gpr_num_\\rt))。旧 Shell 要求 .inst 绝对立即数，但 GNU 宏尚未展开，这是测试错误而非码字错误。替换为 8 个完整参数元组逐项核对、8 个 .macro/.inst/调用/.purgem 精确数量门禁，并在存在 aarch64-linux-gnu-gcc 时汇编 MiniC 和原 GNU C 作为真实编码可汇编性检查。四架构非法目标以及两项非法 debug 寄存器/约束拒绝继续保持，不执行特权指令。以本 HEAD 的真实 CI 验证结果为准。
