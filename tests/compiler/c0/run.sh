@@ -371,8 +371,8 @@ run_c0_host run-compile-only-case.sh gnu-empty-records
 run_c0_host run-x86-sysv-12byte-record.sh
 MINIC_CC="$(dirname "$minic")/minic-cc" \
 HOST_CC="$host_cc" \
-sh "$root/tests/compiler/c0/probe-lp64-empty-record-call-abi.sh"
-sh "$root/tests/compiler/c0/probe-lp64-overaligned-stack-frame.sh"
+sh "$root/tests/compiler/c0/run-native-matrix.sh" probe-lp64-empty-record-call-abi
+sh "$root/tests/compiler/c0/run-native-matrix.sh" probe-lp64-overaligned-stack-frame
 expect_compile_failure \
     invalid_conflicting_const_parameter \
     "conflicting function declaration"

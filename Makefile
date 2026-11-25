@@ -761,7 +761,7 @@ check-fast: check-rv64i-linux-softarith-source
 .PHONY: check-riscv-linux-compiletime-assert-guards
 check-riscv-linux-compiletime-assert-guards: $(MINIC_CC_BINARY)
 	@MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
-		sh tests/compiler/c0/run-riscv-linux-compiletime-assert-guards.sh
+		sh tests/compiler/c0/run-native-matrix.sh run-riscv-linux-compiletime-assert-guards
 
 check-fast: check-riscv-linux-compiletime-assert-guards
 
@@ -1751,7 +1751,7 @@ check-asm-operand-plan: $(MINIC_CC_BINARY)
 .PHONY: check-riscv-extended-zero-output-volatile
 check-riscv-extended-zero-output-volatile: $(MINIC_CC_BINARY)
 	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
-	sh tests/compiler/c0/run-riscv-extended-zero-output-volatile.sh
+	sh tests/compiler/c0/run-native-matrix.sh run-riscv-extended-zero-output-volatile
 
 check-fast: check-riscv-extended-zero-output-volatile
 
@@ -2086,7 +2086,7 @@ check-rv64-pic-elf-nonpreemptible: $(MINIC_CC_BINARY)
 .PHONY: check-aarch64-fixmap-cross-static-const
 check-aarch64-fixmap-cross-static-const: $(MINIC_CC_BINARY)
 	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
-	sh tests/compiler/c0/probe-aarch64-fixmap-cross-static-const.sh
+	sh tests/compiler/c0/run-native-matrix.sh probe-aarch64-fixmap-cross-static-const
 
 .PHONY: check-aarch64-fp-pointer-record-abi
 check-aarch64-fp-pointer-record-abi: $(MINIC_CC_BINARY)

@@ -65,7 +65,7 @@ bash tests/compiler/c0/run-native-matrix.sh probe-core-asm-zero-stride
 sh tests/compiler/c0/probe-rv32-target-gate.sh
 sh tests/compiler/c0/probe-rv32-packed-scalar-alignment.sh
 sh tests/compiler/c0/probe-riscv-packed-overflow-alignment.sh
-sh tests/compiler/c0/probe-rv64-packed-wide-alignment.sh
+sh tests/compiler/c0/run-native-matrix.sh probe-rv64-packed-wide-alignment
 sh tests/compiler/c0/probe-riscv-packed-structured-asm-alignment.sh
 bash tests/compiler/c0/probe-aarch64-typed-frame-path.sh "$mini"
 bash tests/compiler/c0/probe-aarch64-variadic-incoming-stack.sh

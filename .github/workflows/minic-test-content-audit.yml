@@ -124,7 +124,6 @@ jobs:
           # native-matrix modes so orphan-name pruning cannot remove live tests.
           MINIC_CC="$PWD/build/release/bin/minic-cc" sh tests/compiler/c0/run-aarch64-gnu-inline-lazy-negatives.sh
           MINIC_CC="$PWD/build/release/bin/minic-cc" sh tests/compiler/c0/run-aarch64-gnu-neon-inline-six.sh
-          MINIC_CC="$PWD/build/release/bin/minic-cc" sh tests/compiler/c0/run-incomplete-function-pointer-array-lifetime.sh
           python3 -m py_compile tools/ci/minic-bootstrap-current-b1-seed-v1.py
           make -j4 MODE=release CFLAGS=-Werror check-unsigned-declarations check-integer-bit-operations check-core-type-verifier check-core-ir-shapes-source check-netlink-warn-branch check-loongarch64-record-copy-size
 
@@ -165,6 +164,5 @@ jobs:
           # native-matrix modes so orphan-name pruning cannot remove live tests.
           MINIC_CC="$PWD/build/release/bin/minic-cc" sh tests/compiler/c0/run-aarch64-gnu-inline-lazy-negatives.sh
           MINIC_CC="$PWD/build/release/bin/minic-cc" sh tests/compiler/c0/run-aarch64-gnu-neon-inline-six.sh
-          MINIC_CC="$PWD/build/release/bin/minic-cc" sh tests/compiler/c0/run-incomplete-function-pointer-array-lifetime.sh
           python3 -m py_compile tools/ci/minic-bootstrap-current-b1-seed-v1.py
           make -j4 MODE=release CFLAGS=-Werror check-unsigned-declarations check-integer-bit-operations check-core-type-verifier check-core-ir-shapes-source check-netlink-warn-branch check-loongarch64-record-copy-size

@@ -76,7 +76,7 @@ for test_script in \
     compile:static-fixed-record-array-zero \
     native:run-static-multidimensional-array-relocation \
     native:run-static-integer-floating-const-initializer \
-    run-incomplete-function-pointer-array-lifetime.sh \
+    native:run-incomplete-function-pointer-array-lifetime \
     native:run-static-integer-pointer-cast-comparison \
     compile:static-aggregate-array-designators \
     compile:prefix-update-expressions \
