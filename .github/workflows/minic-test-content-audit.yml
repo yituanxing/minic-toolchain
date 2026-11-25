@@ -163,3 +163,51 @@ jobs:
           for name in core-checked-arithmetic core-comparisons core-condition-and core-logical-and-value; do
             BUILD_DIR="$PWD/build/test-pruning/$name" sh tests/compiler/c0/run-core-basic-runtime-case.sh "$name"
           done
+
+  shell-families:
+    if: "startsWith(github.event.head_commit.message, 'audit families')"
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Read all actual scripts and identify repeated executable structures
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          from collections import defaultdict,Counter
+          import subprocess,re,json
+          files=subprocess.check_output(["git","ls-files","-z"]).decode().strip("\0").split("\0")
+          texts={}
+          for p in files:
+              try: texts[p]=Path(p).read_text()
+              except (UnicodeDecodeError, OSError): pass
+          scripts={p:s for p,s in texts.items() if p.startswith("tests/") and p.endswith(".sh")}
+          # Compare command structure, not filenames. Treat messages, source names,
+          # artifact names, grep operands and flags as candidate data only.
+          def skeleton(s):
+              if re.search(r'<<|eval\b|^\s*function\b',s,re.M):return None
+              lines=[]
+              for line in s.splitlines():
+                  if not line.strip() or line.lstrip().startswith("#"):continue
+                  lines.append(line.strip())
+              s="\n".join(lines).replace("\\\n"," ")
+              s=re.sub(r'(?<=/)[A-Za-z0-9_.-]+\.(?:c|i|s|o|elf|sh|out|err|log|stdout|stderr|txt)\b','FILE',s)
+              s=re.sub(r'(?<=/tests/)[A-Za-z0-9_.-]+(?=\n|[/"\s])','WORK',s)
+              s=re.sub(r"'[^'\n]*'", "'LIT'",s)
+              s=re.sub(r'"[^"\n]*"',lambda m: '"'+re.sub(r'[A-Za-z0-9_.-]+(?=[/"\s]|$)',lambda n:n.group() if "$" in m.group() and n.group() in ("root","work","MINIC","minic","target","source","source_file","host_cc","host","CC","d","tmp","tmp_dir") else "V",m.group()[1:-1])+'"',s)
+              s=re.sub(r'(?<![\w$])[0-9]+(?!\w)','NUM',s)
+              s=re.sub(r'[ \t]+',' ',s)
+              return s
+          groups=defaultdict(list)
+          for p,s in scripts.items():
+              k=skeleton(s)
+              if k is not None:groups[k].append(p)
+          for k,ps in sorted(groups.items(),key=lambda x:-len(x[1])):
+              if len(ps)<2:continue
+              print("FAMILY",json.dumps({"count":len(ps),"paths":ps,"skeleton":k[:3500]}))
+          # For script-only single-target/simple native probes, display actual
+          # full scripts (not just names) for the next manual selection.
+          for p,s in scripts.items():
+              if p.startswith("tests/compiler/c0/") and len(s)<2500 and re.search(r'(?m)^\s*for target in ',s) and re.search(r'(?m)^\s*["$].*(?:gnu|minic|mini)"\s*(?:\|\|[^\\n]*)?$',s):
+                  print("NATIVE_FAMILY",json.dumps([p,s]))
+          print("SHELL_FAMILY_SUMMARY",json.dumps({"scripts":len(scripts),"grouped":sum(len(v) for v in groups.values() if len(v)>1),"families":sum(len(v)>1 for v in groups.values())}))
+          PY
