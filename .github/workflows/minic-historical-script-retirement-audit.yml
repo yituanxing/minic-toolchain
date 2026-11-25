@@ -385,9 +385,61 @@ jobs:
           metadata |= {"tools/ci/linux-perf-build-minic-profile-v1.sh", "tools/ci/linux-perf-ast-growth-ab-v1.sh"}
           metadata |= {"tools/ci/linux-runtime-build-minic-profile-v1.sh", "tools/ci/linux-runtime-profile-cache-id-v1.py"}
           metadata -= retired_route_files | expired_replay_files
+          # All 37 original C0 entrypoints are preserved in the exact pre-consolidation tree.
+          source_assembly_cases = {
+              "tests/compiler/c0/run-anonymous-record-field-types.sh",
+              "tests/compiler/c0/run-compound-assignment-full.sh",
+              "tests/compiler/c0/run-enum-constant-expressions.sh",
+              "tests/compiler/c0/run-flexible-array-members.sh",
+              "tests/compiler/c0/run-function-designator-calls.sh",
+              "tests/compiler/c0/run-integer-constant-bitwise.sh",
+              "tests/compiler/c0/run-packed-record-layout.sh",
+              "tests/compiler/c0/run-static-local-record-initializers.sh",
+              "tests/compiler/c0/run-static-record-arrays.sh",
+              "tests/compiler/c0/run-builtin-clzll.sh",
+              "tests/compiler/c0/run-builtin-unary-family.sh",
+              "tests/compiler/c0/run-external-record-compound-literal.sh",
+              "tests/compiler/c0/run-function-parameter-adjustment.sh",
+              "tests/compiler/c0/run-function-pointer-qualifiers.sh",
+              "tests/compiler/c0/run-gnu-incomplete-record-function-signature.sh",
+              "tests/compiler/c0/run-gnu-omitted-conditional.sh",
+              "tests/compiler/c0/run-gnu-record-compound-literal.sh",
+              "tests/compiler/c0/run-conditional-null-pointer-constant.sh",
+              "tests/compiler/c0/run-deferred-declarator-attributes.sh",
+              "tests/compiler/c0/run-pragma-pack-record-layout.sh",
+              "tests/compiler/c0/run-preprocessed-line-markers.sh",
+              "tests/compiler/c0/run-static-global-object-section.sh",
+              "tests/compiler/c0/run-static-mixed-symbol-relocations.sh",
+              "tests/compiler/c0/run-static-object-address-relocation.sh",
+              "tests/compiler/c0/run-expression-statements.sh",
+              "tests/compiler/c0/run-long-types.sh",
+              "tests/compiler/c0/run-pointer-qualifications.sh",
+              "tests/compiler/c0/run-static-functions.sh",
+              "tests/compiler/c0/run-switch-control-flow.sh",
+              "tests/compiler/c0/run-unsigned-char-layout.sh",
+              "tests/compiler/c0/run-gnu-auto-type-local.sh",
+              "tests/compiler/c0/run-gnu-object-alignment-attribute.sh",
+              "tests/compiler/c0/run-pointer-arithmetic.sh",
+              "tests/compiler/c0/run-static-local-arrays.sh",
+              "tests/compiler/c0/run-pointer-array-typed-null.sh",
+              "tests/compiler/c0/run-predefined-func-name.sh",
+              "tests/compiler/c0/run-static-zero-declaration-list.sh",
+          }
+          assert len(source_assembly_cases) == 37 and not (expected & source_assembly_cases)
+          assert source_assembly_cases <= set(git("ls-tree", "-r", "--name-only", "bfc0a37b6fb7f0211b1068ebce2e8d49a8ba111c").decode().splitlines())
+          expected |= source_assembly_cases
+          metadata |= {
+              "tests/compiler/c0/run-compile-only-case.sh",
+              "tests/compiler/c0/run-foundation-focused.sh",
+              ".github/scripts/compiler-c0-full-gate.sh",
+              "tests/compiler/c0/probe-review-batch-2026-10-29.sh",
+              "tests/compiler/c0/run.sh",
+              "Makefile",
+              "tests/compiler/c0/run-cast-expressions.sh",
+          }
           deleted = changed_paths(base, "HEAD", "--diff-filter=D")
           changed = changed_paths(base, "HEAD")
-          if len(expected) != 981 or deleted != expected or changed != expected | metadata:
+          if len(expected) != 1018 or deleted != expected or changed != expected | metadata:
               raise SystemExit("RETIREMENT_SCOPE=FAIL: unexpected tree changes")
           # Preserve the full closure in a historical checkout, not a successful
           # no-op overlay on a different source architecture.
@@ -1236,6 +1288,43 @@ jobs:
             echo "BULK_COMPILE_EQUIVALENCE=PASS case=$name original_exit=$old_rc"
           done
           echo "BULK_COMPILE_COMPARISON passed=$passed unchanged_baseline_fail=$baseline_failures"
+          git diff --exit-code
+
+      - name: Compare 37 original source-assembly drivers with consolidated routes
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          export MINIC="$PWD/build/retirement-oracle/bin/minic" HOST_CC=cc
+          sh -n tests/compiler/c0/run-compile-only-case.sh
+          work="$PWD/build/retirement-source-assembly"
+          mkdir -p "$work"
+          passed=0
+          baseline_failures=0
+          for name in anonymous-record-field-types compound-assignment-full enum-constant-expressions flexible-array-members function-designator-calls integer-constant-bitwise packed-record-layout static-local-record-initializers static-record-arrays builtin-clzll builtin-unary-family external-record-compound-literal function-parameter-adjustment function-pointer-qualifiers gnu-incomplete-record-function-signature gnu-omitted-conditional gnu-record-compound-literal conditional-null-pointer-constant deferred-declarator-attributes pragma-pack-record-layout preprocessed-line-markers static-global-object-section static-mixed-symbol-relocations static-object-address-relocation expression-statements long-types pointer-qualifications static-functions switch-control-flow unsigned-char-layout gnu-auto-type-local gnu-object-alignment-attribute pointer-arithmetic static-local-arrays pointer-array-typed-null predefined-func-name static-zero-declaration-list; do
+            script="tests/compiler/c0/run-$name.sh"
+            test ! -e "$script"
+            git show bfc0a37b6fb7f0211b1068ebce2e8d49a8ba111c:"$script" > "$script"
+            export BUILD_DIR="$work/$name"
+            mkdir -p "$BUILD_DIR"
+            old_rc=0
+            sh "$script" > "$work/$name.old.stdout" 2> "$work/$name.old.stderr" || old_rc=$?
+            rm "$script"
+            mv "$BUILD_DIR" "$work/$name.old"
+            mkdir -p "$BUILD_DIR"
+            new_rc=0
+            sh tests/compiler/c0/run-compile-only-case.sh "$name" > "$work/$name.new.stdout" 2> "$work/$name.new.stderr" || new_rc=$?
+            test "$old_rc" -eq "$new_rc"
+            diff -r "$work/$name.old" "$BUILD_DIR"
+            cmp "$work/$name.old.stdout" "$work/$name.new.stdout"
+            cmp "$work/$name.old.stderr" "$work/$name.new.stderr"
+            if test "$old_rc" -eq 0; then
+              passed=$((passed+1))
+            else
+              baseline_failures=$((baseline_failures+1))
+            fi
+            echo "SOURCE_ASSEMBLY_EQUIVALENCE=PASS case=$name original_exit=$old_rc"
+          done
+          echo "SOURCE_ASSEMBLY_COMPARISON passed=$passed unchanged_baseline_fail=$baseline_failures"
           git diff --exit-code
 
   bulk-c0-template-discovery:

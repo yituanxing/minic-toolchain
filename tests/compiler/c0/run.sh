@@ -402,7 +402,7 @@ expect_compile_failure invalid_return "expected expression"
 
 run_c0_host run-gnu-void-return-expression.sh
 
-run_c0_host run-gnu-omitted-conditional.sh
+run_c0_host run-compile-only-case.sh gnu-omitted-conditional
 
 run_c0_host run-gnu-static-local-interleaved-attribute.sh
 
@@ -412,9 +412,9 @@ run_c0_host run-character-array-string-initializer.sh
 
 run_c0_host run-array-parameter-adjustment.sh
 
-run_c0_host run-function-parameter-adjustment.sh
+run_c0_host run-compile-only-case.sh function-parameter-adjustment
 
-run_c0_host run-function-pointer-qualifiers.sh
+run_c0_host run-compile-only-case.sh function-pointer-qualifiers
 
 run_c0_host run-function-pointer-field-array.sh
 
@@ -458,19 +458,19 @@ MINIC="$minic" BUILD_DIR="$work/gnu-weak-function-symbol" HOST_CC="$host_cc" sh 
 
 MINIC="$minic" BUILD_DIR="$work/gnu-weak-undefined-live" HOST_CC="$host_cc" sh "$root/tests/compiler/c0/run-gnu-weak-undefined-live.sh"
 
-MINIC="$minic" BUILD_DIR="$work/pragma-pack-record-layout" HOST_CC="$host_cc" sh "$root/tests/compiler/c0/run-pragma-pack-record-layout.sh"
+MINIC="$minic" BUILD_DIR="$work/pragma-pack-record-layout" HOST_CC="$host_cc" sh "$root/tests/compiler/c0/run-compile-only-case.sh" pragma-pack-record-layout
 
 MINIC="$minic" BUILD_DIR="$work/gnu-target-pragma" sh "$root/tests/compiler/c0/run-gnu-target-pragma.sh"
 
-MINIC="$minic" BUILD_DIR="$work/conditional-null-pointer-constant" HOST_CC="$host_cc" sh "$root/tests/compiler/c0/run-conditional-null-pointer-constant.sh"
+MINIC="$minic" BUILD_DIR="$work/conditional-null-pointer-constant" HOST_CC="$host_cc" sh "$root/tests/compiler/c0/run-compile-only-case.sh" conditional-null-pointer-constant
 
-MINIC="$minic" BUILD_DIR="$work/deferred-declarator-attributes" HOST_CC="$host_cc" sh "$root/tests/compiler/c0/run-deferred-declarator-attributes.sh"
+MINIC="$minic" BUILD_DIR="$work/deferred-declarator-attributes" HOST_CC="$host_cc" sh "$root/tests/compiler/c0/run-compile-only-case.sh" deferred-declarator-attributes
 
 run_c0_host run-static-array-designators.sh
 
 run_c0_host run-compile-only-case.sh external-inferred-record-array
 
-run_c0_host run-builtin-unary-family.sh
+run_c0_host run-compile-only-case.sh builtin-unary-family
 
 run_c0_default run-gnu-switch-case-range.sh
 

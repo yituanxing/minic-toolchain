@@ -17,11 +17,11 @@ for test_script in \
     compile:external-pointer-arrays \
     run-external-array-declarator-routing.sh \
     compile:extern-parenthesized-functions \
-    run-anonymous-record-field-types.sh \
+    compile:anonymous-record-field-types \
     compile:typedef-enum-definitions \
-    run-enum-constant-expressions.sh \
+    compile:enum-constant-expressions \
     run-enum-constant-scopes.sh \
-    run-integer-constant-bitwise.sh \
+    compile:integer-constant-bitwise \
     compile:unsigned-64-literals \
     run-builtin-va-list.sh \
     run-aarch64-builtin-va-list-declaration.sh \
@@ -50,7 +50,7 @@ for test_script in \
     compile:pointer-integer-casts \
     compile:record-assignment-expressions \
     compile:bitwise-and-assignment-expressions \
-    run-compound-assignment-full.sh \
+    compile:compound-assignment-full \
     compile:for-expression-initializers \
     compile:mixed-double-arithmetic \
     compile:conditional-pointer-qualifiers \
@@ -58,11 +58,11 @@ for test_script in \
     compile:top-level-comma-conditions \
     compile:cast-type-classification \
     compile:stack-fixed-arguments \
-    run-static-local-record-initializers.sh \
-    run-static-record-arrays.sh \
+    compile:static-local-record-initializers \
+    compile:static-record-arrays \
     run-static-nested-record-initializers.sh \
-    run-static-mixed-symbol-relocations.sh \
-    run-external-record-compound-literal.sh \
+    compile:static-mixed-symbol-relocations \
+    compile:external-record-compound-literal \
     compile:static-local-scalars \
     compile:static-local-inferred-arrays \
     compile:static-local-pointer-arrays \
@@ -78,9 +78,9 @@ for test_script in \
     run-static-integer-pointer-cast-comparison.sh \
     compile:static-aggregate-array-designators \
     compile:prefix-update-expressions \
-    run-function-designator-calls.sh \
+    compile:function-designator-calls \
     compile:function-address-expressions \
-    run-preprocessed-line-markers.sh \
+    compile:preprocessed-line-markers \
     compile:gnu-signed-keyword \
     compile:gnu-int128-type \
     compile:bool-semantics \
@@ -106,11 +106,11 @@ for test_script in \
     compile:function-arena-borrow-lifetime \
     run-gnu-statement-record-value.sh \
     run-gnu-array-range-initializer.sh \
-    run-gnu-record-compound-literal.sh \
+    compile:gnu-record-compound-literal \
     run-gnu-static-local-implicit-zero.sh \
     compile:gnu-top-level-empty-declaration \
-    run-gnu-object-alignment-attribute.sh \
-    run-gnu-auto-type-local.sh \
+    compile:gnu-object-alignment-attribute \
+    compile:gnu-auto-type-local \
     compile:gnu-local-interleaved-informational-attribute \
     run-gnu-array-object-identity.sh \
     run-gnu-local-label-address.sh \
@@ -129,7 +129,7 @@ for test_script in \
     run-gnu-pointer-sign-call-conversion.sh \
     compile:static-assert-declaration \
     compile:gnu-choose-expr-bitfield \
-    run-builtin-clzll.sh \
+    compile:builtin-clzll \
     compile:alignof-type-query \
     compile:rv64-integer-aggregate-return \
     run-unnamed-bit-fields.sh \
@@ -141,7 +141,7 @@ for test_script in \
     compile:extern-function-pointer-object \
     run-extern-interleaved-function-attributes.sh \
     compile:shared-function-declarator \
-    run-gnu-incomplete-record-function-signature.sh \
+    compile:gnu-incomplete-record-function-signature \
     run-enum-tag-type-references.sh \
     run-gnu-enum-entity.sh \
     compile:extern-multi-declarators \

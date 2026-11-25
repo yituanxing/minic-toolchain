@@ -1112,7 +1112,7 @@ check-static-functions: $(MINIC_BINARY)
 	MINIC="$(abspath $(MINIC_BINARY))" \
 	HOST_CC="$(CC)" \
 	BUILD_DIR="$(abspath $(BUILD_DIR))" \
-	sh tests/compiler/c0/run-static-functions.sh
+	sh tests/compiler/c0/run-compile-only-case.sh static-functions
 
 check-unsigned-declarations: $(MINIC_BINARY)
 	MINIC="$(abspath $(MINIC_BINARY))" \
@@ -1124,7 +1124,7 @@ check-long-types: $(MINIC_BINARY)
 	MINIC="$(abspath $(MINIC_BINARY))" \
 	HOST_CC="$(CC)" \
 	BUILD_DIR="$(abspath $(BUILD_DIR))" \
-	sh tests/compiler/c0/run-long-types.sh
+	sh tests/compiler/c0/run-compile-only-case.sh long-types
 
 check-for-loops: $(MINIC_BINARY)
 	MINIC="$(abspath $(MINIC_BINARY))" \
@@ -1154,7 +1154,7 @@ check-unsigned-char-layout: $(MINIC_BINARY)
 	MINIC="$(abspath $(MINIC_BINARY))" \
 	HOST_CC="$(CC)" \
 	BUILD_DIR="$(abspath $(BUILD_DIR))" \
-	sh tests/compiler/c0/run-unsigned-char-layout.sh
+	sh tests/compiler/c0/run-compile-only-case.sh unsigned-char-layout
 
 check-pointer-subscripts: $(MINIC_BINARY)
 	MINIC="$(abspath $(MINIC_BINARY))" \
@@ -1166,7 +1166,7 @@ check-pointer-arithmetic: $(MINIC_BINARY)
 	MINIC="$(abspath $(MINIC_BINARY))" \
 	HOST_CC="$(CC)" \
 	BUILD_DIR="$(abspath $(BUILD_DIR))" \
-	sh tests/compiler/c0/run-pointer-arithmetic.sh
+	sh tests/compiler/c0/run-compile-only-case.sh pointer-arithmetic
 
 check-pointer-object-const: $(MINIC_BINARY)
 	MINIC="$(abspath $(MINIC_BINARY))" \
@@ -1208,7 +1208,7 @@ check-expression-statements: $(MINIC_BINARY)
 	MINIC="$(abspath $(MINIC_BINARY))" \
 	HOST_CC="$(CC)" \
 	BUILD_DIR="$(abspath $(BUILD_DIR))" \
-	sh tests/compiler/c0/run-expression-statements.sh
+	sh tests/compiler/c0/run-compile-only-case.sh expression-statements
 
 check-postfix-subscripts: $(MINIC_BINARY)
 	MINIC="$(abspath $(MINIC_BINARY))" \

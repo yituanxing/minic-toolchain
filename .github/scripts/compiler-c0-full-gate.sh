@@ -141,13 +141,13 @@ static_local_focused() {
     MINIC="$root/build/ci-debug/bin/minic" \
     HOST_CC=cc \
     BUILD_DIR="$root/build/ci-static-local-focused" \
-        sh tests/compiler/c0/run-static-local-arrays.sh
+        sh tests/compiler/c0/run-compile-only-case.sh static-local-arrays
 }
 
 predefined_func_name_focused() {
     MINIC="$root/build/ci-debug/bin/minic" \
     BUILD_DIR="$root/build/ci-predefined-func-name" \
-        sh tests/compiler/c0/run-predefined-func-name.sh
+        sh tests/compiler/c0/run-compile-only-case.sh predefined-func-name
 }
 
 static_aggregate_initializer_focused() {
@@ -189,7 +189,7 @@ switch_control_flow_focused() {
     MINIC="$root/build/ci-debug/bin/minic" \
     HOST_CC=cc \
     BUILD_DIR="$root/build/ci-switch-control-flow" \
-        sh tests/compiler/c0/run-switch-control-flow.sh
+        sh tests/compiler/c0/run-compile-only-case.sh switch-control-flow
 }
 
 wide_string_focused() {
@@ -445,7 +445,7 @@ runtime_record_fam_prefix_focused() {
     RISCV_CC=riscv64-linux-gnu-gcc \
     QEMU_RISCV64=qemu-riscv64 \
     REQUIRE_RISCV_RUNTIME=1 \
-        sh tests/compiler/c0/run-gnu-record-compound-literal.sh
+        sh tests/compiler/c0/run-compile-only-case.sh gnu-record-compound-literal
 }
 
 run_c0_gate_case() {
@@ -464,9 +464,9 @@ linenoise_driven_focused() {
         compile:function-type-typedefs \
         compile:unnamed-prototype-parameters \
         compile:static-pointer-arrays \
-        run-pointer-array-typed-null.sh \
+        compile:pointer-array-typed-null \
         compile:static-zero-definitions \
-        run-static-zero-declaration-list.sh \
+        compile:static-zero-declaration-list \
         compile:record-copy-array-members \
         compile:zero-aggregate-null \
         compile:record-local-initializers \
@@ -485,8 +485,8 @@ linenoise_driven_focused() {
 sds_driven_focused() {
     local script
     for script in \
-        run-packed-record-layout.sh \
-        run-flexible-array-members.sh \
+        compile:packed-record-layout \
+        compile:flexible-array-members \
         compile:inline-functions \
         compile:postfix-const \
         compile:long-long-types \
@@ -540,13 +540,13 @@ external_tentative_focused() {
 static_global_section_focused() {
     MINIC="$root/build/ci-debug/bin/minic" \
     BUILD_DIR="$root/build/ci-static-global-section" \
-        sh tests/compiler/c0/run-static-global-object-section.sh
+        sh tests/compiler/c0/run-compile-only-case.sh static-global-object-section
 }
 
 static_object_address_focused() {
     MINIC="$root/build/ci-debug/bin/minic" \
     BUILD_DIR="$root/build/ci-static-object-address" \
-        sh tests/compiler/c0/run-static-object-address-relocation.sh
+        sh tests/compiler/c0/run-compile-only-case.sh static-object-address-relocation
 }
 
 file_scope_basic_asm_focused() {

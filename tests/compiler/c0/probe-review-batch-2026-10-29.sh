@@ -43,7 +43,7 @@ bash tests/compiler/mir-migration/probe_loong_llsc_extended_forms.sh "$mini"
 bash tests/compiler/c0/probe-loongarch64-packed-hardware-asm-results.sh "$mini"
 bash tests/compiler/c0/probe-data-layout-zero-size-reloc.sh
 sh tests/compiler/c0/run-alignof-expression.sh
-sh tests/compiler/c0/run-packed-record-layout.sh
+sh tests/compiler/c0/run-compile-only-case.sh packed-record-layout
 sh tests/compiler/c0/probe-x86-immediate-qualification.sh
 bash tests/target/run-x86-typed-asm-forms.sh
 bash tests/compiler/c0/probe-x86-typed-mmio-atomic-oracle.sh "$mini"

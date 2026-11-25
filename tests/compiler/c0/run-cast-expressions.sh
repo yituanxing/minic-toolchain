@@ -89,4 +89,4 @@ expect_failure \
 MINIC="$minic" \
 HOST_CC="$host_cc" \
 BUILD_DIR="$build_dir" \
-sh "$root/tests/compiler/c0/run-pointer-qualifications.sh"
+sh "$root/tests/compiler/c0/run-compile-only-case.sh" pointer-qualifications
