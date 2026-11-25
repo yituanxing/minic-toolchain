@@ -72,12 +72,12 @@ jobs:
                       print("DYNAMIC_SCRIPT_CALL",json.dumps({"p":p,"line":i+1,"cmd":line.strip()[:220]}),flush=True)
           # Unlike exact AST equality, we care about common semantics, fixture owners,
           # and independently asserted negative/output contracts.
-          for p,s in scripts.items():
+          pattern=re.compile(r"(?<![A-Za-z0-9])(?:tests/[A-Za-z0-9_./-]+\.(?:c|i)|[A-Za-z_][\w-]*\.c)(?![A-Za-z0-9])")
+          source_refs={p:set(pattern.findall(s)) for p,s in scripts.items()}
+          for p,r1 in source_refs.items():
               group=[]
-              for q,t in scripts.items():
+              for q,r2 in source_refs.items():
                   if p>=q:continue
-                  r1=set(re.findall(r"(?<![A-Za-z0-9])(?:tests/[A-Za-z0-9_./-]+\.(?:c|i)|[A-Za-z_][\w-]*\.c)(?![A-Za-z0-9])",s))
-                  r2=set(re.findall(r"(?<![A-Za-z0-9])(?:tests/[A-Za-z0-9_./-]+\.(?:c|i)|[A-Za-z_][\w-]*\.c)(?![A-Za-z0-9])",t))
                   overlap=len(r1 & r2)
                   if overlap and overlap >= max(2, min(len(r1),len(r2))*.7):
                       group.append((q,overlap,len(r1),len(r2)))
