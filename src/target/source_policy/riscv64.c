@@ -9,7 +9,7 @@ static bool rv64_register_clobber(const char *name, size_t length) {
 }
 
 const MinicTargetAsmSourcePolicy minic_riscv64_asm_source_policy = {
-    .fixed_register_read = minic_riscv64_machine_fixed_register_read,
+    .fixed_register_read = minic_riscv_machine_fixed_register_read,
     .local_fixed_register = minic_riscv64_machine_local_fixed_register,
     .register_clobber = rv64_register_clobber,
     .immediate_constraint = minic_source_asm_signed_imm12,

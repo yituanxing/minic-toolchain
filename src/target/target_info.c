@@ -14,7 +14,7 @@ typedef struct MinicTargetMachineDescriptor {
 
 static const MinicTargetMachineDescriptor minic_machine_riscv32 = {
     .target = {
-        .fixed_register_read = minic_riscv32_machine_fixed_register_read,
+        .fixed_register_read = minic_riscv_machine_fixed_register_read,
         .local_fixed_register = minic_riscv32_machine_local_fixed_register,
         .variadic_scalar_read_kind = MINIC_VARIADIC_SCALAR_READ_LINEAR_SLOT,
         .variadic_linear_slot_bytes = 4U,
@@ -28,7 +28,7 @@ static const MinicTargetMachineDescriptor minic_machine_riscv32 = {
 };
 static const MinicTargetMachineDescriptor minic_machine_riscv64 = {
     .target = {
-        .fixed_register_read = minic_riscv64_machine_fixed_register_read,
+        .fixed_register_read = minic_riscv_machine_fixed_register_read,
         .local_fixed_register = minic_riscv64_machine_local_fixed_register,
         .variadic_scalar_read_kind = MINIC_VARIADIC_SCALAR_READ_LINEAR_SLOT,
         .variadic_linear_slot_bytes = 8U,

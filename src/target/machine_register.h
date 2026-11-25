@@ -10,9 +10,8 @@
  * one ISA register rule serves both admission and sealed Core emission. */
 typedef bool (*MinicMachineRegisterRecognizer)(const char *, size_t);
 
-bool minic_riscv32_machine_fixed_register_read(const char *, size_t);
+bool minic_riscv_machine_fixed_register_read(const char *, size_t);
 bool minic_riscv32_machine_local_fixed_register(const char *, size_t);
-bool minic_riscv64_machine_fixed_register_read(const char *, size_t);
 bool minic_riscv64_machine_local_fixed_register(const char *, size_t);
 bool minic_x86_64_machine_fixed_register_read(const char *, size_t);
 bool minic_x86_64_machine_local_fixed_register(const char *, size_t);

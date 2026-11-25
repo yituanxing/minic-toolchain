@@ -69,8 +69,7 @@ TARGET_SOURCE_POLICY_SOURCES := \
 	src/target/source_policy/loongarch64.c
 
 TARGET_MACHINE_REGISTER_SOURCES := \
-	src/target/riscv32/machine_register.c \
-	src/target/riscv64/machine_register.c \
+	src/target/riscv/machine_register.c \
 	src/target/x86_64/machine_register.c \
 	src/target/aarch64/machine_register.c \
 	src/target/loongarch64/machine_register.c

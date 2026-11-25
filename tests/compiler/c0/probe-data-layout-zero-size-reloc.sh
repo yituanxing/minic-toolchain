@@ -26,8 +26,7 @@ cc -I"$root/include" -I"$root/src" -std=c11 -O0 -g \
     "$root/src/target/source_policy/x86_64.c" \
     "$root/src/target/source_policy/aarch64.c" \
     "$root/src/target/source_policy/loongarch64.c" \
-    "$root/src/target/riscv32/machine_register.c" \
-    "$root/src/target/riscv64/machine_register.c" \
+    "$root/src/target/riscv/machine_register.c" \
     "$root/src/target/x86_64/machine_register.c" \
     "$root/src/target/aarch64/machine_register.c" \
     "$root/src/target/loongarch64/machine_register.c" \
