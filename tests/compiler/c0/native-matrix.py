@@ -20,6 +20,14 @@ TARGETS = ["x86_64", "aarch64", "loongarch64", "riscv64", "riscv32"]
 def flags(value):
     return shlex.split(value or "")
 
+def source_for_case(config, work):
+    if "inline_source" in config:
+        require("source" not in config, "inline source must not alias tracked fixture")
+        inline = work / "inline-source.c"
+        inline.write_text(config["inline_source"])
+        return str(inline)
+    return source(config["source"])
+
 def source(name):
     if name.startswith("tests/"):
         path = ROOT / name
@@ -60,7 +68,7 @@ def function_section(data, function):
     require(last < len(lines), f"missing .size for function {function}")
     return b"".join(lines[first:last + 1])
 
-def check_all(checks, artifacts, targets, counts=(), cfg=()):
+def check_all(checks, artifacts, targets, counts=(), cfg=(), order=()):
     for target, sense, mode, pattern, *section in checks:
         for t in targets if target == "*" else [target]:
             require(t in artifacts, f"missing check artifact {t}")
@@ -79,6 +87,13 @@ def check_all(checks, artifacts, targets, counts=(), cfg=()):
         count = int(proc.stdout)
         require(count >= minimum and (maximum is None or count <= maximum),
                 f"{target}: count {count} outside {minimum}..{maximum}: {pattern}")
+    for target, first, second in order:
+        data = artifacts[target]
+        a = data.find(first.encode())
+        b = data.find(second.encode())
+        require(a >= 0 and b >= 0 and a < b,
+                f"{target}: assembly ordering contract {first!r} before {second!r} failed")
+
     for target, function, minimum in cfg:
         require(function.replace("_", "").isalnum(), "invalid CFG function")
         pattern = r"^\.Lminic_mir_" + function + r"_[0-9]+:$"
@@ -154,7 +169,7 @@ def minic_compile(config, mini, input_path, output_path, target, env, reject=Fal
 
 def positive(config, cc, mini, work):
     env = environment(config)
-    src = source(config["source"])
+    src = source_for_case(config, work)
     input_path = work / "input.i"
     preprocess(config, cc, src, input_path, env)
     if config.get("direct_input") and not config.get("mutations"):
@@ -222,11 +237,11 @@ def positive(config, cc, mini, work):
         if config.get("compare"):
             require(config.get("gnu", True) and p.stdout == g.stdout and p.stderr == g.stderr,
                     "GNU and MiniC native outputs diverge")
-    check_all(config.get("checks", []), artifacts, targets, config.get("counts", []), config.get("cfg", []))
+    check_all(config.get("checks", []), artifacts, targets, config.get("counts", []), config.get("cfg", []), config.get("order", []))
 
 def negative(config, cc, mini, work):
     env = environment(config)
-    src = source(config["source"])
+    src = source_for_case(config, work)
     ip = work / "negative.i"
     preprocess(config, cc, src, ip, env)
     if config.get("direct_input") and not config.get("mutations"):
