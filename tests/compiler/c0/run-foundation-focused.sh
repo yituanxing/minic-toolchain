@@ -4,6 +4,7 @@ set -eu
 run_focused() {
     case "$1" in
         compile:*) sh tests/compiler/c0/run-compile-only-case.sh "${1#compile:}" ;;
+        strict:*) sh tests/compiler/c0/run-core-strict-runtime-case.sh "${1#strict:}" ;;
         *) sh "tests/compiler/c0/$1" ;;
     esac
 }
@@ -91,7 +92,7 @@ for test_script in \
     compile:gnu-extension-prefix-declarations \
     run-gnu-prefix-function-attributes.sh \
     run-gnu-is-constexpr-bitfield.sh \
-    run-record-array-range-once.sh \
+    strict:record-array-range-once \
     run-x86-security-function-attributes.sh \
     compile:gnu-format-cold-attributes \
     run-anonymous-record-members.sh \
