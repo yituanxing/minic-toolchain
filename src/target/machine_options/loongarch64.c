@@ -1,6 +1,5 @@
 #include "target/machine_options/target_policies.h"
 
-#include "target/machine_options/unsupported.h"
 #include "target/loongarch64/machine_target_state.h"
 
 #include <stdio.h>
@@ -20,12 +19,4 @@ bool minic_machine_options_loongarch64_resolve(MinicTargetInfo *target,
     }
     return minic_loongarch64_target_soft_float_abi_set(
         target, strcmp(mabi, "lp64s") == 0);
-}
-
-bool minic_machine_options_loongarch64_codegen(MinicTargetInfo *target,
-                                               const char *option,
-                                               char *reason, size_t capacity) {
-    (void)target;
-    (void)option;
-    return minic_machine_options_reject_codegen(reason, capacity);
 }

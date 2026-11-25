@@ -537,7 +537,21 @@ jobs:
               "src/target/common/module_global_emit.c",
               "src/target/common/module_global_emit.h",
           }
-          if len(expected) != 1065 or deleted != expected or changed != expected | metadata:
+          retired_source_paths = {"src/target/machine_options/aarch64.c"}
+          assert retired_source_paths <= set(git("ls-tree", "-r", "--name-only", "a96ca1d6867b850656fe9cca6fd5c56317a226c8").decode().splitlines())
+          assert not (expected & retired_source_paths)
+          expected |= retired_source_paths
+          metadata |= {
+              "src/target/machine_options/target_policies.h",
+              "src/target/machine_options/unsupported.h",
+              "src/target/machine_options/riscv.c",
+              "src/target/machine_options/x86_64.c",
+              "src/target/machine_options/loongarch64.c",
+              "src/target/target_machine_options.c",
+              "Makefile",
+              "tests/compiler/bootstrap/b0-sources.txt",
+          }
+          if len(expected) != 1066 or deleted != expected or changed != expected | metadata:
               raise SystemExit("RETIREMENT_SCOPE=FAIL: unexpected tree changes")
           # Preserve the full closure in a historical checkout, not a successful
           # no-op overlay on a different source architecture.
@@ -590,7 +604,7 @@ jobs:
                  (p.startswith("docs/ci/") and p.endswith(".md"))
           }
           targets = defaultdict(set)
-          for p in (deleted - shared_fixtures) | set(candidates):
+          for p in (deleted - shared_fixtures - retired_source_paths) | set(candidates):
               targets[pathlib.PurePosixPath(p).name].add(p)
           rx = re.compile("|".join(re.escape(n) for n in sorted(targets, key=len, reverse=True)))
           broad = re.compile(r"tools/dev/(?:pr(?:71|75|76|77)[^a-zA-Z0-9]|(?:patch-core-frontier|run-core-frontier|materialize)[-*?]|[*?])")
@@ -654,7 +668,7 @@ jobs:
               for num, line in enumerate(data.decode("utf-8", errors="replace").splitlines(), 1):
                   found = set(rx.findall(line))
                   hits = {p for n in found for p in targets[n] if p != path}
-                  removed = (hits & deleted) | {p for p in shared_fixtures if p in line}
+                  removed = (hits & deleted) | {p for p in shared_fixtures | retired_source_paths if p in line}
                   if path in archive_reference_lines and line in archive_reference_lines[path]:
                       pinned = removed & historical_archives
                       if pinned:

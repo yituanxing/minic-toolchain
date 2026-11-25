@@ -174,7 +174,6 @@ MINIC_SOURCES := \
 	src/target/target_catalog.c \
 	src/target/target_machine_options.c \
 	src/target/machine_options/riscv.c \
-	src/target/machine_options/aarch64.c \
 	src/target/machine_options/loongarch64.c \
 	src/target/machine_options/x86_64.c \
 	$(TARGET_SOURCE_POLICY_SOURCES) \
@@ -3031,7 +3030,6 @@ check-target-machine-options-registry:
 	  tests/target/machine_options_registry_test.c \
 	  src/target/target_catalog.c src/target/target_machine_options.c \
 	  src/target/machine_options/riscv.c \
-	  src/target/machine_options/aarch64.c \
 	  src/target/machine_options/loongarch64.c \
 	  src/target/machine_options/x86_64.c \
 	  src/target/riscv/isa_resolve.c \

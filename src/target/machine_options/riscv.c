@@ -1,12 +1,11 @@
 #include "target/machine_options/target_policies.h"
 
-#include "target/machine_options/unsupported.h"
 #include "target/riscv/isa_resolve.h"
 #include "target/riscv/machine_target_state.h"
 
 #include <stdio.h>
 
-static bool riscv_options_resolve(MinicTargetInfo *target,
+bool minic_machine_options_riscv_resolve(MinicTargetInfo *target,
                                  const char *march, const char *mabi,
                                  char *reason, size_t capacity) {
     char detail[240];
@@ -19,32 +18,4 @@ static bool riscv_options_resolve(MinicTargetInfo *target,
         return false;
     }
     return minic_riscv_target_isa_store(target, &isa);
-}
-
-bool minic_machine_options_riscv32_resolve(MinicTargetInfo *target,
-                                           const char *march, const char *mabi,
-                                           char *reason, size_t capacity) {
-    return riscv_options_resolve(target, march, mabi, reason, capacity);
-}
-
-bool minic_machine_options_riscv64_resolve(MinicTargetInfo *target,
-                                           const char *march, const char *mabi,
-                                           char *reason, size_t capacity) {
-    return riscv_options_resolve(target, march, mabi, reason, capacity);
-}
-
-bool minic_machine_options_riscv32_codegen(MinicTargetInfo *target,
-                                           const char *option,
-                                           char *reason, size_t capacity) {
-    (void)target;
-    (void)option;
-    return minic_machine_options_reject_codegen(reason, capacity);
-}
-
-bool minic_machine_options_riscv64_codegen(MinicTargetInfo *target,
-                                           const char *option,
-                                           char *reason, size_t capacity) {
-    (void)target;
-    (void)option;
-    return minic_machine_options_reject_codegen(reason, capacity);
 }

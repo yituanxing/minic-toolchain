@@ -1,20 +1,10 @@
 #include "target/machine_options/target_policies.h"
 
-#include "target/machine_options/unsupported.h"
 #include "target/x86_64/codegen_options.h"
 #include "target/x86_64/machine_target_state.h"
 
 #include <stdio.h>
 #include <string.h>
-
-bool minic_machine_options_x86_64_resolve(MinicTargetInfo *target,
-                                          const char *march, const char *mabi,
-                                          char *reason, size_t capacity) {
-    (void)target;
-    (void)march;
-    (void)mabi;
-    return minic_machine_options_reject_isa(reason, capacity);
-}
 
 bool minic_machine_options_x86_64_codegen(MinicTargetInfo *target,
                                           const char *option,
