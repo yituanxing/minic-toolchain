@@ -49,25 +49,31 @@ def matching(content, mode, pattern):
     require(p.returncode in (0, 1), f"invalid grep pattern {pattern!r}")
     return p.returncode == 0
 
+def function_section(data, function):
+    start = (function + ":").encode()
+    end = (".size " + function).encode()
+    lines = data.splitlines(keepends=True)
+    first = next((i for i, line in enumerate(lines) if line.strip() == start), -1)
+    require(first >= 0, f"missing function {function}")
+    last = next((i for i in range(first + 1, len(lines))
+                 if lines[i].strip().startswith(end)), len(lines))
+    require(last < len(lines), f"missing .size for function {function}")
+    return b"".join(lines[first:last + 1])
+
 def check_all(checks, artifacts, targets, counts=(), cfg=()):
     for target, sense, mode, pattern, *section in checks:
         for t in targets if target == "*" else [target]:
             require(t in artifacts, f"missing check artifact {t}")
             data = artifacts[t]
             if section:
-                start = (section[0] + ":").encode()
-                end = (".size " + section[0]).encode()
-                lines = data.splitlines(keepends=True)
-                first = next((i for i, line in enumerate(lines) if line.strip() == start), -1)
-                require(first >= 0, f"{t}: missing function {section[0]}")
-                last = next((i for i in range(first + 1, len(lines))
-                             if lines[i].strip().startswith(end)), len(lines))
-                data = b"".join(lines[first:last + 1])
+                data = function_section(data, section[0])
             require(matching(data, mode, pattern) == (sense == "present"),
                     f"{t}: {sense} {pattern!r} failed")
 
-    for target, mode, pattern, minimum, maximum in counts:
+    for target, mode, pattern, minimum, maximum, *section in counts:
         data = artifacts[target]
+        if section:
+            data = function_section(data, section[0])
         proc = subprocess.run(["grep", "-" + mode + "c", "--", pattern], input=data, stdout=subprocess.PIPE)
         require(proc.returncode in (0, 1), f"invalid count pattern {pattern!r}")
         count = int(proc.stdout)
@@ -159,6 +165,11 @@ def positive(config, cc, mini, work):
     support = [source(s) for s in config.get("support", [])]
     targets = config.get("targets", TARGETS)
     artifacts = {}
+    if "gnu_asm_only_flags" in config:
+        gnu_asm = work / "gnu-reference.s"
+        execute([cc, *flags(config["gnu_asm_only_flags"]), src,
+                 "-o", gnu_asm], env, label="GNU assembly-only oracle")
+        artifacts["gnu"] = gnu_asm.read_bytes()
     if config.get("gnu", True):
         gnu = work / "gnu"
         kind = config.get("gnu_kind", "source")
@@ -289,6 +300,19 @@ def run(name, supplied):
             negative(settings(group, row), cc, mini, dest)
             if row.get("marker"):
                 print(row["marker"], flush=True)
+        for model in group.get("optional_models", []):
+            path = os.environ.get(model["env"])
+            if not path:
+                continue
+            for i, name in enumerate(model.get("names", [])):
+                src = Path(path) if model.get("direct_file") else (
+                    Path(path) / (model.get("prefix", "") + name + model.get("suffix", ".i")))
+                require(src.is_file(), f"missing optional Linux model {src}")
+                target = model.get("target", "x86_64")
+                options = settings(group, {"mini_flags": model.get("mini_flags", "")})
+                dest = work / f"optional-{i}-{name}.s"
+                minic_compile(options, mini, src, dest, target, environment(group))
+                check_all(model.get("checks", []), {target: dest.read_bytes()}, [target])
         if group["marker"]:
             print(group["marker"], flush=True)
 
