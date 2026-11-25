@@ -3330,3 +3330,18 @@ check-direct-local-effects: $(MINIC_CC_BINARY)
 	"$(abspath $(BUILD_DIR))/tests/frontend/direct-local-effects"
 
 check-fast: check-direct-local-effects
+
+# Former standalone C0 probes now share the native matrix engine. Keep their
+# complete positive/negative, multi-ISA and GNU-native oracles in check-fast.
+.PHONY: check-c0-consolidated-native
+check-c0-consolidated-native: $(MINIC_CC_BINARY)
+	@set -e; for case in \
+	    run-riscv-fixed-register-phase-alias \
+	    probe-gnu-numeric-pointer-global \
+	    probe-aarch64-pie-shape \
+	    probe-gnu-indirect-record-return-5isa; do \
+	  MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	    sh tests/compiler/c0/run-native-matrix.sh "$$case"; \
+	done
+
+check-fast: check-c0-consolidated-native
