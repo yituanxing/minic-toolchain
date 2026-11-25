@@ -276,7 +276,8 @@ def run(name, supplied):
             negative(settings(group, row), cc, mini, dest)
             if row.get("marker"):
                 print(row["marker"], flush=True)
-        print(group["marker"], flush=True)
+        if group["marker"]:
+            print(group["marker"], flush=True)
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)

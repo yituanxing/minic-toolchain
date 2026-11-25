@@ -17,7 +17,7 @@ for test_script in \
     run-extern-incomplete-arrays.sh \
     compile:extern-fixed-integer-arrays \
     compile:external-pointer-arrays \
-    run-external-array-declarator-routing.sh \
+    native:run-external-array-declarator-routing \
     compile:extern-parenthesized-functions \
     compile:anonymous-record-field-types \
     compile:typedef-enum-definitions \
@@ -71,7 +71,7 @@ for test_script in \
     compile:static-local-fixed-arrays \
     compile:static-inferred-char-arrays \
     compile:static-inferred-integer-array \
-    run-static-mutable-arrays.sh \
+    native:run-static-mutable-arrays \
     compile:static-preformed-array-zero \
     compile:static-fixed-record-array-zero \
     run-static-multidimensional-array-relocation.sh \

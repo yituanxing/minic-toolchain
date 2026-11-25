@@ -167,7 +167,7 @@ MINIC_CC="$minic" MINIC_REACHABILITY_REQUIRE_CROSS="${MINIC_REACHABILITY_REQUIRE
 
 # MC-073: an address-taken Core block without a C local_label_symbol is still
 # reachable, but an address producer in an unreachable block is not a root.
-bash "$root/tests/core/run-core-ir-shapes.sh" "$host_cc"
+bash "$root/tests/compiler/c0/run-native-matrix.sh" run-core-ir-shapes "$host_cc"
 
 # The pre-existing computed-goto runtime probes cover direct, dynamic and
 # static tables. Their GNU/QEMU differential is mandatory when installed.

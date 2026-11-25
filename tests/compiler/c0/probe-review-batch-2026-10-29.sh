@@ -9,7 +9,7 @@ export MINIC_CC="$mini" MINIC="$mini" HOST_CC="${HOST_CC:-cc}"
 
 sh tests/compiler/c0/run-target-probe-case.sh float32-const-eval
 sh tests/compiler/c0/run-target-probe-case.sh runtime-designated-positional
-sh tests/compiler/c0/probe-inline-symbolic-shared-body.sh
+sh tests/compiler/c0/run-native-matrix.sh probe-inline-symbolic-shared-body
 sh tests/compiler/c0/run-native-matrix.sh probe-symbolic-inline-two-callers
 sh tests/compiler/c0/probe-function-pointer-attribute-policy.sh
 sh tests/compiler/c0/run-native-matrix.sh probe-static-typedef-array-redeclaration
@@ -44,8 +44,8 @@ bash tests/compiler/c0/probe-loongarch64-packed-hardware-asm-results.sh "$mini"
 bash tests/compiler/c0/probe-data-layout-zero-size-reloc.sh
 sh tests/compiler/c0/run-alignof-expression.sh
 sh tests/compiler/c0/run-compile-only-case.sh packed-record-layout
-sh tests/compiler/c0/probe-x86-immediate-qualification.sh
-bash tests/target/run-x86-typed-asm-forms.sh
+sh tests/compiler/c0/run-native-matrix.sh probe-x86-immediate-qualification
+bash tests/compiler/c0/run-native-matrix.sh run-x86-typed-asm-forms
 bash tests/compiler/c0/probe-x86-typed-mmio-atomic-oracle.sh "$mini"
 bash tests/compiler/c0/probe-x86-typed-machine-qualification-gaps.sh "$mini"
 bash tests/compiler/c0/probe-x86-typed-scalar-families.sh "$mini"
@@ -56,12 +56,12 @@ bash tests/compiler/c0/probe-target-gnu-earlyclobber-transport.sh "$mini"
 sh tests/compiler/c0/run-x86-global-plan-abi.sh
 MINIC="$(dirname "$mini")/minic" sh tests/compiler/c0/run-enum-tag-scopes.sh
 MINIC="$(dirname "$mini")/minic" sh tests/compiler/c0/run-tag-namespace-scopes.sh
-sh tests/compiler/c0/probe-external-pointer-array-initializers.sh
-sh tests/compiler/c0/probe-gnu-cleanup-goto-lifetime.sh
+sh tests/compiler/c0/run-native-matrix.sh probe-external-pointer-array-initializers
+sh tests/compiler/c0/run-native-matrix.sh probe-gnu-cleanup-goto-lifetime
 bash tests/compiler/c0/probe-core-asm-goto-percent-escape.sh
-bash tests/compiler/c0/probe-core-asm-empty-rk.sh
+bash tests/compiler/c0/run-native-matrix.sh probe-core-asm-empty-rk
 bash tests/compiler/c0/probe-core-asm-nonvolatile-rk.sh
-bash tests/compiler/c0/probe-core-asm-zero-stride.sh
+bash tests/compiler/c0/run-native-matrix.sh probe-core-asm-zero-stride
 sh tests/compiler/c0/probe-rv32-target-gate.sh
 sh tests/compiler/c0/probe-rv32-packed-scalar-alignment.sh
 sh tests/compiler/c0/probe-riscv-packed-overflow-alignment.sh

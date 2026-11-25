@@ -242,7 +242,7 @@ jobs:
           retired={name for name,config in cases.items() if not (root/config.get("old_path","tests/compiler/c0/"+name+".sh")).exists()}
           bad=[]
           for p in active:
-              if p.startswith("docs/") or p.endswith(".md") or p==".github/workflows/minic-test-content-audit.yml": continue
+              if p.startswith("docs/") or p.endswith(".md") or p in (".github/workflows/minic-test-content-audit.yml", "tests/compiler/c0/native-matrix.json", ".github/workflows/minic-historical-script-retirement-audit.yml"): continue
               try: body=(root/p).read_text()
               except (UnicodeDecodeError,OSError): continue
               for name in retired:

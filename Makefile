@@ -676,7 +676,7 @@ check-fast: check-rv32-wide-branch-condition
 # carry a redundant source-C descriptor.
 .PHONY: check-rv32-coretype-scalar
 check-rv32-coretype-scalar:
-	HOST_CC="$(CC)" bash tests/target/riscv32/run-coretype-scalar.sh
+	HOST_CC="$(CC)" bash tests/compiler/c0/run-native-matrix.sh run-coretype-scalar
 
 check-fast: check-rv32-coretype-scalar
 
@@ -684,7 +684,7 @@ check-fast: check-rv32-coretype-scalar
 # source-C DataLayout fallback must remain retired.
 .PHONY: check-riscv-coretype-root-alignment
 check-riscv-coretype-root-alignment:
-	HOST_CC="$(CC)" bash tests/target/riscv/run-coretype-root-alignment.sh
+	HOST_CC="$(CC)" bash tests/compiler/c0/run-native-matrix.sh run-coretype-root-alignment
 
 check-fast: check-riscv-coretype-root-alignment
 
@@ -1025,11 +1025,11 @@ check-fast: check-target-abstraction-boundary
 
 .PHONY: check-core-types
 check-core-types:
-	bash tests/core/run-core-types.sh "$(CC)"
+	bash tests/compiler/c0/run-native-matrix.sh run-core-types "$(CC)"
 
 .PHONY: check-core-ir-shapes
 check-core-ir-shapes: check-core-types
-	bash tests/core/run-core-ir-shapes.sh "$(CC)"
+	bash tests/compiler/c0/run-native-matrix.sh run-core-ir-shapes "$(CC)"
 
 .PHONY: check-core-ir-shapes-source
 check-core-ir-shapes-source: $(MINIC_CC_BINARY)
@@ -1037,7 +1037,7 @@ check-core-ir-shapes-source: $(MINIC_CC_BINARY)
 
 .PHONY: check-core-type-verifier
 check-core-type-verifier:
-	bash tests/core/run-core-type-verifier.sh "$(CC)"
+	bash tests/compiler/c0/run-native-matrix.sh run-core-type-verifier "$(CC)"
 
 # Keep the CoreType vector extent/ABI contract independently testable: no
 # target ISA, frontend snapshot, cross compiler or Linux image is required.
@@ -1116,7 +1116,7 @@ check-unsigned-declarations: $(MINIC_BINARY)
 	MINIC="$(abspath $(MINIC_BINARY))" \
 	HOST_CC="$(CC)" \
 	BUILD_DIR="$(abspath $(BUILD_DIR))" \
-	sh tests/compiler/c0/run-unsigned-declarations.sh
+	sh tests/compiler/c0/run-native-matrix.sh run-unsigned-declarations
 
 check-long-types: $(MINIC_BINARY)
 	MINIC="$(abspath $(MINIC_BINARY))" \
@@ -1140,7 +1140,7 @@ check-prefix-decrement-update: $(MINIC_BINARY)
 	MINIC="$(abspath $(MINIC_BINARY))" \
 	HOST_CC="$(CC)" \
 	BUILD_DIR="$(abspath $(BUILD_DIR))" \
-	sh tests/compiler/c0/run-prefix-decrement-update.sh
+	sh tests/compiler/c0/run-native-matrix.sh run-prefix-decrement-update
 
 check-cast-expressions: $(MINIC_BINARY)
 	MINIC="$(abspath $(MINIC_BINARY))" \
@@ -1158,7 +1158,7 @@ check-pointer-subscripts: $(MINIC_BINARY)
 	MINIC="$(abspath $(MINIC_BINARY))" \
 	HOST_CC="$(CC)" \
 	BUILD_DIR="$(abspath $(BUILD_DIR))" \
-	sh tests/compiler/c0/run-pointer-subscripts.sh
+	sh tests/compiler/c0/run-native-matrix.sh run-pointer-subscripts
 
 check-pointer-arithmetic: $(MINIC_BINARY)
 	MINIC="$(abspath $(MINIC_BINARY))" \
@@ -1170,25 +1170,25 @@ check-pointer-object-const: $(MINIC_BINARY)
 	MINIC="$(abspath $(MINIC_BINARY))" \
 	HOST_CC="$(CC)" \
 	BUILD_DIR="$(abspath $(BUILD_DIR))" \
-	sh tests/compiler/c0/run-pointer-object-const.sh
+	sh tests/compiler/c0/run-native-matrix.sh run-pointer-object-const
 
 check-const-locals: $(MINIC_BINARY)
 	MINIC="$(abspath $(MINIC_BINARY))" \
 	HOST_CC="$(CC)" \
 	BUILD_DIR="$(abspath $(BUILD_DIR))" \
-	sh tests/compiler/c0/run-const-locals.sh
+	sh tests/compiler/c0/run-native-matrix.sh run-const-locals
 
 check-global-objects: $(MINIC_BINARY)
 	MINIC="$(abspath $(MINIC_BINARY))" \
 	HOST_CC="$(CC)" \
 	BUILD_DIR="$(abspath $(BUILD_DIR))" \
-	sh tests/compiler/c0/run-global-objects.sh
+	sh tests/compiler/c0/run-native-matrix.sh run-global-objects
 
 check-bitwise-xor: $(MINIC_BINARY)
 	MINIC="$(abspath $(MINIC_BINARY))" \
 	HOST_CC="$(CC)" \
 	BUILD_DIR="$(abspath $(BUILD_DIR))" \
-	sh tests/compiler/c0/run-bitwise-xor.sh
+	sh tests/compiler/c0/run-native-matrix.sh run-bitwise-xor
 
 check-integer-bit-operations: $(MINIC_BINARY)
 	MINIC="$(abspath $(MINIC_BINARY))" \
@@ -1212,13 +1212,13 @@ check-postfix-subscripts: $(MINIC_BINARY)
 	MINIC="$(abspath $(MINIC_BINARY))" \
 	HOST_CC="$(CC)" \
 	BUILD_DIR="$(abspath $(BUILD_DIR))" \
-	sh tests/compiler/c0/run-postfix-subscripts.sh
+	sh tests/compiler/c0/run-native-matrix.sh run-postfix-subscripts
 
 check-compound-xor-assignment: $(MINIC_BINARY)
 	MINIC="$(abspath $(MINIC_BINARY))" \
 	HOST_CC="$(CC)" \
 	BUILD_DIR="$(abspath $(BUILD_DIR))" \
-	sh tests/compiler/c0/run-compound-xor-assignment.sh
+	sh tests/compiler/c0/run-native-matrix.sh run-compound-xor-assignment
 
 # LP64 type-model ABI oracle for the two registered (not yet emitted) ISAs.
 # Link to the same *already compiled* MiniC library objects as minic-cc.
@@ -3225,7 +3225,7 @@ check-loong-scalar-normalized-seal: $(MINIC_CC_BINARY)
 	  src/target/loongarch64/asm_contract_source.c $(MINIC_LDFLAGS) \
 	  -o "$(BUILD_DIR)/tests/compiler/c0/loong-scalar-normalized-seal"
 	"$(abspath $(BUILD_DIR))/tests/compiler/c0/loong-scalar-normalized-seal"
-	bash tests/compiler/c0/probe-loong-scalar-source-rank.sh \
+	bash tests/compiler/c0/run-native-matrix.sh probe-loong-scalar-source-rank \
 	  "$(abspath $(MINIC_CC_BINARY))"
 
 check-fast: check-a64-normalized-seal check-loong-scalar-normalized-seal
@@ -3278,7 +3278,7 @@ check-core-qualified-record-function-pointer: $(MINIC_CC_BINARY)
 
 check-gnu-cleanup-asm-lifetime: $(MINIC_CC_BINARY)
 	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
-	  bash tests/compiler/c0/probe-gnu-cleanup-goto-lifetime.sh
+	  bash tests/compiler/c0/run-native-matrix.sh probe-gnu-cleanup-goto-lifetime
 
 # Both source-qualified Linux AMD APIC patch-site alternatives and WRMSR
 # feature immediates retain their physical operands and GNU ELF relocations.

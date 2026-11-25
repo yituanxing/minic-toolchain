@@ -1038,7 +1038,8 @@ lacks src/target/riscv32/rv32_emit.c 'rv32_call_info('
 has src/target/riscv32/rv32_abi_plan.c 'minic_riscv32_abi_place('
 has src/target/riscv32/rv32_scalar.c 'rv32_core_scalar_storage_words('
 exists tests/target/riscv32/coretype_scalar_test.c
-exists tests/target/riscv32/run-coretype-scalar.sh
+exists tests/compiler/c0/native-matrix.json
+has tests/compiler/c0/native-matrix.json '"run-coretype-scalar"'
 # RV32 integer, wide, pointer and memory execution share one sealed Core
 # width/pointee oracle. No per-opcode C descriptor escape hatch remains.
 for source in src/target/riscv32/rv32_scalar.c \
@@ -1755,7 +1756,7 @@ cc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror \
 # Attached integer/atomic/bitcast admission must derive widths, signedness
 # and pointee effects from CoreType; a fake C-width oracle intentionally
 # fails if any selected path consults the old frontend integer model.
-bash tests/compiler/c0/probe-core-numeric-coretypes.sh
+bash tests/compiler/c0/run-native-matrix.sh probe-core-numeric-coretypes
 
 # x86 SysV/Win64 Core record and scalar classification must preserve the
 # original INTEGER eightbyte, unaligned MEMORY and indirect-return boundary.
@@ -1769,7 +1770,7 @@ cc -std=c11 -O2 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror \
 
 # RV64 LP64/LP64D call and return classification depends on the attached
 # neutral CoreType graph, including union and soft/hard-float exceptions.
-bash tests/compiler/c0/probe-rv64-coretype-abi.sh
+bash tests/compiler/c0/run-native-matrix.sh probe-rv64-coretype-abi
 
 # Immutable ModuleIR globals have one byte-accurate fragment walk shared by
 # all five targets; malformed ordering, size and relocation widths fail.

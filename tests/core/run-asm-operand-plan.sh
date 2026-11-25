@@ -24,5 +24,5 @@ bash "$root/tests/compiler/c0/probe-target-gnu-earlyclobber-transport.sh" "$mini
 
 # Preserve deterministic rejection identity under the same source-form ID
 # used for a successful Core plan; no generic opaque ASM fallback is allowed.
-bash "$root/tests/compiler/c0/probe-linux-core-asm-unclaimed-census.sh" "$minic"
+bash "$root/tests/compiler/c0/run-native-matrix.sh" probe-linux-core-asm-unclaimed-census "$minic"
 echo 'TYPED_ASM_OPERAND_PLAN=PASS source_core_target=1 targets=5 linux_oracle=1 fail_closed=1'

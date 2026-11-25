@@ -448,7 +448,7 @@ run_c0_host run-linux-gnu-frontend-semantics.sh
 
 MINIC="$minic" BUILD_DIR="$work/gnu-extern-void-symbol" HOST_CC="$host_cc" sh "$root/tests/compiler/c0/run-gnu-extern-void-symbol.sh"
 
-MINIC="$minic" BUILD_DIR="$work/extern-typedef-array-object" HOST_CC="$host_cc" sh "$root/tests/compiler/c0/run-extern-typedef-array-object.sh"
+MINIC="$minic" BUILD_DIR="$work/extern-typedef-array-object" HOST_CC="$host_cc" sh "$root/tests/compiler/c0/run-native-matrix.sh" run-extern-typedef-array-object
 
 MINIC="$minic" BUILD_DIR="$work/expression-statement-entry" HOST_CC="$host_cc" sh "$root/tests/compiler/c0/run-expression-statement-entry.sh"
 
@@ -482,7 +482,7 @@ run_c0_default run-static-local-self-reference.sh
 
 run_c0_default run-record-value-initialize.sh
 
-run_c0_host run-braced-static-scalar.sh
+run_c0_host run-native-matrix.sh run-braced-static-scalar
 
 run_c0_host run-compile-only-case.sh static-pointer-constant-conditional
 
