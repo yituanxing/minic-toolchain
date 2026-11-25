@@ -8139,14 +8139,15 @@
   },
   "run-enum-constant-scopes": {
     "mini": "legacy",
-    "omit_target_option": true,
+    "omit_target_option": false,
     "host": "HOST_CC_CC",
     "targets": [
-      "riscv64"
+      "riscv64",
+      "x86_64"
     ],
     "pre_flags": "-E -P -x c",
-    "gnu": false,
-    "native": false,
+    "gnu": true,
+    "native": true,
     "marker": "PASS compiler/c0/enum_constant_scopes cross-function=1 nested-shadow=1 restore-outer=1 duplicate-same-scope=reject",
     "positive": [
       {
@@ -8156,13 +8157,7 @@
             "riscv64",
             "present",
             "F",
-            "first:"
-          ],
-          [
-            "riscv64",
-            "present",
-            "F",
-            "second:"
+            "main:"
           ]
         ]
       }
@@ -8172,7 +8167,9 @@
         "inline_source": "int main(void) {\n    enum { ARG_same = 1 };\n    enum { ARG_same = 2 };\n    return ARG_same;\n}\n",
         "diagnostic": "duplicate enumerator name"
       }
-    ]
+    ],
+    "compare": true,
+    "exit": 0
   },
   "run-gnu-void-pointer-arithmetic": {
     "mini": "legacy",
@@ -8245,14 +8242,15 @@
   },
   "run-gnu-builtin-object-size": {
     "mini": "legacy",
-    "omit_target_option": true,
+    "omit_target_option": false,
     "host": "HOST_CC_CC",
     "targets": [
-      "riscv64"
+      "riscv64",
+      "x86_64"
     ],
     "pre_flags": "-E -P -std=gnu11 -x c",
-    "gnu": false,
-    "native": false,
+    "gnu": true,
+    "native": true,
     "marker": "PASS compiler/c0/gnu_builtin_object_size query=compile-time unknown=max:-1,min:0 direct-array=9 side-effects=unevaluated mode=0..3",
     "positive": [
       {
@@ -8262,37 +8260,7 @@
             "riscv64",
             "present",
             "F",
-            "unknown_max:"
-          ],
-          [
-            "riscv64",
-            "present",
-            "F",
-            "unknown_subobject:"
-          ],
-          [
-            "riscv64",
-            "present",
-            "F",
-            "unknown_min:"
-          ],
-          [
-            "riscv64",
-            "present",
-            "F",
-            "known_array:"
-          ],
-          [
-            "riscv64",
-            "present",
-            "F",
-            "  li a0, -1"
-          ],
-          [
-            "riscv64",
-            "present",
-            "F",
-            "  li a0, 9"
+            "main:"
           ],
           [
             "riscv64",
@@ -8302,6 +8270,18 @@
           ],
           [
             "riscv64",
+            "absent",
+            "F",
+            "call side_effect_pointer"
+          ],
+          [
+            "x86_64",
+            "absent",
+            "F",
+            "__builtin_object_size"
+          ],
+          [
+            "x86_64",
             "absent",
             "F",
             "call side_effect_pointer"
@@ -8317,7 +8297,9 @@
       {
         "inline_source": "unsigned long nonconstant_mode(void *pointer, int mode) {\n    return __builtin_object_size(pointer, mode);\n}\n"
       }
-    ]
+    ],
+    "compare": true,
+    "exit": 0
   },
   "run-gnu-array-range-initializer": {
     "mini": "legacy",
@@ -8408,32 +8390,32 @@
           [
             "riscv64",
             "present",
-            "F",
-            "  la a0, repeated_scalar"
+            "E",
+            "^  lla (x[0-9]+|[a-z][0-9]+), repeated_scalar$"
           ],
           [
             "riscv64",
             "present",
-            "F",
-            "  la a0, repeated_const"
+            "E",
+            "^  lla (x[0-9]+|[a-z][0-9]+), repeated_const$"
           ],
           [
             "riscv64",
             "present",
-            "F",
-            "  la a0, repeated_incomplete"
+            "E",
+            "^  lla (x[0-9]+|[a-z][0-9]+), repeated_incomplete$"
           ],
           [
             "riscv64",
             "present",
-            "F",
-            "  la a0, completed_array"
+            "E",
+            "^  lla (x[0-9]+|[a-z][0-9]+), completed_array$"
           ],
           [
             "riscv64",
             "present",
-            "F",
-            "  la a0, fixed_array"
+            "E",
+            "^  lla (x[0-9]+|[a-z][0-9]+), fixed_array$"
           ],
           [
             "riscv64",
@@ -8456,14 +8438,14 @@
           [
             "riscv64",
             "present",
-            "F",
-            "  li a0, 16"
+            "E",
+            "^  li (x[0-9]+|[a-z][0-9]+), 16$"
           ],
           [
             "riscv64",
             "present",
-            "F",
-            "  li a0, 12"
+            "E",
+            "^  li (x[0-9]+|[a-z][0-9]+), 12$"
           ]
         ]
       }
@@ -8522,7 +8504,7 @@
             "riscv64",
             "present",
             "E",
-            "^  la a0, \\.Luser_[0-9]+$"
+            "^  lla x([0-9]|[12][0-9]|30), \\.Lminic_mir_(first_local_label|repeated_local_labels|forward_local_label)_[0-9]+$"
           ]
         ]
       }
@@ -8544,7 +8526,7 @@
       [
         "riscv64",
         "E",
-        "^  la a0, \\.Luser_[0-9]+$",
+        "^  lla x([0-9]|[12][0-9]|30), \\.Lminic_mir_(first_local_label|repeated_local_labels|forward_local_label)_[0-9]+$",
         4,
         null
       ]
