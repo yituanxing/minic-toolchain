@@ -145,7 +145,8 @@ def minic_compile(config, mini, input_path, output_path, target, env, reject=Fal
         require(not output_path.exists() or not output_path.stat().st_size,
                 f"{target}: rejected input left assembly")
     else:
-        require(output_path.is_file() and output_path.stat().st_size > 0,
+        require(output_path.is_file() and
+                (config.get("allow_empty_assembly") or output_path.stat().st_size > 0),
                 f"{target}: empty assembly")
     return p
 

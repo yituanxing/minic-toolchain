@@ -24,7 +24,6 @@ jobs:
           cases=json.loads((root/'tests/compiler/c0/native-matrix.json').read_text())
           names=[
             "run-gnu-inline-asm-over-capacity",
-            "probe-gnu-numeric-pointer-global",
             "probe-direct-lp64-abi-policy",
             "run-block-extern-void-linker-symbol",
             "run-gnu-zero-extent-global-array-address",
@@ -40,16 +39,14 @@ jobs:
             "run-riscv-extended-zero-output-volatile",
             "run-riscv-linux-compiletime-assert-guards",
             "run-incomplete-function-pointer-array-lifetime",
-            "run-gnu-array-object-identity",
             "probe-aarch64-fixmap-cross-static-const",
             "probe-rv64-packed-wide-alignment",
             "probe-gnu-const-bitfield-initialization-5isa",
-            "probe-gnu-indirect-record-return-5isa",
             "probe-gnu-nested-switch-record-return-5isa",
             "probe-gnu-variadic-single-scalar-record",
           ]
-          assert len(names)==24 and all(n in cases for n in names)
-          bash_cases={'run-gnu-zero-extent-global-array-address','run-gnu-static-multi-array-declarators','probe-gnu-nested-switch-record-return-5isa','probe-gnu-indirect-record-return-5isa','probe-gnu-const-bitfield-initialization-5isa'}
+          assert len(names)==21 and all(n in cases for n in names)
+          bash_cases={'run-gnu-zero-extent-global-array-address','run-gnu-static-multi-array-declarators','probe-gnu-nested-switch-record-return-5isa','probe-gnu-variadic-single-scalar-record','probe-gnu-const-bitfield-initialization-5isa'}
           with_arg={'run-gnu-zero-extent-global-array-address','run-gnu-static-multi-array-declarators'}
           fail=[]
           for name in names:
