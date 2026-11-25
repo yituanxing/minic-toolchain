@@ -153,27 +153,6 @@ expect_if_gnu_differential() {
     printf '%s\n' "PASS compiler/c0/$name Core-CFG GNU/MiniC exit=$minic_exit"
 }
 
-expect_compile_failure() {
-    name=$1
-    expected_message=$2
-
-    "$host_cc" -E -P -x c \
-        "$root/tests/compiler/c0/$name.c" \
-        -o "$work/$name.i"
-    if "$minic" -S "$work/$name.i" -o "$work/$name.s" \
-        >"$work/$name.stdout" 2>"$work/$name.stderr"; then
-        printf '%s\n' \
-            "FAIL compiler/c0/$name: compilation unexpectedly succeeded" >&2
-        exit 1
-    fi
-    if ! grep -F "$expected_message" "$work/$name.stderr" >/dev/null; then
-        printf '%s\n' "FAIL compiler/c0/$name: diagnostic mismatch" >&2
-        cat "$work/$name.stderr" >&2
-        exit 1
-    fi
-    printf '%s\n' "PASS compiler/c0/$name"
-}
-
 compile_source empty_main empty_main
 compile_source block_scope_gcc_diagnostic_pragma block_scope_gcc_diagnostic_pragma
 compile_source goto_loop_reentry goto_loop_reentry
@@ -322,75 +301,35 @@ if grep -F ".globl table" "$work/static_global_array.s" >/dev/null; then
 fi
 printf '%s\n' "PASS compiler/c0/static_global_array"
 
-expect_compile_failure \
-    invalid_duplicate_block_local \
-    "duplicate local declaration"
-expect_compile_failure \
-    invalid_out_of_scope_local \
-    "use of undeclared local"
-expect_compile_failure \
-    invalid_address_of_rvalue \
-    "address-of requires an lvalue object or function designator"
-expect_compile_failure \
-    invalid_dereference_integer \
-    "dereference requires a pointer operand"
-expect_compile_failure \
-    invalid_pointer_initializer \
-    "initializer type does not match local type"
-expect_compile_failure \
-    invalid_assignment_rvalue \
-    "assignment expression requires a modifiable object lvalue"
-expect_compile_failure \
-    invalid_pointer_assignment_type \
-    "assignment expression type does not match target type"
-expect_compile_failure \
-    invalid_pointer_add_pointer \
-    "unsupported pointer arithmetic operands"
-expect_compile_failure \
-    invalid_integer_subtract_pointer \
-    "unsupported pointer arithmetic operands"
-expect_compile_failure \
-    invalid_zero_length_array \
-    "array bound must not be negative"
-expect_compile_failure \
-    invalid_array_initializer \
-    "array initializers are not supported yet"
-expect_compile_failure \
-    invalid_bare_array_use \
-    "return expression does not match function return type"
-expect_compile_failure \
-    invalid_array_index_type \
-    "array index must have integer type"
-expect_compile_failure \
-    invalid_duplicate_record_field \
-    "duplicate record field"
-expect_compile_failure \
-    invalid_duplicate_record_definition \
-    "duplicate record definition"
+run_c0_host run-parser-rejections.sh invalid_duplicate_block_local
+run_c0_host run-parser-rejections.sh invalid_out_of_scope_local
+run_c0_host run-parser-rejections.sh invalid_address_of_rvalue
+run_c0_host run-parser-rejections.sh invalid_dereference_integer
+run_c0_host run-parser-rejections.sh invalid_pointer_initializer
+run_c0_host run-parser-rejections.sh invalid_assignment_rvalue
+run_c0_host run-parser-rejections.sh invalid_pointer_assignment_type
+run_c0_host run-parser-rejections.sh invalid_pointer_add_pointer
+run_c0_host run-parser-rejections.sh invalid_integer_subtract_pointer
+run_c0_host run-parser-rejections.sh invalid_zero_length_array
+run_c0_host run-parser-rejections.sh invalid_array_initializer
+run_c0_host run-parser-rejections.sh invalid_bare_array_use
+run_c0_host run-parser-rejections.sh invalid_array_index_type
+run_c0_host run-parser-rejections.sh invalid_duplicate_record_field
+run_c0_host run-parser-rejections.sh invalid_duplicate_record_definition
 run_c0_host run-compile-only-case.sh gnu-empty-records
 run_c0_host run-x86-sysv-12byte-record.sh
 MINIC_CC="$(dirname "$minic")/minic-cc" \
 HOST_CC="$host_cc" \
 sh "$root/tests/compiler/c0/run-native-matrix.sh" probe-lp64-empty-record-call-abi
 sh "$root/tests/compiler/c0/run-native-matrix.sh" probe-lp64-overaligned-stack-frame
-expect_compile_failure \
-    invalid_conflicting_const_parameter \
-    "conflicting function declaration"
-expect_compile_failure \
-    invalid_named_void_parameter \
-    "parameter type cannot be bare void"
-expect_compile_failure \
-    invalid_duplicate_typedef \
-    "duplicate typedef name"
+run_c0_host run-parser-rejections.sh invalid_conflicting_const_parameter
+run_c0_host run-parser-rejections.sh invalid_named_void_parameter
+run_c0_host run-parser-rejections.sh invalid_duplicate_typedef
 compile_source void_typedef void_typedef
 printf '%s\n' "PASS compiler/c0/void_typedef"
 
-expect_compile_failure \
-    invalid_void_typedef \
-    "local object cannot have void type"
-expect_compile_failure \
-    invalid_too_many_global_initializers \
-    "too many nested static array initializers"
+run_c0_host run-parser-rejections.sh invalid_void_typedef
+run_c0_host run-parser-rejections.sh invalid_too_many_global_initializers
 compile_source static_scalar_global static_scalar_global
 expect_instructions static_scalar_global "la a0, value" "lw a0, 0(a0)"
 grep -F "  .word 7" "$work/static_scalar_global.s" >/dev/null

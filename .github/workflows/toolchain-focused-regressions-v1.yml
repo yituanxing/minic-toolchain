@@ -235,7 +235,9 @@ jobs:
       # contract, not merely compile the compiler and cross-check two new ISAs.
       # Reuse the existing broad x86 smoke rather than inventing another test.
       - name: RV64 explicit ISA profiles GNU-AS and QEMU runtime differential
+        id: rv64_isa_profiles
         if: steps.owners.outputs.mode != 'four-backend'
+        continue-on-error: true
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -693,6 +695,11 @@ jobs:
           mkdir -p build/toolchain-focused-t1-verdict
           failures=0
           echo -e 'owner\tcheck\tresult' > build/toolchain-focused-t1-verdict/outcomes.tsv
+          result="${{ steps.rv64_isa_profiles.outcome }}"
+          printf '%s\t%s\t%s\n' 'rv64' 'strict_isa_profiles' "$result" >> build/toolchain-focused-t1-verdict/outcomes.tsv
+          if [[ "$MODE" != four-backend && "$result" != success ]]; then
+            echo "T1_OWNER_CHECK_FAILED owner=rv64 check=strict_isa_profiles result=$result"; failures=1
+          fi
           result="${{ steps.four.outcome }}"
           printf '%s\t%s\t%s\n' 'four-backend' 'gnu_qemu_cjson_frontier' "$result" >> build/toolchain-focused-t1-verdict/outcomes.tsv
           if [[ "$MODE" == all || "$MODE" == four-backend ]]; then
@@ -767,9 +774,9 @@ jobs:
           if [[ "${{ steps.build.outcome }}" != success ]]; then failures=1; fi
           cat build/toolchain-focused-t1-verdict/outcomes.tsv
           if [[ "$failures" -eq 0 ]]; then
-            echo "TOOLCHAIN_FOCUSED_T1=PASS mode=$MODE independent_test_checks=10 shared_builds=1"
+            echo "TOOLCHAIN_FOCUSED_T1=PASS mode=$MODE independent_test_checks=11 shared_builds=1"
           else
-            echo "TOOLCHAIN_FOCUSED_T1=FAIL mode=$MODE independent_test_checks=10 shared_builds=1"
+            echo "TOOLCHAIN_FOCUSED_T1=FAIL mode=$MODE independent_test_checks=11 shared_builds=1"
           fi
           exit "$failures"
 

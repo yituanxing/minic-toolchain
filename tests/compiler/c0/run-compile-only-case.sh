@@ -4,6 +4,9 @@ set -eu
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
 minic=${MINIC:-"$root/build/debug/bin/minic"}
 host_cc=${HOST_CC:-${CC:-cc}}
+run_parser_reject() {
+    MINIC="$minic" HOST_CC="$host_cc" sh "$root/tests/compiler/c0/run-parser-rejections.sh" "$1"
+}
 if [ "$#" -ne 1 ]; then
     echo "usage: $0 CASE" >&2
     echo "Run a case registered in this driver." >&2
@@ -183,23 +186,9 @@ grep -F '.dword init_namespace' \
     "$work/static_record_flexible_array_initializer.s" >/dev/null
 printf '%s\n' 'PASS compiler/c0/static_record_flexible_array_initializer aggregate-tail+relocation'
 
-expect_failure() {
-    name=$1
-    expected=$2
-    "$host_cc" -E -P -x c "$root/tests/compiler/c0/$name.c" -o "$work/$name.i"
-    if "$minic" -S "$work/$name.i" -o "$work/$name.s" \
-        >"$work/$name.stdout" 2>"$work/$name.stderr"; then
-        printf '%s\n' "FAIL compiler/c0/$name: compilation unexpectedly succeeded" >&2
-        exit 1
-    fi
-    grep -F "$expected" "$work/$name.stderr" >/dev/null
-    printf '%s\n' "PASS compiler/c0/$name"
-}
 
-expect_failure invalid_flexible_array_not_last \
-    'flexible array member must be the last record field'
-expect_failure invalid_union_flexible_array \
-    'flexible array member is not allowed in union'
+run_parser_reject invalid_flexible_array_not_last
+run_parser_reject invalid_union_flexible_array
             ;;
         function-designator-calls)
 test "$(grep -c -F '  jalr ra, t0, 0' "$work/function_designator_call.s")" -eq 2
@@ -869,33 +858,9 @@ grep -F "  call set_value" "$work/expression_statement.s" >/dev/null
 grep -F "  call increment" "$work/expression_statement.s" >/dev/null
 printf '%s\n' "PASS compiler/c0/expression_statement"
 
-expect_failure() {
-    name=$1
-    diagnostic=$2
 
-    "$host_cc" -E -P -x c \
-        "$root/tests/compiler/c0/$name.c" \
-        -o "$work/$name.i"
-    if "$minic" -S "$work/$name.i" -o "$work/$name.s" \
-        >"$work/$name.stdout" 2>"$work/$name.stderr"; then
-        printf '%s\n' \
-            "FAIL compiler/c0/$name: compilation unexpectedly succeeded" >&2
-        exit 1
-    fi
-    if ! grep -F "$diagnostic" "$work/$name.stderr" >/dev/null; then
-        printf '%s\n' "FAIL compiler/c0/$name: diagnostic mismatch" >&2
-        cat "$work/$name.stderr" >&2
-        exit 1
-    fi
-    printf '%s\n' "PASS compiler/c0/$name"
-}
-
-expect_failure \
-    invalid_call_assignment_target \
-    "assignment expression requires a modifiable object lvalue"
-expect_failure \
-    invalid_expression_statement_semicolon \
-    "expected ';' after expression"
+run_parser_reject invalid_call_assignment_target
+run_parser_reject invalid_expression_statement_semicolon
             ;;
         long-types)
 grep -F ".globl main" "$work/long_type_specifiers.s" >/dev/null
@@ -916,36 +881,17 @@ check_invalid() {
 }
 
 check_invalid invalid_too_many_long_specifiers "too many long type specifiers"
-check_invalid invalid_signed_unsigned "conflicting signed and unsigned type specifiers"
-check_invalid invalid_long_char "char cannot be combined with short, int, or long"
+run_parser_reject invalid_signed_unsigned
+run_parser_reject invalid_long_char
             ;;
         pointer-qualifications)
 grep -F "  call read_value" "$work/pointer_qualification.s" >/dev/null
 grep -E '^[[:space:]]+lw[[:space:]]+[^,]+,[[:space:]]*0\([^)]*\)$' "$work/pointer_qualification.s" >/dev/null
 printf '%s\n' "PASS compiler/c0/pointer_qualification"
 
-expect_failure() {
-    name=$1
 
-    "$host_cc" -E -P -x c \
-        "$root/tests/compiler/c0/$name.c" \
-        -o "$work/$name.i"
-    if "$minic" -S \
-        "$work/$name.i" \
-        -o "$work/$name.s" \
-        >"$work/$name.stdout" \
-        2>"$work/$name.stderr"; then
-        printf '%s\n' \
-            "FAIL compiler/c0/$name: compilation unexpectedly succeeded" >&2
-        exit 1
-    fi
-    grep -F "call argument type does not match declaration" \
-        "$work/$name.stderr" >/dev/null
-    printf '%s\n' "PASS compiler/c0/$name"
-}
-
-expect_failure invalid_const_pointer_removal
-expect_failure invalid_nested_const_pointer
+run_parser_reject invalid_const_pointer_removal
+run_parser_reject invalid_nested_const_pointer
             ;;
         static-functions)
 grep -F ".type helper, @function" "$work/static_functions.s" >/dev/null
@@ -978,32 +924,10 @@ grep -Eq '^\.Lminic_mir_identity_[0-9]+:$' "$work/pointer_return.s"
 grep -F "  call identity" "$work/pointer_return.s" >/dev/null
 printf '%s\n' "PASS compiler/c0/pointer_return"
 
-expect_failure() {
-    name=$1
-    message=$2
 
-    "$host_cc" -E -P -x c \
-        "$root/tests/compiler/c0/$name.c" \
-        -o "$work/$name.i"
-    if "$minic" -S "$work/$name.i" -o "$work/$name.s" \
-        >"$work/$name.stdout" 2>"$work/$name.stderr"; then
-        printf '%s\n' \
-            "FAIL compiler/c0/$name: compilation unexpectedly succeeded" >&2
-        exit 1
-    fi
-    grep -F "$message" "$work/$name.stderr" >/dev/null
-    printf '%s\n' "PASS compiler/c0/$name"
-}
-
-expect_failure \
-    invalid_function_linkage_conflict \
-    "conflicting function declaration"
-expect_failure \
-    invalid_void_return_value \
-    "void function cannot return a value"
-expect_failure \
-    invalid_int_return_without_value \
-    "non-void function requires a return value"
+run_parser_reject invalid_function_linkage_conflict
+run_parser_reject invalid_void_return_value
+run_parser_reject invalid_int_return_without_value
             ;;
         switch-control-flow)
 grep -F ".Lswitch_case_" "$work/switch_control_flow.s" >/dev/null
@@ -1032,55 +956,17 @@ printf '%s\n' "PASS compiler/c0/switch_typed_consteval casted-typedef=1 binary=1
 grep -F 'fallthrough_shape:' "$work/gnu_fallthrough_statement.s" >/dev/null
 printf '%s\n' "PASS compiler/c0/gnu_fallthrough_statement attribute=diagnostic statement-only=1 aliases=2"
 
-expect_failure() {
-    name=$1
-    message=$2
 
-    "$host_cc" -E -P -x c \
-        "$root/tests/compiler/c0/$name.c" \
-        -o "$work/$name.i"
-    if "$minic" -S "$work/$name.i" -o "$work/$name.s" \
-        >"$work/$name.stdout" 2>"$work/$name.stderr"; then
-        printf '%s\n' \
-            "FAIL compiler/c0/$name: compilation unexpectedly succeeded" >&2
-        exit 1
-    fi
-    if ! grep -F "$message" "$work/$name.stderr" >/dev/null; then
-        printf '%s\n' "FAIL compiler/c0/$name: diagnostic mismatch" >&2
-        cat "$work/$name.stderr" >&2
-        exit 1
-    fi
-    printf '%s\n' "PASS compiler/c0/$name"
-}
+run_parser_reject invalid_case_outside_switch
+run_parser_reject invalid_default_outside_switch
+run_parser_reject invalid_duplicate_case
+run_parser_reject invalid_duplicate_default
+run_parser_reject invalid_switch_double_selector
+run_parser_reject invalid_case_nonconstant
+run_parser_reject invalid_case_symbolic_pointer
 
-expect_failure \
-    invalid_case_outside_switch \
-    "case label requires an enclosing switch"
-expect_failure \
-    invalid_default_outside_switch \
-    "default label requires an enclosing switch"
-expect_failure \
-    invalid_duplicate_case \
-    "duplicate or overlapping case value range"
-expect_failure \
-    invalid_duplicate_default \
-    "duplicate default label"
-expect_failure \
-    invalid_switch_double_selector \
-    "switch selector requires an integer expression"
-expect_failure \
-    invalid_case_nonconstant \
-    "case label currently requires an integer constant expression"
-expect_failure \
-    invalid_case_symbolic_pointer \
-    "case label currently requires an integer constant expression"
-
-expect_failure \
-    invalid_fallthrough_outside_switch \
-    "GNU fallthrough statement attribute requires an enclosing switch"
-expect_failure \
-    invalid_statement_attribute_target \
-    "GNU attribute is not valid on a statement"
+run_parser_reject invalid_fallthrough_outside_switch
+run_parser_reject invalid_statement_attribute_target
 
 "$host_cc" -E -P -std=gnu11 -x c \
     "$root/tests/compiler/c0/gnu_unused_label_attribute.c" \

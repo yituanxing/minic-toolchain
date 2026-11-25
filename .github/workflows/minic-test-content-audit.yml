@@ -1,10 +1,7 @@
 name: MiniC native regression matrix
 on:
   push:
-    branches:
-      - cleanup/minic-test-pruning-20261125
-      - cleanup/minic-semantic-deep-20261125
-      - main
+    branches: [main]
     paths:
       - 'src/**'
       - 'tools/minic*/**'
@@ -22,113 +19,7 @@ on:
 permissions:
   contents: read
 jobs:
-  validate-native-matrix:
-    if: github.ref == 'refs/heads/cleanup/minic-test-pruning-20261125' || github.ref == 'refs/heads/cleanup/minic-semantic-deep-20261125'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - name: Build production MiniC
-        run: make -j4 MODE=release CFLAGS=-Werror build/release/bin/minic-cc build/release/bin/minic
-      - name: Run original and shared native oracle for every selected driver
-        run: |
-          python3 - <<'PY'
-          import concurrent.futures,json,os,pathlib,subprocess,tempfile
-          root=pathlib.Path.cwd()
-          cases=json.loads((root/"tests/compiler/c0/native-matrix.json").read_text())
-          # Verify direct callers against the live repository before temporarily
-          # retrieving a historical script for the independent oracle.
-          active=subprocess.check_output(["git","ls-files","-z"]).decode().strip("\0").split("\0")
-          retired={name for name,config in cases.items() if not (root/config.get("old_path","tests/compiler/c0/"+name+".sh")).exists()}
-          bad=[]
-          for p in active:
-              if p.startswith("docs/") or p.endswith(".md") or p in (".github/workflows/minic-test-content-audit.yml", "tests/compiler/c0/native-matrix.json"): continue
-              try: body=(root/p).read_text()
-              except (UnicodeDecodeError,OSError): continue
-              for name in retired:
-                  if name+".sh" in body: bad.append((p,name))
-              for name in cases.keys()-retired:
-                  if name+".sh" in body and pathlib.Path(p).name != name+".sh":
-                      for i,line in enumerate(body.splitlines(),1):
-                          if name+".sh" in line: print("MATRIX_CALLER",json.dumps([name,p,i,line]),flush=True)
-          if bad: raise AssertionError(bad)
-          # Check every reference to the superseded, parameterized C input set.
-          old_inputs=["invalid_tag_kind_enum_struct","invalid_tag_kind_struct_enum","invalid_tag_kind_struct_union","invalid_tag_kind_union_struct","invalid_tag_kind_shadow_enum","invalid_tag_kind_shadow_struct","invalid_tag_kind_forward_enum_record","invalid_bitwise_xor_pointer","invalid_bitwise_and_pointer","invalid_shift_pointer"]
-          for path in active:
-              if path.startswith("docs/") or path.endswith(".md") or path in (".github/workflows/minic-test-content-audit.yml"): continue
-              try: body=(root/path).read_text()
-              except (UnicodeDecodeError,OSError): continue
-              for name in old_inputs:
-                  if name in body and pathlib.Path(path).stem != name:
-                      for i,line in enumerate(body.splitlines(),1):
-                          if name in line: print("MATRIX_SOURCE_CALLER",json.dumps([name,path,i,line]),flush=True)
-          print("NATIVE_MATRIX_LIVE_CALLERS=PASS",flush=True)
-          compiler=str(root/"build/release/bin/minic-cc")
-          baseline=pathlib.Path(tempfile.mkdtemp(prefix="matrix-baseline-"))
-          subprocess.run(["git","worktree","add","--detach",str(baseline),"bad27ded8f6fe38f1c510d706558f9b7d0171666"],check=True)
-          def one(item):
-              name,config=item
-              with tempfile.TemporaryDirectory(prefix="matrix-verify-") as d:
-                  work=pathlib.Path(d)
-                  oldenv=dict(os.environ,MINIC_CC=compiler,MINIC=str(root/"build/release/bin/minic") if config.get("mini")=="legacy" else compiler,BUILD_DIR=str(work/"old"))
-                  newenv=dict(oldenv,BUILD_DIR=str(work/"new"))
-                  old_path=config.get("old_path","tests/compiler/c0/"+name+".sh")
-                  old=baseline/old_path
-                  args=["cc"] if config.get("host")=="arg" else ([compiler] if config.get("mini") in ("arg","optional-arg","arg-first") else [])
-                  try:
-                      a=subprocess.run(["bash",str(old),*args],cwd=baseline,env=oldenv,stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=200)
-                      b=subprocess.run(["sh","tests/compiler/c0/run-native-matrix.sh",name,*args],env=newenv,stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=100)
-                      return dict(name=name,old=a.returncode,new=b.returncode,stdout_equal=a.stdout==b.stdout,stderr_equal=(a.stderr.replace(str(baseline).encode(),b"<CHECKOUT>").replace(str(root).encode(),b"<CHECKOUT>")==b.stderr.replace(str(baseline).encode(),b"<CHECKOUT>").replace(str(root).encode(),b"<CHECKOUT>")),oldout=a.stdout.decode(errors="replace")[-500:],newout=b.stdout.decode(errors="replace")[-500:],olderr=a.stderr.decode(errors="replace")[-1300:] if a.returncode or a.stderr!=b.stderr else "",newerr=b.stderr.decode(errors="replace")[-1300:] if b.returncode or a.stderr!=b.stderr else "")
-                  except subprocess.TimeoutExpired as exc:
-                      return dict(name=name,old=-99,new=-99,error=str(exc))
-          with concurrent.futures.ThreadPoolExecutor(max_workers=4) as ex:
-              results=list(ex.map(one,cases.items()))
-          for row in results: print("NATIVE_MATRIX_CASE",json.dumps(row),flush=True)
-          passed=[r["name"] for r in results if r["old"]==r["new"]==0]
-          print("NATIVE_MATRIX_PASS",json.dumps(passed),flush=True)
-          print("NATIVE_MATRIX_TOTAL",len(passed),len(results),flush=True)
-          if len(passed)!=len(results): raise SystemExit(1)
-          # Different human-facing status banners are allowed only for audited
-          # migrations; 94 other cases must match independent stdout/stderr
-          # byte-for-byte, not merely return success for both implementations.
-          output_format_exceptions = {
-              "probe-gnu-wide-local-and-record-chained",
-              "probe-mc089-x87-ordered-comparisons",
-              "run-core-ir-shapes",
-              "run-core-types",
-              "run-inline-asm-provenance",
-              "run-structured-inline-asm-capacity",
-              "run-coretype-root-alignment",
-              "run-coretype-scalar",
-              "run-x86-typed-asm-forms",
-              "probe-rv64-coretype-abi",
-              "run-gnu-zero-length-array",
-              "run-gnu-builtin-constant-p-if-guard",
-          }
-          assert output_format_exceptions <= cases.keys()
-          strict_failures=[r["name"] for r in results
-                           if r["name"] not in output_format_exceptions and
-                              (not r.get("stdout_equal", False) or not r.get("stderr_equal", False))]
-          print("NATIVE_MATRIX_STRICT_STDOUT_STDERR", len(results)-len(output_format_exceptions),
-                "exceptions", len(output_format_exceptions), "failures", strict_failures, flush=True)
-          if strict_failures: raise SystemExit(1)
-          PY
-
-      - name: Exercise maintained Make entrypoints
-        run: |
-          bash -n tests/compiler/c0/run.sh tests/compiler/c0/run-foundation-focused.sh tests/compiler/c0/probe-review-batch-2026-10-29.sh
-          # These semantic fixtures are referenced via dynamically constructed
-          # source paths, not their complete filenames. Exercise them in both
-          # native-matrix modes so orphan-name pruning cannot remove live tests.
-          MINIC_CC="$PWD/build/release/bin/minic-cc" sh tests/compiler/c0/run-aarch64-gnu-inline-lazy-negatives.sh
-          MINIC_CC="$PWD/build/release/bin/minic-cc" sh tests/compiler/c0/run-aarch64-gnu-neon-inline-six.sh
-          python3 -m py_compile tools/ci/minic-bootstrap-current-b1-seed-v1.py
-          make -j4 MODE=release CFLAGS=-Werror check-unsigned-declarations check-integer-bit-operations check-core-type-verifier check-core-ir-shapes-source check-netlink-warn-branch check-loongarch64-record-copy-size
-
   current-native-matrix:
-    if: github.ref != 'refs/heads/cleanup/minic-test-pruning-20261125' && github.ref != 'refs/heads/cleanup/minic-semantic-deep-20261125'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -156,6 +47,9 @@ jobs:
           if any(code for _,code,_ in results): raise SystemExit(1)
           print("NATIVE_MATRIX_TOTAL",len(results),len(cases))
           PY
+      - name: Run generated parser and semantic rejection matrix
+        run: |
+          MINIC="$PWD/build/release/bin/minic" HOST_CC=cc sh tests/compiler/c0/run-parser-rejections.sh --all
       - name: Exercise maintained Make entrypoints
         run: |
           bash -n tests/compiler/c0/run.sh tests/compiler/c0/run-foundation-focused.sh tests/compiler/c0/probe-review-batch-2026-10-29.sh
