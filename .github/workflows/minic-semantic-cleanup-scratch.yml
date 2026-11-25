@@ -265,6 +265,13 @@ jobs:
           disabled={p:len(re.findall(r"(?m)^[ \t]*#[ \t]*if[ \t]+0(?:\s|$)",s)) for p,s in src.items()}
           disabled={p:n for p,n in disabled.items() if n}
           print("PROD_PREPROCESSOR_DEAD_CANDIDATES",json.dumps({"duplicate_includes":incdup,"if_zero":disabled}),flush=True)
+          # Directory-wide discovery of C0 fixtures invalidates static no-name callers.
+          pattern=re.compile(r"(?:glob\(|rglob\(|find |os\.walk|Path\(|ls |git ls-files|for [^\n]{0,80} in |xargs).{0,180}(?:compiler/c0|tests/compiler|\.c\b|[*.]c\b)",re.I)
+          discover=[]
+          for p,s in owners.items():
+              for match in pattern.finditer(s):
+                  discover.append((p,s.count("\n",0,match.start())+1,match.group(0).strip()[:185]))
+          print("C0_DYNAMIC_DISCOVERY",json.dumps({"count":len(discover),"matches":discover[:140]}),flush=True)
           print("AUDIT_COMPLETE",flush=True)
           PY
       - name: Verify compiler build and architecture boundary
