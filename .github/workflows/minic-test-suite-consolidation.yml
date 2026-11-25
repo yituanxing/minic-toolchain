@@ -7,7 +7,7 @@ permissions:
   contents: write
 jobs:
   migrate:
-    if: startsWith(github.event.head_commit.message, 'test-suite: bootstrap')
+    if: "startsWith(github.event.head_commit.message, 'test-suite: bootstrap')"
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -17,7 +17,8 @@ jobs:
       - name: Generate five incremental commits and verify all test case identities
         run: |
           set -Eeuo pipefail
-          test "$(git rev-parse HEAD^)" = "4f3b6b1b087e4e9cb8a0d17fdac5b8a46d193bad"
+          git merge-base --is-ancestor "4f3b6b1b087e4e9cb8a0d17fdac5b8a46d193bad" HEAD
+          test -z "$(git ls-files 'tests/suites/*.cases')"
           test "${GITHUB_REF_NAME}" = "cleanup/minic-test-suite-consolidation-20261125"
           git config user.name "MiniC test-suite migration"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
