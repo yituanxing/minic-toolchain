@@ -1,4 +1,5 @@
 #include "frontend/parser_static_constants.h"
+#include "common/integer_bits.h"
 #include "frontend/const_eval.h"
 #include <inttypes.h>
 #include <limits.h>
@@ -415,7 +416,7 @@ static bool static_pointer_mask_bits(const MinicParser *parser, uint64_t value, 
     pointer_bits = (unsigned int)(layout->pointer_size * 8U);
     *bits = value;
     if (pointer_bits < 64U) {
-        *bits &= (UINT64_C(1) << pointer_bits) - UINT64_C(1);
+        *bits &= minic_integer_mask64(pointer_bits);
     }
     return true;
 }

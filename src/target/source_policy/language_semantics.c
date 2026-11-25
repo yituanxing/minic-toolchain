@@ -1,4 +1,5 @@
 #include "target/target_info.h"
+#include "common/integer_bits.h"
 #include "frontend/ast.h"
 #include "target/source_policy/source_policy.h"
 #include "target/source_policy/target_source_info.h"
@@ -114,7 +115,7 @@ integer_literal_fits(const MinicTargetIntegerModel *model, MinicType type, uint6
         if (bits >= 64U) {
             return true;
         }
-        return value <= (UINT64_C(1) << bits) - UINT64_C(1);
+        return value <= minic_integer_mask64(bits);
     }
     if (bits > 64U) {
         return true;
@@ -122,7 +123,7 @@ integer_literal_fits(const MinicTargetIntegerModel *model, MinicType type, uint6
     if (bits == 64U) {
         return value <= (uint64_t)INT64_MAX;
     }
-    return value <= (UINT64_C(1) << (bits - 1U)) - UINT64_C(1);
+    return value <= minic_integer_mask64(bits - 1U);
 }
 /* Target C language/ABI state is a translation-unit property, not a global
  * CPU property. This owns the option semantics and preserves defaults when a

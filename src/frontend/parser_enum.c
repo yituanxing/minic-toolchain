@@ -1,4 +1,5 @@
 #include "frontend/parser_internal.h"
+#include "common/integer_bits.h"
 #include "frontend/parser_name_index.h"
 
 #include <limits.h>
@@ -212,7 +213,7 @@ signed_type_fits(MinicParser *parser, MinicType type, int64_t minimum, uint64_t 
         type_maximum = (uint64_t)INT64_MAX;
     } else {
         type_minimum = -(INT64_C(1) << (bits - 1U));
-        type_maximum = (UINT64_C(1) << (bits - 1U)) - UINT64_C(1);
+        type_maximum = minic_integer_mask64(bits - 1U);
     }
     return minimum >= type_minimum && maximum <= type_maximum;
 }
@@ -225,7 +226,7 @@ static bool unsigned_type_fits(MinicParser *parser, MinicType type, uint64_t max
         bits == 0U || bits > 64U || !minic_type_is_unsigned_integer(type)) {
         return false;
     }
-    type_maximum = bits == 64U ? UINT64_MAX : (UINT64_C(1) << bits) - UINT64_C(1);
+    type_maximum = minic_integer_mask64(bits);
     return maximum <= type_maximum;
 }
 
@@ -274,9 +275,7 @@ static bool normalize_value_bits(MinicParser *parser,
         return false;
     }
     raw = value->negative ? (uint64_t)value->signed_value : value->unsigned_value;
-    if (width != 64U) {
-        raw &= (UINT64_C(1) << width) - UINT64_C(1);
-    }
+    raw &= minic_integer_mask64(width);
     *bits = raw;
     return true;
 }
@@ -294,15 +293,11 @@ static bool const_value_to_numeric(MinicParser *parser,
         return false;
     }
     raw = constant->bits;
-    if (width != 64U) {
-        raw &= (UINT64_C(1) << width) - UINT64_C(1);
-    }
+    raw &= minic_integer_mask64(width);
     (void)memset(value, 0, sizeof(*value));
     if (minic_type_is_signed_integer(constant->type) &&
         (raw & (UINT64_C(1) << (width - 1U))) != 0U) {
-        if (width != 64U) {
-            raw |= ~((UINT64_C(1) << width) - UINT64_C(1));
-        }
+        raw = minic_integer_sign_extend64(raw, width);
         (void)memcpy(&value->signed_value, &raw, sizeof(raw));
         value->negative = true;
         return true;

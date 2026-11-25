@@ -1,4 +1,5 @@
 #include "compiler/global_payload.h"
+#include "common/integer_bits.h"
 #include "target/data_layout_source.h"
 
 #include <stdint.h>
@@ -75,7 +76,7 @@ static bool minic_payload_bits(const MinicMultiGlobalPayloadSink *sink,
     if (width != 1U && width != 2U && width != 4U && width != 8U)
         return false;
     if (width < 8U)
-        bits &= (UINT64_C(1) << (width * 8U)) - UINT64_C(1);
+        bits &= minic_integer_mask64((unsigned int)(width * 8U));
     return sink->emit_bits(sink->context, type, width, bits);
 }
 
@@ -425,7 +426,7 @@ static bool minic_multi_visit_record_bit_field_run(
             return false;
         }
         mask =
-            field->bit_width == 64U ? UINT64_MAX : (UINT64_C(1) << field->bit_width) - UINT64_C(1);
+            minic_integer_mask64(field->bit_width);
         bits &= mask;
         for (bit_index = 0U; bit_index < field->bit_width; ++bit_index) {
             size_t positioned_bit;

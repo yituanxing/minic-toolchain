@@ -1,4 +1,5 @@
 #include "target/common/module_global_emit.h"
+#include "common/integer_bits.h"
 #include "target/common/elf_section_name.h"
 #include "target/common/elf_alias_emit.h"
 #include "core/symbol_identity.h"
@@ -80,14 +81,14 @@ bool minic_multi_module_emit_global_fragments(
             if (fprintf(out, "  .zero %zu\n", width) < 0) return false;
             break;
         case MINIC_CORE_MODULE_FRAGMENT_BITS:
-            if (width < 8U) bits &= (UINT64_C(1) << (8U * width)) - UINT64_C(1);
+            if (width < 8U) bits &= minic_integer_mask64((unsigned int)(8U * width));
             /* The target's GNU dialect may require signed decimal spelling.
              * Two's-complement sign extension depends only on the emitted
              * width and raw bits, not on any C initializer/source type. */
             if (signed_integer_bits && width != 1U) {
                 int64_t signed_bits;
-                if (width < 8U && (bits & (UINT64_C(1) << (8U * width - 1U))) != 0U)
-                    bits |= ~((UINT64_C(1) << (8U * width)) - UINT64_C(1));
+                if (width < 8U)
+                    bits = minic_integer_sign_extend64(bits, (unsigned int)(8U * width));
                 (void)memcpy(&signed_bits, &bits, sizeof(signed_bits));
                 if (fprintf(out, "  %s %" PRId64 "\n", data, signed_bits) < 0)
                     return false;
@@ -132,8 +133,7 @@ static bool minic_module_elf_nobits_payload_valid(
         if (fragment->kind == MINIC_CORE_MODULE_FRAGMENT_BITS) {
             const uint64_t visible_bits = fragment->byte_count == 8U
                 ? fragment->bits
-                : fragment->bits & ((UINT64_C(1) <<
-                                      (8U * fragment->byte_count)) - UINT64_C(1));
+                : fragment->bits & minic_integer_mask64(8U * fragment->byte_count);
             if (visible_bits != 0U) return false;
         }
     }

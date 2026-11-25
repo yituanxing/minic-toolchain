@@ -1,4 +1,5 @@
 #include "compiler/c_lower/core_lower_internal.h"
+#include "common/integer_bits.h"
 
 #include "frontend/expression_semantics.h"
 #include <stdint.h>
@@ -388,9 +389,7 @@ MinicCoreLowerStatus minic_core_lower_try_bit_field_assignment(
                 }
             }
 
-            low_mask = field->bit_width == 64U
-                           ? UINT64_MAX
-                           : ((UINT64_C(1) << field->bit_width) - UINT64_C(1));
+            low_mask = minic_integer_mask64(field->bit_width);
             if (field->bit_width < storage_width) {
                 (void)memset(&operation, 0, sizeof(operation));
                 operation.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
@@ -494,9 +493,7 @@ MinicCoreLowerStatus minic_core_lower_try_bit_field_assignment(
             }
 
             field_mask = low_mask << bit_offset;
-            storage_mask = storage_width == 64U
-                               ? UINT64_MAX
-                               : ((UINT64_C(1) << storage_width) - UINT64_C(1));
+            storage_mask = minic_integer_mask64(storage_width);
             clear_mask = (~field_mask) & storage_mask;
             (void)memset(&operation, 0, sizeof(operation));
             operation.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
@@ -660,9 +657,7 @@ MinicCoreLowerStatus minic_core_lower_try_bit_field_read(
                 }
             }
             if (field->bit_width < storage_width) {
-                mask_bits = field->bit_width == 64U
-                                ? UINT64_MAX
-                                : ((UINT64_C(1) << field->bit_width) - UINT64_C(1));
+                mask_bits = minic_integer_mask64(field->bit_width);
                 (void)memset(&extract, 0, sizeof(extract));
                 extract.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
                 extract.span = expression->span;
@@ -936,9 +931,7 @@ MinicCoreLowerStatus minic_core_lower_try_bit_field_compound(
                     return MINIC_CORE_LOWER_ERROR;
                 }
             }
-            bit_low_mask = bit_field->bit_width == 64U
-                               ? UINT64_MAX
-                               : ((UINT64_C(1) << bit_field->bit_width) - UINT64_C(1));
+            bit_low_mask = minic_integer_mask64(bit_field->bit_width);
             if (bit_field->bit_width < bit_storage_width) {
                 (void)memset(&bit_instruction, 0, sizeof(bit_instruction));
                 bit_instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
@@ -1263,9 +1256,7 @@ MinicCoreLowerStatus minic_core_lower_try_bit_field_compound(
                 }
             }
             bit_field_mask = bit_low_mask << bit_offset;
-            bit_storage_mask = bit_storage_width == 64U
-                                   ? UINT64_MAX
-                                   : ((UINT64_C(1) << bit_storage_width) - UINT64_C(1));
+            bit_storage_mask = minic_integer_mask64(bit_storage_width);
             bit_clear_mask = (~bit_field_mask) & bit_storage_mask;
             bit_status = core_bit_field_load_storage(
                 context, expression->span, bit_address, bit_storage_type,
@@ -1453,9 +1444,7 @@ MinicCoreLowerStatus minic_core_lower_bit_field_update(
             return MINIC_CORE_LOWER_ERROR;
         }
     }
-    low_mask = field->bit_width == 64U
-                   ? UINT64_MAX
-                   : ((UINT64_C(1) << field->bit_width) - UINT64_C(1));
+    low_mask = minic_integer_mask64(field->bit_width);
     if (field->bit_width < storage_width) {
         (void)memset(&instruction, 0, sizeof(instruction));
         instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
@@ -1667,9 +1656,7 @@ MinicCoreLowerStatus minic_core_lower_bit_field_update(
     }
 
     field_mask = low_mask << bit_offset;
-    storage_mask = storage_width == 64U
-                       ? UINT64_MAX
-                       : ((UINT64_C(1) << storage_width) - UINT64_C(1));
+    storage_mask = minic_integer_mask64(storage_width);
     clear_mask = (~field_mask) & storage_mask;
     (void)memset(&instruction, 0, sizeof(instruction));
     instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;

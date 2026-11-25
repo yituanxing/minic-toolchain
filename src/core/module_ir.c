@@ -1,4 +1,5 @@
 #include "core/module_ir.h"
+#include "common/integer_bits.h"
 #include "core/core_ir.h"
 #include "core/symbol_identity.h"
 
@@ -15,14 +16,8 @@ bool minic_core_asm_names_symbol(const char *text, size_t length,
         const unsigned char before = index == 0U ? 0U : (unsigned char)text[index - 1U];
         const unsigned char after = index + name_length == length ? 0U :
             (unsigned char)text[index + name_length];
-        const bool left_identifier =
-            (before >= 'a' && before <= 'z') || (before >= 'A' && before <= 'Z') ||
-            (before >= '0' && before <= '9') || before == '_' || before == '.' ||
-            before == '$';
-        const bool right_identifier =
-            (after >= 'a' && after <= 'z') || (after >= 'A' && after <= 'Z') ||
-            (after >= '0' && after <= '9') || after == '_' || after == '.' ||
-            after == '$';
+        const bool left_identifier = minic_core_assembler_symbol_byte(before);
+        const bool right_identifier = minic_core_assembler_symbol_byte(after);
         if (!left_identifier && !right_identifier &&
             memcmp(text + index, symbol, name_length) == 0)
             return true;
@@ -360,8 +355,7 @@ static bool module_live_global_definition_valid(
                    (global->data_policy != MINIC_CORE_MODULE_DATA_MATERIALIZED || bss)) {
             const uint64_t visible_bits = fragment->byte_count == 8U
                 ? fragment->bits
-                : fragment->bits & ((UINT64_C(1) <<
-                                      (8U * fragment->byte_count)) - UINT64_C(1));
+                : fragment->bits & minic_integer_mask64(8U * fragment->byte_count);
             if (visible_bits != 0U) return false;
         }
     }
