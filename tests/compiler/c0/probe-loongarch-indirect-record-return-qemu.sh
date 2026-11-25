@@ -96,7 +96,7 @@ printf '%s\n' \
 "$minic" --target=loongarch64-linux -S "$work/too-large.i" \
     -o "$work/too-large.s" || fail 'legal 2049-byte record refused'
 contains '^too_large:$' "$work/too-large.s"
-contains '^  li\\.d \\$t3, 2049$' "$work/too-large.s"
+contains '^  li\.d \$t3, 2049$' "$work/too-large.s"
 
 # A 1 MiB+1 local remains beyond the shared LP64 frame capacity.
 printf '%s\n' \
