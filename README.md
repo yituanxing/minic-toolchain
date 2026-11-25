@@ -54,21 +54,27 @@ This satisfies the declared completion criteria for the first external project. 
 ## Build and validation
 
 ```sh
-make
-make check-fast
-make sanitize
+make -j4 MODE=release CFLAGS=-Werror all
+make MODE=release CFLAGS=-Werror check-fast
+make MODE=release CFLAGS=-Werror check-toolchain
 ```
 
-With a RISC-V Linux compiler and QEMU user-mode executor:
+The single current CI workflow builds the production compiler and eight companion
+tools, runs the existing 202-case declarative native matrix (positive/negative,
+GNU comparisons, target assembly, and native execution where each case permits),
+the generated parser-rejection suite, and MiniAS/MiniPP smoke gates.
 
-```sh
-make check-runtime \
-  RISCV_CC=riscv64-linux-gnu-gcc \
-  QEMU_RISCV64=qemu-riscv64 \
-  REQUIRE_RISCV_RUNTIME=1
-```
+The explicit `make bootstrap` B1 47-source Stage1/Stage2 fixed-point gate
+is retained as a **manual** cross-toolchain operation; the CI baseline does not
+certify current Stage4 self-hosting, all five target runtimes, Linux image boot,
+or historical 2064-object integration. Those former checks were deliberately
+retired from the current tree; their full inputs, scripts, and workflow history
+remain recoverable from Git commit `29443f5b2bc1b9543a9e253ad36e0ce8dc9f5cf8`.
 
-GitHub Actions runs the complete clean-checkout gate on Ubuntu 24.04, including the offline pinned tiny-AES AES-128 ECB differential execution gate.
+This restructuring changes the **scope of verification**, not production
+compiler semantics: `src/`, the toolchain component implementations, runtime
+sources, and pinned `third_party/` remain unchanged. Do not interpret green
+baseline CI as full historical acceptance.
 
 ## Project rules
 

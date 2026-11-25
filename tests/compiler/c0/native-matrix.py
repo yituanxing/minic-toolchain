@@ -438,8 +438,38 @@ def main():
     parser.add_argument("case", nargs="?")
     parser.add_argument("compiler", nargs="?")
     parser.add_argument("--list", action="store_true")
+    parser.add_argument("--all", action="store_true")
     args = parser.parse_args()
-    if args.list:
+    if args.all:
+        if args.case or args.compiler or args.list:
+            parser.error("--all cannot be combined with a single case or --list")
+        from concurrent.futures import ThreadPoolExecutor
+        cc_bin = os.environ.get("MINIC_CC", str(ROOT / "build/release/bin/minic-cc"))
+        driver = os.environ.get("MINIC", str(ROOT / "build/release/bin/minic"))
+        def execute_case(item):
+            name, config = item
+            supplied = (["cc"] if config.get("host") == "arg" else
+                        [cc_bin] if config.get("mini") in ("arg", "optional-arg", "arg-first") else [])
+            env = dict(os.environ, MINIC_CC=cc_bin,
+                       MINIC=driver if config.get("mini") == "legacy" else cc_bin)
+            try:
+                output = subprocess.run(
+                    ["sh", str(ROOT / "tests/compiler/c0/run-native-matrix.sh"), name, *supplied],
+                    cwd=ROOT, env=env, stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT, timeout=200, check=False)
+                return (name, output.returncode, output.stdout.decode(errors="replace"))
+            except subprocess.TimeoutExpired:
+                return (name, 124, "case timeout")
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            results = list(pool.map(execute_case, DATA.items()))
+        for name, code, output in results:
+            print(f"{name}: {'PASS' if code == 0 else 'FAIL'}", flush=True)
+            if code:
+                print(output, flush=True)
+        ok = all(code == 0 for _, code, _ in results)
+        print(f"NATIVE_MATRIX_TOTAL={len(results)} passed={sum(c == 0 for _, c, _ in results)}")
+        return 0 if ok else 1
+    elif args.list:
         print("\n".join(sorted(DATA)))
     elif args.case in DATA:
         try:
