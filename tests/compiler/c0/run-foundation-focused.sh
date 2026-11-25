@@ -34,8 +34,8 @@ for test_script in \
     compile:gnu-function-asm-labels \
     compile:gnu-function-visibility \
     compile:gnu-visible-extern-arrays \
-    run-gnu-aligned-record-fields.sh \
-    run-gnu-zero-length-record-arrays.sh \
+    compile:gnu-aligned-record-fields \
+    compile:gnu-zero-length-record-arrays \
     compile:record-forward-declarations \
     compile:record-multi-declarators \
     run-xgene-parenthesized-pointer-record-field.sh \
@@ -86,8 +86,8 @@ for test_script in \
     compile:bool-semantics \
     run-typeof-generic.sh \
     run-gnu-typedef-redundant-aligned.sh \
-    run-gnu-record-alignment.sh \
-    run-gnu-empty-records.sh \
+    compile:gnu-record-alignment \
+    compile:gnu-empty-records \
     compile:gnu-extension-prefix-declarations \
     run-gnu-prefix-function-attributes.sh \
     run-gnu-is-constexpr-bitfield.sh \

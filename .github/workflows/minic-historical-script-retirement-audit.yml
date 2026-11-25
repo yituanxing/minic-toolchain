@@ -193,6 +193,23 @@ jobs:
               proc = subprocess.run(["python3", path], capture_output=True, text=True)
               assert proc.returncode == 78 and "HISTORICAL_PROFILE_RETIRED:" in proc.stderr
           expected |= retired_rv64_labels
+          retired_test_wrappers = {
+              "tests/compiler/c0/run-gnu-empty-records.sh",
+              "tests/compiler/c0/run-gnu-zero-length-record-arrays.sh",
+              "tests/compiler/c0/run-gnu-record-alignment.sh",
+              "tests/compiler/c0/run-gnu-aligned-record-fields.sh",
+          }
+          expected |= retired_test_wrappers
+          metadata |= {
+              "tests/compiler/c0/run.sh",
+              "tests/compiler/c0/run-foundation-focused.sh",
+              ".github/workflows/minic-native-refactor-gate.yml",
+          }
+          for path in retired_test_wrappers:
+              name = pathlib.PurePosixPath(path).stem.removeprefix("run-")
+              original = git("show", "fa8d4a1836ff57d967d94fa9f46f2df3b83166c8:" + path).decode()
+              assert original == ('#!/bin/sh\n# Compatibility entry point; original assertions live in the shared driver.\n'
+                                  'exec sh "$(dirname -- "$0")/run-compile-only-case.sh" ' + name + '\n')
           metadata |= retired_missing_source
           metadata |= {
               ".github/workflows/linux-expanded-pi-p1-runtime-v1.yml",
@@ -211,7 +228,7 @@ jobs:
           metadata |= {"tools/ci/linux-runtime-build-minic-profile-v1.sh", "tools/ci/linux-runtime-profile-cache-id-v1.py"}
           deleted = changed_paths(base, "HEAD", "--diff-filter=D")
           changed = changed_paths(base, "HEAD")
-          if len(expected) != 922 or deleted != expected or changed != expected | metadata:
+          if len(expected) != 926 or deleted != expected or changed != expected | metadata:
               raise SystemExit("RETIREMENT_SCOPE=FAIL: unexpected tree changes")
           # Preserve the full closure in a historical checkout, not a successful
           # no-op overlay on a different source architecture.

@@ -50,10 +50,11 @@ on:
       - 'tests/compiler/c0/probe-zero-record-five-targets.sh'
       - 'tests/compiler/c0/run-x86_64-record-array-sret-sysv.sh'
       - 'tests/compiler/c0/zero_record_noop_sideeffects.c'
-      - 'tests/compiler/c0/run-gnu-empty-records.sh'
-      - 'tests/compiler/c0/run-gnu-zero-length-record-arrays.sh'
-      - 'tests/compiler/c0/run-gnu-record-alignment.sh'
-      - 'tests/compiler/c0/run-gnu-aligned-record-fields.sh'
+      - 'tests/compiler/c0/run-compile-only-case.sh'
+      - 'tests/compiler/c0/gnu_empty_records.c'
+      - 'tests/compiler/c0/gnu_zero_length_record_array.c'
+      - 'tests/compiler/c0/gnu_record_alignment.c'
+      - 'tests/compiler/c0/gnu_aligned_record_field.c'
       - 'tests/compiler/c0/probe-core-block-walk.c'
       - 'tests/compiler/c0/probe-direct-lp64-dispatch.c'
       - 'tests/compiler/c0/probe-core-facts-one-pass.c'
@@ -252,13 +253,13 @@ jobs:
             check-machine-core-coverage
           MINIC_CC="$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc" \
             HOST_CC=cc bash tests/compiler/c0/run-x86_64-record-array-sret-sysv.sh
-          for probe in run-gnu-empty-records.sh \
-                       run-gnu-zero-length-record-arrays.sh \
-                       run-gnu-record-alignment.sh \
-                       run-gnu-aligned-record-fields.sh; do
+          for probe in gnu-empty-records \
+                       gnu-zero-length-record-arrays \
+                       gnu-record-alignment \
+                       gnu-aligned-record-fields; do
             MINIC="$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc" \
               BUILD_DIR=build/minic-native-backend \
-              sh "tests/compiler/c0/$probe"
+              sh tests/compiler/c0/run-compile-only-case.sh "$probe"
           done
       - name: x86 Linux fixed-RSP preempt trampoline MachineIR and native GNU differential
         shell: bash

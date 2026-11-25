@@ -9,6 +9,22 @@ work=${BUILD_DIR:-"$root/build/debug"}/tests/compiler-c0
 
 mkdir -p "$work"
 
+# Reuse child-process environments without exporting them globally.
+run_c0_host() (
+    script=$1
+    shift
+    MINIC="$minic" HOST_CC="$host_cc" BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
+        sh "$root/tests/compiler/c0/$script" "$@"
+)
+
+run_c0_default() (
+    script=$1
+    shift
+    MINIC="$minic" BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
+        sh "$root/tests/compiler/c0/$script" "$@"
+)
+
+
 compile_source() {
     name=$1
     source_name=$2
@@ -351,14 +367,8 @@ expect_compile_failure \
 expect_compile_failure \
     invalid_duplicate_record_definition \
     "duplicate record definition"
-MINIC="$minic" \
-HOST_CC="$host_cc" \
-BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
-sh "$root/tests/compiler/c0/run-gnu-empty-records.sh"
-MINIC="$minic" \
-HOST_CC="$host_cc" \
-BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
-sh "$root/tests/compiler/c0/run-x86-sysv-12byte-record.sh"
+run_c0_host run-compile-only-case.sh gnu-empty-records
+run_c0_host run-x86-sysv-12byte-record.sh
 MINIC_CC="$(dirname "$minic")/minic-cc" \
 HOST_CC="$host_cc" \
 sh "$root/tests/compiler/c0/probe-lp64-empty-record-call-abi.sh"
@@ -390,120 +400,51 @@ grep -F "  .word 1" "$work/braced_scalar_static_global.s" >/dev/null
 printf '%s\n' "PASS compiler/c0/braced_scalar_static_global"
 expect_compile_failure invalid_return "expected expression"
 
-MINIC="$minic" \
-HOST_CC="$host_cc" \
-BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
-sh "$root/tests/compiler/c0/run-gnu-void-return-expression.sh"
+run_c0_host run-gnu-void-return-expression.sh
 
-MINIC="$minic" \
-HOST_CC="$host_cc" \
-BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
-sh "$root/tests/compiler/c0/run-gnu-omitted-conditional.sh"
+run_c0_host run-gnu-omitted-conditional.sh
 
-MINIC="$minic" \
-HOST_CC="$host_cc" \
-BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
-sh "$root/tests/compiler/c0/run-gnu-static-local-interleaved-attribute.sh"
+run_c0_host run-gnu-static-local-interleaved-attribute.sh
 
-MINIC="$minic" \
-HOST_CC="$host_cc" \
-BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
-sh "$root/tests/compiler/c0/run-compile-only-case.sh" runtime-local-array-initializer
+run_c0_host run-compile-only-case.sh runtime-local-array-initializer
 
-MINIC="$minic" \
-HOST_CC="$host_cc" \
-BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
-sh "$root/tests/compiler/c0/run-character-array-string-initializer.sh"
+run_c0_host run-character-array-string-initializer.sh
 
-MINIC="$minic" \
-HOST_CC="$host_cc" \
-BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
-sh "$root/tests/compiler/c0/run-array-parameter-adjustment.sh"
+run_c0_host run-array-parameter-adjustment.sh
 
-MINIC="$minic" \
-HOST_CC="$host_cc" \
-BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
-sh "$root/tests/compiler/c0/run-function-parameter-adjustment.sh"
+run_c0_host run-function-parameter-adjustment.sh
 
-MINIC="$minic" \
-HOST_CC="$host_cc" \
-BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
-sh "$root/tests/compiler/c0/run-function-pointer-qualifiers.sh"
+run_c0_host run-function-pointer-qualifiers.sh
 
-MINIC="$minic" \
-HOST_CC="$host_cc" \
-BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
-sh "$root/tests/compiler/c0/run-function-pointer-field-array.sh"
+run_c0_host run-function-pointer-field-array.sh
 
-MINIC="$minic" \
-HOST_CC="$host_cc" \
-BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
-sh "$root/tests/compiler/c0/run-compile-only-case.sh" gnu-function-pointer-bridge-call
+run_c0_host run-compile-only-case.sh gnu-function-pointer-bridge-call
 
-MINIC="$minic" \
-BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
-sh "$root/tests/compiler/c0/run-gnu-function-copy-alias.sh"
+run_c0_default run-gnu-function-copy-alias.sh
 
-MINIC="$minic" \
-BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
-sh "$root/tests/compiler/c0/run-linux-tail-batch3.sh"
+run_c0_default run-linux-tail-batch3.sh
 
-MINIC="$minic" \
-BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
-sh "$root/tests/compiler/c0/run-linux-tail-batch4.sh"
+run_c0_default run-linux-tail-batch4.sh
 
-MINIC="$minic" \
-HOST_CC="$host_cc" \
-BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
-sh "$root/tests/compiler/c0/run-compile-only-case.sh" pointer-to-bool-conversion
+run_c0_host run-compile-only-case.sh pointer-to-bool-conversion
 
-MINIC="$minic" \
-HOST_CC="$host_cc" \
-BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
-sh "$root/tests/compiler/c0/run-compile-only-case.sh" block-scope-extern-multi-declarator
+run_c0_host run-compile-only-case.sh block-scope-extern-multi-declarator
 
-MINIC="$minic" \
-HOST_CC="$host_cc" \
-BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
-sh "$root/tests/compiler/c0/run-compile-only-case.sh" record-rvalue-member
+run_c0_host run-compile-only-case.sh record-rvalue-member
 
-MINIC="$minic" \
-HOST_CC="$host_cc" \
-BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
-sh "$root/tests/compiler/c0/run-record-conditional-materialization.sh"
+run_c0_host run-record-conditional-materialization.sh
 
-MINIC="$minic" \
-HOST_CC="$host_cc" \
-BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
-sh "$root/tests/compiler/c0/run-compile-only-case.sh" gnu-packed-record-field
+run_c0_host run-compile-only-case.sh gnu-packed-record-field
 
-MINIC="$minic" \
-HOST_CC="$host_cc" \
-BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
-sh "$root/tests/compiler/c0/run-compile-only-case.sh" comma-operator
+run_c0_host run-compile-only-case.sh comma-operator
 
-MINIC="$minic" \
-HOST_CC="$host_cc" \
-BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
-sh "$root/tests/compiler/c0/run-compile-only-case.sh" comma-operator
+run_c0_host run-compile-only-case.sh block-scope-extern-object
 
-MINIC="$minic" \
-HOST_CC="$host_cc" \
-BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
-sh "$root/tests/compiler/c0/run-compile-only-case.sh" block-scope-extern-object
+run_c0_host run-compile-only-case.sh transparent-union
 
-MINIC="$minic" \
-HOST_CC="$host_cc" \
-BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
-sh "$root/tests/compiler/c0/run-compile-only-case.sh" transparent-union
+run_c0_host run-gnu-zero-length-array.sh
 
-MINIC="$minic" \
-HOST_CC="$host_cc" \
-BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
-sh "$root/tests/compiler/c0/run-gnu-zero-length-array.sh"
-
-MINIC="$minic" HOST_CC="$host_cc" BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
-  sh "$root/tests/compiler/c0/run-linux-gnu-frontend-semantics.sh"
+run_c0_host run-linux-gnu-frontend-semantics.sh
 
 MINIC="$minic" BUILD_DIR="$work/gnu-extern-void-symbol" HOST_CC="$host_cc" sh "$root/tests/compiler/c0/run-gnu-extern-void-symbol.sh"
 
@@ -525,114 +466,68 @@ MINIC="$minic" BUILD_DIR="$work/conditional-null-pointer-constant" HOST_CC="$hos
 
 MINIC="$minic" BUILD_DIR="$work/deferred-declarator-attributes" HOST_CC="$host_cc" sh "$root/tests/compiler/c0/run-deferred-declarator-attributes.sh"
 
-MINIC="$minic" \
-HOST_CC="$host_cc" \
-BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
-sh "$root/tests/compiler/c0/run-static-array-designators.sh"
+run_c0_host run-static-array-designators.sh
 
-MINIC="$minic" \
-HOST_CC="$host_cc" \
-BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
-sh "$root/tests/compiler/c0/run-compile-only-case.sh" external-inferred-record-array
+run_c0_host run-compile-only-case.sh external-inferred-record-array
 
-MINIC="$minic" \
-HOST_CC="$host_cc" \
-BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
-sh "$root/tests/compiler/c0/run-builtin-unary-family.sh"
+run_c0_host run-builtin-unary-family.sh
 
-MINIC="$minic" \
-BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
-sh "$root/tests/compiler/c0/run-gnu-switch-case-range.sh"
+run_c0_default run-gnu-switch-case-range.sh
 
-MINIC="$minic" \
-BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
-sh "$root/tests/compiler/c0/run-string-octal-escape.sh"
+run_c0_default run-string-octal-escape.sh
 
-MINIC="$minic" \
-BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
-sh "$root/tests/compiler/c0/run-gnu-signed-left-shift-ice.sh"
+run_c0_default run-gnu-signed-left-shift-ice.sh
 
-MINIC="$minic" \
-BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
-sh "$root/tests/compiler/c0/run-static-local-self-reference.sh"
+run_c0_default run-static-local-self-reference.sh
 
-MINIC="$minic" \
-BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
-sh "$root/tests/compiler/c0/run-record-value-initialize.sh"
+run_c0_default run-record-value-initialize.sh
 
-MINIC="$minic" HOST_CC="$host_cc" \
-BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
-sh "$root/tests/compiler/c0/run-braced-static-scalar.sh"
+run_c0_host run-braced-static-scalar.sh
 
-MINIC="$minic" HOST_CC="$host_cc" \
-BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
-sh "$root/tests/compiler/c0/run-compile-only-case.sh" static-pointer-constant-conditional
+run_c0_host run-compile-only-case.sh static-pointer-constant-conditional
 
-MINIC="$minic" HOST_CC="$host_cc" BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
-  sh "$root/tests/compiler/c0/run-compile-only-case.sh" runtime-record-zero-shorthand
+run_c0_host run-compile-only-case.sh runtime-record-zero-shorthand
 
-MINIC="$minic" HOST_CC="$host_cc" BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
-  sh "$root/tests/compiler/c0/run-compile-only-case.sh" external-array-redeclaration-owner
+run_c0_host run-compile-only-case.sh external-array-redeclaration-owner
 
-MINIC="$minic" HOST_CC="$host_cc" BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
-  sh "$root/tests/compiler/c0/run-compile-only-case.sh" static-local-prefix-attributes
+run_c0_host run-compile-only-case.sh static-local-prefix-attributes
 
-MINIC="$minic" HOST_CC="$host_cc" BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
-  sh "$root/tests/compiler/c0/run-compile-only-case.sh" gnu-object-unused-alias
+run_c0_host run-compile-only-case.sh gnu-object-unused-alias
 
-MINIC="$minic" HOST_CC="$host_cc" BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
-  sh "$root/tests/compiler/c0/run-alignof-expression.sh"
+run_c0_host run-alignof-expression.sh
 
-MINIC="$minic" HOST_CC="$host_cc" BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
-  sh "$root/tests/compiler/c0/run-compile-only-case.sh" static-record-array-suffix-attributes
+run_c0_host run-compile-only-case.sh static-record-array-suffix-attributes
 
-MINIC="$minic" HOST_CC="$host_cc" BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
-  sh "$root/tests/compiler/c0/run-compile-only-case.sh" static-record-single-char-array
+run_c0_host run-compile-only-case.sh static-record-single-char-array
 
-MINIC="$minic" HOST_CC="$host_cc" BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
-  sh "$root/tests/compiler/c0/run-compile-only-case.sh" preformed-static-array
+run_c0_host run-compile-only-case.sh preformed-static-array
 
-MINIC="$minic" HOST_CC="$host_cc" BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
-  sh "$root/tests/compiler/c0/run-compile-only-case.sh" external-tentative-declarator-list
+run_c0_host run-compile-only-case.sh external-tentative-declarator-list
 
-MINIC="$minic" BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
-  sh "$root/tests/compiler/c0/run-compile-only-case.sh" fixed-call-character-pointer
+run_c0_default run-compile-only-case.sh fixed-call-character-pointer
 
-MINIC="$minic" HOST_CC="$host_cc" BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
-  sh "$root/tests/compiler/c0/run-compile-only-case.sh" small-record-copy-return
+run_c0_host run-compile-only-case.sh small-record-copy-return
 
-MINIC="$minic" HOST_CC="$host_cc" BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
-  sh "$root/tests/compiler/c0/run-compile-only-case.sh" backward-static-aggregate-overlay
+run_c0_host run-compile-only-case.sh backward-static-aggregate-overlay
 
-MINIC="$minic" HOST_CC="$host_cc" BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
-  sh "$root/tests/compiler/c0/run-compile-only-case.sh" gnu-weak-external-objects
+run_c0_host run-compile-only-case.sh gnu-weak-external-objects
 
-MINIC="$minic" HOST_CC="$host_cc" BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
-  sh "$root/tests/compiler/c0/run-compile-only-case.sh" static-record-nested-designator-string-overlay
+run_c0_host run-compile-only-case.sh static-record-nested-designator-string-overlay
 
-MINIC="$minic" HOST_CC="$host_cc" BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
-  sh "$root/tests/compiler/c0/run-compile-only-case.sh" static-integer-address-relocation
+run_c0_host run-compile-only-case.sh static-integer-address-relocation
 
-MINIC="$minic" HOST_CC="$host_cc" BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
-  sh "$root/tests/compiler/c0/run-compile-only-case.sh" static-union-zero-overlay
+run_c0_host run-compile-only-case.sh static-union-zero-overlay
 
 
-MINIC="$minic" HOST_CC="$host_cc" BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
-  sh "$root/tests/compiler/c0/run-compile-only-case.sh" enum-forward-completion
+run_c0_host run-compile-only-case.sh enum-forward-completion
 
-MINIC="$minic" HOST_CC="$host_cc" BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
-  sh "$root/tests/compiler/c0/run-first500-pareto-v1.sh"
+run_c0_host run-first500-pareto-v1.sh
 
-MINIC="$minic" HOST_CC="$host_cc" BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
-  sh "$root/tests/compiler/c0/run-first500-static-array-pointer-v1.sh"
+run_c0_host run-first500-static-array-pointer-v1.sh
 
-MINIC="$minic" HOST_CC="$host_cc" BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
-  sh "$root/tests/compiler/c0/run-compile-only-case.sh" enum-mode-byte
+run_c0_host run-compile-only-case.sh enum-mode-byte
 
-MINIC="$minic" \
-HOST_CC="$host_cc" \
-BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
-sh "$root/tests/compiler/c0/run-compile-only-case.sh" declaration-head-variadic
+run_c0_host run-compile-only-case.sh declaration-head-variadic
 
 MINIC="$minic" \
 RISCV_CC="${RISCV_CC:-riscv64-linux-gnu-gcc}" \
@@ -640,58 +535,31 @@ QEMU_RISCV64="${QEMU_RISCV64:-qemu-riscv64}" \
 BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
 sh "$root/tests/compiler/c0/run-builtin-va-copy.sh"
 
-MINIC="$minic" HOST_CC="$host_cc" BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
-  sh "$root/tests/compiler/c0/run-compile-only-case.sh" static-storage-scalar-array-owner
+run_c0_host run-compile-only-case.sh static-storage-scalar-array-owner
 
 
-MINIC="$minic" \
-HOST_CC="$host_cc" \
-BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
-sh "$root/tests/compiler/c0/run-compile-only-case.sh" static-record-array-member-designator
+run_c0_host run-compile-only-case.sh static-record-array-member-designator
 
-MINIC="$minic" \
-BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
-sh "$root/tests/compiler/c0/run-linux-tail-batch5.sh"
+run_c0_default run-linux-tail-batch5.sh
 
-MINIC="$minic" \
-BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
-sh "$root/tests/compiler/c0/run-linux-tail-batch6.sh"
+run_c0_default run-linux-tail-batch6.sh
 
-MINIC="$minic" \
-BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
-sh "$root/tests/compiler/c0/run-linux-tail-batch7.sh"
+run_c0_default run-linux-tail-batch7.sh
 
-MINIC="$minic" \
-BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
-sh "$root/tests/compiler/c0/run-scalar-compound-literal.sh"
+run_c0_default run-scalar-compound-literal.sh
 
 
-MINIC="$minic" \
-HOST_CC="$host_cc" \
-BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
-sh "$root/tests/compiler/c0/run-linux-tail-batch8.sh"
+run_c0_host run-linux-tail-batch8.sh
 
-MINIC="$minic" HOST_CC="$host_cc" BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
-  sh "$root/tests/compiler/c0/run-compile-only-case.sh" gnu-local-object-alignment
+run_c0_host run-compile-only-case.sh gnu-local-object-alignment
 
-MINIC="$minic" HOST_CC="$host_cc" BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
-  sh "$root/tests/compiler/c0/run-compile-only-case.sh" builtin-memset-call
+run_c0_host run-compile-only-case.sh builtin-memset-call
 
-MINIC="$minic" \
-BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
-sh "$root/tests/compiler/c0/run-float-to-double-fixed-call.sh"
-MINIC="$minic" \
-BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
-sh "$root/tests/compiler/c0/run-arithmetic-fixed-call-dead-long-double.sh"
-MINIC="$minic" \
-BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
-sh "$root/tests/compiler/c0/run-internal-inline-emission.sh"
-MINIC="$minic" \
-BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
-sh "$root/tests/compiler/c0/run-null-member-offset-constant.sh"
-MINIC="$minic" \
-BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
-sh "$root/tests/compiler/c0/run-relocatable-const-section.sh"
+run_c0_default run-float-to-double-fixed-call.sh
+run_c0_default run-arithmetic-fixed-call-dead-long-double.sh
+run_c0_default run-internal-inline-emission.sh
+run_c0_default run-null-member-offset-constant.sh
+run_c0_default run-relocatable-const-section.sh
 MINIC="$minic" \
 BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
 RISCV_CC="${RISCV_CC:-riscv64-linux-gnu-gcc}" \
@@ -702,42 +570,16 @@ BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
 RISCV_CC="${RISCV_CC:-riscv64-linux-gnu-gcc}" \
 QEMU_RISCV64="${QEMU_RISCV64:-qemu-riscv64}" \
 sh "$root/tests/compiler/c0/run-switch-nested-break-rv64.sh"
-MINIC="$minic" \
-BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
-sh "$root/tests/compiler/c0/run-core-block-spill-reuse.sh"
-MINIC="$minic" \
-HOST_CC="$host_cc" \
-BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
-sh "$root/tests/compiler/c0/run-compile-only-case.sh" nested-function-pointer-field
-MINIC="$minic" \
-HOST_CC="$host_cc" \
-BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
-sh "$root/tests/compiler/c0/run-compile-only-case.sh" static-floating-aggregate
-MINIC="$minic" \
-HOST_CC="$host_cc" \
-BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
-sh "$root/tests/compiler/c0/run-compile-only-case.sh" variadic-function-pointer-cast
-MINIC="$minic" \
-HOST_CC="$host_cc" \
-BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
-sh "$root/tests/compiler/c0/run-compile-only-case.sh" nested-function-pointer-type-name
+run_c0_default run-core-block-spill-reuse.sh
+run_c0_host run-compile-only-case.sh nested-function-pointer-field
+run_c0_host run-compile-only-case.sh static-floating-aggregate
+run_c0_host run-compile-only-case.sh variadic-function-pointer-cast
+run_c0_host run-compile-only-case.sh nested-function-pointer-type-name
 
-MINIC="$minic" \
-HOST_CC="$host_cc" \
-BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
-sh "$root/tests/compiler/c0/run-compile-only-case.sh" block-scope-typedef
+run_c0_host run-compile-only-case.sh block-scope-typedef
 
-MINIC="$minic" \
-HOST_CC="$host_cc" \
-BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
-sh "$root/tests/compiler/c0/run-compile-only-case.sh" volatile-parameter
+run_c0_host run-compile-only-case.sh volatile-parameter
 
-MINIC="$minic" \
-HOST_CC="$host_cc" \
-BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
-sh "$root/tests/compiler/c0/run-float-binary-arithmetic.sh"
+run_c0_host run-float-binary-arithmetic.sh
 
-MINIC="$minic" \
-HOST_CC="$host_cc" \
-BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
-sh "$root/tests/compiler/c0/run-compile-only-case.sh" parenthesized-array-declarator
+run_c0_host run-compile-only-case.sh parenthesized-array-declarator
