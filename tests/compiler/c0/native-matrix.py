@@ -21,8 +21,11 @@ def flags(value):
     return shlex.split(value or "")
 
 def source(name):
-    parent = "tests/compiler/" if name.startswith("audit/") else "tests/compiler/c0/"
-    path = ROOT / (parent + name + ".c")
+    if name.startswith("tests/"):
+        path = ROOT / name
+    else:
+        parent = "tests/compiler/" if name.startswith("audit/") else "tests/compiler/c0/"
+        path = ROOT / (parent + name + ("" if name.endswith((".c", ".i")) else ".c"))
     if not path.is_file():
         raise ValueError(f"missing regression input {path}")
     return str(path)
@@ -46,7 +49,7 @@ def matching(content, mode, pattern):
     require(p.returncode in (0, 1), f"invalid grep pattern {pattern!r}")
     return p.returncode == 0
 
-def check_all(checks, artifacts, targets):
+def check_all(checks, artifacts, targets, counts=(), cfg=()):
     for target, sense, mode, pattern, *section in checks:
         for t in targets if target == "*" else [target]:
             require(t in artifacts, f"missing check artifact {t}")
@@ -63,7 +66,24 @@ def check_all(checks, artifacts, targets):
             require(matching(data, mode, pattern) == (sense == "present"),
                     f"{t}: {sense} {pattern!r} failed")
 
+    for target, mode, pattern, minimum, maximum in counts:
+        data = artifacts[target]
+        proc = subprocess.run(["grep", "-" + mode + "c", "--", pattern], input=data, stdout=subprocess.PIPE)
+        require(proc.returncode in (0, 1), f"invalid count pattern {pattern!r}")
+        count = int(proc.stdout)
+        require(count >= minimum and (maximum is None or count <= maximum),
+                f"{target}: count {count} outside {minimum}..{maximum}: {pattern}")
+    for target, function, minimum in cfg:
+        require(function.replace("_", "").isalnum(), "invalid CFG function")
+        pattern = r"^\.Lminic_mir_" + function + r"_[0-9]+:$"
+        check_all([[target, "present", "E", r"^[[:space:]]+ret$"]], artifacts, targets,
+                  [[target, "E", pattern, minimum, None]])
+
 def compiler(mode, supplied):
+    if mode == "legacy":
+        return os.environ.get("MINIC", str(ROOT / "build/debug/bin/minic"))
+    if mode == "arg-first" and supplied:
+        return supplied
     if mode == "arg":
         require(supplied is not None, "MiniC compiler path argument required")
         return supplied
@@ -74,7 +94,9 @@ def compiler(mode, supplied):
     default = ROOT / "build" / ("debug" if mode == "debug" else "release") / "bin/minic-cc"
     return os.environ.get("MINIC_CC") or (supplied if mode == "optional-arg" else None) or str(default)
 
-def host(mode):
+def host(mode, supplied=None):
+    if mode == "arg":
+        return supplied or "cc"
     return {"cc": "cc", "gcc": "gcc",
             "CC": os.environ.get("CC", "cc"),
             "HOST_CC": os.environ.get("HOST_CC", "cc"),
@@ -93,11 +115,19 @@ def environment(config):
     return env
 
 def preprocess(config, cc, src, out, env):
-    execute([cc, *flags(config.get("pre_flags", "-std=gnu11 -E -P -x c")),
-             *flags(config.get("defines")), src, "-o", out], env, label="GNU preprocessing")
+    if config.get("direct_input"):
+        out.write_bytes(Path(src).read_bytes())
+    else:
+        execute([cc, *flags(config.get("pre_flags", "-std=gnu11 -E -P -x c")),
+                 *flags(config.get("defines")), src, "-o", out], env, label="GNU preprocessing")
+    for old, new in config.get("mutations", []):
+        raw = out.read_bytes()
+        require(old.encode() in raw, f"mutation missing: {old!r}")
+        out.write_bytes(raw.replace(old.encode(), new.encode()))
 
 def minic_compile(config, mini, input_path, output_path, target, env, reject=False):
     output_path.unlink(missing_ok=True)
+    env = dict(env, **config.get("mini_env", {}))
     p = execute([mini, "--target=" + target + "-linux",
                  *flags(config.get("mini_flags")),
                  *flags(config.get("target_flags", {}).get(target)),
@@ -116,6 +146,8 @@ def positive(config, cc, mini, work):
     src = source(config["source"])
     input_path = work / "input.i"
     preprocess(config, cc, src, input_path, env)
+    if config.get("direct_input") and not config.get("mutations"):
+        input_path = Path(src)
     if "syntax" in config:
         execute([cc, *flags(config["syntax"]), *flags(config.get("defines")), src], env)
     support = [source(s) for s in config.get("support", [])]
@@ -164,13 +196,15 @@ def positive(config, cc, mini, work):
         if config.get("compare"):
             require(config.get("gnu", True) and p.stdout == g.stdout and p.stderr == g.stderr,
                     "GNU and MiniC native outputs diverge")
-    check_all(config.get("checks", []), artifacts, targets)
+    check_all(config.get("checks", []), artifacts, targets, config.get("counts", []), config.get("cfg", []))
 
 def negative(config, cc, mini, work):
     env = environment(config)
     src = source(config["source"])
     ip = work / "negative.i"
     preprocess(config, cc, src, ip, env)
+    if config.get("direct_input") and not config.get("mutations"):
+        ip = Path(src)
     for verdict in ("gnu_accept", "gnu_reject"):
         if verdict not in config:
             continue
@@ -185,11 +219,39 @@ def negative(config, cc, mini, work):
         if "diagnostic" in config:
             require(config["diagnostic"].encode() in p.stderr,
                     f"{target}: unrelated diagnostic: {p.stderr.decode(errors='replace')}")
+        check_all(config.get("checks", []), {"stderr": p.stderr}, ["stderr"])
+
+UNIT_FLAGS = {
+    "basic": "-std=c11 -Wall -Wextra -Werror",
+    "strict": "-std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Wstrict-prototypes -Wmissing-prototypes -Werror",
+    "typed": "-std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror",
+}
+CORE_IR = ["src/core/core_ir.c", "src/compiler/c_lower/core_ir_source.c",
+           "src/core/core_type.c", "src/core/core_ir_verify.c", "src/frontend/type.c"]
+
+def host_units(group, cc, work):
+    env = environment(group)
+    if group.get("language_boundary"):
+        execute([ROOT / "tests/core/check-core-language-boundary.sh", cc], env)
+    for i, unit in enumerate(group["units"]):
+        opts = settings(group, unit)
+        sources = unit["sources"] + (CORE_IR if unit.get("core_ir") else [])
+        for mode in opts.get("modes", ["native"]):
+            extra = ["-O1", "-g", "-fsanitize=address,undefined", "-fno-omit-frame-pointer"] if mode == "asan" else flags(opts.get("optimization", "-O2"))
+            gc = flags("-ffunction-sections -fdata-sections -Wl,--gc-sections") if opts.get("gc") else []
+            includes = ["-I" + str(ROOT / name) for name in opts.get("includes", ["src", "include"])]
+            exe = work / f"unit-{i}-{mode}"
+            execute([cc, *flags(UNIT_FLAGS[opts.get("warnings", "basic")]), *extra, *gc,
+                     *includes, *(ROOT / s for s in sources), "-o", exe], env, label="host unit build")
+            for args in unit.get("args", [[]]):
+                result = execute([exe, *args], dict(env, ASAN_OPTIONS="detect_leaks=0"), label="host unit runtime")
+                sys.stdout.buffer.write(result.stdout)
+                sys.stderr.buffer.write(result.stderr)
 
 def run(name, supplied):
     group = DATA[name]
-    mini = compiler(group.get("mini", "release"), supplied)
-    cc = host(group.get("host", "HOST_CC"))
+    mini = None if "units" in group else compiler(group.get("mini", "release"), supplied)
+    cc = host(group.get("host", "HOST_CC"), supplied)
     with tempfile.TemporaryDirectory(prefix=name + "-") as tmp:
         work = Path(tmp)
         if "work" in group:
@@ -200,6 +262,8 @@ def run(name, supplied):
                 base = Path(os.environ.get("BUILD_DIR", default)) / group["work"]
             base.mkdir(parents=True, exist_ok=True)
             work = base.resolve()
+        if "units" in group:
+            host_units(group, cc, work)
         for index, row in enumerate(group.get("positive", [])):
             dest = work if index == 0 else work / f"positive-{index}"
             dest.mkdir(parents=True, exist_ok=True)

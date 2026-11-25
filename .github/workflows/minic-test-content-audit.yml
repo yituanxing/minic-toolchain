@@ -223,7 +223,7 @@ jobs:
   validate-native-matrix:
     if: "startsWith(github.event.head_commit.message, 'native matrix')"
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
         with:
@@ -239,13 +239,18 @@ jobs:
           # Verify direct callers against the live repository before temporarily
           # retrieving a historical script for the independent oracle.
           active=subprocess.check_output(["git","ls-files","-z"]).decode().strip("\0").split("\0")
+          retired={name for name,config in cases.items() if not (root/config.get("old_path","tests/compiler/c0/"+name+".sh")).exists()}
           bad=[]
           for p in active:
               if p.startswith("docs/") or p.endswith(".md") or p==".github/workflows/minic-test-content-audit.yml": continue
               try: body=(root/p).read_text()
               except (UnicodeDecodeError,OSError): continue
-              for name in cases:
+              for name in retired:
                   if name+".sh" in body: bad.append((p,name))
+              for name in cases.keys()-retired:
+                  if name+".sh" in body and pathlib.Path(p).name != name+".sh":
+                      for i,line in enumerate(body.splitlines(),1):
+                          if name+".sh" in line: print("MATRIX_CALLER",json.dumps([name,p,i,line]),flush=True)
           if bad: raise AssertionError(bad)
           print("NATIVE_MATRIX_LIVE_CALLERS=PASS",flush=True)
           compiler=str(root/"build/release/bin/minic-cc")
@@ -255,14 +260,15 @@ jobs:
                   work=pathlib.Path(d)
                   oldenv=dict(os.environ,MINIC_CC=compiler,MINIC=compiler,BUILD_DIR=str(work/"old"))
                   newenv=dict(oldenv,BUILD_DIR=str(work/"new"))
-                  old=root/"tests/compiler/c0"/(name+".sh")
+                  old_path=config.get("old_path","tests/compiler/c0/"+name+".sh")
+                  old=root/old_path
                   if not old.exists():
                       # Archived source is run from the same relative test
                       # directory only inside this disposable CI checkout.
-                      old.write_bytes(subprocess.check_output(["git","show","bad27ded8f6fe38f1c510d706558f9b7d0171666:tests/compiler/c0/"+name+".sh"]))
-                  args=[compiler] if config.get("mini") in ("arg","optional-arg") else []
+                      old.write_bytes(subprocess.check_output(["git","show","bad27ded8f6fe38f1c510d706558f9b7d0171666:"+old_path]))
+                  args=["cc"] if config.get("host")=="arg" else ([compiler] if config.get("mini") in ("arg","optional-arg","arg-first") else [])
                   try:
-                      a=subprocess.run(["bash",str(old),*args],env=oldenv,stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=100)
+                      a=subprocess.run(["bash",str(old),*args],env=oldenv,stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=200)
                       b=subprocess.run(["sh","tests/compiler/c0/run-native-matrix.sh",name,*args],env=newenv,stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=100)
                       return dict(name=name,old=a.returncode,new=b.returncode,oldout=a.stdout.decode(errors="replace")[-500:],newout=b.stdout.decode(errors="replace")[-500:],olderr=a.stderr.decode(errors="replace")[-700:] if a.returncode else "",newerr=b.stderr.decode(errors="replace")[-1000:] if b.returncode else "")
                   except subprocess.TimeoutExpired as exc:
