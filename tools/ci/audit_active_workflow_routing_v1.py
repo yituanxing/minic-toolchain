@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import csv
 from pathlib import Path
+from historical_workflows import historical_job_view
 import re
 import sys
 
@@ -294,7 +295,7 @@ def main():
         archive = retired_dir / name
         if branch == BRANCHES[0]:
             assert live.is_file(), name
-            payload = live.read_bytes()
+            payload = historical_job_view(live).encode()
         else:
             assert not live.exists() and archive.is_file(), name
             payload = archive.read_bytes()

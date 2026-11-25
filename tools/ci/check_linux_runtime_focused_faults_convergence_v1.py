@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Check original Runtime diagnosis body, tags, archived SHA and concurrency."""
 from pathlib import Path
+from historical_workflows import historical_job_view
 import re
 import subprocess
 import os
@@ -23,7 +24,7 @@ def normalized(job):
    if not re.search(r"^    if: |^    concurrency:$|^      group: linux-|^      cancel-in-progress: ",line)
  )).strip()
 def main():
- text=CANONICAL.read_text()
+ text=historical_job_view(CANONICAL)
  current=jobs(text)
  if set(current)!=set(SPECS)|{'candidate','frontier-fast-v5','qemu-runtime'}: raise AssertionError(f"combined focused/frontier job set changed: {sorted(current)}")
  branch = os.environ.get("GITHUB_REF_NAME", "agent/linux-expanded-kbuild-v0")

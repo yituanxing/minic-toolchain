@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Protect the two Runtime diagnostic canons unified into seven jobs."""
 from pathlib import Path
+from historical_workflows import historical_job_view
 import re, subprocess, os
 
 ROOT=Path(__file__).resolve().parents[2]
@@ -16,7 +17,7 @@ def jobs(text):
  return {x.group(1):s[x.start():m[i+1].start() if i+1<len(m) else len(s)].strip()
          for i,x in enumerate(m)}
 def main():
- combined=CURRENT.read_text()
+ combined=historical_job_view(CURRENT)
  now=jobs(combined)
  if len(now)!=7:raise AssertionError("seven distinct diagnostic jobs required")
  for filename,(sha,expected) in SOURCES.items():

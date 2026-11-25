@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Verify canonical Runtime full, fast and QEMU frontier job bodies and exact archives."""
 from pathlib import Path
+from historical_workflows import historical_job_view
 import re, subprocess
 
 ROOT=Path(__file__).resolve().parents[2]
@@ -18,7 +19,7 @@ def clean(job):
  return "\n".join(x for x in job.splitlines() if not re.search(
   r"^    if: |^    concurrency:$|^      group: linux-|^      cancel-in-progress: ",x)).strip()
 def main():
- text=CANONICAL.read_text()
+ text=historical_job_view(CANONICAL)
  merged=jobs(text)
  if set(merged)!=set(SPECS)|{'cpu-stall','fork-stack','fault-context','satp-refresh'}: raise AssertionError(f"combined focused/frontier job set differs: {sorted(merged)}")
  for name,(filename,sha,mode,tag,group) in SPECS.items():

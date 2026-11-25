@@ -123,12 +123,63 @@ jobs:
           archive_legacy = "0ae7f10f2ffe3a06eee0a3b77eaf82de63a22cc1"
           assert retired_legacy_reports <= set(git("ls-tree", "-r", "--name-only", archive_legacy).decode().splitlines())
           expected |= retired_legacy_reports
+          retired_stack = {
+              "tools/ci/apply-builtin-constant-p-local-facts-v0.py",
+              "tools/ci/apply-inline-asm-local-integer-facts-v0.py",
+              "tools/ci/apply-inline-asm-rk-cast-tail-v0.py",
+              "tools/ci/apply-inline-asm-rk-early-hotfix-v0.py",
+              "tools/ci/apply-inline-asm-rk-early-v0.py",
+              "tools/ci/apply-inline-asm-rk-tail-rollback-v0.py",
+              "tools/ci/apply-inline-integer-specialization-v0.py",
+              "tools/ci/apply-inline-specialization-base-callee-integer-v0.py",
+              "tools/ci/apply-inline-specialization-base-callee-symbolic-v0.py",
+              "tools/ci/apply-inline-specialization-capacity-v0.py",
+              "tools/ci/apply-inline-specialization-core-empty-function-v0.py",
+              "tools/ci/apply-inline-specialization-core-reachability-v0.py",
+              "tools/ci/apply-inline-specialization-label-alias-v0.py",
+              "tools/ci/apply-inline-specialization-local-facts-v0.py",
+              "tools/ci/apply-inline-specialization-original-reachability-v0.py",
+              "tools/ci/apply-inline-specialization-resolved-asm-goto-v0.py",
+              "tools/ci/apply-inline-specialization-stable-parameter-facts-v0.py",
+              "tools/ci/apply-inline-specialization-symbolic-address-v0.py",
+              "tools/ci/apply-inline-specialization-symbolic-array-lvalue-v0.py",
+              "tools/ci/apply-inline-specialization-symbolic-closed-integers-v0.py",
+              "tools/ci/apply-inline-specialization-symbolic-integer-closure-v0.py",
+              "tools/ci/apply-inline-specialization-symbolic-nested-array-v0.py",
+              "tools/ci/apply-inline-specialization-symbolic-transitive-rewrite-v0.py",
+              "tools/ci/apply-inline-specialization-transitive-integer-v0.py",
+              "tools/ci/apply-local-integer-assignment-v2.py",
+              "tools/ci/apply-local-integer-conditions-v1.py",
+              "tools/ci/apply-local-integer-constants-v0.py",
+              "tools/ci/apply-local-integer-guard-facts-v0.py",
+              "tools/ci/apply-local-integer-logical-conditions-v0.py",
+              "tools/ci/apply-local-null-pointer-facts-v0.py",
+              "tools/ci/apply-riscv64-default-text-section-v0.py",
+              "tools/ci/apply-riscv64-explicit-section-flags-v0.py",
+              "tools/ci/perf-v1-overrides/apply-inline-specialization-base-callee-integer-v0.py",
+              "tools/ci/perf-v1-overrides/apply-inline-specialization-capacity-v0.py",
+              "tools/ci/perf-v1-overrides/apply-inline-specialization-transitive-integer-v0.py",
+          }
+          assert retired_stack <= set(git("ls-tree", "-r", "--name-only", "fe0a83481864b2808f62098510b08df579ff42a5").decode().splitlines())
+          expected |= retired_stack
+          metadata |= {
+              ".github/workflows/linux-expanded-pi-p1-runtime-v1.yml",
+              ".github/workflows/linux-runtime-focused-faults-v1.yml",
+              "tools/ci/historical_workflows.py",
+              "tools/ci/check_linux_expanded_pi_p1_convergence_v1.py",
+              "tools/ci/check_linux_early_runtime_union_v1.py",
+              "tools/ci/check_linux_runtime_focused_faults_convergence_v1.py",
+              "tools/ci/check_linux_runtime_frontier_diagnostics_convergence_v1.py",
+              "tools/ci/check_linux_runtime_diagnostic_union_v1.py",
+              "tools/ci/audit_active_workflow_routing_v1.py",
+              "tools/ci/check_linux_legacy_tag_router_v1.py",
+          }
           metadata |= {"docs/ci/linux-runtime-isolation.md"}
           metadata |= {"tools/ci/linux-perf-build-minic-profile-v1.sh", "tools/ci/linux-perf-ast-growth-ab-v1.sh"}
           metadata |= {"tools/ci/linux-runtime-build-minic-profile-v1.sh", "tools/ci/linux-runtime-profile-cache-id-v1.py"}
           deleted = changed_paths(base, "HEAD", "--diff-filter=D")
           changed = changed_paths(base, "HEAD")
-          if len(expected) != 878 or deleted != expected or changed != expected | metadata:
+          if len(expected) != 913 or deleted != expected or changed != expected | metadata:
               raise SystemExit("RETIREMENT_SCOPE=FAIL: unexpected tree changes")
           # Preserve the full closure in a historical checkout, not a successful
           # no-op overlay on a different source architecture.
@@ -148,11 +199,19 @@ jobs:
                       if line.strip().startswith("apply-")]
           assert len(patch_labels(runtime_text)) == 44
           assert patch_labels(runtime_text) == patch_labels(old_runtime_text)
-          historical_labels = {"  " + pathlib.PurePosixPath(p).name + " # historical-only" for p in retired_runtime}
+          historical_labels = {"  " + pathlib.PurePosixPath(p).name + " # historical-only"
+                               for p in retired_runtime | retired_stack
+                               if pathlib.PurePosixPath(p).name in patch_labels(runtime_text)}
           assert set(line for line in runtime_text.splitlines() if line.endswith(" # historical-only")) == historical_labels
           assert 'python3 "tools/ci/$p"' not in runtime_text and 'native_profile=' not in runtime_text
           assert retired_runtime <= set(git("ls-tree", "-r", "--name-only", "59ad3648637eba4991c0fb8ce27f121cc852b4fa").decode().splitlines())
           print("NATIVE_RUNTIME_RETIREMENT=PASS labels=44 archived_inputs=10 historical_fallback=retired")
+          import sys
+          sys.path.insert(0, "tools/ci")
+          from historical_workflows import RETIRED_JOBS, historical_job_view
+          for path in RETIRED_JOBS:
+              historical_job_view(pathlib.Path(path))
+          print("HISTORICAL_JOB_RETIREMENT=PASS retired_jobs=4 unrelated_jobs_unchanged=10 archived_stack_inputs=" + str(len(retired_stack)))
           perf_replay = "59ad3648637eba4991c0fb8ce27f121cc852b4fa"
           historical_tree = set(git("ls-tree", "-r", "--name-only", perf_replay).decode().splitlines())
           assert retired_perf <= historical_tree
@@ -245,7 +304,7 @@ jobs:
                           removed -= pinned
                   # Exact inert metadata labels are not executable callers.
                   if path == runtime_path and line in historical_labels:
-                      removed -= retired_runtime
+                      removed -= retired_runtime | retired_stack
                   if removed or broad.search(line):
                       record = f"{path}:{num}: " + (", ".join(sorted(removed)) if removed else "possible dynamic path")
                       (archived if historical else docs if document else active).append(record)

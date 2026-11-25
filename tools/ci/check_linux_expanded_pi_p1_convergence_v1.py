@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Exact Git blob and job-body proof for expanded PI/P1 Runtime consolidation."""
 from pathlib import Path
+from historical_workflows import historical_job_view
 import os, re, subprocess
 
 ROOT=Path(__file__).resolve().parents[2]
@@ -27,7 +28,7 @@ def normalized(s):
  return "\n".join(l for l in s.splitlines() if not re.search(
   r"^    if: |^    concurrency:$|^      group: (?:linux-expanded-pi-runtime-v0|linux-expanded-entry-trace)-|^      cancel-in-progress: true$", l)).strip()
 def main():
- s=CANONICAL.read_text()
+ s=historical_job_view(CANONICAL)
  merged=jobs(s)
  if set(merged)!=set(SPECS)|{"pi-local-symbol","satp-micro","qemu-watch-cert","inconclusive-cert"}: raise AssertionError(f"merged early-runtime jobs changed: {merged.keys()}")
  for name,(file,sha,mode,tag) in SPECS.items():

@@ -49,39 +49,39 @@ else
   exit 78
 fi
 patches=(
-  apply-local-integer-assignment-v2.py
-  apply-local-integer-logical-conditions-v0.py
-  apply-local-null-pointer-facts-v0.py
-  apply-builtin-constant-p-local-facts-v0.py
-  apply-inline-integer-specialization-v0.py
-  apply-inline-specialization-local-facts-v0.py
-  apply-inline-specialization-stable-parameter-facts-v0.py
-  apply-inline-specialization-transitive-integer-v0.py
-  apply-inline-specialization-base-callee-integer-v0.py
-  apply-inline-specialization-capacity-v0.py
-  apply-inline-specialization-symbolic-address-v0.py
-  apply-inline-specialization-symbolic-nested-array-v0.py
-  apply-inline-specialization-symbolic-integer-closure-v0.py
-  apply-inline-specialization-symbolic-transitive-rewrite-v0.py
-  apply-inline-specialization-symbolic-array-lvalue-v0.py
-  apply-inline-specialization-symbolic-closed-integers-v0.py
-  apply-inline-specialization-base-callee-symbolic-v0.py
-  apply-inline-specialization-resolved-asm-goto-v0.py
-  apply-inline-specialization-core-reachability-v0.py
-  apply-inline-specialization-original-reachability-v0.py
-  apply-inline-asm-local-integer-facts-v0.py
-  apply-inline-asm-rk-early-v0.py
-  apply-inline-asm-rk-early-hotfix-v0.py
-  apply-inline-asm-rk-tail-rollback-v0.py
-  apply-inline-asm-rk-cast-tail-v0.py
+  apply-local-integer-assignment-v2.py # historical-only
+  apply-local-integer-logical-conditions-v0.py # historical-only
+  apply-local-null-pointer-facts-v0.py # historical-only
+  apply-builtin-constant-p-local-facts-v0.py # historical-only
+  apply-inline-integer-specialization-v0.py # historical-only
+  apply-inline-specialization-local-facts-v0.py # historical-only
+  apply-inline-specialization-stable-parameter-facts-v0.py # historical-only
+  apply-inline-specialization-transitive-integer-v0.py # historical-only
+  apply-inline-specialization-base-callee-integer-v0.py # historical-only
+  apply-inline-specialization-capacity-v0.py # historical-only
+  apply-inline-specialization-symbolic-address-v0.py # historical-only
+  apply-inline-specialization-symbolic-nested-array-v0.py # historical-only
+  apply-inline-specialization-symbolic-integer-closure-v0.py # historical-only
+  apply-inline-specialization-symbolic-transitive-rewrite-v0.py # historical-only
+  apply-inline-specialization-symbolic-array-lvalue-v0.py # historical-only
+  apply-inline-specialization-symbolic-closed-integers-v0.py # historical-only
+  apply-inline-specialization-base-callee-symbolic-v0.py # historical-only
+  apply-inline-specialization-resolved-asm-goto-v0.py # historical-only
+  apply-inline-specialization-core-reachability-v0.py # historical-only
+  apply-inline-specialization-original-reachability-v0.py # historical-only
+  apply-inline-asm-local-integer-facts-v0.py # historical-only
+  apply-inline-asm-rk-early-v0.py # historical-only
+  apply-inline-asm-rk-early-hotfix-v0.py # historical-only
+  apply-inline-asm-rk-tail-rollback-v0.py # historical-only
+  apply-inline-asm-rk-cast-tail-v0.py # historical-only
   apply-inline-asm-immediate-batch-trace-v0.py # historical-only
   apply-inline-asm-write-output-trace-v0.py # historical-only
-  apply-inline-specialization-core-empty-function-v0.py
-  apply-inline-specialization-label-alias-v0.py
+  apply-inline-specialization-core-empty-function-v0.py # historical-only
+  apply-inline-specialization-label-alias-v0.py # historical-only
   # Explicit section flags now live in canonical RV64 C source.  The separate
-  # default-text behavior still depends on the active Linux Runtime profile:
-  # keep its existing apply script, which also installs the M179 guard facts.
-  apply-riscv64-default-text-section-v0.py
+  # default-text rewrite is also historical; current source is built directly.
+  # Keep the original label for comparing historical Runtime receipts.
+  apply-riscv64-default-text-section-v0.py # historical-only
   apply-inline-asm-symbolic-specialization-v0.py
   apply-riscv64-core-value-slot-pack-v0.py
   apply-riscv64-core-value-slot-reuse-v0.py

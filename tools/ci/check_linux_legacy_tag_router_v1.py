@@ -8,6 +8,7 @@ https://github.com/yituanxing/minic-toolchain/actions/runs/37902327902
 This gate itself is T0, not Linux Image / QEMU / 3536 test certification.
 """
 from pathlib import Path
+from historical_workflows import historical_job_view
 from itertools import combinations
 import hashlib
 import os
@@ -99,7 +100,7 @@ def main():
     if set(actual) != expected_ids:
         raise AssertionError(f"unexpected router jobs: {set(actual) ^ expected_ids}")
     for name, (original_sha, push_block, tags, job_id) in OWNERS.items():
-        current = (ROOT / ".github/workflows" / name).read_text()
+        current = historical_job_view(ROOT / ".github/workflows" / name)
         if name == "minild-integration-v1.yml":
             # Performance retains its original unscoped opt-in push; Runtime
             # must route through the same canonical owner via workflow_call.

@@ -6,6 +6,7 @@ development branch's different Entry Trace code. Every runnable job body must
 match the corresponding archived canonical source exactly.
 """
 from pathlib import Path
+from historical_workflows import historical_job_view
 import os
 import re
 import subprocess
@@ -45,7 +46,7 @@ def main():
     branch = os.environ.get("GITHUB_REF_NAME", "agent/linux-expanded-kbuild-v0")
     if branch not in HISTORICAL["linux-expanded-pi-p1-runtime-v1.yml"]:
         raise AssertionError(f"unsupported development branch {branch}")
-    text = CURRENT.read_text()
+    text = historical_job_view(CURRENT)
     active = jobs(text)
     expected_jobs = set().union(*JOB_SETS.values())
     if set(active) != expected_jobs:

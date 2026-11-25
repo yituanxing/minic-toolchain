@@ -16,6 +16,56 @@ def git(*args):
     return subprocess.check_output(["git", *args], cwd=ROOT)
 
 
+
+# The former job bodies are preserved as evidence, not executable current CI.
+# Verify the live workflow against the *entire* pinned original with exactly
+# four deterministic fail-closed substitutions before exposing historical text
+# to the original archive/hash guards. Unrelated job bodies and routing remain
+# byte-for-byte protected.
+RETIRED_JOB_SNAPSHOT = "fe0a83481864b2808f62098510b08df579ff42a5"
+RETIRED_JOBS = {
+    ".github/workflows/linux-expanded-pi-p1-runtime-v1.yml": {"pi-runtime"},
+    ".github/workflows/linux-runtime-focused-faults-v1.yml": {"cpu-stall", "fork-stack", "candidate"},
+}
+RETIRED_JOB_STEPS = (
+    "      - name: Reject retired pre-split compiler overlay\n"
+    "        shell: bash\n"
+    "        run: |\n"
+    "          echo 'HISTORICAL_PROFILE_RETIRED: exact pre-split overlay replay requires historical checkout eb583f9dd9bf9cb2ebf530a8579930311b8539d9; no current compiler or runtime PASS.' >&2\n"
+    "          exit 78\n"
+)
+
+
+def historical_job_view(path):
+    """Validate live retirement, then return original for historical hash checks."""
+    import re
+    path = Path(path)
+    relative = path.resolve().relative_to(ROOT).as_posix()
+    current = path.read_text()
+    if relative not in RETIRED_JOBS:
+        return current
+    original = git("show", RETIRED_JOB_SNAPSHOT + ":" + relative).decode()
+    marks = list(re.finditer(r"(?m)^  ([a-z][a-z0-9-]*):[ \t]*$", original))
+    marks = [m for m in marks if m.start() > original.index("\njobs:\n")]
+    expected = original
+    replaced = set()
+    for i in range(len(marks) - 1, -1, -1):
+        mark = marks[i]
+        if mark.group(1) not in RETIRED_JOBS[relative]:
+            continue
+        end = marks[i + 1].start() if i + 1 < len(marks) else len(original)
+        body = original[mark.start():end]
+        prefix, separator, _ = body.partition("    steps:\n")
+        if not separator:
+            raise RuntimeError("missing original job steps: " + mark.group(1))
+        expected = (expected[:mark.start()] + prefix + separator + RETIRED_JOB_STEPS
+                    + ("\n" if end < len(original) else "") + expected[end:])
+        replaced.add(mark.group(1))
+    if replaced != RETIRED_JOBS[relative] or current != expected:
+        raise RuntimeError("unexpected live historical job retirement drift: " + relative)
+    return original
+
+
 def inventory():
     rows = {}
     for row in git("ls-tree", "-rz", SNAPSHOT, "--", PREFIX).split(b"\0"):
