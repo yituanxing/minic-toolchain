@@ -351,7 +351,7 @@ Frontend 多数 `probe=*parser` 只是词法前瞻、Core 不同强度的常量�
   [Linux runtime frontier](minic-linux-runtime-frontier-2026-10-30.md)、
   [RISC-V closeout checklist](minic-riscv-closeout-checklist.md)、
   [真实项目选择](real-project-selection.md)、
-  [x86 真实项目 checkpoint](multitarget-x86_64-real-project-checkpoint-2026-10-18.md)。
+  [x86 真实项目 checkpoint](https://github.com/yituanxing/minic-toolchain/blob/0475a7442e86d4942b85f58e4a20f59045e592bb/docs/architecture/multitarget-x86_64-real-project-checkpoint-2026-10-18.md)。
 
 ### 2026-10-29 分项审查（31 份，历史证据）
 

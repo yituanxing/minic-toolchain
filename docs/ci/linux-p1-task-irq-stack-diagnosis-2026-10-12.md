@@ -260,7 +260,7 @@ must not be described as an uninterrupted nested call chain just
 because their breakpoints appear consecutively.
 
 Prior paired-GCC GDB evidence in
-`docs/ci/p1-stack-overflow-evidence-2026-10-12.md` shows roughly
+[p1-stack-overflow-evidence-2026-10-12.md](https://github.com/yituanxing/minic-toolchain/blob/0475a7442e86d4942b85f58e4a20f59045e592bb/docs/ci/p1-stack-overflow-evidence-2026-10-12.md) shows roughly
 8 KiB less cumulative task-stack use when `ip6_output.o` and
 `tcp_ipv6.o` are GCC. Their original plain P1 run passed 3/3
 (whereas GDB perturbation itself can still induce failure).

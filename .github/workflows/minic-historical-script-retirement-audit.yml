@@ -35,15 +35,14 @@ jobs:
           audit = ".github/workflows/minic-historical-script-retirement-audit.yml"
           def git(*args):
               return subprocess.check_output(["git", *args])
-          # Derive the exact historical retirement set from the previously
-          # accepted immutable tree; never derive the allowlist from HEAD.
-          accepted = "d24fdb4086fd9cf45d534942989a085ca422c6ef"
+          # Exact previously accepted tree, plus this explicit reviewed batch.
+          accepted = "0475a7442e86d4942b85f58e4a20f59045e592bb"
           def changed_paths(before, after, *options):
               return set(git("diff", "--no-renames", "--name-only", *options,
                              before, after).decode().splitlines())
           expected = changed_paths(base, accepted, "--diff-filter=D")
           metadata = changed_paths(base, accepted) - expected
-          assert len(expected) == 792
+          assert len(expected) == 824
           shared_fixtures = {
               "tests/programs/c0/cast_expressions.c",
               "tests/programs/c0/hexadecimal_expression.c",
@@ -60,43 +59,19 @@ jobs:
           assert len(historical_archives) == 68
           assert shared_fixtures <= expected and historical_archives <= expected
           expected |= {
-              "tests/compiler/c0/run-array-bound-constant-expressions.sh",
-              "tests/compiler/c0/run-compound-assignment-expressions.sh",
-              "tests/compiler/c0/run-extern-fixed-integer-arrays.sh",
-              "tests/compiler/c0/run-for-declaration-initializers.sh",
-              "tests/compiler/c0/run-for-expression-initializers.sh",
-              "tests/compiler/c0/run-gnu-compiletime-selection-builtins.sh",
-              "tests/compiler/c0/run-gnu-function-asm-labels.sh",
-              "tests/compiler/c0/run-gnu-section-symbol-attribute.sh",
-              "tests/compiler/c0/run-gnu-va-builtins.sh",
-              "tests/compiler/c0/run-gnu-visible-extern-arrays.sh",
-              "tests/compiler/c0/run-incomplete-array-typedef.sh",
-              "tests/compiler/c0/run-inline-functions.sh",
-              "tests/compiler/c0/run-prefix-update-expressions.sh",
-              "tests/compiler/c0/run-record-assignment-expressions.sh",
-              "tests/compiler/c0/run-record-copy-array-members.sh",
-              "tests/compiler/c0/run-record-local-initializers.sh",
-              "tests/compiler/c0/run-runtime-local-array-initializer.sh",
-              "tests/compiler/c0/run-runtime-record-array-initializers.sh",
-              "tests/compiler/c0/run-short-integers.sh",
-              "tests/compiler/c0/run-static-aggregate-array-designators.sh",
-              "tests/compiler/c0/run-static-inferred-char-arrays.sh",
-              "tests/compiler/c0/run-static-local-fixed-arrays.sh",
-              "tests/compiler/c0/run-static-local-inferred-arrays.sh",
-              "tests/compiler/c0/run-static-local-pointer-arrays.sh",
-              "tests/compiler/c0/run-static-local-scalars.sh",
-              "tests/compiler/c0/run-static-pointer-arrays.sh",
-              "tests/compiler/c0/run-static-prefix-object-attributes.sh",
-              "tests/compiler/c0/run-static-union-zero-overlay.sh",
-              "tests/compiler/c0/run-static-zero-definitions.sh",
-              "tests/compiler/c0/run-unnamed-prototype-parameters.sh",
-              "tests/compiler/c0/run-void-pointer-locals.sh",
-              "tests/compiler/c0/run-wide-integer-literals.sh",
+              "docs/ci/verified-9bee70c-runtime44-perf4-native-src.patch",
+              "docs/ci/p1-stack-overflow-evidence-2026-10-12.md",
+              "docs/architecture/multitarget-x86_64-real-project-checkpoint-2026-10-18.md",
           }
-          metadata.add("tests/compiler/c0/run-static-local-arrays.sh")
+          metadata |= {
+              "docs/ci/README.md",
+              "docs/ci/linux-p1-task-irq-stack-diagnosis-2026-10-12.md",
+              "docs/architecture/README.md",
+              "docs/architecture/multitarget-two-backend-audit-2026-10-19.md",
+          }
           deleted = changed_paths(base, "HEAD", "--diff-filter=D")
           changed = changed_paths(base, "HEAD")
-          if len(expected) != 824 or deleted != expected or changed != expected | metadata:
+          if len(expected) != 827 or deleted != expected or changed != expected | metadata:
               raise SystemExit("RETIREMENT_SCOPE=FAIL: unexpected tree changes")
           files = [p.decode() for p in git("ls-files", "-z").split(b"\0") if p]
           candidates = {
@@ -820,67 +795,3 @@ jobs:
           done
           echo "BULK_COMPILE_COMPARISON passed=$passed unchanged_baseline_fail=$baseline_failures"
           git diff --exit-code
-
-  full-source-symbol-census:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: 0475a7442e86d4942b85f58e4a20f59045e592bb
-          persist-credentials: false
-      - name: Build all MiniC target implementations
-        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/source-census build/source-census/bin/minic
-      - name: Cross-check object symbols with every tracked source and configuration file
-        run: |
-          python3 - <<'PY'
-          import collections, hashlib, json, pathlib, re, subprocess
-          root=pathlib.Path.cwd()
-          paths=subprocess.check_output(["git","ls-files","-z"]).decode().split("\0")
-          texts={}
-          for p in paths:
-              if not p: continue
-              b=pathlib.Path(p).read_bytes()
-              if b"\0" in b: continue
-              try: texts[p]=b.decode()
-              except UnicodeDecodeError: pass
-          # Read all tracked source and configuration text, not just the translation units.
-          definitions=collections.defaultdict(list)
-          references=collections.defaultdict(list)
-          objects=sorted(pathlib.Path("build/source-census").rglob("*.o"))
-          for obj in objects:
-              out=subprocess.check_output(["nm","-g","--format=posix",str(obj)],text=True)
-              for line in out.splitlines():
-                  fields=line.split()
-                  if len(fields)<2: continue
-                  name,kind=fields[:2]
-                  if kind=="T" and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*",name):
-                      definitions[name].append(str(obj))
-                  elif kind=="U": references[name].append(str(obj))
-          owners=collections.defaultdict(list)
-          all_refs=collections.defaultdict(list)
-          names=set(definitions)-set(references)
-          rx=re.compile(r"\b(?:"+"|".join(re.escape(s) for s in sorted(names,key=len,reverse=True))+r")\b") if names else re.compile(r"(?!)")
-          for p,s in texts.items():
-              if p==".github/workflows/minic-historical-script-retirement-audit.yml": continue
-              for no,line in enumerate(s.splitlines(),1):
-                  for name in set(rx.findall(line)):
-                      all_refs[name].append([p,no,line.strip()[:240]])
-                      if p.endswith((".c",".h")) and not p.startswith(("third_party/","tests/vendor/")):
-                          owners[name].append([p,no,line.strip()[:240]])
-          print("SOURCE_SYMBOL_CENSUS "+json.dumps({"objects":len(objects),"defined":len(definitions),"unreferenced_by_nm":len(names),"source_files":sum(p.startswith(("src/","include/")) and p.endswith((".c",".h")) for p in texts),"tracked_text":len(texts)}))
-          for name in sorted(names):
-              refs=owners[name]
-              if name.startswith("minic_") and len(refs)<=3 and any(p.startswith("src/") for p,_,_ in refs):
-                  print("SOURCE_CANDIDATE "+json.dumps({"name":name,"objects":definitions[name],"source":refs,"all":all_refs[name][:30],"total_refs":len(all_refs[name])},ensure_ascii=True))
-          # Large stored historical patches and dated evidence: exact reference inventory.
-          for p,s in texts.items():
-              if not p.startswith("docs/") or not (p.endswith(".patch") or len(s)>60000): continue
-              name=pathlib.PurePosixPath(p).name
-              refs=[]
-              for q,other in texts.items():
-                  if q==p or q==".github/workflows/minic-historical-script-retirement-audit.yml": continue
-                  for no,line in enumerate(other.splitlines(),1):
-                      if name in line: refs.append([q,no,line.strip()[:220]])
-              print("LARGE_HISTORY "+json.dumps({"path":p,"lines":len(s.splitlines()),"bytes":len(s.encode()),"refs":refs},ensure_ascii=True))
-          PY
