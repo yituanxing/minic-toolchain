@@ -253,20 +253,12 @@ core_comparisons_focused() {
         sh tests/compiler/c0/run-core-basic-runtime-case.sh core-comparisons
 }
 
-core_integer_multiply_overflow_focused() {
+core_checked_arithmetic_focused() {
     MINIC="$root/build/ci-debug/bin/minic" \
-    BUILD_DIR="$root/build/ci-core-integer-multiply-overflow" \
+    BUILD_DIR="$root/build/ci-core-checked-arithmetic" \
     RISCV_CC=riscv64-linux-gnu-gcc \
     QEMU_RISCV64=qemu-riscv64 \
-        sh tests/compiler/c0/run-core-basic-runtime-case.sh core-integer-multiply-overflow
-}
-
-core_integer_add_overflow_focused() {
-    MINIC="$root/build/ci-debug/bin/minic" \
-    BUILD_DIR="$root/build/ci-core-integer-add-overflow" \
-    RISCV_CC=riscv64-linux-gnu-gcc \
-    QEMU_RISCV64=qemu-riscv64 \
-        sh tests/compiler/c0/run-core-basic-runtime-case.sh core-integer-add-overflow
+        sh tests/compiler/c0/run-core-basic-runtime-case.sh core-checked-arithmetic
 }
 
 core_short_circuit_or_focused() {
@@ -331,14 +323,6 @@ core_opaque_inline_asm_focused() {
     RISCV_CC=riscv64-linux-gnu-gcc \
     QEMU_RISCV64=qemu-riscv64 \
         sh tests/compiler/c0/run-core-basic-runtime-case.sh core-opaque-inline-asm
-}
-
-core_integer_subtract_overflow_focused() {
-    MINIC="$root/build/ci-debug/bin/minic" \
-    BUILD_DIR="$root/build/ci-core-integer-subtract-overflow" \
-    RISCV_CC=riscv64-linux-gnu-gcc \
-    QEMU_RISCV64=qemu-riscv64 \
-        sh tests/compiler/c0/run-core-basic-runtime-case.sh core-integer-subtract-overflow
 }
 
 core_target_constant_fallback_focused() {
@@ -586,8 +570,7 @@ start_gate core-fixed-call-scalar-conversions-focused core_fixed_call_scalar_con
 start_gate core-scalar-assignment-implicit-void-focused core_scalar_assignment_implicit_void_focused
 start_gate core-global-scalar-memory-focused core_global_scalar_memory_focused
 start_gate core-comparisons-focused core_comparisons_focused
-start_gate core-integer-multiply-overflow-focused core_integer_multiply_overflow_focused
-start_gate core-integer-add-overflow-focused core_integer_add_overflow_focused
+start_gate core-checked-arithmetic-focused core_checked_arithmetic_focused
 start_gate core-short-circuit-or-focused core_short_circuit_or_focused
 start_gate core-nested-if-continuation-focused core_nested_if_continuation_focused
 start_gate core-condition-and-focused core_condition_and_focused
@@ -596,7 +579,6 @@ start_gate core-integer-bitwise-and-assignment-focused core_integer_bitwise_and_
 start_gate core-pointer-offset-focused core_pointer_offset_focused
 start_gate core-statement-expression-focused core_statement_expression_focused
 start_gate core-opaque-inline-asm-focused core_opaque_inline_asm_focused
-start_gate core-integer-subtract-overflow-focused core_integer_subtract_overflow_focused
 start_gate core-target-constant-fallback-focused core_target_constant_fallback_focused
 start_gate core-integer-bitwise-not-focused core_integer_bitwise_not_focused
 start_gate core-postfix-update-m24-focused core_postfix_update_m24_focused

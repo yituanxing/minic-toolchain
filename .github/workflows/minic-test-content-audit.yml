@@ -97,7 +97,7 @@ jobs:
               assert b"core-required-no-fallback" not in b,(p,"obsolete gate")
               if p.startswith(("src/","tools/minic/","tools/minic-cc/")):
                   assert not re.search(rb'\bMINIC_CORE_(?:IR|CODEGEN)\b',b),p
-          retired_comparison = ["core-integer-equality","core-scalar-not-equal","core-pointer-equality-qualifiers"]
+          retired_comparison = ["core-integer-equality","core-scalar-not-equal","core-pointer-equality-qualifiers","core-integer-add-overflow","core-integer-multiply-overflow","core-integer-subtract-overflow"]
           for p in live:
               if p.startswith("docs/") or p.endswith(".md") or p in (".github/workflows/minic-test-content-audit.yml",".github/workflows/minic-historical-script-retirement-audit.yml"):continue
               b=pathlib.Path(p).read_bytes()
@@ -146,9 +146,13 @@ jobs:
           "$MINIC" --target=x86_64-linux -S build/test-pruning/compare.i -o build/test-pruning/compare.s
           cc -no-pie build/test-pruning/compare.s tests/compiler/c0/core_comparisons_runtime.c -o build/test-pruning/compare
           build/test-pruning/compare
+          cc -E -P tests/compiler/c0/core_checked_arithmetic.c -o build/test-pruning/checked.i
+          "$MINIC" --target=x86_64-linux -S build/test-pruning/checked.i -o build/test-pruning/checked.s
+          cc -no-pie build/test-pruning/checked.s tests/compiler/c0/core_checked_arithmetic_runtime.c -o build/test-pruning/checked
+          build/test-pruning/checked
           export MINIC_CC="$MINIC" RISCV_CC=riscv64-linux-gnu-gcc QEMU_RISCV64=qemu-riscv64
           export BUILD_DIR="$PWD/build/test-pruning/stack"
           sh tests/compiler/c0/run-compile-only-case.sh stack-fixed-arguments
-          for name in core-comparisons core-condition-and core-logical-and-value; do
+          for name in core-checked-arithmetic core-comparisons core-condition-and core-logical-and-value; do
             BUILD_DIR="$PWD/build/test-pruning/$name" sh tests/compiler/c0/run-core-basic-runtime-case.sh "$name"
           done

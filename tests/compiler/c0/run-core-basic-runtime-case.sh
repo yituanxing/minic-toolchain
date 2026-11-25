@@ -2,7 +2,7 @@
 # RV64 Core production-code differential against GNU. One compiler path.
 set -eu
 case "${1:-}" in
-    core-comparisons|core-condition-and|core-fixed-call-scalar-conversions|core-for-postincrement-m20|core-global-scalar-memory|core-integer-bitwise-and-assignment|core-integer-bitwise-not|core-integer-or-shifts-m22|core-logical-and-value|core-nested-if-continuation|core-integer-add-overflow|core-integer-multiply-overflow|core-integer-subtract-overflow|core-pointer-condition-m21|core-pointer-offset|core-short-circuit-or|core-scalar-assignment-implicit-void|core-scalar-lvalue-bitcast|core-opaque-inline-asm|core-statement-expression|core-target-constant-fallback) name=$1 ;;
+    core-checked-arithmetic|core-comparisons|core-condition-and|core-fixed-call-scalar-conversions|core-for-postincrement-m20|core-global-scalar-memory|core-integer-bitwise-and-assignment|core-integer-bitwise-not|core-integer-or-shifts-m22|core-logical-and-value|core-nested-if-continuation|core-pointer-condition-m21|core-pointer-offset|core-short-circuit-or|core-scalar-assignment-implicit-void|core-scalar-lvalue-bitcast|core-opaque-inline-asm|core-statement-expression|core-target-constant-fallback) name=$1 ;;
     *) echo "usage: $0 <known-core-basic-runtime-case>" >&2; exit 64 ;;
 esac
 test "$#" -eq 1 || exit 64
@@ -27,7 +27,7 @@ source_file="$root/tests/compiler/c0/$stem.c"
 runtime_file="$root/tests/compiler/c0/${stem}_runtime.c"
 mkdir -p "$work"
 case "$name" in
-    core-fixed-call-scalar-conversions|core-global-scalar-memory|core-integer-bitwise-not|core-integer-add-overflow|core-integer-multiply-overflow|core-scalar-assignment-implicit-void|core-scalar-lvalue-bitcast)
+    core-fixed-call-scalar-conversions|core-global-scalar-memory|core-integer-bitwise-not|core-scalar-assignment-implicit-void|core-scalar-lvalue-bitcast)
         input="$work/$stem.i"; core="$work/$stem-core.s" ;;
     core-short-circuit-or)
         input="$work/$stem.i"; core="$work/core.s" ;;
@@ -39,6 +39,14 @@ esac
 
 # Declarative per-case checks, in the original execution order.
 case "$name" in
+    core-checked-arithmetic)
+        for op in add sub mul; do
+            for type in int long uint ulong; do
+                grep -q "^checked_${op}_${type}:" "$core"
+            done
+            grep -q "^size_${op}:" "$core"
+        done
+        ;;
     core-comparisons)
         for symbol in global_equal set_if_equal integer_ne pointer_eq pointer_ne member_eq member_ne list_condition list_first list_last qualified_eq qualified_ne explicit_cast_eq null_eq void_eq; do
             grep -q "^${symbol}:" "$core"
@@ -91,27 +99,6 @@ case "$name" in
     core-nested-if-continuation)
         grep -q '^core_nested_then:' "$core"
         grep -q '^core_nested_both:' "$core"
-        ;;
-    core-integer-add-overflow)
-        grep -q '^core_m8_checked_int:' "$core"
-        grep -q '^core_m8_checked_long:' "$core"
-        grep -q '^core_m8_checked_uint:' "$core"
-        grep -q '^core_m8_checked_ulong:' "$core"
-        grep -q '^core_m8_size_add:' "$core"
-        grep -q 'sltu t4, t2, t0' "$core"
-        grep -q 'srli t4, t4, 63' "$core"
-        ;;
-    core-integer-multiply-overflow)
-        grep -q '^core_m6_checked_int:' "$core"
-        grep -q '^core_m6_checked_long:' "$core"
-        grep -q '^core_m6_checked_ulong:' "$core"
-        grep -q '^core_m6_size_mul:' "$core"
-        grep -q 'mulhu t4, t0, t1' "$core"
-        grep -q 'mulh t4, t0, t1' "$core"
-        ;;
-    core-integer-subtract-overflow)
-        grep -q 'sltu t4, t0, t1' "$core"
-        grep -q 'sub t2, t0, t1' "$core"
         ;;
     core-pointer-offset)
         for symbol in core_m15_void_add core_m15_int_add core_m15_int_add_commuted core_m15_list_poison; do
