@@ -95,7 +95,10 @@ jobs:
                       "HISTORICAL_PERF_RETIRED" in archived_stub), path
               assert "SystemExit(78)" in archived_stub or "exit 78" in archived_stub, path
           for path, sha in route_blobs.items():
-              assert git("hash-object", path).decode().strip() == sha, path
+              if path == ".github/workflows/linux-runtime-optin-perf-suite-v1.yml":
+                  assert git("rev-parse", "201db76b4806f0b96ca1ec149c767100dfb2b8dc:" + path).decode().strip() == sha, path
+              else:
+                  assert git("hash-object", path).decode().strip() == sha, path
           expected |= retired_route_files
           # Four replay routes require artifacts from one exact producer run.
           # Its artifact API returned total_count=0 on 2026-11-25. Preserve
@@ -699,6 +702,45 @@ jobs:
               seen_profile_steps.add(name)
           assert seen_profile_steps == retired_profile_steps and live_perf == expected_perf
           print("HISTORICAL_PERF_BUILD_RETIREMENT=PASS four_steps_fail_closed unrelated_steps_identical")
+          # Only remove normal-success steps dominated by an existing exit-78 guard.
+          # Preserve all fail-aware reporting and untouched bootstrap routes.
+          source_perf = git("show", "201db76b4806f0b96ca1ec149c767100dfb2b8dc:" + perf_path).decode()
+          assert source_perf == live_perf
+          unreachable = {
+              "Materialize this Kbuild C TU range (not part of MiniC time)": "Build latest Canonical MiniC",
+              "Verify both historically damaged preprocessed inputs with GCC": "Build latest Canonical MiniC",
+              "Measure MiniC -S only, using four parallel workers": "Build latest Canonical MiniC",
+              "Install RISC-V assembler and emulator": "Build control and candidate with identical Canonical patches",
+              "Compare GCC frontend, baseline rejection and fixed QEMU behavior": "Build control and candidate with identical Canonical patches",
+              "Parser index fallback, scope, and zero-expression smokes": "Build baseline and integrated optimization from clean sources",
+              "Release direct minic smoke on previously crashing TU": "Build baseline and integrated optimization from clean sources",
+              "Reuse frozen first500 paired A-B for each independent factor": "Build two one-factor-off compilers from immutable source",
+          }
+          steps = list(re.finditer(r"(?m)^      - (?:name:|uses:) (.+)$", source_perf))
+          by_name = {m[1]: (i, m) for i, m in enumerate(steps)}
+          cuts = []
+          for name, guard in unreachable.items():
+              i, m = by_name[name]
+              gi, gm = by_name[guard]
+              assert gi < i
+              end = steps[i+1].start() if i+1 < len(steps) else len(source_perf)
+              block = source_perf[m.start():end]
+              guard_block = source_perf[gm.start():steps[gi+1].start()]
+              assert "exit 78" in guard_block and "HISTORICAL_PERF_RETIRED" in guard_block
+              condition = lambda s: re.search(r"(?m)^        if: (.+)$", s)
+              gc, mc = condition(guard_block), condition(block)
+              g = gc[1] if gc else ""
+              c = mc[1] if mc else ""
+              assert not any(f in c for f in ("always()", "failure()", "cancelled()"))
+              assert g == c or (guard == "Build latest Canonical MiniC" and g[1:-1] in c)
+              tail = re.search(r"\n(?:[ \t]*\n)*$", block)
+              cut = m.start() + (tail.start() if tail else len(block))
+              assert not re.search(r"\n  [a-z][a-z0-9-]*:\s*\n|\n      #", block[:cut-m.start()])
+              cuts.append((m.start(), cut))
+          for start, end in sorted(cuts, reverse=True):
+              source_perf = source_perf[:start] + re.sub(r"^\n{1,3}", "\n", source_perf[end:], count=1)
+          assert pathlib.Path(perf_path).read_text() == source_perf
+          print("HISTORICAL_PERF_UNREACHABLE_REMOVAL=PASS removed=8 fail_closed_routes_preserved")
           retired_steps = {
               "Build unmodified and lexer-only lookahead Parser MiniC",
               "Four-owner RV64 record validation single-walk A/B",
