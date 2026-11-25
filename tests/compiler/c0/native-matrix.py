@@ -167,8 +167,10 @@ def positive(config, cc, mini, work):
         else:
             inp = input_path if kind == "preprocessed" else src
             define_flags = [] if kind == "preprocessed" else flags(config.get("defines"))
-            execute([cc, *gnu_flags, *define_flags, inp, *support, "-o", gnu], env,
-                    label="GNU native build")
+            gnu_build = execute([cc, *gnu_flags, *define_flags, inp, *support, "-o", gnu], env,
+                                label="GNU native build")
+            if config.get("relay_gnu_build_stderr"):
+                sys.stderr.buffer.write(gnu_build.stderr)
         g = execute([gnu], env, expect=config.get("exit", 0), label="GNU runtime")
         sys.stdout.buffer.write(g.stdout)
         sys.stderr.buffer.write(g.stderr)
@@ -177,6 +179,8 @@ def positive(config, cc, mini, work):
         p = minic_compile(config, mini, input_path, out, target, env)
         artifacts[target] = out.read_bytes()
         artifacts[target + "_log"] = p.stderr
+        if config.get("relay_compile_stderr"):
+            sys.stderr.buffer.write(p.stderr)
     if config.get("native", True):
         require("x86_64" in targets, "native test must compile x86_64")
         mini_s = work / "x86_64-linux.s"
