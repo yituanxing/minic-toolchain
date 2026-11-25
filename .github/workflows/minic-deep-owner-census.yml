@@ -135,7 +135,7 @@ jobs:
                   for n,line in enumerate(s.splitlines(),1):
                       if base in line or target in line:
                           owners.append((p,n,line.strip()[:280]))
-              print("OLD_DOC_REFERENCES",json.dumps({"path":target,"bytes":len(blob[target]),"references":owners[:70]}),flush=True)
+              print("OLD_DOC_REFERENCES",json.dumps({"path":target,"bytes":len(blob.get(target,"")),"references":owners[:70]}),flush=True)
           # Enumerate all action event contracts and external references; do not infer
           # routing from filename or a path-filter alone.
           workflows={p:s for p,s in blob.items() if p.startswith(".github/workflows/") and p.endswith((".yml",".yaml"))}
