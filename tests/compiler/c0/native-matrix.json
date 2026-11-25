@@ -8136,5 +8136,493 @@
         "mini_flags": "-fshort-wchar -funsigned-char -fno-PIE"
       }
     ]
+  },
+  "run-enum-constant-scopes": {
+    "mini": "legacy",
+    "omit_target_option": true,
+    "host": "HOST_CC_CC",
+    "targets": [
+      "riscv64"
+    ],
+    "pre_flags": "-E -P -x c",
+    "gnu": false,
+    "native": false,
+    "marker": "PASS compiler/c0/enum_constant_scopes cross-function=1 nested-shadow=1 restore-outer=1 duplicate-same-scope=reject",
+    "positive": [
+      {
+        "source": "enum_constant_scopes",
+        "checks": [
+          [
+            "riscv64",
+            "present",
+            "F",
+            "first:"
+          ],
+          [
+            "riscv64",
+            "present",
+            "F",
+            "second:"
+          ]
+        ]
+      }
+    ],
+    "negative": [
+      {
+        "inline_source": "int main(void) {\n    enum { ARG_same = 1 };\n    enum { ARG_same = 2 };\n    return ARG_same;\n}\n",
+        "diagnostic": "duplicate enumerator name"
+      }
+    ]
+  },
+  "run-gnu-void-pointer-arithmetic": {
+    "mini": "legacy",
+    "omit_target_option": true,
+    "host": "HOST_CC_CC",
+    "targets": [
+      "riscv64"
+    ],
+    "pre_flags": "-E -P -std=gnu11 -x c",
+    "gnu": false,
+    "native": false,
+    "marker": "PASS compiler/c0/gnu_void_pointer_arithmetic pointee=void/function stride=1 binary=+,- update=++ difference=void+function mismatched=reject incomplete-record=unchanged",
+    "positive": [
+      {
+        "source": "gnu_void_pointer_arithmetic",
+        "checks": [
+          [
+            "riscv64",
+            "present",
+            "F",
+            "gnu_void_pointer_add:"
+          ],
+          [
+            "riscv64",
+            "present",
+            "F",
+            "gnu_void_pointer_subtract:"
+          ],
+          [
+            "riscv64",
+            "present",
+            "F",
+            "gnu_void_pointer_post_increment:"
+          ],
+          [
+            "riscv64",
+            "present",
+            "F",
+            "gnu_void_pointer_pre_increment:"
+          ],
+          [
+            "riscv64",
+            "present",
+            "F",
+            "linux_void_pointer_difference:"
+          ],
+          [
+            "riscv64",
+            "present",
+            "F",
+            "gnu_function_pointer_difference:"
+          ]
+        ]
+      }
+    ],
+    "negative": [
+      {
+        "inline_source": "long bad_difference(int *left, long *right)\n{\n    return left - right;\n}\n",
+        "diagnostic": "unsupported pointer arithmetic operands"
+      },
+      {
+        "inline_source": "struct Incomplete;\nlong bad_incomplete_difference(struct Incomplete *left, struct Incomplete *right)\n{\n    return left - right;\n}\n",
+        "diagnostic": "unsupported pointer arithmetic operands"
+      },
+      {
+        "inline_source": "struct Incomplete;\nstruct Incomplete *bad_update(struct Incomplete *pointer)\n{\n    return pointer++;\n}\n",
+        "diagnostic": "pointer update requires an arithmetic-compatible pointee type"
+      }
+    ]
+  },
+  "run-gnu-builtin-object-size": {
+    "mini": "legacy",
+    "omit_target_option": true,
+    "host": "HOST_CC_CC",
+    "targets": [
+      "riscv64"
+    ],
+    "pre_flags": "-E -P -std=gnu11 -x c",
+    "gnu": false,
+    "native": false,
+    "marker": "PASS compiler/c0/gnu_builtin_object_size query=compile-time unknown=max:-1,min:0 direct-array=9 side-effects=unevaluated mode=0..3",
+    "positive": [
+      {
+        "source": "gnu_builtin_object_size",
+        "checks": [
+          [
+            "riscv64",
+            "present",
+            "F",
+            "unknown_max:"
+          ],
+          [
+            "riscv64",
+            "present",
+            "F",
+            "unknown_subobject:"
+          ],
+          [
+            "riscv64",
+            "present",
+            "F",
+            "unknown_min:"
+          ],
+          [
+            "riscv64",
+            "present",
+            "F",
+            "known_array:"
+          ],
+          [
+            "riscv64",
+            "present",
+            "F",
+            "  li a0, -1"
+          ],
+          [
+            "riscv64",
+            "present",
+            "F",
+            "  li a0, 9"
+          ],
+          [
+            "riscv64",
+            "absent",
+            "F",
+            "__builtin_object_size"
+          ],
+          [
+            "riscv64",
+            "absent",
+            "F",
+            "call side_effect_pointer"
+          ]
+        ]
+      }
+    ],
+    "negative": [
+      {
+        "inline_source": "unsigned long invalid_mode(void *pointer) {\n    return __builtin_object_size(pointer, 4);\n}\n",
+        "diagnostic": "__builtin_object_size mode must be between 0 and 3"
+      },
+      {
+        "inline_source": "unsigned long nonconstant_mode(void *pointer, int mode) {\n    return __builtin_object_size(pointer, mode);\n}\n"
+      }
+    ]
+  },
+  "run-gnu-array-range-initializer": {
+    "mini": "legacy",
+    "omit_target_option": true,
+    "host": "HOST_CC_CC",
+    "targets": [
+      "riscv64"
+    ],
+    "pre_flags": "-E -P -std=gnu11 -x c",
+    "gnu": false,
+    "native": false,
+    "marker": "PASS compiler/c0/gnu-array-range-initializer index=C99 range=GNU fixed-runtime-owner=shared nested-compound=linux-shape multi-range-evaluate-once=1 single-range-runtime=1 nonconstant-index=1 backward=1 override=last-wins bounds=checked",
+    "positive": [
+      {
+        "source": "gnu_array_range_initializer",
+        "checks": [
+          [
+            "riscv64",
+            "present",
+            "F",
+            "runtime_array_range_initializer:"
+          ],
+          [
+            "riscv64",
+            "present",
+            "F",
+            "direct_local_array_range_initializer:"
+          ],
+          [
+            "riscv64",
+            "present",
+            "F",
+            "direct_index_nonconstant:"
+          ],
+          [
+            "riscv64",
+            "present",
+            "F",
+            "single_element_range_effect:"
+          ],
+          [
+            "riscv64",
+            "present",
+            "F",
+            "  call range_effect"
+          ]
+        ]
+      },
+      {
+        "inline_source": "int nonconstant_range(int value)\n{\n    int items[2] = { [0 ... 1] = value };\n    return items[0] + items[1];\n}\n"
+      },
+      {
+        "inline_source": "int backward_designator(void)\n{\n    int items[3] = { [1] = 3, [0] = 4 };\n    return items[0];\n}\n"
+      }
+    ],
+    "negative": [
+      {
+        "inline_source": "int reversed_range(void)\n{\n    int items[2] = { [1 ... 0] = 3 };\n    return items[0];\n}\n",
+        "diagnostic": "GNU array range designator upper bound is below lower bound"
+      },
+      {
+        "inline_source": "int out_of_range(void)\n{\n    int items[2] = { [2] = 3 };\n    return items[0];\n}\n",
+        "diagnostic": "array designator index is outside the initialized array"
+      }
+    ]
+  },
+  "run-gnu-extern-object-redeclaration": {
+    "mini": "legacy",
+    "omit_target_option": true,
+    "host": "HOST_CC_CC",
+    "targets": [
+      "riscv64"
+    ],
+    "pre_flags": "-E -P -std=gnu11 -x c",
+    "gnu": false,
+    "native": false,
+    "marker": "PASS compiler/c0/gnu_extern_object_redeclaration scalar=merge const=merge record=merge array=transaction+composite-bound definition-then-extern=merge incompatible=reject",
+    "positive": [
+      {
+        "source": "gnu_extern_object_redeclaration",
+        "checks": [
+          [
+            "riscv64",
+            "present",
+            "F",
+            "read_redeclarations:"
+          ],
+          [
+            "riscv64",
+            "present",
+            "F",
+            "  la a0, repeated_scalar"
+          ],
+          [
+            "riscv64",
+            "present",
+            "F",
+            "  la a0, repeated_const"
+          ],
+          [
+            "riscv64",
+            "present",
+            "F",
+            "  la a0, repeated_incomplete"
+          ],
+          [
+            "riscv64",
+            "present",
+            "F",
+            "  la a0, completed_array"
+          ],
+          [
+            "riscv64",
+            "present",
+            "F",
+            "  la a0, fixed_array"
+          ],
+          [
+            "riscv64",
+            "present",
+            "F",
+            ".globl defined_object"
+          ],
+          [
+            "riscv64",
+            "present",
+            "F",
+            ".size defined_object, 4"
+          ],
+          [
+            "riscv64",
+            "absent",
+            "E",
+            "^\\.globl (repeated_scalar|repeated_const|repeated_incomplete|completed_array|fixed_array|repeated_record)$"
+          ],
+          [
+            "riscv64",
+            "present",
+            "F",
+            "  li a0, 16"
+          ],
+          [
+            "riscv64",
+            "present",
+            "F",
+            "  li a0, 12"
+          ]
+        ]
+      }
+    ],
+    "negative": [
+      {
+        "inline_source": "extern int conflict;\nextern unsigned int conflict;\n",
+        "diagnostic": "conflicting extern object redeclaration"
+      },
+      {
+        "inline_source": "extern int conflict_array[4];\nextern int conflict_array[5];\n",
+        "diagnostic": "conflicting extern object redeclaration"
+      }
+    ]
+  },
+  "run-gnu-local-label-address": {
+    "mini": "legacy",
+    "omit_target_option": true,
+    "host": "HOST_CC_CC",
+    "targets": [
+      "riscv64"
+    ],
+    "pre_flags": "-E -P -std=gnu11 -x c",
+    "gnu": false,
+    "native": false,
+    "marker": "PASS compiler/c0/gnu_local_label_address local-scope=1 duplicate-names=1 forward-address=1 labels>=4 addresses>=4",
+    "positive": [
+      {
+        "source": "gnu_local_label_address",
+        "checks": [
+          [
+            "riscv64",
+            "present",
+            "F",
+            "first_local_label:"
+          ],
+          [
+            "riscv64",
+            "present",
+            "F",
+            "repeated_local_labels:"
+          ],
+          [
+            "riscv64",
+            "present",
+            "F",
+            "forward_local_label:"
+          ],
+          [
+            "riscv64",
+            "present",
+            "E",
+            "^\\.Luser_[0-9]+:$"
+          ],
+          [
+            "riscv64",
+            "present",
+            "E",
+            "^  la a0, \\.Luser_[0-9]+$"
+          ]
+        ]
+      }
+    ],
+    "negative": [
+      {
+        "inline_source": "unsigned long bad(void) {\n    return (unsigned long)&&missing;\n}\n",
+        "diagnostic": "address of unknown label"
+      }
+    ],
+    "counts": [
+      [
+        "riscv64",
+        "E",
+        "^\\.Luser_[0-9]+:$",
+        4,
+        null
+      ],
+      [
+        "riscv64",
+        "E",
+        "^  la a0, \\.Luser_[0-9]+$",
+        4,
+        null
+      ]
+    ]
+  },
+  "run-aarch64-builtin-va-list-declaration": {
+    "mini": "legacy",
+    "omit_target_option": false,
+    "host": "HOST_CC_CC",
+    "targets": [
+      "aarch64"
+    ],
+    "pre_flags": "-E -P -std=gnu11 -x c",
+    "gnu": false,
+    "native": false,
+    "marker": "PASS compiler/c0/aarch64_builtin_va_list_declaration direct_type=1 typedef_type=1 aapcs64_cursor_copy=2 invalid_cursor=3",
+    "positive": [
+      {
+        "source": "aarch64_builtin_va_list_declaration",
+        "checks": [
+          [
+            "aarch64",
+            "present",
+            "F",
+            "builtin_va_declaration_probe:"
+          ],
+          [
+            "aarch64",
+            "present",
+            "F",
+            "ldp x11, x12, [x10]"
+          ],
+          [
+            "aarch64",
+            "present",
+            "F",
+            "stp x13, x14, [x9, #16]"
+          ]
+        ]
+      }
+    ],
+    "negative": [
+      {
+        "source": "aarch64_builtin_va_list_declaration",
+        "defines": "-DINVALID_CONST_DEST",
+        "checks": [
+          [
+            "stderr",
+            "present",
+            "E",
+            "GNU va builtin requires a modifiable va_list lvalue|__builtin_va_copy source must be a va_list lvalue"
+          ]
+        ]
+      },
+      {
+        "source": "aarch64_builtin_va_list_declaration",
+        "defines": "-DINVALID_INTEGER_DEST",
+        "checks": [
+          [
+            "stderr",
+            "present",
+            "E",
+            "GNU va builtin requires a modifiable va_list lvalue|__builtin_va_copy source must be a va_list lvalue"
+          ]
+        ]
+      },
+      {
+        "source": "aarch64_builtin_va_list_declaration",
+        "defines": "-DINVALID_INTEGER_SOURCE",
+        "checks": [
+          [
+            "stderr",
+            "present",
+            "E",
+            "GNU va builtin requires a modifiable va_list lvalue|__builtin_va_copy source must be a va_list lvalue"
+          ]
+        ]
+      }
+    ]
   }
 }

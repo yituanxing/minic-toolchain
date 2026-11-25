@@ -1103,7 +1103,7 @@ printf '%s\n' "PASS compiler/c0/pointer_aggregate_arithmetic stride=12 shift-add
 MINIC="$minic" \
 HOST_CC="$host_cc" \
 BUILD_DIR="$build_dir" \
-sh "$root/tests/compiler/c0/run-gnu-void-pointer-arithmetic.sh"
+sh "$root/tests/compiler/c0/run-native-matrix.sh" run-gnu-void-pointer-arithmetic
             ;;
         static-local-arrays)
 grep -F "__minic_static_local_" "$work/static_local_array.s" >/dev/null

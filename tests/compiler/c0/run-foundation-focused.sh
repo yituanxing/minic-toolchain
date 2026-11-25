@@ -22,11 +22,11 @@ for test_script in \
     compile:anonymous-record-field-types \
     compile:typedef-enum-definitions \
     compile:enum-constant-expressions \
-    run-enum-constant-scopes.sh \
+    native:run-enum-constant-scopes \
     compile:integer-constant-bitwise \
     compile:unsigned-64-literals \
     run-builtin-va-list.sh \
-    run-aarch64-builtin-va-list-declaration.sh \
+    native:run-aarch64-builtin-va-list-declaration \
     compile:restrict-qualifiers \
     compile:gnu-extension-declaration \
     compile:builtin-expect \
@@ -99,7 +99,7 @@ for test_script in \
     native:run-anonymous-record-members \
     native:run-block-scope-record-tags \
     compile:block-scope-extern-function-attributes \
-    run-gnu-void-pointer-arithmetic.sh \
+    native:run-gnu-void-pointer-arithmetic \
     compile:gnu-statement-expression \
     compile:gnu-void-function-pointer-assignment \
     compile:gnu-no-profile-function-attribute \
@@ -107,7 +107,7 @@ for test_script in \
     compile:gnu-typeof-array-bound-cast \
     compile:function-arena-borrow-lifetime \
     run-gnu-statement-record-value.sh \
-    run-gnu-array-range-initializer.sh \
+    native:run-gnu-array-range-initializer \
     compile:gnu-record-compound-literal \
     native:run-gnu-static-local-implicit-zero \
     compile:gnu-top-level-empty-declaration \
@@ -115,7 +115,7 @@ for test_script in \
     compile:gnu-auto-type-local \
     compile:gnu-local-interleaved-informational-attribute \
     run-gnu-array-object-identity.sh \
-    run-gnu-local-label-address.sh \
+    native:run-gnu-local-label-address \
     native:run-gnu-inline-asm-fence \
     compile:gnu-typeof-local-declaration \
     compile:gnu-inline-asm-readwrite-output \
@@ -125,7 +125,7 @@ for test_script in \
     run-gnu-fixed-register-bindings.sh \
     compile:gnu-compiletime-selection-builtins \
     compile:gnu-builtin-constant-p \
-    run-gnu-builtin-object-size.sh \
+    native:run-gnu-builtin-object-size \
     run-gnu-call-frame-address.sh \
     native:run-gnu-builtin-unreachable \
     native:run-gnu-pointer-sign-call-conversion \
@@ -148,7 +148,7 @@ for test_script in \
     native:run-gnu-enum-entity \
     compile:extern-multi-declarators \
     compile:extern-multidimensional-array \
-    run-gnu-extern-object-redeclaration.sh \
+    native:run-gnu-extern-object-redeclaration \
     compile:gnu-section-symbol-attribute \
     compile:gnu-const-function-attribute \
     run-driver-gnu-predefines.sh \
