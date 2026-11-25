@@ -8,7 +8,7 @@ authorize changes to MiniPP, MiniAS or MiniLD. The starting PR #674 branch is
 
 ## Source inventory and ownership
 
-The older `minic-global-architecture-audit-2026-10-29.md` count of 319
+The older [minic-global-architecture-audit-2026-10-29.md](https://github.com/yituanxing/minic-toolchain/blob/07f99be84fe58d025524601d6733fa723e6db4c3/docs/architecture/minic-global-architecture-audit-2026-10-29.md) count of 319
 tracked `src/` C/H files is a historical snapshot, **not the denominator for
 this tree**. At IR-P24 the tracked `src/**/*.{c,h}` inventory has **379**
 files: 71 Frontend, 15 Compiler, 58 Core, 232 Target, and 3 Common.

@@ -327,27 +327,29 @@ Frontend 多数 `probe=*parser` 只是词法前瞻、Core 不同强度的常量�
 
 ### 生产核验、真实软件和历史阶段快照
 
-- [早期项目审计](project-audit-2026-10-07.md)、
-  [主分支生产审计](current-main-production-audit-2026-10-16.md)、
-  [白盒成本审计](minic-whitebox-cost-audit-2026-10-16.md)、
-  [轻量自举收敛](lean-compiler-and-prebootstrap-convergence-2026-10-16.md)、
-  [早期 foundation](foundation-refactor-v1.md)、
-  [Core IR v0 shadow](core-ir-v0-shadow.md)、
-  [Core-only runtime](core-only-runtime-r0-checkpoint.md)、
-  [多目标双后端审计](multitarget-two-backend-audit-2026-10-19.md)、
-  [四后端 M0](four-backend-m0-aarch64-loongarch64-2026-10-19.md)、
-  [首 500 文件后评估](post-first500-architecture-review-checkpoint.md)。
-- [全项目表达式边界审计](project-global-audit-and-expression-boundaries-2026-10-21.md)、
-  [四后端收尾记录](minic-four-backend-refactor-closeout-2026-10-22.md)、
-  [四架构 Linux 入口](minic-linux-entry-four-isa-2026-10-23.md)、
-  [RV64I strict subtarget](minic-rv64i-strict-subtarget-2026-10-23.md)、
-  [RV32 CJSON](riscv32-cjson-libc-real-runtime-2026-10-24.md)、
-  [RV32 Lua](rv32-lua-5.5.0-real-frontier-2026-10-24.md)、
-  [RV32 zlib](rv32-zlib-real-software-2026-10-24.md)、
-  [RV32 minigzip](rv32-zlib-minigzip-real-roundtrip-2026-10-24.md)。
-- [主分支全局源码审计（旧 SHA）](minic-global-source-audit-2026-10-26.md)、
+已归档的 20 份历史快照通过固定 Git 提交链接阅读；当前工作树不再重复保存。现行设计、问题与验收合同仍在本目录维护。
+
+- [早期项目审计](https://github.com/yituanxing/minic-toolchain/blob/07f99be84fe58d025524601d6733fa723e6db4c3/docs/architecture/project-audit-2026-10-07.md)、
+  [主分支生产审计](https://github.com/yituanxing/minic-toolchain/blob/07f99be84fe58d025524601d6733fa723e6db4c3/docs/architecture/current-main-production-audit-2026-10-16.md)、
+  [白盒成本审计](https://github.com/yituanxing/minic-toolchain/blob/07f99be84fe58d025524601d6733fa723e6db4c3/docs/architecture/minic-whitebox-cost-audit-2026-10-16.md)、
+  [轻量自举收敛](https://github.com/yituanxing/minic-toolchain/blob/07f99be84fe58d025524601d6733fa723e6db4c3/docs/architecture/lean-compiler-and-prebootstrap-convergence-2026-10-16.md)、
+  [早期 foundation](https://github.com/yituanxing/minic-toolchain/blob/07f99be84fe58d025524601d6733fa723e6db4c3/docs/architecture/foundation-refactor-v1.md)、
+  [Core IR v0 shadow](https://github.com/yituanxing/minic-toolchain/blob/07f99be84fe58d025524601d6733fa723e6db4c3/docs/architecture/core-ir-v0-shadow.md)、
+  [Core-only runtime](https://github.com/yituanxing/minic-toolchain/blob/07f99be84fe58d025524601d6733fa723e6db4c3/docs/architecture/core-only-runtime-r0-checkpoint.md)、
+  [多目标双后端审计](https://github.com/yituanxing/minic-toolchain/blob/07f99be84fe58d025524601d6733fa723e6db4c3/docs/architecture/multitarget-two-backend-audit-2026-10-19.md)、
+  [四后端 M0](https://github.com/yituanxing/minic-toolchain/blob/07f99be84fe58d025524601d6733fa723e6db4c3/docs/architecture/four-backend-m0-aarch64-loongarch64-2026-10-19.md)、
+  [首 500 文件后评估](https://github.com/yituanxing/minic-toolchain/blob/07f99be84fe58d025524601d6733fa723e6db4c3/docs/architecture/post-first500-architecture-review-checkpoint.md)。
+- [全项目表达式边界审计](https://github.com/yituanxing/minic-toolchain/blob/07f99be84fe58d025524601d6733fa723e6db4c3/docs/architecture/project-global-audit-and-expression-boundaries-2026-10-21.md)、
+  [四后端收尾记录](https://github.com/yituanxing/minic-toolchain/blob/07f99be84fe58d025524601d6733fa723e6db4c3/docs/architecture/minic-four-backend-refactor-closeout-2026-10-22.md)、
+  [四架构 Linux 入口](https://github.com/yituanxing/minic-toolchain/blob/07f99be84fe58d025524601d6733fa723e6db4c3/docs/architecture/minic-linux-entry-four-isa-2026-10-23.md)、
+  [RV64I strict subtarget](https://github.com/yituanxing/minic-toolchain/blob/07f99be84fe58d025524601d6733fa723e6db4c3/docs/architecture/minic-rv64i-strict-subtarget-2026-10-23.md)、
+  [RV32 CJSON](https://github.com/yituanxing/minic-toolchain/blob/07f99be84fe58d025524601d6733fa723e6db4c3/docs/architecture/riscv32-cjson-libc-real-runtime-2026-10-24.md)、
+  [RV32 Lua](https://github.com/yituanxing/minic-toolchain/blob/07f99be84fe58d025524601d6733fa723e6db4c3/docs/architecture/rv32-lua-5.5.0-real-frontier-2026-10-24.md)、
+  [RV32 zlib](https://github.com/yituanxing/minic-toolchain/blob/07f99be84fe58d025524601d6733fa723e6db4c3/docs/architecture/rv32-zlib-real-software-2026-10-24.md)、
+  [RV32 minigzip](https://github.com/yituanxing/minic-toolchain/blob/07f99be84fe58d025524601d6733fa723e6db4c3/docs/architecture/rv32-zlib-minigzip-real-roundtrip-2026-10-24.md)。
+- [主分支全局源码审计（旧 SHA）](https://github.com/yituanxing/minic-toolchain/blob/07f99be84fe58d025524601d6733fa723e6db4c3/docs/architecture/minic-global-source-audit-2026-10-26.md)、
   [三 ISA Linux campaign](minic-linux-three-isa-campaign-2026-10-27.md)、
-  [10/29 全局架构旧计划](minic-global-architecture-audit-2026-10-29.md)、
+  [10/29 全局架构旧计划](https://github.com/yituanxing/minic-toolchain/blob/07f99be84fe58d025524601d6733fa723e6db4c3/docs/architecture/minic-global-architecture-audit-2026-10-29.md)、
   [Linux runtime frontier](minic-linux-runtime-frontier-2026-10-30.md)、
   [RISC-V closeout checklist](minic-riscv-closeout-checklist.md)、
   [真实项目选择](real-project-selection.md)、

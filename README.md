@@ -22,7 +22,7 @@ C (.c) -> MiniPP (.i) -> MiniC (.s) -> MiniAS (.o)
 
 All **2064/2064** real C objects passed across seven shards. The native RV32 ELF32 compat-vDSO link was also qualified in this integrated run. GNU utilities can still serve documented build probes, pinned macro references, and differential oracles; this is not a claim that every project operation is GNU-free or that future compiler revisions are already certified.
 
-MiniPP, MiniAS, MiniAR, MiniLD, ELF/object tools and the staged `minic` driver remain separately executable and have independent scopes of acceptance. The [lean compiler and pre-bootstrap convergence plan](docs/architecture/lean-compiler-and-prebootstrap-convergence-2026-10-16.md) records an earlier design stage; its statement that an RV32 C backend was not yet planned is **historical**, since `src/target/riscv32/` now implements one. For current compiler boundaries, evidence and cleanup work, use the [MiniC architecture index](docs/architecture/README.md).
+MiniPP, MiniAS, MiniAR, MiniLD, ELF/object tools and the staged `minic` driver remain separately executable and have independent scopes of acceptance. The [lean compiler and pre-bootstrap convergence plan](https://github.com/yituanxing/minic-toolchain/blob/07f99be84fe58d025524601d6733fa723e6db4c3/docs/architecture/lean-compiler-and-prebootstrap-convergence-2026-10-16.md) records an earlier design stage; its statement that an RV32 C backend was not yet planned is **historical**, since `src/target/riscv32/` now implements one. For current compiler boundaries, evidence and cleanup work, use the [MiniC architecture index](docs/architecture/README.md).
 
 ## Current implementation
 

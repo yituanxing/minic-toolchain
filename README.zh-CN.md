@@ -22,7 +22,7 @@ C (.c) -> MiniPP (.i) -> MiniC (.s) -> MiniAS (.o)
 
 本轮 **2064/2064** 个真实 C 对象和七个分片均通过；RV32 compat-vDSO 的原生 ELF32 链接也在该完整运行时链路中接受验证。GNU 工具仍可用于明确记录的构建探测、固定宏参考和差分 oracle；不要把该验收解释成「整个工程完全不需要 GNU」，也不能用这次结果证明未来未测试的源码修改。
 
-MiniPP、MiniAS、MiniAR、MiniLD、ELF/对象工具及分阶段 `minic` driver 均保留独立执行入口，接口和验收范围仍分别维护。[轻量编译器架构与自举前收敛计划](docs/architecture/lean-compiler-and-prebootstrap-convergence-2026-10-16.md) 记录的是更早的设计阶段；其中“尚不实现 RV32 C 后端”**已是历史表述**，当前 `src/target/riscv32/` 已有实现。现行编译器边界、审计证据与清理依赖统一从[MiniC 架构总入口](docs/architecture/README.md)查看。
+MiniPP、MiniAS、MiniAR、MiniLD、ELF/对象工具及分阶段 `minic` driver 均保留独立执行入口，接口和验收范围仍分别维护。[轻量编译器架构与自举前收敛计划](https://github.com/yituanxing/minic-toolchain/blob/07f99be84fe58d025524601d6733fa723e6db4c3/docs/architecture/lean-compiler-and-prebootstrap-convergence-2026-10-16.md) 记录的是更早的设计阶段；其中“尚不实现 RV32 C 后端”**已是历史表述**，当前 `src/target/riscv32/` 已有实现。现行编译器边界、审计证据与清理依赖统一从[MiniC 架构总入口](docs/architecture/README.md)查看。
 
 ## 当前实现
 

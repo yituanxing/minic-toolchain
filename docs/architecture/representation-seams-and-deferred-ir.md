@@ -134,7 +134,7 @@ Language-specific rules are resolved above the AST/Core seam. Their resulting fa
 
 The checked-in Core IR remains shadow-only with respect to code generation: the default assembly path still uses the existing RV64 backend. The shadow consumes the real normalized FunctionBody and supports a bounded execution subset including scalar and abstract parameter values, frontend-resolved integer value conversion, local object identity, object addresses, typed load/store effects, operation-level volatile semantics, and explicit CFG ownership for supported `if` and source `while` statements.
 
-Core lowering distinguishes `OK`, valid-but-`UNSUPPORTED`, and actual `ERROR`; optional shadow mode skips unsupported functions, while strict mode turns them into a CI-visible coverage failure. Supported shadow compilation must remain byte-identical to default RV64 output. The temporary environment switch is migration plumbing rather than a public compiler interface. See `core-ir-v0-shadow.md` for the exact current contract.
+Core lowering distinguishes `OK`, valid-but-`UNSUPPORTED`, and actual `ERROR`; optional shadow mode skips unsupported functions, while strict mode turns them into a CI-visible coverage failure. Supported shadow compilation must remain byte-identical to default RV64 output. The temporary environment switch is migration plumbing rather than a public compiler interface. See [core-ir-v0-shadow.md](https://github.com/yituanxing/minic-toolchain/blob/07f99be84fe58d025524601d6733fa723e6db4c3/docs/architecture/core-ir-v0-shadow.md) for the exact current contract.
 
 ## 6. DataLayout, BackendLayout and ABI boundaries / DataLayout、BackendLayout 与 ABI 边界
 
