@@ -236,6 +236,18 @@ jobs:
           import concurrent.futures,json,os,pathlib,subprocess,tempfile
           root=pathlib.Path.cwd()
           cases=json.loads((root/"tests/compiler/c0/native-matrix.json").read_text())
+          # Verify direct callers against the live repository before temporarily
+          # retrieving a historical script for the independent oracle.
+          active=subprocess.check_output(["git","ls-files","-z"]).decode().strip("\0").split("\0")
+          bad=[]
+          for p in active:
+              if p.startswith("docs/") or p.endswith(".md") or p==".github/workflows/minic-test-content-audit.yml": continue
+              try: body=(root/p).read_text()
+              except (UnicodeDecodeError,OSError): continue
+              for name in cases:
+                  if name+".sh" in body: bad.append((p,name))
+          if bad: raise AssertionError(bad)
+          print("NATIVE_MATRIX_LIVE_CALLERS=PASS",flush=True)
           compiler=str(root/"build/release/bin/minic-cc")
           def one(item):
               name,config=item

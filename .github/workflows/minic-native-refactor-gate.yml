@@ -245,7 +245,7 @@ jobs:
           MINIC_CC="$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc" \
             HOST_CC=cc bash tests/compiler/c0/probe-flat-global-payload.sh
           MINIC_CC="$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc" \
-            HOST_CC=cc bash tests/compiler/c0/probe-gnu-nested-union-compound-record-array.sh
+            HOST_CC=cc bash tests/compiler/c0/run-native-matrix.sh probe-gnu-nested-union-compound-record-array
       - name: Source-free record layout and five-target GNU empty record differential
         run: |
           make MODE=release CFLAGS=-Werror BUILD_DIR=build/minic-native-backend \

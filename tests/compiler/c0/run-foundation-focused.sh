@@ -5,6 +5,7 @@ run_focused() {
     case "$1" in
         compile:*) sh tests/compiler/c0/run-compile-only-case.sh "${1#compile:}" ;;
         strict:*) sh tests/compiler/c0/run-core-strict-runtime-case.sh "${1#strict:}" ;;
+        native:*) sh tests/compiler/c0/run-native-matrix.sh "${1#native:}" ;;
         *) sh "tests/compiler/c0/$1" ;;
     esac
 }
@@ -76,7 +77,7 @@ for test_script in \
     run-static-multidimensional-array-relocation.sh \
     run-static-integer-floating-const-initializer.sh \
     run-incomplete-function-pointer-array-lifetime.sh \
-    run-static-integer-pointer-cast-comparison.sh \
+    native:run-static-integer-pointer-cast-comparison \
     compile:static-aggregate-array-designators \
     compile:prefix-update-expressions \
     compile:function-designator-calls \

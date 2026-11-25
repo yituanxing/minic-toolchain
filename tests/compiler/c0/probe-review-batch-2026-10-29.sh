@@ -10,21 +10,21 @@ export MINIC_CC="$mini" MINIC="$mini" HOST_CC="${HOST_CC:-cc}"
 sh tests/compiler/c0/run-target-probe-case.sh float32-const-eval
 sh tests/compiler/c0/run-target-probe-case.sh runtime-designated-positional
 sh tests/compiler/c0/probe-inline-symbolic-shared-body.sh
-sh tests/compiler/c0/probe-symbolic-inline-two-callers.sh
+sh tests/compiler/c0/run-native-matrix.sh probe-symbolic-inline-two-callers
 sh tests/compiler/c0/probe-function-pointer-attribute-policy.sh
-sh tests/compiler/c0/probe-static-typedef-array-redeclaration.sh
+sh tests/compiler/c0/run-native-matrix.sh probe-static-typedef-array-redeclaration
 sh tests/compiler/c0/probe-rv32-ffsll-high-word.sh
 sh tests/compiler/c0/probe-rv64-record-load-irregular.sh
 sh tests/compiler/c0/probe-rv64-record-load-packed.sh
 sh tests/compiler/c0/run-core-cfg-fold-effectful-conditions.sh
-bash tests/compiler/c0/probe-core-expr-branch-local-facts.sh "$mini"
-sh tests/compiler/c0/run-core-switch-case-fact-isolation.sh
+bash tests/compiler/c0/run-native-matrix.sh probe-core-expr-branch-local-facts "$mini"
+sh tests/compiler/c0/run-native-matrix.sh run-core-switch-case-fact-isolation
 sh tests/compiler/c0/run-core-rv32-va-record-cursor.sh
 sh tests/compiler/c0/probe-rv32-variadic-record-abi-alignment.sh
-bash tests/compiler/c0/run-packed-bitfield-field-layout.sh "$mini"
-sh tests/compiler/c0/run-packed-bitfield-guard-page.sh
-sh tests/compiler/c0/run-packed-bitfield-cross-word-window.sh
-sh tests/compiler/c0/probe-static-array-redeclaration.sh
+bash tests/compiler/c0/run-native-matrix.sh run-packed-bitfield-field-layout "$mini"
+sh tests/compiler/c0/run-native-matrix.sh run-packed-bitfield-guard-page
+sh tests/compiler/c0/run-native-matrix.sh run-packed-bitfield-cross-word-window
+sh tests/compiler/c0/run-native-matrix.sh probe-static-array-redeclaration
 sh tests/compiler/c0/run-core-local-effect-summary.sh
 sh tests/compiler/c0/run-core-reentry-query-contract.sh
 MINIC="$mini" sh tests/compiler/c0/run-core-if-snapshot-and-prune.sh

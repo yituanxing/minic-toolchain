@@ -617,7 +617,7 @@ check-gnu-linux-memory-encode-page-boolean-range: $(MINIC_CC_BINARY)
 .PHONY: check-core-cfg-effectful-boolean-fact-barrier
 check-core-cfg-effectful-boolean-fact-barrier: $(MINIC_CC_BINARY)
 	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
-		sh tests/compiler/c0/probe-core-cfg-effectful-boolean-fact-barrier.sh
+		sh tests/compiler/c0/run-native-matrix.sh probe-core-cfg-effectful-boolean-fact-barrier
 
 check-fast: check-core-cfg-effectful-boolean-fact-barrier
 
@@ -1734,7 +1734,7 @@ check-linux-symbolic-integer-and-record: $(MINIC_CC_BINARY)
 
 .PHONY: check-packed-bitfield-field-layout
 check-packed-bitfield-field-layout: $(MINIC_CC_BINARY)
-	bash tests/compiler/c0/run-packed-bitfield-field-layout.sh "$(abspath $(MINIC_CC_BINARY))"
+	bash tests/compiler/c0/run-native-matrix.sh run-packed-bitfield-field-layout "$(abspath $(MINIC_CC_BINARY))"
 
 .PHONY: check-packed-zero-width-bitfield-barrier
 check-packed-zero-width-bitfield-barrier: $(MINIC_CC_BINARY)
@@ -1776,7 +1776,7 @@ check-core-call-dump:
 .PHONY: check-mc089-x87-ordered-comparisons
 check-mc089-x87-ordered-comparisons: $(MINIC_CC_BINARY)
 	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
-	sh tests/compiler/c0/probe-mc089-x87-ordered-comparisons.sh
+	sh tests/compiler/c0/run-native-matrix.sh probe-mc089-x87-ordered-comparisons
 
 check-fast: check-mc089-x87-ordered-comparisons
 
@@ -1795,7 +1795,7 @@ check-core-gp-forward: $(MINIC_CC_BINARY)
 .PHONY: check-core-literal-branch-guard
 check-core-literal-branch-guard: $(MINIC_CC_BINARY)
 	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" \
-	bash tests/compiler/c0/probe-core-literal-branch-guard.sh
+	bash tests/compiler/c0/run-native-matrix.sh probe-core-literal-branch-guard
 
 .PHONY: check-core-literal-branch-fold
 check-core-literal-branch-fold:
@@ -1922,7 +1922,7 @@ check-fast: check-record-field-function-pointer-realloc
 .PHONY: check-static-chained-array-arena
 check-static-chained-array-arena: $(MINIC_CC_BINARY)
 	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
-	bash tests/compiler/c0/probe-static-chained-array-arena.sh
+	bash tests/compiler/c0/run-native-matrix.sh probe-static-chained-array-arena
 
 check-fast: check-static-chained-array-arena
 
@@ -1947,14 +1947,14 @@ check-fast: check-parameter-tag-scope
 .PHONY: check-owned-call-designator-rollback
 check-owned-call-designator-rollback: $(MINIC_CC_BINARY)
 	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
-	bash tests/compiler/c0/probe-owned-call-designator-rollback.sh
+	bash tests/compiler/c0/run-native-matrix.sh probe-owned-call-designator-rollback
 
 check-fast: check-owned-call-designator-rollback
 
 .PHONY: check-static-record-backward-arena
 check-static-record-backward-arena: $(MINIC_CC_BINARY)
 	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
-	bash tests/compiler/c0/probe-static-record-backward-arena.sh
+	bash tests/compiler/c0/run-native-matrix.sh probe-static-record-backward-arena
 
 check-fast: check-static-record-backward-arena
 
@@ -1968,14 +1968,14 @@ check-fast: check-x86-head-inline-section
 .PHONY: check-attributed-record-forward-declarations
 check-attributed-record-forward-declarations: $(MINIC_CC_BINARY)
 	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
-	bash tests/compiler/c0/probe-attributed-record-forward-declarations.sh
+	bash tests/compiler/c0/run-native-matrix.sh probe-attributed-record-forward-declarations
 
 check-fast: check-attributed-record-forward-declarations
 
 .PHONY: check-runtime-nested-array-arena-growth
 check-runtime-nested-array-arena-growth: $(MINIC_CC_BINARY)
 	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
-	sh tests/compiler/c0/probe-runtime-nested-array-arena-growth.sh
+	sh tests/compiler/c0/run-native-matrix.sh probe-runtime-nested-array-arena-growth
 
 .PHONY: check-runtime-record-positional-arena-growth
 check-runtime-record-positional-arena-growth: $(MINIC_CC_BINARY)
@@ -1987,28 +1987,28 @@ check-fast: check-runtime-nested-array-arena-growth check-runtime-record-positio
 .PHONY: check-mc035-runtime-range-once-arena
 check-mc035-runtime-range-once-arena: $(MINIC_CC_BINARY)
 	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
-	sh tests/compiler/c0/probe-mc035-runtime-range-once-arena.sh
+	sh tests/compiler/c0/run-native-matrix.sh probe-mc035-runtime-range-once-arena
 
 check-fast: check-mc035-runtime-range-once-arena
 
 .PHONY: check-runtime-record-tagged-arena-growth
 check-runtime-record-tagged-arena-growth: $(MINIC_CC_BINARY)
 	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
-	sh tests/compiler/c0/probe-runtime-record-tagged-arena-growth.sh
+	sh tests/compiler/c0/run-native-matrix.sh probe-runtime-record-tagged-arena-growth
 
 check-fast: check-runtime-record-tagged-arena-growth
 
 .PHONY: check-return-assignment-expression
 check-return-assignment-expression: $(MINIC_CC_BINARY)
 	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
-	sh tests/compiler/c0/probe-return-assignment-expression.sh
+	sh tests/compiler/c0/run-native-matrix.sh probe-return-assignment-expression
 
 check-fast: check-return-assignment-expression
 
 .PHONY: check-builtin-lexeme-contract
 check-builtin-lexeme-contract: $(MINIC_CC_BINARY)
 	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
-	sh tests/compiler/c0/probe-builtin-lexeme-contract.sh
+	sh tests/compiler/c0/run-native-matrix.sh probe-builtin-lexeme-contract
 
 check-fast: check-builtin-lexeme-contract
 
@@ -2029,14 +2029,14 @@ check-fast: check-mc006-shared-call-relocations
 .PHONY: check-mc033-statement-update-facts
 check-mc033-statement-update-facts: $(MINIC_CC_BINARY)
 	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
-	sh tests/compiler/c0/probe-mc033-statement-update-facts.sh
+	sh tests/compiler/c0/run-native-matrix.sh probe-mc033-statement-update-facts
 
 check-fast: check-mc033-statement-update-facts
 
 .PHONY: check-mc036-record-conditional-facts
 check-mc036-record-conditional-facts: $(MINIC_CC_BINARY)
 	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
-	sh tests/compiler/c0/probe-mc036-record-conditional-facts.sh
+	sh tests/compiler/c0/run-native-matrix.sh probe-mc036-record-conditional-facts
 
 check-fast: check-mc036-record-conditional-facts
 
@@ -2050,14 +2050,14 @@ check-fast: check-mc038-anonymous-designator-runtime
 .PHONY: check-alignment-attribute-semantic-arena
 check-alignment-attribute-semantic-arena: $(MINIC_CC_BINARY)
 	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
-	sh tests/compiler/c0/probe-alignment-attribute-semantic-arena.sh
+	sh tests/compiler/c0/run-native-matrix.sh probe-alignment-attribute-semantic-arena
 
 check-fast: check-alignment-attribute-semantic-arena
 
 .PHONY: check-mc034-static-designator-pointer-pair
 check-mc034-static-designator-pointer-pair: $(MINIC_CC_BINARY)
 	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
-	sh tests/compiler/c0/probe-mc034-static-designator-pointer-pair.sh
+	sh tests/compiler/c0/run-native-matrix.sh probe-mc034-static-designator-pointer-pair
 
 check-fast: check-mc034-static-designator-pointer-pair
 
@@ -2240,12 +2240,12 @@ check-aarch64-weak-direct-call-got: $(MINIC_CC_BINARY)
 .PHONY: check-core-rhs-no-cfg-snapshot
 check-core-rhs-no-cfg-snapshot: $(MINIC_CC_BINARY)
 	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" BUILD_DIR="$(abspath $(BUILD_DIR))" \
-	sh tests/compiler/c0/probe-core-rhs-no-cfg-snapshot.sh
+	sh tests/compiler/c0/run-native-matrix.sh probe-core-rhs-no-cfg-snapshot
 
 .PHONY: check-core-field-get-contiguous-mask-guard
 check-core-field-get-contiguous-mask-guard: $(MINIC_CC_BINARY)
 	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" BUILD_DIR="$(abspath $(BUILD_DIR))" \
-	sh tests/compiler/c0/probe-core-field-get-contiguous-mask-guard.sh
+	sh tests/compiler/c0/run-native-matrix.sh probe-core-field-get-contiguous-mask-guard
 
 .PHONY: check-gnu-dead-file-static-object-graph
 check-gnu-dead-file-static-object-graph: $(MINIC_CC_BINARY)
@@ -2264,7 +2264,7 @@ check-fast: check-core-module-reachability-closure
 .PHONY: check-core-inline-statement-constant-guard
 check-core-inline-statement-constant-guard: $(MINIC_CC_BINARY)
 	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" BUILD_DIR="$(abspath $(BUILD_DIR))" \
-	sh tests/compiler/c0/probe-core-inline-statement-constant-guard.sh
+	sh tests/compiler/c0/run-native-matrix.sh probe-core-inline-statement-constant-guard
 
 .PHONY: check-linux-rv32-bounce-shortcircuit
 check-linux-rv32-bounce-shortcircuit: $(MINIC_CC_BINARY)
@@ -2316,7 +2316,7 @@ check-gnu-const-global-record: $(MINIC_CC_BINARY)
 .PHONY: check-linux-empty-static-stub-cfi
 check-linux-empty-static-stub-cfi: $(MINIC_CC_BINARY)
 	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" BUILD_DIR="$(abspath $(BUILD_DIR))" \
-	sh tests/compiler/c0/probe-linux-empty-static-stub-cfi.sh
+	sh tests/compiler/c0/run-native-matrix.sh probe-linux-empty-static-stub-cfi
 
 .PHONY: check-gnu-linux-static-field-guard
 check-gnu-linux-static-field-guard: $(MINIC_CC_BINARY)
@@ -2326,17 +2326,17 @@ check-gnu-linux-static-field-guard: $(MINIC_CC_BINARY)
 .PHONY: check-core-same-global-address-order
 check-core-same-global-address-order: $(MINIC_CC_BINARY)
 	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" BUILD_DIR="$(abspath $(BUILD_DIR))" \
-	sh tests/compiler/c0/probe-core-same-global-address-order.sh
+	sh tests/compiler/c0/run-native-matrix.sh probe-core-same-global-address-order
 
 .PHONY: check-core-compound-record-byte-layout
 check-core-compound-record-byte-layout: $(MINIC_CC_BINARY)
 	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" BUILD_DIR="$(abspath $(BUILD_DIR))" \
-	sh tests/compiler/c0/probe-core-compound-record-byte-layout.sh
+	sh tests/compiler/c0/run-native-matrix.sh probe-core-compound-record-byte-layout
 
 .PHONY: check-core-literal-rhs-snapshot
 check-core-literal-rhs-snapshot: $(MINIC_CC_BINARY)
 	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" BUILD_DIR="$(abspath $(BUILD_DIR))" \
-	sh tests/compiler/c0/probe-core-literal-rhs-snapshot.sh
+	sh tests/compiler/c0/run-native-matrix.sh probe-core-literal-rhs-snapshot
 
 .PHONY: check-gnu-linux-zoned-constant-switch
 check-gnu-linux-zoned-constant-switch: $(MINIC_CC_BINARY)
