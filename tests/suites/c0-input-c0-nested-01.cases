@@ -1,0 +1,68 @@
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_nested_const_pointer.c"}
+int inspect_values(const int **values)
+{
+    return 0;
+}
+
+int main(void)
+{
+    int value;
+    int *pointer;
+
+    value = 1;
+    pointer = &value;
+    return inspect_values(&pointer);
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_nested_designator_positional_overflow.c"}
+struct inner { int first; int second; };
+struct outer { struct inner nested; int tail; };
+
+static struct outer invalid = { .nested.first = 1, 2, 3, 4 };
+int main(void) { return invalid.tail; }
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/nested_function_pointer_field.c"}
+typedef struct Vfs Vfs;
+
+struct Vfs {
+    void (*(*xDlSym)(Vfs *, void *, const char *))(void);
+};
+
+static void resolved_symbol(void)
+{
+}
+
+static void (*resolve_symbol(Vfs *vfs, void *handle, const char *name))(void)
+{
+    (void)vfs;
+    (void)handle;
+    (void)name;
+    return resolved_symbol;
+}
+
+int install_resolver(Vfs *vfs)
+{
+    vfs->xDlSym = resolve_symbol;
+    return sizeof(vfs->xDlSym) == sizeof(void *) ? 0 : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/nested_function_pointer_type_name.c"}
+static void (*nested_function_pointer_type_name(void *symbol,
+                                                     void *handle,
+                                                     const char *name))(void)
+{
+    void (*(*resolver)(void *, const char *))(void);
+
+    resolver = (void (*(*)(void *, const char *))(void))symbol;
+    return (*resolver)(handle, name);
+}
+
+/* Keep the nested type-name path reachable under the Common dead-static
+ * elimination pass. The helper itself is free to be inlined or specialized. */
+void (*resolve_nested_function_pointer(void *symbol,
+                                       void *handle,
+                                       const char *name))(void)
+{
+    return nested_function_pointer_type_name(symbol, handle, name);
+}
+@@@ end

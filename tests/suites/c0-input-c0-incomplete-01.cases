@@ -1,0 +1,151 @@
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/incomplete_array_symbol_address_equality.c"}
+extern const char *__start_names[];
+extern const char *__stop_names[];
+extern int array_unqualified[];
+extern const int array_const[];
+extern int complete_extent[3];
+extern int incomplete_extent[];
+
+int array_symbol_boundaries_differ(void) {
+    return &__stop_names != &__start_names;
+}
+
+int compatible_array_pointer_boundaries(void) {
+    return (&array_unqualified != &array_const) +
+           (&complete_extent != &incomplete_extent);
+}
+
+int main(void) { return 0; }
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/incomplete_array_typedef.c"}
+struct match_token {
+    int token;
+};
+
+typedef struct match_token match_table_t[];
+typedef match_table_t *match_table_pointer_t;
+
+int main(void) {
+    match_table_pointer_t table = 0;
+    return table != 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/incomplete_array_typedef_nested_bad.c"}
+typedef int bad_match_table_t[2][];
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/incomplete_enum_byvalue_reject.c"}
+/* A declaration of an opaque enum inside a function-pointer signature is
+ * representable, but materializing an object of that incomplete C type
+ * must remain a hard source-language failure, not a guessed integer ABI. */
+enum no_integer_abi;
+enum no_integer_abi illegal_object;
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/incomplete_enum_call_reject.c"}
+/* A layout-free forward enum is safe in a declaration, not a by-value
+ * call result. Neither Core nor the target may invent its return ABI. */
+enum unknown_result;
+extern enum unknown_result callback(void);
+int illegal_call(void) { return (int)callback(); }
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/incomplete_enum_transitive_coretype.c"}
+/* Linux-style forward enums in an *unused* externally declared function
+ * pointer's transitive record type have no object layout or known integer
+ * ABI. C->Core must preserve their distinct nominal identities rather than
+ * trying to import an undefined compatible integer representation.
+ *
+ * These paths match the original Linux 6.6.143 fwnode_operations and consw
+ * headers, but the contract is language-wide and applies to every target. */
+enum dma_attr;
+enum vc_intensity;
+struct device;
+
+struct fwnode_operations {
+    enum dma_attr (*device_get_dma_attr)(const struct device *);
+    unsigned int (*con_build_attr)(enum vc_intensity);
+};
+struct fwnode_handle { const struct fwnode_operations *ops; };
+struct device { struct fwnode_handle *fwnode; unsigned long flags; };
+
+extern int (*platform_notify)(struct device *);
+extern const struct fwnode_operations *conswitchp;
+
+/* Exercise both imported external symbol identities from reachable machine
+ * code. Do not call the opaque-enum callbacks: without a definition, their
+ * by-value ABI is deliberately unknown. */
+int (*platform_notify)(struct device *) = 0;
+const struct fwnode_operations *conswitchp = 0;
+
+/* Complete enum uses keep their actual C integer ABI and never become
+ * opaque. The linked native oracle exercises this independent control. */
+enum complete_direction { DIRECTION_UP = 7, DIRECTION_DOWN = 9 };
+static int direction_value(enum complete_direction direction) {
+    return (int)direction;
+}
+int main(void) {
+    return direction_value(DIRECTION_DOWN) == 9 &&
+                   platform_notify == 0 && conswitchp == 0 ? 0 : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/incomplete_function_pointer_array_direct.c"}
+extern int (*callbacks[])(int);
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/incomplete_function_pointer_array_lifetime.c"}
+typedef int (*CallbackArray[])(int);
+
+int increment(int value) { return value + 1; }
+int decrement(int value) { return value - 1; }
+
+extern int (*callbacks[])(int);
+extern int (*callbacks[])(int);
+int (*callbacks[])(int) = {increment, decrement};
+
+CallbackArray first_table = {increment};
+CallbackArray second_table = {decrement, increment};
+
+extern int (*later[])(int);
+extern int (*later[])(int);
+
+int main(void) {
+    return callbacks[0](1) == 2 && callbacks[1](1) == 0 &&
+           first_table[0](1) == 2 && second_table[0](1) == 0 &&
+           second_table[1](1) == 2 ? 0 : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/incomplete_function_pointer_array_repeated.c"}
+extern int (*callbacks[])(int);
+extern int (*callbacks[])(int);
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/incomplete_function_pointer_array_typedef.c"}
+typedef int (*CallbackArray[])(int);
+extern CallbackArray callbacks;
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/incomplete_record_pointer.c"}
+int main(void)
+{
+    struct opaque *value;
+    return value == value;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_incomplete_array_pointer_discard_const.c"}
+struct Entry { unsigned id; };
+static const struct Entry entries[2];
+struct Holder { struct Entry (*discard_const)[]; };
+static struct Holder holder = { .discard_const = &entries };
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_incomplete_function_pointer_array_redeclaration.c"}
+extern int (*callbacks[])(int);
+extern float (*callbacks[])(int);
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_incomplete_global_array_sizeof.c"}
+/* An incomplete `extern T objects[]` remains distinct from GNU `T[0]`.
+ * Completing the zero-extent address-of case must not legalize sizeof here. */
+extern int objects[];
+int main(void) { return (int)sizeof(objects); }
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_incomplete_record_object.c"}
+int main(void)
+{
+    struct opaque value;
+    return 0;
+}
+@@@ end

@@ -1,0 +1,87 @@
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_const_compound_xor.c"}
+int main(void)
+{
+    const int value = 1;
+
+    value ^= 2;
+    return value;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_const_local_assignment.c"}
+int main(void)
+{
+    const int value = 3;
+    value = 4;
+    return value;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_const_local_increment.c"}
+int main(void)
+{
+    const int limit = 2;
+    int index;
+
+    for (index = 0; index < limit; ++limit) {
+        return 1;
+    }
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_const_pointer_member_assignment.c"}
+struct Box {
+    int value;
+};
+
+int write_box(const struct Box *box)
+{
+    box->value = 3;
+    return 0;
+}
+
+int main(void)
+{
+    struct Box box;
+
+    return write_box(&box);
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_const_pointer_parameter_reassignment.c"}
+int replace(int * const value, int *replacement)
+{
+    value = replacement;
+    return 0;
+}
+
+int main(void)
+{
+    int first;
+    int second;
+
+    return replace(&first, &second);
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_const_pointer_reassignment.c"}
+int main(void)
+{
+    int first;
+    int second;
+    int * const fixed = &first;
+
+    fixed = &second;
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_const_pointer_removal.c"}
+int write_value(int *value)
+{
+    *value = 2;
+    return *value;
+}
+
+int main(void)
+{
+    const int value = 1;
+
+    return write_value(&value);
+}
+@@@ end

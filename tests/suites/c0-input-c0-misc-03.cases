@@ -1,0 +1,567 @@
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/tagged_bare_record_member_incomplete_field.c"}
+/* MC-063 negative: a named field still requires a complete object type;
+ * only a bare tagged declaration is permitted to leave the tag incomplete. */
+struct Missing;
+struct Reject { struct Missing member; };
+int main(void) { return 0; }
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/tagged_bare_record_members.c"}
+/* MC-063: only a directly written, tagless struct/union contributes an
+ * anonymous member. Tagged and typedef-only declarations do not add fields. */
+struct Full { int x; };
+union NamedUnion { int x; };
+typedef struct { int z; } Alias;
+
+struct TaggedBare { struct Full; int y; };
+struct TaggedUnionBare { union NamedUnion; int y; };
+struct AliasBare { Alias; int y; };
+struct Incomplete;
+struct IncompleteBare { struct Incomplete; int y; };
+
+struct Anonymous { struct { int x; }; int y; };
+struct ExplicitMember { struct Full inner; int y; };
+
+int main(void) {
+    struct Anonymous value;
+    value.x = 17;
+    value.y = 5;
+    return sizeof(struct TaggedBare) != 4U ||
+           sizeof(struct TaggedUnionBare) != 4U ||
+           sizeof(struct AliasBare) != 4U ||
+           sizeof(struct IncompleteBare) != 4U ||
+           sizeof(struct Anonymous) != 8U ||
+           sizeof(struct ExplicitMember) != 8U ||
+           value.x + value.y != 22;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/top_level_comma_condition.c"}
+static int cursor;
+
+int comma_condition_loop(void) {
+    int iterations = 0;
+
+    cursor = 0;
+    while (((void)(cursor += 1)), (cursor < 3)) {
+        iterations += 1;
+    }
+    return iterations == 2 && cursor == 3;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/transparent_union.c"}
+struct page { int value; };
+struct folio { int value; };
+struct encoded_page { int value; };
+
+typedef union {
+    struct page **pages;
+    struct folio **folios;
+    struct encoded_page **encoded_pages;
+} release_pages_arg __attribute__((__transparent_union__));
+
+int release_pages(release_pages_arg arg, int nr)
+{
+    return arg.folios == ((void *)0) ? 0 : nr;
+}
+
+int call_page(struct page **pages)
+{
+    return release_pages(pages, 1);
+}
+
+int call_folio(struct folio **folios)
+{
+    return release_pages(folios, 2);
+}
+
+int call_encoded(struct encoded_page **encoded_pages)
+{
+    return release_pages(encoded_pages, 3);
+}
+
+int call_null(void)
+{
+    return release_pages(0, 4);
+}
+
+typedef int (*release_pages_fn)(release_pages_arg, int);
+
+int call_indirect(release_pages_fn fn, struct folio **folios)
+{
+    return fn(folios, 5);
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/typeof_generic.c"}
+extern int generic_side_effect(void);
+
+int typeof_function_redeclaration(int value) {
+    return value;
+}
+extern typeof(typeof_function_redeclaration) typeof_function_redeclaration;
+
+struct TypeofPending;
+extern __attribute__((section(".probe.typeof.incomplete")))
+    __typeof__(struct TypeofPending) typeof_pending_object;
+
+void *typeof_incomplete_object_address(void) {
+    return &typeof_pending_object;
+}
+
+unsigned long generic_selected_value(unsigned long value) {
+    return _Generic(value,
+                    int: 3UL,
+                    unsigned long: 7UL,
+                    default: 9UL);
+}
+
+unsigned long generic_default_value(void *value) {
+    return _Generic(value,
+                    int: 3UL,
+                    unsigned long: 7UL,
+                    default: 9UL);
+}
+
+unsigned long generic_controlling_is_unevaluated(void) {
+    return _Generic(generic_side_effect(),
+                    int: 11UL,
+                    default: 13UL);
+}
+
+unsigned long typeof_expression_size(unsigned long *value) {
+    return sizeof(typeof(*value));
+}
+
+unsigned long typeof_type_name_size(void) {
+    return sizeof(__typeof__(unsigned long));
+}
+
+unsigned long typeof_generic_pointer_size(const void *addr) {
+    return sizeof(const volatile typeof(
+        _Generic((*(unsigned long *)addr),
+                 char: (char)0,
+                 unsigned char: (unsigned char)0,
+                 signed char: (signed char)0,
+                 unsigned short: (unsigned short)0,
+                 signed short: (signed short)0,
+                 unsigned int: (unsigned int)0,
+                 signed int: (signed int)0,
+                 unsigned long: (unsigned long)0,
+                 signed long: (signed long)0,
+                 unsigned long long: (unsigned long long)0,
+                 signed long long: (signed long long)0,
+                 default: (*(unsigned long *)addr))) *);
+}
+
+
+struct QueryTail {
+    int head;
+    unsigned char tail[];
+};
+
+unsigned long typeof_flexible_array_pointer_size(struct QueryTail *value) {
+    return sizeof(typeof(value->tail) *);
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/unbounded_for_break.c"}
+int main(void)
+{
+    int outer;
+    int inner;
+    int result;
+
+    result = 0;
+    for (outer = 0; ; ++outer) {
+        for (inner = 0; ; ++inner) {
+            result = result + 1;
+            if (inner == 2) {
+                break;
+            }
+        }
+        result = result + inner;
+        result = result + 10;
+        if (outer == 1) {
+            break;
+        }
+    }
+    result = result + outer;
+    return result;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/unnamed_bit_fields.c"}
+typedef _Bool bool;
+
+struct full_unit_pad {
+    char tag;
+    int :32;
+    char tail;
+};
+
+struct zero_width_barrier {
+    char tag;
+    int :0;
+    char tail;
+};
+
+struct bool_bits {
+    bool first : 1;
+    bool second : 1;
+    char tail;
+};
+
+struct signed_bits {
+    int signed_three : 3;
+    char tail;
+};
+
+struct int_bits {
+    unsigned int low : 10;
+    unsigned int high : 12;
+    char tail;
+};
+
+struct short_boundary_bits {
+    unsigned short low : 10;
+    unsigned short high : 12;
+    char tail;
+};
+
+struct named_zero_barrier {
+    unsigned int first : 1;
+    unsigned int :0;
+    unsigned int second : 1;
+    char tail;
+};
+
+static struct bool_bits static_bool_bits = {
+    .second = 1,
+    .first = 1,
+    .tail = 5,
+};
+
+static struct int_bits static_int_bits = {
+    .high = 0xabc,
+    .low = 0x155,
+    .tail = 7,
+};
+
+unsigned long full_unit_tail_offset(void) {
+    return __builtin_offsetof(struct full_unit_pad, tail);
+}
+
+unsigned long zero_width_tail_offset(void) {
+    return __builtin_offsetof(struct zero_width_barrier, tail);
+}
+
+unsigned long bool_tail_offset(void) {
+    return __builtin_offsetof(struct bool_bits, tail);
+}
+
+unsigned long signed_tail_offset(void) {
+    return __builtin_offsetof(struct signed_bits, tail);
+}
+
+unsigned long signed_record_size(void) {
+    return sizeof(struct signed_bits);
+}
+
+unsigned long int_tail_offset(void) {
+    return __builtin_offsetof(struct int_bits, tail);
+}
+
+unsigned long short_boundary_tail_offset(void) {
+    return __builtin_offsetof(struct short_boundary_bits, tail);
+}
+
+unsigned long named_zero_tail_offset(void) {
+    return __builtin_offsetof(struct named_zero_barrier, tail);
+}
+
+int read_bool_second(struct bool_bits *bits) {
+    return bits->second;
+}
+
+void write_bool_second(struct bool_bits *bits, int value) {
+    bits->second = value;
+}
+
+int read_signed_three(struct signed_bits *bits) {
+    return bits->signed_three;
+}
+
+unsigned int read_int_high(struct int_bits *bits) {
+    return bits->high;
+}
+
+void add_int_high(struct int_bits *bits, unsigned int value) {
+    bits->high += value;
+}
+
+unsigned int increment_barrier_second(struct named_zero_barrier *bits) {
+    return ++bits->second;
+}
+
+int zero_initialize_unnamed_bit_fields(void) {
+    struct named_zero_barrier value = {0};
+    return value.first == 0 && value.second == 0 && value.tail == 0 ? 0 : 1;
+}
+
+int main(void) {
+    return full_unit_tail_offset() == 8UL && zero_width_tail_offset() == 4UL &&
+                   bool_tail_offset() == 1UL && signed_tail_offset() == 1UL &&
+                   signed_record_size() == 4UL && int_tail_offset() == 3UL &&
+                   short_boundary_tail_offset() == 4UL && named_zero_tail_offset() == 5UL
+               ? 0
+               : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/unnamed_prototype_parameter.c"}
+int consume(int);
+void install(void (*)(void));
+
+static void callback(void) {
+}
+
+int main(void) {
+    install(callback);
+    return consume(0);
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/unsigned_64_literals.c"}
+typedef unsigned long long MiniU64;
+
+_Static_assert(sizeof(2147483648) == sizeof(long),
+               "decimal literal should select long after int overflow");
+_Static_assert((0xffffffff >> 31) == 1,
+               "hex literal should select unsigned int when signed int cannot represent it");
+_Static_assert(sizeof(0x8000000000000000) == sizeof(unsigned long),
+               "large hex literal should select unsigned long on RV64");
+
+MiniU64 max_unsigned_64(void) {
+    return 18446744073709551615ULL;
+}
+
+MiniU64 top_unsigned_bit(void) {
+    return 18446744073709551615ULL >> 63;
+}
+
+int unsigned_max_above_signed_max(void) {
+    return 18446744073709551615ULL > 9223372036854775807ULL;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/unsigned_declarations.c"}
+int main(void)
+{
+    unsigned i, j, k;
+    unsigned int *first, *second;
+
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/unsupported_transparent_union_nonpointer.c"}
+typedef union {
+    unsigned long value;
+    void *pointer;
+} mixed_arg __attribute__((__transparent_union__));
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/volatile_parameter.c"}
+typedef struct {
+    double rSum;
+    double rErr;
+} VolatileSumCtx;
+
+static void volatile_parameter_step(volatile VolatileSumCtx *pSum,
+                                    volatile double r)
+{
+    volatile double s = pSum->rSum;
+    volatile double t = s + r;
+
+    pSum->rErr += (s - t) + r;
+    pSum->rSum = t;
+}
+
+double volatile_parameter_probe(double a, double b)
+{
+    VolatileSumCtx sum = {a, 0.0};
+    volatile_parameter_step(&sum, b);
+    return sum.rSum + sum.rErr;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/volatile_qualifiers.c"}
+typedef int flag_t;
+typedef void (*hook_t)(int);
+
+struct State {
+    volatile flag_t trap;
+    const volatile int status;
+    int * volatile cursor;
+    volatile hook_t hook;
+};
+
+int read_state(struct State *state) {
+    volatile int copy;
+    copy = state->trap;
+    return copy + state->status + *state->cursor;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/while_loop.c"}
+int main(void)
+{
+#if CASE == 1
+    int x = 0;
+    while (x < 5)
+        x = x + 1;
+    return x;
+#elif CASE == 2
+    int i = 1;
+    int sum = 0;
+    while (i <= 5) {
+        sum = sum + i;
+        i = i + 1;
+    }
+    return sum;
+#elif CASE == 3
+    int x = 7;
+    while (0)
+        x = 9;
+    return x;
+#elif CASE == 4
+    int x = 0;
+    int y = 0;
+    int count = 0;
+    while (x < 3) {
+        y = 0;
+        while (y < 2) {
+            count = count + 1;
+            y = y + 1;
+        }
+        x = x + 1;
+    }
+    return count;
+#elif CASE == 5
+    int x = 0;
+    while (1) {
+        x = x + 1;
+        if (x == 4)
+            return x;
+    }
+#else
+#error unsupported while test case
+#endif
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/wide_integer_literal.c"}
+long long largest_signed(void) {
+    return 9223372036854775807LL;
+}
+
+long long near_largest_signed(void) {
+    return 9223372036854775806LL;
+}
+
+int main(void) {
+    return largest_signed() > near_largest_signed() ? 0 : 1;
+}
+
+enum binary_flags {
+    BINARY_FLAG_READ = 0b00000001,
+    BINARY_FLAG_WRITE = 0b00000100
+};
+
+unsigned int binary_literal_value(void) {
+    return 0b10101010U;
+}
+
+int binary_enum_value(void) {
+    return BINARY_FLAG_READ | BINARY_FLAG_WRITE;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/wide_pointer_offset_runtime.c"}
+/* The target-neutral Core POINTER_OFFSET accepts 128-bit signed/unsigned
+ * subscripts. On LP64 the low 64 bits determine the scaled displacement;
+ * signed -3 has an all-ones high limb, so this exercises the wide SSA slot.
+ * GNU complete empty records additionally have a zero-byte pointer stride. */
+typedef signed __int128 signed128;
+typedef unsigned __int128 unsigned128;
+struct ZeroWidth { };
+static struct ZeroWidth zero_objects[3];
+static volatile long signed_source = -3;
+static volatile unsigned long unsigned_source = 2;
+static int values[16];
+
+int main(void) {
+    signed128 back = (signed128)signed_source;
+    unsigned128 forward = (unsigned128)unsigned_source;
+    int *origin;
+    int *left;
+    int *right;
+    struct ZeroWidth *zero;
+    values[4] = 11;
+    values[9] = 19;
+    origin = &values[7];
+    left = origin + back;
+    right = origin + forward;
+    if (left != &values[4] || right != &values[9]) return 1;
+    if (*left != 11 || *right != 19) return 2;
+    zero = zero_objects;
+    if (zero + back != zero || zero + forward != zero) return 3;
+    return 42;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/wide_string_literal.c"}
+typedef unsigned char u8;
+typedef unsigned short u16;
+typedef unsigned int u32;
+typedef unsigned long efi_status_t;
+typedef u16 efi_char16_t;
+
+typedef struct {
+    u8 bytes[16];
+} efi_guid_t;
+
+typedef efi_status_t efi_get_variable_t(
+    efi_char16_t *name, efi_guid_t *vendor, u32 *attr, unsigned long *data_size, void *data);
+
+_Static_assert(sizeof(L"A") == 4, "-fshort-wchar wide literal size");
+
+static efi_status_t wide_efi_call(efi_get_variable_t *get_var) {
+    unsigned long size = 1;
+    u8 secboot = 0;
+
+    return get_var(L"SecureBoot", (efi_guid_t *)0, (u32 *)0, &size, &secboot);
+}
+
+int Lvalue_boundary(int Lvalue) {
+    return Lvalue + (int)wide_efi_call;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/x86_kvm_fpu_shim/asm/fpu/api.h"}
+/* Intentionally empty: x86_kvm_original_fpu_owner.c provides the minimal
+ * function-like FPU lock API names needed by the original Linux header.
+ * Never used to replace or patch arch/x86/kvm/fpu.h itself. */
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/xgene_parenthesized_pointer_record_field.c"}
+/* Linux xgene_enet_ring.h: `struct sk_buff *(*rx_skb);` is a pointer-to-
+ * pointer object field, not a function pointer (no parameter suffix follows). */
+struct Packet { int bytes; };
+struct Ring {
+    struct Packet *(*rx_skb);
+    struct Packet *(*const owner);
+    struct Packet *(*deliver)(void);
+    struct Packet *(*buffers)[3];
+};
+
+static struct Packet packet = { 17 };
+static struct Packet *head = &packet;
+static struct Packet *buffer_rows[3] = { &packet, 0, &packet };
+static struct Packet *next_packet(void) { return &packet; }
+static struct Ring ring = {
+    .rx_skb = &head,
+    .owner = &head,
+    .deliver = next_packet,
+    .buffers = &buffer_rows,
+};
+int main(void) {
+    return ring.rx_skb == &head && *ring.rx_skb == &packet &&
+           (*ring.owner)->bytes == 17 && ring.deliver() == &packet &&
+           (*ring.buffers)[2] == &packet ? 0 : 1;
+}
+@@@ end

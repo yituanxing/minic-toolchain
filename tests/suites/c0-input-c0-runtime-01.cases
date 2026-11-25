@@ -1,0 +1,202 @@
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_runtime_array_bound.c"}
+int main(void) {
+    int count = 4;
+    int values[count];
+    return values[0];
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_runtime_record_array_backward_designator.c"}
+struct runtime_record_array_probe {
+    int value;
+};
+
+int invalid_runtime_record_array_backward_designator(void) {
+    struct runtime_record_array_probe items[3] = {
+        [1] = {.value = 1},
+        [0] = {.value = 2},
+    };
+    return items[0].value;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_runtime_record_array_range_designator.c"}
+struct runtime_record_array_probe {
+    int value;
+};
+
+int invalid_runtime_record_array_range_designator(void) {
+    struct runtime_record_array_probe items[3] = {
+        [0 ... 1] = {.value = 1},
+    };
+    return items[0].value;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/runtime_designated_positional.c"}
+struct triple { int a, b, c; };
+
+int designated_then_positional(int seed) {
+    struct triple v = {
+        .a = (seed + 1) * 1,
+        (seed + 2) * 1,
+        (seed + 3) * 1
+    };
+    return v.a * 100 + v.b * 10 + v.c;
+}
+
+int main(void) { return designated_then_positional(4) == 567 ? 0 : 1; }
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/runtime_local_array_initializer.c"}
+struct attribute_group {
+    int value;
+};
+
+const struct attribute_group *probe(const struct attribute_group *group)
+{
+    return group;
+}
+
+int consume(const struct attribute_group **groups)
+{
+    return groups[0] != ((void *)0) && groups[1] == ((void *)0);
+}
+
+int linux_shape(const struct attribute_group *grp)
+{
+    const struct attribute_group *groups[] = { probe(grp), ((void *)0) };
+
+    return sizeof(groups) == 2 * sizeof(groups[0]) ? consume(groups) : 0;
+}
+
+int fixed_tail_zero(void)
+{
+    int values[3] = { 7, 9 };
+
+    return values[0] + values[1] + values[2];
+}
+
+int main(void)
+{
+    return fixed_tail_zero() == 16 ? 0 : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/runtime_nested_array_arena_growth.c"}
+/* MC-039: parsing sizeof(type) inside a nested runtime array initializer
+ * may grow Program.array_types before the next nested element is parsed. */
+int main(void) {
+    (void)sizeof(int[3]);  (void)sizeof(int[4]);
+    (void)sizeof(int[5]);  (void)sizeof(int[6]);
+    (void)sizeof(int[7]);  (void)sizeof(int[8]);
+    (void)sizeof(int[9]);  (void)sizeof(int[10]);
+    (void)sizeof(int[11]); (void)sizeof(int[12]);
+    (void)sizeof(int[13]); (void)sizeof(int[14]);
+    (void)sizeof(int[15]);
+#ifndef MC039_SKIP_LAST_PREFIX
+    (void)sizeof(int[16]);
+#endif
+#ifdef MC039_EXTRA_PREFIX
+    (void)sizeof(int[17]);
+#endif
+#ifdef MC039_EXTRA_PREFIX_2
+    (void)sizeof(int[18]);
+#endif
+    int values[2][1] = {{sizeof(int[777])}, {5}};
+    return values[0][0] + values[1][0] == (int)sizeof(int[777]) + 5 ? 0 : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/runtime_record_array_initializer.c"}
+typedef unsigned char u8;
+typedef struct {
+    u8 b[16];
+} guid_t;
+
+static int consume_guid(guid_t *guid) {
+    return guid->b[0] + guid->b[15];
+}
+
+int linux_guid_compound_literal(void) {
+    return consume_guid(&(guid_t){{(0x8be4df61) & 0xff,
+                                   ((0x8be4df61) >> 8) & 0xff,
+                                   ((0x8be4df61) >> 16) & 0xff,
+                                   ((0x8be4df61) >> 24) & 0xff,
+                                   (0x93ca) & 0xff,
+                                   ((0x93ca) >> 8) & 0xff,
+                                   (0x11d2) & 0xff,
+                                   ((0x11d2) >> 8) & 0xff,
+                                   0xaa,
+                                   0x0d,
+                                   0x00,
+                                   0xe0,
+                                   0x98,
+                                   0x03,
+                                   0x2b,
+                                   0x8c}});
+}
+
+struct timespec64_probe {
+    long tv_sec;
+    long tv_nsec;
+};
+
+long runtime_record_array_local(long mtime) {
+    struct timespec64_probe t[2] = {{.tv_sec = mtime}, {.tv_sec = mtime}};
+    return t[0].tv_sec + t[1].tv_sec;
+}
+
+struct runtime_record_array_probe {
+    long first;
+    long second;
+};
+
+long runtime_record_array_designated(long value) {
+    struct runtime_record_array_probe items[4] = {
+        [1] = {.first = value},
+        {.second = value},
+    };
+    return items[0].first + items[0].second + items[1].first + items[1].second +
+           items[2].first + items[2].second + items[3].first + items[3].second;
+}
+
+long runtime_inferred_record_array(long value) {
+    struct runtime_record_array_probe items[] = {
+        {.first = value},
+        {.second = value},
+    };
+    return (long)(sizeof(items) / sizeof(items[0])) + items[0].first + items[1].second;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/runtime_record_array_value_initializer.c"}
+struct pair { int left; int right; };
+
+int main(void) {
+    struct pair seed = { 3, 4 };
+    struct pair *ptr = &seed;
+    struct pair values[] = { *ptr, { 5, 6 } };
+    struct pair fixed[2] = { *ptr, { 7, 8 } };
+    return values[0].left == 3 && values[0].right == 4 &&
+                   values[1].left == 5 && values[1].right == 6 &&
+                   fixed[0].left == 3 && fixed[0].right == 4 &&
+                   fixed[1].left == 7 && fixed[1].right == 8
+               ? 0
+               : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/runtime_record_zero_shorthand.c"}
+struct inner {
+    long left;
+    long right;
+};
+struct outer {
+    struct inner nested;
+    long tail;
+};
+static long run(void) {
+    struct outer first = {0};
+    struct outer second = {
+        0,
+    };
+    return first.nested.left + first.nested.right + first.tail + second.nested.left +
+           second.nested.right + second.tail;
+}
+int main(void) {
+    return (int)run();
+}
+@@@ end

@@ -1,0 +1,409 @@
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/packed_bitfield_cross_word_64_limit.c"}
+/* Admitted by GNU C, but currently exceeds Core's 64-bit extraction
+ * container (64-bit field starting at a nonzero bit offset takes 9 bytes).
+ * This must fail closed until a split high/low transport is available. */
+struct __attribute__((packed)) PackedNineBytes {
+    unsigned int first : 1;
+    unsigned long long value : 64;
+};
+
+_Static_assert(sizeof(struct PackedNineBytes) == 9U, "GNU 65-bit packed record");
+
+unsigned long long read_nine(const struct PackedNineBytes *p) {
+    return p->value;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/packed_bitfield_cross_word_window.c"}
+/* GCC permits a packed 32-bit bit-field to begin after another bit-field.
+ * Its storage window spans five bytes even though the value width is 32 bits. */
+struct __attribute__((packed)) CrossWordBits {
+    unsigned int first : 1;
+    unsigned int value : 32;
+};
+
+struct __attribute__((packed)) CrossWordSignedBits {
+    unsigned int first : 1;
+    signed int value : 32;
+};
+
+_Static_assert(sizeof(struct CrossWordBits) == 5U, "packed 33 bits");
+_Static_assert(sizeof(struct CrossWordSignedBits) == 5U, "signed packed 33 bits");
+
+int signed_crossword(struct CrossWordSignedBits *p) {
+    p->value = -17;
+    if (p->value++ != -17) return 99;
+    return p->value += 7;
+}
+
+unsigned read_crossword(const struct CrossWordBits *p) {
+    return p->value;
+}
+
+void write_crossword(struct CrossWordBits *p, unsigned v) {
+    p->value = v;
+}
+
+unsigned compound_crossword(struct CrossWordBits *p) {
+    return p->value += 3U;
+}
+
+unsigned update_crossword(struct CrossWordBits *p) {
+    return p->value++;
+}
+
+typedef unsigned long size_t;
+extern void *mmap(void *, size_t, int, int, int, long);
+extern int mprotect(void *, size_t, int);
+extern int munmap(void *, size_t);
+
+int main(void) {
+    unsigned char *base = (unsigned char *)mmap((void *)0, 8192UL, 3, 34, -1, 0L);
+    struct CrossWordBits *p;
+    struct CrossWordSignedBits *signed_p;
+    unsigned i;
+
+    if (base == (void *)-1) return 1;
+    p = (struct CrossWordBits *)(base + 4096UL - sizeof(*p));
+    for (i = 0U; i < sizeof(*p); ++i) ((unsigned char *)p)[i] = 0U;
+    if (mprotect(base + 4096UL, 4096UL, 0) != 0) return 2;
+    p->first = 1U;
+    write_crossword(p, 0x87654321U);
+    if (p->first != 1U || read_crossword(p) != 0x87654321U) return 3;
+    if (compound_crossword(p) != 0x87654324U) return 4;
+    if (update_crossword(p) != 0x87654324U) return 5;
+    if (p->first != 1U || read_crossword(p) != 0x87654325U) return 6;
+    signed_p = (struct CrossWordSignedBits *)p;
+    signed_p->first = 1U;
+    if (signed_crossword(signed_p) != -9 ||
+        signed_p->value != -9 || signed_p->first != 1U) return 8;
+    if (munmap(base, 8192UL) != 0) return 7;
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/packed_bitfield_field_layout.c"}
+/* GNU field attributes are layout facts even on a named bit-field. */
+struct PackedHead {
+    char lead;
+    __attribute__((packed)) unsigned int bits : 3;
+    char tail;
+};
+
+struct PackedTrailing {
+    char lead;
+    unsigned int bits : 3 __attribute__((packed));
+    char tail;
+};
+
+struct NormalField {
+    char lead;
+    unsigned int bits : 3;
+    char tail;
+};
+
+struct AlignedPackedField {
+    char lead;
+    __attribute__((packed, aligned(2))) unsigned int bits : 3;
+    char tail;
+};
+
+struct PackedMulti {
+    char lead;
+    __attribute__((packed)) unsigned int first : 3, second : 5;
+    char tail;
+};
+
+union PackedUnion {
+    __attribute__((packed)) unsigned int bits : 3;
+    char byte;
+};
+
+struct PackedUnnamed {
+    char lead;
+    __attribute__((packed)) unsigned int : 3;
+    char tail;
+};
+
+_Static_assert(sizeof(struct PackedHead) == 3 &&
+                   _Alignof(struct PackedHead) == 1,
+               "declaration-head packed bit-field layout");
+_Static_assert(sizeof(struct PackedTrailing) == 3 &&
+                   _Alignof(struct PackedTrailing) == 1,
+               "post-width packed bit-field layout");
+_Static_assert(sizeof(struct NormalField) == 4 &&
+                   _Alignof(struct NormalField) == 4,
+               "ordinary named bit-field retains ABI alignment");
+_Static_assert(sizeof(struct AlignedPackedField) == 4 &&
+                   _Alignof(struct AlignedPackedField) == 2,
+               "field aligned(2) overrides packed minimum");
+_Static_assert(sizeof(struct PackedMulti) == 3 &&
+                   _Alignof(struct PackedMulti) == 1,
+               "declaration-head attributes apply to comma bit-fields");
+_Static_assert(sizeof(union PackedUnion) == 1 &&
+                   _Alignof(union PackedUnion) == 1,
+               "union bit-field carries packed storage semantics");
+_Static_assert(sizeof(struct PackedUnnamed) == 3 &&
+                   _Alignof(struct PackedUnnamed) == 1,
+               "unnamed bit-field retains GNU declaration attributes");
+
+int main(void) {
+    struct PackedHead h = {1, 5, 3};
+    struct PackedTrailing t = {1, 6, 3};
+    struct AlignedPackedField a = {1, 7, 3};
+    struct PackedMulti m = {1, 3, 17, 5};
+    union PackedUnion u = {.bits = 4};
+    return h.bits == 5 && t.bits == 6 && a.bits == 7 &&
+           m.first == 3 && m.second == 17 && u.bits == 4 ? 42 : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/packed_bitfield_guard_page.c"}
+/* GNU/MiniC native oracle for packed bit-fields at an allocation boundary.
+ * The record ends at the first page's last byte; a 32-bit load of `tail`
+ * would read two bytes of the PROT_NONE second page. */
+typedef unsigned long size_t;
+extern void *mmap(void *, size_t, int, int, int, long);
+extern int mprotect(void *, size_t, int);
+extern int munmap(void *, size_t);
+
+struct __attribute__((packed)) PackedBits {
+    unsigned char pad;
+    unsigned int lo : 5;
+    unsigned int hi : 17;
+    unsigned int tail : 10;
+};
+
+/* A full four-byte packed record is still allowed to start at an odd
+ * address; byte_offset=0 and in-record bounds alone cannot justify ld.w. */
+struct __attribute__((packed)) PackedBase {
+    unsigned int low : 3;
+    unsigned int unused : 29;
+};
+
+struct __attribute__((packed)) PackedSignedTail {
+    unsigned char prefix[3];
+    signed int value : 9;
+};
+
+__attribute__((noinline)) int read_signed_tail(const struct PackedSignedTail *p) {
+    return p->value;
+}
+
+__attribute__((noinline)) int modify_signed_tail(struct PackedSignedTail *p) {
+    p->value = -13;
+    if (p->value++ != -13) return 99;
+    return p->value += 4;
+}
+
+__attribute__((noinline)) unsigned read_base(const struct PackedBase *p) {
+    return p->low;
+}
+
+__attribute__((noinline)) void write_base(struct PackedBase *p, unsigned value) {
+    p->low = value;
+}
+
+__attribute__((noinline)) unsigned read_tail(const struct PackedBits *p) {
+    return p->tail;
+}
+
+__attribute__((noinline)) unsigned read_high(const struct PackedBits *p) {
+    return p->hi;
+}
+
+__attribute__((noinline)) void write_tail(struct PackedBits *p, unsigned value) {
+    p->tail = value;
+}
+
+__attribute__((noinline)) void write_high(struct PackedBits *p, unsigned value) {
+    p->hi = value;
+}
+
+__attribute__((noinline)) unsigned update_tail(struct PackedBits *p) {
+    return p->tail++;
+}
+
+__attribute__((noinline)) unsigned compound_tail(struct PackedBits *p) {
+    return p->tail += 3U;
+}
+
+int main(void) {
+    unsigned char *allocation;
+    struct PackedBits *p;
+    struct PackedBase *unaligned;
+    struct PackedSignedTail *signed_tail;
+    unsigned i;
+
+    if (sizeof(struct PackedBits) != 5U) return 1;
+    allocation = (unsigned char *)mmap((void *)0, 8192UL, 3, 34, -1, 0L);
+    if (allocation == (void *)-1) return 2;
+    p = (struct PackedBits *)(allocation + 4096UL - sizeof(*p));
+    for (i = 0U; i != sizeof(*p); ++i)
+        ((unsigned char *)p)[i] = 0U;
+    if (mprotect(allocation + 4096UL, 4096UL, 0) != 0) return 3;
+
+    write_high(p, 0x15555U);
+    if (read_high(p) != 0x15555U) return 4;
+    write_tail(p, 511U);
+    if (read_tail(p) != 511U) return 5;
+    if (update_tail(p) != 511U || read_tail(p) != 512U) return 6;
+    if (compound_tail(p) != 515U || read_tail(p) != 515U) return 7;
+    if (read_high(p) != 0x15555U) return 8;
+    unaligned = (struct PackedBase *)(allocation + 4096UL - 5UL);
+    if (sizeof(*unaligned) != 4U) return 10;
+    write_base(unaligned, 5U);
+    if (read_base(unaligned) != 5U) return 11;
+    signed_tail = (struct PackedSignedTail *)(allocation + 4096UL - 5UL);
+    if (sizeof(*signed_tail) != 5U) return 12;
+    for (i = 0U; i != sizeof(*signed_tail); ++i)
+        ((unsigned char *)signed_tail)[i] = 0U;
+    if (modify_signed_tail(signed_tail) != -8 ||
+        read_signed_tail(signed_tail) != -8) return 13;
+    if (munmap(allocation, 8192UL) != 0) return 9;
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/packed_record_layout.c"}
+struct __attribute__((__packed__)) packed_sample {
+    unsigned char first;
+    unsigned short second;
+    unsigned char third;
+};
+
+struct suffix_packed_sample {
+    unsigned char first;
+    unsigned short second;
+    unsigned char third;
+} __attribute__((__packed__));
+
+struct forward_packed_sample;
+struct __attribute__((__packed__)) forward_packed_sample {
+    unsigned char first;
+    unsigned short second;
+};
+
+static struct packed_sample sample __attribute__((used));
+static struct suffix_packed_sample suffix_sample __attribute__((used));
+static struct forward_packed_sample forward_sample __attribute__((used));
+
+unsigned short read_second(void) {
+    return sample.second;
+}
+
+unsigned char read_third(void) {
+    return sample.third;
+}
+
+int main(void) {
+    return sizeof(struct packed_sample) == 4 && sizeof(struct suffix_packed_sample) == 4 &&
+                   sizeof(struct forward_packed_sample) == 3
+               ? 0
+               : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/packed_zero_width_bitfield_barrier.c"}
+/* GNU unnamed zero-width bit-fields retain their *natural type boundary*
+ * even when a record's packed attribute or pragma pack caps other members.
+ * This boundary does not increase the record's own alignment requirement. */
+struct __attribute__((packed)) PackedInt {
+    char lead;
+    unsigned int : 0;
+    char tail;
+};
+
+#pragma pack(push, 1)
+struct PragmaInt {
+    char lead;
+    unsigned int : 0;
+    char tail;
+};
+#pragma pack(pop)
+
+struct __attribute__((packed)) PackedShort {
+    char lead;
+    unsigned short : 0;
+    char tail;
+};
+
+struct __attribute__((packed)) PackedLongLong {
+    char lead;
+    unsigned long long : 0;
+    char tail;
+};
+
+struct FieldPackedInt {
+    char lead;
+    unsigned int __attribute__((packed)) : 0;
+    char tail;
+};
+
+struct __attribute__((packed)) FieldAlignedInt {
+    char lead;
+    unsigned int __attribute__((aligned(8))) : 0;
+    char tail;
+};
+
+struct __attribute__((packed)) PackedAcrossBits {
+    char lead;
+    unsigned int low : 3;
+    unsigned int : 0;
+    unsigned int high : 4;
+    char tail;
+};
+
+struct __attribute__((packed)) PackedWithoutBarrier {
+    char lead;
+    unsigned int : 3;
+    char tail;
+};
+
+struct OrdinaryInt {
+    char lead;
+    unsigned int : 0;
+    char tail;
+};
+
+_Static_assert(__builtin_offsetof(struct PackedInt, tail) == 4 &&
+                   sizeof(struct PackedInt) == 5 &&
+                   _Alignof(struct PackedInt) == 1,
+               "packed int:0 is an alignment fence, not record alignment");
+_Static_assert(__builtin_offsetof(struct PragmaInt, tail) == 4 &&
+                   sizeof(struct PragmaInt) == 5 &&
+                   _Alignof(struct PragmaInt) == 1,
+               "pragma pack(1) does not erase int:0 fence");
+_Static_assert(__builtin_offsetof(struct PackedShort, tail) == 2 &&
+                   sizeof(struct PackedShort) == 3,
+               "short:0 uses its two-byte natural boundary");
+_Static_assert(__builtin_offsetof(struct PackedLongLong, tail) == 8 &&
+                   sizeof(struct PackedLongLong) == 9,
+               "long long:0 uses its eight-byte natural boundary");
+_Static_assert(__builtin_offsetof(struct FieldPackedInt, tail) == 4 &&
+                   sizeof(struct FieldPackedInt) == 5 &&
+                   _Alignof(struct FieldPackedInt) == 1,
+               "field-level packed does not erase unnamed zero-width fence");
+_Static_assert(__builtin_offsetof(struct FieldAlignedInt, tail) == 8 &&
+                   sizeof(struct FieldAlignedInt) == 9 &&
+                   _Alignof(struct FieldAlignedInt) == 1,
+               "field-level aligned(8) widens fence without aligning record");
+_Static_assert(__builtin_offsetof(struct PackedAcrossBits, tail) == 5 &&
+                   sizeof(struct PackedAcrossBits) == 6,
+               "zero-width fence after partial packed storage unit");
+_Static_assert(__builtin_offsetof(struct PackedWithoutBarrier, tail) == 2 &&
+                   sizeof(struct PackedWithoutBarrier) == 3,
+               "nonzero unnamed bit-field does not act as a fence");
+_Static_assert(__builtin_offsetof(struct OrdinaryInt, tail) == 4 &&
+                   sizeof(struct OrdinaryInt) == 5,
+               "ordinary int:0 retains its existing boundary");
+
+struct PackedInt packed_global = {.lead = 1, .tail = 2};
+struct PragmaInt pragma_global = {.lead = 3, .tail = 4};
+struct PackedAcrossBits bits_global = {
+    .lead = 5, .low = 3, .high = 12, .tail = 6};
+
+int main(void) {
+    if (packed_global.tail != 2 || pragma_global.tail != 4 ||
+        bits_global.low != 3 || bits_global.high != 12 ||
+        bits_global.tail != 6) {
+        return 1;
+    }
+    return 42;
+}
+@@@ end

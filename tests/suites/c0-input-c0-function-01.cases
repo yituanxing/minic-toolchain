@@ -1,0 +1,318 @@
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/function_address_expression.c"}
+typedef int (*MiniUnary)(int value);
+
+static int increment(int value) {
+    return value + 1;
+}
+
+MiniUnary direct_function_address(void) {
+    return &increment;
+}
+
+MiniUnary cancel_function_dereference(MiniUnary function) {
+    return &*function;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/function_arena_borrow_lifetime.c"}
+int return_after_function_arena_growth(int value)
+{
+    return ({
+        extern int arena_growth_00(void);
+        extern int arena_growth_01(void);
+        extern int arena_growth_02(void);
+        extern int arena_growth_03(void);
+        extern int arena_growth_04(void);
+        extern int arena_growth_05(void);
+        extern int arena_growth_06(void);
+        extern int arena_growth_07(void);
+        extern int arena_growth_08(void);
+        extern int arena_growth_09(void);
+        extern int arena_growth_10(void);
+        extern int arena_growth_11(void);
+        extern int arena_growth_12(void);
+        extern int arena_growth_13(void);
+        extern int arena_growth_14(void);
+        extern int arena_growth_15(void);
+        extern int arena_growth_16(void);
+        extern int arena_growth_17(void);
+        extern int arena_growth_18(void);
+        extern int arena_growth_19(void);
+        extern int arena_growth_20(void);
+        extern int arena_growth_21(void);
+        extern int arena_growth_22(void);
+        extern int arena_growth_23(void);
+        extern int arena_growth_24(void);
+        extern int arena_growth_25(void);
+        extern int arena_growth_26(void);
+        extern int arena_growth_27(void);
+        extern int arena_growth_28(void);
+        extern int arena_growth_29(void);
+        extern int arena_growth_30(void);
+        extern int arena_growth_31(void);
+        value;
+    });
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/function_designator_call.c"}
+typedef int (*MiniBinary)(int left, int right);
+
+int call_pointer(MiniBinary function, int left, int right) {
+    return function(left, right);
+}
+
+int call_dereferenced_pointer(MiniBinary function, int left, int right) {
+    return (*function)(left, right);
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/function_linkage_inheritance.c"}
+static inline int read_timer_like(unsigned long *value) {
+    *value = 7UL;
+    return 0;
+}
+
+int read_timer_like(unsigned long *value);
+
+int main(void) {
+    unsigned long value = 0UL;
+    return read_timer_like(&value) == 0 && value == 7UL ? 0 : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/function_parameter_adjustment.c"}
+typedef int callback_t(int value);
+
+typedef int done_t(int value, void *private_data);
+
+int apply_callback(callback_t callback);
+int apply_callback(int (*callback)(int value))
+{
+    _Static_assert(sizeof(callback) == sizeof(void *), "function parameter adjusts to pointer");
+    return callback(7);
+}
+
+int invoke_done(done_t done, void *private_data)
+{
+    return done(5, private_data);
+}
+
+int plus_one(int value)
+{
+    return value + 1;
+}
+
+int finish(int value, void *private_data)
+{
+    return value + (private_data != (void *)0);
+}
+
+int main(void)
+{
+    int marker = 1;
+    return apply_callback(plus_one) == 8 && invoke_done(finish, &marker) == 6 ? 0 : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/function_pointer_array_redeclaration.c"}
+/* Linux ixgbe: multiple declarations of a parameter pointer to a fixed
+ * array may materialize distinct array descriptor IDs in the frontend.
+ * Compatibility is by element type and array shape, not descriptor ID. */
+typedef unsigned int u32;
+typedef int s32;
+
+struct ixgbe_hw { u32 tag; };
+extern s32 ixgbe_fw_phy_activity(struct ixgbe_hw *hw, u32 activity,
+                                u32 (*data)[4]);
+extern s32 ixgbe_fw_phy_activity(struct ixgbe_hw *hw, u32 activity,
+                                u32 (*data)[4]);
+s32 ixgbe_fw_phy_activity(struct ixgbe_hw *hw, u32 activity,
+                          u32 (*data)[4]) {
+    (void)hw;
+    (void)data;
+    return (s32)(activity + 15U);
+}
+
+/* The incomplete bound is compatible with the concrete bound. */
+extern s32 compatible_unknown_bound(u32 (*data)[]);
+s32 compatible_unknown_bound(u32 (*data)[4]) { (void)data; return 3; }
+
+/* Nested fixed arrays compare all dimensions recursively. */
+extern s32 compatible_nested_array(u32 (*data)[2][4]);
+s32 compatible_nested_array(u32 (*data)[2][4]) {
+    (void)data;
+    return 8;
+}
+
+int main(void) {
+    struct ixgbe_hw hw = { 10U };
+    u32 data[4] = { 1U, 2U, 3U, 4U };
+    u32 nested[2][4] = {{ 1U, 2U, 3U, 4U }, { 5U, 6U, 7U, 8U }};
+    return ixgbe_fw_phy_activity(&hw, 20U, &data) == 35 &&
+                   compatible_unknown_bound(&data) == 3 &&
+                   compatible_nested_array(&nested) == 8
+               ? 0 : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/function_pointer_parameter.c"}
+static void callback(void) {
+}
+
+int accept_callback(void (*function)(void));
+
+int main(void) {
+    return accept_callback(callback);
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/function_pointer_qualifiers.c"}
+typedef int callback_t(int value);
+
+struct Ops {
+    int (*const filter)(int value);
+    int (*volatile hook)(int value);
+};
+
+typedef int (*const const_callback_t)(int value);
+
+int call_filter(struct Ops *ops, int value) {
+    return ops->filter(value);
+}
+
+int call_hook(struct Ops *ops, int value) {
+    return ops->hook(value);
+}
+
+int call_typedef(const_callback_t callback, int value) {
+    return callback(value);
+}
+
+/* Array suffixes belong to the function-pointer declarator, not the function type. */
+extern int (*external_handlers[])(int value);
+static int (*static_handlers[1])(int value) = {0};
+
+int function_pointer_array_shape(void) {
+    return static_handlers[0] == 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/function_pointer_record_fields.c"}
+typedef long unsigned int size_t;
+
+struct Hooks {
+    void *(*alloc)(size_t size);
+    void (*free_fn)(void *);
+};
+
+int main(void)
+{
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/function_type_typedef.c"}
+typedef void(callback_type)(int);
+
+void install_callback(callback_type *callback);
+
+static void callback(int value) {
+}
+
+int main(void) {
+    install_callback(callback);
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/function_typed_declarator.c"}
+struct perf_branch_entry {
+    unsigned long from;
+};
+
+typedef int perf_snapshot_branch_stack_t(struct perf_branch_entry *entries, unsigned int cnt);
+typedef int (*perf_snapshot_branch_stack_ptr_t)(struct perf_branch_entry *entries,
+                                                unsigned int cnt);
+
+extern typeof(perf_snapshot_branch_stack_t) __SCT__perf_snapshot_branch_stack;
+extern perf_snapshot_branch_stack_t typed_direct;
+extern int typed_direct(struct perf_branch_entry *entries, unsigned int cnt);
+extern perf_snapshot_branch_stack_t(parenthesized_direct);
+extern perf_snapshot_branch_stack_ptr_t callback_slot;
+
+int invoke_typed(struct perf_branch_entry *entries) {
+    return __SCT__perf_snapshot_branch_stack(entries, 1U) + typed_direct(entries, 2U) +
+           parenthesized_direct(entries, 3U) + callback_slot(entries, 4U);
+}
+
+struct p_log;
+struct fs_parameter_spec;
+struct fs_parameter;
+struct fs_parse_result;
+
+typedef int fs_param_type(struct p_log *log,
+                          const struct fs_parameter_spec *spec,
+                          struct fs_parameter *param,
+                          struct fs_parse_result *result);
+
+fs_param_type fs_param_is_bool, fs_param_is_u32, fs_param_is_s32, fs_param_is_u64, fs_param_is_enum,
+    fs_param_is_string, fs_param_is_blob, fs_param_is_blockdev, fs_param_is_path, fs_param_is_fd;
+
+int invoke_function_typed_list(struct p_log *log,
+                               const struct fs_parameter_spec *spec,
+                               struct fs_parameter *param,
+                               struct fs_parse_result *result) {
+    return fs_param_is_bool(log, spec, param, result) + fs_param_is_fd(log, spec, param, result);
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/function_typed_prototype.c"}
+struct AES_ctx {
+    int RoundKey[176];
+};
+
+void AES_init_ctx(struct AES_ctx *ctx, const int *key);
+
+int main(void)
+{
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_function_attribute_on_pointer_object.c"}
+extern int __attribute__((__noinline__)) * bad_object;
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_function_linkage_conflict.c"}
+int helper(void);
+static int helper(void);
+
+int main(void)
+{
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_function_pointer_array_redeclaration.c"}
+typedef unsigned int u32;
+#if defined(BAD_BOUND)
+int incompatible(u32 (*data)[4]);
+int incompatible(u32 (*data)[5]);
+#elif defined(BAD_ELEMENT_QUALIFIER)
+int incompatible(u32 (*data)[4]);
+int incompatible(const u32 (*data)[4]);
+#elif defined(BAD_NESTED_BOUND)
+int incompatible(u32 (*data)[2][4]);
+int incompatible(u32 (*data)[2][5]);
+#else
+#error select BAD_* test mode
+#endif
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_function_pointer_object_function_attribute.c"}
+void (*__attribute__((noclone)) invalid_function_pointer_object)(void);
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_function_pointer_typedef_interleaved_attribute.c"}
+typedef void (*__attribute__((section(".bad.type"))) invalid_interleaved_type)(void);
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_function_typed_definition.c"}
+typedef int callback_t(int value);
+callback_t callback {
+    return 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_function_typed_redeclaration.c"}
+typedef int callback_t(int value);
+extern callback_t callback;
+extern int callback(long value);
+
+int main(void) {
+    return 0;
+}
+@@@ end

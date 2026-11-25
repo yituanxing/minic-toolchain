@@ -1,0 +1,600 @@
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/aarch64_neon_unsupported_alu.c"}
+typedef __Uint8x16_t vector128_u8;
+
+void xor_vector128(vector128_u8 *dst, const vector128_u8 *left,
+                   const vector128_u8 *right) {
+    *dst = *left ^ *right;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/aarch64_neon_vector128_add_core.c"}
+/* MiniC source-identity ADD test, distinct from the strict GNU ACLE header
+ * differential. It exercises real V-register Core lowering without a fake
+ * uint128/record surrogate. Cross-assembly/QEMU is a separate required gate. */
+typedef __Uint64x2_t vector128_u64;
+typedef __Uint8x16_t vector128_u8;
+
+union lanes64 {
+    vector128_u64 vec;
+    unsigned long long word[2];
+};
+
+union lanes8 {
+    vector128_u8 vec;
+    unsigned char byte[16];
+};
+
+static union lanes64 left64, right64, out64;
+static union lanes8 left8, right8, out8;
+
+int main(void) {
+    unsigned int i;
+    left64.word[0] = 0x123456789abcdef0ULL;
+    left64.word[1] = 0xdeadbeef00440088ULL;
+    right64.word[0] = 0xff00ff00ff00ff00ULL;
+    right64.word[1] = 0x0011223344556677ULL;
+    out64.vec = left64.vec + right64.vec;
+    if (out64.word[0] != (left64.word[0] + right64.word[0]) ||
+        out64.word[1] != (left64.word[1] + right64.word[1])) return 1;
+
+    for (i = 0; i < 16; ++i) {
+        left8.byte[i] = (unsigned char)(i * 13U + 5U);
+        right8.byte[i] = (unsigned char)(i * 7U + 9U);
+    }
+    out8.vec = left8.vec + right8.vec;
+    for (i = 0; i < 16; ++i)
+        if (out8.byte[i] != (unsigned char)(left8.byte[i] + right8.byte[i]))
+            return 2;
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/aarch64_neon_vector128_lanes.c"}
+/* Integer/polynomial Q-register lane families: exact lane arithmetic and
+ * canonical bitwise XOR, with distinct AAPCS64 Q-register identities. */
+typedef __Int16x8_t q16;
+typedef __Int32x4_t q32;
+typedef __Int64x2_t q64;
+typedef __Uint16x8_t uq16;
+typedef __Uint32x4_t uq32;
+typedef __Uint64x2_t uq64;
+typedef __Poly16x8_t pq16;
+typedef __Poly64x2_t pq64;
+
+q16 qadd16(q16 x, q16 y) { return x + y; }
+q32 qadd32(q32 x, q32 y) { return x + y; }
+q64 qadd64(q64 x, q64 y) { return x + y; }
+uq16 qxor16(uq16 x, uq16 y) { return x ^ y; }
+uq32 qxor32(uq32 x, uq32 y) { return x ^ y; }
+uq64 qxor64(uq64 x, uq64 y) { return x ^ y; }
+pq16 qpxor16(pq16 x, pq16 y) { return x ^ y; }
+pq64 qpxor64(pq64 x, pq64 y) { return x ^ y; }
+
+__attribute__((noinline)) q16 qninth16(
+    q16 a, q16 b, q16 c, q16 d, q16 e, q16 f, q16 g, q16 h, q16 i) {
+    return a + i;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/aarch64_neon_vector128_unsupported_add.c"}
+typedef __Uint64x2_t vector128_u64;
+typedef __Uint8x16_t vector128_u8;
+static vector128_u64 a, result;
+static vector128_u8 b;
+/* The implementation must reject mixed lane identities, even for ADD. */
+void unsupported_vector_add(void) { result = a + b; }
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/aarch64_neon_vector128_xor_core.c"}
+/* MiniC source-identity test, distinct from the strict GNU ACLE header
+ * differential. It exercises real V-register Core lowering without a fake
+ * uint128/record surrogate. Cross-assembly/QEMU is a separate required gate. */
+typedef __Uint64x2_t vector128_u64;
+typedef __Uint8x16_t vector128_u8;
+
+union lanes64 {
+    vector128_u64 vec;
+    unsigned long long word[2];
+};
+
+union lanes8 {
+    vector128_u8 vec;
+    unsigned char byte[16];
+};
+
+static union lanes64 left64, right64, out64;
+static union lanes8 left8, right8, out8;
+
+int main(void) {
+    unsigned int i;
+    left64.word[0] = 0x123456789abcdef0ULL;
+    left64.word[1] = 0xdeadbeef00440088ULL;
+    right64.word[0] = 0xff00ff00ff00ff00ULL;
+    right64.word[1] = 0x0011223344556677ULL;
+    out64.vec = left64.vec ^ right64.vec;
+    if (out64.word[0] != (left64.word[0] ^ right64.word[0]) ||
+        out64.word[1] != (left64.word[1] ^ right64.word[1])) return 1;
+
+    for (i = 0; i < 16; ++i) {
+        left8.byte[i] = (unsigned char)(i * 13U + 5U);
+        right8.byte[i] = (unsigned char)(i * 7U + 9U);
+    }
+    out8.vec = left8.vec ^ right8.vec;
+    for (i = 0; i < 16; ++i)
+        if (out8.byte[i] != (unsigned char)(left8.byte[i] ^ right8.byte[i]))
+            return 2;
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/aarch64_neon_vector64_abi.c"}
+/* AAPCS64 D-register ABI: named signed/unsigned byte vectors have exact
+ * eight-byte lane storage, survive direct/indirect calls and stack overflow,
+ * and return through v0 rather than an integer-class GPR. */
+typedef __Int8x8_t v8i8;
+typedef __Uint8x8_t v8u8;
+
+union lanes8 {
+    v8i8 signed_vector;
+    v8u8 unsigned_vector;
+    unsigned char byte[8];
+};
+
+static union lanes8 left, right, result;
+
+__attribute__((noinline)) v8i8 add8(v8i8 a, v8i8 b) {
+    return a + b;
+}
+
+__attribute__((noinline)) v8u8 xor8(v8u8 a, v8u8 b) {
+    return a ^ b;
+}
+
+__attribute__((noinline)) v8u8 ninth8(
+    v8u8 a, v8u8 b, v8u8 c, v8u8 d,
+    v8u8 e, v8u8 f, v8u8 g, v8u8 h, v8u8 i) {
+    return a ^ i;
+}
+
+int main(void) {
+    unsigned int i;
+    v8u8 (*indirect)(v8u8, v8u8) = xor8;
+    for (i = 0U; i < 8U; ++i) {
+        left.byte[i] = (unsigned char)(i * 17U + 1U);
+        right.byte[i] = (unsigned char)(i * 3U + 11U);
+    }
+    result.signed_vector = add8(left.signed_vector, right.signed_vector);
+    for (i = 0U; i < 8U; ++i)
+        if (result.byte[i] != (unsigned char)(left.byte[i] + right.byte[i]))
+            return 1;
+    result.unsigned_vector = indirect(left.unsigned_vector, right.unsigned_vector);
+    for (i = 0U; i < 8U; ++i)
+        if (result.byte[i] != (unsigned char)(left.byte[i] ^ right.byte[i]))
+            return 2;
+    result.unsigned_vector = ninth8(
+        left.unsigned_vector, left.unsigned_vector, left.unsigned_vector,
+        left.unsigned_vector, left.unsigned_vector, left.unsigned_vector,
+        left.unsigned_vector, left.unsigned_vector, right.unsigned_vector);
+    for (i = 0U; i < 8U; ++i)
+        if (result.byte[i] != (unsigned char)(left.byte[i] ^ right.byte[i]))
+            return 3;
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/aarch64_neon_vector64_basic.c"}
+typedef __Int8x8_t v8i8;
+typedef __Uint8x8_t v8u8;
+
+v8i8 add_d(v8i8 a, v8i8 b) {
+    return a + b;
+}
+
+v8u8 xor_d(v8u8 a, v8u8 b) {
+    return a ^ b;
+}
+
+v8i8 call_add_d(v8i8 value) {
+    return add_d(value, value);
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/aarch64_neon_vector64_lanes.c"}
+/* All integer/polynomial D-register lane layouts share the same AAPCS64
+ * eight-byte register carrier, but ADD must preserve element boundaries.
+ * Keep each source identity distinct: no byte-vector ABI substitutions. */
+typedef __Int8x8_t d8;
+typedef __Int16x4_t d16;
+typedef __Int32x2_t d32;
+typedef __Int64x1_t d64;
+typedef __Uint16x4_t u16;
+typedef __Uint32x2_t u32;
+typedef __Uint64x1_t u64;
+typedef __Poly8x8_t p8;
+typedef __Poly16x4_t p16;
+typedef __Poly64x1_t p64;
+
+d8 add8(d8 x, d8 y) { return x + y; }
+d16 add16(d16 x, d16 y) { return x + y; }
+d32 add32(d32 x, d32 y) { return x + y; }
+d64 add64(d64 x, d64 y) { return x + y; }
+u16 xor16(u16 x, u16 y) { return x ^ y; }
+u32 xor32(u32 x, u32 y) { return x ^ y; }
+u64 xor64(u64 x, u64 y) { return x ^ y; }
+p8 pxor8(p8 x, p8 y) { return x ^ y; }
+p16 pxor16(p16 x, p16 y) { return x ^ y; }
+p64 pxor64(p64 x, p64 y) { return x ^ y; }
+
+/* Ensure each ABI vector type is returned through v0, not GPR pairs. */
+__attribute__((noinline)) d16 ninth16(
+    d16 a, d16 b, d16 c, d16 d, d16 e, d16 f, d16 g, d16 h, d16 i) {
+    return a + i;
+}
+__attribute__((noinline)) d32 invoke32(d32 (*fn)(d32,d32), d32 x, d32 y) {
+    return fn(x,y);
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/aarch64_neon_vector_layout.c"}
+/* The first executable-vector milestone must agree with GCC's actual
+ * AAPCS64 declaration and object layout, before any NEON operation is added.
+ * Do not replace a vector with an integer or a record as a false shortcut. */
+typedef __Uint8x16_t uint8x16_t;
+typedef __Uint64x2_t uint64x2_t;
+typedef __Int8x16_t int8x16_t;
+typedef __Poly8x16_t poly8x16_t;
+
+_Static_assert(sizeof(uint8x16_t) == 16, "NEON byte vector storage");
+_Static_assert(_Alignof(uint8x16_t) == 16, "NEON byte vector alignment");
+_Static_assert(sizeof(uint64x2_t) == 16, "NEON 64-bit lane vector storage");
+_Static_assert(_Alignof(uint64x2_t) == 16, "NEON 64-bit lane vector alignment");
+_Static_assert(sizeof(int8x16_t) == 16, "NEON signed byte vector storage");
+_Static_assert(_Alignof(int8x16_t) == 16, "NEON signed byte vector alignment");
+_Static_assert(sizeof(poly8x16_t) == 16, "NEON polynomial byte vector storage");
+_Static_assert(_Alignof(poly8x16_t) == 16, "NEON polynomial byte vector alignment");
+
+struct neon_vector_layout {
+    unsigned char tag;
+    uint8x16_t first;
+    uint64x2_t second;
+};
+_Static_assert(__builtin_offsetof(struct neon_vector_layout, first) == 16,
+               "NEON first field alignment");
+_Static_assert(__builtin_offsetof(struct neon_vector_layout, second) == 32,
+               "NEON second field alignment");
+_Static_assert(sizeof(struct neon_vector_layout) == 48,
+               "NEON record layout");
+
+int main(void) { return 0; }
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/aarch64_record_copy_conditional_machine_cfg.c"}
+/* A long record copy emits a real out-of-line MachineCFG loop. The source
+ * conditional immediately following it must branch through a physically
+ * adjacent false auxiliary, even though the initial Core false block was
+ * reserved before the copy loop was introduced. */
+struct Record80 {
+    unsigned long payload[10];
+};
+
+extern struct Record80 source_record;
+extern struct Record80 destination_record;
+extern int branch_result(int);
+
+int aarch64_record_copy_then_branch(int condition) {
+    destination_record = source_record;
+    if (condition)
+        return branch_result(17);
+    return branch_result(23);
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/aarch64_typed_extended_float_abi.c"}
+/* AAPCS64 binary128 is passed and returned in Q registers; Core marks
+ * intrinsic TF operations by type, not by their runtime fallback names.
+ * Exercise every sealed Core TF operation against the MachineIR selector. */
+long double tf_add(long double x, long double y) { return x + y; }
+long double tf_sub(long double x, long double y) { return x - y; }
+long double tf_mul(long double x, long double y) { return x * y; }
+long double tf_div(long double x, long double y) { return x / y; }
+long double tf_neg(long double x) { return -x; }
+
+int tf_eq(long double x, long double y) { return x == y; }
+int tf_lt(long double x, long double y) { return x < y; }
+int tf_le(long double x, long double y) { return x <= y; }
+
+long double tf_from_f32(float x) { return (long double)x; }
+long double tf_from_f64(double x) { return (long double)x; }
+float tf_to_f32(long double x) { return (float)x; }
+double tf_to_f64(long double x) { return (double)x; }
+
+long double tf_from_s32(int x) { return (long double)x; }
+long double tf_from_u32(unsigned int x) { return (long double)x; }
+long double tf_from_s64(long long x) { return (long double)x; }
+long double tf_from_u64(unsigned long long x) { return (long double)x; }
+int tf_to_s32(long double x) { return (int)x; }
+unsigned int tf_to_u32(long double x) { return (unsigned int)x; }
+long long tf_to_s64(long double x) { return (long long)x; }
+unsigned long long tf_to_u64(long double x) { return (unsigned long long)x; }
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/aarch64_user_vector_pcs_reject.c"}
+typedef __Float32x4_t __f32x4_t;
+__attribute__((__aarch64_vector_pcs__)) __f32x4_t not_glibc(__f32x4_t);
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/aarch64_va_copy_abi.c"}
+/* GNU↔MiniC AAPCS64 ABI oracle. No libc dependency beyond the CRT:
+ * both callers and callees may receive the real 32B state by reference. */
+typedef __builtin_va_list va_list;
+
+static int probe_nonvariadic_copy(va_list incoming) {
+    va_list independent;
+    int before, first, after, second;
+    __builtin_va_copy(independent, incoming);
+    before = __builtin_va_arg(incoming, int);
+    first = __builtin_va_arg(independent, int);
+    after = __builtin_va_arg(incoming, int);
+    second = __builtin_va_arg(independent, int);
+    __builtin_va_end(independent);
+    return before == 17 && first == 17 && after == 19 && second == 19;
+}
+
+static int probe_variadic_copy(int fixed, ...) {
+    va_list original, independent;
+    int a, b, c, d;
+    __builtin_va_start(original, fixed);
+    __builtin_va_copy(independent, original);
+    a = __builtin_va_arg(original, int);
+    b = __builtin_va_arg(independent, int);
+    c = __builtin_va_arg(original, int);
+    d = __builtin_va_arg(independent, int);
+    __builtin_va_end(independent);
+    __builtin_va_end(original);
+    return fixed == 7 && a == 17 && b == 17 && c == 19 && d == 19;
+}
+
+static int probe_passed_copy(int fixed, ...) {
+    va_list original;
+    int good;
+    __builtin_va_start(original, fixed);
+    good = fixed == 7 && probe_nonvariadic_copy(original);
+    __builtin_va_end(original);
+    return good;
+}
+
+int main(void) {
+    return probe_variadic_copy(7, 17, 19) &&
+           probe_passed_copy(7, 17, 19) ? 42 : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/aarch64_va_cursor_source_object_runtime.c"}
+/* AAPCS64 builtin va_list is a 32-byte mutable struct value, not void *.
+ * Build with an AArch64 GNU toolchain/QEMU when available; on MiniC the
+ * preexisting proxy must fail explicitly until real source layout lands. */
+typedef __builtin_va_list MiniVa;
+
+struct EmbeddedVa {
+    unsigned char prefix;
+    MiniVa cursor;
+    unsigned char suffix;
+};
+
+static MiniVa global_cursor;
+static MiniVa pair_of_cursors[2];
+
+static unsigned long sum_after_copy(unsigned long fixed, ...) {
+    MiniVa current;
+    MiniVa copy;
+    unsigned long first, second, third;
+    __builtin_va_start(current, fixed);
+    first = __builtin_va_arg(current, unsigned long);
+    __builtin_va_copy(copy, current);
+    second = __builtin_va_arg(copy, unsigned long);
+    third = __builtin_va_arg(current, unsigned long);
+    __builtin_va_end(copy);
+    __builtin_va_end(current);
+    return first * 100UL + second * 10UL + third;
+}
+
+int main(void) {
+    MiniVa local;
+    struct EmbeddedVa container;
+    if (sizeof(MiniVa) != 32U || sizeof(local) != 32U ||
+        sizeof(global_cursor) != 32U) return 10;
+    if (sizeof(pair_of_cursors) != 64U || sizeof(container) != 48U ||
+        sizeof(container.cursor) != 32U) return 11;
+    if ((char *)(&local + 1) - (char *)&local != 32) return 12;
+    return sum_after_copy(99UL, 1UL, 2UL) == 122UL ? 0 : 13;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/aarch64_variadic_incoming_stack.c"}
+/* AAPCS64 register-exhaustion oracle: one named GP argument occupies x0;
+ * the eighth and ninth unnamed unsigned-long arguments must be fetched from
+ * the CALLER's incoming stack, above the callee's x29/x30 frame record. */
+#ifdef MINIC_AARCH64_CURSOR
+/* The source AAPCS64 va_list is a 32-byte struct; Core passes its address to
+ * the machine ABI cursor without inventing a pointer-valued C proxy. */
+typedef __builtin_va_list va_list;
+#define va_start(ap, last) __builtin_va_start(ap, last)
+#define va_arg(ap, type) __builtin_va_arg(ap, type)
+#define va_end(ap) __builtin_va_end(ap)
+#else
+#include <stdarg.h>
+#endif
+
+static unsigned long static_stack_cursor(unsigned long named, ...) {
+    va_list ap;
+    unsigned long values[9];
+    unsigned int i;
+    va_start(ap, named);
+    for (i = 0; i < 9; ++i) values[i] = va_arg(ap, unsigned long);
+    va_end(ap);
+    return values[0] + values[6] + values[7] * 100UL + values[8];
+}
+
+/* Force both a dynamic x19-anchored frame and a >16-byte local alignment.
+ * The over-aligned case must recover the saved entry-SP value, not derive
+ * incoming arguments from the post-realignment frame anchor. */
+static unsigned long aligned_dynamic_stack_cursor(unsigned long named, ...) {
+    /* Exercise the ABI's maximum supported local realignment while the
+     * sibling named-stack cursor below still covers the 64-byte boundary. */
+    struct __attribute__((aligned(256))) Aligned {
+        volatile unsigned char bytes[64];
+    } local;
+    volatile unsigned char *dynamic =
+        (volatile unsigned char *)__builtin_alloca((named & 31UL) + 32UL);
+    va_list ap;
+    unsigned long values[9];
+    unsigned int i;
+    local.bytes[0] = (unsigned char)named;
+    dynamic[0] = local.bytes[0];
+    va_start(ap, named);
+    for (i = 0; i < 9; ++i) values[i] = va_arg(ap, unsigned long);
+    va_end(ap);
+    return values[0] + values[6] + values[7] * 100UL + values[8] +
+           (unsigned long)(dynamic[0] - local.bytes[0]);
+}
+
+/* Nine named GP scalars consume x0..x7 and one incoming stack slot. The
+ * first unnamed argument is at entry-SP+16+8, not entry-SP+16. */
+static unsigned long named_gp_stack_cursor(
+    unsigned long g0, unsigned long g1, unsigned long g2,
+    unsigned long g3, unsigned long g4, unsigned long g5,
+    unsigned long g6, unsigned long g7, unsigned long g8, ...) {
+    va_list ap;
+    unsigned long first, second;
+    va_start(ap, g8);
+    first = va_arg(ap, unsigned long);
+    second = va_arg(ap, unsigned long);
+    va_end(ap);
+    return first * 100UL + second;
+}
+
+/* Two fixed 16-byte records occupy x0/x1 and x2/x3. Counting their C
+ * parameters as only two GPRs would start va_arg at x2 instead of x4. */
+struct TwoLongs { unsigned long lo; unsigned long hi; };
+static unsigned long named_record_gp_cursor(
+    struct TwoLongs first_fixed, struct TwoLongs second_fixed, ...) {
+    va_list ap;
+    unsigned long first, second;
+    va_start(ap, second_fixed);
+    first = va_arg(ap, unsigned long);
+    second = va_arg(ap, unsigned long);
+    va_end(ap);
+    return first * 100UL + second;
+}
+
+/* The saved entry SP remains authoritative even when the 9th fixed
+ * integer travels in a caller stack slot and the callee realigns SP. */
+static unsigned long named_aligned_dynamic_stack_cursor(
+    unsigned long g0, unsigned long g1, unsigned long g2,
+    unsigned long g3, unsigned long g4, unsigned long g5,
+    unsigned long g6, unsigned long g7, unsigned long g8, ...) {
+    struct __attribute__((aligned(64))) Aligned {
+        volatile unsigned char bytes[64];
+    } local;
+    volatile unsigned char *dynamic =
+        (volatile unsigned char *)__builtin_alloca((g0 & 31UL) + 32UL);
+    va_list ap;
+    unsigned long first, second;
+    local.bytes[0] = (unsigned char)g8;
+    dynamic[0] = local.bytes[0];
+    va_start(ap, g8);
+    first = va_arg(ap, unsigned long);
+    second = va_arg(ap, unsigned long);
+    va_end(ap);
+    return first * 100UL + second +
+           (unsigned long)(dynamic[0] - local.bytes[0]);
+}
+
+/* Both fixed banks overflow: g8 is in the first named stack slot and f8
+ * the second. The unnamed integer and double follow in distinct slots. */
+static unsigned long named_mixed_stack_cursor(
+    unsigned long g0, unsigned long g1, unsigned long g2,
+    unsigned long g3, unsigned long g4, unsigned long g5,
+    unsigned long g6, unsigned long g7, unsigned long g8,
+    double f0, double f1, double f2, double f3, double f4,
+    double f5, double f6, double f7, double f8, ...) {
+    va_list ap;
+    unsigned long integer;
+    double fractional;
+    va_start(ap, f8);
+    integer = va_arg(ap, unsigned long);
+    fractional = va_arg(ap, double);
+    va_end(ap);
+    return integer + (unsigned long)(fractional * 10.0);
+}
+
+int main(void) {
+    struct TwoLongs fixed0 = {11UL, 22UL};
+    struct TwoLongs fixed1 = {33UL, 44UL};
+    const unsigned long expected = 1UL + 7UL + 8UL * 100UL + 9UL;
+    if (static_stack_cursor(99UL, 1UL, 2UL, 3UL, 4UL, 5UL, 6UL,
+                            7UL, 8UL, 9UL) != expected) return 1;
+    if (aligned_dynamic_stack_cursor(99UL, 1UL, 2UL, 3UL, 4UL, 5UL,
+                                     6UL, 7UL, 8UL, 9UL) != expected) return 2;
+    if (named_gp_stack_cursor(10UL, 11UL, 12UL, 13UL, 14UL, 15UL, 16UL,
+                              17UL, 18UL, 23UL, 45UL) != 2345UL) return 3;
+    if (named_record_gp_cursor(fixed0, fixed1, 23UL, 45UL) != 2345UL)
+        return 6;
+    if (named_aligned_dynamic_stack_cursor(
+            10UL, 11UL, 12UL, 13UL, 14UL, 15UL, 16UL,
+            17UL, 18UL, 23UL, 45UL) != 2345UL) return 5;
+    if (named_mixed_stack_cursor(10UL, 11UL, 12UL, 13UL, 14UL, 15UL,
+                                 16UL, 17UL, 18UL,
+                                 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0,
+                                 8.0, 9.0, 1234UL, 2.5) != 1259UL) return 4;
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/aarch64_weak_direct_call_got.c"}
+/* Linux AArch64's no-PLT ELF link requires undefined weak direct calls to
+ * branch through a GOT-resolved function pointer, even in -fno-pie mode.
+ * Defined weak and ordinary strong functions retain direct BL semantics. */
+extern int minic_missing_weak_call(int) __attribute__((weak));
+extern int minic_present_weak_call(int) __attribute__((weak));
+extern int minic_strong_call(int);
+
+int minic_defined_weak_call(int) __attribute__((weak));
+int minic_defined_weak_call(int value)
+{
+    return value * 2;
+}
+
+int minic_weak_direct_dispatch(int value)
+{
+    if (minic_missing_weak_call)
+        return minic_missing_weak_call(value);
+    if (minic_present_weak_call)
+        return minic_present_weak_call(value);
+    return minic_strong_call(value);
+}
+
+int main(void)
+{
+    if (minic_weak_direct_dispatch(7) != 17)
+        return 1;
+    if (minic_defined_weak_call(8) != 16)
+        return 2;
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/aarch64_weak_direct_call_got_provider.c"}
+/* Provider is always compiled with GNU, never MiniC. */
+int minic_present_weak_call(int value)
+{
+    return value + 10;
+}
+
+int minic_strong_call(int value)
+{
+    return value + 100;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/aarch64_weak_redeclaration_got.c"}
+/* Genuine GNU ELF declaration-merging cases: a weak undefined symbol may
+ * acquire its binding on a later declaration, before code uses its address.
+ * In kernel non-PIC code, address materialization must still use the GOT. */
+extern long early_strong_object;
+extern long early_strong_object __attribute__((weak));
+
+extern long early_weak_object __attribute__((weak));
+extern long early_weak_object;
+
+extern long weak_function(void) __attribute__((weak));
+extern long weak_function(void);
+
+long weak_address_sum(void) {
+    return (long)&early_strong_object + (long)&early_weak_object +
+           (long)weak_function;
+}
+@@@ end

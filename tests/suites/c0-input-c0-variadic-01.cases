@@ -1,0 +1,293 @@
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_variadic_conflict.c"}
+int emit(int tag, ...);
+int emit(int tag);
+
+int main(void)
+{
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_variadic_function_pointer_field.c"}
+struct Hooks {
+    int (*emit)(int tag, ...);
+};
+
+int main(void)
+{
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_variadic_missing_fixed_argument.c"}
+int consume(int first, int second, ...);
+
+int main(void)
+{
+    return consume(1);
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_variadic_too_many_arguments.c"}
+int consume(int tag, ...);
+
+int main(void) {
+    return consume(1,
+                   2,
+                   3,
+                   4,
+                   5,
+                   6,
+                   7,
+                   8,
+                   9,
+                   10,
+                   11,
+                   12,
+                   13,
+                   14,
+                   15,
+                   16,
+                   17,
+                   18,
+                   19,
+                   20,
+                   21,
+                   22,
+                   23,
+                   24,
+                   25,
+                   26,
+                   27,
+                   28,
+                   29,
+                   30,
+                   31,
+                   32,
+                   33,
+                   34,
+                   35,
+                   36,
+                   37,
+                   38,
+                   39,
+                   40,
+                   41,
+                   42,
+                   43,
+                   44,
+                   45,
+                   46,
+                   47,
+                   48,
+                   49,
+                   50,
+                   51,
+                   52,
+                   53,
+                   54,
+                   55,
+                   56,
+                   57,
+                   58,
+                   59,
+                   60,
+                   61,
+                   62,
+                   63,
+                   64,
+                   65);
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_variadic_without_fixed.c"}
+int emit(...);
+
+int main(void)
+{
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/variadic_callee_save.c"}
+char *__minic_va_start(void);
+int minic_verify_va_list(char *arguments);
+
+static int check_arguments(int fixed, const char *tag, ...) {
+    char *arguments;
+
+    arguments = __minic_va_start();
+    return fixed == 11 ? minic_verify_va_list(arguments) : 40;
+}
+
+int main(void) {
+    return check_arguments(11, "x", 22, 3.5);
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/variadic_callee_save_gcc.c"}
+#include <stdarg.h>
+
+int minic_verify_va_list(char *arguments);
+
+static int check_arguments(int fixed, const char *tag, ...) {
+    va_list arguments;
+    int result;
+
+    va_start(arguments, tag);
+    result = minic_verify_va_list(arguments);
+    va_end(arguments);
+    return fixed == 11 ? result : 40;
+}
+
+int main(void) {
+    return check_arguments(11, "x", 22, 3.5);
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/variadic_callee_save_helper.c"}
+#include <stdint.h>
+
+int minic_verify_va_list(char *arguments) {
+    const uint64_t *words = (const uint64_t *)arguments;
+    union {
+        double value;
+        uint64_t bits;
+    } expected;
+
+    expected.value = 3.5;
+    if ((int64_t)words[0] != 22) {
+        return 41;
+    }
+    if (words[1] != expected.bits) {
+        return 42;
+    }
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/variadic_declaration.c"}
+int emit(int tag, ...);
+int emit(int tag, ...);
+
+int main(void)
+{
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/variadic_definition.c"}
+static int keep_fixed(int value, ...) {
+    return value;
+}
+
+int main(void) {
+    return keep_fixed(0, 1, 2);
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/variadic_direct_call.c"}
+int verify_variadic(int tag, ...);
+
+int main(void) {
+    char small;
+    long wide;
+    int value;
+    float approximate;
+    double precise;
+
+    small = 7;
+    wide = 1234;
+    value = 29;
+    approximate = 1.25f;
+    precise = 2.5;
+    return verify_variadic(5,
+                           11,
+                           small,
+                           wide,
+                           &value,
+                           precise,
+                           approximate,
+                           61,
+                           62,
+                           63,
+                           64,
+                           65,
+                           66,
+                           67,
+                           68,
+                           69,
+                           70,
+                           71,
+                           72,
+                           73,
+                           74);
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/variadic_direct_call_helper.c"}
+#include <stdarg.h>
+
+int verify_variadic(int tag, ...) {
+    va_list arguments;
+    int first;
+    int promoted_char;
+    long wide;
+    int *pointer;
+    double precise;
+    double promoted_float;
+    int expected;
+
+    va_start(arguments, tag);
+    first = va_arg(arguments, int);
+    promoted_char = va_arg(arguments, int);
+    wide = va_arg(arguments, long);
+    pointer = va_arg(arguments, int *);
+    precise = va_arg(arguments, double);
+    promoted_float = va_arg(arguments, double);
+
+    if (tag != 5 || first != 11 || promoted_char != 7 || wide != 1234 || pointer == 0 ||
+        *pointer != 29 || precise != 2.5 || promoted_float != 1.25) {
+        va_end(arguments);
+        return 1;
+    }
+    for (expected = 61; expected <= 74; ++expected) {
+        if (va_arg(arguments, int) != expected) {
+            va_end(arguments);
+            return 2;
+        }
+    }
+    va_end(arguments);
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/variadic_function_pointer_cast.c"}
+int variadic_function_pointer_cast(void *opaque)
+{
+    return ((int (*)(int, int, ...))opaque)(11, 22, 33);
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/variadic_indirect_call.c"}
+typedef long (*indirect_variadic_fn)(long, ...);
+
+extern long indirect_variadic_sink(long tag, ...);
+
+int main(void)
+{
+    indirect_variadic_fn fn = indirect_variadic_sink;
+
+    return (int)fn(7L, 11L, 13L, 17L, 19L, 23L, 29L, 31L, 37L, 41L);
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/variadic_indirect_call_helper.c"}
+#include <stdarg.h>
+
+long indirect_variadic_sink(long tag, ...)
+{
+    static const long expected[] = {11L, 13L, 17L, 19L, 23L, 29L, 31L, 37L, 41L};
+    va_list arguments;
+    unsigned long index;
+
+    if (tag != 7L) {
+        return 1L;
+    }
+    va_start(arguments, tag);
+    for (index = 0UL; index < sizeof(expected) / sizeof(expected[0]); ++index) {
+        if (va_arg(arguments, long) != expected[index]) {
+            va_end(arguments);
+            return (long)(index + 2UL);
+        }
+    }
+    va_end(arguments);
+    return 0L;
+}
+@@@ end

@@ -1,0 +1,144 @@
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/anonymous_qualified_member_const_reject.c"}
+struct Vma { int x; };
+struct VmFault {
+    const struct { struct Vma *vma; };
+};
+void invalid_write(struct VmFault *vmf, struct Vma *other) {
+    vmf->vma = other;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/anonymous_qualified_members.c"}
+/* GNU anonymous record members retain the qualifiers of the directly written
+ * record specifier.  A typedef-only or tagged bare declaration remains
+ * memberless even if the spelling carries the same qualifiers. */
+typedef struct { unsigned long ignored; } HiddenAlias;
+
+struct Vma { unsigned long tag; };
+
+struct VmFault {
+    const struct {
+        struct Vma *vma;
+        unsigned long address;
+        union { unsigned int flags; unsigned int mask; };
+    };
+    volatile union { unsigned int state; unsigned int state_alias; };
+    unsigned long tail;
+};
+
+struct DeepVmFault {
+    const volatile struct {
+        struct {
+            struct Vma *vma;
+        };
+    };
+    unsigned long tail;
+};
+
+struct ExtensionFault {
+    __extension__ const struct { unsigned long value; };
+};
+
+struct QualifiedNonmembers {
+    const HiddenAlias;
+    volatile struct Vma;
+    unsigned long tail;
+};
+
+static struct Vma vma = { 47UL };
+static struct VmFault fault = { .vma = &vma, .address = 0x1234UL,
+                               .flags = 6U, .state = 9U, .tail = 19UL };
+static struct DeepVmFault deep_fault = { .vma = &vma, .tail = 31UL };
+static struct ExtensionFault extension_fault = { .value = 43UL };
+
+int main(void) {
+    struct VmFault *vmf = &fault;
+    struct DeepVmFault *nested = &deep_fault;
+    return vmf->vma->tag != 47UL || vmf->address != 0x1234UL ||
+           vmf->mask != 6U || vmf->state_alias != 9U || vmf->tail != 19UL ||
+           nested->vma->tag != 47UL || nested->tail != 31UL ||
+           extension_fault.value != 43UL ||
+           sizeof(struct QualifiedNonmembers) != sizeof(unsigned long) ||
+           __builtin_offsetof(struct VmFault, vma) != 0U;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/anonymous_record_field_type.c"}
+union StackLike {
+    int scalar;
+    struct {
+        signed char tag;
+        unsigned short delta;
+    } linked;
+};
+
+unsigned read_delta(union StackLike *value) {
+    return value->linked.delta;
+}
+
+int main(void) {
+    union StackLike value;
+    value.linked.tag = -1;
+    value.linked.delta = 513;
+    return sizeof(value) == 4 && read_delta(&value) == 513 ? 0 : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/anonymous_record_members.c"}
+struct BranchData {
+    const char *func;
+    const char *file;
+    unsigned line;
+    union {
+        struct {
+            unsigned long correct;
+            unsigned long incorrect;
+        };
+        struct {
+            unsigned long miss;
+            unsigned long hit;
+        };
+        unsigned long miss_hit[2];
+    };
+};
+
+unsigned long read_correct(struct BranchData *data) {
+    return data->correct;
+}
+
+unsigned long read_hit(struct BranchData *data) {
+    return data->hit;
+}
+
+unsigned long read_second_counter(struct BranchData *data) {
+    return data->miss_hit[1];
+}
+
+unsigned long branch_data_size(void) {
+    return sizeof(struct BranchData);
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/anonymous_record_members_runtime.c"}
+struct BranchData {
+    const char *func;
+    const char *file;
+    unsigned line;
+    union {
+        struct { unsigned long correct, incorrect; };
+        struct { unsigned long miss, hit; };
+        unsigned long miss_hit[2];
+    };
+};
+
+extern unsigned long read_correct(struct BranchData *data);
+extern unsigned long read_hit(struct BranchData *data);
+extern unsigned long read_second_counter(struct BranchData *data);
+extern unsigned long branch_data_size(void);
+
+int main(void) {
+    struct BranchData data = {0};
+
+    data.correct = 13UL;
+    data.incorrect = 27UL;
+    return !(branch_data_size() == sizeof(data) && sizeof(data) == 40U &&
+             read_correct(&data) == 13UL && read_hit(&data) == 27UL &&
+             read_second_counter(&data) == 27UL);
+}
+@@@ end

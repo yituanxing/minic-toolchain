@@ -1,0 +1,62 @@
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/expected/return_0.s"}
+.text
+.globl main
+.type main, @function
+main:
+  li a0, 0
+  ret
+.size main, .-main
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/expected/return_42.s"}
+.text
+.globl main
+.type main, @function
+main:
+  li a0, 42
+  ret
+.size main, .-main
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_return.c"}
+int main(void) {
+    return +;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/return_0.c"}
+int main(void) {
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/return_42.c"}
+int main(void) {
+    return 42;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/return_assignment_expression.c"}
+/* C8: a return's full-expression parser owns '=' and nested assignment. */
+#ifdef MINIC_INVALID_RETURN_ASSIGNMENT
+int main(void) {
+    const int unchanged = 0;
+    return unchanged = 1;
+}
+#else
+static int assign_result(int left, int right) {
+    return left = right + (left - left);
+}
+
+static int chained_result(int a, int b, int c) {
+    return a = b = c;
+}
+
+static int conditional_result(int value, int condition) {
+    return value = condition ? 7 : 11;
+}
+
+int main(void) {
+    if (assign_result(3, 4) != 4) return 1;
+    if (chained_result(1, 2, 5) != 5) return 2;
+    if (conditional_result(2, 0) != 11) return 3;
+    if (conditional_result(2, 1) != 7) return 4;
+    return 0;
+}
+#endif
+@@@ end

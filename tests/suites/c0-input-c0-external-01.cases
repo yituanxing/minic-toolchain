@@ -1,0 +1,387 @@
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/external_array_declarator_routing.c"}
+typedef unsigned char u8;
+
+struct cpu_operations {
+    int state;
+};
+
+const struct cpu_operations *cpu_ops[4] __attribute__((__section__(".data..ro_after_init")));
+
+unsigned long empty_zero_page[8] __attribute__((__section__(".bss..page_aligned")))
+__attribute__((__aligned__(64)));
+
+u8 purgatory_sha256_digest[32] __attribute__((__section__(".kexec-purgatory")));
+u8 purgatory_sha_regions[2][4] __attribute__((__section__(".kexec-purgatory")));
+
+unsigned long initialized_map[4]
+    __attribute__((__section__(".data..ro_after_init"))) = {1, 2, 3, 4};
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/external_array_redeclaration_owner.c"}
+extern int tentative_values[];
+int tentative_values[4];
+extern int defined_values[];
+int defined_values[4] = {1, 2, 3, 4};
+int main(void) {
+    return tentative_values[0] + defined_values[3] - 4;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/external_char_array_redeclaration.c"}
+/* GNU C permits a completed array declaration before an omitted-bound
+ * string-literal definition. The existing complete extent must be retained. */
+char exact[4];
+char exact[] = "abc";
+
+char padded[6];
+char padded[] = "abc";
+
+char no_nul[3];
+char no_nul[] = "abc";
+
+extern char extern_decl[4];
+char extern_decl[] = "xyz";
+
+int main(void) {
+    return !(exact[0] == 'a' && exact[3] == 0 &&
+             padded[2] == 'c' && padded[3] == 0 && padded[5] == 0 &&
+             no_nul[0] == 'a' && no_nul[2] == 'c' &&
+             extern_decl[0] == 'x' && extern_decl[3] == 0);
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/external_char_array_redeclaration_too_long.c"}
+/* A completed bound cannot be silently widened by a later string definition. */
+char short_array[2];
+char short_array[] = "abc";
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/external_inferred_record_array.c"}
+struct riscv_isa_ext_data {
+    const char *name;
+    const char *property;
+    unsigned int id;
+};
+
+extern const struct riscv_isa_ext_data riscv_isa_ext[];
+
+const struct riscv_isa_ext_data riscv_isa_ext[] = {
+    {
+        .name = "zicntr",
+        .property = "riscv,isa-base",
+        .id = 1,
+    },
+    {
+        .name = "zifencei",
+        .property = 0,
+        .id = 2,
+    },
+};
+
+struct stats_desc {
+    unsigned int flags;
+    int exponent;
+    unsigned int size;
+    unsigned int bucket_size;
+    unsigned int offset;
+};
+
+struct kvm_stats_desc {
+    struct stats_desc desc;
+    char name[16];
+};
+
+const struct kvm_stats_desc kvm_stats[] = {
+    {
+        {
+            .flags = 1,
+            .exponent = -9,
+            .size = 1,
+            .bucket_size = 0,
+            .offset = 4,
+        },
+        .name = "halt_wait",
+    },
+    {
+        {
+            .flags = 2,
+            .exponent = 0,
+            .size = 8,
+            .bucket_size = 1,
+            .offset = 12,
+        },
+        .name = "signal",
+    },
+};
+
+const struct riscv_isa_ext_data fixed_record_array[1] = {
+    {
+        .name = "fixed",
+        .property = 0,
+        .id = 3,
+    },
+};
+
+enum designated_ext_slot {
+    DESIGNATED_EXT_SLOT = 3,
+};
+
+const struct riscv_isa_ext_data designated_ext[] = {
+    [DESIGNATED_EXT_SLOT] = {
+        .name = "designated",
+        .property = 0,
+        .id = 9,
+    },
+};
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/external_pointer_array.c"}
+static const char shared_name[] = "shared";
+
+const char *const names[4] = {
+    "one",
+    shared_name,
+    0,
+    "four"
+};
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/external_pointer_array_implicit_address_invalid.c"}
+/* Negative GCC/MiniC parity: integer global names must not be silently
+ * rewritten to their addresses in external pointer-array initializers. */
+int external_pointer_array_scalar;
+int *external_pointer_array_bad[1] = {external_pointer_array_scalar};
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/external_pointer_array_inferred_implicit_address_invalid.c"}
+/* The inferred-bound entry path must reject implicit object addresses too. */
+int external_pointer_array_inferred_scalar;
+int *external_pointer_array_inferred_bad[] = {external_pointer_array_inferred_scalar};
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/external_pointer_array_initializer.c"}
+/* Positive GCC/MiniC parity: static pointer-array initializers must accept
+ * explicit addresses, array-to-pointer decay and null pointer constants. */
+int external_pointer_array_target = 17;
+int external_pointer_array_second = 29;
+int external_pointer_array_data[2] = {41, 43};
+int *external_pointer_array_values[4] = {
+    &external_pointer_array_target,
+    0,
+    external_pointer_array_data,
+    &external_pointer_array_second
+};
+/* This unbounded spelling is the only path that calls the older
+ * parse_external_integer_array_definition entry point. */
+int *external_pointer_array_inferred[] = {
+    &external_pointer_array_second, external_pointer_array_data,
+    0, &external_pointer_array_target
+};
+char external_pointer_array_text[] = "ok";
+
+int main(void) {
+    return external_pointer_array_values[0] == &external_pointer_array_target &&
+                   *external_pointer_array_values[0] == 17 &&
+                   external_pointer_array_values[1] == 0 &&
+                   external_pointer_array_values[2] == external_pointer_array_data &&
+                   external_pointer_array_values[2][1] == 43 &&
+                   external_pointer_array_values[3] == &external_pointer_array_second &&
+                   sizeof(external_pointer_array_inferred) == 4 * sizeof(int *) &&
+                   *external_pointer_array_inferred[0] == 29 &&
+                   external_pointer_array_inferred[1][1] == 43 &&
+                   external_pointer_array_inferred[2] == 0 &&
+                   *external_pointer_array_inferred[3] == 17 &&
+                   sizeof(external_pointer_array_text) == 3 &&
+                   external_pointer_array_text[0] == 'o'
+               ? 0
+               : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/external_pointer_definition.c"}
+char *message = "hello";
+void (*power_off)(void) = ((void *)0);
+int object_target = 41;
+int *object_pointer = &object_target;
+struct PointerPair {
+    int left;
+    int right;
+};
+struct PointerPair pair_target = {.left = 7, .right = 23};
+int *member_pointer = &pair_target.right;
+int callback_target(void) {
+    return 17;
+}
+int (*callback_pointer)(void) = callback_target;
+int main(void) {
+    if (message[0] != 'h' || message[4] != 'o')
+        return 1;
+    if (power_off != 0)
+        return 2;
+    if (*object_pointer != 41)
+        return 3;
+    if (*member_pointer != 23)
+        return 4;
+    if (callback_pointer() != 17)
+        return 5;
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/external_record_compound_literal.c"}
+struct counter {
+    int value;
+};
+
+union key_payload {
+    unsigned long type;
+    void *entries;
+};
+
+struct static_key {
+    struct counter enabled;
+    union key_payload payload;
+};
+
+struct static_key_false {
+    struct static_key key;
+};
+
+struct static_key_false sched_numa_balancing = (struct static_key_false){
+    .key = {.enabled = {0}, {.type = 0UL}},
+};
+
+int earlier_target;
+int later_target;
+
+struct reordered_static_record {
+    int *first;
+    int marker;
+    int *last;
+};
+
+struct reordered_static_record reordered_static = (struct reordered_static_record){
+    .last = &later_target,
+    .first = &earlier_target,
+    .marker = 7,
+};
+
+int main(void) {
+    return sched_numa_balancing.key.enabled.value;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/external_scalar_definition.c"}
+extern int external_count;
+int external_count = 7;
+
+long long external_wide = 11LL;
+unsigned long loops_per_jiffy = (1 << 12);
+unsigned long external_payload_wide = (1UL << 40);
+static const unsigned long long internal_runtime_limit = ((1ULL << (64 - 20)) - 1) * 1000L;
+struct WidePayloadRecord {
+    unsigned long payload;
+};
+static const struct WidePayloadRecord internal_wide_record = {
+    .payload = (1UL << 40),
+};
+static int internal_folded = (3 + 5) * 2;
+
+int main(void) {
+    return external_count == 7 && external_wide == 11LL && loops_per_jiffy == 4096UL &&
+                   external_payload_wide == (1UL << 40) &&
+                   internal_runtime_limit == 17592186044415000ULL &&
+                   internal_wide_record.payload == (1UL << 40) && internal_folded == 16
+               ? 0
+               : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/external_tentative_declarator_list.c"}
+/* Each comma declarator must create or merge its own canonical external object. */
+unsigned long first_value, second_value;
+int *first_pointer, *second_pointer;
+int main(void) {
+    return (int)(first_value + second_value) + (first_pointer != 0) + (second_pointer != 0);
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/external_tentative_definitions.c"}
+typedef _Bool bool;
+
+bool early_boot_irqs_disabled;
+
+enum system_states {
+    SYSTEM_BOOTING = 0,
+    SYSTEM_RUNNING = 1,
+};
+
+enum system_states system_state;
+
+void (*late_time_init)(void);
+
+extern char __attribute__((__section__(".init.data"))) boot_command_line[];
+char __attribute__((__section__(".init.data"))) boot_command_line[1024];
+char *saved_command_line __attribute__((__section__(".data..ro_after_init")));
+
+int repeated_tentative;
+int repeated_tentative;
+
+extern int extern_then_tentative;
+int extern_then_tentative;
+
+int tentative_then_extern;
+extern int tentative_then_extern;
+
+int tentative_then_full;
+int tentative_then_full = 7;
+
+int full_then_tentative = 9;
+int full_then_tentative;
+
+struct tentative_record {
+    int first;
+    long second;
+};
+
+struct tentative_record record_state;
+
+static int static_repeated_tentative;
+static int static_repeated_tentative;
+
+static int static_tentative_then_full;
+static int static_tentative_then_full = 11;
+
+static int static_full_then_tentative = 13;
+static int static_full_then_tentative;
+
+static int static_pointer_target;
+static int *static_pointer_tentative;
+static int *static_pointer_tentative;
+static int *static_pointer_then_full;
+static int *static_pointer_then_full = &static_pointer_target;
+
+static struct tentative_record static_record_only;
+static const struct tentative_record static_record_then_full;
+static const struct tentative_record static_record_then_full = {3, 17};
+
+extern unsigned long composite_page_table[];
+unsigned long composite_page_table[4] __attribute__((__section__(".bss..page_aligned")))
+__attribute__((__aligned__(4096)));
+
+extern void *const composite_call_table[];
+void *const composite_call_table[4] = {0, 0, 0, 0};
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/external_tentative_incomplete_array.c"}
+int incomplete_tentative_array[];
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_external_array_composite_bound.c"}
+extern int conflicting_array_bound[2];
+int conflicting_array_bound[3];
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_external_inferred_record_array_brace_elision.c"}
+struct pair {
+    int left;
+    int right;
+};
+const struct pair pairs[] = {1, 2};
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_external_integer_nonconstant.c"}
+int runtime_source;
+int external_nonconstant = runtime_source + 1;
+
+int main(void) {
+    return external_nonconstant;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_external_tentative_redeclaration.c"}
+extern int conflicting_tentative;
+long conflicting_tentative;
+@@@ end

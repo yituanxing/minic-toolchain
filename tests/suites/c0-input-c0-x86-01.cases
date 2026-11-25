@@ -1,0 +1,3089 @@
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_x86_bss_nonzero_initializer.c"}
+int __attribute__((section(".bss.minic.nonzero"))) global_nonzero = 5;
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_x86_gnu_function_pointer_array_param.c"}
+typedef long (*wrong_handler_t)(long);
+extern int invoke_handlers(int (*exit_handlers[])(int), int);
+int bad_call(wrong_handler_t handlers[]) {
+    /* Different return and argument types are not pointer-compatible. */
+    return invoke_handlers(handlers, 8);
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_x86_gnu_vector_size.c"}
+typedef unsigned int u32;
+#if defined(BAD_SIZE)
+typedef u32 __attribute__((vector_size(3))) illegal_vector;
+#elif defined(BAD_ELEMENT)
+struct record { u32 x; };
+typedef struct record __attribute__((vector_size(16))) illegal_vector;
+#elif defined(BAD_NONCONST)
+extern int size_in_bytes;
+typedef u32 __attribute__((vector_size(size_in_bytes))) illegal_vector;
+#elif defined(UNSUPPORTED_WIDTH)
+/* Valid GNU C, but MiniC x86 intentionally admits <=16B storage until the
+ * complete 256/512-bit layout and ABI are separately proven. */
+typedef u32 __attribute__((vector_size(32))) illegal_vector;
+#else
+#error Define one vector_size negative test mode
+#endif
+illegal_vector source_object;
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_x86_gnu_vector_size_copy.c"}
+typedef unsigned int u32;
+typedef u32 v4 __attribute__((vector_size(16)));
+typedef u32 v2 __attribute__((vector_size(8)));
+
+#if defined(BAD_ARITHMETIC)
+void forbidden(void) { v4 a, b, c; a = b + c; }
+#elif defined(BAD_VOLATILE)
+void forbidden(void) { volatile v4 a, b; a = b; }
+#elif defined(BAD_EIGHT_BYTES)
+void forbidden(void) { v2 a, b; a = b; }
+#elif defined(BAD_BYVALUE)
+v4 forbidden(v4 value) { return value; }
+#else
+#error Select one unsupported vector operation
+#endif
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_x86_linux_kvm_hypercall_abi.c"}
+#include "x86_linux_kvm_hypercall_full_abi.c"
+
+/* A fifth argument exists in the GNU constraints, but must be physical RSI.
+ * RDI is a valid GCC constraint and must NOT silently satisfy this contract. */
+long linux_kvm_wrong_fifth_register(unsigned int nr, unsigned long p1,
+                                   unsigned long p2, unsigned long p3,
+                                   unsigned long p4) {
+    long ret;
+    asm volatile(KVM_ALT_VMCALL : "=a"(ret) : "a"(nr), "b"(p1), "c"(p2),
+                 "d"(p3), "D"(p4) : "memory");
+    return ret;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_x86_linux_kvm_hypercall_memory.c"}
+#include "x86_linux_kvm_hypercall_full_abi.c"
+
+/* The direct AMD form is a compiler memory barrier in the Linux source.
+ * An unrelated CC clobber cannot claim the identical memory effect. */
+long linux_kvm_sev_missing_memory(unsigned int nr, unsigned long p1,
+                                  unsigned long p2, unsigned long p3) {
+    long ret;
+    asm volatile("vmmcall" : "=a"(ret) : "a"(nr), "b"(p1), "c"(p2),
+                 "d"(p3) : "cc");
+    return ret;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_x86_sysv_12byte_mixed_record.c"}
+/* A mixed SSE/INTEGER SysV aggregate is NOT two INTEGER-class registers.
+ * In particular, 12-byte all-INTEGER admission may not accept this layout. */
+typedef struct MixedWords {
+    float first;
+    unsigned int second;
+    unsigned int third;
+} MixedWords;
+
+MixedWords invalid_mixed_return(MixedWords input) {
+    return input;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/probe-x86-core-abi-shape.c"}
+#include "core/core_type.h"
+#include "target/x86_64/abi.h"
+#include <stdio.h>
+#include <string.h>
+
+#define REQUIRE(condition) do { if (!(condition)) { \
+    (void)fprintf(stderr, "X86_CORE_ABI_SHAPE=FAIL line=%d: %s\n", \
+                  __LINE__, #condition); \
+    return 1; \
+} } while (0)
+
+static bool put(MinicCoreTypeContext *types, MinicCoreType type,
+                MinicCoreTypeId *id) {
+    return minic_core_type_register(types, &type, id);
+}
+
+int main(void) {
+    MinicCoreTypeContext context;
+    MinicCoreType type = {0};
+    MinicCoreTypeId integer, pointer, array, one, two, unaligned, large, small;
+    MinicCoreTypeId aligned_alias, oversized_alias, incomplete;
+    MinicCoreTypeId zero_array, unsized_array, zero_tail, unsized_tail;
+    MinicCoreRecordField fields[2] = {{0}};
+    size_t bytes = 0U;
+    bool sign = false;
+
+    minic_core_type_context_initialize(&context);
+    type.kind = MINIC_CORE_TYPE_INTEGER;
+    type.has_layout = true;
+    type.size = 4U;
+    type.alignment = 4U;
+    type.value.integer.bit_width = 32U;
+    type.value.integer.is_signed = true;
+    REQUIRE(put(&context, type, &integer));
+    REQUIRE(minic_x86_64_core_scalar_width(&context, integer, &bytes, &sign));
+    REQUIRE(bytes == 4U && sign);
+
+    (void)memset(&type, 0, sizeof(type));
+    type.kind = MINIC_CORE_TYPE_POINTER;
+    type.has_layout = true;
+    type.size = 8U;
+    type.alignment = 8U;
+    type.value.pointer.pointee = integer;
+    REQUIRE(put(&context, type, &pointer));
+    REQUIRE(minic_x86_64_core_scalar_width(&context, pointer, &bytes, &sign));
+    REQUIRE(bytes == 8U && !sign);
+
+    fields[0].type_id = integer;
+    fields[0].alignment = 4U;
+    (void)memset(&type, 0, sizeof(type));
+    type.kind = MINIC_CORE_TYPE_RECORD;
+    type.has_layout = true;
+    type.size = 4U;
+    type.alignment = 4U;
+    type.value.record.is_complete = true;
+    type.value.record.fields = fields;
+    type.value.record.field_count = 1U;
+    REQUIRE(put(&context, type, &one));
+    REQUIRE(minic_x86_64_core_one_gp_record(&context, one, &bytes));
+    REQUIRE(bytes == 4U && !minic_x86_64_core_two_gp_record(&context, one));
+
+    (void)memset(&type, 0, sizeof(type));
+    type.kind = MINIC_CORE_TYPE_ARRAY;
+    type.has_layout = true;
+    type.size = 12U;
+    type.alignment = 4U;
+    type.value.array.element = integer;
+    type.value.array.count = 3U;
+    type.value.array.is_complete = true;
+    REQUIRE(put(&context, type, &array));
+    /* Sealed zero and incomplete extents alone must exclude these record
+     * tails from SysV registers, without redundant source-field flags. */
+    type.value.array.count = 0U;
+    type.size = 0U;
+    REQUIRE(put(&context, type, &zero_array));
+    type.value.array.is_complete = false;
+    type.has_layout = false;
+    type.alignment = 0U;
+    REQUIRE(put(&context, type, &unsized_array));
+    fields[0].type_id = zero_array;
+    (void)memset(&type, 0, sizeof(type));
+    type.kind = MINIC_CORE_TYPE_RECORD;
+    type.has_layout = true;
+    type.size = 8U;
+    type.alignment = 4U;
+    type.value.record.is_complete = true;
+    type.value.record.fields = fields;
+    type.value.record.field_count = 1U;
+    REQUIRE(put(&context, type, &zero_tail));
+    REQUIRE(!minic_x86_64_core_one_gp_record(&context, zero_tail, &bytes));
+    REQUIRE(!minic_x86_64_core_two_gp_record(&context, zero_tail));
+    fields[0].type_id = unsized_array;
+    REQUIRE(put(&context, type, &unsized_tail));
+    REQUIRE(!minic_x86_64_core_one_gp_record(&context, unsized_tail, &bytes));
+    REQUIRE(!minic_x86_64_core_two_gp_record(&context, unsized_tail));
+    fields[0].type_id = array;
+    (void)memset(&type, 0, sizeof(type));
+    type.kind = MINIC_CORE_TYPE_RECORD;
+    type.has_layout = true;
+    type.size = 12U;
+    type.alignment = 4U;
+    type.value.record.is_complete = true;
+    type.value.record.fields = fields;
+    type.value.record.field_count = 1U;
+    REQUIRE(put(&context, type, &two));
+    REQUIRE(minic_x86_64_core_two_gp_record(&context, two));
+
+    fields[0].type_id = integer;
+    fields[0].byte_offset = 1U;
+    (void)memset(&type, 0, sizeof(type));
+    type.kind = MINIC_CORE_TYPE_RECORD;
+    type.has_layout = true;
+    type.size = 8U;
+    type.alignment = 1U;
+    type.value.record.is_complete = true;
+    type.value.record.has_nondefault_layout_policy = true;
+    type.value.record.fields = fields;
+    type.value.record.field_count = 1U;
+    REQUIRE(put(&context, type, &unaligned));
+    REQUIRE(!minic_x86_64_core_one_gp_record(&context, unaligned, &bytes));
+    REQUIRE(!minic_x86_64_core_two_gp_record(&context, unaligned));
+    REQUIRE(!minic_x86_64_core_memory_result_record(&context, unaligned, &bytes));
+
+    fields[0].byte_offset = 0U;
+    (void)memset(&type, 0, sizeof(type));
+    type.kind = MINIC_CORE_TYPE_RECORD;
+    type.has_layout = true;
+    type.size = 24U;
+    type.alignment = 8U;
+    type.value.record.is_complete = true;
+    type.value.record.fields = fields;
+    type.value.record.field_count = 1U;
+    REQUIRE(put(&context, type, &large));
+    REQUIRE(minic_x86_64_core_memory_result_record(&context, large, &bytes));
+    REQUIRE(bytes == 24U);
+    REQUIRE(!minic_x86_64_core_one_gp_record(&context, large, &bytes));
+    REQUIRE(!minic_x86_64_core_two_gp_record(&context, large));
+
+    type.size = 4U;
+    type.alignment = 4U;
+    REQUIRE(put(&context, type, &small));
+    REQUIRE(small != one);
+    REQUIRE(minic_x86_64_core_record_abi_compatible(&context, one, one));
+    REQUIRE(!minic_x86_64_core_record_abi_compatible(&context, one, small));
+
+    (void)memset(&type, 0, sizeof(type));
+    type.kind = MINIC_CORE_TYPE_ALIGNED;
+    type.has_layout = true;
+    type.has_abi_alignment_override = true;
+    type.size = 4U;
+    type.alignment = 16U;
+    type.value.aligned.base = one;
+    REQUIRE(put(&context, type, &aligned_alias));
+    REQUIRE(!minic_x86_64_core_one_gp_record(&context, aligned_alias, &bytes));
+    REQUIRE(!minic_x86_64_core_record_abi_compatible(
+        &context, one, aligned_alias));
+    type.size = 24U;
+    type.alignment = 32U;
+    type.value.aligned.base = large;
+    REQUIRE(put(&context, type, &oversized_alias));
+    REQUIRE(!minic_x86_64_core_memory_result_record(
+        &context, oversized_alias, &bytes));
+    REQUIRE(!minic_x86_64_core_record_abi_compatible(
+        &context, MINIC_CORE_TYPE_INVALID, one));
+    REQUIRE(!minic_x86_64_core_scalar_width(
+        &context, MINIC_CORE_TYPE_INVALID, &bytes, &sign));
+
+    (void)memset(&type, 0, sizeof(type));
+    type.kind = MINIC_CORE_TYPE_RECORD;
+    REQUIRE(put(&context, type, &incomplete));
+    REQUIRE(!minic_x86_64_core_record_abi_compatible(
+        &context, incomplete, incomplete));
+    REQUIRE(!minic_x86_64_core_one_gp_record(&context, incomplete, &bytes));
+
+    minic_core_type_context_destroy(&context);
+    (void)puts("X86_CORE_ABI_SHAPE=PASS scalar pointer one_gp two_gp unaligned_reject sret nominal");
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/probe-x86-matched-asm-template.c"}
+#include "target/x86_64/asm_contract.h"
+#include <stdbool.h>
+#include <stdio.h>
+#include <string.h>
+
+static int probe(const char *s, size_t outputs, bool expected) {
+    bool got = minic_x86_64_asm_matched_template(s, strlen(s), outputs);
+    if (got == expected) return 0;
+    fprintf(stderr, "X86_MATCHED_TEMPLATE_CONTRACT_FAIL expected=%d actual=%d source=%s\n",
+            (int)expected, (int)got, s);
+    return 1;
+}
+
+int main(void) {
+    int failed = 0;
+    failed += probe("movq %0, %1\n\tadcq %2,%3", 4, true);
+    failed += probe("movq (%0), %3\n\tadcq 1*8(%1), %3", 4, true);
+    failed += probe("movq %3, 3*8(%2)", 4, true);
+    failed += probe("addq $1, (%0)\n\tsbbq $0, 2*8(%0)", 1, true);
+    failed += probe("subq $1, (%0)", 1, true);
+    failed += probe("movq (%0), %3; syscall", 4, false);
+    failed += probe("movq 4*8(%0), %3", 4, false);
+    failed += probe("movq 1*16(%0), %3", 4, false);
+    failed += probe("movq $2, (%0)", 1, false);
+    failed += probe("movq $1, %gs:(%0)", 1, false);
+    failed += probe("cmc\n\tsbbq %0,%1", 2, true);
+    failed += probe("addq %0,%1;movq %1,%0", 2, true);
+    failed += probe("cmc", 4, false);
+    failed += probe("movq %0,%1;syscall", 2, false);
+    failed += probe("movq %0,%1;call attacker", 2, false);
+    failed += probe("movq %0,%1 # injected", 2, false);
+    failed += probe("movq %0,%1\n\t.ret", 2, false);
+    failed += probe("movq %0,%1, %0", 2, false);
+    failed += probe("movq %%rax,%1", 2, false);
+    failed += probe("movq %0,8(%1)", 2, false);
+    failed += probe("movq %0,%4", 4, false);
+    failed += probe("movqX %0,%1", 2, false);
+    failed += probe("movq %0,%1\n\tud2", 2, false);
+    failed += probe("movq %0,%1\n\taddq %1,%0", 1, false);
+    if (failed != 0) return 1;
+    puts("MINIC_X86_MATCHED_GNU_TEMPLATE_SECURITY=PASS cases=24");
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/x86_asm_lowercase_i_valid.c"}
+int main(void) {
+    __asm__ volatile("nop" : : "i"(31));
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/x86_asm_mixed_Ir_unqualified.c"}
+void unsupported(void) {
+    __asm__ volatile("nop" : : "Ir"(31));
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/x86_asm_uppercase_I_unqualified.c"}
+void unsupported(void) {
+    __asm__ volatile("nop" : : "I"(31));
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/x86_futex_extable_atomic.c"}
+/* The complete original Linux 6.6.143 futex GNU exception-table macro.
+ * The type-17 handler changes its designated physical output register on
+ * EFAULT, while the ordinary success path uses real atomic x86 operations. */
+#define FUTEX_SMP_LOCK \
+    ".pushsection .smp_locks,\"a\"\n" \
+    ".balign 4\n" \
+    ".long 671f - .\n" \
+    ".popsection\n" \
+    "671:\n\tlock; "
+
+#define FUTEX_EX_TABLE(source, target, output) \
+    " .pushsection \"__ex_table\",\"a\"\n" \
+    " .balign 4\n" \
+    " .long (" source ") - .\n" \
+    " .long (" target ") - .\n" \
+    ".macro extable_type_reg type:req reg:req\n" \
+    ".set .Lfound, 0\n" \
+    ".set .Lregnr, 0\n" \
+    ".irp rs,rax,rcx,rdx,rbx,rsp,rbp,rsi,rdi,r8,r9,r10,r11,r12,r13,r14,r15\n" \
+    ".ifc \\reg, %%\\rs\n" \
+    ".set .Lfound, .Lfound+1\n" \
+    ".long \\type + (.Lregnr << 8)\n" \
+    ".endif\n" \
+    ".set .Lregnr, .Lregnr+1\n" \
+    ".endr\n" \
+    ".set .Lregnr, 0\n" \
+    ".irp rs,eax,ecx,edx,ebx,esp,ebp,esi,edi,r8d,r9d,r10d,r11d,r12d,r13d,r14d,r15d\n" \
+    ".ifc \\reg, %%\\rs\n" \
+    ".set .Lfound, .Lfound+1\n" \
+    ".long \\type + (.Lregnr << 8)\n" \
+    ".endif\n" \
+    ".set .Lregnr, .Lregnr+1\n" \
+    ".endr\n" \
+    ".if (.Lfound != 1)\n" \
+    ".error \"extable_type_reg: bad register argument\"\n" \
+    ".endif\n" \
+    ".endm\n" \
+    "extable_type_reg reg=" output ", type=(17 | ((-14) << 16)) \n" \
+    ".purgem extable_type_reg\n" \
+    " .popsection\n"
+
+static int futex_cmpxchg(unsigned int *uaddr, unsigned int oldval,
+                         unsigned int newval, unsigned int *previous)
+{
+    int ret = 0;
+    unsigned int result;
+    asm volatile("\n1:\t" FUTEX_SMP_LOCK "cmpxchgl %3, %2\n"
+                 "2:\n" FUTEX_EX_TABLE("1b", "2b", "%0")
+        : "+r" (ret), "=a" (result), "+m" (*uaddr)
+        : "r" (newval), "1" (oldval) : "memory");
+    *previous = result;
+    return ret;
+}
+
+static int futex_xchg(unsigned int *uaddr, int next, int *previous)
+{
+    int oldval = 0, ret;
+    asm volatile("1:\t" "xchgl %0, %2\n" "2:\n"
+                 FUTEX_EX_TABLE("1b", "2b", "%1")
+        : "=r" (oldval), "=r" (ret), "+m" (*uaddr)
+        : "0" (next), "1" (0));
+    *previous = oldval;
+    return ret;
+}
+
+static int futex_xadd(unsigned int *uaddr, int next, int *previous)
+{
+    int oldval = 0, ret;
+    asm volatile("1:\t" FUTEX_SMP_LOCK "xaddl %0, %2\n"
+                 "2:\n" FUTEX_EX_TABLE("1b", "2b", "%1")
+        : "=r" (oldval), "=r" (ret), "+m" (*uaddr)
+        : "0" (next), "1" (0));
+    *previous = oldval;
+    return ret;
+}
+
+static int futex_or(unsigned int *uaddr, int mask, int *previous)
+{
+    int oldval = 0, ret, temporary;
+    asm volatile("1:\tmovl %2, %0\n"
+                 "2:\tmovl %0, %3\n"
+                 "\torl %4, %3\n"
+                 "3:\t" FUTEX_SMP_LOCK "cmpxchgl %3, %2\n"
+                 "\tjnz\t2b\n4:\n"
+                 FUTEX_EX_TABLE("1b", "4b", "%1")
+                 FUTEX_EX_TABLE("3b", "4b", "%1")
+        : "=&a" (oldval), "=&r" (ret), "+m" (*uaddr), "=&r" (temporary)
+        : "r" (mask), "1" (0));
+    *previous = oldval;
+    return ret;
+}
+
+static int futex_and(unsigned int *uaddr, int mask, int *previous)
+{
+    int oldval = 0, ret, temporary;
+    asm volatile("1:\tmovl %2, %0\n"
+                 "2:\tmovl %0, %3\n"
+                 "\tandl %4, %3\n"
+                 "3:\t" FUTEX_SMP_LOCK "cmpxchgl %3, %2\n"
+                 "\tjnz\t2b\n4:\n"
+                 FUTEX_EX_TABLE("1b", "4b", "%1")
+                 FUTEX_EX_TABLE("3b", "4b", "%1")
+        : "=&a" (oldval), "=&r" (ret), "+m" (*uaddr), "=&r" (temporary)
+        : "r" (mask), "1" (0));
+    *previous = oldval;
+    return ret;
+}
+
+static int futex_xor(unsigned int *uaddr, int mask, int *previous)
+{
+    int oldval = 0, ret, temporary;
+    asm volatile("1:\tmovl %2, %0\n"
+                 "2:\tmovl %0, %3\n"
+                 "\txorl %4, %3\n"
+                 "3:\t" FUTEX_SMP_LOCK "cmpxchgl %3, %2\n"
+                 "\tjnz\t2b\n4:\n"
+                 FUTEX_EX_TABLE("1b", "4b", "%1")
+                 FUTEX_EX_TABLE("3b", "4b", "%1")
+        : "=&a" (oldval), "=&r" (ret), "+m" (*uaddr), "=&r" (temporary)
+        : "r" (mask), "1" (0));
+    *previous = oldval;
+    return ret;
+}
+
+int main(void)
+{
+    unsigned int value = 17, previous = 0;
+    int old = 0;
+    if (futex_cmpxchg(&value, 17, 42, &previous) ||
+        previous != 17 || value != 42) return 1;
+    if (futex_cmpxchg(&value, 17, 99, &previous) ||
+        previous != 42 || value != 42) return 2;
+    if (futex_xchg(&value, 11, &old) || old != 42 || value != 11) return 3;
+    if (futex_xadd(&value, 5, &old) || old != 11 || value != 16) return 4;
+    if (futex_or(&value, 64, &old) || old != 16 || value != 80) return 5;
+    if (futex_and(&value, 64, &old) || old != 80 || value != 64) return 6;
+    if (futex_xor(&value, 106, &old) || old != 64 || value != 42) return 7;
+    return 42;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/x86_global_plan_abi.c"}
+/* Differential object-layout oracle for the shared GlobalEmissionPlan.
+ * One TU exercises ELF metadata, scalar IEEE754 data, relocations and
+ * recursive C aggregate initialization without target instruction tricks. */
+int global_anchor = 37;
+static __attribute__((used)) float global_float = 1.25f;
+static __attribute__((used)) double global_double = -2.5;
+static __attribute__((used)) int *global_pointer = &global_anchor;
+
+__attribute__((used, section(".bss.minic.global"))) int named_bss_zero;
+__attribute__((used, section(".bssish.minic.global"))) int named_bssish_zero;
+
+static int global_function(int value) { return value + 5; }
+struct NestedReloc {
+    int *pointer;
+    int (*call)(int);
+    double fraction;
+};
+struct OuterReloc {
+    struct NestedReloc nested;
+    const char *name;
+};
+static __attribute__((used)) struct OuterReloc global_nested = {
+    { &global_anchor, global_function, 2.25 }, "nested"
+};
+
+static __attribute__((used)) const char *global_pointer_grid[2][2] = {
+    { "first", "second" }, { "third", 0 }
+};
+
+struct FlexibleGlobal {
+    const char *name;
+    int values[];
+};
+static __attribute__((used)) struct FlexibleGlobal global_flexible = {
+    "flexible", { 11, 13, 17 }
+};
+
+int main(void) {
+    return global_anchor == 37 && global_float == 1.25f &&
+           global_double == -2.5 && global_pointer == &global_anchor &&
+           named_bss_zero == 0 && named_bssish_zero == 0 &&
+           global_nested.nested.pointer == &global_anchor &&
+           global_nested.nested.call(5) == 10 &&
+           global_nested.nested.fraction == 2.25 &&
+           global_nested.name[0] == 'n' &&
+           global_pointer_grid[0][0][0] == 'f' &&
+           global_pointer_grid[1][0][0] == 't' &&
+           global_pointer_grid[1][1] == 0 &&
+           global_flexible.name[0] == 'f' &&
+           global_flexible.values[0] == 11 &&
+           global_flexible.values[2] == 17 ? 0 : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/x86_gnu_function_pointer_array_param.c"}
+/* Linux arch/x86/kvm/vmx/vmx.i:58019:
+ * nested_vmx_hardware_setup(int (*exit_handlers[])(struct kvm_vcpu *));
+ * An array parameter of function pointers adjusts to pointer-to-function-
+ * pointer, without leaving an ownerless incomplete array descriptor. */
+typedef int (*exit_handler_t)(int);
+
+extern int invoke_handlers(int (*exit_handlers[])(int), int value);
+
+__attribute__((noinline))
+int invoke_handlers(int (*exit_handlers[])(int), int value) {
+    return exit_handlers[1](value);
+}
+
+__attribute__((noinline))
+int invoke_typedef_handlers(exit_handler_t exit_handlers[], int value) {
+    return exit_handlers[0](value);
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/x86_gnu_function_pointer_array_param_driver.c"}
+typedef int (*exit_handler_t)(int);
+extern int invoke_handlers(int (*exit_handlers[])(int), int);
+extern int invoke_typedef_handlers(exit_handler_t exit_handlers[], int);
+
+static int plus_three(int n) { return n + 3; }
+static int times_five(int n) { return n * 5; }
+
+int main(void) {
+    exit_handler_t handlers[2] = {plus_three, times_five};
+    if (invoke_handlers(handlers, 8) != 40) return 1;
+    if (invoke_typedef_handlers(handlers, 8) != 11) return 2;
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/x86_gnu_vector_size_copy.c"}
+/* Linux arch/x86/kvm/hyperv.c style 16-byte vector storage assignment.
+ * This is storage only: no SSE arithmetic, value-return, or vector call ABI. */
+typedef unsigned int u32;
+typedef unsigned long long u64;
+typedef u32 sse128_t __attribute__((vector_size(16)));
+
+union kvm_xmm {
+    sse128_t vec;
+    u64 words[2];
+};
+
+struct kvm_state {
+    unsigned char pad;
+    union kvm_xmm xmm;
+    unsigned int tail;
+};
+
+static union kvm_xmm source, destination;
+static struct kvm_state nested;
+
+struct hyperv_hc {
+    sse128_t xmm[1];
+};
+
+static u64 hyperv_mask(struct hyperv_hc *hc) {
+    /* Mirrors the blocking Linux arch/x86/kvm/hyperv.c expression shape. */
+    return ({
+        union kvm_xmm flush;
+        flush.vec = hc->xmm[0];
+        flush.words[0];
+    });
+}
+
+int main(void) {
+    struct hyperv_hc hyperv;
+    source.words[0] = 0x0123456789abcdefULL;
+    source.words[1] = 0xfedcba9876543210ULL;
+    destination.vec = source.vec;
+    if (destination.words[0] != source.words[0] ||
+        destination.words[1] != source.words[1]) return 1;
+
+    source.words[0] = 0x1122334455667788ULL;
+    source.words[1] = 0x8877665544332211ULL;
+    nested.xmm.vec = source.vec;
+    if (nested.xmm.words[0] != source.words[0] ||
+        nested.xmm.words[1] != source.words[1]) return 2;
+    destination.vec = nested.xmm.vec;
+    if (destination.words[0] != source.words[0] ||
+        destination.words[1] != source.words[1]) return 3;
+    hyperv.xmm[0] = source.vec;
+    if (hyperv_mask(&hyperv) != source.words[0]) return 4;
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/x86_gnu_vector_size_movdqa.c"}
+/* Exact Linux arch/x86/kvm/fpu.h movdqa GNU memory constraints.
+ * The kernel compiles -mno-sse: only explicit asm may touch XMM. */
+typedef unsigned int u32;
+typedef unsigned long long u64;
+typedef u32 __attribute__((vector_size(16))) sse128_t;
+union kvm_xmm_image { sse128_t vec; u64 words[2]; u32 lanes[4]; };
+
+#define DECLARE_KVM_XMM(N) \
+    __attribute__((noinline)) void kvm_write_xmm##N(const sse128_t *p) { \
+        asm("movdqa %0, %%xmm" #N :: "m"(*p)); \
+    } \
+    __attribute__((noinline)) void kvm_read_xmm##N(sse128_t *p) { \
+        asm("movdqa %%xmm" #N ", %0" : "=m"(*p)); \
+    }
+
+DECLARE_KVM_XMM(0)
+DECLARE_KVM_XMM(1)
+DECLARE_KVM_XMM(2)
+DECLARE_KVM_XMM(3)
+DECLARE_KVM_XMM(4)
+DECLARE_KVM_XMM(5)
+DECLARE_KVM_XMM(6)
+DECLARE_KVM_XMM(7)
+DECLARE_KVM_XMM(8)
+DECLARE_KVM_XMM(9)
+DECLARE_KVM_XMM(10)
+DECLARE_KVM_XMM(11)
+DECLARE_KVM_XMM(12)
+DECLARE_KVM_XMM(13)
+DECLARE_KVM_XMM(14)
+DECLARE_KVM_XMM(15)
+
+/* A normal scalar/union write of all 16 bytes is required in addition to
+ * direct XMM memory transfer. C by-value vector CALL is deliberately absent. */
+int main(void) {
+    union kvm_xmm_image a, b;
+    a.words[0] = 0x123456789abcdef0ULL;
+    a.words[1] = 0xfedcba9876543210ULL;
+    b.words[0] = 0;
+    b.words[1] = 0;
+    kvm_write_xmm0(&a.vec);
+    kvm_read_xmm0(&b.vec);
+    if (b.words[0] != a.words[0] || b.words[1] != a.words[1])
+        return 1;
+    b.words[0] = 0;
+    b.words[1] = 0;
+    kvm_write_xmm15(&a.vec);
+    kvm_read_xmm15(&b.vec);
+    return b.words[0] != a.words[0] || b.words[1] != a.words[1];
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/x86_gnu_vector_size_storage.c"}
+/* Linux 6.6 arch/x86/kvm/fpu.h:8 -- GNU fixed vector *storage* with
+ * explicit -mno-sse kernel flags. No SIMD arithmetic or call ABI inferred. */
+typedef unsigned int u32;
+typedef u32 __attribute__((vector_size(16))) sse128_t;
+typedef u32 __attribute__((__vector_size__(8))) sse64_t;
+
+_Static_assert(sizeof(sse128_t) == 16, "KVM XMM image must be 16 bytes");
+_Static_assert(_Alignof(sse128_t) == 16, "movdqa requires 16-byte alignment");
+_Static_assert(sizeof(sse64_t) == 8, "distinct GNU vector width");
+_Static_assert(_Alignof(sse64_t) == 8, "8-byte vector alignment");
+
+struct kvm_vector_wrapper {
+    unsigned char marker;
+    sse128_t state;
+    unsigned char tail;
+};
+_Static_assert(__builtin_offsetof(struct kvm_vector_wrapper, state) == 16,
+               "vector field alignment");
+_Static_assert(sizeof(struct kvm_vector_wrapper) == 48,
+               "vector member controls struct stride");
+
+union kvm_vector_image {
+    sse128_t vec;
+    unsigned long long as_u64[2];
+    u32 as_u32[4];
+};
+_Static_assert(sizeof(union kvm_vector_image) == 16, "union full XMM image");
+_Static_assert(_Alignof(union kvm_vector_image) == 16, "union XMM alignment");
+
+unsigned long kvm_vector_storage_signature(void) {
+    return (unsigned long)(sizeof(struct kvm_vector_wrapper) +
+                           __builtin_offsetof(struct kvm_vector_wrapper, state) +
+                           _Alignof(union kvm_vector_image));
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/x86_gnu_vector_size_storage_driver.c"}
+extern unsigned long kvm_vector_storage_signature(void);
+
+int main(void) {
+    return kvm_vector_storage_signature() == 80UL ? 0 : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/x86_head_inline_section_driver.c"}
+unsigned long probe_early(void);
+unsigned long probe_later(void);
+unsigned long probe_early_again(void);
+unsigned long probe_explicit_owner(void);
+unsigned long probe_nested_early(void);
+unsigned long probe_nested_later(void);
+unsigned long probe_overflow_early(void);
+unsigned long probe_overflow_later(void);
+
+int main(void) {
+    return probe_early() != 144UL ||
+           probe_later() != 144UL ||
+           probe_early_again() != 144UL ||
+           probe_explicit_owner() != 39UL ||
+           probe_nested_early() != 60UL ||
+           probe_nested_later() != 60UL ||
+           probe_overflow_early() != 6UL ||
+           probe_overflow_later() != 6UL;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/x86_head_inline_section_probe.c"}
+static __attribute__((always_inline)) inline unsigned long probe_helper(unsigned long input) {
+    return (input + 7UL) ^ (input << 3);
+}
+
+__attribute__((section(".head.text")))
+unsigned long probe_early(void) {
+    return probe_helper(17UL);
+}
+
+__attribute__((section(".init.text")))
+unsigned long probe_later(void) {
+    return probe_helper(17UL);
+}
+
+__attribute__((section(".head.text")))
+unsigned long probe_early_again(void) {
+    return probe_helper(17UL);
+}
+
+static __attribute__((section(".special.text"), always_inline)) inline
+unsigned long probe_explicit(unsigned long input) {
+    return input * 3UL;
+}
+
+__attribute__((section(".head.text")))
+unsigned long probe_explicit_owner(void) {
+    return probe_explicit(13UL);
+}
+
+/* The leaf call is a single shared source-AST expression. Both specialized
+ * middle callers must get a local leaf clone even when the leaf's literal
+ * argument does not acquire new transitive integer facts. */
+static __attribute__((always_inline)) inline unsigned long
+probe_nested_leaf(unsigned long input) {
+    return (input * 5UL) + 2UL;
+}
+
+static __attribute__((always_inline)) inline unsigned long
+probe_nested_middle(unsigned long input) {
+    return probe_nested_leaf(11UL) + input;
+}
+
+__attribute__((section(".head.text")))
+unsigned long probe_nested_early(void) {
+    return probe_nested_middle(3UL);
+}
+
+__attribute__((section(".init.text")))
+unsigned long probe_nested_later(void) {
+    return probe_nested_middle(3UL);
+}
+
+/* Linux overflow.h: the _Bool call only gains its range-specialized clone
+ * after the integer and symbolic passes. A sectioned integer clone of the
+ * enclosing helper has no Boolean parameter facts, but still needs the
+ * late-created Boolean callee duplicated into its own section. */
+static inline _Bool probe_overflow_expected(_Bool overflow) {
+    return __builtin_expect(!!overflow, 0);
+}
+
+static inline unsigned long probe_overflow_product(unsigned long n,
+                                                   unsigned long size) {
+    unsigned long bytes;
+    if (__builtin_expect(!!probe_overflow_expected(
+            __builtin_mul_overflow(n, size, &bytes)), 0))
+        return ~0UL;
+    return bytes;
+}
+
+static inline unsigned long probe_overflow_wrapper(unsigned long n) {
+    return probe_overflow_product(n, 2UL);
+}
+
+__attribute__((section(".head.text")))
+unsigned long probe_overflow_early(void) {
+    return probe_overflow_wrapper(3UL);
+}
+
+__attribute__((section(".init.text")))
+unsigned long probe_overflow_later(void) {
+    return probe_overflow_wrapper(3UL);
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/x86_kbuild_mitigations.c"}
+/* Original GNU Linux x86-64 Kbuild mitigation shapes: direct, indirect and
+ * label-address control flow. Link/run through external thunk definitions. */
+static int minic_x86_add_five(int x) { return x + 5; }
+
+int minic_x86_indirect_call(int (*fn)(int), int x) {
+    return fn(x);
+}
+
+int minic_x86_computed_goto(int x) {
+    static void *const labels[2] = { &&left, &&right };
+    goto *labels[x & 1];
+left:
+    return x + 10;
+right:
+    return x + 20;
+}
+
+int main(void) {
+    return minic_x86_indirect_call(minic_x86_add_five, 7) != 12 ||
+           minic_x86_computed_goto(0) != 10 ||
+           minic_x86_computed_goto(1) != 21;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/x86_kernel_head_link_address.c"}
+/* x86's pre-page-table .head.text needs the link-time kernel VMA for a
+ * C global address; regular code and PIE code must keep their own policy. */
+unsigned long kernel_link_address_probe_anchor = 0x195ac3UL;
+
+__attribute__((section(".head.text"), noinline))
+unsigned long kernel_head_link_address_probe(void) {
+    return (unsigned long)&kernel_link_address_probe_anchor;
+}
+
+__attribute__((noinline))
+unsigned long kernel_regular_link_address_probe(void) {
+    return (unsigned long)&kernel_link_address_probe_anchor;
+}
+
+/* The opposite .head.text case: the kernel runs here before the high-half
+ * virtual mapping exists. A descriptor actually written via a C lvalue, and
+ * subsequently passed to a helper, needs its displaced RIP-relative address.
+ * Returning an address as link-time arithmetic above remains absolute. */
+struct kernel_head_probe_desc {
+    unsigned short limit;
+    unsigned long address;
+} __attribute__((packed));
+
+struct kernel_head_probe_desc kernel_head_direct_descriptor;
+extern void kernel_head_direct_data_consumer(struct kernel_head_probe_desc *);
+
+__attribute__((section(".head.text"), noinline))
+void kernel_head_direct_global_probe(unsigned long value) {
+    kernel_head_direct_descriptor.address = value;
+    kernel_head_direct_data_consumer(&kernel_head_direct_descriptor);
+}
+
+/* One symbol now has both address roles inside the SAME .head.text function.
+ * Physical data writes must use displaced RIP-relative addressing while
+ * pointer-to-integer arithmetic must retain the original link VMA. The
+ * opposite evaluation orders prevent a producer-order workaround. */
+volatile unsigned long kernel_head_mixed_global;
+
+__attribute__((section(".head.text"), noinline))
+unsigned long kernel_head_mixed_store_then_vma(unsigned long value) {
+    kernel_head_mixed_global = value;
+    return (unsigned long)&kernel_head_mixed_global;
+}
+
+__attribute__((section(".head.text"), noinline))
+unsigned long kernel_head_mixed_vma_then_store(unsigned long value) {
+    unsigned long vma = (unsigned long)&kernel_head_mixed_global;
+    kernel_head_mixed_global = value;
+    return vma;
+}
+
+/* An unannotated static helper inherits the address role of its only caller.
+ * Linux head64.c has exactly this layout: startup_64_setup_env in .head.text
+ * calls startup_64_load_idt in ordinary .text, which passes a global's link
+ * VMA into fixup_pointer(ptr, physbase). The helper's global address must
+ * remain absolute, even though the machine code executes before paging. */
+unsigned long kernel_head_helper_target;
+static __attribute__((noinline)) unsigned long
+kernel_head_fixup_pointer(unsigned long *pointer, unsigned long physbase) {
+    return (unsigned long)pointer -
+           (unsigned long)&kernel_link_address_probe_anchor + physbase;
+}
+static __attribute__((noinline)) unsigned long
+kernel_head_only_helper(unsigned long physbase) {
+    return kernel_head_fixup_pointer(&kernel_head_helper_target, physbase);
+}
+__attribute__((section(".head.text"), noinline))
+unsigned long kernel_head_helper_entry(unsigned long physbase) {
+    return kernel_head_only_helper(physbase);
+}
+
+/* The same static helper reached from both normal and early code cannot
+ * inherit the head-only role. It keeps ordinary .text PC-relative lowering. */
+static __attribute__((noinline)) unsigned long kernel_head_shared_helper(void) {
+    return (unsigned long)&kernel_head_helper_target;
+}
+__attribute__((section(".head.text"), noinline))
+unsigned long kernel_head_shared_entry(void) {
+    return kernel_head_shared_helper();
+}
+__attribute__((noinline))
+unsigned long kernel_head_shared_normal(void) {
+    return kernel_head_shared_helper();
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/x86_kernel_head_link_address_driver.c"}
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/mman.h>
+
+extern unsigned long kernel_link_address_probe_anchor;
+extern unsigned long kernel_head_link_address_probe(void);
+extern unsigned long kernel_regular_link_address_probe(void);
+struct kernel_head_probe_desc {
+    unsigned short limit;
+    unsigned long address;
+} __attribute__((packed));
+extern struct kernel_head_probe_desc kernel_head_direct_descriptor;
+extern void kernel_head_direct_global_probe(unsigned long value);
+extern volatile unsigned long kernel_head_mixed_global;
+extern unsigned long kernel_head_mixed_store_then_vma(unsigned long);
+extern unsigned long kernel_head_mixed_vma_then_store(unsigned long);
+extern unsigned long kernel_head_helper_target;
+extern unsigned long kernel_head_helper_entry(unsigned long);
+extern unsigned long kernel_head_shared_entry(void);
+extern unsigned long kernel_head_shared_normal(void);
+static int head_direct_consumer_ok;
+
+void kernel_head_direct_data_consumer(struct kernel_head_probe_desc *desc) {
+    head_direct_consumer_ok = (desc == &kernel_head_direct_descriptor &&
+                               desc->address == 0x19ac321UL);
+}
+
+/* The early function and its data are displaced by an identical amount.
+ * PC-relative stores must therefore update the cloned physical object, but
+ * VMA arithmetic must still produce the ORIGINAL link-time object address.
+ * Merely executing the functions at their normal link location would not
+ * distinguish the two representations. */
+static int check_displaced_mixed_use(
+    unsigned long (*function)(unsigned long), unsigned long value) {
+    const uintptr_t code = (uintptr_t)(void *)function;
+    const uintptr_t data = (uintptr_t)&kernel_head_mixed_global;
+    const uintptr_t begin = code < data ? code : data;
+    const uintptr_t code_end = code + 256U;
+    const uintptr_t data_end = data + sizeof(unsigned long);
+    const uintptr_t end = code_end > data_end ? code_end : data_end;
+    const size_t span = (size_t)(end - begin);
+    unsigned char *copy;
+    uintptr_t relocated_address;
+    unsigned long (*relocated)(unsigned long);
+    unsigned long result, cloned_data = 0U;
+    int ok;
+    if (span > (1U << 20)) return 0;
+    copy = mmap(NULL, span, PROT_READ | PROT_WRITE | PROT_EXEC,
+                MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (copy == MAP_FAILED) return 0;
+    memcpy(copy + (code - begin), (const void *)code, 256U);
+    kernel_head_mixed_global = 0x7733UL;
+    relocated_address = (uintptr_t)(copy + (code - begin));
+    memcpy(&relocated, &relocated_address, sizeof(relocated));
+    result = relocated(value);
+    memcpy(&cloned_data, copy + (data - begin), sizeof(cloned_data));
+    ok = result == (unsigned long)data && cloned_data == value &&
+         kernel_head_mixed_global == 0x7733UL;
+    if (munmap(copy, span) != 0) return 0;
+    return ok;
+}
+
+int main(void) {
+    void *page = mmap(NULL, 4096, PROT_READ | PROT_WRITE | PROT_EXEC,
+                      MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    unsigned long (*relocated)(void);
+    unsigned long linked = (unsigned long)&kernel_link_address_probe_anchor;
+    if (page == MAP_FAILED) return 4;
+    if (kernel_head_link_address_probe() != linked ||
+        kernel_regular_link_address_probe() != linked) return 5;
+    kernel_head_direct_global_probe(0x19ac321UL);
+    if (!head_direct_consumer_ok ||
+        kernel_head_direct_descriptor.address != 0x19ac321UL) return 8;
+    if (!check_displaced_mixed_use(
+            kernel_head_mixed_store_then_vma, 0x195ac3UL)) return 9;
+    if (!check_displaced_mixed_use(
+            kernel_head_mixed_vma_then_store, 0x8f71UL)) return 10;
+    if (kernel_head_helper_entry(0x2000UL) !=
+            (unsigned long)&kernel_head_helper_target - linked + 0x2000UL ||
+        kernel_head_shared_entry() != (unsigned long)&kernel_head_helper_target ||
+        kernel_head_shared_normal() != (unsigned long)&kernel_head_helper_target)
+        return 11;
+    /* The displacement-to-RIP representation is wrong for this function:
+     * a relocated copy must still produce the original link-time symbol VMA. */
+    memcpy(page, (const void *)(uintptr_t)&kernel_head_link_address_probe, 256);
+    memcpy(&relocated, &page, sizeof(relocated));
+    if (relocated() != linked) return 6;
+    if (munmap(page, 4096) != 0) return 7;
+    printf("%lx\n", linked);
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/x86_kvm_movdqa_reject.c"}
+/* KVM's exact vector_size(16) 16-byte aligned MOVDQA contract is not
+ * permitted to admit byte-sized memory, another vector width, or unsupported
+ * registers/constraints. All cases are intentional MiniC failures. */
+typedef unsigned int u32;
+typedef u32 __attribute__((vector_size(16))) v128;
+typedef u32 __attribute__((vector_size(8))) v64;
+static unsigned char scalar[16] __attribute__((aligned(16)));
+void reject(void) {
+#if BAD_FORM == 1
+    asm("movdqa %%xmm0,%0" : "=m"(scalar[0]));
+#elif BAD_FORM == 2
+    v64 wrong;
+    asm("movdqa %%xmm0,%0" : "=m"(wrong));
+#elif BAD_FORM == 3
+    v128 right;
+    asm("movdqa %%xmm16,%0" : "=m"(right));
+#elif BAD_FORM == 4
+    v128 right;
+    asm("movdqa %%xmm0,%0" : "=r"(right));
+#elif BAD_FORM == 5
+    const v128 right = {0, 0, 0, 0};
+    asm("movdqa %%xmm0,%0" : "=m"(right));
+#endif
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/x86_kvm_original_fpu_owner.c"}
+/* Compile the UNMODIFIED Linux 6.6.143 arch/x86/kvm/fpu.h through a tiny
+ * kernel-API shim: neither the vector typedef nor the 32 XMM asm patterns
+ * are pasted/reimplemented here. LINUX_SRC is supplied by the harness. */
+typedef unsigned int u32;
+typedef unsigned long long u64;
+extern void abort(void);
+#define CONFIG_X86_64 1
+#define BUG() abort()
+#define fpregs_lock() ((void)0)
+#define fpregs_unlock() ((void)0)
+#define fpregs_assert_state_consistent() ((void)0)
+#define TIF_NEED_FPU_LOAD 0
+#define test_thread_flag(flag) 0
+#define switch_fpu_return() ((void)0)
+#include "arch/x86/kvm/fpu.h"
+
+/* Variable-index helpers force all 16 register arms in the original source
+ * to stay eligible; dynamic runtime below checks actual XMM0 and XMM15. */
+__attribute__((noinline)) void kvm_original_write(int reg, const sse128_t *p) {
+    _kvm_write_sse_reg(reg, p);
+}
+__attribute__((noinline)) void kvm_original_read(int reg, sse128_t *p) {
+    _kvm_read_sse_reg(reg, p);
+}
+
+int main(void) {
+    __sse128_u input, output;
+    input.as_u64[0] = 0x123456789abcdef0ULL;
+    input.as_u64[1] = 0xfedcba9876543210ULL;
+    output.as_u64[0] = 0;
+    output.as_u64[1] = 0;
+    kvm_original_write(0, &input.vec);
+    kvm_original_read(0, &output.vec);
+    if (output.as_u64[0] != input.as_u64[0] ||
+        output.as_u64[1] != input.as_u64[1]) return 1;
+    output.as_u64[0] = 0;
+    output.as_u64[1] = 0;
+    kvm_original_write(15, &input.vec);
+    kvm_original_read(15, &output.vec);
+    if (output.as_u64[0] != input.as_u64[0] ||
+        output.as_u64[1] != input.as_u64[1]) return 2;
+    /* Linux hyperv.c and fpu.h use this exact GNU statement-expression
+     * union transport, which must preserve both 64-bit lanes with -mno-sse. */
+    if (sse128_lo(input.vec) != input.as_u64[0] ||
+        sse128_hi(input.vec) != input.as_u64[1]) return 3;
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/x86_linux_cmpxchg16b_alt.c"}
+/* Original Linux 6.6 x86 per-CPU CMPXCHG16B alternative: the emulation
+ * branch executes a private kernel call, while the replacement uses GS.
+ * Assemble/inspect the ELF patch metadata, never execute this in user mode. */
+typedef unsigned __int128 u128;
+typedef unsigned long u64;
+union halves { u128 full; struct { u64 low, high; }; };
+
+void __update_cpu_freelist_fast(volatile u128 *per_cpu,
+                                u128 *oldp, u128 desired) {
+    union halves old = {.full = *oldp};
+    union halves next = {.full = desired};
+    asm volatile("# ALT: oldnstr\n"
+                 "661:\n\tleaq %P[var], %%rsi; call this_cpu_cmpxchg16b_emu\n"
+                 "662:\n"
+                 "# ALT: padding\n"
+                 ".skip -(((6651f-6641f)-(662b-661b)) > 0) * "
+                     "((6651f-6641f)-(662b-661b)),0x90\n"
+                 "663:\n"
+                 ".pushsection .altinstructions,\"a\"\n"
+                 " .long 661b - .\n"
+                 " .long 6641f - .\n"
+                 " .4byte ( 4*32+13)\n"
+                 " .byte 663b-661b\n"
+                 " .byte 6651f-6641f\n"
+                 ".popsection\n"
+                 ".pushsection .altinstr_replacement, \"ax\"\n"
+                 "# ALT: replacement 1\n"
+                 "6641:\n\tcmpxchg16b %%gs:%[var]\n"
+                 "6651:\n.popsection\n"
+                 : [var] "+m"(*per_cpu), "+a"(old.low), "+d"(old.high)
+                 : "b"(next.low), "c"(next.high)
+                 : "memory", "rsi");
+    *oldp = old.full;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/x86_linux_cmpxchg16b_atomic.c"}
+/* Real Linux arch_try_cmpxchg128 contract: ZF, 16-byte memory, RDX:RAX,
+ * RBX:RCX, and the .smp_locks PREL32 patch site are inseparable. */
+typedef unsigned __int128 u128;
+typedef unsigned long u64;
+typedef _Bool bool;
+union halves { u128 full; struct { u64 low, high; }; };
+
+static bool cmpxchg128(volatile u128 *ptr, u128 *oldp, u128 desired) {
+    union halves old_pair = { .full = *oldp };
+    union halves new_pair = { .full = desired };
+    bool swapped;
+    asm volatile(".pushsection .smp_locks,\"a\"\n"
+                 ".balign 4\n"
+                 ".long 671f - .\n"
+                 ".popsection\n"
+                 "671:\n\tlock; cmpxchg16b %[ptr]"
+                 "\n\t/* output condition code e*/\n"
+                 : "=@cce"(swapped), [ptr] "+m"(*ptr),
+                   "+a"(old_pair.low), "+d"(old_pair.high)
+                 : "b"(new_pair.low), "c"(new_pair.high)
+                 : "memory");
+    if (!swapped) *oldp = old_pair.full;
+    return swapped;
+}
+
+int main(void) {
+    volatile u128 cell __attribute__((aligned(16))) = (u128)7UL;
+    u128 expected = (u128)7UL;
+    u128 desired = ((u128)0x123456789abcdef0UL << 64) | (u128)11UL;
+    if (!cmpxchg128(&cell, &expected, desired) || cell != desired ||
+        expected != (u128)7UL)
+        return 1;
+    expected = (u128)3UL;
+    if (cmpxchg128(&cell, &expected, (u128)9UL) ||
+        cell != desired || expected != desired)
+        return 2;
+    return 42;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/x86_linux_kvm_hypercall_full_abi.c"}
+/* Linux 6.6.143 arch/x86/include/asm/kvm_para.h: the actual five-argument
+ * alternative site and the one-through-four argument ABI siblings. This is
+ * a privileged-instruction compile/ELF test, never executed in user mode. */
+#define KVM_ALT_VMCALL                                                  \
+    "# ALT: oldnstr\n"                                                 \
+    "661:\n\t" "vmcall" "\n662:\n"                                    \
+    "# ALT: padding\n"                                                 \
+    ".skip -(((" "665""1""f-""664""1""f" ")-(" "662b-661b"          \
+    ")) > 0) * " "((" "665""1""f-""664""1""f" ")-(" "662b-661b"    \
+    ")),0x90\n"                                                        \
+    "663" ":\n"                                                        \
+    ".pushsection .altinstructions,\"a\"\n"                         \
+    " .long 661b - .\n"                                                \
+    " .long " "664""1""f - .\n"                                       \
+    " .4byte " "( 8*32+15)" "\n"                                      \
+    " .byte " "663""b-661b" "\n"                                      \
+    " .byte " "665""1""f-""664""1""f" "\n"                           \
+    ".popsection\n"                                                    \
+    ".pushsection .altinstr_replacement, \"ax\"\n"                 \
+    "# ALT: replacement " "1" "\n"                                    \
+    "664""1"":\n\t" "vmmcall" "\n"                                 \
+    "665""1" ":\n"                                                   \
+    ".popsection\n"
+
+long linux_kvm_alt0(unsigned int nr) {
+    long ret;
+    asm volatile(KVM_ALT_VMCALL : "=a"(ret) : "a"(nr) : "memory");
+    return ret;
+}
+long linux_kvm_alt1(unsigned int nr, unsigned long p1) {
+    long ret;
+    asm volatile(KVM_ALT_VMCALL : "=a"(ret) : "a"(nr), "b"(p1) : "memory");
+    return ret;
+}
+long linux_kvm_alt2(unsigned int nr, unsigned long p1, unsigned long p2) {
+    long ret;
+    asm volatile(KVM_ALT_VMCALL : "=a"(ret) : "a"(nr), "b"(p1), "c"(p2) : "memory");
+    return ret;
+}
+long linux_kvm_alt3(unsigned int nr, unsigned long p1, unsigned long p2,
+                    unsigned long p3) {
+    long ret;
+    asm volatile(KVM_ALT_VMCALL : "=a"(ret) : "a"(nr), "b"(p1), "c"(p2),
+                 "d"(p3) : "memory");
+    return ret;
+}
+long linux_kvm_alt4(unsigned int nr, unsigned long p1, unsigned long p2,
+                    unsigned long p3, unsigned long p4) {
+    long ret;
+    asm volatile(KVM_ALT_VMCALL : "=a"(ret) : "a"(nr), "b"(p1), "c"(p2),
+                 "d"(p3), "S"(p4) : "memory");
+    return ret;
+}
+long linux_kvm_sev_direct0(unsigned int nr) {
+    long ret;
+    asm volatile("vmmcall" : "=a"(ret) : "a"(nr) : "memory");
+    return ret;
+}
+long linux_kvm_sev_direct3(unsigned int nr, unsigned long p1,
+                           unsigned long p2, unsigned long p3) {
+    long ret;
+    asm volatile("vmmcall" : "=a"(ret) : "a"(nr), "b"(p1), "c"(p2),
+                 "d"(p3) : "memory");
+    return ret;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/x86_linux_p2_change_bit_xor.c"}
+/* Exact GNU Linux 6.6.143 arch_change_bit() x86-64 ASM source form.
+ * The constant branch must be an atomic LOCK XOR of the selected byte, with
+ * a real .smp_locks patch record. It is NOT an OR/AND, barrier, or plain XOR.
+ */
+static inline __attribute__((__gnu_inline__)) __attribute__((__always_inline__)) void
+linux_arch_change_bit(long nr, volatile unsigned long *addr)
+{
+    if (__builtin_constant_p(nr)) {
+        asm volatile(".pushsection .smp_locks,\"a\"\n"
+                     ".balign 4\n"
+                     ".long 671f - .\n"
+                     ".popsection\n"
+                     "671:\n\tlock; xorb %b1,%0"
+                     : "+m" (*(volatile char *)((void *)addr + (nr >> 3)))
+                     : "iq" (1 << (nr & 7)));
+    } else {
+        asm volatile(".pushsection .smp_locks,\"a\"\n"
+                     ".balign 4\n"
+                     ".long 671f - .\n"
+                     ".popsection\n"
+                     "671:\n\tlock; btcq %1,%0"
+                     : : "m" (*(volatile long *)addr), "Ir" (nr) : "memory");
+    }
+}
+
+void x86_p2_change_fixed(volatile unsigned long *addr)
+{
+    linux_arch_change_bit(9, addr);
+}
+
+void x86_p2_change_variable(long nr, volatile unsigned long *addr)
+{
+    linux_arch_change_bit(nr, addr);
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/x86_linux_p2_change_bit_xor_driver.c"}
+#include <pthread.h>
+#include <stddef.h>
+
+extern void x86_p2_change_fixed(volatile unsigned long *addr);
+extern void x86_p2_change_variable(long nr, volatile unsigned long *addr);
+
+static volatile unsigned long word;
+
+static void *change_fixed_concurrently(void *unused)
+{
+    size_t i;
+    (void)unused;
+    for (i = 0; i < 20001; ++i)
+        x86_p2_change_fixed(&word);
+    return NULL;
+}
+
+int main(void)
+{
+    pthread_t threads[6];
+    size_t i;
+
+    x86_p2_change_fixed(&word);
+    if (word != (1UL << 9)) return 1;
+    x86_p2_change_fixed(&word);
+    if (word != 0UL) return 2;
+    x86_p2_change_variable(31, &word);
+    if (word != (1UL << 31)) return 3;
+    x86_p2_change_variable(63, &word);
+    if (word != ((1UL << 31) | (1UL << 63))) return 4;
+    x86_p2_change_variable(31, &word);
+    x86_p2_change_variable(63, &word);
+    if (word != 0UL) return 5;
+    x86_p2_change_variable(9, &word);
+    x86_p2_change_fixed(&word);
+    if (word != 0UL) return 6;
+
+    /* Six odd-parity writers all toggle bit 9. If LOCK XOR were reduced to
+     * ordinary non-atomic read/modify/write, lost toggles would be exposed. */
+    for (i = 0; i < sizeof(threads) / sizeof(threads[0]); ++i)
+        if (pthread_create(&threads[i], NULL, change_fixed_concurrently, NULL))
+            return 7;
+    for (i = 0; i < sizeof(threads) / sizeof(threads[0]); ++i)
+        if (pthread_join(threads[i], NULL)) return 8;
+    return word == 0UL ? 0 : 9;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/x86_linux_p2_kvm_asm_followups.c"}
+/* GNU-only source oracle for original Linux 6.6.143 arch/x86/kvm/x86.i:
+ * div_frac():64365, record_steal_time():65105-65126. No MiniC PASS claim.
+ * These are real x86 integer-division, exchange and extable contracts. */
+#include <stdint.h>
+
+struct __large_struct {
+    unsigned long buf[100];
+};
+
+uint32_t x86_p2_kvm_div_frac(uint32_t dividend, uint32_t divisor)
+{
+    uint32_t quotient, remainder;
+    asm("divl %2"
+        : "=a" (quotient), "=d" (remainder)
+        : "rm" (divisor), "0" (0), "1" ((uint32_t)dividend));
+    return quotient;
+}
+
+/* In memory-operand XCHG, x86 implicitly performs an atomic exchange even
+ * without an explicit LOCK prefix. The early-clobber `+&r` errno must not
+ * overlap the byte source or address. The extable is real fault metadata. */
+int x86_p2_kvm_clear_steal_preempted(volatile unsigned char *address,
+                                     unsigned char *previous)
+{
+    unsigned char old = 0;
+    int err = -14;
+    asm volatile("1: xchgb %0, %2\n"
+                 "xor %1, %1\n"
+                 "2:\n"
+                 " .pushsection \"__ex_table\",\"a\"\n"
+                 " .balign 4\n"
+                 " .long (1b) - .\n"
+                 " .long (2b) - .\n"
+                 " .long 3\n"
+                 " .popsection\n"
+                 : "+q" (old), "+&r" (err), "+m" (*address));
+    if (err) return err;
+    *previous = old;
+    return 0;
+}
+
+/* Exact exception-fixup asm-goto shape in record_steal_time(): the fault
+ * target is operand %l2, not a direct jump. A kernel fixup handler consults
+ * the __ex_table relocation; user-space cannot exercise the fault path. */
+int x86_p2_kvm_put_user_byte(unsigned char value,
+                             volatile unsigned char *address)
+{
+    asm goto("\n"
+             "1:\tmovb %0,%1\n"
+             " .pushsection \"__ex_table\",\"a\"\n"
+             " .balign 4\n"
+             " .long (1b) - .\n"
+             " .long (%l2) - .\n"
+             " .long 3\n"
+             " .popsection\n"
+             : : "iq" (value), "m" (*(struct __large_struct *)address)
+             : : fault);
+    return 0;
+fault:
+    return -14;
+}
+
+int x86_p2_kvm_get_user_byte(volatile unsigned char *address,
+                             unsigned char *value)
+{
+    unsigned char read_value;
+    asm volatile goto("\n"
+                      "1:\tmovb %[umem],%[output]\n"
+                      " .pushsection \"__ex_table\",\"a\"\n"
+                      " .balign 4\n"
+                      " .long (1b) - .\n"
+                      " .long (%l2) - .\n"
+                      " .long 3\n"
+                      " .popsection\n"
+                      : [output] "=q" (read_value)
+                      : [umem] "m" (*(struct __large_struct *)address)
+                      : : fault);
+    *value = read_value;
+    return 0;
+fault:
+    return -14;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/x86_linux_p2_kvm_asm_followups_driver.c"}
+#include <stdint.h>
+
+extern uint32_t x86_p2_kvm_div_frac(uint32_t dividend, uint32_t divisor);
+extern int x86_p2_kvm_clear_steal_preempted(volatile unsigned char *address,
+                                            unsigned char *previous);
+extern int x86_p2_kvm_put_user_byte(unsigned char value,
+                                    volatile unsigned char *address);
+extern int x86_p2_kvm_get_user_byte(volatile unsigned char *address,
+                                    unsigned char *value);
+
+int main(void)
+{
+    static const uint32_t inputs[][2] = {
+        {0, 1}, {1, 3}, {2, 3}, {3, 4}, {6, 7}, {100, 101},
+        {65535, 65536}, {0x7fffffffU, 0x80000000U},
+        {0xfffffffeU, 0xffffffffU}
+    };
+    volatile unsigned char memory = 0x5a;
+    unsigned char previous = 0, loaded = 0;
+    unsigned int index;
+
+    for (index = 0; index < sizeof(inputs) / sizeof(inputs[0]); ++index) {
+        const uint32_t dividend = inputs[index][0];
+        const uint32_t divisor = inputs[index][1];
+        const uint32_t exact = (uint32_t)(((uint64_t)dividend << 32) / divisor);
+        if (x86_p2_kvm_div_frac(dividend, divisor) != exact) return 1;
+    }
+    if (x86_p2_kvm_clear_steal_preempted(&memory, &previous)) return 2;
+    if (previous != 0x5a || memory != 0) return 3;
+    if (x86_p2_kvm_put_user_byte(0x83, &memory)) return 4;
+    if (memory != 0x83) return 5;
+    if (x86_p2_kvm_get_user_byte(&memory, &loaded)) return 6;
+    if (loaded != 0x83) return 7;
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/x86_linux_paravirt_patch_site.c"}
+/* The x86 Linux runtime rewrites paravirt inline-asm sites with a 5-byte
+ * CALL rel32. The emitted 771..772 span must therefore be at least 5 bytes
+ * even if MiniC selects a 3-byte register-indirect memory CALL. */
+struct pv_ops_type {
+    struct { void (*safe_halt)(void); } irq;
+};
+
+static int callback_count;
+static void callback(void) { ++callback_count; }
+struct pv_ops_type pv_ops = { .irq = { .safe_halt = callback } };
+register unsigned long current_stack_pointer __asm__("rsp");
+
+void pv_call(void) {
+    unsigned long edi = 0, esi = 0, edx = 0, ecx = 0;
+    asm volatile(
+        "771:\n\t"
+        "999:\n\t"
+        ".pushsection .discard.retpoline_safe\n\t"
+        ".long 999b\n\t"
+        ".popsection\n\t"
+        "call *%[paravirt_opptr];\n"
+        "772:\n"
+        ".pushsection .parainstructions,\"a\"\n"
+        " .balign 8\n"
+        " .quad 771b\n"
+        " .byte %c[paravirt_typenum]\n"
+        " .byte 772b-771b\n"
+        " .balign 8\n"
+        ".popsection\n"
+        : "=D" (edi), "=S" (esi), "=d" (edx), "=c" (ecx),
+          "+r" (current_stack_pointer)
+        : [paravirt_typenum] "i" (1),
+          [paravirt_opptr] "m" (pv_ops.irq.safe_halt)
+        : "memory", "cc", "rax", "r8", "r9", "r10", "r11");
+}
+
+int main(void) {
+    pv_call();
+    return callback_count == 1 ? 42 : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/x86_linux_put_user_pointer.c"}
+/* The real Linux robust-list and alternate-signal-stack writers pass a
+ * pointer through RAX to the private __put_user_8 helper. Their GNU asm is
+ * intentionally not a normal SysV call: RCX is the user address/error and
+ * RSP is an explicit +r operand. Keep the actual ABI and pointer payload. */
+typedef unsigned long uintptr_t;
+register uintptr_t current_stack_pointer asm("rsp");
+
+__asm__(
+    ".text\n"
+    ".globl __put_user_8\n"
+    "__put_user_8:\n"
+    "  movq %rax, (%rcx)\n"
+    "  movabsq $0x123456789abcdef0, %rbx\n"
+    "  xorl %ecx, %ecx\n"
+    "  ret\n"
+    ".globl __put_user_nocheck_8\n"
+    ".set __put_user_nocheck_8, __put_user_8\n");
+
+static int write_robust_ptr(void **user, void *value) {
+    int err;
+    void *address = user;
+    register void *physical_value asm("%rax") = value;
+    asm volatile("call __put_user_%c[size]"
+                 : "=c"(err), "+r"(current_stack_pointer)
+                 : "0"(address), "r"(physical_value),
+                   [size] "i"(sizeof(*user))
+                 : "ebx");
+    return err;
+}
+
+static int write_sigaltstack_ptr(void **user, void *value) {
+    int err;
+    void *address = user;
+    register void *physical_value asm("%rax") = value;
+    asm volatile("call __put_user_nocheck_%c[size]"
+                 : "=c"(err), "+r"(current_stack_pointer)
+                 : "0"(address), "r"(physical_value),
+                   [size] "i"(sizeof(*user))
+                 : "ebx");
+    return err;
+}
+
+int main(void) {
+    int first = 17;
+    long second = 0x12345678L;
+    void *slot_a = (void *)0;
+    void *slot_b = (void *)0;
+    int status_a = write_robust_ptr(&slot_a, &first);
+    int status_b = write_sigaltstack_ptr(&slot_b, &second);
+    return status_a == 0 && status_b == 0 &&
+           slot_a == &first && slot_b == &second ? 42 : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/x86_linux_task_size_alt.c"}
+/* Linux 6.6.143 TASK_SIZE_MAX: same input roles and complete ELF alternative. */
+unsigned long minic_x86_task_size_max(void) {
+    unsigned long ret;
+    __asm__ volatile (
+        "# ALT: oldnstr\n"
+        "661:\n\t" "movq %[small],%0" "\n"
+        "662:\n"
+        "# ALT: padding\n"
+        ".skip -(((6651f-6641f)-(662b-661b)) > 0) * "
+        "((6651f-6641f)-(662b-661b)),0x90\n"
+        "663:\n"
+        ".pushsection .altinstructions,\"a\"\n"
+        " .long 661b - .\n"
+        " .long 6641f - .\n"
+        " .4byte (16*32+16)\n"
+        " .byte 663b-661b\n"
+        " .byte 6651f-6641f\n"
+        ".popsection\n"
+        ".pushsection .altinstr_replacement, \"ax\"\n"
+        "# ALT: replacement 1\n"
+        "6641:\n\t" "movq %[large],%0" "\n"
+        "6651:\n"
+        ".popsection\n"
+        : "=r" (ret)
+        : "i" (0), [small] "i" ((1UL << 47) - (1UL << 12)),
+          [large] "i" ((1UL << 56) - (1UL << 12)));
+    return ret;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/x86_linux_testcc.c"}
+#include <stdbool.h>
+
+/* Linux constant_test_bit_acquire emits the same ZF flag-output pattern. */
+static bool test_nz(unsigned char *byte) {
+    bool result;
+    asm volatile("testb %2,%1\n\t/* output condition code nz*/\n"
+        : "=@ccnz" (result)
+        : "m" (*byte), "i" (8)
+        : "memory");
+    return result;
+}
+
+static bool test_z(unsigned char *byte) {
+    bool result;
+    asm volatile("testb %2,%1\n\t/* output condition code z*/\n"
+        : "=@ccz" (result)
+        : "m" (*byte), "i" (16)
+        : "memory");
+    return result;
+}
+
+static bool test_non_power_mask(unsigned char *byte) {
+    bool result;
+    asm volatile("testb %2,%1\n\t/* output condition code nz*/\n"
+        : "=@ccnz" (result)
+        : "m" (*byte), "i" (3)
+        : "memory");
+    return result;
+}
+
+int main(void) {
+    unsigned char zero = 0, selected = 8, other = 16, mixed = 2;
+    return test_nz(&zero) || !test_nz(&selected) || test_nz(&other) ||
+        !test_z(&zero) || !test_z(&selected) || test_z(&other) ||
+        test_non_power_mask(&zero) || !test_non_power_mask(&mixed);
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/x86_linux_vmware_machineir.c"}
+/* Derived from Linux 6.6.143 arch/x86/kernel/cpu/vmware.c. Privileged
+ * opcodes are compile/assemble-only: this fixture must never execute. */
+typedef unsigned int u32;
+extern u32 vmware_hypercall_mode;
+
+u32 minic_vmware_hypercall_probe(u32 command) {
+    u32 eax, ecx, edx, ebx;
+    switch (vmware_hypercall_mode) {
+    case 2U:
+        __asm__("vmcall" : "=a"(eax), "=c"(ecx), "=d"(edx), "=b"(ebx)
+            : "a"(0x564D5868U), "c"(command), "d"(0), "b"(~0U)
+            : "memory");
+        break;
+    case 1U:
+        __asm__("vmmcall" : "=a"(eax), "=c"(ecx), "=d"(edx), "=b"(ebx)
+            : "a"(0x564D5868U), "c"(command), "d"(0), "b"(~0U)
+            : "memory");
+        break;
+    default:
+        __asm__("inl (%%dx), %%eax" : "=a"(eax), "=c"(ecx), "=d"(edx), "=b"(ebx)
+            : "a"(0x564D5868U), "c"(command), "d"(0x5658), "b"(~0U)
+            : "memory");
+        break;
+    }
+    return eax ^ ecx ^ edx ^ ebx;
+}
+
+#define VMWARE_ALT_MAX "((6651f-6641f) ^ (((6651f-6641f) ^ (6652f-6642f)) & -(-((6651f-6641f) < (6652f-6642f)))))"
+u32 minic_vmware_stealclock_probe(u32 arg1, u32 arg2) {
+    u32 result, info;
+    __asm__ volatile (
+        "# ALT: oldinstr2\n"
+        "661:\n\tmovw $0x5658, %%dx; inl (%%dx), %%eax\n"
+        "662:\n"
+        "# ALT: padding2\n"
+        ".skip -( (" VMWARE_ALT_MAX " - (662b-661b)) > 0) * ("
+            VMWARE_ALT_MAX " - (662b-661b)), 0x90\n"
+        "663:\n"
+        ".pushsection .altinstructions,\"a\"\n"
+        " .long 661b - .\n"
+        " .long 6641f - .\n"
+        " .4byte (8*32+18)\n"
+        " .byte 663b-661b\n"
+        " .byte 6651f-6641f\n"
+        " .long 661b - .\n"
+        " .long 6642f - .\n"
+        " .4byte (8*32+19)\n"
+        " .byte 663b-661b\n"
+        " .byte 6652f-6642f\n"
+        ".popsection\n"
+        ".pushsection .altinstr_replacement,\"ax\"\n"
+        "# ALT: replacement 1\n"
+        "6641:\n\tvmcall\n"
+        "6651:\n"
+        "# ALT: replacement 2\n"
+        "6642:\n\tvmmcall\n"
+        "6652:\n"
+        ".popsection\n"
+        : "=a"(result), "=c"(info)
+        : "a"(0x564D5868U), "b"(0), "c"(91), "d"(0),
+          "S"(arg1), "D"(arg2)
+        : "memory");
+    return result ^ info;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/x86_linux_zero_extent_record_arrays.c"}
+/* GNU defconfig may leave a feature-gated table without any entries.
+ * The declaration is a defined zero-sized object, not a missing alias. */
+struct minic_gss_enctype {
+    unsigned int etype;
+    const char *name;
+    unsigned long marker;
+};
+
+static const struct minic_gss_enctype supported_gss_krb5_enctypes[] = {};
+
+struct minic_hda_config {
+    unsigned long id;
+    int flags;
+};
+
+static const struct minic_hda_config config_table[] = {};
+static const struct minic_hda_config nested_config[][3] = {};
+
+unsigned long minic_zero_record_array_extents(void) {
+    return sizeof(supported_gss_krb5_enctypes) +
+           sizeof(config_table) + sizeof(nested_config);
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/x86_msabi_definition_native_driver.c"}
+#include <stdio.h>
+#include <string.h>
+
+__attribute__((ms_abi))
+long win64_scalar_entry(long, long, long, long, long, long);
+__attribute__((ms_abi))
+double win64_mixed_entry(long, double, float, long, double, long);
+__attribute__((ms_abi)) float win64_float_entry(float);
+__attribute__((ms_abi)) long win64_empty_entry(void);
+
+__attribute__((noinline)) long sysv_intrude(long value) {
+    /* SysV callees may destroy Win64 callee-preserved RDI/RSI/XMM6. */
+    __asm__ volatile (
+        "movq $0, %%rdi\n\t"
+        "movq $0, %%rsi\n\t"
+        "pxor %%xmm6, %%xmm6\n\t"
+        "pxor %%xmm15, %%xmm15\n\t"
+        : : : "rdi", "rsi", "xmm6", "xmm15");
+    return value + 31;
+}
+
+static int check_entry_nonvolatiles(void) {
+    const unsigned char seed[16] = {
+        0x31, 0x42, 0x53, 0x64, 0x75, 0x86, 0x97, 0xa8,
+        0xb9, 0xca, 0xdb, 0xec, 0xfd, 0x0e, 0x1f, 0x20};
+    const unsigned char seed_high[16] = {
+        0x8e, 0x7d, 0x6c, 0x5b, 0x4a, 0x39, 0x28, 0x17,
+        0x06, 0xf5, 0xe4, 0xd3, 0xc2, 0xb1, 0xa0, 0x9f};
+    unsigned char observed[16] = {0};
+    unsigned char observed_high[16] = {0};
+    unsigned long preserved_rdi = 0U, preserved_rsi = 0U;
+    long result = -1;
+    /* GCC's x86 asm sets the actual six Microsoft ABI argument locations:
+     * four registers, 32-byte caller home, and slots at rsp+32/rsp+40.
+     * The callee calls a SysV function that deliberately clobbers RDI/RSI
+     * and both the first and last Win64-only XMM registers, making
+     * missing saves at either end of the physical bank observable. */
+    __asm__ volatile (
+        "movq $0x12345, %%rdi\n\t"
+        "movq $0x6789a, %%rsi\n\t"
+        "movdqu %[input_xmm], %%xmm6\n\t"
+        "movdqu %[input_xmm_high], %%xmm15\n\t"
+        "subq $48, %%rsp\n\t"
+        "movq $5, 32(%%rsp)\n\t"
+        "movq $6, 40(%%rsp)\n\t"
+        "movq $1, %%rcx\n\t"
+        "movq $2, %%rdx\n\t"
+        "movq $3, %%r8\n\t"
+        "movq $4, %%r9\n\t"
+        "call win64_scalar_entry\n\t"
+        "addq $48, %%rsp\n\t"
+        "movq %%rdi, %[output_rdi]\n\t"
+        "movq %%rsi, %[output_rsi]\n\t"
+        "movdqu %%xmm6, %[output_xmm]\n\t"
+        "movdqu %%xmm15, %[output_xmm_high]\n\t"
+        : "=a" (result),
+          [output_rdi] "=m" (preserved_rdi),
+          [output_rsi] "=m" (preserved_rsi),
+          [output_xmm] "=m" (observed),
+          [output_xmm_high] "=m" (observed_high)
+        : [input_xmm] "m" (seed),
+          [input_xmm_high] "m" (seed_high)
+        : "rcx", "rdx", "r8", "r9", "r10", "r11", "rdi", "rsi",
+          "xmm6", "xmm15", "memory", "cc");
+    return result == 192L && preserved_rdi == 0x12345UL &&
+           preserved_rsi == 0x6789aUL && memcmp(seed, observed, 16U) == 0 &&
+           memcmp(seed_high, observed_high, 16U) == 0;
+}
+
+int main(void) {
+    if (!check_entry_nonvolatiles() ||
+        win64_scalar_entry(1L, 2L, 3L, 4L, 5L, 6L) != 192L ||
+        win64_mixed_entry(2L, 1.5, 2.25f, 4L, 3.5, 6L) != 19.25 ||
+        win64_float_entry(2.5f) != 3.75f ||
+        win64_empty_entry() != 0x1234)
+        return 1;
+    puts("MS_X64_DEFINITION=PASS incoming=6 mixed_xmm=1 shadow=1 nonvolatile=12");
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/x86_msabi_definition_native_impl.c"}
+/* GNU/Linux EFI exposes real Microsoft-x64 function definitions, not just
+ * foreign callbacks. These definitions are compiled once by GCC and once
+ * by MiniC while the caller is always independent GCC machine code. */
+extern long sysv_intrude(long value);
+/* Linux EFI declares efi_pe_entry before its later body; exercise that
+ * exact prototype-to-definition ABI metadata lifecycle. */
+__attribute__((ms_abi))
+long win64_scalar_entry(long, long, long, long, long, long);
+
+__attribute__((ms_abi))
+long win64_scalar_entry(long a, long b, long c, long d, long e, long f) {
+    return sysv_intrude(e) + a * 3 + b * 5 + c * 7 + d * 11 + f * 13;
+}
+
+__attribute__((ms_abi))
+double win64_mixed_entry(long a, double b, float c, long d, double e, long f) {
+    return (double)a + b + (double)c + (double)d + e + (double)f;
+}
+
+__attribute__((ms_abi))
+float win64_float_entry(float value) {
+    return value + 1.25f;
+}
+
+__attribute__((ms_abi))
+long win64_empty_entry(void) {
+    return 0x1234;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/x86_msabi_definition_native_negative.c"}
+#if defined(NEG_DEF_VARIADIC)
+__attribute__((ms_abi)) long rejected(long value, ...) { return value; }
+#elif defined(NEG_DEF_AGGREGATE)
+struct Pair { long first; long second; };
+__attribute__((ms_abi)) struct Pair rejected(struct Pair value) { return value; }
+#elif defined(NEG_DEF_INT128)
+__attribute__((ms_abi)) __int128 rejected(__int128 value) { return value; }
+#elif defined(NEG_DEF_LONG_DOUBLE)
+__attribute__((ms_abi)) long double rejected(long double value) { return value; }
+#endif
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/x86_msabi_no_sse.c"}
+/* A genuine MS x64 entry with a SysV outgoing call, as in EFI libstub.
+ * With -mno-sse neither ABI boundary may use XMM save/restore opcodes. */
+typedef unsigned long mini_u64;
+
+__attribute__((noinline))
+mini_u64 minic_ms_no_sse_helper(mini_u64 value) {
+    return (value << 3) ^ 0x55UL;
+}
+
+__attribute__((ms_abi, noinline))
+mini_u64 minic_ms_no_sse_entry(mini_u64 a, mini_u64 b) {
+    return minic_ms_no_sse_helper(a) + b;
+}
+
+#ifdef MINIC_MSABI_FLOAT_NEGATIVE
+__attribute__((ms_abi, noinline))
+double minic_ms_no_sse_float(double value) {
+    return value + 1.0;
+}
+
+int main(void) {
+    return (int)minic_ms_no_sse_float(2.0);
+}
+#else
+int main(void) {
+    return minic_ms_no_sse_entry(7UL, 11UL) ==
+        (((7UL << 3) ^ 0x55UL) + 11UL) ? 0 : 1;
+}
+#endif
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/x86_msabi_scalar_native_client.c"}
+/* MiniC SysV functions call foreign Win64 ABI functions by name and through
+ * precisely typed EFI callbacks. No aggregate/variadic MS ABI is exercised. */
+extern __attribute__((ms_abi)) long ms_scalar_zero(void);
+extern __attribute__((ms_abi)) long ms_scalar_one(long);
+extern __attribute__((ms_abi)) long ms_scalar_four(long, long, long, long);
+extern __attribute__((ms_abi)) long ms_scalar_five(long, long, long, long, long);
+extern __attribute__((ms_abi)) long ms_scalar_seven(
+    long, long, long, long, long, long, long);
+extern __attribute__((ms_abi)) double ms_scalar_mixed(
+    double, long, float, long, double, long, double);
+
+typedef long ms_zero_t(void);
+typedef long ms_one_t(long);
+typedef long ms_four_t(long, long, long, long);
+typedef long ms_five_t(long, long, long, long, long);
+typedef long ms_seven_t(long, long, long, long, long, long, long);
+typedef double ms_mixed_t(double, long, float, long, double, long, double);
+
+struct MSCallbacks {
+    ms_zero_t __attribute__((ms_abi)) *zero;
+    ms_one_t __attribute__((ms_abi)) *one;
+    ms_four_t __attribute__((ms_abi)) *four;
+    ms_five_t __attribute__((ms_abi)) *five;
+    ms_seven_t __attribute__((ms_abi)) *seven;
+    ms_mixed_t __attribute__((ms_abi)) *mixed;
+};
+
+long minic_ms_direct_zero(void) { return ms_scalar_zero(); }
+long minic_ms_direct_one(void) { return ms_scalar_one(11); }
+long minic_ms_direct_four(void) { return ms_scalar_four(1, 2, 3, 4); }
+long minic_ms_direct_five(void) { return ms_scalar_five(1, 2, 3, 4, 5); }
+long minic_ms_direct_seven(void) {
+    return ms_scalar_seven(1, 2, 3, 4, 5, 6, 7);
+}
+double minic_ms_direct_mixed(void) {
+    return ms_scalar_mixed(2.5, 11, 3.25f, 22, 4.5, 33, 5.5);
+}
+
+long minic_ms_indirect_zero(struct MSCallbacks *callbacks) {
+    return callbacks->zero();
+}
+long minic_ms_indirect_one(struct MSCallbacks *callbacks) {
+    return callbacks->one(11);
+}
+long minic_ms_indirect_four(struct MSCallbacks *callbacks) {
+    return callbacks->four(1, 2, 3, 4);
+}
+long minic_ms_indirect_five(struct MSCallbacks *callbacks) {
+    return callbacks->five(1, 2, 3, 4, 5);
+}
+long minic_ms_indirect_seven(struct MSCallbacks *callbacks) {
+    return callbacks->seven(1, 2, 3, 4, 5, 6, 7);
+}
+double minic_ms_indirect_mixed(struct MSCallbacks *callbacks) {
+    return callbacks->mixed(2.5, 11, 3.25f, 22, 4.5, 33, 5.5);
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/x86_msabi_scalar_native_gnu.c"}
+#include <stdio.h>
+
+/* GNU GCC owns the MS x64 callees and the SysV oracle. Both direct calls
+ * and typed EFI callbacks must agree with GCC's native register/stack ABI. */
+typedef long ms_zero_t(void);
+typedef long ms_one_t(long);
+typedef long ms_four_t(long, long, long, long);
+typedef long ms_five_t(long, long, long, long, long);
+typedef long ms_seven_t(long, long, long, long, long, long, long);
+typedef double ms_mixed_t(double, long, float, long, double, long, double);
+struct MSCallbacks {
+    ms_zero_t __attribute__((ms_abi)) *zero;
+    ms_one_t __attribute__((ms_abi)) *one;
+    ms_four_t __attribute__((ms_abi)) *four;
+    ms_five_t __attribute__((ms_abi)) *five;
+    ms_seven_t __attribute__((ms_abi)) *seven;
+    ms_mixed_t __attribute__((ms_abi)) *mixed;
+};
+
+__attribute__((ms_abi, noinline)) long ms_scalar_zero(void) { return 101; }
+__attribute__((ms_abi, noinline)) long ms_scalar_one(long a) { return a + 13; }
+__attribute__((ms_abi, noinline)) long ms_scalar_four(
+    long a, long b, long c, long d) {
+    return a + 10 * b + 100 * c + 1000 * d;
+}
+__attribute__((ms_abi, noinline)) long ms_scalar_five(
+    long a, long b, long c, long d, long e) {
+    return a + 10 * b + 100 * c + 1000 * d + 10000 * e;
+}
+__attribute__((ms_abi, noinline)) long ms_scalar_seven(
+    long a, long b, long c, long d, long e, long f, long g) {
+    return a + 10 * b + 100 * c + 1000 * d + 10000 * e +
+           100000 * f + 1000000 * g;
+}
+__attribute__((ms_abi, noinline)) double ms_scalar_mixed(
+    double a, long b, float c, long d, double e, long f, double g) {
+    return a + 2.0 * (double)b + (double)c + 3.0 * (double)d +
+           e + 4.0 * (double)f + g;
+}
+
+extern long minic_ms_direct_zero(void);
+extern long minic_ms_direct_one(void);
+extern long minic_ms_direct_four(void);
+extern long minic_ms_direct_five(void);
+extern long minic_ms_direct_seven(void);
+extern double minic_ms_direct_mixed(void);
+extern long minic_ms_indirect_zero(struct MSCallbacks *);
+extern long minic_ms_indirect_one(struct MSCallbacks *);
+extern long minic_ms_indirect_four(struct MSCallbacks *);
+extern long minic_ms_indirect_five(struct MSCallbacks *);
+extern long minic_ms_indirect_seven(struct MSCallbacks *);
+extern double minic_ms_indirect_mixed(struct MSCallbacks *);
+
+int main(void) {
+    struct MSCallbacks cb = {
+        ms_scalar_zero, ms_scalar_one, ms_scalar_four,
+        ms_scalar_five, ms_scalar_seven, ms_scalar_mixed
+    };
+    long zero = ms_scalar_zero();
+    long one = ms_scalar_one(11);
+    long four = ms_scalar_four(1, 2, 3, 4);
+    long five = ms_scalar_five(1, 2, 3, 4, 5);
+    long seven = ms_scalar_seven(1, 2, 3, 4, 5, 6, 7);
+    double mixed = ms_scalar_mixed(2.5, 11, 3.25f, 22, 4.5, 33, 5.5);
+
+    if (minic_ms_direct_zero() != zero || minic_ms_indirect_zero(&cb) != zero ||
+        minic_ms_direct_one() != one || minic_ms_indirect_one(&cb) != one ||
+        minic_ms_direct_four() != four || minic_ms_indirect_four(&cb) != four ||
+        minic_ms_direct_five() != five || minic_ms_indirect_five(&cb) != five ||
+        minic_ms_direct_seven() != seven || minic_ms_indirect_seven(&cb) != seven ||
+        minic_ms_direct_mixed() != mixed || minic_ms_indirect_mixed(&cb) != mixed) {
+        (void)fprintf(stderr,
+            "MS_X64_SCALAR=FAIL direct/indirect values expected %ld %ld %ld %ld %ld %.3f\n",
+            zero, one, four, five, seven, mixed);
+        return 1;
+    }
+    puts("MS_X64_SCALAR=PASS direct=6 indirect=6 positional_FP=1 stack=3 shadow=32");
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/x86_msabi_scalar_negative.c"}
+#if defined(NEG_VARARGS)
+typedef long callback_t(long, ...);
+struct T { callback_t __attribute__((ms_abi)) *cb; };
+long rejected(struct T *t) { return t->cb(1, 2); }
+#elif defined(NEG_AGGREGATE)
+struct Pair { long first; long second; };
+typedef long callback_t(struct Pair);
+struct T { callback_t __attribute__((ms_abi)) *cb; };
+long rejected(struct T *t) {
+    struct Pair p = {1, 2};
+    return t->cb(p);
+}
+#elif defined(NEG_INT128)
+typedef long callback_t(__int128);
+struct T { callback_t __attribute__((ms_abi)) *cb; };
+long rejected(struct T *t) { return t->cb(1); }
+#elif defined(NEG_LONG_DOUBLE)
+typedef long double callback_t(long);
+struct T { callback_t __attribute__((ms_abi)) *cb; };
+long double rejected(struct T *t) { return t->cb(7); }
+#endif
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/x86_pat_clflushopt_alternative.c"}
+/* Original Linux 6.6.143 arch/x86/include/asm/special_insns.h ALT owner:
+ * selector 9*32+23, actual cache flush and 66-prefix CLFLUSHOPT replacement. */
+#ifndef PAT_CLFLUSHOPT_UNUSED_IMM
+#define PAT_CLFLUSHOPT_UNUSED_IMM 0
+#endif
+
+static void clflushopt(volatile void *p)
+{
+    asm volatile (
+        "# ALT: oldnstr\n" "661:\n\t"
+        ".byte 0x3e; clflush %P0"
+        "\n662:\n" "# ALT: padding\n"
+        ".skip -(((6651f-6641f)-(662b-661b)) > 0) * "
+        "((6651f-6641f)-(662b-661b)),0x90\n"
+        "663:\n" ".pushsection .altinstructions,\"a\"\n"
+        " .long 661b - .\n" " .long 6641f - .\n"
+        " .4byte (9*32+23)\n"
+        " .byte 663b-661b\n" " .byte 6651f-6641f\n"
+        ".popsection\n"
+        ".pushsection .altinstr_replacement, \"ax\"\n"
+        "# ALT: replacement 1\n" "6641:\n\t"
+        ".byte 0x66; clflush %P0"
+        "\n6651:\n" ".popsection\n"
+        : "+m" (*(volatile char *)p) : "i" (PAT_CLFLUSHOPT_UNUSED_IMM));
+}
+
+int main(void)
+{
+    char cacheline[128] = { 0 };
+    cacheline[13] = 42;
+    clflushopt(&cacheline[13]);
+    return cacheline[13];
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/x86_raid6_avx2_native_gnu.c"}
+/* AVX2 RAID6: load two aligned 32-byte vectors and non-temporally XOR.
+ * All work is real YMM hardware ASM; no C SIMD intrinsic/auto-vectorizer. */
+static unsigned char a[32] __attribute__((aligned(32)));
+static unsigned char b[32] __attribute__((aligned(32)));
+static unsigned char r[32] __attribute__((aligned(32)));
+
+int main(void) {
+    int i;
+    for (i = 0; i != 32; ++i) {
+        a[i] = (unsigned char)(i * 17 + 9);
+        b[i] = (unsigned char)(i * 7 + 21);
+    }
+    asm volatile("vmovdqa %0,%%ymm0\n\t"
+                 "vmovdqa %1,%%ymm1\n\t"
+                 "vpxor %%ymm1,%%ymm0,%%ymm0\n\t"
+                 "vmovntdq %%ymm0,%2"
+                 : : "m" (a[0]), "m" (b[0]), "m" (r[0]));
+    asm volatile("sfence" : : : "memory");
+    for (i = 0; i != 32; ++i)
+        if (r[i] != (unsigned char)(a[i] ^ b[i])) return 1;
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/x86_raid6_avx512_native_gnu.c"}
+/* AVX512 RAID6: 64-byte ZMM load/XOR/non-temporal store plus real K1
+ * predicate generation. Distinguishes true AVX512 hardware from pretending
+ * that a parsed template already implements SIMD. */
+static unsigned char a[64] __attribute__((aligned(64)));
+static unsigned char b[64] __attribute__((aligned(64)));
+static unsigned char r[64] __attribute__((aligned(64)));
+
+int main(void) {
+    int i;
+    for (i = 0; i != 64; ++i) {
+        a[i] = (unsigned char)(i * 13 + 7);
+        b[i] = (unsigned char)(i * 11 + 19);
+    }
+    asm volatile("vmovdqa64 %0,%%zmm0\n\t"
+                 "vmovdqa64 %1,%%zmm1\n\t"
+                 "vpcmpgtb %%zmm0,%%zmm1,%%k1\n\t"
+                 "vpmovm2b %%k1,%%zmm2\n\t"
+                 "vpxorq %%zmm1,%%zmm0,%%zmm0\n\t"
+                 "vmovntdq %%zmm0,%2"
+                 : : "m" (a[0]), "m" (b[0]), "m" (r[0]));
+    asm volatile("sfence" : : : "memory");
+    for (i = 0; i != 64; ++i)
+        if (r[i] != (unsigned char)(a[i] ^ b[i])) return 1;
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/x86_raid6_simd_native_gnu.c"}
+/* Linux RAID6-style fixed XMM registers. GNU basic asm spells %xmm,
+ * extended asm must spell %%xmm; the source memory operand is an address,
+ * even though the declared C lvalue is only one byte wide. */
+static unsigned char a[32] __attribute__((aligned(16))) = {
+    0x15, 0x27, 0x39, 0x4b, 0x5d, 0x6f, 0x71, 0x83,
+    0x95, 0xa7, 0xb9, 0xcb, 0xdd, 0xef, 0xf1, 0x03
+};
+static unsigned char b[32] __attribute__((aligned(16))) = {
+    0x24, 0x18, 0x64, 0x50, 0x8c, 0x78, 0xb4, 0xa0,
+    0xdc, 0xc8, 0x14, 0x00, 0x3c, 0x28, 0x54, 0x40
+};
+static unsigned char r[32] __attribute__((aligned(16)));
+
+int main(void) {
+    int i;
+    asm volatile("pxor %xmm0,%xmm0");
+    asm volatile("movdqa %0,%%xmm0" : : "m" (a[0]));
+    asm volatile("movdqa %0,%%xmm1" : : "m" (b[0]));
+    asm volatile("pxor %xmm1,%xmm0");
+    asm volatile("movdqa %%xmm0,%0" : "=m" (r[0]));
+    for (i = 0; i != 16; ++i)
+        if (r[i] != (unsigned char)(a[i] ^ b[i])) return 1;
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/x86_raid6_simd_reject.c"}
+/* Each form must fail in MiniC's target-owned hardware ASM admission.
+ * These are not permitted to borrow a generic parse-only or scalar path. */
+static unsigned char bytes[64] __attribute__((aligned(64)));
+void reject(void) {
+#if BAD_FORM == 1
+    asm volatile("vaddps %ymm0,%ymm1,%ymm2"); /* unknown RAID6 opcode */
+#elif BAD_FORM == 2
+    asm volatile("movdqa %9,%%xmm0" : : "m" (bytes[0]));
+#elif BAD_FORM == 3
+    asm volatile("movdqa %%xmm0,%0" : "=r" (bytes[0]));
+#elif BAD_FORM == 4
+    asm volatile("vmovdqa64 %%zmm31,%0" : "=m" (bytes[0]));
+#elif BAD_FORM == 5
+    asm volatile("syscall %xmm0");
+#endif
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/x86_reachable_dead_externals.c"}
+extern void __compiletime_assert_212(void);
+extern void mesh_update(int);
+
+static inline int feature_disabled(void) { return 0; }
+
+int probe_disabled_mesh(int value) {
+    if (feature_disabled())
+        mesh_update(value);
+    return value + 1;
+}
+
+int probe_dead_build_assert(int value) {
+    if (feature_disabled() && value > 0)
+        __compiletime_assert_212();
+    return value + 2;
+}
+
+int probe_const_builtin(int value) {
+    if (__builtin_constant_p(value) && value > 12345)
+        __compiletime_assert_212();
+    return value + 3;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/x86_reachable_live.c"}
+extern void visible_side_effect(int);
+extern int observable_condition(void);
+
+int runtime_guard(int value) {
+    if (value > 0)
+        visible_side_effect(value);
+    return value;
+}
+
+int effectful_condition(int value) {
+    if (observable_condition())
+        visible_side_effect(value);
+    return value;
+}
+
+int entry_goto_dead_source_arm(int value) {
+    if (0) {
+entry_label:
+        visible_side_effect(value);
+        return value;
+    }
+    if (value == 42)
+        goto entry_label;
+    return value;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/x86_reachable_live_driver.c"}
+#include <stdio.h>
+
+extern int runtime_guard(int);
+extern int effectful_condition(int);
+extern int entry_goto_dead_source_arm(int);
+
+static int side_calls;
+static int condition_calls;
+static int condition_result;
+
+void visible_side_effect(int value) { side_calls += value; }
+int observable_condition(void) { ++condition_calls; return condition_result; }
+
+int main(void) {
+    int result = 0;
+    result += runtime_guard(7);
+    result += runtime_guard(-3);
+    condition_result = 1;
+    result += effectful_condition(5);
+    condition_result = 0;
+    result += effectful_condition(100);
+    result += entry_goto_dead_source_arm(42);
+    result += entry_goto_dead_source_arm(2);
+    printf("%d %d %d\n", result, side_calls, condition_calls);
+    return (result == 153 && side_calls == 54 && condition_calls == 2) ? 0 : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/x86_reachable_vma_assert.c"}
+/* Minimal exact GNU-preprocessed Linux 6.6.143 VDSO vma.i branch shape:
+ * get_random_u32_below() has a __builtin_constant_p early-return, followed
+ * by a compiletime-assert body that is unreachable for a variable ceil.
+ * The x86 emitter must not preserve this unreachable unresolved reference. */
+typedef unsigned int u32;
+
+u32 __get_random_u32_below(u32 ceil) {
+    return ceil + 4U;
+}
+
+static inline __attribute__((__gnu_inline__)) __attribute__((__unused__))
+u32 get_random_u32_below(u32 ceil)
+{
+    if (!__builtin_constant_p(ceil))
+        return __get_random_u32_below(ceil);
+    do {
+        __attribute__((__noreturn__)) extern void __compiletime_assert_80(void)
+            __attribute__((__error__("get_random_u32_below() must take ceil > 0")));
+        if (!(!(!ceil))) __compiletime_assert_80();
+    } while (0);
+    if (ceil <= 1)
+        return 0;
+    return 7;
+}
+
+int main(int argc, char **argv) {
+    (void)argv;
+    return get_random_u32_below((u32)argc) == (u32)argc + 4U ? 42 : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/x86_security_function_attributes.c"}
+/* Native Linux x86 function-security annotations have target-specific code
+ * generation semantics. Preserve exact spellings and fail closed when the
+ * policy is not one of MiniC's explicitly qualified fallback forms. */
+#if defined(REJECT_NOCF_ARGUMENT)
+__attribute__((nocf_check(1))) int x86_rejected(int n) { return n; }
+#elif defined(REJECT_INDIRECT_THUNK)
+__attribute__((__indirect_branch__("thunk"))) int x86_rejected(int n) { return n; }
+#elif defined(REJECT_INDIRECT_THUNK_EXTERN)
+__attribute__((__indirect_branch__("thunk-extern"))) int x86_rejected(int n) { return n; }
+#elif defined(REJECT_INDIRECT_NUMBER)
+__attribute__((__indirect_branch__(0))) int x86_rejected(int n) { return n; }
+#elif defined(REJECT_TARGET_VECTOR)
+__attribute__((__target__("avx2"))) int x86_rejected(int n) { return n; }
+#elif defined(REJECT_TARGET_ABI)
+__attribute__((__target__("general-regs-only"))) int x86_rejected(int n) { return n; }
+#elif defined(REJECT_TARGET_NUMBER)
+__attribute__((__target__(42))) int x86_rejected(int n) { return n; }
+#elif defined(REJECT_TARGET_MIXED)
+__attribute__((__target__("bmi2,avx2"))) int x86_rejected(int n) { return n; }
+#else
+__attribute__((nocf_check)) int x86_no_endbr(int n) { return n + 1; }
+__attribute__((__indirect_branch__("keep")))
+int x86_keep_branch(int (*callback)(int), int n) { return callback(n); }
+__attribute__((__target__("bmi2")))
+int x86_bmi2_fallback(int n) { return n * 13; }
+/* Zstd's actual Linux 6.6 BMI2_TARGET_ATTRIBUTE, not a synthesized option. */
+__attribute__((__target__("lzcnt,bmi,bmi2")))
+int x86_zstd_bmi2_fallback(int n) { return n * 7; }
+__attribute__((__target__("default")))
+int x86_default_fallback(int n) { return n ^ 13; }
+int x86_security_probe(int n) {
+    return x86_keep_branch(x86_no_endbr, n) + x86_bmi2_fallback(n) +
+           x86_zstd_bmi2_fallback(n) + x86_default_fallback(n);
+}
+#endif
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/x86_sysv_12byte_record.c"}
+/* SysV AMD64: an all-INTEGER 12-byte record occupies two GP eightbytes,
+ * but the second contains only four valid object bytes.  These functions
+ * deliberately cross the translation-unit ABI boundary in both directions. */
+typedef unsigned int u32;
+typedef unsigned long long u64;
+
+typedef struct ThreeWords {
+    u32 words[3];
+} ThreeWords;
+
+typedef struct ThreeFields {
+    u32 first;
+    u32 second;
+    u32 third;
+} ThreeFields;
+
+extern ThreeWords gnu_three_words(u32 a, u32 b, u32 c);
+extern u64 gnu_five_plus_three(u64 a, u64 b, u64 c, u64 d, u64 e,
+                                ThreeWords value);
+
+ThreeWords minic_three_words(ThreeWords value) {
+    value.words[0] += 2U;
+    value.words[1] += 3U;
+    value.words[2] += 5U;
+    return value;
+}
+
+ThreeFields minic_three_fields(ThreeFields value) {
+    value.first += 7U;
+    value.second += 11U;
+    value.third += 13U;
+    return value;
+}
+
+/* Five integer arguments consume all but one SysV GP register, so the
+ * indivisible two-eightbyte record must occupy two outgoing stack slots. */
+u64 minic_five_plus_three(u64 a, u64 b, u64 c, u64 d, u64 e,
+                          ThreeWords value) {
+    return a + b + c + d + e + value.words[0] * 7ULL +
+           value.words[1] * 11ULL + value.words[2] * 13ULL;
+}
+
+u64 minic_call_gnu(void) {
+    ThreeWords input = gnu_three_words(41U, 43U, 47U);
+    ThreeWords output = minic_three_words(input);
+    return gnu_five_plus_three(3ULL, 5ULL, 7ULL, 11ULL, 13ULL, output);
+}
+
+ThreeWords minic_indirect_three_words(ThreeWords (*fn)(ThreeWords),
+                                     ThreeWords value) {
+    return fn(value);
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/x86_sysv_12byte_record_driver.c"}
+/* GNU side of the cross-compiler ABI oracle.  The same driver must pass
+ * when the subject is GNU-built and when it is MiniC-built. */
+typedef unsigned int u32;
+typedef unsigned long long u64;
+
+typedef struct ThreeWords {
+    u32 words[3];
+} ThreeWords;
+
+typedef struct ThreeFields {
+    u32 first;
+    u32 second;
+    u32 third;
+} ThreeFields;
+
+_Static_assert(sizeof(ThreeWords) == 12U, "SysV 12-byte record size");
+_Static_assert(_Alignof(ThreeWords) == 4U, "SysV 12-byte record alignment");
+_Static_assert(sizeof(ThreeFields) == 12U, "SysV 12-byte field record size");
+
+extern ThreeWords minic_three_words(ThreeWords value);
+extern ThreeFields minic_three_fields(ThreeFields value);
+extern u64 minic_five_plus_three(u64, u64, u64, u64, u64, ThreeWords);
+extern u64 minic_call_gnu(void);
+extern ThreeWords minic_indirect_three_words(ThreeWords (*fn)(ThreeWords),
+                                              ThreeWords value);
+
+ThreeWords gnu_three_words(u32 a, u32 b, u32 c) {
+    ThreeWords result = {{a, b, c}};
+    return result;
+}
+
+u64 gnu_five_plus_three(u64 a, u64 b, u64 c, u64 d, u64 e,
+                         ThreeWords value) {
+    return a + b + c + d + e + value.words[0] * 7ULL +
+           value.words[1] * 11ULL + value.words[2] * 13ULL;
+}
+
+int main(void) {
+    ThreeWords input = {{17U, 19U, 23U}};
+    ThreeWords output;
+    ThreeFields fields = {17U, 19U, 23U};
+    ThreeFields result_fields;
+    struct WithCanary {
+        ThreeWords value;
+        u32 guard;
+    } protected_result = {{{0U, 0U, 0U}}, 0xBADC0FFEU};
+
+    output = minic_three_words(input);
+    if (output.words[0] != 19U || output.words[1] != 22U ||
+        output.words[2] != 28U)
+        return 1;
+    result_fields = minic_three_fields(fields);
+    if (result_fields.first != 24U || result_fields.second != 30U ||
+        result_fields.third != 36U)
+        return 6;
+    if (minic_five_plus_three(2ULL, 3ULL, 5ULL, 7ULL, 11ULL, input) !=
+        gnu_five_plus_three(2ULL, 3ULL, 5ULL, 7ULL, 11ULL, input))
+        return 2;
+    if (minic_call_gnu() != gnu_five_plus_three(3ULL, 5ULL, 7ULL, 11ULL,
+                                               13ULL, minic_three_words(
+                                                   gnu_three_words(41U, 43U, 47U))))
+        return 3;
+    output = minic_indirect_three_words(minic_three_words, input);
+    if (output.words[0] != 19U || output.words[1] != 22U ||
+        output.words[2] != 28U)
+        return 4;
+    protected_result.value = minic_three_words(input);
+    if (protected_result.guard != 0xBADC0FFEU ||
+        protected_result.value.words[2] != 28U)
+        return 5;
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/x86_sysv_integer_record_tree.c"}
+/* One- and two-GPR SysV aggregate ABI classification must agree for nested
+ * unions, arrays, integer bit-fields and ordinary aligned scalar members.
+ * The driver is built independently by GCC; return and argument registers
+ * therefore cannot be silently changed by recompiling both call ends. */
+typedef struct { unsigned int lo; unsigned int hi; } OneGP;
+typedef union { unsigned long all; OneGP parts; } TwoHalf;
+typedef struct { TwoHalf first; unsigned long second; } TwoGP;
+typedef struct { unsigned long items[2]; } ArrayTwoGP;
+typedef struct __attribute__((packed)) { unsigned int lo:3, hi:29; } PackedBitGP;
+
+__attribute__((noinline)) OneGP x86_one_roundtrip(OneGP value) {
+    value.lo += 3U;
+    value.hi ^= 0x5a5aU;
+    return value;
+}
+
+__attribute__((noinline)) TwoGP x86_two_roundtrip(TwoGP value) {
+    value.first.parts.lo ^= 0x1234U;
+    value.second += 0x101U;
+    return value;
+}
+
+__attribute__((noinline)) ArrayTwoGP x86_array_roundtrip(ArrayTwoGP value) {
+    value.items[0] += 17UL;
+    value.items[1] ^= 0x12345678UL;
+    return value;
+}
+
+__attribute__((noinline)) PackedBitGP x86_bit_roundtrip(PackedBitGP value) {
+    value.lo ^= 3U;
+    value.hi += 23U;
+    return value;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/x86_sysv_integer_record_tree_driver.c"}
+/* GCC oracle caller for x86_sysv_integer_record_tree.c. GNU's ABI
+ * classification is independent of the MiniC-compiled callee. */
+typedef struct { unsigned int lo; unsigned int hi; } OneGP;
+typedef union { unsigned long all; OneGP parts; } TwoHalf;
+typedef struct { TwoHalf first; unsigned long second; } TwoGP;
+typedef struct { unsigned long items[2]; } ArrayTwoGP;
+typedef struct __attribute__((packed)) { unsigned int lo:3, hi:29; } PackedBitGP;
+
+extern OneGP x86_one_roundtrip(OneGP);
+extern TwoGP x86_two_roundtrip(TwoGP);
+extern ArrayTwoGP x86_array_roundtrip(ArrayTwoGP);
+extern PackedBitGP x86_bit_roundtrip(PackedBitGP);
+
+int main(void) {
+    OneGP a = {13U, 0xaabbccddU};
+    TwoGP b;
+    ArrayTwoGP c = {{19UL, 0x11223344UL}};
+    PackedBitGP d = {5U, 0x4321U};
+    b.first.parts.lo = 0xabcdef89U;
+    b.first.parts.hi = 0x01234567U;
+    b.second = 0x99887766UL;
+    a = x86_one_roundtrip(a);
+    b = x86_two_roundtrip(b);
+    c = x86_array_roundtrip(c);
+    d = x86_bit_roundtrip(d);
+    if (a.lo != 16U || a.hi != (0xaabbccddU ^ 0x5a5aU)) return 1;
+    if (b.first.parts.lo != (0xabcdef89U ^ 0x1234U) ||
+        b.first.parts.hi != 0x01234567U ||
+        b.second != 0x99887867UL) return 2;
+    if (c.items[0] != 36UL || c.items[1] != (0x11223344UL ^ 0x12345678UL)) return 3;
+    if (d.lo != (5U ^ 3U) || d.hi != 0x4338U) return 4;
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/x86_typed_eight_legacy_abi.c"}
+/* Eight independent x86 Linux ASM source families, including the immutable
+ * GNU ELF records in .tracedata and .altinstructions. Privileged/special ISA
+ * functions exist for GNU AS, but only user-safe functions are executed. */
+typedef unsigned long u64;
+typedef unsigned long size_t;
+typedef unsigned int u32;
+typedef _Bool bool;
+
+void checked_pm_trace(u64 *a, u64 *b) {
+    void *pa, *pb;
+    asm volatile(" movq $1f,%0\n"
+        ".section .tracedata,\"a\"\n"
+        "1:\t.word %c1\n\t"
+        " .quad %c2\n"
+        ".previous"
+        : "=r"(pa) : "i"(598), "i"("drivers/base/power/main.c"));
+    asm volatile(" movq $1f,%0\n"
+        ".section .tracedata,\"a\"\n"
+        "1:\t.word %c1\n\t"
+        " .quad %c2\n"
+        ".previous"
+        : "=r"(pb) : "i"(1629), "i"("drivers/base/power/main.c"));
+    *a=(u64)pa;
+    *b=(u64)pb;
+}
+void checked_movntdqa(void *dst, const void *src) {
+    asm("movntdqa (%0), %%xmm0\nmovups %%xmm0, (%1)\n"
+        :: "r"(src), "r"(dst) : "memory");
+}
+unsigned long checked_pvclock(unsigned long now, unsigned long fraction) {
+    unsigned long lo, hi;
+    asm("mulq %[mul_frac]; shrd $32, %[hi], %[lo]"
+        : [lo] "=a"(lo), [hi] "=d"(hi)
+        : "0"(now), [mul_frac] "rm"(fraction));
+    return lo;
+}
+register unsigned long current_stack_pointer asm("rsp");
+unsigned int preempt_counter;
+void __SCT__preempt_schedule(void) { preempt_counter += 3U; }
+void __SCT__preempt_schedule_notrace(void) { preempt_counter += 5U; }
+void checked_preempt(void) {
+    asm volatile("call __SCT__preempt_schedule" : "+r"(current_stack_pointer));
+}
+void checked_preempt_notrace(void) {
+    asm volatile("call __SCT__preempt_schedule_notrace" : "+r"(current_stack_pointer));
+}
+u64 checked_ipv6(const u64 *src, const u64 *dst, u64 input) {
+    u64 result;
+    asm("addq (%[saddr]),%[sum]\n\t"
+        "adcq 8(%[saddr]),%[sum]\n\t"
+        "adcq (%[daddr]),%[sum]\n\t"
+        "adcq 8(%[daddr]),%[sum]\n\t"
+        "adcq $0,%[sum]\n"
+        : [sum] "=r"(result)
+        : "[sum]"(input), [saddr] "r"(src), [daddr] "r"(dst));
+    return result;
+}
+int checked_boot_compare(const void *a, const void *b, size_t length) {
+    bool diff;
+    asm("repe; cmpsb\n\t/* output condition code nz */\n"
+        : "=@ccnz"(diff), "+D"(a), "+S"(b), "+c"(length));
+    return diff;
+}
+struct OldTv { long sec; long usec; };
+struct Timezone { int minutes; int dst; };
+long checked_vdso_syscall(struct OldTv *tv, struct Timezone *tz) {
+    long ret;
+    asm("syscall" : "=a"(ret)
+        : "0"(96), "D"(tv), "S"(tz) : "memory");
+    return ret;
+}
+unsigned int checked_cpunode(void) {
+    unsigned int p;
+    asm volatile(
+        "# ALT: oldnstr\n"
+        "661:\n\tlsl %[seg],%[p]\n"
+        "662:\n# ALT: padding\n"
+        ".skip -(((6651f-6641f)-(662b-661b)) > 0) * "
+        "((6651f-6641f)-(662b-661b)),0x90\n"
+        "663:\n"
+        ".pushsection .altinstructions,\"a\"\n"
+        " .long 661b - .\n .long 6641f - .\n"
+        " .4byte (16*32+22)\n"
+        " .byte 663b-661b\n .byte 6651f-6641f\n"
+        ".popsection\n"
+        ".pushsection .altinstr_replacement, \"ax\"\n"
+        "# ALT: replacement 1\n"
+        "6641:\n\t.byte 0xf3,0x0f,0xc7,0xf8\n"
+        "6651:\n.popsection\n"
+        : [p] "=a"(p) : "i"(0), [seg] "r"(15*8+3));
+    return p;
+}
+int main(void) {
+    u64 src[2] = {0, 0}, dst[2] = {0, 0};
+    unsigned char a[8] = {0, 1, 2, 3, 4, 5, 6, 7};
+    unsigned char b[8] = {0, 1, 2, 3, 4, 5, 6, 7};
+    struct OldTv tv = {0};
+    struct Timezone tz = {0};
+    if (checked_ipv6(src, dst, 42) != 42) return 1;
+    if (checked_boot_compare(a, b, 8) != 0) return 2;
+    if (checked_pvclock(0x100000000UL, 1UL) != 1UL) return 3;
+    checked_preempt();
+    checked_preempt_notrace();
+    if (preempt_counter != 8U) return 4;
+    if (checked_vdso_syscall(&tv, &tz) != 0) return 5;
+    if (tv.sec <= 0) return 6;
+    return 42;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/x86_typed_five_legacy_abi.c"}
+/* Five x86 Linux Source -> Core -> Machine ASM families.  GNU and MiniC
+ * both compile this .i, with all physical ISA/ELF effects still present. */
+struct __attribute__((aligned(16))) X86FxSaveArea {
+    unsigned char bytes[512];
+};
+static struct X86FxSaveArea fx32, fx64;
+static unsigned long identity_source = 42UL;
+
+static void do_fences(void) {
+    __asm__ volatile("lock; addl $0,-4(%%rsp)" ::: "memory", "cc");
+    __asm__ volatile("mfence" ::: "memory");
+    __asm__ volatile("lfence" ::: "memory");
+    __asm__ volatile("sfence" ::: "memory");
+    __asm__ volatile("pause");
+    __asm__ volatile("rep; nop");
+    __asm__ volatile("fninit");
+}
+
+static void do_fxsave(void) {
+    __asm__ volatile("fxsave %0" : "+m"(fx32));
+    __asm__ volatile("fxsaveq %[fx]" : [fx] "=m"(fx64));
+}
+
+static unsigned long get_here(void) {
+    unsigned long here;
+    __asm__("lea 0(%%rip), %0" : "=r"(here));
+    return here;
+}
+
+static unsigned int get_rights(void) {
+    unsigned short selector = 0U;
+    unsigned int rights;
+    __asm__ volatile(
+        "lar %[old_ss], %[ar]\n\t"
+        "jz 1f\n\t"
+        "xorl %[ar], %[ar]\n\t"
+        "1:"
+        : [ar] "=r"(rights) : [old_ss] "rm"(selector));
+    return rights;
+}
+
+static void read_identity(void) {
+    __asm__ volatile("mov %[address], %%r9" :
+                     : [address] "g"(identity_source) : "r9", "memory");
+}
+
+int main(void) {
+    do_fences();
+    do_fxsave();
+    read_identity();
+    (void)get_rights();
+    return get_here() != 0UL && identity_source == 42UL ? 42 : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/x86_typed_machine_qualification_gaps.c"}
+/* x86 target-owned GNU MXCSR and ORC-unwind qualification regression. */
+typedef unsigned int u32;
+typedef unsigned long u64;
+
+#if defined(NEGATIVE_MXCSR_REGISTER)
+void probe(u32 *value) {
+    u32 result;
+    __asm__ __volatile__("stmxcsr %0" : "=r" (result));
+    *value = result;
+}
+#elif defined(NEGATIVE_MXCSR_WIDTH)
+void probe(u64 *value) {
+    __asm__ __volatile__("stmxcsr %0" : "=m" (*value));
+}
+#elif defined(NEGATIVE_MXCSR_CLOBBER)
+void probe(u32 *value) {
+    __asm__ __volatile__("stmxcsr %0" : "=m" (*value) : : "cc");
+}
+#elif defined(NEGATIVE_MXCSR_SUFFIX)
+void probe(u32 *value) {
+    __asm__ __volatile__("stmxcsr %0; cli" : "=m" (*value));
+}
+#elif defined(NEGATIVE_UNWIND_MEMORY)
+void probe(u64 *a, u64 *b, u64 *c) {
+    __asm__ __volatile__("lea (%%rip), %0\n\tmov %%rsp, %1\n\tmov %%rbp, %2"
+                         : "=m" (*a), "=r" (*b), "=r" (*c));
+}
+#elif defined(NEGATIVE_UNWIND_CLOBBER)
+void probe(u64 *a, u64 *b, u64 *c) {
+    __asm__ __volatile__("lea (%%rip), %0\n\tmov %%rsp, %1\n\tmov %%rbp, %2"
+                         : "=r" (*a), "=r" (*b), "=r" (*c) : : "memory");
+}
+#elif defined(NEGATIVE_UNWIND_SUFFIX)
+void probe(u64 *a, u64 *b, u64 *c) {
+    __asm__ __volatile__("lea (%%rip), %0\n\tmov %%rsp, %1\n\tmov %%rbp, %2\n\tcli"
+                         : "=r" (*a), "=r" (*b), "=r" (*c));
+}
+#else
+void probe_mxcsr_store(u32 *value) {
+    __asm__ __volatile__("stmxcsr %0" : "=m" (*value));
+}
+void probe_mxcsr_load(const u32 *value) {
+    __asm__ __volatile__("ldmxcsr %0" : : "m" (*value));
+}
+void probe_mxcsr_store_named(u32 *value) {
+    __asm__ __volatile__("stmxcsr %[val]" : [val] "=m" (*value));
+}
+void probe_unwind(u64 *a, u64 *b, u64 *c) {
+    __asm__ __volatile__("lea (%%rip), %0\n\tmov %%rsp, %1\n\tmov %%rbp, %2"
+                         : "=r" (*a), "=r" (*b), "=r" (*c));
+}
+#endif
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/x86_typed_mmio_atomic_driver.c"}
+extern void mini_typed_mmio_exchange(unsigned int *, unsigned int,
+                                     unsigned int *, unsigned int *);
+extern void gnu_typed_mmio_exchange(unsigned int *, unsigned int,
+                                    unsigned int *, unsigned int *);
+
+int main(void) {
+    unsigned int mini_word = 7U, gnu_word = 7U;
+    unsigned int mini_read = 0U, gnu_read = 0U;
+    unsigned int mini_old = 0U, gnu_old = 0U;
+    mini_typed_mmio_exchange(&mini_word, 42U, &mini_read, &mini_old);
+    gnu_typed_mmio_exchange(&gnu_word, 42U, &gnu_read, &gnu_old);
+    if (mini_word != gnu_word || mini_read != gnu_read ||
+        mini_old != gnu_old || mini_word != 43U || mini_read != 7U ||
+        mini_old != 42U) return 1;
+    return 42;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/x86_typed_mmio_atomic_oracle.c"}
+/* Three qualified GNU x86 families with a shared observable scalar/memory
+ * result. Volatile enforces the MMIO contract without requiring real devices. */
+#if defined(GNU_ORACLE)
+#define ENTRY gnu_typed_mmio_exchange
+#else
+#define ENTRY mini_typed_mmio_exchange
+#endif
+
+void ENTRY(unsigned int *word, unsigned int value,
+           unsigned int *readback, unsigned int *old) {
+    unsigned int from_memory;
+    unsigned int exchanged = value + 1U;
+    __asm__ __volatile__("movl %1, %0" : "=r" (from_memory)
+                         : "m" (*word) : "memory");
+    *readback = from_memory;
+    __asm__ __volatile__("movl %0, %1" : : "r" (value), "m" (*word)
+                         : "memory");
+    __asm__ __volatile__("xchgl %0, %1" : "+r" (exchanged), "+m" (*word)
+                         : : "memory", "cc");
+    *old = exchanged;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/x86_typed_scalar_families.c"}
+/* Independent source-owner probes: exactly one source-qualified form per
+ * migrated family. No GNU kernel headers or privileged instructions run. */
+void typed_port_io(unsigned char value, unsigned short port) {
+    __asm__ volatile("outb %b0, %w1" : : "a"(value), "Nd"(port));
+}
+
+void typed_atomic_rmw(unsigned int *memory, unsigned int value) {
+    __asm__ volatile("addl %1,%0" : "+m"(*memory) : "ir"(value) : "memory");
+}
+
+unsigned int typed_raw_cmpxchg(unsigned int *memory, unsigned int value) {
+    unsigned int old = *memory;
+    __asm__ volatile("cmpxchgl %2,%1"
+        : "=a"(old), "+m"(*memory) : "r"(value), "0"(old) : "memory");
+    return old;
+}
+
+_Bool typed_trycas(unsigned int *memory, unsigned int value) {
+    unsigned int old = *memory;
+    _Bool success;
+    __asm__ volatile("cmpxchgl %[new], %[ptr]\n\t/* output condition code z */"
+        : "=@ccz"(success), [ptr] "+m"(*memory), "+a"(old)
+        : [new] "r"(value) : "memory");
+    return success;
+}
+
+_Bool typed_bitops(unsigned long *memory, unsigned long bit) {
+    _Bool carry;
+    __asm__ volatile("btq %2,%1\n\t/* output condition code c */"
+        : "=@ccc"(carry) : "m"(*memory), "Ir"(bit) : "memory");
+    return carry;
+}
+
+_Bool typed_atomic_cc(int *memory) {
+    _Bool equal;
+    __asm__ volatile("incl %0\n\t/* output condition code e */"
+        : "+m"(*memory), "=@cce"(equal) : : "memory");
+    return equal;
+}
+
+#ifdef NEGATIVE_PORT_IO
+void bad_port_io(unsigned char value, unsigned short port) {
+    __asm__ volatile("outb %b0, %w1; cli" : : "a"(value), "Nd"(port));
+}
+#endif
+
+#ifdef NEGATIVE_ATOMIC_RMW
+void bad_atomic_rmw(unsigned int *memory, unsigned int value) {
+    __asm__ volatile("addl %1,%0; cli" : "+m"(*memory) : "ir"(value) : "memory");
+}
+#endif
+
+#ifdef NEGATIVE_RAW_CMPXCHG
+unsigned int bad_raw_cmpxchg(unsigned int *memory, unsigned int value) {
+    unsigned int old = *memory;
+    __asm__ volatile("cmpxchgl %2,%1; cli"
+        : "=a"(old), "+m"(*memory) : "r"(value), "0"(old) : "memory");
+    return old;
+}
+#endif
+
+#ifdef NEGATIVE_TRYCAS
+_Bool bad_trycas(unsigned int *memory, unsigned int value) {
+    unsigned int old = *memory;
+    _Bool success;
+    __asm__ volatile("cmpxchgl %[new], %[ptr]; cli\n\t/* output condition code z */"
+        : "=@ccz"(success), [ptr] "+m"(*memory), "+a"(old)
+        : [new] "r"(value) : "memory");
+    return success;
+}
+#endif
+
+#ifdef NEGATIVE_BITOPS
+_Bool bad_bitops(unsigned long *memory, unsigned long bit) {
+    _Bool carry;
+    __asm__ volatile("btq %2,%1; cli\n\t/* output condition code c */"
+        : "=@ccc"(carry) : "m"(*memory), "Ir"(bit) : "memory");
+    return carry;
+}
+#endif
+
+#ifdef NEGATIVE_ATOMIC_CC
+_Bool bad_atomic_cc(int *memory) {
+    _Bool equal;
+    __asm__ volatile("incl %0; cli\n\t/* output condition code e */"
+        : "+m"(*memory), "=@cce"(equal) : : "memory");
+    return equal;
+}
+#endif
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/x86_typed_six_legacy_abi.c"}
+/* R5: six Source -> Core -> typed Machine ASM families, plus the original
+ * overlapping eight-operand CPUID that MUST remain on the legacy verifier.
+ * Privileged instructions and TPAUSE are GNU-AS-only, never run in user mode. */
+typedef unsigned int u32;
+static u32 flags;
+static volatile unsigned long cache_line;
+static unsigned short selector;
+
+void checked_verw(void) {
+    asm volatile("verw %[ds]" :: [ds] "m"(selector) : "cc");
+}
+void privileged_invlpg(unsigned long address) {
+    asm volatile("invlpg (%0)" :: "r"(address) : "memory");
+}
+void checked_clflush(volatile unsigned long *address) {
+    asm volatile("clflush %0" : "+m"(*address));
+}
+unsigned long checked_delay_mul(unsigned long loops, unsigned long multiplier) {
+    int scratch;
+    asm("mull %%edx" : "=d"(loops), "=&a"(scratch)
+        : "1"(loops), "0"(multiplier));
+    return loops;
+}
+unsigned long checked_delay_wait(unsigned long loops) {
+    asm volatile("test %0,%0\n\tjz 3f\n\tjmp 1f\n\t"
+                 ".align 16\n1:\tjmp 2f\n\t.align 16\n"
+                 "2:\tdec %0\n\tjnz 2b\n3:\tdec %0\n"
+        : "+a"(loops));
+    return loops;
+}
+void checked_tpause(u32 ecx, u32 edx, u32 eax) {
+    asm volatile("tpause %%ecx\n" :: "c"(ecx), "d"(edx), "a"(eax));
+}
+void privileged_halt(void) {
+    asm volatile("hlt");
+}
+void checked_movnti(unsigned long value) {
+    asm("movntiq %1, %0" : "=m"(cache_line) : "r"(value));
+}
+void checked_set_bit(u32 n) {
+    asm volatile("btsl %1,%0" : "+m"(flags) : "Ir"(n));
+}
+void checked_cpuid_six(u32 id, u32 count, u32 *a, u32 *b, u32 *c, u32 *d) {
+    asm volatile("cpuid" : "=a"(*a), "=b"(*b), "=c"(*c), "=d"(*d)
+        : "0"(id), "2"(count));
+}
+void checked_cpuid_eight(u32 *a, u32 *b, u32 *c, u32 *d) {
+    /* Historically accepted by generic qualified() with 8 Core bindings.
+     * BOOT_FLAGS typed ID must never intercept this valid older shape. */
+    asm("cpuid" : "=a"(*a), "=b"(*b), "=c"(*c), "=d"(*d)
+        : "0"(*a), "1"(*b), "2"(*c), "3"(*d));
+}
+
+int main(void) {
+    u32 first[4] = {0, 0, 0, 0};
+    u32 second[4] = {0, 0, 0, 0};
+    unsigned int i;
+    checked_cpuid_six(0, 0, &first[0], &first[1], &first[2], &first[3]);
+    checked_cpuid_eight(&second[0], &second[1], &second[2], &second[3]);
+    for (i = 0; i < 4; ++i)
+        if (first[i] != second[i]) return 1;
+    checked_set_bit(3);
+    if (flags != 8) return 2;
+    checked_movnti(42);
+    asm volatile("mfence" ::: "memory");
+    if (cache_line != 42) return 3;
+    checked_clflush(&cache_line);
+    if (checked_delay_mul(0xffffffffUL, 0xffffffffUL) !=
+        0xfffffffeUL) return 4;
+    return 42;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/x86_va_cursor_source_basic_runtime.c"}
+typedef __builtin_va_list MiniVa;
+
+extern int vsnprintf(char *, unsigned long, const char *, MiniVa);
+
+static int consume(MiniVa cursor) {
+    return __builtin_va_arg(cursor, int);
+}
+
+static int from_source(unsigned int named, ...) {
+    MiniVa cursor;
+    MiniVa duplicate;
+    char text[16];
+    int result;
+    __builtin_va_start(cursor, named);
+    if (consume(cursor) != 71) return 1;
+    __builtin_va_copy(duplicate, cursor);
+    if (__builtin_va_arg(duplicate, int) != 82) return 2;
+    if (__builtin_va_arg(cursor, int) != 82) return 3;
+    result = vsnprintf(text, sizeof(text), "%d", cursor);
+    __builtin_va_end(duplicate);
+    __builtin_va_end(cursor);
+    if (result != 2 || text[0] != '9' || text[1] != '3' || text[2] != 0)
+        return 4;
+    return 0;
+}
+
+int main(void) {
+    MiniVa cursor;
+    if (sizeof(cursor) != 24U || sizeof(MiniVa) != 24U) return 5;
+    if ((char *)(&cursor + 1) - (char *)&cursor != 24) return 6;
+    return from_source(1U, 71, 82, 93);
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/x86_va_cursor_source_object_runtime.c"}
+/* x86-64 SysV source-object vs internal vararg-tag regression.
+ * GNU __builtin_va_list is an array[1] of a 24-byte struct, not a pointer.
+ * Run with host GCC and MiniC native; the latter must match GCC or reject
+ * explicitly while the real source representation is being introduced. */
+typedef __builtin_va_list MiniVa;
+
+extern int vsnprintf(char *, unsigned long, const char *, MiniVa);
+
+struct EmbeddedVa {
+    unsigned char prefix;
+    MiniVa cursor;
+    unsigned char suffix;
+};
+
+static MiniVa global_cursor;
+static MiniVa pair_of_cursors[2];
+
+/* Parameters of typedef'd array va_list are adjusted to state pointers.
+ * The callee must advance the caller's actual cursor object, not a local
+ * pointer proxy. va_copy also accepts an adjusted parameter as its source. */
+static int consume_one(MiniVa cursor) {
+    return __builtin_va_arg(cursor, int);
+}
+
+static int copy_from_parameter(MiniVa cursor) {
+    MiniVa independent;
+    int value;
+    __builtin_va_copy(independent, cursor);
+    value = __builtin_va_arg(independent, int);
+    __builtin_va_end(independent);
+    return value;
+}
+
+static int exercise_parameter_decay(unsigned int fixed, ...) {
+    MiniVa cursor;
+    int observed;
+    __builtin_va_start(cursor, fixed);
+    observed = consume_one(cursor);
+    if (observed != 11) return 3;
+    if (copy_from_parameter(cursor) != 12) return 4;
+    if (__builtin_va_arg(cursor, int) != 12) return 5;
+    if (__builtin_va_arg(cursor, int) != 13) return 6;
+    __builtin_va_end(cursor);
+    return 0;
+}
+
+static int format_remaining(unsigned int fixed, ...) {
+    MiniVa current;
+    MiniVa copy;
+    char buffer[32];
+    int length;
+
+    __builtin_va_start(current, fixed);
+    if (__builtin_va_arg(current, int) != 41) return 1;
+    __builtin_va_copy(copy, current);
+    length = vsnprintf(buffer, sizeof(buffer), "%d/%ld", copy);
+    __builtin_va_end(copy);
+    __builtin_va_end(current);
+    if (length != 5 || buffer[0] != '7' || buffer[1] != '/' ||
+        buffer[2] != '9' || buffer[3] != '0' || buffer[4] != '0' ||
+        buffer[5] != '\0') return 2;
+    return 0;
+}
+
+int main(void) {
+    MiniVa local;
+    struct EmbeddedVa container;
+    if (sizeof(MiniVa) != 24U || sizeof(local) != 24U ||
+        sizeof(global_cursor) != 24U) return 10;
+    if (sizeof(pair_of_cursors) != 48U || sizeof(container) != 40U ||
+        sizeof(container.cursor) != 24U) return 11;
+    if ((char *)(&local + 1) - (char *)&local != 24) return 12;
+    if (format_remaining(9U, 41, 7, 900L) != 0) return 20;
+    if (exercise_parameter_decay(4U, 11, 12, 13) != 0) return 21;
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/x86_variadic_no_sse.c"}
+#include <stdarg.h>
+
+/* Linux early exception handlers invoke integer-only variadic functions
+ * before CR4.OSFXSR makes even an unused XMM spill legal. */
+__attribute__((noinline))
+unsigned long minic_x86_integer_varargs(unsigned long fixed, ...) {
+    va_list args;
+    unsigned long first, second;
+    va_start(args, fixed);
+    first = va_arg(args, unsigned long);
+    second = va_arg(args, unsigned long);
+    va_end(args);
+    return fixed + first * 3UL + second;
+}
+
+#ifdef MINIC_X86_TEST_FLOAT_VARARGS
+__attribute__((noinline))
+double minic_x86_float_varargs(unsigned long fixed, ...) {
+    va_list args;
+    double first;
+    va_start(args, fixed);
+    first = va_arg(args, double);
+    va_end(args);
+    return first + (double)fixed;
+}
+#endif
+
+int main(void) {
+    if (minic_x86_integer_varargs(2UL, 7UL, 11UL) != 34UL)
+        return 1;
+#ifdef MINIC_X86_TEST_FLOAT_VARARGS
+    if (minic_x86_float_varargs(2UL, 3.5) != 5.5)
+        return 2;
+#endif
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/x86_vdso_hidden_unused.c"}
+/* A Linux vDSO translation unit may declare more hidden externs than its
+ * emitted functions actually use.  An unused hidden declaration must not
+ * become an undefined ELF symbol merely because it was parsed. */
+extern long vdso_hidden_unused_data __attribute__((visibility("hidden")));
+extern long vdso_hidden_required_data __attribute__((visibility("hidden")));
+extern long vdso_default_preemptible_data;
+__attribute__((visibility("hidden")))
+extern long vdso_hidden_required_function(long);
+
+long minic_x86_vdso_hidden_probe(long input) {
+    long (*function)(long) = vdso_hidden_required_function;
+    return vdso_hidden_required_data + vdso_default_preemptible_data +
+           function(input);
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/x86_vdso_hidden_unused_owner.c"}
+long vdso_hidden_required_data = 37;
+long vdso_default_preemptible_data = 2;
+
+long vdso_hidden_required_function(long input) {
+    return input + 3;
+}
+
+extern long minic_x86_vdso_hidden_probe(long);
+
+int main(void) {
+    return minic_x86_vdso_hidden_probe(0) == 42 ? 0 : 1;
+}
+@@@ end

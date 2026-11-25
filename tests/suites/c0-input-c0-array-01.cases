@@ -1,0 +1,482 @@
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/array_bound_constant_expression.c"}
+int multiplied_size(void) {
+    char multiplied[1024 * 1024];
+    return (int)sizeof(multiplied);
+}
+
+int grouped_size(void) {
+    unsigned char grouped[(2 + 3) * (8 - 1)];
+    return (int)sizeof(grouped);
+}
+
+int divided_size(void) {
+    int divided[(24 / 3) + (7 % 4)];
+    return (int)sizeof(divided);
+}
+
+int linux_siginfo_bound(void) {
+    char dummy[(__alignof__(void *) < sizeof(short) ? sizeof(short) : __alignof__(void *))];
+    return (int)sizeof(dummy);
+}
+
+struct RecordBound {
+    char dummy[(__alignof__(void *) < sizeof(short) ? sizeof(short) : __alignof__(void *))];
+    int tail;
+};
+
+int linux_siginfo_record_bound(void) {
+    return (int)sizeof(((struct RecordBound *)0)->dummy);
+}
+
+
+/* GNU C accepts a string literal element as a compile-time array bound.
+ * BusyBox's original libbb/vfork_daemon_rexec.c has exactly this shape:
+ * BUILD_BUG_ON(CONFIG_BUSYBOX_EXEC_PATH[0] != '/').
+ * Reject ordinary const global and runtime array reads (below fixture).
+ */
+#define STRING_BOUND_CHECK(expr) ((void)sizeof(char[1 - 2 * !!(expr)]))
+int busybox_exec_path_string_bound(void) {
+    STRING_BOUND_CHECK("/proc/self/exe"[0] != '/');
+    STRING_BOUND_CHECK("alpha"[5] != 0);
+    STRING_BOUND_CHECK("/bin"[0] != 47);
+    return 0;
+}
+
+int main(void) {
+    return busybox_exec_path_string_bound() == 0 && multiplied_size() == 1048576 && grouped_size() == 35 && divided_size() == 44 &&
+                   linux_siginfo_bound() == 8 && linux_siginfo_record_bound() == 8
+               ? 0
+               : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/array_bound_integer_cast.c"}
+enum Code {
+    CODE_LAST = 7
+};
+
+int main(void) {
+    int table[(int)(CODE_LAST) + 1];
+    unsigned char small[(unsigned char)(260)];
+    return sizeof(table) == 32 && sizeof(small) == 4 ? 0 : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/array_bound_sizeof.c"}
+enum {
+    SIZE_WIDTH = 5,
+    SIZE_TOTAL
+};
+
+typedef struct SignalSet {
+    unsigned long words[16];
+} SignalSet;
+
+struct Sizes {
+    unsigned char pointer_bytes[(sizeof(void *))];
+    int arithmetic[sizeof(long) + 2 * sizeof(short)];
+    int enum_bound[SIZE_TOTAL];
+    int cast_bound[((int)(SIZE_TOTAL) + 1)];
+    unsigned char literal_bytes[sizeof("\x1bLua") + sizeof("\x19\x93\r\n\x1a\n")];
+    unsigned char aggregate_bytes[256 - sizeof(SignalSet)];
+};
+
+int read_sizes(struct Sizes *sizes) {
+    return sizes->pointer_bytes[7] + sizes->arithmetic[11] + sizes->enum_bound[5] +
+           sizes->cast_bound[6] + sizes->literal_bytes[11] + sizes->aggregate_bytes[127];
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/array_declaration.c"}
+extern unsigned char literal_bound[sizeof("abc")];
+
+int main(void)
+{
+    int values[4];
+    int *pointers[2];
+
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/array_local_materialization.c"}
+/* C array declarators and typedef arrays must agree across local, static,
+ * expression, parameter and Core storage paths.  This program is compiled
+ * from the same GNU-preprocessed .i by five MiniC targets and GNU itself. */
+typedef int Triple[3];
+typedef Triple TwoTriples[2];
+
+struct Box {
+    unsigned char tag;
+    Triple row;
+    int tail[2];
+};
+
+static const Triple global_triple = {71, 73, 79};
+static int bound_evaluations;
+
+static int next_bound(void)
+{
+    bound_evaluations += 1;
+    return 3;
+}
+
+static int sum_three(const int values[static 3])
+{
+    return values[0] + values[1] + values[2];
+}
+
+static int check_fixed_locals(void)
+{
+    int plain[2][3] = {{2, 3, 5}, {7, 11, 13}};
+    Triple declarations[2] = {{17, 19, 23}, {29, 31, 37}};
+    TwoTriples typedef_outer;
+    const int immutable[3] = {67, 71, 73};
+    int inferred[] = {79, 83, 89, 97};
+    Triple *next = &declarations[1];
+
+    typedef_outer[0][0] = 41;
+    typedef_outer[0][1] = 43;
+    typedef_outer[0][2] = 47;
+    typedef_outer[1][0] = 53;
+    typedef_outer[1][1] = 59;
+    typedef_outer[1][2] = 61;
+
+    if (sizeof(plain) != 6U * sizeof(int) ||
+        sizeof(declarations) != 6U * sizeof(int) ||
+        sizeof(typedef_outer) != 6U * sizeof(int) ||
+        sizeof(typedef_outer[0]) != 3U * sizeof(int) ||
+        sizeof(inferred) != 4U * sizeof(int)) return 1;
+    if ((char *)&plain[1] - (char *)&plain[0] != 3 * (int)sizeof(int) ||
+        (char *)&declarations[1] - (char *)&declarations[0] !=
+            3 * (int)sizeof(int) ||
+        (char *)&typedef_outer[1] - (char *)&typedef_outer[0] !=
+            3 * (int)sizeof(int)) return 2;
+    if (plain[0][2] != 5 || plain[1][1] != 11 ||
+        (*next)[0] != 29 || (*next)[2] != 37 ||
+        typedef_outer[0][1] != 43 || typedef_outer[1][2] != 61 ||
+        immutable[0] != 67 || inferred[3] != 97) return 3;
+    if (sum_three(plain[0]) != 10 ||
+        sum_three(declarations[1]) != 97 ||
+        sum_three(typedef_outer[1]) != 173) return 4;
+    return 0;
+}
+
+static int check_const_record(void)
+{
+    const struct Box item = {5, {11, 13, 17}, {19, 23}};
+    if (item.tag != 5 || item.row[0] != 11 || item.row[2] != 17 ||
+        item.tail[1] != 23) return 1;
+    if (sizeof(item.row) != 3U * sizeof(int) ||
+        (char *)&item.tail[0] - (char *)&item.row[0] !=
+            3 * (int)sizeof(int)) return 2;
+    return 0;
+}
+
+static int check_static_locals(void)
+{
+    static const int plain[4] = {31, 37};
+    static const int typed_extent[3] = {41, 43, 47};
+    static const int inferred[] = {53, 59, 61};
+    if (sizeof(plain) != 4U * sizeof(int) ||
+        sizeof(typed_extent) != 3U * sizeof(int) ||
+        sizeof(inferred) != 3U * sizeof(int)) return 1;
+    if (plain[0] != 31 || plain[1] != 37 || plain[2] != 0 ||
+        plain[3] != 0 || typed_extent[2] != 47 || inferred[1] != 59 ||
+        global_triple[2] != 79) return 2;
+    return 0;
+}
+
+static int check_vla_and_compound(void)
+{
+    int values[next_bound()];
+    int *literal = (int[]){101, 103, 107};
+    values[0] = 109;
+    values[1] = 113;
+    values[2] = 127;
+    if (bound_evaluations != 1 ||
+        values[0] != 109 || values[1] != 113 || values[2] != 127)
+        return 1;
+    if (literal[0] != 101 || literal[1] != 103 || literal[2] != 107)
+        return 2;
+    return 0;
+}
+
+/* GNU C regards a zero-length automatic array as a complete zero-sized
+ * object, unlike an incomplete or runtime-sized VLA.  It has an address but
+ * must never be indexed or used to overwrite adjacent live locals. */
+static int check_gnu_zero_local(void)
+{
+    int before = 131;
+    int empty[0];
+    int after = 137;
+    void *address = &empty;
+    if (sizeof(empty) != 0U || address == 0) return 1;
+    if (before != 131 || after != 137) return 2;
+    return 0;
+}
+
+int main(void)
+{
+    if (check_fixed_locals()) return 11;
+    if (check_const_record()) return 12;
+    if (check_static_locals()) return 13;
+    if (check_vla_and_compound()) return 14;
+    if (check_gnu_zero_local()) return 15;
+    return 42;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/array_local_materialization_negative.c"}
+/* One independent ill-formed declaration/expression for each CASE. */
+#if CASE == 1
+void bad(void) { int values[3]; values[0] = 1; values = values; }
+#elif CASE == 2
+int bad(void) { int values[1.5]; return values[0]; }
+#elif CASE == 3
+int bad(void) { const int values[2] = {1, 2}; values[1] = 3; return 0; }
+#elif CASE == 4
+int bad(void)[3];
+#elif CASE == 5
+int functions[2](void);
+#elif CASE == 6
+int length;
+int values[length];
+#elif CASE == 7
+void bad[2];
+#elif CASE == 8
+struct Bad { int flexible[]; int tail; };
+#elif CASE == 9
+union Bad { int flexible[]; int tail; };
+#elif CASE == 10
+int bad(void) { int values[2]; int values[3]; return 0; }
+#elif CASE == 11
+int bad(void) { int values[2] = 7; return values[0]; }
+#elif CASE == 12
+int bad(void) { int values[2] = {1, 2, 3}; return values[0]; }
+#elif CASE == 13
+int bad(void) { int values[3]; int (*wrong)[2] = &values; return (*wrong)[0]; }
+#elif CASE == 14
+typedef int Incomplete[];
+unsigned long bad(void) { return sizeof(Incomplete); }
+#elif CASE == 15
+int bad(void) { char values[2]; values = "a"; return 0; }
+#elif CASE == 16
+struct R { int cells[3]; };
+int bad(void) {
+    const struct R value = {{1, 2, 3}};
+    value.cells[0] = 7; /* Record lvalue's const must propagate to array elements. */
+    return 0;
+}
+#else
+#error unknown local array negative CASE
+#endif
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/array_parameter_adjustment.c"}
+typedef unsigned char u8;
+
+void generate_random_uuid(u8 uuid[16]);
+void generate_random_uuid(u8 *uuid)
+{
+    uuid[0] = 7;
+}
+
+void unnamed_array_parameter(u8 [1 << 4]);
+void unnamed_array_parameter(u8 *bytes)
+{
+    bytes[1] = 9;
+}
+
+void unnamed_incomplete_array_parameter(u8 []);
+void unnamed_incomplete_array_parameter(u8 *bytes)
+{
+    bytes[2] = 11;
+}
+
+typedef void (*generator_fn)(u8 bytes[16]);
+
+static int adjusted_size(u8 bytes[16])
+{
+    _Static_assert(sizeof(bytes) == sizeof(void *), "array parameter adjusts to pointer");
+    return (int)bytes[0];
+}
+
+int main(void)
+{
+    u8 bytes[16] = {0};
+    generator_fn fn = generate_random_uuid;
+    fn(bytes);
+    unnamed_array_parameter(bytes);
+    unnamed_incomplete_array_parameter(bytes);
+    return adjusted_size(bytes) == 7 && bytes[1] == 9 && bytes[2] == 11 ? 0 : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/array_shape_convergence.c"}
+/* One source shape must survive C parsing, Core lowering and all five
+ * target emitters.  Keep each observable address/extent check live. */
+typedef int Row[3];
+
+struct Fixed {
+    int tag;
+    Row matrix_row;
+    int tail[2];
+};
+
+struct Zero {
+    int tag;
+    int empty[0];
+    int tail;
+};
+
+struct Flexible {
+    unsigned long count;
+    unsigned char payload[];
+};
+
+static int bound_evaluations;
+
+static int next_bound(void)
+{
+    ++bound_evaluations;
+    return 3;
+}
+
+static int check_nested_typedef(void)
+{
+    Row rows[2] = {{1, 2, 3}, {4, 5, 6}};
+    Row *second = &rows[1];
+
+    if (sizeof(rows) != 6U * sizeof(int) ||
+        sizeof(rows[0]) != 3U * sizeof(int) ||
+        sizeof(*second) != 3U * sizeof(int)) return 1;
+    if ((char *)&rows[1] - (char *)&rows[0] != 3 * (int)sizeof(int))
+        return 2;
+    if ((*second)[0] != 4 || (*second)[2] != 6 || rows[0][1] != 2)
+        return 3;
+    return 0;
+}
+
+static int check_record_fields(void)
+{
+    struct Fixed fixed = {7, {11, 12, 13}, {17, 19}};
+    if (sizeof(fixed.matrix_row) != 3U * sizeof(int) ||
+        fixed.matrix_row[2] != 13 || fixed.tail[1] != 19) return 1;
+    if ((char *)&fixed.tail[0] - (char *)&fixed.matrix_row[0] !=
+        3 * (int)sizeof(int)) return 2;
+    return 0;
+}
+
+static int check_gnu_zero_and_flexible(void)
+{
+    struct Zero zero = {3, {}, 5};
+    struct Flexible flexible = {9};
+    if (sizeof(zero.empty) != 0U || zero.tag != 3 || zero.tail != 5)
+        return 1;
+    if ((char *)&zero.tail - (char *)&zero.empty != 0)
+        return 2;
+    if ((char *)flexible.payload - (char *)&flexible !=
+        (int)sizeof(unsigned long)) return 3;
+    return 0;
+}
+
+static int check_vla(void)
+{
+    int values[next_bound()];
+    values[0] = 23;
+    values[1] = 29;
+    values[2] = 31;
+    if (bound_evaluations != 1 || values[0] != 23 ||
+        values[1] != 29 || values[2] != 31) return 1;
+    return 0;
+}
+
+static int check_array_compound_literal(void)
+{
+    int *values = (int[]){37, 41, 43};
+    return values[0] == 37 && values[1] == 41 && values[2] == 43 ? 0 : 1;
+}
+
+static int check_inferred_extent(void)
+{
+    int values[] = {47, 53};
+    if (sizeof(values) != 2U * sizeof(int)) return 1;
+    if (values[0] != 47 || values[1] != 53) return 2;
+    return 0;
+}
+
+int main(void)
+{
+    if (check_nested_typedef()) return 11;
+    if (check_record_fields()) return 12;
+    if (check_gnu_zero_and_flexible()) return 13;
+    if (check_vla()) return 14;
+    if (check_array_compound_literal()) return 15;
+    if (check_inferred_extent()) return 16;
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/array_shape_convergence_negative.c"}
+/* Exactly one ill-formed array contract per compile. GNU C and MiniC must
+ * both reject it; no architecture may reinterpret it as a scalar object. */
+#if CASE == 1
+typedef int Row[3];
+int bad(void)
+{
+    Row rows[2];
+    rows[0] = (Row){1, 2, 3}; /* Arrays are not assignable. */
+    return 0;
+}
+#elif CASE == 2
+struct Flexible { int tag; int payload[]; };
+unsigned long bad(void)
+{
+    return sizeof(((struct Flexible *)0)->payload); /* Incomplete type. */
+}
+#elif CASE == 3
+int bad(void)
+{
+    int values[1.5]; /* An array bound must have integer type. */
+    return values[0];
+}
+#elif CASE == 4
+typedef int Row[3];
+int bad(void)
+{
+    Row rows[2];
+    int (*wrong)[2] = &rows[0]; /* Bound is part of pointee identity. */
+    return (*wrong)[0];
+}
+#elif CASE == 5
+struct Zero { int header; int empty[0]; };
+struct Zero bad = { .header = 1, .empty = {7} }; /* No slots. */
+#else
+#error unknown array negative fixture CASE
+#endif
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_array_index_type.c"}
+int main(void)
+{
+    int values[2];
+    int *pointer;
+
+    return values[pointer];
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_array_initializer.c"}
+int main(void)
+{
+    int values[2] = 1;
+
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_array_symbol_equality_element.c"}
+extern int first[];
+extern double second[];
+int wrong_elements(void) { return &first != &second; }
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_array_symbol_equality_extent.c"}
+extern int first[2];
+extern int second[3];
+int wrong_extents(void) { return &first != &second; }
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_array_symbol_equality_nested_const.c"}
+extern int *first[];
+extern const int *second[];
+int wrong_nested_qualification(void) { return &first != &second; }
+@@@ end

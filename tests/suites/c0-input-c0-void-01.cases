@@ -1,0 +1,69 @@
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_void_local_object.c"}
+int main(void) {
+    void value;
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_void_object_definition.c"}
+static void not_an_object;
+int main(void) { return 0; }
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_void_return_value.c"}
+static void touch(void)
+{
+    return 1;
+}
+
+int main(void)
+{
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_void_typedef.c"}
+typedef void nothing_t;
+
+int main(void)
+{
+    nothing_t value;
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/void_cast_discard.c"}
+static int counter;
+
+static int bump(void) {
+    counter += 1;
+    return counter;
+}
+
+int main(void) {
+    (void)0;
+    (void)bump();
+    return counter == 1 ? 0 : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/void_pointer_local.c"}
+static int is_null(void *pointer) {
+    return pointer == (void *)0;
+}
+
+int main(void) {
+    void *pointer = (void *)0;
+    const void *constant_pointer = pointer;
+    return is_null(pointer) && constant_pointer == (void *)0 ? 0 : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/void_typedef.c"}
+typedef void opaque_t;
+
+static opaque_t *identity(opaque_t *value)
+{
+    return value;
+}
+
+int main(void)
+{
+    opaque_t *value = (opaque_t *)0;
+    return identity(value) == (opaque_t *)0 ? 0 : 1;
+}
+@@@ end

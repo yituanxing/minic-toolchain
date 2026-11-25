@@ -1,0 +1,3084 @@
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/gnu_inline_asm_named_operands.c"}
+typedef struct AtomicLike {
+    int counter;
+} AtomicLike;
+
+static AtomicLike global_counter = {5};
+
+static int fetch_add_unless_like(AtomicLike *v, int a, int u) {
+    int prev;
+    int rc;
+
+    __asm__ __volatile__(
+        "0:\tlr.w     %[p],  %[c]\n"
+        "\tbeq      %[p],  %[u], 1f\n"
+        "\tadd      %[rc], %[p], %[a]\n"
+        "\tsc.w.rl  %[rc], %[rc], %[c]\n"
+        "\tbnez     %[rc], 0b\n"
+        "\tfence    rw, rw\n"
+        "1:\n"
+        : [p] "=&r"(prev), [rc] "=&r"(rc), [c] "+A"(v->counter)
+        : [a] "r"(a), [u] "r"(u)
+        : "memory");
+    return prev;
+}
+
+int main(void) {
+    int first;
+    int second;
+
+    first = fetch_add_unless_like(&global_counter, 3, 99);
+    second = fetch_add_unless_like(&global_counter, 4, 8);
+    return first == 5 && second == 8 && global_counter.counter == 8 ? 0 : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/gnu_inline_asm_operands.c"}
+typedef struct AtomicLike {
+    int counter;
+} AtomicLike;
+
+static AtomicLike global_counter = {7};
+
+static void atomic_add_like(int value, AtomicLike *target) {
+    __asm__ __volatile__("amoadd.w zero, %1, %0" : "+A"(target->counter) : "r"(value) : "memory");
+}
+
+static int atomic_fetch_add_like(int value, AtomicLike *target) {
+    register int previous;
+
+    __asm__ __volatile__("amoadd.w %1, %2, %0"
+                         : "+A"(target->counter), "=r"(previous)
+                         : "r"(value)
+                         : "memory");
+    return previous;
+}
+
+static void memory_output_store_like(int value, int *target) {
+    __asm__ __volatile__("sw %z1, %0" : "=m"(*target) : "rJ"(value) : "memory");
+}
+
+static int futex_constraint_shape(int value, int *target) {
+    int ret = 0;
+    int previous = 0;
+
+    __asm__ __volatile__("amoswap.w.aqrl %[ov],%z[op],%[u]"
+                         : [r] "+r"(ret), [ov] "=&r"(previous), [u] "+m"(*target)
+                         : [op] "Jr"(value)
+                         : "memory");
+    return previous + ret;
+}
+
+typedef struct RegisterOutputs {
+    unsigned long first;
+    unsigned long second;
+    unsigned long third;
+    unsigned long fourth;
+    unsigned long fifth;
+} RegisterOutputs;
+
+static void register_member_outputs_like(RegisterOutputs *target) {
+    __asm__ __volatile__("li %0, 1\n\t"
+                         "li %1, 2\n\t"
+                         "li %2, 3\n\t"
+                         "li %3, 4\n\t"
+                         "li %4, 5"
+                         : "=r"(target->first),
+                           "=r"(target->second),
+                           "=r"(target->third),
+                           "=r"(target->fourth),
+                           "=r"(target->fifth));
+}
+
+static int linux_target_constraint_shape(int value) {
+    __asm__ __volatile__("addi t3, zero, %1\n\t"
+                         "add %0, %0, t3"
+                         : "+r"(value)
+                         : "I"(7)
+                         : "t3");
+    return value;
+}
+
+static int clobber_reservation(int left, int right) {
+    int result;
+
+    __asm__ __volatile__("add %0, %1, %2" : "=r"(result) : "r"(left), "r"(right) : "t3");
+    return result;
+}
+
+static int memory_input_linux_shape(const int *value);
+
+int main(void) {
+    int previous;
+    int swap_target = 21;
+    int swapped;
+    int memory_probe = 0;
+    RegisterOutputs register_probe = {0};
+
+    atomic_add_like(5, &global_counter);
+    previous = atomic_fetch_add_like(3, &global_counter);
+    swapped = futex_constraint_shape(9, &swap_target);
+    memory_output_store_like(8, &memory_probe);
+    register_member_outputs_like(&register_probe);
+    return previous == 12 && global_counter.counter == 15 && swapped == 21 && swap_target == 9 &&
+                   linux_target_constraint_shape(5) == 12 && clobber_reservation(4, 6) == 10 &&
+                   memory_probe == 8 && memory_input_linux_shape(&memory_probe) == 8 &&
+                   register_probe.first == 1UL && register_probe.second == 2UL &&
+                   register_probe.third == 3UL && register_probe.fourth == 4UL &&
+                   register_probe.fifth == 5UL
+               ? 0
+               : 1;
+}
+
+static int memory_input_linux_shape(const int *value) {
+    long error = 0;
+    int loaded;
+
+    __asm__ __volatile__("lw %1, %2" : "+r"(error), "=&r"(loaded) : "m"(*value));
+    return loaded + (int)error;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/gnu_inline_asm_over_capacity.c"}
+/* GNU accepts this 17-input asm form. MiniC's Core currently represents at
+ * most 16 data operands, so each target must reject it before code emission. */
+unsigned long gnu_inline_asm_over_capacity(unsigned long x) {
+    __asm__ __volatile__(
+        "nop"
+        :
+        : "r"(x), "r"(x), "r"(x), "r"(x), "r"(x), "r"(x), "r"(x), "r"(x),
+          "r"(x), "r"(x), "r"(x), "r"(x), "r"(x), "r"(x), "r"(x), "r"(x),
+          "r"(x)
+        : "memory");
+    return x;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/gnu_inline_asm_readwrite_earlyclobber.c"}
+static unsigned long readwrite_earlyclobber(unsigned long left, unsigned long right) {
+    register unsigned long a0 asm("a0") = left;
+    register unsigned long a1 asm("a1") = right;
+    unsigned long scratch = 3;
+    unsigned long extra = 7;
+
+    asm volatile("add %0, %0, %3\n\t"
+                 "add %1, %1, %3\n\t"
+                 "add %2, %2, %3"
+                 : "+&r"(a0), "+&r"(a1), "+&r"(scratch)
+                 : "r"(extra)
+                 : "memory");
+    return a0 + a1 + scratch;
+}
+
+int main(void) {
+    return readwrite_earlyclobber(4, 5) == 33 ? 0 : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/gnu_inline_asm_readwrite_output.c"}
+static unsigned long compiler_barrier(unsigned long dividend, unsigned int divisor) {
+    asm("" : "+rm"(dividend));
+    return dividend - divisor;
+}
+
+int main(void) {
+    return compiler_barrier(9UL, 4U) == 5UL ? 0 : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/gnu_inline_asm_satp_decl_init.c"}
+#define satp_swap_like(value)                                                \
+({                                                                           \
+    unsigned long __v = (unsigned long)(value);                              \
+    __asm__ __volatile__("csrrw %0, satp, %1"                                \
+                         : "=r"(__v)                                         \
+                         : "rK"(__v)                                         \
+                         : "memory");                                        \
+    __v;                                                                     \
+})
+
+static unsigned long satp_decl_transition(unsigned long identity_satp) {
+    unsigned long old_satp;
+
+    __asm__ __volatile__("csrw satp, %0"
+                         :
+                         : "rK"(identity_satp)
+                         : "memory");
+
+    old_satp = satp_swap_like(0ULL);
+    return old_satp;
+}
+
+unsigned long satp_decl_window_probe(unsigned long identity_satp) {
+    return satp_decl_transition(identity_satp);
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/gnu_inline_asm_satp_direct.c"}
+static unsigned long satp_direct(unsigned long identity_satp) {
+    unsigned long prior;
+
+    __asm__ __volatile__("csrw satp, %0"
+                         :
+                         : "rK"(identity_satp)
+                         : "memory");
+
+    __asm__ __volatile__("csrrw %0, satp, %1"
+                         : "=r"(prior)
+                         : "rK"(0UL)
+                         : "memory");
+    return prior;
+}
+
+unsigned long satp_direct_probe(unsigned long identity_satp) {
+    return satp_direct(identity_satp);
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/gnu_inline_asm_satp_window.c"}
+static unsigned long satp_transition(unsigned long identity_satp) {
+    unsigned long prior;
+
+    __asm__ __volatile__("csrw satp, %0"
+                         :
+                         : "rK"(identity_satp)
+                         : "memory");
+
+    prior = 0UL;
+    __asm__ __volatile__("csrrw %0, satp, %1"
+                         : "=r"(prior)
+                         : "rK"(prior)
+                         : "memory");
+    return prior;
+}
+
+unsigned long satp_window_probe(unsigned long identity_satp) {
+    return satp_transition(identity_satp);
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/gnu_inline_keyword_spellings.c"}
+static __inline__ unsigned short swap16(unsigned short value) {
+    return (unsigned short)((value << 8) | (value >> 8));
+}
+
+static __inline unsigned int add1(unsigned int value) {
+    return value + 1U;
+}
+
+int main(void) {
+    return (swap16(0x1234U) == 0x3412U && add1(41U) == 42U) ? 0 : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/gnu_int128_type.c"}
+typedef __signed__ __int128 signed128_t;
+typedef unsigned __int128 unsigned128_t;
+typedef __uint128 direct_unsigned128_t;
+
+struct Int128Layout {
+    char lead;
+    signed128_t value;
+};
+
+unsigned long signed128_size(void) {
+    return sizeof(signed128_t);
+}
+
+unsigned long unsigned128_size(void) {
+    return sizeof(unsigned128_t);
+}
+
+unsigned long direct_unsigned128_size(void) {
+    return sizeof(direct_unsigned128_t);
+}
+
+unsigned long int128_record_size(void) {
+    return sizeof(struct Int128Layout);
+}
+
+typedef union Int128Words {
+    struct {
+        unsigned long low;
+        unsigned long high;
+    } words;
+    unsigned128_t full;
+} Int128Words;
+
+int int128_pair_equal(const Int128Words *left, const Int128Words *right) {
+    unsigned128_t left_value = left->full;
+    unsigned128_t right_value = right->full;
+    return left_value == right_value;
+}
+
+void int128_pair_copy(Int128Words *target, const Int128Words *source) {
+    unsigned128_t value = source->full;
+    target->full = value;
+}
+
+unsigned long int128_mul_shift(unsigned long value, unsigned int scale, unsigned int shift) {
+    return (unsigned long)(((unsigned128_t)value * scale) >> shift);
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/gnu_is_constexpr_bitfield.c"}
+/* Linux 6.6 i915_reg_defs.h uses BUILD_BUG_ON_ZERO(-!!(condition)) and
+ * __is_constexpr to validate register bitfields at compile time. The C
+ * conditional operator must distinguish an integer ICE zero cast to void*
+ * from an otherwise identical runtime expression: only the ICE is a null
+ * pointer constant, so the conditional's pointer type changes. */
+#define KERNEL_IS_CONSTEXPR(x) \
+    (sizeof(int) == sizeof(*(8 ? ((void *)((long)(x) * 0L)) : (int *)8)))
+#define KERNEL_BUILD_BUG_ON_ZERO(e) ((int)sizeof(struct { int : (-!!(e)); }))
+#define KERNEL_BF_SHF(x) (__builtin_ffsll(x) - 1)
+#define KERNEL_POWER_OF_TWO(x) ((x) && (((x) & ((x) - 1)) == 0))
+#define KERNEL_PREP(mask, value) \
+    ((unsigned)((((__typeof__(mask))(value) << KERNEL_BF_SHF(mask)) & (mask)) + \
+    KERNEL_BUILD_BUG_ON_ZERO(!KERNEL_IS_CONSTEXPR(mask)) + \
+    KERNEL_BUILD_BUG_ON_ZERO((mask) == 0 || (mask) > 4294967295U) + \
+    KERNEL_BUILD_BUG_ON_ZERO(!KERNEL_POWER_OF_TWO((mask) + \
+                               (1ULL << KERNEL_BF_SHF(mask)))) + \
+    KERNEL_BUILD_BUG_ON_ZERO(__builtin_choose_expr( \
+        KERNEL_IS_CONSTEXPR(value), \
+        (~((mask) >> KERNEL_BF_SHF(mask)) & (value)), 0))))
+
+#if defined(REJECT_ZERO_MASK)
+unsigned reject_bad_mask(void) { return KERNEL_PREP(0U, 2U); }
+#elif defined(REJECT_OUT_OF_RANGE_VALUE)
+unsigned reject_bad_value(void) { return KERNEL_PREP(0xF0U, 32U); }
+#else
+_Static_assert(KERNEL_IS_CONSTEXPR(0xF0U), "integer ICE zero is a null pointer constant");
+_Static_assert(sizeof(*(8 ? (void *)((long)0xF0U * 0L) : (int *)8)) == sizeof(int),
+               "ICE zero must retain the int pointer arm");
+
+unsigned kernel_i915_bitfield_probe(unsigned runtime) {
+    /* Runtime x * 0 is still NOT an integer constant expression. The
+     * conditional must instead select composite void*, GNU sizeof(void)=1. */
+    _Static_assert(!KERNEL_IS_CONSTEXPR(runtime), "runtime zero is not an ICE");
+    _Static_assert(sizeof(*(8 ? (void *)((long)runtime * 0L) : (int *)8)) == 1,
+                   "non-ICE conditional must retain void pointer arm");
+    return KERNEL_PREP(0xF0U, 2U) + KERNEL_PREP(0xF0U, runtime);
+}
+#endif
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/gnu_linux_bpf_union_zero.c"}
+/* Linux 6.6.143 kernel/bpf/helpers.c union spinlock zero test shape.
+ * A reduced source model, NOT an authenticated frozen GNU Linux .i owner.
+ * The same GNU-preprocessed file must pass both GNU -O2 and MiniC codegen. */
+typedef unsigned int u32;
+typedef struct { u32 value; } TinySpinlock;
+typedef union { u32 word; TinySpinlock lock; } TinySpinWord;
+
+extern void __compiletime_assert_758(void);
+
+int bpf_union_zero_assert_model(u32 *spinword)
+{
+    /* Exact fixed-kernel ordering: __bpf_spin_lock declares its alias to
+     * the incoming lock before the local designated-initialized union. */
+    u32 *l = (void *)spinword;
+    TinySpinWord u = { .lock = { .value = 0U } };
+    if (u.word != 0U)
+        __compiletime_assert_758();
+    return (int)u.word + (l != (void *)0);
+}
+
+int main(void)
+{
+    u32 lock_word = 0;
+    return bpf_union_zero_assert_model(&lock_word) == 1 ? 42 : 1;
+}
+
+#ifdef MINIC_NEGATIVE_CASES
+/* Each case must retain all possible live writes and side effects.  An
+ * initial zero union may not be used to prove a subsequently changed or
+ * escaped object remains zero. Volatile union reads must stay observable. */
+extern void runtime_nonzero_probe(void);
+extern void mutate_spinword(TinySpinWord *);
+
+u32 bpf_union_dynamic_write(u32 input)
+{
+    TinySpinWord u = { .lock = { .value = 0U } };
+    u.word = input;
+    if (u.word != 0U)
+        runtime_nonzero_probe();
+    return u.word;
+}
+
+u32 bpf_union_escaped_write(void)
+{
+    TinySpinWord u = { .lock = { .value = 0U } };
+    mutate_spinword(&u);
+    if (u.word != 0U)
+        runtime_nonzero_probe();
+    return u.word;
+}
+
+u32 bpf_union_volatile_read(u32 input)
+{
+    volatile TinySpinWord u = { .lock = { .value = 0U } };
+    if (input != 0U)
+        u.word = input;
+    if (u.word != 0U)
+        runtime_nonzero_probe();
+    return u.word;
+}
+
+u32 bpf_union_nonzero_initializer(void)
+{
+    TinySpinWord u = { .lock = { .value = 1U } };
+    if (u.word != 0U)
+        runtime_nonzero_probe();
+    return u.word;
+}
+#endif
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/gnu_linux_i915_irq_known_zero.c"}
+/* Fixed Linux 6.6.143 intel_gt_irq.c: gen11_gt_irq_postinstall's essential
+ * BUILD_BUG_ON(irqs & 0xffff0000) shape. This is a model of the source,
+ * NOT an authenticated frozen .i proof for the remaining x86 GNU LD owner.
+ * The difference from an expression-only mask proof is a conditional update
+ * to a local object, followed by a control-flow merge and then a read. */
+typedef unsigned int u32;
+
+extern void __compiletime_assert_461(void)
+    __attribute__((__error__("i915 interrupt bits must remain low16")));
+
+static volatile unsigned int observed_conditions;
+
+static int intel_uc_wants_guc_submission(u32 configured)
+{
+    ++observed_conditions;
+    return configured != 0U;
+}
+
+static u32 gen11_gt_irq_postinstall(u32 configured)
+{
+    u32 irqs = 0x00000100U;
+    if (!intel_uc_wants_guc_submission(configured))
+        irqs |= 0x00000004U | 0x00000010U | 0x00000020U;
+
+    if (irqs & 0xffff0000U)
+        __compiletime_assert_461();
+    return irqs;
+}
+
+int main(int argc, char **argv)
+{
+    u32 a, b;
+    (void)argv;
+    a = gen11_gt_irq_postinstall((u32)(argc - 1));
+    b = gen11_gt_irq_postinstall((u32)argc);
+    return a == 0x00000134U && b == 0x00000100U &&
+        observed_conditions == 2U ? 42 : 1;
+}
+
+#ifdef MINIC_NEGATIVE_CASES
+/* These MUST retain the external call. A possible-one-bits dataflow fact
+ * cannot survive unknown compound OR, escaped locals or volatile accesses. */
+extern void runtime_dynamic_highbits_probe(void);
+extern void runtime_escaped_highbits_probe(void);
+extern void runtime_volatile_highbits_probe(void);
+extern void runtime_constant_highbits_probe(void);
+extern void mutate_irqs(u32 *);
+
+u32 dynamic_highbits(u32 incoming, int enabled)
+{
+    u32 irqs = 0x00000100U;
+    if (enabled)
+        irqs |= incoming;
+    if (irqs & 0xffff0000U)
+        runtime_dynamic_highbits_probe();
+    return irqs;
+}
+
+u32 constant_highbits(int enabled)
+{
+    u32 irqs = 0x00000100U;
+    if (enabled)
+        irqs |= 0x80000000U;
+    if (irqs & 0xffff0000U)
+        runtime_constant_highbits_probe();
+    return irqs;
+}
+
+u32 escaped_local_highbits(u32 incoming)
+{
+    u32 irqs = incoming & 0xffffU;
+    mutate_irqs(&irqs);
+    if (irqs & 0xffff0000U)
+        runtime_escaped_highbits_probe();
+    return irqs;
+}
+
+u32 volatile_local_highbits(u32 incoming)
+{
+    volatile u32 irqs = incoming & 0xffffU;
+    if (incoming & 1U)
+        irqs |= 0x20U;
+    if (irqs & 0xffff0000U)
+        runtime_volatile_highbits_probe();
+    return irqs;
+}
+#endif
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/gnu_linux_ioremap_inline_arg_guard.c"}
+/* Fixed Linux v6.6.143 arch/x86/mm/ioremap.c and asm-generic/fixmap.h:
+ * early_ioremap_init calls fix_to_virt(0), whose pure always-inline body
+ * starts with the parameter-dependent BUILD_BUG_ON(idx >= limit). This
+ * models the real frozen .i failure; it does not replace its SHA evidence. */
+typedef unsigned int u32;
+typedef unsigned long ulong;
+
+extern void __compiletime_assert_183(void);
+extern void __compiletime_assert_369(void);
+
+static inline __attribute__((always_inline)) ulong fix_to_virt(u32 idx)
+{
+    do {
+        if (idx >= 1024U)
+            __compiletime_assert_183();
+    } while (0);
+    return 0xffffffffff5ff000UL - ((ulong)idx << 12);
+}
+
+int main(void)
+{
+    do {
+        if ((fix_to_virt(0U) + 4096UL) & ((1UL << 21) - 1UL))
+            __compiletime_assert_369();
+    } while (0);
+    return fix_to_virt(0U) == 0xffffffffff5ff000UL ? 42 : 1;
+}
+
+#ifdef MINIC_NEGATIVE_CASES
+extern void runtime_guard_side_effect(u32);
+volatile u32 observed_guard;
+
+/* A nonconstant parameter may enter the diagnostic path. Do not treat the
+ * pure guard-loop admission at call-site zero as a function-wide theorem. */
+ulong negative_dynamic_idx(u32 idx)
+{
+    return fix_to_virt(idx);
+}
+
+/* A truly dynamic loop guard has observable side effects even when the
+ * helper's returned integer is constant at the call site. */
+static inline __attribute__((always_inline)) ulong volatile_guard(u32 idx)
+{
+    do {
+        if (observed_guard)
+            runtime_guard_side_effect(idx);
+    } while (0);
+    return 0xffffffffff5ff000UL - ((ulong)idx << 12);
+}
+
+ulong negative_volatile_guard(void)
+{
+    return volatile_guard(0U);
+}
+#endif
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/gnu_linux_kaslr_addr_range_guard.c"}
+/* Fixed Linux 6.6.143 arch/x86/mm/kaslr.c: kernel_randomize_memory().
+ * Source-level model of the original GNU frozen .i:30937-30941.  The
+ * pgtable_l5_enabled() condition is runtime-dependent and MUST run, but
+ * both candidate address-space bases lie below CPU_ENTRY_AREA_BASE.
+ * Not an authenticated execution of the complete frozen Kbuild owner. */
+#define __PAGE_OFFSET_BASE_L5 0xff11000000000000UL
+#define __PAGE_OFFSET_BASE_L4 0xffff888000000000UL
+#define CPU_ENTRY_AREA_BASE ((-4UL) << 39)
+
+static const unsigned long vaddr_end = CPU_ENTRY_AREA_BASE;
+extern void __compiletime_assert_287(void);
+
+static int probe_count;
+static int pgtable_l5_enabled(int config)
+{
+    probe_count++;
+    return config != 0;
+}
+
+static unsigned long kernel_randomize_memory_shape(int config)
+{
+    unsigned long vaddr_start;
+    unsigned long vaddr;
+    vaddr_start = pgtable_l5_enabled(config) ?
+        __PAGE_OFFSET_BASE_L5 : __PAGE_OFFSET_BASE_L4;
+    vaddr = vaddr_start;
+    if (vaddr_start >= vaddr_end)
+        __compiletime_assert_287();
+    return vaddr;
+}
+
+int main(void)
+{
+    unsigned long l5 = kernel_randomize_memory_shape(1);
+    unsigned long l4 = kernel_randomize_memory_shape(0);
+    return probe_count == 2 && l5 == __PAGE_OFFSET_BASE_L5 &&
+           l4 == __PAGE_OFFSET_BASE_L4 ? 42 : 1;
+}
+
+#ifdef MINIC_NEGATIVE_CASES
+extern void observed_above_end(void);
+static volatile unsigned long dynamic_address;
+
+unsigned long kaslr_dynamic_invalid(int config)
+{
+    unsigned long start = config ? __PAGE_OFFSET_BASE_L5 : dynamic_address;
+    if (start >= vaddr_end)
+        observed_above_end();
+    return start;
+}
+
+unsigned long kaslr_static_invalid(int config)
+{
+    unsigned long start = config ? __PAGE_OFFSET_BASE_L5 : ~0UL;
+    if (start >= vaddr_end)
+        observed_above_end();
+    return start;
+}
+#endif
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/gnu_linux_kbuild_disjoint_bitmask_assert.c"}
+/* Exact essential GNU -E fs/exec.c BUILD_BUG_ON condition, stripped of
+ * unrelated Linux headers.  Runtime-dependent VM_EXEC is strictly disjoint
+ * from VM_STACK_INCOMPLETE_SETUP and cannot reach the diagnostic call. */
+typedef unsigned int u32;
+struct task_snapshot { u32 personality; };
+static volatile int observed_side_effects;
+
+extern void __compiletime_assert_707(void)
+    __attribute__((__noreturn__, __error__("VM_STACK_FLAGS & VM_STACK_INCOMPLETE_SETUP")));
+
+static int linux_stack_flags(struct task_snapshot *task) {
+    if (!(!((0x00000100 | (0x00000001 | 0x00000002 |
+                    ((task->personality & 0x00200000) ? 0x00000004 : 0) |
+                    0x00000010 | 0x00000020 | 0x00000040) |
+               0x00100000) & (0x00010000 | 0x00008000 | 0)))) {
+        __compiletime_assert_707();
+    }
+    return task->personality & 1U ? 42 : 41;
+}
+
+static u32 snapshot_personality(struct task_snapshot *task) {
+    ++observed_side_effects;
+    return task->personality;
+}
+
+static void linux_stack_flags_effectful(struct task_snapshot *task) {
+    if (!(!((0x00000100 | (0x00000001 | 0x00000002 |
+                    ((snapshot_personality(task) & 0x00200000) ? 0x00000004 : 0) |
+                    0x00000010 | 0x00000020 | 0x00000040) |
+               0x00100000) & (0x00010000 | 0x00008000 | 0)))) {
+        __compiletime_assert_707();
+    }
+}
+
+int main(int argc, char **argv) {
+    struct task_snapshot task;
+    (void)argv;
+    task.personality = (u32)argc;
+    linux_stack_flags_effectful(&task);
+    return observed_side_effects == 1 ? linux_stack_flags(&task) : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/gnu_linux_kmalloc_index_bool_guard.c"}
+/* Linux 6.6.143 include/linux/slab.h::__kmalloc_index, copied from the
+ * original x86 GNU -E frozen vma.i (the 2nd bool argument controls a final
+ * compile-time error only after all size-range returns were exhausted).
+ * Keep the GNU diagnostic call undefined: no fallback or fake definition. */
+typedef __SIZE_TYPE__ size_t;
+typedef _Bool bool;
+
+static inline __attribute__((__gnu_inline__, __always_inline__, __unused__))
+unsigned int __kmalloc_index(size_t size, bool size_is_constant)
+{
+    if (!size) return 0;
+    if (size <= (1 << 3)) return 3;
+    if ((1 << 3) <= 32 && size > 64 && size <= 96) return 1;
+    if ((1 << 3) <= 64 && size > 128 && size <= 192) return 2;
+    if (size <= 8) return 3;
+    if (size <= 16) return 4;
+    if (size <= 32) return 5;
+    if (size <= 64) return 6;
+    if (size <= 128) return 7;
+    if (size <= 256) return 8;
+    if (size <= 512) return 9;
+    if (size <= 1024) return 10;
+    if (size <= 2 * 1024) return 11;
+    if (size <= 4 * 1024) return 12;
+    if (size <= 8 * 1024) return 13;
+    if (size <= 16 * 1024) return 14;
+    if (size <= 32 * 1024) return 15;
+    if (size <= 64 * 1024) return 16;
+    if (size <= 128 * 1024) return 17;
+    if (size <= 256 * 1024) return 18;
+    if (size <= 512 * 1024) return 19;
+    if (size <= 1024 * 1024) return 20;
+    if (size <= 2 * 1024 * 1024) return 21;
+    if (!0 && size_is_constant) {
+        __attribute__((__noreturn__)) extern void __compiletime_assert_212(void)
+            __attribute__((__error__("unexpected size in kmalloc_index()")));
+        if (!(!(1))) __compiletime_assert_212();
+    } else {
+        __builtin_unreachable();
+    }
+    return (unsigned int)-1;
+}
+
+/* The original inline source may see a constant second argument although
+ * its first argument is merely range-bounded by an enclosing caller. */
+#ifdef MINIC_TEST_RANGE_GUARD
+unsigned int bound_size_512(size_t n)
+{
+    if (n > 512) return 0;
+    return __kmalloc_index(n, 1);
+}
+#endif
+
+/* Unknown size and a constant false second argument are fully valid. */
+unsigned int dynamic_size(size_t n)
+{
+    return __kmalloc_index(n, __builtin_constant_p(n));
+}
+
+unsigned int known_size(void)
+{
+    return __kmalloc_index(64, 1);
+}
+
+/* The query may turn true when Core knows a local initializer.  No zero-fact
+ * clone can be selected in that caller. */
+unsigned int local_constant_size(void)
+{
+    size_t n = 64;
+    return __kmalloc_index(n, __builtin_constant_p(n));
+}
+
+/* A genuinely unsafe constant-enabled unknown size MUST remain rejected.
+ * The candidate-only zero clone may never be substituted into this call. */
+#ifdef MINIC_TEST_UNSAFE_TRUE
+unsigned int unsafe_true(size_t n)
+{
+    return __kmalloc_index(n, 1);
+}
+#endif
+
+int main(int argc, char **argv)
+{
+    (void)argv;
+    return dynamic_size((size_t)argc) == 3U &&
+           known_size() == 6 && local_constant_size() == 6
+           ? 42 : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/gnu_linux_memory_encode_page_boolean_range.c"}
+/* Linux v6.6.143 mm/memory.c: zap_pte_range's mutable delay_rmap is 0/1.
+ * The inline TLB helper forwards that parameter to encode_page's
+ * BUILD_BUG_ON(flags > ENCODE_PAGE_BITS). This fixture is a separate source
+ * regression; the frozen 3.1 MiB original .i is replayed independently. */
+struct page { unsigned long value; };
+struct encoded_page;
+
+#if defined(MINIC_NEGATIVE_CASE)
+extern void __compiletime_assert_161(void);
+#else
+extern void __compiletime_assert_161(void)
+    __attribute__((error("BUILD_BUG_ON failed: flags > 3")));
+#endif
+
+static inline __attribute__((always_inline)) struct encoded_page *
+encode_page(struct page *page, unsigned long flags) {
+    if (!(!(flags > 3ul))) __compiletime_assert_161();
+    return (struct encoded_page *)(flags | (unsigned long)page);
+}
+
+static inline __attribute__((always_inline)) unsigned long
+remove_page_with_flags(struct page *page, unsigned int flags) {
+    return (unsigned long)encode_page(page, flags);
+}
+
+#if !defined(MINIC_NEGATIVE_CASE)
+static volatile int ticks;
+static int check_condition(int value) {
+    ++ticks;
+    return value;
+}
+
+static unsigned long remove_in_caller(struct page *page, int select) {
+    unsigned int delay_rmap = 0;
+    if (check_condition(select)) delay_rmap = 1;
+    return remove_page_with_flags(page, delay_rmap);
+}
+
+int main(void) {
+    struct page page = {0};
+    unsigned long raw = (unsigned long)&page;
+    if ((raw & 3ul) != 0ul) return 12;
+    if (remove_in_caller(&page, 0) != raw) return 13;
+    if (remove_in_caller(&page, 1) != (raw | 1ul)) return 14;
+    if (ticks != 2) return 15; /* The runtime condition still executes. */
+    return 42;
+}
+#elif MINIC_NEGATIVE_CASE == 1
+/* The 4 case is reachable: a may-one mask of 4 must NOT prove <= 3. */
+unsigned long unsafe_four(struct page *page, int select) {
+    unsigned int flags = 0;
+    if (select) flags = 4;
+    return remove_page_with_flags(page, flags);
+}
+#elif MINIC_NEGATIVE_CASE == 2
+/* An address escape invalidates all local facts. */
+extern void mutate(unsigned int *flags);
+unsigned long unsafe_escape(struct page *page) {
+    unsigned int flags = 0;
+    mutate(&flags);
+    return remove_page_with_flags(page, flags);
+}
+#elif MINIC_NEGATIVE_CASE == 3
+/* A volatile read cannot be replaced by the syntactic write set. */
+unsigned long unsafe_volatile(struct page *page, int select) {
+    volatile unsigned int flags = 0;
+    if (select) flags = 1;
+    return remove_page_with_flags(page, flags);
+}
+#elif MINIC_NEGATIVE_CASE == 4
+/* An arbitrary unsigned incoming value retains the runtime assertion. */
+unsigned long unsafe_parameter(struct page *page, unsigned int flags) {
+    return remove_page_with_flags(page, flags);
+}
+#endif
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/gnu_linux_nf_conntrack_total_size.c"}
+/* Fixed Linux v6.6.143 net/netfilter/nf_conntrack_extend.c shape.
+ * Reduced historical-owner candidate, NOT authenticated original frozen .i. */
+typedef unsigned int u32;
+enum { NF_CT_EXT_NUM = 5 };
+struct nf_ct_ext { u32 offset[8]; u32 len; };
+struct nf_conn_help { unsigned char data[24]; };
+struct nf_conn_nat { unsigned char data[16]; };
+struct nf_conn_seqadj { unsigned char data[12]; };
+struct nf_conn_acct { unsigned char data[24]; };
+struct nf_conntrack_ecache { unsigned char data[20]; };
+struct nf_conn_tstamp { unsigned char data[16]; };
+
+extern void __compiletime_assert_697(void);
+extern void runtime_size_assert_probe(void);
+static volatile u32 observable_loop_counter;
+
+static inline __attribute__((__gnu_inline__)) __attribute__((__unused__))
+    __attribute__((no_instrument_function)) __attribute__((__always_inline__))
+    u32 total_extension_size(void)
+{
+    /* Upstream has this separate BUG_ON before the `sizeof` return. Its
+     * do/while AST wrapper is significant to compile-time helper folding. */
+    do {
+        extern void __compiletime_assert_696(void);
+        if (!(NF_CT_EXT_NUM <= 10))
+            __compiletime_assert_696();
+    } while (0);
+    return sizeof(struct nf_ct_ext) + sizeof(struct nf_conn_help) +
+           sizeof(struct nf_conn_nat) + sizeof(struct nf_conn_seqadj) +
+           sizeof(struct nf_conn_acct) + sizeof(struct nf_conntrack_ecache) +
+           sizeof(struct nf_conn_tstamp);
+}
+
+static u32 nf_ct_ext_add_size(void)
+{
+    if (total_extension_size() > 255U)
+        __compiletime_assert_697();
+    return total_extension_size();
+}
+
+/* The leading-loop optimization MUST reject an actual write.  The caller
+ * observes this effect, so neither GNU nor MiniC may remove it while proving
+ * the otherwise constant return. */
+static __attribute__((always_inline)) inline u32 impure_size(void)
+{
+    do {
+        ++observable_loop_counter;
+    } while (0);
+    return total_extension_size();
+}
+
+int main(void)
+{
+    return nf_ct_ext_add_size() == 148U &&
+           impure_size() == 148U &&
+           observable_loop_counter == 1U ? 42 : 1;
+}
+
+#ifdef MINIC_NEGATIVE_CASES
+u32 nf_ct_dynamic_guard(u32 externally_supplied)
+{
+    if (total_extension_size() + externally_supplied > 255U)
+        runtime_size_assert_probe();
+    return externally_supplied;
+}
+
+u32 nf_ct_inverted_guard(u32 incoming)
+{
+    if (incoming > total_extension_size())
+        runtime_size_assert_probe();
+    return incoming;
+}
+#endif
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/gnu_linux_nvme_prp_constant_guard.c"}
+/* Linux 6.6.143 drivers/nvme/host/pci.i:53436-53441,55828.
+ * The original GNU -E source has exactly two initialized unsigned locals;
+ * BUILD_BUG_ON must reject a real runtime guard, not this constant five. */
+#define NVME_PAGE_SIZE (1U << 12)
+#define NVME_MAX_KB_SZ 8192U
+#define NVME_MAX_NR_ALLOCATIONS 5U
+#define DIV_ROUND_UP(n, d) (((n) + (d) - 1U) / (d))
+
+static inline __attribute__((always_inline)) unsigned nvme_pci_npages_prp(void)
+{
+    unsigned max_bytes = (NVME_MAX_KB_SZ * 1024U) + NVME_PAGE_SIZE;
+    unsigned nprps = DIV_ROUND_UP(max_bytes, NVME_PAGE_SIZE);
+    return DIV_ROUND_UP(8U * nprps, NVME_PAGE_SIZE - 8U);
+}
+
+extern void __compiletime_assert_449(void)
+    __attribute__((error("BUILD_BUG_ON failed: nvme_pci_npages_prp() > 5")));
+
+int main(void)
+{
+    if (nvme_pci_npages_prp() > NVME_MAX_NR_ALLOCATIONS)
+        __compiletime_assert_449();
+    return 42;
+}
+
+#ifdef MINIC_NVME_PRP_NEGATIVES
+extern volatile unsigned live_nprps;
+extern void witnessed_effect(void);
+extern void __compiletime_assert_runtime(void);
+
+static inline __attribute__((always_inline)) unsigned effectful_prp(void)
+{
+    unsigned max_bytes = (NVME_MAX_KB_SZ * 1024U) + NVME_PAGE_SIZE;
+    witnessed_effect();
+    unsigned nprps = DIV_ROUND_UP(max_bytes, NVME_PAGE_SIZE);
+    return DIV_ROUND_UP(8U * nprps, NVME_PAGE_SIZE - 8U);
+}
+
+unsigned negative_effect(void)
+{
+    return effectful_prp();
+}
+
+static inline __attribute__((always_inline)) unsigned volatile_prp(void)
+{
+    unsigned nprps = live_nprps;
+    return DIV_ROUND_UP(8U * nprps, NVME_PAGE_SIZE - 8U);
+}
+
+void negative_volatile(void)
+{
+    if (volatile_prp() > NVME_MAX_NR_ALLOCATIONS)
+        __compiletime_assert_runtime();
+}
+
+static inline __attribute__((always_inline)) unsigned parameter_prp(unsigned nprps)
+{
+    return DIV_ROUND_UP(8U * nprps, NVME_PAGE_SIZE - 8U);
+}
+
+void negative_argument(unsigned nprps)
+{
+    if (parameter_prp(nprps) > NVME_MAX_NR_ALLOCATIONS)
+        __compiletime_assert_runtime();
+}
+#endif
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/gnu_linux_static_field_guard.c"}
+/* GNU Linux bitfield.h-style diagnostics inside an ordinary TU-local static
+ * function.  Its mask is a formal parameter, but every live caller supplies
+ * a compile-time constant.  MiniC must specialize the call without a GCC C
+ * fallback and must not synthesize definitions for diagnostic externs. */
+extern void invalid_field_mask(void)
+    __attribute__((error("field mask must be constant and contiguous")));
+
+static unsigned long read_field(unsigned long reg, unsigned long mask)
+{
+    unsigned long shifted;
+    if (!__builtin_constant_p(mask))
+        invalid_field_mask();
+    if (mask == 0UL)
+        invalid_field_mask();
+    shifted = mask >> __builtin_ctzl(mask);
+    if ((shifted & (shifted + 1UL)) != 0UL)
+        invalid_field_mask();
+    return (reg & mask) >> __builtin_ctzl(mask);
+}
+
+static unsigned long use_two_fields(unsigned long reg)
+{
+    return read_field(reg, 0x00000070UL) +
+           read_field(reg, 0x0000f000UL);
+}
+
+int main(void)
+{
+#if defined(TEST_DYNAMIC_FIELD_GUARD)
+    volatile unsigned long dynamic_mask = 0x70UL;
+    return (int)read_field(0x15d40UL, dynamic_mask);
+#elif defined(TEST_INVALID_FIELD_GUARD)
+    return (int)read_field(0x15d40UL, 0x000000a0UL);
+#else
+    return use_two_fields(0x15d40UL) != 9UL;
+#endif
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/gnu_linux_task_mmu_swp_pfn_guard.c"}
+/* Linux 6.6.143 fs/proc/task_mmu.c -> include/linux/swapops.h:
+ * is_pfn_swap_entry(): BUILD_BUG_ON(SWP_TYPE_SHIFT < SWP_PFN_BITS).
+ * The exact frozen GNU .i spells the bound as
+ *     58 < ((feature ? 52 : 46) - 12).
+ * This standalone model is NOT the frozen original and must not certify
+ * whole-kernel GNU LD/QEMU on its own. */
+typedef unsigned long u64;
+static volatile unsigned int observed_feature_reads;
+
+extern void __compiletime_assert_347(void);
+
+static unsigned int boot_cpu_feature(void)
+{
+    ++observed_feature_reads;
+    return observed_feature_reads & 1U;
+}
+
+static u64 is_pfn_swap_entry_guard_model(void)
+{
+    u64 pfn_bits = (boot_cpu_feature() ? 52UL : 46UL) - 12UL;
+    if (58UL < pfn_bits)
+        __compiletime_assert_347();
+    return pfn_bits;
+}
+
+int main(void)
+{
+    u64 first = is_pfn_swap_entry_guard_model();
+    u64 second = is_pfn_swap_entry_guard_model();
+    return first == 40UL && second == 34UL &&
+           observed_feature_reads == 2U ? 42 : 1;
+}
+
+#ifdef MINIC_NEGATIVE_CASES
+extern void runtime_pfn_bits_probe(void);
+extern u64 dangerous_pfn_bits_source(void);
+
+/* A runtime-dependent branch may genuinely produce a value > 58. */
+u64 dynamic_high_pfn_bits(int active)
+{
+    u64 bits = (active ? dangerous_pfn_bits_source() : 46UL) - 12UL;
+    if (58UL < bits)
+        runtime_pfn_bits_probe();
+    return bits;
+}
+
+/* A literal high branch is still unsafe, despite the other being 46. */
+u64 fixed_high_pfn_bits(int active)
+{
+    u64 bits = (active ? 80UL : 46UL) - 12UL;
+    if (58UL < bits)
+        runtime_pfn_bits_probe();
+    return bits;
+}
+
+/* A changed local must not inherit the original two-constant bound. */
+u64 escaped_pfn_bits(int active)
+{
+    u64 bits = (active ? 52UL : 46UL) - 12UL;
+    bits |= dangerous_pfn_bits_source();
+    if (58UL < bits)
+        runtime_pfn_bits_probe();
+    return bits;
+}
+#endif
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/gnu_linux_zoned_constant_switch.c"}
+/* CONFIG_BLK_DEV_ZONED=n: a dead `return q->limits.zoned` must not keep a
+ * runtime zoned callback alive through an inline switch/helper/getter chain.
+ * The companion dynamic case exercises the opposite live-reference edge. */
+struct minic_zoned_queue {
+    int model;
+};
+
+struct minic_zoned_disk {
+    struct minic_zoned_queue *queue;
+};
+
+extern int minic_disabled_zoned_must_not_resolve(void);
+extern int minic_dynamic_zoned_must_resolve(void);
+
+static volatile int minic_dynamic_zoned_enabled = 1;
+volatile int minic_zoned_getter_visits;
+
+static inline int minic_disabled_zoned_model(struct minic_zoned_queue *queue)
+{
+    if (0)
+        return queue->model;
+    return 0;
+}
+
+static inline int minic_dynamic_zoned_model(struct minic_zoned_queue *queue)
+{
+    if (minic_dynamic_zoned_enabled)
+        return queue->model;
+    return 0;
+}
+
+static inline int minic_disabled_queue_is_zoned(struct minic_zoned_queue *queue)
+{
+    switch (minic_disabled_zoned_model(queue)) {
+    case 1:
+    case 2:
+        return 1;
+    default:
+        return 0;
+    }
+}
+
+static inline int minic_dynamic_queue_is_zoned(struct minic_zoned_queue *queue)
+{
+    switch (minic_dynamic_zoned_model(queue)) {
+    case 1:
+    case 2:
+        return 1;
+    default:
+        return 0;
+    }
+}
+
+static inline struct minic_zoned_queue *
+minic_disk_queue(struct minic_zoned_disk *disk)
+{
+    return disk->queue;
+}
+
+int minic_disabled_zoned_entry(struct minic_zoned_disk *disk)
+{
+    if (minic_disabled_queue_is_zoned(minic_disk_queue(disk)))
+        return minic_disabled_zoned_must_not_resolve();
+    return 41;
+}
+
+int minic_dynamic_zoned_entry(struct minic_zoned_disk *disk)
+{
+    if (minic_dynamic_queue_is_zoned(minic_disk_queue(disk)))
+        return minic_dynamic_zoned_must_resolve();
+    return 43;
+}
+
+static inline struct minic_zoned_queue *
+minic_disk_queue_with_effect(struct minic_zoned_disk *disk)
+{
+    ++minic_zoned_getter_visits;
+    return disk->queue;
+}
+
+int minic_zoned_getter_effect_entry(struct minic_zoned_disk *disk)
+{
+    struct minic_zoned_queue *queue = minic_disk_queue_with_effect(disk);
+    return queue->model + minic_zoned_getter_visits;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/gnu_linux_zoned_constant_switch_driver.c"}
+struct minic_zoned_queue {
+    int model;
+};
+
+struct minic_zoned_disk {
+    struct minic_zoned_queue *queue;
+};
+
+extern volatile int minic_zoned_getter_visits;
+extern int minic_disabled_zoned_entry(struct minic_zoned_disk *disk);
+extern int minic_dynamic_zoned_entry(struct minic_zoned_disk *disk);
+extern int minic_zoned_getter_effect_entry(struct minic_zoned_disk *disk);
+
+int minic_dynamic_zoned_must_resolve(void)
+{
+    return 97;
+}
+
+int main(void)
+{
+    struct minic_zoned_queue queue = {1};
+    struct minic_zoned_disk disk = {&queue};
+    if (minic_disabled_zoned_entry(&disk) != 41)
+        return 1;
+    if (minic_dynamic_zoned_entry(&disk) != 97)
+        return 2;
+    if (minic_zoned_getter_effect_entry(&disk) != 2 ||
+        minic_zoned_getter_visits != 1)
+        return 3;
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/gnu_local_fixed_register_binding_reject.c"}
+long reject_local_fixed(long value) {
+    register long bad asm("s1") = value;
+    return bad;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/gnu_local_fixed_register_bindings.c"}
+long local_fixed_syscall_like(long first, long second) {
+    register long a0v asm("a0") = first;
+    register long a1v asm("a1") = second;
+    register long result asm("a0");
+    register long nr asm("a7") = 169;
+
+    asm volatile("add %0, %1, %2 # nr=%3" : "=r"(result) : "r"(a0v), "r"(a1v), "r"(nr) : "memory");
+    return result;
+}
+
+void *local_fixed_pointer_like(void *input) {
+    register void *a0v asm("a0") = input;
+    register void *result asm("a0");
+
+    asm volatile("mv %0, %1" : "=r"(result) : "r"(a0v) : "memory");
+    return result;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/gnu_local_function_pointer_noreturn_attribute.c"}
+/* arch/arm64/kernel/hibernate.c declares its local resume trampoline as
+ * `void __noreturn (*hibernate_exit)(...)`: function, not object, attribute. */
+void never_return(int value) __attribute__((noreturn));
+void never_return(int value) {
+    for (;;) {
+        (void)value;
+    }
+}
+
+int main(void) {
+    void __attribute__((noreturn)) (*hibernate_exit)(int) = never_return;
+    return hibernate_exit != never_return;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/gnu_local_interleaved_informational_attribute.c"}
+typedef long long s64;
+
+int main(void) {
+    s64 __attribute__((__unused__)) steal = 0, irq_delta = 0;
+    return steal == 0 && irq_delta == 0 ? 0 : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/gnu_local_label_address.c"}
+static unsigned long first_local_label(void) {
+    return ({
+        __label__ here;
+    here:
+        (unsigned long)&&here;
+    });
+}
+
+static unsigned long repeated_local_labels(int pick_first) {
+    unsigned long first = ({
+        __label__ here;
+    here:
+        (unsigned long)&&here;
+    });
+    unsigned long second = ({
+        __label__ here;
+    here:
+        (unsigned long)&&here;
+    });
+
+    return pick_first ? first : second;
+}
+
+static unsigned long forward_local_label(void) {
+    return ({
+        __label__ later;
+        unsigned long address = (unsigned long)&&later;
+    later:
+        address;
+    });
+}
+
+int main(void) {
+    unsigned long a = first_local_label();
+    unsigned long b = repeated_local_labels(1);
+    unsigned long c = repeated_local_labels(0);
+    unsigned long d = forward_local_label();
+
+    return (a != 0UL && b != 0UL && c != 0UL && d != 0UL) ? 0 : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/gnu_local_nonstring_array_attribute.c"}
+/* drivers/soc/qcom/cmd-db.c: `u8 query[sizeof(ent->id)] __nonstring`. */
+int main(void) {
+    unsigned char query[8] __attribute__((nonstring));
+    query[0] = 'a';
+    query[1] = 'b';
+    return query[0] != 'a' || query[1] != 'b';
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/gnu_local_object_alignment.c"}
+struct alignment_probe {
+    unsigned long first;
+    unsigned long second;
+};
+
+int local_explicit_alignment(int value)
+{
+    char scratch[17] __attribute__((__aligned__(32)));
+    scratch[0] = (char)value;
+    return scratch[0];
+}
+
+int local_alignof_alignment(int value)
+{
+    char scratch[sizeof(struct alignment_probe) + 3]
+        __attribute__((__aligned__(__alignof__(struct alignment_probe))));
+    scratch[0] = (char)value;
+    return scratch[0];
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/gnu_local_wide_string_array.c"}
+/* Linux arch/x86/kernel/kvm.c initializes a local EFI CHAR16 array from L"...". */
+typedef unsigned short minic_efi_char16_t;
+
+static int check_efi_name(void) {
+    minic_efi_char16_t name[] = L"SevLiveMigrationEnabled";
+    minic_efi_char16_t fixed[4] = L"abc";
+    return (sizeof(name) / sizeof(name[0]) == 24U &&
+            name[0] == 'S' && name[23] == 0 &&
+            name[22] == 'd' && fixed[0] == 'a' && fixed[3] == 0);
+}
+
+int main(void) { return check_efi_name() ? 0 : 1; }
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/gnu_local_wide_string_array_negative.c"}
+/* Plain byte strings cannot initialize a 16-bit EFI CHAR16 local array. */
+static unsigned int minic_wide_invalid(void) {
+    unsigned short buffer[] = "not-wide";
+    return buffer[0];
+}
+int minic_wide_invalid_entry(void) { return (int)minic_wide_invalid(); }
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/gnu_mixed_void_conditional.c"}
+/* GNU mixed-void ternary is used by Linux x86's pgd_clear() macro. The
+ * value-producing arm must still execute side effects exactly once. */
+static int progress;
+
+static void void_effect(int amount) {
+    progress += amount;
+}
+
+static int value_effect(int amount) {
+    progress += amount;
+    return amount * 2;
+}
+
+void minic_mixed_void_conditional(int cond) {
+    cond ? void_effect(3) : value_effect(5);
+    cond ? value_effect(7) : void_effect(11);
+}
+
+void minic_constant_mixed_void(void) {
+    1 ? void_effect(13) : value_effect(17);
+    0 ? value_effect(19) : void_effect(23);
+}
+
+int main(void) {
+    minic_mixed_void_conditional(1);
+    minic_mixed_void_conditional(0);
+    minic_constant_mixed_void();
+    return progress == (3 + 7 + 5 + 11 + 13 + 23) ? 0 : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/gnu_nested_record_member_qualifier_abi.c"}
+/* A GNU record statement-expression is an rvalue; its pointer member's
+ * outer const must vanish from Core SSA, while pointee const must survive. */
+typedef struct QualLeaf {
+    const int *const pointer;
+    volatile unsigned int mark;
+} QualLeaf;
+typedef struct QualOuter { QualLeaf leaf; } QualOuter;
+
+static const int selected_values[2] = { 19, 31 };
+static unsigned int call_count;
+
+__attribute__((noinline)) static QualOuter make_outer(int which) {
+    QualOuter value = {
+        { which ? &selected_values[1] : &selected_values[0],
+          (unsigned int)(70 + which) }
+    };
+    call_count++;
+    return value;
+}
+
+__attribute__((noinline)) const int *select_nested_pointer(int which) {
+    return ({ QualOuter value = make_outer(which); value; }).leaf.pointer;
+}
+
+__attribute__((noinline)) unsigned int read_nested_volatile_twice(void) {
+    QualOuter source = make_outer(0);
+    /* Two distinct volatile scalar projections of a record rvalue. The
+     * record copies must not suppress the member loads as ordinary SSA. */
+    unsigned int first = ({ QualOuter value = source; value; }).leaf.mark;
+    unsigned int second = ({ QualOuter value = source; value; }).leaf.mark;
+    return first + second;
+}
+
+int main(void) {
+    const int *left = select_nested_pointer(0);
+    const int *right = select_nested_pointer(1);
+    const unsigned int twice = read_nested_volatile_twice();
+    return *left == 19 && *right == 31 && twice == 140 &&
+           call_count == 3 ? 0 : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/gnu_nested_switch_return_reachability.c"}
+/* A nested switch can return along every arm despite a trailing, dead break. */
+static int nested_mode(unsigned product, unsigned mode) {
+    switch (product) {
+    case 11:
+        switch (mode) {
+        case 1: return 111;
+        case 2: return 112;
+        default: return -11;
+        }
+        break;
+    case 22:
+        switch (mode) {
+        case 3: return 223;
+        default: return -22;
+        }
+        break;
+    default:
+        return -1;
+    }
+}
+
+/* A genuinely reachable break must still escape the switch. */
+static int live_break(unsigned product, unsigned mode) {
+    switch (product) {
+    case 11:
+        switch (mode) {
+        case 1: return 111;
+        default: break;
+        }
+        break;
+    case 22:
+        return 222;
+    default:
+        return -1;
+    }
+    return -77;
+}
+
+int main(void) {
+    if (nested_mode(11, 1) != 111 || nested_mode(11, 2) != 112 ||
+        nested_mode(11, 99) != -11 || nested_mode(22, 3) != 223 ||
+        nested_mode(22, 0) != -22 || nested_mode(99, 0) != -1)
+        return 1;
+    if (live_break(11, 1) != 111 || live_break(11, 0) != -77 ||
+        live_break(22, 0) != 222 || live_break(99, 0) != -1)
+        return 2;
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/gnu_nested_union_compound_record_array.c"}
+/* Linux i915 power maps contain file-scope compound-literal record arrays
+ * with two pointer relocations per row and an anonymous union of records. */
+enum minic_well_id { MINIC_WELL_ALWAYS_ON = 1, MINIC_WELL_BXT = 7 };
+
+struct minic_domain_list {
+    const unsigned int *list;
+    unsigned char count;
+};
+
+struct minic_well_instance {
+    const char *name;
+    const struct minic_domain_list *domains;
+    enum minic_well_id id;
+    union {
+        struct { unsigned char index; } vlv;
+        struct { int phy; } bxt;
+        struct { unsigned char index; } hsw;
+    };
+};
+
+static const unsigned int minic_domains[] = { 2, 4, 6 };
+static const struct minic_domain_list minic_domain_set = { minic_domains, 3 };
+
+#define MINIC_WELL_ROWS(...) ((const struct minic_well_instance[]) { __VA_ARGS__ })
+
+static const struct minic_well_instance *minic_compound_wells =
+    MINIC_WELL_ROWS(
+        { .name = "always-on", .domains = &minic_domain_set,
+          .id = MINIC_WELL_ALWAYS_ON },
+        { .name = "bxt", .domains = &minic_domain_set,
+          .id = MINIC_WELL_BXT, .bxt.phy = 0x1234 }
+    );
+
+int minic_nested_union_compound_result(void) {
+    return (minic_compound_wells[0].id == MINIC_WELL_ALWAYS_ON &&
+            minic_compound_wells[0].vlv.index == 0 &&
+            minic_compound_wells[1].id == MINIC_WELL_BXT &&
+            minic_compound_wells[1].bxt.phy == 0x1234 &&
+            minic_compound_wells[1].domains->list[2] == 6 &&
+            minic_compound_wells[0].name[0] == 'a' &&
+            minic_compound_wells[1].name[1] == 'x') ? 0 : 91;
+}
+
+int main(void) { return minic_nested_union_compound_result(); }
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/gnu_no_profile_function_attribute.c"}
+int __attribute__((__noinline__)) __attribute__((__no_instrument_function__))
+__attribute__((__section__(".noinstr.text"))) __attribute__((__no_sanitize_address__))
+__attribute__((__no_profile_instrument_function__))
+no_profile_decl(int value);
+
+__attribute__((__noinline__)) __attribute__((__no_instrument_function__))
+__attribute__((__section__(".noinstr.text"))) __attribute__((__no_sanitize_address__))
+__attribute__((__no_profile_instrument_function__)) int
+no_profile_decl(int value) {
+    return value + 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/gnu_numeric_pointer_global.c"}
+/* Linux uses absolute nonzero pointer sentinels in file-scope objects.
+ * The constant is not an ELF symbol relocation and has to occupy the
+ * target-width pointer slot with the GNU implementation-defined bits. */
+static void *empty_list = (void *)-1L;
+static unsigned char *guard_page = (unsigned char *)0x1000L;
+
+void *read_empty_list(void) { return empty_list; }
+unsigned char *read_guard_page(void) { return guard_page; }
+
+/* A pointer converted to C _Bool is 1 for any nonnull pointer, never the
+ * low byte of its address.  Both LP64 direct machine targets must normalize
+ * the full pointer register before writing the Core scalar value. */
+_Bool pointer_is_nonnull(const void *pointer) { return (_Bool)pointer; }
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/gnu_object_alignment_attribute.c"}
+typedef unsigned long long u64;
+
+typedef struct {
+    unsigned int __softirq_pending;
+} irq_cpustat_t;
+
+extern __attribute__((section(".data..percpu" "..shared_aligned")))
+__typeof__(irq_cpustat_t) irq_stat __attribute__((__aligned__((1 << 6))));
+
+extern __attribute__((section(".probe.suffix.aligned"))) __typeof__(u64) suffix_aligned
+    __attribute__((__aligned__((1 << 6))));
+extern u64 isolated_aligned __attribute__((__aligned__((1 << 6)))), isolated_natural;
+
+extern u64 __attribute__((__aligned__((1 << 6)), __section__(".data..cacheline_aligned"))) jiffies_64;
+extern unsigned long volatile __attribute__((__aligned__((1 << 6)), __section__(".data..cacheline_aligned"))) jiffies;
+u64 ordinary = 1;
+u64 suffix_aligned = 0;
+u64 isolated_aligned = 0;
+u64 isolated_natural = 0;
+u64 jiffies_64 = 0;
+unsigned long volatile jiffies = 0;
+
+int main(void)
+{
+    return ordinary == 1 ? 0 : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/gnu_object_unused_alias.c"}
+static const int value __attribute__((unused)) = 7;
+int main(void) {
+    return value - 7;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/gnu_octal_character_case_range.c"}
+int linux_printk_level_like(const char *buffer) {
+    if (buffer[0] == '\001' && buffer[1]) {
+        switch (buffer[1]) {
+        case '0' ... '7':
+            return buffer[1];
+        case '\077':
+            return 99;
+        default:
+            return 0;
+        }
+    }
+    return -1;
+}
+
+int octal_character_values(void) {
+    return '\0' + '\7' + '\12' + '\123';
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/gnu_omitted_conditional.c"}
+static int probe_calls;
+
+static int probe(int value)
+{
+    probe_calls += 1;
+    return value;
+}
+
+int linux_shape(int ret)
+{
+    return ret ?: -7;
+}
+
+int evaluate_once(void)
+{
+    return probe(5) ?: 9;
+}
+
+int false_fallback(void)
+{
+    return 0 ?: 9;
+}
+
+_Static_assert((5 ?: 9) == 5, "GNU omitted conditional true consteval");
+_Static_assert((0 ?: 9) == 9, "GNU omitted conditional false consteval");
+
+int main(void)
+{
+    return linux_shape(3) + false_fallback() + evaluate_once() + probe_calls == 18 ? 0 : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/gnu_overflow_builtins.c"}
+static _Bool __attribute__((__warn_unused_result__)) checked_add_int(int a, int b, int *result) {
+    return __builtin_add_overflow(a, b, result);
+}
+
+static _Bool checked_mul_long(long a, long b, long *result) {
+    return __builtin_mul_overflow(a, b, result);
+}
+
+static _Bool checked_mul_ulong(unsigned long a, unsigned long b, unsigned long *result) {
+    return __builtin_mul_overflow(a, b, result);
+}
+
+static _Bool checked_mul_int_uint(int a, unsigned int b, int *result) {
+    return __builtin_mul_overflow(a, b, result);
+}
+
+static _Bool checked_sub_ulong(unsigned long a, unsigned long b, unsigned long *result) {
+    return __builtin_sub_overflow(a, b, result);
+}
+
+static _Bool checked_mul_representable_constant(unsigned long value, unsigned long *result) {
+    return __builtin_mul_overflow(value, 1000L, result);
+}
+
+int main(void) {
+    int i = 0;
+    int mixed = 0;
+    long l = 0;
+    unsigned long ul = 0;
+
+    return checked_add_int(1, 2, &i) || checked_mul_long(2, 3, &l) ||
+                   checked_mul_ulong(4UL, 5UL, &ul) ||
+                   checked_mul_int_uint(-2, 3U, &mixed) ||
+                   !checked_mul_int_uint(2147483647, 2U, &mixed) ||
+                   checked_sub_ulong(8UL, 3UL, &ul) ||
+                   checked_mul_representable_constant(2UL, &ul)
+               ? 1
+               : (i == 3 && l == 6 && ul == 2000UL ? 0 : 2);
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/gnu_packed_record_field.c"}
+struct PackedMiddle {
+    unsigned char lead;
+    unsigned long value __attribute__((__packed__));
+    unsigned char tail;
+};
+
+struct PackedThenNatural {
+    unsigned char lead;
+    unsigned long packed_value __attribute__((packed));
+    unsigned long natural_value;
+};
+
+struct PackedAligned {
+    unsigned char lead;
+    unsigned long value __attribute__((packed, aligned(4)));
+    unsigned char tail;
+};
+
+_Static_assert(__builtin_offsetof(struct PackedMiddle, lead) == 0, "lead");
+_Static_assert(__builtin_offsetof(struct PackedMiddle, value) == 1, "packed field offset");
+_Static_assert(__builtin_offsetof(struct PackedMiddle, tail) == 9, "tail after packed field");
+_Static_assert(sizeof(struct PackedMiddle) == 10, "packed field does not pack entire record");
+
+_Static_assert(__builtin_offsetof(struct PackedThenNatural, packed_value) == 1, "packed value");
+_Static_assert(__builtin_offsetof(struct PackedThenNatural, natural_value) == 16, "next field natural alignment");
+_Static_assert(sizeof(struct PackedThenNatural) == 24, "record keeps natural alignment from normal field");
+
+_Static_assert(__builtin_offsetof(struct PackedAligned, value) == 4, "aligned raises packed field alignment");
+_Static_assert(__builtin_offsetof(struct PackedAligned, tail) == 12, "aligned packed field size");
+_Static_assert(sizeof(struct PackedAligned) == 16, "explicit field alignment contributes to record");
+
+int main(void)
+{
+    struct PackedMiddle value = {1, 2, 3};
+    return value.lead == 1 && value.value == 2 && value.tail == 3 ? 0 : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/gnu_plain_unsigned_char_pointer_assignment.c"}
+static char *pack_upper(char *cursor) {
+    return cursor;
+}
+
+int main(void) {
+    unsigned char storage[2] = {0, 0};
+    unsigned char *cursor = storage;
+    char *plain = (char *)cursor;
+
+    cursor = pack_upper(plain);
+    plain = cursor;
+    return plain == (char *)storage ? 0 : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/gnu_pointer_sign_call_conversion.c"}
+typedef unsigned int u32;
+
+typedef int (*signed_pointer_call_t)(int *old, int next);
+
+static int update_signed(int *old, int next) {
+    int previous = *old;
+    *old = next;
+    return previous;
+}
+
+static int direct_pointer_sign_call(void) {
+    u32 old = 7U;
+    int previous = update_signed(&old, old + 3U);
+
+    return previous == 7 && old == 10U ? 0 : 1;
+}
+
+static int indirect_pointer_sign_call(signed_pointer_call_t call) {
+    u32 old = 11U;
+    int previous = call(&old, old + 4U);
+
+    return previous == 11 && old == 15U ? 0 : 2;
+}
+
+int main(void) {
+    return direct_pointer_sign_call() + indirect_pointer_sign_call(update_signed);
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/gnu_pragma_neon_header_aarch64.i"}
+#pragma GCC push_options
+#pragma GCC target ("+nothing+simd")
+#pragma GCC aarch64 "arm_neon.h"
+typedef unsigned char neon_header_marker_byte;
+#pragma GCC pop_options
+int main(void) { neon_header_marker_byte x = 0; return (int)x; }
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/gnu_pragma_target_aarch64.c"}
+#pragma GCC push_options
+#pragma GCC target ("+nothing+simd")
+static int level_one(void) { return 11; }
+#pragma GCC push_options
+#pragma GCC target("+nothing+simd")
+static int level_two(void) { return 20; }
+#pragma GCC pop_options
+static int restored_one(void) { return 7; }
+#pragma GCC pop_options
+int main(void) { return level_one() + level_two() - restored_one() - 24; }
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/gnu_prefix_function_attributes.c"}
+/* Real GNU kernel libc prototypes use __const__ and __const.
+ * These qualify C types and cannot be target-specific expressions. */
+extern void *minic_probe_memcpy(void *dst, __const__ void *src, unsigned long len);
+int minic_probe_const_underscored(const __const__ int *p) { return *p; }
+int minic_probe_const_plain(const __const int *p) { return *p; }
+
+/* Linux no_instrument_function has both spellings; GCC artificial only
+ * changes debug-inline call-site attribution, not code or call ABI. */
+__attribute__((no_instrument_function))
+int linux_noinstr_plain(int value) { return value + 1; }
+
+__attribute__((__no_instrument_function__))
+int linux_noinstr_underscored(int value) { return value - 1; }
+
+static inline __attribute__((artificial))
+int linux_artificial_plain(int value) { return value + 2; }
+
+static inline __attribute__((__artificial__))
+int linux_artificial_underscored(int value) { return value - 2; }
+
+int linux_artificial_calls(int value) {
+    return linux_artificial_plain(value) + linux_artificial_underscored(value);
+}
+
+static inline __attribute__((__gnu_inline__)) __attribute__((__unused__))
+    __attribute__((__no_instrument_function__)) __attribute__((__always_inline__)) const int *
+prefix_attribute_identity(const int *value)
+{
+    return value;
+}
+
+const int *call_prefix_attribute_identity(const int *value)
+{
+    return prefix_attribute_identity(value);
+}
+
+inline __attribute__((__gnu_inline__)) __attribute__((__unused__))
+    __attribute__((__no_instrument_function__)) int prefix_external_identity(int value)
+{
+    return value;
+}
+
+
+/* Linux signal/start_kernel shapes: externally_visible preserves public reachability
+ * under whole-program optimization. MiniC never internalizes public symbols, so the
+ * bounded semantic effect is intentionally parse-only while external linkage stays. */
+__attribute__((__externally_visible__))
+void externally_visible_decl(int value);
+
+__attribute__((__externally_visible__)) __attribute__((__cold__))
+__attribute__((__section__(".probe.externally-visible.text")))
+__attribute__((__no_sanitize_address__)) __attribute__((__no_stack_protector__))
+void externally_visible_decl(int value)
+{
+    (void)value;
+}
+
+extern __attribute__((__externally_visible__)) int externally_visible_object;
+
+int *externally_visible_object_address(void)
+{
+    return &externally_visible_object;
+}
+
+
+__attribute__((no_sanitize_address)) __attribute__((no_stack_protector))
+void instrumentation_policy_aliases(void)
+{
+}
+
+static inline __attribute__((gnu_inline)) __attribute__((always_inline))
+/* Standalone .i regression: no libc typedefs are injected by GNU -E -P.
+ * This fixture tests GNU attribute spelling, not external stddef.h owners. */
+unsigned long prefix_plain_spelling_identity(unsigned long value)
+{
+    return value;
+}
+
+/* The unused static inline body need not own a separate ELF symbol.
+ * Exercise the plain spelling through a live caller instead. */
+unsigned long call_prefix_plain_spelling_identity(unsigned long value)
+{
+    return prefix_plain_spelling_identity(value);
+}
+
+/* Official Zstd includes GCC no_sanitize("undefined") attributes.
+ * No sanitizer instrumentation is generated by MiniC. */
+__attribute__((no_sanitize("undefined")))
+int zstd_ubsan_policy(int value) { return value + 1; }
+
+__attribute__((__no_sanitize__("undefined")))
+int zstd_ubsan_underscored_policy(int value) { return value - 1; }
+
+/* The exact policy used by pinned upstream Zstd 1.5.7. */
+__attribute__((no_sanitize("pointer-overflow")))
+int zstd_pointer_overflow_policy(int value) { return value; }
+
+__attribute__((no_sanitize("signed-integer-overflow")))
+int zstd_signed_overflow_policy(int value) { return value; }
+
+/* The original Zstd GNU prefix policy needs exact ELF visibility and
+ * explicit known pure metadata. */
+extern __attribute__((visibility("default"))) int zstd_visibility_decl(int);
+int zstd_visibility_decl(int value) { return value + 4; }
+extern __attribute__((pure)) int zstd_pure_decl(int);
+int zstd_pure_decl(int value) { return value + 5; }
+__attribute__((visibility("hidden")))
+int zstd_hidden_visibility_definition(int value) { return value - 5; }
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/gnu_prefix_local_object_attribute.c"}
+int external_value = 5;
+
+int main(void) {
+    __attribute__((__unused__)) unsigned int *before_stage;
+    __attribute__((__unused__)) unsigned int *start_stage = (unsigned int *)0;
+    __attribute__((__unused__)) extern int external_value;
+    __attribute__((__unused__)) unsigned int result = (unsigned int)external_value + 3U;
+
+    (void)start_stage;
+    return result == 8U ? 0 : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/gnu_qualified_array_alias.c"}
+/* Linux lib/crypto/aes.c exposes two readonly aliases for internal
+ * volatile/const substitution tables.  GNU alias declarations name storage,
+ * and may therefore carry a different top-level element cv qualifier. */
+static volatile const unsigned char aes_sbox[4] = { 0x63, 0x7c, 0x77, 0x7b };
+static const volatile unsigned char aes_inv_sbox[4] = { 0x52, 0x09, 0x6a, 0xd5 };
+
+extern const unsigned char crypto_aes_sbox[4]
+    __attribute__((alias("aes_sbox")));
+extern const unsigned char crypto_aes_inv_sbox[4]
+    __attribute__((alias("aes_inv_sbox")));
+
+unsigned int minic_alias_sbox_sum(void) {
+    return (unsigned int)crypto_aes_sbox[0] +
+           (unsigned int)crypto_aes_inv_sbox[1];
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/gnu_qualified_array_pointer_argument.c"}
+/* ARM64 Linux ghash-ce-glue.c: PMULL function pointer expects `const u64
+ * h[][2]` but a writable flexible array member `u64 h[][2]` supplies it. */
+typedef unsigned long long u64;
+
+struct minic_ghash_key {
+    u64 first;
+    u64 h[][2];
+};
+
+typedef void (*minic_pmull_update)(int, u64 [], const char *,
+                                   const u64 [][2], const char *);
+
+static void minic_pmull_fallback(int blocks, u64 digest[], const char *src,
+                                 const u64 h[][2], const char *head) {
+    digest[0] += (u64)blocks + h[0][0];
+    if (src != 0 && head != 0)
+        digest[0] += 1U;
+}
+
+void minic_ghash_update(minic_pmull_update callback,
+                        struct minic_ghash_key *key, u64 digest[]) {
+    /* This is the real Linux `simd_update(..., key->h, head)` shape. */
+    callback(1, digest, (const char *)0, key->h, (const char *)0);
+    minic_pmull_fallback(1, digest, (const char *)0, key->h, (const char *)0);
+}
+
+static void minic_accept_pmull_function(minic_pmull_update simd_update,
+                                       u64 digest[], struct minic_ghash_key *key) {
+    simd_update(1, digest, (const char *)0, key->h, (const char *)0);
+}
+
+void minic_ghash_real_declared_update(u64 digest[], struct minic_ghash_key *key) {
+    /* A real GNU Linux ghash call also passes a function designator whose
+     * parameter has a separately parsed compatible multi-dimensional array
+     * type.  Signature interning must not use only array descriptor IDs. */
+    minic_accept_pmull_function(minic_pmull_fallback, digest, key);
+}
+
+static u64 minic_storage[2][2] = {{3U, 4U}, {5U, 6U}};
+
+static u64 minic_sum_const(const u64 h[][2]) {
+    return h[0][0] + h[1][0];
+}
+
+int main(void) {
+    return minic_sum_const(minic_storage) == 8U ? 0 : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/gnu_record_alignment.c"}
+struct PointerAligned {
+    char byte;
+} __attribute__((aligned(sizeof(void *))));
+
+struct __attribute__((aligned(16))) PrefixAligned {
+    char byte;
+};
+
+struct OverAligned {
+    char byte;
+} __attribute__((__aligned__(16)));
+
+struct OverAlignedHolder {
+    char lead;
+    struct OverAligned payload;
+};
+
+unsigned long pointer_aligned_size(void) {
+    return sizeof(struct PointerAligned);
+}
+
+unsigned long prefix_aligned_size(void) {
+    return sizeof(struct PrefixAligned);
+}
+
+unsigned long over_aligned_size(void) {
+    return sizeof(struct OverAligned);
+}
+
+unsigned long over_aligned_holder_size(void) {
+    return sizeof(struct OverAlignedHolder);
+}
+
+unsigned long over_aligned_holder_offset(void) {
+    return __builtin_offsetof(struct OverAlignedHolder, payload);
+}
+
+struct DesignatedOnly {
+    int first;
+    int second;
+} __attribute__((__designated_init__));
+
+struct DesignatedAligned {
+    char byte;
+} __attribute__((__designated_init__, aligned(16)));
+
+unsigned long designated_only_size(void) {
+    return sizeof(struct DesignatedOnly);
+}
+
+unsigned long designated_aligned_size(void) {
+    return sizeof(struct DesignatedAligned);
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/gnu_record_array_chained_member.c"}
+/* Linux i915 intel_engine_cs.c uses [ENGINE_CLASS].reg = (i915_reg_t){...}. */
+typedef struct MinicReg { unsigned reg; } MinicReg;
+typedef union MinicUnionReg { MinicReg reg; MinicReg mcr_reg; } MinicUnionReg;
+
+static const MinicUnionReg gen8_regs[4] = {
+    [0].reg = (MinicReg){.reg = 0x4260U},
+    [1].reg = (MinicReg){.reg = 0x4264U},
+    [2].reg = (MinicReg){.reg = 0x4270U},
+    [3].reg = (MinicReg){.reg = 0x426cU},
+};
+static const MinicUnionReg gen12_regs[6] = {
+    [0].mcr_reg = (MinicReg){.reg = 0xced8U},
+    [1].mcr_reg = (MinicReg){.reg = 0xcedcU},
+    [2].mcr_reg = (MinicReg){.reg = 0xcee0U},
+    [3].mcr_reg = (MinicReg){.reg = 0xcee4U},
+    [5].mcr_reg = (MinicReg){.reg = 0xcf04U},
+};
+struct MinicPair { unsigned lo; unsigned hi; };
+static const struct MinicPair pairs[3] = {
+    [0].lo = 1U,
+    [0].hi = 2U,
+    [2].hi = 3U,
+    [2].lo = 4U,
+};
+struct MinicOuter { unsigned tag; struct MinicPair inner; };
+static const struct MinicOuter nested[2] = {
+    [0].inner.lo = 10U,
+    [0].inner.hi = 20U,
+    [1].tag = 7U,
+    [1].inner.hi = 30U,
+};
+
+int main(void) {
+    if (sizeof(gen8_regs)/sizeof(gen8_regs[0]) != 4U ||
+        sizeof(gen12_regs)/sizeof(gen12_regs[0]) != 6U ||
+        sizeof(pairs)/sizeof(pairs[0]) != 3U) return 1;
+    if (gen8_regs[0].reg.reg != 0x4260U ||
+        gen8_regs[3].reg.reg != 0x426cU ||
+        gen12_regs[5].mcr_reg.reg != 0xcf04U ||
+        gen12_regs[4].reg.reg != 0U) return 2;
+    return pairs[0].lo == 1U && pairs[0].hi == 2U &&
+           pairs[1].lo == 0U && pairs[1].hi == 0U &&
+           pairs[2].lo == 4U && pairs[2].hi == 3U &&
+           nested[0].tag == 0U && nested[0].inner.lo == 10U &&
+           nested[0].inner.hi == 20U && nested[1].tag == 7U &&
+           nested[1].inner.lo == 0U && nested[1].inner.hi == 30U ? 0 : 3;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/gnu_record_array_chained_member_negative.c"}
+/* Only declared members may follow a GNU [i].member designator. */
+struct MinicNegativeRecord { unsigned valid; };
+static const struct MinicNegativeRecord invalid[2] = {
+    [0].missing = 1U,
+};
+int minic_record_chained_bad(void) { return (int)invalid[0].valid; }
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/gnu_record_compound_literal.c"}
+typedef unsigned long size_t;
+
+struct Holder {
+    int tag;
+    union {
+        struct {
+            void *ptr;
+            size_t count;
+        };
+        size_t raw;
+    };
+};
+
+static int left_effect(void)
+{
+    return 11;
+}
+
+static int init_effect(void)
+{
+    return 22;
+}
+
+/* Linux iov_iter_ubuf shape: assign a designated record compound literal. */
+void assign_holder(struct Holder *out, void *ptr, size_t count)
+{
+    *out = (struct Holder) {
+        .tag = 1,
+        .ptr = ptr,
+        .count = count,
+    };
+}
+
+int compound_member(void)
+{
+    return ((struct Holder) { .tag = 7 }).tag;
+}
+
+/* Linux path_put_init shape: an empty compound literal means all-zero. */
+void clear_holder(struct Holder *out)
+{
+    *out = (struct Holder) { };
+}
+
+int local_empty_initializer(void)
+{
+    struct Holder holder = { };
+    return holder.tag + (int)holder.count;
+}
+
+int compound_address_and_order(void)
+{
+    int left = left_effect();
+    struct Holder *holder = &((struct Holder) {
+        .tag = init_effect(),
+        .ptr = (void *)0,
+        .count = 3,
+    });
+    return left + holder->tag + (int)holder->count;
+}
+
+typedef struct {
+    unsigned long val;
+} kernel_cap_t;
+
+/* Linux capability.h shape: positional compound literal from runtime expressions. */
+kernel_cap_t cap_combine_shape(const kernel_cap_t a, const kernel_cap_t b)
+{
+    return (kernel_cap_t) { a.val | b.val };
+}
+
+int positional_member(void)
+{
+    kernel_cap_t a = { .val = 5 };
+    kernel_cap_t b = { .val = 10 };
+    kernel_cap_t result = cap_combine_shape(a, b);
+    return (int)result.val;
+}
+
+struct NestedInner {
+    unsigned long first;
+    unsigned long second;
+};
+
+struct NestedOuter {
+    struct NestedInner inner;
+    int count;
+};
+
+int nested_designated_braces(int value)
+{
+    struct NestedOuter item = {
+        .inner = { 3, 4 },
+        .count = value,
+    };
+    return (int)(item.inner.first + item.inner.second) + item.count;
+}
+
+struct FlexibleRuntime {
+    int tag;
+    unsigned long count;
+    unsigned char payload[];
+};
+
+void assign_flexible_prefix(struct FlexibleRuntime *out, int tag, unsigned long count)
+{
+    *out = (struct FlexibleRuntime) {
+        .tag = tag,
+        .count = count,
+    };
+}
+
+void assign_flexible_prefix_positional(struct FlexibleRuntime *out,
+                                       int tag,
+                                       unsigned long count)
+{
+    *out = (struct FlexibleRuntime) { tag, count };
+}
+
+void clear_flexible_prefix(struct FlexibleRuntime *out)
+{
+    *out = (struct FlexibleRuntime) { };
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/gnu_record_compound_literal_runtime.c"}
+extern void *malloc(unsigned long size);
+extern void free(void *pointer);
+
+struct FlexibleRuntime {
+    int tag;
+    unsigned long count;
+    unsigned char payload[];
+};
+
+void assign_flexible_prefix(struct FlexibleRuntime *out, int tag, unsigned long count);
+void assign_flexible_prefix_positional(struct FlexibleRuntime *out, int tag, unsigned long count);
+void clear_flexible_prefix(struct FlexibleRuntime *out);
+
+static int payload_unchanged(const struct FlexibleRuntime *value) {
+    return value->payload[0] == 0xA5U && value->payload[1] == 0x5AU && value->payload[2] == 0x3CU &&
+           value->payload[3] == 0xC3U;
+}
+
+static void seed_payload(struct FlexibleRuntime *value) {
+    value->payload[0] = 0xA5U;
+    value->payload[1] = 0x5AU;
+    value->payload[2] = 0x3CU;
+    value->payload[3] = 0xC3U;
+}
+
+int main(void) {
+    struct FlexibleRuntime *value;
+
+    value = (struct FlexibleRuntime *)malloc(sizeof(*value) + 4U);
+    if (value == (void *)0) {
+        return 90;
+    }
+
+    seed_payload(value);
+    value->tag = -1;
+    value->count = 99U;
+    assign_flexible_prefix(value, 7, 41U);
+    if (value->tag != 7 || value->count != 41U || !payload_unchanged(value)) {
+        free(value);
+        return 1;
+    }
+
+    seed_payload(value);
+    value->tag = -2;
+    value->count = 98U;
+    assign_flexible_prefix_positional(value, 8, 42U);
+    if (value->tag != 8 || value->count != 42U || !payload_unchanged(value)) {
+        free(value);
+        return 2;
+    }
+
+    seed_payload(value);
+    value->tag = 9;
+    value->count = 43U;
+    clear_flexible_prefix(value);
+    if (value->tag != 0 || value->count != 0U || !payload_unchanged(value)) {
+        free(value);
+        return 3;
+    }
+
+    free(value);
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/gnu_register_inline_asm_output.c"}
+static unsigned long read_cycle_like(void) {
+    return ({
+        register unsigned long value;
+        __asm__ __volatile__("csrr %0, " "0xc01" : "=r"(value) : : "memory");
+        value;
+    });
+}
+
+int main(void) {
+    /* Keep the register-output producer reachable: dead static functions are
+     * intentionally pruned by Core module reachability. */
+    return (int)read_cycle_like();
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/gnu_runtime_if_effect_facts.c"}
+/* GNU/MiniC strict differential: an impure condition may leave unrelated
+ * automatic locals unchanged. The Core IF guard must retain those incoming
+ * facts without retaining locals modified by aliases, assignments or loops. */
+#include <stdio.h>
+
+static volatile int global_volatile_flag;
+static int call_count;
+
+__attribute__((noinline)) static int touch_external(int x) {
+    ++call_count;
+    return x;
+}
+
+static int nested_pure_ternary(int flag) {
+    int lower = 1;
+    if (flag ? !__builtin_constant_p((long long)lower >= 0) : 0)
+        return -11;
+    return 11;
+}
+
+static int nested_volatile_ternary(int flag) {
+    int lower = 1;
+    global_volatile_flag = flag;
+    if (global_volatile_flag
+        ? !__builtin_constant_p((long long)lower >= 0) : 0)
+        return -12;
+    return 12;
+}
+
+static int nested_call_ternary(int flag) {
+    int lower = 1;
+    if (touch_external(flag)
+        ? !__builtin_constant_p((long long)lower >= 0) : 0)
+        return -13;
+    return 13;
+}
+
+static int conditional_assign_phi(int flag) {
+    int x = 1;
+    if (flag)
+        x = 2;
+    return flag ? x == 2 : x == 1;
+}
+
+static int branch_phi(int left, int right) {
+    int x = 1;
+    if (left)
+        x = 2;
+    if (right)
+        x = 3;
+    return left ? (right ? x == 3 : x == 2)
+                : (right ? x == 3 : x == 1);
+}
+
+static int loop_phi(int n) {
+    int x = 1;
+    for (int i = 0; i < n; ++i)
+        x += i;
+    return n ? x >= 1 : x == 1;
+}
+
+static int short_circuit_mutation(int flag) {
+    int changed = 0;
+    int x = 5;
+    if (flag && (++changed, x == 5))
+        x = 7;
+    return x * 10 + changed;
+}
+
+static int alias_local_mutation(int flag) {
+    int x = 1;
+    int *p = &x;
+    if (flag)
+        *p = 2;
+    if (flag ? x == 2 : x == 1)
+        return 1;
+    return -1;
+}
+
+static int label_reentry(int flag) {
+    int x = 1;
+    if (flag)
+        goto label;
+    x = 2;
+label:
+    return flag ? x == 1 : x == 2;
+}
+
+static int builtin_unevaluated_side_effect(int flag) {
+    int x = 1;
+    if (flag ? __builtin_constant_p((++x, x)) : 0)
+        return -1;
+    return x;
+}
+
+static int ternary_increment(int flag) {
+    int x = 1;
+    if (flag ? ++x == 2 : x == 1)
+        return x;
+    return -1;
+}
+
+__attribute__((noinline)) static void touch_local_pointer(int *value) {
+    *value = 4;
+}
+
+static int statement_local_escape(int flag) {
+    int result = flag ? ({
+        int temporary = 1;
+        touch_local_pointer(&temporary);
+        temporary;
+    }) : 3;
+    return flag ? result == 4 : result == 3;
+}
+
+static int statement_local_join(int flag) {
+    int result = ({
+        int temporary = 1;
+        if (flag)
+            temporary = 2;
+        temporary;
+    });
+    return flag ? result == 2 : result == 1;
+}
+
+static int statement_local_shadow(int flag) {
+    int value = 10;
+    if (flag ? ({ int value = 1; value == 1; }) : value == 10)
+        return value;
+    return -1;
+}
+
+static int statement_nested_block_owner(int flag) {
+    int out = 0;
+    if (flag ? ({
+        int value = 0;
+        if (flag) {
+            int nested = 2;
+            value = nested;
+        }
+        value == 2;
+    }) : 0)
+        out = 1;
+    return flag ? out : !out;
+}
+
+int main(void) {
+    int pure_zero = nested_pure_ternary(0);
+    int pure_one = nested_pure_ternary(1);
+    int volatile_zero = nested_volatile_ternary(0);
+    int volatile_one = nested_volatile_ternary(1);
+    int call_zero = nested_call_ternary(0);
+    int call_one = nested_call_ternary(1);
+    int observed_calls = call_count;
+    printf("pure=%d,%d volatile=%d,%d call=%d,%d call_count=%d\n",
+        pure_zero, pure_one, volatile_zero, volatile_one,
+        call_zero, call_one, observed_calls);
+    printf("phi=%d,%d multi=%d,%d,%d,%d loop=%d,%d short=%d,%d alias=%d,%d label=%d,%d\n",
+        conditional_assign_phi(0), conditional_assign_phi(1),
+        branch_phi(0,0), branch_phi(0,1), branch_phi(1,0), branch_phi(1,1),
+        loop_phi(0), loop_phi(3),
+        short_circuit_mutation(0), short_circuit_mutation(1),
+        alias_local_mutation(0), alias_local_mutation(1),
+        label_reentry(0), label_reentry(1));
+    printf("unevaluated=%d,%d increment=%d,%d\n",
+        builtin_unevaluated_side_effect(0), builtin_unevaluated_side_effect(1),
+        ternary_increment(0), ternary_increment(1));
+    printf("stmt_escape=%d,%d stmt_join=%d,%d shadow=%d,%d nested=%d,%d\n",
+        statement_local_escape(0), statement_local_escape(1),
+        statement_local_join(0), statement_local_join(1),
+        statement_local_shadow(0), statement_local_shadow(1),
+        statement_nested_block_owner(0), statement_nested_block_owner(1));
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/gnu_section_symbol_attribute.c"}
+extern char __attribute__((__section__(".probe.data"))) placed_data[];
+char placed_data[] = "x";
+
+extern unsigned long suffix_first __attribute__((__section__(".probe.suffix.first"))),
+    suffix_second __attribute__((__section__(".probe.suffix.second")));
+unsigned long suffix_first = 7;
+unsigned long suffix_second = 9;
+
+extern char suffix_array[] __attribute__((__section__(".probe.suffix.array")));
+char suffix_array[] = "z";
+
+struct prefix_section_shape {
+    unsigned long value;
+};
+
+extern __attribute__((section(".probe.prefix.record" "")))
+__typeof__(struct prefix_section_shape) prefix_section_record;
+
+extern __attribute__((section(".probe.prefix.concat" "")))
+__typeof__(unsigned long) prefix_section_scalar;
+unsigned long prefix_section_scalar = 11;
+
+void __attribute__((__section__(".probe.text"))) placed_function(void);
+
+void placed_function(void) {
+}
+
+/* Linux init/main.i shape: symbol section before the return type, optimization
+ * metadata beside it, and function metadata after the declarator. */
+__attribute__((__section__(".probe.prefix.text"))) __attribute__((__cold__))
+void *prefix_placed_function(int nid, unsigned long size, unsigned long mask)
+    __attribute__((__alloc_size__(2))) __attribute__((__malloc__));
+
+void *prefix_placed_function(int nid, unsigned long size, unsigned long mask) {
+    if (nid || size || mask) {
+        return (void *)0;
+    }
+    return (void *)0;
+}
+
+int main(void) {
+    placed_function();
+    return placed_data[0] == 'x' && suffix_first == 7 && suffix_second == 9 &&
+                   suffix_array[0] == 'z' && prefix_section_scalar == 11
+               ? 0
+               : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/gnu_signed_keyword.c"}
+typedef __signed__ char signed_char_alias;
+typedef __signed short signed_short_alias;
+typedef __signed__ int signed_int_alias;
+typedef __signed long signed_long_alias;
+
+signed_long_alias widen_signed_aliases(signed_char_alias a,
+                                       signed_short_alias b,
+                                       signed_int_alias c) {
+    return (signed_long_alias)a + (signed_long_alias)b + (signed_long_alias)c;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/gnu_statement_expr_record_return.c"}
+/* A record-valued GNU statement expression may be a function's return value.
+ * Its side effects must run once, and its final aggregate may be a call. */
+typedef struct Pair {
+    long first;
+    long second;
+} Pair;
+
+/* Fixed-width records cover the 8-byte register and 32-byte indirect-result
+ * paths on both ILP32 and LP64 targets, in addition to Pair's 16/8 bytes. */
+typedef struct Small {
+    unsigned long long value;
+} Small;
+typedef struct Large {
+    unsigned long long a, b, c, d;
+} Large;
+
+static int effects;
+
+static Pair make_pair(long input) {
+    Pair result;
+    result.first = input;
+    result.second = input + 7;
+    return result;
+}
+
+static Pair make_from_statement(long input) {
+    return ({
+        long adjusted = input + 3;
+        ++effects;
+        ({ int unused = effects; (void)unused; });
+        make_pair(adjusted);
+    });
+}
+
+static Small make_small(unsigned long long input) {
+    Small result = { input + 7ULL };
+    return result;
+}
+
+static Large make_large(unsigned long long input) {
+    Large result = { input, input + 1ULL, input + 2ULL, input + 3ULL };
+    return result;
+}
+
+static Small small_from_statement(unsigned long long input) {
+    return ({
+        unsigned long long adjusted = input + 2ULL;
+        ({ int positive = adjusted != 0ULL; if (positive) effects += 3; positive; });
+        make_small(adjusted);
+    });
+}
+
+static Large large_from_statement(unsigned long long input) {
+    return ({
+        unsigned long long adjusted = input + 4ULL;
+        ({ int positive = adjusted != 0ULL; if (positive) effects += 5; positive; });
+        make_large(adjusted);
+    });
+}
+
+int main(void) {
+    Pair pair = make_from_statement(23);
+    if (pair.first != 26 || pair.second != 33 || effects != 1)
+        return 1;
+    pair = make_from_statement(8);
+    if (pair.first != 11 || pair.second != 18 || effects != 2)
+        return 2;
+    {
+        Small small = small_from_statement(5ULL);
+        Large large = large_from_statement(9ULL);
+        if (small.value != 14ULL || large.a != 13ULL || large.b != 14ULL ||
+            large.c != 15ULL || large.d != 16ULL || effects != 10)
+            return 3;
+    }
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/gnu_statement_expr_record_return_mismatch_negative.c"}
+typedef struct Pair { long first; long second; } Pair;
+Pair invalid_return(void) {
+    /* An integer statement expression is not a record return. */
+    return ({ long value = 1; value; });
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/gnu_statement_expression.c"}
+static int statement_value(int input) {
+    int value = input;
+
+    return ({
+        do {
+            value += 2;
+        } while (0);
+        value;
+    });
+}
+
+static int statement_void(int input) {
+    int value = input;
+
+    ({
+        value += 3;
+        __asm__ __volatile__("" : : : "memory");
+    });
+    return value;
+}
+
+int main(void) {
+    return statement_value(5) == 7 && statement_void(4) == 7 ? 0 : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/gnu_statement_record_value.c"}
+typedef struct record_box {
+    long *lock;
+} record_box_t;
+
+extern int try_lock(long *lock);
+
+record_box_t construct_box(long *lock) {
+    record_box_t box = ({
+        record_box_t temporary = {.lock = lock}, *current = &temporary;
+        if (current->lock && !try_lock(current->lock))
+            current->lock = (void *)0;
+        temporary;
+    });
+    return box;
+}
+
+void assign_box(record_box_t *target, long *lock) {
+    *target = ({
+        record_box_t temporary = {.lock = lock};
+        temporary;
+    });
+}
+
+typedef struct discarded_record {
+    long value;
+} discarded_record_t;
+
+typedef struct discarded_empty {
+} discarded_empty_t;
+
+typedef struct discarded_holder {
+    discarded_empty_t cookie;
+} discarded_holder_t;
+
+static discarded_record_t *discard_record_source(discarded_record_t *value) {
+    return value;
+}
+
+void discard_record_lvalue(discarded_record_t *value) {
+    (void)(*discard_record_source(value));
+}
+
+void discard_zero_record_member(discarded_holder_t *holder) {
+    (void)(holder->cookie);
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/gnu_statement_record_value_runtime.c"}
+/* Independent native GCC/MiniC oracle for GNU statement record snapshots. */
+typedef struct record_box { long *lock; } record_box_t;
+typedef struct discarded_record { long value; } discarded_record_t;
+typedef struct discarded_empty {} discarded_empty_t;
+typedef struct discarded_holder { discarded_empty_t cookie; } discarded_holder_t;
+
+extern record_box_t construct_box(long *lock);
+extern void assign_box(record_box_t *target, long *lock);
+extern void discard_record_lvalue(discarded_record_t *value);
+extern void discard_zero_record_member(discarded_holder_t *holder);
+
+static int lock_calls;
+
+int try_lock(long *lock) {
+    lock_calls++;
+    if (*lock != 0) return 0;
+    *lock = 1;
+    return 1;
+}
+
+int main(void) {
+    long available = 0, unavailable = 1;
+    record_box_t first = construct_box(&available);
+    record_box_t failed = construct_box(&unavailable);
+    record_box_t assigned = { (void *)0 };
+    discarded_record_t discarded = { 89 };
+    discarded_holder_t empty;
+
+    assign_box(&assigned, &unavailable);
+    discard_record_lvalue(&discarded);
+    discard_zero_record_member(&empty);
+    return first.lock == &available && available == 1 &&
+           failed.lock == (void *)0 && assigned.lock == &unavailable &&
+           unavailable == 1 && discarded.value == 89 && lock_calls == 2 ? 0 : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/gnu_static_local_implicit_zero.c"}
+struct lock_class_key {
+    unsigned long owner;
+    unsigned int state;
+};
+
+extern void consume_address(void *value);
+
+void linux_static_key_shape(void)
+{
+    static struct lock_class_key key;
+    static int scalar;
+    static int *pointer;
+    static int values[3];
+
+    consume_address(&key);
+    consume_address(&scalar);
+    consume_address(&pointer);
+    consume_address(&values[0]);
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/gnu_static_local_interleaved_attribute.c"}
+struct LockdepLike {
+    int key;
+    unsigned long state;
+};
+
+static int record_value(void) {
+    static struct LockdepLike __attribute__((__unused__)) map = {};
+    return map.key + (int)map.state;
+}
+
+static int scalar_value(void) {
+    static int __attribute__((__unused__)) value = 7;
+    return value;
+}
+
+static int section_value(void) {
+    static _Bool __attribute__((__section__(".data..once"))) already_done;
+    static int __attribute__((section(".data.localpair"))) first, second;
+    already_done = 1;
+    first = 3;
+    second = 4;
+    return (int)already_done + first + second;
+}
+
+int main(void) {
+    return record_value() == 0 && scalar_value() == 7 && section_value() == 8 ? 0 : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/gnu_static_mixed_pointer_scalar_declarators.c"}
+/* A declarator's `*` belongs to that name, not the shared declaration specifier.
+ * In particular, after an initialized pointer, the next name may be either
+ * another pointer or an ordinary scalar object. */
+static int left = 11;
+static int right = 29;
+static int *first = &left, *second = &right, scalar = 37;
+static const char *first_text = "left", *second_text = "right";
+static int * const protected = &left, *ordinary = &right;
+typedef int *int_pointer;
+static int_pointer from_typedef = &left, also_from_typedef = &right;
+
+int main(void) {
+    return *first == 11 && *second == 29 && scalar == 37 &&
+                   first_text[0] == 'l' && second_text[0] == 'r' &&
+                   *protected == 11 && *ordinary == 29 &&
+                   *from_typedef == 11 && *also_from_typedef == 29 ? 0 : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/gnu_static_multi_array_declarators.c"}
+/* GNU Linux bq27xxx_battery.c: one static u8 declaration defines many
+ * register tables, each with a separate designated initializer. */
+static unsigned char first_regs[5] = {
+    [0] = 0x10, [3] = 0x33
+}, second_regs[5] = {
+    [1] = 0x21, [4] = 0x44
+}, third_regs[5] = {
+    [2] = 0x32
+};
+
+static int inferred_first[] = {3, 5}, inferred_second[] = {7, 11, 13};
+
+static int mixed_values[2] = {17, 19}, mixed_scalar = 23,
+           *mixed_pointer = mixed_values;
+
+static const char *const labels[2] = {"left", "right"},
+                  *const more_labels[2] = {"up", "down"};
+
+typedef unsigned short pair[2];
+static pair pair_first = {29, 31}, pair_second = {37, 41};
+
+int main(void) {
+    if (first_regs[0] != 0x10 || first_regs[3] != 0x33 ||
+        second_regs[1] != 0x21 || second_regs[4] != 0x44 ||
+        third_regs[2] != 0x32 || inferred_first[1] != 5 ||
+        inferred_second[2] != 13 || mixed_values[0] != 17 ||
+        mixed_scalar != 23 || mixed_pointer != mixed_values ||
+        labels[0][0] != 'l' || more_labels[1][0] != 'd' ||
+        pair_first[1] != 31 || pair_second[0] != 37) {
+        return 1;
+    }
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/gnu_static_multidimensional_pointer_arrays.c"}
+/* Linux drivers/clk/imx/clk-imx93.c has arrays of pointer arrays whose
+ * elements are separately brace-enclosed, not scalar pointer initializers. */
+static const char *const parent_names[3][4] = {
+    {"osc_24m", "sys_pll_pfd0_div2", "sys_pll_pfd1_div2", "video_pll"},
+    {"osc_24m", "sys_pll_pfd0_div2", "sys_pll_pfd1_div2", "sys_pll_pfd2_div2"},
+    {"osc_24m", "sys_pll_pfd1_div2", "video_pll", "sys_pll_pfd2_div2"}
+};
+
+static const char *other_names[2][3] = {
+    [0] = {[2] = "zero-two", [0] = "zero-zero"},
+    [1] = {[1] = "one-one"}
+};
+
+static const char *last_names[2][2] = {
+    {"up"}, {"down", "right"}
+};
+
+int main(void) {
+    return parent_names[0][0][0] != 'o' ||
+           parent_names[1][3][8] != 'p' ||
+           parent_names[2][2][0] != 'v' ||
+           other_names[0][0][5] != 'z' ||
+           other_names[0][1] != 0 ||
+           other_names[0][2][5] != 't' ||
+           other_names[1][1][4] != 'o' ||
+           last_names[0][0][0] != 'u' ||
+           last_names[0][1] != 0 ||
+           last_names[1][1][0] != 'r';
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/gnu_static_null_pointer_conditional.c"}
+/* Linux nf_conntrack_sip: GNU C constant integer fields can use a pointer
+ * null constant as the condition of a compile-time conditional expression. */
+struct minic_sip_header {
+    const char *name;
+    unsigned long length;
+};
+static const struct minic_sip_header minic_sip_headers[] = {
+    { .name = "CSeq", .length = (((void *)0)) ? sizeof(((void *)0)) - 1 : 0 },
+    { .name = "From", .length = ("f") ? sizeof("f") - 1 : 0 }
+};
+
+int minic_sip_header_result(void) {
+    return minic_sip_headers[0].length == 0 &&
+           minic_sip_headers[1].length == 1 ? 0 : 71;
+}
+
+int main(void) { return minic_sip_header_result(); }
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/gnu_static_null_pointer_conditional_negative.c"}
+/* Reading a pointer-valued global is not a GNU integer constant expression. */
+static int *minic_runtime_pointer;
+static const int minic_illegal_static_condition =
+    minic_runtime_pointer ? 1 : 0;
+
+int minic_bad_conditional(void) { return minic_illegal_static_condition; }
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/gnu_static_union_anonymous_record_arena_growth.c"}
+/* A GNU static union designator may create many anonymous record types while
+ * evaluating sizeof(). The growable parser->program->records array may move;
+ * an outer union descriptor must not retain an arena pointer across it. */
+#define A(N) sizeof(struct { unsigned char member_##N; })
+union trap_config {
+    unsigned long long raw;
+    struct {
+        unsigned long long fgt : 8;
+        unsigned long long bit : 8;
+        unsigned long long unused : 48;
+    };
+};
+
+static const union trap_config traps[] = {
+    { .fgt = 3 + ((
+        A(1) + A(2) + A(3) + A(4) + A(5) + A(6) + A(7) + A(8) +
+        A(9) + A(10) + A(11) + A(12) + A(13) + A(14) + A(15) + A(16) +
+        A(17) + A(18) + A(19) + A(20) + A(21) + A(22) + A(23) + A(24) +
+        A(25) + A(26) + A(27) + A(28) + A(29) + A(30) + A(31) + A(32) +
+        A(33) + A(34) + A(35) + A(36) + A(37) + A(38) + A(39) + A(40) +
+        A(41) + A(42) + A(43) + A(44) + A(45) + A(46) + A(47) + A(48) +
+        A(49) + A(50) + A(51) + A(52) + A(53) + A(54) + A(55) + A(56) +
+        A(57) + A(58) + A(59) + A(60) + A(61) + A(62) + A(63) + A(64)) & 7),
+      .bit = 5 + ((
+        A(65) + A(66) + A(67) + A(68) + A(69) + A(70) + A(71) + A(72) +
+        A(73) + A(74) + A(75) + A(76) + A(77) + A(78) + A(79) + A(80) +
+        A(81) + A(82) + A(83) + A(84) + A(85) + A(86) + A(87) + A(88) +
+        A(89) + A(90) + A(91) + A(92) + A(93) + A(94) + A(95) + A(96) +
+        A(97) + A(98) + A(99) + A(100) + A(101) + A(102) + A(103) + A(104) +
+        A(105) + A(106) + A(107) + A(108) + A(109) + A(110) + A(111) + A(112) +
+        A(113) + A(114) + A(115) + A(116) + A(117) + A(118) + A(119) + A(120) +
+        A(121) + A(122) + A(123) + A(124) + A(125) + A(126) + A(127) + A(128)) & 7) },
+};
+
+int main(void) { return traps[0].fgt == 3 && traps[0].bit == 5 ? 0 : 1; }
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/gnu_static_union_anonymous_record_designator.c"}
+/* arch/arm64/kvm/emulate-nested.c uses promoted anonymous bitfields in
+ * designated static union initializers nested inside arrays of records. */
+union trap_config {
+    unsigned long long val;
+    struct {
+        unsigned long long cgt:10;
+        unsigned long long fgt:4;
+        unsigned long long bit:6;
+        unsigned long long pol:1;
+        unsigned long long fgf:5;
+        unsigned long long unused:37;
+        unsigned long long mbz:1;
+    };
+};
+
+struct encoding_to_trap_config {
+    const unsigned int encoding;
+    const unsigned int end;
+    const union trap_config tc;
+    const unsigned int line;
+};
+
+static const struct encoding_to_trap_config entries[] = {
+    {.encoding = 11, .end = 11, .tc = {.cgt = 3}, .line = 21},
+    {.encoding = 12, .end = 12,
+     .tc = {.fgt = 2, .bit = 4, .pol = 1, .fgf = 3}, .line = 22},
+    {.encoding = 13, .end = 13, .tc = {.val = 41}, .line = 23}
+};
+
+int main(void) {
+    return entries[0].tc.cgt != 3 || entries[0].tc.val != 3 ||
+           entries[1].tc.fgt != 2 || entries[1].tc.bit != 4 ||
+           entries[1].tc.pol != 1 || entries[1].tc.fgf != 3 ||
+           entries[2].tc.val != 41 || entries[2].line != 23;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/gnu_tee_nested_const_record_member.c"}
+typedef struct KUid { unsigned int val; } KUid;
+typedef struct Cred { KUid euid; } Cred;
+static Cred credential = { { 77U } };
+static volatile Cred volatile_credential = { { 145U } };
+static unsigned int credential_calls;
+static unsigned int volatile_credential_calls;
+
+static const Cred *current_cred(void) { credential_calls++; return &credential; }
+static const volatile Cred *current_cred_volatile(void) {
+    volatile_credential_calls++;
+    return &volatile_credential;
+}
+extern int snprintf(char *buffer, unsigned long size, const char *format, ...);
+
+int current_uid(char *buffer) {
+    return snprintf(buffer, 128UL, "uid=%x",
+        (({ ({ do { } while (0); ;
+               ((typeof(*(current_cred())) *)(current_cred()));
+            })->euid; })).val);
+}
+
+int current_uid_volatile(char *buffer) {
+    return snprintf(buffer, 128UL, "uid=%x",
+        (({ ({ do { } while (0); ;
+               ((typeof(*(current_cred_volatile())) *)(current_cred_volatile()));
+            })->euid; })).val);
+}
+
+int main(void) {
+    char first[128], second[128];
+    return current_uid(first) == 6 && first[0] == 'u' &&
+        first[4] == '4' && first[5] == 'd' && first[6] == 0 &&
+        current_uid_volatile(second) == 6 && second[0] == 'u' &&
+        second[4] == '9' && second[5] == '1' && second[6] == 0 &&
+        credential_calls == 1 && volatile_credential_calls == 1 ? 0 : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/gnu_top_level_empty_declaration.c"}
+;
+static int first(void)
+{
+    return 11;
+}
+;;
+typedef int probe_int_t;
+;
+static probe_int_t second(void)
+{
+    return first() + 31;
+}
+;
+int main(void)
+{
+    return second() == 42 ? 0 : 1;
+}
+;
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/gnu_transparent_union_callback.c"}
+/* Original BusyBox libbb/xconnect.c meets glibc getsockname:
+ * a function whose second parameter is a GNU transparent-union pointer
+ * is passed where the consumer declares the union's FIRST pointer member.
+ * This must preserve the C function-pointer ABI without accepting unrelated
+ * incompatible signatures. */
+#include <stdio.h>
+struct MiniSockaddr { int family; };
+typedef union {
+    struct MiniSockaddr *sa;
+    void *opaque;
+} MiniSockaddrArg __attribute__((__transparent_union__));
+
+static int read_address(int fd, MiniSockaddrArg addr, unsigned *length)
+{
+    if (addr.sa == 0 || length == 0 || *length != 4U)
+        return -1;
+    ++*length;
+    return fd + addr.sa->family + (int)*length;
+}
+
+static int run_callback(int fd,
+                        int (*getter)(int, struct MiniSockaddr *, unsigned *))
+{
+    struct MiniSockaddr addr = {17};
+    unsigned length = 4U;
+    int result = getter(fd, &addr, &length);
+    return result + (int)length;
+}
+
+int main(void)
+{
+    int result = run_callback(7, read_address);
+    if (result != 34) {
+        printf("bad=%d\n", result);
+        return 1;
+    }
+    puts("transparent-union-callback: 34");
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/gnu_typedef_nonredundant_aligned.c"}
+typedef int over_aligned_int __attribute__((aligned(16)));
+
+struct aligned_holder {
+    char prefix;
+    over_aligned_int value;
+};
+
+struct call_single_shape {
+    unsigned long words[2];
+};
+
+typedef struct call_single_shape call_single_shape_t
+    __attribute__((__aligned__(sizeof(struct call_single_shape))));
+
+_Static_assert(__alignof__(over_aligned_int) == 16, "typedef minimum alignment");
+_Static_assert(__builtin_offsetof(struct aligned_holder, value) == 16,
+               "record field consumes typedef alignment");
+_Static_assert(sizeof(struct aligned_holder) == 32, "record size consumes typedef alignment");
+_Static_assert(sizeof(struct call_single_shape) == 16, "fixture shape size");
+_Static_assert(__alignof__(call_single_shape_t) == 16, "sizeof expression alignment");
+
+over_aligned_int read_over_aligned(over_aligned_int value) {
+    return value;
+}
+
+unsigned long aligned_holder_size(void) {
+    return sizeof(struct aligned_holder);
+}
+
+unsigned long call_single_alignment(void) {
+    return __alignof__(call_single_shape_t);
+}
+@@@ end

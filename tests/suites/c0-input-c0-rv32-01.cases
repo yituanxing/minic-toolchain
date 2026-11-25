@@ -1,0 +1,813 @@
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_rv32_global_plan_section_injection.c"}
+/* ELF section attributes must be data, not arbitrary assembler statements. */
+int __attribute__((used, section(".data.rv32.plan; ebreak"))) rv32_plan_injected = 1;
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/probe-rv32-frame-access.c"}
+#include "target/riscv32/rv32_internal.h"
+#include <stdint.h>
+#include <stdio.h>
+
+/* The live ILP32 frame->typed MachineIR handoff: ABI geometry and every
+ * physical slot owner are fixed before machine instruction selection.
+ * Retired FILE* stack-transport helpers must not be linked into this test. */
+int main(void) {
+    Rv32Frame frame = {0};
+    MinicRiscvPhysicalFrame machine = {0};
+    size_t offsets[] = {16U, SIZE_MAX, 60U};
+    size_t objects[] = {24U};
+
+    frame.isa.xlen = 32U;
+    frame.isa.abi = MINIC_RISCV_ABI_ILP32;
+    frame.frame_size = 64U;
+    frame.stack_alignment = 16U;
+    frame.outgoing_size = 16U;
+    frame.value_count = 3U;
+    frame.value_offsets = offsets;
+    frame.object_count = 1U;
+    frame.object_offsets = objects;
+    frame.abi.named_gpr_words = 4U;
+    frame.abi.named_stack_words = 3U;
+    if (!rv32_machine_physical_frame(&frame, &machine) ||
+        machine.frame_size != 64U || machine.stack_alignment != 16U ||
+        machine.outgoing_size != 16U || machine.return_address_offset != 16U ||
+        machine.first_variadic_gpr != 4U ||
+        machine.named_stack_argument_slots != 3U ||
+        machine.has_dynamic_stack_alignment || machine.has_dynamic_stack ||
+        machine.has_hidden_result_pointer || !machine.saves_return_address)
+        return 1;
+
+    frame.stack_alignment = 64U;
+    frame.has_dynamic_stack_alignment = true;
+    frame.has_dynamic_stack = true;
+    frame.abi.indirect_return = true;
+    frame.sret_offset = 32U;
+    frame.saved_base_offset = 36U;
+    frame.entry_sp_offset = 40U;
+    frame.is_variadic = true;
+    frame.varargs_offset = 44U;
+    frame.varargs_size = 16U;
+    if (!rv32_machine_physical_frame(&frame, &machine) ||
+        machine.stack_alignment != 64U || !machine.has_dynamic_stack ||
+        !machine.has_dynamic_stack_alignment || !machine.variadic ||
+        !machine.has_hidden_result_pointer ||
+        machine.hidden_result_pointer_offset != 32U ||
+        machine.saved_frame_base_offset != 36U || machine.entry_sp_offset != 40U ||
+        machine.varargs_offset != 44U || machine.varargs_size != 16U)
+        return 2;
+
+    if (rv32_machine_physical_frame(NULL, &machine) ||
+        rv32_machine_physical_frame(&frame, NULL)) return 3;
+    frame.isa.xlen = 64U;
+    if (rv32_machine_physical_frame(&frame, &machine)) return 4;
+    frame.isa.xlen = 32U;
+    frame.frame_size = 0U;
+    if (rv32_machine_physical_frame(&frame, &machine)) return 5;
+    frame.frame_size = 64U;
+    frame.abi.named_gpr_words = 9U;
+    if (rv32_machine_physical_frame(&frame, &machine)) return 6;
+    frame.abi.named_gpr_words = 4U;
+    frame.has_dynamic_stack_alignment = false;
+    if (rv32_machine_physical_frame(&frame, &machine)) return 7;
+    frame.has_dynamic_stack_alignment = true;
+    frame.outgoing_size = 128U;
+    if (rv32_machine_physical_frame(&frame, &machine)) return 8;
+    frame.outgoing_size = 16U;
+    frame.value_offsets = NULL;
+    if (rv32_machine_physical_frame(&frame, &machine)) return 9;
+    frame.value_offsets = offsets;
+    frame.object_offsets = NULL;
+    if (rv32_machine_physical_frame(&frame, &machine)) return 10;
+
+    puts("MINIC_RV32_FRAME_ACCESS=PASS physical_abi=2 bad_frame=8 invalid_null=2");
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/rv32-linux-picolibc-errno.c"}
+/* Target libc ABI integration, not a replacement errno implementation:
+ * the real Picolibc TLS errno symbol is accessed by GNU GCC-generated
+ * thread pointer code and exposed through the documented errno-function
+ * declaration mode in Picolibc's public errno.h. */
+#include <errno.h>
+
+int *__minic_picolibc_errno(void) {
+    return &errno;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/rv32-linux-picolibc-posix.c"}
+/* Linux RV32I ILP32 file-descriptor boundary for authentic upstream
+ * Picolibc and zlib. No custom C stdio, compression or allocator logic.
+ * Linux syscalls are the only platform-specific porting surface. */
+#include <errno.h>
+#include <fcntl.h>
+#include <stdarg.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <sys/types.h>
+#include <sys/time.h>
+#include <sys/times.h>
+#include <unistd.h>
+
+static long linux_syscall1(long nr, long first) {
+    register long a0 __asm__("a0") = first;
+    register long a7 __asm__("a7") = nr;
+    __asm__ volatile("ecall" : "+r"(a0) : "r"(a7) : "memory");
+    return a0;
+}
+static long linux_syscall2(long nr, long first, long second) {
+    register long a0 __asm__("a0") = first;
+    register long a1 __asm__("a1") = second;
+    register long a7 __asm__("a7") = nr;
+    __asm__ volatile("ecall" : "+r"(a0) : "r"(a1), "r"(a7) : "memory");
+    return a0;
+}
+static long linux_syscall3(long nr, long first, long second, long third) {
+    register long a0 __asm__("a0") = first;
+    register long a1 __asm__("a1") = second;
+    register long a2 __asm__("a2") = third;
+    register long a7 __asm__("a7") = nr;
+    __asm__ volatile("ecall" : "+r"(a0) : "r"(a1), "r"(a2), "r"(a7) : "memory");
+    return a0;
+}
+/* Linux RV32 uses __NR_llseek at asm-generic syscall 62, not the
+ * 3-register LP64 lseek ABI. The kernel writes loff_t into memory. */
+static long linux_syscall5(long nr, long x0, long x1, long x2,
+                           long x3, long x4) {
+    register long a0 __asm__("a0") = x0;
+    register long a1 __asm__("a1") = x1;
+    register long a2 __asm__("a2") = x2;
+    register long a3 __asm__("a3") = x3;
+    register long a4 __asm__("a4") = x4;
+    register long a7 __asm__("a7") = nr;
+    __asm__ volatile("ecall" : "+r"(a0) :
+        "r"(a1), "r"(a2), "r"(a3), "r"(a4), "r"(a7) : "memory");
+    return a0;
+}
+static long linux_syscall4(long nr,long first,long second,long third,long fourth){
+    register long a0 __asm__("a0") = first;
+    register long a1 __asm__("a1") = second;
+    register long a2 __asm__("a2") = third;
+    register long a3 __asm__("a3") = fourth;
+    register long a7 __asm__("a7") = nr;
+    __asm__ volatile("ecall" : "+r"(a0) :
+                     "r"(a1), "r"(a2), "r"(a3), "r"(a7) : "memory");
+    return a0;
+}
+static long linux_result(long value) {
+    if (value < 0 && value >= -4095) {
+        errno = (int)-value;
+        return -1;
+    }
+    return value;
+}
+ssize_t read(int fd, void *buf, size_t count) {
+    return (ssize_t)linux_result(linux_syscall3(
+        63L, (long)fd, (long)buf, (long)count));
+}
+int close(int fd) {
+    return (int)linux_result(linux_syscall1(57L, (long)fd));
+}
+off_t lseek(int fd, off_t offset, int whence) {
+    const int64_t requested = (int64_t)offset;
+    int64_t result = 0;
+    long status = linux_syscall5(
+        62L, (long)fd, (long)(requested >> 32),
+        (long)(uint32_t)requested, (long)&result, (long)whence);
+    if (linux_result(status) < 0) return (off_t)-1;
+    /* A 32-bit off_t must not silently truncate a kernel loff_t. */
+    if (sizeof(off_t) == 4U &&
+        (result > (int64_t)INT32_MAX || result < (int64_t)INT32_MIN)) {
+        errno = EOVERFLOW;
+        return (off_t)-1;
+    }
+    return (off_t)result;
+}
+int open(const char *path, int flags, ...) {
+    mode_t mode = 0;
+    if (flags & O_CREAT) {
+        va_list args;
+        va_start(args, flags);
+        mode = (mode_t)va_arg(args, int);
+        va_end(args);
+    }
+    return (int)linux_result(linux_syscall4(
+        56L, -100L, (long)path, (long)flags, (long)mode));
+}
+int unlink(const char *path) {
+    return (int)linux_result(linux_syscall3(
+        35L, -100L, (long)path, 0L));
+}
+
+/* The portable original Lua os library exercises rename(), clock()
+ * and time(), whose platform syscalls must be provided by a genuine
+ * Linux RV32I/Picolibc integration rather than fabricated C stubs. */
+int rename(const char *oldname, const char *newname) {
+    return (int)linux_result(linux_syscall4(
+        38L, -100L, (long)oldname, -100L, (long)newname));
+}
+
+/* RV32 Linux uses the time64 syscall family. The older 169
+ * gettimeofday is absent from QEMU's RV32 Linux ABI (ENOSYS).
+ * Implement Picolibc's ordinary gettimeofday API using the kernel's
+ * genuine clock_gettime64(403) CLOCK_REALTIME operation, with explicit
+ * 64-bit kernel timespec and portable timeval conversion. */
+int gettimeofday(struct timeval *tv, void *timezone) {
+    struct {
+        int64_t seconds;
+        int64_t nanoseconds;
+    } native;
+    long result;
+    (void)timezone;
+    if (tv == NULL) return 0;
+    result = linux_result(linux_syscall2(403L, 0L, (long)&native));
+    if (result < 0) return -1;
+    tv->tv_sec = (time_t)native.seconds;
+    tv->tv_usec = (suseconds_t)(native.nanoseconds / INT64_C(1000));
+    return 0;
+}
+
+/* Linux RV32 native tms contains four 32-bit clock_t fields.
+ * Picolibc's own clock_t may be wider than the kernel ABI. */
+clock_t times(struct tms *buffer) {
+    struct {
+        int32_t utime, stime, cutime, cstime;
+    } native;
+    const long result = linux_result(linux_syscall1(153L, (long)&native));
+    if (result < 0) return (clock_t)-1;
+    if (buffer != NULL) {
+        buffer->tms_utime = (clock_t)native.utime;
+        buffer->tms_stime = (clock_t)native.stime;
+        buffer->tms_cutime = (clock_t)native.cutime;
+        buffer->tms_cstime = (clock_t)native.cstime;
+    }
+    return (clock_t)result;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/rv32-linux-picolibc-start.S"}
+/* Freestanding Linux process entry for the upstream embedded libc.
+ * The genuine cJSON implementation and reference use identical CRT and
+ * Picolibc. There is no MiniC-specific C runtime substitute. */
+    .text
+    .globl _start
+    .type _start, @function
+_start:
+    .option push
+    .option norelax
+    la gp, __global_pointer$
+    .option pop
+    /* Linux enters static ELF32 with tp unset. RISC-V's local-exec TLS
+     * accesses (including Picolibc errno) are relative to tp. Initialize
+     * the actual ELF PT_TLS image before any libc constructor or main(). */
+    mv a0, sp
+    call rv32_picolibc_tls_init
+    mv tp, a0
+    /* Picolibc's hosted CRT invokes constructors and libc initialization
+     * before main; custom Linux entry must preserve that ownership. */
+    call __libc_init_array
+    /* Linux RV32 ELF entry stack: argc at 0(sp), argv at 4(sp).
+     * cJSON's main(void) ignores them; zlib's original example main
+     * uses argc/argv and must never see uninitialized argument GPRs. */
+    lw a0, 0(sp)
+    addi a1, sp, 4
+    call main
+    /* The real Picolibc exit path flushes buffered stdout and runs
+     * registered finalizers before calling our Linux _exit syscall. */
+    call exit
+1:  j 1b
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/rv32-linux-picolibc-syscalls.c"}
+/* Linux syscall adapter for unmodified upstream Picolibc: the libc owns
+ * malloc/realloc/free, strtod, sprintf, sscanf, locale and floating logic.
+ * Only the OS-specific brk/exit boundary belongs to this fixture.
+ * Cross-built with external GCC RV32I/ILP32, never MiniC. */
+#include <stddef.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <sys/types.h>
+#include <unistd.h>
+/* RISC-V local-exec TLS belongs to the process entry, not to a fake
+ * implementation of Picolibc errno. The Linux kernel maps PT_TLS but does
+ * not construct the userspace thread pointer. Our single-threaded static
+ * ELF32 test adapter copies the REAL linked TLS template and zero-fills
+ * tbss, before calling any libc initialization or application code.
+ *
+ * The initial Linux stack contains argc, argv[], envp[] and auxv pairs.
+ * Discover PT_TLS through AT_PHDR/AT_PHNUM (no private libc internals).
+ * Missing/malformed metadata or unsupported TLS size fails closed. */
+typedef struct {
+    uint32_t type, offset, vaddr, paddr, filesz, memsz, flags, align;
+} Rv32ElfProgramHeader;
+_Static_assert(sizeof(Rv32ElfProgramHeader) == 32U, "ELF32 phdr ABI");
+
+#define RV32_STATIC_TLS_CAPACITY 4096U
+#define RV32_STATIC_TLS_ALIGNMENT 64U
+static unsigned char rv32_static_tls[RV32_STATIC_TLS_CAPACITY +
+                                    RV32_STATIC_TLS_ALIGNMENT]
+    __attribute__((aligned(RV32_STATIC_TLS_ALIGNMENT)));
+
+void *rv32_picolibc_tls_init(const uintptr_t *entry_stack) {
+    const uintptr_t argc = entry_stack[0];
+    const uintptr_t *cursor;
+    uintptr_t phdr_address = 0U, phdr_count = 0U, phdr_size = 0U;
+    uintptr_t phdr_index;
+    int found = 0;
+    if (argc > 4096U || entry_stack[argc + 1U] != 0U) _exit(127);
+    cursor = entry_stack + argc + 2U;
+    while (*cursor != 0U) ++cursor;  /* environment pointers */
+    ++cursor;
+    while (cursor[0] != 0U) {       /* AT_NULL */
+        if (cursor[0] == 3U) phdr_address = cursor[1]; /* AT_PHDR */
+        if (cursor[0] == 4U) phdr_size = cursor[1];    /* AT_PHENT */
+        if (cursor[0] == 5U) phdr_count = cursor[1];   /* AT_PHNUM */
+        cursor += 2;
+    }
+    if (phdr_address == 0U || phdr_count == 0U || phdr_count > 256U ||
+        phdr_size != sizeof(Rv32ElfProgramHeader)) _exit(127);
+    for (phdr_index = 0U; phdr_index < phdr_count; ++phdr_index) {
+        const Rv32ElfProgramHeader *header =
+            (const Rv32ElfProgramHeader *)(phdr_address +
+                phdr_index * phdr_size);
+        unsigned char *dest;
+        const unsigned char *src;
+        uintptr_t i, align, base;
+        if (header->type != 7U) continue;  /* PT_TLS */
+        if (found) _exit(127);
+        found = 1;
+        align = header->align == 0U ? 1U : header->align;
+        if ((align & (align - 1U)) != 0U ||
+            align > RV32_STATIC_TLS_ALIGNMENT ||
+            header->filesz > header->memsz ||
+            header->memsz > RV32_STATIC_TLS_CAPACITY) _exit(127);
+        base = ((uintptr_t)rv32_static_tls + align - 1U) & ~(align - 1U);
+        dest = (unsigned char *)base;
+        src = (const unsigned char *)(uintptr_t)header->vaddr;
+        for (i = 0U; i < header->filesz; ++i) dest[i] = src[i];
+        for (; i < header->memsz; ++i) dest[i] = 0U;
+        return dest;
+    }
+    /* With no PT_TLS, tp is not dereferenced by any legitimate TLS access. */
+    return rv32_static_tls;
+}
+
+static long linux_syscall1(long nr, long arg) {
+    register long a0 __asm__("a0") = arg;
+    register long a7 __asm__("a7") = nr;
+    __asm__ volatile("ecall" : "+r"(a0) : "r"(a7) : "memory");
+    return a0;
+}
+/* The Debian Picolibc tinystdio build leaves stdout/stdin/stderr as
+ * target-platform integration points. Supply the documented FILE
+ * callbacks backed by the Linux syscall adapter, not a substitute
+ * implementation of printf, snprintf or string formatting. */
+static int rv32_linux_console_put(char ch, FILE *file) {
+    (void)file;
+    return write(1, &ch, 1U) == 1 ? (unsigned char)ch : EOF;
+}
+static int rv32_linux_console_get(FILE *file) {
+    (void)file;
+    return EOF;
+}
+static FILE rv32_linux_console = FDEV_SETUP_STREAM(
+    rv32_linux_console_put, rv32_linux_console_get, NULL, _FDEV_SETUP_RW);
+FILE *const stdin = &rv32_linux_console;
+FILE *const stdout = &rv32_linux_console;
+FILE *const stderr = &rv32_linux_console;
+
+/* Picolibc's tinystdio and the original upstream test.c use a real
+ * Linux write(2), not a test-only output simulator. */
+ssize_t write(int fd, const void *buffer, size_t length) {
+    register long a0 __asm__("a0") = fd;
+    register long a1 __asm__("a1") = (long)buffer;
+    register long a2 __asm__("a2") = (long)length;
+    register long a7 __asm__("a7") = 64L;
+    __asm__ volatile("ecall" : "+r"(a0) :
+                     "r"(a1), "r"(a2), "r"(a7) : "memory");
+    return (ssize_t)a0;
+}
+
+void *sbrk(intptr_t count) {
+    uintptr_t old = (uintptr_t)linux_syscall1(214L, 0L);
+    uintptr_t requested;
+    if (count >= 0) {
+        if ((uintptr_t)count > UINTPTR_MAX - old) return (void *)(intptr_t)-1;
+        requested = old + (uintptr_t)count;
+    } else {
+        uintptr_t decrease = (uintptr_t)(-(count + 1)) + 1U;
+        if (decrease > old) return (void *)(intptr_t)-1;
+        requested = old - decrease;
+    }
+    if ((uintptr_t)linux_syscall1(214L, (long)requested) != requested)
+        return (void *)(intptr_t)-1;
+    return (void *)old;
+}
+__attribute__((noreturn)) void _exit(int code) {
+    (void)linux_syscall1(93L, code);
+    for (;;) { __asm__ volatile("j ."); }
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/rv32_constructor_init_array.c"}
+/* GNU constructor semantics: two distinct linkages, no implicit libc CRT. */
+static volatile unsigned int constructed;
+
+__attribute__((constructor))
+static void ctor_private(void) {
+    constructed |= 1U;
+}
+
+__attribute__((constructor))
+void ctor_external(void) {
+    constructed |= 2U;
+}
+
+static void should_not_run(void) {
+    constructed |= 8U;
+}
+
+int main(void) {
+    if (constructed != 3U) {
+        return 17;
+    }
+    /* The unmarked function is reachable in the object but must not
+     * appear in .init_array. Prevent a dead-code-only negative check. */
+    if (constructed == 0U) {
+        should_not_run();
+    }
+    return constructed == 3U ? 0 : 18;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/rv32_ffsll_high_word.c"}
+int ffsll_high_word(long long x) { return __builtin_ffsll(x); }
+
+int main(void) {
+    return ffsll_high_word(0) == 0 &&
+           ffsll_high_word(1LL) == 1 &&
+           ffsll_high_word(1LL << 40) == 41 &&
+           ffsll_high_word(1LL << 63) == 64 ? 0 : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/rv32_global_plan_abi.c"}
+/* RV32 ILP32 GlobalEmissionPlan source/ELF/QEMU oracle.
+ * No host headers: exactly one GNU-preprocessed .i is shared by both MiniCs
+ * and, where installed, GNU's real RV32 ELF32 assembler/compiler. */
+int rv32_plan_anchor[4] = {9, 11, 13, 15};
+static __attribute__((used)) unsigned long long rv32_plan_wide =
+    0xfedcba9876543210ULL;
+static __attribute__((used)) unsigned short rv32_plan_halves[3] = {2, 3};
+static __attribute__((used)) int *rv32_plan_addend = &rv32_plan_anchor[2];
+static __attribute__((used)) int rv32_plan_zeros[4];
+
+/* GNU zero-sized extensions must still own typed ELF object symbols. */
+struct Rv32PlanEmpty {};
+static __attribute__((used)) struct Rv32PlanEmpty rv32_plan_empty_record;
+static __attribute__((used)) int rv32_plan_empty_array[0];
+
+/* Current RV32 intentionally emits an explicitly named .bss.* as PROGBITS.
+ * This differs from GNU's NOBITS policy, but R2 must preserve C39 bytes. */
+__attribute__((used, section(".bss.minic.rv32.plan"))) int rv32_plan_named_bss;
+__attribute__((used, section(".data.minic.rv32.plan"))) int rv32_plan_named_data = 17;
+
+__attribute__((weak, used)) int rv32_plan_weak_zero;
+__attribute__((weak, used)) int rv32_plan_weak_value = 7;
+__attribute__((weak, used)) int rv32_plan_weak_array[2];
+
+struct Rv32PlanInner {
+    unsigned short number;
+    int *pointer;
+};
+struct Rv32PlanOuter {
+    struct Rv32PlanInner children[2];
+    unsigned int flags;
+};
+static __attribute__((used, section(".init.data.minic.rv32.plan")))
+struct Rv32PlanOuter rv32_plan_nested = {
+    {{21, &rv32_plan_anchor[0]}, {23, &rv32_plan_anchor[2]}}, 41
+};
+
+/* A section-owned pointer grid must still use 32-bit, not LP64, fixups. */
+static __attribute__((used, section(".init.data.minic.rv32.ptrs")))
+int *rv32_plan_pointer_grid[3] = {
+    &rv32_plan_anchor[1], 0, &rv32_plan_anchor[3]
+};
+
+int main(void) {
+    return rv32_plan_anchor[0] == 9 && rv32_plan_anchor[2] == 13 &&
+        rv32_plan_wide == 0xfedcba9876543210ULL &&
+        rv32_plan_halves[0] == 2 && rv32_plan_halves[1] == 3 &&
+        rv32_plan_halves[2] == 0 &&
+        rv32_plan_addend == &rv32_plan_anchor[2] &&
+        rv32_plan_zeros[3] == 0 &&
+        sizeof(rv32_plan_empty_record) == 0 &&
+        sizeof(rv32_plan_empty_array) == 0 &&
+        rv32_plan_named_bss == 0 && rv32_plan_named_data == 17 &&
+        rv32_plan_weak_zero == 0 && rv32_plan_weak_value == 7 &&
+        rv32_plan_weak_array[1] == 0 &&
+        rv32_plan_nested.children[0].number == 21 &&
+        rv32_plan_nested.children[0].pointer == &rv32_plan_anchor[0] &&
+        rv32_plan_nested.children[1].number == 23 &&
+        rv32_plan_nested.children[1].pointer == &rv32_plan_anchor[2] &&
+        rv32_plan_nested.flags == 41 &&
+        rv32_plan_pointer_grid[0] == &rv32_plan_anchor[1] &&
+        rv32_plan_pointer_grid[1] == 0 &&
+        rv32_plan_pointer_grid[2] == &rv32_plan_anchor[3] ? 42 : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/rv32_global_plan_start.S"}
+/* Tiny genuine RV32 Linux entry: no libc, hidden syscall or MiniC runtime. */
+    .text
+    .globl _start
+    .type _start, @function
+_start:
+    .option push
+    .option norelax
+    la gp, __global_pointer$
+    .option pop
+    call main
+    li a7, 93
+    ecall
+1:  j 1b
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/rv32_gnu_di_earlyclobber_pair.c"}
+/* GNU RISC-V RV32 `=&r` on a DI lvalue occupies two consecutive GPRs.
+ * Linux's get_user dispatch contains this exact +r / =&r / m shape.
+ * The source `lw` sets only the low word: upper output bits are not defined
+ * by the source ASM and must never be invented by the backend. */
+unsigned long long rv32_di_pair_load(const unsigned int *memory) {
+    unsigned long error = 0;
+    unsigned long long value;
+    __asm__ __volatile__("lw %1, %2" : "+r" (error), "=&r" (value)
+        : "m" (*memory) : "memory");
+    return value;
+}
+
+/* The lvalue transport must also handle unaligned C destinations; the
+ * generated source assembly is still the original literal instruction. */
+struct __attribute__((packed)) rv32_pair_slot {
+    unsigned char padding;
+    unsigned long long value;
+};
+
+void rv32_di_pair_unaligned(struct rv32_pair_slot *slot,
+    const unsigned int *memory) {
+    unsigned long error = 0;
+    __asm__ __volatile__("lw %1, %2" : "+r" (error),
+        "=&r" (slot->value) : "m" (*memory) : "memory");
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/rv32_packed_scalar_alignment.c"}
+/* GNU packed members are valid C lvalues even when their natural machine
+ * width exceeds the enclosing record's alignment.  Scalar loads/stores must
+ * never depend on the CPU's optional unaligned access behavior. */
+struct __attribute__((packed)) PackedScalars {
+    unsigned char prefix;
+    short narrow;
+    unsigned int word;
+    unsigned long long wide;
+    double fp;
+};
+
+short packed_read_short(const struct PackedScalars *p) { return p->narrow; }
+unsigned int packed_read_word(const struct PackedScalars *p) { return p->word; }
+unsigned long long packed_read_wide(const struct PackedScalars *p) { return p->wide; }
+double packed_read_double(const struct PackedScalars *p) { return p->fp; }
+void packed_write_short(struct PackedScalars *p, short v) { p->narrow = v; }
+void packed_write_word(struct PackedScalars *p, unsigned int v) { p->word = v; }
+void packed_write_wide(struct PackedScalars *p, unsigned long long v) { p->wide = v; }
+void packed_write_double(struct PackedScalars *p, double v) { p->fp = v; }
+
+struct NaturalScalars { unsigned int word; unsigned long long wide; };
+unsigned int natural_local_fast_path(void) {
+    struct NaturalScalars object;
+    object.word = 79U;
+    return object.word;
+}
+
+#ifndef MINIC_PROBE_NO_MAIN
+int main(void) {
+    struct PackedScalars object;
+    object.prefix = 0x5AU;
+    packed_write_short(&object, (short)-1234);
+    packed_write_word(&object, 0xA98F1234U);
+    packed_write_wide(&object, 0x7766554433221100ULL);
+    packed_write_double(&object, 3.75);
+    if (object.prefix != 0x5AU ||
+        packed_read_short(&object) != (short)-1234 ||
+        packed_read_word(&object) != 0xA98F1234U ||
+        packed_read_wide(&object) != 0x7766554433221100ULL ||
+        packed_read_double(&object) != 3.75 ||
+        natural_local_fast_path() != 79U)
+        return 1;
+    return 0;
+}
+#endif
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/rv32_scalar_shift_u64_count.c"}
+/* RV32 Linux BPF authentic owners use i64 shift counts for i32 scalars.
+ * A scalar result must not be mistaken for a two-register i64 operand. */
+unsigned int rv32_shift_left_u64_count(unsigned int lhs,
+    unsigned long long count) {
+    return lhs << count;
+}
+
+unsigned int rv32_shift_right_u64_count(unsigned int lhs,
+    unsigned long long count) {
+    return lhs >> count;
+}
+
+int rv32_shift_right_i64_count(int lhs, long long count) {
+    return lhs >> count;
+}
+
+unsigned short rv32_shift_right_narrow_u64_count(unsigned short lhs,
+    unsigned long long count) {
+    return (unsigned short)(lhs >> count);
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/rv32_u64_compound_or_store.c"}
+/* RV32 Linux 6.6.143 virtio_pci_modern_dev.c::vp_modern_get_features
+ * regression.  VIRTIO_F_VERSION_1 is bit 32, not bit 0; losing the
+ * compound-assignment writeback makes a modern PCI virtio device appear
+ * to lack this mandatory feature even when its high feature register is 1.
+ *
+ * Compile this exact GNU-preprocessed C both with GNU C and MiniC C, then
+ * link the resulting ELF32 objects to the same GNU-built driver and run
+ * both under actual qemu-riscv32 (run-rv32-u64-compound-or-store.sh).
+ */
+
+typedef unsigned int rv32_u32;
+typedef unsigned long long rv32_u64;
+typedef rv32_u64 (*rv32_feature_fn)(rv32_u32, rv32_u32);
+
+rv32_u64 rv32_virtio_feature_rmw(rv32_u32 low, rv32_u32 high) {
+    rv32_u64 features = low;
+    features |= ((rv32_u64)high << 32);
+    return features;
+}
+
+rv32_u64 rv32_virtio_feature_explicit(rv32_u32 low, rv32_u32 high) {
+    rv32_u64 features = low;
+    features = features | ((rv32_u64)high << 32);
+    return features;
+}
+
+/* Indirect 64-bit return tests the caller-side RV32 a0/a1 ABI independently
+ * of the 64-bit OR-and-writeback logic in the function above. */
+rv32_u64 rv32_virtio_feature_indirect(rv32_feature_fn read_features,
+                                      rv32_u32 low, rv32_u32 high) {
+    return read_features(low, high);
+}
+
+int rv32_virtio_has_version_1(rv32_u32 low, rv32_u32 high) {
+    return !!(rv32_virtio_feature_rmw(low, high) & (1ULL << 32));
+}
+
+/* Faithful transport-feature copy from Linux 6.6.143 virtio.c::
+ * virtio_dev_probe(): i walks [VIRTIO_TRANSPORT_F_START=28,
+ * VIRTIO_TRANSPORT_F_END=41), and __virtio_set_bit() performs a 64-bit
+ * compound OR into a struct member.  This is a separate failure surface
+ * from vp_modern_get_features() itself. */
+struct rv32_virtio_device {
+    rv32_u32 canary;
+    rv32_u64 features;
+};
+
+rv32_u64 rv32_virtio_negotiated_transport(rv32_u32 low, rv32_u32 high) {
+    struct rv32_virtio_device dev;
+    rv32_u64 device_features = rv32_virtio_feature_rmw(low, high);
+    unsigned int i;
+    dev.canary = 0x45671234U;
+    dev.features = 0;
+    for (i = 28; i < 41; ++i)
+        if (device_features & (1ULL << i))
+            dev.features |= 1ULL << i;
+    if (dev.canary != 0x45671234U)
+        return 0xffffffffffffffffULL;
+    return dev.features;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/rv32_variadic_record_abi_alignment.c"}
+/* RV32 psABI: an unnamed two-word argument requires an even-numbered GPR
+ * pair only if its ABI alignment is 8 bytes. Size 8 is not sufficient. */
+typedef struct { unsigned int low, high; } Pair32;
+typedef struct __attribute__((packed)) {
+    unsigned int low, high;
+} PackedPair32;
+typedef struct {
+    unsigned int low, high;
+} __attribute__((aligned(8))) AlignedPair32;
+
+_Static_assert(sizeof(Pair32) == 8 && _Alignof(Pair32) == 4,
+               "natural pair has 4-byte alignment");
+_Static_assert(sizeof(PackedPair32) == 8 && _Alignof(PackedPair32) == 1,
+               "packed pair has 1-byte alignment");
+_Static_assert(sizeof(AlignedPair32) == 8 && _Alignof(AlignedPair32) == 8,
+               "overaligned pair has 8-byte alignment");
+
+unsigned int accept_pair(unsigned int tag, ...);
+
+unsigned int call_natural(Pair32 pair) {
+    return accept_pair(1U, pair, 0x51U);
+}
+unsigned int call_packed(PackedPair32 pair) {
+    return accept_pair(2U, pair, 0x52U);
+}
+unsigned int call_aligned(AlignedPair32 pair) {
+    return accept_pair(3U, pair, 0x53U);
+}
+unsigned int call_wide_scalar(unsigned long long value) {
+    return accept_pair(4U, value, 0x54U);
+}
+
+/* Pack-1 and pack-8 C types also exercise CoreObject layout, independent
+ * of the register-pair selection. In the callee the second parameter may
+ * occupy a frame offset of one byte. */
+typedef struct __attribute__((packed)) { unsigned char value; } OneByte;
+PackedPair32 return_after_byte(OneByte lead, PackedPair32 pair) {
+    pair.low += lead.value;
+    return pair;
+}
+PackedPair32 call_after_byte(OneByte lead, PackedPair32 pair) {
+    return return_after_byte(lead, pair);
+}
+
+/* The direct Core callee signature and the Core function definition must
+ * agree on variadicness. RV32 saves the unnamed a-registers in the callee's
+ * variadic register area, but must not do so for an ordinary definition. */
+unsigned int take_variadic(unsigned int named, ...) {
+    __builtin_va_list args;
+    unsigned int tail;
+    __builtin_va_start(args, named);
+    tail = __builtin_va_arg(args, unsigned int);
+    __builtin_va_end(args);
+    return named + tail;
+}
+
+unsigned int take_fixed(unsigned int named, unsigned int tail) {
+    return named + tail;
+}
+
+unsigned int call_take_variadic(void) {
+    return take_variadic(7U, 35U);
+}
+
+unsigned int call_take_fixed(void) {
+    return take_fixed(7U, 35U);
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/rv32_wide_branch_condition.c"}
+/* A Core conditional branch may consume a 64-bit integer on RV32 ILP32.
+ * The truth value must combine both stored words.  In particular, a value
+ * with only bit 32 set is true, and a masked-off high word is false.
+ */
+typedef unsigned int U32;
+typedef unsigned long long U64;
+
+int rv32_wide_branch_value(U32 low, U32 high) {
+    U64 value = (((U64)high) << 32) | (U64)low;
+    if (value) return 1;
+    return 0;
+}
+
+int rv32_wide_branch_mask(U32 low, U32 high,
+                          U32 mask_low, U32 mask_high) {
+    U64 value = (((U64)high) << 32) | (U64)low;
+    U64 mask = (((U64)mask_high) << 32) | (U64)mask_low;
+    if (value & mask) return 1;
+    return 0;
+}
+
+int rv32_wide_branch_ternary(U32 low, U32 high) {
+    U64 value = (((U64)high) << 32) | (U64)low;
+    return value ? 17 : 23;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/rv32_wide_variadic_machine_ci.c"}
+/* Host-preprocessed Core/Machine smoke for the RV32 zlib CI's mandatory
+ * variadic preflight. GNU's <stdarg.h> maps these four operations to exactly
+ * these builtin forms for the ILP32 target. The paired 64-bit constants and
+ * two-word comparisons must survive typed MachineIR whole-function lowering. */
+int rv32_ci_vwide(int fixed, ...) {
+    __builtin_va_list ap;
+    unsigned long long big;
+    double dbl;
+    int tail;
+    __builtin_va_start(ap, fixed);
+    big = __builtin_va_arg(ap, unsigned long long);
+    dbl = __builtin_va_arg(ap, double);
+    tail = __builtin_va_arg(ap, int);
+    __builtin_va_end(ap);
+    return fixed == 3 && big == 0x1122334455667788ULL &&
+           dbl == 6.5 && tail == 9 ? 47 : 0;
+}
+
+int rv32_ci_vwide_spilled(int a, int b, int c, int d, int e,
+                         int f, int g, ...) {
+    __builtin_va_list ap;
+    unsigned long long big;
+    int tail;
+    __builtin_va_start(ap, g);
+    big = __builtin_va_arg(ap, unsigned long long);
+    tail = __builtin_va_arg(ap, int);
+    __builtin_va_end(ap);
+    return a + b + c + d + e + f + g == 28 &&
+           big == 0x123456789abcdef0ULL && tail == 9 ? 48 : 0;
+}
+@@@ end

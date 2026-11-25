@@ -1,0 +1,464 @@
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/loong-linux-named-store-mb.c"}
+/* Unmodified GNU operand roles from Linux 6.6
+ * arch/loongarch/include/asm/barrier.h __smp_store_mb(), cases 4/8.
+ * Unlike cmpxchg.h __xchg_asm, these stores use named registers, an
+ * unsigned-long scratch result and NO explicit "memory" clobber. */
+typedef unsigned int u32;
+typedef unsigned long long u64;
+
+static volatile u32 state32 = 0x12345678U;
+static volatile u64 state64 = 0x123456789abcdef0ULL;
+struct guarded_word {
+    volatile u32 before;
+    volatile u32 value;
+    volatile u32 after;
+};
+static struct guarded_word guarded = {
+    0x10203040U, 0x50607080U, 0x90a0b0c0U
+};
+
+void linux_store_mb32(u32 value) {
+    unsigned long tmp;
+    volatile u32 *p = &state32;
+    __asm__ __volatile__(
+        "amswap_db.w %[tmp], %[val], %[mem]\n"
+        : [mem] "+ZB" (*p), [tmp] "=&r" (tmp)
+        : [val] "r" (value)
+        : );
+}
+
+void linux_store_mb64(u64 value) {
+    unsigned long tmp;
+    volatile u64 *p = &state64;
+    __asm__ __volatile__(
+        "amswap_db.d %[tmp], %[val], %[mem]\n"
+        : [mem] "+ZB" (*p), [tmp] "=&r" (tmp)
+        : [val] "r" (value)
+        : );
+}
+
+/* A `.w` AMDB must affect only the 32-bit C lvalue. The GNU `+ZB`
+ * descriptor is not a license to spill the machine scratch through the
+ * adjacent words. Both sentinels are volatile to expose byte-width bugs. */
+void linux_store_mb_guarded(u32 value) {
+    unsigned long tmp;
+    volatile u32 *p = &guarded.value;
+    __asm__ __volatile__(
+        "amswap_db.w %[tmp], %[val], %[mem]\n"
+        : [mem] "+ZB" (*p), [tmp] "=&r" (tmp)
+        : [val] "r" (value)
+        : );
+}
+
+int main(void) {
+    linux_store_mb32(0xa5b6c7d8U);
+    if (state32 != 0xa5b6c7d8U) return 1;
+    linux_store_mb64(0xffeeddccbbaa9988ULL);
+    if (state64 != 0xffeeddccbbaa9988ULL) return 2;
+    linux_store_mb32(0x80000001U);
+    if (state32 != 0x80000001U) return 3;
+    linux_store_mb64(0x8000000000000001ULL);
+    if (state64 != 0x8000000000000001ULL) return 4;
+    linux_store_mb_guarded(0xdeadbeefU);
+    if (guarded.value != 0xdeadbeefU ||
+        guarded.before != 0x10203040U ||
+        guarded.after != 0x90a0b0c0U) return 5;
+
+    /* Original GNU memory-role values are reloaded on every iteration.
+     * Deterministic wraparound exercises sign bit, zero and many distinct
+     * subword patterns against the GNU compiled reference function. */
+    u32 step32 = 0x8912ffffU;
+    u64 step64 = 0x8123456789abcdefULL;
+    for (unsigned int i = 0U; i < 4096U; ++i) {
+        step32 = step32 * 1664525U + 1013904223U;
+        step64 ^= step64 << 13;
+        step64 ^= step64 >> 7;
+        step64 ^= step64 << 17;
+        linux_store_mb32(step32);
+        linux_store_mb64(step64);
+        linux_store_mb_guarded(step32 ^ 0x5a5a5a5aU);
+        if (state32 != step32 || state64 != step64 ||
+            guarded.value != (step32 ^ 0x5a5a5a5aU) ||
+            guarded.before != 0x10203040U ||
+            guarded.after != 0x90a0b0c0U)
+            return 6;
+    }
+    return 42;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/loong-linux-small-xchg.c"}
+/* Original Linux 6.6 arch/loongarch/include/asm/cmpxchg.h
+ * __xchg_small: a single 32-bit LL/SC reservation atomically exchanges
+ * the selected 8/16-bit field without disturbing the adjoining fields.
+ * Keep the exact GNU template, constraints and ordering. */
+typedef unsigned char u8;
+typedef unsigned short u16;
+typedef unsigned int u32;
+typedef unsigned long uptr;
+
+static volatile u32 state = 0xa1b2c3d4U;
+
+static u32 linux_xchg_small(volatile void *ptr, u32 val, u32 size) {
+    u32 old32, mask, temp, shift;
+    volatile u32 *ptr32;
+    mask = (1U << (size * 8U)) - 1U;
+    val &= mask;
+    shift = ((uptr)ptr & 3UL) * 8U;
+    mask <<= shift;
+    ptr32 = (volatile u32 *)((uptr)ptr & ~3UL);
+    __asm__ __volatile__(
+        "1:\tll.w\t\t%0, %3\t\t\n"
+        "\tandn\t\t%1, %0, %z4\t\n"
+        "\tor\t\t%1, %1, %z5\t\n"
+        "\tsc.w\t\t%1, %2\t\t\n"
+        "\tbeqz\t\t%1, 1b\t\t\n"
+        : "=&r" (old32), "=&r" (temp), "=ZC" (*ptr32)
+        : "ZC" (*ptr32), "Jr" (mask), "Jr" (val << shift)
+        : "memory");
+    return (old32 & mask) >> shift;
+}
+
+/* Every byte and both halfwords must preserve their neighbors. The apparent
+ * four independent stores below are intentionally all LL/SC updates of the
+ * *same* enclosing aligned word; direct subword stores would not exercise
+ * the contract, and stale/mis-shifted masks would corrupt adjacent bytes. */
+static int test_all_offsets(void) {
+    volatile u8 *bytes = (volatile u8 *)&state;
+    volatile u16 *halves = (volatile u16 *)&state;
+    state = 0x10203040U;
+    if (linux_xchg_small(bytes, 0xabU, 1U) != 0x40U) return 1;
+    if (state != 0x102030abU) return 2;
+    if (linux_xchg_small(bytes + 1, 0xcdU, 1U) != 0x30U) return 3;
+    if (state != 0x1020cdabU) return 4;
+    if (linux_xchg_small(bytes + 2, 0xefU, 1U) != 0x20U) return 5;
+    if (state != 0x10efcdabU) return 6;
+    if (linux_xchg_small(bytes + 3, 0x78U, 1U) != 0x10U) return 7;
+    if (state != 0x78efcdabU) return 8;
+    if (linux_xchg_small(halves, 0x9001U, 2U) != 0xcdabU) return 9;
+    if (state != 0x78ef9001U) return 10;
+    if (linux_xchg_small(halves + 1, 0x0081U, 2U) != 0x78efU) return 11;
+    if (state != 0x00819001U) return 12;
+    return 0;
+}
+
+/* The return must be zero-extended exactly like the original Linux u32
+ * function, even when the old byte/halfword's highest bit is set. A C
+ * caller may then narrow to signed 8/16-bit, which must sign-extend there.
+ * Repeat the reservation to catch incorrect SC status/output handling. */
+static int test_sign_and_repetition(void) {
+    volatile u8 *bytes = (volatile u8 *)&state;
+    volatile u16 *halves = (volatile u16 *)&state;
+    u32 i;
+    state = 0x80008080U;
+    if (linux_xchg_small(bytes + 1, 0x7fU, 1U) != 0x80U) return 1;
+    if (state != 0x80007f80U) return 2;
+    if ((signed char)linux_xchg_small(bytes, 0x01U, 1U) != -128)
+        return 3;
+    if (state != 0x80007f01U) return 4;
+    if ((signed short)linux_xchg_small(halves + 1, 0x8001U, 2U)
+        != (signed short)0x8000) return 5;
+    if (state != 0x80017f01U) return 6;
+    for (i = 0U; i < 64U; ++i) {
+        u32 prior = (state >> 24) & 0xffU;
+        u32 next = (i * 13U + 0x81U) & 0xffU;
+        if (linux_xchg_small(bytes + 3, next, 1U) != prior) return 7;
+        if ((state & 0x00ffffffU) != 0x00017f01U) return 8;
+        if ((state >> 24) != next) return 9;
+    }
+    return 0;
+}
+
+int main(void) {
+    volatile u8 *bytes = (volatile u8 *)&state;
+    volatile u16 *halves = (volatile u16 *)&state;
+    if (linux_xchg_small(bytes + 1, 0x71U, 1U) != 0xc3U) return 1;
+    if (state != 0xa1b271d4U) return 2;
+    if (linux_xchg_small(bytes + 3, 0x19aU, 1U) != 0xa1U) return 3;
+    if (state != 0x9ab271d4U) return 4;
+    if (linux_xchg_small(halves + 1, 0x5e47U, 2U) != 0x9ab2U) return 5;
+    if (state != 0x5e4771d4U) return 6;
+    if (linux_xchg_small(halves, 0x2d93U, 2U) != 0x71d4U) return 7;
+    if (state != 0x5e472d93U) return 8;
+    if (linux_xchg_small(bytes, 0x1bU, 1U) != 0x93U) return 9;
+    if (state != 0x5e472d1bU) return 10;
+    if (test_all_offsets()) return 11;
+    if (test_sign_and_repetition()) return 12;
+    return 42;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/probe-loong-scalar-normalized-seal.c"}
+#include "target/loongarch64/asm_contract.h"
+
+#include <stdio.h>
+#include <string.h>
+
+#define REQUIRE(expr) do { if (!(expr)) return __LINE__; } while (0)
+
+/* The Linux uaccess template is unusually long because it embeds its
+ * hardware-register exception-fixup mapping. The entire instruction and
+ * relocation table, not just the first ld/st mnemonic, is the machine form. */
+#define LOONG_GPR_MAP \
+    ".equ .L__gpr_num_zero, 0\n" \
+    ".irp num, 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31\n" \
+    ".equ .L__gpr_num_$r\\num, \\num\n" \
+    ".endr\n" \
+    ".equ .L__gpr_num_$ra, 1\n" \
+    ".equ .L__gpr_num_$tp, 2\n" \
+    ".equ .L__gpr_num_$sp, 3\n" \
+    ".irp num, 0,1,2,3,4,5,6,7\n" \
+    ".equ .L__gpr_num_$a\\num, 4+\\num\n" \
+    ".endr\n" \
+    ".irp num, 0,1,2,3,4,5,6,7,8\n" \
+    ".equ .L__gpr_num_$t\\num, 12+\\num\n" \
+    ".endr\n" \
+    ".equ .L__gpr_num_$s9, 22\n" \
+    ".equ .L__gpr_num_$fp, 22\n" \
+    ".irp num, 0,1,2,3,4,5,6,7,8\n" \
+    ".equ .L__gpr_num_$s\\num, 23+\\num\n" \
+    ".endr\n"
+
+static const char uaccess_load[] =
+    "1: ld.b %1, %2\n2:\n" LOONG_GPR_MAP
+    ".pushsection __ex_table, \"a\"\n"
+    ".balign 4\n"
+    ".long ((1b) - .)\n"
+    ".long ((2b) - .)\n"
+    ".short (2)\n"
+    ".short ((((.L__gpr_num_%0) << 0) | ((.L__gpr_num_%1) << 5)))\n"
+    ".popsection\n";
+
+static const char sub_positive[] =
+    "1: ll.w %1, %2 # atomic_sub_if_positive\n"
+    "addi.w %0, %1, %3\n"
+    "move %1, %0\n"
+    "bltz %0, 2f\n"
+    "sc.w %1, %2\n"
+    "beqz %1, 1b\n"
+    "2: dbar 0x700";
+
+static bool matches(uint32_t id, uint32_t variant, const char *text) {
+    return minic_loongarch64_typed_scalar_form_matches_template(
+        id, variant, text, strlen(text));
+}
+
+static int run(void) {
+    static const struct { uint32_t id, variant; const char *source, *normalized; }
+    valid[] = {
+        {MINIC_LOONG_MACHINE_ASM_LITERAL_DBAR, 2U,
+         "dbar 0x700", "dbar 0x700"},
+        {MINIC_LOONG_MACHINE_ASM_HINT_DBAR, 1U,
+         "dbar %0", "dbar %0"},
+        {MINIC_LOONG_MACHINE_ASM_SUB_POSITIVE, 1U,
+         sub_positive, sub_positive},
+        {MINIC_LOONG_MACHINE_ASM_UACCESS, 1U,
+         uaccess_load, uaccess_load},
+        {MINIC_LOONG_MACHINE_ASM_PERCPU_AMO, 1U,
+         "amadd.w %[ret], %[val], %[ptr]", "amadd.w %0, %2, %1"},
+        {MINIC_LOONG_MACHINE_ASM_CSR, 1U,
+         "csrrd %[val], %[reg]", "csrrd %0, %1"},
+        {MINIC_LOONG_MACHINE_ASM_AMO_STORE, 8U,
+         "amadd_db.d $zero, %1, %0", "amadd_db.d $zero, %1, %0"},
+        {MINIC_LOONG_MACHINE_ASM_AMO_FETCH, 8U,
+         "amadd_db.d %1, %2, %0", "amadd_db.d %1, %2, %0"}
+    };
+    static const char *const forged[] = {
+        "dbar 0x701",                     /* altered privileged barrier */
+        "dbar %1",                       /* changed immediate input */
+        "1: ll.w %1, %2 # atomic_sub_if_positive\n"
+        "addi.w %0, %1, %3\nmove %1, %0\nbltz %0, 2f\n"
+        "sc.w %1, %3\nbeqz %1, 1b\n2: dbar 0x700",
+        "1: ld.b %2, %1\n2:\n",       /* forged fault register order */
+        "amadd.w %0, %1, %2",           /* swapped val and pointer */
+        "csrrd %0, 1",                 /* privileged CSR index */
+        "amadd_db.d $zero, %0, %1",    /* swapped memory and input */
+        "amadd_db.d %1, %0, %2"        /* swapped memory and input */
+    };
+    char altered_uaccess[sizeof(uaccess_load)];
+    char *relocation;
+    size_t i;
+    for (i = 0U; i < sizeof(valid) / sizeof(valid[0]); ++i) {
+        REQUIRE(matches(valid[i].id, valid[i].variant, valid[i].source));
+        REQUIRE(matches(valid[i].id, valid[i].variant, valid[i].normalized));
+        REQUIRE(!matches(valid[i].id, valid[i].variant + 1U,
+                         valid[i].normalized));
+        REQUIRE(!matches(valid[i].id, valid[i].variant, forged[i]));
+        REQUIRE(!matches(0U, valid[i].variant, valid[i].normalized));
+    }
+    memcpy(altered_uaccess, uaccess_load, sizeof(altered_uaccess));
+    relocation = strstr(altered_uaccess, ".L__gpr_num_%1");
+    REQUIRE(relocation != NULL);
+    relocation[sizeof(".L__gpr_num_%") - 1U] = '0';
+    REQUIRE(!matches(MINIC_LOONG_MACHINE_ASM_UACCESS, 1U,
+                     altered_uaccess));
+    REQUIRE(!matches(MINIC_LOONG_MACHINE_ASM_PERCPU_AMO, 1U,
+                     "amadd.w %0, %2, %1; nop"));
+    REQUIRE(!matches(MINIC_LOONG_MACHINE_ASM_CSR, 2U,
+                     "csrrd %0, %1"));
+    return 0;
+}
+
+int main(void) {
+    const int failed = run();
+    if (failed != 0) {
+        (void)fprintf(stderr,
+            "LOONG_SCALAR_NORMALIZED_SEAL failed line=%d\n", failed);
+        return 1;
+    }
+    (void)puts("LOONG_SCALAR_NORMALIZED_SEAL=PASS families=8 positive=16"
+               " forged_operands=8 forged_variants=8 forged_fixup=1"
+               " hardware_privilege=checked");
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/probe-loong-simd-normalized-seal.c"}
+#include "target/loongarch64/simd_asm.h"
+#include "target/loongarch64/simd_source_policy.h"
+#include "target/backend_source.h"
+#include "frontend/type.h"
+
+#include <stdio.h>
+#include <string.h>
+
+#define REQUIRE(expr) do { if (!(expr)) return __LINE__; } while (0)
+
+/* Standalone source-expression fixture: this deliberately leaves the
+ * compiler's Core machinery out of the source/normalized ISA proof. */
+const MinicExpression *minic_c0_program_expression(
+    const MinicC0Program *program, MinicExpressionId id) {
+    return program != NULL && id < program->expression_count
+        ? &program->expressions[id] : NULL;
+}
+
+static bool forged_effect_seal(
+    const MinicTargetInvocation *invocation,
+    const MinicC0Program *program, const MinicInlineAsm *source,
+    const char *normalized, size_t length,
+    MinicTargetInlineAsmContract *contract) {
+    (void)invocation;
+    (void)program;
+    (void)source;
+    (void)normalized;
+    (void)length;
+    ++contract->operand_count;
+    return true;
+}
+
+static int run(void) {
+    static const char named_source[] =
+        "vld $vr0, %[v1]\n"
+        "vxor.v $vr1, $vr0, $vr0\n"
+        "vst $vr1, %[v2]";
+    static const char named_numeric[] =
+        "vld $vr0, %0\n"
+        "vxor.v $vr1, $vr0, $vr0\n"
+        "vst $vr1, %1";
+    static const char forged_register[] =
+        "vld $vr0, %0\n"
+        "vxor.v $vr2, $vr0, $vr0\n"
+        "vst $vr1, %1";
+    static const char forged_instruction[] =
+        "vld $vr0, %0\n"
+        "vxor.v $vr1, $vr0, $vr0\n"
+        "vst $vr1, %1\n"
+        "vst $vr0, %1";
+    static const char numeric_rw[] =
+        "vld $vr0, %0\n"
+        "vst $vr0, %0";
+    MinicType pointer;
+    MinicExpression expressions[2] = {{0}};
+    MinicC0Program program = {0};
+    MinicInlineAsmOperand inputs[2] = {{0}};
+    MinicInlineAsmOperand output = {0};
+    MinicInlineAsm source = {0};
+    MinicTargetInlineAsmContract contract = {0};
+    MinicSourceBackend backend = {0};
+    /* This isolated SIMD machine-effects proof does not consult source ABI
+     * policy. Its source qualifier requires a present invocation, while the
+     * canonical target registrations are checked by the M0 ABI suite. */
+    MinicTargetInvocation invocation = {0};
+    invocation.machine.architecture = MINIC_TARGET_ARCH_LOONGARCH64;
+    backend.seal_normalized_inline_asm = minic_loongarch64_simd_seal_normalized;
+    REQUIRE(minic_type_pointer_to(minic_type_unsigned_char(), &pointer));
+    expressions[0].type = pointer;
+    expressions[1].type = pointer;
+    program.expressions = expressions;
+    program.expression_count = 2U;
+    inputs[0].name = "v1";
+    inputs[0].name_length = 2U;
+    inputs[0].constraint_text = "r";
+    inputs[0].constraint_length = 1U;
+    inputs[0].expression = 0U;
+    inputs[1].name = "v2";
+    inputs[1].name_length = 2U;
+    inputs[1].constraint_text = "r";
+    inputs[1].constraint_length = 1U;
+    inputs[1].expression = 1U;
+    source.template_text = (char *)named_source;
+    source.template_length = sizeof(named_source) - 1U;
+    source.inputs = inputs;
+    source.input_count = 2U;
+    source.is_volatile = true;
+    source.has_memory_clobber = true;
+    source.clobber_count = 1U;
+    REQUIRE(minic_loongarch64_simd_qualify_source(&program, &source, &contract));
+    REQUIRE(minic_source_backend_capture_asm_operand_source(
+        &source, MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED, &contract));
+    REQUIRE(minic_source_backend_seal_normalized_inline_asm(
+        &backend, &invocation, &program, &source, named_numeric,
+        sizeof(named_numeric)-1U, &contract));
+    REQUIRE(contract.target_machine_form_id == MINIC_LOONG_MACHINE_ASM_SIMD);
+    REQUIRE(contract.target_machine_form_variant == MINIC_LOONG_MACHINE_SIMD_LSX);
+
+    contract.target_machine_form_id = 0U;
+    contract.target_machine_form_variant = 0U;
+    REQUIRE(!minic_source_backend_seal_normalized_inline_asm(
+        &backend, &invocation, &program, &source, forged_register,
+        sizeof(forged_register)-1U, &contract));
+    REQUIRE(contract.target_machine_form_id == 0U);
+    REQUIRE(!minic_source_backend_seal_normalized_inline_asm(
+        &backend, &invocation, &program, &source, forged_instruction,
+        sizeof(forged_instruction)-1U, &contract));
+    REQUIRE(contract.target_machine_form_id == 0U);
+    backend.seal_normalized_inline_asm = forged_effect_seal;
+    REQUIRE(!minic_source_backend_seal_normalized_inline_asm(
+        &backend, &invocation, &program, &source, named_numeric,
+        sizeof(named_numeric)-1U, &contract));
+    backend.seal_normalized_inline_asm = minic_loongarch64_simd_seal_normalized;
+
+    /* Numeric +m form carries a true memory RMW effect even without a
+     * literal GNU memory clobber. It is also sealed at the same boundary. */
+    expressions[0].value_category = MINIC_VALUE_LVALUE;
+    output.constraint_text = "+m";
+    output.constraint_length = 2U;
+    output.access = MINIC_INLINE_ASM_OPERAND_READ_WRITE;
+    output.expression = 0U;
+    source.template_text = (char *)numeric_rw;
+    source.template_length = sizeof(numeric_rw) - 1U;
+    source.outputs = &output;
+    source.output_count = 1U;
+    source.inputs = NULL;
+    source.input_count = 0U;
+    source.has_memory_clobber = false;
+    source.clobber_count = 0U;
+    contract = (MinicTargetInlineAsmContract){0};
+    REQUIRE(minic_loongarch64_simd_qualify_source(&program, &source, &contract));
+    REQUIRE(minic_source_backend_capture_asm_operand_source(
+        &source, MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED, &contract));
+    REQUIRE(contract.effective_memory_effect);
+    REQUIRE(minic_source_backend_seal_normalized_inline_asm(
+        &backend, &invocation, &program, &source, numeric_rw,
+        sizeof(numeric_rw)-1U, &contract));
+    REQUIRE(contract.target_machine_form_id == MINIC_LOONG_MACHINE_ASM_SIMD);
+    return 0;
+}
+
+int main(void) {
+    const int failed = run();
+    if (failed != 0) {
+        (void)fprintf(stderr, "LOONG_SIMD_NORMALIZED_SEAL failed line=%d\n", failed);
+        return 1;
+    }
+    (void)puts("LOONG_SIMD_NORMALIZED_SEAL=PASS named+numeric_rw tampered_reg+extra_instruction forged_effect fail_closed");
+    return 0;
+}
+@@@ end

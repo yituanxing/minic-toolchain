@@ -1,0 +1,1373 @@
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/loongarch64_core_integer_emit.c"}
+typedef signed __int128 signed128_t;
+typedef unsigned __int128 unsigned128_t;
+
+signed128_t loong_core_negate_i128(signed128_t value) {
+    return -value;
+}
+
+unsigned128_t loong_core_not_u128(unsigned128_t value) {
+    return ~value;
+}
+
+unsigned128_t loong_core_add_u128(unsigned128_t left,
+                                  unsigned128_t right) {
+    return left + right;
+}
+
+int loong_core_less_i128(signed128_t left, signed128_t right) {
+    return left < right;
+}
+
+int loong_core_less_u128(unsigned128_t left, unsigned128_t right) {
+    return left < right;
+}
+
+unsigned128_t loong_core_shift_left_u128(unsigned128_t left,
+                                         unsigned int right) {
+    return left << right;
+}
+
+signed128_t loong_core_shift_right_i128(signed128_t left,
+                                       unsigned int right) {
+    return left >> right;
+}
+
+unsigned128_t loong_core_shift_right_u128(unsigned128_t left,
+                                          unsigned int right) {
+    return left >> right;
+}
+
+int loong_core_equal_pointer(const void *left, const void *right) {
+    return left == right;
+}
+
+_Bool loong_core_checked_add_i32_u32(int left, unsigned int right,
+                                     int *result) {
+    return __builtin_add_overflow(left, right, result);
+}
+
+_Bool loong_core_checked_add_u32_i32(unsigned int left, int right,
+                                     int *result) {
+    return __builtin_add_overflow(left, right, result);
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/loongarch64_frame_fold.c"}
+/* The native path may use a known frame-object offset directly. An escaped
+ * pointer and a packed external pointer must retain their distinct paths. */
+struct S { long a, b; int flag; };
+struct __attribute__((packed)) Packed { char tag; int value; };
+volatile long output;
+extern void escape(int *);
+
+long work(long a, long b) {
+    struct S x;
+    x.a = a;
+    x.b = b;
+    x.flag = 3;
+    x.a += x.b;
+    output = x.a;
+    return x.a * x.flag + x.b;
+}
+
+int alias_escape(int x) {
+    int local = x;
+    escape(&local);
+    return local;
+}
+
+int packed_read(struct Packed *p) {
+    return p->value;
+}
+
+/* Keep the frame genuinely large: the volatile byte object is observable,
+ * while incoming scalar/SSA transport remains naturally aligned above it. */
+unsigned long large_frame_touch(unsigned long x) {
+    volatile unsigned char bytes[4096];
+    bytes[4032] = (unsigned char)x;
+    return (unsigned long)bytes[4032] + x;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/loongarch64_immediate_core_fold.c"}
+/* A single-use Core INTEGER_CONSTANT is a machine-immediate operand only
+ * when the LoongArch selector can encode it. Tests also exercise a fallback
+ * constant, a dynamic RHS, and a volatile LOAD->ALU sequence. */
+static volatile long minic_immediate_volatile = 20;
+
+__attribute__((noinline)) long minic_immediate_add(long value)
+{
+    return value + 7L;
+}
+
+__attribute__((noinline)) long minic_immediate_sub(long value)
+{
+    return value - 2048L;
+}
+
+__attribute__((noinline)) long minic_immediate_mask(long value)
+{
+    return (value & 4095L) ^ 7L;
+}
+
+__attribute__((noinline)) long minic_immediate_out_of_range(long value)
+{
+    return value + 2048L;
+}
+
+__attribute__((noinline)) long minic_immediate_dynamic(long left, long right)
+{
+    return left + right;
+}
+
+__attribute__((noinline)) long minic_immediate_load_chain(void)
+{
+    return minic_immediate_volatile + 7L;
+}
+
+__attribute__((noinline)) long minic_immediate_barrier(void)
+{
+    long value = minic_immediate_volatile;
+    __asm__ __volatile__("" ::: "memory");
+    return value + 7L;
+}
+
+int main(void)
+{
+    if (minic_immediate_add(13) != 20) return 1;
+    if (minic_immediate_sub(2057) != 9) return 2;
+    if (minic_immediate_mask(4101) != 2) return 3;
+    if (minic_immediate_out_of_range(13) != 2061) return 4;
+    if (minic_immediate_dynamic(13, 7) != 20) return 5;
+    if (minic_immediate_load_chain() != 27) return 6;
+    if (minic_immediate_barrier() != 27) return 7;
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/loongarch64_indirect_sret.c"}
+/* MiniC half of the LoongArch LP64D cross-compiler aggregate-result ABI.
+ * An indirect call with a 17+/24+/40-byte result passes hidden $a0,
+ * named arguments in $a1+, and returns the caller's result buffer in $a0. */
+struct L17 { unsigned char b[17]; };
+struct L24 { unsigned long w[3]; };
+struct L40 { unsigned long w[5]; };
+
+extern struct L17 (*make17)(unsigned char);
+extern struct L24 (*make24)(unsigned long);
+extern struct L40 (*make40)(unsigned long, unsigned long, unsigned long,
+                           unsigned long, unsigned long, unsigned long,
+                           unsigned long, unsigned long, unsigned long,
+                           unsigned long);
+
+struct L17 minic_indirect_17(unsigned char v) {
+    return make17(v);
+}
+
+struct L24 minic_indirect_24(unsigned long v) {
+    struct L24 intermediate = make24(v);
+    intermediate.w[2] += 5UL;
+    return intermediate;
+}
+
+struct L40 minic_indirect_40(unsigned long v) {
+    return make40(1UL, 2UL, 3UL, 4UL, 5UL, 6UL,
+                  7UL, 8UL, 9UL, v);
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/loongarch64_indirect_sret_gnu.c"}
+/* GNU LoongArch64 side; GNU caller checks MiniC indirect-call results,
+ * while GNU callees interpret the hidden-result and stack argument ABI. */
+#include <stdio.h>
+
+struct L17 { unsigned char b[17]; };
+struct L24 { unsigned long w[3]; };
+struct L40 { unsigned long w[5]; };
+
+extern struct L17 minic_indirect_17(unsigned char);
+extern struct L24 minic_indirect_24(unsigned long);
+extern struct L40 minic_indirect_40(unsigned long);
+
+static struct L17 gnu17(unsigned char v) {
+    struct L17 result;
+    unsigned i;
+    for (i = 0; i < 17; ++i) result.b[i] = (unsigned char)(v + i);
+    return result;
+}
+static struct L24 gnu24(unsigned long v) {
+    struct L24 result = {{ v, v + 11UL, v + 22UL }};
+    return result;
+}
+static struct L40 gnu40(unsigned long a, unsigned long b, unsigned long c,
+                        unsigned long d, unsigned long e, unsigned long f,
+                        unsigned long g, unsigned long h, unsigned long i,
+                        unsigned long j) {
+    struct L40 result = {{ a + b, c + d, e + f, g + h, i + j }};
+    return result;
+}
+
+struct L17 (*make17)(unsigned char) = gnu17;
+struct L24 (*make24)(unsigned long) = gnu24;
+struct L40 (*make40)(unsigned long, unsigned long, unsigned long,
+                     unsigned long, unsigned long, unsigned long,
+                     unsigned long, unsigned long, unsigned long,
+                     unsigned long) = gnu40;
+
+int main(void) {
+    struct L17 a = minic_indirect_17(7);
+    struct L24 b = minic_indirect_24(31UL);
+    struct L40 c = minic_indirect_40(21UL);
+    unsigned i;
+    for (i = 0U; i < 17U; ++i)
+        if (a.b[i] != (unsigned char)(i + 7U)) return 1;
+    if (b.w[0] != 31UL || b.w[1] != 42UL || b.w[2] != 58UL)
+        return 2;
+    if (c.w[0] != 3UL || c.w[1] != 7UL || c.w[2] != 11UL ||
+        c.w[3] != 15UL || c.w[4] != 30UL)
+        return 3;
+    puts("LOONGARCH64_INDIRECT_SRET_OK");
+    return 42;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/loongarch64_inline_invtlb_mnemonic.c"}
+/* Linux-style always-inline wrapper has the same C name as the target opcode.
+ * The `i` operand is not valid in its generic function body; constant
+ * callsites specialize before the Core reachability closure. */
+static __inline__ __attribute__((__gnu_inline__, __always_inline__))
+void invtlb(unsigned int op, unsigned int info, unsigned long address) {
+    __asm__ __volatile__("invtlb %0, %1, %2\n\t" : :
+        "i"(op), "r"(info), "r"(address) : "memory");
+}
+
+void emit_invtlb_constant(unsigned int info, unsigned long address) {
+    invtlb(0U, info, address);
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/loongarch64_linux_clock_cpuid_memory.c"}
+/* Exact Linux 6.6 arch/loongarch/vdso/vgetcpu.i CPU-ID clock form.
+ * Unlike the nonvolatile VDSO base form, this source has one memory clobber. */
+static __inline__ __attribute__((__gnu_inline__, __always_inline__))
+int linux_read_cpu_id(void) {
+    int cpu_id;
+    __asm__ __volatile__("rdtime.d $zero, %0\n"
+                         : "=r"(cpu_id) : : "memory");
+    return cpu_id;
+}
+
+int linux_cpu_id(void) { return linux_read_cpu_id(); }
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/loongarch64_linux_cpucfg.c"}
+unsigned int loongson_cpu_get_prid(void) {
+    unsigned int prid;
+    __asm__ volatile("cpucfg %0, %1\n\t" : "=&r"(prid) : "r"(0));
+    return prid;
+}
+unsigned int loongson_cpu_get_cfg(unsigned int index) {
+    unsigned int cfg;
+    __asm__ volatile("cpucfg %0, %1\n\t" : "=&r"(cfg) : "r"(index));
+    return cfg;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/loongarch64_linux_cpucfg_intrinsic.c"}
+/* Linux 6.6.143 arch/loongarch/include/asm/loongarch.h expands
+ * read_cpucfg(reg) to the GCC <larchintrin.h> intrinsic __cpucfg(reg).
+ * It is a machine intrinsic, never an ELF function reference. */
+extern __inline unsigned int
+__attribute__((__gnu_inline__, __always_inline__, __artificial__))
+__cpucfg(unsigned int index) {
+    return (unsigned int)__builtin_loongarch_cpucfg(index);
+}
+
+unsigned int linux_cpucfg_leaf(unsigned int index) {
+    return __cpucfg(index);
+}
+
+unsigned int linux_cpucfg_zero(void) {
+    return __cpucfg(0U);
+}
+
+unsigned int loong_cpucfg_existing_builtin(unsigned int index) {
+    return __builtin_loongarch_cpucfg(index);
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/loongarch64_linux_final_opaque_asm.c"}
+/* Exact Linux 6.6.143 GNU native-defconfig LoongArch forms from
+ * arch/loongarch/kernel/smp.c and arch/loongarch/kernel/relocate.c. */
+void loong_linux_smp_bug_413(void) {
+    __asm__ __volatile__(
+        ".pushsection __bug_table, \"aw\"; .align 2; 10000: .long 10001f - .; "
+        ".pushsection .rodata.str, \"aMS\", @progbits, 1; 10002: .string "
+        "\"arch/loongarch/kernel/smp.c\"; .popsection; .long 10002b - .; "
+        ".short 413; .short 0; .popsection; 10001: break 1");
+}
+void loong_linux_smp_bug_435(void) {
+    __asm__ __volatile__(
+        ".pushsection __bug_table, \"aw\"; .align 2; 10000: .long 10001f - .; "
+        ".pushsection .rodata.str, \"aMS\", @progbits, 1; 10002: .string "
+        "\"arch/loongarch/kernel/smp.c\"; .popsection; .long 10002b - .; "
+        ".short 435; .short 0; .popsection; 10001: break 1");
+}
+void loong_linux_relocate_cache_sync(void) {
+    /* Original arch/loongarch/kernel/relocate.c carries a compiler barrier
+     * after copying executable text, unlike the old abbreviated fixture. */
+    __asm__ __volatile__("ibar 0 \t\n" "dbar 0 \t\n" ::: "memory");
+}
+void loong_linux_idle_play_dead_asm(void) {
+    __asm__ __volatile__("dbar 0\n\t" : : : "memory");
+    __asm__ __volatile__("idle 0\n\t");
+    __asm__ __volatile__(
+        ".pushsection __bug_table, \"aw\"; .align 2; 10000: .long 10001f - .; "
+        ".pushsection .rodata.str, \"aMS\", @progbits, 1; 10002: .string "
+        "\"arch/loongarch/kernel/smp.c\"; .popsection; .long 10002b - .; "
+        ".short 413; .short 0; .popsection; 10001: break 1");
+}
+void loong_linux_poll_play_dead_asm(void) {
+    __asm__ __volatile__("dbar 0\n\t" : : : "memory");
+    __asm__ __volatile__("nop\n\t");
+    __asm__ __volatile__(
+        ".pushsection __bug_table, \"aw\"; .align 2; 10000: .long 10001f - .; "
+        ".pushsection .rodata.str, \"aMS\", @progbits, 1; 10002: .string "
+        "\"arch/loongarch/kernel/smp.c\"; .popsection; .long 10002b - .; "
+        ".short 435; .short 0; .popsection; 10001: break 1");
+}
+
+#ifdef MINIC_LOONG_UNSUPPORTED_RAW_ASM
+void loong_linux_unsupported_multiline_asm(void) {
+    __asm__ __volatile__("ibar 0 \t\n" "dbar 1 \t\n");
+}
+#endif
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/loongarch64_linux_frametrace.c"}
+/* Linux 6.6.143 arch/loongarch/kernel/traps.c:prepare_frametrace.
+ * The complete GNU form is kept intact to exercise the target descriptor. */
+struct pt_regs {
+    unsigned long regs[32];
+    unsigned long csr_era;
+};
+
+void loong_prepare_frametrace(struct pt_regs *regs) {
+    __asm__ __volatile__(
+        "st.d $r1, %1, 8*1\n\t"
+        "pcaddi $ra, 0\n\t"
+        "st.d $ra, %0\n\t"
+        "ld.d $ra, %1, 8\n\t"
+        "st.d $r2, %1, 8*2\n\t"
+        "st.d $r3, %1, 8*3\n\t"
+        "st.d $r4, %1, 8*4\n\t"
+        "st.d $r5, %1, 8*5\n\t"
+        "st.d $r6, %1, 8*6\n\t"
+        "st.d $r7, %1, 8*7\n\t"
+        "st.d $r8, %1, 8*8\n\t"
+        "st.d $r9, %1, 8*9\n\t"
+        "st.d $r10, %1, 8*10\n\t"
+        "st.d $r11, %1, 8*11\n\t"
+        "st.d $r12, %1, 8*12\n\t"
+        "st.d $r13, %1, 8*13\n\t"
+        "st.d $r14, %1, 8*14\n\t"
+        "st.d $r15, %1, 8*15\n\t"
+        "st.d $r16, %1, 8*16\n\t"
+        "st.d $r17, %1, 8*17\n\t"
+        "st.d $r18, %1, 8*18\n\t"
+        "st.d $r19, %1, 8*19\n\t"
+        "st.d $r20, %1, 8*20\n\t"
+        "st.d $r21, %1, 8*21\n\t"
+        "st.d $r22, %1, 8*22\n\t"
+        "st.d $r23, %1, 8*23\n\t"
+        "st.d $r24, %1, 8*24\n\t"
+        "st.d $r25, %1, 8*25\n\t"
+        "st.d $r26, %1, 8*26\n\t"
+        "st.d $r27, %1, 8*27\n\t"
+        "st.d $r28, %1, 8*28\n\t"
+        "st.d $r29, %1, 8*29\n\t"
+        "st.d $r30, %1, 8*30\n\t"
+        "st.d $r31, %1, 8*31\n\t"
+        : "=m" (regs->csr_era)
+        : "r" (regs->regs)
+        : "memory");
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/loongarch64_linux_iocsr_wrapper_alias.c"}
+/* The four GNU larchintrin.h extern-inline wrappers used by Linux 6.6.143.
+ * Their bodies belong to genuine GNU machine builtins, never ELF libcalls.
+ * Keep the spellings/signatures aligned with the frozen original GNU .i. */
+extern __inline unsigned long
+__attribute__((__gnu_inline__, __always_inline__, __artificial__))
+__iocsrrd_d(unsigned int addr) {
+    return (unsigned long)__builtin_loongarch_iocsrrd_d(addr);
+}
+
+extern __inline unsigned int
+__attribute__((__gnu_inline__, __always_inline__, __artificial__))
+__iocsrrd_w(unsigned int addr) {
+    return (unsigned int)__builtin_loongarch_iocsrrd_w(addr);
+}
+
+extern __inline void
+__attribute__((__gnu_inline__, __always_inline__, __artificial__))
+__iocsrwr_d(unsigned long value, unsigned int addr) {
+    __builtin_loongarch_iocsrwr_d(value, addr);
+}
+
+extern __inline void
+__attribute__((__gnu_inline__, __always_inline__, __artificial__))
+__iocsrwr_w(unsigned int value, unsigned int addr) {
+    __builtin_loongarch_iocsrwr_w(value, addr);
+}
+
+unsigned long minic_iocsr_read64(unsigned int addr) {
+    return __iocsrrd_d(addr);
+}
+
+unsigned int minic_iocsr_read32(unsigned int addr) {
+    return __iocsrrd_w(addr);
+}
+
+void minic_iocsr_write64(unsigned long value, unsigned int addr) {
+    __iocsrwr_d(value, addr);
+}
+
+void minic_iocsr_write32(unsigned int value, unsigned int addr) {
+    __iocsrwr_w(value, addr);
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/loongarch64_linux_irq_stack.c"}
+/* Linux 6.6.143 arch/loongarch/kernel/traps.c:do_vint IRQ-stack switch.
+ * The compiler must save its own RA and S0 across this inline BL. */
+struct pt_regs { unsigned long regs[32]; };
+extern void handle_loongarch_irq(struct pt_regs *regs);
+
+void loong_irq_switch(unsigned long stack, struct pt_regs *regs) {
+    __asm__ __volatile__(
+        "move\t$s0, $sp\t\t\n"
+        "move\t$sp, %[stk]\t\t\n"
+        "move\t$a0, %[regs]\t\t\n"
+        "bl\thandle_loongarch_irq\n"
+        "move\t$sp, $s0\t\t\n"
+        :
+        : [stk] "r" (stack), [regs] "r" (regs)
+        : "$a0", "$a1", "$a2", "$a3", "$a4", "$a5", "$a6", "$a7", "$s0",
+          "$t0", "$t1", "$t2", "$t3", "$t4", "$t5", "$t6", "$t7", "$t8",
+          "memory");
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/loongarch64_linux_mixed_mul_overflow.c"}
+/* Actual operand/result types at Linux 6.6.143 drm_mode_vrefresh and
+ * fbcon_set_font. GNU overflow arithmetic compares the exact mathematical
+ * product to the destination type's range, regardless of C promotions. */
+int drm_like(int clock, unsigned int numerator, unsigned int *product) {
+    return __builtin_mul_overflow(clock, numerator, product);
+}
+
+int fbcon_like(int size, unsigned int charcount, int *product) {
+    return __builtin_mul_overflow(size, charcount, product);
+}
+
+int drm_like_negated(unsigned int numerator, int clock,
+                     unsigned int *product) {
+    return __builtin_mul_overflow(numerator, clock, product);
+}
+
+#ifdef MINI_MIXED_OVERFLOW_HOST_TEST
+#include <limits.h>
+#include <stdio.h>
+
+static int check_one(int lhs, unsigned int rhs) {
+    unsigned int u = 0;
+    int s = 0;
+    const long long exact = (long long)lhs * (long long)rhs;
+    const int expected_unsigned = exact < 0 || exact > (long long)UINT_MAX;
+    const int expected_signed = exact < INT_MIN || exact > INT_MAX;
+    const int got_unsigned = drm_like(lhs, rhs, &u);
+    const int got_signed = fbcon_like(lhs, rhs, &s);
+    return got_unsigned == expected_unsigned &&
+           got_signed == expected_signed &&
+           u == (unsigned int)exact && s == (int)exact &&
+           drm_like_negated(rhs, lhs, &u) == expected_unsigned;
+}
+
+int main(void) {
+    static const int signed_samples[] = {
+        INT_MIN, INT_MIN + 1, -10000, -1, 0, 1, 2, 10000, INT_MAX
+    };
+    static const unsigned int unsigned_samples[] = {
+        0U, 1U, 2U, 32767U, 65536U, (unsigned int)INT_MAX,
+        0x80000000U, UINT_MAX
+    };
+    unsigned int i, j;
+    for (i = 0; i < sizeof(signed_samples)/sizeof(signed_samples[0]); ++i)
+        for (j = 0; j < sizeof(unsigned_samples)/sizeof(unsigned_samples[0]); ++j)
+            if (!check_one(signed_samples[i], unsigned_samples[j])) {
+                fprintf(stderr, "mixed overflow mismatch: %d, %u\n",
+                        signed_samples[i], unsigned_samples[j]);
+                return 1;
+            }
+    return 0;
+}
+#endif
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/loongarch64_linux_simd_asm.i"}
+void lsx_raid_step(unsigned char *p, unsigned char *q) {
+    asm volatile("vld $vr0, %0" : : "m"(*p));
+    asm volatile("vori.b $vr4, $vr0, 0");
+    asm volatile("vslti.b $vr12, $vr4, 0");
+    asm volatile("vslli.b $vr16, $vr4, 1");
+    asm volatile("vandi.b $vr12, $vr12, 0x1d");
+    asm volatile("vxor.v $vr16, $vr16, $vr12");
+    asm volatile("vst $vr16, %0" : "=m"(*q));
+}
+void lasx_recover_step(unsigned char *p, unsigned char *q) {
+    asm volatile("xvld $xr20, %0" : : "m"(*p));
+    asm volatile("xvreplve0.q $xr22, $xr20");
+    asm volatile("xvsrli.b $xr4, $xr22, 4");
+    asm volatile("xvandi.b $xr4, $xr4, 0x0f");
+    asm volatile("xvshuf.b $xr2, $xr22, $xr22, $xr4");
+    asm volatile("xvxor.v $xr4, $xr4, $xr2");
+    asm volatile("xvst $xr4, %0" : "=m"(*q));
+}
+void raid_eight_memory_rw(
+    unsigned char *p0, unsigned char *p1,
+    unsigned char *p2, unsigned char *p3,
+    unsigned char *p4, unsigned char *p5,
+    unsigned char *p6, unsigned char *p7) {
+    asm volatile(
+        "vld $vr0, %0\n\t"
+        "vld $vr1, %1\n\t"
+        "vld $vr2, %2\n\t"
+        "vld $vr3, %3\n\t"
+        "vld $vr4, %4\n\t"
+        "vld $vr5, %5\n\t"
+        "vld $vr6, %6\n\t"
+        "vld $vr7, %7\n\t"
+        "vxor.v $vr0, $vr0, $vr4\n\t"
+        "vxor.v $vr1, $vr1, $vr5\n\t"
+        "vst $vr0, %0\n\t"
+        "vst $vr1, %1\n\t"
+        "vst $vr2, %2\n\t"
+        "vst $vr3, %3\n\t"
+        "vst $vr4, %4\n\t"
+        "vst $vr5, %5\n\t"
+        "vst $vr6, %6\n\t"
+        "vst $vr7, %7\n\t"
+        : "+m"(*p0), "+m"(*p1), "+m"(*p2), "+m"(*p3),
+          "+m"(*p4), "+m"(*p5), "+m"(*p6), "+m"(*p7));
+}
+void xor_named_pointer(unsigned long *v1, const unsigned long *v2) {
+    asm volatile(
+        "vld $vr0, %[v1], 0\n\t"
+        "vld $vr1, %[v1], 16\n\t"
+        "vld $vr4, %[v2], 0\n\t"
+        "vld $vr5, %[v2], 16\n\t"
+        "vxor.v $vr0, $vr0, $vr4\n\t"
+        "vxor.v $vr1, $vr1, $vr5\n\t"
+        "vst $vr0, %[v1], 0\n\t"
+        "vst $vr1, %[v1], 16\n\t"
+        : : [v1] "r"(v1), [v2] "r"(v2) : "memory");
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/loongarch64_linux_simd_machineir.i"}
+void xor_lsx_selected(unsigned long *dst, const unsigned long *src) {
+    asm volatile(
+        "vld $vr0, %[v1], 0\n\t"
+        "vld $vr1, %[v1], 16\n\t"
+        "vld $vr4, %[v2], 0\n\t"
+        "vld $vr5, %[v2], 16\n\t"
+        "vxor.v $vr0, $vr0, $vr4\n\t"
+        "vxor.v $vr1, $vr1, $vr5\n\t"
+        "vst $vr0, %[v1], 0\n\t"
+        "vst $vr1, %[v1], 16\n\t"
+        : : [v1] "r"(dst), [v2] "r"(src) : "memory");
+}
+void xor_lasx_selected(unsigned long *dst, const unsigned long *src) {
+    asm volatile(
+        "xvld $xr0, %[v1], 0\n\t"
+        "xvld $xr4, %[v2], 0\n\t"
+        "xvxor.v $xr0, $xr0, $xr4\n\t"
+        "xvst $xr0, %[v1], 0\n\t"
+        : : [v1] "r"(dst), [v2] "r"(src) : "memory");
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/loongarch64_linux_tp_write.c"}
+/* Original Linux 6.6.143 arch/loongarch/kernel/relocate.c model: GNU
+ * global hard-register variable is an assignable architectural TP alias. */
+struct thread_info { unsigned long sentinel; };
+register struct thread_info *__current_thread_info asm("$tp");
+
+struct thread_info *loong_relocate_thread_info(unsigned long random_offset) {
+    struct thread_info *before = __current_thread_info;
+    __current_thread_info =
+        (void *)((long)__current_thread_info + random_offset);
+    return before;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/loongarch64_linux_u64_u32_checked_add.c"}
+/* Original Linux fs/udf/inode.c udf_current_aext() type shape:
+ * check_add_overflow(sizeof(struct allocExtDesc), le32_to_cpu(...), &alen)
+ * has unsigned long 64 + unsigned int 32 -> signed int 32. */
+int udf_checked_add_u64_u32(unsigned long length,
+                            unsigned int delta, int *written) {
+    return __builtin_add_overflow(length, delta, written);
+}
+int udf_checked_add_u32_u64(unsigned int delta,
+                            unsigned long length, int *written) {
+    return __builtin_add_overflow(delta, length, written);
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/loongarch64_linux_udf_current_aext_overflow.c"}
+/* Linux 6.6.143 fs/udf/inode.c udf_current_aext checked-addition
+ * contract: a constant sizeof size_t, le32_to_cpu's u32, and signed int. */
+typedef unsigned int __u32;
+int loong_linux_checked_add_i32_u32(int lhs, __u32 rhs, int *result) {
+    return __builtin_add_overflow(lhs, rhs, result);
+}
+int loong_linux_checked_add_u32_i32(__u32 lhs, int rhs, int *result) {
+    return __builtin_add_overflow(lhs, rhs, result);
+}
+int loong_linux_udf_parameter_like(unsigned long fixed_size,
+                                   __u32 disk_length, int *result) {
+    return __builtin_add_overflow(fixed_size, disk_length, result);
+}
+int loong_linux_udf_cast_constant_like(__u32 disk_length, int *result) {
+    return __builtin_add_overflow((unsigned long)8, disk_length, result);
+}
+struct allocExtDesc {
+    __u32 previousAllocExtLocation;
+    __u32 lengthAllocDescs;
+};
+int loong_linux_udf_current_aext_overflow(__u32 disk_length, int *result) {
+    return __builtin_add_overflow(sizeof(struct allocExtDesc),
+                                  disk_length, result);
+}
+int loong_linux_udf_current_aext_local(__u32 disk_length) {
+    int alen;
+    if (__builtin_add_overflow(sizeof(struct allocExtDesc),
+                               disk_length, &alen))
+        return -1;
+    return alen;
+}
+
+#ifdef MINIC_LOONG_UNSUPPORTED_DIFFERENT_SHAPE
+int loong_linux_checked_sub_i32_u32(int lhs, __u32 rhs, int *result) {
+    return __builtin_sub_overflow(lhs, rhs, result);
+}
+int loong_linux_checked_add_i32_u32_to_u16(int lhs, __u32 rhs,
+                                           unsigned short *result) {
+    return __builtin_add_overflow(lhs, rhs, result);
+}
+#endif
+
+#ifdef MINIC_GNU_NATIVE_ORACLE
+#include <limits.h>
+#include <stdio.h>
+int main(void) {
+    const int signed_cases[] = { INT_MIN, -32768, -1, 0, 1, INT_MAX - 1, INT_MAX };
+    const __u32 unsigned_cases[] = { 0U, 1U, 7U, INT_MAX, 0x80000000U, 0xffffffffU };
+    unsigned long long state = 0x9e3779b97f4a7c15ULL;
+    unsigned long long tested = 0ULL;
+    for (unsigned int i = 0U; i < 10000U; ++i) {
+        int a;
+        __u32 b;
+        if (i < sizeof(signed_cases) / sizeof(signed_cases[0]))
+            a = signed_cases[i];
+        else {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            a = (int)(unsigned int)state;
+        }
+        for (unsigned int j = 0U;
+             j < sizeof(unsigned_cases) / sizeof(unsigned_cases[0]); ++j) {
+            b = unsigned_cases[j];
+            const long long sum = (long long)a + (long long)b;
+            const int flag = sum < INT_MIN || sum > INT_MAX;
+            const int low = (int)(unsigned int)sum;
+            int lhs_out = 0, rhs_out = 0;
+            if (loong_linux_checked_add_i32_u32(a, b, &lhs_out) != flag ||
+                loong_linux_checked_add_u32_i32(b, a, &rhs_out) != flag ||
+                lhs_out != low || rhs_out != low) {
+                fprintf(stderr, "GNU i32/u32 overflow mismatch i=%u j=%u\n",
+                        i, j);
+                return 1;
+            }
+            ++tested;
+        }
+    }
+    printf("MINIC_LOONG_UDF_GNU_NATIVE=PASS checked_pairs=%llu orientations=2\n",
+           tested);
+    return 0;
+}
+#endif
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/loongarch64_linux_va_fixed_overflow.c"}
+/* Original Linux 6.6.143 drm_universal_plane_init and config_item_set_name
+ * require GNU va_start with 9/10 named arguments and independent cursors. */
+typedef __builtin_va_list minic_va_list;
+
+long loong_va9(long a, long b, long c, long d, long e, long f,
+               long g, long h, long i, ...) {
+    minic_va_list ap;
+    long x, y;
+    __builtin_va_start(ap, i);
+    x = __builtin_va_arg(ap, long);
+    y = __builtin_va_arg(ap, long);
+    __builtin_va_end(ap);
+    return a + i + x * 3 + y;
+}
+
+long loong_va10(long a, long b, long c, long d, long e, long f,
+                long g, long h, long i, long j, ...) {
+    minic_va_list ap;
+    long x;
+    __builtin_va_start(ap, j);
+    x = __builtin_va_arg(ap, long);
+    __builtin_va_end(ap);
+    return b + j + x;
+}
+
+long loong_va_two_starts(long tag, const char *format, ...) {
+    minic_va_list first, second, copied;
+    long a, b, c;
+    __builtin_va_start(first, format);
+    __builtin_va_start(second, format);
+    __builtin_va_copy(copied, first);
+    a = __builtin_va_arg(first, long);
+    b = __builtin_va_arg(second, long);
+    c = __builtin_va_arg(copied, long);
+    __builtin_va_end(first);
+    __builtin_va_end(second);
+    __builtin_va_end(copied);
+    return tag + a + b + c;
+}
+
+int main(void) {
+    if (loong_va9(1, 2, 3, 4, 5, 6, 7, 8, 9, 17, 23) != 84)
+        return 1;
+    if (loong_va10(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 19) != 31)
+        return 2;
+    if (loong_va_two_starts(3, "x", 11, 17) != 36)
+        return 3;
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/loongarch64_packed_asm_output.c"}
+/* GNU C allows a packed field as a register-output lvalue. The GNU ASM
+ * instruction itself is target-qualified; its *compiler-generated writeback*
+ * must never assume the destination address is naturally aligned. */
+struct __attribute__((packed)) PackedOutput {
+    unsigned char tag;
+    unsigned long value;
+};
+
+void loong_fpr_packed(struct PackedOutput *dst) {
+    __asm__ __volatile__("movfr2gr.d %0, $f0" : "=r"(dst->value));
+}
+
+void loong_percpu_packed(struct PackedOutput *dst, void *offset) {
+    __asm__ __volatile__("ldx.d %[ret], $r21, %[ptr]"
+        : [ret] "=&r"(dst->value) : [ptr] "r"(offset) : "memory");
+}
+
+void loong_fpr_native(unsigned long *dst) {
+    __asm__ __volatile__("movfr2gr.d %0, $f0" : "=r"(*dst));
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/loongarch64_packed_asm_result_family.c"}
+/* GNU C output lvalues may reside in packed storage. The ASM opcode itself
+ * stays target-owned; only the compiler-produced result writeback must use
+ * the typed/alignment-aware memory transport. */
+struct __attribute__((packed)) PackedResults {
+    unsigned char pad;
+    unsigned int word;
+    int clock_tid;
+    unsigned long wide;
+};
+
+void packed_clock(struct PackedResults *p) {
+    __asm__ __volatile__("rdtime.d %0, %1"
+        : "=r"(p->wide), "=r"(p->clock_tid));
+}
+
+void packed_cpucfg(struct PackedResults *p, unsigned int index) {
+    __asm__ __volatile__("cpucfg %0, %1\n\t"
+        : "=&r"(p->word) : "r"(index));
+}
+
+void packed_nospec(struct PackedResults *p, unsigned long i,
+                   unsigned long n) {
+    __asm__ __volatile__(
+        "sltu\t%0, %1, %2\n\tsub.d\t%0, $zero, %0\n\t"
+        : "=r"(p->wide) : "r"(i), "r"(n) :);
+}
+
+void packed_percpu_amo(struct PackedResults *p, unsigned long long *mem,
+                       unsigned long value) {
+    __asm__ __volatile__("amadd.d %[ret], %[val], %[ptr]"
+        : [ret] "=&r"(p->wide), [ptr] "+ZB"(*mem)
+        : [val] "r"(value));
+}
+
+void packed_frametrace_csr(struct PackedResults *p) {
+    __asm__ __volatile__("csrrd %0, 0x7" : "=r"(p->wide));
+}
+
+/* A static scalar has a proven 8-byte global alignment and does not need
+ * the runtime guard; retain this fast path when refactoring the helper. */
+static unsigned long native_global_result;
+void aligned_global_frametrace_csr(void) {
+    __asm__ __volatile__("csrrd %0, 0x7" : "=r"(native_global_result));
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/loongarch64_packed_bitfield_alignment.c"}
+/* Prove byte-aligned and nonzero byte-offset bit-field access through a
+ * packed source address. LoongArch LD.W/LD.D must never target that address
+ * unless alignment has been proved; GNU C permits packed bit-field layout. */
+struct __attribute__((packed)) PackedBits {
+    unsigned char pad;
+    unsigned int lo : 5;
+    unsigned int hi : 17;
+    unsigned int tail : 10;
+};
+
+unsigned read_packed_high(const struct PackedBits *p) {
+    return p->hi;
+}
+
+void write_packed_high(struct PackedBits *p, unsigned value) {
+    p->hi = value;
+}
+
+unsigned read_packed_tail(const struct PackedBits *p) {
+    return p->tail;
+}
+
+struct __attribute__((packed)) PackedScalar {
+    unsigned char pad;
+    unsigned int value;
+    void *pointer;
+};
+
+unsigned read_packed_scalar(const struct PackedScalar *p) {
+    return p->value;
+}
+
+void write_packed_scalar(struct PackedScalar *p, unsigned value) {
+    p->value = value;
+}
+
+void *read_packed_pointer(const struct PackedScalar *p) {
+    return p->pointer;
+}
+
+struct NaturalScalar {
+    unsigned value;
+    void *pointer;
+};
+
+unsigned read_natural_scalar(const struct NaturalScalar *p) {
+    return p->value;
+}
+
+void *read_natural_pointer(const struct NaturalScalar *p) {
+    return p->pointer;
+}
+
+struct __attribute__((packed)) PackedWide {
+    unsigned char pad;
+    unsigned __int128 wide;
+};
+
+unsigned __int128 read_packed_wide(const struct PackedWide *p) {
+    return p->wide;
+}
+
+void write_packed_wide(struct PackedWide *p, unsigned __int128 value) {
+    p->wide = value;
+}
+
+static struct { unsigned __int128 wide; } naturally_aligned_wide;
+
+unsigned __int128 read_static_wide(void) {
+    return naturally_aligned_wide.wide;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/loongarch64_packed_hardware_asm_results.c"}
+/* Valid GNU C with target-qualified LoongArch source-owned atomics/CSR.
+ * Only compiler-generated outputs to packed C lvalues require typed memory. */
+struct __attribute__((packed)) PackedHardwareResult {
+    unsigned char pad;
+    unsigned long old;
+    long signed_old;
+};
+
+/* The atomic memory operands themselves are naturally aligned globals. */
+static unsigned long naturally_aligned_mem;
+static long naturally_aligned_signed_mem;
+
+void packed_pte_result(struct PackedHardwareResult *p, unsigned long flag) {
+    __asm__ __volatile__(
+        "1: ll.d %1, %0\n"
+        "bnez %1, 2f\n"
+        "or %1, %1, %2\n"
+        "sc.d %1, %0\n"
+        "beqz %1, 1b\n"
+        "nop\n"
+        "2: dbar 0x700\n"
+        : "+m"(naturally_aligned_mem), "=&r"(p->old)
+        : "r"(flag));
+}
+
+void packed_amo_fetch(struct PackedHardwareResult *p, long value) {
+    __asm__ __volatile__("amadd_db.d %1, %2, %0"
+        : "+ZB"(naturally_aligned_signed_mem), "=&r"(p->signed_old)
+        : "r"(value) : "memory");
+}
+
+void packed_xchg(struct PackedHardwareResult *p, unsigned long value) {
+    __asm__ __volatile__("amswap_db.d %1, %z2, %0"
+        : "+ZB"(naturally_aligned_mem), "=&r"(p->old)
+        : "Jr"(value) : "memory");
+}
+
+void packed_csr_xchg(struct PackedHardwareResult *p, unsigned int mask) {
+    __asm__ __volatile__("csrxchg %0, %1, %2"
+        : "+r"(p->old) : "r"(mask), "i"(0) : "memory");
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/loongarch64_packed_uaccess_output.c"}
+/* GNU's genuine LoongArch __get_user fault-table form. Packed destinations
+ * exercise both the +r error ingress/egress and =r data carrier transport. */
+#define LOONG_GPR_MAP \
+    ".equ .L__gpr_num_zero, 0\n" \
+    ".irp num, 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31\n" \
+    ".equ .L__gpr_num_$r\\num, \\num\n" \
+    ".endr\n" \
+    ".equ .L__gpr_num_$ra, 1\n" \
+    ".equ .L__gpr_num_$tp, 2\n" \
+    ".equ .L__gpr_num_$sp, 3\n" \
+    ".irp num, 0,1,2,3,4,5,6,7\n" \
+    ".equ .L__gpr_num_$a\\num, 4+\\num\n" \
+    ".endr\n" \
+    ".irp num, 0,1,2,3,4,5,6,7,8\n" \
+    ".equ .L__gpr_num_$t\\num, 12+\\num\n" \
+    ".endr\n" \
+    ".equ .L__gpr_num_$s9, 22\n" \
+    ".equ .L__gpr_num_$fp, 22\n" \
+    ".irp num, 0,1,2,3,4,5,6,7,8\n" \
+    ".equ .L__gpr_num_$s\\num, 23+\\num\n" \
+    ".endr\n"
+
+#define LOONG_UACCESS(OPCODE) \
+    "1: " OPCODE " %1, %2\n2:\n" LOONG_GPR_MAP \
+    ".pushsection __ex_table, \"a\"\n" \
+    ".balign 4\n" \
+    ".long ((1b) - .)\n" \
+    ".long ((2b) - .)\n" \
+    ".short (2)\n" \
+    ".short ((((.L__gpr_num_%0) << 0) | ((.L__gpr_num_%1) << 5)))\n" \
+    ".popsection\n"
+
+/* Linux 6.6.143 uses a deliberately wide struct only to make the GNU "m"
+ * operand describe a faulting user address. Its type is not the ld/st width. */
+#define LOONG_UACCESS_STORE(OPCODE) \
+    "1: " OPCODE " %z2, %1  # __put_user_asm\n2:\n" LOONG_GPR_MAP \
+    ".pushsection __ex_table, \"a\"\n" \
+    ".balign 4\n" \
+    ".long ((1b) - .)\n" \
+    ".long ((2b) - .)\n" \
+    ".short (2)\n" \
+    ".short ((((.L__gpr_num_%0) << 0) | ((.L__gpr_num_zero) << 5)))\n" \
+    ".popsection\n"
+
+struct __large_struct { unsigned long buf[100]; };
+
+#define LOONG_LARGE_LOAD(NAME, OPCODE, TYPE) \
+    void NAME(int *err, TYPE *result, const TYPE *user) { \
+        __asm__ __volatile__(LOONG_UACCESS(OPCODE) \
+            : "+r"(*err), "=r"(*result) \
+            : "m"(*(const struct __large_struct *)user)); \
+    }
+
+#define LOONG_LARGE_STORE(NAME, OPCODE, TYPE) \
+    void NAME(int *err, TYPE *user, TYPE value) { \
+        __asm__ __volatile__(LOONG_UACCESS_STORE(OPCODE) \
+            : "+r"(*err), "=m"(*(struct __large_struct *)user) \
+            : "Jr"(value)); \
+    }
+
+LOONG_LARGE_LOAD(linux_large_get_byte, "ld.b", unsigned char)
+LOONG_LARGE_LOAD(linux_large_get_half, "ld.h", unsigned short)
+LOONG_LARGE_LOAD(linux_large_get_word, "ld.w", unsigned int)
+LOONG_LARGE_LOAD(linux_large_get_double, "ld.d", unsigned long)
+LOONG_LARGE_STORE(linux_large_put_byte, "st.b", unsigned char)
+LOONG_LARGE_STORE(linux_large_put_half, "st.h", unsigned short)
+LOONG_LARGE_STORE(linux_large_put_word, "st.w", unsigned int)
+LOONG_LARGE_STORE(linux_large_put_double, "st.d", unsigned long)
+
+struct __attribute__((packed)) PackedUser {
+    unsigned char pad;
+    int err;
+    unsigned char byte;
+    unsigned short half;
+    unsigned int word;
+    unsigned long canary;
+};
+
+void packed_uaccess_byte(struct PackedUser *r, const unsigned char *ptr) {
+    __asm__ __volatile__(LOONG_UACCESS("ld.b")
+        : "+r"(r->err), "=r"(r->byte) : "m"(*ptr));
+}
+void packed_uaccess_half(struct PackedUser *r, const unsigned short *ptr) {
+    __asm__ __volatile__(LOONG_UACCESS("ld.h")
+        : "+r"(r->err), "=r"(r->half) : "m"(*ptr));
+}
+void packed_uaccess_word(struct PackedUser *r, const unsigned int *ptr) {
+    __asm__ __volatile__(LOONG_UACCESS("ld.w")
+        : "+r"(r->err), "=r"(r->word) : "m"(*ptr));
+}
+
+/* GNU's register C carrier can be larger than the faulting memory access.
+ * The actual register output object is still eight bytes here. */
+void packed_uaccess_wide_carrier(struct PackedUser *r,
+                                const unsigned char *ptr) {
+    __asm__ __volatile__(LOONG_UACCESS("ld.b")
+        : "+r"(r->err), "=r"(r->canary) : "m"(*ptr));
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/loongarch64_pointer_stride_power_of_two.c"}
+/* Same-source LoongArch pointer-offset stride differential: exact 2^n
+ * scaling must preserve negative indices and unsigned wrap semantics. */
+struct triple_byte { unsigned char bytes[3]; };
+struct pair_long { long a, b; };
+struct triple_long { long a, b, c; };
+
+__attribute__((noinline)) long stride1(const char *p, long i) { return p[i]; }
+__attribute__((noinline)) long stride2(const short *p, long i) { return p[i]; }
+__attribute__((noinline)) long stride4(const int *p, long i) { return p[i]; }
+__attribute__((noinline)) long stride8(const long *p, long i) { return p[i]; }
+__attribute__((noinline)) long stride16(const struct pair_long *p, long i) { return p[i].b; }
+__attribute__((noinline)) long stride3(const struct triple_byte *p, long i) { return p[i].bytes[0]; }
+__attribute__((noinline)) long stride24(const struct triple_long *p, long i) { return p[i].c; }
+__attribute__((noinline)) long stride_sub8(const long *p, long i) { return *(p - i); }
+__attribute__((noinline)) long stride_neg8(const long *p, long i) { return p[-i]; }
+__attribute__((noinline)) unsigned long stride_unsigned8(
+    const unsigned long *p, unsigned long i) { return p[i]; }
+
+int main(void) {
+    char a[] = {11, 12, 13, 14};
+    short b[] = {21, 22, 23, 24};
+    int c[] = {31, 32, 33, 34};
+    long d[] = {41, 42, 43, 44};
+    unsigned long u[] = {81, 82, 83, 84};
+    struct pair_long e[] = {{1, 51}, {2, 52}, {3, 53}, {4, 54}};
+    struct triple_byte f[] = {{{61, 0, 0}}, {{62, 0, 0}}, {{63, 0, 0}}, {{64, 0, 0}}};
+    struct triple_long g[] = {{1, 2, 71}, {3, 4, 72}, {5, 6, 73}, {7, 8, 74}};
+    return stride1(&a[2], -1) != 12 || stride2(b, 2) != 23 ||
+           stride4(c, 3) != 34 || stride8(d, 1) != 42 ||
+           stride16(e, 2) != 53 || stride3(f, 1) != 62 ||
+           stride24(g, 3) != 74 || stride_sub8(&d[3], 2) != 42 ||
+           stride_neg8(&d[3], 1) != 43 || stride_unsigned8(u, 2UL) != 83UL;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/loongarch64_record_chunk_native_word.c"}
+/* Whole aligned LP64D record chunks are machine words; short packed tails
+ * retain byte-exact ingress/egress without an out-of-bounds full-width load. */
+struct Word { unsigned long long value; };
+struct Pair { unsigned long long first, second; };
+struct Tail { unsigned char bytes[7]; };
+
+struct Word loong_word_echo(struct Word arg) { return arg; }
+struct Pair loong_pair_echo(struct Pair arg) { return arg; }
+struct Tail loong_tail_echo(struct Tail arg) { return arg; }
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/loongarch64_record_copy_size.c"}
+/* Local LoongArch code-size regression: preserve unaligned byte semantics
+ * without emitting a full unrolled instruction sequence for every byte. */
+struct record32 {
+    unsigned char bytes[32];
+};
+
+struct record32 minic_record32_by_value(struct record32 input) {
+    struct record32 output = input;
+    return output;
+}
+
+void minic_record32_copy(struct record32 *dst,
+                         const struct record32 *src) {
+    *dst = *src;
+}
+
+unsigned char minic_record32_load(const struct record32 *src) {
+    struct record32 local = *src;
+    return local.bytes[31];
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/loongarch64_syscall_alias_policy.c"}
+/* GCC oracle and MiniC LoongArch GNU-alias ABI test vectors. Compile each
+ * `-DCASE=N` through the host preprocessor before passing the resulting .i
+ * to MiniC; a malformed GNU alias does not prove target-policy rejection. */
+#ifndef CASE
+#define CASE 0
+#endif
+
+#if CASE == 0
+/* Genuine Linux __SYSCALL_DEFINEx ABI transport: two 64-bit GPR words. */
+extern long sys_entry(unsigned int id, const char *ptr)
+    __attribute__((alias("__se_sys_entry")));
+long __se_sys_entry(long id, long ptr) { return id + (ptr != 0); }
+int main(void) { return sys_entry(41U, (const char *)1) == 42 ? 0 : 1; }
+#elif CASE == 1
+/* Generic C-compatible aliases remain legal regardless of symbol spelling. */
+extern long ordinary_alias(long n) __attribute__((alias("ordinary_owner")));
+long ordinary_owner(long n) { return n + 1; }
+int main(void) { return ordinary_alias(41) == 42 ? 0 : 1; }
+#elif CASE == 2
+/* An unrelated alias must not inherit sys_*'s ABI exception. */
+extern long ordinary_alias(unsigned int id) __attribute__((alias("ordinary_owner")));
+long ordinary_owner(long id) { return id; }
+#elif CASE == 3
+/* The two symbol suffixes must match exactly. */
+extern long sys_alpha(unsigned int id) __attribute__((alias("__se_sys_beta")));
+long __se_sys_beta(long id) { return id; }
+#elif CASE == 4
+/* COMPAT syscalls are a separate Linux ABI family, not admitted implicitly. */
+extern long compat_sys_entry(unsigned int id)
+    __attribute__((alias("__se_compat_sys_entry")));
+long __se_compat_sys_entry(long id) { return id; }
+#elif CASE == 5
+/* FP arguments travel through a different LoongArch ABI register class. */
+extern long sys_float(float value) __attribute__((alias("__se_sys_float")));
+long __se_sys_float(long value) { return value; }
+#elif CASE == 6
+/* Aggregate arguments can use a different ABI transfer shape. */
+struct Word { int value; };
+extern long sys_record(struct Word value) __attribute__((alias("__se_sys_record")));
+long __se_sys_record(long value) { return value; }
+#elif CASE == 7
+/* A variadic alias cannot use the fixed-arity syscall sanitizer contract. */
+extern long sys_vararg(int value, ...) __attribute__((alias("__se_sys_vararg")));
+long __se_sys_vararg(long value, ...) { return value; }
+#elif CASE == 8
+/* A 128-bit source parameter needs more than one GPR word. */
+extern long sys_wide(__int128 value) __attribute__((alias("__se_sys_wide")));
+long __se_sys_wide(long value) { return value; }
+#elif CASE == 9
+/* The sanitizer must receive a full 64-bit long/long long word. */
+extern long sys_small(int value) __attribute__((alias("__se_sys_small")));
+long __se_sys_small(unsigned int value) { return value; }
+#elif CASE == 10
+/* Source and sanitizer return types must be C-compatible signed long. */
+extern int sys_result(int value) __attribute__((alias("__se_sys_result")));
+long __se_sys_result(long value) { return value; }
+#elif CASE == 11
+/* Linux __SYSCALL_DEFINEx admits at most six positional arguments. */
+extern long sys_seven(int a, int b, int c, int d, int e, int f, int g)
+    __attribute__((alias("__se_sys_seven")));
+long __se_sys_seven(long a, long b, long c, long d, long e, long f, long g) {
+    return a + b + c + d + e + f + g;
+}
+#elif CASE == 12
+/* A 64-bit long long source travels to __SC_LONG's signed long long word. */
+extern long sys_longlong(unsigned long long value)
+    __attribute__((alias("__se_sys_longlong")));
+long __se_sys_longlong(long long value) { return value == 41 ? 42 : 0; }
+int main(void) { return sys_longlong(41ULL) == 42 ? 0 : 1; }
+#else
+#error unknown test case
+#endif
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/loongarch64_typed_invtlb_add_unless.c"}
+/* Original Loong Linux native INVTLB / LL-SC add-unless ASM forms.
+ * These source templates exercise typed form variants without executing
+ * privileged TLB operations on the host. */
+void invtlb_asid_va(unsigned int asid, unsigned long va) {
+    __asm__ __volatile__("invtlb %0, %1, %2" : :
+        "i"(0), "r"(asid), "r"(va) : "memory");
+}
+
+void invtlb_va(unsigned long va) {
+    __asm__ __volatile__("invtlb %0, $zero, %1" : :
+        "i"(0), "r"(va) : "memory");
+}
+
+void invtlb_asid(unsigned int asid) {
+    __asm__ __volatile__("invtlb %0, %1, $zero" : :
+        "i"(0), "r"(asid) : "memory");
+}
+
+void invtlb_all(void) {
+    __asm__ __volatile__("invtlb %0, $zero, $zero" : : "i"(0) : "memory");
+}
+
+unsigned int add_unless_word(volatile unsigned int *ptr,
+                             unsigned int add, unsigned int unless) {
+    unsigned int prior, sc;
+    __asm__ __volatile__(
+        "0: ll.w %[p], %[c]\n"
+        "beq %[p], %[u], 1f\n"
+        "add.w %[rc], %[p], %[a]\n"
+        "sc.w %[rc], %[c]\n"
+        "beqz %[rc], 0b\n"
+        "b 2f\n"
+        "1: dbar 0x700\n"
+        "2:"
+        : [p] "=&r"(prior), [rc] "=&r"(sc), [c] "=ZB"(*ptr)
+        : [a] "r"(add), [u] "r"(unless) : "memory");
+    return prior;
+}
+
+unsigned long add_unless_double(volatile unsigned long *ptr,
+                                 unsigned long add, unsigned long unless) {
+    unsigned long prior, sc;
+    __asm__ __volatile__(
+        "0: ll.d %[p], %[c]\n"
+        "beq %[p], %[u], 1f\n"
+        "add.d %[rc], %[p], %[a]\n"
+        "sc.d %[rc], %[c]\n"
+        "beqz %[rc], 0b\n"
+        "b 2f\n"
+        "1: dbar 0x700\n"
+        "2:"
+        : [p] "=&r"(prior), [rc] "=&r"(sc), [c] "=ZB"(*ptr)
+        : [a] "r"(add), [u] "r"(unless) : "memory");
+    return prior;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/loongarch64_va_start_nested_builtin_arena.c"}
+/* Keep the Function arena exactly at its initial 16-slot capacity when
+ * va_start parses the nested LoongArch builtin. The builtin synthesizes the
+ * seventeenth Function and can realloc the arena while the enclosing parser
+ * is still checking its final named parameter. Run with an ASan MiniC build
+ * to catch dangling MinicFunction* reads, not merely source acceptance. */
+typedef __builtin_va_list minic_va_list;
+
+extern int arena_f00(void);
+extern int arena_f01(void);
+extern int arena_f02(void);
+extern int arena_f03(void);
+extern int arena_f04(void);
+extern int arena_f05(void);
+extern int arena_f06(void);
+extern int arena_f07(void);
+extern int arena_f08(void);
+extern int arena_f09(void);
+extern int arena_f10(void);
+extern int arena_f11(void);
+extern int arena_f12(void);
+extern int arena_f13(void);
+extern int arena_f14(void);
+
+unsigned long loong_va_start_nested_builtin(unsigned long tag, ...) {
+    minic_va_list ap;
+    __builtin_va_start(*(&ap + (0U * __builtin_loongarch_cpucfg(0U))), tag);
+    unsigned long result = __builtin_va_arg(ap, unsigned long);
+    __builtin_va_end(ap);
+    return result;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/loongarch64_vararg_int128_pair.c"}
+/* GNU LoongArch LP64D: only *unnamed* 16-aligned wide scalars skip an odd
+ * GAR. Named __int128 retains the ordinary a7/stack split rule. */
+typedef unsigned __int128 U128;
+typedef unsigned long (*VaOneFn)(unsigned long, ...);
+typedef unsigned long (*VaSevenFn)(unsigned long, unsigned long,
+    unsigned long, unsigned long, unsigned long, unsigned long,
+    unsigned long, ...);
+
+extern unsigned long va_one(unsigned long tag, ...);
+extern unsigned long va_seven(unsigned long a, unsigned long b,
+    unsigned long c, unsigned long d, unsigned long e,
+    unsigned long f, unsigned long g, ...);
+extern unsigned long fixed_one(unsigned long tag, U128 value);
+extern unsigned long fixed_seven(unsigned long a, unsigned long b,
+    unsigned long c, unsigned long d, unsigned long e,
+    unsigned long f, unsigned long g, U128 value);
+
+unsigned long loong_va_pair_direct(U128 value) {
+    return va_one(11UL, value, 19UL);
+}
+
+unsigned long loong_va_pair_indirect(U128 value) {
+    VaOneFn callee = va_one;
+    return callee(11UL, value, 19UL);
+}
+
+unsigned long loong_va_spill_direct(U128 value) {
+    return va_seven(1UL, 2UL, 3UL, 4UL, 5UL, 6UL, 7UL,
+                    value, 19UL);
+}
+
+unsigned long loong_va_spill_indirect(U128 value) {
+    VaSevenFn callee = va_seven;
+    return callee(1UL, 2UL, 3UL, 4UL, 5UL, 6UL, 7UL,
+                  value, 19UL);
+}
+
+unsigned long loong_named_pair_control(U128 value) {
+    return fixed_one(11UL, value);
+}
+
+unsigned long loong_named_split_control(U128 value) {
+    return fixed_seven(1UL, 2UL, 3UL, 4UL, 5UL, 6UL, 7UL, value);
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/loongarch64_vararg_int128_pair_gnu.c"}
+#include <stdarg.h>
+typedef unsigned __int128 U128;
+
+extern unsigned long loong_va_pair_direct(U128);
+extern unsigned long loong_va_pair_indirect(U128);
+extern unsigned long loong_va_spill_direct(U128);
+extern unsigned long loong_va_spill_indirect(U128);
+extern unsigned long loong_named_pair_control(U128);
+extern unsigned long loong_named_split_control(U128);
+
+static U128 reference(void) {
+    return ((U128)0x123456789abcdef0ULL << 64) |
+           (U128)0xfedcba9876543210ULL;
+}
+
+unsigned long va_one(unsigned long tag, ...) {
+    va_list ap;
+    U128 wide;
+    unsigned long tail;
+    va_start(ap, tag);
+    wide = va_arg(ap, U128);
+    tail = va_arg(ap, unsigned long);
+    va_end(ap);
+    return tag == 11UL && wide == reference() && tail == 19UL;
+}
+
+unsigned long va_seven(unsigned long a, unsigned long b,
+    unsigned long c, unsigned long d, unsigned long e,
+    unsigned long f, unsigned long g, ...) {
+    va_list ap;
+    U128 wide;
+    unsigned long tail;
+    va_start(ap, g);
+    wide = va_arg(ap, U128);
+    tail = va_arg(ap, unsigned long);
+    va_end(ap);
+    return a == 1UL && b == 2UL && c == 3UL && d == 4UL &&
+           e == 5UL && f == 6UL && g == 7UL &&
+           wide == reference() && tail == 19UL;
+}
+
+unsigned long fixed_one(unsigned long tag, U128 wide) {
+    return tag == 11UL && wide == reference();
+}
+
+unsigned long fixed_seven(unsigned long a, unsigned long b,
+    unsigned long c, unsigned long d, unsigned long e,
+    unsigned long f, unsigned long g, U128 wide) {
+    return a == 1UL && b == 2UL && c == 3UL && d == 4UL &&
+           e == 5UL && f == 6UL && g == 7UL && wide == reference();
+}
+
+int main(void) {
+    U128 wide = reference();
+    if (!loong_va_pair_direct(wide)) return 1;
+    if (!loong_va_pair_indirect(wide)) return 2;
+    if (!loong_va_spill_direct(wide)) return 3;
+    if (!loong_va_spill_indirect(wide)) return 4;
+    if (!loong_named_pair_control(wide)) return 5;
+    if (!loong_named_split_control(wide)) return 6;
+    return 42;
+}
+@@@ end

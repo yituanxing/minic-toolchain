@@ -1,0 +1,172 @@
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/extern_fixed_integer_array.c"}
+typedef unsigned char MiniByte;
+
+extern const MiniByte table[2 + 3];
+
+const MiniByte table[2 + 3] = {1, 2, 3};
+
+int main(void) {
+    return sizeof(table) == 5 && table[0] == 1 && table[2] == 3 && table[3] == 0 &&
+                   table[4] == 0
+               ? 0
+               : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/extern_function_pointer_object.c"}
+extern long (*panic_blink_like)(int state);
+
+static int has_blink(void) {
+    return panic_blink_like != 0;
+}
+
+int main(void) {
+    return has_blink() ? 0 : 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/extern_incomplete_array.c"}
+extern const char message[];
+
+int read_second(void) {
+    return message[1];
+}
+
+const char message[] = "ab" "cd";
+
+int main(void) {
+    return sizeof(message) == 5 && read_second() == 'b' ? 0 : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/extern_incomplete_array_only.c"}
+extern const char remote_message[];
+
+int first_character(void) {
+    return remote_message[0];
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/extern_incomplete_record_object.c"}
+struct opaque_record;
+extern struct opaque_record opaque_object;
+
+static struct opaque_record *opaque_address(void) {
+    return &opaque_object;
+}
+
+int main(void) {
+    return opaque_address() == &opaque_object ? 0 : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/extern_interleaved_function_attributes.c"}
+extern __attribute__((__format__(printf, 4, 5)))
+void warn_slowpath_fmt(const char *file,
+                       const int line,
+                       unsigned taint,
+                       const char *fmt,
+                       ...);
+
+extern __attribute__((__format__(printf, 1, 2)))
+void warn_printk(const char *fmt, ...);
+
+int declaration_head_probe(int value) {
+    warn_slowpath_fmt("probe.c", 7, 0U, "%d", value);
+    warn_printk("%d", value);
+    return value;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/extern_multi_declarators.c"}
+typedef int (*entry_like_t)(void);
+
+extern entry_like_t start_like[], end_like[];
+
+static entry_like_t *start_address(void) {
+    return start_like;
+}
+
+static entry_like_t *end_address(void) {
+    return end_like;
+}
+
+int main(void) {
+    return start_address() == end_address();
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/extern_multidimensional_array.c"}
+extern const unsigned long
+cpu_bit_bitmap[64 + 1][(((64) + ((sizeof(long) * 8)) - 1) / ((sizeof(long) * 8)))];
+
+unsigned long read_cpu_bit(unsigned int cpu, unsigned int word) {
+    return cpu_bit_bitmap[cpu][word];
+}
+
+const unsigned long *cpu_bit_row(unsigned int cpu) {
+    const unsigned long *row = cpu_bit_bitmap[1 + cpu % 64];
+    return row;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/extern_object.c"}
+extern int external_counter;
+
+int read_external(void) {
+    return external_counter;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/extern_parenthesized_functions.c"}
+extern int (external_add)(int left, int right);
+extern void *(external_alloc)(void *pointer, unsigned size);
+
+int main(void) {
+    char value = 0;
+    return external_add(1, 2) == 3 && external_alloc(&value, 1) != 0 ? 0 : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/extern_typedef_array_object.c"}
+struct cpumask {
+    unsigned long bits[2];
+};
+
+typedef struct cpumask cpumask_var_t[1];
+extern cpumask_var_t irq_default_affinity;
+
+typedef unsigned long row_t[3];
+extern row_t matrix[2];
+
+typedef int triple_t[3];
+extern triple_t values;
+extern int values[3];
+
+struct cpumask *default_affinity(void) {
+    return &irq_default_affinity[0];
+}
+
+unsigned long *select_row(unsigned int index) {
+    return matrix[index];
+}
+
+int *values_ptr(void) {
+    return values;
+}
+
+unsigned long matrix_size(void) {
+    return sizeof(matrix);
+}
+
+unsigned long values_size(void) {
+    return sizeof(values);
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_extern_typedef_array_redeclaration.c"}
+typedef int triple_t[3];
+extern triple_t values;
+extern int values[4];
+
+int main(void) {
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_extern_void_redeclaration.c"}
+extern const void opaque_symbol;
+extern const int opaque_symbol;
+
+int main(void) {
+    return 0;
+}
+@@@ end

@@ -1,0 +1,713 @@
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_rv64_global_plan_bss_initializer.c"}
+/* GNU rejects nonzero data in an ELF SHT_NOBITS .bss section. */
+int __attribute__((used, section(".bss.minic.rv64.plan")))
+    rv64_plan_bad_bss_initializer = 11;
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_rv64_global_plan_section_injection.c"}
+/* A user section name must not escape into a second GAS statement. */
+int __attribute__((used, section(".data.rv64.plan; ebreak")))
+    rv64_plan_bad_section = 1;
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/probe-rv64-coretype-abi.c"}
+#include "core/core_type.h"
+#include "target/riscv64/abi.h"
+
+#include <stdio.h>
+#include <string.h>
+
+#define CHECK(c) do { \
+    if (!(c)) { \
+        (void)fprintf(stderr, "RV64_CORETYPE_ABI=FAIL line=%d expr=%s\n", \
+                      __LINE__, #c); \
+        return 1; \
+    } \
+} while (0)
+
+static bool register_integer(MinicCoreTypeContext *types, unsigned int bits,
+                             MinicCoreTypeId *id) {
+    MinicCoreType type = {0};
+    type.kind = MINIC_CORE_TYPE_INTEGER;
+    type.has_layout = true;
+    type.size = bits / 8U;
+    type.alignment = bits == 128U ? 16U : type.size;
+    type.value.integer.bit_width = bits;
+    type.value.integer.is_signed = true;
+    return minic_core_type_register(types, &type, id);
+}
+
+static bool register_float(MinicCoreTypeContext *types,
+                           MinicCoreFloatFormat format, size_t size,
+                           MinicCoreTypeId *id) {
+    MinicCoreType type = {0};
+    type.kind = MINIC_CORE_TYPE_FLOAT;
+    type.has_layout = true;
+    type.size = size;
+    type.alignment = size;
+    type.value.floating.format = format;
+    return minic_core_type_register(types, &type, id);
+}
+
+static bool register_record(MinicCoreTypeContext *types, MinicCoreTypeId field_type,
+                            size_t size, bool is_union, MinicCoreTypeId *id) {
+    MinicCoreRecordField field = {0};
+    MinicCoreType type = {0};
+    field.type_id = field_type;
+    field.alignment = 8U;
+    type.kind = MINIC_CORE_TYPE_RECORD;
+    type.has_layout = true;
+    type.size = size;
+    type.alignment = 8U;
+    type.value.record.is_complete = true;
+    type.value.record.is_union = is_union;
+    type.value.record.fields = &field;
+    type.value.record.field_count = 1U;
+    return minic_core_type_register(types, &type, id);
+}
+
+int main(void) {
+    MinicCoreTypeContext types;
+    MinicCoreTypeId i32, i64, i128, f64, ext, fp_record, fp_union, big_record;
+    MinicRiscv64AbiValue value;
+    MinicRiscv64AbiCursor cursor;
+    MinicRiscv64AbiArgumentLocation location;
+    MinicCoreType type = {0};
+    MinicCoreTypeId pointer;
+
+    minic_core_type_context_initialize(&types);
+    CHECK(register_integer(&types, 32U, &i32));
+    CHECK(register_integer(&types, 64U, &i64));
+    CHECK(register_integer(&types, 128U, &i128));
+    CHECK(register_float(&types, MINIC_CORE_FLOAT_BINARY64, 8U, &f64));
+    CHECK(register_float(&types, MINIC_CORE_FLOAT_BINARY128, 16U, &ext));
+    CHECK(register_record(&types, f64, 16U, false, &fp_record));
+    CHECK(register_record(&types, f64, 16U, true, &fp_union));
+    CHECK(register_record(&types, i64, 24U, false, &big_record));
+
+    type.kind = MINIC_CORE_TYPE_POINTER;
+    type.has_layout = true;
+    type.size = 8U;
+    type.alignment = 8U;
+    type.value.pointer.pointee = big_record;
+    CHECK(minic_core_type_register(&types, &type, &pointer));
+
+    CHECK(minic_riscv64_abi_classify_core_value_profile(&types, i32, false, &value));
+    CHECK(value.kind == MINIC_RISCV64_ABI_VALUE_INTEGER &&
+          value.storage_size == 4U && value.slot_count == 1U);
+    CHECK(minic_riscv64_abi_classify_core_value_profile(&types, pointer, false, &value));
+    CHECK(value.kind == MINIC_RISCV64_ABI_VALUE_INTEGER);
+    CHECK(minic_riscv64_abi_classify_core_value_profile(&types, f64, false, &value));
+    CHECK(value.kind == MINIC_RISCV64_ABI_VALUE_FLOAT && value.slot_count == 1U);
+    CHECK(minic_riscv64_abi_classify_core_value_profile(&types, i128, false, &value));
+    CHECK(value.kind == MINIC_RISCV64_ABI_VALUE_WIDE_SCALAR && value.slot_count == 2U);
+    CHECK(minic_riscv64_abi_classify_core_value_profile(&types, ext, true, &value));
+    CHECK(value.kind == MINIC_RISCV64_ABI_VALUE_WIDE_SCALAR);
+
+    /* ABI reject: real FP struct needs unimplemented FPR flattening. A
+     * union containing the same FP member takes integer convention. */
+    CHECK(!minic_riscv64_abi_classify_core_value_profile(
+        &types, fp_record, false, &value));
+    CHECK(minic_riscv64_abi_classify_core_value_profile(
+        &types, fp_record, true, &value));
+    CHECK(value.kind == MINIC_RISCV64_ABI_VALUE_AGGREGATE && value.slot_count == 2U);
+    CHECK(minic_riscv64_abi_classify_core_value_profile(
+        &types, fp_union, false, &value));
+    CHECK(value.kind == MINIC_RISCV64_ABI_VALUE_AGGREGATE && value.slot_count == 2U);
+    CHECK(minic_riscv64_abi_classify_core_value_profile(
+        &types, big_record, false, &value));
+    CHECK(value.kind == MINIC_RISCV64_ABI_VALUE_INDIRECT && value.storage_size == 24U);
+    CHECK(!minic_riscv64_abi_classify_core_value_profile(
+        &types, MINIC_CORE_TYPE_INVALID, false, &value));
+
+    CHECK(minic_riscv64_abi_cursor_initialize_for_core_return_profile(
+        &types, big_record, false, &cursor, &value));
+    CHECK(cursor.integer_register_count == 1U &&
+          value.kind == MINIC_RISCV64_ABI_VALUE_INDIRECT);
+    CHECK(minic_riscv64_abi_place_core_argument(
+        &types, i64, true, &cursor, &location));
+    CHECK(location.integer_register_begin == 1U &&
+          location.integer_register_count == 1U);
+
+    minic_riscv64_abi_cursor_initialize(&cursor);
+    cursor.integer_register_count = 1U;
+    CHECK(minic_riscv64_abi_place_core_argument(
+        &types, i128, false, &cursor, &location));
+    CHECK(location.integer_register_begin == 2U &&
+          location.integer_register_count == 2U &&
+          cursor.integer_register_count == 4U);
+    minic_riscv64_abi_cursor_initialize(&cursor);
+    CHECK(minic_riscv64_abi_place_core_argument(
+        &types, f64, true, &cursor, &location));
+    CHECK(location.floating_register_begin == 0U &&
+          location.floating_register_count == 1U);
+    minic_riscv64_abi_cursor_initialize(&cursor);
+    cursor.lp64_soft_float = true;
+    CHECK(minic_riscv64_abi_place_core_argument(
+        &types, f64, true, &cursor, &location));
+    CHECK(location.integer_register_count == 1U &&
+          location.floating_register_count == 0U);
+
+    /* Invalid contexts/types never fall back to C DataLayout. */
+    CHECK(!minic_riscv64_abi_place_core_argument(
+        &types, MINIC_CORE_TYPE_INVALID, true, &cursor, &location));
+    minic_core_type_context_destroy(&types);
+    (void)puts("RV64_CORETYPE_ABI=PASS LP64 LP64D union_fp_reject wide_pair hidden_result");
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/rv64_checked_overflow_math_oracle.c"}
+/* Independent GNU-native arithmetic oracle for the RISC-V LP64 typed
+ * checked-overflow selector. This validates the exact selected predicates,
+ * modulo result and separate stored-value/SSA-boolean semantics over all
+ * four 32/64-bit signednesses. It does NOT replace GNU RV64 ELF/QEMU tests. */
+#include <inttypes.h>
+#include <limits.h>
+#include <stdbool.h>
+#include <stdint.h>
+#include <stdio.h>
+
+static uint64_t seed = UINT64_C(0x9e3779b97f4a7c15);
+static uint64_t random_word(void) {
+    seed ^= seed << 13;
+    seed ^= seed >> 7;
+    seed ^= seed << 17;
+    return seed;
+}
+
+static bool check_signed32(int32_t a, int32_t b) {
+    int32_t actual;
+    int64_t wide;
+    bool flag;
+
+    wide = (int64_t)a + (int64_t)b;
+    flag = __builtin_add_overflow(a, b, &actual);
+    if (actual != (int32_t)wide || flag !=
+        (wide != (int64_t)(int32_t)wide)) return false;
+    wide = (int64_t)a - (int64_t)b;
+    flag = __builtin_sub_overflow(a, b, &actual);
+    if (actual != (int32_t)wide || flag !=
+        (wide != (int64_t)(int32_t)wide)) return false;
+    wide = (int64_t)a * (int64_t)b;
+    flag = __builtin_mul_overflow(a, b, &actual);
+    return actual == (int32_t)wide && flag ==
+        (wide != (int64_t)(int32_t)wide);
+}
+
+static bool check_unsigned32(uint32_t a, uint32_t b) {
+    uint32_t actual;
+    uint64_t wide;
+    bool flag;
+
+    wide = (uint64_t)a + (uint64_t)b;
+    flag = __builtin_add_overflow(a, b, &actual);
+    if (actual != (uint32_t)wide || flag != (wide > UINT32_MAX))
+        return false;
+    flag = __builtin_sub_overflow(a, b, &actual);
+    if (actual != a - b || flag != (a < b)) return false;
+    wide = (uint64_t)a * (uint64_t)b;
+    flag = __builtin_mul_overflow(a, b, &actual);
+    return actual == (uint32_t)wide && flag == (wide > UINT32_MAX);
+}
+
+static bool check_signed64(int64_t a, int64_t b) {
+    const uint64_t lhs = (uint64_t)a, rhs = (uint64_t)b;
+    const uint64_t add = lhs + rhs, sub = lhs - rhs;
+    const uint64_t low_product =
+        (uint64_t)((unsigned __int128)lhs * (unsigned __int128)rhs);
+    const __int128 full_product = (__int128)a * (__int128)b;
+    int64_t actual;
+    bool flag, predicted;
+
+    predicted = ((~(lhs ^ rhs) & (lhs ^ add)) >> 63) != 0U;
+    flag = __builtin_add_overflow(a, b, &actual);
+    if ((uint64_t)actual != add || flag != predicted) return false;
+    predicted = (((lhs ^ rhs) & (lhs ^ sub)) >> 63) != 0U;
+    flag = __builtin_sub_overflow(a, b, &actual);
+    if ((uint64_t)actual != sub || flag != predicted) return false;
+    /* Multiplication first writes the low product, then checks the inverse
+     * division when b!=0, with the INT64_MIN/-1 exceptional pair admitted. */
+    predicted = b != 0 && ((a == INT64_MIN && b == -1) ||
+        ((int64_t)low_product / b != a));
+    flag = __builtin_mul_overflow(a, b, &actual);
+    return (uint64_t)actual == low_product && flag == predicted &&
+        flag == (full_product > INT64_MAX || full_product < INT64_MIN);
+}
+
+static bool check_unsigned64(uint64_t a, uint64_t b) {
+    const uint64_t add = a + b, sub = a - b;
+    const unsigned __int128 full_product =
+        (unsigned __int128)a * (unsigned __int128)b;
+    const uint64_t low_product = (uint64_t)full_product;
+    uint64_t actual;
+    bool flag;
+
+    flag = __builtin_add_overflow(a, b, &actual);
+    if (actual != add || flag != (add < a)) return false;
+    flag = __builtin_sub_overflow(a, b, &actual);
+    if (actual != sub || flag != (a < b)) return false;
+    flag = __builtin_mul_overflow(a, b, &actual);
+    return actual == low_product && flag ==
+        (b != 0U && low_product / b != a) &&
+        flag == (full_product > UINT64_MAX);
+}
+
+int main(void) {
+    static const uint64_t edges[] = {
+        UINT64_C(0), UINT64_C(1), UINT64_C(2), UINT64_C(3),
+        UINT64_C(0x7fffffff), UINT64_C(0x80000000),
+        UINT64_C(0xffffffff), UINT64_C(0x100000000),
+        UINT64_C(0x7fffffffffffffff), UINT64_C(0x8000000000000000),
+        UINT64_C(0xffffffff00000000), UINT64_MAX
+    };
+    size_t i, j, checked = 0U;
+    for (i = 0U; i < sizeof(edges) / sizeof(edges[0]) + 10000U; ++i) {
+        const uint64_t a = i < sizeof(edges) / sizeof(edges[0]) ?
+            edges[i] : random_word();
+        for (j = 0U; j < sizeof(edges) / sizeof(edges[0]) + 12U; ++j) {
+            const uint64_t b = j < sizeof(edges) / sizeof(edges[0]) ?
+                edges[j] : random_word();
+            if (!check_signed32((int32_t)a, (int32_t)b) ||
+                !check_unsigned32((uint32_t)a, (uint32_t)b) ||
+                !check_signed64((int64_t)a, (int64_t)b) ||
+                !check_unsigned64(a, b)) {
+                fprintf(stderr, "RV64_CHECKED_MATH=FAIL a=%" PRIx64
+                    " b=%" PRIx64 "\n", a, b);
+                return 1;
+            }
+            checked += 4U;
+        }
+    }
+    printf("RV64_CHECKED_MATH=PASS combinations=%zu 32_64=1 signed_unsigned=1 add_sub_mul=1\n",
+           checked);
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/rv64_global_plan_abi.c"}
+/* Target-independent C oracle for RV64 GlobalEmissionPlan migration.
+ * Keep each definition externally visible to ELF inspection even if a
+ * compiler proves the runtime checks at compile time. */
+int rv64_plan_anchor = 37;
+static __attribute__((used)) unsigned char rv64_plan_byte = 255;
+static __attribute__((used)) float rv64_plan_float = 1.25f;
+static __attribute__((used)) double rv64_plan_double = -2.5;
+static __attribute__((used)) int *rv64_plan_pointer = &rv64_plan_anchor;
+static __attribute__((used)) int rv64_plan_zero_tail[5] = {11, 13};
+static __attribute__((used)) int rv64_plan_tentative[4];
+
+__attribute__((used, section(".bss.minic.rv64.plan"))) int rv64_plan_named_bss;
+__attribute__((used, section(".bssish.minic.rv64.plan"))) int rv64_plan_named_data;
+
+static int rv64_plan_add(int value) { return value + 5; }
+struct Rv64PlanNested {
+    int *pointer;
+    int (*call)(int);
+    double fraction;
+};
+struct Rv64PlanOuter {
+    struct Rv64PlanNested nested;
+    const char *name;
+};
+static __attribute__((used)) struct Rv64PlanOuter rv64_plan_nested = {
+    {&rv64_plan_anchor, rv64_plan_add, 2.25}, "nested"
+};
+
+static __attribute__((used)) const char *rv64_plan_pointer_grid[2][2] = {
+    {"first", "second"}, {"third", 0}
+};
+
+struct Rv64PlanFlexible {
+    const char *name;
+    int values[];
+};
+static __attribute__((used)) struct Rv64PlanFlexible rv64_plan_flexible = {
+    "flexible", {11, 13, 17}
+};
+
+struct Rv64PlanBitfield {
+    unsigned int low : 6;
+    unsigned int high : 10;
+    unsigned short marker;
+};
+static __attribute__((used)) struct Rv64PlanBitfield rv64_plan_bitfield = {
+    37, 777, 0x1234
+};
+
+int main(void) {
+    return rv64_plan_anchor == 37 && rv64_plan_byte == 255 &&
+        rv64_plan_float == 1.25f && rv64_plan_double == -2.5 &&
+        rv64_plan_pointer == &rv64_plan_anchor &&
+        rv64_plan_zero_tail[0] == 11 && rv64_plan_zero_tail[1] == 13 &&
+        rv64_plan_zero_tail[4] == 0 && rv64_plan_tentative[3] == 0 &&
+        rv64_plan_named_bss == 0 && rv64_plan_named_data == 0 &&
+        rv64_plan_nested.nested.pointer == &rv64_plan_anchor &&
+        rv64_plan_nested.nested.call(5) == 10 &&
+        rv64_plan_nested.nested.fraction == 2.25 &&
+        rv64_plan_nested.name[0] == 'n' &&
+        rv64_plan_pointer_grid[0][0][0] == 'f' &&
+        rv64_plan_pointer_grid[1][0][0] == 't' &&
+        rv64_plan_pointer_grid[1][1] == 0 &&
+        rv64_plan_flexible.name[0] == 'f' &&
+        rv64_plan_flexible.values[0] == 11 &&
+        rv64_plan_flexible.values[2] == 17 &&
+        rv64_plan_bitfield.low == 37 &&
+        rv64_plan_bitfield.high == 777 &&
+        rv64_plan_bitfield.marker == 0x1234 ? 42 : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/rv64_hardfloat_ninth_fixed.c"}
+/* RV64 LP64D: fa0..fa7 contain only the first eight named FP arguments.
+ * A ninth named FP argument is passed in the first available integer
+ * register, NOT rejected or silently placed onto the stack. */
+double ninth(double a0, double a1, double a2, double a3,
+             double a4, double a5, double a6, double a7,
+             double a8) { return a8; }
+
+double tenth_mixed(unsigned long tag, double a0, double a1,
+                   double a2, double a3, double a4, double a5,
+                   double a6, double a7, double a8, double a9) {
+    (void)tag;
+    (void)a8;
+    return a9;
+}
+
+double spill_mixed(unsigned long a, unsigned long b, unsigned long c,
+                   unsigned long d, unsigned long e, unsigned long f,
+                   unsigned long g, unsigned long h,
+                   double a0, double a1, double a2, double a3,
+                   double a4, double a5, double a6, double a7,
+                   double a8) { (void)h; return a8; }
+
+float ninth_float(double a0, double a1, double a2, double a3,
+                  double a4, double a5, double a6, double a7,
+                  float a8) { return a8; }
+
+extern double (*indirect_ninth)(double, double, double, double, double,
+                                double, double, double, double);
+
+double call_ninth(double x) {
+    return ninth(x,x,x,x,x,x,x,x,x);
+}
+
+double call_tenth_mixed(double x) {
+    return tenth_mixed(17UL,x,x,x,x,x,x,x,x,x,x);
+}
+
+double call_spill_mixed(double x) {
+    return spill_mixed(1UL,2UL,3UL,4UL,5UL,6UL,7UL,8UL,
+                       x,x,x,x,x,x,x,x,x);
+}
+
+float call_ninth_float(double x, float y) {
+    return ninth_float(x,x,x,x,x,x,x,x,y);
+}
+
+double call_indirect_ninth(double x) {
+    return indirect_ninth(x,x,x,x,x,x,x,x,x);
+}
+
+/* F/D availability must not reclassify integer ALU operations. The selected
+ * RV64I machine backend always lowers MUL/DIV/REM through typed GNU runtime
+ * calls, independent of the psABI used for floating arguments. */
+unsigned int int32_arithmetic(unsigned int left, unsigned int right) {
+    return left * right + left / right + left % right;
+}
+
+long int64_arithmetic(long left, long right) {
+    return left * right + left / right + left % right;
+}
+
+/* psABI binary128 is a pair of GPR words even with LP64D enabled. Both
+ * direct and indirect calls must preserve the complete 16-byte payload. */
+extern long double gnu_binary128(void);
+extern long double (*binary128_pointer)(void);
+
+long double call_binary128_direct(void) {
+    return gnu_binary128();
+}
+
+long double call_binary128_indirect(void) {
+    return binary128_pointer();
+}
+
+long double passthrough_binary128(long double value) {
+    return value;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/rv64_hardfloat_record_abi_probe.c"}
+#if defined(PROBE_FLOAT) || (!defined(PROBE_DOUBLE) && !defined(PROBE_MIXED))
+struct OneFloat { float f; };
+float receive_one_float(struct OneFloat value) { return value.f; }
+#if !defined(PROBE_CALLEE_ONLY)
+float call_one_float(struct OneFloat value) {
+    return receive_one_float(value);
+}
+#endif
+#endif
+#if defined(PROBE_DOUBLE) || (!defined(PROBE_FLOAT) && !defined(PROBE_MIXED))
+struct OneDouble { double d; };
+double receive_one_double(struct OneDouble value) { return value.d; }
+#if !defined(PROBE_CALLEE_ONLY)
+double call_one_double(struct OneDouble value) {
+    return receive_one_double(value);
+}
+#endif
+#endif
+#if defined(PROBE_MIXED) || (!defined(PROBE_FLOAT) && !defined(PROBE_DOUBLE))
+struct FloatInt { float f; int i; };
+double receive_float_int(struct FloatInt value) {
+    return (double)value.i + (double)value.f;
+}
+#endif
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/rv64_integer_aggregate_return.c"}
+struct pair64 {
+    long first;
+    long second;
+};
+
+static struct pair64 add_pair(struct pair64 lhs, struct pair64 rhs) {
+    struct pair64 result;
+
+    result.first = lhs.first + rhs.first;
+    result.second = lhs.second + rhs.second;
+    return result;
+}
+
+static struct pair64 forward_pair(struct pair64 lhs, struct pair64 rhs) {
+    return add_pair(lhs, rhs);
+}
+
+int main(void) {
+    return 0;
+}
+
+struct triple64 {
+    long first;
+    long second;
+    long third;
+};
+
+static struct triple64 make_triple(long base) {
+    struct triple64 result;
+
+    result.first = base;
+    result.second = base + 1;
+    result.third = base + 2;
+    return result;
+}
+
+static struct triple64 forward_triple(long base) {
+    return make_triple(base);
+}
+
+static void cleanup_triple(struct triple64 *value) {
+    value->third += 1;
+}
+
+static long cleanup_triple_call(long base) {
+    struct triple64 value __attribute__((cleanup(cleanup_triple))) = make_triple(base);
+
+    return value.first + value.second + value.third;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/rv64_lp64_softfloat_record_call.c"}
+/* LP64 base integer psABI: even records with FP leaves travel through the
+ * integer aggregate ABI. Both direct and SSA-pointer calls return records
+ * in a0/a1, while LP64D must reject until FP-record flattening exists. */
+typedef struct OneFloat { float f; } OneFloat;
+typedef struct OneDouble { double d; } OneDouble;
+
+__attribute__((noinline)) OneFloat echo_float(OneFloat value) {
+    return value;
+}
+__attribute__((noinline)) OneDouble echo_double(OneDouble value) {
+    return value;
+}
+
+OneFloat direct_float(OneFloat value) {
+    return echo_float(value);
+}
+OneDouble direct_double(OneDouble value) {
+    return echo_double(value);
+}
+OneFloat indirect_float(OneFloat value, OneFloat (*callee)(OneFloat)) {
+    return callee(value);
+}
+OneDouble indirect_double(OneDouble value, OneDouble (*callee)(OneDouble)) {
+    return callee(value);
+}
+
+int main(void) {
+    OneFloat f = {3.25f};
+    OneDouble d = {6.5};
+    OneFloat x = direct_float(f);
+    OneDouble y = direct_double(d);
+    OneFloat z = indirect_float(x, echo_float);
+    OneDouble w = indirect_double(y, echo_double);
+    const unsigned char *expected_float = (const unsigned char *)&f;
+    const unsigned char *expected_double = (const unsigned char *)&d;
+    const unsigned char *direct_float_bytes = (const unsigned char *)&x;
+    const unsigned char *direct_double_bytes = (const unsigned char *)&y;
+    const unsigned char *indirect_float_bytes = (const unsigned char *)&z;
+    const unsigned char *indirect_double_bytes = (const unsigned char *)&w;
+    unsigned long i;
+    /* Byte-wise validation uses only RV64I integer instructions, so strict
+     * -march=rv64i need not synthesize unsupported FP comparison opcodes. */
+    for (i = 0UL; i < sizeof(f); ++i)
+        if (expected_float[i] != direct_float_bytes[i] ||
+            expected_float[i] != indirect_float_bytes[i]) return 1;
+    for (i = 0UL; i < sizeof(d); ++i)
+        if (expected_double[i] != direct_double_bytes[i] ||
+            expected_double[i] != indirect_double_bytes[i]) return 2;
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/rv64_packed_wide_alignment.c"}
+/* Target-independent Core LOAD/STORE may point at misaligned 16-byte
+ * int128/long-double members.  RV64 must split into guarded 8-byte words
+ * with bytewise fallback, not assume the physical member's type alignment. */
+struct __attribute__((packed)) PackedWide {
+    char lead;
+    __int128 value;
+    long double fp;
+};
+
+__int128 packed_wide_read(const struct PackedWide *p) { return p->value; }
+void packed_wide_write(struct PackedWide *p, __int128 x) { p->value = x; }
+long double packed_long_double_read(const struct PackedWide *p) { return p->fp; }
+void packed_long_double_write(struct PackedWide *p, long double x) { p->fp = x; }
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/rv64_record_load_irregular.c"}
+/* The RV64 Core RECORD_LOAD fallback must copy every byte of a record.
+ * Sizes 3/5/6/7 previously loaded only the first byte into a wider slot. */
+struct three { unsigned char b[3]; };
+struct five { unsigned char b[5]; };
+struct six { unsigned char b[6]; };
+struct seven { unsigned char b[7]; };
+struct nine { unsigned char b[9]; };
+struct fifteen { unsigned char b[15]; };
+
+struct three load_three(const struct three *p) { return *p; }
+struct five load_five(const struct five *p) { return *p; }
+struct six load_six(const struct six *p) { return *p; }
+struct seven load_seven(const struct seven *p) { return *p; }
+struct nine load_nine(const struct nine *p) { return *p; }
+struct fifteen load_fifteen(const struct fifteen *p) { return *p; }
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/rv64_record_load_packed.c"}
+/* RECORD_LOAD must preserve each byte of a packed record even when its
+ * nominal size matches a native word-width load/store.  The GCC packed
+ * attribute makes each record align to one byte; a caller may pass an odd
+ * address without violating that C type's alignment contract. */
+struct __attribute__((packed)) packed_two { unsigned char data[2]; };
+struct __attribute__((packed)) packed_four { unsigned char data[4]; };
+struct __attribute__((packed)) packed_eight { unsigned char data[8]; };
+
+_Static_assert(_Alignof(struct packed_two) == 1, "packed_two alignment");
+_Static_assert(_Alignof(struct packed_four) == 1, "packed_four alignment");
+_Static_assert(_Alignof(struct packed_eight) == 1, "packed_eight alignment");
+
+struct packed_two load_packed_two(const struct packed_two *p) { return *p; }
+struct packed_four load_packed_four(const struct packed_four *p) { return *p; }
+struct packed_eight load_packed_eight(const struct packed_eight *p) { return *p; }
+
+/* Exercise a load with an extra addressable one-byte local. The frame
+ * planner, not source declaration order, chooses the snapshot offset. */
+struct packed_four load_packed_four_with_local(const struct packed_four *p) {
+    volatile unsigned char guard = p->data[0];
+    (void)guard;
+    return *p;
+}
+
+/* Natural aligned records use the same fallback because the Core load pointer
+ * currently has no transferable proof of its actual runtime alignment. */
+struct natural_two { unsigned short value; };
+struct natural_four { unsigned int value; };
+struct natural_eight { unsigned long long value; };
+
+struct natural_two load_natural_two(const struct natural_two *p) { return *p; }
+struct natural_four load_natural_four(const struct natural_four *p) { return *p; }
+struct natural_eight load_natural_eight(const struct natural_eight *p) { return *p; }
+
+/* The member's type is naturally four-aligned, but its address is not:
+ * the containing packed record places it at byte offset one. */
+struct __attribute__((packed)) packed_outer_four {
+    unsigned char prefix;
+    struct natural_four member;
+};
+struct natural_four load_natural_field_packed(const struct packed_outer_four *p) {
+    return p->member;
+}
+
+/* The first one-byte by-value parameter may place the second packed record
+ * at an odd frame offset. This exercises incoming register scatter, outgoing
+ * register gather and return-value aggregate marshalling. */
+struct packed_one { unsigned char data[1]; } __attribute__((packed));
+struct packed_two mix_after_one_two(struct packed_one first, struct packed_two value) {
+    value.data[0] = first.data[0];
+    return value;
+}
+struct packed_four mix_after_one_four(struct packed_one first, struct packed_four value) {
+    value.data[0] = first.data[0];
+    return value;
+}
+struct packed_eight mix_after_one_eight(struct packed_one first, struct packed_eight value) {
+    value.data[0] = first.data[0];
+    return value;
+}
+
+struct packed_four call_after_one_four(struct packed_one first, struct packed_four value) {
+    return mix_after_one_four(first, value);
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/rv64_union_fp_abi_consumer.c"}
+/* MC-059: independent consumer TU. Exit 42 means all ABI checks passed. */
+union U64 { double d; unsigned long long bits; };
+union OnlyFP { double d; };
+struct Nested { unsigned long long tag; union U64 data; };
+struct Array { union U64 items[2]; };
+
+extern union U64 abi_echo(union U64);
+extern unsigned long long abi_bits(union U64);
+extern struct Nested abi_nested(struct Nested);
+extern struct Array abi_array(struct Array);
+extern union OnlyFP abi_only_fp(union OnlyFP);
+extern double abi_scalar(double);
+
+int main(void) {
+    union U64 u;
+    struct Nested n;
+    struct Array a;
+    union OnlyFP fp;
+    u.bits = 0x123456789abcdef0ULL;
+    if (abi_echo(u).bits != u.bits) return 1;
+    if (abi_bits(u) != u.bits) return 2;
+    n.tag = 0x1020304050607080ULL;
+    n.data.bits = 0xfedcba9876543210ULL;
+    n = abi_nested(n);
+    if (n.tag != 0x1020304050607080ULL ||
+        n.data.bits != 0xfedcba9876543210ULL) return 3;
+    a.items[0].bits = 0x1122334455667788ULL;
+    a.items[1].bits = 0x8877665544332211ULL;
+    a = abi_array(a);
+    if (a.items[0].bits != 0x1122334455667788ULL ||
+        a.items[1].bits != 0x8877665544332211ULL) return 4;
+    fp.d = 6.5;
+    if (abi_only_fp(fp).d != 6.5) return 5;
+    if (abi_scalar(1.25) != 3.25) return 6;
+    return 42;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/rv64_union_fp_abi_provider.c"}
+/* MC-059: independent producer TU for GNU/MiniC ABI interoperability. */
+union U64 { double d; unsigned long long bits; };
+union OnlyFP { double d; };
+struct Nested { unsigned long long tag; union U64 data; };
+struct Array { union U64 items[2]; };
+
+union U64 abi_echo(union U64 x) { return x; }
+unsigned long long abi_bits(union U64 x) { return x.bits; }
+struct Nested abi_nested(struct Nested x) { return x; }
+struct Array abi_array(struct Array x) { return x; }
+union OnlyFP abi_only_fp(union OnlyFP x) { return x; }
+double abi_scalar(double x) { return x + 2.0; }
+@@@ end

@@ -1,0 +1,921 @@
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/check-riscv-gpr-abi.c"}
+/* Standalone psABI placement contract, independent of any Core IR frame. */
+#include "target/riscv/gpr_abi_cursor.h"
+#include <stdio.h>
+
+static int check(MinicRiscvGprAbiCursor in, size_t words,
+                 bool unnamed, bool pair, size_t rb, size_t rc,
+                 size_t sb, size_t sc, size_t next_reg, size_t next_stack) {
+    MinicRiscvGprAbiPlacement p = {0};
+    if (!minic_riscv_gpr_abi_place(&in, words, unnamed, pair, &p) ||
+        p.register_begin != rb || p.register_count != rc ||
+        p.stack_begin != sb || p.stack_count != sc ||
+        in.register_words != next_reg || in.stack_words != next_stack)
+        return 1;
+    return 0;
+}
+int main(void) {
+    const MinicRiscvGprAbiCursor after_a0 = {1U, 0U, false};
+    const MinicRiscvGprAbiCursor after_a6 = {7U, 0U, false};
+    const MinicRiscvGprAbiCursor odd_stack = {8U, 1U, false};
+    const MinicRiscvGprAbiCursor already_stack = {8U, 2U, true};
+    MinicRiscvGprAbiPlacement result = {0};
+    MinicRiscvGprAbiCursor overflow = {8U, SIZE_MAX, false};
+    if (check(after_a6, 2U, false, false, 7U, 1U, 0U, 1U, 8U, 1U)) return 1;
+    if (check(after_a0, 2U, true, true, 2U, 2U, 0U, 0U, 4U, 0U)) return 2;
+    if (check(after_a6, 2U, true, true, 8U, 0U, 0U, 2U, 8U, 2U)) return 3;
+    if (check(odd_stack, 2U, true, true, 8U, 0U, 2U, 2U, 8U, 4U)) return 4;
+    if (check(already_stack, 1U, true, false, 8U, 0U, 2U, 1U, 8U, 3U)) return 5;
+    if (check(after_a0, 2U, false, false, 1U, 2U, 0U, 0U, 3U, 0U)) return 6;
+    if (minic_riscv_gpr_abi_place(&overflow, 1U, true, false, &result) ||
+        overflow.stack_words != SIZE_MAX) return 7;
+    if (minic_riscv_gpr_abi_place(&overflow, 2U, false, true, &result)) return 8;
+    puts("RISCV_GPR_ABI_CURSOR=PASS named_split=1 wide_even=1 stack_align=1 overflow=reject");
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/check-riscv-machine-selection.c"}
+/* ISA/ABI-free RISC-V machine selection contract for both XLEN widths. */
+#include "target/riscv/instruction_select.h"
+#include <stdio.h>
+#include <limits.h>
+#include <string.h>
+
+static int match(const char *got, const char *expected) {
+    return got != NULL && strcmp(got, expected) == 0;
+}
+static bool pointer_scale(size_t stride,
+                          MinicRiscvPointerScaleKind kind,
+                          unsigned shift) {
+    MinicRiscvPointerScalePlan plan;
+    return minic_riscv_plan_pointer_scale(stride, &plan) &&
+           plan.kind == kind && plan.shift == shift;
+}
+int main(void) {
+    const struct {
+        MinicCoreInstructionKind kind;
+        bool is_unsigned;
+        unsigned xlen;
+        const char *symbol;
+    } arithmetic[] = {
+        { MINIC_CORE_INSTRUCTION_INTEGER_MULTIPLY, false, 32U, "__mulsi3" },
+        { MINIC_CORE_INSTRUCTION_INTEGER_MULTIPLY, false, 64U, "__muldi3" },
+        { MINIC_CORE_INSTRUCTION_INTEGER_DIVIDE, false, 32U, "__divsi3" },
+        { MINIC_CORE_INSTRUCTION_INTEGER_DIVIDE, true, 32U, "__udivsi3" },
+        { MINIC_CORE_INSTRUCTION_INTEGER_REMAINDER, false, 32U, "__modsi3" },
+        { MINIC_CORE_INSTRUCTION_INTEGER_REMAINDER, true, 32U, "__umodsi3" },
+        { MINIC_CORE_INSTRUCTION_INTEGER_DIVIDE, false, 64U, "__divdi3" },
+        { MINIC_CORE_INSTRUCTION_INTEGER_DIVIDE, true, 64U, "__udivdi3" },
+        { MINIC_CORE_INSTRUCTION_INTEGER_REMAINDER, false, 64U, "__moddi3" },
+        { MINIC_CORE_INSTRUCTION_INTEGER_REMAINDER, true, 64U, "__umoddi3" }
+    };
+    size_t i;
+    for (i = 0U; i < sizeof(arithmetic) / sizeof(arithmetic[0]); ++i)
+        if (!match(minic_riscv_integer_arithmetic_symbol(
+                    arithmetic[i].kind, arithmetic[i].is_unsigned,
+                    arithmetic[i].xlen), arithmetic[i].symbol))
+            return 1;
+    if (minic_riscv_integer_arithmetic_symbol(
+            MINIC_CORE_INSTRUCTION_INTEGER_DIVIDE, false, 128U) != NULL ||
+        minic_riscv_integer_arithmetic_symbol(
+            MINIC_CORE_INSTRUCTION_POINTER_LESS, true, 32U) != NULL)
+        return 2;
+    if (!match(minic_riscv_scalar_binary_opcode(
+            MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_RIGHT, false), "sra") ||
+        !match(minic_riscv_scalar_binary_opcode(
+            MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_RIGHT, true), "srl") ||
+        !match(minic_riscv_scalar_binary_opcode(
+            MINIC_CORE_INSTRUCTION_INTEGER_LESS, false), "slt") ||
+        !match(minic_riscv_scalar_binary_opcode(
+            MINIC_CORE_INSTRUCTION_INTEGER_LESS, true), "sltu"))
+        return 3;
+    if (!match(minic_riscv_softfloat_arithmetic_symbol(
+            MINIC_CORE_INSTRUCTION_DOUBLE_ADD), "__adddf3"))
+        return 4;
+    if (!pointer_scale(0U, MINIC_RISCV_POINTER_SCALE_ZERO, 0U) ||
+        !pointer_scale(1U, MINIC_RISCV_POINTER_SCALE_UNIT, 0U) ||
+        !pointer_scale(2U, MINIC_RISCV_POINTER_SCALE_SHIFT, 1U) ||
+        !pointer_scale(8U, MINIC_RISCV_POINTER_SCALE_SHIFT, 3U) ||
+        !pointer_scale(3U, MINIC_RISCV_POINTER_SCALE_MULTIPLY, 0U) ||
+        !pointer_scale((size_t)-1, MINIC_RISCV_POINTER_SCALE_MULTIPLY, 0U) ||
+        !pointer_scale((size_t)1U << (sizeof(size_t) * CHAR_BIT - 1U),
+                       MINIC_RISCV_POINTER_SCALE_SHIFT,
+                       (unsigned)(sizeof(size_t) * CHAR_BIT - 1U)) ||
+        minic_riscv_plan_pointer_scale(0U, NULL))
+        return 5;
+    puts("RISCV_MACHINE_SELECTION=PASS ilp32_libgcc=5 lp64_libgcc=5 shift_compare=4 softfloat=1");
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/riscv_abi_register_boundary.S"}
+/* GNU AS physical-register witnesses: no compiler normalization masks a
+ * caller's raw a0 or ninth outgoing stack slot. */
+.text
+.globl _start
+.type _start,@function
+_start:
+    .option push
+    .option norelax
+    la gp, __global_pointer$
+    .option pop
+    call main
+    li a7,93
+    ecall
+
+#if ABI_RV64
+.globl abi_raw_arg_u32
+.type abi_raw_arg_u32,@function
+abi_raw_arg_u32:
+    /* Return full incoming physical a0 bit pattern unchanged. */
+    ret
+
+.globl abi_raw_stack_u32
+.type abi_raw_stack_u32,@function
+abi_raw_stack_u32:
+    /* Eight preceding unsigned-long arguments occupy a0..a7. */
+    ld a0,0(sp)
+    ret
+
+.globl abi_raw_call_ret_u32
+.type abi_raw_call_ret_u32,@function
+abi_raw_call_ret_u32:
+    addi sp,sp,-16
+    sd ra,8(sp)
+    call minic_ret_u32
+    ld ra,8(sp)
+    addi sp,sp,16
+    /* Return MiniC's untouched raw unsigned-i32 a0 as unsigned long. */
+    ret
+#endif
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/riscv_abi_register_boundary.c"}
+/* RV32/RV64 native C->Core->Machine psABI scalar register differential.
+ * Cross-compile this exact file with both GNU C and MiniC. */
+#if ABI_RV64
+extern unsigned long abi_raw_arg_u32(unsigned int);
+extern unsigned long abi_raw_stack_u32(
+    unsigned long, unsigned long, unsigned long, unsigned long,
+    unsigned long, unsigned long, unsigned long, unsigned long,
+    unsigned int);
+
+unsigned long minic_caller_arg_u32(void) {
+    unsigned int value = 0x80000000U;
+    return abi_raw_arg_u32(value);
+}
+unsigned long minic_caller_stack_u32(void) {
+    unsigned int value = 0x80000000U;
+    return abi_raw_stack_u32(1UL, 2UL, 3UL, 4UL,
+        5UL, 6UL, 7UL, 8UL, value);
+}
+unsigned int minic_ret_u32(void) {
+    return 0x80000000U;
+}
+unsigned long minic_callee_convert_u32(unsigned int value) {
+    /* GNU caller supplies sign-extended a0; Core must canonicalize
+     * unsigned 32-bit values to zero-extended 64-bit C semantics. */
+    return (unsigned long)value;
+}
+#endif
+
+int minic_asm_signed_char(void) {
+    signed char value = -2;
+    __asm__ volatile ("srai %0,%0,1" : "+r"(value));
+    return value == -1;
+}
+int minic_asm_signed_short(void) {
+    signed short value = -2;
+    __asm__ volatile ("srai %0,%0,1" : "+r"(value));
+    return value == -1;
+}
+int minic_asm_unsigned_char(void) {
+    unsigned char value = 0xfeU;
+    /* QImode "+r" leaves upper GPR bits unspecified in GNU; test
+     * only the defined low 8 bits of the inout value. */
+    __asm__ volatile ("addi %0,%0,1" : "+r"(value));
+    return value == 0xffU;
+}
+int minic_asm_unsigned_short(void) {
+    unsigned short value = 0xfffeU;
+    /* HImode "+r" likewise makes no promise about upper GPR bits. */
+    __asm__ volatile ("addi %0,%0,1" : "+r"(value));
+    return value == 0xffffU;
+}
+#if ABI_RV64
+int minic_asm_unsigned32_readwrite(void) {
+    unsigned int value = 0x80000000U;
+    __asm__ volatile ("srai %0,%0,32" : "+r"(value));
+    return value == 0xffffffffU;
+}
+int minic_asm_unsigned32_input(void) {
+    unsigned int value = 0x80000000U;
+    unsigned long output;
+    __asm__ volatile ("srai %0,%1,32" : "=r"(output) : "r"(value));
+    return output == ~0UL;
+}
+int minic_asm_unsigned32_mixed(void) {
+    unsigned int value = 0x80000000U;
+    unsigned long output;
+    __asm__ volatile ("srai %0,%3,32" : "=&r"(output)
+                      : "r"(value), "r"(value), "r"(value));
+    return output == ~0UL;
+}
+int minic_asm_unsigned32_mixed_readwrite(void) {
+    unsigned int value = 0x80000000U;
+    __asm__ volatile ("srai %0,%0,32" : "+r"(value)
+                      : "r"(value), "r"(value));
+    return value == 0xffffffffU;
+}
+#endif
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/riscv_abi_register_boundary_driver.c"}
+/* Independent GNU C driver: every assertion is a guest exit code. */
+extern int minic_asm_signed_char(void);
+extern int minic_asm_signed_short(void);
+extern int minic_asm_unsigned_char(void);
+extern int minic_asm_unsigned_short(void);
+#if ABI_RV64
+extern unsigned long minic_caller_arg_u32(void);
+extern unsigned long minic_caller_stack_u32(void);
+extern unsigned long abi_raw_call_ret_u32(void);
+extern unsigned long minic_callee_convert_u32(unsigned int);
+extern int minic_asm_unsigned32_readwrite(void);
+extern int minic_asm_unsigned32_input(void);
+extern int minic_asm_unsigned32_mixed(void);
+extern int minic_asm_unsigned32_mixed_readwrite(void);
+#endif
+int main(void) {
+    if (minic_asm_signed_char() != 1) return 11;
+    if (minic_asm_signed_short() != 1) return 12;
+    if (minic_asm_unsigned_char() != 1) return 13;
+    if (minic_asm_unsigned_short() != 1) return 14;
+#if ABI_RV64
+    if (minic_caller_arg_u32() != 0xffffffff80000000UL) return 21;
+    if (minic_caller_stack_u32() != 0xffffffff80000000UL) return 22;
+    if (abi_raw_call_ret_u32() != 0xffffffff80000000UL) return 23;
+    if (minic_callee_convert_u32(0x80000000U) != 0x80000000UL) return 24;
+    if (minic_asm_unsigned32_readwrite() != 1) return 31;
+    if (minic_asm_unsigned32_input() != 1) return 32;
+    if (minic_asm_unsigned32_mixed() != 1) return 33;
+    if (minic_asm_unsigned32_mixed_readwrite() != 1) return 34;
+#endif
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/riscv_adjacent_private_stack_forward.c"}
+/* Exercise private Core SSA spills and intervening side-effect barriers. */
+long mini_stack_forward_chain(long a, long b, long c) {
+    long first = a + b;
+    long second = first + c;
+    return second + first;
+}
+
+long mini_stack_forward_call(long a, long b, long (*f)(long)) {
+    long first = a + b;
+    return f(first) + first;
+}
+
+long mini_stack_forward_asm(long a, long b) {
+    long first = a + b;
+    __asm__ __volatile__("nop" ::: "memory");
+    return first + b;
+}
+
+long mini_stack_forward_branch(long a, long b, int choose) {
+    long first = a + b;
+    if (choose) return first + b;
+    return first + a;
+}
+
+/* A large private frame exercises the 12-bit displacement expansion path. */
+long mini_stack_forward_large(long a, long b) {
+    volatile long pad[640];
+    pad[0] = a;
+    pad[639] = b;
+    return pad[0] + pad[639] + a + b;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/riscv_adjacent_private_stack_forward_driver.c"}
+/* Freestanding test driver: GCC emits only the harness, MiniC emits cases. */
+extern long mini_stack_forward_chain(long, long, long);
+extern long mini_stack_forward_call(long, long, long (*)(long));
+extern long mini_stack_forward_asm(long, long);
+extern long mini_stack_forward_branch(long, long, int);
+extern long mini_stack_forward_large(long, long);
+
+static long times_three(long value) { return value * 3; }
+
+int mini_stack_forward_test_main(void) {
+    if (mini_stack_forward_chain(-17, 9, 4) != -12) return 11;
+    if (mini_stack_forward_chain(100, -7, 20) != 206) return 12;
+    if (mini_stack_forward_call(-17, 9, times_three) != -32) return 13;
+    if (mini_stack_forward_call(100, -7, times_three) != 372) return 14;
+    if (mini_stack_forward_asm(-17, 9) != 1) return 15;
+    if (mini_stack_forward_branch(-17, 9, 1) != 1) return 16;
+    if (mini_stack_forward_branch(-17, 9, 0) != -25) return 17;
+    if (mini_stack_forward_large(-17, 9) != -16) return 18;
+    if (mini_stack_forward_large(100, -7) != 186) return 19;
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/riscv_adjacent_private_stack_forward_start.S"}
+    .text
+    .globl _start
+_start:
+    call mini_stack_forward_test_main
+    li a7, 93
+    ecall
+1:  j 1b
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/riscv_aligned_payload_memory.c"}
+/* Statically proven Core local address alignment may select integer word
+ * payload transfers even under RV32I/RV64I's soft-float ABI. A pointer
+ * parameter and a GNU packed field do not carry that proof. */
+struct __attribute__((packed)) PackedDouble {
+    unsigned char tag;
+    double payload;
+};
+
+__attribute__((noinline)) double aligned_local_payload(double incoming) {
+    double local = incoming;
+    return local;
+}
+
+__attribute__((noinline)) double unknown_pointer_payload(const double *p) {
+    return *p;
+}
+
+__attribute__((noinline)) double packed_field_payload(
+    const struct PackedDouble *p) {
+    return p->payload;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/riscv_extended_zero_output_implicit_volatile.c"}
+/* Original Linux RISC-V TLB flush shape: GNU extended asm with zero outputs
+ * is implicitly volatile even if it has inputs and a memory clobber. */
+void local_flush_tlb_implicit(unsigned long asid) {
+    if (asid != ~0UL)
+        asm("sfence.vma x0, %0" : : "r"(asid) : "memory");
+}
+
+void local_flush_tlb_explicit(unsigned long asid) {
+    if (asid != ~0UL)
+        asm volatile("sfence.vma x0, %0" : : "r"(asid) : "memory");
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/riscv_fixed_register_phase_alias.c"}
+/* Real Linux vDSO ecall register family: output a0 may overlap an input
+ * a0 only because =r is written after the asm reads its inputs. */
+#if defined(MINIC_BAD_EARLYCLOBBER)
+long fixed_alias_bad_earlyclobber(long first, long second) {
+    register long in asm("a0") = first;
+    register long other asm("a1") = second;
+    register long result asm("a0");
+    asm volatile("add %0, %1, %2"
+                 : "=&r"(result) : "r"(in), "r"(other) : "memory");
+    return result;
+}
+#elif defined(MINIC_BAD_TWO_INPUTS)
+long fixed_alias_bad_two_inputs(long first, long second) {
+    register long in0 asm("a0") = first;
+    register long in1 asm("a0") = second;
+    register long result asm("a1");
+    asm volatile("add %0, %1, %2"
+                 : "=r"(result) : "r"(in0), "r"(in1) : "memory");
+    return result;
+}
+#else
+long fixed_alias_vdso_like(long first, long second) {
+    register long in0 asm("a0") = first;
+    register long in1 asm("a1") = second;
+    register long result asm("a0");
+    register long nr asm("a7") = 169;
+    asm volatile("add %0, %1, %2 # nr=%3"
+                 : "=r"(result) : "r"(in0), "r"(in1), "r"(nr)
+                 : "memory");
+    return result;
+}
+#endif
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/riscv_legacy_wide_asm.c"}
+static inline unsigned long rv32_irq_save_legacy(void) {
+    unsigned long flags = 2;
+    __asm__ __volatile__("csrrc %0, 0x100, %1"
+                         : "=r"(flags) : "rK"(flags) : "memory");
+    return flags;
+}
+unsigned long rv32_irq_save_entry(void) { return rv32_irq_save_legacy(); }
+int rv32_put_user_pair(unsigned int *ptr, unsigned long long value) {
+    unsigned long err = 0;
+    __asm__ __volatile__("sw %z3, %1\n\tsw %z4, %2"
+                         : "+r"(err), "=m"(ptr[0]), "=m"(ptr[1])
+                         : "rJ"(value), "rJ"(value >> 32) : "memory");
+    return (int)err;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/riscv_linux_compiletime_assert_guards.c"}
+/* Linux 6.6 jump_label.c and asm-generic/rwonce.h compile-time guards.
+ * The calls are invalid if emitted into GNU objects; valid constants must
+ * remove them while preserving unsupported dynamic assertions. */
+typedef struct {
+    int counter;
+} mini_atomic_t;
+
+extern void __compiletime_assert_304(void)
+    __attribute__((error("BUILD_BUG_ON atomic zero initializer")));
+extern void __compiletime_assert_305(void)
+    __attribute__((error("BUILD_BUG_ON atomic one initializer")));
+extern void __compiletime_assert_329(void)
+    __attribute__((error("unsupported READ_ONCE integer access width")));
+extern void __compiletime_assert_dynamic(void)
+    __attribute__((error("dynamic assertion must not be dropped")));
+extern void __compiletime_assert_effectful(void)
+    __attribute__((error("effectful initializer must not be elided")));
+extern void __compiletime_assert_minmax_signedness(void)
+    __attribute__((error("matching int signedness must be proved")));
+extern void __compiletime_assert_auto_type_qualifiers(void)
+    __attribute__((error("GNU __auto_type dropped the wrong qualifiers")));
+extern void __compiletime_assert_minmax_dynamic(void)
+    __attribute__((error("genuine signedness mismatch must survive")));
+
+void mini_jump_label_init(void) {
+    if (!((int){0} == 0))
+        __compiletime_assert_304();
+    if (!((int){1} == 1))
+        __compiletime_assert_305();
+}
+
+struct mini_pid_namespace {
+    int memfd_noexec_scope;
+    struct mini_pid_namespace *parent;
+};
+
+int mini_pidns_memfd_noexec_scope(struct mini_pid_namespace *ns) {
+    if (!(sizeof(ns->memfd_noexec_scope) == sizeof(char) ||
+          sizeof(ns->memfd_noexec_scope) == sizeof(short) ||
+          sizeof(ns->memfd_noexec_scope) == sizeof(int) ||
+          sizeof(ns->memfd_noexec_scope) == sizeof(long)))
+        __compiletime_assert_329();
+    return *(const volatile int *)&ns->memfd_noexec_scope;
+}
+
+/* Full Linux 6.6 compiler_types.h / asm-generic/rwonce.h statement-expression
+ * placement: the compile-time guard is nested in READ_ONCE inside a for loop.
+ * It must not depend on optimizations of the surrounding runtime predicate. */
+#define MINI_READ_ONCE(x) ({ \
+    do { \
+        if (!(sizeof(x) == sizeof(char) || sizeof(x) == sizeof(short) || \
+              sizeof(x) == sizeof(int) || sizeof(x) == sizeof(long) || \
+              sizeof(x) == sizeof(long long))) \
+            __compiletime_assert_329(); \
+    } while (0); \
+    (*(const volatile __typeof__(x) *)&(x)); \
+})
+
+int mini_pidns_memfd_noexec_scope_loop(struct mini_pid_namespace *ns) {
+    int scope = 0;
+    for (; ns; ns = ns->parent) {
+        int value = MINI_READ_ONCE(ns->memfd_noexec_scope);
+        scope = scope > value ? scope : value;
+    }
+    return scope;
+}
+
+/* Linux minmax.h uses __auto_type on READ_ONCE's const-volatile lvalue,
+ * then compares each local's typeof-derived signedness mask.  GNU C drops
+ * the initializer's top-level cv qualifiers on __auto_type, so the mask is
+ * a pure type fact even though its initializer must still perform a volatile
+ * load.  This is the exact class found in seven Linux 6.6 source owners. */
+#define MINI_SIGN_USE(v) \
+    ((((typeof(v))(-1)) < (typeof(v))1) \
+        ? (2 + (__builtin_constant_p((long long)(v) >= 0) && \
+                ((long long)(v) >= 0))) \
+        : (1 + 2 * (sizeof(v) < 4)))
+#define MINI_MAX_SIGNED(x, y) ({ \
+    __auto_type __x = (x); \
+    __auto_type __y = (y); \
+    do { \
+        if (!(!(!((MINI_SIGN_USE(__x)) & (MINI_SIGN_USE(__y)))))) \
+            __compiletime_assert_minmax_signedness(); \
+    } while (0); \
+    (__x > __y ? __x : __y); \
+})
+
+int mini_pidns_read_once_max(struct mini_pid_namespace *ns) {
+    int scope = 0;
+    for (; ns; ns = ns->parent)
+        scope = MINI_MAX_SIGNED(scope, MINI_READ_ONCE(ns->memfd_noexec_scope));
+    return scope;
+}
+
+int mini_pidns_volatile_max(const volatile int *address, int other) {
+    return MINI_MAX_SIGNED(other, *address);
+}
+
+int mini_pidns_auto_type_qualifiers(const volatile int *address,
+                                    const int *const pointer) {
+    __auto_type number = *address;
+    __auto_type const_number = *pointer;
+    __auto_type deduced_pointer = pointer;
+    if (!__builtin_types_compatible_p(typeof(number), int) ||
+        !__builtin_types_compatible_p(typeof(const_number), int) ||
+        !__builtin_types_compatible_p(typeof(deduced_pointer), const int *))
+        __compiletime_assert_auto_type_qualifiers();
+    return number + const_number + *deduced_pointer;
+}
+
+int mini_pidns_mismatched_signedness(int signed_value, unsigned long unsigned_value) {
+    __auto_type x = signed_value;
+    __auto_type y = unsigned_value;
+    if (!(MINI_SIGN_USE(x) & MINI_SIGN_USE(y)))
+        __compiletime_assert_minmax_dynamic();
+    return x;
+}
+
+void mini_runtime_assert_survives(int runtime_value) {
+    if ((int){runtime_value} != 0)
+        __compiletime_assert_dynamic();
+}
+
+void mini_effectful_assert_survives(int *ptr) {
+    if ((int){++*ptr} != 0)
+        __compiletime_assert_effectful();
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/riscv_mixed_checked_overflow_edge.c"}
+#include <limits.h>
+
+/* GNU checked arithmetic uses mathematical operands rather than the normal
+ * C usual arithmetic conversions. In particular ULONG_MAX+1 must overflow
+ * an int even though its low machine word wraps to zero. */
+static int wide_first(unsigned long wide, int narrow, int *out) {
+    return __builtin_add_overflow(wide, narrow, out);
+}
+static int signed_first(int narrow, unsigned long wide, int *out) {
+    return __builtin_add_overflow(narrow, wide, out);
+}
+static int multiply_signed_first(int signed_operand,
+    unsigned int unsigned_operand, int *out) {
+    return __builtin_mul_overflow(signed_operand, unsigned_operand, out);
+}
+static int multiply_unsigned_first(unsigned int unsigned_operand,
+    int signed_operand, int *out) {
+    return __builtin_mul_overflow(unsigned_operand, signed_operand, out);
+}
+
+int main(void) {
+    int result = 0;
+    if (!wide_first(ULONG_MAX, 1, &result) || result != 0)
+        return 1;
+    if (!signed_first(1, ULONG_MAX, &result) || result != 0)
+        return 2;
+    if (wide_first(0, -1, &result) || result != -1)
+        return 3;
+    if (signed_first(INT_MIN, 0, &result) || result != INT_MIN)
+        return 4;
+    if (wide_first((unsigned long)INT_MAX + 1UL, -1, &result) ||
+        result != INT_MAX)
+        return 5;
+    if (!signed_first(0, (unsigned long)INT_MAX + 1UL, &result) ||
+        result != INT_MIN)
+        return 6;
+    if (multiply_signed_first(-2, 3U, &result) || result != -6)
+        return 7;
+    if (multiply_unsigned_first(3U, -2, &result) || result != -6)
+        return 8;
+    if (!multiply_signed_first(INT_MIN, 2U, &result) || result != 0)
+        return 9;
+    if (multiply_unsigned_first(1U, INT_MIN, &result) || result != INT_MIN)
+        return 10;
+    if (!multiply_unsigned_first(UINT_MAX, -1, &result) || result != 1)
+        return 11;
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/riscv_named_asm_goto.c"}
+/* Exact GNU C asm-goto source ownership: named `i` input and C label.
+ * C ingress binds names once; RV32/RV64 typed MachineIR preserves the source
+ * and proves the real Core CFG branch and physical fallthrough. */
+int rv32_jump_owner(int test) {
+    if (test)
+        __asm__ __volatile__ goto (
+            ".option push\n\t.option norelax\n"
+            "1: nop\n\t"
+            ".pushsection __jump_table,\"aw\"\n\t"
+            ".long 1b - ., %l[enabled] - .\n\t"
+            ".word %[key]\n\t"
+            ".popsection\n\t.option pop"
+            : : [key] "i"(11) : : enabled);
+    return 0;
+enabled:
+    return 1;
+}
+
+/* Two distinct actual labels must retain two independently verifiable
+ * Machine successors. The first three GNU operands are constant facts. */
+int rv32_jump_two_labels(int choice) {
+    if (choice)
+        __asm__ __volatile__ goto (
+            ".pushsection __jump_table,\"aw\"\n\t"
+            ".word %[alpha], %[beta], %[gamma]\n\t"
+            ".long %l[yes] - ., %l[no] - .\n\t"
+            ".popsection"
+            : : [alpha] "i"(3), [beta] "i"(5), [gamma] "i"(7)
+            : : yes, no);
+    return 0;
+yes:
+    return 1;
+no:
+    return 2;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/riscv_named_asm_goto_failures.c"}
+/* GNU names are resolved at C ingress and sealed in Core; `%l[...]` may
+ * reference only a C label, `%[...]` only an input operand. The three
+ * deliberately forged forms must fail before any target text is emitted. */
+#if NAMED_GOTO_FAILURE == 1
+int rv32_named_goto_missing_input(void) {
+    asm volatile goto(".word %[ghost]" : : [key] "i"(11) : : enabled);
+    return 0;
+enabled:
+    return 1;
+}
+#elif NAMED_GOTO_FAILURE == 2
+int rv32_named_goto_wrong_kind(void) {
+    asm volatile goto(".long %l[key] - ." : : [key] "i"(11) : : enabled);
+    return 0;
+enabled:
+    return 1;
+}
+#elif NAMED_GOTO_FAILURE == 3
+int rv32_named_goto_colliding_names(void) {
+    asm volatile goto(".word %[key]\n.long %l[key] - ."
+        : : [key] "i"(11) : : key);
+    return 0;
+key:
+    return 1;
+}
+#else
+#error NAMED_GOTO_FAILURE must select a deliberately invalid form
+#endif
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/riscv_overalign_frame.c"}
+int rv32_overaligned_frame(int p0, int p1, int p2, int p3,
+                           int p4, int p5, int p6, int p7,
+                           int p8, int p9) {
+    char huge[7] __attribute__((aligned(64)));
+    huge[0] = (char)p9;
+    return (int)huge[0] + (int)((unsigned long)huge & 63u) + p8;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/riscv_overaligned_varargs.c"}
+/* MC-014 / MC-015: a GNU variadic callee can realign its local frame to
+ * 64 bytes, but the caller only guarantees 16-byte entry-SP alignment.
+ * The saved a-registers and the caller's stack arguments form ONE linear
+ * va_list regardless of the 0/16/32/48-byte entry-SP alignment phase. */
+struct Aligned64 {
+    unsigned long words[8];
+} __attribute__((aligned(64)));
+
+__attribute__((noinline))
+unsigned long va_frame_one(unsigned long tag, ...) {
+    struct Aligned64 storage;
+    __builtin_va_list ap;
+    unsigned long total = 0;
+    unsigned int i;
+    storage.words[0] = tag;
+    total += (unsigned long)&storage & 63UL;
+    __builtin_va_start(ap, tag);
+    for (i = 0; i < 9U; ++i)
+        total += __builtin_va_arg(ap, unsigned long);
+    __builtin_va_end(ap);
+    return total + storage.words[0];
+}
+
+__attribute__((noinline))
+unsigned long va_frame_seven(
+    unsigned long a0, unsigned long a1, unsigned long a2,
+    unsigned long a3, unsigned long a4, unsigned long a5,
+    unsigned long a6, ...) {
+    struct Aligned64 storage;
+    __builtin_va_list ap;
+    unsigned long total;
+    storage.words[0] = a0 + a1 + a2 + a3 + a4 + a5 + a6;
+    total = (unsigned long)&storage & 63UL;
+    __builtin_va_start(ap, a6);
+    total += __builtin_va_arg(ap, unsigned long);
+    total += __builtin_va_arg(ap, unsigned long);
+    total += __builtin_va_arg(ap, unsigned long);
+    __builtin_va_end(ap);
+    return total + storage.words[0];
+}
+
+__attribute__((noinline))
+unsigned long va_frame_eight(
+    unsigned long a0, unsigned long a1, unsigned long a2,
+    unsigned long a3, unsigned long a4, unsigned long a5,
+    unsigned long a6, unsigned long a7, ...) {
+    struct Aligned64 storage;
+    __builtin_va_list ap;
+    unsigned long total;
+    storage.words[0] = a0 + a1 + a2 + a3 + a4 + a5 + a6 + a7;
+    total = (unsigned long)&storage & 63UL;
+    __builtin_va_start(ap, a7);
+    total += __builtin_va_arg(ap, unsigned long);
+    total += __builtin_va_arg(ap, unsigned long);
+    __builtin_va_end(ap);
+    return total + storage.words[0];
+}
+
+/* The first unnamed word is one caller-stack slot after the ninth named
+ * parameter. RV32 must not accidentally use E or realigned S here. */
+__attribute__((noinline))
+unsigned long va_frame_nine(
+    unsigned long a0, unsigned long a1, unsigned long a2,
+    unsigned long a3, unsigned long a4, unsigned long a5,
+    unsigned long a6, unsigned long a7, unsigned long a8, ...) {
+    struct Aligned64 storage;
+    __builtin_va_list ap;
+    unsigned long total;
+    storage.words[0] = a0 + a1 + a2 + a3 + a4 + a5 + a6 + a7 + a8;
+    total = (unsigned long)&storage & 63UL;
+    __builtin_va_start(ap, a8);
+    total += __builtin_va_arg(ap, unsigned long);
+    total += __builtin_va_arg(ap, unsigned long);
+    __builtin_va_end(ap);
+    return total + storage.words[0];
+}
+
+/* A moving alloca-SP must not change the entry-SP ABI anchor either. */
+__attribute__((noinline))
+unsigned long va_frame_dynamic(unsigned long tag, unsigned long count, ...) {
+    struct Aligned64 storage;
+    unsigned char *scratch = __builtin_alloca(count + 16UL);
+    __builtin_va_list ap;
+    unsigned long total;
+    scratch[0] = (unsigned char)count;
+    storage.words[0] = tag + scratch[0];
+    total = (unsigned long)&storage & 63UL;
+    __builtin_va_start(ap, count);
+    total += __builtin_va_arg(ap, unsigned long);
+    total += __builtin_va_arg(ap, unsigned long);
+    total += __builtin_va_arg(ap, unsigned long);
+    total += __builtin_va_arg(ap, unsigned long);
+    total += __builtin_va_arg(ap, unsigned long);
+    total += __builtin_va_arg(ap, unsigned long);
+    total += __builtin_va_arg(ap, unsigned long);
+    total += __builtin_va_arg(ap, unsigned long);
+    total += __builtin_va_arg(ap, unsigned long);
+    __builtin_va_end(ap);
+    return total + storage.words[0];
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/riscv_packed_overflow_alignment.c"}
+/* Every checked-overflow result_address is a real C lvalue, including a
+ * GNU packed field which can be misaligned relative to its integer width. */
+struct __attribute__((packed)) OverflowPacked {
+    unsigned char lead;
+    signed short narrow;
+    int word;
+    unsigned long long wide;
+};
+
+int packed_overflow_narrow(struct OverflowPacked *p) {
+    return __builtin_add_overflow((short)32767, (short)1, &p->narrow);
+}
+int packed_overflow_add(struct OverflowPacked *p) {
+    return __builtin_add_overflow(2147483647, 1, &p->word);
+}
+int packed_overflow_sub(struct OverflowPacked *p) {
+    return __builtin_sub_overflow(-2147483647 - 1, 1, &p->word);
+}
+int packed_overflow_mul(struct OverflowPacked *p) {
+    return __builtin_mul_overflow(100000, 100000, &p->word);
+}
+int packed_overflow_wide(struct OverflowPacked *p) {
+    return __builtin_mul_overflow(0x100000000ULL, 0x100000000ULL, &p->wide);
+}
+
+int main(void) {
+    struct OverflowPacked p;
+    p.lead = 27;
+    if (!packed_overflow_narrow(&p) || p.narrow != (short)-32768)
+        return 1;
+    if (!packed_overflow_add(&p) || p.word != (-2147483647 - 1))
+        return 2;
+    if (!packed_overflow_sub(&p) || p.word != 2147483647)
+        return 3;
+    if (!packed_overflow_mul(&p) || p.word != 1410065408)
+        return 4;
+    if (!packed_overflow_wide(&p) || p.wide != 0ULL || p.lead != 27)
+        return 5;
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/riscv_packed_structured_asm_alignment.c"}
+/* GNU constraints are source owned; the compiler-generated register ingress
+ * and egress must obey the same packed-lvalue alignment as ordinary C.
+ * Native GNU x86 uses x86 template spelling; RISCV_ASM_PROBE_TARGET selects
+ * the equivalent Base-I source text for RV32I and RV64I -S verification. */
+#ifdef RISCV_ASM_PROBE_TARGET
+#define ASM_INT_INC "addi %0, %0, 1"
+#define ASM_INT_SET "li %0, 17"
+#define ASM_LONG_INC "addi %0, %0, 1"
+#else
+#define ASM_INT_INC "addl $1, %0"
+#define ASM_INT_SET "movl $17, %0"
+#define ASM_LONG_INC "addq $1, %0"
+#endif
+
+struct __attribute__((packed)) PackedAsm {
+    unsigned char prefix;
+    int value;
+    long wide;
+};
+
+void packed_asm_readwrite(struct PackedAsm *p) {
+    __asm__ __volatile__(ASM_INT_INC : "+r"(p->value));
+}
+
+void packed_asm_output(struct PackedAsm *p) {
+    __asm__ __volatile__(ASM_INT_SET : "=r"(p->value));
+}
+
+void packed_asm_wide(struct PackedAsm *p) {
+    __asm__ __volatile__(ASM_LONG_INC : "+r"(p->wide));
+}
+
+/* Six simultaneous operands survive a large-displacement frame reload. The
+ * static frame transport may only use t2, t5 and t6 as hidden temporaries;
+ * those registers must never be allocated as any asm input at this site. */
+void packed_asm_large_frame(long a, long b, long c,
+                            long d, long e, long f) {
+    volatile unsigned char space[8192];
+    space[0] = 1;
+    (void)space[0];
+    __asm__ __volatile__(
+        "# MINIC_PACKED_ASM_INPUTS %0 %1 %2 %3 %4 %5"
+        : : "r"(a), "r"(b), "r"(c), "r"(d), "r"(e), "r"(f)
+        : "memory");
+}
+
+#ifndef RISCV_ASM_PROBE_TARGET
+int main(void) {
+    struct PackedAsm p;
+    p.prefix = 71;
+    p.value = 4;
+    p.wide = 123;
+    packed_asm_readwrite(&p);
+    if (p.value != 5)
+        return 1;
+    packed_asm_output(&p);
+    if (p.value != 17)
+        return 2;
+    packed_asm_wide(&p);
+    if (p.wide != 124 || p.prefix != 71)
+        return 3;
+    packed_asm_large_frame(1, 2, 3, 4, 5, 6);
+    return 0;
+}
+#endif
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/riscv_secondary_label_closure.c"}
+/* A constant-specialized clone can retain an indirect-entry label whose
+ * ordinary entry path was folded away.  This is a genuine Core entry root,
+ * not permission for the backend to forge a branch from its ABI prologue. */
+static inline int secondary_label(unsigned selector) {
+    if (selector == 0U) return 13;
+    if (selector == 1U) goto alternate;
+    return 27;
+alternate:
+    return 41;
+}
+
+int secondary_first(void) { return secondary_label(0U); }
+int secondary_second(void) { return secondary_label(1U); }
+int secondary_third(unsigned selector) {
+    return secondary_label(selector);
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/riscv_source_asm_saved_operands.c"}
+/* The original RISC-V Linux irq.c runs inline ASM that clobbers the whole
+ * caller-saved a/t bank. GCC binds its remaining generic inputs to saved
+ * s-registers; the MiniC RV64 frame must save/restore exactly those. */
+#if defined(MINIC_BAD_NO_AVAILABLE_GPR)
+void cannot_bind_operand(unsigned long first) {
+    __asm__ volatile("xor zero, %0, %0" : : "r"(first) :
+        "a0", "a1", "a2", "a3", "a4", "a5", "a6", "a7",
+        "t0", "t1", "t2", "t3", "t4", "t5", "t6",
+        "s0", "s1", "s2", "s3", "s4", "s5", "s6",
+        "s7", "s8", "s9", "s10", "s11", "memory");
+}
+#else
+unsigned long linux_irq_two_saved_inputs(unsigned long first,
+                                          unsigned long second) {
+    __asm__ volatile("xor zero, %[first], %[second]" :
+        : [first] "r"(first), [second] "r"(second) :
+        "a0", "a1", "a2", "a3", "a4", "a5", "a6", "a7",
+        "t0", "t1", "t2", "t3", "t4", "t5", "t6", "memory");
+    return first + second;
+}
+#endif
+@@@ end

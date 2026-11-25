@@ -1,0 +1,112 @@
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_long_char.c"}
+int main(void)
+{
+    unsigned long char value = 0;
+    return value;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_long_long.c"}
+int main(void)
+{
+    long long value = 0;
+    return (int)value;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/long_double_binary128_tail.c"}
+/* Between x87's 64 and IEEE binary128's 113 significant bits. This check
+ * deliberately runs only on a target whose long double is binary128. */
+int main(void) {
+    volatile long double value = 1.000000000000000000000000000000001L;
+    volatile long double one = 1.0L;
+    return value != one ? 42 : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/long_double_declaration_runtime.c"}
+typedef int signed_word_t __attribute__((__mode__(__word__)));
+typedef unsigned int unsigned_word_t __attribute__((__mode__(__word__)));
+
+extern double ld_probe_a(double, long double);
+extern double ld_probe_b(double, double long);
+
+_Static_assert(sizeof(long double) == 16, "RV64 long double size");
+_Static_assert(_Alignof(long double) == 16, "RV64 long double alignment");
+_Static_assert(sizeof(signed_word_t) == 8, "RV64 signed word mode size");
+_Static_assert(sizeof(unsigned_word_t) == 8, "RV64 unsigned word mode size");
+
+int main(void) {
+    signed_word_t s = -1;
+    unsigned_word_t u = 1;
+    return (s < 0 && u == 1) ? 0 : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/long_double_literal_precision.c"}
+/* The decimal tail is outside binary64 but inside x87 extended precision.
+ * The final long binary128 literal also exercises the shared 113-bit path
+ * on four non-x86 targets even though this harness executes on x86 only. */
+_Static_assert(sizeof(long double) == 16,
+               "supported Linux target long double uses 16-byte storage");
+
+int main(void) {
+    volatile long double decimal_tail = 1.0000000000000001L;
+    volatile long double hex_ulp = 0x1.0000000000000002p0L;
+    volatile long double hex_half_ulp = 0x1.0000000000000001p0L;
+    volatile long double x87_min_subnormal = 0x1p-16445L;
+    volatile long double quad_tail = 1.000000000000000000000000000000001L;
+    volatile double hex_double = 0x1.8p+1;
+    volatile float hex_float = 0x1.2p+2f;
+    volatile double hex_leading_dot = 0x.8p+2;
+    (void)quad_tail;
+    /* Equality isolates literal precision from the separate existing x87
+     * relational-helper ordering bug (even 2.0L > 1.0L currently fails). */
+    if (decimal_tail == 1.0L) return 1;
+    if (hex_ulp == 1.0L) return 2;
+    if (hex_half_ulp != 1.0L) return 3;
+    if (x87_min_subnormal == 0.0L) return 4;
+    if (hex_double != 3.0 || hex_float != 4.5f ||
+        hex_leading_dot != 2.0) return 5;
+    return 42;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/long_long_types.c"}
+static long long signed_value = 3LL;
+static unsigned long long unsigned_value = 4ULL;
+
+long long add_long_long(long long left, unsigned int right) {
+    return left + right;
+}
+
+unsigned long long add_unsigned_long_long(unsigned long long left, unsigned long right) {
+    return left + right;
+}
+
+int main(void) {
+    return sizeof(long long) == 8 && sizeof(unsigned long long) == 8 &&
+                   add_long_long(signed_value, 2U) == 5LL &&
+                   add_unsigned_long_long(unsigned_value, 2UL) == 6ULL
+               ? 0
+               : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/long_type_specifiers.c"}
+typedef long signed int signed_long_a;
+typedef signed long signed_long_b;
+typedef unsigned long int unsigned_long_a;
+typedef long unsigned int size_word;
+
+static signed_long_a identity_signed(signed_long_b value)
+{
+    return value;
+}
+
+static unsigned_long_a identity_unsigned(size_word value)
+{
+    return value;
+}
+
+int main(void)
+{
+    signed_long_a left = 3;
+    size_word right = 4;
+    return (int)(identity_signed(left) + identity_unsigned(right));
+}
+@@@ end

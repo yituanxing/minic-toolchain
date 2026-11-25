@@ -1,0 +1,3877 @@
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/core_qualified_record_function_pointer.c"}
+/* Linux EFI and block-layer CoreType ingress contracts, kept free of sysroot.
+ * Distinct source function declarators below have one execution signature;
+ * aligned records and pointer-to-qualified records retain their own layout. */
+typedef struct __attribute__((packed)) Guid {
+    unsigned char bytes[16];
+} Guid;
+typedef Guid EfiGuid __attribute__((aligned(4)));
+
+typedef struct Node Node;
+typedef void DoneCallback(Node *);
+struct Node {
+    DoneCallback *done;
+    const Node *next;
+    EfiGuid guid;
+};
+
+extern int bytes_equal(const void *, const void *, unsigned long);
+
+int guid_compare(EfiGuid left, EfiGuid right) {
+    return bytes_equal(&left, &right, sizeof(EfiGuid));
+}
+
+void guid_copy(EfiGuid *dst, const EfiGuid *src) {
+    *dst = *src;
+}
+
+EfiGuid guid_roundtrip(EfiGuid input) {
+    EfiGuid copy = input;
+    guid_copy(&copy, &input);
+    return copy;
+}
+
+static void on_done(Node *node) {
+    node->done = (DoneCallback *)0;
+}
+
+void wire_node(Node *node) {
+    /* Field type and function-declaration type are imported independently. */
+    node->done = on_done;
+    node->next = node; /* pointer-to-record -> pointer-to-const-record */
+}
+
+void run_node(Node *node) {
+    if (node->done) node->done(node);
+}
+
+/* Nested const on the pointer object must not discard the ABI alignment
+ * of its pointee during C -> Core type import.  These field accesses also
+ * exercise the exact FIELD_ADDRESS Core identity contract. */
+typedef struct AlignedGuidSlot {
+    EfiGuid *pointer;
+} AlignedGuidSlot;
+
+EfiGuid *load_guid_from_const_slot(const AlignedGuidSlot *slot) {
+    return slot->pointer;
+}
+
+typedef struct ReadOnlyGuidSlot {
+    const EfiGuid *const pointer;
+} ReadOnlyGuidSlot;
+
+const EfiGuid *load_const_guid_from_slot(const ReadOnlyGuidSlot *slot) {
+    return slot->pointer;
+}
+
+/* An aligned integer typedef is ABI-relevant on a fixed call signature,
+ * but its storage alignment is not part of the scalar LOAD result. */
+typedef unsigned long long AlignedU64 __attribute__((aligned(16)));
+extern AlignedU64 echo_aligned_u64(AlignedU64 value);
+
+AlignedU64 call_aligned_u64(AlignedU64 input) {
+    AlignedU64 copy = input;
+    return echo_aligned_u64(copy);
+}
+
+/* Linux mpt3sas writes through an aligned integer typedef and then uses
+ * |= on that same field. The storage address retains the ABI alignment,
+ * whereas Core LOAD yields an unaligned scalar SSA value. Exercise both
+ * direct and aggregate-member compound updates across every Target. */
+typedef struct ResponseFrame {
+    AlignedU64 address;
+} ResponseFrame;
+
+unsigned long long update_aligned_response(ResponseFrame *frame,
+                                           unsigned long long high_bits) {
+    frame->address |= high_bits;
+    frame->address += 1ULL;
+    return frame->address;
+}
+
+typedef double AlignedDouble __attribute__((aligned(16)));
+
+double update_aligned_float(AlignedDouble *result, double increment) {
+    *result += increment;
+    return *result;
+}
+
+_Static_assert(!__builtin_types_compatible_p(EfiGuid *, const EfiGuid *),
+               "discarding pointee const is not allowed by C types");
+
+/* These MUST remain different ABI signatures when canonicalizing imported
+ * function types: fixed and variadic are not interchangeable. */
+typedef int FixedFn(int);
+typedef int VariadicFn(int, ...);
+_Static_assert(!__builtin_types_compatible_p(FixedFn *, VariadicFn *),
+               "variadic function pointers must remain different");
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/core_record_call_conditional_subscript.c"}
+/* Regression for CSR machine source select: a record-returning RHS call
+ * must stay single-evaluation when the LHS ternary subscript splits Core CFG.
+ * A 24-byte result exercises the by-value aggregate storage path on LP64. */
+struct Record {
+    unsigned long first;
+    unsigned long second;
+    unsigned long third;
+};
+
+static struct Record bindings[3];
+static unsigned int calls;
+
+static struct Record make_record(unsigned long value) {
+    struct Record result;
+    ++calls;
+    result.first = value;
+    result.second = value + 1UL;
+    result.third = value + 2UL;
+    return result;
+}
+
+static int check(unsigned int form, unsigned long input) {
+    unsigned int destination = form == 1U ? 1U : 2U;
+    unsigned int other = destination == 1U ? 2U : 1U;
+    unsigned int before = calls;
+
+    bindings[other].first = 0UL;
+    bindings[form == 1U ? 1U : 2U] = make_record(input);
+    return calls == before + 1U &&
+           bindings[destination].first == input &&
+           bindings[destination].second == input + 1UL &&
+           bindings[destination].third == input + 2UL &&
+           bindings[other].first == 0UL;
+}
+
+int main(void) {
+    if (!check(1U, 17UL)) return 1;
+    if (!check(2U, 31UL)) return 2;
+    return calls == 2U ? 0 : 3;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/core_record_local_m29.c"}
+typedef unsigned long core_m29_u64;
+typedef unsigned int core_m29_u32;
+
+union CoreM29Union {
+    core_m29_u64 ll;
+    struct {
+        core_m29_u32 low;
+        core_m29_u32 high;
+    } l;
+};
+
+struct CoreM29WideRecord {
+    core_m29_u64 a;
+    core_m29_u64 b;
+    core_m29_u64 c;
+};
+
+static core_m29_u64 core_m29_mul_u32_u32(core_m29_u32 a, core_m29_u32 b) {
+    return (core_m29_u64)a * b;
+}
+
+core_m29_u64 core_m29_union_roundtrip(core_m29_u64 value) {
+    union CoreM29Union u;
+
+    u.ll = value;
+    return u.ll;
+}
+
+core_m29_u32 core_m29_union_low(core_m29_u64 value) {
+    union CoreM29Union u;
+
+    u.ll = value;
+    return u.l.low;
+}
+
+core_m29_u64 core_m29_record_24(core_m29_u64 value) {
+    struct CoreM29WideRecord r;
+
+    r.a = value;
+    r.b = value + 1UL;
+    r.c = value + 2UL;
+    return r.a + r.b + r.c;
+}
+
+core_m29_u64 core_m29_mul_u64_u32_div(core_m29_u64 a,
+                                       core_m29_u32 mul,
+                                       core_m29_u32 divisor) {
+    union CoreM29Union u;
+    union CoreM29Union rl;
+    union CoreM29Union rh;
+
+    u.ll = a;
+    rl.ll = core_m29_mul_u32_u32(u.l.low, mul);
+    rh.ll = core_m29_mul_u32_u32(u.l.high, mul) + rl.l.high;
+    rl.l.high = ({
+        core_m29_u32 base = divisor;
+        core_m29_u32 rem;
+        rem = ((core_m29_u64)rh.ll) % base;
+        rh.ll = ((core_m29_u64)rh.ll) / base;
+        rem;
+    });
+    ({
+        core_m29_u32 base = divisor;
+        core_m29_u32 rem;
+        rem = ((core_m29_u64)rl.ll) % base;
+        rl.ll = ((core_m29_u64)rl.ll) / base;
+        rem;
+    });
+    rl.l.high = rh.l.low;
+    return rl.ll;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/core_record_local_m29_runtime.c"}
+#include <stdio.h>
+
+extern unsigned long core_m29_union_roundtrip(unsigned long);
+extern unsigned int core_m29_union_low(unsigned long);
+extern unsigned long core_m29_record_24(unsigned long);
+extern unsigned long core_m29_mul_u64_u32_div(unsigned long, unsigned int, unsigned int);
+
+int main(void) {
+    static const unsigned long values[] = {
+        0UL,
+        1UL,
+        0x100000002UL,
+        0x123456789abcdef0UL,
+    };
+    static const unsigned int muls[] = {1U, 3U, 17U, 65537U};
+    static const unsigned int divisors[] = {1U, 5U, 97U, 65521U};
+    unsigned int i;
+
+    for (i = 0U; i < 4U; ++i) {
+        unsigned long value = values[i];
+        printf("R %u %lu %u %lu\n",
+               i,
+               core_m29_union_roundtrip(value),
+               core_m29_union_low(value),
+               core_m29_record_24(value));
+        printf("D %u %lu\n",
+               i,
+               core_m29_mul_u64_u32_div(value, muls[i], divisors[i]));
+    }
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/core_reentry_policy_runtime.c"}
+/* CFG pruning must distinguish an external source edge from an internal edge
+ * that disappears with its discarded block. Case labels are dispatch entries
+ * even inside a lexical if(0), independently of an ordinary goto. */
+static int external_jump(void) {
+    goto inside;
+    return 1;
+inside:
+    return 42;
+}
+
+static int internal_jump(void) {
+    if (0) {
+        goto internal;
+internal:
+        return 99;
+    }
+    return 7;
+}
+
+static int dispatched_case(int value) {
+    switch (value) {
+        if (0) {
+        case 3:
+            return 31;
+        }
+        default:
+            return 32;
+    }
+}
+
+int main(void) {
+    if (external_jump() != 42) return 1;
+    if (internal_jump() != 7) return 2;
+    if (dispatched_case(3) != 31) return 3;
+    if (dispatched_case(2) != 32) return 4;
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/core_required_no_fallback.c"}
+static int core_owned_sum9(int a, int b, int c, int d, int e, int f, int g, int h, int i) {
+    return a + b + c + d + e + f + g + h + i;
+}
+
+int core_owned_call9(void) {
+    return core_owned_sum9(1, 2, 3, 4, 5, 6, 7, 8, 9);
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/core_rhs_no_cfg_snapshot.c"}
+/* A non-branching RHS can reuse an already evaluated Core SSA LHS without
+ * creating an extra temporary object. CFG-producing RHS forms still need
+ * their historical cross-block snapshot. Check both paths against GNU C. */
+static volatile int lhs_reads;
+static volatile int rhs_reads;
+static volatile int branch_effects;
+
+__attribute__((noinline)) static int read_left(void)
+{
+    ++lhs_reads;
+    return 11;
+}
+
+__attribute__((noinline)) static int read_right(void)
+{
+    ++rhs_reads;
+    return 7;
+}
+
+static int straightline_rhs(int value, int index, int *array)
+{
+    return read_left() + ((array[index] ^ value) & 63);
+}
+
+static int conditional_rhs(int value, int choose)
+{
+    return value + (choose ? (++branch_effects + 3) : (branch_effects + 5));
+}
+
+static int shortcircuit_rhs(int value, int condition)
+{
+    return value + (condition && ++branch_effects);
+}
+
+static int statement_rhs(int value)
+{
+    return value + ({ int temporary = 6; temporary + 3; });
+}
+
+static int call_rhs(void)
+{
+    return read_left() + read_right();
+}
+
+int main(void)
+{
+    int values[3] = {5, 9, 12};
+    if (straightline_rhs(3, 2, values) != 26 || lhs_reads != 1)
+        return 1;
+    if (conditional_rhs(10, 1) != 14 || branch_effects != 1)
+        return 2;
+    if (conditional_rhs(10, 0) != 16 || branch_effects != 1)
+        return 3;
+    if (shortcircuit_rhs(10, 0) != 10 || branch_effects != 1)
+        return 4;
+    if (shortcircuit_rhs(10, 1) != 11 || branch_effects != 2)
+        return 5;
+    if (statement_rhs(10) != 19)
+        return 6;
+    if (call_rhs() != 18 || lhs_reads != 2 || rhs_reads != 1)
+        return 7;
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/core_rv32_va_record_cursor.c"}
+/* An 8-byte record consumes two RV32 linear va_list slots, not one. */
+typedef __builtin_va_list MiniVaList;
+
+typedef struct {
+    unsigned int low;
+    unsigned int high;
+} Pair32;
+
+typedef struct {
+    unsigned long long value;
+} WideAlign;
+
+static unsigned int check_pair(unsigned int tag, ...) {
+    MiniVaList ap;
+    Pair32 pair;
+    unsigned int tail;
+    __builtin_va_start(ap, tag);
+    pair = __builtin_va_arg(ap, Pair32);
+    tail = __builtin_va_arg(ap, unsigned int);
+    __builtin_va_end(ap);
+    return pair.low == 0x12345678U && pair.high == 0x9abcdef0U &&
+           tail == 0x2468ace0U;
+}
+
+static unsigned int check_aligned(unsigned int tag, ...) {
+    MiniVaList ap;
+    WideAlign wide;
+    unsigned int tail;
+    __builtin_va_start(ap, tag);
+    wide = __builtin_va_arg(ap, WideAlign);
+    tail = __builtin_va_arg(ap, unsigned int);
+    __builtin_va_end(ap);
+    return wide.value == 0x123456789abcdef0ULL && tail == 0x13579bdfU;
+}
+
+int main(void) {
+    Pair32 pair;
+    WideAlign wide;
+    pair.low = 0x12345678U;
+    pair.high = 0x9abcdef0U;
+    wide.value = 0x123456789abcdef0ULL;
+    if (!check_pair(1U, pair, 0x2468ace0U))
+        return 1;
+    if (!check_aligned(2U, wide, 0x13579bdfU))
+        return 2;
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/core_same_global_address_order.c"}
+/* Linux 6.6.143 mm/ksm.c: STABLE_NODE_DUP_HEAD is the address of an
+ * in-object member, not an unknown integer or an unrelated linker symbol. */
+struct list_head {
+    struct list_head *next;
+    struct list_head *prev;
+};
+static struct list_head migrate_nodes;
+static struct list_head unrelated_nodes;
+
+extern void impossible_early_sentinel(void)
+    __attribute__((error("member address must follow object start")));
+extern void impossible_late_sentinel(void)
+    __attribute__((error("member address must precede one-past object")));
+
+int stable_node_guard(void) {
+    if (!(!(((struct list_head *)&migrate_nodes.prev) <= &migrate_nodes)))
+        impossible_early_sentinel();
+    if (!(!(((struct list_head *)&migrate_nodes.prev) >= &migrate_nodes + 1)))
+        impossible_late_sentinel();
+    return 19;
+}
+
+/* Different objects have linker-owned relative addresses.  Never fold this
+ * source-level comparison as if they were a single aggregate. */
+int unrelated_global_order(void) {
+    return &migrate_nodes < &unrelated_nodes;
+}
+
+int main(void) {
+    return stable_node_guard() == 19 ? 0 : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/core_scalar_assignment_implicit_void.c"}
+struct core_m4_list_head {
+    struct core_m4_list_head *next;
+    struct core_m4_list_head *prev;
+};
+
+#define CORE_M4_WRITE_ONCE(x, value)                                                               \
+    do {                                                                                           \
+        *(volatile __typeof__(x) *)&(x) = (value);                                                 \
+    } while (0)
+
+void core_m4_init_list_head(struct core_m4_list_head *list) {
+    CORE_M4_WRITE_ONCE(list->next, list);
+    CORE_M4_WRITE_ONCE(list->prev, list);
+}
+
+void core_m4_pointer_store(const void **slot, const void *value) {
+    *slot = value;
+}
+
+void core_m4_empty_void(void) {}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/core_scalar_assignment_implicit_void_runtime.c"}
+#include <stdio.h>
+
+struct core_m4_list_head {
+    struct core_m4_list_head *next;
+    struct core_m4_list_head *prev;
+};
+
+void core_m4_init_list_head(struct core_m4_list_head *list);
+void core_m4_pointer_store(const void **slot, const void *value);
+void core_m4_empty_void(void);
+
+int main(void) {
+    struct core_m4_list_head head;
+    const void *slot;
+    int value;
+
+    head.next = 0;
+    head.prev = 0;
+    slot = 0;
+    value = 23;
+    core_m4_init_list_head(&head);
+    core_m4_pointer_store(&slot, &value);
+    core_m4_empty_void();
+    (void)printf("%d %d %d\n", head.next == &head, head.prev == &head, slot == &value);
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/core_scalar_comma_qualified_runtime.c"}
+int main(void) {
+    const double source = 3.25;
+    double value = 0.0;
+
+    value = ((void)0, source);
+    if (value != 3.25) {
+        return 1;
+    }
+
+    value = ((void)(value + 1.0), source);
+    return value == 3.25 ? 0 : 2;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/core_scalar_lvalue_bitcast.c"}
+struct CoreBitcastPair {
+    int offset;
+    int value;
+};
+
+void *core_offset_to_ptr(const int *offset) {
+    return (void *)((unsigned long)offset + *offset);
+}
+
+int core_pointer_read(const int *value) {
+    return *value;
+}
+
+int core_member_read(struct CoreBitcastPair *pair) {
+    return pair->value;
+}
+
+unsigned long core_pointer_bits(const void *value) {
+    return (unsigned long)value;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/core_scalar_lvalue_bitcast_runtime.c"}
+#include <stdio.h>
+
+struct CoreBitcastPair {
+    int offset;
+    int value;
+};
+
+void *core_offset_to_ptr(const int *offset);
+int core_pointer_read(const int *value);
+int core_member_read(struct CoreBitcastPair *pair);
+unsigned long core_pointer_bits(const void *value);
+
+int main(void) {
+    struct CoreBitcastPair pair;
+    void *resolved;
+    int direct;
+    int member;
+    unsigned long bits;
+
+    pair.offset = (int)((char *)&pair.value - (char *)&pair.offset);
+    pair.value = 73;
+    resolved = core_offset_to_ptr(&pair.offset);
+    direct = core_pointer_read(&pair.value);
+    member = core_member_read(&pair);
+    bits = core_pointer_bits(&pair.value);
+    printf("%d %d %d %d\n",
+           resolved == (void *)&pair.value,
+           direct,
+           member,
+           bits == (unsigned long)&pair.value);
+    return resolved == (void *)&pair.value && direct == 73 && member == 73 &&
+                   bits == (unsigned long)&pair.value
+               ? 0
+               : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/core_scalar_not_equal.c"}
+struct core_m13_node {
+    struct core_m13_node *next;
+    struct core_m13_node *prev;
+};
+
+int core_m13_integer_not_equal(int left, int right) {
+    return left != right;
+}
+
+int core_m13_pointer_not_equal(int *left, int *right) {
+    return left != right;
+}
+
+int core_m13_member_pointer_not_equal(struct core_m13_node *node, struct core_m13_node *other) {
+    return node->next != other;
+}
+
+int core_m13_list_condition(struct core_m13_node *new_node,
+                            struct core_m13_node *prev,
+                            struct core_m13_node *next) {
+    if (__builtin_expect(
+            !!(next->prev == prev && prev->next == next && new_node != prev && new_node != next),
+            1))
+        return 1;
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/core_scalar_not_equal_runtime.c"}
+#include <stdio.h>
+
+struct core_m13_node {
+    struct core_m13_node *next;
+    struct core_m13_node *prev;
+};
+
+int core_m13_integer_not_equal(int left, int right);
+int core_m13_pointer_not_equal(int *left, int *right);
+int core_m13_member_pointer_not_equal(struct core_m13_node *node, struct core_m13_node *other);
+int core_m13_list_condition(struct core_m13_node *new_node,
+                            struct core_m13_node *prev,
+                            struct core_m13_node *next);
+
+int main(void) {
+    int left = 1;
+    int right = 2;
+    struct core_m13_node prev;
+    struct core_m13_node next;
+    struct core_m13_node new_node;
+
+    prev.next = &next;
+    prev.prev = &prev;
+    next.next = &next;
+    next.prev = &prev;
+    new_node.next = &new_node;
+    new_node.prev = &new_node;
+
+    printf("%d %d %d %d %d %d %d\n",
+           core_m13_integer_not_equal(3, 3),
+           core_m13_integer_not_equal(3, 4),
+           core_m13_pointer_not_equal(&left, &left),
+           core_m13_pointer_not_equal(&left, &right),
+           core_m13_member_pointer_not_equal(&prev, &next),
+           core_m13_member_pointer_not_equal(&prev, &prev),
+           core_m13_list_condition(&new_node, &prev, &next));
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/core_short_circuit_or.c"}
+int core_m9_rhs(void);
+
+int core_m9_short_circuit_or(int left) {
+    if (left || core_m9_rhs())
+        return 7;
+    return 3;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/core_short_circuit_or_runtime.c"}
+#include <stdio.h>
+
+int core_m9_short_circuit_or(int left);
+static int rhs_calls;
+
+int core_m9_rhs(void) {
+    ++rhs_calls;
+    return 0;
+}
+
+int main(void) {
+    int first = core_m9_short_circuit_or(1);
+    int calls_after_true = rhs_calls;
+    int second = core_m9_short_circuit_or(0);
+    printf("%d %d %d %d\n", first, calls_after_true, second, rhs_calls);
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/core_statement_expression.c"}
+struct core_m17_node {
+    struct core_m17_node *next;
+    struct core_m17_node *prev;
+};
+
+int core_m17_scalar_value(int value) {
+    return ({ value; });
+}
+
+struct core_m17_node *core_m17_read_once_shape(const struct core_m17_node *head) {
+    return ({ (*(struct core_m17_node *const volatile *)&(head->next)); });
+}
+
+int core_m17_list_empty(const struct core_m17_node *head) {
+    return ({ (*(struct core_m17_node *const volatile *)&(head->next)); }) == head;
+}
+
+int core_m17_prefix_store(int *value) {
+    return ({
+        *value = 17;
+        *value;
+    });
+}
+
+int core_m17_prefix_call_target(int value) {
+    return value + 3;
+}
+
+int core_m17_prefix_call(int value) {
+    return ({
+        core_m17_prefix_call_target(value);
+        value;
+    });
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/core_statement_expression_runtime.c"}
+#include <stdio.h>
+
+struct core_m17_node {
+    struct core_m17_node *next;
+    struct core_m17_node *prev;
+};
+
+int core_m17_scalar_value(int value);
+struct core_m17_node *core_m17_read_once_shape(const struct core_m17_node *head);
+int core_m17_list_empty(const struct core_m17_node *head);
+int core_m17_prefix_store(int *value);
+int core_m17_prefix_call(int value);
+
+int main(void) {
+    struct core_m17_node head;
+    struct core_m17_node other;
+    int stored = 4;
+
+    head.next = &head;
+    head.prev = &head;
+    other.next = &head;
+    other.prev = &head;
+
+    printf("%d %d %d %d %d %d\n",
+           core_m17_scalar_value(9),
+           core_m17_read_once_shape(&head) == &head,
+           core_m17_list_empty(&head),
+           core_m17_list_empty(&other),
+           core_m17_prefix_store(&stored),
+           core_m17_prefix_call(8));
+    printf("stored=%d\n", stored);
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/core_switch_case_fact_isolation.c"}
+/* Every case is a separate possible switch entry; facts from a case before
+ * it must not be reused when compiling a later independent case entry.
+ * The fallthrough case ensures that an actual predecessor remains valid. */
+static int independent_case(int selector, int initial) {
+    int value = initial;
+    switch (selector) {
+    case 0:
+        value = 1;
+        break;
+    case 1:
+        if (value == 1)
+            return 17;
+        return 23;
+    default:
+        break;
+    }
+    return value;
+}
+
+static int fallthrough_case(int selector, int initial) {
+    int value = initial;
+    switch (selector) {
+    case 0:
+        value = 1;
+        /* fall through */
+    case 1:
+        if (value == 1)
+            return 17;
+        return 23;
+    default:
+        break;
+    }
+    return value;
+}
+
+static int nested_case(int selector, int initial) {
+    int value = initial;
+    switch (selector) {
+        if (selector >= 0) {
+        case 0:
+            value = 1;
+            break;
+        case 1:
+            if (value == 1)
+                return 17;
+            return 23;
+        }
+    }
+    return value;
+}
+
+int main(void) {
+    if (independent_case(0, 0) != 1) return 1;
+    if (independent_case(1, 0) != 23) return 2;
+    if (independent_case(1, 1) != 17) return 3;
+    if (fallthrough_case(0, 0) != 17) return 4;
+    if (fallthrough_case(1, 0) != 23) return 5;
+    if (fallthrough_case(1, 1) != 17) return 6;
+    if (nested_case(0, 0) != 1) return 7;
+    if (nested_case(1, 0) != 23) return 8;
+    if (nested_case(1, 1) != 17) return 9;
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/core_switch_m27.c"}
+int core_m27_switch_simple(int value) {
+    switch (value) {
+    case 1:
+        return 10;
+    case 2:
+    case 3:
+        return 20;
+    default:
+        return 30;
+    }
+}
+
+int core_m27_switch_range(int value) {
+    switch (value) {
+    case 4 ... 7:
+        return 1;
+    default:
+        return 0;
+    }
+}
+
+int core_m27_switch_fallthrough(int value) {
+    int result;
+
+    result = 0;
+    switch (value) {
+    case 1:
+        result = result + 1;
+    case 2:
+        result = result + 2;
+        break;
+    default:
+        result = 9;
+    }
+    return result;
+}
+
+int core_m27_printk_get_level(const char *buffer) {
+    if (buffer[0] == '\001' && buffer[1]) {
+        switch (buffer[1]) {
+        case '0' ... '7':
+        case 'c':
+            return buffer[1];
+        }
+    }
+    return 0;
+}
+
+
+int core_m27_switch_nested_case(int selector, int cond) {
+    int result;
+
+    result = 0;
+    switch (selector) {
+    case 3:
+    case 4:
+    case 5:
+        result = 3;
+        if (cond) {
+    case 0:
+    case 1:
+    case 2:
+            result = result + 10;
+        }
+        break;
+    default:
+        result = 99;
+    }
+    return result;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/core_switch_m27_runtime.c"}
+int core_m27_switch_simple(int value);
+int core_m27_switch_range(int value);
+int core_m27_switch_fallthrough(int value);
+int core_m27_printk_get_level(const char *buffer);
+int core_m27_switch_nested_case(int selector, int cond);
+
+int main(void) {
+    const char level3[] = {'\001', '3', 0};
+    const char levelc[] = {'\001', 'c', 0};
+    const char plain[] = {'x', '3', 0};
+
+    if (core_m27_switch_simple(1) != 10 || core_m27_switch_simple(3) != 20 ||
+        core_m27_switch_simple(9) != 30) {
+        return 1;
+    }
+    if (core_m27_switch_range(4) != 1 || core_m27_switch_range(7) != 1 ||
+        core_m27_switch_range(8) != 0) {
+        return 2;
+    }
+    if (core_m27_switch_fallthrough(1) != 3 || core_m27_switch_fallthrough(2) != 2 ||
+        core_m27_switch_fallthrough(9) != 9) {
+        return 3;
+    }
+    if (core_m27_printk_get_level(level3) != '3' || core_m27_printk_get_level(levelc) != 'c' ||
+        core_m27_printk_get_level(plain) != 0) {
+        return 4;
+    }
+    if (core_m27_switch_nested_case(0, 0) != 10 ||
+        core_m27_switch_nested_case(1, 1) != 10 ||
+        core_m27_switch_nested_case(3, 0) != 3 ||
+        core_m27_switch_nested_case(3, 1) != 13 ||
+        core_m27_switch_nested_case(9, 1) != 99) {
+        return 5;
+    }
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/core_target_constant_fallback.c"}
+struct list_head {
+    struct list_head *next;
+    struct list_head *prev;
+};
+
+unsigned long core_m10_pointer_size(void) {
+    return sizeof(void *);
+}
+
+void core_m10_init_list(struct list_head *list) {
+    do {
+        do {
+            __attribute__((noreturn, error("Unsupported access size for WRITE_ONCE"))) extern void
+            core_m10_compiletime_error_next(void);
+            if (!((sizeof(list->next) == sizeof(char) || sizeof(list->next) == sizeof(short) ||
+                   sizeof(list->next) == sizeof(int) || sizeof(list->next) == sizeof(long)) ||
+                  sizeof(list->next) == sizeof(long long)))
+                core_m10_compiletime_error_next();
+        } while (0);
+        do {
+            *(volatile __typeof__(list->next) *)&(list->next) = list;
+        } while (0);
+    } while (0);
+    do {
+        do {
+            __attribute__((noreturn, error("Unsupported access size for WRITE_ONCE"))) extern void
+            core_m10_compiletime_error_prev(void);
+            if (!((sizeof(list->prev) == sizeof(char) || sizeof(list->prev) == sizeof(short) ||
+                   sizeof(list->prev) == sizeof(int) || sizeof(list->prev) == sizeof(long)) ||
+                  sizeof(list->prev) == sizeof(long long)))
+                core_m10_compiletime_error_prev();
+        } while (0);
+        do {
+            *(volatile __typeof__(list->prev) *)&(list->prev) = list;
+        } while (0);
+    } while (0);
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/core_target_constant_fallback_runtime.c"}
+#include <stdio.h>
+
+struct list_head {
+    struct list_head *next;
+    struct list_head *prev;
+};
+
+unsigned long core_m10_pointer_size(void);
+void core_m10_init_list(struct list_head *list);
+
+void core_m10_compiletime_error_next(void) {
+    puts("BAD-next");
+}
+
+void core_m10_compiletime_error_prev(void) {
+    puts("BAD-prev");
+}
+
+int main(void) {
+    struct list_head list = {0, 0};
+    core_m10_init_list(&list);
+    printf("%lu %d %d\n", core_m10_pointer_size(), list.next == &list, list.prev == &list);
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/probe-core-address-alignment-depth.c"}
+#include "core/address_alignment.h"
+
+#include <stdint.h>
+#include <stdio.h>
+#include <string.h>
+
+/* The former Loong implementation, retained only as an independent unit
+ * oracle during migration. Actual object/global DataLayout root decisions
+ * remain in the machine callback; this verifies Common's exact propagation
+ * and historical recursion budget, not a guessed target ABI. */
+static size_t legacy_loong_alignment(
+    const MinicCoreFunction *fn, MinicCoreValueId value_id,
+    MinicCoreAddressRootAlignment root, void *context, unsigned depth) {
+    const MinicCoreInstruction *origin;
+    size_t base, offset;
+    if (fn == NULL || value_id >= fn->value_count || depth > 16U ||
+        fn->values == NULL || fn->instructions == NULL ||
+        fn->values[value_id].definition >= fn->instruction_count)
+        return 1U;
+    origin = &fn->instructions[fn->values[value_id].definition];
+    if (origin->result != value_id) return 1U;
+    switch (origin->kind) {
+    case MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS:
+    case MINIC_CORE_INSTRUCTION_GLOBAL_ADDRESS:
+        return root(fn, origin, context);
+    case MINIC_CORE_INSTRUCTION_FIELD_ADDRESS:
+        base = legacy_loong_alignment(
+            fn, origin->value.field_address.base, root, context, depth + 1U);
+        offset = origin->value.field_address.byte_offset;
+        break;
+    case MINIC_CORE_INSTRUCTION_POINTER_OFFSET:
+        base = legacy_loong_alignment(
+            fn, origin->value.pointer_offset.base, root, context, depth + 1U);
+        offset = origin->value.pointer_offset.element_size;
+        break;
+    default:
+        return 1U;
+    }
+    while (offset != 0U) {
+        const size_t remainder = base % offset;
+        base = offset;
+        offset = remainder;
+    }
+    return base == 0U ? 1U : base;
+}
+
+static size_t oracle_root(const MinicCoreFunction *fn,
+                          const MinicCoreInstruction *origin, void *context) {
+    (void)fn;
+    (void)context;
+    switch (origin->kind) {
+    case MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS: return 16U;
+    case MINIC_CORE_INSTRUCTION_GLOBAL_ADDRESS: return 8U;
+    default: return 1U;
+    }
+}
+
+int main(void) {
+    MinicCoreFunction fn = {0};
+    MinicCoreValue values[68];
+    MinicCoreInstruction instructions[68];
+    size_t depth;
+    unsigned root;
+    memset(values, 0, sizeof(values));
+    memset(instructions, 0, sizeof(instructions));
+    fn.values = values;
+    fn.instructions = instructions;
+    for (depth = 0U; depth < 68U; ++depth) {
+        values[depth].definition = (MinicCoreInstructionId)depth;
+        instructions[depth].result = (MinicCoreValueId)depth;
+    }
+    for (root = 0U; root < 2U; ++root) {
+        instructions[0].kind = root == 0U
+            ? MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS
+            : MINIC_CORE_INSTRUCTION_GLOBAL_ADDRESS;
+        instructions[0].value.object_id = 0U;
+        for (depth = 0U; depth <= 67U; ++depth) {
+            size_t before, after, default_depth, capped_depth;
+            size_t i;
+            fn.value_count = depth + 1U;
+            fn.instruction_count = depth + 1U;
+            for (i = 1U; i <= depth; ++i) {
+                instructions[i].kind = (i & 1U)
+                    ? MINIC_CORE_INSTRUCTION_FIELD_ADDRESS
+                    : MINIC_CORE_INSTRUCTION_POINTER_OFFSET;
+                if (i & 1U) {
+                    instructions[i].value.field_address.base =
+                        (MinicCoreValueId)(i - 1U);
+                    instructions[i].value.field_address.byte_offset = 8U;
+                } else {
+                    instructions[i].value.pointer_offset.base =
+                        (MinicCoreValueId)(i - 1U);
+                    instructions[i].value.pointer_offset.element_size = 8U;
+                }
+            }
+            before = legacy_loong_alignment(
+                &fn, (MinicCoreValueId)depth, oracle_root, NULL, 0U);
+            after = minic_core_address_known_alignment_bounded(
+                &fn, (MinicCoreValueId)depth, oracle_root, NULL, 16U);
+            default_depth = minic_core_address_known_alignment(
+                &fn, (MinicCoreValueId)depth, oracle_root, NULL);
+            capped_depth = minic_core_address_known_alignment_bounded(
+                &fn, (MinicCoreValueId)depth, oracle_root, NULL, 999U);
+            if (before != after ||
+                capped_depth != default_depth ||
+                (depth <= 16U && default_depth != before) ||
+                (depth == 17U && (after != 1U || default_depth != 8U)) ||
+                (depth >= 65U && default_depth != 1U)) {
+                fprintf(stderr,
+                    "CORE_ALIGNMENT_DIFFERENTIAL_FAIL root=%u depth=%zu "
+                    "legacy=%zu bounded=%zu default=%zu\n",
+                    root, depth, before, after, default_depth);
+                return 1;
+            }
+        }
+    }
+
+    /* Invalid definitions and non-address producers never infer alignment. */
+    fn.value_count = 1U;
+    fn.instruction_count = 1U;
+    instructions[0].kind = MINIC_CORE_INSTRUCTION_PARAMETER;
+    if (minic_core_address_known_alignment_bounded(
+            &fn, 0U, oracle_root, NULL, 16U) != 1U)
+        return 2;
+    instructions[0].kind = MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS;
+    instructions[0].result = MINIC_CORE_VALUE_INVALID;
+    if (minic_core_address_known_alignment_bounded(
+            &fn, 0U, oracle_root, NULL, 16U) != 1U)
+        return 3;
+    instructions[0].result = 0U;
+    values[0].definition = 1U;
+    if (minic_core_address_known_alignment_bounded(
+            &fn, 0U, oracle_root, NULL, 16U) != 1U)
+        return 4;
+
+    puts("MINIC_CORE_ADDRESS_ALIGNMENT_DEPTH=PASS "
+         "loong-legacy=bounded16 default64 roots=object,global depths=0..67");
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/probe-core-block-walk.c"}
+#include "target/common/core_block_walk.h"
+#include <stdio.h>
+
+int main(void) {
+    MinicCoreInstruction instructions[2] = {{0}, {0}};
+    MinicCoreInstructionId ids[] = {0U, 1U};
+    MinicCoreBlock blocks[3] = {{0}, {0}, {0}};
+    MinicCoreFunction fn = {0};
+    MinicCoreBlockWalk walk = {0};
+    const MinicCoreBlock *block = NULL;
+    const MinicCoreInstruction *ins = NULL;
+    MinicCoreInstructionId id = 0U;
+    size_t index = 0U, count = 0U;
+    bool visible[3] = {true, false, true};
+
+    blocks[0].instructions = ids;
+    blocks[0].instruction_count = 2U;
+    fn.blocks = blocks;
+    fn.block_count = 3U;
+    fn.instructions = instructions;
+    fn.instruction_count = 2U;
+
+    minic_core_block_walk_begin(&walk, &fn, NULL);
+    while (minic_core_block_walk_next(&walk, &index, &block)) {
+        if (index != count || block != &blocks[index]) return 1;
+        ++count;
+    }
+    if (count != 3U) return 2;
+    minic_core_block_walk_begin(&walk, &fn, visible);
+    count = 0U;
+    while (minic_core_block_walk_next(&walk, &index, &block)) {
+        if (index != 2U * count || block != &blocks[index]) return 3;
+        ++count;
+    }
+    if (count != 2U) return 4;
+    if (!minic_core_block_instruction_at(
+            &fn, &blocks[0], 1U, &id, &ins) ||
+        id != 1U || ins != &instructions[1]) return 5;
+    ids[1] = 2U;
+    if (minic_core_block_instruction_at(
+            &fn, &blocks[0], 1U, &id, &ins)) return 6;
+    ids[1] = 1U;
+    if (minic_core_block_instruction_at(
+            &fn, &blocks[0], 2U, &id, &ins)) return 7;
+    puts("MINIC_FIVE_TARGET_CORE_BLOCK_WALK=PASS all=3 reachable=2 invalid=2");
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/probe-core-call-convention-intern.c"}
+#include "compiler/c_lower/core_ir_source.h"
+
+#include <stdio.h>
+
+/* Pure Core metadata exercise: no target backend is allowed to infer that
+ * MS_X64 implies SysV machine argument locations. */
+int main(void) {
+    MinicCoreSourceBuilder builder;
+    MinicCoreFunction *fn = &builder.core;
+    MinicCoreCalleeId direct, repeated_direct, distinct_direct;
+    MinicCoreCallSignatureId indirect, repeated_indirect, distinct_indirect;
+    const MinicType scalar = minic_type_int();
+    const MinicFunctionCallingConvention invalid =
+        (MinicFunctionCallingConvention)99;
+
+    minic_core_source_builder_initialize(&builder);
+    if (!minic_core_function_set_signature(
+            &builder, "caller", 6U, scalar, &scalar, 1U) ||
+        builder.source_draft->calling_convention != MINIC_CALLING_CONVENTION_DEFAULT ||
+        !minic_core_function_set_calling_convention(&builder, MINIC_CALLING_CONVENTION_MS_X64) ||
+        builder.source_draft->calling_convention != MINIC_CALLING_CONVENTION_MS_X64 ||
+        minic_core_function_set_calling_convention(&builder, MINIC_CALLING_CONVENTION_DEFAULT) ||
+        minic_core_function_set_calling_convention(&builder, invalid))
+        return 2;
+
+    if (!minic_core_function_add_callee(
+            &builder, "efi_method", 10U, scalar, &scalar, 1U, false,
+            MINIC_CALLING_CONVENTION_MS_X64, &direct) ||
+        !minic_core_function_add_callee(
+            &builder, "efi_method", 10U, scalar, &scalar, 1U, false,
+            MINIC_CALLING_CONVENTION_MS_X64, &repeated_direct) ||
+        direct != repeated_direct || fn->callee_count != 1U ||
+        builder.source_draft->callees[direct].calling_convention !=
+            MINIC_CALLING_CONVENTION_MS_X64)
+        return 3;
+
+    /* Same ELF symbol must never be interned with conflicting ABI metadata. */
+    if (minic_core_function_add_callee(
+            &builder, "efi_method", 10U, scalar, &scalar, 1U, false,
+            MINIC_CALLING_CONVENTION_DEFAULT, &distinct_direct) ||
+        minic_core_function_add_callee(
+            &builder, "efi_method", 10U, scalar, &scalar, 1U, false,
+            invalid, &distinct_direct) ||
+        fn->callee_count != 1U)
+        return 4;
+
+    if (!minic_core_function_add_callee(
+            &builder, "sysv_helper", 11U, scalar, &scalar, 1U, false,
+            MINIC_CALLING_CONVENTION_DEFAULT, &distinct_direct) ||
+        distinct_direct == direct || fn->callee_count != 2U ||
+        builder.source_draft->callees[distinct_direct].calling_convention !=
+            MINIC_CALLING_CONVENTION_DEFAULT)
+        return 5;
+
+    if (!minic_core_function_add_call_signature(
+            &builder, 7U, scalar, &scalar, 1U, false,
+            MINIC_CALLING_CONVENTION_MS_X64, &indirect) ||
+        !minic_core_function_add_call_signature(
+            &builder, 7U, scalar, &scalar, 1U, false,
+            MINIC_CALLING_CONVENTION_MS_X64, &repeated_indirect) ||
+        indirect != repeated_indirect || fn->call_signature_count != 1U ||
+        builder.source_draft->call_signatures[indirect].calling_convention !=
+            MINIC_CALLING_CONVENTION_MS_X64)
+        return 6;
+
+    /* Defensive Core interning checks convention even when a malformed
+     * producer reuses one function-type ID for two ABI signatures. */
+    if (!minic_core_function_add_call_signature(
+            &builder, 7U, scalar, &scalar, 1U, false,
+            MINIC_CALLING_CONVENTION_DEFAULT, &distinct_indirect) ||
+        distinct_indirect == indirect || fn->call_signature_count != 2U ||
+        minic_core_function_add_call_signature(
+            &builder, 7U, scalar, &scalar, 1U, false,
+            invalid, &distinct_indirect))
+        return 7;
+
+    minic_core_source_builder_destroy(&builder);
+    puts("CORE_CALLING_CONVENTION_METADATA=PASS direct indirect conflict invalid");
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/probe-core-call-coretypes.c"}
+#include "target/common/core_call_view.h"
+#include "target/common/core_abi_value_shape.h"
+
+#include <stdio.h>
+#include <string.h>
+
+/* Target-independent type-owned CALL checks: no C type-table/AST lookup. */
+static bool register_type(MinicCoreTypeContext *context, MinicCoreType type,
+                          MinicCoreTypeId *result) {
+    return minic_core_type_register(context, &type, result);
+}
+
+static bool register_signature(MinicCoreTypeContext *context,
+                               MinicCoreTypeId result_type,
+                               const MinicCoreTypeId *parameters, size_t count,
+                               MinicCoreTypeId *result) {
+    MinicCoreType type = {0};
+    type.kind = MINIC_CORE_TYPE_FUNCTION;
+    type.value.function.return_type = result_type;
+    type.value.function.parameters = (MinicCoreTypeId *)parameters;
+    type.value.function.parameter_count = count;
+    return register_type(context, type, result);
+}
+
+/* Call marshaling follows sealed Core scalar layout on every ISA. No C
+ * descriptor can be reached through these public Core ABI records. */
+static bool probe_abi_value_shapes(void) {
+    MinicCoreTypeContext context;
+    MinicCoreFunction function = {0};
+    MinicCoreType type = {0};
+    MinicCoreTypeId id;
+    MinicCoreAbiValueShape shape;
+    minic_core_type_context_initialize(&context);
+    function.type_context = &context;
+    type.kind = MINIC_CORE_TYPE_INTEGER;
+    type.has_layout = true;
+    type.size = 1U;
+    type.alignment = 1U;
+    type.value.integer.bit_width = 8U;
+    type.value.integer.is_bool = true;
+    if (!register_type(&context, type, &id) ||
+        !minic_core_abi_value_shape(&function, id, &shape) ||
+        shape.kind != MINIC_CORE_TYPE_INTEGER || shape.bytes != 1U ||
+        !shape.integer_bool || shape.integer_width != 1U) return false;
+    type.value.integer.bit_width = 16U; /* forged layout */
+    if (!register_type(&context, type, &id) ||
+        minic_core_abi_value_shape(&function, id, &shape)) return false;
+    type.value.integer.bit_width = 128U;
+    type.value.integer.is_bool = false;
+    type.size = 16U;
+    type.alignment = 16U;
+    if (!register_type(&context, type, &id) ||
+        !minic_core_abi_wide_scalar(&function, id)) return false;
+    type.kind = MINIC_CORE_TYPE_POINTER;
+    type.value.pointer.pointee = id;
+    type.size = 4U;
+    type.alignment = 4U;
+    if (!register_type(&context, type, &id) ||
+        !minic_core_abi_value_shape(&function, id, &shape) ||
+        shape.kind != MINIC_CORE_TYPE_POINTER || shape.bytes != 4U) return false;
+    type.kind = MINIC_CORE_TYPE_FLOAT;
+    type.size = 8U;
+    type.alignment = 8U;
+    type.value.floating.format = MINIC_CORE_FLOAT_BINARY64;
+    if (!register_type(&context, type, &id) ||
+        !minic_core_abi_float_format(&function, id, MINIC_CORE_FLOAT_BINARY64) ||
+        minic_core_abi_float_format(&function, id, MINIC_CORE_FLOAT_BINARY32))
+        return false;
+    type.value.floating.format = MINIC_CORE_FLOAT_X87_EXTENDED80; /* wrong size */
+    if (register_type(&context, type, &id)) return false;
+    type.size = 16U;
+    type.alignment = 16U;
+    if (!register_type(&context, type, &id) ||
+        !minic_core_abi_wide_scalar(&function, id)) return false;
+    type.kind = MINIC_CORE_TYPE_RECORD;
+    type.size = 0U;
+    type.alignment = 1U;
+    type.value.record.is_complete = true;
+    if (!register_type(&context, type, &id) ||
+        !minic_core_abi_kind(&function, id, MINIC_CORE_TYPE_RECORD))
+        return false;
+    type.value.record.is_complete = false;
+    if (!register_type(&context, type, &id) ||
+        minic_core_abi_value_shape(&function, id, &shape)) return false;
+    if (minic_core_abi_value_shape(&function, MINIC_CORE_TYPE_INVALID, &shape))
+        return false;
+    function.type_context = NULL;
+    if (minic_core_abi_value_shape(&function, id, &shape)) return false;
+    minic_core_type_context_destroy(&context);
+    return true;
+}
+
+int main(void) {
+    MinicCoreTypeContext context;
+    MinicCoreType type = {0};
+    MinicCoreTypeId integer, record, other_record, signature_type;
+    MinicCoreTypeId direct_type, direct_record, direct_qualified, direct_return;
+    MinicCoreTypeId pointer_type, other_signature, other_pointer;
+    MinicCoreTypeId qualified_record, qualified_pointer;
+    MinicCoreValue values[2];
+    MinicCoreObject objects[2];
+    MinicCoreCallee callee = {0};
+    MinicCoreCallSignature signature = {0};
+    MinicCoreCallArgument argument = {0};
+    MinicCoreInstruction call = {0};
+    MinicCoreCallView view;
+    MinicCoreTypeId actual;
+    MinicCoreFunction function = {0};
+
+    if (!probe_abi_value_shapes()) return 23;
+    minic_core_type_context_initialize(&context);
+    (void)memset(values, 0, sizeof(values));
+    (void)memset(objects, 0, sizeof(objects));
+    type.kind = MINIC_CORE_TYPE_INTEGER;
+    type.has_layout = true;
+    type.size = 4U;
+    type.alignment = 4U;
+    type.value.integer.bit_width = 32U;
+    type.value.integer.is_signed = true;
+    if (!register_type(&context, type, &integer)) return 1;
+
+    (void)memset(&type, 0, sizeof(type));
+    type.kind = MINIC_CORE_TYPE_RECORD;
+    type.has_layout = true;
+    type.size = 4U;
+    type.alignment = 4U;
+    type.value.record.is_complete = true;
+    if (!register_type(&context, type, &record) ||
+        !register_type(&context, type, &other_record) || record == other_record)
+        return 2;
+
+    (void)memset(&type, 0, sizeof(type));
+    type.kind = MINIC_CORE_TYPE_FUNCTION;
+    type.value.function.return_type = integer;
+    type.value.function.parameters = &integer;
+    type.value.function.parameter_count = 1U;
+    if (!register_type(&context, type, &signature_type) ||
+        !register_type(&context, type, &other_signature) ||
+        signature_type == other_signature)
+        return 3;
+
+    (void)memset(&type, 0, sizeof(type));
+    type.kind = MINIC_CORE_TYPE_POINTER;
+    type.has_layout = true;
+    type.size = 8U;
+    type.alignment = 8U;
+    type.value.pointer.pointee = signature_type;
+    if (!register_type(&context, type, &pointer_type)) return 4;
+    type.value.pointer.pointee = other_signature;
+    if (!register_type(&context, type, &other_pointer)) return 5;
+
+    (void)memset(&type, 0, sizeof(type));
+    type.kind = MINIC_CORE_TYPE_ALIGNED;
+    type.has_layout = true;
+    type.size = 4U;
+    type.alignment = 8U;
+    type.has_abi_alignment_override = true;
+    type.value.aligned.base = record;
+    if (!register_type(&context, type, &qualified_record)) return 15;
+    type.size = 8U;
+    type.alignment = 16U;
+    type.value.aligned.base = pointer_type;
+    if (!register_type(&context, type, &qualified_pointer)) return 16;
+
+    if (!register_signature(&context, integer, &integer, 1U, &direct_type) ||
+        !register_signature(&context, integer, &record, 1U, &direct_record) ||
+        !register_signature(&context, integer, &qualified_record, 1U,
+                            &direct_qualified) ||
+        !register_signature(&context, record, NULL, 0U, &direct_return)) return 24;
+
+    function.type_context = &context;
+    function.values = values;
+    function.value_count = 2U;
+    function.objects = objects;
+    function.object_count = 2U;
+    function.callees = &callee;
+    function.callee_count = 1U;
+    function.call_signatures = &signature;
+    function.call_signature_count = 1U;
+    function.call_arguments = &argument;
+    function.call_argument_count = 1U;
+    values[0].core_type_id = integer;
+    values[1].core_type_id = pointer_type;
+    objects[0].core_type_id = record;
+    objects[1].core_type_id = other_record;
+
+    callee.core_function_type_id = direct_type;
+    argument.kind = MINIC_CORE_CALL_ARGUMENT_VALUE;
+    argument.value.value_id = 0U;
+    call.kind = MINIC_CORE_INSTRUCTION_CALL;
+    call.core_type_id = integer;
+    call.result = 0U;
+    call.value.call.callee_id = 0U;
+    call.value.call.argument_count = 1U;
+    call.value.call.result_object = MINIC_CORE_OBJECT_INVALID;
+    if (!minic_core_call_view_build(&function, &call, &view) ||
+        !minic_core_call_view_argument_core_type(&function, &view, 0U, &actual) ||
+        actual != integer || view.core_return_type_id != integer)
+        return 6;
+    call.core_type_id = record;
+    if (minic_core_call_view_build(&function, &call, &view)) return 7;
+    call.core_type_id = integer;
+    callee.core_function_type_id = MINIC_CORE_TYPE_INVALID;
+    if (minic_core_call_view_build(&function, &call, &view)) return 20;
+    callee.core_function_type_id = direct_type;
+    values[0].core_type_id = MINIC_CORE_TYPE_INVALID;
+    if (minic_core_call_view_build(&function, &call, &view)) return 21;
+    values[0].core_type_id = integer;
+
+    /* Record by value: same shape and layout never replaces nominal type. */
+    argument.kind = MINIC_CORE_CALL_ARGUMENT_OBJECT;
+    argument.value.object_id = 0U;
+    callee.core_function_type_id = direct_record;
+    if (!minic_core_call_view_build(&function, &call, &view)) return 8;
+    argument.value.object_id = 1U;
+    if (minic_core_call_view_build(&function, &call, &view)) return 9;
+    argument.value.object_id = 0U;
+    objects[0].core_type_id = qualified_record;
+    if (minic_core_call_view_build(&function, &call, &view)) return 17;
+    callee.core_function_type_id = direct_qualified;
+    if (!minic_core_call_view_build(&function, &call, &view)) return 18;
+    objects[0].core_type_id = record;
+    callee.core_function_type_id = direct_record;
+
+    /* Aggregate return identity and storage form are Core obligations. */
+    callee.core_function_type_id = direct_return;
+    call.value.call.argument_count = 0U;
+    call.core_type_id = record;
+    call.result = MINIC_CORE_VALUE_INVALID;
+    call.value.call.result_object = 0U;
+    if (!minic_core_call_view_build(&function, &call, &view) ||
+        view.return_form != MINIC_CORE_CALL_RETURN_OBJECT)
+        return 10;
+    call.value.call.result_object = 1U;
+    if (minic_core_call_view_build(&function, &call, &view)) return 11;
+
+    signature.core_function_type_id = signature_type;
+    argument.kind = MINIC_CORE_CALL_ARGUMENT_VALUE;
+    argument.value.value_id = 0U;
+    call.kind = MINIC_CORE_INSTRUCTION_INDIRECT_CALL;
+    call.core_type_id = integer;
+    call.result = 0U;
+    call.value.indirect_call.callee = 1U;
+    call.value.indirect_call.signature_id = 0U;
+    call.value.indirect_call.argument_count = 1U;
+    call.value.indirect_call.result_object = MINIC_CORE_OBJECT_INVALID;
+    if (!minic_core_call_view_build(&function, &call, &view) ||
+        view.core_function_type_id != signature_type)
+        return 12;
+    values[1].core_type_id = qualified_pointer;
+    if (!minic_core_call_view_build(&function, &call, &view)) return 19;
+    /* Structurally identical but nominally different function signature. */
+    values[1].core_type_id = other_pointer;
+    if (minic_core_call_view_build(&function, &call, &view)) return 13;
+    values[1].core_type_id = pointer_type;
+    signature.core_function_type_id = MINIC_CORE_TYPE_INVALID;
+    if (minic_core_call_view_build(&function, &call, &view)) return 22;
+    signature.core_function_type_id = signature_type;
+    context.types[signature_type].value.function.parameters[0] = record;
+    if (minic_core_call_view_build(&function, &call, &view)) return 14;
+
+    minic_core_type_context_destroy(&context);
+    puts("MINIC_CORE_CALL_CORETYPE=PASS direct_indirect_nominal_record_return_qualifiers_abi_shapes");
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/probe-core-call-semantics.c"}
+#include "target/common/core_call_view.h"
+
+#include <stdio.h>
+#include <string.h>
+
+/* Common CALL identity is entirely Core-owned, with no C source descriptors
+ * in the public schema. Core CALL admission and call-index ownership can
+ * therefore never depend on nominal C rank or frontend metadata. */
+typedef struct TypeIds {
+    MinicCoreTypeId integer, record, other_record;
+    MinicCoreTypeId function, other_function, function_pointer;
+    MinicCoreTypeId direct_default, direct_record, direct_other_record;
+    MinicCoreTypeId direct_record_result;
+} TypeIds;
+
+static bool register_signature(MinicCoreTypeContext *context,
+    MinicCoreTypeId return_type, MinicCoreTypeId *parameters, size_t count,
+    MinicCoreTypeId *out) {
+    MinicCoreType type = {0};
+    type.kind = MINIC_CORE_TYPE_FUNCTION;
+    type.value.function.return_type = return_type;
+    type.value.function.parameters = parameters;
+    type.value.function.parameter_count = count;
+    return minic_core_type_register(context, &type, out);
+}
+
+static bool register_types(MinicCoreTypeContext *context, TypeIds *ids) {
+    MinicCoreType type = {0};
+    minic_core_type_context_initialize(context);
+    type.kind = MINIC_CORE_TYPE_INTEGER;
+    type.has_layout = true;
+    type.size = 4U;
+    type.alignment = 4U;
+    type.value.integer.bit_width = 32U;
+    type.value.integer.is_signed = true;
+    if (!minic_core_type_register(context, &type, &ids->integer)) return false;
+    (void)memset(&type, 0, sizeof(type));
+    type.kind = MINIC_CORE_TYPE_RECORD;
+    type.has_layout = true;
+    type.size = 4U;
+    type.alignment = 4U;
+    type.value.record.is_complete = true;
+    if (!minic_core_type_register(context, &type, &ids->record) ||
+        !minic_core_type_register(context, &type, &ids->other_record)) return false;
+    (void)memset(&type, 0, sizeof(type));
+    type.kind = MINIC_CORE_TYPE_FUNCTION;
+    type.value.function.return_type = ids->integer;
+    type.value.function.parameters = &ids->integer;
+    type.value.function.parameter_count = 1U;
+    type.value.function.calling_convention = MINIC_CALLING_CONVENTION_MS_X64;
+    if (!minic_core_type_register(context, &type, &ids->function) ||
+        !minic_core_type_register(context, &type, &ids->other_function)) return false;
+    (void)memset(&type, 0, sizeof(type));
+    type.kind = MINIC_CORE_TYPE_POINTER;
+    type.has_layout = true;
+    type.size = 8U;
+    type.alignment = 8U;
+    type.value.pointer.pointee = ids->function;
+    return minic_core_type_register(context, &type, &ids->function_pointer) &&
+        register_signature(context, ids->integer, &ids->integer, 1U,
+                           &ids->direct_default) &&
+        register_signature(context, ids->integer, &ids->record, 1U,
+                           &ids->direct_record) &&
+        register_signature(context, ids->integer, &ids->other_record, 1U,
+                           &ids->direct_other_record) &&
+        register_signature(context, ids->record, NULL, 0U,
+                           &ids->direct_record_result);
+}
+
+#define CHECK(expr, code) do { \
+    if (!(expr)) { \
+        (void)fprintf(stderr, "MINIC_CORE_CALL_SEMANTICS=FAIL code=%d line=%d\n", \
+                      (code), __LINE__); \
+        return (code); \
+    } \
+} while (0)
+
+int main(void) {
+    MinicCoreTypeContext context;
+    TypeIds types = {0};
+    MinicCoreFunction fn = {0};
+    MinicCoreCallee callee = {0};
+    MinicCoreCallSignature signature = {0};
+    MinicCoreCallArgument argument = {0};
+    MinicCoreInstruction call = {0};
+    MinicCoreValue values[2] = {0};
+    MinicCoreObject object = {0};
+    MinicCoreCallView view;
+    MinicCoreTypeId actual;
+
+    CHECK(register_types(&context, &types), 2);
+    fn.type_context = &context;
+    fn.values = values; fn.value_count = 2U;
+    fn.objects = &object; fn.object_count = 1U;
+    fn.callees = &callee; fn.callee_count = 1U;
+    fn.call_arguments = &argument; fn.call_argument_count = 1U;
+    values[0].core_type_id = types.integer;
+    values[1].core_type_id = types.function_pointer;
+    object.core_type_id = types.record;
+    callee.name = "probe";
+    callee.name_length = 5U;
+    callee.core_function_type_id = types.direct_default;
+    argument.kind = MINIC_CORE_CALL_ARGUMENT_VALUE;
+    argument.value.value_id = 0U;
+    call.kind = MINIC_CORE_INSTRUCTION_CALL;
+    call.core_type_id = types.integer;
+    call.result = 0U;
+    call.value.call.callee_id = 0U;
+    call.value.call.argument_count = 1U;
+    call.value.call.result_object = MINIC_CORE_OBJECT_INVALID;
+
+    CHECK(minic_core_call_view_build(&fn, &call, &view) &&
+          view.return_form == MINIC_CORE_CALL_RETURN_VALUE &&
+          view.calling_convention == MINIC_CALLING_CONVENTION_DEFAULT &&
+          minic_core_call_view_argument_core_type(&fn, &view, 0U, &actual) &&
+          actual == types.integer, 3);
+    callee.core_function_type_id = types.function;
+    CHECK(minic_core_call_view_build(&fn, &call, &view) &&
+          view.calling_convention == MINIC_CALLING_CONVENTION_MS_X64, 28);
+    context.types[types.function].value.function.calling_convention =
+        (MinicFunctionCallingConvention)99;
+    CHECK(!minic_core_call_view_build(&fn, &call, &view), 29);
+    context.types[types.function].value.function.calling_convention =
+        MINIC_CALLING_CONVENTION_MS_X64;
+    callee.core_function_type_id = types.direct_default;
+
+    call.core_type_id = types.record;
+    CHECK(!minic_core_call_view_build(&fn, &call, &view), 4);
+    call.core_type_id = types.integer;
+    call.result = MINIC_CORE_VALUE_INVALID;
+    CHECK(!minic_core_call_view_build(&fn, &call, &view), 5);
+    call.result = 0U;
+    argument.value.value_id = 999U;
+    CHECK(!minic_core_call_view_build(&fn, &call, &view), 6);
+    argument.kind = MINIC_CORE_CALL_ARGUMENT_OBJECT;
+    argument.value.object_id = 0U;
+    CHECK(!minic_core_call_view_build(&fn, &call, &view), 7);
+
+    callee.core_function_type_id = types.direct_record;
+    CHECK(minic_core_call_view_build(&fn, &call, &view) &&
+          minic_core_call_view_argument_core_type(&fn, &view, 0U, &actual) &&
+          actual == types.record, 8);
+    callee.core_function_type_id = types.direct_other_record;
+    CHECK(!minic_core_call_view_build(&fn, &call, &view), 9);
+    callee.core_function_type_id = types.direct_record_result;
+    call.value.call.argument_count = 0U;
+    call.core_type_id = types.record;
+    call.result = MINIC_CORE_VALUE_INVALID;
+    call.value.call.result_object = 0U;
+    CHECK(minic_core_call_view_build(&fn, &call, &view) &&
+          view.return_form == MINIC_CORE_CALL_RETURN_OBJECT, 10);
+    call.value.call.result_object = MINIC_CORE_OBJECT_INVALID;
+    CHECK(!minic_core_call_view_build(&fn, &call, &view), 11);
+    call.value.call.result_object = 0U;
+    object.core_type_id = types.other_record;
+    CHECK(!minic_core_call_view_build(&fn, &call, &view), 12);
+    object.core_type_id = types.record;
+
+    /* Empty or invalid Core type denotes neither scalar nor record return.
+     * Use a real Core void type instead. */
+    {
+        MinicCoreType type = {0};
+        MinicCoreTypeId void_id, void_function;
+        type.kind = MINIC_CORE_TYPE_VOID;
+        CHECK(minic_core_type_register(&context, &type, &void_id), 31);
+        CHECK(register_signature(&context, void_id, NULL, 0U, &void_function), 32);
+        callee.core_function_type_id = void_function;
+        call.core_type_id = void_id;
+        call.value.call.result_object = MINIC_CORE_OBJECT_INVALID;
+        CHECK(minic_core_call_view_build(&fn, &call, &view) &&
+              view.return_form == MINIC_CORE_CALL_RETURN_VOID, 13);
+        call.result = 0U;
+        CHECK(!minic_core_call_view_build(&fn, &call, &view), 14);
+    }
+    call.result = MINIC_CORE_VALUE_INVALID;
+
+    signature.core_function_type_id = types.function;
+    fn.call_signatures = &signature;
+    fn.call_signature_count = 1U;
+    argument.kind = MINIC_CORE_CALL_ARGUMENT_VALUE;
+    argument.value.value_id = 0U;
+    call.kind = MINIC_CORE_INSTRUCTION_INDIRECT_CALL;
+    call.core_type_id = types.integer;
+    call.result = 0U;
+    call.value.indirect_call.callee = 1U;
+    call.value.indirect_call.signature_id = 0U;
+    call.value.indirect_call.argument_count = 1U;
+    call.value.indirect_call.result_object = MINIC_CORE_OBJECT_INVALID;
+    CHECK(minic_core_call_view_build(&fn, &call, &view) &&
+          view.signature == &signature &&
+          view.calling_convention == MINIC_CALLING_CONVENTION_MS_X64 &&
+          view.function_pointer == 1U, 15);
+    context.types[types.function].value.function.calling_convention =
+        (MinicFunctionCallingConvention)99;
+    CHECK(!minic_core_call_view_build(&fn, &call, &view), 30);
+    context.types[types.function].value.function.calling_convention =
+        MINIC_CALLING_CONVENTION_MS_X64;
+
+    /* The sparse Common CALL index is shared by all five target ABI plans. */
+    {
+        MinicCoreCallIndex index = {0};
+        MinicCoreInstruction ordered[5] = {0};
+        size_t ordinal = SIZE_MAX;
+        const MinicCoreCallView *cached;
+        MinicCoreCallIndexHandle owned = {0}, borrowed = {0};
+        MinicCoreCallIndex invalid = {0};
+
+        ordered[1] = call;
+        ordered[4] = call;
+        ordered[4].kind = MINIC_CORE_INSTRUCTION_CALL;
+        ordered[4].value.call.callee_id = 0U;
+        ordered[4].value.call.argument_count = 1U;
+        ordered[4].value.call.result_object = MINIC_CORE_OBJECT_INVALID;
+        callee.core_function_type_id = types.direct_default;
+        fn.instructions = ordered;
+        fn.instruction_count = 5U;
+        CHECK(minic_core_call_index_build(&fn, 2U, &index) &&
+              index.count == 2U &&
+              minic_core_call_index_find(&index, 0U, &ordinal) == NULL &&
+              minic_core_call_index_find(&index, 3U, &ordinal) == NULL &&
+              minic_core_call_index_find(&index, 1U, NULL) == NULL, 16);
+        cached = minic_core_call_index_find(&index, 1U, &ordinal);
+        CHECK(cached != NULL && ordinal == 0U &&
+              cached->calling_convention == MINIC_CALLING_CONVENTION_MS_X64 &&
+              cached->function_pointer == 1U, 16);
+        cached = minic_core_call_index_find(&index, 4U, &ordinal);
+        CHECK(cached != NULL && ordinal == 1U &&
+              cached->calling_convention == MINIC_CALLING_CONVENTION_DEFAULT &&
+              cached->callee == &callee, 16);
+        minic_core_call_index_destroy(&index);
+        CHECK(index.count == 0U && index.sites == NULL, 17);
+        ordered[1].value.indirect_call.signature_id = 9U;
+        CHECK(!minic_core_call_index_build(&fn, 2U, &index) &&
+              index.sites == NULL && index.count == 0U, 18);
+        ordered[1] = call;
+        CHECK(!minic_core_call_index_build(&fn, 1U, &index), 19);
+        minic_core_call_index_destroy(&index);
+        CHECK(minic_core_call_index_handle_prepare(&fn, NULL, &owned) &&
+              owned.index == &owned.owned && owned.owned.count == 2U &&
+              minic_core_call_index_find(owned.index, 4U, &ordinal) != NULL &&
+              ordinal == 1U, 21);
+        CHECK(!minic_core_call_index_handle_prepare(&fn, NULL, &owned), 21);
+        minic_core_call_index_handle_destroy(&owned);
+        CHECK(owned.index == NULL && owned.owned.sites == NULL &&
+              owned.owned.count == 0U, 22);
+        CHECK(minic_core_call_index_build(&fn, 2U, &index) &&
+              minic_core_call_index_handle_prepare(&fn, &index, &borrowed) &&
+              borrowed.index == &index && borrowed.owned.sites == NULL, 23);
+        minic_core_call_index_handle_destroy(&borrowed);
+        CHECK(borrowed.index == NULL && index.count == 2U &&
+              minic_core_call_index_find(&index, 1U, &ordinal) != NULL, 24);
+        minic_core_call_index_destroy(&index);
+        invalid.count = 6U;
+        CHECK(!minic_core_call_index_handle_prepare(&fn, &invalid, &owned), 25);
+        ordered[1].value.indirect_call.signature_id = 9U;
+        CHECK(!minic_core_call_index_handle_prepare(&fn, NULL, &owned) &&
+              owned.index == NULL && owned.owned.sites == NULL &&
+              owned.owned.count == 0U, 26);
+        ordered[1] = call;
+        fn.instruction_count = 0U;
+        CHECK(minic_core_call_index_handle_prepare(&fn, NULL, &owned) &&
+              owned.index == &owned.owned && owned.owned.count == 0U, 27);
+        minic_core_call_index_handle_destroy(&owned);
+        fn.instruction_count = 5U;
+        signature.core_function_type_id = types.other_function;
+        CHECK(!minic_core_call_view_build(&fn, &call, &view), 20);
+    }
+
+    minic_core_type_context_destroy(&context);
+    (void)puts("MINIC_FIVE_TARGET_CALL_SEMANTICS=PASS CoreType_C_free scalar_record_void_indirect malformed_reject index");
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/probe-core-duplicate-object-closure.c"}
+/* Independently constructed Core producer: two Module objects own one
+ * assembler spelling, but a third unrelated static has no live edges. */
+#include "compiler/core_reachability.h"
+
+#include <stdio.h>
+#include <string.h>
+
+int main(void) {
+    MinicCoreModuleGlobal globals[3] = {0};
+    MinicCoreModuleFunctionSymbol function_symbol = {0};
+    MinicCoreGlobal referenced_global = {0};
+    MinicCoreInstruction instruction = {0};
+    MinicCoreInstructionId instruction_id = 0U;
+    MinicCoreBlock block = {0};
+    MinicCoreFunction function = {0};
+    MinicCoreLowerStatus status = MINIC_CORE_LOWER_OK;
+    MinicCoreFunctionSet set = {0};
+
+    globals[0].name = "same_asm_symbol";
+    globals[0].definition_kind = MINIC_CORE_MODULE_DEFINITION_DECLARATION;
+    globals[0].is_internal = false;
+    globals[0].emittable = true;
+    globals[0].owner_function_index = SIZE_MAX;
+
+    globals[1].name = "same_asm_symbol";
+    globals[1].definition_kind = MINIC_CORE_MODULE_DEFINITION_REGULAR;
+    globals[1].is_internal = true;
+    globals[1].emittable = true;
+    globals[1].owner_function_index = SIZE_MAX;
+
+    globals[2].name = "unrelated_dead_static";
+    globals[2].definition_kind = MINIC_CORE_MODULE_DEFINITION_REGULAR;
+    globals[2].is_internal = true;
+    globals[2].emittable = true;
+    globals[2].owner_function_index = SIZE_MAX;
+
+    function_symbol.name = "main";
+    function_symbol.is_defined = true;
+    function_symbol.is_reachability_root = true;
+    function_symbol.alias_target_index = SIZE_MAX;
+    function_symbol.storage_owner_function_index = SIZE_MAX;
+    referenced_global.name = "same_asm_symbol";
+    referenced_global.name_length = strlen(referenced_global.name);
+    instruction.kind = MINIC_CORE_INSTRUCTION_GLOBAL_ADDRESS;
+    instruction.value.global_id = 0U;
+    block.instructions = &instruction_id;
+    block.instruction_count = 1U;
+    function.blocks = &block;
+    function.block_count = 1U;
+    function.instructions = &instruction;
+    function.instruction_count = 1U;
+    function.globals = &referenced_global;
+    function.global_count = 1U;
+    set.functions = &function;
+    set.statuses = &status;
+    set.function_count = 1U;
+    set.module.function_symbols = &function_symbol;
+    set.module.function_count = 1U;
+    set.module.globals = globals;
+    set.module.global_count = 3U;
+
+    if (!minic_core_function_set_close_reachability(&set, false) ||
+        !globals[0].emittable || !globals[1].emittable ||
+        globals[2].emittable) {
+        fputs("CORE_DUPLICATE_OBJECT_RANGE=FAIL\n", stderr);
+        return 1;
+    }
+    puts("CORE_DUPLICATE_OBJECT_RANGE=PASS duplicate_owners=2 unrelated_static=pruned");
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/probe-core-facts-one-pass.c"}
+#include "target/common/core_function_facts.h"
+#include <stdio.h>
+#include <stdlib.h>
+
+int main(void) {
+    MinicCoreInstruction instructions[6] = {
+        {.kind = MINIC_CORE_INSTRUCTION_CALL,
+         .value.call = {.argument_count = 9U}},
+        {.kind = MINIC_CORE_INSTRUCTION_VARIADIC_ARGUMENT_ADDRESS, .result = 2U},
+        {.kind = MINIC_CORE_INSTRUCTION_DYNAMIC_STACK_ALLOC},
+        {.kind = MINIC_CORE_INSTRUCTION_VARIADIC_ARGUMENT_ADDRESS, .result = 7U},
+        {.kind = MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM},
+        {.kind = MINIC_CORE_INSTRUCTION_INDIRECT_CALL,
+         .value.indirect_call = {.argument_count = 4U}},
+    };
+    MinicCoreFunction fn = {0};
+    MinicCoreFunctionFacts facts = {0};
+    MinicCoreValueId *results = NULL;
+    fn.instructions = instructions;
+    fn.instruction_count = 6U;
+    if (!minic_core_function_facts_analyze_collect(&fn, &facts, &results))
+        return 1;
+    if (facts.direct_call_count != 1U || facts.indirect_call_count != 1U ||
+        facts.max_call_arity != 9U || facts.variadic_address_count != 2U ||
+        !facts.needs_saved_return_address ||
+        !facts.uses_dynamic_stack_alloc || !facts.uses_structured_inline_asm ||
+        facts.variadic_address_results != results || results == NULL ||
+        results[0] != 2U || results[1] != 7U)
+        return 2;
+    free(results);
+    results = NULL;
+    if (!minic_core_function_facts_analyze(&fn, &facts))
+        return 3;
+    if (facts.variadic_address_count != 2U ||
+        facts.variadic_address_results != NULL ||
+        facts.direct_call_count != 1U || facts.indirect_call_count != 1U)
+        return 4;
+    if (!minic_core_function_facts_analyze_collect(&fn, &facts, &results))
+        return 5;
+    /* The caller must not accidentally overwrite an allocated index. */
+    if (minic_core_function_facts_analyze_collect(&fn, &facts, &results))
+        return 6;
+    free(results);
+    puts("MINIC_COMMON_FACTS_SINGLE_PASS=PASS owned_va=2 borrowed_standalone=0");
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/probe-core-floating-shape.c"}
+/* All 17 floating-scalar Core operations use only sealed Core identities;
+ * nominal C ranks and frontend descriptors are absent from Core IR. */
+#include "target/common/core_floating_shape.h"
+#include <stdio.h>
+
+#define REQUIRE(expr) do { if (!(expr)) return __LINE__; } while (0)
+
+static bool register_float(MinicCoreTypeContext *ctx,
+                           MinicCoreFloatFormat format, size_t bytes,
+                           MinicCoreTypeId *id) {
+    MinicCoreType type = {0};
+    type.kind = MINIC_CORE_TYPE_FLOAT;
+    type.has_layout = true;
+    type.size = bytes;
+    type.alignment = bytes;
+    type.value.floating.format = format;
+    return minic_core_type_register(ctx, &type, id);
+}
+
+static bool register_int(MinicCoreTypeContext *ctx, size_t bytes,
+                         bool sign, MinicCoreTypeId *id) {
+    MinicCoreType type = {0};
+    type.kind = MINIC_CORE_TYPE_INTEGER;
+    type.has_layout = true;
+    type.size = bytes;
+    type.alignment = bytes;
+    type.value.integer.bit_width = (unsigned int)(bytes * 8U);
+    type.value.integer.is_signed = sign;
+    return minic_core_type_register(ctx, &type, id);
+}
+
+static int run(void) {
+    MinicCoreTypeContext ctx;
+    MinicCoreTypeId f32, f64, ext, i8, i32, u64, invalid_float, invalid_int;
+    MinicCoreValue values[4] = {0};
+    MinicCoreFunction function = {0};
+    MinicCoreInstruction ins = {0};
+    MinicCoreFloatingShape shape;
+    MinicCoreType malformed = {0};
+    const MinicCoreInstructionKind f32_ops[] = {
+        MINIC_CORE_INSTRUCTION_FLOAT_ADD,
+        MINIC_CORE_INSTRUCTION_FLOAT_SUBTRACT,
+        MINIC_CORE_INSTRUCTION_FLOAT_MULTIPLY,
+        MINIC_CORE_INSTRUCTION_FLOAT_DIVIDE,
+    };
+    const MinicCoreInstructionKind f64_ops[] = {
+        MINIC_CORE_INSTRUCTION_DOUBLE_ADD,
+        MINIC_CORE_INSTRUCTION_DOUBLE_SUBTRACT,
+        MINIC_CORE_INSTRUCTION_DOUBLE_MULTIPLY,
+        MINIC_CORE_INSTRUCTION_DOUBLE_DIVIDE,
+    };
+    const MinicCoreInstructionKind comparisons[] = {
+        MINIC_CORE_INSTRUCTION_DOUBLE_EQUAL,
+        MINIC_CORE_INSTRUCTION_DOUBLE_LESS,
+        MINIC_CORE_INSTRUCTION_DOUBLE_LESS_EQUAL,
+    };
+    size_t i;
+    minic_core_type_context_initialize(&ctx);
+    REQUIRE(register_float(&ctx, MINIC_CORE_FLOAT_BINARY32, 4U, &f32));
+    REQUIRE(register_float(&ctx, MINIC_CORE_FLOAT_BINARY64, 8U, &f64));
+    REQUIRE(register_float(&ctx, MINIC_CORE_FLOAT_BINARY128, 16U, &ext));
+    REQUIRE(register_int(&ctx, 1U, true, &i8));
+    REQUIRE(register_int(&ctx, 4U, true, &i32));
+    REQUIRE(register_int(&ctx, 8U, false, &u64));
+    REQUIRE(!register_float(&ctx, MINIC_CORE_FLOAT_BINARY64, 4U,
+                            &invalid_float));
+    invalid_float = MINIC_CORE_TYPE_INVALID;
+    malformed.kind = MINIC_CORE_TYPE_INTEGER;
+    malformed.has_layout = true;
+    malformed.size = 4U;
+    malformed.alignment = 4U;
+    malformed.value.integer.bit_width = 16U;
+    REQUIRE(minic_core_type_register(&ctx, &malformed, &invalid_int));
+    function.type_context = &ctx;
+    function.values = values;
+    function.value_count = 4U;
+    ins.result = 3U;
+    ins.value.binary.left = 0U;
+    ins.value.binary.right = 1U;
+
+    ins.kind = MINIC_CORE_INSTRUCTION_FLOATING_CONSTANT;
+    values[3].core_type_id = f32;
+    ins.core_type_id = f32;
+    REQUIRE(minic_core_floating_shape(&function, &ins, &shape));
+    values[3].core_type_id = f64;
+    ins.core_type_id = f64;
+    REQUIRE(minic_core_floating_shape(&function, &ins, &shape));
+    values[3].core_type_id = ext;
+    ins.core_type_id = ext;
+    REQUIRE(minic_core_floating_shape(&function, &ins, &shape));
+    values[0].core_type_id = f32;
+    values[1].core_type_id = f32;
+    values[3].core_type_id = f32;
+    ins.core_type_id = f32;
+    for (i = 0U; i < 4U; ++i) {
+        ins.kind = f32_ops[i];
+        REQUIRE(minic_core_floating_shape(&function, &ins, &shape));
+    }
+    values[0].core_type_id = f64;
+    values[1].core_type_id = f64;
+    values[3].core_type_id = f64;
+    ins.core_type_id = f64;
+    for (i = 0U; i < 4U; ++i) {
+        ins.kind = f64_ops[i];
+        REQUIRE(minic_core_floating_shape(&function, &ins, &shape));
+    }
+    values[3].core_type_id = i32;
+    ins.core_type_id = i32;
+    for (i = 0U; i < 3U; ++i) {
+        ins.kind = comparisons[i];
+        REQUIRE(minic_core_floating_shape(&function, &ins, &shape));
+    }
+    ins.kind = MINIC_CORE_INSTRUCTION_DOUBLE_NEGATE;
+    ins.value.operand = 0U;
+    values[3].core_type_id = f64;
+    ins.core_type_id = f64;
+    REQUIRE(minic_core_floating_shape(&function, &ins, &shape));
+
+    ins.kind = MINIC_CORE_INSTRUCTION_INTEGER_TO_DOUBLE;
+    values[0].core_type_id = i8;
+    REQUIRE(minic_core_floating_shape(&function, &ins, &shape));
+    REQUIRE(shape.integer_bytes == 1U && shape.integer_signed);
+    values[0].core_type_id = u64;
+    REQUIRE(minic_core_floating_shape(&function, &ins, &shape));
+    REQUIRE(shape.integer_bytes == 8U && !shape.integer_signed);
+    ins.kind = MINIC_CORE_INSTRUCTION_DOUBLE_TO_INTEGER;
+    values[0].core_type_id = f64;
+    values[3].core_type_id = u64;
+    ins.core_type_id = u64;
+    REQUIRE(minic_core_floating_shape(&function, &ins, &shape));
+    REQUIRE(shape.integer_bytes == 8U && !shape.integer_signed);
+    ins.kind = MINIC_CORE_INSTRUCTION_FLOAT_TO_DOUBLE;
+    values[0].core_type_id = f32;
+    values[3].core_type_id = f64;
+    ins.core_type_id = f64;
+    REQUIRE(minic_core_floating_shape(&function, &ins, &shape));
+    ins.kind = MINIC_CORE_INSTRUCTION_DOUBLE_TO_FLOAT;
+    values[0].core_type_id = f64;
+    values[3].core_type_id = f32;
+    ins.core_type_id = f32;
+    REQUIRE(minic_core_floating_shape(&function, &ins, &shape));
+
+    values[0].core_type_id = invalid_float;
+    REQUIRE(!minic_core_floating_shape(&function, &ins, &shape));
+    values[0].core_type_id = f64;
+    ins.core_type_id = f64;
+    REQUIRE(!minic_core_floating_shape(&function, &ins, &shape));
+    ins.kind = MINIC_CORE_INSTRUCTION_INTEGER_TO_DOUBLE;
+    values[0].core_type_id = invalid_int;
+    REQUIRE(!minic_core_floating_shape(&function, &ins, &shape));
+    ins.kind = MINIC_CORE_INSTRUCTION_DOUBLE_TO_FLOAT;
+    values[0].core_type_id = f64;
+    ins.core_type_id = f32;
+    ins.result = 4U;
+    REQUIRE(!minic_core_floating_shape(&function, &ins, &shape));
+    ins.result = 3U;
+    function.type_context = NULL;
+    REQUIRE(!minic_core_floating_shape(&function, &ins, &shape));
+    minic_core_type_context_destroy(&ctx);
+    return 0;
+}
+
+int main(void) {
+    const int line = run();
+    if (line != 0) {
+        fprintf(stderr, "CORE_FLOATING_SHAPE=FAIL line=%d\n", line);
+        return 1;
+    }
+    puts("CORE_FLOATING_SHAPE=PASS family=17 C_free binary32 binary64 extended signed8 unsigned64 invalid=5");
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/probe-core-frame-layout.c"}
+#include "target/common/core_frame_layout.h"
+#include <stdint.h>
+#include <stdio.h>
+
+/* Byte geometry is ISA/ABI-neutral; real frame direction/physical offsets
+ * are checked by the x86/RV32/RV64/ARM64/LA64 runtime matrices separately. */
+int main(void) {
+    size_t value = 91U, offset = 92U;
+    if (!minic_core_frame_align_up(16U, 16U, &value) || value != 16U ||
+        !minic_core_frame_align_up(17U, 16U, &value) || value != 32U ||
+        !minic_core_frame_align_up(17U, 6U, &value) || value != 18U ||
+        minic_core_frame_align_up(SIZE_MAX, 16U, &value) ||
+        minic_core_frame_align_up(17U, 0U, &value) ||
+        minic_core_frame_align_up(17U, 8U, NULL))
+        return 1;
+    value = 3U;
+    if (!minic_core_frame_reserve(&value, 8U, 7U, 64U, &offset) ||
+        offset != 8U || value != 15U)
+        return 2;
+    if (!minic_core_frame_reserve(&value, 8U, 0U, 64U, &offset) ||
+        offset != 16U || value != 16U)
+        return 3;
+    if (minic_core_frame_reserve(&value, 16U, 33U, 48U, &offset) ||
+        value != 16U || offset != 16U)
+        return 4;
+    value = SIZE_MAX - 1U;
+    offset = 7U;
+    if (minic_core_frame_reserve(&value, 16U, 0U, SIZE_MAX, &offset) ||
+        value != SIZE_MAX - 1U || offset != 7U)
+        return 5;
+    value = 0U;
+    offset = 8U;
+    if (minic_core_frame_reserve(&value, 1U, 1025U, 1024U, &offset) ||
+        value != 0U || offset != 8U)
+        return 6;
+    if (!minic_core_frame_reserve(&value, 1U, 1024U, 1024U, &offset) ||
+        value != 1024U || offset != 0U)
+        return 7;
+    puts("MINIC_FIVE_TARGET_FRAME_GEOMETRY=PASS alignment reservation overflow rollback");
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/probe-core-frame-type-ownership.c"}
+#include "target/common/core_object_intervals.h"
+#include "target/common/core_object_reuse.h"
+#include "target/common/core_spill_layout.h"
+
+#include <stdint.h>
+#include <stdio.h>
+
+#define REQUIRE(expr) do { if (!(expr)) return __LINE__; } while (0)
+
+static bool integer_type(MinicCoreTypeContext *ctx, unsigned int bits,
+                         MinicCoreTypeId *id) {
+    MinicCoreType type = {0};
+    type.kind = MINIC_CORE_TYPE_INTEGER;
+    type.has_layout = true;
+    type.size = bits / 8U;
+    type.alignment = type.size;
+    type.value.integer.bit_width = bits;
+    type.value.integer.is_signed = true;
+    return minic_core_type_register(ctx, &type, id);
+}
+
+static int run(void) {
+    MinicCoreTypeContext types;
+    MinicCoreTypeId i32, i64;
+    MinicCoreValue values[1] = {0};
+    MinicCoreInstruction instruction = {0};
+    MinicCoreInstructionId ids[1] = {0U};
+    MinicCoreBlock block = {0};
+    MinicCoreObject object = {0};
+    MinicCoreFunction function = {0};
+    MinicCoreObjectIntervalAnalysis analysis = {0};
+    CoreScalarObjectInterval candidate = {0}, interval = {0};
+    MinicCoreObjectReusePlan reuse = {0};
+    size_t offsets[1] = {SIZE_MAX};
+    size_t bytes = SIZE_MAX, failed_block = SIZE_MAX;
+
+    minic_core_type_context_initialize(&types);
+    REQUIRE(integer_type(&types, 32U, &i32));
+    REQUIRE(integer_type(&types, 64U, &i64));
+
+    /* SSA and frame-object storage have no source C descriptors. */
+    values[0].core_type_id = i64;
+    instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
+    instruction.core_type_id = i64;
+    instruction.result = 0U;
+    block.instructions = ids;
+    block.instruction_count = 1U;
+    block.has_terminator = true;
+    block.terminator.kind = MINIC_CORE_TERMINATOR_RETURN;
+    block.terminator.return_value = MINIC_CORE_VALUE_INVALID;
+    block.terminator.return_object = MINIC_CORE_OBJECT_INVALID;
+    object.core_type_id = i32;
+    function.type_context = &types;
+    function.values = values;
+    function.value_count = 1U;
+    function.instructions = &instruction;
+    function.instruction_count = 1U;
+    function.blocks = &block;
+    function.block_count = 1U;
+    function.objects = &object;
+    function.object_count = 1U;
+
+    REQUIRE(minic_core_function_reused_spill_layout(
+        &function, 4U, 0U, offsets, &bytes, &failed_block));
+    REQUIRE(offsets[0] == 0U && bytes == 8U && failed_block == SIZE_MAX);
+    offsets[0] = SIZE_MAX;
+    bytes = SIZE_MAX;
+    REQUIRE(minic_core_function_reused_spill_layout(
+        &function, 8U, 0U, offsets, &bytes, NULL));
+    REQUIRE(offsets[0] == 0U && bytes == 8U);
+
+    /* Supplying a positive interval index isolates the Core scalar
+     * classification from the independent escape/lifetime proof. */
+    candidate.reusable = true;
+    candidate.block_index = 0U;
+    candidate.first_position = 0U;
+    candidate.last_position = 0U;
+    analysis.interval_index = &candidate;
+    REQUIRE(minic_core_object_interval(
+        &function, 0U, 8U, &analysis, &interval));
+    REQUIRE(interval.reusable && !interval.can_share_across_blocks);
+    object.core_type_id = MINIC_CORE_TYPE_INVALID;
+    REQUIRE(minic_core_object_interval(
+        &function, 0U, 8U, &analysis, &interval));
+    REQUIRE(!interval.reusable);
+    object.core_type_id = i32;
+    REQUIRE(minic_core_object_reuse_plan_build(
+        &function, 8U, true, &reuse));
+    REQUIRE(reuse.prepared && reuse.object_count == 1U);
+    minic_core_object_reuse_plan_destroy(&reuse);
+
+    values[0].core_type_id = MINIC_CORE_TYPE_INVALID;
+    offsets[0] = SIZE_MAX;
+    REQUIRE(!minic_core_function_reused_spill_layout(
+        &function, 4U, 0U, offsets, &bytes, &failed_block));
+    REQUIRE(failed_block == 0U && offsets[0] == SIZE_MAX);
+    values[0].core_type_id = i64;
+    function.values = NULL;
+    REQUIRE(!minic_core_function_reused_spill_layout(
+        &function, 4U, 0U, offsets, &bytes, &failed_block));
+    function.values = values;
+    function.objects = NULL;
+    REQUIRE(!minic_core_object_reuse_plan_build(
+        &function, 8U, true, &reuse));
+    function.objects = &object;
+    function.type_context = NULL;
+    REQUIRE(!minic_core_function_reused_spill_layout(
+        &function, 4U, 0U, offsets, &bytes, &failed_block));
+    REQUIRE(!minic_core_object_interval(
+        &function, 0U, 8U, &analysis, &interval));
+    REQUIRE(!minic_core_object_reuse_plan_build(
+        &function, 8U, true, &reuse));
+    REQUIRE(!reuse.prepared && reuse.intervals == NULL && reuse.slots == NULL);
+    minic_core_type_context_destroy(&types);
+    return 0;
+}
+
+int main(void) {
+    int failed = run();
+    if (failed != 0) {
+        (void)fprintf(stderr, "core_frame_type_ownership failed at %d\n", failed);
+        return 1;
+    }
+    (void)puts("CORE_FRAME_TYPE_OWNERSHIP=PASS Core-only object+interval+spill ILP32_LP64 C-free malformed missing-context");
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/probe-core-inline-asm-token-closure.c"}
+/* The standalone Core reachability API must retain the original raw-ASM
+ * matcher semantics with indexed token lookup: exact identifier boundaries,
+ * duplicate Module names, comments, mnemonic collisions and unusual names. */
+#include "compiler/core_reachability.h"
+
+#include <stdbool.h>
+#include <stdio.h>
+#include <string.h>
+
+#define MAX_NAMES 8U
+
+static bool run_case(const char *label, const char *template_text,
+                     size_t template_length,
+                     bool target_qualified,
+                     const char *const *function_names, const bool *function_live,
+                     size_t function_count,
+                     const char *const *object_names, const bool *object_live,
+                     size_t object_count) {
+    MinicCoreModuleFunctionSymbol symbols[MAX_NAMES] = {{0}};
+    MinicCoreModuleGlobal globals[MAX_NAMES] = {{0}};
+    MinicCoreFunction functions[MAX_NAMES] = {{0}};
+    MinicCoreLowerStatus statuses[MAX_NAMES] = {0};
+    MinicCoreInlineAsm assembly = {0};
+    MinicCoreInstruction instruction = {0};
+    MinicCoreInstructionId instruction_id = 0U;
+    MinicCoreBlock block = {0};
+    MinicCoreFunctionSet set = {0};
+    size_t i;
+    if (function_count == 0U || function_count > MAX_NAMES ||
+        object_count > MAX_NAMES) return false;
+    for (i = 0U; i < function_count; ++i) {
+        symbols[i].name = (char *)function_names[i];
+        symbols[i].is_defined = true;
+        symbols[i].is_internal = true;
+        symbols[i].is_reachability_root = i == 0U;
+        symbols[i].alias_target_index = SIZE_MAX;
+        symbols[i].storage_owner_function_index = SIZE_MAX;
+        statuses[i] = MINIC_CORE_LOWER_OK;
+    }
+    for (i = 0U; i < object_count; ++i) {
+        globals[i].name = (char *)object_names[i];
+        globals[i].is_internal = true;
+        globals[i].emittable = true;
+        globals[i].definition_kind = MINIC_CORE_MODULE_DEFINITION_REGULAR;
+        globals[i].owner_function_index = SIZE_MAX;
+        globals[i].alias_target_index = SIZE_MAX;
+    }
+    assembly.template_text = (char *)template_text;
+    assembly.template_length = template_length == 0U ?
+        strlen(template_text) : template_length;
+    assembly.operand_plan_owner = target_qualified ?
+        MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED :
+        MINIC_ASM_OPERAND_PLAN_NONE;
+    assembly.target_machine_form_id = target_qualified ? 1U : 0U;
+    instruction.kind = target_qualified ?
+        MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM :
+        MINIC_CORE_INSTRUCTION_OPAQUE_INLINE_ASM;
+    if (target_qualified) {
+        instruction.value.structured_inline_asm.inline_asm_id = 0U;
+        instruction.value.structured_inline_asm.operand_count = 1U;
+    } else instruction.value.inline_asm_id = 0U;
+    block.instructions = &instruction_id;
+    block.instruction_count = 1U;
+    functions[0].blocks = &block;
+    functions[0].block_count = 1U;
+    functions[0].instructions = &instruction;
+    functions[0].instruction_count = 1U;
+    functions[0].inline_asms = &assembly;
+    functions[0].inline_asm_count = 1U;
+    set.functions = functions;
+    set.statuses = statuses;
+    set.function_count = function_count;
+    set.module.function_symbols = symbols;
+    set.module.function_count = function_count;
+    set.module.globals = globals;
+    set.module.global_count = object_count;
+    if (!minic_core_function_set_close_reachability(&set, false)) {
+        fprintf(stderr, "CORE_INLINE_ASM_TOKEN=FAIL case=%s closure\n", label);
+        return false;
+    }
+    for (i = 0U; i < function_count; ++i)
+        if (symbols[i].is_referenced != function_live[i]) {
+            fprintf(stderr, "CORE_INLINE_ASM_TOKEN=FAIL case=%s fn=%s\n",
+                    label, function_names[i]);
+            return false;
+        }
+    for (i = 0U; i < object_count; ++i)
+        if (globals[i].emittable != object_live[i]) {
+            fprintf(stderr, "CORE_INLINE_ASM_TOKEN=FAIL case=%s obj=%s\n",
+                    label, object_names[i]);
+            return false;
+        }
+    return true;
+}
+
+int main(void) {
+    static const char *const functions[] = {
+        "main", "hit_fn", "hit_fn", "dot.name", "prefix_hit_fn", "foo"
+    };
+    static const bool function_live[] = {true, true, true, true, false, true};
+    static const char *const globals[] = {
+        "hit_obj", "hit_obj", "dead_obj", "foo"
+    };
+    static const bool global_live[] = {true, true, false, true};
+    static const char *const mnemonic_functions[] = {"main", "invtlb", "unused"};
+    static const bool mnemonic_only_live[] = {true, false, false};
+    static const bool mnemonic_reference_live[] = {true, true, false};
+    static const char *const mnemonic_globals[] = {"invtlb", "unused"};
+    static const bool mnemonic_global_live[] = {true, false};
+    static const char *const unsafe_functions[] = {"main", "foo@VER", "miss"};
+    static const bool unsafe_function_live[] = {true, true, false};
+    static const char *const unsafe_globals[] = {"obj-name", "miss"};
+    static const bool unsafe_global_live[] = {true, false};
+    static const char *const nul_functions[] = {"main", "hit_fn", "unused"};
+    static const bool nul_function_live[] = {true, true, false};
+    static const char *const nul_globals[] = {"hit_obj", "unused"};
+    static const bool nul_global_live[] = {true, false};
+    static const char nul_asm[] = "call hit_fn\0.word hit_obj";
+
+    if (!run_case("indexed-boundary-and-duplicates",
+                  "call hit_fn@PLT; .quad hit_obj; mov dot.name, %foo; "
+                  "# hit_fn (quoted hit_obj) and not prefix_hit_fn$1\n",
+                  0U, false, functions, function_live, 6U,
+                  globals, global_live, 4U) ||
+        !run_case("target-mnemonic-only", "  invtlb %0, %1",
+                  0U, true, mnemonic_functions, mnemonic_only_live, 3U,
+                  mnemonic_globals, mnemonic_global_live, 2U) ||
+        !run_case("target-mnemonic-referenced", " invtlb %0; .word invtlb",
+                  0U, true, mnemonic_functions, mnemonic_reference_live, 3U,
+                  mnemonic_globals, mnemonic_global_live, 2U) ||
+        !run_case("unusual-symbol-fallback", "call foo@VER; .word obj-name",
+                  0U, false, unsafe_functions, unsafe_function_live, 3U,
+                  unsafe_globals, unsafe_global_live, 2U) ||
+        !run_case("embedded-nul-raw-bytes", nul_asm, sizeof(nul_asm) - 1U,
+                  false, nul_functions, nul_function_live, 3U,
+                  nul_globals, nul_global_live, 2U)) return 1;
+    puts("CORE_INLINE_ASM_TOKEN=PASS indexed_boundaries=6 duplicate_functions=2 duplicate_objects=2 comments=1 mnemonic_only=1 mnemonic_reference=1 unsafe_fallback=1 embedded_NUL=1");
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/probe-core-instruction-family.c"}
+#include "target/common/core_instruction_family.h"
+#include <stdio.h>
+
+/* Exhaustive ABI-neutral membership guard for every current Core kind.
+ * Compiler-generated M/A/F instructions are never inferred from membership. */
+int main(void) {
+    unsigned int i, integer = 0U, floating = 0U, calls = 0U;
+    for (i = 0U; i < (unsigned int)MINIC_CORE_INSTRUCTION_KIND_COUNT; ++i) {
+        MinicCoreInstructionKind kind = (MinicCoreInstructionKind)i;
+        bool a = minic_core_instruction_is_integer_scalar(kind);
+        bool b = minic_core_instruction_is_floating_scalar(kind);
+        bool c = minic_core_instruction_is_call(kind);
+        if ((unsigned)a + (unsigned)b + (unsigned)c > 1U) return 3;
+        integer += a ? 1U : 0U;
+        floating += b ? 1U : 0U;
+        calls += c ? 1U : 0U;
+    }
+    if (integer != 20U || floating != 17U || calls != 2U ||
+        minic_core_instruction_is_integer_scalar(
+            MINIC_CORE_INSTRUCTION_INTEGER_OVERFLOW) ||
+        minic_core_instruction_is_integer_scalar(
+            MINIC_CORE_INSTRUCTION_SCALAR_BITCAST) ||
+        minic_core_instruction_is_integer_scalar(
+            MINIC_CORE_INSTRUCTION_ATOMIC_LOAD) ||
+        minic_core_instruction_is_floating_scalar(
+            MINIC_CORE_INSTRUCTION_VARIADIC_COPY) ||
+        !minic_core_instruction_is_call(MINIC_CORE_INSTRUCTION_CALL) ||
+        !minic_core_instruction_is_call(MINIC_CORE_INSTRUCTION_INDIRECT_CALL))
+        return 4;
+    puts("MINIC_FIVE_TARGET_CORE_FAMILY=PASS integer=20 float=17 call=2");
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/probe-core-literal-branch-fold.c"}
+#include "core/core_ir.h"
+#include <stddef.h>
+#include <stdio.h>
+#include <string.h>
+
+int main(void) {
+    MinicCoreFunction fn = {0};
+    MinicCoreInstruction ins[1] = {0};
+    MinicCoreValue values[1] = {0};
+    MinicCoreBlock blocks[3] = {0};
+    MinicCoreTypeContext types;
+    MinicCoreType type = {0};
+    MinicCoreTypeId int_id, double_id;
+    bool reachable[3] = {false, false, false};
+
+    minic_core_type_context_initialize(&types);
+    type.kind = MINIC_CORE_TYPE_INTEGER;
+    type.has_layout = true;
+    type.size = 4U;
+    type.alignment = 4U;
+    type.value.integer.bit_width = 32U;
+    type.value.integer.is_signed = true;
+    if (!minic_core_type_register(&types, &type, &int_id)) return 10;
+    (void)memset(&type, 0, sizeof(type));
+    type.kind = MINIC_CORE_TYPE_FLOAT;
+    type.has_layout = true;
+    type.size = 8U;
+    type.alignment = 8U;
+    type.value.floating.format = MINIC_CORE_FLOAT_BINARY64;
+    if (!minic_core_type_register(&types, &type, &double_id)) return 11;
+
+    fn.entry_block = 0U;
+    fn.type_context = &types;
+    fn.values = values;
+    fn.value_count = 1U;
+    fn.instructions = ins;
+    fn.instruction_count = 1U;
+    fn.blocks = blocks;
+    fn.block_count = 3U;
+    values[0].core_type_id = int_id;
+    values[0].definition = 0U;
+    ins[0].kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
+    ins[0].result = 0U;
+    ins[0].core_type_id = int_id;
+    ins[0].value.integer_value = 1;
+    blocks[0].has_terminator = true;
+    blocks[0].terminator.kind = MINIC_CORE_TERMINATOR_CONDITIONAL_BRANCH;
+    blocks[0].terminator.conditional.condition = 0U;
+    blocks[0].terminator.conditional.when_true = 1U;
+    blocks[0].terminator.conditional.when_false = 2U;
+    for (size_t i = 1U; i < 3U; ++i) {
+        blocks[i].has_terminator = true;
+        blocks[i].terminator.kind = MINIC_CORE_TERMINATOR_RETURN;
+        blocks[i].terminator.return_value = MINIC_CORE_VALUE_INVALID;
+    }
+    if (minic_core_function_fold_literal_branches(&fn) != 1U ||
+        blocks[0].terminator.kind != MINIC_CORE_TERMINATOR_BRANCH ||
+        blocks[0].terminator.branch_target != 1U ||
+        !minic_core_function_mark_reachable_blocks(&fn, reachable, 3U) ||
+        !reachable[0] || !reachable[1] || reachable[2]) return 1;
+    /* A sealed local symbol remains a CFG root even when constant folding
+     * proves its ordinary lexical branch unreachable. */
+    blocks[2].local_label_symbol = ".Luser_2";
+    if (!minic_core_function_mark_reachable_blocks(&fn, reachable, 3U) ||
+        !reachable[2]) return 12;
+    blocks[2].local_label_symbol = NULL;
+
+    /* False literal selects the other successor without changing effects. */
+    blocks[0].terminator.kind = MINIC_CORE_TERMINATOR_CONDITIONAL_BRANCH;
+    blocks[0].terminator.conditional.condition = 0U;
+    blocks[0].terminator.conditional.when_true = 1U;
+    blocks[0].terminator.conditional.when_false = 2U;
+    ins[0].value.integer_value = 0;
+    if (minic_core_function_fold_literal_branches(&fn) != 1U ||
+        blocks[0].terminator.branch_target != 2U) return 2;
+
+    /* A runtime parameter is not a literal, even when its value happens to
+     * be one at some callsite. Every edge must remain reachable. */
+    blocks[0].terminator.kind = MINIC_CORE_TERMINATOR_CONDITIONAL_BRANCH;
+    blocks[0].terminator.conditional.condition = 0U;
+    blocks[0].terminator.conditional.when_true = 1U;
+    blocks[0].terminator.conditional.when_false = 2U;
+    ins[0].kind = MINIC_CORE_INSTRUCTION_PARAMETER;
+    if (minic_core_function_fold_literal_branches(&fn) != 0U ||
+        blocks[0].terminator.kind != MINIC_CORE_TERMINATOR_CONDITIONAL_BRANCH)
+        return 3;
+
+    ins[0].kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
+    values[0].definition = 99U;
+    if (minic_core_function_fold_literal_branches(&fn) != 0U ||
+        blocks[0].terminator.kind != MINIC_CORE_TERMINATOR_CONDITIONAL_BRANCH)
+        return 4;
+    values[0].definition = 0U;
+    blocks[0].terminator.conditional.condition = 99U;
+    if (minic_core_function_fold_literal_branches(&fn) != 0U ||
+        blocks[0].terminator.kind != MINIC_CORE_TERMINATOR_CONDITIONAL_BRANCH)
+        return 5;
+    blocks[0].terminator.conditional.condition = 0U;
+    blocks[0].terminator.conditional.when_true = 99U;
+    ins[0].value.integer_value = 1;
+    if (minic_core_function_fold_literal_branches(&fn) != 0U ||
+        blocks[0].terminator.kind != MINIC_CORE_TERMINATOR_CONDITIONAL_BRANCH)
+        return 6;
+    blocks[0].terminator.conditional.when_true = 1U;
+    blocks[0].terminator.conditional.when_false = 99U;
+    if (minic_core_function_fold_literal_branches(&fn) != 0U ||
+        blocks[0].terminator.kind != MINIC_CORE_TERMINATOR_CONDITIONAL_BRANCH)
+        return 7;
+    blocks[0].terminator.conditional.when_false = 2U;
+    values[0].core_type_id = double_id;
+    ins[0].core_type_id = double_id;
+    if (minic_core_function_fold_literal_branches(&fn) != 0U ||
+        blocks[0].terminator.kind != MINIC_CORE_TERMINATOR_CONDITIONAL_BRANCH)
+        return 8;
+    (void)memset(&fn, 0, sizeof(fn));
+    if (minic_core_function_fold_literal_branches(&fn) != 0U) return 9;
+    minic_core_type_context_destroy(&types);
+    puts("CORE_LITERAL_BRANCH_FOLD=PASS true=1 false=1 dynamic_preserved=1 unreachable_pruned=1 malformed_fail_closed=6");
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/probe-core-lp64-aggregate.c"}
+#include "target/common/aggregate_shape.h"
+#include "target/common/lp64_aggregate.h"
+
+#include <stdio.h>
+#include <string.h>
+
+#define CHECK(expr) do { \
+    if (!(expr)) { \
+        (void)fprintf(stderr, "CORE_LP64_AGGREGATE=FAIL line=%d: %s\n", \
+                      __LINE__, #expr); \
+        return 1; \
+    } \
+} while (0)
+
+static bool integer(MinicCoreTypeContext *ctx, size_t bytes, MinicCoreTypeId *out) {
+    MinicCoreType type = {0};
+    type.kind = MINIC_CORE_TYPE_INTEGER;
+    type.has_layout = true;
+    type.size = bytes;
+    type.alignment = bytes;
+    type.value.integer.bit_width = (unsigned int)(bytes * 8U);
+    return minic_core_type_register(ctx, &type, out);
+}
+
+static bool scalar_float(MinicCoreTypeContext *ctx, size_t bytes,
+                         MinicCoreTypeId *out) {
+    MinicCoreType type = {0};
+    type.kind = MINIC_CORE_TYPE_FLOAT;
+    type.has_layout = true;
+    type.size = bytes;
+    type.alignment = bytes;
+    type.value.floating.format = bytes == 4U
+        ? MINIC_CORE_FLOAT_BINARY32 : MINIC_CORE_FLOAT_BINARY64;
+    return minic_core_type_register(ctx, &type, out);
+}
+
+static bool record(MinicCoreTypeContext *ctx, size_t bytes, size_t align,
+                   const MinicCoreRecordField *fields, size_t count,
+                   bool is_union, size_t pack_align, size_t explicit_align,
+                   MinicCoreTypeId *out) {
+    MinicCoreType type = {0};
+    type.kind = MINIC_CORE_TYPE_RECORD;
+    type.has_layout = true;
+    type.size = bytes;
+    type.alignment = align;
+    type.value.record.is_complete = true;
+    type.value.record.is_union = is_union;
+    type.value.record.has_nondefault_layout_policy =
+        pack_align != 0U || explicit_align != 0U;
+    type.value.record.fields = (MinicCoreRecordField *)fields;
+    type.value.record.field_count = count;
+    return minic_core_type_register(ctx, &type, out);
+}
+
+int main(void) {
+    MinicCoreTypeContext ctx;
+    MinicCoreType type = {0};
+    MinicCoreTypeId i8, i32, i64, f32, f64, arr12, zero_arr, unsized_arr;
+    MinicCoreTypeId int_record, packed, misaligned, empty, nested;
+    MinicCoreTypeId array_record, fp_record, packed_fp, field_restricted_fp;
+    MinicCoreTypeId extended_fp, union_fp;
+    MinicCoreTypeId big_record, huge_record, qual_record, vector_id, vector_record;
+    MinicCoreRecordField fields[2] = {{0}};
+    MinicAggregateStorageShape shape;
+    size_t bytes, chunks, lanes, width;
+
+    minic_core_type_context_initialize(&ctx);
+    CHECK(integer(&ctx, 1U, &i8));
+    CHECK(integer(&ctx, 4U, &i32));
+    CHECK(integer(&ctx, 8U, &i64));
+    CHECK(scalar_float(&ctx, 4U, &f32));
+    CHECK(scalar_float(&ctx, 8U, &f64));
+
+    fields[0].type_id = i32;
+    fields[0].alignment = 4U;
+    CHECK(record(&ctx, 4U, 4U, fields, 1U, false, 0U, 0U, &int_record));
+    CHECK(minic_multi_gp_record_core(&ctx, int_record, &bytes, &chunks));
+    CHECK(bytes == 4U && chunks == 1U);
+    CHECK(!minic_multi_empty_record_core(&ctx, int_record));
+    CHECK(!minic_multi_indirect_record_core(&ctx, int_record, &bytes));
+    CHECK(!minic_multi_fp_return_record_core(&ctx, int_record, &lanes, &width));
+
+    fields[0].type_id = i8;
+    fields[0].alignment = 1U;
+    fields[0].byte_offset = 0U;
+    fields[1].type_id = i32;
+    fields[1].byte_offset = 1U;
+    fields[1].is_bit_field = true;
+    fields[1].bit_width = 3U;
+    fields[1].alignment = 1U;
+    CHECK(record(&ctx, 5U, 1U, fields, 2U, false, 1U, 0U, &packed));
+    CHECK(minic_multi_gp_record_core(&ctx, packed, &bytes, &chunks));
+    CHECK(bytes == 5U && chunks == 1U);
+    fields[1].is_bit_field = false;
+    fields[1].bit_width = 0U;
+    CHECK(record(&ctx, 5U, 1U, fields, 2U, false, 1U, 0U, &misaligned));
+    CHECK(!minic_multi_gp_record_core(&ctx, misaligned, &bytes, &chunks));
+
+    CHECK(record(&ctx, 0U, 1U, NULL, 0U, false, 0U, 0U, &empty));
+    CHECK(minic_multi_empty_record_core(&ctx, empty));
+    CHECK(!minic_multi_gp_record_core(&ctx, empty, &bytes, &chunks));
+    fields[0] = (MinicCoreRecordField){.type_id = empty, .alignment = 1U};
+    fields[1] = (MinicCoreRecordField){.type_id = int_record,
+                                        .byte_offset = 0U, .alignment = 4U};
+    CHECK(record(&ctx, 4U, 4U, fields, 2U, false, 0U, 0U, &nested));
+    CHECK(minic_multi_gp_record_core(&ctx, nested, &bytes, &chunks));
+    CHECK(bytes == 4U && chunks == 1U);
+
+    type = (MinicCoreType){0};
+    type.kind = MINIC_CORE_TYPE_ARRAY;
+    type.has_layout = true;
+    type.size = 12U;
+    type.alignment = 4U;
+    type.value.array.element = i32;
+    type.value.array.count = 3U;
+    type.value.array.is_complete = true;
+    CHECK(minic_core_type_register(&ctx, &type, &arr12));
+    type.value.array.count = 0U;
+    type.size = 0U;
+    CHECK(minic_core_type_register(&ctx, &type, &zero_arr));
+    type.value.array.is_complete = false;
+    type.has_layout = false;
+    type.alignment = 0U;
+    CHECK(minic_core_type_register(&ctx, &type, &unsized_arr));
+    fields[0] = (MinicCoreRecordField){.type_id = zero_arr, .alignment = 4U};
+    CHECK(record(&ctx, 8U, 4U, fields, 1U, false, 0U, 0U, &array_record));
+    CHECK(!minic_multi_gp_record_core(&ctx, array_record, &bytes, &chunks));
+    fields[0].type_id = unsized_arr;
+    CHECK(record(&ctx, 8U, 4U, fields, 1U, false, 0U, 0U, &array_record));
+    CHECK(!minic_multi_gp_record_core(&ctx, array_record, &bytes, &chunks));
+    fields[0] = (MinicCoreRecordField){.type_id = arr12, .alignment = 4U};
+    CHECK(record(&ctx, 12U, 4U, fields, 1U, false, 0U, 0U, &array_record));
+    CHECK(minic_multi_gp_record_core(&ctx, array_record, &bytes, &chunks));
+    CHECK(bytes == 12U && chunks == 2U);
+
+    fields[0] = (MinicCoreRecordField){.type_id = f32, .alignment = 4U};
+    fields[1] = (MinicCoreRecordField){.type_id = f32,
+                                        .byte_offset = 4U, .alignment = 4U};
+    CHECK(record(&ctx, 8U, 4U, fields, 2U, false, 0U, 0U, &fp_record));
+    CHECK(minic_multi_fp_return_record_core(&ctx, fp_record, &lanes, &width));
+    CHECK(lanes == 2U && width == 4U);
+    CHECK(!minic_multi_gp_record_core(&ctx, fp_record, &bytes, &chunks));
+    fields[0].has_nondefault_layout_policy = true;
+    CHECK(record(&ctx, 8U, 4U, fields, 2U, false, 0U, 0U, &field_restricted_fp));
+    CHECK(!minic_multi_fp_return_record_core(&ctx, field_restricted_fp, &lanes, &width));
+    fields[0].has_nondefault_layout_policy = false;
+    CHECK(record(&ctx, 8U, 4U, fields, 2U, false, 1U, 0U, &packed_fp));
+    CHECK(!minic_multi_fp_return_record_core(&ctx, packed_fp, &lanes, &width));
+    CHECK(record(&ctx, 8U, 4U, fields, 2U, false, 0U, 8U, &extended_fp));
+    CHECK(!minic_multi_fp_return_record_core(&ctx, extended_fp, &lanes, &width));
+    CHECK(record(&ctx, 8U, 4U, fields, 2U, true, 0U, 0U, &union_fp));
+    CHECK(!minic_multi_fp_return_record_core(&ctx, union_fp, &lanes, &width));
+
+    fields[0] = (MinicCoreRecordField){.type_id = i64, .alignment = 8U};
+    CHECK(record(&ctx, 24U, 8U, fields, 1U, false, 0U, 0U, &big_record));
+    CHECK(minic_multi_indirect_record_core(&ctx, big_record, &bytes));
+    CHECK(bytes == 24U);
+    CHECK(record(&ctx, 2049U, 8U, fields, 1U, false, 0U, 0U, &huge_record));
+    CHECK(!minic_multi_indirect_record_core(&ctx, huge_record, &bytes));
+    type = (MinicCoreType){0};
+    type.kind = MINIC_CORE_TYPE_ALIGNED;
+    type.value.aligned.base = big_record;
+    type.has_layout = true;
+    type.size = 24U;
+    type.alignment = 16U;
+    type.has_abi_alignment_override = true;
+    CHECK(minic_core_type_register(&ctx, &type, &qual_record));
+    CHECK(minic_common_aggregate_storage_shape_core(&ctx, qual_record, 8U, &shape));
+    CHECK(shape.alignment == 16U && shape.words == 3U);
+    CHECK(minic_multi_indirect_record_core(&ctx, qual_record, &bytes));
+
+    type = (MinicCoreType){0};
+    type.kind = MINIC_CORE_TYPE_VECTOR;
+    type.has_layout = true;
+    type.size = 16U;
+    type.alignment = 16U;
+    type.value.vector.element = i32;
+    type.value.vector.element_count = 4U;
+    CHECK(minic_core_type_register(&ctx, &type, &vector_id));
+    fields[0] = (MinicCoreRecordField){.type_id = vector_id, .alignment = 16U};
+    CHECK(record(&ctx, 16U, 16U, fields, 1U, false, 0U, 0U, &vector_record));
+    CHECK(!minic_multi_gp_record_core(&ctx, vector_record, &bytes, &chunks));
+
+    CHECK(!minic_multi_gp_record_core(&ctx, MINIC_CORE_TYPE_INVALID,
+                                      &bytes, &chunks));
+    CHECK(!minic_multi_indirect_record_core(&ctx, MINIC_CORE_TYPE_INVALID, &bytes));
+    CHECK(!minic_common_aggregate_storage_shape_core(
+        &ctx, MINIC_CORE_TYPE_INVALID, 8U, &shape));
+    CHECK(!minic_common_aggregate_storage_shape_core(&ctx, int_record, 0U, &shape));
+    CHECK(!minic_common_aggregate_storage_shape_core(&ctx, int_record, 3U, &shape));
+    CHECK(!minic_common_aggregate_storage_shape_core(NULL, int_record, 8U, &shape));
+
+    minic_core_type_context_destroy(&ctx);
+    (void)puts("CORE_LP64_AGGREGATE=PASS integer bitfield packed unaligned empty nested array hfa indirect qualifier vector invalid");
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/probe-core-module-elf-linkage.c"}
+/* A machine PIC/ELF decision must use ModuleIR's sealed linkage snapshot,
+ * even if a later C Program declares a completely different symbol. */
+#include "core/module_ir.h"
+#include "target/common/elf_module_symbol_info.h"
+
+#include <stdio.h>
+
+#define CHECK(check, code) do { if (!(check)) return (code); } while (0)
+#define OBJ(symbol) minic_multi_elf_module_symbol_facts( \
+    &module, (symbol), MINIC_ELF_MODULE_SYMBOL_OBJECT)
+#define FN(symbol) minic_multi_elf_module_symbol_facts( \
+    &module, (symbol), MINIC_ELF_MODULE_SYMBOL_FUNCTION)
+
+int main(void) {
+    MinicCoreModuleGlobal globals[] = {
+        {.name = "internal_object", .is_internal = true,
+         .emittable = true, .alias_target_index = SIZE_MAX},
+        {.name = "hidden_object", .definition_kind = MINIC_CORE_MODULE_DEFINITION_DECLARATION,
+         .visibility = MINIC_CORE_MODULE_VISIBILITY_HIDDEN,
+         .alias_target_index = SIZE_MAX},
+        {.name = "weak_object", .definition_kind = MINIC_CORE_MODULE_DEFINITION_DECLARATION,
+         .is_weak = true,
+         .alias_target_index = SIZE_MAX},
+        {.name = "tentative_object", .is_weak = true, .emittable = true,
+         .definition_kind = MINIC_CORE_MODULE_DEFINITION_ZERO_FILL,
+         .data_policy = MINIC_CORE_MODULE_DATA_ZERO_ONLY,
+         .alias_target_index = SIZE_MAX},
+        {.name = "scope_extern", .is_internal = true,
+         .definition_kind = MINIC_CORE_MODULE_DEFINITION_DECLARATION,
+         .alias_target_index = SIZE_MAX},
+    };
+    MinicCoreModuleFunctionSymbol functions[] = {
+        {.name = "internal_function", .is_defined = true, .is_internal = true,
+         .is_referenced = true, .alias_target_index = SIZE_MAX,
+         .storage_owner_function_index = SIZE_MAX},
+        {.name = "hidden_function",
+         .visibility = MINIC_CORE_MODULE_VISIBILITY_INTERNAL,
+         .alias_target_index = SIZE_MAX, .storage_owner_function_index = SIZE_MAX},
+        {.name = "weak_function", .is_weak = true,
+         .alias_target_index = SIZE_MAX, .storage_owner_function_index = SIZE_MAX},
+        {.name = "visible_function", .is_defined = true,
+         .alias_target_index = SIZE_MAX, .storage_owner_function_index = SIZE_MAX},
+    };
+    MinicCoreModuleGlobal mixed_globals[] = {
+        {.name = "weak_first", .definition_kind = MINIC_CORE_MODULE_DEFINITION_DECLARATION,
+         .is_weak = true,
+         .alias_target_index = SIZE_MAX},
+        {.name = "weak_first", .is_internal = true, .emittable = true,
+         .alias_target_index = SIZE_MAX},
+        {.name = "strong_first", .is_internal = true, .emittable = true,
+         .alias_target_index = SIZE_MAX},
+        {.name = "strong_first", .definition_kind = MINIC_CORE_MODULE_DEFINITION_DECLARATION,
+         .is_weak = true,
+         .alias_target_index = SIZE_MAX},
+        {.name = "weak_alias", .definition_kind = MINIC_CORE_MODULE_DEFINITION_DECLARATION,
+         .is_weak = true,
+         .emittable = true, .alias_target_index = 1U},
+        {.name = "pruned", .is_internal = true,
+         .alias_target_index = SIZE_MAX},
+        {.name = "pruned", .definition_kind = MINIC_CORE_MODULE_DEFINITION_DECLARATION,
+         .is_weak = true,
+         .alias_target_index = SIZE_MAX},
+        {.name = "local_alias", .is_internal = true,
+         .definition_kind = MINIC_CORE_MODULE_DEFINITION_DECLARATION,
+         .emittable = true, .alias_target_index = 1U},
+        /* ELF names are untyped: opposite-kind strong owners take precedence. */
+        {.name = "function_owned_object",
+         .definition_kind = MINIC_CORE_MODULE_DEFINITION_DECLARATION,
+         .is_weak = true, .alias_target_index = SIZE_MAX},
+        {.name = "object_owned_function", .emittable = true,
+         .alias_target_index = SIZE_MAX},
+    };
+    MinicCoreModuleFunctionSymbol mixed_functions[] = {
+        {.name = "weak_first", .is_weak = true,
+         .alias_target_index = SIZE_MAX, .storage_owner_function_index = SIZE_MAX},
+        {.name = "weak_first", .is_defined = true, .is_internal = true,
+         .is_referenced = true, .alias_target_index = SIZE_MAX,
+         .storage_owner_function_index = SIZE_MAX},
+        {.name = "strong_first", .is_defined = true, .is_internal = true,
+         .is_referenced = true, .alias_target_index = SIZE_MAX,
+         .storage_owner_function_index = SIZE_MAX},
+        {.name = "strong_first", .is_weak = true,
+         .alias_target_index = SIZE_MAX, .storage_owner_function_index = SIZE_MAX},
+        {.name = "weak_alias", .is_weak = true, .alias_target_index = 1U,
+         .storage_owner_function_index = SIZE_MAX},
+        {.name = "pruned", .is_defined = true, .is_internal = true,
+         .alias_target_index = SIZE_MAX, .storage_owner_function_index = SIZE_MAX},
+        {.name = "pruned", .is_weak = true,
+         .alias_target_index = SIZE_MAX, .storage_owner_function_index = SIZE_MAX},
+        {.name = "local_alias", .is_internal = true,
+         .alias_target_index = 1U, .storage_owner_function_index = SIZE_MAX},
+        {.name = "function_owned_object", .is_defined = true,
+         .alias_target_index = SIZE_MAX, .storage_owner_function_index = SIZE_MAX},
+        {.name = "object_owned_function", .is_weak = true,
+         .alias_target_index = SIZE_MAX, .storage_owner_function_index = SIZE_MAX},
+    };
+    MinicCoreModule module = {
+        .globals = globals,
+        .global_count = sizeof(globals) / sizeof(globals[0]),
+        .function_symbols = functions,
+        .function_count = sizeof(functions) / sizeof(functions[0]),
+        .finalized = true
+    };
+
+    /* Locality is stricter than nonpreemptibility: external hidden
+     * declarations may be nonpreemptible without a TU-owned definition. */
+    CHECK(OBJ("internal_object").tu_local, 1);
+    CHECK(!OBJ("hidden_object").tu_local, 2);
+    CHECK(!OBJ("scope_extern").tu_local, 3);
+    CHECK(FN("internal_function").tu_local, 4);
+    CHECK(!FN("hidden_function").tu_local, 5);
+    CHECK(OBJ("internal_object").nonpreemptible, 6);
+    CHECK(OBJ("hidden_object").nonpreemptible, 7);
+    CHECK(!OBJ("weak_object").nonpreemptible, 8);
+    CHECK(!OBJ("scope_extern").nonpreemptible, 9);
+    CHECK(FN("internal_function").nonpreemptible, 10);
+    CHECK(FN("hidden_function").nonpreemptible, 11);
+    CHECK(!FN("visible_function").nonpreemptible, 12);
+    CHECK(OBJ("weak_object").undefined_weak, 13);
+    CHECK(!OBJ("tentative_object").undefined_weak, 14);
+    CHECK(FN("weak_function").undefined_weak, 15);
+    CHECK(!FN("internal_function").undefined_weak, 16);
+    CHECK(OBJ("weak_function").undefined_weak &&
+          FN("weak_object").undefined_weak, 35);
+    CHECK(!OBJ("source_only_name").tu_local &&
+          !OBJ("source_only_name").nonpreemptible &&
+          !OBJ("source_only_name").undefined_weak &&
+          !FN("source_only_name").tu_local &&
+          !FN("source_only_name").nonpreemptible &&
+          !FN("source_only_name").undefined_weak, 17);
+    module.finalized = false;
+    CHECK(!OBJ("internal_object").nonpreemptible &&
+          !FN("weak_function").undefined_weak, 18);
+    module.finalized = true;
+    module.globals = NULL;
+    CHECK(!OBJ("internal_object").tu_local, 19);
+    module.function_symbols = NULL;
+    CHECK(!FN("internal_function").tu_local, 20);
+    module.globals = mixed_globals;
+    module.global_count = sizeof(mixed_globals) / sizeof(mixed_globals[0]);
+    module.function_symbols = mixed_functions;
+    module.function_count = sizeof(mixed_functions) / sizeof(mixed_functions[0]);
+    /* The emitted symbol owner wins over an extern-only weak declaration,
+     * irrespective of source order. A weak alias is itself emitted, not an
+     * unresolved weak. A dead internal body does not claim a local symbol. */
+    CHECK(OBJ("weak_first").tu_local && OBJ("weak_first").nonpreemptible &&
+          !OBJ("weak_first").undefined_weak, 21);
+    CHECK(OBJ("strong_first").tu_local &&
+          !OBJ("strong_first").undefined_weak, 22);
+    CHECK(!OBJ("weak_alias").undefined_weak, 23);
+    CHECK(!OBJ("pruned").tu_local && OBJ("pruned").undefined_weak, 24);
+    CHECK(FN("weak_first").tu_local && FN("weak_first").nonpreemptible &&
+          !FN("weak_first").undefined_weak, 25);
+    CHECK(FN("strong_first").tu_local &&
+          !FN("strong_first").undefined_weak, 26);
+    CHECK(!FN("weak_alias").undefined_weak, 27);
+    CHECK(!FN("pruned").tu_local && FN("pruned").undefined_weak, 28);
+    CHECK(!minic_multi_elf_module_symbol_facts(
+          &module, "weak_first", (MinicElfModuleSymbolKind)99).tu_local, 29);
+    CHECK(OBJ("local_alias").tu_local &&
+          OBJ("local_alias").nonpreemptible, 30);
+    CHECK(FN("local_alias").tu_local &&
+          FN("local_alias").nonpreemptible, 31);
+    CHECK(!OBJ("function_owned_object").undefined_weak &&
+          !FN("function_owned_object").undefined_weak, 32);
+    CHECK(!OBJ("object_owned_function").undefined_weak &&
+          !FN("object_owned_function").undefined_weak, 33);
+    CHECK(!OBJ("function_owned_object").tu_local &&
+          !FN("object_owned_function").tu_local, 34);
+    puts("MINIC_CORE_MODULE_ELF_LINKAGE=PASS facts=3 kinds=2 cases=35 cross_kind=4");
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/probe-core-numeric-coretypes.c"}
+#include "core/core_ir.h"
+#include "target/common/core_numeric_shape.h"
+#include "target/common/direct_instruction_semantics.h"
+#include "target/common/lp64_scalar.h"
+#include "target/source_policy/source_info.h"
+
+#include <stdio.h>
+
+#define REQUIRE(expr) do { if (!(expr)) return __LINE__; } while (0)
+
+/* This intentionally bogus target integer model exposes any accidental
+ * Core -> C fallback in the attached live path. Standalone legacy tests keep
+ * their old model through separate probes. */
+static size_t legacy_integer_queries;
+bool minic_target_info_integer_width(const MinicTargetInvocation *target,
+                                     const MinicC0Program *program,
+                                     MinicType type, unsigned int *bits) {
+    (void)target;
+    (void)program;
+    (void)type;
+    (void)bits;
+    ++legacy_integer_queries;
+    return false;
+}
+
+static bool add_integer(MinicCoreTypeContext *types, unsigned int bits,
+                        bool sign, MinicCoreTypeId *id) {
+    MinicCoreType type = {0};
+    type.kind = MINIC_CORE_TYPE_INTEGER;
+    type.has_layout = true;
+    type.size = ((size_t)bits + 7U) / 8U;
+    type.alignment = type.size;
+    type.value.integer.bit_width = bits;
+    type.value.integer.is_signed = sign;
+    return minic_core_type_register(types, &type, id);
+}
+
+static bool add_pointer(MinicCoreTypeContext *types, MinicCoreTypeId pointee,
+                        MinicCoreTypeId *id) {
+    MinicCoreType type = {0};
+    type.kind = MINIC_CORE_TYPE_POINTER;
+    type.has_layout = true;
+    type.size = 8U;
+    type.alignment = 8U;
+    type.value.pointer.pointee = pointee;
+    return minic_core_type_register(types, &type, id);
+}
+
+int main(void) {
+    MinicCoreTypeContext types;
+    MinicCoreTypeId i8, i32, u32, u64, p_i8, p_i32;
+    MinicCoreValue values[4] = {0};
+    MinicCoreFunction fn = {0};
+    MinicCoreInstruction ins = {0};
+    MinicCoreIntegerOverflowNarrowShape narrow;
+    MinicDirectMachineInstructionShape machine_shape;
+    size_t width, lw, rw;
+    bool sign, ls, rs, pointer, ptr_to_int, source_pointer, left_signed;
+    bool wide_left, right_signed, result_signed;
+
+    minic_core_type_context_initialize(&types);
+    REQUIRE(add_integer(&types, 8U, true, &i8));
+    REQUIRE(add_integer(&types, 32U, true, &i32));
+    REQUIRE(add_integer(&types, 32U, false, &u32));
+    REQUIRE(add_integer(&types, 64U, false, &u64));
+    REQUIRE(add_pointer(&types, i8, &p_i8));
+    REQUIRE(add_pointer(&types, i32, &p_i32));
+    REQUIRE(minic_lp64_core_valid_parameter_type(&types, i32));
+    REQUIRE(minic_lp64_core_valid_parameter_type(&types, p_i32));
+    REQUIRE(minic_lp64_core_valid_return_type(&types, u64));
+    REQUIRE(minic_lp64_core_valid_return_with_indirect(&types, i32, NULL));
+    REQUIRE(!minic_lp64_core_valid_parameter_type(&types, MINIC_CORE_TYPE_INVALID));
+
+    /* Invalid C descriptors deliberately remain zero in these Core values:
+     * live numeric/width admission must require only attached CoreTypeIds. */
+    values[0].core_type_id = i32;
+    values[1].core_type_id = i32;
+    values[2].core_type_id = p_i32;
+    values[3].core_type_id = u64;
+    fn.type_context = &types;
+    fn.values = values;
+    fn.value_count = 4U;
+
+    ins.kind = MINIC_CORE_INSTRUCTION_INTEGER_OVERFLOW;
+    ins.value.integer_overflow.operator_kind = MINIC_CORE_INTEGER_OVERFLOW_ADD;
+    ins.value.integer_overflow.left = 0U;
+    ins.value.integer_overflow.right = 1U;
+    ins.value.integer_overflow.result_address = 2U;
+    REQUIRE(minic_core_integer_overflow_shape(&fn, &ins,
+                                               &width, &sign));
+    REQUIRE(width == 4U && sign);
+    values[1].core_type_id = u64;
+    REQUIRE(minic_core_integer_overflow_mixed_add_i32_shape(
+        &fn, &ins, &left_signed));
+    REQUIRE(left_signed);
+    REQUIRE(!minic_core_integer_overflow_shape(&fn, &ins,
+                                                &width, &sign));
+    values[1].core_type_id = i32;
+
+    /* A valid narrow integer pointer is a normal, source-neutral Core
+     * execution type. Enum destination rejection happened before publication;
+     * machine shape tests must never depend on C source-origin flags. */
+    values[2].core_type_id = p_i8;
+    REQUIRE(minic_core_integer_overflow_narrow_result_shape(
+        &fn, &ins, &narrow));
+    REQUIRE(narrow.result_width == 1U && narrow.result_signed);
+    REQUIRE(legacy_integer_queries == 0U);
+    /* Invalid Core-only pointee shape is rejected using CoreType alone. */
+    values[2].core_type_id = i32;
+    REQUIRE(!minic_core_integer_overflow_narrow_result_shape(
+        &fn, &ins, &narrow));
+    REQUIRE(!minic_core_integer_overflow_shape(&fn, &ins, &width, &sign));
+    values[2].core_type_id = p_i32;
+    REQUIRE(minic_core_integer_overflow_shape(
+        &fn, &ins, &width, &sign));
+
+    /* Exercise every Common overflow consumer with poisoned C descriptors.
+     * Their successful and rejected shapes are properties of Core alone. */
+    values[0].core_type_id = u64;
+    values[1].core_type_id = u32;
+    REQUIRE(minic_core_integer_overflow_u64_u32_to_i32_shape(
+        &fn, &ins, &wide_left) && wide_left);
+    values[0].core_type_id = u32;
+    values[1].core_type_id = u64;
+    REQUIRE(minic_core_integer_overflow_u64_u32_to_i32_shape(
+        &fn, &ins, &wide_left) && !wide_left);
+    values[0].core_type_id = i32;
+    values[1].core_type_id = u32;
+    ins.value.integer_overflow.operator_kind = MINIC_CORE_INTEGER_OVERFLOW_MULTIPLY;
+    REQUIRE(minic_core_integer_overflow_mixed_multiply_i32_shape(
+        &fn, &ins, &left_signed, &right_signed, &result_signed));
+    REQUIRE(left_signed && !right_signed && result_signed);
+    values[1].core_type_id = i32;
+    REQUIRE(!minic_core_integer_overflow_mixed_multiply_i32_shape(
+        &fn, &ins, &left_signed, &right_signed, &result_signed));
+    values[2].core_type_id = p_i8;
+    REQUIRE(minic_core_integer_overflow_narrow_result_shape(&fn, &ins, &narrow));
+    fn.type_context = NULL;
+    REQUIRE(!minic_core_integer_overflow_narrow_result_shape(&fn, &ins, &narrow));
+    REQUIRE(!minic_core_integer_overflow_mixed_multiply_i32_shape(
+        &fn, &ins, &left_signed, &right_signed, &result_signed));
+    ins.value.integer_overflow.operator_kind = MINIC_CORE_INTEGER_OVERFLOW_ADD;
+    REQUIRE(!minic_core_integer_overflow_mixed_add_i32_shape(&fn, &ins, &left_signed));
+    REQUIRE(!minic_core_integer_overflow_u64_u32_to_i32_shape(&fn, &ins, &wide_left));
+    fn.type_context = &types;
+    values[2].core_type_id = p_i32;
+    values[1].core_type_id = i32;
+    fn.type_context = NULL;
+    REQUIRE(!minic_core_integer_overflow_shape(
+        &fn, &ins, &width, &sign));
+    fn.type_context = &types;
+
+    ins.kind = MINIC_CORE_INSTRUCTION_INTEGER_CLZ;
+    ins.core_type_id = i32;
+    values[1].core_type_id = u32;
+    ins.value.operand = 1U;
+    {
+        unsigned int bits;
+        REQUIRE(minic_core_integer_bitscan_shape(&fn,
+                                                  &ins, &bits));
+        REQUIRE(bits == 32U);
+        values[1].core_type_id = i32;
+        REQUIRE(!minic_core_integer_bitscan_shape(&fn,
+                                                   &ins, &bits));
+        fn.type_context = NULL;
+        REQUIRE(!minic_core_integer_bitscan_shape(&fn, &ins, &bits));
+        fn.type_context = &types;
+    }
+
+    ins.kind = MINIC_CORE_INSTRUCTION_INTEGER_NEGATE;
+    ins.core_type_id = i32;
+    ins.value.operand = 0U;
+    REQUIRE(minic_multi_direct_integer_unary_shape(
+        &fn, &ins, &width, &sign));
+    REQUIRE(width == 4U && sign);
+
+    ins.kind = MINIC_CORE_INSTRUCTION_POINTER_LESS;
+    ins.value.binary.left = 2U;
+    ins.value.binary.right = 2U;
+    REQUIRE(minic_multi_direct_pointer_less_shape(&fn, &ins));
+
+    ins.kind = MINIC_CORE_INSTRUCTION_SCALAR_BITCAST;
+    ins.core_type_id = i32;
+    ins.value.operand = 2U;
+    REQUIRE(minic_multi_direct_scalar_bitcast_shape(
+        &fn, &ins, &ptr_to_int, &width,
+        &sign, &source_pointer));
+    REQUIRE(ptr_to_int && source_pointer && width == 4U && sign);
+
+    ins.kind = MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_LEFT;
+    ins.value.binary.left = 0U;
+    ins.value.binary.right = 1U;
+    REQUIRE(minic_multi_direct_integer_shift_shape(
+        &fn, &ins, &lw, &rw, &ls, &rs));
+    REQUIRE(lw == 4U && rw == 4U && ls && rs);
+
+    ins.kind = MINIC_CORE_INSTRUCTION_LOAD;
+    ins.value.load.address = 2U;
+    REQUIRE(minic_multi_direct_scalar_load_shape(
+        &fn, &ins, &width, &sign, &pointer));
+    REQUIRE(width == 4U && sign && !pointer);
+    ins.kind = MINIC_CORE_INSTRUCTION_ATOMIC_LOAD;
+    ins.value.atomic_load.address = 2U;
+    ins.value.atomic_load.memory_order = 0U;
+    REQUIRE(minic_multi_direct_scalar_load_shape(
+        &fn, &ins, &width, &sign, &pointer));
+    REQUIRE(width == 4U && sign && !pointer);
+    ins.value.atomic_load.memory_order = 4U;
+    REQUIRE(!minic_multi_direct_scalar_load_shape(
+        &fn, &ins, &width, &sign, &pointer));
+    REQUIRE(legacy_integer_queries == 0U);
+
+    ins.kind = MINIC_CORE_INSTRUCTION_STORE;
+    ins.result = MINIC_CORE_VALUE_INVALID;
+    ins.value.store.address = 2U;
+    ins.value.store.stored_value = 0U;
+    REQUIRE(minic_multi_direct_scalar_store_shape(
+        &fn, &ins, &width, &sign, &pointer));
+    REQUIRE(width == 4U && sign && !pointer);
+    ins.kind = MINIC_CORE_INSTRUCTION_ATOMIC_STORE;
+    ins.value.atomic_store.address = 2U;
+    ins.value.atomic_store.stored_value = 0U;
+    ins.value.atomic_store.memory_order = 0U;
+    REQUIRE(minic_multi_direct_scalar_store_shape(
+        &fn, &ins, &width, &sign, &pointer));
+    ins.value.atomic_store.memory_order = 3U;
+    REQUIRE(!minic_multi_direct_scalar_store_shape(
+        &fn, &ins, &width, &sign, &pointer));
+
+    values[2].core_type_id = MINIC_CORE_TYPE_INVALID;
+    ins.kind = MINIC_CORE_INSTRUCTION_LOAD;
+    ins.value.load.address = 2U;
+    REQUIRE(!minic_multi_direct_scalar_load_shape(
+        &fn, &ins, &width, &sign, &pointer));
+    values[2].core_type_id = p_i32;
+
+    /* The Direct LP64 machine family uses the same exclusive Core execution
+     * view across scalar ALU, compare, pointer offsets and dispatch. */
+    ins.kind = MINIC_CORE_INSTRUCTION_INTEGER_ADD;
+    ins.core_type_id = i32;
+    ins.result = 0U;
+    ins.value.binary.left = 0U;
+    ins.value.binary.right = 1U;
+    REQUIRE(minic_multi_direct_integer_binary_shape(
+        &fn, &ins, &lw, &rw, &ls, &rs));
+    REQUIRE(lw == 4U && rw == 4U && ls && rs);
+    REQUIRE(minic_multi_direct_machine_instruction_shape(
+        &fn, &ins, false, &machine_shape));
+    REQUIRE(machine_shape.family == MINIC_DIRECT_MACHINE_INTEGER);
+    ins.kind = MINIC_CORE_INSTRUCTION_INTEGER_LESS;
+    REQUIRE(minic_multi_direct_integer_compare_shape(
+        &fn, &ins, &lw, &rw, &ls, &rs));
+    ins.kind = MINIC_CORE_INSTRUCTION_SCALAR_IS_ZERO;
+    ins.value.operand = 2U;
+    REQUIRE(minic_multi_direct_scalar_zero_shape(
+        &fn, &ins, &width, &sign, &pointer) && pointer);
+    ins.kind = MINIC_CORE_INSTRUCTION_POINTER_OFFSET;
+    ins.value.pointer_offset.base = 2U;
+    ins.value.pointer_offset.index = 0U;
+    ins.value.pointer_offset.element_size = 4U;
+    REQUIRE(minic_multi_direct_pointer_offset_shape(
+        &fn, &ins, 16U, &width, &sign) && width == 4U && sign);
+    REQUIRE(!minic_multi_direct_pointer_offset_shape(
+        &fn, &ins, 2U, &width, &sign));
+
+    fn.type_context = NULL;
+    REQUIRE(!minic_multi_direct_pointer_offset_shape(
+        &fn, &ins, 16U, &width, &sign));
+    ins.kind = MINIC_CORE_INSTRUCTION_LOAD;
+    ins.value.load.address = 2U;
+    REQUIRE(!minic_multi_direct_scalar_load_shape(
+        &fn, &ins, &width, &sign, &pointer));
+    ins.kind = MINIC_CORE_INSTRUCTION_INTEGER_ADD;
+    REQUIRE(!minic_multi_direct_integer_binary_shape(
+        &fn, &ins, &lw, &rw, &ls, &rs));
+    REQUIRE(!minic_multi_direct_machine_instruction_shape(
+        &fn, &ins, false, &machine_shape));
+    ins.kind = MINIC_CORE_INSTRUCTION_RECORD_LOAD;
+    REQUIRE(!minic_multi_direct_machine_instruction_shape(
+        &fn, &ins, false, &machine_shape));
+    ins.kind = MINIC_CORE_INSTRUCTION_INTEGER_LESS;
+    REQUIRE(!minic_multi_direct_integer_compare_shape(
+        &fn, &ins, &lw, &rw, &ls, &rs));
+    ins.kind = MINIC_CORE_INSTRUCTION_SCALAR_IS_ZERO;
+    REQUIRE(!minic_multi_direct_scalar_zero_shape(
+        &fn, &ins, &width, &sign, &pointer));
+    minic_core_type_context_destroy(&types);
+    (void)puts("CORE_NUMERIC_CORETYPE=PASS overflow source_neutral_shape bitscan LP64_scalar bitcast atomic_no_C_query");
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/probe-core-object-storage-ownership.c"}
+#include "target/common/core_object_storage.h"
+#include "target/data_layout.h"
+#include "target/data_layout_source.h"
+#include <stdio.h>
+#include <string.h>
+
+/* Deliberately stub only DataLayout's type query so this native -Werror
+ * probe checks actual Common CoreObjectStorage ownership and error paths
+ * without involving a platform's ABI, machine code or target runtime. */
+static size_t type_queries;
+bool minic_data_layout_type(const struct MinicTargetInvocation *layout,
+                            const MinicC0Program *program, MinicType type,
+                            size_t *size, size_t *alignment) {
+    (void)type;
+    if (layout == NULL || program == NULL || size == NULL || alignment == NULL)
+        return false;
+    ++type_queries;
+    *size = 4U;
+    *alignment = 4U;
+    return true;
+}
+static int check(bool ok, int code) { return ok ? 0 : code; }
+int main(void) {
+    MinicCoreTypeContext types;
+    MinicCoreType storage_type = {0};
+    MinicCoreTypeId storage_id, array_id;
+    MinicCoreObject object = {0};
+    MinicCoreFunction function = {0};
+    MinicCoreObjectStoragePlan owned = {0};
+    MinicCoreObjectStoragePlan borrowed_plan = {0};
+    MinicCoreObjectStoragePlan invalid = {0};
+    MinicCoreObjectStoragePlan mismatched = {0};
+    bool borrowed = true;
+    int err;
+    minic_core_type_context_initialize(&types);
+    storage_type.kind = MINIC_CORE_TYPE_INTEGER;
+    storage_type.has_layout = true;
+    storage_type.size = 4U;
+    storage_type.alignment = 4U;
+    storage_type.value.integer.bit_width = 32U;
+    if (!minic_core_type_register(&types, &storage_type, &storage_id)) return 11;
+    storage_type = (MinicCoreType){0};
+    storage_type.kind = MINIC_CORE_TYPE_ARRAY;
+    storage_type.has_layout = true;
+    storage_type.size = 8U;
+    storage_type.alignment = 4U;
+    storage_type.value.array.element = storage_id;
+    storage_type.value.array.count = 2U;
+    storage_type.value.array.is_complete = true;
+    if (!minic_core_type_register(&types, &storage_type, &array_id)) return 13;
+    object.core_type_id = array_id;
+    object.explicit_alignment = 16U;
+    function.type_context = &types;
+    function.objects = &object;
+    function.object_count = 1U;
+
+    if ((err = check(minic_core_object_storage_plan_acquire(
+            &function, NULL, &owned, &borrowed), 1)) ||
+        (err = check(!borrowed && owned.count == 1U &&
+                     owned.objects != NULL && owned.objects[0].extent == 8U &&
+                     owned.objects[0].alignment == 16U && type_queries == 0U, 2)))
+        return err;
+    if ((err = check(minic_core_object_storage_plan_acquire(
+            &function, &owned,
+            &borrowed_plan, &borrowed), 3)) ||
+        (err = check(borrowed && borrowed_plan.objects == owned.objects &&
+                     borrowed_plan.count == 1U && type_queries == 0U, 4)))
+        return err;
+    /* A second caller cannot acquire a nonempty destination; borrowed
+     * objects are never freed by releasing their view. */
+    if (minic_core_object_storage_plan_acquire(
+            &function, &owned, &borrowed_plan, &borrowed))
+        return 5;
+    minic_core_object_storage_plan_release(&borrowed_plan, true);
+    if (borrowed_plan.objects != NULL || borrowed_plan.count != 0U ||
+        owned.objects == NULL || owned.objects[0].alignment != 16U)
+        return 6;
+
+    mismatched = owned;
+    mismatched.count = 2U;
+    borrowed = true;
+    if (minic_core_object_storage_plan_acquire(
+            &function, &mismatched, &invalid, &borrowed) ||
+        borrowed || invalid.objects != NULL || invalid.count != 0U)
+        return 7;
+    mismatched.count = 1U;
+    mismatched.objects = NULL;
+    if (minic_core_object_storage_plan_acquire(
+            &function, &mismatched, &invalid, &borrowed))
+        return 8;
+    object.explicit_alignment = 3U;
+    if (minic_core_object_storage_plan_acquire(
+            &function, NULL, &invalid, &borrowed) ||
+        borrowed || invalid.objects != NULL || invalid.count != 0U)
+        return 9;
+    object.explicit_alignment = 16U;
+    function.type_context = NULL;
+    if (minic_core_object_storage_plan_acquire(
+            &function, NULL, &invalid, &borrowed) ||
+        borrowed || invalid.objects != NULL || type_queries != 0U)
+        return 12;
+    minic_core_object_storage_plan_release(&owned, false);
+    if (owned.objects != NULL || owned.count != 0U)
+        return 10;
+    minic_core_type_context_destroy(&types);
+    (void)puts("MINIC_FIVE_TARGET_OBJECT_STORAGE_OWNERSHIP=PASS");
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/probe-core-object-storage-resolved.c"}
+#include "target/common/core_object_storage.h"
+#include "target/data_layout.h"
+#include "target/data_layout_source.h"
+#include <stdint.h>
+#include <stdio.h>
+
+/* The resolved five-target Core object path must never reopen C DataLayout.
+ * This deliberately conflicting C stub makes accidental fallback visible. */
+static unsigned int legacy_layout_queries;
+bool minic_data_layout_type(const struct MinicTargetInvocation *layout,
+                            const MinicC0Program *program, MinicType type,
+                            size_t *size, size_t *alignment) {
+    (void)type;
+    if (layout == NULL || program == NULL || size == NULL || alignment == NULL)
+        return false;
+    ++legacy_layout_queries;
+    *size = 4U;
+    *alignment = 4U;
+    return true;
+}
+
+int main(void) {
+    MinicCoreTypeContext types;
+    MinicCoreType type = {0};
+    MinicCoreTypeId integer_id, array_id, incomplete_id;
+    MinicCoreObject object = {0};
+    MinicCoreFunction fn = {0};
+    MinicCoreObjectStoragePlan plan = {0};
+
+    minic_core_type_context_initialize(&types);
+    type.kind = MINIC_CORE_TYPE_INTEGER;
+    type.has_layout = true;
+    type.size = 8U;
+    type.alignment = 8U;
+    type.value.integer.bit_width = 64U;
+    if (!minic_core_type_register(&types, &type, &integer_id)) return 1;
+    type = (MinicCoreType){0};
+    type.kind = MINIC_CORE_TYPE_ARRAY;
+    type.has_layout = true;
+    type.size = 24U;
+    type.alignment = 8U;
+    type.value.array.element = integer_id;
+    type.value.array.count = 3U;
+    type.value.array.is_complete = true;
+    if (!minic_core_type_register(&types, &type, &array_id)) return 10;
+    type = (MinicCoreType){0};
+    type.kind = MINIC_CORE_TYPE_OPAQUE;
+    if (!minic_core_type_register(&types, &type, &incomplete_id)) return 2;
+
+    object.core_type_id = array_id;
+    object.explicit_alignment = 16U;
+    fn.type_context = &types;
+    fn.objects = &object;
+    fn.object_count = 1U;
+    if (!minic_core_object_storage_plan_build(&fn, &plan)) return 3;
+    if (plan.count != 1U || plan.objects[0].extent != 24U ||
+        plan.objects[0].alignment != 16U || legacy_layout_queries != 0U)
+        return 4;
+    minic_core_object_storage_plan_destroy(&plan);
+
+    object.core_type_id = MINIC_CORE_TYPE_INVALID;
+    if (minic_core_object_storage_plan_build(&fn, &plan) ||
+        legacy_layout_queries != 0U || plan.objects != NULL) return 5;
+    object.core_type_id = incomplete_id;
+    if (minic_core_object_storage_plan_build(&fn, &plan) ||
+        legacy_layout_queries != 0U || plan.objects != NULL) return 6;
+    /* The array's extent is validated by its CoreType declaration; there
+     * is no independent object count that could silently overflow. */
+    type = (MinicCoreType){0};
+    type.kind = MINIC_CORE_TYPE_ARRAY;
+    type.has_layout = true;
+    type.size = SIZE_MAX;
+    type.alignment = 8U;
+    type.value.array.element = integer_id;
+    type.value.array.count = SIZE_MAX;
+    type.value.array.is_complete = true;
+    if (minic_core_type_register(&types, &type, &array_id) ||
+        legacy_layout_queries != 0U || plan.objects != NULL) return 7;
+    object.core_type_id = integer_id;
+    object.explicit_alignment = 3U;
+    if (minic_core_object_storage_plan_build(&fn, &plan) ||
+        legacy_layout_queries != 0U || plan.objects != NULL) return 8;
+
+    /* Standalone fixtures must also supply CoreType. Even a valid old C
+     * descriptor must not reactivate the retired target layout oracle. */
+    fn.type_context = NULL;
+    object.explicit_alignment = 0U;
+    if (minic_core_object_storage_plan_build(&fn, &plan) ||
+        legacy_layout_queries != 0U || plan.objects != NULL)
+        return 9;
+    minic_core_type_context_destroy(&types);
+    (void)puts("CORE_STORAGE_RESOLVED_NO_SOURCE_LAYOUT=PASS");
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/probe-core-record-layout-contract.c"}
+/* Source-free Core record verifier: reject physically impossible member spans
+ * before any target ABI planner or Machine IR selector trusts their offsets. */
+#include "core/core_type.h"
+#include <stdio.h>
+#include <stdint.h>
+#include <string.h>
+
+static bool primitive(MinicCoreTypeContext *ctx, MinicCoreTypeKind kind,
+                      size_t bytes, MinicCoreTypeId *id) {
+    MinicCoreType type = {0};
+    type.kind = kind;
+    type.has_layout = true;
+    type.size = bytes;
+    type.alignment = bytes;
+    if (kind == MINIC_CORE_TYPE_INTEGER) type.value.integer.bit_width = (unsigned)(bytes * 8U);
+    return minic_core_type_register(ctx, &type, id);
+}
+
+static bool invalid_record(MinicCoreTypeContext *ctx, MinicCoreTypeId field_ty,
+                           size_t byte_offset, size_t bit_offset,
+                           size_t bit_width, bool bit_field) {
+    MinicCoreRecordField field = {0};
+    MinicCoreType record = {0};
+    MinicCoreTypeId ignored;
+    field.type_id = field_ty;
+    field.byte_offset = byte_offset;
+    field.bit_offset = bit_offset;
+    field.bit_width = bit_width;
+    field.alignment = 4U;
+    field.is_bit_field = bit_field;
+    record.kind = MINIC_CORE_TYPE_RECORD;
+    record.has_layout = true;
+    record.size = 8U;
+    record.alignment = 4U;
+    record.value.record.fields = &field;
+    record.value.record.field_count = 1U;
+    record.value.record.is_complete = true;
+    return minic_core_type_register(ctx, &record, &ignored);
+}
+
+int main(void) {
+    MinicCoreTypeContext ctx = {0};
+    MinicCoreTypeId u32, rec, incomplete_array;
+    MinicCoreType prov = {0}, complete = {0}, array = {0};
+    MinicCoreRecordField fields[2] = {{0}, {0}};
+    minic_core_type_context_initialize(&ctx);
+    if (!primitive(&ctx, MINIC_CORE_TYPE_INTEGER, 4U, &u32)) return 1;
+    /* All five of these malformed complete record layouts were previously
+     * accepted by the CoreType registration boundary. */
+    if (invalid_record(&ctx, u32, 9U, 0U, 0U, false)) return 2;
+    if (invalid_record(&ctx, u32, 6U, 0U, 0U, false)) return 3;
+    if (invalid_record(&ctx, u32, 0U, 8U, 3U, true)) return 4;
+    if (invalid_record(&ctx, u32, 0U, 0U, 33U, true)) return 5;
+    if (invalid_record(&ctx, u32, 0U, 1U, 0U, false)) return 6;
+    /* A provisional record's Source-resolved layout may already be known;
+     * completing its Core member graph must preserve that contract. */
+    prov.kind = MINIC_CORE_TYPE_RECORD;
+    prov.has_layout = true;
+    prov.size = 8U;
+    prov.alignment = 4U;
+    if (!minic_core_type_register(&ctx, &prov, &rec)) return 7;
+    fields[0].type_id = u32;
+    fields[0].alignment = 4U;
+    fields[1].type_id = u32;
+    fields[1].byte_offset = 4U;
+    fields[1].alignment = 4U;
+    complete = prov;
+    complete.value.record.is_complete = true;
+    complete.value.record.field_count = 2U;
+    complete.value.record.fields = fields;
+    if (!minic_core_type_complete_record(&ctx, rec, &complete)) return 8;
+    /* Legitimate incomplete flexible array in a final record slot. */
+    array.kind = MINIC_CORE_TYPE_ARRAY;
+    array.value.array.element = u32;
+    if (!minic_core_type_register(&ctx, &array, &incomplete_array)) return 9;
+    fields[0].type_id = u32;
+    fields[0].byte_offset = 0U;
+    fields[0].alignment = 4U;
+    fields[1].type_id = incomplete_array;
+    fields[1].byte_offset = 8U;
+    fields[1].alignment = 4U;
+    complete.value.record.fields = fields;
+    if (!minic_core_type_register(&ctx, &complete, &rec)) return 10;
+    minic_core_type_context_destroy(&ctx);
+    puts("MINIC_CORE_RECORD_LAYOUT=PASS invalid_field_spans=5 flexible_tail=1");
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/probe-core-scalar-conversion-shape.c"}
+/* Core conversions and scalar bitcasts use sealed CoreType IDs, without a
+ * source-language descriptor in the public instruction/value schema. */
+#include "target/common/core_abi_value_shape.h"
+#include <stdio.h>
+
+#define CHECK(expr) do { if (!(expr)) return __LINE__; } while (0)
+
+static bool add_integer(MinicCoreTypeContext *ctx, size_t bytes,
+                        bool sign, bool boolean, MinicCoreTypeId *id) {
+    MinicCoreType type = {0};
+    type.kind = MINIC_CORE_TYPE_INTEGER;
+    type.has_layout = true;
+    type.size = bytes;
+    type.alignment = bytes;
+    type.value.integer.bit_width = (unsigned int)(bytes * 8U);
+    type.value.integer.is_signed = sign;
+    type.value.integer.is_bool = boolean;
+    return minic_core_type_register(ctx, &type, id);
+}
+
+static bool add_pointer(MinicCoreTypeContext *ctx, size_t bytes,
+                        MinicCoreTypeId pointee, MinicCoreTypeId *id) {
+    MinicCoreType type = {0};
+    type.kind = MINIC_CORE_TYPE_POINTER;
+    type.has_layout = true;
+    type.size = bytes;
+    type.alignment = bytes;
+    type.value.pointer.pointee = pointee;
+    return minic_core_type_register(ctx, &type, id);
+}
+
+static int run(void) {
+    MinicCoreTypeContext types;
+    MinicCoreTypeId signed_byte, unsigned_long, wide, boolean, invalid;
+    MinicCoreTypeId pointer, pointer32, malformed_pointer;
+    MinicCoreType malformed = {0};
+    MinicCoreValue values[2] = {0};
+    MinicCoreFunction function = {0};
+    MinicCoreInstruction instruction = {0};
+    MinicCoreIntegerConversionShape shape;
+    MinicCoreScalarBitcastShape bitcast;
+    MinicCoreAbiValueShape abi;
+    size_t bytes;
+    bool sign;
+    minic_core_type_context_initialize(&types);
+    CHECK(add_integer(&types, 1U, true, false, &signed_byte));
+    CHECK(add_integer(&types, 8U, false, false, &unsigned_long));
+    CHECK(add_integer(&types, 16U, true, false, &wide));
+    CHECK(add_integer(&types, 1U, false, true, &boolean));
+    malformed.kind = MINIC_CORE_TYPE_INTEGER;
+    malformed.has_layout = true;
+    malformed.size = 4U;
+    malformed.alignment = 4U;
+    malformed.value.integer.bit_width = 16U;
+    CHECK(minic_core_type_register(&types, &malformed, &invalid));
+    CHECK(add_pointer(&types, 8U, signed_byte, &pointer));
+    CHECK(add_pointer(&types, 4U, signed_byte, &pointer32));
+    CHECK(add_pointer(&types, 2U, signed_byte, &malformed_pointer));
+    function.type_context = &types;
+    function.values = values;
+    function.value_count = 2U;
+    CHECK(minic_core_abi_value_shape(&function, wide, &abi));
+    CHECK(abi.bytes == 16U && abi.integer_width == 16U && abi.integer_signed);
+    CHECK(minic_core_abi_value_shape(&function, boolean, &abi) && abi.integer_bool);
+    CHECK(!minic_core_abi_value_shape(&function, invalid, &abi));
+    CHECK(!minic_core_abi_value_shape(&function, malformed_pointer, &abi));
+    CHECK(minic_core_abi_value_shape(&function, pointer32, &abi) && abi.bytes == 4U);
+    CHECK(minic_core_floating_integer(minic_core_type_get(&types, wide), &bytes, &sign));
+    CHECK(bytes == 16U && sign);
+    CHECK(!minic_core_floating_integer(minic_core_type_get(&types, invalid), &bytes, &sign));
+    instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONVERSION;
+    instruction.value.operand = 0U;
+    instruction.result = 1U;
+    values[0].core_type_id = signed_byte;
+    values[1].core_type_id = unsigned_long;
+    instruction.core_type_id = unsigned_long;
+    CHECK(minic_core_integer_conversion_shape(&function, &instruction, &shape));
+    CHECK(shape.source_bytes == 1U && shape.target_bytes == 8U &&
+          shape.source_signed && !shape.target_signed &&
+          !shape.source_bool && !shape.target_bool);
+    values[0].core_type_id = wide;
+    values[1].core_type_id = boolean;
+    instruction.core_type_id = boolean;
+    CHECK(minic_core_integer_conversion_shape(&function, &instruction, &shape));
+    CHECK(shape.source_bytes == 16U && shape.target_bytes == 1U &&
+          shape.target_bool);
+    values[0].core_type_id = invalid;
+    CHECK(!minic_core_integer_conversion_shape(&function, &instruction, &shape));
+    values[0].core_type_id = wide;
+    instruction.core_type_id = signed_byte;
+    CHECK(!minic_core_integer_conversion_shape(&function, &instruction, &shape));
+    instruction.core_type_id = boolean;
+    function.type_context = NULL;
+    CHECK(!minic_core_integer_conversion_shape(&function, &instruction, &shape));
+    function.type_context = &types;
+
+    instruction.kind = MINIC_CORE_INSTRUCTION_SCALAR_BITCAST;
+    values[0].core_type_id = pointer;
+    values[1].core_type_id = unsigned_long;
+    instruction.core_type_id = unsigned_long;
+    CHECK(minic_core_scalar_bitcast_shape(&function, &instruction, &bitcast));
+    CHECK(bitcast.source_pointer && !bitcast.target_pointer &&
+          bitcast.source_bytes == 8U && bitcast.target_bytes == 8U &&
+          !bitcast.target_bool && !bitcast.target_signed);
+    values[0].core_type_id = pointer32;
+    CHECK(minic_core_scalar_bitcast_shape(&function, &instruction, &bitcast));
+    CHECK(bitcast.source_bytes == 4U && bitcast.target_bytes == 8U);
+    values[0].core_type_id = pointer;
+    values[1].core_type_id = boolean;
+    instruction.core_type_id = boolean;
+    CHECK(minic_core_scalar_bitcast_shape(&function, &instruction, &bitcast));
+    CHECK(bitcast.target_bool && bitcast.target_bytes == 1U);
+    values[0].core_type_id = unsigned_long;
+    values[1].core_type_id = pointer;
+    instruction.core_type_id = pointer;
+    CHECK(minic_core_scalar_bitcast_shape(&function, &instruction, &bitcast));
+    CHECK(!bitcast.source_pointer && bitcast.target_pointer &&
+          bitcast.source_bytes == 8U);
+    values[1].core_type_id = pointer32;
+    instruction.core_type_id = pointer32;
+    CHECK(minic_core_scalar_bitcast_shape(&function, &instruction, &bitcast));
+    CHECK(bitcast.source_bytes == 8U && bitcast.target_bytes == 4U);
+    values[1].core_type_id = pointer;
+    instruction.core_type_id = pointer;
+    values[0].core_type_id = malformed_pointer;
+    CHECK(!minic_core_scalar_bitcast_shape(&function, &instruction, &bitcast));
+    values[0].core_type_id = unsigned_long;
+    instruction.core_type_id = boolean;
+    CHECK(!minic_core_scalar_bitcast_shape(&function, &instruction, &bitcast));
+    instruction.core_type_id = pointer;
+    values[1].core_type_id = pointer;
+    function.type_context = NULL;
+    CHECK(!minic_core_scalar_bitcast_shape(&function, &instruction, &bitcast));
+    minic_core_type_context_destroy(&types);
+    return 0;
+}
+
+int main(void) {
+    const int line = run();
+    if (line != 0) {
+        fprintf(stderr, "CORE_SCALAR_CONVERSION_SHAPE=FAIL line=%d\n", line);
+        return 1;
+    }
+    puts("CORE_SCALAR_CONVERSION_SHAPE=PASS C_free integer bitcast LP64_ILP32 bool rollback=6");
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/probe-core-semantic-family.c"}
+#include "target/common/core_instruction_family.h"
+#include <stdio.h>
+/* Semantic classification is NOT an ISA/ABI permission bitset. */
+int main(void) {
+    unsigned int i;
+    for (i = 0U; i < (unsigned int)MINIC_CORE_INSTRUCTION_KIND_COUNT; ++i) {
+        const MinicCoreSemanticFamily family =
+            minic_core_instruction_semantic_family((MinicCoreInstructionKind)i);
+        /* Four numeric IDs between opaque and structured ASM were retired.
+         * Preserving their holes is intentional ABI stability, not a new
+         * live Core opcode that the target vocabulary failed to classify. */
+        if (i > (unsigned int)MINIC_CORE_INSTRUCTION_OPAQUE_INLINE_ASM &&
+            i < (unsigned int)MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM) {
+            if (family != MINIC_CORE_FAMILY_INVALID) return 1;
+        } else if (family == MINIC_CORE_FAMILY_INVALID) return 1;
+    }
+    if (minic_core_instruction_semantic_family((MinicCoreInstructionKind)-1) !=
+            MINIC_CORE_FAMILY_INVALID ||
+        minic_core_instruction_semantic_family(
+            (MinicCoreInstructionKind)MINIC_CORE_INSTRUCTION_KIND_COUNT) !=
+            MINIC_CORE_FAMILY_INVALID ||
+        minic_core_instruction_semantic_family(MINIC_CORE_INSTRUCTION_ATOMIC_STORE) !=
+            MINIC_CORE_FAMILY_MEMORY ||
+        minic_core_instruction_semantic_family(MINIC_CORE_INSTRUCTION_VARIADIC_COPY) !=
+            MINIC_CORE_FAMILY_ABI ||
+        minic_core_instruction_semantic_family(MINIC_CORE_INSTRUCTION_FIXED_REGISTER_WRITE) !=
+            MINIC_CORE_FAMILY_ABI ||
+        minic_core_instruction_semantic_family(
+            MINIC_CORE_INSTRUCTION_VECTOR_STORAGE_COPY) !=
+            MINIC_CORE_FAMILY_MEMORY ||
+        minic_core_instruction_semantic_family(
+            MINIC_CORE_INSTRUCTION_VECTOR_REGISTER_LOAD) !=
+            MINIC_CORE_FAMILY_MEMORY ||
+        minic_core_instruction_semantic_family(
+            MINIC_CORE_INSTRUCTION_VECTOR_REGISTER_STORE) !=
+            MINIC_CORE_FAMILY_MEMORY ||
+        minic_core_instruction_semantic_family(
+            MINIC_CORE_INSTRUCTION_VECTOR_REGISTER_XOR) !=
+            MINIC_CORE_FAMILY_VECTOR ||
+        minic_core_instruction_semantic_family(
+            MINIC_CORE_INSTRUCTION_VECTOR_REGISTER_ADD) !=
+            MINIC_CORE_FAMILY_VECTOR ||
+        minic_core_instruction_is_memory_access(
+            MINIC_CORE_INSTRUCTION_VECTOR_REGISTER_ADD) ||
+        minic_core_instruction_is_memory_access(
+            MINIC_CORE_INSTRUCTION_VECTOR_REGISTER_XOR) ||
+        !minic_core_instruction_is_vector_arithmetic(
+            MINIC_CORE_INSTRUCTION_VECTOR_REGISTER_XOR) ||
+        !minic_core_instruction_is_vector_arithmetic(
+            MINIC_CORE_INSTRUCTION_VECTOR_REGISTER_ADD) ||
+        !minic_core_instruction_is_call(MINIC_CORE_INSTRUCTION_INDIRECT_CALL) ||
+        !minic_core_instruction_is_integer_scalar(MINIC_CORE_INSTRUCTION_INTEGER_CLZ) ||
+        !minic_core_instruction_is_floating_scalar(MINIC_CORE_INSTRUCTION_FLOAT_DIVIDE) ||
+        !minic_core_instruction_is_memory_access(MINIC_CORE_INSTRUCTION_ATOMIC_LOAD) ||
+        !minic_core_instruction_is_inline_asm(
+            MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM)) return 2;
+    printf("MINIC_FIVE_TARGET_CORE_FAMILY=PASS opcodes=%u\n",
+           (unsigned)MINIC_CORE_INSTRUCTION_KIND_COUNT);
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/probe-core-value-slots.c"}
+#include "target/common/core_value_slots.h"
+#include "frontend/type.h"
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+/* All targets share Core's last-use scalar slots; only Direct LP64 needs
+ * this separate 16-byte wide sidecar, with checked transactional bounds. */
+int main(void) {
+    MinicCoreFunction fn = {0};
+    MinicCoreValue values[4] = {0};
+    MinicCoreTypeContext types;
+    MinicCoreType shapes[4] = {0};
+    size_t *slots = NULL, end = SIZE_MAX;
+    size_t i;
+    minic_core_type_context_initialize(&types);
+    shapes[0].kind = MINIC_CORE_TYPE_INTEGER;
+    shapes[0].has_layout = true;
+    shapes[0].size = shapes[0].alignment = 4U;
+    shapes[0].value.integer.bit_width = 32U;
+    shapes[1].kind = MINIC_CORE_TYPE_INTEGER;
+    shapes[1].has_layout = true;
+    shapes[1].size = shapes[1].alignment = 16U;
+    shapes[1].value.integer.bit_width = 128U;
+    shapes[2].kind = MINIC_CORE_TYPE_FLOAT;
+    shapes[2].has_layout = true;
+    shapes[2].size = shapes[2].alignment = 8U;
+    shapes[2].value.floating.format = MINIC_CORE_FLOAT_BINARY64;
+    shapes[3].kind = MINIC_CORE_TYPE_FLOAT;
+    shapes[3].has_layout = true;
+    shapes[3].size = shapes[3].alignment = 16U;
+    shapes[3].value.floating.format = MINIC_CORE_FLOAT_BINARY128;
+    for (i = 0U; i < 4U; ++i)
+        if (!minic_core_type_register(&types, &shapes[i], &values[i].core_type_id))
+            return 1;
+    fn.values = values;
+    fn.value_count = 4U;
+    fn.type_context = &types;
+    /* SSA has no C descriptor; slot policy uses only Core execution shape. */
+
+    if (!minic_core_wide_value_slots_build(
+            &fn, 64U, 128U,
+            &slots, &end) || slots == NULL || end != 96U ||
+        slots[0] != SIZE_MAX || slots[1] != 64U ||
+        slots[2] != SIZE_MAX || slots[3] != 80U)
+        return 2;
+    free(slots); slots = NULL;
+
+    /* Failed allocation is transactional: the caller's state does not
+     * change, including at limits and when passed malformed Core metadata. */
+    end = 123U;
+    if (minic_core_wide_value_slots_build(
+            &fn, 64U, 95U,
+            &slots, &end) || slots != NULL || end != 123U)
+        return 3;
+    if (minic_core_wide_value_slots_build(
+            &fn, SIZE_MAX-8U, SIZE_MAX,
+            &slots, &end) || slots != NULL || end != 123U)
+        return 4;
+    if (minic_core_wide_value_slots_build(
+            &fn, 101U, 100U,
+            &slots, &end) || slots != NULL || end != 123U)
+        return 5;
+    fn.values = NULL;
+    if (minic_core_wide_value_slots_build(
+            &fn, 0U, 100U,
+            &slots, &end) || slots != NULL || end != 123U)
+        return 6;
+    fn.values = values;
+    fn.value_count = 0U;
+    if (!minic_core_wide_value_slots_build(
+            &fn, 32U, 32U,
+            &slots, &end) || slots != NULL || end != 32U)
+        return 7;
+
+    fn.value_count = 4U;
+    fn.type_context = NULL;
+    if (minic_core_wide_value_slots_build(&fn, 32U, 128U, &slots, &end))
+        return 8;
+    fn.type_context = &types;
+    values[2].core_type_id = MINIC_CORE_TYPE_INVALID;
+    if (minic_core_wide_value_slots_build(&fn, 32U, 128U, &slots, &end))
+        return 9;
+    minic_core_type_context_destroy(&types);
+
+    puts("MINIC_CORE_WIDE_VALUE_SLOTS=PASS coretype_only wide-tail bounds rollback");
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/probe-core-value-use-counts.c"}
+#include "core/value_uses.h"
+#include <stddef.h>
+#include <stdio.h>
+#include <string.h>
+
+int main(void) {
+    MinicCoreFunction fn = {0};
+    MinicCoreBlock block = {0};
+    MinicCoreInstruction ins[4] = {0};
+    MinicCoreInstructionId ids[4] = {0U, 1U, 2U, 3U};
+    size_t uses[4] = {99U, 99U, 99U, 99U};
+    fn.values = NULL;
+    fn.value_count = 4U;
+    fn.instructions = ins;
+    fn.instruction_count = 4U;
+    fn.blocks = &block;
+    fn.block_count = 1U;
+    block.instructions = ids;
+    block.instruction_count = 4U;
+    block.has_terminator = true;
+    block.terminator.kind = MINIC_CORE_TERMINATOR_RETURN;
+    block.terminator.return_value = 2U;
+    ins[0].kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
+    ins[0].result = 0U;
+    ins[1].kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
+    ins[1].result = 1U;
+    ins[2].kind = MINIC_CORE_INSTRUCTION_INTEGER_ADD;
+    ins[2].result = 2U;
+    ins[2].value.binary.left = 0U;
+    ins[2].value.binary.right = 0U;
+    ins[3].kind = MINIC_CORE_INSTRUCTION_STORE;
+    ins[3].result = MINIC_CORE_VALUE_INVALID;
+    ins[3].value.store.address = 1U;
+    ins[3].value.store.stored_value = 2U;
+
+    if (!minic_core_function_value_use_counts(&fn, uses, 4U) ||
+        uses[0] != 2U || uses[1] != 1U ||
+        uses[2] != 2U || uses[3] != 0U) {
+        fputs("CORE_VALUE_USE_COUNTS=FAIL duplicate/terminator/dead\n", stderr);
+        return 1;
+    }
+    /* Repeated invocation must reset the once-owned table, not add another
+     * occurrence to a previous run's liveness facts. */
+    if (!minic_core_function_value_use_counts(&fn, uses, 4U) ||
+        uses[0] != 2U || uses[3] != 0U) return 2;
+    if (minic_core_function_value_use_counts(&fn, uses, 3U)) return 3;
+    ids[3] = 99U;
+    if (minic_core_function_value_use_counts(&fn, uses, 4U)) return 4;
+    ids[3] = 3U;
+    ins[2].value.binary.left = 99U;
+    if (minic_core_function_value_use_counts(&fn, uses, 4U)) return 5;
+    ins[2].value.binary.left = 0U;
+    block.has_terminator = false;
+    if (minic_core_function_value_use_counts(&fn, uses, 4U)) return 6;
+
+    (void)memset(&fn, 0, sizeof(fn));
+    if (!minic_core_function_value_use_counts(&fn, NULL, 0U)) return 7;
+    puts("CORE_VALUE_USE_COUNTS=PASS duplicate_operand=2 terminator=1 dead_result=0 malformed_fail_closed=1");
+    return 0;
+}
+@@@ end

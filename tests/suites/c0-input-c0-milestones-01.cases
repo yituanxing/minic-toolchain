@@ -1,0 +1,2304 @@
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/m129_builtin_isdigit.c"}
+int probe_digit(int value) {
+    return __builtin_isdigit(value);
+}
+
+int main(void) {
+    return probe_digit('7') && !probe_digit('x') && !probe_digit(-1) ? 0 : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/m129_discarded_record_values.c"}
+typedef struct {
+    unsigned long bits;
+} record_word_t;
+
+static record_word_t make_word(unsigned long value) {
+    return (record_word_t){value + 1UL};
+}
+
+int main(void) {
+    record_word_t left = {1UL};
+    record_word_t right = {2UL};
+    left = 1 ? right : make_word(3UL);
+    make_word(4UL);
+    return left.bits == 2UL ? 0 : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/m130_discarded_lvalue.c"}
+typedef struct {
+    int value;
+} item_t;
+
+static item_t global_item = {7};
+
+static item_t *touch_item(int *count) {
+    *count += 1;
+    return &global_item;
+}
+
+int main(void) {
+    int count = 0;
+    (void)touch_item(&count)->value;
+    return count == 1 ? 0 : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/m131_zero_size_record_subscript.c"}
+struct empty_record { };
+
+static struct empty_record *zero_stride(struct empty_record *pointer, long index) {
+    return pointer + index;
+}
+
+int main(void) {
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/m132_unbounded_for_termination.c"}
+static int terminal_loop(int value) {
+    for (;;) {
+        if (value)
+            return value;
+    }
+}
+
+static int breakable_loop(int value) {
+    for (;;) {
+        if (value)
+            break;
+        value = 1;
+    }
+    return value;
+}
+
+int main(void) {
+    return terminal_loop(1) == 1 && breakable_loop(0) == 1 ? 0 : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/m133_constant_true_loop_reachability.c"}
+static int while_terminal(int value) {
+    while (1) {
+        if (value)
+            return value;
+    }
+}
+
+static int do_while_terminal(int value) {
+    do {
+        if (value)
+            return value;
+    } while (1);
+}
+
+static int while_breakable(int value) {
+    while (1) {
+        if (value)
+            break;
+        value = 1;
+    }
+    return value;
+}
+
+static int while_false(int value) {
+    while (0)
+        value = 99;
+    return value;
+}
+
+int main(void) {
+    return while_terminal(1) == 1 &&
+           do_while_terminal(1) == 1 &&
+           while_breakable(0) == 1 &&
+           while_false(7) == 7 ? 0 : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/m134_unreachable_nested_label.c"}
+int nested_label_must_not_be_dropped(void) {
+    goto inside;
+    return 1;
+    if (1) {
+inside:
+        return 2;
+    }
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/m134_unreachable_tail.c"}
+int unreachable_expression(int x) {
+    return x + 1;
+    x = x + 2;
+}
+
+int unreachable_if(int x) {
+    return x;
+    if (x) {
+        return 9;
+    }
+}
+
+int unreachable_while(int x) {
+    return x;
+    while (x) {
+        x = x - 1;
+    }
+}
+
+int top_level_label_reentry(int x) {
+    if (x) {
+        goto live;
+    }
+    return 3;
+live:
+    return 4;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/m141_scoped_loop_continue_tail.c"}
+static int for_unbounded_continue(int limit) {
+    int i = 0;
+    for (;;) {
+        i += 1;
+        if (i < limit)
+            continue;
+        return i;
+    }
+}
+
+static int for_update_continue(int limit) {
+    int i = 0;
+    int sum = 0;
+    for (; i < limit; i += 1) {
+        if (i & 1)
+            continue;
+        sum += i;
+    }
+    return sum;
+}
+
+static int nested_for_continue(int limit) {
+    int outer = 0;
+    int total = 0;
+    for (; outer < limit; outer += 1) {
+        int inner = 0;
+        for (;;) {
+            inner += 1;
+            if (inner < 2)
+                continue;
+            break;
+        }
+        total += inner;
+    }
+    return total;
+}
+
+static int ordinary_for_unchanged(int limit) {
+    int i;
+    int sum = 0;
+    for (i = 0; i < limit; i += 1)
+        sum += i;
+    return sum;
+}
+
+int main(void) {
+    return for_unbounded_continue(4) == 4 &&
+           for_update_continue(6) == 6 &&
+           nested_for_continue(3) == 6 &&
+           ordinary_for_unchanged(5) == 10 ? 0 : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/m142_nonedge_cleanup_metadata.c"}
+static void cleanup_int(int *value) {
+    *value += 1;
+}
+
+static int cleanup_assignment(int seed) {
+    int guard __attribute__((cleanup(cleanup_int))) = seed;
+    int result = 0;
+    result = guard + 7;
+    return result;
+}
+
+static int cleanup_internal_loop_label(int seed) {
+    int total = 0;
+    int i;
+    for (i = 0; i < 3; i += 1) {
+        int guard __attribute__((cleanup(cleanup_int))) = i;
+        while (guard < 0) {
+            guard += 1;
+        }
+        total += guard;
+    }
+    return total + seed;
+}
+
+int main(void) {
+    return cleanup_assignment(2) == 9 &&
+           cleanup_internal_loop_label(4) == 7 ? 0 : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/m144_unreferenced_loop_label_metadata.c"}
+static void cleanup_int(int *value) {
+    *value += 1;
+}
+
+static int cleanup_loop_tail(int seed) {
+    int total = seed;
+    int i;
+    for (i = 0; i < 3; i += 1) {
+        int guard __attribute__((cleanup(cleanup_int))) = i;
+        while (guard < 1)
+            guard += 1;
+        total += guard;
+    }
+    return total;
+}
+
+static int ordinary_source_label(int x) {
+    if (x > 0)
+        goto done;
+    x = 7;
+done:
+    return x;
+}
+
+int main(void) {
+    return cleanup_loop_tail(2) == 6 &&
+           ordinary_source_label(3) == 3 &&
+           ordinary_source_label(0) == 7 ? 0 : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/m147_normalized_for_continue_binding.c"}
+static int plain_while_baseline(int n) {
+    int sum = 0;
+    while (n > 0) {
+        n -= 1;
+        if (n & 1)
+            sum += n;
+    }
+    return sum;
+}
+
+static int normalized_for_continue(int n) {
+    int i;
+    int sum = 0;
+    for (i = 0; i < n; i += 1) {
+        if (i & 1)
+            continue;
+        sum += i;
+    }
+    return sum;
+}
+
+int main(void) {
+    return plain_while_baseline(5) == 4 &&
+           normalized_for_continue(6) == 6 ? 0 : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/m148_for_update_continue_cfg.c"}
+static int update_calls;
+
+static int next_i(int i) {
+    update_calls += 1;
+    return i + 1;
+}
+
+static int update_continue(int limit) {
+    int i;
+    int sum = 0;
+    update_calls = 0;
+    for (i = 0; i < limit; i = next_i(i)) {
+        if (i & 1)
+            continue;
+        sum += i;
+    }
+    return sum + update_calls * 100;
+}
+
+static int no_update_continue(int limit) {
+    int i = 0;
+    for (;;) {
+        i += 1;
+        if (i < limit)
+            continue;
+        return i;
+    }
+}
+
+int main(void) {
+    return update_continue(5) == 506 && no_update_continue(4) == 4 ? 0 : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/m149_parser_tail_continue_provenance.c"}
+static int plain_while_continue(int n) {
+    int total = 0;
+    while (n > 0) {
+        n -= 1;
+        if (n & 1)
+            continue;
+        total += n;
+    }
+    return total;
+}
+
+static int for_update_continue(int limit) {
+    int i;
+    int total = 0;
+    for (i = 0; i < limit; i += 1) {
+        if (i & 1)
+            continue;
+        total += i;
+    }
+    return total;
+}
+
+static int for_unbounded_continue(int limit) {
+    int i = 0;
+    for (;;) {
+        i += 1;
+        if (i < limit)
+            continue;
+        return i;
+    }
+}
+
+int main(void) {
+    return plain_while_continue(5) == 6 &&
+           for_update_continue(6) == 6 &&
+           for_unbounded_continue(4) == 4 ? 0 : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/m150_indirect_variadic_call.c"}
+typedef int (*sink_fn)(const char *, ...);
+
+static int sink(const char *tag, ...) {
+    return tag[0];
+}
+
+static int invoke(sink_fn fn, int value, void *pointer) {
+    return fn("v", value, pointer);
+}
+
+int main(void) {
+    return invoke(sink, 7, (void *)0) == 'v' ? 0 : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/m151_indirect_call_batch.c"}
+typedef struct Pair {
+    unsigned long pointer_bits;
+    unsigned long length;
+} Pair;
+
+typedef int (*record_fn)(int, Pair);
+typedef int (*variadic_fn)(const char *, ...);
+
+static int consume_record(int bias, Pair pair) {
+    return bias + (int)pair.length;
+}
+
+static int invoke_record(record_fn fn, Pair pair) {
+    return fn(3, pair);
+}
+
+static int consume_variadic(const char *tag, ...) {
+    return tag[0];
+}
+
+static int invoke_variadic(variadic_fn fn, int value, void *pointer) {
+    return fn("v", value, pointer);
+}
+
+int main(void) {
+    Pair pair = {0, 4};
+    int a = invoke_record(consume_record, pair);
+    int b = invoke_variadic(consume_variadic, 7, (void *)0);
+    return a == 7 && b == 'v' ? 0 : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/m152_enum_bit_field_write.c"}
+enum iter_state {
+    ITER_INVALID,
+    ITER_ACTIVE,
+    ITER_DRAINED,
+};
+
+struct outer_state {
+    int prefix;
+    struct {
+        void *btf;
+        unsigned int btf_id;
+        enum iter_state state : 2;
+        int depth : 30;
+    } iter;
+};
+
+enum value_type {
+    VALUE_UNDEFINED,
+    VALUE_FLAG,
+    VALUE_STRING,
+};
+
+struct parameter {
+    const char *key;
+    enum value_type type : 8;
+    char *string;
+};
+
+void set_iter_state(struct outer_state *st) {
+    st->iter.state = ITER_ACTIVE;
+}
+
+int set_parameter_type(void) {
+    struct parameter param;
+    param.type = VALUE_FLAG;
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/m153_signed_bit_field_write.c"}
+struct signed_bits {
+    unsigned int tag : 2;
+    int depth : 30;
+};
+
+void clear_depth(struct signed_bits *p) {
+    p->depth = 0;
+}
+
+void set_negative_depth(struct signed_bits *p) {
+    p->depth = -1;
+}
+
+int assigned_signed_depth(struct signed_bits *p) {
+    return (p->depth = -3);
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/m154_signed_bit_field_update.c"}
+struct signed_bits {
+    unsigned int tag : 2;
+    int depth : 30;
+};
+
+int post_inc(struct signed_bits *p) { return p->depth++; }
+int pre_inc(struct signed_bits *p) { return ++p->depth; }
+int post_dec(struct signed_bits *p) { return p->depth--; }
+int pre_dec(struct signed_bits *p) { return --p->depth; }
+
+struct unsigned_bits { unsigned int value : 3; };
+unsigned int unsigned_pre(struct unsigned_bits *p) { return ++p->value; }
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/m155_extern_void_symbol_address.c"}
+#define __weak __attribute__((weak))
+extern const void __start_notes __weak;
+extern const void __stop_notes __weak;
+extern void *memcpy(void *dst, const void *src, unsigned long n);
+
+unsigned long notes_size(void) {
+    return (unsigned long)(&__stop_notes - &__start_notes);
+}
+
+void notes_copy(char *buf, long off, unsigned long count) {
+    memcpy(buf, &__start_notes + off, count);
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/m156_structural_pointer_relational.c"}
+struct item { int value; };
+extern struct item __start_items[];
+extern struct item __stop_items[];
+
+int has_items(void) {
+    return &__stop_items > &__start_items;
+}
+
+extern const void __start_blob;
+extern const void __stop_blob;
+int has_blob(void) {
+    return &__stop_blob > &__start_blob;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/m157_scalar_compound_literal_address.c"}
+int scalar_zero(void) {
+    return (int){0};
+}
+
+int scalar_one(void) {
+    return (int){1};
+}
+
+int scalar_build_bug_shape(void) {
+    return !(!((int){0} != 0));
+}
+
+int scalar_reinitialize(int x) {
+    return (int){x};
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/m158_final_strict_tail.c"}
+extern void m158_sink(void);
+
+int m158_ctzl(unsigned long x) {
+    return __builtin_ctzl(x);
+}
+
+void m158_void_statement_expression(void) {
+    (void)({ m158_sink(); });
+}
+
+int m158_computed_goto(int which) {
+    void *target = which ? &&one : &&two;
+    goto *target;
+one:
+    return 1;
+two:
+    return 2;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/m159_constant_true_do_while.c"}
+int m159_infinite_return_loop(int x) {
+    do {
+        if (x)
+            return 1;
+        x += 1;
+    } while (1);
+}
+
+int m159_false_tail_not_stripped(int x) {
+    do {
+        x += 1;
+    } while (0);
+    return x;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/mc001_symbolic_closure_arena.c"}
+/* MC-001: transitive symbolic closure builds &global[index] using an
+ * integer-specialized inline caller.  A recursive rewrite may grow the
+ * Program's Expression arena while its parent has an active ExpressionId. */
+#ifndef PAD_COUNT
+#define PAD_COUNT 0
+#endif
+
+#define PAD_1(x) ((x) + 1)
+#define PAD_2(x) PAD_1(PAD_1(x))
+#define PAD_4(x) PAD_2(PAD_2(x))
+#define PAD_8(x) PAD_4(PAD_4(x))
+#define PAD_16(x) PAD_8(PAD_8(x))
+#define PAD_32(x) PAD_16(PAD_16(x))
+#define PAD_64(x) PAD_32(PAD_32(x))
+#define PAD_128(x) PAD_64(PAD_64(x))
+
+#if PAD_COUNT < 0 || PAD_COUNT > 255
+#error PAD_COUNT must fit in eight bits
+#endif
+
+#if PAD_COUNT & 1
+#define APPLY_1(x) PAD_1(x)
+#else
+#define APPLY_1(x) (x)
+#endif
+#if PAD_COUNT & 2
+#define APPLY_2(x) PAD_2(x)
+#else
+#define APPLY_2(x) (x)
+#endif
+#if PAD_COUNT & 4
+#define APPLY_4(x) PAD_4(x)
+#else
+#define APPLY_4(x) (x)
+#endif
+#if PAD_COUNT & 8
+#define APPLY_8(x) PAD_8(x)
+#else
+#define APPLY_8(x) (x)
+#endif
+#if PAD_COUNT & 16
+#define APPLY_16(x) PAD_16(x)
+#else
+#define APPLY_16(x) (x)
+#endif
+#if PAD_COUNT & 32
+#define APPLY_32(x) PAD_32(x)
+#else
+#define APPLY_32(x) (x)
+#endif
+#if PAD_COUNT & 64
+#define APPLY_64(x) PAD_64(x)
+#else
+#define APPLY_64(x) (x)
+#endif
+#if PAD_COUNT & 128
+#define APPLY_128(x) PAD_128(x)
+#else
+#define APPLY_128(x) (x)
+#endif
+
+#define PAD_VALUE APPLY_128(APPLY_64(APPLY_32(APPLY_16(\
+    APPLY_8(APPLY_4(APPLY_2(APPLY_1(1))))))))
+
+static int pad_anchor(void) { return PAD_VALUE; }
+static int globals[12] = { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12 };
+
+#ifdef MC001_TWO_ARGUMENTS
+__attribute__((always_inline)) static inline int leaf(int *left, int *right) {
+    return *left + *right;
+}
+
+__attribute__((always_inline)) static inline int middle(int index, int offset) {
+    return leaf(&globals[index], &globals[offset]);
+}
+
+int main(void) {
+    return middle(2, 3) == 7 && pad_anchor() == PAD_COUNT + 1 ? 0 : 1;
+}
+#else
+__attribute__((always_inline)) static inline int leaf(int *value) {
+    return *value;
+}
+
+__attribute__((always_inline)) static inline int middle(int index) {
+    return leaf(&globals[index]);
+}
+
+int main(void) {
+    return middle(6) == 7 && pad_anchor() == PAD_COUNT + 1 ? 0 : 1;
+}
+#endif
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/mc033_statement_updates_local_facts.c"}
+/* MC-033: an effect-only update must invalidate the Core local constant fact. */
+static int original_counterexample(void) {
+    int x = 0;
+    x++;
+    if (x == 0) return 99;
+    return 7;
+}
+
+static int statement_post_increment(void) {
+    int x = 0;
+    x++;
+    if (x == 0) return 11;
+    return x == 1 ? 0 : 12;
+}
+
+static int statement_post_decrement(void) {
+    int x = 0;
+    x--;
+    if (x == 0) return 21;
+    return x == -1 ? 0 : 22;
+}
+
+static int statement_pre_increment(void) {
+    int x = 0;
+    ++x;
+    if (x == 0) return 31;
+    return x == 1 ? 0 : 32;
+}
+
+static int statement_pre_decrement(void) {
+    int x = 0;
+    --x;
+    if (x == 0) return 41;
+    return x == -1 ? 0 : 42;
+}
+
+static int nested_update_value(void) {
+    int x = 0;
+    int old = x++;
+    int updated = ++x;
+    if (old != 0 || updated != 2 || x != 2) return 51;
+    if (x++ == 2) {
+        if (x == 2) return 52;
+    } else {
+        return 53;
+    }
+    return x == 3 ? 0 : 54;
+}
+
+static int goto_reentry(void) {
+    int count = 0;
+again:
+    count++;
+    if (count < 3) goto again;
+    if (count == 0) return 61;
+    return count == 3 ? 0 : 62;
+}
+
+static int continue_reentry(void) {
+    int count = 0;
+    for (int i = 0; i < 3; ++i) {
+        count++;
+        if (i < 2) continue;
+    }
+    return count == 3 ? 0 : 71;
+}
+
+int main(void) {
+    int code;
+    if (original_counterexample() != 7) return 81;
+    if ((code = statement_post_increment()) != 0) return code;
+    if ((code = statement_post_decrement()) != 0) return code;
+    if ((code = statement_pre_increment()) != 0) return code;
+    if ((code = statement_pre_decrement()) != 0) return code;
+    if ((code = nested_update_value()) != 0) return code;
+    if ((code = goto_reentry()) != 0) return code;
+    if ((code = continue_reentry()) != 0) return code;
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/mc034_static_designator_pointer_pair.c"}
+/* MC-034: designated static Record values must not subtract a snapshot
+ * pointer from Program.records.  The phase shifts Record arena occupancy
+ * without changing the observable static-object contract. */
+#ifndef MC034_PREFIX_PHASE
+#define MC034_PREFIX_PHASE 0
+#endif
+
+#if MC034_PREFIX_PHASE >= 1
+struct mc034_pad_1 { long value; };
+#endif
+#if MC034_PREFIX_PHASE >= 2
+struct mc034_pad_2 { char bytes[3]; };
+#endif
+#if MC034_PREFIX_PHASE >= 3
+union mc034_pad_3 { int a; long b; };
+#endif
+#if MC034_PREFIX_PHASE >= 4
+struct mc034_pad_4 { struct { short inner; }; long tail; };
+#endif
+#if MC034_PREFIX_PHASE >= 5
+struct mc034_pad_5 { int a[7]; };
+#endif
+
+struct mc034_simple { int x; };
+static struct mc034_simple mc034_q = { .x = 3 };
+
+struct mc034_outer {
+    int head;
+    struct { int promoted; int other; };
+    int tail;
+};
+static struct mc034_outer mc034_outer_value = {
+    .head = 5, .promoted = 7, .other = 11, .tail = 13
+};
+
+union mc034_union {
+    unsigned long bits;
+    struct { unsigned long low; };
+};
+static union mc034_union mc034_union_value = { .low = 17UL };
+
+int main(void) {
+    return (mc034_q.x == 3 &&
+            mc034_outer_value.head == 5 &&
+            mc034_outer_value.promoted == 7 &&
+            mc034_outer_value.other == 11 &&
+            mc034_outer_value.tail == 13 &&
+            mc034_union_value.low == 17UL) ? 0 : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/mc035_runtime_range_once_arena.c"}
+/* MC-035: the scalar range action is materialized through an extra Local and
+ * LVALUE_READ. The Program.expression arena can grow between those two nodes. */
+#ifndef MC035_PREFIX_PHASE
+#define MC035_PREFIX_PHASE 2
+#endif
+
+int testcase(int seed) {
+#if MC035_PREFIX_PHASE >= 1
+    seed + 0;
+#endif
+#if MC035_PREFIX_PHASE >= 2
+    seed + 1;
+#endif
+#if MC035_PREFIX_PHASE >= 3
+    seed + 2;
+#endif
+#if MC035_PREFIX_PHASE >= 4
+    seed + 3;
+#endif
+#if MC035_PREFIX_PHASE >= 5
+    seed + 4;
+#endif
+    int target[16] = {0, [1 ... 15] = seed + 1};
+    return target[0] + target[1] + target[15];
+}
+
+static int once_count;
+static int once(int seed) {
+    ++once_count;
+    return seed + 5;
+}
+
+int main(void) {
+    int range[4] = {[0 ... 3] = once(7)};
+    if (testcase(3) != 8)
+        return 1;
+    if (once_count != 1 || range[0] != 12 || range[1] != 12 ||
+        range[2] != 12 || range[3] != 12)
+        return 2;
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/mc036_record_conditional_fact_join.c"}
+/* MC-036: both aggregate conditional arms must start from the same facts.
+ * The false arm's x=2 must not change the facts observed after the true arm.
+ * GNU C statement expressions intentionally retain source-side effects. */
+struct Mc036Record { int value; };
+
+static int mc036_simple(int c) {
+    int x = 0;
+    struct Mc036Record a = { 1 }, b = { 2 };
+    struct Mc036Record r = c ? ({ x = 1; a; }) : ({ x = 2; b; });
+    if (x == 2) return r.value + 10;
+    return r.value;
+}
+
+static int mc036_condition_effect(int c) {
+    int x = 0;
+    struct Mc036Record a = { 4 }, b = { 5 };
+    struct Mc036Record r = (x = c + 3, c)
+        ? ({ x = 6; a; }) : ({ x = 8; b; });
+    return r.value + x;
+}
+
+static int mc036_nested(int c, int d) {
+    int x = 0;
+    struct Mc036Record a = { 1 }, b = { 2 }, z = { 3 };
+    struct Mc036Record r = c
+        ? ({ x = d ? 4 : 5; a; })
+        : ({ x = 9; d ? b : z; });
+    return r.value + x;
+}
+
+static int mc036_loop(int c) {
+    int sum = 0;
+    int i;
+    struct Mc036Record a = { 1 }, b = { 2 };
+    for (i = 0; i < 4; ++i) {
+        int x = 0;
+        struct Mc036Record r = (i & 1) ? ({ x = 1; a; }) : ({ x = 2; b; });
+        if (i == 2) continue;
+        sum += r.value + x;
+        if (c && i == 3) break;
+    }
+    return sum;
+}
+
+int main(void) {
+    if (mc036_simple(1) != 1 || mc036_simple(0) != 12) return 1;
+    if (mc036_condition_effect(1) != 10 ||
+        mc036_condition_effect(0) != 13) return 2;
+    if (mc036_nested(1, 1) != 5 || mc036_nested(1, 0) != 6 ||
+        mc036_nested(0, 1) != 11 || mc036_nested(0, 0) != 12) return 3;
+    if (mc036_loop(0) != 8 || mc036_loop(1) != 8) return 4;
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/mc048_rv32_linux_start.S"}
+.text
+.globl _start
+_start:
+  .option push
+  .option norelax
+  la gp, __global_pointer$
+  .option pop
+  call main
+  li a7, 93
+  ecall
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/mc058_asm_integer_param_mutation_negative.c"}
+/* MC-058: the ingress constant 1 is killed by x=y. GNU rejects its later
+ * `i` constraint because y is an arbitrary runtime value; MiniC must not
+ * silently emit the stale `.byte 1` from clone entrance facts. */
+static inline __attribute__((always_inline)) int mc058_rebound(int x, int y) {
+    x = y;
+    __asm__ volatile(".byte %c0" : : "i"(x));
+    return 1;
+}
+int mc058_rebound_probe(int y) { return mc058_rebound(1, y); }
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/mc058_asm_integer_param_rebind_constant.c"}
+/* A write kills the entry specialization fact, but local Core tracking may
+ * still prove a newly assigned constant. Preserve that valid immediate. */
+static inline __attribute__((always_inline)) int mc058_rebind_constant(int x) {
+    x = 2;
+    __asm__ volatile(".byte %c0" : : "i"(x));
+    return x;
+}
+int mc058_rebind_constant_probe(void) { return mc058_rebind_constant(1); }
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/mc058_asm_pointer_param_mutation.c"}
+/* MC-058: a cloned entry pointer fact must not outlive assignment to its
+ * parameter local. GNU resolves the immediate to the newly assigned object;
+ * MiniC must either resolve it to that object or reject conservatively,
+ * NEVER substitute the stale entry symbol. */
+static int mc058_old_target;
+static int mc058_new_target;
+static inline __attribute__((always_inline)) int mc058_rebind(int *p) {
+    p = &mc058_new_target;
+    __asm__ volatile(".quad %c0" : : "i"(p));
+    return 1;
+}
+int mc058_rebind_probe(void) { return mc058_rebind(&mc058_old_target); }
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/mc058_asm_volatile_parameter_negative.c"}
+/* A volatile parameter access is a fresh C read, even when its caller
+ * supplied an integer constant. Never replace it with a clone entrance
+ * GNU `i` immediate; GCC rejects the impossible constraint. */
+static inline __attribute__((always_inline)) int mc058_volatile(int volatile x) {
+    __asm__ volatile(".byte %c0" : : "i"(x));
+    return 1;
+}
+int mc058_volatile_probe(void) { return mc058_volatile(1); }
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/mc058_stale_boolean_parameter.c"}
+/* MC-058: an incoming specialization range belongs to a parameter VALUE,
+ * not to its mutable storage across writes, branches, and address escapes.
+ * GCC and MiniC must both return zero from main on x86 native execution.
+ * All five target compilers must accept this same GNU-preprocessed fixture. */
+__attribute__((always_inline)) static inline int leaf_range(int x) {
+    return x == 2 ? 1 : 0;
+}
+
+__attribute__((always_inline)) static inline int middle_assign(int x) {
+    x = 2;
+    return leaf_range(x);
+}
+
+__attribute__((always_inline)) static inline int middle_increment(int x) {
+    ++x;
+    return leaf_range(x);
+}
+
+__attribute__((always_inline)) static inline int middle_conditional(int x, int change) {
+    if (change)
+        x = 2;
+    return leaf_range(x);
+}
+
+__attribute__((always_inline)) static inline int middle_escape(int x) {
+    int *alias = &x;
+    *alias = 2;
+    return leaf_range(x);
+}
+
+__attribute__((always_inline)) static inline int middle_loop(int x) {
+    int n = 0;
+    while (n < 1) {
+        x = 2;
+        ++n;
+    }
+    return leaf_range(x);
+}
+
+int check_assign(int z) { return middle_assign((_Bool)z); }
+int check_increment(int z) { return middle_increment((_Bool)z); }
+int check_conditional(int z, int change) {
+    return middle_conditional((_Bool)z, change);
+}
+int check_escape(int z) { return middle_escape((_Bool)z); }
+int check_loop(int z) { return middle_loop((_Bool)z); }
+
+int main(void) {
+    return check_assign(0) != 1 || check_assign(1) != 1 ||
+           check_increment(0) != 0 || check_increment(1) != 1 ||
+           check_conditional(0, 0) != 0 || check_conditional(1, 0) != 0 ||
+           check_conditional(0, 1) != 1 || check_conditional(1, 1) != 1 ||
+           check_escape(0) != 1 || check_escape(1) != 1 ||
+           check_loop(0) != 1 || check_loop(1) != 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/mc058_symbolic_pointer_addends.c"}
+/* MC-058: GNU asm `i` symbol addends are byte offsets, while source C
+ * pointer +/- integer uses the pointee size. The %c modifier prints the
+ * raw address on x86 GCC and in MiniC's common immediate normalizer. */
+struct Mc058Pair { int lo; long long hi; };
+static int mc058_words[8];
+static char mc058_bytes[8];
+static long long mc058_wides[8];
+static struct Mc058Pair mc058_pairs[8];
+
+static inline __attribute__((always_inline)) int mc058_int(int *p) {
+    __asm__ volatile(".quad %c0" : : "i"(p));
+    return 1;
+}
+static inline __attribute__((always_inline)) int mc058_char(char *p) {
+    __asm__ volatile(".quad %c0" : : "i"(p));
+    return 1;
+}
+static inline __attribute__((always_inline)) int mc058_wide(long long *p) {
+    __asm__ volatile(".quad %c0" : : "i"(p));
+    return 1;
+}
+static inline __attribute__((always_inline)) int mc058_pair(struct Mc058Pair *p) {
+    __asm__ volatile(".quad %c0" : : "i"(p));
+    return 1;
+}
+static inline __attribute__((always_inline)) int mc058_void(void *p) {
+    __asm__ volatile(".quad %c0" : : "i"(p));
+    return 1;
+}
+
+int mc058_int_plus(void) { return mc058_int(mc058_words + 1); }
+int mc058_int_commuted(void) { return mc058_int(1 + mc058_words); }
+int mc058_int_minus(void) { return mc058_int(mc058_words - 1); }
+int mc058_char_plus(void) { return mc058_char(mc058_bytes + 1); }
+int mc058_wide_plus(void) { return mc058_wide(mc058_wides + 1); }
+int mc058_pair_plus(void) { return mc058_pair(mc058_pairs + 1); }
+int mc058_void_plus(void) { return mc058_void((void *)mc058_words + 1); }
+int mc058_cast_char_plus(void) { return mc058_char((char *)mc058_words + 1); }
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/mc058_symbolic_pointer_stride_overflow_negative.c"}
+/* MC-058: 2^61 int elements require a byte addend of 2^63, which cannot
+ * fit signed 64-bit ELF relocation arithmetic. Fail closed; never wrap the
+ * product to INT64_MIN or emit a misleading symbol+offset immediate. */
+static int mc058_overflow_words[2];
+static inline __attribute__((always_inline)) int mc058_overflow_asm(int *p) {
+    __asm__ volatile(".quad %c0" : : "i"(p));
+    return 1;
+}
+int mc058_overflow_probe(void) {
+    return mc058_overflow_asm(mc058_overflow_words + 0x2000000000000000LL);
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/mc058_symbolic_transitive_mutation.c"}
+/* MC-058: a pointer parameter reassigned inside an inline caller must not
+ * propagate its stale entry symbol into a transitive leaf's GNU `i` operand.
+ * GCC emits mc058_rebound_new; a conservative MiniC rejection is safe. */
+static int mc058_rebound_old;
+static int mc058_rebound_new;
+
+__attribute__((always_inline)) static inline int mc058_rebound_leaf(int *p) {
+    __asm__ volatile(".quad %c0" : : "i"(p));
+    return 1;
+}
+__attribute__((always_inline)) static inline int mc058_rebound_middle(int *p) {
+    p = &mc058_rebound_new;
+    return mc058_rebound_leaf(p);
+}
+int mc058_rebound_entry(void) {
+    return mc058_rebound_middle(&mc058_rebound_old);
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/mc058_symbolic_transitive_offsets.c"}
+/* MC-058: the same source FunctionBody is called through one and two
+ * symbolic-pointer specialization levels. The Core selector must compare
+ * normalized symbol+byte-addend, not separately allocated ExpressionIds. */
+static int mc058_chain_slots[16];
+
+__attribute__((always_inline)) static inline int mc058_chain_leaf(int *p) {
+    __asm__ volatile(".quad %c0" : : "i"(p));
+    return 1;
+}
+__attribute__((always_inline)) static inline int mc058_chain_plus(int *p) {
+    return mc058_chain_leaf(p + 1);
+}
+__attribute__((always_inline)) static inline int mc058_chain_commuted(int *p) {
+    return mc058_chain_leaf(1 + p);
+}
+__attribute__((always_inline)) static inline int mc058_chain_minus(int *p) {
+    return mc058_chain_leaf(p - 1);
+}
+__attribute__((always_inline)) static inline int mc058_chain_two_hops(int *p) {
+    return mc058_chain_plus(p + 1);
+}
+
+int mc058_chain_entry_plus(void) { return mc058_chain_plus(mc058_chain_slots); }
+int mc058_chain_entry_commuted(void) {
+    return mc058_chain_commuted(mc058_chain_slots);
+}
+int mc058_chain_entry_minus(void) {
+    return mc058_chain_minus(mc058_chain_slots + 2);
+}
+int mc058_chain_entry_two_hops(void) {
+    return mc058_chain_two_hops(mc058_chain_slots);
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/mc058_symbolic_zero_stride_add.c"}
+/* GNU zero-sized complete records have a zero-byte pointer stride. Their
+ * `base+1` symbolic immediate must remain the unmodified symbol, while
+ * the existing &empty_array[1] subscript safety gate stays separate. */
+struct Mc058Empty { };
+static struct Mc058Empty mc058_empty_objects[2];
+static inline __attribute__((always_inline)) int mc058_empty_immediate(
+    struct Mc058Empty *p) {
+    __asm__ volatile(".quad %c0" : : "i"(p));
+    return 1;
+}
+int mc058_empty_probe(void) {
+    return mc058_empty_immediate(mc058_empty_objects + 1);
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/p41_asm_output_stale_known_negative.c"}
+/* P41: an output constraint writes an ordinary C local, so a prior Core
+ * value fact cannot satisfy a later GNU `i` immediate constraint. */
+int p41_asm_output_stale_known(void) {
+    int x = 1;
+    __asm__ volatile("addi %0, zero, 2" : "=r"(x));
+    __asm__ volatile(".byte %c0" : : "i"(x));
+    return x;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/p41_asm_specialized_integer_width.c"}
+/* P41: GNU `i` after call specialization must obey typed C expression
+ * semantics, including casts, boolean conversion, unsigned wrap and shifts.
+ * Distinct top-level callers keep all variants alive in GCC and MiniC. */
+__attribute__((always_inline)) static inline int emit_cast(unsigned int value) {
+    __asm__ volatile(".long %c0" :: "i"((unsigned char)(value + 1U)));
+    return 0;
+}
+__attribute__((always_inline)) static inline int emit_signed(unsigned int value) {
+    __asm__ volatile(".long %c0" :: "i"((signed char)(value + 1U)));
+    return 0;
+}
+__attribute__((always_inline)) static inline int emit_boolean(unsigned int value) {
+    __asm__ volatile(".long %c0" :: "i"((_Bool)(value + 1U)));
+    return 0;
+}
+__attribute__((always_inline)) static inline int emit_wrapping(unsigned int value) {
+    __asm__ volatile(".long %c0" :: "i"((unsigned int)(value + 2U)));
+    return 0;
+}
+__attribute__((always_inline)) static inline int emit_shift_after_cast(unsigned int value) {
+    __asm__ volatile(".long %c0" :: "i"(((unsigned char)(value + 1U)) << 1));
+    return 0;
+}
+__attribute__((always_inline)) static inline int emit_unsigned_short(unsigned int value) {
+    __asm__ volatile(".long %c0" :: "i"((unsigned short)(value + 2U)));
+    return 0;
+}
+__attribute__((always_inline)) static inline int emit_signed_short(unsigned int value) {
+    __asm__ volatile(".long %c0" :: "i"((short)(value + 1U)));
+    return 0;
+}
+__attribute__((always_inline)) static inline int emit_negate(unsigned int value) {
+    __asm__ volatile(".long %c0" :: "i"(-((int)(value + 1U))));
+    return 0;
+}
+__attribute__((always_inline)) static inline int emit_complement(unsigned int value) {
+    __asm__ volatile(".long %c0" :: "i"(~((unsigned short)(value + 1U))));
+    return 0;
+}
+__attribute__((always_inline)) static inline int emit_narrow_shift(unsigned int value) {
+    __asm__ volatile(".long %c0" :: "i"(((unsigned short)(value + 1U)) >> 1));
+    return 0;
+}
+__attribute__((always_inline)) static inline int emit_unsigned_underflow(unsigned int value) {
+    __asm__ volatile(".long %c0" :: "i"(value - 2U));
+    return 0;
+}
+__attribute__((always_inline)) static inline int emit_logical_not(unsigned int value) {
+    __asm__ volatile(".long %c0" :: "i"(!(value + 1U)));
+    return 0;
+}
+int p41_cast(void) { return emit_cast(258U); }
+int p41_signed(void) { return emit_signed(254U); }
+int p41_boolean(void) { return emit_boolean(258U); }
+int p41_wrapping(void) { return emit_wrapping(4294967295U); }
+int p41_shift_after_cast(void) { return emit_shift_after_cast(255U); }
+int p41_unsigned_short(void) { return emit_unsigned_short(65535U); }
+int p41_signed_short(void) { return emit_signed_short(65534U); }
+int p41_negate(void) { return emit_negate(6U); }
+int p41_complement(void) { return emit_complement(65534U); }
+int p41_narrow_shift(void) { return emit_narrow_shift(65535U); }
+int p41_unsigned_underflow(void) { return emit_unsigned_underflow(0U); }
+int p41_logical_not(void) { return emit_logical_not(4294967295U); }
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/p41_asm_specialized_pointer_index_width.c"}
+/* A typed specialized index feeds the symbol+byte-addend normalizer.
+ * After narrowing 258+1 to unsigned char, the int[] offset is 3*4=12,
+ * never 259*4 or 259 bytes. */
+int p41_address_slots[64];
+__attribute__((always_inline)) static inline int p41_address_leaf(unsigned int index) {
+    __asm__ volatile(".quad %c0" ::
+                     "i"(&p41_address_slots[(unsigned char)(index + 1U)]));
+    return 0;
+}
+int p41_address_entry(void) { return p41_address_leaf(258U); }
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/p41_bounded_or_conditional_negative.c"}
+/* P41: dynamic path changes an entry-specialized parameter via bounded OR;
+ * its value is no longer admissible for GNU `i` immediate operands. */
+__attribute__((always_inline)) static inline int p41_or_conditional(int x, int y) {
+    if (y) x |= 2;
+    __asm__ volatile(".byte %c0" : : "i"(x));
+    return x;
+}
+int p41_or_conditional_probe(int y) { return p41_or_conditional(0, y); }
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/p41_bounded_or_controlflow_runtime.c"}
+/* P41: a one-sided bounded-bit proof survives OR, but a speculative inline
+ * parameter *entry* fact must not survive conditional, nested, or loop writes.
+ * The source parameter is constant at the callsite, the control flag is not. */
+__attribute__((always_inline)) static inline int p41_or_cond(int x, int y) {
+    if (y) x |= 2;
+    return x;
+}
+
+__attribute__((always_inline)) static inline int p41_or_nested(int x, int y) {
+    if (y) {
+        x |= 2;
+        if (y > 2) x |= 4;
+    }
+    return x;
+}
+
+__attribute__((always_inline)) static inline int p41_or_loop(int x, int y) {
+    int i = 0;
+    while (i < y) {
+        x |= 2;
+        ++i;
+    }
+    return x;
+}
+
+int main(int argc, char **argv) {
+    int y = argc - 1;
+    int expected_nested;
+    (void)argv;
+    expected_nested = y <= 0 ? 1 : y <= 2 ? 3 : 7;
+    return p41_or_cond(0, y) != (y ? 2 : 0) ||
+           p41_or_cond(1, y) != (y ? 3 : 1) ||
+           p41_or_nested(1, y) != expected_nested ||
+           p41_or_loop(0, y) != (y > 0 ? 2 : 0);
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/p41_bounded_or_live_immediate.c"}
+/* P41: a specialization fact describes the function entry, not a parameter
+ * after a compound assignment. Even when a bounded-bit analysis retains
+ * useful information, the old immediate fact must be invalidated. */
+__attribute__((always_inline)) static inline int p41_or_live(int x) {
+    x |= 2;
+    __asm__ volatile(".byte %c0" : : "i"(x));
+    return x;
+}
+
+int p41_or_live_probe(void) { return p41_or_live(0); }
+
+extern int p41_unknown(int);
+__attribute__((always_inline)) static inline int p41_or_live_barrier(int x, int y) {
+    x |= 2;
+    if (y) p41_unknown(x);
+    __asm__ volatile(".byte %c0" : : "i"(x));
+    return x;
+}
+int p41_or_barrier_probe(int z) { return p41_or_live_barrier(0, z); }
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/p41_volatile_record_member.c"}
+/* P41 regression: member cv-qualification is a source-type property. */
+struct P41Counter {
+    volatile unsigned int embedded;
+    unsigned int plain;
+};
+
+struct P41Outer {
+    struct P41Counter child;
+    unsigned int *pointer;
+    unsigned int array[2];
+    unsigned int bits:5;
+};
+
+volatile struct P41Counter p41_global;
+
+unsigned int p41_read_global_twice(void) {
+    return p41_global.plain + p41_global.plain;
+}
+
+unsigned int p41_read_pointer_twice(volatile struct P41Counter *pointer) {
+    return pointer->plain + pointer->plain;
+}
+
+unsigned int p41_read_nested_pointer_twice(volatile struct P41Counter *pointer) {
+    return pointer->embedded + pointer->plain;
+}
+
+void p41_store_pointer(volatile struct P41Counter *pointer, unsigned int value) {
+    pointer->plain = value;
+}
+
+void p41_discard_volatile_member(volatile struct P41Counter *pointer) {
+    pointer->plain;
+}
+
+int p41_volatile_member_generic(volatile struct P41Counter *pointer) {
+    return _Generic(&pointer->plain, volatile unsigned int *: 1, default: 0);
+}
+
+int p41_nested_record_generic(volatile struct P41Outer *outer) {
+    return _Generic(&outer->child.plain, volatile unsigned int *: 1, default: 0);
+}
+
+int p41_pointer_field_generic(volatile struct P41Outer *outer) {
+    return _Generic(&outer->pointer, unsigned int *volatile *: 1, default: 0);
+}
+
+int p41_array_element_generic(volatile struct P41Outer *outer) {
+    return _Generic(&outer->array[0], volatile unsigned int *: 1, default: 0);
+}
+
+int p41_const_volatile_member_generic(const volatile struct P41Counter *pointer) {
+    return _Generic(&pointer->plain, const volatile unsigned int *: 1, default: 0);
+}
+
+unsigned int p41_read_bitfield(volatile struct P41Outer *outer) {
+    return outer->bits;
+}
+
+#ifdef P41_NATIVE_MAIN
+int main(void) {
+    volatile struct P41Counter counter;
+    volatile struct P41Outer outer;
+    counter.plain = 3;
+    counter.embedded = 9;
+    outer.bits = 17;
+    outer.child.plain = 7;
+    outer.array[0] = 11;
+    if (p41_read_pointer_twice(&counter) != 6U ||
+        p41_read_nested_pointer_twice(&counter) != 12U ||
+        p41_volatile_member_generic(&counter) != 1 ||
+        p41_nested_record_generic(&outer) != 1 ||
+        p41_pointer_field_generic(&outer) != 1 ||
+        p41_array_element_generic(&outer) != 1 ||
+        p41_const_volatile_member_generic(&counter) != 1 ||
+        p41_read_bitfield(&outer) != 17U) {
+        return 1;
+    }
+    p41_store_pointer(&counter, 5U);
+    return counter.plain == 5U ? 0 : 2;
+}
+#endif
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/p43_direct_record_callsite.c"}
+/* A single source FunctionBody supplies three independent specialization
+ * dimensions to Record-returning direct CALLs.  The leaf CALL is a shared
+ * source ExpressionId, even when its enclosing middle is cloned for callers
+ * in different sections.  The caller owns the executable CALL identity. */
+struct P43Record {
+    long value;
+};
+
+static int p43_first = 11;
+static int p43_second = 22;
+static int p43_third = 33;
+
+static __attribute__((always_inline)) inline struct P43Record
+p43_record_leaf(int *pointer, int delta, _Bool select_first) {
+    struct P43Record result;
+    result.value = (long)*pointer +
+        (__builtin_constant_p(delta) ? (long)delta : 900L) +
+        (select_first ? 100L : 200L);
+    return result;
+}
+
+static __attribute__((always_inline)) inline struct P43Record
+p43_record_middle(int *pointer, int delta, _Bool select_first) {
+    return p43_record_leaf(pointer, delta, select_first);
+}
+
+__attribute__((section(".head.text")))
+long p43_record_head(void) {
+    struct P43Record result = p43_record_middle(&p43_first, 3, 1);
+    return result.value;
+}
+
+__attribute__((section(".init.text")))
+long p43_record_init(void) {
+    struct P43Record result = p43_record_middle(&p43_second, 5, 0);
+    return result.value;
+}
+
+__attribute__((section(".head.text")))
+long p43_record_head_other(void) {
+    struct P43Record result = p43_record_middle(&p43_third, 7, 1);
+    return result.value;
+}
+
+__attribute__((section(".head.text")))
+long p43_record_head_reuse(void) {
+    struct P43Record result = p43_record_middle(&p43_first, 3, 1);
+    return result.value;
+}
+
+/* Runtime values must not inherit an unrelated caller's entry facts. */
+static long p43_record_dynamic(int *pointer, int delta, int flag) {
+    struct P43Record result = p43_record_middle(pointer, delta, (_Bool)flag);
+    return result.value;
+}
+
+int main(void) {
+    volatile int dynamic_delta = 5;
+    volatile int dynamic_flag = 1;
+    if (p43_record_head() != 114L) return 11;
+    if (p43_record_init() != 227L) return 12;
+    if (p43_record_head_other() != 140L) return 13;
+    if (p43_record_head_reuse() != 114L) return 14;
+    if (p43_record_dynamic(&p43_third, dynamic_delta, dynamic_flag) != 1033L)
+        return 15;
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/p43_inline_call_plan_identity.c"}
+/* P43: source CALL IDs must remain canonical even when several AST passes
+ * successively choose a clone for the same expression. The transient plan
+ * is discarded before Core lowering, which independently resolves the
+ * executable callee from the active caller's proven facts. */
+#include "compiler/inline_specialize_common.h"
+
+#include <stdio.h>
+
+#define CHECK(test, id) do { if (!(test)) return (id); } while (0)
+
+/* The common unit also provides the source-owner worklist.  This small
+ * contract test deliberately does not construct an owner index. */
+bool minic_perf_program_build_expression_source_owners(
+    const MinicC0Program *program, size_t function_limit,
+    MinicFunctionId *owners, size_t owner_count) {
+    (void)program;
+    (void)function_limit;
+    (void)owners;
+    (void)owner_count;
+    return false;
+}
+
+static int test_call_plan(void) {
+    MinicFunction functions[7] = {0};
+    MinicExpression expressions[6] = {0};
+    MinicC0Program program = {0};
+    MinicInlineCallPlan plan = {0};
+
+    program.functions = functions;
+    program.function_count = 3U;
+    program.expressions = expressions;
+    program.expression_count = 3U;
+
+    expressions[0].kind = MINIC_EXPRESSION_CALL;
+    expressions[0].value.call.function_id = 0U;
+    expressions[1].kind = MINIC_EXPRESSION_INTEGER;
+    expressions[2].kind = MINIC_EXPRESSION_CALL;
+    expressions[2].value.call.function_id = 1U;
+
+    CHECK(minic_inline_call_plan_initialize(&plan, &program), 1);
+    CHECK(!minic_inline_call_plan_initialize(&plan, &program), 2);
+    CHECK(minic_inline_call_plan_get(&plan, 0U) == 0U, 3);
+    CHECK(minic_inline_call_plan_get(&plan, 2U) == 1U, 4);
+    CHECK(minic_inline_call_plan_get(&plan, 1U) == MINIC_FUNCTION_INVALID, 5);
+
+    /* Clones appended by successive integer/symbolic/boolean passes. */
+    program.function_count = 6U;
+    CHECK(minic_inline_call_plan_set(&plan, 2U, 3U), 6);
+    CHECK(minic_inline_call_plan_set(&plan, 0U, 4U), 7);
+    CHECK(minic_inline_call_plan_set(&plan, 2U, 5U), 8);
+    CHECK(minic_inline_call_plan_get(&plan, 0U) == 4U, 9);
+    CHECK(minic_inline_call_plan_get(&plan, 2U) == 5U, 10);
+    CHECK(expressions[0].value.call.function_id == 0U, 11);
+    CHECK(expressions[2].value.call.function_id == 1U, 12);
+
+    /* A later-cloned FunctionBody appends a previously nonexistent CALL.
+     * The plan must expand without losing earlier selections or modifying
+     * the just-appended canonical expression. */
+    expressions[3].kind = MINIC_EXPRESSION_CALL;
+    expressions[3].value.call.function_id = 2U;
+    expressions[4].kind = MINIC_EXPRESSION_INTEGER;
+    expressions[5].kind = MINIC_EXPRESSION_CALL;
+    expressions[5].value.call.function_id = 0U;
+    program.expression_count = 6U;
+    CHECK(minic_inline_call_plan_get(&plan, 3U) == 2U, 13);
+    CHECK(minic_inline_call_plan_get(&plan, 5U) == 0U, 14);
+    CHECK(minic_inline_call_plan_set(&plan, 5U, 3U), 15);
+    CHECK(minic_inline_call_plan_get(&plan, 0U) == 4U, 16);
+    CHECK(minic_inline_call_plan_get(&plan, 2U) == 5U, 17);
+    CHECK(minic_inline_call_plan_get(&plan, 3U) == 2U, 18);
+    CHECK(minic_inline_call_plan_get(&plan, 5U) == 3U, 19);
+    CHECK(expressions[5].value.call.function_id == 0U, 20);
+
+    CHECK(!minic_inline_call_plan_set(&plan, 1U, 3U), 21);
+    CHECK(!minic_inline_call_plan_set(&plan, 6U, 3U), 22);
+    CHECK(!minic_inline_call_plan_set(&plan, 3U, 7U), 23);
+    CHECK(minic_inline_call_plan_get(&plan, 6U) == MINIC_FUNCTION_INVALID, 24);
+    CHECK(expressions[0].value.call.function_id == 0U &&
+          expressions[2].value.call.function_id == 1U &&
+          expressions[3].value.call.function_id == 2U &&
+          expressions[5].value.call.function_id == 0U, 25);
+
+    minic_inline_call_plan_destroy(&plan);
+    CHECK(plan.program == NULL && plan.selected == NULL &&
+          plan.selected_count == 0U, 26);
+    CHECK(minic_inline_call_plan_get(&plan, 0U) == MINIC_FUNCTION_INVALID, 27);
+    CHECK(minic_inline_call_plan_initialize(&plan, &program), 28);
+    CHECK(minic_inline_call_plan_get(&plan, 0U) == 0U &&
+          minic_inline_call_plan_get(&plan, 2U) == 1U &&
+          minic_inline_call_plan_get(&plan, 5U) == 0U, 29);
+    minic_inline_call_plan_destroy(&plan);
+    return 0;
+}
+
+int main(void) {
+    int result = test_call_plan();
+    if (result != 0) {
+        fprintf(stderr, "P43_INLINE_CALL_PLAN_IDENTITY=FAIL test=%d\n", result);
+        return result;
+    }
+    puts("P43_INLINE_CALL_PLAN_IDENTITY=PASS canonical_source=PASS clone_appends=PASS");
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/p44_inline_asm_mutating_symbolic.c"}
+/* P44: GNU `i` must preserve a known pointer-symbol fact even when a distinct
+ * read/write ASM output escapes the pointer parameter's lvalue. The source
+ * FunctionBody is shared by inline variants; producing the symbolic text
+ * before invalidating mutable source locals is essential. */
+static int p44_mutating_symbolic_slots[8] = { 11, 22, 33, 44 };
+
+#ifdef P44_DIRECT_OUTPUT_LOCAL
+#define P44_OUTPUT_LVALUE(p) (p)
+#else
+#define P44_OUTPUT_LVALUE(p) (*(&(p)))
+#endif
+
+static __attribute__((always_inline)) inline int
+p44_inline_mutating_symbolic(int *p) {
+    __asm__ volatile(".pushsection .rodata\n\t"
+                     ".quad %c1\n\t"
+                     ".popsection"
+                     : "+r"(P44_OUTPUT_LVALUE(p)) : "i"(p));
+    return 0;
+}
+
+int main(void) {
+    return p44_inline_mutating_symbolic(p44_mutating_symbolic_slots);
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/p44_live_asm_reachability.c"}
+/* P44: only an *emitted* GNU inline ASM operand can keep its static
+ * relocation target alive. A dead C function or dead Core CFG branch is
+ * not a linker-visible root merely because the parser saw an "i" operand.
+ * The live producer must retain its static function and object on every
+ * admitted target, including in a GNU-linked x86 ELF executable. */
+extern int p44_dead_unresolved(void);
+
+static int p44_dead_fn(void) __attribute__((unused));
+static int p44_dead_fn(void) {
+    return p44_dead_unresolved();
+}
+
+static int p44_dead_object __attribute__((unused)) = 17;
+
+static void p44_dead_asm_owner(void) __attribute__((unused));
+static void p44_dead_asm_owner(void) {
+    __asm__ volatile(".pushsection .rodata\n\t"
+                     ".quad %c0\n\t"
+                     ".quad %c1\n\t"
+                     ".popsection" : :
+                     "i"(p44_dead_fn), "i"(&p44_dead_object));
+}
+
+static int p44_dead_branch_fn(void) __attribute__((unused));
+static int p44_dead_branch_fn(void) {
+    return p44_dead_unresolved();
+}
+
+static int p44_live_fn(void) __attribute__((unused));
+static int p44_live_fn(void) {
+    return 29;
+}
+
+static int p44_live_object __attribute__((unused)) = 31;
+static unsigned char p44_live_bytes[16] __attribute__((unused));
+
+int main(void) {
+    if (0) {
+        __asm__ volatile(".pushsection .rodata\n\t"
+                         ".quad %c0\n\t"
+                         ".popsection" : : "i"(p44_dead_branch_fn));
+    }
+    __asm__ volatile(".pushsection .rodata\n\t"
+                     ".quad %c0\n\t"
+                     ".quad %c1\n\t"
+                     ".popsection" : :
+                     "i"(p44_live_fn), "i"(&p44_live_object));
+    /* The source-symbol edge must survive both simple byte offsets and
+     * nested expression wrappers; an ASM operand is not necessarily a
+     * direct FUNCTION/GLOBAL_OBJECT AST node. */
+    __asm__ volatile(".pushsection .rodata\n\t"
+                     ".quad %c0\n\t"
+                     ".quad %c1\n\t"
+                     ".popsection" : :
+                     "i"((char *)&p44_live_bytes + 4),
+                     "i"(((char *)&p44_live_bytes[0]) + (2 + 6)));
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/p46_oracle_aggregate_copy.c"}
+/* P46: compare complete aggregate byte images against GNU C, using sizes
+ * that cross the x86 machine copy threshold, byte tails, and page bounds.
+ * All cases have distinct source/destination storage and a self-copy. */
+extern int puts(const char *);
+
+#define P46_CASE(N)                                                          \
+    struct P46Blob_##N { unsigned char bytes[N]; };                          \
+    struct P46Frame_##N {                                                     \
+        unsigned long before;                                                 \
+        struct P46Blob_##N blob;                                              \
+        unsigned long after;                                                  \
+    };                                                                        \
+    static int p46_case_##N(void) {                                           \
+        struct P46Frame_##N source;                                           \
+        struct P46Frame_##N destination;                                      \
+        unsigned long index;                                                  \
+        source.before = 0x12345678UL;                                        \
+        source.after = 0x87654321UL;                                         \
+        destination.before = 0x10203040UL;                                   \
+        destination.after = 0x50607080UL;                                    \
+        for (index = 0; index < N; ++index) {                                \
+            source.blob.bytes[index] =                                        \
+                (unsigned char)((index * 17UL + N) & 255UL);                  \
+            destination.blob.bytes[index] = 0;                               \
+        }                                                                     \
+        destination.blob = source.blob;                                       \
+        source.blob.bytes[0] ^= 0x5aU;                                       \
+        destination.blob = destination.blob;                                  \
+        for (index = 0; index < N; ++index) {                                \
+            if (destination.blob.bytes[index] !=                              \
+                (unsigned char)((index * 17UL + N) & 255UL))                  \
+                return 1;                                                     \
+        }                                                                     \
+        if (source.before != 0x12345678UL ||                                \
+            source.after != 0x87654321UL ||                                 \
+            destination.before != 0x10203040UL ||                           \
+            destination.after != 0x50607080UL)                              \
+            return 2;                                                         \
+        return 0;                                                             \
+    }
+
+P46_CASE(1)
+P46_CASE(3)
+P46_CASE(7)
+P46_CASE(8)
+P46_CASE(9)
+P46_CASE(2048)
+P46_CASE(4096)
+P46_CASE(4097)
+P46_CASE(16384)
+
+int main(void) {
+    if (p46_case_1() || p46_case_3() || p46_case_7() ||
+        p46_case_8() || p46_case_9() || p46_case_2048() ||
+        p46_case_4096() || p46_case_4097() || p46_case_16384())
+        return 42;
+    puts("P46_AGGREGATE_COPY=PASS");
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/p46_x86_head_aggregate.c"}
+/* MC-076: original C source for GCC and MiniC head physical-address roles.
+ * Move the compiled .head.text together with its .head.data and execute the
+ * displaced copy: RIP-relative record accesses follow the displacement,
+ * while link-VMA pointer->integer round-trips must be rebased at memory use.
+ */
+struct P46Pair {
+    unsigned long lo;
+    unsigned long hi;
+};
+
+struct P46Pair x86_p46_head_src
+    __attribute__((section(".head.data"))) = {0x37195UL, 0xeca264UL};
+struct P46Pair x86_p46_head_dst
+    __attribute__((section(".head.data"))) = {0x11UL, 0x22UL};
+
+__attribute__((section(".head.text"), noinline, used))
+void x86_p46_head_copy_direct(void) {
+    x86_p46_head_dst = x86_p46_head_src;
+}
+
+__attribute__((section(".head.text"), noinline, used))
+void x86_p46_head_copy_cast(void) {
+    *(struct P46Pair *)(unsigned long)&x86_p46_head_dst =
+        *(struct P46Pair *)(unsigned long)&x86_p46_head_src;
+}
+
+__attribute__((section(".head.text"), noinline, used))
+void x86_p46_head_copy_load(void) {
+    struct P46Pair value = x86_p46_head_src;
+    x86_p46_head_dst = value;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/p46_x86_head_aggregate_driver.c"}
+#define _GNU_SOURCE
+#include <stdint.h>
+#include <stdio.h>
+#include <string.h>
+#include <sys/mman.h>
+
+struct P46Pair { unsigned long lo, hi; };
+extern struct P46Pair x86_p46_head_src;
+extern struct P46Pair x86_p46_head_dst;
+extern void x86_p46_head_copy_direct(void);
+extern void x86_p46_head_copy_cast(void);
+extern void x86_p46_head_copy_load(void);
+
+static int check_displaced(void (*fn)(void)) {
+    const uintptr_t code = (uintptr_t)(void *)fn;
+    const uintptr_t src = (uintptr_t)&x86_p46_head_src;
+    const uintptr_t dst = (uintptr_t)&x86_p46_head_dst;
+    const uintptr_t begin = code < src ? (code < dst ? code : dst)
+                                       : (src < dst ? src : dst);
+    const uintptr_t end_code = code + 1024U;
+    const uintptr_t end_src = src + sizeof(struct P46Pair);
+    const uintptr_t end_dst = dst + sizeof(struct P46Pair);
+    const uintptr_t end1 = end_code > end_src ? end_code : end_src;
+    const uintptr_t end = end1 > end_dst ? end1 : end_dst;
+    const size_t span = (size_t)(end - begin);
+    unsigned char *image;
+    uintptr_t offset_code;
+    void (*displaced)(void);
+    struct P46Pair cloned_destination;
+    const struct P46Pair known_source = {0x6137acUL, 0xf31b42UL};
+    const struct P46Pair original_destination = {0x765432UL, 0xabcdefUL};
+    int result;
+
+    if (span > (2U << 20)) return 0;
+    image = mmap(NULL, span, PROT_READ | PROT_WRITE | PROT_EXEC,
+                 MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (image == MAP_FAILED) return 0;
+    memcpy(image + (code - begin), (const void *)code, 1024U);
+    memcpy(image + (src - begin), &known_source, sizeof(known_source));
+    memcpy(image + (dst - begin), &original_destination,
+           sizeof(original_destination));
+
+    x86_p46_head_dst = original_destination;
+    offset_code = (uintptr_t)(image + (code - begin));
+    memcpy(&displaced, &offset_code, sizeof(displaced));
+    displaced();
+    memcpy(&cloned_destination, image + (dst - begin),
+           sizeof(cloned_destination));
+    result = cloned_destination.lo == known_source.lo &&
+             cloned_destination.hi == known_source.hi &&
+             x86_p46_head_dst.lo == original_destination.lo &&
+             x86_p46_head_dst.hi == original_destination.hi;
+    if (munmap(image, span) != 0) return 0;
+    return result;
+}
+
+int main(void) {
+    int direct = check_displaced(x86_p46_head_copy_direct);
+    int cast = check_displaced(x86_p46_head_copy_cast);
+    int load = check_displaced(x86_p46_head_copy_load);
+    printf("HEAD_AGGREGATE displace_direct=%d displace_cast=%d displace_load=%d\n",
+           direct, cast, load);
+    return direct && cast && load ? 0 : 42;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/p48_x86_head_local_provenance.c"}
+/* MC-076: all heads use the SAME early-boot C source as the GNU controls.
+ * The code and .head.data objects are moved together at runtime.  Pointer
+ * storage in a local Core object must not erase the distinction between the
+ * displaced physical dereference and the original link-time numeric VMA.
+ * No C-source or target flag is used to mark the desired address role. */
+
+volatile unsigned long p48_head_cells[3]
+    __attribute__((section(".head.data"))) = {0x11UL, 0x22UL, 0x33UL};
+volatile unsigned long p48_head_other
+    __attribute__((section(".head.data"))) = 0x44UL;
+
+/* GCC -O2 independently produces PC-relative store + link-VMA return. */
+__attribute__((section(".head.text"), noinline, used))
+unsigned long p48_head_baseline(unsigned long value, unsigned long selector) {
+    (void)selector;
+    p48_head_cells[0] = value;
+    return (unsigned long)&p48_head_cells[0];
+}
+
+/* Deliberately non-volatile local pointer: GCC -O2 can coalesce this into a
+ * PC-relative physical store and absolute link-VMA return.  MiniC still
+ * has to preserve the same two observable behaviors. */
+__attribute__((section(".head.text"), noinline, used))
+unsigned long p48_head_plain_local(unsigned long value,
+                                   unsigned long selector) {
+    volatile unsigned long *pointer = &p48_head_cells[1];
+    (void)selector;
+    *pointer = value;
+    return (unsigned long)pointer;
+}
+
+/* Volatile pointer OBJECT storage forces a genuine pointer STORE/LOAD. */
+__attribute__((section(".head.text"), noinline, used))
+unsigned long p48_head_local(unsigned long value, unsigned long selector) {
+    volatile unsigned long *volatile pointer = &p48_head_cells[0];
+    (void)selector;
+    *pointer = value;
+    return (unsigned long)pointer;
+}
+
+/* Transport through two independent local pointer slots.  The pointer
+ * offset is runtime-variable, followed by pointer->integer->pointer; the
+ * returned integer must still be a link VMA including that same offset. */
+__attribute__((section(".head.text"), noinline, used))
+unsigned long p48_head_roundtrip(unsigned long value, unsigned long selector) {
+    volatile unsigned long *volatile pointer = &p48_head_cells[0];
+    unsigned long numeric = (unsigned long)(pointer + selector);
+    volatile unsigned long *volatile roundtrip =
+        (volatile unsigned long *)numeric;
+    *roundtrip = value;
+    return (unsigned long)roundtrip;
+}
+
+/* Two control-flow edges agree on the SAME symbol but select different
+ * elements.  A proof may retain the shared origin, not a fixed offset. */
+__attribute__((section(".head.text"), noinline, used))
+unsigned long p48_head_same_origin_branch(unsigned long value,
+                                          unsigned long selector) {
+    volatile unsigned long *volatile pointer = &p48_head_cells[0];
+    if (selector != 0UL)
+        pointer = &p48_head_cells[1];
+    *pointer = value;
+    return (unsigned long)pointer;
+}
+
+/* A pointer lives in an addressable record field.  This is a distinct Core
+ * field-address LOAD/STORE path, not the scalar local-slot fast path. */
+struct P48PointerRecord {
+    unsigned long tag;
+    volatile unsigned long *pointer;
+};
+
+__attribute__((section(".head.text"), noinline, used))
+unsigned long p48_head_record_field(unsigned long value,
+                                    unsigned long selector) {
+    struct P48PointerRecord record;
+    (void)selector;
+    record.tag = 0x17UL;
+    record.pointer = &p48_head_cells[2];
+    *record.pointer = value;
+    return (unsigned long)record.pointer;
+}
+
+/* A fixed result-address inside __builtin_add_overflow is a real machine
+ * memory writer, even though it is not a Core STORE instruction.  Use a
+ * runtime selector (zero in this particular oracle) to keep the overflow
+ * operation live, then verify the displaced *result address* was written. */
+__attribute__((section(".head.text"), noinline, used))
+unsigned long p48_head_overflow_address(unsigned long value,
+                                        unsigned long selector) {
+    unsigned int carry = __builtin_add_overflow(
+        value, selector, (unsigned long *)&p48_head_cells[2]);
+    return carry ? 0UL : (unsigned long)&p48_head_cells[2];
+}
+
+/* Ordinary .text runs at its linked address and must not inherit the early
+ * physical/link-VMA conversion.  The PIE variant uses this same source. */
+__attribute__((noinline, used))
+unsigned long p48_normal_local(unsigned long value, unsigned long selector) {
+    volatile unsigned long *volatile pointer = &p48_head_cells[0];
+    (void)selector;
+    *pointer = value;
+    return (unsigned long)pointer;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/p48_x86_head_local_provenance_driver.c"}
+#define _GNU_SOURCE
+#include <stdint.h>
+#include <stdio.h>
+#include <string.h>
+#include <sys/mman.h>
+
+extern volatile unsigned long p48_head_cells[3];
+extern volatile unsigned long p48_head_other;
+
+typedef unsigned long (*P48HeadFunction)(unsigned long, unsigned long);
+extern unsigned long p48_head_baseline(unsigned long, unsigned long);
+extern unsigned long p48_head_plain_local(unsigned long, unsigned long);
+extern unsigned long p48_head_local(unsigned long, unsigned long);
+extern unsigned long p48_head_roundtrip(unsigned long, unsigned long);
+extern unsigned long p48_head_same_origin_branch(unsigned long, unsigned long);
+extern unsigned long p48_head_record_field(unsigned long, unsigned long);
+extern unsigned long p48_head_overflow_address(unsigned long, unsigned long);
+extern unsigned long p48_normal_local(unsigned long, unsigned long);
+
+/* Match the P46 displaced-native oracle: one physical image of code and the
+ * entire head-data symbol region, relocated by the SAME delta.  A dereference
+ * through an absolute linked VMA writes the original object instead of the
+ * cloned physical object, and therefore fails even if ordinary native
+ * execution at the linked address would have passed. */
+static int p48_check_displaced(const char *name, P48HeadFunction fn,
+                              unsigned long value, unsigned long selector,
+                              int written_index, int numeric_index) {
+    enum { P48_COPIED_FUNCTION_BYTES = 1024 };
+    const unsigned long initial_cells[3] = {
+        0x128c31UL, 0x637a45UL, 0x9abc51UL
+    };
+    const unsigned long initial_other = 0xeeca72UL;
+    const uintptr_t code = (uintptr_t)(void *)fn;
+    const uintptr_t cells = (uintptr_t)(const void *)p48_head_cells;
+    const uintptr_t other = (uintptr_t)(const void *)&p48_head_other;
+    const uintptr_t begin = code < cells ? (code < other ? code : other)
+                                         : (cells < other ? cells : other);
+    const uintptr_t code_end = code + P48_COPIED_FUNCTION_BYTES;
+    const uintptr_t cells_end = cells + sizeof(initial_cells);
+    const uintptr_t other_end = other + sizeof(initial_other);
+    const uintptr_t end_a = code_end > cells_end ? code_end : cells_end;
+    const uintptr_t end = end_a > other_end ? end_a : other_end;
+    const size_t span = (size_t)(end - begin);
+    unsigned char *image;
+    unsigned long cloned_cells[3] = {0UL, 0UL, 0UL};
+    unsigned long cloned_other = 0UL;
+    uintptr_t relocated_address;
+    P48HeadFunction relocated;
+    unsigned long actual;
+    uintptr_t expected_numeric;
+    int ok = 1;
+    size_t i;
+
+    if (span == 0U || span > (4U << 20)) {
+        fprintf(stderr, "P48_DISPLACED=FAIL %s unsupported_span=%zu\n",
+                name, span);
+        return 0;
+    }
+    image = mmap(NULL, span, PROT_READ | PROT_WRITE | PROT_EXEC,
+                 MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (image == MAP_FAILED) {
+        fprintf(stderr, "P48_DISPLACED=FAIL %s mmap\n", name);
+        return 0;
+    }
+    memcpy(image + (code - begin), (const void *)(uintptr_t)code,
+           P48_COPIED_FUNCTION_BYTES);
+    memcpy(image + (cells - begin), initial_cells, sizeof(initial_cells));
+    memcpy(image + (other - begin), &initial_other, sizeof(initial_other));
+    for (i = 0U; i < 3U; ++i) p48_head_cells[i] = initial_cells[i];
+    p48_head_other = initial_other;
+
+    relocated_address = (uintptr_t)(image + (code - begin));
+    memcpy(&relocated, &relocated_address, sizeof(relocated));
+    actual = relocated(value, selector);
+    memcpy(cloned_cells, image + (cells - begin), sizeof(cloned_cells));
+    memcpy(&cloned_other, image + (other - begin), sizeof(cloned_other));
+
+    expected_numeric = numeric_index == 3
+        ? other : cells + (size_t)numeric_index * sizeof(unsigned long);
+    if (actual != (unsigned long)expected_numeric) ok = 0;
+    for (i = 0U; i < 3U; ++i) {
+        if (cloned_cells[i] !=
+            (written_index == (int)i ? value : initial_cells[i]) ||
+            p48_head_cells[i] != initial_cells[i])
+            ok = 0;
+    }
+    if (cloned_other != (written_index == 3 ? value : initial_other) ||
+        p48_head_other != initial_other) ok = 0;
+    if (!ok)
+        fprintf(stderr,
+                "P48_DISPLACED=FAIL %s returned=0x%lx expected=0x%lx "
+                "clone0=0x%lx clone1=0x%lx clone2=0x%lx other=0x%lx\n",
+                name, actual, (unsigned long)expected_numeric,
+                cloned_cells[0], cloned_cells[1], cloned_cells[2],
+                cloned_other);
+    if (munmap(image, span) != 0) ok = 0;
+    return ok;
+}
+
+static int p48_check_normal(void) {
+    unsigned long expected = (unsigned long)&p48_head_cells[0];
+    const unsigned long value = 0x72ca32UL;
+    p48_head_cells[0] = 0x5151UL;
+    return p48_normal_local(value, 0UL) == expected &&
+           p48_head_cells[0] == value;
+}
+
+int main(void) {
+#ifdef P48_NATIVE_ONLY
+    const int normal = p48_check_normal();
+    printf("P48_HEAD_LOCAL pic_normal=%d\n", normal);
+    return normal ? 0 : 42;
+#else
+    /* GCC -O2 is a genuine displaced positive reference for the baseline
+     * and plain local.  GNU -O0's volatile local pointer store transports
+     * an absolute VMA, so it is NOT a displaced golden for harder cases. */
+    const int baseline = p48_check_displaced(
+        "baseline", p48_head_baseline, 0x17ae31UL, 0UL, 0, 0);
+    const int plain = p48_check_displaced(
+        "plain_local", p48_head_plain_local, 0x18a25cUL, 0UL, 1, 1);
+    const int normal = p48_check_normal();
+#ifdef P48_GNU_GOLDEN
+    printf("P48_HEAD_LOCAL gnu_baseline=%d gnu_plain_local=%d normal=%d\n",
+           baseline, plain, normal);
+    return baseline && plain && normal ? 0 : 42;
+#else
+    const int local = p48_check_displaced(
+        "local", p48_head_local, 0x19be43UL, 0UL, 0, 0);
+    const int roundtrip_zero = p48_check_displaced(
+        "roundtrip_zero", p48_head_roundtrip, 0x6dabc1UL, 0UL, 0, 0);
+    const int roundtrip_one = p48_check_displaced(
+        "roundtrip_one", p48_head_roundtrip, 0x6dabc2UL, 1UL, 1, 1);
+    const int branch_zero = p48_check_displaced(
+        "branch_zero", p48_head_same_origin_branch, 0x71be50UL, 0UL, 0, 0);
+    const int branch_one = p48_check_displaced(
+        "branch_one", p48_head_same_origin_branch, 0x71be51UL, 1UL, 1, 1);
+    const int record = p48_check_displaced(
+        "record_field", p48_head_record_field, 0xc1a713UL, 0UL, 2, 2);
+    const int overflow = p48_check_displaced(
+        "overflow_address", p48_head_overflow_address,
+        0x19ab34UL, 0UL, 2, 2);
+    printf("P48_HEAD_LOCAL baseline=%d plain=%d local=%d roundtrip0=%d "
+           "roundtrip1=%d branch0=%d branch1=%d record=%d overflow=%d "
+           "normal=%d\n",
+           baseline, plain, local, roundtrip_zero, roundtrip_one,
+           branch_zero, branch_one, record, overflow, normal);
+    return baseline && plain && local && roundtrip_zero && roundtrip_one &&
+           branch_zero && branch_one && record && overflow && normal ? 0 : 42;
+#endif
+#endif
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/p48_x86_head_local_uncertain.c"}
+/* MC-076 P48 negative admission: two distinct unproved local-pointer
+ * origins, each also used in a function with a direct physical data store.
+ * A target must never silently assign one global's physical/VMA policy to
+ * a pointer after conflicting writes or an address-escaping local slot.
+ * `P48_CASE_CONFLICT` and `P48_CASE_ALIAS` are compiled independently so a
+ * rejection in one cannot hide accidental acceptance of the other. */
+
+volatile unsigned long p48_uncertain_cells[2]
+    __attribute__((section(".head.data"))) = {0x11UL, 0x22UL};
+volatile unsigned long p48_uncertain_other
+    __attribute__((section(".head.data"))) = 0x33UL;
+
+#ifdef P48_CASE_CONFLICT
+__attribute__((section(".head.text"), noinline, used))
+unsigned long p48_uncertain_conflict(unsigned long value,
+                                     unsigned long selector) {
+    volatile unsigned long *volatile pointer = &p48_uncertain_cells[0];
+    if (selector != 0UL)
+        pointer = &p48_uncertain_other;
+    p48_uncertain_cells[0] = value;
+    return (unsigned long)pointer;
+}
+#endif
+
+#ifdef P48_CASE_ALIAS
+__attribute__((section(".head.text"), noinline, used))
+unsigned long p48_uncertain_escaped_alias(unsigned long value,
+                                          unsigned long selector) {
+    volatile unsigned long *volatile pointer = &p48_uncertain_cells[0];
+    volatile unsigned long *volatile *alias = &pointer;
+    if (selector != 0UL)
+        *alias = &p48_uncertain_other;
+    p48_uncertain_cells[0] = value;
+    return (unsigned long)pointer;
+}
+#endif
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/p49_x86_head_crosscall_driver.c"}
+#define _GNU_SOURCE
+#include <stdint.h>
+#include <stdio.h>
+#include <string.h>
+#include <sys/mman.h>
+
+extern volatile unsigned long p49_head_global;
+extern unsigned long p49_head_entry(unsigned long);
+#ifdef P51_NESTED_RETURN
+extern volatile unsigned long *p51_head_wrapper(volatile unsigned long *);
+#endif
+#ifdef P49_POINTER_RETURN
+extern volatile unsigned long *p49_head_helper(volatile unsigned long *);
+#else
+extern unsigned long p49_head_helper(volatile unsigned long *);
+#endif
+
+typedef unsigned long (*P49Entry)(unsigned long);
+
+int main(void) {
+    enum { copied_code = 256 };
+    const uintptr_t entry = (uintptr_t)(void *)p49_head_entry;
+    const uintptr_t helper = (uintptr_t)(void *)p49_head_helper;
+#ifdef P51_NESTED_RETURN
+    const uintptr_t wrapper = (uintptr_t)(void *)p51_head_wrapper;
+#endif
+    const uintptr_t data = (uintptr_t)(const void *)&p49_head_global;
+    uintptr_t begin = entry < helper ? entry : helper;
+    uintptr_t end = entry > helper ? entry : helper;
+    const unsigned long initial = 0x2211UL, value = 0x45fa72UL;
+    unsigned char *image;
+    unsigned long cloned_value = 0UL, actual;
+    uintptr_t destination;
+    P49Entry cloned_entry;
+    int ok;
+#ifdef P51_NESTED_RETURN
+    if (wrapper < begin) begin = wrapper;
+    if (wrapper > end) end = wrapper;
+#endif
+    if (data < begin) begin = data;
+    end += copied_code;
+    if (data + sizeof(initial) > end) end = data + sizeof(initial);
+    if (end <= begin || end - begin > (4U << 20)) return 3;
+    image = mmap(NULL, end - begin, PROT_READ | PROT_WRITE | PROT_EXEC,
+                 MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (image == MAP_FAILED) return 4;
+    memcpy(image + (entry - begin), (void *)entry, copied_code);
+    memcpy(image + (helper - begin), (void *)helper, copied_code);
+#ifdef P51_NESTED_RETURN
+    memcpy(image + (wrapper - begin), (void *)wrapper, copied_code);
+#endif
+    memcpy(image + (data - begin), &initial, sizeof(initial));
+    p49_head_global = initial;
+    destination = (uintptr_t)(image + (entry - begin));
+    memcpy(&cloned_entry, &destination, sizeof(cloned_entry));
+    actual = cloned_entry(value);
+    memcpy(&cloned_value, image + (data - begin), sizeof(cloned_value));
+    ok = actual == data && cloned_value == value &&
+         p49_head_global == initial;
+    printf("P49_HEAD_CROSSCALL=%s returned=0x%lx expected_vma=0x%lx "
+           "cloned=0x%lx original=0x%lx\n",
+           ok ? "PASS" : "FAIL", actual, (unsigned long)data,
+           cloned_value, p49_head_global);
+    return munmap(image, end - begin) == 0 && ok ? 0 : 42;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/p49_x86_head_crosscall_provenance.c"}
+/* MC-076/P49: GCC and MiniC must see exactly this same source.  Direct
+ * stores in .head.text use relocated physical memory; a helper's numeric
+ * pointer result instead denotes the original ELF link VMA. */
+volatile unsigned long p49_head_global
+    __attribute__((section(".head.data"))) = 0x2211UL;
+
+__attribute__((section(".head.text"), noinline, used))
+unsigned long p49_head_helper(volatile unsigned long *pointer) {
+    return (unsigned long)pointer;
+}
+
+__attribute__((section(".head.text"), noinline, used))
+unsigned long p49_head_entry(unsigned long value) {
+    p49_head_global = value;
+    return p49_head_helper(&p49_head_global);
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/p49_x86_head_physical_helper.c"}
+/* Distinct positive admission: a head helper physically dereferences the
+ * pointer and never treats it as a numeric link-VMA. Do not reject all
+ * pointer arguments merely because a global is also directly accessed. */
+volatile unsigned long p49_physical_global
+    __attribute__((section(".head.data"))) = 0x12UL;
+
+__attribute__((section(".head.text"), noinline, used))
+void p49_physical_helper(volatile unsigned long *pointer,
+                         unsigned long value) {
+    *pointer = value;
+}
+
+__attribute__((section(".head.text"), noinline, used))
+unsigned long p49_physical_entry(unsigned long value) {
+    p49_physical_global = value;
+    p49_physical_helper(&p49_physical_global, value + 1UL);
+    return p49_physical_global;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/p49_x86_head_return_alias.c"}
+/* MC-076/P49: a head helper returns the original pointer unchanged and
+ * only its caller observes the numeric link VMA.  The callee contains no
+ * pointer-to-integer cast, so a callee-only provenance check misses it. */
+volatile unsigned long p49_head_global
+    __attribute__((section(".head.data"))) = 0x2211UL;
+
+__attribute__((section(".head.text"), noinline, used))
+volatile unsigned long *p49_head_helper(volatile unsigned long *pointer) {
+    return pointer;
+}
+
+__attribute__((section(".head.text"), noinline, used))
+unsigned long p49_head_entry(unsigned long value) {
+    p49_head_global = value;
+    return (unsigned long)p49_head_helper(&p49_head_global);
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/p50_x86_head_return_local_alias.c"}
+/* MC-076/P50: an early-head helper returns a physical pointer.  The
+ * caller first stores it in a volatile local pointer slot and only then
+ * converts the reloaded pointer to a link-VMA integer.  The GNU -O2 oracle
+ * must keep a real stack store/load, so a direct CALL-result-bitcast-only
+ * check is insufficient.  This is an intentional fail-closed case until
+ * cross-function Core pointer provenance is modeled and emitted correctly. */
+volatile unsigned long p49_head_global
+    __attribute__((section(".head.data"))) = 0x2211UL;
+
+__attribute__((section(".head.text"), noinline, used))
+volatile unsigned long *p49_head_helper(volatile unsigned long *pointer) {
+    return pointer;
+}
+
+__attribute__((section(".head.text"), noinline, used))
+unsigned long p49_head_entry(unsigned long value) {
+    volatile unsigned long *volatile saved;
+    p49_head_global = value;
+    saved = p49_head_helper(&p49_head_global);
+    return (unsigned long)saved;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/p51_x86_head_nested_return_alias.c"}
+/* MC-076/P51: a pointer from the early-head physical global crosses two
+ * direct-call ABI boundaries.  The first callee forwards it to a second
+ * helper and returns that CALL result, rather than its own parameter SSA.
+ * A one-level parameter-to-RETURN census misses this alias route. */
+volatile unsigned long p49_head_global
+    __attribute__((section(".head.data"))) = 0x2211UL;
+
+__attribute__((section(".head.text"), noinline, used))
+volatile unsigned long *p49_head_helper(volatile unsigned long *pointer) {
+    return pointer;
+}
+
+__attribute__((section(".head.text"), noinline, used))
+volatile unsigned long *p51_head_wrapper(volatile unsigned long *pointer) {
+    return p49_head_helper(pointer);
+}
+
+__attribute__((section(".head.text"), noinline, used))
+unsigned long p49_head_entry(unsigned long value) {
+    p49_head_global = value;
+    return (unsigned long)p51_head_wrapper(&p49_head_global);
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/p52_x86_head_indirect_return_alias.c"}
+/* MC-076/P52: the .head.text pointer-returning function is reached through
+ * a volatile function-pointer slot.  Physical STORE and numeric link VMA
+ * need different relocations even when the target of the INDIRECT_CALL is
+ * not resolved by the Core direct-call census. */
+volatile unsigned long p49_head_global
+    __attribute__((section(".head.data"))) = 0x2211UL;
+
+typedef volatile unsigned long *(*P52Fn)(volatile unsigned long *);
+
+__attribute__((section(".head.text"), noinline, used))
+volatile unsigned long *p49_head_helper(volatile unsigned long *pointer) {
+    return pointer;
+}
+
+__attribute__((section(".head.text"), noinline, used))
+unsigned long p49_head_entry(unsigned long value) {
+    P52Fn volatile callback = p49_head_helper;
+    p49_head_global = value;
+    return (unsigned long)callback(&p49_head_global);
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/p53_x86_head_external_return_alias.c"}
+/* MC-076/P53: this early-head callee has no definition in the current
+ * source module.  The compiler must not assume an external helper never
+ * forwards a physically addressed global into a numeric link-VMA use. */
+volatile unsigned long p49_head_global
+    __attribute__((section(".head.data"))) = 0x2211UL;
+
+extern volatile unsigned long *p53_external_identity(
+    volatile unsigned long *pointer);
+
+__attribute__((section(".head.text"), noinline, used))
+unsigned long p49_head_entry(unsigned long value) {
+    p49_head_global = value;
+    return (unsigned long)p53_external_identity(&p49_head_global);
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/p54_x86_head_external_physical_only.c"}
+/* MC-076/P54 positive control: an external helper only consumes a pointer
+ * for an early physical access.  No pointer return is interpreted as a
+ * numerical link-VMA value.  It must remain compile-admissible. */
+volatile unsigned long p54_physical_global
+    __attribute__((section(".head.data"))) = 0x2211UL;
+
+extern void p54_external_physical_writer(volatile unsigned long *pointer);
+
+__attribute__((section(".head.text"), noinline, used))
+void p54_head_entry(unsigned long value) {
+    p54_physical_global = value;
+    p54_external_physical_writer(&p54_physical_global);
+}
+@@@ end

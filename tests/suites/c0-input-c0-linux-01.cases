@@ -1,0 +1,202 @@
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/linux-aarch64-x30-xpaclri-wrong-register.c"}
+unsigned long minic_linux_xpaclri_wrong_register(unsigned long ptr) {
+    register unsigned long hard_frame_pointer asm("x29") = ptr;
+    asm("hint #7" : "+r" (hard_frame_pointer));
+    return hard_frame_pointer;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/linux-aarch64-x30-xpaclri-wrong-template.c"}
+unsigned long minic_linux_xpaclri_wrong_template(unsigned long ptr) {
+    register unsigned long hard_lr asm("x30") = ptr;
+    asm("nop" : "+r" (hard_lr));
+    return hard_lr;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/linux-aarch64-x30-xpaclri.c"}
+/* Original Linux 6.6.143 arch/arm64/include/asm/compiler.h XPACLRI
+ * local-register idiom. This source deliberately preserves its GNU tied
+ * +r x30 contract instead of substituting an ordinary register operand. */
+#define ARM64_ASM_ARCH "armv8.3-a"
+#define ARM64_ASM_PREAMBLE ".arch " ARM64_ASM_ARCH "\n"
+
+#define xpaclri(ptr)                                                   \
+({                                                                     \
+    register unsigned long __xpaclri_ptr asm("x30") = (ptr);            \
+    asm(ARM64_ASM_PREAMBLE "\thint\t#7\n" : "+r" (__xpaclri_ptr));     \
+    __xpaclri_ptr;                                                      \
+})
+
+unsigned long minic_linux_xpaclri(unsigned long ptr) {
+    return xpaclri(ptr);
+}
+
+unsigned long minic_linux_xpaclri_twice(unsigned long a, unsigned long b) {
+    unsigned long first = xpaclri(a);
+    return first ^ xpaclri(b);
+}
+
+/* ARM64_ASM_PREAMBLE is absent when Kbuild's assembler does not request an
+ * explicit architecture directive: both original forms must remain valid. */
+#undef ARM64_ASM_PREAMBLE
+#define ARM64_ASM_PREAMBLE
+
+unsigned long minic_linux_xpaclri_without_arch(unsigned long ptr) {
+    return xpaclri(ptr);
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/linux-core-asm-unclaimed-census.c"}
+void not_an_isa_contract(unsigned long value) {
+    __asm__ volatile ("amswap_db.w %0, %0, %0" : : "r" (value) : "memory");
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/linux-empty-static-stub-cfi.c"}
+/* Linux CONFIG-disabled CFI stubs may take linker-script symbol addresses,
+ * but an empty internal helper with pure arguments must not keep relocations
+ * to those otherwise undefined symbols alive. This need not be `inline`. */
+extern char minic_missing_cfi_start;
+extern char minic_missing_cfi_end;
+extern int __cfi_sites[], __cfi_sites_end[];
+extern int __retpoline_sites[], __retpoline_sites_end[];
+
+static void cfi_disabled_stub(void *start, void *end)
+{
+}
+
+static void cfi_side_effect_stub(int value)
+{
+}
+
+/* Same non-inline CONFIG_FINEIBT=n source shape as Linux v6.6.143's
+ * __apply_fineibt() from arch/x86/kernel/alternative.c. Here the externs
+ * are arrays, so C uses implicit array-to-pointer conversion. */
+static void fineibt_disabled_stub(int *ret_start, int *ret_end,
+                                  int *cfi_start, int *cfi_end, _Bool builtin)
+{
+}
+
+static volatile int cfi_observed;
+
+int main(void)
+{
+    cfi_disabled_stub(&minic_missing_cfi_start, &minic_missing_cfi_end);
+    fineibt_disabled_stub(__retpoline_sites, __retpoline_sites_end,
+                          __cfi_sites, __cfi_sites_end, 1);
+    cfi_side_effect_stub(++cfi_observed);
+    return cfi_observed == 1 ? 0 : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/linux_gnu_frontend_semantics.c"}
+/* Real GNU Linux 6.6 frontend patterns: x86 csum, AMD IBS and APIC static
+   calls, pgtable zero-length stack arrays and sectioned static locals. */
+union RawWord {
+    unsigned long value;
+    unsigned char bytes[8];
+};
+
+static int callback(int n) { return n + 7; }
+static int (*callback_slot)(int) = callback;
+extern typeof(*callback_slot) static_call_trampoline;
+
+static unsigned long union_scalar_cast(unsigned long bits) {
+    union RawWord converted = (union RawWord)bits;
+    return converted.value;
+}
+
+static int function_designator_decay(void) {
+    typeof(&static_call_trampoline) fn = (*callback_slot);
+    return fn(5);
+}
+
+static unsigned long gnu_array_pointer_cast(const void *ptr) {
+    return sizeof(*(const char (*)[32])ptr);
+}
+
+static unsigned long local_zero_extent(void) {
+    unsigned long slots[0];
+    return sizeof(slots);
+}
+
+/* This test asserts actual ELF section emission; keep the owner and object
+ * explicitly even when whole-program Core folding makes the call dead. */
+static __attribute__((used)) unsigned long sectioned_static_object(void) {
+    static const __attribute__((used, section(".rodata.gnu.front")))
+        unsigned long values[] = { 17UL, 23UL };
+    return values[1];
+}
+
+
+struct SampleRecord { int value; };
+static struct SampleRecord record_value(int n) {
+    struct SampleRecord result = { n };
+    return result;
+}
+static unsigned long inferred_record_array(void) {
+    struct SampleRecord elements[] = {
+        record_value(5),
+        ({ struct SampleRecord result = record_value(7); result; }),
+    };
+    return sizeof(elements) + (unsigned long)(elements[0].value + elements[1].value);
+}
+
+int main(void) {
+    char bytes[32];
+    if (union_scalar_cast(0x12345678UL) != 0x12345678UL) return 1;
+    if (function_designator_decay() != 12) return 2;
+    if (gnu_array_pointer_cast(bytes) != 32) return 3;
+    if (local_zero_extent() != 0) return 4;
+    if (sectioned_static_object() != 23) return 5;
+    if (inferred_record_array() != 2 * sizeof(struct SampleRecord) + 12) return 6;
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/linux_rv32_bounce_constant_guard.c"}
+/* Linux block/blk.h's CONFIG_BOUNCE=n constant-inline reachability shape. */
+struct mini_queue { unsigned int bounce; unsigned int data; };
+extern unsigned long max_low_pfn;
+extern unsigned long max_pfn;
+extern int __blk_queue_bounce(struct mini_queue *);
+extern int bio_has_data(struct mini_queue *);
+
+static inline int mini_queue_may_bounce(struct mini_queue *q) {
+    return 0 && q->bounce == 1 && max_low_pfn >= max_pfn;
+}
+
+static inline int mini_queue_bounce(struct mini_queue *q) {
+    if (__builtin_expect(mini_queue_may_bounce(q) && bio_has_data(q), 0))
+        return __blk_queue_bounce(q);
+    return 1;
+}
+
+int linux_rv32_bounce_const_guard(struct mini_queue *q) {
+    return mini_queue_bounce(q);
+}
+
+#ifndef MINI_BOUNCE_TEST_DISABLED_ONLY
+/* The unknown, effectful second operand MUST still run when reachable. */
+int linux_rv32_bounce_enabled(struct mini_queue *q) {
+    if (__builtin_expect(1 && bio_has_data(q), 0))
+        return __blk_queue_bounce(q);
+    return 1;
+}
+
+/* The first operand of && is always evaluated, even when the right is zero. */
+int linux_rv32_bounce_effectful_left(struct mini_queue *q) {
+    return bio_has_data(q) && 0;
+}
+
+/* The second operand of a true || must not be evaluated. */
+int linux_rv32_bounce_true_or(struct mini_queue *q) {
+    return 1 || bio_has_data(q);
+}
+
+/* A false || must execute its second operand. */
+int linux_rv32_bounce_false_or(struct mini_queue *q) {
+    return 0 || bio_has_data(q);
+}
+
+extern volatile unsigned int runtime_gate;
+int linux_rv32_bounce_volatile_left(struct mini_queue *q) {
+    return runtime_gate && 0 && bio_has_data(q);
+}
+#endif
+@@@ end

@@ -1,0 +1,896 @@
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/gnu_typedef_redundant_aligned.c"}
+typedef __signed__ __int128 signed128_aligned __attribute__((aligned(16)));
+typedef unsigned __int128 unsigned128_aligned __attribute__((__aligned__(16)));
+
+struct AlignedPair {
+    char lead;
+    signed128_aligned value;
+};
+
+unsigned long signed128_aligned_size(void) {
+    return sizeof(signed128_aligned);
+}
+
+unsigned long aligned_pair_size(void) {
+    return sizeof(struct AlignedPair);
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/gnu_typeof_array_bound_cast.c"}
+typedef unsigned int
+    note_like_t[(((sizeof(unsigned long) + ((__typeof__((sizeof(unsigned long))))((4)) - 1)) &
+                  ~((__typeof__((sizeof(unsigned long))))((4)) - 1)) *
+                 2 / 4)];
+
+int typeof_array_bound_cast_size(void) {
+    return (int)sizeof(note_like_t);
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/gnu_typeof_array_type_name.c"}
+extern __typeof__(unsigned long[0x00001000 / sizeof(long)]) overflow_stack;
+extern __typeof__(unsigned long *[4]) pointer_table;
+
+unsigned long typeof_array_size(void) {
+    return sizeof(overflow_stack);
+}
+
+unsigned long typeof_pointer_array_size(void) {
+    return sizeof(pointer_table);
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/gnu_typeof_local_declaration.c"}
+struct link {
+    struct link *next;
+};
+
+static struct link *copy_next(const struct link *head) {
+    return ({
+        typeof(*&head->next) saved = head->next;
+        saved;
+    });
+}
+
+int main(void) {
+    struct link node;
+
+    node.next = &node;
+    return copy_next(&node) == &node ? 0 : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/gnu_unused_label_attribute.c"}
+static int probe(int value) {
+    if (value) {
+        goto done;
+    }
+    value = 7;
+done:
+    __attribute__((__unused__));
+    return value;
+}
+int main(void) {
+    return probe(0) == 7 ? 0 : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/gnu_variadic_multifield_record_negative.c"}
+typedef __builtin_va_list MiniVaList;
+typedef struct { unsigned int first, second; } MiniPair;
+
+unsigned int mini_va_unsupported_pair(unsigned int tag, ...) {
+    MiniVaList ap;
+    __builtin_va_start(ap, tag);
+    MiniPair pair = __builtin_va_arg(ap, MiniPair);
+    __builtin_va_end(ap);
+    return pair.first + pair.second;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/gnu_variadic_restart_aapcs64.c"}
+typedef __builtin_va_list MiniVaList;
+
+extern int mini_va_take_one(MiniVaList ap);
+
+int mini_va_restart(unsigned int tag, ...) {
+    MiniVaList ap;
+    int first;
+    int second;
+    __builtin_va_start(ap, tag);
+    first = mini_va_take_one(ap);
+    __builtin_va_end(ap);
+    if (tag != 0U) {
+        __builtin_va_start(ap, tag);
+        second = mini_va_take_one(ap);
+        __builtin_va_end(ap);
+    } else {
+        second = 0;
+    }
+    return first + second;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/gnu_variadic_restart_aapcs64_driver.c"}
+#include <stdarg.h>
+
+extern int mini_va_restart(unsigned int tag, ...);
+
+int mini_va_take_one(va_list ap) {
+    return va_arg(ap, int);
+}
+
+int main(void) {
+    if (mini_va_restart(1U, 21) != 42) return 1;
+    if (mini_va_restart(0U, 27) != 27) return 2;
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/gnu_variadic_restart_invalid.c"}
+typedef __builtin_va_list MiniVaList;
+
+int mini_invalid_start(unsigned int tag) {
+    MiniVaList ap;
+    __builtin_va_start(ap, tag);
+    __builtin_va_end(ap);
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/gnu_variadic_single_scalar_record.c"}
+typedef __builtin_va_list MiniVaList;
+
+typedef struct {
+    unsigned int value;
+} MiniUserId;
+
+typedef struct {
+    unsigned int value;
+} MiniGroupId;
+
+typedef struct {
+    double value;
+} MiniReal;
+
+typedef struct {
+    void *value;
+} MiniPointer;
+
+unsigned int mini_va_record_sum(unsigned int tag, ...) {
+    MiniVaList ap;
+    __builtin_va_start(ap, tag);
+    MiniUserId uid = __builtin_va_arg(ap, MiniUserId);
+    MiniGroupId gid = __builtin_va_arg(ap, MiniGroupId);
+    __builtin_va_end(ap);
+    return uid.value + gid.value + tag;
+}
+
+unsigned int mini_va_record_many(unsigned int tag, ...) {
+    MiniVaList ap;
+    unsigned int total = tag;
+    unsigned int i;
+    __builtin_va_start(ap, tag);
+    for (i = 0; i < 9; ++i) {
+        MiniUserId current = __builtin_va_arg(ap, MiniUserId);
+        total += current.value;
+    }
+    __builtin_va_end(ap);
+    return total;
+}
+
+double mini_va_record_real(unsigned int tag, ...) {
+    MiniVaList ap;
+    double total = (double)tag;
+    unsigned int i;
+    __builtin_va_start(ap, tag);
+    for (i = 0; i < 9; ++i) {
+        MiniReal current = __builtin_va_arg(ap, MiniReal);
+        total += current.value;
+    }
+    __builtin_va_end(ap);
+    return total;
+}
+
+unsigned long mini_va_record_pointer(unsigned int tag, ...) {
+    MiniVaList ap;
+    __builtin_va_start(ap, tag);
+    MiniPointer current = __builtin_va_arg(ap, MiniPointer);
+    __builtin_va_end(ap);
+    return (unsigned long)current.value + tag;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/gnu_variadic_single_scalar_record_driver.c"}
+typedef struct { unsigned int value; } MiniUserId;
+typedef struct { unsigned int value; } MiniGroupId;
+typedef struct { double value; } MiniReal;
+typedef struct { void *value; } MiniPointer;
+
+extern unsigned int mini_va_record_sum(unsigned int tag, ...);
+extern unsigned int mini_va_record_many(unsigned int tag, ...);
+extern double mini_va_record_real(unsigned int tag, ...);
+extern unsigned long mini_va_record_pointer(unsigned int tag, ...);
+
+int main(void) {
+    MiniUserId uid = { 25U };
+    MiniGroupId gid = { 7U };
+    MiniReal v = { 1.0 };
+    MiniPointer pointer = { (void *)&uid };
+    if (mini_va_record_sum(10U, uid, gid) != 42U) return 1;
+    if (mini_va_record_many(3U, uid, uid, uid, uid, uid,
+                            uid, uid, uid, uid) != 228U) return 2;
+    if (mini_va_record_real(2U, v, v, v, v, v,
+                            v, v, v, v) != 11.0) return 3;
+    if (mini_va_record_pointer(7U, pointer) !=
+        (unsigned long)(void *)&uid + 7U) return 4;
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/gnu_visible_extern_array.c"}
+__attribute__((visibility("internal"))) extern const char *const names[3];
+
+__attribute__((visibility("internal"))) const char *const names[3] = {
+    "one",
+    "two",
+    "three",
+};
+
+const char *read_name(int index) {
+    return names[index];
+}
+
+struct hidden_item {
+    int value;
+};
+
+extern struct hidden_item hidden_items[2] __attribute__((visibility("hidden")));
+struct hidden_item hidden_items[2] = {{1}, {2}};
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/gnu_void_function_pointer_assignment.c"}
+typedef long (*syscall_t)(unsigned long,
+                          unsigned long,
+                          unsigned long,
+                          unsigned long,
+                          unsigned long,
+                          unsigned long,
+                          unsigned long);
+
+extern void *const compat_sys_call_table[];
+
+struct early_entry {
+    const void *data;
+};
+
+typedef void (*early_fn_t)(const void *);
+
+long linux_shaped_syscall_assignment(unsigned long syscall) {
+    syscall_t fn;
+
+    fn = compat_sys_call_table[syscall];
+    return fn(0, 0, 0, 0, 0, 0, 0);
+}
+
+void linux_shaped_early_assignment(const struct early_entry *entry, const void *arg) {
+    early_fn_t fn;
+
+    fn = (void *)entry->data;
+    fn(arg);
+}
+
+void *gnu_function_pointer_to_void(syscall_t fn) {
+    void *value;
+
+    value = fn;
+    return value;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/gnu_void_pointer_arithmetic.c"}
+unsigned long gnu_void_pointer_add(void) {
+    return (unsigned long)((void *)0x100 + 0x23UL);
+}
+
+unsigned long gnu_void_pointer_subtract(void) {
+    return (unsigned long)((void *)0x180 - 0x20UL);
+}
+
+void *gnu_void_pointer_post_increment(void *pointer) {
+    return pointer++;
+}
+
+void *gnu_void_pointer_pre_increment(void *pointer) {
+    return ++pointer;
+}
+
+int main(void) {
+    return (gnu_void_pointer_add() == 0x123UL && gnu_void_pointer_subtract() == 0x160UL &&
+            gnu_void_pointer_post_increment((void *)0x200) == (void *)0x200 &&
+            gnu_void_pointer_pre_increment((void *)0x200) == (void *)0x201)
+               ? 0
+               : 1;
+}
+
+long gnu_void_pointer_difference(void *left, void *right) {
+    return left - right;
+}
+
+long linux_void_pointer_difference(void *ptr, unsigned char *data) {
+    return ptr - (void *)data;
+}
+
+typedef int gnu_callback_type(int value);
+
+long gnu_function_pointer_difference(gnu_callback_type *left, gnu_callback_type *right) {
+    return left - right;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/gnu_void_pointer_function_member_assignment.c"}
+struct Hooks {
+    int (*apply)(int);
+};
+
+static int increment(int value) {
+    return value + 1;
+}
+
+static struct Hooks hooks = {increment};
+
+static int assign_object_pointer(struct Hooks *target, void *object_pointer) {
+    target->apply = object_pointer;
+    return 0;
+}
+
+int main(void) {
+    int value;
+    return assign_object_pointer(&hooks, &value);
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/gnu_void_pointer_relational.c"}
+int main(void) {
+    int value = 0;
+    const void *left = &value;
+    void *right = &value;
+
+    if (left < right) {
+        return 1;
+    }
+    if (left > right) {
+        return 2;
+    }
+    if (left <= right && left >= right) {
+        return 0;
+    }
+    return 3;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/gnu_void_pointer_variable_function_argument.c"}
+int sink(int (*callback)(unsigned int cpu))
+{
+    (void)callback;
+    return 0;
+}
+
+int bridge(void *opaque)
+{
+    return sink(opaque);
+}
+
+int main(void)
+{
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/gnu_void_return_expression.c"}
+static int trace_value;
+
+static void mark_return_expression(void)
+{
+    trace_value = trace_value * 10 + 1;
+}
+
+static void mark_cleanup(int *value)
+{
+    (void)value;
+    trace_value = trace_value * 10 + 2;
+}
+
+static void return_void_call(void)
+{
+    int guard __attribute__((__cleanup__(mark_cleanup))) = 0;
+    return mark_return_expression();
+}
+
+static void return_void_cast(int value)
+{
+    return (void)value;
+}
+
+int main(void)
+{
+    return_void_call();
+    return_void_cast(7);
+    return trace_value == 12 ? 0 : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/gnu_weak_external_objects.c"}
+struct uts_like {
+    int value;
+};
+struct uts_like weak_record __attribute__((__weak__));
+const char weak_banner[] __attribute__((__weak__));
+int weak_defined __attribute__((weak)) = 7;
+int main(void) {
+    return weak_record.value + weak_banner[0] + weak_defined - 7;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/gnu_weak_function_symbol.c"}
+void __attribute__((weak)) calibration_delay_done(void);
+void optional_hook(void) __attribute__((__weak__));
+void later_weak(void);
+void __attribute__((weak)) later_weak(void);
+
+int __attribute__((weak)) weak_definition(void) {
+    return 7;
+}
+
+int strong_definition(void) {
+    return 9;
+}
+
+void invoke_hooks(void) {
+    calibration_delay_done();
+    optional_hook();
+    later_weak();
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/gnu_weak_undefined_live.c"}
+/* Linux EFI uses genuinely undefined weak objects and functions: a missing
+ * provider is legal and must link as address zero.  Global initializers and
+ * live Core both need to retain the weak ELF binding. */
+extern int missing_object __attribute__((weak));
+__attribute__((weak)) __attribute__((visibility("hidden")))
+extern int hidden_missing_object;
+extern int provided_object __attribute__((weak));
+extern int missing_function(void) __attribute__((weak));
+__attribute__((weak)) __attribute__((visibility("hidden")))
+extern int hidden_missing_function(void);
+extern int provided_function(void) __attribute__((weak));
+extern int unused_weak_object __attribute__((weak));
+extern int unused_weak_function(void) __attribute__((weak));
+
+static int *object_addresses[] = {
+    &missing_object, &hidden_missing_object, &provided_object
+};
+static int (*function_addresses[])(void) = {
+    missing_function, hidden_missing_function, provided_function
+};
+
+/* A global initializer can carry a weak absolute relocation; a live Core
+ * address expression additionally tests the target's code relocation. On
+ * AArch64 an undefined weak may be zero, even under kernel -fno-pic. */
+static int weak_runtime_addresses(void) {
+    return &missing_object == 0 && &hidden_missing_object == 0 &&
+           missing_function == 0 && hidden_missing_function == 0 &&
+           &provided_object != 0 && provided_function != 0;
+}
+
+int main(void) {
+    if (!weak_runtime_addresses()) return 3;
+    if (object_addresses[0] != 0 || object_addresses[1] != 0 ||
+        object_addresses[2] == 0 || *object_addresses[2] != 17)
+        return 1;
+    if (function_addresses[0] != 0 || function_addresses[1] != 0 ||
+        function_addresses[2] == 0 || function_addresses[2]() != 23)
+        return 2;
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/gnu_weak_undefined_provider.c"}
+int provided_object = 17;
+int provided_function(void) { return 23; }
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/gnu_word_mode_runtime.c"}
+typedef int register_t __attribute__((__mode__ (__word__)));
+typedef unsigned int uregister_t __attribute__((__mode__((__word__))));
+
+_Static_assert(sizeof(register_t) == 8, "signed word mode");
+_Static_assert(sizeof(uregister_t) == 8, "unsigned word mode");
+
+int main(void) {
+    register_t a = -1;
+    uregister_t b = 1;
+    return (a < 0 && b == 1) ? 0 : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/gnu_xen_ring_volatile_response.c"}
+/* Linux 6.6 xen/interface/io/ring.h RING_COPY_RESPONSE shape. */
+typedef unsigned long long u64;
+typedef unsigned short u16;
+typedef unsigned char u8;
+typedef short s16;
+
+struct blkif_response {
+    u64 id;
+    u8 operation;
+    s16 status;
+};
+struct xen_netif_tx_response {
+    u16 id;
+    s16 status;
+};
+
+struct blkif_slot { struct blkif_response rsp; };
+struct netif_slot { struct xen_netif_tx_response rsp; };
+struct blkif_sring { struct blkif_slot ring[4]; };
+struct netif_sring { struct netif_slot ring[4]; };
+struct blkif_front_ring { struct blkif_sring *sring; unsigned nr_ents; };
+struct netif_front_ring { struct netif_sring *sring; unsigned nr_ents; };
+
+#define RING_GET_RESPONSE(r, i) \
+    (&(r)->sring->ring[((i) & ((r)->nr_ents - 1))].rsp)
+#define RING_COPY_RESPONSE(r, i, dest) do { \
+    *(dest) = *(volatile typeof(dest))RING_GET_RESPONSE(r, i); \
+} while (0)
+
+void xen_blkif_response_copy(struct blkif_front_ring *ring, unsigned index,
+                             struct blkif_response *result) {
+    RING_COPY_RESPONSE(ring, index, result);
+}
+
+void xen_netif_response_copy(struct netif_front_ring *ring, unsigned index,
+                             struct xen_netif_tx_response *result) {
+    RING_COPY_RESPONSE(ring, index, result);
+}
+
+int main(void) {
+    struct blkif_sring blk_sring = {0};
+    struct netif_sring net_sring = {0};
+    struct blkif_front_ring blk = {&blk_sring, 4};
+    struct netif_front_ring net = {&net_sring, 4};
+    struct blkif_response block;
+    struct xen_netif_tx_response network;
+    blk_sring.ring[2].rsp.id = 0x1234;
+    blk_sring.ring[2].rsp.operation = 7;
+    blk_sring.ring[2].rsp.status = -2;
+    net_sring.ring[3].rsp.id = 17;
+    net_sring.ring[3].rsp.status = -1;
+    xen_blkif_response_copy(&blk, 2, &block);
+    xen_netif_response_copy(&net, 3, &network);
+    return block.id == 0x1234 && block.operation == 7 && block.status == -2 &&
+           network.id == 17 && network.status == -1 ? 0 : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/gnu_zero_array_nested_record_global.c"}
+struct ClockInfo {
+    const char *name;
+    unsigned int id;
+    const unsigned int *table;
+};
+
+static const unsigned int table_a[] = { 11U, 13U };
+static const unsigned int table_b[] = { 17U, 19U };
+
+/* GNU permits an explicitly empty trailing [0] member. It has zero storage
+ * and zero scalar initializer slots, despite the nonempty record element. */
+static const struct {
+    struct ClockInfo common[2];
+    struct ClockInfo drp[0];
+} core_clks = {
+    .common = {
+        { .name = "a", .id = 1, .table = table_a },
+        { .name = "b", .id = 2, .table = table_b },
+    },
+    .drp = { },
+};
+
+int main(void) {
+    return core_clks.common[0].name[0] == 'a' &&
+           core_clks.common[1].name[0] == 'b' &&
+           core_clks.common[0].table[1] == 13U &&
+           core_clks.common[1].table[1] == 19U &&
+           core_clks.common[1].id == 2U &&
+           sizeof(core_clks) == 2U * sizeof(struct ClockInfo) ? 0 : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/gnu_zero_extent_global_array_address.c"}
+/* sound/soc/soc-core.c: GCC permits a GNU-complete zero-sized array and
+ * Linux __ADDRESSABLE emits a global address constant for it. */
+struct component { int id; };
+struct component null_components[0];
+extern typeof(null_components) null_components;
+static void *const addressable_null_components = (void *)&null_components;
+
+int main(void) {
+    return sizeof(null_components) != 0 ||
+           addressable_null_components != (void *)&null_components;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/gnu_zero_length_array.c"}
+typedef long atomic_long_t;
+typedef int zero_ints[0];
+
+_Static_assert(sizeof(zero_ints) == 0, "GNU zero-length array sizeof");
+
+extern atomic_long_t vm_numa_event[];
+extern atomic_long_t vm_numa_event[0];
+
+int *decay_zero(zero_ints *holder)
+{
+    return *holder;
+}
+
+int main(void)
+{
+    return sizeof(zero_ints) == 0 ? 0 : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/gnu_zero_length_record_array.c"}
+struct ZeroPad {
+    char prefix;
+    unsigned long reserved[0];
+    char tail;
+};
+
+int zero_array_offset(void) {
+    return __builtin_offsetof(struct ZeroPad, reserved);
+}
+
+int zero_tail_offset(void) {
+    return __builtin_offsetof(struct ZeroPad, tail);
+}
+
+int zero_record_size(void) {
+    return sizeof(struct ZeroPad);
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/gnu_zero_size_aggregate_reloc.c"}
+/* GNU zero-sized aggregate members occupy no scalar relocation slots.
+ * The following pointer relocations appear AFTER an array of zero-sized
+ * records, and must retain their true GNU offsets without invented stride. */
+struct Empty {};
+struct Holder {
+    struct Empty ignored[2];
+    struct {
+        long *ptr;
+    } nested;
+};
+
+long gnu_zero_size_anchor = 81;
+struct Holder gnu_zero_size_holders[2] = {
+    { .nested = { .ptr = &gnu_zero_size_anchor } },
+    { .nested = { .ptr = &gnu_zero_size_anchor } }
+};
+
+int main(void) {
+    return gnu_zero_size_holders[0].nested.ptr == &gnu_zero_size_anchor &&
+           gnu_zero_size_holders[1].nested.ptr == &gnu_zero_size_anchor &&
+           *gnu_zero_size_holders[0].nested.ptr == 81 ? 0 : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_gnu_aarch64_q_record_rvalue.c"}
+/* An aggregate passed to a GNU memory constraint must remain an lvalue. */
+struct minic_q_word { unsigned int bits; };
+extern struct minic_q_word minic_q_make_record(void);
+
+unsigned int minic_q_invalid_record_rvalue(void) {
+    unsigned int result;
+    __asm__ __volatile__("ldar %w0, %1"
+                         : "=r" (result)
+                         : "Q" (minic_q_make_record())
+                         : "memory");
+    return result;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_gnu_aarch64_z_record_memory.c"}
+struct minic_z_word {
+    unsigned int bits;
+};
+
+unsigned int minic_z_invalid_record_constraint(const struct minic_z_word *word) {
+    unsigned int result;
+    __asm__ __volatile__("ldar %w0, %1"
+                         : "=r"(result)
+                         : "Z"(*word)
+                         : "memory");
+    return result;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_gnu_enum_qualifier_drop.c"}
+enum simple_mode { SIMPLE_A, SIMPLE_B };
+static const enum simple_mode read_only_mode = SIMPLE_A;
+
+/* Even a same-representation underlying int does not justify dropping
+ * the source object's const qualification. */
+unsigned int *minic_bad_enum_qualifier_drop(void) {
+    return &read_only_mode;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_gnu_enum_underlying_pointer.c"}
+enum signed_mode { SIGNED_BELOW_ZERO = -1, SIGNED_ZERO = 0 };
+static enum signed_mode signed_state;
+
+/* Signed enum is compatible with int, not unsigned int. */
+unsigned int *minic_bad_signed_enum_pointer(void) {
+    return &signed_state;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_gnu_function_pointer_array_qualifiers.c"}
+/* Two otherwise identical callbacks must preserve their pointee element
+ * qualifications.  A mutable u64 (*)[2] parameter cannot silently stand in
+ * for a const u64 (*)[2] formal function type. */
+typedef unsigned long long u64;
+
+typedef void (*callback_const)(const u64 h[][2]);
+
+static void callback_mutable(u64 h[][2]) {
+    h[0][0] += 1U;
+}
+
+static void accept_callback(callback_const cb) {
+    (void)cb;
+}
+
+void reject_different_nested_array_qualifiers(void) {
+    accept_callback(callback_mutable);
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_gnu_function_pointer_array_signature.c"}
+/* Passing a callback with a different nested array extent remains invalid.
+ * Structural function type matching must preserve fixed array bounds. */
+typedef unsigned long long u64;
+
+typedef void (*callback_2)(const u64 h[][2]);
+
+static void bad_callback(const u64 h[][3]) {
+    (void)h;
+}
+
+static void accept_callback(callback_2 cb) {
+    (void)cb;
+}
+
+void reject_different_nested_array_extent(void) {
+    accept_callback(bad_callback);
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_gnu_mixed_void_conditional_value.c"}
+extern void minic_void_effect(void);
+
+/* GNU result type is void: it cannot initialize an int or be returned
+ * from a nonvoid function. */
+int minic_invalid_mixed_void_result(int cond) {
+    return cond ? minic_void_effect() : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_gnu_nested_record_member_pointee_const.c"}
+typedef struct Inner { const int *const pointer; } Inner;
+typedef struct Outer { Inner inner; } Outer;
+static const int value = 7;
+static Outer make_outer(void) {
+    Outer result = { { &value } };
+    return result;
+}
+void illegal_write_through_nested_record_rvalue(void) {
+    *({ Outer result = make_outer(); result; }).inner.pointer = 42;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_gnu_nested_record_volatile_rvalue_address.c"}
+/* A volatile field of a materialized record rvalue is still an rvalue:
+ * recording its address would expose a temporary with invalid lifetime. */
+typedef struct Inner { volatile unsigned int mark; } Inner;
+typedef struct Outer { Inner inner; } Outer;
+static Outer make_outer(void) {
+    Outer result = { { 7U } };
+    return result;
+}
+volatile unsigned int *invalid_nested_volatile_member_address(void) {
+    return &({ Outer result = make_outer(); result; }).inner.mark;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_gnu_pragma_neon_header_foreign.i"}
+#pragma GCC aarch64 "arm_neon.h"
+int invalid_neon_header_foreign(void) { return 1; }
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_gnu_pragma_neon_header_popped.i"}
+#pragma GCC push_options
+#pragma GCC target("+nothing+simd")
+#pragma GCC pop_options
+#pragma GCC aarch64 "arm_neon.h"
+int invalid_neon_header_popped(void) { return 1; }
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_gnu_pragma_neon_header_spoof.i"}
+#pragma GCC push_options
+#pragma GCC target("+nothing+simd")
+#pragma GCC aarch64 "arm_neon_extra.h"
+int invalid_neon_header_spoof(void) { return 1; }
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_gnu_pragma_neon_header_trailing.i"}
+#pragma GCC push_options
+#pragma GCC target("+nothing+simd")
+#pragma GCC aarch64 "arm_neon.h" extra
+int invalid_neon_header_trailing(void) { return 1; }
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_gnu_pragma_neon_header_unselected.i"}
+#pragma GCC aarch64 "arm_neon.h"
+int invalid_neon_header_unselected(void) { return 1; }
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_gnu_pragma_target_cross_target.c"}
+#pragma GCC push_options
+#pragma GCC target("+nothing+simd")
+int invalid_gnu_target_cross_target(void) { return 1; }
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_gnu_pragma_target_feature.c"}
+#pragma GCC push_options
+#pragma GCC target("+nothing+aes")
+int invalid_gnu_target_feature(void) { return 1; }
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_gnu_pragma_target_pop.c"}
+#pragma GCC pop_options
+int invalid_gnu_target_pop(void) { return 1; }
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_gnu_pragma_target_syntax.c"}
+#pragma GCC push_options
+#pragma GCC target("+nothing+simd", "+aes")
+int invalid_gnu_target_syntax(void) { return 1; }
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_gnu_prefix_local_object_attribute.c"}
+int main(void) {
+    __attribute__((__cleanup__(missing_cleanup_function))) int value = 1;
+    return value;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_gnu_qualified_array_pointer_argument.c"}
+typedef unsigned long long u64;
+static const u64 minic_readonly[2][2] = {{1U, 2U}, {3U, 4U}};
+
+static void minic_mutate(u64 values[][2]) {
+    values[0][0] = 7U;
+}
+
+void minic_illegal_const_drop(void) {
+    minic_mutate(minic_readonly);
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_gnu_tee_rvalue_member_address.c"}
+/* A field selected from a statement-expression record rvalue is NOT a C
+ * object lvalue.  Removing top-level cv from its value must not allow &. */
+typedef struct KUid { unsigned int val; } KUid;
+KUid *invalid(void) {
+    return &({ KUid temporary = { 1U }; temporary; });
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_gnu_transparent_union_callback.c"}
+/* An ordinary mismatched callback must stay rejected. */
+struct MiniSockaddr { int family; };
+typedef union {
+    struct MiniSockaddr *sa;
+    void *opaque;
+} MiniSockaddrArg __attribute__((__transparent_union__));
+int wrong_getter(int fd, double wrong, unsigned *length)
+{
+    (void)fd; (void)wrong; (void)length;
+    return -1;
+}
+int consumer(int (*getter)(int, struct MiniSockaddr *, unsigned *))
+{
+    return getter(0, 0, 0);
+}
+int testcase(void)
+{
+    return consumer(wrong_getter);
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_gnu_weak_internal_object.c"}
+static int internal_value __attribute__((weak));
+int main(void) {
+    return internal_value;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_gnu_zero_array_nonempty_record_global.c"}
+struct ClockInfo {
+    const char *name;
+    unsigned int id;
+    const unsigned int *table;
+};
+static const unsigned int table[] = { 3U };
+static const struct {
+    struct ClockInfo common[1];
+    struct ClockInfo drp[0];
+} invalid_clks = {
+    .common = { { .name = "valid", .id = 1, .table = table } },
+    /* This specifies an element that cannot fit into a zero-length array.
+     * GCC diagnoses excess elements; MiniC must not silently emit a ghost. */
+    .drp = { { .name = "unexpected", .id = 2, .table = table } },
+};
+int main(void) { return invalid_clks.common[0].id; }
+@@@ end

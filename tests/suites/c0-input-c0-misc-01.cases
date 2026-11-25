@@ -1,0 +1,2295 @@
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/a64_kvm_flag_guard.c"}
+/* Linux 6.6.143 arch/arm64/include/asm/kvm_host.h __build_check_flag:
+ * __fls is static-inline, not a lexically constant expression; GCC -O2
+ * specializes the mask and proves the bound at the concrete callsite. */
+#define BUILD_BUG_ON(expr) do { \
+    extern void __attribute__((error("invalid KVM flag"))) __kvm_flag_error(void); \
+    if (expr) __kvm_flag_error(); \
+} while (0)
+static __attribute__((always_inline)) inline unsigned long
+__fls(unsigned long word) {
+    return (sizeof(word) * 8) - 1 - __builtin_clzl(word);
+}
+static __attribute__((always_inline)) inline void check_flag(unsigned long mask) {
+    BUILD_BUG_ON((sizeof(unsigned long) * 8) <= __fls(mask));
+}
+void call_check(void) {
+    check_flag(1UL << 4);
+}
+
+/* Keep an observable runtime call in a different function. The constant
+ * return evaluator must never treat an impure/volatile callee as a pure fact. */
+extern volatile unsigned long runtime_flag;
+extern void runtime_only(void);
+static inline unsigned long read_runtime_flag(void) {
+    return runtime_flag;
+}
+void preserve_runtime_guard(void) {
+    if (read_runtime_flag()) runtime_only();
+}
+
+/* clz(0) is undefined and must not become a speculative constant. */
+extern void zero_operand_guard(void);
+void preserve_undefined_zero(void) {
+    if (__builtin_clzl(0UL) == 64U) zero_operand_guard();
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/adjacent_string_literals.c"}
+int consume(const char *text);
+
+int main(void) {
+    return consume("alpha" "beta");
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/alignof_expression.c"}
+struct align_tail {
+    long head;
+    unsigned char tail[];
+};
+
+/* A record's pragma pack limit and explicit field alignment participate in
+ * __alignof__(member), independently of the field's natural C type size.
+ * These source oracles must agree with GNU C and the canonical layout walk. */
+#pragma pack(push, 2)
+struct align_pack_two {
+    char head;
+    long long value;
+};
+#pragma pack(pop)
+
+struct __attribute__((packed)) align_packed_override {
+    char head;
+    long long value __attribute__((aligned(2)));
+};
+
+struct align_field_override {
+    char head;
+    long long value __attribute__((packed, aligned(4)));
+};
+
+/* Integer bitfields share the same effective alignment during allocation;
+ * GNU C does not permit querying __alignof__(a_bit_field) directly. */
+struct __attribute__((packed)) align_bits {
+    unsigned int first : 3;
+    unsigned int second : 5;
+    unsigned char tail;
+};
+
+_Static_assert(sizeof(struct align_pack_two) == 10, "pragma-pack offsets");
+_Static_assert(sizeof(struct align_packed_override) == 10, "packed+aligned offsets");
+_Static_assert(sizeof(struct align_field_override) == 12, "field packed+aligned offsets");
+_Static_assert(sizeof(struct align_bits) == 2, "packed bitfield layout");
+
+unsigned long alignof_scalar_member(struct align_tail *ptr) {
+    return __alignof__(ptr->head);
+}
+
+unsigned long alignof_flexible_array_member(struct align_tail *ptr) {
+    return __alignof__(ptr->tail);
+}
+
+unsigned long alignof_pack_two_member(struct align_pack_two *ptr) {
+    return __alignof__(ptr->value);
+}
+
+unsigned long alignof_packed_override_member(struct align_packed_override *ptr) {
+    return __alignof__(ptr->value);
+}
+
+unsigned long alignof_field_override_member(struct align_field_override *ptr) {
+    return __alignof__(ptr->value);
+}
+
+int main(void) {
+    struct align_tail *ptr = 0;
+    return (int)(alignof_scalar_member(ptr) != 8 ||
+                 alignof_flexible_array_member(ptr) != 1 ||
+                 alignof_pack_two_member(0) != 2 ||
+                 alignof_packed_override_member(0) != 2 ||
+                 alignof_field_override_member(0) != 4);
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/alignof_type_query.c"}
+struct OverAligned {
+    char byte;
+} __attribute__((__aligned__(16)));
+
+_Static_assert(__alignof__(unsigned long) == 8, "gnu ulong alignment");
+_Static_assert(__alignof(unsigned long long) == 8, "gnu alias alignment");
+_Static_assert(_Alignof(struct OverAligned) == 16, "c11 record alignment");
+
+unsigned long alignof_ulong(void) {
+    return __alignof__(unsigned long);
+}
+
+unsigned long alignof_record(void) {
+    return _Alignof(struct OverAligned);
+}
+
+int main(void) {
+    return alignof_ulong() == 8 && alignof_record() == 16 ? 0 : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/anon_promoted_designator_positional.c"}
+struct trace_event_field {
+    const char *type;
+    union {
+        struct {
+            const char *name;
+            int size;
+            int align;
+            unsigned int is_signed:1;
+            int filter_type;
+        };
+        int (*define_fields)(void);
+    };
+};
+
+static struct trace_event_field fields[] = {
+    { .type = "a", .name = "b", .size = 4, .align = 4,
+      0, .filter_type = 9 },
+    {},
+};
+
+struct outer {
+    struct {
+        int first;
+        int second;
+        int third;
+    } inner;
+    int tail;
+};
+
+static struct outer positional = {
+    .inner.first = 1,
+    2,
+    .inner.third = 3,
+    .tail = 4,
+};
+
+int main(void) {
+    return !(fields[0].is_signed == 0 && fields[0].filter_type == 9 &&
+             positional.inner.first == 1 && positional.inner.second == 2 &&
+             positional.inner.third == 3 && positional.tail == 4);
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/arithmetic.c"}
+int main(void)
+{
+#if CASE == 1
+    return 1 + 2 * 3;
+#elif CASE == 2
+    return (8 - 3) * 2;
+#elif CASE == 3
+    return 20 / 3 + 20 % 3;
+#elif CASE == 4
+    return -1 + 10;
+#else
+#error unsupported arithmetic test case
+#endif
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/attributed_record_forward_conflict.c"}
+/* MC-067 rejection: attributes must not hide an incompatible tag kind. */
+struct __attribute__((aligned(16))) KindMismatch;
+union KindMismatch { int x; };
+int main(void) { return 0; }
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/attributed_record_forward_declarations.c"}
+/* MC-067: GNU record attributes before or after the forward tag must not
+ * turn a declaration into a definition (at file or block scope). */
+struct __attribute__((aligned(16))) Before;
+struct After __attribute__((aligned(16)));
+union __attribute__((may_alias)) UnionBefore;
+union UnionAfter __attribute__((may_alias));
+
+struct Before { int x; };
+struct After { int x; };
+union UnionBefore { int x; };
+union UnionAfter { int x; };
+
+int main(void) {
+    struct __attribute__((aligned(16))) LocalBefore;
+    struct LocalAfter __attribute__((aligned(16)));
+    union __attribute__((may_alias)) LocalUnionBefore;
+    union LocalUnionAfter __attribute__((may_alias));
+    struct LocalBefore { int x; };
+    struct LocalAfter { int x; };
+    union LocalUnionBefore { int x; };
+    union LocalUnionAfter { int x; };
+
+    return sizeof(struct Before) != sizeof(int) ||
+           sizeof(struct After) != sizeof(int) ||
+           sizeof(union UnionBefore) != sizeof(int) ||
+           sizeof(union UnionAfter) != sizeof(int) ||
+           sizeof(struct LocalBefore) != sizeof(int) ||
+           sizeof(struct LocalAfter) != sizeof(int) ||
+           sizeof(union LocalUnionBefore) != sizeof(int) ||
+           sizeof(union LocalUnionAfter) != sizeof(int);
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/backward_static_aggregate_overlay.c"}
+struct node {
+    long value;
+};
+struct pair {
+    long left;
+    long right;
+};
+struct holder {
+    struct node *slots[2];
+    struct pair pair;
+    long tail;
+};
+static struct node node0 = {7};
+static struct holder object = {
+    .tail = 9,
+    .slots = {&node0, &node0},
+    .pair = (struct pair){3, 5},
+};
+int main(void) {
+    return (int)(object.slots[0]->value + object.slots[1]->value + object.pair.left +
+                 object.pair.right + object.tail - 31);
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/bitwise_and_assignment_expression.c"}
+static unsigned flags;
+static int calls;
+
+static unsigned *next_flags(void) {
+    calls += 1;
+    return &flags;
+}
+
+int main(void) {
+    flags = 255u;
+    (*next_flags() &= 15u);
+    return calls == 1 && flags == 15u ? 0 : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/bool_semantics.c"}
+typedef _Bool bool_alias;
+
+unsigned long bool_size(void) {
+    return sizeof(_Bool);
+}
+
+_Bool bool_return(int value) {
+    return value;
+}
+
+int bool_assignment(int value) {
+    _Bool flag;
+    flag = value;
+    return flag;
+}
+
+int bool_promotion(_Bool flag) {
+    return flag + 2;
+}
+
+int bool_alias_roundtrip(bool_alias flag) {
+    return flag;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/braced_static_scalar.c"}
+static unsigned long value = {7};
+static int *pointer = {
+    0,
+};
+int main(void) {
+    return value == 7 && pointer == 0 ? 0 : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/byte_field_or_assign_rv64.c"}
+typedef unsigned char lu_byte;
+
+typedef struct {
+    unsigned long pad0;
+    unsigned long pad1;
+    unsigned long pad2;
+    unsigned long pad3;
+    unsigned long pad4;
+    unsigned long pad5;
+    unsigned long pad6;
+    unsigned long pad7;
+    unsigned long pad8;
+    unsigned long pad9;
+    unsigned long pad10;
+    unsigned long pad11;
+    unsigned long pad12;
+    lu_byte gcstp;
+} State;
+
+static int nested_gc(State *g)
+{
+    if (g->gcstp & (2 | 4))
+        return -1;
+    return 7;
+}
+
+static int run_finalizer(State *g)
+{
+    lu_byte oldgcstp = g->gcstp;
+    int result;
+    g->gcstp |= 2;
+    result = nested_gc(g);
+    g->gcstp = oldgcstp;
+    return result;
+}
+
+int main(void)
+{
+    State g = {0};
+    int result = run_finalizer(&g);
+    if (result != -1)
+        return 1;
+    if (g.gcstp != 0)
+        return 2;
+    g.gcstp = 4;
+    if (nested_gc(&g) != -1)
+        return 3;
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/c11_noreturn.c"}
+_Noreturn void terminate_now(void);
+
+int main(void) {
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/check-four-target-model-m0.c"}
+/* M0 metadata-only ABI audit. No new target code is emitted here. */
+#include "target/target_info.h"
+#include "target/source_policy/source_info.h"
+#include "target/source_policy/source_policy.h"
+#include "target/data_layout_source.h"
+#include "target/backend.h"
+#include "frontend/ast.h"
+#include "target/riscv/instruction_select.h"
+#include "target/riscv/machine_target_state.h"
+#include "frontend/parser.h"
+#include "frontend/ast_verifier.h"
+
+#include <stdio.h>
+#include <string.h>
+
+static int verify_lp64(const char *name,
+                       MinicTargetArchitecture expected_arch,
+                       MinicIntegerSign expected_char_sign,
+                       MinicIntegerRank expected_wchar_rank,
+                       MinicIntegerSign expected_wchar_sign) {
+    const MinicTargetInfo *info = minic_target_info_from_name(name);
+    MinicTargetInvocation invocation;
+    const MinicDataLayout *layout;
+    if (info == NULL || info->architecture != expected_arch ||
+        info != minic_target_info_for_architecture(expected_arch) ||
+        !minic_target_invocation_begin(&invocation, info) ||
+        invocation.source_info.integer_model == NULL ||
+        info->data_layout == NULL) {
+        (void)fprintf(stderr, "FAIL target identity: %s\n", name);
+        return 1;
+    }
+    layout = info->data_layout;
+    if (invocation.source_info.integer_model->plain_char_sign != expected_char_sign ||
+        invocation.source_info.integer_model->semantic_width_bits[MINIC_INTEGER_RANK_BOOL] != 1U ||
+        invocation.source_info.integer_model->semantic_width_bits[MINIC_INTEGER_RANK_CHAR] != 8U ||
+        invocation.source_info.integer_model->semantic_width_bits[MINIC_INTEGER_RANK_SHORT] != 16U ||
+        invocation.source_info.integer_model->semantic_width_bits[MINIC_INTEGER_RANK_INT] != 32U ||
+        invocation.source_info.integer_model->semantic_width_bits[MINIC_INTEGER_RANK_LONG] != 64U ||
+        invocation.source_info.integer_model->semantic_width_bits[MINIC_INTEGER_RANK_INT128] != 128U ||
+        invocation.source_info.wide_character_type.integer_rank != expected_wchar_rank ||
+        invocation.source_info.wide_character_type.integer_sign != expected_wchar_sign ||
+        invocation.source_info.word_integer_rank != MINIC_INTEGER_RANK_LONG) {
+        (void)fprintf(stderr, "FAIL integer/char/wchar ABI: %s\n", name);
+        return 1;
+    }
+    if (!minic_data_layout_is_little_endian(layout) ||
+        layout->pointer_size != 8U || layout->pointer_alignment != 8U ||
+        invocation.source_info.integer_size[MINIC_INTEGER_RANK_INT] != 4U ||
+        invocation.source_info.integer_size[MINIC_INTEGER_RANK_LONG] != 8U ||
+        invocation.source_info.integer_size[MINIC_INTEGER_RANK_INT128] != 16U ||
+        invocation.source_info.integer_alignment[MINIC_INTEGER_RANK_INT128] != 16U ||
+        layout->float_size != 4U || layout->float_alignment != 4U ||
+        layout->double_size != 8U || layout->double_alignment != 8U ||
+        layout->long_double_size != 16U || layout->long_double_alignment != 16U) {
+        (void)fprintf(stderr, "FAIL LP64 storage ABI: %s\n", name);
+        return 1;
+    }
+    return 0;
+}
+
+/* RV32 is a distinct ILP32 consumer of the existing TargetInfo/DataLayout
+ * model. Test GNU C language promotions, not only raw pointer bytes. */
+static int verify_rv32(void) {
+    const MinicTargetInfo *t = minic_target_info_from_name("riscv32-linux");
+    MinicTargetInvocation invocation;
+    MinicType v;
+    if (t == NULL || t->architecture != MINIC_TARGET_ARCH_RISCV32 ||
+        !minic_target_invocation_begin(&invocation, t) ||
+        minic_riscv_target_isa(t).xlen != 32U ||
+        minic_riscv_target_isa(t).abi != MINIC_RISCV_ABI_ILP32 ||
+        !minic_data_layout_is_little_endian(t->data_layout) ||
+        t->data_layout->pointer_size != 4U ||
+        t->data_layout->pointer_alignment != 4U ||
+        invocation.source_info.integer_size[MINIC_INTEGER_RANK_LONG] != 4U ||
+        invocation.source_info.integer_size[MINIC_INTEGER_RANK_LONG_LONG] != 8U ||
+        invocation.source_info.integer_alignment[MINIC_INTEGER_RANK_LONG_LONG] != 8U ||
+        invocation.source_info.integer_model->semantic_width_bits[MINIC_INTEGER_RANK_LONG] != 32U ||
+        invocation.source_info.integer_model->semantic_width_bits[MINIC_INTEGER_RANK_LONG_LONG] != 64U ||
+        invocation.source_info.integer_model->plain_char_sign != MINIC_INTEGER_SIGN_UNSIGNED ||
+        invocation.source_info.word_integer_rank != MINIC_INTEGER_RANK_INT ||
+        t->variadic_scalar_read_kind != MINIC_VARIADIC_SCALAR_READ_LINEAR_SLOT ||
+        t->variadic_linear_slot_bytes != 4U ||
+        t->variadic_copy_kind != MINIC_VARIADIC_COPY_SCALAR_ASSIGNMENT ||
+        !minic_target_info_integer_common(&invocation, minic_type_unsigned_int(),
+                                          minic_type_long(), &v) ||
+        !minic_type_equal(v, minic_type_unsigned_long()) ||
+        !minic_target_info_integer_common(&invocation, minic_type_unsigned_long(),
+                                          minic_type_long_long(), &v) ||
+        !minic_type_equal(v, minic_type_long_long()))
+        return (void)fprintf(stderr, "RV32_ILP32_MODEL=FAIL\n"), 1;
+    return puts("RV32_ILP32_MODEL=PASS xlen=32 ptr=4 long=4 longlong=8 signedness=qualified") == EOF ? 1 : 0;
+}
+
+/* The entire target registration must be unambiguous: rejecting only the
+ * particular entry encountered would admit a different interpretation from
+ * the source-name and Core-import entry points. */
+static int verify_target_builtin_registry_rejection(void) {
+    MinicTargetInvocation invocation;
+    MinicTargetSourceLanguagePolicy policy;
+    MinicTargetSourceBuiltinTypeDescriptor entries[2];
+    const MinicTargetSourceBuiltinTypeDescriptor *registered;
+    MinicType builtin = minic_type_header_builtin(
+        1U, MINIC_BUILTIN_DECLARATION_FIXED_VECTOR128_STORAGE);
+    if (!minic_target_invocation_begin(
+            &invocation, minic_target_info_for_architecture(
+                MINIC_TARGET_ARCH_AARCH64))) return 1;
+    policy = *invocation.source_info.source_language_policy;
+    registered = policy.builtin_types;
+    entries[0] = registered[0];
+    entries[1] = registered[1];
+    policy.builtin_types = entries;
+    policy.builtin_type_count = 2U;
+    invocation.source_info.source_language_policy = &policy;
+    if (!minic_target_info_named_builtin_type(
+            &invocation, "__Float32x4_t", sizeof("__Float32x4_t") - 1U,
+            NULL)) return 2;
+
+    entries[1].id = entries[0].id; /* distinct names, ambiguous nominal ID */
+    if (minic_target_info_source_builtin_type_descriptor(
+            &invocation, builtin, NULL)) return 3;
+    entries[1] = registered[1];
+    entries[1].spelling = entries[0].spelling; /* duplicated C spelling */
+    if (minic_target_info_named_builtin_type(
+            &invocation, entries[0].spelling, strlen(entries[0].spelling), NULL))
+        return 4;
+    entries[1] = registered[1];
+
+    entries[0].core_import = MINIC_TARGET_BUILTIN_CORE_IMPORT_OPAQUE;
+    if (minic_target_info_source_builtin_type_descriptor(
+            &invocation, builtin, NULL)) return 5;
+    entries[0] = registered[0];
+    entries[0].vector_element = MINIC_TARGET_BUILTIN_SCALAR_NONE;
+    if (minic_target_info_source_builtin_type_descriptor(
+            &invocation, builtin, NULL)) return 6;
+    entries[0] = registered[0];
+    entries[0].required_capability =
+        MINIC_TARGET_LANG_OPAQUE_VECTOR_HEADER_DECLARATIONS;
+    if (minic_target_info_source_builtin_type_descriptor(
+            &invocation, builtin, NULL)) return 7;
+
+    entries[0] = registered[5]; /* valid fixed-width vector descriptor */
+    entries[1] = registered[6];
+    entries[0].core_import = MINIC_TARGET_BUILTIN_CORE_IMPORT_OPAQUE;
+    if (minic_target_info_named_builtin_type(
+            &invocation, entries[1].spelling, strlen(entries[1].spelling), NULL))
+        return 8;
+    entries[0] = registered[5];
+    entries[0].vector_element = MINIC_TARGET_BUILTIN_SCALAR_NONE;
+    if (minic_target_info_named_builtin_type(
+            &invocation, entries[1].spelling, strlen(entries[1].spelling), NULL))
+        return 9;
+    return 0;
+}
+
+/* Parser/verifier language admission and ABI cursor identity must agree on
+ * all five target descriptors. Declaration admission is not codegen support. */
+static int verify_language_admission(void) {
+    static const char *const names[] = {
+        "riscv32-linux", "riscv64-linux", "x86_64-linux",
+        "aarch64-linux", "loongarch64-linux"
+    };
+    static const char *const builtin_names[] = {
+        "__Float32x4_t", "__Float64x2_t", "__SVFloat32_t",
+        "__SVFloat64_t", "__SVBool_t", "__Uint8x16_t",
+        "__Uint64x2_t", "__Int8x16_t", "__Poly8x16_t"
+    };
+    size_t i;
+    for (i = 0U; i < sizeof(names) / sizeof(names[0]); ++i) {
+        MinicTargetInvocation invocation;
+        const MinicTargetInvocation *t = &invocation;
+        MinicType vector_type;
+        MinicType vector_pointer;
+        MinicType first_opaque = minic_type_header_builtin(
+            3U, MINIC_BUILTIN_DECLARATION_HEADER_ONLY_OPAQUE);
+        size_t builtin_index;
+        bool is_arm = i == 3U;
+        bool has_extended_float = i != 0U;
+        bool has_vector;
+        if (!minic_target_invocation_begin(&invocation,
+                                           minic_target_info_from_name(names[i])) ||
+            minic_target_info_language_type_supported(
+                t, MINIC_TYPE_BASE_FLOAT128) != has_extended_float ||
+            minic_target_info_language_type_supported(
+                t, MINIC_TYPE_BASE_FLOAT32X) != has_extended_float ||
+            t->source_info.gnu_fixed_vector_max_storage_bytes !=
+                (i == 2U ? 16U : 0U)) {
+            (void)fprintf(stderr, "FAIL target language/varargs contract: %s\\n", names[i]);
+            return 1;
+        }
+        for (builtin_index = 0U;
+             builtin_index < sizeof(builtin_names) / sizeof(builtin_names[0]);
+             ++builtin_index) {
+            MinicType discovered = minic_type_void();
+            MinicTargetSourceBuiltinTypeDescriptor descriptor;
+            MinicBuiltinDeclarationRole expected_role =
+                builtin_index >= 2U && builtin_index < 5U
+                ? MINIC_BUILTIN_DECLARATION_HEADER_ONLY_OPAQUE
+                : MINIC_BUILTIN_DECLARATION_FIXED_VECTOR128_STORAGE;
+            bool admitted = minic_target_info_named_builtin_type(
+                t, builtin_names[builtin_index], strlen(builtin_names[builtin_index]),
+                &discovered);
+            if (admitted != is_arm ||
+                (is_arm && (discovered.base_kind != MINIC_TYPE_BASE_TARGET_BUILTIN ||
+                            discovered.target_builtin_id != builtin_index + 1U ||
+                            discovered.target_builtin_role != expected_role ||
+                            !minic_target_info_source_builtin_type_descriptor(
+                                t, discovered, &descriptor) ||
+                            descriptor.id != discovered.target_builtin_id ||
+                            descriptor.role != expected_role ||
+                            (descriptor.core_import ==
+                             MINIC_TARGET_BUILTIN_CORE_IMPORT_VECTOR128) !=
+                                (builtin_index < 2U || builtin_index >= 5U))) ||
+                (is_arm && minic_type_is_fixed_vector128_storage(discovered) !=
+                               (builtin_index < 2U || builtin_index >= 5U))) {
+                (void)fprintf(stderr, "FAIL target builtin registry: %s: %s\n",
+                              names[i], builtin_names[builtin_index]);
+                return 1;
+            }
+        }
+        {
+            MinicType d_signed = minic_type_void();
+            MinicType d_unsigned = minic_type_void();
+            MinicTargetSourceBuiltinTypeDescriptor desc;
+            const bool signed_found = minic_target_info_named_builtin_type(
+                t, "__Int8x8_t", 10U, &d_signed);
+            const bool unsigned_found = minic_target_info_named_builtin_type(
+                t, "__Uint8x8_t", 11U, &d_unsigned);
+            if (signed_found != is_arm || unsigned_found != is_arm ||
+                (is_arm &&
+                 (!minic_type_is_fixed_vector64_storage(d_signed) ||
+                  !minic_type_is_fixed_vector64_storage(d_unsigned) ||
+                  !minic_target_info_source_builtin_type_descriptor(t, d_signed, &desc) ||
+                  desc.core_import != MINIC_TARGET_BUILTIN_CORE_IMPORT_VECTOR64 ||
+                  !minic_target_info_language_type_supported_for_type(t, d_signed) ||
+                  !minic_target_info_language_type_supported_for_type(t, d_unsigned)))) {
+                (void)fprintf(stderr, "FAIL 64-bit D-vector source registry: %s\n", names[i]);
+                return 1;
+            }
+        }
+        if (minic_target_info_language_type_supported_for_type(
+                t, first_opaque) != is_arm ||
+            minic_target_info_language_type_supported_for_type(
+                t, minic_type_header_builtin(
+                    999U, MINIC_BUILTIN_DECLARATION_HEADER_ONLY_OPAQUE)) ||
+            minic_target_info_language_type_supported_for_type(
+                t, minic_type_header_builtin(
+                    3U, MINIC_BUILTIN_DECLARATION_FIXED_VECTOR128_STORAGE))) {
+            (void)fprintf(stderr, "FAIL target builtin identity forgery: %s\n", names[i]);
+            return 1;
+        }
+        {
+            MinicType forged[9];
+            size_t forged_index;
+            for (forged_index = 0U; forged_index < 9U; ++forged_index)
+                forged[forged_index] = first_opaque;
+            forged[0].gnu_vector_bytes = 16U;
+            forged[1].gnu_vector_element_kind = MINIC_TYPE_BASE_INT;
+            forged[2].integer_rank = MINIC_INTEGER_RANK_INT;
+            forged[3].integer_sign = MINIC_INTEGER_SIGN_SIGNED;
+            forged[4].is_plain_char = true;
+            forged[5].record_id = (MinicRecordId)0U;
+            forged[6].array_type_id = (MinicArrayTypeId)0U;
+            forged[7].function_type_id = (MinicFunctionTypeId)0U;
+            forged[8].enum_id = (MinicEnumId)0U;
+            for (forged_index = 0U; forged_index < 9U; ++forged_index) {
+                if (minic_target_info_source_builtin_type_descriptor(
+                        t, forged[forged_index], NULL)) {
+                    (void)fprintf(stderr,
+                                  "FAIL target builtin field forgery: %s variant=%zu\n",
+                                  names[i], forged_index);
+                    return 1;
+                }
+            }
+        }
+        if (minic_target_info_header_attribute_supported(
+                t, "__aarch64_vector_pcs__",
+                sizeof("__aarch64_vector_pcs__") - 1U) != is_arm ||
+            minic_target_info_header_attribute_supported(
+                t, "__aarch64_vector_pcs__", 3U)) {
+            (void)fprintf(stderr, "FAIL target header attribute contract: %s\\n", names[i]);
+            return 1;
+        }
+        has_vector = minic_target_info_named_builtin_type(
+            t, "__SVBool_t", sizeof("__SVBool_t") - 1U, &vector_type);
+        if (minic_target_info_named_builtin_type(
+                t, "__Uint8x16_t", sizeof("__Uint8x16_t") - 1U,
+                NULL) != is_arm ||
+            minic_target_info_named_builtin_type(
+                t, "__Uint64x2_t", sizeof("__Uint64x2_t") - 1U,
+                NULL) != is_arm ||
+            minic_target_info_named_builtin_type(
+                t, "__Int8x16_t", sizeof("__Int8x16_t") - 1U,
+                NULL) != is_arm ||
+            minic_target_info_named_builtin_type(
+                t, "__Poly8x16_t", sizeof("__Poly8x16_t") - 1U,
+                NULL) != is_arm) {
+            (void)fprintf(stderr, "FAIL AArch64 vector storage admission: %s\n", names[i]);
+            return 1;
+        }
+        if (!minic_type_pointer_to(
+                first_opaque, &vector_pointer)) {
+            (void)fprintf(stderr, "FAIL target vector pointer construction: %s\n", names[i]);
+            return 1;
+        }
+        {
+            MinicType qualified = first_opaque;
+            MinicType pointer_qualified = vector_pointer;
+            qualified.base_qualifiers = MINIC_TYPE_QUALIFIER_CONST |
+                                        MINIC_TYPE_QUALIFIER_VOLATILE;
+            pointer_qualified.pointer_qualifiers = 1U;
+            pointer_qualified.pointer_volatile_qualifiers = 1U;
+            if (minic_target_info_source_builtin_type_descriptor(
+                    t, qualified, NULL) != is_arm ||
+                minic_target_info_source_builtin_type_descriptor(
+                    t, vector_pointer, NULL) != is_arm ||
+                minic_target_info_source_builtin_type_descriptor(
+                    t, pointer_qualified, NULL) != is_arm) {
+                (void)fprintf(stderr, "FAIL target builtin legitimate qualifiers/pointers: %s\n",
+                              names[i]);
+                return 1;
+            }
+        }
+        if (has_vector != is_arm ||
+            (is_arm && (vector_type.base_kind != MINIC_TYPE_BASE_TARGET_BUILTIN ||
+                        vector_type.target_builtin_id != 5U)) ||
+            minic_target_info_header_opaque_vector_return(
+                t, first_opaque) != is_arm ||
+            minic_target_info_header_opaque_vector_return(
+                t, minic_type_float128()) ||
+            minic_target_info_header_opaque_vector_return(
+                t, vector_pointer) ||
+            minic_target_info_named_builtin_type(
+                t, "__SVBool_t", sizeof("__SVBool_t") - 2U, NULL) ||
+            minic_target_info_named_builtin_type(
+                t, "__not_a_builtin", sizeof("__not_a_builtin") - 1U, NULL)) {
+            (void)fprintf(stderr, "FAIL target opaque builtin contract: %s\\n", names[i]);
+            return 1;
+        }
+    }
+    return puts("TARGET_LANGUAGE_ADMISSION=PASS five-targets") == EOF ? 1 : 0;
+}
+
+/* One target-owned C shape and one Program-owned type pair. Repeated
+ * __builtin_va_list names and typedefs must share RecordId/ArrayTypeId;
+ * source objects now use their true layout, not a pointer-sized proxy. */
+static int verify_va_cursor_source_abi(void) {
+    static const char *const names[] = {
+        "riscv32-linux", "riscv64-linux", "x86_64-linux",
+        "aarch64-linux", "loongarch64-linux"
+    };
+    static const char source[] =
+        "typedef __builtin_va_list First;\n"
+        "typedef __builtin_va_list Again;\n"
+        "int forwarded(First a);\n"
+        "int forwarded(Again a);\n"
+        "struct VaBox { int key; First member; };\n";
+    size_t i;
+    for (i = 0U; i < sizeof(names) / sizeof(names[0]); ++i) {
+        const MinicTargetInfo *machine = minic_target_info_from_name(names[i]);
+        MinicTargetInvocation invocation;
+        const MinicTargetInvocation *t = &invocation;
+        MinicC0Program program;
+        MinicVaCursorSourceShape shape;
+        MinicC0AstVerifyFailure failure;
+        MinicDiagnostic diagnostic = {0};
+        MinicType source_type, state_type, pointer_state, void_pointer;
+        size_t bytes, alignment;
+        bool x86 = i == 2U;
+        bool aarch = i == 3U;
+        bool opaque = x86 || aarch;
+        MinicTargetInvocation missing_policy;
+        minic_c0_program_initialize(&program);
+        if (!minic_target_invocation_begin(&invocation, machine) ||
+            !minic_target_info_va_cursor_source_shape(t, &shape) ||
+            shape.kind != (x86 ? MINIC_VA_CURSOR_SOURCE_OPAQUE_RECORD_ARRAY_ONE :
+                          aarch ? MINIC_VA_CURSOR_SOURCE_OPAQUE_RECORD :
+                                  MINIC_VA_CURSOR_SOURCE_LINEAR_POINTER) ||
+            shape.object_size != (x86 ? 24U : aarch ? 32U : machine->data_layout->pointer_size) ||
+            shape.object_alignment != machine->data_layout->pointer_alignment ||
+            !minic_parse_c0_program_for_target(names[i], source,
+                                               sizeof(source) - 1U, t,
+                                               &program, &diagnostic) ||
+            !minic_c0_program_va_cursor_source_types(
+                &program, &source_type, &state_type) ||
+            !minic_type_pointer_to(minic_type_void(), &void_pointer) ||
+            !minic_type_pointer_to(state_type, &pointer_state) ||
+            !minic_data_layout_type(t, &program, source_type,
+                                    &bytes, &alignment) ||
+            bytes != shape.object_size || alignment != shape.object_alignment ||
+            program.record_count != (opaque ? 2U : 1U) ||
+            /* Opaque cursor storage materializes a char[N] array; SysV x86
+             * additionally owns its canonical one-element va_list array. */
+            program.array_type_count != (x86 ? 2U : aarch ? 1U : 0U) ||
+            program.type_alias_count != 2U ||
+            !minic_type_equal(program.type_aliases[0].type, source_type) ||
+            !minic_type_equal(program.type_aliases[1].type, source_type) ||
+            !minic_target_info_va_cursor_source_operand_supported(
+                t, &program, source_type, true) ||
+            !minic_target_info_va_cursor_source_copy_types_compatible(
+                t, &program, source_type, source_type) ||
+            minic_target_info_va_cursor_source_copy_types_compatible(
+                t, &program, source_type, minic_type_int()) != opaque ||
+            (opaque && minic_target_info_va_cursor_source_operand_supported(
+                t, &program, void_pointer, true)) ||
+            (x86 && !minic_target_info_va_cursor_source_operand_supported(
+                t, &program, pointer_state, false)) ||
+            !minic_c0_program_verify_target_detailed(
+                &program, MINIC_C0_AST_PARSED, t, &failure)) {
+            (void)fprintf(stderr,
+                "FAIL target va cursor C source identity: %s diagnostic=%s records=%zu arrays=%zu\n",
+                names[i], diagnostic.message, program.record_count, program.array_type_count);
+            minic_c0_program_destroy(&program);
+            return 1;
+        }
+        if (opaque) {
+            /* ABI-state targets must never silently revert to an ordinary
+             * void* source cursor when their source policy is missing. */
+            if (!minic_target_invocation_begin(&missing_policy, machine)) {
+                minic_c0_program_destroy(&program);
+                return 1;
+            }
+            missing_policy.source_info.va_cursor_source_abi_policy = NULL;
+            if (minic_target_info_va_cursor_source_shape(
+                    &missing_policy, &shape)) {
+                minic_c0_program_destroy(&program);
+                (void)fprintf(stderr,
+                    "FAIL target va cursor ABI-state missing source policy: %s\n",
+                    names[i]);
+                return 1;
+            }
+        }
+        minic_c0_program_destroy(&program);
+    }
+    return puts("TARGET_VA_CURSOR_SOURCE_ABI=PASS x86_array24 aarch_record32 linear_isa3 canonical_tu5 typedef_identity") == EOF;
+}
+
+static int verify_registered_target_catalog(void) {
+    const MinicTargetCatalogEntry *targets;
+    const MinicDataLayout unknown_layout = {0};
+    size_t i, count;
+    unsigned int toolchain_count = 0U;
+    targets = minic_target_catalog_all(&count);
+    if (targets == NULL || count != 5U ||
+        minic_data_layout_is_little_endian(NULL) ||
+        minic_data_layout_is_little_endian(&unknown_layout) ||
+        minic_target_catalog_find("not-a-target") != NULL ||
+        minic_target_catalog_for_architecture((MinicTargetArchitecture)999) != NULL ||
+        minic_target_catalog_default() !=
+            minic_target_catalog_for_architecture(MINIC_TARGET_ARCH_RISCV64))
+        return 1;
+    for (i = 0U; i < count; ++i) {
+        const MinicTargetCatalogEntry *entry =
+            minic_target_catalog_find(targets[i].name);
+        const MinicTargetInfo *info =
+            minic_target_info_from_name(targets[i].name);
+        const MinicBackend *backend = minic_backend_for_target(info);
+        size_t j;
+        if (entry != &targets[i] || info == NULL ||
+            entry != minic_target_catalog_for_architecture(entry->architecture) ||
+            info->architecture != entry->architecture ||
+            backend == NULL || backend->emit_module == NULL ||
+            info->data_layout == NULL ||
+            (entry->isa_family == MINIC_TARGET_ISA_FAMILY_RISCV) !=
+                (minic_riscv_target_isa(info).xlen != 0U) ||
+            !(entry->product_driver_stages &
+              MINIC_TARGET_STAGE_ASSEMBLY_FROM_PREPROCESSED_C))
+            return 1;
+        for (j = 0U; j < i; ++j) {
+            const MinicTargetInfo *other =
+                minic_target_info_from_name(targets[j].name);
+            if (other == info || minic_backend_for_target(other) == backend)
+                return 1;
+        }
+        if (entry->product_driver_stages &
+            MINIC_TARGET_STAGE_STAGED_ASSEMBLER_AND_LINKER) {
+            if (entry->architecture != MINIC_TARGET_ARCH_RISCV64)
+                return 1;
+            ++toolchain_count;
+        }
+    }
+    if (toolchain_count != 1U) return 1;
+    {
+        MinicTargetInfo unknown = *minic_default_target_info();
+        unknown.architecture = (MinicTargetArchitecture)999;
+        if (minic_backend_for_target(&unknown) != NULL) return 1;
+    }
+    return puts("TARGET_CATALOG=PASS five_backends=5 full_staged=rv64_only single_registration=1") == EOF;
+}
+
+static int verify_riscv_profile_catalog(void) {
+    const MinicRiscvProfile *profiles;
+    size_t n, i, j;
+    profiles = minic_riscv_profile_all(&n);
+    if (profiles == NULL || n != 6U ||
+        minic_riscv_profile_find("rv64gc") != NULL ||
+        minic_riscv_profile_find("rv32im") != NULL ||
+        minic_riscv_profile_find(NULL) != NULL)
+        return 1;
+    for (i = 0U; i < n; ++i) {
+        const MinicRiscvProfile *p = &profiles[i];
+        if (p != minic_riscv_profile_find(p->march) ||
+            (p->xlen != 32U && p->xlen != 64U) ||
+            ((p->xlen == 32U) != (p->kind == MINIC_RISCV_PROFILE_RV32I)) ||
+            strcmp(p->mabi, p->xlen == 32U ? "ilp32" :
+                   p->kind == MINIC_RISCV_PROFILE_RV64IMAFD ? "lp64d" : "lp64") != 0 ||
+            (p->codegen_features & ~p->features) != 0U ||
+            (p->xlen == 32U && p->features != 0U))
+            return 1;
+        for (j = i + 1U; j < n; ++j)
+            if (strcmp(p->march, profiles[j].march) == 0)
+                return 1;
+    }
+    if (minic_riscv_profile_find("rv64ima_zicsr_zifencei") == NULL ||
+        minic_riscv_profile_find("rv64imac_zicsr_zifencei") == NULL)
+        return 1;
+    return puts("RISCV_PROFILE_CATALOG=PASS six_explicit_profiles Base_I_source_asm_supersets") == EOF;
+}
+
+static int verify_invocation_language_abi(void) {
+    const MinicTargetCatalogEntry *entries;
+    size_t i, count;
+    entries = minic_target_catalog_all(&count);
+    for (i = 0U; i < count; ++i) {
+        const MinicTargetInfo *canonical =
+            minic_target_info_from_name(entries[i].name);
+        MinicTargetInvocation invocation, second;
+        MinicIntegerSign original;
+        MinicType original_wchar;
+        if (canonical == NULL ||
+            !minic_target_invocation_begin(&invocation, canonical) ||
+            !minic_target_invocation_begin(&second, canonical) ||
+            !minic_target_info_plain_char_sign(&second, &original) ||
+            !minic_target_info_wide_character_type(&second, &original_wchar) ||
+            !minic_target_invocation_plain_char(
+                &invocation, original == MINIC_INTEGER_SIGN_SIGNED
+                    ? MINIC_INTEGER_SIGN_UNSIGNED : MINIC_INTEGER_SIGN_SIGNED) ||
+            !minic_target_invocation_short_wchar(&invocation, true) ||
+            invocation.machine.architecture != canonical->architecture ||
+            invocation.source_info.integer_model != &invocation.integer_model ||
+            second.source_info.integer_model != &second.integer_model ||
+            invocation.integer_model.plain_char_sign == original ||
+            second.integer_model.plain_char_sign != original ||
+            !minic_type_equal(second.source_info.wide_character_type, original_wchar) ||
+            !minic_target_invocation_short_wchar(&invocation, false) ||
+            !minic_type_equal(invocation.source_info.wide_character_type, original_wchar))
+            return (void)fprintf(stderr,
+                "TARGET_INVOCATION_ABI=FAIL target:%s\n", entries[i].name), 1;
+    }
+    return puts("TARGET_INVOCATION_ABI=PASS five_targets immutable_models signed_char short_wchar_restore") == EOF;
+}
+
+static int verify_riscv_integer_strategy(void) {
+    /* Only the machine selector sees optional M. The same typed Core
+     * operation remains compilable through a Base-I libcall on both XLENs.
+     * C/other extensions are irrelevant until a qualified emitter consumes
+     * them. The synthetic RV32M subtarget is a selector test only: the
+     * CLI does not yet claim RV32M machine/ABI certification. */
+    const MinicCoreInstructionKind ops[] = {
+        MINIC_CORE_INSTRUCTION_INTEGER_MULTIPLY,
+        MINIC_CORE_INSTRUCTION_INTEGER_DIVIDE,
+        MINIC_CORE_INSTRUCTION_INTEGER_REMAINDER
+    };
+    const char *expected_native[][2] = {
+        {"mul", "mul"}, {"div", "divu"}, {"rem", "remu"}
+    };
+    size_t x, op, sign;
+    for (x = 0U; x < 2U; ++x) {
+        MinicRiscvIsa base = {
+            .xlen = x == 0U ? 32U : 64U,
+            .abi = x == 0U ? MINIC_RISCV_ABI_ILP32 : MINIC_RISCV_ABI_LP64,
+            .features = 0U,
+            .strict_isa = true
+        };
+        MinicRiscvIsa extended = base;
+        MinicRiscvIntegerPlan plan;
+        extended.features = MINIC_RISCV_FEATURE_M | MINIC_RISCV_FEATURE_C;
+        extended.codegen_features = MINIC_RISCV_FEATURE_M;
+        for (op = 0U; op < sizeof(ops) / sizeof(ops[0]); ++op) {
+            for (sign = 0U; sign < 2U; ++sign) {
+                const char *sym = minic_riscv_integer_arithmetic_symbol(
+                    ops[op], sign != 0U, base.xlen);
+                if (sym == NULL ||
+                    !minic_riscv_plan_integer_arithmetic(
+                        &base, ops[op], sign != 0U, base.xlen, &plan) ||
+                    plan.strategy != MINIC_RISCV_INTEGER_RUNTIME_LIBCALL ||
+                    plan.opcode != NULL ||
+                    plan.symbol == NULL ||
+                    strcmp(plan.symbol, sym) != 0)
+                    return 1;
+                if (!minic_riscv_plan_integer_arithmetic(
+                        &extended, ops[op], sign != 0U, base.xlen, &plan) ||
+                    plan.strategy != MINIC_RISCV_INTEGER_NATIVE_M ||
+                    plan.symbol != NULL ||
+                    strcmp(plan.opcode, expected_native[op][sign]) != 0)
+                    return 1;
+                /* Target still supports M, but this invocation emits I. */
+                extended.codegen_features = 0U;
+                if (!minic_riscv_plan_integer_arithmetic(
+                        &extended, ops[op], sign != 0U, base.xlen, &plan) ||
+                    plan.strategy != MINIC_RISCV_INTEGER_RUNTIME_LIBCALL)
+                    return 1;
+                extended.features = MINIC_RISCV_FEATURE_M | MINIC_RISCV_FEATURE_C;
+        extended.codegen_features = MINIC_RISCV_FEATURE_M;
+            }
+        }
+        if (minic_riscv_plan_integer_arithmetic(
+                &base, ops[0], false, base.xlen == 32U ? 64U : 32U, &plan) ||
+            minic_riscv_plan_integer_arithmetic(
+                &base, MINIC_CORE_INSTRUCTION_INTEGER_ADD, false,
+                base.xlen, &plan))
+            return 1;
+    }
+    return puts("RISCV_BASE_I_STRATEGY=PASS rv32_rv64 M_optional C_ignored runtime_fallback") == EOF;
+}
+
+/* One typed Core CALL_FRAME_ADDRESS invariant under separate machine ABIs.
+ * AArch64 owns a genuine x29 frame record (so caller-level 1 works);
+ * LoongArch owns current fixed SP, while SysV x86 owns RBP.
+ * Levels above the implemented target contract remain prohibited. */
+static int verify_lp64_return_address_level_zero(void) {
+    const MinicTargetInfo *aarch =
+        minic_target_info_from_name("aarch64-linux");
+    const MinicTargetInfo *x86 =
+        minic_target_info_from_name("x86_64-linux");
+    const MinicTargetInfo *loong =
+        minic_target_info_from_name("loongarch64-linux");
+    if (!aarch || !x86 || !loong ||
+        !minic_target_info_call_frame_address_supported(
+            aarch, MINIC_CALL_FRAME_ADDRESS_RETURN, 0U) ||
+        minic_target_info_call_frame_address_supported(
+            aarch, MINIC_CALL_FRAME_ADDRESS_RETURN, 1U) ||
+        !minic_target_info_call_frame_address_supported(
+            aarch, MINIC_CALL_FRAME_ADDRESS_FRAME, 0U) ||
+        !minic_target_info_call_frame_address_supported(
+            aarch, MINIC_CALL_FRAME_ADDRESS_FRAME, 1U) ||
+        minic_target_info_call_frame_address_supported(
+            aarch, MINIC_CALL_FRAME_ADDRESS_FRAME, 2U) ||
+        !minic_target_info_call_frame_address_supported(
+            x86, MINIC_CALL_FRAME_ADDRESS_RETURN, 0U) ||
+        !minic_target_info_call_frame_address_supported(
+            x86, MINIC_CALL_FRAME_ADDRESS_FRAME, 0U) ||
+        minic_target_info_call_frame_address_supported(
+            x86, MINIC_CALL_FRAME_ADDRESS_RETURN, 1U) ||
+        minic_target_info_call_frame_address_supported(
+            x86, MINIC_CALL_FRAME_ADDRESS_FRAME, 1U) ||
+        !minic_target_info_call_frame_address_supported(
+            loong, MINIC_CALL_FRAME_ADDRESS_RETURN, 0U) ||
+        minic_target_info_call_frame_address_supported(
+            loong, MINIC_CALL_FRAME_ADDRESS_RETURN, 1U) ||
+        !minic_target_info_call_frame_address_supported(
+            loong, MINIC_CALL_FRAME_ADDRESS_FRAME, 0U) ||
+        minic_target_info_call_frame_address_supported(
+            loong, MINIC_CALL_FRAME_ADDRESS_FRAME, 1U)) {
+        (void)fprintf(stderr, "LP64_CALL_FRAME=FAIL\n");
+        return 1;
+    }
+    (void)puts("LP64_CALL_FRAME=PASS aarch64_x30_sp loongarch64_ra_sp x86_saved_pc_and_rbp level0_only");
+    return 0;
+}
+
+static int verify_fixed_register_target_contract(void) {
+    static const char *names[] = {
+        "riscv32-linux", "riscv64-linux", "x86_64-linux",
+        "aarch64-linux", "loongarch64-linux"
+    };
+    size_t i;
+    for (i = 0U; i < sizeof(names) / sizeof(names[0]); ++i) {
+        const MinicTargetInfo *t = minic_target_info_from_name(names[i]);
+        bool riscv = i <= 1U;
+        bool x86 = i == 2U;
+        bool arm64 = i == 3U;
+        if (!t ||
+            minic_target_info_fixed_register_supported(t, "rsp", 3U) != x86 ||
+            minic_target_info_fixed_register_supported(t, "sp", 2U) != (riscv || arm64) ||
+            minic_target_info_fixed_register_supported(t, "tp", 2U) != riscv ||
+            minic_target_info_fixed_register_supported(t, "r15", 3U) ||
+            minic_target_info_fixed_register_supported(t, "rbp", 3U) ||
+            minic_target_info_fixed_register_supported(t, "rsp", 2U)) {
+            (void)fprintf(stderr, "FIXED_REGISTER_TARGET=FAIL %s\n", names[i]);
+            return 1;
+        }
+    }
+    {
+        const MinicTargetInfo *rv64 = minic_target_info_from_name("riscv64-linux");
+        const MinicTargetInfo *rv32 = minic_target_info_from_name("riscv32-linux");
+        MinicTargetInvocation source_rv64, source_rv32;
+        if (rv64 == NULL || rv32 == NULL ||
+            !minic_target_invocation_begin(&source_rv64, rv64) ||
+            !minic_target_invocation_begin(&source_rv32, rv32) ||
+            !minic_target_info_local_fixed_register_supported(rv64, "a7", 2U) ||
+            !minic_target_info_local_fixed_register_supported(rv64, "x17", 3U) ||
+            minic_target_info_local_fixed_register_supported(rv64, "x7", 2U) ||
+            !minic_target_info_inline_asm_register_clobber_supported(&source_rv64, "t2", 2U) ||
+            !minic_target_info_inline_asm_register_clobber_supported(&source_rv64, "x7", 2U) ||
+            !minic_target_info_inline_asm_register_clobber_supported(&source_rv64, "x31", 3U) ||
+            minic_target_info_inline_asm_register_clobber_supported(&source_rv64, "x8", 2U) ||
+            minic_target_info_inline_asm_register_clobber_supported(&source_rv64, "sp", 2U) ||
+            minic_target_info_local_fixed_register_supported(rv32, "x17", 3U) ||
+            minic_target_info_inline_asm_register_clobber_supported(&source_rv32, "x7", 2U)) {
+            (void)fprintf(stderr, "RISCV_PHYSICAL_REGISTER_ADMISSION=FAIL\n");
+            return 1;
+        }
+        (void)puts("RISCV_PHYSICAL_REGISTER_ADMISSION=PASS rv64_aliases rv32_fail_closed");
+    }
+    (void)puts("FIXED_REGISTER_TARGET=PASS rv_sp_tp x86_rsp_live aarch64_sp_live other_GPRs_fail_closed");
+    return 0;
+}
+
+/* An identical GNU constraint letter is not an identical ISA predicate:
+ * RV/LoongArch: signed imm12; AArch64: unsigned imm12 with optional LSL12;
+ * x86: shift count 0..31. Parser admission NEVER qualifies machine ASM. */
+static int verify_gnu_asm_immediate_target_contract(void) {
+    static const char *const names[] = {
+        "riscv32-linux", "riscv64-linux", "x86_64-linux",
+        "aarch64-linux", "loongarch64-linux"
+    };
+    size_t i;
+    for (i = 0U; i < sizeof(names) / sizeof(names[0]); ++i) {
+        MinicTargetInvocation invocation;
+        const MinicTargetInvocation *target = &invocation;
+        const bool signed12 = (i == 0U || i == 1U || i == 4U);
+        const bool arm = i == 3U;
+        const bool x86 = i == 2U;
+        if (!minic_target_invocation_begin(
+                &invocation, minic_target_info_from_name(names[i])) ||
+            minic_target_info_inline_asm_immediate_may_defer(target) != (arm || x86 || i == 4U) ||
+            minic_target_info_inline_asm_immediate_constraint_supported(target, "I", 1U, -2048) != signed12 ||
+            minic_target_info_inline_asm_immediate_constraint_supported(target, "I", 1U, 0) != (signed12 || arm || x86) ||
+            minic_target_info_inline_asm_immediate_constraint_supported(target, "I", 1U, 0x401) != (signed12 || arm) ||
+            minic_target_info_inline_asm_immediate_constraint_supported(target, "I", 1U, 2047) != (signed12 || arm) ||
+            minic_target_info_inline_asm_immediate_constraint_supported(target, "I", 1U, 31) != (signed12 || arm || x86) ||
+            minic_target_info_inline_asm_immediate_constraint_supported(target, "I", 1U, 32) != (signed12 || arm) ||
+            minic_target_info_inline_asm_immediate_constraint_supported(target, "I", 1U, -1) != signed12 ||
+            minic_target_info_inline_asm_immediate_constraint_supported(target, "I", 1U, -2049) ||
+            minic_target_info_inline_asm_immediate_constraint_supported(target, "I", 1U, 2048) != arm ||
+            minic_target_info_inline_asm_immediate_constraint_supported(target, "I", 1U, 4095) != arm ||
+            minic_target_info_inline_asm_immediate_constraint_supported(target, "I", 1U, 4096) != arm ||
+            minic_target_info_inline_asm_immediate_constraint_supported(target, "I", 1U, 0xfff000) != arm ||
+            minic_target_info_inline_asm_immediate_constraint_supported(target, "I", 1U, 0x100001) ||
+            minic_target_info_inline_asm_immediate_constraint_supported(target, "I", 1U, 0x1000000) ||
+            minic_target_info_inline_asm_immediate_constraint_supported(target, "K", 1U, 18) ||
+            minic_target_info_inline_asm_immediate_constraint_supported(target, "II", 2U, 18) ||
+            minic_target_info_inline_asm_register_clobber_supported(target, "t0", 2U) !=
+                (i == 0U || i == 1U || i == 4U)) {
+            (void)fprintf(stderr, "GNU_ASM_IMMEDIATE_TARGET=FAIL target=%s\n", names[i]);
+            return 1;
+        }
+    }
+    (void)puts("GNU_ASM_IMMEDIATE_TARGET=PASS signed12_rv_loong arm_unsigned12_opt_shift x86_shift_0_31 templates_fail_closed");
+    return 0;
+}
+
+/* Every target source admission policy is independent of the physical ASM
+ * machine emitter. The old single target_info ISA switch used to conflate
+ * GNU parser spelling, hard-register object identity and emitted clobbers. */
+static int verify_target_asm_source_policy(void) {
+    static const char *const names[] = {
+        "riscv32-linux", "riscv64-linux", "x86_64-linux",
+        "aarch64-linux", "loongarch64-linux"
+    };
+    const MinicTargetInfo *rv32 = minic_target_info_from_name(names[0]);
+    const MinicTargetInfo *rv64 = minic_target_info_from_name(names[1]);
+    const MinicTargetInfo *x86 = minic_target_info_from_name(names[2]);
+    const MinicTargetInfo *arm = minic_target_info_from_name(names[3]);
+    const MinicTargetInfo *loong = minic_target_info_from_name(names[4]);
+    MinicTargetInfo unsupported;
+    MinicTargetInvocation source_rv32, source_rv64, source_x86, source_arm, source_loong;
+    MinicTargetInvocation unsupported_source;
+    MinicType result, arguments[3];
+    size_t argument_count, immediate_index, i;
+    const char *mnemonic;
+    char callee[128];
+    unsigned int stage = 0U;
+    if (!rv32 || !rv64 || !x86 || !arm || !loong ||
+        !minic_target_invocation_begin(&source_rv32, rv32) ||
+        !minic_target_invocation_begin(&source_rv64, rv64) ||
+        !minic_target_invocation_begin(&source_x86, x86) ||
+        !minic_target_invocation_begin(&source_arm, arm) ||
+        !minic_target_invocation_begin(&source_loong, loong)) return 1;
+    for (i = 0U; i < sizeof(names) / sizeof(names[0]); ++i) {
+        stage = 1U;
+        const MinicTargetInfo *target = minic_target_info_from_name(names[i]);
+        MinicTargetInvocation source_target;
+        if (!minic_target_invocation_begin(&source_target, target) ||
+            source_target.source_info.asm_source_policy == NULL ||
+            !minic_target_info_inline_asm_memory_input_constraint_supported(
+                &source_target, "m", 1U) ||
+            minic_target_info_inline_asm_memory_input_constraint_supported(
+                &source_target, "Q", 1U) != (target == arm)) goto failure;
+    }
+    unsupported = *x86;
+    if (!minic_target_invocation_begin(&unsupported_source, x86)) goto failure;
+    stage = 2U;
+    unsupported_source.source_info.asm_source_policy = NULL;
+    if (!minic_target_info_fixed_register_supported(&unsupported, "rsp", 3U) ||
+        minic_target_info_inline_asm_memory_input_constraint_supported(
+            &unsupported_source, "m", 1U) ||
+        minic_target_info_inline_asm_source_clobber_supported(
+            &unsupported_source, "cc", 2U)) goto failure;
+    stage = 3U;
+    if (!minic_target_info_local_fixed_register_supported(x86, "%rax", 4U) ||
+        minic_target_info_local_fixed_register_supported(x86, "%r15", 4U) ||
+        minic_target_info_inline_asm_register_clobber_supported(&source_x86, "rbx", 3U) ||
+        !minic_target_info_inline_asm_source_clobber_supported(&source_x86, "ebx", 3U) ||
+        !minic_target_info_inline_asm_source_clobber_supported(&source_x86, "flags", 5U) ||
+        !minic_target_info_inline_asm_readwrite_hardreg_supported(
+            &source_x86, "rsp", 3U, "+r", 2U, minic_type_unsigned_long()) ||
+        minic_target_info_inline_asm_readwrite_hardreg_supported(
+            &source_x86, "rsp", 3U, "+r", 2U, minic_type_int())) goto failure;
+    stage = 4U;
+    if (!minic_target_info_local_fixed_register_supported(arm, "x30", 3U) ||
+        !minic_target_info_local_fixed_register_supported(arm, "r17", 3U) ||
+        minic_target_info_local_fixed_register_supported(arm, "x18", 3U) ||
+        !minic_target_info_inline_asm_register_clobber_supported(&source_arm, "cc", 2U) ||
+        minic_target_info_fixed_register_write_supported(arm, "sp", 2U))
+        goto failure;
+    stage = 5U;
+    if (!minic_target_info_fixed_register_supported(loong, "$r21", 4U) ||
+        !minic_target_info_fixed_register_write_supported(loong, "$tp", 3U) ||
+        minic_target_info_fixed_register_write_supported(loong, "$sp", 3U) ||
+        !minic_target_info_local_fixed_register_supported(loong, "a7", 2U) ||
+        minic_target_info_local_fixed_register_supported(loong, "t1", 2U) ||
+        !minic_target_info_inline_asm_source_clobber_supported(&source_loong, "$s0", 3U))
+        goto failure;
+    stage = 6U;
+    if (!minic_target_info_local_fixed_register_supported(rv32, "a7", 2U) ||
+        minic_target_info_local_fixed_register_supported(rv32, "x17", 3U) ||
+        !minic_target_info_inline_asm_register_clobber_supported(&source_rv32, "t6", 2U) ||
+        !minic_target_info_local_fixed_register_supported(rv64, "x17", 3U) ||
+        minic_target_info_local_fixed_register_supported(rv64, "x7", 2U))
+        goto failure;
+    stage = 7U;
+    if (!minic_target_info_machine_builtin_signature(&source_loong,
+            "__builtin_loongarch_crc_w_b_w", sizeof("__builtin_loongarch_crc_w_b_w") - 1U,
+            callee, sizeof(callee), &result, arguments, &argument_count,
+            &mnemonic, &immediate_index) ||
+        !minic_type_equal(result, minic_type_int()) ||
+        !minic_type_is_plain_char(arguments[0]) ||
+        !minic_type_is_signed_integer(arguments[0]) ||
+        argument_count != 2U || immediate_index != SIZE_MAX ||
+        strcmp(mnemonic, "crc.w.b.w") != 0 ||
+        minic_target_info_machine_builtin_signature(&source_x86,
+            "__builtin_loongarch_crc_w_b_w", sizeof("__builtin_loongarch_crc_w_b_w") - 1U,
+            callee, sizeof(callee), &result, arguments, &argument_count,
+            &mnemonic, &immediate_index)) goto failure;
+    /* Machine admission starts from the sealed internal Core callee, never
+     * re-enters GNU source aliases or constructs C argument types. */
+    stage = 8U;
+    if (!minic_target_info_machine_builtin_form(
+            loong, "__minic_target_builtin_loongarch_crc_w_b_w",
+            sizeof("__minic_target_builtin_loongarch_crc_w_b_w") - 1U,
+            &argument_count, &mnemonic, &immediate_index) ||
+        argument_count != 2U || immediate_index != SIZE_MAX ||
+        strcmp(mnemonic, "crc.w.b.w") != 0 ||
+        !minic_target_info_machine_builtin_form(
+            loong, "__minic_target_builtin_loongarch_csrwr_d",
+            sizeof("__minic_target_builtin_loongarch_csrwr_d") - 1U,
+            &argument_count, &mnemonic, &immediate_index) ||
+        argument_count != 2U || immediate_index != 1U ||
+        strcmp(mnemonic, "csrwr") != 0 ||
+        !minic_target_info_machine_builtin_form(
+            loong, "__minic_target_builtin_loongarch_cpucfg",
+            sizeof("__minic_target_builtin_loongarch_cpucfg") - 1U,
+            &argument_count, &mnemonic, &immediate_index) ||
+        argument_count != 1U || immediate_index != SIZE_MAX ||
+        strcmp(mnemonic, "cpucfg") != 0)
+        goto failure;
+    stage = 9U;
+    if (!minic_target_info_machine_builtin_signature(
+            &source_loong, "__cpucfg", sizeof("__cpucfg") - 1U,
+            callee, sizeof(callee), &result, arguments, &argument_count,
+            &mnemonic, &immediate_index) ||
+        strcmp(callee, "__minic_target_builtin_loongarch_cpucfg") != 0 ||
+        !minic_type_equal(result, minic_type_unsigned_int()) ||
+        !minic_type_equal(arguments[0], minic_type_unsigned_int()) ||
+        !minic_target_info_machine_builtin_signature(
+            &source_loong, "__iocsrrd_w", sizeof("__iocsrrd_w") - 1U,
+            callee, sizeof(callee), &result, arguments, &argument_count,
+            &mnemonic, &immediate_index) ||
+        strcmp(callee, "__minic_target_builtin_loongarch_iocsrrd_w") != 0 ||
+        argument_count != 1U || strcmp(mnemonic, "iocsrrd.w") != 0)
+        goto failure;
+    stage = 10U;
+    unsupported = *loong;
+    unsupported.machine_builtin_form_lookup = NULL;
+    if (minic_target_info_machine_builtin_form(
+            &unsupported, "__minic_target_builtin_loongarch_cpucfg",
+            sizeof("__minic_target_builtin_loongarch_cpucfg") - 1U,
+            &argument_count, &mnemonic, &immediate_index) ||
+        minic_target_info_machine_builtin_form(
+            x86, "__minic_target_builtin_loongarch_cpucfg",
+            sizeof("__minic_target_builtin_loongarch_cpucfg") - 1U,
+            &argument_count, &mnemonic, &immediate_index) ||
+        minic_target_info_machine_builtin_form(
+            loong, "__builtin_loongarch_cpucfg",
+            sizeof("__builtin_loongarch_cpucfg") - 1U,
+            &argument_count, &mnemonic, &immediate_index) ||
+        minic_target_info_machine_builtin_form(
+            loong, "__cpucfg", sizeof("__cpucfg") - 1U,
+            &argument_count, &mnemonic, &immediate_index) ||
+        minic_target_info_machine_builtin_form(
+            loong, "__minic_target_builtin_loongarch_unknown",
+            sizeof("__minic_target_builtin_loongarch_unknown") - 1U,
+            &argument_count, &mnemonic, &immediate_index) ||
+        minic_target_info_machine_builtin_form(
+            loong, "__minic_target_builtin_loongarch_cpucfg_suffix",
+            sizeof("__minic_target_builtin_loongarch_cpucfg_suffix") - 1U,
+            &argument_count, &mnemonic, &immediate_index) ||
+        minic_target_info_machine_builtin_form(
+            loong, "__minic_target_builtin_loongarch_cpucfg",
+            sizeof("__minic_target_builtin_loongarch_cpucfg") - 1U,
+            NULL, &mnemonic, &immediate_index))
+        goto failure;
+    (void)puts("TARGET_ASM_SOURCE_POLICY=PASS five_independent_targets grammar_vs_machine_fail_closed loong_builtin_owned");
+    return 0;
+failure:
+    (void)fprintf(stderr, "TARGET_ASM_SOURCE_POLICY=FAIL stage=%u\n", stage);
+    return 1;
+}
+
+int main(void) {
+    const MinicTargetInfo *rv = minic_default_target_info();
+    const MinicTargetInfo *x86 = minic_target_info_from_name("x86_64-linux");
+    const MinicTargetInfo *arm = minic_target_info_from_name("aarch64-linux");
+    const MinicTargetInfo *loong = minic_target_info_from_name("loongarch64-linux");
+    if (rv == NULL || x86 == NULL || arm == NULL || loong == NULL ||
+        rv == arm || x86 == arm || rv == loong || x86 == loong ||
+        arm == loong || rv->architecture != MINIC_TARGET_ARCH_RISCV64 ||
+        x86->architecture != MINIC_TARGET_ARCH_X86_64 ||
+        minic_target_info_from_name("mips64-linux") != NULL ||
+        minic_target_info_from_name(NULL) != NULL ||
+        minic_target_info_for_architecture((MinicTargetArchitecture)999) != NULL) {
+        (void)fprintf(stderr, "FAIL four independent target identities\n");
+        return 1;
+    }
+    /* Both AAPCS64 (32-byte tag) and SysV x86 (24-byte tag) now allocate
+     * independent mutable cursor state; RV64/Loong remain scalar cursors. */
+    if (arm->variadic_scalar_read_kind != MINIC_VARIADIC_SCALAR_READ_ABI_CURSOR ||
+        arm->variadic_copy_kind != MINIC_VARIADIC_COPY_ABI_STATE ||
+        x86->variadic_copy_kind != MINIC_VARIADIC_COPY_ABI_STATE ||
+        rv->variadic_copy_kind != MINIC_VARIADIC_COPY_SCALAR_ASSIGNMENT ||
+        loong->variadic_copy_kind != MINIC_VARIADIC_COPY_SCALAR_ASSIGNMENT) {
+        (void)fprintf(stderr, "FAIL ABI-state va_copy must own separate mutable tag on AAPCS64 and x86\n");
+        return 1;
+    }
+    if (verify_lp64_return_address_level_zero() != 0 ||
+        verify_fixed_register_target_contract() != 0 ||
+        verify_gnu_asm_immediate_target_contract() != 0 ||
+        verify_target_asm_source_policy() != 0 ||
+        verify_riscv_integer_strategy() != 0 || verify_registered_target_catalog() != 0 || verify_riscv_profile_catalog() != 0 ||
+        verify_lp64("riscv64-linux", MINIC_TARGET_ARCH_RISCV64,
+                    MINIC_INTEGER_SIGN_UNSIGNED, MINIC_INTEGER_RANK_INT,
+                    MINIC_INTEGER_SIGN_SIGNED) != 0 ||
+        verify_invocation_language_abi() != 0 ||
+        verify_target_builtin_registry_rejection() != 0 ||
+        verify_language_admission() != 0 ||
+        verify_va_cursor_source_abi() != 0 || verify_rv32() != 0 ||
+        verify_lp64("aarch64-linux", MINIC_TARGET_ARCH_AARCH64,
+                    MINIC_INTEGER_SIGN_UNSIGNED, MINIC_INTEGER_RANK_INT,
+                    MINIC_INTEGER_SIGN_UNSIGNED) != 0 ||
+        verify_lp64("loongarch64-linux", MINIC_TARGET_ARCH_LOONGARCH64,
+                    MINIC_INTEGER_SIGN_SIGNED, MINIC_INTEGER_RANK_INT,
+                    MINIC_INTEGER_SIGN_SIGNED) != 0) return 1;
+    (void)puts("FOUR_BACKEND_TARGET_MODELS_M0=PASS registered=4 distinct_layouts=4 aarch64_char=unsigned loongarch64_char=signed no_machine_codegen_claim=1");
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/comma_operator.c"}
+int comma_growth(void) {
+    return ((1),
+            (1 + 2 + 3 + 4 + 5 + 6 + 7 + 8 + 9 + 10 + 11 + 12 + 13 + 14 + 15 + 16 + 17 +
+             18 + 19 + 20));
+}
+
+int comma_value(int *target) {
+    int value = 1;
+    ((void)(value), ((void)0));
+    return ((*target = value + 2), *target);
+}
+
+int comma_conditions(int *target) {
+    int value = 0;
+
+    while (((void)(*target = *target + 1)), (value < 1)) {
+        value += 1;
+    }
+    if (((void)(*target = *target + 1)), (value == 1)) {
+        return *target;
+    }
+    return 0;
+}
+
+int comma_expression_statement(void)
+{
+    int value = 0;
+
+    (void)(value += 1), (void)(value += 2), (void)(value += 4);
+    return value;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/comparisons.c"}
+int main(void)
+{
+#if CASE == 1
+    return 7 == 7;
+#elif CASE == 2
+    return 7 != 7;
+#elif CASE == 3
+    return -3 < 2;
+#elif CASE == 4
+    return 2 <= 2;
+#elif CASE == 5
+    return 9 > 4;
+#elif CASE == 6
+    return 4 >= 9;
+#elif CASE == 7
+    return 1 + 2 * 3 == 7;
+#elif CASE == 8
+    int x = -5;
+    return x < 0;
+#else
+#error unsupported comparison test case
+#endif
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/compatible_incomplete_array_pointer.c"}
+/* The array type behind a pointer remains compatible when one bound is
+ * incomplete. This occurs in Linux i915 DMI pointer initializers. */
+struct Entry { unsigned id; };
+
+static const struct Entry entries[2] = {{ 11U }, { 22U }};
+struct Holder { const struct Entry (*list)[]; };
+static const struct Holder holder = { .list = &entries };
+static const struct Holder compound_holder = {
+    .list = &(const struct Entry[]){ { 33U }, { 44U } }
+};
+
+int main(void) {
+    return (*holder.list)[0].id == 11U &&
+                   (*holder.list)[1].id == 22U &&
+                   (*compound_holder.list)[0].id == 33U &&
+                   (*compound_holder.list)[1].id == 44U
+               ? 0 : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/declaration_head_variadic.c"}
+typedef __attribute__((__format__(printf, 2, 3))) int (*printer_t)(void *, const char *, ...);
+typedef int __attribute__((nonnull(2, 3))) (*compare_t)(void *, const void *, const void *);
+
+static int pick_first(int fixed, ...) {
+    return fixed;
+}
+
+int variadic_redecl(int fixed, ...);
+extern typeof(variadic_redecl) variadic_redecl;
+
+static int use_prefix_parameter(__attribute__((__unused__)) int ignored) {
+    return pick_first(7, 11, 13);
+}
+
+static int use_post_type_parameter(int __attribute__((__unused__)) ignored) {
+    return pick_first(5, 17);
+}
+
+int main(void) {
+    printer_t printer = (printer_t)0;
+    compare_t compare = (compare_t)0;
+
+    if (printer != (printer_t)0 || compare != (compare_t)0) {
+        return 1;
+    }
+    return use_prefix_parameter(0) + use_post_type_parameter(0) - 12;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/declaration_head_variadic_layout_bad.c"}
+typedef __attribute__((section(".bad"))) int (*bad_function_t)(int, ...);
+
+int main(void) {
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/deferred_declarator_attributes.c"}
+void __attribute__((__section__(".text.preptr"))) __attribute__((__noinline__)) *
+    map_before_pointer(int value);
+
+void *map_before_pointer(int value) {
+    return value ? (void *)0 : (void *)0;
+}
+
+void *__attribute__((noinline)) map_after_pointer(int value);
+
+void *map_after_pointer(int value) {
+    return value ? (void *)0 : (void *)0;
+}
+
+char *__attribute__((__unused__)) *interleaved_return_pointer_attribute(void) {
+    return (char **)0;
+}
+
+extern char __attribute__((__section__(".data.preptr"))) * extern_slot_before_pointer;
+
+int use_deferred_declarator_attributes(void) {
+    return map_before_pointer(1) == (void *)0 && map_after_pointer(2) == (void *)0;
+}
+
+void __attribute__((__noinline__)) __attribute__((__noclone__)) kfree_skb_reason_shape(int reason);
+
+void kfree_skb_reason_shape(int reason) {
+    (void)reason;
+}
+
+void __attribute__((noclone)) * noclone_after_return_pointer(int value);
+
+void *noclone_after_return_pointer(int value) {
+    return value ? (void *)0 : (void *)0;
+}
+
+static int __attribute__((__used__)) used_object_shape = 7;
+
+void __attribute__((used)) used_function_shape(void);
+
+void used_function_shape(void) {
+    (void)used_object_shape;
+}
+
+void (*__attribute__((__section__(".init.fp-object"))) late_time_init_shape)(void);
+
+int parameter_attribute_before_pointer(void __attribute__((__unused__)) *data) {
+    return data != (void *)0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/driver_gnu_predefines.c"}
+#if !defined(__GNUC__) || !defined(__GNUC_MINOR__)
+#error Mini driver must advertise its supported GNU attribute surface
+#endif
+
+#if (__GNUC__ > 2) || (__GNUC__ == 2 && __GNUC_MINOR__ >= 7)
+#define MINI_DRIVER_PACKED __attribute__((__packed__))
+#else
+#define MINI_DRIVER_PACKED
+#endif
+
+struct DriverPackedProbe {
+    unsigned char tag;
+    unsigned int value;
+} MINI_DRIVER_PACKED;
+
+_Static_assert(sizeof(struct DriverPackedProbe) == 5,
+               "Mini driver GNU predefines must preserve packed attributes");
+
+int driver_gnu_predefine_probe(void) {
+    return (int)sizeof(struct DriverPackedProbe);
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/earlycon_table_goto_runtime.c"}
+/* Linux 6.6 earlycon setup loop, reduced without including Linux headers.
+ * Preserve the essential layout (152-byte descriptor), pointer induction,
+ * continue edges, mutable _Bool retry, and backward goto on a for-exit.
+ */
+typedef _Bool bool;
+typedef unsigned long size_t;
+struct early_id {
+    char name[16];
+    char compatible[128];
+    unsigned long payload;
+};
+static const struct early_id ids[3] = {
+    {"uart", "vendor,uart", 1},
+    {"sbi", "", 2},
+    {"test", "vendor,test", 3}
+};
+static int iterations;
+static int registration_busy;
+static int console_registered(void)
+{
+    return registration_busy;
+}
+static int register_earlycon(char *options, const struct early_id *match)
+{
+    (void)options;
+    return (int)match->payload;
+}
+static size_t mini_len(const char *s)
+{
+    size_t n = 0;
+    while (s[n])
+        ++n;
+    return n;
+}
+static int mini_cmp(const char *a, const char *b, size_t n)
+{
+    size_t i;
+    for (i = 0; i < n; ++i) {
+        if (a[i] != b[i])
+            return 1;
+    }
+    return 0;
+}
+static int earlycon_table_probe(char *buf)
+{
+    const struct early_id *match;
+    bool empty_compatible = 1;
+    if (!buf || !buf[0])
+        return -22;
+    if (console_registered())
+        return -114;
+again:
+    for (match = ids; match < ids + 3; match++) {
+        size_t len = mini_len(match->name);
+        ++iterations;
+        if (iterations > 12)
+            return 99;
+        if (mini_cmp(buf, match->name, len))
+            continue;
+        if (empty_compatible && *match->compatible)
+            continue;
+        if (buf[len]) {
+            if (buf[len] != ',')
+                continue;
+            buf += len + 1;
+        } else
+            buf = 0;
+        return register_earlycon(buf, match);
+    }
+    if (empty_compatible) {
+        empty_compatible = 0;
+        goto again;
+    }
+    return -2;
+}
+int earlycon_table_probe_entry(void)
+{
+    char no_match[] = "absent";
+    char delayed[] = "uart";
+    int result;
+    registration_busy = 0;
+    iterations = 0;
+    result = earlycon_table_probe(no_match);
+    if (result != -2 || iterations != 6)
+        return 11;
+    iterations = 0;
+    result = earlycon_table_probe(delayed);
+    if (result != 1 || iterations != 4)
+        return 12;
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/earlycon_two_pass_runtime.c"}
+/* Minimum earlycon-style scan: a mutable _Bool gates a second pass
+ * through a for-loop reached through a backward goto. No Linux dependency.
+ * Regression witness: pristine MiniC PASS, production 39-patch runtime
+ * profile FAIL. The first bad buildable prefix is #32, an inline-asm
+ * symbolic specialization wrapper invokes seven follow-on patches;
+ * the last, unreachable-reentry, expands to another twenty CFG patches.
+ * The focused regression isolates them incrementally on ONE runner.
+ * A backward goto into a user label must invalidate cached local facts:
+ * first-pass true is not a valid constant at a second-pass label entry. */
+typedef _Bool bool;
+static int scan_count;
+static int table[3] = {1, 3, 5};
+
+int earlycon_probe_not_found(int wanted)
+{
+    bool second_pass = 1;
+    int i;
+again:
+    for (i = 0; i < 3; ++i) {
+        ++scan_count;
+        /* Bound buggy loops to give CI a deterministic error rather than hang. */
+        if (scan_count > 16)
+            return 99;
+        if (table[i] == wanted && !second_pass)
+            return 100 + scan_count;
+    }
+    if (second_pass) {
+        second_pass = 0;
+        goto again;
+    }
+    return scan_count;
+}
+
+int earlycon_probe_entry(void)
+{
+    int result;
+    scan_count = 0;
+    result = earlycon_probe_not_found(7);
+    if (result != 6 || scan_count != 6)
+        return 1;
+    scan_count = 0;
+    result = earlycon_probe_not_found(3);
+    if (result != 105 || scan_count != 5)
+        return 2;
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/elf_hidden_undefined_pic.c"}
+/* GNU PIC visibility oracle. GNU AS must receive .hidden for undefined
+ * external declarations, while default-visible addresses remain preemptible. */
+extern int hidden_data __attribute__((visibility("hidden")));
+extern int default_data;
+__attribute__((visibility("hidden"))) extern int hidden_function(int);
+extern int default_function(int);
+
+int *mini_hidden_data_address(void) { return &hidden_data; }
+int *mini_default_data_address(void) { return &default_data; }
+int (*mini_hidden_function_address(void))(int) { return &hidden_function; }
+int (*mini_default_function_address(void))(int) { return &default_function; }
+
+int mini_hidden_pic_runtime(int value) {
+    int *hidden = mini_hidden_data_address();
+    int *external = mini_default_data_address();
+    int (*hidden_call)(int) = mini_hidden_function_address();
+    int (*default_call)(int) = mini_default_function_address();
+    return *hidden + *external + hidden_call(value) + default_call(value + 1);
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/elf_hidden_undefined_pic_owner.c"}
+/* Distinct translation unit: hidden symbols must remain HIDDEN UND in the
+ * MiniC object and resolve locally when GNU LD combines the shared module. */
+__attribute__((visibility("hidden"))) int hidden_data = 7;
+int default_data = 11;
+
+__attribute__((visibility("hidden"))) int hidden_function(int value) {
+    return value + 3;
+}
+int default_function(int value) { return value + 5; }
+
+extern int mini_hidden_pic_runtime(int);
+int main(void) { return mini_hidden_pic_runtime(2) == 31 ? 0 : 1; }
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/empty_main.c"}
+int main() {}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/expression_statement_entry.c"}
+struct counters {
+    int contexts;
+};
+
+int drive_expression_entries(struct counters *ctx, int *value) {
+    ++ctx->contexts;
+    --*value;
+    ~ctx->contexts;
+    'x';
+    1.5;
+    "entry";
+    sizeof(ctx->contexts);
+    _Alignof(int);
+    return ctx->contexts + *value;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/file_scope_basic_asm.c"}
+int file_asm_target;
+
+asm(".section \".export_symbol\",\"a\" ; __export_symbol_file_asm_target: ; "
+    ".asciz \"\" ; .ascii \"\" \"\\0\" ; .balign 8 ; .quad file_asm_target ; .previous");
+
+__asm__(".section \".minic.fileasm\",\"a\" ; __minic_file_asm_second: ; "
+        ".ascii \"%\" ; .previous");
+
+__asm(".section \".minic.fileasm\",\"a\" ; __minic_file_asm_third: ; .previous");
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/fixed_call_character_pointer.c"}
+static long take_unsigned(const unsigned char *p) {
+    return p[0];
+}
+static long take_signed(const signed char *p) {
+    return p[0];
+}
+int main(void) {
+    /* The bridge belongs to fixed-call conversion; the local remains plain char. */
+    char bytes[1] = {0};
+    return (int)(take_unsigned(bytes) + take_signed(bytes));
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/flexible_array_member.c"}
+struct __attribute__((__packed__)) packet {
+    unsigned short length;
+    unsigned char flags;
+    char payload[];
+};
+
+char *packet_payload(struct packet *packet) {
+    return packet->payload;
+}
+
+int main(void) {
+    return sizeof(struct packet) == 3 ? 0 : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/float32_const_eval.c"}
+static int direct_float = (int)1.5f;
+static int added_float = (int)(1.5f + 2.0f);
+static int negative_float = (int)(-2.5f);
+int main(void) {
+    return direct_float == 1 && added_float == 3 && negative_float == -2 ? 0 : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/float_binary_arithmetic.c"}
+float float_add(float a, float b) { return a + b; }
+float float_sub(float a, float b) { return a - b; }
+float float_mul(float a, float b) { return a * b; }
+float float_div(float a, float b) { return a / b; }
+float float_nan(void) { return 0.0f / 0.0f; }
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/global_payload_definition_shapes.c"}
+/* P65: keep definition/linker policy separate from source initializer syntax.
+ * In Core ModuleIR the one ZERO fragment may describe both tentative and
+ * explicitly initialized weak definitions; no C slot count is published. */
+__attribute__((used, weak)) int weak_tentative;
+__attribute__((used, weak)) int weak_explicit_zero = 0;
+__attribute__((used, weak)) int weak_empty_array[2] = {};
+__attribute__((used, weak)) int weak_zero_array[2] = {0};
+
+struct S { int x; int y; };
+__attribute__((used, weak)) struct S weak_empty_record = {};
+__attribute__((used, weak)) struct S weak_zero_record = {0};
+
+__attribute__((used)) int nested_scalar_array[2][2] = {{1,2},{3,4}};
+__attribute__((used)) int zero_nested_scalar_array[2][2];
+__attribute__((used)) struct S nested_records[2][2] =
+    {{{1,2},{3,4}},{{5,6},{7,8}}};
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/global_pointer_subscript.c"}
+static char **items;
+
+char *pick_item(int index) {
+    return items[index];
+}
+
+int main(void) {
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/goto_loop_reentry.c"}
+static int reentry_probe(int value)
+{
+    int total = 0;
+
+    goto jump_in;
+    while (value < 3) {
+        total += 10;
+jump_in:
+        total += 1;
+        value += 1;
+    }
+    return total;
+}
+
+int main(void)
+{
+    return reentry_probe(0) == 23 ? 0 : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/hexadecimal_expression.c"}
+int main(void)
+{
+    return 0x4d;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/identity_record_typedef_cast.c"}
+typedef struct record_alias_payload {
+    long value;
+} sockptr_t;
+
+typedef sockptr_t bpfptr_t;
+
+static sockptr_t copy_alias(bpfptr_t source) {
+    return (sockptr_t)source;
+}
+
+int main(void) {
+    bpfptr_t source = {.value = 37};
+    return copy_alias(source).value == 37 ? 0 : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/if_else.c"}
+int main(void)
+{
+#if CASE == 1
+    int x = 0;
+    if (1)
+        x = 7;
+    return x;
+#elif CASE == 2
+    int x = 0;
+    if (0)
+        x = 7;
+    else
+        x = 9;
+    return x;
+#elif CASE == 3
+    int x = 3;
+    if (x < 5) {
+        x = x + 4;
+    }
+    return x;
+#elif CASE == 4
+    int x = 0;
+    if (1)
+        if (0)
+            x = 3;
+        else
+            x = 8;
+    return x;
+#elif CASE == 5
+    if (0)
+        return 4;
+    else
+        return 6;
+#elif CASE == 6
+    int x = 2;
+    if (0) {
+        x = 9;
+    }
+    return x;
+#elif CASE == 7
+    int x = 1;
+    if (1) {
+        x = x + 2;
+        x = x * 3;
+    }
+    return x;
+#else
+#error unsupported if/else test case
+#endif
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/implicit_arithmetic_assignment.c"}
+static unsigned convert_with_initializer(double value)
+{
+    unsigned local = value;
+    return local;
+}
+
+static unsigned convert_with_return(double value)
+{
+    return value;
+}
+
+int main(void)
+{
+    return convert_with_initializer(7.75) == 7U &&
+           convert_with_return(11.5) == 11U
+               ? 0
+               : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/inferred_static_unsigned_char_list.c"}
+static const unsigned char filetype_table[] = {0, 8, 4, 2, 6, 1, 12, 10};
+
+int main(void) {
+    return sizeof(filetype_table) == 8 && filetype_table[0] == 0 && filetype_table[1] == 8 &&
+                   filetype_table[6] == 12 && filetype_table[7] == 10
+               ? 0
+               : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/inline_function.c"}
+static inline int add_one(int value) {
+    return value + 1;
+}
+
+inline static int add_two(int value) {
+    return value + 2;
+}
+
+int main(void) {
+    return add_one(2) == 3 && add_two(2) == 4 ? 0 : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/inline_symbolic_shared_body.c"}
+/* Every inlining specialization must preserve independent source bindings. */
+static int fa(void) { return 11; }
+static int fb(void) { return 22; }
+__attribute__((always_inline)) static inline int leaf(int (*fn)(void), int k) {
+    (void)k;
+    return fn();
+}
+__attribute__((always_inline)) static inline int mid(int (*fn)(void), int k) {
+    return leaf(fn, k);
+}
+int aa(void) { return mid(fa, 1); }
+int bb(void) { return mid(fb, 1); }
+static int values[] = { 31, 42 };
+__attribute__((always_inline)) static inline int read_ptr(const int *p) {
+    return *p;
+}
+__attribute__((always_inline)) static inline int read_index(int index) {
+    return read_ptr(&values[index]);
+}
+int cc(void) { return read_index(0); }
+int dd(void) { return read_index(1); }
+int main(void) {
+    return aa() == 11 && bb() == 22 && cc() == 31 && dd() == 42 ? 0 : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/integer_bit_operations.c"}
+int main(void)
+{
+    int signed_value;
+    int signed_shift;
+    unsigned unsigned_value;
+    unsigned unsigned_shift;
+    int result;
+
+    signed_value = -16;
+    signed_shift = signed_value >> 2;
+    unsigned_value = 1;
+    unsigned_value = unsigned_value << 31;
+    unsigned_shift = unsigned_value >> 31;
+    result = (3 << 4) + (29 & 15);
+    result = result + signed_shift;
+    result = result + unsigned_shift;
+    return result;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/integer_constant_bitwise.c"}
+enum MiniMode {
+    MINI_MODE_ZERO = 0,
+    MINI_MODE_TWO = 2
+};
+
+const unsigned char bitwise_table[(1 << 3)] = {
+    ((0 << 7) | (1 << 3) | MINI_MODE_TWO),
+    ((7 & 3) ^ 4),
+    (~0 & 0xff),
+    (!0 << 1),
+    (32 >> 2)
+};
+
+const unsigned int octal_permission = 0644;
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_address_of_rvalue.c"}
+int main(void)
+{
+    int *pointer = &7;
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_address_record_rvalue_array.c"}
+struct S { long a[3]; };
+struct S produce(void);
+
+void invalid(void) {
+    long (*p)[3] = &produce().a;
+    (void)p;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_assign_record_rvalue_member.c"}
+typedef struct {
+    unsigned long value;
+} sample_t;
+
+sample_t make_sample(sample_t value)
+{
+    return value;
+}
+
+int main(void)
+{
+    sample_t value = { 1 };
+    make_sample(value).value = 7;
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_assignment_rvalue.c"}
+int main(void)
+{
+    int value = 1;
+    (value + 1) = 3;
+    return value;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_bare_array_use.c"}
+int main(void)
+{
+    int values[2];
+
+    return values;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_bare_global_array.c"}
+static const int table[2] = {1, 2};
+
+int main(void)
+{
+    return table;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_bit_field_address.c"}
+struct Bits {
+    unsigned int flag : 1;
+};
+
+unsigned int *bad(struct Bits *bits) {
+    return &bits->flag;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_bit_field_width.c"}
+struct Bits {
+    unsigned char flag : 9;
+};
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_bitwise_and_pointer.c"}
+int main(void)
+{
+    int value;
+    int *pointer;
+
+    pointer = &value;
+    return pointer & 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_bitwise_xor_pointer.c"}
+int main(void)
+{
+    int value;
+    int *pointer;
+
+    pointer = &value;
+    return pointer ^ 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_braced_scalar_static_global.c"}
+static const int value __attribute__((used)) = {1};
+
+int main(void)
+{
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_braced_static_scalar_extra.c"}
+static int value = {1, 2};
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_break_missing_semicolon.c"}
+int main(void)
+{
+    int value;
+
+    value = 0;
+    for (value = 0; ; ++value) {
+        break
+    }
+    return value;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_break_outside_loop.c"}
+int main(void)
+{
+    break;
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_call_assignment_target.c"}
+static int value(void)
+{
+    return 1;
+}
+
+int main(void)
+{
+    value() = 3;
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_case_nonconstant.c"}
+int main(void)
+{
+    int value = 1;
+
+    switch (value) {
+    case value:
+        return 1;
+    default:
+        return 0;
+    }
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_case_outside_switch.c"}
+int main(void)
+{
+    case 1:
+        return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_case_symbolic_pointer.c"}
+static int object;
+
+int probe(unsigned long value) {
+    switch (value) {
+    case (unsigned long)&object:
+        return 1;
+    default:
+        return 0;
+    }
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_complete_array_pointer_bound.c"}
+struct Entry { unsigned id; };
+static struct Entry entries[2];
+struct Holder { struct Entry (*wrong_extent)[3]; };
+static struct Holder holder = { .wrong_extent = &entries };
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_conflicting_const_parameter.c"}
+void inspect(const int *value);
+void inspect(int *value);
+
+int main(void)
+{
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_deep_pointer_qualification.c"}
+void reject_deep_qualification(char **source) {
+    const char **target;
+    target = source;
+    (void)target;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_default_outside_switch.c"}
+int main(void)
+{
+    default:
+        return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_dereference_integer.c"}
+int main(void)
+{
+    int value = 7;
+    return *value;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_efi_msabi_function_pointer_attribute.c"}
+typedef unsigned long efi_status_t;
+
+#if defined(BAD_TYPEDEF_ARGUMENT)
+typedef efi_status_t (__attribute__((ms_abi(1))) *efi_bad_callback_t)(void *);
+#elif defined(BAD_RECORD_ARGUMENT)
+struct efi_bad_record {
+    efi_status_t (__attribute__((ms_abi(1))) *handler)(void *);
+};
+#elif defined(BAD_PARAMETER_ARGUMENT)
+int efi_bad_parameter(
+    efi_status_t (__attribute__((ms_abi(1))) *callback)(void *));
+#else
+#error select an invalid EFI ABI attribute case
+#endif
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_empty_record.c"}
+struct Empty {
+};
+
+int main(void)
+{
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_empty_while_condition.c"}
+int main(void)
+{
+    while () {
+        break;
+    }
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_expression_statement_semicolon.c"}
+static void touch(int *value)
+{
+    *value = 1;
+}
+
+int main(void)
+{
+    int value;
+
+    touch(&value)
+    return value;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_fallthrough_outside_switch.c"}
+int invalid_fallthrough_outside_switch(void)
+{
+    __attribute__((__fallthrough__));
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_file_scope_basic_asm_operands.c"}
+int value;
+asm(".quad %0" : : "r"(value));
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_file_scope_basic_asm_qualifier.c"}
+asm volatile("nop");
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_flexible_array_not_last.c"}
+struct invalid_packet {
+    int length;
+    char payload[];
+    int trailing;
+};
+
+int main(void) {
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_flexible_array_sizeof.c"}
+struct Holder { int head; unsigned long values[]; };
+unsigned long bad(struct Holder *holder) { return sizeof(holder->values); }
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_global_array_assignment.c"}
+static const int table[2] = {1, 2};
+
+int main(void)
+{
+    table[0] = 3;
+    return table[0];
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_indirect_nested_diagnostic.c"}
+typedef int unary_fn_t(int value);
+
+int bad_indirect_argument(unary_fn_t *fn) {
+    return fn(missing_name);
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_inferred_local_array_without_initializer.c"}
+int main(void)
+{
+    int values[];
+    return 0;
+}
+@@@ end

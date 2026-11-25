@@ -1,0 +1,173 @@
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/static_typedef_array_redefinition.c"}
+typedef int Two[2];
+static Two duplicate = { 1, 2 };
+static Two duplicate = { 3, 4 };
+
+int main(void) { return duplicate[0]; }
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/static_union_active_member_relocation.c"}
+static int target = 7;
+
+union payload {
+    long canonical;
+    struct {
+        int first;
+        int second;
+    } pair;
+};
+
+struct holder {
+    union payload payload;
+    int *pointer;
+};
+
+static struct holder state = {
+    .payload.pair = { .first = 1, .second = 2 },
+    .pointer = &target,
+};
+
+int main(void) {
+    return (state.payload.pair.first == 1 && state.payload.pair.second == 2 &&
+            state.pointer == &target && *state.pointer == 7)
+               ? 0
+               : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/static_union_nonzero_overlay_invalid.c"}
+union reader_special {
+    long l;
+    int s;
+};
+struct task_state {
+    long before;
+    union reader_special special;
+    long after;
+};
+static struct task_state init_task = {
+    .before = 3,
+    .after = 5,
+    .special.s = 1,
+};
+int main(void) {
+    return init_task.special.s;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/static_union_shape_overlay.c"}
+struct target_node {
+    int value;
+};
+
+union shape_union {
+    struct {
+        unsigned char a;
+        unsigned char b;
+        unsigned char c;
+        unsigned char d;
+    } bytes;
+    unsigned int word;
+};
+
+struct holder {
+    union shape_union shape;
+    int after;
+    struct target_node *next;
+};
+
+struct target_node target = { .value = 9 };
+struct holder sample = {
+    .after = 7,
+    .shape.word = 0,
+    .next = &target,
+};
+
+int union_shape_overlay_probe(void) {
+    return sample.shape.word == 0 && sample.after == 7 && sample.next == &target;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/static_union_zero_overlay.c"}
+union reader_special {
+    long l;
+    int s;
+};
+
+struct task_state {
+    long before;
+    union reader_special special;
+    long after;
+};
+
+static struct task_state init_task = {
+    .before = 3,
+    .after = 5,
+    .special.s = 0,
+};
+
+int main(void) {
+    return (init_task.before == 3 && init_task.special.s == 0 && init_task.after == 5) ? 0 : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/static_zero_declaration_list.c"}
+struct Pair {
+    int left;
+    int right;
+};
+
+static const char *panic_later, *panic_param;
+static int **deep, *shallow;
+static struct Pair first_pair, second_pair;
+
+int main(void) {
+    if (panic_later != 0 || panic_param != 0 || deep != 0 || shallow != 0) {
+        return 1;
+    }
+    return first_pair.left + first_pair.right + second_pair.left + second_pair.right;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/static_zero_definition.c"}
+struct State {
+    int value;
+    char *pointer;
+};
+
+static struct State state __attribute__((used));
+static int counter __attribute__((used));
+static char *pointer __attribute__((used));
+
+int main(void) {
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/static_zero_length_record_field_relocation.c"}
+static int target = 7;
+
+struct payload {
+    long a;
+    long b;
+    long c;
+    long d;
+    long e;
+    long f;
+    long g;
+};
+
+struct holder {
+    int before;
+    struct payload zero[0];
+    int *pointer;
+    int after;
+    int *tail[];
+};
+
+static struct holder state = {
+    .before = 3,
+    .pointer = &target,
+    .after = 5,
+};
+
+int main(void) {
+    return (state.before == 3 && state.pointer == &target && *state.pointer == 7 &&
+            state.after == 5)
+               ? 0
+               : 1;
+}
+@@@ end

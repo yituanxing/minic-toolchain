@@ -1,0 +1,206 @@
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/block-extern-incomplete.c"}
+/* Original Linux 6.6.143 seq_user_ns shape: forward-declared record.
+ * 'extern' is a no-storage entity declaration, legal until definition;
+ * address-taking requires only a pointer to the incomplete record. */
+struct user_namespace;
+struct user_namespace *seq_user_ns(void) {
+    extern struct user_namespace init_user_ns;
+    return &init_user_ns;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/block_extern_void_linker_symbol.c"}
+int main(void) {
+    extern const void __start_notes __attribute__((weak));
+    extern const void __stop_notes __attribute__((weak));
+    const void *first = &__start_notes;
+    const void *last = &__stop_notes;
+
+    return first == last ? 0 : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/block_scope_extern_function_attributes.c"}
+static int probe(void) {
+    __attribute__((__noreturn__)) extern void __compiletime_assert_0(void)
+        __attribute__((__error__("compile-time assertion failed")));
+
+    if (0) {
+        __compiletime_assert_0();
+    }
+    return 7;
+}
+
+int main(void) {
+    return probe() - 7;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/block_scope_extern_function_typedef.c"}
+/* Original Linux AArch64: typedef is already a function, not a function
+ * pointer object. Its block-scope extern must keep the canonical symbol
+ * and ABI prototype without inventing a function-valued storage object. */
+typedef void (ttbr_replace_func)(unsigned long);
+typedef unsigned long (read_counter_func)(void);
+
+unsigned long select_replacer(unsigned long value) {
+    extern ttbr_replace_func idmap_cpu_replace_ttbr1;
+    extern read_counter_func read_counter;
+    ttbr_replace_func *replace = idmap_cpu_replace_ttbr1;
+    replace(value);
+    return read_counter();
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/block_scope_extern_multi_declarator.c"}
+extern char __init_begin[4];
+extern char __init_end[4];
+
+unsigned long span(void) {
+    extern char __init_begin[], __init_end[];
+    return (unsigned long)&__init_end - (unsigned long)&__init_begin;
+}
+
+int main(void) {
+    return span() == 4 ? 0 : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/block_scope_extern_object.c"}
+unsigned long first(unsigned long pfn)
+{
+    extern unsigned long zero_pfn;
+    extern unsigned long zero_pfn;
+    return pfn == zero_pfn;
+}
+
+unsigned long second(void)
+{
+    extern unsigned long zero_pfn;
+    return zero_pfn;
+}
+
+unsigned long before_promotion(void)
+{
+    extern unsigned long promoted;
+    return promoted;
+}
+
+extern unsigned long promoted;
+
+unsigned long after_promotion(void)
+{
+    return promoted;
+}
+
+/* Linux arch/loongarch/mm/cache.c declares a weak external object inside
+ * a function. The GNU attribute belongs to the object symbol, not to a
+ * function declaration or to the local block's storage. */
+unsigned long weak_external_address(void)
+{
+    extern char __attribute__((__weak__)) except_vec_cex;
+    return (unsigned long)&except_vec_cex;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/block_scope_gcc_diagnostic_pragma.c"}
+int main(void) {
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wformat-zero-length"
+    int value = 0;
+#pragma GCC diagnostic pop
+    return value;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/block_scope_record_tags.c"}
+struct shadow_tag {
+    int outer;
+};
+
+int block_scope_record_tags(void) {
+    struct shadow_tag before;
+    before.outer = 1;
+
+    {
+        struct shadow_tag {
+            long inner;
+        };
+        struct shadow_tag inner_value;
+        inner_value.inner = 2;
+        if (inner_value.inner != 2)
+            return 1;
+    }
+
+    {
+        struct same_scope;
+        struct same_scope {
+            int value;
+        };
+        struct same_scope local_value;
+        local_value.value = 3;
+        if (local_value.value != 3)
+            return 2;
+    }
+
+    union cpumask_rcuhead {
+        int cpumask;
+        long rcu;
+    };
+    union cpumask_rcuhead mask;
+    mask.cpumask = 4;
+    if (mask.cpumask != 4)
+        return 3;
+
+    {
+        struct with_declarator {
+            int value;
+        } object;
+        object.value = 5;
+        if (object.value != 5)
+            return 4;
+    }
+
+    {
+        struct shadow_tag after;
+        after.outer = 6;
+        if (after.outer != 6)
+            return 5;
+    }
+    return before.outer == 1 ? 0 : 6;
+}
+
+int main(void) {
+    return block_scope_record_tags();
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/block_scope_typedef.c"}
+typedef int LOGFUNC_t;
+
+int block_scope_typedef_probe(void)
+{
+    {
+        typedef void (*LOGFUNC_t)(void *, int, const char *);
+        LOGFUNC_t xLog = (LOGFUNC_t)0;
+        if (xLog != 0) {
+            return 1;
+        }
+    }
+
+    LOGFUNC_t value = 7;
+    return value == 7 ? 0 : 2;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_block_scope_extern_conflict.c"}
+int conflict(void)
+{
+    extern unsigned long value;
+    extern int value;
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_block_scope_extern_leak.c"}
+unsigned long declaring_function(void)
+{
+    extern unsigned long hidden;
+    return hidden;
+}
+
+unsigned long outside_scope(void)
+{
+    return hidden;
+}
+@@@ end

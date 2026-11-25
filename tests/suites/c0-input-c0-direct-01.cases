@@ -1,0 +1,673 @@
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/direct_function_parameter.c"}
+static int increment(int value) {
+    return value + 1;
+}
+static int apply(int callback(int), int value) {
+    return callback(value);
+}
+int main(void) {
+    return apply(increment, 6) == 7 ? 0 : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/direct_lp64_asm_capacity.c"}
+/* Counted source ASM for the AArch64/LoongArch64 Common Direct LP64
+ * preflight.  Preprocess with -DMINIC_ASM_CASE=255/256/257/512. */
+#ifndef MINIC_ASM_CASE
+#define MINIC_ASM_CASE 257
+#endif
+
+#define NOP1 __asm__ __volatile__("nop")
+#define NOP2 NOP1; NOP1
+#define NOP4 NOP2; NOP2
+#define NOP8 NOP4; NOP4
+#define NOP16 NOP8; NOP8
+#define NOP32 NOP16; NOP16
+#define NOP64 NOP32; NOP32
+#define NOP128 NOP64; NOP64
+#define NOP256 NOP128; NOP128
+
+int direct_lp64_asm_capacity(void) {
+#if MINIC_ASM_CASE == 255
+    NOP128; NOP64; NOP32; NOP16; NOP8; NOP4; NOP2; NOP1;
+#elif MINIC_ASM_CASE == 256
+    NOP256;
+#elif MINIC_ASM_CASE == 257
+    NOP256; NOP1;
+#elif MINIC_ASM_CASE == 512
+    NOP256; NOP256;
+#else
+#error "unsupported test case"
+#endif
+    return 42;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/direct_lp64_asm_preflight_unit.c"}
+/* Whitebox-only guard for Core's ASM ID exactly-once ownership invariant.
+ * Include the implementation so the private checker can be exercised with
+ * synthetic malformed Core that a valid C frontend never constructs. */
+#include "target/common/direct_preflight.c"
+
+static int check_asm_ids(size_t count) {
+    MinicCoreFunction function = {0};
+    MinicCoreType void_type = {.kind = MINIC_CORE_TYPE_VOID};
+    MinicCoreTypeContext types = {
+        .types = &void_type, .type_count = 1U, .type_capacity = 1U
+    };
+    MinicCoreInstruction *instructions = NULL;
+    MinicCoreInlineAsm *asms = NULL;
+    size_t i;
+    int failed = 1;
+    char nop[] = "nop";
+
+    instructions = (MinicCoreInstruction *)calloc(count, sizeof(*instructions));
+    asms = (MinicCoreInlineAsm *)calloc(count, sizeof(*asms));
+    if (instructions == NULL || asms == NULL) goto done;
+    for (i = 0U; i < count; ++i) {
+        instructions[i].kind = MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM;
+        /* Only the sealed Core void identity authorizes an ASM effect.
+         * C descriptors do not exist in the executable Core instruction. */
+        instructions[i].core_type_id = 0U;
+        instructions[i].result = MINIC_CORE_VALUE_INVALID;
+        instructions[i].value.structured_inline_asm.inline_asm_id = (MinicCoreInlineAsmId)i;
+        asms[i].template_text = nop;
+        asms[i].template_length = 3U;
+    }
+    function.inline_asm_count = count;
+    function.type_context = &types;
+    function.inline_asms = asms;
+    function.instruction_count = count;
+    function.instructions = instructions;
+    if (!direct_lp64_only_structured_asm(&function, NULL)) goto done;
+
+    /* Source-generic scalar fallbacks were previously RISC-V-only opcodes.
+     * Their new typed STRUCTURED spelling must not silently widen x86/A64/
+     * Loong hardware capabilities, while target-qualified exact forms and
+     * pre-existing generic +r/two-input effects remain admissible here. */
+    instructions[0].value.structured_inline_asm.operand_count = 1U;
+    instructions[0].value.structured_inline_asm.operands[0].kind =
+        MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+    if (direct_lp64_only_structured_asm(&function, NULL)) goto done;
+    asms[0].operand_plan_owner = MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED;
+    if (!direct_lp64_only_structured_asm(&function, NULL)) goto done;
+    asms[0].operand_plan_owner = MINIC_ASM_OPERAND_PLAN_NONE;
+    instructions[0].value.structured_inline_asm.operands[0].kind =
+        MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE;
+    if (!direct_lp64_only_structured_asm(&function, NULL)) goto done;
+    instructions[0].value.structured_inline_asm.operand_count = 2U;
+    instructions[0].value.structured_inline_asm.operands[0].kind =
+        MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE;
+    instructions[0].value.structured_inline_asm.operands[1].kind =
+        MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+    if (direct_lp64_only_structured_asm(&function, NULL)) goto done;
+    instructions[0].value.structured_inline_asm.operands[0].kind =
+        MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+    if (!direct_lp64_only_structured_asm(&function, NULL)) goto done;
+    instructions[0].value.structured_inline_asm.operand_count = 0U;
+
+    /* One repeated ID leaves another entry orphaned. */
+    if (count > 1U) {
+        instructions[count - 1U].value.structured_inline_asm.inline_asm_id = 0U;
+        if (direct_lp64_only_structured_asm(&function, NULL)) goto done;
+    }
+    /* A bad ID must be rejected before the bitmap is indexed. */
+    instructions[count - 1U].value.structured_inline_asm.inline_asm_id =
+        (MinicCoreInlineAsmId)count;
+    if (direct_lp64_only_structured_asm(&function, NULL)) goto done;
+    instructions[count - 1U].value.structured_inline_asm.inline_asm_id =
+        (MinicCoreInlineAsmId)(count - 1U);
+    function.instruction_count = count - 1U;
+    if (direct_lp64_only_structured_asm(&function, NULL)) goto done;
+    function.instruction_count = count;
+    asms[0].template_text = NULL;
+    if (direct_lp64_only_structured_asm(&function, NULL)) goto done;
+
+    failed = 0;
+done:
+    free(instructions);
+    free(asms);
+    return failed;
+}
+
+int main(void) {
+    if (check_asm_ids(1U) != 0 ||
+        check_asm_ids(256U) != 0 ||
+        check_asm_ids(257U) != 0 ||
+        check_asm_ids(512U) != 0) {
+        return 1;
+    }
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/direct_lp64_asm_unqualified.c"}
+/* The capacity fix must not weaken the target ASM allowlist. */
+int direct_lp64_asm_unqualified(void) {
+    __asm__ __volatile__("not_a_supported_machine_opcode");
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/direct_lp64_reachable_host.c"}
+/* Five-ISA CFG + GNU/native x86 differential without indirect branches.
+ * Separate LP64 fixture covers computed-goto address relocations. */
+static int enter_case(int take) {
+    int value = 0;
+    if (take) goto FORWARD;
+    switch (sizeof(void *)) {
+    case 1: FORWARD: value = 43; break;
+    case 8: value = 42; break;
+    default: value = 99; break;
+    }
+    return value;
+}
+
+int main(void) {
+    return enter_case(0) == 42 && enter_case(1) == 43 ? 42 : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/direct_lp64_reachable_source_labels.c"}
+/* A machine block can be reached without an ordinary CFG predecessor:
+ * - a static &&label relocation, - a dynamic block address, and
+ * - a forward goto into an otherwise dead lexical switch case.
+ * All labels must remain roots when direct LP64 emitters skip dead blocks. */
+static int static_dispatch(int n) {
+    static void *const labels[] = {&&first, &&second, &&third};
+    if (n < 0 || n > 2) return 0;
+    goto *labels[n];
+first:
+    return 10;
+second:
+    return 20;
+third:
+    return 42;
+}
+
+static int dynamic_dispatch(int n) {
+    void *address = &&miss;
+    if (n != 0) address = &&hit;
+    goto *address;
+hit:
+    return 42;
+miss:
+    return 7;
+}
+
+static int external_switch_reentry(int enter) {
+    int result = 0;
+    if (enter) goto FORWARD;
+    switch (sizeof(void *)) {
+    case 1: FORWARD: result = 43; break;
+    case 8: result = 42; break;
+    default: result = 99; break;
+    }
+    return result;
+}
+
+int main(void) {
+    return static_dispatch(0) == 10 && static_dispatch(1) == 20 &&
+           static_dispatch(2) == 42 && static_dispatch(3) == 0 &&
+           dynamic_dispatch(0) == 7 && dynamic_dispatch(1) == 42 &&
+           external_switch_reentry(0) == 42 &&
+           external_switch_reentry(1) == 43 ? 42 : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/direct_lp64_source_object_slot_reuse.c"}
+/* The LP64 source-object stack pool must use the existing RV Core interval
+ * proof.  Temporary address-backed scalars with disjoint lifetimes may share
+ * storage; pointers that escape and locals read across CFG joins may not. */
+
+#define LOCAL_STEP(k) \
+    volatile int local_##k = (seed ^ (k)) + 3; \
+    sum += local_##k;
+
+volatile int *lp64_slot_first;
+volatile int *lp64_slot_second;
+
+static void retain_both(volatile int *first, volatile int *second) {
+    lp64_slot_first = first;
+    lp64_slot_second = second;
+}
+
+int lp64_disjoint_local_slots(int seed) {
+    int sum = 0;
+    LOCAL_STEP(1); LOCAL_STEP(2); LOCAL_STEP(3); LOCAL_STEP(4);
+    LOCAL_STEP(5); LOCAL_STEP(6); LOCAL_STEP(7); LOCAL_STEP(8);
+    LOCAL_STEP(9); LOCAL_STEP(10); LOCAL_STEP(11); LOCAL_STEP(12);
+    LOCAL_STEP(13); LOCAL_STEP(14); LOCAL_STEP(15); LOCAL_STEP(16);
+    LOCAL_STEP(17); LOCAL_STEP(18); LOCAL_STEP(19); LOCAL_STEP(20);
+    LOCAL_STEP(21); LOCAL_STEP(22); LOCAL_STEP(23); LOCAL_STEP(24);
+    LOCAL_STEP(25); LOCAL_STEP(26); LOCAL_STEP(27); LOCAL_STEP(28);
+    LOCAL_STEP(29); LOCAL_STEP(30); LOCAL_STEP(31); LOCAL_STEP(32);
+    LOCAL_STEP(33); LOCAL_STEP(34); LOCAL_STEP(35); LOCAL_STEP(36);
+    LOCAL_STEP(37); LOCAL_STEP(38); LOCAL_STEP(39); LOCAL_STEP(40);
+    LOCAL_STEP(41); LOCAL_STEP(42); LOCAL_STEP(43); LOCAL_STEP(44);
+    LOCAL_STEP(45); LOCAL_STEP(46); LOCAL_STEP(47); LOCAL_STEP(48);
+    LOCAL_STEP(49); LOCAL_STEP(50); LOCAL_STEP(51); LOCAL_STEP(52);
+    LOCAL_STEP(53); LOCAL_STEP(54); LOCAL_STEP(55); LOCAL_STEP(56);
+    LOCAL_STEP(57); LOCAL_STEP(58); LOCAL_STEP(59); LOCAL_STEP(60);
+    LOCAL_STEP(61); LOCAL_STEP(62); LOCAL_STEP(63); LOCAL_STEP(64);
+    return sum;
+}
+
+int lp64_escape_preserves_independent_slots(int seed) {
+    int first = seed + 11;
+    int second = seed + 19;
+    retain_both(&first, &second);
+    if (lp64_slot_first == lp64_slot_second) return -5000;
+    first += seed;
+    second += seed * 2;
+    return *lp64_slot_first * 3 + *lp64_slot_second * 5;
+}
+
+int lp64_crossblock_live_value(int seed) {
+    int preserved = seed + 7;
+    int result = 0;
+    if ((seed & 1) != 0) goto JOIN;
+    result += seed + 2;
+JOIN:
+    result += preserved;
+    {
+        int later = seed * 3;
+        result += later;
+    }
+    return result;
+}
+
+int main(void) {
+    const int seed = 13;
+    const int expected_disjoint = lp64_disjoint_local_slots(seed);
+    const int expected_escape = lp64_escape_preserves_independent_slots(seed);
+    const int expected_join = lp64_crossblock_live_value(seed);
+    return expected_disjoint == 2272 && expected_escape == 401 &&
+           expected_join == 59 ? 42 : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/direct_lp64_spill_reuse_pressure.c"}
+/* Shared Core last-use SSA spill allocator must drive both direct LP64
+ * targets, including a zero-value function, CFG joins and address-backed
+ * scalar locals. This deliberately creates >256 Core SSA results so the
+ * historical value_id*8 frame exceeds LoongArch's signed-12-bit offset. */
+#define SPILL_STEP(mask, gain) \
+    do { if ((input & (mask)) != 0U) sum += (gain); } while (0)
+
+void lp64_empty_values(void) { }
+
+int lp64_spill_pressure(unsigned int input) {
+    int sum = 0;
+    SPILL_STEP(1U, 1); SPILL_STEP(2U, 2);
+    SPILL_STEP(4U, 3); SPILL_STEP(8U, 4);
+    SPILL_STEP(16U, 5); SPILL_STEP(32U, 6);
+    SPILL_STEP(64U, 7); SPILL_STEP(128U, 8);
+    SPILL_STEP(256U, 9); SPILL_STEP(512U, 10);
+    SPILL_STEP(1024U, 11); SPILL_STEP(2048U, 12);
+    SPILL_STEP(4096U, 13); SPILL_STEP(8192U, 14);
+    SPILL_STEP(16384U, 15); SPILL_STEP(32768U, 16);
+    SPILL_STEP(1U, 1); SPILL_STEP(2U, 2);
+    SPILL_STEP(4U, 3); SPILL_STEP(8U, 4);
+    SPILL_STEP(16U, 5); SPILL_STEP(32U, 6);
+    SPILL_STEP(64U, 7); SPILL_STEP(128U, 8);
+    SPILL_STEP(256U, 9); SPILL_STEP(512U, 10);
+    SPILL_STEP(1024U, 11); SPILL_STEP(2048U, 12);
+    SPILL_STEP(4096U, 13); SPILL_STEP(8192U, 14);
+    SPILL_STEP(16384U, 15); SPILL_STEP(32768U, 16);
+    SPILL_STEP(1U, 1); SPILL_STEP(2U, 2);
+    SPILL_STEP(4U, 3); SPILL_STEP(8U, 4);
+    SPILL_STEP(16U, 5); SPILL_STEP(32U, 6);
+    SPILL_STEP(64U, 7); SPILL_STEP(128U, 8);
+    SPILL_STEP(256U, 9); SPILL_STEP(512U, 10);
+    SPILL_STEP(1024U, 11); SPILL_STEP(2048U, 12);
+    SPILL_STEP(4096U, 13); SPILL_STEP(8192U, 14);
+    SPILL_STEP(16384U, 15); SPILL_STEP(32768U, 16);
+    if (input == 0U) goto EXIT;
+    if ((input & 0x80000000U) != 0U) return -1;
+EXIT:
+    return sum;
+}
+
+int main(void) {
+    volatile unsigned int runtime_input = 3U;
+    lp64_empty_values();
+    return lp64_spill_pressure(runtime_input) == 9 &&
+           lp64_spill_pressure(0U) == 0 &&
+           lp64_spill_pressure(65535U) == 408 ? 42 : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_direct_incompatible_function_pointer_call.c"}
+struct hlist_node {
+    int value;
+};
+
+int sink(int (*callback)(unsigned int cpu))
+{
+    (void)callback;
+    return 0;
+}
+
+int multi(unsigned int cpu, struct hlist_node *node)
+{
+    return (int)cpu + node->value;
+}
+
+int main(void)
+{
+    return sink(multi);
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/probe-direct-global-module-contract.c"}
+#define _GNU_SOURCE
+#include "core/module_ir.h"
+#include "target/riscv/machine_target_state.h"
+#include "target/riscv32/rv32_global_emit.h"
+#include "target/riscv64/global_emit.h"
+#include "target/x86_64/global_emit.h"
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+/* Three externally callable target global emitters must reject forged
+ * finalized Modules before printing. The two LP64 direct targets have only
+ * a private global emitter, reached through the verified full writer. */
+typedef enum ProbeArch { PROBE_RV32, PROBE_RV64, PROBE_X86 } ProbeArch;
+
+static bool probe_emit(ProbeArch arch, const MinicCoreModule *module,
+                       bool expect_success, const char *needle) {
+    MinicDataLayout layout = {.pointer_size = arch == PROBE_RV32 ? 4U : 8U};
+    MinicTargetInfo target = {
+        .architecture = arch == PROBE_RV32 ? MINIC_TARGET_ARCH_RISCV32 :
+                        arch == PROBE_RV64 ? MINIC_TARGET_ARCH_RISCV64 :
+                                            MINIC_TARGET_ARCH_X86_64,
+        .data_layout = &layout
+    };
+    char *output = NULL;
+    size_t output_size = 0U;
+    FILE *stream = open_memstream(&output, &output_size);
+    bool result, valid;
+    if (stream == NULL) return false;
+    if (arch == PROBE_RV32 || arch == PROBE_RV64) {
+        MinicRiscvIsa isa = {0};
+        isa.xlen = arch == PROBE_RV32 ? 32U : 64U;
+        isa.abi = arch == PROBE_RV32 ? MINIC_RISCV_ABI_ILP32 :
+                                      MINIC_RISCV_ABI_LP64;
+        if (!minic_riscv_target_isa_store(&target, &isa)) {
+            (void)fclose(stream);
+            free(output);
+            return false;
+        }
+    }
+    result = arch == PROBE_RV32
+        ? minic_riscv32_emit_module_global(stream, &target, module, 0U)
+        : arch == PROBE_RV64
+        ? minic_riscv64_emit_module_global(stream, &target, module, 0U)
+        : minic_x86_64_emit_module_global(stream, &target, module, 0U);
+    if (fclose(stream) != 0) result = false;
+    valid = result == expect_success && output != NULL &&
+        ((expect_success && (needle == NULL || strstr(output, needle) != NULL)) ||
+         (!expect_success && output_size == 0U));
+    free(output);
+    return valid;
+}
+
+static bool probe_case(const MinicCoreModule *module, const char *label,
+                       bool core_valid, bool rv32_valid, bool rv64_valid,
+                       bool x86_valid, const char *rv_needle,
+                       const char *x86_needle) {
+    const bool global_valid = minic_core_module_verify_global(module, 0U);
+    const bool full_valid = minic_core_module_verify(module);
+    if (global_valid != core_valid || full_valid != core_valid ||
+        !probe_emit(PROBE_RV32, module, rv32_valid, rv_needle) ||
+        !probe_emit(PROBE_RV64, module, rv64_valid, rv_needle) ||
+        !probe_emit(PROBE_X86, module, x86_valid, x86_needle)) {
+        (void)fprintf(stderr, "DIRECT_GLOBAL_CONTRACT_FAILED=%s core=%d full=%d\n",
+                      label, (int)global_valid, (int)full_valid);
+        return false;
+    }
+    return true;
+}
+
+int main(void) {
+    MinicCoreTypeContext types;
+    MinicCoreType byte = {.kind = MINIC_CORE_TYPE_INTEGER,
+                          .has_layout = true, .size = 1U, .alignment = 1U,
+                          .value.integer.bit_width = 8U};
+    MinicCoreType word = {.kind = MINIC_CORE_TYPE_INTEGER,
+                          .has_layout = true, .size = 4U, .alignment = 4U,
+                          .value.integer.bit_width = 32U};
+    MinicCoreType wide = {.kind = MINIC_CORE_TYPE_INTEGER,
+                          .has_layout = true, .size = 8U, .alignment = 8U,
+                          .value.integer.bit_width = 64U};
+    MinicCoreType array = {.kind = MINIC_CORE_TYPE_ARRAY,
+                           .has_layout = true, .size = 16U, .alignment = 4U};
+    MinicCoreType flexible = {.kind = MINIC_CORE_TYPE_RECORD,
+                              .has_layout = true, .size = 8U, .alignment = 8U};
+    MinicCoreType incomplete = {.kind = MINIC_CORE_TYPE_ARRAY};
+    MinicCoreType pointer = {.kind = MINIC_CORE_TYPE_POINTER,
+                             .has_layout = true, .size = 4U, .alignment = 4U};
+    MinicCoreRecordField fields[2] = {
+        {.byte_offset = 0U, .alignment = 8U},
+        {.byte_offset = 8U, .alignment = 4U}
+    };
+    MinicCoreTypeId byte_id, word_id, wide_id, array_id, incomplete_id;
+    MinicCoreTypeId flexible_id, ptr4_id, ptr8_id;
+    MinicCoreModuleFragment zero = {
+        .kind = MINIC_CORE_MODULE_FRAGMENT_ZERO, .byte_count = 4U
+    };
+    MinicCoreModuleFragment bits = {
+        .kind = MINIC_CORE_MODULE_FRAGMENT_BITS, .byte_count = 4U, .bits = 42U
+    };
+    MinicCoreModuleFragment reloc = {
+        .kind = MINIC_CORE_MODULE_FRAGMENT_RELOCATION,
+        .byte_count = 8U, .relocation_kind = MINIC_CORE_MODULE_RELOCATION_OBJECT,
+        .relocation_symbol = "external"
+    };
+    MinicCoreModuleReference reference = {
+        .kind = MINIC_CORE_MODULE_REFERENCE_OBJECT, .target_index = 1U
+    };
+    MinicCoreModuleGlobal globals[2] = {
+        {.name = "owned", .emittable = true, .storage_size = 4U,
+         .storage_alignment = 4U, .fragments = &zero, .fragment_count = 1U,
+         .data_policy = MINIC_CORE_MODULE_DATA_ZERO_NUMERIC,
+         .alias_target_index = SIZE_MAX, .owner_function_index = SIZE_MAX},
+        {.name = "external", .definition_kind = MINIC_CORE_MODULE_DEFINITION_DECLARATION,
+         .alias_target_index = SIZE_MAX, .owner_function_index = SIZE_MAX}
+    };
+    MinicCoreModule module = {
+        .globals = globals, .global_count = 2U, .finalized = true,
+        .type_context = &types
+    };
+    MinicCoreModuleGlobal *object = &globals[0];
+    bool success = false;
+    minic_core_type_context_initialize(&types);
+    if (!minic_core_type_register(&types, &byte, &byte_id) ||
+        !minic_core_type_register(&types, &word, &word_id) ||
+        !minic_core_type_register(&types, &wide, &wide_id)) goto done;
+    array.value.array.element = word_id;
+    array.value.array.count = 4U;
+    array.value.array.is_complete = true;
+    if (!minic_core_type_register(&types, &array, &array_id)) goto done;
+    incomplete.value.array.element = word_id;
+    if (!minic_core_type_register(&types, &incomplete, &incomplete_id)) goto done;
+    fields[0].type_id = wide_id;
+    fields[1].type_id = incomplete_id;
+    flexible.value.record.is_complete = true;
+    flexible.value.record.fields = fields;
+    flexible.value.record.field_count = 2U;
+    if (!minic_core_type_register(&types, &flexible, &flexible_id)) goto done;
+    pointer.value.pointer.pointee = word_id;
+    if (!minic_core_type_register(&types, &pointer, &ptr4_id)) goto done;
+    pointer.size = pointer.alignment = 8U;
+    if (!minic_core_type_register(&types, &pointer, &ptr8_id)) goto done;
+    globals[1].core_type_id = word_id;
+    object->core_type_id = word_id;
+
+#define CHECK_CASE(label, core, rv32, rv64, x86, rvtext, x86text) \
+    do { if (!probe_case(&module, label, core, rv32, rv64, x86, rvtext, x86text)) \
+        goto done; } while (0)
+    CHECK_CASE("matching_zero", true, true, true, true, NULL, NULL);
+    zero.byte_count = object->storage_size = 8U;
+    CHECK_CASE("wrong_scalar_size", false, false, false, false, NULL, NULL);
+    zero.byte_count = object->storage_size = 4U;
+    object->storage_alignment = 1U;
+    CHECK_CASE("underalignment", false, false, false, false, NULL, NULL);
+    object->storage_alignment = 4U;
+    object->core_type_id = array_id;
+    object->storage_size = 0U;
+    object->fragments = NULL;
+    object->fragment_count = 0U;
+    CHECK_CASE("complete_array_zero_extent", false, false, false, false, NULL, NULL);
+    object->core_type_id = flexible_id;
+    object->storage_size = zero.byte_count = 20U;
+    object->storage_alignment = 8U;
+    object->fragments = &zero;
+    object->fragment_count = 1U;
+    CHECK_CASE("flexible_tail_missing_extension", false, false, false, false,
+               NULL, NULL);
+    object->storage_extension_unit_bytes = 4U;
+    CHECK_CASE("flexible_tail", true, true, true, true, NULL, NULL);
+    object->storage_extension_unit_bytes = 0U;
+    object->core_type_id = byte_id;
+    object->storage_size = object->storage_alignment = 1U;
+    object->fragments = &bits;
+    bits.byte_count = 1U;
+    bits.bits = 0x100U;
+    CHECK_CASE("zero_visible_byte", true, true, true, true, NULL, NULL);
+    bits.bits = 42U;
+    CHECK_CASE("zero_tag_nonzero_bits", false, false, false, false, NULL, NULL);
+    object->data_policy = MINIC_CORE_MODULE_DATA_MATERIALIZED;
+    CHECK_CASE("default_bss_nonzero", false, false, false, false, NULL, NULL);
+    object->data_policy = (MinicCoreModuleDataPolicy)3;
+    CHECK_CASE("conflicting_flags", false, false, false, false, NULL, NULL);
+    object->data_policy = MINIC_CORE_MODULE_DATA_MATERIALIZED;
+    object->default_section = MINIC_CORE_MODULE_SECTION_DATA;
+    object->core_type_id = word_id;
+    object->storage_size = object->storage_alignment = bits.byte_count = 4U;
+    object->section_name = ".bss.direct.nonzero";
+    CHECK_CASE("explicit_bss_nonzero", true, true, true, false,
+               "@progbits", NULL);
+    object->section_name = NULL;
+
+    /* A source-free pointer may legitimately carry a relocation even when
+     * its source numeric initializer slots are all zero. */
+    object->core_type_id = ptr8_id;
+    object->storage_size = object->storage_alignment = reloc.byte_count = 8U;
+    object->fragments = &reloc;
+    object->references = &reference;
+    object->reference_count = 1U;
+    object->data_policy = MINIC_CORE_MODULE_DATA_ZERO_NUMERIC;
+    CHECK_CASE("zero_tag_symbol_relocation", true, false, true, true, NULL, NULL);
+    object->definition_kind = MINIC_CORE_MODULE_DEFINITION_ZERO_FILL;
+    object->data_policy = MINIC_CORE_MODULE_DATA_ZERO_ONLY;
+    CHECK_CASE("tentative_relocation", false, false, false, false, NULL, NULL);
+    object->definition_kind = MINIC_CORE_MODULE_DEFINITION_REGULAR;
+    object->data_policy = MINIC_CORE_MODULE_DATA_MATERIALIZED;
+    object->default_section = MINIC_CORE_MODULE_SECTION_BSS;
+    CHECK_CASE("bss_relocation", false, false, false, false, NULL, NULL);
+    object->default_section = MINIC_CORE_MODULE_SECTION_DATA;
+    object->references = NULL;
+    object->reference_count = 0U;
+    CHECK_CASE("unmatched_relocation", false, false, false, false, NULL, NULL);
+
+    /* A forged function relocation must never index a missing Module
+     * function-symbol table merely because finalized was set by its maker. */
+    {
+        MinicCoreModuleReference function_reference = {
+            .kind = MINIC_CORE_MODULE_REFERENCE_FUNCTION, .target_index = 0U
+        };
+        module.function_count = 1U;
+        module.function_symbols = NULL;
+        reloc.relocation_kind = MINIC_CORE_MODULE_RELOCATION_FUNCTION;
+        reloc.relocation_symbol = "missing_function_symbol";
+        object->references = &function_reference;
+        object->reference_count = 1U;
+        CHECK_CASE("missing_function_symbols", false, false, false, false,
+                   NULL, NULL);
+        module.function_count = 0U;
+        object->references = NULL;
+        object->reference_count = 0U;
+        reloc.relocation_kind = MINIC_CORE_MODULE_RELOCATION_OBJECT;
+        reloc.relocation_symbol = "external";
+    }
+
+    /* RV32's corresponding legal relocation is pointer-width 4, unlike
+     * both LP64 emitters; test that target's positive case on its own. */
+    object->core_type_id = ptr4_id;
+    object->storage_size = object->storage_alignment = reloc.byte_count = 4U;
+    object->references = &reference;
+    object->reference_count = 1U;
+    object->data_policy = MINIC_CORE_MODULE_DATA_ZERO_NUMERIC;
+    if (!minic_core_module_verify_global(&module, 0U) ||
+        !probe_emit(PROBE_RV32, &module, true, NULL)) goto done;
+
+    object->definition_kind = MINIC_CORE_MODULE_DEFINITION_DECLARATION;
+    object->data_policy = MINIC_CORE_MODULE_DATA_MATERIALIZED;
+    object->storage_size = 0U;
+    object->storage_alignment = 0U;
+    object->fragments = NULL;
+    object->fragment_count = 0U;
+    object->references = NULL;
+    object->reference_count = 0U;
+    CHECK_CASE("extern_noop", true, true, false, false, NULL, NULL);
+    success = true;
+#undef CHECK_CASE
+done:
+    minic_core_type_context_destroy(&types);
+    if (success)
+        puts("DIRECT_GLOBAL_MODULE_CONTRACT=PASS three_public_emitters=3 core_local_global_preflight=1 forged_finalized=10 legal_abi_exceptions=5");
+    return success ? 0 : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/probe-direct-lp64-abi-policy-negative.c"}
+/* AAPCS64 has a fixed FP bank; the current qualified LoongArch64 linear
+ * varargs cursor deliberately rejects this fixed-double function shape. */
+unsigned long abi_named_double_variadic(double base, ...) {
+    __builtin_va_list args;
+    unsigned long next;
+    __builtin_va_start(args, base);
+    next = __builtin_va_arg(args, unsigned long);
+    __builtin_va_end(args);
+    return (unsigned long)base + next;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/probe-direct-lp64-abi-policy.c"}
+/* AAPCS64 and LoongArch LP64D share Core CALL semantics, but differ in
+ * aggregate/GPR splitting, aligned __int128 pairs and hidden result slots. */
+struct AbiPair { unsigned long low, high; };
+struct AbiLarge { unsigned long first, middle, last; };
+
+extern unsigned long abi_pair_callee(
+    unsigned long, unsigned long, unsigned long, unsigned long,
+    unsigned long, unsigned long, unsigned long, struct AbiPair);
+extern unsigned long abi_wide_callee(
+    unsigned long, unsigned long, unsigned long, unsigned long,
+    unsigned long, unsigned long, unsigned long, unsigned __int128);
+extern struct AbiLarge abi_large_callee(struct AbiLarge, unsigned long);
+extern double abi_float_callee(unsigned long, double, float);
+
+unsigned long abi_pair_boundary(struct AbiPair pair) {
+    return abi_pair_callee(1UL, 2UL, 3UL, 4UL, 5UL, 6UL, 7UL, pair);
+}
+
+unsigned long abi_wide_boundary(unsigned __int128 wide) {
+    return abi_wide_callee(1UL, 2UL, 3UL, 4UL, 5UL, 6UL, 7UL, wide);
+}
+
+struct AbiLarge abi_indirect_return(struct AbiLarge value) {
+    return abi_large_callee(value, 5UL);
+}
+
+double abi_fp_boundary(double value) {
+    return abi_float_callee(3UL, value, 4.0f);
+}
+
+unsigned long abi_linear_or_state_va(unsigned long tag, ...) {
+    __builtin_va_list args;
+    unsigned long left, right;
+    __builtin_va_start(args, tag);
+    left = __builtin_va_arg(args, unsigned long);
+    right = __builtin_va_arg(args, unsigned long);
+    __builtin_va_end(args);
+    return tag + left + right;
+}
+
+unsigned long abi_variadic_boundary(void) {
+    return abi_linear_or_state_va(1UL, 2UL, 3UL);
+}
+@@@ end

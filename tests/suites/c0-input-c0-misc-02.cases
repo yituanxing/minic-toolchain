@@ -1,0 +1,2657 @@
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_inline_object.c"}
+inline int value;
+
+int main(void) {
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_int_return_without_value.c"}
+int value(void)
+{
+    return;
+}
+
+int main(void)
+{
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_integer_subtract_pointer.c"}
+int main(void)
+{
+    int value = 7;
+    int *pointer = &value;
+
+    return *(1 - pointer);
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_local_array_initializer_element.c"}
+int main(void)
+{
+    int *values[] = { 1 };
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_local_nonstring_attribute_arguments.c"}
+int main(void) {
+    char query[8] __attribute__((nonstring(3)));
+    query[0] = 0;
+    return query[0];
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_local_scalar_noreturn_attribute.c"}
+int main(void) {
+    int __attribute__((noreturn)) bad = 1;
+    return bad;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_named_void_parameter.c"}
+void reset(void value);
+
+int main(void)
+{
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_named_zero_bit_field.c"}
+struct Bits {
+    unsigned int flag : 0;
+};
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_noclone_argument.c"}
+void __attribute__((noclone(1))) bad_noclone_argument(void);
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_noclone_object.c"}
+extern int __attribute__((__noclone__)) noclone_object;
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_noinline_argument.c"}
+void __attribute__((noinline(1))) bad_noinline(void);
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_nonvariadic_extra_argument.c"}
+int consume(int value);
+
+int main(void)
+{
+    return consume(1, 2);
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_out_of_scope_local.c"}
+int main(void)
+{
+    if (1) {
+        int value = 7;
+        value = value + 1;
+    }
+    return value;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_parameter_suffix_aligned.c"}
+static int add_one(int value __attribute__((aligned(16)))) {
+    return value + 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_parser_probe_hash_ownership.c"}
+enum KnownIndices { INDEX_0, INDEX_1, INDEX_2, INDEX_3,
+                    INDEX_4, INDEX_5, INDEX_6, INDEX_7 };
+int touch_index(void) { return INDEX_0; }
+enum NewIndices { INDEX_8, INDEX_9 };
+struct Pair { int first; int second; };
+extern int runtime_index;
+/* A speculative bound probe must still reject a nonconstant designator. */
+struct Pair invalid[] = { [runtime_index] = {1, 2} };
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_postfix_subscript_scalar.c"}
+int main(void)
+{
+    int value;
+
+    value = 3;
+    return (value)[0];
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_pragma_pack_alignment.c"}
+#pragma pack(3)
+struct bad { char c; int value; };
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_predefined_func_name_file_scope.c"}
+int file_scope_size = sizeof(__func__);
+
+int main(void) {
+    return file_scope_size;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_predefined_func_name_write.c"}
+int change_name(void) {
+    __func__[0] = 'x';
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_preprocessor_directive.c"}
+#define HIDDEN 1
+int value;
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_scalar_subscript.c"}
+int main(void)
+{
+    int value;
+    return value[0];
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_self_record_by_value.c"}
+typedef struct Node {
+    struct Node next;
+    int value;
+} Node;
+
+int main(void)
+{
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_shift_pointer.c"}
+int main(void)
+{
+    int value;
+    int *pointer;
+
+    pointer = &value;
+    return pointer << 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_signed_unsigned.c"}
+int main(void)
+{
+    signed unsigned int value = 0;
+    return value;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_statement_attribute_target.c"}
+int invalid_statement_attribute_target(int value) {
+    switch (value) {
+    case 0:
+        __attribute__((__always_inline__));
+    default:
+        return value;
+    }
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_switch_double_selector.c"}
+int main(void)
+{
+    double value = 1.0;
+
+    switch (value) {
+    case 1:
+        return 1;
+    default:
+        return 0;
+    }
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_too_many_global_initializers.c"}
+static const int table[2] = {1, 2, 3};
+
+int main(void)
+{
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_too_many_long_specifiers.c"}
+long long long value;
+
+int main(void) {
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_transparent_union_nonmember.c"}
+struct a { int value; };
+struct b { int value; };
+
+typedef union {
+    struct a **as;
+    struct b **bs;
+} bridge_arg __attribute__((__transparent_union__));
+
+int sink(bridge_arg arg)
+{
+    return arg.as != ((void *)0);
+}
+
+int bad(char **other)
+{
+    return sink(other);
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_transparent_union_nonunion.c"}
+typedef struct {
+    int *value;
+} bad_type __attribute__((__transparent_union__));
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_union_designated_init.c"}
+union BadDesignatedUnion {
+    int value;
+} __attribute__((__designated_init__));
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_union_flexible_array.c"}
+union invalid_union {
+    int value;
+    char payload[];
+};
+
+int main(void) {
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_unknown_pragma.c"}
+#pragma once
+int value;
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_unnamed_definition_parameter.c"}
+static int invalid_definition(int) {
+    return 0;
+}
+
+int main(void) {
+    return invalid_definition(0);
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_used_argument.c"}
+static int __attribute__((used(1))) invalid_used_argument = 0;
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_used_field.c"}
+struct InvalidUsedField {
+    int value __attribute__((used));
+};
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_xgene_parenthesized_pointer_record_field.c"}
+struct Packet { int bytes; };
+/* A function-pointer field must still have a valid parameter declaration. */
+struct BadRing { struct Packet *(*deliver)(int,); };
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/large_pointer_stride.c"}
+/* Cross-GNU/QEMU oracle for pointer offsets with record_size > signed imm12. */
+#include <stdio.h>
+typedef struct { unsigned char payload[4096]; } LargeRecord;
+static LargeRecord records[4];
+int main(int argc, char **argv)
+{
+    unsigned int i = (unsigned int)(argc & 1);
+    (void)argv;
+    records[i].payload[17] = 41;
+    records[i + 1U].payload[18] = 1;
+    printf("%u\n", (unsigned int)records[i].payload[17] +
+                    (unsigned int)records[i + 1U].payload[18]);
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/locals.c"}
+int main(void)
+{
+#if CASE == 1
+    int x = 7;
+    return x;
+#elif CASE == 2
+    int x;
+    int y = 4;
+    x = 7;
+    return x + y;
+#elif CASE == 3
+    int x = 3;
+    x = x * 5;
+    return x;
+#else
+#error unsupported local test case
+#endif
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/logical_not.c"}
+int main(void)
+{
+#if CASE == 1
+    return !0;
+#elif CASE == 2
+    return !5;
+#elif CASE == 3
+    return !!7;
+#elif CASE == 4
+    return !(3 < 4);
+#elif CASE == 5
+    int x = 0;
+    return !x;
+#else
+#error unsupported logical-not test case
+#endif
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/lp64_empty_record_call_abi.c"}
+/* GNU C zero-byte composites: AAPCS64 and LoongArch LP64D ignore an empty
+ * named argument without shifting subsequent GP arguments. Both ABIs also
+ * ignore empty members when classifying nonempty INTEGER-class records. */
+struct Empty { };
+struct Nested {
+    unsigned long first;
+    struct Empty ignored;
+    unsigned long last;
+};
+
+unsigned long empty_middle(unsigned long first, struct Empty ignored,
+                           unsigned long last) {
+    (void)ignored;
+    return first * 10UL + last;
+}
+
+unsigned long empty_on_register_boundary(unsigned long first,
+                                         unsigned long second,
+                                         unsigned long third,
+                                         unsigned long fourth,
+                                         unsigned long fifth,
+                                         unsigned long sixth,
+                                         unsigned long seventh,
+                                         unsigned long eighth,
+                                         struct Empty ignored,
+                                         unsigned long ninth) {
+    (void)ignored;
+    return first + second + third + fourth + fifth + sixth +
+           seventh + eighth + ninth;
+}
+
+unsigned long call_empty_middle(void) {
+    struct Empty empty = { };
+    return empty_middle(3UL, empty, 7UL) +
+           empty_on_register_boundary(1UL, 2UL, 3UL, 4UL, 5UL,
+                                      6UL, 7UL, 8UL, empty, 9UL);
+}
+
+struct Empty return_empty(void) {
+    struct Empty empty = { };
+    return empty;
+}
+
+void call_return_empty(void) {
+    struct Empty empty = return_empty();
+    (void)empty;
+}
+
+struct Nested return_nonempty_with_empty_member(unsigned long value) {
+    struct Nested nested = { .first = value, .last = value + 1UL };
+    return nested;
+}
+
+unsigned long call_nonempty_with_empty_member(void) {
+    struct Nested nested = return_nonempty_with_empty_member(11UL);
+    return nested.first + nested.last;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/lp64_overaligned_stack_frame.c"}
+/* All AAPCS64/LP64D callers guarantee only 16B SP alignment. A local type
+ * aligned(32) must be placed at a genuinely 32B address, and a ninth GP
+ * argument must still load from the ORIGINAL incoming call stack. */
+struct Aligned32 {
+    unsigned long words[4];
+} __attribute__((aligned(32)));
+
+unsigned long overalign_with_stack_argument(
+    unsigned long a, unsigned long b, unsigned long c, unsigned long d,
+    unsigned long e, unsigned long f, unsigned long g, unsigned long h,
+    unsigned long ninth) {
+    struct Aligned32 value;
+    value.words[0] = ninth;
+    value.words[1] = a + b + c;
+    value.words[2] = d + e + f;
+    value.words[3] = g + h;
+    return value.words[0] + value.words[1] + value.words[2] + value.words[3];
+}
+
+unsigned long overalign_dynamic_stack(unsigned long amount) {
+    struct Aligned32 value;
+    unsigned char *scratch = __builtin_alloca(amount + 16UL);
+    scratch[0] = (unsigned char)amount;
+    value.words[0] = amount;
+    value.words[1] = scratch[0];
+    value.words[2] = amount + 1UL;
+    value.words[3] = amount + 2UL;
+    return value.words[0] + value.words[1] + value.words[2] + value.words[3];
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/machine_operand_full_union_init.c"}
+#include "target/common/machine_ir.h"
+
+#include <stddef.h>
+#include <stdint.h>
+#include <string.h>
+
+/* The first union alternative (physical) occupies only 16 bytes, while the
+ * address and symbol alternatives carry fields beyond those first bytes.
+ * Exercise the exact production MachineIR storage and its by-value return. */
+static MinicMachineOperand address_operand(unsigned base) {
+    MinicMachineOperand result;
+    (void)memset(&result, 0, sizeof(result));
+    result.kind = MINIC_MACHINE_OPERAND_ADDRESS;
+    result.value.address.has_base = true;
+    result.value.address.base.number = base;
+    result.value.address.scale = 1U;
+    result.value.address.displacement = -56;
+    return result;
+}
+
+static MinicMachineOperand symbol_operand(void) {
+    MinicMachineOperand result;
+    (void)memset(&result, 0, sizeof(result));
+    result.kind = MINIC_MACHINE_OPERAND_SYMBOL;
+    result.value.symbol.name = "sample_symbol";
+    result.value.symbol.relocation = 3U;
+    return result;
+}
+
+static int check_address(unsigned base) {
+    MinicMachineOperand operand = address_operand(base);
+    return operand.kind == MINIC_MACHINE_OPERAND_ADDRESS &&
+        operand.value.address.has_base &&
+        operand.value.address.base.number == base &&
+        operand.value.address.scale == 1U &&
+        operand.value.address.displacement == -56 &&
+        !operand.value.address.has_symbol &&
+        operand.value.address.symbol == NULL &&
+        operand.value.address.relocation == 0U &&
+        operand.value.address.addend == 0;
+}
+
+int main(void) {
+    MinicMachineOperand symbol = symbol_operand();
+#if __SIZEOF_POINTER__ == 8
+    if (sizeof(MinicMachineOperand) != 112U ||
+        offsetof(MinicMachineOperand, value.address.has_symbol) != 64U ||
+        offsetof(MinicMachineOperand, value.address.symbol) != 72U) return 3;
+#endif
+    if (!check_address(29U) || !check_address(31U)) return 1;
+    if (symbol.kind != MINIC_MACHINE_OPERAND_SYMBOL ||
+        symbol.value.symbol.name == NULL ||
+        symbol.value.symbol.name[0] != 's' ||
+        symbol.value.symbol.relocation != 3U ||
+        symbol.value.symbol.addend != 0) return 2;
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/main_parameters_runtime.c"}
+int main(int argc, char **argv) {
+    if (argc < 1) {
+        return 1;
+    }
+    if (argv == (void *)0 || argv[0] == (void *)0) {
+        return 2;
+    }
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/multiply_assignment.c"}
+int main(void) {
+    unsigned long value = 3;
+    value *= 2;
+    return value == 6 ? 0 : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/netfilter_hook_insertion_runtime.c"}
+/* Regression: dynamic Netfilter hook insertion must reload the local
+   "inserted" flag after a loop backedge. The old MiniC core.o folded
+   if (inserted || priority > old_ops[i]->priority) to an unconditional
+   edge, producing an out-of-bounds hook array write under Linux 6.6.143. */
+struct hook_op { unsigned int priority; unsigned int token; };
+struct hook_entry { unsigned int token; unsigned int priv; };
+
+static int check_insert(unsigned int priority, unsigned int expected_position) {
+    struct hook_op old0 = {10U, 10U};
+    struct hook_op old1 = {20U, 20U};
+    struct hook_op old2 = {30U, 30U};
+    struct hook_op new_op = {0U, 99U};
+    const struct hook_op *old_ops[3];
+    struct hook_entry old_hooks[3];
+    struct hook_entry new_hooks[9];
+    unsigned int old_entries = 3U;
+    unsigned int i = 0U, nhooks = 0U, j;
+    int inserted = 0;
+
+    old_ops[0] = &old0; old_ops[1] = &old1; old_ops[2] = &old2;
+    for (j = 0U; j < 3U; j++) {
+        old_hooks[j].token = old_ops[j]->token;
+        old_hooks[j].priv = 100U + j;
+    }
+    new_op.priority = priority;
+    while (i < old_entries && nhooks < 9U) {
+        if (inserted || new_op.priority > old_ops[i]->priority) {
+            new_hooks[nhooks] = old_hooks[i];
+            i++;
+        } else {
+            new_hooks[nhooks].token = new_op.token;
+            new_hooks[nhooks].priv = 999U;
+            inserted = 1;
+        }
+        nhooks++;
+    }
+    if (!inserted && nhooks < 9U) {
+        new_hooks[nhooks].token = new_op.token;
+        new_hooks[nhooks].priv = 999U;
+        nhooks++;
+    }
+    if (nhooks != 4U) return 1;
+    if (new_hooks[expected_position].token != 99U ||
+        new_hooks[expected_position].priv != 999U) return 2;
+    for (j = 0U; j < 3U; j++) {
+        unsigned int slot = j >= expected_position ? j + 1U : j;
+        if (new_hooks[slot].token != old_ops[j]->token ||
+            new_hooks[slot].priv != 100U + j) return 3;
+    }
+    return 0;
+}
+
+int main(int argc, char **argv) {
+    unsigned int extra = argc == 0;
+    (void)argv;
+    if (check_insert(5U + extra, 0U) != 0) return 11;
+    if (check_insert(15U + extra, 1U) != 0) return 12;
+    if (check_insert(25U + extra, 2U) != 0) return 13;
+    if (check_insert(35U + extra, 3U) != 0) return 14;
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/netlink_warn_guard_runtime.c"}
+/* Regress net/netlink/genetlink.c WARN_ON(!cnt) after split-op selection.
+ * The warning must be guarded by a runtime branch: a bad MiniC core-lower
+ * fact merge emits unconditional ebreak even when cnt becomes positive.
+ * Structure intentionally matches the GNU statement-expression and
+ * do-while(0) warning macro in Linux 6.6.143.
+ */
+struct netlink_probe_ops { unsigned flags; };
+static struct netlink_probe_ops test_ops[] = { {2U}, {4U}, {6U} };
+
+#define TEST_WARN_ON(x) ({                                        \
+    int __ret_warn_on = !!(x);                                  \
+    if (__builtin_expect(!!(__ret_warn_on), 0))                  \
+        do { __asm__ __volatile__("ebreak"); } while (0);       \
+    __builtin_expect(!!(__ret_warn_on), 0);                     \
+})
+
+static __attribute__((noinline)) int check_flags(unsigned index,
+                                                  unsigned valid_limit)
+{
+    unsigned i = index;
+    int cnt = 0;
+    if (test_ops[i + (unsigned)cnt].flags & 2U) {
+        cnt++;
+    } else {
+        __asm__ __volatile__("" ::: "memory");
+    }
+    if (i + (unsigned)cnt < valid_limit &&
+        test_ops[i + (unsigned)cnt].flags & 4U) {
+        cnt++;
+    } else {
+        __asm__ __volatile__("" ::: "memory");
+    }
+    TEST_WARN_ON(!cnt);
+    return cnt;
+}
+
+int main(void)
+{
+    if (check_flags(0U, 3U) != 2) return 1;
+    if (check_flags(1U, 3U) != 1) return 2;
+    if (check_flags(2U, 3U) != 1) return 3;
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/netlink_warn_x86_minimal.c"}
+static volatile int bad_count;
+
+__attribute__((noinline)) static int check(int flags) {
+    int cnt = 0;
+    if (flags & 2)
+        cnt++;
+    if (flags & 4)
+        cnt++;
+    if (!cnt)
+        bad_count++;
+    return cnt;
+}
+
+int main(void) {
+    if (check(2) != 1) return 1;
+    if (check(4) != 1) return 2;
+    if (check(6) != 2) return 3;
+    return bad_count == 0 ? 0 : 99;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/parameter_suffix_informational_attribute.c"}
+static int add_one(int value __attribute__((__unused__))) {
+    return value + 1;
+}
+int main(void) {
+    return add_one(6) == 7 ? 0 : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/parenthesized_array_declarator.c"}
+static const char *(parenthesized_array[]) = {
+    "alpha",
+    "beta",
+    "gamma"
+};
+
+const char *parenthesized_array_pick(int index)
+{
+    return parenthesized_array[index];
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/parenthesized_comma_expression.c"}
+static int calls;
+
+static int bump(void) {
+    calls += 1;
+    return 7;
+}
+
+int main(void) {
+    int value = (bump(), 11);
+
+    ((void)bump(), ((void)0));
+    return calls == 2 && value == 11 ? 0 : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/parser_probe_hash_ownership.c"}
+/* Exercise the parser's speculative static-aggregate designator scanner
+ * after adding global enum constants beyond the cached hash load limit.
+ * A value-copied parser probe must not free the owning parser's index. */
+enum FirstNames {
+    FIRST_0, FIRST_1, FIRST_2, FIRST_3,
+    FIRST_4, FIRST_5, FIRST_6, FIRST_7
+};
+
+int use_first_name(void) { return FIRST_0; }
+
+enum LaterNames {
+    LATER_0, LATER_1, LATER_2, LATER_3,
+    LATER_4, LATER_5, LATER_6, LATER_7,
+    LATER_8
+};
+
+struct Item { int value; int extra; };
+struct Item probe_array[] = {
+    [LATER_0] = {1, 2},
+    [LATER_8] = {3, 4}
+};
+
+int use_probe_array(void) { return probe_array[LATER_8].extra; }
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/postfix_const.c"}
+static int same_first(char const *left, const char *right) {
+    return left[0] == right[0];
+}
+
+typedef char *text;
+
+static int use_typedef_const(text const value) {
+    return value[0];
+}
+
+int main(void) {
+    return same_first("x", "x") && use_typedef_const("x") == 'x' ? 0 : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/pragma_pack_record_layout.c"}
+# 1 "pragma-pack.c"
+#pragma pack(1)
+struct packed_one {
+    char lead;
+    int value;
+};
+struct packed_two {
+    char lead;
+    unsigned long value;
+};
+#pragma pack()
+struct natural_one {
+    char lead;
+    int value;
+};
+#pragma pack(2)
+struct packed_align_two {
+    char lead;
+    int value;
+};
+#pragma pack(4)
+struct packed_align_four {
+    char lead;
+    unsigned long value;
+};
+#pragma pack(8)
+struct packed_align_eight {
+    char lead;
+    unsigned long value;
+};
+#pragma pack()
+struct forward_record;
+#pragma pack(1)
+struct forward_record {
+    char lead;
+    int value;
+};
+#pragma pack()
+struct attribute_packed {
+    char lead;
+    int value;
+} __attribute__((packed));
+_Static_assert(sizeof(struct packed_one) == 5, "pack(1) size");
+_Static_assert(__builtin_offsetof(struct packed_one, value) == 1, "pack(1) offset");
+_Static_assert(sizeof(struct packed_two) == 9, "pack state spans definitions");
+_Static_assert(__builtin_offsetof(struct packed_two, value) == 1, "pack state offset");
+_Static_assert(sizeof(struct natural_one) == 8, "pack reset size");
+_Static_assert(__builtin_offsetof(struct natural_one, value) == 4, "pack reset offset");
+_Static_assert(sizeof(struct packed_align_two) == 6, "pack(2) size");
+_Static_assert(__builtin_offsetof(struct packed_align_two, value) == 2, "pack(2) offset");
+_Static_assert(sizeof(struct packed_align_four) == 12, "pack(4) size");
+_Static_assert(__builtin_offsetof(struct packed_align_four, value) == 4, "pack(4) offset");
+_Static_assert(sizeof(struct packed_align_eight) == 16, "pack(8) size");
+_Static_assert(__builtin_offsetof(struct packed_align_eight, value) == 8, "pack(8) offset");
+_Static_assert(sizeof(struct forward_record) == 5, "definition-time pack state");
+_Static_assert(__builtin_offsetof(struct forward_record, value) == 1, "forward identity");
+_Static_assert(sizeof(struct attribute_packed) == 5, "GNU packed remains independent");
+int main(void) { return 0; }
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/prefix_decrement_update.c"}
+int main(void)
+{
+    int value;
+    int result;
+
+    result = 0;
+    for (value = 5; ; --value) {
+        result = result + value;
+        if (value == 1) {
+            break;
+        }
+    }
+    result = result + value;
+    return result;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/prefix_update_expression.c"}
+int read_with_prefix_updates(int *values) {
+    int pc = 0;
+    int first = values[++pc];
+    int second = values[--pc];
+    return first + second + pc;
+}
+
+int *advance_pointer(int *pointer) {
+    return ++pointer;
+}
+
+int *retreat_pointer(int *pointer) {
+    return --pointer;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/preformed_static_array.c"}
+struct mapping {
+    int value;
+};
+/* The declarator has already formed the array type before the initializer is parsed. */
+static struct mapping maps[] __attribute__((section(".data.test"))) = {
+    {.value = 1},
+    {.value = 2},
+};
+int main(void) {
+    return maps[0].value + maps[1].value - 3;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/preprocessed_line_markers.i"}
+# 0 "probe.c"
+# 1 "probe.c"
+# 1 "header.h" 1 3 4
+int marker_value(void) { return 7; }
+# 2 "probe.c" 2
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/probe-a64-normalized-seal.c"}
+/* Host unit probe of A64's Source-qualified -> normalized-machine seal.
+ * Link with the ordinary MiniC object set (without tools/minic-cc/main.o).
+ * This test does not need an A64 cross-assembler or QEMU. */
+#include "target/aarch64/asm_contract.h"
+#include "target/aarch64/asm_contract_source.h"
+#include "frontend/ast.h"
+#include "frontend/type.h"
+
+#include <stdio.h>
+#include <string.h>
+
+typedef struct ProbeCase {
+    MinicTargetInvocation invocation;
+    MinicC0Program program;
+    MinicExpression expr[2];
+    MinicInlineAsm src;
+    MinicInlineAsmOperand output;
+    MinicInlineAsmOperand input[2];
+    MinicTargetInlineAsmContract contract;
+} ProbeCase;
+
+static void set_operand(MinicInlineAsmOperand *op, const char *constraint,
+                        MinicExpressionId expression,
+                        MinicInlineAsmOperandAccess access) {
+    memset(op, 0, sizeof(*op));
+    op->constraint_text = (char *)constraint;
+    op->constraint_length = strlen(constraint);
+    op->expression = expression;
+    op->access = access;
+}
+
+static bool initialize_case(ProbeCase *test, const char *source,
+                            MinicType first, MinicType second,
+                            bool acquire, bool raw) {
+    memset(test, 0, sizeof(*test));
+    if (!minic_target_invocation_begin(
+            &test->invocation,
+            minic_target_info_for_architecture(MINIC_TARGET_ARCH_AARCH64)))
+        return false;
+    test->program.expressions = test->expr;
+    test->program.expression_count = 2U;
+    test->expr[0].type = first;
+    test->expr[0].value_category = MINIC_VALUE_LVALUE;
+    test->expr[1].type = second;
+    test->expr[1].value_category = acquire && !raw
+        ? MINIC_VALUE_LVALUE : MINIC_VALUE_RVALUE;
+    test->src.template_text = (char *)source;
+    test->src.template_length = strlen(source);
+    test->src.is_volatile = true;
+    test->src.outputs = &test->output;
+    test->src.output_count = 1U;
+    test->src.inputs = test->input;
+    test->src.input_count = 1U;
+    test->src.has_memory_clobber = !raw;
+    test->src.clobber_count = raw ? 0U : 1U;
+    if (acquire) {
+        set_operand(&test->output, "=r", 0U,
+                    MINIC_INLINE_ASM_OPERAND_WRITE_ONLY);
+        set_operand(&test->input[0], raw ? "r" : "Q", 1U,
+                    MINIC_INLINE_ASM_OPERAND_READ_ONLY);
+    } else if (!raw) {
+        set_operand(&test->output, "=Q", 0U,
+                    MINIC_INLINE_ASM_OPERAND_WRITE_ONLY);
+        set_operand(&test->input[0], "rZ", 1U,
+                    MINIC_INLINE_ASM_OPERAND_READ_ONLY);
+    } else {
+        test->src.output_count = 0U;
+        test->src.input_count = 2U;
+        set_operand(&test->input[0], "rZ", 0U,
+                    MINIC_INLINE_ASM_OPERAND_READ_ONLY);
+        set_operand(&test->input[1], "r", 1U,
+                    MINIC_INLINE_ASM_OPERAND_READ_ONLY);
+        test->expr[0].value_category = MINIC_VALUE_RVALUE;
+    }
+    return minic_aarch64_qualify_inline_asm(
+        &test->invocation, &test->program, &test->src, &test->contract);
+}
+
+static bool check_normalization(ProbeCase *test, const char *machine,
+                                uint32_t form, uint32_t width) {
+    MinicTargetInlineAsmContract candidate = test->contract;
+    if (!minic_aarch64_seal_normalized_inline_asm(
+            &test->invocation, &test->program, &test->src, machine, strlen(machine),
+            &candidate) ||
+        candidate.target_machine_form_id != form ||
+        candidate.target_machine_form_variant != width ||
+        candidate.operand_count != test->contract.operand_count ||
+        memcmp(candidate.kinds, test->contract.kinds,
+               sizeof(candidate.kinds)) != 0 ||
+        candidate.implicit_memory_effect !=
+            test->contract.implicit_memory_effect)
+        return false;
+    return true;
+}
+
+static bool check_reject(ProbeCase *test, const char *wrong) {
+    MinicTargetInlineAsmContract candidate = test->contract;
+    return !minic_aarch64_seal_normalized_inline_asm(
+        &test->invocation, &test->program, &test->src, wrong, strlen(wrong), &candidate);
+}
+
+int main(void) {
+    static const char *const acquire[] = {
+        "ldarb %w0, %1", "ldarh %w0, %1",
+        "ldar %w0, %1", "ldar %0, %1"
+    };
+    static const char *const release[] = {
+        "stlrb %w1, %0", "stlrh %w1, %0",
+        "stlr %w1, %0", "stlr %x1, %0"
+    };
+    static const char *const raw_store[] = {
+        "strb %w0, [%1]", "strh %w0, [%1]",
+        "str %w0, [%1]", "str %x0, [%1]"
+    };
+    static const char *const raw_read_old[] = {
+        "ldrb%w0,[%1]", "ldrh%w0,[%1]",
+        "ldr%w0,[%1]", "ldr%0,[%1]"
+    };
+    static const char *const raw_read_new[] = {
+        "ldarb%w0,[%1]", "ldarh%w0,[%1]",
+        "ldar%w0,[%1]", "ldar%0,[%1]"
+    };
+    static const char middle[] =
+        "662:.pushsection.altinstructions,\"a\""
+        ".word661b-..word663f-..hword91"
+        ".byte662b-661b.byte664f-663f"
+        ".popsection.subsection1663:";
+    static const char tail[] =
+        "664:.org.-(664b-663b)+(662b-661b)"
+        ".org.-(662b-661b)+(664b-663b).previous.endif";
+    const MinicType widths[] = {
+        minic_type_unsigned_char(), minic_type_unsigned_short(),
+        minic_type_unsigned_int(), minic_type_unsigned_long_long()
+    };
+    MinicType address;
+    size_t i;
+    ProbeCase test;
+    char raw_read[512];
+    if (!minic_type_pointer_to(minic_type_unsigned_char(), &address))
+        return 1;
+    for (i = 0U; i < 4U; ++i) {
+        const uint32_t width = (uint32_t)(1U << i);
+        if (!initialize_case(&test, acquire[i], widths[i], widths[i],
+                             true, false) ||
+            !check_normalization(&test, acquire[i], 1U, width) ||
+            !check_reject(&test, release[i]) ||
+            !check_reject(&test, "ldar %w1, %0") ||
+            !check_reject(&test, "ldar %w0, %1; dmb ish"))
+            return (int)(10U + i);
+        if (!initialize_case(&test, release[i], widths[i], widths[i],
+                             false, false) ||
+            !check_normalization(&test, release[i], 2U, width) ||
+            !check_reject(&test, acquire[i]) ||
+            !check_reject(&test, "stlr %w0, %1"))
+            return (int)(20U + i);
+        if (!initialize_case(&test, raw_store[i], widths[i], address,
+                             false, true) ||
+            !check_normalization(&test, raw_store[i], 4U, width) ||
+            !check_reject(&test, "str %w1, [%0]") ||
+            !check_reject(&test, "str %w0, [%1]; dmb ish"))
+            return (int)(30U + i);
+        if (snprintf(raw_read, sizeof(raw_read),
+                ".if1==1661:%s%s%s%s", raw_read_old[i], middle,
+                raw_read_new[i], tail) < 0 ||
+            !initialize_case(&test, raw_read, widths[i], address,
+                             true, true) ||
+            !check_normalization(&test, raw_read, 3U, width) ||
+            !check_reject(&test, "ldr %w0, [%1]"))
+            return (int)(40U + i);
+    }
+    puts("PASS A64 LDAR/STLR/MMIO source-normalized seal widths=4 families=4 negatives=28");
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/probe-module-emit-preflight-contract.c"}
+#include "target/common/program_emit.h"
+
+#include <stdio.h>
+
+/* The full-module writer's single preflight owns typed Module verification
+ * and live-function arena identity. A discarded function's borrowed arena
+ * is deliberately irrelevant: it is never emitted. */
+int main(void) {
+    MinicCoreTypeContext owned = {0}, foreign = {0};
+    MinicCoreModuleFunctionSymbol symbols[2] = {
+        {.name = "live", .is_defined = true,
+         .alias_target_index = SIZE_MAX,
+         .storage_owner_function_index = SIZE_MAX},
+        {.name = "discarded", .is_defined = false,
+         .alias_target_index = SIZE_MAX,
+         .storage_owner_function_index = SIZE_MAX}
+    };
+    MinicCoreFunction functions[2] = {{0}, {0}};
+    MinicCoreModuleFragment numeric = {
+        .kind = MINIC_CORE_MODULE_FRAGMENT_BITS,
+        .byte_count = 4U, .bits = 42U
+    };
+    MinicCoreModuleGlobal global = {
+        .name = "forged", .emittable = true,
+        .core_type_id = MINIC_CORE_TYPE_INVALID,
+        .storage_alignment = 4U, .storage_size = 4U,
+        .fragments = &numeric, .fragment_count = 1U,
+        .alias_target_index = SIZE_MAX,
+        .owner_function_index = SIZE_MAX
+    };
+    MinicCoreModule module = {
+        .type_context = &owned, .finalized = true,
+        .function_symbols = symbols, .function_count = 2U
+    };
+    functions[0].type_context = &owned;
+    functions[1].type_context = &foreign;
+    if (!minic_program_emit_module_preflight(&module, functions, 2U)) return 1;
+    functions[0].type_context = &foreign;
+    if (minic_program_emit_module_preflight(&module, functions, 2U)) return 2;
+    functions[0].type_context = &owned;
+    if (minic_program_emit_module_preflight(&module, NULL, 2U)) return 3;
+    if (minic_program_emit_module_preflight(&module, functions, 1U)) return 4;
+    module.finalized = false;
+    if (minic_program_emit_module_preflight(&module, functions, 2U)) return 5;
+    module.finalized = true;
+    module.globals = &global;
+    module.global_count = 1U;
+    if (minic_program_emit_module_preflight(&module, functions, 2U)) return 6;
+    module.globals = NULL;
+    module.global_count = 0U;
+    if (!minic_program_emit_module_preflight(&module, functions, 2U)) return 7;
+    puts("MODULE_EMIT_PREFLIGHT_CONTRACT=PASS forged_finalized=1 alien_arena=1 dead_arena_exception=1 null_and_count=2 finalized=1");
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/probe-module-function-visitor.c"}
+/* The machine visitor has exactly one declaration owner: sealed ModuleIR.
+ * It never accepts C Program, including as a seemingly-unused argument. */
+#include "target/common/program_visit.h"
+#include <stdio.h>
+#include <string.h>
+
+typedef struct ProbeState {
+    const MinicCoreModule *module;
+    const MinicCoreModuleFunctionSymbol *symbol;
+    bool expect_definition;
+    size_t visited;
+} ProbeState;
+
+static size_t plan_builds;
+
+bool minic_core_function_plan_build(
+    const MinicCoreFunction *function, MinicCoreFunctionPlan *plan) {
+    if (function == NULL || plan == NULL || plan->prepared) return false;
+    ++plan_builds;
+    plan->prepared = true;
+    return true;
+}
+
+void minic_core_function_plan_destroy(MinicCoreFunctionPlan *plan) {
+    if (plan != NULL) (void)memset(plan, 0, sizeof(*plan));
+}
+
+static bool inspect(FILE *out, const MinicCoreModule *module,
+                    const MinicTargetInfo *target,
+                    const MinicCoreModuleFunctionSymbol *symbol,
+                    const MinicCoreFunction *function,
+                    const MinicCoreFunctionFacts *facts,
+                    const MinicCoreObjectStoragePlan *objects,
+                    size_t index, bool sections, void *context) {
+    ProbeState *state = context;
+    (void)out;
+    (void)target;
+    (void)function;
+    (void)sections;
+    if (state == NULL || module != state->module || index != 0U ||
+        symbol != state->symbol || symbol == NULL ||
+        symbol->name == NULL || strcmp(symbol->name, "module_symbol") != 0 ||
+        symbol->section_name == NULL ||
+        strcmp(symbol->section_name, ".text.module_only") != 0 ||
+        !symbol->is_weak || symbol->explicit_alignment != 32U ||
+        symbol->is_defined != state->expect_definition ||
+        (facts != NULL) != state->expect_definition ||
+        (objects != NULL) != state->expect_definition)
+        return false;
+    ++state->visited;
+    return true;
+}
+
+int main(void) {
+    MinicCoreFunction function = {0};
+    MinicCoreModuleFunctionSymbol symbol = {0};
+    MinicCoreModule module = {0};
+    MinicTargetInfo target = {0};
+    ProbeState state = {0};
+    FILE *out = tmpfile();
+    if (out == NULL) return 1;
+
+    symbol.name = "module_symbol";
+    symbol.section_name = ".text.module_only";
+    symbol.is_weak = true;
+    symbol.explicit_alignment = 32U;
+    symbol.is_defined = true;
+    symbol.is_referenced = true;
+    symbol.storage_owner_function_index = SIZE_MAX;
+    module.function_symbols = &symbol;
+    module.function_count = 1U;
+    module.finalized = true;
+    state.module = &module;
+    state.symbol = &symbol;
+    state.expect_definition = true;
+
+    if (!minic_program_visit_prepared_functions_module(
+            out, &module, &target, &function, 1U, false,
+            MINIC_PROGRAM_FUNCTION_LIVE_DEFINITIONS, false,
+            inspect, &state) ||
+        state.visited != 1U || plan_builds != 1U) return 2;
+
+    /* Declarations do not prepare a Core plan. Definitions are selected
+     * exclusively by the module symbol, including internal liveness. */
+    symbol.is_defined = false;
+    state.visited = 0U;
+    state.expect_definition = false;
+    if (!minic_program_visit_prepared_functions_module(
+            out, &module, &target, &function, 1U, false,
+            MINIC_PROGRAM_FUNCTION_DECLARATIONS, false,
+            inspect, &state) ||
+        state.visited != 1U || plan_builds != 1U) return 3;
+    state.visited = 0U;
+    if (!minic_program_visit_prepared_functions_module(
+            out, &module, &target, &function, 1U, false,
+            MINIC_PROGRAM_FUNCTION_LIVE_DEFINITIONS, false,
+            inspect, &state) || state.visited != 0U) return 4;
+
+    module.finalized = false;
+    if (minic_program_visit_prepared_functions_module(
+            out, &module, &target, &function, 1U, false,
+            MINIC_PROGRAM_FUNCTION_DECLARATIONS, false,
+            inspect, &state)) return 5;
+    module.finalized = true;
+    module.function_count = 0U;
+    if (minic_program_visit_prepared_functions_module(
+            out, &module, &target, &function, 1U, false,
+            MINIC_PROGRAM_FUNCTION_DECLARATIONS, false,
+            inspect, &state)) return 6;
+    if (minic_program_visit_prepared_functions_module(
+            out, NULL, &target, &function, 1U, false,
+            MINIC_PROGRAM_FUNCTION_DECLARATIONS, false,
+            inspect, &state)) return 7;
+    if (fclose(out) != 0) return 8;
+    puts("MINIC_MODULE_FUNCTION_OWNER=PASS sealed_module_only=1 definition=1 declaration=1 rollback=3");
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/probe-module-global-fragments.c"}
+#define _GNU_SOURCE
+#include "target/common/module_global_emit.h"
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+static const char *lp64_directive(size_t width) {
+    return width == 1U ? ".byte" : width == 2U ? ".2byte" :
+           width == 4U ? ".4byte" : width == 8U ? ".8byte" : NULL;
+}
+
+static bool emitted_matches(const MinicCoreModuleGlobal *global,
+                            size_t relocation_width, const char *expected,
+                            bool should_succeed, bool signed_spelling) {
+    char *text = NULL;
+    size_t length = 0U;
+    FILE *out = open_memstream(&text, &length);
+    bool success;
+    if (out == NULL) return false;
+    success = minic_multi_module_emit_global_fragments(
+        out, global, lp64_directive, signed_spelling, relocation_width);
+    if (fclose(out) != 0) success = false;
+    if ((success != should_succeed) || text == NULL ||
+        strcmp(text, expected) != 0) {
+        free(text);
+        return false;
+    }
+    free(text);
+    return true;
+}
+
+int main(void) {
+    MinicCoreModuleGlobal global = {.alias_target_index = SIZE_MAX};
+    MinicCoreModuleFragment fragments[] = {
+        {.kind = MINIC_CORE_MODULE_FRAGMENT_ZERO, .byte_offset = 0U,
+         .byte_count = 3U},
+        {.kind = MINIC_CORE_MODULE_FRAGMENT_BITS, .byte_offset = 3U,
+         .byte_count = 1U, .bits = 0x1ffU},
+        {.kind = MINIC_CORE_MODULE_FRAGMENT_RELOCATION, .byte_offset = 4U,
+         .byte_count = 8U, .relocation_kind = MINIC_CORE_MODULE_RELOCATION_OBJECT,
+         .relocation_symbol = "target_obj", .relocation_addend = -16},
+        {.kind = MINIC_CORE_MODULE_FRAGMENT_ZERO, .byte_offset = 12U,
+         .byte_count = 4U},
+        {.kind = MINIC_CORE_MODULE_FRAGMENT_BITS, .byte_offset = 16U,
+         .byte_count = 8U, .bits = UINT64_C(18446744073709551615)}
+    };
+    const char *expected =
+        "  .zero 3\n  .byte 255\n  .8byte target_obj-16\n"
+        "  .zero 4\n  .8byte 18446744073709551615\n";
+    global.name = "test_obj";
+    global.storage_size = 24U;
+    global.storage_alignment = 8U;
+    global.fragments = fragments;
+    global.fragment_count = sizeof(fragments) / sizeof(*fragments);
+    if (!emitted_matches(&global, 8U, expected, true, false) ||
+        !emitted_matches(&global, 4U, "", false, false)) return 1;
+
+    fragments[3].byte_offset = 11U;
+    if (!emitted_matches(&global, 8U, "", false, false)) return 2;
+    fragments[3].byte_offset = 12U;
+    fragments[2].relocation_symbol = "bad\ninjected";
+    if (!emitted_matches(&global, 8U, "", false, false)) return 3;
+    fragments[2].relocation_symbol = "target_obj";
+    fragments[2].byte_count = 16U;
+    if (!emitted_matches(&global, 8U, "", false, false)) return 4;
+    fragments[2].byte_count = 8U;
+
+    global.storage_size = 0U;
+    global.fragment_count = 0U;
+    if (!emitted_matches(&global, 8U, "", true, false)) return 5;
+    fragments[0].kind = MINIC_CORE_MODULE_FRAGMENT_ZERO;
+    fragments[0].byte_count = 0U;
+    global.fragment_count = 1U;
+    if (!emitted_matches(&global, 8U, "", false, false)) return 6;
+    global.fragment_count = 0U;
+
+    fragments[0].kind = MINIC_CORE_MODULE_FRAGMENT_BITS;
+    fragments[0].byte_offset = 0U;
+    fragments[0].byte_count = 4U;
+    fragments[0].bits = UINT64_C(0xffffffff);
+    global.storage_size = 4U;
+    global.fragment_count = 1U;
+    if (!emitted_matches(&global, 0U, "  .4byte -1\n", true, true)) return 7;
+    /* The same physical payload must serialize under both GNU dialects,
+     * regardless of whether the C producer used signed, unsigned or float.
+     * No source-type hint exists in the immutable Core fragment. */
+    if (!emitted_matches(&global, 0U, "  .4byte 4294967295\n", true, false))
+        return 17;
+    fragments[0].bits = UINT64_C(0x80000000);
+    if (!emitted_matches(&global, 0U, "  .4byte -2147483648\n", true, true) ||
+        !emitted_matches(&global, 0U, "  .4byte 2147483648\n", true, false))
+        return 18;
+    fragments[0].byte_count = global.storage_size = 2U;
+    fragments[0].bits = UINT64_C(0xffff);
+    if (!emitted_matches(&global, 0U, "  .2byte -1\n", true, true) ||
+        !emitted_matches(&global, 0U, "  .2byte 65535\n", true, false))
+        return 19;
+    fragments[0].byte_count = global.storage_size = 8U;
+    fragments[0].bits = UINT64_MAX;
+    if (!emitted_matches(&global, 0U, "  .8byte -1\n", true, true) ||
+        !emitted_matches(&global, 0U, "  .8byte 18446744073709551615\n", true, false))
+        return 20;
+    fragments[0].byte_count = 1U;
+    fragments[0].bits = UINT64_C(0x1ff);
+    global.storage_size = 1U;
+    if (!emitted_matches(&global, 0U, "  .byte 255\n", true, true)) return 8;
+    fragments[0].kind = MINIC_CORE_MODULE_FRAGMENT_RELOCATION;
+    fragments[0].byte_count = 4U;
+    fragments[0].relocation_kind = MINIC_CORE_MODULE_RELOCATION_LABEL;
+    fragments[0].relocation_symbol = ".Luser_23";
+    global.storage_size = 4U;
+    if (!emitted_matches(&global, 4U, "  .4byte .Luser_23\n", true, false))
+        return 9;
+
+    {
+        char *text = NULL;
+        size_t length = 0U;
+        MinicModuleElfGlobalPlan plan;
+        FILE *out = open_memstream(&text, &length);
+        if (out == NULL) return 10;
+        global.section_name = ".bss.test";
+        global.visibility = MINIC_CORE_MODULE_VISIBILITY_HIDDEN;
+        global.is_read_only = true;
+        /* The preceding standalone relocation fragment is *not* a valid
+         * ELF SHT_NOBITS payload. RV's explicit @progbits policy retains it. */
+        if (minic_multi_module_elf_global_plan_build(
+                &global, ".data", true, lp64_directive, false, 4U, &plan))
+            return 11;
+        if (!minic_multi_module_elf_global_plan_build(
+                &global, ".data", false, lp64_directive, false, 4U, &plan) ||
+            strcmp(plan.explicit_section_type, "progbits") != 0)
+            return 12;
+        fragments[0].kind = MINIC_CORE_MODULE_FRAGMENT_BITS;
+        fragments[0].relocation_symbol = NULL;
+        fragments[0].bits = 1U;
+        if (minic_multi_module_elf_global_plan_build(
+                &global, ".data", true, lp64_directive, false, 4U, &plan))
+            return 13;
+        /* Numeric data is interpreted by its physical width; high bits
+         * beyond a byte do not become nonzero ELF section contents. */
+        fragments[0].byte_count = global.storage_size = 1U;
+        fragments[0].bits = 0x100U;
+        if (!minic_multi_module_elf_global_plan_build(
+                &global, ".data", true, lp64_directive, false, 4U, &plan) ||
+            strcmp(plan.explicit_section_type, "nobits") != 0)
+            return 14;
+        fragments[0].kind = MINIC_CORE_MODULE_FRAGMENT_ZERO;
+        fragments[0].byte_count = global.storage_size = 4U;
+        if (!minic_multi_module_elf_global_plan_build(
+                &global, ".data", true, lp64_directive, false, 4U, &plan) ||
+            !minic_multi_module_elf_global_emit_visibility(out, &plan) ||
+            !minic_multi_module_elf_global_emit_section(out, &plan) ||
+            !minic_multi_module_elf_global_emit_binding(out, &plan) ||
+            fclose(out) != 0) {
+            free(text);
+            return 15;
+        }
+        if (strcmp(text,
+                   ".hidden test_obj\n.section .bss.test,\"a\",@nobits\n"
+                   ".globl test_obj\n") != 0) {
+            free(text);
+            return 16;
+        }
+        free(text);
+    }
+    puts("MODULE_GLOBAL_FRAGMENTS=PASS zero bits source_neutral_signed_dialect widths=1,2,4,8 reloc label strict_layout ELF_section physical_nobits=5");
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/probe-program-emit-elf-owner-tls.c"}
+/* Standalone, C-frontend-free witness for the physical ELF output contract:
+ * undefined weak prototypes never demote an emitted strong owner; a direct
+ * LP64 machine writer must not serialize TLS storage as ordinary .data. */
+#include "target/common/program_emit.h"
+#include "target/common/direct_program_emit.h"
+#include "core/module_ir.h"
+
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+static bool emit_object(FILE *out, const MinicCoreModule *module,
+                        const MinicTargetInfo *target,
+                        const MinicCoreModuleGlobal *object, size_t ordinal,
+                        void *context) {
+    (void)module; (void)target; (void)ordinal; (void)context;
+    return object != NULL && object->name != NULL &&
+        fprintf(out, ".data\n.globl %s\n.type %s,@object\n%s:\n"
+                     "  .quad 0\n.size %s,8\n",
+                object->name, object->name, object->name, object->name) >= 0;
+}
+
+static bool emit_function(FILE *out, const MinicCoreModule *module,
+                          const MinicTargetInfo *target,
+                          const MinicCoreModuleFunctionSymbol *symbol,
+                          const MinicCoreFunction *function,
+                          const MinicCoreFunctionFacts *facts,
+                          const MinicCoreObjectStoragePlan *storage,
+                          size_t ordinal, bool sections, void *context) {
+    (void)module; (void)target; (void)function; (void)facts; (void)storage;
+    (void)ordinal; (void)sections; (void)context;
+    return symbol != NULL && symbol->is_defined &&
+        fprintf(out, ".text\n.globl %s\n.type %s,@function\n%s:\n"
+                     "  ret\n.size %s,.-%s\n",
+                symbol->name, symbol->name, symbol->name,
+                symbol->name, symbol->name) >= 0;
+}
+
+static bool emit_file_asm(FILE *out, const MinicCoreModule *module,
+                          const MinicTargetInfo *target,
+                          const MinicCoreFunction *functions,
+                          size_t count, bool sections, void *context) {
+    (void)target; (void)functions; (void)count; (void)sections; (void)context;
+    return minic_program_emit_source_file_asm_module(out, module);
+}
+
+static bool direct_unused_function(FILE *out, const MinicTargetInfo *target,
+                                   const MinicCoreModule *module,
+                                   const MinicCoreModuleFunctionSymbol *symbol,
+                                   const MinicCoreFunction *function,
+                                   const MinicCoreFunctionFacts *facts,
+                                   const MinicCoreObjectStoragePlan *storage,
+                                   size_t index, bool sections) {
+    (void)out; (void)target; (void)module; (void)symbol; (void)function;
+    (void)facts; (void)storage; (void)index; (void)sections;
+    return false;
+}
+
+static bool file_is(const char *path, const char *expected) {
+    char buffer[128] = {0};
+    FILE *file = fopen(path, "rb");
+    size_t length;
+    if (file == NULL) return false;
+    length = fread(buffer, 1U, sizeof(buffer) - 1U, file);
+    return fclose(file) == 0 && length == strlen(expected) &&
+           strcmp(buffer, expected) == 0;
+}
+
+static bool write_original(const char *path) {
+    FILE *file = fopen(path, "wb");
+    if (file == NULL) return false;
+    return fputs("ORIGINAL\n", file) != EOF && fclose(file) == 0;
+}
+
+static bool check_direct_tls(const char *path, const MinicCoreTypeContext *types,
+                             MinicCoreTypeId word_id) {
+    MinicCoreModuleFragment zero = {
+        .kind = MINIC_CORE_MODULE_FRAGMENT_ZERO, .byte_count = 8U
+    };
+    MinicCoreModuleGlobal data = {
+        .name = "core_tls_owner", .emittable = true,
+        .is_thread_local = true,
+        .core_type_id = word_id, .storage_size = 8U,
+        .storage_alignment = 8U, .fragments = &zero, .fragment_count = 1U,
+        .alias_target_index = SIZE_MAX, .owner_function_index = SIZE_MAX,
+        .default_section = MINIC_CORE_MODULE_SECTION_DATA
+    };
+    MinicCoreModule module = {
+        .type_context = types, .globals = &data,
+        .global_count = 1U, .finalized = true
+    };
+    MinicTargetInfo target = {0};
+    MinicMultiDirectModuleConfig config = {
+        .architecture_name = "aarch64", .display_name = "AArch64",
+        .gnu_stack_note = ".section .note.GNU-stack,\"\",@progbits\n",
+        .elf_function_type = "%function", .elf_object_type = "%object",
+        .emit_function = direct_unused_function
+    };
+    MinicDiagnostic diagnostic = {0};
+    size_t index;
+    const MinicTargetArchitecture architectures[2] = {
+        MINIC_TARGET_ARCH_AARCH64, MINIC_TARGET_ARCH_LOONGARCH64
+    };
+    if (!minic_core_module_verify(&module)) return false;
+    for (index = 0U; index < 2U; ++index) {
+        target.architecture = architectures[index];
+        config.architecture = architectures[index];
+        config.architecture_name = index == 0U ? "aarch64" : "loongarch64";
+        config.display_name = index == 0U ? "AArch64" : "LoongArch64";
+        if (!write_original(path) ||
+            minic_multi_direct_write_module(path, &target, NULL, 0U, false,
+                                           &module, &config, &diagnostic) ||
+            !file_is(path, "ORIGINAL\n"))
+            return false;
+    }
+    /* The exact same source-free Core definition must emit when non-TLS;
+     * otherwise a generic output failure could masquerade as the TLS gate. */
+    data.is_thread_local = false;
+    for (index = 0U; index < 2U; ++index) {
+        FILE *out;
+        char buffer[1024] = {0};
+        size_t length;
+        target.architecture = architectures[index];
+        config.architecture = architectures[index];
+        if (!minic_multi_direct_write_module(path, &target, NULL, 0U, false,
+                                             &module, &config, &diagnostic))
+            return false;
+        out = fopen(path, "rb");
+        if (out == NULL) return false;
+        length = fread(buffer, 1U, sizeof(buffer) - 1U, out);
+        if (fclose(out) != 0 || length == 0U ||
+            strstr(buffer, "core_tls_owner:\n") == NULL ||
+            strstr(buffer, ".size core_tls_owner,8\n") == NULL)
+            return false;
+    }
+    return true;
+}
+
+int main(int argc, char **argv) {
+    static const char file_asm_text[] =
+        ".data\n.quad weak_before\n.quad weak_after\n.quad weak_fn\n"
+        ".quad weak_after_fn\n.quad cross_function_owner\n"
+        ".quad cross_object_owner\n.quad missing_object\n.quad missing_fn\n";
+    MinicCoreTypeContext types = {0};
+    MinicCoreType word = {
+        .kind = MINIC_CORE_TYPE_INTEGER, .has_layout = true,
+        .size = 8U, .alignment = 8U
+    };
+    MinicCoreTypeId word_id;
+    MinicCoreModuleFragment zeros[2] = {
+        { .kind = MINIC_CORE_MODULE_FRAGMENT_ZERO, .byte_count = 8U },
+        { .kind = MINIC_CORE_MODULE_FRAGMENT_ZERO, .byte_count = 8U }
+    };
+    MinicCoreModuleGlobal globals[8] = {
+        { .name = "weak_before", .definition_kind = MINIC_CORE_MODULE_DEFINITION_DECLARATION,
+          .is_weak = true, .is_file_asm_root = true,
+          .alias_target_index = SIZE_MAX, .owner_function_index = SIZE_MAX },
+        { .name = "weak_before", .emittable = true, .storage_size = 8U,
+          .storage_alignment = 8U, .fragments = &zeros[0], .fragment_count = 1U,
+          .alias_target_index = SIZE_MAX, .owner_function_index = SIZE_MAX },
+        { .name = "weak_after", .emittable = true, .storage_size = 8U,
+          .storage_alignment = 8U, .fragments = &zeros[1], .fragment_count = 1U,
+          .alias_target_index = SIZE_MAX, .owner_function_index = SIZE_MAX },
+        { .name = "weak_after", .definition_kind = MINIC_CORE_MODULE_DEFINITION_DECLARATION,
+          .is_weak = true, .is_file_asm_root = true,
+          .alias_target_index = SIZE_MAX, .owner_function_index = SIZE_MAX },
+        { .name = "missing_object", .definition_kind = MINIC_CORE_MODULE_DEFINITION_DECLARATION,
+          .is_weak = true, .is_file_asm_root = true,
+          .alias_target_index = SIZE_MAX, .owner_function_index = SIZE_MAX },
+        { .name = "unused_object", .definition_kind = MINIC_CORE_MODULE_DEFINITION_DECLARATION,
+          .is_weak = true,
+          .alias_target_index = SIZE_MAX, .owner_function_index = SIZE_MAX },
+        /* An object-typed weak declaration has a FUNCTION definition owner. */
+        { .name = "cross_function_owner",
+          .definition_kind = MINIC_CORE_MODULE_DEFINITION_DECLARATION,
+          .is_weak = true, .is_file_asm_root = true,
+          .alias_target_index = SIZE_MAX, .owner_function_index = SIZE_MAX },
+        /* In the opposite order a strong OBJECT precedes a weak function. */
+        { .name = "cross_object_owner", .emittable = true,
+          .storage_size = 8U, .storage_alignment = 8U,
+          .fragments = &zeros[0], .fragment_count = 1U,
+          .alias_target_index = SIZE_MAX, .owner_function_index = SIZE_MAX }
+    };
+    MinicCoreModuleFunctionSymbol symbols[8] = {
+        { .name = "weak_fn", .is_weak = true, .is_file_asm_root = true,
+          .alias_target_index = SIZE_MAX, .storage_owner_function_index = SIZE_MAX },
+        { .name = "weak_fn", .is_defined = true, .is_referenced = true,
+          .alias_target_index = SIZE_MAX, .storage_owner_function_index = SIZE_MAX },
+        { .name = "weak_after_fn", .is_defined = true, .is_referenced = true,
+          .alias_target_index = SIZE_MAX, .storage_owner_function_index = SIZE_MAX },
+        { .name = "weak_after_fn", .is_weak = true, .is_file_asm_root = true,
+          .alias_target_index = SIZE_MAX, .storage_owner_function_index = SIZE_MAX },
+        { .name = "missing_fn", .is_weak = true, .is_file_asm_root = true,
+          .alias_target_index = SIZE_MAX, .storage_owner_function_index = SIZE_MAX },
+        { .name = "unused_fn", .is_weak = true,
+          .alias_target_index = SIZE_MAX, .storage_owner_function_index = SIZE_MAX },
+        { .name = "cross_function_owner", .is_defined = true,
+          .is_referenced = true,
+          .alias_target_index = SIZE_MAX, .storage_owner_function_index = SIZE_MAX },
+        { .name = "cross_object_owner", .is_weak = true,
+          .is_file_asm_root = true,
+          .alias_target_index = SIZE_MAX, .storage_owner_function_index = SIZE_MAX }
+    };
+    MinicCoreBlock entry = {
+        .has_terminator = true,
+        .terminator = { .kind = MINIC_CORE_TERMINATOR_RETURN,
+                        .return_value = MINIC_CORE_VALUE_INVALID }
+    };
+    MinicCoreFunction functions[8] = {0};
+    MinicCoreModuleFileAsm file_asm = {
+        .text = (char *)file_asm_text, .length = sizeof(file_asm_text) - 1U
+    };
+    MinicCoreModule module = {
+        .type_context = &types, .globals = globals,
+        .global_count = sizeof(globals) / sizeof(globals[0]),
+        .function_symbols = symbols,
+        .function_count = sizeof(symbols) / sizeof(symbols[0]),
+        .file_asms = &file_asm, .file_asm_count = 1U,
+        .finalized = true
+    };
+    MinicProgramEmitConfig config = {
+        .emit_function = emit_function, .between = emit_file_asm,
+        .selection = MINIC_PROGRAM_FUNCTION_LIVE_DEFINITIONS
+    };
+    MinicTargetInfo target = {0};
+    size_t index;
+    if (argc != 3) return 2;
+    minic_core_type_context_initialize(&types);
+    if (!minic_core_type_register(&types, &word, &word_id)) return 3;
+    for (index = 0U; index < 8U; ++index)
+        globals[index].core_type_id = word_id;
+    functions[1].name = "weak_fn";
+    functions[1].type_context = &types;
+    functions[1].blocks = &entry;
+    functions[1].block_count = 1U;
+    functions[2].name = "weak_after_fn";
+    functions[2].type_context = &types;
+    functions[2].blocks = &entry;
+    functions[2].block_count = 1U;
+    functions[6].name = "cross_function_owner";
+    functions[6].type_context = &types;
+    functions[6].blocks = &entry;
+    functions[6].block_count = 1U;
+    if (!minic_core_module_verify(&module) ||
+        !minic_program_emit_write_module(argv[1], &module, &target,
+            functions, 8U, false, &config, NULL, emit_object))
+        return 4;
+    if (!check_direct_tls(argv[2], &types, word_id)) return 5;
+    (void)remove(argv[2]);
+    minic_core_type_context_destroy(&types);
+    puts("MINIC_ELF_SYMBOL_OWNER_TLS=PASS same_kind_owner=4 cross_kind_owner=2 undefined_weak=2 direct_TLS_reject=2 direct_nonTLS_emit=2");
+    return 0;
+}
+
+/* No CALLs or stack objects are in this standalone Core fixture. */
+bool minic_core_object_storage_plan_build(
+    const MinicCoreFunction *function, MinicCoreObjectStoragePlan *plan) {
+    return function != NULL && plan != NULL && function->object_count == 0U;
+}
+void minic_core_object_storage_plan_destroy(MinicCoreObjectStoragePlan *plan) {
+    if (plan != NULL) *plan = (MinicCoreObjectStoragePlan){0};
+}
+bool minic_core_call_index_build(const MinicCoreFunction *function,
+                                 size_t expected, MinicCoreCallIndex *index) {
+    return function != NULL && expected == 0U && index != NULL;
+}
+void minic_core_call_index_destroy(MinicCoreCallIndex *index) {
+    if (index != NULL) *index = (MinicCoreCallIndex){0};
+}
+bool minic_core_function_verify(const MinicCoreFunction *function) {
+    return function != NULL && function->type_context != NULL &&
+           function->block_count == 1U && function->blocks != NULL;
+}
+bool minic_core_function_dump(FILE *output, const MinicCoreFunction *function) {
+    (void)output; (void)function;
+    return false;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/probe-program-emit-transaction.c"}
+#define _POSIX_C_SOURCE 200809L
+#include "target/common/program_emit.h"
+#include "target/common/elf_alias_emit.h"
+#include <stdbool.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+
+/* tmpfile() unconditionally allocates under the host's /tmp on some libc
+ * implementations, ignoring TMPDIR. Keep the transactional read/write
+ * fixture next to the caller-provided output path instead, and unlink it
+ * immediately so every failure/close remains self-cleaning. */
+static FILE *test_buffered_rw_stream(const char *path) {
+    static const char suffix[] = ".stream-XXXXXX";
+    const size_t size = strlen(path) + sizeof(suffix);
+    char *name = malloc(size);
+    FILE *stream;
+    int fd;
+    if (name == NULL) return NULL;
+    (void)snprintf(name, size, "%s%s", path, suffix);
+    fd = mkstemp(name);
+    if (fd < 0) { free(name); return NULL; }
+    if (unlink(name) != 0) {
+        (void)close(fd);
+        (void)remove(name);
+        free(name);
+        return NULL;
+    }
+    free(name);
+    stream = fdopen(fd, "w+b");
+    if (stream == NULL) (void)close(fd);
+    return stream;
+}
+
+/* Standalone host-level probe of the real five-target output transaction. */
+typedef struct TestContext {
+    unsigned int fail_stage, globals, functions, finalizations;
+} TestContext;
+
+static bool prefix(FILE *out, const MinicCoreModule *p,
+                   const MinicTargetInfo *t, const MinicCoreFunction *f,
+                   size_t n, bool sections, void *opaque) {
+    TestContext *ctx = opaque;
+    (void)p; (void)t; (void)f; (void)n; (void)sections;
+    return fputs("P\n", out) != EOF && ctx->fail_stage != 1U;
+}
+static bool fixture_global(FILE *out, const MinicCoreModule *p,
+                   const MinicTargetInfo *t, const MinicCoreModuleGlobal *obj,
+                   size_t index, void *opaque) {
+    TestContext *ctx = opaque;
+    (void)p; (void)t; (void)obj;
+    if (index != 0U) return false;
+    ++ctx->globals;
+    return fputs("G\n", out) != EOF && ctx->fail_stage != 2U;
+}
+static bool between(FILE *out, const MinicCoreModule *p,
+                    const MinicTargetInfo *t, const MinicCoreFunction *f,
+                    size_t n, bool sections, void *opaque) {
+    TestContext *ctx = opaque;
+    (void)p; (void)t; (void)f; (void)n; (void)sections;
+    return fputs("B\n", out) != EOF && ctx->fail_stage != 3U;
+}
+static bool function(FILE *out, const MinicCoreModule *p,
+                     const MinicTargetInfo *t,
+                     const MinicCoreModuleFunctionSymbol *module_decl,
+                     const MinicCoreFunction *f,
+                     const MinicCoreFunctionFacts *facts,
+                     const MinicCoreObjectStoragePlan *storage, size_t index,
+                     bool sections, void *opaque) {
+    TestContext *ctx = opaque;
+    (void)p; (void)t; (void)f; (void)sections;
+    if (p == NULL || module_decl == NULL) return false;
+    if (index != 0U || facts == NULL || storage == NULL ||
+        storage->count != 0U ||
+        facts->direct_call_count != 1U ||
+        facts->indirect_call_count != 1U ||
+        facts->variadic_address_count != 1U ||
+        facts->variadic_address_results == NULL ||
+        facts->variadic_address_results[0] != 0U ||
+        !facts->needs_saved_return_address ||
+        !facts->uses_structured_inline_asm ||
+        !facts->uses_dynamic_stack_alloc ||
+        facts->max_call_arity != 7U || facts->call_index == NULL ||
+        facts->verified_function != f ||
+        facts->reachable_blocks == NULL || !facts->reachable_blocks[0] ||
+        facts->value_use_counts == NULL)
+        return false;
+    ++ctx->functions;
+    return fputs("F\n", out) != EOF && ctx->fail_stage != 4U;
+}
+static bool finalize(const char *path, const MinicTargetInfo *t,
+                     void *opaque) {
+    TestContext *ctx = opaque;
+    FILE *in;
+    char data[64] = {0};
+    size_t bytes;
+    (void)t;
+    ++ctx->finalizations;
+    if (strstr(path, ".minic-") == NULL) return false;
+    in = fopen(path, "rb");
+    if (in == NULL) return false;
+    bytes = fread(data, 1U, sizeof(data) - 1U, in);
+    if (fclose(in) != 0) return false;
+    return bytes == strlen("P\nG\nB\nF\nT\n") &&
+           strcmp(data, "P\nG\nB\nF\nT\n") == 0 &&
+           ctx->fail_stage != 5U;
+}
+
+typedef struct ModuleTestContext {
+    const MinicCoreModule *module;
+    size_t globals;
+} ModuleTestContext;
+
+static bool module_global(FILE *out, const MinicCoreModule *module,
+                          const MinicTargetInfo *target,
+                          const MinicCoreModuleGlobal *object,
+                          size_t ordinal, void *opaque) {
+    ModuleTestContext *context = opaque;
+    (void)target;
+    if (module != context->module || ordinal != 0U || object == NULL ||
+        object->name == NULL || strcmp(object->name, "owned") != 0)
+        return false;
+    ++context->globals;
+    return fprintf(out, "G:%s\n", object->name) >= 0;
+}
+
+static bool module_between(FILE *out, const MinicCoreModule *module,
+                           const MinicTargetInfo *target,
+                           const MinicCoreFunction *functions,
+                           size_t function_count, bool sections, void *opaque) {
+    const ModuleTestContext *context = opaque;
+    (void)target; (void)functions; (void)function_count;
+    (void)sections;
+    return module == context->module &&
+           minic_program_emit_source_file_asm_module(out, module);
+}
+
+/* Module-only output owns immutable global/ASM and symbol-use evidence. */
+static int check_module_snapshot_output(const char *path) {
+    MinicCoreTypeContext types = {0};
+    MinicCoreType word = {
+        .kind = MINIC_CORE_TYPE_INTEGER, .has_layout = true,
+        .size = 8U, .alignment = 8U
+    };
+    MinicCoreTypeId word_id;
+    MinicCoreModuleReference reference = {
+        .kind = MINIC_CORE_MODULE_REFERENCE_OBJECT, .target_index = 1U
+    };
+    MinicCoreModuleFragment fragment = {
+        .kind = MINIC_CORE_MODULE_FRAGMENT_RELOCATION,
+        .byte_count = 8U,
+        .relocation_kind = MINIC_CORE_MODULE_RELOCATION_OBJECT,
+        .relocation_symbol = "weak_ext"
+    };
+    MinicCoreModuleGlobal globals[4] = {
+        { .name = "owned", .emittable = true, .fragments = &fragment,
+          .fragment_count = 1U, .references = &reference,
+          .reference_count = 1U, .storage_size = 8U,
+          .storage_alignment = 8U, .default_section = MINIC_CORE_MODULE_SECTION_DATA,
+          .alias_target_index = SIZE_MAX, .owner_function_index = SIZE_MAX },
+        { .name = "weak_ext", .definition_kind = MINIC_CORE_MODULE_DEFINITION_DECLARATION,
+          .is_weak = true,
+          .visibility = MINIC_CORE_MODULE_VISIBILITY_HIDDEN,
+          .alias_target_index = SIZE_MAX, .owner_function_index = SIZE_MAX },
+        { .name = "unused_hidden", .definition_kind = MINIC_CORE_MODULE_DEFINITION_DECLARATION,
+          .visibility = MINIC_CORE_MODULE_VISIBILITY_HIDDEN,
+          .alias_target_index = SIZE_MAX, .owner_function_index = SIZE_MAX },
+        /* Real ModuleIR ingress seals lexical raw file-ASM references into
+         * this ownership bit. A hand-built module must carry that fact too;
+         * the output writer must not parse source ASM a second time. */
+        { .name = "asm_weak", .definition_kind = MINIC_CORE_MODULE_DEFINITION_DECLARATION,
+          .is_weak = true,
+          .is_file_asm_root = true,
+          .visibility = MINIC_CORE_MODULE_VISIBILITY_HIDDEN,
+          .alias_target_index = SIZE_MAX, .owner_function_index = SIZE_MAX }
+    };
+    MinicCoreModuleFileAsm file_asm = { " .quad asm_weak", 15U };
+    MinicCoreModule module = {
+        .type_context = &types,
+        .globals = globals, .global_count = 4U,
+        .file_asms = &file_asm, .file_asm_count = 1U,
+        .finalized = true
+    };
+    MinicTargetInfo target = {0};
+    MinicProgramEmitConfig config = {
+        .emit_function = function,
+        .between = module_between,
+        .trailer = "T\n",
+        .selection = MINIC_PROGRAM_FUNCTION_LIVE_DEFINITIONS
+    };
+    ModuleTestContext context = { .module = &module };
+    FILE *in;
+    char data[4096] = {0};
+    size_t count;
+    minic_core_type_context_initialize(&types);
+    if (!minic_core_type_register(&types, &word, &word_id)) return 19;
+    globals[0].core_type_id = word_id;
+    if (!minic_program_emit_write_module(
+            path, &module, &target, NULL, 0U, false,
+            &config, &context, module_global)) return 1;
+    in = fopen(path, "rb");
+    if (in == NULL) return 2;
+    count = fread(data, 1U, sizeof(data) - 1U, in);
+    if (fclose(in) != 0 || count == 0U || context.globals != 1U ||
+        strstr(data, ".weak weak_ext\n.hidden weak_ext\n") == NULL ||
+        strstr(data, ".weak asm_weak\n.hidden asm_weak\n") == NULL ||
+        strstr(data, "G:owned\n") == NULL ||
+        strstr(data, ".text\n .quad asm_weak\n.text\n") == NULL ||
+        strstr(data, "unused_hidden") != NULL ||
+        strstr(data, "poison_source") != NULL) return 3;
+    /* Repeated output is deterministic from the same sealed module. */
+    context.globals = 0U;
+    if (!minic_program_emit_write_module(
+            path, &module, &target, NULL, 0U, false,
+            &config, &context, module_global)) return 12;
+    in = fopen(path, "rb");
+    if (in == NULL) return 13;
+    (void)memset(data, 0, sizeof(data));
+    count = fread(data, 1U, sizeof(data) - 1U, in);
+    if (fclose(in) != 0 || count == 0U || context.globals != 1U ||
+        strstr(data, ".weak weak_ext\n.hidden weak_ext\n") == NULL ||
+        strstr(data, ".weak asm_weak\n.hidden asm_weak\n") == NULL ||
+        strstr(data, "G:owned\n") == NULL ||
+        strstr(data, ".text\n .quad asm_weak\n.text\n") == NULL ||
+        strstr(data, "poison_source") != NULL) return 14;
+    /* The emitted .weak/.hidden directives and unused-symbol exclusion above
+     * exercise the real private symbol-use collector through its output. */
+    module.finalized = false;
+    if (minic_program_emit_write_module(
+            path, &module, &target, NULL, 0U, false,
+            &config, &context, module_global)) return 4;
+    module.finalized = true;
+    fragment.relocation_symbol = NULL;
+    if (minic_program_emit_write_module(
+            path, &module, &target, NULL, 0U, false,
+            &config, &context, module_global)) return 8;
+    fragment.relocation_symbol = "weak_ext";
+    {
+        MinicCoreModuleFunctionSymbol symbols[2] = {
+            { .name = "real_fn", .is_defined = true, .alias_target_index = SIZE_MAX,
+              .storage_owner_function_index = SIZE_MAX },
+            { .name = "alias_fn", .alias_target_index = 0U,
+              .storage_owner_function_index = SIZE_MAX }
+        };
+        MinicCoreModuleGlobal alias = {
+            .name = "alias_obj", .definition_kind = MINIC_CORE_MODULE_DEFINITION_DECLARATION,
+            .alias_target_index = 0U
+        };
+        FILE *tmp = test_buffered_rw_stream(path);
+        if (tmp == NULL) return 5;
+        module.function_symbols = symbols;
+        module.function_count = 2U;
+        alias.alias_target_index = module.global_count;
+        if (minic_multi_elf_emit_module_object_alias(
+                tmp, &module, &alias, "@object"))
+            { (void)fclose(tmp); return 15; }
+        alias.alias_target_index = 1U; /* undefined weak is not an alias owner */
+        if (minic_multi_elf_emit_module_object_alias(
+                tmp, &module, &alias, "@object"))
+            { (void)fclose(tmp); return 16; }
+        alias.alias_target_index = 0U;
+        symbols[1].alias_target_index = 2U;
+        if (minic_multi_elf_emit_module_function_aliases(
+                tmp, &module, "@function"))
+            { (void)fclose(tmp); return 17; }
+        symbols[1].alias_target_index = 0U;
+        if (ftell(tmp) != 0L) { (void)fclose(tmp); return 18; }
+        if (!minic_multi_elf_emit_module_object_alias(
+                tmp, &module, &alias, "@object") ||
+            !minic_multi_elf_emit_module_function_aliases(
+                tmp, &module, "@function") || fseek(tmp, 0L, SEEK_SET) != 0)
+            { (void)fclose(tmp); return 6; }
+        (void)memset(data, 0, sizeof(data));
+        count = fread(data, 1U, sizeof(data) - 1U, tmp);
+        if (fclose(tmp) != 0 || count == 0U ||
+            strstr(data, ".set alias_obj, owned\n") == NULL ||
+            strstr(data, ".set alias_fn, real_fn\n") == NULL) return 7;
+    }
+    minic_core_type_context_destroy(&types);
+    (void)remove(path);
+    return 0;
+}
+
+int main(int argc, char **argv) {
+    MinicCoreType scalar = {
+        .kind = MINIC_CORE_TYPE_INTEGER, .has_layout = true,
+        .size = 8U, .alignment = 8U
+    };
+    MinicCoreTypeId scalar_id;
+    MinicCoreModuleFragment zero = {
+        .kind = MINIC_CORE_MODULE_FRAGMENT_ZERO, .byte_count = 8U
+    };
+    MinicCoreModuleGlobal object = {
+        .name = "fixture_global", .emittable = true,
+        .storage_size = 8U, .storage_alignment = 8U,
+        .default_section = MINIC_CORE_MODULE_SECTION_BSS,
+        .fragments = &zero, .fragment_count = 1U,
+        .alias_target_index = SIZE_MAX, .owner_function_index = SIZE_MAX
+    };
+    MinicCoreModuleFunctionSymbol declaration = {
+        .name = "fixture_function", .is_defined = true,
+        .is_referenced = true, .alias_target_index = SIZE_MAX,
+        .storage_owner_function_index = SIZE_MAX
+    };
+    MinicCoreFunction ir = {0};
+    MinicCoreTypeContext synthetic_types = {0};
+    /* Transaction callbacks use six global instructions for fact coverage,
+     * but executable Core must still have a valid, reachable entry block. */
+    MinicCoreBlock entry_block = {
+        .terminator = { .kind = MINIC_CORE_TERMINATOR_RETURN,
+                        .return_value = MINIC_CORE_VALUE_INVALID },
+        .has_terminator = true
+    };
+    MinicCoreInstruction instructions[6] = {
+        { .kind = MINIC_CORE_INSTRUCTION_CALL, .value.call = { .argument_count = 7U } },
+        { .kind = MINIC_CORE_INSTRUCTION_INDIRECT_CALL, .value.indirect_call = { .argument_count = 3U } },
+        { .kind = MINIC_CORE_INSTRUCTION_DYNAMIC_STACK_ALLOC },
+        { .kind = MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM },
+        { .kind = MINIC_CORE_INSTRUCTION_VARIADIC_ARGUMENT_ADDRESS },
+        { .kind = MINIC_CORE_INSTRUCTION_CALL_FRAME_ADDRESS }
+    };
+    MinicCoreModule module = {
+        .type_context = &synthetic_types,
+        .globals = &object, .global_count = 1U,
+        .function_symbols = &declaration, .function_count = 1U,
+        .finalized = true
+    };
+    MinicTargetInfo target = {0};
+    MinicProgramEmitConfig config = {
+        .emit_function = function,
+        .prefix = prefix,
+        .between = between,
+        .trailer = "T\n",
+        .finalize = finalize,
+        .selection = MINIC_PROGRAM_FUNCTION_LIVE_DEFINITIONS,
+        .continue_after_failure = false,
+    };
+    TestContext ctx = {0};
+    unsigned int stage;
+    const char *path;
+    if (argc != 2) return 2;
+    path = argv[1];
+    minic_core_type_context_initialize(&synthetic_types);
+    if (!minic_core_type_register(&synthetic_types, &scalar, &scalar_id)) return 3;
+    object.core_type_id = scalar_id;
+    instructions[5].value.call_frame_address.kind = MINIC_CORE_CALL_FRAME_ADDRESS_RETURN;
+    ir.instructions = instructions;
+    ir.type_context = &synthetic_types;
+    ir.instruction_count = sizeof(instructions) / sizeof(instructions[0]);
+    ir.blocks = &entry_block;
+    ir.block_count = 1U;
+    ir.entry_block = 0U;
+    target.data_layout = &(MinicDataLayout){0};
+    for (stage = 0U; stage <= 5U; ++stage) {
+        FILE *existing;
+        bool result;
+        (void)remove(path);
+        (void)memset(&ctx, 0, sizeof(ctx));
+        ctx.fail_stage = stage;
+        result = minic_program_emit_write_module(
+            path, &module, &target, &ir, 1U, false, &config, &ctx,
+            fixture_global);
+        existing = fopen(path, "rb");
+        if (result != (stage == 0U) ||
+            (existing != NULL) != (stage == 0U) ||
+            ctx.globals != (stage == 1U ? 0U : 1U) ||
+            ctx.functions != (stage == 0U || stage >= 4U ? 1U : 0U)) {
+            if (existing != NULL) (void)fclose(existing);
+            return (int)stage + 10;
+        }
+        if (existing != NULL) (void)fclose(existing);
+    }
+    /* Census keeps scanning after a failed global, but leaves no partial .s. */
+    config.continue_after_failure = true;
+    (void)memset(&ctx, 0, sizeof(ctx));
+    ctx.fail_stage = 2U;
+    (void)remove(path);
+    if (minic_program_emit_write_module(
+            path, &module, &target, &ir, 1U, false,
+            &config, &ctx, fixture_global) ||
+        ctx.globals != 1U || ctx.functions != 1U)
+        return 20;
+    {
+        FILE *leaked = fopen(path, "rb");
+        if (leaked != NULL) {
+            (void)fclose(leaked);
+            return 21;
+        }
+    }
+    /* Module definitions select the shared Core function-plan builder. */
+    {
+        MinicCoreModuleFunctionSymbol module_decl = {
+            .name = "sealed_function", .is_defined = true, .is_referenced = true,
+            .alias_target_index = SIZE_MAX, .storage_owner_function_index = SIZE_MAX
+        };
+        MinicCoreModule owned_module = {
+            .function_symbols = &module_decl, .function_count = 1U,
+            .finalized = true
+        };
+        FILE *probe = test_buffered_rw_stream(path);
+        if (probe == NULL) return 41;
+        (void)memset(&ctx, 0, sizeof(ctx));
+        if (!minic_program_visit_prepared_functions_module(
+                probe, &owned_module, &target, &ir, 1U, false,
+                MINIC_PROGRAM_FUNCTION_LIVE_DEFINITIONS, false,
+                function, &ctx) || ctx.functions != 1U) {
+            (void)fclose(probe);
+            return 42;
+        }
+        if (fclose(probe) != 0) return 43;
+        /* A missing sealed Module cannot sneak through the machine visitor. */
+        probe = test_buffered_rw_stream(path);
+        if (probe == NULL) return 44;
+        (void)memset(&ctx, 0, sizeof(ctx));
+        if (minic_program_visit_prepared_functions_module(
+                probe, NULL, &target, &ir, 1U, false,
+                MINIC_PROGRAM_FUNCTION_LIVE_DEFINITIONS, false,
+                function, &ctx) || ctx.functions != 0U) {
+            (void)fclose(probe);
+            return 45;
+        }
+        if (fclose(probe) != 0) return 46;
+    }
+    {
+        const int snapshot_result = check_module_snapshot_output(path);
+        if (snapshot_result != 0) {
+            (void)fprintf(stderr, "MODULE_SNAPSHOT_TRANSACTION_FAILED=%d\n",
+                          snapshot_result);
+            return 50;
+        }
+    }
+    puts("MINIC_CORE_MODULE_SYMBOL_TRANSACTION=PASS no_C_program_global=file_asm=1 weak_hidden=2 alias=2 invalid_reject=2");
+    (void)remove(path);
+    /* Errors at every stage must leave the previous successful output
+     * untouched; this distinguishes atomic replacement from unlink rollback. */
+    config.continue_after_failure = false;
+    for (stage = 1U; stage <= 5U; ++stage) {
+        FILE *original = fopen(path, "wb");
+        FILE *existing;
+        char data[32] = {0};
+        size_t n;
+        if (original == NULL || fputs("ORIGINAL\n", original) == EOF ||
+            fclose(original) != 0) return 30;
+        (void)memset(&ctx, 0, sizeof(ctx));
+        ctx.fail_stage = stage;
+        if (minic_program_emit_write_module(path, &module, &target, &ir, 1U,
+                                      false, &config, &ctx,
+                                      fixture_global)) return 31;
+        existing = fopen(path, "rb");
+        if (existing == NULL) return 32;
+        n = fread(data, 1U, sizeof(data) - 1U, existing);
+        if (fclose(existing) != 0 || n != strlen("ORIGINAL\n") ||
+            strcmp(data, "ORIGINAL\n") != 0) return 33;
+    }
+    (void)memset(&ctx, 0, sizeof(ctx));
+    if (!minic_program_emit_write_module(path, &module, &target, &ir, 1U,
+                                  false, &config, &ctx, fixture_global)) return 34;
+    {
+        FILE *in = fopen(path, "rb");
+        char data[64] = {0};
+        if (in == NULL || fread(data, 1U, sizeof(data) - 1U, in) !=
+                          strlen("P\nG\nB\nF\nT\n") ||
+            fclose(in) != 0 || strcmp(data, "P\nG\nB\nF\nT\n") != 0)
+            return 35;
+    }
+    (void)remove(path);
+    puts("MINIC_FIVE_TARGET_OUTPUT_TRANSACTION=PASS failures=5 rollback=5 census=1 atomic_preserve=5");
+    minic_core_type_context_destroy(&synthetic_types);
+    return 0;
+}
+
+/* The host-native transaction probe has no type-layout dependency. For
+ * zero-object test functions, the real builder and this small test stub
+ * have identical success/cleanup semantics. Architecture runtime gates
+ * always link the production Core storage implementation. */
+bool minic_core_object_storage_plan_build(
+    const MinicCoreFunction *fn, MinicCoreObjectStoragePlan *plan) {
+    return fn != NULL && plan != NULL &&
+           fn->object_count == 0U && plan->objects == NULL;
+}
+void minic_core_object_storage_plan_destroy(MinicCoreObjectStoragePlan *plan) {
+    if (plan != NULL) *plan = (MinicCoreObjectStoragePlan){0};
+}
+
+/* The transaction test deliberately uses synthetic, not semantically valid,
+ * CALL instructions to test rollback after failed output stages. Its host
+ * stub is isolated from the real separately tested semantic CALL index. */
+bool minic_core_call_index_build(const MinicCoreFunction *fn,
+                                 size_t expected, MinicCoreCallIndex *index) {
+    return fn != NULL && expected == 2U && index != NULL &&
+           index->sites == NULL && index->count == 0U;
+}
+void minic_core_call_index_destroy(MinicCoreCallIndex *index) {
+    if (index != NULL) *index = (MinicCoreCallIndex){0};
+}
+
+/* The transaction test uses intentionally synthetic CALL operands. Its
+ * standalone verifier stub tests output lifetime without linking the real
+ * Core verifier, which is covered by product compiler regression gates. */
+bool minic_core_function_verify(const MinicCoreFunction *fn) {
+    return fn != NULL && fn->instruction_count == 6U &&
+           fn->instructions != NULL;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/probe-typed-extended-float-runtime.c"}
+/* A real C symbol named like a compiler-runtime helper must remain an
+ * ordinary external call.  Core's intrinsic wide arithmetic is separately
+ * identified by its typed operation, regardless of symbol spelling. */
+long double __addtf3(long double left, long double right) {
+    return left + right + 2.0L;
+}
+
+long double call_named_helper(long double left, long double right) {
+    return __addtf3(left, right);
+}
+
+long double call_typed_add(long double left, long double right) {
+    return left + right;
+}
+
+int call_typed_less(long double left, long double right) {
+    return left < right;
+}
+
+int call_typed_less_equal(long double left, long double right) {
+    return left <= right;
+}
+
+int main(void) {
+    long double left = 1.0L;
+    long double right = 2.0L;
+    return call_named_helper(left, right) == 5.0L &&
+           call_typed_add(left, right) == 3.0L &&
+           call_typed_less(left, right) == 1 &&
+           call_typed_less(right, left) == 0 &&
+           call_typed_less_equal(left, left) == 1 &&
+           call_typed_less_equal(right, left) == 0 ? 42 : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/promoted_static_record_designator.c"}
+static int btf_id;
+
+struct proto {
+    int ret_type;
+    union {
+        struct {
+            int arg1_type;
+            int *arg1_btf_id;
+        };
+        long storage[2];
+    };
+};
+
+static struct proto value = {
+    .ret_type = 1,
+    .arg1_type = 2,
+    .arg1_btf_id = &btf_id,
+};
+
+int main(void) {
+    return value.ret_type != 1 || value.arg1_type != 2 || value.arg1_btf_id != &btf_id;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/qualified_array_address_const_reject.c"}
+struct Flexible {
+    unsigned long prefix;
+    unsigned char bytes[];
+};
+void cannot_modify_const_flexible_array(const struct Flexible *owner) {
+    owner->bytes[0] = 12U;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/qualified_array_address_verifier.c"}
+/* GNU Linux 6.6.143 frequently takes the address of a flexible array
+ * member through a const-qualified record pointer.  The address expression
+ * has a pointer-to-qualified-incomplete-array type; the declaration's
+ * interned array descriptor remains unqualified.  Both descriptions must
+ * agree after applying the enclosing lvalue qualifiers. */
+struct Flexible {
+    unsigned long prefix;
+    unsigned char bytes[];
+};
+struct GnuZero {
+    unsigned long prefix;
+    unsigned char bytes[0];
+};
+struct Fixed {
+    unsigned long prefix;
+    unsigned char bytes[4];
+};
+struct Multi {
+    unsigned long prefix;
+    unsigned int bytes[2][3];
+};
+
+static const struct Flexible flexible = { 17UL };
+static volatile struct GnuZero zero = { 19UL };
+static const volatile struct Fixed fixed = { 23UL, { 1U, 2U, 3U, 4U } };
+static const struct Multi multi = { 29UL, { { 1U, 2U, 3U }, { 4U, 5U, 6U } } };
+
+const void *flexible_address(const struct Flexible *owner) {
+    return (const void *)&owner->bytes;
+}
+volatile void *zero_address(volatile struct GnuZero *owner) {
+    return (volatile void *)&owner->bytes;
+}
+const volatile void *fixed_address(const volatile struct Fixed *owner) {
+    return (const volatile void *)&owner->bytes;
+}
+const void *multi_address(const struct Multi *owner) {
+    return (const void *)&owner->bytes;
+}
+
+int main(void) {
+    return flexible_address(&flexible) !=
+               (const void *)((const unsigned char *)&flexible +
+                              __builtin_offsetof(struct Flexible, bytes)) ||
+           zero_address(&zero) !=
+               (volatile void *)((volatile unsigned char *)&zero +
+                                 __builtin_offsetof(struct GnuZero, bytes)) ||
+           fixed_address(&fixed) !=
+               (const volatile void *)((const volatile unsigned char *)&fixed +
+                                       __builtin_offsetof(struct Fixed, bytes)) ||
+           multi_address(&multi) !=
+               (const void *)((const unsigned char *)&multi +
+                              __builtin_offsetof(struct Multi, bytes));
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/qualified_array_address_wrong_element_reject.c"}
+struct Flexible {
+    unsigned long prefix;
+    unsigned char bytes[];
+};
+void incompatible_array_element_pointer(const struct Flexible *owner) {
+    const unsigned short (*wrong)[] = &owner->bytes;
+    (void)wrong;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/restrict_qualifiers.c"}
+extern void *
+copy_gnu(void *__restrict destination, const void *__restrict source, unsigned long count);
+extern void *copy_gnu_double(void *__restrict__ destination,
+                             const void *__restrict__ source,
+                             unsigned long count);
+extern void *copy_c(void *restrict destination, const void *restrict source, unsigned long count);
+
+void *call_restrict_forms(void *destination, const void *source) {
+    copy_gnu(destination, source, 4);
+    copy_gnu_double(destination, source, 4);
+    return copy_c(destination, source, 4);
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/riscv64i_freestanding_integer_ops.c"}
+/* Real RV64I Linux needs arithmetic which never imports libgcc symbols.
+ * Keep these functions reachable: GNU Kbuild links the original operations
+ * from 2064 independent C owners without a hosted libgcc runtime. */
+typedef unsigned long long u64;
+typedef long long s64;
+typedef unsigned __int128 u128;
+typedef __int128 s128;
+
+u64 rv64i_linux_umul(u64 a, u64 b) { return a * b; }
+u64 rv64i_linux_udiv(u64 a, u64 b) { return a / b; }
+u64 rv64i_linux_umod(u64 a, u64 b) { return a % b; }
+s64 rv64i_linux_smul(s64 a, s64 b) { return a * b; }
+s64 rv64i_linux_sdiv(s64 a, s64 b) { return a / b; }
+s64 rv64i_linux_smod(s64 a, s64 b) { return a % b; }
+s128 rv64i_linux_multi3(s128 a, s128 b) { return a * b; }
+u128 rv64i_linux_umulti3(u128 a, u128 b) { return a * b; }
+
+/* Actual Linux io_uring / fbcon checked-overflow operand shapes. */
+int rv64i_linux_mixed_mul(int signed_input, unsigned int unsigned_input,
+                          int *result) {
+    return __builtin_mul_overflow(signed_input, unsigned_input, result);
+}
+int rv64i_linux_checked_add(unsigned long wide, int narrow, int *result) {
+    return __builtin_add_overflow(wide, narrow, result);
+}
+
+/* C makes INT64_MIN / -1 undefined; the backend must nonetheless not depend
+ * on a libgcc helper for its division sequence. Compile this shape, but do
+ * not execute the undefined arithmetic pair in the runtime oracle. */
+s64 rv64i_linux_div_min_candidate(s64 divisor) {
+    return (-9223372036854775807LL - 1LL) / divisor;
+}
+
+int main(void) {
+    volatile u64 dividend = 0xfedcba9876543210ULL;
+    volatile u64 divisor = 123456789ULL;
+    volatile s64 signed_dividend = -777777777777LL;
+    volatile s64 signed_divisor = 12345LL;
+    u64 quotient = rv64i_linux_udiv(dividend, divisor);
+    u64 remainder = rv64i_linux_umod(dividend, divisor);
+    s64 signed_quotient = rv64i_linux_sdiv(signed_dividend, signed_divisor);
+    s64 signed_remainder = rv64i_linux_smod(signed_dividend, signed_divisor);
+    int checked = 0;
+    if (quotient * divisor + remainder != dividend || remainder >= divisor)
+        return 1;
+    if (signed_quotient * signed_divisor + signed_remainder != signed_dividend)
+        return 2;
+    if (signed_remainder >= 0 || signed_remainder <= -signed_divisor)
+        return 3;
+    if (rv64i_linux_umul(0xffffffffffffffffULL, 3ULL) !=
+        0xfffffffffffffffdULL)
+        return 4;
+    if (rv64i_linux_smul(-17LL, 19LL) != -323LL)
+        return 5;
+    if (rv64i_linux_multi3((s128)-1234567, (s128)9876543) !=
+        (s128)-12193254061881LL)
+        return 6;
+    if (rv64i_linux_umulti3((u128)1234567, (u128)9876543) !=
+        (u128)12193254061881ULL)
+        return 7;
+    if (rv64i_linux_mixed_mul(-2, 3U, &checked) || checked != -6)
+        return 8;
+    if (!rv64i_linux_checked_add(~0UL, 1, &checked) || checked != 0)
+        return 9;
+    if (rv64i_linux_sdiv((-9223372036854775807LL - 1LL), 2) !=
+        -4611686018427387904LL)
+        return 10;
+    return 42;
+}
+
+#ifdef RISCV_GUEST
+__asm__(".globl _start\n"
+        "_start:\n"
+        " call main\n"
+        " li a7, 93\n"
+        " ecall\n");
+#endif
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/shared_function_declarator.c"}
+typedef int (UnaryFunction)(int);
+
+struct ctl_table;
+typedef unsigned long size_t;
+typedef long loff_t;
+/* Linux sysctl.h shape: a typedef names the function type itself. */
+typedef int proc_handler(struct ctl_table *ctl, int write, void *buffer,
+                         size_t *lenp, loff_t *ppos);
+
+struct ProcOps {
+    proc_handler *handler;
+};
+
+struct Ops {
+    int (*run)(int);
+};
+
+extern int (*external_hook)(int);
+
+static int add_one(int value)
+{
+    return value + 1;
+}
+
+static int apply(int (*function)(int), int value)
+{
+    return function(value);
+}
+
+static void discard(int value)
+{
+    (void)value;
+}
+
+static int apply_local(int value)
+{
+    void (*notify)(int);
+    int (*transform)(int);
+    int (ordinary) = value;
+
+    notify = discard;
+    transform = add_one;
+    notify(ordinary);
+    return transform(ordinary);
+}
+
+struct Rq {
+    int value;
+};
+
+static void observe_rq(struct Rq *rq)
+{
+    (void)rq;
+}
+
+static void apply_casted_callback(void *raw, struct Rq *rq)
+{
+    void (*function)(struct Rq *);
+
+    function = (void (*)(struct Rq *))raw;
+    function(rq);
+}
+
+static int proc_impl(struct ctl_table *ctl, int write, void *buffer,
+                     size_t *lenp, loff_t *ppos)
+{
+    (void)ctl;
+    (void)buffer;
+    (void)lenp;
+    (void)ppos;
+    return write;
+}
+
+static int apply_proc(proc_handler *handler)
+{
+    return handler((struct ctl_table *)0, 42, (void *)0, (size_t *)0, (loff_t *)0);
+}
+
+int main(void)
+{
+    struct Rq rq;
+
+    rq.value = 7;
+    apply_casted_callback((void *)observe_rq, &rq);
+    return (apply(add_one, 41) - 42) + (apply_proc(proc_impl) - 42) +
+           (apply_local(41) - 42);
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/short_integer_layout.c"}
+struct short_layout {
+    unsigned char first;
+    unsigned short second;
+    unsigned int third;
+};
+
+static struct short_layout layout;
+static unsigned short initialized = 65535;
+
+unsigned short read_second(void) {
+    return layout.second;
+}
+
+void write_second(unsigned short value) {
+    layout.second = value;
+}
+
+short narrow_signed(int value) {
+    return value;
+}
+
+int main(void) {
+    write_second(initialized);
+    return read_second() == 65535 && narrow_signed(65535) == -1 ? 0 : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/signed_char_semantics.c"}
+static signed char signed_value = 254;
+static unsigned char unsigned_value = 254;
+static char plain_value = 255;
+
+int main(void) {
+    signed char local = 0;
+    signed char *signed_pointer = &signed_value;
+    unsigned char *unsigned_pointer = &unsigned_value;
+    char *plain_pointer = &plain_value;
+
+    local = *signed_pointer;
+    return local == -2 && *unsigned_pointer == 254 && *plain_pointer == 255 ? 0 : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/small_record_copy_return.c"}
+typedef struct {
+    unsigned value;
+} one_t;
+typedef struct {
+    unsigned lo;
+    unsigned hi;
+} two_t;
+static one_t make_one(unsigned value) {
+    one_t out = {value};
+    return out;
+}
+one_t choose_one(int condition, const one_t *stored) {
+    return condition ? *stored : make_one(7U);
+}
+two_t assign_and_return(two_t *dst, two_t *src) {
+    return *dst = *src;
+}
+int main(void) {
+    one_t one = {3U};
+    two_t a = {1U, 2U};
+    two_t b = {4U, 5U};
+    one_t r = choose_one(1, &one);
+    two_t p = assign_and_return(&a, &b);
+    return (int)(r.value + p.lo + p.hi - 12U);
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/stack_fixed_arguments.c"}
+int gcc_abi_sum9(int a, int b, int c, int d, int e, int f, int g, int h, int i);
+
+int minic_abi_sum9(int a, int b, int c, int d, int e, int f, int g, int h, int i) {
+    return a + 2 * b + 3 * c + 4 * d + 5 * e + 6 * f + 7 * g + 8 * h + 9 * i;
+}
+
+int minic_call_gcc9(void) {
+    return gcc_abi_sum9(1, 2, 3, 4, 5, 6, 7, 8, 9);
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/stack_fixed_arguments_gcc.c"}
+int minic_abi_sum9(int a, int b, int c, int d, int e, int f, int g, int h, int i);
+int minic_call_gcc9(void);
+
+int gcc_abi_sum9(int a, int b, int c, int d, int e, int f, int g, int h, int i) {
+    return a + 2 * b + 3 * c + 4 * d + 5 * e + 6 * f + 7 * g + 8 * h + 9 * i;
+}
+
+int main(void) {
+    if (minic_abi_sum9(1, 2, 3, 4, 5, 6, 7, 8, 9) != 285) {
+        return 41;
+    }
+    if (minic_call_gcc9() != 285) {
+        return 42;
+    }
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/switch_nested_break_rv64.c"}
+#define CHECKVAL(res) { if ((res) == -1) break; }
+
+static int calls;
+
+static int guarded_api(void)
+{
+    calls += 1;
+    return -1;
+}
+
+static int exercise(int option)
+{
+    switch (option) {
+    case 6: {
+        int res = guarded_api();
+        CHECKVAL(res);
+        return 60;
+    }
+    case 7:
+        return guarded_api();
+    case 8:
+        return guarded_api();
+    default:
+        return guarded_api();
+    }
+    return calls == 1 ? 23 : 99;
+}
+
+int main(void)
+{
+    int result = exercise(6);
+    if (result != 23)
+        return 1;
+    if (calls != 1)
+        return 2;
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/switch_typed_consteval.c"}
+typedef unsigned char u8;
+typedef u8 blk_status_t;
+
+struct pointer_case_item {
+    int value;
+};
+
+int linux_casted_case(blk_status_t error) {
+    switch (error) {
+    case ((blk_status_t)1):
+        return 1;
+    case ((blk_status_t)(1 + 2)):
+        return 3;
+    case ((blk_status_t)4)...((blk_status_t)(2 + 4)):
+        return 4;
+    default:
+        return 0;
+    }
+}
+
+int typed_narrowing_case(unsigned int value) {
+    switch (value) {
+    case ((u8)257):
+        return 1;
+    case ((u8)-1):
+        return 255;
+    default:
+        return 0;
+    }
+}
+
+int pointer_integer_roundtrip_case(unsigned long value) {
+    switch (value) {
+    case (unsigned long)((struct pointer_case_item *)1):
+        return 1;
+    case (unsigned long)((struct pointer_case_item *)(1 + 2)):
+        return 3;
+    default:
+        return 0;
+    }
+}
+
+int unsigned_64_case(unsigned long value) {
+    switch (value) {
+    case (3UL | (1UL << 63)):
+        return 1;
+    case -4ULL:
+        return 2;
+    default:
+        return 0;
+    }
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/symbolic_inline_two_callers.c"}
+/* Two callers must not share caller-specific symbolic facts in a single AST. */
+static int first_value = 11;
+static int second_value = 29;
+
+static inline int read_selected(int *value, int condition) {
+    if (condition)
+        return *value;
+    return -*value;
+}
+
+static inline int forward_selected(int *value, int condition) {
+    return read_selected(value, condition);
+}
+
+int first_route(void) {
+    return forward_selected(&first_value, 1);
+}
+
+int second_route(void) {
+    return forward_selected(&second_value, 0);
+}
+
+int dynamic_route(int *value, int condition) {
+    return forward_selected(value, condition);
+}
+
+int main(void) {
+    return first_route() == 11 && second_route() == -29 &&
+                   dynamic_route(&first_value, 1) == 11 &&
+                   dynamic_route(&second_value, 0) == -29
+               ? 0 : 1;
+}
+@@@ end

@@ -1,0 +1,76 @@
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_duplicate_block_local.c"}
+int main(void)
+{
+    if (1) {
+        int value = 1;
+        int value = 2;
+        return value;
+    }
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_duplicate_case.c"}
+int main(void)
+{
+    switch (1) {
+    case 1:
+        break;
+    case 1:
+        break;
+    }
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_duplicate_default.c"}
+int main(void)
+{
+    switch (1) {
+    default:
+        break;
+    default:
+        break;
+    }
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_duplicate_record_definition.c"}
+struct Item {
+    int first;
+};
+
+struct Item {
+    int second;
+};
+
+int main(void)
+{
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_duplicate_record_field.c"}
+struct Pair {
+    int value;
+    int value;
+};
+
+int main(void)
+{
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_duplicate_typedef.c"}
+typedef int value_t;
+typedef int value_t;
+
+int main(void)
+{
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_duplicate_unsigned_local.c"}
+int main(void)
+{
+    unsigned value, value;
+    return 0;
+}
+@@@ end

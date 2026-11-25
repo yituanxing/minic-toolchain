@@ -1,0 +1,238 @@
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/enum_constant_expression.c"}
+enum Token {
+    TOKEN_FIRST = (255 + 1),
+    TOKEN_SECOND = TOKEN_FIRST + 2,
+    TOKEN_THIRD = (2 * 3) + TOKEN_SECOND,
+    WORK_OFFQ_POOL_SHIFT_LIKE = 33,
+    WORK_OFFQ_LEFT_LIKE = 64 - WORK_OFFQ_POOL_SHIFT_LIKE,
+    WORK_OFFQ_POOL_BITS_LIKE =
+        WORK_OFFQ_LEFT_LIKE <= 31 ? WORK_OFFQ_LEFT_LIKE : 31,
+    TOKEN_LOGICAL = TOKEN_SECOND > 200 && TOKEN_FIRST == 256 ? 9 : 10,
+    TOKEN_SHORT_CIRCUIT = 0 ? (1 / 0) : 7
+};
+
+_Static_assert(TOKEN_FIRST == 256, "enum arithmetic");
+_Static_assert(TOKEN_SECOND == 258, "prior enumerator");
+_Static_assert(TOKEN_THIRD == 264, "mixed arithmetic");
+_Static_assert(WORK_OFFQ_POOL_BITS_LIKE == 31, "Linux conditional enum initializer");
+_Static_assert(TOKEN_LOGICAL == 9, "logical and relational enum initializer");
+_Static_assert(TOKEN_SHORT_CIRCUIT == 7, "conditional evaluation selects one branch");
+
+int main(void) {
+    return TOKEN_FIRST == 256 && TOKEN_SECOND == 258 && TOKEN_THIRD == 264 &&
+                   WORK_OFFQ_POOL_BITS_LIKE == 31 && TOKEN_LOGICAL == 9 &&
+                   TOKEN_SHORT_CIRCUIT == 7
+               ? 0
+               : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/enum_constant_scopes.c"}
+static int first(void) {
+    enum {
+        ARG_shared = 1,
+        ARG_first = 3,
+    };
+    return ARG_shared + ARG_first;
+}
+
+static int second(void) {
+    enum {
+        ARG_shared = 2,
+        ARG_second = 4,
+    };
+    {
+        enum {
+            ARG_shared = 8,
+        };
+        if (ARG_shared != 8)
+            return 99;
+    }
+    return ARG_shared + ARG_second;
+}
+
+int main(void) {
+    return first() == 4 && second() == 6 ? 0 : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/enum_forward_completion.c"}
+enum wide;
+extern enum wide global_wide;
+enum wide read_wide(enum wide value);
+
+enum wide {
+    WIDE_VALUE = 1ULL << 40,
+};
+
+enum wide global_wide = WIDE_VALUE;
+
+enum wide read_wide(enum wide value) {
+    return value;
+}
+
+unsigned long use_wide(void) {
+    return (unsigned long)read_wide(global_wide);
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/enum_mode_byte.c"}
+enum unsigned_byte_enum {
+    UBE_ZERO = 0,
+    UBE_HIGH = 200,
+} __attribute__((__mode__(byte)));
+
+enum signed_byte_enum {
+    SBE_LOW = -128,
+    SBE_HIGH = 100,
+} __attribute__((mode(__byte__)));
+
+static enum unsigned_byte_enum unsigned_value = UBE_HIGH;
+static enum signed_byte_enum signed_value = SBE_LOW;
+
+int main(void) {
+    return sizeof(unsigned_value) != 1 || sizeof(signed_value) != 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/enum_mode_byte_overflow.c"}
+enum too_wide_for_byte {
+    BYTE_ZERO = 0,
+    BYTE_TOO_WIDE = 256,
+} __attribute__((__mode__(byte)));
+
+int main(void) {
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/enum_tag_scopes.c"}
+/* GNU C oracle: definitions in nested scopes shadow outer enum tags.
+ * Leaving a block restores the visible enclosing tag and its enumerators. */
+enum scoped_mode { MODE_GLOBAL = 11 };
+
+static int inner_definition(void) {
+    enum scoped_mode { MODE_FUNCTION = 22 };
+    enum scoped_mode value = MODE_FUNCTION;
+    return (int)value;
+}
+
+static int nested_definitions(void) {
+    enum scoped_mode { MODE_LOCAL = 33 };
+    int total = MODE_LOCAL;
+    {
+        enum scoped_mode { MODE_NESTED = 44 };
+        enum scoped_mode nested = MODE_NESTED;
+        total += (int)nested;
+    }
+    {
+        enum scoped_mode current = MODE_LOCAL;
+        total += (int)current;
+    }
+    return total;
+}
+
+static int restore_outer(void) {
+    {
+        enum scoped_mode { MODE_BLOCK = 55 };
+        enum scoped_mode value = MODE_BLOCK;
+        if ((int)value != 55) return -1;
+    }
+    enum scoped_mode outer = MODE_GLOBAL;
+    return (int)outer;
+}
+
+static int forward_shadow(void) {
+    /* A standalone forward tag introduces an incomplete declaration in
+     * this block and must not inherit the completed file-scope entity. */
+    enum scoped_mode;
+    enum scoped_mode { MODE_FORWARD = 66 };
+    enum scoped_mode value = MODE_FORWARD;
+    return (int)value;
+}
+
+int main(void) {
+    enum scoped_mode outer = MODE_GLOBAL;
+    return inner_definition() == 22 && nested_definitions() == 110 &&
+           restore_outer() == 11 && forward_shadow() == 66 &&
+           outer == MODE_GLOBAL ? 0 : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/enum_tag_type_references.c"}
+struct hrtimer;
+struct fwnode_handle;
+
+enum lockdep_like {
+    LOCKDEP_LIKE_OK,
+    LOCKDEP_LIKE_BAD,
+};
+
+extern enum system_states_like {
+    SYSTEM_BOOTING_LIKE,
+    SYSTEM_RUNNING_LIKE,
+} system_state_like;
+
+typedef enum system_states_like system_state_alias;
+
+/* Linux timer.h shape: first use is a function return type, definition later. */
+extern enum hrtimer_restart it_real_fn(struct hrtimer *);
+
+/* Linux trace shape: first use is a function-pointer typedef return type. */
+typedef enum print_line_t (*trace_print_func)(void);
+
+/* Linux security.h shape: explicit standalone incomplete enum declaration. */
+enum fs_value_type;
+
+/* Linux fwnode.h shape: first use is a function-pointer record field return type. */
+struct fwnode_operations_like {
+    enum dev_dma_attr (*device_get_dma_attr)(const struct fwnode_handle *fwnode);
+};
+
+enum hrtimer_restart {
+    HRTIMER_NORESTART,
+    HRTIMER_RESTART,
+};
+
+enum print_line_t {
+    TRACE_TYPE_PARTIAL_LINE,
+    TRACE_TYPE_HANDLED,
+};
+
+enum fs_value_type {
+    FS_VALUE_UNDEFINED,
+    FS_VALUE_FLAG,
+};
+
+enum dev_dma_attr {
+    DEV_DMA_NOT_SUPPORTED,
+    DEV_DMA_NON_COHERENT,
+};
+
+extern void add_taint_like(unsigned flag, enum lockdep_like state);
+enum lockdep_like report_bug_like(unsigned long address, enum lockdep_like state);
+
+static enum lockdep_like normalize_state(enum lockdep_like state) {
+    return state;
+}
+
+static enum hrtimer_restart timer_result(void) {
+    return HRTIMER_RESTART;
+}
+
+static enum fs_value_type fs_value(void) {
+    return FS_VALUE_FLAG;
+}
+
+int main(void) {
+    system_state_alias state = SYSTEM_BOOTING_LIKE;
+    trace_print_func printer = (trace_print_func)0;
+    struct fwnode_operations_like ops = {0};
+
+    return normalize_state(LOCKDEP_LIKE_OK) + state + timer_result() + fs_value() +
+           (printer != 0) + (ops.device_get_dma_attr != 0);
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_enum_tag_scope_leak.c"}
+/* A block-scope tag is not visible after leaving the block. */
+int escaped_enum_tag(void) {
+    {
+        enum vanishing_tag { VANISHING_VALUE = 1 };
+    }
+    return (int)sizeof(enum vanishing_tag);
+}
+@@@ end

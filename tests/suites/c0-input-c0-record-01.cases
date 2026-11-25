@@ -1,0 +1,454 @@
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_record_array_assignment.c"}
+struct Holder { int values[4]; };
+void bad(struct Holder *holder) { holder->values = 0; }
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_record_array_brace_elision.c"}
+struct packet {
+    int values[2];
+    int tail;
+};
+
+int invalid_record_array_brace_elision(void) {
+    struct packet packet = {1, 2, 3};
+    return packet.tail;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_record_array_update.c"}
+struct Holder { int values[4]; };
+void bad(struct Holder *holder) { holder->values++; }
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_record_designated_init_arguments.c"}
+struct BadDesignated {
+    int value;
+} __attribute__((__designated_init__(1)));
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/record_array_range_once.c"}
+/* Linux i915 rc6 initializes register descriptors with [0 ... N-1].
+ * The GNU range initializer must evaluate one record expression only once. */
+struct Reg { unsigned int address; };
+
+static int evaluations;
+
+static struct Reg make_reg(unsigned int value) {
+    struct Reg result;
+    ++evaluations;
+    result.address = value;
+    return result;
+}
+
+int main(void) {
+    struct Reg regs[5] = {
+        [1 ... 3] = make_reg(99U),
+    };
+    struct Reg constants[4] = {
+        [0 ... 3] = ((const struct Reg){ .address = 21U }),
+    };
+    if (evaluations != 1 || regs[0].address != 0U ||
+        regs[1].address != 99U || regs[2].address != 99U ||
+        regs[3].address != 99U || regs[4].address != 0U ||
+        constants[0].address != 21U || constants[3].address != 21U)
+        return 1;
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/record_assignment_expression.c"}
+union Payload {
+    long wide;
+    int words[2];
+};
+
+struct Stamp {
+    long sec;
+    long nsec;
+};
+
+struct Holder {
+    struct Stamp first;
+    struct Stamp second;
+};
+
+extern struct Stamp make_stamp(long value);
+
+void assign_both(struct Holder *holder, long value) {
+    holder->first = holder->second = make_stamp(value);
+}
+
+int main(void) {
+    union Payload left;
+    union Payload right;
+
+    right.wide = 123;
+    (left = right, (void)0);
+    return left.wide == 123 ? 0 : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/record_call_argument_materialization.c"}
+typedef struct {
+    unsigned long bits;
+} record_word_t;
+
+static record_word_t make_word(unsigned long value) {
+    return (record_word_t){value + 1UL};
+}
+
+void consume_word(record_word_t value);
+
+int main(void) {
+    consume_word(0 ? (record_word_t){3UL} : make_word(10UL));
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/record_conditional_consume_stub.c"}
+/* Native ABI oracle for the constant-false record call-argument fixture.
+ * Keep the sink in a separate GNU-compiled translation unit: MiniC must
+ * materialize and transfer the actual struct, not merely return zero. */
+typedef struct {
+    unsigned long bits;
+} record_word_t;
+
+void consume_word(record_word_t value) {
+    if (value.bits != 11UL) {
+        __builtin_trap();
+    }
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/record_conditional_materialization.c"}
+typedef struct {
+    unsigned long bits;
+} pgprot_t;
+
+static pgprot_t pgprot_from_va(unsigned long value) {
+    return (pgprot_t){value + 1UL};
+}
+
+static unsigned long consume(pgprot_t value) {
+    return value.bits;
+}
+
+static unsigned long assign_then_read(int early, unsigned long value) {
+    pgprot_t selected;
+
+    selected = early ? (pgprot_t){7UL} : pgprot_from_va(value);
+    return selected.bits;
+}
+
+static unsigned long selected_member(int early, unsigned long first,
+                                     unsigned long second) {
+    /* Linux pgprot_t idiom: project a field from a conditional record rvalue.
+     * Each arm owns a distinct compound literal initializer. */
+    return (early ? (pgprot_t){first + 3UL}
+                  : (pgprot_t){second + 5UL}).bits;
+}
+
+static unsigned long selected_call_count;
+
+static pgprot_t selected_true(void) {
+    ++selected_call_count;
+    return (pgprot_t){17UL};
+}
+
+static pgprot_t selected_false(void) {
+    selected_call_count += 100UL;
+    return (pgprot_t){23UL};
+}
+
+static unsigned long selected_call_member(int early) {
+    return (early ? selected_true() : selected_false()).bits;
+}
+
+int main(void) {
+    if (consume(1 ? (pgprot_t){3UL} : pgprot_from_va(10UL)) != 3UL) {
+        return 1;
+    }
+    if (consume(0 ? (pgprot_t){3UL} : pgprot_from_va(10UL)) != 11UL) {
+        return 2;
+    }
+    if (assign_then_read(0, 20UL) != 21UL) {
+        return 3;
+    }
+    if (assign_then_read(1, 20UL) != 7UL) {
+        return 4;
+    }
+    if (selected_member(1, 31UL, 40UL) != 34UL ||
+        selected_member(0, 31UL, 40UL) != 45UL) {
+        return 5;
+    }
+    if (selected_call_member(1) != 17UL || selected_call_count != 1UL) {
+        return 6;
+    }
+    if (selected_call_member(0) != 23UL || selected_call_count != 101UL) {
+        return 7;
+    }
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/record_copy_array_member.c"}
+struct Packet {
+    int tag;
+    unsigned char bytes[4];
+    int value;
+};
+
+int copy_packet(void) {
+    struct Packet source;
+    struct Packet target;
+
+    target = source;
+    return 0;
+}
+
+int main(void) {
+    return copy_packet();
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/record_definition.c"}
+struct AES_ctx {
+    int RoundKey[176];
+    int *Next;
+};
+
+typedef struct {
+    const unsigned char *json;
+    unsigned long position;
+} error;
+
+struct pointer_array_fields {
+    char (*zero)[0];
+    char (*one)[1];
+    const unsigned char (*two)[2];
+};
+
+int main(void)
+{
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/record_field_nonstring_attribute.c"}
+struct ext4_like_super_block {
+    char s_last_mounted[64] __attribute__((__nonstring__));
+};
+
+int main(void) {
+    struct ext4_like_super_block value;
+    value.s_last_mounted[0] = 'x';
+    return value.s_last_mounted[0] == 'x' ? 0 : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/record_forward_declarations.c"}
+struct Forward;
+union Slot;
+
+struct Forward *pass(struct Forward *p);
+
+struct Forward {
+    int value;
+};
+
+union Slot {
+    int value;
+    long wide;
+};
+
+struct Forward *pass(struct Forward *p) {
+    return p;
+}
+
+int read_forward(struct Forward *p) {
+    return pass(p)->value;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/record_length_one_array.c"}
+struct Holder {
+    int values[1];
+    int scalar;
+};
+
+int read_first(struct Holder *holder) {
+    return holder->values[0] + holder->scalar;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/record_local_chained_designator.c"}
+struct Inner {
+    int x;
+    int y;
+};
+
+struct Outer {
+    struct Inner inner;
+    int z;
+};
+
+int chained_record_designator(void) {
+    struct Outer value = {
+        .inner.x = 3,
+        .inner.y = 4,
+        .z = 5,
+    };
+
+    return value.inner.x + value.inner.y + value.z;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/record_local_initializer.c"}
+struct Packet {
+    int tag;
+    unsigned char bytes[4];
+};
+
+struct Guard {
+    void *lock;
+    int flags;
+};
+
+static int copy_packet(struct Packet *source) {
+    struct Packet saved = *source;
+    return saved.tag;
+}
+
+static int initialize_guard(void) {
+    struct Guard guard = { .lock = (void *)1, .flags = 7 },
+                 *guard_ptr __attribute__((__unused__)) = &guard;
+    return (unsigned long)guard.lock == 1 && guard.flags == 7 && guard_ptr == &guard;
+}
+
+int main(void) {
+    return initialize_guard() ? 0 : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/record_multi_declarators.c"}
+struct Link {
+    int value, flags;
+    struct Link *previous, *next;
+};
+
+int read_link(struct Link *link) {
+    return link->next->value + link->flags;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/record_multidimensional_arrays.c"}
+struct Grid {
+    int cells[3][2];
+    unsigned char bytes[2][4][2];
+};
+
+int read_grid(struct Grid *grid, int row, int column) {
+    return grid->cells[row][column] + grid->bytes[1][3][1];
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/record_rvalue_array_member.c"}
+/* An array selected from an aggregate rvalue is not an lvalue, but may
+ * decay into a pointer to an array inside the full-expression temporary. */
+struct Inner {
+    long words[3];
+};
+
+struct Outer {
+    struct Inner inner;
+    long tail;
+};
+
+static int evaluations;
+
+static struct Outer produce(long x) {
+    struct Outer result;
+    evaluations++;
+    result.inner.words[0] = x;
+    result.inner.words[1] = x + 1;
+    result.inner.words[2] = x + 2;
+    result.tail = x + 3;
+    return result;
+}
+
+static long consume(const long *words) {
+    return words[0] + words[2];
+}
+
+int main(void) {
+    long first = produce(10).inner.words[1];
+    long second = consume(produce(20).inner.words);
+    long third = (0 ? produce(30) : produce(40)).inner.words[2];
+    unsigned long extent = sizeof(produce(50).inner.words);
+    if (first != 11 || second != 42 || third != 42 ||
+        extent != 3 * sizeof(long) || evaluations != 3)
+        return 1;
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/record_rvalue_member.c"}
+typedef struct {
+    unsigned long pgprot;
+} pgprot_t;
+
+pgprot_t pgprot_noncached(pgprot_t oldprot)
+{
+    return oldprot;
+}
+
+unsigned long project(pgprot_t oldprot)
+{
+    return (pgprot_noncached(oldprot)).pgprot;
+}
+
+int main(void)
+{
+    pgprot_t value = { 17 };
+    return project(value) == 17 ? 0 : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/record_rvalue_nested_member.c"}
+/* A GNU/ISO C aggregate rvalue has one temporary object: nested member
+ * projections walk that one materialization without re-running the source
+ * call. Linux arm64 mmu.c has ((pud_t){...}).p4d.pgd.pgd chains. */
+struct Leaf { unsigned long value; };
+struct Mid { struct Leaf leaf; unsigned long extra; };
+struct Outer { struct Mid mid; unsigned long tail; };
+
+static int evaluations;
+
+static struct Outer produce(unsigned long value) {
+    struct Outer result;
+    evaluations += 1;
+    result.mid.leaf.value = value + 11UL;
+    result.mid.extra = value + 21UL;
+    result.tail = value + 31UL;
+    return result;
+}
+
+static struct Mid pass_mid(unsigned long value) {
+    return produce(value).mid;
+}
+
+static struct Leaf pass_leaf(unsigned long value) {
+    return produce(value).mid.leaf;
+}
+
+int main(void) {
+    unsigned long one = produce(3UL).mid.leaf.value;
+    struct Mid two = produce(4UL).mid;
+    struct Leaf three = produce(5UL).mid.leaf;
+    unsigned long four = (1 ? produce(6UL) : produce(7UL)).mid.leaf.value;
+    struct Mid five = pass_mid(8UL);
+    struct Leaf six = pass_leaf(9UL);
+
+    if (evaluations != 6 || one != 14UL || two.leaf.value != 15UL ||
+        two.extra != 25UL || three.value != 16UL || four != 17UL ||
+        five.leaf.value != 19UL || five.extra != 29UL || six.value != 20UL)
+        return 1;
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/record_typedef_array_field.c"}
+typedef unsigned long GpState[4];
+
+struct Context {
+    GpState regs;
+    unsigned marker;
+};
+
+unsigned long read_reg(struct Context *context, int index) {
+    return context->regs[index];
+}
+
+unsigned long context_size(void) {
+    return sizeof(struct Context);
+}
+@@@ end

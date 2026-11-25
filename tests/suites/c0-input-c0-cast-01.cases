@@ -1,0 +1,139 @@
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/cast_double_to_integer.c"}
+int main(void)
+{
+    double value = 7.75;
+
+    return (int)value;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/cast_expressions.c"}
+typedef int row_t[3];
+
+int main(void)
+{
+    int values[3];
+    int *flat;
+    row_t *row;
+    unsigned unsigned_value;
+    int signed_value;
+    int result;
+
+    values[0] = 7;
+    values[1] = 11;
+    values[2] = 13;
+    flat = &values[0];
+    row = (row_t *)flat;
+    unsigned_value = (unsigned)-1;
+    signed_value = (int)unsigned_value;
+    result = (values[0] + values[2]);
+    result = result - 20;
+    return (*row)[1] + (signed_value == -1) + result;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/cast_integer_conversion.c"}
+int main(void) {
+    unsigned int unsigned_value;
+    int signed_value;
+
+    unsigned_value = (unsigned int)-1;
+    signed_value = (int)unsigned_value;
+    return signed_value == -1 ? 0 : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/cast_integer_to_double.c"}
+double convert_to_double(int value) {
+    return (double)value;
+}
+
+int main(void) {
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/cast_integer_to_float.c"}
+float cast_integer_to_float(int value)
+{
+    return (float)value;
+}
+
+double overflow_float_to_double(void)
+{
+    return (double)1e5000f;
+}
+
+float quarter_float(void)
+{
+    return .25f;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/cast_plain_char.c"}
+int main(void)
+{
+    int value;
+
+    value = 65;
+    return (char)value;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/cast_record_type_names.c"}
+union Holder {
+    int value;
+    long wide;
+};
+
+int read_holder(void *raw) {
+    union Holder *holder = (union Holder *)raw;
+    volatile int *value = (volatile int *)&holder->value;
+    return *value;
+}
+
+int main(void) {
+    union Holder holder;
+    holder.value = 9;
+    return read_holder(&holder) == 9 ? 0 : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/cast_type_classification.c"}
+union Box {
+    int value;
+    long wide;
+};
+
+int read_union_cast(void *pointer) {
+    return ((union Box *)pointer)->value;
+}
+
+int read_volatile_cast(int *pointer) {
+    return *((volatile int *)pointer);
+}
+
+int narrow_short(int value) {
+    return (int)((short)value);
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/cast_typedef_shadow.c"}
+typedef int word_t;
+
+int main(void)
+{
+    int word_t;
+
+    word_t = 5;
+    return (word_t) + 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_cast_assignment_target.c"}
+int main(void)
+{
+    int value;
+
+    value = 1;
+    (int)value = 3;
+    return value;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_cast_integer_to_float.c"}
+int main(void)
+{
+    return (float)0;
+}
+@@@ end

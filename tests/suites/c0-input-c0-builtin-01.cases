@@ -1,0 +1,309 @@
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/builtin_clzll.c"}
+_Static_assert(__builtin_clzll(1ULL) == 63, "clzll one");
+_Static_assert(__builtin_clzll(16ULL) == 59, "clzll sixteen");
+_Static_assert(__builtin_clzll(0x8000000000000000ULL) == 0, "clzll top bit");
+
+struct MutexLike {
+    long state;
+};
+
+struct LinuxShape {
+    struct MutexLike open_file_mutex[
+        1 << (2 * (__builtin_constant_p(64 < 32 ? 64 : 32)
+                       ? ((64 < 32 ? 64 : 32) < 2
+                              ? 0
+                              : 63 - __builtin_clzll(64 < 32 ? 64 : 32))
+                       : 0))];
+};
+
+_Static_assert(sizeof(((struct LinuxShape *)0)->open_file_mutex) / sizeof(struct MutexLike) == 1024,
+               "Linux kernfs lock array bound");
+
+static int runtime_clzll_ull(unsigned long long value) {
+    return __builtin_clzll(value);
+}
+
+static int runtime_clzll_uint(unsigned int value) {
+    return __builtin_clzll(value);
+}
+
+static int runtime_clzll_int(int value) {
+    return __builtin_clzll(value);
+}
+
+int main(void) {
+    return runtime_clzll_ull(1ULL) == 63 &&
+                   runtime_clzll_ull(16ULL) == 59 &&
+                   runtime_clzll_ull(0x8000000000000000ULL) == 0 &&
+                   runtime_clzll_ull(0x00f0000000000000ULL) == 8 &&
+                   runtime_clzll_uint(0x80000000U) == 32 &&
+                   runtime_clzll_int(-1) == 0
+               ? 0
+               : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/builtin_expect.c"}
+long expect_value(int value) {
+    return __builtin_expect(value != 0, 1);
+}
+
+long expect_zero(int value) {
+    return __builtin_expect(value == 0, 0 + 1 - 1);
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/builtin_huge_val_runtime.c"}
+int main(void)
+{
+    double huge = __builtin_huge_val();
+    return huge > 1.0e300 ? 0 : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/builtin_memcpy_call.c"}
+void *copy_with_builtin(char *dest, const char *src, unsigned long length) {
+    return __builtin_memcpy(dest, src, length);
+}
+
+void *memcpy(void *dest, const void *src, unsigned long length);
+
+void copy_and_discard(char *dest, const char *src, unsigned long length) {
+    (void)__builtin_memcpy(dest, src, length);
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/builtin_memset_call.c"}
+void *zero_with_builtin(char *dest, unsigned long length) {
+    return __builtin_memset(dest, 0, length);
+}
+
+void *memset(void *dest, int value, unsigned long length);
+
+void fill_and_discard(char *dest, unsigned long length) {
+    (void)__builtin_memset(dest, 0x5a, length);
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/builtin_offsetof.c"}
+struct Sample {
+    char first;
+    int value;
+    unsigned short tail;
+};
+
+typedef struct Sample Sample;
+
+struct BranchData {
+    const char *func;
+    const char *file;
+    unsigned line;
+    union {
+        struct {
+            unsigned long correct;
+            unsigned long incorrect;
+        };
+        struct {
+            unsigned long miss;
+            unsigned long hit;
+        };
+        unsigned long miss_hit[2];
+    };
+};
+
+_Static_assert(__builtin_offsetof(struct BranchData, hit) == 32,
+               "promoted anonymous member offsetof");
+_Static_assert(__builtin_offsetof(struct BranchData, miss_hit) == 24,
+               "promoted anonymous array member offsetof");
+
+struct IndexedOffset {
+    char lead;
+    unsigned long node[2];
+};
+
+_Static_assert(__builtin_offsetof(struct IndexedOffset, node[1]) == 16,
+               "constant indexed offsetof");
+
+unsigned long indexed_offset(unsigned int idx) {
+    return __builtin_offsetof(struct IndexedOffset, node[idx]);
+}
+
+int main(void) {
+    char padding[__builtin_offsetof(Sample, tail)];
+
+    return sizeof(padding) == 8 && __builtin_offsetof(Sample, value) == 4 &&
+                   __builtin_offsetof(struct Sample, tail) == 8 &&
+                   __builtin_offsetof(struct BranchData, hit) == 32 &&
+                   __builtin_offsetof(struct BranchData, miss_hit) == 24 &&
+                   indexed_offset(0) == 8 && indexed_offset(1) == 16
+               ? 0
+               : 1;
+}
+
+struct Flow4 {
+    unsigned short family;
+    unsigned int mark;
+};
+
+struct Flowi {
+    char lead;
+    union {
+        struct Flow4 ip4;
+        unsigned long raw;
+    } u;
+};
+
+_Static_assert(__builtin_offsetof(struct Flowi, u.ip4) == 8, "nested member offsetof Linux shape");
+_Static_assert(__builtin_offsetof(struct Flowi, u.ip4.mark) == 12,
+               "nested member offsetof accumulates record offsets");
+
+struct NestedElement {
+    char lead;
+    unsigned int value;
+};
+
+struct NestedGrid {
+    char lead;
+    struct NestedElement rows[3];
+};
+
+_Static_assert(__builtin_offsetof(struct NestedGrid, rows[2].value) == 24,
+               "array then nested member offsetof");
+
+unsigned long nested_indexed_offset(unsigned int idx) {
+    return __builtin_offsetof(struct NestedGrid, rows[idx].value);
+}
+
+struct MatrixOffset {
+    char lead;
+    unsigned short cell[2][3];
+};
+
+_Static_assert(__builtin_offsetof(struct MatrixOffset, cell[1][2]) == 12,
+               "multidimensional offsetof designator");
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/builtin_prefetch.c"}
+int main(void)
+{
+    int values[4];
+    int *cursor = values;
+
+    __builtin_prefetch(cursor);
+    __builtin_prefetch(cursor++, 1);
+    __builtin_prefetch(cursor++, 2, 0);
+    return cursor == values + 2 ? 0 : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/builtin_unary_family.c"}
+_Static_assert(__builtin_clz(1U) == 31, "clz one");
+_Static_assert(__builtin_clzl(1UL) == 63, "clzl one");
+_Static_assert(__builtin_clzll(1ULL) == 63, "clzll one");
+_Static_assert(__builtin_ctz(8U) == 3, "ctz eight");
+_Static_assert(__builtin_ctzl(8UL) == 3, "ctzl eight");
+_Static_assert(__builtin_ctzl(0x100UL) == 8, "ctzl 256");
+_Static_assert(__builtin_ctzll(0x100ULL) == 8, "ctzll 256");
+_Static_assert(__builtin_ffsll(0LL) == 0, "ffsll zero");
+_Static_assert(__builtin_ffsll(8LL) == 4, "ffsll eight");
+_Static_assert(__builtin_ffsll(-1LL) == 1, "ffsll negative one");
+_Static_assert(__builtin_isdigit('7') == 1, "isdigit digit");
+_Static_assert(__builtin_isdigit('x') == 0, "isdigit nondigit");
+
+/* Keep each dynamic builtin implementation observable even when the
+ * caller's arguments become compile-time facts after Core specialization.
+ * The separate KVM guard probe verifies that specialization itself. */
+static __attribute__((noinline, used)) int runtime_clz(unsigned int value) {
+    return __builtin_clz(value);
+}
+
+static __attribute__((noinline, used)) int runtime_ctzl(unsigned long value) {
+    return __builtin_ctzl(value);
+}
+
+static __attribute__((noinline, used)) int runtime_ctzll(unsigned long long value) {
+    return __builtin_ctzll(value);
+}
+
+static __attribute__((noinline, used)) int runtime_ffsll(long long value) {
+    return __builtin_ffsll(value);
+}
+
+static __attribute__((noinline, used)) int runtime_isdigit(int value) {
+    return __builtin_isdigit(value);
+}
+
+int main(void) {
+    return runtime_clz(1U) == 31 && runtime_ctzl(8UL) == 3 &&
+                   runtime_ctzll(0x100ULL) == 8 && runtime_ffsll(8LL) == 4 &&
+                   runtime_ffsll(0LL) == 0 && runtime_isdigit('7') && !runtime_isdigit('x')
+               ? 0
+               : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/builtin_va_copy.c"}
+static int copy_cursor(int fixed, ...) {
+    char *source;
+    char *copy;
+
+    __builtin_va_start(source, fixed);
+    __builtin_va_copy(copy, source);
+    if (copy != source) {
+        return 7;
+    }
+    __builtin_va_end(copy);
+    __builtin_va_end(source);
+    return 0;
+}
+
+int main(void) {
+    return copy_cursor(1, 2, 3);
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/builtin_va_list.c"}
+typedef __builtin_va_list MiniBuiltinVaList;
+
+void *builtin_va_list_as_pointer(MiniBuiltinVaList value) {
+    return value;
+}
+
+MiniBuiltinVaList builtin_va_list_roundtrip(void *value) {
+    MiniBuiltinVaList result = value;
+    return result;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_builtin_prefetch_address.c"}
+int main(void)
+{
+    __builtin_prefetch(7);
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_builtin_prefetch_locality.c"}
+int main(void)
+{
+    int value = 0;
+    __builtin_prefetch(&value, 0, 4);
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_builtin_prefetch_rw.c"}
+int main(void)
+{
+    int value = 0;
+    __builtin_prefetch(&value, 3);
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_builtin_va_copy_source.c"}
+int bad_va_copy_source(int fixed, ...) {
+    char *target;
+    int source;
+
+    __builtin_va_copy(target, source);
+    return fixed;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/invalid_builtin_va_copy_target.c"}
+int bad_va_copy_target(int fixed, ...) {
+    char *source;
+    int target;
+
+    __builtin_va_start(source, fixed);
+    __builtin_va_copy(target, source);
+    return 0;
+}
+@@@ end

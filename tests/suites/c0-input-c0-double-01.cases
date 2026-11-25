@@ -1,0 +1,122 @@
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/double_return_abi.c"}
+double seed(void);
+
+double relay(void)
+{
+    return seed();
+}
+
+double literal(void)
+{
+    return (double)123.5;
+}
+
+double add_values(void)
+{
+    return 1.5 + 2.25;
+}
+
+double subtract_values(void)
+{
+    return 9.0 - 2.5;
+}
+
+double multiply_values(void)
+{
+    return 1.5 * 4.0;
+}
+
+double divide_values(void)
+{
+    return 9.0 / 4.0;
+}
+
+double nan_value(void)
+{
+    return 0.0 / 0.0;
+}
+
+int main(void)
+{
+    return 0;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/double_return_abi_helper.c"}
+#include <stdlib.h>
+
+double relay(void);
+double literal(void);
+double add_values(void);
+double subtract_values(void);
+double multiply_values(void);
+double divide_values(void);
+double nan_value(void);
+
+double seed(void)
+{
+    return 123.5;
+}
+
+__attribute__((constructor)) static void validate_double_return_abi(void)
+{
+    double value;
+
+    if (relay() != 123.5)
+    {
+        _Exit(73);
+    }
+    if (literal() != 123.5)
+    {
+        _Exit(74);
+    }
+    if (add_values() != 3.75)
+    {
+        _Exit(75);
+    }
+    if (subtract_values() != 6.5)
+    {
+        _Exit(76);
+    }
+    if (multiply_values() != 6.0)
+    {
+        _Exit(77);
+    }
+    if (divide_values() != 2.25)
+    {
+        _Exit(78);
+    }
+    value = nan_value();
+    if (value == value)
+    {
+        _Exit(79);
+    }
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/double_to_float_runtime.c"}
+int main(void) {
+    double source = 1.5;
+    float narrowed = (float)source;
+    double widened = (double)narrowed;
+
+    return widened == 1.5 ? 0 : 1;
+}
+@@@ end
+@@@ {"kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/double_to_narrow_integer.c"}
+/* Double to signed/unsigned 8-/16-bit C conversions (all representable). */
+#include <stdio.h>
+int main(int argc, char **argv)
+{
+    double a = argc ? -12.75 : -10.0;
+    double b = argc ? 240.9 : 200.0;
+    double c = argc ? -1234.75 : -1200.0;
+    double d = argc ? 40000.6 : 35000.0;
+    signed char sc = (signed char)a;
+    unsigned char uc = (unsigned char)b;
+    signed short ss = (signed short)c;
+    unsigned short us = (unsigned short)d;
+    (void)argv;
+    printf("%d %u %d %u\n", (int)sc, (unsigned int)uc,
+                              (int)ss, (unsigned int)us);
+    return 0;
+}
+@@@ end
