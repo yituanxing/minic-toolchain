@@ -602,7 +602,22 @@ jobs:
               "docs/architecture/minic-function-contract-register.md",
               "docs/architecture/minic-issue-register.md",
           }
-          if len(expected) != 1087 or deleted != expected or changed != expected | metadata:
+          later_archived_riscv_records = {
+              "docs/architecture/minic-boundary-convergence-2026-11-03.md",
+              "docs/architecture/minic-core-module-ownership-p69-2026-11-05.md",
+              "docs/architecture/riscv-gpr-abi-core-call-ownership-2026-10-24.md",
+              "docs/architecture/riscv-machine-operation-families-2026-10-24.md",
+              "docs/architecture/riscv-machine-selection-ownership-2026-10-24.md",
+              "docs/architecture/riscv32-ilp32-abi-architecture-audit-2026-10-24.md",
+              "docs/architecture/riscv32-ilp32-i64-machine-lowering-2026-10-24.md",
+              "docs/architecture/riscv32-machine-ownership-refactor-2026-10-24.md",
+              "docs/architecture/riscv32-per-function-abi-planning-2026-10-24.md",
+              "docs/architecture/rv32-variadic-psabi-2026-10-24.md",
+          }
+          assert later_archived_riscv_records <= set(git("ls-tree", "-r", "--name-only", "37e5187ab87116af59edcb65ebc6d0c1b82fd2c6").decode().splitlines())
+          assert not (expected & later_archived_riscv_records)
+          expected |= later_archived_riscv_records
+          if len(expected) != 1097 or deleted != expected or changed != expected | metadata:
               raise SystemExit("RETIREMENT_SCOPE=FAIL: unexpected tree changes")
           # Preserve the full closure in a historical checkout, not a successful
           # no-op overlay on a different source architecture.
@@ -1762,4 +1777,109 @@ jobs:
                   print("PERIPHERAL_CANDIDATE", json.dumps({"path": p, "group": group, "refs": sorted(refs)[:12]}))
           print("PERIPHERAL_COUNTS", json.dumps({"/".join(k): v for k,v in sorted(groups.items())}))
           print("PERIPHERAL_NOTE: lexical candidates only; dynamic callers, manual tests, and unique regression fixtures require review")
+          PY
+
+  manual-probe-consolidation-candidates:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - name: Derive exact shared manual probe prologues without modifying tracked files
+        run: |
+          python3 - <<'PY'
+          import base64, collections, json, pathlib, re, subprocess, tempfile
+          root = pathlib.Path("tests/compiler/c0")
+          audit = ".github/workflows/minic-historical-script-retirement-audit.yml"
+          files = subprocess.check_output(["git","ls-files","-z"]).decode().strip("\0").split("\0")
+          data = {}
+          for path in files:
+              b = pathlib.Path(path).read_bytes()
+              if b"\0" not in b:
+                  try: data[path] = b.decode()
+                  except UnicodeDecodeError: pass
+          candidates = [p for p in data if p.startswith(str(root)+"/probe-") and p.endswith(".sh")]
+          by_name = {pathlib.Path(p).name:p for p in candidates}
+          refs = collections.defaultdict(set)
+          for p,s in data.items():
+              if p == audit: continue
+              for n in set(re.findall(r'probe-[A-Za-z0-9_.-]+\.sh',s)):
+                  if n in by_name and by_name[n] != p: refs[by_name[n]].add(p)
+              for line in s.splitlines():
+                  if re.search(r'(?:probe-[^ ]*[*?]|probe-\$|glob\([^)]*probe-|probe-\{)',line) and re.search(r'(?:bash|sh |for |glob|find |exec|source |run_c0)',line):
+                      print("MANUAL_DYNAMIC",json.dumps([p,line[:240]]))
+          groups = collections.defaultdict(list)
+          for p in candidates:
+              if refs[p]: continue
+              s = data[p]
+              if not s.endswith("\n") or "\r" in s or "__minic_probe_case" in s or "BASH_SOURCE" in s or re.search(r'\$\{?0\b', re.sub(r'dirname\s+(?:--\s+)?"\$(?:0|\{0\})"',"dirname-safe",s)):
+                  continue
+              lines = s.splitlines(keepends=True)
+              shell = lines[0].strip()
+              if shell not in ("#!/bin/sh","#!/usr/bin/env bash","#!/bin/bash"):continue
+              k=1
+              while k<len(lines) and (not lines[k].strip() or lines[k].startswith("#")): k+=1
+              if k>=len(lines) or lines[k].strip() not in ("set -eu","set -Eeuo pipefail","set -euo pipefail"):continue
+              q=k
+              while q<len(lines) and q-k<10:
+                  line=lines[q].strip()
+                  if not line or line.startswith("#") or line.endswith("\\"):break
+                  if q==k or re.match(r'^[A-Za-z_][A-Za-z0-9_]*=',line) or re.match(r'^(?:test |trap |: |command -v |mkdir -p )',line):
+                      if re.search(r'(?:<<|&&|\|\||;[ \t]*(?:if|then|do|done|fi|case|esac)\b)',line):break
+                      q+=1
+                  else:break
+              if q-k<4 or q>=len(lines):continue
+              prefix=tuple(lines[k:k+4])
+              family=pathlib.Path(p).name.split("-")[1]
+              if family not in ("aarch64","loongarch64","x86","riscv","gnu","rv32","rv64"):family="common"
+              groups[(shell,family,prefix)].append((p,lines[:k],lines[k:]))
+          payload=[]
+          for (shell,family,prefix), members in sorted(groups.items(),key=lambda x:(x[0][1],x[0][0],x[0][2])):
+              if len(members)<3:continue
+              shared=list(prefix)
+              while len(shared)<10:
+                  i=len(shared)
+                  if any(len(body)<=i for _,_,body in members):break
+                  line=members[0][2][i]
+                  if any(body[i]!=line for _,_,body in members):break
+                  if not re.match(r'^(?:[A-Za-z_][A-Za-z0-9_]*=|trap |test |command -v |: |mkdir -p )',line) or line.rstrip().endswith("\\") or "<<" in line:break
+                  shared.append(line)
+              path=str(root/f"run-manual-{family}-family-{len(payload)+1}.sh")
+              assert path not in data
+              cases=[pathlib.Path(p).stem for p,_,_ in members]
+              out=[shell+"\n","# Named manual probes; shared initialization is exact, case assertions are unchanged.\n",
+                   'if [ "${1:-}" = "--list" ]; then\n', "    printf '%s\\n' "+" ".join("'"+n+"'" for n in cases)+"\n", "    exit 0\nfi\n",
+                   '__minic_probe_case=${1:?probe case required; use --list}\n','shift\n',
+                   'case "$__minic_probe_case" in\n', "  "+"|".join(cases)+") ;;\n", '  *) printf "%s\\n" "unknown probe: $__minic_probe_case" >&2; exit 64 ;;\nesac\n']
+              out.extend(shared)
+              out.append('case "$__minic_probe_case" in\n')
+              for (p,head,body),name in zip(members,cases):
+                  assert "".join(head+body)==data[p]
+                  assert body[:len(shared)]==shared
+                  out.append(name+")\n")
+                  out.extend(head[1:])
+                  out.extend(body[len(shared):])
+                  out.append(";;\n")
+              out.append("esac\n")
+              merged="".join(out)
+              interpreter="sh" if shell=="#!/bin/sh" else "bash"
+              with tempfile.TemporaryDirectory() as td:
+                  target=pathlib.Path(td)/"merged.sh"
+                  target.write_text(merged)
+                  check=subprocess.run([interpreter,"-n",str(target)],capture_output=True,text=True)
+                  if check.returncode:
+                      print("MANUAL_REJECT",json.dumps([path,check.stderr[:200]]));continue
+                  for p,head,body in members:
+                      old=pathlib.Path(td)/"old.sh";old.write_text(data[p])
+                      if subprocess.run([interpreter,"-n",str(old)],capture_output=True).returncode:break
+                  else:
+                      payload.append({"path":path,"content":merged,"removed":[p for p,_,_ in members],"shared_lines":len(shared),"cases":cases})
+          print("MANUAL_GROUP_COUNTS",json.dumps({"groups":len(payload),"removed":sum(len(x["removed"]) for x in payload),"net":sum(len(x["removed"])-1 for x in payload)}))
+          for group in payload:
+              print("MANUAL_GROUP",json.dumps({"path":group["path"],"removed":group["removed"],"shared_lines":group["shared_lines"]}))
+              blob=base64.b64encode(json.dumps(group,separators=(",",":")).encode()).decode()
+              for i in range(0,len(blob),2000):
+                  print("MANUAL_PAYLOAD",group["path"],i//2000,blob[i:i+2000])
+          print("MANUAL_CANDIDATE_END",len(payload))
           PY

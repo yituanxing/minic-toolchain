@@ -303,14 +303,14 @@ Frontend 多数 `probe=*parser` 只是词法前瞻、Core 不同强度的常量�
 - 目标与 ABI：
   [工具链组件边界](toolchain-component-boundaries.md)、
   [Direct LP64 preflight](https://github.com/yituanxing/minic-toolchain/blob/bab9fb3e0d488d9d50da0ce95ded842bf7ef87f2/docs/architecture/minic-only-direct-lp64-preflight-2026-10-21.md)、
-  [RV ABI GPR cursor](riscv-gpr-abi-core-call-ownership-2026-10-24.md)、
-  [RV 机器操作家族](riscv-machine-operation-families-2026-10-24.md)、
-  [RV 指令选择](riscv-machine-selection-ownership-2026-10-24.md)、
-  [RV32 ABI 审计](riscv32-ilp32-abi-architecture-audit-2026-10-24.md)、
-  [RV32 宽整数](riscv32-ilp32-i64-machine-lowering-2026-10-24.md)、
-  [RV32 机器归属](riscv32-machine-ownership-refactor-2026-10-24.md)、
-  [RV32 函数 ABI](riscv32-per-function-abi-planning-2026-10-24.md)、
-  [RV32 变参](rv32-variadic-psabi-2026-10-24.md)、
+  [RV ABI GPR cursor](https://github.com/yituanxing/minic-toolchain/blob/37e5187ab87116af59edcb65ebc6d0c1b82fd2c6/docs/architecture/riscv-gpr-abi-core-call-ownership-2026-10-24.md)、
+  [RV 机器操作家族](https://github.com/yituanxing/minic-toolchain/blob/37e5187ab87116af59edcb65ebc6d0c1b82fd2c6/docs/architecture/riscv-machine-operation-families-2026-10-24.md)、
+  [RV 指令选择](https://github.com/yituanxing/minic-toolchain/blob/37e5187ab87116af59edcb65ebc6d0c1b82fd2c6/docs/architecture/riscv-machine-selection-ownership-2026-10-24.md)、
+  [RV32 ABI 审计](https://github.com/yituanxing/minic-toolchain/blob/37e5187ab87116af59edcb65ebc6d0c1b82fd2c6/docs/architecture/riscv32-ilp32-abi-architecture-audit-2026-10-24.md)、
+  [RV32 宽整数](https://github.com/yituanxing/minic-toolchain/blob/37e5187ab87116af59edcb65ebc6d0c1b82fd2c6/docs/architecture/riscv32-ilp32-i64-machine-lowering-2026-10-24.md)、
+  [RV32 机器归属](https://github.com/yituanxing/minic-toolchain/blob/37e5187ab87116af59edcb65ebc6d0c1b82fd2c6/docs/architecture/riscv32-machine-ownership-refactor-2026-10-24.md)、
+  [RV32 函数 ABI](https://github.com/yituanxing/minic-toolchain/blob/37e5187ab87116af59edcb65ebc6d0c1b82fd2c6/docs/architecture/riscv32-per-function-abi-planning-2026-10-24.md)、
+  [RV32 变参](https://github.com/yituanxing/minic-toolchain/blob/37e5187ab87116af59edcb65ebc6d0c1b82fd2c6/docs/architecture/rv32-variadic-psabi-2026-10-24.md)、
   [RV64 ABI 分类](rv64-abi-classification-v1.md)、
   [RV64 callee](rv64-callee-abi-location-v1.md)、
   [RV64 caller](rv64-caller-abi-location-v1.md)、
@@ -375,3 +375,6 @@ Frontend 多数 `probe=*parser` 只是词法前瞻、Core 不同强度的常量�
 
 
 **2026-11-25 archive:** Ten earlier AST/Core/four-backend design snapshots and the frozen F8 input list are Git-only historical evidence; the links above point to the exact archived bytes. The current compiler architecture, live issue register, function contracts, cleanup/refactor ledgers and source remain unchanged.
+
+
+**Historical RISC-V and Module boundary implementation records:** [pinned snapshot 37e5187a](https://github.com/yituanxing/minic-toolchain/tree/37e5187ab87116af59edcb65ebc6d0c1b82fd2c6/docs/architecture). These ten dated implementation/audit reports have moved out of the live checkout; outstanding debt still belongs to the issue register and current source. Original records: [minic-boundary-convergence-2026-11-03.md](https://github.com/yituanxing/minic-toolchain/blob/37e5187ab87116af59edcb65ebc6d0c1b82fd2c6/docs/architecture/minic-boundary-convergence-2026-11-03.md) · [minic-core-module-ownership-p69-2026-11-05.md](https://github.com/yituanxing/minic-toolchain/blob/37e5187ab87116af59edcb65ebc6d0c1b82fd2c6/docs/architecture/minic-core-module-ownership-p69-2026-11-05.md) · [riscv-gpr-abi-core-call-ownership-2026-10-24.md](https://github.com/yituanxing/minic-toolchain/blob/37e5187ab87116af59edcb65ebc6d0c1b82fd2c6/docs/architecture/riscv-gpr-abi-core-call-ownership-2026-10-24.md) · [riscv-machine-operation-families-2026-10-24.md](https://github.com/yituanxing/minic-toolchain/blob/37e5187ab87116af59edcb65ebc6d0c1b82fd2c6/docs/architecture/riscv-machine-operation-families-2026-10-24.md) · [riscv-machine-selection-ownership-2026-10-24.md](https://github.com/yituanxing/minic-toolchain/blob/37e5187ab87116af59edcb65ebc6d0c1b82fd2c6/docs/architecture/riscv-machine-selection-ownership-2026-10-24.md) · [riscv32-ilp32-abi-architecture-audit-2026-10-24.md](https://github.com/yituanxing/minic-toolchain/blob/37e5187ab87116af59edcb65ebc6d0c1b82fd2c6/docs/architecture/riscv32-ilp32-abi-architecture-audit-2026-10-24.md) · [riscv32-ilp32-i64-machine-lowering-2026-10-24.md](https://github.com/yituanxing/minic-toolchain/blob/37e5187ab87116af59edcb65ebc6d0c1b82fd2c6/docs/architecture/riscv32-ilp32-i64-machine-lowering-2026-10-24.md) · [riscv32-machine-ownership-refactor-2026-10-24.md](https://github.com/yituanxing/minic-toolchain/blob/37e5187ab87116af59edcb65ebc6d0c1b82fd2c6/docs/architecture/riscv32-machine-ownership-refactor-2026-10-24.md) · [riscv32-per-function-abi-planning-2026-10-24.md](https://github.com/yituanxing/minic-toolchain/blob/37e5187ab87116af59edcb65ebc6d0c1b82fd2c6/docs/architecture/riscv32-per-function-abi-planning-2026-10-24.md) · [rv32-variadic-psabi-2026-10-24.md](https://github.com/yituanxing/minic-toolchain/blob/37e5187ab87116af59edcb65ebc6d0c1b82fd2c6/docs/architecture/rv32-variadic-psabi-2026-10-24.md).
