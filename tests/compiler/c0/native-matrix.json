@@ -7941,7 +7941,7 @@
             "aarch64",
             "present",
             "F",
-            "  cset x9, ne"
+            "  cset w9, ne"
           ],
           [
             "loongarch64",
@@ -8120,7 +8120,7 @@
         "targets": [
           "x86_64"
         ],
-        "diagnostic": "x86-64 Core instruction unsupported"
+        "diagnostic": "x86-64 cannot select complete typed MachineIR function"
       }
     ],
     "optional_models": [
