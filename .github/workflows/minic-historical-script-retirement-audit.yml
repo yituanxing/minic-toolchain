@@ -1237,3 +1237,113 @@ jobs:
           done
           echo "BULK_COMPILE_COMPARISON passed=$passed unchanged_baseline_fail=$baseline_failures"
           git diff --exit-code
+
+  bulk-c0-template-discovery:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - name: Derive exact shared-driver cases and all callers
+        run: |
+          python3 - <<'PY'
+          import pathlib,re,subprocess,json
+          from collections import Counter,defaultdict
+          root=pathlib.Path(".")
+          directory=pathlib.Path("tests/compiler/c0")
+          driver=directory/"run-compile-only-case.sh"
+          allowed={str(directory/"run.sh"),str(directory/"run-foundation-focused.sh"),".github/scripts/compiler-c0-full-gate.sh"}
+          def tracked():
+              return subprocess.check_output(["git","ls-files","-z"]).decode().strip("\0").split("\0")
+          files=tracked()
+          scripts=sorted(directory.glob("*.sh"))
+          def logical(s):
+              rows=[]
+              start=0
+              for m in re.finditer(r"(?m)^(?:.*\\\n)*[^\n]*(?:\n|$)",s):
+                  if not m.group(): continue
+                  line=re.sub(r"\\\n[ \t]*"," ",m.group()).strip()
+                  line=re.sub(r"[ \t]+"," ",line)
+                  if line: rows.append((line,m.start(),m.end()))
+              return rows
+          common=["#!/bin/sh","set -eu",'root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)','minic=${MINIC:-"$root/build/debug/bin/minic"}','host_cc=${HOST_CC:-${CC:-cc}}']
+          work_rx=re.compile(r'work=\$\{BUILD_DIR:-"\$root/build/debug"\}/tests/([a-zA-Z0-9_./-]+)')
+          pre_rx=re.compile(r'"\$host_cc" -E -P (?:-std=(gnu11|c11) )?-x c "\$root/tests/compiler/c0/([a-zA-Z0-9_-]+)\.c" -o "\$work/([a-zA-Z0-9_-]+)\.i"')
+          asm_rx=re.compile(r'"\$minic" -S "\$work/([a-zA-Z0-9_-]+)\.i" -o "\$work/([a-zA-Z0-9_-]+)\.s"')
+          stats=Counter()
+          candidates={}
+          for p in scripts:
+              if not p.name.startswith("run-") or p==driver:
+                  stats["other-driver"]+=1;continue
+              n=p.stem[4:]
+              s=p.read_text()
+              rows=logical(s)
+              if [r[0] for r in rows[:5]]!=common:
+                  stats["different-setup"]+=1;continue
+              if len(rows)<9:
+                  stats["short"]+=1;continue
+              w=work_rx.fullmatch(rows[5][0])
+              if not w or ".." in w[1].split("/"):
+                  stats["different-workdir"]+=1;continue
+              idx=6
+              reset=rows[idx][0]=='rm -rf "$work"'
+              idx+=reset
+              if rows[idx][0]!='mkdir -p "$work"':
+                  stats["different-preparation"]+=1;continue
+              pre=pre_rx.fullmatch(rows[idx+1][0])
+              asm=asm_rx.fullmatch(rows[idx+2][0])
+              if not pre or not asm or pre[3]!=asm[1] or not (directory/(pre[2]+".c")).is_file():
+                  stats["different-compile"]+=1;continue
+              body=s[rows[idx+2][2]:].strip("\n")
+              # Preserve every assertion and reject any semantic ambiguity from moving
+              # the body into the existing case statement. No heredocs or argument use.
+              if not body or re.search(r"<<|\$(?:[0-9@*#?]|[{](?:[0-9@*#?]|source\b|input\b|output\b|dialect\b|name\b))|\$(?:source|input|output|dialect|name)\b|(?m:^\s*(?:shift|set --|exec)\b)|\brequire_(?:file_)?literals\b",body):
+                  stats["body-needs-review"]+=1;continue
+              if re.search(r"(?m)^    "+re.escape(n)+r"\)",driver.read_text()):
+                  stats["already-registered"]+=1;continue
+              candidates[p.name]={"case":n,"path":str(p),"row":[pre[2],w[1],pre[3],asm[2],pre[1] or "","yes" if reset else "no"],"body":body}
+          # Whole-tree literal usage, including the two dynamic list dispatchers.
+          rx=re.compile("|".join(re.escape(n) for n in sorted(candidates,key=len,reverse=True))) if candidates else re.compile(r"(?!)")
+          refs=defaultdict(list)
+          for path in files:
+              p=pathlib.Path(path)
+              if not p.is_file() or p.suffix in (".md",".rst") or path.startswith("docs/"):
+                  continue
+              data=p.read_bytes()
+              if b"\0" in data: continue
+              for i,line in enumerate(data.decode("utf-8",errors="replace").splitlines(),1):
+                  for n in set(rx.findall(line)):
+                      if path!=candidates[n]["path"]:
+                          refs[n].append((path,i,line))
+          def rewrite(path,line,n,case):
+              # Exact shell invocation; reject path globs, assertions, nontrivial args,
+              # and arbitrary consumers. Current full/foundation gate lists use compile:.
+              if path in (str(directory/"run-foundation-focused.sh"),".github/scripts/compiler-c0-full-gate.sh"):
+                  if re.fullmatch(r"[ \t]*"+re.escape(n)+r"[ \t]*(?:\\)?[ \t]*",line):
+                      return line.replace(n,"compile:"+case)
+              if path==str(directory/"run.sh") and re.fullmatch(r"[ \t]*run_c0_(?:host|default) "+re.escape(n),line):
+                  return line.replace(n,"run-compile-only-case.sh "+case)
+              if path in allowed or path.endswith(".sh") or path=="Makefile":
+                  for token in ('"$root/tests/compiler/c0/'+n+'"','tests/compiler/c0/'+n):
+                      if re.search(r"\bsh "+re.escape(token)+r"[ \t]*$",line):
+                          return line.replace(token,token.replace(n,"run-compile-only-case.sh")+" "+case)
+              return None
+          selected=[]
+          for n,c in candidates.items():
+              edits=[]
+              for path,i,line in refs[n]:
+                  replacement=rewrite(path,line,n,c["case"])
+                  if replacement is None: break
+                  edits.append([path,i,line,replacement])
+              else:
+                  c["edits"]=edits
+                  selected.append(c)
+                  continue
+              stats["unhandled-consumer"]+=1
+              print("BULK_BLOCK "+json.dumps([n,path,i,line[:160]],ensure_ascii=True))
+          print("BULK_COUNTS "+json.dumps({"scripts":len(scripts),"template_candidates":len(candidates),"selected":len(selected),"rejected":stats},sort_keys=True))
+          for c in selected:
+              print("BULK_CASE "+json.dumps(c,ensure_ascii=True,separators=(",",":")))
+          print("BULK_END "+str(len(selected)))
+          PY
