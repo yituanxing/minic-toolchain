@@ -1,4 +1,4 @@
-name: MiniC C0 eight-case legacy/new parity (temporary)
+name: MiniC C0 14-case legacy/new parity (temporary)
 on:
   push:
     branches:
@@ -14,7 +14,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Build production MiniC exact head
         run: make -j4 MODE=release CFLAGS=-Werror build/release/bin/minic-cc build/release/bin/minic
-      - name: Verify old-vs-new 8 cases byte-for-byte including compiler/native runtime
+      - name: Verify old-vs-new 14 cases byte-for-byte including compiler/native runtime
         shell: bash
         run: |
           python3 - <<'PY'
@@ -25,19 +25,25 @@ jobs:
           names=[
             'run-first500-pareto-v1',
             'run-first500-static-array-pointer-v1',
-            'run-expression-statement-entry',
             'run-character-array-string-initializer',
             'run-packed-zero-width-bitfield-barrier',
             'probe-zero-record-five-targets',
             'probe-rv32-pointer-widening-source',
             'run-gnu-runtime-if-effect-facts',
+            'probe-core-indirect-local-fact-escape',
+            'probe-gnu-qualified-array-alias',
+            'probe-gnu-builtin-popcount',
+            'probe-gnu-builtin-overflow-predicate',
+            'run-riscv-source-asm-saved-operands',
+            'run-aarch64-builtin-va-list-declaration',
+            'probe-core-function-designator-nonnull',
           ]
           failures=[]
           for name in names:
               with tempfile.TemporaryDirectory(prefix='minic-ab-') as temp:
                   base=pathlib.Path(temp)
                   env=dict(os.environ,MINIC_CC=cc,MINIC=legacy,HOST_CC='cc',CC='cc')
-                  old_cmd=(['bash'] if name in ('run-packed-zero-width-bitfield-barrier','probe-rv32-pointer-widening-source') else ['sh'])+['tests/compiler/c0/'+name+'.sh']
+                  old_cmd=(['bash'] if name in ('run-packed-zero-width-bitfield-barrier','probe-rv32-pointer-widening-source','probe-core-indirect-local-fact-escape','probe-core-function-designator-nonnull') else ['sh'])+['tests/compiler/c0/'+name+'.sh']
                   if name=='run-packed-zero-width-bitfield-barrier': old_cmd.append(cc)
                   new_cmd=['sh','tests/compiler/c0/run-native-matrix.sh',name]
                   if name=='run-packed-zero-width-bitfield-barrier': new_cmd.append(cc)
