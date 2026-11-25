@@ -1744,3 +1744,5 @@ C61 修正结论：提交 `a0219a75` 的真实 RV64 CI 显示 double-return、�
 ## 批次 C62：x86 GNU 核心语义回归数据化（2026-11-25）
 
 当前基线 `e6ea6709a48a`。将三份原先没有任何直接调用者的 x86 shell 脚本迁移到现役 `native-matrix.json`：TESTB CC flag-output（包括 3 条 testb、setnz/sete、3 组负例及双运行时）、Linux IOMEM tied SI/DI/CX（包含 0–31 字节 GNU/MiniC 运行及三个非法 ASM 变体）、零尺寸静态数组（包括两个 GNU/Minic ELF 对象的 nm 小写 r 以及 .size 0）。只给已有 `native-matrix.py` 增加两种通用 opt-in nm 对象取证和 sed 首次替换语义，不新建驱动/目录，不删除原 C fixture。三项自动纳入现有 177 项 Native Matrix 推送验收；以此提交的实际 CI 为准，不能视静态迁移为已经通过。
+
+C62 第一次真实 Native Matrix：TESTCC 与 IOMEM 两组全部 PASS；零尺寸数组首次 FAIL 于要求未被引用的 internal const 符号必须出现在 .s。原 fixture 只有 `sizeof` 常量折叠使用，GNU/MiniC 可合法省略。故在原 fixture 中加入公开地址表（3 个对应 ELF 重定位），将验证收紧为真实可观察的静态零尺寸对象存在性和 GNU/MiniC `nm -S` 双重证明。不放宽语义断言，须以新提交 CI 复核。
