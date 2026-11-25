@@ -44,7 +44,7 @@ jobs:
           retired={name for name,config in cases.items() if not (root/config.get("old_path","tests/compiler/c0/"+name+".sh")).exists()}
           bad=[]
           for p in active:
-              if p.startswith("docs/") or p.endswith(".md") or p in (".github/workflows/minic-test-content-audit.yml", "tests/compiler/c0/native-matrix.json", ".github/workflows/minic-historical-script-retirement-audit.yml"): continue
+              if p.startswith("docs/") or p.endswith(".md") or p in (".github/workflows/minic-test-content-audit.yml", "tests/compiler/c0/native-matrix.json"): continue
               try: body=(root/p).read_text()
               except (UnicodeDecodeError,OSError): continue
               for name in retired:
@@ -57,7 +57,7 @@ jobs:
           # Check every reference to the superseded, parameterized C input set.
           old_inputs=["invalid_tag_kind_enum_struct","invalid_tag_kind_struct_enum","invalid_tag_kind_struct_union","invalid_tag_kind_union_struct","invalid_tag_kind_shadow_enum","invalid_tag_kind_shadow_struct","invalid_tag_kind_forward_enum_record","invalid_bitwise_xor_pointer","invalid_bitwise_and_pointer","invalid_shift_pointer"]
           for path in active:
-              if path.startswith("docs/") or path.endswith(".md") or path in (".github/workflows/minic-test-content-audit.yml", ".github/workflows/minic-historical-script-retirement-audit.yml"): continue
+              if path.startswith("docs/") or path.endswith(".md") or path in (".github/workflows/minic-test-content-audit.yml"): continue
               try: body=(root/path).read_text()
               except (UnicodeDecodeError,OSError): continue
               for name in old_inputs:
