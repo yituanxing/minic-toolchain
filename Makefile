@@ -721,7 +721,7 @@ check-fast: check-direct-lp64-asm-capacity
 .PHONY: check-riscv-source-asm-saved-operands
 check-riscv-source-asm-saved-operands: $(MINIC_CC_BINARY)
 	@MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
-		sh tests/compiler/c0/run-riscv-source-asm-saved-operands.sh
+		sh tests/compiler/c0/run-native-matrix.sh run-riscv-source-asm-saved-operands
 
 check-fast: check-riscv-source-asm-saved-operands
 
@@ -1069,7 +1069,7 @@ check-core-record-layout-contract:
 check-zero-record-five-targets: $(MINIC_CC_BINARY)
 	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" \
 	BUILD_DIR="$(abspath $(BUILD_DIR))" \
-	sh tests/compiler/c0/probe-zero-record-five-targets.sh
+	sh tests/compiler/c0/run-native-matrix.sh probe-zero-record-five-targets
 
 check-fast: check-core-record-layout-contract check-zero-record-five-targets
 
@@ -1738,7 +1738,7 @@ check-packed-bitfield-field-layout: $(MINIC_CC_BINARY)
 
 .PHONY: check-packed-zero-width-bitfield-barrier
 check-packed-zero-width-bitfield-barrier: $(MINIC_CC_BINARY)
-	bash tests/compiler/c0/run-packed-zero-width-bitfield-barrier.sh "$(abspath $(MINIC_CC_BINARY))"
+	bash tests/compiler/c0/run-native-matrix.sh run-packed-zero-width-bitfield-barrier "$(abspath $(MINIC_CC_BINARY))"
 
 .PHONY: check-long-double-literal-precision
 check-long-double-literal-precision: $(MINIC_CC_BINARY)
@@ -1804,7 +1804,7 @@ check-core-literal-branch-fold:
 .PHONY: check-core-function-designator-nonnull
 check-core-function-designator-nonnull: $(MINIC_CC_BINARY)
 	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" \
-	bash tests/compiler/c0/probe-core-function-designator-nonnull.sh
+	bash tests/compiler/c0/run-native-matrix.sh probe-core-function-designator-nonnull
 
 check-fast: check-loongarch64-record-copy-size check-loongarch64-frame-fold check-core-value-use-counts check-core-dead-ssa-writeback check-core-gp-forward check-core-literal-branch-guard check-core-literal-branch-fold check-core-function-designator-nonnull
 
@@ -1816,7 +1816,7 @@ check-gnu-builtin-constant-p-if-guard: $(MINIC_CC_BINARY)
 .PHONY: check-gnu-runtime-if-effect-facts
 check-gnu-runtime-if-effect-facts: $(MINIC_CC_BINARY)
 	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
-	sh tests/compiler/c0/run-gnu-runtime-if-effect-facts.sh
+	sh tests/compiler/c0/run-native-matrix.sh run-gnu-runtime-if-effect-facts
 
 .PHONY: check-gnu-if-condition-local-owner
 check-gnu-if-condition-local-owner: $(MINIC_CC_BINARY)
@@ -1855,7 +1855,7 @@ check-fast: check-x86-kernel-head-link-address
 .PHONY: check-core-indirect-local-fact-escape
 check-core-indirect-local-fact-escape: $(MINIC_CC_BINARY)
 	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
-	bash tests/compiler/c0/probe-core-indirect-local-fact-escape.sh
+	bash tests/compiler/c0/run-native-matrix.sh probe-core-indirect-local-fact-escape
 
 check-fast: check-core-indirect-local-fact-escape
 
@@ -1929,7 +1929,7 @@ check-fast: check-static-chained-array-arena
 .PHONY: check-rv32-pointer-widening-source check-rv32-pointer-widening-qemu
 check-rv32-pointer-widening-source: $(MINIC_CC_BINARY)
 	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
-	bash tests/compiler/c0/probe-rv32-pointer-widening-source.sh
+	bash tests/compiler/c0/run-native-matrix.sh probe-rv32-pointer-widening-source
 
 check-rv32-pointer-widening-qemu: $(MINIC_CC_BINARY)
 	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" \

@@ -408,7 +408,7 @@ run_c0_host run-gnu-static-local-interleaved-attribute.sh
 
 run_c0_host run-compile-only-case.sh runtime-local-array-initializer
 
-run_c0_host run-character-array-string-initializer.sh
+run_c0_host run-native-matrix.sh run-character-array-string-initializer
 
 run_c0_host run-array-parameter-adjustment.sh
 
@@ -521,9 +521,9 @@ run_c0_host run-compile-only-case.sh static-union-zero-overlay
 
 run_c0_host run-compile-only-case.sh enum-forward-completion
 
-run_c0_host run-first500-pareto-v1.sh
+run_c0_host run-native-matrix.sh run-first500-pareto-v1
 
-run_c0_host run-first500-static-array-pointer-v1.sh
+run_c0_host run-native-matrix.sh run-first500-static-array-pointer-v1
 
 run_c0_host run-compile-only-case.sh enum-mode-byte
 

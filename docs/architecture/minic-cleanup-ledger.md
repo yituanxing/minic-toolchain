@@ -471,7 +471,7 @@ DELETE 0**；明确记录不应删除的逻辑，避免之后凭重复外观破�
 
 **验证 PASS：** 当前 Release `-Werror` minic-cc 全源链接；
 `run-core-local-effect-summary.sh` 的 AST 白盒单元、GNU/MiniC
-x86 原生与五 ISA `-S`；`run-gnu-runtime-if-effect-facts.sh`
+x86 原生与五 ISA `-S`；`run-native-matrix.sh run-gnu-runtime-if-effect-facts`
 的 x86 GNU/MiniC 原生差分和 RV64 `-S`。无实际生产改动，
 完整五 ISA ELF/QEMU 与联合验收仍推迟。
 
@@ -605,7 +605,7 @@ x86 原生对照；`run-core-constant-switch-dead-cases.sh` 五目标 `-S`
 的 GNU AS/nm 对照；`run-gnu-switch-case-range.sh`；
 `probe-gnu-nested-switch-record-return-5isa.sh` 五 ISA `-S`、
 x86 GNU/MiniC 原生及负例；`run-for-loops.sh`、
-`run-gnu-runtime-if-effect-facts.sh`、`run-core-reentry-query-contract.sh`。
+`run-native-matrix.sh run-gnu-runtime-if-effect-facts`、`run-core-reentry-query-contract.sh`。
 另独立 MC-048 在合入后通过五 ISA `-S` 与 GNU/MiniC 双 ELF32
 `qemu-riscv32` native exit7。**不计 PASS：** 老
 `run-switch-control-flow.sh` 首个断言仍要求历史

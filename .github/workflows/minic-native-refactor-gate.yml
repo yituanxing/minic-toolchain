@@ -50,7 +50,7 @@ on:
       - 'tests/compiler/c0/probe-core-semantic-family.c'
       - 'tests/compiler/c0/probe-core-vector-layout-contract.c'
       - 'tests/compiler/c0/probe-core-record-layout-contract.c'
-      - 'tests/compiler/c0/probe-zero-record-five-targets.sh'
+      - 'tests/compiler/c0/native-matrix.json'
       - 'tests/compiler/c0/run-x86_64-record-array-sret-sysv.sh'
       - 'tests/compiler/c0/zero_record_noop_sideeffects.c'
       - 'tests/compiler/c0/run-compile-only-case.sh'
