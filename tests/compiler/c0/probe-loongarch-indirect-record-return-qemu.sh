@@ -85,16 +85,124 @@ contains '^  st\.d \$a0, \$(sp|s0|t3),' "$work/indirect.s"
 contains '^  ld\.d \$a0, \$(sp|s0|t3),' "$work/indirect.s"
 contains '^  jirl \$ra, \$t2, 0$' "$work/indirect.s"
 
-# The bounded ABI copy is deliberately 17..2048 bytes. Never silently
-# truncate a 2049-byte result, and never leave a partial .s on rejection.
+# Shared indirect-record classification accepts 2049 bytes. The existing
+# MachineIR copy loop and 1 MiB physical frame policy own the real bounds.
 printf '%s\n' \
   'struct TooLarge { unsigned char bytes[2049]; };' \
   'struct TooLarge too_large(void) {' \
   '  struct TooLarge v; v.bytes[0] = 1; v.bytes[2048] = 2; return v;' \
   '}' >"$work/too-large.c"
 "$host_cc" -E -P -x c "$work/too-large.c" -o "$work/too-large.i"
-reject too-large "$work/too-large.i"
-printf '%s\n' 'LOONGARCH64_SRET_SOURCE=PASS hidden_a0=1 explicit_a1=1 dynamic_frame=1 sizes=17..2048 indirect_positive=1 overlimit_negative=1'
+"$minic" --target=loongarch64-linux -S "$work/too-large.i" \
+    -o "$work/too-large.s" || fail 'legal 2049-byte record refused'
+contains '^too_large:
+
+if ! command -v "$cross_cc" >/dev/null 2>&1 ||
+   ! command -v "$cross_qemu" >/dev/null 2>&1; then
+    if [[ ${MINIC_REQUIRE_LOONG_SRET:-0} == 1 ]]; then
+        fail 'required LoongArch64 GNU GAS/QEMU toolchain absent'
+    fi
+    printf '%s\n' 'LOONGARCH64_SRET_RUNTIME=SKIP GNU cross tools/QEMU missing'
+    exit 0
+fi
+
+# Use GNU target preprocessing for BOTH the reference and mixed ABI run.
+"$cross_cc" -E -P -std=gnu11 -x c "$mini_source" -o "$work/target-mini.i"
+"$minic" --target=loongarch64-linux -S "$work/target-mini.i" -o "$work/target-mini.s" \
+    || fail 'LoongArch-target preprocessing/compilation'
+"$cross_cc" -std=gnu11 -O2 -static "$mini_source" "$gnu_source" \
+    -o "$work/gnu.elf" || fail 'GNU reference static link'
+"$cross_cc" -std=gnu11 -O2 -c "$gnu_source" \
+    -o "$work/gnu.o" || fail 'GNU caller/callee object'
+"$cross_cc" -static -x assembler "$work/target-mini.s" -x none "$work/gnu.o" \
+    -o "$work/mini.elf" || fail 'MiniC/GNU mixed static link'
+
+set +e
+timeout 45s "$cross_qemu" "$work/gnu.elf" >"$work/gnu.out" 2>"$work/gnu.err"
+gnu_status=$?
+timeout 45s "$cross_qemu" "$work/mini.elf" >"$work/mini.out" 2>"$work/mini.err"
+mini_status=$?
+set -e
+if [[ $gnu_status -ne 42 || $mini_status -ne 42 ]]; then
+    printf '%s\n' "GNU=$gnu_status MiniC=$mini_status" >&2
+    sed -n '1,14p' "$work/gnu.err" >&2
+    sed -n '1,14p' "$work/mini.err" >&2
+    fail 'GNU/GNU and GNU/MiniC runtime ABI differ'
+fi
+cmp "$work/gnu.out" "$work/mini.out" || fail 'mixed stdout mismatch'
+cmp "$work/gnu.err" "$work/mini.err" || fail 'mixed stderr mismatch'
+# A 2049-byte return must preserve the same hidden a0 result-pointer ABI.
+cat >"$work/large-caller.c" <<'SRC'
+struct TooLarge { unsigned char bytes[2049]; };
+extern struct TooLarge too_large(void);
+int main(void) {
+    struct TooLarge value = too_large();
+    return value.bytes[0] == 1 && value.bytes[2048] == 2 ? 42 : 1;
+}
+SRC
+"$cross_cc" -std=gnu11 -O0 -static "$work/too-large.c" \
+    "$work/large-caller.c" -o "$work/large-gnu.elf"
+"$cross_cc" -std=gnu11 -O0 -c "$work/large-caller.c" \
+    -o "$work/large-caller.o"
+"$cross_cc" -static -x assembler "$work/too-large.s" -x none \
+    "$work/large-caller.o" -o "$work/large-minic.elf"
+for producer in gnu minic; do
+    rc=0
+    timeout 45s "$cross_qemu" "$work/large-$producer.elf" || rc=$?
+    if [[ "$rc" -ne 42 ]]; then
+        fail "2049-byte GNU caller/producer=$producer result=$rc expected=42"
+    fi
+done
+printf '%s\n' 'LOONGARCH64_SRET_RUNTIME=PASS GNU_AS=2 GNU_static=4 QEMU=4 mixed_ABI=2 sizes=17,24,32,40,64,144,2048,2049'
+ "$work/too-large.s"
+contains '^  li\\.d \\$t3, 2049
+
+if ! command -v "$cross_cc" >/dev/null 2>&1 ||
+   ! command -v "$cross_qemu" >/dev/null 2>&1; then
+    if [[ ${MINIC_REQUIRE_LOONG_SRET:-0} == 1 ]]; then
+        fail 'required LoongArch64 GNU GAS/QEMU toolchain absent'
+    fi
+    printf '%s\n' 'LOONGARCH64_SRET_RUNTIME=SKIP GNU cross tools/QEMU missing'
+    exit 0
+fi
+
+# Use GNU target preprocessing for BOTH the reference and mixed ABI run.
+"$cross_cc" -E -P -std=gnu11 -x c "$mini_source" -o "$work/target-mini.i"
+"$minic" --target=loongarch64-linux -S "$work/target-mini.i" -o "$work/target-mini.s" \
+    || fail 'LoongArch-target preprocessing/compilation'
+"$cross_cc" -std=gnu11 -O2 -static "$mini_source" "$gnu_source" \
+    -o "$work/gnu.elf" || fail 'GNU reference static link'
+"$cross_cc" -std=gnu11 -O2 -c "$gnu_source" \
+    -o "$work/gnu.o" || fail 'GNU caller/callee object'
+"$cross_cc" -static -x assembler "$work/target-mini.s" -x none "$work/gnu.o" \
+    -o "$work/mini.elf" || fail 'MiniC/GNU mixed static link'
+
+set +e
+timeout 45s "$cross_qemu" "$work/gnu.elf" >"$work/gnu.out" 2>"$work/gnu.err"
+gnu_status=$?
+timeout 45s "$cross_qemu" "$work/mini.elf" >"$work/mini.out" 2>"$work/mini.err"
+mini_status=$?
+set -e
+if [[ $gnu_status -ne 42 || $mini_status -ne 42 ]]; then
+    printf '%s\n' "GNU=$gnu_status MiniC=$mini_status" >&2
+    sed -n '1,14p' "$work/gnu.err" >&2
+    sed -n '1,14p' "$work/mini.err" >&2
+    fail 'GNU/GNU and GNU/MiniC runtime ABI differ'
+fi
+cmp "$work/gnu.out" "$work/mini.out" || fail 'mixed stdout mismatch'
+cmp "$work/gnu.err" "$work/mini.err" || fail 'mixed stderr mismatch'
+printf '%s\n' 'LOONGARCH64_SRET_RUNTIME=PASS GNU_AS=1 GNU_static=2 QEMU=2 mixed_ABI=1 sizes=17,24,32,40,64,144,2048'
+ "$work/too-large.s"
+
+# Keep the true bounded-frame refusal, well above 2 KiB.
+printf '%s\n' \
+  'struct BeyondFrame { unsigned char bytes[1048577]; };' \
+  'struct BeyondFrame cannot_fit(void) {' \
+  '  struct BeyondFrame v; v.bytes[0] = 7; return v;' \
+  '}' >"$work/frame-limit.c"
+"$host_cc" -E -P -x c "$work/frame-limit.c" -o "$work/frame-limit.i"
+reject frame-limit "$work/frame-limit.i"
+printf '%s\n' 'LOONGARCH64_SRET_SOURCE=PASS hidden_a0=1 explicit_a1=1 dynamic_frame=1 sizes=17..2049 indirect_positive=1 frame_capacity_negative=1'
 
 if ! command -v "$cross_cc" >/dev/null 2>&1 ||
    ! command -v "$cross_qemu" >/dev/null 2>&1; then
