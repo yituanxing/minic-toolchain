@@ -55,7 +55,7 @@ jobs:
               category=('REFERENCED' if real else 'NO_EXPLICIT_REF')+('/MATRIX_OVERLAP' if matrix_overlaps else '/UNIQUE')+('/CROSS' if iscross else '/HOST')+('/CUSTOM' if hard else '/SIMPLE')+('/INLINE' if generated else '/FILE')
               groups[category]+=1
               indexed.append(dict(name=name,path=p,bytes=len(s),lines=s.count('\n')+1,refs=real,docs=len(cands)-len(real),overlap=matrix_overlaps,fixtures=norm,cross=iscross,hard=hard,generated=generated,negative=neg,category=category))
-          print('AUDIT_SUMMARY',json.dumps(dict(total=len(indexed),tracked=len(files),source_files=len(sources),exactly_orphan=sum(not x['refs'] for x in indexed),orphan_with_matrix=sum(not x['refs'] and x['overlap'] for x in indexed),orphan_no_matrix=sum(not x['refs'] and not x['overlap'] for x in indexed),matrix_cases=len(mat)),ensure_ascii=False))
+          print('AUDIT_SUMMARY',json.dumps(dict(total=len(indexed),tracked=len(files),source_files=len(sources),exactly_orphan=sum(not x['refs'] for x in indexed),orphan_with_matrix=sum(not x['refs'] and bool(x['overlap']) for x in indexed),orphan_no_matrix=sum(not x['refs'] and not bool(x['overlap']) for x in indexed),matrix_cases=len(mat)),ensure_ascii=False))
           print('AUDIT_GROUPS',json.dumps(groups.most_common(),ensure_ascii=False))
           for x in sorted((x for x in indexed if not x['refs']),key=lambda x:(len(x['overlap'])==0,x['cross'] or x['hard'] or x['generated'],x['bytes'])):
               print('ORPHAN',json.dumps({k:x[k] for k in ('name','bytes','docs','overlap','fixtures','cross','hard','generated','negative')},ensure_ascii=False))
