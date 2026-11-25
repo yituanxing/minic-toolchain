@@ -111,7 +111,6 @@ def check_all(checks, artifacts, targets, counts=(), cfg=(), order=(),
 
     for target, pattern, expected_bytes in object_zeros:
         lines = artifacts[target].decode(errors="replace").splitlines()
-        match = matching
         label_re = re.compile(pattern)
         found = False
         for i, line in enumerate(lines):
