@@ -715,7 +715,9 @@ jobs:
           # Only remove normal-success steps dominated by an existing exit-78 guard.
           # Preserve all fail-aware reporting and untouched bootstrap routes.
           source_perf = git("show", "201db76b4806f0b96ca1ec149c767100dfb2b8dc:" + perf_path).decode()
-          assert source_perf == live_perf
+          # The route snapshot and later pinned input differ in other preserved steps.
+          # The latter blob was independently verified above before subtraction.
+          assert git("rev-parse", "201db76b4806f0b96ca1ec149c767100dfb2b8dc:" + perf_path).decode().strip() == route_blobs[perf_path]
           unreachable = {
               "Materialize this Kbuild C TU range (not part of MiniC time)": "Build latest Canonical MiniC",
               "Verify both historically damaged preprocessed inputs with GCC": "Build latest Canonical MiniC",
@@ -1525,3 +1527,85 @@ jobs:
           done
           echo "TARGET_PROBE_COMPARISON passed=$passed unchanged_baseline_fail=$baseline_failures"
           git diff --exit-code
+
+  full-source-census:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Build the actual standalone compiler for symbol and reference audit
+        run: make -j4 MODE=debug BUILD_DIR=build/source-census CFLAGS=-Werror build/source-census/bin/minic-cc
+      - name: Whole-source function and duplicate implementation census
+        run: |
+          python3 - <<'PY'
+          import collections, hashlib, json, pathlib, re, subprocess
+          root=pathlib.Path(".")
+          files=subprocess.check_output(["git","ls-files","-z"]).decode().strip("\0").split("\0")
+          sources=[p for p in files if p.startswith(("src/","include/","tools/minic/","tools/minic-cc/")) and p.endswith((".c",".h",".def"))]
+          objects=sorted(pathlib.Path("build/source-census").rglob("*.o"))
+          symbols=collections.defaultdict(list)
+          for obj in objects:
+              result=subprocess.run(["nm","-P","--defined-only",str(obj)],capture_output=True,text=True,check=True)
+              for line in result.stdout.splitlines():
+                  fields=line.split()
+                  if len(fields)>=2 and fields[1] in ("T","t","W","w") and re.fullmatch(r"[A-Za-z_]\w*",fields[0]):
+                      symbols[fields[0]].append((str(obj),fields[1]))
+          names=set(symbols)
+          refs=collections.defaultdict(list)
+          token=re.compile(r"\b[A-Za-z_]\w*\b")
+          for p in files:
+              if p.startswith(("third_party/","tests/vendor/")):continue
+              data=pathlib.Path(p).read_bytes()
+              if b"\0" in data:continue
+              for n,line in enumerate(data.decode("utf-8",errors="replace").splitlines(),1):
+                  for name,count in collections.Counter(token.findall(line)).items():
+                      if name in names:refs[name].append((p,n,count,line.strip()))
+          # All actual object-defined functions, with all retained tree occurrences.
+          print("SOURCE_CENSUS "+json.dumps({"tracked":len(files),"sources":len(sources),"lines":sum(len(pathlib.Path(p).read_text().splitlines()) for p in sources),"objects":len(objects),"symbols":len(symbols)},sort_keys=True))
+          for name,defs in sorted(symbols.items()):
+              if name=="main":continue
+              hits=refs[name]
+              actual=[r for r in hits if not r[0].endswith((".md",".rst",".txt",".json",".tsv"))]
+              if sum(r[2] for r in actual)<=3 and len(defs)==1:
+                  print("SOURCE_DEAD_CANDIDATE "+json.dumps({"name":name,"objects":defs,"refs":actual,"docs":[r for r in hits if r not in actual]},ensure_ascii=True,separators=(",",":")))
+          # Detect repeated full function bodies by brace-balanced C lexical tokens.
+          # Comments and string literals are protected. Names remain unchanged:
+          # matching bodies are review inputs rather than automatic deletions.
+          lex=re.compile(r'//[^\n]*|/\*[\s\S]*?\*/|"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'|[A-Za-z_]\w*|0[xX][0-9A-Fa-f]+|\d+|[^\s]')
+          bodies=collections.defaultdict(list)
+          for p in sources:
+              if not p.endswith(".c"):continue
+              s=pathlib.Path(p).read_text()
+              ts=[m for m in lex.finditer(s) if not m.group().startswith(("//","/*"))]
+              vals=[m.group() for m in ts]
+              depth=0
+              start=None
+              for i,v in enumerate(vals):
+                  if v=="{":
+                      if depth==0 and i>2 and vals[i-1]==")":
+                          j=i-1
+                          par=1
+                          while j>0 and par:
+                              j-=1
+                              par+=(vals[j]==")")-(vals[j]=="(")
+                          if j>0 and re.fullmatch(r"[A-Za-z_]\w*",vals[j-1]):
+                              start=(i,j-1,vals[j-1])
+                      depth+=1
+                  elif v=="}":
+                      depth-=1
+                      if depth==0 and start is not None:
+                          a,j,name=start
+                          if i-a>=20:
+                              norm=" ".join(vals[a:i+1])
+                              bodies[hashlib.sha256(norm.encode()).hexdigest()].append({"path":p,"name":name,"line":s.count("\n",0,ts[j].start())+1,"body_lines":s.count("\n",ts[a].start(),ts[i].end())+1,"tokens":i-a})
+                          start=None
+          for group in sorted(bodies.values(),key=lambda g:-len(g)):
+              if len(group)>1:print("SOURCE_EXACT_BODY "+json.dumps(group,separators=(",",":")))
+          print("SOURCE_DUPLICATE_COUNTS "+json.dumps({"groups":sum(len(g)>1 for g in bodies.values()),"functions":sum(len(g) for g in bodies.values()),"candidate_body_lines":sum(sum(x["body_lines"] for x in g)-g[0]["body_lines"] for g in bodies.values() if len(g)>1)}))
+          # Source coverage and directory ownership, not just candidate names.
+          for prefix in ("src/frontend/","src/core/","src/compiler/","src/target/","include/","tools/minic/","tools/minic-cc/"):
+              owners=[p for p in sources if p.startswith(prefix)]
+              print("SOURCE_OWNER "+json.dumps({"path":prefix,"files":len(owners),"lines":sum(len(pathlib.Path(p).read_text().splitlines()) for p in owners)}))
+          PY
