@@ -1,6 +1,6 @@
 #include "compiler/inline_specialize_common.h"
 #include "frontend/function_body.h"
-#include "core/module_ir.h"
+#include "core/symbol_identity.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -9,20 +9,20 @@
 /* Reuse Core's whole-assembler-token identity proof: a substring in a
  * longer symbol is not a live reference to this inline function. */
 static bool minic_program_has_opaque_asm_symbol(const MinicC0Program *program,
-                                         const char *name) {
+                                         const char *name, size_t name_length) {
     size_t index;
-    if (program == NULL || name == NULL || name[0] == '\0')
+    if (program == NULL || name == NULL || name_length == 0U)
         return true;
     for (index = 0U; index < program->file_asm_count; ++index) {
         const MinicFileAsm *source_asm = &program->file_asms[index];
-        if (minic_core_asm_names_symbol(
-                source_asm->text, source_asm->length, name))
+        if (minic_core_asm_token_mentions_symbol(
+                source_asm->text, source_asm->length, name, name_length))
             return true;
     }
     for (index = 0U; index < program->inline_asm_count; ++index) {
         const MinicInlineAsm *source_asm = &program->inline_asms[index];
-        if (minic_core_asm_names_symbol(
-                source_asm->template_text, source_asm->template_length, name))
+        if (minic_core_asm_token_mentions_symbol(
+                source_asm->template_text, source_asm->template_length, name, name_length))
             return true;
     }
     return false;
@@ -32,7 +32,7 @@ bool minic_inline_source_has_opaque_asm_reference(
     const MinicC0Program *program, const MinicFunction *source) {
     if (source == NULL) return true;
     return minic_program_has_opaque_asm_symbol(
-        program, source->name);
+        program, source->name, source->name_length);
 }
 
 bool minic_inline_call_plan_initialize(

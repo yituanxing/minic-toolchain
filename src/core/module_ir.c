@@ -8,23 +8,9 @@
 
 bool minic_core_asm_names_symbol(const char *text, size_t length,
                                  const char *symbol) {
-    size_t index, name_length;
-    if (text == NULL || symbol == NULL ||
-        (name_length = strlen(symbol)) == 0U || name_length > length)
-        return false;
-    for (index = 0U; index <= length - name_length; ++index) {
-        const unsigned char before = index == 0U ? 0U : (unsigned char)text[index - 1U];
-        const unsigned char after = index + name_length == length ? 0U :
-            (unsigned char)text[index + name_length];
-        const bool left_identifier = minic_core_assembler_symbol_byte(before);
-        const bool right_identifier = minic_core_assembler_symbol_byte(after);
-        if (!left_identifier && !right_identifier &&
-            memcmp(text + index, symbol, name_length) == 0)
-            return true;
-    }
-    return false;
+    return symbol != NULL && minic_core_asm_token_mentions_symbol(
+        text, length, symbol, strlen(symbol));
 }
-
 void minic_core_module_initialize(MinicCoreModule *module) {
     if (module != NULL) (void)memset(module, 0, sizeof(*module));
 }

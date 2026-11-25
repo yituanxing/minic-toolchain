@@ -23,6 +23,27 @@ static inline bool minic_core_assembler_symbol_byte(unsigned char c) {
            (c >= '0' && c <= '9') || c == '_' || c == '.' || c == '$';
 }
 
+/* Exact ASM token matching shared by source clone reachability and
+ * sealed Core emission. Both text and symbol are length-delimited: no
+ * hidden ModuleIR linkage, no substring matches within longer names. */
+static inline bool minic_core_asm_token_mentions_symbol(
+    const char *text, size_t text_length,
+    const char *name, size_t name_length) {
+    size_t index;
+    if (text == NULL || name == NULL || name_length == 0U ||
+        name_length > text_length) return false;
+    for (index = 0U; index <= text_length - name_length; ++index) {
+        const unsigned char before = index == 0U ? 0U :
+            (unsigned char)text[index - 1U];
+        const unsigned char after = index + name_length == text_length ? 0U :
+            (unsigned char)text[index + name_length];
+        if (!minic_core_assembler_symbol_byte(before) &&
+            !minic_core_assembler_symbol_byte(after) &&
+            memcmp(text + index, name, name_length) == 0) return true;
+    }
+    return false;
+}
+
 static inline bool minic_core_assembler_symbol_lexically_safe(const char *symbol) {
     const unsigned char *cursor = (const unsigned char *)symbol;
     if (cursor == NULL || *cursor == '\0') return false;
