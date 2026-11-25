@@ -1746,3 +1746,7 @@ C61 修正结论：提交 `a0219a75` 的真实 RV64 CI 显示 double-return、�
 当前基线 `e6ea6709a48a`。将三份原先没有任何直接调用者的 x86 shell 脚本迁移到现役 `native-matrix.json`：TESTB CC flag-output（包括 3 条 testb、setnz/sete、3 组负例及双运行时）、Linux IOMEM tied SI/DI/CX（包含 0–31 字节 GNU/MiniC 运行及三个非法 ASM 变体）、零尺寸静态数组（包括两个 GNU/Minic ELF 对象的 nm 小写 r 以及 .size 0）。只给已有 `native-matrix.py` 增加两种通用 opt-in nm 对象取证和 sed 首次替换语义，不新建驱动/目录，不删除原 C fixture。三项自动纳入现有 177 项 Native Matrix 推送验收；以此提交的实际 CI 为准，不能视静态迁移为已经通过。
 
 C62 第一次真实 Native Matrix：TESTCC 与 IOMEM 两组全部 PASS；零尺寸数组首次 FAIL 于要求未被引用的 internal const 符号必须出现在 .s。原 fixture 只有 `sizeof` 常量折叠使用，GNU/MiniC 可合法省略。故在原 fixture 中加入公开地址表（3 个对应 ELF 重定位），将验证收紧为真实可观察的静态零尺寸对象存在性和 GNU/MiniC `nm -S` 双重证明。不放宽语义断言，须以新提交 CI 复核。
+
+## 批次 C63：五份 AArch64 仅编译 Shell 归入现役 Matrix（2026-11-25）
+
+以 `cf1867e51c72` 为基线。审读上述五份没有任何直接调用者的旧 Shell：LL/SC 128-bit +&Q 约束，PMCCFILTR、MTE/SDEI 特权 MRS（仅编译不执行），KVM EL2/PMU 23 种寄存器写，以及 KVM debug 134 条 MSR/ICC 8 种编码。全部把真实 positive 输出数量/关键指令、四或两种跨 ISA 拒绝、源约束或寄存器错配负例迁入原有 `native-matrix.json`；原 C fixture 保留。两份有可选 GNU aarch64 工具链验收的，增加复用已存在 `optional_asm_tool` 的原始 GNU C 编译，非安装环境报告为 optional 而不伪称 GNU-AS PASS。没有新建 runner/workflow/文件。保留负例 fail-closed，不实际执行特权代码。新增矩阵自动随现役 Native CI 运行，须以本提交 exact-HEAD 结果为准。

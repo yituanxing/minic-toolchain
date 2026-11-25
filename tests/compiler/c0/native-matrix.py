@@ -259,6 +259,10 @@ def positive(config, cc, mini, work):
         if optional_tool and shutil.which(optional_tool):
             execute([optional_tool, "-c", out, "-o", work / (target + "-cross.o")],
                     env, label="optional GNU cross assembly")
+            if config.get("optional_asm_gnu_source"):
+                execute([optional_tool, "-c", src,
+                         "-o", work / (target + "-cross-gnu.o")],
+                        env, label="optional original GNU C source assembly")
         if config.get("host_asm_object"):
             execute([cc, "-x", "assembler", "-c", out,
                      "-o", work / (target + "-host.o")], env,
