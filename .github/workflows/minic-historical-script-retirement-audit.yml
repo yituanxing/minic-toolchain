@@ -113,11 +113,22 @@ jobs:
               "tools/ci/apply-perf-ast-capacity-growth-v1.py",
           }
           expected |= retired_runtime | retired_perf
+          retired_legacy_reports = {
+              "docs/ci/ci-active-overlap-cost-audit-2026-10-09.md",
+              "docs/ci/linux-distributed-full-image-v1.md",
+              "docs/ci/linux-distributed-image-graph-v1.md",
+              "docs/ci/minic-existing-fixes-consolidation-inventory-2026-10-15.md",
+              "tools/ci/linux-fast-relink-shadow-v1.sh",
+          }
+          archive_legacy = "0ae7f10f2ffe3a06eee0a3b77eaf82de63a22cc1"
+          assert retired_legacy_reports <= set(git("ls-tree", "-r", "--name-only", archive_legacy).decode().splitlines())
+          expected |= retired_legacy_reports
+          metadata |= {"docs/ci/linux-runtime-isolation.md"}
           metadata |= {"tools/ci/linux-perf-build-minic-profile-v1.sh", "tools/ci/linux-perf-ast-growth-ab-v1.sh"}
           metadata |= {"tools/ci/linux-runtime-build-minic-profile-v1.sh", "tools/ci/linux-runtime-profile-cache-id-v1.py"}
           deleted = changed_paths(base, "HEAD", "--diff-filter=D")
           changed = changed_paths(base, "HEAD")
-          if len(expected) != 873 or deleted != expected or changed != expected | metadata:
+          if len(expected) != 878 or deleted != expected or changed != expected | metadata:
               raise SystemExit("RETIREMENT_SCOPE=FAIL: unexpected tree changes")
           # Preserve the full closure in a historical checkout, not a successful
           # no-op overlay on a different source architecture.

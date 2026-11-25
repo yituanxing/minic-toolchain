@@ -103,7 +103,7 @@ of the same mechanics.  Current useful primitives include:
 - `tools/ci/linux-first-fault-analyzer-v1.py` — first-fault analysis;
 - `tools/ci/linux-early-runtime-link-v1.sh`, `v2.sh`, `v3.sh` — early-runtime
   relink generations;
-- `tools/ci/linux-fast-relink-shadow-v1.sh` — fast shadow/relink support.
+- [Historical fixed-config shadow/relink experiment](https://github.com/yituanxing/minic-toolchain/blob/0ae7f10f2ffe3a06eee0a3b77eaf82de63a22cc1/tools/ci/linux-fast-relink-shadow-v1.sh) — Git-only evidence; not a current CI entrypoint.
 
 Existing fixture producers, source caches and MiniC runtime-profile builders
 remain authoritative until an equivalent canonical replacement is verified.
