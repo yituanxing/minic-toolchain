@@ -512,7 +512,17 @@ jobs:
               "docs/architecture/representation-seams-and-deferred-ir.md",
               "docs/architecture/minic-boundary-convergence-2026-11-03.md",
           }
-          if len(expected) != 1061 or deleted != expected or changed != expected | metadata:
+          historical_pinned_replays = {
+              "tools/ci/linux-three-isa-p2-x86-fail36-replay-v1.py",
+              "tools/ci/linux-x86-kvm25-vector-replay-v1.py",
+              "tools/ci/linux-rv64-p2-moduled-v1.sh",
+              "tools/ci/linux-perf-packed-call-regression-review-v1.py",
+          }
+          assert len(historical_pinned_replays) == 4 and not (expected & historical_pinned_replays)
+          assert historical_pinned_replays <= set(git("ls-tree", "-r", "--name-only", "7a8cdf0e1835db81eeeed822f602a1a722cdcbd7").decode().splitlines())
+          expected |= historical_pinned_replays
+          metadata.add("docs/ci/README.md")
+          if len(expected) != 1065 or deleted != expected or changed != expected | metadata:
               raise SystemExit("RETIREMENT_SCOPE=FAIL: unexpected tree changes")
           # Preserve the full closure in a historical checkout, not a successful
           # no-op overlay on a different source architecture.
