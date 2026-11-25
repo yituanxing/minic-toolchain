@@ -96,7 +96,7 @@ for test_script in \
     strict:record-array-range-once \
     run-x86-security-function-attributes.sh \
     compile:gnu-format-cold-attributes \
-    run-anonymous-record-members.sh \
+    native:run-anonymous-record-members \
     run-block-scope-record-tags.sh \
     compile:block-scope-extern-function-attributes \
     run-gnu-void-pointer-arithmetic.sh \

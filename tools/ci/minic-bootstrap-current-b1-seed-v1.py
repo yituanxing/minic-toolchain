@@ -139,7 +139,7 @@ def main():
     # instead of relying on unspecified inactive union representation bytes.
     with (logs / "machine-operand-full-union-init.log").open("wb") as log:
         command(
-            ["sh", "tests/compiler/c0/run-machine-operand-full-union-init.sh"],
+            ["sh", "tests/compiler/c0/run-native-matrix.sh", "run-machine-operand-full-union-init"],
             env=dict(env, MINIC_CC=str(stage0), BUILD_DIR=str(work / "stage0")),
             timeout=120, stdout=log, stderr=subprocess.STDOUT)
     print("BOOTSTRAP_B1_MACHINE_OPERAND_INIT=PASS targets=5 runtime=x86_64",

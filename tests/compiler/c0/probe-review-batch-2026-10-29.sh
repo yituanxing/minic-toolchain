@@ -13,10 +13,10 @@ sh tests/compiler/c0/run-native-matrix.sh probe-inline-symbolic-shared-body
 sh tests/compiler/c0/run-native-matrix.sh probe-symbolic-inline-two-callers
 sh tests/compiler/c0/probe-function-pointer-attribute-policy.sh
 sh tests/compiler/c0/run-native-matrix.sh probe-static-typedef-array-redeclaration
-sh tests/compiler/c0/probe-rv32-ffsll-high-word.sh
+sh tests/compiler/c0/run-native-matrix.sh probe-rv32-ffsll-high-word
 sh tests/compiler/c0/probe-rv64-record-load-irregular.sh
 sh tests/compiler/c0/probe-rv64-record-load-packed.sh
-sh tests/compiler/c0/run-core-cfg-fold-effectful-conditions.sh
+sh tests/compiler/c0/run-native-matrix.sh run-core-cfg-fold-effectful-conditions
 bash tests/compiler/c0/run-native-matrix.sh probe-core-expr-branch-local-facts "$mini"
 sh tests/compiler/c0/run-native-matrix.sh run-core-switch-case-fact-isolation
 sh tests/compiler/c0/run-core-rv32-va-record-cursor.sh
@@ -58,9 +58,9 @@ MINIC="$(dirname "$mini")/minic" sh tests/compiler/c0/run-enum-tag-scopes.sh
 MINIC="$(dirname "$mini")/minic" sh tests/compiler/c0/run-tag-namespace-scopes.sh
 sh tests/compiler/c0/run-native-matrix.sh probe-external-pointer-array-initializers
 sh tests/compiler/c0/run-native-matrix.sh probe-gnu-cleanup-goto-lifetime
-bash tests/compiler/c0/probe-core-asm-goto-percent-escape.sh
+bash tests/compiler/c0/run-native-matrix.sh probe-core-asm-goto-percent-escape
 bash tests/compiler/c0/run-native-matrix.sh probe-core-asm-empty-rk
-bash tests/compiler/c0/probe-core-asm-nonvolatile-rk.sh
+bash tests/compiler/c0/run-native-matrix.sh probe-core-asm-nonvolatile-rk
 bash tests/compiler/c0/run-native-matrix.sh probe-core-asm-zero-stride
 sh tests/compiler/c0/probe-rv32-target-gate.sh
 sh tests/compiler/c0/probe-rv32-packed-scalar-alignment.sh

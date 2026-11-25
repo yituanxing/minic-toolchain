@@ -1033,7 +1033,7 @@ check-core-ir-shapes: check-core-types
 
 .PHONY: check-core-ir-shapes-source
 check-core-ir-shapes-source: $(MINIC_CC_BINARY)
-	bash tests/core/run-core-ir-shapes-source.sh "$(abspath $(MINIC_CC_BINARY))"
+	bash tests/compiler/c0/run-native-matrix.sh run-core-ir-shapes-source "$(abspath $(MINIC_CC_BINARY))"
 
 .PHONY: check-core-type-verifier
 check-core-type-verifier:
@@ -1194,7 +1194,7 @@ check-integer-bit-operations: $(MINIC_BINARY)
 	MINIC="$(abspath $(MINIC_BINARY))" \
 	HOST_CC="$(CC)" \
 	BUILD_DIR="$(abspath $(BUILD_DIR))" \
-	sh tests/compiler/c0/run-integer-bit-operations.sh
+	sh tests/compiler/c0/run-native-matrix.sh run-integer-bit-operations
 
 check-pointer-members: $(MINIC_BINARY)
 	MINIC="$(abspath $(MINIC_BINARY))" \
@@ -1767,11 +1767,11 @@ check-loongarch64-frame-fold: $(MINIC_CC_BINARY)
 
 .PHONY: check-core-value-use-counts
 check-core-value-use-counts:
-	bash tests/compiler/c0/probe-core-value-use-counts.sh
+	bash tests/compiler/c0/run-native-matrix.sh probe-core-value-use-counts
 
 .PHONY: check-core-call-dump
 check-core-call-dump:
-	HOST_CC="$(CC)" bash tests/compiler/c0/probe-core-call-dump.sh
+	HOST_CC="$(CC)" bash tests/compiler/c0/run-native-matrix.sh probe-core-call-dump
 
 .PHONY: check-mc089-x87-ordered-comparisons
 check-mc089-x87-ordered-comparisons: $(MINIC_CC_BINARY)
@@ -1799,7 +1799,7 @@ check-core-literal-branch-guard: $(MINIC_CC_BINARY)
 
 .PHONY: check-core-literal-branch-fold
 check-core-literal-branch-fold:
-	bash tests/compiler/c0/probe-core-literal-branch-fold.sh
+	bash tests/compiler/c0/run-native-matrix.sh probe-core-literal-branch-fold
 
 .PHONY: check-core-function-designator-nonnull
 check-core-function-designator-nonnull: $(MINIC_CC_BINARY)
@@ -1811,7 +1811,7 @@ check-fast: check-loongarch64-record-copy-size check-loongarch64-frame-fold chec
 .PHONY: check-gnu-builtin-constant-p-if-guard
 check-gnu-builtin-constant-p-if-guard: $(MINIC_CC_BINARY)
 	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
-	sh tests/compiler/c0/run-gnu-builtin-constant-p-if-guard.sh
+	sh tests/compiler/c0/run-native-matrix.sh run-gnu-builtin-constant-p-if-guard
 
 .PHONY: check-gnu-runtime-if-effect-facts
 check-gnu-runtime-if-effect-facts: $(MINIC_CC_BINARY)
@@ -2152,7 +2152,7 @@ check-fast: check-p43-direct-record-callsite
 
 .PHONY: check-p43-inline-call-plan-identity
 check-p43-inline-call-plan-identity:
-	HOST_CC="$(CC)" bash tests/compiler/c0/probe-p43-inline-call-plan-identity.sh
+	HOST_CC="$(CC)" bash tests/compiler/c0/run-native-matrix.sh probe-p43-inline-call-plan-identity
 
 check-fast: check-p43-inline-call-plan-identity
 
@@ -3004,7 +3004,7 @@ check-fast: check-target-sealed-symbol-contract
 .PHONY: check-frontend-asm-goto-cleanup-lifetime
 check-frontend-asm-goto-cleanup-lifetime: $(MINIC_CC_BINARY)
 	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" \
-	  sh tests/frontend/p24_asm_goto_cleanup_regression.sh
+	  sh tests/compiler/c0/run-native-matrix.sh p24_asm_goto_cleanup_regression
 
 check-fast: check-frontend-asm-goto-cleanup-lifetime
 

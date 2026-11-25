@@ -2,6 +2,8 @@
 int main(void)
 {
     int value;
-    int *pointer = &value;
+    int *pointer;
+
+    pointer = &value;
     return pointer OP 1;
 }

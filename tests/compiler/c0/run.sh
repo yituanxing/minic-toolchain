@@ -442,7 +442,7 @@ run_c0_host run-compile-only-case.sh block-scope-extern-object
 
 run_c0_host run-compile-only-case.sh transparent-union
 
-run_c0_host run-gnu-zero-length-array.sh
+run_c0_host run-native-matrix.sh run-gnu-zero-length-array
 
 run_c0_host run-linux-gnu-frontend-semantics.sh
 

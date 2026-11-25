@@ -18,7 +18,9 @@ on:
       - 'src/target/source_policy/**'
       - 'tests/compiler/c0/probe-loongarch64-linux-jump-label.sh'
       - 'tests/compiler/c0/probe-loongarch64-linux-vdso-syscall.sh'
-      - 'tests/compiler/c0/probe-loongarch64-linux-simd-machineir.sh'
+      - 'tests/compiler/c0/native-matrix.json'
+      - 'tests/compiler/c0/native-matrix.py'
+      - 'tests/compiler/c0/run-native-matrix.sh'
       - 'tests/compiler/c0/loongarch64_linux_simd_machineir.i'
       - 'Makefile'
   workflow_dispatch:
@@ -98,7 +100,7 @@ jobs:
             tee build/loong-as-smoke-ci/evidence/linux-vdso-syscall.receipt
           grep -Fxq 'MINIC_LOONG_VDSO_SYSCALL_GNU_AS=PASS' \
             build/loong-as-smoke-ci/evidence/linux-vdso-syscall.receipt
-          sh tests/compiler/c0/probe-loongarch64-linux-simd-machineir.sh |
+          sh tests/compiler/c0/run-native-matrix.sh probe-loongarch64-linux-simd-machineir |
             tee build/loong-as-smoke-ci/evidence/linux-simd-machineir.receipt
           grep -Fxq 'MINIC_LOONG_SIMD_MACHINEIR_NEGATIVE=PASS invalid-offset=reject' \
             build/loong-as-smoke-ci/evidence/linux-simd-machineir.receipt
