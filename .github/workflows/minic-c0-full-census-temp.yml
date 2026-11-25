@@ -97,3 +97,37 @@ jobs:
                   if kind=='C_NORMALIZED' and len(group)<2: continue
                   print('CLONE_GROUP',kind,json.dumps(group))
           PY
+
+      - name: Audit all 270 CI utility owners and dependency reachability
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import pathlib,subprocess,re,json,collections
+          root=pathlib.Path.cwd()
+          paths=[p for p in subprocess.check_output(['git','ls-files','-z']).decode().split('\x00') if p]
+          utils=[p for p in paths if p.startswith('tools/ci/') and (root/p).is_file()]
+          sources={}
+          for p in paths:
+              if p!='':
+                  try:
+                      if (root/p).stat().st_size < 250000 and (root/p).is_file():
+                          sources[p]=(root/p).read_text(errors='replace')
+                  except: pass
+          groups=collections.Counter()
+          rows=[]
+          for p in utils:
+              name=p.split('/')[-1];stem=name.rsplit('.',1)[0];content=sources.get(p,'')
+              refs=[];docs=[]
+              for other,body in sources.items():
+                  if other==p:continue
+                  if p in body or name in body or (len(stem)>=12 and re.search(r'(?<![\w-])'+re.escape(stem)+r'(?![\w-])',body)):
+                      (docs if other.endswith('.md') else refs).append(other)
+              role=(name.split('-')[0].split('_')[0])
+              groups[(role,'LIVE' if refs else 'NO_EXPLICIT_REF')]+=1
+              header=[x.strip() for x in content.splitlines()[:12] if x.strip() and not x.startswith('#!')]
+              rows.append(dict(name=name,path=p,bytes=len(content),refs=refs,docs=docs[:3],role=role,header=header[:3],uses_write=bool(re.search(r'\.write_text|open\(.{0,40}[\x22\x27]w[\x22\x27]|git\s+commit|sed\s+-i|os\.remove|unlink\(',content)),imports=sorted(set(re.findall(r'(?:from|import)\s+([\w.]+)',content)))[:8]))
+          print('UTILITY_SUMMARY',json.dumps(dict(total=len(rows),live=sum(bool(x['refs']) for x in rows),no_refs=sum(not x['refs'] for x in rows),groups=groups.most_common()),ensure_ascii=False))
+          for x in rows:
+              if not x['refs']:
+                  print('UTILITY_ORPHAN',json.dumps({k:x[k] for k in ('name','bytes','role','docs','header','uses_write','imports')},ensure_ascii=False))
+          PY
