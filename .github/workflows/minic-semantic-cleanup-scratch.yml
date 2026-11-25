@@ -181,6 +181,49 @@ jobs:
                       "minild" if n.startswith("minild") else "other")
               byfamily[family]+=1
           print("CI_TOOL_CALL_GRAPH",json.dumps({"tools":len(ci_tools),"unreferenced":len(unref),"unreferenced_bytes":sum(len(ci_tools[p]) for p in unref),"families":byfamily.most_common(),"candidates":unref[:160]}),flush=True)
+          # Scan actual production C function bodies, not filenames. Candidates are
+          # exact or alpha-renamed bodies, including cross-target duplication.
+          def functions(s):
+              # Mask comments/literals to preserve byte offsets and brace depth.
+              mask=re.sub(r"/\*.*?\*/|//[^\n]*|\"(?:\\.|[^\"\\])*\"|'(?:\\.|[^'\\])*'",
+                          lambda m: " "*len(m.group()),s,flags=re.S)
+              level=0
+              stack=[]
+              result=[]
+              for i,ch in enumerate(mask):
+                  if ch=="{":
+                      if level==0:
+                          h=mask[max(0,i-600):i]
+                          m=re.search(r"([A-Za-z_]\w*)\s*\([^{};]{0,480}\)\s*$",h)
+                          if m and m.group(1) not in ("if","while","for","switch","sizeof","_Generic"):
+                              stack.append((m.group(1),i))
+                          else: stack.append((None,i))
+                      level+=1
+                  elif ch=="}":
+                      level-=1
+                      if level==0 and stack:
+                          name,start=stack.pop()
+                          if name:
+                              body=s[start:i+1]
+                              if len(body)>450:result.append((name,body))
+              return result
+          prod_func=collections.defaultdict(list)
+          rename_func=collections.defaultdict(list)
+          countfunc=0
+          for p,s in src.items():
+              for name,body in functions(s):
+                  countfunc+=1
+                  t=scan(body)
+                  if len(t)<65:continue
+                  exact=hashlib.sha256("\x1f".join(t).encode()).hexdigest()
+                  rename=hashlib.sha256(canonical(t).encode()).hexdigest()
+                  prod_func[exact].append((p,name,len(t)))
+                  rename_func[rename].append((p,name,len(t)))
+          def dupresults(d):
+              result=[a for a in d.values() if len(a)>1 and len(set(x[0] for x in a))>1]
+              result.sort(key=lambda a:-sum(x[2] for x in a))
+              return {"groups":len(result),"candidates":result[:35]}
+          print("PROD_FUNCTION_DUPLICATES",json.dumps({"scanned":countfunc,"exact":dupresults(prod_func),"renamed":dupresults(rename_func)}),flush=True)
           print("AUDIT_COMPLETE",flush=True)
           PY
       - name: Verify compiler build and architecture boundary
