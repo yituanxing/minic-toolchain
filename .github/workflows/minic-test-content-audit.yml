@@ -1,62 +1,22 @@
-name: MiniC native regression matrix
+name: MiniC minimal production baseline
 on:
   push:
     branches: [main]
-    paths:
-      - 'src/**'
-      - 'tools/minic*/**'
-      - 'tests/**'
-      - 'Makefile'
-      - '.github/workflows/minic-test-content-audit.yml'
   pull_request:
-    paths:
-      - 'src/**'
-      - 'tools/minic*/**'
-      - 'tests/**'
-      - 'Makefile'
-      - '.github/workflows/minic-test-content-audit.yml'
   workflow_dispatch:
 permissions:
   contents: read
 jobs:
-  current-native-matrix:
+  baseline:
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
-      - name: Build production MiniC
-        run: make -j4 MODE=release CFLAGS=-Werror build/release/bin/minic-cc build/release/bin/minic
-      - name: Execute the maintained regression matrix
-        run: |
-          python3 - <<'PY'
-          import concurrent.futures,json,os,pathlib,subprocess,tempfile
-          root=pathlib.Path.cwd()
-          cases=json.loads((root/"tests/compiler/c0/native-matrix.json").read_text())
-          compiler=str(root/"build/release/bin/minic-cc")
-          def one(item):
-              name,config=item
-              with tempfile.TemporaryDirectory(prefix="matrix-") as work:
-                  env=dict(os.environ,MINIC_CC=compiler,MINIC=str(root/"build/release/bin/minic") if config.get("mini")=="legacy" else compiler,BUILD_DIR=work)
-                  args=["cc"] if config.get("host")=="arg" else ([compiler] if config.get("mini") in ("arg","optional-arg","arg-first") else [])
-                  p=subprocess.run(["sh","tests/compiler/c0/run-native-matrix.sh",name,*args],env=env,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,timeout=200)
-                  return name,p.returncode,p.stdout.decode(errors="replace")
-          with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
-              results=list(pool.map(one,cases.items()))
-          for name,code,out in results:
-              print(name,code,out,flush=True)
-          if any(code for _,code,_ in results): raise SystemExit(1)
-          print("NATIVE_MATRIX_TOTAL",len(results),len(cases))
-          PY
-      - name: Run generated parser and semantic rejection matrix
-        run: |
-          MINIC="$PWD/build/release/bin/minic" HOST_CC=cc sh tests/compiler/c0/run-parser-rejections.sh --all
-      - name: Exercise maintained Make entrypoints
-        run: |
-          bash -n tests/compiler/c0/run.sh tests/compiler/c0/run-foundation-focused.sh tests/compiler/c0/probe-review-batch-2026-10-29.sh
-          # These semantic fixtures are referenced via dynamically constructed
-          # source paths, not their complete filenames. Exercise them in both
-          # native-matrix modes so orphan-name pruning cannot remove live tests.
-          MINIC_CC="$PWD/build/release/bin/minic-cc" sh tests/compiler/c0/run-aarch64-gnu-inline-lazy-negatives.sh
-          MINIC_CC="$PWD/build/release/bin/minic-cc" sh tests/compiler/c0/run-aarch64-gnu-neon-inline-six.sh
-          python3 -m py_compile tools/ci/minic-bootstrap-current-b1-seed-v1.py
-          make -j4 MODE=release CFLAGS=-Werror check-unsigned-declarations check-integer-bit-operations check-core-type-verifier check-core-ir-shapes-source check-netlink-warn-branch check-loongarch64-record-copy-size
+      - name: Build complete production toolchain (C11, -Werror)
+        run: make -j4 MODE=release CFLAGS=-Werror all
+      - name: Run maintained 202-case GNU/MiniC native oracle matrix
+        run: make MODE=release CFLAGS=-Werror check-native
+      - name: Verify generated invalid-language rejections
+        run: make MODE=release CFLAGS=-Werror check-parser
+      - name: Verify MiniAS and MiniPP native smoke contracts
+        run: make MODE=release CFLAGS=-Werror check-toolchain

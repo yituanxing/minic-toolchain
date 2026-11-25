@@ -1,3 +1,0 @@
-sources=all
-mode=input-only
-nonce=20261107-1

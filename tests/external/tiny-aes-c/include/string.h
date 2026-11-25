@@ -1,4 +1,0 @@
-#ifndef MINIC_TINY_AES_STRING_H
-#define MINIC_TINY_AES_STRING_H
-
-#endif
