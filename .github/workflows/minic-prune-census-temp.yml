@@ -62,5 +62,34 @@ jobs:
               summary={"path":p,"group":buckets[p],"bytes":source.stat().st_size,"lines":len(body.splitlines()),"docrefs":len(weak[p]),"shebang":body.splitlines()[:2],"external":("/" in body.replace(p,""))}
               print("CANDIDATE",json.dumps(summary,ensure_ascii=False),flush=True)
           print("CANDIDATES_END",flush=True)
+          print("DEPENDENCY_CENSUS_BEGIN",flush=True)
+          # Only consider fixtures actually named inside an unreferenced driver.
+          # Inspect every retained tracked text for full filename OR stem ownership.
+          # References from the removed drivers themselves do not justify retention.
+          fixturepaths={}
+          for p in paths:
+              ps=str(p)
+              if not ps.startswith("tests/compiler/c0/") or p.suffix not in (".c",".i",".S",".s",".h"): continue
+              name=p.name
+              stem=p.stem
+              callers=[]
+              for orphan in orphans:
+                  body=textfiles.get(orphan,"")
+                  if ps in body or name in body or stem in body:
+                      callers.append(orphan)
+              if not callers: continue
+              live=[]
+              docs=[]
+              for other,body in textfiles.items():
+                  if other==ps or other in orphans: continue
+                  if ps in body or name in body or stem in body:
+                      (docs if other.startswith("docs/") or other.endswith(".md") else live).append(other)
+              if not live:
+                  fixturepaths[ps]={"from":callers,"docs":docs}
+          print("ORPHAN_FIXTURE_COUNT",len(fixturepaths),flush=True)
+          for p,obj in sorted(fixturepaths.items()):
+              print("ORPHAN_FIXTURE",json.dumps({"path":p,"bytes":(root/p).stat().st_size,"owners":obj["from"],"docs":obj["docs"][:4]}),flush=True)
+          print("DEPENDENCY_CENSUS_END",flush=True)
+          
           
           PY
