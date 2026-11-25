@@ -104,5 +104,21 @@ jobs:
               if base.startswith("apply-"):
                   print("ONE_SHOT_APPLY",json.dumps({"p":p,"bytes":len(v),"callers":candidate[:25]}),flush=True)
           print("TOOL_ORPHANS",json.dumps({"total":len(toolfiles),"unreferenced":len(tool_reports),"scripts":tool_reports}),flush=True)
+          # Token/trigger-history use audit before compacting. These files might be
+          # consumed as exact SHA content, not merely changed-path triggers.
+          targets=["tools/ci/linux-three-isa-trigger.txt",
+                   "tools/ci/linux-rv64-runtime-trigger.txt",
+                   "tools/ci/linux-rv64-p1-eight-trigger.txt",
+                   "tools/ci/linux-perf-lexer-rescan-census-v1.sh",
+                   "tools/ci/linux-perf-integrated-full-profile-v1.sh"]
+          for target in targets:
+              base=pathlib.Path(target).name
+              owners=[]
+              for p,s in blob.items():
+                  if p==target:continue
+                  for line_no,line in enumerate(s.splitlines(),1):
+                      if base in line or target in line:
+                          owners.append((p,line_no,line.strip()[:350]))
+              print("TARGET_OWNERS",json.dumps({"path":target,"count":len(owners),"owners":owners[:160]}),flush=True)
           print("OWNER_AUDIT_COMPLETE",flush=True)
           PY
