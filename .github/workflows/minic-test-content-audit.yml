@@ -263,3 +263,66 @@ jobs:
           print("NATIVE_MATRIX_TOTAL",len(passed),len(results),flush=True)
           if len(passed)!=len(results): raise SystemExit(1)
           PY
+
+  source-families:
+    if: "startsWith(github.event.head_commit.message, 'audit source families')"
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Read every regression translation unit and compare semantic skeletons
+        run: |
+          python3 - <<'PY'
+          import collections,difflib,json,re,subprocess
+          from pathlib import Path
+          files=subprocess.check_output(["git","ls-files","-z"]).decode().strip("\0").split("\0")
+          text={}
+          for p in files:
+              try:text[p]=Path(p).read_text()
+              except (OSError,UnicodeDecodeError):pass
+          tests={p:s for p,s in text.items() if p.startswith(("tests/compiler/","tests/target/","tests/programs/")) and p.endswith(".c")}
+          lex=re.compile(r'(?P<comment>/\*[\s\S]*?\*/|//[^\n]*)|(?P<string>(?:u8|[LuU])?"(?:\\[\s\S]|[^"\\])*"|(?:[LuU])?\'(?:\\[\s\S]|[^\'\\])*\')|(?P<id>[a-zA-Z_][a-zA-Z_0-9]*)|(?P<num>(?:0[xX][0-9a-fA-F]+|[0-9]+)(?:[uUlL]*))|(?P<op>>=|<<=|==|!=|<=|>=|->|\+\+|--|&&|\|\||<<|>>|\+=|-=|\*=|/=|%=|&=|\|=|\^=|\.\.\.|##|[^\s])')
+          reserved=set("auto break case char const continue default do double else enum extern float for goto if inline int long register restrict return short signed sizeof static struct switch typedef union unsigned void volatile while _Alignas _Alignof _Atomic _Bool _Complex _Generic _Imaginary _Noreturn _Static_assert _Thread_local asm __asm__ __volatile__ __attribute__ __typeof__ typeof __extension__ __inline__ main".split())
+          def tokens(s,lit=False):
+              ids={}
+              result=[]
+              for m in lex.finditer(s):
+                  v=m.group();k=m.lastgroup
+                  if k=="comment":continue
+                  if k=="id" and v not in reserved and not v.startswith("__builtin_"):
+                      v=ids.setdefault(v,"id"+str(len(ids)))
+                  elif lit and k=="num":v="NUM"
+                  elif lit and k=="string":v="STR"
+                  result.append(v)
+              return tuple(result)
+          names=collections.defaultdict(set)
+          for p in tests:names[Path(p).name].add(p);names[Path(p).stem].add(p);names[Path(p).stem.replace("_","-")].add(p)
+          refs=collections.defaultdict(set)
+          for p,s in text.items():
+              if p.startswith("docs/") or p.endswith(".md") or p==".github/workflows/minic-test-content-audit.yml":continue
+              for word in set(re.findall(r'[A-Za-z0-9_.-]+',s)) & names.keys():
+                  for q in names[word]:
+                      if p!=q:refs[q].add(p)
+          for abstract in (False,True):
+              groups=collections.defaultdict(list)
+              for p,s in tests.items():
+                  if re.search(r'(?m)^\s*#|__LINE__|__FILE__|__COUNTER__|\\\n',s):continue
+                  t=tokens(s,abstract)
+                  if len(t)>=5:groups[t].append(p)
+              for t,ps in sorted(groups.items(),key=lambda x:-len(x[1])):
+                  if len(ps)<2:continue
+                  print("SOURCE_FAMILY",json.dumps({"abstract_literals":abstract,"paths":ps,"tokens":len(t),"source":{p:tests[p] for p in ps if len(tests[p])<1600},"refs":{p:sorted(refs[p]) for p in ps}}))
+              print("SOURCE_FAMILY_SUMMARY",json.dumps({"abstract_literals":abstract,"groups":sum(len(ps)>1 for ps in groups.values()),"members":sum(len(ps) for ps in groups.values() if len(ps)>1)}))
+          # Candidate small simple assembly drivers and host unit drivers:
+          # actual source is emitted for review and matched with active callers.
+          for p,s in text.items():
+              if not p.startswith("tests/compiler/c0/") or not p.endswith(".sh") or len(s)>2500 or "<<" in s:continue
+              if re.search(r'(?m)^\s*for (?:target|arch) in ',s):continue
+              if not re.search(r'(?m)^\s*grep |^\s*test "\$\(grep|^\s*"\$work/[^"]+"$',s):continue
+              refs2=[]
+              for q,body in text.items():
+                  if q==p or q.startswith("docs/") or q.endswith(".md") or q==".github/workflows/minic-test-content-audit.yml":continue
+                  for i,line in enumerate(body.splitlines(),1):
+                      if Path(p).name in line:refs2.append([q,i,line])
+              print("SIMPLE_DRIVER",json.dumps({"path":p,"body":s,"refs":refs2}))
+          print("SOURCE_TOTAL",len(tests))
+          PY
