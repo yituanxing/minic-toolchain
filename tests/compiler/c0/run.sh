@@ -484,12 +484,12 @@ run_c0_default run-linux-tail-batch5.sh
 
 run_c0_default run-linux-tail-batch6.sh
 
-run_c0_default run-linux-tail-batch7.sh
+run_c0_default run-native-matrix.sh run-linux-tail-batch7
 
 run_c0_default run-scalar-compound-literal.sh
 
 
-run_c0_host run-linux-tail-batch8.sh
+run_c0_host run-native-matrix.sh run-linux-tail-batch8
 
 run_c0_host run-compile-only-case.sh gnu-local-object-alignment
 
