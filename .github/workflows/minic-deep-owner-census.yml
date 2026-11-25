@@ -90,5 +90,19 @@ jobs:
               if not any(stem in s for s in drivers.values()):
                   c0_dark.append(p)
           print("DARK_C0_PATHS",json.dumps({"count":len(c0_dark),"paths":c0_dark[:250]}),flush=True)
+          # CI-side script inventory: scan every tracked text owner (including docs)
+          # and distinguish live executors from one-shot source rewriters.
+          toolfiles={p:v for p,v in blob.items() if p.startswith("tools/ci/") and p.endswith((".py",".sh"))}
+          tool_reports=[]
+          for p,v in toolfiles.items():
+              base=pathlib.Path(p).name
+              stem=pathlib.Path(p).stem
+              candidate=[(o, "exact" if p in t or base in t else "stem") for o,t in blob.items()
+                         if o!=p and (p in t or base in t or stem in t)]
+              if not candidate:
+                  tool_reports.append((p,len(v),v.splitlines()[:8]))
+              if base.startswith("apply-"):
+                  print("ONE_SHOT_APPLY",json.dumps({"p":p,"bytes":len(v),"callers":candidate[:25]}),flush=True)
+          print("TOOL_ORPHANS",json.dumps({"total":len(toolfiles),"unreferenced":len(tool_reports),"scripts":tool_reports}),flush=True)
           print("OWNER_AUDIT_COMPLETE",flush=True)
           PY
