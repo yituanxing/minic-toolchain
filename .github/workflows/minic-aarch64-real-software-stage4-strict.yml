@@ -18,7 +18,7 @@ on:
       - 'tests/external/busybox/check-pinned-1361-source.sh'
       - 'tests/compiler/c0/probe-aarch64-pie-extern-got.sh'
       - 'tests/compiler/c0/probe-aarch64-linux-jump-label.sh'
-      - 'tests/compiler/c0/probe-aarch64-linux-kvm-kern-hyp-va-callback.sh'
+      - 'tests/compiler/c0/run-target-probe-case.sh'
       - 'tests/compiler/c0/probe-aarch64-linux-qcom-pstate-ssbs.sh'
       - 'tests/compiler/c0/probe-aarch64-linux-kvm-at-fixup.sh'
       - 'tests/compiler/c0/probe-aarch64-linux-rng-user-cache.sh'
@@ -102,7 +102,7 @@ jobs:
             tee build/aarch-stage4-ci/evidence/linux-jump-label.receipt
           grep -Fxq 'AARCH64_JUMP_LABEL_GNU_AS=PASS' \
             build/aarch-stage4-ci/evidence/linux-jump-label.receipt
-          sh tests/compiler/c0/probe-aarch64-linux-kvm-kern-hyp-va-callback.sh |
+          sh tests/compiler/c0/run-target-probe-case.sh aarch64-linux-kvm-kern-hyp-va-callback |
             tee build/aarch-stage4-ci/evidence/linux-kvm-va-callback.receipt
           grep -Fxq 'AARCH64_KVM_VA_CALLBACK_GNU_AS=PASS' \
             build/aarch-stage4-ci/evidence/linux-kvm-va-callback.receipt

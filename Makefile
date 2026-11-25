@@ -643,7 +643,7 @@ check-gnu-linux-bpf-union-zero: $(MINIC_CC_BINARY)
 .PHONY: check-gnu-linux-task-mmu-swp-pfn-guard
 check-gnu-linux-task-mmu-swp-pfn-guard: $(MINIC_CC_BINARY)
 	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
-		sh tests/compiler/c0/probe-gnu-linux-task-mmu-swp-pfn-guard.sh
+		sh tests/compiler/c0/run-target-probe-case.sh gnu-linux-task-mmu-swp-pfn-guard
 
 .PHONY: check-gnu-linux-kaslr-addr-range-guard
 check-gnu-linux-kaslr-addr-range-guard: $(MINIC_CC_BINARY)
@@ -653,7 +653,7 @@ check-gnu-linux-kaslr-addr-range-guard: $(MINIC_CC_BINARY)
 .PHONY: check-gnu-linux-nf-conntrack-size
 check-gnu-linux-nf-conntrack-size: $(MINIC_CC_BINARY)
 	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
-		sh tests/compiler/c0/probe-gnu-linux-nf-conntrack-size.sh
+		sh tests/compiler/c0/run-target-probe-case.sh gnu-linux-nf-conntrack-size
 
 .PHONY: check-gnu-linux-ioremap-inline-arg-guard
 check-gnu-linux-ioremap-inline-arg-guard: $(MINIC_CC_BINARY)

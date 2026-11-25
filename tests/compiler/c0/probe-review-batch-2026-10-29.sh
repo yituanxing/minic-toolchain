@@ -7,8 +7,8 @@ mini=${1:?Expected absolute MiniC compiler path}
 test -x "$mini"
 export MINIC_CC="$mini" MINIC="$mini" HOST_CC="${HOST_CC:-cc}"
 
-sh tests/compiler/c0/probe-float32-const-eval.sh
-sh tests/compiler/c0/probe-runtime-designated-positional.sh
+sh tests/compiler/c0/run-target-probe-case.sh float32-const-eval
+sh tests/compiler/c0/run-target-probe-case.sh runtime-designated-positional
 sh tests/compiler/c0/probe-inline-symbolic-shared-body.sh
 sh tests/compiler/c0/probe-symbolic-inline-two-callers.sh
 sh tests/compiler/c0/probe-function-pointer-attribute-policy.sh

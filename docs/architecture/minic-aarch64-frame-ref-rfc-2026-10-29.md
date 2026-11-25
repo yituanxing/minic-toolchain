@@ -240,7 +240,7 @@ Reuse the repository's existing scripts:
 - `tests/compiler/c0/probe-lp64-indirect-record-abi-qemu.sh`
 - `tests/compiler/c0/probe-aarch64-indirect-record-return-qemu.sh`
 - `tests/compiler/c0/probe-aarch64-large-structured-asm-spills.sh`
-- `tests/compiler/c0/probe-aarch64-linux-smmu-dynamic-dmb.sh`
+- `tests/compiler/c0/run-target-probe-case.sh aarch64-linux-smmu-dynamic-dmb`
 - `tests/compiler/c0/probe-aarch64-linux-large-pointer-stride.sh`
 - `tests/compiler/c0/probe-direct-lp64-core-record-snapshot-qemu.sh`
 

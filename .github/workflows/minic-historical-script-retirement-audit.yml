@@ -444,7 +444,40 @@ jobs:
           deleted = changed_paths(base, "HEAD", "--diff-filter=D")
           changed = changed_paths(base, "HEAD")
           metadata.add("tests/compiler/c0/run-core-strict-runtime-case.sh")
-          if len(expected) != 1020 or deleted != expected or changed != expected | metadata:
+          target_probe_cases = {
+              "tests/compiler/c0/probe-aarch64-linux-apple-aic-sysregs.sh",
+              "tests/compiler/c0/probe-aarch64-linux-bpf-enum-acqrel.sh",
+              "tests/compiler/c0/probe-aarch64-linux-lse-atomic-full.sh",
+              "tests/compiler/c0/probe-aarch64-linux-debug-pmu-mrs-banks.sh",
+              "tests/compiler/c0/probe-aarch64-linux-hyp-debug-qcom-sysregs.sh",
+              "tests/compiler/c0/probe-aarch64-linux-hyp-spinlock-lse.sh",
+              "tests/compiler/c0/probe-aarch64-linux-kvm-gic-registers.sh",
+              "tests/compiler/c0/probe-aarch64-linux-kvm-kern-hyp-va-callback.sh",
+              "tests/compiler/c0/probe-aarch64-linux-kvm-tlbi-range.sh",
+              "tests/compiler/c0/probe-aarch64-linux-kvm-tlbi.sh",
+              "tests/compiler/c0/probe-aarch64-linux-pstate-pan-tco-alternatives.sh",
+              "tests/compiler/c0/probe-aarch64-linux-rcu-record-acquire-release.sh",
+              "tests/compiler/c0/probe-aarch64-linux-efi-implicit-cache.sh",
+              "tests/compiler/c0/probe-aarch64-linux-smmu-dynamic-dmb.sh",
+              "tests/compiler/c0/probe-aarch64-linux-mrs-read-family.sh",
+              "tests/compiler/c0/probe-aarch64-linux-smccc-v11-full.sh",
+              "tests/compiler/c0/probe-aarch64-linux-tegra-ndiv-sysreg.sh",
+              "tests/compiler/c0/probe-float32-const-eval.sh",
+              "tests/compiler/c0/probe-runtime-designated-positional.sh",
+              "tests/compiler/c0/probe-gnu-linux-nf-conntrack-size.sh",
+              "tests/compiler/c0/probe-gnu-linux-task-mmu-swp-pfn-guard.sh",
+          }
+          assert len(target_probe_cases) == 21 and not (expected & target_probe_cases)
+          assert target_probe_cases <= set(git("ls-tree", "-r", "--name-only", "b424e87ac89e9ae5162a0fdcdb3af8d544c13e62").decode().splitlines())
+          expected |= target_probe_cases
+          metadata |= {
+              "tests/compiler/c0/run-target-probe-case.sh",
+              ".github/workflows/minic-aarch64-real-software-stage4-strict.yml",
+              "docs/architecture/minic-aarch64-frame-ref-rfc-2026-10-29.md",
+              "tests/compiler/c0/probe-review-batch-2026-10-29.sh",
+              "Makefile",
+          }
+          if len(expected) != 1041 or deleted != expected or changed != expected | metadata:
               raise SystemExit("RETIREMENT_SCOPE=FAIL: unexpected tree changes")
           # Preserve the full closure in a historical checkout, not a successful
           # no-op overlay on a different source architecture.
@@ -1363,6 +1396,52 @@ jobs:
           done
           echo "SOURCE_ASSEMBLY_COMPARISON passed=$passed unchanged_baseline_fail=$baseline_failures"
           git diff --exit-code
+
+      - name: Compare 21 original target probes with shared target driver
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          export MINIC_CC="$PWD/build/retirement-oracle/bin/minic-cc" HOST_CC=cc
+          sh -n tests/compiler/c0/run-target-probe-case.sh
+          work="$PWD/build/retirement-target-probe"
+          mkdir -p "$work/bin"
+          # Reuse identical temporary directory names on both arms, so
+          # compiler diagnostics and assembly paths stay directly comparable.
+          export PROBE_FIXED_TMP="$work/probe-work"
+          cat > "$work/bin/mktemp" <<'SH'
+          #!/bin/sh
+          if [ "$#" -eq 1 ] && [ "$1" = -d ]; then
+              mkdir -- "$PROBE_FIXED_TMP" || exit 1
+              printf '%s\n' "$PROBE_FIXED_TMP"
+          else
+              exec /usr/bin/mktemp "$@"
+          fi
+          SH
+          chmod +x "$work/bin/mktemp"
+          export PATH="$work/bin:$PATH"
+          passed=0
+          baseline_failures=0
+          for name in aarch64-linux-apple-aic-sysregs aarch64-linux-bpf-enum-acqrel aarch64-linux-lse-atomic-full aarch64-linux-debug-pmu-mrs-banks aarch64-linux-hyp-debug-qcom-sysregs aarch64-linux-hyp-spinlock-lse aarch64-linux-kvm-gic-registers aarch64-linux-kvm-kern-hyp-va-callback aarch64-linux-kvm-tlbi-range aarch64-linux-kvm-tlbi aarch64-linux-pstate-pan-tco-alternatives aarch64-linux-rcu-record-acquire-release aarch64-linux-efi-implicit-cache aarch64-linux-smmu-dynamic-dmb aarch64-linux-mrs-read-family aarch64-linux-smccc-v11-full aarch64-linux-tegra-ndiv-sysreg float32-const-eval runtime-designated-positional gnu-linux-nf-conntrack-size gnu-linux-task-mmu-swp-pfn-guard; do
+            script="tests/compiler/c0/probe-$name.sh"
+            test ! -e "$script"
+            git show b424e87ac89e9ae5162a0fdcdb3af8d544c13e62:"$script" > "$script"
+            test ! -e "$PROBE_FIXED_TMP"
+            old_rc=0
+            sh "$script" > "$work/$name.old.stdout" 2> "$work/$name.old.stderr" || old_rc=$?
+            rm "$script"
+            test ! -e "$PROBE_FIXED_TMP"
+            new_rc=0
+            sh tests/compiler/c0/run-target-probe-case.sh "$name" > "$work/$name.new.stdout" 2> "$work/$name.new.stderr" || new_rc=$?
+            test ! -e "$PROBE_FIXED_TMP"
+            test "$old_rc" -eq "$new_rc"
+            cmp "$work/$name.old.stdout" "$work/$name.new.stdout"
+            cmp "$work/$name.old.stderr" "$work/$name.new.stderr"
+            if test "$old_rc" -eq 0; then passed=$((passed+1)); else baseline_failures=$((baseline_failures+1)); fi
+            echo "TARGET_PROBE_EQUIVALENCE=PASS case=$name original_exit=$old_rc"
+          done
+          echo "TARGET_PROBE_COMPARISON passed=$passed unchanged_baseline_fail=$baseline_failures"
+          git diff --exit-code
+
 
   bulk-c0-template-discovery:
     runs-on: ubuntu-24.04
