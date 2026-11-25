@@ -236,6 +236,49 @@ jobs:
               assert original == ('#!/bin/sh\n# Compatibility entry point; original assertions live in the shared driver.\n'
                                   'exec sh "$(dirname -- "$0")/run-compile-only-case.sh" ' + name + '\n')
           metadata |= retired_missing_source
+          # Exact former source-rewrite targets and anchors are absent in
+          # the split layout; keep historical experiments fail-closed.
+          retired_split_files = {
+              "tools/ci/apply-correctness-constant-p-core-local-facts-v1.py": "src/core/core_lower.c",
+              "tools/ci/apply-correctness-constant-p-nested-core-v2.py": "src/core/core_lower.c",
+              "tools/ci/apply-p1-pure-discarded-local-address-equality-v1.py": "src/core/core_lower.c",
+              "tools/ci/apply-perf-core-lower-statement-workspace-v1.py": "src/core/core_lower.h",
+          }
+          retired_split_anchors = {
+              "tools/ci/apply-inline-specialization-local-boolean-domain-index-v0.py": "static bool minic_inline_local_boolean_domain(",
+              "tools/ci/apply-inline-specialization-local-boolean-domain-scoped-v1.py": "static bool minic_inline_local_boolean_domain(",
+              "tools/ci/apply-perf-ast-footprint-trace-v1.py": "success = minic_parse_c0_program(input_path, buffer.data, buffer.size, &program, diagnostic);",
+              "tools/ci/apply-perf-ast-shape-census-v1.py": "    minic_core_function_set_destroy(&core_set);\n    minic_c0_program_destroy(&program);",
+              "tools/ci/apply-perf-boolean-scan-census-v1.py": "static bool minic_inline_local_boolean_domain(",
+              "tools/ci/apply-perf-integer-call-expression-index-v1.py": "        size_t refinement_count = 0U;\n\n        for (caller_index = original_function_count;",
+              "tools/ci/apply-perf-integer-function-body-owner-filter-v1.py": "static bool minic_specialize_inline_integer_calls(",
+              "tools/ci/apply-perf-integer-loop-trace-v0.py": "original_function_count = program->function_count;",
+              "tools/ci/apply-perf-specialization-phase-trace-v0.py": "!minic_specialize_inline_integer_calls(&program, target_info)",
+              "tools/ci/apply-perf-symbolic-call-index-v1.py": "        if (!symbolic_owner_index_ready) {",
+              "tools/ci/apply-perf-symbolic-function-body-owner-filter-v0.py": "    {\n        size_t caller_index;\n        (void)original_function_count;\n        for (caller_index = 0U;",
+              "tools/ci/apply-perf-symbolic-loop-trace-v0.py": "original_function_count = program->function_count;",
+              "tools/ci/apply-perf-symbolic-scan-census-v1.py": "static bool minic_specialize_inline_symbolic_calls(",
+          }
+          retired_split_shells = {
+              "tools/ci/linux-perf-ast-footprint-v1.sh",
+              "tools/ci/linux-perf-combined-parser-marginal-v1.sh",
+              "tools/ci/linux-perf-diagnose-optimized-phase-v1.sh",
+              "tools/ci/linux-perf-integer-owner-marginal-v1.sh",
+              "tools/ci/linux-perf-specialization-trace-optin-v1.sh",
+          }
+          compiler_source = pathlib.Path("src/compiler/compiler.c").read_text()
+          for path, source in retired_split_files.items():
+              assert not pathlib.Path(source).exists(), (path, source)
+          for path, anchor in retired_split_anchors.items():
+              assert anchor not in compiler_source, (path, anchor)
+          assert "MINIC_BOOLEAN_DOMAIN_SCOPED_NATIVE_V1" not in compiler_source
+          split_rewriters = set(retired_split_files) | set(retired_split_anchors)
+          for path in sorted(split_rewriters | retired_split_shells):
+              interpreter = "bash" if path.endswith(".sh") else "python3"
+              proc = subprocess.run([interpreter, path], capture_output=True, text=True)
+              assert proc.returncode == 78 and "HISTORICAL_PROFILE_RETIRED:" in proc.stderr, path
+          metadata |= split_rewriters | retired_split_shells
+          print("HISTORICAL_SPLIT_LAYOUT_RETIREMENT=PASS obsolete_rewriters=17 obsolete_wrappers=5")
           metadata |= {
               ".github/workflows/linux-expanded-pi-p1-runtime-v1.yml",
               ".github/workflows/linux-runtime-focused-faults-v1.yml",
