@@ -1,0 +1,66 @@
+name: MiniC temporary full-tree caller census
+on:
+  push:
+    branches:
+      - cleanup/minic-deep-prune-20261125
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  census:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Enumerate all retained tracked texts and literal script call owners
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import collections, json, pathlib, subprocess
+          root=pathlib.Path.cwd()
+          paths=[pathlib.Path(x) for x in subprocess.check_output(["git","ls-files","-z"]).decode().strip("\0").split("\0")]
+          textfiles={}
+          for p in paths:
+              try:
+                  if p.stat().st_size > 900000: continue
+                  textfiles[str(p)]=p.read_text(encoding="utf-8")
+              except (UnicodeDecodeError,OSError): continue
+          buckets={}
+          for p in paths:
+              s=str(p)
+              if s.startswith("tests/compiler/c0/") and s.endswith(".sh"): buckets[s]="c0shell"
+              if s.startswith("tools/ci/") and p.suffix in (".sh",".py"): buckets[s]="citool"
+          print("AUDIT_HEAD",subprocess.check_output(["git","rev-parse","HEAD"],text=True).strip())
+          print("TOTAL",len(paths),"TEXT",len(textfiles),"CANDIDATE_SCRIPT_TOTAL",len(buckets),flush=True)
+          refs=collections.defaultdict(list)
+          weak=collections.defaultdict(list)
+          for candidate,group in buckets.items():
+              name=pathlib.PurePosixPath(candidate).name
+              for path,body in textfiles.items():
+                  if path==candidate: continue
+                  if candidate not in body and name not in body: continue
+                  lines=body.splitlines()
+                  for n,line in enumerate(lines,1):
+                      if candidate in line or name in line:
+                          target=(weak if path.startswith("docs/") or path.endswith(".md") else refs)
+                          target[candidate].append((path,n,line.strip()[:150]))
+          orphans=[p for p in buckets if not refs[p]]
+          print("GROUP_TOTALS",json.dumps(collections.Counter(buckets.values())),flush=True)
+          print("GROUP_UNREFERENCED",json.dumps(collections.Counter(buckets[p] for p in orphans)),flush=True)
+          print("DYNAMIC_GLOBS")
+          for path,body in textfiles.items():
+              if path.startswith("docs/") or path.endswith(".md"): continue
+              for n,line in enumerate(body.splitlines(),1):
+                  if ("tests/compiler/c0/" in line or "tools/ci/" in line) and (any(x in line for x in ("*.sh","*.py","glob(","find ","ls ","pathlib","readdir","for script"))):
+                      print("DYNAMIC",json.dumps([path,n,line.strip()[:180]]),flush=True)
+          print("CANDIDATES_BEGIN",flush=True)
+          for p in sorted(orphans):
+              source=root/p
+              body=textfiles.get(p,"")
+              summary={"path":p,"group":buckets[p],"bytes":source.stat().st_size,"lines":len(body.splitlines()),"docrefs":len(weak[p]),"shebang":body.splitlines()[:2],"external":("/" in body.replace(p,""))}
+              print("CANDIDATE",json.dumps(summary,ensure_ascii=False),flush=True)
+          print("CANDIDATES_END",flush=True)
+          
+          PY
