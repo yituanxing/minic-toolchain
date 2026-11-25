@@ -32,6 +32,7 @@ jobs:
             'probe-rv32-pointer-widening-source',
             'run-gnu-runtime-if-effect-facts',
           ]
+          failures=[]
           for name in names:
               with tempfile.TemporaryDirectory(prefix='minic-ab-') as temp:
                   base=pathlib.Path(temp)
@@ -51,6 +52,8 @@ jobs:
                   if a.returncode or b.returncode or a.stdout!=b.stdout or a.stderr!=b.stderr:
                       print('OLD_OUTPUT',repr(a.stdout[-4000:]),repr(a.stderr[-4000:]),flush=True)
                       print('NEW_OUTPUT',repr(b.stdout[-4000:]),repr(b.stderr[-4000:]),flush=True)
-                      raise SystemExit('old/new parity failure: '+name)
-          print('MINIC_NATIVE_OLD_NEW_8_OF_8=PASS',flush=True)
+                      failures.append(name)
+                      continue
+          print('MINIC_NATIVE_OLD_NEW_SUMMARY',len(names)-len(failures),'passed',failures,flush=True)
+          if failures: raise SystemExit(1)
           PY
