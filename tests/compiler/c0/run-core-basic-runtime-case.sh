@@ -2,7 +2,7 @@
 # RV64 Core production-code differential against GNU. One compiler path.
 set -eu
 case "${1:-}" in
-    core-condition-and|core-fixed-call-scalar-conversions|core-for-postincrement-m20|core-global-scalar-memory|core-integer-bitwise-and-assignment|core-integer-bitwise-not|core-integer-equality|core-integer-or-shifts-m22|core-logical-and-value|core-nested-if-continuation|core-integer-add-overflow|core-integer-multiply-overflow|core-integer-subtract-overflow|core-pointer-condition-m21|core-pointer-equality-qualifiers|core-pointer-offset|core-scalar-not-equal|core-short-circuit-or|core-scalar-assignment-implicit-void|core-scalar-lvalue-bitcast|core-opaque-inline-asm|core-statement-expression|core-target-constant-fallback) name=$1 ;;
+    core-comparisons|core-condition-and|core-fixed-call-scalar-conversions|core-for-postincrement-m20|core-global-scalar-memory|core-integer-bitwise-and-assignment|core-integer-bitwise-not|core-integer-or-shifts-m22|core-logical-and-value|core-nested-if-continuation|core-integer-add-overflow|core-integer-multiply-overflow|core-integer-subtract-overflow|core-pointer-condition-m21|core-pointer-offset|core-short-circuit-or|core-scalar-assignment-implicit-void|core-scalar-lvalue-bitcast|core-opaque-inline-asm|core-statement-expression|core-target-constant-fallback) name=$1 ;;
     *) echo "usage: $0 <known-core-basic-runtime-case>" >&2; exit 64 ;;
 esac
 test "$#" -eq 1 || exit 64
@@ -27,7 +27,7 @@ source_file="$root/tests/compiler/c0/$stem.c"
 runtime_file="$root/tests/compiler/c0/${stem}_runtime.c"
 mkdir -p "$work"
 case "$name" in
-    core-fixed-call-scalar-conversions|core-global-scalar-memory|core-integer-bitwise-not|core-integer-equality|core-integer-add-overflow|core-integer-multiply-overflow|core-scalar-assignment-implicit-void|core-scalar-lvalue-bitcast)
+    core-fixed-call-scalar-conversions|core-global-scalar-memory|core-integer-bitwise-not|core-integer-add-overflow|core-integer-multiply-overflow|core-scalar-assignment-implicit-void|core-scalar-lvalue-bitcast)
         input="$work/$stem.i"; core="$work/$stem-core.s" ;;
     core-short-circuit-or)
         input="$work/$stem.i"; core="$work/core.s" ;;
@@ -39,6 +39,11 @@ esac
 
 # Declarative per-case checks, in the original execution order.
 case "$name" in
+    core-comparisons)
+        for symbol in global_equal set_if_equal integer_ne pointer_eq pointer_ne member_eq member_ne list_condition list_first list_last qualified_eq qualified_ne explicit_cast_eq null_eq void_eq; do
+            grep -q "^${symbol}:" "$core"
+        done
+        ;;
     core-condition-and)
         grep -q '^core_m12_short_circuit_and:' "$core"
         grep -q '^core_m12_wrapped_pointer_and:' "$core"
@@ -71,15 +76,6 @@ case "$name" in
         grep -q '^core_m7_not_ulong:' "$core"
         grep -q '^core_m7_size_max:' "$core"
         grep -q 'xori t0, t0, -1' "$core"
-        ;;
-    core-integer-equality)
-        grep -q '^core_m5b_equal:' "$core"
-        grep -q '^core_m5b_set_if_equal:' "$core"
-        grep -q '^core_m11_pointer_equal:' "$core"
-        grep -q '^core_m11_member_pointer_equal:' "$core"
-        grep -q 'xor t0, t0, t1' "$core"
-        grep -q 'seqz t0, t0' "$core"
-        grep -q 'la t0, core_m5b_global' "$core"
         ;;
     core-integer-or-shifts-m22)
         grep -F 'or t0, t0, t1' "$core" >/dev/null
@@ -117,18 +113,8 @@ case "$name" in
         grep -q 'sltu t4, t0, t1' "$core"
         grep -q 'sub t2, t0, t1' "$core"
         ;;
-    core-pointer-equality-qualifiers)
-        for symbol in core_m16_list_is_first core_m16_list_is_last core_m16_qualified_equal core_m16_qualified_not_equal core_m16_explicit_qualified_member_cast core_m16_null_equal core_m16_void_equal; do
-            grep -q "^${symbol}:" "$core"
-        done
-        ;;
     core-pointer-offset)
         for symbol in core_m15_void_add core_m15_int_add core_m15_int_add_commuted core_m15_list_poison; do
-            grep -q "^${symbol}:" "$core"
-        done
-        ;;
-    core-scalar-not-equal)
-        for symbol in core_m13_integer_not_equal core_m13_pointer_not_equal core_m13_member_pointer_not_equal core_m13_list_condition; do
             grep -q "^${symbol}:" "$core"
         done
         ;;

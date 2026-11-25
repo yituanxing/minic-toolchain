@@ -97,6 +97,13 @@ jobs:
               assert b"core-required-no-fallback" not in b,(p,"obsolete gate")
               if p.startswith(("src/","tools/minic/","tools/minic-cc/")):
                   assert not re.search(rb'\bMINIC_CORE_(?:IR|CODEGEN)\b',b),p
+          retired_comparison = ["core-integer-equality","core-scalar-not-equal","core-pointer-equality-qualifiers"]
+          for p in live:
+              if p.startswith("docs/") or p.endswith(".md") or p in (".github/workflows/minic-test-content-audit.yml",".github/workflows/minic-historical-script-retirement-audit.yml"):continue
+              b=pathlib.Path(p).read_bytes()
+              if b"\0" in b:continue
+              for name in retired_comparison:
+                  assert name.encode() not in b and name.replace("-","_").encode() not in b,(p,name)
           print("RETIRED_LIVE_CALLERS=NONE")
           PY
       - name: Build and check actual old negative fixtures now accepted by GNU and MiniC
@@ -131,6 +138,6 @@ jobs:
           export MINIC_CC="$MINIC" RISCV_CC=riscv64-linux-gnu-gcc QEMU_RISCV64=qemu-riscv64
           export BUILD_DIR="$PWD/build/test-pruning/stack"
           sh tests/compiler/c0/run-compile-only-case.sh stack-fixed-arguments
-          for name in core-integer-equality core-scalar-not-equal core-pointer-equality-qualifiers core-condition-and core-logical-and-value; do
+          for name in core-comparisons core-condition-and core-logical-and-value; do
             BUILD_DIR="$PWD/build/test-pruning/$name" sh tests/compiler/c0/run-core-basic-runtime-case.sh "$name"
           done

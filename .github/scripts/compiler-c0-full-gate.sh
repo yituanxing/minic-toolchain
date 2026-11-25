@@ -245,12 +245,12 @@ core_global_scalar_memory_focused() {
         sh tests/compiler/c0/run-core-basic-runtime-case.sh core-global-scalar-memory
 }
 
-core_integer_equality_focused() {
+core_comparisons_focused() {
     MINIC="$root/build/ci-debug/bin/minic" \
-    BUILD_DIR="$root/build/ci-core-integer-equality" \
+    BUILD_DIR="$root/build/ci-core-comparisons" \
     RISCV_CC=riscv64-linux-gnu-gcc \
     QEMU_RISCV64=qemu-riscv64 \
-        sh tests/compiler/c0/run-core-basic-runtime-case.sh core-integer-equality
+        sh tests/compiler/c0/run-core-basic-runtime-case.sh core-comparisons
 }
 
 core_integer_multiply_overflow_focused() {
@@ -317,14 +317,6 @@ core_pointer_offset_focused() {
         sh tests/compiler/c0/run-core-basic-runtime-case.sh core-pointer-offset
 }
 
-core_pointer_equality_qualifiers_focused() {
-    MINIC="$root/build/ci-debug/bin/minic" \
-    BUILD_DIR="$root/build/ci-core-pointer-equality-qualifiers" \
-    RISCV_CC=riscv64-linux-gnu-gcc \
-    QEMU_RISCV64=qemu-riscv64 \
-        sh tests/compiler/c0/run-core-basic-runtime-case.sh core-pointer-equality-qualifiers
-}
-
 core_statement_expression_focused() {
     MINIC="$root/build/ci-debug/bin/minic" \
     BUILD_DIR="$root/build/ci-core-statement-expression" \
@@ -339,14 +331,6 @@ core_opaque_inline_asm_focused() {
     RISCV_CC=riscv64-linux-gnu-gcc \
     QEMU_RISCV64=qemu-riscv64 \
         sh tests/compiler/c0/run-core-basic-runtime-case.sh core-opaque-inline-asm
-}
-
-core_scalar_not_equal_focused() {
-    MINIC="$root/build/ci-debug/bin/minic" \
-    BUILD_DIR="$root/build/ci-core-scalar-not-equal" \
-    RISCV_CC=riscv64-linux-gnu-gcc \
-    QEMU_RISCV64=qemu-riscv64 \
-        sh tests/compiler/c0/run-core-basic-runtime-case.sh core-scalar-not-equal
 }
 
 core_integer_subtract_overflow_focused() {
@@ -601,17 +585,15 @@ start_gate core-scalar-lvalue-bitcast-focused core_scalar_lvalue_bitcast_focused
 start_gate core-fixed-call-scalar-conversions-focused core_fixed_call_scalar_conversions_focused
 start_gate core-scalar-assignment-implicit-void-focused core_scalar_assignment_implicit_void_focused
 start_gate core-global-scalar-memory-focused core_global_scalar_memory_focused
-start_gate core-integer-equality-focused core_integer_equality_focused
+start_gate core-comparisons-focused core_comparisons_focused
 start_gate core-integer-multiply-overflow-focused core_integer_multiply_overflow_focused
 start_gate core-integer-add-overflow-focused core_integer_add_overflow_focused
 start_gate core-short-circuit-or-focused core_short_circuit_or_focused
 start_gate core-nested-if-continuation-focused core_nested_if_continuation_focused
 start_gate core-condition-and-focused core_condition_and_focused
 start_gate core-logical-and-value-focused core_logical_and_value_focused
-start_gate core-scalar-not-equal-focused core_scalar_not_equal_focused
 start_gate core-integer-bitwise-and-assignment-focused core_integer_bitwise_and_assignment_focused
 start_gate core-pointer-offset-focused core_pointer_offset_focused
-start_gate core-pointer-equality-qualifiers-focused core_pointer_equality_qualifiers_focused
 start_gate core-statement-expression-focused core_statement_expression_focused
 start_gate core-opaque-inline-asm-focused core_opaque_inline_asm_focused
 start_gate core-integer-subtract-overflow-focused core_integer_subtract_overflow_focused
