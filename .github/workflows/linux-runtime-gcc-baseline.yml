@@ -976,79 +976,12 @@ jobs:
             elif [[ "${{ contains(github.event.head_commit.message, '[linux-perf-core-workspace]') }}" == true ]]; then
               echo 'HISTORICAL_PROFILE_RETIRED: pre-split experiment requires matching historical source; original route at abc0eeeff86c4b573fd1d4e338cd68e281749edb; no current-source PASS.' >&2
               exit 78
-            elif [[ "${{ contains(github.event.head_commit.message, '[linux-perf-parser-global]') }}" == true ]]; then
-              # Isolated NEXT algorithmic question: with the same function hash
-              # enabled on both arms, does the incremental global-object hash
-              # reduce the remaining lookup cost? Keep all real frozen Linux .i
-              # and authentic Runtime+Boolean baseline unchanged.
-              work="$ev/boolean-hot/parser-global"
-              mkdir -p "$work/function/bin" "$work/function-global/bin"
-              cp "$root/minic" "$work/function/bin/minic"
-              cp "$root/minic" "$work/function-global/bin/minic"
-              python3 tools/ci/apply-perf-parser-lookup-counters-v0.py
-              python3 tools/ci/apply-perf-parser-function-hash-v0.py
-              make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain" \
-                "$root/minic-cc" >/dev/null
-              cp "$root/minic-cc" "$work/function/bin/minic-cc"
-              python3 tools/ci/apply-perf-parser-global-hash-v0.py
-              make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain" \
-                "$root/minic-cc" >/dev/null
-              cp "$root/minic-cc" "$work/function-global/bin/minic-cc"
-              test "$(sha256sum "$work/function/bin/minic-cc" | cut -d' ' -f1)" != "$(sha256sum "$work/function-global/bin/minic-cc" | cut -d' ' -f1)"
-              git diff --check
-              for owner in kernel/bpf/btf.o kernel/bpf/verifier.o net/core/filter.o; do
-                key="${owner//\//_}"
-                frozen="$ev/boolean-hot/$key.frozen.i"
-                test -s "$frozen"
-                echo "PARSER_GLOBAL_INDEX_SCREEN=START owner=$owner"
-                python3 tools/ci/linux-perf-pinned-single-paired-ab-v1.py \
-                  --input "$frozen" \
-                  --baseline-driver "$work/function/bin/minic" \
-                  --candidate-driver "$work/function-global/bin/minic" \
-                  --repeats 2 --out "$work/results/$key" \
-                  | tee "$work/$key-screen.txt"
-                grep -Fq 'MINIC_ONE_OWNER_AB=PASS' "$work/$key-screen.txt"
-                echo "PARSER_GLOBAL_INDEX_SCREEN=PASS owner=$owner byte_identical=true"
-              done
-              echo 'PARSER_GLOBAL_INDEX_GROUP=PASS owners=3 only_global_hash_changed=true QEMU_pending=true'
-            elif [[ "${{ contains(github.event.head_commit.message, '[linux-perf-parser-index]') }}" == true ]]; then
-              # A DIFFERENT algorithmic target: parser's repeated linear function
-              # lookup. Reuse the frozen BPF/net inputs; never rebuild GNU C.
-              # Both arms have identical diagnostic counters; only the lookup
-              # algorithm changes (hash index vs forward first-match scan).
-              work="$ev/boolean-hot/parser-index"
-              mkdir -p "$work/counters/bin" "$work/hash/bin"
-              cp "$root/minic" "$work/counters/bin/minic"
-              cp "$root/minic" "$work/hash/bin/minic"
-              python3 tools/ci/apply-perf-parser-lookup-counters-v0.py
-              make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain" \
-                "$root/minic-cc" >/dev/null
-              cp "$root/minic-cc" "$work/counters/bin/minic-cc"
-              python3 tools/ci/apply-perf-parser-function-hash-v0.py
-              make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain" \
-                "$root/minic-cc" >/dev/null
-              cp "$root/minic-cc" "$work/hash/bin/minic-cc"
-              test "$(sha256sum "$work/counters/bin/minic-cc" | cut -d' ' -f1)" != "$(sha256sum "$work/hash/bin/minic-cc" | cut -d' ' -f1)"
-              git diff --check
-              if [[ "${{ contains(github.event.head_commit.message, '[linux-perf-hotowners-rotation]') }}" == true ]]; then
-                targets=(net/core/dev.o net/ipv4/tcp_input.o lib/crc32.o)
-              else
-                targets=(kernel/bpf/btf.o kernel/bpf/verifier.o net/core/filter.o)
-              fi
-              for owner in "${targets[@]}"; do
-                key="${owner//\//_}"
-                test -s "$ev/boolean-hot/$key.frozen.i"
-                echo "PARSER_INDEX_SCREEN=START owner=$owner"
-                python3 tools/ci/linux-perf-pinned-single-paired-ab-v1.py \
-                  --input "$ev/boolean-hot/$key.frozen.i" \
-                  --baseline-driver "$work/counters/bin/minic" \
-                  --candidate-driver "$work/hash/bin/minic" \
-                  --repeats 2 --out "$work/results/$key" \
-                  | tee "$work/$key-screen.txt"
-                grep -Fq 'MINIC_ONE_OWNER_AB=PASS' "$work/$key-screen.txt"
-                echo "PARSER_INDEX_SCREEN=PASS owner=$owner byte_identical=true"
-              done
-              echo "PARSER_INDEX_SCREEN_GROUP=PASS owners=3 rotation=${{ contains(github.event.head_commit.message, '[linux-perf-hotowners-rotation]') }} only_function_hash_changed=true QEMU_pending=true"
+            elif [[ "${{ contains(github.event.head_commit.message, '[linux-perf-parser-global]') }}" == true || "${{ contains(github.event.head_commit.message, '[linux-perf-parser-index]') }}" == true ]]; then
+              # Both parser name indexes and lookup counters now reside in
+              # canonical C. Historical "before/after" patch arms construct
+              # the same compiler and cannot provide an independent A/B.
+              echo 'HISTORICAL_PROFILE_RETIRED: parser index overlays are canonical; the pre-promotion paired A/B requires historical source; no current-source PASS.' >&2
+              exit 78
             elif [[ "${{ contains(github.event.head_commit.message, '[linux-perf-symbolic-call]') }}" == true ]]; then
               echo 'HISTORICAL_PROFILE_RETIRED: pre-split experiment requires matching historical source; original route at abc0eeeff86c4b573fd1d4e338cd68e281749edb; no current-source PASS.' >&2
               exit 78
@@ -1796,8 +1729,8 @@ jobs:
           fi
           if [[ "${{ contains(github.event.head_commit.message, '[linux-perf-integrated-full]') }}" == true ]]; then
             perf_tag=$(sha256sum tools/ci/linux-perf-integrated-full-profile-v1.sh \
-              tools/ci/apply-perf-parser-lookup-counters-v0.py \
-              tools/ci/apply-perf-parser-function-hash-v0.py | sha256sum | cut -c1-16)
+              src/frontend/parser_internal.h src/frontend/parser_core.c \
+              src/frontend/parser_global.c src/frontend/parser_function.c | sha256sum | cut -c1-16)
             profile="${profile}-perf-integrated-3-v1-${perf_tag}"
           fi
           subset=$(sha256sum "build/linux-runtime-gcc-shards-v1/shard-${{ matrix.shard }}/full-objects.txt" | cut -d' ' -f1)
@@ -2467,8 +2400,8 @@ jobs:
           fi
           if [[ "${{ contains(github.event.head_commit.message, '[linux-perf-integrated-full]') }}" == true ]]; then
             perf_tag=$(sha256sum tools/ci/linux-perf-integrated-full-profile-v1.sh \
-              tools/ci/apply-perf-parser-lookup-counters-v0.py \
-              tools/ci/apply-perf-parser-function-hash-v0.py | sha256sum | cut -c1-16)
+              src/frontend/parser_internal.h src/frontend/parser_core.c \
+              src/frontend/parser_global.c src/frontend/parser_function.c | sha256sum | cut -c1-16)
             profile="${profile}-perf-integrated-3-v1-${perf_tag}"
           fi
           objects=$(sha256sum "$ev/full-objects.txt" | cut -d' ' -f1)
