@@ -30,7 +30,7 @@ sh tests/compiler/c0/run-core-reentry-query-contract.sh
 MINIC="$mini" sh tests/compiler/c0/run-core-if-snapshot-and-prune.sh
 sh tests/compiler/c0/probe-rv64-hardfloat-ninth-fixed.sh
 sh tests/compiler/c0/probe-minic-target-machine-options.sh
-sh tests/compiler/c0/probe-rv64-hardfloat-fp-record-reject.sh
+sh tests/compiler/c0/run-native-matrix.sh probe-rv64-hardfloat-fp-record-reject
 sh tests/compiler/c0/probe-rv64-lp64-softfloat-record-call.sh
 sh tests/compiler/c0/probe-loongarch64-packed-scalar-alignment.sh
 bash tests/compiler/mir-migration/probe_loong_scalar_source_forms.sh "$mini"

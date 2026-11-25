@@ -40,7 +40,7 @@ for test_script in \
     compile:gnu-zero-length-record-arrays \
     compile:record-forward-declarations \
     compile:record-multi-declarators \
-    run-xgene-parenthesized-pointer-record-field.sh \
+    native:run-xgene-parenthesized-pointer-record-field \
     compile:record-typedef-array-fields \
     compile:volatile-qualifiers \
     compile:array-bound-sizeof \
@@ -62,7 +62,7 @@ for test_script in \
     compile:stack-fixed-arguments \
     compile:static-local-record-initializers \
     compile:static-record-arrays \
-    run-static-nested-record-initializers.sh \
+    native:run-static-nested-record-initializers \
     compile:static-mixed-symbol-relocations \
     compile:external-record-compound-literal \
     compile:static-local-scalars \
@@ -74,8 +74,8 @@ for test_script in \
     native:run-static-mutable-arrays \
     compile:static-preformed-array-zero \
     compile:static-fixed-record-array-zero \
-    run-static-multidimensional-array-relocation.sh \
-    run-static-integer-floating-const-initializer.sh \
+    native:run-static-multidimensional-array-relocation \
+    native:run-static-integer-floating-const-initializer \
     run-incomplete-function-pointer-array-lifetime.sh \
     native:run-static-integer-pointer-cast-comparison \
     compile:static-aggregate-array-designators \
@@ -92,7 +92,7 @@ for test_script in \
     compile:gnu-empty-records \
     compile:gnu-extension-prefix-declarations \
     run-gnu-prefix-function-attributes.sh \
-    run-gnu-is-constexpr-bitfield.sh \
+    native:run-gnu-is-constexpr-bitfield \
     strict:record-array-range-once \
     run-x86-security-function-attributes.sh \
     compile:gnu-format-cold-attributes \

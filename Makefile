@@ -1862,21 +1862,21 @@ check-fast: check-core-indirect-local-fact-escape
 .PHONY: check-external-char-array-redeclaration
 check-external-char-array-redeclaration: $(MINIC_CC_BINARY)
 	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
-	bash tests/compiler/c0/probe-external-char-array-redeclaration.sh
+	bash tests/compiler/c0/run-native-matrix.sh probe-external-char-array-redeclaration
 
 check-fast: check-external-char-array-redeclaration
 
 .PHONY: check-tagged-bare-record-members
 check-tagged-bare-record-members: $(MINIC_CC_BINARY)
 	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
-	bash tests/compiler/c0/probe-tagged-bare-record-members.sh
+	bash tests/compiler/c0/run-native-matrix.sh probe-tagged-bare-record-members
 
 check-fast: check-tagged-bare-record-members
 
 .PHONY: check-anonymous-qualified-record-members
 check-anonymous-qualified-record-members: $(MINIC_CC_BINARY)
 	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
-	bash tests/compiler/c0/probe-anonymous-qualified-record-members.sh
+	bash tests/compiler/c0/run-native-matrix.sh probe-anonymous-qualified-record-members
 
 check-fast: check-anonymous-qualified-record-members
 
@@ -2098,7 +2098,7 @@ check-fast: check-aarch64-fp-pointer-record-abi
 .PHONY: check-core-overflow-enum-origin
 check-core-overflow-enum-origin: $(MINIC_CC_BINARY)
 	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" \
-	bash tests/compiler/c0/probe-core-overflow-enum-origin.sh
+	bash tests/compiler/c0/run-native-matrix.sh probe-core-overflow-enum-origin
 
 check-fast: check-core-overflow-enum-origin
 
@@ -3254,7 +3254,7 @@ check-fast: check-loong-typed-scalar
 .PHONY: check-array-shape-convergence
 check-array-shape-convergence: $(MINIC_CC_BINARY)
 	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
-	  sh tests/compiler/c0/run-array-shape-convergence.sh
+	  sh tests/compiler/c0/run-native-matrix.sh run-array-shape-convergence
 
 check-fast: check-array-shape-convergence
 
@@ -3264,7 +3264,7 @@ check-fast: check-array-shape-convergence
 .PHONY: check-qualified-array-address-verifier
 check-qualified-array-address-verifier: $(MINIC_CC_BINARY)
 	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
-	  bash tests/compiler/c0/probe-qualified-array-address-verifier.sh
+	  bash tests/compiler/c0/run-native-matrix.sh probe-qualified-array-address-verifier
 
 check-fast: check-qualified-array-address-verifier
 

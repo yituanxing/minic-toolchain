@@ -327,13 +327,13 @@ run-static-nested-record-designator.sh、
 run-static-record-nested-designator-string-overlay.sh、
 run-static-record-array-member-designator.sh、
 run-static-storage-scalar-array-owner.sh、
-run-static-multidimensional-array-relocation.sh（五 ISA 源汇编）。
+run-native-matrix.sh run-static-multidimensional-array-relocation（五 ISA 源汇编）。
 static_aggregate_array_designators.c 直接 GNU/MiniC x86 本机编译运行均 exit 0。
 
 **旧脚本不冒报：** run-static-aggregate-array-designators.sh 在
 “.size sparse_records, 32” 保留符号文本检查处 exit 1，
 当前优化输出无该静态符号；对应 fixture GNU/MiniC 原生执行核对通过，
-旧脚本本身仍 **NOT PASS**。run-static-multidimensional-array-relocation.sh
+旧脚本本身仍 **NOT PASS**。run-native-matrix.sh run-static-multidimensional-array-relocation
 首次未设置 MINIC_CC 而寻找不存在的 debug 编译器（exit 127），
 更正路径后 PASS。完整 ELF/QEMU 与 MiniAS/MiniLD 联合验收继续推迟。
 
