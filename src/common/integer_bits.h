@@ -2,10 +2,11 @@
 #define MINIC_COMMON_INTEGER_BITS_H
 
 #include <stdint.h>
+#include <stddef.h>
 
 /* Pure bit geometry; language types, signedness and overflow policy belong
  * to callers. Width 0 is an empty mask; widths >=64 saturate. */
-static inline uint64_t minic_integer_mask64(unsigned int width) {
+static inline uint64_t minic_integer_mask64(size_t width) {
     return width >= 64U ? UINT64_MAX : (UINT64_C(1) << width) - UINT64_C(1);
 }
 

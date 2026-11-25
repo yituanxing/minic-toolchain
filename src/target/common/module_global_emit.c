@@ -81,7 +81,7 @@ bool minic_multi_module_emit_global_fragments(
             if (fprintf(out, "  .zero %zu\n", width) < 0) return false;
             break;
         case MINIC_CORE_MODULE_FRAGMENT_BITS:
-            if (width < 8U) bits &= minic_integer_mask64((unsigned int)(8U * width));
+            if (width < 8U) bits &= minic_integer_mask64(8U * width);
             /* The target's GNU dialect may require signed decimal spelling.
              * Two's-complement sign extension depends only on the emitted
              * width and raw bits, not on any C initializer/source type. */

@@ -76,7 +76,7 @@ static bool minic_payload_bits(const MinicMultiGlobalPayloadSink *sink,
     if (width != 1U && width != 2U && width != 4U && width != 8U)
         return false;
     if (width < 8U)
-        bits &= minic_integer_mask64((unsigned int)(width * 8U));
+        bits &= minic_integer_mask64(width * 8U);
     return sink->emit_bits(sink->context, type, width, bits);
 }
 
