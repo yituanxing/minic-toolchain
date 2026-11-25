@@ -21,13 +21,11 @@
 #include "target/common/direct_instruction_semantics.h"
 #include "target/common/direct_residual_plan.h"
 #include "target/common/elf_module_symbol_info.h"
-#include "target/common/core_machine_asm.h"
 #include "target/common/lp64_aggregate.h"
 #include "target/common/lp64_scalar.h"
 #include "core/address_alignment.h"
 #include "core/value_uses.h"
 #include "core/symbol_identity.h"
-#include "core/address_alignment.h"
 #include <limits.h>
 #include <stdint.h>
 #include <stdio.h>
