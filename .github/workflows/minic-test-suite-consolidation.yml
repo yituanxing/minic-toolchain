@@ -1,0 +1,41 @@
+name: MiniC five-round test suite consolidation candidate
+on:
+  push:
+    branches:
+      - cleanup/minic-test-suite-consolidation-20261125
+permissions:
+  contents: write
+jobs:
+  migrate:
+    if: startsWith(github.event.head_commit.message, 'test-suite: bootstrap')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Generate five incremental commits and verify all test case identities
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse HEAD^)" = "4f3b6b1b087e4e9cb8a0d17fdac5b8a46d193bad"
+          test "${GITHUB_REF_NAME}" = "cleanup/minic-test-suite-consolidation-20261125"
+          git config user.name "MiniC test-suite migration"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          python3 tests/suites/migrate_once.py
+          git log --oneline -6
+          python3 tests/suites/materialize.py
+          python3 tests/suites/materialize.py
+          git diff --exit-code
+          git diff --cached --exit-code
+          git push origin HEAD:refs/heads/cleanup/minic-test-suite-consolidation-20261125
+      - name: Verify strict build and existing target boundary on the migrated tree
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release CFLAGS=-Werror build/release/bin/minic-cc
+          bash tests/compiler/c0/check-minic-target-boundaries.sh
+      - name: Check independent generated test inputs and native execution
+        run: |
+          set -Eeuo pipefail
+          export MINIC_CC="$PWD/build/release/bin/minic-cc"
+          bash tests/compiler/c0/run-manual-x86-native-probes.sh probe-x86-linux-boot-string-native "$MINIC_CC"
+          make -j4 MODE=release CFLAGS=-Werror check-target-abstraction-boundary
