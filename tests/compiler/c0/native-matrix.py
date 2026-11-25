@@ -23,7 +23,9 @@ def flags(value):
 def source_for_case(config, work):
     if "inline_source" in config:
         require("source" not in config, "inline source must not alias tracked fixture")
-        inline = work / "inline-source.c"
+        suffix = config.get("inline_suffix", ".c")
+        require(suffix in (".c", ".i"), "invalid inline C source suffix")
+        inline = work / ("inline-source" + suffix)
         inline.write_text(config["inline_source"])
         return str(inline)
     return source(config["source"])
