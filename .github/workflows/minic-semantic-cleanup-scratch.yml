@@ -158,6 +158,29 @@ jobs:
               if not any(x.get("checks") or x.get("counts") or x.get("diagnostic") or x.get("gnu_reject") or x.get("syntax") for x in rows) and not v.get("units"):fields["no_explicit_assertions"]+=1
               fields["rows"]+=len(rows)
           print("MATRIX_AUDIT",json.dumps({"groups":len(matrix),**fields}),flush=True)
+          # Tools/CI is an independent owner domain: list actual active callers, and do
+          # not count archival docs as an active invocation.
+          ci_tools={p:s for p,s in blob.items() if p.startswith("tools/ci/") and p.endswith((".py",".sh"))}
+          active={p:s for p,s in blob.items() if p.endswith((".py",".sh",".yml",".yaml",".mk")) or p in ("Makefile","CMakeLists.txt")}
+          tool_refs={}
+          for p in ci_tools:
+              base=Path(p).name
+              stem=Path(p).stem
+              callers=[q for q,s in active.items() if q!=p and (base in s or p in s or (stem in s and q.endswith(".py")))]
+              tool_refs[p]=callers
+          unref=[p for p,rr in tool_refs.items() if not rr]
+          byfamily=collections.Counter()
+          for p in unref:
+              n=Path(p).name
+              family=("linux-three-isa" if n.startswith("linux-three-isa") else
+                      "linux-runtime" if n.startswith("linux-runtime") else
+                      "linux-perf" if n.startswith("linux-perf") else
+                      "minic-bootstrap" if n.startswith("minic-bootstrap") else
+                      "minias" if n.startswith("minias") else
+                      "minipp" if n.startswith("minipp") else
+                      "minild" if n.startswith("minild") else "other")
+              byfamily[family]+=1
+          print("CI_TOOL_CALL_GRAPH",json.dumps({"tools":len(ci_tools),"unreferenced":len(unref),"unreferenced_bytes":sum(len(ci_tools[p]) for p in unref),"families":byfamily.most_common(),"candidates":unref[:160]}),flush=True)
           print("AUDIT_COMPLETE",flush=True)
           PY
       - name: Verify compiler build and architecture boundary
