@@ -78,6 +78,14 @@ jobs:
               "src/frontend/parser_statement.c",
               "src/frontend/parser_runtime_initializer.h",
           }
+          metadata |= {
+              "src/target/aarch64/asm_contract.c",
+              "src/target/aarch64/asm_contract.h",
+              "src/target/source_policy/language_semantics.c",
+              "src/target/source_policy/source_info.h",
+              "src/target/x86_64/asm_contract_source.c",
+              "src/target/x86_64/asm_contract_source.h",
+          }
           deleted = changed_paths(base, "HEAD", "--diff-filter=D")
           changed = changed_paths(base, "HEAD")
           if len(expected) != 827 or deleted != expected or changed != expected | metadata:

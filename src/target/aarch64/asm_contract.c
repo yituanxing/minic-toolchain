@@ -3,6 +3,9 @@
 #include "target/common/linux_jump_label_asm.h"
 #include <string.h>
 
+static bool minic_aarch64_linux_barrier_alternative_opaque(
+    const MinicCoreInlineAsm *);
+
 /* Source-language admission remains in asm_contract_source.c. This module
  * owns the finite target ISA-form recognizers consumed at C ingress, while
  * selected instruction/operand semantics and physical output live solely in
@@ -106,7 +109,7 @@ bool aarch64_linux_cap_goto_text(const char *s, size_t len,
     return cap < (1U << 15);
 }
 
-bool minic_aarch64_linux_cap_asm_goto_core(const MinicCoreInlineAsm *a) {
+static bool minic_aarch64_linux_cap_asm_goto_core(const MinicCoreInlineAsm *a) {
     return a != NULL && a->is_goto && a->is_volatile &&
            a->goto_target != MINIC_CORE_BLOCK_INVALID &&
            (aarch64_linux_cap_goto_text(a->template_text,
@@ -977,7 +980,7 @@ const Aarch64LinuxBarrierAlternative *aarch64_linux_barrier_alternative(
     return NULL;
 }
 
-bool minic_aarch64_linux_barrier_alternative_opaque(
+static bool minic_aarch64_linux_barrier_alternative_opaque(
     const MinicCoreInlineAsm *a) {
     return a != NULL && a->is_volatile && !a->is_goto &&
            a->register_clobber_count == 0U && !a->has_memory_clobber &&

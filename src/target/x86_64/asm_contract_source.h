@@ -8,7 +8,6 @@
 /* C-language GNU ASM admission. Machine emitters include asm_contract.h
  * and consume only sealed Core forms; they never import MinicType or reopen
  * source C operand constraints. */
-bool minic_x86_64_kvm_movdqa_u32x4_type(MinicType);
 bool minic_x86_64_linux_mmio_type_matches(MinicType, unsigned int);
 bool minic_x86_64_requires_qualified_input_asm(const MinicInlineAsm *);
 bool minic_x86_64_qualify_inline_asm(

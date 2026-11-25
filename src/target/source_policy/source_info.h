@@ -178,8 +178,6 @@ bool minic_target_info_function_pointer_calling_convention_declaration_supported
     const MinicTargetInvocation *target, MinicFunctionCallingConvention convention);
 bool minic_target_info_va_cursor_source_shape(
     const MinicTargetInvocation *target, MinicVaCursorSourceShape *shape);
-bool minic_target_info_va_cursor_source_type_supported(
-    const MinicTargetInvocation *target, const MinicC0Program *program, MinicType type);
 bool minic_target_info_va_cursor_source_operand_supported(
     const MinicTargetInvocation *target, const MinicC0Program *program,
     MinicType type, bool is_lvalue);

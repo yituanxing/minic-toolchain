@@ -660,7 +660,7 @@ static bool x86_linux_raid6_simd_source(const MinicTargetInvocation *invocation,
 /* GNU C vector-size/rank/sign qualification belongs to source ingress.
  * The machine emitter independently verifies the sealed Core vector shape
  * and never receives a source MinicType. */
-bool minic_x86_64_kvm_movdqa_u32x4_type(MinicType type) {
+static bool minic_x86_64_kvm_movdqa_u32x4_type(MinicType type) {
     return minic_type_is_gnu_fixed_vector(type) &&
         type.gnu_vector_bytes == 16U &&
         type.gnu_vector_element_kind == MINIC_TYPE_BASE_INT &&

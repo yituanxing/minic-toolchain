@@ -436,7 +436,7 @@ bool minic_target_info_va_cursor_source_shape(
             target->machine.variadic_copy_kind == MINIC_VARIADIC_COPY_ABI_STATE);
 }
 
-bool minic_target_info_va_cursor_source_type_supported(
+static bool minic_target_info_va_cursor_source_type_supported(
     const MinicTargetInvocation *target, const MinicC0Program *program, MinicType type) {
     MinicVaCursorSourceShape shape;
     MinicType source, state, pointer_state;
