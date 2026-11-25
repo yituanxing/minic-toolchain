@@ -180,5 +180,16 @@ jobs:
               n=pathlib.Path(p).name
               if n.startswith(("core_","aarch64_gnu_inline_lazy_","aarch64_gnu_neon_inline_","incomplete_function_pointer_array_")):continue
               print("DARK_C0_SEMANTIC_REFS",json.dumps({"path":p,"refs":prefix_refs(pathlib.Path(p).stem)}),flush=True)
+          # Final conservative reference closure: search meaningful semantic tokens
+          # independent of historical filename prefixes and test dispatch.
+          terms=["raid6","record_copy_conditional","vector_pcs","xen_ring","promoted_static_record","riscv_legacy","di_earlyclobber","scalar_shift_u64","wide_variadic_machine","checked_overflow_math","while_loop","float16_opaque","vector128_unsupported_add"]
+          for term in terms:
+              found=[]
+              for p,s in executable.items():
+                  if p.endswith("minic-deep-owner-census.yml"):continue
+                  for n,line in enumerate(s.splitlines(),1):
+                      if term in line and not line.strip().startswith("#"):
+                          found.append((p,n,line.strip()[:200]))
+              print("SEMANTIC_TOKEN_CALLERS",json.dumps({"term":term,"count":len(found),"refs":found[:35]}),flush=True)
           print("OWNER_AUDIT_COMPLETE",flush=True)
           PY
